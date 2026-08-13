@@ -1,0 +1,24 @@
+#-----------------------------------------------------------
+# Vivado v2026.1 (64-bit)
+# SW Build 6511674 on Tue Jun 16 11:01:26 MDT 2026
+# IP Build 6504888 on Tue Jun 09 09:05:25 MDT 2026
+# SharedData Build 6501428 on Mon Jun 08 17:34:18 MDT 2026
+# Start of session at: Wed Aug 12 23:12:30 2026
+# Process ID         : 1074996
+# Current directory  : /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/tools/hid_led_blink
+# Command line       : vivado -mode batch -source /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/tools/hid_led_blink/vivado_build.tcl -tclargs /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/hid_led_blink
+# Log file           : /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/tools/hid_led_blink/vivado.log
+# Journal file       : /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/tools/hid_led_blink/vivado.jou
+# Running On         : LittleBoy
+# Platform           : Ubuntu
+# Operating System   : Ubuntu 26.04 LTS
+# Processor Detail   : AMD Ryzen AI 9 HX 470 w/ Radeon 890M
+# CPU Frequency      : 5051.900 MHz
+# CPU Physical cores : 12
+# CPU Logical cores  : 24
+# Host memory        : 128308 MB
+# Swap memory        : 111669 MB
+# Total Virtual      : 239977 MB
+# Available Virtual  : 222392 MB
+#-----------------------------------------------------------
+source /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/tools/hid_led_blink/vivado_build.tcl

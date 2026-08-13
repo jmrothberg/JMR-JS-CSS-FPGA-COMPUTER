@@ -1,0 +1,28 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Local / generated
+card.img
+card.img~
+*.log
+vivado.jou
+vivado.log
+.Xil/
+scripts/vivado_env.sh
+
+# Build / sim outputs (regenerate)
+build/
+sim/sim_build*/
+sim/sim_build_*/
+
+# Editor
+.vscode/
+*.swp
+*~
+
+# Traces may be large; keep directory, ignore noise if needed later
+# traces/*.log is kept for now so session flight logs can be committed when useful

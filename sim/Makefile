@@ -1,0 +1,118 @@
+# Verilator FPGA-SIM for JMR JS Computer.
+# make -C sim sim_server_synth  → sim_build_synth/jmr_js_sim_server
+# Tops jmr_js_core (same DUT as board). GUI falls back to host_sim_server.py.
+
+ROOT := $(abspath ..)
+RTL  := $(ROOT)/rtl
+BUILD := sim_build_synth
+FONT := $(ROOT)/vectors/font_rom.hex
+
+.PHONY: sim_server_synth font tb_uart_link tb_ft245 tb_ps2_rx tb_ps2_typing clean
+# Keep the sim server as default — extra TBs are gates, not the build
+.DEFAULT_GOAL := sim_server_synth
+
+# UART tether link testbench — must PASS before any board flash
+tb_uart_link: $(BUILD)/tb_uart_link
+	$(BUILD)/tb_uart_link
+
+$(BUILD)/tb_uart_link: tb_uart_link.cpp $(RTL)/engines/jmr_uart_link.sv
+	mkdir -p $(BUILD)
+	verilator -cc -exe -build -j 0 \
+		-Mdir $(BUILD)/obj_uart \
+		-o $(abspath $(BUILD)/tb_uart_link) \
+		--top-module jmr_uart_link \
+		-GCLK_HZ=1000000 -GBAUD=100000 \
+		-CFLAGS "-std=c++17" \
+		$(RTL)/engines/jmr_uart_link.sv \
+		tb_uart_link.cpp
+
+# DPTI / FT245 PHY — PROG-cable tether (must PASS before flash)
+tb_ft245: $(BUILD)/tb_ft245
+	$(BUILD)/tb_ft245
+
+$(BUILD)/tb_ft245: tb_ft245.cpp $(RTL)/engines/jmr_ft245_async.sv
+	mkdir -p $(BUILD)
+	verilator -cc -exe -build -j 0 \
+		-Mdir $(BUILD)/obj_ft245 \
+		-o $(abspath $(BUILD)/tb_ft245) \
+		--top-module jmr_ft245_async \
+		-CFLAGS "-std=c++17" \
+		$(RTL)/engines/jmr_ft245_async.sv \
+		tb_ft245.cpp
+
+# PS/2 receiver — debounce must still assemble Set-2 bytes
+tb_ps2_rx: $(BUILD)/tb_ps2_rx
+	$(BUILD)/tb_ps2_rx
+
+$(BUILD)/tb_ps2_rx: tb_ps2_rx.cpp $(RTL)/phys/ps2_rx.sv
+	mkdir -p $(BUILD)
+	verilator -cc -exe -build -j 0 \
+		-Mdir $(BUILD)/obj_ps2 \
+		-o $(abspath $(BUILD)/tb_ps2_rx) \
+		--top-module ps2_rx \
+		-CFLAGS "-std=c++17" \
+		$(RTL)/phys/ps2_rx.sv \
+		tb_ps2_rx.cpp
+
+# PS/2 end-to-end: waveforms → decode table → type HELP into console
+tb_ps2_typing: $(BUILD)/tb_ps2_typing
+	$(BUILD)/tb_ps2_typing
+
+$(BUILD)/tb_ps2_typing: tb_ps2_typing.cpp tb_ps2_typing_top.sv \
+		$(RTL)/phys/ps2_rx.sv $(RTL)/phys/ps2_decode.sv \
+		$(RTL)/engines/jmr_keyboard_fifo.sv $(RTL)/engines/jmr_video_vram.sv \
+		$(RTL)/engines/jmr_console_engine.sv
+	mkdir -p $(BUILD)
+	verilator -cc -exe -build -j 0 \
+		-Mdir $(BUILD)/obj_ps2_typing \
+		-o $(abspath $(BUILD)/tb_ps2_typing) \
+		--top-module tb_ps2_typing_top \
+		-Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+		-CFLAGS "-std=c++17" \
+		tb_ps2_typing_top.sv \
+		$(RTL)/phys/ps2_rx.sv $(RTL)/phys/ps2_decode.sv \
+		$(RTL)/engines/jmr_keyboard_fifo.sv $(RTL)/engines/jmr_video_vram.sv \
+		$(RTL)/engines/jmr_console_engine.sv \
+		tb_ps2_typing.cpp
+
+font: $(FONT)
+$(FONT): $(ROOT)/tools/export_font_rom_hex.py $(ROOT)/functional_model/font8.py
+	$(ROOT)/.venv/bin/python $(ROOT)/tools/export_font_rom_hex.py
+	cp -f $(FONT) $(RTL)/video/font_rom.hex
+
+sim_server_synth: $(BUILD)/jmr_js_sim_server
+
+CORE_SRCS := \
+	$(RTL)/engines/jmr_keyboard_fifo.sv \
+	$(RTL)/engines/jmr_video_vram.sv \
+	$(RTL)/engines/jmr_console_engine.sv \
+	$(RTL)/engines/jmr_mini_fb.sv \
+	$(RTL)/engines/jmr_rectdemo_engine.sv \
+	$(RTL)/engines/jmr_js_vm.sv \
+	$(RTL)/engines/storage_engine.sv \
+	$(RTL)/phys/sd_spi_master.sv \
+	$(RTL)/jmr_js_core.sv
+
+JSB_HEX := $(ROOT)/vectors/invaders_jsb.hex
+
+$(JSB_HEX): $(ROOT)/tools/compile_js.py $(ROOT)/storage/INVADERS.JS \
+		$(ROOT)/functional_model/jsb_format.py
+	$(ROOT)/.venv/bin/python $(ROOT)/tools/compile_js.py $(ROOT)/storage/INVADERS.JS
+
+$(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
+	mkdir -p $(BUILD) $(BUILD)/obj_dir
+	# $readmemh path is relative to sim cwd / obj_dir — stage hex both places
+	cp -f $(JSB_HEX) $(BUILD)/invaders_jsb.hex
+	cp -f $(JSB_HEX) $(BUILD)/obj_dir/invaders_jsb.hex
+	cp -f $(JSB_HEX) invaders_jsb.hex
+	verilator -cc -exe -build -j 0 \
+		-Mdir $(BUILD)/obj_dir \
+		-o $(abspath $(BUILD)/jmr_js_sim_server) \
+		--top-module jmr_js_core \
+		-Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+		-CFLAGS "-std=c++17" \
+		$(CORE_SRCS) \
+		sim_main.cpp
+
+clean:
+	rm -rf $(BUILD)

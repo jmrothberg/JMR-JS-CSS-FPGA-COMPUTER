@@ -1,0 +1,44 @@
+---
+description: Features land PYTHON first, then FPGA-SIM, then board .bit/.bin — uniform glass across F9 runtimes.
+alwaysApply: true
+---
+
+# Python → FPGA-SIM → board (uniform experience)
+
+The Constitution order is mandatory for **user-visible** behaviour (console
+commands, JS/Canvas surface, disk names, errors, READY/prompt, glass text):
+
+1. **PYTHON** (`functional_model/` + GUI host path) — behavioural truth
+2. **FPGA-SIM** (Verilator / sim backend) — same typed experience
+3. **Board** (`.bit` / `.bin`, standalone or tethered) — silicon confirmation
+
+## Do not ship RTL-only UX
+
+- Do **not** add a console command or READY-path feature only in RTL while
+  PYTHON / FPGA-SIM still reject or silently ignore it.
+- Host shortcuts must grow the **same** verbs the board console has, or the
+  GUI cannot troubleshoot against silicon.
+- Board-only smoke is **not** done for a feature that F9 PYTHON / FPGA-SIM
+  cannot type the same way.
+
+## Implementation checklist (agent)
+
+When adding or changing glass-level behaviour:
+
+1. Implement + exercise in the **Python FM** (and GUI PYTHON path).
+2. Mirror in **FPGA-SIM** so F9 FPGA-SIM matches.
+3. Only then RTL/fit if needed, build `.bit`/`.bin`, flash, smoke the **board**.
+4. Update [docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md) if status
+   changes; note any temporary parity debt explicitly (never leave it silent).
+
+## Debugging across runtimes
+
+- Same command on all three → compare traces under `traces/` (see
+  `use-existing-traces`).
+- Works on board only → **parity bug** (host path missing), not “board magic.”
+- Works in PYTHON only → SIM/RTL lag; do not “fix” by weakening PYTHON.
+
+## Related
+
+- [CONSTITUTION.md](../../CONSTITUTION.md) — Development Order
+- [docs/FPGA_BRINGUP.md](../../docs/FPGA_BRINGUP.md) — PYTHON / FPGA-SIM / BOARD

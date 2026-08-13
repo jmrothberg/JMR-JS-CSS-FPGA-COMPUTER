@@ -1,0 +1,39 @@
+---
+description: Debug SIM/FPGA failures from existing session traces first — do not re-run programs to reproduce unless the user asks.
+alwaysApply: true
+---
+
+# Use existing traces first
+
+When the user reports a JS / SIM / FPGA runtime bug (READY with no error,
+TRAP, wrong screen, etc.):
+
+1. **Look at the newest files under `traces/`** (especially `*_FPGA-SIM.log`
+   and the matching host `.log`) before writing or running any repro script.
+2. Start at the **end of the trace**: fault / trap / note / typed lines, then
+   any µop / flight tail before the fault.
+3. Prefer diagnosis from that evidence. **Do not re-run heavy demos or the GUI**
+   to reproduce unless the user explicitly asks, or the trace is
+   missing/incomplete.
+4. Offline helpers that only read sources, token streams, microcode listings,
+   or the existing log are fine; full sim / GUI repro is not the default.
+5. If you must run something later, say why the trace was not enough first.
+
+## Feature order before board proof
+
+User-visible behaviour must already exist on **PYTHON**, then **FPGA-SIM**,
+before treating the board as the place that “defines” it. See
+`python-first-parity`. A board-only win with GUI/SIM reject is a **parity gap**,
+not a successful ship.
+
+## Verification must include the real board
+
+A fix that claims silicon is not verified until it runs on the **FPGA
+hardware**. FPGA-SIM and the Python functional model are necessary but not
+sufficient. Always confirm on the board **after** PYTHON + FPGA-SIM match,
+never sim alone and never board-only UX.
+
+## This product is not the BASIC machine
+
+Do not assume Nexys A7-100T pinouts, BASIC tokens, or BASIC LUT-shrink history.
+Debug *this* repo’s traces and RTL.

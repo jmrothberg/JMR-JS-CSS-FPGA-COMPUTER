@@ -1,0 +1,30 @@
+---
+description: FPGA-SIM must be real RTL by default — never silently use the PYTHON host twin.
+alwaysApply: true
+---
+
+# Never fake FPGA-SIM
+
+HARD RULE: **FPGA-SIM must never default to, or silently fall back to, a
+PYTHON host twin.** That trap made F9 “FPGA-SIM” look fine while BOARD RTL
+was broken.
+
+## Defaults
+
+- **F9 FPGA-SIM** = real Verilator RTL (`sim/sim_build_synth/jmr_js_sim_server`).
+- **Host twin** (`sim/host_sim_server.py`, dukpy / full Canvas) = **explicit
+  opt-in only**: `JMR_SIM_HOST=1`. Never the default. Never a quiet fallback
+  when the RTL binary is missing.
+- If RTL is missing: **fail loud** (“build `make -C sim sim_server_synth`”).
+  Do not pretend PYTHON is FPGA-SIM.
+
+## Product mindset (JS, not BASIC Model I)
+
+- Glass is **640×480** (GUI mirror must match HDMI field, not a 16-line strip).
+- Keyboard is **full JS** (case + punctuation); do not reintroduce a–z fold.
+- Constitution order: PYTHON → **real FPGA-SIM** → BOARD.
+
+## Code touchpoints
+
+- [`runtime/sim_backend.py`](../../runtime/sim_backend.py) — default RTL
+- GUI status must show `FPGA-SIM (RTL)` vs `FPGA-SIM (HOST)`
