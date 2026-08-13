@@ -7,7 +7,7 @@ Monitor text and Canvas games share the same framebuffer. No separate Text conso
   python3 gui_jmr_js.py
 
 F9 cycles PYTHON → FPGA-SIM → BOARD → (ASIC-SIM later).
-Arrows + Space = play; mouse stick is secondary (yields while keys held).
+Arrows + Space = play. Mouse stick OFF (was fighting KEYBITS on FPGA-SIM).
 """
 
 from __future__ import annotations
@@ -103,6 +103,10 @@ class App:
         self._key_down = False
         self._key_fire = False
         self._ppm_bytes: bytes | None = None
+        # NEW: letterbox cursor blink (~2 Hz) — HDMI already blinks via frame_div[5]
+        self._cursor_on = True
+        self._cursor_t = time.monotonic()
+        self._last_prompt: str | None = None
 
         self._build_ui()
         # MORE waiter: pump Tk + refresh glass (BASIC more_idle pattern)
@@ -115,11 +119,7 @@ class App:
         self.root.bind_all("<<Paste>>", self.on_paste)
         self.root.bind_all("<Control-v>", self.on_paste)
         self.root.bind_all("<Control-V>", self.on_paste)
-        self.canvas_label.bind("<Motion>", self.on_mouse_move)
-        self.canvas_label.bind("<ButtonPress-1>", lambda e: self._btn(True, 1))
-        self.canvas_label.bind("<ButtonRelease-1>", lambda e: self._btn(False, 1))
-        self.canvas_label.bind("<ButtonPress-3>", lambda e: self._btn(True, 2))
-        self.canvas_label.bind("<ButtonRelease-3>", lambda e: self._btn(False, 2))
+        # NEW: mouse stick OFF — click only focuses glass (no JOY overwrite of KEYBITS)
         self.canvas_label.bind("<Button-1>", lambda e: self.canvas_label.focus_set())
         self.root.bind_all("<F9>", self.cycle_runtime)
         self.root.bind_all("<Escape>", lambda e: self.break_program())
@@ -366,12 +366,14 @@ class App:
         prompt = f"> {self.line_buf}"
         # Paint into the ACTIVE runtime glass (FPGA-SIM uses PROMPT RPC)
         if hasattr(self.backend, "paint_prompt"):
-            self.backend.paint_prompt(prompt)
+            self.backend.paint_prompt(prompt, cursor_on=self._cursor_on)
         else:
-            m.paint_monitor(prompt)
+            m.paint_monitor(prompt, cursor_on=self._cursor_on)
+        self._last_prompt = prompt
         self._refresh_fb()
 
     def _emit_keys(self) -> None:
+        # NEW: KEYBITS only — never JOY 0 (SIM assigns joy_in; JOY wiped arrows/Space)
         bits = 0
         if self._key_left:
             bits |= JOY_LEFT
@@ -384,50 +386,6 @@ class App:
         if self._key_fire:
             bits |= JOY_FIRE1
         self.backend.set_key_bits(bits)
-        if self.backend.name != "BOARD" and not self._play_key_held():
-            self._emit_joy_from_pointer()
-        elif self.backend.name != "BOARD" and self._play_key_held():
-            # Arrows win: clear mouse stick so it cannot fight keys
-            self.backend.set_joy(0)
-
-    def _btn(self, down: bool, which: int) -> None:
-        if which == 1:
-            self._fire1 = down
-        else:
-            self._fire2 = down
-        if not self._play_key_held():
-            self._emit_joy_from_pointer()
-
-    def on_mouse_move(self, event: tk.Event) -> None:
-        self._mx = event.x
-        self._my = event.y
-        if not self._play_key_held():
-            self._emit_joy_from_pointer()
-
-    def _emit_joy_from_pointer(self) -> None:
-        if self.backend.name == "BOARD":
-            return
-        if self._play_key_held():
-            self.backend.set_joy(0)
-            return
-        mx = getattr(self, "_mx", WIDTH // 2)
-        my = getattr(self, "_my", HEIGHT // 2)
-        cx, cy = WIDTH // 2, HEIGHT // 2
-        bits = 0
-        dx, dy = mx - cx, my - cy
-        if dy < -DEADZONE:
-            bits |= JOY_UP
-        if dy > DEADZONE:
-            bits |= JOY_DOWN
-        if dx < -DEADZONE:
-            bits |= JOY_LEFT
-        if dx > DEADZONE:
-            bits |= JOY_RIGHT
-        if self._fire1:
-            bits |= JOY_FIRE1
-        if self._fire2:
-            bits |= JOY_FIRE2
-        self.backend.set_joy(bits)
 
     def _refresh_fb(self) -> None:
         fb = self.backend.framebuffer()
@@ -452,12 +410,18 @@ class App:
     def _frame(self) -> None:
         # One tick only (SimBackend.frame_tick does TICK; poll is a no-op)
         self.backend.frame_tick()
+        # NEW: blink cyan block on letterbox so you can see the insert point
+        now = time.monotonic()
+        blink_flip = False
+        if now - self._cursor_t >= 0.5:
+            self._cursor_on = not self._cursor_on
+            self._cursor_t = now
+            blink_flip = True
         if not self._is_running():
             prompt = f"> {self.line_buf}"
             if hasattr(self.backend, "paint_prompt"):
-                # Only re-PROMPT when local buffer changed — otherwise TICK handles FB
-                if getattr(self, "_last_prompt", None) != prompt:
-                    self.backend.paint_prompt(prompt)
+                if self._last_prompt != prompt or blink_flip:
+                    self.backend.paint_prompt(prompt, cursor_on=self._cursor_on)
                     self._last_prompt = prompt
         self._refresh_fb()
         self.status.configure(text=self._status_text())

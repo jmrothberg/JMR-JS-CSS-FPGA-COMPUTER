@@ -51,6 +51,7 @@ add_files -fileset constrs_1 $ROOT/constraints/nexys_video.xdc
 set_property top top_nexys_video [current_fileset]
 set_property verilog_define {SYNTHESIS=1} [current_fileset]
 set_property STEPS.WRITE_BITSTREAM.ARGS.BIN_FILE true [get_runs impl_1]
+# Default Vivado strategy — Explore took 30m and still missed WNS; fix RTL instead
 
 update_compile_order -fileset sources_1
 
@@ -80,6 +81,14 @@ if {[get_property PROGRESS [get_runs impl_1]] != "100%" ||
 open_run impl_1
 report_utilization -file $OUT/utilization_impl.rpt
 
+# NEW: never ship a failing-timing bit (prior build wrote .bit with WNS −0.5 ns)
+set wns [lindex [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -setup]] 0]
+puts "TIMING WNS=$wns"
+if {$wns eq "" || $wns < 0} {
+  puts "ERROR: timing not met (WNS=$wns) — refusing to publish .bit"
+  exit 1
+}
+
 file copy -force \
   [get_property DIRECTORY [get_runs impl_1]]/top_nexys_video.bit \
   $OUT/jmr_nexys_video.bit
@@ -89,5 +98,5 @@ if {[file exists [get_property DIRECTORY [get_runs impl_1]]/top_nexys_video.bin]
     $OUT/jmr_nexys_video.bin
 }
 
-puts "OK wrote $OUT/jmr_nexys_video.bit"
+puts "OK wrote $OUT/jmr_nexys_video.bit (WNS=$wns)"
 exit 0

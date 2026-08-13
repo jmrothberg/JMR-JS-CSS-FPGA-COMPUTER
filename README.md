@@ -1,9 +1,12 @@
 # JMR JS Computer
 
-An original **standalone** FPGA computer whose **native machine language is
-JavaScript** (Canvas game computer). There is no soft CPU, no browser-on-FPGA
-cheat, and no hidden general-purpose core: JS → bytecode → microcode + engines.
-V1 does **not** ship a general CSS browser — games draw on Canvas.
+An original **standalone** FPGA → ASIC computer whose **native machine
+language is JavaScript** (HTML5/Canvas games; minimal CSS as needed). There
+is no soft CPU, no browser-on-FPGA, and **no dukpy/Duktape as the machine**:
+`LOAD "NAME.HTML"` → edit → **`RUN` always compiles** that HTML → fresh
+internal `.JSH` → bytecode VM + engines. Never prefer a stale `.JSH`. Chrome
+may open the same `.HTML` for authoring; PYTHON/FPGA-SIM/BOARD must run the
+**JMR VM**. V1 does **not** ship a general CSS browser — games draw on Canvas.
 
 **Sibling already works:** `JMR-BASIC-FPGA-COMPUTER` on Nexys **A7-100T** (T100)
 is a fully working BASIC-native FPGA (VGA + USB keyboard + console). This repo
@@ -12,12 +15,14 @@ XC7A200T) — steal method, not BASIC ISA or A7 pins.
 
 **Primary board:** Digilent **Nexys Video** (XC7A200T) — HDMI 640×480, USB
 keyboard (J15), Pmod joystick. **PA-StarLite** is a later port.
-Development order: **PYTHON → real FPGA-SIM (perfect) → board**. Do **not**
-flash until FPGA-SIM battery is green. Never fake F9 FPGA-SIM with a host twin.
-User-typed glass must match across F9 runtimes (no RTL-only console commands).
+Development order: **PYTHON bytecode → real FPGA-SIM (perfect) → board → ASIC**.
+Do **not** flash until FPGA-SIM battery is green. Never fake F9 FPGA-SIM with a
+host twin; never treat dukpy/Chrome as the machine. User-typed glass must match
+across F9 runtimes (no RTL-only console commands).
 
 **Status for agents:** [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md)
-(keyboard on board is the open silicon issue; keep sim green first).
+(J15 USB Host is dead on this T200 — GUI/PROG tether; FPGA-SIM is ahead of
+the 03:36 flashed bit).
 
 ```
 $ python3 run_jmr_js.py
@@ -40,13 +45,15 @@ python3 run_jmr_js.py
 
 python3 gui_jmr_js.py
 # 3. GUI — one 640×480 glass (text+games); F9 runtimes; arrows+space play
+#    Prefers .venv. HTML RUN = compile-on-RUN bytecode (not dukpy / not stale .JSH).
+#    F9 BOARD: PC keyboard = tether (J15 dead).
 
 make -C sim sim_server_synth
 # 4. Verilator FPGA-SIM binary (REQUIRED for F9 FPGA-SIM; never fake with host twin)
-#    Opt-in dukpy twin only: JMR_SIM_HOST=1
+#    Opt-in host twin ONLY for debug: JMR_SIM_HOST=1 (not product)
 
-python3 tools/check_runtime_parity.py
-# 5. PYTHON ↔ FPGA-SIM RTL glass smoke
+.venv/bin/python tools/check_runtime_parity.py
+# 5. PYTHON ↔ FPGA-SIM RTL glass smoke (bytecode path; no dukpy cheat)
 
 python3 tools/make_sd_image.py create card.img
 # 6a. rebuild FAT32 card.img from storage/
@@ -54,11 +61,10 @@ python3 tools/make_sd_image.py create card.img
 sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
 # 6b. write card.img → physical µSD (lsblk; whole disk not partition)
 
-# 7. ONLY after BATTERY PASS + timing clean — do not flash to “debug” sim gaps:
+# 7. ONLY after BATTERY PASS + timing WNS ≥ 0:
 # source scripts/vivado_env.sh && make -C tools/board_flow bit && make -C tools/board_flow flash
-# JP4=boot source only; keyboard in J15 (same PIC24 USB→PS/2 idea as BASIC T100 J5).
-# HID hardware isolation (J15→LEDs only; wait until JS Vivado is idle):
-# source scripts/vivado_env.sh && make -C tools/hid_led_blink bit flash
+# JP4=boot source only. J15 USB Host is dead on this board — play via GUI tether.
+# Last flashed bit 2026-08-13 03:36 (WNS +0.139); tree has newer JSB/640 FB RTL.
 ```
 
 Day-one: **1 → 2 → 3 → 4 → 5**. FPGA-SIM is **real RTL** after step 4 — do not
@@ -67,8 +73,10 @@ Do not jump to Vivado before PYTHON + FPGA-SIM agree on user-visible behaviour.
 Gate: `python3 tools/check_runtime_parity.py` must print **BATTERY PASS**.
 Board flash is step 7, last — never a substitute for fixing FPGA-SIM.
 
-**LOAD / paste:** `LOAD INVADERS_FULL.HTML` or `LOAD 3` (DIR index). Quotes optional;
-Ctrl-V pastes into the prompt (same idea as the BASIC GUI).
+**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY) then `RUN`.
+Only HTML titles. **`RUN` = compile-on-RUN** (fresh internal `.JSH`; line
+numbers from the HTML). Never type `.JSH`; stale `.JSH` is disposable.
+Same-stem `.JS` demos are not the product. Ctrl-V pastes into the prompt.
 
 
 **[CONSTITUTION.md](CONSTITUTION.md) is the specification.** If the code and
@@ -80,6 +88,9 @@ the Constitution disagree, the code is wrong.
 [docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md#teach-me-rtl--fpga-sim--vivado--bit--bin)
 
 **Architecture:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
+**Fit / LUTs / BRAM / slices:** [docs/FPGA_FIT.md](docs/FPGA_FIT.md) — measured
+from `build/nexys_video/utilization_impl.rpt`. Do not invent counts.
 
 **Session status:** [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md)
 
@@ -110,8 +121,8 @@ tokens, microcode, or Nexys A7-100T pinouts here. Board freeze:
 | `third_party/digilent_rgb2dvi/` | Digilent HDMI TMDS IP (do not rewrite) |
 | `sim/` | Verilator + cocotb |
 | `constraints/` | Nexys Video XDC (StarLite later; not A7-100T) |
-| `storage/` | Seeds for card image / demos (`INVADERS_FULL.HTML`, …) |
-| `docs/` | Architecture, bring-up, handoff |
+| `storage/` | Seeds: `NAME.HTML` titles (`.JSH` = compile-on-RUN output only) |
+| `docs/` | Architecture, bring-up, fit, handoff |
 | `traces/` | Flight logs — read first when debugging |
 | `.cursor/rules/` | Product rules for *this* machine |
 

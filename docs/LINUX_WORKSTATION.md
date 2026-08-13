@@ -12,21 +12,45 @@ x86 **Ubuntu/Debian** preferred. Needs a desktop session for the GUI.
 this workstation builds the **JS** machine on Nexys Video. Do not flash the
 T200 board to debug gaps that FPGA-SIM has not passed.
 
+**No cheats:** product = HTML/JS native CPU (FPGA → ASIC). dukpy/host twin are
+not the machine. See `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`.
+
 ---
 
-## Readiness (honest, 2026-08-12)
+## Readiness (honest, 2026-08-13)
+
+Live detail: [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
 
 | Layer | Status |
 |---|---|
-| Constitution + Cursor rules | Done |
-| PYTHON FM glass / GUI F9 | Working (letterbox console + demos) |
-| FPGA-SIM (real Verilator RTL) | Working for console / LIST / RECTDEMO / INVADERS.JS / PS2 bench |
-| Host twin as “FPGA-SIM” | **Forbidden** unless `JMR_SIM_HOST=1` |
-| Battery `check_runtime_parity.py` | Must PASS before any flash |
-| Board keyboard (J15) | **Open** — sim PASS; silicon typing not proven |
-| Vivado bit / flash | **Do not** until sim-perfect for the feature; check WNS ≥ 0 |
+| Constitution + Cursor rules | Done (no-dukpy native CPU) |
+| PYTHON FM / GUI F9 | Letterbox; titles = `*.HTML` **compile-on-RUN** (dukpy / stale `.JSH` = debt) |
+| FPGA-SIM (real Verilator RTL) | Same `LOAD HTML` / `RUN` = compile current HTML; host twin forbidden |
+| Host twin as “FPGA-SIM” | **Forbidden** unless `JMR_SIM_HOST=1` (debug only) |
+| Battery `check_runtime_parity.py` | Must PASS (`.venv/bin/python`) before any flash |
+| Board keyboard (J15) | **Dead hardware** — use GUI/PROG tether; do not thrash PS/2 RTL |
+| Last SRAM flash | See SESSION_HANDOFF — tree may be ahead of flashed bit |
 
-Do not invent LUT counts. Do not start Vivado before PYTHON + FPGA-SIM agree.
+### Monitor verbs (PYTHON and F9 FPGA-SIM — same glass)
+
+| Verb | Behaviour |
+|---|---|
+| `DIR` | Catalog |
+| `LOAD "NAME.HTML"` | Product titles — quotes optional |
+| `LIST` / `LIST -` | Numbered lines; pages with `-- MORE --` |
+| `LIST 10-20` / `LIST n` | Range / single display line |
+| `EDIT n` | Show line; next Enter replaces it |
+| `CLS` | Clear glass |
+| `RUN` | **Compile-on-RUN** → JMR bytecode VM (fresh `.JSH`). Not dukpy / not stale sidecar. |
+
+### Play controls
+
+- **Arrows + Space** (and Up/Down as the HTML binds). Mouse stick **off**.
+- KEYBITS: Up=1 Down=2 Left=4 Right=8 Fire=16. BOARD: GUI → PROG `0xFE`+bits.
+- One glass: letterbox text at READY; full FB while a game RUNs (feature).
+
+Do not invent LUT counts — copy [FPGA_FIT.md](FPGA_FIT.md).
+Flash only after battery PASS and timing WNS ≥ 0.
 
 ---
 
@@ -51,11 +75,11 @@ python3 gui_jmr_js.py
 make -C sim sim_server_synth
 make -C sim tb_ps2_typing
 python3 tools/make_sd_image.py create sim/card.img
-python3 tools/check_runtime_parity.py   # BATTERY PASS
+.venv/bin/python tools/check_runtime_parity.py   # BATTERY PASS (bytecode path)
 ```
 
 F9 in the GUI uses this binary. If missing → fail loud; do not fall back to
-PYTHON and call it FPGA-SIM.
+PYTHON and call it FPGA-SIM. Never use dukpy as “FPGA-SIM.”
 
 ---
 
@@ -69,16 +93,4 @@ make -C tools/board_flow flash          # SRAM smoke first
 # make -C tools/board_flow flash-qspi   # only after SRAM smoke
 ```
 
-Gold synthesizability gate remains Vivado on Linux — not Mac Verilator.
-Keyboard: J15 USB Host (PIC24→PS/2), same *idea* as BASIC T100 J5.
-HID isolation (only if JS bit LD7 stays dark; wait for JS Vivado to finish):
-`source scripts/vivado_env.sh && make -C tools/hid_led_blink bit flash`
-
----
-
-## Related
-
-- [ARCHITECTURE.md](ARCHITECTURE.md)
-- [SESSION_HANDOFF.md](SESSION_HANDOFF.md)
-- [../CONSTITUTION.md](../CONSTITUTION.md)
-- [../README.md](../README.md)
+Only after all three HTML titles are green on FPGA-SIM **and** you GUI-tested.

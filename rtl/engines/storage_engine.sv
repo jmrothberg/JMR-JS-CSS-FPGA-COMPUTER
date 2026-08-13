@@ -158,7 +158,7 @@ module storage_engine #(
         S_FS0, S_FS1, S_FS2, S_FS3, S_FS4,       // FAT set (all FAT copies)
         S_AL0, S_AL1, S_AL1R, S_AL1C, S_AL1D, S_AL2, S_AL3, // allocate
         S_FC0, S_FC1, S_FC2,                     // free cluster chain
-        S_RB0, S_RB0C, S_RB1, S_RBA0, S_RBA1,    // read byte / advance
+        S_RB0, S_RB0C, S_RB1, S_RBA0, S_RBA1, S_RBA1B, // read byte / pipelined LBA
         S_GB0, S_GB1,                            // NEW: public get_byte
         S_RL0, S_RL1, S_RL2,                     // LINE INPUT#
         S_RF0, S_RF1, S_RF2, S_RF3, S_RF4,       // INPUT# field
@@ -197,6 +197,7 @@ module storage_engine #(
 
     logic [31:0] f_first, f_size, f_pos;
     logic [31:0] cur_clus, data_lba, buf_lba;
+    logic [31:0] lba_off;  // NEW: pipeline (clus-2)<<spc then +data_start (WNS)
     logic [7:0]  sect_in_clus;
     logic [9:0]  rd_off;
     logic [9:0]  wr_idx;
@@ -413,6 +414,7 @@ module storage_engine #(
             stem_i <= 8'h0; ext_i <= 8'h0; in_ext <= 1'b0;
             f_first <= 32'h0; f_size <= 32'h0; f_pos <= 32'h0;
             cur_clus <= 32'h0; data_lba <= 32'h0; buf_lba <= 32'hFFFFFFFF;
+            lba_off <= 32'h0;
             sect_in_clus <= 8'h0; rd_off <= 10'h0; wr_idx <= 10'h0;
             dir_lba <= 32'h0; slot_lba <= 32'h0; dir_off <= 10'h0; slot_off <= 10'h0;
             slot_ok <= 1'b0; found_r <= 1'b0;
@@ -947,9 +949,14 @@ module storage_engine #(
                     end
                 end
                 S_RBA1: begin
+                    // NEW: split LBA math — was fat_val→data_lba in one cycle (−0.5 ns WNS)
                     cur_clus     <= fat_val;
                     sect_in_clus <= 8'h0;
-                    data_lba     <= data_start + ((fat_val - 32'd2) << spc_shift);
+                    lba_off      <= (fat_val - 32'd2) << spc_shift;
+                    state        <= S_RBA1B;
+                end
+                S_RBA1B: begin
+                    data_lba <= data_start + lba_off;
                     pop_ret();
                 end
 

@@ -228,28 +228,15 @@ static std::string screen_text() {
     return oss.str();
 }
 
-// NEW: export mini-FB (160×120) scaled ×4 → 640×480 indexed (game_mode)
+// NEW: export native 640×480 game FB (no ×4 upsample — FB is glass size)
 static std::string fb_export_b64() {
-    constexpr int MW = 160, MH = 120, SCALE = 4;
     constexpr int W = 640, H = 480;
-    std::vector<uint8_t> mini(MW * MH, 0);
-    for (int i = 0; i < MW * MH; i++) {
-        top->dump_fb_raddr = (uint16_t)i;
+    std::vector<uint8_t> full((size_t)W * H, 0);
+    for (int i = 0; i < W * H; i++) {
+        top->dump_fb_raddr = (uint32_t)i;
         tick(); // BRAM dump port is registered — settle
         tick();
-        mini[(size_t)i] = (uint8_t)(top->dump_fb_rdata & 0xff);
-    }
-    std::vector<uint8_t> full((size_t)W * H, 0);
-    for (int my = 0; my < MH; my++) {
-        for (int mx = 0; mx < MW; mx++) {
-            uint8_t pix = mini[(size_t)my * MW + mx];
-            int x0 = mx * SCALE, y0 = my * SCALE;
-            for (int dy = 0; dy < SCALE; dy++) {
-                size_t base = (size_t)(y0 + dy) * W + (size_t)x0;
-                for (int dx = 0; dx < SCALE; dx++)
-                    full[base + (size_t)dx] = pix;
-            }
-        }
+        full[(size_t)i] = (uint8_t)(top->dump_fb_rdata & 0xff);
     }
     return b64_encode(full.data(), full.size());
 }
@@ -279,6 +266,12 @@ int main(int argc, char** argv) {
             std::cout << "BYE" << std::endl;
             break;
         }
+        // Compile-on-RUN: host rewrote card.img .JSH; reload SPI image before FAT OPEN
+        if (line == "SDRELOAD") {
+            sd_load_image();
+            std::cout << "OK" << std::endl;
+            continue;
+        }
         if (line.rfind("KEY ", 0) == 0) {
             unsigned v = std::stoul(line.substr(4), nullptr, 16);
             push_key(uint8_t(v));
@@ -302,7 +295,8 @@ int main(int argc, char** argv) {
             std::cout << "OK" << std::endl;
             continue;
         }
-        // NEW: GUI arrows send KEYBITS (host twin already did). Same as JOY.
+        // NEW: KEYBITS = play bits (Left=4 Right=8 Fire=16). Assign joy_in;
+        // GUI must not follow with JOY 0 (that wiped arrows/Space).
         if (line.rfind("KEYBITS ", 0) == 0) {
             unsigned v = std::stoul(line.substr(8), nullptr, 0);
             top->joy_in = v & 0x3f;

@@ -58,7 +58,7 @@ class RuntimeBackend(ABC):
     def frame_tick(self) -> None:
         pass
 
-    def paint_prompt(self, prompt: str) -> None:
+    def paint_prompt(self, prompt: str, cursor_on: bool = False) -> None:
         """Optional: paint monitor prompt into this runtime's glass."""
         pass
 
@@ -93,8 +93,8 @@ class PythonBackend(RuntimeBackend):
     def frame_tick(self) -> None:
         self.machine.frame_tick()
 
-    def paint_prompt(self, prompt: str) -> None:
-        self.machine.paint_monitor(prompt)
+    def paint_prompt(self, prompt: str, cursor_on: bool = False) -> None:
+        self.machine.paint_monitor(prompt, cursor_on=cursor_on)
 
     @property
     def running(self) -> bool:

@@ -93,9 +93,9 @@ module top_nexys_video (
     logic [7:0] scan_data, dump_data;
     logic       ready_lit, game_mode;
     logic [5:0] joy_out;
-    logic [14:0] fb_raddr;
+    logic [18:0] fb_raddr;
     logic [7:0]  fb_rdata;
-    logic [14:0] dump_fb_raddr;
+    logic [18:0] dump_fb_raddr;
     logic [7:0]  dump_fb_rdata;
     // NEW: SPI from core storage_engine
     logic sd_sck, sd_mosi, sd_miso, sd_cs_n;
@@ -103,6 +103,7 @@ module top_nexys_video (
     // NEW: PROG-cable tether — FT245 FIFO on FT2232 ch A (T100-style one cable)
     logic       uart_kbd_push;
     logic [7:0] uart_kbd_data;
+    logic [5:0] uart_joy_bits;  // NEW: GUI KEYBITS while J15 USB host is dead
     logic [9:0] uart_dump_addr;
     jmr_uart_link #(.CLK_HZ(100_000_000), .USE_DPTI(1)) u_link (
         .clk(core_clk), .rst_n(rst_n),
@@ -111,6 +112,7 @@ module top_nexys_video (
         .prog_rdn(prog_rdn), .prog_wrn(prog_wrn),
         .prog_oen(prog_oen), .prog_siwun(prog_siwun),
         .kbd_push(uart_kbd_push), .kbd_data(uart_kbd_data),
+        .joy_bits(uart_joy_bits),
         .dump_addr(uart_dump_addr), .dump_data(dump_data),
         .dump_fb_raddr(dump_fb_raddr), .dump_fb_rdata(dump_fb_rdata),
         .game_mode(game_mode),
@@ -124,7 +126,8 @@ module top_nexys_video (
         .clk(core_clk), .pixel_clk(pixel_clk), .rst_n(rst_n),
         .standalone_mode(1'b1),
         .kbd_push(core_kbd_push), .kbd_data(core_kbd_data),
-        .joy_in(6'b0), .joy_out(joy_out),
+        // NEW: was 6'b0 — games ignored GUI arrows; tether KEYBITS feed joy_in
+        .joy_in(uart_joy_bits), .joy_out(joy_out),
         .dump_addr(uart_dump_addr), .dump_data(dump_data),
         .cursor(cursor), .ready_lit(ready_lit),
         .scan_addr(scan_addr), .scan_data(scan_data),

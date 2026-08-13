@@ -17,9 +17,8 @@ Flashing half-broken bits wastes hours.
 different XDC/PHY only after Nexys Video glass works. Do **not** run two board
 bring-ups in parallel until monitor + HDMI + INPUT are proven on Nexys Video.
 
-SystemVerilog sources will live in `rtl/`. Simulation uses **Verilator**
-(+ cocotb when tests land) under `sim/`. Constraints live under `constraints/`
-(board-specific XDC when RTL starts).
+SystemVerilog lives in `rtl/`. Simulation uses **Verilator** under `sim/`.
+Constraints: `constraints/nexys_video.xdc`.
 
 ---
 
@@ -66,15 +65,19 @@ designs. Only Vivado (board flow) produces them; Verilator never does.
 
 ---
 
-## Debug tiers: PYTHON → FPGA-SIM → BOARD
+## Debug tiers: PYTHON → FPGA-SIM → BOARD → ASIC
 
 | Runtime | What it is | Where the “CPU” lives |
 |---|---|---|
-| **PYTHON** | Functional Model | `functional_model/` |
+| **PYTHON** | **JMR bytecode VM** — **compile-on-RUN** | `functional_model/` (fresh `.JSH` output; never stale) |
 | **FPGA-SIM** | Same RTL as the board, simulated | Verilator → `sim/sim_build_synth/jmr_js_sim_server` (**default**). Host twin only with `JMR_SIM_HOST=1` — never a silent fallback. |
 | **BOARD** | Real Nexys Video (standalone or tethered debug) | Silicon |
+| **ASIC** | Same ISA after FPGA honesty | — |
 
-Glass discipline: [../.cursor/rules/python-first-parity.mdc](../.cursor/rules/python-first-parity.mdc).
+Titles: `LOAD "NAME.HTML"` / `RUN` only. Never call Chrome or dukpy a rung.
+
+Glass: [../.cursor/rules/python-first-parity.mdc](../.cursor/rules/python-first-parity.mdc),
+[../.cursor/rules/no-dukpy-cheat-native-cpu.mdc](../.cursor/rules/no-dukpy-cheat-native-cpu.mdc).
 
 Traces first: [../.cursor/rules/use-existing-traces.mdc](../.cursor/rules/use-existing-traces.mdc).
 
@@ -98,12 +101,12 @@ Traces first: [../.cursor/rules/use-existing-traces.mdc](../.cursor/rules/use-ex
 | FPGA part | **XC7A200T-1SBG484C** |
 | External RAM | 512 MiB DDR3 (enough for V1 FB + heap; exact map later) |
 | Video | **HDMI Source** (J8) — native **640×480 @ ~60 Hz**, ~25.175 MHz pixel clock |
-| Framebuffer | 8 bpp indexed, **256-entry RGB888 palette**, double buffer (2× 307,200 bytes) |
-| Keyboard | USB HOST (J15) → PIC24 → PS/2 into FPGA — **standalone typing / EDIT / ESC** |
-| Play controls | **Pmod digital joystick / gamepad** (GPIO) on BOARD; **GUI mouse → same joy bitfield** on PYTHON + FPGA-SIM |
-| Mouse | **Not V1 standalone USB**; host mouse is joystick emulator in sim only |
-| Host link | PROG/UART — flash + **optional debug only** (not required to play) |
-| Storage | µSD SPI master wired; FAT32 LOAD engine next |
+| Framebuffer | 8 bpp indexed, **256-entry RGB888 palette**. FPGA-SIM / next bit: dual **640×480** BRAM. Last flash (03:36): 160×120 scaled. DDR3 heap/FB still later |
+| Keyboard | USB HOST (J15) → PIC24 → PS/2 — **this board’s J15 is dead**; GUI/PROG tether until RMA |
+| Play controls | GUI arrows+Space → KEYBITS (BOARD: PROG `0xFE`+bits). Mouse stick **off**. Pmod joy later |
+| Mouse | **Not V1 standalone USB** |
+| Host link | PROG FT245 (ch A / `.0`) — flash + tether glass + play keys |
+| Storage | µSD SPI + FAT32 DIR/LOAD; companion `.JSB` on card for simple titles |
 | openFPGALoader `-b` id | **nexysVideo** |
 | Bitstream output path | `build/nexys_video/jmr_nexys_video.bit` |
 | Second port | **PA-StarLite** later — HDMI + 40-pin joystick; keyboard needs Pmod (no HID jack) |
@@ -119,7 +122,7 @@ Traces first: [../.cursor/rules/use-existing-traces.mdc](../.cursor/rules/use-ex
         ↓
 256-entry palette → 24-bit RGB
         ↓
-rtl/video/jmr_hdmi_scanout.sv  (640×480 timing → vid_pData / HSync / VSync / DE)
+rtl/video/jmr_text_hdmi_scanout.sv  (640×480 timing → vid_pData / HSync / VSync / DE)
         ↓
 Digilent rgb2dvi  (PixelClk ~25.175 MHz → TMDS)
         ↓
@@ -127,15 +130,17 @@ HDMI Source (J8)  — pins in constraints/nexys_video.xdc (Digilent master XDC)
 ```
 
 **First silicon (console):** `rtl/top_nexys_video.sv` is a PHY shell around
-`jmr_js_core` — READY text on HDMI + USB-HID PS/2 keyboard + µSD SPI. Same
-core as Verilator FPGA-SIM. `RUN` plays RECTDEMO on a mini canvas (Esc back).
+`jmr_js_core` — READY text on HDMI + µSD SPI. Same core as Verilator FPGA-SIM.
+J15 keyboard is dead on this unit — type and play from **F9 BOARD** GUI tether.
+Do **not** raise HDMI resolution or switch this T200 to VGA for torn glyphs
+(that was VRAM CDC; dual-clock scan port).
 
 ```bash
 source scripts/vivado_env.sh
 make -C sim sim_server_synth          # FPGA-SIM RTL binary
-make -C tools/board_flow bit
-make -C tools/board_flow flash-qspi   # set JP1 to QSPI first
-# HDMI: type HELP / DIR / RUN  (keyboard in USB HID port; USB cable optional after QSPI)
+make -C tools/board_flow bit          # publish only if WNS ≥ 0
+make -C tools/board_flow flash        # SRAM first
+# HDMI: READY letterbox; play via GUI arrows+Space
 ```
 
 Volatile SRAM-only load (lost on unplug): `make -C tools/board_flow flash`.
@@ -163,7 +168,8 @@ Same USB cable as JTAG (J12 PROG). The bitstream streams:
 - Game: `P<rr>:` + 160 hex nibbles (mini-FB 160×120 ×4 → full GUI glass)
 - Keys: `K` line on each USB Host `ps2_strobe` (flight-log proof)
 
-Every host byte lands in the keyboard FIFO. **F9 → BOARD** mirrors HDMI.
+Every host byte lands in the keyboard FIFO. **F9 → BOARD** mirrors HDMI and
+sends play KEYBITS (`0xFE` + 6-bit field) because J15 cannot.
 
 Nexys Video's FT2232 **channel A** is the FT245 FIFO (DPTI), not a UART — RTL
 `jmr_ft245_async` speaks that FIFO; Linux exposes it as the `/dev/ttyUSB*`
@@ -181,17 +187,24 @@ Gates: `make -C sim tb_uart_link tb_ft245`.
 - **LD4** = `~sd_cd` (card present)
 - **LD3** = MMCM locked, **LD2** = READY, **LD1** = game_mode, **LD0** = alive
 - **PS/2 is RX-only** (Digilent / BASIC T100 method). No host `0xFF`/`0xF4`.
-  Keyboard in **J15 USB Host**.
+  Product jack is **J15 USB Host** (dead on this unit — type via PROG tether).
 - **JP4 = FPGA boot source only** (JTAG / QSPI / USB-SD). It does **not**
   enable the keyboard. Do not move JP4 to “fix” typing.
 - **BUSY LED blinking = host JTAG/flash traffic**, not a fault.
 
 ### Silicon honesty (RUN)
 
-- `LOAD RECTDEMO.JS` + `RUN` → mini-FB rectangles (hardcoded engine)
-- `LOAD INVADERS.JS` + `RUN` → **bytecode VM** (`jmr_js_vm` + `invaders_jsb.hex`)
-- Other LOADs without bytecode → `?NB` (no bytecode)
-- Esc exits game_mode (priority over busy)
+- User product path: `LOAD "*.HTML"` + `RUN` → **compile-on-RUN** → fresh
+  bytecode / `.JSH` into the JMR VM. Never prefer a stale companion `.JSH`.
+  Never dukpy on silicon.
+- `?NH` = HTML path debt (temporary). Missing compile path → fail loud
+  (not Invaders hex lie).
+- Optional differently named demos (`RECTDEMO.JS`, …) may use `.JSB`.
+- Esc exits game_mode
+
+Last SRAM image: **2026-08-13 03:36**, WNS **+0.139 ns** (HDMI VRAM CDC +
+tether KEYBITS). See [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
+Rule: `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`.
 
 ### FPGA-SIM battery (before every flash)
 
@@ -199,7 +212,7 @@ Gates: `make -C sim tb_uart_link tb_ft245`.
 make -C sim sim_server_synth
 make -C sim tb_ps2_typing
 python3 tools/make_sd_image.py create sim/card.img
-python3 tools/check_runtime_parity.py   # must print BATTERY PASS
+.venv/bin/python tools/check_runtime_parity.py   # must print BATTERY PASS
 ```
 
 Do **not** flash the board until that battery is green **and** you are
@@ -218,14 +231,18 @@ distributed LUT RAM and produced ~−90 ns WNS / dead tether — that is not a
 | FPGA pins | F4 / B2 | **W17 / N13** (`constraints/nexys_video.xdc`) |
 | Video | VGA | HDMI |
 
-If Verilator `tb_ps2_typing` PASS and **LD7 never blinks**, debug **PIC24 /
-J15 / keyboard / power-order** like the BASIC bring-up docs — do not rewrite
-console RTL or move JP4. Prefer the **same wired keyboard** that works on T100.
+If Verilator `tb_ps2_typing` PASS and **LD7 never blinks**, this unit’s **J15 /
+PIC24 is dead** (proven 2026-08-13). Use the GUI tether. Do not rewrite
+console RTL or move JP4.
 
 ### Keyboard checklist (if LD7 never blinks)
 
 RTL path is proven by `tb_ps2_typing`. Then check hardware only:
 
+- **Unplug HDMI before any keyboard power-cycle test.** A connected HDMI
+  monitor back-feeds 5 V into the board (keyboard LED stays lit with SW8
+  off), so the keyboard never truly resets and the PIC24 never re-enumerates
+  it. T100 never hit this — VGA carries no 5 V. Found 2026-08-13.
 - Keyboard in **J15 USB Host** (not UART / not PROG)
 - Wired **boot-protocol** keyboard preferred; no hub / wireless dongle
 - Plug in before power-on; DONE lit; JP4 = boot source only (not a keyboard fix)
@@ -268,10 +285,14 @@ No HDMI Sink, DisplayPort, higher modes, or audio-over-HDMI for V1.
 The machine must run **without a PC**: HDMI monitor + USB keyboard + Pmod
 joystick. UART/JTAG are for programming and optional debug only.
 
+**This T200 unit:** J15 never enumerates. Until RMA/replace, **F9 BOARD +
+PROG tether** is the working keyboard (type + KEYBITS play). Product goal
+above is unchanged.
+
 | Role | Plug | Path |
 |---|---|---|
-| Typing / EDIT / ESC | USB keyboard → USB HOST | PIC24 → PS/2 → keyboard PHY → INPUT FIFO |
-| Play (move/fire) | Digital joystick/gamepad → Pmod | GPIO reader → INPUT FIFO |
+| Typing / EDIT / ESC | USB keyboard → USB HOST | PIC24 → PS/2 → keyboard PHY → INPUT FIFO (**this unit: J15 dead → PROG tether**) |
+| Play (move/fire) | GUI KEYBITS (this unit) / Pmod later | `0xFE`+bits → `joy_in` / GPIO reader → INPUT FIFO |
 | Mouse | — | Out of V1 |
 
 Many physical sources merge into **one INPUT FIFO** → INPUT engine → monitor /
@@ -284,4 +305,5 @@ JS events (pattern cite: BASIC sibling UART/`KEY` + PS/2 FIFO merge in
 
 - [LINUX_WORKSTATION.md](LINUX_WORKSTATION.md)
 - [ARCHITECTURE.md](ARCHITECTURE.md)
+- [FPGA_FIT.md](FPGA_FIT.md)
 - [SESSION_HANDOFF.md](SESSION_HANDOFF.md)

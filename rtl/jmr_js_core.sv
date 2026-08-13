@@ -19,12 +19,12 @@ module jmr_js_core #(
     output logic        ready_lit,
     input  logic [9:0]  scan_addr,
     output logic [7:0]  scan_data,
-    // Mini-canvas scanout (game mode)
+    // Mini-canvas scanout (game mode) — native 640×480
     output logic        game_mode,
-    input  logic [14:0] fb_raddr,
+    input  logic [18:0] fb_raddr,
     output logic [7:0]  fb_rdata,
-    // NEW: tether FB dump (core clk) — full 640×480 mirror path
-    input  logic [14:0] dump_fb_raddr = 15'd0,
+    // NEW: tether FB dump (core clk)
+    input  logic [18:0] dump_fb_raddr = 19'd0,
     output logic [7:0]  dump_fb_rdata,
     // NEW: µSD SPI (storage_engine owns the master)
     output logic        sd_sck,
@@ -39,13 +39,20 @@ module jmr_js_core #(
     logic [7:0] put_char;
     logic run_pulse;
     logic vm_start;
+    logic halt_pulse;
     logic demo_busy, demo_done;
     logic vm_busy, vm_done;
     logic fb_we, fb_swap, demo_fb_we, demo_fb_swap, vm_fb_we, vm_fb_swap;
-    logic [14:0] fb_waddr, demo_fb_waddr, vm_fb_waddr;
+    logic [18:0] fb_waddr, demo_fb_waddr, vm_fb_waddr;
     logic [7:0]  fb_wdata, demo_fb_wdata, vm_fb_wdata;
     logic frame_tick;
     logic [15:0] frame_div;
+    // NEW: console loads .JSB into VM code BRAM
+    logic        code_we;
+    logic [14:0]  code_waddr;
+    logic [31:0] code_wdata;
+    logic        stor_get_byte;
+    logic [7:0]  stor_get_data;
 
     // Console ↔ storage
     logic        stor_open, stor_close, stor_readline, stor_putc;
@@ -73,6 +80,11 @@ module jmr_js_core #(
     logic [7:0]  ram_wdata, ram_rdata;
     logic        ram_req, ram_req_q;
     logic        ram_sel_stor; // 1 = storage master won
+    // NEW: 2-cycle RAM — latch addr then access+gnt (closes state→RAM→rdata WNS)
+    logic        ram_pend;
+    logic        ram_pend_we, ram_pend_stor;
+    logic [13:0] ram_pend_addr;
+    logic [7:0]  ram_pend_wdata;
 
     wire in_work_c = (c_mem_addr >= 16'hB000) && (c_mem_addr < 16'hE000);
     wire in_work_s = (s_mem_addr >= 16'hB000) && (s_mem_addr < 16'hE000);
@@ -104,18 +116,31 @@ module jmr_js_core #(
             ram_rdata <= 8'h00;
             s_mem_gnt <= 1'b0;
             c_mem_gnt <= 1'b0;
+            ram_pend <= 1'b0;
+            ram_pend_we <= 1'b0;
+            ram_pend_stor <= 1'b0;
+            ram_pend_addr <= '0;
+            ram_pend_wdata <= '0;
         end else begin
             s_mem_gnt <= 1'b0;
             c_mem_gnt <= 1'b0;
-            if (ram_req) begin
-                if (ram_we) work_ram[ram_addr] <= ram_wdata;
-                ram_rdata <= work_ram[ram_addr];
-                // write-first: readback shows new data on write
-                if (ram_we) ram_rdata <= ram_wdata;
-                ram_req_q <= 1'b1;
-                if (ram_sel_stor) s_mem_gnt <= 1'b1;
+            if (ram_pend) begin
+                if (ram_pend_we) work_ram[ram_pend_addr] <= ram_pend_wdata;
+                ram_rdata <= ram_pend_we ? ram_pend_wdata : work_ram[ram_pend_addr];
+                if (ram_pend_stor) s_mem_gnt <= 1'b1;
                 else c_mem_gnt <= 1'b1;
-            end else ram_req_q <= 1'b0;
+                ram_pend <= 1'b0;
+                ram_req_q <= 1'b1;
+            end else if (ram_req) begin
+                ram_pend <= 1'b1;
+                ram_pend_addr <= ram_addr;
+                ram_pend_we <= ram_we;
+                ram_pend_wdata <= ram_wdata;
+                ram_pend_stor <= ram_sel_stor;
+                ram_req_q <= 1'b0;
+            end else begin
+                ram_req_q <= 1'b0;
+            end
         end
     end
     assign s_mem_rdata = ram_rdata;
@@ -129,7 +154,7 @@ module jmr_js_core #(
     );
 
     jmr_video_vram u_vid (
-        .clk(clk), .rst_n(rst_n),
+        .clk(clk), .scan_clk(pixel_clk), .rst_n(rst_n),
         .cls(cls), .put_en(put_en), .put_char(put_char), .print_nl(print_nl),
         .busy(video_busy), .cursor(cursor),
         .scan_addr(scan_addr), .scan_data(scan_data),
@@ -146,9 +171,12 @@ module jmr_js_core #(
         .ready_lit(ready_lit),
         .run_pulse(run_pulse),
         .vm_start(vm_start),
+        .halt_pulse(halt_pulse),
+        .code_we(code_we), .code_waddr(code_waddr), .code_wdata(code_wdata),
         .stor_open(stor_open), .stor_mode(stor_mode), .stor_chan(stor_chan),
         .stor_name_addr(stor_name_addr), .stor_name_len(stor_name_len),
         .stor_close(stor_close), .stor_readline(stor_readline),
+        .stor_get_byte(stor_get_byte), .stor_get_data(stor_get_data),
         .stor_putc(stor_putc), .stor_putc_data(stor_putc_data),
         .stor_dir(stor_dir), .stor_dir_next(stor_dir_next), .stor_delete(stor_delete),
         .stor_busy(stor_busy), .stor_done(stor_done),
@@ -165,7 +193,7 @@ module jmr_js_core #(
         .start_open(stor_open), .mode_in(stor_mode), .chan_in(stor_chan),
         .name_addr(stor_name_addr), .name_len(stor_name_len),
         .start_close(stor_close), .start_readline(stor_readline),
-        .start_readfield(1'b0), .start_get_byte(1'b0), .get_byte(),
+        .start_readfield(1'b0), .start_get_byte(stor_get_byte), .get_byte(stor_get_data),
         .start_putc(stor_putc), .putc_data(stor_putc_data),
         .start_dir(stor_dir), .start_dir_next(stor_dir_next),
         .start_delete(stor_delete),
@@ -209,9 +237,10 @@ module jmr_js_core #(
     jmr_js_vm #(.CODE_HEX("invaders_jsb.hex")) u_vm (
         .clk(clk), .rst_n(rst_n),
         .start(vm_start),
-        .stop(kbd_push && kbd_data == 8'h1B),
+        .stop((kbd_push && kbd_data == 8'h1B) || halt_pulse),
         .frame_tick(frame_tick),
         .joy_in(joy_in),
+        .code_we(code_we), .code_waddr(code_waddr), .code_wdata(code_wdata),
         .busy(vm_busy), .done(vm_done),
         .fb_we(vm_fb_we), .fb_waddr(vm_fb_waddr),
         .fb_wdata(vm_fb_wdata), .fb_swap(vm_fb_swap)
@@ -225,7 +254,7 @@ module jmr_js_core #(
 
     always_ff @(posedge clk) begin
         if (!rst_n) game_mode <= 1'b0;
-        else if (kbd_push && kbd_data == 8'h1B) game_mode <= 1'b0;
+        else if ((kbd_push && kbd_data == 8'h1B) || halt_pulse) game_mode <= 1'b0;
         else if (run_pulse || demo_busy || demo_done || vm_start || vm_busy)
             game_mode <= 1'b1;
     end

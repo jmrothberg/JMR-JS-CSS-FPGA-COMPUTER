@@ -37,6 +37,38 @@ dispatch FPGA execution engines (microcode + engines). This is NOT:
 It is a new architecture: **JavaScript (+ minimal game HTML container) is the
 instruction surface.** Canvas drawing is hardware-accelerated.
 
+## Vendored-titles mandate (success criteria, non-negotiable)
+
+This is a **real HTML / JavaScript / (minimal) CSS native CPU** — FPGA first,
+then ASIC. Same method as the BASIC sibling; **not** a browser or dukpy box.
+
+The machine plays real HTML5/Canvas games. One title = one file:
+`INVADERS.HTML`, `PACMAN.HTML`, `DONKEY.HTML`. Those **MUST LOAD + RUN with
+the same glass on PYTHON → FPGA-SIM → BOARD** (then ASIC).
+
+- **No dukpy cheat.** PYTHON runs the **JMR bytecode VM**. **`RUN` always
+  compiles the loaded `.HTML`** (editor source of truth) into a **fresh**
+  internal `.JSH` — never prefer a stale on-disk `.JSH`. Compile errors must
+  report **line numbers from that HTML**. dukpy/Duktape/V8/QuickJS must not be
+  the product execution path. Chrome may open the same `.HTML` for authoring
+  only — that does not count as PYTHON/FPGA proof.
+- **No host-twin FPGA-SIM.** F9 FPGA-SIM = Verilator RTL. `JMR_SIM_HOST=1`
+  is explicit debug only.
+- `?NH` ("no HTML") is a **temporary, tracked debt** — never an acceptable
+  final state. A runtime showing `?NH` for a vendored title means the product
+  is **NOT DONE**.
+- Proof ladder: PYTHON **bytecode** truth → FPGA-SIM (real Verilator RTL) →
+  BOARD → ASIC. Never fake any rung; never call silicon done from Chrome/dukpy.
+- **The HTML decides the keys.** Hardware/VM deliver raw key events
+  (keycodes); each game's own `keydown`/`keyup` handlers define its bindings.
+  No hardcoded key→action maps in RTL.
+- Every game feature must work from card + local input alone (untethered).
+  Tether = debug mirror only. When the J15 keyboard hardware is fixed, play
+  must work standalone with **zero code changes**.
+- Same-name `NAME.JS` / `NAME.JSB` are **not** product twins of the HTML
+  titles. Optional differently named demos (e.g. `RECTDEMO`) may keep bytecode
+  smoke. `storage/games_*` = upstream archive only.
+
 ---
 
 # FUNDAMENTAL PHILOSOPHY
@@ -56,7 +88,8 @@ engines, not library code on a hidden CPU.
 
 1. No Z80 / 6502 / RISC-V / MicroBlaze / soft general-purpose CPU as the
    execution cheat.
-2. No JS interpreter or browser engine running on another processor.
+2. No JS interpreter or browser engine (dukpy/Duktape/V8/QuickJS/Node) as
+   the PYTHON / FPGA-SIM / BOARD / ASIC product path.
 3. JavaScript (bytecode) is the architectural instruction surface.
 4. User never sees a conventional assembly ISA as the programming model.
 5. Architecture must remain understandable (engines, not a monolith).
@@ -75,15 +108,17 @@ engines, not library code on a hidden CPU.
 
 Architecture
 ↓
-Python Functional Model
+Python Functional Model (**JMR bytecode VM** — not dukpy)
 ↓
 Python Hardware Model (explicit memories / FSMs / clocks)
 ↓
 SystemVerilog
 ↓
-Simulation (FPGA-SIM / Verilator)
+Simulation (FPGA-SIM / Verilator RTL — never host twin)
 ↓
 FPGA (`.bit` / `.bin` on primary board)
+↓
+ASIC (only after FPGA honesty)
 ↓
 Optimization
 
@@ -92,9 +127,11 @@ Do **not** flash the board to debug gaps that FPGA-SIM has not already closed.
 FPGA-SIM means **real Verilator RTL** of this design — never a silent host twin.
 
 **Uniform glass (F9 PYTHON → FPGA-SIM → BOARD):** every user-typed / user-visible
-behaviour must work the same way in the Python / GUI host path and in FPGA-SIM
-**before** it is considered done on the board. Cursor rule:
-`.cursor/rules/python-first-parity.mdc`.
+behaviour must work the same way on the **bytecode** path before board “done.”
+User titles: `LOAD "NAME.HTML"` / `RUN` only. **`RUN` = compile-on-RUN**
+(fresh `.JSH` output; never stale sidecar). Cursor rules:
+`python-first-parity.mdc`, `no-dukpy-cheat-native-cpu.mdc`,
+`never-fake-fpga-sim.mdc`.
 
 The BASIC sibling (`JMR-BASIC-FPGA-COMPUTER` on Nexys A7-100T) is a **working
 reference for method and USB-HID→PS/2 bring-up**, not a pinout or ISA source.
@@ -112,13 +149,18 @@ repo’s `docs/FPGA_BRINGUP.md` and `constraints/` — never copy Nexys A7-100T
 numbers from the BASIC machine.
 
 **Display (frozen):** HDMI Source, native **640×480 @ ~60 Hz**, 8 bpp indexed,
-256-entry RGB888 palette, double-buffered framebuffers in external DDR3.
+256-entry RGB888 palette, double-buffered. **V1 now:** dual FB in BRAM
+(`jmr_mini_fb.sv`). External DDR3 remains the target for heap + full FB later.
 
 **Standalone input (frozen):**
 
 - USB HOST keyboard (typing / EDIT / hardware ESC)
 - Pmod **digital joystick / gamepad** for play
 - USB mouse **not** required for V1 (USB HOST is one device; no Digilent hub)
+
+**This T200 unit:** J15 USB Host is hardware-dead. Type and play from the GUI
+PROG tether until RMA. The freeze above is still the product jack. Live status:
+`docs/SESSION_HANDOFF.md`.
 
 **Primary development host:** Ubuntu / Debian Linux (day-one path:
 `docs/LINUX_WORKSTATION.md` — GUI, Verilator, Vivado, flash).
@@ -296,7 +338,8 @@ Do not assume Nexys A7-100T pinouts.
 
 Every subsystem exists first in Python.
 
-The Python model is the behavioral truth.
+The Python **bytecode functional model** (JMR VM + engines) is the behavioral
+truth for the machine — **not** dukpy/Duktape/V8 executing HTML as a cheat.
 
 Python exposes every internal state.
 
@@ -427,6 +470,9 @@ Every subsystem should be independently testable.
 Same glass on PYTHON, FPGA-SIM, and board.
 
 Standalone: HDMI out, USB keyboard, Pmod joystick, no PC required to play.
+
+`INVADERS.HTML`, `PACMAN.HTML`, and `DONKEY.HTML` LOAD + RUN and are playable
+on all three runtimes (see Vendored-titles mandate). No `?NH` anywhere.
 
 The architecture should be elegant enough that someone reading the repository
 understands how a complete computer works from keyboard/joystick input to

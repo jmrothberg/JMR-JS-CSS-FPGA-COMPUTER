@@ -1,0 +1,64 @@
+---
+description: Real HTML/JS/CSS-native CPU — no dukpy/V8/host twin as the machine.
+alwaysApply: true
+---
+
+# No dukpy cheat — native HTML/JS/CSS CPU
+
+This product is a **real JavaScript-native computer** (HTML5 Canvas games,
+minimal CSS as needed) destined for **FPGA then ASIC** — same ladder as
+`JMR-BASIC-FPGA-COMPUTER`, not a browser wrapped around a soft CPU.
+
+## Hard cheats (forbidden)
+
+- **dukpy / Duktape / V8 / QuickJS / Node / browser** executing game logic
+  as the PYTHON / FPGA-SIM / BOARD / ASIC “machine.”
+- Silent **host twin** for F9 FPGA-SIM (`JMR_SIM_HOST=1` is opt-in debug only;
+  never default — see `never-fake-fpga-sim`).
+- Claiming BOARD/ASIC done because Chrome or dukpy looked good.
+- Shipping **same-name twin titles** (`INVADERS.JS` vs `INVADERS.HTML`) as if
+  they were the product — **one title = one `NAME.HTML`**.
+
+## Honest path (required)
+
+```
+LOAD "NAME.HTML"  →  edit (line numbers = HTML)  →  RUN
+    →  always compile current HTML  →  fresh internal .JSH  →  JMR VM
+```
+
+| Runtime | What runs the game |
+|---|---|
+| Chrome | Browser (authoring / visual check only — not the machine) |
+| PYTHON | **Bytecode VM** — **compile-on-RUN** from loaded HTML |
+| FPGA-SIM | **Verilator RTL** of that VM (same UX; no stale `.JSH`) |
+| BOARD / ASIC | **Same RTL ISA** on silicon |
+
+Order: **PYTHON bytecode perfect → FPGA-SIM perfect → board → ASIC.**
+Never skip; never fake a rung.
+
+## Compile-on-RUN (hard rule)
+
+- **Source of truth = the loaded `.HTML`** (editor buffer), not a disk `.JSH`.
+- **`RUN` always recompiles** that HTML → bytecode. Compile errors must show
+  **line numbers from the current HTML**, not an old sidecar.
+- **`.JSH` = invisible output** of that compile (overwrite/write fresh). Never
+  a typed LOAD name. Never prefer a pre-existing `.JSH` over compiling.
+- **Stale `.JSH` is trash.** Do not treat checked-in / leftover `.JSH` as the
+  game. Safe to delete; regenerate only as compile output.
+- FPGA-SIM/BOARD must not load an old companion `.JSH` while HTML was edited —
+  same rule: RUN = compile current HTML (then load the fresh bytecode into the
+  VM / BRAM). Missing compile path → fail loud (`?NH` debt), never Invaders hex.
+
+## Files
+
+- **Edit / LOAD / play:** `storage/*.HTML` only (`LOAD "NAME.HTML"` / `RUN`).
+- **`.JSH`:** internal compile cache only — see Compile-on-RUN above.
+- **Optional demos:** differently named `RECTDEMO.JS` / `JOYDEMO.JS` (+ `.JSB`).
+- **`storage/games_*`:** upstream archive only — not DIR, not card, not twins.
+
+## Agent checklist before marking HTML “done”
+
+1. Same `NAME.HTML` works in Chrome (look/feel).
+2. PYTHON `LOAD`+`RUN` = **compile-on-RUN bytecode**, not dukpy, not stale `.JSH`.
+3. FPGA-SIM F9 shows **RTL**, same LOAD+RUN, same glass/keys.
+4. Board confirms after SIM — then ASIC planning is allowed.

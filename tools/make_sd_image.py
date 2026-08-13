@@ -57,11 +57,18 @@ FSINFO_SECTOR = 1
 
 # Host long names → unique 8.3 card names (FAT root has no LFN on the board).
 CARD_NAME_MAP = {
-    "INVADERS_FULL.HTML": "INVADFUL.HTM",
     "INVADERS.HTML": "INVADERS.HTM",
     "INVADERS.JS": "INVADERS.JS",
+    "INVADERS.JSH": "INVADERS.JSH",
+    "DONKEY.HTML": "DONKEY.HTM",
+    "DONKEY.JS": "DONKEY.JS",
+    "DONKEY.JSH": "DONKEY.JSH",
+    "PACMAN.HTML": "PACMAN.HTM",
+    "PACMAN.JS": "PACMAN.JS",
+    "PACMAN.JSH": "PACMAN.JSH",
     "JOYDEMO.JS": "JOYDEMO.JS",
     "RECTDEMO.JS": "RECTDEMO.JS",
+    "CLIMB.JS": "CLIMB.JS",
 }
 
 
@@ -86,7 +93,7 @@ def collect_storage_files(
     for path in sorted(storage_dir.iterdir()):
         if not path.is_file() or path.name.startswith("."):
             continue
-        if path.suffix.upper() not in (".JS", ".HTML", ".HTM", ".PNG", ".DAT", ".BIN", ".JSB"):
+        if path.suffix.upper() not in (".JS", ".HTML", ".HTM", ".PNG", ".DAT", ".BIN", ".JSB", ".JSH"):
             continue
         host = path.name
         card = CARD_NAME_MAP.get(host.upper(), card_name_83(host))
@@ -175,8 +182,10 @@ def check_program(name: str, data: bytes) -> tuple[list[str], list[str]]:
                     f"{name}:{i}: {len(line)} chars, over the {LINE_MAX}-char limit"
                 )
         return errors, warns
-    # JS / HTML Canvas seeds — board LOAD path still growing; warn only on huge files
-    if len(data) > 512 * 1024:
+    # JS / HTML Canvas seeds — board LOAD path still growing; warn only on huge files.
+    # Single-file HTML with embedded PNG sprites is expected to exceed 512 KiB.
+    limit = 2 * 1024 * 1024 if upper.endswith((".HTM", ".HTML")) else 512 * 1024
+    if len(data) > limit:
         warns.append(f"{name}: {len(data)} bytes is large for early board storage")
     return errors, warns
 
@@ -302,6 +311,18 @@ def populate(image: bytearray, files: list[tuple[str, bytes]]) -> bytearray:
     return card.image
 
 
+def patch_card_file(img_path: Path, name: str, data: bytes) -> None:
+    """Overwrite one 8.3 file in an existing card.img (compile-on-RUN .JSH)."""
+    raw = bytearray(img_path.read_bytes())
+    mem = Memory()
+    card = SdSpiCard(mem, raw)
+    card.init()
+    vol = Fat32Volume(mem, card)
+    vol.mount()
+    vol.write_file(name, data)
+    img_path.write_bytes(bytes(card.image))
+
+
 def create_image(
     path: Path,
     size_bytes: int = DEFAULT_SIZE,
@@ -316,9 +337,15 @@ def create_image(
     if include_storage:
         # NEW: auto-compile storage/*.JS → .JSB so RUN has bytecode companions
         try:
-            from tools.compile_js import compile_one
+            from tools.compile_js import compile_html_one, compile_one
             for js in sorted(STORAGE_DIR.glob("*.JS")):
                 compile_one(js)
+            # NEW: HTML scripts → .JSH sidecar (does not overwrite .JSB)
+            for html in sorted(STORAGE_DIR.glob("*.HTML")):
+                try:
+                    compile_html_one(html)
+                except Exception as he:
+                    print(f"warning: compile HTML {html.name}: {he}", file=sys.stderr)
         except Exception as e:
             print(f"warning: compile_js skipped: {e}", file=sys.stderr)
         pairs.extend(collect_storage_files())

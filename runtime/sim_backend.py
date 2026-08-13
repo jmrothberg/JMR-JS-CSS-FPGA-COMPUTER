@@ -42,6 +42,7 @@ class SimBackend(RuntimeBackend):
         self._running = False  # NEW: RTL game_mode — skip prompt overlay
         self._more = False     # NEW: parked on -- MORE --
         self._edit_prefill: Optional[str] = None
+        self._loaded_name: str = ""
         self._log = FlightLog(self.name)
         # HARD RULE: RTL is default. Host twin ONLY via explicit JMR_SIM_HOST=1.
         # JMR_SIM_RTL=1 is accepted as a no-op alias (legacy scripts).
@@ -84,6 +85,9 @@ class SimBackend(RuntimeBackend):
             self._log.note("spawn host_sim_server.py (explicit JMR_SIM_HOST=1)")
         env = os.environ.copy()
         env["JMR_STANDALONE"] = env.get("JMR_STANDALONE", "1")
+        # NEW: always the project card.img (sim_main prefers ../card.img from
+        # sim/ cwd — a stale root image used to hide INVADERS.JSH → ?NH)
+        env.setdefault("JMR_CARD_IMG", str(ROOT / "card.img"))
         # NEW: keep stderr separate — RTL prints "SD image …" on cerr; merging
         # into stdout used to steal the READY handshake (fake/broken SIM start).
         self._proc = subprocess.Popen(
@@ -144,8 +148,13 @@ class SimBackend(RuntimeBackend):
         return self._edit_prefill
 
     def _screen_has_more(self) -> bool:
-        lines = [ln.rstrip() for ln in self._screen.splitlines()]
-        return bool(lines) and lines[-1].lstrip().startswith("-- MORE")
+        # NEW: skip trailing blank VRAM rows — MORE is last non-empty line
+        for ln in reversed(self._screen.splitlines()):
+            t = ln.strip()
+            if not t:
+                continue
+            return t.startswith("-- MORE")
+        return False
 
     def _abort_more(self) -> None:
         """Esc out of -- MORE -- so the next LINE is not eaten as a page key."""
@@ -174,7 +183,9 @@ class SimBackend(RuntimeBackend):
                 return
             # wrapped continuation of EDIT body — keep scanning for 'N body'
 
-    def _paint_screen_local(self, prompt: Optional[str] = None) -> None:
+    def _paint_screen_local(
+        self, prompt: Optional[str] = None, cursor_on: bool = False
+    ) -> None:
         """RTL text path — HDMI letterbox (same geometry as PYTHON / BOARD)."""
         # NEW: while MORE, do not append a second ">"
         if self._more:
@@ -186,6 +197,7 @@ class SimBackend(RuntimeBackend):
         self._canvas.paint_console_letterbox(
             self._screen.splitlines(),
             prompt=pr,
+            cursor_on=cursor_on,
         )
 
     def _sync_glass(self, prompt: Optional[str] = None) -> None:
@@ -209,10 +221,65 @@ class SimBackend(RuntimeBackend):
         self._log.type_line(text)
         # NEW: leave MORE before a new command (else first char advances the page)
         self._abort_more()
+        stripped = text.strip()
+        upper = stripped.upper()
+        if upper.startswith("LOAD"):
+            self._loaded_name = stripped[4:].strip().strip('"').strip("'")
+        # Compile-on-RUN: fresh .JSH into the live card, then RTL FAT-loads it.
+        if upper == "RUN" or upper.startswith("RUN "):
+            if self._html_loaded_stem() and not self._compile_on_run_html():
+                self._sync_glass("> ")
+                return
         self._rpc(f"LINE {text}")
         self._sync_glass("> ")
-        if text.strip().upper().startswith("EDIT"):
+        if upper.startswith("EDIT"):
             self._note_edit_prefill()
+
+    def _html_loaded_stem(self) -> str:
+        name = (self._loaded_name or "").upper()
+        if name.endswith(".HTML") or name.endswith(".HTM"):
+            return Path(name).stem[:8]
+        return ""
+
+    def _compile_on_run_html(self) -> bool:
+        """Compile current storage HTML → fresh .JSH on card.img → SDRELOAD.
+
+        RTL still FAT-loads NAME.JSH; that file is this compile, not a stale sidecar.
+        """
+        stem = self._html_loaded_stem()
+        html_path = ROOT / "storage" / f"{stem}.HTML"
+        if not html_path.is_file():
+            self._log.fault("COMPILE", f"no {html_path.name} — refuse RUN (?NH)")
+            return False
+        try:
+            from functional_model.compiler import CompileError
+            from tools.compile_js import compile_html_text, encode_html_chunk
+            from tools.make_sd_image import patch_card_file
+
+            html = html_path.read_text(encoding="utf-8")
+            chunk = compile_html_text(html)
+            blob = encode_html_chunk(chunk)
+            jsh_name = f"{stem}.JSH"
+            (ROOT / "storage" / jsh_name).write_bytes(blob)
+            card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
+            if card.is_file():
+                patch_card_file(card, jsh_name, blob)
+                resp = self._rpc("SDRELOAD")
+                if resp != "OK":
+                    self._log.fault(
+                        "SDRELOAD",
+                        f"{resp} — rebuild sim (SDRELOAD) so RUN cannot load a stale .JSH",
+                    )
+                    return False
+            self._log.note(f"compile-on-RUN {html_path.name} → {jsh_name} ({len(blob)} bytes)")
+            return True
+        except CompileError as e:
+            where = f" LINE {e.line}" if e.line else ""
+            self._log.fault("COMPILE", f"ERROR{where}: {e.message}")
+            return False
+        except Exception as e:
+            self._log.fault("COMPILE", str(e))
+            return False
 
     def push_key(self, ch: str) -> None:
         """MORE continue / Esc — GUI Space/Enter while more_waiting."""
@@ -239,20 +306,20 @@ class SimBackend(RuntimeBackend):
     def set_key_bits(self, bits: int) -> None:
         self._rpc(f"KEYBITS {bits}")
 
-    def paint_prompt(self, prompt: str) -> None:
+    def paint_prompt(self, prompt: str, cursor_on: bool = False) -> None:
         if not self._started:
             self._start()
         # NEW: game owns the glass (BASIC method) — never overlay `>` on FB
         if self._running or self._more:
             return
         if self._use_rtl:
-            self._paint_screen_local(prompt)
+            self._paint_screen_local(prompt, cursor_on=cursor_on)
         else:
             self._rpc(f"PROMPT {prompt}")
             resp = self._rpc("FB?")
             if resp == "FB SAME":
                 self._rpc("SCREEN?")
-                self._paint_screen_local(prompt)
+                self._paint_screen_local(prompt, cursor_on=cursor_on)
 
     def hard_break(self) -> None:
         self._log.note("BREAK")

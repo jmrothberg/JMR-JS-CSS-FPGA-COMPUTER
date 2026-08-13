@@ -49,6 +49,12 @@ class Machine:
         self.html_host: Optional[HtmlJsHost] = None
         # NEW: one-shot RUN (RECTDEMO) keeps pixels until next command / CLS
         self._keep_fb: bool = False
+        # NEW: HTML product path is bytecode / .JSH (dukpy only if JMR_HTML_DUKPY=1)
+        self._bytecode_html: bool = False
+        self._html_chunk = None
+        self._raf_q: list = []
+        self._listeners: list = []
+        self._key_prev: int = 0
         # Always-on flight log (BASIC TraceLog method)
         self.trace = TraceLog(self)
 
@@ -71,9 +77,15 @@ class Machine:
     def _ready(self) -> None:
         self.console_log.append(READY)
 
-    def paint_monitor(self, prompt: Optional[str] = None) -> None:
+    def paint_monitor(
+        self, prompt: Optional[str] = None, cursor_on: bool = False
+    ) -> None:
         """Paint console_log + prompt onto FRONT FB (HDMI letterbox — same as SIM/BOARD)."""
-        if self.running and (self._loop_chunk is not None or self.html_host is not None):
+        if self.running and (
+            self._loop_chunk is not None
+            or self.html_host is not None
+            or getattr(self, "_bytecode_html", False)
+        ):
             return  # game owns the glass
         # NEW: last RUN frame stays until CLS / next typed command
         if self._keep_fb and not self.running:
@@ -84,6 +96,7 @@ class Machine:
         self.canvas.paint_console_letterbox(
             self.console_log[-MONITOR_VISIBLE_ROWS:],
             prompt=pr,
+            cursor_on=cursor_on,
         )
 
     # --- INPUT --------------------------------------------------------
@@ -108,6 +121,11 @@ class Machine:
         self.running = False
         self._loop_chunk = None
         self._keep_fb = False
+        # NEW: clear bytecode-HTML frame state
+        self._bytecode_html = False
+        self._html_chunk = None
+        self._raf_q = []
+        self._listeners = []
         if self.html_host is not None:
             self.html_host.stop()
             self.html_host = None
@@ -173,7 +191,7 @@ class Machine:
             return [
                 "DIR LOAD SAVE NEW LIST EDIT INSERT DELETE RUN MEM HELP CLS",
                 "LOAD name  or  LOAD n  (n = DIR number); quotes optional",
-                "e.g. LOAD INVADERS_FULL.HTML   or   LOAD 3",
+                'e.g. LOAD INVADERS.JS   or   LOAD "PACMAN.HTML"',
                 "LIST / LIST -  pages with -- MORE -- (Space/Enter=next Esc=abort)",
                 "LIST 10-20  range;  EDIT n  then type new line + Enter",
                 "CLS  clears the glass;  Games: arrows + Space, ESC quit",
@@ -448,33 +466,86 @@ class Machine:
         src = "\n".join(self.source_lines)
         if not src.strip():
             return ["ERROR: NO PROGRAM"]
-        # HTML Canvas games → dukpy host (FM). Simple .JS → bytecode VM.
+        # HTML Canvas games → bytecode / .JSH (product). Simple .JS → bytecode VM.
         name_u = self.source_name.upper()
         if name_u.endswith(".HTML") or name_u.endswith(".HTM") or "<canvas" in src.lower():
             return self._run_html(src)
         return self._run_source(src)
 
     def _run_html(self, html: str) -> List[str]:
-        base = self.storage.root
-        # If source was loaded from a subfolder name, still resolve scripts from storage/
-        try:
-            self.html_host = HtmlJsHost(self.canvas, self.input)
-            # Prefer games_invaders as base when loading INVADERS_FULL
-            from pathlib import Path as P
+        import os
 
-            base_dir = base
-            if "INVADERS" in self.source_name.upper():
-                cand = base / "games_invaders"
-                if cand.is_dir():
-                    base_dir = cand
-            self.html_host.load_html(html, base_dir=base_dir)
-            self.running = True
-            self._loop_chunk = None
-            return ["HTML GAME RUNNING - arrows + space, ESC quit"]
+        # Product path: bytecode / .JSH (CONSTITUTION). dukpy is opt-in debug only.
+        if os.environ.get("JMR_HTML_DUKPY", "").strip() in ("1", "true", "yes"):
+            try:
+                self.html_host = HtmlJsHost(self.canvas, self.input)
+                # Playable titles are one HTML file (inline JS + data: URIs), same
+                # as dropping the file in a browser. Leftover relative src= still
+                # resolves next to the HTML (storage/), not a special games_* remap.
+                self.html_host.load_html(html, base_dir=self.storage.root)
+                self.running = True
+                self._loop_chunk = None
+                return ["HTML GAME RUNNING - arrows + space, ESC quit"]
+            except Exception as e:
+                self.html_host = None
+                self.running = False
+                return [f"ERROR: HTML/JS {e}"]
+        return self._run_html_bytecode(html)
+
+    def _run_html_bytecode(self, html: str) -> List[str]:
+        """Compile-on-RUN: always compile current HTML → fresh .JSH → VM.
+
+        Never read a pre-existing .JSH (stale sidecar is not the game).
+        CompileError.line is the HTML editor line, not a sidecar.
+        """
+        from .compiler import CompileError
+        from tools.compile_js import compile_html_text, encode_html_chunk
+
+        try:
+            chunk = compile_html_text(html)
+        except CompileError as e:
+            where = f" LINE {e.line}" if e.line else ""
+            return [f"ERROR{where}: {e.message}"]
         except Exception as e:
-            self.html_host = None
-            self.running = False
             return [f"ERROR: HTML/JS {e}"]
+        jsh = self._html_jsh_path()
+        if jsh is not None:
+            try:
+                jsh.write_bytes(encode_html_chunk(chunk))
+            except Exception:
+                pass
+        self.html_host = None
+        self.running = True
+        self.vm.natives = self._natives()
+        self.vm.globals.clear()
+        self._loop_chunk = None
+        self._html_chunk = chunk  # NEW: for rAF / listeners
+        self._sprites = list(getattr(chunk, "sprites", None) or [])
+        self.vm._sprites = self._sprites
+        self._raf_q = []
+        self._listeners = []  # (event, fn)
+        self._key_prev = 0
+        self._enter_left = 2  # DONKEY title+character Enter (same as dukpy host)
+        self._enter_delay = 2
+        self._ctx_tx = 0
+        self._ctx_ty = 0
+        self._ctx_sx = 1.0
+        self._ctx_sy = 1.0
+        self.vm.run(chunk)
+        if self.vm.error:
+            self.running = False
+            self._html_chunk = None
+            return [self.vm.error]
+        # Keep running so frame_tick drains rAF
+        self._bytecode_html = True
+        return ["HTML BYTECODE RUNNING - arrows + space, ESC quit"]
+
+    def _html_jsh_path(self) -> Optional[Path]:
+        """Internal compile-on-RUN output path (write fresh; never LOAD)."""
+        stem = Path(self.source_name).stem
+        if not stem:
+            return None
+        return self.storage.root / (stem.upper()[:8] + ".JSH")
 
     def _run_source(self, src: str) -> List[str]:
         before = len(self.lines_out)
@@ -515,22 +586,269 @@ class Machine:
             "keyLeft": self._nat_key_left,
             "keyRight": self._nat_key_right,
             "keyFire": self._nat_key_fire,
+            # NEW: platformer climb (DONKEY) — same joy bits as GUI KEYBITS
+            "keyUp": self._nat_key_up,
+            "keyDown": self._nat_key_down,
             "startLoop": self._nat_start_loop,
+            # NEW (compiler v2): Math natives for HTML titles (PYTHON first)
+            "Math.floor": self._nat_math_floor,
+            "Math.abs": self._nat_math_abs,
+            "Math.min": self._nat_math_min,
+            "Math.max": self._nat_math_max,
+            "Math.random": self._nat_math_random,
+            "Math.sqrt": self._nat_math_sqrt,
+            "typeof": self._nat_typeof,
+            # NEW: DOM / storage stubs so HTML titles can compile+run on bytecode path
+            "document.getElementById": self._nat_dom_el,
+            "document.querySelector": self._nat_dom_el,
+            "document.createElement": self._nat_dom_el,
+            "document.addEventListener": self._nat_add_event_listener,
+            "window.addEventListener": self._nat_add_event_listener,
+            "addEventListener": self._nat_add_event_listener,  # NEW: bare global
+            "removeEventListener": self._nat_noop,
+            "localStorage.getItem": self._nat_ls_get,
+            "localStorage.setItem": self._nat_ls_set,
+            "localStorage.removeItem": self._nat_ls_remove,
+            "JSON.parse": self._nat_json_parse,
+            "JSON.stringify": self._nat_json_stringify,
+            "Date": self._nat_new_date,
+            "Image": self._nat_new_image,
+            # NEW: timer/rAF stubs — real engine lands in engines todo
+            "requestAnimationFrame": self._nat_raf,
+            "setTimeout": self._nat_set_timeout,
+            "clearTimeout": self._nat_noop,
+            "setInterval": self._nat_set_timeout,
+            "clearInterval": self._nat_noop,
+            # NEW: JSB v2 unknown CALL_NATIVE
+            "_stub": self._nat_noop,
+            # NEW: Canvas2D methods via ctx.* (HTML bytecode path)
+            "ctx.fillRect": self._nat_fill_rect,
+            "ctx.clearRect": self._nat_clear_rect,
+            "ctx.setFillStyle": self._nat_fill_style_css,
+            "ctx.drawImage": self._nat_draw_image,
+            "ctx.fillText": self._nat_fill_text,
+            "ctx.fillPath": self._nat_fill_path,
+            "ctx.strokePath": self._nat_stroke_path,
+            "setFillStyle": self._nat_fill_style_css,
+            "__ctx_xform": self._nat_ctx_xform,
+            "__fire_click": self._nat_fire_click,
         }
+
+    def _nat_ctx_xform(self, x=0, y=0, sx=1, sy=1):
+        # NEW: setTransform scale (DONKEY world 1510×685 → 640×480 glass)
+        self._ctx_tx = float(x or 0)
+        self._ctx_ty = float(y or 0)
+        self._ctx_sx = float(sx if sx is not None else 1) or 1.0
+        self._ctx_sy = float(sy if sy is not None else 1) or 1.0
+        return None
+
+    def _xf(self, x, y, w=None, h=None):
+        """Apply current canvas transform (translate + axis scale)."""
+        sx = float(getattr(self, "_ctx_sx", 1) or 1)
+        sy = float(getattr(self, "_ctx_sy", 1) or 1)
+        tx = float(getattr(self, "_ctx_tx", 0) or 0)
+        ty = float(getattr(self, "_ctx_ty", 0) or 0)
+        ix = int(float(x or 0) * sx + tx)
+        iy = int(float(y or 0) * sy + ty)
+        if w is None:
+            return ix, iy
+        return ix, iy, max(1, int(float(w or 0) * sx)), max(1, int(float(h or 0) * sy))
+
+    def _nat_fill_style_css(self, color):
+        """NEW: map CSS color names/hex to palette index for HTML titles."""
+        if isinstance(color, (int, float)):
+            self.canvas.fill_style = int(color) & 0xFF
+            return None
+        s = str(color).strip().lower()
+        named = {
+            "black": 0,
+            "white": 1,
+            "red": 2,
+            "green": 3,
+            "blue": 4,
+            "yellow": 5,
+            "cyan": 6,
+            "magenta": 7,
+            "gold": 5,
+            "#2ecc40": 3,
+            "#ffffff": 1,
+            "#fff": 1,
+            "#000000": 0,
+            "#000": 0,
+            "#33ff66": 3,
+            "#ff55aa": 7,
+            "#ffcc00": 5,
+            "#baa0de": 7,
+            "#f5f5dc": 1,
+            "#ffe600": 5,
+            "#09f": 4,
+            "#0099ff": 4,
+            "#f00": 2,
+            "#ff0000": 2,
+            "#aaa": 1,
+            "#fff": 1,
+            "#bababa": 1,
+        }
+        if s in named:
+            self.canvas.fill_style = named[s]
+        elif s.startswith("#") and (len(s) == 4 or len(s) >= 7):
+            # nearest CanvasEngine pal 0..7 (RTL HDMI uses the same 8)
+            try:
+                if len(s) == 4:
+                    r = int(s[1] * 2, 16)
+                    g = int(s[2] * 2, 16)
+                    b = int(s[3] * 2, 16)
+                else:
+                    r = int(s[1:3], 16)
+                    g = int(s[3:5], 16)
+                    b = int(s[5:7], 16)
+                pal = [
+                    (0, 0, 0),
+                    (255, 255, 255),
+                    (255, 0, 0),
+                    (0, 255, 0),
+                    (0, 0, 255),
+                    (255, 255, 0),
+                    (0, 255, 255),
+                    (255, 0, 255),
+                ]
+                best, bd = 1, 1 << 30
+                for i, (pr, pg, pb) in enumerate(pal):
+                    d = (r - pr) * (r - pr) + (g - pg) * (g - pg) + (b - pb) * (b - pb)
+                    if d < bd:
+                        best, bd = i, d
+                self.canvas.fill_style = best
+            except Exception:
+                self.canvas.fill_style = 7
+        else:
+            self.canvas.fill_style = 7
+        return None
 
     def _nat_log(self, *args):
         self._print(*[str(a) for a in args])
         return None
 
     def _nat_fill_rect(self, x, y, w, h, color=None):
+        ix, iy, iw, ih = self._xf(x, y, w, h)
         if color is not None:
-            self.canvas.fill_rect(int(x), int(y), int(w), int(h), int(color))
+            self.canvas.fill_rect(ix, iy, iw, ih, int(color))
         else:
-            self.canvas.fill_rect(int(x), int(y), int(w), int(h))
+            self.canvas.fill_rect(ix, iy, iw, ih)
         return None
 
+    def _nat_draw_image(self, *args):
+        """Blit sprite pixels from Image._pix / jmr:spr pack (no magenta stub)."""
+        sx = sy = 0
+        sw = sh = dw = dh = None
+        img = None
+        if len(args) >= 9:
+            img, sx, sy, sw, sh, dx, dy, dw, dh = args[:9]
+        elif len(args) >= 5:
+            img, dx, dy, dw, dh = args[:5]
+        elif len(args) >= 3:
+            img, dx, dy = args[:3]
+        else:
+            return None
+        pix = None
+        iw = ih = 0
+        if isinstance(img, dict):
+            pix = img.get("_pix")
+            iw = int(img.get("width") or 0)
+            ih = int(img.get("height") or 0)
+        if not pix or iw <= 0 or ih <= 0:
+            return None
+        if sw is None:
+            sw, sh = iw, ih
+        if dw is None:
+            dw, dh = sw, sh
+        dx, dy, dw, dh = self._xf(dx, dy, dw, dh)
+        try:
+            self.canvas.blit_indexed(
+                pix, iw, ih, int(sx), int(sy), int(sw), int(sh),
+                dx, dy, dw, dh,
+            )
+        except Exception:
+            pass
+        return None
+
+    def _nat_fill_text(self, t, x, y, style=None, align="left"):
+        if style is not None:
+            self._nat_fill_style_css(style)
+        ix, iy = self._xf(x, y)
+        self.canvas.fill_text(t, ix, iy, align=str(align or "left"))
+        return None
+
+    def _nat_fill_path(self, spec, style=None):
+        if style is not None:
+            self._nat_fill_style_css(style)
+        self._raster_path(spec, stroke=False)
+        return None
+
+    def _nat_stroke_path(self, spec, style=None):
+        if style is not None:
+            self._nat_fill_style_css(style)
+        self._raster_path(spec, stroke=True)
+        return None
+
+    def _raster_path(self, spec, stroke: bool) -> None:
+        """PACMAN maze/beans: one primitive per beginPath (arc or move+line)."""
+        import math
+
+        if not spec:
+            return
+        c = self.canvas.fill_style
+        if isinstance(spec, list):
+            cmds = spec
+        else:
+            cmds = str(spec).split("|")
+        for cmd in cmds:
+            if not cmd:
+                continue
+            if isinstance(cmd, tuple):
+                parts = list(cmd)
+                op = parts[0]
+            else:
+                parts = str(cmd).split(",")
+                op = parts[0]
+            if op == "A" and len(parts) >= 4:
+                cx, cy, r = float(parts[1]), float(parts[2]), float(parts[3])
+                ix, iy = self._xf(cx, cy)
+                sx = float(getattr(self, "_ctx_sx", 1) or 1)
+                self.canvas.fill_circle(ix, iy, max(1, int(float(r) * sx)), c, stroke)
+            elif op == "L" and len(parts) >= 3:
+                x1, y1 = self._xf(float(parts[1]), float(parts[2]))
+                x0 = getattr(self, "_path_x", x1)
+                y0 = getattr(self, "_path_y", y1)
+                self._line(x0, y0, x1, y1, c)
+                self._path_x, self._path_y = x1, y1
+            elif op == "M" and len(parts) >= 3:
+                self._path_x, self._path_y = self._xf(float(parts[1]), float(parts[2]))
+
+    def _line(self, x0, y0, x1, y1, c) -> None:
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
+        back = self.canvas.back
+        w = self.canvas.width
+        h = self.canvas.height
+        while True:
+            if 0 <= x0 < w and 0 <= y0 < h:
+                back[y0 * w + x0] = c
+            if x0 == x1 and y0 == y1:
+                break
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x0 += sx
+            if e2 < dx:
+                err += dx
+                y0 += sy
+
     def _nat_clear_rect(self, x, y, w, h):
-        self.canvas.clear_rect(int(x), int(y), int(w), int(h))
+        ix, iy, iw, ih = self._xf(x, y, w, h)
+        self.canvas.clear_rect(ix, iy, iw, ih)
         return None
 
     def _nat_clear(self, color=0):
@@ -565,8 +883,136 @@ class Machine:
 
         return 1 if (self.input.play_bits() & KEY_FIRE) else 0
 
+    def _nat_key_up(self):
+        from .input_engine import KEY_UP
+
+        return 1 if (self.input.play_bits() & KEY_UP) else 0
+
+    def _nat_key_down(self):
+        from .input_engine import KEY_DOWN
+
+        return 1 if (self.input.play_bits() & KEY_DOWN) else 0
+
     def _nat_start_loop(self):
         self._loop_chunk = True
+        return None
+
+    # NEW (compiler v2): Math natives — int-friendly; random is deterministic seed later
+    def _nat_math_floor(self, x):
+        import math
+
+        return int(math.floor(float(x)))
+
+    def _nat_math_abs(self, x):
+        return abs(x)
+
+    def _nat_math_min(self, a, b):
+        return a if a < b else b
+
+    def _nat_math_max(self, a, b):
+        return a if a > b else b
+
+    def _nat_math_random(self):
+        # PYTHON control: real random; RTL will use LFSR — parity via seeded tests
+        import random
+
+        return random.random()
+
+    def _nat_math_sqrt(self, x):
+        import math
+
+        return math.sqrt(float(x)) if float(x) >= 0 else 0.0
+
+    def _nat_typeof(self, x):
+        # NEW: JS typeof for PACMAN map checks
+        if x is None:
+            return "undefined"
+        if isinstance(x, bool):
+            return "boolean"
+        if isinstance(x, (int, float)):
+            return "number"
+        if isinstance(x, str):
+            return "string"
+        if callable(x) or (isinstance(x, dict) and x.get("__class") == "Fn"):
+            return "function"
+        return "object"
+
+    # NEW: tiny DOM/storage stubs for HTML→bytecode path (leaderboard etc.)
+    def _nat_dom_el(self, *_a):
+        return {"__class": "Element", "style": {}}
+
+    def _nat_noop(self, *_a):
+        return None
+
+    def _nat_ls_get(self, key):
+        if not hasattr(self, "_ls"):
+            self._ls = {}
+        return self._ls.get(str(key))
+
+    def _nat_ls_set(self, key, val):
+        if not hasattr(self, "_ls"):
+            self._ls = {}
+        self._ls[str(key)] = str(val)
+        return None
+
+    def _nat_ls_remove(self, key):
+        if not hasattr(self, "_ls"):
+            self._ls = {}
+        self._ls.pop(str(key), None)
+        return None
+
+    def _nat_json_parse(self, s):
+        import json
+
+        try:
+            return json.loads(s) if s else None
+        except Exception:
+            return None
+
+    def _nat_json_stringify(self, v):
+        import json
+
+        try:
+            return json.dumps(v)
+        except Exception:
+            return "null"
+
+    def _nat_new_date(self, *_a):
+        # NEW: Date stub for HTML leaderboard
+        return {"__class": "Date"}
+
+    def _nat_new_image(self, *_a):
+        # NEW: Image stub — onload/src set via props; host path paints real PNG
+        return {"__class": "Image", "src": "", "width": 1, "height": 1}
+
+    def _nat_raf(self, fn=None):
+        # NEW: queue fn for next frame_tick (bytecode HTML path)
+        if not hasattr(self, "_raf_q"):
+            self._raf_q = []
+        if fn is not None:
+            self._raf_q.append(fn)
+        return 1
+
+    def _nat_set_timeout(self, fn=None, ms=0):
+        # NEW: treat as rAF for now (no real clock in bytecode VM yet)
+        return self._nat_raf(fn)
+
+    def _nat_add_event_listener(self, event=None, fn=None, *_a):
+        # NEW: store keydown/keyup handlers for bytecode HTML
+        if not hasattr(self, "_listeners"):
+            self._listeners = []
+        if event is not None and fn is not None:
+            self._listeners.append((str(event), fn))
+        return None
+
+    def _nat_fire_click(self, *_a):
+        # NEW: Element.click() → invoke registered "click" listeners
+        chunk = getattr(self, "_html_chunk", None)
+        if chunk is None:
+            return None
+        for et, fn in list(getattr(self, "_listeners", [])):
+            if et == "click":
+                self.vm.call_fn(chunk, fn, [{"type": "click"}])
         return None
 
     def frame_tick(self) -> None:
@@ -578,6 +1024,10 @@ class Machine:
             except Exception as e:
                 self._print(f"ERROR: JS {e}")
                 self.hard_break()
+            return
+        # NEW: bytecode HTML path — fire key listeners + drain rAF
+        if getattr(self, "_bytecode_html", False) and self.running:
+            self._bytecode_html_frame()
             return
         if not self.running or self._loop_chunk is None:
             return
@@ -595,3 +1045,47 @@ class Machine:
             self.running = False
             self._loop_chunk = None
             self.paint_monitor("> ")
+
+    def _bytecode_html_frame(self) -> None:
+        """NEW: one frame for HTML-as-bytecode — keys then rAF queue."""
+        chunk = getattr(self, "_html_chunk", None)
+        if chunk is None:
+            return
+        # NEW: tether KEYBITS → key-state edges; drain generic key event queue
+        self.input._sync_play_bits_to_keys()
+        for et, code, key in self.input.drain_key_events():
+            self._fire_listeners(et, code, key)
+        # drain rAF (one generation)
+        q = getattr(self, "_raf_q", [])
+        self._raf_q = []
+        for fn in q:
+            try:
+                self.vm.call_fn(chunk, fn, [])
+            except Exception as e:
+                self._print(f"ERROR: JS {e}")
+                self.hard_break()
+                return
+            if self.vm.error:
+                self._print(self.vm.error)
+                self.hard_break()
+                return
+        # After rAF so title screens have bound keydown (DONKEY Enter to start)
+        if getattr(self, "_enter_left", 0) > 0:
+            self._enter_delay = getattr(self, "_enter_delay", 0) - 1
+            if self._enter_delay <= 0:
+                self._fire_listeners("keydown", 13, "Enter")
+                self._fire_listeners("keyup", 13, "Enter")
+                self._enter_left -= 1
+                self._enter_delay = 8
+        # NEW: HTML canvas draws to back; present like dukpy host / swapBuffers
+        self.canvas.swap()
+        self._keep_fb = True
+
+    def _fire_listeners(self, event: str, key_code: int, key: str) -> None:
+        chunk = getattr(self, "_html_chunk", None)
+        if chunk is None:
+            return
+        ev = {"key": key, "keyCode": key_code, "which": key_code, "code": key}
+        for et, fn in list(getattr(self, "_listeners", [])):
+            if et == event:
+                self.vm.call_fn(chunk, fn, [ev])

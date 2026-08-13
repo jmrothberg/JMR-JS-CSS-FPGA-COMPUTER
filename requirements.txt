@@ -1,5 +1,6 @@
 pytest>=7.0
 pyserial>=3.5
 dukpy>=0.3.0
+Pillow>=10.0
 # cocotb: add when sim/ cocotb tests land
 # tkinter is a system package on Linux (python3-tk), not a PyPI wheel.

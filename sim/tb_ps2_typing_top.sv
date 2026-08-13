@@ -57,7 +57,7 @@ module tb_ps2_typing_top (
         .data(kbd_q), .empty(kbd_empty), .full(kbd_full)
     );
     jmr_video_vram u_vid (
-        .clk(clk), .rst_n(rst_n),
+        .clk(clk), .scan_clk(clk), .rst_n(rst_n),
         .cls(cls), .put_en(put_en), .put_char(put_char), .print_nl(print_nl),
         .busy(video_busy), .cursor(cursor),
         .scan_addr(scan_addr), .scan_data(scan_data),

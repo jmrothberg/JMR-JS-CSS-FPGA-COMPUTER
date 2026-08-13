@@ -5,10 +5,10 @@
 //       console owns the glass, exactly like the USB keyboard path.
 //   TX dumps (yield between rows / between key notes):
 //       "S<rowhex>:" + 64 chars + "\n"          text console rows 0..F
-//       "P<rr>:" + 160 hex nibbles + "\n"       mini-FB rows 00..77 (game_mode)
+//       "P<rr>:" + 160 hex nibbles + "\n"       subsample 160×120 of 640×480 FB
 //       "K\n"                                   USB Host ps2_strobe edge
 //       Host places rows by index and resyncs on torn frames (BASIC method).
-//
+//       HDMI paints full 640×480; tether keeps 160×120×4 for bandwidth.//
 // uart_simple is the proven BASIC 8N1 core (rounded divider, wr_en-safe busy).
 module uart_simple #(
     parameter int CLK_HZ = 100_000_000,
@@ -139,11 +139,13 @@ module jmr_uart_link #(
     // Keyboard inject (merged with PS/2 in the top)
     output logic       kbd_push,
     output logic [7:0] kbd_data,
+    // NEW: GUI play keys over PROG tether (J15 dead — host arrows → joy_in)
+    output logic [5:0] joy_bits,
     // Char VRAM dump read port (jmr_js_core dump_addr/dump_data)
     output logic [9:0] dump_addr,
     input  logic [7:0] dump_data,
-    // NEW: mini-FB dump for full 640×480 GUI mirror in game_mode
-    output logic [14:0] dump_fb_raddr,
+    // NEW: subsample of 640×480 FB for tether (160×120 → host ×4)
+    output logic [18:0] dump_fb_raddr,
     input  logic [7:0]  dump_fb_rdata,
     // NEW: when game_mode, stream P-rows (mini-FB) instead of text S-rows
     input  logic       game_mode = 1'b0,
@@ -181,23 +183,34 @@ module jmr_uart_link #(
         end
     endgenerate
 
-    // RX → keyboard FIFO. GUI sends line text + "\n"; both CR and LF mean Enter.
+    // RX → keyboard FIFO, or KEYBITS prefix 0xFE + bits (GUI play while J15 dead).
+    // GUI BoardBackend.set_key_bits writes [0xFE, bits]; never push those to console.
+    logic joy_cmd;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             kbd_push <= 1'b0;
             kbd_data <= 8'h00;
+            joy_bits <= 6'b0;
+            joy_cmd <= 1'b0;
         end else begin
             kbd_push <= 1'b0;
             if (rx_ready) begin
-                kbd_push <= 1'b1;
-                kbd_data <= (rx_data == 8'h0A || rx_data == 8'h0D) ? 8'h0D : rx_data;
+                if (joy_cmd) begin
+                    joy_bits <= rx_data[5:0];
+                    joy_cmd <= 1'b0;
+                end else if (rx_data == 8'hFE) begin
+                    joy_cmd <= 1'b1;
+                end else begin
+                    kbd_push <= 1'b1;
+                    kbd_data <= (rx_data == 8'h0A || rx_data == 8'h0D) ? 8'h0D : rx_data;
+                end
             end
         end
     end
 
     // TX dump FSM:
     //   text:  "S<rowhex>:" + 64 chars + "\n"   (rows 0..F)
-    //   game:  "P<rr>:" + 160 hex nibbles + "\n" (rows 00..77, mini-FB 160×120)
+    //   game:  "P<rr>:" + 160 hex nibbles + "\n" (subsample of 640×480)
     //   key:   "K\n" once when ps2_strobe fires (between dumps)
     typedef enum logic [3:0] {
         HB_IDLE, HB_HDR, HB_ROW, HB_ROW2, HB_COLON, HB_BYTE, HB_NL, HB_K, HB_KNL
@@ -210,6 +223,8 @@ module jmr_uart_link #(
     logic [7:0]  fb_col;        // 0..159
     logic        k_pending;
     logic        ps2_strobe_q;
+    // NEW: register pixel/char before wr_data (dump_addr→RAM→wr was WNS −0.025)
+    logic [7:0]  dump_byte_q;
 
     function automatic logic [7:0] hex_digit(input logic [3:0] n);
         hex_digit = (n < 4'd10) ? (8'h30 + {4'b0, n}) : (8'h37 + {4'b0, n});
@@ -229,6 +244,7 @@ module jmr_uart_link #(
             wr_data <= 8'h0;
             k_pending <= 1'b0;
             ps2_strobe_q <= 1'b0;
+            dump_byte_q <= 8'h20;
         end else begin
             wr_en <= 1'b0;
             dump_div <= dump_div + 22'd1;
@@ -236,6 +252,11 @@ module jmr_uart_link #(
             // Rising edge of USB scancode strobe → one tether note
             if (ps2_strobe && !ps2_strobe_q)
                 k_pending <= 1'b1;
+            // Sample VRAM/FB one cycle ahead of HB_BYTE consume
+            if (dump_game)
+                dump_byte_q <= hex_digit(dump_fb_rdata[3:0]);
+            else
+                dump_byte_q <= (dump_data < 8'h20 || dump_data > 8'h7E) ? 8'h20 : dump_data;
 
             unique case (hb_state)
                 HB_IDLE: begin
@@ -294,17 +315,18 @@ module jmr_uart_link #(
                 end
                 HB_BYTE: if (!tx_busy) begin
                     wr_en <= 1'b1;
+                    // NEW: use registered sample (breaks dump_addr→wr_data combo)
+                    wr_data <= dump_byte_q;
                     if (dump_game) begin
-                        // One hex nibble per pixel (palette 0..15) — 160 chars/row
-                        wr_data <= hex_digit(dump_fb_rdata[3:0]);
                         if (fb_col == 8'd159) begin
                             hb_state <= HB_NL;
                         end else begin
                             fb_col <= fb_col + 8'd1;
-                            dump_fb_raddr <= dump_fb_raddr + 15'd1;
+                            // subsample: next pixel at (row*4, col*4) in 640×480
+                            dump_fb_raddr <= 19'(fb_row) * 19'd2560
+                                          + 19'(fb_col + 8'd1) * 19'd4;
                         end
                     end else begin
-                        wr_data <= (dump_data < 8'h20 || dump_data > 8'h7E) ? 8'h20 : dump_data;
                         if (dump_addr[5:0] == 6'd63) hb_state <= HB_NL;
                         dump_addr <= dump_addr + 10'd1;
                     end
@@ -320,7 +342,8 @@ module jmr_uart_link #(
                             dump_fb_raddr <= '0;
                         end else begin
                             fb_row <= fb_row + 7'd1;
-                            dump_fb_raddr <= dump_fb_raddr + 15'd1; // next row start
+                            // next subsample row start: ((row+1)*4)*640
+                            dump_fb_raddr <= 19'(fb_row + 7'd1) * 19'd2560;
                         end
                     end else begin
                         // dump_addr wrapped to 0 => all 16 rows sent

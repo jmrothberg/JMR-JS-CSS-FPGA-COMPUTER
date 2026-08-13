@@ -1,5 +1,5 @@
 ---
-description: Features land PYTHON first, then FPGA-SIM, then board .bit/.bin — uniform glass across F9 runtimes.
+description: Features land PYTHON bytecode first, then FPGA-SIM, then board — never dukpy as truth.
 alwaysApply: true
 ---
 
@@ -8,9 +8,28 @@ alwaysApply: true
 The Constitution order is mandatory for **user-visible** behaviour (console
 commands, JS/Canvas surface, disk names, errors, READY/prompt, glass text):
 
-1. **PYTHON** (`functional_model/` + GUI host path) — behavioural truth
+1. **PYTHON** (`functional_model/` **bytecode VM** + GUI) — behavioural truth
 2. **FPGA-SIM** (Verilator / sim backend) — same typed experience
-3. **Board** (`.bit` / `.bin`, standalone or tethered) — silicon confirmation
+3. **Board** (`.bit` / `.bin`) — silicon confirmation
+4. **ASIC** later — only after board honesty
+
+**No dukpy cheat.** PYTHON truth means the JMR VM running **compile-on-RUN**
+from the loaded HTML (fresh internal `.JSH`), not Duktape and not a stale
+disk sidecar. See `no-dukpy-cheat-native-cpu`.
+
+## Vendored HTML titles MUST RUN (Constitution mandate)
+
+- `INVADERS.HTML`, `PACMAN.HTML`, `DONKEY.HTML` — user types only
+  `LOAD "NAME.HTML"` / `RUN`. **`RUN` always recompiles** current HTML;
+  `.JSH` is invisible output (never prefer an old file).
+- Must LOAD + RUN playable on **all three** runtimes via **bytecode**.
+  `?NH` is temporary tracked debt, never done.
+- **The HTML decides the keys**: hardware/VM deliver raw keycodes only; the
+  game's own `keydown`/`keyup` handlers define bindings. No hardcoded key
+  maps in RTL.
+- **No `.bit`/`.bin` builds** until all three HTML titles are green on
+  FPGA-SIM *and* the user has personally tested them in the GUI (F9 FPGA-SIM)
+  and approved. PYTHON bytecode is perfected first as the control.
 
 ## Do not ship RTL-only UX
 
@@ -25,7 +44,7 @@ commands, JS/Canvas surface, disk names, errors, READY/prompt, glass text):
 
 When adding or changing glass-level behaviour:
 
-1. Implement + exercise in the **Python FM** (and GUI PYTHON path).
+1. Implement + exercise in the **Python bytecode FM** (and GUI PYTHON path).
 2. Mirror in **FPGA-SIM** so F9 FPGA-SIM matches.
 3. Only then RTL/fit if needed, build `.bit`/`.bin`, flash, smoke the **board**.
 4. Update [docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md) if status
@@ -36,9 +55,11 @@ When adding or changing glass-level behaviour:
 - Same command on all three → compare traces under `traces/` (see
   `use-existing-traces`).
 - Works on board only → **parity bug** (host path missing), not “board magic.”
-- Works in PYTHON only → SIM/RTL lag; do not “fix” by weakening PYTHON.
+- Works in PYTHON only → SIM/RTL lag; do not “fix” by weakening PYTHON or
+  by using dukpy.
 
 ## Related
 
 - [CONSTITUTION.md](../../CONSTITUTION.md) — Development Order
 - [docs/FPGA_BRINGUP.md](../../docs/FPGA_BRINGUP.md) — PYTHON / FPGA-SIM / BOARD
+- `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`

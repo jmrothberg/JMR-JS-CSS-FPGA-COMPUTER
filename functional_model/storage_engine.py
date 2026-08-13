@@ -63,7 +63,8 @@ class StorageEngine:
                 return p
         # Optional extension: INVADERS_FULL → INVADERS_FULL.HTML / .JS
         if "." not in base:
-            for ext in (".HTML", ".HTM", ".JS"):
+            # .JS first so LOAD "invaders" is the FPGA-SIM bytecode title.
+            for ext in (".JS", ".HTML", ".HTM"):
                 cand = self.root / (base + ext)
                 if cand.is_file():
                     return cand

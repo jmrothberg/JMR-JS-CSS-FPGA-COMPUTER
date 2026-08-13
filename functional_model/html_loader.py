@@ -1,7 +1,8 @@
 """Extract runnable JS + canvas size from a minimal HTML game container.
 
-LLM NOTE: Not a browser. Only <canvas> + <script> bodies (inline).
-External <script src> resolved relative to the HTML file when present on disk.
+LLM NOTE: Not a browser. Playable titles are one HTML file (inline <script>
++ data:image sprites). External <script src> is still resolved next to the
+HTML when present (browser-like), but games should not need sibling files.
 """
 
 from __future__ import annotations

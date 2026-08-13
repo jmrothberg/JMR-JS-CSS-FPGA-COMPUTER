@@ -13,8 +13,9 @@ was broken.
 
 - **F9 FPGA-SIM** = real Verilator RTL (`sim/sim_build_synth/jmr_js_sim_server`).
 - **Host twin** (`sim/host_sim_server.py`, dukpy / full Canvas) = **explicit
-  opt-in only**: `JMR_SIM_HOST=1`. Never the default. Never a quiet fallback
-  when the RTL binary is missing.
+  opt-in debug only**: `JMR_SIM_HOST=1`. Never the default. Never a quiet
+  fallback when the RTL binary is missing. Dukpy is **not** the product CPU
+  (see `no-dukpy-cheat-native-cpu`).
 - If RTL is missing: **fail loud** (“build `make -C sim sim_server_synth`”).
   Do not pretend PYTHON is FPGA-SIM.
 
@@ -22,7 +23,8 @@ was broken.
 
 - Glass is **640×480** (GUI mirror must match HDMI field, not a 16-line strip).
 - Keyboard is **full JS** (case + punctuation); do not reintroduce a–z fold.
-- Constitution order: PYTHON → **real FPGA-SIM** → BOARD.
+- Constitution order: **PYTHON bytecode** → **real FPGA-SIM** → BOARD → ASIC.
+  Never claim a rung done via dukpy or host twin.
 
 ## Code touchpoints
 

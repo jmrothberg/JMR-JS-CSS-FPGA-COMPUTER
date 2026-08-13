@@ -21,17 +21,18 @@ TRAP, wrong screen, etc.):
 
 ## Feature order before board proof
 
-User-visible behaviour must already exist on **PYTHON**, then **FPGA-SIM**,
-before treating the board as the place that “defines” it. See
-`python-first-parity`. A board-only win with GUI/SIM reject is a **parity gap**,
-not a successful ship.
+User-visible behaviour must already exist on **PYTHON bytecode VM**, then
+**FPGA-SIM RTL**, before treating the board as the place that “defines” it.
+See `python-first-parity` and `no-dukpy-cheat-native-cpu`. Chrome/dukpy
+looking good is **not** PYTHON proof. A board-only win with GUI/SIM reject
+is a **parity gap**, not a successful ship.
 
 ## Verification must include the real board
 
 A fix that claims silicon is not verified until it runs on the **FPGA
-hardware**. FPGA-SIM and the Python functional model are necessary but not
+hardware**. FPGA-SIM and the Python **bytecode** FM are necessary but not
 sufficient. Always confirm on the board **after** PYTHON + FPGA-SIM match,
-never sim alone and never board-only UX.
+never sim alone and never board-only UX. ASIC only after FPGA honesty.
 
 ## This product is not the BASIC machine
 

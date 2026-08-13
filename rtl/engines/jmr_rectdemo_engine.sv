@@ -1,28 +1,29 @@
-// RECTDEMO fillRect engine — same geometry as storage/RECTDEMO.JS on mini FB.
-// LLM NOTE: Hardcoded native path until full bytecode VM lands; same glass intent.
+// RECTDEMO fillRect engine — same geometry as storage/RECTDEMO.JS on 640×480 FB.
+// LLM NOTE: Hardcoded native path; glass matches PYTHON fillRect coords.
 module jmr_rectdemo_engine (
     input  logic        clk,
     input  logic        rst_n,
     input  logic        start,
     output logic        busy,
     output logic        done,
-    // Mini FB write
     output logic        fb_we,
-    output logic [14:0] fb_waddr,
+    output logic [18:0] fb_waddr,
     output logic [7:0]  fb_wdata,
     output logic        fb_swap
 );
-    localparam int W = 160;
-    localparam int H = 120;
+    localparam int W = 640;
+    localparam int H = 480;
+    localparam int PIXELS = W * H;
 
     typedef enum logic [3:0] {
         S_IDLE, S_CLEAR, S_RECT1, S_RECT2, S_SWAP, S_DONE
     } state_t;
     state_t state;
 
-    logic [14:0] idx;
-    logic [7:0]  rx, ry, rw, rh, color;
-    logic [7:0]  x, y;
+    logic [18:0] idx;
+    logic [9:0]  rx, ry, rw, rh;
+    logic [7:0]  color;
+    logic [9:0]  x, y;
 
     assign busy = (state != S_IDLE && state != S_DONE);
 
@@ -48,28 +49,28 @@ module jmr_rectdemo_engine (
                     fb_we <= 1'b1;
                     fb_waddr <= idx;
                     fb_wdata <= 8'd0;
-                    if (idx == 15'(W * H - 1)) begin
-                        // fillRect(10,10,100,60,2) scaled 160/640 = /4 → (2,2,25,15,2)
-                        rx <= 8'd2; ry <= 8'd2; rw <= 8'd25; rh <= 8'd15; color <= 8'd2;
-                        x <= 8'd2; y <= 8'd2;
+                    if (idx == 19'(PIXELS - 1)) begin
+                        // fillRect(10,10,100,60,2) native 640×480
+                        rx <= 10'd10; ry <= 10'd10; rw <= 10'd100; rh <= 10'd60; color <= 8'd2;
+                        x <= 10'd10; y <= 10'd10;
                         state <= S_RECT1;
                     end else idx <= idx + 1'b1;
                 end
                 S_RECT1, S_RECT2: begin
                     fb_we <= 1'b1;
-                    fb_waddr <= 15'(y) * 15'(W) + 15'(x);
+                    fb_waddr <= 19'(y) * 19'(W) + 19'(x);
                     fb_wdata <= color;
-                    if (x == rx + rw - 1'b1) begin
+                    if (x == rx + rw - 10'd1) begin
                         x <= rx;
-                        if (y == ry + rh - 1'b1) begin
+                        if (y == ry + rh - 10'd1) begin
                             if (state == S_RECT1) begin
-                                // fillRect(120,10,100,60,4) → (30,2,25,15,4)
-                                rx <= 8'd30; ry <= 8'd2; rw <= 8'd25; rh <= 8'd15; color <= 8'd4;
-                                x <= 8'd30; y <= 8'd2;
+                                // fillRect(120,10,100,60,4)
+                                rx <= 10'd120; ry <= 10'd10; rw <= 10'd100; rh <= 10'd60; color <= 8'd4;
+                                x <= 10'd120; y <= 10'd10;
                                 state <= S_RECT2;
                             end else state <= S_SWAP;
-                        end else y <= y + 1'b1;
-                    end else x <= x + 1'b1;
+                        end else y <= y + 10'd1;
+                    end else x <= x + 10'd1;
                 end
                 S_SWAP: begin
                     fb_swap <= 1'b1;
