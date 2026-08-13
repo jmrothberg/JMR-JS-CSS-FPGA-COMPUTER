@@ -59,16 +59,34 @@ NATIVE_IDS = {
     "clearInterval": 31,
     "localStorage.removeItem": 32,
     "_stub": 33,  # unknown CALL_NATIVE → no-op
+    # NEW (full-game builtins): Array(n) ctor; Date.now reserved for RTL
+    "Array": 34,
+    "Date.now": 35,
+    # NEW: listener removal (DONKEY menus) — distinct from add ids 19/20
+    "document.removeEventListener": 36,
+    "window.removeEventListener": 37,
+    # NEW: synthetic events (DONKEY boot script Enter via dispatchEvent)
+    "document.dispatchEvent": 38,
+    "window.dispatchEvent": 39,
 }
 
 # NEW: aliases share an id (decode prefers the canonical NATIVE_IDS key)
 NATIVE_ALIASES = {
     "console.warn": 0,
     "addEventListener": 19,
+    "removeEventListener": 36,
 }
 
 # flags bit0 = JSB v2 (name table + class table after ops; ops_base still 3+n_consts)
 FLAG_V2 = 1
+# flags bit1 = ASET asset section present (external SRAM asset bank).
+# When set, a u32 aset_byte_off (from file start) follows the 12-byte header
+# (consts then start at byte 16 / word 4). Code part = [0, aset_byte_off);
+# the loader streams code → code BRAM and the ASET payload → asset SRAM.
+FLAG_ASET = 2
+ASET_MAGIC = b"ASET"
+ASET_PAL_BYTES = 768  # 256 × RGB888 at asset-SRAM offset 0
+SRAM_BYTES = 4 * 1024 * 1024  # 2M × 16 IS61WV204816 contract (see docs/ARCHITECTURE.md)
 # LOAD_CONST a1: 0=i32  1=string intern  2=None  3=IEEE-754 bits in const pool
 _LC_I32, _LC_STR, _LC_NONE, _LC_F32 = 0, 1, 2, 3
 _STR_CAP = 512  # huge data: URIs stubbed — Image.onload still truthy
@@ -105,16 +123,54 @@ def _needs_v2(chunk: Chunk) -> bool:
     return False
 
 
-def encode_chunk(chunk: Chunk, v2: bool | None = None, sprites=None) -> bytes:
+def build_aset_payload(palette, sprites):
+    """ASET payload = 256×RGB888 palette + 2-byte-aligned sprite banks.
+
+    Returns (payload_bytes, [(w, h, sram_off), ...]). sram_off is the byte
+    offset inside the payload == asset-SRAM address after the loader streams
+    the payload to SRAM[0]. Deterministic: encode and decode/RUN rebuild the
+    exact same offsets from (palette, sprites).
+    """
+    pal = list(palette or [])
+    out = bytearray()
+    for i in range(256):
+        r, g, b = pal[i] if i < len(pal) else (0, 0, 0)
+        out += bytes((int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF))
+    descs: List[Tuple[int, int, int]] = []
+    for w, h, pix in sprites or []:
+        if len(out) & 1:
+            out += b"\x00"  # 16-bit SRAM port alignment
+        descs.append((int(w) & 0xFFFF, int(h) & 0xFFFF, len(out)))
+        need = int(w) * int(h)
+        out += pix[:need]
+        if len(pix) < need:
+            out += b"\x00" * (need - len(pix))
+    if len(out) > SRAM_BYTES:
+        raise ValueError(
+            f"ASET payload {len(out)} bytes exceeds the 4 MB asset SRAM bank"
+        )
+    return bytes(out), descs
+
+
+def encode_chunk(
+    chunk: Chunk, v2: bool | None = None, sprites=None, aset: bool = False
+) -> bytes:
     """Encode a compiled Chunk to .JSB bytes.
 
     v1 (flags=0): ints only — simple .JS titles.
     v2 (flags=1): name/class trailer after ops so RTL ops_base stays 3+n_consts.
+    aset=True (flags bit1): SPRD descriptors in the trailer + ASET section
+    (palette + full-res sprite banks) for the external SRAM asset bank —
+    the product path for HTML titles (no pixels in code BRAM).
     """
     if v2 is None:
         v2 = _needs_v2(chunk)
-    if v2:
-        return _encode_v2(chunk, sprites=sprites if sprites is not None else getattr(chunk, "sprites", None))
+    if v2 or aset:
+        return _encode_v2(
+            chunk,
+            sprites=sprites if sprites is not None else getattr(chunk, "sprites", None),
+            aset=aset,
+        )
     return _encode_v1(chunk)
 
 
@@ -187,7 +243,13 @@ def _encode_v1(chunk: Chunk) -> bytes:
             a1 = int(args[1]) & 0xFF
         elif op == Op.MAKE_FN:
             a0 = int(args[0]) & 0xFFFF
-            a1 = int(args[1]) & 0xFF if len(args) > 1 else 0
+            # NEW: a1 bit7 = is_arrow (lexical this); bit6 = IIFE (flat call);
+            # low 6 bits = nparam
+            a1 = int(args[1]) & 0x3F if len(args) > 1 else 0
+            if len(args) > 2 and args[2]:
+                a1 |= 0x80
+            if len(args) > 3 and args[3]:
+                a1 |= 0x40
         elif op == Op.CALL_VAL:
             # NEW: a0=argc (was dropped in v1 fall-through)
             a0 = int(args[0]) & 0xFFFF
@@ -209,7 +271,7 @@ def _intern_name(names: List[str], index: dict[str, int], s: str) -> int:
     return index[s]
 
 
-def _encode_v2(chunk: Chunk, sprites=None) -> bytes:
+def _encode_v2(chunk: Chunk, sprites=None, aset: bool = False) -> bytes:
     """JSB v2: keep header+i32 consts+ops; name/class trailer after ops."""
     names: List[str] = list(chunk.names)
     name_index: dict[str, int] = {n: i for i, n in enumerate(names)}
@@ -269,6 +331,11 @@ def _encode_v2(chunk: Chunk, sprites=None) -> bytes:
                 var_index[name] = len(var_names)
                 var_names.append(name)
             a0 = var_index[name] & 0xFFFF
+            # NEW: LET_VAR a1 bit0 = call-frame local (fn param/var). RTL has
+            # flat vars: it must always-store those, keeping init-if-missing
+            # only for top-level LET_VAR (state survives per-frame re-runs).
+            if op == Op.LET_VAR and len(args) > 1 and args[1]:
+                a1 = 1
         elif op in (Op.JUMP, Op.JUMP_IF_FALSE):
             a0 = int(args[0]) & 0xFFFF
         elif op == Op.CALL_NATIVE:
@@ -300,14 +367,21 @@ def _encode_v2(chunk: Chunk, sprites=None) -> bytes:
             a1 = int(args[1]) & 0xFF
         elif op == Op.MAKE_FN:
             a0 = int(args[0]) & 0xFFFF
-            a1 = int(args[1]) & 0xFF if len(args) > 1 else 0
+            # NEW: a1 bit7 = is_arrow (lexical this); bit6 = IIFE (flat call);
+            # low 6 bits = nparam
+            a1 = int(args[1]) & 0x3F if len(args) > 1 else 0
+            if len(args) > 2 and args[2]:
+                a1 |= 0x80
+            if len(args) > 3 and args[3]:
+                a1 |= 0x40
         elif op == Op.CALL_VAL:
             a0 = int(args[0]) & 0xFFFF
         word = (opc) | ((a0 & 0xFFFF) << 8) | ((a1 & 0xFF) << 24)
         ops_out.append(word)
 
+    flags = FLAG_V2 | (FLAG_ASET if aset else 0)
     hdr = MAGIC + struct.pack(
-        "<HHHH", len(ops_out), len(consts), len(var_names), FLAG_V2
+        "<HHHH", len(ops_out), len(consts), len(var_names), flags
     )
     body = b"".join(struct.pack("<i", c) for c in consts)
     body += b"".join(struct.pack("<I", w) for w in ops_out)
@@ -320,8 +394,12 @@ def _encode_v2(chunk: Chunk, sprites=None) -> bytes:
         ctor = meta.get("ctor")
         ctor_ip = 0xFFFF if ctor is None else int(ctor) & 0xFFFF
         meth_rows: list[tuple[int, int]] = []
+        getters = meta.get("getters") or ()
         for mname, entry in (meta.get("methods") or {}).items():
             mi = _intern_name(names, name_index, mname)
+            # NEW: bit15 of the name index flags a `get name()` accessor
+            if mname in getters:
+                mi |= 0x8000
             meth_rows.append((mi & 0xFFFF, int(entry) & 0xFFFF))
         class_rows.append((ni & 0xFFFF, ctor_ip, meth_rows))
     trailer = struct.pack("<H", len(names))
@@ -342,21 +420,47 @@ def _encode_v2(chunk: Chunk, sprites=None) -> bytes:
         trailer += struct.pack("<HHH", ni, ctor_ip, len(meth_rows))
         for mi, entry in meth_rows:
             trailer += struct.pack("<HH", mi, entry)
-    # SPR1 sprite pack before UTF-8 names — RTL trailer stops after class table
+    # Sprite block before UTF-8 names — RTL trailer stops after class table
     # then peeks this magic (PACMAN has none; INVADERS/DONKEY drawImage).
     spr = sprites if sprites is not None else getattr(chunk, "sprites", None)
-    if spr:
+    aset_payload = b""
+    if aset:
+        # ASET path: descriptors only (SPRD); pixels + palette go to the
+        # external SRAM asset bank via the ASET section (never code BRAM).
+        aset_payload, descs = build_aset_payload(
+            getattr(chunk, "palette", None), spr
+        )
+        trailer += b"SPRD" + struct.pack("<H", len(descs))
+        for w, h, soff in descs:
+            trailer += struct.pack("<HHI", w, h, soff)
+    elif spr:
+        # Legacy SPR1 (tiny .JS demos only): pixels inline in the trailer.
         trailer += b"SPR1" + struct.pack("<H", len(spr))
         for w, h, pix in spr:
             trailer += struct.pack("<HH", int(w) & 0xFFFF, int(h) & 0xFFFF)
             trailer += pix[: int(w) * int(h)]
             if len(pix) < int(w) * int(h):
                 trailer += b"\x00" * (int(w) * int(h) - len(pix))
-    # UTF-8 names last — PYTHON decode only (RTL stops after class table / SPR1)
+    # UTF-8 names last — PYTHON decode only (RTL stops after class table / SPRD)
     for n in names:
         raw = n.encode("utf-8")[:0xFFFF]
         trailer += struct.pack("<H", len(raw)) + raw
-    return hdr + body + trailer
+    if not aset:
+        return hdr + body + trailer
+    # ASET file layout: [hdr | u32 aset_off | body | trailer | pad4 | ASET…]
+    code_len = len(hdr) + 4 + len(body) + len(trailer)
+    pad = (-code_len) % 4  # ASET section starts word-aligned for the streamer
+    aset_off = code_len + pad
+    return (
+        hdr
+        + struct.pack("<I", aset_off)
+        + body
+        + trailer
+        + b"\x00" * pad
+        + ASET_MAGIC
+        + struct.pack("<I", len(aset_payload))
+        + aset_payload
+    )
 
 
 def decode_chunk(data: bytes) -> Chunk:
@@ -365,6 +469,10 @@ def decode_chunk(data: bytes) -> Chunk:
         raise ValueError("bad JSB magic")
     n_ops, n_consts, n_vars, flags = struct.unpack_from("<HHHH", data, 4)
     off = 12
+    aset_off = 0
+    if flags & FLAG_ASET:
+        aset_off = struct.unpack_from("<I", data, off)[0]
+        off += 4
     packed_consts: List[int] = []
     for _ in range(n_consts):
         packed_consts.append(struct.unpack_from("<i", data, off)[0])
@@ -377,6 +485,7 @@ def decode_chunk(data: bytes) -> Chunk:
     var_name_idx: List[int] = []
     classes: dict[str, dict] = {}
     sprites: list = []
+    palette: list | None = None
     if flags & FLAG_V2:
         n_names = struct.unpack_from("<H", data, off)[0]
         off += 2
@@ -399,6 +508,7 @@ def decode_chunk(data: bytes) -> Chunk:
                 off += 4
                 meths.append((mi, int(entry)))
             class_raw.append((ni, ctor_ip, meths))
+        sprite_descs: list[tuple[int, int, int]] = []
         if off + 4 <= len(data) and data[off : off + 4] == b"SPR1":
             off += 4
             n_spr = struct.unpack_from("<H", data, off)[0]
@@ -409,6 +519,15 @@ def decode_chunk(data: bytes) -> Chunk:
                 npi = int(sw) * int(sh)
                 sprites.append((int(sw), int(sh), bytes(data[off : off + npi])))
                 off += npi
+        elif off + 4 <= len(data) and data[off : off + 4] == b"SPRD":
+            # ASET descriptors: pixels live in the ASET section / asset SRAM
+            off += 4
+            n_spr = struct.unpack_from("<H", data, off)[0]
+            off += 2
+            for _s in range(n_spr):
+                sw, sh, soff = struct.unpack_from("<HHI", data, off)
+                off += 8
+                sprite_descs.append((int(sw), int(sh), int(soff)))
         for _ in range(n_names):
             ln = struct.unpack_from("<H", data, off)[0]
             off += 2
@@ -416,17 +535,39 @@ def decode_chunk(data: bytes) -> Chunk:
             off += ln
         for ni, ctor_ip, meths in class_raw:
             cname = names[ni] if ni < len(names) else f"C{ni}"
-            methods = {
-                (names[mi] if mi < len(names) else f"m{mi}"): int(entry)
-                for mi, entry in meths
-            }
+            methods = {}
+            getters: set = set()
+            for mi, entry in meths:
+                # NEW: bit15 of the name index flags a `get name()` accessor
+                is_get = bool(mi & 0x8000)
+                mi &= 0x7FFF
+                mname = names[mi] if mi < len(names) else f"m{mi}"
+                methods[mname] = int(entry)
+                if is_get:
+                    getters.add(mname)
             classes[cname] = {
                 "ctor": None if ctor_ip == 0xFFFF else int(ctor_ip),
                 "methods": methods,
+                "getters": getters,
             }
         # pad names so var/GET_PROP indices resolve
         while len(names) < n_names:
             names.append("")
+        # ASET section: palette + full-res sprite banks (asset-SRAM image)
+        if (flags & FLAG_ASET) and aset_off:
+            if data[aset_off : aset_off + 4] != ASET_MAGIC:
+                raise ValueError("bad ASET magic (truncated asset section?)")
+            pay_len = struct.unpack_from("<I", data, aset_off + 4)[0]
+            payload = data[aset_off + 8 : aset_off + 8 + pay_len]
+            if len(payload) < pay_len:
+                raise ValueError("truncated ASET payload")
+            palette = [
+                (payload[i * 3], payload[i * 3 + 1], payload[i * 3 + 2])
+                for i in range(256)
+            ]
+            for sw, sh, soff in sprite_descs:
+                npi = sw * sh
+                sprites.append((sw, sh, bytes(payload[soff : soff + npi])))
     else:
         # v1: synthesize var names; GET_PROP name idx may not round-trip
         names = [f"v{i}" for i in range(max(n_vars, 1))]
@@ -467,12 +608,23 @@ def decode_chunk(data: bytes) -> Chunk:
             code.append((Op.CALL_USER, a0, a1))
         elif op in (Op.JUMP, Op.JUMP_IF_FALSE, Op.MAKE_ARRAY, Op.GET_PROP, Op.SET_PROP, Op.CALL_VAL):
             code.append((op, a0))
-        elif op in (Op.NEW_OBJ, Op.CALL_METHOD, Op.MAKE_FN):
+        elif op == Op.MAKE_FN:
+            # NEW: unpack a1 bit7 → is_arrow, bit6 → IIFE, low 6 → nparam
+            code.append(
+                (op, a0, a1 & 0x3F, 1 if (a1 & 0x80) else 0, 1 if (a1 & 0x40) else 0)
+            )
+        elif op in (Op.NEW_OBJ, Op.CALL_METHOD):
             code.append((op, a0, a1))
         else:
             code.append((op,) if not a0 and not a1 else (op, a0, a1) if a1 else (op, a0))
     return Chunk(
-        code, consts, names, functions=None, classes=classes or None, sprites=sprites or None
+        code,
+        consts,
+        names,
+        functions=None,
+        classes=classes or None,
+        sprites=sprites or None,
+        palette=palette,
     )
 
 

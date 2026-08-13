@@ -69,12 +69,14 @@ designs. Only Vivado (board flow) produces them; Verilator never does.
 
 | Runtime | What it is | Where the “CPU” lives |
 |---|---|---|
-| **PYTHON** | **JMR bytecode VM** — **compile-on-RUN** | `functional_model/` (fresh `.JSH` output; never stale) |
+| **PYTHON** | **JMR bytecode VM** — **compile-on-RUN** | `functional_model/` (fresh `.JSH`, code + ASET art; never stale) |
 | **FPGA-SIM** | Same RTL as the board, simulated | Verilator → `sim/sim_build_synth/jmr_js_sim_server` (**default**). Host twin only with `JMR_SIM_HOST=1` — never a silent fallback. |
 | **BOARD** | Real Nexys Video (standalone or tethered debug) | Silicon |
 | **ASIC** | Same ISA after FPGA honesty | — |
 
 Titles: `LOAD "NAME.HTML"` / `RUN` only. Never call Chrome or dukpy a rung.
+Fat graphics ride the `.JSH` ASET section into the external SRAM asset bank
+(no `NAME.DAT` file).
 
 Glass: [../.cursor/rules/python-first-parity.mdc](../.cursor/rules/python-first-parity.mdc),
 [../.cursor/rules/no-dukpy-cheat-native-cpu.mdc](../.cursor/rules/no-dukpy-cheat-native-cpu.mdc).
@@ -99,14 +101,14 @@ Traces first: [../.cursor/rules/use-existing-traces.mdc](../.cursor/rules/use-ex
 |---|---|
 | Digilent product | **Nexys Video** (primary) |
 | FPGA part | **XC7A200T-1SBG484C** |
-| External RAM | 512 MiB DDR3 (enough for V1 FB + heap; exact map later) |
+| External RAM | 512 MiB DDR3 → bridged as the **4 MB SRAM asset bank** (2M × 16 IS61WV204816 contract; simple SRAM port; ASIC uses the real chip). See `docs/ARCHITECTURE.md` |
 | Video | **HDMI Source** (J8) — native **640×480 @ ~60 Hz**, ~25.175 MHz pixel clock |
-| Framebuffer | 8 bpp indexed, **256-entry RGB888 palette**. FPGA-SIM / next bit: dual **640×480** BRAM. Last flash (03:36): 160×120 scaled. DDR3 heap/FB still later |
+| Framebuffer | 8 bpp indexed, **256-entry RGB888 palette**. FPGA-SIM / next bit: dual **640×480** BRAM. Last flash (03:36): 160×120 scaled |
 | Keyboard | USB HOST (J15) → PIC24 → PS/2 — **this board’s J15 is dead**; GUI/PROG tether until RMA |
 | Play controls | GUI arrows+Space → KEYBITS (BOARD: PROG `0xFE`+bits). Mouse stick **off**. Pmod joy later |
 | Mouse | **Not V1 standalone USB** |
 | Host link | PROG FT245 (ch A / `.0`) — flash + tether glass + play keys |
-| Storage | µSD SPI + FAT32 DIR/LOAD; companion `.JSB` on card for simple titles |
+| Storage | µSD SPI + FAT32: `NAME.HTML` (LOAD) + internal `.JSH` compile cache (code + ASET art) |
 | openFPGALoader `-b` id | **nexysVideo** |
 | Bitstream output path | `build/nexys_video/jmr_nexys_video.bit` |
 | Second port | **PA-StarLite** later — HDMI + 40-pin joystick; keyboard needs Pmod (no HID jack) |
@@ -195,8 +197,10 @@ Gates: `make -C sim tb_uart_link tb_ft245`.
 ### Silicon honesty (RUN)
 
 - User product path: `LOAD "*.HTML"` + `RUN` → **compile-on-RUN** → fresh
-  bytecode / `.JSH` into the JMR VM. Never prefer a stale companion `.JSH`.
-  Never dukpy on silicon.
+  bytecode / `.JSH` into the JMR VM. Full-quality graphics stream from the
+  `.JSH` ASET section into the external SRAM asset bank (never pack Donkey
+  art into code BRAM; no `NAME.DAT`). Never
+  prefer a stale companion `.JSH`. Never dukpy on silicon.
 - `?NH` = HTML path debt (temporary). Missing compile path → fail loud
   (not Invaders hex lie).
 - Optional differently named demos (`RECTDEMO.JS`, …) may use `.JSB`.

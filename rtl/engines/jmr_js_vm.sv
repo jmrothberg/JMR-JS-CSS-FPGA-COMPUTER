@@ -18,7 +18,13 @@ module jmr_js_vm #(
     output logic        fb_we,
     output logic [18:0] fb_waddr,
     output logic [7:0]  fb_wdata,
-    output logic        fb_swap
+    output logic        fb_swap,
+    // NEW: external asset SRAM read port (jmr_sram_port master, read-only) —
+    // ASET sprite banks live there; blitter fetches pixels 2-per-16-bit word
+    output logic        sram_req,
+    output logic [20:0] sram_addr,
+    input  logic [15:0] sram_rdata,
+    input  logic        sram_ack
 );
     localparam int CODE_WORDS = 32768;
     localparam int MAX_CONSTS = 1024;
@@ -79,21 +85,26 @@ module jmr_js_vm #(
     logic signed [31:0] vars   [0:MAX_VARS-1];
     logic               var_init [0:MAX_VARS-1];
     logic signed [31:0] stack  [0:STACK_DEPTH-1];
-    logic [8:0]  sp;
-    logic [15:0] ip;
+    // NEW: public for the sim server VMSTAT? probe (FPGA-SIM bring-up only)
+    logic [8:0]  sp /*verilator public_flat_rd*/;
+    logic [15:0] ip /*verilator public_flat_rd*/;
     logic [15:0] n_ops, n_consts, ops_base, jsb_flags;
     logic        looping, running;
     // NEW: tagged stack/vars for HTML heap (0=int 1=obj 2=arr 3=str 4=fn 5=undef 6=elem)
     logic [2:0]  stack_tag [0:STACK_DEPTH-1];
     logic [2:0]  var_tag   [0:MAX_VARS-1];
-    localparam int MAX_OBJ = 2048; // bunkers + grid + per-frame {velocity} literals
+    // NEW: INVADERS.HTML boot alone allocates ~1.8K objects (VMSTAT audit) —
+    // grow the VM, never the games. Temporaries recycle in the upper ring.
+    localparam int MAX_OBJ = 8192;
+    localparam int OBJ_RING = MAX_OBJ / 2; // wrap point: boot heap stays below
     localparam int OBJ_SLOTS = 32; // PACMAN Item.assign copies ~20 settings onto this
-    localparam int MAX_ARR = 256;
+    localparam int MAX_ARR = 1024;
+    localparam int ARR_RING = MAX_ARR / 2;
     localparam int ARR_CAP = 128;
     localparam int MAX_CLS = 16;
     localparam int MAX_CMETH = 16;
     localparam int CSTK = 128;
-    logic [15:0] n_obj, n_arr;
+    logic [15:0] n_obj /*verilator public_flat_rd*/, n_arr /*verilator public_flat_rd*/;
     logic [5:0]  obj_n    [0:MAX_OBJ-1];
     logic [15:0] obj_key  [0:MAX_OBJ-1][0:OBJ_SLOTS-1];
     logic [31:0] obj_val  [0:MAX_OBJ-1][0:OBJ_SLOTS-1];
@@ -121,8 +132,8 @@ module jmr_js_vm #(
     logic [8:0]  var_this;   // NEW: LOAD_VAR slot for __this
     logic        this_ok;
     logic [15:0] raf_fn [0:7];
-    logic [3:0]  raf_n;
-    logic [15:0] kd_fn, ku_fn, click_fn; // interned MAKE_FN entries; 0xFFFF=none
+    logic [3:0]  raf_n /*verilator public_flat_rd*/;
+    logic [15:0] kd_fn /*verilator public_flat_rd*/, ku_fn, click_fn; // interned MAKE_FN entries; 0xFFFF=none
     logic        click_fired; // NEW: HTML auto-start click once
     logic        pre_click_raf; // NEW: one rAF (Image.onload) before click
     logic [5:0]  prev_joy;
@@ -140,21 +151,29 @@ module jmr_js_vm #(
     logic [15:0] id_now, id_gettime;
     logic [15:0] id_beginpath, id_fill, id_stroke, id_moveto, id_lineto, id_closepath, id_strokestyle;
     logic [15:0] id_hex_09f, id_hex_f5f5, id_hex_ffe6, id_hex_f00, id_hex_aaa;
-    logic [15:0] spr_nid [0:7]; // intern idx of "jmr:spr:0"..7
+    logic [15:0] spr_nid [0:7] /*verilator public_flat_rd*/; // intern idx of "jmr:spr:0"..7
+    // NEW: bring-up probes — drawImage sprite-marker hits vs misses
+    logic [15:0] dbg_di_hit /*verilator public_flat_rd*/, dbg_di_miss /*verilator public_flat_rd*/;
     logic [1:0]  path_kind; // 0 none 1 arc 2 moveto 3 lineto
     logic signed [31:0] path_x0, path_y0, path_x1, path_y1, path_r;
     logic        path_stroke;
     localparam int SPR_BYTES = 262144;
     localparam int MAX_SPR = 8;
     (* ram_style = "block" *) logic [7:0] spr_mem [0:SPR_BYTES-1];
-    logic [17:0] spr_off [0:MAX_SPR-1];
-    logic [9:0]  spr_ww [0:MAX_SPR-1];
-    logic [9:0]  spr_hh [0:MAX_SPR-1];
-    logic [3:0]  n_spr, spr_i;
+    // NEW: ASET sprites live in the 4 MB asset SRAM — offsets are 22-bit byte
+    // addresses in the payload; DONKEY sheets are 1470×750 so w/h are u16.
+    logic [21:0] spr_off [0:MAX_SPR-1];
+    logic [15:0] spr_ww [0:MAX_SPR-1];
+    logic [15:0] spr_hh [0:MAX_SPR-1];
+    logic [3:0]  n_spr /*verilator public_flat_rd*/, spr_i;
     logic [2:0]  spr_hdr;
     logic [17:0] spr_wp, spr_left;
     logic [7:0]  blit_si;
-    logic [9:0]  blit_sx, blit_sy, blit_sw, blit_sh;
+    logic [15:0] blit_sx, blit_sy, blit_sw, blit_sh;
+    logic        aset_mode;   // NEW: header flags bit1 — sprites in asset SRAM
+    logic        sprd_mode;   // NEW: trailer carries SPRD descriptors (no pixels)
+    logic        blit_wait;   // NEW: SRAM read handshake inside S_BLIT
+    logic [15:0] hdr_w;       // NEW: header words (3, or 4 when ASET off present)
     logic [31:0] time_ms; // PACMAN Date.now / getTime — must advance or start() skips draw
     localparam int MAX_FN_PROTO = 64;
     logic [15:0] fn_proto_ip [0:MAX_FN_PROTO-1];
@@ -200,7 +219,7 @@ module jmr_js_vm #(
         S_ALU, S_ALU_WR,
         S_CALL, S_FOREACH, S_KEYEV
     } st_t;
-    st_t state, ret_state;
+    st_t state /*verilator public_flat_rd*/, ret_state;
 
     logic [15:0] c_i;
     // NEW: 10-bit coords for 640×480 (was 8-bit mini after scale4)
@@ -210,22 +229,29 @@ module jmr_js_vm #(
     logic [7:0]  nat_id, nat_argc;
     logic signed [31:0] a_s, b_s;
 
-    // NEW: registered multiply operands + product (break DSP→stack path)
-    logic signed [31:0] mul_a, mul_b, mul_prod;
+    // NEW: registered multiply operands + product (break DSP→stack path).
+    // 64-bit product: fx×fx needs the >>16 correction (Q16.16 renormalize).
+    logic signed [31:0] mul_a, mul_b;
+    logic signed [63:0] mul_prod;
 
     // NEW: ALU pipeline for ADD/SUB/LT/GT/EQ/NEG/NOT
     logic signed [31:0] alu_a, alu_b, alu_r;
     logic [2:0] alu_op;  // 0 ADD 1 SUB 2 LT 3 GT 4 EQ 5 NEG 6 NOT
+    // NEW: Q16.16 mixed arithmetic — operands lifted to fx when either is fx;
+    // ADD/SUB/NEG results stay fx, compares are plain ints.
+    logic        alu_fx;
+    logic        mul_fx_a, mul_fx_b;
+    logic        div_int_in;   // both DIV inputs were ints (exact → int result)
 
-    // NEW: restoring-divider state (32 cycles @ core clk; result matches the
-    // old single-cycle signed '/' — truncate toward zero, div-by-0 → 0)
-    logic [31:0] div_uq;   // shifting dividend, becomes |quotient|
+    // NEW: restoring-divider state (48 cycles @ core clk) — dividend is
+    // |N| << 16 so the quotient lands in Q16.16 (truncate toward zero, /0 → 0)
+    logic [47:0] div_uq;   // shifting dividend, becomes |quotient| (Q16.16)
     logic [31:0] div_ub;   // |divisor|
     logic [31:0] div_rem;  // partial remainder
     logic [5:0]  div_cnt;
     logic        div_neg;  // result sign
     logic [32:0] div_rnext;
-    assign div_rnext = {div_rem, div_uq[31]};
+    assign div_rnext = {div_rem, div_uq[47]};
 
     assign busy = running;
     assign done = (state == S_DONE);
@@ -240,6 +266,12 @@ module jmr_js_vm #(
         if (v < 0) clip_u = 10'd0;
         else if (v >= lim) clip_u = 10'(lim - 1);
         else clip_u = 10'(v);
+    endfunction
+    // NEW: 16-bit clamp for blit source coords (ASET sheets exceed 10 bits)
+    function automatic logic [15:0] clip_src(input logic signed [31:0] v);
+        if (v < 0) clip_src = 16'd0;
+        else if (v > 32'sd65535) clip_src = 16'd65535;
+        else clip_src = 16'(v);
     endfunction
     function automatic logic [9:0] clip_sz(
         input logic signed [31:0] v,
@@ -267,6 +299,38 @@ module jmr_js_vm #(
             mag = $signed({8'd0, mant} >> (8'd150 - exp));
         f32_to_i = bits[31] ? -mag : mag;
     endfunction
+    // NEW: float bits → Q16.16 fixed (tag 7). 0.12*width must not be 0 —
+    // fractions are the FM parity gap (INVADERS ship scale, DONKEY 640/1510).
+    function automatic logic signed [31:0] f32_to_fx(input logic [31:0] bits);
+        logic [7:0] exp;
+        logic [23:0] mant;
+        logic signed [31:0] mag;
+        exp = bits[30:23];
+        mant = {1'b1, bits[22:0]};
+        if (exp == 8'd0 || exp < 8'd103)          // |v| < 2^-24 → 0
+            mag = 32'sd0;
+        else if (exp >= 8'd142)                    // |v| >= 2^15 clamps Q16.16
+            mag = 32'sd2147483647;
+        else if (exp >= 8'd134)                    // v×2^16 = mant×2^(exp-134)
+            mag = $signed({8'd0, mant} << (exp - 8'd134));
+        else
+            mag = $signed({8'd0, mant} >> (8'd134 - exp));
+        f32_to_fx = bits[31] ? -mag : mag;
+    endfunction
+    // NEW: tag-aware int read — Q16.16 (tag 7) floors to i32, others pass through
+    function automatic logic signed [31:0] fxi(
+        input logic signed [31:0] v, input logic [2:0] t);
+        fxi = (t == 3'd7) ? (v >>> 16) : v;
+    endfunction
+    // NEW: lift an int operand into Q16.16 when its partner is fx
+    function automatic logic signed [31:0] fxlift(
+        input logic signed [31:0] v, input logic [2:0] t, input logic pair_fx);
+        fxlift = (pair_fx && t != 3'd7) ? (v <<< 16) : v;
+    endfunction
+    // NEW: stack read floored to int — draw/native args must not see raw Q16.16
+    function automatic logic signed [31:0] sti(input logic [8:0] i);
+        sti = (stack_tag[i] == 3'd7) ? (stack[i] >>> 16) : stack[i];
+    endfunction
 
     task automatic next_op;
         ip <= ip + 16'd1;
@@ -284,13 +348,13 @@ module jmr_js_vm #(
     endtask
     // NEW: KEYBITS OR into HTML keys.*.pressed (plan: debug OR, no WASD map in handlers)
     task automatic poke_pressed(input logic [15:0] child_ni, input logic down);
-        logic [10:0] koid, child;
+        logic [12:0] koid, child;
         logic found;
-        koid = vars[var_keys][10:0];
+        koid = vars[var_keys][12:0];
         child = 11'd0;
         for (int s = 0; s < OBJ_SLOTS; s++)
             if (s < obj_n[koid] && obj_key[koid][s] == child_ni)
-                child = obj_val[koid][s][10:0];
+                child = obj_val[koid][s][12:0];
         found = 1'b0;
         for (int s = 0; s < OBJ_SLOTS; s++) begin
             if (s < obj_n[child] && obj_key[child][s] == id_pressed) begin
@@ -321,12 +385,15 @@ module jmr_js_vm #(
             code_raddr <= '0;
             nat_id <= '0; nat_argc <= '0;
             c_i <= '0;
+            sram_req <= 1'b0; sram_addr <= '0; blit_wait <= 1'b0;
+            aset_mode <= 1'b0; sprd_mode <= 1'b0; hdr_w <= 16'd3;
         end else begin
             fb_we <= 1'b0;
             fb_swap <= 1'b0;
             if (stop) begin
                 running <= 1'b0;
                 looping <= 1'b0;
+                sram_req <= 1'b0; blit_wait <= 1'b0; // NEW: drop mid-blit SRAM req
                 state <= S_IDLE;
             end else unique case (state)
                 S_IDLE: if (start) begin
@@ -357,7 +424,11 @@ module jmr_js_vm #(
                     ret_state <= S_GOT_HDR2;
                 end
                 S_GOT_HDR2: begin
-                    ops_base <= 16'd3 + n_consts;
+                    // NEW: flags bit1 (ASET) → u32 aset_byte_off occupies word 3,
+                    // consts start at word 4; sprites blit from the asset SRAM.
+                    aset_mode <= code_rdata[17];
+                    hdr_w <= code_rdata[17] ? 16'd4 : 16'd3;
+                    ops_base <= (code_rdata[17] ? 16'd4 : 16'd3) + n_consts;
                     jsb_flags <= code_rdata[31:16];
                     for (int i = 0; i < MAX_VARS; i++) var_init[i] <= 1'b0;
                     n_obj <= 0; n_arr <= 0; n_cls <= 0; csp <= 0; raf_n <= 0;
@@ -387,28 +458,30 @@ module jmr_js_vm #(
                     id_hex_09f <= 16'hFFFF; id_hex_f5f5 <= 16'hFFFF; id_hex_ffe6 <= 16'hFFFF;
                     id_hex_f00 <= 16'hFFFF; id_hex_aaa <= 16'hFFFF;
                     path_kind <= 2'd0; n_spr <= 4'd0; spr_wp <= 18'd0; spr_hdr <= 3'd0;
+                    dbg_di_hit <= 16'd0; dbg_di_miss <= 16'd0;
+                    sprd_mode <= 1'b0; blit_wait <= 1'b0; sram_req <= 1'b0;
                     time_ms <= 32'd0;
                     n_fn_proto <= 7'd0;
                     enter_n <= 3'd2; enter_delay <= 4'd2;
                     for (int i = 0; i < 1024; i++) intern_var_ok[i] <= 1'b0;
                     ctx_tx <= 32'sd0; ctx_ty <= 32'sd0;
                     saved_tx <= 32'sd0; saved_ty <= 32'sd0;
-                    trail_off <= 19'(16'd3 + n_consts + n_ops) << 2;
+                    trail_off <= 19'((code_rdata[17] ? 16'd4 : 16'd3) + n_consts + n_ops) << 2;
                     trail_ph <= 5'd0;
                     trail_guard <= 16'd0;
                     if (n_consts == 16'd0) begin
                         ip <= '0;
                         if (code_rdata[16]) begin
-                            code_raddr <= 15'((16'd3 + n_ops));
+                            code_raddr <= 15'((code_rdata[17] ? 16'd4 : 16'd3) + n_ops);
                             state <= S_RD;
                             ret_state <= S_TRAIL;
                         end else begin
-                            code_raddr <= 15'd3;
+                            code_raddr <= code_rdata[17] ? 15'd4 : 15'd3;
                             state <= S_FETCH_WAIT;
                         end
                     end else begin
                         c_i <= '0;
-                        code_raddr <= 15'd3;
+                        code_raddr <= code_rdata[17] ? 15'd4 : 15'd3;
                         state <= S_RD;
                         ret_state <= S_LD_CONST;
                     end
@@ -418,16 +491,16 @@ module jmr_js_vm #(
                     if (c_i + 16'd1 >= n_consts) begin
                         ip <= '0;
                         if (jsb_flags[0]) begin
-                            code_raddr <= 15'(16'd3 + n_consts + n_ops);
+                            code_raddr <= 15'(hdr_w + n_consts + n_ops);
                             state <= S_RD;
                             ret_state <= S_TRAIL;
                         end else begin
-                            code_raddr <= 15'(16'd3 + n_consts);
+                            code_raddr <= 15'(hdr_w + n_consts);
                             state <= S_FETCH_WAIT;
                         end
                     end else begin
                         c_i <= c_i + 16'd1;
-                        code_raddr <= 15'(16'd3 + c_i + 16'd1);
+                        code_raddr <= 15'(hdr_w + c_i + 16'd1);
                         state <= S_RD;
                         ret_state <= S_LD_CONST;
                     end
@@ -619,9 +692,11 @@ module jmr_js_vm #(
                                 trail_ph <= 5'd25;
                             end
                             5'd25: begin
-                                // bytes: acc[7:0], acc[15:8], trail_n[7:0], tb  == "SPR1"?
+                                // bytes: acc[7:0], acc[15:8], trail_n[7:0], tb == "SPR1"
+                                // (inline pixels) or "SPRD" (ASET descriptors)
                                 if (trail_acc[7:0] == 8'h53 && trail_acc[15:8] == 8'h50 &&
-                                    trail_n[7:0] == 8'h52 && tb == 8'h31) begin
+                                    trail_n[7:0] == 8'h52 && (tb == 8'h31 || tb == 8'h44)) begin
+                                    sprd_mode <= (tb == 8'h44);
                                     trail_ph <= 5'd26;
                                 end else begin
                                     code_raddr <= 15'(ops_base);
@@ -640,11 +715,37 @@ module jmr_js_vm #(
                                     code_raddr <= 15'(ops_base);
                                     state <= S_FETCH_WAIT;
                                     trail_ph <= 5'd31;
+                                end else if (sprd_mode) begin
+                                    // SPRD: 8-byte descriptors (w,h u16 + u32 SRAM
+                                    // offset) — no pixel copy, stay in S_TRAIL
+                                    spr_hdr <= 3'd0;
+                                    trail_ph <= 5'd28;
                                 end else begin
                                     trail_ph <= 5'd31;
                                     spr_hdr <= 3'd0;
                                     state <= S_SPR;
                                 end
+                            end
+                            5'd28: begin
+                                // NEW: SPRD descriptor walk — spr_hdr counts the 8
+                                // bytes; off byte 3 ignored (bank is 4 MB / 22 bits)
+                                unique case (spr_hdr)
+                                    3'd0: begin trail_acc[7:0] <= tb; spr_hdr <= 3'd1; end
+                                    3'd1: begin spr_ww[spr_i[2:0]] <= {tb, trail_acc[7:0]}; spr_hdr <= 3'd2; end
+                                    3'd2: begin trail_acc[7:0] <= tb; spr_hdr <= 3'd3; end
+                                    3'd3: begin spr_hh[spr_i[2:0]] <= {tb, trail_acc[7:0]}; spr_hdr <= 3'd4; end
+                                    3'd4: begin spr_off[spr_i[2:0]][7:0]   <= tb; spr_hdr <= 3'd5; end
+                                    3'd5: begin spr_off[spr_i[2:0]][15:8]  <= tb; spr_hdr <= 3'd6; end
+                                    3'd6: begin spr_off[spr_i[2:0]][21:16] <= tb[5:0]; spr_hdr <= 3'd7; end
+                                    default: begin
+                                        spr_hdr <= 3'd0;
+                                        if (spr_i + 4'd1 >= n_spr) begin
+                                            code_raddr <= 15'(ops_base);
+                                            state <= S_FETCH_WAIT;
+                                            trail_ph <= 5'd31;
+                                        end else spr_i <= spr_i + 4'd1;
+                                    end
+                                endcase
                             end
                             default: begin
                                 // unknown phase — do not hang HTML RUN
@@ -685,9 +786,10 @@ module jmr_js_vm #(
                                     stack[sp] <= 32'sd0;
                                     stack_tag[sp] <= 3'd5;
                                 end else if (code_rdata[31:24] == 8'd3) begin
-                                    // float bits → signed int (0.12 scale → 0 so x stays GAME_WIDTH/2)
-                                    stack[sp] <= f32_to_i(consts[code_rdata[17:8]]);
-                                    stack_tag[sp] <= 3'd0;
+                                    // NEW: float const → Q16.16 fixed (tag 7) — real
+                                    // fractions (0.12 ship scale, PACMAN *.5 speeds)
+                                    stack[sp] <= f32_to_fx(consts[code_rdata[17:8]]);
+                                    stack_tag[sp] <= 3'd7;
                                 end else begin
                                     stack[sp] <= consts[code_rdata[17:8]];
                                     stack_tag[sp] <= 3'd0;
@@ -709,7 +811,10 @@ module jmr_js_vm #(
                                 next_op();
                             end
                             OP_LET_VAR: begin
-                                if (!var_init[code_rdata[16:8]]) begin
+                                // NEW: a1 bit0 = call-frame local (fn param/var) —
+                                // always store; top-level keeps init-if-missing so
+                                // globals survive the per-frame program re-run.
+                                if (code_rdata[24] || !var_init[code_rdata[16:8]]) begin
                                     vars[code_rdata[16:8]] <= stack[sp - 8'd1];
                                     var_tag[code_rdata[16:8]] <= stack_tag[sp - 8'd1];
                                     var_init[code_rdata[16:8]] <= 1'b1;
@@ -718,15 +823,22 @@ module jmr_js_vm #(
                                 next_op();
                             end
                             OP_ADD: begin
-                                alu_a <= stack[sp - 8'd2];
-                                alu_b <= stack[sp - 8'd1];
+                                // NEW: mixed Q16.16 — lift the int side when the other is fx
+                                alu_fx <= (stack_tag[sp - 8'd2] == 3'd7 || stack_tag[sp - 8'd1] == 3'd7);
+                                alu_a <= fxlift(stack[sp - 8'd2], stack_tag[sp - 8'd2],
+                                                stack_tag[sp - 8'd1] == 3'd7);
+                                alu_b <= fxlift(stack[sp - 8'd1], stack_tag[sp - 8'd1],
+                                                stack_tag[sp - 8'd2] == 3'd7);
                                 alu_op <= 3'd0;
                                 sp <= sp - 8'd1;
                                 state <= S_ALU;
                             end
                             OP_SUB: begin
-                                alu_a <= stack[sp - 8'd2];
-                                alu_b <= stack[sp - 8'd1];
+                                alu_fx <= (stack_tag[sp - 8'd2] == 3'd7 || stack_tag[sp - 8'd1] == 3'd7);
+                                alu_a <= fxlift(stack[sp - 8'd2], stack_tag[sp - 8'd2],
+                                                stack_tag[sp - 8'd1] == 3'd7);
+                                alu_b <= fxlift(stack[sp - 8'd1], stack_tag[sp - 8'd1],
+                                                stack_tag[sp - 8'd2] == 3'd7);
                                 alu_op <= 3'd1;
                                 sp <= sp - 8'd1;
                                 state <= S_ALU;
@@ -735,43 +847,62 @@ module jmr_js_vm #(
                                 // NEW: register operands, multiply next cycle (timing)
                                 mul_a <= stack[sp - 8'd2];
                                 mul_b <= stack[sp - 8'd1];
+                                mul_fx_a <= (stack_tag[sp - 8'd2] == 3'd7);
+                                mul_fx_b <= (stack_tag[sp - 8'd1] == 3'd7);
                                 state <= S_MUL;
                             end
                             OP_DIV: begin
                                 // NEW: multi-cycle divide (see S_DIV) — the old
-                                // single-cycle '/' blew board timing (WNS −90 ns)
+                                // single-cycle '/' blew board timing (WNS −90 ns).
+                                // JS-honest: quotient computed in Q16.16 ((N<<16)/D
+                                // after lifting both to fx); int/int exact stays int
+                                // (indices), inexact becomes fx (DONKEY 640/1510).
                                 if (stack[sp - 8'd1] == 0) begin
                                     stack[sp - 8'd2] <= 32'sd0;
+                                    stack_tag[sp - 8'd2] <= 3'd0;
                                     sp <= sp - 8'd1;
                                     next_op();
                                 end else begin
-                                    div_neg <= stack[sp - 8'd2][31] ^ stack[sp - 8'd1][31];
-                                    div_uq  <= stack[sp - 8'd2][31]
-                                               ? 32'(-stack[sp - 8'd2]) : 32'(stack[sp - 8'd2]);
-                                    div_ub  <= stack[sp - 8'd1][31]
-                                               ? 32'(-stack[sp - 8'd1]) : 32'(stack[sp - 8'd1]);
+                                    logic signed [31:0] na, nb;
+                                    na = fxlift(stack[sp - 8'd2], stack_tag[sp - 8'd2], 1'b1);
+                                    nb = fxlift(stack[sp - 8'd1], stack_tag[sp - 8'd1], 1'b1);
+                                    div_int_in <= (stack_tag[sp - 8'd2] != 3'd7 &&
+                                                   stack_tag[sp - 8'd1] != 3'd7);
+                                    div_neg <= na[31] ^ nb[31];
+                                    // 48-bit dividend = |N| << 16 (fx quotient)
+                                    div_uq  <= {(na[31] ? 32'(-na) : 32'(na)), 16'd0};
+                                    div_ub  <= nb[31] ? 32'(-nb) : 32'(nb);
                                     div_rem <= '0;
                                     div_cnt <= '0;
                                     state <= S_DIV;
                                 end
                             end
                             OP_LT: begin
-                                alu_a <= stack[sp - 8'd2];
-                                alu_b <= stack[sp - 8'd1];
+                                alu_fx <= 1'b0; // compares always yield i32 bool
+                                alu_a <= fxlift(stack[sp - 8'd2], stack_tag[sp - 8'd2],
+                                                stack_tag[sp - 8'd1] == 3'd7);
+                                alu_b <= fxlift(stack[sp - 8'd1], stack_tag[sp - 8'd1],
+                                                stack_tag[sp - 8'd2] == 3'd7);
                                 alu_op <= 3'd2;
                                 sp <= sp - 8'd1;
                                 state <= S_ALU;
                             end
                             OP_GT: begin
-                                alu_a <= stack[sp - 8'd2];
-                                alu_b <= stack[sp - 8'd1];
+                                alu_fx <= 1'b0;
+                                alu_a <= fxlift(stack[sp - 8'd2], stack_tag[sp - 8'd2],
+                                                stack_tag[sp - 8'd1] == 3'd7);
+                                alu_b <= fxlift(stack[sp - 8'd1], stack_tag[sp - 8'd1],
+                                                stack_tag[sp - 8'd2] == 3'd7);
                                 alu_op <= 3'd3;
                                 sp <= sp - 8'd1;
                                 state <= S_ALU;
                             end
                             OP_EQ: begin
-                                alu_a <= stack[sp - 8'd2];
-                                alu_b <= stack[sp - 8'd1];
+                                alu_fx <= 1'b0;
+                                alu_a <= fxlift(stack[sp - 8'd2], stack_tag[sp - 8'd2],
+                                                stack_tag[sp - 8'd1] == 3'd7);
+                                alu_b <= fxlift(stack[sp - 8'd1], stack_tag[sp - 8'd1],
+                                                stack_tag[sp - 8'd2] == 3'd7);
                                 alu_op <= 3'd4;
                                 sp <= sp - 8'd1;
                                 state <= S_ALU;
@@ -782,9 +913,10 @@ module jmr_js_vm #(
                                 state <= S_FETCH_WAIT;
                             end
                             OP_JIF: begin
-                                // JS falsy: undef or int 0 — objects/strings/fns at oid 0 are still truthy
+                                // JS falsy: undef, int 0, or fx 0.0 — objects/strings/fns at oid 0 are still truthy
                                 a_s = (stack_tag[sp - 8'd1] == 3'd5 ||
-                                       (stack_tag[sp - 8'd1] == 3'd0 && stack[sp - 8'd1] == 0))
+                                       ((stack_tag[sp - 8'd1] == 3'd0 || stack_tag[sp - 8'd1] == 3'd7)
+                                        && stack[sp - 8'd1] == 0))
                                       ? 32'sd0 : 32'sd1;
                                 sp <= sp - 8'd1;
                                 if (a_s == 0) begin
@@ -817,64 +949,75 @@ module jmr_js_vm #(
                                 next_op();
                             end
                             OP_NEG: begin
+                                alu_fx <= (stack_tag[sp - 8'd1] == 3'd7); // -fx stays fx
                                 alu_a <= stack[sp - 8'd1];
                                 alu_op <= 3'd5;
                                 state <= S_ALU;
                             end
                             OP_NOT: begin
                                 // JS !x — objects/strings/fns truthy even when the packed oid is 0
+                                alu_fx <= 1'b0;
                                 alu_a <= (stack_tag[sp - 8'd1] == 3'd5 ||
-                                          (stack_tag[sp - 8'd1] == 3'd0 && stack[sp - 8'd1] == 0))
+                                          ((stack_tag[sp - 8'd1] == 3'd0 || stack_tag[sp - 8'd1] == 3'd7)
+                                           && stack[sp - 8'd1] == 0))
                                          ? 32'sd0 : 32'sd1;
                                 alu_op <= 3'd6;
                                 state <= S_ALU;
                             end
                             OP_MOD: begin
-                                // NEW: a % b — reuse divider remainder (approx); 0 if b==0
-                                if (stack[sp - 8'd1] == 0) begin
-                                    stack[sp - 8'd2] <= 32'sd0;
-                                    sp <= sp - 8'd1;
-                                    next_op();
-                                end else begin
-                                    alu_a <= stack[sp - 8'd2];
-                                    alu_b <= stack[sp - 8'd1];
-                                    stack[sp - 8'd2] <= stack[sp - 8'd2] - (stack[sp - 8'd2] / stack[sp - 8'd1]) * stack[sp - 8'd1];
+                                // NEW: a % b on floored ints (fx operands coerce) — 0 if b==0
+                                begin
+                                    logic signed [31:0] ma, mb;
+                                    ma = fxi(stack[sp - 8'd2], stack_tag[sp - 8'd2]);
+                                    mb = fxi(stack[sp - 8'd1], stack_tag[sp - 8'd1]);
+                                    if (mb == 0)
+                                        stack[sp - 8'd2] <= 32'sd0;
+                                    else
+                                        stack[sp - 8'd2] <= ma - (ma / mb) * mb;
+                                    stack_tag[sp - 8'd2] <= 3'd0;
                                     sp <= sp - 8'd1;
                                     next_op();
                                 end
                             end
                             OP_BIT_OR: begin
-                                stack[sp - 8'd2] <= stack[sp - 8'd2] | stack[sp - 8'd1];
+                                // NEW: `v|0` is the JS float→int idiom — floor fx first
+                                stack[sp - 8'd2] <= fxi(stack[sp - 8'd2], stack_tag[sp - 8'd2])
+                                                  | fxi(stack[sp - 8'd1], stack_tag[sp - 8'd1]);
                                 stack_tag[sp - 8'd2] <= 3'd0;
                                 sp <= sp - 8'd1;
                                 next_op();
                             end
                             OP_BIT_AND: begin
-                                stack[sp - 8'd2] <= stack[sp - 8'd2] & stack[sp - 8'd1];
+                                stack[sp - 8'd2] <= fxi(stack[sp - 8'd2], stack_tag[sp - 8'd2])
+                                                  & fxi(stack[sp - 8'd1], stack_tag[sp - 8'd1]);
                                 stack_tag[sp - 8'd2] <= 3'd0;
                                 sp <= sp - 8'd1;
                                 next_op();
                             end
                             OP_MAKE_ARR: begin
-                                arr_len[n_arr[7:0]] <= code_rdata[15:8];
+                                arr_len[n_arr[9:0]] <= code_rdata[15:8];
                                 for (int k = 0; k < ARR_CAP; k++) begin
                                     if (k < code_rdata[15:8]) begin
-                                        arr_val[n_arr[7:0]][k] <= stack[sp - 8'(code_rdata[15:8] - k)];
-                                        arr_tag[n_arr[7:0]][k] <= stack_tag[sp - 8'(code_rdata[15:8] - k)];
+                                        arr_val[n_arr[9:0]][k] <= stack[sp - 8'(code_rdata[15:8] - k)];
+                                        arr_tag[n_arr[9:0]][k] <= stack_tag[sp - 8'(code_rdata[15:8] - k)];
                                     end
                                 end
                                 sp <= sp - code_rdata[15:8];
                                 stack[sp - code_rdata[15:8]] <= {16'd0, n_arr};
                                 stack_tag[sp - code_rdata[15:8]] <= 3'd2;
-                                n_arr <= n_arr + 16'd1;
+                                // NEW: recycle ring like objects — per-frame array
+                                // temporaries must not run the heap off the end
+                                n_arr <= (n_arr >= 16'(MAX_ARR - 1)) ? 16'(ARR_RING) : (n_arr + 16'd1);
                                 sp <= sp - code_rdata[15:8] + 8'd1;
                                 next_op();
                             end
                             OP_ARR_GET: begin
-                                // stack [arr, idx]
+                                // stack [arr, idx] — fx index floors (a[i*0.5] etc.)
                                 if (stack_tag[sp - 8'd2] == 3'd2) begin
-                                    stack[sp - 8'd2] <= arr_val[stack[sp - 8'd2][7:0]][stack[sp - 8'd1][6:0]];
-                                    stack_tag[sp - 8'd2] <= arr_tag[stack[sp - 8'd2][7:0]][stack[sp - 8'd1][6:0]];
+                                    stack[sp - 8'd2] <= arr_val[stack[sp - 8'd2][9:0]]
+                                        [7'(fxi(stack[sp - 8'd1], stack_tag[sp - 8'd1]))];
+                                    stack_tag[sp - 8'd2] <= arr_tag[stack[sp - 8'd2][9:0]]
+                                        [7'(fxi(stack[sp - 8'd1], stack_tag[sp - 8'd1]))];
                                 end else begin
                                     stack[sp - 8'd2] <= 32'sd0;
                                     stack_tag[sp - 8'd2] <= 3'd5;
@@ -883,10 +1026,14 @@ module jmr_js_vm #(
                                 next_op();
                             end
                             OP_ARR_SET: begin
-                                // [arr, idx, val]
-                                if (stack_tag[sp - 8'd3] == 3'd2) begin
-                                    arr_val[stack[sp - 8'd3][7:0]][stack[sp - 8'd2][6:0]] <= stack[sp - 8'd1];
-                                    arr_tag[stack[sp - 8'd3][7:0]][stack[sp - 8'd2][6:0]] <= stack_tag[sp - 8'd1];
+                                // [arr, idx, val] — fx index floors first (LHS needs a plain var)
+                                begin
+                                    logic [6:0] aidx;
+                                    aidx = 7'(fxi(stack[sp - 8'd2], stack_tag[sp - 8'd2]));
+                                    if (stack_tag[sp - 8'd3] == 3'd2) begin
+                                        arr_val[stack[sp - 8'd3][9:0]][aidx] <= stack[sp - 8'd1];
+                                        arr_tag[stack[sp - 8'd3][9:0]][aidx] <= stack_tag[sp - 8'd1];
+                                    end
                                 end
                                 stack[sp - 8'd3] <= stack[sp - 8'd1];
                                 stack_tag[sp - 8'd3] <= stack_tag[sp - 8'd1];
@@ -894,24 +1041,24 @@ module jmr_js_vm #(
                                 next_op();
                             end
                             OP_MAKE_OBJ: begin
-                                obj_n[n_obj[10:0]] <= 0;
-                                obj_cls[n_obj[10:0]] <= 0;
+                                obj_n[n_obj[12:0]] <= 0;
+                                obj_cls[n_obj[12:0]] <= 0;
                                 stack[sp] <= {16'd0, n_obj};
                                 stack_tag[sp] <= 3'd1;
-                                n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'd1024 : (n_obj + 16'd1);
+                                n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'(OBJ_RING) : (n_obj + 16'd1);
                                 sp <= sp + 8'd1;
                                 next_op();
                             end
                             OP_GET_PROP: begin
                                 if (stack_tag[sp - 8'd1] == 3'd2 &&
                                     (code_rdata[23:8] == id_length || code_rdata[23:8] == 16'd66)) begin
-                                    stack[sp - 8'd1] <= {24'd0, arr_len[stack[sp - 8'd1][7:0]]};
+                                    stack[sp - 8'd1] <= {24'd0, arr_len[stack[sp - 8'd1][9:0]]};
                                     stack_tag[sp - 8'd1] <= 3'd0;
                                 end else if (stack_tag[sp - 8'd1] == 3'd1) begin
                                     begin
-                                        logic [10:0] gi, pi;
+                                        logic [12:0] gi, pi;
                                         logic foundp;
-                                        gi = stack[sp - 8'd1][10:0];
+                                        gi = stack[sp - 8'd1][12:0];
                                         stack[sp - 8'd1] <= 32'sd0;
                                         stack_tag[sp - 8'd1] <= 3'd5;
                                         foundp = 1'b0;
@@ -928,7 +1075,7 @@ module jmr_js_vm #(
                                             for (int s = 0; s < OBJ_SLOTS; s++) begin
                                                 if (s < obj_n[gi] && obj_key[gi][s] == id_proto &&
                                                     obj_tag[gi][s] == 3'd1)
-                                                    pi = obj_val[gi][s][10:0];
+                                                    pi = obj_val[gi][s][12:0];
                                             end
                                             for (int s = 0; s < OBJ_SLOTS; s++) begin
                                                 if (s < obj_n[pi] && obj_key[pi][s] == code_rdata[23:8]) begin
@@ -939,8 +1086,8 @@ module jmr_js_vm #(
                                         end
                                         // GET_PROP prototype on instance with no slot: alloc empty proto
                                         if (!foundp && code_rdata[23:8] == id_proto) begin
-                                            obj_n[n_obj[10:0]] <= 0;
-                                            obj_cls[n_obj[10:0]] <= 0;
+                                            obj_n[n_obj[12:0]] <= 0;
+                                            obj_cls[n_obj[12:0]] <= 0;
                                             stack[sp - 8'd1] <= {16'd0, n_obj};
                                             stack_tag[sp - 8'd1] <= 3'd1;
                                             if (obj_n[gi] < OBJ_SLOTS[5:0]) begin
@@ -949,17 +1096,17 @@ module jmr_js_vm #(
                                                 obj_tag[gi][obj_n[gi]] <= 3'd1;
                                                 obj_n[gi] <= obj_n[gi] + 6'd1;
                                             end
-                                            n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'd1024 : (n_obj + 16'd1);
+                                            n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'(OBJ_RING) : (n_obj + 16'd1);
                                         end
                                         // KEYBITS OR into HTML keys.*.pressed at read
                                         if (code_rdata[23:8] == id_pressed || code_rdata[23:8] == 16'd198) begin
-                                            if (gi == keys_a_oid[10:0] && joy_in[2]) begin
+                                            if (gi == keys_a_oid[12:0] && joy_in[2]) begin
                                                 stack[sp - 8'd1] <= 32'sd1;
                                                 stack_tag[sp - 8'd1] <= 3'd0;
-                                            end else if (gi == keys_d_oid[10:0] && joy_in[3]) begin
+                                            end else if (gi == keys_d_oid[12:0] && joy_in[3]) begin
                                                 stack[sp - 8'd1] <= 32'sd1;
                                                 stack_tag[sp - 8'd1] <= 3'd0;
-                                            end else if (gi == keys_sp_oid[10:0] && joy_in[4]) begin
+                                            end else if (gi == keys_sp_oid[12:0] && joy_in[4]) begin
                                                 stack[sp - 8'd1] <= 32'sd1;
                                                 stack_tag[sp - 8'd1] <= 3'd0;
                                             end
@@ -981,12 +1128,12 @@ module jmr_js_vm #(
                                         end
                                         if (!hit && n_fn_proto < MAX_FN_PROTO[6:0]) begin
                                             poid = n_obj;
-                                            obj_n[n_obj[10:0]] <= 0;
-                                            obj_cls[n_obj[10:0]] <= 0;
+                                            obj_n[n_obj[12:0]] <= 0;
+                                            obj_cls[n_obj[12:0]] <= 0;
                                             fn_proto_ip[n_fn_proto] <= stack[sp - 8'd1][15:0];
                                             fn_proto_oid[n_fn_proto] <= n_obj;
                                             n_fn_proto <= n_fn_proto + 7'd1;
-                                            n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'd1024 : (n_obj + 16'd1);
+                                            n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'(OBJ_RING) : (n_obj + 16'd1);
                                         end
                                         stack[sp - 8'd1] <= {16'd0, poid};
                                         stack_tag[sp - 8'd1] <= 3'd1;
@@ -1012,9 +1159,9 @@ module jmr_js_vm #(
                                 // [obj, val]  a0=name
                                 if (stack_tag[sp - 8'd2] == 3'd1) begin
                                     begin
-                                        logic [10:0] oi;
+                                        logic [12:0] oi;
                                         logic found;
-                                        oi = stack[sp - 8'd2][10:0];
+                                        oi = stack[sp - 8'd2][12:0];
                                         found = 1'b0;
                                         for (int s = 0; s < OBJ_SLOTS; s++) begin
                                             if (s < obj_n[oi] && obj_key[oi][s] == code_rdata[23:8]) begin
@@ -1041,9 +1188,16 @@ module jmr_js_vm #(
                                         end
                                         if (code_rdata[23:8] == id_src && stack_tag[sp - 8'd1] == 3'd3) begin
                                             // Image.src = "jmr:spr:N" → pack index in obj_cls
+                                            // NEW: also publish the real sheet size (SPRD) —
+                                            // width*scale must match the FM, not the 300×200 stub
                                             for (int k = 0; k < 8; k++)
-                                                if (stack[sp - 8'd1][15:0] == spr_nid[k[2:0]])
+                                                if (stack[sp - 8'd1][15:0] == spr_nid[k[2:0]]) begin
                                                     obj_cls[oi] <= 16'hFFC0 | k[15:0];
+                                                    if (obj_cls[oi][15:4] == 12'hFFC) begin
+                                                        obj_val[oi][0] <= 32'(spr_ww[k[2:0]]);
+                                                        obj_val[oi][1] <= 32'(spr_hh[k[2:0]]);
+                                                    end
+                                                end
                                         end
                                     end
                                     // Image.onload = fn — invoke now so player.image exists before animate
@@ -1067,7 +1221,7 @@ module jmr_js_vm #(
                                     end
                                 end else if (stack_tag[sp - 8'd2] == 3'd2 &&
                                            (code_rdata[23:8] == id_length || code_rdata[23:8] == 16'd66)) begin
-                                    arr_len[stack[sp - 8'd2][7:0]] <= stack[sp - 8'd1][7:0];
+                                    arr_len[stack[sp - 8'd2][9:0]] <= stack[sp - 8'd1][7:0];
                                     stack[sp - 8'd2] <= stack[sp - 8'd1];
                                     stack_tag[sp - 8'd2] <= stack_tag[sp - 8'd1];
                                     sp <= sp - 8'd1;
@@ -1107,7 +1261,9 @@ module jmr_js_vm #(
                                 end
                             end
                             OP_MAKE_FN: begin
-                                stack[sp] <= {8'd0, code_rdata[31:24], code_rdata[23:8]}; // nparam, entry
+                                // NEW: a1 bit7=arrow bit6=IIFE (env hints for FM) —
+                                // mask them so nparam stays the low 6 bits
+                                stack[sp] <= {8'd0, 2'd0, code_rdata[29:24], code_rdata[23:8]}; // nparam, entry
                                 stack_tag[sp] <= 3'd4;
                                 sp <= sp + 8'd1;
                                 next_op();
@@ -1179,8 +1335,8 @@ module jmr_js_vm #(
                                 end
                             end
                             OP_NEW_OBJ: begin
-                                obj_n[n_obj[10:0]] <= 0;
-                                obj_cls[n_obj[10:0]] <= code_rdata[23:8];
+                                obj_n[n_obj[12:0]] <= 0;
+                                obj_cls[n_obj[12:0]] <= code_rdata[23:8];
                                 begin
                                     logic [15:0] ctor_ip;
                                     logic [8:0] vslot;
@@ -1198,10 +1354,10 @@ module jmr_js_vm #(
                                     // copy Fn.prototype onto new object
                                     for (int i = 0; i < MAX_FN_PROTO; i++) begin
                                         if (i < n_fn_proto && fn_proto_ip[i] == ctor_ip) begin
-                                            obj_key[n_obj[10:0]][0] <= id_proto;
-                                            obj_val[n_obj[10:0]][0] <= {16'd0, fn_proto_oid[i]};
-                                            obj_tag[n_obj[10:0]][0] <= 3'd1;
-                                            obj_n[n_obj[10:0]] <= 6'd1;
+                                            obj_key[n_obj[12:0]][0] <= id_proto;
+                                            obj_val[n_obj[12:0]][0] <= {16'd0, fn_proto_oid[i]};
+                                            obj_tag[n_obj[12:0]][0] <= 3'd1;
+                                            obj_n[n_obj[12:0]] <= 6'd1;
                                         end
                                     end
                                     if (ctor_ip != 16'hFFFF) begin
@@ -1216,14 +1372,14 @@ module jmr_js_vm #(
                                             vars[var_this] <= n_obj;
                                             var_tag[var_this] <= 3'd1;
                                         end
-                                        n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'd1024 : (n_obj + 16'd1);
+                                        n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'(OBJ_RING) : (n_obj + 16'd1);
                                         ip <= ctor_ip;
                                         code_raddr <= 15'(ops_base + ctor_ip);
                                         state <= S_FETCH_WAIT;
                                     end else begin
                                         stack[sp] <= {16'd0, n_obj};
                                         stack_tag[sp] <= 3'd1;
-                                        n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'd1024 : (n_obj + 16'd1);
+                                        n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'(OBJ_RING) : (n_obj + 16'd1);
                                         sp <= sp + 8'd1;
                                         next_op();
                                     end
@@ -1234,8 +1390,9 @@ module jmr_js_vm #(
                                 if (stack_tag[sp - 8'(code_rdata[31:24]) - 8'd1] == 3'd2 &&
                                     code_rdata[23:8] == id_push) begin
                                     begin
-                                        logic [7:0] ai, al;
-                                        ai = stack[sp - 8'(code_rdata[31:24]) - 8'd1][7:0];
+                                        logic [9:0] ai;
+                                        logic [7:0] al;
+                                        ai = stack[sp - 8'(code_rdata[31:24]) - 8'd1][9:0];
                                         al = arr_len[ai];
                                         if (al < ARR_CAP[7:0]) begin
                                             arr_val[ai][al] <= stack[sp - 8'd1];
@@ -1266,8 +1423,9 @@ module jmr_js_vm #(
                                            code_rdata[23:8] == id_splice) begin
                                     // splice(start, n) — shift-delete (INVADERS cull)
                                     begin
-                                        logic [7:0] ai, st, cnt;
-                                        ai = stack[sp - 8'(code_rdata[31:24]) - 8'd1][7:0];
+                                        logic [9:0] ai;
+                                        logic [7:0] st, cnt;
+                                        ai = stack[sp - 8'(code_rdata[31:24]) - 8'd1][9:0];
                                         st = (code_rdata[31:24] >= 8'd1) ? stack[sp - 8'(code_rdata[31:24])][7:0] : 8'd0;
                                         cnt = (code_rdata[31:24] >= 8'd2) ? stack[sp - 8'd1][7:0] : 8'd1;
                                         if (st < arr_len[ai]) begin
@@ -1333,7 +1491,7 @@ module jmr_js_vm #(
                                         next_op();
                                     end
                                 end else if (stack_tag[sp - 8'(code_rdata[31:24]) - 8'd1] == 3'd1 &&
-                                            obj_cls[stack[sp - 8'(code_rdata[31:24]) - 8'd1][10:0]] == 16'hFFFD &&
+                                            obj_cls[stack[sp - 8'(code_rdata[31:24]) - 8'd1][12:0]] == 16'hFFFD &&
                                             code_rdata[31:24] == 8'd0) begin
                                     // (new Date()).getTime() even if intern id_gettime missed
                                     begin
@@ -1351,16 +1509,16 @@ module jmr_js_vm #(
                                 end else if (code_rdata[23:8] == id_assign) begin
                                     // Object.assign(target, ...src) — append src slots onto target
                                     begin
-                                        logic [10:0] ti, si;
+                                        logic [12:0] ti, si;
                                         logic [5:0] tn;
                                         logic [7:0] aca;
                                         aca = code_rdata[31:24];
-                                        ti = stack[sp - aca][10:0];
+                                        ti = stack[sp - aca][12:0];
                                         tn = obj_n[ti];
                                         if (stack_tag[sp - aca] == 3'd1) begin
                                             for (int src = 0; src < 3; src++) begin
                                                 if (src < aca - 8'd1) begin
-                                                    si = stack[sp - aca + 8'(src) + 8'd1][10:0];
+                                                    si = stack[sp - aca + 8'(src) + 8'd1][12:0];
                                                     if (stack_tag[sp - aca + 8'(src) + 8'd1] == 3'd1) begin
                                                         for (int s = 0; s < OBJ_SLOTS; s++) begin
                                                             if (s < obj_n[si] && tn < OBJ_SLOTS[5:0]) begin
@@ -1389,8 +1547,8 @@ module jmr_js_vm #(
                                     sp <= sp - 8'(code_rdata[31:24]);
                                     next_op();
                                 end else if (code_rdata[23:8] == id_translate) begin
-                                    ctx_tx <= ctx_tx + stack[sp - 8'd2];
-                                    ctx_ty <= ctx_ty + stack[sp - 8'd1];
+                                    ctx_tx <= ctx_tx + sti(sp - 9'd2);
+                                    ctx_ty <= ctx_ty + sti(sp - 9'd1);
                                     sp <= sp - 8'(code_rdata[31:24]);
                                     next_op();
                                 end else if (code_rdata[23:8] == id_rotate) begin
@@ -1402,21 +1560,21 @@ module jmr_js_vm #(
                                     sp <= sp - 8'(code_rdata[31:24]);
                                     next_op();
                                 end else if (code_rdata[23:8] == id_arc && code_rdata[31:24] >= 8'd3) begin
-                                    path_x0 <= stack[sp - 8'(code_rdata[31:24])] + ctx_tx;
-                                    path_y0 <= stack[sp - 8'(code_rdata[31:24]) + 8'd1] + ctx_ty;
-                                    path_r  <= stack[sp - 8'(code_rdata[31:24]) + 8'd2];
+                                    path_x0 <= sti(sp - 9'(code_rdata[31:24])) + ctx_tx;
+                                    path_y0 <= sti(sp - 9'(code_rdata[31:24]) + 9'd1) + ctx_ty;
+                                    path_r  <= sti(sp - 9'(code_rdata[31:24]) + 9'd2);
                                     path_kind <= 2'd1;
                                     sp <= sp - 8'(code_rdata[31:24]);
                                     next_op();
                                 end else if (code_rdata[23:8] == id_moveto && code_rdata[31:24] >= 8'd2) begin
-                                    path_x0 <= stack[sp - 8'd2] + ctx_tx;
-                                    path_y0 <= stack[sp - 8'd1] + ctx_ty;
+                                    path_x0 <= sti(sp - 9'd2) + ctx_tx;
+                                    path_y0 <= sti(sp - 9'd1) + ctx_ty;
                                     path_kind <= 2'd2;
                                     sp <= sp - 8'(code_rdata[31:24]);
                                     next_op();
                                 end else if (code_rdata[23:8] == id_lineto && code_rdata[31:24] >= 8'd2) begin
-                                    path_x1 <= stack[sp - 8'd2] + ctx_tx;
-                                    path_y1 <= stack[sp - 8'd1] + ctx_ty;
+                                    path_x1 <= sti(sp - 9'd2) + ctx_tx;
+                                    path_y1 <= sti(sp - 9'd1) + ctx_ty;
                                     path_kind <= 2'd3;
                                     sp <= sp - 8'(code_rdata[31:24]);
                                     next_op();
@@ -1445,11 +1603,11 @@ module jmr_js_vm #(
                                     end
                                 end else if (code_rdata[23:8] == id_filltext) begin
                                     color <= fill_style_i;
-                                    rx <= clip_u(stack[sp - 8'd2] + ctx_tx, MW);
-                                    ry <= clip_u(stack[sp - 8'd1] + ctx_ty, MH);
+                                    rx <= clip_u(sti(sp - 9'd2) + ctx_tx, MW);
+                                    ry <= clip_u(sti(sp - 9'd1) + ctx_ty, MH);
                                     rw <= 10'd64; rh <= 10'd8;
-                                    x <= clip_u(stack[sp - 8'd2] + ctx_tx, MW);
-                                    y <= clip_u(stack[sp - 8'd1] + ctx_ty, MH);
+                                    x <= clip_u(sti(sp - 9'd2) + ctx_tx, MW);
+                                    y <= clip_u(sti(sp - 9'd1) + ctx_ty, MH);
                                     sp <= sp - 8'(code_rdata[31:24]) - 8'd1;
                                     ip <= ip + 16'd1;
                                     state <= S_RECT;
@@ -1461,31 +1619,35 @@ module jmr_js_vm #(
                                         ac = code_rdata[31:24];
                                         // args: img at sp-ac, then dx,dy[,dw,dh] or 9-arg sheet
                                         ioid = stack[sp - ac][15:0];
-                                        si = obj_cls[ioid[10:0]][2:0];
-                                        if (obj_cls[ioid[10:0]][15:4] == 12'hFFC && {1'b0, si} < n_spr) begin
+                                        si = obj_cls[ioid[12:0]][2:0];
+                                        if (obj_cls[ioid[12:0]][15:4] == 12'hFFC && {1'b0, si} < n_spr) begin
+                                            dbg_di_hit <= dbg_di_hit + 16'd1;
                                             blit_si <= si;
                                             if (ac >= 8'd9) begin
-                                                blit_sx <= clip_u(stack[sp - 8'd8], 1024);
-                                                blit_sy <= clip_u(stack[sp - 8'd7], 1024);
-                                                blit_sw <= clip_sz(stack[sp - 8'd6], 10'd0, 1024);
-                                                blit_sh <= clip_sz(stack[sp - 8'd5], 10'd0, 1024);
-                                                rx <= clip_u(stack[sp - 8'd4] + ctx_tx, MW);
-                                                ry <= clip_u(stack[sp - 8'd3] + ctx_ty, MH);
-                                                rw <= clip_sz(stack[sp - 8'd2], clip_u(stack[sp - 8'd4] + ctx_tx, MW), MW);
-                                                rh <= clip_sz(stack[sp - 8'd1], clip_u(stack[sp - 8'd3] + ctx_ty, MH), MH);
+                                                // NEW: 16-bit source window (full-res ASET sheets)
+                                                blit_sx <= clip_src(sti(sp - 9'd8));
+                                                blit_sy <= clip_src(sti(sp - 9'd7));
+                                                blit_sw <= clip_src(sti(sp - 9'd6));
+                                                blit_sh <= clip_src(sti(sp - 9'd5));
+                                                rx <= clip_u(sti(sp - 9'd4) + ctx_tx, MW);
+                                                ry <= clip_u(sti(sp - 9'd3) + ctx_ty, MH);
+                                                rw <= clip_sz(sti(sp - 9'd2), clip_u(sti(sp - 9'd4) + ctx_tx, MW), MW);
+                                                rh <= clip_sz(sti(sp - 9'd1), clip_u(sti(sp - 9'd3) + ctx_ty, MH), MH);
                                             end else if (ac >= 8'd5) begin
-                                                blit_sx <= 10'd0; blit_sy <= 10'd0;
+                                                blit_sx <= 16'd0; blit_sy <= 16'd0;
                                                 blit_sw <= spr_ww[si[2:0]]; blit_sh <= spr_hh[si[2:0]];
-                                                rx <= clip_u(stack[sp - 8'd4] + ctx_tx, MW);
-                                                ry <= clip_u(stack[sp - 8'd3] + ctx_ty, MH);
-                                                rw <= clip_sz(stack[sp - 8'd2], clip_u(stack[sp - 8'd4] + ctx_tx, MW), MW);
-                                                rh <= clip_sz(stack[sp - 8'd1], clip_u(stack[sp - 8'd3] + ctx_ty, MH), MH);
+                                                rx <= clip_u(sti(sp - 9'd4) + ctx_tx, MW);
+                                                ry <= clip_u(sti(sp - 9'd3) + ctx_ty, MH);
+                                                rw <= clip_sz(sti(sp - 9'd2), clip_u(sti(sp - 9'd4) + ctx_tx, MW), MW);
+                                                rh <= clip_sz(sti(sp - 9'd1), clip_u(sti(sp - 9'd3) + ctx_ty, MH), MH);
                                             end else begin
-                                                blit_sx <= 10'd0; blit_sy <= 10'd0;
+                                                blit_sx <= 16'd0; blit_sy <= 16'd0;
                                                 blit_sw <= spr_ww[si[2:0]]; blit_sh <= spr_hh[si[2:0]];
-                                                rx <= clip_u(stack[sp - 8'd2] + ctx_tx, MW);
-                                                ry <= clip_u(stack[sp - 8'd1] + ctx_ty, MH);
-                                                rw <= spr_ww[si[2:0]]; rh <= spr_hh[si[2:0]];
+                                                rx <= clip_u(sti(sp - 9'd2) + ctx_tx, MW);
+                                                ry <= clip_u(sti(sp - 9'd1) + ctx_ty, MH);
+                                                // dest = natural size, clipped to the glass
+                                                rw <= (spr_ww[si[2:0]] > 16'(MW)) ? 10'(MW) : spr_ww[si[2:0]][9:0];
+                                                rh <= (spr_hh[si[2:0]] > 16'(MH)) ? 10'(MH) : spr_hh[si[2:0]][9:0];
                                             end
                                             x <= 10'd0; y <= 10'd0;
                                             sp <= sp - ac - 8'd1;
@@ -1493,6 +1655,7 @@ module jmr_js_vm #(
                                             state <= S_BLIT;
                                         end else begin
                                             // no sprite — skip (do not paint a giant magenta box)
+                                            dbg_di_miss <= dbg_di_miss + 16'd1;
                                             sp <= sp - ac - 8'd1;
                                             next_op();
                                         end
@@ -1504,10 +1667,10 @@ module jmr_js_vm #(
                                     color <= (code_rdata[23:8] == id_clearrect) ? 8'd0 : fill_style_i;
                                     begin
                                         logic [9:0] tw, th, tx, ty;
-                                        tx = clip_u(stack[sp - 8'd4] + ctx_tx, MW);
-                                        ty = clip_u(stack[sp - 8'd3] + ctx_ty, MH);
-                                        tw = clip_sz(stack[sp - 8'd2], tx, MW);
-                                        th = clip_sz(stack[sp - 8'd1], ty, MH);
+                                        tx = clip_u(sti(sp - 9'd4) + ctx_tx, MW);
+                                        ty = clip_u(sti(sp - 9'd3) + ctx_ty, MH);
+                                        tw = clip_sz(sti(sp - 9'd2), tx, MW);
+                                        th = clip_sz(sti(sp - 9'd1), ty, MH);
                                         rx <= tx; ry <= ty; rw <= tw; rh <= th;
                                         x <= tx; y <= ty;
                                     end
@@ -1526,7 +1689,7 @@ module jmr_js_vm #(
                                         oid = stack[sp - ac - 8'd1][15:0];
                                         if (ot == 3'd1) begin
                                             for (int c = 0; c < MAX_CLS; c++) begin
-                                                if (c < n_cls && cls_name[c] == obj_cls[oid[10:0]]) begin
+                                                if (c < n_cls && cls_name[c] == obj_cls[oid[12:0]]) begin
                                                     for (int m = 0; m < MAX_CMETH; m++) begin
                                                         if (m < cls_nmeth[c] && cls_mname[c][m] == code_rdata[23:8])
                                                             mip = cls_mip[c][m];
@@ -1559,22 +1722,22 @@ module jmr_js_vm #(
                                             // instance-property Fn (PACMAN this.createStage)
                                             begin
                                                 logic [15:0] fip;
-                                                logic [10:0] pi;
+                                                logic [12:0] pi;
                                                 fip = 16'hFFFF;
                                                 pi = 11'd0;
                                                 if (ot == 3'd1) begin
                                                     for (int s = 0; s < OBJ_SLOTS; s++) begin
-                                                        if (s < obj_n[oid[10:0]] &&
-                                                            obj_key[oid[10:0]][s] == code_rdata[23:8] &&
-                                                            obj_tag[oid[10:0]][s] == 3'd4)
-                                                            fip = obj_val[oid[10:0]][s][15:0];
+                                                        if (s < obj_n[oid[12:0]] &&
+                                                            obj_key[oid[12:0]][s] == code_rdata[23:8] &&
+                                                            obj_tag[oid[12:0]][s] == 3'd4)
+                                                            fip = obj_val[oid[12:0]][s][15:0];
                                                     end
                                                     if (fip == 16'hFFFF) begin
                                                         for (int s = 0; s < OBJ_SLOTS; s++) begin
-                                                            if (s < obj_n[oid[10:0]] &&
-                                                                obj_key[oid[10:0]][s] == id_proto &&
-                                                                obj_tag[oid[10:0]][s] == 3'd1)
-                                                                pi = obj_val[oid[10:0]][s][10:0];
+                                                            if (s < obj_n[oid[12:0]] &&
+                                                                obj_key[oid[12:0]][s] == id_proto &&
+                                                                obj_tag[oid[12:0]][s] == 3'd1)
+                                                                pi = obj_val[oid[12:0]][s][12:0];
                                                         end
                                                         for (int s = 0; s < OBJ_SLOTS; s++) begin
                                                             if (s < obj_n[pi] &&
@@ -1639,12 +1802,12 @@ module jmr_js_vm #(
                         8'd2: begin
                             // fillRect(x,y,w,h,color) — native 640×480, clipped
                             color <= sat8(stack[sp - 8'd1]);
-                            rx <= clip_u(stack[sp - 8'd5], MW);
-                            ry <= clip_u(stack[sp - 8'd4], MH);
-                            rw <= clip_sz(stack[sp - 8'd3], clip_u(stack[sp - 8'd5], MW), MW);
-                            rh <= clip_sz(stack[sp - 8'd2], clip_u(stack[sp - 8'd4], MH), MH);
-                            x  <= clip_u(stack[sp - 8'd5], MW);
-                            y  <= clip_u(stack[sp - 8'd4], MH);
+                            rx <= clip_u(sti(sp - 9'd5), MW);
+                            ry <= clip_u(sti(sp - 9'd4), MH);
+                            rw <= clip_sz(sti(sp - 9'd3), clip_u(sti(sp - 9'd5), MW), MW);
+                            rh <= clip_sz(sti(sp - 9'd2), clip_u(sti(sp - 9'd4), MH), MH);
+                            x  <= clip_u(sti(sp - 9'd5), MW);
+                            y  <= clip_u(sti(sp - 9'd4), MH);
                             sp <= sp - 8'd5;
                             state <= S_RECT;
                         end
@@ -1695,33 +1858,48 @@ module jmr_js_vm #(
                             state <= S_FETCH_WAIT;
                         end
                         // NEW: Math / DOM / rAF (HTML .JSH)
-                        8'd10, 8'd11: begin // floor / abs
-                            stack[sp - 8'd1] <= (nat_id == 8'd11 && stack[sp - 8'd1][31]) ?
-                                -stack[sp - 8'd1] : stack[sp - 8'd1];
+                        8'd10: begin // Math.floor — fx floors to int (arith >>16)
+                            stack[sp - 8'd1] <= fxi(stack[sp - 8'd1], stack_tag[sp - 8'd1]);
                             stack_tag[sp - 8'd1] <= 3'd0;
                             code_raddr <= 15'(ops_base + ip);
                             state <= S_FETCH_WAIT;
                         end
-                        8'd12: begin // min
-                            stack[sp - 8'd2] <= (stack[sp - 8'd2] < stack[sp - 8'd1]) ?
-                                stack[sp - 8'd2] : stack[sp - 8'd1];
-                            stack_tag[sp - 8'd2] <= 3'd0;
+                        8'd11: begin // Math.abs — keeps fx tag (abs(0.5)=0.5)
+                            stack[sp - 8'd1] <= stack[sp - 8'd1][31] ?
+                                -stack[sp - 8'd1] : stack[sp - 8'd1];
+                            code_raddr <= 15'(ops_base + ip);
+                            state <= S_FETCH_WAIT;
+                        end
+                        8'd12: begin // min — fx-aware compare, keep the winner's tag
+                            if (fxlift(stack[sp - 8'd2], stack_tag[sp - 8'd2], stack_tag[sp - 8'd1] == 3'd7)
+                              < fxlift(stack[sp - 8'd1], stack_tag[sp - 8'd1], stack_tag[sp - 8'd2] == 3'd7)) begin
+                                stack[sp - 8'd2] <= stack[sp - 8'd2];
+                                stack_tag[sp - 8'd2] <= stack_tag[sp - 8'd2];
+                            end else begin
+                                stack[sp - 8'd2] <= stack[sp - 8'd1];
+                                stack_tag[sp - 8'd2] <= stack_tag[sp - 8'd1];
+                            end
                             sp <= sp - 8'd1;
                             code_raddr <= 15'(ops_base + ip);
                             state <= S_FETCH_WAIT;
                         end
                         8'd13: begin // max
-                            stack[sp - 8'd2] <= (stack[sp - 8'd2] > stack[sp - 8'd1]) ?
-                                stack[sp - 8'd2] : stack[sp - 8'd1];
-                            stack_tag[sp - 8'd2] <= 3'd0;
+                            if (fxlift(stack[sp - 8'd2], stack_tag[sp - 8'd2], stack_tag[sp - 8'd1] == 3'd7)
+                              > fxlift(stack[sp - 8'd1], stack_tag[sp - 8'd1], stack_tag[sp - 8'd2] == 3'd7)) begin
+                                stack[sp - 8'd2] <= stack[sp - 8'd2];
+                                stack_tag[sp - 8'd2] <= stack_tag[sp - 8'd2];
+                            end else begin
+                                stack[sp - 8'd2] <= stack[sp - 8'd1];
+                                stack_tag[sp - 8'd2] <= stack_tag[sp - 8'd1];
+                            end
                             sp <= sp - 8'd1;
                             code_raddr <= 15'(ops_base + ip);
                             state <= S_FETCH_WAIT;
                         end
-                        8'd14: begin // random 0..0 (int); LFSR bump
+                        8'd14: begin // NEW: Math.random → Q16.16 fraction 0..1 (LFSR)
                             lfsr <= {lfsr[30:0], lfsr[31] ^ lfsr[21] ^ lfsr[1] ^ lfsr[0]};
-                            stack[sp] <= 32'sd0;
-                            stack_tag[sp] <= 3'd0;
+                            stack[sp] <= {16'd0, lfsr[15:0]};
+                            stack_tag[sp] <= 3'd7;
                             sp <= sp + 8'd1;
                             code_raddr <= 15'(ops_base + ip);
                             state <= S_FETCH_WAIT;
@@ -1751,27 +1929,27 @@ module jmr_js_vm #(
                             state <= S_FETCH_WAIT;
                         end
                         8'd25: begin // Date() stub — getTime via obj_cls magic (intern-miss safe)
-                            obj_n[n_obj[10:0]] <= 0;
-                            obj_cls[n_obj[10:0]] <= 16'hFFFD;
+                            obj_n[n_obj[12:0]] <= 0;
+                            obj_cls[n_obj[12:0]] <= 16'hFFFD;
                             stack[sp] <= {16'd0, n_obj};
                             stack_tag[sp] <= 3'd1;
-                            n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'd1024 : (n_obj + 16'd1);
+                            n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'(OBJ_RING) : (n_obj + 16'd1);
                             sp <= sp + 8'd1;
                             code_raddr <= 15'(ops_base + ip);
                             state <= S_FETCH_WAIT;
                         end
                         8'd26: begin // Image() — stub size so onload scale is nonzero
-                            obj_n[n_obj[10:0]] <= 5'd2;
-                            obj_cls[n_obj[10:0]] <= 16'hFFC0;
-                            obj_key[n_obj[10:0]][0] <= id_width;
-                            obj_val[n_obj[10:0]][0] <= 32'sd300;
-                            obj_tag[n_obj[10:0]][0] <= 3'd0;
-                            obj_key[n_obj[10:0]][1] <= id_height;
-                            obj_val[n_obj[10:0]][1] <= 32'sd200;
-                            obj_tag[n_obj[10:0]][1] <= 3'd0;
+                            obj_n[n_obj[12:0]] <= 5'd2;
+                            obj_cls[n_obj[12:0]] <= 16'hFFC0;
+                            obj_key[n_obj[12:0]][0] <= id_width;
+                            obj_val[n_obj[12:0]][0] <= 32'sd300;
+                            obj_tag[n_obj[12:0]][0] <= 3'd0;
+                            obj_key[n_obj[12:0]][1] <= id_height;
+                            obj_val[n_obj[12:0]][1] <= 32'sd200;
+                            obj_tag[n_obj[12:0]][1] <= 3'd0;
                             stack[sp] <= {16'd0, n_obj};
                             stack_tag[sp] <= 3'd1;
-                            n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'd1024 : (n_obj + 16'd1);
+                            n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'(OBJ_RING) : (n_obj + 16'd1);
                             sp <= sp + 8'd1;
                             code_raddr <= 15'(ops_base + ip);
                             state <= S_FETCH_WAIT;
@@ -1874,29 +2052,47 @@ module jmr_js_vm #(
                         code_raddr <= 15'(ops_base + ip);
                         state <= S_FETCH_WAIT;
                     end else begin
-                        begin
-                            logic [9:0] sx, sy;
-                            logic [17:0] so;
-                            logic [7:0] pix;
-                            sx = blit_sx + ((blit_sw == 10'd0 || rw == 10'd0) ? 10'd0
-                                 : 10'((32'(x) * 32'(blit_sw)) / 32'(rw)));
-                            sy = blit_sy + ((blit_sh == 10'd0 || rh == 10'd0) ? 10'd0
-                                 : 10'((32'(y) * 32'(blit_sh)) / 32'(rh)));
-                            so = spr_off[blit_si[2:0]] + 18'(sy) * 18'(spr_ww[blit_si[2:0]]) + 18'(sx);
-                            pix = spr_mem[so];
+                        // NEW: source coords are 16-bit (DONKEY 1470×750 sheets);
+                        // so is a 22-bit byte offset into the 4 MB asset SRAM.
+                        logic [15:0] sx, sy;
+                        logic [21:0] so;
+                        logic [7:0] pix;
+                        logic       put;
+                        sx = blit_sx + ((blit_sw == 16'd0 || rw == 10'd0) ? 16'd0
+                             : 16'((32'(x) * 32'(blit_sw)) / 32'(rw)));
+                        sy = blit_sy + ((blit_sh == 16'd0 || rh == 10'd0) ? 16'd0
+                             : 16'((32'(y) * 32'(blit_sh)) / 32'(rh)));
+                        so = spr_off[blit_si[2:0]] + 22'(sy) * 22'(spr_ww[blit_si[2:0]]) + 22'(sx);
+                        put = 1'b0;
+                        pix = 8'd0;
+                        if (!aset_mode) begin
+                            pix = spr_mem[so[17:0]];
+                            put = 1'b1;
+                        end else if (!blit_wait) begin
+                            // NEW: ASET — fetch the 16-bit SRAM word holding this pixel
+                            sram_req <= 1'b1;
+                            sram_addr <= so[21:1];
+                            blit_wait <= 1'b1;
+                        end else if (sram_ack) begin
+                            pix = so[0] ? sram_rdata[15:8] : sram_rdata[7:0];
+                            sram_req <= 1'b0;
+                            blit_wait <= 1'b0;
+                            put = 1'b1;
+                        end
+                        if (put) begin
                             if (pix != 8'd0 && (rx + x) < 10'(MW) && (ry + y) < 10'(MH)) begin
                                 fb_we <= 1'b1;
                                 fb_waddr <= 19'(ry + y) * 19'(MW) + 19'(rx + x);
                                 fb_wdata <= pix;
                             end
+                            if (x == (rw - 10'd1)) begin
+                                x <= 10'd0;
+                                if (y == (rh - 10'd1)) begin
+                                    code_raddr <= 15'(ops_base + ip);
+                                    state <= S_FETCH_WAIT;
+                                end else y <= y + 10'd1;
+                            end else x <= x + 10'd1;
                         end
-                        if (x == (rw - 10'd1)) begin
-                            x <= 10'd0;
-                            if (y == (rh - 10'd1)) begin
-                                code_raddr <= 15'(ops_base + ip);
-                                state <= S_FETCH_WAIT;
-                            end else y <= y + 10'd1;
-                        end else x <= x + 10'd1;
                     end
                 end
                 S_SPR: begin
@@ -1914,17 +2110,17 @@ module jmr_js_vm #(
                                 trail_acc[7:0] <= trail_tb;
                                 spr_hdr <= 3'd1;
                             end else if (spr_hdr == 3'd1) begin
-                                spr_ww[spr_i[2:0]] <= {trail_tb, trail_acc[7:0]}[9:0];
+                                spr_ww[spr_i[2:0]] <= {6'd0, {trail_tb, trail_acc[7:0]}[9:0]};
                                 spr_hdr <= 3'd2;
                             end else if (spr_hdr == 3'd2) begin
                                 trail_acc[7:0] <= trail_tb;
                                 spr_hdr <= 3'd3;
                             end else begin
-                                spr_hh[spr_i[2:0]] <= {trail_tb, trail_acc[7:0]}[9:0];
-                                spr_off[spr_i[2:0]] <= spr_wp;
-                                spr_left <= 18'({trail_tb, trail_acc[7:0]}[9:0]) * 18'(spr_ww[spr_i[2:0]]);
+                                spr_hh[spr_i[2:0]] <= {6'd0, {trail_tb, trail_acc[7:0]}[9:0]};
+                                spr_off[spr_i[2:0]] <= 22'(spr_wp);
+                                spr_left <= 18'({trail_tb, trail_acc[7:0]}[9:0]) * 18'(spr_ww[spr_i[2:0]][9:0]);
                                 spr_hdr <= 3'd0;
-                                if (18'({trail_tb, trail_acc[7:0]}[9:0]) * 18'(spr_ww[spr_i[2:0]]) == 18'd0) begin
+                                if (18'({trail_tb, trail_acc[7:0]}[9:0]) * 18'(spr_ww[spr_i[2:0]][9:0]) == 18'd0) begin
                                     if (spr_i + 4'd1 >= n_spr) begin
                                         code_raddr <= 15'(ops_base);
                                         state <= S_FETCH_WAIT;
@@ -1932,7 +2128,7 @@ module jmr_js_vm #(
                                 end
                             end
                         end else begin
-                            if (spr_wp < 18'(SPR_BYTES))
+                            if ({1'b0, spr_wp} < 19'(SPR_BYTES))
                                 spr_mem[spr_wp] <= trail_tb;
                             spr_wp <= spr_wp + 18'd1;
                             spr_left <= spr_left - 18'd1;
@@ -1965,17 +2161,21 @@ module jmr_js_vm #(
                 // NEW: stack write from alu_r — binary ops already did sp--
                 S_ALU_WR: begin
                     stack[sp - 8'd1] <= alu_r;
-                    stack_tag[sp - 8'd1] <= 3'd0; // EQ/ADD result is i32, not leftover str/obj tag
+                    // fx ADD/SUB/NEG keep Q16.16; compares/NOT are plain ints
+                    stack_tag[sp - 8'd1] <= alu_fx ? 3'd7 : 3'd0;
                     next_op();
                 end
                 // NEW: DSP multiply into mul_prod only (no stack write this cycle)
                 S_MUL: begin
-                    mul_prod <= mul_a * mul_b;
+                    mul_prod <= 64'(mul_a) * 64'(mul_b);
                     state <= S_MUL_WR;
                 end
                 // NEW: stack write from registered product — closes −0.183 ns WNS
                 S_MUL_WR: begin
-                    stack[sp - 8'd2] <= mul_prod;
+                    // int×int → int; int×fx → fx as-is; fx×fx → renormalize >>16
+                    stack[sp - 8'd2] <= (mul_fx_a && mul_fx_b)
+                                        ? 32'(mul_prod >>> 16) : mul_prod[31:0];
+                    stack_tag[sp - 8'd2] <= (mul_fx_a || mul_fx_b) ? 3'd7 : 3'd0;
                     sp <= sp - 8'd1;
                     next_op();
                 end
@@ -1983,16 +2183,28 @@ module jmr_js_vm #(
                 S_DIV: begin
                     if (div_rnext >= {1'b0, div_ub}) begin
                         div_rem <= 32'(div_rnext - {1'b0, div_ub});
-                        div_uq  <= {div_uq[30:0], 1'b1};
+                        div_uq  <= {div_uq[46:0], 1'b1};
                     end else begin
                         div_rem <= div_rnext[31:0];
-                        div_uq  <= {div_uq[30:0], 1'b0};
+                        div_uq  <= {div_uq[46:0], 1'b0};
                     end
-                    if (div_cnt == 6'd31) state <= S_DIV_FIN;
+                    if (div_cnt == 6'd47) state <= S_DIV_FIN;
                     else div_cnt <= div_cnt + 6'd1;
                 end
                 S_DIV_FIN: begin
-                    stack[sp - 8'd2] <= div_neg ? -$signed(div_uq) : $signed(div_uq);
+                    // Q16.16 quotient; int/int exact division stays a plain int
+                    begin
+                        logic [31:0] qmag;
+                        qmag = (|div_uq[47:31]) ? 32'h7FFFFFFF : div_uq[31:0];
+                        if (div_int_in && qmag[15:0] == 16'd0) begin
+                            stack[sp - 8'd2] <= div_neg ? -$signed({16'd0, qmag[31:16]})
+                                                        : $signed({16'd0, qmag[31:16]});
+                            stack_tag[sp - 8'd2] <= 3'd0;
+                        end else begin
+                            stack[sp - 8'd2] <= div_neg ? -$signed(qmag) : $signed(qmag);
+                            stack_tag[sp - 8'd2] <= 3'd7;
+                        end
+                    end
                     sp <= sp - 8'd1;
                     next_op();
                 end
@@ -2000,7 +2212,7 @@ module jmr_js_vm #(
                     // NEW: drain arr.forEach(fn) using frame at csp-1
                     if (csp == 0) begin
                         state <= S_WAIT_FRAME;
-                    end else if (cstack_fe_i[csp - 7'd1] >= arr_len[cstack_fe_arr[csp - 7'd1][7:0]]) begin
+                    end else if (cstack_fe_i[csp - 7'd1] >= arr_len[cstack_fe_arr[csp - 7'd1][9:0]]) begin
                         stack[sp] <= 32'sd0;
                         stack_tag[sp] <= 3'd5;
                         sp <= sp + 8'd1;
@@ -2011,8 +2223,8 @@ module jmr_js_vm #(
                         state <= S_FETCH_WAIT;
                     end else begin
                         // bind nparam args: el, then idx if the callback asked for it
-                        stack[sp] <= arr_val[cstack_fe_arr[csp - 7'd1][7:0]][cstack_fe_i[csp - 7'd1][6:0]];
-                        stack_tag[sp] <= arr_tag[cstack_fe_arr[csp - 7'd1][7:0]][cstack_fe_i[csp - 7'd1][6:0]];
+                        stack[sp] <= arr_val[cstack_fe_arr[csp - 7'd1][9:0]][cstack_fe_i[csp - 7'd1][6:0]];
+                        stack_tag[sp] <= arr_tag[cstack_fe_arr[csp - 7'd1][9:0]][cstack_fe_i[csp - 7'd1][6:0]];
                         if (cstack_ctorobj[csp - 7'd1][7:0] >= 8'd2) begin
                             stack[sp + 8'd1] <= {24'd0, cstack_fe_i[csp - 7'd1]};
                             stack_tag[sp + 8'd1] <= 3'd0;
@@ -2041,21 +2253,23 @@ module jmr_js_vm #(
                         enter_delay <= enter_delay - 4'd1;
                     // KEYBITS edges → keydown/keyup with event.key + keyCode (HTML bindings)
                     if (kd_fn != 16'hFFFF && (joy_in & ~prev_joy) != 0) begin
-                        obj_n[n_obj[10:0]] <= 6'd2;
-                        obj_cls[n_obj[10:0]] <= 0;
-                        obj_key[n_obj[10:0]][0] <= id_key;
-                        obj_val[n_obj[10:0]][0] <= {16'd0,
+                        obj_n[n_obj[12:0]] <= 6'd2;
+                        obj_cls[n_obj[12:0]] <= 0;
+                        obj_key[n_obj[12:0]][0] <= id_key;
+                        obj_val[n_obj[12:0]][0] <= {16'd0,
                             joy_in[2] ? id_arrow_l : joy_in[3] ? id_arrow_r :
                             joy_in[4] ? id_space : id_arrow_l};
-                        obj_tag[n_obj[10:0]][0] <= 3'd3;
-                        obj_key[n_obj[10:0]][1] <= id_keycode;
-                        obj_val[n_obj[10:0]][1] <= joy_in[2] ? 32'sd37 : joy_in[3] ? 32'sd39 :
+                        obj_tag[n_obj[12:0]][0] <= 3'd3;
+                        obj_key[n_obj[12:0]][1] <= id_keycode;
+                        obj_val[n_obj[12:0]][1] <= joy_in[2] ? 32'sd37 : joy_in[3] ? 32'sd39 :
                             joy_in[4] ? 32'sd32 : joy_in[0] ? 32'sd38 : 32'sd40;
-                        obj_tag[n_obj[10:0]][1] <= 3'd0;
-                        stack[sp] <= {16'd0, n_obj};
-                        stack_tag[sp] <= 3'd1;
-                        sp <= sp + 8'd1;
-                        n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'd1024 : (n_obj + 16'd1);
+                        obj_tag[n_obj[12:0]][1] <= 3'd0;
+                        // NEW: frame boundary — reset the eval stack (leftovers
+                        // are leaks; ~1 word/frame overflowed sp at ~500 frames)
+                        stack[0] <= {16'd0, n_obj};
+                        stack_tag[0] <= 3'd1;
+                        sp <= 9'd1;
+                        n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'(OBJ_RING) : (n_obj + 16'd1);
                         ip <= kd_fn;
                         cstack_ip[csp] <= n_ops;
                         cstack_this[csp] <= this_obj;
@@ -2065,20 +2279,20 @@ module jmr_js_vm #(
                         code_raddr <= 15'(ops_base + kd_fn);
                         state <= S_FETCH_WAIT;
                     end else if (ku_fn != 16'hFFFF && (prev_joy & ~joy_in) != 0) begin
-                        obj_n[n_obj[10:0]] <= 6'd2;
-                        obj_key[n_obj[10:0]][0] <= id_key;
-                        obj_val[n_obj[10:0]][0] <= {16'd0,
+                        obj_n[n_obj[12:0]] <= 6'd2;
+                        obj_key[n_obj[12:0]][0] <= id_key;
+                        obj_val[n_obj[12:0]][0] <= {16'd0,
                             prev_joy[2] ? id_arrow_l : prev_joy[3] ? id_arrow_r :
                             prev_joy[4] ? id_space : id_arrow_l};
-                        obj_tag[n_obj[10:0]][0] <= 3'd3;
-                        obj_key[n_obj[10:0]][1] <= id_keycode;
-                        obj_val[n_obj[10:0]][1] <= prev_joy[2] ? 32'sd37 : prev_joy[3] ? 32'sd39 :
+                        obj_tag[n_obj[12:0]][0] <= 3'd3;
+                        obj_key[n_obj[12:0]][1] <= id_keycode;
+                        obj_val[n_obj[12:0]][1] <= prev_joy[2] ? 32'sd37 : prev_joy[3] ? 32'sd39 :
                             prev_joy[4] ? 32'sd32 : 32'sd38;
-                        obj_tag[n_obj[10:0]][1] <= 3'd0;
-                        stack[sp] <= {16'd0, n_obj};
-                        stack_tag[sp] <= 3'd1;
-                        sp <= sp + 8'd1;
-                        n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'd1024 : (n_obj + 16'd1);
+                        obj_tag[n_obj[12:0]][1] <= 3'd0;
+                        stack[0] <= {16'd0, n_obj}; // frame boundary: fresh stack
+                        stack_tag[0] <= 3'd1;
+                        sp <= 9'd1;
+                        n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'(OBJ_RING) : (n_obj + 16'd1);
                         ip <= ku_fn;
                         cstack_ip[csp] <= n_ops;
                         cstack_isctor[csp] <= 1'b0;
@@ -2089,6 +2303,7 @@ module jmr_js_vm #(
                     end else if (raf_n != 0 && !pre_click_raf) begin
                         // one rAF first (Image.onload) so player.image is set
                         pre_click_raf <= 1'b1;
+                        sp <= '0; // frame boundary: fresh eval stack
                         ip <= raf_fn[0];
                         raf_n <= raf_n - 4'd1;
                         raf_fn[0] <= raf_fn[1];
@@ -2108,6 +2323,7 @@ module jmr_js_vm #(
                     end else if (click_fn != 16'hFFFF && !click_fired) begin
                         // HTML auto-start: idle animate re-queues rAF so click never drained
                         click_fired <= 1'b1;
+                        sp <= '0; // frame boundary: fresh eval stack
                         ip <= click_fn;
                         cstack_ip[csp] <= n_ops;
                         cstack_this[csp] <= this_obj;
@@ -2121,18 +2337,18 @@ module jmr_js_vm #(
                         // DONKEY/PACMAN title: synthetic Enter (PYTHON _enter_left)
                         enter_n <= enter_n - 3'd1;
                         enter_delay <= 4'd8;
-                        obj_n[n_obj[10:0]] <= 6'd2;
-                        obj_cls[n_obj[10:0]] <= 0;
-                        obj_key[n_obj[10:0]][0] <= id_key;
-                        obj_val[n_obj[10:0]][0] <= {16'd0, id_enter};
-                        obj_tag[n_obj[10:0]][0] <= 3'd3;
-                        obj_key[n_obj[10:0]][1] <= id_keycode;
-                        obj_val[n_obj[10:0]][1] <= 32'sd13;
-                        obj_tag[n_obj[10:0]][1] <= 3'd0;
-                        stack[sp] <= {16'd0, n_obj};
-                        stack_tag[sp] <= 3'd1;
-                        sp <= sp + 8'd1;
-                        n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'd1024 : (n_obj + 16'd1);
+                        obj_n[n_obj[12:0]] <= 6'd2;
+                        obj_cls[n_obj[12:0]] <= 0;
+                        obj_key[n_obj[12:0]][0] <= id_key;
+                        obj_val[n_obj[12:0]][0] <= {16'd0, id_enter};
+                        obj_tag[n_obj[12:0]][0] <= 3'd3;
+                        obj_key[n_obj[12:0]][1] <= id_keycode;
+                        obj_val[n_obj[12:0]][1] <= 32'sd13;
+                        obj_tag[n_obj[12:0]][1] <= 3'd0;
+                        stack[0] <= {16'd0, n_obj}; // frame boundary: fresh stack
+                        stack_tag[0] <= 3'd1;
+                        sp <= 9'd1;
+                        n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? 16'(OBJ_RING) : (n_obj + 16'd1);
                         ip <= kd_fn;
                         cstack_ip[csp] <= n_ops;
                         cstack_this[csp] <= this_obj;
@@ -2142,6 +2358,7 @@ module jmr_js_vm #(
                         code_raddr <= 15'(ops_base + kd_fn);
                         state <= S_FETCH_WAIT;
                     end else if (raf_n != 0) begin
+                        sp <= '0; // frame boundary: fresh eval stack
                         ip <= raf_fn[0];
                         raf_n <= raf_n - 4'd1;
                         raf_fn[0] <= raf_fn[1];

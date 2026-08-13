@@ -2,6 +2,7 @@
 // Protocol: KEY / LINE / SCREEN? / STATUS? / RUNCLK / TICK / QUIT
 // NEW: card.img SPI model (BASIC sim_main SdCard) for DIR/LOAD/SAVE.
 #include "Vjmr_js_core.h"
+#include "Vjmr_js_core___024root.h" // NEW: VMSTAT? probe reads public VM regs
 #include "verilated.h"
 #include <cstdint>
 #include <cstdio>
@@ -254,6 +255,7 @@ int main(int argc, char** argv) {
     top->dump_addr = 0;
     top->scan_addr = 0;
     top->fb_raddr = 0;
+    top->pal_raddr = 0;
     top->sd_miso = 1;
     ticks(8);
     top->rst_n = 1;
@@ -322,6 +324,51 @@ int main(int argc, char** argv) {
         }
         if (line.rfind("PROMPT ", 0) == 0) {
             std::cout << "OK" << std::endl;
+            continue;
+        }
+        // NEW: minimal VM probe for RTL bring-up (state/ip/raf/heap counters)
+        if (line == "VMSTAT?") {
+            auto* r = top->rootp;
+            std::cout << "VMSTAT state=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__state)
+                      << " ip=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__ip)
+                      << " sp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__sp)
+                      << " raf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__raf_n)
+                      << " obj=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_obj)
+                      << " arr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_arr)
+                      << " spr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_spr)
+                      << " kd=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__kd_fn)
+                      << " spr0=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__spr_nid[0])
+                      << " dihit=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_di_hit)
+                      << " dimiss=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_di_miss)
+                      << std::endl;
+            continue;
+        }
+        // NEW: SRAMPEEK <word_addr> <n> — dump asset-SRAM words (bring-up only)
+        if (line.rfind("SRAMPEEK ", 0) == 0) {
+            unsigned a = 0, n = 8;
+            std::sscanf(line.c_str() + 9, "%u %u", &a, &n);
+            std::ostringstream oss;
+            oss << "SRAM";
+            for (unsigned i = 0; i < n && (a + i) < 2097152u; i++)
+                oss << " " << std::hex
+                    << unsigned(top->rootp->jmr_js_core__DOT__u_sram__DOT__mem[a + i]);
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
+        // NEW: title palette dump (ASET 256×RGB888 loaded by the console on RUN)
+        // — GUI mirror colors FB indices exactly like the HDMI field would.
+        if (line == "PAL?") {
+            uint8_t pal[768];
+            for (int i = 0; i < 256; i++) {
+                top->pal_raddr = (uint8_t)i;
+                tick(); // registered BRAM read — settle
+                tick();
+                uint32_t v = top->pal_rdata;
+                pal[i * 3 + 0] = (uint8_t)(v >> 16);
+                pal[i * 3 + 1] = (uint8_t)(v >> 8);
+                pal[i * 3 + 2] = (uint8_t)(v);
+            }
+            std::cout << "PAL " << b64_encode(pal, sizeof(pal)) << std::endl;
             continue;
         }
         if (line == "FB?") {

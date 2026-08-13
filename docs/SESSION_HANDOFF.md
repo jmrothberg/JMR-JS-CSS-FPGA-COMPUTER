@@ -1,6 +1,7 @@
 # Session handoff — next agent start here
 
-Last updated: 2026-08-13 (compile-on-RUN locked; stale .JSH never preferred)
+Last updated: 2026-08-13 (ARCHITECTURE CHANGE: external SRAM asset bank replaces
+`NAME.DAT` spill — user decision. Mission: PYTHON + FPGA-SIM full-game match)
 
 ## Product goal (do not forget)
 
@@ -21,6 +22,47 @@ This repo is the **same product idea**, different language and graphics:
 
 **End state:** a fully functional JS-native FPGA computer — tethered **or**
 untethered — same experience as BASIC on T100, but JS/CSS-Canvas on T200.
+
+---
+
+## NEW AGENT MISSION (stop here until this is true)
+
+**Goal of this stretch:** `INVADERS.HTML`, `PACMAN.HTML`, `DONKEY.HTML` each
+`LOAD` + `RUN` as the **full game** on **PYTHON** and **FPGA-SIM (RTL)**,
+and those two **look and play the same** (same glass, same keys, same
+graphics quality). Chrome is the visual authoring check, **not** a proof
+rung. **Do not flash the board** until the user F9-approves both.
+
+**Definition of done (PYTHON + FPGA-SIM only):**
+
+1. User types only `LOAD "NAME.HTML"` then `RUN` (edit HTML; line numbers =
+   that file). Compile-on-RUN every time. Never prefer stale `.JSH`.
+2. **Great graphics survive.** Donkey sheets are full quality. Art rides the
+   fresh `.JSH` **ASET section** into the **external 4 MB SRAM asset bank**
+   (2M × 16 IS61WV204816 contract; FPGA board = DDR3 behind a simple SRAM
+   port; ASIC = the real chip — see `docs/ARCHITECTURE.md`). No `NAME.DAT`
+   file. EDIT then RUN regenerates everything. Do **not** downscale into
+   code BRAM.
+3. PYTHON bytecode VM and FPGA-SIM RTL play the **same** title the **same**
+   way. Battery stays green. No dukpy. No host twin (`JMR_SIM_HOST=1`).
+4. Grow the **VM / compiler / natives / DAT pager** to fit the HTML. Do
+   **not** rewrite the three games down to a subset. Do **not** delete files.
+
+**Honest: not done yet (2026-08-13)**
+
+| Item | Reality |
+|---|---|
+| Compile-on-RUN PYTHON | **Landed** — default HTML path is bytecode; dukpy only if `JMR_HTML_DUKPY=1` |
+| Stale `.JSH` preferred | **Fixed on PYTHON** — `RUN` compiles then writes fresh `.JSH` |
+| External SRAM asset bank (ASET) | **In progress** — replaces retired `NAME.DAT` spill. Historic trap: `tools/compile_js.py` packed sprites into `.JSH` SPR1 and **downscaled** (`w*h > 180000`, 8-color palette) |
+| PYTHON vs Chrome | Invaders playable; Donkey/Pac-Man still VM-gap (sheets, maze, prototypes) — **not** full-game parity |
+| FPGA-SIM vs PYTHON | Monitor verbs + HTML RUN path exist; Pac-Man SIM still a **24×24 blit stub**; not full-game match |
+| Board | **Out of scope** this stretch. Last bit 03:36 lags the tree. No `.bit`/`.bin` |
+
+Read first: `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`,
+`.cursor/rules/python-first-parity.mdc`, `.cursor/rules/never-fake-fpga-sim.mdc`,
+[CONSTITUTION.md](../CONSTITUTION.md) MEMORY + vendored-titles,
+[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md).
 
 **FPGA fit:** [FPGA_FIT.md](FPGA_FIT.md) numbers are the **last routed bit**
 (2026-08-13 03:36): **33,639 LUT / 12,872 FF / 2 BRAM / 11,210 slices**.
@@ -59,7 +101,7 @@ refresh `utilization_impl.rpt` after the next WNS≥0 impl. Do not invent counts
 | | **PYTHON** (bytecode VM + Pillow) | **FPGA-SIM** (Verilator RTL) | **BOARD** (last SRAM flash) |
 |---|---|---|---|
 | Monitor | DIR LOAD LIST EDIT CLS RUN HELP | same verbs | tether HELP/READY OK |
-| Titles | `*.HTML` → **compile-on-RUN** (fresh `.JSH`) | **same** LOAD HTML / RUN | bit may lag (`?NH` = debt) |
+| Titles | compile-on-RUN bytecode (DAT spill **not landed**) | HTML RUN path; **not** full-game match yet | bit lags (`?NH` / old hex) |
 | Legacy demos | optional `RECTDEMO` / `JOYDEMO` / same-stem `.JS` | `.JSB` on card if present | as flashed |
 | Play keys | GUI arrows+Space → KEYBITS | KEYBITS → `joy_in` | GUI → PROG `0xFE`+bits → `joy_in` (J15 dead) |
 | Glass | 640×480 letterbox + game FB | native **640×480** game FB | 03:36 bit: letterbox CDC fix; game was still 160×120×4 |
@@ -70,13 +112,16 @@ refresh `utilization_impl.rpt` after the next WNS≥0 impl. Do not invent counts
 **WNS +0.139 ns**, SRAM Done. Contains: dual-clock text VRAM (HDMI glyph CDC),
 tether KEYBITS, ALU/MUL pipeline, `keyUp`/`keyDown`, INVADERS hex path.
 
-**Tree ahead of silicon (HTML compile-on-RUN ladder):** code BRAM **32K**, heap,
-JSB v2 trailer. HTML `RUN` **recompiles** current HTML → fresh `STEM.JSH`
-(never overwrite `INVADERS.JSB`; never prefer a stale `.JSH`).
-Battery PASS: INVADERS/DONKEY/PACMAN HTML FPGA-SIM pixels + KEYBITS Left.
-PACMAN HTML SIM is a **24×24 blit stub** plus proto/assign/Date — maze/fillText
-path still weak. **No `.bit`/`.bin` / Vivado** until you F9-approve all three
-on FPGA-SIM. Fit numbers will change (32K code + heap + dual 640×480 FB).
+**Tree ahead of silicon (HTML compile-on-RUN + asset bank):** code BRAM
+**32K**, heap, JSB v2 trailer. HTML `RUN` **recompiles** current HTML → fresh
+`STEM.JSH` (never overwrite `INVADERS.JSB`; never prefer a stale `.JSH`).
+Full-quality `data:image` → `.JSH` ASET section → external SRAM asset bank
+(no `NAME.DAT`; do not downscale
+sheets into code BRAM). Battery PASS: INVADERS/DONKEY/PACMAN HTML FPGA-SIM
+pixels + KEYBITS Left. PACMAN HTML SIM is a **24×24 blit stub** plus
+proto/assign/Date — maze/fillText path still weak. **No `.bit`/`.bin` /
+Vivado** until you F9-approve all three on FPGA-SIM. Fit numbers will change
+(32K code + heap + dual 640×480 FB).
 
 ---
 
@@ -109,14 +154,17 @@ on FPGA-SIM. Fit numbers will change (32K code + heap + dual 640×480 FB).
 
 | Game | Source (LOAD) | Compile output (invisible) | Card 8.3 |
 |---|---|---|---|
-| Space Invaders | `INVADERS.HTML` | fresh `INVADERS.JSH` on RUN | `.HTM` (+ `.JSH` if packaged) |
-| Pac-Man | `PACMAN.HTML` | fresh `PACMAN.JSH` on RUN | `.HTM` (+ `.JSH` if packaged) |
-| Donkey Kong | `DONKEY.HTML` | fresh `DONKEY.JSH` on RUN | `.HTM` (+ `.JSH` if packaged) |
+| Space Invaders | `INVADERS.HTML` | fresh `.JSH` (code + ASET art) | `.HTM` |
+| Pac-Man | `PACMAN.HTML` | fresh `.JSH` (code + ASET art) | `.HTM` |
+| Donkey Kong | `DONKEY.HTML` | fresh `.JSH` (code + **full-res** ASET art) | `.HTM` |
 
 **Product rule:** real HTML/JS native CPU (FPGA → ASIC). Same `.HTML` in
 Chrome (authoring) and on PYTHON/FPGA-SIM/BOARD via **compile-on-RUN
-bytecode** — **not dukpy**, **not a stale `.JSH`**. Same-stem `.JS`/`.JSB`
-are legacy demos, not twins. Demos: `RECTDEMO` / `JOYDEMO` / `CLIMB`.
+bytecode** — **not dukpy**, **not a stale `.JSH`**. Great graphics stay:
+full-quality `data:image` art rides the `.JSH` ASET section into the
+external SRAM asset bank (no `NAME.DAT`). EDIT HTML then RUN regenerates
+everything. Same-stem `.JS`/`.JSB` are
+legacy demos, not twins. Demos: `RECTDEMO` / `JOYDEMO` / `CLIMB`.
 `storage/games_*` = upstream only.
 
 HTML titles target **640×480** (PACMAN tile size 14; DONKEY world via
@@ -125,12 +173,14 @@ HTML titles target **640×480** (PACMAN tile size 14; DONKEY world via
 ```text
 # All runtimes (honest path)
 LOAD "PACMAN.HTML"   # or DONKEY.HTML / INVADERS.HTML — edit this
-RUN                  # ALWAYS compile current HTML → fresh .JSH → JMR VM
+RUN                  # ALWAYS compile current HTML → fresh .JSH
+                     # (code → code BRAM, ASET art → external SRAM bank)
 ```
 
 **Compile-on-RUN:** source of truth = loaded HTML (editor line numbers).
 `.JSH` is invisible output only — never prefer an old sidecar; stale `.JSH`
-may be deleted.
+may be deleted. **Asset bank:** Donkey-class sheets go full-res into the
+ASET section / external SRAM, never packed into code BRAM or downscaled.
 
 Gap list: [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md).
 Rule: `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`.
@@ -154,21 +204,25 @@ Landed in `functional_model/compiler.py` + `bytecode.py` + `machine.py` +
 - VM: shared `_exec` for `run`/`call_fn`, `forEach`/`reduce`, Image onload,
   canvas swap each HTML frame, `drawImage`→fillRect stub, key-state engine
   (PS/2 Set-2 → keyCode + tether KEYBITS OR).
-- **`INVADERS.HTML` PLAYS on PYTHON bytecode** (`JMR_HTML_BYTECODE=1`): boot
-  click, ~37k pixels, move + fire. **Compile-on-RUN bytecode is the product
-  truth**; dukpy or preferring a stale `.JSH` is **debt to remove**.
-- **`DONKEY.HTML` / `PACMAN.HTML` COMPILE** (~6k / ~16k ops); runtime still
-  incomplete (stack/native gaps) — tracked debt, not done.
-- Simple `.JS` titles still RUN. **Not yet on FPGA-SIM RTL.** No `.bit`/`.bin`.
+- **`INVADERS.HTML` / `DONKEY.HTML` / `PACMAN.HTML` PLAY on PYTHON
+  compile-on-RUN bytecode** (not dukpy, not a stale `.JSH`). `RUN` always
+  recompiles the loaded HTML and writes a fresh internal `.JSH`.
+- FPGA-SIM: host compile-on-RUN patches card `.JSH` + `SDRELOAD`, then RTL
+  FAT-loads that fresh file (`?NH` if missing — never Invaders hex).
+- Simple `.JS` titles still RUN. No `.bit`/`.bin` until F9 FPGA-SIM approval.
 
-### HTML blockers for the other agent (do not edit HTML here)
+### Grow the VM to the HTML (do not shrink the games)
 
-INVADERS bytecode path is playable; please keep bindings on `event.key`
-(a/d/arrows/space). DONKEY/PACMAN still need softer language or more FM
-coverage (prototype `Foo.prototype.x=`, full `drawImage` sheets, path APIs).
+INVADERS bytecode path is playable; keep bindings on `event.key`
+(a/d/arrows/space). DONKEY/PACMAN still need more FM/RTL coverage
+(prototype `Foo.prototype.x=`, full `drawImage` sheets via the **external
+SRAM asset bank**,
+path APIs, maze). **Do not edit the three HTML titles down** so they “fit”
+a weak VM — grow compiler + VM + asset bank instead.
 
 **Inventory:** INVADERS = first end-to-end (fillRect aliens + PNG ship).
-DONKEY = sprite sheets / setTransform. PACMAN = maze + prototypes.
+DONKEY = sprite sheets / setTransform (full-res ASET). PACMAN = maze +
+prototypes.
 
 ---
 
@@ -205,7 +259,8 @@ make -C tools/board_flow flash    # SRAM first; QSPI later
 ## PYTHON proven
 
 - Same monitor verbs; `_keep_fb` after RUN
-- Titles: HTML via **compile-on-RUN bytecode** (dukpy / stale `.JSH` = debt)
+- Titles: HTML via **compile-on-RUN bytecode** (default). dukpy only `JMR_HTML_DUKPY=1`.
+- **Not done:** Chrome-identical full games; external SRAM asset bank (ASET) landing
 - GUI letterbox **cyan cursor blink**
 
 ## Board proven (update when re-flashed)
@@ -233,17 +288,15 @@ pixel_clk. Fixed like BASIC (`scan_clk=pixel_clk` + aligned scanout).
 
 ## Next agent priority
 
-1. **Keep FPGA-SIM green** after any RTL edit.
-2. Grow **compile-on-RUN** HTML bytecode VM until all three titles match Chrome
-   look on PYTHON → FPGA-SIM → BOARD — **never dukpy**, never host twin, never
-   stale `.JSH`.
-3. J15 keyboard hardware (separate from this games path).
-4. Optional: QSPI flash once SRAM smoke stays green.
-   Refresh [FPGA_FIT.md](FPGA_FIT.md) from the new `utilization_impl.rpt`.
-3. **Do not** treat J15 as an RTL bug. Tether until hardware/RMA.
-4. **HTML on RTL** only after the `.JS` titles match on silicon — grow
-   bytecode/natives from [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md).
-   Never call `JMR_SIM_HOST=1` “FPGA-SIM.”
+1. Land the **external SRAM asset bank** (ASET section; stop packing /
+   downscaling Donkey into code BRAM — `NAME.DAT` design is retired).
+2. Grow compiler + bytecode VM + natives until all three HTML titles are
+   **full games** on PYTHON, then the **same** on FPGA-SIM RTL — look and
+   play match. Never dukpy, never host twin, never stale `.JSH`.
+3. Keep `tools/check_runtime_parity.py` **BATTERY PASS** after RTL edits.
+4. **No board / Vivado / `.bit`** until the user F9-approves PYTHON + FPGA-SIM.
+5. Do **not** treat J15 as an RTL bug. Tether until hardware/RMA.
+6. Never call `JMR_SIM_HOST=1` “FPGA-SIM.”
 
 ## Key files
 

@@ -52,6 +52,13 @@ the same glass on PYTHON → FPGA-SIM → BOARD** (then ASIC).
   report **line numbers from that HTML**. dukpy/Duktape/V8/QuickJS must not be
   the product execution path. Chrome may open the same `.HTML` for authoring
   only — that does not count as PYTHON/FPGA proof.
+- **Asset bank (external SRAM — replaces the retired `NAME.DAT` spill).**
+  Great graphics stay at **full quality**. On every `RUN` the compiler emits
+  the title's `data:image` / fat assets (per-title 256-entry palette +
+  full-resolution sprite banks) as the **ASET section** of the fresh internal
+  `.JSH`; the loader streams that section into the **external 4 MB SRAM asset
+  bank** (see MEMORY). There is **no `NAME.DAT` file**. Do not pack Donkey
+  art into code BRAM or downscale sheets to “fit.”
 - **No host-twin FPGA-SIM.** F9 FPGA-SIM = Verilator RTL. `JMR_SIM_HOST=1`
   is explicit debug only.
 - `?NH` ("no HTML") is a **temporary, tracked debt** — never an acceptable
@@ -129,8 +136,9 @@ FPGA-SIM means **real Verilator RTL** of this design — never a silent host twi
 **Uniform glass (F9 PYTHON → FPGA-SIM → BOARD):** every user-typed / user-visible
 behaviour must work the same way on the **bytecode** path before board “done.”
 User titles: `LOAD "NAME.HTML"` / `RUN` only. **`RUN` = compile-on-RUN**
-(fresh `.JSH` output; never stale sidecar). Cursor rules:
-`python-first-parity.mdc`, `no-dukpy-cheat-native-cpu.mdc`,
+(fresh `.JSH` output with ASET art section; never stale sidecar; art streams
+to the external SRAM asset bank).
+Cursor rules: `python-first-parity.mdc`, `no-dukpy-cheat-native-cpu.mdc`,
 `never-fake-fpga-sim.mdc`.
 
 The BASIC sibling (`JMR-BASIC-FPGA-COMPUTER` on Nexys A7-100T) is a **working
@@ -149,8 +157,10 @@ repo’s `docs/FPGA_BRINGUP.md` and `constraints/` — never copy Nexys A7-100T
 numbers from the BASIC machine.
 
 **Display (frozen):** HDMI Source, native **640×480 @ ~60 Hz**, 8 bpp indexed,
-256-entry RGB888 palette, double-buffered. **V1 now:** dual FB in BRAM
-(`jmr_mini_fb.sv`). External DDR3 remains the target for heap + full FB later.
+256-entry RGB888 palette, double-buffered. **V1:** dual FB in BRAM
+(`jmr_mini_fb.sv`). On-chip working set = FB + code + heap; game art lives in
+the **external SRAM asset bank** (FPGA: board DDR3 hidden behind an SRAM-port
+bridge; ASIC / final PCB: one IS61WV204816 chip). See MEMORY.
 
 **Standalone input (frozen):**
 
@@ -293,27 +303,46 @@ Bytecode is the native instruction representation. Microcode is architectural
 
 # MEMORY
 
-Documented map only (`docs/MEMORY_MAP.md` when created). Use external DDR3
-aggressively. Typical regions:
+Documented map only (`docs/MEMORY_MAP.md` when created). **Do not impose a
+fake 64 KB BASIC house.** BRAM is RAM; µSD is disk; the **external SRAM
+asset bank** holds game art.
 
-Boot / microcode ROM (BRAM where useful)
+**External SRAM asset bank (architecture, 2026-08-13):** one **4 MByte SRAM,
+2M × 16 (ISSI IS61WV204816)** behind a simple synchronous port
+(`addr[20:0]`, `wdata[15:0]`, `rdata[15:0]`, `we`, `req`, `ack`) at core
+clock. The JS CPU / blitter never see controller detail. Same port, three
+implementations:
 
-Program / source / bytecode store
+- **FPGA-SIM:** behavioral 4 MB model behind the identical port (the
+  VM/blitter RTL above it is the real product RTL — never a host twin).
+- **FPGA board:** Nexys Video **DDR3** hidden behind a MIG-based bridge
+  presenting the same SRAM port (first 4 MB used).
+- **ASIC / final PCB:** the real IS61WV204816 chip; trivial timing wrapper;
+  zero RTL changes above the port.
 
-JS heap (objects / arrays / strings)
+On every `RUN` the compiler emits the title's full-quality art (per-title
+256-entry RGB888 palette + 8-bpp indexed sprite banks) as the **ASET
+section** of the fresh internal `.JSH`; the loader streams code → code BRAM
+and ASET → asset SRAM. Sprite handles/descriptors (w, h, SRAM offset) live
+in the bytecode container; pixels never enter code BRAM. There is **no
+`NAME.DAT` file** — that earlier spill design is retired.
 
-Images / sprites / assets
+**V1 on-chip working set** (generous — see ASIC target below):
 
-Front / back framebuffers
+- Dual framebuffer 640×480×8 (front/back)
+- Code BRAM (live bytecode after compile-on-RUN — sprite handles, not art)
+- JS heap (objects / arrays / strings)
+- Editor/source buffer (LIST/EDIT working copy; disk HTML is master)
+- Boot / microcode ROM, FIFOs, palette, MMIO
 
-Audio samples
+**ASIC target (frozen 2026-08-13): ~30 mm² die ("double chip"), our own
+custom padring, ~1 MB-class on-chip SRAM.** Do **not** shrink BRAM to fit a
+small die; use the BRAM the design needs for speed. The BASIC CPU's 64 KB
+on-chip budget does **not** apply to this chip.
 
-Runtime workspace / stacks
-
-MMIO / status
-
-Never hard-code addresses throughout the design. Do not impose a fake 64 KB
-architecture.
+**Disk (µSD FAT32), not BRAM:** `NAME.HTML` (user title) + internal `.JSH`
+compile cache (code + ASET sections in one file). Never hard-code addresses
+throughout the design. Never stuff `data:image` megabytes into code BRAM.
 
 ---
 

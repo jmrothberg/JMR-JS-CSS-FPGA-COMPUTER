@@ -22,7 +22,7 @@ from functional_model.jsb_format import encode_chunk, jsb_to_hex_lines  # noqa: 
 STORAGE = ROOT / "storage"
 VECTORS = ROOT / "vectors"
 
-# Default CanvasEngine 8-slot pal — sprite pixels match FPGA-SIM GUI / RTL HDMI-ish.
+# Legacy fixed 8 (palette entries 0..7 stay frozen; monitor glass uses them).
 _PAL8 = [
     (0, 0, 0),
     (255, 255, 255),
@@ -35,24 +35,20 @@ _PAL8 = [
 ]
 
 
-def _pal8(r: int, g: int, b: int, a: int) -> int:
-    if a < 16:
-        return 0
-    best, bd = 1, 1 << 30
-    for i, (pr, pg, pb) in enumerate(_PAL8):
-        d = (r - pr) * (r - pr) + (g - pg) * (g - pg) + (b - pb) * (b - pb)
-        if d < bd:
-            best, bd = i, d
-    return best
-
-
 def _extract_data_uri_sprites(src: str):
-    """Replace data:image/png;base64,… with jmr:spr:N and build indexed pack."""
+    """Replace data:image/…;base64,… with jmr:spr:N; keep FULL-RES RGBA sheets.
+
+    ARCHITECTURE (2026-08-13): the old path downscaled sheets (`w*h > 180000`)
+    and quantized to 8 colors so pixels fit code BRAM — that trap is removed.
+    Sheets stay full quality; they are quantized against the per-title
+    256-entry palette (_quantize_sprites) and ride the .JSH ASET section into
+    the external SRAM asset bank, never into code BRAM.
+    """
     import base64
-    import re
     from io import BytesIO
 
-    sprites = []
+    images = []  # PIL RGBA images (None = undecodable → 1×1 blank)
+    seen: dict = {}  # identical data URIs share one sprite handle (dedup)
     pat = re.compile(r"data:image/[a-zA-Z0-9+./;=,_-]+")
 
     def repl(m):
@@ -62,32 +58,107 @@ def _extract_data_uri_sprites(src: str):
         header, b64 = uri.split(",", 1)
         if "base64" not in header.lower():
             return uri
+        if uri in seen:
+            return f"jmr:spr:{seen[uri]}"
         try:
             from PIL import Image as PILImage
 
             blob = base64.b64decode(b64)
             im = PILImage.open(BytesIO(blob)).convert("RGBA")
         except Exception:
-            n = len(sprites)
-            sprites.append((1, 1, b"\x00"))
-            return f"jmr:spr:{n}"
-        w, h = im.size
-        # cap a single sheet so .JSH + SPR1 fits code BRAM (32K words)
-        while w * h > 180000:
-            im = im.resize((max(1, w // 2), max(1, h // 2)))
-            w, h = im.size
-        pix = bytearray(w * h)
-        px = im.load()
-        for yy in range(h):
-            row = yy * w
-            for xx in range(w):
-                r, g, b, a = px[xx, yy]
-                pix[row + xx] = _pal8(r, g, b, a)
-        n = len(sprites)
-        sprites.append((w, h, bytes(pix)))
+            im = None
+        n = len(images)
+        images.append(im)
+        seen[uri] = n
         return f"jmr:spr:{n}"
 
-    return pat.sub(repl, src), sprites
+    return pat.sub(repl, src), images
+
+
+# String literals that might be CSS colors ('#fff', 'rgb(…)', 'orange', …)
+_COLOR_TOKEN = re.compile(
+    r"""['"](#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?(?:[0-9a-fA-F]{2})?"""
+    r"""|rgba?\([^)'"]*\)|[a-zA-Z]{3,20})['"]"""
+)
+
+
+def _harvest_source_colors(src: str, cap: int = 120):
+    """Exact fillStyle/strokeStyle colors from the JS source → palette seeds."""
+    from functional_model.canvas_engine import parse_css_color
+
+    out = []
+    seen = set()
+    for m in _COLOR_TOKEN.finditer(src):
+        rgb = parse_css_color(m.group(1))
+        if rgb and rgb not in seen:
+            seen.add(rgb)
+            out.append(rgb)
+            if len(out) >= cap:
+                break
+    return out
+
+
+def _build_title_palette(images, harvested):
+    """256-entry title palette: 0..7 legacy fixed, then harvested source
+    colors (exact fillStyle hits), then adaptive colors from the sheets."""
+    pal = list(_PAL8)
+    for rgb in harvested:
+        if rgb not in pal and len(pal) < 256:
+            pal.append(rgb)
+    room = 256 - len(pal)
+    if room > 0 and any(im is not None for im in images):
+        from PIL import Image as PILImage
+
+        samples = []
+        for im in images:
+            if im is None:
+                continue
+            w, h = im.size
+            step = max(1, (w * h) // 65536)  # cap work per sheet
+            for px in list(im.getdata())[::step]:
+                r, g, b, a = px
+                if a >= 16:
+                    samples.append((r, g, b))
+        if samples:
+            strip = PILImage.new("RGB", (len(samples), 1))
+            strip.putdata(samples)
+            q = strip.quantize(colors=room)
+            qp = q.getpalette()[: room * 3]
+            for i in range(0, len(qp), 3):
+                rgb = (qp[i], qp[i + 1], qp[i + 2])
+                if rgb not in pal and len(pal) < 256:
+                    pal.append(rgb)
+    while len(pal) < 256:
+        pal.append((0, 0, 0))
+    return pal
+
+
+def _quantize_sprites(images, pal):
+    """RGBA sheets → full-res 8-bpp indices in the title palette; alpha<16 → 0.
+
+    Quantizes against entries 1..255 (temp palette shifted by one) so opaque
+    black maps to ink, never to transparent index 0. All Pillow C paths —
+    no per-pixel Python loop over Donkey-size sheets.
+    """
+    from PIL import Image as PILImage
+
+    pimg = PILImage.new("P", (1, 1))
+    flat = []
+    for r, g, b in pal[1:256]:
+        flat.extend((r, g, b))
+    pimg.putpalette(flat)
+    out = []
+    for im in images:
+        if im is None:
+            out.append((1, 1, b"\x00"))
+            continue
+        w, h = im.size
+        q = im.convert("RGB").quantize(palette=pimg, dither=0)
+        q = q.point(lambda i: i + 1 if i < 255 else 255)
+        mask = im.getchannel("A").point(lambda a: 255 if a < 16 else 0)
+        q.paste(0, mask=mask)
+        out.append((w, h, q.tobytes()))
+    return out
 
 
 def compile_one(src_path: Path, out_dir: Path | None = None) -> Path:
@@ -137,20 +208,34 @@ def compile_html_text(html: str):
         spans.append((h0, body.count("\n") + 1))
     if not any(b.strip() for b in bodies):
         raise CompileError("NO SCRIPT IN HTML", 1)
-    src = "\n".join(bodies)
-    src, sprites = _extract_data_uri_sprites(src)
+    # NEW: ';' between <script> blocks — browsers end statements at script
+    # boundaries; a bare "\n" join glued DONKEY's `rAF(update)` to the next
+    # script's `(function(){...})()` as a call chain (ASI hazard).
+    src = ";\n".join(bodies)
+    src, images = _extract_data_uri_sprites(src)
+    harvested = _harvest_source_colors(src)
+    palette = _build_title_palette(images, harvested)
+    sprites = _quantize_sprites(images, palette)
     try:
         chunk = compile_source(src)
     except CompileError as e:
         e.line = _js_line_to_html(spans, e.line or 0)
         raise
     chunk.sprites = sprites or None
+    chunk.palette = palette
     return chunk
 
 
 def encode_html_chunk(chunk) -> bytes:
-    """Fresh internal .JSH bytes (JSB v2 + optional SPR1)."""
-    return encode_chunk(chunk, v2=True, sprites=getattr(chunk, "sprites", None))
+    """Fresh internal .JSH bytes (JSB v2 + SPRD descriptors + ASET section).
+
+    HTML titles always take the ASET path: full-res sprite banks + the
+    per-title palette stream to the external SRAM asset bank; code BRAM
+    only ever sees bytecode + descriptors.
+    """
+    return encode_chunk(
+        chunk, v2=True, sprites=getattr(chunk, "sprites", None), aset=True
+    )
 
 
 def compile_html_one(src_path: Path, out_dir: Path | None = None) -> Path:

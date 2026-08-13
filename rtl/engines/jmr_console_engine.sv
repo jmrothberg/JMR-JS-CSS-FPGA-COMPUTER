@@ -29,6 +29,16 @@ module jmr_console_engine (
     output logic        code_we,
     output logic [14:0] code_waddr,
     output logic [31:0] code_wdata,
+    // NEW: ASET section → external asset SRAM (jmr_sram_port write master)
+    output logic        sram_req,
+    output logic        sram_we,
+    output logic [20:0] sram_addr,
+    output logic [15:0] sram_wdata,
+    input  logic        sram_ack,
+    // NEW: ASET palette (payload bytes 0..767 = 256×RGB888) → palette BRAM
+    output logic        pal_we,
+    output logic [7:0]  pal_waddr,
+    output logic [23:0] pal_wdata,
     // NEW: storage_engine (BASIC handshake)
     output logic        stor_open,
     output logic [7:0]  stor_mode,
@@ -96,7 +106,8 @@ module jmr_console_engine (
         C_EDIT_WR_NEW, C_EDIT_WR_WAIT, C_EDIT_WR_NL,
         // NEW: load companion .JSB from FAT into VM code BRAM
         C_JSB_PREP, C_JSB_NWR, C_JSB_NWR_W, C_JSB_OPEN, C_JSB_OPENW,
-        C_JSB_GB, C_JSB_GBW, C_JSB_CLOSE, C_JSB_CLOSEW
+        C_JSB_GB, C_JSB_GBW, C_JSB_CLOSE, C_JSB_CLOSEW,
+        C_JSB_SRAMW // NEW: wait asset-SRAM write ack (ASET payload word)
     } cstate_t;
     cstate_t state, ret_state;
 
@@ -124,6 +135,21 @@ module jmr_console_engine (
     logic [1:0]  jsb_bi;        // byte index 0..3 within word
     logic [31:0] jsb_word;
     logic [7:0]  jsb_name_len;
+    // NEW: ASET stream splitter — code bytes → code BRAM (as before), ASET
+    // payload → asset SRAM (palette bytes 0..767 also tap the palette BRAM)
+    logic [22:0] jsb_boff;      // byte offset within the .JSH stream
+    logic [22:0] jsb_aset_off;  // header u32 at bytes 12..15 (0 = none yet)
+    logic        jsb_has_aset;  // header flags bit1 (byte 10 bit1)
+    logic        aset_seen;     // "ASET" magic matched at aset_off
+    logic [22:0] aset_len;      // payload length from the ASET header
+    logic [22:0] aset_pay;      // payload byte counter == SRAM byte address
+    logic [7:0]  sram_lo;       // low byte latch for 16-bit word packing
+    logic        sram_last;     // final odd-byte flush → CLOSE after ack
+    logic [7:0]  pal_r, pal_g;  // palette byte packer (RGB triplets)
+    logic [7:0]  pal_idx;
+    logic [1:0]  pal_ph;
+    logic [22:0] aset_rel;      // byte offset inside the ASET section
+    assign aset_rel = jsb_boff - jsb_aset_off;
     logic        ld_err;        // NEW: LOAD ?LS/?IO sticky until CLOSEW
     // NEW: LIST range / MORE (display numbers 10,20,… like PYTHON)
     logic        list_page;
@@ -270,6 +296,12 @@ module jmr_console_engine (
             jsb_waddr <= 0; jsb_bi <= 0; jsb_word <= 0; jsb_name_len <= 0;
             jsb_want_jsh <= 1'b0;
             ld_err <= 0;
+            sram_req <= 0; sram_we <= 0; sram_addr <= 0; sram_wdata <= 0;
+            pal_we <= 0; pal_waddr <= 0; pal_wdata <= 0;
+            jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
+            aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
+            sram_lo <= 0; sram_last <= 0;
+            pal_r <= 0; pal_g <= 0; pal_idx <= 0; pal_ph <= 0;
             list_page <= 0; list_lo <= 16'd10; list_hi <= 16'hFFFF;
             list_disp <= 16'd10; list_on_page <= 0; list_skip <= 0;
             list_from_card <= 0; list_bol <= 0;
@@ -288,6 +320,7 @@ module jmr_console_engine (
             stor_open <= 0; stor_close <= 0; stor_readline <= 0; stor_get_byte <= 0;
             stor_putc <= 0; stor_dir <= 0; stor_dir_next <= 0; stor_delete <= 0;
             mem_en <= 0; mem_we <= 0;
+            pal_we <= 0; // NEW: 1-cycle palette write strobes (sram_req holds to ack)
 
             unique case (state)
                 C_BOOT_CLS: begin
@@ -1407,6 +1440,10 @@ module jmr_console_engine (
                     jsb_bi <= 0;
                     jsb_word <= 0;
                     ld_err <= 0;
+                    // NEW: fresh ASET splitter per load
+                    jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
+                    aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
+                    sram_last <= 0; pal_idx <= 0; pal_ph <= 0;
                     state <= C_JSB_OPENW;
                 end
                 C_JSB_OPENW: if (stor_done) begin
@@ -1429,8 +1466,77 @@ module jmr_console_engine (
                             code_waddr <= jsb_waddr;
                             code_wdata <= jsb_word;
                         end
-                        state <= C_JSB_CLOSE;
+                        // NEW fail loud: header promised an ASET section but the
+                        // stream ended early → ?NH, never silent blank sprites
+                        if (jsb_has_aset && (!aset_seen || aset_pay < aset_len)) begin
+                            ld_err <= 1'b1; reply_sel <= 4'd9; reply_idx <= 0;
+                            state <= C_JSB_CLOSE;
+                        end else if (aset_seen && aset_pay[0]) begin
+                            // odd payload tail — flush the pending low byte
+                            sram_req <= 1'b1; sram_we <= 1'b1;
+                            sram_addr <= aset_pay[21:1];
+                            sram_wdata <= {8'h00, sram_lo};
+                            sram_last <= 1'b1;
+                            state <= C_JSB_SRAMW;
+                        end else
+                            state <= C_JSB_CLOSE;
+                    end else if (jsb_has_aset && jsb_aset_off != 23'd0
+                                 && jsb_boff >= 23'd16 && jsb_boff >= jsb_aset_off) begin
+                        // ---- ASET section: "ASET" + u32 len, then payload → SRAM
+                        jsb_boff <= jsb_boff + 23'd1;
+                        state <= C_JSB_GB;
+                        if (aset_rel < 23'd4) begin
+                            // magic check — mismatch = truncated/garbled → ?NH
+                            if ((aset_rel == 23'd0 && stor_get_data != "A") ||
+                                (aset_rel == 23'd1 && stor_get_data != "S") ||
+                                (aset_rel == 23'd2 && stor_get_data != "E") ||
+                                (aset_rel == 23'd3 && stor_get_data != "T")) begin
+                                ld_err <= 1'b1; reply_sel <= 4'd9; reply_idx <= 0;
+                                state <= C_JSB_CLOSE;
+                            end
+                        end else if (aset_rel < 23'd8) begin
+                            // u32 payload length (bank is 4 MB → 23 bits kept)
+                            unique case (aset_rel[1:0])
+                                2'd0: aset_len[7:0]   <= stor_get_data;
+                                2'd1: aset_len[15:8]  <= stor_get_data;
+                                2'd2: aset_len[22:16] <= stor_get_data[6:0];
+                                default: aset_seen <= 1'b1; // byte 7 (≥8 MB bits ignored)
+                            endcase
+                        end else begin
+                            // payload byte aset_pay: palette tap + 16-bit SRAM pack
+                            if (aset_pay < 23'd768) begin
+                                if (pal_ph == 2'd0) begin
+                                    pal_r <= stor_get_data; pal_ph <= 2'd1;
+                                end else if (pal_ph == 2'd1) begin
+                                    pal_g <= stor_get_data; pal_ph <= 2'd2;
+                                end else begin
+                                    pal_we <= 1'b1;
+                                    pal_waddr <= pal_idx;
+                                    pal_wdata <= {pal_r, pal_g, stor_get_data};
+                                    pal_idx <= pal_idx + 8'd1;
+                                    pal_ph <= 2'd0;
+                                end
+                            end
+                            aset_pay <= aset_pay + 23'd1;
+                            if (!aset_pay[0])
+                                sram_lo <= stor_get_data;
+                            else begin
+                                sram_req <= 1'b1; sram_we <= 1'b1;
+                                sram_addr <= aset_pay[21:1];
+                                sram_wdata <= {stor_get_data, sram_lo};
+                                state <= C_JSB_SRAMW;
+                            end
+                        end
                     end else begin
+                        // ---- code region: word packer → code BRAM (as before)
+                        jsb_boff <= jsb_boff + 23'd1;
+                        // header taps for the splitter (flags u16 at 10, off u32 at 12)
+                        if (jsb_boff == 23'd10) jsb_has_aset <= stor_get_data[1];
+                        if (jsb_has_aset) begin
+                            if (jsb_boff == 23'd12) jsb_aset_off[7:0]   <= stor_get_data;
+                            if (jsb_boff == 23'd13) jsb_aset_off[15:8]  <= stor_get_data;
+                            if (jsb_boff == 23'd14) jsb_aset_off[22:16] <= stor_get_data[6:0];
+                        end
                         case (jsb_bi)
                             2'd0: jsb_word <= {24'h0, stor_get_data};
                             2'd1: jsb_word <= {16'h0, stor_get_data, jsb_word[7:0]};
@@ -1449,6 +1555,11 @@ module jmr_console_engine (
                             state <= C_JSB_GB;
                         end
                     end
+                end
+                // NEW: hold the SRAM write until the port acks, then stream on
+                C_JSB_SRAMW: if (sram_ack) begin
+                    sram_req <= 1'b0; sram_we <= 1'b0;
+                    state <= sram_last ? C_JSB_CLOSE : C_JSB_GB;
                 end
                 C_JSB_CLOSE: if (!stor_busy) begin stor_close <= 1'b1; state <= C_JSB_CLOSEW; end
                 C_JSB_CLOSEW: if (stor_done) begin

@@ -20,14 +20,28 @@ RUN
 
 | Game | Source (LOAD) | On RUN (invisible) |
 |---|---|---|
-| Space Invaders | `INVADERS.HTML` | compile → fresh `INVADERS.JSH` |
-| Pac-Man | `PACMAN.HTML` | compile → fresh `PACMAN.JSH` |
-| Donkey Kong | `DONKEY.HTML` | compile → fresh `DONKEY.JSH` |
+| Space Invaders | `INVADERS.HTML` | compile → fresh `.JSH` (code + ASET art) |
+| Pac-Man | `PACMAN.HTML` | compile → fresh `.JSH` (code + ASET art) |
+| Donkey Kong | `DONKEY.HTML` | compile → fresh `.JSH` (code + **full-res** ASET art) |
 
 **Compile-on-RUN (hard):** source of truth = loaded `.HTML` (editor line
 numbers). `RUN` **always** recompiles. `.JSH` = invisible *output* only —
 never a LOAD name; **never prefer a pre-existing `.JSH`**. Stale `.JSH` may
 be deleted.
+
+**Asset bank (external SRAM — no `NAME.DAT`):** great graphics stay at full
+quality. `RUN` emits `data:image` art (per-title 256-entry palette +
+full-resolution 8-bpp banks) as the **ASET section** of the fresh `.JSH`;
+the loader streams it into the **external 4 MB SRAM asset bank**
+(IS61WV204816 contract — see `docs/ARCHITECTURE.md`). Bytecode carries
+descriptors (w, h, SRAM offset) only. Do not pack Donkey sheets into code
+BRAM or downscale them to fit.
+
+**Code debt (2026-08-13):** ASET/asset-bank path is **in progress**.
+Historic trap: `tools/compile_js.py` `_extract_data_uri_sprites` packed
+pixels into `.JSH` and downscaled (`w*h > 180000`) with an 8-color palette.
+PYTHON compile-on-RUN **is** default. Full-game PYTHON ↔ FPGA-SIM match is
+**not** done.
 
 Same-stem `NAME.JS` / `NAME.JSB` are **legacy demos**, not product twins.
 Optional smoke demos with other names: `RECTDEMO`, `JOYDEMO`, `CLIMB`.
@@ -70,6 +84,7 @@ decides keys. No `.bit`/`.bin` until FPGA-SIM is green and the user GUI-tests.
 | keydown/keyup (HTML decides bindings) | KEYBITS / host | `joy_in` / PS/2 | tether until J15 fixed |
 | heap / GC / objects in **JMR** VM | required (not dukpy) | required | required |
 | `.JSH` into VM / BRAM | **compile-on-RUN** → fresh bytecode | **yes** (same rule) | yes after matching flash |
+| external SRAM asset bank (ASET) | **required** — full-res art via FM SRAM model | **same** (stream ASET → SRAM port; blit from SRAM) | same after matching flash |
 | standalone keyboard | GUI / host | Verilator PS/2 OK | **dead J15** — PROG tether |
 
 Columns mean **JMR VM parity**, never “dukpy can do it so PYTHON is done.”
@@ -137,15 +152,16 @@ still has Invaders hex / 160×120 FB only.
 | File | Role |
 |---|---|
 | `storage/INVADERS.HTML` / `PACMAN.HTML` / `DONKEY.HTML` | **Product titles** (LOAD these) |
-| `storage/*.JSH` | Compile-on-RUN *output* only (stale = disposable; not LOAD names) |
+| `storage/*.JSH` | Compile-on-RUN *output* only, code + ASET art (stale = disposable; not LOAD names) |
 | `storage/RECTDEMO.JS` / `JOYDEMO.JS` / `CLIMB.JS` | Optional differently named VM smoke |
 | `storage/games_*` | Upstream archive only |
 
 ## Host notes (PYTHON)
 
 - **Product path:** `functional_model/` **bytecode VM** — **compile-on-RUN**
-  from loaded HTML (fresh `.JSH` output). Preferring a stale disk `.JSH` or
-  dukpy in `js_host.py` is **debt to remove**, not truth.
+  from loaded HTML (fresh `.JSH` output; full-quality art → ASET section →
+  FM asset-SRAM model). Preferring a stale disk `.JSH` or dukpy in
+  `js_host.py` is **debt to remove**, not truth.
 - Use **`.venv`** (Pillow for `drawImage` on the Canvas engine).
 - Playable HTML titles declare `<canvas width="640" height="480">`; glass is
   640×480 (DONKEY still `setTransform`s its internal world).

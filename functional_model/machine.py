@@ -15,6 +15,7 @@ from .compiler import CompileError, compile_source
 from .html_loader import extract_html_program
 from .input_engine import InputEngine
 from .js_host import HtmlJsHost
+from .sram_engine import SramEngine
 from .storage_engine import StorageEngine
 from .trace import TraceLog
 
@@ -33,6 +34,9 @@ class Machine:
         self.input = InputEngine()
         self.canvas = CanvasEngine()
         self.storage = StorageEngine(storage_root)
+        # NEW: external SRAM asset bank model (ASET payload lives here)
+        self.sram = SramEngine()
+        self._spr_descs: list = []  # (w, h, sram_off) per sprite handle
         self.lines_out: List[str] = []
         self.console_log: List[str] = []
         self.source_name: str = "UNTITLED.JS"
@@ -126,6 +130,7 @@ class Machine:
         self._html_chunk = None
         self._raf_q = []
         self._listeners = []
+        self._timers = []  # NEW: kill pending setTimeout/setInterval
         if self.html_host is not None:
             self.html_host.stop()
             self.html_host = None
@@ -520,13 +525,51 @@ class Machine:
         self.vm.globals.clear()
         self._loop_chunk = None
         self._html_chunk = chunk  # NEW: for rAF / listeners
-        self._sprites = list(getattr(chunk, "sprites", None) or [])
+        # NEW (external SRAM asset bank): stream ASET payload → SRAM model.
+        # VM sees handles (sprite index → w/h/sram_off); pixels stay in SRAM.
+        from .jsb_format import build_aset_payload
+
+        if getattr(chunk, "palette", None):
+            payload, descs = build_aset_payload(chunk.palette, chunk.sprites)
+            self.sram.load(payload)
+            self._spr_descs = list(descs)
+            # Title palette drives the glass (entries 0..7 stay the fixed 8)
+            self.canvas.palette = list(chunk.palette)
+        else:
+            self._spr_descs = []
+        self._css_cache = {}  # fillStyle cache follows the new palette
+        self._sprites = list(self._spr_descs)
         self.vm._sprites = self._sprites
+        # NEW: seeded globals so Object.assign / Date.now / performance.now
+        # resolve as CALL_METHOD on real receivers (compiler emits LOAD_VAR)
+        self.vm.globals["Object"] = {"__class": "ObjectCtor"}
+        self.vm.globals["Date"] = {"__class": "DateCtor"}
+        self.vm.globals["performance"] = {"__class": "DateCtor"}
+        # NEW: real frame-scheduled timers (16.7 ms per frame_tick)
+        self._timers = []  # [due_frame, fn, period_frames|None, id]
+        self._timer_seq = 1
+        self._frame_no = 0
+        # NEW: frame clock active from RUN's top-level code onward, so the
+        # `timestamp` a game captures at boot matches later frame ticks
+        # (PACMAN's 16 ms limiter mixed wall clock with frame clock).
+        self.vm.time_ms = 0.0
         self._raf_q = []
         self._listeners = []  # (event, fn)
         self._key_prev = 0
-        self._enter_left = 2  # DONKEY title+character Enter (same as dukpy host)
-        self._enter_delay = 2
+        # NEW: seed document/window so `if (document.dispatchEvent)` guards
+        # pass and games can dispatch synthetic events (DONKEY boot script).
+        self.vm.globals["document"] = {
+            "__class": "Element",
+            "dispatchEvent": 1,
+            "addEventListener": 1,
+            "removeEventListener": 1,
+        }
+        self.vm.globals["window"] = {
+            "__class": "Element",
+            "dispatchEvent": 1,
+            "addEventListener": 1,
+            "removeEventListener": 1,
+        }
         self._ctx_tx = 0
         self._ctx_ty = 0
         self._ctx_sx = 1.0
@@ -605,7 +648,14 @@ class Machine:
             "document.addEventListener": self._nat_add_event_listener,
             "window.addEventListener": self._nat_add_event_listener,
             "addEventListener": self._nat_add_event_listener,  # NEW: bare global
-            "removeEventListener": self._nat_noop,
+            # NEW: real removal (DONKEY startSelect removes itself; a missing
+            # native here killed the handler before gameState changed)
+            "removeEventListener": self._nat_remove_event_listener,
+            "document.removeEventListener": self._nat_remove_event_listener,
+            "window.removeEventListener": self._nat_remove_event_listener,
+            # NEW: synthetic events — DONKEY boot script fires Enter itself
+            "document.dispatchEvent": self._nat_dispatch_event,
+            "window.dispatchEvent": self._nat_dispatch_event,
             "localStorage.getItem": self._nat_ls_get,
             "localStorage.setItem": self._nat_ls_set,
             "localStorage.removeItem": self._nat_ls_remove,
@@ -613,12 +663,14 @@ class Machine:
             "JSON.stringify": self._nat_json_stringify,
             "Date": self._nat_new_date,
             "Image": self._nat_new_image,
-            # NEW: timer/rAF stubs — real engine lands in engines todo
+            # NEW (full-game builtins): Array(n) constructor (PACMAN grids)
+            "Array": self._nat_new_array,
+            # NEW: real frame-scheduled timers (rAF stays queue-per-frame)
             "requestAnimationFrame": self._nat_raf,
             "setTimeout": self._nat_set_timeout,
-            "clearTimeout": self._nat_noop,
-            "setInterval": self._nat_set_timeout,
-            "clearInterval": self._nat_noop,
+            "clearTimeout": self._nat_clear_timer,
+            "setInterval": self._nat_set_interval,
+            "clearInterval": self._nat_clear_timer,
             # NEW: JSB v2 unknown CALL_NATIVE
             "_stub": self._nat_noop,
             # NEW: Canvas2D methods via ctx.* (HTML bytecode path)
@@ -629,6 +681,11 @@ class Machine:
             "ctx.fillText": self._nat_fill_text,
             "ctx.fillPath": self._nat_fill_path,
             "ctx.strokePath": self._nat_stroke_path,
+            # NEW: canvas growth for full games
+            "ctx.measureText": self._nat_measure_text,
+            "ctx.strokeRect": self._nat_stroke_rect,
+            "ctx.getImageData": self._nat_get_image_data,
+            "ctx.putImageData": self._nat_put_image_data,
             "setFillStyle": self._nat_fill_style_css,
             "__ctx_xform": self._nat_ctx_xform,
             "__fire_click": self._nat_fire_click,
@@ -655,73 +712,33 @@ class Machine:
         return ix, iy, max(1, int(float(w or 0) * sx)), max(1, int(float(h or 0) * sy))
 
     def _nat_fill_style_css(self, color):
-        """NEW: map CSS color names/hex to palette index for HTML titles."""
+        """Map CSS color to a 256-entry title-palette index.
+
+        NEW (external SRAM asset bank): the palette is per-title (harvested
+        source colors are exact hits; sprites quantized to the same entries),
+        so fillStyle maps by nearest match over all 256 — not the old fixed 8.
+        Black maps to 0 (background); index 0 is only transparent for blits.
+        """
+        from .canvas_engine import nearest_palette_index, parse_css_color
+
         if isinstance(color, (int, float)):
             self.canvas.fill_style = int(color) & 0xFF
             return None
         s = str(color).strip().lower()
-        named = {
-            "black": 0,
-            "white": 1,
-            "red": 2,
-            "green": 3,
-            "blue": 4,
-            "yellow": 5,
-            "cyan": 6,
-            "magenta": 7,
-            "gold": 5,
-            "#2ecc40": 3,
-            "#ffffff": 1,
-            "#fff": 1,
-            "#000000": 0,
-            "#000": 0,
-            "#33ff66": 3,
-            "#ff55aa": 7,
-            "#ffcc00": 5,
-            "#baa0de": 7,
-            "#f5f5dc": 1,
-            "#ffe600": 5,
-            "#09f": 4,
-            "#0099ff": 4,
-            "#f00": 2,
-            "#ff0000": 2,
-            "#aaa": 1,
-            "#fff": 1,
-            "#bababa": 1,
-        }
-        if s in named:
-            self.canvas.fill_style = named[s]
-        elif s.startswith("#") and (len(s) == 4 or len(s) >= 7):
-            # nearest CanvasEngine pal 0..7 (RTL HDMI uses the same 8)
-            try:
-                if len(s) == 4:
-                    r = int(s[1] * 2, 16)
-                    g = int(s[2] * 2, 16)
-                    b = int(s[3] * 2, 16)
-                else:
-                    r = int(s[1:3], 16)
-                    g = int(s[3:5], 16)
-                    b = int(s[5:7], 16)
-                pal = [
-                    (0, 0, 0),
-                    (255, 255, 255),
-                    (255, 0, 0),
-                    (0, 255, 0),
-                    (0, 0, 255),
-                    (255, 255, 0),
-                    (0, 255, 255),
-                    (255, 0, 255),
-                ]
-                best, bd = 1, 1 << 30
-                for i, (pr, pg, pb) in enumerate(pal):
-                    d = (r - pr) * (r - pr) + (g - pg) * (g - pg) + (b - pb) * (b - pb)
-                    if d < bd:
-                        best, bd = i, d
-                self.canvas.fill_style = best
-            except Exception:
-                self.canvas.fill_style = 7
-        else:
-            self.canvas.fill_style = 7
+        cache = getattr(self, "_css_cache", None)
+        if cache is None:
+            cache = self._css_cache = {}
+        idx = cache.get(s)
+        if idx is None:
+            rgb = parse_css_color(s)
+            if rgb is None:
+                idx = 7  # unknown string — keep legacy magenta tell
+            elif rgb == (0, 0, 0):
+                idx = 0
+            else:
+                idx = nearest_palette_index(self.canvas.palette, rgb, lo=1)
+            cache[s] = idx
+        self.canvas.fill_style = idx
         return None
 
     def _nat_log(self, *args):
@@ -755,6 +772,15 @@ class Machine:
             pix = img.get("_pix")
             iw = int(img.get("width") or 0)
             ih = int(img.get("height") or 0)
+            # NEW: ASET handle — pixels live in the external SRAM asset bank
+            if pix is None and img.get("_spr") is not None:
+                si = int(img["_spr"])
+                descs = self._spr_descs
+                if 0 <= si < len(descs):
+                    w_, h_, off = descs[si]
+                    if w_ > 0 and h_ > 0:
+                        pix = self.sram.view(off, w_ * h_)
+                        iw, ih = w_, h_
         if not pix or iw <= 0 or ih <= 0:
             return None
         if sw is None:
@@ -771,11 +797,84 @@ class Machine:
             pass
         return None
 
-    def _nat_fill_text(self, t, x, y, style=None, align="left"):
+    def _font_scale(self, font=None) -> int:
+        """ctx.font '20px Arial' → integer glyph scale (8×8 base), including
+        the current canvas x-scale (DONKEY world→glass setTransform)."""
+        px = 8.0
+        if font:
+            m = None
+            import re as _re
+
+            m = _re.search(r"(\d+(?:\.\d+)?)\s*px", str(font))
+            if m:
+                px = float(m.group(1))
+        sx = float(getattr(self, "_ctx_sx", 1) or 1)
+        return max(1, int(round(px * sx / 8.0)))
+
+    def _nat_fill_text(self, t, x, y, style=None, align="left", font=None):
         if style is not None:
             self._nat_fill_style_css(style)
         ix, iy = self._xf(x, y)
-        self.canvas.fill_text(t, ix, iy, align=str(align or "left"))
+        self.canvas.fill_text(
+            t, ix, iy, align=str(align or "left"), scale=self._font_scale(font)
+        )
+        return None
+
+    def _nat_measure_text(self, t, font=None):
+        # NEW: width matches fill_text glyph geometry (8 px × scale per char)
+        return {"width": len(str(t)) * 8 * self._font_scale(font)}
+
+    def _nat_stroke_rect(self, x, y, w, h, style=None):
+        # NEW: 1px outline via four edges (device-space thickness)
+        if style is not None:
+            self._nat_fill_style_css(style)
+        ix, iy, iw, ih = self._xf(x, y, w, h)
+        c = self.canvas.fill_style
+        self.canvas.fill_rect(ix, iy, iw, 1, c)
+        self.canvas.fill_rect(ix, iy + ih - 1, iw, 1, c)
+        self.canvas.fill_rect(ix, iy, 1, ih, c)
+        self.canvas.fill_rect(ix + iw - 1, iy, 1, ih, c)
+        return None
+
+    def _nat_get_image_data(self, x=0, y=0, w=0, h=0):
+        """NEW: indexed snapshot of the BACK buffer (PACMAN maze cache).
+        Device space — Canvas2D getImageData ignores the transform."""
+        ix, iy, iw, ih = int(x), int(y), int(w), int(h)
+        iw = max(0, iw)
+        ih = max(0, ih)
+        buf = bytearray(iw * ih)
+        back = self.canvas.back
+        cw, chh = self.canvas.width, self.canvas.height
+        x0 = max(0, -ix)
+        x1 = min(iw, cw - ix)
+        for yy in range(ih):
+            sy = iy + yy
+            if sy < 0 or sy >= chh or x1 <= x0:
+                continue
+            row = sy * cw + ix
+            drow = yy * iw
+            buf[drow + x0 : drow + x1] = back[row + x0 : row + x1]
+        return {"__class": "ImageData", "width": iw, "height": ih, "_idx": bytes(buf)}
+
+    def _nat_put_image_data(self, d, dx=0, dy=0, *_a):
+        if not isinstance(d, dict) or d.get("_idx") is None:
+            return None
+        iw = int(d.get("width") or 0)
+        ih = int(d.get("height") or 0)
+        buf = d["_idx"]
+        ix, iy = int(dx), int(dy)
+        back = self.canvas.back
+        cw, chh = self.canvas.width, self.canvas.height
+        self.canvas.dirty = True
+        x0 = max(0, -ix)
+        x1 = min(iw, cw - ix)
+        for yy in range(ih):
+            ty = iy + yy
+            if ty < 0 or ty >= chh or x1 <= x0:
+                continue
+            row = ty * cw + ix
+            srow = yy * iw
+            back[row + x0 : row + x1] = buf[srow + x0 : srow + x1]
         return None
 
     def _nat_fill_path(self, spec, style=None):
@@ -814,17 +913,46 @@ class Machine:
                 cx, cy, r = float(parts[1]), float(parts[2]), float(parts[3])
                 ix, iy = self._xf(cx, cy)
                 sx = float(getattr(self, "_ctx_sx", 1) or 1)
-                self.canvas.fill_circle(ix, iy, max(1, int(float(r) * sx)), c, stroke)
+                # NEW: real start/end angles (PACMAN mouth / ghost skirts)
+                a0 = float(parts[4]) if len(parts) > 4 else 0.0
+                a1 = float(parts[5]) if len(parts) > 5 else 0.0
+                ccw = bool(len(parts) > 6 and float(parts[6]))
+                if len(parts) <= 4 or abs(a1 - a0) >= 2 * math.pi - 1e-6:
+                    self.canvas.fill_circle(
+                        ix, iy, max(1, int(float(r) * sx)), c, stroke
+                    )
+                elif a0 != a1:
+                    self.canvas.fill_circle(
+                        ix, iy, max(1, int(float(r) * sx)), c, stroke,
+                        a0=a0, a1=a1, ccw=ccw,
+                    )
+                self._path_x, self._path_y = ix, iy
             elif op == "L" and len(parts) >= 3:
                 x1, y1 = self._xf(float(parts[1]), float(parts[2]))
                 x0 = getattr(self, "_path_x", x1)
                 y0 = getattr(self, "_path_y", y1)
                 self._line(x0, y0, x1, y1, c)
                 self._path_x, self._path_y = x1, y1
+            elif op == "Q" and len(parts) >= 5:
+                # NEW: quadratic curve — subdivide into 8 line segments
+                qcx, qcy = self._xf(float(parts[1]), float(parts[2]))
+                x1, y1 = self._xf(float(parts[3]), float(parts[4]))
+                x0 = getattr(self, "_path_x", x1)
+                y0 = getattr(self, "_path_y", y1)
+                px, py = x0, y0
+                for i in range(1, 9):
+                    t = i / 8.0
+                    u = 1.0 - t
+                    bx = int(u * u * x0 + 2 * u * t * qcx + t * t * x1)
+                    by = int(u * u * y0 + 2 * u * t * qcy + t * t * y1)
+                    self._line(px, py, bx, by, c)
+                    px, py = bx, by
+                self._path_x, self._path_y = x1, y1
             elif op == "M" and len(parts) >= 3:
                 self._path_x, self._path_y = self._xf(float(parts[1]), float(parts[2]))
 
     def _line(self, x0, y0, x1, y1, c) -> None:
+        self.canvas.dirty = True
         dx = abs(x1 - x0)
         dy = abs(y1 - y0)
         sx = 1 if x0 < x1 else -1
@@ -985,6 +1113,12 @@ class Machine:
         # NEW: Image stub — onload/src set via props; host path paints real PNG
         return {"__class": "Image", "src": "", "width": 1, "height": 1}
 
+    def _nat_new_array(self, *args):
+        # NEW: Array(n) → n undefined slots (JS); Array(a,b,…) → [a,b,…]
+        if len(args) == 1 and isinstance(args[0], (int, float)):
+            return [None] * max(0, int(args[0]))
+        return list(args)
+
     def _nat_raf(self, fn=None):
         # NEW: queue fn for next frame_tick (bytecode HTML path)
         if not hasattr(self, "_raf_q"):
@@ -993,16 +1127,81 @@ class Machine:
             self._raf_q.append(fn)
         return 1
 
-    def _nat_set_timeout(self, fn=None, ms=0):
-        # NEW: treat as rAF for now (no real clock in bytecode VM yet)
-        return self._nat_raf(fn)
+    # NEW: real frame-scheduled timers — hardware-honest (RTL counts frames
+    # the same way; no host wall-clock in the game loop).
+    _MS_PER_FRAME = 1000.0 / 60.0
+
+    def _ms_to_frames(self, ms) -> int:
+        try:
+            return max(1, int(round(float(ms or 0) / self._MS_PER_FRAME)))
+        except (TypeError, ValueError):
+            return 1
+
+    def _nat_set_timeout(self, fn=None, ms=0, *_a):
+        if fn is None:
+            return 0
+        if not hasattr(self, "_timers"):
+            self._timers = []
+            self._timer_seq = 1
+            self._frame_no = 0
+        tid = self._timer_seq
+        self._timer_seq += 1
+        self._timers.append([self._frame_no + self._ms_to_frames(ms), fn, None, tid])
+        return tid
+
+    def _nat_set_interval(self, fn=None, ms=0, *_a):
+        if fn is None:
+            return 0
+        if not hasattr(self, "_timers"):
+            self._timers = []
+            self._timer_seq = 1
+            self._frame_no = 0
+        tid = self._timer_seq
+        self._timer_seq += 1
+        period = self._ms_to_frames(ms)
+        self._timers.append([self._frame_no + period, fn, period, tid])
+        return tid
+
+    def _nat_clear_timer(self, tid=None, *_a):
+        if tid is None or not hasattr(self, "_timers"):
+            return None
+        self._timers = [t for t in self._timers if t[3] != tid]
+        return None
 
     def _nat_add_event_listener(self, event=None, fn=None, *_a):
-        # NEW: store keydown/keyup handlers for bytecode HTML
+        # NEW: store keydown/keyup handlers for bytecode HTML.
+        # Chrome semantics: the same (type, listener) pair registers once —
+        # DONKEY re-adds startSelect every title frame.
         if not hasattr(self, "_listeners"):
             self._listeners = []
         if event is not None and fn is not None:
-            self._listeners.append((str(event), fn))
+            ev = str(event)
+            for et, f in self._listeners:
+                if et == ev and f is fn:
+                    return None
+            self._listeners.append((ev, fn))
+        return None
+
+    def _nat_remove_event_listener(self, event=None, fn=None, *_a):
+        # NEW: remove by (type, listener identity) — DONKEY menu handlers
+        if event is None or fn is None or not hasattr(self, "_listeners"):
+            return None
+        ev = str(event)
+        self._listeners = [
+            (et, f) for et, f in self._listeners if not (et == ev and f is fn)
+        ]
+        return None
+
+    def _nat_dispatch_event(self, ev=None, *_a):
+        # NEW: document/window.dispatchEvent(ev) — fire listeners matching
+        # ev.type with the synthetic event object (DONKEY boot Enter).
+        chunk = getattr(self, "_html_chunk", None)
+        if chunk is None or not isinstance(ev, dict):
+            return None
+        etype = str(ev.get("type") or "keydown")
+        for et, fn in list(getattr(self, "_listeners", [])):
+            if et == etype:
+                self.vm.call_fn(chunk, fn, [ev])
         return None
 
     def _nat_fire_click(self, *_a):
@@ -1055,12 +1254,23 @@ class Machine:
         self.input._sync_play_bits_to_keys()
         for et, code, key in self.input.drain_key_events():
             self._fire_listeners(et, code, key)
+        # NEW: surface listener errors (they used to die silently mid-handler)
+        if self.vm.error:
+            self._print(self.vm.error)
+            self.hard_break()
+            return
+        self._frame_no = getattr(self, "_frame_no", 0) + 1
+        # NEW: deterministic frame clock — Date.now/getTime tick with frames
+        self.vm.time_ms = self._frame_no * (1000.0 / 60.0)
         # drain rAF (one generation)
         q = getattr(self, "_raf_q", [])
         self._raf_q = []
+        # NEW: browser-style rAF timestamp (ms) — DONKEY's update(timestamp)
+        # computes elapsed from it; without it DK animation/barrels froze.
+        raf_ts = self._frame_no * (1000.0 / 60.0)
         for fn in q:
             try:
-                self.vm.call_fn(chunk, fn, [])
+                self.vm.call_fn(chunk, fn, [raf_ts])
             except Exception as e:
                 self._print(f"ERROR: JS {e}")
                 self.hard_break()
@@ -1069,17 +1279,37 @@ class Machine:
                 self._print(self.vm.error)
                 self.hard_break()
                 return
-        # After rAF so title screens have bound keydown (DONKEY Enter to start)
-        if getattr(self, "_enter_left", 0) > 0:
-            self._enter_delay = getattr(self, "_enter_delay", 0) - 1
-            if self._enter_delay <= 0:
-                self._fire_listeners("keydown", 13, "Enter")
-                self._fire_listeners("keyup", 13, "Enter")
-                self._enter_left -= 1
-                self._enter_delay = 8
-        # NEW: HTML canvas draws to back; present like dukpy host / swapBuffers
-        self.canvas.swap()
-        self._keep_fb = True
+        # NEW: fire due frame-scheduled timers AFTER rAF. A sub-frame timeout
+        # set mid-handler (DK isThrowing, 10 ms) lands after the next rAF in
+        # Chrome because the handler itself eats most of the frame slot; the
+        # rAF handler must see the flag before the timeout clears it.
+        due = [t for t in getattr(self, "_timers", []) if t[0] <= self._frame_no]
+        for t in due:
+            if t not in self._timers:
+                continue  # cleared by an earlier callback this frame
+            if t[2] is None:
+                self._timers.remove(t)
+            else:
+                t[0] = self._frame_no + t[2]  # interval reschedule
+            try:
+                self.vm.call_fn(chunk, t[1], [])
+            except Exception as e:
+                self._print(f"ERROR: JS {e}")
+                self.hard_break()
+                return
+            if self.vm.error:
+                self._print(self.vm.error)
+                self.hard_break()
+                return
+        # NEW: no machine auto-Enter — the HTML decides its own boot keys
+        # (DONKEY ships a boot script that dispatchEvent()s Enter; PACMAN's
+        # game stage binds Enter as PAUSE, so a fake Enter froze it).
+        # NEW: present only frames the game drew (swap-on-draw) — setTimeout
+        # paced loops draw every Nth tick; blind swap flashed stale buffers.
+        if self.canvas.dirty:
+            self.canvas.swap()
+            self.canvas.dirty = False
+            self._keep_fb = True
 
     def _fire_listeners(self, event: str, key_code: int, key: str) -> None:
         chunk = getattr(self, "_html_chunk", None)

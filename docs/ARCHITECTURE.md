@@ -9,6 +9,71 @@ not a redesign.
 **Constitution:** [../CONSTITUTION.md](../CONSTITUTION.md) wins on conflict.
 **Board / HDMI / input freeze:** [FPGA_BRINGUP.md](FPGA_BRINGUP.md).
 
+**One-page poster** (sibling style to the JMR BASIC Architecture 2.0 diagram):
+
+![JMR JS Computer — Architecture V1 poster](jmr_js_architecture_v1.png)
+
+### Architecture V1 poster errata (AI-rendered image; text noise)
+
+The block diagram is correct: compile-on-RUN, three memory rooms, HDMI scanout
+from the **on-chip** dual framebuffer, external SRAM = blitter-source only.
+Known text errors baked into the render — trust this list, not the poster
+fine print:
+
+- SRAM port contract is `addr[20:0]`, `wdata[15:0]`, `rdata[15:0]`, **`we` /
+  `req` / `ack`** at core clock — poster `rge` is a garbled **`req`**.
+- 4 MB map: **`0x000000–0x0002FF`** title palette (256 × RGB888 = 768 bytes),
+  **`0x000300+`** 8-bpp sprite banks, top reserved. Poster extra zeros
+  (`0x00000000` / `0x0003000+`) are wrong.
+- Engines: Event/Timer/**rAF** (`requestAnimationFrame`), not “IAF”.
+- Missing compile path → fail loud (**`?NH`**), never fake output. Poster
+  “(RUN)” in that warning is wrong.
+- Blitter note: “**Pixels** never enter code BRAM.” Poster “Never never”
+  is a double-word glitch. There is no `NAME.DAT` file.
+- On-chip working set: **microcode ROM** and **FIFOs** are separate items
+  (poster jammed them as “microcode ROM FIFOs”).
+- FPGA HDMI PHY on this poster (Digilent `rgb2dvi` TMDS, Nexys Video J8) is
+  the **board** path. ASIC HDMI is parallel RGB out of the chip through an
+  external transmitter — see the ASIC board poster. Neither path scans out
+  from asset SRAM.
+- ASIC rung “~30 mm² die, custom padring, ~1 MB-class on-chip SRAM” is
+  Constitution-frozen. **QFN-100** is a later Rev A package proposal and
+  lives on the ASIC board poster, not this one.
+
+**ASIC board poster (Rev A proposal)** — QFN-100 chip + external 4 MB asset
+SRAM + HDMI transmitter carrier board, sibling style to the JMR BASIC ASIC
+board poster:
+
+![JMR JS ASIC — Rev A board poster](jmr_js_asic_board_rev_a.png)
+
+### ASIC board poster errata (AI-rendered image; text noise)
+
+The block diagram, buses, and video path are correct (HDMI scans out from the
+**on-chip** front framebuffer; U8 asset SRAM feeds the blitter only). Known
+text errors baked into the render — trust this list, not the poster fine print:
+
+- **Proposals, not frozen:** QFN-100 (12×12 mm), TFP410-class HDMI transmitter,
+  12-bit DDR RGB video bus, and the power-domain values are Rev A proposals.
+  The Constitution freezes only the die target (~30 mm², custom padring,
+  ~1 MB-class on-chip SRAM) and the IS61WV204816 asset-SRAM port contract.
+- U8 part number must read **ISSI IS61WV204816** (2M × 16, 4 MB).
+- SYSTEM RULES §1: garbled bullet should read "Game **art lives** OFF-chip in
+  the 4 MB SRAM asset bank (never in **code** RAM)."
+- SYSTEM RULES §4: SRAM bullet should read "A[20:0] + DQ[15:0] +
+  CE#/OE#/WE#/UB#/LB# (async SRAM bus)"; the microSD/UART/audio bullets are
+  garbled — correct text: "microSD SPI (CS/SCK/MOSI/MISO), FAT32:
+  NAME.HTML titles + invisible .JSH compile cache", "Console UART via
+  CH340/CP2102 micro-USB (debug/tether only)", "Audio PWM → amp → 3.5 mm
+  jack (V1-later)".
+- PIN SUMMARY table: title should read "(Indicative Budget)"; the
+  "RRAM_CTRL" row is spurious; Audio (PWM) count is **2** (PWM_L, PWM_R);
+  rows do not sum — authoritative budget: SRAM addr 21 + SRAM data 16 +
+  SRAM ctrl 5 + RGB DDR 12 + video sync/clk 4 + PS/2 2 + joystick 6 +
+  SPI 4 + UART 2 + audio 2 + clk/rst/test 3 + LEDs 3 + power/gnd 20 = 100.
+- BOARD NOTES: "debug/therm" → "debug/**tether**"; "NAME.FMT tiles" →
+  "NAME.HTML titles"; ".JSlf" → ".JSH".
+- Pin numbers on the QFN drawing are illustrative placement only.
+
 ---
 
 ## The idea
@@ -31,7 +96,8 @@ There is no hidden general-purpose core underneath. **No dukpy/V8/browser as
 the machine.** V1 is a **Canvas game computer** (HTML titles → JMR bytecode).
 
 ```
-NAME.HTML  →  RUN always compiles  →  fresh .JSH  →  bytecode VM + engines
+NAME.HTML  →  RUN always compiles  →  fresh .JSH (code + ASET art)
+           →  code → code BRAM, ASET → external SRAM asset bank  →  VM
 ```
 
 User types only `LOAD "NAME.HTML"` / `RUN`. Chrome may open the same file for
@@ -60,7 +126,10 @@ Pmod joystick ─► GPIO reader ───┘
                               ↓
               Paint / Video (palette + HDMI 640×480)
                               ↓
-          Framebuffers (V1: dual 640×480 BRAM; DDR3 later)
+          Framebuffers (V1: dual 640×480 BRAM)
+
+Blitter ◄──► external SRAM asset bank (4 MB, simple SRAM port;
+             FPGA board = DDR3 behind a bridge; ASIC = IS61WV204816)
 ```
 
 Also: String, Event/Timer, Storage, Audio (later) — separate engines, shared
@@ -96,11 +165,68 @@ host blocks. Compile/parse may take many cycles — that is intentional.
 
 ## BRAM / LUT policy
 
-Prefer BRAM for palette, microcode, FIFOs, font, line buffers, bounded stacks.
-**V1 game FB (FPGA-SIM / next bit):** native dual **640×480** in `jmr_mini_fb.sv`
-BRAM — not DDR3 yet. Constitution still wants heaps / full FB in external DDR3
-later; the 03:36 flashed bit was still 160×120 scaled. Do not invent LUT counts
-from that mix. Live chip totals: [FPGA_FIT.md](FPGA_FIT.md).
+Prefer BRAM for palette, microcode, FIFOs, font, line buffers, bounded stacks,
+**and the V1 working set.** Dual **640×480** FB lives in `jmr_mini_fb.sv`
+BRAM. Also on-chip: code BRAM, JS heap. Game art lives in the **external
+SRAM asset bank** (see below), never in code BRAM. µSD holds `NAME.HTML` +
+the internal `.JSH` compile cache (code + ASET sections in one file — no
+`NAME.DAT`). Do not fake a 64K map. Do not pack Donkey `data:image` sheets
+into code BRAM or downscale them to “fit.”
+
+**ASIC target (frozen 2026-08-13): ~30 mm² die ("double chip"), our own
+custom padring, ~1 MB-class on-chip SRAM.** Use the BRAM the design needs
+for speed; never shrink BRAM to chase a small die. Live FPGA chip totals:
+[FPGA_FIT.md](FPGA_FIT.md).
+
+---
+
+## External SRAM asset bank
+
+One **4 MByte SRAM, 2M × 16 (ISSI IS61WV204816)** behind a simple
+synchronous port. Same port, three implementations; nothing above the port
+ever changes:
+
+| Rung | Implementation |
+|---|---|
+| FPGA-SIM | behavioral 4 MB model behind the identical port (RTL above is real) |
+| FPGA board | Nexys Video **DDR3** behind a MIG-based bridge (first 4 MB used) |
+| ASIC / final PCB | the real IS61WV204816; trivial timing wrapper |
+
+**Port contract (`jmr_sram_port`, core clock):**
+
+```
+addr  [20:0]   16-bit word address (2M words = 4 MB)
+wdata [15:0]   write data
+rdata [15:0]   read data (valid with ack)
+we             1 = write, 0 = read
+req            request strobe (hold until ack)
+ack            completion strobe (1+ cycles later; bridge may stall)
+```
+
+**4 MB map (V1):**
+
+```
+0x000000 – 0x0002FF   title palette (256 × RGB888 = 768 bytes)
+0x000300 – top        sprite pixel banks (8-bpp indexed, 2-byte aligned)
+top of bank           reserved (future FB / heap migration)
+```
+
+**`.JSH` container (JSB v2 + ASET):**
+
+- Header flags: bit0 = v2 trailer (existing), **bit1 = ASET present**. When
+  bit1 is set, a `u32 aset_byte_off` (offset from file start) follows the
+  12-byte header, before consts.
+- Code part (header, consts, ops, v2 trailer) streams to **code BRAM** as
+  today. The v2 trailer carries **SPRD** sprite descriptors
+  (`n_spr:u16`, then per sprite `w:u16, h:u16, sram_off:u32`) — handles
+  only, no pixels. Legacy SPR1 (pixels in trailer) remains only for tiny
+  `.JS` demos.
+- ASET part at `aset_byte_off`: magic `"ASET"` + `u32 payload_len` +
+  payload = palette block (768 bytes) + sprite banks. The loader streams
+  the payload to asset SRAM address 0 (palette also loads the palette
+  BRAM). `sram_off` descriptors point into this payload.
+- Missing/truncated ASET when SPRD expects one → **fail loud** (`?NH`-class
+  error), never silent blank sprites.
 
 ## FM → RTL correspondence
 
@@ -120,9 +246,12 @@ As modules land, keep a table here: diagram block → `functional_model/…` →
 
 **Honest path:** product titles are `*.HTML`. **`RUN` always compiles** the
 loaded HTML into the **JMR bytecode VM** (fresh internal `.JSH` output) on
-PYTHON, FPGA-SIM, BOARD, ASIC. Never prefer a stale `.JSH`. dukpy is a
-**cheat / debt** if used as the game engine. Never call dukpy “FPGA-SIM.”
-User never types `.JSH` — only `LOAD "NAME.HTML"` / `RUN`.
+PYTHON, FPGA-SIM, BOARD, ASIC. Full-quality graphics ride the `.JSH` ASET
+section into the external SRAM asset bank (no `NAME.DAT`; EDIT+RUN
+regenerates everything). Never
+prefer a stale `.JSH`. dukpy is a **cheat / debt** if used as the game engine.
+Never call dukpy “FPGA-SIM.” User never types `.JSH` — only
+`LOAD "NAME.HTML"` / `RUN`.
 See [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and
 `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`.
 

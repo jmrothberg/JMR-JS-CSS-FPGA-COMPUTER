@@ -86,6 +86,9 @@ class Chunk:
     classes: Optional[Dict[str, dict]] = None
     # NEW: card-build sprite pack (w, h, indexed pixels) for drawImage
     sprites: Optional[List[Tuple[int, int, bytes]]] = None
+    # NEW (external SRAM asset bank): per-title 256-entry RGB888 palette.
+    # Entries 0..7 stay the legacy fixed 8; 8..255 = harvested + adaptive.
+    palette: Optional[List[Tuple[int, int, int]]] = None
 
 
 class VM:
@@ -98,16 +101,34 @@ class VM:
         self.natives = natives or {}
         self.globals: Dict[str, Any] = {}
         self.stack: List[Any] = []
-        # NEW: (return_ip, saved__this, ctor_obj_or_None)
-        self.call_stack: List[Tuple[int, Any, Any]] = []
+        # NEW: (return_ip, saved__this, ctor_obj_or_None, saved_env)
+        self.call_stack: List[Tuple[int, Any, Any, Any]] = []
+        # NEW: lexical environment — dict of locals with "__par" parent link.
+        # None at top level (globals). PACMAN builds 12 game stages inside
+        # _COIGIG.forEach(function(config){var stage,map,player;...}); a flat
+        # namespace left every closure pointing at the LAST level's player.
+        self.env: Optional[dict] = None
         self.halted = False
         self.error: Optional[str] = None
+        # NEW: deterministic frame clock (ms). The machine sets this every
+        # frame so Date.now/getTime pace games by VM frames, not host wall
+        # time (PACMAN's `now-timestamp<16` limiter skipped every draw when
+        # the FM ticked faster than real time). None → wall clock fallback.
+        self.time_ms: Optional[float] = None
+
+    def _now_ms(self) -> int:
+        if self.time_ms is not None:
+            return int(self.time_ms)
+        import time as _time
+
+        return int(_time.time() * 1000)
 
     def reset_run(self) -> None:
         self.stack.clear()
         self.call_stack.clear()
         self.halted = False
         self.error = None
+        self.env = None
 
     def run(self, chunk: Chunk, max_steps: int = 1_000_000) -> None:
         # NEW: shared opcode loop lives in _exec (also used by call_fn)
@@ -130,9 +151,20 @@ class VM:
         entry = int(fn["entry"])
         if entry < 0:
             return None
-        for a in argv or []:
+        # NEW: bind exactly nparam args (JS semantics) — the prologue pops
+        # one value per declared param, so extra args (forEach idx) must be
+        # trimmed and missing ones padded with undefined.
+        args_in = list(argv or [])
+        nparam = fn.get("nparam")
+        if nparam is not None:
+            n = int(nparam)
+            args_in = args_in[:n] + [None] * max(0, n - len(args_in))
+        for a in args_in:
             self.stack.append(a)
-        self.call_stack.append((-1, self.globals.get("__this"), None))
+        # NEW: fresh lexical env chained to the Fn's captured scope
+        saved_env = self.env
+        self.call_stack.append((-1, self.globals.get("__this"), None, saved_env))
+        self.env = {"__par": fn.get("env")}
         if fn.get("bound_this") is not None:
             self.globals["__this"] = fn["bound_this"]
         # Run from entry without clearing stack/globals (nested from rAF / click)
@@ -142,6 +174,8 @@ class VM:
         # Nested error should surface; don't leave halted stuck for outer frame_tick
         if not self.error:
             self.halted = saved_halted
+        # NEW: restore caller env even if the callee errored mid-frame
+        self.env = saved_env
         return self.stack.pop() if self.stack else None
 
     def _exec(self, chunk: Chunk, start_ip: int = 0, max_steps: int = 1_000_000, reset: bool = True) -> None:
@@ -164,16 +198,37 @@ class VM:
                 self.stack.append(chunk.consts[args[0]])
             elif op == Op.LOAD_VAR:
                 name = chunk.names[args[0]]
-                self.stack.append(self.globals.get(name))
+                # NEW: lexical env chain first, then globals
+                e = self.env
+                while e is not None:
+                    if name in e:
+                        self.stack.append(e[name])
+                        break
+                    e = e.get("__par")
+                else:
+                    self.stack.append(self.globals.get(name))
             elif op == Op.STORE_VAR:
                 name = chunk.names[args[0]]
                 # NEW: tolerate empty stack (partial expr compile) — undefined
-                self.globals[name] = self.stack.pop() if self.stack else None
+                val = self.stack.pop() if self.stack else None
+                # NEW: assign in the declaring scope; undeclared → global (JS)
+                e = self.env
+                while e is not None:
+                    if name in e:
+                        e[name] = val
+                        break
+                    e = e.get("__par")
+                else:
+                    self.globals[name] = val
             elif op == Op.LET_VAR:
-                # LLM NOTE: let/const under startLoop — do not reset each frame.
+                # LLM NOTE: let/const under startLoop — do not reset each frame
+                # at TOP LEVEL. Inside a function call env, declare/assign in
+                # the CURRENT env (fresh per call, so `let x = 0` re-inits).
                 name = chunk.names[args[0]]
                 val = self.stack.pop() if self.stack else None
-                if name not in self.globals:
+                if self.env is not None:
+                    self.env[name] = val
+                elif name not in self.globals:
                     self.globals[name] = val
             elif op == Op.ADD:
                 b, a = self.stack.pop(), self.stack.pop()
@@ -220,16 +275,17 @@ class VM:
                     self.stack.append(a % b)
             elif op == Op.LT:
                 b, a = self.stack.pop(), self.stack.pop()
-                if a is None or b is None:
-                    self.stack.append(False)
-                else:
-                    self.stack.append(a < b)
+                # NEW: coerce None→0 like ADD/SUB do. `>=` compiles to NOT LT,
+                # so "None compares False" inverted into True there (DONKEY
+                # `!(this.jumpHeight >= 750)` broke platform collision).
+                a = 0 if a is None else a
+                b = 0 if b is None else b
+                self.stack.append(a < b)
             elif op == Op.GT:
                 b, a = self.stack.pop(), self.stack.pop()
-                if a is None or b is None:
-                    self.stack.append(False)
-                else:
-                    self.stack.append(a > b)
+                a = 0 if a is None else a
+                b = 0 if b is None else b
+                self.stack.append(a > b)
             elif op == Op.EQ:
                 b, a = self.stack.pop(), self.stack.pop()
                 self.stack.append(a == b)
@@ -252,6 +308,40 @@ class VM:
                 argv = [self.stack.pop() for _ in range(argc)][::-1]
                 fn = self.natives.get(name)
                 if fn is None:
+                    # NEW: forward-declared user fn — call site compiled before
+                    # `function update(){}` existed (DONKEY startGame → update()).
+                    fmeta = (chunk.functions or {}).get(name)
+                    if fmeta is not None:
+                        self.call_stack.append(
+                            (ip, self.globals.get("__this"), None, self.env)
+                        )
+                        # direct decl call: chain to caller env (flat-compatible)
+                        self.env = {"__par": self.env}
+                        for a in argv:
+                            self.stack.append(a)
+                        ip = int(fmeta[0])
+                        continue
+                    # NEW: env/global holds a first-class Fn value (var f = () => ...)
+                    gfn = None
+                    e = self.env
+                    while e is not None:
+                        if name in e:
+                            gfn = e[name]
+                            break
+                        e = e.get("__par")
+                    else:
+                        gfn = self.globals.get(name)
+                    if isinstance(gfn, dict) and gfn.get("__class") == "Fn":
+                        self.call_stack.append(
+                            (ip, self.globals.get("__this"), None, self.env)
+                        )
+                        self.env = {"__par": gfn.get("env")}
+                        if gfn.get("bound_this") is not None:
+                            self.globals["__this"] = gfn["bound_this"]
+                        for a in argv:
+                            self.stack.append(a)
+                        ip = int(gfn["entry"])
+                        continue
                     have = ",".join(sorted(self.natives)) or "(none)"
                     self.error = f"ERROR: UNKNOWN NATIVE {name} (have: {have})"
                     self.halted = True
@@ -261,7 +351,11 @@ class VM:
                 self.stack.append(result)
             elif op == Op.CALL_USER:
                 entry = int(args[0])
-                self.call_stack.append((ip, self.globals.get("__this"), None))
+                self.call_stack.append(
+                    (ip, self.globals.get("__this"), None, self.env)
+                )
+                # direct decl call: chain to caller env (flat-compatible)
+                self.env = {"__par": self.env}
                 ip = entry
             elif op == Op.CALL_VAL:
                 # NEW: call Fn on stack — (function(){...}()) IIFE
@@ -269,7 +363,17 @@ class VM:
                 argv = [self.stack.pop() for _ in range(argc)][::-1]
                 fn = self.stack.pop()
                 if isinstance(fn, dict) and fn.get("__class") == "Fn":
-                    self.call_stack.append((ip, self.globals.get("__this"), None))
+                    self.call_stack.append(
+                        (ip, self.globals.get("__this"), None, self.env)
+                    )
+                    # NEW: top-level IIFE runs FLAT (no env) — module locals
+                    # stay global so class methods see their sprite sheets;
+                    # nested closures still get a per-call env.
+                    if not (fn.get("iife") and self.env is None and fn.get("env") is None):
+                        self.env = {"__par": fn.get("env")}
+                    # NEW: honor captured `this` on the Fn value (arrows/bind)
+                    if fn.get("bound_this") is not None:
+                        self.globals["__this"] = fn["bound_this"]
                     for a in argv:
                         self.stack.append(a)
                     ip = int(fn["entry"])
@@ -315,18 +419,23 @@ class VM:
                             entry = int(fn["entry"])
                             nparam = int(fn.get("nparam", 2))
 
-                            def _cmp(a, b, _entry=entry, _np=nparam):
+                            def _cmp(a, b, _entry=entry, _np=nparam, _fenv=fn.get("env")):
                                 # re-entrant mini-run of comparator
                                 saved = (
                                     self.stack[:],
                                     self.call_stack[:],
                                     self.globals.get("__this"),
                                     ip,
+                                    self.env,
                                 )
                                 self.stack.append(a)
                                 self.stack.append(b)
                                 # bind params like CALL_USER prologue expects args on stack
-                                self.call_stack.append((-1, self.globals.get("__this"), None))
+                                self.call_stack.append(
+                                    (-1, self.globals.get("__this"), None, self.env)
+                                )
+                                # NEW: comparator params LET_VAR into a fresh env
+                                self.env = {"__par": _fenv}
                                 rip = _entry
                                 # run until RET_VAL to our mark
                                 steps2 = 0
@@ -343,8 +452,11 @@ class VM:
                                         # nested return
                                         if not self.call_stack:
                                             break
-                                        rip, saved_this, ctor_obj = self.call_stack.pop()
+                                        rip, saved_this, ctor_obj, saved_env2 = (
+                                            self.call_stack.pop()
+                                        )
                                         self.globals["__this"] = saved_this
+                                        self.env = saved_env2
                                         if ctor_obj is not None:
                                             if self.stack:
                                                 self.stack.pop()
@@ -353,9 +465,33 @@ class VM:
                                     if op2 == Op.LOAD_CONST:
                                         self.stack.append(chunk.consts[args2[0]])
                                     elif op2 == Op.LOAD_VAR:
-                                        self.stack.append(self.globals.get(chunk.names[args2[0]]))
+                                        _n2 = chunk.names[args2[0]]
+                                        _e2 = self.env
+                                        while _e2 is not None:
+                                            if _n2 in _e2:
+                                                self.stack.append(_e2[_n2])
+                                                break
+                                            _e2 = _e2.get("__par")
+                                        else:
+                                            self.stack.append(self.globals.get(_n2))
                                     elif op2 == Op.STORE_VAR:
-                                        self.globals[chunk.names[args2[0]]] = self.stack.pop()
+                                        _n2 = chunk.names[args2[0]]
+                                        _v2 = self.stack.pop()
+                                        _e2 = self.env
+                                        while _e2 is not None:
+                                            if _n2 in _e2:
+                                                _e2[_n2] = _v2
+                                                break
+                                            _e2 = _e2.get("__par")
+                                        else:
+                                            self.globals[_n2] = _v2
+                                    elif op2 == Op.LET_VAR:
+                                        _n2 = chunk.names[args2[0]]
+                                        _v2 = self.stack.pop()
+                                        if self.env is not None:
+                                            self.env[_n2] = _v2
+                                        elif _n2 not in self.globals:
+                                            self.globals[_n2] = _v2
                                     elif op2 == Op.GET_PROP:
                                         name = chunk.names[args2[0]]
                                         o = self.stack.pop()
@@ -392,6 +528,7 @@ class VM:
                                 self.stack[:] = saved[0]
                                 self.call_stack[:] = saved[1]
                                 self.globals["__this"] = saved[2]
+                                self.env = saved[4]
                                 return int(result) if result is not None else 0
 
                             from functools import cmp_to_key
@@ -425,9 +562,152 @@ class VM:
                         else:
                             self.stack.append(None)
                         continue
+                    # NEW (full-game builtins): fill/map/filter/join/… (PACMAN)
+                    if meth == "fill":
+                        v = argv[0] if argv else None
+                        for i in range(len(obj)):
+                            obj[i] = v
+                        self.stack.append(obj)
+                        continue
+                    if meth == "map":
+                        out = []
+                        if argv and isinstance(argv[0], dict) and argv[0].get("__class") == "Fn":
+                            for idx, el in enumerate(list(obj)):
+                                out.append(self.call_fn(chunk, argv[0], [el, idx]))
+                                if self.error:
+                                    return
+                        self.stack.append(out)
+                        continue
+                    if meth == "filter":
+                        out = []
+                        if argv and isinstance(argv[0], dict) and argv[0].get("__class") == "Fn":
+                            for idx, el in enumerate(list(obj)):
+                                keep = self.call_fn(chunk, argv[0], [el, idx])
+                                if self.error:
+                                    return
+                                if keep:
+                                    out.append(el)
+                        self.stack.append(out)
+                        continue
+                    if meth == "find" or meth == "findIndex":
+                        hit, hidx = None, -1
+                        if argv and isinstance(argv[0], dict) and argv[0].get("__class") == "Fn":
+                            for idx, el in enumerate(list(obj)):
+                                ok = self.call_fn(chunk, argv[0], [el, idx])
+                                if self.error:
+                                    return
+                                if ok:
+                                    hit, hidx = el, idx
+                                    break
+                        self.stack.append(hit if meth == "find" else hidx)
+                        continue
+                    if meth == "some" or meth == "every":
+                        res = meth == "every"
+                        if argv and isinstance(argv[0], dict) and argv[0].get("__class") == "Fn":
+                            for idx, el in enumerate(list(obj)):
+                                ok = self.call_fn(chunk, argv[0], [el, idx])
+                                if self.error:
+                                    return
+                                if meth == "some" and ok:
+                                    res = True
+                                    break
+                                if meth == "every" and not ok:
+                                    res = False
+                                    break
+                        self.stack.append(res)
+                        continue
+                    if meth == "join":
+                        sep = str(argv[0]) if argv and argv[0] is not None else ","
+                        self.stack.append(
+                            sep.join("" if e is None else str(e) for e in obj)
+                        )
+                        continue
+                    if meth == "concat":
+                        out = list(obj)
+                        for a in argv:
+                            if isinstance(a, list):
+                                out.extend(a)
+                            else:
+                                out.append(a)
+                        self.stack.append(out)
+                        continue
+                    if meth == "includes":
+                        self.stack.append(bool(argv) and argv[0] in obj)
+                        continue
+                    if meth == "shift":
+                        self.stack.append(obj.pop(0) if obj else None)
+                        continue
+                    if meth == "unshift":
+                        for a in reversed(argv):
+                            obj.insert(0, a)
+                        self.stack.append(len(obj))
+                        continue
+                    if meth == "reverse":
+                        obj.reverse()
+                        self.stack.append(obj)
+                        continue
                 if isinstance(obj, str):
                     if meth == "trim":
                         self.stack.append(obj.strip())
+                        continue
+                    # NEW (full-game builtins): string methods (PACMAN maze keys)
+                    if meth == "replace":
+                        if len(argv) >= 2 and isinstance(argv[0], str):
+                            # JS string-arg replace: FIRST occurrence only
+                            self.stack.append(obj.replace(argv[0], str(argv[1]), 1))
+                        else:
+                            self.stack.append(obj)
+                        continue
+                    if meth == "indexOf":
+                        self.stack.append(obj.find(str(argv[0])) if argv else -1)
+                        continue
+                    if meth == "lastIndexOf":
+                        self.stack.append(obj.rfind(str(argv[0])) if argv else -1)
+                        continue
+                    if meth == "includes":
+                        self.stack.append(bool(argv) and str(argv[0]) in obj)
+                        continue
+                    if meth == "split":
+                        if not argv or argv[0] is None:
+                            self.stack.append([obj])
+                        elif argv[0] == "":
+                            self.stack.append(list(obj))
+                        else:
+                            self.stack.append(obj.split(str(argv[0])))
+                        continue
+                    if meth in ("substring", "substr", "slice"):
+                        a = int(argv[0]) if argv else 0
+                        if meth == "substr":
+                            b = a + int(argv[1]) if len(argv) > 1 else len(obj)
+                        else:
+                            b = int(argv[1]) if len(argv) > 1 else len(obj)
+                        if meth != "slice":
+                            a, b = max(0, a), max(0, b)
+                            if a > b:
+                                a, b = b, a
+                        self.stack.append(obj[a:b])
+                        continue
+                    if meth == "charAt":
+                        i = int(argv[0]) if argv else 0
+                        self.stack.append(obj[i] if 0 <= i < len(obj) else "")
+                        continue
+                    if meth == "charCodeAt":
+                        i = int(argv[0]) if argv else 0
+                        self.stack.append(ord(obj[i]) if 0 <= i < len(obj) else None)
+                        continue
+                    if meth == "toUpperCase":
+                        self.stack.append(obj.upper())
+                        continue
+                    if meth == "toLowerCase":
+                        self.stack.append(obj.lower())
+                        continue
+                    if meth == "padStart":
+                        n = int(argv[0]) if argv else 0
+                        fill = str(argv[1]) if len(argv) > 1 else " "
+                        self.stack.append(obj.rjust(n, fill[:1] or " "))
+                        continue
+                    if meth == "repeat":
+                        self.stack.append(obj * max(0, int(argv[0])) if argv else "")
                         continue
                 if isinstance(obj, dict) and obj.get("__class") == "RegExp":
                     # NEW: /re/.test(s) — stub false (skip iOS6 polyfill branch)
@@ -444,6 +724,44 @@ class VM:
                             datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
                             + "Z"
                         )
+                        continue
+                    if meth in ("getTime", "valueOf"):
+                        self.stack.append(self._now_ms())
+                        continue
+                # NEW: Date.now() / performance.now() — seeded DateCtor global
+                if (
+                    isinstance(obj, dict)
+                    and obj.get("__class") == "DateCtor"
+                    and meth == "now"
+                ):
+                    self.stack.append(self._now_ms())
+                    continue
+                # NEW: Object.keys/values/entries/freeze — seeded ObjectCtor global
+                if isinstance(obj, dict) and obj.get("__class") == "ObjectCtor":
+                    src = argv[0] if argv else None
+                    if meth == "keys":
+                        self.stack.append(
+                            [k for k in src if k != "__class" and not str(k).startswith("__")]
+                            if isinstance(src, dict)
+                            else []
+                        )
+                        continue
+                    if meth == "values":
+                        self.stack.append(
+                            [v for k, v in src.items() if k != "__class" and not str(k).startswith("__")]
+                            if isinstance(src, dict)
+                            else []
+                        )
+                        continue
+                    if meth == "entries":
+                        self.stack.append(
+                            [[k, v] for k, v in src.items() if k != "__class" and not str(k).startswith("__")]
+                            if isinstance(src, dict)
+                            else []
+                        )
+                        continue
+                    if meth == "freeze" or meth == "create":
+                        self.stack.append(src if src is not None else {})
                         continue
                 if not isinstance(obj, dict):
                     # NEW: tolerate null.method() from optional DOM
@@ -470,13 +788,17 @@ class VM:
                         self.stack.append(None)
                     continue
                 if cls_name == "Fn" and meth == "bind":
-                    # PACMAN callback.bind(this) — copy Fn with bound_this
+                    # PACMAN callback.bind(this) — copy Fn with bound_this.
+                    # NEW: keep the captured lexical env — losing it detached
+                    # stage key handlers from their level's player/map.
                     bound = {
                         "__class": "Fn",
                         "entry": obj.get("entry"),
                         "nparam": obj.get("nparam", 0),
                         "bound_this": argv[0] if argv else None,
                     }
+                    if obj.get("env") is not None:
+                        bound["env"] = obj["env"]
                     self.stack.append(bound)
                     continue
                 # NEW: Object.assign(target, ...srcs) — PACMAN Item/Map/Stage ctors
@@ -517,7 +839,10 @@ class VM:
                         self.stack.append(None)
                         continue
                     if meth == "quadraticCurveTo" and len(argv) >= 4:
-                        obj.setdefault("_path", []).append(f"L,{argv[2]},{argv[3]}")
+                        # NEW: real quadratic record — rasterizer subdivides
+                        obj.setdefault("_path", []).append(
+                            f"Q,{argv[0]},{argv[1]},{argv[2]},{argv[3]}"
+                        )
                         self.stack.append(None)
                         continue
                     if meth == "arc" and len(argv) >= 3:
@@ -553,6 +878,26 @@ class VM:
                                 argv[2] if len(argv) > 2 else 0,
                                 obj.get("fillStyle"),
                                 obj.get("textAlign") or "left",
+                                obj.get("font"),  # NEW: px size → glyph scale
+                            )
+                        self.stack.append(None)
+                        continue
+                    if meth == "measureText":
+                        # NEW: DONKEY HUD layout — width from glyph size × font
+                        mfn = self.natives.get("ctx.measureText")
+                        t = argv[0] if argv else ""
+                        if mfn:
+                            self.stack.append(mfn(t, obj.get("font")))
+                        else:
+                            self.stack.append({"width": len(str(t)) * 8})
+                        continue
+                    if meth == "strokeRect" and len(argv) >= 4:
+                        # NEW: 1px rect outline (was a no-op)
+                        sfn = self.natives.get("ctx.strokeRect")
+                        if sfn:
+                            sfn(
+                                argv[0], argv[1], argv[2], argv[3],
+                                obj.get("strokeStyle") or obj.get("fillStyle"),
                             )
                         self.stack.append(None)
                         continue
@@ -604,7 +949,6 @@ class VM:
                         "clip",
                         "rotate",
                         "scale",
-                        "strokeRect",
                     ):
                         self.stack.append(None)
                         continue
@@ -620,7 +964,10 @@ class VM:
                         if isinstance(proto, dict):
                             fn = proto.get(meth)
                     if isinstance(fn, dict) and fn.get("__class") == "Fn":
-                        self.call_stack.append((ip, self.globals.get("__this"), None))
+                        self.call_stack.append(
+                            (ip, self.globals.get("__this"), None, self.env)
+                        )
+                        self.env = {"__par": fn.get("env")}
                         self.globals["__this"] = (
                             fn["bound_this"] if fn.get("bound_this") is not None else obj
                         )
@@ -635,7 +982,10 @@ class VM:
                     self.error = f"ERROR: NO METHOD {cls_name}.{meth}"
                     self.halted = True
                     return
-                self.call_stack.append((ip, self.globals.get("__this"), None))
+                self.call_stack.append(
+                    (ip, self.globals.get("__this"), None, self.env)
+                )
+                self.env = {"__par": None}  # class methods close over nothing
                 self.globals["__this"] = obj
                 for a in argv:
                     self.stack.append(a)
@@ -647,7 +997,16 @@ class VM:
                 argv = [self.stack.pop() for _ in range(argc)][::-1]
                 meta = (chunk.classes or {}).get(cls_name)
                 obj: dict = {"__class": cls_name}
-                ctor_fn = self.globals.get(cls_name)
+                # NEW: resolve the ctor Fn through the env chain then globals
+                # (PACMAN's Stage/Item/Map are locals of the Game function now)
+                e = self.env
+                while e is not None:
+                    if cls_name in e:
+                        ctor_fn = e[cls_name]
+                        break
+                    e = e.get("__par")
+                else:
+                    ctor_fn = self.globals.get(cls_name)
                 if isinstance(ctor_fn, dict) and ctor_fn.get("__class") == "Fn":
                     proto = ctor_fn.get("prototype")
                     if proto is None:
@@ -655,19 +1014,35 @@ class VM:
                         ctor_fn["prototype"] = proto
                     obj["__proto__"] = proto
                 ctor = meta.get("ctor") if meta else None
-                # NEW: var Item = function(){} — ctor is Fn in globals
+                # NEW: var Item = function(){} — ctor is Fn value
                 if ctor is None:
-                    fn = self.globals.get(cls_name)
+                    fn = ctor_fn
                     if isinstance(fn, dict) and fn.get("__class") == "Fn":
-                        self.call_stack.append((ip, self.globals.get("__this"), obj))
+                        self.call_stack.append(
+                            (ip, self.globals.get("__this"), obj, self.env)
+                        )
+                        self.env = {"__par": fn.get("env")}
                         self.globals["__this"] = obj
                         for a in argv:
                             self.stack.append(a)
                         ip = int(fn["entry"])
                         continue
+                    # NEW: DOM event ctors — copy (type, options) into the
+                    # instance so dispatchEvent handlers see ev.key/keyCode
+                    # (DONKEY boot script's new KeyboardEvent("keydown", {...}))
+                    if cls_name in ("KeyboardEvent", "Event", "CustomEvent", "MouseEvent"):
+                        if argv and isinstance(argv[0], str):
+                            obj["type"] = argv[0]
+                        if len(argv) > 1 and isinstance(argv[1], dict):
+                            for _k, _v in argv[1].items():
+                                if _k != "__class":
+                                    obj[_k] = _v
                     self.stack.append(obj)
                 else:
-                    self.call_stack.append((ip, self.globals.get("__this"), obj))
+                    self.call_stack.append(
+                        (ip, self.globals.get("__this"), obj, self.env)
+                    )
+                    self.env = {"__par": None}  # class ctor closes over nothing
                     self.globals["__this"] = obj
                     for a in argv:
                         self.stack.append(a)
@@ -676,8 +1051,9 @@ class VM:
                 if not self.call_stack:
                     self.halted = True
                     return
-                ip, saved_this, ctor_obj = self.call_stack.pop()
+                ip, saved_this, ctor_obj, saved_env = self.call_stack.pop()
                 self.globals["__this"] = saved_this
+                self.env = saved_env
                 # NEW: constructor → discard return value, leave the instance
                 if ctor_obj is not None:
                     if self.stack:
@@ -739,7 +1115,25 @@ class VM:
                 # NEW: push first-class function {__class:Fn, entry, nparam}
                 entry = int(args[0])
                 nparam = int(args[1]) if len(args) > 1 else 0
-                self.stack.append({"__class": "Fn", "entry": entry, "nparam": nparam})
+                fn_val: dict = {"__class": "Fn", "entry": entry, "nparam": nparam}
+                # NEW: capture the lexical environment (closures) — PACMAN's
+                # per-level stage/map/player closures need their own iteration
+                # scope, not whatever the flat globals held last.
+                if self.env is not None:
+                    fn_val["env"] = self.env
+                # NEW: only arrows (arg2=1) capture lexical `this` — DONKEY's
+                # (e)=>this.startGame(e) — regular function expressions keep
+                # dynamic this (PACMAN Stage.prototype.* set inside ctors).
+                if len(args) > 2 and args[2]:
+                    cur_this = self.globals.get("__this")
+                    if cur_this is not None:
+                        fn_val["bound_this"] = cur_this
+                # NEW: arg3=1 → immediately-invoked (IIFE). Top-level IIFEs
+                # run FLAT (locals stay global) so module classes/functions
+                # keep seeing their module vars (DONKEY sprite sheets).
+                if len(args) > 3 and args[3]:
+                    fn_val["iife"] = True
+                self.stack.append(fn_val)
             elif op == Op.GET_PROP:
                 name = chunk.names[args[0]]
                 obj = self.stack.pop()
@@ -765,7 +1159,32 @@ class VM:
                         obj["prototype"] = proto
                     self.stack.append(proto)
                 elif isinstance(obj, dict):
-                    self.stack.append(obj.get(name))
+                    val = obj.get(name)
+                    # NEW: this.method / this.arrowField as a VALUE (DONKEY
+                    # passes this.startSelect to addEventListener). Materialize
+                    # the class method as a bound Fn and cache it on the
+                    # instance so identity is stable (add/remove listener).
+                    if val is None and obj.get("__class"):
+                        meta = (chunk.classes or {}).get(obj["__class"])
+                        entry = (meta.get("methods") or {}).get(name) if meta else None
+                        if entry is not None:
+                            # NEW: `get name()` accessor — CALL it now (argc 0)
+                            # instead of materializing a Fn (DONKEY marioMiddle).
+                            if name in (meta.get("getters") or ()):
+                                self.call_stack.append(
+                                    (ip, self.globals.get("__this"), None, self.env)
+                                )
+                                self.env = {"__par": None}
+                                self.globals["__this"] = obj
+                                ip = int(entry)
+                                continue
+                            val = {
+                                "__class": "Fn",
+                                "entry": int(entry),
+                                "bound_this": obj,
+                            }
+                            obj[name] = val
+                    self.stack.append(val)
                 else:
                     self.stack.append(getattr(obj, name, None))
             elif op == Op.SET_PROP:
@@ -790,7 +1209,7 @@ class VM:
                         w, h = _png_size_from_data_uri(val)
                         obj["width"] = w
                         obj["height"] = h
-                        # jmr:spr:N from card-build pack
+                        # jmr:spr:N sprite handle from compile-on-RUN
                         if val.startswith("jmr:spr:"):
                             try:
                                 si = int(val.split(":")[-1])
@@ -798,11 +1217,15 @@ class VM:
                                 si = -1
                             pack = getattr(self, "_sprites", None) or []
                             if 0 <= si < len(pack):
-                                sw, sh, pix = pack[si]
+                                sw, sh, third = pack[si]
                                 obj["width"] = sw
                                 obj["height"] = sh
-                                obj["_pix"] = pix
                                 obj["_spr"] = si
+                                # legacy SPR1 pack carries bytes; ASET path
+                                # carries an SRAM offset — pixels stay in the
+                                # asset bank (drawImage resolves via _spr)
+                                if isinstance(third, (bytes, bytearray)):
+                                    obj["_pix"] = third
                         onload = obj.get("onload")
                         if isinstance(onload, dict) and onload.get("__class") == "Fn":
                             # NEW: don't let nested call_fn disturb ctor stack

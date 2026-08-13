@@ -231,9 +231,31 @@ class SimBackend(RuntimeBackend):
                 self._sync_glass("> ")
                 return
         self._rpc(f"LINE {text}")
+        # HTML RUN FAT-loads a large fresh .JSH (sprites); wait for VM start
+        if (upper == "RUN" or upper.startswith("RUN ")) and self._html_loaded_stem():
+            for i in range(40000):
+                self._rpc("TICK")
+                if i % 500 == 499:
+                    st = self._rpc("STATUS?")
+                    glass = self.screen_text()
+                    if "running=1" in st or "?NH" in glass or "?NB" in glass:
+                        break
+            # NEW: ASET palette landed in the RTL palette BRAM during the FAT
+            # load — mirror it so the GUI colors FB indices like HDMI would.
+            self._sync_palette()
         self._sync_glass("> ")
         if upper.startswith("EDIT"):
             self._note_edit_prefill()
+
+    def _sync_palette(self) -> None:
+        """Pull the RTL palette BRAM (PAL?) into the GUI canvas palette."""
+        resp = self._rpc("PAL?")
+        if resp.startswith("PAL "):
+            raw = base64.b64decode(resp[4:])
+            if len(raw) == 768:
+                self._canvas.palette = [
+                    (raw[i * 3], raw[i * 3 + 1], raw[i * 3 + 2]) for i in range(256)
+                ]
 
     def _html_loaded_stem(self) -> str:
         name = (self._loaded_name or "").upper()

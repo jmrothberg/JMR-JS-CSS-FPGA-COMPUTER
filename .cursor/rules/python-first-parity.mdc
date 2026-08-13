@@ -21,9 +21,13 @@ disk sidecar. See `no-dukpy-cheat-native-cpu`.
 
 - `INVADERS.HTML`, `PACMAN.HTML`, `DONKEY.HTML` — user types only
   `LOAD "NAME.HTML"` / `RUN`. **`RUN` always recompiles** current HTML;
-  `.JSH` is invisible output (never prefer an old file).
-- Must LOAD + RUN playable on **all three** runtimes via **bytecode**.
-  `?NH` is temporary tracked debt, never done.
+  `.JSH` is invisible output (never prefer an old file). **The asset bank**
+  (full-quality `data:image` graphics → ASET section → external SRAM) is
+  part of compile-on-RUN on **all three** runtimes — see
+  `no-dukpy-cheat-native-cpu`. No `NAME.DAT` file.
+- Must LOAD + RUN playable on **PYTHON then FPGA-SIM** via **bytecode**,
+  **looking and playing the same** (full game). Board only after user F9
+  approval. `?NH` is temporary tracked debt, never done.
 - **The HTML decides the keys**: hardware/VM deliver raw keycodes only; the
   game's own `keydown`/`keyup` handlers define bindings. No hardcoded key
   maps in RTL.

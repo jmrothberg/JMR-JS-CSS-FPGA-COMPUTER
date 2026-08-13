@@ -89,15 +89,14 @@ CORE_SRCS := \
 	$(RTL)/engines/jmr_mini_fb.sv \
 	$(RTL)/engines/jmr_rectdemo_engine.sv \
 	$(RTL)/engines/jmr_js_vm.sv \
+	$(RTL)/engines/jmr_sram_model.sv \
+	$(RTL)/engines/jmr_palette_bram.sv \
 	$(RTL)/engines/storage_engine.sv \
 	$(RTL)/phys/sd_spi_master.sv \
 	$(RTL)/jmr_js_core.sv
 
 JSB_HEX := $(ROOT)/vectors/invaders_jsb.hex
-
-$(JSB_HEX): $(ROOT)/tools/compile_js.py $(ROOT)/storage/INVADERS.JS \
-		$(ROOT)/functional_model/jsb_format.py
-	$(ROOT)/.venv/bin/python $(ROOT)/tools/compile_js.py $(ROOT)/storage/INVADERS.JS
+# Product titles are .HTML (compile-on-RUN). Do not require storage/INVADERS.JS.
 
 $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 	mkdir -p $(BUILD) $(BUILD)/obj_dir

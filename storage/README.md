@@ -32,6 +32,10 @@ RUN                # ALWAYS compile current HTML → fresh internal .JSH → VM
 - **`.JSH`** = invisible compile *output* (overwrite/write fresh). Not a LOAD
   name. Not a second game. Stale `.JSH` may be deleted; do not prefer it over
   compiling.
+- **Graphics** ride the `.JSH` **ASET section** into the external 4 MB SRAM
+  asset bank at RUN (full quality; per-title 256-entry palette). There is
+  **no `NAME.DAT` file** — that older spill design is retired. Great
+  graphics stay; they never live in code BRAM.
 
 ## Not product titles
 

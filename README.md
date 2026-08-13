@@ -4,9 +4,13 @@ An original **standalone** FPGA → ASIC computer whose **native machine
 language is JavaScript** (HTML5/Canvas games; minimal CSS as needed). There
 is no soft CPU, no browser-on-FPGA, and **no dukpy/Duktape as the machine**:
 `LOAD "NAME.HTML"` → edit → **`RUN` always compiles** that HTML → fresh
-internal `.JSH` → bytecode VM + engines. Never prefer a stale `.JSH`. Chrome
-may open the same `.HTML` for authoring; PYTHON/FPGA-SIM/BOARD must run the
-**JMR VM**. V1 does **not** ship a general CSS browser — games draw on Canvas.
+internal `.JSH` (code + ASET art) → bytecode VM + engines. Full-quality
+graphics stream into the **external 4 MB SRAM asset bank** (IS61WV204816
+contract; FPGA board bridges DDR3 behind the same simple port — no `NAME.DAT`
+file). Never prefer a stale
+`.JSH`. Chrome may open the same `.HTML` for authoring; PYTHON/FPGA-SIM/BOARD
+must run the **JMR VM**. V1 does **not** ship a general CSS browser — games
+draw on Canvas. BRAM is RAM; µSD is disk; external SRAM is the asset bank.
 
 **Sibling already works:** `JMR-BASIC-FPGA-COMPUTER` on Nexys **A7-100T** (T100)
 is a fully working BASIC-native FPGA (VGA + USB keyboard + console). This repo
@@ -75,8 +79,10 @@ Board flash is step 7, last — never a substitute for fixing FPGA-SIM.
 
 **LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY) then `RUN`.
 Only HTML titles. **`RUN` = compile-on-RUN** (fresh internal `.JSH`; line
-numbers from the HTML). Never type `.JSH`; stale `.JSH` is disposable.
-Same-stem `.JS` demos are not the product. Ctrl-V pastes into the prompt.
+numbers from the HTML). Fat graphics ride the `.JSH` ASET section into the
+external SRAM asset bank (invisible plumbing; no `.DAT` file). Never type
+`.JSH` as a LOAD name. Same-stem `.JS`
+demos are not the product. Ctrl-V pastes into the prompt.
 
 
 **[CONSTITUTION.md](CONSTITUTION.md) is the specification.** If the code and
@@ -88,6 +94,8 @@ the Constitution disagree, the code is wrong.
 [docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md#teach-me-rtl--fpga-sim--vivado--bit--bin)
 
 **Architecture:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+(posters: [architecture V1](docs/jmr_js_architecture_v1.png) ·
+[ASIC board Rev A](docs/jmr_js_asic_board_rev_a.png) — errata in ARCHITECTURE.md)
 
 **Fit / LUTs / BRAM / slices:** [docs/FPGA_FIT.md](docs/FPGA_FIT.md) — measured
 from `build/nexys_video/utilization_impl.rpt`. Do not invent counts.
@@ -121,7 +129,7 @@ tokens, microcode, or Nexys A7-100T pinouts here. Board freeze:
 | `third_party/digilent_rgb2dvi/` | Digilent HDMI TMDS IP (do not rewrite) |
 | `sim/` | Verilator + cocotb |
 | `constraints/` | Nexys Video XDC (StarLite later; not A7-100T) |
-| `storage/` | Seeds: `NAME.HTML` titles (`.JSH` = compile-on-RUN output only) |
+| `storage/` | Seeds: `NAME.HTML` titles (`.JSH` = compile output, code + ASET art) |
 | `docs/` | Architecture, bring-up, fit, handoff |
 | `traces/` | Flight logs — read first when debugging |
 | `.cursor/rules/` | Product rules for *this* machine |

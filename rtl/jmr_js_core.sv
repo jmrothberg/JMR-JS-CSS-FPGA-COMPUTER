@@ -26,6 +26,9 @@ module jmr_js_core #(
     // NEW: tether FB dump (core clk)
     input  logic [18:0] dump_fb_raddr = 19'd0,
     output logic [7:0]  dump_fb_rdata,
+    // NEW: title palette readout (ASET 256×RGB888) — HDMI top + sim PAL? dump
+    input  logic [7:0]  pal_raddr = 8'd0,
+    output logic [23:0] pal_rdata,
     // NEW: µSD SPI (storage_engine owns the master)
     output logic        sd_sck,
     output logic        sd_mosi,
@@ -53,6 +56,19 @@ module jmr_js_core #(
     logic [31:0] code_wdata;
     logic        stor_get_byte;
     logic [7:0]  stor_get_data;
+    // NEW: 4 MB external asset SRAM (jmr_sram_port) — console writes the ASET
+    // payload during RUN load; the VM blitter reads sprite pixels while running.
+    // The two masters never overlap (load completes before vm_start).
+    logic        cons_sram_req, cons_sram_we, vm_sram_req;
+    logic [20:0] cons_sram_addr, vm_sram_addr;
+    logic [15:0] cons_sram_wdata, sram_rdata;
+    logic        sram_ack, sram_req, sram_we;
+    logic [20:0] sram_addr;
+    logic [15:0] sram_wdata;
+    // NEW: ASET palette load (console) → palette BRAM (read by scanout/dump)
+    logic        pal_we;
+    logic [7:0]  pal_waddr;
+    logic [23:0] pal_wdata;
 
     // Console ↔ storage
     logic        stor_open, stor_close, stor_readline, stor_putc;
@@ -173,6 +189,10 @@ module jmr_js_core #(
         .vm_start(vm_start),
         .halt_pulse(halt_pulse),
         .code_we(code_we), .code_waddr(code_waddr), .code_wdata(code_wdata),
+        .sram_req(cons_sram_req), .sram_we(cons_sram_we),
+        .sram_addr(cons_sram_addr), .sram_wdata(cons_sram_wdata),
+        .sram_ack(sram_ack),
+        .pal_we(pal_we), .pal_waddr(pal_waddr), .pal_wdata(pal_wdata),
         .stor_open(stor_open), .stor_mode(stor_mode), .stor_chan(stor_chan),
         .stor_name_addr(stor_name_addr), .stor_name_len(stor_name_len),
         .stor_close(stor_close), .stor_readline(stor_readline),
@@ -243,7 +263,30 @@ module jmr_js_core #(
         .code_we(code_we), .code_waddr(code_waddr), .code_wdata(code_wdata),
         .busy(vm_busy), .done(vm_done),
         .fb_we(vm_fb_we), .fb_waddr(vm_fb_waddr),
-        .fb_wdata(vm_fb_wdata), .fb_swap(vm_fb_swap)
+        .fb_wdata(vm_fb_wdata), .fb_swap(vm_fb_swap),
+        .sram_req(vm_sram_req), .sram_addr(vm_sram_addr),
+        .sram_rdata(sram_rdata), .sram_ack(sram_ack)
+    );
+
+    // NEW: asset-SRAM arbiter — console (load) wins; VM only reads while running
+    assign sram_req   = cons_sram_req | vm_sram_req;
+    assign sram_we    = cons_sram_req ? cons_sram_we : 1'b0;
+    assign sram_addr  = cons_sram_req ? cons_sram_addr : vm_sram_addr;
+    assign sram_wdata = cons_sram_wdata;
+
+    // NEW: behavioral 4 MB SRAM (FPGA-SIM). Board build swaps this instance
+    // for the MIG DDR3 bridge behind the identical port; ASIC uses the real
+    // IS61WV204816 — nothing above the port changes.
+    jmr_sram_model u_sram (
+        .clk(clk), .rst_n(rst_n),
+        .req(sram_req), .we(sram_we), .addr(sram_addr),
+        .wdata(sram_wdata), .rdata(sram_rdata), .ack(sram_ack)
+    );
+
+    // NEW: per-title 256-entry palette (loaded from the ASET section on RUN)
+    jmr_palette_bram u_palette (
+        .clk(clk), .we(pal_we), .waddr(pal_waddr), .wdata(pal_wdata),
+        .raddr(pal_raddr), .rdata(pal_rdata)
     );
 
     // Mux FB writers — VM preferred while busy

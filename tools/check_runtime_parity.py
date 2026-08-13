@@ -311,9 +311,15 @@ def check_python_html_bytecode_title(stem: str) -> int:
     from functional_model.input_engine import KEY_LEFT
 
     m.set_key_bits(KEY_LEFT)
-    py.frame_tick()
-    fb1 = bytes(m.canvas.front)
-    if fb0 == fb1:
+    # setTimeout-paced titles (DONKEY ~30 Hz) repaint every other rAF tick —
+    # allow a few frames before calling the FB static.
+    changed = False
+    for _ in range(4):
+        py.frame_tick()
+        if bytes(m.canvas.front) != fb0:
+            changed = True
+            break
+    if not changed:
         print(f"FAIL PYTHON HTML BYTECODE {stem} Left no FB change")
         return 1
     m.set_key_bits(0)
