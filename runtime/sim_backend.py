@@ -43,7 +43,14 @@ class SimBackend(RuntimeBackend):
         self._more = False     # NEW: parked on -- MORE --
         self._edit_prefill: Optional[str] = None
         self._loaded_name: str = ""
+        self._break_run_wait: bool = False
+        self._fb_logged: bool = False  # first game FB? only
         self._log = FlightLog(self.name)
+        self._kev_n = 0
+        self._kev_codes: list = []
+        self._play_t = 0.0
+        self._play_frames = 0
+        self._last_glass = ""
         # HARD RULE: RTL is default. Host twin ONLY via explicit JMR_SIM_HOST=1.
         # JMR_SIM_RTL=1 is accepted as a no-op alias (legacy scripts).
         host_opt = os.environ.get("JMR_SIM_HOST", "").strip().lower() in ("1", "true", "yes")
@@ -125,13 +132,69 @@ class SimBackend(RuntimeBackend):
                 raw = base64.b64decode(parts[3])
                 if len(raw) == len(self._canvas.front):
                     self._canvas.front[:] = raw
+                if not self._fb_logged:
+                    self._fb_logged = True
+                    self._log.note(f"rpc FB? first-frame {dt_ms:.1f}ms")
         elif resp == "FB SAME":
             pass
         elif resp.startswith("ERR") or resp.startswith("FAULT"):
             self._log.fault("RPC", f"cmd={cmd!r} resp={resp!r}")
-        if cmd.startswith("LINE ") or cmd.startswith("KEY ") or dt_ms > 25.0:
-            self._log.note(f"rpc {cmd.split()[0]} {dt_ms:.1f}ms")
+        # Do not log every FB?/TICK timing (hundreds of NOTE rpc FB? 316ms).
+        # LINE/KEY always; FB? only on fault (already logged) or first game frame.
+        verb = cmd.split()[0] if cmd else ""
+        quiet = verb in ("FB?", "TICK", "TICKN", "FRAME", "SCREEN?", "STATUS?", "PAL?", "JOY", "KEYBITS")
+        if verb == "LINE":
+            self._log.note(f"rpc LINE {dt_ms:.1f}ms {resp}")
+        elif verb == "KEYEVT":
+            self._kev_n += 1
+            parts = cmd.split()
+            if len(parts) >= 2:
+                self._kev_codes.append(parts[1])
+            if self._kev_n == 1:
+                self._kev_t0 = time.monotonic()
+            elif time.monotonic() - getattr(self, "_kev_t0", 0.0) >= 5.0:
+                self._flush_keyevts()
+        elif verb in ("KEY", "SDRELOAD"):
+            self._log.note(f"rpc {verb} {dt_ms:.1f}ms")
+        elif (not quiet) and dt_ms > 25.0:
+            self._log.note(f"rpc {verb} {dt_ms:.1f}ms")
         return resp
+
+    def _flush_keyevts(self) -> None:
+        if not self._kev_n:
+            return
+        codes = ",".join(self._kev_codes[:16])
+        self._log.note(f"keyevts n={self._kev_n} codes={codes}")
+        self._kev_n = 0
+        self._kev_codes = []
+        self._kev_t0 = time.monotonic()
+
+    def _note_glass(self, tag: str) -> None:
+        """Last ~16 non-empty rows after DIR/LOAD/LIST/SAVE (letterbox)."""
+        rows = [
+            ln.strip()
+            for ln in self._screen.replace("\\n", "\n").splitlines()
+            if ln.strip()
+        ]
+        msg = f"GLASS {tag} " + " | ".join(rows[-16:])[:400]
+        if msg == self._last_glass:
+            return
+        self._last_glass = msg
+        self._log.note(msg)
+
+    def _load_reply_ready(self, glass: str, stem: str) -> bool:
+        """True only for THIS load's LOADED stem+LINES (or ?IO/?LS)."""
+        g = glass.replace("\\n", "\n")
+        if "?IO" in g or "?LS" in g:
+            return True
+        want = (stem or "").upper()[:8]
+        if not want:
+            return "LOADED" in g and "LINES" in g
+        for ln in g.splitlines():
+            u = ln.upper()
+            if "LOADED" in u and "LINES" in u and want in u:
+                return True
+        return False
 
     @property
     def running(self) -> bool:
@@ -184,7 +247,8 @@ class SimBackend(RuntimeBackend):
             # wrapped continuation of EDIT body — keep scanning for 'N body'
 
     def _paint_screen_local(
-        self, prompt: Optional[str] = None, cursor_on: bool = False
+        self, prompt: Optional[str] = None, cursor_on: bool = False,
+        cursor_col: Optional[int] = None,
     ) -> None:
         """RTL text path — HDMI letterbox (same geometry as PYTHON / BOARD)."""
         # NEW: while MORE, do not append a second ">"
@@ -198,6 +262,7 @@ class SimBackend(RuntimeBackend):
             self._screen.splitlines(),
             prompt=pr,
             cursor_on=cursor_on,
+            cursor_col=cursor_col,
         )
 
     def _sync_glass(self, prompt: Optional[str] = None) -> None:
@@ -231,19 +296,68 @@ class SimBackend(RuntimeBackend):
                 self._sync_glass("> ")
                 return
         self._rpc(f"LINE {text}")
-        # HTML RUN FAT-loads a large fresh .JSH (sprites); wait for VM start
-        if (upper == "RUN" or upper.startswith("RUN ")) and self._html_loaded_stem():
-            for i in range(40000):
-                self._rpc("TICK")
-                if i % 500 == 499:
-                    st = self._rpc("STATUS?")
-                    glass = self.screen_text()
-                    if "running=1" in st or "?NH" in glass or "?NB" in glass:
+        # LIST/DIR may park on -- MORE --; LINE now waits, but keep pumping
+        # until MORE or prompt so we never paint '>' over a mid-page.
+        if upper == "LIST" or upper.startswith("LIST ") or upper == "DIR":
+            for _ in range(80):
+                pump = getattr(self, "run_wait_idle", None)
+                if pump is not None:
+                    pump()
+                self._rpc("SCREEN?")
+                if self._screen_has_more():
+                    break
+                last = ""
+                for ln in reversed(self._screen.replace("\\n", "\n").splitlines()):
+                    t = ln.strip()
+                    if t:
+                        last = t
                         break
+                if last in ("READY", ">", "> ") or last.startswith("READY"):
+                    break
+                self._rpc("TICKN 500")
+        # HTML LOAD: wait for THIS stem+LINES, not a stale LOADED still on glass.
+        if upper.startswith("LOAD") and self._html_loaded_stem():
+            self._break_run_wait = False
+            stem = self._html_loaded_stem()
+            for i in range(400):
+                pump = getattr(self, "run_wait_idle", None)
+                if pump is not None:
+                    pump()
+                if getattr(self, "_break_run_wait", False):
+                    break
+                self._rpc("TICKN 2000")
+                self._rpc("SCREEN?")
+                if self._load_reply_ready(self._screen, stem):
+                    break
+        if upper.startswith("SAVE"):
+            self._persist_save(stripped)
+        # HTML RUN FAT-loads a large fresh .JSH (sprites); wait for VM start.
+        # Scale TICKN by compile size (any fat HTML, not one title). TICKN n =
+        # n×1000 clocks; ~100 clk/byte of FAT+SRAM stream plus headroom.
+        if (upper == "RUN" or upper.startswith("RUN ")) and self._html_loaded_stem():
+            nbytes = int(getattr(self, "_last_jsh_bytes", 0) or 0)
+            clocks = max(40_000_000, nbytes * 200)
+            slices = max(1, (clocks + 1_999_999) // 2_000_000)
+            self._break_run_wait = False
+            for i in range(slices):
+                pump = getattr(self, "run_wait_idle", None)
+                if pump is not None:
+                    pump()
+                if getattr(self, "_break_run_wait", False):
+                    break
+                self._rpc("TICKN 2000")
+                st = self._rpc("STATUS?")
+                glass = self.screen_text()
+                if "running=1" in st or "?NH" in glass or "?NB" in glass:
+                    break
+                if i % 4 == 3:
+                    self._sync_glass("> ")
             # NEW: ASET palette landed in the RTL palette BRAM during the FAT
             # load — mirror it so the GUI colors FB indices like HDMI would.
             self._sync_palette()
-        self._sync_glass("> ")
+        self._sync_glass()
+        if upper == "DIR" or upper.startswith("LOAD") or upper.startswith("SAVE") or upper == "LIST" or upper.startswith("LIST"):
+            self._note_glass(upper.split()[0])
         if upper.startswith("EDIT"):
             self._note_edit_prefill()
 
@@ -262,6 +376,39 @@ class SimBackend(RuntimeBackend):
         if name.endswith(".HTML") or name.endswith(".HTM"):
             return Path(name).stem[:8]
         return ""
+
+    def _persist_save(self, text: str) -> None:
+        """Host-copy full HTML onto card.img after RTL SAVE (SOURCE may truncate).
+
+        SDRELOAD picks up the patched FAT so LOAD of the new name works.
+        """
+        rest = text[4:].strip().strip('"').strip("'")
+        if not rest:
+            return
+        stem = self._html_loaded_stem() or Path(self._loaded_name or "").stem[:8]
+        if not stem:
+            return
+        src = None
+        for ext in (".HTML", ".HTM", ".JS"):
+            p = ROOT / "storage" / f"{stem}{ext}"
+            if p.is_file():
+                src = p
+                break
+        if src is None:
+            return
+        try:
+            from tools.make_sd_image import patch_card_file
+
+            data = src.read_bytes()
+            dest = ROOT / "storage" / rest
+            dest.write_bytes(data)
+            card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
+            if card.is_file():
+                patch_card_file(card, rest, data)
+                self._rpc("SDRELOAD")
+            self._log.note(f"SAVE persist {src.name} → {rest} ({len(data)} bytes)")
+        except Exception as e:
+            self._log.fault("SAVE", str(e))
 
     def _compile_on_run_html(self) -> bool:
         """Compile current storage HTML → fresh .JSH on card.img → SDRELOAD.
@@ -293,6 +440,7 @@ class SimBackend(RuntimeBackend):
                         f"{resp} — rebuild sim (SDRELOAD) so RUN cannot load a stale .JSH",
                     )
                     return False
+            self._last_jsh_bytes = len(blob)
             self._log.note(f"compile-on-RUN {html_path.name} → {jsh_name} ({len(blob)} bytes)")
             return True
         except CompileError as e:
@@ -304,7 +452,11 @@ class SimBackend(RuntimeBackend):
             return False
 
     def push_key(self, ch: str) -> None:
-        """MORE continue / Esc — GUI Space/Enter while more_waiting."""
+        """MORE continue / Esc — GUI Space/Enter while more_waiting.
+
+        After the page key, TICKN until the next -- MORE -- or prompt
+        (LIST of a fat HTML needs ~10^5 clocks; a handful of TICK is not enough).
+        """
         if not self._started:
             self._start()
         if ch == "\x1b":
@@ -313,8 +465,40 @@ class SimBackend(RuntimeBackend):
             self._rpc("KEY 20" if ch == " " else "KEY 0d")
         else:
             self._rpc(f"KEY {ord(ch):02x}")
-        for _ in range(40):
-            self._rpc("TICK")
+        # Leave the current MORE page first (SCREEN still shows the old -- MORE --)
+        for _ in range(120):
+            pump = getattr(self, "run_wait_idle", None)
+            if pump is not None:
+                pump()
+            self._rpc("SCREEN?")
+            if not self._screen_has_more():
+                break
+            last = ""
+            for ln in reversed(self._screen.replace("\\n", "\n").splitlines()):
+                t = ln.strip()
+                if t:
+                    last = t
+                    break
+            if last in ("READY", ">", "> ") or last.startswith("READY"):
+                break
+            self._rpc("TICKN 2000")
+        # Then wait until the next -- MORE -- or prompt (same as type_line LIST)
+        for _ in range(120):
+            pump = getattr(self, "run_wait_idle", None)
+            if pump is not None:
+                pump()
+            self._rpc("SCREEN?")
+            if self._screen_has_more():
+                break
+            last = ""
+            for ln in reversed(self._screen.replace("\\n", "\n").splitlines()):
+                t = ln.strip()
+                if t:
+                    last = t
+                    break
+            if last in ("READY", ">", "> ") or last.startswith("READY"):
+                break
+            self._rpc("TICKN 2000")
         self._sync_glass("> " if not self._more else "")
 
     def screen_text(self) -> str:
@@ -328,23 +512,36 @@ class SimBackend(RuntimeBackend):
     def set_key_bits(self, bits: int) -> None:
         self._rpc(f"KEYBITS {bits}")
 
-    def paint_prompt(self, prompt: str, cursor_on: bool = False) -> None:
+    def key_event(self, key_code: int, key: str, pressed: bool) -> None:
+        # NEW: raw keyboard → RTL KEYEVT for every code. HTML decides bindings.
+        # KEYBITS still tethers arrows/space; RTL skips synthetic keydown when
+        # a KEYEVT is already queued (no double-fire).
+        self._rpc(f"KEYEVT {int(key_code) & 0xFF} {1 if pressed else 0}")
+
+    def paint_prompt(self, prompt: str, cursor_on: bool = False, cursor_col=None) -> None:
         if not self._started:
             self._start()
         # NEW: game owns the glass (BASIC method) — never overlay `>` on FB
         if self._running or self._more:
             return
         if self._use_rtl:
-            self._paint_screen_local(prompt, cursor_on=cursor_on)
+            self._paint_screen_local(prompt, cursor_on=cursor_on, cursor_col=cursor_col)
         else:
             self._rpc(f"PROMPT {prompt}")
             resp = self._rpc("FB?")
             if resp == "FB SAME":
                 self._rpc("SCREEN?")
-                self._paint_screen_local(prompt, cursor_on=cursor_on)
+                self._paint_screen_local(prompt, cursor_on=cursor_on, cursor_col=cursor_col)
 
     def hard_break(self) -> None:
+        self._flush_keyevts()
         self._log.note("BREAK")
+        # NEW: one VM telemetry line on BREAK (n_obj / heap_ovf / to_ovf / raf)
+        try:
+            self._log.note(self._rpc("VMSTAT?"))
+        except Exception:
+            pass
+        self._break_run_wait = True  # NEW: abort size-scaled RUN TICKN wait
         self._abort_more()
         self._rpc("KEY 1b")
         self._sync_glass("> ")
@@ -359,15 +556,30 @@ class SimBackend(RuntimeBackend):
     def frame_tick(self) -> None:
         if not self._started:
             return
-        self._rpc("TICK")
-        # NEW: TICK stays cheap; pull FB while the game is up so GUI animates
+        # NEW: while running, one VM frame (tick-to-swap) not TICK=1000
         if self._running:
-            self._rpc("FB?")
+            self._rpc("FRAME")
+            self._play_frames += 1
+            now = time.monotonic()
+            if self._play_t == 0.0:
+                self._play_t = now
+            elif now - self._play_t >= 5.0:
+                self._flush_keyevts()
+                try:
+                    st = self._rpc("VMSTAT?")
+                except Exception:
+                    st = ""
+                self._log.note(f"play fb_frames={self._play_frames} {st}")
+                self._play_t = now
+                self._play_frames = 0
         elif self._more:
+            self._rpc("TICK")
             self._rpc("SCREEN?")
             self._more = self._screen_has_more()
             if not self._more:
                 self._paint_screen_local("> ")
+        else:
+            self._rpc("TICK")
 
     def trace_path(self) -> Optional[Path]:
         return self._log.path
@@ -387,4 +599,5 @@ class SimBackend(RuntimeBackend):
             pass
         self._proc = None
         self._started = False
+        self._flush_keyevts()
         self._log.note("shutdown")

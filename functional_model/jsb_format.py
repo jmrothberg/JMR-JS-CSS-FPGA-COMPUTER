@@ -88,7 +88,8 @@ ASET_MAGIC = b"ASET"
 ASET_PAL_BYTES = 768  # 256 × RGB888 at asset-SRAM offset 0
 SRAM_BYTES = 4 * 1024 * 1024  # 2M × 16 IS61WV204816 contract (see docs/ARCHITECTURE.md)
 # LOAD_CONST a1: 0=i32  1=string intern  2=None  3=IEEE-754 bits in const pool
-_LC_I32, _LC_STR, _LC_NONE, _LC_F32 = 0, 1, 2, 3
+# 4=RegExp packed in const pool (pattern bytes + flags — RTL has no char heap)
+_LC_I32, _LC_STR, _LC_NONE, _LC_F32, _LC_REGEX = 0, 1, 2, 3, 4
 _STR_CAP = 512  # huge data: URIs stubbed — Image.onload still truthy
 
 
@@ -119,6 +120,8 @@ def _needs_v2(chunk: Chunk) -> bool:
             return True
     for c in chunk.consts:
         if isinstance(c, str) or c is None or isinstance(c, float):
+            return True
+        if isinstance(c, dict):
             return True
     return False
 
@@ -285,6 +288,29 @@ def _encode_v2(chunk: Chunk, sprites=None, aset: bool = False) -> bytes:
         if c is None:
             orig_lc.append((0, _LC_NONE))
             continue
+        if isinstance(c, dict) and c.get("__class") == "RegExp":
+            # Pack pattern bytes + flags into the i32 const pool so RTL
+            # String.replace can honor /pat/g without a char heap.
+            raw = str(c.get("source") or "")
+            pat, fl = raw, ""
+            if raw.startswith("/"):
+                end = raw.rfind("/")
+                if end > 0:
+                    pat, fl = raw[1:end], raw[end + 1 :]
+            b0 = ord(pat[0]) if pat else 0
+            b1 = ord(pat[1]) if len(pat) > 1 else 0
+            packed = (
+                (b0 & 0xFF)
+                | ((b1 & 0xFF) << 8)
+                | ((len(pat) & 0xFF) << 16)
+                | ((1 if "g" in fl else 0) << 24)
+                | ((1 if "i" in fl else 0) << 25)
+            )
+            if packed not in const_map:
+                const_map[packed] = len(consts)
+                consts.append(packed)
+            orig_lc.append((const_map[packed], _LC_REGEX))
+            continue
         if isinstance(c, str):
             stored = c if len(c) <= _STR_CAP else "data:stub"
             orig_lc.append((_intern_name(names, name_index, stored), _LC_STR))
@@ -411,7 +437,10 @@ def _encode_v2(chunk: Chunk, sprites=None, aset: bool = False) -> bytes:
         return h
 
     for n in names:
-        trailer += struct.pack("<H", _name_hash(n))
+        # NEW: u8 length after each hash — RTL string concat folds
+        # h(a+b) = h(a)*31^len(b) + h(b), and find-or-alloc matches
+        # hash+len (two PACMAN names collide on hash alone)
+        trailer += struct.pack("<HB", _name_hash(n), min(len(n.encode("utf-8")), 255))
     trailer += struct.pack("<H", len(var_names))
     for n in var_names:
         trailer += struct.pack("<H", name_index.get(n, 0) & 0xFFFF)
@@ -430,9 +459,37 @@ def _encode_v2(chunk: Chunk, sprites=None, aset: bool = False) -> bytes:
         aset_payload, descs = build_aset_payload(
             getattr(chunk, "palette", None), spr
         )
+        # NEW: RTL descriptor table holds 16 (MAX_SPR in jmr_js_vm.sv).
+        # Fail LOUD at compile time — never silently drop a sheet.
+        if len(descs) > 16:
+            raise ValueError(
+                f"ASET has {len(descs)} sprites; RTL MAX_SPR is 16 — "
+                "grow the descriptor table, do not drop art"
+            )
         trailer += b"SPRD" + struct.pack("<H", len(descs))
         for w, h, soff in descs:
             trailer += struct.pack("<HHI", w, h, soff)
+        # NEW: FSTY — fillStyle color table. The compiler owns the title
+        # palette, so it precomputes name→palette-index with the SAME
+        # resolve the FM uses at runtime; RTL loads this LUT so PYTHON and
+        # RTL paint the exact same indices (no hardcoded hex map drift).
+        from .canvas_engine import nearest_palette_index, parse_css_color
+
+        pal = getattr(chunk, "palette", None)
+        fsty_rows = []
+        if pal:
+            for i, n in enumerate(names):
+                if i >= 1024:
+                    break  # RTL fill_lut is 1024 entries
+                s = str(n).strip().lower()
+                rgb = parse_css_color(s)
+                if rgb is None:
+                    continue
+                idx = 0 if rgb == (0, 0, 0) else nearest_palette_index(pal, rgb, lo=1)
+                fsty_rows.append((i, idx))
+        trailer += b"FSTY" + struct.pack("<H", len(fsty_rows))
+        for i, idx in fsty_rows:
+            trailer += struct.pack("<HH", i, idx & 0xFF)
     elif spr:
         # Legacy SPR1 (tiny .JS demos only): pixels inline in the trailer.
         trailer += b"SPR1" + struct.pack("<H", len(spr))
@@ -489,8 +546,8 @@ def decode_chunk(data: bytes) -> Chunk:
     if flags & FLAG_V2:
         n_names = struct.unpack_from("<H", data, off)[0]
         off += 2
-        # hashes[n_names] then varmap/classes then UTF-8 names
-        off += 2 * n_names  # skip RTL intern hashes
+        # hashes[n_names] (u16 hash + u8 len each) then varmap/classes then UTF-8 names
+        off += 3 * n_names  # skip RTL intern hash+len records
         n_vn = struct.unpack_from("<H", data, off)[0]
         off += 2
         for _ in range(n_vn):
@@ -528,6 +585,12 @@ def decode_chunk(data: bytes) -> Chunk:
                 sw, sh, soff = struct.unpack_from("<HHI", data, off)
                 off += 8
                 sprite_descs.append((int(sw), int(sh), int(soff)))
+        # NEW: skip the FSTY fillStyle LUT (RTL-only; FM resolves at runtime
+        # with the same algorithm the compiler used, so results are identical)
+        if off + 4 <= len(data) and data[off : off + 4] == b"FSTY":
+            off += 4
+            n_fsty = struct.unpack_from("<H", data, off)[0]
+            off += 2 + 4 * n_fsty
         for _ in range(n_names):
             ln = struct.unpack_from("<H", data, off)[0]
             off += 2
@@ -591,6 +654,20 @@ def decode_chunk(data: bytes) -> Chunk:
             elif a1 == _LC_F32:
                 bits = packed_consts[a0] if a0 < len(packed_consts) else 0
                 consts.append(struct.unpack("<f", struct.pack("<i", bits))[0])
+                code.append((Op.LOAD_CONST, len(consts) - 1))
+            elif a1 == _LC_REGEX:
+                packed = packed_consts[a0] if a0 < len(packed_consts) else 0
+                u = packed & 0xFFFFFFFF
+                plen = (u >> 16) & 0xFF
+                chars = []
+                if plen >= 1:
+                    chars.append(chr(u & 0xFF))
+                if plen >= 2:
+                    chars.append(chr((u >> 8) & 0xFF))
+                fl = ("g" if (u >> 24) & 1 else "") + ("i" if (u >> 25) & 1 else "")
+                consts.append(
+                    {"__class": "RegExp", "source": "/" + "".join(chars) + "/" + fl}
+                )
                 code.append((Op.LOAD_CONST, len(consts) - 1))
             else:
                 code.append((Op.LOAD_CONST, a0))

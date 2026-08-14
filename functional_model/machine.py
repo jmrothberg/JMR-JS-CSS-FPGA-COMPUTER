@@ -48,6 +48,7 @@ class Machine:
         # GUI sets more_idle to pump Tk while LIST waits for MORE.
         self.more_idle: Optional[Callable[[], None]] = None
         self._more_key: Optional[str] = None
+        self._list_more_waiting: bool = False  # NEW: GUI more_waiting / ESC abort
         self.prompt_buf: str = ""  # live "> …" shown on glass
         self.break_requested: bool = False
         self.html_host: Optional[HtmlJsHost] = None
@@ -82,7 +83,8 @@ class Machine:
         self.console_log.append(READY)
 
     def paint_monitor(
-        self, prompt: Optional[str] = None, cursor_on: bool = False
+        self, prompt: Optional[str] = None, cursor_on: bool = False,
+        cursor_col: Optional[int] = None,
     ) -> None:
         """Paint console_log + prompt onto FRONT FB (HDMI letterbox — same as SIM/BOARD)."""
         if self.running and (
@@ -101,6 +103,7 @@ class Machine:
             self.console_log[-MONITOR_VISIBLE_ROWS:],
             prompt=pr,
             cursor_on=cursor_on,
+            cursor_col=cursor_col,
         )
 
     # --- INPUT --------------------------------------------------------
@@ -122,6 +125,7 @@ class Machine:
         self.input.push_key(ch)
 
     def hard_break(self) -> None:
+        more_abort = bool(self._list_more_waiting)
         self.running = False
         self._loop_chunk = None
         self._keep_fb = False
@@ -134,12 +138,28 @@ class Machine:
         if self.html_host is not None:
             self.html_host.stop()
             self.html_host = None
-        self.input.clear_escape()
-        self.break_requested = False
+        # NEW: LIST MORE — GUI break_program push_key(ESC) then hard_break.
+        # Do not clear the abort the waiter still has to observe.
+        if more_abort:
+            self.break_requested = True
+            if self._more_key is None:
+                self._more_key = "\x1b"
+        else:
+            self.input.clear_escape()
+            self.break_requested = False
         self._print("^BREAK")
         self._ready()
         self.paint_monitor("> ")
         self.trace.edge("BREAK", "hard_break")
+        # NEW: one VM telemetry line on BREAK (minimal, no spam)
+        self.trace.edge(
+            "NOTE",
+            "VM raf_n=%s to_n=%s"
+            % (
+                len(getattr(self, "_raf_q", [])),
+                len(getattr(self, "_timers", [])),
+            ),
+        )
         self.trace.dump_ring("BREAK")
 
     def poll_escape(self) -> bool:
@@ -165,6 +185,13 @@ class Machine:
                 if row.startswith("ERROR"):
                     self.trace.edge("ERROR", row[:160])
                     self.trace.dump_ring("ERROR")
+        # NEW: log glass after DIR/LOAD/LIST/SAVE (not just the typed line)
+        u = line.strip().upper()
+        if u == "DIR" or u.startswith("LOAD") or u.startswith("SAVE") or u == "LIST" or u.startswith("LIST"):
+            glass = " | ".join(x for x in out if x and x != READY)[:400]
+            self.trace.edge("GLASS", glass)
+            if out and str(out[0]).startswith("LOADED"):
+                self.trace.edge("LOADED", out[0][:160])
         if not self.running:
             self._ready()
             if not self._keep_fb:
@@ -195,7 +222,7 @@ class Machine:
         if upper == "HELP":
             return [
                 "DIR LOAD SAVE NEW LIST EDIT INSERT DELETE RUN MEM HELP CLS",
-                "LOAD name  or  LOAD n  (n = DIR number); quotes optional",
+                "LOAD name   quotes optional;  e.g. LOAD INVADERS.HTML",
                 'e.g. LOAD INVADERS.JS   or   LOAD "PACMAN.HTML"',
                 "LIST / LIST -  pages with -- MORE -- (Space/Enter=next Esc=abort)",
                 "LIST 10-20  range;  EDIT n  then type new line + Enter",
@@ -205,7 +232,9 @@ class Machine:
             names = self.storage.catalog()
             if not names:
                 return ["(empty)"]
-            return [f"{i}  {name}" for i, name in enumerate(names, 1)]
+            # PYTHON glass spec: names only (no DIR indices). Hide .JSB/.JSH
+            # via catalog(). FPGA-SIM DIR must look the same.
+            return list(names)
         if upper.startswith("LOAD"):
             return self._cmd_load(text)
         if upper == "SAVE" or upper.startswith("SAVE "):
@@ -349,53 +378,68 @@ class Machine:
         return self._list_paged(lines)
 
     def _list_paged(self, lines: List[str]) -> List[str]:
-        """Print pages of LIST_PAGE_LINES; wait for key between pages."""
+        """Print pages of LIST_PAGE_LINES glass ROWS; wait for key between pages.
+
+        NEW: pre-wrap each line at the glass width (64 cols) and page by
+        wrapped ROWS. A 15K-char data:image line used to wrap to ~245 rows at
+        paint time, flooding the whole page past -- MORE -- (INVADERS "LIST
+        truncates"; PACMAN pages scrolled their tops off the glass).
+        """
+        from .canvas_engine import CONSOLE_COLS
+
         shown: List[str] = []
         on_page = 0
         for line in lines:
-            self._print(line)
+            text = line.replace("\t", " ")
+            segs = [text[i : i + CONSOLE_COLS] for i in range(0, len(text), CONSOLE_COLS)] or [""]
+            for seg in segs:
+                self._print(seg)
+                on_page += 1
+                self.paint_monitor("")  # NEW: no `>` over LIST / MORE
+                if on_page >= LIST_PAGE_LINES:
+                    self._print("-- MORE --")
+                    self.paint_monitor("")
+                    if not self._await_list_more():
+                        self._print("^BREAK")
+                        return shown
+                    # remove MORE line from log for cleaner next page
+                    if self.console_log and self.console_log[-1] == "-- MORE --":
+                        self.console_log.pop()
+                    on_page = 0
             shown.append(line)
-            on_page += 1
-            self.paint_monitor("> ")
-            if on_page >= LIST_PAGE_LINES:
-                self._print("-- MORE --")
-                self.paint_monitor("")
-                if not self._await_list_more():
-                    self._print("^BREAK")
-                    break
-                # remove MORE line from log for cleaner next page
-                if self.console_log and self.console_log[-1] == "-- MORE --":
-                    self.console_log.pop()
-                on_page = 0
         return shown
 
     def _await_list_more(self) -> bool:
         """True = next page; False = abort (Esc). Pattern cite BASIC MORE."""
         self._more_key = None
+        self._list_more_waiting = True
         polls = 0
-        while True:
-            if self.break_requested or self.input.escape_pending:
-                self.break_requested = False
-                self.input.clear_escape()
-                return False
-            if self._more_key is not None:
-                k = self._more_key
-                self._more_key = None
-                if k in ("\x1b", "\x03"):
+        try:
+            while True:
+                if self.break_requested or self.input.escape_pending:
+                    self.break_requested = False
+                    self.input.clear_escape()
                     return False
-                return True
-            ch = self.input.pop_key()
-            if ch is not None:
-                if ch in ("\x1b", "\x03"):
-                    return False
-                return True
-            idle = self.more_idle
-            if idle is not None:
-                idle()
-                continue
-            polls += 1
-            if polls >= 50:
-                return True  # scripts / pytest: auto-continue
+                if self._more_key is not None:
+                    k = self._more_key
+                    self._more_key = None
+                    if k in ("\x1b", "\x03"):
+                        return False
+                    return True
+                ch = self.input.pop_key()
+                if ch is not None:
+                    if ch in ("\x1b", "\x03"):
+                        return False
+                    return True
+                idle = self.more_idle
+                if idle is not None:
+                    idle()
+                    continue
+                polls += 1
+                if polls >= 50:
+                    return True  # scripts / pytest: auto-continue
+        finally:
+            self._list_more_waiting = False
 
     def _cmd_edit(self, text: str) -> List[str]:
         rest = text[4:].strip()

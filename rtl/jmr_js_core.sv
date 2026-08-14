@@ -13,6 +13,10 @@ module jmr_js_core #(
     input  logic [7:0]  kbd_data,
     input  logic [5:0]  joy_in,
     output logic [5:0]  joy_out,
+    // NEW: raw keyboard events for games (sim KEYEVT / board PS/2 decode)
+    input  logic        key_evt_stb = 1'b0,
+    input  logic [7:0]  key_evt_code = 8'd0,
+    input  logic        key_evt_down = 1'b0,
     input  logic [9:0]  dump_addr,
     output logic [7:0]  dump_data,
     output logic [9:0]  cursor,
@@ -54,8 +58,9 @@ module jmr_js_core #(
     logic        code_we;
     logic [14:0]  code_waddr;
     logic [31:0] code_wdata;
-    logic        stor_get_byte;
+    logic        stor_get_byte, stor_nl_scan;
     logic [7:0]  stor_get_data;
+    logic [15:0] stor_nl_count;
     // NEW: 4 MB external asset SRAM (jmr_sram_port) — console writes the ASET
     // payload during RUN load; the VM blitter reads sprite pixels while running.
     // The two masters never overlap (load completes before vm_start).
@@ -69,6 +74,10 @@ module jmr_js_core #(
     logic        pal_we;
     logic [7:0]  pal_waddr;
     logic [23:0] pal_wdata;
+    // NEW: VM getImageData reads the back bank (PYTHON canvas.back twin)
+    logic [18:0] vm_dump_addr;
+    logic        vm_dump_sel;
+    logic [7:0]  dump_back_rdata;
 
     // Console ↔ storage
     logic        stor_open, stor_close, stor_readline, stor_putc;
@@ -88,7 +97,7 @@ module jmr_js_core #(
 
     assign joy_out = joy_in;
 
-    // ---- work RAM 0xB000-0xDFFF (12 KB) — NAME/STORAGE/SOURCE ------------
+    // ---- work RAM 0xB000-0xDFFF (12 KB) — NAME/STORAGE only -------------
     // Indexed by addr[13:0] relative to 0xB000. Registered 1-cycle read.
     (* ram_style = "block" *) logic [7:0] work_ram [0:12287];
     logic        ram_we;
@@ -197,6 +206,7 @@ module jmr_js_core #(
         .stor_name_addr(stor_name_addr), .stor_name_len(stor_name_len),
         .stor_close(stor_close), .stor_readline(stor_readline),
         .stor_get_byte(stor_get_byte), .stor_get_data(stor_get_data),
+        .stor_nl_scan(stor_nl_scan), .stor_nl_count(stor_nl_count),
         .stor_putc(stor_putc), .stor_putc_data(stor_putc_data),
         .stor_dir(stor_dir), .stor_dir_next(stor_dir_next), .stor_delete(stor_delete),
         .stor_busy(stor_busy), .stor_done(stor_done),
@@ -214,6 +224,7 @@ module jmr_js_core #(
         .name_addr(stor_name_addr), .name_len(stor_name_len),
         .start_close(stor_close), .start_readline(stor_readline),
         .start_readfield(1'b0), .start_get_byte(stor_get_byte), .get_byte(stor_get_data),
+        .start_nl_scan(stor_nl_scan), .nl_count(stor_nl_count),
         .start_putc(stor_putc), .putc_data(stor_putc_data),
         .start_dir(stor_dir), .start_dir_next(stor_dir_next),
         .start_delete(stor_delete),
@@ -229,7 +240,9 @@ module jmr_js_core #(
         .wr_clk(clk), .rd_clk(pixel_clk), .rst_n(rst_n),
         .we(fb_we), .waddr(fb_waddr), .wdata(fb_wdata), .swap(fb_swap),
         .raddr(fb_raddr), .rdata(fb_rdata),
-        .dump_raddr(dump_fb_raddr), .dump_rdata(dump_fb_rdata)
+        .dump_raddr(vm_dump_sel ? vm_dump_addr : dump_fb_raddr),
+        .dump_rdata(dump_fb_rdata),
+        .dump_back_rdata(dump_back_rdata)
     );
 
     jmr_rectdemo_engine u_demo (
@@ -260,10 +273,15 @@ module jmr_js_core #(
         .stop((kbd_push && kbd_data == 8'h1B) || halt_pulse),
         .frame_tick(frame_tick),
         .joy_in(joy_in),
+        .key_evt_stb(key_evt_stb),
+        .key_evt_code(key_evt_code),
+        .key_evt_down(key_evt_down),
         .code_we(code_we), .code_waddr(code_waddr), .code_wdata(code_wdata),
         .busy(vm_busy), .done(vm_done),
         .fb_we(vm_fb_we), .fb_waddr(vm_fb_waddr),
         .fb_wdata(vm_fb_wdata), .fb_swap(vm_fb_swap),
+        .fb_dump_addr(vm_dump_addr), .fb_dump_sel(vm_dump_sel),
+        .fb_dump_back(dump_back_rdata),
         .sram_req(vm_sram_req), .sram_addr(vm_sram_addr),
         .sram_rdata(sram_rdata), .sram_ack(sram_ack)
     );

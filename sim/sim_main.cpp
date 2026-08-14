@@ -6,6 +6,7 @@
 #include "verilated.h"
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <sstream>
@@ -59,6 +60,7 @@ struct SdCard {
     bool initialised = false;
     unsigned acmd41_count = 0;
     unsigned wake_clocks = 0;
+    bool     dirty = false;
 
     void push(uint8_t b) { tx.push_back(b); }
     uint8_t pop() {
@@ -131,6 +133,7 @@ struct SdCard {
                 size_t off = (size_t)write_lba * SD_SECTOR;
                 if (off + SD_SECTOR <= image.size())
                     std::memcpy(&image[off], write_buf.data(), SD_SECTOR);
+                dirty = true;
                 push(0x05);
                 for (unsigned i = 0; i < SD_WRITE_BUSY_BYTES; i++) push(0x00);
                 push(0xFF);
@@ -162,6 +165,16 @@ struct SdCard {
 };
 
 static SdCard sd;
+static std::string sd_path;
+
+static void sd_save_image() {
+    if (!sd.dirty || sd_path.empty() || sd.image.empty()) return;
+    FILE *f = std::fopen(sd_path.c_str(), "wb");
+    if (!f) return;
+    std::fwrite(sd.image.data(), 1, sd.image.size(), f);
+    std::fclose(f);
+    sd.dirty = false;
+}
 
 static void sd_load_image() {
     const char *env = std::getenv("JMR_CARD_IMG");
@@ -181,6 +194,7 @@ static void sd_load_image() {
         }
         std::fclose(f);
         if (sd.present) {
+            sd_path = p;
             std::cerr << "SD image " << p << " (" << sd.image.size() << " bytes)\n";
             return;
         }
@@ -270,6 +284,7 @@ int main(int argc, char** argv) {
         }
         // Compile-on-RUN: host rewrote card.img .JSH; reload SPI image before FAT OPEN
         if (line == "SDRELOAD") {
+            sd_save_image();
             sd_load_image();
             std::cout << "OK" << std::endl;
             continue;
@@ -285,9 +300,28 @@ int main(int argc, char** argv) {
             std::string text = line.substr(5);
             for (char c : text) push_key(uint8_t(c));
             push_key(0x0D);
-            // FAT mount + DIR walk needs many SPI bit times
-            ticks(5'000'000);
-            std::cout << "OK" << std::endl;
+            // Tick until prompt, game_mode (RUN started), or -- MORE --.
+            // Missing game_mode burned the full 100M-clock cap after RUN.
+            unsigned clk = 0;
+            int capped = 1;
+            int game_slices = 0;
+            for (int i = 0; i < 400; ++i) {
+                ticks(250000);
+                clk += 250000;
+                if (top->ready_lit) { capped = 0; break; }
+                // RUN: stop shortly after game_mode (not another 100M clocks).
+                // A few extra slices let boot rAF (DONKEY Enter at frames 4/12) run.
+                if (top->game_mode) {
+                    game_slices++;
+                    if (game_slices >= 16) { capped = 0; break; }
+                }
+                if ((i & 3) == 3) {
+                    std::string s = screen_text();
+                    if (s.find("-- MORE") != std::string::npos) { capped = 0; break; }
+                }
+            }
+            sd_save_image();
+            std::cout << "OK clk=" << clk << " capped=" << capped << std::endl;
             continue;
         }
         if (line.rfind("JOY ", 0) == 0) {
@@ -306,6 +340,20 @@ int main(int argc, char** argv) {
             std::cout << "OK" << std::endl;
             continue;
         }
+        // NEW: KEYEVT <keyCode> <down> — raw keyboard event for games
+        // (GUI forwards real keys; the HTML decides bindings)
+        if (line.rfind("KEYEVT ", 0) == 0) {
+            unsigned code = 0, down = 0;
+            std::sscanf(line.c_str() + 7, "%u %u", &code, &down);
+            top->key_evt_code = code & 0xFF;
+            top->key_evt_down = down ? 1 : 0;
+            top->key_evt_stb = 1;
+            ticks(1);
+            top->key_evt_stb = 0;
+            ticks(1);
+            std::cout << "OK" << std::endl;
+            continue;
+        }
         if (line == "SCREEN?") {
             std::cout << "SCREEN " << screen_text() << std::endl;
             continue;
@@ -320,6 +368,16 @@ int main(int argc, char** argv) {
             ticks(1000);
             if (line == "TICK") std::cout << "FB SAME" << std::endl;
             else std::cout << "OK" << std::endl;
+            continue;
+        }
+        // NEW: TICKN <n> — n×1000 clocks in one RPC (DONKEY's 2.4 MB .JSH
+        // FAT+SRAM stream needs millions of clocks; per-TICK RPC is too slow)
+        if (line.rfind("TICKN ", 0) == 0) {
+            unsigned n = 1;
+            std::sscanf(line.c_str() + 6, "%u", &n);
+            if (n > 100000u) n = 100000u;
+            ticks(1000u * n);
+            std::cout << "OK" << std::endl;
             continue;
         }
         if (line.rfind("PROMPT ", 0) == 0) {
@@ -340,7 +398,102 @@ int main(int argc, char** argv) {
                       << " spr0=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__spr_nid[0])
                       << " dihit=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_di_hit)
                       << " dimiss=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_di_miss)
+                      // NEW: join/path bring-up counters (PACMAN maze debug)
+                      << " joinmiss=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_join_miss)
+                      << " pathovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_path_ovf)
+                      << " heapovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_heap_ovf)
+                      << " toovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_to_ovf)
+                      << " jsonovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_json_ovf)
+                      << " swaps=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n)
                       << std::endl;
+            continue;
+        }
+        // NEW: VARPEEK <i> <n> — dump VM vars (bring-up only)
+        if (line.rfind("VARPEEK ", 0) == 0) {
+            unsigned a = 0, n = 8;
+            std::sscanf(line.c_str() + 8, "%u %u", &a, &n);
+            std::ostringstream oss;
+            oss << "VARS";
+            for (unsigned i = 0; i < n && (a + i) < 512u; i++)
+                oss << " " << int32_t(top->rootp->jmr_js_core__DOT__u_vm__DOT__vars[a + i]);
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
+        // NEW: FBRAW? — nonzero counts of both FB banks + front bit (bring-up)
+        if (line == "FBRAW?") {
+            unsigned nz0 = 0, nz1 = 0;
+            for (unsigned i = 0; i < 307200u; i++) {
+                if (top->rootp->jmr_js_core__DOT__u_fb__DOT__mem0[i]) nz0++;
+                if (top->rootp->jmr_js_core__DOT__u_fb__DOT__mem1[i]) nz1++;
+            }
+            std::cout << "FBRAW nz0=" << nz0 << " nz1=" << nz1
+                      << " front=" << unsigned(top->rootp->jmr_js_core__DOT__u_fb__DOT__front)
+                      << std::endl;
+            continue;
+        }
+        // NEW: PDOPEEK? — first 16 latched path commands (op, p1x, p1y, p2x, p2y);
+        // PDOCLR re-arms the latch (bring-up only)
+        if (line == "PDOPEEK?") {
+            auto* r = top->rootp;
+            std::ostringstream oss;
+            oss << "PDO n=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_pdo_n);
+            for (int i = 0; i < 16; i++) {
+                auto& w = r->jmr_js_core__DOT__u_vm__DOT__dbg_pdo[i];
+                unsigned op = (unsigned)((w[2] >> 0) & 0x3);
+                int16_t p1x = (int16_t)((w[1] >> 16) & 0xFFFF);
+                int16_t p1y = (int16_t)(w[1] & 0xFFFF);
+                int16_t p2x = (int16_t)((w[0] >> 16) & 0xFFFF);
+                int16_t p2y = (int16_t)(w[0] & 0xFFFF);
+                oss << " [" << op << ":" << p1x << "," << p1y << "," << p2x << "," << p2y << "]";
+            }
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
+        if (line == "PDOCLR") {
+            top->rootp->jmr_js_core__DOT__u_vm__DOT__dbg_pdo_n = 0;
+            top->rootp->jmr_js_core__DOT__u_vm__DOT__dbg_rect_n = 0;
+            top->rootp->jmr_js_core__DOT__u_vm__DOT__dbg_line_px = 0;
+            top->rootp->jmr_js_core__DOT__u_vm__DOT__dbg_circ_px = 0;
+            top->rootp->jmr_js_core__DOT__u_vm__DOT__dbg_rect_px = 0;
+            std::cout << "OK" << std::endl;
+            continue;
+        }
+        // NEW: PXCNT? — raster px counters since PDOCLR (flood hunt)
+        if (line == "PXCNT?") {
+            auto* r = top->rootp;
+            std::cout << "PX line=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_line_px)
+                      << " circ=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_circ_px)
+                      << " rect=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_rect_px)
+                      << std::endl;
+            continue;
+        }
+        // NEW: RECTPEEK? — first 16 latched rect rasterizations
+        if (line == "RECTPEEK?") {
+            auto* r = top->rootp;
+            std::ostringstream oss;
+            oss << "RECT n=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_rect_n);
+            for (int i = 0; i < 16; i++) {
+                uint64_t w = r->jmr_js_core__DOT__u_vm__DOT__dbg_rect[i];
+                unsigned c  = (unsigned)((w >> 40) & 0xFF);
+                unsigned rx = (unsigned)((w >> 30) & 0x3FF);
+                unsigned ry = (unsigned)((w >> 20) & 0x3FF);
+                unsigned rw = (unsigned)((w >> 10) & 0x3FF);
+                unsigned rh = (unsigned)(w & 0x3FF);
+                oss << " [c" << c << ":" << rx << "," << ry << " " << rw << "x" << rh << "]";
+            }
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
+        // NEW: FBBANK? <0|1> — dump one FB bank directly (bring-up: see what the
+        // BACK buffer holds when the front never swaps in)
+        if (line.rfind("FBBANK? ", 0) == 0) {
+            unsigned b = 0;
+            std::sscanf(line.c_str() + 8, "%u", &b);
+            std::vector<uint8_t> full(307200u, 0);
+            for (unsigned i = 0; i < 307200u; i++)
+                full[i] = b ? (uint8_t)top->rootp->jmr_js_core__DOT__u_fb__DOT__mem1[i]
+                            : (uint8_t)top->rootp->jmr_js_core__DOT__u_fb__DOT__mem0[i];
+            std::cout << "FB 640 480 " << b64_encode(full.data(), full.size()) << std::endl;
             continue;
         }
         // NEW: SRAMPEEK <word_addr> <n> — dump asset-SRAM words (bring-up only)
@@ -373,6 +526,28 @@ int main(int argc, char** argv) {
         }
         if (line == "FB?") {
             // NEW: real mini-FB pixels when game_mode (RECTDEMO / VM)
+            if (top->game_mode) {
+                std::cout << "FB 640 480 " << fb_export_b64() << std::endl;
+            } else {
+                std::cout << "FB SAME" << std::endl;
+            }
+            continue;
+        }
+        // NEW: one VM frame — tick until fb swap (dbg_swap_n) or cap.
+        // GUI TICK=1000 was << frame_div 65536, so PACMAN ghosts never left.
+        if (line == "FRAME") {
+            unsigned before = 0;
+            if (top->rootp)
+                before = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n);
+            const int CAP = 2000000; // ~one maze/title blit + frame_tick 65536
+            int used = 0;
+            int got = 0;
+            for (; used < CAP; used++) {
+                tick();
+                unsigned now = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n);
+                if (now != before) { got = 1; used++; break; }
+            }
+            (void)got;
             if (top->game_mode) {
                 std::cout << "FB 640 480 " << fb_export_b64() << std::endl;
             } else {

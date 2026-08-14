@@ -44,6 +44,55 @@ from runtime.backend import PythonBackend  # noqa: E402
 FRAME_MS = 16
 DEADZONE = 40
 
+# NEW: Tk keysym → (JS keyCode, JS event.key). The HTML decides bindings —
+# this is the raw-keyboard path (Enter starts PACMAN; letters for DONKEY).
+_TK_TO_JS = {
+    "Return": (13, "Enter"),
+    "KP_Enter": (13, "Enter"),
+    "space": (32, " "),
+    "Left": (37, "ArrowLeft"),
+    "Up": (38, "ArrowUp"),
+    "Right": (39, "ArrowRight"),
+    "Down": (40, "ArrowDown"),
+    "BackSpace": (8, "Backspace"),
+    "Tab": (9, "Tab"),
+    "Shift_L": (16, "Shift"),
+    "Shift_R": (16, "Shift"),
+    "Control_L": (17, "Control"),
+    "Control_R": (17, "Control"),
+}
+
+
+def apply_line_key(buf: str, col: int, keysym: str, char: str = "") -> tuple[str, int]:
+    """Monitor line editor: Left/Right move an insert index; Backspace deletes there."""
+    col = max(0, min(int(col), len(buf)))
+    if keysym == "Left":
+        return buf, max(0, col - 1)
+    if keysym == "Right":
+        return buf, min(len(buf), col + 1)
+    if keysym == "BackSpace":
+        if col <= 0:
+            return buf, 0
+        return buf[: col - 1] + buf[col:], col - 1
+    if char and char.isprintable():
+        return buf[:col] + char + buf[col:], col + 1
+    return buf, col
+
+
+def _js_key(event: tk.Event) -> tuple[int, str] | None:
+    """Tk keysym → (JS keyCode, event.key). HTML decides bindings."""
+    ks = event.keysym
+    if ks in _TK_TO_JS:
+        return _TK_TO_JS[ks]
+    ch = getattr(event, "char", "") or ""
+    if len(ks) == 1 and ks.isalpha():
+        return (ord(ks.upper()), ch if ch else ks)
+    if len(ks) == 1:
+        return (ord(ks), ch if ch else ks)
+    if len(ch) == 1 and ch.isprintable():
+        return (ord(ch.upper()) if ch.isalpha() else ord(ch), ch)
+    return None
+
 
 def _try_sim_backend():
     try:
@@ -77,6 +126,8 @@ class App:
         self.root = tk.Tk()
         self.root.title("JMR JS Computer")
         self.root.configure(bg="#1a1a1a")
+        self._alive = True
+        self._after_id: str | None = None
         self.machine = Machine()
         self.machine.boot_lines()
 
@@ -95,6 +146,7 @@ class App:
         self.backend = self.backends[0]
 
         self.line_buf = ""
+        self.line_col = 0
         self._fire1 = False
         self._fire2 = False
         self._key_left = False
@@ -111,6 +163,9 @@ class App:
         self._build_ui()
         # MORE waiter: pump Tk + refresh glass (BASIC more_idle pattern)
         self.machine.more_idle = self._more_idle
+        for b in self.backends:
+            if getattr(b, "name", "") == "FPGA-SIM":
+                b.run_wait_idle = self._more_idle
 
         # bind_all so arrows work even if focus is weird (no Text widget to steal them)
         self.root.bind_all("<KeyPress>", self.on_key_press)
@@ -127,7 +182,19 @@ class App:
         self.machine.paint_monitor("> ")
         self._refresh_fb()
         self.canvas_label.focus_set()
-        self.root.after(FRAME_MS, self._frame)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        # NEW: size once. Status/log text must never grow the window or the
+        # 640×480 glass (Enter / F9 / LOADING used to widen the alleys).
+        self.root.update_idletasks()
+        gw = self.root.winfo_reqwidth()
+        gh = self.root.winfo_reqheight()
+        self.root.geometry(f"{gw}x{gh}")
+        self.root.minsize(gw, gh)
+        self.root.maxsize(gw, gh)
+        self.root.resizable(False, False)
+        self._status_shown = None
+        self._set_status(self._status_text())
+        self._after_id = self.root.after(FRAME_MS, self._frame)
 
     def _build_ui(self) -> None:
         self.status = tk.Label(
@@ -137,11 +204,15 @@ class App:
             bg="#1a1a1a",
             anchor="w",
             font=("Courier", 11),
+            width=80,
         )
         self.status.pack(fill=tk.X, padx=6, pady=4)
 
         self.photo = tk.PhotoImage(width=WIDTH, height=HEIGHT)
-        self.canvas_label = tk.Label(self.root, image=self.photo, bg="#000", takefocus=1)
+        self.canvas_label = tk.Label(
+            self.root, image=self.photo, bg="#000", takefocus=1,
+            width=WIDTH, height=HEIGHT,
+        )
         self.canvas_label.pack(padx=6, pady=4)
 
         self.hint = tk.Label(
@@ -150,6 +221,7 @@ class App:
             fg="#888",
             bg="#1a1a1a",
             anchor="w",
+            width=80,
         )
         self.hint.pack(fill=tk.X, padx=6, pady=2)
 
@@ -166,6 +238,20 @@ class App:
         tr = self.backend.trace_path()
         tip = f"  log={tr.name}" if tr is not None else ""
         return f"Runtime: {cur}   [{' | '.join(names)}]{tip}"
+
+    def _set_status(self, text: str) -> None:
+        # NEW: truncate inside a fixed-width label — never wrap (height) or
+        # grow (width). Courier width=80 chars matches the 640 glass.
+        max_ch = 80
+        if len(text) > max_ch:
+            text = text[: max_ch - 1] + "…"
+        if text == getattr(self, "_status_shown", None):
+            return
+        self._status_shown = text
+        try:
+            self.status.configure(text=text)
+        except tk.TclError:
+            pass
 
     def _is_running(self) -> bool:
         """Game owns the glass — PYTHON loop / last frame or FPGA-SIM game_mode."""
@@ -184,11 +270,14 @@ class App:
         )
 
     def _more_idle(self) -> None:
+        if not self._alive:
+            return
         try:
             self._refresh_fb()
             self.root.update()
         except tk.TclError:
-            pass
+            self._alive = False
+            return
         time.sleep(0.01)
 
     def cycle_runtime(self, _event=None) -> None:
@@ -200,7 +289,7 @@ class App:
         if self.backend.name == "FPGA-SIM":
             self.backend._started = False
             self.backend._proc = None
-        self.status.configure(text=self._status_text())
+        self._set_status(self._status_text())
         self._paint_prompt()
         self.canvas_label.focus_set()
 
@@ -209,6 +298,7 @@ class App:
         m.push_key("\x1b")
         self.backend.hard_break()
         self.line_buf = ""
+        self.line_col = 0
         self._paint_prompt()
         self.canvas_label.focus_set()
 
@@ -236,10 +326,13 @@ class App:
         parts = clip.split("\n")
         for i, part in enumerate(parts):
             last = i == len(parts) - 1
-            self.line_buf += part
+            col = getattr(self, "line_col", len(self.line_buf))
+            self.line_buf = self.line_buf[:col] + part + self.line_buf[col:]
+            self.line_col = col + len(part)
             if not last:
                 line = self.line_buf
                 self.line_buf = ""
+                self.line_col = 0
                 self.backend.type_line(line)
                 self._after_command()
         self._paint_prompt()
@@ -255,16 +348,37 @@ class App:
             if event.keysym.lower() == "v":
                 return self.on_paste(event)
             return "break"
-        # Play keys — always (games or monitor MORE)
+        # NEW: game running → forward the RAW key (JS keyCode/key) to the
+        # runtime key-state engine. The HTML decides bindings (Enter starts
+        # PACMAN); KEYBITS below stays as the joy tether.
+        if self._is_running():
+            jk = _js_key(event)
+            if jk is not None and hasattr(self.backend, "key_event"):
+                self.backend.key_event(jk[0], jk[1], True)
+        # Play keys only while a game is running (or MORE paging).
+        # At the monitor prompt, Left/Right move the insert cursor.
+        playing = self._is_running()
         if event.keysym == "Left":
-            self._key_left = True
-            self._emit_keys()
-            self._feed_more(" ")
+            if playing:
+                self._key_left = True
+                self._emit_keys()
+                self._feed_more(" ")
+            else:
+                self.line_buf, self.line_col = apply_line_key(
+                    self.line_buf, self.line_col, "Left"
+                )
+                self._paint_prompt()
             return "break"
         if event.keysym == "Right":
-            self._key_right = True
-            self._emit_keys()
-            self._feed_more(" ")
+            if playing:
+                self._key_right = True
+                self._emit_keys()
+                self._feed_more(" ")
+            else:
+                self.line_buf, self.line_col = apply_line_key(
+                    self.line_buf, self.line_col, "Right"
+                )
+                self._paint_prompt()
             return "break"
         if event.keysym == "Up":
             self._key_up = True
@@ -283,7 +397,9 @@ class App:
                 return "break"
             if self._is_running():
                 return "break"
-            self.line_buf += " "
+            self.line_buf, self.line_col = apply_line_key(
+                self.line_buf, self.line_col, "space", " "
+            )
             self._paint_prompt()
             return "break"
         if self._is_running():
@@ -293,21 +409,39 @@ class App:
             self._feed_more("\r")
             line = self.line_buf
             self.line_buf = ""
+            self.line_col = 0
+            # NEW: fat LOAD/RUN must not freeze the window (swallows Enter)
+            up = line.strip().upper()
+            if up == "RUN" or up.startswith("RUN ") or up.startswith("LOAD"):
+                try:
+                    self._set_status(self._status_text() + "  LOADING/COMPILING")
+                    self.root.update_idletasks()
+                except tk.TclError:
+                    pass
             self.backend.type_line(line)
             self._after_command()
             return "break"
         if event.keysym == "BackSpace":
-            self.line_buf = self.line_buf[:-1]
+            self.line_buf, self.line_col = apply_line_key(
+                self.line_buf, self.line_col, "BackSpace"
+            )
             self._paint_prompt()
             return "break"
         ch = event.char
         if ch and ch.isprintable():
-            self.line_buf += ch
+            self.line_buf, self.line_col = apply_line_key(
+                self.line_buf, self.line_col, "char", ch
+            )
             self._paint_prompt()
             return "break"
         return None
 
     def on_key_release(self, event: tk.Event) -> str | None:
+        # NEW: raw keyup twin of the on_key_press key_event forward
+        if self._is_running():
+            jk = _js_key(event)
+            if jk is not None and hasattr(self.backend, "key_event"):
+                self.backend.key_event(jk[0], jk[1], False)
         if event.keysym == "Left":
             self._key_left = False
             self._emit_keys()
@@ -353,8 +487,16 @@ class App:
             pref = m.edit_prefill() if getattr(m, "_edit_waiting", None) is not None else None
         if pref is not None:
             self.line_buf = pref
-        self._paint_prompt()
-        self.canvas_label.focus_set()
+            self.line_col = len(pref)
+        # NEW: LOAD/RUN can outlive the window (DONKEY compile); skip
+        # focus if the user already closed Tk.
+        if not self._alive:
+            return
+        try:
+            self._paint_prompt()
+            self.canvas_label.focus_set()
+        except tk.TclError:
+            return
         self._refresh_fb()
 
     def _paint_prompt(self) -> None:
@@ -363,14 +505,20 @@ class App:
         if getattr(self.backend, "more_waiting", False):
             return
         m = getattr(self.backend, "machine", self.machine)
-        prompt = f"> {self.line_buf}"
-        # Paint into the ACTIVE runtime glass (FPGA-SIM uses PROMPT RPC)
+        prompt = self._prompt_text()
+        col = max(0, min(getattr(self, "line_col", len(self.line_buf)), len(self.line_buf)))
+        # NEW: cyan block at insert index (`> ` is 2 cols) — no yellow '|'
+        cc = 2 + col
         if hasattr(self.backend, "paint_prompt"):
-            self.backend.paint_prompt(prompt, cursor_on=self._cursor_on)
+            self.backend.paint_prompt(prompt, cursor_on=self._cursor_on, cursor_col=cc)
         else:
-            m.paint_monitor(prompt, cursor_on=self._cursor_on)
+            m.paint_monitor(prompt, cursor_on=self._cursor_on, cursor_col=cc)
         self._last_prompt = prompt
         self._refresh_fb()
+
+    def _prompt_text(self) -> str:
+        """`> ` + line. Cursor is the cyan block, not a '|' glyph."""
+        return f"> {self.line_buf}"
 
     def _emit_keys(self) -> None:
         # NEW: KEYBITS only — never JOY 0 (SIM assigns joy_in; JOY wiped arrows/Space)
@@ -407,28 +555,54 @@ class App:
         except tk.TclError:
             pass
 
+    def _on_close(self) -> None:
+        # NEW: cancel the after-loop before destroy so Tk does not fire
+        # `_frame` / focus on a dead interpreter (close during LOAD/RUN).
+        self._alive = False
+        if self._after_id is not None:
+            try:
+                self.root.after_cancel(self._after_id)
+            except tk.TclError:
+                pass
+            self._after_id = None
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
     def _frame(self) -> None:
-        # One tick only (SimBackend.frame_tick does TICK; poll is a no-op)
-        self.backend.frame_tick()
-        # NEW: blink cyan block on letterbox so you can see the insert point
-        now = time.monotonic()
-        blink_flip = False
-        if now - self._cursor_t >= 0.5:
-            self._cursor_on = not self._cursor_on
-            self._cursor_t = now
-            blink_flip = True
-        if not self._is_running():
-            prompt = f"> {self.line_buf}"
-            if hasattr(self.backend, "paint_prompt"):
-                if self._last_prompt != prompt or blink_flip:
-                    self.backend.paint_prompt(prompt, cursor_on=self._cursor_on)
-                    self._last_prompt = prompt
-        self._refresh_fb()
-        self.status.configure(text=self._status_text())
-        self.root.after(FRAME_MS, self._frame)
+        if not self._alive:
+            return
+        try:
+            # One tick only (SimBackend.frame_tick does TICK; poll is a no-op)
+            self.backend.frame_tick()
+            # NEW: blink cyan block on letterbox so you can see the insert point
+            now = time.monotonic()
+            blink_flip = False
+            if now - self._cursor_t >= 0.5:
+                self._cursor_on = not self._cursor_on
+                self._cursor_t = now
+                blink_flip = True
+            if not self._is_running():
+                prompt = self._prompt_text()
+                col = max(0, min(getattr(self, "line_col", 0), len(self.line_buf)))
+                cc = 2 + col
+                if hasattr(self.backend, "paint_prompt"):
+                    if self._last_prompt != prompt or blink_flip:
+                        self.backend.paint_prompt(
+                            prompt, cursor_on=self._cursor_on, cursor_col=cc
+                        )
+                        self._last_prompt = prompt
+            self._refresh_fb()
+            self._set_status(self._status_text())
+            self._after_id = self.root.after(FRAME_MS, self._frame)
+        except tk.TclError:
+            self._alive = False
+            self._after_id = None
 
     def run(self) -> None:
         self.root.mainloop()
+        self._alive = False
         for b in self.backends:
             b.shutdown()
 

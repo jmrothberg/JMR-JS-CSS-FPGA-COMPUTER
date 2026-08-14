@@ -15,12 +15,14 @@ module jmr_mini_fb (
     output logic [7:0]  rdata,
     // tether dump port (core clk) — shares Port A with writes
     input  logic [18:0] dump_raddr = 19'd0,
-    output logic [7:0]  dump_rdata
+    output logic [7:0]  dump_rdata,
+    // NEW: back-buffer dump (already read both banks; mux only — no 3rd port)
+    output logic [7:0]  dump_back_rdata
 );
     localparam int PIXELS = 640 * 480;
-    (* ram_style = "block" *) logic [7:0] mem0 [0:PIXELS-1];
-    (* ram_style = "block" *) logic [7:0] mem1 [0:PIXELS-1];
-    logic front;
+    (* ram_style = "block" *) logic [7:0] mem0 [0:PIXELS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [7:0] mem1 [0:PIXELS-1] /*verilator public_flat_rd*/;
+    logic front /*verilator public_flat_rd*/;
     logic [7:0] r0, r1, d0, d1;
 
     always_ff @(posedge wr_clk) begin
@@ -47,6 +49,7 @@ module jmr_mini_fb (
         r1 <= mem1[raddr];
     end
 
-    assign rdata      = front ? r0 : r1;
-    assign dump_rdata = front ? d0 : d1;
+    assign rdata           = front ? r0 : r1;
+    assign dump_rdata      = front ? d0 : d1;
+    assign dump_back_rdata = front ? d1 : d0;
 endmodule

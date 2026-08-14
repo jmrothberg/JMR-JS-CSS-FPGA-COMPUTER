@@ -10,7 +10,13 @@ module sd_spi_master #(
     // runs at 4.6875 MHz, where those defaults give ~18 kHz init — below the SD
     // spec's 100–400 kHz window — so top_nexys_a7 overrides them.
     parameter int unsigned INIT_DIV = 127,
+`ifdef VERILATOR
+    // Sim-only: SCK = clk/2. Board keeps RUN_DIV=3 (real SPI). Fat .JSH loads
+    // were minutes in Verilator at the board divider.
+    parameter int unsigned RUN_DIV  = 0
+`else
     parameter int unsigned RUN_DIV  = 3
+`endif
 ) (
     input  logic        clk,
     input  logic        rst_n,

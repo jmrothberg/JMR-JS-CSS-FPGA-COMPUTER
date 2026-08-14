@@ -38,6 +38,8 @@ module storage_engine #(
     // NEW: raw file byte for PATCH.BIN boot loader (after OPEN "I")
     input  logic        start_get_byte = 1'b0,
     output logic [7:0]  get_byte,
+    input  logic        start_nl_scan = 1'b0,  // count remaining 0x0A from f_pos
+    output logic [15:0] nl_count,
     input  logic        start_putc,       // PRINT# separator / newline
     input  logic [7:0]  putc_data,
     // NEW: console DIR catalog + REMOVE (DIR uses BRAM sbuf sequential dent walk)
@@ -160,6 +162,7 @@ module storage_engine #(
         S_FC0, S_FC1, S_FC2,                     // free cluster chain
         S_RB0, S_RB0C, S_RB1, S_RBA0, S_RBA1, S_RBA1B, // read byte / pipelined LBA
         S_GB0, S_GB1,                            // NEW: public get_byte
+        S_NL0, S_NL1,                            // remaining-file newline scan
         S_RL0, S_RL1, S_RL2,                     // LINE INPUT#
         S_RF0, S_RF1, S_RF2, S_RF3, S_RF4,       // INPUT# field
         S_RF5, S_RF6,
@@ -238,6 +241,7 @@ module storage_engine #(
     logic        cl_data_done; // NEW: CLOSE data-sector flush latch
     logic        cat_on;       // NEW: DIR catalog scan active
     logic        dir_yield;    // NEW: S_DIR_ADV should S_CPY after advancing
+    logic [15:0] nl_acc;
 
     assign busy      = (state != S_IDLE);
     assign done      = done_r;
@@ -247,6 +251,7 @@ module storage_engine #(
     assign sink_busy = sink_busy_r;
     // NEW: expose last S_RB0C byte for PATCH.BIN / binary readers
     assign get_byte  = rb_byte;
+    assign nl_count  = nl_acc;
 
     // ---- helpers ---------------------------------------------------------
     function automatic logic [7:0] upcase(input logic [7:0] c);
@@ -420,6 +425,7 @@ module storage_engine #(
             slot_ok <= 1'b0; found_r <= 1'b0;
             ent_clus <= 32'h0; ent_size <= 32'h0;
             eof_r <= 1'b0; err_r <= 1'b0; done_r <= 1'b0;
+            nl_acc <= 16'd0;
             bare_name <= 1'b0; alt_try <= 3'd0;
             cat_on <= 1'b0; dir_yield <= 1'b0;
             line_n <= 9'h0; line_pos <= 9'h0; fld_off <= 9'h0; fld_len <= 9'h0;
@@ -480,6 +486,12 @@ module storage_engine #(
                         eof_r <= 1'b0;
                         err_r <= 1'b0;
                         state <= S_GB0;
+                    end else if (start_nl_scan) begin
+                        // Count remaining 0x0A from current f_pos (one SPI sector at a time)
+                        eof_r <= 1'b0;
+                        err_r <= 1'b0;
+                        nl_acc <= 16'd0;
+                        state <= S_NL0;
                     end else if (start_putc) begin
                         app_byte <= putc_data;
                         push_call(S_AP0, S_FIN);
@@ -970,6 +982,21 @@ module storage_engine #(
                 end
                 S_GB1: push_call(S_RBA0, S_FIN);
 
+                // Remaining-file NL count — one get_byte + advance per loop,
+                // all inside storage (no console handshake per byte).
+                S_NL0: begin
+                    if (mode_r != 8'h49) state <= S_ERR;
+                    else if (f_pos >= f_size) begin
+                        eof_r <= 1'b1;
+                        state <= S_FIN;
+                    end else push_call(S_RB0, S_NL1);
+                end
+                S_NL1: begin
+                    if (rb_byte == 8'h0A && nl_acc != 16'hFFFF)
+                        nl_acc <= nl_acc + 16'd1;
+                    push_call(S_RBA0, S_NL0);
+                end
+
                 // ---------------- LINE INPUT# -----------------------------
                 // Shared line filler: reads up to the next LF into linebuf.
                 // rl_ret picks the consumer (LINE INPUT# vs INPUT# refill).
@@ -1346,6 +1373,11 @@ module storage_engine #(
                         state  <= S_FIN;
                     end else if (dent[0] == 8'hE5 || dent[11] == 8'h0F || dent[11][3]) begin
                         state <= S_DIR_ADV; // skip
+                    end else if (
+                        (dent[8] == "J" && dent[9] == "S" && dent[10] == "H") ||
+                        (dent[8] == "J" && dent[9] == "S" && dent[10] == "B")
+                    ) begin
+                        state <= S_DIR_ADV; // hide .JSH/.JSB sidecars
                     end else begin
                         dent_i <= 5'd0;
                         line_n <= 9'h0;
@@ -1375,7 +1407,12 @@ module storage_engine #(
                         if (dent_i >= 5'd11) begin
                             fld_off   <= 9'h0;
                             // NEW: include this cycle's optional ext byte in length
-                            fld_len   <= line_n + ((dent[dent_i - 5'd1] != 8'h20) ? 9'd1 : 9'd0);
+                            // .HTM on FAT → glass .HTML (PYTHON names)
+                            if (dent[8] == "H" && dent[9] == "T" && dent[10] == "M") begin
+                                linebuf[line_n[7:0] + ((dent[10] != 8'h20) ? 8'd1 : 8'd0)] <= "L";
+                                fld_len <= line_n + ((dent[dent_i - 5'd1] != 8'h20) ? 9'd1 : 9'd0) + 9'd1;
+                            end else
+                                fld_len <= line_n + ((dent[dent_i - 5'd1] != 8'h20) ? 9'd1 : 9'd0);
                             cpy_i     <= 9'h0;
                             dir_yield <= 1'b1;
                             state     <= S_DIR_ADV;

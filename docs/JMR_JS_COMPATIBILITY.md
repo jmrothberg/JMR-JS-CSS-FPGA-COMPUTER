@@ -147,6 +147,67 @@ still has Invaders hex / 160×120 FB only.
 
 ---
 
+## Frozen ISA (three HTML compiles, 2026-08-14)
+
+This is the **actual** `CALL_NATIVE` / `CALL_METHOD` / Canvas surface emitted
+by `INVADERS.HTML` / `PACMAN.HTML` / `DONKEY.HTML`. It is the ISA. Do **not**
+grow “popular HTML5” past this list. Status: **done** (PYTHON + RTL), **gap**
+(play-blocking or a rung still lies), **never**.
+
+Chrome is authoring only. Fonts are **never** Chrome TTF (PYTHON 8×8 bitmap;
+RTL `fillText` is a 64×8 rect stub).
+
+### Natives (`CALL_NATIVE` → `jsb_format.NATIVE_IDS`)
+
+| Native | Titles | Status |
+|---|---|---|
+| `document.getElementById` / `querySelector` / `createElement` | all | done (DOM stub / canvas elem) |
+| `addEventListener` / `removeEventListener` (document/window) | all | done |
+| `document.dispatchEvent` / `window.dispatchEvent` | DONKEY | done (immediate fire) |
+| `new KeyboardEvent` / `Event` / `CustomEvent` / `MouseEvent` | DONKEY boot Enter | done PYTHON+RTL (`NEW_OBJ` copies type+options) |
+| `requestAnimationFrame` / `setTimeout` / `clearTimeout` | all | done |
+| `Math.floor` / `abs` / `min` / `max` / `random` / `sqrt` | INVADERS, PACMAN | done |
+| `JSON.parse` / `JSON.stringify` | INVADERS, PACMAN | **gap** until nested number arrays do not leak RTL `n_arr` |
+| `Array` ctor | PACMAN | **gap** until `fill`+`map` temps rewind |
+| `Image` | INVADERS, DONKEY | done (ASET handle) |
+| `Date` / `Date.now` | INVADERS, PACMAN | done (frame clock) |
+| `localStorage.*` | INVADERS | done (in-memory) |
+| `typeof` | PACMAN | done PYTHON; RTL via compiler op |
+| `window.open` | PACMAN | **never** (no-op / `_stub`) |
+| `console.log` / `console.warn` | INVADERS, DONKEY | done |
+
+### Methods (language / VM — not title gates)
+
+| Method | Titles | Status |
+|---|---|---|
+| `join` | PACMAN (`code.join('')` maze keys) | **gap** until `==='1100'` hits `case` (not `default` spokes) |
+| `indexOf` | PACMAN (neighbor bits + beans stringify) | **gap** until `indexOf(1)>-1` and string `indexOf(0)` |
+| `fill` / `map` / `filter` / `unshift` | PACMAN finder | **gap** on RTL if nursery pins `arr=4095` |
+| `forEach` / `find` / `splice` / `push` | INVADERS, PACMAN | done |
+| `replace` (string + RegExp stub) | PACMAN | done |
+| `assign` / `bind` | PACMAN | done |
+| `getContext` | all | done |
+
+### Canvas ops
+
+| Op | Titles | Status |
+|---|---|---|
+| `fillRect` / `clearRect` / `drawImage` / `setTransform` | INVADERS / DONKEY | done |
+| `beginPath` / `moveTo` / `lineTo` / `arc` / `stroke` / `fill` / `quadraticCurveTo` | PACMAN (+ INVADERS arc) | **gap** until maze `switch` draws **arcs** (occupancy), not four spokes; `#09f` stroke color is FSTY (not topology) |
+| `fillText` / `measureText` | PACMAN, DONKEY, INVADERS HUD | **never** Chrome font — 8×8 / rect stub |
+| `getImageData` / `putImageData` | PACMAN map cache | done (undefined / no-op; maps redraw) |
+| `lineWidth` / `strokeStyle` | PACMAN | done as path state; color LUT may still miss `#09f` on RTL |
+
+### Never (not in the three compiles as a product API)
+
+WebGL, Fetch/XHR, Audio (`.play` is a stub), TTF/`FontFace`, real `window.open`,
+CSS layout engine, browsing.
+
+Play-blocking gaps get **one pytest per gap** in `tests/test_bytecode_js.py`
+(RTL twin in `tests/test_rtl_snippets.py` only if play-blocking).
+
+---
+
 ## Regression seeds
 
 | File | Role |

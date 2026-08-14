@@ -39,66 +39,6 @@ const c = canvas.getContext("2d");
 const GAME_WIDTH = 640;
 const GAME_HEIGHT = 480;
 
-// Arcade HUD / ground (green overlay band like the 1978 cabinet)
-const GROUND_Y = 454;
-const UFO_Y = 28;
-// Original UFO points by player-shot count (ROM nibble table × 10)
-const UFO_SCORES = [100, 50, 50, 100, 150, 100, 100, 50, 300, 100, 100, 100, 50, 150, 100, 50];
-// 2-frame 1978 sprites (1 = pixel). Squid 11 wide, crab/octopus 12, saucer 16.
-const SPR_SQUID = [
-  ["00100000100", "00010001000", "00111111100", "01101110110", "11111111111", "10111111101", "10100000101", "00011011000"],
-  ["00100000100", "10100000101", "10111111101", "11101110111", "11111111111", "00111111100", "00100000100", "01000000010"],
-];
-const SPR_CRAB = [
-  ["001000000100", "000100001000", "001111111100", "011011101110", "111111111111", "101111111101", "101000000101", "000110011000"],
-  ["001000000100", "100100001001", "101111111101", "111011101111", "011111111110", "001111111100", "000100001000", "001000000100"],
-];
-const SPR_OCTO = [
-  ["000011110000", "011111111110", "111111111111", "111001100111", "111111111111", "001110011100", "011000000110", "110000000011"],
-  ["000011110000", "011111111110", "111111111111", "111001100111", "111111111111", "000110011000", "001101101100", "011000000110"],
-];
-const SPR_SAUCER = [
-  "0000011111100000",
-  "0001111111111000",
-  "0011111111111100",
-  "0110110110110110",
-  "1111111111111111",
-  "0011100110011100",
-  "0001000000001000",
-];
-let invaderFrame = 0;
-// Taito color version: magenta squid, cyan crab, yellow octopus, red UFO, green ground
-const COL_SQUID = "#ff55ff";
-const COL_CRAB = "#33ffff";
-const COL_OCTO = "#ffff33";
-const COL_UFO = "#ff3344";
-const COL_GND = "#33ff66";
-
-function colorForType(type) {
-  if (type === 0) return COL_SQUID;
-  if (type === 1) return COL_CRAB;
-  return COL_OCTO;
-}
-
-function drawBitmap(x, y, rows, color, scale) {
-  c.fillStyle = color;
-  for (let r = 0; r < rows.length; r++) {
-    const row = rows[r];
-    for (let col = 0; col < row.length; col++) {
-      if (row[col] === "1") {
-        c.fillRect(x + col * scale, y + r * scale, scale, scale);
-      }
-    }
-  }
-}
-
-function drawCannon(x, y, scale) {
-  c.fillStyle = COL_GND;
-  c.fillRect(x + 6 * scale, y, 2 * scale, 3 * scale);
-  c.fillRect(x + 5 * scale, y + 3 * scale, 4 * scale, 2 * scale);
-  c.fillRect(x, y + 5 * scale, 14 * scale, 5 * scale);
-}
-
 const LB_KEY = "space_invaders_leaderboard_v1";
 
 function getLeaderboard() {
@@ -216,13 +156,16 @@ class Projectile {
   constructor({ position, velocity }) {
     this.position = position;
     this.velocity = velocity;
-    // thin arcade laser (radius kept for existing hit tests)
-    this.radius = 2;
+
+    this.radius = 4;
   }
 
   draw() {
-    c.fillStyle = "#ffffff";
-    c.fillRect(this.position.x - 1, this.position.y, 2, 10);
+    c.beginPath();
+    c.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2);
+    c.fillStyle = "red";
+    c.fill();
+    c.closePath();
   }
 
   update() {
@@ -266,17 +209,11 @@ class InvaderProjectile {
 
     this.width = 3;
     this.height = 10;
-    this.wobble = 0;
   }
 
   draw() {
-    // arcade "plunger" bomb: short dashed stack
-    c.fillStyle = "#ffffff";
-    const x = this.position.x;
-    const y = this.position.y;
-    c.fillRect(x, y, this.width, 3);
-    c.fillRect(x, y + 4, this.width, 3);
-    c.fillRect(x, y + 8, this.width, 2);
+    c.fillStyle = "yellow";
+    c.fillRect(this.position.x, this.position.y, this.width, this.height);
   }
 
   update() {
@@ -286,34 +223,54 @@ class InvaderProjectile {
   }
 }
 
-// Arcade ranks: squid 30, crab 20, octopus 10 — two walk frames like 1978
+// NEW: classic Space Invaders — 4 alien types as block sprites (regular SI look)
 class Invader {
-  constructor({ position, type, col }) {
+  constructor({ position, type }) {
     this.type = type | 0;
-    this.col = col | 0;
-    this.width = 36;
+    this.width = 32;
     this.height = 24;
     this.position = { x: position.x, y: position.y };
   }
 
-  points() {
-    if (this.type === 0) return 30;
-    if (this.type === 1) return 20;
-    return 10;
-  }
-
   draw() {
-    const fr = invaderFrame & 1;
-    const scale = 3;
+    const colors = ["#ffffff", "#33ff66", "#ff55aa", "#ffcc00"];
+    const col = colors[this.type % 4];
     const x = this.position.x;
     const y = this.position.y;
-    const col = colorForType(this.type);
+    c.fillStyle = col;
+    // type 0 = squid (top), 1 = crab, 2 = octopus, 3 = fat bottom
     if (this.type === 0) {
-      drawBitmap(x + 2, y, SPR_SQUID[fr], col, scale);
+      c.fillRect(x + 10, y, 12, 4);
+      c.fillRect(x + 6, y + 4, 20, 8);
+      c.fillRect(x + 2, y + 12, 28, 4);
+      c.fillRect(x + 6, y + 16, 6, 4);
+      c.fillRect(x + 20, y + 16, 6, 4);
+      c.fillRect(x + 2, y + 20, 4, 4);
+      c.fillRect(x + 26, y + 20, 4, 4);
     } else if (this.type === 1) {
-      drawBitmap(x, y, SPR_CRAB[fr], col, scale);
+      c.fillRect(x + 4, y, 8, 4);
+      c.fillRect(x + 20, y, 8, 4);
+      c.fillRect(x + 2, y + 4, 28, 8);
+      c.fillRect(x, y + 12, 32, 4);
+      c.fillRect(x + 6, y + 16, 8, 4);
+      c.fillRect(x + 18, y + 16, 8, 4);
+      c.fillRect(x + 2, y + 20, 6, 4);
+      c.fillRect(x + 24, y + 20, 6, 4);
+    } else if (this.type === 2) {
+      c.fillRect(x + 8, y, 16, 4);
+      c.fillRect(x + 4, y + 4, 24, 8);
+      c.fillRect(x, y + 12, 32, 4);
+      c.fillRect(x + 4, y + 16, 8, 4);
+      c.fillRect(x + 20, y + 16, 8, 4);
+      c.fillRect(x + 8, y + 20, 4, 4);
+      c.fillRect(x + 20, y + 20, 4, 4);
     } else {
-      drawBitmap(x, y, SPR_OCTO[fr], col, scale);
+      c.fillRect(x + 6, y, 20, 4);
+      c.fillRect(x + 2, y + 4, 28, 12);
+      c.fillRect(x, y + 16, 8, 4);
+      c.fillRect(x + 24, y + 16, 8, 4);
+      c.fillRect(x + 8, y + 20, 6, 4);
+      c.fillRect(x + 18, y + 20, 6, 4);
     }
   }
 
@@ -337,22 +294,22 @@ class Invader {
   }
 }
 
-// Arcade 11×5: squid / crab / crab / octopus / octopus. Next wave starts lower.
+// NEW: classic 11×5 formation + stepped march (edge reverse + drop)
 class Grid {
   constructor() {
-    const startY = 48 + Math.min(level - 1, 6) * 16;
-    this.position = { x: 64, y: startY };
+    this.position = { x: 72, y: 36 };
     this.dir = 1;
     this.velocity = { x: 0, y: 0 };
     this.invaders = [];
     this.moveClock = 0;
-    this.moveDelay = 48;
+    this.moveDelay = Math.max(10, 26 - (level - 1) * 2);
 
     const columns = 11;
     const rows = 5;
     const stepX = 44;
-    const stepY = 32;
-    const rowType = [0, 1, 1, 2, 2];
+    const stepY = 34;
+    // row → alien type (4 kinds like classic SI ranks)
+    const rowType = [0, 1, 1, 2, 3];
 
     this.width = columns * stepX;
 
@@ -365,7 +322,6 @@ class Grid {
               y: this.position.y + y * stepY,
             },
             type: rowType[y],
-            col: x,
           })
         );
       }
@@ -373,15 +329,12 @@ class Grid {
   }
 
   update() {
-    // cadence follows remaining count (last alien almost every frame)
+    // one step per moveDelay frames (classic cadence)
     this.velocity.x = 0;
     this.velocity.y = 0;
-    const n = this.invaders.length;
-    this.moveDelay = Math.max(1, Math.floor(n * 0.9) - (level - 1) * 2);
     this.moveClock++;
     if (this.moveClock < this.moveDelay) return;
     this.moveClock = 0;
-    invaderFrame = 1 - invaderFrame;
 
     const step = 8;
     let hitEdge = false;
@@ -397,6 +350,7 @@ class Grid {
     if (hitEdge) {
       this.dir = -this.dir;
       this.velocity.y = 16;
+      this.moveDelay = Math.max(8, this.moveDelay - 1);
     } else {
       this.velocity.x = this.dir * step;
     }
@@ -461,45 +415,6 @@ function resetBunkers() {
   for (let i = 0; i < xs.length; i++) bunkers.push(new Bunker(xs[i], y));
 }
 
-// Arcade mystery ship (red overlay band). Score from shot-count table.
-class Saucer {
-  constructor() {
-    this.width = 48;
-    this.height = 21;
-    this.position = { x: -48, y: UFO_Y };
-    this.velocity = { x: 0, y: 0 };
-    this.alive = false;
-  }
-
-  spawn() {
-    const fromLeft = Math.random() < 0.5;
-    this.alive = true;
-    this.position.y = UFO_Y;
-    if (fromLeft) {
-      this.position.x = -this.width;
-      this.velocity.x = 1.5;
-    } else {
-      this.position.x = GAME_WIDTH;
-      this.velocity.x = -1.5;
-    }
-  }
-
-  draw() {
-    if (!this.alive) return;
-    drawBitmap(this.position.x, this.position.y, SPR_SAUCER, COL_UFO, 3);
-  }
-
-  update() {
-    if (!this.alive) return;
-    this.position.x += this.velocity.x;
-    if (this.position.x > GAME_WIDTH + 8 || this.position.x + this.width < -8) {
-      this.alive = false;
-      return;
-    }
-    this.draw();
-  }
-}
-
 class PowerUp {
   constructor({ position, type }) {
     (this.position = position),
@@ -526,11 +441,10 @@ class PowerUp {
 const player = new Player();
 const projectiles = [];
 const grids = [];
-const bunkers = []; // NEW: classic bunkers
+const bunkers = []; // NEW: classic SI bunkers
 const invaderProjectiles = [];
 const particles = [];
 const powerUps = [];
-const saucer = new Saucer();
 
 const keys = {
   a: { pressed: false },
@@ -543,25 +457,9 @@ let randomInterval = Math.floor(Math.random() * 500 + 500);
 let game = { over: false, active: false };
 let score = 0;
 let level = 1;
-let lives = 3;
-let hiScore = 0;
-let shotCount = 0;
-let playerDying = false;
-let dieTimer = 0;
-let saucerClock = 0;
-let saucerDelay = 720;
-let splashClock = 0;
-let splashSaucerX = -48;
 
 let levelHasSpawned = false;
 let nextLevelTimer = null;
-
-{
-  const list = getLeaderboard();
-  for (let i = 0; i < list.length; i++) {
-    if (list[i].score > hiScore) hiScore = list[i].score;
-  }
-}
 
 // Power-Ups
 let shieldActive = false;
@@ -643,178 +541,26 @@ function hideNextLevelScreen() {
 }
 
 function nextLevel() {
+  const bonus = 500 * level;
+  score += bonus;
+  scoreEl.innerHTML = score;
+
   level++;
-  if (levelEl) levelEl.innerHTML = level;
+  levelEl.innerHTML = level;
   hideNextLevelScreen();
 
+  // Reset for next level
   frames = 1;
-  saucer.alive = false;
-  saucerClock = 0;
-  invaderProjectiles.length = 0;
-  projectiles.length = 0;
+  randomInterval = Math.max(
+    200,
+    Math.floor(Math.random() * 500 + 500) - level * 50
+  ); // Shorter intervals between spawns
 
+  // Spawn first grid of new level immediately
   grids.length = 0;
   grids.push(new Grid());
-  resetBunkers(); // NEW: fresh bunkers each wave
+  resetBunkers(); // NEW: fresh bunkers each level
   levelHasSpawned = true;
-}
-
-function bumpScore(n) {
-  score += n;
-  if (scoreEl) scoreEl.innerHTML = score;
-  if (score > hiScore) hiScore = score;
-}
-
-function drawHud() {
-  c.fillStyle = "#ffffff";
-  c.fillText("SCORE " + score, 16, 20);
-  c.fillText("HI " + hiScore, 260, 20);
-  c.fillText("WAVE " + level, 500, 20);
-  c.fillStyle = COL_GND;
-  c.fillRect(0, GROUND_Y, GAME_WIDTH, 2);
-  let extras = lives;
-  if (!playerDying && !game.over && player.opacity > 0) extras = lives - 1;
-  if (extras < 0) extras = 0;
-  for (let i = 0; i < extras; i++) {
-    drawCannon(16 + i * 32, GROUND_Y + 6, 1);
-  }
-}
-
-function drawSplash() {
-  splashClock++;
-  if (splashClock % 18 === 0) invaderFrame = 1 - invaderFrame;
-  splashSaucerX += 2;
-  if (splashSaucerX > GAME_WIDTH + 8) splashSaucerX = -48;
-  const fr = invaderFrame & 1;
-
-  drawBitmap(splashSaucerX, 12, SPR_SAUCER, COL_UFO, 3);
-
-  c.fillStyle = COL_UFO;
-  c.fillRect(70, 40, 500, 7);
-  c.fillStyle = COL_SQUID;
-  c.fillRect(70, 47, 500, 7);
-  c.fillStyle = COL_CRAB;
-  c.fillRect(70, 54, 500, 7);
-  c.fillStyle = COL_OCTO;
-  c.fillRect(70, 61, 500, 7);
-  c.fillStyle = COL_GND;
-  c.fillRect(70, 68, 500, 7);
-
-  c.fillStyle = "#ffffff";
-  c.fillText("PLAY", 292, 100);
-  c.fillText("SPACE INVADERS", 200, 124);
-
-  c.fillStyle = COL_SQUID;
-  c.fillText("* SCORE ADVANCE TABLE *", 168, 160);
-
-  drawBitmap(176, 176, SPR_SAUCER, COL_UFO, 3);
-  c.fillStyle = COL_UFO;
-  c.fillText("= ? MYSTERY", 248, 196);
-
-  drawBitmap(184, 216, SPR_SQUID[fr], COL_SQUID, 3);
-  c.fillStyle = COL_SQUID;
-  c.fillText("= 30 POINTS", 248, 236);
-
-  drawBitmap(182, 256, SPR_CRAB[fr], COL_CRAB, 3);
-  c.fillStyle = COL_CRAB;
-  c.fillText("= 20 POINTS", 248, 276);
-
-  drawBitmap(182, 296, SPR_OCTO[fr], COL_OCTO, 3);
-  c.fillStyle = COL_OCTO;
-  c.fillText("= 10 POINTS", 248, 316);
-
-  for (let i = 0; i < 8; i++) {
-    const t = i % 3;
-    const ax = 72 + i * 62 + (Math.floor(splashClock / 8) % 8);
-    const ay = 348;
-    if (t === 0) drawBitmap(ax, ay, SPR_SQUID[fr], COL_SQUID, 3);
-    else if (t === 1) drawBitmap(ax, ay, SPR_CRAB[fr], COL_CRAB, 3);
-    else drawBitmap(ax, ay, SPR_OCTO[fr], COL_OCTO, 3);
-  }
-  drawCannon(300, GROUND_Y - 16, 2);
-  c.fillStyle = COL_GND;
-  c.fillRect(0, GROUND_Y, GAME_WIDTH, 2);
-
-  if ((splashClock % 48) < 32) {
-    c.fillStyle = "#ffffff";
-    c.fillText("PRESS SPACE", 236, 420);
-  }
-  c.fillStyle = COL_GND;
-  c.fillText("LEFT / RIGHT MOVE", 196, 444);
-}
-
-function drawFormation() {
-  for (let bi = 0; bi < bunkers.length; bi++) bunkers[bi].draw();
-  for (let gi = 0; gi < grids.length; gi++) {
-    const g = grids[gi];
-    for (let i = 0; i < g.invaders.length; i++) g.invaders[i].draw();
-  }
-  saucer.draw();
-}
-
-function pickShooter(grid) {
-  const lowest = [];
-  for (let i = 0; i < grid.invaders.length; i++) {
-    const inv = grid.invaders[i];
-    const col = inv.col;
-    if (!lowest[col] || inv.position.y > lowest[col].position.y) {
-      lowest[col] = inv;
-    }
-  }
-  const shooters = [];
-  for (let col = 0; col < 11; col++) {
-    if (lowest[col]) shooters.push(lowest[col]);
-  }
-  if (shooters.length === 0) return null;
-  if (Math.random() < 0.5 && player.width) {
-    const px = player.position.x + player.width / 2;
-    let best = shooters[0];
-    let bestD = 9999;
-    for (let i = 0; i < shooters.length; i++) {
-      const cx = shooters[i].position.x + shooters[i].width / 2;
-      const d = cx > px ? cx - px : px - cx;
-      if (d < bestD) {
-        bestD = d;
-        best = shooters[i];
-      }
-    }
-    return best;
-  }
-  return shooters[Math.floor(Math.random() * shooters.length)];
-}
-
-function killPlayer() {
-  if (playerDying || game.over) return;
-  playerDying = true;
-  dieTimer = 90;
-  lives--;
-  player.opacity = 0;
-  projectiles.length = 0;
-  createParticles({ object: player, color: "white", fades: true });
-}
-
-function finishDie() {
-  playerDying = false;
-  if (lives <= 0) {
-    game.over = true;
-    game.active = false;
-    showGameOver();
-    return;
-  }
-  player.opacity = 1;
-  if (player.width) {
-    player.position.x = GAME_WIDTH / 2 - player.width / 2;
-  }
-  invaderProjectiles.length = 0;
-}
-
-function invasionOver() {
-  lives = 0;
-  playerDying = false;
-  player.opacity = 0;
-  game.over = true;
-  game.active = false;
-  showGameOver();
 }
 
 // NEW: handful of star pixels (not 100 arc particles)
@@ -881,16 +627,11 @@ function animate() {
       }
     });
 
-    // keep the wave on glass after death / game over (arcade: aliens stay)
-    if (game.over) {
-      drawFormation();
-      if (player.image) player.draw();
-      drawHud();
-      c.fillStyle = "#ffffff";
-      c.fillText("GAME OVER", 260, 240);
-      c.fillText("SPACE TO RESTART", 220, 268);
+    if (player.image) {
+      player.draw();
     } else {
-      drawSplash();
+      c.fillStyle = "white";
+      c.fillRect(GAME_WIDTH / 2 - 10, GAME_HEIGHT - 40, 20, 20);
     }
 
     requestAnimationFrame(animate);
@@ -957,8 +698,6 @@ function animate() {
 
     // hit player
     if (
-      !playerDying &&
-      player.opacity > 0 &&
       invaderProjectile.position.y + invaderProjectile.height >=
         player.position.y &&
       invaderProjectile.position.x + invaderProjectile.width >=
@@ -975,15 +714,25 @@ function animate() {
 
       setTimeout(() => {
         invaderProjectiles.splice(index, 1);
+        player.opacity = 0;
+        game.over = true;
+
         const music = document.getElementById("explosion");
-        if (music && music.play) {
-          music.currentTime = 0;
-          music.play().catch((err) => console.warn("Autoplay blocked:", err));
-          music.volume = 5.0;
-        }
+        music.currentTime = 0;
+        music.play().catch((err) => console.warn("Autoplay blocked:", err));
+        music.volume = 5.0;
       }, 0);
 
-      killPlayer();
+      setTimeout(() => {
+        game.active = false;
+        showGameOver();
+      }, 1000);
+
+      createParticles({
+        object: player,
+        color: "white",
+        fades: true,
+      });
     }
   });
 
@@ -1016,70 +765,24 @@ function animate() {
         setTimeout(() => {
           projectiles.splice(index, 1);
         }, 0);
-        return;
       }
-    }
-
-    // player laser vs mystery ship
-    if (
-      saucer.alive &&
-      projectile.position.y - projectile.radius <= saucer.position.y + saucer.height &&
-      projectile.position.x + projectile.radius >= saucer.position.x &&
-      projectile.position.x - projectile.radius <= saucer.position.x + saucer.width &&
-      projectile.position.y + projectile.radius >= saucer.position.y
-    ) {
-      const pts = UFO_SCORES[shotCount & 15];
-      bumpScore(pts);
-      saucer.alive = false;
-      saucerClock = 0;
-      createParticles({ object: saucer, color: "#ff3344", fades: true });
-      setTimeout(() => {
-        projectiles.splice(index, 1);
-      }, 0);
     }
   });
 
   // grids + invaders
   grids.forEach((grid, gridIndex) => {
-    if (playerDying) {
-      grid.velocity.x = 0;
-      grid.velocity.y = 0;
-    } else {
-      grid.update();
-    }
+    grid.update();
 
-    // front-row column shots only, max 3 bombs (arcade)
-    const shootingFrequency = Math.max(40, 90 - level * 8);
-    if (
-      !playerDying &&
-      frames % shootingFrequency === 0 &&
-      grid.invaders.length > 0 &&
-      invaderProjectiles.length < 3
-    ) {
-      const sh = pickShooter(grid);
-      if (sh) sh.shoot(invaderProjectiles);
+    // More frequent shooting based on level
+    const shootingFrequency = Math.max(50, 100 - level * 10);
+    if (frames % shootingFrequency === 0 && grid.invaders.length > 0) {
+      grid.invaders[Math.floor(Math.random() * grid.invaders.length)].shoot(
+        invaderProjectiles
+      );
     }
 
     grid.invaders.forEach((invader, i) => {
       invader.update({ velocity: grid.velocity });
-
-      // descending ranks chew the bunkers
-      for (let bi = 0; bi < bunkers.length; bi++) {
-        bunkers[bi].hitAt(
-          invader.position.x + invader.width / 2,
-          invader.position.y + invader.height,
-          6
-        );
-      }
-
-      if (
-        !game.over &&
-        !playerDying &&
-        player.height > 0 &&
-        invader.position.y + invader.height >= player.position.y
-      ) {
-        invasionOver();
-      }
 
       // player projectile vs invader
       projectiles.forEach((projectile, j) => {
@@ -1100,7 +803,11 @@ function animate() {
             );
 
             if (invaderFound && projectileFound) {
-              bumpScore(invader.points());
+              let points = 100;
+              if (bonusActive) points *= 2;
+
+              score += points;
+              scoreEl.innerHTML = score;
 
               createParticles({
                 object: invader,
@@ -1127,6 +834,20 @@ function animate() {
                 grid.position.x = minX;
               } else {
                 grids.splice(gridIndex, 1);
+              }
+
+              // --- POWER-UP DROP ---
+              if (Math.random() < 0.03) {
+                const type = Math.random() < 0.5 ? "shield" : "points";
+                powerUps.push(
+                  new PowerUp({
+                    position: {
+                      x: invader.position.x + invader.width / 2 - 10,
+                      y: invader.position.y,
+                    },
+                    type,
+                  })
+                );
               }
             }
           }, 0);
@@ -1166,15 +887,13 @@ function animate() {
   // Check for victory condition
   checkVictory();
 
-  // player movement (cannon does not tilt)
-  if (playerDying) {
-    player.velocity.x = 0;
-  } else if (keys.a.pressed && !keys.d.pressed) {
+  // player movement
+  if (keys.a.pressed && !keys.d.pressed) {
     player.velocity.x = -5;
-    player.rotation = 0;
+    player.rotation = -0.15;
   } else if (keys.d.pressed && !keys.a.pressed) {
     player.velocity.x = 5;
-    player.rotation = 0;
+    player.rotation = 0.15;
   } else {
     player.velocity.x = 0;
     player.rotation = 0;
@@ -1182,31 +901,14 @@ function animate() {
 
   player.update();
 
-  if (!playerDying) {
-    if (saucer.alive) {
-      saucer.update();
-    } else {
-      saucerClock++;
-      if (
-        saucerClock >= saucerDelay &&
-        grids.length > 0 &&
-        grids[0].invaders.length >= 8
-      ) {
-        saucer.spawn();
-        saucerClock = 0;
-        saucerDelay = 600 + Math.floor(Math.random() * 360);
-      }
-    }
-  } else {
-    saucer.draw();
-    dieTimer--;
-    if (dieTimer <= 0) finishDie();
-  }
-
-  drawHud();
-  if (nextLevelTimer) {
-    c.fillStyle = "#ffffff";
-    c.fillText("WAVE CLEAR", 260, 240);
+  // NEW: next wave only after clear (no stacked grids mid-fight)
+  if (frames % randomInterval === 0 && grids.length === 0 && !nextLevelTimer) {
+    grids.push(new Grid());
+    frames = 0;
+    randomInterval = Math.max(
+      200,
+      Math.floor(Math.random() * 500 + 500) - level * 50
+    );
   }
 
   frames++;
@@ -1214,23 +916,15 @@ function animate() {
 
 animate();
 
-function startGame() {
+document.getElementById("start").addEventListener("click", () => {
   document.getElementById("start").style.display = "none";
   document.getElementById("leaderboard").style.display = "none";
   document.getElementById("controlsHint").style.display = "none";
 
   score = 0;
   level = 1;
-  lives = 3;
-  shotCount = 0;
-  playerDying = false;
-  dieTimer = 0;
-  saucer.alive = false;
-  saucerClock = 0;
-  saucerDelay = 720;
-  invaderFrame = 0;
-  if (scoreEl) scoreEl.innerHTML = score;
-  if (levelEl) levelEl.innerHTML = level;
+  scoreEl.innerHTML = score;
+  levelEl.innerHTML = level;
   hideNextLevelScreen();
   game.over = false;
   game.active = true;
@@ -1238,31 +932,22 @@ function startGame() {
   grids.length = 0;
   invaderProjectiles.length = 0;
   projectiles.length = 0;
-  powerUps.length = 0;
   resetBunkers(); // NEW: classic bunkers on start
 
   player.opacity = 1;
-  if (player.width) {
-    player.position.x = GAME_WIDTH / 2 - player.width / 2;
-  }
-  keys.a.pressed = false;
-  keys.d.pressed = false;
-  keys.space.pressed = false;
 
   frames = 1;
+  randomInterval = Math.max(
+    200,
+    Math.floor(Math.random() * 500 + 500) - level * 50
+  );
   grids.push(new Grid());
   levelHasSpawned = true;
 
   const music = document.getElementById("backgroundMusic");
-  if (music && music.play) {
-    music.currentTime = 0;
-    music.play().catch((err) => console.warn("Autoplay blocked:", err));
-    music.volume = 0.5;
-  }
-}
-
-document.getElementById("start").addEventListener("click", () => {
-  startGame();
+  music.currentTime = 0;
+  music.play().catch((err) => console.warn("Autoplay blocked:", err));
+  music.volume = 0.5;
 });
 
 document.getElementById("saveScoreBtn").addEventListener("click", () => {
@@ -1286,13 +971,9 @@ document.getElementById("clearLB")?.addEventListener("click", () => {
 let canShoot = true;
 
 addEventListener("keydown", (e) => {
-  const { key } = e;
-  if (!game.active && key === " ") {
-    startGame();
-    return;
-  }
-  if (game.over || !game.active || playerDying) return;
+  if (game.over || !game.active) return;
 
+  const { key } = e;
   switch (key) {
     case "a":
     case "ArrowLeft":
@@ -1303,8 +984,6 @@ addEventListener("keydown", (e) => {
       keys.d.pressed = true;
       break;
     case " ":
-      // arcade: only one player laser on screen
-      if (projectiles.length > 0) return;
       if (!canShoot) return;
       canShoot = false;
       setTimeout(() => {
@@ -1312,7 +991,6 @@ addEventListener("keydown", (e) => {
       }, 100);
 
       keys.space.pressed = true;
-      shotCount++;
       projectiles.push(
         new Projectile({
           position: {
@@ -1323,11 +1001,9 @@ addEventListener("keydown", (e) => {
         })
       );
       const music = document.getElementById("laser");
-      if (music && music.play) {
-        music.currentTime = 0;
-        music.play().catch((err) => console.warn("Autoplay blocked:", err));
-        music.volume = 0.25;
-      }
+      music.currentTime = 0;
+      music.play().catch((err) => console.warn("Autoplay blocked:", err));
+      music.volume = 0.25;
       break;
   }
 });
@@ -1352,7 +1028,11 @@ addEventListener("keyup", (e) => {
 
 </script>
 <script>
-/* Attract splash on LOAD+RUN / Chrome — PRESS SPACE to start (no auto-click). */
+/* Same file in Chrome or LOAD+RUN: auto-START (no CSS menu). */
+requestAnimationFrame(function () {
+  var b = document.getElementById("start");
+  if (b && b.click) b.click();
+});
 </script>
 </body>
 </html>

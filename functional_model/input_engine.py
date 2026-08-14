@@ -159,6 +159,11 @@ class InputEngine:
     def key_down(self, key_code: int) -> bool:
         return bool(self._down.get(int(key_code)))
 
+    def key_event(self, key_code: int, key: str, pressed: bool) -> None:
+        """NEW: GUI/host raw keyboard → key-state engine (the HTML decides
+        bindings; this is the honest path for Enter/letters, not KEYBITS)."""
+        self._set_key(int(key_code), str(key), bool(pressed))
+
     def drain_key_events(self) -> List[Tuple[str, int, str]]:
         """Pop queued keydown/keyup events (type, keyCode, key)."""
         out: List[Tuple[str, int, str]] = []

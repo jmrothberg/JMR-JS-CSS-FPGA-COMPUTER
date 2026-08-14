@@ -277,6 +277,7 @@ class CanvasEngine:
         color: int = 3,
         prompt_color: int = 5,
         cursor_on: bool = False,
+        cursor_col: Optional[int] = None,
     ) -> None:
         """Paint last CONSOLE_VISIBLE_LINES as 64×16 HDMI letterbox (shared glass)."""
         self.clear_front(0)
@@ -304,9 +305,11 @@ class CanvasEngine:
         pr_row = min(len(body), CONSOLE_ROWS - 1)
         for c, ch in enumerate(pr[:CONSOLE_COLS]):
             self.draw_console_char(c, pr_row, ch, prompt_color)
-        # NEW: blinking block after prompt (HDMI already blinks via frame_div[5])
-        if cursor_on and len(pr) < CONSOLE_COLS:
-            self.fill_console_cell(len(pr), pr_row, color=6)
+        # NEW: cyan block at insert column (not a literal '|' in the prompt)
+        if cursor_on:
+            cc = cursor_col if cursor_col is not None else len(pr)
+            if 0 <= cc < CONSOLE_COLS:
+                self.fill_console_cell(cc, pr_row, color=6)
 
     def front_rgb_preview(self, scale: int = 1) -> bytes:
         """RGB24 packed bytes of front buffer (for Tk PhotoImage / parity)."""

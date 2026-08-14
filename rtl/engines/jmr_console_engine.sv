@@ -49,6 +49,8 @@ module jmr_console_engine (
     output logic        stor_readline,
     output logic        stor_get_byte,
     input  logic [7:0]  stor_get_data,
+    output logic        stor_nl_scan,     // NEW: count remaining 0x0A per sector
+    input  logic [15:0] stor_nl_count,
     output logic        stor_putc,
     output logic [7:0]  stor_putc_data,
     output logic        stor_dir,
@@ -59,7 +61,8 @@ module jmr_console_engine (
     input  logic        stor_err,
     input  logic        stor_eof,
     input  logic [7:0]  stor_line_len,
-    // NEW: work RAM master (NAME_BUF 0xB850, STORAGE_BUFFER 0xBB00, SOURCE 0xC000)
+    // NEW: work RAM master (NAME_BUF 0xB850, STORAGE_BUFFER 0xBB00)
+    // SOURCE is a dedicated 128 KiB BRAM — not the 12 KB work map.
     output logic        mem_en,
     output logic        mem_we,
     output logic [15:0] mem_addr,
@@ -69,8 +72,12 @@ module jmr_console_engine (
 );
     localparam logic [15:0] NAME_BUF        = 16'hB850;
     localparam logic [15:0] STORAGE_BUFFER  = 16'hBB00;
-    localparam logic [15:0] SOURCE_BASE     = 16'hC000;
-    localparam int unsigned SOURCE_MAX      = 8192;
+    // Dedicated SOURCE BRAM (INVADERS/PACMAN HTML). ASET SRAM stays art from 0.
+    localparam int unsigned SOURCE_MAX      = 131072;
+    (* ram_style = "block" *) logic [7:0] source_mem [0:SOURCE_MAX-1];
+    logic        src_req, src_we, src_gnt;
+    logic [16:0] src_addr;
+    logic [7:0]  src_wdata, src_rdata;
 
     typedef enum logic [6:0] {
         C_BOOT_CLS, C_BOOT_MSG, C_PROMPT, C_IDLE, C_ECHO, C_WAIT_VIDEO,
@@ -83,6 +90,7 @@ module jmr_console_engine (
         C_LD_OPEN, C_LD_OPENW, C_LD_RL, C_LD_RLW,
         C_LD_RD, C_LD_RDW, C_LD_WRW, C_LD_NLW, C_LD_CLOSE, C_LD_CLOSEW,
         C_LD_GB, C_LD_GBW, C_LD_GB_WR, // HTML: byte-copy into SOURCE (no 128-char ?LS)
+        C_LD_NLSCANW, C_LD_ANN_SP, C_LD_ANN_NAME, C_LD_ANN_PAR, C_LD_ANN_TAIL,
         // SAVE
         C_SV_OPEN, C_SV_OPENW, C_SV_RD, C_SV_RDW, C_SV_PUT, C_SV_PUTW, C_SV_CLOSE, C_SV_CLOSEW,
         // REMOVE
@@ -91,9 +99,9 @@ module jmr_console_engine (
         C_LIST_PARSE, C_LIST_PAR_LO, C_LIST_PAR_HI,
         C_LIST_INIT, C_LIST_LINE, C_LIST_PEEL, C_LIST_EMIT_DIG,
         C_LIST_SP, C_LIST_RD_GO, C_LIST_RD, C_LIST_CH, C_LIST_PUT,
-        C_LIST_PUT_LAST, C_LIST_NL_FORCE, C_LIST_NL,
+        C_LIST_PUT_LAST, C_LIST_NL_FORCE, C_LIST_NL, C_LIST_WRAP, C_LIST_WRAP_PAGE,
         C_LIST_MORE, C_LIST_WAIT,
-        // NEW: HTML LIST re-streams the file from the card (SOURCE is 8K)
+        // NEW: HTML LIST re-streams the file from the card (SOURCE holds 128K)
         C_LIST_CNWR, C_LIST_CNWR_W, C_LIST_COPEN, C_LIST_COPENW,
         C_LIST_CARD_GB, C_LIST_CARD_GBW, C_LIST_CARD_FIRST, C_LIST_PUT_CARD,
         C_LIST_CCLOSE, C_LIST_CCLOSEW,
@@ -107,7 +115,8 @@ module jmr_console_engine (
         // NEW: load companion .JSB from FAT into VM code BRAM
         C_JSB_PREP, C_JSB_NWR, C_JSB_NWR_W, C_JSB_OPEN, C_JSB_OPENW,
         C_JSB_GB, C_JSB_GBW, C_JSB_CLOSE, C_JSB_CLOSEW,
-        C_JSB_SRAMW // NEW: wait asset-SRAM write ack (ASET payload word)
+        C_JSB_SRAMW, // NEW: wait asset-SRAM write ack (ASET payload word)
+        C_JSB_PEEK, C_JSB_PEEKW // NEW: code-BRAM full — fail loud if more bytes
     } cstate_t;
     cstate_t state, ret_state;
 
@@ -119,8 +128,8 @@ module jmr_console_engine (
     logic [6:0] reply_idx;
     logic [6:0] name_i, name_start, name_len_r;
     logic [7:0] dir_n, dir_idx;
-    logic [15:0] src_len;     // bytes in SOURCE_BASE
-    logic [15:0] src_i;
+    logic [17:0] src_len;     // bytes in SOURCE BRAM (0..131072)
+    logic [17:0] src_i;
     logic [7:0]  rd_ch;
     logic        cmd_is_load, cmd_is_save, cmd_is_remove;
     // NEW: last LOADed name (upcased) — classify HTML vs JS vs RECTDEMO
@@ -151,10 +160,15 @@ module jmr_console_engine (
     logic [22:0] aset_rel;      // byte offset inside the ASET section
     assign aset_rel = jsb_boff - jsb_aset_off;
     logic        ld_err;        // NEW: LOAD ?LS/?IO sticky until CLOSEW
+    logic [15:0] ld_nlines;     // NEW: newline count for LOADED NAME (N LINES)
+    logic        ld_need_eol;   // last HTML byte was not NL
+    logic        ld_ann;        // announce name+count after LOADED
     // NEW: LIST range / MORE (display numbers 10,20,… like PYTHON)
     logic        list_page;
     logic [15:0] list_lo, list_hi, list_disp;
     logic [3:0]  list_on_page;
+    logic [5:0]  list_col;        // 0..63 glass wrap (FM _list_paged twin)
+    logic        list_wrap_more;  // MORE after a wrap, resume same source line
     logic        list_skip;       // line outside range — consume without print
     logic        list_from_card;  // HTML LIST: get_byte from FAT, not SOURCE
     logic        list_bol;        // beginning of line — emit number first
@@ -166,8 +180,8 @@ module jmr_console_engine (
     // NEW: EDIT n
     logic        edit_pending;
     logic [15:0] edit_disp;
-    logic [15:0] edit_start, edit_end;  // byte offsets of target line
-    logic [15:0] edit_copy_i, edit_new_len;
+    logic [17:0] edit_start, edit_end;  // byte offsets of target line
+    logic [17:0] edit_copy_i, edit_new_len;
     logic [4:0]  peel_tmp;  // NEW: /10 peel scratch (no nested logic decls)
 
     // Case-insensitive compare helpers (FIFO no longer folds a-z)
@@ -265,6 +279,22 @@ module jmr_console_engine (
     assign stor_chan = 8'd1;
     assign stor_name_addr = NAME_BUF;
 
+    // 1-cycle SOURCE BRAM (pulse src_req; src_gnt next cycle)
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            src_gnt <= 1'b0;
+            src_rdata <= 8'h00;
+        end else begin
+            src_gnt <= 1'b0;
+            if (src_req) begin
+                if (src_we)
+                    source_mem[src_addr] <= src_wdata;
+                src_rdata <= src_we ? src_wdata : source_mem[src_addr];
+                src_gnt <= 1'b1;
+            end
+        end
+    end
+
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             state <= C_BOOT_CLS;
@@ -286,8 +316,10 @@ module jmr_console_engine (
             ch <= 0;
             stor_open <= 0; stor_close <= 0; stor_readline <= 0; stor_get_byte <= 0;
             stor_putc <= 0; stor_dir <= 0; stor_dir_next <= 0; stor_delete <= 0;
+            stor_nl_scan <= 0;
             stor_mode <= "I"; stor_name_len <= 0; stor_putc_data <= 0;
             mem_en <= 0; mem_we <= 0; mem_addr <= 0; mem_wdata <= 0;
+            src_req <= 0; src_we <= 0; src_addr <= 0; src_wdata <= 0;
             src_len <= 0; src_i <= 0;
             name_len_r <= 0; name_i <= 0; name_start <= 0;
             dir_n <= 0; dir_idx <= 0;
@@ -296,6 +328,7 @@ module jmr_console_engine (
             jsb_waddr <= 0; jsb_bi <= 0; jsb_word <= 0; jsb_name_len <= 0;
             jsb_want_jsh <= 1'b0;
             ld_err <= 0;
+            ld_nlines <= 0; ld_need_eol <= 0; ld_ann <= 0;
             sram_req <= 0; sram_we <= 0; sram_addr <= 0; sram_wdata <= 0;
             pal_we <= 0; pal_waddr <= 0; pal_wdata <= 0;
             jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
@@ -304,6 +337,7 @@ module jmr_console_engine (
             pal_r <= 0; pal_g <= 0; pal_idx <= 0; pal_ph <= 0;
             list_page <= 0; list_lo <= 16'd10; list_hi <= 16'hFFFF;
             list_disp <= 16'd10; list_on_page <= 0; list_skip <= 0;
+            list_col <= 0; list_wrap_more <= 0;
             list_from_card <= 0; list_bol <= 0;
             edit_pending <= 0; edit_disp <= 0;
             edit_start <= 0; edit_end <= 0;
@@ -319,7 +353,9 @@ module jmr_console_engine (
             code_we <= 0;
             stor_open <= 0; stor_close <= 0; stor_readline <= 0; stor_get_byte <= 0;
             stor_putc <= 0; stor_dir <= 0; stor_dir_next <= 0; stor_delete <= 0;
+            stor_nl_scan <= 0;
             mem_en <= 0; mem_we <= 0;
+            src_req <= 0; src_we <= 0;
             pal_we <= 0; // NEW: 1-cycle palette write strobes (sram_req holds to ack)
 
             unique case (state)
@@ -526,10 +562,16 @@ module jmr_console_engine (
                 end
                 C_REPLY: begin
                     if (reply_char(reply_sel, reply_idx) == 8'h00) begin
-                        print_nl <= 1'b1;
-                        msg_idx <= 0;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_PROMPT;
+                        if (ld_ann && reply_sel == 4'd5) begin
+                            // NEW: same line as PYTHON — LOADED NAME (N LINES)
+                            name_i <= 0;
+                            state <= C_LD_ANN_SP;
+                        end else begin
+                            print_nl <= 1'b1;
+                            msg_idx <= 0;
+                            state <= C_WAIT_VIDEO;
+                            ret_state <= C_PROMPT;
+                        end
                     end else if (!video_busy) begin
                         put_en <= 1'b1;
                         put_char <= reply_char(reply_sel, reply_idx);
@@ -679,6 +721,9 @@ module jmr_console_engine (
                     stor_open <= 1'b1;
                     src_len <= 0;
                     ld_err <= 0;
+                    ld_nlines <= 0;
+                    ld_need_eol <= 0;
+                    ld_ann <= 0;
                     state <= C_LD_OPENW;
                 end
                 C_LD_OPENW: if (stor_done) begin
@@ -707,44 +752,46 @@ module jmr_console_engine (
                 C_LD_RD: begin
                     if (dir_idx >= dir_n) begin
                         // append NL
-                        if (src_len < SOURCE_MAX[15:0]) begin
-                            mem_en <= 1'b1; mem_we <= 1'b1;
-                            mem_addr <= SOURCE_BASE + src_len;
-                            mem_wdata <= 8'h0A;
+                        if (src_len < SOURCE_MAX) begin
+                            src_req <= 1'b1; src_we <= 1'b1;
+                            src_addr <= src_len[16:0];
+                            src_wdata <= 8'h0A;
                             state <= C_LD_NLW;
                         end else begin
-                            // NEW: .JS source may exceed 8K SOURCE; keep prefix for LIST, RUN uses .JSB
+                            // SOURCE full — keep prefix for LIST, RUN uses .JSB
                             state <= C_LD_CLOSE;
                         end
-                    end else if (src_len < SOURCE_MAX[15:0]) begin
+                    end else if (src_len < SOURCE_MAX) begin
                         mem_en <= 1'b1; mem_we <= 1'b0;
                         mem_addr <= STORAGE_BUFFER + {8'h0, dir_idx};
                         state <= C_LD_RDW;
                     end else begin
-                        // NEW: truncate oversized .JS into SOURCE (same as prefix LIST)
                         state <= C_LD_CLOSE;
                     end
                 end
                 C_LD_RDW: if (mem_gnt) begin
                     rd_ch <= mem_rdata;
-                    mem_en <= 1'b1; mem_we <= 1'b1;
-                    mem_addr <= SOURCE_BASE + src_len;
-                    mem_wdata <= mem_rdata;
+                    src_req <= 1'b1; src_we <= 1'b1;
+                    src_addr <= src_len[16:0];
+                    src_wdata <= mem_rdata;
                     state <= C_LD_WRW;
                 end
-                C_LD_WRW: if (mem_gnt) begin
+                C_LD_WRW: if (src_gnt) begin
                     src_len <= src_len + 1'b1;
                     dir_idx <= dir_idx + 1'b1;
                     state <= C_LD_RD;
                 end
-                C_LD_NLW: if (mem_gnt) begin
+                C_LD_NLW: if (src_gnt) begin
                     src_len <= src_len + 1'b1;
+                    ld_nlines <= ld_nlines + 16'd1;
                     state <= C_LD_RL;
                 end
-                // HTML: stream file bytes into SOURCE prefix (8K cap, no line-length ?LS)
+                // HTML: stream file bytes into SOURCE (128K), then sector NL scan
                 C_LD_GB: if (!stor_busy) begin
-                    if (src_len >= SOURCE_MAX[15:0]) state <= C_LD_CLOSE;
-                    else begin
+                    if (src_len >= SOURCE_MAX) begin
+                        stor_nl_scan <= 1'b1;
+                        state <= C_LD_NLSCANW;
+                    end else begin
                         stor_get_byte <= 1'b1;
                         state <= C_LD_GBW;
                     end
@@ -754,22 +801,93 @@ module jmr_console_engine (
                         ld_err <= 1'b1; reply_sel <= 4'd4; reply_idx <= 0; state <= C_LD_CLOSE;
                     end else if (stor_eof) state <= C_LD_CLOSE;
                     else begin
-                        mem_en <= 1'b1; mem_we <= 1'b1;
-                        mem_addr <= SOURCE_BASE + src_len;
-                        mem_wdata <= stor_get_data;
+                        src_req <= 1'b1; src_we <= 1'b1;
+                        src_addr <= src_len[16:0];
+                        src_wdata <= stor_get_data;
+                        if (stor_get_data == 8'h0A)
+                            ld_nlines <= ld_nlines + 16'd1;
+                        ld_need_eol <= (stor_get_data != 8'h0A && stor_get_data != 8'h0D);
                         state <= C_LD_GB_WR;
                     end
                 end
-                C_LD_GB_WR: if (mem_gnt) begin
+                C_LD_GB_WR: if (src_gnt) begin
                     src_len <= src_len + 1'b1;
                     state <= C_LD_GB;
+                end
+                C_LD_NLSCANW: if (stor_done) begin
+                    if (!stor_err)
+                        ld_nlines <= ld_nlines + stor_nl_count;
+                    state <= C_LD_CLOSE;
                 end
                 C_LD_CLOSE: if (!stor_busy) begin stor_close <= 1'b1; state <= C_LD_CLOSEW; end
                 C_LD_CLOSEW: if (stor_done) begin
                     if (ld_err)
                         state <= C_REPLY;
                     else begin
+                        if (ld_need_eol)
+                            ld_nlines <= ld_nlines + 16'd1;
+                        ld_ann <= 1'b1;
                         reply_sel <= 4'd5; reply_idx <= 0; state <= C_REPLY;
+                    end
+                end
+                C_LD_ANN_SP: if (!video_busy) begin
+                    put_en <= 1'b1;
+                    put_char <= " ";
+                    name_i <= 0;
+                    dir_idx <= 0;
+                    state <= C_WAIT_VIDEO;
+                    ret_state <= C_LD_ANN_NAME;
+                end
+                C_LD_ANN_NAME: begin
+                    if (name_i >= {2'b0, src_name_len}) begin
+                        state <= C_LD_ANN_PAR;
+                    end else if (!video_busy) begin
+                        put_en <= 1'b1;
+                        put_char <= src_name[name_i[3:0]];
+                        name_i <= name_i + 1'b1;
+                        state <= C_WAIT_VIDEO;
+                        ret_state <= C_LD_ANN_NAME;
+                    end
+                end
+                C_LD_ANN_PAR: if (!video_busy) begin
+                    put_en <= 1'b1;
+                    put_char <= (dir_idx == 8'd0) ? " " : "(";
+                    if (dir_idx == 8'd0) begin
+                        dir_idx <= 8'd1;
+                        state <= C_WAIT_VIDEO;
+                        ret_state <= C_LD_ANN_PAR;
+                    end else begin
+                        dir_idx <= 0;
+                        peel_mag <= ld_nlines;
+                        dig_n <= 0;
+                        peel_bit <= 5'd16;
+                        peel_rem <= 0;
+                        peel_q <= 0;
+                        state <= C_WAIT_VIDEO;
+                        ret_state <= C_LIST_PEEL;
+                    end
+                end
+                C_LD_ANN_TAIL: begin
+                    if (msg_idx >= 7) begin
+                        ld_ann <= 1'b0;
+                        print_nl <= 1'b1;
+                        msg_idx <= 0;
+                        state <= C_WAIT_VIDEO;
+                        ret_state <= C_PROMPT;
+                    end else if (!video_busy) begin
+                        put_en <= 1'b1;
+                        case (msg_idx)
+                            0: put_char <= " ";
+                            1: put_char <= "L";
+                            2: put_char <= "I";
+                            3: put_char <= "N";
+                            4: put_char <= "E";
+                            5: put_char <= "S";
+                            default: put_char <= ")";
+                        endcase
+                        msg_idx <= msg_idx + 1'b1;
+                        state <= C_WAIT_VIDEO;
+                        ret_state <= C_LD_ANN_TAIL;
                     end
                 end
 
@@ -787,13 +905,13 @@ module jmr_console_engine (
                 C_SV_RD: begin
                     if (src_i >= src_len) state <= C_SV_CLOSE;
                     else begin
-                        mem_en <= 1'b1; mem_we <= 1'b0;
-                        mem_addr <= SOURCE_BASE + src_i;
+                        src_req <= 1'b1; src_we <= 1'b0;
+                        src_addr <= src_i[16:0];
                         state <= C_SV_RDW;
                     end
                 end
-                C_SV_RDW: if (mem_gnt) begin
-                    rd_ch <= mem_rdata;
+                C_SV_RDW: if (src_gnt) begin
+                    rd_ch <= src_rdata;
                     state <= C_SV_PUT;
                 end
                 C_SV_PUT: if (!stor_busy) begin
@@ -897,6 +1015,8 @@ module jmr_console_engine (
                         src_i <= 0;
                         list_disp <= 16'd10;
                         list_on_page <= 0;
+                        list_col <= 0;
+                        list_wrap_more <= 0;
                         list_skip <= 1'b0;
                         name_i <= 0;
                         state <= C_LIST_CNWR;
@@ -907,6 +1027,8 @@ module jmr_console_engine (
                         src_i <= 0;
                         list_disp <= 16'd10;
                         list_on_page <= 0;
+                        list_col <= 0;
+                        list_wrap_more <= 0;
                         list_skip <= 1'b0;
                         state <= C_LIST_LINE;
                     end
@@ -922,8 +1044,8 @@ module jmr_console_engine (
                         if (list_disp < list_lo) begin
                             list_skip <= 1'b1;
                             // consume until NL without printing
-                            mem_en <= 1'b1; mem_we <= 1'b0;
-                            mem_addr <= SOURCE_BASE + src_i;
+                            src_req <= 1'b1; src_we <= 1'b0;
+                            src_addr <= src_i[16:0];
                             state <= C_LIST_RD;
                         end else begin
                             list_skip <= 1'b0;
@@ -953,8 +1075,12 @@ module jmr_console_engine (
                     end
                 end
                 C_LIST_EMIT_DIG: begin
-                    if (dig_i == 0) state <= C_LIST_SP;
-                    else if (!video_busy) begin
+                    if (dig_i == 0) begin
+                        if (ld_ann) begin
+                            msg_idx <= 0;
+                            state <= C_LD_ANN_TAIL;
+                        end else state <= C_LIST_SP;
+                    end else if (!video_busy) begin
                         dig_i <= dig_i - 3'd1;
                         put_en <= 1'b1;
                         put_char <= digs[dig_i - 3'd1];
@@ -969,12 +1095,12 @@ module jmr_console_engine (
                     ret_state <= list_from_card ? C_LIST_CARD_FIRST : C_LIST_RD_GO;
                 end
                 C_LIST_RD_GO: begin
-                    mem_en <= 1'b1; mem_we <= 1'b0;
-                    mem_addr <= SOURCE_BASE + src_i;
+                    src_req <= 1'b1; src_we <= 1'b0;
+                    src_addr <= src_i[16:0];
                     state <= C_LIST_RD;
                 end
-                C_LIST_RD: if (mem_gnt) begin
-                    rd_ch <= mem_rdata;
+                C_LIST_RD: if (src_gnt) begin
+                    rd_ch <= src_rdata;
                     state <= C_LIST_CH;
                 end
                 C_LIST_CH: begin
@@ -1011,8 +1137,15 @@ module jmr_console_engine (
                 C_LIST_PUT: if (!video_busy) begin
                     put_en <= 1'b1;
                     put_char <= rd_ch;
-                    state <= C_WAIT_VIDEO;
-                    ret_state <= C_LIST_RD_GO;
+                    if (list_col >= 6'd63) begin
+                        list_col <= 0;
+                        state <= C_WAIT_VIDEO;
+                        ret_state <= C_LIST_WRAP;
+                    end else begin
+                        list_col <= list_col + 6'd1;
+                        state <= C_WAIT_VIDEO;
+                        ret_state <= C_LIST_RD_GO;
+                    end
                 end
                 C_LIST_PUT_LAST: if (!video_busy) begin
                     put_en <= 1'b1;
@@ -1028,6 +1161,7 @@ module jmr_console_engine (
                 C_LIST_NL: begin
                     list_disp <= list_disp + 16'd10;
                     list_bol <= 1'b1;
+                    list_col <= 0;
                     if (list_page) begin
                         if (list_on_page >= 4'd13) begin
                             list_on_page <= 0;
@@ -1038,6 +1172,25 @@ module jmr_console_engine (
                             state <= list_from_card ? C_LIST_CARD_GB : C_LIST_LINE;
                         end
                     end else state <= list_from_card ? C_LIST_CARD_GB : C_LIST_LINE;
+                end
+                C_LIST_WRAP: begin
+                    // 64-col wrap: count a page row, do not bump list_disp
+                    print_nl <= 1'b1;
+                    state <= C_WAIT_VIDEO;
+                    ret_state <= C_LIST_WRAP_PAGE;
+                end
+                C_LIST_WRAP_PAGE: begin
+                    if (list_page) begin
+                        if (list_on_page >= 4'd13) begin
+                            list_on_page <= 0;
+                            list_wrap_more <= 1'b1;
+                            reply_sel <= 4'd8; reply_idx <= 0;
+                            state <= C_LIST_MORE;
+                        end else begin
+                            list_on_page <= list_on_page + 4'd1;
+                            state <= list_from_card ? C_LIST_CARD_GB : C_LIST_RD_GO;
+                        end
+                    end else state <= list_from_card ? C_LIST_CARD_GB : C_LIST_RD_GO;
                 end
                 C_LIST_MORE: begin
                     if (reply_char(reply_sel, reply_idx) == 8'h00) begin
@@ -1060,7 +1213,11 @@ module jmr_console_engine (
                         msg_idx <= 0;
                     end else begin
                         // Space/Enter/any key → next page
-                        state <= list_from_card ? C_LIST_CARD_GB : C_LIST_LINE;
+                        if (list_wrap_more) begin
+                            list_wrap_more <= 1'b0;
+                            state <= list_from_card ? C_LIST_CARD_GB : C_LIST_RD_GO;
+                        end else
+                            state <= list_from_card ? C_LIST_CARD_GB : C_LIST_LINE;
                     end
                 end
                 // HTML LIST: reopen LOADed name and stream bytes (long lines OK)
@@ -1144,8 +1301,15 @@ module jmr_console_engine (
                 C_LIST_PUT_CARD: if (!video_busy) begin
                     put_en <= 1'b1;
                     put_char <= rd_ch;
-                    state <= C_WAIT_VIDEO;
-                    ret_state <= C_LIST_CARD_GB;
+                    if (list_col >= 6'd63) begin
+                        list_col <= 0;
+                        state <= C_WAIT_VIDEO;
+                        ret_state <= C_LIST_WRAP;
+                    end else begin
+                        list_col <= list_col + 6'd1;
+                        state <= C_WAIT_VIDEO;
+                        ret_state <= C_LIST_CARD_GB;
+                    end
                 end
                 C_LIST_CCLOSE: if (!stor_busy) begin
                     stor_close <= 1'b1;
@@ -1191,18 +1355,18 @@ module jmr_console_engine (
                     end else if (src_i >= src_len) begin
                         reply_sel <= 4'd3; reply_idx <= 0; state <= C_REPLY;
                     end else begin
-                        mem_en <= 1'b1; mem_we <= 1'b0;
-                        mem_addr <= SOURCE_BASE + src_i;
+                        src_req <= 1'b1; src_we <= 1'b0;
+                        src_addr <= src_i[16:0];
                         state <= C_EDIT_RD;
                     end
                 end
-                C_EDIT_RD: if (mem_gnt) begin
-                    rd_ch <= mem_rdata;
+                C_EDIT_RD: if (src_gnt) begin
+                    rd_ch <= src_rdata;
                     state <= C_EDIT_CH;
                 end
                 C_EDIT_CH: begin
                     // NEW: advance to next byte (src_i+1) — old path re-read
-                    // SOURCE_BASE+src_i and left edit_start one past the line start
+                    // SOURCE+src_i and left edit_start one past the line start
                     if (rd_ch == 8'h0A || rd_ch == 8'h0D) begin
                         src_i <= src_i + 1'b1;
                         list_disp <= list_disp + 16'd10;
@@ -1213,8 +1377,8 @@ module jmr_console_engine (
                         state <= C_EDIT_FIND;
                     end else begin
                         src_i <= src_i + 1'b1;
-                        mem_en <= 1'b1; mem_we <= 1'b0;
-                        mem_addr <= SOURCE_BASE + src_i + 16'd1;
+                        src_req <= 1'b1; src_we <= 1'b0;
+                        src_addr <= src_i[16:0] + 17'd1;
                         state <= C_EDIT_RD;
                     end
                 end
@@ -1254,12 +1418,12 @@ module jmr_console_engine (
                     ret_state <= C_EDIT_BODY;
                 end
                 C_EDIT_BODY: begin
-                    mem_en <= 1'b1; mem_we <= 1'b0;
-                    mem_addr <= SOURCE_BASE + src_i;
+                    src_req <= 1'b1; src_we <= 1'b0;
+                    src_addr <= src_i[16:0];
                     state <= C_EDIT_BODY_RD;
                 end
-                C_EDIT_BODY_RD: if (mem_gnt) begin
-                    rd_ch <= mem_rdata;
+                C_EDIT_BODY_RD: if (src_gnt) begin
+                    rd_ch <= src_rdata;
                     state <= C_EDIT_BODY_CH;
                 end
                 C_EDIT_BODY_CH: begin
@@ -1292,13 +1456,13 @@ module jmr_console_engine (
                 end
                 // Replace: shift tail by delta first, then write new text + NL
                 C_EDIT_REPL: begin
-                    if ({8'h0, line_len} + 16'd1 > (edit_end - edit_start + 16'd1)) begin
-                        peel_mag <= ({8'h0, line_len} + 16'd1) - (edit_end - edit_start + 16'd1);
+                    if (18'({8'h0, line_len}) + 18'd1 > (edit_end - edit_start + 18'd1)) begin
+                        peel_mag <= 16'(18'({8'h0, line_len}) + 18'd1 - (edit_end - edit_start + 18'd1));
                         edit_copy_i <= src_len;
                         state <= C_EDIT_GROW;
-                    end else if ({8'h0, line_len} + 16'd1 < (edit_end - edit_start + 16'd1)) begin
-                        peel_mag <= (edit_end - edit_start + 16'd1) - ({8'h0, line_len} + 16'd1);
-                        edit_copy_i <= edit_end + 16'd1;
+                    end else if (18'({8'h0, line_len}) + 18'd1 < (edit_end - edit_start + 18'd1)) begin
+                        peel_mag <= 16'((edit_end - edit_start + 18'd1) - (18'({8'h0, line_len}) + 18'd1));
+                        edit_copy_i <= edit_end + 18'd1;
                         state <= C_EDIT_SHRINK;
                     end else begin
                         name_i <= 0;
@@ -1307,72 +1471,70 @@ module jmr_console_engine (
                     end
                 end
                 C_EDIT_GROW: begin
-                    if (edit_copy_i == (edit_end + 16'd1) || src_len == edit_end + 16'd1) begin
-                        src_len <= src_len + peel_mag;
+                    if (edit_copy_i == (edit_end + 18'd1) || src_len == edit_end + 18'd1) begin
+                        src_len <= src_len + {2'b0, peel_mag};
                         name_i <= 0;
                         src_i <= edit_start;
                         state <= C_EDIT_WR_NEW;
                     end else begin
-                        mem_en <= 1'b1; mem_we <= 1'b0;
-                        mem_addr <= SOURCE_BASE + edit_copy_i - 16'd1;
+                        src_req <= 1'b1; src_we <= 1'b0;
+                        src_addr <= 17'(edit_copy_i - 18'd1);
                         state <= C_EDIT_GROW_RD;
                     end
                 end
-                C_EDIT_GROW_RD: if (mem_gnt) begin
-                    rd_ch <= mem_rdata;
-                    // NEW: issue write here; wait gnt in GROW_WR (LOAD pattern)
-                    mem_en <= 1'b1; mem_we <= 1'b1;
-                    mem_addr <= SOURCE_BASE + (edit_copy_i - 16'd1) + peel_mag;
-                    mem_wdata <= mem_rdata;
+                C_EDIT_GROW_RD: if (src_gnt) begin
+                    rd_ch <= src_rdata;
+                    src_req <= 1'b1; src_we <= 1'b1;
+                    src_addr <= 17'((edit_copy_i - 18'd1) + {2'b0, peel_mag});
+                    src_wdata <= src_rdata;
                     state <= C_EDIT_GROW_WR;
                 end
-                C_EDIT_GROW_WR: if (mem_gnt) begin
-                    edit_copy_i <= edit_copy_i - 16'd1;
+                C_EDIT_GROW_WR: if (src_gnt) begin
+                    edit_copy_i <= edit_copy_i - 18'd1;
                     state <= C_EDIT_GROW;
                 end
                 C_EDIT_SHRINK: begin
                     if (edit_copy_i >= src_len) begin
-                        src_len <= src_len - peel_mag;
+                        src_len <= src_len - {2'b0, peel_mag};
                         name_i <= 0;
                         src_i <= edit_start;
                         state <= C_EDIT_WR_NEW;
                     end else begin
-                        mem_en <= 1'b1; mem_we <= 1'b0;
-                        mem_addr <= SOURCE_BASE + edit_copy_i;
+                        src_req <= 1'b1; src_we <= 1'b0;
+                        src_addr <= edit_copy_i[16:0];
                         state <= C_EDIT_SHRINK_RD;
                     end
                 end
-                C_EDIT_SHRINK_RD: if (mem_gnt) begin
-                    rd_ch <= mem_rdata;
-                    mem_en <= 1'b1; mem_we <= 1'b1;
-                    mem_addr <= SOURCE_BASE + edit_copy_i - peel_mag;
-                    mem_wdata <= mem_rdata;
+                C_EDIT_SHRINK_RD: if (src_gnt) begin
+                    rd_ch <= src_rdata;
+                    src_req <= 1'b1; src_we <= 1'b1;
+                    src_addr <= 17'(edit_copy_i - {2'b0, peel_mag});
+                    src_wdata <= src_rdata;
                     state <= C_EDIT_SHRINK_WR;
                 end
-                C_EDIT_SHRINK_WR: if (mem_gnt) begin
-                    edit_copy_i <= edit_copy_i + 16'd1;
+                C_EDIT_SHRINK_WR: if (src_gnt) begin
+                    edit_copy_i <= edit_copy_i + 18'd1;
                     state <= C_EDIT_SHRINK;
                 end
                 C_EDIT_WR_NEW: begin
                     if (name_i >= line_len) begin
-                        mem_en <= 1'b1; mem_we <= 1'b1;
-                        mem_addr <= SOURCE_BASE + src_i;
-                        mem_wdata <= 8'h0A;
+                        src_req <= 1'b1; src_we <= 1'b1;
+                        src_addr <= src_i[16:0];
+                        src_wdata <= 8'h0A;
                         state <= C_EDIT_WR_NL;
                     end else begin
-                        // NEW: one write per gnt — was blasting every cycle and corrupting SOURCE
-                        mem_en <= 1'b1; mem_we <= 1'b1;
-                        mem_addr <= SOURCE_BASE + src_i;
-                        mem_wdata <= line[name_i];
+                        src_req <= 1'b1; src_we <= 1'b1;
+                        src_addr <= src_i[16:0];
+                        src_wdata <= line[name_i];
                         state <= C_EDIT_WR_WAIT;
                     end
                 end
-                C_EDIT_WR_WAIT: if (mem_gnt) begin
+                C_EDIT_WR_WAIT: if (src_gnt) begin
                     name_i <= name_i + 1'b1;
                     src_i <= src_i + 1'b1;
                     state <= C_EDIT_WR_NEW;
                 end
-                C_EDIT_WR_NL: if (mem_gnt) begin
+                C_EDIT_WR_NL: if (src_gnt) begin
                     reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
                 end
 
@@ -1549,7 +1711,7 @@ module jmr_console_engine (
                             end
                         endcase
                         if (jsb_bi == 2'd3 && jsb_waddr == 15'h7FFF)
-                            state <= C_JSB_CLOSE;
+                            state <= C_JSB_PEEK; // last word packed — peek for overflow
                         else begin
                             jsb_bi <= jsb_bi + 2'd1; // wraps 3→0 naturally? NO 2'd3+1=0 ✓
                             state <= C_JSB_GB;
@@ -1568,6 +1730,22 @@ module jmr_console_engine (
                     else begin
                         vm_start <= 1'b1;
                         reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
+                    end
+                end
+                // NEW: code BRAM full after word 7FFF — more code bytes → ?NB, never truncated RUN
+                C_JSB_PEEK: if (!stor_busy) begin
+                    stor_get_byte <= 1'b1;
+                    state <= C_JSB_PEEKW;
+                end
+                C_JSB_PEEKW: if (stor_done) begin
+                    if (stor_err || stor_eof)
+                        state <= C_JSB_CLOSE;
+                    else if (jsb_has_aset && jsb_aset_off != 23'd0
+                             && (jsb_boff + 23'd1) >= jsb_aset_off)
+                        state <= C_JSB_CLOSE; // ASET follows — code fit
+                    else begin
+                        ld_err <= 1'b1; reply_sel <= 4'd7; reply_idx <= 0;
+                        state <= C_JSB_CLOSE;
                     end
                 end
 

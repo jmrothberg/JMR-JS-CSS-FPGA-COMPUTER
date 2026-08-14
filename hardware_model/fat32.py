@@ -38,6 +38,9 @@ class FatGeom:
     fsinfo_sector: int
     fat_start: int  # absolute LBA of first FAT
     data_start: int  # absolute LBA of cluster 2
+    # NEW: partition sector count (BPB total_sectors_32) — caps allocation so
+    # FAT tail entries with no backing data sectors are never handed out
+    total_sectors: int = 0
 
 
 class Fat32Volume:
@@ -101,6 +104,13 @@ class Fat32Volume:
             | (bpb[47] << 24)
         )
         fsinfo = bpb[48] | (bpb[49] << 8)
+        # NEW: partition size (total_sectors_32 at offset 32) for alloc bound
+        total32 = (
+            bpb[32]
+            | (bpb[33] << 8)
+            | (bpb[34] << 16)
+            | (bpb[35] << 24)
+        )
         fat_start = part_lba + reserved
         data_start = fat_start + fats * spf
         self.geom = FatGeom(
@@ -114,6 +124,7 @@ class Fat32Volume:
             fsinfo_sector=fsinfo,
             fat_start=fat_start,
             data_start=data_start,
+            total_sectors=total32,
         )
         self._publish_geom()
         self.memory.write(mm.IO_FS_STATUS, mm.FS_STATUS_MOUNTED)
@@ -245,6 +256,14 @@ class Fat32Volume:
                 if hint < 2 or hint >= 0x0FFFFFF0:
                     hint = 2
         max_cluster = (g.sectors_per_fat * SECTOR_SIZE) // 4
+        # NEW: FAT sizing rounds up, so tail entries can point past the card
+        # (DONKEY 2.4 MB patch hit "LBA 32768 out of range"). Cap allocation
+        # at clusters whose data sectors actually exist in the partition.
+        if g.total_sectors:
+            data_secs = g.part_lba + g.total_sectors - g.data_start
+            max_cluster = min(max_cluster, 2 + data_secs // g.sectors_per_cluster)
+        if hint >= max_cluster:
+            hint = 2
         for c in range(hint, max_cluster):
             if self._fat_get(c) == FREE:
                 self._fat_set(c, EOC)

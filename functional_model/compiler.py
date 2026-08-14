@@ -12,6 +12,11 @@ import re
 from typing import Any, List, Optional, Tuple
 
 from .bytecode import Chunk, Op
+from .jsb_format import NATIVE_ALIASES, NATIVE_IDS
+
+# Bare ID( PYTHON still implements as natives (not in the JSB NATIVE_IDS table).
+# Unknown ID( otherwise LOAD_VAR+CALL_VAL so RTL can call `var f = function`.
+_HOST_NATIVES = frozenset({"joy", "getJoy", "clearRect", "setFillStyle"})
 
 
 class CompileError(Exception):
@@ -201,6 +206,8 @@ class Compiler:
         self.all_methods: set[str] = set()
         # NEW: break patch lists for switch (and later loops)
         self.break_stack: List[List[int]] = []
+        # NEW: continue patch lists for for/while (bunker arch `continue`)
+        self.continue_stack: List[List[int]] = []
         # NEW: >0 inside function/method/arrow → let/const must STORE (not LET_VAR).
         # Top-level keeps LET_VAR for startLoop re-entry (DONKEY.JS inited etc.).
         self._fn_depth = 0
@@ -591,6 +598,14 @@ class Compiler:
             self.break_stack[-1].append(self._emit(Op.JUMP, 0))
             self._match(";")
             return
+        # NEW: continue → jump to innermost loop's step/condition (not a no-op ID)
+        if text == "continue":
+            self._advance()
+            if not self.continue_stack:
+                raise CompileError("CONTINUE OUTSIDE LOOP", line)
+            self.continue_stack[-1].append(self._emit(Op.JUMP, 0))
+            self._match(";")
+            return
         # NEW: try { ... } catch (...) { ... } — run try body; skip catch tokens
         if text == "try":
             self._advance()
@@ -695,12 +710,16 @@ class Compiler:
         self._expect(")")
         jmp_f = self._emit(Op.JUMP_IF_FALSE, 0)
         self.break_stack.append([])
+        self.continue_stack.append([])
         self._statement()
         self._emit(Op.JUMP, loop)
         end = len(self.code)
         self._patch(jmp_f, Op.JUMP_IF_FALSE, end)
         for j in self.break_stack.pop():
             self._patch(j, Op.JUMP, end)
+        # NEW: while continue jumps to the condition (loop head)
+        for j in self.continue_stack.pop():
+            self._patch(j, Op.JUMP, loop)
 
     def _for_stmt(self) -> None:
         """NEW: for (init; cond; step) body → init; while(cond){ body; step }
@@ -736,7 +755,12 @@ class Compiler:
                     self._emit(Op.ARRAY_GET)
                     self._emit(_decl, self._name(bind))
                     self.break_stack.append([])
+                    self.continue_stack.append([])
                     self._statement()
+                    # NEW: for-of continue lands on idx++
+                    cont = len(self.code)
+                    for j in self.continue_stack.pop():
+                        self._patch(j, Op.JUMP, cont)
                     self._emit(Op.LOAD_VAR, idx)
                     self._emit(Op.LOAD_CONST, self._const(1))
                     self._emit(Op.ADD)
@@ -751,7 +775,10 @@ class Compiler:
         # init — must STORE (not LET_VAR): loop vars re-init every entry;
         # LET_VAR skips if name already exists → empty nested loops (INVADERS
         # Grid; also flat top-level IIFE bodies where env is None).
+        # NEW: inside a call env, for (let/const i) LET_VAR first so STORE
+        # for i++ hits this frame's `i`, not a caller/forEach captured `i`.
         if self._peek_text() in ("let", "var", "const"):
+            _kw = self._peek_text()
             _decl = Op.STORE_VAR
             self._advance()
             kind, text, line = self._advance()
@@ -762,7 +789,10 @@ class Compiler:
                 self._ternary()  # `,` = next declarator, not comma-op
             else:
                 self._emit(Op.LOAD_CONST, self._const(None))
-            self._emit(_decl, self._name(text))
+            if _kw in ("let", "const") and self._fn_depth:
+                self._emit(Op.LET_VAR, self._name(text), 1)
+            else:
+                self._emit(_decl, self._name(text))
             # NEW: for (let i = 0, j = n; ...) extra declarators
             while self._match(","):
                 kind, text, line = self._advance()
@@ -772,7 +802,10 @@ class Compiler:
                     self._ternary()
                 else:
                     self._emit(Op.LOAD_CONST, self._const(None))
-                self._emit(_decl, self._name(text))
+                if _kw in ("let", "const") and self._fn_depth:
+                    self._emit(Op.LET_VAR, self._name(text), 1)
+                else:
+                    self._emit(_decl, self._name(text))
         elif self._peek_text() != ";":
             self._expression()
             self._emit(Op.POP)
@@ -800,8 +833,13 @@ class Compiler:
         step_end = self.i
         self._expect(")")
         self.break_stack.append([])
+        self.continue_stack.append([])
         # body
         self._statement()
+        # NEW: for-continue lands on the step (must not skip col++/row++)
+        cont = len(self.code)
+        for j in self.continue_stack.pop():
+            self._patch(j, Op.JUMP, cont)
         # emit step by replaying tokens inside a truncated view
         if step_start < step_end:
             saved_i = self.i
@@ -1294,16 +1332,51 @@ class Compiler:
                     self._emit(Op.SET_PROP, self._name(meth))
                     return
                 self._emit(Op.GET_PROP, self._name(meth))
+                # NEW: ID.prop++ / ID.prop-- must write back. Bare `item.timeout--`
+                # was returning here; `_call`'s leftover GET_PROP postfix only
+                # subtracted on the stack, so PACMAN's engine never ticked NPC
+                # timeouts and ghosts never left the house.
+                if self._peek_text() in ("++", "--"):
+                    op = self._advance()[1]
+                    delta = 1 if op == "++" else -1
+                    self.code.pop()  # remove GET_PROP; stack still has the obj
+                    self._emit(Op.DUP)
+                    self._emit(Op.GET_PROP, self._name(meth))
+                    self._emit(Op.DUP)
+                    self._emit(Op.LOAD_CONST, self._const(delta))
+                    self._emit(Op.ADD)
+                    ti_new = self._name("__n")
+                    ti_old = self._name("__v")
+                    ti_obj = self._name("__o")
+                    self._emit(Op.STORE_VAR, ti_new)
+                    self._emit(Op.STORE_VAR, ti_old)
+                    self._emit(Op.STORE_VAR, ti_obj)
+                    self._emit(Op.LOAD_VAR, ti_obj)
+                    self._emit(Op.LOAD_VAR, ti_new)
+                    self._emit(Op.SET_PROP, self._name(meth))
+                    self._emit(Op.POP)
+                    self._emit(Op.LOAD_VAR, ti_old)
                 return
             if self._match("("):
-                # NEW: user function vs native
-                argc = self._arg_list()
-                self._expect(")")
+                # Known `function foo()` → CALL_USER. Known natives stay
+                # CALL_NATIVE. Anything else is a first-class Fn in a var
+                # (`var rec = function(){ rec(); }` / nested `_render()`).
+                # JSB CALL_NATIVE encodes a numeric id and drops the name, so
+                # unknown ID( must not become stub 33 — LOAD_VAR + CALL_VAL.
                 if text in self.functions:
+                    argc = self._arg_list()
+                    self._expect(")")
                     entry, params = self.functions[text]
                     self._emit(Op.CALL_USER, entry, argc)
-                else:
+                elif text in NATIVE_IDS or text in NATIVE_ALIASES or text in _HOST_NATIVES:
+                    argc = self._arg_list()
+                    self._expect(")")
                     self._emit(Op.CALL_NATIVE, self._name(text), argc)
+                else:
+                    self._emit(Op.LOAD_VAR, self._name(text))
+                    argc = self._arg_list()
+                    self._expect(")")
+                    self._emit(Op.CALL_VAL, argc)
                 return
             if self._match("["):
                 self._emit(Op.LOAD_VAR, self._name(text))

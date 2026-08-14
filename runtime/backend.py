@@ -58,7 +58,7 @@ class RuntimeBackend(ABC):
     def frame_tick(self) -> None:
         pass
 
-    def paint_prompt(self, prompt: str, cursor_on: bool = False) -> None:
+    def paint_prompt(self, prompt: str, cursor_on: bool = False, cursor_col=None) -> None:
         """Optional: paint monitor prompt into this runtime's glass."""
         pass
 
@@ -81,11 +81,20 @@ class PythonBackend(RuntimeBackend):
     def set_key_bits(self, bits: int) -> None:
         self.machine.set_key_bits(bits)
 
+    def key_event(self, key_code: int, key: str, pressed: bool) -> None:
+        # NEW: raw keyboard → FM key-state engine (HTML decides bindings)
+        self.machine.input.key_event(key_code, key, pressed)
+
     def push_key(self, ch: str) -> None:
         self.machine.push_key(ch)
 
     def hard_break(self) -> None:
         self.machine.hard_break()
+
+    @property
+    def more_waiting(self) -> bool:
+        """True while LIST is parked on -- MORE -- (GUI must not paint `>`)."""
+        return bool(getattr(self.machine, "_list_more_waiting", False))
 
     def framebuffer(self):
         return self.machine.canvas
@@ -93,8 +102,8 @@ class PythonBackend(RuntimeBackend):
     def frame_tick(self) -> None:
         self.machine.frame_tick()
 
-    def paint_prompt(self, prompt: str, cursor_on: bool = False) -> None:
-        self.machine.paint_monitor(prompt, cursor_on=cursor_on)
+    def paint_prompt(self, prompt: str, cursor_on: bool = False, cursor_col=None) -> None:
+        self.machine.paint_monitor(prompt, cursor_on=cursor_on, cursor_col=cursor_col)
 
     @property
     def running(self) -> bool:

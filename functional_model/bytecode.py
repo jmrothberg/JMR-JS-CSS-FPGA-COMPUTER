@@ -288,7 +288,16 @@ class VM:
                 self.stack.append(a > b)
             elif op == Op.EQ:
                 b, a = self.stack.pop(), self.stack.pop()
-                self.stack.append(a == b)
+                # NEW: JS === is identity for objects/arrays (find(x => x === obj)).
+                # Python dict/list == is deep equality and would match the wrong item.
+                if isinstance(a, (dict, list)) or isinstance(b, (dict, list)):
+                    self.stack.append(a is b)
+                elif isinstance(a, str) or isinstance(b, str):
+                    # NEW: join() may yield a Python str while case '1100' is
+                    # interned; compare string values so maze switch hits arcs.
+                    self.stack.append(str(a) == str(b))
+                else:
+                    self.stack.append(a == b)
             elif op == Op.BIT_OR:
                 b, a = self.stack.pop(), self.stack.pop()
                 # NEW: coerce None/bool like JS ToInt32-ish for `type | 0`
@@ -618,9 +627,16 @@ class VM:
                         continue
                     if meth == "join":
                         sep = str(argv[0]) if argv and argv[0] is not None else ","
-                        self.stack.append(
-                            sep.join("" if e is None else str(e) for e in obj)
-                        )
+                        # NEW: JS ToString for numbers so 1+1+0+0 → '1100'
+                        # not '1.0' (float elems would miss every switch case).
+                        def _js_str(e):
+                            if e is None:
+                                return ""
+                            if isinstance(e, float) and e == int(e):
+                                return str(int(e))
+                            return str(e)
+
+                        self.stack.append(sep.join(_js_str(e) for e in obj))
                         continue
                     if meth == "concat":
                         out = list(obj)
@@ -652,9 +668,37 @@ class VM:
                         continue
                     # NEW (full-game builtins): string methods (PACMAN maze keys)
                     if meth == "replace":
+                        # NEW: string pattern = first only; RegExp stub honors
+                        # source+flags (`g` → all). Any HTML, not one title.
                         if len(argv) >= 2 and isinstance(argv[0], str):
-                            # JS string-arg replace: FIRST occurrence only
                             self.stack.append(obj.replace(argv[0], str(argv[1]), 1))
+                        elif (
+                            len(argv) >= 2
+                            and isinstance(argv[0], dict)
+                            and argv[0].get("__class") == "RegExp"
+                        ):
+                            import re as _re
+
+                            raw = str(argv[0].get("source") or "")
+                            pat, fl = raw, ""
+                            if raw.startswith("/"):
+                                end = raw.rfind("/")
+                                if end > 0:
+                                    pat, fl = raw[1:end], raw[end + 1 :]
+                            flags = 0
+                            if "i" in fl:
+                                flags |= _re.I
+                            if "m" in fl:
+                                flags |= _re.M
+                            if "s" in fl:
+                                flags |= _re.S
+                            cnt = 0 if "g" in fl else 1
+                            try:
+                                self.stack.append(
+                                    _re.sub(pat, str(argv[1]), obj, count=cnt, flags=flags)
+                                )
+                            except Exception:
+                                self.stack.append(obj)
                         else:
                             self.stack.append(obj)
                         continue
@@ -763,6 +807,17 @@ class VM:
                     if meth == "freeze" or meth == "create":
                         self.stack.append(src if src is not None else {})
                         continue
+                    # NEW: Object.assign(target, ...srcs)
+                    if meth == "assign" and argv:
+                        target = argv[0]
+                        if isinstance(target, dict):
+                            for src2 in argv[1:]:
+                                if isinstance(src2, dict):
+                                    for k, v in src2.items():
+                                        if k != "__class":
+                                            target[k] = v
+                        self.stack.append(target)
+                        continue
                 if not isinstance(obj, dict):
                     # NEW: tolerate null.method() from optional DOM
                     self.stack.append(None)
@@ -782,6 +837,20 @@ class VM:
                 if cls_name == "Element" and meth == "addEventListener":
                     # NEW: el.addEventListener → same as document.addEventListener
                     fn = self.natives.get("addEventListener")
+                    if fn:
+                        self.stack.append(fn(*argv))
+                    else:
+                        self.stack.append(None)
+                    continue
+                if cls_name == "Element" and meth == "removeEventListener":
+                    fn = self.natives.get("removeEventListener")
+                    if fn:
+                        self.stack.append(fn(*argv))
+                    else:
+                        self.stack.append(None)
+                    continue
+                if cls_name == "Element" and meth == "dispatchEvent":
+                    fn = self.natives.get("document.dispatchEvent")
                     if fn:
                         self.stack.append(fn(*argv))
                     else:

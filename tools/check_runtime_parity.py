@@ -591,46 +591,9 @@ def check_rtl_help_list_run() -> int:
         for _ in range(100):
             sim._rpc("TICK")
 
-        # NEW: PACMAN.JS + DONKEY.JS must RUN (not ?NB) via companion .JSB
-        for title, keybits in (("PACMAN.JS", 4), ("DONKEY.JS", 1)):
-            sim.type_line(f"LOAD {title}")
-            st = _norm_glass(sim.screen_text())
-            if "LOADED" not in st:
-                print(f"FAIL RTL LOAD {title}", repr(st)[-200:])
-                return 1
-            sim.type_line("RUN")
-            running = False
-            for _ in range(5000):
-                sim._rpc("TICK")
-                if "running=1" in sim._rpc("STATUS?"):
-                    running = True
-                    break
-            if not running:
-                st = _norm_glass(sim.screen_text())
-                print(f"FAIL RTL RUN {title} not running", st[-120:], sim._rpc("STATUS?"))
-                return 1
-            for _ in range(200):
-                sim._rpc("TICK")
-            fb = sim._rpc("FB?")
-            raw = base64.b64decode(fb.split(None, 3)[3])
-            nz = sum(1 for b in raw if b)
-            if nz < 50:
-                print(f"FAIL RTL RUN {title} FB empty", nz)
-                return 1
-            sim._rpc(f"KEYBITS {keybits}")
-            fb0 = bytes(sim.framebuffer().front)
-            for _ in range(40):
-                sim._rpc("TICK")
-            sim._rpc("FB?")
-            fb1 = bytes(sim.framebuffer().front)
-            if fb0 == fb1:
-                print(f"FAIL RTL {title} KEYBITS {keybits} no FB change")
-                return 1
-            sim._rpc("KEYBITS 0")
-            print(f"OK RTL RUN {title} pixels ({nz}) + key")
-            sim.hard_break()
-            for _ in range(100):
-                sim._rpc("TICK")
+        # RETIRED: the PACMAN.JS/DONKEY.JS twin check loaded same-name .JS
+        # companions that no longer exist (one title = one NAME.HTML; the
+        # compile-on-RUN HTML ladder below covers both titles + keys).
 
         # NEW: HTML RUN = compile-on-RUN → fresh .JSH on card → RTL FAT-load
         sim.type_line('LOAD "invaders.html"')
@@ -708,8 +671,11 @@ def check_rtl_help_list_run() -> int:
                 return 1
             sim.type_line("RUN")
             running = False
-            for _ in range(8000):
-                sim._rpc("TICK")
+            # DONKEY's full-res ASET makes the .JSH ~2.4 MB — the FAT+SRAM
+            # stream runs ~100 clk/byte ≈ 250M clocks (board: ~2.5 s at
+            # 100 MHz), so wait in big TICKN slices
+            for _ in range(200):
+                sim._rpc("TICKN 2000")
                 if "running=1" in sim._rpc("STATUS?"):
                     running = True
                     break
@@ -887,6 +853,212 @@ def check_board_optional() -> int:
         board.shutdown()
 
 
+def _bunker_arch_ok(fb: bytes) -> bool:
+    """INVADERS bunkers at y=350, x=70: continue skips the two corner cells."""
+    row = 350 * 640
+    corner = any(fb[row + 70 + i] for i in range(8))
+    inner = any(fb[row + 78 + i] for i in range(8))
+    return (not corner) and bool(inner)
+
+
+# Ghost NPC colors from the HTML (_COLOR). House = cells (11..16, 12..15)
+# at map origin (16,8) size 14, plus ~12px sprite radius.
+_GHOST_RGB = ((255, 0, 0), (255, 153, 51), (0, 204, 255), (255, 153, 204))
+_HOUSE = (155, 270, 160, 250)  # x0,x1,y0,y1
+
+
+def _ghost_indices(pal) -> set[int]:
+    from functional_model.canvas_engine import nearest_palette_index
+
+    out: set[int] = set()
+    for rgb in _GHOST_RGB:
+        idx = nearest_palette_index(list(pal), rgb, lo=1)
+        pr, pg, pb = pal[idx]
+        d = sum((a - b) * (a - b) for a, b in zip((pr, pg, pb), rgb))
+        if d <= 80 * 80 * 3:
+            out.add(idx)
+    return out
+
+
+def _ghost_color_outside(fb: bytes, pal) -> int:
+    """Count ghost-colored pixels outside the house bbox (not maze/pellet ink)."""
+    want = _ghost_indices(pal)
+    if not want:
+        return 0
+    x0, x1, y0, y1 = _HOUSE
+    n = 0
+    for y in range(480):
+        row = y * 640
+        for x in range(640):
+            if x0 <= x <= x1 and y0 <= y <= y1:
+                continue
+            if fb[row + x] in want:
+                n += 1
+    return n
+    inner = any(fb[row + 78 + i] for i in range(8))
+    return (not corner) and bool(inner)
+
+
+def check_play_progression() -> int:
+    """Play-progression (both runtimes) — F9 regressions should fail here first."""
+    # PYTHON INVADERS bunker arch + fire still draws
+    m = Machine()
+    py = PythonBackend(m)
+    m.boot_lines()
+    py.type_line('LOAD "INVADERS.HTML"')
+    py.type_line("RUN")
+    if not m.running or getattr(m, "html_host", None) is not None:
+        print("FAIL PYTHON play INVADERS not bytecode")
+        return 1
+    for _ in range(24):
+        py.frame_tick()
+    fb = bytes(m.canvas.front)
+    if not _bunker_arch_ok(fb):
+        print("FAIL PYTHON INVADERS bunker top is square (continue)")
+        return 1
+    print("OK PYTHON INVADERS bunker arch")
+    py.hard_break()
+
+    # PYTHON PACMAN: ghost-colored pixels outside the house bbox (not any maze pixel).
+    # House is map cells (11..16, 12..15) at origin (16,8) size 14, plus sprite radius.
+    m = Machine()
+    py = PythonBackend(m)
+    m.boot_lines()
+    py.type_line('LOAD "PACMAN.HTML"')
+    py.type_line("RUN")
+    for _ in range(16):
+        py.frame_tick()
+        if m.vm.error:
+            print("FAIL PYTHON play PACMAN VM", m.vm.error)
+            return 1
+    m.input.key_event(13, "Enter", True)
+    m.input.key_event(13, "Enter", False)
+    for _ in range(150):
+        py.frame_tick()
+        if m.vm.error:
+            print("FAIL PYTHON play PACMAN VM", m.vm.error)
+            return 1
+    fb = bytes(m.canvas.front)
+    n_out = _ghost_color_outside(fb, m.canvas.palette)
+    if n_out < 8:
+        print("FAIL PYTHON PACMAN no ghost-color outside house", n_out)
+        return 1
+    print("OK PYTHON PACMAN ghost-color outside house", n_out)
+    py.hard_break()
+
+    # PYTHON DONKEY: boot and/or KEYEVT Enter leave the initial glass
+    m = Machine()
+    py = PythonBackend(m)
+    m.boot_lines()
+    py.type_line('LOAD "DONKEY.HTML"')
+    py.type_line("RUN")
+    fb0 = bytes(m.canvas.front)
+    for _ in range(16):
+        py.frame_tick()
+    m.input.key_event(13, "Enter", True)
+    m.input.key_event(13, "Enter", False)
+    for _ in range(16):
+        py.frame_tick()
+    fb1 = bytes(m.canvas.front)
+    if fb0 == fb1:
+        print("FAIL PYTHON DONKEY boot/Enter no FB change")
+        return 1
+    print("OK PYTHON DONKEY Enter advances")
+    py.hard_break()
+
+    # RTL twins
+    os.environ.pop("JMR_SIM_HOST", None)
+    sim = SimBackend()
+    if not sim.available or not sim._use_rtl:
+        print("FAIL FPGA-SIM RTL missing for play-progression")
+        return 1
+    try:
+        for _ in range(200):
+            sim._rpc("TICK")
+        sim.type_line('LOAD "INVADERS.HTML"')
+        sim.type_line("RUN")
+        running = False
+        for _ in range(4000):
+            sim._rpc("TICK")
+            if "running=1" in sim._rpc("STATUS?"):
+                running = True
+                break
+        if not running:
+            print("FAIL RTL play INVADERS not running")
+            return 1
+        for _ in range(400):
+            sim._rpc("TICK")
+        sim._rpc("FB?")
+        fb = bytes(sim.framebuffer().front)
+        if not _bunker_arch_ok(fb):
+            print("FAIL RTL INVADERS bunker top is square")
+            return 1
+        print("OK RTL INVADERS bunker arch")
+        sim.hard_break()
+        for _ in range(50):
+            sim._rpc("TICK")
+
+        sim.type_line('LOAD "PACMAN.HTML"')
+        sim.type_line("RUN")
+        running = False
+        for _ in range(4000):
+            sim._rpc("TICK")
+            if "running=1" in sim._rpc("STATUS?"):
+                running = True
+                break
+        if not running:
+            print("FAIL RTL play PACMAN not running")
+            return 1
+        for _ in range(400):
+            sim._rpc("TICK")
+        sim._rpc("KEYEVT 13 1")
+        sim._rpc("KEYEVT 13 0")
+        for _ in range(4000):
+            sim._rpc("TICK")
+        sim._rpc("FB?")
+        fb = bytes(sim.framebuffer().front)
+        pal = sim.framebuffer().palette
+        n_out = _ghost_color_outside(fb, pal)
+        if n_out < 8:
+            print("FAIL RTL PACMAN no ghost-color outside house", n_out)
+            return 1
+        print("OK RTL PACMAN ghost-color outside house", n_out)
+        sim.hard_break()
+        for _ in range(50):
+            sim._rpc("TICK")
+
+        sim.type_line('LOAD "DONKEY.HTML"')
+        sim.type_line("RUN")
+        running = False
+        for _ in range(200):
+            sim._rpc("TICKN 2000")
+            if "running=1" in sim._rpc("STATUS?"):
+                running = True
+                break
+        if not running:
+            print("FAIL RTL play DONKEY not running")
+            return 1
+        for _ in range(2000):
+            sim._rpc("TICK")
+        sim._rpc("FB?")
+        fb0 = bytes(sim.framebuffer().front)
+        for _ in range(2000):
+            sim._rpc("TICK")
+        sim._rpc("KEYEVT 13 1")
+        sim._rpc("KEYEVT 13 0")
+        for _ in range(2000):
+            sim._rpc("TICK")
+        sim._rpc("FB?")
+        fb1 = bytes(sim.framebuffer().front)
+        if fb0 == fb1:
+            print("FAIL RTL DONKEY boot/Enter no FB change")
+            return 1
+        print("OK RTL DONKEY Enter advances")
+        return 0
+    finally:
+        sim.shutdown()
+
+
 def main() -> int:
     steps = [
         check_python_letterbox,
@@ -898,6 +1070,7 @@ def main() -> int:
         check_one_glass_parity,
         check_rtl_help_list_run,
         check_rtl_list_edit_cls,
+        check_play_progression,
         check_ps2_bench,
         check_board_optional,
     ]

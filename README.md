@@ -49,6 +49,7 @@ python3 run_jmr_js.py
 
 python3 gui_jmr_js.py
 # 3. GUI — one 640×480 glass (text+games); F9 runtimes; arrows+space play
+#    Window size is locked at startup (status text must not grow the alleys).
 #    Prefers .venv. HTML RUN = compile-on-RUN bytecode (not dukpy / not stale .JSH).
 #    F9 BOARD: PC keyboard = tether (J15 dead).
 
@@ -131,7 +132,8 @@ tokens, microcode, or Nexys A7-100T pinouts here. Board freeze:
 | `constraints/` | Nexys Video XDC (StarLite later; not A7-100T) |
 | `storage/` | Seeds: `NAME.HTML` titles (`.JSH` = compile output, code + ASET art) |
 | `docs/` | Architecture, bring-up, fit, handoff |
-| `traces/` | Flight logs — read first when debugging |
+| `tools/` | compile, SD image, battery, `golden_frames.py` (Chrome vs PYTHON vs RTL) |
+| `traces/` | Flight logs — read first when debugging. `traces/goldens/` = frame diffs |
 | `.cursor/rules/` | Product rules for *this* machine |
 
 ---

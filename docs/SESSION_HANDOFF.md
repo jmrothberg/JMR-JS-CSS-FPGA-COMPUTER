@@ -1,7 +1,81 @@
 # Session handoff — next agent start here
 
-Last updated: 2026-08-13 (ARCHITECTURE CHANGE: external SRAM asset bank replaces
-`NAME.DAT` spill — user decision. Mission: PYTHON + FPGA-SIM full-game match)
+Last updated: 2026-08-14 (DONKEY KeyboardEvent ctor, FRAME clocks, GUI lock).
+Battery is play-progression with **ghost-color outside house** (not any-pixel).
+Fonts are **not** Chrome (8×8 / rect stub) — out of scope. User F9 remains
+the play gate. Mission: PYTHON + FPGA-SIM full-game match
+
+## LANDED 2026-08-14 evening — GUI + DONKEY title + play clocks
+
+1. **GUI window never resizes.** `gui_jmr_js.py` pins geometry after first
+   layout (`resizable False`, minsize=maxsize). Status/hint are width=80
+   truncated — Enter / F9 / LOADING must not grow the alleys. Glass stays
+   640×480.
+2. **One cursor.** Yellow `|` glyph removed. Cyan block at insert column
+   (`cursor_col`).
+3. **DONKEY FPGA-SIM title stuck.** RTL `OP_NEW_OBJ` now copies `(type,
+   options)` for interned `KeyboardEvent`/`Event`/`CustomEvent`/`MouseEvent`
+   (PYTHON twin in `bytecode.py`). Boot script `new KeyboardEvent("keydown",
+   {key:"Enter"})` + `dispatchEvent` advances title → character → game.
+   Snippets: `test_keyboard_event_ctor_sets_key`,
+   `test_rtl_keyboard_event_ctor_sets_key`.
+4. **Play clocks.** GUI `frame_tick` uses `FRAME` (tick until `dbg_swap_n`
+   or 2M-clock cap) instead of `TICK`=1000. VM `frame_tick` is every 65536
+   clocks — 1000-clock TICK starved PACMAN ghosts/reverse and DONKEY rAF.
+   LINE also breaks after `game_mode` (+16 slices for boot rAF) and logs
+   `OK clk=… capped=…`.
+5. **Logs.** KEYEVT coalesced; periodic `play fb_frames=` + VMSTAT; no
+   duplicate GLASS.
+
+**Still user F9:** PACMAN ghosts leave + reverse on FPGA-SIM; DONKEY playable
+after title flash. Board / `.bit` untouched. Fonts still rect stub.
+
+Goldens (`tools/golden_frames.py` 2026-08-14 evening): DONKEY RTL now paints
+(`nz=45632` vs PYTHON `60003`) — title is no longer a stuck sprite-soup.
+PACMAN occupancy PYTHON vs RTL still **148 center-bits** (maze arcs vs spokes
+gap; not a hard CI gate). INVADERS PYTHON vs RTL tile mismatch remains
+(fillText stub + timing). User F9 is the play gate.
+
+## OPEN BUGS 2026-08-14 — finite surface + maze + ghosts
+
+Frozen ISA from compiling the three HTML titles is in
+[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md) (done / gap / never).
+WebGL, Fetch, Audio, TTF, `window.open` = **never**. Fonts stay 8×8 / rect
+stub — not Chrome Arial.
+
+### PYTHON — this stretch
+
+1. **`join('')` EQ `case '1100'`.** String-value `===` plus JS ToString on
+   join so neighbor-bit keys hit quarter-**arcs**, not `default` spokes.
+   Snippets: `test_join_empty_eq_case_1100`,
+   `test_switch_join_draws_arc_not_spokes`.
+2. **Ghost-update snippet** leaves the start cell (`timeout` / `!offset` /
+   finder / `_COS`). `test_ghost_update_leaves_start_cell`.
+
+### FPGA-SIM — this stretch
+
+3. **Array nursery = object keep.** `commit_arr_keep` raises `n_arr_keep` to
+   **oid+1** (not `n_arr`). `Array(n)` / `map()` temps are nursery. Rewind
+   does not wait for `click_fired`. Finder JSON/steps no longer pin
+   `arr=4095`. Snippets: `test_rtl_join_empty_eq_case_1100`,
+   `test_rtl_switch_join_draws_arc_not_spokes`,
+   `test_rtl_ghost_update_leaves_start_cell`,
+   `test_rtl_finder_many_frames_still_paths`.
+
+### Battery / goldens
+
+- Play-progression fails unless **ghost-colored** pixels exist **outside**
+  the house bbox (map cells 11–16 × 12–15 at origin 16,8 size 14), PYTHON
+  and RTL, after Enter (title → stage 0).
+- `tools/golden_frames.py`: PACMAN **stage 0** occupancy mask (HUD x≥410
+  masked). PYTHON vs RTL center-bits = corridor topology. Chrome occupancy
+  skipped if still on the title (no Enter). Color `#09f` vs `#9966CC` is
+  FSTY, not topology.
+
+**Still out of scope:** fillText glyph ROM, Chrome fonts, `.bit`/`.bin`.
+User F9 PYTHON then F9 FPGA-SIM is the play gate.
+
+---
 
 ## Product goal (do not forget)
 
@@ -48,16 +122,164 @@ rung. **Do not flash the board** until the user F9-approves both.
 4. Grow the **VM / compiler / natives / DAT pager** to fit the HTML. Do
    **not** rewrite the three games down to a subset. Do **not** delete files.
 
-**Honest: not done yet (2026-08-13)**
+**Honest: F9 play-test round 3 landed 2026-08-14 (PYTHON then RTL). Battery
+PASS is pixels+Left smoke, not a play proof. Do not claim INVADERS-shoot
+or ghosts-leave-box from that PASS. User F9 PYTHON then F9 FPGA-SIM is the
+remaining gate.**
 
 | Item | Reality |
 |---|---|
 | Compile-on-RUN PYTHON | **Landed** — default HTML path is bytecode; dukpy only if `JMR_HTML_DUKPY=1` |
 | Stale `.JSH` preferred | **Fixed on PYTHON** — `RUN` compiles then writes fresh `.JSH` |
-| External SRAM asset bank (ASET) | **In progress** — replaces retired `NAME.DAT` spill. Historic trap: `tools/compile_js.py` packed sprites into `.JSH` SPR1 and **downscaled** (`w*h > 180000`, 8-color palette) |
-| PYTHON vs Chrome | Invaders playable; Donkey/Pac-Man still VM-gap (sheets, maze, prototypes) — **not** full-game parity |
-| FPGA-SIM vs PYTHON | Monitor verbs + HTML RUN path exist; Pac-Man SIM still a **24×24 blit stub**; not full-game match |
+| External SRAM asset bank (ASET) | **Landed** — full-res sheets ride `.JSH` ASET → 4 MB SRAM model; RTL blits per-pixel from the SRAM port (`aset_mode`), 16 descriptors, compiler **fails loud** past 16 (never drops art). Old downscale trap removed |
+| RTL setTransform scale | **Landed** — `ctx_sx/ctx_sy` Q16.16 copied from FM `machine.py _xf` (`int(x*sx+tx)`, `max(1,int(w*sx))`); save/restore keep scale. DONKEY world→glass scales on RTL |
+| PYTHON vs Chrome | All three RUN + respond to keys on PYTHON bytecode; **full look/play match not yet user-F9-verified** — do not claim done |
+| PYTHON LIST | **Fixed** — 64-col wrap + MORE paging; ESC aborts MORE (`more_waiting`; GUI must not paint `>` over `-- MORE --`). Fat `data:image` lines **are** the HTML — LIST never shows `.JSH` |
+| Raw keyboard → games | **Landed** — KEYEVT for **all** keyCodes (incl. space/arrows). KEYBITS joy tether kept; skip KEYBITS-edge synthetic keydown when a KEYEVT for that code is already queued. `e.key` for space is U+0020 `" "`, not `"Space"`. HTML decides bindings |
+| RTL Date frame clock | **Fixed** — `time_ms` advances 17 ms once per frame in `S_WAIT_FRAME` (FM twin); `Date.now()`/`getTime()` are pure reads. The old +17-per-CALL hack made PACMAN game time race ahead |
+| PACMAN purple flood | **Fixed** — `getImageData(0,0,640,480)` hit the fillRect argc-4 fallback and painted a full-screen rect with the stale wall strokeStyle. Fallback retired; `getImageData`→undefined / `putImageData` no-op (maps redraw per frame) |
+| FPGA-SIM vs PYTHON | Battery **PASS** (2026-08-14 round 3): INVADERS/PACMAN/DONKEY HTML pixels+keys on PYTHON and RTL. Dedicated **128 KiB SOURCE BRAM** (not 8K work RAM). DIR names only (hide `.JSH`/`.JSB`). LOAD wait is this stem+LINES. LIST waits for MORE/prompt. `e.key === " "` KEYEVT; mini-finder BFS on RTL (`var f=function` → CALL_VAL). ASET SRAM stays art from address 0. **Open RTL debt:** (1) `fillText` still a rect stub (glyph ROM missing), (2) RTL walls paint `#9966CC` while FM level-1 walls are `#09f`. |
 | Board | **Out of scope** this stretch. Last bit 03:36 lags the tree. No `.bit`/`.bin` |
+
+---
+
+## OPEN BUGS 2026-08-14 (user play-test) — landed this stretch
+
+Traces `session_20260814_12*` plus the user's F9
+`session_20260814_140402_*` / screenshot (one invader, dead controls, PACMAN
+title-only) confirmed heap saturation on RTL and PYTHON `===` using deep
+equality. Battery **PASS** after the fixes below. User F9 is the remaining
+gate. No `.bit`/`.bin`.
+
+### PYTHON — landed
+
+1. **INVADERS — wrong alien eliminated.** Per-call env was already
+   `call_fn` → `{"__par": fn.env}`. Extra hole: `===` on objects/arrays is
+   now identity (`is`), not Python deep `==`, so `find(x => x === obj)`
+   cannot match a different dict with the same fields. Generic tests in
+   `tests/test_bytecode_js.py`.
+2. **PACMAN — ghosts never leave the box.** `String.replace` accepts the
+   compiler RegExp stub; `g` → all matches.
+
+### FPGA-SIM — landed
+
+3. **INVADERS — bullets pass through / all vanish after a shot.** `MAKE_FN`
+   is a heap object with a **live env pointer**. `setTimeout` has its own
+   8-slot queue (fire after rAF; `toovf` sticky). Heap no longer saturates
+   on animate: uncaptured call envs recycle; per-frame object bump rewind
+   of nursery slots (do not wrap live objects).
+4. **LIST wrap paging.** `list_col` 0..63; wrap counts a page row, does not
+   bump `list_disp`.
+5. **PACMAN title-only / black after maze.** No live-slot wrap. JSON +
+   replace in RTL. Live env so `nextStage`/`animate` share `_index`. Object
+   nursery + env recycle. Offline: maze beans stay, `obj` stable ~3K, Left
+   changes FB. Battery PACMAN.HTM pixels+key **OK**.
+6. **DONKEY RUN wait.** GUI wait is size-scaled `TICKN` (byte cap), break on
+   `running=1` / `?NH` / `?NB`.
+
+---
+
+## OPEN BUGS 2026-08-14 afternoon F9 — landed this stretch
+
+User F9 after the morning stretch: FPGA-SIM INVADERS did not shoot; LIST
+stopped ~230; PACMAN maze drew but arrows/ghosts failed; DONKEY RUN froze
+ESC; LOAD lacked PYTHON's name+line count. PYTHON INVADERS still culled a
+top-row alien (explosion at the hit); PYTHON PACMAN ghosts stayed in the
+box (scared worked); LIST MORE stuck on fat HTML.
+
+Inner loop = pytest of language/console/RTL **snippets** (not LOAD+RUN of
+the three titles). Battery is smoke after those pass. User F9 remains the
+play gate. No HTML rewrites, no title gates, no `.bit`/`.bin`. SOURCE stays
+8K; 4 MB SRAM stays the ASET art bank.
+
+### PYTHON — landed
+
+1. **Wrong alien (`for (let i)` clobber).** Inside a call env, `for (let i)`
+   was compiled as STORE_VAR and walked into the caller / forEach `i`.
+   Callees now LET_VAR so `i++` stays in this frame. Test:
+   `test_for_let_in_callee_does_not_clobber_foreach_i`.
+2. **JSON stringify+replace+parse + mini-finder.** Nested number arrays
+   round-trip; `Array(n).fill(0).map(() => Array(m).fill(0))` works. Generic
+   tests in `tests/test_bytecode_js.py` — not a maze-`2` or `/2/g` special
+   case. F9 ghosts-in-box may still be RTL pathing; pytest language path is
+   green.
+3. **LIST MORE abort.** `more_waiting` while `_await_list_more`; ESC aborts
+   (Space/Enter page). `hard_break` must **not** clear the MORE abort (GUI
+   `break_program` pushes ESC then `hard_break`). No `>` painted on wrapped
+   LIST rows. Fat `data:image` LIST **is** the HTML; `.JSH` is never LIST
+   source.
+
+### FPGA-SIM — landed
+
+4. **Nursery rewind ate `arr.push` objects.** `commit_obj_keep` raises
+   `n_obj_keep` to **`oid+1`** (not `n_obj`) on push / SET_PROP / ARR_SET of
+   a nursery obj/fn. Late `rAF(animate)` must not freeze the whole bump.
+   Snippet: `test_rtl_push_object_survives_frame`.
+5. **Raw KEYEVT.** Host no longer drops 32 / 37–40. KEYBITS-edge synthetic
+   keydown only if the KEYEVT FIFO is empty. `e.key` for space is intern
+   `" "` (U+0020). Snippet: `test_rtl_keyevt_space_keycode`.
+6. **RUN/LOAD wait + ESC.** `type_line` pumps `run_wait_idle` between TICKN
+   slices and aborts on `_break_run_wait` (`hard_break`). Fat HTML wait is
+   size-scaled — do not shrink Donkey art.
+7. **LOADED NAME (N LINES) + LIST from card.** HTML LOAD copies SOURCE up to
+   8K then **drains FAT** counting all newlines. LIST restores `src_name`
+   and streams the **card** HTML, never `.JSH`. Snippets:
+   `test_rtl_load_html_line_count`, `test_rtl_list_after_run_is_source`.
+
+**Still out of scope:** fillText glyph ROM, wall-color `#09f` vs `#9966CC`.
+Do **not** claim shoot / ghosts-leave-box / look-play match from battery
+PASS. User F9 PYTHON then F9 FPGA-SIM.
+
+---
+
+## OPEN BUGS 2026-08-14 F9 round 3 — landed this stretch
+
+User F9 after the afternoon stretch: PYTHON INVADERS correct; PACMAN
+steers on FPGA-SIM; leftover holes were language/console (DIR/LIST/LOAD,
+8K SOURCE leftover, `e.key === " "`, finder BFS via `var f = function`).
+
+Inner loop = pytest snippets (`test_bytecode_js`, `test_console_log`,
+`test_rtl_snippets`). Battery is pixels+Left smoke. User F9 is the play
+gate. No HTML rewrites, no title gates, no `.bit`/`.bin`. ASET SRAM stays
+art from address 0.
+
+### PYTHON — landed
+
+1. **DIR names only.** No `1  INVADERS.HTML`. Catalog still hides `.JSB`/`.JSH`.
+2. **Finder BFS.** `Object.assign` / stringify+`/2/g` / fill+map / objects in
+   `steps` path out of a truthy-`2` cell after replace opens it. No maze-`2`
+   special case. `var rec = function(){ rec() }` is CALL_VAL.
+3. **EDIT insert cursor.** GUI Left/Right move an insert index when not
+   running; Backspace deletes there.
+
+### FPGA-SIM — landed
+
+4. **128 KiB SOURCE BRAM.** Dedicated `source_mem`, not the 12 KB work map.
+   LOAD copies HTML into SOURCE (INVADERS/PACMAN class). ASET SRAM still
+   art from 0.
+5. **Traces.** `NOTE GLASS` after DIR/LOAD/LIST/SAVE (letterbox). No FB?
+   timing spam. PYTHON logs the reply of those verbs.
+6. **LIST MORE.** `LINE` ticks until prompt or `-- MORE --`. Host does not
+   paint `>` over MORE. Space pages; ESC aborts.
+7. **LOAD wait.** Requires **this** stem + `LINES` (or `?IO`/`?LS`), not a
+   stale `LOADED` still on glass. Remaining newlines counted per sector.
+8. **DIR / SAVE.** Glass names match PYTHON (`.HTM`→`.HTML`; hide `.JSH`/
+   `.JSB`). SAVE persists onto `card.img` so LOAD of the new name works.
+9. **KEYEVT `e.key === " "`.** Intern hash 32 + len 1; event alloc then env
+   on the next cycle (`S_KEYEV`) so the event object is not clobbered.
+   Snippet: `test_rtl_keyevt_space_e_key_char`.
+10. **Mini-finder on RTL.** Same BFS snippet as PYTHON. Nested `var f =
+    function` compiles to LOAD_VAR+CALL_VAL (JSB stub 33 dropped the name).
+    Array.fill/map/unshift already in the VM. Snippet:
+    `test_rtl_finder_paths_out_of_house`.
+11. **Nursery burst.** `commit_obj_keep` is oid+1 on nested stores too.
+    Snippet: `test_rtl_push_survives_particle_burst`.
+
+**Remaining debt:** fillText glyph ROM, wall-color `#09f` vs `#9966CC`.
+Do **not** claim shoot / ghosts-leave-box / look-play match from battery
+PASS. User F9 PYTHON then F9 FPGA-SIM.
+
+---
 
 Read first: `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`,
 `.cursor/rules/python-first-parity.mdc`, `.cursor/rules/never-fake-fpga-sim.mdc`,
@@ -117,11 +339,10 @@ tether KEYBITS, ALU/MUL pipeline, `keyUp`/`keyDown`, INVADERS hex path.
 `STEM.JSH` (never overwrite `INVADERS.JSB`; never prefer a stale `.JSH`).
 Full-quality `data:image` → `.JSH` ASET section → external SRAM asset bank
 (no `NAME.DAT`; do not downscale
-sheets into code BRAM). Battery PASS: INVADERS/DONKEY/PACMAN HTML FPGA-SIM
-pixels + KEYBITS Left. PACMAN HTML SIM is a **24×24 blit stub** plus
-proto/assign/Date — maze/fillText path still weak. **No `.bit`/`.bin` /
-Vivado** until you F9-approve all three on FPGA-SIM. Fit numbers will change
-(32K code + heap + dual 640×480 FB).
+sheets into code BRAM). Battery 2026-08-14: INVADERS / PACMAN / DONKEY HTML
+pixels+keys **PASS** on PYTHON and RTL. fillText is still a 64×8 rect (glyph
+ROM missing). **No `.bit`/`.bin` / Vivado** until you F9-approve all three on
+FPGA-SIM. Fit numbers will change (32K code + heap + dual 640×480 FB).
 
 ---
 
@@ -249,7 +470,8 @@ make -C tools/board_flow flash    # SRAM first; QSPI later
 ## FPGA-SIM proven (not host twin)
 
 - 64×16 letterbox, origin (64,112); one prompt (strip trailing blanks / bare `>`)
-- LIST / MORE / EDIT / CLS; FIFO depth 128
+- LIST / MORE / EDIT / CLS; FIFO depth 128; LIST HTML from card (never `.JSH`);
+  LOAD prints `LOADED NAME (N LINES)`; SOURCE prefix stays 8K
 - Product path: `LOAD "*.HTML"` / `RUN` → **compile-on-RUN** → fresh bytecode
   into code BRAM (never prefer stale `.JSH`; never Invaders hex)
 - Native **640×480** game FB; tether dump may subsample

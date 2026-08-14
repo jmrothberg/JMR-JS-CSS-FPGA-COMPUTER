@@ -218,7 +218,7 @@ class BoardBackend(RuntimeBackend):
         except Exception as e:
             self._log.fault("SERIAL", str(e))
 
-    def paint_prompt(self, prompt: str, cursor_on: bool = False) -> None:
+    def paint_prompt(self, prompt: str, cursor_on: bool = False, cursor_col=None) -> None:
         self._prompt = prompt
         self._paint_mirror()
 
