@@ -71,12 +71,13 @@ User must **restart F9** so the new binary loads.
 |---|---|
 | Chrome | Authoring look only — not the machine |
 | PYTHON bytecode | Titles play. Control. |
-| FPGA-SIM (Verilator RTL) | F9 PACMAN 2026-08-15: left maze/mouth/ghosts still wrong. Fix in tree: `arr[-1]`/`arr[len]` now undefined (left-edge `map.get`); `a[i]=` grows `length` (28-wide house finder). **Restart F9.** User has not blessed play. |
+| FPGA-SIM (Verilator RTL) | Env/`f`/`times` fix in tree (`release_env_to` no duplicate free-list). Peek after 130 FRAMEs: rAF env has `f`; item.times toggles; ghost `timeout=0` but still house `coord.y=14`. **Restart F9.** Mouth should open. Ghosts leaving / left-turn are follow-ups if F9 still shows them. User has not blessed play. |
 | Board | Out of scope. Last bit lags the tree. J15 USB-HID is dead — type/play from GUI tether until hardware is fixed. |
 
 Monitor: `LOAD` / `RUN` / `LIST` / `DIR` / `EDIT`. One glass: READY letterbox,
 RUN = 640×480 FB. `.JSB` = tiny `.JS` demo bytecode. `.JSH` = HTML
-compile-on-RUN (code + ASET). Games only need `.JSH`.
+compile-on-RUN (code + ASET). Games only need `.JSH`. GUI **F10** opens a
+read-only Architecture Monitor (JS die / three rooms / compile-on-RUN; no F7/F8).
 
 ---
 
@@ -100,6 +101,10 @@ pytest fails.
   SPR1 pixels. 1:1, 5-arg 2×, `setTransform(2,…)`, 9-arg source window, ASET
   SRAM path — `tests/test_rtl_snippets.py` (`test_rtl_drawimage_*`,
   `test_rtl_aset_*`). Venetian blinds were a skipped-byte pack, not “DONKEY.”
+- **`release_env_to`:** free every frame in `[saved, env_sp)`; skip `env_cap`;
+  no duplicate `env_free`; no nursery oid on the free list after keep. PACMAN
+  `item.times` was 0 because forEach LOAD `f` missed a recycled live env.
+  `test_rtl_game_ctor_raf_f_increments`.
 
 ---
 

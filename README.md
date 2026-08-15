@@ -48,10 +48,10 @@ python3 run_jmr_js.py
 # 2. terminal glass — PYTHON functional model
 
 python3 gui_jmr_js.py
-# 3. GUI — one 640×480 glass (text+games); F9 runtimes; arrows+space play
+# 3. GUI — one 640×480 glass (text+games); F9 runtimes; F10 Architecture Monitor
 #    Window size is locked at startup (status text must not grow the alleys).
 #    Prefers .venv. HTML RUN = compile-on-RUN bytecode (not dukpy / not stale .JSH).
-#    F9 BOARD: PC keyboard = tether (J15 dead).
+#    F9 BOARD: PC keyboard = tether (J15 dead). F10 hides the monitor (faster).
 
 make -C sim sim_server_synth
 # 4. Verilator FPGA-SIM binary (REQUIRED for F9 FPGA-SIM; never fake with host twin)

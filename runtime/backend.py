@@ -14,6 +14,89 @@ CARD_IMG = ROOT / "card.img"
 STORAGE_DIR = ROOT / "storage"
 
 
+def parse_status_kv(line: str) -> dict:
+    """Parse `VMSTAT k=v …` / `STATUS k=v …`. Unknown tokens ignored."""
+    out: dict = {}
+    if not line:
+        return out
+    for tok in str(line).split():
+        if "=" not in tok:
+            continue
+        k, v = tok.split("=", 1)
+        if not k:
+            continue
+        if v.isdigit() or (v.startswith("-") and v[1:].isdigit()):
+            try:
+                out[k] = int(v)
+                continue
+            except ValueError:
+                pass
+        out[k] = v
+    return out
+
+
+def card_catalog(extra: list[str] | None = None) -> list[str]:
+    """HTML/JS titles plus invisible .JSH compile cache names."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for n in extra or []:
+        if n and n not in seen:
+            seen.add(n)
+            names.append(n)
+    if STORAGE_DIR.is_dir():
+        for p in sorted(STORAGE_DIR.iterdir()):
+            if not p.is_file() or p.name.startswith("."):
+                continue
+            if p.suffix.upper() in (".HTML", ".HTM", ".JS", ".JSH") and p.name not in seen:
+                seen.add(p.name)
+                names.append(p.name)
+    return names
+
+
+def _js_tag(val) -> str:
+    if val is None:
+        return "undef"
+    if isinstance(val, bool) or isinstance(val, int) or isinstance(val, float):
+        return "int"
+    if isinstance(val, str):
+        return "str"
+    if isinstance(val, list):
+        return "arr"
+    if isinstance(val, dict):
+        cls = val.get("__class", "")
+        if cls == "Fn":
+            return "fn"
+        if cls in ("Elem", "Element"):
+            return "elem"
+        return "obj"
+    return type(val).__name__[:6]
+
+
+def _js_short(val, n: int = 24) -> str:
+    # NEW: never repr() heap objects — PACMAN stack entries are cyclic/huge
+    # and repr() of one dict froze the GUI frame loop after RUN.
+    if val is None:
+        return "undef"
+    if isinstance(val, dict):
+        cls = val.get("__class") or "obj"
+        return f"{cls}/{len(val)}"
+    if isinstance(val, list):
+        return f"[{len(val)}]"
+    if isinstance(val, str):
+        return val if len(val) <= n else val[: n - 1] + "…"
+    try:
+        s = str(val)
+    except Exception:
+        return "?"
+    if len(s) > n:
+        return s[: n - 1] + "…"
+    return s
+
+
+def _merge_jsh_catalog(catalog: list[str]) -> list[str]:
+    return card_catalog(catalog)
+
+
 class RuntimeBackend(ABC):
     name: str = "ABSTRACT"
 
@@ -61,6 +144,10 @@ class RuntimeBackend(ABC):
     def paint_prompt(self, prompt: str, cursor_on: bool = False, cursor_col=None) -> None:
         """Optional: paint monitor prompt into this runtime's glass."""
         pass
+
+    def arch_snapshot(self) -> dict:
+        """Read-only Architecture Monitor fields. Missing keys are fine."""
+        return {}
 
 
 class PythonBackend(RuntimeBackend):
@@ -124,3 +211,50 @@ class PythonBackend(RuntimeBackend):
         tr = getattr(self.machine, "trace", None)
         if tr is not None:
             tr.close()
+
+    def arch_snapshot(self) -> dict:
+        """PYTHON live fields for the Architecture Monitor (existing Machine/VM)."""
+        m = self.machine
+        vm = getattr(m, "vm", None)
+        stack = list(getattr(vm, "stack", None) or [])
+        preview_parts = []
+        for x in stack[-8:]:
+            preview_parts.append(f"{_js_tag(x)}:{_js_short(x)}")
+        catalog: list[str] = []
+        try:
+            catalog = list(m.storage.catalog())
+        except Exception:
+            catalog = []
+        # NEW: also list compile-cache .JSH next to DIR names (not a LOAD name)
+        catalog = _merge_jsh_catalog(catalog)
+        running = bool(self.running)
+        chunk = getattr(m, "_html_chunk", None)
+        n_ops = len(getattr(chunk, "code", None) or []) if chunk is not None else 0
+        n_consts = len(getattr(chunk, "consts", None) or []) if chunk is not None else 0
+        spr = len(getattr(m, "_spr_descs", None) or [])
+        sram_bytes = int(getattr(getattr(m, "sram", None), "loaded_bytes", 0) or 0)
+        return {
+            "running": running,
+            "sname": "RUN" if running else "IDLE",
+            "sp": len(stack),
+            "raf": len(getattr(m, "_raf_q", []) or []),
+            "ton": len(getattr(m, "_timers", []) or []),
+            "source_name": getattr(m, "source_name", "") or "",
+            "catalog": catalog,
+            "glass": (m.screen_text() or "")[-800:],
+            "hdmi_mode": "game" if running else "letterbox",
+            "stack_depth": len(stack),
+            "stack_preview": ", ".join(preview_parts),
+            "n_globals": len(getattr(vm, "globals", {}) or {}),
+            "more": bool(getattr(m, "_list_more_waiting", False)),
+            "obj": len(getattr(vm, "globals", {}) or {}),
+            "arr": sum(
+                1 for v in (getattr(vm, "globals", {}) or {}).values()
+                if isinstance(v, list)
+            ),
+            "spr": spr,
+            "n_ops": n_ops,
+            "n_consts": n_consts,
+            "n_html": len(getattr(m, "source_lines", None) or []),
+            "sram_bytes": sram_bytes,
+        }

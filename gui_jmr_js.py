@@ -7,7 +7,7 @@ Monitor text and Canvas games share the same framebuffer. No separate Text conso
   python3 gui_jmr_js.py
 
 F9 cycles PYTHON → FPGA-SIM → BOARD → (ASIC-SIM later).
-Arrows + Space = play. Mouse stick OFF (was fighting KEYBITS on FPGA-SIM).
+F10 toggles the Architecture Monitor (JS schematic). Arrows + Space = play.
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from functional_model.input_engine import (  # noqa: E402
     JOY_RIGHT,
     JOY_UP,
 )
+from gui_arch_monitor import ArchitectureView  # noqa: E402
 from runtime.backend import PythonBackend  # noqa: E402
 
 FRAME_MS = 16
@@ -159,6 +160,7 @@ class App:
         self._cursor_on = True
         self._cursor_t = time.monotonic()
         self._last_prompt: str | None = None
+        self._busy_prompt: str | None = None  # keep typed RUN/LIST until LINE returns
 
         self._build_ui()
         # MORE waiter: pump Tk + refresh glass (BASIC more_idle pattern)
@@ -177,6 +179,7 @@ class App:
         # NEW: mouse stick OFF — click only focuses glass (no JOY overwrite of KEYBITS)
         self.canvas_label.bind("<Button-1>", lambda e: self.canvas_label.focus_set())
         self.root.bind_all("<F9>", self.cycle_runtime)
+        self.root.bind_all("<F10>", self._toggle_arch_monitor)
         self.root.bind_all("<Escape>", lambda e: self.break_program())
 
         self.machine.paint_monitor("> ")
@@ -194,6 +197,8 @@ class App:
         self.root.resizable(False, False)
         self._status_shown = None
         self._set_status(self._status_text())
+        # NEW: Architecture Monitor is a second window (does not grow the glass)
+        self._build_arch_monitor()
         self._after_id = self.root.after(FRAME_MS, self._frame)
 
     def _build_ui(self) -> None:
@@ -217,13 +222,108 @@ class App:
 
         self.hint = tk.Label(
             self.root,
-            text="F9=runtime  ESC=break  Ctrl-V paste  EDIT n / LIST -  arrows+space=play  type+Enter",
+            text="F9=runtime  F10=monitor  ESC=break  Ctrl-V paste  EDIT n / LIST -  arrows+space=play  type+Enter",
             fg="#888",
             bg="#1a1a1a",
             anchor="w",
             width=80,
         )
         self.hint.pack(fill=tk.X, padx=6, pady=2)
+        self._hint_keys = self.hint.cget("text")
+
+    def _build_arch_monitor(self) -> None:
+        """Second window: JS Architecture Monitor (F10 hide/show)."""
+        self.arch_window = tk.Toplevel(self.root)
+        self.arch_window.title("JMR ARCHITECTURE MONITOR")
+        self.arch_window.configure(bg="#0d0f0d")
+        self.arch = ArchitectureView(self.arch_window)
+        # NEW: X hides (does not quit the glass). bind_all F10 already covers focus.
+        self.arch_window.protocol("WM_DELETE_WINDOW", self._hide_arch_monitor)
+        # NEW: F-keys on the monitor toplevel (bind_all also fires — debounce)
+        self.arch_window.bind("<F9>", self.cycle_runtime)
+        self.arch_window.bind("<F10>", self._toggle_arch_monitor)
+        self.arch_window.bind("<Escape>", lambda e: self.break_program())
+        self._place_arch_window()
+        try:
+            self.root.lift()
+            self.canvas_label.focus_set()
+        except tk.TclError:
+            pass
+        self._update_arch_monitor()
+
+    def _place_arch_window(self) -> None:
+        """Put the monitor to the right of the locked 640×480 glass."""
+        try:
+            self.root.update_idletasks()
+            self.arch_window.update_idletasks()
+            gap = 8
+            x0 = int(self.root.winfo_x())
+            y0 = int(self.root.winfo_y())
+            gw = int(self.root.winfo_width())
+            self.arch_window.geometry(f"+{x0 + gw + gap}+{y0}")
+        except tk.TclError:
+            pass
+
+    def _arch_visible(self) -> bool:
+        try:
+            return (
+                self.arch_window.winfo_exists()
+                and self.arch_window.state() != "withdrawn"
+            )
+        except tk.TclError:
+            return False
+
+    def _hide_arch_monitor(self) -> None:
+        try:
+            self.arch_window.withdraw()
+        except tk.TclError:
+            pass
+        try:
+            self.hint.configure(text="Architecture Monitor hidden · F10 to show")
+        except tk.TclError:
+            pass
+
+    def _show_arch_monitor(self) -> None:
+        try:
+            self.arch_window.deiconify()
+            self.arch_window.lift()
+            self._place_arch_window()
+            self.hint.configure(text=self._hint_keys)
+        except tk.TclError:
+            pass
+
+    def _toggle_arch_monitor(self, _event=None) -> str:
+        if not self._fkey_ok():
+            return "break"
+        if self._arch_visible():
+            self._hide_arch_monitor()
+        else:
+            self._show_arch_monitor()
+        return "break"
+
+    def _fkey_ok(self) -> bool:
+        """bind_all + arch_window bind both fire — drop the duplicate."""
+        now = time.monotonic()
+        if now - getattr(self, "_fkey_t", 0.0) < 0.08:
+            return False
+        self._fkey_t = now
+        return True
+
+    def _update_arch_monitor(self) -> None:
+        if not self._arch_visible():
+            return
+        snap = {}
+        getter = getattr(self.backend, "arch_snapshot", None)
+        if callable(getter):
+            try:
+                snap = getter() or {}
+            except Exception:
+                snap = {}
+        self.arch.update(
+            runtime=self.backend.name,
+            snap=snap,
+            line_buf=self.line_buf,
+        )
 
     def _status_text(self) -> str:
         # NEW: show FPGA-SIM (RTL) vs (HOST) so a fake twin cannot hide
@@ -273,6 +373,12 @@ class App:
         if not self._alive:
             return
         try:
+            # Re-stamp typed RUN/LIST if SCREEN? wiped the letterbox mid-LINE.
+            if getattr(self, "_busy_prompt", None) and hasattr(self.backend, "paint_prompt"):
+                if not getattr(self.backend, "running", False) and not getattr(
+                    self.backend, "more_waiting", False
+                ):
+                    self.backend.paint_prompt(self._busy_prompt, cursor_on=False)
             self._refresh_fb()
             self.root.update()
         except tk.TclError:
@@ -281,6 +387,8 @@ class App:
         time.sleep(0.01)
 
     def cycle_runtime(self, _event=None) -> None:
+        if not self._fkey_ok():
+            return
         old = self.backend
         self.backend_index = (self.backend_index + 1) % len(self.backends)
         self.backend = self.backends[self.backend_index]
@@ -294,6 +402,8 @@ class App:
         self.canvas_label.focus_set()
 
     def break_program(self) -> None:
+        if not self._fkey_ok():
+            return
         m = getattr(self.backend, "machine", self.machine)
         m.push_key("\x1b")
         self.backend.hard_break()
@@ -340,7 +450,7 @@ class App:
         return "break"
 
     def on_key_press(self, event: tk.Event) -> str | None:
-        if event.keysym in ("F9", "Escape"):
+        if event.keysym in ("F9", "F10", "Escape"):
             return None
         # Ctrl/Cmd+V handled by on_paste binds — do not also type 'v'
         state = int(getattr(event, "state", 0) or 0)
@@ -413,10 +523,26 @@ class App:
         if event.keysym in ("Return", "KP_Enter"):
             self._feed_more("\r")
             line = self.line_buf
+            up = line.strip().upper()
+            busy = (
+                up == "RUN"
+                or up.startswith("RUN ")
+                or up.startswith("LOAD")
+                or up == "LIST"
+                or up.startswith("LIST")
+            )
+            if busy:
+                # Keep the typed line visible until LINE returns (SCREEN? used
+                # to blank `> run` mid-compile).
+                self._busy_prompt = f"> {line}" if line.strip() else "> WORKING…"
+                if hasattr(self.backend, "paint_prompt"):
+                    self.backend.paint_prompt(self._busy_prompt, cursor_on=False)
+                else:
+                    self.machine.paint_monitor(self._busy_prompt, cursor_on=False)
+                self._refresh_fb()
             self.line_buf = ""
             self.line_col = 0
             # NEW: fat LOAD/RUN must not freeze the window (swallows Enter)
-            up = line.strip().upper()
             if up == "RUN" or up.startswith("RUN ") or up.startswith("LOAD"):
                 try:
                     self._set_status(self._status_text() + "  LOADING/COMPILING")
@@ -424,6 +550,7 @@ class App:
                 except tk.TclError:
                     pass
             self.backend.type_line(line)
+            self._busy_prompt = None
             self._after_command()
             return "break"
         if event.keysym == "BackSpace":
@@ -509,6 +636,15 @@ class App:
             return
         if getattr(self.backend, "more_waiting", False):
             return
+        if getattr(self, "_busy_prompt", None):
+            prompt = self._busy_prompt
+            if hasattr(self.backend, "paint_prompt"):
+                self.backend.paint_prompt(prompt, cursor_on=False)
+            else:
+                self.machine.paint_monitor(prompt, cursor_on=False)
+            self._last_prompt = prompt
+            self._refresh_fb()
+            return
         m = getattr(self.backend, "machine", self.machine)
         prompt = self._prompt_text()
         col = max(0, min(getattr(self, "line_col", len(self.line_buf)), len(self.line_buf)))
@@ -588,7 +724,13 @@ class App:
                 self._cursor_on = not self._cursor_on
                 self._cursor_t = now
                 blink_flip = True
-            if not self._is_running():
+            if getattr(self, "_busy_prompt", None):
+                if hasattr(self.backend, "paint_prompt") and (
+                    self._last_prompt != self._busy_prompt or blink_flip
+                ):
+                    self.backend.paint_prompt(self._busy_prompt, cursor_on=False)
+                    self._last_prompt = self._busy_prompt
+            elif not self._is_running():
                 prompt = self._prompt_text()
                 col = max(0, min(getattr(self, "line_col", 0), len(self.line_buf)))
                 cc = 2 + col
@@ -600,6 +742,7 @@ class App:
                         self._last_prompt = prompt
             self._refresh_fb()
             self._set_status(self._status_text())
+            self._update_arch_monitor()
             self._after_id = self.root.after(FRAME_MS, self._frame)
         except tk.TclError:
             self._alive = False

@@ -2849,6 +2849,75 @@ requestAnimationFrame(tick);
         sim.shutdown()
 
 
+def test_rtl_game_ctor_raf_f_increments():
+    """Game-ctor rAF must apply `item.times = f/frames` inside forEach.
+
+    `f` itself can live in the nested fn's env and still increment (PACMAN
+    env 1442 key 102). Mouth/ghosts need the *forEach callback* to read that
+    `f` and SET_PROP times — that write stayed 0 on FPGA-SIM.
+    """
+    src = """
+function Game() {
+  var resetItems = function() {};
+  var getItemsByType = function() {};
+  var Item = function(params) {
+    this._settings = {frames: 1, times: 0, timeout: 0, status: 1,
+      update: function() {}, draw: function() {}};
+    Object.assign(this, this._settings, params || {});
+  };
+  var items = [];
+  var i;
+  for (i = 0; i < 12; i++) items.push(new Item({frames: 10, times: 0}));
+  var maps = [{frames: 1, times: 0, update: function() {}, draw: function() {}}];
+  this.init = function() { this.start(); };
+  this.start = function() {
+    var f = 0;
+    var timestamp = (new Date()).getTime();
+    var fn = function() {
+      var now = (new Date()).getTime();
+      if (now - timestamp < 16) {
+        requestAnimationFrame(fn);
+        return;
+      }
+      timestamp = now;
+      f = f + 1;
+      maps.forEach(function(map) {
+        if (!(f % map.frames)) map.times = f / map.frames;
+      });
+      items.forEach(function(item) {
+        if (!(f % item.frames)) item.times = f / item.frames;
+        if (item.timeout) item.timeout--;
+        item.update();
+      });
+      if (items[0].times != 0) {
+        fillRect(10, 10, 20, 20, 2);
+        swapBuffers();
+      }
+      requestAnimationFrame(fn);
+    };
+    requestAnimationFrame(fn);
+  };
+}
+var g = new Game();
+g.init();
+"""
+    sim = _sim()
+    try:
+        _patch_js("GCTF.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "GCTF.JS"')
+        sim.type_line("RUN")
+        saw = False
+        for _ in range(24):
+            sim._rpc("FRAME")
+            if _fb_pix(_fb_raw(sim), 15, 15) == 2:
+                saw = True
+                break
+        assert saw, "forEach did not write item.times from captured f"
+    finally:
+        sim.shutdown()
+
+
 def test_rtl_times_from_f_div_frames():
     """item.times = f/frames when !(f%frames) must toggle (mouth gate)."""
     src = """
@@ -3304,6 +3373,102 @@ requestAnimationFrame(tick);
         assert _fb_pix(_fb_raw(sim), 15, 15) == 2, (
             "re-parsed maze rows were recycled by later frame temps"
         )
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_nested_find_indexof_splice_identity():
+    """Nested array find + indexOf-by-identity + splice (collision shape)."""
+    src = """
+var grids = [{invaders: [{id:1}, {id:2}, {id:3}]}];
+var projectiles = [{id:10}, {id:20}];
+var invader = grids[0].invaders[1];
+var projectile = projectiles[0];
+function tick() {
+  var grid = grids[0];
+  var invaderFound = grid.invaders.find(function(a) { return a === invader; });
+  var projectileFound = projectiles.find(function(p) { return p === projectile; });
+  if (invaderFound && projectileFound) {
+    var i = grid.invaders.indexOf(invaderFound);
+    var j = projectiles.indexOf(projectileFound);
+    grid.invaders.splice(i, 1);
+    projectiles.splice(j, 1);
+  }
+  if (grid.invaders.length == 2 && projectiles.length == 1)
+    fillRect(10, 10, 8, 8, 3);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("NFIS.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "NFIS.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 14, 14) == 3, "nested find+indexOf+splice missed identity"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_title_gamestate_enter_advances():
+    """Class-field startSelect + gameState + KeyboardEvent at rAF n===4."""
+    src = """
+var gameState = "title";
+class G {
+  startSelect = (event) => {
+    if (event.key === "Enter" && gameState === "title") {
+      gameState = "character";
+    }
+  }
+}
+const g = new G();
+function update() {
+  if (gameState == "title") {
+    document.addEventListener("keydown", g.startSelect);
+    fillRect(10, 10, 20, 20, 2);
+  } else {
+    fillRect(40, 10, 20, 20, 3);
+  }
+  swapBuffers();
+  requestAnimationFrame(update);
+}
+requestAnimationFrame(update);
+(function () {
+  function fireEnter() {
+    var ev;
+    try {
+      ev = new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, which: 13 });
+    } catch (e) {
+      ev = { type: "keydown", key: "Enter", keyCode: 13, which: 13 };
+    }
+    if (document.dispatchEvent) document.dispatchEvent(ev);
+  }
+  var n = 0;
+  function boot() {
+    n += 1;
+    if (n === 4) fireEnter();
+    if (n === 12) fireEnter();
+    if (n < 14) requestAnimationFrame(boot);
+  }
+  requestAnimationFrame(boot);
+})();
+"""
+    sim = _sim()
+    try:
+        _patch_js("TENT.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "TENT.JS"')
+        sim.type_line("RUN")
+        saw = False
+        for _ in range(16):
+            sim._rpc("FRAME")
+            if _fb_pix(_fb_raw(sim), 44, 14) == 3:
+                saw = True
+                break
+        assert saw, "title gameState did not leave on KeyboardEvent Enter"
     finally:
         sim.shutdown()
 

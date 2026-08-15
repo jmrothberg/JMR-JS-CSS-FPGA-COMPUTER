@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 from functional_model.canvas_engine import CanvasEngine
-from runtime.backend import ROOT, RuntimeBackend
+from runtime.backend import ROOT, RuntimeBackend, card_catalog, parse_status_kv
 from runtime.flight_log import FlightLog
 
 SIM_DIR = ROOT / "sim"
@@ -41,6 +41,7 @@ class SimBackend(RuntimeBackend):
         self._started = False
         self._running = False  # NEW: RTL game_mode — skip prompt overlay
         self._more = False     # NEW: parked on -- MORE --
+        self._listing = False  # LIST/DIR until READY — no '>' between pages
         self._edit_prefill: Optional[str] = None
         self._loaded_name: str = ""
         self._break_run_wait: bool = False
@@ -56,6 +57,10 @@ class SimBackend(RuntimeBackend):
         self._play_fclk: list = []
         self._last_glass = ""
         self._more_page = 0
+        # NEW: Architecture Monitor — cache VMSTAT/STATUS (no extra RPC while RUN)
+        self._vmstat_raw = ""
+        self._status_raw = ""
+        self._vmstat_t = 0.0
         # HARD RULE: RTL is default. Host twin ONLY via explicit JMR_SIM_HOST=1.
         # JMR_SIM_RTL=1 is accepted as a no-op alias (legacy scripts).
         host_opt = os.environ.get("JMR_SIM_HOST", "").strip().lower() in ("1", "true", "yes")
@@ -144,10 +149,18 @@ class SimBackend(RuntimeBackend):
             pass
         elif resp.startswith("ERR") or resp.startswith("FAULT"):
             self._log.fault("RPC", f"cmd={cmd!r} resp={resp!r}")
+        if resp.startswith("VMSTAT"):
+            self._vmstat_raw = resp
+            self._vmstat_t = time.monotonic()
+        elif resp.startswith("STATUS"):
+            self._status_raw = resp
         # Do not log every FB?/TICK timing (hundreds of NOTE rpc FB? 316ms).
         # LINE/KEY always; FB? only on fault (already logged) or first game frame.
         verb = cmd.split()[0] if cmd else ""
-        quiet = verb in ("FB?", "TICK", "TICKN", "FRAME", "SCREEN?", "STATUS?", "PAL?", "JOY", "KEYBITS")
+        quiet = verb in (
+            "FB?", "TICK", "TICKN", "FRAME", "SCREEN?", "STATUS?", "PAL?",
+            "JOY", "KEYBITS", "VMSTAT?",
+        )
         if verb == "LINE":
             self._log.note(f"rpc LINE {dt_ms:.1f}ms {resp}")
         elif verb == "KEYEVT":
@@ -260,11 +273,13 @@ class SimBackend(RuntimeBackend):
             self._rpc("SCREEN?")
             if not self._screen_has_more():
                 self._more = False
+                self._listing = False
                 return
             self._rpc("KEY 1b")
             for _ in range(30):
                 self._rpc("TICK")
         self._more = False
+        self._listing = False
 
     def _note_edit_prefill(self) -> None:
         """After EDIT n, SCREEN shows '20 body' — capture body for GUI prefill."""
@@ -286,9 +301,9 @@ class SimBackend(RuntimeBackend):
         cursor_col: Optional[int] = None,
     ) -> None:
         """RTL text path — HDMI letterbox (same geometry as PYTHON / BOARD)."""
-        # NEW: while MORE, do not append a second ">"
-        if self._more:
-            pr = None
+        # Parked on -- MORE -- (or paging to the next MORE): never overlay '>'
+        if self._more or self._screen_has_more():
+            self._more = True
             lines = self._screen.splitlines()
             self._canvas.paint_console_letterbox(lines, prompt="")
             return
@@ -313,9 +328,16 @@ class SimBackend(RuntimeBackend):
         self._running = "running=1" in st
         if self._running:
             return
+        last = self._last_glass_line()
+        if last in ("READY",) or last.startswith("READY"):
+            self._listing = False
         if self._use_rtl or resp == "FB SAME" or not resp.startswith("FB "):
             if self._use_rtl or not any(self._canvas.front):
-                self._paint_screen_local(prompt)
+                # LIST/DIR: keep -- MORE -- (or the current page) without '>'
+                if self._more or self._listing:
+                    self._paint_screen_local("")
+                else:
+                    self._paint_screen_local(prompt)
 
     def _pump_until_more_or_ready(self, *, leave_more: bool = False) -> None:
         """Wait until MORE or READY. Fat data-URI LIST needs millions of SPI clocks."""
@@ -355,6 +377,7 @@ class SimBackend(RuntimeBackend):
         # LIST/DIR may park on -- MORE --; LINE now waits, but keep pumping
         # until MORE or prompt so we never paint '>' over a mid-page.
         if upper == "LIST" or upper.startswith("LIST ") or upper == "DIR":
+            self._listing = True
             self._more_page = 0
             self._pump_until_more_or_ready()
         # HTML LOAD: wait for THIS stem+LINES, not a stale LOADED still on glass.
@@ -394,8 +417,7 @@ class SimBackend(RuntimeBackend):
                 glass = self.screen_text()
                 if "running=1" in st or "?NH" in glass or "?NB" in glass:
                     break
-                if i % 4 == 3:
-                    self._sync_glass("> ")
+                # Do not overlay '>' during LINE/FAT wait (typed RUN vanished).
             # NEW: ASET palette landed in the RTL palette BRAM during the FAT
             # load — mirror it so the GUI colors FB indices like HDMI would.
             self._sync_palette()
@@ -616,11 +638,14 @@ class SimBackend(RuntimeBackend):
                 self._play_frames = 0
                 self._play_fclk = []
         elif self._more:
-            self._rpc("TICK")
+            # Parked: do not TICK (C_LIST_WAIT is key-driven) and do not
+            # paint '>' between pages while the next MORE is still printing.
             self._rpc("SCREEN?")
             self._more = self._screen_has_more()
             if not self._more:
-                self._paint_screen_local("> ")
+                last = self._last_glass_line()
+                if last in ("READY",) or last.startswith("READY"):
+                    self._paint_screen_local("> ")
         else:
             self._rpc("TICK")
 
@@ -644,3 +669,27 @@ class SimBackend(RuntimeBackend):
         self._started = False
         self._flush_keyevts()
         self._log.note("shutdown")
+
+    def arch_snapshot(self) -> dict:
+        """FPGA-SIM observer: cached VMSTAT?/STATUS?/SCREEN? (no extra RPC while RUN)."""
+        if self._started and not self._running:
+            now = time.monotonic()
+            if now - self._vmstat_t >= 0.25:
+                try:
+                    self._rpc("VMSTAT?")
+                except Exception:
+                    pass
+                try:
+                    self._rpc("STATUS?")
+                except Exception:
+                    pass
+        snap = parse_status_kv(self._vmstat_raw)
+        snap.update(parse_status_kv(self._status_raw))
+        snap["running"] = bool(self._running) or snap.get("running") in (1, "1", True)
+        snap["glass"] = self._screen or ""
+        snap["hdmi_mode"] = "game" if self._running else "letterbox"
+        snap["source_name"] = self._loaded_name or ""
+        snap["more"] = bool(self._more)
+        snap["catalog"] = card_catalog()
+        snap["sp"] = snap.get("sp", 0)
+        return snap

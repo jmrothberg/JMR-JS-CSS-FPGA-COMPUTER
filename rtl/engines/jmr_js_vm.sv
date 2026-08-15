@@ -155,7 +155,7 @@ module jmr_js_vm #(
     // NEW: per-frame object bump rewind (call envs / temps). Same policy as
     // arrays: do not wrap live slots; commit keep when a nursery obj/fn is
     // stored into the pre-frame heap or a timer/rAF queue.
-    logic [15:0] n_obj_keep;
+    logic [15:0] n_obj_keep /*verilator public_flat_rd*/; // NEW: debug peek (bring-up)
     logic        obj_keep_ok;
     logic [3:0]  obj_keep_wait;
     logic        frame_fire; // NEW: fire rAF/keys the cycle after obj rewind
@@ -188,7 +188,7 @@ module jmr_js_vm #(
     logic [5:0]  env_sp /*verilator public_flat_rd*/; // 0 = top-level (vars[] only)
     logic [15:0] env_oid [0:ENV_DEPTH-1]; // NEW: live heap env objects (not value snapshots)
     logic        env_cap [0:ENV_DEPTH-1]; // NEW: MAKE_FN captured this frame
-    logic [15:0] env_free [0:ENV_DEPTH-1]; // NEW: recycled uncaptured env oids
+    logic [15:0] env_free [0:ENV_DEPTH-1] /*verilator public_flat_rd*/; // NEW: recycled uncaptured env oids (peek)
     logic [5:0]  env_free_n /*verilator public_flat_rd*/;
     logic [15:0] env_walk; // heap env object id (parent chain)
     logic [8:0]  env_ld_slot;
@@ -308,7 +308,7 @@ module jmr_js_vm #(
     logic [15:0] this_obj;
     logic [8:0]  var_this;   // NEW: LOAD_VAR slot for __this
     logic        this_ok;
-    logic [15:0] raf_fn [0:7];
+    logic [15:0] raf_fn [0:7] /*verilator public_flat_rd*/; // NEW: debug peek (bring-up)
     logic [3:0]  raf_n /*verilator public_flat_rd*/;
     logic [15:0] kd_fn /*verilator public_flat_rd*/, ku_fn, click_fn; // interned MAKE_FN entries; 0xFFFF=none
     // NEW: keydown/keyup listener table (4 slots, fire all; last-wins was a parity gap)
@@ -707,17 +707,34 @@ module jmr_js_vm #(
         end
     endtask
     // NEW: recycle this call's env unless MAKE_FN captured it (live closure).
+    // Jumping env_sp to `saved` used to free only the TOP frame, so a nested
+    // forEach/finder return leaked middle oids AND could push the same oid
+    // twice (PACMAN ENVSTAT free=2296,2295,2296). Nursery oids on the free
+    // list sit ABOVE n_obj_keep — the bump allocator then overwrites that
+    // env as a regular object in the same frame, so forEach LOAD f misses
+    // and item.times stays 0 (stale vars[]).
     task automatic release_env_to(input logic [5:0] saved);
-        if (env_sp > saved && env_sp != 6'd0) begin
-            if (!env_cap[env_sp - 6'd1]) begin
-                if (n_obj == (env_oid[env_sp - 6'd1] + 16'd1))
-                    n_obj <= env_oid[env_sp - 6'd1];
-                else if (env_free_n < ENV_DEPTH[5:0]) begin
-                    env_free[env_free_n] <= env_oid[env_sp - 6'd1];
-                    env_free_n <= env_free_n + 6'd1;
+        logic [5:0] nn;
+        logic dup;
+        logic [15:0] oid;
+        nn = env_free_n;
+        for (int i = 0; i < ENV_DEPTH; i++) begin
+            if (i >= 32'(saved) && i < 32'(env_sp) && env_sp != 6'd0 &&
+                !env_cap[i[5:0]]) begin
+                oid = env_oid[i[5:0]];
+                dup = 1'b0;
+                for (int j = 0; j < ENV_DEPTH; j++)
+                    if (j < 32'(nn) && env_free[j] == oid) dup = 1'b1;
+                if (i == 32'(env_sp) - 1 && n_obj == (oid + 16'd1))
+                    n_obj <= oid;
+                else if (!dup && nn < ENV_DEPTH[5:0] &&
+                         (!obj_keep_ok || oid < n_obj_keep)) begin
+                    env_free[nn] <= oid;
+                    nn = nn + 6'd1;
                 end
             end
         end
+        env_free_n <= nn;
         env_sp <= saved;
     endtask
     // NEW: nursery obj/fn stored into an *old-space array* (boot snapshot).

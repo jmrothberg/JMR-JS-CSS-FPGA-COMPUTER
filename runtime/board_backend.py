@@ -25,7 +25,7 @@ from functional_model.canvas_engine import (
     CONSOLE_ROWS,
     CanvasEngine,
 )
-from runtime.backend import RuntimeBackend
+from runtime.backend import RuntimeBackend, card_catalog
 from runtime.flight_log import FlightLog
 
 # Board char VRAM geometry (jmr_video_vram / jmr_uart_link dump)
@@ -262,3 +262,17 @@ class BoardBackend(RuntimeBackend):
                 self._ser.close()
             except Exception:
                 pass
+
+    def arch_snapshot(self) -> dict:
+        """BOARD coarse tether snapshot — no µop stream."""
+        running = bool(self._have_fb)
+        return {
+            "running": running,
+            "sname": "RUN" if running else "IDLE",
+            "hdmi_mode": "game" if running else "letterbox",
+            "glass": self.screen_text()[-800:],
+            "board_coarse": True,
+            "tether": self._ser is not None,
+            "catalog": card_catalog(),
+            "more": False,
+        }

@@ -495,11 +495,52 @@ int main(int argc, char** argv) {
             std::cout << "OBJ " << oid
                       << " cls=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_cls[oid])
                       << " n=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_n[oid]);
-            for (unsigned s = 0; s < 6; s++) {
+            // NEW: dump every live slot (was 6) — item objects carry ~20 props
+            unsigned ns = unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_n[oid]);
+            if (ns > 32) ns = 32;
+            for (unsigned s = 0; s < ns; s++) {
                 std::cout << " [" << s << "]k="
                           << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_key[oid][s])
                           << " v=" << int(r->jmr_js_core__DOT__u_vm__DOT__obj_val[oid][s])
                           << " t=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_tag[oid][s]);
+            }
+            std::cout << std::endl;
+            continue;
+        }
+        // NEW: ENVSTAT? — env free list + keep watermark (bring-up only)
+        if (line == "ENVSTAT?") {
+            auto* r = top->rootp;
+            std::cout << "ENVSTAT keep=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_obj_keep)
+                      << " nobj=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_obj)
+                      << " esp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_sp)
+                      << " free_n=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_free_n)
+                      << " free=";
+            unsigned fn2 = unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_free_n);
+            for (unsigned i = 0; i < fn2 && i < 64; i++)
+                std::cout << (i ? "," : "") << unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_free[i]);
+            std::cout << std::endl;
+            continue;
+        }
+        // NEW: RAFPEEK? — queued rAF fn oids (bring-up only)
+        if (line == "RAFPEEK?") {
+            auto* r = top->rootp;
+            std::cout << "RAF";
+            for (unsigned i = 0; i < 8; i++)
+                std::cout << " " << unsigned(r->jmr_js_core__DOT__u_vm__DOT__raf_fn[i]);
+            std::cout << std::endl;
+            continue;
+        }
+        // NEW: ARRPEEK <aid> — dump array len + elements (bring-up only)
+        if (line.rfind("ARRPEEK ", 0) == 0) {
+            auto* r = top->rootp;
+            unsigned aid = std::stoul(line.substr(8)) & 4095;
+            unsigned len = unsigned(r->jmr_js_core__DOT__u_vm__DOT__arr_len[aid]);
+            std::cout << "ARR " << aid << " len=" << len;
+            if (len > 32) len = 32;
+            for (unsigned s = 0; s < len; s++) {
+                std::cout << " [" << s << "]v="
+                          << int(r->jmr_js_core__DOT__u_vm__DOT__arr_val[aid][s])
+                          << " t=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__arr_tag[aid][s]);
             }
             std::cout << std::endl;
             continue;
