@@ -167,24 +167,35 @@ RTL `fillText` is a 64×8 rect stub).
 | `new KeyboardEvent` / `Event` / `CustomEvent` / `MouseEvent` | DONKEY boot Enter | done PYTHON+RTL (`NEW_OBJ` copies type+options) |
 | `requestAnimationFrame` / `setTimeout` / `clearTimeout` | all | done |
 | `Math.floor` / `abs` / `min` / `max` / `random` / `sqrt` | INVADERS, PACMAN | done |
-| `JSON.parse` / `JSON.stringify` | INVADERS, PACMAN | **gap** until nested number arrays do not leak RTL `n_arr` |
-| `Array` ctor | PACMAN | **gap** until `fill`+`map` temps rewind |
+| `JSON.parse` / `JSON.stringify` | INVADERS, PACMAN | done (nested + interned parse; stringify finishes FRAME) |
+| `Array` ctor | PACMAN | done (`fill`+`map` nested rows writable) |
 | `Image` | INVADERS, DONKEY | done (ASET handle) |
 | `Date` / `Date.now` | INVADERS, PACMAN | done (frame clock) |
 | `localStorage.*` | INVADERS | done (in-memory) |
-| `typeof` | PACMAN | done PYTHON; RTL via compiler op |
+| `typeof` | PACMAN | done PYTHON+RTL (interned result; `"number"` not intern-0) |
 | `window.open` | PACMAN | **never** (no-op / `_stub`) |
 | `console.log` / `console.warn` | INVADERS, DONKEY | done |
+
+### Constructors (`NEW_OBJ` / `NEW`)
+
+| Construct | Titles | Status |
+|---|---|---|
+| `new KeyboardEvent(type, {key, keyCode, …})` | DONKEY boot Enter | done (options copied onto the event) |
+| `new Event` / `CustomEvent` / `MouseEvent` | DONKEY | done |
+| `new Image()` | INVADERS, DONKEY | done (ASET handle) |
+| `new Date()` | INVADERS, PACMAN | done (frame clock) |
+| `Array(n)` | PACMAN finder `steps` | done (`fill`+`map` nested) |
+| `RegExp` literal / `new RegExp` | PACMAN `replace` | done (stub + flags; interned `/g`) |
 
 ### Methods (language / VM — not title gates)
 
 | Method | Titles | Status |
 |---|---|---|
-| `join` | PACMAN (`code.join('')` maze keys) | **gap** until `==='1100'` hits `case` (not `default` spokes) |
-| `indexOf` | PACMAN (neighbor bits + beans stringify) | **gap** until `indexOf(1)>-1` and string `indexOf(0)` |
-| `fill` / `map` / `filter` / `unshift` | PACMAN finder | **gap** on RTL if nursery pins `arr=4095` |
+| `join` | PACMAN (`code.join('')` maze keys) | done (number and string-digit `['1','1','0','0']` hit `case '1100'`) |
+| `indexOf` | PACMAN (neighbor bits + beans stringify) | done (`indexOf(1)>-1`; string `indexOf` via `S_IDXSTR`) |
+| `fill` / `map` / `filter` / `unshift` | PACMAN finder | done (`fill`+`map` nested; `filter` truthy; `findIndex` identity) |
 | `forEach` / `find` / `splice` / `push` | INVADERS, PACMAN | done |
-| `replace` (string + RegExp stub) | PACMAN | done |
+| `replace` (string + RegExp stub) | PACMAN | done (interned `/g` and dynstr) |
 | `assign` / `bind` | PACMAN | done |
 | `getContext` | all | done |
 
@@ -193,9 +204,9 @@ RTL `fillText` is a 64×8 rect stub).
 | Op | Titles | Status |
 |---|---|---|
 | `fillRect` / `clearRect` / `drawImage` / `setTransform` | INVADERS / DONKEY | done |
-| `beginPath` / `moveTo` / `lineTo` / `arc` / `stroke` / `fill` / `quadraticCurveTo` | PACMAN (+ INVADERS arc) | **gap** until maze `switch` draws **arcs** (occupancy), not four spokes; `#09f` stroke color is FSTY (not topology) |
+| `beginPath` / `moveTo` / `lineTo` / `arc` / `stroke` / `fill` / `quadraticCurveTo` | PACMAN (+ INVADERS arc) | done (`join('')` `case '1100'` paints a quarter-arc, not spokes) |
 | `fillText` / `measureText` | PACMAN, DONKEY, INVADERS HUD | **never** Chrome font — 8×8 / rect stub |
-| `getImageData` / `putImageData` | PACMAN map cache | done (undefined / no-op; maps redraw) |
+| `getImageData` / `putImageData` | PACMAN map cache | done (64×64 and 640×480 GET `fcap=0`; 1 px/cycle; do not raise 16M CAP) |
 | `lineWidth` / `strokeStyle` | PACMAN | done as path state; color LUT may still miss `#09f` on RTL |
 
 ### Never (not in the three compiles as a product API)

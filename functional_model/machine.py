@@ -6,6 +6,7 @@ Glass: monitor text and games share the same 640×480 framebuffer (BASIC method)
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -54,12 +55,14 @@ class Machine:
         self.html_host: Optional[HtmlJsHost] = None
         # NEW: one-shot RUN (RECTDEMO) keeps pixels until next command / CLS
         self._keep_fb: bool = False
-        # NEW: HTML product path is bytecode / .JSH (dukpy only if JMR_HTML_DUKPY=1)
+        # NEW: bytecode HTML path is bytecode / .JSH (dukpy only if JMR_HTML_DUKPY=1)
         self._bytecode_html: bool = False
         self._html_chunk = None
         self._raf_q: list = []
         self._listeners: list = []
         self._key_prev: int = 0
+        self._play_t: float = 0.0
+        self._play_frames: int = 0
         # Always-on flight log (BASIC TraceLog method)
         self.trace = TraceLog(self)
 
@@ -112,7 +115,11 @@ class Machine:
         self.input.set_joy(bits)
 
     def set_key_bits(self, bits: int) -> None:
-        self.input.set_key_bits(bits)
+        # KEYBITS→JS only while a game is running. Typing Space in
+        # LOAD "NAME.HTML" used to queue keydown 32 into the first rAF.
+        self.input.key_bits = int(bits) & 0x3F
+        if self.running:
+            self.input._sync_play_bits_to_keys()
 
     def push_key(self, ch: str) -> None:
         if ch == "\x1b":
@@ -182,7 +189,7 @@ class Machine:
         for row in out:
             if row != READY:
                 self.console_log.append(row)
-                if row.startswith("ERROR"):
+                if row.startswith("ERROR") or row.startswith("?SN") or row.startswith("?FN"):
                     self.trace.edge("ERROR", row[:160])
                     self.trace.dump_ring("ERROR")
         # NEW: log glass after DIR/LOAD/LIST/SAVE (not just the typed line)
@@ -257,6 +264,9 @@ class Machine:
             return self._cmd_insert(text)
         if upper.startswith("DELETE"):
             return self._cmd_delete(text)
+        if upper.startswith("REMOVE"):
+            # NEW: same verb as RTL REMOVE (alias of DELETE)
+            return self._cmd_delete("DELETE" + text[6:])
         if upper == "RUN" or upper.startswith("RUN "):
             return self._cmd_run(text)
         if upper == "MEM":
@@ -268,6 +278,15 @@ class Machine:
         if text.isdigit():
             return self._cmd_run(f"RUN {text}")
 
+        # NEW: bare identifier / unknown verb → ?SN ERROR (laod), not silent JS
+        first = text.split(None, 1)[0]
+        if first.isidentifier() and first[0].isalpha():
+            js_kw = (
+                "var", "let", "const", "function", "class", "if", "for",
+                "while", "return", "new", "typeof", "void", "async", "await",
+            )
+            if first.lower() not in js_kw and not any(c in text for c in "()="):
+                return ["?SN ERROR"]
         return self._run_source(text)
 
     @staticmethod
@@ -294,7 +313,7 @@ class Machine:
             raw = self.storage.load_text(rest)
             self.source_name = self.storage.resolve_name(rest)
         except FileNotFoundError:
-            return [f"ERROR: FILE NOT FOUND {rest}"]
+            return ["?FN FILE NOT FOUND"]
         self.source_lines = raw.splitlines()
         return [f"LOADED {self.source_name} ({len(self.source_lines)} LINES)"]
 
@@ -510,7 +529,9 @@ class Machine:
             if i < 0 or i >= len(names):
                 return ["ERROR: NO ENTRY"]
             load_out = self._cmd_load(f"LOAD {names[i]}")
-            if load_out and load_out[0].startswith("ERROR"):
+            if load_out and (
+                load_out[0].startswith("ERROR") or load_out[0].startswith("?FN")
+            ):
                 return load_out
         src = "\n".join(self.source_lines)
         if not src.strip():
@@ -557,12 +578,20 @@ class Machine:
             return [f"ERROR{where}: {e.message}"]
         except Exception as e:
             return [f"ERROR: HTML/JS {e}"]
+        blob = encode_html_chunk(chunk)
         jsh = self._html_jsh_path()
         if jsh is not None:
             try:
-                jsh.write_bytes(encode_html_chunk(chunk))
+                jsh.write_bytes(blob)
             except Exception:
                 pass
+        self.trace.edge(
+            "COMPILE",
+            f"compile-on-RUN {self.source_name} → "
+            f"{jsh.name if jsh is not None else 'JSH'} ({len(blob)} bytes)",
+        )
+        # Prompt/LIST Space must not arrive as the first game keydown.
+        self.input.discard_queued_keys()
         self.html_host = None
         self.running = True
         self.vm.natives = self._natives()
@@ -1253,9 +1282,13 @@ class Machine:
         chunk = getattr(self, "_html_chunk", None)
         if chunk is None:
             return None
+        n = 0
         for et, fn in list(getattr(self, "_listeners", [])):
             if et == "click":
+                n += 1
                 self.vm.call_fn(chunk, fn, [{"type": "click"}])
+        if n:
+            self.trace.edge("CLICK", f"listeners={n}")
         return None
 
     def frame_tick(self) -> None:
@@ -1271,6 +1304,19 @@ class Machine:
         # NEW: bytecode HTML path — fire key listeners + drain rAF
         if getattr(self, "_bytecode_html", False) and self.running:
             self._bytecode_html_frame()
+            # NEW: 1 s play heartbeat so a hang is visible without µop spam
+            self._play_frames = getattr(self, "_play_frames", 0) + 1
+            now = time.monotonic()
+            if not getattr(self, "_play_t", 0.0):
+                self._play_t = now
+            elif now - self._play_t >= 1.0:
+                self.trace.edge(
+                    "PLAY",
+                    f"frames={self._play_frames} raf_n={len(getattr(self, '_raf_q', []))} "
+                    f"to_n={len(getattr(self, '_timers', []))}",
+                )
+                self._play_t = now
+                self._play_frames = 0
             return
         if not self.running or self._loop_chunk is None:
             return
@@ -1296,7 +1342,13 @@ class Machine:
             return
         # NEW: tether KEYBITS → key-state edges; drain generic key event queue
         self.input._sync_play_bits_to_keys()
-        for et, code, key in self.input.drain_key_events():
+        evs = self.input.drain_key_events()
+        if evs:
+            self.trace.edge(
+                "KEY",
+                ",".join(f"{et}:{code}" for et, code, _k in evs),
+            )
+        for et, code, key in evs:
             self._fire_listeners(et, code, key)
         # NEW: surface listener errors (they used to die silently mid-handler)
         if self.vm.error:

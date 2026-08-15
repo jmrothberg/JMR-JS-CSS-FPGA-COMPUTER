@@ -1,5 +1,16 @@
 // JMR-JS stack VM — BRAM code (writable from FAT .JSB) + 640×480 game FB.
 // ISA: functional_model/bytecode.py + jsb_format.py
+//
+// Section map (st_t groups — keep enum order; append new states at the end):
+//   boot/load:  S_IDLE..S_TRAIL, S_FETCH_WAIT, S_EXEC, S_NAT
+//   raster:     S_CLEAR, S_RECT, S_CIRCLE, S_LINE, S_BLIT, S_SPR, S_PWALK..S_QPY
+//   frame:      S_WAIT_FRAME, S_DONE, S_XF_MUL, S_XF_APPLY
+//   strings:    S_JOIN..S_CONCAT, S_STRIDX, S_STRIDX_WR, S_REPL, S_IDXSTR,
+//               S_FONTPX..S_STR_WR, S_NAMCPY (interned → json_mem)
+//   numbers:    S_SQRT, S_DIV, S_MUL, S_ALU
+//   calls:      S_CALL, S_FOREACH, S_KEYEV, S_ENV_LOAD
+//   JSON:       S_JSON, S_JSON_PARSE
+//   ImageData:  S_IMGD_GET, S_IMGD_PUT
 module jmr_js_vm #(
     parameter string CODE_HEX = "invaders_jsb.hex",
     // NEW: the 8x8 glyph table PYTHON draws with (functional_model/font8.py,
@@ -192,6 +203,13 @@ module jmr_js_vm #(
     logic [15:0] dbg_tmr_mis /*verilator public_flat_rd*/;
     logic [15:0] dbg_tmr_sched /*verilator public_flat_rd*/; // setTimeout accepted
     logic [15:0] dbg_tmr_fire /*verilator public_flat_rd*/;  // callbacks launched
+    // NEW: Array.find hits + splice calls — play log must show whether a
+    // timeout actually culled (tsch/tfire alone cannot).
+    logic [15:0] dbg_find_hit /*verilator public_flat_rd*/;
+    logic [15:0] dbg_splice_n /*verilator public_flat_rd*/;
+    // NEW: slow-path S_DIV entries (not the 1-cycle /2 shift). Play logs
+    // show whether a frame is still paying 48 clocks per `width/2`.
+    logic [15:0] dbg_div_n /*verilator public_flat_rd*/;
     logic [11:0] to_delay [0:7]; // remaining frames (delay_ms/17)
     logic [11:0] to_period [0:7]; // 0 = one-shot; else interval re-arm
     logic [15:0] to_id [0:7];
@@ -209,6 +227,10 @@ module jmr_js_vm #(
     logic [15:0] name_off [0:1023];   // intern idx -> first byte in name_mem
     logic [15:0] name_rdaddr;
     logic [7:0]  name_rdata;          // registered read (BRAM, not a mux)
+    // NEW: sequential str[i] prefetch — next GET_IDX of i+1 hits name_rdata
+    logic [15:0] str_pf_id;
+    logic signed [31:0] str_pf_ci;
+    logic        str_pf_ok;
     logic [15:0] dbg_str_ovf /*verilator public_flat_rd*/; // bytes past NAME_CAP
     // NEW: ip where the last frame-level callback returned (VMSTAT cbip)
     logic [15:0] dbg_cb_ip /*verilator public_flat_rd*/;
@@ -257,6 +279,8 @@ module jmr_js_vm #(
     // NEW: JSON/text scratch (stringify/parse/replace) — VM cap, sticky ovf
     logic [7:0]  json_mem [0:JSON_CAP-1];
     logic [13:0] json_wp, json_rp, json_src, json_srclen, json_dst;
+    logic        namcpy_repl; // S_NAMCPY then S_REPL (else S_JSON_PARSE)
+    logic        namcpy_armed; // wait 1 cycle for registered name_rdata
     logic [15:0] dbg_json_ovf /*verilator public_flat_rd*/;
     logic [2:0]  js_tag [0:JSON_STK-1];
     logic [31:0] js_val [0:JSON_STK-1];
@@ -274,9 +298,11 @@ module jmr_js_vm #(
     logic [13:0] idx_off;
     logic [7:0]  idx_needle;
     // NEW: one ImageData snapshot (FM canvas.back copy). VM cap = 1 buffer.
-    logic [7:0]  imgd_pix [0:FB_PIXELS-1];
-    logic [18:0] imgd_i, imgd_n;
-    logic [9:0]  imgd_x0, imgd_y0, imgd_w, imgd_h, imgd_x, imgd_y;
+    // ram_style block: a 307200-entry unpacked mux in Verilator made
+    // S_IMGD_GET miss its i++ NBA and spin until the 16M FRAME cap.
+    (* ram_style = "block" *) logic [7:0] imgd_pix [0:FB_PIXELS-1];
+    logic [18:0] imgd_i /*verilator public_flat_rd*/, imgd_n /*verilator public_flat_rd*/;
+    logic [9:0]  imgd_x0, imgd_y0, imgd_w /*verilator public_flat_rd*/, imgd_h /*verilator public_flat_rd*/, imgd_x, imgd_y;
     logic        imgd_armed;
     logic [10:0] imgd_res;
     logic [15:0] this_obj;
@@ -295,6 +321,7 @@ module jmr_js_vm #(
     logic        boot_clr; // NEW: clear both FB banks before first op
     logic [1:0]  boot_clr_n;
     logic [15:0] id_find; // Array.find
+    logic [15:0] id_findindex, id_filter; // Array.findIndex / Array.filter
     logic        click_fired; // NEW: HTML auto-start click once
     logic        pre_click_raf; // NEW: one rAF (Image.onload) before click
     logic [5:0]  prev_joy;
@@ -327,6 +354,8 @@ module jmr_js_vm #(
     // fallback (getImageData(0,0,640,480) painted a full-screen rect with the
     // stale wall strokeStyle: the PACMAN purple flood)
     logic [15:0] id_getimgdata, id_putimgdata;
+    // NEW: typeof result intern ids (jsb_format._name_hash of the JS strings)
+    logic [15:0] id_str_undef, id_str_number, id_str_string, id_str_object, id_str_function;
     // NEW: Math.sqrt bit-serial regs — radicand Q32.32-ish (val<<16), 24-bit root
     logic [47:0] sq_rad;
     logic [25:0] sq_rem;
@@ -534,9 +563,23 @@ module jmr_js_vm #(
         // raster 8x8 glyphs; S_STR_WR gives a joined string its bytes
         S_FONTPX, S_TXT_LD, S_TXT_DRAW, S_STR_WR,
         // NEW: Canvas ImageData snapshot (one buffer, FM twin)
-        S_IMGD_GET, S_IMGD_PUT
+        S_IMGD_GET, S_IMGD_PUT,
+        // NEW: copy interned name_mem bytes into json_mem (parse/replace).
+        // Appended so existing sname= indices stay valid.
+        S_NAMCPY,
+        // NEW: depth-1 element copy for SET_PROP array-over-array
+        // (map.data = JSON.parse(...) at PACMAN level start / any re-parse).
+        // Ref-copying rows left nursery arr ids inside an old-space array;
+        // the next frame rewind recycled those ids into draw temps
+        // (code=[0,0,0,0]) so the maze read back 4-wide garbage.
+        S_ARR_DCOPY
     } st_t;
     st_t state /*verilator public_flat_rd*/, ret_state;
+
+    // NEW: S_ARR_DCOPY scratch (SET_PROP array-over-array deep row copy)
+    logic [11:0] dc_src, dc_dst;
+    logic [7:0]  dc_i;
+    logic        dc_arm;
 
     logic [15:0] c_i;
     // NEW: 10-bit coords for 640×480 (was 8-bit mini after scale4)
@@ -1001,6 +1044,7 @@ module jmr_js_vm #(
                     obj_keep_ok <= 1'b0; n_obj_keep <= 0;
                     obj_keep_wait <= ARR_KEEP_DELAY[3:0];
                     frame_fire <= 1'b0;
+                    dc_arm <= 1'b0; // NEW: no stale SET_PROP deep copy across RUNs
                     env_sp <= 0; env_free_n <= 0; to_n <= 0; to_seq <= 16'd1; dbg_heap_ovf <= 0; dbg_to_ovf <= 0;
                     dbg_json_ovf <= 0; js_sp <= 0; json_wp <= 0;
                     kd_fn <= 16'hFFFF; ku_fn <= 16'hFFFF; click_fn <= 16'hFFFF;
@@ -1011,6 +1055,7 @@ module jmr_js_vm #(
                     ku_slot[2] <= 16'hFFFF; ku_slot[3] <= 16'hFFFF;
                     boot_clr <= 1'b1; boot_clr_n <= 2'd2;
                     id_find <= 16'hFFFF;
+                    id_findindex <= 16'hFFFF; id_filter <= 16'hFFFF;
                     click_fired <= 1'b0;
                     pre_click_raf <= 1'b0;
                     fill_style_i <= 8'd1; lfsr <= 32'hACE1; this_obj <= 0;
@@ -1046,6 +1091,9 @@ module jmr_js_vm #(
                     id_moveto <= 16'hFFFF; id_lineto <= 16'hFFFF; id_closepath <= 16'hFFFF;
                     id_quadcurve <= 16'hFFFF;
                     id_getimgdata <= 16'hFFFF; id_putimgdata <= 16'hFFFF;
+                    id_str_undef <= 16'hFFFF; id_str_number <= 16'hFFFF;
+                    id_str_string <= 16'hFFFF; id_str_object <= 16'hFFFF;
+                    id_str_function <= 16'hFFFF;
                     id_join <= 16'hFFFF; id_indexof <= 16'hFFFF; id_replace <= 16'hFFFF;
                     names_n <= 16'd0; dbg_join_miss <= 16'd0; dbg_pdo_n <= 5'd0;
                     dbg_rect_n <= 5'd0; dbg_swap_n <= 16'd0;
@@ -1068,11 +1116,15 @@ module jmr_js_vm #(
                     for (int i = 0; i < 1024; i++) name_has[i] <= 1'b0;
                     names_ok <= 1'b0; nb_i <= 16'd0; nb_len <= 16'd0; nb_wp <= 16'd0;
                     dbg_str_ovf <= 16'd0; name_rdaddr <= 16'd0; str_res <= 11'd0;
+                    str_pf_ok <= 1'b0; str_pf_id <= 16'd0; str_pf_ci <= 32'sd0;
+                    namcpy_repl <= 1'b0; namcpy_armed <= 1'b0;
                     // NEW: fillText defaults match FM (8 px glyphs, left align)
                     ctx_align <= 2'd0; ctx_font_px <= 8'd8;
                     font_raddr <= 10'd0; txt_len <= 7'd0; txt_ph <= 4'd0;
                     dbg_cb_ip <= 16'd0; dbg_tmr_mis <= 16'd0;
                     dbg_tmr_sched <= 16'd0; dbg_tmr_fire <= 16'd0;
+                    dbg_find_hit <= 16'd0; dbg_splice_n <= 16'd0;
+                    dbg_div_n <= 16'd0;
                     ctx_tx <= 32'sd0; ctx_ty <= 32'sd0;
                     saved_tx <= 32'sd0; saved_ty <= 32'sd0;
                     ctx_sx <= FX_ONE; ctx_sy <= FX_ONE;   // NEW: identity scale
@@ -1154,6 +1206,8 @@ module jmr_js_vm #(
                                 if ({tb, trail_acc[7:0]} == 16'd42332) id_map <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd38281) id_unshift <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd62905) id_find <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd61081) id_findindex <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd52088) id_filter <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd29049) id_getctx <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd50568) id_click <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd58957) id_ael <= name_idx;
@@ -1245,6 +1299,12 @@ module jmr_js_vm #(
                                 if ({tb, trail_acc[7:0]} == 16'd56618) id_join <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd17993) id_indexof <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd45748) id_replace <= name_idx;
+                                // NEW: typeof() result strings
+                                if ({tb, trail_acc[7:0]} == 16'd24912) id_str_undef <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd56137) id_str_number <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd24593) id_str_string <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd41791) id_str_object <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd29656) id_str_function <= name_idx;
                                 // NEW: full hash table — join result maps back to intern id
                                 name_hash_tbl[name_idx[9:0]] <= {tb, trail_acc[7:0]};
                                 // NEW: u8 length byte follows each hash (concat fold)
@@ -1574,7 +1634,14 @@ module jmr_js_vm #(
                                 code_raddr <= 15'(trail_off[16:2] + 15'd1);
                                 trail_off <= trail_off + 16'd1;
                                 state <= S_RD;
-                                ret_state <= S_TRAIL;
+                                // SPR1 pixel copy starts this cycle when count>0.
+                                // ret_state must be S_SPR — S_TRAIL + ph 31 would
+                                // skip the pack (dihit with a blank FB).
+                                if (trail_ph == 5'd27 && !sprd_mode &&
+                                    {tb, trail_acc[7:0]} != 16'd0)
+                                    ret_state <= S_SPR;
+                                else
+                                    ret_state <= S_TRAIL;
                             end else trail_off <= trail_off + 16'd1;
                         end
                         // FETCH only after SPR miss or empty pack
@@ -1591,8 +1658,45 @@ module jmr_js_vm #(
                         color <= 8'd0;
                         clr_idx <= '0;
                         state <= S_CLEAR;
+                    end else if (dc_arm) begin
+                        // NEW: pending SET_PROP array deep copy runs between ops
+                        dc_arm <= 1'b0;
+                        state <= S_ARR_DCOPY;
                     end else
                         state <= S_EXEC;
+                end
+
+                S_ARR_DCOPY: begin
+                    // NEW: one element per cycle. Both-array elements copy the
+                    // CHILD's contents into the existing dst child (keeps its
+                    // old-space id — JS identity is approximated the same way
+                    // the outer in-place copy already does). Anything else is
+                    // a plain value/ref copy, same as the old single-cycle
+                    // loop. Depth stops at 1: grand-children still ref-copy.
+                    if (dc_i >= ARR_CAP[7:0]) begin
+                        state <= S_EXEC;
+                    end else begin
+                        if (dc_i < arr_len[dc_src] &&
+                            arr_tag[dc_src][dc_i[6:0]] == 3'd2 &&
+                            arr_tag[dc_dst][dc_i[6:0]] == 3'd2 &&
+                            arr_val[dc_src][dc_i[6:0]][11:0] !=
+                            arr_val[dc_dst][dc_i[6:0]][11:0]) begin
+                            begin
+                                logic [11:0] cs, cd;
+                                cs = arr_val[dc_src][dc_i[6:0]][11:0];
+                                cd = arr_val[dc_dst][dc_i[6:0]][11:0];
+                                arr_len[cd] <= arr_len[cs];
+                                for (int k = 0; k < ARR_CAP; k++) begin
+                                    arr_val[cd][k] <= arr_val[cs][k];
+                                    arr_tag[cd][k] <= arr_tag[cs][k];
+                                end
+                            end
+                        end else begin
+                            arr_val[dc_dst][dc_i[6:0]] <= arr_val[dc_src][dc_i[6:0]];
+                            arr_tag[dc_dst][dc_i[6:0]] <= arr_tag[dc_src][dc_i[6:0]];
+                        end
+                        dc_i <= dc_i + 8'd1;
+                    end
                 end
 
                 S_EXEC: begin
@@ -1757,6 +1861,32 @@ module jmr_js_vm #(
                                     stack_tag[sp - 8'd2] <= 3'd0;
                                     sp <= sp - 8'd1;
                                     next_op();
+                                // NEW: 1-cycle /2 (arithmetic shift). `cell/2` and
+                                // `width/2` were 48 restoring steps each; a frame of
+                                // those loops paid millions of clocks. Shift is
+                                // JS-honest: even/even stays int, odd/2 is fx (5/2).
+                                end else if (stack_tag[sp - 8'd1] != 3'd7 &&
+                                             (stack[sp - 8'd1] == 32'sd2 ||
+                                              stack[sp - 8'd1] == -32'sd2) &&
+                                             stack[sp - 8'd2] != 32'sh80000000) begin
+                                    if (stack_tag[sp - 8'd2] == 3'd7) begin
+                                        stack[sp - 8'd2] <= stack[sp - 8'd1][31]
+                                            ? -32'(stack[sp - 8'd2] >>> 1)
+                                            : 32'(stack[sp - 8'd2] >>> 1);
+                                        stack_tag[sp - 8'd2] <= 3'd7;
+                                    end else if (!stack[sp - 8'd2][0]) begin
+                                        stack[sp - 8'd2] <= stack[sp - 8'd1][31]
+                                            ? -32'(stack[sp - 8'd2] >>> 1)
+                                            : 32'(stack[sp - 8'd2] >>> 1);
+                                        stack_tag[sp - 8'd2] <= 3'd0;
+                                    end else begin
+                                        stack[sp - 8'd2] <= stack[sp - 8'd1][31]
+                                            ? -32'(stack[sp - 8'd2] <<< 15)
+                                            : 32'(stack[sp - 8'd2] <<< 15);
+                                        stack_tag[sp - 8'd2] <= 3'd7;
+                                    end
+                                    sp <= sp - 8'd1;
+                                    next_op();
                                 end else begin
                                     logic signed [31:0] na, nb;
                                     na = fxlift(stack[sp - 8'd2], stack_tag[sp - 8'd2], 1'b1);
@@ -1769,6 +1899,7 @@ module jmr_js_vm #(
                                     div_ub  <= nb[31] ? 32'(-nb) : 32'(nb);
                                     div_rem <= '0;
                                     div_cnt <= '0;
+                                    dbg_div_n <= dbg_div_n + 16'd1;
                                     state <= S_DIV;
                                 end
                             end
@@ -1943,10 +2074,23 @@ module jmr_js_vm #(
                             OP_ARR_GET: begin
                                 // stack [arr, idx] — fx index floors (a[i*0.5] etc.)
                                 if (stack_tag[sp - 8'd2] == 3'd2) begin
-                                    stack[sp - 8'd2] <= arr_val[stack[sp - 8'd2][11:0]]
-                                        [7'(fxi(stack[sp - 8'd1], stack_tag[sp - 8'd1]))];
-                                    stack_tag[sp - 8'd2] <= arr_tag[stack[sp - 8'd2][11:0]]
-                                        [7'(fxi(stack[sp - 8'd1], stack_tag[sp - 8'd1]))];
+                                    // NEW: OOB (idx<0 or idx>=len) is undefined.
+                                    // 7-bit wrap of -1 read slot 127, so map.get(-1)
+                                    // returned leftover instead of -1 (falsy 0 vs
+                                    // JS truthy -1) and left-edge wall codes broke.
+                                    begin
+                                        logic signed [31:0] aidx32;
+                                        logic [11:0] aid;
+                                        aid = stack[sp - 8'd2][11:0];
+                                        aidx32 = fxi(stack[sp - 8'd1], stack_tag[sp - 8'd1]);
+                                        if (aidx32 < 0 || aidx32 >= 32'(arr_len[aid])) begin
+                                            stack[sp - 8'd2] <= 32'sd0;
+                                            stack_tag[sp - 8'd2] <= 3'd5;
+                                        end else begin
+                                            stack[sp - 8'd2] <= arr_val[aid][7'(aidx32)];
+                                            stack_tag[sp - 8'd2] <= arr_tag[aid][7'(aidx32)];
+                                        end
+                                    end
                                     sp <= sp - 8'd1;
                                     next_op();
                                 end else if (stack_tag[sp - 8'd2] == 3'd1 &&
@@ -1978,11 +2122,33 @@ module jmr_js_vm #(
                                         logic signed [31:0] ci;
                                         ci = fxi(stack[sp - 8'd1], stack_tag[sp - 8'd1]);
                                         if (ci >= 0 && ci < 32'(name_len_tbl[stack[sp - 8'd2][9:0]])) begin
-                                            name_rdaddr <= name_off[stack[sp - 8'd2][9:0]] + 16'(ci);
-                                            str_res <= 11'(sp - 8'd2);
-                                            sp <= sp - 8'd1;
-                                            ip <= ip + 16'd1;
-                                            state <= S_STRIDX;
+                                            if (str_pf_ok && str_pf_id == stack[sp - 8'd2][15:0] &&
+                                                str_pf_ci == ci &&
+                                                name_rdaddr == name_off[stack[sp - 8'd2][9:0]] + 16'(ci)) begin
+                                                // NEW: sequential hit — name_rdata is this char
+                                                if (char_ok[name_rdata]) begin
+                                                    stack[sp - 8'd2] <= {16'd0, char_id[name_rdata]};
+                                                    stack_tag[sp - 8'd2] <= 3'd3;
+                                                end else begin
+                                                    stack[sp - 8'd2] <= 32'sd0;
+                                                    stack_tag[sp - 8'd2] <= 3'd5;
+                                                end
+                                                sp <= sp - 8'd1;
+                                                name_rdaddr <= name_off[stack[sp - 8'd2][9:0]] + 16'(ci) + 16'd1;
+                                                str_pf_id <= stack[sp - 8'd2][15:0];
+                                                str_pf_ci <= ci + 32'sd1;
+                                                str_pf_ok <= 1'b1;
+                                                next_op();
+                                            end else begin
+                                                name_rdaddr <= name_off[stack[sp - 8'd2][9:0]] + 16'(ci);
+                                                str_res <= 11'(sp - 8'd2);
+                                                str_pf_id <= stack[sp - 8'd2][15:0];
+                                                str_pf_ci <= ci;
+                                                str_pf_ok <= 1'b0;
+                                                sp <= sp - 8'd1;
+                                                ip <= ip + 16'd1;
+                                                state <= S_STRIDX;
+                                            end
                                         end else begin
                                             // out of range is undefined, same as PYTHON
                                             stack[sp - 8'd2] <= 32'sd0;
@@ -2001,11 +2167,21 @@ module jmr_js_vm #(
                             OP_ARR_SET: begin
                                 // [arr, idx, val] — fx index floors first (LHS needs a plain var)
                                 begin
+                                    logic signed [31:0] aidx32;
                                     logic [6:0] aidx;
-                                    aidx = 7'(fxi(stack[sp - 8'd2], stack_tag[sp - 8'd2]));
-                                    if (stack_tag[sp - 8'd3] == 3'd2) begin
-                                        arr_val[stack[sp - 8'd3][11:0]][aidx] <= stack[sp - 8'd1];
-                                        arr_tag[stack[sp - 8'd3][11:0]][aidx] <= stack_tag[sp - 8'd1];
+                                    logic [11:0] aid;
+                                    aidx32 = fxi(stack[sp - 8'd2], stack_tag[sp - 8'd2]);
+                                    aidx = 7'(aidx32);
+                                    aid = stack[sp - 8'd3][11:0];
+                                    if (stack_tag[sp - 8'd3] == 3'd2 &&
+                                        aidx32 >= 0 && aidx32 < ARR_CAP) begin
+                                        arr_val[aid][aidx] <= stack[sp - 8'd1];
+                                        arr_tag[aid][aidx] <= stack_tag[sp - 8'd1];
+                                        // NEW: a[i]= grows length (JS). Without this,
+                                        // [] then a[x]=1 left len=0 so stringify/finder
+                                        // saw empty rows.
+                                        if (aidx32 >= 32'(arr_len[aid]))
+                                            arr_len[aid] <= 8'(aidx32 + 32'sd1);
                                     end else if (stack_tag[sp - 8'd3] == 3'd1 &&
                                                  stack_tag[sp - 8'd2] == 3'd3) begin
                                         // NEW: obj[strkey] = v — overwrite-or-append
@@ -2261,9 +2437,19 @@ module jmr_js_vm #(
                                             dst = obj_val[oi][found_s][11:0];
                                             src = stack[sp - 8'd1][11:0];
                                             arr_len[dst[11:0]] <= arr_len[src[11:0]];
-                                            for (int k = 0; k < ARR_CAP; k++) begin
-                                                arr_val[dst[11:0]][k] <= arr_val[src[11:0]][k];
-                                                arr_tag[dst[11:0]][k] <= arr_tag[src[11:0]][k];
+                                            // NEW: element copy moved to S_ARR_DCOPY
+                                            // (runs before the next op). Nested rows
+                                            // (both sides arrays) copy CONTENTS into
+                                            // the existing dst row so old-space keeps
+                                            // owning them — a ref copy left nursery
+                                            // row ids that the frame rewind recycled
+                                            // (PACMAN map.data re-parse at level
+                                            // start → maze read 4-wide draw temps).
+                                            if (dst[11:0] != src[11:0]) begin
+                                                dc_dst <= dst[11:0];
+                                                dc_src <= src[11:0];
+                                                dc_i <= 8'd0;
+                                                dc_arm <= 1'b1;
                                             end
                                         end else if (found) begin
                                             obj_val[oi][found_s] <= stack[sp - 8'd1];
@@ -2505,6 +2691,7 @@ module jmr_js_vm #(
                                                    stack[sp - 8'd1] == 32'sd0);
                                         if (md == 16'hFFFE && truthy) begin
                                             // find hit — return current element, pop callback+fe frames
+                                            dbg_find_hit <= dbg_find_hit + 16'd1;
                                             stack[sp - 8'd1] <=
                                                 arr_val[cstack_fe_arr[csp - 7'd2][11:0]]
                                                        [cstack_fe_i[csp - 7'd2][6:0]];
@@ -2517,8 +2704,37 @@ module jmr_js_vm #(
                                             csp <= csp - 7'd2;
                                             code_raddr <= 15'(ops_base + cstack_ip[csp - 7'd2]);
                                             state <= S_FETCH_WAIT;
+                                        end else if (md == 16'hFFFD && truthy) begin
+                                            // findIndex hit — return current index
+                                            stack[sp - 8'd1] <= {24'd0, cstack_fe_i[csp - 7'd2]};
+                                            stack_tag[sp - 8'd1] <= 3'd0;
+                                            release_env_to(cstack_env[csp - 7'd1]);
+                                            ip <= cstack_ip[csp - 7'd2];
+                                            this_obj <= cstack_this[csp - 7'd2];
+                                            csp <= csp - 7'd2;
+                                            code_raddr <= 15'(ops_base + cstack_ip[csp - 7'd2]);
+                                            state <= S_FETCH_WAIT;
                                         end else begin
-                                            if (md != 16'hFFFF && md != 16'hFFFE && sp != 0) begin
+                                            if (cstack_isctor[csp - 7'd2] &&
+                                                md != 16'hFFFF && md != 16'hFFFE && md != 16'hFFFD &&
+                                                truthy) begin
+                                                // filter: keep source element
+                                                begin
+                                                    logic [7:0] fl;
+                                                    fl = arr_len[md[11:0]];
+                                                    if (fl < ARR_CAP[7:0]) begin
+                                                        arr_val[md[11:0]][fl[6:0]] <=
+                                                            arr_val[cstack_fe_arr[csp - 7'd2][11:0]]
+                                                                   [cstack_fe_i[csp - 7'd2][6:0]];
+                                                        arr_tag[md[11:0]][fl[6:0]] <=
+                                                            arr_tag[cstack_fe_arr[csp - 7'd2][11:0]]
+                                                                   [cstack_fe_i[csp - 7'd2][6:0]];
+                                                        arr_len[md[11:0]] <= fl + 8'd1;
+                                                    end
+                                                end
+                                            end else if (md != 16'hFFFF && md != 16'hFFFE &&
+                                                       md != 16'hFFFD && !cstack_isctor[csp - 7'd2] &&
+                                                       sp != 0) begin
                                                 arr_val[md[11:0]][cstack_fe_i[csp - 7'd2][6:0]] <=
                                                     stack[sp - 8'd1];
                                                 arr_tag[md[11:0]][cstack_fe_i[csp - 7'd2][6:0]] <=
@@ -2744,11 +2960,16 @@ module jmr_js_vm #(
                                            (code_rdata[23:8] == id_foreach ||
                                             code_rdata[23:8] == 16'd112 ||
                                             code_rdata[23:8] == id_map ||
-                                            code_rdata[23:8] == id_find)) begin
-                                    // arr.forEach(fn) / arr.map(fn) / arr.find(fn)
+                                            code_rdata[23:8] == id_find ||
+                                            (id_findindex != 16'hFFFF &&
+                                             code_rdata[23:8] == id_findindex) ||
+                                            (id_filter != 16'hFFFF &&
+                                             code_rdata[23:8] == id_filter))) begin
+                                    // arr.forEach/map/find/findIndex/filter
                                     cstack_ip[csp] <= ip + 16'd1;
                                     cstack_this[csp] <= this_obj;
-                                    cstack_isctor[csp] <= 1'b0;
+                                    cstack_isctor[csp] <= (id_filter != 16'hFFFF &&
+                                                           code_rdata[23:8] == id_filter);
                                     cstack_isfe[csp] <= 1'b1;
                                     cstack_fe_arr[csp] <= stack[sp - 8'(code_rdata[31:24]) - 8'd1][15:0];
                                     cstack_fe_fn[csp] <= stack[sp - 8'd1][15:0];
@@ -2762,8 +2983,17 @@ module jmr_js_vm #(
                                         // commits if stored. Do not freeze temps.
                                         if (n_arr >= 16'(MAX_ARR - 1)) dbg_heap_ovf <= dbg_heap_ovf + 16'd1;
                                         n_arr <= (n_arr >= 16'(MAX_ARR - 1)) ? n_arr : (n_arr + 16'd1);
-                                    end else if (code_rdata[23:8] == id_find)
+                                    end else if (code_rdata[23:8] == id_filter) begin
+                                        arr_len[n_arr[11:0]] <= 8'd0;
+                                        cstack_map_arr[csp] <= n_arr;
+                                        if (n_arr >= 16'(MAX_ARR - 1)) dbg_heap_ovf <= dbg_heap_ovf + 16'd1;
+                                        n_arr <= (n_arr >= 16'(MAX_ARR - 1)) ? n_arr : (n_arr + 16'd1);
+                                    end else if (id_find != 16'hFFFF &&
+                                                code_rdata[23:8] == id_find)
                                         cstack_map_arr[csp] <= 16'hFFFE; // find sentinel
+                                    else if (id_findindex != 16'hFFFF &&
+                                             code_rdata[23:8] == id_findindex)
+                                        cstack_map_arr[csp] <= 16'hFFFD; // findIndex sentinel
                                     else
                                         cstack_map_arr[csp] <= 16'hFFFF;
                                     cstack_env[csp] <= env_sp;
@@ -2806,6 +3036,7 @@ module jmr_js_vm #(
                                     begin
                                         logic [11:0] ai;
                                         logic [7:0] st, cnt;
+                                        dbg_splice_n <= dbg_splice_n + 16'd1;
                                         ai = stack[sp - 8'(code_rdata[31:24]) - 8'd1][11:0];
                                         st = (code_rdata[31:24] >= 8'd1) ? stack[sp - 8'(code_rdata[31:24])][7:0] : 8'd0;
                                         cnt = (code_rdata[31:24] >= 8'd2) ? stack[sp - 8'd1][7:0] : 8'd1;
@@ -2868,16 +3099,6 @@ module jmr_js_vm #(
                                         json_res <= 11'(sp - ac - 8'd1);
                                         sp <= sp - ac;
                                         ip <= ip + 16'd1;
-                                        if (rt == 3'd1) begin
-                                            json_src <= obj_val[recv[12:0]][0][13:0];
-                                            json_srclen <= obj_val[recv[12:0]][1][13:0];
-                                        end else begin
-                                            // interned 1-char: hash == byte when len==1
-                                            json_mem[0] <= name_hash_tbl[recv[9:0]][7:0];
-                                            json_src <= 14'd0;
-                                            json_srclen <= (name_len_tbl[recv[9:0]] == 8'd1)
-                                                ? 14'd1 : 14'd0;
-                                        end
                                         repl_g <= 1'b0; repl_nlen <= 8'd1; repl_pat1 <= 8'd0;
                                         repl_pat0 <= 8'd0;
                                         if (pt == 3'd1 && obj_cls[p0[12:0]] == CLS_REGEX) begin
@@ -2898,15 +3119,37 @@ module jmr_js_vm #(
                                             repl_rch <= 8'(fxi(stack[sp - 8'd1], 3'd0) + 32'sd48);
                                         else
                                             repl_rch <= 8'h30;
-                                        json_rp <= (rt == 3'd1) ? obj_val[recv[12:0]][0][13:0] : 14'd0;
-                                        json_dst <= (rt == 3'd1)
-                                            ? (obj_val[recv[12:0]][0][13:0] + obj_val[recv[12:0]][1][13:0])
-                                            : 14'd1;
-                                        json_wp <= (rt == 3'd1)
-                                            ? (obj_val[recv[12:0]][0][13:0] + obj_val[recv[12:0]][1][13:0])
-                                            : 14'd1;
+                                        if (rt == 3'd1) begin
+                                            json_src <= obj_val[recv[12:0]][0][13:0];
+                                            json_srclen <= obj_val[recv[12:0]][1][13:0];
+                                            json_rp <= obj_val[recv[12:0]][0][13:0];
+                                            json_dst <= obj_val[recv[12:0]][0][13:0]
+                                                + obj_val[recv[12:0]][1][13:0];
+                                            json_wp <= obj_val[recv[12:0]][0][13:0]
+                                                + obj_val[recv[12:0]][1][13:0];
+                                            state <= S_REPL;
+                                        end else if (name_len_tbl[recv[9:0]] == 8'd1 &&
+                                                     !name_has[recv[9:0]]) begin
+                                            // interned 1-char without NAMB: hash == byte
+                                            json_mem[0] <= name_hash_tbl[recv[9:0]][7:0];
+                                            json_src <= 14'd0;
+                                            json_srclen <= 14'd1;
+                                            json_rp <= 14'd0;
+                                            json_dst <= 14'd1;
+                                            json_wp <= 14'd1;
+                                            state <= S_REPL;
+                                        end else begin
+                                            // interned longer: copy name_mem → json_mem
+                                            json_src <= 14'd0;
+                                            json_srclen <= {6'd0, name_len_tbl[recv[9:0]]};
+                                            json_rp <= 14'd0;
+                                            name_rdaddr <= name_off[recv[9:0]];
+                                            json_wp <= 14'd0;
+                                            namcpy_repl <= 1'b1;
+                                            namcpy_armed <= 1'b0;
+                                            state <= S_NAMCPY;
+                                        end
                                         repl_did <= 1'b0;
-                                        state <= S_REPL;
                                     end
                                 end else if (code_rdata[23:8] == id_indexof &&
                                            code_rdata[31:24] >= 8'd1 &&
@@ -3336,7 +3579,11 @@ module jmr_js_vm #(
                                         imgd_w <= ww; imgd_h <= hh;
                                         imgd_x <= x0; imgd_y <= y0;
                                         imgd_i <= 19'd0;
-                                        imgd_n <= 19'(ww) * 19'(hh);
+                                        // 32-bit product: 10-bit ww*hh of 640×480
+                                        // wrapped to 0 and skipped the copy (or a
+                                        // 19-bit self-mul truncated the count).
+                                        imgd_n <= (32'(ww) * 32'(hh) > 32'(FB_PIXELS))
+                                            ? 19'(FB_PIXELS) : 19'(32'(ww) * 32'(hh));
                                         imgd_armed <= 1'b0;
                                         imgd_res <= 11'(sp - acg - 8'd1);
                                         sp <= sp - acg - 8'd1;
@@ -3821,6 +4068,33 @@ module jmr_js_vm #(
                                 json_pph <= 3'd0;
                                 sp <= sp - nat_argc[7:0];
                                 state <= S_JSON_PARSE;
+                            end else if (nat_argc >= 8'd1 &&
+                                         stack_tag[sp - nat_argc[7:0]] == 3'd3) begin
+                                // interned literal — copy name_mem into json_mem then parse
+                                json_src <= 14'd0;
+                                json_srclen <= {6'd0, name_len_tbl[stack[sp - nat_argc[7:0]][9:0]]};
+                                json_rp <= 14'd0;
+                                js_sp <= 6'd0;
+                                js_ph[0] <= 3'd0;
+                                json_pph <= 3'd0;
+                                sp <= sp - nat_argc[7:0];
+                                if (name_len_tbl[stack[sp - nat_argc[7:0]][9:0]] == 8'd0) begin
+                                    stack[11'(sp - nat_argc[7:0])] <= 32'sd0;
+                                    stack_tag[11'(sp - nat_argc[7:0])] <= 3'd5;
+                                    sp <= 11'(sp - nat_argc[7:0]) + 11'd1;
+                                    code_raddr <= 15'(ops_base + ip);
+                                    state <= S_FETCH_WAIT;
+                                end else if (name_len_tbl[stack[sp - nat_argc[7:0]][9:0]] == 8'd1 &&
+                                             !name_has[stack[sp - nat_argc[7:0]][9:0]]) begin
+                                    json_mem[0] <= name_hash_tbl[stack[sp - nat_argc[7:0]][9:0]][7:0];
+                                    state <= S_JSON_PARSE;
+                                end else begin
+                                    name_rdaddr <= name_off[stack[sp - nat_argc[7:0]][9:0]];
+                                    json_wp <= 14'd0;
+                                    namcpy_repl <= 1'b0;
+                                    namcpy_armed <= 1'b0;
+                                    state <= S_NAMCPY;
+                                end
                             end else begin
                                 stack[sp - nat_argc[7:0]] <= 32'sd0;
                                 stack_tag[sp - nat_argc[7:0]] <= 3'd5;
@@ -3861,6 +4135,38 @@ module jmr_js_vm #(
                                 // NEW: Array(n) is nursery (finder steps).
                                 if (n_arr >= 16'(MAX_ARR - 1)) dbg_heap_ovf <= dbg_heap_ovf + 16'd1;
                                 n_arr <= (n_arr >= 16'(MAX_ARR - 1)) ? n_arr : (n_arr + 16'd1);
+                                sp <= (nat_argc == 0) ? (sp + 8'd1) : (sp - nat_argc[7:0] + 8'd1);
+                                code_raddr <= 15'(ops_base + ip);
+                                state <= S_FETCH_WAIT;
+                            end
+                        end
+                        8'd40: begin // typeof — JS tag string (PACMAN map hole checks)
+                            begin
+                                logic [2:0] tt;
+                                logic [15:0] tn;
+                                tt = (nat_argc >= 8'd1) ? stack_tag[sp - nat_argc[7:0]] : 3'd5;
+                                tn = 16'hFFFF;
+                                if (tt == 3'd5) tn = id_str_undef;
+                                else if (tt == 3'd3) tn = (id_str_string != 16'hFFFF)
+                                    ? id_str_string : id_str_undef;
+                                else if (tt == 3'd4) tn = (id_str_function != 16'hFFFF)
+                                    ? id_str_function : id_str_undef;
+                                else if (tt == 3'd1 || tt == 3'd2) tn = (id_str_object != 16'hFFFF)
+                                    ? id_str_object : id_str_undef;
+                                else tn = (id_str_number != 16'hFFFF)
+                                    ? id_str_number : 16'hFFFE;
+                                sp <= (nat_argc == 0) ? sp : (sp - nat_argc[7:0]);
+                                if (tn == 16'hFFFE) begin
+                                    // "number" was never interned — still != 'undefined'
+                                    stack[sp - ((nat_argc == 0) ? 8'd0 : nat_argc[7:0])] <= 32'sd1;
+                                    stack_tag[sp - ((nat_argc == 0) ? 8'd0 : nat_argc[7:0])] <= 3'd0;
+                                end else if (tn != 16'hFFFF) begin
+                                    stack[sp - ((nat_argc == 0) ? 8'd0 : nat_argc[7:0])] <= {16'd0, tn};
+                                    stack_tag[sp - ((nat_argc == 0) ? 8'd0 : nat_argc[7:0])] <= 3'd3;
+                                end else begin
+                                    stack[sp - ((nat_argc == 0) ? 8'd0 : nat_argc[7:0])] <= 32'sd0;
+                                    stack_tag[sp - ((nat_argc == 0) ? 8'd0 : nat_argc[7:0])] <= 3'd5;
+                                end
                                 sp <= (nat_argc == 0) ? (sp + 8'd1) : (sp - nat_argc[7:0] + 8'd1);
                                 code_raddr <= 15'(ops_base + ip);
                                 state <= S_FETCH_WAIT;
@@ -4147,6 +4453,13 @@ module jmr_js_vm #(
                         et = arr_tag[jn_arr][jn_i[6:0]];
                         ev = (et == 3'd7) ? ($signed(arr_val[jn_arr][jn_i[6:0]]) >>> 16)
                                           : $signed(arr_val[jn_arr][jn_i[6:0]]);
+                        if (et == 3'd3 && name_len_tbl[arr_val[jn_arr][jn_i[6:0]][9:0]] == 8'd1 &&
+                            name_hash_tbl[arr_val[jn_arr][jn_i[6:0]][9:0]][7:0] >= 8'h30 &&
+                            name_hash_tbl[arr_val[jn_arr][jn_i[6:0]][9:0]][7:0] <= 8'h39) begin
+                            // interned "0".."9" — same as number digits for maze wall codes
+                            ev = 32'(name_hash_tbl[arr_val[jn_arr][jn_i[6:0]][9:0]][7:0] - 8'h30);
+                            et = 3'd0;
+                        end
                         if ((et != 3'd0 && et != 3'd7) || ev < 32'sd0 || ev > 32'sd9) begin
                             // non-digit join shape — honest miss, result undefined
                             dbg_join_miss <= dbg_join_miss + 16'd1;
@@ -4467,52 +4780,62 @@ module jmr_js_vm #(
                     end
                 end
                 S_SPR: begin
-                    // copy sprite pack from code_mem trailer bytes (trail_tb)
+                    // copy sprite pack from code_mem trailer bytes (trail_tb).
+                    // Parse the current byte EVERY cycle — including when
+                    // trail_off[1:0]==3. Fetching the next word without
+                    // consuming byte 3 skipped every 4th header/pixel (wrong
+                    // stride / blank tiny sprites). S_TRAIL already parses
+                    // then fetches; match that. NAMB follows the pixels.
+                    logic spr_end;
+                    spr_end = 1'b0;
+                    if (spr_left == 18'd0) begin
+                        // header w/h via spr_hdr 0..3
+                        if (spr_hdr == 3'd0) begin
+                            trail_acc[7:0] <= trail_tb;
+                            spr_hdr <= 3'd1;
+                        end else if (spr_hdr == 3'd1) begin
+                            spr_ww[spr_i[3:0]] <= {6'd0, {trail_tb, trail_acc[7:0]}[9:0]};
+                            spr_hdr <= 3'd2;
+                        end else if (spr_hdr == 3'd2) begin
+                            trail_acc[7:0] <= trail_tb;
+                            spr_hdr <= 3'd3;
+                        end else begin
+                            spr_hh[spr_i[3:0]] <= {6'd0, {trail_tb, trail_acc[7:0]}[9:0]};
+                            spr_off[spr_i[3:0]] <= 22'(spr_wp);
+                            spr_left <= 18'({trail_tb, trail_acc[7:0]}[9:0]) * 18'(spr_ww[spr_i[3:0]][9:0]);
+                            spr_hdr <= 3'd0;
+                            if (18'({trail_tb, trail_acc[7:0]}[9:0]) * 18'(spr_ww[spr_i[3:0]][9:0]) == 18'd0) begin
+                                if (spr_i + 5'd1 >= n_spr) begin
+                                    spr_hdr <= 3'd0;
+                                    trail_ph <= 6'd35;
+                                    spr_end = 1'b1;
+                                end else spr_i <= spr_i + 5'd1;
+                            end
+                        end
+                    end else begin
+                        if ({1'b0, spr_wp} < 19'(SPR_BYTES))
+                            spr_mem[spr_wp] <= trail_tb;
+                        spr_wp <= spr_wp + 18'd1;
+                        spr_left <= spr_left - 18'd1;
+                        if (spr_left == 18'd1) begin
+                            if (spr_i + 5'd1 >= n_spr) begin
+                                spr_hdr <= 3'd0;
+                                trail_ph <= 6'd35;
+                                spr_end = 1'b1;
+                            end else begin
+                                spr_i <= spr_i + 5'd1;
+                                spr_hdr <= 3'd0;
+                            end
+                        end
+                    end
                     if (trail_off[1:0] == 2'd3) begin
                         code_raddr <= 15'(trail_off[16:2] + 15'd1);
                         trail_off <= trail_off + 16'd1;
                         state <= S_RD;
-                        ret_state <= S_SPR;
+                        ret_state <= spr_end ? S_TRAIL : S_SPR;
                     end else begin
                         trail_off <= trail_off + 16'd1;
-                        if (spr_left == 18'd0) begin
-                            // header w/h via spr_hdr 0..3
-                            if (spr_hdr == 3'd0) begin
-                                trail_acc[7:0] <= trail_tb;
-                                spr_hdr <= 3'd1;
-                            end else if (spr_hdr == 3'd1) begin
-                                spr_ww[spr_i[3:0]] <= {6'd0, {trail_tb, trail_acc[7:0]}[9:0]};
-                                spr_hdr <= 3'd2;
-                            end else if (spr_hdr == 3'd2) begin
-                                trail_acc[7:0] <= trail_tb;
-                                spr_hdr <= 3'd3;
-                            end else begin
-                                spr_hh[spr_i[3:0]] <= {6'd0, {trail_tb, trail_acc[7:0]}[9:0]};
-                                spr_off[spr_i[3:0]] <= 22'(spr_wp);
-                                spr_left <= 18'({trail_tb, trail_acc[7:0]}[9:0]) * 18'(spr_ww[spr_i[3:0]][9:0]);
-                                spr_hdr <= 3'd0;
-                                if (18'({trail_tb, trail_acc[7:0]}[9:0]) * 18'(spr_ww[spr_i[3:0]][9:0]) == 18'd0) begin
-                                    if (spr_i + 5'd1 >= n_spr) begin
-                                        code_raddr <= 15'(ops_base);
-                                        state <= S_FETCH_WAIT;
-                                    end else spr_i <= spr_i + 5'd1;
-                                end
-                            end
-                        end else begin
-                            if ({1'b0, spr_wp} < 19'(SPR_BYTES))
-                                spr_mem[spr_wp] <= trail_tb;
-                            spr_wp <= spr_wp + 18'd1;
-                            spr_left <= spr_left - 18'd1;
-                            if (spr_left == 18'd1) begin
-                                if (spr_i + 5'd1 >= n_spr) begin
-                                    code_raddr <= 15'(ops_base);
-                                    state <= S_FETCH_WAIT;
-                                end else begin
-                                    spr_i <= spr_i + 5'd1;
-                                    spr_hdr <= 3'd0;
-                                end
-                            end
-                        end
+                        if (spr_end) state <= S_TRAIL;
                     end
                 end
                 // NEW: ALU result into alu_r (no stack write this cycle)
@@ -4594,7 +4917,10 @@ module jmr_js_vm #(
                     if (csp == 0) begin
                         state <= S_WAIT_FRAME;
                     end else if (cstack_fe_i[csp - 7'd1] >= arr_len[cstack_fe_arr[csp - 7'd1][11:0]]) begin
-                        if (cstack_map_arr[csp - 7'd1] != 16'hFFFF &&
+                        if (cstack_map_arr[csp - 7'd1] == 16'hFFFD) begin
+                            stack[sp] <= -32'sd1;
+                            stack_tag[sp] <= 3'd0; // findIndex miss
+                        end else if (cstack_map_arr[csp - 7'd1] != 16'hFFFF &&
                             cstack_map_arr[csp - 7'd1] != 16'hFFFE) begin
                             stack[sp] <= {16'd0, cstack_map_arr[csp - 7'd1]};
                             stack_tag[sp] <= 3'd2;
@@ -4748,42 +5074,8 @@ module jmr_js_vm #(
                         cstack_isctor[csp] <= 1'b0;
                         cstack_isfe[csp] <= 1'b0;
                         state <= S_KEYEV;
-                    end else if (raf_n != 0 && (!pre_click_raf || raf_n > 4'd1)) begin
-                        // Drain nested boot rAFs (HTML queues extra frames before
-                        // the looping animate) before auto-click. A canvas
-                        // click listener must not steal those slots.
-                        pre_click_raf <= 1'b1;
-                        sp <= '0; // frame boundary: fresh eval stack
-                        ip <= fn_entry(raf_fn[0]);
-                        raf_n <= raf_n - 4'd1;
-                        enter_captured_fn(raf_fn[0]);
-                        raf_fn[0] <= raf_fn[1];
-                        raf_fn[1] <= raf_fn[2];
-                        raf_fn[2] <= raf_fn[3];
-                        raf_fn[3] <= raf_fn[4];
-                        raf_fn[4] <= raf_fn[5];
-                        raf_fn[5] <= raf_fn[6];
-                        raf_fn[6] <= raf_fn[7];
-                        cstack_ip[csp] <= n_ops;
-                        cstack_this[csp] <= this_obj;
-                        cstack_isctor[csp] <= 1'b0;
-                        cstack_isfe[csp] <= 1'b0;
-                        csp <= csp + 7'd1;
-                        code_raddr <= 15'(ops_base + fn_entry(raf_fn[0]));
-                        state <= S_FETCH_WAIT;
-                    end else if (click_fn != 16'hFFFF && !click_fired) begin
-                        // HTML auto-start: idle animate re-queues rAF so click never drained
-                        click_fired <= 1'b1;
-                        sp <= '0; // frame boundary: fresh eval stack
-                        ip <= fn_entry(click_fn);
-                        cstack_ip[csp] <= n_ops;
-                        cstack_this[csp] <= this_obj;
-                        cstack_isctor[csp] <= 1'b0;
-                        cstack_isfe[csp] <= 1'b0;
-                        enter_captured_fn(click_fn);
-                        csp <= csp + 7'd1;
-                        code_raddr <= 15'(ops_base + fn_entry(click_fn));
-                        state <= S_FETCH_WAIT;
+                    // KEYEVT before rAF (PYTHON drains keys then rAF). Do not
+                    // auto-fire click_fn — attract waits for Space / .click().
                     end else if (kev_rp != kev_wp &&
                                 (kev_q[kev_rp][8] ? kd_n : ku_n) == 3'd0) begin
                         // no handler registered for this direction — drop event
@@ -5502,8 +5794,36 @@ module jmr_js_vm #(
                         end
                     end
                 end
-                S_STRIDX: state <= S_STRIDX_WR; // name_rdaddr was set last cycle
+                S_NAMCPY: begin
+                    // interned name_mem → json_mem via registered name_rdata
+                    // (same BRAM lag as str[i]; do not combinational-read NAME_CAP).
+                    if (!namcpy_armed) namcpy_armed <= 1'b1;
+                    else begin
+                        if (json_wp < 14'(JSON_CAP))
+                            json_mem[json_wp[12:0]] <= name_rdata;
+                        if (json_wp + 14'd1 >= json_srclen || json_wp + 14'd1 >= 14'(JSON_CAP)) begin
+                            json_src <= 14'd0;
+                            json_rp <= 14'd0;
+                            namcpy_armed <= 1'b0;
+                            if (namcpy_repl) begin
+                                json_dst <= json_srclen;
+                                json_wp <= json_srclen;
+                                state <= S_REPL;
+                            end else begin
+                                json_wp <= 14'd0;
+                                state <= S_JSON_PARSE;
+                            end
+                        end else begin
+                            json_wp <= json_wp + 14'd1;
+                            name_rdaddr <= name_rdaddr + 16'd1;
+                            namcpy_armed <= 1'b0;
+                        end
+                    end
+                end
+                S_STRIDX: state <= S_STRIDX_WR; // wait: name_rdata lags name_rdaddr 1 cycle
                 S_STRIDX_WR: begin
+                    // name_rdata is this char. Prefetch i+1 so the next sequential
+                    // str[i] hits in EXEC (string-row sprites: row[col]==="1").
                     if (char_ok[name_rdata]) begin
                         stack[str_res] <= {16'd0, char_id[name_rdata]};
                         stack_tag[str_res] <= 3'd3;
@@ -5511,6 +5831,9 @@ module jmr_js_vm #(
                         stack[str_res] <= 32'sd0;
                         stack_tag[str_res] <= 3'd5;
                     end
+                    name_rdaddr <= name_rdaddr + 16'd1;
+                    str_pf_ci <= str_pf_ci + 32'sd1;
+                    str_pf_ok <= 1'b1;
                     code_raddr <= 15'(ops_base + ip);
                     state <= S_FETCH_WAIT;
                 end
@@ -5531,7 +5854,11 @@ module jmr_js_vm #(
                 end
                 S_IMGD_GET: begin
                     // Copy back-buffer rect into the one snapshot (dump_back is
-                    // registered 1 cycle after fb_dump_addr).
+                    // registered 1 cycle after dump_raddr). S_CLEAR twin: one
+                    // index, always i++ until n — 10-bit x+w wrap spun until
+                    // the 16M FRAME cap. 1 px/cycle × 307200 fits; do not
+                    // raise the cap. Host FB? must not walk dump_sel (GET
+                    // holds it).
                     fb_we <= 1'b0;
                     fb_dump_sel <= 1'b1;
                     if (imgd_n == 19'd0) begin
@@ -5552,39 +5879,37 @@ module jmr_js_vm #(
                         code_raddr <= 15'(ops_base + ip);
                         state <= S_FETCH_WAIT;
                     end else if (!imgd_armed) begin
-                        // dump_back is registered 1 cycle after dump_raddr
                         imgd_armed <= 1'b1;
                     end else begin
                         if (imgd_i < 19'(FB_PIXELS))
                             imgd_pix[imgd_i] <= fb_dump_back;
-                        if (imgd_x >= (imgd_x0 + imgd_w - 10'd1) || imgd_x == 10'(MW - 1)) begin
-                            imgd_x <= imgd_x0;
-                            fb_dump_addr <= 19'(imgd_y + 10'd1) * 19'(MW) + 19'(imgd_x0);
-                            if (imgd_y >= (imgd_y0 + imgd_h - 10'd1) || imgd_y == 10'(MH - 1)) begin
-                                obj_cls[n_obj[12:0]] <= CLS_IMGD;
-                                obj_n[n_obj[12:0]] <= 6'd2;
-                                obj_key[n_obj[12:0]][0] <= id_width;
-                                obj_val[n_obj[12:0]][0] <= {22'd0, imgd_w};
-                                obj_tag[n_obj[12:0]][0] <= 3'd0;
-                                obj_key[n_obj[12:0]][1] <= id_height;
-                                obj_val[n_obj[12:0]][1] <= {22'd0, imgd_h};
-                                obj_tag[n_obj[12:0]][1] <= 3'd0;
-                                stack[imgd_res] <= {16'd0, n_obj};
-                                stack_tag[imgd_res] <= 3'd1;
-                                if (n_obj >= 16'(MAX_OBJ - 1)) dbg_heap_ovf <= dbg_heap_ovf + 16'd1;
-                                n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
-                                sp <= imgd_res + 11'd1;
-                                fb_dump_sel <= 1'b0;
-                                code_raddr <= 15'(ops_base + ip);
-                                state <= S_FETCH_WAIT;
-                            end else begin
-                                imgd_y <= imgd_y + 10'd1;
-                                imgd_i <= imgd_i + 19'd1;
-                            end
+                        if (imgd_i == (imgd_n - 19'd1)) begin
+                            obj_cls[n_obj[12:0]] <= CLS_IMGD;
+                            obj_n[n_obj[12:0]] <= 6'd2;
+                            obj_key[n_obj[12:0]][0] <= id_width;
+                            obj_val[n_obj[12:0]][0] <= {22'd0, imgd_w};
+                            obj_tag[n_obj[12:0]][0] <= 3'd0;
+                            obj_key[n_obj[12:0]][1] <= id_height;
+                            obj_val[n_obj[12:0]][1] <= {22'd0, imgd_h};
+                            obj_tag[n_obj[12:0]][1] <= 3'd0;
+                            stack[imgd_res] <= {16'd0, n_obj};
+                            stack_tag[imgd_res] <= 3'd1;
+                            if (n_obj >= 16'(MAX_OBJ - 1)) dbg_heap_ovf <= dbg_heap_ovf + 16'd1;
+                            n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
+                            sp <= imgd_res + 11'd1;
+                            fb_dump_sel <= 1'b0;
+                            code_raddr <= 15'(ops_base + ip);
+                            state <= S_FETCH_WAIT;
                         end else begin
-                            imgd_x <= imgd_x + 10'd1;
                             imgd_i <= imgd_i + 19'd1;
-                            fb_dump_addr <= 19'(imgd_y) * 19'(MW) + 19'(imgd_x + 10'd1);
+                            if (imgd_x >= (imgd_x0 + imgd_w - 10'd1) || imgd_x == 10'(MW - 1)) begin
+                                imgd_x <= imgd_x0;
+                                imgd_y <= imgd_y + 10'd1;
+                                fb_dump_addr <= 19'(imgd_y + 10'd1) * 19'(MW) + 19'(imgd_x0);
+                            end else begin
+                                imgd_x <= imgd_x + 10'd1;
+                                fb_dump_addr <= 19'(imgd_y) * 19'(MW) + 19'(imgd_x + 10'd1);
+                            end
                         end
                     end
                 end

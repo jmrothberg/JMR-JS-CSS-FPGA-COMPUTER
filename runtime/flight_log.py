@@ -10,23 +10,30 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from functional_model.trace import git_stamp, point_latest, session_trace_dir
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TRACES_DIR = REPO_ROOT / "traces"
 
 
 class FlightLog:
-    def __init__(self, runtime_name: str, directory: Optional[Path] = None) -> None:
-        self.directory = directory if directory is not None else TRACES_DIR
+    def __init__(self, runtime_name: str, directory: Optional[Path] = None,
+                 extra_header: str = "") -> None:
+        self.directory = directory if directory is not None else session_trace_dir()
         self.directory.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
         self.path = self.directory / f"session_{stamp}_{runtime_name}.log"
-        self.path.write_text(
+        hdr = (
             f"# JMR JS {runtime_name} flight log\n"
+            f"# git={git_stamp()}\n"
             f"# started_utc={datetime.now(timezone.utc).isoformat()}\n"
-            f"# events: TYPE / NOTE / FAULT — start reading at the end\n"
-            f"# ---\n",
-            encoding="utf-8",
+            "# events: TYPE / NOTE / FAULT / MORE / FRAME — start reading at the end\n"
         )
+        if extra_header:
+            hdr += extra_header if extra_header.endswith("\n") else extra_header + "\n"
+        hdr += "# ---\n"
+        self.path.write_text(hdr, encoding="utf-8")
+        point_latest(runtime_name, self.path)
 
     def type_line(self, text: str) -> None:
         self._append(f"TYPE {text}")

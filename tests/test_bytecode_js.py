@@ -818,3 +818,189 @@ requestAnimationFrame(tick);
         m._bytecode_html_frame()
     assert m.vm.globals.get("hit") == 1, m.vm.globals.get("hit")
 
+
+def test_click_listener_does_not_autostart():
+    """addEventListener('click') must not fire without Element.click / a key."""
+    m = _run_js_frames(
+        """
+var active = 0;
+addEventListener("click", function() { active = 1; });
+addEventListener("keydown", function(e) {
+  const { key } = e;
+  if (!active && key === " ") active = 1;
+});
+function tick() { requestAnimationFrame(tick); }
+requestAnimationFrame(tick);
+""",
+        n_frames=8,
+    )
+    assert m.vm.globals.get("active") == 0, "click listener auto-fired"
+    m.input.key_event(32, " ", True)
+    for _ in range(4):
+        m._bytecode_html_frame()
+    assert m.vm.globals.get("active") == 1, m.vm.globals.get("active")
+
+
+def test_queued_keybits_space_does_not_autostart():
+    """Space while typing LOAD must not start the attract screen on RUN."""
+    from functional_model.input_engine import JOY_FIRE1
+
+    m = Machine()
+    m.set_key_bits(JOY_FIRE1)
+    m.set_key_bits(0)
+    assert not m.input._events, "prompt KEYBITS queued JS keydown"
+    # leftover path: InputEngine.set_key_bits still syncs (tests / tether)
+    m.input.set_key_bits(JOY_FIRE1)
+    m.input.set_key_bits(0)
+    assert m.input._events
+    src = """
+var active = 0;
+addEventListener("click", function() { active = 1; });
+addEventListener("keydown", function(e) {
+  const { key } = e;
+  if (!active && key === " ") active = 1;
+});
+function tick() { requestAnimationFrame(tick); }
+requestAnimationFrame(tick);
+"""
+    m.vm.natives = m._natives()
+    m.vm.globals.clear()
+    m.vm.globals["document"] = {"__class": "Element", "addEventListener": 1}
+    m.vm.globals["window"] = m.vm.globals["document"]
+    chunk = compile_source(src)
+    m._html_chunk = chunk
+    m._bytecode_html = True
+    m._timers = []
+    m._raf_q = []
+    m._listeners = []
+    m.input.discard_queued_keys()
+    m.running = True
+    m.vm.run(chunk)
+    assert m.vm.error is None, m.vm.error
+    for _ in range(8):
+        m._bytecode_html_frame()
+        assert m.vm.error is None, m.vm.error
+    assert m.vm.globals.get("active") == 0, "prompt Space leaked into RUN"
+    m.input.key_event(32, " ", True)
+    for _ in range(4):
+        m._bytecode_html_frame()
+    assert m.vm.globals.get("active") == 1, m.vm.globals.get("active")
+
+
+def test_wall_box_neighbor_codes_are_arcs():
+    """2x2 wall cells: NESW neighbor bits → join → quarter-arcs, not + spokes."""
+    m = _run_js_frames(
+        """
+var c = document.getElementById('c').getContext('2d');
+c.strokeStyle = '#09f';
+c.lineWidth = 2;
+var map = [[1, 1], [1, 1]];
+var size = 20;
+function get(i, j) {
+  if (j < 0 || i < 0 || j >= 2 || i >= 2) return 0;
+  return map[j][i];
+}
+function pos(i, j) {
+  return {x: 100 + i * size, y: 100 + j * size};
+}
+var j, i;
+function draw() {
+for (j = 0; j < 2; j++) {
+  for (i = 0; i < 2; i++) {
+    var code = [0, 0, 0, 0];
+    if (get(i + 1, j) && !(get(i + 1, j - 1) && get(i + 1, j + 1) && get(i, j - 1) && get(i, j + 1))) code[0] = 1;
+    if (get(i, j + 1) && !(get(i - 1, j + 1) && get(i + 1, j + 1) && get(i - 1, j) && get(i + 1, j))) code[1] = 1;
+    if (get(i - 1, j) && !(get(i - 1, j - 1) && get(i - 1, j + 1) && get(i, j - 1) && get(i, j + 1))) code[2] = 1;
+    if (get(i, j - 1) && !(get(i - 1, j - 1) && get(i + 1, j - 1) && get(i - 1, j) && get(i + 1, j))) code[3] = 1;
+    var p = pos(i, j);
+    switch (code.join('')) {
+      case '1100':
+        c.beginPath();
+        c.arc(p.x + size / 2, p.y + size / 2, size / 2, 3.14159265, 4.71238898, false);
+        c.stroke();
+        break;
+      case '0110':
+        c.beginPath();
+        c.arc(p.x - size / 2, p.y + size / 2, size / 2, 4.71238898, 6.2831853, false);
+        c.stroke();
+        break;
+      case '0011':
+        c.beginPath();
+        c.arc(p.x - size / 2, p.y - size / 2, size / 2, 0, 1.5707963, false);
+        c.stroke();
+        break;
+      case '1001':
+        c.beginPath();
+        c.arc(p.x + size / 2, p.y - size / 2, size / 2, 1.5707963, 3.14159265, false);
+        c.stroke();
+        break;
+      default:
+        c.beginPath();
+        c.moveTo(p.x, p.y);
+        c.lineTo(p.x + 10, p.y);
+        c.stroke();
+    }
+  }
+}
+}
+draw();
+""",
+        n_frames=1,
+    )
+    fb = m.canvas.front
+    w = 640
+    assert fb[100 * w + 100] == 0, "spoke through (0,0) center"
+    assert fb[100 * w + 120] == 0, "spoke through (1,0) center"
+    assert fb[120 * w + 100] == 0, "spoke through (0,1) center"
+    assert fb[120 * w + 120] == 0, "spoke through (1,1) center"
+    assert fb[110 * w + 100] != 0, "1100 quarter-arc missing"
+
+
+def test_findindex_identity():
+    m = _run_js_frames(
+        """
+var a = [{id:1},{id:2}];
+var i = a.findIndex(function(e) { return e.id == 2; });
+""",
+        n_frames=0,
+    )
+    assert m.vm.globals.get("i") == 1, m.vm.globals.get("i")
+
+
+def test_typeof_number_not_undefined():
+    m = _run_js_frames(
+        """
+var a = [0, 1];
+var ok = (typeof a[0] != 'undefined') && (typeof a[1] != 'undefined');
+""",
+        n_frames=0,
+    )
+    assert m.vm.globals.get("ok") is True, m.vm.globals.get("ok")
+
+
+def test_filter_keeps_truthy():
+    m = _run_js_frames(
+        """
+var a = [0, 1, 0, 2];
+var b = a.filter(function(x) { return x; });
+var n = b.length;
+var f = b[0];
+var g = b[1];
+""",
+        n_frames=0,
+    )
+    assert m.vm.globals.get("n") == 2, m.vm.globals.get("n")
+    assert m.vm.globals.get("f") == 1, m.vm.globals.get("f")
+    assert m.vm.globals.get("g") == 2, m.vm.globals.get("g")
+
+
+def test_for_of_sums():
+    m = _run_js_frames(
+        """
+var s = 0;
+for (const x of [1, 2, 3]) s = s + x;
+""",
+        n_frames=0,
+    )
+    assert m.vm.globals.get("s") == 6, m.vm.globals.get("s")
+

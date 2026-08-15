@@ -45,12 +45,17 @@ class SimBackend(RuntimeBackend):
         self._loaded_name: str = ""
         self._break_run_wait: bool = False
         self._fb_logged: bool = False  # first game FB? only
-        self._log = FlightLog(self.name)
+        extra = ""
+        if _SYNTH.is_file():
+            extra = f"# rtl_mtime={_SYNTH.stat().st_mtime:.0f}\n"
+        self._log = FlightLog(self.name, extra_header=extra)
         self._kev_n = 0
         self._kev_codes: list = []
         self._play_t = 0.0
         self._play_frames = 0
+        self._play_fclk: list = []
         self._last_glass = ""
+        self._more_page = 0
         # HARD RULE: RTL is default. Host twin ONLY via explicit JMR_SIM_HOST=1.
         # JMR_SIM_RTL=1 is accepted as a no-op alias (legacy scripts).
         host_opt = os.environ.get("JMR_SIM_HOST", "").strip().lower() in ("1", "true", "yes")
@@ -169,23 +174,53 @@ class SimBackend(RuntimeBackend):
         self._kev_codes = []
         self._kev_t0 = time.monotonic()
 
+    def _last_glass_line(self) -> str:
+        """Last non-empty VRAM row (not a 16-row 400-char join)."""
+        last = ""
+        for ln in reversed(self._screen.replace("\\n", "\n").splitlines()):
+            t = ln.strip()
+            if t:
+                last = t
+                break
+        return last
+
     def _note_glass(self, tag: str) -> None:
-        """Last ~16 non-empty rows after DIR/LOAD/LIST/SAVE (letterbox)."""
-        rows = [
-            ln.strip()
-            for ln in self._screen.replace("\\n", "\n").splitlines()
-            if ln.strip()
-        ]
-        msg = f"GLASS {tag} " + " | ".join(rows[-16:])[:400]
+        """LIST/DIR/LOAD/SAVE — last non-empty row so a long URI is readable."""
+        last = self._last_glass_line()
+        msg = f"GLASS {tag} {last[:120]}"
         if msg == self._last_glass:
             return
         self._last_glass = msg
         self._log.note(msg)
+        if last.startswith("-- MORE"):
+            self._note_more()
+
+    def _note_more(self) -> None:
+        """MORE page + the source line above it (wrap=1 if mid-URI / long)."""
+        self._more_page = getattr(self, "_more_page", 0) + 1
+        prev = ""
+        seen_more = False
+        for ln in reversed(self._screen.replace("\\n", "\n").splitlines()):
+            t = ln.strip()
+            if not t:
+                continue
+            if t.startswith("-- MORE"):
+                seen_more = True
+                continue
+            if seen_more:
+                prev = t
+                break
+        wrap = int(
+            ("data:image" in prev.lower())
+            or prev.endswith("|")
+            or len(prev) >= 60
+        )
+        self._log.note(f"MORE page={self._more_page} wrap={wrap} {prev[:80]}")
 
     def _load_reply_ready(self, glass: str, stem: str) -> bool:
-        """True only for THIS load's LOADED stem+LINES (or ?IO/?LS)."""
+        """True only for THIS load's LOADED stem+LINES (or ?IO/?FN/?LS)."""
         g = glass.replace("\\n", "\n")
-        if "?IO" in g or "?LS" in g:
+        if "?IO" in g or "?LS" in g or "?FN" in g:
             return True
         want = (stem or "").upper()[:8]
         if not want:
@@ -282,6 +317,27 @@ class SimBackend(RuntimeBackend):
             if self._use_rtl or not any(self._canvas.front):
                 self._paint_screen_local(prompt)
 
+    def _pump_until_more_or_ready(self, *, leave_more: bool = False) -> None:
+        """Wait until MORE or READY. Fat data-URI LIST needs millions of SPI clocks."""
+        for _ in range(500):
+            pump = getattr(self, "run_wait_idle", None)
+            if pump is not None:
+                pump()
+            if getattr(self, "_break_run_wait", False):
+                break
+            self._rpc("SCREEN?")
+            has = self._screen_has_more()
+            if leave_more:
+                if not has:
+                    break
+            elif has:
+                break
+            last = self._last_glass_line()
+            if last in ("READY", ">", "> ") or last.startswith("READY"):
+                break
+            # TICKN 20000 = 20M clocks (same as fat RUN)
+            self._rpc("TICKN 20000")
+
     def type_line(self, text: str) -> None:
         self._log.type_line(text)
         # NEW: leave MORE before a new command (else first char advances the page)
@@ -299,33 +355,19 @@ class SimBackend(RuntimeBackend):
         # LIST/DIR may park on -- MORE --; LINE now waits, but keep pumping
         # until MORE or prompt so we never paint '>' over a mid-page.
         if upper == "LIST" or upper.startswith("LIST ") or upper == "DIR":
-            for _ in range(80):
-                pump = getattr(self, "run_wait_idle", None)
-                if pump is not None:
-                    pump()
-                self._rpc("SCREEN?")
-                if self._screen_has_more():
-                    break
-                last = ""
-                for ln in reversed(self._screen.replace("\\n", "\n").splitlines()):
-                    t = ln.strip()
-                    if t:
-                        last = t
-                        break
-                if last in ("READY", ">", "> ") or last.startswith("READY"):
-                    break
-                self._rpc("TICKN 500")
+            self._more_page = 0
+            self._pump_until_more_or_ready()
         # HTML LOAD: wait for THIS stem+LINES, not a stale LOADED still on glass.
         if upper.startswith("LOAD") and self._html_loaded_stem():
             self._break_run_wait = False
             stem = self._html_loaded_stem()
-            for i in range(400):
+            for i in range(500):
                 pump = getattr(self, "run_wait_idle", None)
                 if pump is not None:
                     pump()
                 if getattr(self, "_break_run_wait", False):
                     break
-                self._rpc("TICKN 2000")
+                self._rpc("TICKN 20000")
                 self._rpc("SCREEN?")
                 if self._load_reply_ready(self._screen, stem):
                     break
@@ -468,40 +510,10 @@ class SimBackend(RuntimeBackend):
         else:
             self._rpc(f"KEY {ord(ch):02x}")
         # Leave the current MORE page first (SCREEN still shows the old -- MORE --)
-        for _ in range(120):
-            pump = getattr(self, "run_wait_idle", None)
-            if pump is not None:
-                pump()
-            self._rpc("SCREEN?")
-            if not self._screen_has_more():
-                break
-            last = ""
-            for ln in reversed(self._screen.replace("\\n", "\n").splitlines()):
-                t = ln.strip()
-                if t:
-                    last = t
-                    break
-            if last in ("READY", ">", "> ") or last.startswith("READY"):
-                break
-            self._rpc("TICKN 2000")
+        self._pump_until_more_or_ready(leave_more=True)
         # Then wait until the next -- MORE -- or prompt (same as type_line LIST)
-        for _ in range(120):
-            pump = getattr(self, "run_wait_idle", None)
-            if pump is not None:
-                pump()
-            self._rpc("SCREEN?")
-            if self._screen_has_more():
-                break
-            last = ""
-            for ln in reversed(self._screen.replace("\\n", "\n").splitlines()):
-                t = ln.strip()
-                if t:
-                    last = t
-                    break
-            if last in ("READY", ">", "> ") or last.startswith("READY"):
-                break
-            self._rpc("TICKN 2000")
-        self._sync_glass("> " if not self._more else "")
+        self._pump_until_more_or_ready()
+        self._sync_glass()
 
     def screen_text(self) -> str:
         if not self._started:
@@ -541,6 +553,8 @@ class SimBackend(RuntimeBackend):
         # NEW: one VM telemetry line on BREAK (n_obj / heap_ovf / to_ovf / raf)
         try:
             self._log.note(self._rpc("VMSTAT?"))
+            self._log.note(self._rpc("PXCNT?"))
+            self._log.note(self._rpc("FBRAW?"))
         except Exception:
             pass
         self._break_run_wait = True  # NEW: abort size-scaled RUN TICKN wait
@@ -560,20 +574,47 @@ class SimBackend(RuntimeBackend):
             return
         # NEW: while running, one VM frame (tick-to-swap) not TICK=1000
         if self._running:
-            self._rpc("FRAME")
+            resp = self._rpc("FRAME")
             self._play_frames += 1
             now = time.monotonic()
             if self._play_t == 0.0:
                 self._play_t = now
-            elif now - self._play_t >= 5.0:
-                self._flush_keyevts()
+            # Capped FRAME returns FB SAME while game_mode — that is the hang.
+            capped = resp == "FB SAME"
+            first3 = self._play_frames <= 3
+            beat = now - self._play_t >= 1.0
+            st = ""
+            if capped or first3 or beat:
                 try:
                     st = self._rpc("VMSTAT?")
                 except Exception:
                     st = ""
-                self._log.note(f"play fb_frames={self._play_frames} {st}")
+            if st:
+                fclk = 0
+                for tok in st.split():
+                    if tok.startswith("fclk="):
+                        try:
+                            fclk = int(tok.split("=", 1)[1])
+                        except ValueError:
+                            pass
+                if fclk:
+                    self._play_fclk.append(fclk)
+                if capped or "fcap=1" in st:
+                    self._log.note(f"FRAME {st}")
+                elif first3:
+                    self._log.note(f"FRAME {st}")
+            if beat:
+                n = len(self._play_fclk)
+                avg = (sum(self._play_fclk) // n) if n else 0
+                mx = max(self._play_fclk) if n else 0
+                self._flush_keyevts()
+                self._log.note(
+                    f"play fb_frames={self._play_frames} fclk_avg={avg} "
+                    f"fclk_max={mx} {st}"
+                )
                 self._play_t = now
                 self._play_frames = 0
+                self._play_fclk = []
         elif self._more:
             self._rpc("TICK")
             self._rpc("SCREEN?")

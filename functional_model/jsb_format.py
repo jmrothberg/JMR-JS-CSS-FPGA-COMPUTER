@@ -68,6 +68,8 @@ NATIVE_IDS = {
     # NEW: synthetic events (DONKEY boot script Enter via dispatchEvent)
     "document.dispatchEvent": 38,
     "window.dispatchEvent": 39,
+    # NEW: typeof x → interned tag string (PACMAN map hole checks)
+    "typeof": 40,
 }
 
 # NEW: aliases share an id (decode prefers the canonical NATIVE_IDS key)

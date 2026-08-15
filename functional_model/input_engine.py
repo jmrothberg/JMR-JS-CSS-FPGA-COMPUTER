@@ -170,3 +170,8 @@ class InputEngine:
         while self._events:
             out.append(self._events.popleft())
         return out
+
+    def discard_queued_keys(self) -> None:
+        """Drop prompt/LIST KEYBITS so they cannot start a game on first rAF."""
+        self._events.clear()
+        self._prev_play = self.play_bits()

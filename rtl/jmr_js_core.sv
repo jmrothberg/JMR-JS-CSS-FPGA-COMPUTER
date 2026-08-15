@@ -316,7 +316,9 @@ module jmr_js_core #(
     always_ff @(posedge clk) begin
         if (!rst_n) game_mode <= 1'b0;
         else if ((kbd_push && kbd_data == 8'h1B) || halt_pulse) game_mode <= 1'b0;
-        else if (run_pulse || demo_busy || demo_done || vm_start || vm_busy)
+        // Enter on RUN/vm_start only. demo_busy/vm_busy must not retrigger
+        // after ESC — console enable is !game_mode, so LIST after RUN died.
+        else if (run_pulse || vm_start)
             game_mode <= 1'b1;
     end
 endmodule

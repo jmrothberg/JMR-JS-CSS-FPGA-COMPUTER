@@ -2,6 +2,14 @@
 // Verbs: HELP / DIR / LOAD / SAVE / REMOVE / LIST / MEM / NEW / RUN
 // NEW: RUN loads companion .JSB from card into VM (not INVADERS-name gate).
 // HTML → companion .JSH (missing → ?NH; never silently run invaders_jsb.hex).
+//
+// Section map (C_* states):
+//   input:    C_IDLE, C_ECHO, C_PARSE
+//   replies:  C_REPLY  (sel 0=HELP 1=MEM 2=OK 3=?SN ERROR 4=?IO
+//                       5=LOADED 6=?FN FILE NOT FOUND 7=?NB 8=-- MORE --)
+//   disk:     C_DIR / C_LOAD / C_SAVE / C_REMOVE / C_LD_* / C_SV_* / C_JSB_*
+//   listing:  C_LIST, C_LIST_WRAP*, C_MORE
+//   edit/run: C_EDIT, C_RUN (compile-on-RUN → .JSH → VM)
 module jmr_console_engine (
     input  logic        clk,
     input  logic        rst_n,
@@ -214,18 +222,19 @@ module jmr_console_engine (
         endcase
     endfunction
 
-    // 0=HELP 1=MEM 2=OK 3=? 4=?IO 5=LOADED 6=?FN 7=?NB 8=-- MORE --
+    // 0=HELP 1=MEM 2=OK 3=?SN ERROR 4=?IO 5=LOADED 6=?FN FILE NOT FOUND 7=?NB 8=-- MORE --
     // 9=?NH (HTML not runnable yet) 10=?LS 11=HTML (LIST stub)
     function automatic logic [7:0] reply_char(input logic [3:0] sel, input logic [6:0] i);
         case (sel)
             4'd0: case (i)
-                0: reply_char="H";1: reply_char="E";2: reply_char="L";3: reply_char="P";
-                4: reply_char=" ";5: reply_char="D";6: reply_char="I";7: reply_char="R";
-                8: reply_char=" ";9: reply_char="L";10: reply_char="O";11: reply_char="A";
-                12: reply_char="D";13: reply_char=" ";14: reply_char="L";15: reply_char="I";
-                16: reply_char="S";17: reply_char="T";18: reply_char=" ";19: reply_char="E";
-                20: reply_char="D";21: reply_char="I";22: reply_char="T";23: reply_char=" ";
-                24: reply_char="C";25: reply_char="L";26: reply_char="S";27: reply_char=" ";
+                // DIR LOAD SAVE NEW LIST EDIT RUN (same verbs as PYTHON HELP)
+                0: reply_char="D";1: reply_char="I";2: reply_char="R";3: reply_char=" ";
+                4: reply_char="L";5: reply_char="O";6: reply_char="A";7: reply_char="D";
+                8: reply_char=" ";9: reply_char="S";10: reply_char="A";11: reply_char="V";
+                12: reply_char="E";13: reply_char=" ";14: reply_char="N";15: reply_char="E";
+                16: reply_char="W";17: reply_char=" ";18: reply_char="L";19: reply_char="I";
+                20: reply_char="S";21: reply_char="T";22: reply_char=" ";23: reply_char="E";
+                24: reply_char="D";25: reply_char="I";26: reply_char="T";27: reply_char=" ";
                 28: reply_char="R";29: reply_char="U";30: reply_char="N"; default: reply_char=8'h00;
             endcase
             4'd1: case (i)
@@ -244,7 +253,12 @@ module jmr_console_engine (
                 4: reply_char="E";5: reply_char="D"; default: reply_char=8'h00;
             endcase
             4'd6: case (i)
-                0: reply_char="?";1: reply_char="F";2: reply_char="N"; default: reply_char=8'h00;
+                // ?FN FILE NOT FOUND
+                0: reply_char="?";1: reply_char="F";2: reply_char="N";3: reply_char=" ";
+                4: reply_char="F";5: reply_char="I";6: reply_char="L";7: reply_char="E";
+                8: reply_char=" ";9: reply_char="N";10: reply_char="O";11: reply_char="T";
+                12: reply_char=" ";13: reply_char="F";14: reply_char="O";15: reply_char="U";
+                16: reply_char="N";17: reply_char="D"; default: reply_char=8'h00;
             endcase
             4'd7: case (i)
                 // ?NB — no bytecode companion .JSB
@@ -270,7 +284,10 @@ module jmr_console_engine (
                 4: reply_char="L";5: reply_char=")"; default: reply_char=8'h00;
             endcase
             default: case (i)
-                0: reply_char="?"; default: reply_char=8'h00;
+                // ?SN ERROR — unknown verb (laod)
+                0: reply_char="?";1: reply_char="S";2: reply_char="N";3: reply_char=" ";
+                4: reply_char="E";5: reply_char="R";6: reply_char="R";7: reply_char="O";
+                8: reply_char="R"; default: reply_char=8'h00;
             endcase
         endcase
     endfunction
@@ -727,7 +744,7 @@ module jmr_console_engine (
                     state <= C_LD_OPENW;
                 end
                 C_LD_OPENW: if (stor_done) begin
-                    if (stor_err) begin reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY; end
+                    if (stor_err) begin reply_sel <= 4'd6; reply_idx <= 0; state <= C_REPLY; end
                     // HTML: copy bytes into SOURCE (prefix) — long data: lines must not ?LS
                     else if (src_is_html) state <= C_LD_GB;
                     else state <= C_LD_RL;
@@ -1084,6 +1101,9 @@ module jmr_console_engine (
                         dig_i <= dig_i - 3'd1;
                         put_en <= 1'b1;
                         put_char <= digs[dig_i - 3'd1];
+                        // LIST wrap tracks the glass column, including "NNN "
+                        if (!ld_ann)
+                            list_col <= list_col + 6'd1;
                         state <= C_WAIT_VIDEO;
                         ret_state <= C_LIST_EMIT_DIG;
                     end
@@ -1091,6 +1111,7 @@ module jmr_console_engine (
                 C_LIST_SP: if (!video_busy) begin
                     put_en <= 1'b1;
                     put_char <= " ";
+                    list_col <= list_col + 6'd1;
                     state <= C_WAIT_VIDEO;
                     ret_state <= list_from_card ? C_LIST_CARD_FIRST : C_LIST_RD_GO;
                 end
@@ -1109,6 +1130,9 @@ module jmr_console_engine (
                         if (list_skip) begin
                             list_disp <= list_disp + 16'd10;
                             state <= C_LIST_LINE;
+                        // wrap already sat at col 0 — extra print_nl skipped a row
+                        end else if (list_col == 6'd0) begin
+                            state <= C_LIST_NL;
                         end else if (!video_busy) begin
                             print_nl <= 1'b1;
                             state <= C_WAIT_VIDEO;
@@ -1154,9 +1178,13 @@ module jmr_console_engine (
                     ret_state <= C_LIST_NL_FORCE;
                 end
                 C_LIST_NL_FORCE: begin
-                    print_nl <= 1'b1;
-                    state <= C_WAIT_VIDEO;
-                    ret_state <= C_LIST_NL;
+                    if (list_col == 6'd0) begin
+                        state <= C_LIST_NL;
+                    end else begin
+                        print_nl <= 1'b1;
+                        state <= C_WAIT_VIDEO;
+                        ret_state <= C_LIST_NL;
+                    end
                 end
                 C_LIST_NL: begin
                     list_disp <= list_disp + 16'd10;
@@ -1174,10 +1202,9 @@ module jmr_console_engine (
                     end else state <= list_from_card ? C_LIST_CARD_GB : C_LIST_LINE;
                 end
                 C_LIST_WRAP: begin
-                    // 64-col wrap: count a page row, do not bump list_disp
-                    print_nl <= 1'b1;
-                    state <= C_WAIT_VIDEO;
-                    ret_state <= C_LIST_WRAP_PAGE;
+                    // V_PUT already advanced at col 63. Extra print_nl used to
+                    // skip a glass row (3-char remnant + blank) on every wrap.
+                    state <= C_LIST_WRAP_PAGE;
                 end
                 C_LIST_WRAP_PAGE: begin
                     if (list_page) begin
@@ -1280,9 +1307,13 @@ module jmr_console_engine (
                         end
                         state <= C_LIST_CARD_GB;
                     end else if (stor_get_data == 8'h0A || stor_get_data == 8'h0D) begin
-                        print_nl <= 1'b1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_LIST_NL;
+                        if (list_col == 6'd0) begin
+                            state <= C_LIST_NL;
+                        end else begin
+                            print_nl <= 1'b1;
+                            state <= C_WAIT_VIDEO;
+                            ret_state <= C_LIST_NL;
+                        end
                     end else if (stor_get_data >= 8'h20 && stor_get_data < 8'h7F) begin
                         rd_ch <= stor_get_data;
                         state <= C_LIST_PUT_CARD;
@@ -1291,9 +1322,13 @@ module jmr_console_engine (
                 C_LIST_CARD_FIRST: begin
                     // after "NNNN " — emit first byte of the line (already in rd_ch)
                     if (rd_ch == 8'h0A || rd_ch == 8'h0D) begin
-                        print_nl <= 1'b1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_LIST_NL;
+                        if (list_col == 6'd0) begin
+                            state <= C_LIST_NL;
+                        end else begin
+                            print_nl <= 1'b1;
+                            state <= C_WAIT_VIDEO;
+                            ret_state <= C_LIST_NL;
+                        end
                     end else if (rd_ch >= 8'h20 && rd_ch < 8'h7F) begin
                         state <= C_LIST_PUT_CARD;
                     end else state <= C_LIST_CARD_GB;

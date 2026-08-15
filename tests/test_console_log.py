@@ -15,11 +15,33 @@ def test_console_log():
     assert c.handle_line('console.log("HELLO")') == ["HELLO", READY]
 
 
-def test_unknown_is_compile_or_sn():
-    c = Console()
-    out = c.handle_line("!!!")
-    assert out[-1] == READY
-    assert out[0].startswith("ERROR") or out[0].startswith("?SN")
+def test_unknown_command_sn_error():
+    """laod (typo) must print ?SN ERROR, not silent READY."""
+    m = Machine()
+    out = m.execute_line("laod")
+    assert out and out[0].startswith("?SN ERROR"), out
+    out = m.execute_line("xyzzy")
+    assert out and out[0].startswith("?SN ERROR"), out
+    # Real JS still runs
+    out = m.execute_line('console.log("HI")')
+    assert out[0] == "HI"
+
+
+def test_missing_file_fn():
+    m = Machine()
+    out = m.execute_line('LOAD "NOPE.HTML"')
+    assert out and out[0].startswith("?FN FILE NOT FOUND"), out
+
+
+def test_list_long_data_uri_pages_to_mark():
+    """A multi-KB data:image line must MORE and still list the marker after it."""
+    m = Machine()
+    uri = 'var s = "data:image/png;base64,' + ("A" * 3000) + '";'
+    m.source_lines = ["<html>", "<script>", uri, "</script>", "<!--MARK-->", "</html>"]
+    out = m.execute_line("LIST")
+    blob = "\n".join(out)
+    assert "MARK" in blob, blob[-200:]
+    assert "data:image" in blob or "AAAA" in blob
 
 
 def test_dir_and_load_rectdemo():

@@ -1,17 +1,17 @@
 // Standalone Pmod + J15 USB proof — no console, no HDMI, no VM.
 //   JA  Pmod PS/2  (RX-only)  → LD7 character pulse
 //   JB  Mini I2C joystick 0x5A → LD0..LD3, LD6
-//   J15 USB: one-shot 0xF4 then same ps2_rx as JA. LD4=clock activity LD5=byte.
+//   J15 USB: retry 0xF4 until ACK. LD4=F4 ok (solid)  LD5=scancode.
 // LED row, LD0 on the left:
 //   LD0 LEFT  LD1 UP  LD2 DOWN  LD3 RIGHT
-//   LD4 USB PS/2 clock activity  LD5 USB scancode (ps2_rx)
+//   LD4 USB F4 ACK (solid)  LD5 USB scancode (ps2_rx)
 //   LD6 stick OK (solid=ACK, slow blink=alive but no stick)
 //   LD7 Pmod keyboard (~200 ms pulse per decoded character)
 module top_pmod_input_test (
     input  wire        clk100,
     input  wire        cpu_resetn,
     input  wire        btnc,
-    // J15 USB Host — inout: one-shot 0xF4, then same ps2_rx as JA.
+    // J15 USB Host — inout: retry 0xF4 until ACK, then ps2_rx.
     input  wire        pmod_ps2_clk,
     input  wire        pmod_ps2_data,
     inout  wire        ps2_clk,
@@ -50,7 +50,7 @@ module top_pmod_input_test (
             key_hold <= key_hold - 25'd1;
     end
 
-    // NEW: 0xF4 only (no 0xFF), then proven ps2_rx. LD4=clock edges, LD5=byte.
+    // NEW: retry 0xF4 until ACK (one-shot was too early). LD4=f4_ok LD5=byte.
     logic usb_clk_raw, usb_byte;
     usb_ps2_try u_usb (
         .clk(clk100), .rst_n(rst_n),
@@ -76,7 +76,7 @@ module top_pmod_input_test (
         (key_hold != 0),                 // LD7 Pmod keyboard
         ack_ok ? 1'b1 : hb[26],          // LD6 stick OK / alive blink
         usb_byte,                        // LD5 USB scancode (ps2_rx)
-        usb_clk_raw,                     // LD4 USB PS/2 clock activity
+        usb_clk_raw,                     // LD4 USB F4 ACK (solid)
         right,                           // LD3 RIGHT
         down,                            // LD2 DOWN
         up,                              // LD1 UP

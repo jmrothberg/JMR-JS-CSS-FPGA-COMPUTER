@@ -3,8 +3,8 @@
 # SW Build 6511674 on Tue Jun 16 11:01:26 MDT 2026
 # IP Build 6504888 on Tue Jun 09 09:05:25 MDT 2026
 # SharedData Build 6501428 on Mon Jun 08 17:34:18 MDT 2026
-# Start of session at: Fri Aug 14 20:01:39 2026
-# Process ID         : 2168960
+# Start of session at: Fri Aug 14 21:36:57 2026
+# Process ID         : 2303501
 # Current directory  : /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/tools/pmod_input_test
 # Command line       : vivado -mode batch -source /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/tools/pmod_input_test/vivado_build.tcl -tclargs /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/pmod_input_test
 # Log file           : /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/tools/pmod_input_test/vivado.log
@@ -13,12 +13,12 @@
 # Platform           : Ubuntu
 # Operating System   : Ubuntu 26.04 LTS
 # Processor Detail   : AMD Ryzen AI 9 HX 470 w/ Radeon 890M
-# CPU Frequency      : 621.622 MHz
+# CPU Frequency      : 5181.545 MHz
 # CPU Physical cores : 12
 # CPU Logical cores  : 24
 # Host memory        : 128308 MB
 # Swap memory        : 111669 MB
 # Total Virtual      : 239977 MB
-# Available Virtual  : 231615 MB
+# Available Virtual  : 231338 MB
 #-----------------------------------------------------------
 source /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/tools/pmod_input_test/vivado_build.tcl

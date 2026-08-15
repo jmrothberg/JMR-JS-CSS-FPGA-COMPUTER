@@ -281,7 +281,7 @@ Known Digilent constraints (not a secret silicon workaround): FPGA must be progr
 
 ### Pmod input LED test (PS/2 keyboard + I2C joystick + J15 USB)
 
-Own Vivado project under `build/pmod_input_test/` so it cannot clobber `build/nexys_video`. JA + JB stay as before. J15 USB: `0xFF` reset left LD5 dark (PIC24 HID still live on LD14). Bit now sends **`0xF4` once** (no reset), then the same `ps2_rx` as JA. **LD4** = PS/2 clock activity after idle. **LD5** = assembled byte. Type on USB: LD4 flicker means PIC24 is clocking; LD5 means a scancode made it. LD6 blink = stick not ACKing (unplugged/loose), not USB.
+Own Vivado project under `build/pmod_input_test/` so it cannot clobber `build/nexys_video`. JA + JB stay as before. J15 USB: one-shot `0xF4` at 200 ms left **LD4 off** (PIC24 still in config→HID). Bit now **retries `0xF4` until ACK** (first try at 1 s). **LD4 solid ON** = PIC24 ACKed enable-scan. **LD5** = scancode. Type only after LD4 is on.
 
 ```bash
 source scripts/vivado_env.sh && make -C tools/pmod_input_test bit flash
@@ -303,8 +303,8 @@ LED row, **LD0 on the left** (both live at once):
 | **LD1** | stick UP |
 | **LD2** | stick DOWN |
 | **LD3** | stick RIGHT |
-| **LD4** | USB PS/2 clock activity (~200 ms). Off at idle. Flicker = PIC24 clocking. |
-| **LD5** | USB scancode (`ps2_rx`, same as JA) |
+| **LD4** | USB: **solid ON** = PIC24 ACKed `0xF4`. Off = still retrying / no PS/2 device clocks. |
+| **LD5** | USB scancode (`ps2_rx`). Type after LD4 is on. |
 | **LD6** | I2C ACK: **solid** = stick talking; **slow blink** = FPGA alive but no stick; **off** = bit not running |
 | **LD7** | Pmod keyboard: ~200 ms pulse per decoded character |
 

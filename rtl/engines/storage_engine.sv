@@ -173,7 +173,9 @@ module storage_engine #(
         S_PUB,
         // NEW: REMOVE + DIR catalog (BRAM sbuf enables sequential dent walk)
         S_DEL0, S_DEL1, S_DEL2, S_DEL_RD, S_DEL_PK, S_DEL_WR, S_DEL_FC,
-        S_DIR0, S_DIR_N, S_DIR_LD, S_DIR_LDC, S_DIR_EV, S_DIR_FMT, S_DIR_ADV
+        S_DIR0, S_DIR_N, S_DIR_LD, S_DIR_LDC, S_DIR_EV, S_DIR_FMT, S_DIR_ADV,
+        // NEW: OPEN dir scan follows the FAT chain (root >1 cluster)
+        S_DS_CHAIN
     } state_t;
 
     state_t state;
@@ -750,16 +752,26 @@ module storage_engine #(
                             slot_off <= ds_off;
                         end
                         if (ds_off + 10'd32 >= 10'd512) begin
-                            ds_sect <= ds_sect + 8'd1;
-                            state   <= (ds_sect + 8'd1 >= spc) ? S_ERR : S_DS_SECT;
+                            if (ds_sect + 8'd1 >= spc) begin
+                                fg_clus <= ds_clus;
+                                push_call(S_FG0, S_DS_CHAIN);
+                            end else begin
+                                ds_sect <= ds_sect + 8'd1;
+                                state   <= S_DS_SECT;
+                            end
                         end else begin
                             ds_off <= ds_off + 10'd32;
                             state  <= S_DS_ENT;
                         end
                     end else if (ds_attr == 8'h0F || ds_attr[3]) begin
                         if (ds_off + 10'd32 >= 10'd512) begin
-                            ds_sect <= ds_sect + 8'd1;
-                            state   <= (ds_sect + 8'd1 >= spc) ? S_ERR : S_DS_SECT;
+                            if (ds_sect + 8'd1 >= spc) begin
+                                fg_clus <= ds_clus;
+                                push_call(S_FG0, S_DS_CHAIN);
+                            end else begin
+                                ds_sect <= ds_sect + 8'd1;
+                                state   <= S_DS_SECT;
+                            end
                         end else begin
                             ds_off <= ds_off + 10'd32;
                             state  <= S_DS_ENT;
@@ -773,12 +785,27 @@ module storage_engine #(
                         pop_ret();
                     end else begin
                         if (ds_off + 10'd32 >= 10'd512) begin
-                            ds_sect <= ds_sect + 8'd1;
-                            state   <= (ds_sect + 8'd1 >= spc) ? S_ERR : S_DS_SECT;
+                            if (ds_sect + 8'd1 >= spc) begin
+                                fg_clus <= ds_clus;
+                                push_call(S_FG0, S_DS_CHAIN);
+                            end else begin
+                                ds_sect <= ds_sect + 8'd1;
+                                state   <= S_DS_SECT;
+                            end
                         end else begin
                             ds_off <= ds_off + 10'd32;
                             state  <= S_DS_ENT;
                         end
+                    end
+                end
+                S_DS_CHAIN: begin
+                    // Next root-dir cluster after spc sectors. EOC → not found.
+                    if (fat_val < 32'd2 || fat_val >= 32'h0FFFFFF8)
+                        pop_ret();
+                    else begin
+                        ds_clus <= fat_val;
+                        ds_sect <= 8'h0;
+                        state   <= S_DS_SECT;
                     end
                 end
 

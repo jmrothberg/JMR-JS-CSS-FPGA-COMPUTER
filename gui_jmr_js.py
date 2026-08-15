@@ -381,16 +381,21 @@ class App:
                 self._paint_prompt()
             return "break"
         if event.keysym == "Up":
-            self._key_up = True
-            self._emit_keys()
+            if playing:
+                self._key_up = True
+                self._emit_keys()
             return "break"
         if event.keysym == "Down":
-            self._key_down = True
-            self._emit_keys()
+            if playing:
+                self._key_down = True
+                self._emit_keys()
             return "break"
         if event.keysym == "space":
-            self._key_fire = True
-            self._emit_keys()
+            # Prompt Space is a command character, not FIRE. Emitting
+            # KEYBITS here queued keydown 32 into the first game frame.
+            if playing:
+                self._key_fire = True
+                self._emit_keys()
             self._feed_more(" ")
             m = getattr(self.backend, "machine", None)
             if m is not None and m.running:

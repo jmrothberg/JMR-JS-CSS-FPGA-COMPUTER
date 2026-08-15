@@ -211,6 +211,28 @@ static int32_t watch_prev = 0;
 static std::vector<uint16_t> ip_trace;
 static size_t ip_trace_cap = 0;
 static uint16_t ip_trace_prev = 0xffff;
+// NEW: last FRAME clocks / cap — play log showed swaps<<fb_frames with no
+// clk, so a 2M-clock cap abort was invisible.
+static unsigned last_fclk = 0;
+static unsigned last_fcap = 0;
+static unsigned fcap_n = 0;
+
+// Must match jmr_js_vm.sv st_t declaration order (VMSTAT sname=).
+static const char* vm_sname(unsigned s) {
+    static const char* N[] = {
+        "S_IDLE","S_RD","S_GOT_MAGIC","S_GOT_HDR1","S_GOT_HDR2","S_LD_CONST",
+        "S_TRAIL","S_FETCH_WAIT","S_EXEC","S_NAT","S_CLEAR","S_RECT","S_CIRCLE",
+        "S_LINE","S_BLIT","S_SPR","S_WAIT_FRAME","S_DONE","S_XF_MUL","S_XF_APPLY",
+        "S_PWALK","S_PDO","S_QSEG","S_QPX","S_QPY","S_JOIN","S_JOIN_FIND",
+        "S_IDXOF","S_CONCAT","S_SQRT","S_DIV","S_DIV_FIN","S_MUL","S_MUL_WR",
+        "S_ALU","S_ALU_WR","S_CALL","S_FOREACH","S_KEYEV","S_ENV_LOAD",
+        "S_JSON","S_JSON_PARSE","S_REPL","S_IDXSTR","S_STRIDX","S_STRIDX_WR",
+        "S_FONTPX","S_TXT_LD","S_TXT_DRAW","S_STR_WR","S_IMGD_GET","S_IMGD_PUT",
+        "S_NAMCPY","S_ARR_DCOPY"
+    };
+    if (s < (unsigned)(sizeof(N) / sizeof(N[0]))) return N[s];
+    return "?";
+}
 
 static void tick() {
     top->clk = 0; top->pixel_clk = 0; top->eval();
@@ -274,12 +296,16 @@ static std::string screen_text() {
 static std::string fb_export_b64() {
     constexpr int W = 640, H = 480;
     std::vector<uint8_t> full((size_t)W * H, 0);
-    for (int i = 0; i < W * H; i++) {
-        top->dump_fb_raddr = (uint32_t)i;
-        tick(); // BRAM dump port is registered — settle
-        tick();
-        full[(size_t)i] = (uint8_t)(top->dump_fb_rdata & 0xff);
-    }
+    // Direct front-bank read. S_IMGD_GET holds dump_sel for up to 307200
+    // cycles, so walking dump_fb_raddr sampled GET's address (and 614k extra
+    // ticks ran the VM past the FRAME swap — full-canvas fillRect looked
+    // black). FBBANK? already reads mem0/mem1 this way.
+    auto* r = top->rootp;
+    unsigned front = unsigned(r->jmr_js_core__DOT__u_fb__DOT__front);
+    for (int i = 0; i < W * H; i++)
+        full[(size_t)i] = front
+            ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0[i]
+            : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1[i];
     return b64_encode(full.data(), full.size());
 }
 
@@ -310,8 +336,11 @@ int main(int argc, char** argv) {
             break;
         }
         // Compile-on-RUN: host rewrote card.img .JSH; reload SPI image before FAT OPEN
+        // Compile-on-RUN: host rewrote card.img; reload SPI image before FAT OPEN.
+        // Do not sd_save_image first — boot/mount may have set dirty, and that
+        // flush would overwrite the host patch (new 8.3 names vanished: ?FN).
         if (line == "SDRELOAD") {
-            sd_save_image();
+            sd.dirty = false;
             sd_load_image();
             std::cout << "OK" << std::endl;
             continue;
@@ -414,7 +443,9 @@ int main(int argc, char** argv) {
         // NEW: minimal VM probe for RTL bring-up (state/ip/raf/heap counters)
         if (line == "VMSTAT?") {
             auto* r = top->rootp;
-            std::cout << "VMSTAT state=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__state)
+            unsigned stn = unsigned(r->jmr_js_core__DOT__u_vm__DOT__state);
+            std::cout << "VMSTAT state=" << stn
+                      << " sname=" << vm_sname(stn)
                       << " ip=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__ip)
                       << " sp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__sp)
                       << " raf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__raf_n)
@@ -444,6 +475,16 @@ int main(int argc, char** argv) {
                       << " ton=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__to_n)
                       << " esp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_sp)
                       << " efree=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_free_n)
+                      << " findh=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_find_hit)
+                      << " spln=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_splice_n)
+                      << " divs=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_div_n)
+                      << " fclk=" << last_fclk
+                      << " fcap=" << last_fcap
+                      << " fcaps=" << fcap_n
+                      << " imgd=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__imgd_i)
+                      << "/" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__imgd_n)
+                      << " imgwh=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__imgd_w)
+                      << "x" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__imgd_h)
                       << std::endl;
             continue;
         }
@@ -614,21 +655,38 @@ int main(int argc, char** argv) {
         }
         // NEW: one VM frame — tick until fb swap (dbg_swap_n) or cap.
         // GUI TICK=1000 was << frame_div 65536, so PACMAN ghosts never left.
+        // 2M was too small once string-row sprites actually painted: INVADERS
+        // drawBitmap is per-pixel str[i]+fillRect, so FRAME capped mid-rAF
+        // (~1 swap per 5 GUI frames) and the wave crawled. Cap is not SPI.
         if (line == "FRAME") {
             unsigned before = 0;
             if (top->rootp)
                 before = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n);
-            const int CAP = 2000000; // ~one maze/title blit + frame_tick 65536
+            const int CAP = 16000000; // one full HTML frame of pixel work
             int used = 0;
             int got = 0;
             for (; used < CAP; used++) {
                 tick();
                 unsigned now = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n);
-                if (now != before) { got = 1; used++; break; }
+                unsigned raf = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__raf_n);
+                unsigned cbip = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__dbg_cb_ip);
+                // Boot S_CLEAR and the first WAIT_FRAME (top-level script end)
+                // pulse fb_swap with raf already queued but before tick()
+                // paints. dbg_cb_ip is set when a rAF/timer callback returns.
+                if (now != before && raf != 0 && cbip != 0) {
+                    got = 1; used++; break;
+                }
             }
-            (void)got;
+            last_fclk = (unsigned)used;
+            last_fcap = got ? 0u : 1u;
+            if (!got) fcap_n++;
             if (top->game_mode) {
-                std::cout << "FB 640 480 " << fb_export_b64() << std::endl;
+                // Capped FRAME has not presented — skip the 640×480 dump
+                // (was ~5 wasted FB encodes per visual frame).
+                if (got)
+                    std::cout << "FB 640 480 " << fb_export_b64() << std::endl;
+                else
+                    std::cout << "FB SAME" << std::endl;
             } else {
                 std::cout << "FB SAME" << std::endl;
             }

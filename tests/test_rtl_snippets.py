@@ -33,6 +33,26 @@ def _patch_js(name: str, src: str) -> None:
     patch_card_file(card, Path(name).stem[:8] + ".JSB", blob)
 
 
+def _patch_html(name: str, src: str) -> None:
+    """Tiny HTML on the card (LIST-from-FAT path). Not a title rewrite."""
+    from tools.make_sd_image import patch_card_file
+
+    card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
+    patch_card_file(card, name, src.encode("utf-8"))
+
+
+def _patch_js_spr(name: str, src: str, sprites: list, *, aset: bool = False) -> None:
+    """Tiny .JS + SPR1 (or ASET/SPRD) pack so drawImage hits the blit (no HTML)."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import encode_chunk
+    from tools.make_sd_image import patch_card_file
+
+    card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
+    blob = encode_chunk(compile_source(src), v2=True, sprites=sprites, aset=aset)
+    patch_card_file(card, name, src.encode("utf-8"))
+    patch_card_file(card, Path(name).stem[:8] + ".JSB", blob)
+
+
 def _fb_raw(sim) -> bytes:
     import base64
 
@@ -75,8 +95,8 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "KEEP.JS"')
         sim.type_line("RUN")
-        for _ in range(80):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
+        sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "nursery obj from push was rewound"
     finally:
         sim.shutdown()
@@ -105,8 +125,7 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "TDEC.JS"')
         sim.type_line("RUN")
-        for _ in range(80):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "item.timeout-- did not write back"
     finally:
         sim.shutdown()
@@ -132,8 +151,7 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "COORD.JS"')
         sim.type_line("RUN")
-        for _ in range(400):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
         st = sim._rpc("VMSTAT?")
         import re as _re
 
@@ -166,12 +184,10 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "KEYSP.JS"')
         sim.type_line("RUN")
-        for _ in range(40):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
         sim.key_event(32, " ", True)
-        # frame_tick is 65536 clk; TICK is 1000 — need >1 frame after KEYEVT
-        for _ in range(200):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
+        sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "KEYEVT 32 did not fire listener"
     finally:
         sim.shutdown()
@@ -199,12 +215,10 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "KEYCH.JS"')
         sim.type_line("RUN")
-        for _ in range(40):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
         sim.key_event(32, " ", True)
-        # frame_tick is 65536 clk; TICK is 1000 — need >1 frame after KEYEVT
-        for _ in range(200):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
+        sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "e.key === ' ' did not match"
     finally:
         sim.shutdown()
@@ -237,8 +251,8 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "BURST.JS"')
         sim.type_line("RUN")
-        for _ in range(120):
-            sim._rpc("TICK")
+        for _ in range(4):
+            sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "grid obj died after nursery burst"
     finally:
         sim.shutdown()
@@ -311,11 +325,87 @@ def test_rtl_list_after_run_is_source():
         sim.type_line('LOAD "RECTDEMO.JS"')
         sim.type_line("RUN")
         sim.hard_break()
-        for _ in range(30):
-            sim._rpc("TICK")
+        sim._rpc("TICKN 200")
         sim.type_line("LIST")
         st = sim.screen_text().replace("\\n", "\n")
         assert "fillRect" in st or "HELLO" in st, st[-400:]
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_list_long_line_wraps_without_holes():
+    """64-col LIST wrap must not extra-NL (VRAM already wraps at col 63).
+
+    Line-number digits used to skip list_col, so wrap fired late and print_nl
+    skipped a glass row — long printable lines looked like injected spaces.
+    """
+    from functional_model.canvas_engine import CONSOLE_COLS
+
+    body = "".join(chr(ord("A") + (i % 26)) for i in range(180))
+    src = "<html>\n<script>\nvar s=\"" + body + "\";\n</script>\n</html>\n"
+    numbered = '30 var s="' + body + '";'
+    segs = [numbered[i : i + CONSOLE_COLS] for i in range(0, len(numbered), CONSOLE_COLS)]
+    sim = _sim()
+    try:
+        _patch_html("WRAP.HTML", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "WRAP.HTML"')
+        sim.type_line("LIST")
+        st = sim.screen_text().replace("\\n", "\n")
+        rows = [ln.rstrip() for ln in st.splitlines()]
+        assert segs[0] in rows, st
+        i = rows.index(segs[0])
+        got = rows[i : i + len(segs)]
+        assert got == segs, (got, segs, st)
+        # extra wrap-NL left a 3-char remnant row between wraps
+        assert all(len(r) > 8 for r in got[:-1]), got
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_unknown_command_sn_error():
+    """laod must print ?SN ERROR, not a bare ?."""
+    sim = _sim()
+    try:
+        sim.type_line("laod")
+        st = sim.screen_text().replace("\\n", "\n")
+        assert "?SN ERROR" in st, st[-400:]
+        sim.type_line('LOAD "NOPE.HTML"')
+        st = sim.screen_text().replace("\\n", "\n")
+        assert "?FN FILE NOT FOUND" in st, st[-400:]
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_list_long_data_uri_pages_to_mark():
+    """LIST of a ~3K data-URI line must MORE mid-line then reach MARK."""
+    src = (
+        "<html>\n<script>\n"
+        'var s = "data:image/png;base64,' + ("A" * 3000) + '";\n'
+        "</script>\n<!--MARK-->\n</html>\n"
+    )
+    sim = _sim()
+    try:
+        _patch_html("LONG.HTML", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "LONG.HTML"')
+        sim.type_line("LIST")
+        st = sim.screen_text().replace("\\n", "\n")
+        assert "-- MORE" in st, st[-400:]
+        # first MORE should still be inside the URI / AAA wrap
+        assert "data:image" in st or "AAA" in st, st[-400:]
+        saw_mark = "MARK" in st
+        for _ in range(40):
+            if saw_mark:
+                break
+            sim.push_key(" ")
+            st = sim.screen_text().replace("\\n", "\n")
+            if "MARK" in st or "</html>" in st:
+                saw_mark = True
+                break
+            if "-- MORE" not in st:
+                break
+        assert saw_mark, st[-500:]
     finally:
         sim.shutdown()
 
@@ -401,8 +491,8 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "FINDER.JS"')
         sim.type_line("RUN")
-        for _ in range(200):
-            sim._rpc("TICK")
+        for _ in range(8):
+            sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "finder BFS did not path out of a 2-cell"
     finally:
         sim.shutdown()
@@ -435,8 +525,7 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "CONT.JS"')
         sim.type_line("RUN")
-        for _ in range(80):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "nested for continue did not skip 22 cells"
     finally:
         sim.shutdown()
@@ -464,9 +553,134 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "FIND.JS"')
         sim.type_line("RUN")
-        for _ in range(80):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "Array.find identity splice did not drop the object"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_present_once_per_frame():
+    """rAF + setTimeout(0) in the same frame must present once (write_repeat).
+
+    Each callback used to pulse fb_swap at ip>=n_ops, so swaps ran at ~2×
+    frames and the glass interleaved half-drawn banks.
+    """
+    import re as _re
+
+    src = """
+var n = 0;
+function tick() {
+  n = n + 1;
+  fillRect(10, 10, 8, 8, 2);
+  setTimeout(function() { n = n; }, 0);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("PONCE.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "PONCE.JS"')
+        sim.type_line("RUN")
+        for _ in range(4):
+            sim._rpc("FRAME")
+        st0 = sim._rpc("VMSTAT?")
+        s0 = int(_re.search(r"swaps=(\d+)", st0 or "").group(1))
+        # ~12 frame_tick periods (65536 clocks). One present/frame → ~12 swaps;
+        # per-callback present → ~24.
+        sim._rpc("TICKN 800")
+        st1 = sim._rpc("VMSTAT?")
+        s1 = int(_re.search(r"swaps=(\d+)", st1 or "").group(1))
+        delta = s1 - s0
+        assert 8 <= delta <= 16, (
+            f"present was not once per frame: swaps {s0}->{s1} delta={delta} ({st1})"
+        )
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_foreach_settimeout_find_splice():
+    """Nested forEach + setTimeout(0) + identity find + splice(captured i).
+
+    PYTHON twin: test_foreach_settimeout_splice_object_identity. Must drop
+    the matched object, not the last forEach index.
+    """
+    src = """
+var invaders = [{id:0},{id:1},{id:2}];
+var shots = [invaders[1]];
+invaders.forEach((invader, i) => {
+  shots.forEach((projectile, j) => {
+    if (projectile === invader) {
+      setTimeout(() => {
+        const found = invaders.find((inv2) => inv2 === invader);
+        if (found) invaders.splice(i, 1);
+      }, 0);
+    }
+  });
+});
+function tick() {
+  if (invaders.length === 2 && invaders[0].id === 0 && invaders[1].id === 2) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("HIT.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "HIT.JS"')
+        sim.type_line("RUN")
+        for _ in range(12):
+            sim._rpc("FRAME")
+        assert _fb_nz(sim) >= 50, (
+            "setTimeout(0) find+splice did not drop the identity match"
+        )
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_nested_arr_prop_find_splice():
+    """splice must mutate the array stored on an object (grid.invaders).
+
+    A top-level array splice can pass while obj.arr.splice() hits a copy.
+    """
+    src = """
+var grid = { invaders: [{id:0},{id:1},{id:2}] };
+var shots = [grid.invaders[1]];
+grid.invaders.forEach((invader, i) => {
+  shots.forEach((projectile, j) => {
+    if (projectile === invader) {
+      setTimeout(() => {
+        const found = grid.invaders.find((inv2) => inv2 === invader);
+        if (found) grid.invaders.splice(i, 1);
+      }, 0);
+    }
+  });
+});
+function tick() {
+  if (grid.invaders.length === 2 && grid.invaders[0].id === 0 && grid.invaders[1].id === 2) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("GSPLC.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "GSPLC.JS"')
+        sim.type_line("RUN")
+        for _ in range(12):
+            sim._rpc("FRAME")
+        assert _fb_nz(sim) >= 50, (
+            "obj.arr identity find+splice did not drop the match"
+        )
     finally:
         sim.shutdown()
 
@@ -491,8 +705,7 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "TDELAY.JS"')
         sim.type_line("RUN")
-        for _ in range(80):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "setTimeout(1000) fired immediately (stopped drawing)"
     finally:
         sim.shutdown()
@@ -546,11 +759,10 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "LISN.JS"')
         sim.type_line("RUN")
-        for _ in range(40):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
         sim._rpc("KEYEVT 13 1")
-        for _ in range(80):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
+        sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "both keydown listeners did not fire"
     finally:
         sim.shutdown()
@@ -579,8 +791,7 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "DISP.JS"')
         sim.type_line("RUN")
-        for _ in range(80):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "dispatchEvent Enter did not reach keydown"
     finally:
         sim.shutdown()
@@ -615,8 +826,7 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "KBEV.JS"')
         sim.type_line("RUN")
-        for _ in range(80):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "new KeyboardEvent did not set e.key"
     finally:
         sim.shutdown()
@@ -651,8 +861,7 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "OFFS.JS"')
         sim.type_line("RUN")
-        for _ in range(80):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "position2coord offset not falsy at cell center"
     finally:
         sim.shutdown()
@@ -685,8 +894,7 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "JOIN.JS"')
         sim.type_line("RUN")
-        for _ in range(80):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "join('') did not EQ case 1100"
     finally:
         sim.shutdown()
@@ -726,6 +934,7 @@ function tick() {
       c.lineTo(posx, posy - 10);
       c.stroke();
   }
+  swapBuffers();
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
@@ -736,8 +945,8 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "ARCS.JS"')
         sim.type_line("RUN")
-        for _ in range(200):
-            sim._rpc("TICK")
+        # FRAME waits for a rAF present (TICK+FB? used to pump 614k extra clocks)
+        sim._rpc("FRAME")
         raw = _fb_raw(sim)
         assert _fb_pix(raw, 100, 100) == 0, "spoke through cell center (join missed case)"
         assert _fb_pix(raw, 100, 110) != 0, "quarter-arc occupancy missing"
@@ -867,8 +1076,7 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "GHOST.JS"')
         sim.type_line("RUN")
-        for _ in range(200):
-            sim._rpc("TICK")
+        sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "ghost-update snippet did not leave start cell"
     finally:
         sim.shutdown()
@@ -1017,10 +1225,10 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "REV.JS"')
         sim.type_line("RUN")
-        for _ in range(4):
+        for _ in range(8):
             sim._rpc("FRAME")
         sim._rpc("KEYEVT 37 1")
-        for _ in range(8):
+        for _ in range(20):
             sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "KEYEVT reverse did not apply at cell center"
     finally:
@@ -1451,6 +1659,1650 @@ requestAnimationFrame(tick);
         assert got == want, (
             f"centred joined text differs: {len(got)} drawn vs {len(want)} "
             f"expected, {len(want - got)} missing / {len(got - want)} extra"
+        )
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_div_by_two_is_shift_not_restoring():
+    """Integer /2 is a 1-cycle shift; /3 still uses the restoring divider.
+
+    `cell/2` in a per-object loop used to cost 48 clocks each (board WNS
+    forced a multi-cycle '/'). Exact even/even stays int; a tight loop of
+    `/2` must not bump `divs` (slow-path count). `/3` still may. FRAME may
+    run a handful of rAFs, so allow a few `/3` — not one per loop trip.
+    """
+    import re as _re
+
+    src = """
+var two = 2;
+var cell = 4;
+var n = 9;
+var three = 3;
+var i;
+var acc;
+function tick() {
+  acc = 0;
+  for (i = 0; i < 80; i++) acc = acc + cell / two;
+  if (acc == 160 && n / three == 3 && (5 / two) * two == 5)
+    fillRect(10, 10, 30, 30, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("DIV2.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "DIV2.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st0 = sim._rpc("VMSTAT?")
+        d0 = int(_re.search(r"divs=(\d+)", st0 or "").group(1))
+        sim._rpc("FRAME")
+        st1 = sim._rpc("VMSTAT?")
+        d1 = int(_re.search(r"divs=(\d+)", st1 or "").group(1))
+        delta = d1 - d0
+        assert delta < 20, (
+            f"/2 used the 48-cycle divider: divs {d0}->{d1} delta={delta} ({st1})"
+        )
+        assert _fb_nz(sim) >= 50, f"/2 or /3 result was wrong ({st1})"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_click_does_not_autostart():
+    """click listener + rAF attract must stay idle until KEYEVT 32.
+
+    A hidden #start addEventListener('click') must not be synthesized on
+    the first WAIT_FRAME (Chrome never auto-clicks).
+    """
+    src = """
+var active = 0;
+addEventListener("click", function() { active = 1; });
+addEventListener("keydown", function(e) {
+  const { key } = e;
+  if (!active && key === " ") active = 1;
+});
+function tick() {
+  if (!active) fillRect(10, 10, 40, 40, 2);
+  else fillRect(200, 10, 40, 40, 3);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("SPLASH.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "SPLASH.JS"')
+        sim.type_line("RUN")
+        for _ in range(12):
+            sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 20, 20) == 2, "attract was skipped (auto-click?)"
+        assert _fb_pix(raw, 220, 20) != 3, "game rect painted before Space"
+        sim._rpc("KEYEVT 32 1")
+        for _ in range(12):
+            sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 220, 20) == 3, "Space did not leave attract"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_nested_map_rows_survive_raf():
+    """Nested number rows [[1,1],[1,1]] must still read back after rAF.
+
+    Maze tiles are a 2D number array. If the inner rows die, get(i,j) is
+    falsy, beans paint a full grid, and wall strokes go missing/wrong —
+    the garbled-maze look. Hardcoded join('1100') arcs already pass
+    (test_rtl_switch_join_draws_arc_not_spokes); this is the map data.
+    """
+    src = """
+var map = [[1, 1], [1, 1]];
+function tick() {
+  if (map[0] && map[0][0] == 1 && map[0][1] == 1 && map[1] && map[1][1] == 1) {
+    fillRect(10, 10, 30, 30, 2);
+  }
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("WBOX.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "WBOX.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 20, 20) == 2, "nested map[j][i] did not survive rAF"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_drawimage_row_stride():
+    """1:1 blit must keep source rows (wrong spr_ww looks like Venetian blinds)."""
+    # 16×4: row0=2, row1=3, row2=4, row3=5
+    pix = bytes([2] * 16 + [3] * 16 + [4] * 16 + [5] * 16)
+    src = """
+var img = new Image();
+img.src = "jmr:spr:0";
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.drawImage(img, 0, 0);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("STRIDE.JS", src, [(16, 4, pix)])
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "STRIDE.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 8, 0) == 2, _fb_pix(raw, 8, 0)
+        assert _fb_pix(raw, 8, 1) == 3, _fb_pix(raw, 8, 1)
+        assert _fb_pix(raw, 8, 2) == 4, _fb_pix(raw, 8, 2)
+        assert _fb_pix(raw, 8, 3) == 5, _fb_pix(raw, 8, 3)
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_scaled_drawimage_2x_solid():
+    """5-arg drawImage 2× must fill dest, not skip every other row."""
+    pix = bytes([4] * 16)  # 4×4 solid blue (palette 4)
+    src = """
+var img = new Image();
+img.src = "jmr:spr:0";
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.drawImage(img, 10, 10, 8, 8);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("SCALE2.JS", src, [(4, 4, pix)])
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "SCALE2.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        holes = [
+            (x, y)
+            for y in range(10, 18)
+            for x in range(10, 18)
+            if _fb_pix(raw, x, y) != 4
+        ]
+        assert not holes, f"scaled blit holes (Venetian blinds) {holes[:8]}"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_scaled_drawimage_2x_rows():
+    """2× scale must repeat each source row, not skip dest lines."""
+    pix = bytes([2] * 4 + [3] * 4)  # 4×2: row0=2, row1=3
+    src = """
+var img = new Image();
+img.src = "jmr:spr:0";
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.drawImage(img, 0, 0, 8, 4);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("SCROW.JS", src, [(4, 2, pix)])
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "SCROW.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 2, 0) == 2 and _fb_pix(raw, 2, 1) == 2, (
+            _fb_pix(raw, 2, 0),
+            _fb_pix(raw, 2, 1),
+        )
+        assert _fb_pix(raw, 2, 2) == 3 and _fb_pix(raw, 2, 3) == 3, (
+            _fb_pix(raw, 2, 2),
+            _fb_pix(raw, 2, 3),
+        )
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_settransform_scales_drawimage():
+    """setTransform(2,0,0,2,0,0) + natural drawImage must 2× dest."""
+    pix = bytes([4] * 16)
+    src = """
+var img = new Image();
+img.src = "jmr:spr:0";
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.setTransform(2, 0, 0, 2, 0, 0);
+  c.drawImage(img, 5, 5);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("XFDIM.JS", src, [(4, 4, pix)])
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "XFDIM.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        # dest origin 10,10 size 8×8
+        holes = [
+            (x, y)
+            for y in range(10, 18)
+            for x in range(10, 18)
+            if _fb_pix(raw, x, y) != 4
+        ]
+        assert not holes, f"setTransform blit holes {holes[:8]}"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_raf_stays_armed():
+    """Looping rAF must keep raf>=1 after a frame (DONKEY Enter left raf=0)."""
+    import re as _re
+
+    src = """
+function tick() {
+  fillRect(10, 10, 8, 8, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("RAF1.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "RAF1.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        m = _re.search(r"raf=(\d+)", st or "")
+        assert m and int(m.group(1)) >= 1, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_getimagedata_small_finishes_frame():
+    """8×8 getImageData must not eat the FRAME cap (full-canvas copy can)."""
+    import re as _re
+
+    src = """
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  fillRect(0, 0, 8, 8, 2);
+  var d = c.getImageData(0, 0, 8, 8);
+  if (d) fillRect(40, 10, 8, 8, 3);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("IMGD.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "IMGD.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        m = _re.search(r"fcap=(\d+)", st or "")
+        assert m and int(m.group(1)) == 0, st
+        assert _fb_pix(_fb_raw(sim), 44, 12) == 3, "getImageData did not return"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_nested_map_survives_measuretext_timeout():
+    """Maze rows must survive rAF + measureText + setTimeout(0) churn."""
+    src = """
+var map = [[1, 1], [1, 1]];
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.measureText("SCORE");
+  setTimeout(function() { var z = 0; }, 0);
+  if (map[0] && map[0][0] == 1 && map[1] && map[1][1] == 1) {
+    fillRect(10, 10, 30, 30, 2);
+  }
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("MCHURN.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "MCHURN.JS"')
+        sim.type_line("RUN")
+        for _ in range(12):
+            sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 20, 20) == 2, "map rows died under measureText/timer"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_filltext_score_in_closure():
+    """Numeric fillText inside a HUD closure must draw a glyph, not skip."""
+    src = """
+var score = 7;
+function hud() {
+  var c = document.getElementById('c').getContext('2d');
+  c.font = '16px Foo';
+  c.fillStyle = 'white';
+  c.fillText(score, 40, 40);
+}
+function tick() {
+  hud();
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("SCORE.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "SCORE.JS"')
+        sim.type_line("RUN")
+        for _ in range(4):
+            sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        want = _expect_text("7", 40, 40, 2)
+        got = {(i % 640, i // 640) for i, b in enumerate(raw) if b}
+        assert want & got, f"SCORE digit missing: want {len(want)} got {len(got)}"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_spr1_then_filltext():
+    """NAMB must still load after a SPR1 pack (fillText after blit)."""
+    pix = bytes([4] * 4)
+    src = """
+var img = new Image();
+img.src = "jmr:spr:0";
+var c = document.getElementById('c').getContext('2d');
+c.font = '8px F';
+c.fillStyle = 'white';
+function tick() {
+  c.drawImage(img, 0, 0);
+  c.fillText('A', 40, 40);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("SPTXT.JS", src, [(2, 2, pix)])
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "SPTXT.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 0, 0) == 4, _fb_pix(raw, 0, 0)
+        want = _expect_text("A", 40, 40, 1)
+        got = {(i % 640, i // 640) for i, b in enumerate(raw) if b}
+        assert want & got, "fillText after SPR1 missed NAMB"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_aset_drawimage_1x():
+    """ASET/SPRD 1:1 blit from asset SRAM (product path, tiny pack)."""
+    pix = bytes([2] * 8 + [3] * 8)
+    src = """
+var img = new Image();
+img.src = "jmr:spr:0";
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.drawImage(img, 0, 0);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("ASET1.JS", src, [(8, 2, pix)], aset=True)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "ASET1.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 4, 0) == 2, _fb_pix(raw, 4, 0)
+        assert _fb_pix(raw, 4, 1) == 3, _fb_pix(raw, 4, 1)
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_aset_scaled_drawimage_2x():
+    """ASET 5-arg 2× blit must fill dest (title-letter scale path)."""
+    pix = bytes([4] * 16)
+    src = """
+var img = new Image();
+img.src = "jmr:spr:0";
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.drawImage(img, 10, 10, 8, 8);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("ASET2.JS", src, [(4, 4, pix)], aset=True)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "ASET2.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        holes = [
+            (x, y)
+            for y in range(10, 18)
+            for x in range(10, 18)
+            if _fb_pix(raw, x, y) != 4
+        ]
+        assert not holes, f"ASET scaled holes {holes[:8]}"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_aset_settransform_scales_drawimage():
+    """ASET + setTransform(2,0,0,2,0,0) must 2× dest (title world→glass)."""
+    pix = bytes([4] * 16)
+    src = """
+var img = new Image();
+img.src = "jmr:spr:0";
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.setTransform(2, 0, 0, 2, 0, 0);
+  c.drawImage(img, 5, 5);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("ASETX.JS", src, [(4, 4, pix)], aset=True)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "ASETX.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        holes = [
+            (x, y)
+            for y in range(10, 18)
+            for x in range(10, 18)
+            if _fb_pix(raw, x, y) != 4
+        ]
+        assert not holes, f"ASET setTransform holes {holes[:8]}"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_aset_scaled_drawimage_2x_rows():
+    """ASET 2× must repeat each source row (non-square dest, title scale)."""
+    pix = bytes([2] * 4 + [3] * 4)
+    src = """
+var img = new Image();
+img.src = "jmr:spr:0";
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.drawImage(img, 0, 0, 8, 4);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("ASETR.JS", src, [(4, 2, pix)], aset=True)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "ASETR.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 2, 0) == 2 and _fb_pix(raw, 2, 1) == 2, (
+            _fb_pix(raw, 2, 0),
+            _fb_pix(raw, 2, 1),
+        )
+        assert _fb_pix(raw, 2, 2) == 3 and _fb_pix(raw, 2, 3) == 3, (
+            _fb_pix(raw, 2, 2),
+            _fb_pix(raw, 2, 3),
+        )
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_drawimage_9arg_src_window():
+    """9-arg drawImage must take the source window, not the whole sheet."""
+    pix = bytes([2] * 8 + [3] * 8 + [4] * 8 + [5] * 8)
+    src = """
+var img = new Image();
+img.src = "jmr:spr:0";
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.drawImage(img, 4, 2, 4, 2, 0, 0, 4, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("WIN9.JS", src, [(8, 4, pix)])
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "WIN9.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 1, 0) == 4, _fb_pix(raw, 1, 0)
+        assert _fb_pix(raw, 1, 1) == 5, _fb_pix(raw, 1, 1)
+        assert _fb_pix(raw, 0, 0) != 2, "9-arg used sheet origin instead of window"
+    finally:
+        sim.shutdown()
+
+
+def _vmstat(sim) -> str:
+    return sim._rpc("VMSTAT?") or ""
+
+
+def test_rtl_json_parse_interned_nested():
+    """JSON.parse of an interned nested-array literal must finish the FRAME."""
+    import re as _re
+
+    src = """
+var n = JSON.parse("[[1,2],[0,1]]");
+function tick() {
+  if (n && n[0] && n[0][1] == 2 && n[1] && n[1][0] == 0) {
+    fillRect(10, 10, 20, 20, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("JPAR.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "JPAR.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = _vmstat(sim)
+        m = _re.search(r"fcap=(\d+)", st)
+        r = _re.search(r"raf=(\d+)", st)
+        assert m and int(m.group(1)) == 0, st
+        assert r and int(r.group(1)) >= 1, st
+        assert _fb_pix(_fb_raw(sim), 15, 15) == 2, "interned JSON.parse nested miss"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_json_stringify_nested_finishes_frame():
+    """JSON.stringify of nested number arrays must not hang (fcap=0, raf>=1)."""
+    import re as _re
+
+    src = """
+var n = JSON.parse(JSON.stringify([[1,2],[0,1]]));
+function tick() {
+  if (n && n[0] && n[0][1] == 2 && n[1] && n[1][0] == 0) {
+    fillRect(10, 10, 20, 20, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("JSTR.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "JSTR.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = _vmstat(sim)
+        m = _re.search(r"fcap=(\d+)", st)
+        r = _re.search(r"raf=(\d+)", st)
+        assert m and int(m.group(1)) == 0, st
+        assert r and int(r.group(1)) >= 1, st
+        assert _fb_pix(_fb_raw(sim), 15, 15) == 2, "stringify+parse nested miss"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_replace_interned_global():
+    """Interned 'aabb'.replace(/a/g,'c') must become ccbb (indexOf, not title)."""
+    src = """
+var r = "aabb".replace(/a/g, "c");
+function tick() {
+  if (r.indexOf("c") == 0 && r.indexOf("b") == 2) {
+    fillRect(10, 10, 20, 20, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("REPLI.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "REPLI.JS"')
+        sim.type_line("RUN")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 15, 15) == 2, "interned replace(/g) miss"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_stringify_replace_parse_opens_digit():
+    """Dynstr JSON.stringify + replace(/2/g,0) + parse must turn 2 into 0."""
+    src = r"""
+var data = [[1,2],[0,1]];
+var o = JSON.parse(JSON.stringify(data).replace(/2/g, 0));
+function tick() {
+  if (o && o[0] && o[0][1] == 0 && o[1] && o[1][0] == 0) {
+    fillRect(10, 10, 20, 20, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("JREP.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "JREP.JS"')
+        sim.type_line("RUN")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 15, 15) == 2, "stringify+replace+parse miss"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_typeof_number_not_undefined():
+    """typeof 0 != 'undefined' (map hole check)."""
+    src = """
+var a = [0, 1];
+function tick() {
+  if (typeof a[0] != 'undefined' && typeof a[1] != 'undefined') {
+    fillRect(10, 10, 20, 20, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("TYPEOF.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "TYPEOF.JS"')
+        sim.type_line("RUN")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 15, 15) == 2, "typeof number miss"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_finder_opened_map_paths():
+    """BFS path out of a 2-cell with the house already open (no JSON)."""
+    src = r"""
+var opened = [
+  [1,1,1,1],
+  [1,0,0,1],
+  [1,0,0,1],
+  [0,0,0,0]
+];
+function finder(params) {
+  var defaults = { map:null, start:{}, end:{}, type:'path' };
+  var options = Object.assign({}, defaults, params);
+  if (options.map[options.start.y][options.start.x] ||
+      options.map[options.end.y][options.end.x]) {
+    return [];
+  }
+  var finded = false;
+  var result = [];
+  var y_length = options.map.length;
+  var x_length = options.map[0].length;
+  var steps = Array(y_length).fill(0).map(function() {
+    return Array(x_length).fill(0);
+  });
+  var _getValue = function(x, y) {
+    if (options.map[y] && typeof options.map[y][x] != 'undefined') {
+      return options.map[y][x];
+    }
+    return -1;
+  };
+  var _render = function(list) {
+    var new_list = [];
+    var next = function(from, to) {
+      var value = _getValue(to.x, to.y);
+      if (value == 0) {
+        if (to.x == options.end.x && to.y == options.end.y) {
+          steps[to.y][to.x] = from;
+          finded = true;
+        } else if (!steps[to.y][to.x]) {
+          steps[to.y][to.x] = from;
+          new_list.push(to);
+        }
+      }
+    };
+    list.forEach(function(current) {
+      next(current, {y: current.y + 1, x: current.x});
+      next(current, {y: current.y, x: current.x + 1});
+      next(current, {y: current.y - 1, x: current.x});
+      next(current, {y: current.y, x: current.x - 1});
+    });
+    if (!finded && new_list.length) {
+      _render(new_list);
+    }
+  };
+  _render([options.start]);
+  if (finded) {
+    var current = options.end;
+    while (current.x != options.start.x || current.y != options.start.y) {
+      result.unshift(current);
+      current = steps[current.y][current.x];
+    }
+  }
+  return result;
+}
+var path = finder({ map:opened, start:{x:1,y:1}, end:{x:0,y:3} });
+function tick() {
+  if (path.length) {
+    fillRect(60, 10, 30, 30, 6);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("FINDO.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "FINDO.JS"')
+        sim.type_line("RUN")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        assert _fb_nz(sim) >= 50, "opened-map finder BFS miss"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_array_fill_map_nested():
+    """Array(n).fill(0).map(() => Array(m).fill(0)) must be writable rows."""
+    src = """
+var steps = Array(2).fill(0).map(function() {
+  return Array(2).fill(0);
+});
+steps[0][1] = 7;
+function tick() {
+  if (steps[0] && steps[0][1] == 7) {
+    fillRect(10, 10, 20, 20, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("ARMAP.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "ARMAP.JS"')
+        sim.type_line("RUN")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 15, 15) == 2, "fill+map nested rows miss"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_join_string_digits_case_1100():
+    """['1','1','0','0'].join('') must EQ interned '1100'."""
+    src = """
+var code = ["1", "1", "0", "0"];
+var hit = 0;
+switch (code.join("")) {
+  case "1100":
+    hit = 1;
+    break;
+  default:
+    hit = 2;
+}
+function tick() {
+  if (hit == 1) {
+    fillRect(10, 10, 20, 20, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("JOINS.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "JOINS.JS"')
+        sim.type_line("RUN")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 15, 15) == 2, "string-digit join missed case 1100"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_findindex_identity():
+    """arr.findIndex identity must return the matching index."""
+    src = """
+var a = [{id:1}, {id:2}];
+var i = a.findIndex(function(e) { return e.id == 2; });
+function tick() {
+  if (i == 1) {
+    fillRect(10, 10, 20, 20, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("FIDXI.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "FIDXI.JS"')
+        sim.type_line("RUN")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 15, 15) == 2, "findIndex identity miss"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_getimagedata_64_and_full_canvas_fcap0():
+    """64×64 then 640×480 getImageData must finish FRAME (do not raise CAP)."""
+    import re as _re
+
+    src = """
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  fillRect(0, 0, 8, 8, 2);
+  var d = c.getImageData(0, 0, 64, 64);
+  if (d) fillRect(40, 10, 8, 8, 3);
+  c.getImageData(0, 0, 640, 480);
+  fillRect(60, 10, 8, 8, 4);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("IMGF.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "IMGF.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = _vmstat(sim)
+        m = _re.search(r"fcap=(\d+)", st)
+        assert m and int(m.group(1)) == 0, st
+        assert _fb_pix(_fb_raw(sim), 44, 12) == 3, "64x64 getImageData did not return"
+        assert _fb_pix(_fb_raw(sim), 64, 12) == 4, "full-canvas getImageData ate the FRAME"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_getimagedata_full_canvas_fcap0():
+    """640×480 getImageData must finish FRAME (1 px/cycle, do not raise CAP)."""
+    import re as _re
+
+    src = """
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.getImageData(0, 0, 640, 480);
+  fillRect(60, 10, 8, 8, 4);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("IMGF2.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "IMGF2.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = _vmstat(sim)
+        m = _re.search(r"fcap=(\d+)", st)
+        assert m and int(m.group(1)) == 0, st
+        assert _fb_pix(_fb_raw(sim), 64, 12) == 4, "full-canvas getImageData ate the FRAME"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_times_mod2_two_wedges():
+    """this.times%2 must paint two different rects across frames (mouth gate)."""
+    src = """
+var times = 0;
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  times = times + 1;
+  c.beginPath();
+  if (times % 2) c.arc(80, 40, 16, 0.5, 5.5, false);
+  else c.arc(80, 40, 16, 0.2, 6.0, false);
+  c.fill();
+  if (times % 2) fillRect(10, 10, 8, 8, 2);
+  else fillRect(30, 10, 8, 8, 3);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("MOUTH.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "MOUTH.JS"')
+        sim.type_line("RUN")
+        saw2 = False
+        saw3 = False
+        for _ in range(8):
+            sim._rpc("FRAME")
+            raw = _fb_raw(sim)
+            if _fb_pix(raw, 12, 12) == 2:
+                saw2 = True
+            if _fb_pix(raw, 32, 12) == 3:
+                saw3 = True
+        assert saw2 and saw3, (saw2, saw3)
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_player_x_moves_on_key():
+    """coord writeback: a keydown must change the painted x."""
+    src = """
+var x = 10;
+document.addEventListener("keydown", function(e) { x = x + 20; });
+function tick() {
+  fillRect(x, 20, 8, 8, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("PMOV.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "PMOV.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 12, 22) == 2, "player never drew"
+        sim._rpc("KEYEVT 39 1")
+        sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 32, 22) == 2, "keydown did not move x"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_filter_keeps_truthy():
+    """arr.filter must keep truthy elements (not a title gate)."""
+    src = """
+var a = [0, 1, 0, 2];
+var b = a.filter(function(x) { return x; });
+function tick() {
+  if (b.length == 2 && b[0] == 1 && b[1] == 2) {
+    fillRect(10, 10, 20, 20, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("FILT.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "FILT.JS"')
+        sim.type_line("RUN")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 15, 15) == 2, "filter miss"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_for_of_sums():
+    """for (const x of arr) must compile to an index loop that runs."""
+    src = """
+var s = 0;
+for (const x of [1, 2, 3]) s = s + x;
+function tick() {
+  if (s == 6) {
+    fillRect(10, 10, 20, 20, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("FOROF.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "FOROF.JS"')
+        sim.type_line("RUN")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 15, 15) == 2, "for-of miss"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_title_blit_one_raf_fcap0():
+    """Several drawImage + fillText in one rAF must finish (fcap=0)."""
+    import re as _re
+
+    pix = bytes([2] * 16)
+    src = """
+var img = new Image();
+img.src = "jmr:spr:0";
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.drawImage(img, 0, 0, 16, 16);
+  c.drawImage(img, 20, 0, 16, 16);
+  c.drawImage(img, 40, 0, 16, 16);
+  c.font = "16px sans-serif";
+  c.fillText("TITLE", 10, 40);
+  c.fillText("ENTER", 10, 60);
+  fillRect(80, 10, 8, 8, 3);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("TBLT.JS", src, [(4, 4, pix)])
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "TBLT.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = _vmstat(sim)
+        m = _re.search(r"fcap=(\d+)", st)
+        r = _re.search(r"raf=(\d+)", st)
+        assert m and int(m.group(1)) == 0, st
+        assert r and int(r.group(1)) >= 1, st
+        assert _fb_pix(_fb_raw(sim), 82, 12) == 3, "title blit did not finish"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_stridx_find_splice_one_frame():
+    """String-row blit + find+splice must finish one FRAME (do not raise CAP)."""
+    import re as _re
+
+    src = """
+var rows = ["01110", "11111", "01110"];
+var aliens = [{id:1}, {id:2}, {id:3}];
+function tick() {
+  var y, x;
+  for (y = 0; y < rows.length; y++) {
+    for (x = 0; x < 5; x++) {
+      if (rows[y][x] === "1") fillRect(10 + x * 2, 10 + y * 2, 2, 2, 2);
+    }
+  }
+  var hit = aliens.find(function(a) { return a.id == 2; });
+  if (hit) {
+    var i = aliens.findIndex(function(a) { return a === hit; });
+    if (i < 0) i = 1;
+    aliens.splice(i, 1);
+  }
+  if (aliens.length == 2) fillRect(40, 10, 8, 8, 3);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("STRK.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "STRK.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = _vmstat(sim)
+        m = _re.search(r"fcap=(\d+)", st)
+        assert m and int(m.group(1)) == 0, st
+        assert _fb_pix(_fb_raw(sim), 44, 12) == 3, "find+splice did not finish FRAME"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_get_put_keeps_left_and_right():
+    """Full-canvas GET then PUT must keep both left and right rects.
+
+    PACMAN caches the maze with getImageData(0,0,width,height) then
+    putImageData every later frame. A left-only dump/put walk looks like
+    a broken left maze with live sprites still drawing on top.
+    """
+    src = """
+var c = document.getElementById('c').getContext('2d');
+var cached = null;
+function tick() {
+  if (!cached) {
+    fillRect(20, 20, 40, 40, 2);
+    fillRect(400, 20, 40, 40, 3);
+    cached = c.getImageData(0, 0, 640, 480);
+  } else {
+    fillRect(0, 0, 640, 480, 0);
+    c.putImageData(cached, 0, 0);
+  }
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("IMGP.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "IMGP.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 30, 30) == 2, "GET/PUT dropped the left rect"
+        assert _fb_pix(raw, 410, 30) == 3, "GET/PUT dropped the right rect"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_times_from_f_div_frames():
+    """item.times = f/frames when !(f%frames) must toggle (mouth gate)."""
+    src = """
+var item = {frames: 10, times: 0};
+var f = 0;
+function tick() {
+  f = f + 1;
+  if (!(f % item.frames)) item.times = f / item.frames;
+  if (item.times % 2) fillRect(10, 10, 8, 8, 2);
+  else fillRect(30, 10, 8, 8, 3);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("TMOD.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "TMOD.JS"')
+        sim.type_line("RUN")
+        saw2 = False
+        saw3 = False
+        for _ in range(24):
+            sim._rpc("FRAME")
+            raw = _fb_raw(sim)
+            if _fb_pix(raw, 12, 12) == 2:
+                saw2 = True
+            if _fb_pix(raw, 32, 12) == 3:
+                saw3 = True
+        assert saw2 and saw3, (saw2, saw3)
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_ghost_x_moves_across_raf():
+    """Ghost this.x += speed must stick across rAF keep (not only a tight loop)."""
+    src = r"""
+var _COS = [1, 0, -1, 0], _SIN = [0, 1, 0, -1];
+var ghost = {x: 100, y: 100, speed: 1, orientation: 3};
+function tick() {
+  ghost.x += ghost.speed * _COS[ghost.orientation];
+  ghost.y += ghost.speed * _SIN[ghost.orientation];
+  fillRect(ghost.x, ghost.y, 6, 6, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("GXRAF.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "GXRAF.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        y0 = None
+        raw = _fb_raw(sim)
+        for y in range(80, 120):
+            if _fb_pix(raw, 102, y) == 2:
+                y0 = y
+                break
+        assert y0 is not None, "ghost never drew"
+        for _ in range(12):
+            sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        moved = False
+        for y in range(70, y0):
+            if _fb_pix(raw, 102, y) == 2:
+                moved = True
+                break
+        assert moved, "ghost y did not decrease across rAF"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_get_put_keeps_thin_strokes():
+    """1px vertical strokes must survive full-canvas GET/PUT on both sides."""
+    src = """
+var c = document.getElementById('c').getContext('2d');
+c.strokeStyle = '#09f';
+c.lineWidth = 2;
+var cached = null;
+function tick() {
+  if (!cached) {
+    c.beginPath(); c.moveTo(30, 20); c.lineTo(30, 80); c.stroke();
+    c.beginPath(); c.moveTo(400, 20); c.lineTo(400, 80); c.stroke();
+    cached = c.getImageData(0, 0, 640, 480);
+  } else {
+    fillRect(0, 0, 640, 480, 0);
+    c.putImageData(cached, 0, 0);
+  }
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("IMGS.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "IMGS.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        left = any(_fb_pix(raw, x, 50) != 0 for x in range(28, 33))
+        right = any(_fb_pix(raw, x, 50) != 0 for x in range(398, 403))
+        assert left, "GET/PUT dropped the left 1px stroke"
+        assert right, "GET/PUT dropped the right 1px stroke"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_mouth_pie_has_gap():
+    """PACMAN mouth: filled arc + lineTo center must leave a facing gap."""
+    src = """
+var c = document.getElementById('c').getContext('2d');
+c.fillStyle = '#FFE600';
+function tick() {
+  c.beginPath();
+  c.arc(80, 80, 16, 0.20 * Math.PI, -0.20 * Math.PI, false);
+  c.lineTo(80, 80);
+  c.closePath();
+  c.fill();
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("PIE.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "PIE.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        body = _fb_pix(raw, 70, 80)
+        gap = _fb_pix(raw, 94, 80)
+        assert body != 0, "mouth body did not fill"
+        assert gap == 0, "mouth pie filled the facing gap (looks like a closed circle)"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_mouth_pie_left_facing_gap():
+    """Player default orientation 2: gap must face left, not a full disk."""
+    src = """
+var c = document.getElementById('c').getContext('2d');
+c.fillStyle = '#FFE600';
+function tick() {
+  c.beginPath();
+  c.arc(80, 80, 16, 1.20 * Math.PI, 0.80 * Math.PI, false);
+  c.lineTo(80, 80);
+  c.closePath();
+  c.fill();
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("PIEL.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "PIEL.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        body = _fb_pix(raw, 90, 80)
+        gap = _fb_pix(raw, 66, 80)
+        assert body != 0, "left-facing mouth body did not fill"
+        assert gap == 0, "left-facing mouth filled the gap (closed circle)"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_arr_oob_is_undefined():
+    """arr[-1] and arr[len] must be undefined so map.get returns -1."""
+    src = """
+var row = [1, 1, 1];
+var hit = 0;
+if (typeof row[-1] == 'undefined' && typeof row[3] == 'undefined') hit = 1;
+function tick() {
+  if (hit) fillRect(10, 10, 20, 20, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("OOB.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "OOB.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 15, 15) == 2, "arr OOB was not undefined"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_finder_28_wide_house_paths():
+    """stringify/replace/parse of a 28-wide house map must still path out."""
+    src = r"""
+var data = [];
+var y, x;
+for (y = 0; y < 8; y++) {
+  data[y] = [];
+  for (x = 0; x < 28; x++) data[y][x] = 1;
+}
+for (x = 0; x < 28; x++) { data[0][x] = 1; data[7][x] = 1; }
+for (y = 1; y < 7; y++) { data[y][0] = 1; data[y][27] = 1; }
+for (x = 1; x < 27; x++) data[6][x] = 0;
+data[5][12] = 2; data[5][13] = 2; data[5][14] = 2; data[5][15] = 2;
+data[4][12] = 1; data[4][13] = 2; data[4][14] = 2; data[4][15] = 1;
+data[3][13] = 0; data[3][14] = 0;
+function finder(params) {
+  var options = Object.assign({}, {map: null, start: {}, end: {}, type: 'path'}, params);
+  if (options.map[options.start.y][options.start.x] ||
+      options.map[options.end.y][options.end.x]) return [];
+  var finded = false, result = [];
+  var y_length = options.map.length, x_length = options.map[0].length;
+  var steps = Array(y_length).fill(0).map(function() { return Array(x_length).fill(0); });
+  var _getValue = function(x, y) {
+    if (options.map[y] && typeof options.map[y][x] != 'undefined') return options.map[y][x];
+    return -1;
+  };
+  var _render = function(list) {
+    var new_list = [];
+    var next = function(from, to) {
+      var value = _getValue(to.x, to.y);
+      if (value < 1) {
+        if (value == -1) { to.x = (to.x + x_length) % x_length; to.y = (to.y + y_length) % y_length; }
+        if (to.x == options.end.x && to.y == options.end.y) { steps[to.y][to.x] = from; finded = true; }
+        else if (!steps[to.y][to.x]) { steps[to.y][to.x] = from; new_list.push(to); }
+      }
+    };
+    list.forEach(function(current) {
+      next(current, {y: current.y + 1, x: current.x});
+      next(current, {y: current.y, x: current.x + 1});
+      next(current, {y: current.y - 1, x: current.x});
+      next(current, {y: current.y, x: current.x - 1});
+    });
+    if (!finded && new_list.length) _render(new_list);
+  };
+  _render([options.start]);
+  if (finded) {
+    var current = options.end;
+    while (current.x != options.start.x || current.y != options.start.y) {
+      result.unshift(current);
+      current = steps[current.y][current.x];
+    }
+  }
+  return result;
+}
+var n = 0;
+function tick() {
+  var opened = JSON.parse(JSON.stringify(data).replace(/2/g, 0));
+  var path = finder({map: opened, start: {x: 13, y: 5}, end: {x: 2, y: 6}});
+  if (path.length) n = n + 1;
+  if (n >= 2) fillRect(10, 10, 20, 20, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("F28.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "F28.JS"')
+        sim.type_line("RUN")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 15, 15) == 2, "28-wide house finder did not path out"
+    finally:
+        sim.shutdown()
+
+
+# Real PACMAN level-1 maze literal (31 rows x 28 cols) — regression harness
+# for the createMap flow: config['map'] -> Object.assign -> stringify/parse.
+_MAZE31 = (
+    "[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"
+    "[1,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,1],"
+    "[1,0,1,1,1,1,0,1,1,1,1,1,0,1,1,0,1,1,1,1,1,0,1,1,1,1,0,1],"
+    "[1,0,1,1,1,1,0,1,1,1,1,1,0,1,1,0,1,1,1,1,1,0,1,1,1,1,0,1],"
+    "[1,0,1,1,1,1,0,1,1,1,1,1,0,1,1,0,1,1,1,1,1,0,1,1,1,1,0,1],"
+    "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],"
+    "[1,0,1,1,1,1,0,1,1,0,1,1,1,1,1,1,1,1,0,1,1,0,1,1,1,1,0,1],"
+    "[1,0,1,1,1,1,0,1,1,0,1,1,1,1,1,1,1,1,0,1,1,0,1,1,1,1,0,1],"
+    "[1,0,0,0,0,0,0,1,1,0,0,0,0,1,1,0,0,0,0,1,1,0,0,0,0,0,0,1],"
+    "[1,1,1,1,1,1,0,1,1,1,1,1,0,1,1,0,1,1,1,1,1,0,1,1,1,1,1,1],"
+    "[1,1,1,1,1,1,0,1,1,1,1,1,0,1,1,0,1,1,1,1,1,0,1,1,1,1,1,1],"
+    "[1,1,1,1,1,1,0,1,1,0,0,0,0,0,0,0,0,0,0,1,1,0,1,1,1,1,1,1],"
+    "[1,1,1,1,1,1,0,1,1,0,1,1,1,2,2,1,1,1,0,1,1,0,1,1,1,1,1,1],"
+    "[1,1,1,1,1,1,0,1,1,0,1,2,2,2,2,2,2,1,0,1,1,0,1,1,1,1,1,1],"
+    "[0,0,0,0,0,0,0,0,0,0,1,2,2,2,2,2,2,1,0,0,0,0,0,0,0,0,0,0],"
+    "[1,1,1,1,1,1,0,1,1,0,1,2,2,2,2,2,2,1,0,1,1,0,1,1,1,1,1,1],"
+    "[1,1,1,1,1,1,0,1,1,0,1,1,1,1,1,1,1,1,0,1,1,0,1,1,1,1,1,1],"
+    "[1,1,1,1,1,1,0,1,1,0,0,0,0,0,0,0,0,0,0,1,1,0,1,1,1,1,1,1],"
+    "[1,1,1,1,1,1,0,1,1,0,1,1,1,1,1,1,1,1,0,1,1,0,1,1,1,1,1,1],"
+    "[1,1,1,1,1,1,0,1,1,0,1,1,1,1,1,1,1,1,0,1,1,0,1,1,1,1,1,1],"
+    "[1,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,1],"
+    "[1,0,1,1,1,1,0,1,1,1,1,1,0,1,1,0,1,1,1,1,1,0,1,1,1,1,0,1],"
+    "[1,0,1,1,1,1,0,1,1,1,1,1,0,1,1,0,1,1,1,1,1,0,1,1,1,1,0,1],"
+    "[1,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,1],"
+    "[1,1,1,0,1,1,0,1,1,0,1,1,1,1,1,1,1,1,0,1,1,0,1,1,0,1,1,1],"
+    "[1,1,1,0,1,1,0,1,1,0,1,1,1,1,1,1,1,1,0,1,1,0,1,1,0,1,1,1],"
+    "[1,0,0,0,0,0,0,1,1,0,0,0,0,1,1,0,0,0,0,1,1,0,0,0,0,0,0,1],"
+    "[1,0,1,1,1,1,1,1,1,1,1,1,0,1,1,0,1,1,1,1,1,1,1,1,1,1,0,1],"
+    "[1,0,1,1,1,1,1,1,1,1,1,1,0,1,1,0,1,1,1,1,1,1,1,1,1,1,0,1],"
+    "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],"
+    "[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]"
+)
+
+
+def test_rtl_maze31_survives_createmap():
+    """Real maze literal must keep row lengths + values through createMap.
+
+    Mirrors PACMAN: config['map'] literal, Object.assign(this,_settings,
+    _params) with _settings.data=[], then data=JSON.parse(JSON.stringify()).
+    Markers: (15,15)=2 lengths ok, (35,15)=4 values ok, (55,15)=5 get() edge
+    ok. On length failure the first bad row y and its length are drawn at
+    y=100/110 marker rows so the fb tells us where it broke.
+    """
+    src = (
+        "var _COIGIG = [{'map':[" + _MAZE31 + "]}];\n"
+        + r"""
+var config = _COIGIG[0];
+var obj = {data: [], x_length: 0, y_length: 0};
+Object.assign(obj, {data: [], x_length: 0, y_length: 0}, {data: config['map']});
+obj.data = JSON.parse(JSON.stringify(config['map']));
+obj.y_length = obj.data.length;
+obj.x_length = obj.data[0].length;
+var get = function(x, y) {
+  if (obj.data[y] && typeof obj.data[y][x] != 'undefined') return obj.data[y][x];
+  return -1;
+};
+var lens_ok = (obj.y_length == 31 && obj.x_length == 28) ? 1 : 0;
+var bad_y = -1, bad_len = -1;
+var vals_ok = 1;
+var vy = -1, vx = -1, vgot = -9;
+// IIFE like the real game (top-level `var x=` in a loop is init-once by
+// design — startLoop re-entry — so the check must run at fn depth 1)
+(function() {
+  var y, x;
+  for (y = 0; y < 31; y++) {
+    var row = obj.data[y];
+    if (!row || row.length != 28) {
+      lens_ok = 0;
+      if (bad_y < 0) { bad_y = y; bad_len = row ? row.length : -1; }
+    } else {
+      for (x = 0; x < 28; x++) {
+        if (row[x] != config['map'][y][x]) {
+          vals_ok = 0;
+          if (vy < 0) { vy = y; vx = x; vgot = row[x]; }
+        }
+      }
+    }
+  }
+})();
+var edge_ok = (get(-1, 5) == -1 && get(28, 5) == -1 && get(0, 0) == 1 &&
+               get(27, 30) == 1 && get(1, 1) == 0 && get(13, 12) == 2) ? 1 : 0;
+function tick() {
+  if (lens_ok) fillRect(10, 10, 10, 10, 2);
+  if (vals_ok) fillRect(30, 10, 10, 10, 4);
+  if (edge_ok) fillRect(50, 10, 10, 10, 5);
+  if (bad_y >= 0) fillRect(100 + bad_y * 4, 100, 4, 4, 3);
+  if (bad_len >= 0) fillRect(100 + bad_len * 4, 110, 4, 4, 3);
+  if (vy >= 0) fillRect(100 + vy * 4, 120, 4, 4, 3);
+  if (vx >= 0) fillRect(100 + vx * 4, 130, 4, 4, 3);
+  if (vgot > -9) fillRect(100 + (vgot + 2) * 4, 140, 4, 4, 3);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    )
+    sim = _sim()
+    try:
+        _patch_js("MAZE31.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "MAZE31.JS"')
+        sim.type_line("RUN")
+        for _ in range(3):
+            sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        bad_y = next((i for i in range(40) if _fb_pix(raw, 100 + i * 4, 102)), None)
+        bad_len = next((i for i in range(40) if _fb_pix(raw, 100 + i * 4, 112)), None)
+        vy = next((i for i in range(40) if _fb_pix(raw, 100 + i * 4, 122)), None)
+        vx = next((i for i in range(40) if _fb_pix(raw, 100 + i * 4, 132)), None)
+        vgot = next((i - 2 for i in range(40) if _fb_pix(raw, 100 + i * 4, 142)), None)
+        assert _fb_pix(raw, 15, 15) == 2, (
+            f"maze row lengths wrong (first bad y={bad_y} len={bad_len})"
+        )
+        assert _fb_pix(raw, 35, 15) == 4, (
+            f"maze values wrong after createMap (first bad y={vy} x={vx} got={vgot})"
+        )
+        assert _fb_pix(raw, 55, 15) == 5, "map.get edge behaviour wrong"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_maze_reparse_survives_nursery_churn():
+    """Post-boot map.data re-parse must survive later frames' array temps.
+
+    PACMAN nextStage() re-runs data=JSON.parse(JSON.stringify(...)) on
+    keydown (post-boot). The parsed rows are nursery arrays; storing them
+    into an old-space object must not leave refs that the frame rewind
+    recycles into draw temps (code=[0,0,0,0]) — that was the 4-wide maze.
+    """
+    src = (
+        "var m = [" + _MAZE31 + "];\n"
+        + r"""
+var obj = {data: []};
+(function() { obj.data = JSON.parse(JSON.stringify(m)); })();
+var n = 0, ok = -1;
+function churn() {
+  var k;
+  for (k = 0; k < 40; k++) { var t = [0, 0, 0, 0]; t[0] = k; }
+}
+function verify() {
+  var good = 1, y, x;
+  for (y = 0; y < 31; y++) {
+    var row = obj.data[y];
+    if (!row || row.length != 28) good = 0;
+    else for (x = 0; x < 28; x++) { if (row[x] != m[y][x]) good = 0; }
+  }
+  return good;
+}
+function tick() {
+  n = n + 1;
+  if (n == 3) { obj.data = JSON.parse(JSON.stringify(m)); }
+  if (n > 3 && n < 7) churn();
+  if (n == 7) ok = verify();
+  if (ok == 1) fillRect(10, 10, 10, 10, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    )
+    sim = _sim()
+    try:
+        _patch_js("REPARSE.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "REPARSE.JS"')
+        sim.type_line("RUN")
+        for _ in range(9):
+            sim._rpc("FRAME")
+        assert _fb_pix(_fb_raw(sim), 15, 15) == 2, (
+            "re-parsed maze rows were recycled by later frame temps"
         )
     finally:
         sim.shutdown()
