@@ -65,6 +65,9 @@ class Machine:
         self._play_frames: int = 0
         # Always-on flight log (BASIC TraceLog method)
         self.trace = TraceLog(self)
+        # NEW: Architecture Monitor phase (LOAD vs compile-on-RUN vs execute)
+        self._arch_phase: str = "idle"
+        self._arch_cmd: str = ""
 
     # --- boot / glass -------------------------------------------------
 
@@ -157,6 +160,8 @@ class Machine:
         self._print("^BREAK")
         self._ready()
         self.paint_monitor("> ")
+        # NEW: HTML still in the editor; bytecode chunk was cleared above
+        self._arch_phase = "loaded" if self.source_lines else "idle"
         self.trace.edge("BREAK", "hard_break")
         # NEW: one VM telemetry line on BREAK (minimal, no spam)
         self.trace.edge(
@@ -181,6 +186,7 @@ class Machine:
         if self.poll_escape():
             return
         line = text.rstrip("\n")
+        self._arch_cmd = line
         # NEW: any new command releases a kept RUN frame
         self._keep_fb = False
         self.trace.edge("LINE", repr(line)[:120])
@@ -249,6 +255,7 @@ class Machine:
         if upper == "NEW":
             self.source_lines = []
             self.source_name = "UNTITLED.JS"
+            self._arch_phase = "idle"
             return ["OK"]
         # NEW: CLS — clear glass like BASIC (log + FB); type_line adds READY
         if upper == "CLS":
@@ -315,6 +322,7 @@ class Machine:
         except FileNotFoundError:
             return ["?FN FILE NOT FOUND"]
         self.source_lines = raw.splitlines()
+        self._arch_phase = "loaded"
         return [f"LOADED {self.source_name} ({len(self.source_lines)} LINES)"]
 
     def _cmd_save(self, text: str) -> List[str]:
@@ -571,12 +579,16 @@ class Machine:
         from .compiler import CompileError
         from tools.compile_js import compile_html_text, encode_html_chunk
 
+        # NEW: compiler front-end is live now (GUI paints this before the wait)
+        self._arch_phase = "compile"
         try:
             chunk = compile_html_text(html)
         except CompileError as e:
+            self._arch_phase = "loaded"
             where = f" LINE {e.line}" if e.line else ""
             return [f"ERROR{where}: {e.message}"]
         except Exception as e:
+            self._arch_phase = "loaded"
             return [f"ERROR: HTML/JS {e}"]
         blob = encode_html_chunk(chunk)
         jsh = self._html_jsh_path()
@@ -594,6 +606,7 @@ class Machine:
         self.input.discard_queued_keys()
         self.html_host = None
         self.running = True
+        self._arch_phase = "run"
         self.vm.natives = self._natives()
         self.vm.globals.clear()
         self._loop_chunk = None
@@ -651,6 +664,7 @@ class Machine:
         if self.vm.error:
             self.running = False
             self._html_chunk = None
+            self._arch_phase = "loaded"
             return [self.vm.error]
         # Keep running so frame_tick drains rAF
         self._bytecode_html = True

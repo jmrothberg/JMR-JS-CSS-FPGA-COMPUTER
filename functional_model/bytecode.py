@@ -89,6 +89,8 @@ class Chunk:
     # NEW (external SRAM asset bank): per-title 256-entry RGB888 palette.
     # Entries 0..7 stay the legacy fixed 8; 8..255 = harvested + adaptive.
     palette: Optional[List[Tuple[int, int, int]]] = None
+    # NEW: HTML/JS source line per opcode (Architecture Monitor observer)
+    op_lines: Optional[List[int]] = None
 
 
 class VM:
@@ -115,6 +117,10 @@ class VM:
         # time (PACMAN's `now-timestamp<16` limiter skipped every draw when
         # the FM ticked faster than real time). None → wall clock fallback.
         self.time_ms: Optional[float] = None
+        # NEW: last opcode the loop actually executed (Architecture Monitor)
+        self.last_ip: int = 0
+        self.last_op: Optional[Op] = None
+        self.last_arg0: Any = None
 
     def _now_ms(self) -> int:
         if self.time_ms is not None:
@@ -193,6 +199,9 @@ class VM:
             if ip >= len(code):
                 return
             op, *args = code[ip]
+            self.last_ip = ip
+            self.last_op = op
+            self.last_arg0 = args[0] if args else None
             ip += 1
             if op == Op.LOAD_CONST:
                 self.stack.append(chunk.consts[args[0]])

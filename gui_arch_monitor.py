@@ -54,6 +54,13 @@ def _sname_keys(sname: str) -> list[str]:
     keys = ["SEQUENCER"]
     if s in ("", "S_IDLE", "IDLE"):
         return ["S5"]
+    if s in ("LOAD", "LOADED"):
+        return ["COMPILER", "STORE", "M_SDCARD", "SD", "PHY_SD", "CONSOLE"]
+    if s in ("COMPILE",):
+        return [
+            "COMPILER", "M_BRAM", "M_SRAM", "SEQUENCER", "STORE",
+            "S1", "CONSOLE", "ARBITER",
+        ]
     if s.startswith("S_GOT") or s in (
         "S_RD", "S_LD_CONST", "S_TRAIL", "S_FETCH_WAIT",
     ):
@@ -117,21 +124,65 @@ _SNAME_HINT = {
 }
 
 
+def _op_engine_keys(op_name: str, native_name: str) -> list[str]:
+    """PYTHON last-opcode → blocks (BASIC µop-heat analog, JS ISA)."""
+    op = (op_name or "").upper()
+    nat = native_name or ""
+    keys = ["SEQUENCER", "DISPATCH", "S1", "S2", "S4"]
+    if op in (
+        "ADD", "SUB", "MUL", "DIV", "MOD", "LT", "GT", "EQ",
+        "NEG", "NOT", "BIT_OR", "BIT_AND",
+    ):
+        keys += ["ALU", "STACK"]
+    elif op in (
+        "MAKE_ARRAY", "ARRAY_GET", "ARRAY_SET", "MAKE_OBJ", "GET_PROP",
+        "SET_PROP", "NEW_OBJ", "CALL_METHOD", "MAKE_FN", "CALL_USER",
+        "CALL_VAL", "RET_VAL", "RETURN",
+    ):
+        keys += ["HEAP", "STACK"]
+    elif op in (
+        "LOAD_CONST", "LOAD_VAR", "STORE_VAR", "LET_VAR", "POP", "DUP",
+        "JUMP", "JUMP_IF_FALSE",
+    ):
+        keys += ["STACK"]
+    if op == "CALL_NATIVE":
+        keys += ["NATIVE"]
+        if nat in ("fillRect", "clear", "swapBuffers", "clearRect", "setFillStyle"):
+            keys += ["CANVAS", "VIDEO", "M_BRAM", "HDMI"]
+        elif nat == "drawImage":
+            keys += ["BLIT", "M_SRAM", "ARBITER"]
+        elif nat in (
+            "requestAnimationFrame", "setTimeout", "setInterval",
+            "clearTimeout", "clearInterval",
+            "document.addEventListener", "window.addEventListener",
+            "document.removeEventListener", "window.removeEventListener",
+            "document.dispatchEvent", "window.dispatchEvent",
+        ):
+            keys += ["RAF"]
+        elif nat in ("JSON.parse", "JSON.stringify"):
+            keys += ["STR", "HEAP"]
+        elif nat == "console.log":
+            keys += ["CONS_ENG"]
+        elif nat.startswith("localStorage"):
+            keys += ["STORE"]
+    return keys
+
+
 class ArchitectureView:
     """JS-native die diagram with live snapshot captions + click inspectors."""
 
-    WIDTH = 1120
-    HEIGHT = 980
+    WIDTH = 1340
+    HEIGHT = 1120
 
     ENGINES = [
-        ("ALU", "Expression / ALU"),
+        ("ALU", "ALU"),
         ("CANVAS", "Canvas 2D"),
         ("BLIT", "Blitter"),
-        ("RAF", "Event / Timer / rAF"),
+        ("RAF", "Event/rAF"),
         ("STR", "String"),
-        ("CONS_ENG", "Console Eng"),
+        ("CONS_ENG", "Console"),
         ("STORE", "Storage"),
-        ("VIDEO", "Video / HDMI"),
+        ("VIDEO", "Video"),
     ]
     STAGES = [
         ("S1", "1 FETCH"),
@@ -213,8 +264,8 @@ class ArchitectureView:
         )
         self.canvas.pack(fill="both", expand=True)
         self.title_font = tkfont.Font(family="Helvetica", size=10, weight="bold")
-        self.value_font = tkfont.Font(family="Menlo", size=10)
-        self.small_font = tkfont.Font(family="Menlo", size=9)
+        self.value_font = tkfont.Font(family="Menlo", size=9)
+        self.small_font = tkfont.Font(family="Menlo", size=8)
         self.blocks: dict[str, tuple[int, int]] = {}
         self.block_rects: dict[str, tuple[int, int, int, int]] = {}
         self.inspect_key: str | None = None
@@ -250,13 +301,15 @@ class ArchitectureView:
         rect = self.canvas.create_rectangle(
             x0, y0, x1, y1, fill=BLOCK_IDLE, outline=BLOCK_OUTLINE, width=1,
         )
+        tw = max(36, x1 - x0 - 14)
+        # title in the top padding; value in the lower half — never on the same baseline
         self.canvas.create_text(
-            (x0 + x1) / 2, y0 + 11, text=title, font=self.title_font,
-            fill=ACCENT_FG if accent else TITLE_FG,
+            (x0 + x1) / 2, y0 + 16, text=title, font=self.title_font,
+            fill=ACCENT_FG if accent else TITLE_FG, width=tw, justify="center",
         )
         value = self.canvas.create_text(
-            (x0 + x1) / 2, (y0 + y1) / 2 + 8, text="", font=self.value_font,
-            fill=VALUE_FG, justify="center",
+            (x0 + x1) / 2, y0 + (y1 - y0) * 0.64, text="", font=self.value_font,
+            fill=VALUE_FG, justify="center", width=tw,
         )
         self.blocks[key] = (rect, value)
         self.block_rects[key] = (x0, y0, x1, y1)
@@ -313,183 +366,199 @@ class ArchitectureView:
             x0, y0, x1, y1 = self.canvas.coords(self.blocks["SD"][0])
         except Exception:
             return
-        self.canvas.coords(self._sd_window, x0 + 6, y0 + 22)
-        w = max(40, x1 - x0 - 12)
-        h = max(40, y1 - y0 - 28)
+        self.canvas.coords(self._sd_window, x0 + 8, y0 + 26)
+        w = max(40, x1 - x0 - 16)
+        h = max(40, y1 - y0 - 34)
         self.canvas.itemconfigure(self._sd_window, width=w, height=h)
 
     def _build(self) -> None:
+        # Layout corridors (wires stay in the gaps — never through labels):
+        #   x=6/10 left gutter (PHY → UART/CONSOLE)
+        #   x=210 left of die (compiler → sequencer)
+        #   y=50 above the die (FETCH / compile-on-RUN into BRAM)
+        #   x=704 core inner-right lip (dispatch → native)
+        #   x=718 core↔ARB alley (heap → ARB top; blit/FB/store south bus)
+        #   x=798 ARB↔memory alley
+        #   y=714 under the die (ASET / store / joy)
+        #   x=1326 right gutter (HDMI scanout → HDMI J8)
         c = self.canvas
         c.create_text(
-            self.WIDTH / 2, 22, text="JMR JS PROCESSOR — LIVE",
+            self.WIDTH / 2, 18, text="JMR JS PROCESSOR — LIVE",
             font=tkfont.Font(family="Helvetica", size=15, weight="bold"),
             fill=PHOSPHOR, tags=("chrome",),
         )
         c.create_text(
-            self.WIDTH / 2, 40,
+            self.WIDTH / 2, 36,
             text="HTML/JS-native CPU — bytecode is the ISA — wheel zoom · shift-drag pan · Home reset",
             font=self.small_font, fill=TITLE_FG, tags=("chrome",),
         )
         c.create_rectangle(
-            200, 52, 900, 638, outline=DIE_FG, width=3,
+            218, 56, 1010, 708, outline=DIE_FG, width=3,
             dash=(6, 4), tags=("die",),
         )
         c.create_text(
-            215, 52, text="JMR JS DIE · XC7A200T",
+            228, 70, text="JMR JS DIE · XC7A200T",
             font=self.small_font, fill=DIE_FG, tags=("die",), anchor="w",
         )
 
-        self._block("UART", 18, 68, 185, 128, "UART / PROG TETHER")
-        self._block("CONSOLE", 18, 142, 185, 232, "CONSOLE / LINE EDITOR")
-        self._block("COMPILER", 18, 248, 185, 400, "COMPILER — compile-on-RUN")
-        self._wire("UART", 102, 128, 102, 142)
-        self._wire("CONSOLE", 102, 232, 102, 248)
-        # compile-on-RUN code path (dashed): HTML → bytecode → sequencer
+        self._block("UART", 16, 72, 204, 148, "UART / PROG TETHER")
+        self._block("CONSOLE", 16, 162, 204, 258, "CONSOLE / LINE EDITOR")
+        self._block("COMPILER", 16, 272, 204, 448, "COMPILER — compile-on-RUN")
+        self._wire("UART", 110, 148, 110, 162)
+        self._wire("CONSOLE", 110, 258, 110, 272)
+        # compile-on-RUN: HTML → sequencer (left gutter — misses core title)
         self._wire(
-            "CODE_BRAM", 185, 280, 208, 280, 208, 126, 226, 126, kind="code",
+            "CODE_BRAM", 204, 340, 210, 340, 210, 144, 240, 144, kind="code",
         )
 
-        c.create_rectangle(215, 58, 638, 632, outline="#3b6e3b", width=2)
+        c.create_rectangle(226, 64, 710, 700, outline="#3b6e3b", width=2)
         c.create_text(
-            426, 72, text="JS PROCESSOR CORE", font=self.title_font, fill=PHOSPHOR,
+            500, 80, text="JS PROCESSOR CORE", font=self.title_font, fill=PHOSPHOR,
         )
-        self._block("SEQUENCER", 226, 86, 422, 166, "1 PROGRAM SEQUENCER")
-        self._block("DISPATCH", 432, 86, 628, 166, "2 DISPATCH TABLE")
-        self._block("STACK", 226, 176, 422, 256, "3 TAGGED EVAL STACK")
-        self._block("HEAP", 432, 176, 628, 256, "4 OBJECT / HEAP")
-        self._block("NATIVE", 226, 266, 628, 328, "5 NATIVE CALL UNIT")
-        self._wire("DISPATCH", 422, 126, 432, 126)
-        self._wire("STACK", 324, 166, 324, 176)
-        self._wire("HEAP", 530, 166, 530, 176)
-        self._wire("STACK", 422, 216, 432, 216, kind="data")  # stack ↔ heap
-        self._wire("NATIVE", 530, 256, 530, 266)
-        self._wire("DISPATCH", 628, 126, 638, 126, 638, 297, 628, 297)
+        self._block("SEQUENCER", 240, 96, 468, 192, "1 PROGRAM SEQUENCER")
+        self._block("DISPATCH", 482, 96, 696, 192, "2 DISPATCH TABLE")
+        self._block("STACK", 240, 206, 468, 302, "3 TAGGED EVAL STACK")
+        self._block("HEAP", 482, 206, 696, 302, "4 OBJECT / HEAP")
+        self._block("NATIVE", 240, 316, 696, 394, "5 NATIVE CALL UNIT")
+        self._wire("DISPATCH", 468, 144, 482, 144)
+        self._wire("STACK", 354, 192, 354, 206)
+        self._wire("HEAP", 589, 192, 589, 206)
+        self._wire("STACK", 468, 254, 482, 254, kind="data")
+        self._wire("NATIVE", 589, 302, 589, 316)
+        self._wire("DISPATCH", 696, 144, 704, 144, 704, 355, 696, 355)
 
         c.create_text(
-            426, 344, text="6 SHARED ENGINES — never merged",
+            468, 412, text="6 SHARED ENGINES — never merged",
             font=self.title_font, fill=TITLE_FG,
         )
-        grid_x, grid_y, bw, bh, gap = 226, 356, 92, 72, 8
+        grid_x, grid_y, bw, bh, gap = 240, 428, 108, 92, 12
         for i, (key, label) in enumerate(self.ENGINES):
             rowi, coli = divmod(i, 4)
             x0 = grid_x + coli * (bw + gap)
             y0 = grid_y + rowi * (bh + gap)
             self._block(key, x0, y0, x0 + bw, y0 + bh, label)
-        self._wire("NATIVE2", 426, 328, 426, 356)
-        # engines → arbiter (data). VIDEO right edge 618; arbiter bottom 674,330
-        self._wire(
-            "ENG_ARB", 618, 392, 674, 392, 674, 330, kind="data",
-        )
+        self._wire("NATIVE2", 468, 394, 468, 428)
+        # engines → ARB left edge (ARB sits beside the engine row, not on the bus)
+        self._wire("ENG_ARB", 708, 474, 728, 474, kind="data")
 
-        self._block("ARBITER", 646, 200, 702, 330, "ARB")
+        self._block("ARBITER", 728, 430, 788, 560, "ARB")
         self.canvas.itemconfigure(self.blocks["ARBITER"][1], font=self.small_font)
-        self._wire("MEM", 638, 260, 646, 260)
 
-        c.create_rectangle(710, 58, 895, 632, outline="#3b6e3b", width=2)
+        c.create_rectangle(808, 64, 1010, 700, outline="#3b6e3b", width=2)
         c.create_text(
-            802, 72, text="MEMORY — THREE ROOMS", font=self.title_font, fill=PHOSPHOR,
+            909, 80, text="MEMORY — THREE ROOMS", font=self.title_font, fill=PHOSPHOR,
         )
-        self._block("M_BRAM", 718, 88, 888, 248, "A  ON-CHIP BRAM")
-        self._block("M_SRAM", 718, 260, 888, 428, "B  ASSET SRAM 4 MB")
-        self._block("M_SDCARD", 718, 440, 888, 620, "C  µSD FAT32")
-        self._wire("ARB_MEM", 702, 260, 718, 260)
-        # fetch: sequencer → code BRAM (along die top)
+        self._block("M_BRAM", 818, 98, 1000, 278, "A  ON-CHIP BRAM")
+        self._block("M_SRAM", 818, 296, 1000, 486, "B  ASSET SRAM 4 MB")
+        self._block("M_SDCARD", 818, 504, 1000, 688, "C  µSD FAT32")
+        # heap → alley x=718 → ARB *top* (does not cross ARB caption)
+        self._wire("MEM", 696, 254, 718, 254, 718, 430, 728, 430, kind="data")
+        # ARB → rooms via x=798 (gap before memory 808)
+        self._wire("ARB_MEM", 788, 450, 798, 450, 798, 188, 818, 188, kind="data")
+        self._wire("BLIT_SRAM", 788, 495, 818, 495, kind="data")
+        # FETCH + compile code along y=50 (above die / core title)
         self._wire(
-            "FETCH", 324, 86, 324, 70, 803, 70, 803, 88, kind="code",
+            "FETCH", 354, 96, 354, 50, 909, 50, 909, 98, kind="code",
         )
-        # compile-on-RUN: code section → BRAM; ASET → asset SRAM
         self._wire(
-            "CODE_BRAM", 185, 260, 208, 260, 208, 64, 803, 64, 803, 88,
+            "CODE_BRAM", 204, 300, 210, 300, 210, 50, 909, 50, 909, 98, kind="code",
+        )
+        # ASET: compiler → under-die y=714 → SRAM (misses MEMORY C title)
+        self._wire(
+            "CODE_ASET",
+            204, 430, 210, 430, 210, 714, 718, 714, 718, 390, 818, 390,
             kind="code",
         )
+        # Canvas FB: down between ALU/Canvas, south bus y=640, into ARB (not through ARB text)
         self._wire(
-            "CODE_ASET", 185, 380, 198, 380, 198, 344, 718, 344, kind="code",
+            "FB_BUS", 414, 520, 414, 640, 718, 640, 718, 495, 728, 495, kind="data",
         )
-        # blitter reads asset SRAM (pixels never enter code BRAM)
+        # Blitter: down between Blitter/rAF onto the same south bus
         self._wire(
-            "BLIT_SRAM", 518, 392, 640, 392, 640, 344, 718, 344, kind="data",
-        )
-        # Canvas/FB lives in on-chip BRAM; HDMI scans front FB only
-        self._wire(
-            "FB_BUS", 418, 392, 418, 200, 718, 200, kind="data",
+            "BLIT_SRAM", 588, 474, 594, 474, 594, 640, 718, 640, kind="data",
         )
 
-        self._block("HDMI", 910, 68, 1105, 158, "HDMI OUT  640×480", accent=True)
-        self._block("REGS", 910, 170, 1105, 278, "REGISTERS", accent=True)
-        self._block("HSTATS", 910, 290, 1105, 398, "HEAP STATS", accent=True)
-        self._block("SD", 910, 410, 1105, 620, "microSD / FAT32", accent=True)
+        self._block("HDMI", 1022, 72, 1264, 168, "HDMI OUT  640×480", accent=True)
+        self._block("REGS", 1022, 182, 1264, 300, "REGISTERS", accent=True)
+        self._block("HSTATS", 1022, 314, 1264, 430, "HEAP STATS", accent=True)
+        self._block("SD", 1022, 444, 1264, 700, "microSD / FAT32", accent=True)
         self.canvas.itemconfigure(self.blocks["SD"][1], font=self.small_font)
         self.sd_list = tk.Text(
             self.canvas, bg=BLOCK_IDLE, fg=VALUE_FG, bd=0, highlightthickness=0,
             font=self.small_font, wrap="none", cursor="arrow",
+            spacing1=2, spacing3=2,
         )
         self.sd_list.configure(state="disabled")
         self._sd_window = self.canvas.create_window(
-            916, 432, window=self.sd_list, anchor="nw", width=180, height=175,
+            1032, 472, window=self.sd_list, anchor="nw", width=220, height=214,
         )
         self._sd_list_text = ""
-        self._wire("HDMI", 888, 113, 910, 113, kind="data")  # BRAM front FB → HDMI
-        self._wire("REGS", 888, 224, 910, 224)
-        self._wire("HSTATS", 888, 344, 910, 344, kind="data")
-        self._wire("STORE", 518, 472, 718, 472, kind="data")  # storage → µSD room
-        self._wire("SD", 888, 515, 910, 515, kind="data")  # µSD room → catalog
+        self._wire("HDMI", 1000, 133, 1022, 133, kind="data")
+        self._wire("REGS", 1000, 241, 1022, 241)
+        self._wire("HSTATS", 1000, 372, 1022, 372, kind="data")
+        # Storage → µSD room from below (not through C's header)
+        self._wire(
+            "STORE", 588, 578, 588, 640, 718, 640, 718, 714, 909, 714, 909, 688,
+            kind="data",
+        )
+        self._wire("SD", 1000, 596, 1022, 596, kind="data")
 
         c.create_text(
-            18, 648, text="BOARD CONNECTORS — Nexys Video (XC7A200T)",
+            16, 730, text="BOARD CONNECTORS — Nexys Video (XC7A200T)",
             font=self.title_font, fill=PHOSPHOR, anchor="w",
         )
         phy = [
-            ("PHY_PS2", "Keyboard", 18),
-            ("PHY_HDMI", "HDMI J8", 230),
-            ("PHY_UART", "PROG USB", 442),
-            ("PHY_JOY", "Pmod joystick", 654),
-            ("PHY_SD", "microSD card", 866),
+            ("PHY_PS2", "Keyboard", 16),
+            ("PHY_HDMI", "HDMI J8", 266),
+            ("PHY_UART", "PROG USB", 516),
+            ("PHY_JOY", "Pmod joystick", 766),
+            ("PHY_SD", "microSD card", 1022),
         ]
         for key, label, x0 in phy:
-            self._block(key, x0, 662, x0 + 200, 728, label)
+            self._block(key, x0, 748, x0 + 220, 814, label)
             c.create_rectangle(
-                x0 + 80, 644, x0 + 120, 662, fill="#3b6e3b", outline=DIE_FG,
+                x0 + 90, 730, x0 + 130, 748, fill="#3b6e3b", outline=DIE_FG,
                 tags=("pad",),
             )
-        # board plugs → die (control). Keep L-shapes along the gutter / die lip.
-        self._wire("KBD", 118, 662, 118, 636, 8, 636, 8, 187, 18, 187)
-        self._wire("UART_PHY", 542, 662, 542, 636, 10, 636, 10, 98, 18, 98)
+        # plugs stay in gutters / under-die alley — HDMI on the RIGHT, SD straight up
+        self._wire("KBD", 126, 748, 126, 722, 10, 722, 10, 210, 16, 210)
+        self._wire("UART_PHY", 626, 748, 626, 722, 6, 722, 6, 110, 16, 110)
         self._wire(
-            "HDMI_PHY", 330, 662, 330, 636, 1112, 636, 1112, 113, 1105, 113,
+            "HDMI_PHY", 1264, 133, 1326, 133, 1326, 736, 376, 736, 376, 748,
             kind="data",
         )
-        self._wire("JOY", 754, 662, 754, 440, 618, 440, 572, 428)
-        self._wire("SD_PHY", 966, 662, 966, 620)
+        self._wire("JOY", 876, 748, 876, 714, 718, 714, 718, 474, 708, 474)
+        self._wire("SD_PHY", 1132, 748, 1132, 700)
 
         c.create_text(
-            18, 744, text="INSTRUCTION FLOW", font=self.title_font,
+            16, 834, text="INSTRUCTION FLOW", font=self.title_font,
             fill=PHOSPHOR, anchor="w",
         )
-        x = 18
+        x = 16
         for key, label in self.STAGES:
-            self._block(key, x, 758, x + 190, 808, label)
+            self._block(key, x, 850, x + 216, 910, label)
             if key != "S5":
-                self._wire("S_" + key, x + 190, 783, x + 218, 783)
-            x += 220
+                self._wire("S_" + key, x + 216, 880, x + 248, 880)
+            x += 252
         self.status_text = c.create_text(
-            18, 828, text="", font=self.value_font, fill=VALUE_FG, anchor="w",
+            16, 932, text="", font=self.value_font, fill=VALUE_FG, anchor="w",
         )
         self.motto_text = c.create_text(
-            18, 850, text="ONE OP · ONE DISPATCH · ONE ENGINE",
+            16, 954, text="ONE OP · ONE DISPATCH · ONE ENGINE",
             font=self.value_font, fill=ACCENT_FG, anchor="w",
         )
         c.create_text(
-            18, 874,
+            16, 976,
             text="click any box for live detail  ·  zoom in to see IP / heap / natives inside blocks",
             font=self.small_font, fill=TITLE_FG, anchor="w",
         )
         c.create_text(
-            18, 896,
+            16, 998,
             text="solid = control/data  ·  dashed blue = compile-on-RUN (HTML → .JSH → BRAM/SRAM)  ·  F10 hides",
             font=self.small_font, fill=TITLE_FG, anchor="w",
         )
         self.path_text = c.create_text(
-            18, 920, text="", font=self.small_font, fill=TITLE_FG, anchor="w",
+            16, 1020, text="", font=self.small_font, fill=TITLE_FG, anchor="w",
         )
 
     def _set(self, key: str, text: str) -> None:
@@ -547,16 +616,13 @@ class ArchitectureView:
                     self._snap["native_id"] = NATIVE_IDS.get(hint[1], "—")
         for key in _sname_keys(sname):
             self._heat_stamp[key] = now
-        if running and runtime == "PYTHON":
-            for key in ("CANVAS", "RAF", "SEQUENCER", "S4", "HDMI", "VIDEO"):
+        op_name = str(self._snap.get("op_name") or "")
+        nname_live = str(self._snap.get("native_name") or "")
+        # NEW: follow the opcode actually executing (not a blanket Canvas glow)
+        if running:
+            for key in _op_engine_keys(op_name, nname_live):
                 self._heat_stamp[key] = now
-        if self._snap.get("n_ops"):
-            for key in ("COMPILER", "M_BRAM", "SEQUENCER", "STORE"):
-                self._heat_stamp[key] = now
-        if int(self._snap.get("sram_bytes") or 0) > 0 or int(self._snap.get("spr") or 0) > 0:
-            for key in ("M_SRAM", "BLIT", "COMPILER"):
-                self._heat_stamp[key] = now
-        if self._snap.get("more"):
+        if self._line_buf or self._snap.get("more"):
             self._heat_stamp["CONSOLE"] = now
         if runtime == "BOARD":
             self._heat_stamp["PHY_HDMI"] = now
@@ -585,12 +651,30 @@ class ArchitectureView:
         self._set("CONSOLE", f"line: {buf!r}" if buf else "line: ''")
         src = self._g("source_name", "")
         nops = self._g("n_ops", "")
-        self._set(
-            "COMPILER",
-            f"{src or 'no HTML'}\n"
-            + (f"{nops} ops → .JSH" if nops not in ("", "—") else "RUN → fresh .JSH"),
-        )
-        self._set("SEQUENCER", f"{sname}\nIP {_dash(ip)}")
+        nhtml = self._g("n_html", "")
+        phase = str(self._snap.get("phase") or "")
+        try:
+            nops_i = int(nops)
+        except (TypeError, ValueError):
+            nops_i = 0
+        try:
+            nhtml_i = int(nhtml)
+        except (TypeError, ValueError):
+            nhtml_i = 0
+        if phase == "compile":
+            comp_live = "compiling → .JSH"
+        elif nops_i > 0:
+            comp_live = f"{nops_i} ops → .JSH"
+        elif nhtml_i > 0:
+            comp_live = f"{nhtml_i} lines  (RUN compiles)"
+        else:
+            comp_live = "LOAD HTML then RUN"
+        self._set("COMPILER", f"{src or 'no HTML'}\n{comp_live}")
+        src_line = self._g("src_line")
+        seq_l2 = f"IP {_dash(ip)}"
+        if src_line not in ("", "—", 0, "0"):
+            seq_l2 += f"  L{src_line}"
+        self._set("SEQUENCER", f"{sname}\n{seq_l2}")
         op_name = self._g("op_name", "")
         self._set(
             "DISPATCH",
@@ -615,10 +699,10 @@ class ArchitectureView:
         self._set("BLIT", "drawImage")
         self._set("RAF", f"rAF {raf}\nto {self._g('ton')}")
         self._set("STR", "join / JSON")
-        self._set("CONS_ENG", "READY/LOAD/RUN")
-        self._set("STORE", "µSD FAT32")
+        self._set("CONS_ENG", "READY")
+        self._set("STORE", "FAT32")
         self._set("VIDEO", "640×480")
-        self._set("ARBITER", "BRAM\nSRAM")
+        self._set("ARBITER", "port")
         mode = self._g("hdmi_mode", "letterbox")
         self._set(
             "M_BRAM",
@@ -789,6 +873,7 @@ class ArchitectureView:
             "efree", "fclk", "strb", "swaps", "dihit", "dimiss", "tfire",
             "running", "hdmi_mode", "source_name", "n_ops", "n_consts",
             "n_html", "sram_bytes", "op_name", "native_name",
+            "phase", "src_line", "last_cmd", "html_line",
         )
         parts = []
         for k in keys:
@@ -831,20 +916,32 @@ class ArchitectureView:
 
     def _inspect_sequencer(self) -> str:
         magic = MAGIC.decode("ascii", errors="replace")
-        return (
+        code_win = str(self._snap.get("code_window") or "")
+        html_win = str(self._snap.get("html_window") or "")
+        html_line = str(self._g("html_line") or "")
+        body = (
             self._hdr("PROGRAM SEQUENCER — fetch unit")
             + "16-bit IP. Fetches 32-bit op-words from code BRAM (32K×32):\n"
             "  op = { arg1[31:24], arg0[23:8], opcode[7:0] }\n"
             f".JSH / {magic} header: n_ops, n_consts, n_vars, flags\n"
             f"(flags bit1 = ASET present, value {FLAG_ASET}).\n"
-            "Bytecode is the ISA — no hidden CPU, no V8/dukpy.\n\n"
+            "Bytecode is the ISA — no hidden CPU, no V8/dukpy.\n"
+            "Analog of BASIC PCU LINE/tokens: IP + HTML line the op compiled from.\n\n"
             f"runtime     {self._runtime}\n"
+            f"phase       {self._g('phase')}\n"
             f"sname       {self._g('sname')}\n"
             f"IP          {self._g('ip')}\n"
+            f"opcode      {self._g('op_name')}  arg0 {self._g('op_arg')}\n"
+            f"native      {self._g('native_name')}  (id {self._g('native_id')})\n"
             f"n_ops       {self._g('n_ops')}   n_consts {self._g('n_consts')}\n"
             f"source      {self._g('source_name', '(none)')}\n"
-            f"HTML lines  {self._g('n_html')}\n"
+            f"HTML line   {self._g('src_line')}   {html_line[:80]}\n"
         )
+        if html_win:
+            body += "\nHTML around IP\n" + html_win + "\n"
+        if code_win:
+            body += "\nbytecode around IP\n" + code_win + "\n"
+        return body
 
     def _inspect_dispatch(self) -> str:
         cur = str(self._g("op_name", "") or "")
@@ -855,7 +952,8 @@ class ArchitectureView:
         return (
             self._hdr("DISPATCH TABLE — opcode → engine")
             + "34 opcodes. CALL_NATIVE (0D) is the FM name; RTL OP_CALL\n"
-            "is the same instruction (native id in arg0).\n\n"
+            "is the same instruction (native id in arg0).\n"
+            f"now: {self._g('op_name')}  native {self._g('native_name')}\n\n"
             + "\n".join(rows)
             + "\n"
         )
@@ -895,7 +993,8 @@ class ArchitectureView:
         )
 
     def _inspect_compiler(self) -> str:
-        return (
+        html_win = str(self._snap.get("html_window") or "")
+        body = (
             self._hdr("COMPILE-ON-RUN FRONT END")
             + "Lexer → Parser → Bytecode generator.\n"
             "LOAD \"NAME.HTML\" then RUN always recompiles the current HTML\n"
@@ -903,12 +1002,17 @@ class ArchitectureView:
             "Code → code BRAM. ASET → external SRAM asset bank.\n"
             "Never prefer a stale .JSH. Compile errors use HTML line numbers.\n"
             "Missing compile path → fail loud (?NH), never fake output.\n\n"
+            f"phase        {self._g('phase')}\n"
+            f"last command {self._g('last_cmd')!r}\n"
             f"loaded HTML  {self._g('source_name', '(none)')}\n"
             f"HTML lines   {self._g('n_html')}\n"
             f"n_ops        {self._g('n_ops')}   n_consts {self._g('n_consts')}\n"
             f"ASET bytes   {self._g('sram_bytes')}   sprites {self._g('spr')}\n"
             f"runtime      {self._runtime}\n"
         )
+        if html_win:
+            body += "\nHTML (editor buffer)\n" + html_win + "\n"
+        return body
 
     def _inspect_console(self) -> str:
         glass = str(self._snap.get("glass") or "")
@@ -922,6 +1026,7 @@ class ArchitectureView:
             + "Monitor verbs: READY · LOAD · RUN · DIR · EDIT · LIST.\n"
             "LIST parks on -- MORE -- (Space pages). Line numbers = HTML.\n\n"
             f"typed line   {self._line_buf!r}\n"
+            f"last command {self._g('last_cmd')!r}\n"
             f"MORE         {bool(self._snap.get('more'))}\n"
             f"last glass   {last[:120] or '—'}\n"
         )

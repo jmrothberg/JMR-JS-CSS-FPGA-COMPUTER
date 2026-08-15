@@ -161,6 +161,7 @@ class App:
         self._cursor_t = time.monotonic()
         self._last_prompt: str | None = None
         self._busy_prompt: str | None = None  # keep typed RUN/LIST until LINE returns
+        self._arch_phase_override: str | None = None
 
         self._build_ui()
         # MORE waiter: pump Tk + refresh glass (BASIC more_idle pattern)
@@ -319,6 +320,13 @@ class App:
                 snap = getter() or {}
             except Exception:
                 snap = {}
+        override = getattr(self, "_arch_phase_override", None)
+        if override:
+            snap["phase"] = override
+            if override == "load":
+                snap["sname"] = "LOAD"
+            elif override == "compile":
+                snap["sname"] = "COMPILE"
         self.arch.update(
             runtime=self.backend.name,
             snap=snap,
@@ -381,6 +389,7 @@ class App:
                     self.backend.paint_prompt(self._busy_prompt, cursor_on=False)
             self._refresh_fb()
             self.root.update()
+            self._update_arch_monitor()
         except tk.TclError:
             self._alive = False
             return
@@ -535,6 +544,10 @@ class App:
                 # Keep the typed line visible until LINE returns (SCREEN? used
                 # to blank `> run` mid-compile).
                 self._busy_prompt = f"> {line}" if line.strip() else "> WORKING…"
+                if up.startswith("LOAD"):
+                    self._arch_phase_override = "load"
+                elif up == "RUN" or up.startswith("RUN "):
+                    self._arch_phase_override = "compile"
                 if hasattr(self.backend, "paint_prompt"):
                     self.backend.paint_prompt(self._busy_prompt, cursor_on=False)
                 else:
@@ -546,10 +559,12 @@ class App:
             if up == "RUN" or up.startswith("RUN ") or up.startswith("LOAD"):
                 try:
                     self._set_status(self._status_text() + "  LOADING/COMPILING")
+                    self._update_arch_monitor()
                     self.root.update_idletasks()
                 except tk.TclError:
                     pass
             self.backend.type_line(line)
+            self._arch_phase_override = None
             self._busy_prompt = None
             self._after_command()
             return "break"
@@ -630,6 +645,7 @@ class App:
         except tk.TclError:
             return
         self._refresh_fb()
+        self._update_arch_monitor()
 
     def _paint_prompt(self) -> None:
         if self._is_running():

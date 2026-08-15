@@ -53,6 +53,64 @@ def card_catalog(extra: list[str] | None = None) -> list[str]:
     return names
 
 
+def _native_name_for_id(nid) -> str:
+    try:
+        from functional_model.jsb_format import NATIVE_IDS
+        n = int(nid)
+    except (TypeError, ValueError, ImportError):
+        return ""
+    for name, i in NATIVE_IDS.items():
+        if i == n:
+            return name
+    return ""
+
+
+def fmt_code_window(chunk, ip, span: int = 5) -> str:
+    """Disassemble chunk.code around IP (BASIC detokenize analog)."""
+    code = getattr(chunk, "code", None) or []
+    if not code:
+        return ""
+    try:
+        ip = int(ip or 0)
+    except (TypeError, ValueError):
+        ip = 0
+    lo = max(0, ip - span)
+    hi = min(len(code), ip + span + 1)
+    rows = []
+    for i in range(lo, hi):
+        op, *args = code[i]
+        name = op.name if hasattr(op, "name") else str(op)
+        extra = ""
+        if args:
+            extra = " " + " ".join(str(a) for a in args[:3])
+        mark = "→" if i == ip else " "
+        rows.append(f"{mark} {i:5d}  {name}{extra}")
+    return "\n".join(rows)
+
+
+def fmt_html_window(lines, lineno, span: int = 4) -> str:
+    """HTML/JS source around the line the current opcode compiled from."""
+    if not lines:
+        return ""
+    try:
+        ln = int(lineno)
+    except (TypeError, ValueError):
+        return ""
+    if ln <= 0:
+        return ""
+    n = len(lines)
+    lo = max(1, ln - span)
+    hi = min(n, ln + span)
+    rows = []
+    for i in range(lo, hi + 1):
+        text = lines[i - 1]
+        if len(text) > 88:
+            text = text[:85] + "…"
+        mark = "→" if i == ln else " "
+        rows.append(f"{i:5d}{mark} {text}")
+    return "\n".join(rows)
+
+
 def _js_tag(val) -> str:
     if val is None:
         return "undef"
@@ -233,9 +291,57 @@ class PythonBackend(RuntimeBackend):
         n_consts = len(getattr(chunk, "consts", None) or []) if chunk is not None else 0
         spr = len(getattr(m, "_spr_descs", None) or [])
         sram_bytes = int(getattr(getattr(m, "sram", None), "loaded_bytes", 0) or 0)
+        phase = str(getattr(m, "_arch_phase", "") or "")
+        if not phase:
+            if running:
+                phase = "run"
+            elif getattr(m, "source_lines", None):
+                phase = "loaded"
+            else:
+                phase = "idle"
+        ip = int(getattr(vm, "last_ip", 0) or 0) if vm is not None else 0
+        last_op = getattr(vm, "last_op", None) if vm is not None else None
+        op_name = last_op.name if last_op is not None and hasattr(last_op, "name") else ""
+        arg0 = getattr(vm, "last_arg0", None) if vm is not None else None
+        native_name = ""
+        native_id = ""
+        if op_name == "CALL_NATIVE" and arg0 is not None:
+            native_id = arg0
+            native_name = _native_name_for_id(arg0)
+        src_line = 0
+        op_lines = getattr(chunk, "op_lines", None) if chunk is not None else None
+        if op_lines and 0 <= ip < len(op_lines):
+            src_line = int(op_lines[ip] or 0)
+        src_lines = list(getattr(m, "source_lines", None) or [])
+        if running and op_name:
+            sname = op_name
+        elif phase == "compile":
+            sname = "COMPILE"
+        elif phase == "load":
+            sname = "LOAD"
+        elif phase == "loaded":
+            sname = "LOADED"
+        elif running:
+            sname = "RUN"
+        else:
+            sname = "IDLE"
         return {
             "running": running,
-            "sname": "RUN" if running else "IDLE",
+            "phase": phase,
+            "sname": sname,
+            "ip": ip,
+            "op_name": op_name,
+            "op_arg": arg0 if arg0 is not None else "",
+            "native_id": native_id,
+            "native_name": native_name,
+            "src_line": src_line,
+            "html_line": (
+                src_lines[src_line - 1][:88] if src_line and 0 < src_line <= len(src_lines)
+                else ""
+            ),
+            "code_window": fmt_code_window(chunk, ip) if chunk is not None else "",
+            "html_window": fmt_html_window(src_lines, src_line or 1 if src_lines else 0),
+            "last_cmd": getattr(m, "_arch_cmd", "") or "",
             "sp": len(stack),
             "raf": len(getattr(m, "_raf_q", []) or []),
             "ton": len(getattr(m, "_timers", []) or []),
@@ -255,6 +361,6 @@ class PythonBackend(RuntimeBackend):
             "spr": spr,
             "n_ops": n_ops,
             "n_consts": n_consts,
-            "n_html": len(getattr(m, "source_lines", None) or []),
+            "n_html": len(src_lines),
             "sram_bytes": sram_bytes,
         }

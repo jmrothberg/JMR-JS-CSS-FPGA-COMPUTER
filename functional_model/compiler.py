@@ -199,6 +199,8 @@ class Compiler:
         self.names: List[str] = []
         self.name_index: dict[str, int] = {}
         self.code: List[Tuple] = []
+        # NEW: HTML line per emitted op (monitor follows bytecode → source)
+        self.op_lines: List[int] = []
         # NEW: user functions name → (entry_ip, params)
         self.functions: dict[str, Tuple[int, List[str]]] = {}
         # NEW: classes + set of all method names (for CALL_METHOD dispatch)
@@ -234,6 +236,7 @@ class Compiler:
             self.names,
             dict(self.functions),
             dict(self.classes),
+            op_lines=list(self.op_lines),
         )
 
     def _prescan_class_names(self) -> None:
@@ -553,7 +556,12 @@ class Compiler:
         return self.name_index[name]
 
     def _emit(self, *op_args: Any) -> int:
+        t = self._peek()
+        if t is None and self.i > 0:
+            t = self.tokens[self.i - 1]
+        line = int(t[2]) if t is not None else 0
         self.code.append(tuple(op_args))
+        self.op_lines.append(line)
         return len(self.code) - 1
 
     def _patch(self, idx: int, *op_args: Any) -> None:

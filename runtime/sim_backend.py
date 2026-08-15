@@ -23,7 +23,10 @@ from pathlib import Path
 from typing import Optional
 
 from functional_model.canvas_engine import CanvasEngine
-from runtime.backend import ROOT, RuntimeBackend, card_catalog, parse_status_kv
+from runtime.backend import (
+    ROOT, RuntimeBackend, card_catalog, parse_status_kv,
+    _native_name_for_id, fmt_code_window, fmt_html_window,
+)
 from runtime.flight_log import FlightLog
 
 SIM_DIR = ROOT / "sim"
@@ -44,6 +47,10 @@ class SimBackend(RuntimeBackend):
         self._listing = False  # LIST/DIR until READY — no '>' between pages
         self._edit_prefill: Optional[str] = None
         self._loaded_name: str = ""
+        self._arch_phase: str = "idle"
+        self._last_cmd: str = ""
+        self._html_chunk = None
+        self._html_lines: list = []
         self._break_run_wait: bool = False
         self._fb_logged: bool = False  # first game FB? only
         extra = ""
@@ -366,11 +373,17 @@ class SimBackend(RuntimeBackend):
         self._abort_more()
         stripped = text.strip()
         upper = stripped.upper()
+        self._last_cmd = stripped
         if upper.startswith("LOAD"):
             self._loaded_name = stripped[4:].strip().strip('"').strip("'")
+            self._arch_phase = "load"
+            self._html_chunk = None
+            self._html_lines = []
         # Compile-on-RUN: fresh .JSH into the live card, then RTL FAT-loads it.
         if upper == "RUN" or upper.startswith("RUN "):
+            self._arch_phase = "compile"
             if self._html_loaded_stem() and not self._compile_on_run_html():
+                self._arch_phase = "loaded"
                 self._sync_glass("> ")
                 return
         self._rpc(f"LINE {text}")
@@ -393,6 +406,17 @@ class SimBackend(RuntimeBackend):
                 self._rpc("TICKN 20000")
                 self._rpc("SCREEN?")
                 if self._load_reply_ready(self._screen, stem):
+                    self._arch_phase = "loaded"
+                    html_path = ROOT / "storage" / f"{stem}.HTML"
+                    if not html_path.is_file():
+                        html_path = ROOT / "storage" / f"{stem}.HTM"
+                    if html_path.is_file():
+                        try:
+                            self._html_lines = html_path.read_text(
+                                encoding="utf-8"
+                            ).splitlines()
+                        except Exception:
+                            self._html_lines = []
                     break
         if upper.startswith("SAVE"):
             self._persist_save(stripped)
@@ -416,6 +440,10 @@ class SimBackend(RuntimeBackend):
                 st = self._rpc("STATUS?")
                 glass = self.screen_text()
                 if "running=1" in st or "?NH" in glass or "?NB" in glass:
+                    if "running=1" in st:
+                        self._arch_phase = "run"
+                    else:
+                        self._arch_phase = "loaded"
                     break
                 # Do not overlay '>' during LINE/FAT wait (typed RUN vanished).
             # NEW: ASET palette landed in the RTL palette BRAM during the FAT
@@ -494,6 +522,8 @@ class SimBackend(RuntimeBackend):
             html = html_path.read_text(encoding="utf-8")
             chunk = compile_html_text(html)
             blob = encode_html_chunk(chunk)
+            self._html_chunk = chunk
+            self._html_lines = html.splitlines()
             jsh_name = f"{stem}.JSH"
             (ROOT / "storage" / jsh_name).write_bytes(blob)
             card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
@@ -685,11 +715,52 @@ class SimBackend(RuntimeBackend):
                     pass
         snap = parse_status_kv(self._vmstat_raw)
         snap.update(parse_status_kv(self._status_raw))
-        snap["running"] = bool(self._running) or snap.get("running") in (1, "1", True)
+        running = bool(self._running) or snap.get("running") in (1, "1", True)
+        snap["running"] = running
+        phase = self._arch_phase
+        if running:
+            phase = "run"
+        elif phase == "idle" and self._loaded_name:
+            phase = "loaded"
+        snap["phase"] = phase
         snap["glass"] = self._screen or ""
-        snap["hdmi_mode"] = "game" if self._running else "letterbox"
+        snap["hdmi_mode"] = "game" if running else "letterbox"
         snap["source_name"] = self._loaded_name or ""
+        snap["last_cmd"] = self._last_cmd
         snap["more"] = bool(self._more)
         snap["catalog"] = card_catalog()
         snap["sp"] = snap.get("sp", 0)
+        chunk = self._html_chunk
+        src_lines = list(self._html_lines or [])
+        n_ops = len(getattr(chunk, "code", None) or []) if chunk is not None else 0
+        n_consts = len(getattr(chunk, "consts", None) or []) if chunk is not None else 0
+        snap["n_ops"] = n_ops
+        snap["n_consts"] = n_consts
+        snap["n_html"] = len(src_lines)
+        ip = int(snap.get("ip") or 0)
+        src_line = 0
+        op_lines = getattr(chunk, "op_lines", None) if chunk is not None else None
+        if op_lines and 0 <= ip < len(op_lines):
+            src_line = int(op_lines[ip] or 0)
+        snap["src_line"] = src_line
+        snap["html_line"] = (
+            src_lines[src_line - 1][:88] if src_line and 0 < src_line <= len(src_lines)
+            else ""
+        )
+        snap["code_window"] = fmt_code_window(chunk, ip) if chunk is not None else ""
+        snap["html_window"] = fmt_html_window(
+            src_lines, src_line or (1 if src_lines else 0),
+        )
+        if not snap.get("op_name"):
+            sname = str(snap.get("sname") or "")
+            if phase == "compile":
+                snap["sname"] = "COMPILE"
+            elif phase == "load":
+                snap["sname"] = "LOAD"
+            elif phase == "loaded" and not running:
+                snap["sname"] = "LOADED"
+            elif sname:
+                pass
+        if snap.get("native_id") and not snap.get("native_name"):
+            snap["native_name"] = _native_name_for_id(snap.get("native_id"))
         return snap
