@@ -775,3 +775,46 @@ requestAnimationFrame(tick);
     # Started at 7 going right for 3 frames, then reverse at next center.
     assert m.vm.globals.get("x") < 7 + 3 + 20, m.vm.globals.get("x")
 
+
+def test_class_field_listener_sees_enter():
+    """this.startSelect as a value must be a bound Fn (DONKEY title Enter)."""
+    m = _run_js_frames(
+        """
+var hit = 0;
+class G {
+  startSelect = (e) => {
+    if (e.key === "Enter") hit = 1;
+  }
+}
+const g = new G();
+addEventListener("keydown", g.startSelect);
+function tick() { requestAnimationFrame(tick); }
+requestAnimationFrame(tick);
+""",
+        n_frames=2,
+    )
+    m.input.key_event(13, "Enter", True)
+    for _ in range(4):
+        m._bytecode_html_frame()
+    assert m.vm.globals.get("hit") == 1, m.vm.globals.get("hit")
+
+
+def test_destructure_space_key_starts():
+    """const { key } = e; key === ' ' (INVADERS start / fire)."""
+    m = _run_js_frames(
+        """
+var hit = 0;
+addEventListener("keydown", function(e) {
+  const { key } = e;
+  if (key === " ") hit = 1;
+});
+function tick() { requestAnimationFrame(tick); }
+requestAnimationFrame(tick);
+""",
+        n_frames=2,
+    )
+    m.input.key_event(32, " ", True)
+    for _ in range(4):
+        m._bytecode_html_frame()
+    assert m.vm.globals.get("hit") == 1, m.vm.globals.get("hit")
+

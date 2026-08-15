@@ -279,6 +279,54 @@ If LD0 lives but LD6/LD5 stay off, or LD7/LD4 never move: **J15 / PIC24 / keyboa
 
 Known Digilent constraints (not a secret silicon workaround): FPGA must be programmed first (PIC24 stays in config mode until DONE); FPGA pull-ups required; **no hubs**; one wired keyboard; do **not** drive `ps2_clk` low (that inhibits the device — `jmr_ps2_host` TX was removed for this).
 
+### Pmod input LED test (PS/2 keyboard + I2C joystick + J15 USB)
+
+Own Vivado project under `build/pmod_input_test/` so it cannot clobber `build/nexys_video`. JA + JB stay as before. J15 USB: `0xFF` reset left LD5 dark (PIC24 HID still live on LD14). Bit now sends **`0xF4` once** (no reset), then the same `ps2_rx` as JA. **LD4** = PS/2 clock activity after idle. **LD5** = assembled byte. Type on USB: LD4 flicker means PIC24 is clocking; LD5 means a scancode made it. LD6 blink = stick not ACKing (unplugged/loose), not USB.
+
+```bash
+source scripts/vivado_env.sh && make -C tools/pmod_input_test bit flash
+```
+
+| Device | Plug | Pins |
+|---|---|---|
+| USB keyboard | **J15 USB Host** | PIC24 → PS/2 `W17`/`N13` (pull-ups) |
+| Pmod PS/2 | **JA top row** | Data=JA1 (AB22), Clock=JA3 (AB20), GND=JA5, VCC=JA6 3.3 V |
+| Mini I2C gamepad @ 0x5A | **JB** PH2.0→Dupont | SCL=JB1 (V9), SDA=JB2 (V8), G=JB5, V=JB6 3.3 V |
+
+Match **labels** on the stick (G V SDA SCL), not wire colors. Do **not** use JXADC (VADJ ~2.5 V). JA VCC is 3.3 V — if the PS/2 keyboard stays dark, Pmod JP1 → external 5 V (VE) from board 5 V0; FPGA CLK/DATA stay 3.3 V. If the stick’s red LED never lights, power V from 5 V0 but keep SDA/SCL at 3.3 V. Never put 5 V on FPGA pins.
+
+LED row, **LD0 on the left** (both live at once):
+
+| LED | Meaning |
+|---|---|
+| **LD0** | stick LEFT |
+| **LD1** | stick UP |
+| **LD2** | stick DOWN |
+| **LD3** | stick RIGHT |
+| **LD4** | USB PS/2 clock activity (~200 ms). Off at idle. Flicker = PIC24 clocking. |
+| **LD5** | USB scancode (`ps2_rx`, same as JA) |
+| **LD6** | I2C ACK: **solid** = stick talking; **slow blink** = FPGA alive but no stick; **off** = bit not running |
+| **LD7** | Pmod keyboard: ~200 ms pulse per decoded character |
+
+Diagonals light two direction LEDs. Stick A/B still work in RTL but are not on LEDs (LD4/LD5 are USB).
+
+USB vs LD14: BUSY flash + **no LD4** = PIC24 got HID but is not clocking PS/2 to the FPGA. BUSY + **LD4 flicker** + **LD5 pulse** = USB reached the FPGA. Pmod JA still only LD7.
+
+**Board PASS 2026-08-14 (user):** JA keyboard + JB stick both live on the LED bit. J15 USB re-tried on this same test (pull-ups + RX-only).
+
+**JS board top 2026-08-14:** same JA/JB wiring is now in [`rtl/top_nexys_video.sv`](../rtl/top_nexys_video.sv) (J15 left in place). FPGA-SIM / PYTHON unchanged — F9 still uses the PC keyboard. Next `make -C tools/board_flow bit flash` of the JS console picks this up; leave the stick and Pmod keyboard plugged in.
+
+### Pmod input on the JS console (JA keyboard + JB stick)
+
+Same plugs as the LED test. No FPGA-SIM edits. J15 `ps2_rx` stays; `jmr_ps2_host` stays off. Frozen JS LEDs unchanged (LD7 is still J15 only).
+
+| Role | Plug |
+|---|---|
+| Type at READY | Pmod PS/2 on **JA** (also GUI tether) |
+| Play | Mini I2C stick on **JB** (also GUI arrows) |
+
+`joy_in = uart_joy_bits | {FIRE2, FIRE1, RIGHT, LEFT, DOWN, UP}` from I2C. NACK → stick bits 0.
+
 Traces: `traces/session_*.log` (PYTHON) and `session_*_FPGA-SIM.log`.
 See [SESSION_HANDOFF.md](SESSION_HANDOFF.md) for current agent priorities.
 
@@ -289,14 +337,13 @@ No HDMI Sink, DisplayPort, higher modes, or audio-over-HDMI for V1.
 The machine must run **without a PC**: HDMI monitor + USB keyboard + Pmod
 joystick. UART/JTAG are for programming and optional debug only.
 
-**This T200 unit:** J15 never enumerates. Until RMA/replace, **F9 BOARD +
-PROG tether** is the working keyboard (type + KEYBITS play). Product goal
-above is unchanged.
+**This T200 unit:** J15 never enumerates. Type on **Pmod PS/2 (JA)** or the GUI
+tether. Play on the **JB** stick or GUI arrows.
 
 | Role | Plug | Path |
 |---|---|---|
-| Typing / EDIT / ESC | USB keyboard → USB HOST | PIC24 → PS/2 → keyboard PHY → INPUT FIFO (**this unit: J15 dead → PROG tether**) |
-| Play (move/fire) | GUI KEYBITS (this unit) / Pmod later | `0xFE`+bits → `joy_in` / GPIO reader → INPUT FIFO |
+| Typing / EDIT / ESC | Pmod PS/2 on **JA** (J15 dead) | JA `ps2_rx` → keyboard FIFO (GUI tether still ORed) |
+| Play (move/fire) | Mini I2C stick on **JB** | I2C `0x5A` OR GUI KEYBITS → `joy_in` |
 | Mouse | — | Out of V1 |
 
 Many physical sources merge into **one INPUT FIFO** → INPUT engine → monitor /

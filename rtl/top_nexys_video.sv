@@ -1,5 +1,6 @@
 // Nexys Video board top — PHY shell around jmr_js_core (BASIC top_nexys_a7 method).
-// Standalone: HDMI text console + USB-HID PS/2 keyboard + µSD (SPI master ready).
+// Standalone: HDMI text console + USB-HID PS/2 (J15) + Pmod PS/2 (JA) +
+// I2C joystick 0x5A (JB) + µSD. Same JA/JB wiring as tools/pmod_input_test.
 module top_nexys_video (
     input  wire       clk100,
     input  wire       cpu_resetn,
@@ -24,6 +25,12 @@ module top_nexys_video (
     // NEW: input-only like BASIC T100 — PIC24 is the PS/2 device; do not drive
     input  wire       ps2_clk,
     input  wire       ps2_data,
+    // NEW: Pmod PS/2 on JA (pin1=Data pin3=Clock) — RX-only, same as J15
+    input  wire       pmod_ps2_clk,
+    input  wire       pmod_ps2_data,
+    // NEW: Mini I2C joystick @ 0x5A on JB (SCL=JB1 SDA=JB2)
+    inout  wire       joy_scl,
+    inout  wire       joy_sda,
     // µSD SPI
     output wire       sd_reset,
     output wire       sd_cclk,
@@ -88,6 +95,33 @@ module top_nexys_video (
         .scancode(ps2_scancode), .strobe(ps2_strobe),
         .ascii(kbd_ascii), .ascii_strobe(kbd_push)
     );
+    // NEW: second PS/2 RX on JA — do not attach jmr_ps2_host (J15 clk-low trap)
+    logic       pmod_kbd_push;
+    logic [7:0] pmod_ascii;
+    logic [7:0] pmod_scancode;
+    logic       pmod_ps2_strobe;
+    logic       pmod_ps2_parity_err;
+    ps2_rx u_pmod_ps2_rx (
+        .clk(core_clk), .rst_n(rst_n),
+        .ps2_clk(pmod_ps2_clk), .ps2_data(pmod_ps2_data),
+        .scancode(pmod_scancode), .strobe(pmod_ps2_strobe),
+        .parity_err(pmod_ps2_parity_err)
+    );
+    ps2_decode u_pmod_ps2_dec (
+        .clk(core_clk), .rst_n(rst_n),
+        .scancode(pmod_scancode), .strobe(pmod_ps2_strobe),
+        .ascii(pmod_ascii), .ascii_strobe(pmod_kbd_push)
+    );
+    // NEW: I2C stick @ 0x5A — NACK leaves bits 0 so GUI KEYBITS still work
+    logic ack_ok, joy_left, joy_up, joy_down, joy_right, fire_ac, fire_bd;
+    jmr_i2c_joy u_i2c_joy (
+        .clk(core_clk), .rst_n(rst_n),
+        .scl(joy_scl), .sda(joy_sda),
+        .ack_ok(ack_ok),
+        .left(joy_left), .up(joy_up), .down(joy_down), .right(joy_right),
+        .fire_ac(fire_ac), .fire_bd(fire_bd)
+    );
+    wire [5:0] i2c_joy_bits = {fire_bd, fire_ac, joy_right, joy_left, joy_down, joy_up};
 
     logic [9:0] scan_addr, cursor;
     logic [7:0] scan_data, dump_data;
@@ -118,16 +152,17 @@ module top_nexys_video (
         .game_mode(game_mode),
         .ps2_strobe(ps2_strobe)
     );
-    // Merge PS/2 + UART key sources (both slow; PS/2 wins on a collision)
-    wire        core_kbd_push = kbd_push | uart_kbd_push;
-    wire [7:0]  core_kbd_data = kbd_push ? kbd_ascii : uart_kbd_data;
+    // Merge J15 + Pmod JA + UART (all slow; J15 wins, then Pmod, then tether)
+    wire        core_kbd_push = kbd_push | pmod_kbd_push | uart_kbd_push;
+    wire [7:0]  core_kbd_data = kbd_push ? kbd_ascii :
+                                pmod_kbd_push ? pmod_ascii : uart_kbd_data;
 
     jmr_js_core u_core (
         .clk(core_clk), .pixel_clk(pixel_clk), .rst_n(rst_n),
         .standalone_mode(1'b1),
         .kbd_push(core_kbd_push), .kbd_data(core_kbd_data),
-        // NEW: was 6'b0 — games ignored GUI arrows; tether KEYBITS feed joy_in
-        .joy_in(uart_joy_bits), .joy_out(joy_out),
+        // NEW: tether KEYBITS OR I2C stick (same 6-bit field as PYTHON)
+        .joy_in(uart_joy_bits | i2c_joy_bits), .joy_out(joy_out),
         .dump_addr(uart_dump_addr), .dump_data(dump_data),
         .cursor(cursor), .ready_lit(ready_lit),
         .scan_addr(scan_addr), .scan_data(scan_data),

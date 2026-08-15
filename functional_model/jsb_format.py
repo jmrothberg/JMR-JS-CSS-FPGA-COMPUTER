@@ -498,7 +498,11 @@ def _encode_v2(chunk: Chunk, sprites=None, aset: bool = False) -> bytes:
             trailer += pix[: int(w) * int(h)]
             if len(pix) < int(w) * int(h):
                 trailer += b"\x00" * (int(w) * int(h) - len(pix))
-    # UTF-8 names last — PYTHON decode only (RTL stops after class table / SPRD)
+    # UTF-8 names last. NEW: "NAMB" marks the section so the RTL trailer FSM can
+    # find it with the same 4-byte peek it already does for SPR1/SPRD instead of
+    # inferring the position. RTL streams these bytes into name_mem so str[i] /
+    # str.length work on interned literals (string-row sprites).
+    trailer += b"NAMB"
     for n in names:
         raw = n.encode("utf-8")[:0xFFFF]
         trailer += struct.pack("<H", len(raw)) + raw
@@ -591,6 +595,10 @@ def decode_chunk(data: bytes) -> Chunk:
             off += 4
             n_fsty = struct.unpack_from("<H", data, off)[0]
             off += 2 + 4 * n_fsty
+        # NEW: "NAMB" marks the UTF-8 name bytes for the RTL trailer FSM.
+        # Tolerate its absence so an older .JSH still decodes.
+        if off + 4 <= len(data) and data[off : off + 4] == b"NAMB":
+            off += 4
         for _ in range(n_names):
             ln = struct.unpack_from("<H", data, off)[0]
             off += 2

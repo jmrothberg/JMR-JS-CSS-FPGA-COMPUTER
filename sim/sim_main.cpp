@@ -202,6 +202,16 @@ static void sd_load_image() {
     std::cerr << "WARN: no card.img — DIR will ?IO\n";
 }
 
+// NEW: VARWATCH <slot> — log every write to vars[slot] with the VM ip.
+// -1 disables. Minimal bring-up watchpoint (stderr, off by default).
+static int watch_slot = -1;
+static int32_t watch_prev = 0;
+// NEW: IPTRACE — ring of executed ip values (execution path). Arm with
+// "IPTRACE <n>", dump+disarm with "IPTRACE?". Off by default.
+static std::vector<uint16_t> ip_trace;
+static size_t ip_trace_cap = 0;
+static uint16_t ip_trace_prev = 0xffff;
+
 static void tick() {
     top->clk = 0; top->pixel_clk = 0; top->eval();
     uint8_t miso = 1;
@@ -210,6 +220,23 @@ static void tick() {
     top->clk = 1; top->pixel_clk = 1; top->eval();
     sd.step(top->sd_cs_n != 0, top->sd_sck != 0, top->sd_mosi != 0, &miso);
     top->sd_miso = miso;
+    if (watch_slot >= 0) {
+        int32_t v = int32_t(top->rootp->jmr_js_core__DOT__u_vm__DOT__vars[watch_slot]);
+        if (v != watch_prev) {
+            std::cerr << "VARW slot=" << watch_slot << " " << watch_prev << "->" << v
+                      << " ip=" << unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__ip)
+                      << " state=" << unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state)
+                      << "\n";
+            watch_prev = v;
+        }
+    }
+    if (ip_trace.size() < ip_trace_cap) {
+        uint16_t cur = uint16_t(top->rootp->jmr_js_core__DOT__u_vm__DOT__ip);
+        if (cur != ip_trace_prev) {
+            ip_trace.push_back(cur);
+            ip_trace_prev = cur;
+        }
+    }
 }
 
 static void ticks(int n) {
@@ -405,7 +432,59 @@ int main(int argc, char** argv) {
                       << " toovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_to_ovf)
                       << " jsonovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_json_ovf)
                       << " swaps=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n)
+                      // NEW: interned string bytes loaded from the trailer (str[i])
+                      << " strb=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__nb_wp)
+                      << " strovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_str_ovf)
+                      // NEW: ip where the last frame callback returned (dead loop)
+                      << " cbip=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_cb_ip)
+                      // NEW: timers dropped because the queued oid was no longer a Fn
+                      << " tmis=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_tmr_mis)
+                      << " tsch=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_tmr_sched)
+                      << " tfire=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_tmr_fire)
+                      << " ton=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__to_n)
+                      << " esp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_sp)
+                      << " efree=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_free_n)
                       << std::endl;
+            continue;
+        }
+        // NEW: OBJPEEK <oid> — dump one heap object (cls, n, key/val/tag slots)
+        if (line.rfind("OBJPEEK ", 0) == 0) {
+            auto* r = top->rootp;
+            unsigned oid = std::stoul(line.substr(8)) & 8191;
+            std::cout << "OBJ " << oid
+                      << " cls=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_cls[oid])
+                      << " n=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_n[oid]);
+            for (unsigned s = 0; s < 6; s++) {
+                std::cout << " [" << s << "]k="
+                          << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_key[oid][s])
+                          << " v=" << int(r->jmr_js_core__DOT__u_vm__DOT__obj_val[oid][s])
+                          << " t=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_tag[oid][s]);
+            }
+            std::cout << std::endl;
+            continue;
+        }
+        // NEW: IPTRACE <n> arms; IPTRACE? dumps the executed-ip path
+        if (line.rfind("IPTRACE ", 0) == 0) {
+            ip_trace.clear();
+            ip_trace_cap = std::stoul(line.substr(8));
+            ip_trace_prev = 0xffff;
+            std::cout << "OK" << std::endl;
+            continue;
+        }
+        if (line == "IPTRACE?") {
+            std::ostringstream oss;
+            oss << "IPS";
+            for (uint16_t v : ip_trace) oss << " " << v;
+            ip_trace_cap = 0;
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
+        // NEW: VARWATCH <slot|-1> — arm/disarm the vars[] write watchpoint
+        if (line.rfind("VARWATCH ", 0) == 0) {
+            watch_slot = std::stoi(line.substr(9));
+            if (watch_slot >= 0)
+                watch_prev = int32_t(top->rootp->jmr_js_core__DOT__u_vm__DOT__vars[watch_slot]);
+            std::cout << "OK" << std::endl;
             continue;
         }
         // NEW: VARPEEK <i> <n> — dump VM vars (bring-up only)

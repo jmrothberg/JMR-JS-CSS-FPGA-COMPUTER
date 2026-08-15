@@ -57,6 +57,14 @@ set_property -dict { PACKAGE_PIN V3   IOSTANDARD LVCMOS33 } [get_ports { hdmi_tx
 set_property -dict { PACKAGE_PIN W17 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { ps2_clk }]
 set_property -dict { PACKAGE_PIN N13 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { ps2_data }]
 
+## Pmod JA top row — Pmod PS/2 (pin1=Data pin3=Clock). Same as pmod_input_test.
+set_property -dict { PACKAGE_PIN AB22 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_ps2_data }]
+set_property -dict { PACKAGE_PIN AB20 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_ps2_clk }]
+
+## Pmod JB — Mini I2C joystick 0x5A (SCL=JB1 SDA=JB2). Same as pmod_input_test.
+set_property -dict { PACKAGE_PIN V9 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { joy_scl }]
+set_property -dict { PACKAGE_PIN V8 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { joy_sda }]
+
 ## µSD slot
 ## µSD — SPI: SCK=cclk MOSI=cmd MISO=d[0] CS=d[3] (LiteX/Digilent)
 ## NEW: PULLUP on MISO/CMD/CS — card tri-states DAT0 between transfers

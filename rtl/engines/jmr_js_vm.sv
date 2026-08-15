@@ -1,7 +1,11 @@
 // JMR-JS stack VM — BRAM code (writable from FAT .JSB) + 640×480 game FB.
 // ISA: functional_model/bytecode.py + jsb_format.py
 module jmr_js_vm #(
-    parameter string CODE_HEX = "invaders_jsb.hex"
+    parameter string CODE_HEX = "invaders_jsb.hex",
+    // NEW: the 8x8 glyph table PYTHON draws with (functional_model/font8.py,
+    // exported by tools/export_font_rom_hex.py) so ctx.fillText paints real
+    // characters instead of the old 64x8 bar stub
+    parameter string FONT_HEX = "font_rom.hex"
 ) (
     input  logic        clk,
     input  logic        rst_n,
@@ -123,7 +127,13 @@ module jmr_js_vm #(
     localparam int JSON_CAP = 8192; // VM-capped scratch; loud overflow, not title-sized
     localparam int JSON_STK = 32;
     localparam int ARR_CAP = 128;
-    localparam int ARR_KEEP_DELAY = 8; // boot rAF/click/nextStage before nursery
+    // NEW: 3, was 8. With no rewind during the grace window, 8 frames of
+    // per-frame temps got baked into the kept region when the watermark
+    // snapshots (PACMAN sat at obj=3263), leaving too little nursery headroom —
+    // a frame then allocated over its own live rAF Fn object, so the dispatcher
+    // ran a stale function that never re-armed and the game froze on its first
+    // drawn frame (raf=0). 3 still covers the boot rAF/click/nextStage chain.
+    localparam int ARR_KEEP_DELAY = 3; // boot rAF/click/nextStage before nursery
     localparam int MAX_CLS = 16;
     localparam int MAX_CMETH = 16;
     localparam int CSTK = 128;
@@ -138,11 +148,12 @@ module jmr_js_vm #(
     logic        obj_keep_ok;
     logic [3:0]  obj_keep_wait;
     logic        frame_fire; // NEW: fire rAF/keys the cycle after obj rewind
-    logic [5:0]  obj_n    [0:MAX_OBJ-1];
-    logic [15:0] obj_key  [0:MAX_OBJ-1][0:OBJ_SLOTS-1];
-    logic [31:0] obj_val  [0:MAX_OBJ-1][0:OBJ_SLOTS-1];
-    logic [2:0]  obj_tag  [0:MAX_OBJ-1][0:OBJ_SLOTS-1];
-    logic [15:0] obj_cls  [0:MAX_OBJ-1];
+    // NEW: public for the sim OBJPEEK probe (bring-up visibility only)
+    logic [5:0]  obj_n    [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
+    logic [15:0] obj_key  [0:MAX_OBJ-1][0:OBJ_SLOTS-1] /*verilator public_flat_rd*/;
+    logic [31:0] obj_val  [0:MAX_OBJ-1][0:OBJ_SLOTS-1] /*verilator public_flat_rd*/;
+    logic [2:0]  obj_tag  [0:MAX_OBJ-1][0:OBJ_SLOTS-1] /*verilator public_flat_rd*/;
+    logic [15:0] obj_cls  [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
     logic [7:0]  arr_len  [0:MAX_ARR-1];
     logic [31:0] arr_val  [0:MAX_ARR-1][0:ARR_CAP-1];
     logic [2:0]  arr_tag  [0:MAX_ARR-1][0:ARR_CAP-1];
@@ -163,23 +174,86 @@ module jmr_js_vm #(
     logic [15:0] cstack_map_arr [0:CSTK-1]; // FFFF=forEach; else dest arr for map
     logic [5:0]  cstack_env [0:CSTK-1]; // NEW: saved env_sp
     logic [6:0]  csp;
-    logic [5:0]  env_sp; // 0 = top-level (vars[] only)
+    logic [5:0]  env_sp /*verilator public_flat_rd*/; // 0 = top-level (vars[] only)
     logic [15:0] env_oid [0:ENV_DEPTH-1]; // NEW: live heap env objects (not value snapshots)
     logic        env_cap [0:ENV_DEPTH-1]; // NEW: MAKE_FN captured this frame
     logic [15:0] env_free [0:ENV_DEPTH-1]; // NEW: recycled uncaptured env oids
-    logic [5:0]  env_free_n;
+    logic [5:0]  env_free_n /*verilator public_flat_rd*/;
     logic [15:0] env_walk; // heap env object id (parent chain)
     logic [8:0]  env_ld_slot;
     logic        env_is_store;
     logic [15:0] dbg_heap_ovf /*verilator public_flat_rd*/;
     logic [15:0] dbg_to_ovf /*verilator public_flat_rd*/;
-    logic [15:0] to_fn [0:7]; // NEW: setTimeout/setInterval queue (Fn obj idx)
-    logic [3:0]  to_n;
+    logic [15:0] to_fn [0:7] /*verilator public_flat_rd*/; // NEW: setTimeout/setInterval queue (Fn obj idx)
+    logic [3:0]  to_n /*verilator public_flat_rd*/;
+    // NEW: timers whose queued oid no longer holds a CLS_FN at fire time.
+    // Executing such a slot ran top-level code mid-game (globals reset,
+    // INVADERS kill timers lost) — count and drop instead.
+    logic [15:0] dbg_tmr_mis /*verilator public_flat_rd*/;
+    logic [15:0] dbg_tmr_sched /*verilator public_flat_rd*/; // setTimeout accepted
+    logic [15:0] dbg_tmr_fire /*verilator public_flat_rd*/;  // callbacks launched
     logic [11:0] to_delay [0:7]; // remaining frames (delay_ms/17)
     logic [11:0] to_period [0:7]; // 0 = one-shot; else interval re-arm
     logic [15:0] to_id [0:7];
     logic [15:0] to_seq;
     logic [15:0] id_replace;
+    // NEW: interned string BYTES. jsb_format already writes every name as UTF-8
+    // at the end of the trailer, but only PYTHON decoded it — RTL kept a hash +
+    // length and no characters, so str[i] was undefined and str.length was
+    // undefined too. Any string-row sprite therefore drew nothing (INVADERS
+    // drawBitmap walks row[col] === "1"), while fillRect/drawImage art painted.
+    // On-chip BRAM with a registered read: one-cycle random access on FPGA and
+    // ASIC alike. The 4 MB external bank stays for art, never for code strings.
+    localparam int NAME_CAP = 32768;
+    logic [7:0]  name_mem [0:NAME_CAP-1];
+    logic [15:0] name_off [0:1023];   // intern idx -> first byte in name_mem
+    logic [15:0] name_rdaddr;
+    logic [7:0]  name_rdata;          // registered read (BRAM, not a mux)
+    logic [15:0] dbg_str_ovf /*verilator public_flat_rd*/; // bytes past NAME_CAP
+    // NEW: ip where the last frame-level callback returned (VMSTAT cbip)
+    logic [15:0] dbg_cb_ip /*verilator public_flat_rd*/;
+    // NEW: byte -> interned idx for every 1-char name, so str[i] hands back a
+    // value that OP_EQ matches against a "x" literal by intern id — one lookup,
+    // no scan over the name table.
+    logic [15:0] char_id [0:255];
+    logic        char_ok [0:255];
+    logic        name_has [0:1023];   // this intern id has bytes in name_mem
+    logic        names_ok;            // name bytes present AND byte-aligned
+    logic [15:0] nb_i, nb_len;
+    logic        nb_one;              // this name is exactly 1 byte (char lookup)
+    logic [15:0] nb_wp /*verilator public_flat_rd*/; // bytes loaded (VMSTAT strb)
+    logic [10:0] str_res;             // stack slot the char is written back to
+    // NEW: 8x8 glyph ROM — one BRAM, registered read, same bytes as the console
+    // scanout font. fillText was a filled 64x8 bar before this; every HUD in
+    // every title (not just the three) now gets the PYTHON glyphs.
+    (* ram_style = "block" *) logic [7:0] font_rom [0:1023];
+    initial $readmemh(FONT_HEX, font_rom);
+    logic [9:0]  font_raddr;
+    logic [7:0]  font_rdata;          // registered read (BRAM, not a mux)
+    // NEW: text staging buffer. Interned bytes, dynstr bytes and plain numbers
+    // are all expanded here, so the glyph raster (and the string concat that
+    // materialises dynamic interns) has exactly one byte source.
+    localparam int TXT_MAX = 64;
+    logic [7:0]  txt_buf [0:TXT_MAX-1];
+    logic [6:0]  txt_len, txt_i, txt_bn;
+    logic [3:0]  txt_ph;
+    logic [2:0]  txt_row, txt_col;
+    logic [3:0]  txt_k, txt_kx, txt_ky; // integer glyph scale + sub-pixel repeat
+    logic [7:0]  txt_bits;
+    logic signed [15:0] txt_px, txt_py; // pen after ctx transform (may be off-glass)
+    logic signed [15:0] txt_x0, txt_y0; // aligned top-left of the first glyph
+    logic [3:0]  txt_pi;                // P10 index while expanding a number
+    logic [3:0]  txt_d;                 // digit being accumulated
+    logic signed [31:0] txt_v;
+    logic [15:0] txt_rp;                // name_mem / json_mem read cursor
+    logic [31:0] txt_val;               // the text argument itself
+    logic [2:0]  txt_vt;
+    logic signed [47:0] txt_kp;         // font_px x ctx_sx (scale product)
+    logic [15:0] txt_w;                 // text width in device pixels
+    logic [1:0]  ctx_align;             // ctx.textAlign 0=left 1=center 2=right
+    logic [7:0]  ctx_font_px;           // ctx.font "NNpx ..." size (FM default 8)
+    logic [7:0]  fpx_acc;               // digits seen while parsing ctx.font
+    logic [7:0]  fp_left;               // bytes left in the font string
     // NEW: JSON/text scratch (stringify/parse/replace) — VM cap, sticky ovf
     logic [7:0]  json_mem [0:JSON_CAP-1];
     logic [13:0] json_wp, json_rp, json_src, json_srclen, json_dst;
@@ -239,6 +313,10 @@ module jmr_js_vm #(
     logic [15:0] id_save, id_restore, id_translate, id_rotate;
     logic [15:0] id_settransform; // NEW: ctx.setTransform(a,b,c,d,e,f)
     logic [15:0] id_assign, id_bind, id_proto, id_filltext, id_arc, id_enter;
+    // NEW: text state — ctx.font px size, ctx.textAlign and its two non-left
+    // values, plus measureText (games right-align HUD text with its width)
+    logic [15:0] id_font, id_textalign, id_center, id_right, id_measuretext;
+    logic [15:0] metrics_oid; // the one reserved measureText result object
     // NEW: DOM event ctors — PYTHON NEW_OBJ copies (type, options) so
     // `new KeyboardEvent("keydown", {key:"Enter",...})` has e.key (DONKEY boot)
     logic [15:0] id_kbevent, id_domevent, id_customev, id_mouseev, id_type;
@@ -283,10 +361,18 @@ module jmr_js_vm #(
     // NEW: string concat ('s'+_index etc.) — operand stash + digit fold
     logic signed [31:0] cc_av, cc_bv, cc_v;
     logic [2:0]  cc_at, cc_bt, cc_t;
-    logic        cc_second, cc_st;
+    logic        cc_second;
+    logic [1:0]  cc_st;   // 0=classify 1=digit fold 2=copy operand bytes
     logic [15:0] cc_h;
     logic [7:0]  cc_len;
     logic [3:0]  cc_pi, cc_d;
+    // NEW: the joined string also gets real BYTES (staged in txt_buf, then
+    // written into name_mem when the intern is allocated). Without this a
+    // concat was hash-only, so "SCORE " + n had a length but no characters
+    // and fillText / str[i] / .length could not see it.
+    logic [15:0] cc_cp;   // name_mem read cursor for a string operand
+    logic [7:0]  cc_cn;   // bytes still to copy
+    logic        cc_bok;  // every operand's bytes made it into txt_buf
     logic [15:0] pow31_tbl [0:255]; // 31^i mod 2^16 (concat hash fold)
     initial begin
         pow31_tbl[0] = 16'd1;
@@ -303,6 +389,13 @@ module jmr_js_vm #(
     logic [15:0] fsty_n, fsty_name;
     // NEW: pass called swapBuffers explicitly (legacy .JS) — no auto-swap
     logic        did_swap;
+    // NEW: a pass (rAF/timer/key callback or top-level) finished this frame.
+    // Present ONCE at the next frame tick instead of once per callback return:
+    // every setTimeout callback and key listener crossed the ip>=n_ops
+    // boundary and pulsed its own fb_swap, so buffers flipped mid-frame and
+    // the glass interleaved two half-drawn banks (PACMAN maze mutilated on
+    // keypress, INVADERS ran at half speed with vanishing draws).
+    logic        present_pend;
     // NEW: bring-up probes — drawImage sprite-marker hits vs misses
     logic [15:0] dbg_di_hit /*verilator public_flat_rd*/, dbg_di_miss /*verilator public_flat_rd*/;
     logic [1:0]  path_kind; // 0 none 1 arc 2 moveto 3 lineto
@@ -391,11 +484,15 @@ module jmr_js_vm #(
     // NEW: JSB v2 trailer walk (byte offset into code_mem)
     logic [18:0] trail_off; // PACMAN .JSH trailer sits past 64K byte
     logic [15:0] trail_n, trail_i, name_len_r, nhash, name_idx, trail_acc;
-    logic [4:0]  trail_ph;
+    // NEW: 6 bits — phases 32..34 stream the trailer's UTF-8 name bytes
+    // (5'd31 stays the "done, go run code" sentinel and still zero-extends)
+    logic [5:0]  trail_ph;
     logic [7:0]  trail_cls_i, trail_meth_i, trail_nmeth;
     logic [8:0]  trail_var_slot;
     logic [7:0]  trail_tb; // NEW: combo byte from code_rdata (do not declare inside always_ff)
-    logic [15:0] trail_guard; // NEW: force FETCH if walker never hits phase 22
+    // NEW: 20 bits — the walk now also streams the UTF-8 name bytes, so the
+    // watchdog has to allow NAME_CAP bytes on top of the tables it used to cover
+    logic [19:0] trail_guard; // NEW: force FETCH if walker never hits phase 22
 
     typedef enum logic [5:0] {
         S_IDLE,
@@ -430,6 +527,12 @@ module jmr_js_vm #(
         S_CALL, S_FOREACH, S_KEYEV, S_ENV_LOAD,
         // NEW: JSON.stringify/parse + String.replace/indexOf on dyn strings
         S_JSON, S_JSON_PARSE, S_REPL, S_IDXSTR,
+        // NEW: str[i] — address cycle then write-back for the registered
+        // name_mem (BRAM) read
+        S_STRIDX, S_STRIDX_WR,
+        // NEW: real fillText — parse ctx.font px, stage the text bytes, then
+        // raster 8x8 glyphs; S_STR_WR gives a joined string its bytes
+        S_FONTPX, S_TXT_LD, S_TXT_DRAW, S_STR_WR,
         // NEW: Canvas ImageData snapshot (one buffer, FM twin)
         S_IMGD_GET, S_IMGD_PUT
     } st_t;
@@ -587,6 +690,40 @@ module jmr_js_vm #(
     task automatic commit_arr_keep(input logic [2:0] tag, input logic [15:0] oid);
         if (arr_keep_ok && tag == 3'd2 && oid >= n_arr_keep)
             n_arr_keep <= oid + 16'd1;
+    endtask
+    // NEW: registering a frame callback IS the end of boot. The keep watermark
+    // only armed after ARR_KEEP_DELAY frames, so a loop registered from
+    // top-level (PACMAN init() -> start() -> requestAnimationFrame(fn)) left its
+    // Fn object in the nursery; the first rewind recycled that oid and the
+    // dispatcher then ran whatever function had taken the slot over — it
+    // returned without re-arming, so raf stuck at 0 and the game froze on its
+    // first drawn frame (cbip landed inside the Game factory, not the loop).
+    // A registered callback is live by definition, and everything allocated up
+    // to it is the program's boot state, so arm both watermarks here. Only on
+    // the FIRST registration: re-arming every frame would walk the bump pointer
+    // up and saturate the heap.
+    task automatic commit_boot_keep();
+        obj_keep_ok <= 1'b1;
+        arr_keep_ok <= 1'b1;
+        if (n_obj > n_obj_keep) n_obj_keep <= n_obj;
+        if (n_arr > n_arr_keep) n_arr_keep <= n_arr;
+    endtask
+    // NEW: a value stored into old space also owns whatever it points at, and a
+    // constructor allocates those children AFTER the instance itself, so
+    // stored_oid+1 kept the parent and rewound its contents (INVADERS:
+    // grids.push(new Grid()) kept the Grid and dropped this.invaders plus every
+    // Invader one frame later — the alien formation vanished and the array
+    // watermark was never committed at all). Allocation is a bump pointer, so
+    // "everything allocated so far" is exactly that subgraph: raise BOTH
+    // watermarks to the current pointers.
+    // Per-frame churn does not reach here — object/array slot overwrites copy
+    // in place below and keep their old oid, so the bump cannot creep
+    // (test_rtl_coord_overwrite_does_not_heapovf).
+    task automatic commit_deep_keep(input logic [2:0] tag);
+        if (tag == 3'd1 || tag == 3'd4 || tag == 3'd2) begin
+            if (obj_keep_ok && n_obj > n_obj_keep) n_obj_keep <= n_obj;
+            if (arr_keep_ok && n_arr > n_arr_keep) n_arr_keep <= n_arr;
+        end
     endtask
     // NEW: clip fillRect args to FB (no wrap — was the sparse BOARD bug)
     function automatic logic [9:0] clip_u(input logic signed [31:0] v, input int unsigned lim);
@@ -789,7 +926,7 @@ module jmr_js_vm #(
             running <= 1'b0;
             looping <= 1'b0;
             fb_we <= 1'b0; fb_swap <= 1'b0;
-            did_swap <= 1'b0;
+            did_swap <= 1'b0; present_pend <= 1'b0;
             fb_waddr <= '0; fb_wdata <= '0;
             fb_dump_addr <= '0; fb_dump_sel <= 1'b0;
             sp <= '0; ip <= '0;
@@ -803,6 +940,11 @@ module jmr_js_vm #(
         end else begin
             fb_we <= 1'b0;
             fb_swap <= 1'b0;
+            // NEW: registered name_mem read — BRAM, so str[i] costs one cycle
+            // (S_STRIDX) instead of a 32 KB combinational mux
+            name_rdata <= name_mem[name_rdaddr[14:0]];
+            // NEW: registered glyph fetch — one row of one character per cycle
+            font_rdata <= font_rom[font_raddr];
             kd_fn <= kd_slot[0];
             ku_fn <= ku_slot[0];
             if (fb_swap) dbg_swap_n <= dbg_swap_n + 16'd1; // NEW: present count
@@ -892,6 +1034,9 @@ module jmr_js_vm #(
                     id_settransform <= 16'hFFFF;
                     id_assign <= 16'hFFFF; id_bind <= 16'hFFFF;
                     id_proto <= 16'hFFFF; id_filltext <= 16'hFFFF; id_arc <= 16'hFFFF;
+                    id_font <= 16'hFFFF; id_textalign <= 16'hFFFF;
+                    id_center <= 16'hFFFF; id_right <= 16'hFFFF;
+                    id_measuretext <= 16'hFFFF; metrics_oid <= 16'hFFFF;
                     id_enter <= 16'hFFFF; id_keycode <= 16'hFFFF;
                     id_kbevent <= 16'hFFFF; id_domevent <= 16'hFFFF;
                     id_customev <= 16'hFFFF; id_mouseev <= 16'hFFFF;
@@ -918,6 +1063,16 @@ module jmr_js_vm #(
                     enter_n <= 3'd0; enter_delay <= 4'd0; // hack retired (KEYEVT)
                     kev_wp <= 3'd0; kev_rp <= 3'd0;
                     for (int i = 0; i < 1024; i++) intern_var_ok[i] <= 1'b0;
+                    // NEW: string bytes / char lookup start empty every LOAD
+                    for (int i = 0; i < 256; i++) char_ok[i] <= 1'b0;
+                    for (int i = 0; i < 1024; i++) name_has[i] <= 1'b0;
+                    names_ok <= 1'b0; nb_i <= 16'd0; nb_len <= 16'd0; nb_wp <= 16'd0;
+                    dbg_str_ovf <= 16'd0; name_rdaddr <= 16'd0; str_res <= 11'd0;
+                    // NEW: fillText defaults match FM (8 px glyphs, left align)
+                    ctx_align <= 2'd0; ctx_font_px <= 8'd8;
+                    font_raddr <= 10'd0; txt_len <= 7'd0; txt_ph <= 4'd0;
+                    dbg_cb_ip <= 16'd0; dbg_tmr_mis <= 16'd0;
+                    dbg_tmr_sched <= 16'd0; dbg_tmr_fire <= 16'd0;
                     ctx_tx <= 32'sd0; ctx_ty <= 32'sd0;
                     saved_tx <= 32'sd0; saved_ty <= 32'sd0;
                     ctx_sx <= FX_ONE; ctx_sy <= FX_ONE;   // NEW: identity scale
@@ -964,8 +1119,8 @@ module jmr_js_vm #(
 
                 S_TRAIL: begin
                     // JSB v2 trailer: names (hash intern ids) + skip vars + class table
-                    trail_guard <= trail_guard + 16'd1;
-                    if (trail_guard >= 16'd40000) begin
+                    trail_guard <= trail_guard + 20'd1;
+                    if (trail_guard >= 20'd200000) begin
                         // walker missed phase 22 — run ops (argc=4 fillRect still paints)
                         code_raddr <= 15'(ops_base);
                         state <= S_FETCH_WAIT;
@@ -1032,6 +1187,12 @@ module jmr_js_vm #(
                                 if ({tb, trail_acc[7:0]} == 16'd9277) id_bind <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd9506) id_proto <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd13648) id_filltext <= name_idx;
+                                // NEW: text metrics/state names (jsb_format._name_hash)
+                                if ({tb, trail_acc[7:0]} == 16'd3151)  id_font <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd38360) id_textalign <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd52309) id_center <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd49692) id_right <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd32683) id_measuretext <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd31314) id_arc <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd5816) id_enter <= name_idx;
                                 // NEW: DOM event ctor names + "type" (jsb_format._name_hash)
@@ -1199,6 +1360,15 @@ module jmr_js_vm #(
                                     trail_n[7:0] == 8'h52 && (tb == 8'h31 || tb == 8'h44)) begin
                                     sprd_mode <= (tb == 8'h44);
                                     trail_ph <= 5'd26;
+                                // NEW: "NAMB" — UTF-8 name bytes with no sprite
+                                // block in front (plain .JS). Self-describing, so
+                                // the section start never has to be inferred from
+                                // where the class table happened to end.
+                                end else if (trail_acc[7:0] == 8'h4E && trail_acc[15:8] == 8'h41 &&
+                                             trail_n[7:0] == 8'h4D && tb == 8'h42) begin
+                                    nb_i <= 16'd0;
+                                    nb_wp <= 16'd0;
+                                    trail_ph <= 6'd32;
                                 end else begin
                                     code_raddr <= 15'(ops_base);
                                     state <= S_FETCH_WAIT;
@@ -1220,9 +1390,9 @@ module jmr_js_vm #(
                                         spr_hdr <= 3'd0;
                                         trail_ph <= 5'd29;
                                     end else begin
-                                        code_raddr <= 15'(ops_base);
-                                        state <= S_FETCH_WAIT;
-                                        trail_ph <= 5'd31;
+                                        // NEW: empty SPR1 — name bytes follow
+                                        spr_hdr <= 3'd0;
+                                        trail_ph <= 6'd35;
                                     end
                                 end else if (sprd_mode) begin
                                     // SPRD: 8-byte descriptors (w,h u16 + u32 SRAM
@@ -1301,12 +1471,97 @@ module jmr_js_vm #(
                                     default: begin
                                         spr_hdr <= 3'd0;
                                         if (fsty_n <= 16'd1) begin
-                                            code_raddr <= 15'(ops_base);
-                                            state <= S_FETCH_WAIT;
-                                            trail_ph <= 5'd31;
+                                            // NEW: names follow FSTY — peek "NAMB"
+                                            trail_acc <= 16'd0;
+                                            trail_ph <= 6'd35;
                                         end else fsty_n <= fsty_n - 16'd1;
                                     end
                                 endcase
+                            end
+                            // NEW: "NAMB" peek after the SPRD/FSTY blocks. Same
+                            // 4-byte compare as the sprite magic; a miss just means
+                            // no string bytes (names_ok stays 0) and never hangs RUN.
+                            6'd35: begin
+                                unique case (spr_hdr)
+                                    3'd0: begin
+                                        if (tb == 8'h4E) spr_hdr <= 3'd1;
+                                        else begin
+                                            code_raddr <= 15'(ops_base);
+                                            state <= S_FETCH_WAIT;
+                                            trail_ph <= 5'd31;
+                                        end
+                                    end
+                                    3'd1, 3'd2: begin
+                                        if ((spr_hdr == 3'd1 && tb == 8'h41) ||
+                                            (spr_hdr == 3'd2 && tb == 8'h4D))
+                                            spr_hdr <= spr_hdr + 3'd1;
+                                        else begin
+                                            code_raddr <= 15'(ops_base);
+                                            state <= S_FETCH_WAIT;
+                                            trail_ph <= 5'd31;
+                                        end
+                                    end
+                                    default: begin
+                                        spr_hdr <= 3'd0;
+                                        if (tb == 8'h42) begin
+                                            nb_i <= 16'd0;
+                                            nb_wp <= 16'd0;
+                                            trail_ph <= 6'd32;
+                                        end else begin
+                                            code_raddr <= 15'(ops_base);
+                                            state <= S_FETCH_WAIT;
+                                            trail_ph <= 5'd31;
+                                        end
+                                    end
+                                endcase
+                            end
+                            // NEW: per-name u16 length, then its raw bytes. Order is
+                            // the intern order, so nb_i IS the intern index and
+                            // name_off[] lands a direct BRAM address for str[i].
+                            6'd32: begin trail_acc[7:0] <= tb; trail_ph <= 6'd33; end
+                            6'd33: begin
+                                nb_len <= {tb, trail_acc[7:0]};
+                                // nb_len counts DOWN per byte, so it cannot tell a
+                                // 1-char name from the last byte of a long one —
+                                // that mixed whole-name ids into the char table.
+                                nb_one <= ({tb, trail_acc[7:0]} == 16'd1);
+                                name_off[nb_i[9:0]] <= nb_wp;
+                                // NEW: bytes for this id are real (fillText and
+                                // str[i] both refuse hash-only ids)
+                                if (nb_wp + {tb, trail_acc[7:0]} <= 16'(NAME_CAP))
+                                    name_has[nb_i[9:0]] <= 1'b1;
+                                names_ok <= 1'b1;
+                                if ({tb, trail_acc[7:0]} == 16'd0) begin
+                                    // empty name — nothing to copy
+                                    if (nb_i + 16'd1 >= names_n) begin
+                                        code_raddr <= 15'(ops_base);
+                                        state <= S_FETCH_WAIT;
+                                        trail_ph <= 5'd31;
+                                    end else begin
+                                        nb_i <= nb_i + 16'd1;
+                                        trail_ph <= 6'd32;
+                                    end
+                                end else trail_ph <= 6'd34;
+                            end
+                            6'd34: begin
+                                if (nb_wp < 16'(NAME_CAP)) name_mem[nb_wp[14:0]] <= tb;
+                                else dbg_str_ovf <= dbg_str_ovf + 16'd1;
+                                nb_wp <= nb_wp + 16'd1;
+                                // 1-char name → the byte→intern lookup str[i] uses
+                                if (nb_one && nb_i < 16'd1024) begin
+                                    char_id[tb] <= nb_i;
+                                    char_ok[tb] <= 1'b1;
+                                end
+                                if (nb_len <= 16'd1) begin
+                                    if (nb_i + 16'd1 >= names_n) begin
+                                        code_raddr <= 15'(ops_base);
+                                        state <= S_FETCH_WAIT;
+                                        trail_ph <= 5'd31;
+                                    end else begin
+                                        nb_i <= nb_i + 16'd1;
+                                        trail_ph <= 6'd32;
+                                    end
+                                end else nb_len <= nb_len - 16'd1;
                             end
                             default: begin
                                 // unknown phase — do not hang HTML RUN
@@ -1342,12 +1597,11 @@ module jmr_js_vm #(
 
                 S_EXEC: begin
                     if (ip >= n_ops) begin
-                        // One implicit present per pass (HTML rAF never calls
-                        // swapBuffers) — but a legacy .JS pass that swapped
-                        // explicitly must NOT swap again (double swap blanked
-                        // INVADERS.JS: front always showed the undrawn buffer)
-                        if (!did_swap) fb_swap <= 1'b1;
-                        did_swap <= 1'b0;
+                        // One implicit present per FRAME, not per pass: mark the
+                        // pass end and let S_WAIT_FRAME swap once at frame_tick
+                        // after every callback of this frame (rAF + timers +
+                        // key listeners) has run — same order the FM presents.
+                        present_pend <= 1'b1;
                         state <= S_WAIT_FRAME;
                     end else begin
                         unique case (code_rdata[7:0])
@@ -1454,8 +1708,10 @@ module jmr_js_vm #(
                                     // PACMAN event keys: 's'+_index, 's1i'+id
                                     cc_av <= stack[sp - 8'd2]; cc_at <= stack_tag[sp - 8'd2];
                                     cc_bv <= stack[sp - 8'd1]; cc_bt <= stack_tag[sp - 8'd1];
-                                    cc_second <= 1'b0; cc_st <= 1'b0;
+                                    cc_second <= 1'b0; cc_st <= 2'd0;
                                     cc_h <= 16'd0; cc_len <= 8'd0; cc_d <= 4'd0;
+                                    // NEW: rebuild the characters too (txt_buf)
+                                    cc_bok <= 1'b1; txt_bn <= 7'd0;
                                     jn_res <= 11'(sp - 8'd2);
                                     sp <= sp - 8'd1;
                                     ip <= ip + 16'd1;
@@ -1691,6 +1947,8 @@ module jmr_js_vm #(
                                         [7'(fxi(stack[sp - 8'd1], stack_tag[sp - 8'd1]))];
                                     stack_tag[sp - 8'd2] <= arr_tag[stack[sp - 8'd2][11:0]]
                                         [7'(fxi(stack[sp - 8'd1], stack_tag[sp - 8'd1]))];
+                                    sp <= sp - 8'd1;
+                                    next_op();
                                 end else if (stack_tag[sp - 8'd2] == 3'd1 &&
                                              stack_tag[sp - 8'd1] == 3'd3) begin
                                     // NEW: obj[strkey] bracket get — PACMAN
@@ -1707,13 +1965,38 @@ module jmr_js_vm #(
                                                 stack_tag[sp - 8'd2] <= obj_tag[gi2][s];
                                             end
                                         end
+                                        sp <= sp - 8'd1;
+                                        next_op();
+                                    end
+                                // NEW: "str"[i] — one char. name_mem is BRAM, so the
+                                // byte lands next cycle in S_STRIDX. This is what
+                                // string-row sprites need (row[col] === "1").
+                                end else if (stack_tag[sp - 8'd2] == 3'd3 && names_ok &&
+                                             (stack_tag[sp - 8'd1] == 3'd0 ||
+                                              stack_tag[sp - 8'd1] == 3'd7)) begin
+                                    begin
+                                        logic signed [31:0] ci;
+                                        ci = fxi(stack[sp - 8'd1], stack_tag[sp - 8'd1]);
+                                        if (ci >= 0 && ci < 32'(name_len_tbl[stack[sp - 8'd2][9:0]])) begin
+                                            name_rdaddr <= name_off[stack[sp - 8'd2][9:0]] + 16'(ci);
+                                            str_res <= 11'(sp - 8'd2);
+                                            sp <= sp - 8'd1;
+                                            ip <= ip + 16'd1;
+                                            state <= S_STRIDX;
+                                        end else begin
+                                            // out of range is undefined, same as PYTHON
+                                            stack[sp - 8'd2] <= 32'sd0;
+                                            stack_tag[sp - 8'd2] <= 3'd5;
+                                            sp <= sp - 8'd1;
+                                            next_op();
+                                        end
                                     end
                                 end else begin
                                     stack[sp - 8'd2] <= 32'sd0;
                                     stack_tag[sp - 8'd2] <= 3'd5;
+                                    sp <= sp - 8'd1;
+                                    next_op();
                                 end
-                                sp <= sp - 8'd1;
-                                next_op();
                             end
                             OP_ARR_SET: begin
                                 // [arr, idx, val] — fx index floors first (LHS needs a plain var)
@@ -1771,6 +2054,20 @@ module jmr_js_vm #(
                                     (code_rdata[23:8] == id_length || code_rdata[23:8] == 16'd66)) begin
                                     stack[sp - 8'd1] <= {24'd0, arr_len[stack[sp - 8'd1][11:0]]};
                                     stack_tag[sp - 8'd1] <= 3'd0;
+                                // NEW: "str".length — the interned length table
+                                // already had this; only arrays were answered, so
+                                // `col < row.length` was col < undefined and every
+                                // character loop body was skipped.
+                                end else if (stack_tag[sp - 8'd1] == 3'd3 &&
+                                    (code_rdata[23:8] == id_length || code_rdata[23:8] == 16'd66)) begin
+                                    stack[sp - 8'd1] <= {24'd0, name_len_tbl[stack[sp - 8'd1][9:0]]};
+                                    stack_tag[sp - 8'd1] <= 3'd0;
+                                // NEW: dynamic string (replace / JSON result) length
+                                end else if (stack_tag[sp - 8'd1] == 3'd1 &&
+                                    obj_cls[stack[sp - 8'd1][12:0]] == CLS_DYNSTR &&
+                                    (code_rdata[23:8] == id_length || code_rdata[23:8] == 16'd66)) begin
+                                    stack[sp - 8'd1] <= obj_val[stack[sp - 8'd1][12:0]][1];
+                                    stack_tag[sp - 8'd1] <= 3'd0;
                                 end else if (stack_tag[sp - 8'd1] == 3'd1) begin
                                     begin
                                         logic [12:0] gi, pi;
@@ -1798,7 +2095,54 @@ module jmr_js_vm #(
                                                 if (s < obj_n[pi] && obj_key[pi][s] == code_rdata[23:8]) begin
                                                     stack[sp - 8'd1] <= obj_val[pi][s];
                                                     stack_tag[sp - 8'd1] <= obj_tag[pi][s];
+                                                    foundp = 1'b1;
                                                 end
+                                            end
+                                        end
+                                        // NEW: this.method as a VALUE (DONKEY
+                                        // addEventListener(this.startSelect)).
+                                        // CALL_METH already finds class methods;
+                                        // GET_PROP did not — listeners were undefined.
+                                        if (!foundp && code_rdata[23:8] != id_proto) begin
+                                            logic [15:0] mip;
+                                            mip = 16'hFFFF;
+                                            for (int c = 0; c < MAX_CLS; c++) begin
+                                                if (c < n_cls && cls_name[c] == obj_cls[gi]) begin
+                                                    for (int m = 0; m < MAX_CMETH; m++) begin
+                                                        // bit15 = getter; those stay CALL_METH
+                                                        if (m < cls_nmeth[c]
+                                                            && cls_mname[c][m][14:0]
+                                                               == code_rdata[22:8]
+                                                            && cls_mname[c][m][15] == 1'b0)
+                                                            mip = cls_mip[c][m];
+                                                    end
+                                                end
+                                            end
+                                            if (mip != 16'hFFFF) begin
+                                                obj_cls[n_obj[12:0]] <= CLS_FN;
+                                                obj_n[n_obj[12:0]] <= 6'd3;
+                                                obj_key[n_obj[12:0]][0] <= 16'd0;
+                                                obj_val[n_obj[12:0]][0] <= {16'd0, mip};
+                                                obj_tag[n_obj[12:0]][0] <= 3'd0;
+                                                obj_key[n_obj[12:0]][1] <= 16'd1;
+                                                obj_val[n_obj[12:0]][1] <= 32'd1;
+                                                obj_tag[n_obj[12:0]][1] <= 3'd0;
+                                                obj_key[n_obj[12:0]][2] <= 16'd2;
+                                                obj_val[n_obj[12:0]][2] <= 32'd0;
+                                                obj_tag[n_obj[12:0]][2] <= 3'd0;
+                                                stack[sp - 8'd1] <= {16'd0, n_obj};
+                                                stack_tag[sp - 8'd1] <= 3'd4;
+                                                if (obj_n[gi] < OBJ_SLOTS[5:0]) begin
+                                                    obj_key[gi][obj_n[gi]] <= code_rdata[23:8];
+                                                    obj_val[gi][obj_n[gi]] <= {16'd0, n_obj};
+                                                    obj_tag[gi][obj_n[gi]] <= 3'd4;
+                                                    obj_n[gi] <= obj_n[gi] + 6'd1;
+                                                end
+                                                if (obj_keep_ok && n_obj >= n_obj_keep)
+                                                    n_obj_keep <= n_obj + 16'd1;
+                                                n_obj <= (n_obj >= 16'(MAX_OBJ - 1))
+                                                         ? n_obj : (n_obj + 16'd1);
+                                                foundp = 1'b1;
                                             end
                                         end
                                         // GET_PROP prototype on instance with no slot: alloc empty proto
@@ -1876,22 +2220,65 @@ module jmr_js_vm #(
                                 // [obj, val]  a0=name
                                 if (stack_tag[sp - 8'd2] == 3'd1) begin
                                     begin
-                                        logic [12:0] oi;
+                                        logic [12:0] oi, src, dst;
                                         logic found;
+                                        logic [4:0] found_s;
                                         oi = stack[sp - 8'd2][12:0];
                                         found = 1'b0;
+                                        found_s = 5'd0;
                                         for (int s = 0; s < OBJ_SLOTS; s++) begin
                                             if (s < obj_n[oi] && obj_key[oi][s] == code_rdata[23:8]) begin
-                                                obj_val[oi][s] <= stack[sp - 8'd1];
-                                                obj_tag[oi][s] <= stack_tag[sp - 8'd1];
                                                 found = 1'b1;
+                                                found_s = 5'(s);
                                             end
                                         end
-                                        if (!found && obj_n[oi] < OBJ_SLOTS[5:0]) begin
+                                        // NEW: in-place copy when overwriting an
+                                        // existing object (item.coord = {x,y} every
+                                        // frame). Replacing the pointer made
+                                        // player.control a nursery oid that the
+                                        // frame rewind deleted — PACMAN reverse
+                                        // never applied. First store of a new
+                                        // object onto old-space still commits keep.
+                                        if (found && obj_tag[oi][found_s] == 3'd1
+                                            && stack_tag[sp - 8'd1] == 3'd1) begin
+                                            dst = obj_val[oi][found_s][12:0];
+                                            src = stack[sp - 8'd1][12:0];
+                                            obj_n[dst] <= obj_n[src];
+                                            obj_cls[dst] <= obj_cls[src];
+                                            for (int k = 0; k < OBJ_SLOTS; k++) begin
+                                                obj_key[dst][k] <= obj_key[src][k];
+                                                obj_val[dst][k] <= obj_val[src][k];
+                                                obj_tag[dst][k] <= obj_tag[src][k];
+                                            end
+                                        // NEW: same in place for array-over-array
+                                        // (this.path = finder(), this.cells =
+                                        // rebuild()). Without this the slot took a
+                                        // nursery arr oid every frame, and deep keep
+                                        // below would otherwise have to grow the
+                                        // watermark on each store to save it.
+                                        end else if (found && obj_tag[oi][found_s] == 3'd2
+                                                     && stack_tag[sp - 8'd1] == 3'd2) begin
+                                            dst = obj_val[oi][found_s][11:0];
+                                            src = stack[sp - 8'd1][11:0];
+                                            arr_len[dst[11:0]] <= arr_len[src[11:0]];
+                                            for (int k = 0; k < ARR_CAP; k++) begin
+                                                arr_val[dst[11:0]][k] <= arr_val[src[11:0]][k];
+                                                arr_tag[dst[11:0]][k] <= arr_tag[src[11:0]][k];
+                                            end
+                                        end else if (found) begin
+                                            obj_val[oi][found_s] <= stack[sp - 8'd1];
+                                            obj_tag[oi][found_s] <= stack_tag[sp - 8'd1];
+                                            // NEW: deep — children were allocated
+                                            // after the stored value (ctor fields)
+                                            if ({3'd0, oi} < n_obj_keep)
+                                                commit_deep_keep(stack_tag[sp - 8'd1]);
+                                        end else if (obj_n[oi] < OBJ_SLOTS[5:0]) begin
                                             obj_key[oi][obj_n[oi]] <= code_rdata[23:8];
                                             obj_val[oi][obj_n[oi]] <= stack[sp - 8'd1];
                                             obj_tag[oi][obj_n[oi]] <= stack_tag[sp - 8'd1];
                                             obj_n[oi] <= obj_n[oi] + 6'd1;
+                                            if ({3'd0, oi} < n_obj_keep)
+                                                commit_deep_keep(stack_tag[sp - 8'd1]);
                                         end
                                         // NEW: SET_PROP overwrite (item.coord =
                                         // position2coord(), this.path = finder())
@@ -1948,6 +2335,38 @@ module jmr_js_vm #(
                                     stack_tag[sp - 8'd2] <= stack_tag[sp - 8'd1];
                                     sp <= sp - 8'd1;
                                     next_op();
+                                end else if (stack_tag[sp - 8'd2] == 3'd6 &&
+                                             code_rdata[23:8] == id_textalign) begin
+                                    // NEW: ctx.textAlign — FM fill_text shifts the
+                                    // pen by half / all of the text width
+                                    ctx_align <= (stack[sp - 8'd1][15:0] == id_center) ? 2'd1
+                                               : (stack[sp - 8'd1][15:0] == id_right)  ? 2'd2
+                                               : 2'd0;
+                                    stack[sp - 8'd2] <= stack[sp - 8'd1];
+                                    stack_tag[sp - 8'd2] <= stack_tag[sp - 8'd1];
+                                    sp <= sp - 8'd1;
+                                    next_op();
+                                end else if (stack_tag[sp - 8'd2] == 3'd6 &&
+                                             code_rdata[23:8] == id_font) begin
+                                    // NEW: ctx.font = "bold 24px Foo" — walk the
+                                    // bytes for the first NNpx run, exactly what
+                                    // FM machine._font_scale's regex takes.
+                                    stack[sp - 8'd2] <= stack[sp - 8'd1];
+                                    stack_tag[sp - 8'd2] <= stack_tag[sp - 8'd1];
+                                    sp <= sp - 8'd1;
+                                    if (stack_tag[sp - 8'd1] == 3'd3 && names_ok &&
+                                        name_has[stack[sp - 8'd1][9:0]]) begin
+                                        txt_rp <= name_off[stack[sp - 8'd1][9:0]];
+                                        name_rdaddr <= name_off[stack[sp - 8'd1][9:0]];
+                                        fp_left <= name_len_tbl[stack[sp - 8'd1][9:0]];
+                                        fpx_acc <= 8'd0;
+                                        ctx_font_px <= 8'd8; // no "px" found → FM default
+                                        ip <= ip + 16'd1;
+                                        state <= S_FONTPX;
+                                    end else begin
+                                        ctx_font_px <= 8'd8;
+                                        next_op();
+                                    end
                                 end else if (stack_tag[sp - 8'd2] == 3'd6 &&
                                            (code_rdata[23:8] == id_fillstyle ||
                                             code_rdata[23:8] == id_strokestyle)) begin
@@ -2140,6 +2559,12 @@ module jmr_js_vm #(
                                         end
                                     end
                                 end else begin
+                                    // NEW: a callback frame returns to the frame
+                                    // boundary sentinel (cstack_ip == n_ops). Latch
+                                    // the RET site so a loop that stops re-arming
+                                    // itself can be found (PACMAN start() fn dies
+                                    // mid-frame and raf drops to 0 with no trace).
+                                    if (cstack_ip[csp - 7'd1] == n_ops) dbg_cb_ip <= ip;
                                     release_env_to(cstack_env[csp - 7'd1]);
                                     csp <= csp - 7'd1;
                                     this_obj <= cstack_this[csp - 7'd1];
@@ -2283,9 +2708,10 @@ module jmr_js_vm #(
                                             // NEW: keep only if dest array is
                                             // old-space (global arr.push). Finder
                                             // new_list.push(to) is nursery — rewind.
+                                            // Deep: grids.push(new Grid()) must also
+                                            // keep the fields the ctor built after it.
                                             if (arr_keep_ok && {4'd0, ai} < n_arr_keep)
-                                                commit_obj_keep(stack_tag[sp - 8'd1],
-                                                                stack[sp - 8'd1][15:0]);
+                                                commit_deep_keep(stack_tag[sp - 8'd1]);
                                         end
                                         stack[sp - 8'(code_rdata[31:24]) - 8'd1] <= {24'd0, al + 8'd1};
                                         stack_tag[sp - 8'(code_rdata[31:24]) - 8'd1] <= 3'd0;
@@ -2367,8 +2793,7 @@ module jmr_js_vm #(
                                             // NEW: same as push — old-space dest only
                                             // (finder result.unshift is nursery).
                                             if (arr_keep_ok && {4'd0, ai} < n_arr_keep)
-                                                commit_obj_keep(stack_tag[sp - 8'd1],
-                                                                stack[sp - 8'd1][15:0]);
+                                                commit_deep_keep(stack_tag[sp - 8'd1]);
                                         end
                                         stack[sp - 8'(code_rdata[31:24]) - 8'd1] <= {24'd0, al + 8'd1};
                                         stack_tag[sp - 8'(code_rdata[31:24]) - 8'd1] <= 3'd0;
@@ -2748,25 +3173,87 @@ module jmr_js_vm #(
                                     path_active <= 1'b1;
                                     state <= S_PWALK;
                                 end else if (code_rdata[23:8] == id_filltext) begin
-                                    color <= fill_style_i;
-                                    if (ctx_sx != FX_ONE || ctx_sy != FX_ONE) begin
-                                        // NEW: scale the text position (glyphs are
-                                        // still the 64x8 stub — rtl-canvas debt)
-                                        xf_x <= stfx(sp - 9'd2); xf_y <= stfx(sp - 9'd1);
-                                        xf_w <= 32'sd64 <<< 16; xf_h <= 32'sd8 <<< 16;
-                                        xf_dst <= 2'd2;
+                                    // NEW: real glyphs. args are (text, x, y[, maxW])
+                                    // counted from the first one, so a 4-arg call
+                                    // still finds x/y. The text value is latched
+                                    // here because sp moves this cycle.
+                                    begin
+                                        logic [10:0] a0;
+                                        a0 = sp - 11'(code_rdata[31:24]); // text slot
+                                        color <= fill_style_i;
+                                        txt_val <= stack[a0];
+                                        txt_vt <= stack_tag[a0];
+                                        txt_ph <= 4'd0;
                                         sp <= sp - 8'(code_rdata[31:24]) - 8'd1;
                                         ip <= ip + 16'd1;
-                                        state <= S_XF_MUL;
-                                    end else begin
-                                        rx <= clip_u(sti(sp - 9'd2) + ctx_tx, MW);
-                                        ry <= clip_u(sti(sp - 9'd1) + ctx_ty, MH);
-                                        rw <= 10'd64; rh <= 10'd8;
-                                        x <= clip_u(sti(sp - 9'd2) + ctx_tx, MW);
-                                        y <= clip_u(sti(sp - 9'd1) + ctx_ty, MH);
-                                        sp <= sp - 8'(code_rdata[31:24]) - 8'd1;
-                                        ip <= ip + 16'd1;
-                                        state <= S_RECT;
+                                        if (ctx_sx != FX_ONE || ctx_sy != FX_ONE) begin
+                                            // scaled ctx (DONKEY world→glass): the pen
+                                            // goes through the shared _xf multiplier
+                                            xf_x <= stfx(a0 + 11'd1);
+                                            xf_y <= stfx(a0 + 11'd2);
+                                            xf_w <= 32'sd0; xf_h <= 32'sd0;
+                                            xf_dst <= 2'd2;
+                                            state <= S_XF_MUL;
+                                        end else begin
+                                            txt_px <= 16'(sti(a0 + 11'd1) + ctx_tx);
+                                            txt_py <= 16'(sti(a0 + 11'd2) + ctx_ty);
+                                            state <= S_TXT_LD;
+                                        end
+                                    end
+                                end else if (code_rdata[23:8] == id_measuretext) begin
+                                    // NEW: {width} so games can right-align text.
+                                    // Same geometry FM _nat_measure_text reports:
+                                    // len x 8 x scale (scale folds ctx_sx below).
+                                    //
+                                    // ONE reserved metrics object, allocated on
+                                    // first use and kept for good. A fresh object
+                                    // per call is what a browser does, but here any
+                                    // store into old space raises the keep
+                                    // watermark to the bump pointer
+                                    // (commit_deep_keep), so one new object per
+                                    // frame walked that watermark up until the
+                                    // array ring wrapped and recycled the oldest
+                                    // live data — PACMAN's maze rows read back 0
+                                    // and half the walls stopped being drawn.
+                                    begin
+                                        logic [7:0] ac;
+                                        logic [15:0] tl;
+                                        logic [15:0] px_;
+                                        logic [15:0] moid;
+                                        ac = code_rdata[31:24];
+                                        tl = 16'd0;
+                                        if (stack_tag[sp - ac] == 3'd3)
+                                            tl = {8'd0, name_len_tbl[stack[sp - ac][9:0]]};
+                                        else if (stack_tag[sp - ac] == 3'd1 &&
+                                                 obj_cls[stack[sp - ac][12:0]] == CLS_DYNSTR)
+                                            tl = {2'd0, obj_val[stack[sp - ac][12:0]][1][13:0]};
+                                        // px per char = font px (x ctx scale) rounded
+                                        // to the 8-px glyph grid, same as fill_text
+                                        px_ = 16'((48'(ctx_font_px) * 48'(ctx_sx)
+                                                  + 48'sd262144) >>> 19);
+                                        if (px_ == 16'd0) px_ = 16'd1;
+                                        moid = (metrics_oid == 16'hFFFF) ? n_obj : metrics_oid;
+                                        obj_cls[moid[12:0]] <= 16'd0; // plain object
+                                        obj_n[moid[12:0]] <= 6'd1;
+                                        obj_key[moid[12:0]][0] <= id_width;
+                                        obj_val[moid[12:0]][0] <= 32'(tl) * 32'd8 * 32'(px_);
+                                        obj_tag[moid[12:0]][0] <= 3'd0;
+                                        if (metrics_oid == 16'hFFFF) begin
+                                            if (n_obj >= 16'(MAX_OBJ - 1))
+                                                dbg_heap_ovf <= dbg_heap_ovf + 16'd1;
+                                            else begin
+                                                metrics_oid <= n_obj;
+                                                n_obj <= n_obj + 16'd1;
+                                                // VM-owned: a rewind must never
+                                                // recycle the slot metrics_oid names
+                                                if ((n_obj + 16'd1) > n_obj_keep)
+                                                    n_obj_keep <= n_obj + 16'd1;
+                                            end
+                                        end
+                                        stack[sp - ac - 8'd1] <= {16'd0, moid};
+                                        stack_tag[sp - ac - 8'd1] <= 3'd1;
+                                        sp <= sp - ac;
+                                        next_op();
                                     end
                                 end else if (code_rdata[23:8] == id_drawimage) begin
                                     // real sprite blit when Image.src was jmr:spr:N
@@ -3216,6 +3703,10 @@ module jmr_js_vm #(
                             if (raf_n < 4'd8 && nat_argc >= 8'd1) begin
                                 raf_fn[raf_n] <= stack[sp - nat_argc[7:0]][15:0];
                                 raf_n <= raf_n + 4'd1;
+                                // NEW: rAF fn must survive the frame nursery
+                                // rewind or PACMAN start() loop dies (raf=0)
+                                commit_obj_keep(stack_tag[sp - nat_argc[7:0]],
+                                                stack[sp - nat_argc[7:0]][15:0]);
                             end
                             sp <= sp - nat_argc[7:0];
                             stack[sp - nat_argc[7:0]] <= 32'sd1;
@@ -3240,6 +3731,9 @@ module jmr_js_vm #(
                                 to_id[to_n] <= to_seq;
                                 to_n <= to_n + 4'd1;
                                 to_seq <= to_seq + 16'd1;
+                                dbg_tmr_sched <= dbg_tmr_sched + 16'd1;
+                                commit_obj_keep(stack_tag[sp - nat_argc[7:0]],
+                                                stack[sp - nat_argc[7:0]][15:0]);
                             end else if (nat_argc >= 8'd1)
                                 dbg_to_ovf <= dbg_to_ovf + 16'd1;
                             sp <= sp - nat_argc[7:0];
@@ -3646,6 +4140,10 @@ module jmr_js_vm #(
                     end else begin
                         logic [2:0] et;
                         logic signed [31:0] ev;
+                        // NEW: the digits are staged as characters too, so a join
+                        // result is a full string (bytes, not just a hash). Without
+                        // this the alloc path below would inherit whatever the last
+                        // concat left in txt_buf.
                         et = arr_tag[jn_arr][jn_i[6:0]];
                         ev = (et == 3'd7) ? ($signed(arr_val[jn_arr][jn_i[6:0]]) >>> 16)
                                           : $signed(arr_val[jn_arr][jn_i[6:0]]);
@@ -3658,6 +4156,11 @@ module jmr_js_vm #(
                             state <= S_FETCH_WAIT;
                         end else begin
                             jn_h <= 16'(32'(jn_h) * 32'd31 + 32'd48 + 32'(ev));
+                            if (jn_i < 16'(TXT_MAX)) begin
+                                txt_buf[jn_i[5:0]] <= 8'h30 + 8'(ev);
+                                txt_bn <= 7'(jn_i) + 7'd1;
+                                cc_bok <= 1'b1;
+                            end else cc_bok <= 1'b0;
                             jn_i <= jn_i + 16'd1;
                         end
                     end
@@ -3713,14 +4216,28 @@ module jmr_js_vm #(
                             stack[jn_res] <= {16'd0, names_n};
                             stack_tag[jn_res] <= 3'd3;
                             names_n <= names_n + 16'd1;
+                            // NEW: and its characters, staged in txt_buf by
+                            // S_CONCAT — that is what makes fillText("SCORE "+n)
+                            // and str[i] on a built string work at all
+                            if (cc_bok && jn_len <= 8'(TXT_MAX) &&
+                                ({1'b0, nb_wp} + {9'd0, jn_len}) <= 17'(NAME_CAP)) begin
+                                name_off[names_n[9:0]] <= nb_wp;
+                                name_has[names_n[9:0]] <= 1'b1;
+                                txt_i <= 7'd0;
+                                state <= S_STR_WR;
+                            end else begin
+                                if (!cc_bok) dbg_str_ovf <= dbg_str_ovf + 16'd1;
+                                code_raddr <= 15'(ops_base + ip);
+                                state <= S_FETCH_WAIT;
+                            end
                         end else begin
                             // intern table full — honest miss
                             dbg_join_miss <= dbg_join_miss + 16'd1;
                             stack[jn_res] <= 32'sd0;
                             stack_tag[jn_res] <= 3'd5;
+                            code_raddr <= 15'(ops_base + ip);
+                            state <= S_FETCH_WAIT;
                         end
-                        code_raddr <= 15'(ops_base + ip);
-                        state <= S_FETCH_WAIT;
                     end else jn_i <= jn_i + 16'd16;
                 end
                 S_CONCAT: begin
@@ -3731,19 +4248,32 @@ module jmr_js_vm #(
                     logic [2:0] t_;
                     v_ = cc_second ? cc_bv : cc_av;
                     t_ = cc_second ? cc_bt : cc_at;
-                    if (cc_st == 1'b0) begin
+                    if (cc_st == 2'd0) begin
                         // classify operand
                         if (t_ == 3'd3) begin
                             cc_h <= 16'(32'(cc_h) * 32'(pow31_tbl[name_len_tbl[v_[9:0]]])
                                         + 32'(name_hash_tbl[v_[9:0]]));
                             cc_len <= cc_len + name_len_tbl[v_[9:0]];
-                            if (cc_second) begin
-                                jn_h <= 16'(32'(cc_h) * 32'(pow31_tbl[name_len_tbl[v_[9:0]]])
-                                            + 32'(name_hash_tbl[v_[9:0]]));
-                                jn_len <= cc_len + name_len_tbl[v_[9:0]];
-                                jn_i <= 16'd0;
-                                state <= S_JOIN_FIND;
-                            end else cc_second <= 1'b1;
+                            // NEW: copy this operand's characters into txt_buf so
+                            // the joined intern can be given real bytes. The
+                            // hash fold above is unchanged, so ids do not move.
+                            if (names_ok && name_has[v_[9:0]] &&
+                                ({1'b0, txt_bn} + {1'b0, name_len_tbl[v_[9:0]][6:0]})
+                                    <= 8'(TXT_MAX)) begin
+                                cc_cp <= name_off[v_[9:0]];
+                                cc_cn <= name_len_tbl[v_[9:0]];
+                                name_rdaddr <= name_off[v_[9:0]];
+                                cc_st <= 2'd2;
+                            end else begin
+                                cc_bok <= 1'b0; // hash-only, as before
+                                if (cc_second) begin
+                                    jn_h <= 16'(32'(cc_h) * 32'(pow31_tbl[name_len_tbl[v_[9:0]]])
+                                                + 32'(name_hash_tbl[v_[9:0]]));
+                                    jn_len <= cc_len + name_len_tbl[v_[9:0]];
+                                    jn_i <= 16'd0;
+                                    state <= S_JOIN_FIND;
+                                end else cc_second <= 1'b1;
+                            end
                         end else if (t_ == 3'd0 || t_ == 3'd7) begin
                             // integer (fx floors) — fold '-' then digits
                             logic signed [31:0] iv;
@@ -3751,6 +4281,10 @@ module jmr_js_vm #(
                             if (iv < 0) begin
                                 cc_h <= 16'(32'(cc_h) * 32'd31 + 32'd45); // '-'
                                 cc_len <= cc_len + 8'd1;
+                                if (txt_bn < 7'(TXT_MAX)) begin
+                                    txt_buf[txt_bn[5:0]] <= 8'h2D;
+                                    txt_bn <= txt_bn + 7'd1;
+                                end else cc_bok <= 1'b0;
                                 iv = -iv;
                             end
                             cc_v <= iv;
@@ -3764,7 +4298,7 @@ module jmr_js_vm #(
                                    : (iv >= 32'sd1000) ? 4'd3
                                    : (iv >= 32'sd100) ? 4'd2
                                    : (iv >= 32'sd10) ? 4'd1 : 4'd0;
-                            cc_st <= 1'b1;
+                            cc_st <= 2'd1;
                         end else begin
                             // undefined/obj/arr/fn concat — honest miss
                             dbg_join_miss <= dbg_join_miss + 16'd1;
@@ -3773,7 +4307,7 @@ module jmr_js_vm #(
                             code_raddr <= 15'(ops_base + ip);
                             state <= S_FETCH_WAIT;
                         end
-                    end else begin
+                    end else if (cc_st == 2'd1) begin
                         // digit loop: subtract P10[cc_pi] until below, fold digit
                         if (cc_v >= 32'(P10[cc_pi])) begin
                             cc_v <= cc_v - 32'(P10[cc_pi]);
@@ -3782,9 +4316,14 @@ module jmr_js_vm #(
                             cc_h <= 16'(32'(cc_h) * 32'd31 + 32'd48 + 32'(cc_d));
                             cc_len <= cc_len + 8'd1;
                             cc_d <= 4'd0;
+                            // NEW: same digit as a character
+                            if (txt_bn < 7'(TXT_MAX)) begin
+                                txt_buf[txt_bn[5:0]] <= 8'h30 + {4'd0, cc_d};
+                                txt_bn <= txt_bn + 7'd1;
+                            end else cc_bok <= 1'b0;
                             if (cc_pi == 4'd0) begin
                                 // operand done
-                                cc_st <= 1'b0;
+                                cc_st <= 2'd0;
                                 if (cc_second) begin
                                     jn_h <= 16'(32'(cc_h) * 32'd31 + 32'd48 + 32'(cc_d));
                                     jn_len <= cc_len + 8'd1;
@@ -3792,6 +4331,24 @@ module jmr_js_vm #(
                                     state <= S_JOIN_FIND;
                                 end else cc_second <= 1'b1;
                             end else cc_pi <= cc_pi - 4'd1;
+                        end
+                    end else begin
+                        // NEW: copy one operand's bytes (name_mem is registered, so
+                        // the first byte lands the cycle after cc_st became 2)
+                        if (cc_cn == 8'd0) begin
+                            cc_st <= 2'd0;
+                            if (cc_second) begin
+                                jn_h <= cc_h; jn_len <= cc_len; // folded already
+                                jn_i <= 16'd0;
+                                state <= S_JOIN_FIND;
+                            end else cc_second <= 1'b1;
+                        end else if (name_rdaddr == cc_cp) begin
+                            name_rdaddr <= name_rdaddr + 16'd1; // prime byte 0
+                        end else begin
+                            txt_buf[txt_bn[5:0]] <= name_rdata;
+                            txt_bn <= txt_bn + 7'd1;
+                            cc_cn <= cc_cn - 8'd1;
+                            if (cc_cn > 8'd1) name_rdaddr <= name_rdaddr + 16'd1;
                         end
                     end
                 end
@@ -3844,12 +4401,15 @@ module jmr_js_vm #(
                         p2y <= trunc32(xfp_h)
                              + ((pc_op[pi[3:0]] == 2'd2) ? ctx_ty : 32'sd0);
                         state <= S_PDO;
+                    end else if (xf_dst == 2'd2) begin
+                        // NEW: fillText pen — glyph size comes from ctx.font, and
+                        // the pen may sit off-glass (centred text clips per pixel)
+                        txt_px <= 16'(ix_);
+                        txt_py <= 16'(iy_);
+                        state <= S_TXT_LD;
                     end else begin
                         iw_ = trunc32(xfp_w); if (iw_ < 32'sd1) iw_ = 32'sd1;
                         ih_ = trunc32(xfp_h); if (ih_ < 32'sd1) ih_ = 32'sd1;
-                        if (xf_dst == 2'd2) begin
-                            iw_ = 32'sd64; ih_ = 32'sd8; // fillText stub keeps its size
-                        end
                         rx <= clip_u(ix_, MW); ry <= clip_u(iy_, MH);
                         rw <= clip_sz(iw_, clip_u(ix_, MW), MW);
                         rh <= clip_sz(ih_, clip_u(iy_, MH), MH);
@@ -4080,6 +4640,12 @@ module jmr_js_vm #(
                 end
                 S_WAIT_FRAME: if (frame_tick) begin
                     prev_joy <= joy_in;
+                    // NEW: the one implicit present per frame (see present_pend).
+                    // An explicit swapBuffers in the pass already flipped —
+                    // do not flip a second time (front would show the stale bank).
+                    if (present_pend && !did_swap) fb_swap <= 1'b1;
+                    present_pend <= 1'b0;
+                    did_swap <= 1'b0;
                     // NEW: FM frame clock twin — Date.now advances once per rAF
                     // frame (machine.py vm.time_ms = frame*16.67). The old
                     // +17-per-CALL hack made game time race ahead: PACMAN
@@ -4289,13 +4855,22 @@ module jmr_js_vm #(
                     begin
                         logic [15:0] foid;
                         logic [12:0] fo;
+                        logic fn_ok;
                         foid = to_fn[0];
                         fo = foid[12:0];
-                        sp <= '0;
-                        ip <= obj_val[fo][0][15:0];
-                        if (to_period[0] != 12'd0 && to_n == 4'd1) begin
+                        // NEW: fire only a live Fn. A recycled oid here executed
+                        // whatever code obj_val[fo][0] pointed at (often ip 0 =
+                        // top level, which re-runs boot and resets globals).
+                        fn_ok = (obj_cls[fo] == CLS_FN);
+                        if (!fn_ok) dbg_tmr_mis <= dbg_tmr_mis + 16'd1;
+                        if (fn_ok) begin
+                            dbg_tmr_fire <= dbg_tmr_fire + 16'd1;
+                            sp <= '0;
+                            ip <= obj_val[fo][0][15:0];
+                        end
+                        if (fn_ok && to_period[0] != 12'd0 && to_n == 4'd1) begin
                             to_delay[0] <= to_period[0]; // re-arm sole interval
-                        end else if (to_period[0] != 12'd0) begin
+                        end else if (fn_ok && to_period[0] != 12'd0) begin
                             to_fn[0] <= to_fn[1]; to_delay[0] <= to_delay[1];
                             to_period[0] <= to_period[1]; to_id[0] <= to_id[1];
                             to_fn[1] <= to_fn[2]; to_delay[1] <= to_delay[2];
@@ -4331,14 +4906,16 @@ module jmr_js_vm #(
                             to_fn[6] <= to_fn[7]; to_delay[6] <= to_delay[7];
                             to_period[6] <= to_period[7]; to_id[6] <= to_id[7];
                         end
-                        cstack_ip[csp] <= n_ops;
-                        cstack_this[csp] <= this_obj;
-                        cstack_isctor[csp] <= 1'b0;
-                        cstack_isfe[csp] <= 1'b0;
-                        enter_captured_fn(foid);
-                        csp <= csp + 7'd1;
-                        code_raddr <= 15'(ops_base + obj_val[fo][0][15:0]);
-                        state <= S_FETCH_WAIT;
+                        if (fn_ok) begin
+                            cstack_ip[csp] <= n_ops;
+                            cstack_this[csp] <= this_obj;
+                            cstack_isctor[csp] <= 1'b0;
+                            cstack_isfe[csp] <= 1'b0;
+                            enter_captured_fn(foid);
+                            csp <= csp + 7'd1;
+                            code_raddr <= 15'(ops_base + obj_val[fo][0][15:0]);
+                            state <= S_FETCH_WAIT;
+                        end
                     end
                 end
                 S_KEYEV: begin
@@ -4707,6 +5284,235 @@ module jmr_js_vm #(
                             json_rp <= json_src + json_srclen;
                         end
                     end
+                end
+                // NEW: str[i] result. name_rdata now holds the character. A 1-char
+                // interned name has hash == its byte, so char_id turns the byte
+                // straight into that intern id and OP_EQ compares it to a "x"
+                // literal with no string walk. A character the program never wrote
+                // as a literal cannot equal any literal, so undefined is correct.
+                S_STR_WR: begin
+                    // NEW: append the staged characters of a joined string to
+                    // name_mem. names_n was bumped in S_JOIN_FIND, so the id
+                    // being filled in is names_n-1.
+                    if (txt_i >= 7'(jn_len)) begin
+                        code_raddr <= 15'(ops_base + ip);
+                        state <= S_FETCH_WAIT;
+                    end else begin
+                        name_mem[nb_wp[14:0]] <= txt_buf[txt_i[5:0]];
+                        if (jn_len == 8'd1 && !char_ok[txt_buf[txt_i[5:0]]]) begin
+                            char_id[txt_buf[txt_i[5:0]]] <= names_n - 16'd1;
+                            char_ok[txt_buf[txt_i[5:0]]] <= 1'b1;
+                        end
+                        nb_wp <= nb_wp + 16'd1;
+                        txt_i <= txt_i + 7'd1;
+                    end
+                end
+                S_FONTPX: begin
+                    // NEW: ctx.font size. Walk the string for the first digit run
+                    // that is followed by 'p' — the same first-match the FM regex
+                    // (\d+)\s*px takes, so '12px/20px' and 'bold 24px X' agree.
+                    if (txt_ph == 4'd0) begin
+                        name_rdaddr <= name_rdaddr + 16'd1; // prime byte 1
+                        txt_ph <= 4'd1;
+                    end else begin
+                        logic got;
+                        got = 1'b0;
+                        if (name_rdata >= 8'h30 && name_rdata <= 8'h39)
+                            fpx_acc <= (fpx_acc >= 8'd26) ? fpx_acc
+                                     : (fpx_acc * 8'd10 + (name_rdata - 8'h30));
+                        else if ((name_rdata == 8'h70 || name_rdata == 8'h50) &&
+                                 fpx_acc != 8'd0) begin
+                            ctx_font_px <= fpx_acc;
+                            got = 1'b1;
+                        end else if (name_rdata != 8'h20)
+                            fpx_acc <= 8'd0; // digits not followed by px
+                        if (got || fp_left <= 8'd1) begin
+                            code_raddr <= 15'(ops_base + ip);
+                            state <= S_FETCH_WAIT;
+                        end else begin
+                            fp_left <= fp_left - 8'd1;
+                            name_rdaddr <= name_rdaddr + 16'd1;
+                        end
+                    end
+                end
+                S_TXT_LD: begin
+                    // NEW: stage the fillText argument into txt_buf. Interned
+                    // strings come from name_mem, joined/JSON strings from
+                    // json_mem, numbers are expanded to digits — after this the
+                    // raster never cares where the text came from.
+                    case (txt_ph)
+                        4'd0: begin
+                            // FM _font_scale: max(1, round(px * ctx_sx / 8))
+                            txt_kp <= 48'(ctx_font_px) * 48'(ctx_sx);
+                            txt_ph <= 4'd1;
+                        end
+                        4'd1: begin
+                            logic signed [47:0] kq;
+                            logic [7:0] nl;
+                            kq = (txt_kp + 48'sd262144) >>> 19;
+                            txt_k <= (kq < 48'sd1) ? 4'd1
+                                   : (kq > 48'sd15) ? 4'd15 : 4'(kq);
+                            txt_i <= 7'd0; txt_bn <= 7'd0; txt_d <= 4'd0;
+                            if (txt_vt == 3'd3 && names_ok && name_has[txt_val[9:0]]) begin
+                                nl = name_len_tbl[txt_val[9:0]];
+                                txt_len <= (nl > 8'(TXT_MAX)) ? 7'(TXT_MAX) : 7'(nl);
+                                name_rdaddr <= name_off[txt_val[9:0]];
+                                txt_ph <= (nl == 8'd0) ? 4'd6 : 4'd2;
+                            end else if (txt_vt == 3'd1 &&
+                                         obj_cls[txt_val[12:0]] == CLS_DYNSTR) begin
+                                txt_rp <= 16'(obj_val[txt_val[12:0]][0][13:0]);
+                                txt_len <= (obj_val[txt_val[12:0]][1][13:0] > 14'(TXT_MAX))
+                                         ? 7'(TXT_MAX) : 7'(obj_val[txt_val[12:0]][1][13:0]);
+                                txt_ph <= (obj_val[txt_val[12:0]][1][13:0] == 14'd0)
+                                        ? 4'd6 : 4'd4;
+                            end else if (txt_vt == 3'd0 || txt_vt == 3'd7) begin
+                                logic signed [31:0] iv;
+                                iv = fxi(txt_val, txt_vt);
+                                if (iv < 0) begin
+                                    txt_buf[0] <= 8'h2D; // '-'
+                                    txt_bn <= 7'd1;
+                                    iv = -iv;
+                                end
+                                txt_v <= iv;
+                                txt_pi <= (iv >= 32'sd1000000000) ? 4'd9
+                                        : (iv >= 32'sd100000000) ? 4'd8
+                                        : (iv >= 32'sd10000000) ? 4'd7
+                                        : (iv >= 32'sd1000000) ? 4'd6
+                                        : (iv >= 32'sd100000) ? 4'd5
+                                        : (iv >= 32'sd10000) ? 4'd4
+                                        : (iv >= 32'sd1000) ? 4'd3
+                                        : (iv >= 32'sd100) ? 4'd2
+                                        : (iv >= 32'sd10) ? 4'd1 : 4'd0;
+                                txt_ph <= 4'd5;
+                            end else begin
+                                // hash-only intern (no bytes) or undefined: draw
+                                // nothing and count it — never a bar of garbage
+                                txt_len <= 7'd0;
+                                dbg_str_ovf <= dbg_str_ovf + 16'd1;
+                                txt_ph <= 4'd6;
+                            end
+                        end
+                        4'd2: begin
+                            name_rdaddr <= name_rdaddr + 16'd1; // prime byte 1
+                            txt_ph <= 4'd3;
+                        end
+                        4'd3: begin
+                            txt_buf[txt_i[5:0]] <= name_rdata;
+                            if (txt_i + 7'd1 >= txt_len) txt_ph <= 4'd6;
+                            else begin
+                                txt_i <= txt_i + 7'd1;
+                                name_rdaddr <= name_rdaddr + 16'd1;
+                            end
+                        end
+                        4'd4: begin
+                            txt_buf[txt_i[5:0]] <= json_mem[txt_rp[12:0]];
+                            if (txt_i + 7'd1 >= txt_len) txt_ph <= 4'd6;
+                            else begin
+                                txt_i <= txt_i + 7'd1;
+                                txt_rp <= txt_rp + 16'd1;
+                            end
+                        end
+                        4'd5: begin
+                            // MSD-first digits (no divider): subtract P10 and count
+                            if (txt_v >= 32'(P10[txt_pi])) begin
+                                txt_v <= txt_v - 32'(P10[txt_pi]);
+                                txt_d <= txt_d + 4'd1;
+                            end else begin
+                                txt_buf[txt_bn[5:0]] <= 8'h30 + {4'd0, txt_d};
+                                txt_bn <= txt_bn + 7'd1;
+                                txt_d <= 4'd0;
+                                if (txt_pi == 4'd0) begin
+                                    txt_len <= txt_bn + 7'd1;
+                                    txt_ph <= 4'd6;
+                                end else txt_pi <= txt_pi - 4'd1;
+                            end
+                        end
+                        default: begin
+                            // FM fill_text: centre/right shift the pen by the text
+                            // width, and y is a baseline (top = y - 8*scale)
+                            logic [15:0] w_;
+                            w_ = 16'(txt_len) * 16'd8 * 16'(txt_k);
+                            txt_x0 <= txt_px - ((ctx_align == 2'd1) ? 16'($signed(w_) >>> 1)
+                                             : (ctx_align == 2'd2) ? 16'($signed(w_))
+                                             : 16'sd0);
+                            txt_y0 <= txt_py - 16'(8 * {12'd0, txt_k});
+                            if (txt_len == 7'd0) begin
+                                code_raddr <= 15'(ops_base + ip);
+                                state <= S_FETCH_WAIT;
+                            end else begin
+                                font_raddr <= {txt_buf[0][6:0], 3'd0};
+                                txt_i <= 7'd0; txt_row <= 3'd0; txt_col <= 3'd0;
+                                txt_kx <= 4'd0; txt_ky <= 4'd0;
+                                txt_ph <= 4'd0;
+                                state <= S_TXT_DRAW;
+                            end
+                        end
+                    endcase
+                end
+                S_TXT_DRAW: begin
+                    // NEW: 8x8 glyph raster, one pixel per cycle, scaled k*k.
+                    // Set bits only (transparent background, like FM fill_text).
+                    if (txt_ph == 4'd0) txt_ph <= 4'd1; // font_rom read latency
+                    else if (txt_ph == 4'd1) begin
+                        txt_bits <= font_rdata;
+                        txt_col <= 3'd0; txt_kx <= 4'd0; txt_ky <= 4'd0;
+                        txt_ph <= 4'd2;
+                    end else begin
+                        logic signed [31:0] xx, yy;
+                        logic on, adv;
+                        logic [6:0] ni_;
+                        ni_ = txt_i + 7'd1;
+                        on = txt_bits[3'd7 - txt_col];
+                        xx = $signed({16'd0, txt_x0})
+                           + ((32'({2'd0, txt_i}) * 32'sd8 + 32'({29'd0, txt_col}))
+                              * 32'({28'd0, txt_k}))
+                           + 32'({28'd0, txt_kx});
+                        yy = $signed({16'd0, txt_y0})
+                           + (32'({29'd0, txt_row}) * 32'({28'd0, txt_k}))
+                           + 32'({28'd0, txt_ky});
+                        if (on && xx >= 32'sd0 && xx < $signed(32'(MW)) &&
+                            yy >= 32'sd0 && yy < $signed(32'(MH))) begin
+                            fb_we <= 1'b1;
+                            fb_waddr <= 19'(yy) * 19'(MW) + 19'(xx);
+                            fb_wdata <= color;
+                        end
+                        // clear pixels cost no time: skip the whole k*k block
+                        adv = 1'b0;
+                        if (!on) adv = 1'b1;
+                        else if (txt_kx + 4'd1 >= txt_k) begin
+                            if (txt_ky + 4'd1 >= txt_k) adv = 1'b1;
+                            else begin txt_ky <= txt_ky + 4'd1; txt_kx <= 4'd0; end
+                        end else txt_kx <= txt_kx + 4'd1;
+                        if (adv) begin
+                            txt_kx <= 4'd0; txt_ky <= 4'd0;
+                            if (txt_col != 3'd7) txt_col <= txt_col + 3'd1;
+                            else if (txt_row != 3'd7) begin
+                                txt_row <= txt_row + 3'd1;
+                                font_raddr <= {txt_buf[txt_i[5:0]][6:0], txt_row + 3'd1};
+                                txt_ph <= 4'd0;
+                            end else if (txt_i + 7'd1 >= txt_len) begin
+                                code_raddr <= 15'(ops_base + ip);
+                                state <= S_FETCH_WAIT;
+                            end else begin
+                                txt_i <= txt_i + 7'd1;
+                                txt_row <= 3'd0;
+                                font_raddr <= {txt_buf[ni_[5:0]][6:0], 3'd0};
+                                txt_ph <= 4'd0;
+                            end
+                        end
+                    end
+                end
+                S_STRIDX: state <= S_STRIDX_WR; // name_rdaddr was set last cycle
+                S_STRIDX_WR: begin
+                    if (char_ok[name_rdata]) begin
+                        stack[str_res] <= {16'd0, char_id[name_rdata]};
+                        stack_tag[str_res] <= 3'd3;
+                    end else begin
+                        stack[str_res] <= 32'sd0;
+                        stack_tag[str_res] <= 3'd5;
+                    end
+                    code_raddr <= 15'(ops_base + ip);
+                    state <= S_FETCH_WAIT;
                 end
                 S_IDXSTR: begin
                     if (json_rp >= json_src + json_srclen) begin

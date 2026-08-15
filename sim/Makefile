@@ -104,6 +104,14 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 	cp -f $(JSB_HEX) $(BUILD)/invaders_jsb.hex
 	cp -f $(JSB_HEX) $(BUILD)/obj_dir/invaders_jsb.hex
 	cp -f $(JSB_HEX) invaders_jsb.hex
+	# same for the glyph ROM the VM now uses for ctx.fillText (sim cwd is sim/)
+	cp -f $(FONT) $(BUILD)/font_rom.hex
+	cp -f $(FONT) $(BUILD)/obj_dir/font_rom.hex
+	cp -f $(FONT) font_rom.hex
+	# SD_RUN_DIV stays at the module default (clk/8). Overriding it to speed up
+	# DONKEY's fat .JSH load broke LOAD entirely: at clk/4 (DIV=1) and clk/2
+	# (DIV=0) the C++ card model in sim_main.cpp misses MOSI setup and every
+	# LOAD returns ?IO. Load time must be fixed above the SPI layer, not here.
 	verilator -cc -exe -build -j 0 \
 		-Mdir $(BUILD)/obj_dir \
 		-o $(abspath $(BUILD)/jmr_js_sim_server) \

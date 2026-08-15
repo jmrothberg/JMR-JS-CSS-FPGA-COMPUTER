@@ -1,9 +1,137 @@
 # Session handoff — next agent start here
 
-Last updated: 2026-08-14 (DONKEY KeyboardEvent ctor, FRAME clocks, GUI lock).
+Last updated: 2026-08-14 (JA+JB in JS board top; FPGA-SIM untouched).
 Battery is play-progression with **ghost-color outside house** (not any-pixel).
 Fonts are **not** Chrome (8×8 / rect stub) — out of scope. User F9 remains
 the play gate. Mission: PYTHON + FPGA-SIM full-game match
+
+## LANDED 2026-08-14 — Pmod JA+JB in JS board top (FPGA-SIM unchanged)
+
+User asked to wire the proven LED-test PHY into the JS console so the next
+board flash types on **JA** and plays from the **JB** stick. Same plugs; do
+not rewire. PYTHON / FPGA-SIM / GUI not edited (F9 still PC keys). J15 RX
+left in place. `jmr_ps2_host` still off. Frozen JS LEDs unchanged.
+
+Files: [`rtl/top_nexys_video.sv`](../rtl/top_nexys_video.sv),
+[`constraints/nexys_video.xdc`](../constraints/nexys_video.xdc),
+[`rtl/phys/jmr_i2c_master.sv`](../rtl/phys/jmr_i2c_master.sv),
+[`rtl/phys/jmr_i2c_joy.sv`](../rtl/phys/jmr_i2c_joy.sv),
+[`tools/board_flow/vivado_build.tcl`](../tools/board_flow/vivado_build.tcl).
+LED test under `tools/pmod_input_test/` kept. Next JS `bit flash` picks it up.
+
+## LANDED 2026-08-14 — Pmod PS/2 + I2C joystick LED test **PASS** (not JS console)
+
+Isolated bit [`tools/pmod_input_test/`](../tools/pmod_input_test/) — user confirmed
+JA keyboard + JB stick on the LED map. No PYTHON / FPGA-SIM / `top_nexys_video`
+edits. J15 USB-HID RTL left in place (PIC24 dead on this unit and a second
+Video board). Re-flash (Vivado idle):
+
+```bash
+source scripts/vivado_env.sh && make -C tools/pmod_input_test bit flash
+```
+
+Plug: **Pmod PS/2 → JA** (Data=JA1 Clock=JA3). **Mini I2C stick 0x5A → JB**
+(SCL=JB1 SDA=JB2, labels not colors). LEDs LD0 left: LEFT UP DOWN RIGHT A/C
+B/D stick-OK keyboard-pulse. Same plugs as the JS console top (merged above).
+
+## LANDED 2026-08-14 late — PACMAN unfrozen (boot nursery headroom)
+
+`ARR_KEEP_DELAY` 8 → 3. The nursery does **not rewind at all** during the keep
+grace window, and then the watermark snapshots whatever exists — so 8 frames of
+per-frame temps got baked into the kept region (PACMAN snapshotted at
+`obj=3263`). With too little headroom left, a frame allocated over its own live
+rAF `Fn` object, the dispatcher then ran a stale function (`cbip` landed inside
+the `Game` factory at ip 1823, not the loop), that function returned without
+re-arming, and `raf` stuck at 0 — PACMAN froze on its first drawn frame with the
+presenter free-running (swaps +140/sample instead of +8). Now `obj=2288`,
+`raf=1` stays 1 through Enter and direction keys, one swap per frame, and the
+mouth animates.
+
+- Diagnosed with a new minimal latch: `dbg_cb_ip` (VMSTAT `cbip=`) = ip where
+  the last frame-level callback returned. That is what identified the stale
+  function; keep it.
+- Guard: `test_rtl_boot_heavy_loop_survives`.
+- Rejected alternative: arming both keep watermarks at the first callback
+  registration (`commit_boot_keep`). It fixed PACMAN but starved the finder
+  snippet's boot closures (hung in `S_ENV_LOAD`). The task is left in place,
+  unused, as the documented design note.
+- Not a regression from the string-bytes work: the 18:19 trace (before it) has
+  the byte-identical `state=16 ip=16325 raf=0 obj=3263 arr=1972`.
+
+### Known remaining parity gaps vs PYTHON (PACMAN/INVADERS screens)
+
+1. **`fillText` draws solid bars in RTL, real glyphs in PYTHON.** This is the
+   "screen not complete" report: PACMAN's SCORE/LEVEL and INVADERS' HUD are
+   bars. A font ROM already exists (`tools/export_font_rom_hex.py`) — wire
+   `fillText` to it.
+2. **Maze rounded outer border** draws as partial straight lines in RTL vs a
+   clean rounded rect in PYTHON (path/arc rasteriser).
+3. Top-level `LET_VAR` is "init only if missing" in **both** FM and RTL
+   (startLoop re-entry), so `var row = []` in a *top-level* loop aliases one
+   array on either rung. Shared compromise, not a divergence — real titles
+   build rows inside functions.
+
+## LANDED 2026-08-14 late — RTL string bytes + deep heap keep
+
+1. **`str[i]` / `str.length` in RTL (INVADERS aliens were invisible).**
+   The VM kept only a hash+length per interned string and never read the
+   trailer's UTF-8 names, so `row.length` was undefined (character loop body
+   skipped) and `row[col]` was undefined. Every string-row sprite drew nothing
+   while `fillRect`/`drawImage` art painted — that is why the glass looked
+   frozen with bunkers + ship but no wave (`raf=1`, `swaps` still climbing).
+   - `jsb_format` now marks the name section with **`NAMB`** so the trailer FSM
+     finds it with the same 4-byte peek it already does for `SPR1`/`SPRD`
+     instead of inferring the position (PYTHON decode skips the marker, and
+     tolerates its absence).
+   - VM streams the bytes into `name_mem` (**32 KB on-chip BRAM, registered
+     read** — one cycle in `S_STRIDX`/`S_STRIDX_WR`, no 32 KB mux, same shape on
+     ASIC). The 4 MB external bank stays for art.
+   - `char_id[256]`/`char_ok[256]`: a 1-char name's hash IS its byte, so `str[i]`
+     maps a byte to that intern id in one lookup and `row[col] === "1"` is a
+     plain intern compare — no string walk.
+   - `.length` also answered for `CLS_DYNSTR` (replace / JSON results).
+   - VMSTAT gained `strb=` (name bytes loaded) and `strovf=`.
+   - Snippet: `test_rtl_string_row_bitmap_draws`.
+   - Verified: INVADERS formation band went **40 px → 26364 px**; splash wave
+     10522 px. `traces/INVADERS_rtl_active.png`.
+2. **Deep heap keep (generic lifetime bug).** `commit_arr_keep` was **dead
+   code** and `commit_obj_keep` only kept `oid+1`, but a constructor allocates
+   its children AFTER the instance — so `arr.push(new C())` kept the object and
+   rewound its own arrays and child objects on the next frame. New
+   `commit_deep_keep` raises BOTH watermarks to the current bump pointers on a
+   genuinely-new store; array-over-array slot overwrite now copies in place
+   (like object-over-object), so per-frame churn still cannot creep.
+   Snippets: `test_rtl_ctor_children_survive_frames` (needs per-frame churn to
+   show — rewind only resets the pointer, it does not clear data),
+   `test_rtl_coord_overwrite_does_not_heapovf` still green.
+3. **Do NOT raise the sim SPI speed.** `-GSD_RUN_DIV=1` (clk/4) and `0` (clk/2)
+   both make the C++ card in `sim_main.cpp` miss MOSI setup — every LOAD returns
+   `?IO` and all RTL snippets fail with FB `nz=0`. Sim stays at the module
+   default clk/8. DONKEY load time must be fixed above the SPI layer.
+
+## LANDED 2026-08-14 night — DONKEY Enter + PACMAN reverse + INVADERS Space
+
+1. **DONKEY title Enter.** RTL `GET_PROP` now materializes class methods as
+   Fn values (`this.startSelect` / `this.choose`) and caches them on the
+   instance — same as PYTHON `bytecode.py`. Snippets:
+   `test_class_field_listener_sees_enter`,
+   `test_rtl_class_field_listener_enter`.
+2. **PACMAN reverse / mouth.** `player.control = {orientation}` was a
+   nursery object; the per-frame rewind deleted it before the next cell
+   center. SET_PROP now copies object-into-object in place and commits keep
+   on first store onto old-space. rAF/timer fns also commit keep (`raf=0`
+   killed the start() loop, so the mouth `times%2` never ticked). Snippet:
+   `test_rtl_control_object_survives_frames`. Coord overwrite still rewinds
+   (`test_rtl_coord_overwrite_does_not_heapovf`).
+3. **INVADERS Space.** Attract splash needs `const { key } = e; key === " "`
+   (no auto-click). Snippets: `test_destructure_space_key_starts`,
+   `test_rtl_destructure_space_key`.
+4. **DONKEY LOAD/RUN minutes.** RUN wait now uses `TICKN 20000` instead of
+   236× `TICKN 2000` RPCs (that RPC overhead was most of the wall time).
+   **Do NOT speed up the sim SPI divider:** `-GSD_RUN_DIV=1` (clk/4) and `0`
+   (clk/2) both make the C++ card model in `sim_main.cpp` miss MOSI setup and
+   every LOAD returns `?IO` (all RTL snippets fail, FB `nz=0`). Sim stays at
+   the module default clk/8, same as the board.
 
 ## LANDED 2026-08-14 evening — GUI + DONKEY title + play clocks
 
@@ -27,8 +155,8 @@ the play gate. Mission: PYTHON + FPGA-SIM full-game match
 5. **Logs.** KEYEVT coalesced; periodic `play fb_frames=` + VMSTAT; no
    duplicate GLASS.
 
-**Still user F9:** PACMAN ghosts leave + reverse on FPGA-SIM; DONKEY playable
-after title flash. Board / `.bit` untouched. Fonts still rect stub.
+**Still user F9:** confirm DONKEY title→game, PACMAN reverse+mouth, INVADERS
+Space start. Board / `.bit` untouched. Fonts still rect stub.
 
 Goldens (`tools/golden_frames.py` 2026-08-14 evening): DONKEY RTL now paints
 (`nz=45632` vs PYTHON `60003`) — title is no longer a stuck sprite-soup.
@@ -366,8 +494,10 @@ FPGA-SIM. Fit numbers will change (32K code + heap + dual 640×480 FB).
   https://forum.digilent.com/forum/4-fpga/
 - **HDMI back-feeds 5 V** — unplug HDMI before any J15 power-cycle test.
 - **JP4 = boot source only** (not a keyboard enable).
-- LEDs: LD7=`ps2_strobe`, LD6=`ps2_clk`, LD5=`ps2_data`, LD4=`~sd_cd`,
+- LEDs (JS console bit): LD7=`ps2_strobe`, LD6=`ps2_clk`, LD5=`ps2_data`, LD4=`~sd_cd`,
   LD3=MMCM, LD2=READY, LD1=game_mode, LD0=alive.
+- **Pmod JA+JB in JS top 2026-08-14.** Same wiring as the LED test. FPGA-SIM
+  unchanged. Next JS bit flash: type on JA, play on JB.
 
 ---
 

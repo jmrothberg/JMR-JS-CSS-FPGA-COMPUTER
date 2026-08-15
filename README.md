@@ -96,6 +96,7 @@ the Constitution disagree, the code is wrong.
 
 **Architecture:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 (posters: [architecture V1](docs/jmr_js_architecture_v1.png) ·
+[core zoom-in](docs/jmr_js_core_zoom_in.png) ·
 [ASIC board Rev A](docs/jmr_js_asic_board_rev_a.png) — errata in ARCHITECTURE.md)
 
 **Fit / LUTs / BRAM / slices:** [docs/FPGA_FIT.md](docs/FPGA_FIT.md) — measured

@@ -1026,3 +1026,432 @@ requestAnimationFrame(tick);
     finally:
         sim.shutdown()
 
+
+def test_rtl_class_field_listener_enter():
+    """GET_PROP this.method must yield a Fn so KEYEVT Enter reaches it."""
+    src = """
+var hit = 0;
+class G {
+  startSelect = (e) => {
+    if (e.key === "Enter") hit = 1;
+  }
+}
+const g = new G();
+addEventListener("keydown", g.startSelect);
+function tick() {
+  if (hit) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("CLSM.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "CLSM.JS"')
+        sim.type_line("RUN")
+        for _ in range(4):
+            sim._rpc("FRAME")
+        sim._rpc("KEYEVT 13 1")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        assert _fb_nz(sim) >= 50, "class-field listener did not see Enter"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_control_object_survives_frames():
+    """player.control = {orientation:n} must outlive the object nursery rewind."""
+    src = """
+var player = {x: 0};
+var n = 0;
+addEventListener("keydown", function(e) {
+  if (e.keyCode == 37) player.control = {orientation: 2};
+});
+function tick() {
+  n = n + 1;
+  if (player.control && player.control.orientation == 2) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("CTRL.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "CTRL.JS"')
+        sim.type_line("RUN")
+        # ARR_KEEP_DELAY is 8 frames — rewind must be live before the key
+        for _ in range(12):
+            sim._rpc("FRAME")
+        sim._rpc("KEYEVT 37 1")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        assert _fb_nz(sim) >= 50, "player.control was rewound"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_destructure_space_key():
+    """const { key } = e; key === ' ' must match KEYEVT 32 (INVADERS start)."""
+    src = """
+var hit = 0;
+addEventListener("keydown", function(e) {
+  const { key } = e;
+  if (key === " ") hit = 1;
+});
+function tick() {
+  if (hit) {
+    fillRect(10, 10, 30, 30, 4);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("DSPC.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "DSPC.JS"')
+        sim.type_line("RUN")
+        for _ in range(4):
+            sim._rpc("FRAME")
+        sim._rpc("KEYEVT 32 1")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        assert _fb_nz(sim) >= 50, "destructured e.key !== space"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_ctor_children_survive_frames():
+    """arr.push(new C()) must keep the ctor's OWN array + child objects.
+
+    The object watermark is stored oid+1, but a constructor allocates its
+    children AFTER the instance, so everything the ctor built sat in the
+    nursery and the per-frame rewind dropped it (INVADERS alien formation
+    vanished one frame after startGame; the array watermark was never
+    committed at all).
+    """
+    src = """
+var grids = [];
+var started = 0;
+class Grid {
+  constructor() {
+    this.items = [];
+    var i;
+    for (i = 0; i < 3; i++) {
+      this.items.push({n: i + 1});
+    }
+  }
+}
+addEventListener("keydown", function(e) {
+  if (e.keyCode == 32 && !started) {
+    started = 1;
+    grids.push(new Grid());
+  }
+});
+function tick() {
+  // per-frame churn: rewind only resets the bump pointer, so the dropped
+  // oids must actually be handed out again for the loss to show (any real
+  // game allocates temps every frame)
+  var j;
+  for (j = 0; j < 6; j++) {
+    var tmp = {a: j, b: [j, j + 1]};
+  }
+  var ok = 0;
+  grids.forEach(function(g) {
+    if (g.items && g.items.length == 3 && g.items[2] && g.items[2].n == 3) ok = 1;
+  });
+  if (ok) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("CTORK.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "CTORK.JS"')
+        sim.type_line("RUN")
+        # keep watermarks must already be live before the push
+        for _ in range(12):
+            sim._rpc("FRAME")
+        sim._rpc("KEYEVT 32 1")
+        for _ in range(12):
+            sim._rpc("FRAME")
+        assert _fb_nz(sim) >= 50, "ctor-built array/objects were rewound"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_boot_heavy_loop_survives():
+    """A loop registered at top-level after heavy boot allocation must live.
+
+    The nursery does not rewind during the keep grace window, so a long grace
+    baked that many frames of per-frame temps into the kept region. With too
+    little headroom left, a frame allocated over its own live rAF Fn object and
+    the dispatcher then ran a stale function that never re-armed — PACMAN froze
+    on its first drawn frame with raf=0.
+    """
+    # NOTE: build inside a function. Top-level LET_VAR is "init only if missing"
+    # in BOTH the FM and RTL (startLoop re-entry), so `var row = []` in a
+    # top-level loop would alias one array on either rung.
+    src = """
+function build() {
+  var out = [];
+  var i;
+  for (i = 0; i < 120; i++) { out.push({a:i, c:{d:i * 2}}); }
+  return out;
+}
+var boot = build();
+var n = 0;
+function tick() {
+  // per-frame churn so the nursery actually recycles
+  var k, tmp;
+  for (k = 0; k < 40; k++) { tmp = {x:k, y:[k, k+1], z:{w:k}}; }
+  n = n + 1;
+  if (n >= 10 && boot.length == 120 && boot[119].c.d == 238) {
+    fillRect(20, 20, 40, 40, 3);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("BOOTL.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "BOOTL.JS"')
+        sim.type_line("RUN")
+        for _ in range(30):
+            sim._rpc("FRAME")
+        assert "raf=1" in sim._rpc("VMSTAT?"), "boot-registered loop stopped re-arming"
+        assert _fb_nz(sim) >= 200, "loop died or boot heap was clobbered"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_string_row_bitmap_draws():
+    """str.length + str[i] === "1" — string-row sprites (INVADERS drawBitmap).
+
+    RTL kept only a hash+length per interned string and never loaded the UTF-8
+    name bytes, so row.length was undefined (loop body skipped) and row[col]
+    was undefined. Every alien/saucer drawn this way was invisible while
+    fillRect/drawImage art still painted.
+    """
+    src = """
+var ROWS = ["0110", "1111"];
+function drawBitmap(x, y, rows, scale) {
+  var r, col, row;
+  for (r = 0; r < rows.length; r++) {
+    row = rows[r];
+    for (col = 0; col < row.length; col++) {
+      if (row[col] === "1") {
+        fillRect(x + col * scale, y + r * scale, scale, scale, 5);
+      }
+    }
+  }
+}
+function tick() {
+  drawBitmap(20, 20, ROWS, 8);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("STRIX.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "STRIX.JS"')
+        sim.type_line("RUN")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        # 6 set bits x 8x8 = 384 px; anything less means chars did not compare
+        assert _fb_nz(sim) >= 384, f"string-row bitmap drew {_fb_nz(sim)} px"
+    finally:
+        sim.shutdown()
+
+
+def _expect_text(text: str, x: int, y: int, k: int, align: str = "left") -> set:
+    """Pixels PYTHON's canvas_engine.fill_text would set (the parity spec)."""
+    from functional_model.font8 import glyph
+
+    px = x - (len(text) * 8 * k) // 2 if align == "center" else x
+    if align == "right":
+        px = x - len(text) * 8 * k
+    py = y - 8 * k
+    out = set()
+    for i, ch in enumerate(text):
+        bits = glyph(ch)
+        for dy, byte in enumerate(bits):
+            for dx in range(8):
+                if byte & (1 << (7 - dx)):
+                    for ry in range(k):
+                        for rx in range(k):
+                            out.add((px + (i * 8 + dx) * k + rx, py + dy * k + ry))
+    return out
+
+
+def test_rtl_filltext_draws_real_glyphs():
+    """ctx.fillText must paint the PYTHON 8x8 font, not a filled bar.
+
+    RTL drew a solid 64x8 rect for every fillText, so every HUD/menu was a
+    row of blocks. Glyphs come from the same font ROM the console scanout
+    uses, and the px size in ctx.font picks the integer scale.
+    """
+    src = """
+var c = document.getElementById('c').getContext('2d');
+c.font = '16px Foo';
+c.fillStyle = 'white';
+function tick() {
+  c.fillText('AB', 100, 108);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("FTXT.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "FTXT.JS"')
+        sim.type_line("RUN")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        want = _expect_text("AB", 100, 108, 2)
+        got = {(i % 640, i // 640) for i, b in enumerate(raw) if b}
+        assert got == want, (
+            f"glyph pixels differ: {len(got)} drawn vs {len(want)} expected, "
+            f"{len(want - got)} missing / {len(got - want)} extra"
+        )
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_filltext_numbers_draw_digits():
+    """fillText(number) must expand to digits (HUD score/level counters)."""
+    src = """
+var c = document.getElementById('c').getContext('2d');
+var _SCORE = 0;
+c.font = '8px F';
+c.fillStyle = 'white';
+function tick() {
+  c.fillText(_SCORE, 100, 108);
+  c.fillText(1234, 200, 108);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("NTXT.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "NTXT.JS"')
+        sim.type_line("RUN")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        got = {(i % 640, i // 640) for i, b in enumerate(_fb_raw(sim)) if b}
+        want = _expect_text("0", 100, 108, 1) | _expect_text("1234", 200, 108, 1)
+        assert got == want, (
+            f"numeric text differs: {len(want - got)} missing / {len(got - want)} extra"
+        )
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_measure_text_does_not_churn_heap():
+    """measureText per frame must not walk the keep watermark up.
+
+    A fresh {width} object per call looked harmless, but any store into old
+    space raises the keep watermark to the bump pointer, so one new object per
+    frame crept upward until the ring wrapped and recycled the oldest live
+    data. PACMAN lost half of its maze rows that way. One reserved metrics
+    object is enough for every title.
+    """
+    src = """
+var c = document.getElementById('c').getContext('2d');
+function build() {
+  var out = [];
+  var i;
+  for (i = 0; i < 100; i++) { out.push([i, i + 1, i + 2]); }
+  return out;
+}
+var boot = build();
+var keep = {n: 0};
+var n = 0;
+function tick() {
+  c.font = '8px F';
+  keep.n = c.measureText('SCORE').width;
+  n = n + 1;
+  if (n >= 50 && boot.length == 100 && boot[99] && boot[99][2] == 101) {
+    fillRect(20, 20, 40, 40, 3);
+  }
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("MTXT.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "MTXT.JS"')
+        sim.type_line("RUN")
+        for _ in range(70):
+            sim._rpc("FRAME")
+        assert _fb_nz(sim) >= 1500, "boot arrays were recycled under measureText churn"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_filltext_center_align_and_joined_text():
+    """textAlign='center' plus a built string ('P'+1) must draw its characters.
+
+    A concat used to intern a hash with no bytes, so text assembled at runtime
+    ('SCORE ' + score) had nothing to draw from.
+    """
+    src = """
+var c = document.getElementById('c').getContext('2d');
+c.font = '8px Foo';
+c.textAlign = 'center';
+c.fillStyle = 'white';
+function tick() {
+  c.fillText('P' + 1, 320, 108);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("FTXTC.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "FTXTC.JS"')
+        sim.type_line("RUN")
+        for _ in range(8):
+            sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        want = _expect_text("P1", 320, 108, 1, align="center")
+        got = {(i % 640, i // 640) for i, b in enumerate(raw) if b}
+        assert got == want, (
+            f"centred joined text differs: {len(got)} drawn vs {len(want)} "
+            f"expected, {len(want - got)} missing / {len(got - want)} extra"
+        )
+    finally:
+        sim.shutdown()
+

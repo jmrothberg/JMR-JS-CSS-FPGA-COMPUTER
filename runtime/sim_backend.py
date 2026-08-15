@@ -337,7 +337,9 @@ class SimBackend(RuntimeBackend):
         if (upper == "RUN" or upper.startswith("RUN ")) and self._html_loaded_stem():
             nbytes = int(getattr(self, "_last_jsh_bytes", 0) or 0)
             clocks = max(40_000_000, nbytes * 200)
-            slices = max(1, (clocks + 1_999_999) // 2_000_000)
+            # NEW: TICKN 20000 = 20M clocks/RPC (cap 100000). Fat .JSH was
+            # 236× TICKN 2000 RPCs after LINE's 100M cap — minutes of overhead.
+            slices = max(1, (clocks + 19_999_999) // 20_000_000)
             self._break_run_wait = False
             for i in range(slices):
                 pump = getattr(self, "run_wait_idle", None)
@@ -345,7 +347,7 @@ class SimBackend(RuntimeBackend):
                     pump()
                 if getattr(self, "_break_run_wait", False):
                     break
-                self._rpc("TICKN 2000")
+                self._rpc("TICKN 20000")
                 st = self._rpc("STATUS?")
                 glass = self.screen_text()
                 if "running=1" in st or "?NH" in glass or "?NB" in glass:

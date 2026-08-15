@@ -42,6 +42,9 @@ add_files $ROOT/rtl/engines/storage_engine.sv
 # NEW: jmr_ps2_host removed from build — BASIC T100 is RX-only (file kept)
 add_files $ROOT/rtl/phys/ps2_rx.sv
 add_files $ROOT/rtl/phys/ps2_decode.sv
+# NEW: I2C stick @ 0x5A (proven in tools/pmod_input_test)
+add_files $ROOT/rtl/phys/jmr_i2c_master.sv
+add_files $ROOT/rtl/phys/jmr_i2c_joy.sv
 add_files $ROOT/rtl/phys/sd_spi_master.sv
 add_files $ROOT/rtl/jmr_js_core.sv
 add_files $ROOT/rtl/top_nexys_video.sv

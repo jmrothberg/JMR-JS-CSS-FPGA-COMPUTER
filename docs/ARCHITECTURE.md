@@ -40,6 +40,33 @@ fine print:
   Constitution-frozen. **QFN-100** is a later Rev A package proposal and
   lives on the ASIC board poster, not this one.
 
+**Core zoom-in poster** (sibling style to the JMR BASIC Processor Core
+zoom-in diagram) — the JS processor core itself: program sequencer, dispatch
+table, tagged eval stack, object/heap engine, native call unit, shared
+engines, compile-on-RUN front end, three memory rooms, I/O:
+
+![JMR JS Processor Core — zoom-in poster](jmr_js_core_zoom_in.png)
+
+### Core zoom-in poster errata (AI-rendered image; text noise)
+
+The block diagram and every number are correct and verified against the code
+(opcodes/hex from `rtl/engines/jmr_js_vm.sv`; header, const pool, and native
+IDs from `functional_model/jsb_format.py`). Known text errors baked into the
+render — trust this list, not the poster fine print:
+
+- Canvas 2D engine caption: first word is garbled — should read
+  "**fillRect** • fillText (8×8 font ROM) • getImageData".
+- Blitter engine caption: "drawingage" → "**drawImage** streams 8-bpp pixels
+  from asset SRAM, 2 px / 16-bit word".
+- Console Engine verb strip: "READV" → "**READY**".
+- Object/Heap footnote: "returnc" → "return**:**" (closures survive after
+  return: setTimeout / requestAnimationFrame).
+- Poster opcode `0D CALL_NATIVE` is the FM name; the RTL localparam is
+  `OP_CALL` — same instruction (native id in arg0). The 9-row tables are
+  samples: 34 opcodes total, 40 native IDs total.
+- Heap "ring recycle" detail: temporaries recycle in the **upper half** of
+  the object/array heaps (boot heap stays below the wrap point).
+
 **ASIC board poster (Rev A proposal)** — QFN-100 chip + external 4 MB asset
 SRAM + HDMI transmitter carrier board, sibling style to the JMR BASIC ASIC
 board poster:
