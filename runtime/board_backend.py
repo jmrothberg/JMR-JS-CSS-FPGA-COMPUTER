@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import os
 import re
+import struct
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -25,7 +27,7 @@ from functional_model.canvas_engine import (
     CONSOLE_ROWS,
     CanvasEngine,
 )
-from runtime.backend import RuntimeBackend, card_catalog
+from runtime.backend import ROOT, RuntimeBackend, card_catalog
 from runtime.flight_log import FlightLog
 
 # Board char VRAM geometry (jmr_video_vram / jmr_uart_link dump)
@@ -94,6 +96,7 @@ class BoardBackend(RuntimeBackend):
         self._fb = bytearray(_FB_W * _FB_H)
         self._have_fb = False
         self._ps2_strobes = 0
+        self._loaded_name = ""
         port = _find_serial_port()
         if port:
             try:
@@ -212,11 +215,64 @@ class BoardBackend(RuntimeBackend):
         self._prompt = "> "
         if self._ser is None:
             return
+        stripped = text.strip()
+        upper = stripped.upper()
+        if upper.startswith("LOAD"):
+            self._loaded_name = stripped[4:].strip().strip('"').strip("'")
         try:
+            # HTML RUN: compile on the host, type RUN, then PROG-stream the .JSH.
+            # Card stays HTML-only — do not FAT-read NAME.JSH.
+            if upper == "RUN" or upper.startswith("RUN "):
+                if self._html_loaded_stem():
+                    blob = self._compile_html_blob()
+                    if not blob:
+                        return
+                    self._ser.write((text + "\n").encode("ascii", errors="replace"))
+                    self._ser.flush()
+                    time.sleep(0.05)
+                    self._ser.write(bytes([0xFD]) + struct.pack("<I", len(blob)))
+                    mv = memoryview(blob)
+                    for i in range(0, len(blob), 16384):
+                        self._ser.write(mv[i : i + 16384])
+                    self._ser.flush()
+                    self._log.note(f"PROG JSH stream {len(blob)} bytes")
+                    return
             self._ser.write((text + "\n").encode("ascii", errors="replace"))
             self._ser.flush()
         except Exception as e:
             self._log.fault("SERIAL", str(e))
+
+    def _html_loaded_stem(self) -> str:
+        name = (self._loaded_name or "").upper()
+        if name.endswith(".HTML") or name.endswith(".HTM"):
+            return Path(name).stem[:8]
+        return ""
+
+    def _compile_html_blob(self) -> bytes:
+        """Host compile-on-RUN for BOARD. Empty if not HTML (tiny .JS keeps FAT .JSB)."""
+        stem = self._html_loaded_stem()
+        if not stem:
+            return b""
+        html_path = ROOT / "storage" / f"{stem}.HTML"
+        if not html_path.is_file():
+            self._log.fault("COMPILE", f"no {html_path.name} — refuse RUN")
+            return b""
+        try:
+            from functional_model.compiler import CompileError
+            from tools.compile_js import compile_html_text, encode_html_chunk
+
+            html = html_path.read_text(encoding="utf-8")
+            blob = encode_html_chunk(compile_html_text(html))
+            (ROOT / "storage" / f"{stem}.JSH").write_bytes(blob)
+            self._log.note(f"compile-on-RUN {html_path.name} ({len(blob)} bytes, PROG stream)")
+            return blob
+        except CompileError as e:
+            where = f" LINE {e.line}" if e.line else ""
+            self._log.fault("COMPILE", f"ERROR{where}: {e.message}")
+            return b""
+        except Exception as e:
+            self._log.fault("COMPILE", str(e))
+            return b""
 
     def paint_prompt(self, prompt: str, cursor_on: bool = False, cursor_col=None) -> None:
         self._prompt = prompt

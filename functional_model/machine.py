@@ -571,9 +571,9 @@ class Machine:
         return self._run_html_bytecode(html)
 
     def _run_html_bytecode(self, html: str) -> List[str]:
-        """Compile-on-RUN: always compile current HTML → fresh .JSH → VM.
+        """Compile-on-RUN: current HTML → ephemeral ProgramImage → VM.
 
-        Never read a pre-existing .JSH (stale sidecar is not the game).
+        Never read or write a .JSB/.JSH sidecar (HTML is the program).
         CompileError.line is the HTML editor line, not a sidecar.
         """
         from .compiler import CompileError
@@ -591,16 +591,13 @@ class Machine:
             self._arch_phase = "loaded"
             return [f"ERROR: HTML/JS {e}"]
         blob = encode_html_chunk(chunk)
-        jsh = self._html_jsh_path()
-        if jsh is not None:
-            try:
-                jsh.write_bytes(blob)
-            except Exception:
-                pass
+        # Execute only what survived serialization. This prevents the Python
+        # rung from proving semantics that the ProgramImage never carried.
+        from .jsb_format import ProgramImage
+        chunk = ProgramImage(blob).decode()
         self.trace.edge(
             "COMPILE",
-            f"compile-on-RUN {self.source_name} → "
-            f"{jsh.name if jsh is not None else 'JSH'} ({len(blob)} bytes)",
+            f"compile-on-RUN {self.source_name} → ProgramImage ({len(blob)} bytes)",
         )
         # Prompt/LIST Space must not arrive as the first game keydown.
         self.input.discard_queued_keys()
@@ -671,7 +668,7 @@ class Machine:
         return ["HTML BYTECODE RUNNING - arrows + space, ESC quit"]
 
     def _html_jsh_path(self) -> Optional[Path]:
-        """Internal compile-on-RUN output path (write fresh; never LOAD)."""
+        """Legacy cache-name helper; the product RUN path does not persist it."""
         stem = Path(self.source_name).stem
         if not stem:
             return None

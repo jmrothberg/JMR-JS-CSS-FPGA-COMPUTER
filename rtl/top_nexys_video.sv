@@ -139,6 +139,10 @@ module top_nexys_video (
     logic [7:0] uart_kbd_data;
     logic [5:0] uart_joy_bits;  // NEW: GUI KEYBITS while J15 USB host is dead
     logic [9:0] uart_dump_addr;
+    logic        uart_jsb_stb;
+    logic [7:0]  uart_jsb_data;
+    logic        uart_jsb_eof;
+    logic        uart_jsb_rdy;
     jmr_uart_link #(.CLK_HZ(100_000_000), .USE_DPTI(1)) u_link (
         .clk(core_clk), .rst_n(rst_n),
         .uart_rx(1'b1), .uart_tx(),
@@ -150,7 +154,9 @@ module top_nexys_video (
         .dump_addr(uart_dump_addr), .dump_data(dump_data),
         .dump_fb_raddr(dump_fb_raddr), .dump_fb_rdata(dump_fb_rdata),
         .game_mode(game_mode),
-        .ps2_strobe(ps2_strobe)
+        .ps2_strobe(ps2_strobe),
+        .jsb_tether_stb(uart_jsb_stb), .jsb_tether_data(uart_jsb_data),
+        .jsb_tether_eof(uart_jsb_eof), .jsb_tether_rdy(uart_jsb_rdy)
     );
     // Merge J15 + Pmod JA + UART (all slow; J15 wins, then Pmod, then tether)
     wire        core_kbd_push = kbd_push | pmod_kbd_push | uart_kbd_push;
@@ -169,7 +175,9 @@ module top_nexys_video (
         .game_mode(game_mode),
         .fb_raddr(fb_raddr), .fb_rdata(fb_rdata),
         .dump_fb_raddr(dump_fb_raddr), .dump_fb_rdata(dump_fb_rdata),
-        .sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso), .sd_cs_n(sd_cs_n)
+        .sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso), .sd_cs_n(sd_cs_n),
+        .jsb_tether_stb(uart_jsb_stb), .jsb_tether_data(uart_jsb_data),
+        .jsb_tether_eof(uart_jsb_eof), .jsb_tether_rdy(uart_jsb_rdy)
     );
 
     // µSD SPI — Nexys Video pinout (LiteX/Digilent):

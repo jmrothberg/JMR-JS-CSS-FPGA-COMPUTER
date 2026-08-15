@@ -150,13 +150,31 @@ module jmr_uart_link #(
     // NEW: when game_mode, stream P-rows (mini-FB) instead of text S-rows
     input  logic       game_mode = 1'b0,
     // NEW: log USB scancodes to tether (flight-log proof without guessing LEDs)
-    input  logic       ps2_strobe = 1'b0
+    input  logic       ps2_strobe = 1'b0,
+    // NEW: HTML RUN .JSH stream (0xFD + u32 LE length + payload)
+    output logic       jsb_tether_stb,
+    output logic [7:0] jsb_tether_data,
+    output logic       jsb_tether_eof,
+    input  logic       jsb_tether_rdy = 1'b0
 );
     logic       rx_ready;
     logic [7:0] rx_data;
     logic       tx_busy;
     logic       wr_en;
     logic [7:0] wr_data;
+    logic       rx_pop;
+    // NEW: 0xFD + u32 LE length + payload → console C_JSB_TETHER (not kbd)
+    typedef enum logic [2:0] {
+        JSH_IDLE, JSH_L0, JSH_L1, JSH_L2, JSH_L3, JSH_DATA
+    } jsh_t;
+    jsh_t jsh_st;
+    logic [31:0] jsh_left;
+    logic        jsh_eof_pend;
+    wire jsh_hold = (jsh_st == JSH_DATA) && !jsb_tether_rdy;
+    assign rx_pop = rx_ready && !jsh_hold;
+    assign jsb_tether_stb = rx_ready && (jsh_st == JSH_DATA) && jsb_tether_rdy;
+    assign jsb_tether_data = rx_data;
+    assign jsb_tether_eof = jsh_eof_pend;
 
     generate
         if (USE_DPTI) begin : g_dpti
@@ -167,7 +185,7 @@ module jmr_uart_link #(
                 .rd_n(prog_rdn), .wr_n(prog_wrn),
                 .oe_n(prog_oen), .siwu_n(prog_siwun),
                 .wr_en(wr_en), .wr_data(wr_data), .tx_busy(tx_busy),
-                .rx_ready(rx_ready), .rx_pop(rx_ready), .rx_data(rx_data)
+                .rx_ready(rx_ready), .rx_pop(rx_pop), .rx_data(rx_data)
             );
         end else begin : g_uart
             assign prog_rdn = 1'b1;
@@ -178,13 +196,12 @@ module jmr_uart_link #(
                 .clk(clk), .rst_n(rst_n),
                 .rx(uart_rx), .tx(uart_tx),
                 .wr_en(wr_en), .wr_data(wr_data), .tx_busy(tx_busy),
-                .rx_ready(rx_ready), .rx_pop(rx_ready), .rx_data(rx_data)
+                .rx_ready(rx_ready), .rx_pop(rx_pop), .rx_data(rx_data)
             );
         end
     endgenerate
 
-    // RX → keyboard FIFO, or KEYBITS prefix 0xFE + bits (GUI play while J15 dead).
-    // GUI BoardBackend.set_key_bits writes [0xFE, bits]; never push those to console.
+    // RX → keyboard FIFO, KEYBITS 0xFE, or JSHLOAD 0xFD (HTML RUN blob).
     logic joy_cmd;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -192,12 +209,42 @@ module jmr_uart_link #(
             kbd_data <= 8'h00;
             joy_bits <= 6'b0;
             joy_cmd <= 1'b0;
+            jsh_st <= JSH_IDLE;
+            jsh_left <= 32'd0;
+            jsh_eof_pend <= 1'b0;
         end else begin
             kbd_push <= 1'b0;
-            if (rx_ready) begin
-                if (joy_cmd) begin
+            jsh_eof_pend <= 1'b0;
+            if (rx_ready && rx_pop) begin
+                if (jsh_st == JSH_L0) begin
+                    jsh_left[7:0] <= rx_data;
+                    jsh_st <= JSH_L1;
+                end else if (jsh_st == JSH_L1) begin
+                    jsh_left[15:8] <= rx_data;
+                    jsh_st <= JSH_L2;
+                end else if (jsh_st == JSH_L2) begin
+                    jsh_left[23:16] <= rx_data;
+                    jsh_st <= JSH_L3;
+                end else if (jsh_st == JSH_L3) begin
+                    jsh_left[31:24] <= rx_data;
+                    if ({rx_data, jsh_left[23:0]} == 32'd0) begin
+                        jsh_eof_pend <= 1'b1;
+                        jsh_st <= JSH_IDLE;
+                    end else
+                        jsh_st <= JSH_DATA;
+                end else if (jsh_st == JSH_DATA) begin
+                    if (jsh_left <= 32'd1) begin
+                        jsh_left <= 32'd0;
+                        jsh_eof_pend <= 1'b1;
+                        jsh_st <= JSH_IDLE;
+                    end else
+                        jsh_left <= jsh_left - 32'd1;
+                end else if (joy_cmd) begin
                     joy_bits <= rx_data[5:0];
                     joy_cmd <= 1'b0;
+                end else if (rx_data == 8'hFD) begin
+                    jsh_st <= JSH_L0;
+                    jsh_left <= 32'd0;
                 end else if (rx_data == 8'hFE) begin
                     joy_cmd <= 1'b1;
                 end else begin

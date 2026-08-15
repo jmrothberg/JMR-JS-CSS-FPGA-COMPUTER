@@ -108,8 +108,16 @@ from `build/nexys_video/utilization_impl.rpt`. Do not invent counts.
 
 ## Method (steal from the BASIC sibling — not the product)
 
+Same rules if you later build a **language-native graphics processing unit**
+or **update BASIC**: the language is the instruction set architecture
+(native operations); Python is the fast ruler (same **results**, not the
+same wall-clock as the chip); register-transfer level hardware must execute
+the same serialized program; lockstep before titles; RUN compiles loaded
+source; user F9 before `.bit`. Full write-up:
+[CONSTITUTION.md](CONSTITUTION.md#language-native-computer-method-js-basic-or-a-later-native-gpu).
+
 - Constitution first.
-- PYTHON functional model → FPGA-SIM → board `.bit`.
+- PYTHON functional model → hardware model on **the bytes RTL gets** → FPGA-SIM → board `.bit`.
 - Uniform glass across F9 runtimes.
 - Read `traces/` before repro spam.
 - Surgical edits; do not delete files; one README.

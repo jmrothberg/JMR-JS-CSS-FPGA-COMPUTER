@@ -8,7 +8,7 @@ module jmr_palette_bram (
     input  wire [7:0]  raddr,
     output reg  [23:0] rdata
 );
-    (* ram_style = "block" *) reg [23:0] mem [0:255];
+    (* ram_style = "block" *) reg [23:0] mem [0:255] /*verilator public_flat_rw*/;
     integer i;
     initial begin
         for (i = 0; i < 256; i = i + 1) mem[i] = 24'h000000;

@@ -89,7 +89,7 @@ text errors baked into the render — trust this list, not the poster fine print
 - SYSTEM RULES §4: SRAM bullet should read "A[20:0] + DQ[15:0] +
   CE#/OE#/WE#/UB#/LB# (async SRAM bus)"; the microSD/UART/audio bullets are
   garbled — correct text: "microSD SPI (CS/SCK/MOSI/MISO), FAT32:
-  NAME.HTML titles + invisible .JSH compile cache", "Console UART via
+  NAME.HTML titles; ProgramImage is regenerated in memory", "Console UART via
   CH340/CP2102 micro-USB (debug/tether only)", "Audio PWM → amp → 3.5 mm
   jack (V1-later)".
 - PIN SUMMARY table: title should read "(Indicative Budget)"; the
@@ -123,7 +123,7 @@ There is no hidden general-purpose core underneath. **No dukpy/V8/browser as
 the machine.** V1 is a **Canvas game computer** (HTML titles → JMR bytecode).
 
 ```
-NAME.HTML  →  RUN always compiles  →  fresh .JSH (code + ASET art)
+NAME.HTML  →  RUN always compiles  →  ephemeral ProgramImage
            →  code → code BRAM, ASET → external SRAM asset bank  →  VM
 ```
 
@@ -196,9 +196,10 @@ Prefer BRAM for palette, microcode, FIFOs, font, line buffers, bounded stacks,
 **and the V1 working set.** Dual **640×480** FB lives in `jmr_mini_fb.sv`
 BRAM. Also on-chip: code BRAM, JS heap. Game art lives in the **external
 SRAM asset bank** (see below), never in code BRAM. µSD holds `NAME.HTML` +
-the internal `.JSH` compile cache (code + ASET sections in one file — no
-`NAME.DAT`). Do not fake a 64K map. Do not pack Donkey `data:image` sheets
-into code BRAM or downscale them to “fit.”
+user files only; the code + ASET ProgramImage is regenerated in memory on
+every `RUN` and is not a persistent `.JSB` / `.JSH` sidecar. There is no
+`NAME.DAT`. Do not fake a 64K map. Do not pack Donkey `data:image` sheets into
+code BRAM or downscale them to “fit.”
 
 **ASIC target (frozen 2026-08-13): ~30 mm² die ("double chip"), our own
 custom padring, ~1 MB-class on-chip SRAM.** Use the BRAM the design needs
@@ -238,7 +239,7 @@ ack            completion strobe (1+ cycles later; bridge may stall)
 top of bank           reserved (future FB / heap migration)
 ```
 
-**`.JSH` container (JSB v2 + ASET):**
+**ProgramImage container (JSB encoding + ASET):**
 
 - Header flags: bit0 = v2 trailer (existing), **bit1 = ASET present**. When
   bit1 is set, a `u32 aset_byte_off` (offset from file start) follows the
@@ -268,16 +269,16 @@ As modules land, keep a table here: diagram block → `functional_model/…` →
 | INPUT / joystick | `functional_model/input_engine.py` | `rtl/engines/jmr_input_engine.sv` |
 | Canvas / FB | `functional_model/canvas_engine.py` | `jmr_mini_fb.sv` native **640×480** dual-buffer BRAM (SIM; next bit) |
 | One-glass letterbox | `CanvasEngine.paint_console_letterbox` | `jmr_text_hdmi_scanout.sv` + dual-clock `jmr_video_vram` |
-| Bytecode VM | `functional_model/bytecode.py` + `jsb_format.py` | `rtl/engines/jmr_js_vm.sv` (writable BRAM + FAT `.JSH`) |
+| Bytecode VM | `functional_model/bytecode.py` + `jsb_format.py` | `rtl/engines/jmr_js_vm.sv` (writable ProgramImage BRAM) |
 | Storage | `functional_model/storage_engine.py` | `storage_engine.sv` + SD SPI + console load |
 
 **Honest path:** product titles are `*.HTML`. **`RUN` always compiles** the
-loaded HTML into the **JMR bytecode VM** (fresh internal `.JSH` output) on
-PYTHON, FPGA-SIM, BOARD, ASIC. Full-quality graphics ride the `.JSH` ASET
-section into the external SRAM asset bank (no `NAME.DAT`; EDIT+RUN
-regenerates everything). Never
-prefer a stale `.JSH`. dukpy is a **cheat / debt** if used as the game engine.
-Never call dukpy “FPGA-SIM.” User never types `.JSH` — only
+loaded HTML into one in-memory ProgramImage for the **JMR bytecode VM** on
+PYTHON, FPGA-SIM, BOARD, ASIC. Full-quality graphics ride its ASET section
+into the external SRAM asset bank (no `NAME.DAT`; EDIT+RUN regenerates
+everything). Never persist or prefer a `.JSB` / `.JSH` sidecar. dukpy is a
+**cheat / debt** if used as the game engine. Never call dukpy “FPGA-SIM.”
+The user only types
 `LOAD "NAME.HTML"` / `RUN`.
 See [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and
 `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`.

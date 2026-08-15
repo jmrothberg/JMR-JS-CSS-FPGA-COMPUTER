@@ -449,6 +449,7 @@ class Compiler:
                 if self.code and self.code[-1][0] == Op.MAKE_FN:
                     entry = int(self.code[-1][1])
                     self.code.pop()  # method body already JUMP-guarded; no runtime MAKE_FN
+                    self.op_lines.pop()  # keep ProgramImage source map aligned
                     methods[mname] = entry
                     self.all_methods.add(mname)
                 else:
@@ -1118,6 +1119,7 @@ class Compiler:
                     # Rewrite: we need obj under value. Re-emit properly:
                     # Remove the GET_PROP we just emitted and redo with DUP.
                     self.code.pop()  # remove GET_PROP
+                    self.op_lines.pop()  # keep ProgramImage source map aligned
                     # stack currently has obj (primary left it)
                     self._emit(Op.DUP)
                     self._emit(Op.GET_PROP, self._name(meth))
@@ -1348,6 +1350,7 @@ class Compiler:
                     op = self._advance()[1]
                     delta = 1 if op == "++" else -1
                     self.code.pop()  # remove GET_PROP; stack still has the obj
+                    self.op_lines.pop()  # keep ProgramImage source map aligned
                     self._emit(Op.DUP)
                     self._emit(Op.GET_PROP, self._name(meth))
                     self._emit(Op.DUP)

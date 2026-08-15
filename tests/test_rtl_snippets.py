@@ -72,6 +72,96 @@ def _fb_nz(sim) -> int:
     return sum(1 for b in _fb_raw(sim) if b)
 
 
+def test_program_image_scalar_checkpoint_matches_python_hm():
+    """The same serialized words produce the same scalar globals and canvas."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+    from hardware_model.js_vm import JsHwVm
+
+    image = ProgramImage.from_chunk(
+        compile_source("var x=1+2; var y=x*4;"), v2=True
+    )
+    hm = JsHwVm()
+    hm.load_image(image)
+    expected = hm.checkpoint()
+
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(100):
+            sim._rpc("TICKN 10")
+            vmstat = sim._rpc("VMSTAT?")
+            if "sname=S_WAIT_FRAME" in vmstat:
+                break
+        assert "sname=S_WAIT_FRAME" in vmstat, vmstat
+        raw = sim._rpc("CHECKPOINT?")
+        got = dict(field.split("=", 1) for field in raw.split()[1:])
+        assert got["vars"] == f"{expected['vars']:x}", (raw, expected)
+        assert got["canvas"] == f"{expected['canvas']:x}", (raw, expected)
+        assert got["sp"] == str(expected["sp"])
+        assert got["csp"] == str(expected["csp"])
+        assert got["error"] == "0", raw
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_call_overflow_halts_loudly():
+    """A recursive call past CSTK reports fault 7 instead of wrapping csp."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+
+    image = ProgramImage.from_chunk(
+        compile_source("function f(){f();} f();"), v2=True
+    )
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(100):
+            sim._rpc("TICKN 10")
+            vmstat = sim._rpc("VMSTAT?")
+            if "fault=7" in vmstat:
+                break
+        assert "fault=7" in vmstat, vmstat
+        checkpoint = sim._rpc("CHECKPOINT?")
+        assert "error=7" in checkpoint, checkpoint
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_down_key_release_keeps_keycode_40():
+    """The KEYBITS Down release must not fall through to Up keyCode 38."""
+    src = """
+var released = 0;
+function onup(e) {
+  if (e.keyCode === 40) released = 1;
+}
+addEventListener("keyup", onup);
+function tick() {
+  if (released) { fillRect(10,10,30,30,2); swapBuffers(); }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("DOWNUP.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "DOWNUP.JS"')
+        sim.type_line("RUN")
+        sim._rpc("KEYBITS 2")
+        sim._rpc("FRAME")
+        sim._rpc("KEYBITS 0")
+        sim._rpc("FRAME")
+        sim._rpc("FRAME")
+        assert _fb_nz(sim) >= 50
+    finally:
+        sim.shutdown()
+
+
 def test_rtl_push_object_survives_frame():
     """arr.push({n:1}) after keep watermark must still be readable next frame."""
     src = """
@@ -1078,6 +1168,57 @@ requestAnimationFrame(tick);
         sim.type_line("RUN")
         sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "ghost-update snippet did not leave start cell"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_house_cell_offset_cos_moves():
+    """Map origin 16,8 size 14 cell (12,14): !offset then _COS/_SIN step."""
+    src = """
+var size = 14, mx = 16, my = 8, cx = 12, cy = 14;
+var _COS = [1, 0, -1, 0], _SIN = [0, 1, 0, -1];
+function position2coord(x, y) {
+  var fx = Math.abs(x - mx) % size - size / 2;
+  var fy = Math.abs(y - my) % size - size / 2;
+  return {
+    x: Math.floor((x - mx) / size),
+    y: Math.floor((y - my) / size),
+    offset: Math.sqrt(fx * fx + fy * fy)
+  };
+}
+var x = mx + cx * size + size / 2;
+var y = my + cy * size + size / 2;
+var speed = 1, orientation = 3;
+var starty = y;
+var i, coord;
+for (i = 0; i < 20; i++) {
+  coord = position2coord(x, y);
+  if (!coord.offset) {
+    y += speed * _SIN[orientation];
+    x += speed * _COS[orientation];
+  } else {
+    y += speed * _SIN[orientation];
+    x += speed * _COS[orientation];
+  }
+}
+var left = (y != starty) ? 1 : 0;
+function tick() {
+  if (left) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("GMOVE.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "GMOVE.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        assert _fb_nz(sim) >= 50, "house-cell !offset / _COS did not change y"
     finally:
         sim.shutdown()
 
@@ -2765,6 +2906,36 @@ requestAnimationFrame(tick);
         assert m and int(m.group(1)) == 0, st
         assert r and int(r.group(1)) >= 1, st
         assert _fb_pix(_fb_raw(sim), 82, 12) == 3, "title blit did not finish"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_title_oneshot_no_rear_raf():
+    """Title that draws once and does not re-queue rAF must still present.
+
+    DONKEY showTitleScreen leaves raf=0. FRAME used to require raf!=0 and
+    spin 16M clocks (FB SAME / blank glass). Do not raise the FRAME cap.
+    """
+    import re as _re
+
+    src = """
+function tick() {
+  fillRect(10, 10, 30, 30, 2);
+  swapBuffers();
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("ONCE.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "ONCE.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = _vmstat(sim)
+        m = _re.search(r"fcap=(\d+)", st)
+        assert m and int(m.group(1)) == 0, st
+        assert _fb_nz(sim) >= 50, "one-shot title FRAME did not present pixels"
     finally:
         sim.shutdown()
 

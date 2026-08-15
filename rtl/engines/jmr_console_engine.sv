@@ -76,13 +76,22 @@ module jmr_console_engine (
     output logic [15:0] mem_addr,
     output logic [7:0]  mem_wdata,
     input  logic [7:0]  mem_rdata,
-    input  logic        mem_gnt
+    input  logic        mem_gnt,
+    // NEW: HTML RUN streams compiled .JSH over PROG (not FAT). Sim uses JSHLOAD.
+    input  logic        jsb_tether_stb = 1'b0,
+    input  logic [7:0]  jsb_tether_data = 8'd0,
+    input  logic        jsb_tether_eof = 1'b0,
+    output logic        jsb_tether_rdy,
+    // NEW: FPGA-SIM RAM LOAD — host already poked SOURCE/src_len, so LOAD skips
+    // the FAT open and announces with sim_src_lines. Tied 0 on the board.
+    input  logic        sim_src_bypass = 1'b0,
+    input  logic [15:0] sim_src_lines = 16'd0
 );
     localparam logic [15:0] NAME_BUF        = 16'hB850;
     localparam logic [15:0] STORAGE_BUFFER  = 16'hBB00;
     // Dedicated SOURCE BRAM (INVADERS/PACMAN HTML). ASET SRAM stays art from 0.
     localparam int unsigned SOURCE_MAX      = 131072;
-    (* ram_style = "block" *) logic [7:0] source_mem [0:SOURCE_MAX-1];
+    (* ram_style = "block" *) logic [7:0] source_mem [0:SOURCE_MAX-1] /*verilator public_flat_rw*/;
     logic        src_req, src_we, src_gnt;
     logic [16:0] src_addr;
     logic [7:0]  src_wdata, src_rdata;
@@ -124,7 +133,8 @@ module jmr_console_engine (
         C_JSB_PREP, C_JSB_NWR, C_JSB_NWR_W, C_JSB_OPEN, C_JSB_OPENW,
         C_JSB_GB, C_JSB_GBW, C_JSB_CLOSE, C_JSB_CLOSEW,
         C_JSB_SRAMW, // NEW: wait asset-SRAM write ack (ASET payload word)
-        C_JSB_PEEK, C_JSB_PEEKW // NEW: code-BRAM full — fail loud if more bytes
+        C_JSB_PEEK, C_JSB_PEEKW, // NEW: code-BRAM full — fail loud if more bytes
+        C_JSB_TETHER, C_JSB_FEED, C_JSB_TEOF // NEW: PROG/host .JSH stream (no FAT)
     } cstate_t;
     cstate_t state, ret_state;
 
@@ -136,17 +146,19 @@ module jmr_console_engine (
     logic [6:0] reply_idx;
     logic [6:0] name_i, name_start, name_len_r;
     logic [7:0] dir_n, dir_idx;
-    logic [17:0] src_len;     // bytes in SOURCE BRAM (0..131072)
+    logic [17:0] src_len /*verilator public_flat_rw*/;     // bytes in SOURCE BRAM (0..131072)
     logic [17:0] src_i;
     logic [7:0]  rd_ch;
     logic        cmd_is_load, cmd_is_save, cmd_is_remove;
     // NEW: last LOADed name (upcased) — classify HTML vs JS vs RECTDEMO
-    logic [7:0]  src_name [0:15];
-    logic [4:0]  src_name_len;
-    logic        src_is_rectdemo;
-    logic        src_is_html;   // .HTM / .HTML — RUN loads .JSH (else ?NH)
-    logic        src_is_js;     // .JS — RUN loads companion .JSB
+    logic [7:0]  src_name [0:15] /*verilator public_flat_rw*/;
+    logic [4:0]  src_name_len /*verilator public_flat_rw*/;
+    logic        src_is_rectdemo /*verilator public_flat_rw*/;
+    logic        src_is_html /*verilator public_flat_rw*/;   // .HTM / .HTML — RUN loads .JSH (else ?NH)
+    logic        src_is_js /*verilator public_flat_rw*/;     // .JS — RUN loads companion .JSB
     logic        jsb_want_jsh;  // NEW: HTML sidecar uses .JSH not .JSB
+    logic        jsb_tether_mode; // NEW: HTML RUN — bytes from PROG, not FAT
+    logic [7:0]  jsb_din;         // NEW: latched stream byte (FAT or tether)
     // NEW: JSB stream packer
     logic [14:0] jsb_waddr;
     logic [1:0]  jsb_bi;        // byte index 0..3 within word
@@ -167,6 +179,7 @@ module jmr_console_engine (
     logic [1:0]  pal_ph;
     logic [22:0] aset_rel;      // byte offset inside the ASET section
     assign aset_rel = jsb_boff - jsb_aset_off;
+    assign jsb_tether_rdy = (state == C_JSB_TETHER);
     logic        ld_err;        // NEW: LOAD ?LS/?IO sticky until CLOSEW
     logic [15:0] ld_nlines;     // NEW: newline count for LOADED NAME (N LINES)
     logic        ld_need_eol;   // last HTML byte was not NL
@@ -344,6 +357,8 @@ module jmr_console_engine (
             src_name_len <= 0; src_is_rectdemo <= 0; src_is_html <= 0; src_is_js <= 0;
             jsb_waddr <= 0; jsb_bi <= 0; jsb_word <= 0; jsb_name_len <= 0;
             jsb_want_jsh <= 1'b0;
+            jsb_tether_mode <= 1'b0;
+            jsb_din <= 8'h0;
             ld_err <= 0;
             ld_nlines <= 0; ld_need_eol <= 0; ld_ann <= 0;
             sram_req <= 0; sram_we <= 0; sram_addr <= 0; sram_wdata <= 0;
@@ -528,17 +543,20 @@ module jmr_console_engine (
                                up(line[0])=="R" && up(line[1])=="U" &&
                                up(line[2])=="N" &&
                                (line_len == 3 || is_sp(line[3]))) begin
-                        // HTML RUN: host compile-on-RUN writes fresh .JSH, then FAT-load
-                        // (?NH if missing; never invaders hex / never stale-as-truth)
+                        // HTML RUN: host compile-on-RUN streams fresh .JSH over
+                        // PROG (C_JSB_TETHER). Never FAT-read NAME.JSH; card is HTML only.
                         // RECTDEMO → rect engine; empty NEW → rect; missing JSB → ?NB
                         if (src_is_html) begin
                             jsb_want_jsh <= 1'b1;
-                            name_i <= 0;
-                            dir_n <= 0;
+                            jsb_tether_mode <= 1'b1;
                             jsb_waddr <= 0;
                             jsb_bi <= 0;
                             jsb_word <= 0;
-                            state <= C_JSB_PREP;
+                            ld_err <= 0;
+                            jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
+                            aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
+                            sram_last <= 0; pal_idx <= 0; pal_ph <= 0;
+                            state <= C_JSB_TETHER;
                         end else if (src_is_rectdemo) begin
                             run_pulse <= 1'b1;
                             reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
@@ -548,6 +566,7 @@ module jmr_console_engine (
                         end else if (src_is_js || src_name_len != 0) begin
                             // NEW: any LOADed program (INVADERS / PACMAN.JS / …) → NAME.JSB
                             jsb_want_jsh <= 1'b0;
+                            jsb_tether_mode <= 1'b0;
                             name_i <= 0;
                             dir_n <= 0;
                             jsb_waddr <= 0;
@@ -734,14 +753,25 @@ module jmr_console_engine (
 
                 // ---- LOAD -----------------------------------------------
                 C_LD_OPEN: if (!stor_busy) begin
-                    stor_mode <= "I";
-                    stor_open <= 1'b1;
-                    src_len <= 0;
-                    ld_err <= 0;
-                    ld_nlines <= 0;
-                    ld_need_eol <= 0;
-                    ld_ann <= 0;
-                    state <= C_LD_OPENW;
+                    // NEW: FPGA-SIM RAM LOAD — SOURCE was poked by the host, so
+                    // announce straight away (same glass rows as a FAT LOAD:
+                    // typed line echoed above, LOADED at the cursor).
+                    if (sim_src_bypass) begin
+                        ld_err <= 0;
+                        ld_need_eol <= 0;
+                        ld_nlines <= sim_src_lines;
+                        ld_ann <= 1'b1;
+                        reply_sel <= 4'd5; reply_idx <= 0; state <= C_REPLY;
+                    end else begin
+                        stor_mode <= "I";
+                        stor_open <= 1'b1;
+                        src_len <= 0;
+                        ld_err <= 0;
+                        ld_nlines <= 0;
+                        ld_need_eol <= 0;
+                        ld_ann <= 0;
+                        state <= C_LD_OPENW;
+                    end
                 end
                 C_LD_OPENW: if (stor_done) begin
                     if (stor_err) begin reply_sel <= 4'd6; reply_idx <= 0; state <= C_REPLY; end
@@ -1658,107 +1688,128 @@ module jmr_console_engine (
                     if (stor_err) begin
                         ld_err <= 1'b1; reply_sel <= 4'd4; reply_idx <= 0; state <= C_JSB_CLOSE;
                     end else if (stor_eof) begin
-                        if (jsb_bi != 2'd0) begin
-                            code_we <= 1'b1;
-                            code_waddr <= jsb_waddr;
-                            code_wdata <= jsb_word;
-                        end
-                        // NEW fail loud: header promised an ASET section but the
-                        // stream ended early → ?NH, never silent blank sprites
-                        if (jsb_has_aset && (!aset_seen || aset_pay < aset_len)) begin
-                            ld_err <= 1'b1; reply_sel <= 4'd9; reply_idx <= 0;
-                            state <= C_JSB_CLOSE;
-                        end else if (aset_seen && aset_pay[0]) begin
-                            // odd payload tail — flush the pending low byte
-                            sram_req <= 1'b1; sram_we <= 1'b1;
-                            sram_addr <= aset_pay[21:1];
-                            sram_wdata <= {8'h00, sram_lo};
-                            sram_last <= 1'b1;
-                            state <= C_JSB_SRAMW;
-                        end else
-                            state <= C_JSB_CLOSE;
-                    end else if (jsb_has_aset && jsb_aset_off != 23'd0
+                        state <= C_JSB_TEOF;
+                    end else begin
+                        jsb_din <= stor_get_data;
+                        state <= C_JSB_FEED;
+                    end
+                end
+                // NEW: HTML RUN — PROG/host byte stream (same splitter as FAT GBW)
+                C_JSB_TETHER: begin
+                    if (jsb_tether_eof)
+                        state <= C_JSB_TEOF;
+                    else if (jsb_tether_stb) begin
+                        jsb_din <= jsb_tether_data;
+                        state <= C_JSB_FEED;
+                    end
+                end
+                C_JSB_TEOF: begin
+                    if (jsb_bi != 2'd0) begin
+                        code_we <= 1'b1;
+                        code_waddr <= jsb_waddr;
+                        code_wdata <= jsb_word;
+                    end
+                    // NEW fail loud: header promised an ASET section but the
+                    // stream ended early → ?NH, never silent blank sprites
+                    if (jsb_has_aset && (!aset_seen || aset_pay < aset_len)) begin
+                        ld_err <= 1'b1; reply_sel <= 4'd9; reply_idx <= 0;
+                        state <= C_JSB_CLOSE;
+                    end else if (aset_seen && aset_pay[0]) begin
+                        sram_req <= 1'b1; sram_we <= 1'b1;
+                        sram_addr <= aset_pay[21:1];
+                        sram_wdata <= {8'h00, sram_lo};
+                        sram_last <= 1'b1;
+                        state <= C_JSB_SRAMW;
+                    end else
+                        state <= C_JSB_CLOSE;
+                end
+                C_JSB_FEED: begin
+                    if (jsb_has_aset && jsb_aset_off != 23'd0
                                  && jsb_boff >= 23'd16 && jsb_boff >= jsb_aset_off) begin
                         // ---- ASET section: "ASET" + u32 len, then payload → SRAM
                         jsb_boff <= jsb_boff + 23'd1;
-                        state <= C_JSB_GB;
+                        state <= jsb_tether_mode ? C_JSB_TETHER : C_JSB_GB;
                         if (aset_rel < 23'd4) begin
-                            // magic check — mismatch = truncated/garbled → ?NH
-                            if ((aset_rel == 23'd0 && stor_get_data != "A") ||
-                                (aset_rel == 23'd1 && stor_get_data != "S") ||
-                                (aset_rel == 23'd2 && stor_get_data != "E") ||
-                                (aset_rel == 23'd3 && stor_get_data != "T")) begin
+                            if ((aset_rel == 23'd0 && jsb_din != "A") ||
+                                (aset_rel == 23'd1 && jsb_din != "S") ||
+                                (aset_rel == 23'd2 && jsb_din != "E") ||
+                                (aset_rel == 23'd3 && jsb_din != "T")) begin
                                 ld_err <= 1'b1; reply_sel <= 4'd9; reply_idx <= 0;
                                 state <= C_JSB_CLOSE;
                             end
                         end else if (aset_rel < 23'd8) begin
-                            // u32 payload length (bank is 4 MB → 23 bits kept)
                             unique case (aset_rel[1:0])
-                                2'd0: aset_len[7:0]   <= stor_get_data;
-                                2'd1: aset_len[15:8]  <= stor_get_data;
-                                2'd2: aset_len[22:16] <= stor_get_data[6:0];
-                                default: aset_seen <= 1'b1; // byte 7 (≥8 MB bits ignored)
+                                2'd0: aset_len[7:0]   <= jsb_din;
+                                2'd1: aset_len[15:8]  <= jsb_din;
+                                2'd2: aset_len[22:16] <= jsb_din[6:0];
+                                default: aset_seen <= 1'b1;
                             endcase
                         end else begin
-                            // payload byte aset_pay: palette tap + 16-bit SRAM pack
                             if (aset_pay < 23'd768) begin
                                 if (pal_ph == 2'd0) begin
-                                    pal_r <= stor_get_data; pal_ph <= 2'd1;
+                                    pal_r <= jsb_din; pal_ph <= 2'd1;
                                 end else if (pal_ph == 2'd1) begin
-                                    pal_g <= stor_get_data; pal_ph <= 2'd2;
+                                    pal_g <= jsb_din; pal_ph <= 2'd2;
                                 end else begin
                                     pal_we <= 1'b1;
                                     pal_waddr <= pal_idx;
-                                    pal_wdata <= {pal_r, pal_g, stor_get_data};
+                                    pal_wdata <= {pal_r, pal_g, jsb_din};
                                     pal_idx <= pal_idx + 8'd1;
                                     pal_ph <= 2'd0;
                                 end
                             end
                             aset_pay <= aset_pay + 23'd1;
                             if (!aset_pay[0])
-                                sram_lo <= stor_get_data;
+                                sram_lo <= jsb_din;
                             else begin
                                 sram_req <= 1'b1; sram_we <= 1'b1;
                                 sram_addr <= aset_pay[21:1];
-                                sram_wdata <= {stor_get_data, sram_lo};
+                                sram_wdata <= {jsb_din, sram_lo};
                                 state <= C_JSB_SRAMW;
                             end
                         end
                     end else begin
-                        // ---- code region: word packer → code BRAM (as before)
                         jsb_boff <= jsb_boff + 23'd1;
-                        // header taps for the splitter (flags u16 at 10, off u32 at 12)
-                        if (jsb_boff == 23'd10) jsb_has_aset <= stor_get_data[1];
+                        if (jsb_boff == 23'd10) jsb_has_aset <= jsb_din[1];
                         if (jsb_has_aset) begin
-                            if (jsb_boff == 23'd12) jsb_aset_off[7:0]   <= stor_get_data;
-                            if (jsb_boff == 23'd13) jsb_aset_off[15:8]  <= stor_get_data;
-                            if (jsb_boff == 23'd14) jsb_aset_off[22:16] <= stor_get_data[6:0];
+                            if (jsb_boff == 23'd12) jsb_aset_off[7:0]   <= jsb_din;
+                            if (jsb_boff == 23'd13) jsb_aset_off[15:8]  <= jsb_din;
+                            if (jsb_boff == 23'd14) jsb_aset_off[22:16] <= jsb_din[6:0];
                         end
                         case (jsb_bi)
-                            2'd0: jsb_word <= {24'h0, stor_get_data};
-                            2'd1: jsb_word <= {16'h0, stor_get_data, jsb_word[7:0]};
-                            2'd2: jsb_word <= {8'h0, stor_get_data, jsb_word[15:0]};
+                            2'd0: jsb_word <= {24'h0, jsb_din};
+                            2'd1: jsb_word <= {16'h0, jsb_din, jsb_word[7:0]};
+                            2'd2: jsb_word <= {8'h0, jsb_din, jsb_word[15:0]};
                             default: begin
                                 code_we <= 1'b1;
                                 code_waddr <= jsb_waddr;
-                                code_wdata <= {stor_get_data, jsb_word[23:0]};
+                                code_wdata <= {jsb_din, jsb_word[23:0]};
                                 jsb_waddr <= jsb_waddr + 15'd1;
                             end
                         endcase
                         if (jsb_bi == 2'd3 && jsb_waddr == 15'h7FFF)
-                            state <= C_JSB_PEEK; // last word packed — peek for overflow
+                            state <= jsb_tether_mode ? C_JSB_TETHER : C_JSB_PEEK;
                         else begin
-                            jsb_bi <= jsb_bi + 2'd1; // wraps 3→0 naturally? NO 2'd3+1=0 ✓
-                            state <= C_JSB_GB;
+                            jsb_bi <= jsb_bi + 2'd1;
+                            state <= jsb_tether_mode ? C_JSB_TETHER : C_JSB_GB;
                         end
                     end
                 end
                 // NEW: hold the SRAM write until the port acks, then stream on
                 C_JSB_SRAMW: if (sram_ack) begin
                     sram_req <= 1'b0; sram_we <= 1'b0;
-                    state <= sram_last ? C_JSB_CLOSE : C_JSB_GB;
+                    state <= sram_last ? C_JSB_CLOSE
+                           : (jsb_tether_mode ? C_JSB_TETHER : C_JSB_GB);
                 end
-                C_JSB_CLOSE: if (!stor_busy) begin stor_close <= 1'b1; state <= C_JSB_CLOSEW; end
+                C_JSB_CLOSE: if (jsb_tether_mode) begin
+                    // no FAT handle — PROG stream already ended
+                    if (ld_err)
+                        state <= C_REPLY;
+                    else begin
+                        vm_start <= 1'b1;
+                        reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
+                    end
+                end else if (!stor_busy) begin stor_close <= 1'b1; state <= C_JSB_CLOSEW; end
                 C_JSB_CLOSEW: if (stor_done) begin
                     if (ld_err)
                         state <= C_REPLY;

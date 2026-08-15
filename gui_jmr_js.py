@@ -406,6 +406,13 @@ class App:
         if self.backend.name == "FPGA-SIM":
             self.backend._started = False
             self.backend._proc = None
+        # NEW: every runtime owns its own glass. The half-typed line belongs to
+        # the machine you just left, so it must not follow you across F9.
+        self.line_buf = ""
+        self.line_col = 0
+        self._busy_prompt = None
+        self._last_prompt = None
+        self._ppm_bytes = None
         self._set_status(self._status_text())
         self._paint_prompt()
         self.canvas_label.focus_set()
@@ -541,9 +548,10 @@ class App:
                 or up.startswith("LIST")
             )
             if busy:
-                # Keep the typed line visible until LINE returns (SCREEN? used
-                # to blank `> run` mid-compile).
-                self._busy_prompt = f"> {line}" if line.strip() else "> WORKING…"
+                # RTL already echoes the typed line on glass. Overlaying the
+                # same `> load "…"` here painted a second (yellow) copy.
+                # ASCII "..." — the 8x8 font has no U+2026 (missing → "?").
+                self._busy_prompt = "> WORKING..."
                 if up.startswith("LOAD"):
                     self._arch_phase_override = "load"
                 elif up == "RUN" or up.startswith("RUN "):

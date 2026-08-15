@@ -95,7 +95,7 @@ module jmr_js_vm #(
     localparam logic [7:0] OP_MAKE_FN    = 8'd33;
     localparam logic [7:0] OP_CALL_VAL   = 8'd34;
 
-    (* ram_style = "block" *) logic [31:0] code_mem [0:CODE_WORDS-1];
+    (* ram_style = "block" *) logic [31:0] code_mem [0:CODE_WORDS-1] /*verilator public_flat_rw*/;
     initial $readmemh(CODE_HEX, code_mem);
     logic [14:0] code_raddr;
     logic [31:0] code_rdata;
@@ -108,16 +108,18 @@ module jmr_js_vm #(
 
     logic signed [31:0] consts [0:MAX_CONSTS-1];
     logic signed [31:0] vars   [0:MAX_VARS-1] /*verilator public_flat_rd*/;
-    logic               var_init [0:MAX_VARS-1];
+    logic               var_init [0:MAX_VARS-1] /*verilator public_flat_rd*/;
     logic signed [31:0] stack  [0:STACK_DEPTH-1];
     // NEW: public for the sim server VMSTAT? probe (FPGA-SIM bring-up only)
     logic [10:0] sp /*verilator public_flat_rd*/; // 2048-deep eval stack
     logic [15:0] ip /*verilator public_flat_rd*/;
-    logic [15:0] n_ops, n_consts, ops_base, jsb_flags;
+    logic [15:0] n_ops, n_consts;
+    logic [15:0] ops_base /*verilator public_flat_rd*/;
+    logic [15:0] jsb_flags;
     logic        looping, running;
     // NEW: tagged stack/vars for HTML heap (0=int 1=obj 2=arr 3=str 4=fn 5=undef 6=elem)
     logic [2:0]  stack_tag [0:STACK_DEPTH-1];
-    logic [2:0]  var_tag   [0:MAX_VARS-1];
+    logic [2:0]  var_tag   [0:MAX_VARS-1] /*verilator public_flat_rd*/;
     // NEW: INVADERS.HTML boot alone allocates ~1.8K objects (VMSTAT audit) —
     // grow the VM, never the games. Temporaries recycle in the upper ring.
     localparam int MAX_OBJ = 8192;
@@ -165,9 +167,21 @@ module jmr_js_vm #(
     logic [31:0] obj_val  [0:MAX_OBJ-1][0:OBJ_SLOTS-1] /*verilator public_flat_rd*/;
     logic [2:0]  obj_tag  [0:MAX_OBJ-1][0:OBJ_SLOTS-1] /*verilator public_flat_rd*/;
     logic [15:0] obj_cls  [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
-    logic [7:0]  arr_len  [0:MAX_ARR-1];
-    logic [31:0] arr_val  [0:MAX_ARR-1][0:ARR_CAP-1];
-    logic [2:0]  arr_tag  [0:MAX_ARR-1][0:ARR_CAP-1];
+    logic [7:0]  arr_len  [0:MAX_ARR-1] /*verilator public_flat_rd*/;
+    logic [31:0] arr_val  [0:MAX_ARR-1][0:ARR_CAP-1] /*verilator public_flat_rd*/;
+    logic [2:0]  arr_tag  [0:MAX_ARR-1][0:ARR_CAP-1] /*verilator public_flat_rd*/;
+    // Stable-handle collector. It traces roots at frame safe points and only
+    // reclaims an unmarked tail; live object/array indices never move.
+    logic        gc_obj_mark [0:MAX_OBJ-1];
+    logic        gc_arr_mark [0:MAX_ARR-1];
+    logic [13:0] gc_queue [0:16383]; // bit13=array, bits12:0=stable index
+    logic [13:0] gc_qr, gc_qw;
+    logic [12:0] gc_i;
+    logic [12:0] gc_root_i;
+    logic [6:0]  gc_slot;
+    logic [13:0] gc_cur;
+    logic [15:0] gc_obj_high, gc_arr_high;
+    logic [15:0] dbg_gc_n /*verilator public_flat_rd*/;
     logic [15:0] cls_name [0:MAX_CLS-1];
     logic [15:0] cls_ctor [0:MAX_CLS-1];
     logic [4:0]  cls_nmeth[0:MAX_CLS-1];
@@ -184,7 +198,7 @@ module jmr_js_vm #(
     logic [7:0]  cstack_fe_i [0:CSTK-1];
     logic [15:0] cstack_map_arr [0:CSTK-1]; // FFFF=forEach; else dest arr for map
     logic [5:0]  cstack_env [0:CSTK-1]; // NEW: saved env_sp
-    logic [6:0]  csp;
+    logic [6:0]  csp /*verilator public_flat_rd*/;
     logic [5:0]  env_sp /*verilator public_flat_rd*/; // 0 = top-level (vars[] only)
     logic [15:0] env_oid [0:ENV_DEPTH-1]; // NEW: live heap env objects (not value snapshots)
     logic        env_cap [0:ENV_DEPTH-1]; // NEW: MAKE_FN captured this frame
@@ -195,6 +209,10 @@ module jmr_js_vm #(
     logic        env_is_store;
     logic [15:0] dbg_heap_ovf /*verilator public_flat_rd*/;
     logic [15:0] dbg_to_ovf /*verilator public_flat_rd*/;
+    logic [15:0] dbg_stack_ovf /*verilator public_flat_rd*/;
+    logic [15:0] dbg_call_ovf /*verilator public_flat_rd*/;
+    logic        machine_fault /*verilator public_flat_rd*/;
+    logic [7:0]  fault_code /*verilator public_flat_rd*/;
     logic [15:0] to_fn [0:7] /*verilator public_flat_rd*/; // NEW: setTimeout/setInterval queue (Fn obj idx)
     logic [3:0]  to_n /*verilator public_flat_rd*/;
     // NEW: timers whose queued oid no longer holds a CLS_FN at fire time.
@@ -210,7 +228,7 @@ module jmr_js_vm #(
     // NEW: slow-path S_DIV entries (not the 1-cycle /2 shift). Play logs
     // show whether a frame is still paying 48 clocks per `width/2`.
     logic [15:0] dbg_div_n /*verilator public_flat_rd*/;
-    logic [11:0] to_delay [0:7]; // remaining frames (delay_ms/17)
+    logic [11:0] to_delay [0:7] /*verilator public_flat_rd*/; // remaining frames (delay_ms/17)
     logic [11:0] to_period [0:7]; // 0 = one-shot; else interval re-arm
     logic [15:0] to_id [0:7];
     logic [15:0] to_seq;
@@ -313,7 +331,7 @@ module jmr_js_vm #(
     logic [15:0] kd_fn /*verilator public_flat_rd*/, ku_fn, click_fn; // interned MAKE_FN entries; 0xFFFF=none
     // NEW: keydown/keyup listener table (4 slots, fire all; last-wins was a parity gap)
     logic [15:0] kd_slot [0:3], ku_slot [0:3];
-    logic [2:0]  kd_n, ku_n;
+    logic [2:0]  kd_n /*verilator public_flat_rd*/, ku_n /*verilator public_flat_rd*/;
     logic [1:0]  kev_li;   // which table slot is firing
     logic [15:0] kev_obj;  // event object reused for remaining listeners
     logic        kev_is_down;
@@ -325,6 +343,7 @@ module jmr_js_vm #(
     logic        click_fired; // NEW: HTML auto-start click once
     logic        pre_click_raf; // NEW: one rAF (Image.onload) before click
     logic [5:0]  prev_joy;
+    logic [5:0]  joy_down_edge, joy_up_edge;
     logic [7:0]  fill_style_i;
     logic [31:0] lfsr;
     logic [15:0] id_fillrect, id_length, id_push, id_splice, id_foreach;
@@ -333,6 +352,10 @@ module jmr_js_vm #(
     logic [15:0] id_rel, id_disp; // removeEventListener / dispatchEvent
     logic [15:0] id_document, id_window; // seed vars so `if (document.dispatchEvent)` is truthy
     logic [15:0] id_arrow_l, id_arrow_r, id_space, id_a, id_d, id_keydown, id_keyup;
+    // NEW: e.key for the vertical arrows. Without these the Up/Down keyCode
+    // arrived with event.key = "ArrowLeft" (the old ternary default), so a
+    // `switch (e.key)` game turned left on every vertical press.
+    logic [15:0] id_arrow_u, id_arrow_d;
     logic [15:0] id_reduce, id_draw, id_update, id_fillstyle, id_clearrect, id_drawimage;
     logic [15:0] id_this_name, id_black, id_white, id_red, id_yellow, id_cyan, id_gold;
     logic [15:0] id_src, id_onload, id_width, id_height;
@@ -572,7 +595,9 @@ module jmr_js_vm #(
         // Ref-copying rows left nursery arr ids inside an old-space array;
         // the next frame rewind recycled those ids into draw temps
         // (code=[0,0,0,0]) so the maze read back 4-wide garbage.
-        S_ARR_DCOPY
+        S_ARR_DCOPY,
+        // Stable-handle mark/tail-sweep collector at frame safe points.
+        S_GC_CLEAR, S_GC_ROOT, S_GC_POP, S_GC_OBJ, S_GC_ARR
     } st_t;
     st_t state /*verilator public_flat_rd*/, ret_state;
 
@@ -785,6 +810,43 @@ module jmr_js_vm #(
             if (arr_keep_ok && n_arr > n_arr_keep) n_arr_keep <= n_arr;
         end
     endtask
+    task automatic bump_csp();
+        if (csp >= 7'(CSTK - 1))
+            dbg_call_ovf <= dbg_call_ovf + 16'd1;
+        else
+            csp <= csp + 7'd1;
+    endtask
+    task automatic boundary_sp(input logic [10:0] next_sp);
+        // One callback return value is permitted; anything more is a real
+        // stack-balance defect and must remain visible as a machine fault.
+        if (sp > 11'd1) dbg_stack_ovf <= dbg_stack_ovf + 16'd1;
+        sp <= next_sp;
+    endtask
+    task automatic gc_mark_obj(input logic [15:0] oid);
+        if (oid < n_obj && oid < 16'(MAX_OBJ) && !gc_obj_mark[oid[12:0]]) begin
+            gc_obj_mark[oid[12:0]] <= 1'b1;
+            gc_queue[gc_qw] <= {1'b0, oid[12:0]};
+            gc_qw <= gc_qw + 14'd1;
+            if (oid + 16'd1 > gc_obj_high) gc_obj_high <= oid + 16'd1;
+        end
+    endtask
+    task automatic gc_mark_value(input logic [2:0] tag, input logic [31:0] value);
+        logic [15:0] oid;
+        oid = value[15:0];
+        if (tag == 3'd2) begin
+            if (oid < n_arr && oid < 16'(MAX_ARR) && !gc_arr_mark[oid[11:0]]) begin
+                gc_arr_mark[oid[11:0]] <= 1'b1;
+                gc_queue[gc_qw] <= {1'b1, 1'b0, oid[11:0]};
+                gc_qw <= gc_qw + 14'd1;
+                if (oid + 16'd1 > gc_arr_high) gc_arr_high <= oid + 16'd1;
+            end
+        end else if (tag == 3'd1 || tag == 3'd4 || tag == 3'd6) begin
+            gc_mark_obj(oid);
+        end else if (tag == 3'd3 && oid < n_obj &&
+                     obj_cls[oid[12:0]] == CLS_DYNSTR) begin
+            gc_mark_obj(oid);
+        end
+    endtask
     // NEW: clip fillRect args to FB (no wrap — was the sparse BOARD bug)
     function automatic logic [9:0] clip_u(input logic signed [31:0] v, input int unsigned lim);
         if (v < 0) clip_u = 10'd0;
@@ -994,6 +1056,12 @@ module jmr_js_vm #(
             code_raddr <= '0;
             nat_id <= '0; nat_argc <= '0;
             c_i <= '0;
+            gc_qr <= '0; gc_qw <= '0; gc_i <= '0; gc_root_i <= '0;
+            gc_slot <= '0; gc_cur <= '0;
+            gc_obj_high <= '0; gc_arr_high <= '0; dbg_gc_n <= '0;
+            dbg_stack_ovf <= '0; dbg_call_ovf <= '0;
+            machine_fault <= 1'b0; fault_code <= 8'd0;
+            prev_joy <= 6'd0; joy_down_edge <= 6'd0; joy_up_edge <= 6'd0;
             sram_req <= 1'b0; sram_addr <= '0; blit_wait <= 1'b0;
             aset_mode <= 1'b0; sprd_mode <= 1'b0; hdr_w <= 16'd3;
             boot_clr <= 1'b0;
@@ -1061,9 +1129,13 @@ module jmr_js_vm #(
                     obj_keep_ok <= 1'b0; n_obj_keep <= 0;
                     obj_keep_wait <= ARR_KEEP_DELAY[3:0];
                     frame_fire <= 1'b0;
+                    gc_qr <= 0; gc_qw <= 0; gc_i <= 0; gc_root_i <= 0;
+                    gc_obj_high <= 0; gc_arr_high <= 0; dbg_gc_n <= 0;
                     dc_arm <= 1'b0; // NEW: no stale SET_PROP deep copy across RUNs
                     env_sp <= 0; env_free_n <= 0; to_n <= 0; to_seq <= 16'd1; dbg_heap_ovf <= 0; dbg_to_ovf <= 0;
                     dbg_json_ovf <= 0; js_sp <= 0; json_wp <= 0;
+                    dbg_stack_ovf <= 0; dbg_call_ovf <= 0;
+                    machine_fault <= 1'b0; fault_code <= 8'd0;
                     kd_fn <= 16'hFFFF; ku_fn <= 16'hFFFF; click_fn <= 16'hFFFF;
                     kd_n <= 3'd0; ku_n <= 3'd0; kev_li <= 2'd0;
                     kd_slot[0] <= 16'hFFFF; kd_slot[1] <= 16'hFFFF;
@@ -1075,6 +1147,7 @@ module jmr_js_vm #(
                     id_findindex <= 16'hFFFF; id_filter <= 16'hFFFF;
                     click_fired <= 1'b0;
                     pre_click_raf <= 1'b0;
+                    prev_joy <= joy_in; joy_down_edge <= 0; joy_up_edge <= 0;
                     fill_style_i <= 8'd1; lfsr <= 32'hACE1; this_obj <= 0;
                     var_this <= 9'd0; this_ok <= 1'b0; id_this_name <= 16'hFFFF;
                     var_keys <= 9'd0; keys_ok <= 1'b0;
@@ -1089,6 +1162,7 @@ module jmr_js_vm #(
                     id_fillstyle <= 16'hFFFF; id_clearrect <= 16'hFFFF; id_drawimage <= 16'hFFFF;
                     id_keydown <= 16'hFFFF; id_keyup <= 16'hFFFF; id_width <= 16'hFFFF;
                     id_space <= 16'hFFFF; id_arrow_l <= 16'hFFFF; id_arrow_r <= 16'hFFFF;
+                    id_arrow_u <= 16'hFFFF; id_arrow_d <= 16'hFFFF;
                     id_a <= 16'hFFFF; id_d <= 16'hFFFF; kev_fn <= 16'hFFFF;
                     id_height <= 16'hFFFF; id_black <= 16'hFFFF; id_white <= 16'hFFFF;
                     id_save <= 16'hFFFF; id_restore <= 16'hFFFF;
@@ -1236,6 +1310,10 @@ module jmr_js_vm #(
                                 if ({tb, trail_acc[7:0]} == 16'd30956) id_keycode <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd31632) id_arrow_l <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd22451) id_arrow_r <= name_idx;
+                                // "ArrowUp" — "ArrowDown" hash is 43, small
+                                // enough to collide, so it is confirmed with
+                                // the length byte in trail_ph 4 below.
+                                if ({tb, trail_acc[7:0]} == 16'd14436) id_arrow_u <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd32)    id_space <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd97)    id_a <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd100)   id_d <= name_idx;
@@ -1333,6 +1411,10 @@ module jmr_js_vm #(
                                 // here so e.key === " " matches KEYEVT payload.
                                 if (name_hash_tbl[name_idx[9:0]] == 16'd32 && tb == 8'd1)
                                     id_space <= name_idx;
+                                // "ArrowDown": hash 43 + len 9 (hash alone is
+                                // also '+' and other short names)
+                                if (name_hash_tbl[name_idx[9:0]] == 16'd43 && tb == 8'd9)
+                                    id_arrow_d <= name_idx;
                                 if (name_idx + 16'd1 >= trail_n) trail_ph <= 5'd6;
                                 else begin
                                     name_idx <= name_idx + 16'd1;
@@ -2518,7 +2600,7 @@ module jmr_js_vm #(
                                         cstack_isctor[csp] <= 1'b0;
                                         cstack_isfe[csp] <= 1'b0;
                                         enter_captured_fn(stack[sp - 8'd1][15:0]);
-                                        csp <= csp + 7'd1;
+                                        bump_csp();
                                         ip <= fn_entry(stack[sp - 8'd1][15:0]);
                                         code_raddr <= 15'(ops_base + fn_entry(stack[sp - 8'd1][15:0]));
                                         stack[sp - 8'd2] <= stack[sp - 8'd1];
@@ -2651,7 +2733,7 @@ module jmr_js_vm #(
                                 cstack_isfe[csp] <= 1'b0;
                                 cstack_env[csp] <= env_sp;
                                 push_fresh_env(16'd0);
-                                csp <= csp + 7'd1;
+                                bump_csp();
                                 ip <= code_rdata[23:8];
                                 code_raddr <= 15'(ops_base + code_rdata[23:8]);
                                 state <= S_FETCH_WAIT;
@@ -2679,7 +2761,7 @@ module jmr_js_vm #(
                                         cstack_isctor[csp] <= 1'b0;
                                         cstack_isfe[csp] <= 1'b0;
                                         enter_captured_fn(foid);
-                                        csp <= csp + 7'd1;
+                                        bump_csp();
                                         ip <= obj_val[fo][0][15:0];
                                         code_raddr <= 15'(ops_base + obj_val[fo][0][15:0]);
                                         state <= S_FETCH_WAIT;
@@ -2779,7 +2861,7 @@ module jmr_js_vm #(
                                             kev_fn <= nxt;
                                             stack[0] <= {16'd0, kev_obj};
                                             stack_tag[0] <= 3'd1;
-                                            sp <= 11'd1;
+                                            boundary_sp(11'd1);
                                             cstack_ip[csp - 7'd1] <= 16'hFFFD;
                                             cstack_this[csp - 7'd1] <= this_obj;
                                             cstack_isctor[csp - 7'd1] <= 1'b0;
@@ -2868,7 +2950,7 @@ module jmr_js_vm #(
                                             env_cap[env_sp] <= 1'b0;
                                             env_sp <= env_sp + 6'd1;
                                         end
-                                        csp <= csp + 7'd1;
+                                        bump_csp();
                                         this_obj <= n_obj;
                                         if (this_ok) begin
                                             vars[var_this] <= n_obj;
@@ -3014,7 +3096,7 @@ module jmr_js_vm #(
                                     else
                                         cstack_map_arr[csp] <= 16'hFFFF;
                                     cstack_env[csp] <= env_sp;
-                                    csp <= csp + 7'd1;
+                                    bump_csp();
                                     sp <= sp - 8'(code_rdata[31:24]) - 8'd1;
                                     state <= S_FOREACH;
                                 end else if (stack_tag[sp - 8'(code_rdata[31:24]) - 8'd1] == 3'd2 &&
@@ -3227,7 +3309,7 @@ module jmr_js_vm #(
                                         kev_ret_ip <= ip + 16'd1;
                                         stack[0] <= {16'd0, oid};
                                         stack_tag[0] <= 3'd1;
-                                        sp <= 11'd1;
+                                        boundary_sp(11'd1);
                                         cstack_ip[csp] <= 16'hFFFD;
                                         cstack_this[csp] <= this_obj;
                                         cstack_isctor[csp] <= 1'b0;
@@ -3254,7 +3336,7 @@ module jmr_js_vm #(
                                         cstack_isctor[csp] <= 1'b0;
                                         cstack_isfe[csp] <= 1'b0;
                                         enter_captured_fn(click_fn);
-                                        csp <= csp + 7'd1;
+                                        bump_csp();
                                         ip <= fn_entry(click_fn);
                                         code_raddr <= 15'(ops_base + fn_entry(click_fn));
                                         sp <= sp - 8'(code_rdata[31:24]) - 8'd1;
@@ -3692,7 +3774,7 @@ module jmr_js_vm #(
                                             cstack_isctor[csp] <= 1'b0;
                                             cstack_isfe[csp] <= 1'b0;
                                             cstack_env[csp] <= env_sp;
-                                            csp <= csp + 7'd1;
+                                            bump_csp();
                                             this_obj <= oid;
                                             if (this_ok) begin
                                                 vars[var_this] <= oid;
@@ -3743,7 +3825,7 @@ module jmr_js_vm #(
                                                     cstack_isctor[csp] <= 1'b0;
                                                     cstack_isfe[csp] <= 1'b0;
                                                     enter_captured_fn(fip);
-                                                    csp <= csp + 7'd1;
+                                                    bump_csp();
                                                     this_obj <= oid;
                                                     if (this_ok) begin
                                                         vars[var_this] <= oid;
@@ -4057,7 +4139,7 @@ module jmr_js_vm #(
                                 kev_ret_ip <= ip; // OP_CALL already did ip+1
                                 stack[0] <= {16'd0, oid};
                                 stack_tag[0] <= 3'd1;
-                                sp <= 11'd1;
+                                boundary_sp(11'd1);
                                 cstack_ip[csp] <= 16'hFFFD;
                                 cstack_this[csp] <= this_obj;
                                 cstack_isctor[csp] <= 1'b0;
@@ -4974,7 +5056,7 @@ module jmr_js_vm #(
                             cstack_isctor[csp] <= 1'b0;
                             cstack_isfe[csp] <= 1'b0;
                             enter_captured_fn(foid);
-                            csp <= csp + 7'd1;
+                            bump_csp();
                             ip <= obj_val[fo][0][15:0];
                             code_raddr <= 15'(ops_base + obj_val[fo][0][15:0]);
                             state <= S_FETCH_WAIT;
@@ -4982,6 +5064,8 @@ module jmr_js_vm #(
                     end
                 end
                 S_WAIT_FRAME: if (frame_tick) begin
+                    joy_down_edge <= joy_in & ~prev_joy;
+                    joy_up_edge <= prev_joy & ~joy_in;
                     prev_joy <= joy_in;
                     // NEW: the one implicit present per frame (see present_pend).
                     // An explicit swapBuffers in the pass already flipped —
@@ -5001,30 +5085,19 @@ module jmr_js_vm #(
                     // NEW: per-frame array nursery — rewind MAKE_ARR temps so
                     // n_arr cannot saturate. Same as objects: do not wait for
                     // click_fired (boot rAF already allocates).
-                    if (arr_keep_ok)
-                        n_arr <= n_arr_keep;
-                    else begin
-                        if (arr_keep_wait != 4'd0)
-                            arr_keep_wait <= arr_keep_wait - 4'd1;
-                        else begin
-                            n_arr_keep <= n_arr;
-                            arr_keep_ok <= 1'b1;
-                        end
-                    end
                     // NEW: object bump rewind the cycle BEFORE rAF/keys so
                     // enter_captured_fn's n_obj++ does not fight n_obj<=keep.
                     // Do not wait for click_fired — boot rAF/nextStage already
                     // allocate; an 8-frame post-click delay overflows first.
-                    if (obj_keep_ok)
-                        n_obj <= n_obj_keep;
-                    else begin
-                        if (obj_keep_wait != 4'd0)
-                            obj_keep_wait <= obj_keep_wait - 4'd1;
-                        else begin
-                            n_obj_keep <= n_obj;
-                            obj_keep_ok <= 1'b1;
-                        end
-                    end
+                    // RETIRED: the two watermark rewinds described above
+                    // guessed liveness and recycled live callbacks/children.
+                    // Start a real root trace; GC completion arms frame_fire.
+                    gc_i <= 13'd0;
+                    gc_qr <= 14'd0;
+                    gc_qw <= 14'd0;
+                    gc_obj_high <= 16'd0;
+                    gc_arr_high <= 16'd0;
+                    state <= S_GC_CLEAR;
                     // KEYBITS level → keys.a/d/space.pressed (HTML table the animate() reads)
                     if (keys_ok) begin
                         poke_pressed(id_a, joy_in[2]);
@@ -5033,28 +5106,29 @@ module jmr_js_vm #(
                     end
                     if (enter_n != 0 && enter_delay != 0)
                         enter_delay <= enter_delay - 4'd1;
-                    frame_fire <= 1'b1;
                     end else if (frame_fire) begin
                     frame_fire <= 1'b0;
                     // KEYBITS edges → keydown/keyup with event.key + keyCode (HTML bindings)
                     // Skip when a KEYEVT is queued so GUI KEYEVT+KEYBITS does not double-fire.
-                    if (kd_fn != 16'hFFFF && (joy_in & ~prev_joy) != 0 && kev_rp == kev_wp) begin
+                    if (kd_fn != 16'hFFFF && joy_down_edge != 0 && kev_rp == kev_wp) begin
+                        joy_down_edge <= 6'd0;
                         obj_n[n_obj[12:0]] <= 6'd2;
                         obj_cls[n_obj[12:0]] <= 0;
                         obj_key[n_obj[12:0]][0] <= id_key;
                         obj_val[n_obj[12:0]][0] <= {16'd0,
-                            joy_in[2] ? id_arrow_l : joy_in[3] ? id_arrow_r :
-                            joy_in[4] ? id_space : id_arrow_l};
+                            joy_down_edge[2] ? id_arrow_l : joy_down_edge[3] ? id_arrow_r :
+                            joy_down_edge[4] ? id_space : joy_down_edge[0] ? id_arrow_u :
+                            joy_down_edge[1] ? id_arrow_d : 16'hFFFF};
                         obj_tag[n_obj[12:0]][0] <= 3'd3;
                         obj_key[n_obj[12:0]][1] <= id_keycode;
-                        obj_val[n_obj[12:0]][1] <= joy_in[2] ? 32'sd37 : joy_in[3] ? 32'sd39 :
-                            joy_in[4] ? 32'sd32 : joy_in[0] ? 32'sd38 : 32'sd40;
+                        obj_val[n_obj[12:0]][1] <= joy_down_edge[2] ? 32'sd37 : joy_down_edge[3] ? 32'sd39 :
+                            joy_down_edge[4] ? 32'sd32 : joy_down_edge[0] ? 32'sd38 : 32'sd40;
                         obj_tag[n_obj[12:0]][1] <= 3'd0;
                         // NEW: frame boundary — reset the eval stack (leftovers
                         // are leaks; ~1 word/frame overflowed sp at ~500 frames)
                         stack[0] <= {16'd0, n_obj};
                         stack_tag[0] <= 3'd1;
-                        sp <= 11'd1;
+                        boundary_sp(11'd1);
                         n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
                         kev_fn <= kd_slot[0];
                         kev_li <= 2'd0;
@@ -5067,20 +5141,22 @@ module jmr_js_vm #(
                         cstack_isfe[csp] <= 1'b0;
                         // S_KEYEV: env alloc next cycle so it cannot clobber the event
                         state <= S_KEYEV;
-                    end else if (ku_fn != 16'hFFFF && (prev_joy & ~joy_in) != 0 && kev_rp == kev_wp) begin
+                    end else if (ku_fn != 16'hFFFF && joy_up_edge != 0 && kev_rp == kev_wp) begin
+                        joy_up_edge <= 6'd0;
                         obj_n[n_obj[12:0]] <= 6'd2;
                         obj_key[n_obj[12:0]][0] <= id_key;
                         obj_val[n_obj[12:0]][0] <= {16'd0,
-                            prev_joy[2] ? id_arrow_l : prev_joy[3] ? id_arrow_r :
-                            prev_joy[4] ? id_space : id_arrow_l};
+                            joy_up_edge[2] ? id_arrow_l : joy_up_edge[3] ? id_arrow_r :
+                            joy_up_edge[4] ? id_space : joy_up_edge[0] ? id_arrow_u :
+                            joy_up_edge[1] ? id_arrow_d : 16'hFFFF};
                         obj_tag[n_obj[12:0]][0] <= 3'd3;
                         obj_key[n_obj[12:0]][1] <= id_keycode;
-                        obj_val[n_obj[12:0]][1] <= prev_joy[2] ? 32'sd37 : prev_joy[3] ? 32'sd39 :
-                            prev_joy[4] ? 32'sd32 : 32'sd38;
+                        obj_val[n_obj[12:0]][1] <= joy_up_edge[2] ? 32'sd37 : joy_up_edge[3] ? 32'sd39 :
+                            joy_up_edge[4] ? 32'sd32 : joy_up_edge[0] ? 32'sd38 : 32'sd40;
                         obj_tag[n_obj[12:0]][1] <= 3'd0;
                         stack[0] <= {16'd0, n_obj}; // frame boundary: fresh stack
                         stack_tag[0] <= 3'd1;
-                        sp <= 11'd1;
+                        boundary_sp(11'd1);
                         n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
                         kev_fn <= ku_slot[0];
                         kev_li <= 2'd0;
@@ -5110,6 +5186,8 @@ module jmr_js_vm #(
                             (kev_q[kev_rp][7:0] == 8'd32) ? id_space :
                             (kev_q[kev_rp][7:0] == 8'd37) ? id_arrow_l :
                             (kev_q[kev_rp][7:0] == 8'd39) ? id_arrow_r :
+                            (kev_q[kev_rp][7:0] == 8'd38) ? id_arrow_u :
+                            (kev_q[kev_rp][7:0] == 8'd40) ? id_arrow_d :
                             (kev_q[kev_rp][7:0] == 8'd65) ? id_a :
                             (kev_q[kev_rp][7:0] == 8'd68) ? id_d : 16'hFFFF};
                         obj_tag[n_obj[12:0]][0] <= 3'd3;
@@ -5118,7 +5196,7 @@ module jmr_js_vm #(
                         obj_tag[n_obj[12:0]][1] <= 3'd0;
                         stack[0] <= {16'd0, n_obj}; // frame boundary: fresh stack
                         stack_tag[0] <= 3'd1;
-                        sp <= 11'd1;
+                        boundary_sp(11'd1);
                         n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
                         kev_fn <= kev_q[kev_rp][8] ? kd_slot[0] : ku_slot[0];
                         kev_li <= 2'd0;
@@ -5131,7 +5209,7 @@ module jmr_js_vm #(
                         cstack_isfe[csp] <= 1'b0;
                         state <= S_KEYEV;
                     end else if (raf_n != 0) begin
-                        sp <= '0; // frame boundary: fresh eval stack
+                        boundary_sp(11'd0); // frame boundary: checked eval stack
                         ip <= fn_entry(raf_fn[0]);
                         raf_n <= raf_n - 4'd1;
                         enter_captured_fn(raf_fn[0]);
@@ -5146,12 +5224,12 @@ module jmr_js_vm #(
                         cstack_this[csp] <= this_obj;
                         cstack_isctor[csp] <= 1'b0;
                         cstack_isfe[csp] <= 1'b0;
-                        csp <= csp + 7'd1;
+                        bump_csp();
                         code_raddr <= 15'(ops_base + fn_entry(raf_fn[0]));
                         state <= S_FETCH_WAIT;
                     end else if (looping) begin
                         ip <= '0;
-                        sp <= '0;
+                        boundary_sp(11'd0);
                         code_raddr <= 15'(ops_base);
                         state <= S_FETCH_WAIT;
                     end else begin
@@ -5174,7 +5252,7 @@ module jmr_js_vm #(
                         if (!fn_ok) dbg_tmr_mis <= dbg_tmr_mis + 16'd1;
                         if (fn_ok) begin
                             dbg_tmr_fire <= dbg_tmr_fire + 16'd1;
-                            sp <= '0;
+                            boundary_sp(11'd0);
                             ip <= obj_val[fo][0][15:0];
                         end
                         if (fn_ok && to_period[0] != 12'd0 && to_n == 4'd1) begin
@@ -5221,7 +5299,7 @@ module jmr_js_vm #(
                             cstack_isctor[csp] <= 1'b0;
                             cstack_isfe[csp] <= 1'b0;
                             enter_captured_fn(foid);
-                            csp <= csp + 7'd1;
+                            bump_csp();
                             code_raddr <= 15'(ops_base + obj_val[fo][0][15:0]);
                             state <= S_FETCH_WAIT;
                         end
@@ -5230,7 +5308,7 @@ module jmr_js_vm #(
                 S_KEYEV: begin
                     // Event object was allocated last cycle (n_obj already bumped).
                     enter_captured_fn(kev_fn);
-                    csp <= csp + 7'd1;
+                    bump_csp();
                     ip <= fn_entry(kev_fn);
                     code_raddr <= 15'(ops_base + fn_entry(kev_fn));
                     state <= S_FETCH_WAIT;
@@ -5960,12 +6038,167 @@ module jmr_js_vm #(
                         end
                     end
                 end
+                S_GC_CLEAR: begin
+                    gc_obj_mark[gc_i] <= 1'b0;
+                    if (gc_i < 13'(MAX_ARR))
+                        gc_arr_mark[gc_i[11:0]] <= 1'b0;
+                    if (gc_i == 13'(MAX_OBJ - 1)) begin
+                        gc_root_i <= 13'd0;
+                        state <= S_GC_ROOT;
+                    end else
+                        gc_i <= gc_i + 13'd1;
+                end
+                S_GC_ROOT: begin
+                    // vars, eval stack, callback queues/listeners, active envs,
+                    // native-held objects, prototype cache, then call frames.
+                    if (gc_root_i < 13'd512) begin
+                        if (var_init[gc_root_i[8:0]])
+                            gc_mark_value(
+                                var_tag[gc_root_i[8:0]],
+                                vars[gc_root_i[8:0]]
+                            );
+                    end else if (gc_root_i < 13'd2560) begin
+                        if ((gc_root_i - 13'd512) < sp)
+                            gc_mark_value(
+                                stack_tag[gc_root_i - 13'd512],
+                                stack[gc_root_i - 13'd512]
+                            );
+                    end else if (gc_root_i < 13'd2568) begin
+                        if ((gc_root_i - 13'd2560) < raf_n)
+                            gc_mark_obj(raf_fn[gc_root_i - 13'd2560]);
+                    end else if (gc_root_i < 13'd2576) begin
+                        if ((gc_root_i - 13'd2568) < to_n)
+                            gc_mark_obj(to_fn[gc_root_i - 13'd2568]);
+                    end else if (gc_root_i < 13'd2580) begin
+                        if ((gc_root_i - 13'd2576) < kd_n)
+                            gc_mark_obj(kd_slot[gc_root_i - 13'd2576]);
+                    end else if (gc_root_i < 13'd2584) begin
+                        if ((gc_root_i - 13'd2580) < ku_n)
+                            gc_mark_obj(ku_slot[gc_root_i - 13'd2580]);
+                    end else if (gc_root_i < 13'd2616) begin
+                        if ((gc_root_i - 13'd2584) < env_sp)
+                            gc_mark_obj(env_oid[gc_root_i - 13'd2584]);
+                    end else if (gc_root_i == 13'd2616) begin
+                        if (metrics_oid != 16'hFFFF) gc_mark_obj(metrics_oid);
+                    end else if (gc_root_i == 13'd2617) begin
+                        if (keys_a_oid != 16'hFFFF) gc_mark_obj(keys_a_oid);
+                    end else if (gc_root_i == 13'd2618) begin
+                        if (keys_d_oid != 16'hFFFF) gc_mark_obj(keys_d_oid);
+                    end else if (gc_root_i == 13'd2619) begin
+                        if (keys_sp_oid != 16'hFFFF) gc_mark_obj(keys_sp_oid);
+                    end else if (gc_root_i == 13'd2620) begin
+                        if (this_ok) gc_mark_obj(this_obj);
+                    end else if (gc_root_i == 13'd2621) begin
+                        if (kev_obj < n_obj) gc_mark_obj(kev_obj);
+                    end else if (gc_root_i == 13'd2622) begin
+                        if (click_fn != 16'hFFFF) gc_mark_obj(click_fn);
+                    end else if (gc_root_i == 13'd2623) begin
+                        if (kd_fn != 16'hFFFF) gc_mark_obj(kd_fn);
+                    end else if (gc_root_i == 13'd2624) begin
+                        if (ku_fn != 16'hFFFF) gc_mark_obj(ku_fn);
+                    end else if (gc_root_i < 13'd2689) begin
+                        if ((gc_root_i - 13'd2625) < n_fn_proto)
+                            gc_mark_obj(fn_proto_oid[gc_root_i - 13'd2625]);
+                    end else if (gc_root_i < 13'd2817) begin
+                        if ((gc_root_i - 13'd2689) < csp)
+                            gc_mark_obj(cstack_this[gc_root_i - 13'd2689]);
+                    end else if (gc_root_i < 13'd2945) begin
+                        if ((gc_root_i - 13'd2817) < csp &&
+                            cstack_isctor[gc_root_i - 13'd2817])
+                            gc_mark_obj(cstack_ctorobj[gc_root_i - 13'd2817]);
+                    end else if (gc_root_i < 13'd3073) begin
+                        if ((gc_root_i - 13'd2945) < csp &&
+                            cstack_isfe[gc_root_i - 13'd2945])
+                            gc_mark_value(
+                                3'd2,
+                                {16'd0, cstack_fe_arr[gc_root_i - 13'd2945]}
+                            );
+                    end else if (gc_root_i < 13'd3201) begin
+                        if ((gc_root_i - 13'd3073) < csp &&
+                            cstack_isfe[gc_root_i - 13'd3073])
+                            gc_mark_obj(cstack_fe_fn[gc_root_i - 13'd3073]);
+                    end
+                    if (gc_root_i == 13'd3200)
+                        state <= S_GC_POP;
+                    else
+                        gc_root_i <= gc_root_i + 13'd1;
+                end
+                S_GC_POP: begin
+                    if (gc_qr == gc_qw) begin
+                        // Tail sweep: every retained handle keeps its index.
+                        n_obj <= gc_obj_high;
+                        n_arr <= gc_arr_high;
+                        n_obj_keep <= gc_obj_high;
+                        n_arr_keep <= gc_arr_high;
+                        obj_keep_ok <= 1'b1;
+                        arr_keep_ok <= 1'b1;
+                        dbg_gc_n <= dbg_gc_n + 16'd1;
+                        frame_fire <= 1'b1;
+                        state <= S_WAIT_FRAME;
+                    end else begin
+                        gc_cur <= gc_queue[gc_qr];
+                        gc_qr <= gc_qr + 14'd1;
+                        gc_slot <= 7'd0;
+                        state <= gc_queue[gc_qr][13] ? S_GC_ARR : S_GC_OBJ;
+                    end
+                end
+                S_GC_OBJ: begin
+                    if (gc_slot < obj_n[gc_cur[12:0]]) begin
+                        // Closure/environment parent handles are stored
+                        // untagged in their fixed metadata slots.
+                        if (obj_cls[gc_cur[12:0]] == CLS_ENV &&
+                            gc_slot == 7'd0 &&
+                            obj_val[gc_cur[12:0]][0][15:0] != 16'd0)
+                            gc_mark_obj(obj_val[gc_cur[12:0]][0][15:0]);
+                        else if (obj_cls[gc_cur[12:0]] == CLS_FN &&
+                                 gc_slot == 7'd2 &&
+                                 obj_val[gc_cur[12:0]][2][15:0] != 16'd0)
+                            gc_mark_obj(obj_val[gc_cur[12:0]][2][15:0]);
+                        else
+                            gc_mark_value(
+                                obj_tag[gc_cur[12:0]][gc_slot[4:0]],
+                                obj_val[gc_cur[12:0]][gc_slot[4:0]]
+                            );
+                        gc_slot <= gc_slot + 7'd1;
+                    end else
+                        state <= S_GC_POP;
+                end
+                S_GC_ARR: begin
+                    if (gc_slot < arr_len[gc_cur[11:0]]) begin
+                        gc_mark_value(
+                            arr_tag[gc_cur[11:0]][gc_slot[6:0]],
+                            arr_val[gc_cur[11:0]][gc_slot[6:0]]
+                        );
+                        gc_slot <= gc_slot + 7'd1;
+                    end else
+                        state <= S_GC_POP;
+                end
                 S_DONE: begin
                     running <= 1'b0;
                     state <= S_IDLE;
                 end
                 default: state <= S_IDLE;
             endcase
+            // Capacity and stale-handle failures are architectural errors.
+            // Stop once, retain a compact fault code, and never hide them by
+            // resetting a stack or wrapping an allocation pointer.
+            if (!machine_fault &&
+                (dbg_heap_ovf != 0 || dbg_to_ovf != 0 ||
+                 dbg_json_ovf != 0 || dbg_path_ovf != 0 ||
+                 dbg_str_ovf != 0 || dbg_stack_ovf != 0 ||
+                 dbg_call_ovf != 0 || dbg_tmr_mis != 0)) begin
+                machine_fault <= 1'b1;
+                if (dbg_heap_ovf != 0) fault_code <= 8'd1;
+                else if (dbg_to_ovf != 0) fault_code <= 8'd2;
+                else if (dbg_json_ovf != 0) fault_code <= 8'd3;
+                else if (dbg_path_ovf != 0) fault_code <= 8'd4;
+                else if (dbg_str_ovf != 0) fault_code <= 8'd5;
+                else if (dbg_stack_ovf != 0) fault_code <= 8'd6;
+                else if (dbg_call_ovf != 0) fault_code <= 8'd7;
+                else fault_code <= 8'd8;
+                running <= 1'b0;
+                state <= S_DONE;
+            end
         end
     end
 endmodule

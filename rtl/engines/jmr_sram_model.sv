@@ -18,7 +18,7 @@ module jmr_sram_model (
 );
     // 2M x 16 — Verilator allocates this on the host; never synthesized
     // for the board (the DDR3 bridge replaces it behind the same port).
-    logic [15:0] mem [0:2097151] /*verilator public_flat_rd*/;
+    logic [15:0] mem [0:2097151] /*verilator public_flat_rw*/;
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin

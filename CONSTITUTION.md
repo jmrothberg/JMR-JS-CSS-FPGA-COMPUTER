@@ -24,7 +24,8 @@ Build an original **standalone** FPGA computer whose native programming
 environment is JavaScript, aimed at playing and editing HTML5/Canvas-style
 2D games.
 
-The user never programs a conventional ISA (no assembly, no hidden RISC).
+The user never programs a conventional **instruction set architecture**
+(the chip’s native operations — no assembly, no hidden RISC).
 
 JavaScript is parsed into compact **JMR-JS bytecode**; bytecode operations
 dispatch FPGA execution engines (microcode + engines). This is NOT:
@@ -47,18 +48,19 @@ The machine plays real HTML5/Canvas games. One title = one file:
 the same glass on PYTHON → FPGA-SIM → BOARD** (then ASIC).
 
 - **No dukpy cheat.** PYTHON runs the **JMR bytecode VM**. **`RUN` always
-  compiles the loaded `.HTML`** (editor source of truth) into a **fresh**
-  internal `.JSH` — never prefer a stale on-disk `.JSH`. Compile errors must
-  report **line numbers from that HTML**. dukpy/Duktape/V8/QuickJS must not be
-  the product execution path. Chrome may open the same `.HTML` for authoring
-  only — that does not count as PYTHON/FPGA proof.
+  compiles the loaded `.HTML`** (editor source of truth) into a fresh,
+  versioned in-memory **ProgramImage** — never persist or prefer a `.JSB` /
+  `.JSH` sidecar. Compile errors must report **line numbers from that HTML**.
+  dukpy/Duktape/V8/QuickJS must not be the product execution path. Chrome may
+  open the same `.HTML` for authoring only — that does not count as
+  PYTHON/FPGA proof.
 - **Asset bank (external SRAM — replaces the retired `NAME.DAT` spill).**
   Great graphics stay at **full quality**. On every `RUN` the compiler emits
   the title's `data:image` / fat assets (per-title 256-entry palette +
-  full-resolution sprite banks) as the **ASET section** of the fresh internal
-  `.JSH`; the loader streams that section into the **external 4 MB SRAM asset
-  bank** (see MEMORY). There is **no `NAME.DAT` file**. Do not pack Donkey
-  art into code BRAM or downscale sheets to “fit.”
+  full-resolution sprite banks) as the **ASET section** of that ProgramImage;
+  the loader streams the section into the **external 4 MB SRAM asset bank**
+  (see MEMORY). There is **no `NAME.DAT` file**. Do not pack Donkey art into
+  code BRAM or downscale sheets to “fit.”
 - **No host-twin FPGA-SIM.** F9 FPGA-SIM = Verilator RTL. `JMR_SIM_HOST=1`
   is explicit debug only.
 - `?NH` ("no HTML") is a **temporary, tracked debt** — never an acceptable
@@ -136,13 +138,61 @@ FPGA-SIM means **real Verilator RTL** of this design — never a silent host twi
 **Uniform glass (F9 PYTHON → FPGA-SIM → BOARD):** every user-typed / user-visible
 behaviour must work the same way on the **bytecode** path before board “done.”
 User titles: `LOAD "NAME.HTML"` / `RUN` only. **`RUN` = compile-on-RUN**
-(fresh `.JSH` output with ASET art section; never stale sidecar; art streams
-to the external SRAM asset bank).
+(fresh in-memory ProgramImage with ASET art section; never a sidecar; art
+streams to the external SRAM asset bank).
 Cursor rules: `python-first-parity.mdc`, `no-dukpy-cheat-native-cpu.mdc`,
 `never-fake-fpga-sim.mdc`.
 
 The BASIC sibling (`JMR-BASIC-FPGA-COMPUTER` on Nexys A7-100T) is a **working
-reference for method and USB-HID→PS/2 bring-up**, not a pinout or ISA source.
+reference for method and USB-HID→PS/2 bring-up**, not a pinout or instruction
+set architecture source.
+
+## Language-native computer method (JS, BASIC, or a later native GPU)
+
+This is how to build or **update** a machine whose native language is the
+**instruction set architecture** (the operations the chip actually runs:
+JavaScript here; BASIC on the sibling; a native graphics processing unit
+would be the same idea with a graphics language). Steal this ladder. Do
+**not** steal the other product’s tokens, pins, or microcode.
+
+**Speed:** Python must stay **fast**. It matches **what** the chip would do
+(same program bytes, same numbers, same errors), not **how long** the chip
+takes. Do not throttle Python to one hardware clock or one micro-operation
+per tick just to “feel like silicon.” Field-programmable gate array
+simulation and the board keep real cycle time; Python does not.
+
+1. **Freeze one executable contract.** Numbers, tagged values, stack, heap,
+   garbage collection, timers/events, and overflow are written down once.
+   Python and register-transfer level (the SystemVerilog hardware
+   description) must mean the same bits. Silent stack resets and guessed
+   “nursery” rewinds are not garbage collection.
+2. **Python executes what the chip receives.** The compiler may use rich
+   Python objects while compiling. Parity proof does not: it runs the
+   **serialized program** (here: ProgramImage words; BASIC: the token
+   stream the engines fetch). A Python `Chunk` or abstract syntax tree
+   that the hardware never sees is not a reference. Python may finish
+   that program in far fewer host milliseconds than the chip.
+3. **Lockstep before programs.** Same blob into Python and Verilator.
+   Compare instruction pointer, frames, heap, events, canvas/video, and
+   errors at small checkpoints. Do not debug titles/games until those
+   **results** match. Lockstep is not “same wall-clock time.”
+4. **Replace hardware semantics incrementally.** One engine (Number, heap,
+   frames, events). Remove a hack only when its lockstep test passes
+   without it. Caps are general and fail loudly. Acceptance titles are
+   tests, not `if (PACMAN)` / `if (ADVENT)` gates.
+5. **RUN compiles the loaded source.** Editor/card text is truth. Do not
+   prefer a stale sidecar (`.JSH` / leftover token file) or a different
+   host path. Fat art belongs in the asset bank, not squeezed into code
+   RAM.
+6. **PYTHON → real FPGA-SIM → user F9 → board → ASIC.** No host twin as
+   the sim default. No `.bit`/`.bin` to “define” a feature FPGA-SIM still
+   rejects. Visual play is the user’s F9, not a snippet PASS.
+
+A native graphics processing unit is the same machine with draw engines as
+first-class instruction-set operations (Canvas here; COLOR/SET on BASIC).
+It is not a second central processing unit running a browser or a ROM
+interpreter.
+
 ---
 
 # TARGET HARDWARE
@@ -322,10 +372,10 @@ implementations:
 
 On every `RUN` the compiler emits the title's full-quality art (per-title
 256-entry RGB888 palette + 8-bpp indexed sprite banks) as the **ASET
-section** of the fresh internal `.JSH`; the loader streams code → code BRAM
+section** of the ephemeral ProgramImage; the loader streams code → code BRAM
 and ASET → asset SRAM. Sprite handles/descriptors (w, h, SRAM offset) live
-in the bytecode container; pixels never enter code BRAM. There is **no
-`NAME.DAT` file** — that earlier spill design is retired.
+in the ProgramImage; pixels never enter code BRAM. There is **no `NAME.DAT`
+file** — that earlier spill design is retired.
 
 **V1 on-chip working set** (generous — see ASIC target below):
 
@@ -340,8 +390,9 @@ custom padring, ~1 MB-class on-chip SRAM.** Do **not** shrink BRAM to fit a
 small die; use the BRAM the design needs for speed. The BASIC CPU's 64 KB
 on-chip budget does **not** apply to this chip.
 
-**Disk (µSD FAT32), not BRAM:** `NAME.HTML` (user title) + internal `.JSH`
-compile cache (code + ASET sections in one file). Never hard-code addresses
+**Disk (µSD FAT32), not BRAM:** `NAME.HTML` is the user title and source of
+truth. `RUN` creates a ProgramImage in memory; product runtimes do not persist
+or prefer `.JSB` / `.JSH` compile sidecars. Never hard-code addresses
 throughout the design. Never stuff `data:image` megabytes into code BRAM.
 
 ---

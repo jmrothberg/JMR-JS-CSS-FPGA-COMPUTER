@@ -117,7 +117,7 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 		-o $(abspath $(BUILD)/jmr_js_sim_server) \
 		--top-module jmr_js_core \
 		-Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
-		-CFLAGS "-std=c++17" \
+		-CFLAGS "-std=c++17 -O2" \
 		$(CORE_SRCS) \
 		sim_main.cpp
 

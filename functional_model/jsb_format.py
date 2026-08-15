@@ -15,11 +15,23 @@ Native IDs (CALL_NATIVE arg0) — resolved at compile time from name:
 from __future__ import annotations
 
 import struct
+from dataclasses import dataclass
 from typing import Any, List, Tuple
 
 from functional_model.bytecode import Chunk, Op
 
 MAGIC = b"JSB1"
+PROGRAM_IMAGE_VERSION = 1
+
+# Frozen V1 capacities shared with rtl/engines/jmr_js_vm.sv.
+PROGRAM_CODE_WORDS = 32768
+PROGRAM_MAX_CONSTS = 1024
+PROGRAM_MAX_VARS = 512
+PROGRAM_MAX_NAMES = 1024
+PROGRAM_NAME_BYTES = 32768
+PROGRAM_MAX_CLASSES = 16
+PROGRAM_MAX_METHODS = 16
+PROGRAM_MAX_SPRITES = 16
 
 NATIVE_IDS = {
     "console.log": 0,
@@ -79,20 +91,430 @@ NATIVE_ALIASES = {
     "removeEventListener": 36,
 }
 
-# flags bit0 = JSB v2 (name table + class table after ops; ops_base still 3+n_consts)
+# flags bit0 = JSB v2 (name table + class table after ops).
 FLAG_V2 = 1
 # flags bit1 = ASET asset section present (external SRAM asset bank).
 # When set, a u32 aset_byte_off (from file start) follows the 12-byte header
 # (consts then start at byte 16 / word 4). Code part = [0, aset_byte_off);
 # the loader streams code → code BRAM and the ASET payload → asset SRAM.
 FLAG_ASET = 2
+# flags bit2 = optional opcode-to-source-line section. It is appended after
+# the existing trailer, so RTL that only understands flags[1:0] can ignore it.
+FLAG_SOURCE_MAP = 4
+KNOWN_FLAGS = FLAG_V2 | FLAG_ASET | FLAG_SOURCE_MAP
 ASET_MAGIC = b"ASET"
+SOURCE_MAP_MAGIC = b"SMAP"
+SOURCE_MAP_VERSION = 1
 ASET_PAL_BYTES = 768  # 256 × RGB888 at asset-SRAM offset 0
 SRAM_BYTES = 4 * 1024 * 1024  # 2M × 16 IS61WV204816 contract (see docs/ARCHITECTURE.md)
 # LOAD_CONST a1: 0=i32  1=string intern  2=None  3=IEEE-754 bits in const pool
 # 4=RegExp packed in const pool (pattern bytes + flags — RTL has no char heap)
 _LC_I32, _LC_STR, _LC_NONE, _LC_F32, _LC_REGEX = 0, 1, 2, 3, 4
 _STR_CAP = 512  # huge data: URIs stubbed — Image.onload still truthy
+
+
+@dataclass(frozen=True)
+class _ImageMeta:
+    n_ops: int
+    n_consts: int
+    n_vars: int
+    flags: int
+    code_end: int
+    aset_off: int
+    op_lines: Tuple[int, ...] | None
+    var_names: Tuple[str, ...]
+
+
+class ProgramImage:
+    """Validated, versioned in-memory wrapper around the frozen JSB1 bytes."""
+
+    __slots__ = ("_data", "_meta")
+
+    def __init__(self, data: bytes | bytearray | memoryview) -> None:
+        self._data = bytes(data)
+        self._meta = _validate_program_image(self._data)
+
+    @classmethod
+    def from_chunk(
+        cls, chunk: Chunk, v2: bool | None = None, sprites=None, aset: bool = False
+    ) -> "ProgramImage":
+        return cls(encode_chunk(chunk, v2=v2, sprites=sprites, aset=aset))
+
+    @property
+    def version(self) -> int:
+        return PROGRAM_IMAGE_VERSION
+
+    @property
+    def data(self) -> bytes:
+        return self._data
+
+    @property
+    def n_ops(self) -> int:
+        return self._meta.n_ops
+
+    @property
+    def n_consts(self) -> int:
+        return self._meta.n_consts
+
+    @property
+    def n_vars(self) -> int:
+        return self._meta.n_vars
+
+    @property
+    def flags(self) -> int:
+        return self._meta.flags
+
+    @property
+    def code_end(self) -> int:
+        """Bytes streamed into code BRAM; excludes the ASET section."""
+        return self._meta.code_end
+
+    @property
+    def op_lines(self) -> Tuple[int, ...] | None:
+        return self._meta.op_lines
+
+    @property
+    def var_names(self) -> Tuple[str, ...]:
+        """Serialized global-variable slot names in RTL slot order."""
+        return self._meta.var_names
+
+    def decode(self) -> Chunk:
+        """Reconstruct all VM execution input from this validated byte stream."""
+        return _decode_chunk_unchecked(self._data, self._meta)
+
+    def __bytes__(self) -> bytes:
+        return self._data
+
+
+def _name_hash(s: str) -> int:
+    h = 0
+    for b in s.encode("utf-8"):
+        h = (h * 31 + b) & 0xFFFF
+    return h
+
+
+def _source_map_section(chunk: Chunk) -> bytes:
+    lines = getattr(chunk, "op_lines", None)
+    if lines is None:
+        return b""
+    if len(lines) != len(chunk.code):
+        raise ValueError(
+            f"source map has {len(lines)} entries for {len(chunk.code)} opcodes"
+        )
+    runs: list[tuple[int, int]] = []
+    for raw_line in lines:
+        line = int(raw_line)
+        if line < 0 or line > 0xFFFFFFFF:
+            raise ValueError(f"source line {line} is outside u32 range")
+        if runs and runs[-1][0] == line and runs[-1][1] < 0xFFFF:
+            runs[-1] = (line, runs[-1][1] + 1)
+        else:
+            runs.append((line, 1))
+    payload = struct.pack("<HHH", SOURCE_MAP_VERSION, len(lines), len(runs))
+    payload += b"".join(struct.pack("<IH", line, count) for line, count in runs)
+    return SOURCE_MAP_MAGIC + struct.pack("<I", len(payload)) + payload
+
+
+def _validate_program_image(data: bytes) -> _ImageMeta:
+    """Strictly validate every JSB1 boundary before a VM can see the image."""
+    size = len(data)
+
+    def need(off: int, count: int, what: str, limit: int | None = None) -> None:
+        end = off + count
+        bound = size if limit is None else limit
+        if off < 0 or count < 0 or end > bound:
+            raise ValueError(f"truncated ProgramImage {what}")
+
+    def u16(off: int, what: str, limit: int | None = None) -> int:
+        need(off, 2, what, limit)
+        return struct.unpack_from("<H", data, off)[0]
+
+    def u32(off: int, what: str, limit: int | None = None) -> int:
+        need(off, 4, what, limit)
+        return struct.unpack_from("<I", data, off)[0]
+
+    need(0, 12, "header")
+    if data[:4] != MAGIC:
+        raise ValueError("bad JSB magic")
+    n_ops, n_consts, n_vars, flags = struct.unpack_from("<HHHH", data, 4)
+    unknown = flags & ~KNOWN_FLAGS
+    if unknown:
+        raise ValueError(f"unsupported required ProgramImage flags 0x{unknown:04x}")
+    if (flags & FLAG_ASET) and not (flags & FLAG_V2):
+        raise ValueError("ASET requires the v2 ProgramImage trailer")
+    if n_consts > PROGRAM_MAX_CONSTS:
+        raise ValueError(
+            f"n_consts {n_consts} > MAX_CONSTS {PROGRAM_MAX_CONSTS}"
+        )
+    if n_vars > PROGRAM_MAX_VARS:
+        raise ValueError(f"n_vars {n_vars} > MAX_VARS {PROGRAM_MAX_VARS}")
+
+    off = 12
+    aset_off = 0
+    if flags & FLAG_ASET:
+        aset_off = u32(off, "ASET offset")
+        off += 4
+        if aset_off & 3:
+            raise ValueError("ASET offset is not word aligned")
+        if aset_off < off or aset_off > size:
+            raise ValueError("ASET offset is outside ProgramImage")
+    code_limit = aset_off if aset_off else size
+    need(off, 4 * n_consts + 4 * n_ops, "constants/opcodes", code_limit)
+    const_off = off
+    ops_off = const_off + 4 * n_consts
+    off = ops_off + 4 * n_ops
+
+    n_names = 0
+    names: list[str] = []
+    hash_rows: list[tuple[int, int]] = []
+    var_name_idx: list[int] = []
+    sprite_descs: list[tuple[int, int, int]] = []
+    if flags & FLAG_V2:
+        n_names = u16(off, "name count", code_limit)
+        off += 2
+        if n_names > PROGRAM_MAX_NAMES:
+            raise ValueError(
+                f"name count {n_names} > NAME_CAP {PROGRAM_MAX_NAMES}"
+            )
+        need(off, 3 * n_names, "name hash table", code_limit)
+        for _ in range(n_names):
+            nh, nl = struct.unpack_from("<HB", data, off)
+            hash_rows.append((nh, nl))
+            off += 3
+
+        n_vn = u16(off, "variable name map", code_limit)
+        off += 2
+        if n_vn != n_vars:
+            raise ValueError(
+                f"variable trailer count {n_vn} does not match header {n_vars}"
+            )
+        need(off, 2 * n_vn, "variable name map", code_limit)
+        for _ in range(n_vn):
+            ni = u16(off, "variable name index", code_limit)
+            off += 2
+            if ni >= n_names:
+                raise ValueError(f"variable name index {ni} is out of bounds")
+            var_name_idx.append(ni)
+
+        n_cls = u16(off, "class count", code_limit)
+        off += 2
+        if n_cls > PROGRAM_MAX_CLASSES:
+            raise ValueError(
+                f"class count {n_cls} > MAX_CLASSES {PROGRAM_MAX_CLASSES}"
+            )
+        for _ in range(n_cls):
+            need(off, 6, "class row", code_limit)
+            ni, ctor_ip, n_meth = struct.unpack_from("<HHH", data, off)
+            off += 6
+            if ni >= n_names:
+                raise ValueError(f"class name index {ni} is out of bounds")
+            if ctor_ip != 0xFFFF and ctor_ip >= n_ops:
+                raise ValueError(f"class constructor IP {ctor_ip} is out of bounds")
+            if n_meth > PROGRAM_MAX_METHODS:
+                raise ValueError(
+                    f"class method count {n_meth} > MAX_METHODS "
+                    f"{PROGRAM_MAX_METHODS}"
+                )
+            need(off, 4 * n_meth, "class methods", code_limit)
+            for _m in range(n_meth):
+                mi, entry = struct.unpack_from("<HH", data, off)
+                off += 4
+                if (mi & 0x7FFF) >= n_names:
+                    raise ValueError(f"method name index {mi & 0x7FFF} is out of bounds")
+                if entry >= n_ops:
+                    raise ValueError(f"method entry IP {entry} is out of bounds")
+
+        if off + 4 <= code_limit and data[off : off + 4] == b"SPR1":
+            if flags & FLAG_ASET:
+                raise ValueError("ASET ProgramImage contains legacy SPR1 pixels")
+            off += 4
+            n_spr = u16(off, "SPR1 count", code_limit)
+            off += 2
+            if n_spr > PROGRAM_MAX_SPRITES:
+                raise ValueError(
+                    f"sprite count {n_spr} > MAX_SPRITES {PROGRAM_MAX_SPRITES}"
+                )
+            for _ in range(n_spr):
+                need(off, 4, "SPR1 descriptor", code_limit)
+                sw, sh = struct.unpack_from("<HH", data, off)
+                off += 4
+                if not sw or not sh:
+                    raise ValueError("SPR1 sprite dimensions must be non-zero")
+                npi = int(sw) * int(sh)
+                need(off, npi, "SPR1 pixels", code_limit)
+                off += npi
+        elif off + 4 <= code_limit and data[off : off + 4] == b"SPRD":
+            if not (flags & FLAG_ASET):
+                raise ValueError("SPRD descriptors require an ASET section")
+            off += 4
+            n_spr = u16(off, "SPRD count", code_limit)
+            off += 2
+            if n_spr > PROGRAM_MAX_SPRITES:
+                raise ValueError(
+                    f"sprite count {n_spr} > MAX_SPRITES {PROGRAM_MAX_SPRITES}"
+                )
+            need(off, 8 * n_spr, "SPRD descriptors", code_limit)
+            for _ in range(n_spr):
+                sw, sh, soff = struct.unpack_from("<HHI", data, off)
+                off += 8
+                if not sw or not sh:
+                    raise ValueError("SPRD sprite dimensions must be non-zero")
+                sprite_descs.append((int(sw), int(sh), int(soff)))
+        elif flags & FLAG_ASET:
+            raise ValueError("ASET ProgramImage is missing SPRD descriptors")
+
+        if off + 4 <= code_limit and data[off : off + 4] == b"FSTY":
+            off += 4
+            n_fsty = u16(off, "FSTY count", code_limit)
+            off += 2
+            if n_fsty > PROGRAM_MAX_NAMES:
+                raise ValueError(f"FSTY count {n_fsty} exceeds fill LUT capacity")
+            need(off, 4 * n_fsty, "FSTY rows", code_limit)
+            for _ in range(n_fsty):
+                ni, palette_index = struct.unpack_from("<HH", data, off)
+                off += 4
+                if ni >= n_names or palette_index > 255:
+                    raise ValueError("FSTY row is out of bounds")
+
+        # NAMB was added without changing JSB magic. Accept the old unmarked
+        # name stream, but validate either representation to the same bounds.
+        if off + 4 <= code_limit and data[off : off + 4] == b"NAMB":
+            off += 4
+        total_name_bytes = 0
+        for i in range(n_names):
+            ln = u16(off, "UTF-8 name length", code_limit)
+            off += 2
+            need(off, ln, "UTF-8 name", code_limit)
+            raw = data[off : off + ln]
+            off += ln
+            try:
+                name = raw.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError(f"invalid UTF-8 in ProgramImage name {i}") from exc
+            names.append(name)
+            total_name_bytes += ln
+        if total_name_bytes > PROGRAM_NAME_BYTES:
+            raise ValueError(
+                f"name bytes {total_name_bytes} > NAME_BYTES {PROGRAM_NAME_BYTES}"
+            )
+        for i, name in enumerate(names):
+            expected = (_name_hash(name), min(len(name.encode("utf-8")), 255))
+            if hash_rows[i] != expected:
+                raise ValueError(f"name hash/length mismatch at index {i}")
+
+    op_lines: Tuple[int, ...] | None = None
+    if flags & FLAG_SOURCE_MAP:
+        need(off, 8, "source-map section", code_limit)
+        if data[off : off + 4] != SOURCE_MAP_MAGIC:
+            raise ValueError("source-map flag set but SMAP section is missing")
+        payload_len = u32(off + 4, "source-map length", code_limit)
+        off += 8
+        source_end = off + payload_len
+        need(off, payload_len, "source-map payload", code_limit)
+        need(off, 6, "source-map header", source_end)
+        sm_version, sm_n_ops, n_runs = struct.unpack_from("<HHH", data, off)
+        off += 6
+        if sm_version != SOURCE_MAP_VERSION:
+            raise ValueError(f"unsupported source-map version {sm_version}")
+        if sm_n_ops != n_ops:
+            raise ValueError(
+                f"source map has {sm_n_ops} opcodes; header has {n_ops}"
+            )
+        need(off, 6 * n_runs, "source-map runs", source_end)
+        lines: list[int] = []
+        for _ in range(n_runs):
+            line, count = struct.unpack_from("<IH", data, off)
+            off += 6
+            if count == 0 or len(lines) + count > n_ops:
+                raise ValueError("invalid source-map run length")
+            lines.extend([int(line)] * count)
+        if off != source_end or len(lines) != n_ops:
+            raise ValueError("source-map payload length/count mismatch")
+        op_lines = tuple(lines)
+
+    # Validate encoded opcode references only after the v2 name table is known.
+    for ip in range(n_ops):
+        word = struct.unpack_from("<I", data, ops_off + 4 * ip)[0]
+        opc, a0, a1 = word & 0xFF, (word >> 8) & 0xFFFF, (word >> 24) & 0xFF
+        if opc not in Op._value2member_map_:
+            raise ValueError(f"unknown opcode {opc} at IP {ip}")
+        op = Op(opc)
+        if op == Op.LOAD_CONST:
+            if a1 in (_LC_I32, _LC_F32, _LC_REGEX) and a0 >= n_consts:
+                raise ValueError(f"constant index {a0} at IP {ip} is out of bounds")
+            if a1 == _LC_STR and a0 >= n_names:
+                raise ValueError(f"string name index {a0} at IP {ip} is out of bounds")
+            if a1 not in (_LC_I32, _LC_STR, _LC_NONE, _LC_F32, _LC_REGEX):
+                raise ValueError(f"unknown LOAD_CONST tag {a1} at IP {ip}")
+        elif op in (Op.LOAD_VAR, Op.STORE_VAR, Op.LET_VAR):
+            if a0 >= n_vars:
+                raise ValueError(f"variable index {a0} at IP {ip} is out of bounds")
+        elif op in (Op.JUMP, Op.JUMP_IF_FALSE):
+            if a0 > n_ops:
+                raise ValueError(f"jump target {a0} at IP {ip} is out of bounds")
+        elif op == Op.CALL_NATIVE:
+            if a0 not in _id_to_native():
+                raise ValueError(f"native ID {a0} at IP {ip} is unknown")
+        elif op in (Op.CALL_USER, Op.MAKE_FN):
+            if a0 >= n_ops:
+                raise ValueError(f"function entry {a0} at IP {ip} is out of bounds")
+        elif op in (Op.GET_PROP, Op.SET_PROP, Op.NEW_OBJ, Op.CALL_METHOD):
+            if a0 >= n_names:
+                raise ValueError(f"name index {a0} at IP {ip} is out of bounds")
+
+    if flags & FLAG_ASET:
+        if off > aset_off:
+            raise ValueError("ProgramImage trailer overlaps ASET section")
+        if any(data[off:aset_off]):
+            raise ValueError("non-zero bytes in ProgramImage ASET alignment padding")
+        if (aset_off + 3) // 4 > PROGRAM_CODE_WORDS:
+            raise ValueError(
+                f"code image {(aset_off + 3) // 4} words > "
+                f"CODE_WORDS {PROGRAM_CODE_WORDS}"
+            )
+        need(aset_off, 8, "ASET header")
+        if data[aset_off : aset_off + 4] != ASET_MAGIC:
+            raise ValueError("bad ASET magic")
+        payload_len = u32(aset_off + 4, "ASET payload length")
+        if payload_len > SRAM_BYTES:
+            raise ValueError(
+                f"ASET payload {payload_len} bytes exceeds asset SRAM {SRAM_BYTES}"
+            )
+        if payload_len < ASET_PAL_BYTES:
+            raise ValueError("ASET payload is missing the 256-entry palette")
+        if aset_off + 8 + payload_len != size:
+            raise ValueError("ASET payload length does not match ProgramImage size")
+        for sw, sh, soff in sprite_descs:
+            npi = sw * sh
+            if soff < ASET_PAL_BYTES or (soff & 1):
+                raise ValueError("ASET sprite offset is invalid or unaligned")
+            if soff + npi > payload_len:
+                raise ValueError("ASET sprite descriptor exceeds payload")
+        code_end = aset_off
+    else:
+        if off != size:
+            raise ValueError("unexpected bytes after ProgramImage trailer")
+        if (size + 3) // 4 > PROGRAM_CODE_WORDS:
+            raise ValueError(
+                f"code image {(size + 3) // 4} words > "
+                f"CODE_WORDS {PROGRAM_CODE_WORDS}"
+            )
+        code_end = size
+
+    return _ImageMeta(
+        n_ops=n_ops,
+        n_consts=n_consts,
+        n_vars=n_vars,
+        flags=flags,
+        code_end=code_end,
+        aset_off=aset_off,
+        op_lines=op_lines,
+        var_names=(
+            tuple(names[i] for i in var_name_idx)
+            if flags & FLAG_V2
+            else tuple(f"v{i}" for i in range(n_vars))
+        ),
+    )
 
 
 def _native_id(name: str) -> int | None:
@@ -263,10 +685,14 @@ def _encode_v1(chunk: Chunk) -> bytes:
         word = (opc) | ((a0 & 0xFFFF) << 8) | ((a1 & 0xFF) << 24)
         ops_out.append(word)
 
-    hdr = MAGIC + struct.pack("<HHHH", len(ops_out), len(consts), len(var_names), 0)
+    source_map = _source_map_section(chunk)
+    flags = FLAG_SOURCE_MAP if source_map else 0
+    hdr = MAGIC + struct.pack(
+        "<HHHH", len(ops_out), len(consts), len(var_names), flags
+    )
     body = b"".join(struct.pack("<i", c) for c in consts)
     body += b"".join(struct.pack("<I", w) for w in ops_out)
-    return hdr + body
+    return hdr + body + source_map
 
 
 def _intern_name(names: List[str], index: dict[str, int], s: str) -> int:
@@ -407,7 +833,12 @@ def _encode_v2(chunk: Chunk, sprites=None, aset: bool = False) -> bytes:
         word = (opc) | ((a0 & 0xFFFF) << 8) | ((a1 & 0xFF) << 24)
         ops_out.append(word)
 
-    flags = FLAG_V2 | (FLAG_ASET if aset else 0)
+    source_map = _source_map_section(chunk)
+    flags = (
+        FLAG_V2
+        | (FLAG_ASET if aset else 0)
+        | (FLAG_SOURCE_MAP if source_map else 0)
+    )
     hdr = MAGIC + struct.pack(
         "<HHHH", len(ops_out), len(consts), len(var_names), flags
     )
@@ -432,12 +863,6 @@ def _encode_v2(chunk: Chunk, sprites=None, aset: bool = False) -> bytes:
         class_rows.append((ni & 0xFFFF, ctor_ip, meth_rows))
     trailer = struct.pack("<H", len(names))
     # NEW: u16 hashes first so RTL intern does not walk UTF-8 (that FSM hung HTML RUN)
-    def _name_hash(s: str) -> int:
-        h = 0
-        for b in s.encode("utf-8"):
-            h = (h * 31 + b) & 0xFFFF
-        return h
-
     for n in names:
         # NEW: u8 length after each hash — RTL string concat folds
         # h(a+b) = h(a)*31^len(b) + h(b), and find-or-alloc matches
@@ -508,6 +933,9 @@ def _encode_v2(chunk: Chunk, sprites=None, aset: bool = False) -> bytes:
     for n in names:
         raw = n.encode("utf-8")[:0xFFFF]
         trailer += struct.pack("<H", len(raw)) + raw
+    # Optional debug section is after the legacy trailer. Existing RTL stops
+    # after NAMB and ignores it; validated Python execution restores op_lines.
+    trailer += source_map
     if not aset:
         return hdr + body + trailer
     # ASET file layout: [hdr | u32 aset_off | body | trailer | pad4 | ASET…]
@@ -526,10 +954,18 @@ def _encode_v2(chunk: Chunk, sprites=None, aset: bool = False) -> bytes:
     )
 
 
-def decode_chunk(data: bytes) -> Chunk:
-    """Decode JSB/JSH bytes back to a Chunk (PYTHON card path / HM)."""
-    if data[:4] != MAGIC:
-        raise ValueError("bad JSB magic")
+def decode_chunk(data: bytes | ProgramImage) -> Chunk:
+    """Validate JSB1 bytes, then reconstruct a Chunk solely for VM semantics."""
+    image = data if isinstance(data, ProgramImage) else ProgramImage(data)
+    return image.decode()
+
+
+def _decode_chunk_unchecked(data: bytes, meta: _ImageMeta) -> Chunk:
+    """Decode bytes already checked by ProgramImage.
+
+    Transitional only: functional_model.bytecode.VM still owns opcode
+    semantics, but every field in this Chunk is reconstructed from bytes.
+    """
     n_ops, n_consts, n_vars, flags = struct.unpack_from("<HHHH", data, 4)
     off = 12
     aset_off = 0
@@ -712,6 +1148,7 @@ def decode_chunk(data: bytes) -> Chunk:
         classes=classes or None,
         sprites=sprites or None,
         palette=palette,
+        op_lines=list(meta.op_lines) if meta.op_lines is not None else None,
     )
 
 

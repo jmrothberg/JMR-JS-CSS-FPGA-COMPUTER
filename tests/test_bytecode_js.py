@@ -1,7 +1,18 @@
 """Generic JS VM tests: closures, String.replace(RegExp), not title-specific."""
 
+import struct
+
+import pytest
+
 from functional_model.compiler import compile_source
+from functional_model.jsb_format import (
+    FLAG_SOURCE_MAP,
+    MAGIC,
+    ProgramImage,
+    encode_chunk,
+)
 from functional_model.machine import Machine
+from hardware_model.js_vm import JsHwVm
 
 
 def _run_js_frames(src: str, n_frames: int = 3) -> Machine:
@@ -1003,4 +1014,78 @@ for (const x of [1, 2, 3]) s = s + x;
         n_frames=0,
     )
     assert m.vm.globals.get("s") == 6, m.vm.globals.get("s")
+
+
+def test_program_image_source_map_round_trip():
+    chunk = compile_source(
+        """
+var a = 1;
+var b = a + 2;
+"""
+    )
+    image = ProgramImage.from_chunk(chunk, v2=True)
+    decoded = image.decode()
+    assert image.flags & FLAG_SOURCE_MAP
+    assert decoded.op_lines == chunk.op_lines
+    assert len(decoded.op_lines) == len(decoded.code)
+
+
+def test_program_image_source_map_tracks_compiler_rewrites():
+    chunk = compile_source(
+        """
+class A { field = () => 1; }
+var o = {n: 1};
+o.n++;
+({n: 2}).n++;
+"""
+    )
+    assert len(chunk.op_lines) == len(chunk.code)
+    assert ProgramImage.from_chunk(chunk, v2=True).decode().op_lines == chunk.op_lines
+
+
+def test_program_image_rejects_corrupt_trailer_and_truncated_aset():
+    chunk = compile_source("var answer = 7;")
+    corrupt = bytearray(encode_chunk(chunk, v2=True))
+    smap = corrupt.index(b"SMAP")
+    corrupt[smap : smap + 4] = b"XMAP"
+    with pytest.raises(ValueError, match="SMAP"):
+        ProgramImage(corrupt)
+
+    aset_blob = encode_chunk(
+        chunk, v2=True, sprites=[(2, 2, b"\x01\x02\x03\x04")], aset=True
+    )
+    with pytest.raises(ValueError, match="ASET.*length|ProgramImage size"):
+        ProgramImage(aset_blob[:-1])
+
+
+def test_program_image_rejects_rtl_capacity_excess():
+    # Header rejection must happen before the absent constant body is read.
+    blob = bytearray(MAGIC + struct.pack("<HHHH", 0, 1025, 0, 0))
+    with pytest.raises(ValueError, match=r"n_consts 1025 > MAX_CONSTS 1024"):
+        ProgramImage(blob)
+
+
+def test_hw_vm_executes_serialized_program_image_not_compiler_chunk():
+    chunk = compile_source("var answer = 7;")
+    image = ProgramImage.from_chunk(chunk, v2=True)
+    chunk.consts[:] = [99 for _ in chunk.consts]
+
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals.get("answer") == 7
+    assert vm._m._html_chunk is not chunk
+
+
+def test_hw_vm_queue_capacity_fails_loudly():
+    src = "function f() {}\n" + "\n".join(
+        "setTimeout(f, 1000);" for _ in range(9)
+    )
+    image = ProgramImage.from_chunk(compile_source(src), v2=True)
+
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error == "ERROR: HM CAPACITY: timer queue overflow (8 timers)"
 

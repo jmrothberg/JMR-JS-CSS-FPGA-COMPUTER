@@ -93,7 +93,7 @@ def collect_storage_files(
     for path in sorted(storage_dir.iterdir()):
         if not path.is_file() or path.name.startswith("."):
             continue
-        if path.suffix.upper() not in (".JS", ".HTML", ".HTM", ".PNG", ".DAT", ".BIN", ".JSB", ".JSH"):
+        if path.suffix.upper() not in (".JS", ".HTML", ".HTM", ".PNG", ".DAT", ".BIN", ".JSB"):
             continue
         host = path.name
         card = CARD_NAME_MAP.get(host.upper(), card_name_83(host))
@@ -337,15 +337,10 @@ def create_image(
     if include_storage:
         # NEW: auto-compile storage/*.JS → .JSB so RUN has bytecode companions
         try:
-            from tools.compile_js import compile_html_one, compile_one
+            from tools.compile_js import compile_one
             for js in sorted(STORAGE_DIR.glob("*.JS")):
                 compile_one(js)
-            # NEW: HTML scripts → .JSH sidecar (does not overwrite .JSB)
-            for html in sorted(STORAGE_DIR.glob("*.HTML")):
-                try:
-                    compile_html_one(html)
-                except Exception as he:
-                    print(f"warning: compile HTML {html.name}: {he}", file=sys.stderr)
+            # HTML titles: card is HTML only. .JSH is host compile-on-RUN, never FAT.
         except Exception as e:
             print(f"warning: compile_js skipped: {e}", file=sys.stderr)
         pairs.extend(collect_storage_files())

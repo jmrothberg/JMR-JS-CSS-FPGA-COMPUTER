@@ -20,18 +20,18 @@ RUN
 
 | Game | Source (LOAD) | On RUN (invisible) |
 |---|---|---|
-| Space Invaders | `INVADERS.HTML` | compile → fresh `.JSH` (code + ASET art) |
-| Pac-Man | `PACMAN.HTML` | compile → fresh `.JSH` (code + ASET art) |
-| Donkey Kong | `DONKEY.HTML` | compile → fresh `.JSH` (code + **full-res** ASET art) |
+| Space Invaders | `INVADERS.HTML` | compile → ephemeral ProgramImage (code + ASET art) |
+| Pac-Man | `PACMAN.HTML` | compile → ephemeral ProgramImage (code + ASET art) |
+| Donkey Kong | `DONKEY.HTML` | compile → ephemeral ProgramImage (code + **full-res** ASET art) |
 
 **Compile-on-RUN (hard):** source of truth = loaded `.HTML` (editor line
-numbers). `RUN` **always** recompiles. `.JSH` = invisible *output* only —
-never a LOAD name; **never prefer a pre-existing `.JSH`**. Stale `.JSH` may
-be deleted.
+numbers). `RUN` **always** recompiles into one versioned in-memory
+**ProgramImage**. `.JSB` / `.JSH` files are not product programs, are never a
+LOAD name, and are never persisted or preferred by a runtime.
 
 **Asset bank (external SRAM — no `NAME.DAT`):** great graphics stay at full
 quality. `RUN` emits `data:image` art (per-title 256-entry palette +
-full-resolution 8-bpp banks) as the **ASET section** of the fresh `.JSH`;
+full-resolution 8-bpp banks) as the **ASET section** of the ProgramImage;
 the loader streams it into the **external 4 MB SRAM asset bank**
 (IS61WV204816 contract — see `docs/ARCHITECTURE.md`). Bytecode carries
 descriptors (w, h, SRAM offset) only. Do not pack Donkey sheets into code
@@ -50,7 +50,7 @@ Upstream trees: `storage/games_*` (not DIR / not card).
 ```text
 LOAD "INVADERS.HTML"
 RUN
-# PYTHON / FPGA-SIM / BOARD — compile current HTML → fresh .JSH → JMR VM
+# PYTHON / FPGA-SIM / BOARD — compile current HTML → ProgramImage → JMR VM
 
 LOAD "PACMAN.HTML"
 RUN
@@ -69,6 +69,77 @@ decides keys. No `.bit`/`.bin` until FPGA-SIM is green and the user GUI-tests.
 
 ---
 
+## Frozen machine contract
+
+This contract is shared by the Python hardware model and RTL. The functional
+Python `Chunk` is a compiler oracle only; parity requires executing the exact
+serialized ProgramImage bytes.
+
+### ProgramImage
+
+- Magic remains `JSB1`; `flags` carries the versioned section contract.
+- One image contains code words, constants, names/classes, opcode-to-HTML
+  source lines, sprite descriptors, palette, and ASET payload.
+- The image exists in memory for the current `RUN`. Tests may keep golden
+  images under test/build output, but product storage contains `NAME.HTML`.
+- Every section has an explicit byte length and must fit before execution.
+  Bad magic, unknown required flags, overlap, truncation, or capacity excess
+  halts with a machine error; no section is silently clipped.
+
+### 64-bit Value ABI
+
+All stack, variable, object, array, environment, callback, and native-held
+values are one 64-bit word.
+
+- Any word not using the reserved tagged-NaN prefix is an IEEE-754 binary64
+  Number. Numeric NaNs are canonicalized to `0x7ff8000000000000`.
+- Tagged values use prefix `0x7ff9` in bits 63:48, a four-bit kind in bits
+  47:44, a 12-bit generation in bits 43:32, and a 32-bit payload in bits
+  31:0.
+- Kinds are: undefined `1`, null `2`, bool `3`, string `4`, object `5`, array
+  `6`, function `7`, element `8`, and lexical environment `9`.
+- Bool payload is exactly 0 or 1. Handle kinds use `(generation,index)`;
+  dereferencing a free slot or mismatched generation is a loud stale-handle
+  error. Handles remain stable across collection.
+- `+`, `-`, `*`, `/`, `%`, comparisons, NaN, infinities, signed zero, and
+  conversion use binary64 behavior in both models. `%` uses truncation toward
+  zero. Bitwise operations use ECMAScript `ToInt32`: NaN, infinities, and
+  either zero become 0; otherwise truncate toward zero and reduce modulo
+  2^32.
+
+### Frames, memories, and collection
+
+- An explicit call frame is
+  `(return_ip, base_sp, this, environment, function, result_count, kind)`.
+  Return and event/frame boundaries assert the expected stack depth; they do
+  not reset `sp` to conceal imbalance.
+- General V1 caps are code 32768 words, constants 1024, globals 512, eval stack
+  2048 Values, call frames 128, objects 8192, arrays 4096, array elements 128,
+  lexical environments 32, timers 8, rAF callbacks 8, and four listeners
+  per event type. Reaching a cap triggers collection where legal, then halts
+  loudly if capacity is still unavailable.
+- Heap slots have allocation bits, generation counters, mark bits, kind, and
+  fixed-capacity payload. Mark/sweep runs only at safe points.
+- Roots are globals, the eval stack, every call frame and lexical environment,
+  document/window listeners, rAF callbacks, timers, arrays/objects reachable
+  from those roots, and handles held by native/Canvas operations.
+- Collection follows every marked handle recursively, then frees unmarked
+  slots and increments their generations. There are no frame watermarks,
+  nursery rewinds, grace-frame guesses, or recycled live callback IDs.
+
+### Deterministic event and failure contract
+
+- One frame advances the machine clock by 1000/60 ms. Random uses one
+  explicitly seeded deterministic generator.
+- Raw key down/up events are queued once. Event order at a frame safe point is
+  input, rAF snapshot, then due timers; callbacks queued during a snapshot run
+  on a later frame.
+- Machine errors include ProgramImage validation, stack/frame imbalance,
+  stale handle, bad tag/kind, and every capacity overflow. Errors stop
+  execution and remain visible to the monitor and conformance checkpoint.
+
+---
+
 ## Three-column gap list (honest)
 
 | Feature / API | PYTHON (bytecode VM) | FPGA-SIM (RTL VM) | FPGA board |
@@ -83,7 +154,7 @@ decides keys. No `.bit`/`.bin` until FPGA-SIM is green and the user GUI-tests.
 | `drawImage` / `Image` PNG | as titles need | as titles need | same |
 | keydown/keyup (HTML decides bindings) | KEYBITS / host | `joy_in` / PS/2 | tether until J15 fixed |
 | heap / GC / objects in **JMR** VM | required (not dukpy) | required | required |
-| `.JSH` into VM / BRAM | **compile-on-RUN** → fresh bytecode | **yes** (same rule) | yes after matching flash |
+| ProgramImage into VM / BRAM | **compile-on-RUN** → ephemeral bytes | **yes** (same bytes) | yes after matching flash |
 | external SRAM asset bank (ASET) | **required** — full-res art via FM SRAM model | **same** (stream ASET → SRAM port; blit from SRAM) | same after matching flash |
 | standalone keyboard | GUI / host | Verilator PS/2 OK | **dead J15** — PROG tether |
 

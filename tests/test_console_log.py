@@ -159,16 +159,22 @@ def test_list_after_run_still_source_not_bytecode():
 
 
 def test_sim_run_wait_honors_break():
-    """Fat HTML RUN wait must stop when hard_break sets the flag (no Donkey)."""
+    """HTML RUN streams an in-memory ProgramImage; no sidecar or FAT wait."""
     from runtime.sim_backend import SimBackend
 
     sim = SimBackend()
     sim._started = True
+    sim._use_rtl = True
     sim._loaded_name = "X.HTML"
-    sim._last_jsh_bytes = 2_400_000
-    calls = {"tickn": 0}
+    sim._program_image = b"JSB1" + b"\0" * 8
+    calls = {"tickn": 0, "progstart": 0}
 
     def rpc(cmd: str) -> str:
+        if str(cmd) == "PROGSTART":
+            calls["progstart"] += 1
+            return "OK bytes=12"
+        if str(cmd).startswith(("PROGBEGIN", "PROGDATA")):
+            return "OK"
         if str(cmd).startswith("TICKN"):
             calls["tickn"] += 1
             sim._break_run_wait = True
@@ -185,26 +191,67 @@ def test_sim_run_wait_honors_break():
     sim._abort_more = lambda: None  # type: ignore[method-assign]
     sim._log.type_line = lambda t: None  # type: ignore[method-assign]
     sim.type_line("RUN")
-    assert calls["tickn"] <= 2, calls["tickn"]
+    assert calls["progstart"] == 1, calls
+    assert calls["tickn"] == 0, calls["tickn"]
 
 
-def test_load_wait_ignores_stale_loaded():
-    """A previous LOADED on glass must not end the wait for this LOAD."""
+def test_sim_compile_uses_loaded_editor_program_image():
+    """RUN compiles the backend's edited source and keeps bytes in memory."""
+    from runtime.sim_backend import SimBackend
+
+    sim = SimBackend()
+    sim._loaded_name = "X.HTML"
+    sim._loaded_html_text = (
+        '<canvas width="640" height="480"></canvas>'
+        "<script>var editedValue=41+1;</script>"
+    )
+    sim._html_lines = sim._loaded_html_text.splitlines()
+    assert sim._compile_on_run_html() is True
+    assert sim._program_image.startswith(b"JSB1")
+    assert sim._html_chunk is not None
+    assert "editedValue" in sim._html_chunk.names
+
+
+def test_sim_edit_updates_compile_source():
+    """The line entered after EDIT changes the source used by the next RUN."""
     from runtime.sim_backend import SimBackend
 
     sim = SimBackend()
     sim._started = True
+    sim._loaded_name = "X.HTML"
+    sim._loaded_html_text = "<script>\nvar value=1;\n</script>"
+    sim._html_lines = sim._loaded_html_text.splitlines()
+    sim._rpc = lambda cmd: "OK"  # type: ignore[method-assign]
+    sim._abort_more = lambda: None  # type: ignore[method-assign]
+    sim._sync_glass = lambda *a, **k: None  # type: ignore[method-assign]
+    sim._note_edit_prefill = lambda: None  # type: ignore[method-assign]
+    sim._log.type_line = lambda t: None  # type: ignore[method-assign]
+    sim.type_line("EDIT 20")
+    sim.type_line("20 var value=2;")
+    assert sim._html_lines[1] == "var value=2;"
+    assert "var value=2;" in sim._loaded_html_text
+
+
+def test_load_wait_ignores_stale_loaded():
+    """FPGA-SIM LOAD of storage HTML uses SRCLOAD (no SPI TICKN)."""
+    from runtime.sim_backend import SimBackend
+
+    sim = SimBackend()
+    sim._started = True
+    sim._use_rtl = True
     sim._loaded_name = "DONKEY.HTML"
     sim._screen = "LOADED INVADERS.HTML (1038 LINES)\nREADY\n> "
-    calls = {"tickn": 0}
+    calls = {"tickn": 0, "srcload": 0}
 
     def rpc(cmd: str) -> str:
+        if str(cmd).startswith("SRCLOAD"):
+            calls["srcload"] += 1
+            sim._screen = "LOADED DONKEY.HTML (1121 LINES)\nREADY\n> "
+            return "OK bytes=1 lines=1121"
         if str(cmd).startswith("LINE"):
             return "OK"
         if str(cmd).startswith("TICKN"):
             calls["tickn"] += 1
-            if calls["tickn"] >= 2:
-                sim._screen = "LOADED DONKEY.HTML (1121 LINES)\nREADY\n> "
             return "OK"
         if cmd == "SCREEN?":
             return "SCREEN " + sim._screen.replace("\n", "\\n")
@@ -222,7 +269,8 @@ def test_load_wait_ignores_stale_loaded():
     sim._log.type_line = lambda t: None  # type: ignore[method-assign]
     sim._log.note = lambda t: None  # type: ignore[method-assign]
     sim.type_line('LOAD "DONKEY.HTML"')
-    assert calls["tickn"] >= 2, calls["tickn"]
+    assert calls["srcload"] == 1, calls
+    assert calls["tickn"] == 0, calls["tickn"]
     assert "DONKEY" in sim._screen
 
 

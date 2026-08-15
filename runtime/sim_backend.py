@@ -51,6 +51,9 @@ class SimBackend(RuntimeBackend):
         self._last_cmd: str = ""
         self._html_chunk = None
         self._html_lines: list = []
+        self._loaded_html_text: str = ""
+        self._program_image: bytes = b""
+        self._edit_waiting_line: Optional[int] = None
         self._break_run_wait: bool = False
         self._fb_logged: bool = False  # first game FB? only
         extra = ""
@@ -155,7 +158,9 @@ class SimBackend(RuntimeBackend):
         elif resp == "FB SAME":
             pass
         elif resp.startswith("ERR") or resp.startswith("FAULT"):
-            self._log.fault("RPC", f"cmd={cmd!r} resp={resp!r}")
+            shown = f"{cmd.split()[0]} bytes={max(0, (len(cmd) - 9) // 2)}" \
+                if cmd.startswith("PROGDATA ") else repr(cmd)
+            self._log.fault("RPC", f"cmd={shown} resp={resp!r}")
         if resp.startswith("VMSTAT"):
             self._vmstat_raw = resp
             self._vmstat_t = time.monotonic()
@@ -166,7 +171,7 @@ class SimBackend(RuntimeBackend):
         verb = cmd.split()[0] if cmd else ""
         quiet = verb in (
             "FB?", "TICK", "TICKN", "FRAME", "SCREEN?", "STATUS?", "PAL?",
-            "JOY", "KEYBITS", "VMSTAT?",
+            "JOY", "KEYBITS", "VMSTAT?", "PROGBEGIN", "PROGDATA", "PROGSTART",
         )
         if verb == "LINE":
             self._log.note(f"rpc LINE {dt_ms:.1f}ms {resp}")
@@ -373,20 +378,92 @@ class SimBackend(RuntimeBackend):
         self._abort_more()
         stripped = text.strip()
         upper = stripped.upper()
+        # Mirror the monitor editor in the backend so RUN compiles the actual
+        # loaded/editor source, including HTML larger than RTL SOURCE BRAM.
+        if self._edit_waiting_line is not None:
+            idx = self._editor_index(self._edit_waiting_line)
+            body = text
+            parts = text.split(None, 1)
+            if parts and parts[0].isdigit():
+                body = parts[1] if len(parts) > 1 else ""
+            if 0 <= idx < len(self._html_lines):
+                self._html_lines[idx] = body
+                self._loaded_html_text = "\n".join(self._html_lines)
+            self._edit_waiting_line = None
+        elif upper.startswith("EDIT "):
+            try:
+                self._edit_waiting_line = int(stripped[4:].strip().split()[0])
+            except (ValueError, IndexError):
+                self._edit_waiting_line = None
+        elif upper.startswith("INSERT "):
+            try:
+                n = int(stripped[6:].strip().split()[0])
+                idx = max(0, min(self._editor_index(n if n >= 10 else n * 10), len(self._html_lines)))
+                self._html_lines.insert(idx, "")
+                self._loaded_html_text = "\n".join(self._html_lines)
+            except (ValueError, IndexError):
+                pass
+        elif upper.startswith("DELETE "):
+            try:
+                n = int(stripped[6:].strip().split()[0])
+                idx = self._editor_index(n if n >= 10 else n * 10)
+                if 0 <= idx < len(self._html_lines):
+                    del self._html_lines[idx]
+                    self._loaded_html_text = "\n".join(self._html_lines)
+            except (ValueError, IndexError):
+                pass
         self._last_cmd = stripped
         if upper.startswith("LOAD"):
             self._loaded_name = stripped[4:].strip().strip('"').strip("'")
             self._arch_phase = "load"
             self._html_chunk = None
             self._html_lines = []
-        # Compile-on-RUN: fresh .JSH into the live card, then RTL FAT-loads it.
+            self._loaded_html_text = ""
+            self._program_image = b""
+        skip_line = False
+        ram_load = False  # NEW: SOURCE came from the host, no FAT wait needed
+        if upper.startswith("LOAD") and self._html_loaded_stem() and self._use_rtl:
+            # FPGA-SIM: fill source BRAM from the host file (no SPI of fat HTML).
+            stem = self._html_loaded_stem()
+            html_path = ROOT / "storage" / f"{stem}.HTML"
+            if not html_path.is_file():
+                html_path = ROOT / "storage" / f"{stem}.HTM"
+            if html_path.is_file():
+                resp = self._rpc(f"SRCLOAD {html_path}")
+                if resp.startswith("OK"):
+                    # NEW: SRCLOAD only fills SOURCE + arms the no-FAT LOAD.
+                    # The typed line still goes to the console so the glass
+                    # echoes it and prints LOADED at the cursor (no row jump).
+                    ram_load = True
+                    self._arch_phase = "loaded"
+                    try:
+                        self._loaded_html_text = html_path.read_text(encoding="utf-8")
+                        self._html_lines = self._loaded_html_text.splitlines()
+                    except Exception:
+                        self._loaded_html_text = ""
+                        self._html_lines = []
+                    self._rpc("SCREEN?")
+                else:
+                    self._log.fault("SRCLOAD", resp)
+        # Compile-on-RUN: ephemeral ProgramImage → RAM stream (no sidecar).
         if upper == "RUN" or upper.startswith("RUN "):
             self._arch_phase = "compile"
             if self._html_loaded_stem() and not self._compile_on_run_html():
                 self._arch_phase = "loaded"
                 self._sync_glass("> ")
                 return
-        self._rpc(f"LINE {text}")
+            if self._html_loaded_stem() and self._use_rtl:
+                resp = self._stream_program_image()
+                if not resp.startswith("OK"):
+                    self._log.fault("PROGRAM", resp)
+                    self._arch_phase = "loaded"
+                    self._sync_glass("> ")
+                    return
+                skip_line = True
+                self._arch_phase = "run"
+                self._sync_palette()
+        if not skip_line:
+            self._rpc(f"LINE {text}")
         # LIST/DIR may park on -- MORE --; LINE now waits, but keep pumping
         # until MORE or prompt so we never paint '>' over a mid-page.
         if upper == "LIST" or upper.startswith("LIST ") or upper == "DIR":
@@ -394,7 +471,13 @@ class SimBackend(RuntimeBackend):
             self._more_page = 0
             self._pump_until_more_or_ready()
         # HTML LOAD: wait for THIS stem+LINES, not a stale LOADED still on glass.
-        if upper.startswith("LOAD") and self._html_loaded_stem():
+        # SRCLOAD already set loaded — do not SPI-wait.
+        if (
+            upper.startswith("LOAD")
+            and self._html_loaded_stem()
+            and not skip_line
+            and not ram_load
+        ):
             self._break_run_wait = False
             stem = self._html_loaded_stem()
             for i in range(500):
@@ -412,19 +495,21 @@ class SimBackend(RuntimeBackend):
                         html_path = ROOT / "storage" / f"{stem}.HTM"
                     if html_path.is_file():
                         try:
-                            self._html_lines = html_path.read_text(
-                                encoding="utf-8"
-                            ).splitlines()
+                            self._loaded_html_text = html_path.read_text(encoding="utf-8")
+                            self._html_lines = self._loaded_html_text.splitlines()
                         except Exception:
+                            self._loaded_html_text = ""
                             self._html_lines = []
                     break
         if upper.startswith("SAVE"):
             self._persist_save(stripped)
-        # HTML RUN FAT-loads a large fresh .JSH (sprites); wait for VM start.
-        # Scale TICKN by compile size (any fat HTML, not one title). TICKN n =
-        # n×1000 clocks; ~100 clk/byte of FAT+SRAM stream plus headroom.
-        if (upper == "RUN" or upper.startswith("RUN ")) and self._html_loaded_stem():
-            nbytes = int(getattr(self, "_last_jsh_bytes", 0) or 0)
+        # HTML RUN: PROGSTART already started the VM. FAT wait is gone.
+        if (
+            (upper == "RUN" or upper.startswith("RUN "))
+            and self._html_loaded_stem()
+            and not skip_line
+        ):
+            nbytes = len(self._program_image)
             clocks = max(40_000_000, nbytes * 200)
             # NEW: TICKN 20000 = 20M clocks/RPC (cap 100000). Fat .JSH was
             # 236× TICKN 2000 RPCs after LINE's 100M cap — minutes of overhead.
@@ -471,6 +556,32 @@ class SimBackend(RuntimeBackend):
             return Path(name).stem[:8]
         return ""
 
+    def _editor_index(self, display_n: int) -> int:
+        """Map monitor display lines (10,20,...) or 1-based rows to an index."""
+        if display_n <= 0:
+            return -1
+        if display_n % 10 == 0:
+            return display_n // 10 - 1
+        if display_n < 10 or display_n <= len(self._html_lines):
+            return display_n - 1
+        return display_n // 10 - 1
+
+    def _stream_program_image(self) -> str:
+        """Stream the ephemeral ProgramImage into Verilator without a sidecar."""
+        blob = self._program_image
+        if not blob:
+            return "ERR no image"
+        resp = self._rpc(f"PROGBEGIN {len(blob)}")
+        if not resp.startswith("OK"):
+            return resp
+        # 32 KiB binary chunks keep each line bounded while avoiding hundreds
+        # of tiny process round trips for full-quality ASET payloads.
+        for off in range(0, len(blob), 32768):
+            resp = self._rpc(f"PROGDATA {blob[off : off + 32768].hex()}")
+            if not resp.startswith("OK"):
+                return resp
+        return self._rpc("PROGSTART")
+
     def _persist_save(self, text: str) -> None:
         """Host-copy full HTML onto card.img after RTL SAVE (SOURCE may truncate).
 
@@ -482,62 +593,49 @@ class SimBackend(RuntimeBackend):
         stem = self._html_loaded_stem() or Path(self._loaded_name or "").stem[:8]
         if not stem:
             return
-        src = None
-        for ext in (".HTML", ".HTM", ".JS"):
-            p = ROOT / "storage" / f"{stem}{ext}"
-            if p.is_file():
-                src = p
-                break
-        if src is None:
+        data = self._loaded_html_text.encode("utf-8")
+        if not data:
             return
         try:
             from tools.make_sd_image import patch_card_file
 
-            data = src.read_bytes()
             dest = ROOT / "storage" / rest
             dest.write_bytes(data)
             card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
             if card.is_file():
                 patch_card_file(card, rest, data)
                 self._rpc("SDRELOAD")
-            self._log.note(f"SAVE persist {src.name} → {rest} ({len(data)} bytes)")
+            self._log.note(f"SAVE loaded editor → {rest} ({len(data)} bytes)")
         except Exception as e:
             self._log.fault("SAVE", str(e))
 
     def _compile_on_run_html(self) -> bool:
-        """Compile current storage HTML → fresh .JSH on card.img → SDRELOAD.
-
-        RTL still FAT-loads NAME.JSH; that file is this compile, not a stale sidecar.
-        """
+        """Compile the loaded/editor HTML into one ephemeral ProgramImage."""
         stem = self._html_loaded_stem()
         html_path = ROOT / "storage" / f"{stem}.HTML"
-        if not html_path.is_file():
+        if not self._loaded_html_text and not html_path.is_file():
             self._log.fault("COMPILE", f"no {html_path.name} — refuse RUN (?NH)")
             return False
         try:
             from functional_model.compiler import CompileError
+            from functional_model.jsb_format import ProgramImage
             from tools.compile_js import compile_html_text, encode_html_chunk
-            from tools.make_sd_image import patch_card_file
 
-            html = html_path.read_text(encoding="utf-8")
+            html = self._loaded_html_text
+            if not html:
+                html = html_path.read_text(encoding="utf-8")
+                self._loaded_html_text = html
+                self._html_lines = html.splitlines()
             chunk = compile_html_text(html)
             blob = encode_html_chunk(chunk)
+            image = ProgramImage(blob)
             self._html_chunk = chunk
             self._html_lines = html.splitlines()
-            jsh_name = f"{stem}.JSH"
-            (ROOT / "storage" / jsh_name).write_bytes(blob)
-            card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
-            if card.is_file():
-                patch_card_file(card, jsh_name, blob)
-                resp = self._rpc("SDRELOAD")
-                if resp != "OK":
-                    self._log.fault(
-                        "SDRELOAD",
-                        f"{resp} — rebuild sim (SDRELOAD) so RUN cannot load a stale .JSH",
-                    )
-                    return False
-            self._last_jsh_bytes = len(blob)
-            self._log.note(f"compile-on-RUN {html_path.name} → {jsh_name} ({len(blob)} bytes)")
+            self._program_image = image.data
+            self._log.note(
+                f"compile-on-RUN loaded {html_path.name} → ProgramImage "
+                f"({len(blob)} bytes, RAM stream)"
+            )
             return True
         except CompileError as e:
             where = f" LINE {e.line}" if e.line else ""
@@ -697,6 +795,14 @@ class SimBackend(RuntimeBackend):
             pass
         self._proc = None
         self._started = False
+        # NEW: the RTL is gone — nothing of this session may survive onto the
+        # glass of the next runtime (F9 used to show the dead session's text).
+        self._running = False
+        self._more = False
+        self._listing = False
+        self._screen = ""
+        self._canvas.front[:] = bytes(len(self._canvas.front))
+        self._canvas.back[:] = bytes(len(self._canvas.back))
         self._flush_keyevts()
         self._log.note("shutdown")
 

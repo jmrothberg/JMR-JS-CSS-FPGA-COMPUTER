@@ -3,7 +3,9 @@
 // NEW: storage_engine + work/source BRAM for DIR/LOAD/SAVE/REMOVE.
 module jmr_js_core #(
     parameter int unsigned SD_INIT_DIV = 127,
-    parameter int unsigned SD_RUN_DIV  = 3
+    parameter int unsigned SD_RUN_DIV  = 3,
+    // NEW: FPGA-SIM FRAME_DIV=1 (one tick per ~2 clk when idle). Board keeps 65535.
+    parameter int unsigned FRAME_DIV   = 65535
 ) (
     input  logic        clk,
     input  logic        pixel_clk,   // mini-FB read domain (board HDMI)
@@ -37,7 +39,19 @@ module jmr_js_core #(
     output logic        sd_sck,
     output logic        sd_mosi,
     input  logic        sd_miso,
-    output logic        sd_cs_n
+    output logic        sd_cs_n,
+    // NEW: FPGA-SIM JSHLOAD pulse (tied 0 on the board)
+    input  logic        sim_vm_start = 1'b0,
+    // NEW: FPGA-SIM FRAME — pulse one frame_tick when already in S_WAIT_FRAME
+    input  logic        sim_frame_pulse = 1'b0,
+    // NEW: PROG FT245 .JSH stream (HTML RUN). Sim leaves these at default 0.
+    input  logic        jsb_tether_stb = 1'b0,
+    input  logic [7:0]  jsb_tether_data = 8'd0,
+    input  logic        jsb_tether_eof = 1'b0,
+    output logic        jsb_tether_rdy,
+    // NEW: FPGA-SIM RAM LOAD — SOURCE poked by the host, LOAD skips FAT open
+    input  logic        sim_src_bypass = 1'b0,
+    input  logic [15:0] sim_src_lines = 16'd0
 );
     logic kbd_empty, kbd_full, kbd_pop, kbd_clear;
     logic [7:0] kbd_q;
@@ -53,7 +67,7 @@ module jmr_js_core #(
     logic [18:0] fb_waddr, demo_fb_waddr, vm_fb_waddr;
     logic [7:0]  fb_wdata, demo_fb_wdata, vm_fb_wdata;
     logic frame_tick;
-    logic [15:0] frame_div;
+    logic [15:0] frame_div /*verilator public_flat_rw*/;
     // NEW: console loads .JSB into VM code BRAM
     logic        code_we;
     logic [14:0]  code_waddr;
@@ -212,7 +226,10 @@ module jmr_js_core #(
         .stor_busy(stor_busy), .stor_done(stor_done),
         .stor_err(stor_err), .stor_eof(stor_eof), .stor_line_len(stor_line_len),
         .mem_en(c_mem_en), .mem_we(c_mem_we), .mem_addr(c_mem_addr),
-        .mem_wdata(c_mem_wdata), .mem_rdata(c_mem_rdata), .mem_gnt(c_mem_gnt)
+        .mem_wdata(c_mem_wdata), .mem_rdata(c_mem_rdata), .mem_gnt(c_mem_gnt),
+        .jsb_tether_stb(jsb_tether_stb), .jsb_tether_data(jsb_tether_data),
+        .jsb_tether_eof(jsb_tether_eof), .jsb_tether_rdy(jsb_tether_rdy),
+        .sim_src_bypass(sim_src_bypass), .sim_src_lines(sim_src_lines)
     );
 
     storage_engine #(
@@ -260,7 +277,7 @@ module jmr_js_core #(
             frame_tick <= 1'b0;
         end else begin
             frame_tick <= 1'b0;
-            if (frame_div == 16'd65535) begin
+            if (frame_div == FRAME_DIV[15:0]) begin
                 frame_div <= '0;
                 frame_tick <= 1'b1;
             end else frame_div <= frame_div + 16'd1;
@@ -269,9 +286,9 @@ module jmr_js_core #(
 
     jmr_js_vm #(.CODE_HEX("invaders_jsb.hex")) u_vm (
         .clk(clk), .rst_n(rst_n),
-        .start(vm_start),
+        .start(vm_start | sim_vm_start),
         .stop((kbd_push && kbd_data == 8'h1B) || halt_pulse),
-        .frame_tick(frame_tick),
+        .frame_tick(frame_tick | sim_frame_pulse),
         .joy_in(joy_in),
         .key_evt_stb(key_evt_stb),
         .key_evt_code(key_evt_code),
@@ -318,7 +335,7 @@ module jmr_js_core #(
         else if ((kbd_push && kbd_data == 8'h1B) || halt_pulse) game_mode <= 1'b0;
         // Enter on RUN/vm_start only. demo_busy/vm_busy must not retrigger
         // after ESC — console enable is !game_mode, so LIST after RUN died.
-        else if (run_pulse || vm_start)
+        else if (run_pulse || vm_start || sim_vm_start)
             game_mode <= 1'b1;
     end
 endmodule

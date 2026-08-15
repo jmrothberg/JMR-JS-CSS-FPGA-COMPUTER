@@ -11,7 +11,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
-#include <vector>
+#include <fstream>
 
 static Vjmr_js_core* top = nullptr;
 
@@ -229,6 +229,7 @@ static const char* vm_sname(unsigned s) {
         "S_JSON","S_JSON_PARSE","S_REPL","S_IDXSTR","S_STRIDX","S_STRIDX_WR",
         "S_FONTPX","S_TXT_LD","S_TXT_DRAW","S_STR_WR","S_IMGD_GET","S_IMGD_PUT",
         "S_NAMCPY","S_ARR_DCOPY"
+        ,"S_GC_CLEAR","S_GC_ROOT","S_GC_POP","S_GC_OBJ","S_GC_ARR"
     };
     if (s < (unsigned)(sizeof(N) / sizeof(N[0]))) return N[s];
     return "?";
@@ -263,6 +264,95 @@ static void tick() {
 
 static void ticks(int n) {
     for (int i = 0; i < n; i++) tick();
+}
+
+static int read_whole_file(const std::string& path, std::vector<uint8_t>& out) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return -1;
+    f.seekg(0, std::ios::end);
+    std::streamoff n = f.tellg();
+    if (n < 0) return -1;
+    f.seekg(0, std::ios::beg);
+    out.resize((size_t)n);
+    if (n && !f.read(reinterpret_cast<char*>(out.data()), n)) return -1;
+    return 0;
+}
+
+static int hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static uint64_t fnv_byte(uint64_t hash, uint8_t value) {
+    return (hash ^ value) * UINT64_C(0x100000001B3);
+}
+
+static uint64_t fnv_u16(uint64_t hash, uint16_t value) {
+    hash = fnv_byte(hash, (uint8_t)value);
+    return fnv_byte(hash, (uint8_t)(value >> 8));
+}
+
+static uint64_t fnv_u32(uint64_t hash, uint32_t value) {
+    hash = fnv_u16(hash, (uint16_t)value);
+    return fnv_u16(hash, (uint16_t)(value >> 16));
+}
+
+// NEW: poke compiled .JSH into code BRAM + asset SRAM (no simulated SPI).
+static int jsh_load_mem(const std::vector<uint8_t>& b) {
+    if (b.size() < 12 || b[0] != 'J' || b[1] != 'S' || b[2] != 'B' || b[3] != '1')
+        return -1;
+    uint16_t flags = (uint16_t)b[10] | ((uint16_t)b[11] << 8);
+    uint32_t aset_off = 0;
+    bool has_aset = (flags & 2) != 0;
+    if (has_aset) {
+        if (b.size() < 16) return -1;
+        aset_off = (uint32_t)b[12] | ((uint32_t)b[13] << 8)
+                 | ((uint32_t)b[14] << 16) | ((uint32_t)b[15] << 24);
+    }
+    size_t code_len = has_aset && aset_off > 0 && aset_off <= b.size()
+                    ? (size_t)aset_off : b.size();
+    auto* rp = top->rootp;
+    const size_t CODE_WORDS = 32768;
+    for (size_t w = 0; w < CODE_WORDS; w++) {
+        size_t i = w * 4;
+        uint32_t word = 0;
+        if (i < code_len) {
+            word = b[i];
+            if (i + 1 < code_len) word |= (uint32_t)b[i + 1] << 8;
+            if (i + 2 < code_len) word |= (uint32_t)b[i + 2] << 16;
+            if (i + 3 < code_len) word |= (uint32_t)b[i + 3] << 24;
+        }
+        rp->jmr_js_core__DOT__u_vm__DOT__code_mem[w] = word;
+    }
+    if (has_aset && aset_off + 8 <= b.size()
+        && b[aset_off] == 'A' && b[aset_off + 1] == 'S'
+        && b[aset_off + 2] == 'E' && b[aset_off + 3] == 'T') {
+        uint32_t plen = (uint32_t)b[aset_off + 4]
+                      | ((uint32_t)b[aset_off + 5] << 8)
+                      | ((uint32_t)b[aset_off + 6] << 16)
+                      | ((uint32_t)b[aset_off + 7] << 24);
+        size_t poff = aset_off + 8;
+        if (plen > b.size() - poff) plen = (uint32_t)(b.size() - poff);
+        if (plen > 4u * 1024u * 1024u) plen = 4u * 1024u * 1024u;
+        for (uint32_t i = 0; i + 1 < plen; i += 2) {
+            uint16_t w = (uint16_t)b[poff + i]
+                       | ((uint16_t)b[poff + i + 1] << 8);
+            rp->jmr_js_core__DOT__u_sram__DOT__mem[i / 2] = w;
+        }
+        if (plen & 1u)
+            rp->jmr_js_core__DOT__u_sram__DOT__mem[plen / 2] =
+                (uint16_t)b[poff + plen - 1];
+        uint32_t pal_n = plen < 768u ? plen : 768u;
+        for (uint32_t pi = 0; pi + 2 < pal_n; pi += 3) {
+            uint32_t rgb = ((uint32_t)b[poff + pi] << 16)
+                         | ((uint32_t)b[poff + pi + 1] << 8)
+                         | (uint32_t)b[poff + pi + 2];
+            rp->jmr_js_core__DOT__u_palette__DOT__mem[pi / 3] = rgb;
+        }
+    }
+    return 0;
 }
 
 static void push_key(uint8_t b) {
@@ -324,12 +414,23 @@ int main(int argc, char** argv) {
     top->fb_raddr = 0;
     top->pal_raddr = 0;
     top->sd_miso = 1;
+    top->sim_vm_start = 0;
+    top->sim_frame_pulse = 0;
+    top->jsb_tether_stb = 0;
+    top->jsb_tether_data = 0;
+    top->jsb_tether_eof = 0;
+    top->sim_src_bypass = 0;
+    top->sim_src_lines = 0;
     ticks(8);
     top->rst_n = 1;
     ticks(200000);
     std::cout << "READY" << std::endl;
 
     std::string line;
+    // ProgramImage is streamed over the existing line RPC. It never becomes a
+    // host-side .JSB/.JSH file; RUN's source of truth remains the loaded HTML.
+    std::vector<uint8_t> program_image;
+    size_t program_expected = 0;
     while (std::getline(std::cin, line)) {
         if (line == "QUIT") {
             std::cout << "BYE" << std::endl;
@@ -343,6 +444,114 @@ int main(int argc, char** argv) {
             sd.dirty = false;
             sd_load_image();
             std::cout << "OK" << std::endl;
+            continue;
+        }
+        if (line.rfind("PROGBEGIN ", 0) == 0) {
+            program_expected = (size_t)std::strtoull(line.c_str() + 10, nullptr, 10);
+            if (program_expected < 12 || program_expected > (4u * 1024u * 1024u + 256u * 1024u)) {
+                program_expected = 0;
+                program_image.clear();
+                std::cout << "ERR size" << std::endl;
+                continue;
+            }
+            program_image.clear();
+            program_image.reserve(program_expected);
+            std::cout << "OK" << std::endl;
+            continue;
+        }
+        if (line.rfind("PROGDATA ", 0) == 0) {
+            const std::string hex = line.substr(9);
+            if (!program_expected || (hex.size() & 1u)
+                || program_image.size() + hex.size() / 2 > program_expected) {
+                std::cout << "ERR data" << std::endl;
+                continue;
+            }
+            bool good = true;
+            for (size_t i = 0; i < hex.size(); i += 2) {
+                int hi = hex_nibble(hex[i]);
+                int lo = hex_nibble(hex[i + 1]);
+                if (hi < 0 || lo < 0) {
+                    good = false;
+                    break;
+                }
+                program_image.push_back((uint8_t)((hi << 4) | lo));
+            }
+            if (!good) {
+                program_image.clear();
+                program_expected = 0;
+                std::cout << "ERR hex" << std::endl;
+                continue;
+            }
+            std::cout << "OK bytes=" << program_image.size() << std::endl;
+            continue;
+        }
+        if (line == "PROGSTART") {
+            if (!program_expected || program_image.size() != program_expected
+                || jsh_load_mem(program_image) != 0) {
+                std::cout << "ERR image" << std::endl;
+                continue;
+            }
+            push_key(0x1B);
+            ticks(8);
+            top->sim_vm_start = 1;
+            tick();
+            top->sim_vm_start = 0;
+            ticks(64);
+            std::cout << "OK bytes=" << program_image.size() << std::endl;
+            continue;
+        }
+        // NEW: RAM-load compiled .JSH (code BRAM + ASET SRAM). No FAT SPI.
+        if (line.rfind("JSHLOAD ", 0) == 0) {
+            std::vector<uint8_t> blob;
+            if (read_whole_file(line.substr(8), blob) != 0 || jsh_load_mem(blob) != 0) {
+                std::cout << "ERR" << std::endl;
+                continue;
+            }
+            push_key(0x1B);
+            ticks(8);
+            top->sim_vm_start = 1;
+            tick();
+            top->sim_vm_start = 0;
+            ticks(64);
+            std::cout << "OK bytes=" << blob.size() << std::endl;
+            continue;
+        }
+        // NEW: FPGA-SIM LOAD of host HTML → source BRAM (no SPI of fat files).
+        if (line.rfind("SRCLOAD ", 0) == 0) {
+            std::vector<uint8_t> html;
+            std::string path = line.substr(8);
+            if (read_whole_file(path, html) != 0) {
+                std::cout << "ERR" << std::endl;
+                continue;
+            }
+            auto* rp = top->rootp;
+            const size_t SRC_MAX = 131072;
+            size_t n = html.size() < SRC_MAX ? html.size() : SRC_MAX;
+            for (size_t i = 0; i < n; i++)
+                rp->jmr_js_core__DOT__u_cons__DOT__source_mem[i] = html[i];
+            rp->jmr_js_core__DOT__u_cons__DOT__src_len = (uint32_t)n;
+            std::string base = path;
+            auto slash = base.find_last_of("/\\");
+            if (slash != std::string::npos) base = base.substr(slash + 1);
+            for (char& c : base)
+                if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+            size_t nlen = base.size() < 16 ? base.size() : 16;
+            rp->jmr_js_core__DOT__u_cons__DOT__src_name_len = (uint8_t)nlen;
+            for (size_t i = 0; i < 16; i++)
+                rp->jmr_js_core__DOT__u_cons__DOT__src_name[i] =
+                    (i < nlen) ? (uint8_t)base[i] : (uint8_t)0;
+            unsigned nlines = 0;
+            for (uint8_t c : html)
+                if (c == '\n') nlines++;
+            if (html.empty() || html.back() != '\n') nlines++;
+            // NEW: do NOT paint the glass here. Arm the console bypass and let
+            // the host send the normal `LINE LOAD "NAME"` — the console echoes
+            // the typed line and prints LOADED at the cursor (no row hopping,
+            // no swallowed command line).
+            top->sim_src_lines = (uint16_t)nlines;
+            top->sim_src_bypass = 1;
+            ticks(2);
+            std::cout << "OK bytes=" << html.size() << " lines=" << nlines << std::endl;
             continue;
         }
         if (line.rfind("KEY ", 0) == 0) {
@@ -377,6 +586,8 @@ int main(int argc, char** argv) {
                 }
             }
             sd_save_image();
+            // NEW: SRCLOAD's LOAD-without-FAT arm is one command long.
+            top->sim_src_bypass = 0;
             std::cout << "OK clk=" << clk << " capped=" << capped << std::endl;
             continue;
         }
@@ -461,6 +672,10 @@ int main(int argc, char** argv) {
                       << " pathovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_path_ovf)
                       << " heapovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_heap_ovf)
                       << " toovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_to_ovf)
+                      << " spovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_stack_ovf)
+                      << " cspovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_call_ovf)
+                      << " fault=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__fault_code)
+                      << " gc=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_gc_n)
                       << " jsonovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_json_ovf)
                       << " swaps=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n)
                       // NEW: interned string bytes loaded from the trailer (str[i])
@@ -485,6 +700,104 @@ int main(int argc, char** argv) {
                       << "/" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__imgd_n)
                       << " imgwh=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__imgd_w)
                       << "x" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__imgd_h)
+                      << std::endl;
+            continue;
+        }
+        // Canonical safe-point checkpoint for Python/RTL differential tests.
+        // Keep this one compact: detailed OBJPEEK/VARPEEK remain opt-in.
+        if (line == "CHECKPOINT?") {
+            auto* r = top->rootp;
+            const uint64_t FNV0 = UINT64_C(0xCBF29CE484222325);
+            uint64_t vars_hash = FNV0;
+            for (unsigned i = 0; i < 512u; i++) {
+                vars_hash = fnv_u32(
+                    vars_hash,
+                    (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__vars[i]
+                );
+                vars_hash = fnv_byte(
+                    vars_hash,
+                    (uint8_t)r->jmr_js_core__DOT__u_vm__DOT__var_tag[i]
+                );
+            }
+            uint64_t heap_hash = FNV0;
+            unsigned nobj = unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_obj);
+            if (nobj > 8192u) nobj = 8192u;
+            for (unsigned oid = 0; oid < nobj; oid++) {
+                heap_hash = fnv_u16(
+                    heap_hash,
+                    (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__obj_cls[oid]
+                );
+                unsigned ns = unsigned(
+                    r->jmr_js_core__DOT__u_vm__DOT__obj_n[oid]
+                );
+                if (ns > 32u) ns = 32u;
+                heap_hash = fnv_byte(heap_hash, (uint8_t)ns);
+                for (unsigned slot = 0; slot < ns; slot++) {
+                    heap_hash = fnv_u16(
+                        heap_hash,
+                        (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__obj_key[oid][slot]
+                    );
+                    heap_hash = fnv_u32(
+                        heap_hash,
+                        (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__obj_val[oid][slot]
+                    );
+                    heap_hash = fnv_byte(
+                        heap_hash,
+                        (uint8_t)r->jmr_js_core__DOT__u_vm__DOT__obj_tag[oid][slot]
+                    );
+                }
+            }
+            unsigned narr = unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_arr);
+            if (narr > 4096u) narr = 4096u;
+            for (unsigned aid = 0; aid < narr; aid++) {
+                unsigned len = unsigned(
+                    r->jmr_js_core__DOT__u_vm__DOT__arr_len[aid]
+                );
+                if (len > 128u) len = 128u;
+                heap_hash = fnv_byte(heap_hash, (uint8_t)len);
+                for (unsigned elem = 0; elem < len; elem++) {
+                    heap_hash = fnv_u32(
+                        heap_hash,
+                        (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__arr_val[aid][elem]
+                    );
+                    heap_hash = fnv_byte(
+                        heap_hash,
+                        (uint8_t)r->jmr_js_core__DOT__u_vm__DOT__arr_tag[aid][elem]
+                    );
+                }
+            }
+            uint64_t canvas_hash = FNV0;
+            unsigned front = unsigned(r->jmr_js_core__DOT__u_fb__DOT__front);
+            for (unsigned i = 0; i < 307200u; i++) {
+                uint8_t px = front
+                    ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0[i]
+                    : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1[i];
+                canvas_hash = fnv_byte(canvas_hash, px);
+            }
+            unsigned ip = unsigned(r->jmr_js_core__DOT__u_vm__DOT__ip);
+            unsigned ops_base = unsigned(
+                r->jmr_js_core__DOT__u_vm__DOT__ops_base
+            );
+            unsigned op = (ops_base + ip < 32768u)
+                ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__code_mem[ops_base + ip] & 0xFFu)
+                : 0u;
+            unsigned error = unsigned(
+                r->jmr_js_core__DOT__u_vm__DOT__fault_code
+            );
+            std::cout << "CHECKPOINT"
+                      << " ip=" << ip
+                      << " op=" << op
+                      << " sp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__sp)
+                      << " csp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__csp)
+                      << " vars=" << std::hex << vars_hash
+                      << " heap=" << heap_hash
+                      << " canvas=" << canvas_hash << std::dec
+                      << " raf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__raf_n)
+                      << " timers=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__to_n)
+                      << " listeners="
+                      << unsigned(r->jmr_js_core__DOT__u_vm__DOT__kd_n
+                                  + r->jmr_js_core__DOT__u_vm__DOT__ku_n)
+                      << " error=" << error
                       << std::endl;
             continue;
         }
@@ -700,23 +1013,44 @@ int main(int argc, char** argv) {
         // drawBitmap is per-pixel str[i]+fillRect, so FRAME capped mid-rAF
         // (~1 swap per 5 GUI frames) and the wave crawled. Cap is not SPI.
         if (line == "FRAME") {
-            unsigned before = 0;
-            if (top->rootp)
-                before = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n);
             const int CAP = 16000000; // one full HTML frame of pixel work
             int used = 0;
             int got = 0;
+            int pulsed = 0;
+            int left_wait = 0;
+            int idle_run = 0;   // NEW: clocks parked in S_WAIT_FRAME after the pulse
             for (; used < CAP; used++) {
+                // FPGA-SIM: one frame_tick when already in S_WAIT_FRAME, then
+                // drop it so `else if (frame_fire)` can dispatch rAF. Do not
+                // treat the same-cycle present_pend swap as a finished frame
+                // (that starved the callback — KEEP.JS needed a second rAF).
+                unsigned st0 = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state);
+                if (st0 == 16u && !pulsed) {
+                    top->sim_frame_pulse = 1;
+                    pulsed = 1;
+                }
                 tick();
-                unsigned now = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n);
-                unsigned raf = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__raf_n);
+                top->sim_frame_pulse = 0;
                 unsigned cbip = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__dbg_cb_ip);
-                // Boot S_CLEAR and the first WAIT_FRAME (top-level script end)
-                // pulse fb_swap with raf already queued but before tick()
-                // paints. dbg_cb_ip is set when a rAF/timer callback returns.
-                if (now != before && raf != 0 && cbip != 0) {
+                unsigned st = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state);
+                // GC temporarily leaves S_WAIT_FRAME before the callback.
+                // Do not mistake collector completion for callback completion.
+                if (pulsed && st != 16u && !(st >= 54u && st <= 58u))
+                    left_wait = 1;
+                // Present after the rAF has run (back in S_WAIT_FRAME), not on
+                // the present_pend swap that shares the pulse cycle.
+                bool due_timer =
+                    unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__to_n) != 0
+                    && unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__to_delay[0]) == 0;
+                if (left_wait && st == 16u && cbip != 0 && !due_timer) {
                     got = 1; used++; break;
                 }
+                // NEW: one-shot screen (title with no rAF re-arm, or a frame
+                // whose only work was the present) never leaves S_WAIT_FRAME.
+                // Burning the 16M cap there froze the GUI for seconds per
+                // frame and delayed the next KEYEVT dispatch (DONKEY Enter).
+                idle_run = (pulsed && st == 16u) ? (idle_run + 1) : 0;
+                if (idle_run > 2000) { got = 1; used++; break; }
             }
             last_fclk = (unsigned)used;
             last_fcap = got ? 0u : 1u;

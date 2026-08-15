@@ -23,7 +23,7 @@ module jmr_video_vram (
     localparam int ROWS = 16;
     localparam int CELLS = 1024;
 
-    (* ram_style = "block" *) logic [7:0] mem [0:CELLS-1];
+    (* ram_style = "block" *) logic [7:0] mem [0:CELLS-1] /*verilator public_flat_rw*/;
 
     typedef enum logic [2:0] {
         // NEW: V_SCROLL_WR — scroll copy is now read-then-write (2 cycles).
