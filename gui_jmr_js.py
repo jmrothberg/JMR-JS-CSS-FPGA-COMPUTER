@@ -362,10 +362,11 @@ class App:
             pass
 
     def _is_running(self) -> bool:
-        """Game owns the glass — PYTHON loop / last frame or FPGA-SIM game_mode."""
+        """Game owns the glass — PYTHON loop / last frame or FPGA-SIM game_mode.
+
+        MORE paging is console, not a running game — Enter must type_line / page.
+        """
         if getattr(self.backend, "running", False):
-            return True
-        if getattr(self.backend, "more_waiting", False):
             return True
         m = getattr(self.backend, "machine", None)
         if m is None:
@@ -537,6 +538,9 @@ class App:
             return "break"
 
         if event.keysym in ("Return", "KP_Enter"):
+            if getattr(self.backend, "more_waiting", False):
+                self._feed_more("\r")
+                return "break"
             self._feed_more("\r")
             line = self.line_buf
             up = line.strip().upper()

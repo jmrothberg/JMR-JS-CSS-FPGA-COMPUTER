@@ -1,6 +1,8 @@
 // Char VRAM 64×16 + put/CLS/NL/scroll — BASIC video_engine method, dual-clock BRAM.
 // LLM NOTE: Port A @ clk (CPU put/scroll/dump). Port B @ scan_clk=pixel_clk (HDMI).
 // Async assign scan_data=mem[scan_addr] across clocks tore glyphs on the monitor.
+// SRAM/ASIC: no reset-for over mem (cannot infer BRAM; SRAM has no parallel clear).
+// Dump shares Port A read with scroll — a third concurrent port forced LUTRAM.
 module jmr_video_vram (
     input  logic        clk,
     input  logic        scan_clk,  // NEW: pixel_clk — true dual-port like BASIC VRAM
@@ -33,28 +35,70 @@ module jmr_video_vram (
     } vstate_t;
     vstate_t state;
     logic [9:0] cur, idx;
-    logic [7:0] scroll_byte; // NEW: registered read for the 2-cycle scroll copy
+    // Port A: one write + one registered read (dump, or scroll source).
+    logic       porta_we;
+    logic [9:0] porta_waddr;
+    logic [7:0] porta_wdata;
+    logic [9:0] porta_raddr;
+    logic [7:0] porta_rdata;
 
     assign cursor = cur;
     assign busy = (state != V_IDLE);
+    assign dump_data = porta_rdata;
 
     // Port B @ pixel_clk — HDMI scan (BASIC memory_arbiter method)
     always_ff @(posedge scan_clk) begin
         scan_data <= mem[scan_addr];
     end
 
-    // Dump @ core clk (tether S-rows)
-    always_ff @(posedge clk) begin
-        dump_data <= mem[dump_addr];
+    // Port A @ core clk — 1W1R; dump_addr unless V_SCROLL is fetching the next row.
+    always_comb begin
+        porta_we    = 1'b0;
+        porta_waddr = cur;
+        porta_wdata = 8'h20;
+        porta_raddr = (state == V_SCROLL) ? (idx + 10'(COLS)) : dump_addr;
+        if (rst_n) begin
+            unique case (state)
+                V_CLS, V_SCROLL_CLR: begin
+                    porta_we    = 1'b1;
+                    porta_waddr = idx;
+                    porta_wdata = 8'h20;
+                end
+                V_PUT: begin
+                    if (put_char == 8'h08 || put_char == 8'h7F) begin
+                        if (cur != 10'd0) begin
+                            porta_we    = 1'b1;
+                            porta_waddr = cur - 10'd1;
+                            porta_wdata = 8'h20;
+                        end
+                    end else begin
+                        porta_we    = 1'b1;
+                        porta_waddr = cur;
+                        porta_wdata = put_char;
+                    end
+                end
+                V_SCROLL_WR: begin
+                    porta_we    = 1'b1;
+                    porta_waddr = idx;
+                    porta_wdata = porta_rdata;
+                end
+                default: ;
+            endcase
+        end
     end
 
-    integer i;
+    always_ff @(posedge clk) begin
+        if (porta_we)
+            mem[porta_waddr] <= porta_wdata;
+        porta_rdata <= mem[porta_raddr];
+    end
+
     always_ff @(posedge clk) begin
         if (!rst_n) begin
-            state <= V_IDLE;
+            // Walk-clear on release (V_CLS); SRAM cannot fill in the reset branch.
+            state <= V_CLS;
             cur <= 10'd0;
             idx <= 10'd0;
-            for (i = 0; i < CELLS; i = i + 1) mem[i] <= 8'h20;
         end else begin
             unique case (state)
                 V_IDLE: begin
@@ -68,7 +112,6 @@ module jmr_video_vram (
                     end
                 end
                 V_CLS: begin
-                    mem[idx] <= 8'h20;
                     if (idx == CELLS[9:0] - 1'b1) begin
                         cur <= 10'd0;
                         state <= V_IDLE;
@@ -77,13 +120,10 @@ module jmr_video_vram (
                 V_PUT: begin
                     // NEW: BS/DEL — match BASIC video_engine (cursor back + erase)
                     if (put_char == 8'h08 || put_char == 8'h7F) begin
-                        if (cur != 10'd0) begin
-                            mem[cur - 10'd1] <= 8'h20;
+                        if (cur != 10'd0)
                             cur <= cur - 10'd1;
-                        end
                         state <= V_IDLE;
                     end else begin
-                        mem[cur] <= put_char;
                         if (cur[5:0] == 6'd63) begin
                             // end of row → NL behavior
                             if (cur[9:6] == 4'd15) begin
@@ -110,8 +150,8 @@ module jmr_video_vram (
                 end
                 V_SCROLL: begin
                     // copy row (idx/64)+1 → idx/64, read phase (see V_SCROLL_WR)
+                    // Address is porta_raddr this cycle; porta_rdata valid next.
                     if (idx < 10'(CELLS - COLS)) begin
-                        scroll_byte <= mem[idx + 10'(COLS)];
                         state <= V_SCROLL_WR;
                     end else begin
                         idx <= 10'(CELLS - COLS);
@@ -120,12 +160,10 @@ module jmr_video_vram (
                 end
                 V_SCROLL_WR: begin
                     // NEW: write phase — breaks the read-mux→write timing path
-                    mem[idx] <= scroll_byte;
                     idx <= idx + 1'b1;
                     state <= V_SCROLL;
                 end
                 V_SCROLL_CLR: begin
-                    mem[idx] <= 8'h20;
                     if (idx == CELLS[9:0] - 1'b1) begin
                         cur <= 10'(CELLS - COLS);
                         state <= V_IDLE;

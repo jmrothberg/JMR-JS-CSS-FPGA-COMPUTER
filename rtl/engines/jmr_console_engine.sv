@@ -190,6 +190,7 @@ module jmr_console_engine (
     logic [3:0]  list_on_page;
     logic [5:0]  list_col;        // 0..63 glass wrap (FM _list_paged twin)
     logic        list_wrap_more;  // MORE after a wrap, resume same source line
+    logic        list_eat_nl;     // drop leftover CR from LINE so first MORE waits
     logic        list_skip;       // line outside range — consume without print
     logic        list_from_card;  // HTML LIST: get_byte from FAT, not SOURCE
     logic        list_bol;        // beginning of line — emit number first
@@ -369,7 +370,7 @@ module jmr_console_engine (
             pal_r <= 0; pal_g <= 0; pal_idx <= 0; pal_ph <= 0;
             list_page <= 0; list_lo <= 16'd10; list_hi <= 16'hFFFF;
             list_disp <= 16'd10; list_on_page <= 0; list_skip <= 0;
-            list_col <= 0; list_wrap_more <= 0;
+            list_col <= 0; list_wrap_more <= 0; list_eat_nl <= 0;
             list_from_card <= 0; list_bol <= 0;
             edit_pending <= 0; edit_disp <= 0;
             edit_start <= 0; edit_end <= 0;
@@ -1224,6 +1225,7 @@ module jmr_console_engine (
                         if (list_on_page >= 4'd13) begin
                             list_on_page <= 0;
                             reply_sel <= 4'd8; reply_idx <= 0;
+                            list_eat_nl <= 1'b1;
                             state <= C_LIST_MORE;
                         end else begin
                             list_on_page <= list_on_page + 4'd1;
@@ -1241,6 +1243,7 @@ module jmr_console_engine (
                         if (list_on_page >= 4'd13) begin
                             list_on_page <= 0;
                             list_wrap_more <= 1'b1;
+                            list_eat_nl <= 1'b1;
                             reply_sel <= 4'd8; reply_idx <= 0;
                             state <= C_LIST_MORE;
                         end else begin
@@ -1265,10 +1268,15 @@ module jmr_console_engine (
                 C_LIST_WAIT: if (enable && !kbd_empty) begin
                     ch <= kbd_data;
                     kbd_pop <= 1'b1;
-                    if (kbd_data == 8'h1B || kbd_data == 8'h03) begin
+                    if (list_eat_nl && (kbd_data == 8'h0D || kbd_data == 8'h0A)) begin
+                        // LINE's terminating CR must not page the first MORE.
+                        list_eat_nl <= 1'b0;
+                    end else if (kbd_data == 8'h1B || kbd_data == 8'h03) begin
+                        list_eat_nl <= 1'b0;
                         state <= list_from_card ? C_LIST_CCLOSE : C_PROMPT;
                         msg_idx <= 0;
                     end else begin
+                        list_eat_nl <= 1'b0;
                         // Space/Enter/any key → next page
                         if (list_wrap_more) begin
                             list_wrap_more <= 1'b0;

@@ -24,8 +24,8 @@ User F9 PYTHON: all three `LOAD "NAME.HTML"` / `RUN` play. Do not mark BOARD/ASI
 | PACMAN | Enter leaves splash, maze `nz` ≥ 1000, next FRAME differs | passed |
 | DONKEY | title `nz` ≥ 50, Enter keeps rAF, FB keeps changing | passed |
 
-Last RTL lockstep: LT/GT ToNumber (non-Number → `+0`, same as PYTHON) so DONKEY `jumpHeight >= 750` before the first jump no longer `fault=5`.
+Last RTL lockstep: class `get name()` on GET_PROP now invokes (same stack as CALL_METHOD argc 0). DONKEY floor collision uses `this.marioBottom`; without the getter the overlap test saw `+0` and the player fell through. Same class of miss as a projectile AABB that never sees real edges.
 
-User has **not** F9-approved FPGA-SIM `(RTL)` yet.
+User has **not** F9-approved FPGA-SIM `(RTL)` yet. Please F9 FPGA-SIM `(RTL)` and check DONKEY standing on girders.
 
-No `.bit`/`.bin` until that F9.
+FPGA-SIM agent owns `rtl/engines/jmr_js_vm.sv` (do not rewrite heaps in parallel). Fit: same RTL as FPGA-SIM; 2026-08-16 Vivado synth died on `vobj_key` (4.2 Mbit). Char VRAM ports are BRAM-legal. No `.bin` until heap is 1-D 1W1R SRAM **and** that F9.

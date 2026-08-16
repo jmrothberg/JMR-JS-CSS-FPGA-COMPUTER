@@ -495,12 +495,12 @@ class Machine:
         return [f"{display} {body}"]
 
     def edit_prefill(self) -> Optional[str]:
-        """Source line text for GUI line_buf when EDIT is waiting."""
+        """`N body` in the prompt — same as BASIC EDIT (Enter strips N)."""
         if self._edit_waiting is None:
             return None
         idx = self._editor_index(self._edit_waiting)
         if 0 <= idx < len(self.source_lines):
-            return self.source_lines[idx]
+            return f"{self._edit_waiting} {self.source_lines[idx]}"
         return ""
 
     def _finish_edit(self, text: str) -> List[str]:

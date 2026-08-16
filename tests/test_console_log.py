@@ -84,7 +84,7 @@ def test_edit_roundtrip():
     assert out[0].startswith("20 ")
     assert "bbb" in out[0]
     assert m._edit_waiting == 20
-    assert m.edit_prefill() == "bbb"
+    assert m.edit_prefill() == "20 bbb"
     out = m.execute_line("bbb * 2")
     assert out == ["OK"]
     assert m.source_lines[1] == "bbb * 2"

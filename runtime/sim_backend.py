@@ -271,13 +271,9 @@ class SimBackend(RuntimeBackend):
         return self._edit_prefill
 
     def _screen_has_more(self) -> bool:
-        # NEW: skip trailing blank VRAM rows — MORE is last non-empty line
-        for ln in reversed(self._screen.splitlines()):
-            t = ln.strip()
-            if not t:
-                continue
-            return t.startswith("-- MORE")
-        return False
+        # MORE may sit above later rows if a leftover CR paged once.
+        nonempty = [ln.strip() for ln in self._screen.splitlines() if ln.strip()]
+        return any(t.startswith("-- MORE") for t in nonempty[-16:])
 
     def _abort_more(self) -> None:
         """Esc out of -- MORE -- so the next LINE is not eaten as a page key."""
@@ -304,7 +300,7 @@ class SimBackend(RuntimeBackend):
                 continue
             parts = t.split(None, 1)
             if parts and parts[0].isdigit():
-                self._edit_prefill = parts[1] if len(parts) > 1 else ""
+                self._edit_prefill = t
                 return
             # wrapped continuation of EDIT body — keep scanning for 'N body'
 

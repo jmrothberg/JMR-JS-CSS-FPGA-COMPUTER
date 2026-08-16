@@ -14,6 +14,34 @@ it fit,” not a T100 `.bin` from this repo.
 The `.bin` file is ~9.3 MB because that is the **200T configuration image size**,
 not how full the chip is.
 
+## Same RTL for FPGA-SIM, `.bin`, and ASIC
+
+FPGA-SIM (Verilator) and `make -C tools/board_flow bit` compile the **same**
+`rtl/*.sv`. There is no synth-only VM. `SYNTHESIS` in the board top is I/O
+(clocks, HDMI), not a second heap. ASIC later uses the same **SRAM ports**
+(address, we, wdata, registered rdata, 1–2 ports); `ram_style = "block"` is a
+Vivado hint, not a Xilinx primitive inside the VM.
+
+**How memories must be coded** (FPGA BRAM and ASIC SRAM macros):
+
+- 1-D arrays, one write + one registered read (true dual-port only for
+  CPU+scanout, e.g. char VRAM / mini-FB). Dump shares the CPU read port.
+- No reset `for` that writes every cell in one cycle — walk CLS instead.
+- Object/array slot scans over clocks; not a combinational compare of all slots.
+- Forbidden: `` `ifdef SYNTHESIS `` smaller heaps, combo sim vs BRAM board,
+  LUTRAM for megabit arrays, shrinking HTML to fit.
+
+**Heap flatten** (`vobj_key` / `vobj_val` / `varr_val` in `jmr_js_vm.sv`) waits
+until the FPGA-SIM agent is not editing that file. Until then Vivado cannot
+finish synth — that is a measurement, not a missing board script.
+
+**Last synth probe (2026-08-16, current RTL, no `.bin`):**
+`ERROR: [Synth 8-4556]` `vobj_key` size **4,194,304** bits (limit 1,000,000)
+in `rtl/engines/jmr_js_vm.sv`. Same class: `vobj_val` ≈ 16.8 Mbit,
+`varr_val` ≈ 32 Mbit, still 2-D combo heaps. Char VRAM (`jmr_video_vram.sv`)
+is 1W1R Port A + HDMI Port B (no mem reset-for). Re-run `make -C tools/board_flow bit`
+after heap flatten; quote `utilization_impl.rpt`, not this probe.
+
 ---
 
 ## Headline (impl, 2026-08-13 03:36, routed)
@@ -59,3 +87,5 @@ LUTRAM can only sit in **SLICEM** boxes (a subset of slices).
 - **Synth ≠ fit.** Use `utilization_impl.rpt` (routed), not the synth report.
 - **`.bin` megabytes ≠ utilization.** The file is the whole 200T config image.
 - **Do not copy BASIC LUT history** into this product. Method only.
+- **FPGA-SIM green ≠ synthesizable.** Verilator will simulate 2-D combo heaps that
+  Vivado rejects (`Synth 8-4556`) and that ASIC SRAM cannot implement.

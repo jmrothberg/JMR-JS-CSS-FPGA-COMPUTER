@@ -33,6 +33,18 @@ def _patch_js(name: str, src: str) -> None:
     patch_card_file(card, Path(name).stem[:8] + ".JSB", blob)
 
 
+def _patch_js_v64(name: str, src: str) -> None:
+    """Tiny .JS + Value64 .JSB (HTML FLAG_VALUE64 path, not tagged)."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import encode_chunk
+    from tools.make_sd_image import patch_card_file
+
+    card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
+    blob = encode_chunk(compile_source(src), v2=True, value64=True)
+    patch_card_file(card, name, src.encode("utf-8"))
+    patch_card_file(card, Path(name).stem[:8] + ".JSB", blob)
+
+
 def _patch_html(name: str, src: str) -> None:
     """Tiny HTML on the card (LIST-from-FAT path). Not a title rewrite."""
     from tools.make_sd_image import patch_card_file
@@ -1196,6 +1208,93 @@ requestAnimationFrame(tick);
         sim.shutdown()
 
 
+def test_rtl_value64_array_find_identity_splice():
+    """Value64 arr.find(el => el === obj) then splice (HTML titles)."""
+    src = """
+var grid = [{n:1}, {n:2}, {n:3}];
+var a = grid[1];
+var hit = grid.find(function(el) { return el === a; });
+if (hit === a) grid.splice(1, 1);
+function tick() {
+  if (grid.length === 2) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("VFIND.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "VFIND.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "vdraw=10,10,30,30,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_value64_array_fill_map_nested():
+    """Value64 Array(n).fill(0).map(() => Array(m).fill(0)) writable rows."""
+    src = """
+var steps = Array(2).fill(0).map(function() {
+  return Array(2).fill(0);
+});
+steps[0][1] = 7;
+function tick() {
+  if (steps[0] && steps[0][1] == 7) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("VARMAP.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "VARMAP.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "vdraw=10,10,30,30,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_value64_array_filter_unshift():
+    """Value64 Array.filter + unshift (getItemsByType / path rebuild)."""
+    src = """
+var items = [{t:1}, {t:2}, {t:1}];
+var a = items.filter(function(e) { return e.t == 1; });
+var p = [9];
+p.unshift(3);
+function tick() {
+  if (a.length === 2 && p[0] === 3 && p.length === 2) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("VFILT.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "VFILT.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "vdraw=10,10,30,30,2" in st, st
+    finally:
+        sim.shutdown()
+
+
 def test_rtl_present_once_per_frame():
     """rAF + setTimeout(0) in the same frame must present once (write_repeat).
 
@@ -1919,6 +2018,62 @@ requestAnimationFrame(tick);
         for _ in range(20):
             sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "KEYEVT reverse did not apply at cell center"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_class_getter_aabb_lands():
+    """GET_PROP of `get bottom()` must be y+height so the overlap window hits.
+
+    Same class of miss as a projectile skipping an AABB: the HTML compares
+    numbers, but an uninvoked getter leaves undefined/+0 and the body falls
+    through the floor.
+    """
+    src = """
+class Body {
+  constructor(x, y, w, h) {
+    this.x = x;
+    this.y = y;
+    this.width = w;
+    this.height = h;
+    this.speed = 2;
+  }
+  get bottom() { return this.y + this.height; }
+  land(platY) {
+    if (this.bottom > platY && this.bottom - this.speed < platY + 24) {
+      this.y = platY - this.height;
+    }
+  }
+}
+var p = new Body(200, 608, 35, 52);
+p.land(648);
+function tick() {
+  if (p.y == 596) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        from functional_model.compiler import compile_source
+        from functional_model.jsb_format import encode_chunk
+        from tools.make_sd_image import patch_card_file
+
+        card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
+        blob = encode_chunk(compile_source(src), v2=True, value64=True)
+        patch_card_file(card, "AABB.JS", src.encode("utf-8"))
+        patch_card_file(card, "AABB.JSB", blob)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "AABB.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        # Value64 native fillRect updates vdraw even when FB? is still the
+        # READY glass. Land only paints this rect if get bottom() was y+h.
+        st = sim._rpc("VMSTAT?")
+        assert "vdraw=10,10,30,30,2" in st, st
     finally:
         sim.shutdown()
 
@@ -3031,6 +3186,33 @@ requestAnimationFrame(tick);
         for _ in range(8):
             sim._rpc("FRAME")
         assert _fb_pix(_fb_raw(sim), 15, 15) == 2, "stringify+replace+parse miss"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_value64_stringify_replace_parse_opens_digit():
+    """Value64 JSON.stringify + replace(/2/g,0) + parse (HTML titles)."""
+    src = r"""
+var data = [[1,2],[0,1]];
+var o = JSON.parse(JSON.stringify(data).replace(/2/g, 0));
+function tick() {
+  if (o && o[0] && o[0][1] == 0 && o[1] && o[1][0] == 0) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("VJREP.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "VJREP.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "vdraw=10,10,30,30,2" in st, st
     finally:
         sim.shutdown()
 
