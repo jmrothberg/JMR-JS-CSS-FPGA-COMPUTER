@@ -25,7 +25,7 @@ module jmr_js_top (
         .wdata(fb_wdata), .rdata(fb_rdata)
     );
     jmr_palette_bram u_pal (
-        .clk(clk), .we(1'b0), .waddr(8'h00), .wdata(24'h0),
+        .wr_clk(clk), .rd_clk(clk), .we(1'b0), .waddr(8'h00), .wdata(24'h0),
         .raddr(pal_raddr), .rdata(pal_rdata)
     );
 endmodule

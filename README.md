@@ -68,6 +68,8 @@ sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
 
 # 7. ONLY after BATTERY PASS + timing WNS ≥ 0:
 # source scripts/vivado_env.sh && make -C tools/board_flow bit && make -C tools/board_flow flash
+# First T200 bit: 1–3 h (MIG + full VM synth). Later `bit` reuses the project.
+# `make -C tools/board_flow bit-fresh` only if MIG/XDC/file list changed.
 # JP4=boot source only. J15 USB Host is dead on this board — play via GUI tether.
 # Last flashed bit 2026-08-13 03:36 (WNS +0.139); tree has newer JSB/640 FB RTL.
 ```
@@ -78,7 +80,8 @@ Do not jump to Vivado before PYTHON + FPGA-SIM agree on user-visible behaviour.
 Gate: `python3 tools/check_runtime_parity.py` must print **BATTERY PASS**.
 Board flash is step 7, last — never a substitute for fixing FPGA-SIM.
 
-**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY) then `RUN`.
+**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID) then `RUN`.
+New HTML titles: [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md).
 Only HTML titles. **`RUN` = compile-on-RUN** (fresh internal `.JSH`; line
 numbers from the HTML). Fat graphics ride the `.JSH` ASET section into the
 external SRAM asset bank (invisible plumbing; no `.DAT` file). Never type
@@ -121,6 +124,7 @@ source; user F9 before `.bit`. Full write-up:
 
 - Constitution first.
 - PYTHON functional model → hardware model on **the bytes RTL gets** → FPGA-SIM → board `.bit`.
+- FPGA-SIM RTL **is** the chip: 1-D SRAM ports (not Verilator-only 2-D combo heaps). [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
 - Uniform glass across F9 runtimes.
 - Read `traces/` before repro spam.
 - Surgical edits; do not delete files; one README.

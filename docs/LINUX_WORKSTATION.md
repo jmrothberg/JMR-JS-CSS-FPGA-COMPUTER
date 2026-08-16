@@ -89,7 +89,8 @@ PYTHON and call it FPGA-SIM. Never use dukpy as “FPGA-SIM.”
 
 ```bash
 source scripts/vivado_env.sh
-make -C tools/board_flow bit
+make -C tools/board_flow bit            # first T200: 1–3 h; later: reuse project
+# make -C tools/board_flow bit-fresh    # only if MIG/XDC/file list changed
 # Confirm timing summary WNS ≥ 0 before flash
 make -C tools/board_flow flash          # SRAM smoke first
 # make -C tools/board_flow flash-qspi   # only after SRAM smoke

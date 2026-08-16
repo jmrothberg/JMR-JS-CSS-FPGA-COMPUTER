@@ -52,6 +52,14 @@ Open-source HDL simulator/compiler: SystemVerilog → C++ model → host
 executable. It is **not** an FPGA and **not** Vivado. It does **not** emit
 `.bit` / `.bin`.
 
+**Trap:** Verilator will happily simulate a 2-D `logic` heap you compare
+with `for (k)` inside `always_ff`. That loop **unrolls** into a combinational
+mux. Real FPGA block RAM and ASIC SRAM are: address in, write enable, **data
+out next clock**, 1–2 ports. FPGA-SIM that only works because of combo
+arrays is **not** board-ready (Vivado `Synth 8-4556` / LUT explosion). Write
+memories as SRAM from the first RTL line — same files as the `.bin`. Rule:
+[FPGA_FIT.md](FPGA_FIT.md), Constitution § language-native method step 7.
+
 ### What is AMD Vivado?
 
 Vendor tool that turns FPGA RTL into a bitstream. **Linux-only** in this
@@ -139,11 +147,20 @@ Do **not** raise HDMI resolution or switch this T200 to VGA for torn glyphs
 
 ```bash
 source scripts/vivado_env.sh
-make -C sim sim_server_synth          # FPGA-SIM RTL binary
+make -C sim sim_server_synth          # FPGA-SIM RTL binary (obj_dir incremental)
 make -C tools/board_flow bit          # publish only if WNS ≥ 0
 make -C tools/board_flow flash        # SRAM first
 # HDMI: READY letterbox; play via GUI arrows+Space
 ```
+
+**First T200 `.bin` vs later:** the first `make -C tools/board_flow bit` creates
+the Vivado project, generates DDR3 MIG, and fully synthesizes `jmr_js_vm`
+(often **1–3 hours**; log may go quiet while CPU stays busy). Later `bit`
+**reuses** `build/nexys_video/vivado` (skip MIG generate, incremental DCP).
+Use `make -C tools/board_flow bit-fresh` only if MIG / XDC / source *list*
+changed. Do not `make -C tools/board_flow clean` between RTL tweaks — that
+forces another first-build. `JMR_VIVADO_JOBS` (default 2) — this design is
+RAM-heavy.
 
 Volatile SRAM-only load (lost on unplug): `make -C tools/board_flow flash`.
 

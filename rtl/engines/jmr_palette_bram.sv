@@ -1,7 +1,8 @@
 // BRAM-style palette: 256 × 24-bit RGB (inferred BRAM on FPGA).
 // LLM NOTE: Keep palette in BRAM — do not unpack into LUT flops.
 module jmr_palette_bram (
-    input  wire        clk,
+    input  wire        wr_clk,   // console ASET load (core clk)
+    input  wire        rd_clk,   // HDMI scanout (pixel clk); sim ties = wr_clk
     input  wire        we,
     input  wire [7:0]  waddr,
     input  wire [23:0] wdata,
@@ -18,8 +19,10 @@ module jmr_palette_bram (
         mem[3] = 24'h00ff00;
         mem[4] = 24'h0000ff;
     end
-    always @(posedge clk) begin
+    always @(posedge wr_clk) begin
         if (we) mem[waddr] <= wdata;
+    end
+    always @(posedge rd_clk) begin
         rdata <= mem[raddr];
     end
 endmodule

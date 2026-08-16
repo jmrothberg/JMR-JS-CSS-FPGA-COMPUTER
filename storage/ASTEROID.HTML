@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Asteroids — JMR</title></head>
+<body style="margin:0;background:#000">
+<!-- Self-contained vector Asteroids: Chrome authoring or LOAD "ASTEROID.HTML" then RUN. -->
+<!-- Native 640x480 glass. Stroke polylines only — no bitmaps, no Audio. -->
+<canvas id="gameCanvas" width="640" height="480"></canvas>
+<script>
+var canvas = document.querySelector("canvas");
+var c = canvas.getContext("2d");
+var W = 640;
+var H = 480;
+
+// Heading 0 = up. 64-entry unit vectors (Math.sin/cos are not V1 natives).
+var UX = [0,0.098,0.1951,0.2903,0.3827,0.4714,0.5556,0.6344,0.7071,0.773,0.8315,0.8819,0.9239,0.9569,0.9808,0.9952,1,0.9952,0.9808,0.9569,0.9239,0.8819,0.8315,0.773,0.7071,0.6344,0.5556,0.4714,0.3827,0.2903,0.1951,0.098,0,-0.098,-0.1951,-0.2903,-0.3827,-0.4714,-0.5556,-0.6344,-0.7071,-0.773,-0.8315,-0.8819,-0.9239,-0.9569,-0.9808,-0.9952,-1,-0.9952,-0.9808,-0.9569,-0.9239,-0.8819,-0.8315,-0.773,-0.7071,-0.6344,-0.5556,-0.4714,-0.3827,-0.2903,-0.1951,-0.098];
+var UY = [-1,-0.9952,-0.9808,-0.9569,-0.9239,-0.8819,-0.8315,-0.773,-0.7071,-0.6344,-0.5556,-0.4714,-0.3827,-0.2903,-0.1951,-0.098,0,0.098,0.1951,0.2903,0.3827,0.4714,0.5556,0.6344,0.7071,0.773,0.8315,0.8819,0.9239,0.9569,0.9808,0.9952,1,0.9952,0.9808,0.9569,0.9239,0.8819,0.8315,0.773,0.7071,0.6344,0.5556,0.4714,0.3827,0.2903,0.1951,0.098,0,-0.098,-0.1951,-0.2903,-0.3827,-0.4714,-0.5556,-0.6344,-0.7071,-0.773,-0.8315,-0.8819,-0.9239,-0.9569,-0.9808,-0.9952];
+
+// Jagged rocks in (right, forward) unit space — four arcade-style outlines.
+var ROCK0 = [0,1,0.45,0.9,0.95,0.35,0.7,-0.15,1,-0.55,0.35,-1,-0.25,-0.95,-0.75,-0.55,-1,0.05,-0.55,0.75,-0.15,1];
+var ROCK1 = [0.15,1,0.85,0.55,0.65,-0.1,1,-0.45,0.35,-1,-0.4,-0.9,-1,-0.3,-0.7,0.2,-0.95,0.7,-0.25,0.9];
+var ROCK2 = [0,0.95,0.55,1,1,0.25,0.7,-0.5,0.15,-1,-0.5,-0.85,-1,-0.35,-0.85,0.4,-0.4,0.95];
+var ROCK3 = [-0.1,1,0.5,0.85,0.95,0.45,0.75,-0.2,1,-0.7,0.1,-0.95,-0.55,-1,-1,-0.2,-0.55,0.55,-0.75,0.85];
+
+var ATTRACT = 0;
+var PLAY = 1;
+var DEAD = 2;
+var OVER = 3;
+var WAVEWAIT = 4;
+
+var mode = ATTRACT;
+var score = 0;
+var hi = 0;
+var lives = 3;
+var wave = 1;
+var nextLife = 10000;
+var tick = 0;
+var wait = 0;
+var fireWait = 0;
+var fireHeld = 0;
+var fireWas = 0;
+var leftHeld = 0;
+var rightHeld = 0;
+var thrustHeld = 0;
+var hyperHeld = 0;
+var hyperWas = 0;
+var startHeld = 0;
+var startWas = 0;
+
+var ship = { x: 320, y: 240, vx: 0, vy: 0, h: 0, hyper: 0, blink: 0 };
+var rocks = [];
+var shots = [];
+var sshots = [];
+var bits = [];
+var ufo = { live: 0, x: 0, y: 0, vx: 0, vy: 0, small: 0, fire: 0, life: 0 };
+var ufoWait = 0;
+var thrustFlick = 0;
+
+var hs = localStorage.getItem("ASTEROID_HI");
+if (hs) hi = hs - 0;
+
+function wrapN(n, m) {
+  while (n < 0) n = n + m;
+  while (n >= m) n = n - m;
+  return n;
+}
+
+function dirx(h) {
+  h = wrapN(h, 256);
+  var i = Math.floor(h / 4);
+  if (i > 63) i = 63;
+  var j = i + 1;
+  if (j > 63) j = 0;
+  var f = (h - i * 4) / 4;
+  return UX[i] + (UX[j] - UX[i]) * f;
+}
+
+function diry(h) {
+  h = wrapN(h, 256);
+  var i = Math.floor(h / 4);
+  if (i > 63) i = 63;
+  var j = i + 1;
+  if (j > 63) j = 0;
+  var f = (h - i * 4) / 4;
+  return UY[i] + (UY[j] - UY[i]) * f;
+}
+
+function rotX(lx, ly, h) {
+  var fx = dirx(h);
+  var fy = diry(h);
+  return (-fy) * lx + fx * ly;
+}
+
+function rotY(lx, ly, h) {
+  var fx = dirx(h);
+  var fy = diry(h);
+  return fx * lx + fy * ly;
+}
+
+function wrapX(x) {
+  if (x < 0) return x + W;
+  if (x >= W) return x - W;
+  return x;
+}
+
+function wrapY(y) {
+  if (y < 0) return y + H;
+  if (y >= H) return y - H;
+  return y;
+}
+
+function wrapD(d, span) {
+  if (d > span * 0.5) d = d - span;
+  if (d < -span * 0.5) d = d + span;
+  return d;
+}
+
+function hit(ax, ay, ar, bx, by, br) {
+  var dx = wrapD(ax - bx, W);
+  var dy = wrapD(ay - by, H);
+  var r = ar + br;
+  return dx * dx + dy * dy < r * r;
+}
+
+function rockPts(shape) {
+  if (shape === 1) return ROCK1;
+  if (shape === 2) return ROCK2;
+  if (shape === 3) return ROCK3;
+  return ROCK0;
+}
+
+function rockRad(sz) {
+  if (sz === 3) return 36;
+  if (sz === 2) return 18;
+  return 9;
+}
+
+function rockPtsScore(sz) {
+  if (sz === 3) return 20;
+  if (sz === 2) return 50;
+  return 100;
+}
+
+function clearArr(a) {
+  while (a.length > 0) a.pop();
+}
+
+function rnd() {
+  return Math.random();
+}
+
+function rndH() {
+  return Math.floor(rnd() * 256);
+}
+
+function aimH(dx, dy) {
+  var best = 0;
+  var bestD = -99999;
+  var i = 0;
+  while (i < 64) {
+    var d = UX[i] * dx + UY[i] * dy;
+    if (d > bestD) {
+      bestD = d;
+      best = i;
+    }
+    i = i + 1;
+  }
+  return best * 4;
+}
+
+function addScore(n) {
+  score = score + n;
+  if (score >= nextLife) {
+    lives = lives + 1;
+    nextLife = nextLife + 10000;
+  }
+  if (score > hi) {
+    hi = score;
+    localStorage.setItem("ASTEROID_HI", "" + hi);
+  }
+}
+
+function spawnRock(sz, x, y, vx, vy, shape) {
+  rocks.push({
+    x: x,
+    y: y,
+    vx: vx,
+    vy: vy,
+    sz: sz,
+    shape: shape,
+    h: rndH(),
+    spin: Math.floor(rnd() * 5) - 2
+  });
+}
+
+function kickVel(base, extra) {
+  var h = rndH();
+  return base + dirx(h) * extra;
+}
+
+function placeEdgeRock(sz) {
+  var side = Math.floor(rnd() * 4);
+  var x = rnd() * W;
+  var y = rnd() * H;
+  if (side === 0) y = 8;
+  if (side === 1) y = H - 8;
+  if (side === 2) x = 8;
+  if (side === 3) x = W - 8;
+  var sp = 0.5 + rnd() * (0.5 + wave * 0.08);
+  if (sz === 2) sp = sp + 0.4;
+  if (sz === 1) sp = sp + 0.9;
+  var h = rndH();
+  spawnRock(sz, x, y, dirx(h) * sp, diry(h) * sp, Math.floor(rnd() * 4));
+}
+
+function startWave() {
+  clearArr(rocks);
+  clearArr(shots);
+  clearArr(sshots);
+  ufo.live = 0;
+  var n = 4 + (wave - 1) * 2;
+  if (n > 11) n = 11;
+  var i = 0;
+  while (i < n) {
+    placeEdgeRock(3);
+    i = i + 1;
+  }
+  ufoWait = 480 + Math.floor(rnd() * 240) - wave * 12;
+  if (ufoWait < 180) ufoWait = 180;
+}
+
+function resetShip() {
+  ship.x = 320;
+  ship.y = 240;
+  ship.vx = 0;
+  ship.vy = 0;
+  ship.h = 0;
+  ship.hyper = 0;
+  ship.blink = 90;
+}
+
+function startGame() {
+  score = 0;
+  lives = 3;
+  wave = 1;
+  nextLife = 10000;
+  clearArr(bits);
+  resetShip();
+  startWave();
+  mode = PLAY;
+}
+
+function splitRock(i) {
+  var r = rocks[i];
+  var sz = r.sz;
+  addScore(rockPtsScore(sz));
+  var x = r.x;
+  var y = r.y;
+  var vx = r.vx;
+  var vy = r.vy;
+  rocks[i] = rocks[rocks.length - 1];
+  rocks.pop();
+  if (sz <= 1) return;
+  var ns = sz - 1;
+  var k = 0.9 + rnd() * 1.1;
+  spawnRock(ns, x, y, kickVel(vx, k), kickVel(vy, k), Math.floor(rnd() * 4));
+  spawnRock(ns, x, y, kickVel(vx, k), kickVel(vy, k), Math.floor(rnd() * 4));
+}
+
+function explodeShip() {
+  clearArr(bits);
+  var h = ship.h;
+  var k = 0;
+  while (k < 4) {
+    var a = h + k * 64;
+    bits.push({
+      x: ship.x,
+      y: ship.y,
+      vx: dirx(a) * (1.2 + rnd()),
+      vy: diry(a) * (1.2 + rnd()),
+      h: a,
+      life: 48 + Math.floor(rnd() * 20)
+    });
+    k = k + 1;
+  }
+  ship.hyper = 0;
+  mode = DEAD;
+  wait = 90;
+  lives = lives - 1;
+  ufo.live = 0;
+  clearArr(sshots);
+}
+
+function firePlayer() {
+  if (shots.length >= 4) return;
+  if (ship.hyper > 0) return;
+  var fx = dirx(ship.h);
+  var fy = diry(ship.h);
+  shots.push({
+    x: ship.x + fx * 12,
+    y: ship.y + fy * 12,
+    vx: ship.vx + fx * 8,
+    vy: ship.vy + fy * 8,
+    life: 48
+  });
+}
+
+function doHyper() {
+  if (ship.hyper > 0) return;
+  ship.hyper = 40;
+  ship.vx = 0;
+  ship.vy = 0;
+}
+
+function spawnUfo() {
+  ufo.small = 0;
+  if (score >= 40000) ufo.small = 1;
+  else if (score >= 10000 && rnd() > 0.35) ufo.small = 1;
+  ufo.live = 1;
+  if (rnd() < 0.5) {
+    ufo.x = 4;
+    ufo.vx = ufo.small ? 2.1 : 1.4;
+  } else {
+    ufo.x = W - 4;
+    ufo.vx = ufo.small ? -2.1 : -1.4;
+  }
+  ufo.y = 40 + rnd() * (H - 80);
+  ufo.vy = 0;
+  ufo.fire = ufo.small ? 36 : 70;
+  ufo.life = 0;
+}
+
+function ufoRad() {
+  return ufo.small ? 8 : 14;
+}
+
+function keyOn(e, down) {
+  var k = e.key;
+  var cde = e.keyCode;
+  if (k === "ArrowLeft" || k === "a" || k === "A" || cde === 37 || cde === 65) leftHeld = down;
+  if (k === "ArrowRight" || k === "d" || k === "D" || cde === 39 || cde === 68) rightHeld = down;
+  if (k === "ArrowUp" || k === "w" || k === "W" || cde === 38 || cde === 87) thrustHeld = down;
+  if (k === " " || cde === 32) fireHeld = down;
+  if (k === "ArrowDown" || k === "s" || k === "S" || k === "Shift" || k === "h" || k === "H" || cde === 40 || cde === 16 || cde === 72 || cde === 83) hyperHeld = down;
+  if (k === "Enter" || cde === 13) startHeld = down;
+}
+
+addEventListener("keydown", function (e) {
+  keyOn(e, 1);
+});
+addEventListener("keyup", function (e) {
+  keyOn(e, 0);
+});
+
+function strokeClosed(pts, ox, oy, scale, h) {
+  var n = pts.length;
+  var i = 0;
+  c.beginPath();
+  while (i < n) {
+    var x = ox + rotX(pts[i] * scale, pts[i + 1] * scale, h);
+    var y = oy + rotY(pts[i] * scale, pts[i + 1] * scale, h);
+    if (i === 0) c.moveTo(x, y);
+    else c.lineTo(x, y);
+    i = i + 2;
+  }
+  c.lineTo(ox + rotX(pts[0] * scale, pts[1] * scale, h), oy + rotY(pts[0] * scale, pts[1] * scale, h));
+  c.stroke();
+}
+
+function drawRockAt(r, ox, oy) {
+  strokeClosed(rockPts(r.shape), ox, oy, rockRad(r.sz), r.h);
+}
+
+function drawRockWrapped(r) {
+  var rad = rockRad(r.sz) + 2;
+  drawRockAt(r, r.x, r.y);
+  if (r.x < rad) drawRockAt(r, r.x + W, r.y);
+  if (r.x > W - rad) drawRockAt(r, r.x - W, r.y);
+  if (r.y < rad) drawRockAt(r, r.x, r.y + H);
+  if (r.y > H - rad) drawRockAt(r, r.x, r.y - H);
+}
+
+function drawShipAt(ox, oy, h, flame) {
+  c.beginPath();
+  c.moveTo(ox + rotX(0, 12, h), oy + rotY(0, 12, h));
+  c.lineTo(ox + rotX(8, -10, h), oy + rotY(8, -10, h));
+  c.lineTo(ox + rotX(0, -5, h), oy + rotY(0, -5, h));
+  c.lineTo(ox + rotX(-8, -10, h), oy + rotY(-8, -10, h));
+  c.lineTo(ox + rotX(0, 12, h), oy + rotY(0, 12, h));
+  c.stroke();
+  if (flame) {
+    c.beginPath();
+    c.moveTo(ox + rotX(-4, -8, h), oy + rotY(-4, -8, h));
+    c.lineTo(ox + rotX(0, -16 - thrustFlick * 3, h), oy + rotY(0, -16 - thrustFlick * 3, h));
+    c.lineTo(ox + rotX(4, -8, h), oy + rotY(4, -8, h));
+    c.stroke();
+  }
+}
+
+function drawUfoAt(ox, oy) {
+  var s = ufo.small ? 0.55 : 1;
+  c.beginPath();
+  c.moveTo(ox - 20 * s, oy);
+  c.lineTo(ox - 8 * s, oy - 6 * s);
+  c.lineTo(ox + 8 * s, oy - 6 * s);
+  c.lineTo(ox + 20 * s, oy);
+  c.lineTo(ox + 8 * s, oy + 7 * s);
+  c.lineTo(ox - 8 * s, oy + 7 * s);
+  c.lineTo(ox - 20 * s, oy);
+  c.stroke();
+  c.beginPath();
+  c.moveTo(ox - 20 * s, oy);
+  c.lineTo(ox + 20 * s, oy);
+  c.stroke();
+}
+
+function drawUfoWrapped() {
+  var rad = 22;
+  drawUfoAt(ufo.x, ufo.y);
+  if (ufo.x < rad) drawUfoAt(ufo.x + W, ufo.y);
+  if (ufo.x > W - rad) drawUfoAt(ufo.x - W, ufo.y);
+  if (ufo.y < rad) drawUfoAt(ufo.x, ufo.y + H);
+  if (ufo.y > H - rad) drawUfoAt(ufo.x, ufo.y - H);
+}
+
+function drawShipWrapped() {
+  var rad = 18;
+  var h = ship.h;
+  var fl = thrustHeld;
+  drawShipAt(ship.x, ship.y, h, fl);
+  if (ship.x < rad) drawShipAt(ship.x + W, ship.y, h, fl);
+  if (ship.x > W - rad) drawShipAt(ship.x - W, ship.y, h, fl);
+  if (ship.y < rad) drawShipAt(ship.x, ship.y + H, h, fl);
+  if (ship.y > H - rad) drawShipAt(ship.x, ship.y - H, h, fl);
+}
+
+function drawHud() {
+  c.fillStyle = "#ffffff";
+  c.fillText("" + score, 24, 20);
+  c.fillText("HI " + hi, 280, 20);
+  var i = 0;
+  while (i < lives && i < 8) {
+    drawShipAt(28 + i * 18, 42, 0, 0);
+    i = i + 1;
+  }
+}
+
+function drawAttract() {
+  c.fillStyle = "#ffffff";
+  c.fillText("ASTEROIDS", 268, 160);
+  c.fillText("1 COIN 1 PLAY", 248, 200);
+  c.fillText("ENTER TO START", 240, 320);
+  c.fillText("LEFT RIGHT ROTATE", 220, 360);
+  c.fillText("UP THRUST   SPACE FIRE", 200, 380);
+  c.fillText("DOWN HYPERSPACE", 232, 400);
+}
+
+function stepRocks() {
+  var i = 0;
+  while (i < rocks.length) {
+    var r = rocks[i];
+    r.x = wrapX(r.x + r.vx);
+    r.y = wrapY(r.y + r.vy);
+    r.h = wrapN(r.h + r.spin, 256);
+    i = i + 1;
+  }
+}
+
+function stepShots(arr) {
+  var i = 0;
+  while (i < arr.length) {
+    var s = arr[i];
+    s.x = wrapX(s.x + s.vx);
+    s.y = wrapY(s.y + s.vy);
+    s.life = s.life - 1;
+    if (s.life <= 0) {
+      arr[i] = arr[arr.length - 1];
+      arr.pop();
+    } else {
+      i = i + 1;
+    }
+  }
+}
+
+function shotsVsRocks(arr) {
+  var si = 0;
+  while (si < arr.length) {
+    var s = arr[si];
+    var ri = 0;
+    var hitR = 0;
+    while (ri < rocks.length) {
+      var r = rocks[ri];
+      if (hit(s.x, s.y, 2, r.x, r.y, rockRad(r.sz))) {
+        splitRock(ri);
+        hitR = 1;
+        break;
+      }
+      ri = ri + 1;
+    }
+    if (hitR) {
+      arr[si] = arr[arr.length - 1];
+      arr.pop();
+    } else {
+      si = si + 1;
+    }
+  }
+}
+
+function shipClear() {
+  var i = 0;
+  while (i < rocks.length) {
+    var r = rocks[i];
+    if (hit(320, 240, 28, r.x, r.y, rockRad(r.sz))) return 0;
+    i = i + 1;
+  }
+  if (ufo.live && hit(320, 240, 28, ufo.x, ufo.y, ufoRad())) return 0;
+  return 1;
+}
+
+function stepUfo() {
+  if (!ufo.live) {
+    if (mode !== PLAY) return;
+    ufoWait = ufoWait - 1;
+    if (ufoWait <= 0 && rocks.length > 0) spawnUfo();
+    return;
+  }
+  ufo.life = ufo.life + 1;
+  if ((ufo.life & 31) === 0) {
+    ufo.vy = (rnd() - 0.5) * (ufo.small ? 1.6 : 1.0);
+  }
+  ufo.x = ufo.x + ufo.vx;
+  ufo.y = wrapY(ufo.y + ufo.vy);
+  if (ufo.x < -24 || ufo.x > W + 24) {
+    ufo.live = 0;
+    ufoWait = 360 + Math.floor(rnd() * 300);
+    return;
+  }
+  ufo.fire = ufo.fire - 1;
+  if (ufo.fire <= 0 && sshots.length < 2 && mode === PLAY && ship.hyper === 0) {
+    var h;
+    if (ufo.small) {
+      var dx = wrapD(ship.x - ufo.x, W);
+      var dy = wrapD(ship.y - ufo.y, H);
+      h = wrapN(aimH(dx, dy) + Math.floor(rnd() * 17) - 8, 256);
+    } else {
+      h = rndH();
+    }
+    var sp = ufo.small ? 6.5 : 5.5;
+    sshots.push({
+      x: ufo.x,
+      y: ufo.y,
+      vx: dirx(h) * sp,
+      vy: diry(h) * sp,
+      life: 50
+    });
+    ufo.fire = ufo.small ? 28 + Math.floor(rnd() * 18) : 55 + Math.floor(rnd() * 30);
+  }
+}
+
+function collidePlay() {
+  var i;
+  if (ship.hyper === 0 && ship.blink === 0) {
+    i = 0;
+    while (i < rocks.length) {
+      if (hit(ship.x, ship.y, 9, rocks[i].x, rocks[i].y, rockRad(rocks[i].sz))) {
+        explodeShip();
+        splitRock(i);
+        return;
+      }
+      i = i + 1;
+    }
+    if (ufo.live && hit(ship.x, ship.y, 9, ufo.x, ufo.y, ufoRad())) {
+      explodeShip();
+      addScore(ufo.small ? 1000 : 200);
+      ufo.live = 0;
+      ufoWait = 400;
+      return;
+    }
+    i = 0;
+    while (i < sshots.length) {
+      if (hit(ship.x, ship.y, 8, sshots[i].x, sshots[i].y, 2)) {
+        explodeShip();
+        return;
+      }
+      i = i + 1;
+    }
+  }
+  i = 0;
+  while (i < shots.length && ufo.live) {
+    if (hit(shots[i].x, shots[i].y, 2, ufo.x, ufo.y, ufoRad())) {
+      addScore(ufo.small ? 1000 : 200);
+      ufo.live = 0;
+      ufoWait = 400;
+      shots[i] = shots[shots.length - 1];
+      shots.pop();
+    } else {
+      i = i + 1;
+    }
+  }
+}
+
+function stepShip() {
+  if (leftHeld) ship.h = wrapN(ship.h - 4, 256);
+  if (rightHeld) ship.h = wrapN(ship.h + 4, 256);
+  if (thrustHeld && ship.hyper === 0) {
+    ship.vx = ship.vx + dirx(ship.h) * 0.18;
+    ship.vy = ship.vy + diry(ship.h) * 0.18;
+    thrustFlick = 1 - thrustFlick;
+  } else {
+    thrustFlick = 0;
+  }
+  var sp2 = ship.vx * ship.vx + ship.vy * ship.vy;
+  if (sp2 > 49) {
+    var s = Math.sqrt(sp2);
+    ship.vx = ship.vx / s * 7;
+    ship.vy = ship.vy / s * 7;
+  }
+  ship.vx = ship.vx * 0.995;
+  ship.vy = ship.vy * 0.995;
+  ship.x = wrapX(ship.x + ship.vx);
+  ship.y = wrapY(ship.y + ship.vy);
+  if (ship.blink > 0) ship.blink = ship.blink - 1;
+  if (ship.hyper > 0) {
+    ship.hyper = ship.hyper - 1;
+    if (ship.hyper === 0) {
+      if (rnd() < 0.16) {
+        explodeShip();
+        return;
+      }
+      ship.x = 40 + rnd() * (W - 80);
+      ship.y = 40 + rnd() * (H - 80);
+      ship.blink = 24;
+    }
+  }
+  if (fireWait > 0) fireWait = fireWait - 1;
+  var fireEdge = fireHeld && !fireWas;
+  if (fireEdge || (fireHeld && fireWait === 0)) {
+    firePlayer();
+    fireWait = 10;
+  }
+  if (hyperHeld && !hyperWas) doHyper();
+}
+
+function stepBits() {
+  var i = 0;
+  while (i < bits.length) {
+    var b = bits[i];
+    b.x = wrapX(b.x + b.vx);
+    b.y = wrapY(b.y + b.vy);
+    b.life = b.life - 1;
+    if (b.life <= 0) {
+      bits[i] = bits[bits.length - 1];
+      bits.pop();
+    } else {
+      i = i + 1;
+    }
+  }
+}
+
+function tickGame() {
+  tick = tick + 1;
+  if ((startHeld && !startWas) && (mode === ATTRACT || mode === OVER)) startGame();
+  stepRocks();
+  stepShots(shots);
+  stepShots(sshots);
+  stepBits();
+  shotsVsRocks(shots);
+  shotsVsRocks(sshots);
+  stepUfo();
+
+  if (mode === PLAY) {
+    stepShip();
+    if (mode === PLAY) collidePlay();
+    if (mode === PLAY && rocks.length === 0 && !ufo.live) {
+      mode = WAVEWAIT;
+      wait = 90;
+    }
+  } else if (mode === DEAD) {
+    wait = wait - 1;
+    if (wait <= 0) {
+      if (lives <= 0) {
+        mode = OVER;
+      } else if (shipClear()) {
+        resetShip();
+        mode = PLAY;
+      } else {
+        wait = 12;
+      }
+    }
+  } else if (mode === WAVEWAIT) {
+    wait = wait - 1;
+    if (wait <= 0) {
+      wave = wave + 1;
+      startWave();
+      ship.blink = 60;
+      mode = PLAY;
+    }
+  } else if (mode === ATTRACT) {
+    if (rocks.length === 0) {
+      wave = 1;
+      startWave();
+    }
+  }
+
+  fireWas = fireHeld;
+  hyperWas = hyperHeld;
+  startWas = startHeld;
+}
+
+function paint() {
+  c.fillStyle = "#000000";
+  c.fillRect(0, 0, W, H);
+  c.strokeStyle = "#ffffff";
+  c.lineWidth = 1;
+  var i = 0;
+  while (i < rocks.length) {
+    drawRockWrapped(rocks[i]);
+    i = i + 1;
+  }
+  i = 0;
+  while (i < shots.length) {
+    var s = shots[i];
+    c.beginPath();
+    c.moveTo(s.x, s.y);
+    c.lineTo(s.x + s.vx * 0.4, s.y + s.vy * 0.4);
+    c.stroke();
+    i = i + 1;
+  }
+  i = 0;
+  while (i < sshots.length) {
+    var u = sshots[i];
+    c.beginPath();
+    c.moveTo(u.x, u.y);
+    c.lineTo(u.x + u.vx * 0.35, u.y + u.vy * 0.35);
+    c.stroke();
+    i = i + 1;
+  }
+  if (ufo.live) drawUfoWrapped();
+  i = 0;
+  while (i < bits.length) {
+    var b = bits[i];
+    c.beginPath();
+    c.moveTo(b.x + rotX(-6, 0, b.h), b.y + rotY(-6, 0, b.h));
+    c.lineTo(b.x + rotX(6, 0, b.h), b.y + rotY(6, 0, b.h));
+    c.stroke();
+    i = i + 1;
+  }
+  if (mode === PLAY || mode === WAVEWAIT) {
+    if (ship.hyper === 0 && (ship.blink === 0 || tick % 4 < 2)) {
+      drawShipWrapped();
+    }
+  }
+  drawHud();
+  if (mode === ATTRACT) drawAttract();
+  if (mode === OVER) {
+    c.fillStyle = "#ffffff";
+    c.fillText("GAME OVER", 276, 230);
+    c.fillText("ENTER TO START", 240, 258);
+  }
+}
+
+function loop() {
+  tickGame();
+  paint();
+  requestAnimationFrame(loop);
+}
+
+startWave();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

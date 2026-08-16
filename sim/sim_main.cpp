@@ -18,6 +18,58 @@
 
 static Vjmr_js_core* top = nullptr;
 
+// CHECKPOINT/OBJPEEK peek 1-D SRAM (not a third hardware port).
+// Match rtl/engines/jmr_js_vm.sv MAX_OBJ / OBJ_SLOTS / MAX_ARR / ARR_CAP.
+static const unsigned VM_MAX_OBJ = 1024u;
+static const unsigned VM_OBJ_SLOTS = 32u;
+static const unsigned VM_MAX_ARR = 512u;
+static const unsigned VM_ARR_CAP = 128u;
+static const unsigned VM_ENV_DEPTH = 512u;
+static const unsigned VM_ENV_SLOTS = 16u;
+static inline unsigned vobj_addr(unsigned h, unsigned s) {
+    return (h * VM_OBJ_SLOTS) + s;
+}
+static inline unsigned varr_addr(unsigned h, unsigned e) {
+    return (h * VM_ARR_CAP) + e;
+}
+static inline unsigned venv_addr(unsigned h, unsigned s) {
+    return (h * VM_ENV_SLOTS) + s;
+}
+static uint16_t peek_vobj_key(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
+    const auto& w = r->jmr_js_core__DOT__u_vm__DOT__vobj_slot[vobj_addr(h, s)];
+    return uint16_t(w[2] & 0xFFFFu);
+}
+static uint64_t peek_vobj_val(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
+    const auto& w = r->jmr_js_core__DOT__u_vm__DOT__vobj_slot[vobj_addr(h, s)];
+    return uint64_t(w[0]) | (uint64_t(w[1]) << 32);
+}
+static uint8_t peek_vobj_tag(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
+    return uint8_t(r->jmr_js_core__DOT__u_vm__DOT__vobj_tmem[vobj_addr(h, s)]);
+}
+static uint64_t peek_varr_val(Vjmr_js_core___024root* r, unsigned h, unsigned e) {
+    return uint64_t(r->jmr_js_core__DOT__u_vm__DOT__varr_slot[varr_addr(h, e)]);
+}
+// TOS window is CPU truth; BRAM vstack lags one write. CHECKPOINT overlays.
+static uint64_t peek_vstack(Vjmr_js_core___024root* r, unsigned slot, unsigned vsp) {
+    if (vsp > 0u && slot < vsp) {
+        unsigned d = vsp - 1u - slot;
+        if (d < 16u)
+            return uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vst_win[d]);
+    }
+    return uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vstack[slot]);
+}
+static uint8_t peek_varr_tag(Vjmr_js_core___024root* r, unsigned h, unsigned e) {
+    return uint8_t(r->jmr_js_core__DOT__u_vm__DOT__varr_tmem[varr_addr(h, e)]);
+}
+static uint16_t peek_venv_key(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
+    const auto& w = r->jmr_js_core__DOT__u_vm__DOT__venv_slot[venv_addr(h, s)];
+    return uint16_t(w[2] & 0x1FFu);
+}
+static uint64_t peek_venv_val(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
+    const auto& w = r->jmr_js_core__DOT__u_vm__DOT__venv_slot[venv_addr(h, s)];
+    return uint64_t(w[0]) | (uint64_t(w[1]) << 32);
+}
+
 // ---- base64 (FB? export) -----------------------------------------------
 static const char B64[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -238,7 +290,13 @@ static const char* vm_sname(unsigned s) {
         "S_V64_GC_OBJ","S_V64_GC_ARR","S_V64_GC_SWEEP_OBJ",
         "S_V64_GC_SWEEP_ARR","S_V64_GC_FN","S_V64_GC_ENV",
         "S_V64_GC_SWEEP_ENV","S_V64_CLEAR","S_V64_RECT",
-        "S_V64_WAIT_FRAME","S_V64_FRAME_RAF","S_V64_FRAME_TIMER"
+        "S_V64_WAIT_FRAME","S_V64_FRAME_RAF","S_V64_FRAME_TIMER",
+        "S_V64_FOREACH","S_V64_FRAME_KEY","S_V64_STRIDX","S_V64_STRIDX_WR",
+        "S_V64_JSON","S_V64_JSON_PARSE","S_V64_CTOR_PAD",
+        "S_HEAP_WAIT","S_HEAP_CMP","S_HEAP_WR","S_HEAP_AWR","S_HEAP_FILL",
+        "S_V64_METH","S_V64_FE_ELEM","S_V64_FE_FILTER","S_V64_OGETI_NAT",
+        "S_V64_IDXSCAN","S_V64_CTOR_ENV","S_REL_ENV","S_FREE_OBJ","S_FREE_ARR",
+        "S_V64_BIND","S_V64_MINMAX","S_V64_WIN_FILL"
     };
     if (s < (unsigned)(sizeof(N) / sizeof(N[0]))) return N[s];
     return "?";
@@ -353,10 +411,10 @@ static int jsh_load_mem(const std::vector<uint8_t>& b) {
         for (uint32_t i = 0; i + 1 < plen; i += 2) {
             uint16_t w = (uint16_t)b[poff + i]
                        | ((uint16_t)b[poff + i + 1] << 8);
-            rp->jmr_js_core__DOT__u_sram__DOT__mem[i / 2] = w;
+            rp->jmr_js_core__DOT__g_sram__DOT__u_sram__DOT__mem[i / 2] = w;
         }
         if (plen & 1u)
-            rp->jmr_js_core__DOT__u_sram__DOT__mem[plen / 2] =
+            rp->jmr_js_core__DOT__g_sram__DOT__u_sram__DOT__mem[plen / 2] =
                 (uint16_t)b[poff + plen - 1];
         uint32_t pal_n = plen < 768u ? plen : 768u;
         for (uint32_t pi = 0; pi + 2 < pal_n; pi += 3) {
@@ -778,9 +836,8 @@ int main(int argc, char** argv) {
                 unsigned checkpoint_sp =
                     unsigned(r->jmr_js_core__DOT__u_vm__DOT__vsp);
                 for (unsigned i = 0; i < checkpoint_sp; i++)
-                    mark_string((uint64_t)
-                        r->jmr_js_core__DOT__u_vm__DOT__vstack[i]);
-                for (unsigned index = 0; index < 8192u; index++) {
+                    mark_string(peek_vstack(r, i, checkpoint_sp));
+                for (unsigned index = 0; index < VM_MAX_OBJ; index++) {
                     unsigned kind = unsigned(
                         r->jmr_js_core__DOT__u_vm__DOT__vobj_alloc[index]
                     );
@@ -788,10 +845,9 @@ int main(int argc, char** argv) {
                         unsigned length = unsigned(
                             r->jmr_js_core__DOT__u_vm__DOT__vobj_len[index]
                         );
-                        if (length > 32u) length = 32u;
+                        if (length > VM_OBJ_SLOTS) length = VM_OBJ_SLOTS;
                         for (unsigned slot = 0; slot < length; slot++)
-                            mark_string((uint64_t)
-                                r->jmr_js_core__DOT__u_vm__DOT__vobj_val[index][slot]);
+                            mark_string(peek_vobj_val(r, index, slot));
                     } else if (kind == 2u) {
                         mark_string((uint64_t)
                             r->jmr_js_core__DOT__u_vm__DOT__vfn_env[index]);
@@ -799,27 +855,25 @@ int main(int argc, char** argv) {
                             r->jmr_js_core__DOT__u_vm__DOT__vfn_bound_this[index]);
                     }
                 }
-                for (unsigned index = 0; index < 4096u; index++)
+                for (unsigned index = 0; index < VM_MAX_ARR; index++)
                     if (r->jmr_js_core__DOT__u_vm__DOT__varr_valid[index]) {
                         unsigned length = unsigned(
                             r->jmr_js_core__DOT__u_vm__DOT__varr_len[index]
                         );
-                        if (length > 128u) length = 128u;
+                        if (length > VM_ARR_CAP) length = VM_ARR_CAP;
                         for (unsigned slot = 0; slot < length; slot++)
-                            mark_string((uint64_t)
-                                r->jmr_js_core__DOT__u_vm__DOT__varr_val[index][slot]);
+                            mark_string(peek_varr_val(r, index, slot));
                     }
-                for (unsigned index = 0; index < 32u; index++)
+                for (unsigned index = 0; index < VM_ENV_DEPTH; index++)
                     if (r->jmr_js_core__DOT__u_vm__DOT__venv_valid[index]) {
                         mark_string((uint64_t)
                             r->jmr_js_core__DOT__u_vm__DOT__venv_parent[index]);
                         unsigned length = unsigned(
                             r->jmr_js_core__DOT__u_vm__DOT__venv_len[index]
                         );
-                        if (length > 16u) length = 16u;
+                        if (length > VM_ENV_SLOTS) length = VM_ENV_SLOTS;
                         for (unsigned slot = 0; slot < length; slot++)
-                            mark_string((uint64_t)
-                                r->jmr_js_core__DOT__u_vm__DOT__venv_val[index][slot]);
+                            mark_string(peek_venv_val(r, index, slot));
                     }
                 for (unsigned index = 0; index < 1024u; index++)
                     if (marked_strings[index]) {
@@ -840,7 +894,7 @@ int main(int argc, char** argv) {
                                 ]
                             );
                     }
-                for (unsigned index = 0; index < 8192u; index++) {
+                for (unsigned index = 0; index < VM_MAX_OBJ; index++) {
                     if (unsigned(
                             r->jmr_js_core__DOT__u_vm__DOT__vobj_alloc[index]
                         ) != 1u)
@@ -848,7 +902,7 @@ int main(int argc, char** argv) {
                     unsigned length = unsigned(
                         r->jmr_js_core__DOT__u_vm__DOT__vobj_len[index]
                     );
-                    if (length > 32u) length = 32u;
+                    if (length > VM_OBJ_SLOTS) length = VM_OBJ_SLOTS;
                     heap_hash = fnv_byte(heap_hash, 'O');
                     heap_hash = fnv_u32(heap_hash, index);
                     heap_hash = fnv_u16(
@@ -880,8 +934,8 @@ int main(int argc, char** argv) {
                     fields.reserve(length);
                     for (unsigned slot = 0; slot < length; slot++) {
                         fields.emplace_back(
-                            (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__vobj_key[index][slot],
-                            (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vobj_val[index][slot]
+                            (uint32_t)peek_vobj_key(r, index, slot),
+                            peek_vobj_val(r, index, slot)
                         );
                     }
                     std::sort(fields.begin(), fields.end());
@@ -890,7 +944,7 @@ int main(int argc, char** argv) {
                         heap_hash = fnv_u64(heap_hash, field.second);
                     }
                 }
-                for (unsigned index = 0; index < 8192u; index++) {
+                for (unsigned index = 0; index < VM_MAX_OBJ; index++) {
                     if (unsigned(
                             r->jmr_js_core__DOT__u_vm__DOT__vobj_alloc[index]
                         ) != 2u)
@@ -924,13 +978,13 @@ int main(int argc, char** argv) {
                         (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__vfn_entry[index]
                     );
                 }
-                for (unsigned index = 0; index < 4096u; index++) {
+                for (unsigned index = 0; index < VM_MAX_ARR; index++) {
                     if (!r->jmr_js_core__DOT__u_vm__DOT__varr_valid[index])
                         continue;
                     unsigned length = unsigned(
                         r->jmr_js_core__DOT__u_vm__DOT__varr_len[index]
                     );
-                    if (length > 128u) length = 128u;
+                    if (length > VM_ARR_CAP) length = VM_ARR_CAP;
                     heap_hash = fnv_byte(heap_hash, 'A');
                     heap_hash = fnv_u32(heap_hash, index);
                     heap_hash = fnv_u16(
@@ -941,17 +995,17 @@ int main(int argc, char** argv) {
                     for (unsigned element = 0; element < length; element++) {
                         heap_hash = fnv_u64(
                             heap_hash,
-                            (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__varr_val[index][element]
+                            peek_varr_val(r, index, element)
                         );
                     }
                 }
-                for (unsigned index = 0; index < 32u; index++) {
+                for (unsigned index = 0; index < VM_ENV_DEPTH; index++) {
                     if (!r->jmr_js_core__DOT__u_vm__DOT__venv_valid[index])
                         continue;
                     unsigned length = unsigned(
                         r->jmr_js_core__DOT__u_vm__DOT__venv_len[index]
                     );
-                    if (length > 16u) length = 16u;
+                    if (length > VM_ENV_SLOTS) length = VM_ENV_SLOTS;
                     heap_hash = fnv_byte(heap_hash, 'E');
                     heap_hash = fnv_u32(heap_hash, index);
                     heap_hash = fnv_u16(
@@ -967,8 +1021,8 @@ int main(int argc, char** argv) {
                     slots.reserve(length);
                     for (unsigned slot = 0; slot < length; slot++) {
                         slots.emplace_back(
-                            (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__venv_key[index][slot],
-                            (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__venv_val[index][slot]
+                            peek_venv_key(r, index, slot),
+                            peek_venv_val(r, index, slot)
                         );
                     }
                     std::sort(slots.begin(), slots.end());
@@ -979,7 +1033,7 @@ int main(int argc, char** argv) {
                 }
             } else {
                 unsigned nobj = unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_obj);
-                if (nobj > 8192u) nobj = 8192u;
+                if (nobj > VM_MAX_OBJ) nobj = VM_MAX_OBJ;
                 for (unsigned oid = 0; oid < nobj; oid++) {
                     heap_hash = fnv_u16(
                         heap_hash,
@@ -988,39 +1042,39 @@ int main(int argc, char** argv) {
                     unsigned ns = unsigned(
                         r->jmr_js_core__DOT__u_vm__DOT__obj_n[oid]
                     );
-                    if (ns > 32u) ns = 32u;
+                    if (ns > VM_OBJ_SLOTS) ns = VM_OBJ_SLOTS;
                     heap_hash = fnv_byte(heap_hash, (uint8_t)ns);
                     for (unsigned slot = 0; slot < ns; slot++) {
                         heap_hash = fnv_u16(
                             heap_hash,
-                            (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__obj_key[oid][slot]
+                            (uint16_t)peek_vobj_key(r, oid, slot)
                         );
                         heap_hash = fnv_u32(
                             heap_hash,
-                            (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__obj_val[oid][slot]
+                            (uint32_t)peek_vobj_val(r, oid, slot)
                         );
                         heap_hash = fnv_byte(
                             heap_hash,
-                            (uint8_t)r->jmr_js_core__DOT__u_vm__DOT__obj_tag[oid][slot]
+                            peek_vobj_tag(r, oid, slot)
                         );
                     }
                 }
                 unsigned narr = unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_arr);
-                if (narr > 4096u) narr = 4096u;
+                if (narr > VM_MAX_ARR) narr = VM_MAX_ARR;
                 for (unsigned aid = 0; aid < narr; aid++) {
                     unsigned len = unsigned(
                         r->jmr_js_core__DOT__u_vm__DOT__arr_len[aid]
                     );
-                    if (len > 128u) len = 128u;
+                    if (len > VM_ARR_CAP) len = VM_ARR_CAP;
                     heap_hash = fnv_byte(heap_hash, (uint8_t)len);
                     for (unsigned elem = 0; elem < len; elem++) {
                         heap_hash = fnv_u32(
                             heap_hash,
-                            (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__arr_val[aid][elem]
+                            (uint32_t)peek_varr_val(r, aid, elem)
                         );
                         heap_hash = fnv_byte(
                             heap_hash,
-                            (uint8_t)r->jmr_js_core__DOT__u_vm__DOT__arr_tag[aid][elem]
+                            peek_varr_tag(r, aid, elem)
                         );
                     }
                 }
@@ -1056,7 +1110,7 @@ int main(int argc, char** argv) {
                 for (unsigned slot = 0; slot < value_sp; slot++) {
                     frames_hash = fnv_u64(
                         frames_hash,
-                        (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vstack[slot]
+                        peek_vstack(r, slot, value_sp)
                     );
                 }
                 frames_hash = fnv_u16(frames_hash, (uint16_t)value_csp);
@@ -1206,18 +1260,18 @@ int main(int argc, char** argv) {
         // NEW: OBJPEEK <oid> — dump one heap object (cls, n, key/val/tag slots)
         if (line.rfind("OBJPEEK ", 0) == 0) {
             auto* r = top->rootp;
-            unsigned oid = std::stoul(line.substr(8)) & 8191;
+            unsigned oid = std::stoul(line.substr(8)) & (VM_MAX_OBJ - 1);
             std::cout << "OBJ " << oid
                       << " cls=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_cls[oid])
                       << " n=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_n[oid]);
             // NEW: dump every live slot (was 6) — item objects carry ~20 props
             unsigned ns = unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_n[oid]);
-            if (ns > 32) ns = 32;
+            if (ns > VM_OBJ_SLOTS) ns = VM_OBJ_SLOTS;
             for (unsigned s = 0; s < ns; s++) {
                 std::cout << " [" << s << "]k="
-                          << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_key[oid][s])
-                          << " v=" << int(r->jmr_js_core__DOT__u_vm__DOT__obj_val[oid][s])
-                          << " t=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_tag[oid][s]);
+                          << unsigned(peek_vobj_key(r, oid, s))
+                          << " v=" << int(peek_vobj_val(r, oid, s))
+                          << " t=" << unsigned(peek_vobj_tag(r, oid, s));
             }
             std::cout << std::endl;
             continue;
@@ -1248,14 +1302,14 @@ int main(int argc, char** argv) {
         // NEW: ARRPEEK <aid> — dump array len + elements (bring-up only)
         if (line.rfind("ARRPEEK ", 0) == 0) {
             auto* r = top->rootp;
-            unsigned aid = std::stoul(line.substr(8)) & 4095;
+            unsigned aid = std::stoul(line.substr(8)) & (VM_MAX_ARR - 1);
             unsigned len = unsigned(r->jmr_js_core__DOT__u_vm__DOT__arr_len[aid]);
             std::cout << "ARR " << aid << " len=" << len;
-            if (len > 32) len = 32;
+            if (len > VM_ARR_CAP) len = VM_ARR_CAP;
             for (unsigned s = 0; s < len; s++) {
                 std::cout << " [" << s << "]v="
-                          << int(r->jmr_js_core__DOT__u_vm__DOT__arr_val[aid][s])
-                          << " t=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__arr_tag[aid][s]);
+                          << int(peek_varr_val(r, aid, s))
+                          << " t=" << unsigned(peek_varr_tag(r, aid, s));
             }
             std::cout << std::endl;
             continue;
@@ -1380,7 +1434,7 @@ int main(int argc, char** argv) {
             oss << "SRAM";
             for (unsigned i = 0; i < n && (a + i) < 2097152u; i++)
                 oss << " " << std::hex
-                    << unsigned(top->rootp->jmr_js_core__DOT__u_sram__DOT__mem[a + i]);
+                    << unsigned(top->rootp->jmr_js_core__DOT__g_sram__DOT__u_sram__DOT__mem[a + i]);
             std::cout << oss.str() << std::endl;
             continue;
         }
@@ -1415,26 +1469,45 @@ int main(int argc, char** argv) {
         // drawBitmap is per-pixel str[i]+fillRect, so FRAME capped mid-rAF
         // (~1 swap per 5 GUI frames) and the wave crawled. Cap is not SPI.
         if (line == "FRAME") {
-            const int CAP = 16000000; // one full HTML frame of pixel work
+            const int CAP = 64000000; // sequential GET_PROP is real silicon at ~30 MHz
             int used = 0;
             int got = 0;
             int pulsed = 0;
             int left_wait = 0;
             int idle_run = 0;   // NEW: clocks parked in S_WAIT_FRAME after the pulse
+            int dead = 0;       // NEW: VM already halted — do not burn the cap
+            auto* rframe = top->rootp;
             for (; used < CAP; used++) {
                 // FPGA-SIM: one frame_tick when already in S_WAIT_FRAME, then
                 // drop it so `else if (frame_fire)` can dispatch rAF. Do not
                 // treat the same-cycle present_pend swap as a finished frame
                 // (that starved the callback — KEEP.JS needed a second rAF).
-                unsigned st0 = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state);
+                unsigned st0 = unsigned(rframe->jmr_js_core__DOT__u_vm__DOT__state);
+                // ARRAY_GET fault=255 (and any machine_fault) used to leave
+                // game_mode up while FRAME spun 64M clocks — GUI stuck on
+                // COMPILE, queued LIST keys landed as garbage after ESC.
+                if (rframe->jmr_js_core__DOT__u_vm__DOT__machine_fault
+                    || st0 == 17u /* S_DONE */
+                    || (st0 == 0u /* S_IDLE */ && used > 64 && !pulsed)) {
+                    dead = 1;
+                    break;
+                }
                 if (st0 == 16u && !pulsed) {
                     top->sim_frame_pulse = 1;
                     pulsed = 1;
                 }
                 tick();
                 top->sim_frame_pulse = 0;
-                unsigned cbip = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__dbg_cb_ip);
-                unsigned st = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state);
+                unsigned cbip = unsigned(rframe->jmr_js_core__DOT__u_vm__DOT__dbg_cb_ip);
+                unsigned st = unsigned(rframe->jmr_js_core__DOT__u_vm__DOT__state);
+                if (rframe->jmr_js_core__DOT__u_vm__DOT__machine_fault
+                    || st == 17u || st == 0u) {
+                    if (st != 16u) {
+                        dead = 1;
+                        used++;
+                        break;
+                    }
+                }
                 // GC temporarily leaves S_WAIT_FRAME before the callback.
                 // Do not mistake collector completion for callback completion.
                 if (pulsed && st != 16u && !(st >= 54u && st <= 58u))
@@ -1458,8 +1531,8 @@ int main(int argc, char** argv) {
                 if (idle_run > 2000) { got = 1; used++; break; }
             }
             last_fclk = (unsigned)used;
-            last_fcap = got ? 0u : 1u;
-            if (!got) fcap_n++;
+            last_fcap = (got || dead) ? 0u : 1u;
+            if (!got && !dead) fcap_n++;
             if (top->game_mode) {
                 // Capped FRAME has not presented — skip the 640×480 dump
                 // (was ~5 wasted FB encodes per visual frame).

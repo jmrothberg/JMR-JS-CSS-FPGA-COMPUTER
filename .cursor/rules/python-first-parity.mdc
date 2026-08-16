@@ -49,7 +49,9 @@ disk sidecar. See `no-dukpy-cheat-native-cpu`.
 When adding or changing glass-level behaviour:
 
 1. Implement + exercise in the **Python bytecode FM** (and GUI PYTHON path).
-2. Mirror in **FPGA-SIM** so F9 FPGA-SIM matches.
+2. Mirror in **FPGA-SIM** so F9 FPGA-SIM matches. RTL memories must be
+   **SRAM-shaped** (1-D, registered read) — Verilator-only 2-D combo heaps
+   are not a rung. See `never-fake-fpga-sim.mdc` and [docs/FPGA_FIT.md](../../docs/FPGA_FIT.md).
 3. Only then RTL/fit if needed, build `.bit`/`.bin`, flash, smoke the **board**.
 4. Update [docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md) if status
    changes; note any temporary parity debt explicitly (never leave it silent).

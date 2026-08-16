@@ -2134,6 +2134,34 @@ def test_hw_value64_date_now_get_prop_call():
     assert vm.globals.get("t") == 0.0
 
 
+def test_hw_value64_array_push_70():
+    """ARRAY_ELEMENTS=128: a 70-brick bunker list must not capacity-fault."""
+    vm = JsHwVm()
+    vm.load_blob(
+        encode_chunk(
+            compile_source(
+                "var cells=[]; var i=0; while(i<70){cells.push(i); i=i+1;} "
+                "var n=cells.length;"
+            ),
+            v2=True,
+            value64=True,
+        )
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("n") == 70.0
+
+
+def test_hw_value64_array_pop():
+    """Array.pop must shrink length (clearArr / any HTML while-pop loop)."""
+    vm = _hw_v64(
+        "var a=[1,2,3]; var x=a.pop(); var n=a.length; var e=[].pop();"
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("x") == 3.0
+    assert vm.globals.get("n") == 2.0
+    assert vm.globals.get("e") is None
+
+
 def test_hw_value64_index_non_array_is_undefined():
     """1[0] is undefined (JS), not a machine fault. Stale handles still fault."""
     vm = JsHwVm()
@@ -2579,6 +2607,19 @@ var sum = t.a + t.b;
     assert vm.globals.get("sum") == 3.0
 
 
+def test_hw_value64_object_assign_second_source():
+    """Object.assign(target, a, b) must copy b (PACMAN Item settings+params)."""
+    vm = _hw_v64(
+        """
+var t = {times: 0};
+Object.assign(t, {times: 0, orientation: 0}, {orientation: 3});
+var ok = (t.times == 0 && t.orientation == 3) ? 1 : 0;
+"""
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("ok") == 1.0
+
+
 def test_hw_value64_p1_function_bind():
     """Function.bind must fix this for a later call."""
     vm = _hw_v64(
@@ -2659,6 +2700,20 @@ def test_hw_value64_console_log_rings():
     assert len(vm.console_log) == 256
     assert vm.console_log[0] == (44.0,)
     assert vm.console_log[-1] == (299.0,)
+
+
+def test_hw_value64_array_get_non_number_is_undefined():
+    """arr[undefined] is undefined, not a machine halt."""
+    vm = _hw_v64(
+        """
+var a = [1, 0, -1, 0];
+var miss = a[undefined];
+var ok = 1;
+if (miss === undefined) ok = 2;
+"""
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("ok") == 2.0
 
 
 def test_hw_value64_clear_timeout_null_is_noop():

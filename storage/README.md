@@ -19,6 +19,9 @@ BOARD → ASIC via the **JMR bytecode VM** — **not dukpy**.
 | Space Invaders | `INVADERS.HTML` |
 | Pac-Man | `PACMAN.HTML` |
 | Donkey Kong | `DONKEY.HTML` |
+| Asteroids (vector) | `ASTEROID.HTML` |
+
+Authoring rules for new titles: [docs/GAME_DESIGN.md](../docs/GAME_DESIGN.md).
 
 ### Compile-on-RUN (hard rule)
 

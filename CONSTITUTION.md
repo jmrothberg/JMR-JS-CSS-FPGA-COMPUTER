@@ -110,6 +110,23 @@ engines, not library code on a hidden CPU.
    BASIC ASIC rules by default).
 10. **Standalone required:** HDMI + local keyboard + local play controls; a PC
     is not required to use the machine. UART/JTAG are flash/debug only.
+11. **FPGA-SIM RTL must be synthesizable SRAM.** Verilator, Vivado, and ASIC
+    compile the **same** `rtl/*.sv`. A 2-D heap you scan with
+    `for (k) if (mem[h][k]==key)` inside `always_ff` is a **simulation array**
+    (the loop unrolls to a combinational mux). Vivado `Synth 8-4556` / LUTRAM
+    / failed timing are the chip refusing it — not a later “fit pass.”
+    Memories are 1-D, address in, write-enable + wdata, **rdata next clock**,
+    1 write + 1–2 read ports. Slot walks take extra clocks; that is real
+    silicon (~30 MHz class), not a reason to keep combo lookups so sim feels
+    fast. Array **depth × width must fit leftover on-chip BRAM** after dual FB
+    (~1 MB class on T200, not 7 MB of “block RAM”). Loud overflow; same caps
+    in PYTHON. Do not hide overflow in the 4 MB **asset** SRAM (art) or by
+    doubling that bank. Write SystemVerilog Vivado will parse (no nested
+    `bus[a:b][c:d]`). No runtime-trip `for (i = j; i < N)` (Synth 8-3380).
+    No nested `for` over `ENV_DEPTH` in a task (walk one index per clock).
+    Operand `vstack` is 1W1R registered, not combo/multi-port LUTRAM
+    (Synth 8-7186). No `` `ifdef SYNTHESIS `` smaller heap, no Xilinx
+    `RAMB36` inside the VM. See [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
 
 ---
 
@@ -141,7 +158,8 @@ User titles: `LOAD "NAME.HTML"` / `RUN` only. **`RUN` = compile-on-RUN**
 (fresh in-memory ProgramImage with ASET art section; never a sidecar; art
 streams to the external SRAM asset bank).
 Cursor rules: `python-first-parity.mdc`, `no-dukpy-cheat-native-cpu.mdc`,
-`never-fake-fpga-sim.mdc`.
+`never-fake-fpga-sim.mdc` (includes: RTL heaps must be SRAM, not Verilator-only
+2-D combo arrays).
 
 The BASIC sibling (`JMR-BASIC-FPGA-COMPUTER` on Nexys A7-100T) is a **working
 reference for method and USB-HID→PS/2 bring-up**, not a pinout or instruction
@@ -187,6 +205,28 @@ simulation and the board keep real cycle time; Python does not.
 6. **PYTHON → real FPGA-SIM → user F9 → board → ASIC.** No host twin as
    the sim default. No `.bit`/`.bin` to “define” a feature FPGA-SIM still
    rejects. Visual play is the user’s F9, not a snippet PASS.
+7. **Write FPGA-SIM as if it were the chip.** Same SystemVerilog as the
+   `.bin` and the ASIC. Heaps, framebuffers, VRAM, code RAM, and FIFOs use
+   **SRAM ports** from day one (1-D array; one index per clock; registered
+   read; dump shares the CPU read port; CLS-walk to clear, never a reset
+   `for` that writes every cell). A `for` over object slots in `always_ff`
+   is **not** 32 clocks — it is 32 parallel compares and will not map to
+   block RAM or an SRAM macro. Extra clocks per `GET_PROP` are how a
+   ~30 MHz FPGA stays closed; combinational megabit muxes blow LUTs and
+   WNS. Do not grow combo 2-D arrays “until games work, then flatten.”
+   Flatten-as-you-go, or flatten in a dedicated pass **before** more
+   opcodes that index the heap. **Shape is not enough:** `MAX_OBJ`/`MAX_ARR`
+   must fit leftover BRAM after the dual framebuffer (T200 ≈ 1.64 MB BRAM
+   total; dual 640×480 FB ≈ 0.6 MB). Legal slot depths: `MAX_OBJ=1024` ×
+   `OBJ_SLOTS=32` × 80b plus `MAX_ARR=512` × `ARR_CAP=128` × 64b plus
+   `ENV_DEPTH=512` × 16 × 80b ≈ 0.9 MB
+   (same numbers in PYTHON; 512 arrays hold ten live nested number-array maps). 8192×32×80b + 4096×128×64b ≈ 7 MB will not
+   infer — that is the anti-pattern. Overflow loud; do not grow the 4 MB
+   asset bank to hold JS objects. Avoid Verilator-only SV (`sig[hi:lo][n:m]`
+   → Vivado Synth 8-2599; use `sig[73:64]` or a wire). Legal shape in this
+   repo:
+   `rtl/engines/storage_engine.sv` (`sbuf`), `rtl/engines/jmr_video_vram.sv`
+   (Port A).
 
 A native graphics processing unit is the same machine with draw engines as
 first-class instruction-set operations (Canvas here; COLOR/SET on BASIC).
@@ -375,6 +415,12 @@ section** of the ephemeral ProgramImage; the loader streams code → code BRAM
 and ASET → asset SRAM. Sprite handles/descriptors (w, h, SRAM offset) live
 in the ProgramImage; pixels never enter code BRAM. There is **no `NAME.DAT`
 file** — that earlier spill design is retired.
+
+**On-chip arrays are SRAM, not simulation tables.** Code, heap, dual FB,
+editor buffer, and char VRAM must infer as block RAM (FPGA) / compiled
+SRAM (ASIC): 1-D, 1–2 ports, registered read. Verilator happiness is not
+proof. Combo 2-D heaps (`vobj_key[obj][slot]` compared in one cycle) are
+forbidden even if FPGA-SIM titles look right.
 
 **V1 on-chip working set** (generous — see ASIC target below):
 

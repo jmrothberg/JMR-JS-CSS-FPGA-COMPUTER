@@ -1295,6 +1295,46 @@ requestAnimationFrame(tick);
         sim.shutdown()
 
 
+def test_rtl_value64_raf_map_churn_no_heap_fault():
+    """rAF Array.map + {x,y} temps must collect; idle PACMAN died at fault=3."""
+    import re as _re
+
+    src = """
+function tick() {
+  var i = 0;
+  while (i < 8) {
+    Array(8).fill(0).map(function() { return {x: 1, y: 1}; });
+    i = i + 1;
+  }
+  fillRect(10, 10, 8, 8, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("VCHURN.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "VCHURN.JS"')
+        sim.type_line("RUN")
+        st = ""
+        for _ in range(64):
+            sim._rpc("FRAME")
+            st = sim._rpc("VMSTAT?") or ""
+            assert "fault=3" not in st, st
+            assert "sname=S_IDLE" not in st, st
+            assert "fcap=0" in st, st
+        assert "fault=0" in st, st
+        raf = int(_re.search(r"raf=(\d+)", st).group(1))
+        assert raf >= 1, st
+        gc = int(_re.search(r"gc=(\d+)", st).group(1))
+        assert gc > 0, st
+        assert "vdraw=10,10,8,8,2" in st, st
+    finally:
+        sim.shutdown()
+
+
 def test_rtl_present_once_per_frame():
     """rAF + setTimeout(0) in the same frame must present once (write_repeat).
 
@@ -2073,6 +2113,266 @@ requestAnimationFrame(tick);
         # Value64 native fillRect updates vdraw even when FB? is still the
         # READY glass. Land only paints this rect if get bottom() was y+h.
         st = sim._rpc("VMSTAT?")
+        assert "vdraw=10,10,30,30,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_make_array_setprop_this_beyond_tos_window():
+    """MAKE_ARRAY of 16+ then SET_PROP must keep `this` under the handle.
+
+    The TOS window is 16 FFs. A 20-element literal drops vsp by 19, so
+    win[1] stays leftover unless BRAM refills it. SET_PROP then wrote the
+    array onto that leftover instead of the receiver, and a later for-of
+    over this.cells saw length 0 (no tiles / no AABB).
+    """
+    cells = ",\n      ".join(f"new Cell({i})" for i in range(20))
+    src = f"""
+class Cell {{
+  constructor(n) {{ this.n = n; }}
+}}
+class Box {{
+  constructor() {{
+    this.cells = [
+      {cells}
+    ];
+  }}
+  sum() {{
+    let s = 0;
+    for (const c of this.cells) s = s + c.n;
+    return s;
+  }}
+}}
+var b = new Box();
+function tick() {{
+  if (b.sum() == 190) {{
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }}
+  requestAnimationFrame(tick);
+}}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        from functional_model.compiler import compile_source
+        from functional_model.jsb_format import encode_chunk
+        from tools.make_sd_image import patch_card_file
+
+        card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
+        blob = encode_chunk(compile_source(src), v2=True, value64=True)
+        patch_card_file(card, "ARR20.JS", src.encode("utf-8"))
+        patch_card_file(card, "ARR20.JSB", blob)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "ARR20.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "vdraw=10,10,30,30,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_array_push_70_cells():
+    """array.push past the old ARR_CAP=64 must keep length (bunker bricks)."""
+    src = """
+var cells = [];
+var i = 0;
+while (i < 70) {
+  cells.push({n: i});
+  i = i + 1;
+}
+function tick() {
+  if (cells.length == 70) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("PUSH70.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "PUSH70.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "vdraw=10,10,30,30,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_array_pop():
+    """Array.pop must shrink length (ASTEROID clearArr / any while-pop)."""
+    src = """
+var a = [1, 2, 3];
+var x = a.pop();
+function tick() {
+  if (x == 3 && a.length == 2) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("ARRPOP.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "ARRPOP.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "vdraw=10,10,30,30,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_array_pop():
+    """Array.pop must shrink length (ASTEROID clearArr / any while-pop)."""
+    src = """
+var a = [1, 2, 3];
+var x = a.pop();
+function tick() {
+  if (x == 3 && a.length == 2) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("ARRPOP.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "ARRPOP.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "vdraw=10,10,30,30,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_date_now_inside_iife_raf():
+    """Date.now() in a nested rAF callback must not ERROR_HANDLE (stale env)."""
+    src = """
+(function () {
+  var lastTime = 0;
+  function tick() {
+    var now = Date.now();
+    if (now >= lastTime) {
+      fillRect(10, 10, 30, 30, 2);
+      swapBuffers();
+    }
+    lastTime = now;
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+})();
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("DATENOW.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "DATENOW.JS"')
+        sim.type_line("RUN")
+        for _ in range(6):
+            sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "vdraw=10,10,30,30,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_console_log_rings_does_not_halt():
+    """console.log overflow must not CAPACITY-fault (DONKEY Mario.update)."""
+    src = """
+var i = 0;
+function tick() {
+  while (i < 300) {
+    console.log(i);
+    i = i + 1;
+  }
+  fillRect(10, 10, 30, 30, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("LOG300.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "LOG300.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "vdraw=10,10,30,30,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_array_get_non_number_is_undefined():
+    """arr[undefined] must not ERROR_INTERNAL (PACMAN _COS[orientation])."""
+    src = """
+var a = [1, 0, -1, 0];
+var miss = a[undefined];
+function tick() {
+  if (miss === undefined) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("ARRUND.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "ARRUND.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "vdraw=10,10,30,30,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_item_assign_cos_orientation():
+    """Object.assign(this, settings, params) must copy params.orientation."""
+    src = """
+var t = {times: 0};
+Object.assign(t, {times: 0, orientation: 0}, {orientation: 3});
+function tick() {
+  if (t.times == 0 && t.orientation == 3) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("COSORI.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "COSORI.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
         assert "vdraw=10,10,30,30,2" in st, st
     finally:
         sim.shutdown()
@@ -4479,9 +4779,9 @@ def test_invaders_fpga_sim_held_left_changes_frame_within_budget():
         assert after != before
         assert "raf=0" not in vmstat
         # Value64 splash/game frames do per-pixel fillRect from string-row
-        # sprites; FRAME itself is capped at 16M. Do not use the old 1.67M
-        # 60 Hz budget (INVADERS is slower than pre-Value64 — leave it).
-        assert fclk <= 16_000_000, f"frame clocks {fclk} exceed 16M FRAME cap ({vmstat})"
+        # sprites; sequential GET_PROP is real silicon (~30 MHz), so FRAME
+        # is capped at 64M (was 16M on the combo-heap cheat).
+        assert fclk <= 64_000_000, f"frame clocks {fclk} exceed 64M FRAME cap ({vmstat})"
     finally:
         sim.shutdown()
 

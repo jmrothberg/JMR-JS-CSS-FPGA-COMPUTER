@@ -1,6 +1,8 @@
 # Verilator FPGA-SIM for JMR JS Computer.
 # make -C sim sim_server_synth  → sim_build_synth/jmr_js_sim_server
 # Tops jmr_js_core (same DUT as board). GUI falls back to host_sim_server.py.
+# Incremental: obj_dir keeps C++ from last Verilator; only changed .sv recompile.
+# `make -C sim clean` is a full rebuild — do not use it between small RTL edits.
 
 ROOT := $(abspath ..)
 RTL  := $(ROOT)/rtl

@@ -26,6 +26,53 @@ was broken.
 - Constitution order: **PYTHON bytecode** → **real FPGA-SIM** → BOARD → ASIC.
   Never claim a rung done via dukpy or host twin.
 
+## RTL must map to real SRAM (not Verilator-only arrays)
+
+FPGA-SIM, `make -C tools/board_flow bit`, and later ASIC compile the **same**
+`rtl/*.sv`. Verilator will simulate patterns that **never** become BRAM or an
+ASIC SRAM macro. Those are fake FPGA-SIM — same class of cheat as a host twin.
+
+**Illegal (do not add; rewrite if you touch it):**
+- 2-D heaps: `logic [15:0] vobj_key [0:MAX_OBJ-1][0:OBJ_SLOTS-1]` or
+  `logic [63:0] venv_val [0:ENV_DEPTH-1][0:ENV_SLOTS-1]` (Synth 8-4556)
+- `for (k = 0; k < N; k++) if (mem[h][k] == key)` inside `always_ff` — that
+  **unrolls** to an N-wide combinational mux, not N clocks. Vivado
+  `Synth 8-4556` (variable > 1 Mbit) or LUTRAM instead of BRAM.
+- Reset `for` that writes every cell in one cycle (SRAM has no parallel clear).
+- `` `ifdef SYNTHESIS `` smaller heap / combo sim vs BRAM board.
+- Xilinx `RAMB36` primitives inside the VM (ASIC cannot use them).
+- **Sim-sized depths on BRAM:** do not restore `MAX_OBJ=8192` × 32 × 80b plus
+  `MAX_ARR=4096` × 128 × 64b ≈ **7 MB**. Legal leftover-BRAM caps:
+  `MAX_OBJ=1024` × 32 × 80b plus `MAX_ARR=512` × `ARR_CAP=128` × 64b plus
+  `ENV_DEPTH=512` × 16 × 80b ≈ 0.9 MB (same numbers in PYTHON). T200 BRAM is
+  **~1.64 MB** total. Dual FB takes ~0.6 MB. Leftover ~**1 MB** is the
+  heap+code budget. Overflow **loud**; same caps in PYTHON. Do **not** put
+  JS heap in the 4 MB asset SRAM (ASET art; FPGA-SIM 4 MB = DDR3 first 4 MB
+  = IS61WV204816). Do **not** bump that bank to 8 MB to hide the heap.
+- Nested part-selects: `vobj_rdata[79:64][9:0]` — Verilator yes, Vivado
+  `Synth 8-2599`. Use `vobj_rdata[73:64]` or a wire.
+- Runtime-trip `for (i = j; i < N)` — Vivado Synth 8-3380. Rewrite
+  `for (i = 0; i < N) if (i >= j)`. Nested `for` over `ENV_DEPTH` (1024×1024)
+  is the same class as combo heap: walk one index per clock (`S_REL_ENV`).
+- Combo/multi-port `vstack` with `ram_style=block` — Synth 8-7186, LUTRAM.
+  1W1R registered like `vobj_slot`.
+- `function automatic` TOS peek from the giant `unique case` — Vivado
+  Synth 8-660 (`vst_at`). Combo `vst_peek` wire from the 16 FF window;
+  do not combo-read `vst_rdata` (last beat, not a 3rd port).
+
+**Legal (FPGA BRAM now, ASIC SRAM later — same ports):**
+- 1-D memory: address in, `we` + wdata, **rdata next clock**, 1 write + 1–2
+  reads. Dump/tether shares the CPU read port (not a third port).
+- Slot scan = FSM both sim and board wait on. Stop at `vobj_len`, not always 32.
+- Copy `rtl/engines/storage_engine.sv` `sbuf` and
+  `rtl/engines/jmr_video_vram.sv` Port A.
+
+Clock: plan **~30 MHz** (BASIC native needed work to hold that; this VM is
+bigger). Sequential SRAM is how you **keep** that clock. Combo megabit muxes
+destroy WNS. Extra GET_PROP clocks are real silicon, not a reason to keep
+combo heaps so F9 “feels fast.” Details: [docs/FPGA_FIT.md](../../docs/FPGA_FIT.md),
+Constitution rule 11 + language-native method step 7.
+
 ## Code touchpoints
 
 - [`runtime/sim_backend.py`](../../runtime/sim_backend.py) — default RTL

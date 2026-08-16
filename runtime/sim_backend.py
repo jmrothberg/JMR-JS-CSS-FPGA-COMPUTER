@@ -45,6 +45,7 @@ class SimBackend(RuntimeBackend):
         self._running = False  # NEW: RTL game_mode — skip prompt overlay
         self._more = False     # NEW: parked on -- MORE --
         self._listing = False  # LIST/DIR until READY — no '>' between pages
+        self._typed_log: list[str] = []  # typed monitor rows; never drop them
         self._edit_prefill: Optional[str] = None
         self._loaded_name: str = ""
         self._arch_phase: str = "idle"
@@ -316,8 +317,17 @@ class SimBackend(RuntimeBackend):
             self._canvas.paint_console_letterbox(lines, prompt="")
             return
         pr = prompt if prompt is not None else "> "
+        # PYTHON console_log is append-only in typed order. RTL SCREEN is
+        # 16 VRAM rows and may still hold an older RUN while a later LOAD
+        # prints LOADED — never merge leftover `> run` onto the end of SCREEN.
+        if not self._listing and self._typed_log:
+            lines = [ln for ln in self._typed_log if ln.strip()]
+        else:
+            lines = [ln for ln in self._screen.splitlines() if ln.strip()]
+        while lines and lines[-1].strip() in (">", "> "):
+            lines.pop()
         self._canvas.paint_console_letterbox(
-            self._screen.splitlines(),
+            lines,
             prompt=pr,
             cursor_on=cursor_on,
             cursor_col=cursor_col,
@@ -409,6 +419,17 @@ class SimBackend(RuntimeBackend):
             except (ValueError, IndexError):
                 pass
         self._last_cmd = stripped
+        if stripped:
+            # PYTHON console_log keeps every typed row. FPGA-SIM HTML RUN
+            # skips LINE so RTL never echoes `> RUN`; keep it here.
+            if not self._typed_log:
+                for ln in self._screen.splitlines():
+                    s = ln.strip()
+                    if s and s not in (">", "> "):
+                        self._typed_log.append(s)
+            self._typed_log.append(f"> {stripped}")
+        if upper in ("CLS", "NEW"):
+            self._typed_log = []
         if upper.startswith("LOAD"):
             self._loaded_name = stripped[4:].strip().strip('"').strip("'")
             self._arch_phase = "load"
@@ -530,6 +551,20 @@ class SimBackend(RuntimeBackend):
             # NEW: ASET palette landed in the RTL palette BRAM during the FAT
             # load — mirror it so the GUI colors FB indices like HDMI would.
             self._sync_palette()
+        if upper.startswith("LOAD"):
+            # Host log is chronological: `> LOAD` then this reply, never a
+            # SCREEN merge that can place LOADED above an older `> run`.
+            self._rpc("SCREEN?")
+            loaded = ""
+            for ln in self._screen.splitlines():
+                s = ln.strip()
+                if s.startswith("LOADED"):
+                    loaded = s
+                    break
+            if loaded:
+                self._typed_log.append(loaded)
+            if not self._typed_log or self._typed_log[-1] != "READY":
+                self._typed_log.append("READY")
         self._sync_glass()
         if upper == "DIR" or upper.startswith("LOAD") or upper.startswith("SAVE") or upper == "LIST" or upper.startswith("LIST"):
             self._note_glass(upper.split()[0])
@@ -694,6 +729,8 @@ class SimBackend(RuntimeBackend):
                 self._paint_screen_local(prompt, cursor_on=cursor_on, cursor_col=cursor_col)
 
     def hard_break(self) -> None:
+        self._running = False
+        self._arch_phase = "loaded"
         self._flush_keyevts()
         self._log.note("BREAK")
         # NEW: one VM telemetry line on BREAK (n_obj / heap_ovf / to_ovf / raf)
@@ -749,6 +786,23 @@ class SimBackend(RuntimeBackend):
                     self._log.note(f"FRAME {st}")
                 elif first3:
                     self._log.note(f"FRAME {st}")
+                # VM halt (fault=255 ARRAY_GET, heap ovf, …): drop game_mode
+                # so LIST is the console, not keys queued behind a dead FRAME.
+                fault_n = 0
+                for tok in st.split():
+                    if tok.startswith("fault="):
+                        try:
+                            fault_n = int(tok.split("=", 1)[1])
+                        except ValueError:
+                            fault_n = 0
+                if fault_n:
+                    self._log.fault("VM", st)
+                    self._running = False
+                    self._arch_phase = "loaded"
+                    self._rpc("KEY 1b")
+                    if not self._typed_log or self._typed_log[-1] != "READY":
+                        self._typed_log.append("READY")
+                    self._sync_glass("> ")
             if beat:
                 n = len(self._play_fclk)
                 avg = (sum(self._play_fclk) // n) if n else 0
@@ -796,6 +850,7 @@ class SimBackend(RuntimeBackend):
         self._running = False
         self._more = False
         self._listing = False
+        self._typed_log = []
         self._screen = ""
         self._canvas.front[:] = bytes(len(self._canvas.front))
         self._canvas.back[:] = bytes(len(self._canvas.back))

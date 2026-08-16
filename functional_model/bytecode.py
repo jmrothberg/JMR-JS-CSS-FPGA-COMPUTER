@@ -1181,7 +1181,7 @@ class VM:
                     try:
                         i = int(idx)
                         # NEW: a[i]= grows length (JS). Twin of RTL ARR_SET.
-                        if i >= len(arr) and i < 128:
+                        if i >= len(arr) and i < 64:
                             arr.extend([None] * (i - len(arr) + 1))
                         if 0 <= i < len(arr):
                             arr[i] = val

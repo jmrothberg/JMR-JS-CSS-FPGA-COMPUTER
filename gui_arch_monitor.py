@@ -973,7 +973,7 @@ class ArchitectureView:
     def _inspect_heap(self) -> str:
         return (
             self._hdr("OBJECT / HEAP ENGINE")
-            + "8192 objects × 32 properties. 4096 arrays.\n"
+            + "1024 objects × 32 properties. 512 arrays × 64 elems.\n"
             "Lexical env 32 deep. Ring recycle for temporaries\n"
             "(upper half; boot heap stays below the wrap).\n"
             "Closures survive after return: setTimeout / requestAnimationFrame.\n\n"

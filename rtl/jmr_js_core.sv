@@ -5,7 +5,10 @@ module jmr_js_core #(
     parameter int unsigned SD_INIT_DIV = 127,
     parameter int unsigned SD_RUN_DIV  = 3,
     // NEW: FPGA-SIM FRAME_DIV=1 (one tick per ~2 clk when idle). Board keeps 65535.
-    parameter int unsigned FRAME_DIV   = 65535
+    parameter int unsigned FRAME_DIV   = 65535,
+    // NEW: 1 = behavioral 4 MB SRAM (FPGA-SIM). 0 = ports for board MIG / ASIC.
+    // Not `ifdef SYNTHESIS` — same RTL, board instantiates #(.SRAM_INTERNAL(0)).
+    parameter bit SRAM_INTERNAL = 1
 ) (
     input  logic        clk,
     input  logic        pixel_clk,   // mini-FB read domain (board HDMI)
@@ -51,7 +54,14 @@ module jmr_js_core #(
     output logic        jsb_tether_rdy,
     // NEW: FPGA-SIM RAM LOAD — SOURCE poked by the host, LOAD skips FAT open
     input  logic        sim_src_bypass = 1'b0,
-    input  logic [15:0] sim_src_lines = 16'd0
+    input  logic [15:0] sim_src_lines = 16'd0,
+    // NEW: asset SRAM port when SRAM_INTERNAL=0 (board MIG). Sim leaves defaults.
+    output logic        sram_ext_req,
+    output logic        sram_ext_we,
+    output logic [20:0] sram_ext_addr,
+    output logic [15:0] sram_ext_wdata,
+    input  logic [15:0] sram_ext_rdata = 16'd0,
+    input  logic        sram_ext_ack = 1'b0
 );
     logic kbd_empty, kbd_full, kbd_pop, kbd_clear;
     logic [7:0] kbd_q;
@@ -309,18 +319,33 @@ module jmr_js_core #(
     assign sram_addr  = cons_sram_req ? cons_sram_addr : vm_sram_addr;
     assign sram_wdata = cons_sram_wdata;
 
-    // NEW: behavioral 4 MB SRAM (FPGA-SIM). Board build swaps this instance
-    // for the MIG DDR3 bridge behind the identical port; ASIC uses the real
-    // IS61WV204816 — nothing above the port changes.
-    jmr_sram_model u_sram (
-        .clk(clk), .rst_n(rst_n),
-        .req(sram_req), .we(sram_we), .addr(sram_addr),
-        .wdata(sram_wdata), .rdata(sram_rdata), .ack(sram_ack)
-    );
+    // NEW: behavioral 4 MB SRAM (FPGA-SIM, SRAM_INTERNAL=1). Board uses
+    // #(.SRAM_INTERNAL(0)) and the MIG DDR3 bridge on these ports.
+    generate
+        if (SRAM_INTERNAL) begin : g_sram
+            jmr_sram_model u_sram (
+                .clk(clk), .rst_n(rst_n),
+                .req(sram_req), .we(sram_we), .addr(sram_addr),
+                .wdata(sram_wdata), .rdata(sram_rdata), .ack(sram_ack)
+            );
+            assign sram_ext_req   = 1'b0;
+            assign sram_ext_we    = 1'b0;
+            assign sram_ext_addr  = 21'd0;
+            assign sram_ext_wdata = 16'd0;
+        end else begin : g_ext
+            assign sram_ext_req   = sram_req;
+            assign sram_ext_we    = sram_we;
+            assign sram_ext_addr  = sram_addr;
+            assign sram_ext_wdata = sram_wdata;
+            assign sram_rdata     = sram_ext_rdata;
+            assign sram_ack       = sram_ext_ack;
+        end
+    endgenerate
 
     // NEW: per-title 256-entry palette (loaded from the ASET section on RUN)
     jmr_palette_bram u_palette (
-        .clk(clk), .we(pal_we), .waddr(pal_waddr), .wdata(pal_wdata),
+        .wr_clk(clk), .rd_clk(pixel_clk),
+        .we(pal_we), .waddr(pal_waddr), .wdata(pal_wdata),
         .raddr(pal_raddr), .rdata(pal_rdata)
     );
 

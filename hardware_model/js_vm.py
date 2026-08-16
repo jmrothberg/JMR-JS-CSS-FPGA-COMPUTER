@@ -39,14 +39,14 @@ MAX_CONSTS = PROGRAM_MAX_CONSTS
 MAX_VARS = PROGRAM_MAX_VARS
 STACK_DEPTH = 2048
 CALL_DEPTH = 128
-MAX_OBJECTS = 8192
-MAX_ARRAYS = 4096
+MAX_OBJECTS = 1024
+MAX_ARRAYS = 512
 HEAP_SLOTS = MAX_OBJECTS  # Backward-compatible name for the object heap cap.
 OBJECT_SLOTS = 32
 ARRAY_ELEMENTS = 128
 # One env per live call/closure. `new Ctor()` bodies that MAKE_FN keep that
 # ctor env for as long as those closures live (empty update/draw on instances).
-ENV_DEPTH = 1024
+ENV_DEPTH = 512
 ENV_SLOTS = 16
 RAF_QUEUE_DEPTH = 8
 TIMER_QUEUE_DEPTH = 64
@@ -2466,10 +2466,11 @@ class JsHwVm:
                     try:
                         index = int(value_unpack_number(index_word))
                     except (TypeError, ValueError, OverflowError):
-                        self._value64_fault(
-                            f"ARRAY_GET requires a finite Number index at IP {op_ip}"
-                        )
-                        return
+                        # JS: arr[undefined]/arr[NaN] is undefined, not a halt
+                        # (PACMAN `_COS[this.orientation]` when GET_PROP misses).
+                        if not self._value64_push(undefined):
+                            return
+                        continue
                     result = (
                         array[index]
                         if 0 <= index < len(array)

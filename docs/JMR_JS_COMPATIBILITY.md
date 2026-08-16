@@ -23,6 +23,7 @@ RUN
 | Space Invaders | `INVADERS.HTML` | compile → ephemeral ProgramImage (code + ASET art) |
 | Pac-Man | `PACMAN.HTML` | compile → ephemeral ProgramImage (code + ASET art) |
 | Donkey Kong | `DONKEY.HTML` | compile → ephemeral ProgramImage (code + **full-res** ASET art) |
+| Asteroids (library) | `ASTEROID.HTML` | compile → ephemeral ProgramImage (vector stroke; no ASET) |
 
 **Compile-on-RUN (hard):** source of truth = loaded `.HTML` (editor line
 numbers). `RUN` **always** recompiles into one versioned in-memory
@@ -400,7 +401,7 @@ values are one 64-bit word.
   Return and event/frame boundaries assert the expected stack depth; they do
   not reset `sp` to conceal imbalance.
 - General V1 caps are code 32768 words, constants 1024, globals 512, eval stack
-  2048 Values, call frames 128, objects 8192, arrays 4096, array elements 128,
+  2048 Values, call frames 128, objects 1024, arrays 512, array elements 64,
   lexical environments 32, timers 64, rAF callbacks 8, and four listeners
   per event type. Reaching a cap triggers collection where legal, then halts
   loudly if capacity is still unavailable.
@@ -583,7 +584,8 @@ Play-blocking gaps get **one pytest per gap** in `tests/test_bytecode_js.py`
 
 | File | Role |
 |---|---|
-| `storage/INVADERS.HTML` / `PACMAN.HTML` / `DONKEY.HTML` | **Product titles** (LOAD these) |
+| `storage/INVADERS.HTML` / `PACMAN.HTML` / `DONKEY.HTML` | **Product titles** (LOAD these; ISA freeze) |
+| `storage/ASTEROID.HTML` | Library title (vector Asteroids). Authoring: [GAME_DESIGN.md](GAME_DESIGN.md) |
 | In-memory ProgramImage | Compile-on-RUN code + source map + descriptors + ASET; never a storage name |
 | `storage/RECTDEMO.JS` / `JOYDEMO.JS` / `CLIMB.JS` | Optional differently named VM smoke |
 | `storage/games_*` | Upstream archive only |

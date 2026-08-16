@@ -552,10 +552,10 @@ class App:
                 or up.startswith("LIST")
             )
             if busy:
-                # RTL already echoes the typed line on glass. Overlaying the
-                # same `> load "…"` here painted a second (yellow) copy.
-                # ASCII "..." — the 8x8 font has no U+2026 (missing → "?").
-                self._busy_prompt = "> WORKING..."
+                # RTL already echoes the typed line on glass. Overlaying
+                # WORKING on that same row wiped RUN, then READY cleared
+                # both. Keep the echoed command; status bar says compiling.
+                self._busy_prompt = f"> {line}"
                 if up.startswith("LOAD"):
                     self._arch_phase_override = "load"
                 elif up == "RUN" or up.startswith("RUN "):

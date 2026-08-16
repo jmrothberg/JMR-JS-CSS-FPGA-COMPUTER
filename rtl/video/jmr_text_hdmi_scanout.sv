@@ -12,6 +12,9 @@ module jmr_text_hdmi_scanout #(
     input  logic        game_mode,
     output logic [18:0] fb_raddr,
     input  logic [7:0]  fb_rdata,
+    // NEW: ASET palette (pixel-clk registered BRAM in the core)
+    output logic [7:0]  pal_index,
+    input  logic [23:0] pal_rgb,
     output logic [23:0] vid_pData,
     output logic        vid_pVDE,
     output logic        vid_pHSync,
@@ -77,6 +80,8 @@ module jmr_text_hdmi_scanout #(
     assign vram_addr = in_text ? {row, col} : 10'd0;
     // NEW: 1:1 FB address (native 640×480)
     assign fb_raddr = visible ? (19'(vcnt) * 19'd640 + 19'(hcnt)) : 19'd0;
+    // Palette read is registered; pal_rgb lines up with fb_q (same 1-cycle delay).
+    assign pal_index = fb_rdata;
 
     always_comb begin
         bits = font_rom[{ch_q[6:0], grow_q}];
@@ -127,7 +132,7 @@ module jmr_text_hdmi_scanout #(
             vid_pVDE   <= visible_q;
 
             if (game_q && visible_q && (hx_q < 10'd640) && (hy_q < 10'd480)) begin
-                vid_pData <= pal(fb_q);
+                vid_pData <= pal_rgb;
             end else if (in_text_q) begin
                 if (frame_div[5] && (cell_q == cursor_cell))
                     vid_pData <= 24'h40FFFF;
