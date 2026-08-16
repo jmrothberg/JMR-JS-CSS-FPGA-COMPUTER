@@ -675,6 +675,7 @@ int main(int argc, char** argv) {
                       << " sp=" << ((unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u)
                           ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vsp)
                           : unsigned(r->jmr_js_core__DOT__u_vm__DOT__sp))
+                      << " vcsp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vcsp)
                       << " vdraw="
                       << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_x)
                       << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_y)

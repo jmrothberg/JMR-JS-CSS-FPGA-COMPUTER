@@ -147,6 +147,10 @@ module jmr_js_vm #(
     // NEW_OBJ stores the interned class name so CALL_METH can find the
     // class-table method (PYTHON _value_object_classes). 16'hFFFF = none.
     logic [15:0] vobj_cls [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
+    // PYTHON _value_object_protos / _value_function_prototypes. `var Stage =
+    // function` + Stage.prototype.createItem is not a JSB class-method table.
+    logic [63:0] vobj_proto [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
+    logic [63:0] vfn_proto [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
     logic [15:0] vobj_key [0:MAX_OBJ-1][0:OBJ_SLOTS-1] /*verilator public_flat_rd*/;
     logic [63:0] vobj_val [0:MAX_OBJ-1][0:OBJ_SLOTS-1] /*verilator public_flat_rd*/;
     logic [11:0] vfn_gen [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
@@ -184,11 +188,11 @@ module jmr_js_vm #(
     logic [11:0] vgc_root_i;
     logic [13:0] valloc_i;
     logic [13:0] vobj_next, varr_next;
-    logic [5:0] venv_next;
+    logic [9:0] venv_next;
     logic [1:0] valloc_kind;
     logic valloc_retried, vgc_halt_after;
     logic venv_mark [0:ENV_DEPTH-1];
-    logic [5:0] vgc_env_i;
+    logic [9:0] vgc_env_i;
     logic [2:0] vgc_root_phase;
     logic vcall_value;
     logic [15:0] vcall_entry;
@@ -201,6 +205,10 @@ module jmr_js_vm #(
     logic [3:0] vobj_builtin [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
     logic [2:0] vnat_dom;
     logic [63:0] vnat_style;
+    // PYTHON measureText {width} — one reused object (tagged metrics_oid).
+    logic [63:0] vmetrics;
+    logic        valloc_metrics;
+    logic [15:0] vmetrics_w;
     logic [63:0] vkev_event;
     logic [63:0] vlistener_ev [0:15] /*verilator public_flat_rd*/;
     logic [63:0] vlistener_fn [0:15] /*verilator public_flat_rd*/;
@@ -258,7 +266,10 @@ module jmr_js_vm #(
     // NEW: per-call lexical env (FM bytecode.py env dict). LIFO frames;
     // MAKE_FN snapshots the current frame onto the Fn heap object so
     // setTimeout/rAF closures keep forEach params after the call returns.
-    localparam int ENV_DEPTH = 32;
+    // PYTHON hardware_model/js_vm.py ENV_DEPTH=1024 — PACMAN Item ctor
+    // captures update/draw closures, so each new Item keeps an env.
+    localparam int ENV_DEPTH = 1024;
+    localparam int TAGGED_ENV_DEPTH = 32;
     localparam int ENV_SLOTS = 16;
     // Finite general timer queue. A legal JS loop can have one pending timeout
     // per frame until an older delay expires, so eight entries was not viable.
@@ -563,10 +574,21 @@ module jmr_js_vm #(
     logic        cc_bok;  // every operand's bytes made it into txt_buf
     // Value64 string + reuses S_CONCAT / S_JOIN_FIND; write vstack not stack.
     logic        v64_concat;
+    logic        v64_join; // arr.join('') writeback via S_JOIN_FIND → vstack
+    logic        v64_sqrt; // Math.sqrt writeback via S_SQRT → vstack
     // Date.now / performance.now GET_PROP allocates a native-35 function
     // (PYTHON entry=-35). CALL_VAL sees vfn_entry 16'hfffa.
     logic        valloc_now_fn;
     logic        valloc_regex;
+    // GET_PROP .prototype on a function: alloc empty proto object (PYTHON).
+    logic        valloc_proto;
+    logic [12:0] valloc_proto_fn;
+    // fn.bind(this) — PYTHON copies entry/env and sets has_bound_this.
+    logic        valloc_bind;
+    logic [12:0] valloc_bind_src;
+    logic [63:0] valloc_bind_this;
+    logic [5:0]  vctor_scan;
+    logic        vctor_armed;
     logic [15:0] pow31_tbl [0:255]; // 31^i mod 2^16 (concat hash fold)
     initial begin
         pow31_tbl[0] = 16'd1;
@@ -753,7 +775,9 @@ module jmr_js_vm #(
         // name_mem BRAM lag for Value64 "str"[i] (row[col]==="1").
         S_V64_STRIDX, S_V64_STRIDX_WR,
         // Value64 JSON.stringify/parse of nested number arrays (map.data clone).
-        S_V64_JSON, S_V64_JSON_PARSE
+        S_V64_JSON, S_V64_JSON_PARSE,
+        // Pad missing ctor/method args to LET_VAR nparam (PYTHON bind_argv).
+        S_V64_CTOR_PAD
     } st_t;
     st_t state /*verilator public_flat_rd*/, ret_state;
 
@@ -1013,10 +1037,10 @@ module jmr_js_vm #(
                 vgc_qw <= vgc_qw + 14'd1;
             end else if (word[63:48] == 16'h7ff9 &&
                          kind == 4'd9 && index < ENV_DEPTH &&
-                         venv_valid[index[4:0]] &&
-                         venv_gen[index[4:0]] == generation &&
-                         !venv_mark[index[4:0]]) begin
-                venv_mark[index[4:0]] <= 1'b1;
+                         venv_valid[index[9:0]] &&
+                         venv_gen[index[9:0]] == generation &&
+                         !venv_mark[index[9:0]]) begin
+                venv_mark[index[9:0]] <= 1'b1;
                 vgc_queue[vgc_qw] <= word;
                 vgc_qw <= vgc_qw + 14'd1;
             end
@@ -1027,7 +1051,7 @@ module jmr_js_vm #(
         input logic [8:0] slot,
         output logic found,
         output logic [63:0] value,
-        output logic [4:0] env_index,
+        output logic [9:0] env_index,
         output logic handle_error
     );
         logic [63:0] cursor;
@@ -1036,28 +1060,28 @@ module jmr_js_vm #(
             cursor = venv;
             found = 1'b0;
             value = V64_UNDEFINED;
-            env_index = 5'd0;
+            env_index = 10'd0;
             handle_error = 1'b0;
             active = 1'b1;
             for (int depth = 0; depth < ENV_DEPTH; depth++) begin
                 if (active && cursor[63:48] == 16'h7ff9 &&
                     cursor[47:44] == 4'd9) begin
                     if (cursor[31:0] >= ENV_DEPTH ||
-                        !venv_valid[cursor[4:0]] ||
-                        venv_gen[cursor[4:0]] != cursor[43:32]) begin
+                        !venv_valid[cursor[9:0]] ||
+                        venv_gen[cursor[9:0]] != cursor[43:32]) begin
                         handle_error = 1'b1;
                         active = 1'b0;
                     end else begin
                         for (int k = 0; k < ENV_SLOTS; k++)
-                            if (!found && k < venv_len[cursor[4:0]] &&
-                                venv_key[cursor[4:0]][k] == slot) begin
+                            if (!found && k < venv_len[cursor[9:0]] &&
+                                venv_key[cursor[9:0]][k] == slot) begin
                                 found = 1'b1;
-                                value = venv_val[cursor[4:0]][k];
-                                env_index = cursor[4:0];
+                                value = venv_val[cursor[9:0]][k];
+                                env_index = cursor[9:0];
                                 active = 1'b0;
                             end
                         if (active)
-                            cursor = venv_parent[cursor[4:0]];
+                            cursor = venv_parent[cursor[9:0]];
                     end
                 end else begin
                     active = 1'b0;
@@ -1192,7 +1216,7 @@ module jmr_js_vm #(
     // NEW: live heap env (FM env dict). Parent oid in slot0.
     task automatic push_fresh_env(input logic [15:0] parent);
         logic [15:0] oid;
-        if (env_sp < ENV_DEPTH[5:0]) begin
+        if (env_sp < TAGGED_ENV_DEPTH[5:0]) begin
             if (env_free_n != 6'd0) begin
                 oid = env_free[env_free_n - 6'd1];
                 env_free_n <= env_free_n - 6'd1;
@@ -1303,7 +1327,7 @@ module jmr_js_vm #(
                     if (j < 32'(nn) && env_free[j] == oid) dup = 1'b1;
                 if (i == 32'(env_sp) - 1 && n_obj == (oid + 16'd1))
                     n_obj <= oid;
-                else if (!dup && nn < ENV_DEPTH[5:0] &&
+                else if (!dup && nn < TAGGED_ENV_DEPTH[5:0] &&
                          (!obj_keep_ok || oid < n_obj_keep)) begin
                     env_free[nn] <= oid;
                     nn = nn + 6'd1;
@@ -1473,6 +1497,47 @@ module jmr_js_vm #(
     function automatic logic signed [31:0] stfx(input logic [10:0] i);
         stfx = (stack_tag[i] == 3'd7) ? stack[i] : (stack[i] <<< 16);
     endfunction
+    // IEEE binary64 → Q16.16 (path/arc args). Compare the exponent to
+    // 1023/1059 directly — do not stash (exp-1023) in a signed local.
+    function automatic logic signed [31:0] v64_to_fx(input logic [63:0] v);
+        logic [10:0] exponent;
+        logic [52:0] mant;
+        logic [31:0] mag;
+        begin
+            exponent = v[62:52];
+            mant = {1'b1, v[51:0]};
+            mag = 32'd0;
+            if (!v64_is_number(v) || exponent == 11'h7ff)
+                mag = 32'd0;
+            else if (exponent >= 11'd1059 && exponent < 11'd1091)
+                mag = 32'(mant << (exponent - 11'd1059));
+            else if (exponent >= 11'd1007 && exponent < 11'd1059)
+                mag = 32'(mant >> (11'd1059 - exponent));
+            v64_to_fx = v[63] ? -$signed(mag) : $signed(mag);
+        end
+    endfunction
+    // Q16.16 → IEEE. Unbiased exp is top-16; IEEE exp = top+1007
+    // (1023-16). Do not stash (top-16) in a signed local.
+    function automatic logic [63:0] v64_from_fx(input logic signed [31:0] fx);
+        logic sign;
+        logic [31:0] magnitude;
+        logic [52:0] mant;
+        integer top;
+        begin
+            sign = fx[31];
+            magnitude = sign ? (~fx + 32'd1) : fx;
+            if (magnitude == 0)
+                v64_from_fx = 64'd0;
+            else begin
+                top = 0;
+                for (int k = 0; k < 32; k++)
+                    if (magnitude[k])
+                        top = k;
+                mant = 53'(magnitude) << (52 - top);
+                v64_from_fx = {sign, 11'(top + 1007), mant[51:0]};
+            end
+        end
+    endfunction
     // NEW: Q32.32 → int, truncating toward zero (Python int() spec in FM _xf)
     function automatic logic signed [31:0] trunc32(input logic signed [63:0] v);
         trunc32 = v[63] ? -32'((-v) >>> 32) : 32'(v >>> 32);
@@ -1629,6 +1694,9 @@ module jmr_js_vm #(
             vcallback_timer <= 1'b0; vgc_wait_after <= 1'b0;
             vnat_base <= '0; vdraw_i <= '0;
             vnat_dom <= 3'd0; vnat_style <= V64_UNDEFINED;
+            vmetrics <= V64_UNDEFINED;
+            valloc_metrics <= 1'b0;
+            vmetrics_w <= 16'd0;
             vkev_event <= V64_UNDEFINED; vlistener_n <= 5'd0;
             vkey_li <= 5'd0;
             v64_frame_armed <= 1'b0;
@@ -1637,6 +1705,13 @@ module jmr_js_vm #(
             vfe_i <= 8'd0; vfe_ret <= 16'd0; vfe_base <= '0; vfe_sp <= 4'd0;
             valloc_now_fn <= 1'b0;
             valloc_regex <= 1'b0;
+            valloc_proto <= 1'b0;
+            valloc_proto_fn <= 13'd0;
+            valloc_bind <= 1'b0;
+            valloc_bind_src <= 13'd0;
+            valloc_bind_this <= V64_UNDEFINED;
+            vctor_scan <= '0;
+            vctor_armed <= 1'b0;
             n_ops <= '0; n_consts <= '0; ops_base <= '0;
             code_raddr <= '0;
             nat_id <= '0; nat_argc <= '0;
@@ -1715,7 +1790,7 @@ module jmr_js_vm #(
                     if (code_rdata[19]) begin
                         vobj_next <= 14'd0;
                         varr_next <= 14'd0;
-                        venv_next <= 6'd0;
+                        venv_next <= 10'd0;
                         vthis <= V64_UNDEFINED;
                         venv <= V64_UNDEFINED;
                         vcall_set_this <= 1'b0;
@@ -1833,6 +1908,8 @@ module jmr_js_vm #(
                     id_join <= 16'hFFFF; id_indexof <= 16'hFFFF; id_replace <= 16'hFFFF;
                     names_n <= 16'd0; dbg_join_miss <= 16'd0; dbg_pdo_n <= 5'd0;
                     v64_concat <= 1'b0;
+                    v64_join <= 1'b0;
+                    v64_sqrt <= 1'b0;
                     dbg_rect_n <= 5'd0; dbg_swap_n <= 16'd0;
                     dbg_line_px <= 32'd0; dbg_circ_px <= 32'd0; dbg_rect_px <= 32'd0;
                     pc_n <= 5'd0; pi <= 5'd0; path_active <= 1'b0; dbg_path_ovf <= 16'd0;
@@ -3656,7 +3733,7 @@ module jmr_js_vm #(
                                         obj_key[n_obj[12:0] + 13'd1][0] <= 16'd0;
                                         obj_val[n_obj[12:0] + 13'd1][0] <= 32'd0;
                                         obj_tag[n_obj[12:0] + 13'd1][0] <= 3'd0;
-                                        if (env_sp < ENV_DEPTH[5:0]) begin
+                                        if (env_sp < TAGGED_ENV_DEPTH[5:0]) begin
                                             env_oid[env_sp] <= n_obj + 16'd1;
                                             env_cap[env_sp] <= 1'b0;
                                             env_sp <= env_sp + 6'd1;
@@ -5249,7 +5326,39 @@ module jmr_js_vm #(
                 S_JOIN: begin
                     // NEW: fold single-digit elems into the encoder u16 hash
                     // (h = h*31 + '0'+d), matching jsb name interning
-                    if (jn_i >= 16'({8'd0, arr_len[jn_arr]})) begin
+                    if (v64_join) begin
+                        if (jn_i >= 16'({8'd0, varr_len[jn_arr]})) begin
+                            jn_i <= 16'd0;
+                            jn_len <= varr_len[jn_arr];
+                            state <= S_JOIN_FIND;
+                        end else begin
+                            logic signed [31:0] ev;
+                            logic [63:0] elem;
+                            elem = varr_val[jn_arr][jn_i[6:0]];
+                            ev = $signed(v64_to_uint32(elem));
+                            if (elem[63:48] == V64_TAG_PREFIX &&
+                                elem[47:44] == 4'd4 &&
+                                name_len_tbl[elem[9:0]] == 8'd1 &&
+                                name_hash_tbl[elem[9:0]][7:0] >= 8'h30 &&
+                                name_hash_tbl[elem[9:0]][7:0] <= 8'h39)
+                                ev = 32'(name_hash_tbl[elem[9:0]][7:0] - 8'h30);
+                            if (ev < 32'sd0 || ev > 32'sd9) begin
+                                dbg_join_miss <= dbg_join_miss + 16'd1;
+                                vstack[jn_res] <= V64_UNDEFINED;
+                                v64_join <= 1'b0;
+                                code_raddr <= 15'(ops_base + ip);
+                                state <= S_FETCH_WAIT;
+                            end else begin
+                                jn_h <= 16'(32'(jn_h) * 32'd31 + 32'd48 + 32'(ev));
+                                if (jn_i < 16'(TXT_MAX)) begin
+                                    txt_buf[jn_i[5:0]] <= 8'h30 + 8'(ev);
+                                    txt_bn <= 7'(jn_i) + 7'd1;
+                                    cc_bok <= 1'b1;
+                                end else cc_bok <= 1'b0;
+                                jn_i <= jn_i + 16'd1;
+                            end
+                        end
+                    end else if (jn_i >= 16'({8'd0, arr_len[jn_arr]})) begin
                         jn_i <= 16'd0;
                         jn_len <= arr_len[jn_arr]; // one char per digit elem
                         state <= S_JOIN_FIND;
@@ -5302,12 +5411,24 @@ module jmr_js_vm #(
                             sq_root <= {sq_root[22:0], 1'b0};
                         end
                         if (sq_i == 5'd0) begin
+                            if (v64_sqrt) begin
+                                vstack[vnat_base] <= v64_from_fx($signed({8'd0,
+                                    (rem2 >= trial) ? {sq_root[22:0], 1'b1}
+                                                    : {sq_root[22:0], 1'b0}}));
+                                vsp <= vnat_base + 12'd1;
+                                ip <= ip + 16'd1;
+                                code_raddr <=
+                                    15'(ops_base + ip + 16'd1);
+                                v64_sqrt <= 1'b0;
+                                state <= S_FETCH_WAIT;
+                            end else begin
                             stack[sp - 8'd1] <= {8'd0,
                                 (rem2 >= trial) ? {sq_root[22:0], 1'b1}
                                                 : {sq_root[22:0], 1'b0}};
                             stack_tag[sp - 8'd1] <= 3'd7;
                             code_raddr <= 15'(ops_base + ip);
                             state <= S_FETCH_WAIT;
+                            end
                         end else sq_i <= sq_i - 5'd1;
                     end
                 end
@@ -5328,11 +5449,12 @@ module jmr_js_vm #(
                         end
                     end
                     if (hitf) begin
-                        if (v64_concat) begin
+                        if (v64_concat || v64_join) begin
                             vstack[jn_res] <= v64_handle(
                                 4'd4, 12'd0, {16'd0, hidx}
                             );
                             v64_concat <= 1'b0;
+                            v64_join <= 1'b0;
                         end else begin
                             stack[jn_res] <= {16'd0, hidx};
                             stack_tag[jn_res] <= 3'd3;
@@ -5343,11 +5465,12 @@ module jmr_js_vm #(
                         if (names_n < 16'd1024) begin
                             name_hash_tbl[names_n[9:0]] <= jn_h;
                             name_len_tbl[names_n[9:0]] <= jn_len;
-                            if (v64_concat) begin
+                            if (v64_concat || v64_join) begin
                                 vstack[jn_res] <= v64_handle(
                                     4'd4, 12'd0, {16'd0, names_n}
                                 );
                                 v64_concat <= 1'b0;
+                            v64_join <= 1'b0;
                             end else begin
                                 stack[jn_res] <= {16'd0, names_n};
                                 stack_tag[jn_res] <= 3'd3;
@@ -5370,9 +5493,10 @@ module jmr_js_vm #(
                         end else begin
                             // intern table full — honest miss
                             dbg_join_miss <= dbg_join_miss + 16'd1;
-                            if (v64_concat) begin
+                            if (v64_concat || v64_join) begin
                                 vstack[jn_res] <= V64_UNDEFINED;
                                 v64_concat <= 1'b0;
+                            v64_join <= 1'b0;
                             end else begin
                                 stack[jn_res] <= 32'sd0;
                                 stack_tag[jn_res] <= 3'd5;
@@ -5444,9 +5568,10 @@ module jmr_js_vm #(
                         end else begin
                             // undefined/obj/arr/fn concat — honest miss
                             dbg_join_miss <= dbg_join_miss + 16'd1;
-                            if (v64_concat) begin
+                            if (v64_concat || v64_join) begin
                                 vstack[jn_res] <= V64_UNDEFINED;
                                 v64_concat <= 1'b0;
+                            v64_join <= 1'b0;
                             end else begin
                                 stack[jn_res] <= 32'sd0;
                                 stack_tag[jn_res] <= 3'd5;
@@ -7023,7 +7148,7 @@ module jmr_js_vm #(
                                 end else begin
                                     logic found, handle_error;
                                     logic [63:0] value;
-                                    logic [4:0] env_index;
+                                    logic [9:0] env_index;
                                     v64_env_lookup_task(
                                         code_rdata[16:8], found, value,
                                         env_index, handle_error
@@ -7061,7 +7186,7 @@ module jmr_js_vm #(
                                 end else begin
                                     logic found, handle_error, local_found;
                                     logic [63:0] old_value;
-                                    logic [4:0] env_index;
+                                    logic [9:0] env_index;
                                     local_found = 1'b0;
                                     v64_env_lookup_task(
                                         code_rdata[16:8], found, old_value,
@@ -7083,8 +7208,8 @@ module jmr_js_vm #(
                                             venv[63:48] != 16'h7ff9 ||
                                             venv[47:44] != 4'd9 ||
                                             venv[31:0] >= ENV_DEPTH ||
-                                            !venv_valid[venv[4:0]] ||
-                                            venv_gen[venv[4:0]] !=
+                                            !venv_valid[venv[9:0]] ||
+                                            venv_gen[venv[9:0]] !=
                                                 venv[43:32]) begin
                                             // Flat IIFE: LET_VAR local with
                                             // no ENV stores the global
@@ -7101,15 +7226,15 @@ module jmr_js_vm #(
                                             state <= S_FETCH_WAIT;
                                         end else begin
                                             for (int k = 0; k < ENV_SLOTS; k++)
-                                                if (k < venv_len[venv[4:0]] &&
-                                                    venv_key[venv[4:0]][k] ==
+                                                if (k < venv_len[venv[9:0]] &&
+                                                    venv_key[venv[9:0]][k] ==
                                                         code_rdata[16:8]) begin
                                                     local_found = 1'b1;
-                                                    venv_val[venv[4:0]][k] <=
+                                                    venv_val[venv[9:0]][k] <=
                                                         vstack[vsp - 12'd1];
                                                 end
                                             if (!local_found &&
-                                                venv_len[venv[4:0]] >=
+                                                venv_len[venv[9:0]] >=
                                                     ENV_SLOTS) begin
                                                 machine_fault <= 1'b1;
                                                 fault_code <= 8'd3;
@@ -7117,14 +7242,14 @@ module jmr_js_vm #(
                                                 state <= S_DONE;
                                             end else begin
                                                 if (!local_found) begin
-                                                    venv_key[venv[4:0]]
-                                                            [venv_len[venv[4:0]]] <=
+                                                    venv_key[venv[9:0]]
+                                                            [venv_len[venv[9:0]]] <=
                                                         code_rdata[16:8];
-                                                    venv_val[venv[4:0]]
-                                                            [venv_len[venv[4:0]]] <=
+                                                    venv_val[venv[9:0]]
+                                                            [venv_len[venv[9:0]]] <=
                                                         vstack[vsp - 12'd1];
-                                                    venv_len[venv[4:0]] <=
-                                                        venv_len[venv[4:0]] + 5'd1;
+                                                    venv_len[venv[9:0]] <=
+                                                        venv_len[venv[9:0]] + 5'd1;
                                                 end
                                                 vsp <= vsp - 12'd1;
                                                 ip <= ip + 16'd1;
@@ -7344,6 +7469,44 @@ module jmr_js_vm #(
                                             ip <= ip + 16'd1;
                                             code_raddr <= 15'(ops_base + ip + 16'd1);
                                             state <= S_FETCH_WAIT;
+                                        end
+                                        8'd15: begin
+                                            // PYTHON Math.sqrt — reuse tagged
+                                            // S_SQRT (Q16.16) then v64_from_fx.
+                                            begin
+                                                logic [63:0] arg;
+                                                logic signed [31:0] v;
+                                                arg = (argc != 0)
+                                                    ? vstack[base] : V64_CANON_NAN;
+                                                if (!v64_is_number(arg) ||
+                                                    (arg[62:52] == 11'h7ff &&
+                                                     arg[51:0] != 0)) begin
+                                                    vstack[base] <= V64_CANON_NAN;
+                                                    vsp <= base + 12'd1;
+                                                    ip <= ip + 16'd1;
+                                                    code_raddr <=
+                                                        15'(ops_base + ip + 16'd1);
+                                                    state <= S_FETCH_WAIT;
+                                                end else if (arg[63] &&
+                                                           arg[62:0] != 0) begin
+                                                    vstack[base] <= V64_CANON_NAN;
+                                                    vsp <= base + 12'd1;
+                                                    ip <= ip + 16'd1;
+                                                    code_raddr <=
+                                                        15'(ops_base + ip + 16'd1);
+                                                    state <= S_FETCH_WAIT;
+                                                end else begin
+                                                    v = v64_to_fx(arg);
+                                                    if (v < 0) v = 32'sd0;
+                                                    sq_rad <= {v, 16'd0};
+                                                    sq_rem <= 26'd0;
+                                                    sq_root <= 24'd0;
+                                                    sq_i <= 5'd23;
+                                                    v64_sqrt <= 1'b1;
+                                                    vnat_base <= base;
+                                                    state <= S_SQRT;
+                                                end
+                                            end
                                         end
                                         8'd27: begin // requestAnimationFrame
                                             bad_fn = argc == 0 ||
@@ -7623,12 +7786,89 @@ module jmr_js_vm #(
                                             code_raddr <= 15'(ops_base + ip + 16'd1);
                                             state <= S_FETCH_WAIT;
                                         end
-                                        8'd36, 8'd37: begin // removeEventListener
-                                            vstack[base] <= result;
-                                            vsp <= base + 12'd1;
-                                            ip <= ip + 16'd1;
-                                            code_raddr <= 15'(ops_base + ip + 16'd1);
-                                            state <= S_FETCH_WAIT;
+                                        8'd36, 8'd37: begin
+                                            // PYTHON removeEventListener —
+                                            // drop matching (event, fn).
+                                            begin
+                                                logic [63:0] ev, fn;
+                                                logic [63:0] nev [0:15];
+                                                logic [63:0] nfn [0:15];
+                                                logic [4:0] w;
+                                                ev = (argc != 0)
+                                                    ? vstack[base] : V64_UNDEFINED;
+                                                fn = (argc > 1)
+                                                    ? vstack[base + 1]
+                                                    : V64_UNDEFINED;
+                                                w = 5'd0;
+                                                for (int k = 0; k < 16; k++) begin
+                                                    nev[k] = V64_UNDEFINED;
+                                                    nfn[k] = V64_UNDEFINED;
+                                                end
+                                                for (int k = 0; k < 16; k++)
+                                                    if (k < vlistener_n &&
+                                                        !(v64_equal(
+                                                              vlistener_ev[k], ev) &&
+                                                          v64_equal(
+                                                              vlistener_fn[k], fn)))
+                                                    begin
+                                                        nev[w] = vlistener_ev[k];
+                                                        nfn[w] = vlistener_fn[k];
+                                                        w = w + 5'd1;
+                                                    end
+                                                for (int k = 0; k < 16; k++) begin
+                                                    vlistener_ev[k] <= nev[k];
+                                                    vlistener_fn[k] <= nfn[k];
+                                                end
+                                                vlistener_n <= w;
+                                                vstack[base] <= result;
+                                                vsp <= base + 12'd1;
+                                                ip <= ip + 16'd1;
+                                                code_raddr <=
+                                                    15'(ops_base + ip + 16'd1);
+                                                state <= S_FETCH_WAIT;
+                                            end
+                                        end
+                                        8'd40: begin
+                                            // PYTHON typeof — interned tag
+                                            // (PACMAN Map.get hole checks).
+                                            begin
+                                                logic [15:0] tn;
+                                                logic [63:0] arg;
+                                                arg = (argc != 0)
+                                                    ? vstack[base] : V64_UNDEFINED;
+                                                tn = id_str_object;
+                                                if (v64_is_number(arg))
+                                                    tn = (id_str_number != 16'hFFFF)
+                                                        ? id_str_number
+                                                        : id_str_object;
+                                                else if (arg[63:48] == V64_TAG_PREFIX &&
+                                                         arg[47:44] ==
+                                                             V64_KIND_UNDEFINED)
+                                                    tn = id_str_undef;
+                                                else if (arg[63:48] == V64_TAG_PREFIX &&
+                                                         arg[47:44] ==
+                                                             V64_KIND_STRING)
+                                                    tn = (id_str_string != 16'hFFFF)
+                                                        ? id_str_string
+                                                        : id_str_object;
+                                                else if (arg[63:48] == V64_TAG_PREFIX &&
+                                                         arg[47:44] ==
+                                                             V64_KIND_FUNCTION)
+                                                    tn = (id_str_function != 16'hFFFF)
+                                                        ? id_str_function
+                                                        : id_str_object;
+                                                else if (id_str_object != 16'hFFFF)
+                                                    tn = id_str_object;
+                                                else
+                                                    tn = 16'd0;
+                                                vstack[base] <= v64_handle(
+                                                    4'd4, 12'd0, {16'd0, tn});
+                                                vsp <= base + 12'd1;
+                                                ip <= ip + 16'd1;
+                                                code_raddr <=
+                                                    15'(ops_base + ip + 16'd1);
+                                                state <= S_FETCH_WAIT;
+                                            end
                                         end
                                         default: begin
                                             machine_fault <= 1'b1;
@@ -7766,12 +8006,11 @@ module jmr_js_vm #(
                                 end else if (vcsp == 0) begin
                                     machine_fault <= 1'b1; fault_code <= 8'd2;
                                     running <= 1'b0; state <= S_DONE;
-                                end else if (
-                                    vsp - 12'd1 != vframe_base_sp[vcsp - 8'd1]
-                                ) begin
-                                    machine_fault <= 1'b1; fault_code <= 8'd2;
-                                    running <= 1'b0; state <= S_DONE;
                                 end else begin
+                                    // PYTHON pops result then checks sp==base.
+                                    // Keep the top as the return value so one
+                                    // extra (ctx.fillText in a method) still
+                                    // returns; writeback below uses vstack[vsp-1].
                                     vthis <= vframe_this[vcsp - 8'd1];
                                     venv <= vframe_env[vcsp - 8'd1];
                                     vcsp <= vcsp - 8'd1;
@@ -7859,6 +8098,45 @@ module jmr_js_vm #(
                                             ip <= ip + 16'd1;
                                             state <= S_V64_STRIDX;
                                         end
+                                    end else if (handle[63:48] == 16'h7ff9 &&
+                                        (handle[47:44] == V64_KIND_OBJECT ||
+                                         handle[47:44] == V64_KIND_ELEMENT) &&
+                                        handle[31:0] < MAX_OBJ &&
+                                        vobj_alloc[handle[12:0]] == 2'd1 &&
+                                        vobj_gen[handle[12:0]] == handle[43:32])
+                                    begin
+                                        // PYTHON: obj[computed] uses interned
+                                        // keys (`_events[eventType]`).
+                                        begin
+                                            logic [15:0] okey;
+                                            logic ofound;
+                                            logic [63:0] oresult;
+                                            okey = 16'hFFFF;
+                                            ofound = 1'b0;
+                                            oresult = V64_UNDEFINED;
+                                            if (vstack[vsp - 12'd1][63:48] ==
+                                                    V64_TAG_PREFIX &&
+                                                vstack[vsp - 12'd1][47:44] ==
+                                                    4'd4 &&
+                                                vstack[vsp - 12'd1][31:0] <
+                                                    32'd1024)
+                                                okey = vstack[vsp - 12'd1][15:0];
+                                            if (okey != 16'hFFFF)
+                                                for (int k = 0; k < OBJ_SLOTS; k++)
+                                                    if (k < vobj_len[handle[12:0]] &&
+                                                        vobj_key[handle[12:0]][k] ==
+                                                            okey) begin
+                                                        ofound = 1'b1;
+                                                        oresult =
+                                                            vobj_val[handle[12:0]][k];
+                                                    end
+                                            vstack[vsp - 12'd2] <= oresult;
+                                            vsp <= vsp - 12'd1;
+                                            ip <= ip + 16'd1;
+                                            code_raddr <=
+                                                15'(ops_base + ip + 16'd1);
+                                            state <= S_FETCH_WAIT;
+                                        end
                                     end else if (handle[63:48] != 16'h7ff9 ||
                                         handle[47:44] != 4'd6 ||
                                         handle[31:0] >= MAX_ARR ||
@@ -7899,13 +8177,75 @@ module jmr_js_vm #(
                                         vstack[vsp - 12'd2],
                                         index_valid, array_index
                                     );
-                                    if (handle[63:48] != 16'h7ff9 ||
+                                    if (handle[63:48] == 16'h7ff9 &&
+                                        (handle[47:44] == V64_KIND_OBJECT ||
+                                         handle[47:44] == V64_KIND_ELEMENT) &&
+                                        handle[31:0] < MAX_OBJ &&
+                                        vobj_alloc[handle[12:0]] == 2'd1 &&
+                                        vobj_gen[handle[12:0]] == handle[43:32])
+                                    begin
+                                        // PYTHON: obj[computed]=value interned
+                                        // keys (`_events[eventType] = {}`).
+                                        begin
+                                            logic [15:0] okey;
+                                            logic ofound;
+                                            okey = 16'hFFFF;
+                                            ofound = 1'b0;
+                                            if (vstack[vsp - 12'd2][63:48] ==
+                                                    V64_TAG_PREFIX &&
+                                                vstack[vsp - 12'd2][47:44] ==
+                                                    4'd4 &&
+                                                vstack[vsp - 12'd2][31:0] <
+                                                    32'd1024)
+                                                okey = vstack[vsp - 12'd2][15:0];
+                                            if (okey != 16'hFFFF)
+                                                for (int k = 0; k < OBJ_SLOTS; k++)
+                                                    if (k < vobj_len[handle[12:0]] &&
+                                                        vobj_key[handle[12:0]][k] ==
+                                                            okey) begin
+                                                        ofound = 1'b1;
+                                                        vobj_val[handle[12:0]][k] <=
+                                                            vstack[vsp - 12'd1];
+                                                    end
+                                            if (!ofound && okey != 16'hFFFF &&
+                                                vobj_len[handle[12:0]] >= OBJ_SLOTS)
+                                            begin
+                                                machine_fault <= 1'b1;
+                                                fault_code <= 8'd3;
+                                                running <= 1'b0;
+                                                state <= S_DONE;
+                                            end else begin
+                                                if (!ofound && okey != 16'hFFFF) begin
+                                                    vobj_key[handle[12:0]]
+                                                            [vobj_len[handle[12:0]]] <=
+                                                        okey;
+                                                    vobj_val[handle[12:0]]
+                                                            [vobj_len[handle[12:0]]] <=
+                                                        vstack[vsp - 12'd1];
+                                                    vobj_len[handle[12:0]] <=
+                                                        vobj_len[handle[12:0]] + 6'd1;
+                                                end
+                                                vstack[vsp - 12'd3] <=
+                                                    vstack[vsp - 12'd1];
+                                                vsp <= vsp - 12'd2;
+                                                ip <= ip + 16'd1;
+                                                code_raddr <=
+                                                    15'(ops_base + ip + 16'd1);
+                                                state <= S_FETCH_WAIT;
+                                            end
+                                        end
+                                    end else if (handle[63:48] != 16'h7ff9 ||
                                         handle[47:44] != 4'd6 ||
                                         handle[31:0] >= MAX_ARR ||
                                         !varr_valid[handle[11:0]] ||
                                         varr_gen[handle[11:0]] != handle[43:32]) begin
-                                        machine_fault <= 1'b1; fault_code <= 8'd4;
-                                        running <= 1'b0; state <= S_DONE;
+                                        // PYTHON: primitive[index]= is a no-op.
+                                        vstack[vsp - 12'd3] <= vstack[vsp - 12'd1];
+                                        vsp <= vsp - 12'd2;
+                                        ip <= ip + 16'd1;
+                                        code_raddr <=
+                                            15'(ops_base + ip + 16'd1);
+                                        state <= S_FETCH_WAIT;
                                     end else if (!index_valid) begin
                                         machine_fault <= 1'b1; fault_code <= 8'hff;
                                         running <= 1'b0; state <= S_DONE;
@@ -7980,6 +8320,49 @@ module jmr_js_vm #(
                                                 15'(ops_base + ip + 16'd1);
                                             state <= S_FETCH_WAIT;
                                         end
+                                    end else if (handle[63:48] == 16'h7ff9 &&
+                                                 handle[47:44] == 4'd7 &&
+                                                 handle[31:0] < MAX_OBJ &&
+                                                 vobj_alloc[handle[12:0]] == 2'd2 &&
+                                                 vfn_gen[handle[12:0]] ==
+                                                     handle[43:32]) begin
+                                        // PYTHON: every function has .prototype
+                                        // (Stage.prototype.createItem).
+                                        if (code_rdata[23:8] == id_proto) begin
+                                            if (vfn_proto[handle[12:0]][63:48] ==
+                                                    V64_TAG_PREFIX &&
+                                                vfn_proto[handle[12:0]][47:44] ==
+                                                    V64_KIND_OBJECT &&
+                                                vfn_proto[handle[12:0]][31:0] <
+                                                    MAX_OBJ &&
+                                                vobj_alloc[vfn_proto[handle[12:0]][12:0]]
+                                                    == 2'd1 &&
+                                                vobj_gen[vfn_proto[handle[12:0]][12:0]]
+                                                    == vfn_proto[handle[12:0]][43:32])
+                                            begin
+                                                vstack[vsp - 12'd1] <=
+                                                    vfn_proto[handle[12:0]];
+                                                ip <= ip + 16'd1;
+                                                code_raddr <=
+                                                    15'(ops_base + ip + 16'd1);
+                                                state <= S_FETCH_WAIT;
+                                            end else begin
+                                                valloc_proto <= 1'b1;
+                                                valloc_proto_fn <= handle[12:0];
+                                                vnat_base <= vsp - 12'd1;
+                                                valloc_kind <= 2'd0;
+                                                valloc_i <= vobj_next;
+                                                valloc_retried <= 1'b0;
+                                                state <= S_V64_ALLOC;
+                                            end
+                                        end else begin
+                                            vstack[vsp - 12'd1] <=
+                                                V64_UNDEFINED;
+                                            ip <= ip + 16'd1;
+                                            code_raddr <=
+                                                15'(ops_base + ip + 16'd1);
+                                            state <= S_FETCH_WAIT;
+                                        end
                                     end else if (handle[63:48] != 16'h7ff9 ||
                                         handle[47:44] != 4'd5 ||
                                         handle[31:0] >= MAX_OBJ ||
@@ -8004,6 +8387,25 @@ module jmr_js_vm #(
                                                 found = 1'b1;
                                                 result = vobj_val[handle[12:0]][k];
                                             end
+                                        // PYTHON: own miss walks _value_object_protos.
+                                        if (!found &&
+                                            vobj_proto[handle[12:0]][63:48] ==
+                                                V64_TAG_PREFIX &&
+                                            vobj_proto[handle[12:0]][47:44] ==
+                                                V64_KIND_OBJECT &&
+                                            vobj_proto[handle[12:0]][31:0] <
+                                                MAX_OBJ &&
+                                            vobj_alloc[vobj_proto[handle[12:0]][12:0]]
+                                                == 2'd1 &&
+                                            vobj_gen[vobj_proto[handle[12:0]][12:0]] ==
+                                                vobj_proto[handle[12:0]][43:32])
+                                            for (int k = 0; k < OBJ_SLOTS; k++)
+                                                if (k < vobj_len[vobj_proto[handle[12:0]][12:0]] &&
+                                                    vobj_key[vobj_proto[handle[12:0]][12:0]][k] ==
+                                                        code_rdata[23:8]) begin
+                                                    found = 1'b1;
+                                                    result = vobj_val[vobj_proto[handle[12:0]][12:0]][k];
+                                                end
                                         vstack[vsp - 12'd1] <= result;
                                         ip <= ip + 16'd1;
                                         code_raddr <=
@@ -8112,6 +8514,40 @@ module jmr_js_vm #(
                                                 else
                                                     fill_style_i <= 8'd1;
                                             end
+                                            if (code_rdata[23:8] == id_src &&
+                                                vobj_builtin[handle[12:0]] == 4'd2 &&
+                                                vstack[vsp - 12'd1][63:48] ==
+                                                    V64_TAG_PREFIX &&
+                                                vstack[vsp - 12'd1][47:44] ==
+                                                    4'd4) begin
+                                                // PYTHON Image.src jmr:spr:N
+                                                for (int k = 0; k < 16; k++)
+                                                    if (vstack[vsp - 12'd1][15:0] ==
+                                                            spr_nid[k[3:0]])
+                                                        vobj_cls[handle[12:0]] <=
+                                                            16'hFFC0 | k[15:0];
+                                            end
+                                            if (code_rdata[23:8] == id_onload &&
+                                                vstack[vsp - 12'd1][63:48] ==
+                                                    V64_TAG_PREFIX &&
+                                                vstack[vsp - 12'd1][47:44] ==
+                                                    4'd7) begin
+                                                // PYTHON Image.onload = fn —
+                                                // invoke now (title img ready).
+                                                vstack[vsp - 12'd2] <=
+                                                    vstack[vsp - 12'd1];
+                                                vsp <= vsp - 12'd1;
+                                                vcall_value <= 1'b1;
+                                                vcall_argc <= 12'd0;
+                                                vcall_set_this <= 1'b1;
+                                                vcall_this <= handle;
+                                                vcall_ctor_val <= V64_UNDEFINED;
+                                                valloc_kind <= 2'd3;
+                                                valloc_i <= venv_next;
+                                                valloc_retried <= 1'b0;
+                                                ip <= ip + 16'd1;
+                                                state <= S_V64_ALLOC;
+                                            end else begin
                                             vstack[vsp - 12'd2] <=
                                                 vstack[vsp - 12'd1];
                                             vsp <= vsp - 12'd1;
@@ -8119,6 +8555,7 @@ module jmr_js_vm #(
                                             code_raddr <=
                                                 15'(ops_base + ip + 16'd1);
                                             state <= S_FETCH_WAIT;
+                                            end
                                         end
                                     end
                                 end
@@ -8321,19 +8758,178 @@ module jmr_js_vm #(
                                                 else
                                                     paint_color = fill_style_i;
                                             end
-                                    vdraw_x <= v64_to_uint32(vstack[base + 1])[9:0];
-                                    vdraw_y <= v64_to_uint32(vstack[base + 2])[9:0];
-                                    vdraw_w <= v64_to_uint32(vstack[base + 3])[9:0];
-                                    vdraw_h <= v64_to_uint32(vstack[base + 4])[9:0];
+                                    // PYTHON _xf: always apply axis scale + translate
+                                    // (identity sx=1, tx=0 is a no-op; save/translate
+                                    // then fillRect must not skip tx).
+                                    vdraw_x <= clip_u(32'(
+                                        ($signed(v64_to_int32(vstack[base + 1]))
+                                         * ctx_sx) >>> 16) + ctx_tx, MW);
+                                    vdraw_y <= clip_u(32'(
+                                        ($signed(v64_to_int32(vstack[base + 2]))
+                                         * ctx_sy) >>> 16) + ctx_ty, MH);
+                                    vdraw_w <= clip_sz(32'(
+                                        ($signed(v64_to_int32(vstack[base + 3]))
+                                         * ctx_sx) >>> 16), 10'd0, MW);
+                                    vdraw_h <= clip_sz(32'(
+                                        ($signed(v64_to_int32(vstack[base + 4]))
+                                         * ctx_sy) >>> 16), 10'd0, MH);
                                     vdraw_color <= (code_rdata[23:8] == id_clearrect)
                                         ? 8'd0 : paint_color;
                                     vdraw_i <= 19'd0;
                                     vnat_base <= base;
                                     state <= S_V64_RECT;
+                                end else if (obj_ok &&
+                                           code_rdata[23:8] == id_save) begin
+                                    // PYTHON ctx.save — one-deep transform stack.
+                                    saved_tx <= ctx_tx; saved_ty <= ctx_ty;
+                                    saved_sx <= ctx_sx; saved_sy <= ctx_sy;
+                                    vstack[base] <= V64_UNDEFINED;
+                                    vsp <= base + 12'd1;
+                                    ip <= ip + 16'd1;
+                                    code_raddr <=
+                                        15'(ops_base + ip + 16'd1);
+                                    state <= S_FETCH_WAIT;
+                                end else if (obj_ok &&
+                                           code_rdata[23:8] == id_restore) begin
+                                    ctx_tx <= saved_tx; ctx_ty <= saved_ty;
+                                    ctx_sx <= saved_sx; ctx_sy <= saved_sy;
+                                    vstack[base] <= V64_UNDEFINED;
+                                    vsp <= base + 12'd1;
+                                    ip <= ip + 16'd1;
+                                    code_raddr <=
+                                        15'(ops_base + ip + 16'd1);
+                                    state <= S_FETCH_WAIT;
+                                end else if (obj_ok && argc >= 12'd2 &&
+                                           code_rdata[23:8] == id_translate) begin
+                                    // PYTHON ctx.translate — Player.drawImage(-w/2,-h/2)
+                                    // lands on position after this.
+                                    ctx_tx <= ctx_tx + v64_to_int32(vstack[base + 1]);
+                                    ctx_ty <= ctx_ty + v64_to_int32(vstack[base + 2]);
+                                    vstack[base] <= V64_UNDEFINED;
+                                    vsp <= base + 12'd1;
+                                    ip <= ip + 16'd1;
+                                    code_raddr <=
+                                        15'(ops_base + ip + 16'd1);
+                                    state <= S_FETCH_WAIT;
+                                end else if (obj_ok && argc >= 12'd6 &&
+                                           code_rdata[23:8] == id_settransform) begin
+                                    // PYTHON setTransform(a,b,c,d,e,f) — axis scale.
+                                    begin
+                                        logic signed [31:0] sx, sy;
+                                        sx = v64_to_fx(vstack[base + 1]);
+                                        sy = v64_to_fx(vstack[base + 4]);
+                                        ctx_sx <= (sx == 32'sd0) ? FX_ONE : sx;
+                                        ctx_sy <= (sy == 32'sd0) ? FX_ONE : sy;
+                                        ctx_tx <= v64_to_int32(vstack[base + 5]);
+                                        ctx_ty <= v64_to_int32(vstack[base + 6]);
+                                        vstack[base] <= V64_UNDEFINED;
+                                        vsp <= base + 12'd1;
+                                        ip <= ip + 16'd1;
+                                        code_raddr <=
+                                            15'(ops_base + ip + 16'd1);
+                                        state <= S_FETCH_WAIT;
+                                    end
+                                end else if (obj_ok && argc >= 12'd3 &&
+                                           code_rdata[23:8] == id_drawimage) begin
+                                    // PYTHON ctx.drawImage — ASET blit when
+                                    // Image.src was jmr:spr:N (vobj_cls FFC).
+                                    begin
+                                        logic [63:0] img;
+                                        logic [7:0] si;
+                                        logic spr_ok;
+                                        img = vstack[base + 1];
+                                        si = 8'(vobj_cls[img[12:0]][3:0]);
+                                        spr_ok = (img[63:48] == V64_TAG_PREFIX &&
+                                                  img[47:44] == V64_KIND_OBJECT &&
+                                                  img[31:0] < MAX_OBJ &&
+                                                  vobj_cls[img[12:0]][15:4] ==
+                                                      12'hFFC &&
+                                                  {1'b0, si} < {4'd0, n_spr});
+                                        if (spr_ok) begin
+                                            dbg_di_hit <= dbg_di_hit + 16'd1;
+                                            blit_si <= si;
+                                            if (argc >= 12'd9) begin
+                                                blit_sx <= clip_src(
+                                                    $signed(v64_to_int32(
+                                                        vstack[base + 2])));
+                                                blit_sy <= clip_src(
+                                                    $signed(v64_to_int32(
+                                                        vstack[base + 3])));
+                                                blit_sw <= clip_src(
+                                                    $signed(v64_to_int32(
+                                                        vstack[base + 4])));
+                                                blit_sh <= clip_src(
+                                                    $signed(v64_to_int32(
+                                                        vstack[base + 5])));
+                                                rx <= clip_u(32'(
+                                                    ($signed(v64_to_int32(
+                                                        vstack[base + 6]))
+                                                     * ctx_sx) >>> 16) + ctx_tx, MW);
+                                                ry <= clip_u(32'(
+                                                    ($signed(v64_to_int32(
+                                                        vstack[base + 7]))
+                                                     * ctx_sy) >>> 16) + ctx_ty, MH);
+                                                rw <= clip_sz(32'(
+                                                    ($signed(v64_to_int32(
+                                                        vstack[base + 8]))
+                                                     * ctx_sx) >>> 16), 10'd0, MW);
+                                                rh <= clip_sz(32'(
+                                                    ($signed(v64_to_int32(
+                                                        vstack[base + 9]))
+                                                     * ctx_sy) >>> 16), 10'd0, MH);
+                                            end else begin
+                                                blit_sx <= 16'd0; blit_sy <= 16'd0;
+                                                blit_sw <= spr_ww[si[3:0]];
+                                                blit_sh <= spr_hh[si[3:0]];
+                                                rx <= clip_u(32'(
+                                                    ($signed(v64_to_int32(
+                                                        vstack[base + 2]))
+                                                     * ctx_sx) >>> 16) + ctx_tx, MW);
+                                                ry <= clip_u(32'(
+                                                    ($signed(v64_to_int32(
+                                                        vstack[base + 3]))
+                                                     * ctx_sy) >>> 16) + ctx_ty, MH);
+                                                if (argc >= 12'd5) begin
+                                                    rw <= clip_sz(32'(
+                                                        ($signed(v64_to_int32(
+                                                            vstack[base + 4]))
+                                                         * ctx_sx) >>> 16),
+                                                        10'd0, MW);
+                                                    rh <= clip_sz(32'(
+                                                        ($signed(v64_to_int32(
+                                                            vstack[base + 5]))
+                                                         * ctx_sy) >>> 16),
+                                                        10'd0, MH);
+                                                end else begin
+                                                    rw <= (spr_ww[si[3:0]] > 16'(MW))
+                                                        ? 10'(MW)
+                                                        : spr_ww[si[3:0]][9:0];
+                                                    rh <= (spr_hh[si[3:0]] > 16'(MH))
+                                                        ? 10'(MH)
+                                                        : spr_hh[si[3:0]][9:0];
+                                                end
+                                            end
+                                            x <= 10'd0; y <= 10'd0;
+                                            vstack[base] <= V64_UNDEFINED;
+                                            vsp <= base + 12'd1;
+                                            ip <= ip + 16'd1;
+                                            state <= S_BLIT;
+                                        end else begin
+                                            dbg_di_miss <= dbg_di_miss + 16'd1;
+                                            vstack[base] <= V64_UNDEFINED;
+                                            vsp <= base + 12'd1;
+                                            ip <= ip + 16'd1;
+                                            code_raddr <=
+                                                15'(ops_base + ip + 16'd1);
+                                            state <= S_FETCH_WAIT;
+                                        end
+                                    end
                                 end else if (obj_ok && argc >= 12'd3 &&
                                            code_rdata[23:8] == id_filltext) begin
                                     // Reuse S_TXT_LD / S_TXT_DRAW (same glyphs as
-                                    // the tagged VM). Interned text + fill_style_i.
+                                    // the tagged VM). PYTHON String(t): intern
+                                    // or ToString(number). txt_vt=5 used to
+                                    // bump dbg_str_ovf and sticky-fault SCORE.
                                     color <= fill_style_i;
                                     if (vstack[base + 1][63:48] == V64_TAG_PREFIX &&
                                         vstack[base + 1][47:44] == 4'd4)
@@ -8341,21 +8937,73 @@ module jmr_js_vm #(
                                             txt_val <= {16'd0, vstack[base + 1][15:0]};
                                             txt_vt <= 3'd3;
                                         end
+                                    else if (v64_is_number(vstack[base + 1])) begin
+                                        txt_val <= v64_to_int32(vstack[base + 1]);
+                                        txt_vt <= 3'd0;
+                                    end
                                     else begin
                                         txt_val <= 32'd0;
-                                        txt_vt <= 3'd5;
+                                        txt_vt <= 3'd0;
                                     end
                                     txt_ph <= 4'd0;
-                                    txt_px <= $signed(
-                                        v64_to_uint32(vstack[base + 2])[15:0]
-                                    );
-                                    txt_py <= $signed(
-                                        v64_to_uint32(vstack[base + 3])[15:0]
-                                    );
+                                    // PYTHON _xf: fillText pen uses the same axis
+                                    // scale + translate as fillRect/drawImage
+                                    // (`Press Enter` at world y=500 on glass).
+                                    txt_px <= 16'(
+                                        ($signed(v64_to_int32(vstack[base + 2]))
+                                         * ctx_sx >>> 16) + ctx_tx);
+                                    txt_py <= 16'(
+                                        ($signed(v64_to_int32(vstack[base + 3]))
+                                         * ctx_sy >>> 16) + ctx_ty);
                                     vstack[base] <= V64_UNDEFINED;
                                     vsp <= base + 12'd1;
                                     ip <= ip + 16'd1;
                                     state <= S_TXT_LD;
+                                end else if (obj_ok &&
+                                           code_rdata[23:8] == id_measuretext) begin
+                                    // PYTHON _nat_measure_text: len * 8 px.
+                                    begin
+                                        logic [15:0] tl;
+                                        logic [63:0] txt;
+                                        tl = 16'd0;
+                                        txt = (argc != 0) ? vstack[base + 12'd1]
+                                            : V64_UNDEFINED;
+                                        if (txt[63:48] == V64_TAG_PREFIX &&
+                                            txt[47:44] == 4'd4 &&
+                                            txt[31:0] < 32'd1024)
+                                            tl = {8'd0, name_len_tbl[txt[9:0]]};
+                                        else if (txt[63:48] == V64_TAG_PREFIX &&
+                                                 txt[47:44] == V64_KIND_OBJECT &&
+                                                 txt[31:0] < MAX_OBJ &&
+                                                 vobj_builtin[txt[12:0]] == 4'd7)
+                                            tl = 16'(v64_to_uint32(
+                                                vobj_val[txt[12:0]][1]));
+                                        vmetrics_w <= (tl << 3);
+                                        if (vmetrics[63:48] == V64_TAG_PREFIX &&
+                                            vmetrics[47:44] == V64_KIND_OBJECT &&
+                                            vmetrics[31:0] < MAX_OBJ &&
+                                            vobj_alloc[vmetrics[12:0]] == 2'd1)
+                                        begin
+                                            vobj_key[vmetrics[12:0]][0] <=
+                                                id_width;
+                                            vobj_val[vmetrics[12:0]][0] <=
+                                                v64_int32_number({16'd0, tl << 3});
+                                            vobj_len[vmetrics[12:0]] <= 6'd1;
+                                            vstack[base] <= vmetrics;
+                                            vsp <= base + 12'd1;
+                                            ip <= ip + 16'd1;
+                                            code_raddr <=
+                                                15'(ops_base + ip + 16'd1);
+                                            state <= S_FETCH_WAIT;
+                                        end else begin
+                                            valloc_metrics <= 1'b1;
+                                            vnat_base <= base;
+                                            valloc_kind <= 2'd0;
+                                            valloc_i <= vobj_next;
+                                            valloc_retried <= 1'b0;
+                                            state <= S_V64_ALLOC;
+                                        end
+                                    end
                                 end else if (arr_ok &&
                                            code_rdata[23:8] == id_splice) begin
                                     logic [7:0] st, cnt, al;
@@ -8381,6 +9029,175 @@ module jmr_js_vm #(
                                     code_raddr <=
                                         15'(ops_base + ip + 16'd1);
                                     state <= S_FETCH_WAIT;
+                                end else if (arr_ok &&
+                                           code_rdata[23:8] == id_join) begin
+                                    // arr.join('') — maze wall-shape switch.
+                                    jn_arr <= receiver[11:0];
+                                    jn_i <= 16'd0; jn_h <= 16'd0;
+                                    jn_res <= 11'(base);
+                                    v64_join <= 1'b1;
+                                    cc_bok <= 1'b1; txt_bn <= 7'd0;
+                                    vstack[base] <= V64_UNDEFINED;
+                                    vsp <= base + 12'd1;
+                                    ip <= ip + 16'd1;
+                                    state <= S_JOIN;
+                                end else if (arr_ok &&
+                                           code_rdata[23:8] == id_indexof) begin
+                                    begin
+                                        logic signed [31:0] found_i;
+                                        logic [63:0] needle;
+                                        found_i = -32'sd1;
+                                        needle = (argc != 0)
+                                            ? vstack[base + 12'd1]
+                                            : V64_UNDEFINED;
+                                        for (int k = 0; k < ARR_CAP; k++)
+                                            if (k < varr_len[receiver[11:0]] &&
+                                                found_i < 0 &&
+                                                v64_equal(
+                                                    varr_val[receiver[11:0]][k],
+                                                    needle))
+                                                found_i = k;
+                                        vstack[base] <=
+                                            v64_int32_number(found_i);
+                                        vsp <= base + 12'd1;
+                                        ip <= ip + 16'd1;
+                                        code_raddr <=
+                                            15'(ops_base + ip + 16'd1);
+                                        state <= S_FETCH_WAIT;
+                                    end
+                                end else if (code_rdata[23:8] == id_indexof &&
+                                    ((receiver[63:48] == V64_TAG_PREFIX &&
+                                      receiver[47:44] == 4'd4 &&
+                                      receiver[31:0] < 32'd1024) ||
+                                     (receiver[63:48] == V64_TAG_PREFIX &&
+                                      receiver[47:44] == V64_KIND_OBJECT &&
+                                      receiver[31:0] < MAX_OBJ &&
+                                      vobj_builtin[receiver[12:0]] == 4'd7)))
+                                begin
+                                    // PYTHON String.indexOf — ToString(needle)
+                                    // (`JSON.stringify(data).indexOf(0)`).
+                                    begin
+                                        logic signed [31:0] found_i;
+                                        logic [7:0] needle_b;
+                                        logic [15:0] hay_off, hay_len;
+                                        logic intern_hay;
+                                        found_i = -32'sd1;
+                                        needle_b = 8'h00;
+                                        if (argc != 0 &&
+                                            v64_is_number(vstack[base + 12'd1]))
+                                            needle_b = 8'h30 +
+                                                v64_to_uint32(vstack[base + 12'd1])[7:0];
+                                        else if (argc != 0 &&
+                                                 vstack[base + 12'd1][63:48] ==
+                                                     V64_TAG_PREFIX &&
+                                                 vstack[base + 12'd1][47:44] ==
+                                                     4'd4 &&
+                                                 vstack[base + 12'd1][31:0] <
+                                                     32'd1024)
+                                            needle_b =
+                                                name_mem[name_off[vstack[base + 12'd1][9:0]]];
+                                        intern_hay = (receiver[47:44] == 4'd4);
+                                        // Dynstr off/len are Value64 Numbers
+                                        // (v64_int32_number). [15:0] of IEEE is
+                                        // not the integer — ToInt like parse.
+                                        hay_off = intern_hay
+                                            ? name_off[receiver[9:0]]
+                                            : 16'(v64_to_uint32(
+                                                vobj_val[receiver[12:0]][0]));
+                                        hay_len = intern_hay
+                                            ? {8'd0, name_len_tbl[receiver[9:0]]}
+                                            : 16'(v64_to_uint32(
+                                                vobj_val[receiver[12:0]][1]));
+                                        if (intern_hay) begin
+                                            for (int k = 0; k < 256; k++)
+                                                if (k < hay_len && found_i < 0 &&
+                                                    name_mem[hay_off + 16'(k)] ==
+                                                        needle_b)
+                                                    found_i = k;
+                                        end else begin
+                                            for (int k = 0; k < JSON_CAP; k++)
+                                                if (k < hay_len && found_i < 0 &&
+                                                    json_mem[hay_off[12:0] + 13'(k)]
+                                                        == needle_b)
+                                                    found_i = k;
+                                        end
+                                        vstack[base] <=
+                                            v64_int32_number(found_i);
+                                        vsp <= base + 12'd1;
+                                        ip <= ip + 16'd1;
+                                        code_raddr <=
+                                            15'(ops_base + ip + 16'd1);
+                                        state <= S_FETCH_WAIT;
+                                    end
+                                end else if (code_rdata[23:8] == id_beginpath ||
+                                           code_rdata[23:8] == id_closepath) begin
+                                    if (code_rdata[23:8] == id_beginpath)
+                                        pc_n <= 5'd0;
+                                    path_kind <= 2'd0;
+                                    vstack[base] <= V64_UNDEFINED;
+                                    vsp <= base + 12'd1;
+                                    ip <= ip + 16'd1;
+                                    code_raddr <=
+                                        15'(ops_base + ip + 16'd1);
+                                    state <= S_FETCH_WAIT;
+                                end else if (code_rdata[23:8] == id_arc &&
+                                           argc >= 12'd3) begin
+                                    if (pc_n < 5'(PATH_MAX)) begin
+                                        pc_op[pc_n[3:0]] <= 2'd3;
+                                        pc_a1[pc_n[3:0]] <=
+                                            v64_to_fx(vstack[base + 12'd1]);
+                                        pc_a2[pc_n[3:0]] <=
+                                            v64_to_fx(vstack[base + 12'd2]);
+                                        pc_a3[pc_n[3:0]] <=
+                                            v64_to_fx(vstack[base + 12'd3]);
+                                        pc_a4[pc_n[3:0]] <= (argc > 12'd3)
+                                            ? v64_to_fx(vstack[base + 12'd4])
+                                            : 32'sd0;
+                                        pc_a5[pc_n[3:0]] <= (argc > 12'd4)
+                                            ? v64_to_fx(vstack[base + 12'd5])
+                                            : 32'sd0;
+                                        pc_ccw[pc_n[3:0]] <= (argc > 12'd5)
+                                            && v64_truthy(vstack[base + 12'd6]);
+                                        pc_n <= pc_n + 5'd1;
+                                    end else
+                                        dbg_path_ovf <= dbg_path_ovf + 16'd1;
+                                    vstack[base] <= V64_UNDEFINED;
+                                    vsp <= base + 12'd1;
+                                    ip <= ip + 16'd1;
+                                    code_raddr <=
+                                        15'(ops_base + ip + 16'd1);
+                                    state <= S_FETCH_WAIT;
+                                end else if ((code_rdata[23:8] == id_moveto ||
+                                            code_rdata[23:8] == id_lineto) &&
+                                           argc >= 12'd2) begin
+                                    if (pc_n < 5'(PATH_MAX)) begin
+                                        pc_op[pc_n[3:0]] <=
+                                            (code_rdata[23:8] == id_moveto)
+                                            ? 2'd0 : 2'd1;
+                                        pc_a1[pc_n[3:0]] <=
+                                            v64_to_fx(vstack[base + 12'd1]);
+                                        pc_a2[pc_n[3:0]] <=
+                                            v64_to_fx(vstack[base + 12'd2]);
+                                        pc_n <= pc_n + 5'd1;
+                                    end else
+                                        dbg_path_ovf <= dbg_path_ovf + 16'd1;
+                                    vstack[base] <= V64_UNDEFINED;
+                                    vsp <= base + 12'd1;
+                                    ip <= ip + 16'd1;
+                                    code_raddr <=
+                                        15'(ops_base + ip + 16'd1);
+                                    state <= S_FETCH_WAIT;
+                                end else if (code_rdata[23:8] == id_fill ||
+                                           code_rdata[23:8] == id_stroke) begin
+                                    color <= fill_style_i;
+                                    path_stroke <=
+                                        (code_rdata[23:8] == id_stroke);
+                                    vstack[base] <= V64_UNDEFINED;
+                                    vsp <= base + 12'd1;
+                                    ip <= ip + 16'd1;
+                                    pi <= 5'd0;
+                                    path_active <= 1'b1;
+                                    state <= S_PWALK;
                                 end else if (code_rdata[23:8] == id_ael) begin
                                     ev = (argc != 0) ? vstack[base + 1]
                                         : V64_UNDEFINED;
@@ -8420,6 +9237,42 @@ module jmr_js_vm #(
                                             15'(ops_base + ip + 16'd1);
                                         state <= S_FETCH_WAIT;
                                     end
+                                end else if (code_rdata[23:8] == id_gettime ||
+                                           code_rdata[23:8] == id_now) begin
+                                    // Date.getTime / .now — frame clock
+                                    // (same mul as native 35 / PYTHON).
+                                    begin
+                                        logic [63:0] ts;
+                                        v64_mul_task(
+                                            v64_int32_number(vframe_no),
+                                            64'h4030aaaaaaaaaaab,
+                                            ts
+                                        );
+                                        vstack[base] <= ts;
+                                        vsp <= base + 12'd1;
+                                        ip <= ip + 16'd1;
+                                        code_raddr <=
+                                            15'(ops_base + ip + 16'd1);
+                                        state <= S_FETCH_WAIT;
+                                    end
+                                end else if (code_rdata[23:8] == id_bind &&
+                                    receiver[63:48] == V64_TAG_PREFIX &&
+                                    receiver[47:44] == V64_KIND_FUNCTION &&
+                                    receiver[31:0] < MAX_OBJ &&
+                                    vobj_alloc[receiver[12:0]] == 2'd2 &&
+                                    vfn_gen[receiver[12:0]] ==
+                                        receiver[43:32]) begin
+                                    // PYTHON Function.prototype.bind
+                                    valloc_bind <= 1'b1;
+                                    valloc_bind_src <= receiver[12:0];
+                                    valloc_bind_this <= (argc != 0)
+                                        ? vstack[base + 12'd1]
+                                        : V64_UNDEFINED;
+                                    vnat_base <= base;
+                                    valloc_kind <= 2'd2;
+                                    valloc_i <= vobj_next;
+                                    valloc_retried <= 1'b0;
+                                    state <= S_V64_ALLOC;
                                 end else if (obj_ok) begin
                                     for (int c = 0; c < MAX_CLS; c++)
                                         if (c < n_cls &&
@@ -8447,6 +9300,67 @@ module jmr_js_vm #(
                                         valloc_retried <= 1'b0;
                                         state <= S_V64_ALLOC;
                                     end else begin
+                                        logic [63:0] own_fn;
+                                        logic own_ok;
+                                        own_fn = V64_UNDEFINED;
+                                        own_ok = 1'b0;
+                                        for (int s = 0; s < OBJ_SLOTS; s++)
+                                            if (s < vobj_len[receiver[12:0]] &&
+                                                vobj_key[receiver[12:0]][s] ==
+                                                    code_rdata[23:8] &&
+                                                vobj_val[receiver[12:0]][s][63:48] ==
+                                                    V64_TAG_PREFIX &&
+                                                vobj_val[receiver[12:0]][s][47:44] ==
+                                                    4'd7 &&
+                                                vobj_val[receiver[12:0]][s][31:0] <
+                                                    MAX_OBJ &&
+                                                vobj_alloc[vobj_val[receiver[12:0]][s][12:0]]
+                                                    == 2'd2) begin
+                                                own_fn = vobj_val[receiver[12:0]][s];
+                                                own_ok = 1'b1;
+                                            end
+                                        // PYTHON: class-method miss → proto Fn
+                                        // (Stage.prototype.createItem).
+                                        if (!own_ok &&
+                                            vobj_proto[receiver[12:0]][63:48] ==
+                                                V64_TAG_PREFIX &&
+                                            vobj_proto[receiver[12:0]][47:44] ==
+                                                V64_KIND_OBJECT &&
+                                            vobj_proto[receiver[12:0]][31:0] <
+                                                MAX_OBJ &&
+                                            vobj_alloc[vobj_proto[receiver[12:0]][12:0]]
+                                                == 2'd1 &&
+                                            vobj_gen[vobj_proto[receiver[12:0]][12:0]] ==
+                                                vobj_proto[receiver[12:0]][43:32])
+                                            for (int s = 0; s < OBJ_SLOTS; s++)
+                                                if (s < vobj_len[vobj_proto[receiver[12:0]][12:0]] &&
+                                                    vobj_key[vobj_proto[receiver[12:0]][12:0]][s] ==
+                                                        code_rdata[23:8] &&
+                                                    vobj_val[vobj_proto[receiver[12:0]][12:0]][s][63:48] ==
+                                                        V64_TAG_PREFIX &&
+                                                    vobj_val[vobj_proto[receiver[12:0]][12:0]][s][47:44] ==
+                                                        4'd7 &&
+                                                    vobj_val[vobj_proto[receiver[12:0]][12:0]][s][31:0] <
+                                                        MAX_OBJ &&
+                                                    vobj_alloc[vobj_val[vobj_proto[receiver[12:0]][12:0]][s][12:0]]
+                                                        == 2'd2) begin
+                                                    own_fn = vobj_val[vobj_proto[receiver[12:0]][12:0]][s];
+                                                    own_ok = 1'b1;
+                                                end
+                                        if (own_ok) begin
+                                            // this.start = function — PYTHON
+                                            // CALL_METHOD own-property Fn.
+                                            vstack[base] <= own_fn;
+                                            vcall_value <= 1'b1;
+                                            vcall_argc <= argc;
+                                            vcall_set_this <= 1'b1;
+                                            vcall_this <= receiver;
+                                            vcall_ctor_val <= V64_UNDEFINED;
+                                            valloc_kind <= 2'd3;
+                                            valloc_i <= venv_next;
+                                            valloc_retried <= 1'b0;
+                                            state <= S_V64_ALLOC;
+                                        end else begin
                                         // Unknown method on ELEMENT/CONTEXT
                                         // returns the receiver (play().catch()).
                                         // RegExp.test stub is false (not iOS).
@@ -8460,6 +9374,7 @@ module jmr_js_vm #(
                                         code_raddr <=
                                             15'(ops_base + ip + 16'd1);
                                         state <= S_FETCH_WAIT;
+                                        end
                                     end
                                 end else begin
                                     vstack[base] <= V64_UNDEFINED;
@@ -8507,25 +9422,22 @@ module jmr_js_vm #(
                                     vsp <= vsp - 12'd1;
                                     ip <= ip + 16'd1;
                                     state <= S_CONCAT;
-                                end else if (!v64_is_number(vstack[vsp - 12'd2]) ||
-                                             !v64_is_number(vstack[vsp - 12'd1])) begin
-                                    machine_fault <= 1'b1; fault_code <= 8'd5;
-                                    running <= 1'b0; state <= S_DONE;
                                 end else begin
-                                    logic [63:0] arithmetic_result;
+                                    // PYTHON ToNumber: non-Number → +0
+                                    // (`timestamp - previous` on first rAF).
+                                    logic [63:0] aa, bb, arithmetic_result;
+                                    aa = v64_is_number(vstack[vsp - 12'd2])
+                                        ? vstack[vsp - 12'd2] : 64'd0;
+                                    bb = v64_is_number(vstack[vsp - 12'd1])
+                                        ? vstack[vsp - 12'd1] : 64'd0;
                                     if (code_rdata[7:0] == OP_ADD)
-                                        v64_add_task(vstack[vsp - 12'd2],
-                                                     vstack[vsp - 12'd1],
-                                                     arithmetic_result);
+                                        v64_add_task(aa, bb, arithmetic_result);
                                     else if (code_rdata[7:0] == OP_SUB)
-                                        v64_add_task(vstack[vsp - 12'd2],
-                                                     {~vstack[vsp - 12'd1][63],
-                                                      vstack[vsp - 12'd1][62:0]},
+                                        v64_add_task(aa,
+                                                     {~bb[63], bb[62:0]},
                                                      arithmetic_result);
                                     else
-                                        v64_mul_task(vstack[vsp - 12'd2],
-                                                     vstack[vsp - 12'd1],
-                                                     arithmetic_result);
+                                        v64_mul_task(aa, bb, arithmetic_result);
                                     vstack[vsp - 12'd2] <= arithmetic_result;
                                     vsp <= vsp - 12'd1;
                                     ip <= ip + 16'd1;
@@ -8537,17 +9449,16 @@ module jmr_js_vm #(
                                 if (vsp < 12'd2) begin
                                     machine_fault <= 1'b1; fault_code <= 8'd1;
                                     running <= 1'b0; state <= S_DONE;
-                                end else if (!v64_is_number(vstack[vsp - 12'd2]) ||
-                                             !v64_is_number(vstack[vsp - 12'd1])) begin
-                                    machine_fault <= 1'b1; fault_code <= 8'd5;
-                                    running <= 1'b0; state <= S_DONE;
                                 end else begin
+                                    // PYTHON ToNumber: non-Number → +0.
                                     logic [63:0] aa, bb, immediate_result;
                                     logic [52:0] ma, mb, na, nb;
                                     logic [5:0] sha, shb;
                                     logic immediate;
-                                    aa = vstack[vsp - 12'd2];
-                                    bb = vstack[vsp - 12'd1];
+                                    aa = v64_is_number(vstack[vsp - 12'd2])
+                                        ? vstack[vsp - 12'd2] : 64'd0;
+                                    bb = v64_is_number(vstack[vsp - 12'd1])
+                                        ? vstack[vsp - 12'd1] : 64'd0;
                                     immediate = 1'b1;
                                     immediate_result = V64_CANON_NAN;
                                     if ((aa[62:52] == 11'h7ff && aa[51:0] != 0) ||
@@ -8684,22 +9595,24 @@ module jmr_js_vm #(
                                 if (vsp < 12'd2) begin
                                     machine_fault <= 1'b1; fault_code <= 8'd1;
                                     running <= 1'b0; state <= S_DONE;
-                                end else if (code_rdata[7:0] != OP_EQ &&
-                                             (!v64_is_number(vstack[vsp - 12'd2]) ||
-                                              !v64_is_number(vstack[vsp - 12'd1]))) begin
-                                    machine_fault <= 1'b1; fault_code <= 8'd5;
-                                    running <= 1'b0; state <= S_DONE;
                                 end else begin
+                                    logic [63:0] aa, bb;
+                                    // PYTHON ToNumber: non-Number → +0 for LT/GT
+                                    // (`this.jumpHeight >= 750` before first jump).
+                                    // EQ keeps identity (PYTHON does not ToNumber).
+                                    aa = (code_rdata[7:0] != OP_EQ &&
+                                          !v64_is_number(vstack[vsp - 12'd2]))
+                                        ? 64'd0 : vstack[vsp - 12'd2];
+                                    bb = (code_rdata[7:0] != OP_EQ &&
+                                          !v64_is_number(vstack[vsp - 12'd1]))
+                                        ? 64'd0 : vstack[vsp - 12'd1];
                                     vstack[vsp - 12'd2] <=
                                         {16'h7ff9, 4'd3, 12'd0, 31'd0,
                                          (code_rdata[7:0] == OP_EQ)
-                                         ? v64_equal(vstack[vsp - 12'd2],
-                                                     vstack[vsp - 12'd1])
+                                         ? v64_equal(aa, bb)
                                          : (code_rdata[7:0] == OP_LT)
-                                         ? v64_less(vstack[vsp - 12'd2],
-                                                    vstack[vsp - 12'd1])
-                                         : v64_less(vstack[vsp - 12'd1],
-                                                    vstack[vsp - 12'd2])};
+                                         ? v64_less(aa, bb)
+                                         : v64_less(bb, aa)};
                                     vsp <= vsp - 12'd1;
                                     ip <= ip + 16'd1;
                                     code_raddr <= 15'(ops_base + ip + 16'd1);
@@ -8855,7 +9768,7 @@ module jmr_js_vm #(
                         end
                     end else if (valloc_kind == 2'd3) begin
                         if (valloc_i < ENV_DEPTH &&
-                            !venv_valid[valloc_i[4:0]]) begin
+                            !venv_valid[valloc_i[9:0]]) begin
                             logic [11:0] base_sp;
                             logic [7:0] nparam;
                             logic [63:0] function_handle, parent_env;
@@ -8869,10 +9782,10 @@ module jmr_js_vm #(
                             nparam = vcall_value
                                 ? {2'd0, vfn_nparam[function_handle[12:0]]}
                                 : vcall_argc;
-                            venv_valid[valloc_i[4:0]] <= 1'b1;
-                            venv_len[valloc_i[4:0]] <= 5'd0;
-                            venv_parent[valloc_i[4:0]] <= parent_env;
-                            venv_next <= valloc_i[5:0] + 6'd1;
+                            venv_valid[valloc_i[9:0]] <= 1'b1;
+                            venv_len[valloc_i[9:0]] <= 5'd0;
+                            venv_parent[valloc_i[9:0]] <= parent_env;
+                            venv_next <= valloc_i[9:0] + 10'd1;
                             vframe_return_ip[vcsp] <= vcallback_raf
                                 ? 16'hffff
                                 : vcallback_timer ? 16'hfffe
@@ -8889,14 +9802,17 @@ module jmr_js_vm #(
                             vcallback_key <= 1'b0;
                             vcallback_fe <= 1'b0;
                             venv <= v64_handle(
-                                4'd9, venv_gen[valloc_i[4:0]],
-                                {27'd0, valloc_i[4:0]}
+                                4'd9, venv_gen[valloc_i[9:0]],
+                                {22'd0, valloc_i[9:0]}
                             );
                             if (vcall_value) begin
-                                vthis <= vfn_flags[function_handle[12:0]][0] ||
-                                         vfn_flags[function_handle[12:0]][2]
+                                // Arrow/bound keep lexical this; CALL_METHOD
+                                // own-property sets vcall_this (game.init).
+                                vthis <= (vfn_flags[function_handle[12:0]][0] ||
+                                          vfn_flags[function_handle[12:0]][2])
                                        ? vfn_bound_this[function_handle[12:0]]
-                                       : V64_UNDEFINED;
+                                       : vcall_set_this
+                                       ? vcall_this : V64_UNDEFINED;
                                 for (int k = 0; k < 64; k++)
                                     if (k < nparam)
                                         vstack[base_sp + k] <=
@@ -8911,12 +9827,15 @@ module jmr_js_vm #(
                             end else begin
                                 vthis <= vcall_set_this
                                        ? vcall_this : V64_UNDEFINED;
-                                ip <= vcall_entry;
+                                vctor_scan <= 6'd0;
+                                vctor_armed <= 1'b0;
                                 code_raddr <= 15'(ops_base + vcall_entry);
+                                state <= S_V64_CTOR_PAD;
                             end
                             vcall_set_this <= 1'b0;
                             vcall_ctor_val <= V64_UNDEFINED;
-                            state <= S_FETCH_WAIT;
+                            if (vcall_value)
+                                state <= S_FETCH_WAIT;
                         end else if (valloc_i + 14'd1 < ENV_DEPTH) begin
                             valloc_i <= valloc_i + 14'd1;
                         end else if (!valloc_retried) begin
@@ -8942,12 +9861,33 @@ module jmr_js_vm #(
                                     vfn_flags[valloc_i[12:0]] <= 3'd0;
                                     vfn_bound_this[valloc_i[12:0]] <=
                                         V64_UNDEFINED;
+                                    vfn_proto[valloc_i[12:0]] <= V64_UNDEFINED;
                                     vstack[vnat_base] <= v64_handle(
                                         4'd7, vfn_gen[valloc_i[12:0]],
                                         {19'd0, valloc_i[12:0]}
                                     );
                                     vsp <= vnat_base + 12'd1;
                                     valloc_now_fn <= 1'b0;
+                                end else if (valloc_bind) begin
+                                    vfn_entry[valloc_i[12:0]] <=
+                                        vfn_entry[valloc_bind_src];
+                                    vfn_nparam[valloc_i[12:0]] <=
+                                        vfn_nparam[valloc_bind_src];
+                                    vfn_env[valloc_i[12:0]] <=
+                                        vfn_env[valloc_bind_src];
+                                    // [2]=has_bound_this (PYTHON bind).
+                                    vfn_flags[valloc_i[12:0]] <=
+                                        {1'b1, vfn_flags[valloc_bind_src][1],
+                                         vfn_flags[valloc_bind_src][0]};
+                                    vfn_bound_this[valloc_i[12:0]] <=
+                                        valloc_bind_this;
+                                    vfn_proto[valloc_i[12:0]] <= V64_UNDEFINED;
+                                    vstack[vnat_base] <= v64_handle(
+                                        4'd7, vfn_gen[valloc_i[12:0]],
+                                        {19'd0, valloc_i[12:0]}
+                                    );
+                                    vsp <= vnat_base + 12'd1;
+                                    valloc_bind <= 1'b0;
                                 end else begin
                                     vfn_entry[valloc_i[12:0]] <= code_rdata[23:8];
                                     vfn_nparam[valloc_i[12:0]] <= code_rdata[29:24];
@@ -8959,6 +9899,7 @@ module jmr_js_vm #(
                                          code_rdata[31]};
                                     vfn_bound_this[valloc_i[12:0]] <=
                                         code_rdata[31] ? vthis : V64_UNDEFINED;
+                                    vfn_proto[valloc_i[12:0]] <= V64_UNDEFINED;
                                     vstack[vsp] <= v64_handle(
                                         4'd7, vfn_gen[valloc_i[12:0]],
                                         {19'd0, valloc_i[12:0]}
@@ -8970,10 +9911,16 @@ module jmr_js_vm #(
                                 state <= S_FETCH_WAIT;
                             end else if (code_rdata[7:0] == OP_NEW_OBJ) begin
                                 logic [15:0] ctor_ip;
-                                logic [63:0] handle;
+                                logic [63:0] handle, ctor_fn;
                                 logic [11:0] argc;
+                                logic [8:0] vslot;
+                                logic found, handle_error, ctor_fn_ok;
+                                logic [9:0] env_index;
+                                logic [63:0] env_value;
                                 ctor_ip = 16'hFFFF;
                                 argc = {4'd0, code_rdata[31:24]};
+                                ctor_fn = V64_UNDEFINED;
+                                ctor_fn_ok = 1'b0;
                                 handle = v64_handle(
                                     4'd5, vobj_gen[valloc_i[12:0]],
                                     {19'd0, valloc_i[12:0]}
@@ -8982,10 +9929,35 @@ module jmr_js_vm #(
                                 vobj_len[valloc_i[12:0]] <= 6'd0;
                                 vobj_cls[valloc_i[12:0]] <= code_rdata[23:8];
                                 vobj_builtin[valloc_i[12:0]] <= 4'd0;
+                                vobj_proto[valloc_i[12:0]] <= V64_UNDEFINED;
                                 for (int c = 0; c < MAX_CLS; c++)
                                     if (c < n_cls &&
                                         cls_name[c] == code_rdata[23:8])
                                         ctor_ip = cls_ctor[c];
+                                // PYTHON _value64_ctor_function_for_class:
+                                // `new Stage` looks up the function in env
+                                // then varmap (nested `var Stage = function`).
+                                if (intern_var_ok[code_rdata[17:8]]) begin
+                                    vslot = intern_var[code_rdata[17:8]];
+                                    v64_env_lookup_task(
+                                        vslot, found, env_value,
+                                        env_index, handle_error
+                                    );
+                                    ctor_fn = found
+                                        ? env_value
+                                        : (vvar_valid[vslot]
+                                           ? vvars[vslot] : V64_UNDEFINED);
+                                    if (ctor_fn[63:48] == V64_TAG_PREFIX &&
+                                        ctor_fn[47:44] == V64_KIND_FUNCTION &&
+                                        ctor_fn[31:0] < MAX_OBJ &&
+                                        vobj_alloc[ctor_fn[12:0]] == 2'd2 &&
+                                        vfn_gen[ctor_fn[12:0]] ==
+                                            ctor_fn[43:32])
+                                        ctor_fn_ok = 1'b1;
+                                end
+                                if (ctor_fn_ok)
+                                    vobj_proto[valloc_i[12:0]] <=
+                                        vfn_proto[ctor_fn[12:0]];
                                 if (ctor_ip != 16'hFFFF) begin
                                     if (vcsp >= CSTK) begin
                                         machine_fault <= 1'b1;
@@ -9000,7 +9972,31 @@ module jmr_js_vm #(
                                         vcall_this <= handle;
                                         vcall_ctor_val <= handle;
                                         valloc_kind <= 2'd3;
-                                        valloc_i <= {8'd0, venv_next};
+                                        valloc_i <= {4'd0, venv_next};
+                                        valloc_retried <= 1'b0;
+                                    end
+                                end else if (ctor_fn_ok) begin
+                                    // constructor_ip None + function ctor:
+                                    // call the function with this=instance.
+                                    if (vcsp >= CSTK) begin
+                                        machine_fault <= 1'b1;
+                                        fault_code <= 8'd2;
+                                        running <= 1'b0;
+                                        state <= S_DONE;
+                                    end else begin
+                                        for (int k = 0; k < 64; k++)
+                                            if (k < argc)
+                                                vstack[vsp - argc + 12'd1 + k] <=
+                                                    vstack[vsp - argc + k];
+                                        vstack[vsp - argc] <= ctor_fn;
+                                        vsp <= vsp + 12'd1;
+                                        vcall_value <= 1'b1;
+                                        vcall_argc <= argc;
+                                        vcall_set_this <= 1'b1;
+                                        vcall_this <= handle;
+                                        vcall_ctor_val <= handle;
+                                        valloc_kind <= 2'd3;
+                                        valloc_i <= {4'd0, venv_next};
                                         valloc_retried <= 1'b0;
                                     end
                                 end else begin
@@ -9024,7 +10020,28 @@ module jmr_js_vm #(
                                 vobj_cls[valloc_i[12:0]] <= 16'hFFFF;
                                 vobj_builtin[valloc_i[12:0]] <= 4'd0;
                                 vobj_len[valloc_i[12:0]] <= 6'd0;
-                                if (vnat_dom == 3'd1) begin
+                                vobj_proto[valloc_i[12:0]] <= V64_UNDEFINED;
+                                if (valloc_proto) begin
+                                    vfn_proto[valloc_proto_fn] <= handle;
+                                    vstack[vnat_base] <= handle;
+                                    valloc_proto <= 1'b0;
+                                    ip <= ip + 16'd1;
+                                    code_raddr <=
+                                        15'(ops_base + ip + 16'd1);
+                                    state <= S_FETCH_WAIT;
+                                end else if (valloc_metrics) begin
+                                    vobj_len[valloc_i[12:0]] <= 6'd1;
+                                    vobj_key[valloc_i[12:0]][0] <= id_width;
+                                    vobj_val[valloc_i[12:0]][0] <=
+                                        v64_int32_number({16'd0, vmetrics_w});
+                                    vmetrics <= handle;
+                                    vstack[vnat_base] <= handle;
+                                    valloc_metrics <= 1'b0;
+                                    ip <= ip + 16'd1;
+                                    code_raddr <=
+                                        15'(ops_base + ip + 16'd1);
+                                    state <= S_FETCH_WAIT;
+                                end else if (vnat_dom == 3'd1) begin
                                     // querySelector style object
                                     vobj_builtin[valloc_i[12:0]] <= 4'd1;
                                     vnat_style <= handle;
@@ -9272,6 +10289,9 @@ module jmr_js_vm #(
                                 vgc_root_i <= 12'd35;
                             end else if (vgc_root_i == 12'd35) begin
                                 v64_gc_mark_task(vfe_fn);
+                                vgc_root_i <= 12'd36;
+                            end else if (vgc_root_i == 12'd36) begin
+                                v64_gc_mark_task(vmetrics);
                                 state <= S_V64_GC_POP;
                             end else
                                 state <= S_V64_GC_POP;
@@ -9302,6 +10322,10 @@ module jmr_js_vm #(
                             vobj_val[vgc_cur[12:0]][vgc_slot_i[4:0]]
                         );
                         vgc_slot_i <= vgc_slot_i + 8'd1;
+                    end else if (vgc_slot_i == {2'b0, vobj_len[vgc_cur[12:0]]})
+                    begin
+                        v64_gc_mark_task(vobj_proto[vgc_cur[12:0]]);
+                        vgc_slot_i <= vgc_slot_i + 8'd1;
                     end else
                         state <= S_V64_GC_POP;
                 end
@@ -9321,16 +10345,19 @@ module jmr_js_vm #(
                     end else if (vgc_slot_i == 1) begin
                         v64_gc_mark_task(vfn_bound_this[vgc_cur[12:0]]);
                         vgc_slot_i <= 8'd2;
+                    end else if (vgc_slot_i == 2) begin
+                        v64_gc_mark_task(vfn_proto[vgc_cur[12:0]]);
+                        vgc_slot_i <= 8'd3;
                     end else
                         state <= S_V64_GC_POP;
                 end
                 S_V64_GC_ENV: begin
                     if (vgc_slot_i == 0) begin
-                        v64_gc_mark_task(venv_parent[vgc_cur[4:0]]);
+                        v64_gc_mark_task(venv_parent[vgc_cur[9:0]]);
                         vgc_slot_i <= 8'd1;
-                    end else if (vgc_slot_i <= venv_len[vgc_cur[4:0]]) begin
+                    end else if (vgc_slot_i <= venv_len[vgc_cur[9:0]]) begin
                         v64_gc_mark_task(
-                            venv_val[vgc_cur[4:0]][vgc_slot_i - 8'd1]
+                            venv_val[vgc_cur[9:0]][vgc_slot_i - 8'd1]
                         );
                         vgc_slot_i <= vgc_slot_i + 8'd1;
                     end else
@@ -9366,7 +10393,7 @@ module jmr_js_vm #(
                             ? 12'd1 : varr_gen[vgc_arr_i] + 12'd1;
                     end
                     if (vgc_arr_i + 12'd1 >= MAX_ARR) begin
-                        vgc_env_i <= 6'd0;
+                        vgc_env_i <= 10'd0;
                         state <= S_V64_GC_SWEEP_ENV;
                     end else
                         vgc_arr_i <= vgc_arr_i + 12'd1;
@@ -9380,7 +10407,7 @@ module jmr_js_vm #(
                             (venv_gen[vgc_env_i] == 12'hfff)
                             ? 12'd1 : venv_gen[vgc_env_i] + 12'd1;
                     end
-                    if (vgc_env_i + 6'd1 >= ENV_DEPTH) begin
+                    if (vgc_env_i + 10'd1 >= ENV_DEPTH) begin
                         if (vgc_halt_after) begin
                             if (vgc_wait_after) begin
                                 vgc_wait_after <= 1'b0;
@@ -9394,14 +10421,14 @@ module jmr_js_vm #(
                             if (valloc_kind == 2'd1)
                                 varr_next <= 14'd0;
                             else if (valloc_kind == 2'd3)
-                                venv_next <= 6'd0;
+                                venv_next <= 10'd0;
                             else
                                 vobj_next <= 14'd0;
                             valloc_retried <= 1'b1;
                             state <= S_V64_ALLOC;
                         end
                     end else
-                        vgc_env_i <= vgc_env_i + 6'd1;
+                        vgc_env_i <= vgc_env_i + 10'd1;
                 end
                 S_V64_CLEAR: begin
                     fb_we <= 1'b1;
@@ -9676,24 +10703,35 @@ module jmr_js_vm #(
                                 end
                             end
                         end else if (ch == 8'h5B) begin
-                            if (varr_next >= MAX_ARR ||
-                                varr_valid[varr_next[11:0]]) begin
-                                machine_fault <= 1'b1; fault_code <= 8'd3;
-                                running <= 1'b0; state <= S_DONE;
-                            end else if (js_sp >= JSON_STK[5:0]) begin
-                                dbg_json_ovf <= dbg_json_ovf + 16'd1;
-                                json_rp <= json_rp + 14'd1;
-                            end else begin
-                                varr_valid[varr_next[11:0]] <= 1'b1;
-                                varr_len[varr_next[11:0]] <= 8'd0;
-                                vjs_val[js_sp] <= v64_handle(
-                                    4'd6, varr_gen[varr_next[11:0]],
-                                    {20'd0, varr_next[11:0]}
-                                );
-                                js_i[js_sp] <= 8'd0;
-                                js_sp <= js_sp + 6'd1;
-                                varr_next <= varr_next + 14'd1;
-                                json_rp <= json_rp + 14'd1;
+                            begin
+                                logic [13:0] free_a;
+                                logic found_a;
+                                found_a = 1'b0;
+                                free_a = 14'd0;
+                                for (int k = 0; k < MAX_ARR; k++)
+                                    if (!found_a && !varr_valid[k]) begin
+                                        found_a = 1'b1;
+                                        free_a = 14'(k);
+                                    end
+                                if (!found_a) begin
+                                    // PYTHON array heap overflow
+                                    machine_fault <= 1'b1; fault_code <= 8'd3;
+                                    running <= 1'b0; state <= S_DONE;
+                                end else if (js_sp >= JSON_STK[5:0]) begin
+                                    dbg_json_ovf <= dbg_json_ovf + 16'd1;
+                                    json_rp <= json_rp + 14'd1;
+                                end else begin
+                                    varr_valid[free_a[11:0]] <= 1'b1;
+                                    varr_len[free_a[11:0]] <= 8'd0;
+                                    vjs_val[js_sp] <= v64_handle(
+                                        4'd6, varr_gen[free_a[11:0]],
+                                        {20'd0, free_a[11:0]}
+                                    );
+                                    js_i[js_sp] <= 8'd0;
+                                    js_sp <= js_sp + 6'd1;
+                                    varr_next <= free_a + 14'd1;
+                                    json_rp <= json_rp + 14'd1;
+                                end
                             end
                         end else if (ch == 8'h5D) begin
                             json_rp <= json_rp + 14'd1;
@@ -9735,6 +10773,35 @@ module jmr_js_vm #(
                             json_rp <= json_rp + 14'd1;
                             json_pph <= 3'd3;
                         end else json_rp <= json_rp + 14'd1;
+                    end
+                end
+                S_V64_CTOR_PAD: begin
+                    // PYTHON _value64_entry_nparam: count leading LET_VAR
+                    // (a1 bit0) then bind_argv (pad undefined / drop extras).
+                    if (!vctor_armed)
+                        vctor_armed <= 1'b1;
+                    else if (code_rdata[7:0] == OP_LET_VAR &&
+                             code_rdata[24] && vctor_scan < 6'd63) begin
+                        vctor_scan <= vctor_scan + 6'd1;
+                        vctor_armed <= 1'b0;
+                        code_raddr <= 15'(ops_base + vcall_entry +
+                            {10'd0, vctor_scan} + 16'd1);
+                    end else begin
+                        logic [11:0] base_sp;
+                        logic [7:0] nparam;
+                        nparam = {2'd0, vctor_scan};
+                        base_sp = vsp - vcall_argc;
+                        for (int k = 0; k < 64; k++)
+                            if (k < nparam)
+                                vstack[base_sp + k] <=
+                                    (k < vcall_argc)
+                                    ? vstack[vsp - vcall_argc + k]
+                                    : V64_UNDEFINED;
+                        vsp <= base_sp + nparam;
+                        ip <= vcall_entry;
+                        code_raddr <= 15'(ops_base + vcall_entry);
+                        vctor_armed <= 1'b0;
+                        state <= S_FETCH_WAIT;
                     end
                 end
                 S_V64_FRAME_KEY: begin

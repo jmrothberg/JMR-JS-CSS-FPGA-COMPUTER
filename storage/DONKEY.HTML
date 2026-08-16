@@ -1093,28 +1093,5 @@ function update(timestamp) {
 
 requestAnimationFrame(update)
 </script>
-<script>
-/* Same file in Chrome or LOAD+RUN: skip title/character menus (frame-counted, not wall-clock). */
-(function () {
-  function fireEnter() {
-    var ev;
-    try {
-      ev = new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, which: 13, bubbles: true });
-    } catch (e) {
-      ev = { type: "keydown", key: "Enter", keyCode: 13, which: 13, preventDefault: function () {} };
-    }
-    if (document.dispatchEvent) document.dispatchEvent(ev);
-    if (window.dispatchEvent) window.dispatchEvent(ev);
-  }
-  var n = 0;
-  function boot() {
-    n += 1;
-    if (n === 4) fireEnter();
-    if (n === 12) fireEnter();
-    if (n < 14) requestAnimationFrame(boot);
-  }
-  requestAnimationFrame(boot);
-})();
-</script>
 </body>
 </html>

@@ -4261,8 +4261,52 @@ def test_invaders_fpga_sim_held_left_changes_frame_within_budget():
         sim.shutdown()
 
 
+def test_pacman_fpga_sim_enter_paints_maze():
+    """PACMAN on real RTL: Enter leaves splash and paints a changing maze."""
+    from tools.compile_js import compile_html_text, encode_html_chunk
+
+    html = ROOT / "storage" / "PACMAN.HTML"
+    if not html.is_file():
+        pytest.skip("PACMAN.HTML missing")
+    image_data = encode_html_chunk(compile_html_text(html.read_text(encoding="utf-8")))
+    sim = _sim()
+    try:
+        sim._loaded_name = "PACMAN.HTML"
+        sim._loaded_html_text = html.read_text(encoding="utf-8")
+        sim._program_image = image_data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = _wait_vm_idle_or_frame(sim)
+        assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
+        assert "raf=0" not in vmstat, vmstat
+        splash = _fb_raw(sim)
+        sim._rpc("KEYEVT 13 1")
+        sim._rpc("FRAME")
+        sim._rpc("KEYEVT 13 0")
+        maze = _fb_raw(sim)
+        vmstat = sim._rpc("VMSTAT?")
+        assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
+        assert "raf=0" not in vmstat, vmstat
+        assert maze != splash
+        assert sum(1 for b in maze if b) >= 1000
+        sim._rpc("FRAME")
+        later = _fb_raw(sim)
+        vmstat = sim._rpc("VMSTAT?")
+        assert "raf=0" not in vmstat, vmstat
+        assert later != maze
+        sim._rpc("FRAME")
+        sim._rpc("FRAME")
+        sim._rpc("FRAME")
+        still = _fb_raw(sim)
+        vmstat = sim._rpc("VMSTAT?")
+        assert "raf=0" not in vmstat, vmstat
+        # nextStage must not skip every map (stringify(beans).indexOf(0)).
+        assert sum(1 for b in still if b) >= 1000
+    finally:
+        sim.shutdown()
+
+
 def test_donkey_fpga_sim_enter_keeps_raf():
-    """DONKEY on real RTL: Enter must not drop the rAF queue."""
+    """DONKEY on real RTL: title paints, Enter keeps rAF, pixels keep changing."""
     from tools.compile_js import compile_html_text, encode_html_chunk
 
     html = ROOT / "storage" / "DONKEY.HTML"
@@ -4277,13 +4321,32 @@ def test_donkey_fpga_sim_enter_keeps_raf():
         assert sim._stream_program_image().startswith("OK")
         vmstat = _wait_vm_idle_or_frame(sim, slices=40)
         assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
+        splash = _fb_raw(sim)
+        assert sum(1 for b in splash if b) >= 50
         sim._rpc("KEYEVT 13 1")
         sim._rpc("FRAME")
         sim._rpc("KEYEVT 13 0")
+        play = _fb_raw(sim)
+        vmstat = sim._rpc("VMSTAT?")
+        for _ in range(8):
+            if play != splash:
+                break
+            sim._rpc("FRAME")
+            vmstat = sim._rpc("VMSTAT?")
+            play = _fb_raw(sim)
+        assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
+        assert "raf=0" not in vmstat, vmstat
+        assert play != splash
+        assert sum(1 for b in play if b) >= 50
+        later = play
         for _ in range(8):
             sim._rpc("FRAME")
             vmstat = sim._rpc("VMSTAT?")
+            later = _fb_raw(sim)
+            if later != play:
+                break
         assert "raf=0" not in vmstat, vmstat
+        assert later != play
     finally:
         sim.shutdown()
 

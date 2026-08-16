@@ -14,10 +14,18 @@ Product plan: `working_html_fpga-sim`. PYTHON glass step is **user-confirmed**.
 
 User F9 PYTHON: all three `LOAD "NAME.HTML"` / `RUN` play. Do not mark BOARD/ASIC done.
 
-## FPGA-SIM lockstep (in progress)
+## FPGA-SIM lockstep (headless pixels green — waiting F9)
 
-Value64 RTL matches PYTHON on IIFE + `class` + `new` + method, and on `clear` / `fillRect` / `swapBuffers` pixels. `v64_to_uint32` now uses the IEEE exponent directly (a package-function signed temp was stuck at 0, so every finite Number became 1). Rebuild `sim_server_synth` is current. 17 Value64 ProgramImage checkpoints pass.
+`make -C sim sim_server_synth` is current. Same ProgramImage stream as PYTHON. Headless pixel gates on real RTL (`sim/sim_build_synth/jmr_js_sim_server`, no host twin):
 
-Still not F9 FPGA-SIM titles: remaining lockstep is recursive env capacity (RTL `ENV_DEPTH` 32 vs PYTHON 1024; this test hits env overflow at csp=32), plus title constructors/natives (`drawImage`, ctx, rAF HTML). FPGA-SIM `RUN` already streams an ephemeral ProgramImage.
+| Title | Gate | Result |
+|---|---|---|
+| INVADERS | held-left FB changes, `fclk` ≤ 16M | passed |
+| PACMAN | Enter leaves splash, maze `nz` ≥ 1000, next FRAME differs | passed |
+| DONKEY | title `nz` ≥ 50, Enter keeps rAF, FB keeps changing | passed |
 
-No `.bit`/`.bin` until the user F9-approves FPGA-SIM `(RTL)`.
+Last RTL lockstep: LT/GT ToNumber (non-Number → `+0`, same as PYTHON) so DONKEY `jumpHeight >= 750` before the first jump no longer `fault=5`.
+
+User has **not** F9-approved FPGA-SIM `(RTL)` yet.
+
+No `.bit`/`.bin` until that F9.
