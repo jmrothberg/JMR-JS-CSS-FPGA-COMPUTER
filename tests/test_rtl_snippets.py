@@ -2555,6 +2555,49 @@ requestAnimationFrame(tick);
         sim.shutdown()
 
 
+def test_rtl_value64_div_by_two_is_shift_not_restoring():
+    """Value64 /2 must be 1-cycle (HTML titles); /3 may still restore."""
+    import re as _re
+
+    src = """
+var two = 2;
+var cell = 4;
+var n = 9;
+var three = 3;
+var i;
+var acc;
+function tick() {
+  acc = 0;
+  for (i = 0; i < 80; i++) acc = acc + cell / two;
+  if (acc == 160 && n / three == 3 && (5 / two) * two == 5) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("VDIV2.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "VDIV2.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st0 = sim._rpc("VMSTAT?")
+        d0 = int(_re.search(r"divs=(\d+)", st0 or "").group(1))
+        sim._rpc("FRAME")
+        st1 = sim._rpc("VMSTAT?")
+        d1 = int(_re.search(r"divs=(\d+)", st1 or "").group(1))
+        delta = d1 - d0
+        assert delta < 20, (
+            f"Value64 /2 used restoring DIV: divs {d0}->{d1} delta={delta} ({st1})"
+        )
+        assert "vdraw=10,10,30,30,2" in st1, st1
+    finally:
+        sim.shutdown()
+
+
 def test_rtl_click_does_not_autostart():
     """click listener + rAF attract must stay idle until KEYEVT 32.
 

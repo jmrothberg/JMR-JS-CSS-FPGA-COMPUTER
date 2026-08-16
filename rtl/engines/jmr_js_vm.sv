@@ -10041,6 +10041,30 @@ module jmr_js_vm #(
                                                  bb[62:52] == 11'h7ff) begin
                                         immediate_result =
                                             {aa[63] ^ bb[63], 63'd0};
+                                    end else if (bb[51:0] == 52'd0 &&
+                                                 aa[62:52] != 11'd0 &&
+                                                 bb[62:52] != 11'd0) begin
+                                        // 1-cycle / 2^k (tagged OP_DIV /2 twin).
+                                        // INVADERS bunker hitAt is cell/2 per
+                                        // brick × invaders × bunkers; 107-cycle
+                                        // restoring DIV made the laser crawl.
+                                        begin
+                                            logic signed [12:0] rexp;
+                                            rexp = $signed({2'b0, aa[62:52]})
+                                                 - $signed({2'b0, bb[62:52]})
+                                                 + 13'sd1023;
+                                            if (rexp <= 0)
+                                                immediate_result =
+                                                    {aa[63] ^ bb[63], 63'd0};
+                                            else if (rexp >= 13'sd2047)
+                                                immediate_result =
+                                                    {aa[63] ^ bb[63], 11'h7ff,
+                                                     52'd0};
+                                            else
+                                                immediate_result =
+                                                    {aa[63] ^ bb[63],
+                                                     rexp[10:0], aa[51:0]};
+                                        end
                                     end else begin
                                         immediate = 1'b0;
                                         ma = {(aa[62:52] != 0), aa[51:0]};
@@ -10058,6 +10082,7 @@ module jmr_js_vm #(
                                             v64_unbiased_exp(aa[62:52], sha)
                                           - v64_unbiased_exp(bb[62:52], shb);
                                         vdiv_sign <= aa[63] ^ bb[63];
+                                        dbg_div_n <= dbg_div_n + 16'd1;
                                     end
                                     if (immediate) begin
                                         vstack[vsp - 12'd2] <= immediate_result;
