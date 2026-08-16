@@ -53,9 +53,12 @@ set_property -dict { PACKAGE_PIN AB13 IOSTANDARD LVCMOS25 } [get_ports { hdmi_tx
 set_property -dict { PACKAGE_PIN U3   IOSTANDARD LVCMOS33 } [get_ports { hdmi_tx_rscl }]
 set_property -dict { PACKAGE_PIN V3   IOSTANDARD LVCMOS33 } [get_ports { hdmi_tx_rsda }]
 
-## USB HID PS/2 from PIC24
+## USB HID PS/2 from PIC24 (J15). Classic boot-protocol keyboard.
+## PULLTYPE: Vivado 2026.1; same as tools/pmod_input_test (proven PASS).
 set_property -dict { PACKAGE_PIN W17 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { ps2_clk }]
 set_property -dict { PACKAGE_PIN N13 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { ps2_data }]
+set_property PULLTYPE PULLUP [get_ports { ps2_clk }]
+set_property PULLTYPE PULLUP [get_ports { ps2_data }]
 
 ## Pmod JA top row — Pmod PS/2 (pin1=Data pin3=Clock). Same as pmod_input_test.
 set_property -dict { PACKAGE_PIN AB22 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_ps2_data }]

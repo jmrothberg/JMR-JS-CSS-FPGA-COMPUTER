@@ -430,6 +430,10 @@ class Compiler:
         methods: dict[str, int] = {}
         getters: set[str] = set()  # NEW: `get name()` accessors (DONKEY marioMiddle)
         ctor_entry: Optional[int] = None
+        ctor_jmp_after_params: Optional[int] = None
+        ctor_body_ip: Optional[int] = None
+        # Class-field arrows are own instance properties, not prototype methods.
+        fields: List[Tuple[str, int, int, int]] = []
         self._expect("{")
         while self._peek_text() not in ("", "}"):
             # NEW: get name() / set name() — body compiles like a method, but
@@ -447,11 +451,13 @@ class Compiler:
                 self._expect("=")
                 self._expression()
                 if self.code and self.code[-1][0] == Op.MAKE_FN:
-                    entry = int(self.code[-1][1])
-                    self.code.pop()  # method body already JUMP-guarded; no runtime MAKE_FN
+                    mkfn = self.code[-1]
+                    entry = int(mkfn[1])
+                    nparam = int(mkfn[2]) if len(mkfn) > 2 else 0
+                    is_arrow = int(mkfn[3]) if len(mkfn) > 3 else 1
+                    self.code.pop()  # body already JUMP-guarded; ctor MAKE_FNs
                     self.op_lines.pop()  # keep ProgramImage source map aligned
-                    methods[mname] = entry
-                    self.all_methods.add(mname)
+                    fields.append((mname, entry, nparam, is_arrow))
                 else:
                     # non-fn field — discard (class decl skipped at runtime)
                     self._emit(Op.POP)
@@ -501,6 +507,10 @@ class Compiler:
                         self._emit(Op.LET_VAR, self._name(key), 1)
                 else:
                     self._emit(Op.LET_VAR, self._name(p), 1)
+            # NEW: after params so _value64_entry_nparam still sees LET_VAR
+            # at constructor_ip (class-field inits jump in after binding).
+            jmp_after_params = self._emit(Op.JUMP, 0)
+            ctor_body = len(self.code)
             self._expect("{")
             self._fn_depth += 1  # NEW: class method/ctor locals use LET_VAR (env)
             while self._peek_text() not in ("", "}"):
@@ -510,14 +520,34 @@ class Compiler:
             self._emit(Op.LOAD_CONST, self._const(None))
             self._emit(Op.RET_VAL)
             self._patch(jmp_over, Op.JUMP, len(self.code))
+            self._patch(jmp_after_params, Op.JUMP, ctor_body)
             if is_ctor:
                 ctor_entry = entry
+                ctor_jmp_after_params = jmp_after_params
+                ctor_body_ip = ctor_body
             else:
                 methods[mname] = entry
                 self.all_methods.add(mname)
                 if is_getter:
                     getters.add(mname)
         self._expect("}")
+        if fields:
+            jmp_over = self._emit(Op.JUMP, 0)
+            fi_entry = len(self.code)
+            for fname, entry, nparam, is_arrow in fields:
+                self._emit(Op.LOAD_VAR, self._name("__this"))
+                self._emit(Op.MAKE_FN, entry, nparam, is_arrow)
+                self._emit(Op.SET_PROP, self._name(fname))
+                self._emit(Op.POP)
+            if ctor_entry is not None and ctor_jmp_after_params is not None:
+                # constructor_ip stays at param LET_VARs (nparam scan / RTL).
+                self._emit(Op.JUMP, int(ctor_body_ip or 0))
+                self._patch(ctor_jmp_after_params, Op.JUMP, fi_entry)
+            else:
+                self._emit(Op.LOAD_CONST, self._const(None))
+                self._emit(Op.RET_VAL)
+                ctor_entry = fi_entry
+            self._patch(jmp_over, Op.JUMP, len(self.code))
         self.classes[cname] = {"ctor": ctor_entry, "methods": methods, "getters": getters}
 
     def _done(self) -> bool:
@@ -1396,7 +1426,8 @@ class Compiler:
                 if self._match("="):
                     self._ternary()  # NEW: `,` is not part of the RHS
                     self._emit(Op.ARRAY_SET)
-                    self._emit(Op.LOAD_CONST, self._const(None))
+                    # ARRAY_SET already leaves the assigned value for the
+                    # surrounding expression/statement to consume.
                 else:
                     self._emit(Op.ARRAY_GET)
                 return

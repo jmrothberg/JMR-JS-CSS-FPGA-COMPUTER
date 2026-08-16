@@ -34,6 +34,7 @@ add_files $ROOT/rtl/engines/jmr_video_vram.sv
 add_files $ROOT/rtl/engines/jmr_console_engine.sv
 add_files $ROOT/rtl/engines/jmr_mini_fb.sv
 add_files $ROOT/rtl/engines/jmr_rectdemo_engine.sv
+add_files $ROOT/rtl/engines/jmr_value.sv
 add_files $ROOT/rtl/engines/jmr_js_vm.sv
 add_files $ROOT/rtl/engines/invaders_jsb.hex
 add_files $ROOT/rtl/engines/jmr_uart_link.sv

@@ -280,9 +280,8 @@ Architectural surface includes (names evolve; engines stay separate):
 A tiny CSS subset is allowed later only if a target game proves it necessary.
 
 Every opcode / dispatch entry has one microcode path and one implementation.
-Full tables live in `docs/` once the FM defines them. Freeze exact bytecode
-encoding after compatibility inventory (`docs/JMR_JS_COMPATIBILITY.md` when
-created).
+Full implement / don’t tables (HTML, JavaScript, CSS, Canvas — Complete or
+TBD) live in `docs/JMR_JS_COMPATIBILITY.md` **Agent surface checklist**.
 
 ---
 
@@ -472,8 +471,8 @@ Multi-cycle ops are acceptable.
 Do not generate random programs as the primary strategy.
 
 Prefer complete educational apps / demos and real Canvas games as permanent
-regressions. Inventory target games in `docs/JMR_JS_COMPATIBILITY.md` before
-freezing the V1 language/API set.
+regressions. Inventory and Complete/TBD checklist:
+`docs/JMR_JS_COMPATIBILITY.md` **Agent surface checklist**.
 
 Every accepted program becomes a permanent regression test.
 

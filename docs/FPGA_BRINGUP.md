@@ -104,7 +104,7 @@ Traces first: [../.cursor/rules/use-existing-traces.mdc](../.cursor/rules/use-ex
 | External RAM | 512 MiB DDR3 → bridged as the **4 MB SRAM asset bank** (2M × 16 IS61WV204816 contract; simple SRAM port; ASIC uses the real chip). See `docs/ARCHITECTURE.md` |
 | Video | **HDMI Source** (J8) — native **640×480 @ ~60 Hz**, ~25.175 MHz pixel clock |
 | Framebuffer | 8 bpp indexed, **256-entry RGB888 palette**. FPGA-SIM / next bit: dual **640×480** BRAM. Last flash (03:36): 160×120 scaled |
-| Keyboard | USB HOST (J15) → PIC24 → PS/2 — **this board’s J15 is dead**; GUI/PROG tether until RMA |
+| Keyboard | USB HOST (J15) → PIC24 → PS/2. **Classic boot-protocol keyboard PASS 2026-08-15.** Some modern HID keyboards light LD14 but never clock PS/2. Pmod JA is the fallback. |
 | Play controls | GUI arrows+Space → KEYBITS (BOARD: PROG `0xFE`+bits). Mouse stick **off**. Pmod joy later |
 | Mouse | **Not V1 standalone USB** |
 | Host link | PROG FT245 (ch A / `.0`) — flash + tether glass + play keys |
@@ -133,7 +133,7 @@ HDMI Source (J8)  — pins in constraints/nexys_video.xdc (Digilent master XDC)
 
 **First silicon (console):** `rtl/top_nexys_video.sv` is a PHY shell around
 `jmr_js_core` — READY text on HDMI + µSD SPI. Same core as Verilator FPGA-SIM.
-J15 keyboard is dead on this unit — type and play from **F9 BOARD** GUI tether.
+J15 works with a **classic USB keyboard**. Type from J15 or Pmod JA; play from **F9 BOARD** GUI tether or the JB stick.
 Do **not** raise HDMI resolution or switch this T200 to VGA for torn glyphs
 (that was VRAM CDC; dual-clock scan port).
 
@@ -189,7 +189,7 @@ Gates: `make -C sim tb_uart_link tb_ft245`.
 - **LD4** = `~sd_cd` (card present)
 - **LD3** = MMCM locked, **LD2** = READY, **LD1** = game_mode, **LD0** = alive
 - **PS/2 is RX-only** (Digilent / BASIC T100 method). No host `0xFF`/`0xF4`.
-  Product jack is **J15 USB Host** (dead on this unit — type via PROG tether).
+  Product jack is **J15 USB Host** (classic keyboard PASS 2026-08-15; some modern HID keyboards do not emit PS/2).
 - **JP4 = FPGA boot source only** (JTAG / QSPI / USB-SD). It does **not**
   enable the keyboard. Do not move JP4 to “fix” typing.
 - **BUSY LED blinking = host JTAG/flash traffic**, not a fault.
@@ -281,7 +281,7 @@ Known Digilent constraints (not a secret silicon workaround): FPGA must be progr
 
 ### Pmod input LED test (PS/2 keyboard + I2C joystick + J15 USB)
 
-Own Vivado project under `build/pmod_input_test/` so it cannot clobber `build/nexys_video`. JA + JB stay as before. J15 USB: one-shot `0xF4` at 200 ms left **LD4 off** (PIC24 still in config→HID). Bit now **retries `0xF4` until ACK** (first try at 1 s). **LD4 solid ON** = PIC24 ACKed enable-scan. **LD5** = scancode. Type only after LD4 is on.
+Own Vivado project under `build/pmod_input_test/` so it cannot clobber `build/nexys_video`. JA + JB stay as before. J15 USB: **classic keyboard PASS 2026-08-15 (user).** The earlier “no scancodes / LD14 only” keyboard was HID that the PIC24 does not translate to PS/2. Use a wired boot-protocol / “classic” USB keyboard on **J15** (no hub). Gaming/NKRO/wireless often enumerates (LD14) and never clocks W17. JA Pmod + JB stick still work on this same LED bit.
 
 ```bash
 source scripts/vivado_env.sh && make -C tools/pmod_input_test bit flash
@@ -312,9 +312,9 @@ Diagonals light two direction LEDs. Stick A/B still work in RTL but are not on L
 
 USB vs LD14: BUSY flash + **no LD4** = PIC24 got HID but is not clocking PS/2 to the FPGA. BUSY + **LD4 flicker** + **LD5 pulse** = USB reached the FPGA. Pmod JA still only LD7.
 
-**Board PASS 2026-08-14 (user):** JA keyboard + JB stick both live on the LED bit. J15 USB re-tried on this same test (pull-ups + RX-only).
+**Board PASS 2026-08-15 (user):** J15 classic USB keyboard + JA Pmod keyboard + JB stick. J15 was not dead hardware.
 
-**JS board top 2026-08-14:** same JA/JB wiring is now in [`rtl/top_nexys_video.sv`](../rtl/top_nexys_video.sv) (J15 left in place). FPGA-SIM / PYTHON unchanged — F9 still uses the PC keyboard. Next `make -C tools/board_flow bit flash` of the JS console picks this up; leave the stick and Pmod keyboard plugged in.
+**JS board top:** J15 + JA + JB are in [`rtl/top_nexys_video.sv`](../rtl/top_nexys_video.sv) and [`tools/board_flow/vivado_build.tcl`](../tools/board_flow/vivado_build.tcl). The next `make -C tools/board_flow bit` writes `build/nexys_video/jmr_nexys_video.bit` and `.bin` with all three ORed with the PROG GUI tether (cable optional). FPGA-SIM / PYTHON unchanged — F9 still uses the PC keyboard.
 
 ### Pmod input on the JS console (JA keyboard + JB stick)
 
@@ -322,7 +322,7 @@ Same plugs as the LED test. No FPGA-SIM edits. J15 `ps2_rx` stays; `jmr_ps2_host
 
 | Role | Plug |
 |---|---|
-| Type at READY | Pmod PS/2 on **JA** (also GUI tether) |
+| Type at READY | **J15** classic USB keyboard, or Pmod PS/2 on **JA** (also GUI tether) |
 | Play | Mini I2C stick on **JB** (also GUI arrows) |
 
 `joy_in = uart_joy_bits | {FIRE2, FIRE1, RIGHT, LEFT, DOWN, UP}` from I2C. NACK → stick bits 0.
@@ -337,12 +337,11 @@ No HDMI Sink, DisplayPort, higher modes, or audio-over-HDMI for V1.
 The machine must run **without a PC**: HDMI monitor + USB keyboard + Pmod
 joystick. UART/JTAG are for programming and optional debug only.
 
-**This T200 unit:** J15 never enumerates. Type on **Pmod PS/2 (JA)** or the GUI
-tether. Play on the **JB** stick or GUI arrows.
+**This T200 unit:** J15 works with a **classic** USB keyboard. Some modern HID keyboards never become PS/2 (LD14 only). Type on J15 or **Pmod PS/2 (JA)**. Play on the **JB** stick or GUI arrows.
 
 | Role | Plug | Path |
 |---|---|---|
-| Typing / EDIT / ESC | Pmod PS/2 on **JA** (J15 dead) | JA `ps2_rx` → keyboard FIFO (GUI tether still ORed) |
+| Typing / EDIT / ESC | J15 classic USB, or Pmod PS/2 on **JA** | J15/`JA` `ps2_rx` → keyboard FIFO (GUI tether still ORed) |
 | Play (move/fire) | Mini I2C stick on **JB** | I2C `0x5A` OR GUI KEYBITS → `joy_in` |
 | Mouse | — | Out of V1 |
 

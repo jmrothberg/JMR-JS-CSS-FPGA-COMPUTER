@@ -64,8 +64,8 @@ render — trust this list, not the poster fine print:
 - Poster opcode `0D CALL_NATIVE` is the FM name; the RTL localparam is
   `OP_CALL` — same instruction (native id in arg0). The 9-row tables are
   samples: 34 opcodes total, 40 native IDs total.
-- Heap "ring recycle" detail: temporaries recycle in the **upper half** of
-  the object/array heaps (boot heap stays below the wrap point).
+- Heap footnote: live objects use **stable handles** and mark/sweep at safe
+  points. The old nursery watermark / ring-recycle story is retired.
 
 **ASIC board poster (Rev A proposal)** — QFN-100 chip + external 4 MB asset
 SRAM + HDMI transmitter carrier board, sibling style to the JMR BASIC ASIC

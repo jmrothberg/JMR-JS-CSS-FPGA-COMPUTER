@@ -12,6 +12,9 @@
 #include <sstream>
 #include <string>
 #include <fstream>
+#include <algorithm>
+#include <utility>
+#include <vector>
 
 static Vjmr_js_core* top = nullptr;
 
@@ -229,7 +232,13 @@ static const char* vm_sname(unsigned s) {
         "S_JSON","S_JSON_PARSE","S_REPL","S_IDXSTR","S_STRIDX","S_STRIDX_WR",
         "S_FONTPX","S_TXT_LD","S_TXT_DRAW","S_STR_WR","S_IMGD_GET","S_IMGD_PUT",
         "S_NAMCPY","S_ARR_DCOPY"
-        ,"S_GC_CLEAR","S_GC_ROOT","S_GC_POP","S_GC_OBJ","S_GC_ARR"
+        ,"S_GC_CLEAR","S_GC_ROOT","S_GC_POP","S_GC_OBJ","S_GC_ARR",
+        "S_V64_CONST_HI","S_V64_EXEC","S_V64_DIV","S_V64_DIV_FIN","S_V64_MOD",
+        "S_V64_ALLOC","S_V64_GC_CLEAR","S_V64_GC_ROOT","S_V64_GC_POP",
+        "S_V64_GC_OBJ","S_V64_GC_ARR","S_V64_GC_SWEEP_OBJ",
+        "S_V64_GC_SWEEP_ARR","S_V64_GC_FN","S_V64_GC_ENV",
+        "S_V64_GC_SWEEP_ENV","S_V64_CLEAR","S_V64_RECT",
+        "S_V64_WAIT_FRAME","S_V64_FRAME_RAF","S_V64_FRAME_TIMER"
     };
     if (s < (unsigned)(sizeof(N) / sizeof(N[0]))) return N[s];
     return "?";
@@ -297,6 +306,11 @@ static uint64_t fnv_u16(uint64_t hash, uint16_t value) {
 static uint64_t fnv_u32(uint64_t hash, uint32_t value) {
     hash = fnv_u16(hash, (uint16_t)value);
     return fnv_u16(hash, (uint16_t)(value >> 16));
+}
+
+static uint64_t fnv_u64(uint64_t hash, uint64_t value) {
+    hash = fnv_u32(hash, (uint32_t)value);
+    return fnv_u32(hash, (uint32_t)(value >> 32));
 }
 
 // NEW: poke compiled .JSH into code BRAM + asset SRAM (no simulated SPI).
@@ -658,8 +672,19 @@ int main(int argc, char** argv) {
             std::cout << "VMSTAT state=" << stn
                       << " sname=" << vm_sname(stn)
                       << " ip=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__ip)
-                      << " sp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__sp)
-                      << " raf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__raf_n)
+                      << " sp=" << ((unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u)
+                          ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vsp)
+                          : unsigned(r->jmr_js_core__DOT__u_vm__DOT__sp))
+                      << " vdraw="
+                      << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_x)
+                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_y)
+                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_w)
+                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_h)
+                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_color)
+                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_i)
+                      << " raf=" << ((unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u)
+                          ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vraf_n)
+                          : unsigned(r->jmr_js_core__DOT__u_vm__DOT__raf_n))
                       << " obj=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_obj)
                       << " arr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_arr)
                       << " spr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_spr)
@@ -708,62 +733,295 @@ int main(int argc, char** argv) {
         if (line == "CHECKPOINT?") {
             auto* r = top->rootp;
             const uint64_t FNV0 = UINT64_C(0xCBF29CE484222325);
+            const bool value64 =
+                (unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u) != 0;
             uint64_t vars_hash = FNV0;
-            for (unsigned i = 0; i < 512u; i++) {
-                vars_hash = fnv_u32(
-                    vars_hash,
-                    (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__vars[i]
-                );
-                vars_hash = fnv_byte(
-                    vars_hash,
-                    (uint8_t)r->jmr_js_core__DOT__u_vm__DOT__var_tag[i]
-                );
-            }
-            uint64_t heap_hash = FNV0;
-            unsigned nobj = unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_obj);
-            if (nobj > 8192u) nobj = 8192u;
-            for (unsigned oid = 0; oid < nobj; oid++) {
-                heap_hash = fnv_u16(
-                    heap_hash,
-                    (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__obj_cls[oid]
-                );
-                unsigned ns = unsigned(
-                    r->jmr_js_core__DOT__u_vm__DOT__obj_n[oid]
-                );
-                if (ns > 32u) ns = 32u;
-                heap_hash = fnv_byte(heap_hash, (uint8_t)ns);
-                for (unsigned slot = 0; slot < ns; slot++) {
-                    heap_hash = fnv_u16(
-                        heap_hash,
-                        (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__obj_key[oid][slot]
+            if (value64) {
+                const uint64_t uninitialized = UINT64_C(0x7FF9F00000000000);
+                for (unsigned i = 0; i < 512u; i++) {
+                    uint64_t word =
+                        r->jmr_js_core__DOT__u_vm__DOT__vvar_valid[i]
+                        ? (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vvars[i]
+                        : uninitialized;
+                    vars_hash = fnv_u64(vars_hash, word);
+                }
+            } else {
+                for (unsigned i = 0; i < 512u; i++) {
+                    vars_hash = fnv_u32(
+                        vars_hash,
+                        (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__vars[i]
                     );
-                    heap_hash = fnv_u32(
-                        heap_hash,
-                        (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__obj_val[oid][slot]
-                    );
-                    heap_hash = fnv_byte(
-                        heap_hash,
-                        (uint8_t)r->jmr_js_core__DOT__u_vm__DOT__obj_tag[oid][slot]
+                    vars_hash = fnv_byte(
+                        vars_hash,
+                        (uint8_t)r->jmr_js_core__DOT__u_vm__DOT__var_tag[i]
                     );
                 }
             }
-            unsigned narr = unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_arr);
-            if (narr > 4096u) narr = 4096u;
-            for (unsigned aid = 0; aid < narr; aid++) {
-                unsigned len = unsigned(
-                    r->jmr_js_core__DOT__u_vm__DOT__arr_len[aid]
-                );
-                if (len > 128u) len = 128u;
-                heap_hash = fnv_byte(heap_hash, (uint8_t)len);
-                for (unsigned elem = 0; elem < len; elem++) {
+            uint64_t heap_hash = FNV0;
+            if (value64) {
+                heap_hash = fnv_byte(heap_hash, 'H');
+                heap_hash = fnv_byte(heap_hash, '6');
+                heap_hash = fnv_byte(heap_hash, '4');
+                heap_hash = fnv_byte(heap_hash, 1);
+                bool marked_strings[1024] = {};
+                auto mark_string = [&](uint64_t word) {
+                    if ((word >> 48) == UINT64_C(0x7ff9)
+                        && ((word >> 44) & 0xfu) == 4u
+                        && (uint32_t)word < 1024u)
+                        marked_strings[(uint32_t)word] = true;
+                };
+                for (unsigned i = 0; i < 512u; i++)
+                    if (r->jmr_js_core__DOT__u_vm__DOT__vvar_valid[i])
+                        mark_string((uint64_t)
+                            r->jmr_js_core__DOT__u_vm__DOT__vvars[i]);
+                unsigned checkpoint_sp =
+                    unsigned(r->jmr_js_core__DOT__u_vm__DOT__vsp);
+                for (unsigned i = 0; i < checkpoint_sp; i++)
+                    mark_string((uint64_t)
+                        r->jmr_js_core__DOT__u_vm__DOT__vstack[i]);
+                for (unsigned index = 0; index < 8192u; index++) {
+                    unsigned kind = unsigned(
+                        r->jmr_js_core__DOT__u_vm__DOT__vobj_alloc[index]
+                    );
+                    if (kind == 1u) {
+                        unsigned length = unsigned(
+                            r->jmr_js_core__DOT__u_vm__DOT__vobj_len[index]
+                        );
+                        if (length > 32u) length = 32u;
+                        for (unsigned slot = 0; slot < length; slot++)
+                            mark_string((uint64_t)
+                                r->jmr_js_core__DOT__u_vm__DOT__vobj_val[index][slot]);
+                    } else if (kind == 2u) {
+                        mark_string((uint64_t)
+                            r->jmr_js_core__DOT__u_vm__DOT__vfn_env[index]);
+                        mark_string((uint64_t)
+                            r->jmr_js_core__DOT__u_vm__DOT__vfn_bound_this[index]);
+                    }
+                }
+                for (unsigned index = 0; index < 4096u; index++)
+                    if (r->jmr_js_core__DOT__u_vm__DOT__varr_valid[index]) {
+                        unsigned length = unsigned(
+                            r->jmr_js_core__DOT__u_vm__DOT__varr_len[index]
+                        );
+                        if (length > 128u) length = 128u;
+                        for (unsigned slot = 0; slot < length; slot++)
+                            mark_string((uint64_t)
+                                r->jmr_js_core__DOT__u_vm__DOT__varr_val[index][slot]);
+                    }
+                for (unsigned index = 0; index < 32u; index++)
+                    if (r->jmr_js_core__DOT__u_vm__DOT__venv_valid[index]) {
+                        mark_string((uint64_t)
+                            r->jmr_js_core__DOT__u_vm__DOT__venv_parent[index]);
+                        unsigned length = unsigned(
+                            r->jmr_js_core__DOT__u_vm__DOT__venv_len[index]
+                        );
+                        if (length > 16u) length = 16u;
+                        for (unsigned slot = 0; slot < length; slot++)
+                            mark_string((uint64_t)
+                                r->jmr_js_core__DOT__u_vm__DOT__venv_val[index][slot]);
+                    }
+                for (unsigned index = 0; index < 1024u; index++)
+                    if (marked_strings[index]) {
+                        unsigned length = unsigned(
+                            r->jmr_js_core__DOT__u_vm__DOT__name_len_tbl[index]
+                        );
+                        unsigned offset = unsigned(
+                            r->jmr_js_core__DOT__u_vm__DOT__name_off[index]
+                        );
+                        heap_hash = fnv_byte(heap_hash, 'S');
+                        heap_hash = fnv_u32(heap_hash, index);
+                        heap_hash = fnv_u32(heap_hash, length);
+                        for (unsigned byte = 0; byte < length; byte++)
+                            heap_hash = fnv_byte(
+                                heap_hash,
+                                (uint8_t)r->jmr_js_core__DOT__u_vm__DOT__name_mem[
+                                    offset + byte
+                                ]
+                            );
+                    }
+                for (unsigned index = 0; index < 8192u; index++) {
+                    if (unsigned(
+                            r->jmr_js_core__DOT__u_vm__DOT__vobj_alloc[index]
+                        ) != 1u)
+                        continue;
+                    unsigned length = unsigned(
+                        r->jmr_js_core__DOT__u_vm__DOT__vobj_len[index]
+                    );
+                    if (length > 32u) length = 32u;
+                    heap_hash = fnv_byte(heap_hash, 'O');
+                    heap_hash = fnv_u32(heap_hash, index);
+                    heap_hash = fnv_u16(
+                        heap_hash,
+                        (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__vobj_gen[index]
+                    );
+                    heap_hash = fnv_u32(heap_hash, length);
+                    {
+                        // PYTHON checkpoint packs class name index or -1.
+                        uint16_t cls = (uint16_t)
+                            r->jmr_js_core__DOT__u_vm__DOT__vobj_cls[index];
+                        heap_hash = fnv_u32(
+                        heap_hash,
+                        cls == 0xFFFFu ? UINT32_C(0xFFFFFFFF)
+                                       : (uint32_t)cls
+                    );
+                    }
+                    {
+                        uint8_t builtin = (uint8_t)
+                            r->jmr_js_core__DOT__u_vm__DOT__vobj_builtin[index];
+                        heap_hash = fnv_u32(
+                            heap_hash,
+                            builtin == 0u ? UINT32_C(0xFFFFFFFF)
+                                          : (uint32_t)builtin
+                        );
+                    }
+                    heap_hash = fnv_u16(heap_hash, (uint16_t)length);
+                    std::vector<std::pair<uint32_t, uint64_t>> fields;
+                    fields.reserve(length);
+                    for (unsigned slot = 0; slot < length; slot++) {
+                        fields.emplace_back(
+                            (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__vobj_key[index][slot],
+                            (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vobj_val[index][slot]
+                        );
+                    }
+                    std::sort(fields.begin(), fields.end());
+                    for (const auto& field : fields) {
+                        heap_hash = fnv_u32(heap_hash, field.first);
+                        heap_hash = fnv_u64(heap_hash, field.second);
+                    }
+                }
+                for (unsigned index = 0; index < 8192u; index++) {
+                    if (unsigned(
+                            r->jmr_js_core__DOT__u_vm__DOT__vobj_alloc[index]
+                        ) != 2u)
+                        continue;
+                    heap_hash = fnv_byte(heap_hash, 'F');
+                    heap_hash = fnv_u32(heap_hash, index);
+                    heap_hash = fnv_u16(
+                        heap_hash,
+                        (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__vfn_gen[index]
+                    );
+                    heap_hash = fnv_u16(
+                        heap_hash,
+                        (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__vfn_nparam[index]
+                    );
+                    heap_hash = fnv_u64(
+                        heap_hash,
+                        (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vfn_env[index]
+                    );
+                    heap_hash = fnv_u64(
+                        heap_hash,
+                        (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vfn_bound_this[index]
+                    );
+                    unsigned flags = unsigned(
+                        r->jmr_js_core__DOT__u_vm__DOT__vfn_flags[index]
+                    );
+                    heap_hash = fnv_byte(heap_hash, flags & 1u);
+                    heap_hash = fnv_byte(heap_hash, (flags >> 1) & 1u);
+                    heap_hash = fnv_byte(heap_hash, (flags >> 2) & 1u);
                     heap_hash = fnv_u32(
                         heap_hash,
-                        (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__arr_val[aid][elem]
+                        (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__vfn_entry[index]
                     );
-                    heap_hash = fnv_byte(
+                }
+                for (unsigned index = 0; index < 4096u; index++) {
+                    if (!r->jmr_js_core__DOT__u_vm__DOT__varr_valid[index])
+                        continue;
+                    unsigned length = unsigned(
+                        r->jmr_js_core__DOT__u_vm__DOT__varr_len[index]
+                    );
+                    if (length > 128u) length = 128u;
+                    heap_hash = fnv_byte(heap_hash, 'A');
+                    heap_hash = fnv_u32(heap_hash, index);
+                    heap_hash = fnv_u16(
                         heap_hash,
-                        (uint8_t)r->jmr_js_core__DOT__u_vm__DOT__arr_tag[aid][elem]
+                        (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__varr_gen[index]
                     );
+                    heap_hash = fnv_u16(heap_hash, (uint16_t)length);
+                    for (unsigned element = 0; element < length; element++) {
+                        heap_hash = fnv_u64(
+                            heap_hash,
+                            (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__varr_val[index][element]
+                        );
+                    }
+                }
+                for (unsigned index = 0; index < 32u; index++) {
+                    if (!r->jmr_js_core__DOT__u_vm__DOT__venv_valid[index])
+                        continue;
+                    unsigned length = unsigned(
+                        r->jmr_js_core__DOT__u_vm__DOT__venv_len[index]
+                    );
+                    if (length > 16u) length = 16u;
+                    heap_hash = fnv_byte(heap_hash, 'E');
+                    heap_hash = fnv_u32(heap_hash, index);
+                    heap_hash = fnv_u16(
+                        heap_hash,
+                        (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__venv_gen[index]
+                    );
+                    heap_hash = fnv_u64(
+                        heap_hash,
+                        (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__venv_parent[index]
+                    );
+                    heap_hash = fnv_u16(heap_hash, (uint16_t)length);
+                    std::vector<std::pair<uint16_t, uint64_t>> slots;
+                    slots.reserve(length);
+                    for (unsigned slot = 0; slot < length; slot++) {
+                        slots.emplace_back(
+                            (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__venv_key[index][slot],
+                            (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__venv_val[index][slot]
+                        );
+                    }
+                    std::sort(slots.begin(), slots.end());
+                    for (const auto& slot : slots) {
+                        heap_hash = fnv_u16(heap_hash, slot.first);
+                        heap_hash = fnv_u64(heap_hash, slot.second);
+                    }
+                }
+            } else {
+                unsigned nobj = unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_obj);
+                if (nobj > 8192u) nobj = 8192u;
+                for (unsigned oid = 0; oid < nobj; oid++) {
+                    heap_hash = fnv_u16(
+                        heap_hash,
+                        (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__obj_cls[oid]
+                    );
+                    unsigned ns = unsigned(
+                        r->jmr_js_core__DOT__u_vm__DOT__obj_n[oid]
+                    );
+                    if (ns > 32u) ns = 32u;
+                    heap_hash = fnv_byte(heap_hash, (uint8_t)ns);
+                    for (unsigned slot = 0; slot < ns; slot++) {
+                        heap_hash = fnv_u16(
+                            heap_hash,
+                            (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__obj_key[oid][slot]
+                        );
+                        heap_hash = fnv_u32(
+                            heap_hash,
+                            (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__obj_val[oid][slot]
+                        );
+                        heap_hash = fnv_byte(
+                            heap_hash,
+                            (uint8_t)r->jmr_js_core__DOT__u_vm__DOT__obj_tag[oid][slot]
+                        );
+                    }
+                }
+                unsigned narr = unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_arr);
+                if (narr > 4096u) narr = 4096u;
+                for (unsigned aid = 0; aid < narr; aid++) {
+                    unsigned len = unsigned(
+                        r->jmr_js_core__DOT__u_vm__DOT__arr_len[aid]
+                    );
+                    if (len > 128u) len = 128u;
+                    heap_hash = fnv_byte(heap_hash, (uint8_t)len);
+                    for (unsigned elem = 0; elem < len; elem++) {
+                        heap_hash = fnv_u32(
+                            heap_hash,
+                            (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__arr_val[aid][elem]
+                        );
+                        heap_hash = fnv_byte(
+                            heap_hash,
+                            (uint8_t)r->jmr_js_core__DOT__u_vm__DOT__arr_tag[aid][elem]
+                        );
+                    }
                 }
             }
             uint64_t canvas_hash = FNV0;
@@ -773,6 +1031,134 @@ int main(int argc, char** argv) {
                     ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0[i]
                     : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1[i];
                 canvas_hash = fnv_byte(canvas_hash, px);
+            }
+            uint64_t frames_hash = FNV0;
+            uint64_t queues_hash = FNV0;
+            if (value64) {
+                frames_hash = fnv_byte(frames_hash, 'F');
+                frames_hash = fnv_byte(frames_hash, '6');
+                frames_hash = fnv_byte(frames_hash, '4');
+                frames_hash = fnv_byte(frames_hash, 1);
+                frames_hash = fnv_u64(
+                    frames_hash,
+                    (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vthis
+                );
+                frames_hash = fnv_u64(
+                    frames_hash,
+                    (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__venv
+                );
+                unsigned value_sp =
+                    unsigned(r->jmr_js_core__DOT__u_vm__DOT__vsp);
+                unsigned value_csp =
+                    unsigned(r->jmr_js_core__DOT__u_vm__DOT__vcsp);
+                frames_hash = fnv_u16(frames_hash, (uint16_t)value_sp);
+                for (unsigned slot = 0; slot < value_sp; slot++) {
+                    frames_hash = fnv_u64(
+                        frames_hash,
+                        (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vstack[slot]
+                    );
+                }
+                frames_hash = fnv_u16(frames_hash, (uint16_t)value_csp);
+                for (unsigned frame = 0; frame < value_csp; frame++) {
+                    frames_hash = fnv_u32(
+                        frames_hash,
+                        (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__vframe_return_ip[frame]
+                    );
+                    frames_hash = fnv_u16(
+                        frames_hash,
+                        (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__vframe_base_sp[frame]
+                    );
+                    frames_hash = fnv_u64(
+                        frames_hash,
+                        (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vframe_this[frame]
+                    );
+                    frames_hash = fnv_u64(
+                        frames_hash,
+                        (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vframe_env[frame]
+                    );
+                    frames_hash = fnv_u64(
+                        frames_hash,
+                        (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vframe_fn[frame]
+                    );
+                    frames_hash = fnv_u64(
+                        frames_hash,
+                        (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vframe_ctor[frame]
+                    );
+                }
+                queues_hash = fnv_byte(queues_hash, 'Q');
+                queues_hash = fnv_byte(queues_hash, '6');
+                queues_hash = fnv_byte(queues_hash, '4');
+                queues_hash = fnv_byte(queues_hash, 1);
+                queues_hash = fnv_u32(
+                    queues_hash,
+                    (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__vframe_no
+                );
+                queues_hash = fnv_u32(
+                    queues_hash,
+                    (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__vtimer_seq
+                );
+                queues_hash = fnv_byte(queues_hash, 0); // startLoop
+                unsigned value_raf =
+                    unsigned(r->jmr_js_core__DOT__u_vm__DOT__vraf_n);
+                queues_hash = fnv_u16(queues_hash, (uint16_t)value_raf);
+                for (unsigned slot = 0; slot < value_raf; slot++)
+                    queues_hash = fnv_u64(
+                        queues_hash,
+                        (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vraf[slot]
+                    );
+                struct TimerCheckpoint {
+                    int32_t due;
+                    int32_t sequence;
+                    int64_t period;
+                    uint64_t function;
+                };
+                std::vector<TimerCheckpoint> timers;
+                for (unsigned slot = 0; slot < 64u; slot++)
+                    if (r->jmr_js_core__DOT__u_vm__DOT__vtimer_valid[slot])
+                        timers.push_back({
+                            (int32_t)r->jmr_js_core__DOT__u_vm__DOT__vtimer_due[slot],
+                            (int32_t)r->jmr_js_core__DOT__u_vm__DOT__vtimer_id[slot],
+                            (int64_t)r->jmr_js_core__DOT__u_vm__DOT__vtimer_period[slot],
+                            (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vtimer_fn[slot],
+                        });
+                std::sort(
+                    timers.begin(), timers.end(),
+                    [](const TimerCheckpoint& a, const TimerCheckpoint& b) {
+                        return a.sequence < b.sequence;
+                    }
+                );
+                queues_hash = fnv_u16(
+                    queues_hash, (uint16_t)timers.size()
+                );
+                for (const auto& timer : timers) {
+                    queues_hash = fnv_u32(
+                        queues_hash, (uint32_t)timer.due
+                    );
+                    queues_hash = fnv_u32(
+                        queues_hash, (uint32_t)timer.sequence
+                    );
+                    queues_hash = fnv_u64(
+                        queues_hash, (uint64_t)timer.period
+                    );
+                    queues_hash = fnv_u64(
+                        queues_hash, timer.function
+                    );
+                }
+                unsigned nlisten = unsigned(
+                    r->jmr_js_core__DOT__u_vm__DOT__vlistener_n
+                );
+                if (nlisten > 16u) nlisten = 16u;
+                queues_hash = fnv_u16(queues_hash, (uint16_t)nlisten);
+                for (unsigned slot = 0; slot < nlisten; slot++) {
+                    queues_hash = fnv_u64(
+                        queues_hash,
+                        (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vlistener_ev[slot]
+                    );
+                    queues_hash = fnv_u64(
+                        queues_hash,
+                        (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vlistener_fn[slot]
+                    );
+                }
             }
             unsigned ip = unsigned(r->jmr_js_core__DOT__u_vm__DOT__ip);
             unsigned ops_base = unsigned(
@@ -787,16 +1173,31 @@ int main(int argc, char** argv) {
             std::cout << "CHECKPOINT"
                       << " ip=" << ip
                       << " op=" << op
-                      << " sp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__sp)
-                      << " csp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__csp)
+                      << " sp=" << (value64
+                          ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vsp)
+                          : unsigned(r->jmr_js_core__DOT__u_vm__DOT__sp))
+                      << " csp=" << (value64
+                          ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vcsp)
+                          : unsigned(r->jmr_js_core__DOT__u_vm__DOT__csp))
                       << " vars=" << std::hex << vars_hash
                       << " heap=" << heap_hash
-                      << " canvas=" << canvas_hash << std::dec
-                      << " raf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__raf_n)
-                      << " timers=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__to_n)
+                      << " canvas=" << canvas_hash << std::dec;
+            if (value64) {
+                std::cout << " ops_base=" << ops_base
+                          << " frames=" << std::hex << frames_hash
+                          << " queues=" << queues_hash << std::dec;
+            }
+            std::cout << " raf=" << (value64
+                          ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vraf_n)
+                          : unsigned(r->jmr_js_core__DOT__u_vm__DOT__raf_n))
+                      << " timers=" << (value64
+                          ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vtimer_n)
+                          : unsigned(r->jmr_js_core__DOT__u_vm__DOT__to_n))
                       << " listeners="
-                      << unsigned(r->jmr_js_core__DOT__u_vm__DOT__kd_n
-                                  + r->jmr_js_core__DOT__u_vm__DOT__ku_n)
+                      << (value64
+                          ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vlistener_n)
+                          : unsigned(r->jmr_js_core__DOT__u_vm__DOT__kd_n
+                                     + r->jmr_js_core__DOT__u_vm__DOT__ku_n))
                       << " error=" << error
                       << std::endl;
             continue;
@@ -1042,7 +1443,10 @@ int main(int argc, char** argv) {
                 bool due_timer =
                     unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__to_n) != 0
                     && unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__to_delay[0]) == 0;
-                if (left_wait && st == 16u && cbip != 0 && !due_timer) {
+                bool frame_continue =
+                    unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__frame_fire) != 0;
+                if (left_wait && st == 16u && cbip != 0 &&
+                    !due_timer && !frame_continue) {
                     got = 1; used++; break;
                 }
                 // NEW: one-shot screen (title with no rAF re-arm, or a frame

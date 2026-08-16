@@ -139,7 +139,7 @@ module jmr_uart_link #(
     // Keyboard inject (merged with PS/2 in the top)
     output logic       kbd_push,
     output logic [7:0] kbd_data,
-    // NEW: GUI play keys over PROG tether (J15 dead — host arrows → joy_in)
+    // NEW: GUI play keys over PROG tether (ORed with JB stick; console optional)
     output logic [5:0] joy_bits,
     // Char VRAM dump read port (jmr_js_core dump_addr/dump_data)
     output logic [9:0] dump_addr,

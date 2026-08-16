@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AURORA</title>
+<style>
+html, body { margin: 0; background: #050014; overflow: hidden; }
+canvas { display: block; background: #050014; }
+</style>
+</head>
+<body>
+<canvas id="c" width="640" height="480"></canvas>
+<script>
+var canvas = document.querySelector("canvas");
+var ctx = canvas.getContext("2d");
+var PAL = [
+  "#050014",
+  "#ffffff",
+  "#ff3b6b",
+  "#3dff9a",
+  "#4d8cff",
+  "#ffe14a",
+  "#3ef6f6",
+  "#ff5ae0"
+];
+var px = 288;
+var py = 428;
+var pw = 72;
+var ph = 14;
+var hop = 0;
+var gems = [];
+var score = 0;
+var lives = 3;
+var frame = 0;
+var leftHeld = 0;
+var rightHeld = 0;
+var fireHeld = 0;
+
+addEventListener("keydown", function(e) {
+  if (e.key === "ArrowLeft") leftHeld = 1;
+  if (e.key === "ArrowRight") rightHeld = 1;
+  if (e.key === " ") fireHeld = 1;
+  if (e.key === "Enter") fireHeld = 1;
+});
+addEventListener("keyup", function(e) {
+  if (e.key === "ArrowLeft") leftHeld = 0;
+  if (e.key === "ArrowRight") rightHeld = 0;
+  if (e.key === " ") fireHeld = 0;
+  if (e.key === "Enter") fireHeld = 0;
+});
+
+function paint(x, y, w, h, n) {
+  ctx.fillStyle = PAL[n] || "#ffffff";
+  ctx.fillRect(x, y, w, h);
+  try {
+    fillRect(x, y, w, h, n);
+  } catch (e) {}
+}
+
+function wipe() {
+  ctx.fillStyle = PAL[0];
+  ctx.fillRect(0, 0, 640, 480);
+  try {
+    clear(0);
+  } catch (e) {}
+}
+
+function hit(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function spawn() {
+  if (gems.length > 10) return;
+  var c = Math.floor(Math.random() * 6) + 2;
+  gems.push({
+    x: Math.floor(Math.random() * 592) + 8,
+    y: 22,
+    w: 14 + (c % 3) * 4,
+    h: 14 + (c % 2) * 4,
+    c: c,
+    v: 3 + Math.floor(Math.random() * 4) + Math.floor(score / 8)
+  });
+}
+
+function resetRun() {
+  gems = [];
+  score = 0;
+  lives = 3;
+  px = 288;
+  hop = 0;
+}
+
+function tick() {
+  frame = frame + 1;
+  if (leftHeld) px = px - 11;
+  if (rightHeld) px = px + 11;
+  if (px < 4) px = 4;
+  if (px > 640 - pw - 4) px = 640 - pw - 4;
+  if (fireHeld && hop === 0) hop = 12;
+  if (hop > 0) hop = hop - 1;
+  var pdy = py - hop * 4;
+  var gap = 22 - score;
+  if (gap < 8) gap = 8;
+  if (frame % gap === 0) spawn();
+
+  var paddle = {x: px, y: pdy, w: pw, h: ph};
+  for (var i = gems.length - 1; i >= 0; i--) {
+    var g = gems[i];
+    g.y = g.y + g.v;
+    if (hit(paddle, g)) {
+      score = score + 1;
+      pw = 72 + score;
+      if (pw > 120) pw = 120;
+      gems.splice(i, 1);
+    } else if (g.y > 470) {
+      lives = lives - 1;
+      gems.splice(i, 1);
+      if (lives <= 0) resetRun();
+    }
+  }
+
+  wipe();
+  var band;
+  for (band = 0; band < 8; band++) {
+    paint(((frame * 4) + band * 80) % 640, 0, 72, 16, (band % 6) + 2);
+  }
+  var star;
+  for (star = 0; star < 28; star++) {
+    paint((star * 97 + frame * 2) % 640, 24 + (star * 53) % 360, 2, 2, (star % 6) + 2);
+  }
+  var tickN = score;
+  if (tickN > 48) tickN = 48;
+  var s;
+  for (s = 0; s < tickN; s++) {
+    paint(8 + s * 6, 20, 4, 10, 5);
+  }
+  var L;
+  for (L = 0; L < lives; L++) {
+    paint(600 + L * 12, 20, 10, 10, 2);
+  }
+  paint(0, 458, 640, 22, 4);
+  paint(0, 462, 640, 6, 6);
+  paint(px - 6, pdy + 4, pw + 12, 6, 6);
+  paint(px, pdy, pw, ph, 1);
+  paint(px + 8, pdy + 3, 10, 8, 6);
+  paint(px + pw - 18, pdy + 3, 10, 8, 7);
+  for (i = 0; i < gems.length; i++) {
+    g = gems[i];
+    paint(g.x - 2, g.y - 2, g.w + 4, g.h + 4, 1);
+    paint(g.x, g.y, g.w, g.h, g.c);
+    paint(g.x + 3, g.y + 3, 4, 4, 1);
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

@@ -210,6 +210,26 @@ def test_sim_compile_uses_loaded_editor_program_image():
     assert sim._program_image.startswith(b"JSB1")
     assert sim._html_chunk is not None
     assert "editedValue" in sim._html_chunk.names
+    from functional_model.jsb_format import FLAG_ASET, FLAG_VALUE64, ProgramImage
+
+    image = ProgramImage(sim._program_image)
+    assert image.flags & FLAG_VALUE64
+    assert image.flags & FLAG_ASET
+
+
+def test_python_html_run_does_not_create_sidecar():
+    """Product RUN keeps the ProgramImage in memory; HTML remains the only file."""
+    from pathlib import Path
+
+    m = Machine()
+    m.source_name = "ZZNOSIDE.HTML"
+    sidecar = Path(m.storage.root) / "ZZNOSIDE.JSH"
+    assert not sidecar.exists()
+    out = m._run_html_bytecode(
+        '<canvas width="640" height="480"></canvas><script>var x=1;</script>'
+    )
+    assert out and m.running
+    assert not sidecar.exists()
 
 
 def test_sim_edit_updates_compile_source():

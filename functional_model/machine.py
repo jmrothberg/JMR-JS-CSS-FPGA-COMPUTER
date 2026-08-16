@@ -68,6 +68,9 @@ class Machine:
         # NEW: Architecture Monitor phase (LOAD vs compile-on-RUN vs execute)
         self._arch_phase: str = "idle"
         self._arch_cmd: str = ""
+        # NEW: HTML RUN executes the serialized ProgramImage on the hardware
+        # model. The functional Chunk is kept only for Architecture Monitor.
+        self._hw_vm = None
 
     # --- boot / glass -------------------------------------------------
 
@@ -142,6 +145,7 @@ class Machine:
         # NEW: clear bytecode-HTML frame state
         self._bytecode_html = False
         self._html_chunk = None
+        self._hw_vm = None
         self._raf_q = []
         self._listeners = []
         self._timers = []  # NEW: kill pending setTimeout/setInterval
@@ -591,10 +595,13 @@ class Machine:
             self._arch_phase = "loaded"
             return [f"ERROR: HTML/JS {e}"]
         blob = encode_html_chunk(chunk)
-        # Execute only what survived serialization. This prevents the Python
-        # rung from proving semantics that the ProgramImage never carried.
-        from .jsb_format import ProgramImage
-        chunk = ProgramImage(blob).decode()
+        # Execute only the serialized ProgramImage. The decoded Chunk is the
+        # Architecture Monitor / ASET observer, never the executor.
+        from .jsb_format import ProgramImage, build_aset_payload
+        from hardware_model.js_vm import JsHwVm
+
+        image = ProgramImage(blob)
+        observed = image.decode()
         self.trace.edge(
             "COMPILE",
             f"compile-on-RUN {self.source_name} → ProgramImage ({len(blob)} bytes)",
@@ -602,69 +609,40 @@ class Machine:
         # Prompt/LIST Space must not arrive as the first game keydown.
         self.input.discard_queued_keys()
         self.html_host = None
-        self.running = True
-        self._arch_phase = "run"
-        self.vm.natives = self._natives()
-        self.vm.globals.clear()
         self._loop_chunk = None
-        self._html_chunk = chunk  # NEW: for rAF / listeners
-        # NEW (external SRAM asset bank): stream ASET payload → SRAM model.
-        # VM sees handles (sprite index → w/h/sram_off); pixels stay in SRAM.
-        from .jsb_format import build_aset_payload
-
-        if getattr(chunk, "palette", None):
-            payload, descs = build_aset_payload(chunk.palette, chunk.sprites)
+        self._html_chunk = observed
+        if getattr(observed, "palette", None):
+            payload, descs = build_aset_payload(observed.palette, observed.sprites)
             self.sram.load(payload)
             self._spr_descs = list(descs)
-            # Title palette drives the glass (entries 0..7 stay the fixed 8)
-            self.canvas.palette = list(chunk.palette)
+            self.canvas.palette = list(observed.palette)
         else:
             self._spr_descs = []
-        self._css_cache = {}  # fillStyle cache follows the new palette
+        self._css_cache = {}
         self._sprites = list(self._spr_descs)
-        self.vm._sprites = self._sprites
-        # NEW: seeded globals so Object.assign / Date.now / performance.now
-        # resolve as CALL_METHOD on real receivers (compiler emits LOAD_VAR)
-        self.vm.globals["Object"] = {"__class": "ObjectCtor"}
-        self.vm.globals["Date"] = {"__class": "DateCtor"}
-        self.vm.globals["performance"] = {"__class": "DateCtor"}
-        # NEW: real frame-scheduled timers (16.7 ms per frame_tick)
-        self._timers = []  # [due_frame, fn, period_frames|None, id]
-        self._timer_seq = 1
-        self._frame_no = 0
-        # NEW: frame clock active from RUN's top-level code onward, so the
-        # `timestamp` a game captures at boot matches later frame ticks
-        # (PACMAN's 16 ms limiter mixed wall clock with frame clock).
-        self.vm.time_ms = 0.0
-        self._raf_q = []
-        self._listeners = []  # (event, fn)
-        self._key_prev = 0
-        # NEW: seed document/window so `if (document.dispatchEvent)` guards
-        # pass and games can dispatch synthetic events (DONKEY boot script).
-        self.vm.globals["document"] = {
-            "__class": "Element",
-            "dispatchEvent": 1,
-            "addEventListener": 1,
-            "removeEventListener": 1,
-        }
-        self.vm.globals["window"] = {
-            "__class": "Element",
-            "dispatchEvent": 1,
-            "addEventListener": 1,
-            "removeEventListener": 1,
-        }
-        self._ctx_tx = 0
-        self._ctx_ty = 0
-        self._ctx_sx = 1.0
-        self._ctx_sy = 1.0
-        self.vm.run(chunk)
-        if self.vm.error:
+        # New glass for this RUN — leftover READY/WORKING letterbox must not
+        # sit on the opposite swap buffer. DONKEY setTransform+clearRect only
+        # covers the scaled world, so uncleared monitor text would show through.
+        self.canvas.clear_front(0)
+        self.canvas.clear(0)
+        hw = JsHwVm()
+        hw.canvas = self.canvas
+        hw.input = self.input
+        hw._m.canvas = self.canvas
+        hw._m.input = self.input
+        hw._m._sprites = list(self._sprites)
+        hw.load_image(image)
+        self._hw_vm = hw
+        self.vm = hw._m.vm
+        self.running = bool(hw.running) and not hw.error
+        self._arch_phase = "run" if self.running else "loaded"
+        self._bytecode_html = True
+        if hw.error:
             self.running = False
             self._html_chunk = None
-            self._arch_phase = "loaded"
-            return [self.vm.error]
-        # Keep running so frame_tick drains rAF
-        self._bytecode_html = True
+            self._hw_vm = None
+            self._bytecode_html = False
+            return [hw.error]
         return ["HTML BYTECODE RUNNING - arrows + space, ESC quit"]
 
     def _html_jsh_path(self) -> Optional[Path]:
@@ -783,17 +761,30 @@ class Machine:
         self._ctx_sy = float(sy if sy is not None else 1) or 1.0
         return None
 
-    def _xf(self, x, y, w=None, h=None):
-        """Apply current canvas transform (translate + axis scale)."""
+    _XF_OMIT = object()
+
+    def _xf(self, x, y, w=_XF_OMIT, h=_XF_OMIT):
+        """Apply current canvas transform (translate + axis scale).
+
+        Point form is omit-w (`_xf(x, y)`). A rect native that passes JS
+        undefined (None) still gets four values — ToNumber(undefined)=0.
+        """
         sx = float(getattr(self, "_ctx_sx", 1) or 1)
         sy = float(getattr(self, "_ctx_sy", 1) or 1)
         tx = float(getattr(self, "_ctx_tx", 0) or 0)
         ty = float(getattr(self, "_ctx_ty", 0) or 0)
         ix = int(float(x or 0) * sx + tx)
         iy = int(float(y or 0) * sy + ty)
-        if w is None:
+        if w is self._XF_OMIT:
             return ix, iy
-        return ix, iy, max(1, int(float(w or 0) * sx)), max(1, int(float(h or 0) * sy))
+        ww = 0 if w is None else w
+        hh = 0 if h is None else h
+        return (
+            ix,
+            iy,
+            max(1, int(float(ww or 0) * sx)),
+            max(1, int(float(hh or 0) * sy)),
+        )
 
     def _nat_fill_style_css(self, color):
         """Map CSS color to a 256-entry title-palette index.
@@ -1348,6 +1339,19 @@ class Machine:
 
     def _bytecode_html_frame(self) -> None:
         """NEW: one frame for HTML-as-bytecode — keys then rAF queue."""
+        hw = getattr(self, "_hw_vm", None)
+        if hw is not None:
+            hw.frame_tick()
+            self.running = bool(hw.running) and not hw.error
+            if hw.error:
+                self._print(hw.error)
+                self.hard_break()
+                return
+            if hw.canvas.dirty:
+                hw.canvas.present()
+                hw.canvas.dirty = False
+                self._keep_fb = True
+            return
         chunk = getattr(self, "_html_chunk", None)
         if chunk is None:
             return

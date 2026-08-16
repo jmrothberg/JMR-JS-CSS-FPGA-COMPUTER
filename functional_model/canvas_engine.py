@@ -183,9 +183,9 @@ class CanvasEngine:
         self.front = bytearray(FB_BYTES)
         self.back = bytearray(FB_BYTES)
         self.fill_style: int = 1  # palette index
-        # NEW: draw-activity flag — present (swap) only on frames the game
-        # actually drew (setTimeout-paced loops draw every Nth tick; swapping
-        # blindly would flash the stale opposite buffer).
+        # NEW: draw-activity flag — present only on frames the game actually
+        # drew (setTimeout-paced loops draw every Nth tick; presenting
+        # blindly would flash a stale snapshot).
         self.dirty: bool = False
 
     def clear(self, color: int = 0) -> None:
@@ -216,6 +216,10 @@ class CanvasEngine:
 
     def swap(self) -> None:
         self.front, self.back = self.back, self.front
+
+    def present(self) -> None:
+        """Snapshot the JS draw buffer to scanout. Canvas stays one bitmap."""
+        self.front[:] = self.back
 
     def draw_char_front(self, col: int, row: int, ch: str, color: int = 3) -> None:
         """Blit one glyph into the FRONT buffer (monitor glass)."""

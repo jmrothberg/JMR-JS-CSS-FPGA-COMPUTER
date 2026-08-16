@@ -241,6 +241,12 @@ def check_python_html_bytecode_invaders() -> int:
     if nz < 100:
         print("FAIL PYTHON HTML BYTECODE INVADERS FB empty", nz)
         return 1
+    # The HTML owns its controls: Space starts INVADERS from its attract screen.
+    from functional_model.input_engine import KEY_FIRE, KEY_LEFT
+    m.set_key_bits(KEY_FIRE)
+    py.frame_tick()
+    m.set_key_bits(0)
+    py.frame_tick()
     for _ in range(30):
         py.frame_tick()
     nz2 = sum(1 for b in m.canvas.front if b)
@@ -250,8 +256,6 @@ def check_python_html_bytecode_invaders() -> int:
     player = m.vm.globals.get("player")
     pos = player.get("position") if isinstance(player, dict) else None
     px0 = pos.get("x") if isinstance(pos, dict) else None
-    from functional_model.input_engine import KEY_FIRE, KEY_LEFT
-
     m.set_key_bits(KEY_LEFT)
     py.frame_tick()
     player = m.vm.globals.get("player")
@@ -370,6 +374,13 @@ def check_hm_invaders_jsh() -> int:
     if nz < 100:
         print("FAIL HM INVADERS FB empty", nz)
         return 1
+    # Space starts the title; subsequent Space is the fire acceptance input.
+    vm.set_key_bits(KEY_FIRE)
+    vm.frame_tick()
+    vm.set_key_bits(0)
+    vm.frame_tick()
+    for _ in range(4):
+        vm.frame_tick()
     player = vm.globals.get("player")
     pos = player.get("position") if isinstance(player, dict) else None
     px0 = pos.get("x") if isinstance(pos, dict) else None

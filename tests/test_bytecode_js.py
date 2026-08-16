@@ -1,17 +1,22 @@
 """Generic JS VM tests: closures, String.replace(RegExp), not title-specific."""
 
+import math
 import struct
 
 import pytest
 
+from functional_model.bytecode import Chunk, Op
 from functional_model.compiler import compile_source
 from functional_model.jsb_format import (
     FLAG_SOURCE_MAP,
+    FLAG_VALUE64,
     MAGIC,
+    NATIVE_IDS,
     ProgramImage,
     encode_chunk,
 )
 from functional_model.machine import Machine
+from hardware_model import js_vm as value64
 from hardware_model.js_vm import JsHwVm
 
 
@@ -1076,16 +1081,1970 @@ def test_hw_vm_executes_serialized_program_image_not_compiler_chunk():
     assert vm.error is None, vm.error
     assert vm.globals.get("answer") == 7
     assert vm._m._html_chunk is not chunk
+    checkpoint = vm.checkpoint()
+    assert "frames" in checkpoint
+    assert "queues" in checkpoint
+    assert checkpoint["error_code"] == value64.ERROR_NONE
 
 
 def test_hw_vm_queue_capacity_fails_loudly():
     src = "function f() {}\n" + "\n".join(
-        "setTimeout(f, 1000);" for _ in range(9)
+        "setTimeout(f, 1000);" for _ in range(65)
     )
     image = ProgramImage.from_chunk(compile_source(src), v2=True)
 
     vm = JsHwVm()
     vm.load_image(image)
 
-    assert vm.error == "ERROR: HM CAPACITY: timer queue overflow (8 timers)"
+    assert vm.error == "ERROR: HM CAPACITY: timer queue overflow (64 timers)"
+
+
+def test_value64_layout_and_nan_canonicalization():
+    undefined = value64.value_pack_tagged(value64.VALUE_KIND_UNDEFINED)
+    boolean = value64.value_pack_tagged(value64.VALUE_KIND_BOOL, payload=1)
+
+    assert undefined == 0x7FF9100000000000
+    assert boolean == 0x7FF9300000000001
+    assert value64.value_kind(undefined) == value64.VALUE_KIND_UNDEFINED
+    assert value64.value_payload(boolean) == 1
+    assert value64.value_is_number(value64.value_pack_number(3.5))
+    assert value64.value_pack_number(float("nan")) == value64.VALUE_CANON_NAN
+
+
+def test_value64_binary64_division_remainder_and_bitwise_contract():
+    number = value64.value_pack_number
+    unpack = value64.value_unpack_number
+
+    assert unpack(value64.value_add(number(0.1), number(0.2))) == pytest.approx(0.3)
+    assert unpack(value64.value_mod(number(-7), number(3))) == -1
+    assert unpack(value64.value_mod(number(7), number(-3))) == 1
+    assert math.isinf(unpack(value64.value_div(number(1), number(0))))
+    assert math.isnan(unpack(value64.value_div(number(0), number(0))))
+    assert unpack(value64.value_bit_or(number(1.9), number(0))) == 1
+    assert unpack(value64.value_bit_or(number(float("nan")), number(0))) == 0
+    assert unpack(value64.value_bit_or(number(2**40), number(0))) == 0
+    assert unpack(value64.value_bit_and(number(-1), number(3))) == 3
+    true_b = value64.value_pack_tagged(value64.VALUE_KIND_BOOL, payload=1)
+    false_b = value64.value_pack_tagged(value64.VALUE_KIND_BOOL, payload=0)
+    # Grouped switch cases OR EQ bools; true|false must be 1, not 0.
+    assert unpack(value64.value_bit_or(true_b, false_b)) == 1
+    assert unpack(value64.value_bit_or(false_b, false_b)) == 0
+
+
+def test_program_image_value64_constant_pool_round_trip():
+    image = ProgramImage.from_chunk(
+        compile_source("var x=0.1; var y=7;"), v2=True, value64=True
+    )
+    decoded = image.decode()
+
+    assert image.version == 2
+    assert image.flags & FLAG_VALUE64
+    assert any(
+        isinstance(value, float) and value == pytest.approx(0.1)
+        for value in decoded.consts
+    )
+    assert 7.0 in decoded.consts
+
+    vm = JsHwVm()
+    vm.load_image(image)
+    assert vm.error is None, vm.error
+    assert vm.globals["x"] == pytest.approx(0.1)
+    assert vm.globals["y"] == 7.0
+
+
+def test_program_image_value64_preserves_distinct_binary64_literals():
+    first = 1.0000000000000002
+    second = 1.0000000000000004
+    image = ProgramImage.from_chunk(
+        compile_source(f"var a={first!r}; var b={second!r};"),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals["a"] == first
+    assert vm.globals["b"] == second
+    assert vm.globals["a"] != vm.globals["b"]
+
+
+def test_hw_value64_executes_code_mem_not_decoded_chunk(monkeypatch):
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+var x = 2;
+if (x < 3) x = (x + 5) * 2;
+else x = 0;
+var rem = x % 3;
+var bits = (7.9 | 0) & 3;
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    decoded = image.decode()
+    decoded.consts[:] = [99 for _ in decoded.consts]
+    decoded.code[:] = [(Op.RETURN,)]
+
+    def fail_if_decoded(_image):
+        raise AssertionError("Value64 execution decoded a Chunk")
+
+    monkeypatch.setattr(ProgramImage, "decode", fail_if_decoded)
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals["x"] == 14.0
+    assert vm.globals["rem"] == 2.0
+    assert vm.globals["bits"] == 3.0
+    assert vm._m._html_chunk is None
+
+
+def test_hw_value64_binary64_edges_execute_from_words():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            "var pos=1/0; var neg=-1/0; var nan=0/0; var rem=-7%3;"
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert math.isinf(vm.globals["pos"]) and vm.globals["pos"] > 0
+    assert math.isinf(vm.globals["neg"]) and vm.globals["neg"] < 0
+    assert math.isnan(vm.globals["nan"])
+    assert vm.globals["rem"] == -1.0
+
+
+def test_hw_value64_nested_array_object_identity_and_cycles():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+var inner = [1, 2];
+var obj = {items: [inner, {n: 3}]};
+var got = obj.items[1].n;
+obj.self = obj;
+var same = obj.self === obj;
+inner[1] = 9;
+var changed = obj.items[0][1];
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals["got"] == 3.0
+    assert vm.globals["same"] is True
+    assert vm.globals["changed"] == 9.0
+
+
+def test_hw_value64_gc_reclaims_churn_before_slot_capacity_fault():
+    arrays = ProgramImage.from_chunk(
+        Chunk(
+            [(Op.MAKE_ARRAY, 0), (Op.POP,)] * (value64.MAX_ARRAYS + 1),
+            [],
+            [],
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(arrays)
+    assert vm.error is None, vm.error
+    assert not any(slot is not None for slot in vm._value_arrays)
+
+    objects = ProgramImage.from_chunk(
+        Chunk(
+            [(Op.MAKE_OBJ,), (Op.POP,)] * (value64.MAX_OBJECTS + 1),
+            [],
+            [],
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm.load_image(objects)
+    assert vm.error is None, vm.error
+    assert not any(slot is not None for slot in vm._value_objects)
+
+    properties = ",".join(
+        f"p{index}:{index}" for index in range(value64.OBJECT_SLOTS + 1)
+    )
+    vm.load_image(
+        ProgramImage.from_chunk(
+            compile_source(f"var o={{{properties}}};"), v2=True, value64=True
+        )
+    )
+    assert vm.error is not None
+    assert (
+        f"object slots {value64.OBJECT_SLOTS + 1} > {value64.OBJECT_SLOTS}"
+        in vm.error
+    )
+
+
+def test_hw_value64_rooted_cycle_survives_allocator_gc():
+    code = [
+        (Op.MAKE_OBJ,),
+        (Op.DUP,),
+        (Op.DUP,),
+        (Op.SET_PROP, 1),
+        (Op.POP,),
+        (Op.STORE_VAR, 0),
+    ]
+    code.extend([(Op.MAKE_OBJ,), (Op.POP,)] * value64.MAX_OBJECTS)
+    image = ProgramImage.from_chunk(
+        Chunk(code, [], ["root", "self"]), v2=True, value64=True
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    root = vm._value_vars[0]
+    obj = vm._value64_resolve_object(root, 0, Op.GET_PROP)
+    assert obj is not None
+    assert obj[1] == root
+    assert sum(slot is not None for slot in vm._value_objects) == 1
+
+
+def test_hw_value64_collected_handle_faults_stale_then_free():
+    image = ProgramImage.from_chunk(
+        compile_source("var a=[];"), v2=True, value64=True
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+    handle = vm._value_vars[0]
+    slot = value64.value_payload(handle)
+    old_generation = value64.value_generation(handle)
+
+    vm._value_var_valid[0] = False
+    vm._value64_collect()
+    new_generation = vm._value_array_generations[slot]
+    assert new_generation != old_generation
+
+    vm.error = None
+    assert vm._value64_resolve_array(handle, 0, Op.ARRAY_GET) is None
+    assert vm.error == (
+        "ERROR: HM VALUE64: stale array handle at IP 0 "
+        f"(slot {slot} generation {old_generation} != {new_generation})"
+    )
+
+    vm.error = None
+    free_handle = value64.value_pack_tagged(
+        value64.VALUE_KIND_ARRAY, new_generation, slot
+    )
+    assert vm._value64_resolve_array(free_handle, 0, Op.ARRAY_GET) is None
+    assert vm.error == f"ERROR: HM VALUE64: free array handle at IP 0 (slot {slot})"
+
+
+def test_hw_value64_serialized_strings_console_and_numeric_natives():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+var s = "hello";
+console.log(s);
+var expectedType = "number";
+var typeName = typeof 3;
+var floorValue = Math.floor(3.75);
+var rootValue = Math.sqrt(81);
+var nowValue = Date.now();
+clear(0);
+fillRect(1, 1, 2, 2, 5);
+swapBuffers();
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    assert "hello" in image.names
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals["s"] == "hello"
+    assert vm.console_log == [("hello",)]
+    assert vm.globals["typeName"] == "number"
+    assert vm.globals["floorValue"] == 3.0
+    assert vm.globals["rootValue"] == 9.0
+    assert vm.globals["nowValue"] == 0.0
+    assert vm.canvas.front[1 * vm.canvas.width + 1] == 5
+
+
+def test_hw_value64_frame_order_input_then_raf_then_timer():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+var order = 0;
+function onKey() { order = order * 10 + 3; }
+function onRaf() { order = order * 10 + 1; }
+function onTimer() { order = order * 10 + 2; }
+addEventListener("keydown", onKey);
+requestAnimationFrame(onRaf);
+setTimeout(onTimer, 0);
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+    assert vm.error is None, vm.error
+    assert vm.running
+
+    vm.input.key_event(13, "Enter", True)
+    vm.frame_tick()
+
+    assert vm.error is None, vm.error
+    assert vm.globals["order"] == 312.0
+    assert not vm._value_raf
+    assert not vm._value_timers
+
+
+def test_hw_value64_remove_listener_and_clear_timers():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+var count = 0;
+function callback() { count = count + 1; }
+addEventListener("keydown", callback);
+removeEventListener("keydown", callback);
+var timeoutId = setTimeout(callback, 0);
+clearTimeout(timeoutId);
+var intervalId = setInterval(callback, 0);
+clearInterval(intervalId);
+requestAnimationFrame(callback);
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+    assert vm.error is None, vm.error
+
+    vm.input.key_event(13, "Enter", True)
+    vm.frame_tick()
+
+    assert vm.error is None, vm.error
+    assert vm.globals["count"] == 1.0
+    assert not vm._value_listeners
+    assert not vm._value_timers
+
+
+def test_hw_value64_async_queue_overflows_fail_loudly():
+    raf_source = "function f(){}" + "requestAnimationFrame(f);" * (
+        value64.RAF_QUEUE_DEPTH + 1
+    )
+    vm = JsHwVm()
+    vm.load_image(
+        ProgramImage.from_chunk(
+            compile_source(raf_source), v2=True, value64=True
+        )
+    )
+    assert vm.error is not None
+    assert (
+        f"rAF queue overflow ({value64.RAF_QUEUE_DEPTH + 1} > "
+        f"{value64.RAF_QUEUE_DEPTH})"
+    ) in vm.error
+
+    timer_source = "function f(){}" + "setTimeout(f,0);" * (
+        value64.TIMER_QUEUE_DEPTH + 1
+    )
+    vm.load_image(
+        ProgramImage.from_chunk(
+            compile_source(timer_source), v2=True, value64=True
+        )
+    )
+    assert vm.error is not None
+    assert (
+        f"timer queue overflow ({value64.TIMER_QUEUE_DEPTH + 1} > "
+        f"{value64.TIMER_QUEUE_DEPTH})"
+    ) in vm.error
+
+    listener_source = "".join(
+        f"function f{index}(){{}}"
+        for index in range(value64.LISTENERS_PER_EVENT + 1)
+    ) + "".join(
+        f'addEventListener("keydown",f{index});'
+        for index in range(value64.LISTENERS_PER_EVENT + 1)
+    )
+    vm.load_image(
+        ProgramImage.from_chunk(
+            compile_source(listener_source), v2=True, value64=True
+        )
+    )
+    assert vm.error is not None
+    assert (
+        f"listener overflow ({value64.LISTENERS_PER_EVENT + 1} > "
+        f"{value64.LISTENERS_PER_EVENT})"
+    ) in vm.error
+
+
+def test_hw_value64_functions_share_object_heap_capacity():
+    image = ProgramImage.from_chunk(
+        compile_source("var f=()=>1; var root={};"), v2=True, value64=True
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+    assert vm.error is None, vm.error
+
+    function_slot = value64.value_payload(
+        vm._value_vars[image.var_names.index("f")]
+    )
+    root_handle = vm._value_vars[image.var_names.index("root")]
+    root_slot = value64.value_payload(root_handle)
+    assert function_slot != root_slot
+
+    previous = root_slot
+    for slot in range(value64.MAX_OBJECTS):
+        if slot in (function_slot, root_slot):
+            continue
+        vm._value_objects[slot] = {}
+        vm._value_objects[previous][0] = value64.value_pack_tagged(
+            value64.VALUE_KIND_OBJECT,
+            vm._value_object_generations[slot],
+            slot,
+        )
+        previous = slot
+    vm.error = None
+    assert vm._value64_alloc_object(0) is None
+    assert vm.error == (
+        "ERROR: HM VALUE64: object heap overflow "
+        f"({value64.MAX_OBJECTS + 1} > {value64.MAX_OBJECTS}) at IP 0"
+    )
+
+
+def test_hw_value64_class_constructor_method_and_this():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+class Counter {
+  constructor(value) { this.value = value; }
+  add(delta) { return this.value + delta; }
+  get current() { return this.value; }
+}
+var counter = new Counter(2);
+var result = counter.add(3);
+var boundAdd = counter.add;
+var boundResult = boundAdd(4);
+var getterResult = counter.current;
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    assert image.classes
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals["result"] == 5.0
+    assert vm.globals["boundResult"] == 6.0
+    assert vm.globals["getterResult"] == 2.0
+
+
+def test_hw_value64_array_map_and_foreach_closures():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+var input = [1, 2, 3];
+var mapped = input.map(function(value) { return value + 1; });
+var sum = 0;
+mapped.forEach(function(value) { sum = sum + value; });
+var second = mapped[1];
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals["sum"] == 9.0
+    assert vm.globals["second"] == 3.0
+
+
+def test_hw_value64_json_round_trip_and_cycle_failure():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+var source = {x: 7, values: [1, 2]};
+var text = JSON.stringify(source);
+var parsed = JSON.parse(text);
+var result = parsed.x + parsed.values[1];
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals["result"] == 9.0
+
+    cyclic = ProgramImage.from_chunk(
+        compile_source(
+            "var value={}; value.self=value; var text=JSON.stringify(value);"
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm.load_image(cyclic)
+    assert vm.error is not None
+    assert "JSON.stringify" in vm.error
+    assert "cyclic object" in vm.error
+
+
+def test_hw_value64_string_replace_and_split():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+var changed = "a-b-a".replace("a", "x");
+var pieces = changed.split("-");
+var first = pieces[0];
+var last = pieces[2];
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals["changed"] == "x-b-a"
+    assert vm.globals["first"] == "x"
+    assert vm.globals["last"] == "a"
+
+
+def test_hw_value64_number_concat_js_tostring_object_key():
+    """JS ToString: 1+','+3 is '1,3' so obj['1,3'] hits the literal key."""
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+var goods = {'1,3': 1};
+var i = 1;
+var j = 3;
+var key = i + ',' + j;
+var hit = goods[key];
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+    assert vm.error is None, vm.error
+    assert vm.globals["key"] == "1,3"
+    assert vm.globals["hit"] == 1.0
+
+
+def test_hw_value64_regex_replace_flags_and_comparator_sort():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+var changed = "A-a-A".replace(/a/gi, "x");
+var values = [3, 1, 2];
+values.sort(function(a, b) { return a - b; });
+var first = values[0];
+var last = values[2];
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals["changed"] == "x-x-x"
+    assert vm.globals["first"] == 1.0
+    assert vm.globals["last"] == 3.0
+
+
+def test_hw_value64_storage_dom_image_array_and_dispatch():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+localStorage.setItem("score", "7");
+var stored = localStorage.getItem("score");
+localStorage.removeItem("score");
+var removed = localStorage.getItem("score");
+var element = document.createElement("div");
+element.value = 9;
+var elementValue = element.value;
+var image = Image();
+image.src = "asset";
+var imageWidth = image.width;
+var list = Array(3);
+var listLength = list.length;
+var hit = 0;
+function onKey(event) { hit = event.keyCode; }
+addEventListener("keydown", onKey);
+var event = {type: "keydown", keyCode: 13};
+document.dispatchEvent(event);
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals["stored"] == "7"
+    assert vm.globals["removed"] is None
+    assert vm.globals["elementValue"] == 9.0
+    assert vm.globals["imageWidth"] == 1.0
+    assert vm.globals["listLength"] == 3.0
+    assert vm.globals["hit"] == 13.0
+
+
+@pytest.mark.parametrize("native_id", sorted(set(NATIVE_IDS.values())))
+def test_hw_value64_every_registered_native_has_dispatch(native_id):
+    image = ProgramImage.from_chunk(
+        compile_source(
+            'var f=function(){}; var key="score"; var value="0"; '
+            'var eventName="keydown"; var typeName="type";'
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+    assert vm.error is None, vm.error
+
+    function = vm._value_vars[image.var_names.index("f")]
+    key = vm._value_vars[image.var_names.index("key")]
+    value = vm._value_vars[image.var_names.index("value")]
+    event_name = vm._value_vars[image.var_names.index("eventName")]
+    event = vm._value64_alloc_object(0)
+    assert event is not None
+    event_obj = vm._value_objects[value64.value_payload(event)]
+    type_index = vm._value_strings.index("type")
+    event_obj[type_index] = event_name
+
+    args_by_id = {
+        19: [event_name, function],
+        20: [event_name, function],
+        21: [key],
+        22: [key, value],
+        23: [value],
+        24: [value64.value_pack_number(0)],
+        27: [function],
+        28: [function, value64.value_pack_number(0)],
+        29: [function, value64.value_pack_number(0)],
+        30: [value64.value_pack_number(1)],
+        31: [value64.value_pack_number(1)],
+        32: [key],
+        34: [value64.value_pack_number(1)],
+        36: [event_name, function],
+        37: [event_name, function],
+        38: [event],
+        39: [event],
+        40: [value64.value_pack_number(1)],
+    }
+    vm.error = None
+    vm._value64_native(native_id, args_by_id.get(native_id, []), 0)
+    assert vm.error is None or "unsupported native ID" not in vm.error
+
+
+def test_hw_value64_declares_every_opcode_supported():
+    assert value64.VALUE64_SUPPORTED_OPS == frozenset(Op)
+
+
+def test_hw_value64_checkpoint_is_raw_and_deterministic():
+    image = ProgramImage.from_chunk(
+        compile_source("var zero=0; var cycle={}; cycle.self=cycle;"),
+        v2=True,
+        value64=True,
+    )
+    first = JsHwVm()
+    second = JsHwVm()
+    first.load_image(image)
+    second.load_image(image)
+
+    checkpoint = first.checkpoint()
+    assert checkpoint == second.checkpoint()
+    assert checkpoint == first.checkpoint()
+    assert checkpoint["error_code"] == value64.ERROR_NONE
+
+    zero_slot = image.var_names.index("zero")
+    first._value_vars[zero_slot] = value64.value_pack_number(-0.0)
+    assert first.globals["zero"] == 0.0
+    assert first.checkpoint()["vars"] != checkpoint["vars"]
+
+    before_uninitialized = first.checkpoint()["vars"]
+    first._value_vars[value64.MAX_VARS - 1] = value64.value_pack_number(99)
+    assert first.checkpoint()["vars"] == before_uninitialized
+    first._value_var_valid[value64.MAX_VARS - 1] = True
+    assert first.checkpoint()["vars"] != before_uninitialized
+
+
+def test_hw_value64_checkpoint_heap_cycles_and_mutations():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            "var object={n:1}; object.self=object; "
+            "var array=[object]; object.array=array;"
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+    before = vm.checkpoint()
+    assert before["heap"] == vm.checkpoint()["heap"]
+
+    object_handle = vm._value_vars[image.var_names.index("object")]
+    object_slot = value64.value_payload(object_handle)
+    name_index = image.names.index("n")
+    vm._value_objects[object_slot][name_index] = value64.value_pack_number(2)
+    after = vm.checkpoint()
+
+    assert after["heap"] != before["heap"]
+    assert after["vars"] == before["vars"]
+
+
+def test_hw_value64_checkpoint_queue_and_frame_sensitivity():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+function first() {}
+function second() {}
+requestAnimationFrame(first);
+requestAnimationFrame(second);
+setTimeout(first, 100);
+addEventListener("keydown", second);
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+    before = vm.checkpoint()
+    assert before["raf"] == 2
+    assert before["timers"] == 1
+    assert before["listeners"] == 1
+
+    vm._value_raf.reverse()
+    reordered = vm.checkpoint()
+    assert reordered["queues"] != before["queues"]
+    assert reordered["raf"] == before["raf"]
+
+    undefined = value64.value_pack_tagged(value64.VALUE_KIND_UNDEFINED)
+    vm._value_calls.append(
+        value64._ValueCallFrame(
+            return_ip=7,
+            base_sp=len(vm._value_stack),
+            this_value=undefined,
+            lexical_env=undefined,
+            function_handle=undefined,
+            constructor_value=undefined,
+        )
+    )
+    framed = vm.checkpoint()
+    assert framed["frames"] != reordered["frames"]
+    assert framed["csp"] == reordered["csp"] + 1
+
+    canvas_before = framed["canvas"]
+    vm.canvas.front[0] ^= 1
+    assert vm.checkpoint()["canvas"] != canvas_before
+
+
+def test_hw_value64_checkpoint_numeric_error_code():
+    image = ProgramImage.from_chunk(
+        Chunk([(Op.NEW_OBJ, 0, 0)], [], ["Missing"]),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+    checkpoint = vm.checkpoint()
+
+    assert checkpoint["error_code"] == value64.ERROR_UNSUPPORTED
+    assert checkpoint["error"] == vm.error
+
+
+def test_hw_value64_unknown_class_fails_without_legacy_delegate():
+    image = ProgramImage.from_chunk(
+        Chunk([(Op.NEW_OBJ, 0, 0)], [], ["C"]),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error == "ERROR: HM VALUE64: unknown class name index 0 at IP 0"
+    assert vm._m._html_chunk is None
+
+
+def test_hw_value64_call_frame_returns_balanced():
+    image = ProgramImage.from_chunk(
+        Chunk(
+            [
+                (Op.LOAD_CONST, 0),
+                (Op.CALL_USER, 4, 1),
+                (Op.STORE_VAR, 1),
+                (Op.JUMP, 9),
+                (Op.LET_VAR, 0, 1),
+                (Op.LOAD_VAR, 0),
+                (Op.LOAD_CONST, 1),
+                (Op.ADD,),
+                (Op.RET_VAL,),
+            ],
+            [2, 1],
+            ["x", "result"],
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals["result"] == 3.0
+    assert vm.checkpoint()["csp"] == 0
+
+
+def test_hw_value64_nested_closure_capture():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+function make(x) {
+  return function(y) { return x + y; };
+}
+var add2 = make(2);
+var result = add2(3);
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals["result"] == 5.0
+    add2_slot = image.var_names.index("add2")
+    assert (
+        value64.value_kind(vm._value_vars[add2_slot])
+        == value64.VALUE_KIND_FUNCTION
+    )
+
+
+def test_hw_value64_closure_instances_keep_independent_environments():
+    image = ProgramImage.from_chunk(
+        compile_source(
+            """
+function make(x) {
+  return function() {
+    x = x + 1;
+    return x;
+  };
+}
+var a = make(1);
+var b = make(10);
+var a1 = a();
+var b1 = b();
+var a2 = a();
+"""
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals["a1"] == 2.0
+    assert vm.globals["b1"] == 11.0
+    assert vm.globals["a2"] == 3.0
+
+
+def test_hw_value64_closure_environment_survives_allocator_gc():
+    source = (
+        "function make(x){return function(){return x;};}"
+        "var f=make(7);"
+        + "({});" * value64.MAX_OBJECTS
+        + "var result=f();"
+    )
+    image = ProgramImage.from_chunk(
+        compile_source(source), v2=True, value64=True
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is None, vm.error
+    assert vm.globals["result"] == 7.0
+    assert sum(env is not None for env in vm._value_envs) == 1
+
+
+def test_hw_value64_environment_depth_overflow_fails_loudly():
+    n = value64.ENV_DEPTH + 1
+    source = (
+        "function make(x){return function(){return x;};}"
+        "var head = null;"
+        f"for (var i = 0; i < {n}; i = i + 1) {{"
+        "head = {f: make(1), next: head};"
+        "}"
+    )
+    image = ProgramImage.from_chunk(
+        compile_source(source), v2=True, value64=True
+    )
+    vm = JsHwVm()
+    vm.load_image(image)
+
+    assert vm.error is not None
+    assert (
+        f"environment heap overflow ({value64.ENV_DEPTH + 1} > "
+        f"{value64.ENV_DEPTH})"
+    ) in vm.error
+
+
+def test_hw_value64_stack_and_call_bounds_fail_loudly():
+    underflow = ProgramImage.from_chunk(
+        Chunk([(Op.DUP,)], [], []), v2=True, value64=True
+    )
+    vm = JsHwVm()
+    vm.load_image(underflow)
+    assert vm.error == "ERROR: HM VALUE64: eval stack underflow at IP 0 (DUP)"
+
+    overflow = ProgramImage.from_chunk(
+        Chunk([(Op.LOAD_CONST, 0)] * (value64.STACK_DEPTH + 1), [1], []),
+        v2=True,
+        value64=True,
+    )
+    vm.load_image(overflow)
+    assert vm.error == (
+        "ERROR: HM VALUE64: eval stack overflow "
+        f"({value64.STACK_DEPTH + 1} > {value64.STACK_DEPTH})"
+    )
+
+    call_overflow = ProgramImage.from_chunk(
+        Chunk([(Op.CALL_USER, 0, 0)], [], []), v2=True, value64=True
+    )
+    vm.load_image(call_overflow)
+    assert vm.error == (
+        "ERROR: HM VALUE64: environment heap overflow "
+        f"({value64.ENV_DEPTH + 1} > {value64.ENV_DEPTH}) at IP 0"
+    )
+
+    unbalanced_return = ProgramImage.from_chunk(
+        Chunk(
+            [
+                (Op.CALL_USER, 2, 0),
+                (Op.JUMP, 5),
+                (Op.LOAD_CONST, 0),
+                (Op.LOAD_CONST, 0),
+                (Op.RET_VAL,),
+            ],
+            [1],
+            [],
+        ),
+        v2=True,
+        value64=True,
+    )
+    vm.load_image(unbalanced_return)
+    assert vm.error == (
+        "ERROR: HM VALUE64: call stack imbalance at IP 4 (sp 1 != base 0)"
+    )
+
+    unbalanced_halt = ProgramImage.from_chunk(
+        Chunk([(Op.LOAD_CONST, 0), (Op.RETURN,)], [1], []),
+        v2=True,
+        value64=True,
+    )
+    vm.load_image(unbalanced_halt)
+    assert vm.error == (
+        "ERROR: HM VALUE64: eval stack imbalance at IP 1 (sp 1 != 0)"
+    )
+
+
+def test_html_program_image_is_value64_and_machine_uses_hw_vm():
+    """Product HTML compile emits Value64; PYTHON RUN executes those words."""
+    from pathlib import Path
+
+    from tools.compile_js import compile_html_text, encode_html_chunk
+
+    html = (
+        "<html><body><canvas></canvas><script>\n"
+        "var hits = 0;\n"
+        "function tick() { hits = hits + 1; requestAnimationFrame(tick); }\n"
+        "requestAnimationFrame(tick);\n"
+        "</script></body></html>\n"
+    )
+    image = ProgramImage(encode_html_chunk(compile_html_text(html)))
+    assert image.flags & FLAG_VALUE64
+
+    machine = Machine()
+    machine.source_name = "TICK.HTML"
+    out = machine._run_html_bytecode(html)
+    assert machine._hw_vm is not None
+    assert machine._hw_vm.error is None, machine._hw_vm.error
+    assert "ERROR" not in out[0]
+    machine.frame_tick()
+    assert machine._hw_vm.globals.get("hits") == 1
+
+    invaders = Path(__file__).resolve().parents[1] / "storage" / "INVADERS.HTML"
+    if invaders.is_file():
+        title = invaders.read_text(encoding="utf-8")
+        title_image = ProgramImage(encode_html_chunk(compile_html_text(title)))
+        assert title_image.flags & FLAG_VALUE64
+        assert title_image.flags & 2  # FLAG_ASET
+
+
+def test_hw_value64_grouped_switch_cases_or_bools():
+    """Compiler BIT_OR of EQ bools must take grouped switch cases."""
+    from hardware_model.js_vm import JsHwVm
+
+    source = (
+        "var hit = 0;\n"
+        "var k = 'ArrowRight';\n"
+        "switch (k) {\n"
+        "  case 'd':\n"
+        "  case 'ArrowRight':\n"
+        "    hit = 1;\n"
+        "    break;\n"
+        "}\n"
+    )
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(compile_source(source), v2=True, value64=True))
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hit") == 1.0
+
+
+def test_hw_value64_date_now_get_prop_call():
+    """Date.now compiles as GET_PROP + CALL_VAL on the interned constructor name."""
+    vm = JsHwVm()
+    vm.load_blob(
+        encode_chunk(
+            compile_source("var t = Date.now();"),
+            v2=True,
+            value64=True,
+        )
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("t") == 0.0
+
+
+def test_hw_value64_index_non_array_is_undefined():
+    """1[0] is undefined (JS), not a machine fault. Stale handles still fault."""
+    vm = JsHwVm()
+    vm.load_blob(
+        encode_chunk(
+            compile_source("var missing=1[0]; var ok=[9][0];"),
+            v2=True,
+            value64=True,
+        )
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("missing") is None
+    assert vm.globals.get("ok") == 9.0
+
+
+def test_hw_value64_set_prop_on_primitive_is_noop():
+    """x.foo = 1 when x is a Number must not halt (sloppy JS / Chunk VM)."""
+    vm = JsHwVm()
+    vm.load_blob(
+        encode_chunk(
+            compile_source("var n=1; n.foo=2; var ok=n;"),
+            v2=True,
+            value64=True,
+        )
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("ok") == 1.0
+
+
+def test_hw_value64_computed_object_index_get_set():
+    """obj[key] is ARRAY_GET/SET on objects, not arrays-only."""
+    vm = JsHwVm()
+    vm.load_blob(
+        encode_chunk(
+            compile_source(
+                "var o={}; var k='hits'; o[k]=3; var got=o[k];"
+            ),
+            v2=True,
+            value64=True,
+        )
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("got") == 3.0
+
+
+def test_hw_value64_missing_function_args_are_undefined():
+    """f(a,b) called as f(1) binds b=undefined; new Ctor(one) is the same."""
+    vm = JsHwVm()
+    vm.load_blob(
+        encode_chunk(
+            compile_source(
+                "function f(a,b){ return b; }\n"
+                "var missing = f(1);\n"
+                "function G(id, params){ this.id = id; this.params = params; }\n"
+                "var g = new G('canvas');\n"
+                "var pid = g.id;\n"
+                "var p = g.params;\n"
+            ),
+            v2=True,
+            value64=True,
+        )
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("missing") is None
+    assert vm.globals.get("pid") == "canvas"
+    assert vm.globals.get("p") is None
+
+
+def test_hw_value64_function_prototype_methods():
+    """new Ctor() instances see methods assigned on Ctor.prototype."""
+    vm = JsHwVm()
+    vm.load_blob(
+        encode_chunk(
+            compile_source(
+                "function Box(n){ this.n = n; }\n"
+                "Box.prototype.get = function(){ return this.n; };\n"
+                "var b = new Box(7);\n"
+                "var x = b.get();\n"
+            ),
+            v2=True,
+            value64=True,
+        )
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("x") == 7.0
+
+
+def test_hw_value64_image_src_fires_onload():
+    """Image.src must run onload so sprite size/position setup can complete."""
+    from hardware_model.js_vm import JsHwVm
+
+    source = (
+        "var w = 0;\n"
+        "var img = new Image();\n"
+        "img.onload = function() { w = img.width; };\n"
+        'img.src = "asset";\n'
+    )
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(compile_source(source), v2=True, value64=True))
+    assert vm.error is None, vm.error
+    assert vm.globals.get("w") == 1.0
+
+    # INVADERS-style: src is assigned before onload.
+    source_late = (
+        "var w = 0;\n"
+        "var img = new Image();\n"
+        'img.src = "asset";\n'
+        "img.onload = function() { w = img.width; };\n"
+    )
+    late = JsHwVm()
+    late.load_blob(encode_chunk(compile_source(source_late), v2=True, value64=True))
+    assert late.error is None, late.error
+    assert late.globals.get("w") == 1.0
+
+    # Pending Image must survive allocator GC before the deferred onload flush.
+    churn = (
+        "var w = 0;\n"
+        "var img = new Image();\n"
+        'img.src = "asset";\n'
+        "img.onload = function() { w = img.width; };\n"
+        "var i = 0;\n"
+        "while (i < 9000) { var t = {}; i = i + 1; }\n"
+    )
+    churn_vm = JsHwVm()
+    churn_vm.load_blob(encode_chunk(compile_source(churn), v2=True, value64=True))
+    assert churn_vm.error is None, churn_vm.error
+    assert churn_vm.globals.get("w") == 1.0
+
+
+def test_hw_value64_arrow_onload_captures_constructor_this():
+    """Arrow in a constructor must keep lexical this across deferred Image.onload."""
+    from hardware_model.js_vm import JsHwVm, value_kind, value_payload
+
+    source = (
+        "class Player {\n"
+        "  constructor() {\n"
+        "    this.width = 0;\n"
+        "    this.image = null;\n"
+        "    const image = new Image();\n"
+        '    image.src = "asset";\n'
+        "    image.onload = () => {\n"
+        "      this.image = image;\n"
+        "      this.width = image.width * 0.12;\n"
+        "    };\n"
+        "  }\n"
+        "}\n"
+        "var player = new Player();\n"
+        "var i = 0;\n"
+        "while (i < 9000) { var t = {}; i = i + 1; }\n"
+    )
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(compile_source(source), v2=True, value64=True))
+    assert vm.error is None, vm.error
+    handle = vm._value_vars[list(vm.program_image.var_names).index("player")]
+    obj = vm._value_objects[value_payload(handle)]
+    names = vm.program_image.names
+    assert vm._value64_host_value(obj.get(names.index("width"))) == pytest.approx(0.12)
+    assert value_kind(obj.get(names.index("image"))) == 5
+
+
+def test_invaders_hm_held_left_changes_framebuffer():
+    """INVADERS: start, then held left must change live game state."""
+    from pathlib import Path
+
+    from hardware_model.js_vm import value_payload, value_unpack_number
+
+    invaders = Path(__file__).resolve().parents[1] / "storage" / "INVADERS.HTML"
+    if not invaders.is_file():
+        pytest.skip("INVADERS.HTML missing")
+    machine = Machine()
+    machine.source_name = "INVADERS.HTML"
+    out = machine._run_html_bytecode(invaders.read_text(encoding="utf-8"))
+    hw = machine._hw_vm
+    assert hw is not None
+    assert hw.error is None, hw.error
+    assert "ERROR" not in out[0]
+    names = hw.program_image.names
+    game_handle = hw._value_vars[list(hw.program_image.var_names).index("game")]
+    player_handle = hw._value_vars[list(hw.program_image.var_names).index("player")]
+
+    def prop(handle, name):
+        obj = hw._value_objects[value_payload(handle)]
+        return hw._value64_host_value(obj.get(names.index(name)))
+
+    machine.input.key_event(32, " ", True)
+    machine.frame_tick()
+    machine.input.key_event(32, " ", False)
+    for _ in range(3):
+        machine.frame_tick()
+        assert hw.error is None, hw.error
+    assert prop(game_handle, "active")
+    position = prop(player_handle, "position")
+    before = hw._value64_host_value(
+        hw._value_objects[value_payload(position)].get(names.index("x"))
+    )
+    machine.input.key_event(39, "ArrowRight", True)
+    for _ in range(4):
+        machine.frame_tick()
+        assert hw.error is None, hw.error
+    after = hw._value64_host_value(
+        hw._value_objects[value_payload(position)].get(names.index("x"))
+    )
+    assert after != before, (before, after)
+    assert hw.checkpoint()["raf"] >= 1
+    # Glass: splash must paint more than one palette index (not solid white).
+    uniq = set(hw.canvas.front[::17])
+    assert len(uniq) >= 2, uniq
+
+
+def test_donkey_hm_enter_keeps_raf_armed():
+    """DONKEY: Enter must leave rAF live (title → next screen)."""
+    from pathlib import Path
+
+    donkey = Path(__file__).resolve().parents[1] / "storage" / "DONKEY.HTML"
+    if not donkey.is_file():
+        pytest.skip("DONKEY.HTML missing")
+    machine = Machine()
+    machine.source_name = "DONKEY.HTML"
+    out = machine._run_html_bytecode(donkey.read_text(encoding="utf-8"))
+    hw = machine._hw_vm
+    assert hw is not None
+    assert hw.error is None, hw.error
+    assert "ERROR" not in out[0]
+    for _ in range(4):
+        machine.frame_tick()
+        assert hw.error is None, hw.error
+    machine.input.key_event(13, "Enter", True)
+    machine.frame_tick()
+    machine.input.key_event(13, "Enter", False)
+    for _ in range(6):
+        machine.frame_tick()
+        assert hw.error is None, hw.error
+    assert hw.checkpoint()["raf"] >= 1
+    # Glass: title art must blit from ASET (not a black clearRect-only frame).
+    uniq = set(hw.canvas.front[::17])
+    assert len(uniq) >= 2, uniq
+
+
+def test_pacman_hm_raf_stays_armed():
+    """PACMAN: RUN must leave rAF live (title auto-advances via nested rAF)."""
+    from pathlib import Path
+
+    pacman = Path(__file__).resolve().parents[1] / "storage" / "PACMAN.HTML"
+    if not pacman.is_file():
+        pytest.skip("PACMAN.HTML missing")
+    machine = Machine()
+    machine.source_name = "PACMAN.HTML"
+    out = machine._run_html_bytecode(pacman.read_text(encoding="utf-8"))
+    hw = machine._hw_vm
+    assert hw is not None, out
+    assert hw.error is None, hw.error
+    assert "ERROR" not in out[0]
+    for _ in range(8):
+        machine.frame_tick()
+        assert hw.error is None, hw.error
+    assert hw.checkpoint()["raf"] >= 1
+    # Glass: maze/HUD must paint more than a solid fillStyle-white frame.
+    uniq = set(hw.canvas.front[::17])
+    assert len(uniq) >= 2, uniq
+    # Power pellets: goods['1,3'] draws arc r=3..4, not the 4×4 fillRect.
+    from functional_model.canvas_engine import nearest_palette_index
+
+    beige = nearest_palette_index(hw.canvas.palette, (245, 245, 220), lo=1)
+    w = hw.canvas.width
+    cx, cy = 16 + 1 * 14 + 7, 8 + 3 * 14 + 7
+    blob = 0
+    for yy in range(cy - 5, cy + 6):
+        row = yy * w
+        for xx in range(cx - 5, cx + 6):
+            if hw.canvas.front[row + xx] == beige:
+                blob += 1
+    assert blob > 16, blob
+
+
+def test_html_run_clears_leftover_monitor_pixels():
+    """HTML RUN wipes both FBs so leftover READY/WORKING cannot show through."""
+    html = (
+        "<html><body><canvas></canvas><script>\n"
+        'var c = document.querySelector("canvas").getContext("2d");\n'
+        'c.fillStyle = "#ffffff";\n'
+        "c.fillRect(8, 8, 4, 4);\n"
+        "</script></body></html>\n"
+    )
+    machine = Machine()
+    machine.source_name = "WIPE.HTML"
+    machine.canvas.front[:] = bytes([3]) * len(machine.canvas.front)
+    machine.canvas.back[:] = bytes([3]) * len(machine.canvas.back)
+    out = machine._run_html_bytecode(html)
+    assert "ERROR" not in out[0]
+    assert machine.canvas.front[0] != 3
+    assert machine.canvas.back[0] != 3
+
+
+def test_hw_value64_p0_raf_callback_rearms():
+    """rAF callback must run on frame_tick and re-arm if it calls rAF."""
+    source = (
+        "var hits = 0;\n"
+        "function tick() {\n"
+        "  hits = hits + 1;\n"
+        "  requestAnimationFrame(tick);\n"
+        "}\n"
+        "requestAnimationFrame(tick);\n"
+    )
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(compile_source(source), v2=True, value64=True))
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hits") == 0.0
+    vm.frame_tick()
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hits") == 1.0
+    assert vm._value_raf, "rAF did not re-arm"
+    vm.frame_tick()
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hits") == 2.0
+    assert vm._value_raf, "rAF dropped after second frame"
+
+
+def test_hw_value64_p0_getcontext_fillrect_paints():
+    """querySelector('canvas').getContext('2d') + fillRect + swapBuffers paints."""
+    source = (
+        'var c = document.querySelector("canvas").getContext("2d");\n'
+        'c.fillStyle = "#ffffff";\n'
+        "c.fillRect(8, 8, 4, 4);\n"
+        "swapBuffers();\n"
+    )
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(compile_source(source), v2=True, value64=True))
+    assert vm.error is None, vm.error
+    pixel = vm.canvas.front[8 * vm.canvas.width + 8]
+    assert pixel != 0, pixel
+
+
+def test_hw_value64_p0_keydown_key_and_keycode():
+    """keydown listener must see e.key and e.keyCode from input.key_event."""
+    source = (
+        'var seenKey = "";\n'
+        "var seenCode = 0;\n"
+        'addEventListener("keydown", function(e) {\n'
+        "  seenKey = e.key;\n"
+        "  seenCode = e.keyCode;\n"
+        "});\n"
+    )
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(compile_source(source), v2=True, value64=True))
+    assert vm.error is None, vm.error
+    vm.input.key_event(13, "Enter", True)
+    vm.frame_tick()
+    assert vm.error is None, vm.error
+    assert vm.globals.get("seenKey") == "Enter", vm.globals.get("seenKey")
+    assert vm.globals.get("seenCode") == 13.0, vm.globals.get("seenCode")
+
+
+def _hw_v64(src: str) -> JsHwVm:
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(compile_source(src), v2=True, value64=True))
+    return vm
+
+
+def _hw_html(html: str) -> JsHwVm:
+    from tools.compile_js import compile_html_text, encode_html_chunk
+
+    vm = JsHwVm()
+    vm.load_blob(encode_html_chunk(compile_html_text(html)))
+    return vm
+
+
+def test_hw_value64_p0_getelementbyid_canvas():
+    """document.getElementById must return a node that getContext can paint."""
+    vm = _hw_v64(
+        'var c = document.getElementById("c").getContext("2d");\n'
+        "c.fillRect(4, 4, 2, 2);\n"
+        "swapBuffers();\n"
+    )
+    assert vm.error is None, vm.error
+    assert vm.canvas.front[4 * vm.canvas.width + 4] != 0
+
+
+def test_hw_value64_p0_html_overlay_ignored():
+    """Hidden overlay markup must not block canvas script (HUD is Canvas)."""
+    vm = _hw_html(
+        "<html><body>"
+        '<div id="start" hidden>START</div>'
+        '<canvas id="c" width="640" height="480"></canvas>'
+        "<script>var ok = 1;</script>"
+        "</body></html>"
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("ok") == 1.0
+
+
+def test_hw_value64_p1_multiple_scripts_share_globals():
+    """Multiple <script> blocks concatenate; later script sees earlier vars."""
+    vm = _hw_html(
+        "<html><body><canvas></canvas>"
+        "<script>var a = 1;</script>"
+        "<script>var b = a + 2;</script>"
+        "</body></html>"
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("b") == 3.0
+
+
+def test_hw_value64_p1_array_splice_filter_join_find():
+    """Array push/splice/filter/fill/join/indexOf/find must work on JsHwVm."""
+    vm = _hw_v64(
+        """
+var grid = [1, 2, 3];
+grid.push(4);
+grid.splice(1, 1);
+var filled = [0, 0, 0].fill(9);
+var kept = [0, 7, 0].filter(function(v) { return v; });
+var joined = [1, 1, 0, 0].join("");
+var idx = [9, 8, 7].indexOf(8);
+var obj = {n: 2};
+var found = [{n: 1}, obj].find(function(el) { return el === obj; });
+var foundN = found.n;
+var g0 = grid[0];
+var g1 = grid[1];
+var f0 = filled[0];
+var k0 = kept[0];
+"""
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("joined") == "1100"
+    assert vm.globals.get("idx") == 1.0
+    assert vm.globals.get("foundN") == 2.0
+    assert vm.globals.get("g0") == 1.0
+    assert vm.globals.get("g1") == 3.0
+    assert vm.globals.get("f0") == 9.0
+    assert vm.globals.get("k0") == 7.0
+
+
+def test_hw_value64_p1_object_assign():
+    """Object.assign copies enumerable fields onto the target."""
+    vm = _hw_v64(
+        """
+var t = {a: 1};
+Object.assign(t, {b: 2});
+var sum = t.a + t.b;
+"""
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("sum") == 3.0
+
+
+def test_hw_value64_p1_function_bind():
+    """Function.bind must fix this for a later call."""
+    vm = _hw_v64(
+        """
+var obj = {n: 3};
+function add(x) { return this.n + x; }
+var bound = add.bind(obj);
+var got = bound(4);
+"""
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("got") == 7.0
+
+
+def test_hw_value64_p1_dispatch_keyboardevent():
+    """new KeyboardEvent + dispatchEvent must deliver e.key to a listener."""
+    vm = _hw_v64(
+        """
+var hit = 0;
+addEventListener("keydown", function(e) {
+  if (e.key === "Enter" && e.keyCode === 13) hit = 1;
+});
+var ev = new KeyboardEvent("keydown", {key: "Enter", keyCode: 13, which: 13});
+document.dispatchEvent(ev);
+"""
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hit") == 1.0
+
+
+def test_hw_value64_class_field_arrow_is_own_property():
+    """Class-field arrows are instance functions (addEventListener identity)."""
+    vm = _hw_v64(
+        """
+var hit = 0;
+class G {
+  startSelect = (e) => {
+    if (e.key === "Enter") hit = 1;
+  }
+}
+var g = new G();
+addEventListener("keydown", g.startSelect);
+"""
+    )
+    assert vm.error is None, vm.error
+    vm.input.key_event(13, "Enter", True)
+    vm.frame_tick()
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hit") == 1.0
+
+
+def test_hw_value64_iife_module_let_is_visible_to_class_method():
+    """Top-level IIFE lets are globals; class methods LOAD_VAR them."""
+    vm = _hw_v64(
+        """
+var P = (function(){
+  let sheet = 7;
+  class P {
+    read() { return sheet; }
+  }
+  return P;
+})();
+var p = new P();
+var v = p.read();
+"""
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("v") == 7.0
+
+
+def test_hw_value64_console_log_rings():
+    """console.log is a diagnostic ring; overflow must not abort."""
+    vm = _hw_v64(
+        "for (var i = 0; i < 300; i = i + 1) console.log(i);\nvar ok = 1;\n"
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("ok") == 1.0
+    assert len(vm.console_log) == 256
+    assert vm.console_log[0] == (44.0,)
+    assert vm.console_log[-1] == (299.0,)
+
+
+def test_hw_value64_clear_timeout_null_is_noop():
+    """clearTimeout(null|undefined) is Web IDL long, not a Number-tag fault."""
+    vm = _hw_v64(
+        """
+var n = 0;
+function bump() { n = n + 1; }
+clearTimeout(null);
+clearTimeout(undefined);
+clearTimeout();
+var id = setTimeout(bump, 0);
+"""
+    )
+    assert vm.error is None, vm.error
+    vm.frame_tick()
+    assert vm.error is None, vm.error
+    assert vm.globals.get("n") == 1.0
+
+
+def test_hw_value64_class_field_keeps_constructor_params():
+    """Field inits must not steal constructor_ip from param LET_VARs."""
+    vm = _hw_v64(
+        """
+class G {
+  startSelect = (e) => { this.armed = e; }
+  constructor(width, height) {
+    this.width = width;
+    this.height = height;
+  }
+}
+var g = new G(1510, 685);
+var w = g.width;
+var h = g.height;
+var fn = g.startSelect;
+"""
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("w") == 1510.0
+    assert vm.globals.get("h") == 685.0
+    from hardware_model.js_vm import VALUE_KIND_FUNCTION, value_kind
+
+    fn = vm._value_vars[list(vm.program_image.var_names).index("fn")]
+    assert value_kind(fn) == VALUE_KIND_FUNCTION
+
+
+def test_hw_value64_present_keeps_draw_buffer():
+    """HTML present copies BACK→FRONT so onload paints the same bitmap."""
+    html = (
+        "<html><body><canvas></canvas><script>\n"
+        'var c = document.querySelector("canvas").getContext("2d");\n'
+        "function tick() {\n"
+        '  c.fillStyle = "#ffffff";\n'
+        "  c.fillRect(0, 0, 8, 8);\n"
+        "  var img = new Image();\n"
+        "  img.onload = function() {\n"
+        '    c.fillStyle = "#ff0000";\n'
+        "    c.fillRect(20, 20, 8, 8);\n"
+        "  };\n"
+        '  img.src = "asset";\n'
+        "}\n"
+        "requestAnimationFrame(tick);\n"
+        "</script></body></html>\n"
+    )
+    machine = Machine()
+    machine.source_name = "PRESENT.HTML"
+    out = machine._run_html_bytecode(html)
+    assert "ERROR" not in out[0], out
+    machine.frame_tick()
+    assert machine._hw_vm is not None and machine._hw_vm.error is None, (
+        machine._hw_vm.error if machine._hw_vm else out
+    )
+    w = machine.canvas.width
+    assert machine.canvas.front[0] != 0
+    assert machine.canvas.front[20 * w + 20] != 0
+
+
+def test_hw_value64_p0_fillstyle_named_hex_rgb():
+    """Canvas fillStyle named/hex/rgb strings must map to distinct paint."""
+    vm = _hw_v64(
+        """
+var c = document.querySelector("canvas").getContext("2d");
+c.fillStyle = "red";
+c.fillRect(0, 0, 2, 2);
+c.fillStyle = "#ffffff";
+c.fillRect(10, 0, 2, 2);
+c.fillStyle = "rgb(0, 0, 255)";
+c.fillRect(20, 0, 2, 2);
+swapBuffers();
+"""
+    )
+    assert vm.error is None, vm.error
+    w = vm.canvas.width
+    red, white, blue = vm.canvas.front[0], vm.canvas.front[10], vm.canvas.front[20]
+    assert red != 0 and white != 0 and blue != 0, (red, white, blue)
+    assert len({red, white, blue}) == 3, (red, white, blue)
+
+
+def test_hw_value64_p1_style_display_stub():
+    """el.style.display none/block is a DOM property stub, not CSS layout."""
+    vm = _hw_v64(
+        """
+var el = document.createElement("div");
+el.style.display = "none";
+var hidden = el.style.display;
+el.style.display = "block";
+var shown = el.style.display;
+"""
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hidden") == "none"
+    assert vm.globals.get("shown") == "block"
+
+
+def test_hw_value64_p0_clearrect():
+    """clearRect must erase pixels previously painted by fillRect."""
+    vm = _hw_v64(
+        """
+var c = document.querySelector("canvas").getContext("2d");
+c.fillRect(6, 6, 4, 4);
+c.clearRect(6, 6, 4, 4);
+swapBuffers();
+"""
+    )
+    assert vm.error is None, vm.error
+    assert vm.canvas.front[6 * vm.canvas.width + 6] == 0
+
+
+def test_hw_value64_p0_canvas_width_height():
+    """canvas.width / height stay 640×480 glass, not a JS resize of HDMI."""
+    vm = _hw_v64(
+        """
+var el = document.querySelector("canvas");
+var w = el.width;
+var h = el.height;
+"""
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("w") == 640.0
+    assert vm.globals.get("h") == 480.0
+
+
+def test_hw_value64_p0_filltext():
+    """fillText must paint HUD glyphs into the framebuffer."""
+    vm = _hw_v64(
+        """
+var c = document.querySelector("canvas").getContext("2d");
+c.fillStyle = "white";
+c.fillText("A", 16, 24);
+swapBuffers();
+"""
+    )
+    assert vm.error is None, vm.error
+    # fillText baseline is y; 8×8 glyph occupies y-8 .. y-1.
+    row = 16 * vm.canvas.width
+    assert any(vm.canvas.front[row + x] != 0 for x in range(16, 24))
+
+
+def test_hw_value64_p1_measuretext_font_align():
+    """measureText width follows font scale; textAlign/textBaseline are stored."""
+    vm = _hw_v64(
+        """
+var c = document.querySelector("canvas").getContext("2d");
+c.font = "16px sans-serif";
+c.textAlign = "center";
+c.textBaseline = "top";
+var w = c.measureText("AB").width;
+var align = c.textAlign;
+var base = c.textBaseline;
+"""
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("w") == 32.0
+    assert vm.globals.get("align") == "center"
+    assert vm.globals.get("base") == "top"
+
+
+def test_hw_value64_p1_path_stroke_line():
+    """beginPath/moveTo/lineTo/stroke with strokeStyle must paint a line."""
+    vm = _hw_v64(
+        """
+var c = document.querySelector("canvas").getContext("2d");
+c.strokeStyle = "#ffffff";
+c.lineWidth = 2;
+c.beginPath();
+c.moveTo(30, 40);
+c.lineTo(50, 40);
+c.stroke();
+swapBuffers();
+"""
+    )
+    assert vm.error is None, vm.error
+    assert vm.canvas.front[40 * vm.canvas.width + 40] != 0
+
+
+def test_hw_value64_p1_arc_fill_and_quadratic():
+    """arc + fill and quadraticCurveTo + stroke must occupy pixels."""
+    vm = _hw_v64(
+        """
+var c = document.querySelector("canvas").getContext("2d");
+c.fillStyle = "white";
+c.beginPath();
+c.arc(80, 80, 10, 0, 6.283185, false);
+c.fill();
+c.strokeStyle = "white";
+c.beginPath();
+c.moveTo(100, 100);
+c.quadraticCurveTo(120, 80, 140, 100);
+c.stroke();
+swapBuffers();
+"""
+    )
+    assert vm.error is None, vm.error
+    w = vm.canvas.width
+    assert vm.canvas.front[80 * w + 80] != 0
+    assert any(vm.canvas.front[90 * w + x] != 0 for x in range(100, 141))
+
+
+def test_hw_value64_p1_settransform():
+    """setTransform must map fillRect into device pixels (world→glass)."""
+    vm = _hw_v64(
+        """
+var c = document.querySelector("canvas").getContext("2d");
+c.setTransform(1, 0, 0, 1, 50, 0);
+c.fillRect(0, 2, 2, 2);
+swapBuffers();
+"""
+    )
+    assert vm.error is None, vm.error
+    w = vm.canvas.width
+    assert vm.canvas.front[2 * w + 50] != 0
+    assert vm.canvas.front[2 * w + 0] == 0
+
+
+def test_hw_value64_p1_save_restore():
+    """save/restore must pop transform so later fillRect uses the saved one."""
+    vm = _hw_v64(
+        """
+var c = document.querySelector("canvas").getContext("2d");
+c.setTransform(1, 0, 0, 1, 60, 0);
+c.save();
+c.setTransform(1, 0, 0, 1, 0, 0);
+c.restore();
+c.fillRect(0, 3, 2, 2);
+swapBuffers();
+"""
+    )
+    assert vm.error is None, vm.error
+    w = vm.canvas.width
+    assert vm.canvas.front[3 * w + 60] != 0
+    assert vm.canvas.front[3 * w + 0] == 0
+
+
+def test_hw_value64_p1_translate_rotate():
+    """translate + rotate must move fillRect off the untransformed origin."""
+    vm = _hw_v64(
+        """
+var c = document.querySelector("canvas").getContext("2d");
+c.translate(20, 20);
+c.rotate(1.570796);
+c.fillRect(0, 0, 8, 2);
+swapBuffers();
+"""
+    )
+    assert vm.error is None, vm.error
+    w = vm.canvas.width
+    origin = vm.canvas.front[0]
+    moved = any(
+        vm.canvas.front[y * w + x] != 0
+        for y in range(12, 29)
+        for x in range(12, 29)
+    )
+    assert origin == 0
+    assert moved
+
+
+def test_hw_value64_p1_global_alpha():
+    """globalAlpha 0 must skip a later fillRect (a no-op stub is not enough)."""
+    vm = _hw_v64(
+        """
+var c = document.querySelector("canvas").getContext("2d");
+c.fillRect(0, 5, 4, 4);
+c.globalAlpha = 0;
+c.fillRect(20, 5, 4, 4);
+swapBuffers();
+"""
+    )
+    assert vm.error is None, vm.error
+    w = vm.canvas.width
+    assert vm.canvas.front[5 * w + 0] != 0
+    assert vm.canvas.front[5 * w + 20] == 0
+
+
+def test_hw_value64_p1_get_put_imagedata():
+    """getImageData snapshot + putImageData must copy pixels to a new origin."""
+    vm = _hw_v64(
+        """
+var c = document.querySelector("canvas").getContext("2d");
+c.fillRect(1, 1, 2, 2);
+var d = c.getImageData(1, 1, 2, 2);
+c.putImageData(d, 12, 12);
+swapBuffers();
+"""
+    )
+    assert vm.error is None, vm.error
+    w = vm.canvas.width
+    assert vm.canvas.front[1 * w + 1] != 0
+    assert vm.canvas.front[12 * w + 12] != 0
+
+
+def test_hw_value64_p0_drawimage_3arg():
+    """drawImage(img, x, y) must blit Image pixels after src/onload."""
+    vm = _hw_v64(
+        """
+var c = document.querySelector("canvas").getContext("2d");
+var img = new Image();
+img.src = "asset";
+img.onload = function() { c.drawImage(img, 7, 7); swapBuffers(); };
+"""
+    )
+    assert vm.error is None, vm.error
+    assert vm.canvas.front[7 * vm.canvas.width + 7] != 0
+
+
+def test_hw_value64_p0_aset_data_image_html():
+    """HTML data:image must land in ASET and drawImage from that bank."""
+    from functional_model.jsb_format import FLAG_ASET
+    from tools.compile_js import compile_html_text, encode_html_chunk
+
+    png = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAE"
+        "hQGAhKmMIQAAAABJRU5ErkJggg=="
+    )
+    html = (
+        '<html><body><canvas></canvas><script>\n'
+        "var c = document.querySelector('canvas').getContext('2d');\n"
+        "var img = new Image();\n"
+        f'img.src = "data:image/png;base64,{png}";\n'
+        "img.onload = function() { c.drawImage(img, 9, 9); swapBuffers(); };\n"
+        "</script></body></html>"
+    )
+    blob = encode_html_chunk(compile_html_text(html))
+    image = ProgramImage(blob)
+    assert image.flags & FLAG_ASET
+    vm = JsHwVm()
+    vm.load_blob(blob)
+    assert vm.error is None, vm.error
+    assert vm.canvas.front[9 * vm.canvas.width + 9] != 0
+
+
+def test_hw_value64_p1_joystick_bits():
+    """Joystick / KEYBITS natives must see set_key_bits on the hardware model."""
+    from functional_model.input_engine import KEY_LEFT
+
+    vm = _hw_v64(
+        """
+var left = 0;
+function tick() { if (keyLeft()) left = 1; }
+requestAnimationFrame(tick);
+"""
+    )
+    assert vm.error is None, vm.error
+    vm.set_key_bits(KEY_LEFT)
+    vm.frame_tick()
+    assert vm.error is None, vm.error
+    assert vm.globals.get("left") == 1.0
+
+
+def test_hw_value64_p0_keyup_key_and_keycode():
+    """keyup listener must see e.key and e.keyCode from input.key_event release."""
+    vm = _hw_v64(
+        """
+var seenKey = "";
+var seenCode = 0;
+addEventListener("keyup", function(e) {
+  seenKey = e.key;
+  seenCode = e.keyCode;
+});
+"""
+    )
+    assert vm.error is None, vm.error
+    vm.input.key_event(13, "Enter", True)
+    vm.frame_tick()
+    vm.input.key_event(13, "Enter", False)
+    vm.frame_tick()
+    assert vm.error is None, vm.error
+    assert vm.globals.get("seenKey") == "Enter", vm.globals.get("seenKey")
+    assert vm.globals.get("seenCode") == 13.0, vm.globals.get("seenCode")
 

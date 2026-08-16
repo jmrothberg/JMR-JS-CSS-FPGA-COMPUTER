@@ -137,7 +137,7 @@ module top_nexys_video (
     // NEW: PROG-cable tether — FT245 FIFO on FT2232 ch A (T100-style one cable)
     logic       uart_kbd_push;
     logic [7:0] uart_kbd_data;
-    logic [5:0] uart_joy_bits;  // NEW: GUI KEYBITS while J15 USB host is dead
+    logic [5:0] uart_joy_bits;  // NEW: GUI KEYBITS ORed with JB stick; optional tether
     logic [9:0] uart_dump_addr;
     logic        uart_jsb_stb;
     logic [7:0]  uart_jsb_data;

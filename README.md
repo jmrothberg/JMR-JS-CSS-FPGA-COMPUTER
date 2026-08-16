@@ -104,6 +104,9 @@ from `build/nexys_video/utilization_impl.rpt`. Do not invent counts.
 
 **Session status:** [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md)
 
+**Implement / don’t checklist (HTML, JS, CSS, Canvas — Complete or TBD):**
+[docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md#agent-surface-checklist-html--javascript--css--canvas)
+
 ---
 
 ## Method (steal from the BASIC sibling — not the product)

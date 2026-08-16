@@ -233,8 +233,14 @@ def encode_html_chunk(chunk) -> bytes:
     per-title palette stream to the external SRAM asset bank; code BRAM
     only ever sees bytecode + descriptors.
     """
+    # Product HTML images always carry the frozen 64-bit Value ABI so PYTHON
+    # and FPGA-SIM execute the same serialized words.
     return encode_chunk(
-        chunk, v2=True, sprites=getattr(chunk, "sprites", None), aset=True
+        chunk,
+        v2=True,
+        sprites=getattr(chunk, "sprites", None),
+        aset=True,
+        value64=True,
     )
 
 

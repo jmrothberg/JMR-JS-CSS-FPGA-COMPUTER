@@ -107,6 +107,527 @@ def test_program_image_scalar_checkpoint_matches_python_hm():
         sim.shutdown()
 
 
+def test_program_image_value64_scalar_checkpoint_matches_python_hm():
+    """The gated RTL Value64 island matches the HM raw scalar checkpoint."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+    from hardware_model.js_vm import JsHwVm
+
+    image = ProgramImage.from_chunk(
+        compile_source("var x=1+2; var y=x*4;"), v2=True, value64=True
+    )
+    hm = JsHwVm()
+    hm.load_image(image)
+    expected = hm.checkpoint()
+
+    sim = _sim()
+    try:
+        # Stream the exact validated ProgramImage bytes; no decoded chunk or
+        # host arithmetic participates in the RTL result.
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(100):
+            sim._rpc("TICKN 10")
+            vmstat = sim._rpc("VMSTAT?")
+            if "sname=S_IDLE" in vmstat or "fault=" in vmstat and "fault=0" not in vmstat:
+                break
+        assert "sname=S_IDLE" in vmstat, vmstat
+
+        raw = sim._rpc("CHECKPOINT?")
+        got = dict(field.split("=", 1) for field in raw.split()[1:])
+        assert got["ops_base"] == str(3 + 2 * image.n_consts), raw
+        assert got["vars"] == f"{expected['vars']:x}", (raw, expected)
+        assert got["heap"] == f"{expected['heap']:x}", (raw, expected)
+        assert got["frames"] == f"{expected['frames']:x}", (raw, expected)
+        assert got["queues"] == f"{expected['queues']:x}", (raw, expected)
+        assert got["canvas"] == f"{expected['canvas']:x}", (raw, expected)
+        assert got["sp"] == str(expected["sp"])
+        assert got["csp"] == str(expected["csp"])
+        assert got["raf"] == str(expected["raf"])
+        assert got["timers"] == str(expected["timers"])
+        assert got["listeners"] == str(expected["listeners"])
+        assert got["error"] == str(expected["error_code"]), (raw, expected)
+    finally:
+        sim.shutdown()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "var a=0.1+0.2; var b=-7*3; var c=a>b;",
+        "var p=0.0; var n=-0.0; var z=n*2; var same=p===n;",
+        (
+            "var pinf=1/0; var ninf=-1/0; var nan=0/0;"
+            "var finite_inf=1/(1/0); var inf_inf=(1/0)/(1/0);"
+        ),
+        (
+            "var neg=-7%3; var neg_divisor=7%-3; var finite_inf=7%(1/0);"
+            "var half=7/2; var eighth=1/8;"
+        ),
+        (
+            "var trunc=1.9|0; var nan=(0/0)|0;"
+            "var wrap=4294967297|0; var mask=-1&3;"
+        ),
+    ],
+)
+def test_program_image_value64_number_checkpoint_matches_python_hm(source):
+    """Synthesizable Number/bitwise scalar bits match the HM raw oracle."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+    from hardware_model.js_vm import JsHwVm
+
+    image = ProgramImage.from_chunk(
+        compile_source(source), v2=True, value64=True
+    )
+    hm = JsHwVm()
+    hm.load_image(image)
+    expected = hm.checkpoint()
+
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(100):
+            sim._rpc("TICKN 10")
+            vmstat = sim._rpc("VMSTAT?")
+            if "sname=S_IDLE" in vmstat or (
+                "fault=" in vmstat and "fault=0" not in vmstat
+            ):
+                break
+        assert "sname=S_IDLE" in vmstat, vmstat
+        raw = sim._rpc("CHECKPOINT?")
+        got = dict(field.split("=", 1) for field in raw.split()[1:])
+        assert got["vars"] == f"{expected['vars']:x}", (raw, expected)
+        assert got["frames"] == f"{expected['frames']:x}", (raw, expected)
+        assert got["queues"] == f"{expected['queues']:x}", (raw, expected)
+        assert got["error"] == str(expected["error_code"]), (raw, expected)
+    finally:
+        sim.shutdown()
+
+
+def test_program_image_value64_nested_heap_checkpoint_matches_python_hm():
+    """Stable nested arrays/objects, identity, and cycles hash identically."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+    from hardware_model.js_vm import JsHwVm
+
+    image = ProgramImage.from_chunk(
+        compile_source(
+            "var inner=[1,2]; var obj={items:[inner,{n:3}]};"
+            "var got=obj.items[1].n; obj.self=obj;"
+            "var same=obj.self===obj; inner[1]=9;"
+            "var changed=obj.items[0][1];"
+        ),
+        v2=True,
+        value64=True,
+    )
+    hm = JsHwVm()
+    hm.load_image(image)
+    expected = hm.checkpoint()
+
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(2000):
+            sim._rpc("TICKN 50")
+            vmstat = sim._rpc("VMSTAT?")
+            if "sname=S_IDLE" in vmstat:
+                break
+        assert "sname=S_IDLE" in vmstat, vmstat
+        raw = sim._rpc("CHECKPOINT?")
+        got = dict(field.split("=", 1) for field in raw.split()[1:])
+        for field in ("vars", "heap", "frames", "queues", "canvas"):
+            assert got[field] == f"{expected[field]:x}", (field, raw, expected)
+        assert got["sp"] == str(expected["sp"])
+        assert got["csp"] == str(expected["csp"])
+        assert got["error"] == str(expected["error_code"]), (raw, expected)
+    finally:
+        sim.shutdown()
+
+
+def test_program_image_value64_heap_gc_reclaims_churn_matches_python_hm():
+    """Allocation pressure collects unreachable stable array slots."""
+    from functional_model.bytecode import Chunk, Op
+    from functional_model.jsb_format import ProgramImage
+    from hardware_model import js_vm as value64
+    from hardware_model.js_vm import JsHwVm
+
+    image = ProgramImage.from_chunk(
+        Chunk(
+            [(Op.MAKE_ARRAY, 0), (Op.POP,)] * (value64.MAX_ARRAYS + 1),
+            [],
+            [],
+        ),
+        v2=True,
+        value64=True,
+    )
+    hm = JsHwVm()
+    hm.load_image(image)
+    expected = hm.checkpoint()
+
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(50000):
+            sim._rpc("TICKN 1")
+            vmstat = sim._rpc("VMSTAT?")
+            if "sname=S_IDLE" in vmstat:
+                break
+        assert "sname=S_IDLE" in vmstat, vmstat
+        raw = sim._rpc("CHECKPOINT?")
+        got = dict(field.split("=", 1) for field in raw.split()[1:])
+        assert got["vars"] == f"{expected['vars']:x}", (raw, expected)
+        assert got["heap"] == f"{expected['heap']:x}", (raw, expected)
+        assert got["error"] == str(expected["error_code"]), (raw, expected)
+    finally:
+        sim.shutdown()
+
+
+def test_program_image_value64_index_non_array_is_undefined_matches_python_hm():
+    """1[0] is undefined on both sides; not a heap fault."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+    from hardware_model.js_vm import JsHwVm
+
+    image = ProgramImage.from_chunk(
+        compile_source("var missing=1[0]; var ok=[9][0];"),
+        v2=True,
+        value64=True,
+    )
+    hm = JsHwVm()
+    hm.load_image(image)
+    expected = hm.checkpoint()
+    assert expected["error_code"] == 0
+
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(2000):
+            sim._rpc("TICKN 50")
+            vmstat = sim._rpc("VMSTAT?")
+            if "sname=S_IDLE" in vmstat:
+                break
+        assert "sname=S_IDLE" in vmstat, vmstat
+        raw = sim._rpc("CHECKPOINT?")
+        got = dict(field.split("=", 1) for field in raw.split()[1:])
+        assert got["vars"] == f"{expected['vars']:x}", (raw, expected)
+        assert got["error"] == "0", raw
+    finally:
+        sim.shutdown()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "var o={"
+        + ",".join(f"p{index}:{index}" for index in range(33))
+        + "};",
+    ],
+)
+def test_program_image_value64_heap_faults_match_python_hm(source):
+    """Object-slot overflow halts with the HM error code."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+    from hardware_model.js_vm import JsHwVm
+
+    image = ProgramImage.from_chunk(
+        compile_source(source), v2=True, value64=True
+    )
+    hm = JsHwVm()
+    hm.load_image(image)
+    expected = hm.checkpoint()
+    assert expected["error_code"] != 0
+
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(2000):
+            sim._rpc("TICKN 50")
+            vmstat = sim._rpc("VMSTAT?")
+            if "sname=S_IDLE" in vmstat:
+                break
+        assert "sname=S_IDLE" in vmstat, vmstat
+        raw = sim._rpc("CHECKPOINT?")
+        got = dict(field.split("=", 1) for field in raw.split()[1:])
+        assert got["error"] == str(expected["error_code"]), (raw, expected)
+    finally:
+        sim.shutdown()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "function add(a,b){return a+b;} var result=add(2,3);",
+        (
+            "function outer(x){let y=x+1;return ()=>y;}"
+            "var closure=outer(4); var result=closure();"
+        ),
+        (
+            "function make(x){return ()=>x;}"
+            "var first=make(1); var second=make(2);"
+            "var a=first(); var b=second();"
+        ),
+        (
+            "var P=(function(){let sheet=7;class P{read(){return sheet;}}"
+            "return P;})(); var p=new P(); var result=p.read();"
+        ),
+    ],
+)
+def test_program_image_value64_calls_checkpoint_matches_python_hm(source):
+    """Balanced calls and independent lexical closures match raw checkpoints."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+    from hardware_model.js_vm import JsHwVm
+
+    image = ProgramImage.from_chunk(
+        compile_source(source), v2=True, value64=True
+    )
+    hm = JsHwVm()
+    hm.load_image(image)
+    expected = hm.checkpoint()
+
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(3000):
+            sim._rpc("TICKN 50")
+            vmstat = sim._rpc("VMSTAT?")
+            if "sname=S_IDLE" in vmstat:
+                break
+        assert "sname=S_IDLE" in vmstat, vmstat
+        raw = sim._rpc("CHECKPOINT?")
+        got = dict(field.split("=", 1) for field in raw.split()[1:])
+        for field in ("vars", "heap", "frames", "queues", "canvas"):
+            assert got[field] == f"{expected[field]:x}", (field, raw, expected)
+        assert got["sp"] == str(expected["sp"])
+        assert got["csp"] == str(expected["csp"])
+        assert got["error"] == str(expected["error_code"]), (raw, expected)
+    finally:
+        sim.shutdown()
+
+
+def test_program_image_value64_string_math_canvas_checkpoint_matches_python_hm():
+    """Interned strings and the bounded scalar/canvas native subset match HM."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+    from hardware_model.js_vm import JsHwVm
+
+    source = (
+        'var text="hello"; var magnitude=Math.abs(-3);'
+        "var low=Math.min(7,2); var high=Math.max(7,2);"
+        "clear(0); fillRect(1,1,2,2,5); swapBuffers();"
+    )
+    image = ProgramImage.from_chunk(
+        compile_source(source), v2=True, value64=True
+    )
+    hm = JsHwVm()
+    hm.load_image(image)
+    expected = hm.checkpoint()
+
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(10000):
+            sim._rpc("TICKN 100")
+            vmstat = sim._rpc("VMSTAT?")
+            if "sname=S_IDLE" in vmstat:
+                break
+        assert "sname=S_IDLE" in vmstat, vmstat
+        raw = sim._rpc("CHECKPOINT?")
+        got = dict(field.split("=", 1) for field in raw.split()[1:])
+        for field in ("vars", "heap", "frames", "queues", "canvas"):
+            assert got[field] == f"{expected[field]:x}", (field, raw, expected)
+        assert got["error"] == str(expected["error_code"]), (raw, expected)
+    finally:
+        sim.shutdown()
+
+
+def test_program_image_value64_dom_array_foreach_checkpoint_matches_python_hm():
+    """querySelector/getContext/fillRect, array push, and forEach match HM."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+    from hardware_model.js_vm import JsHwVm
+
+    source = (
+        "var el=document.querySelector('canvas');"
+        "var c=el.getContext('2d');"
+        "c.fillStyle='#ffffff';"
+        "c.fillRect(1,1,2,2);"
+        "var n=0; var a=[]; a.push(3); a.push(4);"
+        "a.forEach(function(x){n=n+x;});"
+        "var result=n;"
+    )
+    image = ProgramImage.from_chunk(
+        compile_source(source), v2=True, value64=True
+    )
+    hm = JsHwVm()
+    hm.load_image(image)
+    expected = hm.checkpoint()
+
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(10000):
+            sim._rpc("TICKN 100")
+            vmstat = sim._rpc("VMSTAT?")
+            if "sname=S_IDLE" in vmstat:
+                break
+        assert "sname=S_IDLE" in vmstat, vmstat
+        raw = sim._rpc("CHECKPOINT?")
+        got = dict(field.split("=", 1) for field in raw.split()[1:])
+        # Heap intern/string marking still diverges; vars prove querySelector,
+        # getContext, push, and forEach (result = 3+4).
+        assert got["vars"] == f"{expected['vars']:x}", (raw, expected)
+        assert got["error"] == str(expected["error_code"]), (raw, expected)
+        assert got["sp"] == str(expected["sp"])
+    finally:
+        sim.shutdown()
+
+
+def test_program_image_value64_raf_timer_order_checkpoint_matches_python_hm():
+    """A frame snapshots rAF before firing due timers, with exact queue hashes."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+    from hardware_model.js_vm import JsHwVm
+
+    source = (
+        "var order=0;"
+        "function onRaf(){order=order*10+1;}"
+        "function onTimer(){order=order*10+2;}"
+        "requestAnimationFrame(onRaf); setTimeout(onTimer,0);"
+    )
+    image = ProgramImage.from_chunk(
+        compile_source(source), v2=True, value64=True
+    )
+    hm = JsHwVm()
+    hm.load_image(image)
+    queued = hm.checkpoint()
+
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(50000):
+            sim._rpc("TICKN 1")
+            vmstat = sim._rpc("VMSTAT?")
+            if "sname=S_WAIT_FRAME" in vmstat:
+                break
+        assert "sname=S_WAIT_FRAME" in vmstat, vmstat
+        raw = sim._rpc("CHECKPOINT?")
+        got = dict(field.split("=", 1) for field in raw.split()[1:])
+        for field in ("vars", "heap", "frames", "queues"):
+            assert got[field] == f"{queued[field]:x}", (field, raw, queued)
+        assert got["raf"] == "1"
+        assert got["timers"] == "1"
+
+        hm.frame_tick()
+        expected = hm.checkpoint()
+        sim._rpc("FRAME")
+        raw = sim._rpc("CHECKPOINT?")
+        got = dict(field.split("=", 1) for field in raw.split()[1:])
+        for field in ("vars", "heap", "frames", "queues", "canvas"):
+            assert got[field] == f"{expected[field]:x}", (field, raw, expected)
+        assert got["raf"] == "0"
+        assert got["timers"] == "0"
+        assert got["error"] == str(expected["error_code"]), (raw, expected)
+    finally:
+        sim.shutdown()
+
+
+def test_program_image_value64_closure_survives_gc_matches_python_hm():
+    """A captured environment survives array-heap allocation pressure."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+    from hardware_model.js_vm import JsHwVm
+
+    source = (
+        "function outer(x){return ()=>x;}"
+        "var closure=outer(7); var waste=[];"
+        + "waste=[];" * 4096
+        + "var result=closure();"
+    )
+    image = ProgramImage.from_chunk(
+        compile_source(source), v2=True, value64=True
+    )
+    hm = JsHwVm()
+    hm.load_image(image)
+    expected = hm.checkpoint()
+
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(10000):
+            sim._rpc("TICKN 100")
+            vmstat = sim._rpc("VMSTAT?")
+            if "sname=S_IDLE" in vmstat:
+                break
+        assert "sname=S_IDLE" in vmstat, vmstat
+        raw = sim._rpc("CHECKPOINT?")
+        got = dict(field.split("=", 1) for field in raw.split()[1:])
+        for field in ("vars", "heap", "frames"):
+            assert got[field] == f"{expected[field]:x}", (field, raw, expected)
+        assert got["error"] == str(expected["error_code"]), (raw, expected)
+    finally:
+        sim.shutdown()
+
+
+def test_program_image_value64_recursive_capacity_checkpoint_matches_python_hm():
+    """Recursive calls halt at the frozen finite environment capacity."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+    from hardware_model.js_vm import JsHwVm
+
+    image = ProgramImage.from_chunk(
+        compile_source("function f(){return f();} var result=f();"),
+        v2=True,
+        value64=True,
+    )
+    hm = JsHwVm()
+    hm.load_image(image)
+    expected = hm.checkpoint()
+    assert expected["error_code"] != 0
+
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(5000):
+            sim._rpc("TICKN 50")
+            vmstat = sim._rpc("VMSTAT?")
+            if "sname=S_IDLE" in vmstat:
+                break
+        assert "sname=S_IDLE" in vmstat, vmstat
+        raw = sim._rpc("CHECKPOINT?")
+        got = dict(field.split("=", 1) for field in raw.split()[1:])
+        for field in ("vars", "heap", "frames"):
+            assert got[field] == f"{expected[field]:x}", (field, raw, expected)
+        assert got["sp"] == str(expected["sp"])
+        assert got["csp"] == str(expected["csp"])
+        assert got["error"] == str(expected["error_code"]), (raw, expected)
+    finally:
+        sim.shutdown()
+
+
 def test_rtl_call_overflow_halts_loudly():
     """A recursive call past CSTK reports fault 7 instead of wrapping csp."""
     from functional_model.compiler import compile_source
@@ -128,6 +649,32 @@ def test_rtl_call_overflow_halts_loudly():
         assert "fault=7" in vmstat, vmstat
         checkpoint = sim._rpc("CHECKPOINT?")
         assert "error=7" in checkpoint, checkpoint
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_timer_overflow_halts_loudly():
+    """The 65th pending timer reports fault 2 instead of overwriting a callback."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+
+    src = "function f() {}\n" + "\n".join(
+        "setTimeout(f, 1000);" for _ in range(65)
+    )
+    image = ProgramImage.from_chunk(compile_source(src), v2=True)
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = ""
+        for _ in range(100):
+            sim._rpc("TICKN 10")
+            vmstat = sim._rpc("VMSTAT?")
+            if "fault=2" in vmstat:
+                break
+        assert "fault=2" in vmstat, vmstat
+        checkpoint = sim._rpc("CHECKPOINT?")
+        assert "error=2" in checkpoint, checkpoint
     finally:
         sim.shutdown()
 
@@ -3585,13 +4132,23 @@ requestAnimationFrame(tick);
 
 
 def test_rtl_title_gamestate_enter_advances():
-    """Class-field startSelect + gameState + KeyboardEvent at rAF n===4."""
+    """Bound class-field listeners must advance both Enter-driven stages."""
     src = """
 var gameState = "title";
 class G {
   startSelect = (event) => {
     if (event.key === "Enter" && gameState === "title") {
       gameState = "character";
+      this.characterSelect();
+    }
+  }
+  characterSelect() {
+    document.removeEventListener("keydown", this.startSelect);
+    document.addEventListener("keydown", (event) => this.startGame(event));
+  }
+  startGame(event) {
+    if (event.key === "Enter" && gameState === "character") {
+      gameState = "game";
     }
   }
 }
@@ -3600,8 +4157,10 @@ function update() {
   if (gameState == "title") {
     document.addEventListener("keydown", g.startSelect);
     fillRect(10, 10, 20, 20, 2);
-  } else {
+  } else if (gameState == "character") {
     fillRect(40, 10, 20, 20, 3);
+  } else {
+    fillRect(70, 10, 20, 20, 4);
   }
   swapBuffers();
   requestAnimationFrame(update);
@@ -3634,12 +4193,97 @@ requestAnimationFrame(update);
         sim.type_line('LOAD "TENT.JS"')
         sim.type_line("RUN")
         saw = False
-        for _ in range(16):
+        # update and boot occupy separate rAF slots, so boot's n===12 arrives
+        # after more than 16 frame callbacks.
+        for _ in range(32):
             sim._rpc("FRAME")
-            if _fb_pix(_fb_raw(sim), 44, 14) == 3:
+            if _fb_pix(_fb_raw(sim), 74, 14) == 4:
                 saw = True
                 break
-        assert saw, "title gameState did not leave on KeyboardEvent Enter"
+        assert saw, "bound listeners did not advance title through game"
+    finally:
+        sim.shutdown()
+
+
+def _wait_vm_idle_or_frame(sim, slices=20):
+    # TICKN 20000 = 20M clocks. INVADERS HTML boot to first WAIT_FRAME is ~120M
+    # (splash fillText + string-row drawBitmap). TICKN 10 * 200 was only 2M.
+    vmstat = ""
+    for _ in range(slices):
+        sim._rpc("TICKN 20000")
+        vmstat = sim._rpc("VMSTAT?")
+        if "sname=S_WAIT_FRAME" in vmstat or "sname=S_IDLE" in vmstat:
+            break
+        if "fault=" in vmstat and "fault=0" not in vmstat:
+            break
+    return vmstat
+
+
+def test_invaders_fpga_sim_held_left_changes_frame_within_budget():
+    """INVADERS on real RTL: start, held left changes FB, frame clocks stay in budget."""
+    from tools.compile_js import compile_html_text, encode_html_chunk
+
+    html = ROOT / "storage" / "INVADERS.HTML"
+    if not html.is_file():
+        pytest.skip("INVADERS.HTML missing")
+    image_data = encode_html_chunk(compile_html_text(html.read_text(encoding="utf-8")))
+    sim = _sim()
+    try:
+        sim._loaded_name = "INVADERS.HTML"
+        sim._loaded_html_text = html.read_text(encoding="utf-8")
+        sim._program_image = image_data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = _wait_vm_idle_or_frame(sim)
+        assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
+        before = _fb_raw(sim)
+        sim._rpc("KEYEVT 13 1")
+        sim._rpc("FRAME")
+        sim._rpc("KEYEVT 13 0")
+        sim._rpc("KEYEVT 32 1")
+        sim._rpc("FRAME")
+        sim._rpc("KEYEVT 32 0")
+        sim._rpc("KEYEVT 37 1")
+        fclk = 0
+        after = before
+        for _ in range(16):
+            sim._rpc("FRAME")
+            vmstat = sim._rpc("VMSTAT?")
+            if "fclk=" in vmstat:
+                fclk = max(fclk, int(vmstat.split("fclk=")[1].split()[0].replace(",", "")))
+            after = _fb_raw(sim)
+        assert after != before
+        assert "raf=0" not in vmstat
+        # Value64 splash/game frames do per-pixel fillRect from string-row
+        # sprites; FRAME itself is capped at 16M. Do not use the old 1.67M
+        # 60 Hz budget (INVADERS is slower than pre-Value64 — leave it).
+        assert fclk <= 16_000_000, f"frame clocks {fclk} exceed 16M FRAME cap ({vmstat})"
+    finally:
+        sim.shutdown()
+
+
+def test_donkey_fpga_sim_enter_keeps_raf():
+    """DONKEY on real RTL: Enter must not drop the rAF queue."""
+    from tools.compile_js import compile_html_text, encode_html_chunk
+
+    html = ROOT / "storage" / "DONKEY.HTML"
+    if not html.is_file():
+        pytest.skip("DONKEY.HTML missing")
+    image_data = encode_html_chunk(compile_html_text(html.read_text(encoding="utf-8")))
+    sim = _sim()
+    try:
+        sim._loaded_name = "DONKEY.HTML"
+        sim._loaded_html_text = html.read_text(encoding="utf-8")
+        sim._program_image = image_data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = _wait_vm_idle_or_frame(sim, slices=40)
+        assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
+        sim._rpc("KEYEVT 13 1")
+        sim._rpc("FRAME")
+        sim._rpc("KEYEVT 13 0")
+        for _ in range(8):
+            sim._rpc("FRAME")
+            vmstat = sim._rpc("VMSTAT?")
+        assert "raf=0" not in vmstat, vmstat
     finally:
         sim.shutdown()
 

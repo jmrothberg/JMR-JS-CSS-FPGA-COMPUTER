@@ -88,6 +88,7 @@ CORE_SRCS := \
 	$(RTL)/engines/jmr_console_engine.sv \
 	$(RTL)/engines/jmr_mini_fb.sv \
 	$(RTL)/engines/jmr_rectdemo_engine.sv \
+	$(RTL)/engines/jmr_value.sv \
 	$(RTL)/engines/jmr_js_vm.sv \
 	$(RTL)/engines/jmr_sram_model.sv \
 	$(RTL)/engines/jmr_palette_bram.sv \

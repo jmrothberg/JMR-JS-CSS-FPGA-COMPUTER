@@ -6,7 +6,7 @@ Monitor text and Canvas games share the same framebuffer. No separate Text conso
 
   python3 gui_jmr_js.py
 
-F9 cycles PYTHON → FPGA-SIM → BOARD → (ASIC-SIM later).
+F9 cycles PYTHON → FPGA-SIM → BOARD → (ASIC-SIM later).load 
 F10 toggles the Architecture Monitor (JS schematic). Arrows + Space = play.
 """
 

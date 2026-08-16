@@ -101,7 +101,10 @@ FLAG_ASET = 2
 # flags bit2 = optional opcode-to-source-line section. It is appended after
 # the existing trailer, so RTL that only understands flags[1:0] can ignore it.
 FLAG_SOURCE_MAP = 4
-KNOWN_FLAGS = FLAG_V2 | FLAG_ASET | FLAG_SOURCE_MAP
+# V2 transition flag: numeric constant slots are 64-bit IEEE-754 Values.
+# Legacy 32-bit images remain readable until the RTL migration is complete.
+FLAG_VALUE64 = 8
+KNOWN_FLAGS = FLAG_V2 | FLAG_ASET | FLAG_SOURCE_MAP | FLAG_VALUE64
 ASET_MAGIC = b"ASET"
 SOURCE_MAP_MAGIC = b"SMAP"
 SOURCE_MAP_VERSION = 1
@@ -114,6 +117,13 @@ _STR_CAP = 512  # huge data: URIs stubbed — Image.onload still truthy
 
 
 @dataclass(frozen=True)
+class ProgramClass:
+    name_index: int
+    constructor_ip: int | None
+    methods: Tuple[Tuple[int, int, bool], ...]
+
+
+@dataclass(frozen=True)
 class _ImageMeta:
     n_ops: int
     n_consts: int
@@ -122,6 +132,8 @@ class _ImageMeta:
     code_end: int
     aset_off: int
     op_lines: Tuple[int, ...] | None
+    names: Tuple[str, ...]
+    classes: Tuple[ProgramClass, ...]
     var_names: Tuple[str, ...]
 
 
@@ -136,13 +148,26 @@ class ProgramImage:
 
     @classmethod
     def from_chunk(
-        cls, chunk: Chunk, v2: bool | None = None, sprites=None, aset: bool = False
+        cls,
+        chunk: Chunk,
+        v2: bool | None = None,
+        sprites=None,
+        aset: bool = False,
+        value64: bool = False,
     ) -> "ProgramImage":
-        return cls(encode_chunk(chunk, v2=v2, sprites=sprites, aset=aset))
+        return cls(
+            encode_chunk(
+                chunk,
+                v2=v2,
+                sprites=sprites,
+                aset=aset,
+                value64=value64,
+            )
+        )
 
     @property
     def version(self) -> int:
-        return PROGRAM_IMAGE_VERSION
+        return 2 if self.flags & FLAG_VALUE64 else PROGRAM_IMAGE_VERSION
 
     @property
     def data(self) -> bytes:
@@ -177,6 +202,16 @@ class ProgramImage:
     def var_names(self) -> Tuple[str, ...]:
         """Serialized global-variable slot names in RTL slot order."""
         return self._meta.var_names
+
+    @property
+    def names(self) -> Tuple[str, ...]:
+        """Validated serialized intern/name table in opcode index order."""
+        return self._meta.names
+
+    @property
+    def classes(self) -> Tuple[ProgramClass, ...]:
+        """Validated class constructor/method/getter descriptors."""
+        return self._meta.classes
 
     def decode(self) -> Chunk:
         """Reconstruct all VM execution input from this validated byte stream."""
@@ -259,15 +294,22 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
         if aset_off < off or aset_off > size:
             raise ValueError("ASET offset is outside ProgramImage")
     code_limit = aset_off if aset_off else size
-    need(off, 4 * n_consts + 4 * n_ops, "constants/opcodes", code_limit)
+    const_bytes = 8 if flags & FLAG_VALUE64 else 4
+    need(
+        off,
+        const_bytes * n_consts + 4 * n_ops,
+        "constants/opcodes",
+        code_limit,
+    )
     const_off = off
-    ops_off = const_off + 4 * n_consts
+    ops_off = const_off + const_bytes * n_consts
     off = ops_off + 4 * n_ops
 
     n_names = 0
     names: list[str] = []
     hash_rows: list[tuple[int, int]] = []
     var_name_idx: list[int] = []
+    classes: list[ProgramClass] = []
     sprite_descs: list[tuple[int, int, int]] = []
     if flags & FLAG_V2:
         n_names = u16(off, "name count", code_limit)
@@ -316,6 +358,7 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
                     f"{PROGRAM_MAX_METHODS}"
                 )
             need(off, 4 * n_meth, "class methods", code_limit)
+            methods: list[tuple[int, int, bool]] = []
             for _m in range(n_meth):
                 mi, entry = struct.unpack_from("<HH", data, off)
                 off += 4
@@ -323,6 +366,14 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
                     raise ValueError(f"method name index {mi & 0x7FFF} is out of bounds")
                 if entry >= n_ops:
                     raise ValueError(f"method entry IP {entry} is out of bounds")
+                methods.append((mi & 0x7FFF, int(entry), bool(mi & 0x8000)))
+            classes.append(
+                ProgramClass(
+                    int(ni),
+                    None if ctor_ip == 0xFFFF else int(ctor_ip),
+                    tuple(methods),
+                )
+            )
 
         if off + 4 <= code_limit and data[off : off + 4] == b"SPR1":
             if flags & FLAG_ASET:
@@ -509,6 +560,8 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
         code_end=code_end,
         aset_off=aset_off,
         op_lines=op_lines,
+        names=tuple(names),
+        classes=tuple(classes),
         var_names=(
             tuple(names[i] for i in var_name_idx)
             if flags & FLAG_V2
@@ -580,7 +633,11 @@ def build_aset_payload(palette, sprites):
 
 
 def encode_chunk(
-    chunk: Chunk, v2: bool | None = None, sprites=None, aset: bool = False
+    chunk: Chunk,
+    v2: bool | None = None,
+    sprites=None,
+    aset: bool = False,
+    value64: bool = False,
 ) -> bytes:
     """Encode a compiled Chunk to .JSB bytes.
 
@@ -597,8 +654,60 @@ def encode_chunk(
             chunk,
             sprites=sprites if sprites is not None else getattr(chunk, "sprites", None),
             aset=aset,
+            value64=value64,
         )
+    if value64:
+        raise ValueError("64-bit Values require the v2 ProgramImage trailer")
     return _encode_v1(chunk)
+
+
+def _upgrade_numeric_constants_to_value64(blob: bytes) -> bytes:
+    """Expand a validated v2 image's constant pool without changing opcodes."""
+    n_ops, n_consts, _n_vars, flags = struct.unpack_from("<HHHH", blob, 4)
+    header_bytes = 16 if flags & FLAG_ASET else 12
+    old_const_off = header_bytes
+    old_ops_off = old_const_off + 4 * n_consts
+    old_tail_off = old_ops_off + 4 * n_ops
+
+    # A pool slot's LOAD_CONST tag tells whether its old 32-bit bits are an
+    # integer, float32, or non-number descriptor. Conflicting uses are invalid.
+    slot_types: dict[int, int] = {}
+    for ip in range(n_ops):
+        word = struct.unpack_from("<I", blob, old_ops_off + 4 * ip)[0]
+        if (word & 0xFF) != int(Op.LOAD_CONST):
+            continue
+        index = (word >> 8) & 0xFFFF
+        load_type = (word >> 24) & 0xFF
+        if load_type not in (_LC_I32, _LC_F32, _LC_REGEX):
+            continue
+        previous = slot_types.setdefault(index, load_type)
+        if previous != load_type:
+            raise ValueError(f"constant slot {index} has conflicting Value types")
+
+    expanded = bytearray()
+    for index in range(n_consts):
+        raw = struct.unpack_from("<I", blob, old_const_off + 4 * index)[0]
+        load_type = slot_types.get(index, _LC_I32)
+        if load_type == _LC_F32:
+            number = struct.unpack("<f", struct.pack("<I", raw))[0]
+            expanded += struct.pack("<d", float(number))
+        elif load_type == _LC_I32:
+            signed = struct.unpack("<i", struct.pack("<I", raw))[0]
+            expanded += struct.pack("<d", float(signed))
+        else:
+            # Regex descriptors are consumed by the string engine, not ALU.
+            expanded += struct.pack("<Q", raw)
+
+    out = bytearray(blob[:old_const_off])
+    out += expanded
+    out += blob[old_ops_off:old_tail_off]
+    out += blob[old_tail_off:]
+    flags |= FLAG_VALUE64
+    struct.pack_into("<H", out, 10, flags)
+    if flags & FLAG_ASET:
+        old_aset = struct.unpack_from("<I", blob, 12)[0]
+        struct.pack_into("<I", out, 12, old_aset + 4 * n_consts)
+    return bytes(out)
 
 
 def _encode_v1(chunk: Chunk) -> bytes:
@@ -702,14 +811,16 @@ def _intern_name(names: List[str], index: dict[str, int], s: str) -> int:
     return index[s]
 
 
-def _encode_v2(chunk: Chunk, sprites=None, aset: bool = False) -> bytes:
-    """JSB v2: keep header+i32 consts+ops; name/class trailer after ops."""
+def _encode_v2(
+    chunk: Chunk, sprites=None, aset: bool = False, value64: bool = False
+) -> bytes:
+    """JSB v2 with either legacy i32 or frozen binary64 constant slots."""
     names: List[str] = list(chunk.names)
     name_index: dict[str, int] = {n: i for i, n in enumerate(names)}
     fns = chunk.functions or {}
 
     consts: List[int] = []
-    const_map: dict[int, int] = {}
+    const_map: dict[tuple[str, int] | int, int] = {}
     # per original const: (packed_i32_or_name_idx, a1_tag)
     orig_lc: List[Tuple[int, int]] = []
     for c in chunk.consts:
@@ -734,21 +845,27 @@ def _encode_v2(chunk: Chunk, sprites=None, aset: bool = False) -> bytes:
                 | ((1 if "g" in fl else 0) << 24)
                 | ((1 if "i" in fl else 0) << 25)
             )
-            if packed not in const_map:
-                const_map[packed] = len(consts)
+            key = ("regex", packed) if value64 else packed
+            if key not in const_map:
+                const_map[key] = len(consts)
                 consts.append(packed)
-            orig_lc.append((const_map[packed], _LC_REGEX))
+            orig_lc.append((const_map[key], _LC_REGEX))
             continue
         if isinstance(c, str):
             stored = c if len(c) <= _STR_CAP else "data:stub"
             orig_lc.append((_intern_name(names, name_index, stored), _LC_STR))
             continue
         if isinstance(c, float) and not isinstance(c, bool):
-            bits = struct.unpack("<i", struct.pack("<f", float(c)))[0]
-            if bits not in const_map:
-                const_map[bits] = len(consts)
+            if value64:
+                bits = struct.unpack("<Q", struct.pack("<d", float(c)))[0]
+                key = ("number", bits)
+            else:
+                bits = struct.unpack("<i", struct.pack("<f", float(c)))[0]
+                key = bits
+            if key not in const_map:
+                const_map[key] = len(consts)
                 consts.append(bits)
-            orig_lc.append((const_map[bits], _LC_F32))
+            orig_lc.append((const_map[key], _LC_F32))
             continue
         if isinstance(c, bool):
             v = 1 if c else 0
@@ -757,10 +874,17 @@ def _encode_v2(chunk: Chunk, sprites=None, aset: bool = False) -> bytes:
                 v = int(c)
             except (TypeError, ValueError):
                 v = 0
-        if v not in const_map:
-            const_map[v] = len(consts)
-            consts.append(v)
-        orig_lc.append((const_map[v], _LC_I32))
+        if value64:
+            bits = struct.unpack("<Q", struct.pack("<d", float(v)))[0]
+            key = ("number", bits)
+            stored = bits
+        else:
+            key = v
+            stored = v
+        if key not in const_map:
+            const_map[key] = len(consts)
+            consts.append(stored)
+        orig_lc.append((const_map[key], _LC_I32))
 
     var_names: List[str] = []
     var_index: dict[str, int] = {}
@@ -838,11 +962,16 @@ def _encode_v2(chunk: Chunk, sprites=None, aset: bool = False) -> bytes:
         FLAG_V2
         | (FLAG_ASET if aset else 0)
         | (FLAG_SOURCE_MAP if source_map else 0)
+        | (FLAG_VALUE64 if value64 else 0)
     )
     hdr = MAGIC + struct.pack(
         "<HHHH", len(ops_out), len(consts), len(var_names), flags
     )
-    body = b"".join(struct.pack("<i", c) for c in consts)
+    body = (
+        b"".join(struct.pack("<Q", c) for c in consts)
+        if value64
+        else b"".join(struct.pack("<i", c) for c in consts)
+    )
     body += b"".join(struct.pack("<I", w) for w in ops_out)
     # trailer: names, var→name idx, class table (RTL ops_base unchanged)
     # Intern class/method names before freezing the name table
@@ -974,8 +1103,12 @@ def _decode_chunk_unchecked(data: bytes, meta: _ImageMeta) -> Chunk:
         off += 4
     packed_consts: List[int] = []
     for _ in range(n_consts):
-        packed_consts.append(struct.unpack_from("<i", data, off)[0])
-        off += 4
+        if flags & FLAG_VALUE64:
+            packed_consts.append(struct.unpack_from("<Q", data, off)[0])
+            off += 8
+        else:
+            packed_consts.append(struct.unpack_from("<i", data, off)[0])
+            off += 4
     ops_words: List[int] = []
     for _ in range(n_ops):
         ops_words.append(struct.unpack_from("<I", data, off)[0])
@@ -1084,7 +1217,12 @@ def _decode_chunk_unchecked(data: bytes, meta: _ImageMeta) -> Chunk:
 
     idn = _id_to_native()
     code: List[Tuple] = []
-    consts: List[Any] = list(packed_consts)
+    if flags & FLAG_VALUE64:
+        consts: List[Any] = [
+            struct.unpack("<d", struct.pack("<Q", raw))[0] for raw in packed_consts
+        ]
+    else:
+        consts = list(packed_consts)
     for w in ops_words:
         opc = w & 0xFF
         a0 = (w >> 8) & 0xFFFF
@@ -1099,7 +1237,10 @@ def _decode_chunk_unchecked(data: bytes, meta: _ImageMeta) -> Chunk:
                 code.append((Op.LOAD_CONST, len(consts) - 1))
             elif a1 == _LC_F32:
                 bits = packed_consts[a0] if a0 < len(packed_consts) else 0
-                consts.append(struct.unpack("<f", struct.pack("<i", bits))[0])
+                if flags & FLAG_VALUE64:
+                    consts.append(struct.unpack("<d", struct.pack("<Q", bits))[0])
+                else:
+                    consts.append(struct.unpack("<f", struct.pack("<i", bits))[0])
                 code.append((Op.LOAD_CONST, len(consts) - 1))
             elif a1 == _LC_REGEX:
                 packed = packed_consts[a0] if a0 < len(packed_consts) else 0
