@@ -19,18 +19,31 @@
 static Vjmr_js_core* top = nullptr;
 
 // CHECKPOINT/OBJPEEK peek 1-D SRAM (not a third hardware port).
-// Match rtl/engines/jmr_js_vm.sv MAX_OBJ / OBJ_SLOTS / MAX_ARR / ARR_CAP.
+// Match rtl/engines/jmr_js_vm.sv two-tier arrays (1536×32 + 128×128).
 static const unsigned VM_MAX_OBJ = 1024u;
 static const unsigned VM_OBJ_SLOTS = 32u;
-static const unsigned VM_MAX_ARR = 512u;
+static const unsigned VM_MAX_ARR_SHORT = 1536u;
+static const unsigned VM_ARR_SHORT_CAP = 32u;
+static const unsigned VM_MAX_ARR_LONG = 128u;
+static const unsigned VM_MAX_ARR = 1664u;
 static const unsigned VM_ARR_CAP = 128u;
+static const unsigned VM_VARR_SHORT_WORDS = VM_MAX_ARR_SHORT * VM_ARR_SHORT_CAP;
 static const unsigned VM_ENV_DEPTH = 512u;
 static const unsigned VM_ENV_SLOTS = 16u;
 static inline unsigned vobj_addr(unsigned h, unsigned s) {
     return (h * VM_OBJ_SLOTS) + s;
 }
-static inline unsigned varr_addr(unsigned h, unsigned e) {
-    return (h * VM_ARR_CAP) + e;
+static inline unsigned varr_addr(Vjmr_js_core___024root* r, unsigned h, unsigned e) {
+    if (h >= VM_MAX_ARR)
+        h = 0;
+    if (r->jmr_js_core__DOT__u_vm__DOT__varr_long[h]) {
+        unsigned phys = unsigned(r->jmr_js_core__DOT__u_vm__DOT__varr_lidx[h]);
+        if (phys >= VM_MAX_ARR_LONG) phys = 0;
+        if (e >= VM_ARR_CAP) e = VM_ARR_CAP - 1u;
+        return VM_VARR_SHORT_WORDS + (phys * VM_ARR_CAP) + e;
+    }
+    if (e >= VM_ARR_SHORT_CAP) e = VM_ARR_SHORT_CAP - 1u;
+    return (h * VM_ARR_SHORT_CAP) + e;
 }
 static inline unsigned venv_addr(unsigned h, unsigned s) {
     return (h * VM_ENV_SLOTS) + s;
@@ -47,7 +60,7 @@ static uint8_t peek_vobj_tag(Vjmr_js_core___024root* r, unsigned h, unsigned s) 
     return uint8_t(r->jmr_js_core__DOT__u_vm__DOT__vobj_tmem[vobj_addr(h, s)]);
 }
 static uint64_t peek_varr_val(Vjmr_js_core___024root* r, unsigned h, unsigned e) {
-    return uint64_t(r->jmr_js_core__DOT__u_vm__DOT__varr_slot[varr_addr(h, e)]);
+    return uint64_t(r->jmr_js_core__DOT__u_vm__DOT__varr_slot[varr_addr(r, h, e)]);
 }
 // TOS window is CPU truth; BRAM vstack lags one write. CHECKPOINT overlays.
 static uint64_t peek_vstack(Vjmr_js_core___024root* r, unsigned slot, unsigned vsp) {
@@ -59,7 +72,7 @@ static uint64_t peek_vstack(Vjmr_js_core___024root* r, unsigned slot, unsigned v
     return uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vstack[slot]);
 }
 static uint8_t peek_varr_tag(Vjmr_js_core___024root* r, unsigned h, unsigned e) {
-    return uint8_t(r->jmr_js_core__DOT__u_vm__DOT__varr_tmem[varr_addr(h, e)]);
+    return uint8_t(r->jmr_js_core__DOT__u_vm__DOT__varr_tmem[varr_addr(r, h, e)]);
 }
 static uint16_t peek_venv_key(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
     const auto& w = r->jmr_js_core__DOT__u_vm__DOT__venv_slot[venv_addr(h, s)];
@@ -296,7 +309,7 @@ static const char* vm_sname(unsigned s) {
         "S_HEAP_WAIT","S_HEAP_CMP","S_HEAP_WR","S_HEAP_AWR","S_HEAP_FILL",
         "S_V64_METH","S_V64_FE_ELEM","S_V64_FE_FILTER","S_V64_OGETI_NAT",
         "S_V64_IDXSCAN","S_V64_CTOR_ENV","S_REL_ENV","S_FREE_OBJ","S_FREE_ARR",
-        "S_V64_BIND","S_V64_MINMAX","S_V64_WIN_FILL"
+        "S_V64_BIND","S_V64_MINMAX","S_V64_WIN_FILL","S_ARR_PROMOTE"
     };
     if (s < (unsigned)(sizeof(N) / sizeof(N[0]))) return N[s];
     return "?";
@@ -734,7 +747,17 @@ int main(int argc, char** argv) {
                           ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vsp)
                           : unsigned(r->jmr_js_core__DOT__u_vm__DOT__sp))
                       << " vcsp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vcsp)
-                      << " vdraw="
+                      << " vret=";
+            {
+                unsigned nfr = unsigned(r->jmr_js_core__DOT__u_vm__DOT__vcsp);
+                if (nfr > 16u) nfr = 16u;
+                for (unsigned i = 0; i < nfr; i++) {
+                    if (i) std::cout << ",";
+                    std::cout << unsigned(
+                        r->jmr_js_core__DOT__u_vm__DOT__vframe_return_ip[i]);
+                }
+            }
+            std::cout << " vdraw="
                       << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_x)
                       << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_y)
                       << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_w)
@@ -745,7 +768,16 @@ int main(int argc, char** argv) {
                           ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vraf_n)
                           : unsigned(r->jmr_js_core__DOT__u_vm__DOT__raf_n))
                       << " obj=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_obj)
-                      << " arr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_arr)
+                      << " arr=";
+            if (unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u) {
+                unsigned narr = 0;
+                for (unsigned i = 0; i < VM_MAX_ARR; i++)
+                    if (r->jmr_js_core__DOT__u_vm__DOT__varr_valid[i])
+                        narr++;
+                std::cout << narr;
+            } else
+                std::cout << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_arr);
+            std::cout
                       << " spr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_spr)
                       << " kd=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__kd_fn)
                       << " spr0=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__spr_nid[0])
@@ -848,7 +880,8 @@ int main(int argc, char** argv) {
                         if (length > VM_OBJ_SLOTS) length = VM_OBJ_SLOTS;
                         for (unsigned slot = 0; slot < length; slot++)
                             mark_string(peek_vobj_val(r, index, slot));
-                    } else if (kind == 2u) {
+                    }
+                    if (r->jmr_js_core__DOT__u_vm__DOT__vfn_valid[index]) {
                         mark_string((uint64_t)
                             r->jmr_js_core__DOT__u_vm__DOT__vfn_env[index]);
                         mark_string((uint64_t)
@@ -945,9 +978,7 @@ int main(int argc, char** argv) {
                     }
                 }
                 for (unsigned index = 0; index < VM_MAX_OBJ; index++) {
-                    if (unsigned(
-                            r->jmr_js_core__DOT__u_vm__DOT__vobj_alloc[index]
-                        ) != 2u)
+                    if (!r->jmr_js_core__DOT__u_vm__DOT__vfn_valid[index])
                         continue;
                     heap_hash = fnv_byte(heap_hash, 'F');
                     heap_hash = fnv_u32(heap_hash, index);
@@ -1257,20 +1288,38 @@ int main(int argc, char** argv) {
                       << std::endl;
             continue;
         }
+        // Opt-in TOS window (CPU truth). ARRAY_SET index is win[1].
+        if (line == "STK?") {
+            auto* r = top->rootp;
+            unsigned vsp = unsigned(r->jmr_js_core__DOT__u_vm__DOT__vsp);
+            std::cout << "STK vsp=" << vsp << std::hex;
+            for (unsigned i = 0; i < 8u; i++)
+                std::cout << " w" << i << "="
+                          << uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vst_win[i]);
+            std::cout << std::dec << std::endl;
+            continue;
+        }
         // NEW: OBJPEEK <oid> — dump one heap object (cls, n, key/val/tag slots)
         if (line.rfind("OBJPEEK ", 0) == 0) {
             auto* r = top->rootp;
             unsigned oid = std::stoul(line.substr(8)) & (VM_MAX_OBJ - 1);
+            const bool value64 =
+                (unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u) != 0;
+            unsigned ns = value64
+                ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vobj_len[oid])
+                : unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_n[oid]);
             std::cout << "OBJ " << oid
                       << " cls=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_cls[oid])
-                      << " n=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_n[oid]);
+                      << " n=" << ns
+                      << " alloc=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vobj_alloc[oid]);
             // NEW: dump every live slot (was 6) — item objects carry ~20 props
-            unsigned ns = unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_n[oid]);
             if (ns > VM_OBJ_SLOTS) ns = VM_OBJ_SLOTS;
             for (unsigned s = 0; s < ns; s++) {
                 std::cout << " [" << s << "]k="
                           << unsigned(peek_vobj_key(r, oid, s))
-                          << " v=" << int(peek_vobj_val(r, oid, s))
+                          << " v=" << std::hex
+                          << peek_vobj_val(r, oid, s)
+                          << std::dec
                           << " t=" << unsigned(peek_vobj_tag(r, oid, s));
             }
             std::cout << std::endl;
@@ -1302,7 +1351,8 @@ int main(int argc, char** argv) {
         // NEW: ARRPEEK <aid> — dump array len + elements (bring-up only)
         if (line.rfind("ARRPEEK ", 0) == 0) {
             auto* r = top->rootp;
-            unsigned aid = std::stoul(line.substr(8)) & (VM_MAX_ARR - 1);
+            unsigned aid = std::stoul(line.substr(8));
+            if (aid >= VM_MAX_ARR) aid = 0;
             unsigned len = unsigned(r->jmr_js_core__DOT__u_vm__DOT__arr_len[aid]);
             std::cout << "ARR " << aid << " len=" << len;
             if (len > VM_ARR_CAP) len = VM_ARR_CAP;

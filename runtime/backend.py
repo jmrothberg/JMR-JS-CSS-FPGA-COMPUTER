@@ -36,7 +36,7 @@ def parse_status_kv(line: str) -> dict:
 
 
 def card_catalog(extra: list[str] | None = None) -> list[str]:
-    """HTML/JS titles plus invisible .JSH compile cache names."""
+    """HTML/JS titles from storage/ (no compile sidecars)."""
     names: list[str] = []
     seen: set[str] = set()
     for n in extra or []:
@@ -47,7 +47,7 @@ def card_catalog(extra: list[str] | None = None) -> list[str]:
         for p in sorted(STORAGE_DIR.iterdir()):
             if not p.is_file() or p.name.startswith("."):
                 continue
-            if p.suffix.upper() in (".HTML", ".HTM", ".JS", ".JSH") and p.name not in seen:
+            if p.suffix.upper() in (".HTML", ".HTM", ".JS") and p.name not in seen:
                 seen.add(p.name)
                 names.append(p.name)
     return names
@@ -283,7 +283,6 @@ class PythonBackend(RuntimeBackend):
             catalog = list(m.storage.catalog())
         except Exception:
             catalog = []
-        # NEW: also list compile-cache .JSH next to DIR names (not a LOAD name)
         catalog = _merge_jsh_catalog(catalog)
         running = bool(self.running)
         chunk = getattr(m, "_html_chunk", None)

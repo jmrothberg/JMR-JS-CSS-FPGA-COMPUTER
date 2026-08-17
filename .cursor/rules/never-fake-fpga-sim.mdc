@@ -43,7 +43,7 @@ ASIC SRAM macro. Those are fake FPGA-SIM — same class of cheat as a host twin.
 - Xilinx `RAMB36` primitives inside the VM (ASIC cannot use them).
 - **Sim-sized depths on BRAM:** do not restore `MAX_OBJ=8192` × 32 × 80b plus
   `MAX_ARR=4096` × 128 × 64b ≈ **7 MB**. Legal leftover-BRAM caps:
-  `MAX_OBJ=1024` × 32 × 80b plus `MAX_ARR=512` × `ARR_CAP=128` × 64b plus
+  `MAX_OBJ=1024` × 32 × 80b plus two-tier `1536×32` + `128×128` × 64b plus
   `ENV_DEPTH=512` × 16 × 80b ≈ 0.9 MB (same numbers in PYTHON). T200 BRAM is
   **~1.64 MB** total. Dual FB takes ~0.6 MB. Leftover ~**1 MB** is the
   heap+code budget. Overflow **loud**; same caps in PYTHON. Do **not** put

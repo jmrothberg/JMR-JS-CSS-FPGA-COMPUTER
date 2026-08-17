@@ -114,6 +114,8 @@ SRAM_BYTES = 4 * 1024 * 1024  # 2M × 16 IS61WV204816 contract (see docs/ARCHITE
 # 4=RegExp packed in const pool (pattern bytes + flags — RTL has no char heap)
 _LC_I32, _LC_STR, _LC_NONE, _LC_F32, _LC_REGEX = 0, 1, 2, 3, 4
 _STR_CAP = 512  # huge data: URIs stubbed — Image.onload still truthy
+# Non-data interned literals (layout rows, etc.) keep their full text.
+# NAMB length is u16; do not stub those down to 512.
 
 
 @dataclass(frozen=True)
@@ -852,7 +854,12 @@ def _encode_v2(
             orig_lc.append((const_map[key], _LC_REGEX))
             continue
         if isinstance(c, str):
-            stored = c if len(c) <= _STR_CAP else "data:stub"
+            # data:image payloads live in ASET; stub the JS string so name_mem
+            # is not filled with megabyte URIs. Layout / source strings stay.
+            if c.startswith("data:") and len(c) > _STR_CAP:
+                stored = "data:stub"
+            else:
+                stored = c
             orig_lc.append((_intern_name(names, name_index, stored), _LC_STR))
             continue
         if isinstance(c, float) and not isinstance(c, bool):

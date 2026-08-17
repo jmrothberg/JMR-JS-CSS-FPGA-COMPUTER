@@ -3,12 +3,11 @@
 An original **standalone** FPGA → ASIC computer whose **native machine
 language is JavaScript** (HTML5/Canvas games; minimal CSS as needed). There
 is no soft CPU, no browser-on-FPGA, and **no dukpy/Duktape as the machine**:
-`LOAD "NAME.HTML"` → edit → **`RUN` always compiles** that HTML → fresh
-internal `.JSH` (code + ASET art) → bytecode VM + engines. Full-quality
+`LOAD "NAME.HTML"` → edit → **`RUN` always compiles** that HTML → in-memory
+ProgramImage (code + ASET art) → bytecode VM + engines. Full-quality
 graphics stream into the **external 4 MB SRAM asset bank** (IS61WV204816
 contract; FPGA board bridges DDR3 behind the same simple port — no `NAME.DAT`
-file). Never prefer a stale
-`.JSH`. Chrome may open the same `.HTML` for authoring; PYTHON/FPGA-SIM/BOARD
+file). Chrome may open the same `.HTML` for authoring; PYTHON/FPGA-SIM/BOARD
 must run the **JMR VM**. V1 does **not** ship a general CSS browser — games
 draw on Canvas. BRAM is RAM; µSD is disk; external SRAM is the asset bank.
 
@@ -50,7 +49,7 @@ python3 run_jmr_js.py
 python3 gui_jmr_js.py
 # 3. GUI — one 640×480 glass (text+games); F9 runtimes; F10 Architecture Monitor
 #    Window size is locked at startup (status text must not grow the alleys).
-#    Prefers .venv. HTML RUN = compile-on-RUN bytecode (not dukpy / not stale .JSH).
+#    Prefers .venv. HTML RUN = compile-on-RUN bytecode (not dukpy).
 #    F9 BOARD: PC keyboard = tether (J15 dead). F10 hides the monitor (faster).
 
 make -C sim sim_server_synth
@@ -80,12 +79,11 @@ Do not jump to Vivado before PYTHON + FPGA-SIM agree on user-visible behaviour.
 Gate: `python3 tools/check_runtime_parity.py` must print **BATTERY PASS**.
 Board flash is step 7, last — never a substitute for fixing FPGA-SIM.
 
-**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID) then `RUN`.
+**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID / AURORA / MRDO / JOYDEMO) then `RUN`.
 New HTML titles: [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md).
-Only HTML titles. **`RUN` = compile-on-RUN** (fresh internal `.JSH`; line
-numbers from the HTML). Fat graphics ride the `.JSH` ASET section into the
-external SRAM asset bank (invisible plumbing; no `.DAT` file). Never type
-`.JSH` as a LOAD name. Same-stem `.JS`
+Only HTML titles. **`RUN` = compile-on-RUN** (in-memory ProgramImage; line
+numbers from the HTML). Fat graphics ride the ASET section into the
+external SRAM asset bank (invisible plumbing; no `.DAT` file). Same-stem `.JS`
 demos are not the product. Ctrl-V pastes into the prompt.
 
 
@@ -146,7 +144,7 @@ tokens, microcode, or Nexys A7-100T pinouts here. Board freeze:
 | `third_party/digilent_rgb2dvi/` | Digilent HDMI TMDS IP (do not rewrite) |
 | `sim/` | Verilator + cocotb |
 | `constraints/` | Nexys Video XDC (StarLite later; not A7-100T) |
-| `storage/` | Seeds: `NAME.HTML` titles (`.JSH` = compile output, code + ASET art) |
+| `storage/` | Seeds: `NAME.HTML` titles (card builder copies this folder) |
 | `docs/` | Architecture, bring-up, fit, handoff |
 | `tools/` | compile, SD image, battery, `golden_frames.py` (Chrome vs PYTHON vs RTL) |
 | `traces/` | Flight logs — read first when debugging. `traces/goldens/` = frame diffs |

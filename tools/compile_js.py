@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
-"""Compile storage/*.JS → .JSB and storage/*.HTML scripts → .JSH.
-
-  python3 tools/compile_js.py storage/INVADERS.JS
-  python3 tools/compile_js.py --all
-  python3 tools/compile_js.py --html storage/INVADERS.HTML
+"""Compile storage/*.JS → .JSB (legacy smoke). HTML titles compile in memory
+on RUN — this tool does not write a sidecar next to the HTML.
 """
 
 from __future__ import annotations
@@ -41,7 +38,7 @@ def _extract_data_uri_sprites(src: str):
     ARCHITECTURE (2026-08-13): the old path downscaled sheets (`w*h > 180000`)
     and quantized to 8 colors so pixels fit code BRAM — that trap is removed.
     Sheets stay full quality; they are quantized against the per-title
-    256-entry palette (_quantize_sprites) and ride the .JSH ASET section into
+    256-entry palette (_quantize_sprites) and ride the ProgramImage ASET section into
     the external SRAM asset bank, never into code BRAM.
     """
     import base64
@@ -227,11 +224,11 @@ def compile_html_text(html: str):
 
 
 def encode_html_chunk(chunk) -> bytes:
-    """Fresh internal .JSH bytes (JSB v2 + SPRD descriptors + ASET section).
+    """ProgramImage bytes (JSB v2 + SPRD descriptors + ASET section).
 
     HTML titles always take the ASET path: full-res sprite banks + the
     per-title palette stream to the external SRAM asset bank; code BRAM
-    only ever sees bytecode + descriptors.
+    only ever sees bytecode + descriptors. Not a disk sidecar.
     """
     # Product HTML images always carry the frozen 64-bit Value ABI so PYTHON
     # and FPGA-SIM execute the same serialized words.
@@ -245,14 +242,12 @@ def encode_html_chunk(chunk) -> bytes:
 
 
 def compile_html_one(src_path: Path, out_dir: Path | None = None) -> Path:
-    """Compile HTML <script> → fresh NAME.JSH (compile-on-RUN cache, not a LOAD name)."""
+    """Compile HTML <script> and print size; do not write a sidecar file."""
     html = src_path.read_text(encoding="utf-8")
     chunk = compile_html_text(html)
     blob = encode_html_chunk(chunk)
-    dest = (out_dir or src_path.parent) / (src_path.stem.upper()[:8] + ".JSH")
-    dest.write_bytes(blob)
-    print(f"wrote {dest} ({len(blob)} bytes, {len(chunk.code)} ops, JSB v2)")
-    return dest
+    print(f"ok {src_path} ({len(blob)} bytes, {len(chunk.code)} ops)")
+    return src_path
 
 
 def main(argv=None) -> int:
@@ -262,7 +257,7 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--html",
         action="store_true",
-        help="compile HTML <script> → .JSH (also with --all)",
+        help="compile HTML <script> in memory (no sidecar file)",
     )
     args = ap.parse_args(argv)
     paths = list(args.paths)

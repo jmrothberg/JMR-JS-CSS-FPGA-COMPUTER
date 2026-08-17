@@ -126,10 +126,9 @@ if {[llength [get_ips -quiet mig_7series_0]] == 0} {
 
 update_compile_order -fileset sources_1
 
-if {[get_property PROGRESS [get_runs synth_1]] ne "0%" &&
-    [get_property PROGRESS [get_runs synth_1]] ne "Not Started"} {
-  reset_run synth_1
-}
+# Always reset: a killed synth leaves PROGRESS 0% but still "needs reset"
+# (Common 17-69). catch: no-op if the run was never launched.
+catch {reset_run synth_1}
 
 launch_runs synth_1 -jobs $JOBS
 wait_on_run synth_1
@@ -144,10 +143,7 @@ if {[get_property PROGRESS [get_runs synth_1]] != "100%" ||
 open_run synth_1
 report_utilization -file $OUT/utilization_synth.rpt
 
-if {[get_property PROGRESS [get_runs impl_1]] ne "0%" &&
-    [get_property PROGRESS [get_runs impl_1]] ne "Not Started"} {
-  reset_run impl_1
-}
+catch {reset_run impl_1}
 
 launch_runs impl_1 -to_step write_bitstream -jobs $JOBS
 wait_on_run impl_1

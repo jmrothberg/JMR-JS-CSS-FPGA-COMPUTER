@@ -75,8 +75,8 @@ the same glass on PYTHON → FPGA-SIM → BOARD** (then ASIC).
   Tether = debug mirror only. When the J15 keyboard hardware is fixed, play
   must work standalone with **zero code changes**.
 - Same-name `NAME.JS` / `NAME.JSB` are **not** product twins of the HTML
-  titles. Optional differently named demos (e.g. `RECTDEMO`) may keep bytecode
-  smoke. `storage/games_*` = upstream archive only.
+  titles. Card seeds are `.HTML` only (plus optional library HTML like
+  `JOYDEMO.HTML`). `storage/games_*` = upstream archive only.
 
 ---
 
@@ -218,9 +218,10 @@ simulation and the board keep real cycle time; Python does not.
    opcodes that index the heap. **Shape is not enough:** `MAX_OBJ`/`MAX_ARR`
    must fit leftover BRAM after the dual framebuffer (T200 ≈ 1.64 MB BRAM
    total; dual 640×480 FB ≈ 0.6 MB). Legal slot depths: `MAX_OBJ=1024` ×
-   `OBJ_SLOTS=32` × 80b plus `MAX_ARR=512` × `ARR_CAP=128` × 64b plus
-   `ENV_DEPTH=512` × 16 × 80b ≈ 0.9 MB
-   (same numbers in PYTHON; 512 arrays hold ten live nested number-array maps). 8192×32×80b + 4096×128×64b ≈ 7 MB will not
+   `OBJ_SLOTS=32` × 80b plus two-tier arrays (`1536×32` + `128×128`) × 64b
+   plus `ENV_DEPTH=512` × 16 × 80b ≈ 0.9 MB
+   (same numbers in PYTHON; short bank holds nested map clones, long bank
+   holds `push` past 32). 8192×32×80b + 4096×128×64b ≈ 7 MB will not
    infer — that is the anti-pattern. Overflow loud; do not grow the 4 MB
    asset bank to hold JS objects. Avoid Verilator-only SV (`sig[hi:lo][n:m]`
    → Vivado Synth 8-2599; use `sig[73:64]` or a wire). Legal shape in this

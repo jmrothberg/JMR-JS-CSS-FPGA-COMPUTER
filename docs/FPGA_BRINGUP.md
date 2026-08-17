@@ -77,13 +77,13 @@ designs. Only Vivado (board flow) produces them; Verilator never does.
 
 | Runtime | What it is | Where the “CPU” lives |
 |---|---|---|
-| **PYTHON** | **JMR bytecode VM** — **compile-on-RUN** | `functional_model/` (fresh `.JSH`, code + ASET art; never stale) |
+| **PYTHON** | **JMR bytecode VM** — **compile-on-RUN** | `functional_model/` (in-memory ProgramImage, code + ASET art) |
 | **FPGA-SIM** | Same RTL as the board, simulated | Verilator → `sim/sim_build_synth/jmr_js_sim_server` (**default**). Host twin only with `JMR_SIM_HOST=1` — never a silent fallback. |
 | **BOARD** | Real Nexys Video (standalone or tethered debug) | Silicon |
 | **ASIC** | Same ISA after FPGA honesty | — |
 
 Titles: `LOAD "NAME.HTML"` / `RUN` only. Never call Chrome or dukpy a rung.
-Fat graphics ride the `.JSH` ASET section into the external SRAM asset bank
+Fat graphics ride the ProgramImage ASET section into the external SRAM asset bank
 (no `NAME.DAT` file).
 
 Glass: [../.cursor/rules/python-first-parity.mdc](../.cursor/rules/python-first-parity.mdc),
@@ -116,7 +116,7 @@ Traces first: [../.cursor/rules/use-existing-traces.mdc](../.cursor/rules/use-ex
 | Play controls | GUI arrows+Space → KEYBITS (BOARD: PROG `0xFE`+bits). Mouse stick **off**. Pmod joy later |
 | Mouse | **Not V1 standalone USB** |
 | Host link | PROG FT245 (ch A / `.0`) — flash + tether glass + play keys |
-| Storage | µSD SPI + FAT32: `NAME.HTML` (LOAD) + internal `.JSH` compile cache (code + ASET art) |
+| Storage | µSD SPI + FAT32: `NAME.HTML` (LOAD). Compile-on-RUN stays in memory. |
 | openFPGALoader `-b` id | **nexysVideo** |
 | Bitstream output path | `build/nexys_video/jmr_nexys_video.bit` |
 | Second port | **PA-StarLite** later — HDMI + 40-pin joystick; keyboard needs Pmod (no HID jack) |
@@ -213,14 +213,12 @@ Gates: `make -C sim tb_uart_link tb_ft245`.
 
 ### Silicon honesty (RUN)
 
-- User product path: `LOAD "*.HTML"` + `RUN` → **compile-on-RUN** → fresh
-  bytecode / `.JSH` into the JMR VM. Full-quality graphics stream from the
-  `.JSH` ASET section into the external SRAM asset bank (never pack Donkey
-  art into code BRAM; no `NAME.DAT`). Never
-  prefer a stale companion `.JSH`. Never dukpy on silicon.
+- User product path: `LOAD "*.HTML"` + `RUN` → **compile-on-RUN** →
+  ProgramImage into the JMR VM. Full-quality graphics stream from the
+  ASET section into the external SRAM asset bank (never pack Donkey
+  art into code BRAM; no `NAME.DAT`). Never dukpy on silicon.
 - `?NH` = HTML path debt (temporary). Missing compile path → fail loud
   (not Invaders hex lie).
-- Optional differently named demos (`RECTDEMO.JS`, …) may use `.JSB`.
 - Esc exits game_mode
 
 Last SRAM image: **2026-08-13 03:36**, WNS **+0.139 ns** (HDMI VRAM CDC +

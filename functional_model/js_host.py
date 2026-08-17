@@ -225,6 +225,7 @@ function __jmr_make_ctx() {
     textAlign: "left",
     textBaseline: "alphabetic",
     globalAlpha: 1,
+    imageSmoothingEnabled: true,
     _path: [],
     fillRect: function (x, y, w, h) {
       call_python("jmr_fillRect", +x, +y, +w, +h, String(this.fillStyle));

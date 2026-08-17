@@ -1,7 +1,7 @@
 // Standalone READY console — BASIC console_engine method + FAT32 storage.
 // Verbs: HELP / DIR / LOAD / SAVE / REMOVE / LIST / MEM / NEW / RUN
-// NEW: RUN loads companion .JSB from card into VM (not INVADERS-name gate).
-// HTML → companion .JSH (missing → ?NH; never silently run invaders_jsb.hex).
+// HTML RUN: host compile-on-RUN streams ProgramImage over PROG (missing → ?NH;
+// never silently run invaders_jsb.hex). Card is HTML only.
 //
 // Section map (C_* states):
 //   input:    C_IDLE, C_ECHO, C_PARSE
@@ -9,7 +9,7 @@
 //                       5=LOADED 6=?FN FILE NOT FOUND 7=?NB 8=-- MORE --)
 //   disk:     C_DIR / C_LOAD / C_SAVE / C_REMOVE / C_LD_* / C_SV_* / C_JSB_*
 //   listing:  C_LIST, C_LIST_WRAP*, C_MORE
-//   edit/run: C_EDIT, C_RUN (compile-on-RUN → .JSH → VM)
+//   edit/run: C_EDIT, C_RUN (compile-on-RUN → ProgramImage → VM)
 module jmr_console_engine (
     input  logic        clk,
     input  logic        rst_n,
@@ -544,8 +544,8 @@ module jmr_console_engine (
                                up(line[0])=="R" && up(line[1])=="U" &&
                                up(line[2])=="N" &&
                                (line_len == 3 || is_sp(line[3]))) begin
-                        // HTML RUN: host compile-on-RUN streams fresh .JSH over
-                        // PROG (C_JSB_TETHER). Never FAT-read NAME.JSH; card is HTML only.
+                        // HTML RUN: host compile-on-RUN streams ProgramImage over
+                        // PROG (C_JSB_TETHER). Never FAT-read a sidecar; card is HTML only.
                         // RECTDEMO → rect engine; empty NEW → rect; missing JSB → ?NB
                         if (src_is_html) begin
                             jsb_want_jsh <= 1'b1;

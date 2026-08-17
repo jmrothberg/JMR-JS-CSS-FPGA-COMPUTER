@@ -2,6 +2,8 @@
 
 Ported from JMR-BASIC-FPGA-COMPUTER/tools/make_sd_image.py (same FAT32 + burn
 guards). Seeds from project `storage/` root files only (not subfolders).
+No title list — whatever is in `storage/` (except docs / leftover sidecars)
+lands on the card as 8.3 names.
 
 Usage:
   python3 tools/make_sd_image.py create card.img
@@ -10,7 +12,7 @@ Usage:
   sudo python3 tools/make_sd_image.py burn /dev/sdX
   sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
 
-Board FAT is 8.3 only — long host names map (see CARD_NAME_MAP / card_name_83).
+Board FAT is 8.3 only — `NAME.HTML` becomes `NAME.HTM` via card_name_83.
 """
 
 from __future__ import annotations
@@ -55,23 +57,9 @@ SECTORS_PER_CLUSTER = 8  # 4 KiB clusters
 ROOT_CLUSTER = 2
 FSINFO_SECTOR = 1
 
-# Host long names → unique 8.3 card names (FAT root has no LFN on the board).
-CARD_NAME_MAP = {
-    "INVADERS.HTML": "INVADERS.HTM",
-    "INVADERS.JS": "INVADERS.JS",
-    "INVADERS.JSH": "INVADERS.JSH",
-    "DONKEY.HTML": "DONKEY.HTM",
-    "DONKEY.JS": "DONKEY.JS",
-    "DONKEY.JSH": "DONKEY.JSH",
-    "PACMAN.HTML": "PACMAN.HTM",
-    "PACMAN.JS": "PACMAN.JS",
-    "PACMAN.JSH": "PACMAN.JSH",
-    "ASTEROID.HTML": "ASTEROID.HTM",
-    "ASTEROID.JSH": "ASTEROID.JSH",
-    "JOYDEMO.JS": "JOYDEMO.JS",
-    "RECTDEMO.JS": "RECTDEMO.JS",
-    "CLIMB.JS": "CLIMB.JS",
-}
+# Card seeds: whatever sits in storage/ root. Never leftover compile sidecars.
+_SKIP_SUFFIX = {".JSH", ".JSB", ".MD", ".MDC", ".TXT", ".JSON"}
+_KEEP_SUFFIX = {".HTML", ".HTM", ".JS", ".PNG", ".DAT", ".BIN"}
 
 
 def _u16(n: int) -> bytes:
@@ -88,28 +76,29 @@ def collect_storage_files(
     """Gather host files that belong on the card (8.3 names, root only).
 
     Only regular files directly in `storage/` — not `games_invaders/` etc.
+    No title hardwire: 8.3 comes from card_name_83 (HTML → HTM).
     """
     pairs: dict[str, bytes] = {}
+    hosts: dict[str, str] = {}
     if not storage_dir.is_dir():
         return []
     for path in sorted(storage_dir.iterdir()):
         if not path.is_file() or path.name.startswith("."):
             continue
-        if path.suffix.upper() not in (".JS", ".HTML", ".HTM", ".PNG", ".DAT", ".BIN", ".JSB"):
+        suf = path.suffix.upper()
+        if suf in _SKIP_SUFFIX or suf not in _KEEP_SUFFIX:
             continue
         host = path.name
-        card = CARD_NAME_MAP.get(host.upper(), card_name_83(host))
-        if card in pairs and CARD_NAME_MAP.get(host.upper()) is None:
-            # Collision on truncated 8.3 — require an explicit map entry
-            raise SystemExit(
-                f"card name collision: {host!r} and another file both map to {card!r}. "
-                f"Add a CARD_NAME_MAP entry in tools/make_sd_image.py"
-            )
+        card = card_name_83(host)
         if card in pairs:
-            print(f"note: {host} -> {card} (overrides prior)", file=sys.stderr)
-        elif card_name_83(host) != host.upper() or host.upper() != card:
+            raise SystemExit(
+                f"card name collision: {host!r} and {hosts[card]!r} both map to "
+                f"{card!r}. Rename one file in storage/ (stem ≤ 8, ext ≤ 3)."
+            )
+        if card != host.upper():
             print(f"note: {host} -> {card} on card (8.3)", file=sys.stderr)
         pairs[card] = path.read_bytes()
+        hosts[card] = host
     return [(name, data) for name, data in sorted(pairs.items())]
 
 
@@ -314,7 +303,7 @@ def populate(image: bytearray, files: list[tuple[str, bytes]]) -> bytearray:
 
 
 def patch_card_file(img_path: Path, name: str, data: bytes) -> None:
-    """Overwrite one 8.3 file in an existing card.img (compile-on-RUN .JSH)."""
+    """Overwrite one 8.3 file in an existing card.img."""
     raw = bytearray(img_path.read_bytes())
     mem = Memory()
     card = SdSpiCard(mem, raw)
@@ -337,14 +326,6 @@ def create_image(
     image = format_fat32(size_bytes)
     pairs: list[tuple[str, bytes]] = []
     if include_storage:
-        # NEW: auto-compile storage/*.JS → .JSB so RUN has bytecode companions
-        try:
-            from tools.compile_js import compile_one
-            for js in sorted(STORAGE_DIR.glob("*.JS")):
-                compile_one(js)
-            # HTML titles: card is HTML only. .JSH is host compile-on-RUN, never FAT.
-        except Exception as e:
-            print(f"warning: compile_js skipped: {e}", file=sys.stderr)
         pairs.extend(collect_storage_files())
     if files:
         # Explicit --files override same-named storage entries.

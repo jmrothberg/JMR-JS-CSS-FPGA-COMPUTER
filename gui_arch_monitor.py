@@ -215,11 +215,11 @@ class ArchitectureView:
         ),
         "CONS_ENG": (
             "Console engine — READY · LOAD · RUN · DIR · EDIT.\n"
-            "RUN always compiles the loaded HTML (never a stale .JSH)."
+            "RUN always compiles the loaded HTML into an in-memory ProgramImage."
         ),
         "STORE": (
             "Storage engine — µSD SPI FAT32.\n"
-            "NAME.HTML titles + invisible .JSH compile cache (code + ASET)."
+            "NAME.HTML titles. Compile-on-RUN is in memory (code + ASET)."
         ),
         "VIDEO": (
             "Video / HDMI scanout — 8-bpp indexed through 256-entry RGB888\n"
@@ -247,8 +247,8 @@ class ArchitectureView:
         ),
         "M_SDCARD": (
             "µSD FAT32 (room C) — disk, not RAM.\n"
-            "LOAD \"NAME.HTML\" titles. .JSH is the invisible compile cache\n"
-            "(code + ASET). Never type .JSH as a LOAD name."
+            "LOAD \"NAME.HTML\" titles. Compile-on-RUN stays in memory\n"
+            "(code + ASET). Card is HTML only."
         ),
         "ARBITER": (
             "MEMORY ARBITER — engines do not bypass BRAM / SRAM.\n"
@@ -316,7 +316,7 @@ class ArchitectureView:
 
     def _wire(self, key: str, *coords: float, kind: str = "ctrl") -> None:
         # NEW: poster legend — ctrl (solid), data (solid green-idle),
-        # code (dashed blue) = compile-on-RUN HTML → .JSH → BRAM/SRAM
+        # code (dashed blue) = compile-on-RUN HTML → ProgramImage → BRAM/SRAM
         if kind == "code":
             fill, dash = "#3a5580", (5, 3)
         elif kind == "data":
@@ -554,7 +554,7 @@ class ArchitectureView:
         )
         c.create_text(
             16, 998,
-            text="solid = control/data  ·  dashed blue = compile-on-RUN (HTML → .JSH → BRAM/SRAM)  ·  F10 hides",
+            text="solid = control/data  ·  dashed blue = compile-on-RUN (HTML → ProgramImage → BRAM/SRAM)  ·  F10 hides",
             font=self.small_font, fill=TITLE_FG, anchor="w",
         )
         self.path_text = c.create_text(
@@ -662,9 +662,9 @@ class ArchitectureView:
         except (TypeError, ValueError):
             nhtml_i = 0
         if phase == "compile":
-            comp_live = "compiling → .JSH"
+            comp_live = "compiling"
         elif nops_i > 0:
-            comp_live = f"{nops_i} ops → .JSH"
+            comp_live = f"{nops_i} ops"
         elif nhtml_i > 0:
             comp_live = f"{nhtml_i} lines  (RUN compiles)"
         else:
@@ -718,7 +718,7 @@ class ArchitectureView:
                 f"spr {spr}\n0x300+ banks",
             )
         ncat = len(self._snap.get("catalog") or [])
-        self._set("M_SDCARD", f"{ncat} files\nHTML + .JSH")
+        self._set("M_SDCARD", f"{ncat} files\nHTML titles")
         if mode == "game" or running:
             self._set("HDMI", "RUN  full field\n640×480 game FB")
         else:
@@ -772,7 +772,7 @@ class ArchitectureView:
         )
         self.canvas.itemconfigure(
             self.path_text,
-            text=f"storage: NAME.HTML titles · .JSH = compile cache (code + ASET) · no NAME.DAT",
+            text=f"storage: NAME.HTML titles · compile-on-RUN in memory (code + ASET) · no NAME.DAT",
         )
         self._refresh_inspector()
 
@@ -923,7 +923,7 @@ class ArchitectureView:
             self._hdr("PROGRAM SEQUENCER — fetch unit")
             + "16-bit IP. Fetches 32-bit op-words from code BRAM (32K×32):\n"
             "  op = { arg1[31:24], arg0[23:8], opcode[7:0] }\n"
-            f".JSH / {magic} header: n_ops, n_consts, n_vars, flags\n"
+            f"ProgramImage / {magic} header: n_ops, n_consts, n_vars, flags\n"
             f"(flags bit1 = ASET present, value {FLAG_ASET}).\n"
             "Bytecode is the ISA — no hidden CPU, no V8/dukpy.\n"
             "Analog of BASIC PCU LINE/tokens: IP + HTML line the op compiled from.\n\n"
@@ -998,9 +998,9 @@ class ArchitectureView:
             self._hdr("COMPILE-ON-RUN FRONT END")
             + "Lexer → Parser → Bytecode generator.\n"
             "LOAD \"NAME.HTML\" then RUN always recompiles the current HTML\n"
-            "into a fresh internal .JSH (code + ASET art).\n"
+            "into an in-memory ProgramImage (code + ASET art).\n"
             "Code → code BRAM. ASET → external SRAM asset bank.\n"
-            "Never prefer a stale .JSH. Compile errors use HTML line numbers.\n"
+            "Compile errors use HTML line numbers.\n"
             "Missing compile path → fail loud (?NH), never fake output.\n\n"
             f"phase        {self._g('phase')}\n"
             f"last command {self._g('last_cmd')!r}\n"
@@ -1066,7 +1066,7 @@ class ArchitectureView:
         return (
             self._hdr("microSD / FAT32")
             + "Room C: disk. LOAD names are NAME.HTML.\n"
-            ".JSH is the invisible compile cache (code + ASET) — not a typed name.\n\n"
+            "Compile-on-RUN stays in memory (code + ASET).\n\n"
             + listing
             + "\n"
         )

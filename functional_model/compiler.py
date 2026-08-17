@@ -203,6 +203,10 @@ class Compiler:
         self.op_lines: List[int] = []
         # NEW: user functions name → (entry_ip, params)
         self.functions: dict[str, Tuple[int, List[str]]] = {}
+        # NEW: fname → IP after the function's last op (before MAKE_FN).
+        # Used to inline tiny param-only callees at CALL_USER sites.
+        self._fn_end: dict[str, int] = {}
+        self._fn_compiling: Optional[str] = None
         # NEW: classes + set of all method names (for CALL_METHOD dispatch)
         self.classes: dict[str, dict] = {}
         self.all_methods: set[str] = set()
@@ -213,6 +217,9 @@ class Compiler:
         # NEW: >0 inside function/method/arrow → let/const must STORE (not LET_VAR).
         # Top-level keeps LET_VAR for startLoop re-entry (DONKEY.JS inited etc.).
         self._fn_depth = 0
+        # NEW: >0 inside while/for body. `var row = []` in a loop must STORE;
+        # LET_VAR skips if the name exists, so every row aliases one array.
+        self._loop_depth = 0
 
     def compile(self) -> Chunk:
         # NEW: hoist function + class declarations first (JS-style)
@@ -340,6 +347,7 @@ class Compiler:
         self._expect(")")
         jmp_over = self._emit(Op.JUMP, 0)
         entry = len(self.code)
+        self._fn_compiling = fname
         # prologue: stack has arg0..argN-1 (last arg on top)
         # NEW: params declare into the per-call lexical env (LET_VAR).
         # arg2=1 flags "call-frame local" for RTL (flat vars: always store;
@@ -356,17 +364,25 @@ class Compiler:
                 self._emit(Op.LET_VAR, self._name(p), 1)
         self._expect("{")
         self._fn_depth += 1  # NEW: function body locals use LET_VAR (env)
-        while self._peek_text() not in ("", "}"):
-            self._statement()
+        # NEW: `if (ch === "1") return 1; ... return 0` is one obj[ch]|0
+        # instead of N EQ/JUMP pairs (inner sprite loops were ~14 compares
+        # per pixel × CALL_USER). Lut is stored after MAKE_FN below.
+        ceq_lut = self._try_emit_char_eq_lookup(params)
+        if not ceq_lut:
+            while self._peek_text() not in ("", "}"):
+                self._statement()
         self._expect("}")
         self._fn_depth -= 1
-        # implicit return undefined
-        self._emit(Op.LOAD_CONST, self._const(None))
-        self._emit(Op.RET_VAL)
+        if not ceq_lut:
+            # implicit return undefined
+            self._emit(Op.LOAD_CONST, self._const(None))
+            self._emit(Op.RET_VAL)
         self._patch(jmp_over, Op.JUMP, len(self.code))
         # store flat param count for arity (destruct counts as 1)
         flat = [p if isinstance(p, str) else "__arg" for p in params]
         self.functions[fname] = (entry, flat)
+        self._fn_end[fname] = len(self.code)
+        self._fn_compiling = None
         # NEW: bind function name as first-class Fn (rAF(animate) / keys need LOAD_VAR)
         self._emit(Op.MAKE_FN, entry, len(flat))
         # NEW: nested decls stay local to the enclosing call env (LET_VAR);
@@ -375,7 +391,158 @@ class Compiler:
             self._emit(Op.LET_VAR, self._name(fname), 1)  # call-frame local (RTL flag)
         else:
             self._emit(Op.STORE_VAR, self._name(fname))
+        if ceq_lut is not None:
+            lut_name, pairs = ceq_lut
+            self._emit(Op.MAKE_OBJ)
+            for ch, num in pairs:
+                self._emit(Op.DUP)
+                self._emit(Op.LOAD_CONST, self._const(num))
+                self._emit(Op.SET_PROP, self._name(ch))
+                self._emit(Op.POP)
+            self._emit(Op.STORE_VAR, self._name(lut_name))
 
+
+    def _try_emit_char_eq_lookup(
+        self, params: List[Any]
+    ) -> Optional[Tuple[str, List[Tuple[str, int]]]]:
+        """If the body is `if (p === "c") return n;` × ≥4 plus `return d`, emit lut get.
+
+        Same JS result as the if-chain. One ARRAY_GET + BIT_OR instead of a
+        linear EQ cascade (sprite `ch === "1"` … `"e"` was thousands of ops
+        per frame).
+        """
+        if len(params) != 1 or not isinstance(params[0], str):
+            return None
+        ident = params[0]
+        saved = self.i
+        pairs: List[Tuple[str, int]] = []
+        while self._peek_text() == "if":
+            self._advance()
+            if not self._match("("):
+                self.i = saved
+                return None
+            tok = self._peek()
+            if tok is None or tok[0] != "ID" or tok[1] != ident:
+                self.i = saved
+                return None
+            self._advance()
+            if self._peek_text() not in ("===", "=="):
+                self.i = saved
+                return None
+            self._advance()
+            kt = self._peek()
+            if kt is None or kt[0] not in ("STR", "STR2"):
+                self.i = saved
+                return None
+            ch = self._advance()[1][1:-1]
+            if len(ch) != 1:
+                self.i = saved
+                return None
+            if not self._match(")"):
+                self.i = saved
+                return None
+            if not self._match("return"):
+                self.i = saved
+                return None
+            nt = self._peek()
+            if nt is None or nt[0] != "NUM":
+                self.i = saved
+                return None
+            num = int(float(self._advance()[1]))
+            self._match(";")
+            pairs.append((ch, num))
+        if len(pairs) < 4 or self._peek_text() != "return":
+            self.i = saved
+            return None
+        self._advance()
+        nt = self._peek()
+        default = 0
+        if nt is not None and nt[0] == "NUM":
+            default = int(float(self._advance()[1]))
+        else:
+            self.i = saved
+            return None
+        self._match(";")
+        if self._peek_text() != "}":
+            self.i = saved
+            return None
+        lut_name = f"__ceq_{ident}_{len(self.names)}"
+        self._emit(Op.LOAD_VAR, self._name(lut_name))
+        self._emit(Op.LOAD_VAR, self._name(ident))
+        self._emit(Op.ARRAY_GET)
+        if default != 0:
+            # missing key is undefined; `undefined|0` is 0, so only OR when
+            # the chain's fallback is not already 0.
+            self._emit(Op.DUP)
+            jmp_hit = self._emit(Op.JUMP_IF_FALSE, 0)
+            jmp_end = self._emit(Op.JUMP, 0)
+            self._patch(jmp_hit, Op.JUMP_IF_FALSE, len(self.code))
+            self._emit(Op.POP)
+            self._emit(Op.LOAD_CONST, self._const(default))
+            self._patch(jmp_end, Op.JUMP, len(self.code))
+        else:
+            self._emit(Op.LOAD_CONST, self._const(0))
+            self._emit(Op.BIT_OR)
+        self._emit(Op.RET_VAL)
+        return lut_name, pairs
+
+    def _fn_body_inlineable(self, entry: int, end: int) -> bool:
+        """Param-only body, no nested call/alloc — safe to run in the caller."""
+        if end <= entry or (end - entry) > 64:
+            return False
+        i = entry
+        while i < end:
+            op = self.code[i]
+            if op[0] == Op.LET_VAR and len(op) > 2 and op[2] == 1:
+                i += 1
+                continue
+            break
+        for ip in range(i, end):
+            op = self.code[ip]
+            if op[0] in (Op.CALL_USER, Op.CALL_VAL, Op.MAKE_FN, Op.NEW_OBJ):
+                return False
+            if op[0] == Op.LET_VAR:
+                return False
+        return True
+
+    def _try_inline_user_call(self, fname: str, argc: int) -> bool:
+        """Splices a tiny callee at the call site (args already on the stack)."""
+        if fname == self._fn_compiling or fname not in self.functions:
+            return False
+        # LET_VAR local flag needs a call env; top-level CALL_USER keeps one.
+        if not self._fn_depth:
+            return False
+        if fname not in self._fn_end:
+            return False
+        entry, params = self.functions[fname]
+        if argc != len(params):
+            return False
+        end = self._fn_end[fname]
+        if not self._fn_body_inlineable(entry, end):
+            return False
+        delta = len(self.code) - entry
+        ret_sites: List[int] = []
+        for ip in range(entry, end):
+            op = self.code[ip]
+            line = self.op_lines[ip] if ip < len(self.op_lines) else 0
+            opc = op[0]
+            if opc == Op.RET_VAL:
+                ret_sites.append(len(self.code))
+                self.code.append((Op.JUMP, 0))
+                self.op_lines.append(line)
+            elif opc in (Op.JUMP, Op.JUMP_IF_FALSE):
+                tgt = int(op[1])
+                if entry <= tgt < end:
+                    tgt = tgt + delta
+                self.code.append((opc, tgt))
+                self.op_lines.append(line)
+            else:
+                self.code.append(tuple(op))
+                self.op_lines.append(line)
+        after = len(self.code)
+        for site in ret_sites:
+            self.code[site] = (Op.JUMP, after)
+        return True
 
     def _skip_class_decl(self) -> None:
         """Advance past a class declaration (already hoisted)."""
@@ -609,7 +776,7 @@ class Compiler:
             return
         if text in ("let", "var", "const"):
             self._advance()
-            self._var_decl()
+            self._var_decl(text)
             self._match(";")
             return
         # NEW: nested class (DONKEY IIFE) — hoisted already; skip token body
@@ -674,7 +841,7 @@ class Compiler:
         self._emit(Op.POP)
         self._match(";")
 
-    def _var_decl(self) -> None:
+    def _var_decl(self, kw: str = "var") -> None:
         # NEW: const { key } = e;  object destructure
         if self._match("{"):
             keys: List[str] = []
@@ -716,7 +883,19 @@ class Compiler:
             # env (per-call locals, closure-correct); top level keeps the
             # init-if-missing global (startLoop re-entry). arg2=1 marks
             # call-frame locals so flat-var RTL always stores those.
-            self._emit(Op.LET_VAR, self._name(text), 1 if self._fn_depth else 0)
+            # Top-level loop body: STORE so `var row = []` runs every
+            # iteration (LET_VAR skips if the global exists → one shared
+            # array; last write wins; one cell store clears a column).
+            # Inside a function, KEEP LET_VAR local (a1 bit0): that always
+            # writes the env slot. STORE_VAR of an undeclared slot falls
+            # through to the GLOBAL, so two functions that both
+            # `var col = 0` in a while share one cursor — the inner sprite
+            # loop resets the outer column index forever (PYTHON 1M fuse /
+            # FPGA-SIM freeze on a full playfield paint).
+            if self._loop_depth and not self._fn_depth:
+                self._emit(Op.STORE_VAR, self._name(text))
+            else:
+                self._emit(Op.LET_VAR, self._name(text), 1 if self._fn_depth else 0)
             if not self._match(","):
                 break
 
@@ -750,7 +929,9 @@ class Compiler:
         jmp_f = self._emit(Op.JUMP_IF_FALSE, 0)
         self.break_stack.append([])
         self.continue_stack.append([])
+        self._loop_depth += 1
         self._statement()
+        self._loop_depth -= 1
         self._emit(Op.JUMP, loop)
         end = len(self.code)
         self._patch(jmp_f, Op.JUMP_IF_FALSE, end)
@@ -795,7 +976,9 @@ class Compiler:
                     self._emit(_decl, self._name(bind))
                     self.break_stack.append([])
                     self.continue_stack.append([])
+                    self._loop_depth += 1
                     self._statement()
+                    self._loop_depth -= 1
                     # NEW: for-of continue lands on idx++
                     cont = len(self.code)
                     for j in self.continue_stack.pop():
@@ -874,7 +1057,9 @@ class Compiler:
         self.break_stack.append([])
         self.continue_stack.append([])
         # body
+        self._loop_depth += 1
         self._statement()
+        self._loop_depth -= 1
         # NEW: for-continue lands on the step (must not skip col++/row++)
         cont = len(self.code)
         for j in self.continue_stack.pop():
@@ -1408,7 +1593,10 @@ class Compiler:
                     argc = self._arg_list()
                     self._expect(")")
                     entry, params = self.functions[text]
-                    self._emit(Op.CALL_USER, entry, argc)
+                    # Tiny param-only callees run in the caller (no CALL_USER
+                    # env alloc). Sprite palettes and in-bounds checks.
+                    if not self._try_inline_user_call(text, argc):
+                        self._emit(Op.CALL_USER, entry, argc)
                 elif text in NATIVE_IDS or text in NATIVE_ALIASES or text in _HOST_NATIVES:
                     argc = self._arg_list()
                     self._expect(")")

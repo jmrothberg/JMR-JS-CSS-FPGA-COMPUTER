@@ -220,8 +220,8 @@ class BoardBackend(RuntimeBackend):
         if upper.startswith("LOAD"):
             self._loaded_name = stripped[4:].strip().strip('"').strip("'")
         try:
-            # HTML RUN: compile on the host, type RUN, then PROG-stream the .JSH.
-            # Card stays HTML-only — do not FAT-read NAME.JSH.
+            # HTML RUN: host-compile current HTML, type RUN, PROG-stream bytes.
+            # Card stays HTML-only.
             if upper == "RUN" or upper.startswith("RUN "):
                 if self._html_loaded_stem():
                     blob = self._compile_html_blob()
@@ -235,7 +235,7 @@ class BoardBackend(RuntimeBackend):
                     for i in range(0, len(blob), 16384):
                         self._ser.write(mv[i : i + 16384])
                     self._ser.flush()
-                    self._log.note(f"PROG JSH stream {len(blob)} bytes")
+                    self._log.note(f"PROG ProgramImage stream {len(blob)} bytes")
                     return
             self._ser.write((text + "\n").encode("ascii", errors="replace"))
             self._ser.flush()
@@ -263,7 +263,6 @@ class BoardBackend(RuntimeBackend):
 
             html = html_path.read_text(encoding="utf-8")
             blob = encode_html_chunk(compile_html_text(html))
-            (ROOT / "storage" / f"{stem}.JSH").write_bytes(blob)
             self._log.note(f"compile-on-RUN {html_path.name} ({len(blob)} bytes, PROG stream)")
             return blob
         except CompileError as e:

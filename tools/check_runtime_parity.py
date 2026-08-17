@@ -108,17 +108,21 @@ def check_python_monitor_verbs() -> int:
         return 1
     print("OK PYTHON CLS")
 
-    # keep-fb: RECTDEMO pixels survive READY after one-shot RUN
-    py.type_line('LOAD "rectdemo"')
+    # JOYDEMO.HTML paints on rAF
+    py.type_line('LOAD "JOYDEMO.HTML"')
     py.type_line("RUN")
+    fi = 0
+    while fi < 5:
+        py.frame_tick()
+        fi = fi + 1
     nz = sum(1 for b in m.canvas.front if b)
     if nz < 50:
-        print("FAIL PYTHON RUN RECTDEMO empty", nz)
+        print("FAIL PYTHON RUN JOYDEMO empty", nz)
         return 1
-    if not getattr(m, "_keep_fb", False):
-        print("FAIL PYTHON keep_fb not set after RUN")
+    if not m.running and not getattr(m, "_keep_fb", False):
+        print("FAIL PYTHON JOYDEMO not running")
         return 1
-    print("OK PYTHON RUN keep-fb", nz)
+    print("OK PYTHON RUN JOYDEMO pixels", nz)
 
     # Product title: INVADERS.HTML compile-on-RUN (INVADERS.JS twin is retired)
     py.type_line("LOAD INVADERS.HTML")
@@ -425,7 +429,7 @@ def check_rtl_help_list_run() -> int:
 
         sim.type_line("DIR")
         st = _norm_glass(sim.screen_text())
-        if "RECTDEMO.JS" not in st and "INVADERS.HTML" not in st and "INVADERS.HTM" not in st:
+        if "JOYDEMO.HTML" not in st and "JOYDEMO.HTM" not in st and "INVADERS.HTML" not in st and "INVADERS.HTM" not in st:
             print("FAIL RTL DIR", repr(st)[-200:])
             return 1
         print("OK RTL DIR")
@@ -467,20 +471,21 @@ def check_rtl_help_list_run() -> int:
         sim._rpc("KEYBITS 0")
         print("OK RTL KEYBITS")
 
-        # RECTDEMO FB pixels
-        sim.type_line("LOAD RECTDEMO.JS")
+        # JOYDEMO.HTML FB pixels
+        sim.type_line("LOAD JOYDEMO.HTML")
         sim.type_line("RUN")
         for _ in range(100):
             sim._rpc("TICK")
         fb = sim._rpc("FB?")
         if not fb.startswith("FB 640 480 "):
-            print("FAIL RECTDEMO FB?", fb[:60])
+            print("FAIL JOYDEMO FB?", fb[:60])
             return 1
         raw = base64.b64decode(fb.split(None, 3)[3])
-        if sum(1 for b in raw if b) < 100:
-            print("FAIL RECTDEMO FB empty")
+        nz = sum(1 for b in raw if b)
+        if nz < 50:
+            print("FAIL JOYDEMO FB empty")
             return 1
-        print("OK RTL RUN RECTDEMO pixels")
+        print("OK RTL RUN JOYDEMO pixels")
         sim.hard_break()
         for _ in range(50):
             sim._rpc("TICK")
@@ -542,7 +547,7 @@ def check_rtl_help_list_run() -> int:
         sim._rpc("KEYBITS 0")
         print("OK RTL KEYBITS Fire")
 
-        # NEW: Up bit reaches RTL (keyUp native id 8; full CLIMB needs card→JSB load)
+        # NEW: Up bit reaches RTL (keyUp native id 8)
         sim._rpc("KEYBITS 1")  # JOY_UP
         st = sim._rpc("STATUS?")
         if "joy=1" not in st:
@@ -560,7 +565,7 @@ def check_rtl_help_list_run() -> int:
             return 1
         print("OK RTL Esc exits game")
 
-        # Remove duplicate early KEYBITS smoke if still above — keep RECTDEMO path's KEYBITS check
+        # Remove duplicate early KEYBITS smoke if still above — keep JOYDEMO path's KEYBITS check
         # Quoted LOAD — same as the GUI user: load "invaders" then RUN
         sim.type_line('LOAD "invaders"')
         st = _norm_glass(sim.screen_text())

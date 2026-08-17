@@ -40,9 +40,15 @@ MAX_VARS = PROGRAM_MAX_VARS
 STACK_DEPTH = 2048
 CALL_DEPTH = 128
 MAX_OBJECTS = 1024
-MAX_ARRAYS = 512
+# Two-tier arrays: leftover BRAM cannot hold 1024×128. Same 65536 × 64b
+# words as 1024×32+256×128; more short handles for nested map literals plus
+# wall/bean JSON clones (~1152), fewer long (bunker push still fits).
+MAX_ARRAYS_SHORT = 1536
+MAX_ARRAYS_LONG = 128
+MAX_ARRAYS = MAX_ARRAYS_SHORT + MAX_ARRAYS_LONG
 HEAP_SLOTS = MAX_OBJECTS  # Backward-compatible name for the object heap cap.
 OBJECT_SLOTS = 32
+ARRAY_SHORT_CAP = 32
 ARRAY_ELEMENTS = 128
 # One env per live call/closure. `new Ctor()` bodies that MAKE_FN keep that
 # ctor env for as long as those closures live (empty update/draw on instances).
@@ -51,6 +57,8 @@ ENV_SLOTS = 16
 RAF_QUEUE_DEPTH = 8
 TIMER_QUEUE_DEPTH = 64
 LISTENERS_PER_EVENT = 4
+# Independent bank (same leftover-BRAM width as objects). Do not share a
+# bump index with MAX_OBJECTS — that made obj+fn <= 1024.
 MAX_FUNCTIONS = MAX_OBJECTS
 CONSOLE_LOG_DEPTH = 256
 LOCAL_STORAGE_SLOTS = 64
@@ -274,6 +282,8 @@ class _ValueCallFrame:
     lexical_env: int
     function_handle: int
     constructor_value: int
+    # MAKE_FN in this activation captured the call env; do not free on RET.
+    env_escaped: bool = False
 
 
 @dataclass
@@ -386,6 +396,7 @@ class JsHwVm:
         self._value_regex: dict[int, tuple[str, bool, bool]] = {}
         self._value_arrays: List[Optional[List[int]]] = [None] * MAX_ARRAYS
         self._value_array_generations: List[int] = [1] * MAX_ARRAYS
+        self._value_array_long: List[bool] = [False] * MAX_ARRAYS
         self._value_envs: List[Optional[_ValueEnv]] = [None] * ENV_DEPTH
         self._value_env_generations: List[int] = [1] * ENV_DEPTH
         self._value_functions: List[Optional[_ValueFunction]] = [
@@ -501,6 +512,7 @@ class JsHwVm:
         self._value_regex = {}
         self._value_arrays = [None] * MAX_ARRAYS
         self._value_array_generations = [1] * MAX_ARRAYS
+        self._value_array_long = [False] * MAX_ARRAYS
         self._value_envs = [None] * ENV_DEPTH
         self._value_env_generations = [1] * ENV_DEPTH
         self._value_functions = [None] * MAX_FUNCTIONS
@@ -690,7 +702,11 @@ class JsHwVm:
         self, function: _ValueFunction, ip: int
     ) -> Optional[int]:
         for index, slot in enumerate(self._value_functions):
-            if slot is None and self._value_objects[index] is None:
+            # Functions and objects are different kinds (PYTHON lists are
+            # already separate). Do not require objects[index] is None —
+            # that shared the leftover-BRAM 1024 bump and faulted PACMAN
+            # at MAKE_FN while hundreds of object slots were still free.
+            if slot is None:
                 self._value_functions[index] = function
                 self._value_function_prototypes[index] = 0
                 return value_pack_tagged(
@@ -700,7 +716,7 @@ class JsHwVm:
                 )
         self._value64_collect((function.captured_env, function.bound_this))
         for index, slot in enumerate(self._value_functions):
-            if slot is None and self._value_objects[index] is None:
+            if slot is None:
                 self._value_functions[index] = function
                 self._value_function_prototypes[index] = 0
                 return value_pack_tagged(
@@ -714,26 +730,80 @@ class JsHwVm:
         )
         return None
 
-    def _value64_alloc_array(self, items: List[int], ip: int) -> Optional[int]:
+    def _value64_long_count(self) -> int:
+        n = 0
         for index, slot in enumerate(self._value_arrays):
             if slot is None:
-                self._value_arrays[index] = list(items)
-                return value_pack_tagged(
-                    VALUE_KIND_ARRAY,
-                    self._value_array_generations[index],
-                    index,
+                continue
+            if index >= MAX_ARRAYS_SHORT or self._value_array_long[index]:
+                n += 1
+        return n
+
+    def _value64_ensure_long(self, index: int, ip: int) -> bool:
+        """Promote a short-bank array in place (same handle). Overflow loud."""
+        if index >= MAX_ARRAYS_SHORT or self._value_array_long[index]:
+            return True
+        if self._value64_long_count() >= MAX_ARRAYS_LONG:
+            self._value64_fault(
+                f"long array overflow ({MAX_ARRAYS_LONG + 1} > "
+                f"{MAX_ARRAYS_LONG}) at IP {ip}"
+            )
+            return False
+        self._value_array_long[index] = True
+        return True
+
+    def _value64_alloc_array(
+        self,
+        items: List[int],
+        ip: int,
+        extra_roots: Optional[Iterable[int]] = None,
+    ) -> Optional[int]:
+        need_long = len(items) > ARRAY_SHORT_CAP
+        if need_long:
+            ranges = ((MAX_ARRAYS_SHORT, MAX_ARRAYS),)
+        else:
+            # Spill into the long-handle range when the short bank is full
+            # (nested map literals + JSON clones exceed the short bank).
+            ranges = (
+                (0, MAX_ARRAYS_SHORT),
+                (MAX_ARRAYS_SHORT, MAX_ARRAYS),
+            )
+        def _roots() -> List[int]:
+            roots = list(items)
+            if extra_roots is not None:
+                roots.extend(extra_roots)
+            return roots
+        if need_long and self._value64_long_count() >= MAX_ARRAYS_LONG:
+            self._value64_collect(_roots())
+            if self._value64_long_count() >= MAX_ARRAYS_LONG:
+                self._value64_fault(
+                    f"long array overflow ({MAX_ARRAYS_LONG + 1} > "
+                    f"{MAX_ARRAYS_LONG}) at IP {ip}"
                 )
-        # The popped elements are temporary roots until their new container
-        # owns them; collecting without them could reclaim live child handles.
-        self._value64_collect(items)
-        for index, slot in enumerate(self._value_arrays):
-            if slot is None:
-                self._value_arrays[index] = list(items)
-                return value_pack_tagged(
-                    VALUE_KIND_ARRAY,
-                    self._value_array_generations[index],
-                    index,
-                )
+                return None
+        def _try(lo: int, hi: int) -> Optional[int]:
+            for index in range(lo, hi):
+                if self._value_arrays[index] is None:
+                    use_long = need_long or index >= MAX_ARRAYS_SHORT
+                    if use_long and self._value64_long_count() >= MAX_ARRAYS_LONG:
+                        continue
+                    self._value_arrays[index] = list(items)
+                    self._value_array_long[index] = use_long
+                    return value_pack_tagged(
+                        VALUE_KIND_ARRAY,
+                        self._value_array_generations[index],
+                        index,
+                    )
+            return None
+        for lo, hi in ranges:
+            handle = _try(lo, hi)
+            if handle is not None:
+                return handle
+        self._value64_collect(_roots())
+        for lo, hi in ranges:
+            handle = _try(lo, hi)
+            if handle is not None:
+                return handle
         self._value64_fault(
             f"array heap overflow ({MAX_ARRAYS + 1} > {MAX_ARRAYS}) at IP {ip}"
         )
@@ -743,7 +813,8 @@ class JsHwVm:
         self, ip: int, extra_roots: Optional[Iterable[int]] = None
     ) -> Optional[int]:
         for index, slot in enumerate(self._value_objects):
-            if slot is None and self._value_functions[index] is None:
+            # Same split as alloc_function: object index != function index.
+            if slot is None:
                 self._value_objects[index] = {}
                 self._value_object_protos[index] = 0
                 return value_pack_tagged(
@@ -753,7 +824,7 @@ class JsHwVm:
                 )
         self._value64_collect(extra_roots)
         for index, slot in enumerate(self._value_objects):
-            if slot is None and self._value_functions[index] is None:
+            if slot is None:
                 self._value_objects[index] = {}
                 self._value_object_protos[index] = 0
                 return value_pack_tagged(
@@ -1009,6 +1080,7 @@ class JsHwVm:
         index = value_payload(handle)
         if kind == VALUE_KIND_ARRAY and index < MAX_ARRAYS:
             self._value_arrays[index] = None
+            self._value_array_long[index] = False
             generation = (self._value_array_generations[index] + 1) & 0xFFF
             self._value_array_generations[index] = generation or 1
         elif kind == VALUE_KIND_OBJECT and index < MAX_OBJECTS:
@@ -1030,6 +1102,42 @@ class JsHwVm:
             self._value_function_prototypes[index] = 0
             generation = (self._value_function_generations[index] + 1) & 0xFFF
             self._value_function_generations[index] = generation or 1
+
+    def _value64_mark_env_escaped(self) -> None:
+        """MAKE_FN captured this activation's env — RET must not recycle it."""
+        if not self._value_calls:
+            return
+        frame = self._value_calls[-1]
+        if frame.env_escaped:
+            return
+        self._value_calls[-1] = _ValueCallFrame(
+            return_ip=frame.return_ip,
+            base_sp=frame.base_sp,
+            this_value=frame.this_value,
+            lexical_env=frame.lexical_env,
+            function_handle=frame.function_handle,
+            constructor_value=frame.constructor_value,
+            env_escaped=True,
+        )
+
+    def _value64_leave_call_frame(self, frame: _ValueCallFrame) -> None:
+        """Pop one call: restore parent, free a non-escaping leaf env.
+
+        palK/drawPix alloc an env per CALL_USER. Without this, ENV_DEPTH
+        fills and GC runs tens of times per paint (PYTHON ~1 fps, FPGA-SIM
+        ~10M clocks/frame). Closures set env_escaped so finder/forEach keep
+        their captured env.
+        """
+        leaving = self._value_env
+        self._value_calls.pop()
+        self._value_this = frame.this_value
+        self._value_env = frame.lexical_env
+        if (
+            not frame.env_escaped
+            and value_kind(leaving) == VALUE_KIND_ENV
+            and leaving != frame.lexical_env
+        ):
+            self._value64_release_handle(leaving)
 
     def _value64_string_text(self, word: int, ip: int, op: Op) -> Optional[str]:
         if value_kind(word) != VALUE_KIND_STRING:
@@ -1463,7 +1571,13 @@ class JsHwVm:
             return out
         return None
 
-    def _value64_json_value(self, host, ip: int) -> Optional[int]:
+    def _value64_json_value(
+        self, host, ip: int, extra_roots: Optional[Iterable[int]] = None
+    ) -> Optional[int]:
+        # Sibling/ancestor handles live only in this Python walk until the
+        # parent array/object is allocated. GC during a nested alloc must
+        # mark them or JSON.parse rows get swept (stale generation).
+        held = list(extra_roots) if extra_roots is not None else []
         if host is None:
             return value_pack_tagged(VALUE_KIND_NULL)
         if isinstance(host, bool):
@@ -1475,11 +1589,11 @@ class JsHwVm:
         if isinstance(host, list):
             items = []
             for item in host:
-                value = self._value64_json_value(item, ip)
+                value = self._value64_json_value(item, ip, held + items)
                 if value is None:
                     return None
                 items.append(value)
-            return self._value64_alloc_array(items, ip)
+            return self._value64_alloc_array(items, ip, held)
         if isinstance(host, dict):
             if len(host) > OBJECT_SLOTS:
                 self._value64_fault(
@@ -1487,15 +1601,15 @@ class JsHwVm:
                 )
                 return None
             fields = []
+            built: List[int] = []
             for key, item in host.items():
                 key_value = self._value64_interned_string(str(key), ip)
-                value = self._value64_json_value(item, ip)
+                value = self._value64_json_value(item, ip, held + built)
                 if key_value is None or value is None:
                     return None
                 fields.append((value_payload(key_value), value))
-            handle = self._value64_alloc_object(
-                ip, (value for _key, value in fields)
-            )
+                built.extend((key_value, value))
+            handle = self._value64_alloc_object(ip, held + built)
             if handle is None:
                 return None
             obj = self._value_objects[value_payload(handle)]
@@ -1609,6 +1723,11 @@ class JsHwVm:
                 "_sy": 1.0,
                 "_saved": None,
             }
+            # NEW: ctx.imageSmoothingEnabled default true; indexed blit is nearest
+            smooth_name = self._value64_interned_string("imageSmoothingEnabled", ip)
+            obj = self._value_objects[ctx_slot]
+            if smooth_name is not None and obj is not None:
+                obj[value_payload(smooth_name)] = value_pack_number(1)
             return handle
         if builtin == BUILTIN_DATE or method in (
             "toISOString",
@@ -1847,6 +1966,10 @@ class JsHwVm:
                         f"{ARRAY_ELEMENTS} at IP {ip}"
                     )
                     return None
+                if len(array) + len(args) > ARRAY_SHORT_CAP:
+                    idx = value_payload(receiver)
+                    if not self._value64_ensure_long(idx, ip):
+                        return None
                 array.extend(args)
                 return value_pack_number(len(array))
             if method == "pop":
@@ -1860,6 +1983,10 @@ class JsHwVm:
                         f"{ARRAY_ELEMENTS} at IP {ip}"
                     )
                     return None
+                if len(array) + len(args) > ARRAY_SHORT_CAP:
+                    idx = value_payload(receiver)
+                    if not self._value64_ensure_long(idx, ip):
+                        return None
                 array[0:0] = args
                 return value_pack_number(len(array))
             if method in ("slice", "splice"):
@@ -1884,6 +2011,10 @@ class JsHwVm:
                         f"array length exceeds {ARRAY_ELEMENTS} at IP {ip}"
                     )
                     return None
+                if len(array) - count + len(replacement) > ARRAY_SHORT_CAP:
+                    idx = value_payload(receiver)
+                    if not self._value64_ensure_long(idx, ip):
+                        return None
                 deleted = array[start : start + count]
                 array[start : start + count] = replacement
                 return self._value64_alloc_array(deleted, ip)
@@ -1913,30 +2044,44 @@ class JsHwVm:
                         return undefined
                     acc = array[0]
                     start = 1
-                for index, element in enumerate(list(array)):
-                    if index < start:
-                        continue
-                    invoke_args = (
-                        [acc, element, value_pack_number(index), receiver]
-                        if method == "reduce"
-                        else [element, value_pack_number(index), receiver]
-                    )
-                    result = self._value64_invoke_function(function, invoke_args)
-                    if result is None:
-                        return None
-                    if method == "map":
-                        mapped.append(result)
-                    elif method == "filter":
-                        if self._value64_truthy(result):
-                            mapped.append(element)
-                    elif method == "find" and self._value64_truthy(result):
-                        found = element
-                        break
-                    elif method == "findIndex" and self._value64_truthy(result):
-                        found_index = value_pack_number(index)
-                        break
-                    elif method == "reduce":
-                        acc = result
+                saved_roots = self._value_dispatch_roots
+                self._value_dispatch_roots = list(saved_roots)
+                try:
+                    for index, element in enumerate(list(array)):
+                        if index < start:
+                            continue
+                        invoke_args = (
+                            [acc, element, value_pack_number(index), receiver]
+                            if method == "reduce"
+                            else [element, value_pack_number(index), receiver]
+                        )
+                        result = self._value64_invoke_function(
+                            function, invoke_args
+                        )
+                        if result is None:
+                            return None
+                        if method == "map":
+                            mapped.append(result)
+                        elif method == "filter":
+                            if self._value64_truthy(result):
+                                mapped.append(element)
+                        elif method == "find" and self._value64_truthy(result):
+                            found = element
+                            break
+                        elif method == "findIndex" and self._value64_truthy(
+                            result
+                        ):
+                            found_index = value_pack_number(index)
+                            break
+                        elif method == "reduce":
+                            acc = result
+                        # map/filter results are only in `mapped` until alloc.
+                        self._value_dispatch_roots = [
+                            *saved_roots,
+                            *mapped,
+                        ]
+                finally:
+                    self._value_dispatch_roots = saved_roots
                 if method in ("map", "filter"):
                     return self._value64_alloc_array(mapped, ip)
                 if method == "find":
@@ -2183,9 +2328,14 @@ class JsHwVm:
         )
 
     def _execute_value64_words(
-        self, max_steps: int = 1_000_000, *, start_ip: int = 0, top_level: bool = True
+        self, max_steps: int = 8_000_000, *, start_ip: int = 0, top_level: bool = True
     ) -> None:
-        """Fetch packed opcodes and 64-bit constants from finite code BRAM."""
+        """Fetch packed opcodes and 64-bit constants from finite code BRAM.
+
+        8M is a runaway fuse (true infinite still trips). One rAF paint of a
+        24×26 tile field plus per-pixel sprite palK if-chains is ~2M ops —
+        the old 1M cap false-triggered after init queued rAF.
+        """
         const_base = 4 if (self.flags & FLAG_ASET) else 3
         ip = start_ip
         steps = 0
@@ -2203,9 +2353,7 @@ class JsHwVm:
                         f"(sp {len(self._value_stack)} != base {frame.base_sp})"
                     )
                     return
-                self._value_calls.pop()
-                self._value_this = frame.this_value
-                self._value_env = frame.lexical_env
+                self._value64_leave_call_frame(frame)
                 if frame.return_ip < 0:
                     self._value_callback_result = undefined
                     return
@@ -2535,6 +2683,10 @@ class JsHwVm:
                             f"at IP {op_ip}"
                         )
                         return
+                    if index >= ARRAY_SHORT_CAP:
+                        idx = value_payload(handle)
+                        if not self._value64_ensure_long(idx, op_ip):
+                            return
                     undefined = value_pack_tagged(VALUE_KIND_UNDEFINED)
                     if index >= len(array):
                         array.extend([undefined] * (index - len(array) + 1))
@@ -2727,6 +2879,10 @@ class JsHwVm:
                         )
                         return
                     undefined = value_pack_tagged(VALUE_KIND_UNDEFINED)
+                    if length > ARRAY_SHORT_CAP:
+                        idx = value_payload(handle)
+                        if not self._value64_ensure_long(idx, op_ip):
+                            return
                     del array[length:]
                     if len(array) < length:
                         array.extend([undefined] * (length - len(array)))
@@ -3132,6 +3288,7 @@ class JsHwVm:
                 handle = self._value64_alloc_function(function, op_ip)
                 if handle is None or not self._value64_push(handle):
                     return
+                self._value64_mark_env_escaped()
             elif op == Op.CALL_USER:
                 if len(self._value_calls) >= CALL_DEPTH:
                     self._value64_fault(
@@ -3253,9 +3410,7 @@ class JsHwVm:
                         f"(sp {len(self._value_stack)} != base {frame.base_sp})"
                     )
                     return
-                self._value_calls.pop()
-                self._value_this = frame.this_value
-                self._value_env = frame.lexical_env
+                self._value64_leave_call_frame(frame)
                 return_value = (
                     frame.constructor_value
                     if value_kind(frame.constructor_value) == VALUE_KIND_OBJECT

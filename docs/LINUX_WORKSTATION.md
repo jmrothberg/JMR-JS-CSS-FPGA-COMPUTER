@@ -13,7 +13,7 @@ this workstation builds the **JS** machine on Nexys Video. Do not flash the
 T200 board to debug gaps that FPGA-SIM has not passed.
 
 **No cheats:** product = HTML/JS native CPU (FPGA → ASIC). dukpy/host twin are
-not the machine. Great graphics ride the `.JSH` ASET section into the
+not the machine. Great graphics ride the ProgramImage ASET section into the
 external SRAM asset bank on RUN (no `NAME.DAT` file).
 See `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`.
 
@@ -26,7 +26,7 @@ Live detail: [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
 | Layer | Status |
 |---|---|
 | Constitution + Cursor rules | Done (no-dukpy native CPU) |
-| PYTHON FM / GUI F9 | Letterbox; titles = `*.HTML` **compile-on-RUN** (ASET → asset SRAM; dukpy / stale `.JSH` = debt) |
+| PYTHON FM / GUI F9 | Letterbox; titles = `*.HTML` **compile-on-RUN** (ASET → asset SRAM; dukpy = debt) |
 | FPGA-SIM (real Verilator RTL) | Same `LOAD HTML` / `RUN` = compile current HTML; host twin forbidden |
 | Host twin as “FPGA-SIM” | **Forbidden** unless `JMR_SIM_HOST=1` (debug only) |
 | Battery `check_runtime_parity.py` | Must PASS (`.venv/bin/python`) before any flash |
@@ -43,13 +43,14 @@ Live detail: [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
 | `LIST 10-20` / `LIST n` | Range / single display line |
 | `EDIT n` | Show line; next Enter replaces it |
 | `CLS` | Clear glass |
-| `RUN` | **Compile-on-RUN** → JMR bytecode VM (fresh `.JSH`, code + ASET art). Not dukpy / not stale sidecar. |
+| `RUN` | **Compile-on-RUN** → JMR bytecode VM (in-memory ProgramImage, code + ASET art). Not dukpy. |
 
 ### Play controls
 
 - **Arrows + Space** (and Up/Down as the HTML binds). Mouse stick **off**.
 - KEYBITS: Up=1 Down=2 Left=4 Right=8 Fire=16. BOARD: GUI → PROG `0xFE`+bits.
-- One glass: letterbox text at READY; full FB while a game RUNs (feature).
+- One glass: letterbox text at READY; **full 640×480 FB** while a game RUNs.
+  Titles fill the field. Do not letterbox a smaller arcade raster inside the game.
 
 Do not invent LUT counts — copy [FPGA_FIT.md](FPGA_FIT.md).
 Flash only after battery PASS and timing WNS ≥ 0.

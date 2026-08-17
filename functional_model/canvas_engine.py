@@ -388,7 +388,11 @@ class CanvasEngine:
         dw: int,
         dh: int,
     ) -> None:
-        """Nearest-neighbor blit; skip index 0 (transparent)."""
+        """Nearest-neighbor blit; skip index 0 (transparent).
+
+        NEW: ctx.imageSmoothingEnabled = false is this path. Indexed 8-bpp
+        glass has no bilinear filter — true/false both nearest-neighbor.
+        """
         if sw <= 0 or sh <= 0 or dw <= 0 or dh <= 0 or iw <= 0 or ih <= 0:
             return
         self.dirty = True

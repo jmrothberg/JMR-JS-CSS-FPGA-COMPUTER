@@ -24,11 +24,13 @@ RUN
 | Pac-Man | `PACMAN.HTML` | compile → ephemeral ProgramImage (code + ASET art) |
 | Donkey Kong | `DONKEY.HTML` | compile → ephemeral ProgramImage (code + **full-res** ASET art) |
 | Asteroids (library) | `ASTEROID.HTML` | compile → ephemeral ProgramImage (vector stroke; no ASET) |
+| Aurora (library) | `AURORA.HTML` | compile → ephemeral ProgramImage (fillRect; no ASET) |
+| Joystick (library) | `JOYDEMO.HTML` | compile → ephemeral ProgramImage (stick + arrows; no ASET) |
+| Mr. Do! (library) | `MRDO.HTML` | compile → ephemeral ProgramImage (portrait 384×480 in 640×480 letterbox; no ASET) |
 
 **Compile-on-RUN (hard):** source of truth = loaded `.HTML` (editor line
 numbers). `RUN` **always** recompiles into one versioned in-memory
-**ProgramImage**. `.JSB` / `.JSH` files are not product programs, are never a
-LOAD name, and are never persisted or preferred by a runtime.
+**ProgramImage**. No sidecar compile file on disk or on the card.
 
 **Asset bank (external SRAM — no `NAME.DAT`):** great graphics stay at full
 quality. `RUN` emits `data:image` art (per-title 256-entry palette +
@@ -40,13 +42,12 @@ BRAM or downscale them to fit.
 
 **Code debt (2026-08-13):** ASET/asset-bank path is **in progress**.
 Historic trap: `tools/compile_js.py` `_extract_data_uri_sprites` packed
-pixels into `.JSH` and downscaled (`w*h > 180000`) with an 8-color palette.
+pixels into the ProgramImage and downscaled (`w*h > 180000`) with an 8-color palette.
 PYTHON compile-on-RUN **is** default. Full-game PYTHON ↔ FPGA-SIM match is
 **not** done.
 
-Same-stem `NAME.JS` / `NAME.JSB` are **legacy demos**, not product twins.
-Optional smoke demos with other names: `RECTDEMO`, `JOYDEMO`, `CLIMB`.
-Upstream trees: `storage/games_*` (not DIR / not card).
+Same-stem `NAME.JS` / `NAME.JSB` are **legacy**, not product twins.
+`storage/games_*` (not DIR / not card).
 
 ```text
 LOAD "INVADERS.HTML"
@@ -267,8 +268,10 @@ Only `"2d"`. `"webgl"` is never.
 | `fillStyle` (hex/named) | P0 | all | Complete |
 | `drawImage` (3/5/9 arg) | P0 | INVADERS, DONKEY | Complete |
 | `beginPath` / `moveTo` / `lineTo` / `arc` / `fill` / `stroke` | P1 | PACMAN, INVADERS | Complete |
+| `closePath` | P1 | PACMAN, MRDO | Complete |
 | `quadraticCurveTo` | P1 | PACMAN | Complete |
 | `strokeStyle` / `lineWidth` | P1 | PACMAN, INVADERS | Complete |
+| `imageSmoothingEnabled` | P1 | DONKEY, MRDO | Complete (false = nearest; indexed FB has no bilinear) |
 | `fillText` | P0 | all HUDs | Complete |
 | `measureText` | P1 | PACMAN, DONKEY | Complete |
 | `font` / `textAlign` / `textBaseline` | P1 | PACMAN, DONKEY | Complete |
@@ -287,7 +290,7 @@ let JS resize HDMI; glass stays 640×480.
 
 | API | Pri | Status | Why skip |
 |---|---|---|---|
-| `strokeRect`, `closePath`, `clip` | P2 | never | Not in frozen three-compile list as required |
+| `strokeRect`, `clip` | P2 | never | Stroke four `lineTo`s or `fillRect` borders; `closePath` is Complete |
 | `scale()` (separate from `setTransform`) | P2 | never | DONKEY uses `setTransform` |
 | `bezierCurveTo`, `ellipse` | P2 | never | PACMAN uses `arc` + quadratic |
 | Gradients / patterns / shadows / filters | P2 | never | Heavy; not in titles |
@@ -305,7 +308,7 @@ do not add RTL-only commands.
 
 | Command | Pri | Status | Notes |
 |---|---|---|---|
-| `DIR` | P0 | Complete | Names only; hide `.JSH` |
+| `DIR` | P0 | Complete | Names only (HTML / optional `.JS`) |
 | `LOAD "NAME.HTML"` | P0 | Complete | Quotes optional |
 | `RUN` | P0 | Complete | Verb works (compile-on-RUN). HTML titles not playable is Canvas/JS TBD, not this row. |
 | `LIST` / `LIST n-m` / MORE | P0 | Complete | HTML line numbers |
@@ -317,7 +320,7 @@ do not add RTL-only commands.
 
 | Item | Pri | Status | Don’t |
 |---|---|---|---|
-| Compile-on-RUN → ephemeral ProgramImage | P0 | Complete | Persist/prefer `.JSH` as the game. On-chip compiler is still TBD (host compile today). |
+| Compile-on-RUN → ephemeral ProgramImage | P0 | Complete | Do not write a sidecar file. On-chip compiler is still TBD (host compile today). |
 | ASET → external 4 MB SRAM | P0 | Complete | Downscale for code BRAM; `NAME.DAT` |
 | Dual FB 640×480 | P0 | Complete | 160×120 leftover |
 
@@ -431,7 +434,7 @@ values are one 64-bit word.
 
 | Feature / API | PYTHON (bytecode VM) | FPGA-SIM (RTL VM) | FPGA board |
 |---|---|---|---|
-| `LOAD` `.HTML` + `RUN` | **required** compile-on-RUN (dukpy / stale `.JSH` = debt) | grow until match (no `?NH`) | same as flashed bit |
+| `LOAD` `.HTML` + `RUN` | **required** compile-on-RUN (dukpy = debt) | grow until match (no `?NH`) | same as flashed bit |
 | numbers / bool / strings | grow to HTML needs | grow | grow |
 | `let` / arithmetic / `if` / loops | grow | grow | grow |
 | arrays / objects / `this` / classes / functions | **required for HTML titles** | **required** (gap until done) | same |
@@ -467,12 +470,17 @@ Columns mean **JMR VM parity**, never “dukpy can do it so PYTHON is done.”
 - `drawImage` for ship/invader PNGs; audio `play()` stubs
 - DOM `button.click` to skip a CSS START menu
 
-### What INVADARC still forces onto the queue
+### What MRDO.HTML forces onto the queue
 
-- Objects, arrays, timers, `getContext`, `fillRect`/`fillText`, Space+Left/Right
-- Pause key (letter **P**) vs machine Esc
-- Score / lives / wave HUD (`fillText` or future CSS)
-- Optional persisted hi-score (`localStorage` beyond in-memory)
+Library title (not ISA freeze). Universal 1982 arcade rules from StrategyWiki /
+Wikipedia / KLOV — **portrait 384×480** (2× 192×240) centered in 640×480
+with black side letterbox, matching the vertical cabinet.
+
+- Tile dirt grid + 4-way dig; cherries in 2×4 groups; six apples that crush
+- Bouncing power ball (reform delay grows; prize resets it)
+- Red creeps → striped drillers; center prize → freeze + Alphamonster + 3 Munchers
+- EXTRA pen (letter every 5000); four clear conditions including diamond
+- Pixel `fillRect` sprites; `imageSmoothingEnabled = false`; HUD on Canvas
 
 ### What FPGA-SIM has today (board after next matching flash)
 
@@ -502,6 +510,10 @@ still has Invaders hex / 160×120 FB only.
 | CSS (game HUD) | wanted | wanted | wanted | later tiny subset |
 | Audio | stub | stub | stub | later |
 | WebGL / Fetch | no | no | no | NEVER |
+
+Library HTML (`ASTEROID`, `AURORA`, `JOYDEMO`, `MRDO`) uses the same V1 surface. MRDO is a
+**portrait** 384×480 tile title (side letterbox on 640×480). Do not stretch
+the cabinet raster.
 
 ---
 
@@ -565,7 +577,8 @@ RTL `fillText` is a 64×8 rect stub).
 | Op | Titles | Status |
 |---|---|---|
 | `fillRect` / `clearRect` / `drawImage` / `setTransform` | INVADERS / DONKEY | done |
-| `beginPath` / `moveTo` / `lineTo` / `arc` / `stroke` / `fill` / `quadraticCurveTo` | PACMAN (+ INVADERS arc) | done |
+| `beginPath` / `moveTo` / `lineTo` / `arc` / `stroke` / `fill` / `quadraticCurveTo` / `closePath` | PACMAN (+ INVADERS arc) | done |
+| `imageSmoothingEnabled` | DONKEY, MRDO | done (nearest blit; false stored) |
 | `fillText` / `measureText` | PACMAN, DONKEY, INVADERS HUD | **never** Chrome font — 8×8 / rect stub (HM `fillText`/`measureText` tests exist) |
 | `getImageData` / `putImageData` | PACMAN map cache | done |
 | `lineWidth` / `strokeStyle` | PACMAN | done |
@@ -586,18 +599,21 @@ Play-blocking gaps get **one pytest per gap** in `tests/test_bytecode_js.py`
 |---|---|
 | `storage/INVADERS.HTML` / `PACMAN.HTML` / `DONKEY.HTML` | **Product titles** (LOAD these; ISA freeze) |
 | `storage/ASTEROID.HTML` | Library title (vector Asteroids). Authoring: [GAME_DESIGN.md](GAME_DESIGN.md) |
+| `storage/AURORA.HTML` | Library title (fillRect gem hopper) |
+| `storage/MRDO.HTML` | Library title (Mr. Do! arcade). Portrait 384×480 letterbox; [GAME_DESIGN.md](GAME_DESIGN.md) |
 | In-memory ProgramImage | Compile-on-RUN code + source map + descriptors + ASET; never a storage name |
-| `storage/RECTDEMO.JS` / `JOYDEMO.JS` / `CLIMB.JS` | Optional differently named VM smoke |
+| `storage/JOYDEMO.HTML` | Library smoke (joystick / arrows on Canvas) |
 | `storage/games_*` | Upstream archive only |
 
 ## Host notes (PYTHON)
 
 - **Product path:** `functional_model/` **bytecode VM** — **compile-on-RUN**
   from loaded HTML (ephemeral ProgramImage; full-quality art → ASET section →
-  FM asset-SRAM model). Persisting or preferring a `.JSB` / `.JSH` sidecar, or
+  FM asset-SRAM model). Writing a compile sidecar, or
   using dukpy in `js_host.py`, is **debt to remove**, not truth.
 - Use **`.venv`** (Pillow for `drawImage` on the Canvas engine).
-- Playable HTML titles declare `<canvas width="640" height="480">`; glass is
-  640×480 (DONKEY still `setTransform`s its internal world).
+- Playable HTML titles declare `<canvas width="640" height="480">` and **fill**
+  that field. READY letterbox is console text only. Do not letterbox a smaller
+  arcade raster inside 640×480. DONKEY may `setTransform` its own world.
 - Esc remains machine quit (games must not steal Esc).
 - Never claim FPGA-SIM/BOARD done because Chrome or dukpy painted.

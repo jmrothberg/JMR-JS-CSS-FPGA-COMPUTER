@@ -14,17 +14,17 @@ commands, JS/Canvas surface, disk names, errors, READY/prompt, glass text):
 4. **ASIC** later — only after board honesty
 
 **No dukpy cheat.** PYTHON truth means the JMR VM running **compile-on-RUN**
-from the loaded HTML (fresh internal `.JSH`), not Duktape and not a stale
-disk sidecar. See `no-dukpy-cheat-native-cpu`.
+from the loaded HTML (in-memory ProgramImage), not Duktape and not a disk
+sidecar. See `no-dukpy-cheat-native-cpu`.
 
 ## Vendored HTML titles MUST RUN (Constitution mandate)
 
 - `INVADERS.HTML`, `PACMAN.HTML`, `DONKEY.HTML` — user types only
-  `LOAD "NAME.HTML"` / `RUN`. **`RUN` always recompiles** current HTML;
-  `.JSH` is invisible output (never prefer an old file). **The asset bank**
+  `LOAD "NAME.HTML"` / `RUN`. **`RUN` always recompiles** current HTML into
+  an in-memory ProgramImage. **The asset bank**
   (full-quality `data:image` graphics → ASET section → external SRAM) is
   part of compile-on-RUN on **all three** runtimes — see
-  `no-dukpy-cheat-native-cpu`. No `NAME.DAT` file.
+  `no-dukpy-cheat-native-cpu`. No `NAME.DAT` file. No `.JSH` on disk.
 - Must LOAD + RUN playable on **PYTHON then FPGA-SIM** via **bytecode**,
   **looking and playing the same** (full game). Board only after user F9
   approval. `?NH` is temporary tracked debt, never done.

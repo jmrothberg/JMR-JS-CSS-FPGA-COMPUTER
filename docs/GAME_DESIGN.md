@@ -38,6 +38,12 @@ That seeds the FAT image from `storage/` root files (8.3 names on the card).
 
 - Native canvas is **640×480**. Declare it in markup:
   `<canvas id="…" width="640" height="480"></canvas>`
+- **Games fill that field.** Do not letterbox a smaller arcade raster
+  (192×240, 224×256, …) with side gutters to “preserve cabinet aspect.”
+  READY console letterbox is monitor text only. After `RUN`, the title
+  owns every pixel. Scale play (tiles, sprites, HUD) to 640×480.
+- `setTransform` is for a title’s own world (DONKEY) if it needs one — not
+  a rule to keep original-resolution bars.
 - Do **not** assign `canvas.width` / `canvas.height` after load (that
   clears the bitmap and fights HDMI).
 - Draw the whole game on Canvas, including score / lives / attract text
@@ -69,8 +75,9 @@ Stay on the **Complete** rows in the compatibility checklist. In particular:
 | `Math.floor` `abs` `min` `max` `random` `sqrt` `Math.PI` | `Math.sin` `cos` `atan2` (not V1 natives — use a lookup table) |
 | `requestAnimationFrame`, `setTimeout` | `Audio` / `.play()` (stub / never) |
 | `getContext("2d")`, `fillRect`, `clearRect`, `fillStyle` | `getContext("webgl")`, gradients, filters |
-| `beginPath` `moveTo` `lineTo` `arc` `stroke` `fill` | `scale()` as a separate call; prefer `setTransform` if you must |
-| `strokeStyle` `lineWidth` `save` `restore` `translate` `rotate` | shadows, `globalCompositeOperation` |
+| `beginPath` `moveTo` `lineTo` `arc` `stroke` `fill` `closePath` | `scale()` as a separate call; prefer `setTransform` if you must |
+| `strokeStyle` `lineWidth` `save` `restore` `translate` `rotate` | shadows, `globalCompositeOperation`, `strokeRect` |
+| `imageSmoothingEnabled = false` | bilinear / filtered upscale (indexed FB is nearest) |
 | `fillText` (8×8 bitmap on the machine, not TTF) | CSS layout, overlay DOM score |
 | `drawImage` / `Image` + `data:image` (ASET → external SRAM) | packing fat art into code, downscaling to “fit BRAM” |
 
@@ -89,11 +96,16 @@ fit, same as every other `NAME.HTML`.
 
 ## Disk names
 
-Host file: `storage/NAME.HTML` (stem ≤ 8 letters so the board 8.3 name stays
-obvious, e.g. `ASTEROID.HTML` → `ASTEROID.HTM`). If the stem is longer,
-add a `CARD_NAME_MAP` entry in `tools/make_sd_image.py`.
+Put `storage/NAME.HTML` in the storage folder (stem ≤ 8 letters so the board
+8.3 name stays obvious: `ASTEROID.HTML` → `ASTEROID.HTM`).
+`python3 tools/make_sd_image.py create card.img` scans `storage/` and copies
+what is there. There is no title list to edit.
 
-`LOAD` uses the HTML name. Never `LOAD` a `.JSH`.
+`LOAD` uses the HTML name. The card is HTML only.
+
+Library example: `MRDO.HTML` is a portrait 384×480 playfield (2× arcade
+192×240) centered in 640×480 with black side letterbox. Tunnels are one
+character wide (32px).
 
 ---
 
@@ -101,7 +113,7 @@ add a `CARD_NAME_MAP` entry in `tools/make_sd_image.py`.
 
 1. Self-contained `storage/NAME.HTML`, 640×480 canvas, keys in the file.
 2. Chrome opens it (authoring look only).
-3. `python3 tools/compile_js.py --html storage/NAME.HTML` succeeds.
+3. `python3 tools/compile_js.py --html storage/NAME.HTML` succeeds (in memory; no sidecar file).
 4. `python3 tools/make_sd_image.py create card.img` lists the 8.3 name.
 5. PYTHON `LOAD` + `RUN` plays. FPGA-SIM then board follow the usual
    ladder — do not claim silicon from Chrome.

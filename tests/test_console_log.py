@@ -44,22 +44,21 @@ def test_list_long_data_uri_pages_to_mark():
     assert "data:image" in blob or "AAAA" in blob
 
 
-def test_dir_and_load_rectdemo():
+def test_dir_and_load_joydemo():
     m = Machine()
     c = Console(m)
     c.boot()
     names = m.storage.catalog()
-    assert "RECTDEMO.JS" in names
+    assert "JOYDEMO.HTML" in names
     out = c.handle_line("DIR")
-    assert any(x == "RECTDEMO.JS" or x.endswith("RECTDEMO.JS") for x in out)
-    # PYTHON DIR is names only — no "1  RECTDEMO.JS"
+    assert any(x == "JOYDEMO.HTML" or x.endswith("JOYDEMO.HTML") for x in out)
     for row in out:
-        if "RECTDEMO" in row:
+        if "JOYDEMO" in row:
             assert not row[:1].isdigit() or not row[1:2].isspace(), row
-    out = c.handle_line("LOAD RECTDEMO.JS")
+    out = c.handle_line("LOAD JOYDEMO.HTML")
     assert out[0].startswith("LOADED")
-    out = c.handle_line("RUN")
-    assert any("HELLO FROM CARD" in x or "RECT DEMO" in x for x in out)
+    c.handle_line("RUN")
+    assert m.running
 
 
 def test_dir_names_only_hides_jsb():
@@ -144,14 +143,14 @@ def test_python_backend_more_waiting():
 
 def test_load_html_reports_line_count():
     m = Machine()
-    out = m.execute_line('LOAD "RECTDEMO.JS"')
+    out = m.execute_line('LOAD "JOYDEMO.HTML"')
     assert out[0].startswith("LOADED"), out
     assert "LINES" in out[0], out[0]
 
 
 def test_list_after_run_still_source_not_bytecode():
     m = Machine()
-    m.execute_line('LOAD "RECTDEMO.JS"')
+    m.execute_line('LOAD "JOYDEMO.HTML"')
     src0 = list(m.source_lines)
     m.execute_line("RUN")
     assert m.source_lines == src0
@@ -335,7 +334,7 @@ def test_python_sim_dir_load_list_shape():
 
 def test_save_after_load_roundtrip_line_count():
     m = Machine()
-    m.execute_line('LOAD "RECTDEMO.JS"')
+    m.execute_line('LOAD "JOYDEMO.HTML"')
     n0 = len(m.source_lines)
     m.execute_line('SAVE "savetest.js"')
     m.execute_line("NEW")

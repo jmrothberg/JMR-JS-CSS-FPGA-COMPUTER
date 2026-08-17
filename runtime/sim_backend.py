@@ -114,7 +114,7 @@ class SimBackend(RuntimeBackend):
         env = os.environ.copy()
         env["JMR_STANDALONE"] = env.get("JMR_STANDALONE", "1")
         # NEW: always the project card.img (sim_main prefers ../card.img from
-        # sim/ cwd — a stale root image used to hide INVADERS.JSH → ?NH)
+        # sim/ cwd — a stale root image used to hide a missing HTML compile path → ?NH)
         env.setdefault("JMR_CARD_IMG", str(ROOT / "card.img"))
         # NEW: keep stderr separate — RTL prints "SD image …" on cerr; merging
         # into stdout used to steal the READY handshake (fake/broken SIM start).
@@ -528,7 +528,7 @@ class SimBackend(RuntimeBackend):
         ):
             nbytes = len(self._program_image)
             clocks = max(40_000_000, nbytes * 200)
-            # NEW: TICKN 20000 = 20M clocks/RPC (cap 100000). Fat .JSH was
+            # NEW: TICKN 20000 = 20M clocks/RPC (cap 100000). Fat ProgramImage was
             # 236× TICKN 2000 RPCs after LINE's 100M cap — minutes of overhead.
             slices = max(1, (clocks + 19_999_999) // 20_000_000)
             self._break_run_wait = False
@@ -554,13 +554,20 @@ class SimBackend(RuntimeBackend):
         if upper.startswith("LOAD"):
             # Host log is chronological: `> LOAD` then this reply, never a
             # SCREEN merge that can place LOADED above an older `> run`.
-            self._rpc("SCREEN?")
+            # SCREEN VRAM is 16 rows and keeps the first LOADED until CLS/RUN,
+            # so do not parse glass for the name — use the file just loaded.
             loaded = ""
-            for ln in self._screen.splitlines():
-                s = ln.strip()
-                if s.startswith("LOADED"):
-                    loaded = s
-                    break
+            if self._html_lines:
+                stem = self._html_loaded_stem()
+                html_path = ROOT / "storage" / f"{stem}.HTML"
+                if not html_path.is_file():
+                    html_path = ROOT / "storage" / f"{stem}.HTM"
+                name = (
+                    html_path.name.upper()
+                    if html_path.is_file()
+                    else (self._loaded_name or "").upper()
+                )
+                loaded = f"LOADED {name} ({len(self._html_lines)} LINES)"
             if loaded:
                 self._typed_log.append(loaded)
             if not self._typed_log or self._typed_log[-1] != "READY":

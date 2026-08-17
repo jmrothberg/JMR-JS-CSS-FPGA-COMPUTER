@@ -834,7 +834,12 @@ class VM:
                 cls_name = obj.get("__class")
                 # NEW: canvas.getContext("2d") → Canvas2D stub for HTML titles
                 if cls_name == "Element" and meth == "getContext":
-                    self.stack.append({"__class": "Canvas2D", "fillStyle": "#000000"})
+                    # NEW: imageSmoothingEnabled default true (browser); blit is nearest
+                    self.stack.append({
+                        "__class": "Canvas2D",
+                        "fillStyle": "#000000",
+                        "imageSmoothingEnabled": 1,
+                    })
                     continue
                 if cls_name == "Element" and meth == "click":
                     # NEW: fire global "click" listeners (start button)

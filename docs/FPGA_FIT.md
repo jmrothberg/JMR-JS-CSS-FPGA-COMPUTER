@@ -43,10 +43,11 @@ win.
   LUTRAM for megabit arrays, shrinking HTML to fit.
 - **Capacity:** T200 ≈ **365** RAMB36 ≈ **1.64 MB**. Dual 640×480×8 FB ≈
   **0.6 MB**. Leftover ≈ **1 MB** for code + JS heap + console. Legal slot
-  BRAMs: `MAX_OBJ=1024` × 32 × 80b ≈ 320 KB plus `MAX_ARR=512` × `ARR_CAP=128`
-  × 64b ≈ 512 KB plus `ENV_DEPTH=512` × 16 × 80b `venv_slot` ≈ 80 KB
-  (PYTHON `hardware_model/js_vm.py` matches). Ten live nested number-array
-  maps need >256 arrays; env depth 512 is the BRAM trade. The 8192 / 4096
+  BRAMs: `MAX_OBJ=1024` × 32 × 80b ≈ 320 KB plus two-tier arrays
+  (`1536×32` + `128×128`) × 64b ≈ 512 KB plus `ENV_DEPTH=512` × 16 × 80b
+  `venv_slot` ≈ 80 KB (PYTHON `hardware_model/js_vm.py` matches). Nested
+  number-array maps plus JSON clones need ~1152 short arrays; bunker-class
+  `push` past 32 uses the long bank (same handle). The 8192 / 4096
   / 128 depths were ~**7 MB** — same class of fake as combo 2-D (Verilator
   runs; the chip cannot). Overflow loud. External **4 MB** SRAM is **ASET
   art only** — do not put JS heap there or bump that bank to 8 MB.

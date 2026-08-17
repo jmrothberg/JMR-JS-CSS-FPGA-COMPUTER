@@ -23,7 +23,7 @@ minimal CSS as needed) destined for **FPGA then ASIC** — same ladder as
 
 ```
 LOAD "NAME.HTML"  →  edit (line numbers = HTML)  →  RUN
-    →  always compile current HTML  →  fresh internal .JSH  →  JMR VM
+    →  always compile current HTML  →  in-memory ProgramImage  →  JMR VM
     →  full-quality graphics → ASET section → external SRAM asset bank,
        never code BRAM (no NAME.DAT — that design is retired)
 ```
@@ -32,7 +32,7 @@ LOAD "NAME.HTML"  →  edit (line numbers = HTML)  →  RUN
 |---|---|
 | Chrome | Browser (authoring / visual check only — not the machine) |
 | PYTHON | **Bytecode VM** — **compile-on-RUN** from loaded HTML |
-| FPGA-SIM | **Verilator RTL** of that VM (same UX; no stale `.JSH`) |
+| FPGA-SIM | **Verilator RTL** of that VM (same UX; compile current HTML) |
 | BOARD / ASIC | **Same RTL ISA** on silicon |
 
 Order: **PYTHON bytecode perfect → FPGA-SIM perfect → board → ASIC.**
@@ -40,16 +40,13 @@ Never skip; never fake a rung.
 
 ## Compile-on-RUN (hard rule)
 
-- **Source of truth = the loaded `.HTML`** (editor buffer), not a disk `.JSH`.
-- **`RUN` always recompiles** that HTML → bytecode. Compile errors must show
-  **line numbers from the current HTML**, not an old sidecar.
-- **`.JSH` = invisible output** of that compile (overwrite/write fresh). Never
-  a typed LOAD name. Never prefer a pre-existing `.JSH` over compiling.
-- **Stale `.JSH` is trash.** Do not treat checked-in / leftover `.JSH` as the
-  game. Safe to delete; regenerate only as compile output.
-- FPGA-SIM/BOARD must not load an old companion `.JSH` while HTML was edited —
-  same rule: RUN = compile current HTML (then load the fresh bytecode into the
-  VM / BRAM). Missing compile path → fail loud (`?NH` debt), never Invaders hex.
+- **Source of truth = the loaded `.HTML`** (editor buffer).
+- **`RUN` always recompiles** that HTML → an in-memory ProgramImage.
+  Compile errors must show **line numbers from the current HTML**.
+- **Do not write or LOAD a `.JSH` file.** Compile output is ephemeral
+  (code + ASET in the ProgramImage). Card and `storage/` are HTML only.
+- FPGA-SIM/BOARD stream that ProgramImage into the VM / BRAM on RUN.
+  Missing compile path → fail loud (`?NH` debt), never Invaders hex.
 
 ## Asset bank (hard rule — external SRAM, replaces the old `.DAT` spill)
 
@@ -60,28 +57,26 @@ because of `data:image` PNGs, not because JS needs megabytes of RAM.
 - **HTML stays the authoring file** (Chrome `data:` URIs OK). User never
   splits art by hand.
 - **`RUN` extracts** `data:image` / fat literals at full resolution into the
-  **ASET section** of the fresh `.JSH` (per-title 256-entry palette +
+  **ASET section** of the ProgramImage (per-title 256-entry palette +
   8-bpp indexed banks). The loader streams ASET into the **external 4 MB
   SRAM asset bank** (2M × 16 IS61WV204816 contract; FPGA board bridges DDR3
   behind the same simple SRAM port; FPGA-SIM uses a behavioral model behind
   the identical port).
 - Bytecode stores **handles/descriptors only** (w, h, SRAM offset).
   `drawImage` blits straight from asset SRAM. Pixels never enter code BRAM.
-- **No `NAME.DAT` file exists.** One invisible `.JSH` carries code + ASET.
-  EDIT HTML then RUN regenerates it; stale files must not win.
+- **No `NAME.DAT` file exists.** The ProgramImage carries code + ASET in
+  memory. EDIT HTML then RUN recompiles; there is no sidecar to prefer.
 - **Forbidden:** packing Donkey art into code BRAM; downscaling sheets to
   squeeze into code BRAM (`180000` pixel cap trap); quantizing to 8 colors.
 - **BRAM = fast on-chip RAM** (dual FB + code + heap — ASIC target is
   ~30 mm², custom padring, ~1 MB-class on-chip SRAM; do not shrink BRAM to
-  fit a small die). **µSD = disk** (HTML + `.JSH` cache). **External SRAM =
+  fit a small die). **µSD = disk** (`NAME.HTML`). **External SRAM =
   asset bank.** Do not fake a 64K BASIC house.
 
 ## Files
 
 - **Edit / LOAD / play:** `storage/*.HTML` only (`LOAD "NAME.HTML"` / `RUN`).
-- **`.JSH`:** internal compile cache only (code + ASET art sections) — see
-  Compile-on-RUN above. No separate graphics file.
-- **Optional demos:** differently named `RECTDEMO.JS` / `JOYDEMO.JS` (+ `.JSB`).
+- **No `.JSH` files.** Compile-on-RUN stays in memory. No separate graphics file.
 - **`storage/games_*`:** upstream archive only — not DIR, not card, not twins.
 
 ## Agent checklist before marking HTML “done”
@@ -90,7 +85,7 @@ PYTHON and FPGA-SIM must **look and play the same** (full game). Board is
 later, after the user F9-approves.
 
 1. Same `NAME.HTML` works in Chrome (authoring look/feel check only).
-2. PYTHON `LOAD`+`RUN` = **compile-on-RUN bytecode**, not dukpy, not stale `.JSH`.
+2. PYTHON `LOAD`+`RUN` = **compile-on-RUN bytecode**, not dukpy.
    Donkey-class art lands full quality in the external SRAM asset bank
    (ASET section; never packed into or downscaled for code BRAM).
 3. FPGA-SIM F9 shows **RTL**, same LOAD+RUN, **same glass/keys/graphics**.

@@ -971,13 +971,13 @@ def test_rtl_list_after_run_is_source():
     """LIST after RUN still shows source text, not .JSB/.JSH bytes."""
     sim = _sim()
     try:
-        sim.type_line('LOAD "RECTDEMO.JS"')
+        sim.type_line('LOAD "JOYDEMO.HTML"')
         sim.type_line("RUN")
         sim.hard_break()
         sim._rpc("TICKN 200")
         sim.type_line("LIST")
         st = sim.screen_text().replace("\\n", "\n")
-        assert "fillRect" in st or "HELLO" in st, st[-400:]
+        assert "fillRect" in st or "JOY DEMO" in st, st[-400:]
     finally:
         sim.shutdown()
 
@@ -2341,6 +2341,70 @@ requestAnimationFrame(tick);
         _patch_js_v64("ARRUND.JS", src)
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "ARRUND.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "vdraw=10,10,30,30,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_foreach_literal_array_set_x():
+    """LOAD_VAR current then SET_PROP x must write the object, not the env."""
+    src = """
+var steps = [[0,0,0],[0,0,0],[0,0,0]];
+var list = [{x:1, y:1}];
+list.forEach(function(current) {
+  var to = {y: current.y + 1, x: current.x};
+  if (!steps[to.y][to.x]) steps[to.y][to.x] = current;
+});
+function tick() {
+  if (steps[2][1]) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("FEXSET.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "FEXSET.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "vdraw=10,10,30,30,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_foreach_literal_array_set_x():
+    """LOAD_VAR current then SET_PROP x must write the object, not the env."""
+    src = """
+var steps = [[0,0,0],[0,0,0],[0,0,0]];
+var list = [{x:1, y:1}];
+list.forEach(function(current) {
+  var to = {y: current.y + 1, x: current.x};
+  if (!steps[to.y][to.x]) steps[to.y][to.x] = current;
+});
+function tick() {
+  if (steps[2][1]) {
+    fillRect(10, 10, 30, 30, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("FEXSET.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "FEXSET.JS"')
         sim.type_line("RUN")
         sim._rpc("FRAME")
         st = sim._rpc("VMSTAT?")
@@ -4360,6 +4424,234 @@ requestAnimationFrame(tick);
         sim.type_line("RUN")
         sim._rpc("FRAME")
         assert _fb_pix(_fb_raw(sim), 15, 15) == 2, "arr OOB was not undefined"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_long_string_index_past_255():
+    """Interned str[i] / str.length must use NAMB u16, not the hash u8."""
+    # Past hash u8 (255) and the old data:stub cap (512). B at 200, A at 500.
+    lit = ("A" * 200) + "B" + ("A" * 399)
+    src = (
+        "var s = '" + lit + "';\n"
+        "var hit = 0;\n"
+        "if (s.length === 600 && s[200] === 'B' && s[500] === 'A') hit = 1;\n"
+        "function tick() {\n"
+        "  if (hit) fillRect(10, 10, 20, 20, 2);\n"
+        "  swapBuffers();\n"
+        "  requestAnimationFrame(tick);\n"
+        "}\n"
+        "requestAnimationFrame(tick);\n"
+    )
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import encode_chunk
+
+    sim = _sim()
+    try:
+        # Value64 ProgramImage (same path as HTML RUN), not a FAT .JSB sidecar.
+        sim._program_image = encode_chunk(compile_source(src), v2=True, value64=True)
+        assert sim._stream_program_image().startswith("OK")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        # FB? follows the front bank; this snippet's last swap can leave the
+        # 20×20 on the back. vdraw is the native that ran.
+        assert "vdraw=10,10,20,20,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_loop_var_array_is_new_each_iteration():
+    """while { var row = []; rows.push(row) } must not alias every row."""
+    src = """
+var rows = [];
+var r = 0;
+while (r < 3) {
+  var row = [];
+  row.push(r);
+  rows.push(row);
+  r = r + 1;
+}
+rows[1][0] = 9;
+var hit = 0;
+if (rows[0][0] === 0 && rows[1][0] === 9 && rows[2][0] === 2) hit = 1;
+function tick() {
+  if (hit) fillRect(10, 10, 20, 20, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import encode_chunk
+
+    sim = _sim()
+    try:
+        sim._program_image = encode_chunk(compile_source(src), v2=True, value64=True)
+        assert sim._stream_program_image().startswith("OK")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "vdraw=10,10,20,20,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_nested_fn_loop_var_is_local():
+    """Inner `var col = 0` must not reset an outer function's column cursor."""
+    src = """
+var hit = 0;
+function inner() {
+  var col = 0;
+  while (col < 16) { col = col + 1; }
+}
+function outer() {
+  var col = 0;
+  var n = 0;
+  while (col < 24) {
+    if (col === 1 || col === 17) inner();
+    n = n + 1;
+    if (n > 200) { hit = -1; return; }
+    col = col + 1;
+  }
+  hit = n;
+}
+outer();
+function tick() {
+  if (hit === 24) fillRect(10, 10, 20, 20, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import encode_chunk
+
+    sim = _sim()
+    try:
+        sim._program_image = encode_chunk(compile_source(src), v2=True, value64=True)
+        assert sim._stream_program_image().startswith("OK")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "vdraw=10,10,20,20,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_leaf_calls_reuse_env():
+    """600 leaf CALL_USER must not GC-storm (ENV_DEPTH is 512)."""
+    src = """
+function leaf(n) { var t = n + 1; return t; }
+var i = 0;
+var s = 0;
+while (i < 600) { s = s + leaf(1); i = i + 1; }
+function tick() {
+  if (s === 1200) fillRect(10, 10, 20, 20, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import encode_chunk
+
+    sim = _sim()
+    try:
+        sim._program_image = encode_chunk(compile_source(src), v2=True, value64=True)
+        assert sim._stream_program_image().startswith("OK")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "vdraw=10,10,20,20,2" in st, st
+        # Boot/end sweep may bump gc; env-full storm was gc=60+/frame.
+        import re
+        gc = int(re.search(r"gc=(\d+)", st).group(1))
+        assert gc <= 4, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_closure_survives_outer_return():
+    """MAKE_FN must keep the captured env after the outer call returns."""
+    src = """
+function outer() {
+  var n = 7;
+  return function inner() { return n; };
+}
+var f = outer();
+var hit = f();
+function tick() {
+  if (hit === 7) fillRect(10, 10, 20, 20, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import encode_chunk
+
+    sim = _sim()
+    try:
+        sim._program_image = encode_chunk(compile_source(src), v2=True, value64=True)
+        assert sim._stream_program_image().startswith("OK")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "vdraw=10,10,20,20,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_value64_nested_foreach_finder():
+    """Same FLAG_VALUE64 image as PYTHON nested-forEach finder; pixels required."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import encode_chunk
+    from test_bytecode_js import _NESTED_FOREACH_FINDER_JS
+
+    sim = _sim()
+    try:
+        sim._program_image = encode_chunk(
+            compile_source(_NESTED_FOREACH_FINDER_JS), v2=True, value64=True
+        )
+        assert sim._stream_program_image().startswith("OK")
+        st = _wait_vm_idle_or_frame(sim)
+        if "fault=241" in st:
+            st = st + " " + sim._rpc("STK?")
+        assert "fault=0" in st, st
+        if "sname=S_WAIT_FRAME" in st:
+            sim._rpc("FRAME")
+            st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 15, 15) == 2, st
+        assert "vdraw=10,10,20,20,2" in st, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_value64_foreach_ctor_assign_function_prop():
+    """Same FLAG_VALUE64 image as PYTHON forEach+new Ctor+assign; no fault=2."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import encode_chunk
+    from test_bytecode_js import _FOREACH_CTOR_ASSIGN_JS
+
+    sim = _sim()
+    try:
+        sim._program_image = encode_chunk(
+            compile_source(_FOREACH_CTOR_ASSIGN_JS), v2=True, value64=True
+        )
+        assert sim._stream_program_image().startswith("OK")
+        st = _wait_vm_idle_or_frame(sim)
+        assert "fault=0" in st, st
+        if "sname=S_WAIT_FRAME" in st:
+            sim._rpc("FRAME")
+            st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "cspovf=0" in st, st
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 15, 15) == 2, st
+        assert "vdraw=10,10,20,20,2" in st, st
     finally:
         sim.shutdown()
 

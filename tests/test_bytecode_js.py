@@ -1048,6 +1048,216 @@ o.n++;
     assert ProgramImage.from_chunk(chunk, v2=True).decode().op_lines == chunk.op_lines
 
 
+def test_hw_value64_loop_var_array_is_new_each_iteration():
+    """while { var row = []; rows.push(row) } must not alias every row."""
+    src = (
+        "var rows = [];\n"
+        "var r = 0;\n"
+        "while (r < 3) {\n"
+        "  var row = [];\n"
+        "  row.push(r);\n"
+        "  rows.push(row);\n"
+        "  r = r + 1;\n"
+        "}\n"
+        "var hit = 0;\n"
+        "if (rows[0][0] === 0 && rows[1][0] === 1 && rows[2][0] === 2) hit = 1;\n"
+        "rows[1][0] = 9;\n"
+        "if (hit === 1 && rows[0][0] === 0 && rows[2][0] === 2) hit = 2;\n"
+    )
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(compile_source(src), v2=True, value64=True))
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hit") == 2.0
+
+
+def test_hw_value64_nested_fn_loop_var_is_local():
+    """Inner `var col = 0` must not reset an outer function's column cursor.
+
+    STORE_VAR of an undeclared env slot writes the GLOBAL — two functions
+    that both `var col` in a while then share one index and never finish.
+    """
+    src = (
+        "var hit = 0;\n"
+        "function inner() {\n"
+        "  var col = 0;\n"
+        "  while (col < 16) { col = col + 1; }\n"
+        "}\n"
+        "function outer() {\n"
+        "  var col = 0;\n"
+        "  var n = 0;\n"
+        "  while (col < 24) {\n"
+        "    if (col === 1 || col === 17) inner();\n"
+        "    n = n + 1;\n"
+        "    if (n > 200) { hit = -1; return; }\n"
+        "    col = col + 1;\n"
+        "  }\n"
+        "  hit = n;\n"
+        "}\n"
+        "outer();\n"
+    )
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(compile_source(src), v2=True, value64=True))
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hit") == 24.0
+
+
+def test_hw_value64_fn_loop_var_array_is_new_each_iteration():
+    """Same row-identity rule inside a function (LET_VAR local, not global)."""
+    src = (
+        "var hit = 0;\n"
+        "function build() {\n"
+        "  var rows = [];\n"
+        "  var r = 0;\n"
+        "  while (r < 3) {\n"
+        "    var row = [];\n"
+        "    row.push(r);\n"
+        "    rows.push(row);\n"
+        "    r = r + 1;\n"
+        "  }\n"
+        "  if (rows[0][0] === 0 && rows[1][0] === 1 && rows[2][0] === 2) hit = 1;\n"
+        "  rows[1][0] = 9;\n"
+        "  if (hit === 1 && rows[0][0] === 0 && rows[2][0] === 2) hit = 2;\n"
+        "}\n"
+        "build();\n"
+    )
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(compile_source(src), v2=True, value64=True))
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hit") == 2.0
+
+
+def test_hw_value64_leaf_calls_reuse_env():
+    """CALL_USER of a param-only function must recycle env (no mid-run GC).
+
+    600 leaf calls > ENV_DEPTH=512. Leaking until GC made a 24×26 sprite
+    paint look frozen (one GC storm per frame).
+    """
+    src = (
+        "function leaf(n) { var t = n + 1; return t; }\n"
+        "var i = 0;\n"
+        "var s = 0;\n"
+        "while (i < 600) { s = s + leaf(1); i = i + 1; }\n"
+        "var hit = (s === 1200) ? 1 : 0;\n"
+    )
+    vm = JsHwVm()
+    collects = [0]
+    orig = vm._value64_collect.__func__
+
+    def wrapped(self, extra_roots=None):
+        collects[0] += 1
+        return orig(self, extra_roots)
+
+    vm._value64_collect = wrapped.__get__(vm, JsHwVm)
+    vm.load_blob(encode_chunk(compile_source(src), v2=True, value64=True))
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hit") == 1.0
+    # One collect at end of execute; alloc_env must not GC mid-loop.
+    assert collects[0] == 1, collects[0]
+
+
+def test_hw_value64_char_eq_return_chain_lookup():
+    """if (ch === "1") return 1; … must match a one-char object lookup."""
+    src = (
+        "function pal(ch) {\n"
+        "  if (ch === '1') return 1;\n"
+        "  if (ch === '2') return 2;\n"
+        "  if (ch === '3') return 3;\n"
+        "  if (ch === 'a') return 10;\n"
+        "  return 0;\n"
+        "}\n"
+        "var hit = pal('2') + pal('a') + pal('0') + pal('z');\n"
+    )
+    chunk = compile_source(src)
+    entry, _params = chunk.functions["pal"]
+    body_eq = sum(1 for op in chunk.code if op[0] == Op.EQ)
+    # The if-chain would emit ≥4 EQ; lookup uses ARRAY_GET + BIT_OR.
+    assert body_eq == 0, body_eq
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(chunk, v2=True, value64=True))
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hit") == 12.0
+
+
+def test_hw_value64_leaf_call_inlined_into_nested_loop():
+    """Param-only callee at a CALL_USER site is copied, not a heap env."""
+    src = (
+        "function pal(ch) {\n"
+        "  if (ch === '1') return 1;\n"
+        "  if (ch === '2') return 2;\n"
+        "  if (ch === '3') return 3;\n"
+        "  if (ch === 'a') return 10;\n"
+        "  return 0;\n"
+        "}\n"
+        "function walk(rows) {\n"
+        "  var r = 0;\n"
+        "  var s = 0;\n"
+        "  while (r < rows.length) {\n"
+        "    var c = 0;\n"
+        "    var row = rows[r];\n"
+        "    while (c < row.length) {\n"
+        "      s = s + pal(row[c]);\n"
+        "      c = c + 1;\n"
+        "    }\n"
+        "    r = r + 1;\n"
+        "  }\n"
+        "  return s;\n"
+        "}\n"
+        "var hit = walk(['12', 'a0']);\n"
+    )
+    chunk = compile_source(src)
+    pal_entry, _ = chunk.functions["pal"]
+    assert not any(
+        op[0] == Op.CALL_USER and len(op) > 1 and op[1] == pal_entry
+        for op in chunk.code
+    )
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(chunk, v2=True, value64=True))
+    assert vm.error is None, vm.error
+    # '1'+'2'+'a'+'0' → 1+2+10+0
+    assert vm.globals.get("hit") == 13.0
+
+
+def test_hw_value64_closure_survives_outer_return():
+    """MAKE_FN must keep the captured env after the outer function returns."""
+    src = (
+        "function outer() {\n"
+        "  var n = 7;\n"
+        "  return function inner() { return n; };\n"
+        "}\n"
+        "var f = outer();\n"
+        "var hit = f();\n"
+    )
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(compile_source(src), v2=True, value64=True))
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hit") == 7.0
+
+
+def test_encode_keeps_long_layout_string_stubs_only_data_uri():
+    """NAMB must keep 624-char layout literals; only fat data: URIs stub."""
+    layout = "#" * 624
+    fat = "data:image/png;base64," + ("A" * 600)
+    chunk = compile_source("var lay = '" + layout + "'; var img = '" + fat + "';")
+    names = ProgramImage(encode_chunk(chunk, v2=True, value64=True)).decode().names
+    assert layout in names
+    assert "data:stub" in names
+    assert fat not in names
+
+
+def test_hw_value64_long_string_index_strict_eq():
+    """cellCh pattern: interned s[i] === '.' past the old 512 stub cap."""
+    lit = ("#" * 10) + ("." * 8) + ("#" * 606)
+    src = (
+        "var s = '" + lit + "';\n"
+        "var hit = 0;\n"
+        "if (s.length === 624 && s[10] === '.' && s[500] === '#') hit = 1;\n"
+    )
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(compile_source(src), v2=True, value64=True))
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hit") == 1.0
+
+
 def test_program_image_rejects_corrupt_trailer_and_truncated_aset():
     chunk = compile_source("var answer = 7;")
     corrupt = bytearray(encode_chunk(chunk, v2=True))
@@ -2618,6 +2828,141 @@ var ok = (t.times == 0 && t.orientation == 3) ? 1 : 0;
     )
     assert vm.error is None, vm.error
     assert vm.globals.get("ok") == 1.0
+
+
+# Nested forEach → finder (Object.assign coord objects + JSON 28-wide clone).
+# Same source as tests/test_rtl_snippets.py test_rtl_value64_nested_foreach_finder.
+_NESTED_FOREACH_FINDER_JS = r"""
+var data = [];
+var y, x;
+for (y = 0; y < 8; y++) {
+  data[y] = [];
+  for (x = 0; x < 28; x++) data[y][x] = 1;
+}
+for (x = 0; x < 28; x++) { data[0][x] = 1; data[7][x] = 1; }
+for (y = 1; y < 7; y++) { data[y][0] = 1; data[y][27] = 1; }
+for (x = 1; x < 27; x++) data[6][x] = 0;
+data[5][12] = 2; data[5][13] = 2; data[5][14] = 2; data[5][15] = 2;
+data[4][12] = 1; data[4][13] = 2; data[4][14] = 2; data[4][15] = 1;
+data[3][13] = 0; data[3][14] = 0;
+function finder(params) {
+  var defaults = { map: null, start: {}, end: {}, type: 'path' };
+  var options = Object.assign({}, defaults, params);
+  if (options.map[options.start.y][options.start.x] ||
+      options.map[options.end.y][options.end.x]) {
+    return [];
+  }
+  var finded = false;
+  var result = [];
+  var y_length = options.map.length;
+  var x_length = options.map[0].length;
+  var steps = Array(y_length).fill(0).map(() => Array(x_length).fill(0));
+  var _getValue = function(gx, gy) {
+    if (options.map[gy] && typeof options.map[gy][gx] != 'undefined') {
+      return options.map[gy][gx];
+    }
+    return -1;
+  };
+  var _render = function(list) {
+    var new_list = [];
+    var next = function(from, to) {
+      var value = _getValue(to.x, to.y);
+      if (value < 1) {
+        if (value == -1) {
+          to.x = (to.x + x_length) % x_length;
+          to.y = (to.y + y_length) % y_length;
+          to.change = 1;
+        }
+        if (to.x == options.end.x && to.y == options.end.y) {
+          steps[to.y][to.x] = from;
+          finded = true;
+        } else if (!steps[to.y][to.x]) {
+          steps[to.y][to.x] = from;
+          new_list.push(to);
+        }
+      }
+    };
+    list.forEach(function(current) {
+      next(current, {y: current.y + 1, x: current.x});
+      next(current, {y: current.y, x: current.x + 1});
+      next(current, {y: current.y - 1, x: current.x});
+      next(current, {y: current.y, x: current.x - 1});
+    });
+    if (!finded && new_list.length) _render(new_list);
+  };
+  _render([options.start]);
+  if (finded) {
+    var cur = options.end;
+    while (cur.x != options.start.x || cur.y != options.start.y) {
+      result.unshift(cur);
+      cur = steps[cur.y][cur.x];
+    }
+  }
+  return result;
+}
+var opened = JSON.parse(JSON.stringify(data).replace(/2/g, 0));
+var actor = { coord: {x: 13, y: 5, offset: 0}, path: [] };
+var goal = { coord: {x: 2, y: 6, offset: 0} };
+function update(item) {
+  item.path = finder({ map: opened, start: item.coord, end: goal.coord });
+}
+var items = [actor];
+items.forEach(function(item) {
+  update(item);
+});
+var plen = actor.path.length;
+if (plen) fillRect(10, 10, 20, 20, 2);
+swapBuffers();
+function tick() {
+  if (plen) fillRect(10, 10, 20, 20, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+
+
+def test_hw_value64_nested_foreach_finder_paths():
+    """Outer forEach → finder ARRAY_SET of to.x must path a JSON-cloned 28-wide map."""
+    vm = _hw_v64(_NESTED_FOREACH_FINDER_JS)
+    assert vm.error is None, vm.error
+    assert int(vm.globals.get("plen") or 0) > 0, vm.globals.get("plen")
+    assert vm.canvas.front[10 * vm.canvas.width + 10] != 0
+
+
+# 12× new Ctor(Object.assign this, settings, params-with-fn) inside forEach.
+# PACMAN glass fault=2 vcsp=128 was new Stage during _COIGIG.forEach, not finder.
+_FOREACH_CTOR_ASSIGN_JS = r"""
+function Ctor(params) {
+  this._params = params || {};
+  this._settings = { index: 0, items: [], update: function() {} };
+  Object.assign(this, this._settings, this._params);
+}
+var n = 0;
+var configs = [0,1,2,3,4,5,6,7,8,9,10,11];
+configs.forEach(function(c) {
+  var obj = new Ctor({
+    update: function() { n = n + 100; }
+  });
+  if (obj.items && obj.index == 0) n = n + 1;
+});
+if (n == 12) fillRect(10, 10, 20, 20, 2);
+swapBuffers();
+function tick() {
+  if (n == 12) fillRect(10, 10, 20, 20, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+
+
+def test_hw_value64_foreach_ctor_assign_function_prop():
+    """forEach + new Ctor + Object.assign function prop must not overflow the call stack."""
+    vm = _hw_v64(_FOREACH_CTOR_ASSIGN_JS)
+    assert vm.error is None, vm.error
+    assert int(vm.globals.get("n") or 0) == 12, vm.globals.get("n")
+    assert vm.canvas.front[10 * vm.canvas.width + 10] != 0
 
 
 def test_hw_value64_p1_function_bind():

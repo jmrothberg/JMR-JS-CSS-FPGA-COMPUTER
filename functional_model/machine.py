@@ -53,9 +53,9 @@ class Machine:
         self.prompt_buf: str = ""  # live "> …" shown on glass
         self.break_requested: bool = False
         self.html_host: Optional[HtmlJsHost] = None
-        # NEW: one-shot RUN (RECTDEMO) keeps pixels until next command / CLS
+        # NEW: one-shot RUN keeps pixels until next command / CLS
         self._keep_fb: bool = False
-        # NEW: bytecode HTML path is bytecode / .JSH (dukpy only if JMR_HTML_DUKPY=1)
+        # NEW: bytecode HTML path is compile-on-RUN ProgramImage (dukpy only if JMR_HTML_DUKPY=1)
         self._bytecode_html: bool = False
         self._html_chunk = None
         self._raf_q: list = []
@@ -548,7 +548,7 @@ class Machine:
         src = "\n".join(self.source_lines)
         if not src.strip():
             return ["ERROR: NO PROGRAM"]
-        # HTML Canvas games → bytecode / .JSH (product). Simple .JS → bytecode VM.
+        # HTML Canvas games → bytecode ProgramImage (product). Simple .JS → bytecode VM.
         name_u = self.source_name.upper()
         if name_u.endswith(".HTML") or name_u.endswith(".HTM") or "<canvas" in src.lower():
             return self._run_html(src)
@@ -557,7 +557,7 @@ class Machine:
     def _run_html(self, html: str) -> List[str]:
         import os
 
-        # Product path: bytecode / .JSH (CONSTITUTION). dukpy is opt-in debug only.
+        # Product path: bytecode ProgramImage (CONSTITUTION). dukpy is opt-in debug only.
         if os.environ.get("JMR_HTML_DUKPY", "").strip() in ("1", "true", "yes"):
             try:
                 self.html_host = HtmlJsHost(self.canvas, self.input)

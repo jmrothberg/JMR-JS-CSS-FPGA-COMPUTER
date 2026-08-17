@@ -20,6 +20,9 @@ BOARD → ASIC via the **JMR bytecode VM** — **not dukpy**.
 | Pac-Man | `PACMAN.HTML` |
 | Donkey Kong | `DONKEY.HTML` |
 | Asteroids (vector) | `ASTEROID.HTML` |
+| Aurora | `AURORA.HTML` |
+| Joystick | `JOYDEMO.HTML` |
+| Mr. Do! | `MRDO.HTML` |
 
 Authoring rules for new titles: [docs/GAME_DESIGN.md](../docs/GAME_DESIGN.md).
 
@@ -27,23 +30,19 @@ Authoring rules for new titles: [docs/GAME_DESIGN.md](../docs/GAME_DESIGN.md).
 
 ```text
 LOAD "NAME.HTML"   # edit this; line numbers = this file
-RUN                # ALWAYS compile current HTML → fresh internal .JSH → VM
+RUN                # ALWAYS compile current HTML → in-memory ProgramImage → VM
 ```
 
-- **Source of truth = `.HTML`**, never a leftover `.JSH`.
+- **Source of truth = `.HTML`**.
 - **`RUN` always recompiles** so editor line numbers match compile errors.
-- **`.JSH`** = invisible compile *output* (overwrite/write fresh). Not a LOAD
-  name. Not a second game. Stale `.JSH` may be deleted; do not prefer it over
-  compiling.
-- **Graphics** ride the `.JSH` **ASET section** into the external 4 MB SRAM
-  asset bank at RUN (full quality; per-title 256-entry palette). There is
-  **no `NAME.DAT` file** — that older spill design is retired. Great
-  graphics stay; they never live in code BRAM.
+- No sidecar compile file on disk or on the card. Graphics ride the
+  ProgramImage **ASET section** into the external 4 MB SRAM asset bank at RUN
+  (full quality; per-title 256-entry palette). There is **no `NAME.DAT` file**.
 
 ## Not product titles
 
 - Same-stem `NAME.JS` / `NAME.JSB` — legacy demos, not twins of the HTML games.
-- Prefer differently named smoke: `RECTDEMO.JS`, `JOYDEMO.JS`, `CLIMB.JS`.
+- Prefer library HTML smoke: `JOYDEMO.HTML`.
 
 ## Upstream only (not DIR / not card)
 
