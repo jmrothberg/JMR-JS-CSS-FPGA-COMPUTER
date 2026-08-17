@@ -1,0 +1,42 @@
+---
+description: One physical JS heap; never skip generation checks to hide exec/parent dual-copy skew. FPGA-SIM RTL is the standalone .bin path.
+alwaysApply: true
+---
+
+# One heap, keep generation — FPGA-SIM is the `.bin`
+
+FPGA-SIM, `make -C tools/board_flow bit` (`.bit` / `.bin`), and later ASIC
+compile the **same** `rtl/*.sv`. FPGA-SIM must stay on that standalone
+Nexys Video path (HDMI + local keyboard). Dual copies of the JS heap are
+not a speed win: leftover T200 BRAM cannot hold two `vvars`/`venv`/`vobj_*`,
+and they go stale vs parent GC.
+
+## The 2026-08-17 overnight cheat (forbidden)
+
+Not four title bugs. Four glass symptoms of **one** cheat:
+
+1. Teach exec64 fast paths against **its own copies** of `vvars` / `venv_*` /
+   `vobj_*` (parent still has the real heap + GC).
+2. Strip generation / gen-match so those copies would not “look stale.”
+
+Symptoms that were treated as title bugs: PACMAN black FB / skip-draw,
+PACMAN rAF `fn` / Date throttle, INVADERS / DONKEY / MRDO heap skew.
+
+```systemverilog
+// BAD — skip gen to hide dual-copy skew (“for PACMAN”)
+if (vobj_alloc[i] == 2'd1) mark = 1;  // no gen match
+
+// GOOD — one SRAM; handle (generation,index) must match
+if (vobj_alloc[i] == 2'd1 && vobj_gen[i] == handle[43:32]) mark = 1;
+```
+
+## Required
+
+- One physical 1-D SRAM per heap. Exec talks **scalar** req/ack, rdata next
+  clock. Parent GC and exec see the same cells.
+- Handle `(generation,index)` stays. Mismatch is loud stale-handle (or the
+  existing PYTHON sloppy SET_PROP no-op). Never skip gen to hide skew.
+- Fast `LOAD_VAR`/`STORE_VAR` is compiler `a1` addressing the **same** SRAM.
+- Unpacked array **ports** stay illegal (Vivado opt bomb). That does **not**
+  authorize cloning megabit arrays inside exec64.
+- Do not “fix” FPGA-SIM in a way that cannot become the standalone `.bin`.

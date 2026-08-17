@@ -385,7 +385,9 @@ values are one 64-bit word.
   `6`, function `7`, element `8`, and lexical environment `9`.
 - Bool payload is exactly 0 or 1. Handle kinds use `(generation,index)`;
   dereferencing a free slot or mismatched generation is a loud stale-handle
-  error. Handles remain stable across collection.
+  error. Handles remain stable across collection. **Do not skip gen-match**
+  in FPGA-SIM RTL to hide exec64/parent dual-copy skew (2026-08-17 overnight
+  cheat). One physical SRAM; FPGA-SIM is the `.bin` path.
 - `+`, `-`, `*`, `/`, `%`, comparisons, NaN, infinities, signed zero, and
   conversion use binary64 behavior in both models. `%` uses truncation toward
   zero. Bitwise operations use ECMAScript `ToInt32`: NaN, infinities, and
@@ -416,6 +418,8 @@ values are one 64-bit word.
 - Collection follows every marked handle recursively, then frees unmarked
   slots and increments their generations. There are no frame watermarks,
   nursery rewinds, grace-frame guesses, or recycled live callback IDs.
+  Marking a live slot **without** matching the handle generation is not
+  collection — it is hiding a second copy of the heap.
 
 ### Deterministic event and failure contract
 

@@ -51,7 +51,10 @@ When adding or changing glass-level behaviour:
 1. Implement + exercise in the **Python bytecode FM** (and GUI PYTHON path).
 2. Mirror in **FPGA-SIM** so F9 FPGA-SIM matches. RTL memories must be
    **SRAM-shaped** (1-D, registered read) — Verilator-only 2-D combo heaps
-   are not a rung. See `never-fake-fpga-sim.mdc` and [docs/FPGA_FIT.md](../../docs/FPGA_FIT.md).
+   are not a rung. One physical JS heap: do not clone `vvars`/`venv`/`vobj_*`
+   in exec64 and skip generation. FPGA-SIM is the same RTL as the standalone
+   `.bin`. See `never-fake-fpga-sim.mdc`, `one-heap-keep-gen.mdc`, and
+   [docs/FPGA_FIT.md](../../docs/FPGA_FIT.md).
 3. Only then RTL/fit if needed, build `.bit`/`.bin`, flash, smoke the **board**.
 4. Update [docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md) if status
    changes; note any temporary parity debt explicitly (never leave it silent).
@@ -69,3 +72,4 @@ When adding or changing glass-level behaviour:
 - [CONSTITUTION.md](../../CONSTITUTION.md) — Development Order
 - [docs/FPGA_BRINGUP.md](../../docs/FPGA_BRINGUP.md) — PYTHON / FPGA-SIM / BOARD
 - `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`
+- `.cursor/rules/one-heap-keep-gen.mdc`

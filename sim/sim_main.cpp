@@ -754,7 +754,9 @@ int main(int argc, char** argv) {
                 for (unsigned i = 0; i < nfr; i++) {
                     if (i) std::cout << ",";
                     std::cout << unsigned(
-                        r->jmr_js_core__DOT__u_vm__DOT__vframe_return_ip[i]);
+                        (unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u)
+                            ? r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__vframe_return_ip[i]
+                            : r->jmr_js_core__DOT__u_vm__DOT__vframe_return_ip[i]);
                 }
             }
             std::cout << " vdraw="
@@ -767,7 +769,16 @@ int main(int argc, char** argv) {
                       << " raf=" << ((unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u)
                           ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vraf_n)
                           : unsigned(r->jmr_js_core__DOT__u_vm__DOT__raf_n))
-                      << " obj=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_obj)
+                      << " obj=";
+            if (unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u) {
+                unsigned nlive = 0;
+                for (unsigned i = 0; i < VM_MAX_OBJ; i++)
+                    if (r->jmr_js_core__DOT__u_vm__DOT__vobj_alloc[i] == 1)
+                        nlive++;
+                std::cout << nlive;
+            } else
+                std::cout << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_obj);
+            std::cout
                       << " arr=";
             if (unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u) {
                 unsigned narr = 0;

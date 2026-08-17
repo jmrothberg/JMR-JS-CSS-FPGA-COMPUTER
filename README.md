@@ -122,7 +122,7 @@ source; user F9 before `.bit`. Full write-up:
 
 - Constitution first.
 - PYTHON functional model → hardware model on **the bytes RTL gets** → FPGA-SIM → board `.bit`.
-- FPGA-SIM RTL **is** the chip: 1-D SRAM ports (not Verilator-only 2-D combo heaps). [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+- FPGA-SIM RTL **is** the chip: 1-D SRAM ports (not Verilator-only 2-D combo heaps). One physical JS heap — do not clone `vvars`/`venv`/`vobj_*` in exec64 and skip generation. Same RTL becomes the standalone `.bin`. [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
 - Uniform glass across F9 runtimes.
 - Read `traces/` before repro spam.
 - Surgical edits; do not delete files; one README.

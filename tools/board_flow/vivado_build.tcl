@@ -129,12 +129,35 @@ if {[llength [get_ips -quiet mig_7series_0]] == 0} {
 
 update_compile_order -fileset sources_1
 
+# Synth 8-6014 etc. stop printing after 100 (Common 17-14). The log then
+# looks hung while Vivado is still in opt. BASIC finishes that phase in
+# seconds; this VM can sit minutes. Raise the cap and heartbeat STATUS.
+set_param messaging.defaultLimit 2000
+set_msg_config -id {Synth 8-6014} -limit 2000
+set_msg_config -id {Synth 8-4767} -limit 200
+
 # Always reset: a killed synth leaves PROGRESS 0% but still "needs reset"
 # (Common 17-69). catch: no-op if the run was never launched.
 catch {reset_run synth_1}
 
+proc jmr_wait_run {run} {
+  while {1} {
+    set st [get_property STATUS [get_runs $run]]
+    set pr [get_property PROGRESS [get_runs $run]]
+    puts "HEARTBEAT [clock format [clock seconds] -format {%H:%M:%S}] $run STATUS=$st PROGRESS=$pr"
+    if {$pr eq "100%" ||
+        [string match -nocase "*fail*" $st] ||
+        [string match -nocase "*error*" $st] ||
+        [string match -nocase "*complete*" $st]} {
+      wait_on_run $run
+      break
+    }
+    wait_on_run $run -timeout 30
+  }
+}
+
 launch_runs synth_1 -jobs $JOBS
-wait_on_run synth_1
+jmr_wait_run synth_1
 set st [get_property STATUS [get_runs synth_1]]
 if {[get_property PROGRESS [get_runs synth_1]] != "100%" ||
     [string match -nocase "*fail*" $st] ||
@@ -149,7 +172,7 @@ report_utilization -file $OUT/utilization_synth.rpt
 catch {reset_run impl_1}
 
 launch_runs impl_1 -to_step write_bitstream -jobs $JOBS
-wait_on_run impl_1
+jmr_wait_run impl_1
 set st [get_property STATUS [get_runs impl_1]]
 if {[get_property PROGRESS [get_runs impl_1]] != "100%" ||
     [string match -nocase "*fail*" $st] ||

@@ -67,6 +67,7 @@ class SimBackend(RuntimeBackend):
         self._play_frames = 0
         self._play_fclk: list = []
         self._log_vdraw = ""
+        self._run_snap_done = False
         self._last_glass = ""
         self._more_page = 0
         # NEW: Architecture Monitor — cache VMSTAT/STATUS (no extra RPC while RUN)
@@ -211,6 +212,20 @@ class SimBackend(RuntimeBackend):
                 break
         return last
 
+    def _vmstat_snap(self, st: str, extra: str = "") -> str:
+        """One-line glass snapshot — not a full VMSTAT dump."""
+        keep = (
+            "sname=", "ip=", "vdraw=", "raf=", "obj=", "arr=", "spr=",
+            "dihit=", "dimiss=", "fault=", "fclk=", "gc=", "swaps=",
+        )
+        parts = [tok for tok in st.split() if tok.startswith(keep)]
+        title = (self._loaded_name or "").upper()[:16]
+        bits = [f"SNAP title={title or '-'}"]
+        bits.extend(parts)
+        if extra:
+            bits.append(extra)
+        return " ".join(bits)
+
     def _note_glass(self, tag: str) -> None:
         """LIST/DIR/LOAD/SAVE — last non-empty row so a long URI is readable."""
         last = self._last_glass_line()
@@ -342,6 +357,7 @@ class SimBackend(RuntimeBackend):
         if resp.startswith("FB ") and len(resp.split(None, 3)) == 4:
             # Real pixels from RTL mini-FB — keep them; do not letterbox on top
             self._running = True
+            self._run_snap_done = False
             return
         st = self._rpc("STATUS?")
         self._running = "running=1" in st
@@ -479,9 +495,22 @@ class SimBackend(RuntimeBackend):
                     return
                 skip_line = True
                 self._arch_phase = "run"
+                self._run_snap_done = False
                 self._sync_palette()
+        if (upper == "RUN" or upper.startswith("RUN ")) and not self._loaded_name:
+            # `laod "invaders.html"` is ?SN, then RUN of an empty VM looks like
+            # a black title. One line — not a FRAME dump.
+            self._log.note("RUN-EMPTY no LOAD this session")
         if not skip_line:
             self._rpc(f"LINE {text}")
+            if not upper.startswith("LOAD") and upper != "RUN" and not upper.startswith("RUN "):
+                try:
+                    self._rpc("SCREEN?")
+                    last = self._last_glass_line()
+                    if last.startswith("?SN") or last.startswith("?FN") or last.startswith("?NH"):
+                        self._log.note(f"GLASS-ERR {last[:80]}")
+                except Exception:
+                    pass
         # LIST/DIR may park on -- MORE --; LINE now waits, but keep pumping
         # until MORE or prompt so we never paint '>' over a mid-page.
         if upper == "LIST" or upper.startswith("LIST ") or upper == "DIR":
@@ -743,7 +772,8 @@ class SimBackend(RuntimeBackend):
         self._log.note("BREAK")
         # NEW: one VM telemetry line on BREAK (n_obj / heap_ovf / to_ovf / raf)
         try:
-            self._log.note(self._rpc("VMSTAT?"))
+            st = self._rpc("VMSTAT?")
+            self._log.note(self._vmstat_snap(st))
             self._log.note(self._rpc("PXCNT?"))
             self._log.note(self._rpc("FBRAW?"))
         except Exception:
@@ -799,7 +829,16 @@ class SimBackend(RuntimeBackend):
                 # Overlay/capped FRAME used to dump the same VMSTAT 100+ times.
                 # Log first3, fcap hang, and a vdraw change (maze→win overlay).
                 if first3 or "fcap=1" in st or vdraw_chg:
-                    self._log.note(f"FRAME {st}")
+                    if not self._run_snap_done:
+                        fb = ""
+                        try:
+                            fb = self._rpc("FBRAW?")
+                        except Exception:
+                            fb = ""
+                        self._log.note(self._vmstat_snap(st, extra=fb[:40]))
+                        self._run_snap_done = True
+                    elif "fcap=1" in st or vdraw_chg:
+                        self._log.note(f"FRAME {st}")
                 # VM halt (fault=255 ARRAY_GET, heap ovf, …): drop game_mode
                 # so LIST is the console, not keys queued behind a dead FRAME.
                 fault_n = 0
@@ -824,7 +863,7 @@ class SimBackend(RuntimeBackend):
                 self._flush_keyevts()
                 self._log.note(
                     f"play fb_frames={self._play_frames} fclk_avg={avg} "
-                    f"fclk_max={mx} {st}"
+                    f"fclk_max={mx} {self._vmstat_snap(st)}"
                 )
                 self._play_t = now
                 self._play_frames = 0

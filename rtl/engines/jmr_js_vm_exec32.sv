@@ -10,7 +10,6 @@ module jmr_js_vm_exec32 (
     input  logic alu_fx,
     input  logic [2:0] alu_op,
     input  logic arr_keep_ok,
-    input  logic [7:0] arr_len [0:MAX_ARR-1],
     input  logic [15:0] blit_sh,
     input  logic [7:0] blit_si,
     input  logic [15:0] blit_sw,
@@ -26,20 +25,12 @@ module jmr_js_vm_exec32 (
     input  logic [7:0] cc_len,
     input  logic cc_second,
     input  logic [1:0] cc_st,
-    input  logic [15:0] char_id [0:255],
-    input  logic char_ok [0:255],
     input  logic click_fired,
     input  logic [15:0] click_fn,
     input  logic [18:0] clr_idx,
-    input  logic [15:0] cls_ctor [0:MAX_CLS-1],
-    input  logic [15:0] cls_mip [0:MAX_CLS-1][0:MAX_CMETH-1],
-    input  logic [15:0] cls_mname [0:MAX_CLS-1][0:MAX_CMETH-1],
-    input  logic [15:0] cls_name [0:MAX_CLS-1],
-    input  logic [4:0] cls_nmeth [0:MAX_CLS-1],
     input  logic [14:0] code_raddr,
     input  logic [31:0] code_rdata,
     input  logic [7:0] color,
-    input  logic signed [31:0] consts [0:MAX_CONSTS-1],
     input  logic [6:0] csp,
     input  logic [15:0] cstack_ctorobj [0:CSTK-1],
     input  logic [5:0] cstack_env [0:CSTK-1],
@@ -89,7 +80,6 @@ module jmr_js_vm_exec32 (
     input  logic [18:0] fb_dump_addr,
     input  logic fb_dump_sel,
     input  logic fb_swap,
-    input  logic [7:0] fill_lut [0:1023],
     input  logic [7:0] fill_style_i,
     input  logic [15:0] fn_proto_ip [0:MAX_FN_PROTO-1],
     input  logic [15:0] fn_proto_oid [0:MAX_FN_PROTO-1],
@@ -238,7 +228,6 @@ module jmr_js_vm_exec32 (
     input  logic [2:0] js_tag [0:JSON_STK-1],
     input  logic [31:0] js_val [0:JSON_STK-1],
     input  logic [13:0] json_dst,
-    input  logic [7:0] json_mem [0:JSON_CAP-1],
     input  logic [2:0] json_pph,
     input  logic [10:0] json_res,
     input  logic [13:0] json_rp,
@@ -275,10 +264,6 @@ module jmr_js_vm_exec32 (
     input  logic namcpy_armed,
     input  logic namcpy_repl,
     input  logic name_has [0:1023],
-    input  logic [15:0] name_hash_tbl [0:1023],
-    input  logic [7:0] name_len_tbl [0:1023],
-    input  logic [7:0] name_mem [0:NAME_CAP-1],
-    input  logic [15:0] name_off [0:1023],
     input  logic [15:0] name_rdaddr,
     input  logic [7:0] name_rdata,
     input  logic names_ok,
@@ -331,7 +316,6 @@ module jmr_js_vm_exec32 (
     input  logic [47:0] sq_rad,
     input  logic [25:0] sq_rem,
     input  logic [23:0] sq_root,
-    input  logic signed [31:0] stack [0:STACK_DEPTH-1],
     input  logic [2:0] stack_tag [0:STACK_DEPTH-1],
     input  logic start,
     input  logic [6:0] state,
@@ -369,7 +353,6 @@ module jmr_js_vm_exec32 (
     input  logic signed [31:0] vars [0:MAX_VARS-1],
     input  logic [11:0] vcall_argc,
     input  logic [63:0] vcall_this,
-    input  logic [5:0] vobj_len [0:MAX_OBJ-1],
     input  logic [9:0] x,
     input  logic [1:0] xf_dst,
     input  logic signed [31:0] xf_h,
@@ -665,8 +648,56 @@ module jmr_js_vm_exec32 (
     output logic signed [31:0] vars_wdata,
     output logic vobj_len_we,
     output logic [11:0] vobj_len_waddr,
-    output logic [5:0] vobj_len_wdata
+    output logic [5:0] vobj_len_wdata,
+    input  logic p_clr,
+    input  logic p_we,
+    input  logic [5:0] p_sel,
+    input  logic [15:0] p_addr,
+    input  logic [15:0] p_addr2,
+    input  logic [63:0] p_data
 );
+
+    // LARGE memories live in this exec (not unpacked array ports).
+    logic [7:0] arr_len [0:MAX_ARR-1];
+    logic [15:0] char_id [0:255];
+    logic char_ok [0:255];
+    logic [15:0] cls_ctor [0:MAX_CLS-1];
+    logic [15:0] cls_mip [0:MAX_CLS-1][0:MAX_CMETH-1];
+    logic [15:0] cls_mname [0:MAX_CLS-1][0:MAX_CMETH-1];
+    logic [15:0] cls_name [0:MAX_CLS-1];
+    logic [4:0] cls_nmeth [0:MAX_CLS-1];
+    logic signed [31:0] consts [0:MAX_CONSTS-1];
+    logic [7:0] fill_lut [0:1023];
+    logic [7:0] json_mem [0:JSON_CAP-1];
+    logic [15:0] name_hash_tbl [0:1023];
+    logic [7:0] name_len_tbl [0:1023];
+    logic [7:0] name_mem [0:NAME_CAP-1];
+    logic [15:0] name_off [0:1023];
+    logic signed [31:0] stack [0:STACK_DEPTH-1];
+    logic [5:0] vobj_len [0:MAX_OBJ-1];
+
+    // Parent clr/poke + exec we into local copies. No opcode rewrite.
+    always_ff @(posedge clk) begin
+        if (p_clr) begin
+            for (int i = 0; i < MAX_ARR; i++) arr_len[i] <= 8'd0;
+            for (int i = 0; i < 256; i++) begin char_id[i] <= 16'd0; char_ok[i] <= 1'b0; end
+        end else if (p_we) begin
+            unique case (p_sel)
+                6'd1: arr_len[p_addr[10:0]] <= p_data[7:0];
+                6'd2: consts[p_addr[9:0]] <= p_data[31:0];
+                6'd3: char_id[p_addr[7:0]] <= p_data[15:0];
+                6'd4: char_ok[p_addr[7:0]] <= p_data[0];
+                6'd5: stack[p_addr[10:0]] <= p_data[31:0];
+                6'd16: json_mem[p_addr[12:0]] <= p_data[7:0];
+                default: ;
+            endcase
+        end
+        if (enable && json_mem_we) json_mem[json_mem_waddr] <= json_mem_wdata;
+        if (enable && arr_len_we) arr_len[arr_len_waddr] <= arr_len_wdata;
+        if (enable && stack_we) stack[stack_waddr] <= stack_wdata;
+        if (enable) begin
+        end
+    end
 
     // Sequential cell so Vivado keep_hierarchy is not dissolved as combo-only.
     logic hier_keep;

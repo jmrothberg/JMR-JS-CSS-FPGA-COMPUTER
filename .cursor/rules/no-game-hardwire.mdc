@@ -17,6 +17,8 @@ This machine **RUNS any compiled HTML**. `INVADERS.HTML` / `PACMAN.HTML` /
 - Buffers / FSM states / scratch sized to one title (“15×20 maze JSON”,
   “2.3 MB Donkey wait only”).
 - Comments that say “for PACMAN” as an excuse to skip general JS semantics.
+- Skipping generation / cloning `vvars`/`venv`/`vobj_*` in exec64 “for PACMAN”
+  black FB, rAF, or Date throttle (that is one heap cheat, not a title fix).
 
 ## Required
 

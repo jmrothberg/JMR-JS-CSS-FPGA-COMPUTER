@@ -126,7 +126,12 @@ engines, not library code on a hidden CPU.
     No nested `for` over `ENV_DEPTH` in a task (walk one index per clock).
     Operand `vstack` is 1W1R registered, not combo/multi-port LUTRAM
     (Synth 8-7186). No `` `ifdef SYNTHESIS `` smaller heap, no Xilinx
-    `RAMB36` inside the VM. See [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+    `RAMB36` inside the VM. **One physical JS heap:** do not clone
+    `vvars` / `venv_*` / `vobj_*` into exec64 and strip generation
+    checks so the copies would not “look stale.” FPGA-SIM is the same
+    `rtl/*.sv` as the standalone `.bit` / `.bin`. Handle
+    `(generation,index)` mismatch is a loud stale-handle, not a speed
+    knob. See [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
 
 ---
 
@@ -159,7 +164,8 @@ User titles: `LOAD "NAME.HTML"` / `RUN` only. **`RUN` = compile-on-RUN**
 streams to the external SRAM asset bank).
 Cursor rules: `python-first-parity.mdc`, `no-dukpy-cheat-native-cpu.mdc`,
 `never-fake-fpga-sim.mdc` (includes: RTL heaps must be SRAM, not Verilator-only
-2-D combo arrays).
+2-D combo arrays), `one-heap-keep-gen.mdc` (one physical heap; never skip
+generation to hide exec/parent dual-copy skew).
 
 The BASIC sibling (`JMR-BASIC-FPGA-COMPUTER` on Nexys A7-100T) is a **working
 reference for method and USB-HID→PS/2 bring-up**, not a pinout or instruction
@@ -227,7 +233,12 @@ simulation and the board keep real cycle time; Python does not.
    → Vivado Synth 8-2599; use `sig[73:64]` or a wire). Legal shape in this
    repo:
    `rtl/engines/storage_engine.sv` (`sbuf`), `rtl/engines/jmr_video_vram.sv`
-   (Port A).
+   (Port A). Unpacked array **ports** on exec32/exec64 are a Vivado opt
+   bomb; that does **not** authorize a second copy of `vvars` / `venv_*` /
+   `vobj_*` inside the exec. Fast `LOAD_VAR` addresses the **same** SRAM
+   via scalar req/ack. Skipping generation so dual copies would not “look
+   stale” is a forbidden cheat (2026-08-17 overnight). FPGA-SIM must remain
+   the path that compiles to a standalone `.bin`.
 
 A native graphics processing unit is the same machine with draw engines as
 first-class instruction-set operations (Canvas here; COLOR/SET on BASIC).

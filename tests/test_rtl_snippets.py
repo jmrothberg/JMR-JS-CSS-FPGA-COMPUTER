@@ -53,14 +53,16 @@ def _patch_html(name: str, src: str) -> None:
     patch_card_file(card, name, src.encode("utf-8"))
 
 
-def _patch_js_spr(name: str, src: str, sprites: list, *, aset: bool = False) -> None:
+def _patch_js_spr(name: str, src: str, sprites: list, *, aset: bool = False, value64: bool = False) -> None:
     """Tiny .JS + SPR1 (or ASET/SPRD) pack so drawImage hits the blit (no HTML)."""
     from functional_model.compiler import compile_source
     from functional_model.jsb_format import encode_chunk
     from tools.make_sd_image import patch_card_file
 
     card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
-    blob = encode_chunk(compile_source(src), v2=True, sprites=sprites, aset=aset)
+    blob = encode_chunk(
+        compile_source(src), v2=True, sprites=sprites, aset=aset, value64=value64
+    )
     patch_card_file(card, name, src.encode("utf-8"))
     patch_card_file(card, Path(name).stem[:8] + ".JSB", blob)
 
@@ -4210,14 +4212,17 @@ g.init();
 """
     sim = _sim()
     try:
-        _patch_js("GCTF.JS", src)
+        _patch_js_v64("GCTF.JS", src)
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "GCTF.JS"')
         sim.type_line("RUN")
         saw = False
         for _ in range(24):
             sim._rpc("FRAME")
-            if _fb_pix(_fb_raw(sim), 15, 15) == 2:
+            st = sim._rpc("VMSTAT?")
+            # Value64 records the native fillRect in vdraw; FB? can lag a
+            # bank until present. PACMAN HTML uses ctx.fillRect (S_V64_RECT).
+            if "vdraw=10,10,20,20,2" in st or _fb_pix(_fb_raw(sim), 15, 15) == 2:
                 saw = True
                 break
         assert saw, "forEach did not write item.times from captured f"
@@ -5314,6 +5319,257 @@ def test_donkey_fpga_sim_enter_keeps_raf():
                 break
         assert "raf=0" not in vmstat, vmstat
         assert later != play
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_fillstyle_fillrect_global_loop_fclk():
+    """fillStyle+fillRect+global PAL load: fclk must not be 8.8M-class."""
+    src = (
+        "var PAL = [1, 2, 3, 4];\n"
+        "var c = document.querySelector('canvas').getContext('2d');\n"
+        "function palK(k) {\n"
+        "  c.fillStyle = PAL[k];\n"
+        "  c.fillRect(0, 0, 4, 4);\n"
+        "}\n"
+        "function tick() {\n"
+        "  var i = 0;\n"
+        "  while (i < 64) { palK(i & 3); i = i + 1; }\n"
+        "  requestAnimationFrame(tick);\n"
+        "}\n"
+        "requestAnimationFrame(tick);\n"
+    )
+    _patch_js_v64("PALK.JS", src)
+    sim = _sim()
+    try:
+        sim.type_line('LOAD "PALK.JS"')
+        sim.type_line("RUN")
+        fclk = 0
+        vmstat = ""
+        for _ in range(8):
+            sim._rpc("FRAME")
+            vmstat = sim._rpc("VMSTAT?")
+            if "fault=" in vmstat and "fault=0" not in vmstat:
+                break
+            if "fclk=" in vmstat:
+                fclk = max(
+                    fclk,
+                    int(vmstat.split("fclk=")[1].split()[0].replace(",", "")),
+                )
+        assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
+        assert "raf=0" not in vmstat, vmstat
+        # 64 tiny rects must not cost millions of clocks (old MRDO was 8.8M).
+        assert fclk < 2_000_000, f"fclk={fclk} ({vmstat})"
+        assert _fb_pix(_fb_raw(sim), 1, 1) != 0
+    finally:
+        sim.shutdown()
+
+
+def test_mrdo_fpga_sim_enter_fclk_not_pathological():
+    """MRDO on real RTL: Enter starts, fault=0, fclk << 8.8M."""
+    from tools.compile_js import compile_html_text, encode_html_chunk
+
+    html = ROOT / "storage" / "MRDO.HTML"
+    if not html.is_file():
+        pytest.skip("MRDO.HTML missing")
+    image_data = encode_html_chunk(compile_html_text(html.read_text(encoding="utf-8")))
+    sim = _sim()
+    try:
+        sim._loaded_name = "MRDO.HTML"
+        sim._loaded_html_text = html.read_text(encoding="utf-8")
+        sim._program_image = image_data
+        assert sim._stream_program_image().startswith("OK")
+        vmstat = _wait_vm_idle_or_frame(sim, slices=40)
+        assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
+        sim._rpc("KEYEVT 13 1")
+        sim._rpc("FRAME")
+        sim._rpc("KEYEVT 13 0")
+        fclk = 0
+        for _ in range(4):
+            sim._rpc("FRAME")
+            vmstat = sim._rpc("VMSTAT?")
+            if "fault=" in vmstat and "fault=0" not in vmstat:
+                break
+            if "fclk=" in vmstat:
+                fclk = max(
+                    fclk,
+                    int(vmstat.split("fclk=")[1].split()[0].replace(",", "")),
+                )
+        assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
+        assert "raf=0" not in vmstat, vmstat
+        # Target: dispatch tax gone; honest pixel writes, ideally < 2M.
+        assert fclk < 2_000_000, f"fclk={fclk} ({vmstat})"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_pacman_like_ctx_fillrect_width_after_date_throttle():
+    """Game-ctor Date throttle then ctx.fillRect(0,0,_.width,_.height).
+
+    PACMAN HTML black was vdraw=0,0,0,0 / fclk≈32k (skip or 0-size).
+    Native fillRect snippets were not this path.
+    """
+    src = """
+function Game() {
+  var _ = this;
+  Object.assign(_, {width: 640, height: 480});
+  var c = document.getElementById('c').getContext('2d');
+  this.start = function() {
+    var timestamp = (new Date()).getTime();
+    var fn = function() {
+      var now = (new Date()).getTime();
+      if (now - timestamp < 16) {
+        requestAnimationFrame(fn);
+        return;
+      }
+      timestamp = now;
+      c.fillStyle = '#000000';
+      c.fillRect(0, 0, _.width, _.height);
+      c.fillStyle = '#ffffff';
+      c.fillRect(10, 10, 20, 20);
+      requestAnimationFrame(fn);
+    };
+    requestAnimationFrame(fn);
+  };
+}
+var g = new Game();
+g.start();
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("PMW.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "PMW.JS"')
+        sim.type_line("RUN")
+        saw = False
+        st = ""
+        for _ in range(24):
+            sim._rpc("FRAME")
+            st = sim._rpc("VMSTAT?")
+            if "vdraw=10,10,20,20" in st or "vdraw=0,0,640,480" in st:
+                saw = True
+                break
+            if _fb_pix(_fb_raw(sim), 15, 15) != 0:
+                saw = True
+                break
+        assert saw, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_stroke_after_fill_black_paints_white():
+    """fillStyle black + fillRect must not leave stroke() black (ASTEROID rocks)."""
+    src = """
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.fillStyle = '#000000';
+  c.fillRect(0, 0, 640, 480);
+  c.strokeStyle = '#ffffff';
+  c.beginPath();
+  c.moveTo(20, 20);
+  c.lineTo(80, 20);
+  c.stroke();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("STROKE.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "STROKE.JS"')
+        sim.type_line("RUN")
+        raw = b""
+        for _ in range(8):
+            sim._rpc("FRAME")
+            raw = _fb_raw(sim)
+            if _fb_pix(raw, 40, 20) != 0:
+                break
+        assert _fb_pix(raw, 40, 20) != 0, "stroke after fillRect black painted nothing"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_image_onload_arrow_sets_player_image():
+    """Constructor arrow onload must write Player.image (INVADERS gun)."""
+    pix = bytes([4] * 16)
+    src = """
+class Player {
+  constructor() {
+    this.image = null;
+    this.width = 0;
+    this.height = 0;
+    const image = new Image();
+    image.src = "jmr:spr:0";
+    image.onload = () => {
+      this.image = image;
+      this.width = image.width;
+      this.height = image.height;
+    };
+  }
+}
+var p = new Player();
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  if (p.image) {
+    c.drawImage(p.image, 10, 10, p.width, p.height);
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("GUN.JS", src, [(4, 4, pix)], value64=True)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "GUN.JS"')
+        sim.type_line("RUN")
+        raw = b""
+        st = ""
+        for _ in range(12):
+            sim._rpc("FRAME")
+            st = sim._rpc("VMSTAT?")
+            raw = _fb_raw(sim)
+            if _fb_pix(raw, 11, 11) == 4:
+                break
+        assert _fb_pix(raw, 11, 11) == 4, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_lastkeypressed_identity_sets_facing():
+    """lastKeyPressed === 'a' must set facingLeft (DONKEY)."""
+    src = """
+var o = {lastKeyPressed: '', facingLeft: false, facingRight: true};
+function tick() {
+  o.lastKeyPressed = 'a';
+  if (o.lastKeyPressed === 'a') {
+    o.facingLeft = true;
+    o.facingRight = false;
+  }
+  if (o.facingLeft) {
+    fillRect(10, 10, 20, 20, 2);
+    swapBuffers();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("FACE.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "FACE.JS"')
+        sim.type_line("RUN")
+        saw = False
+        st = ""
+        for _ in range(8):
+            sim._rpc("FRAME")
+            st = sim._rpc("VMSTAT?")
+            if "vdraw=10,10,20,20,2" in st or _fb_pix(_fb_raw(sim), 15, 15) == 2:
+                saw = True
+                break
+        assert saw, st
     finally:
         sim.shutdown()
 

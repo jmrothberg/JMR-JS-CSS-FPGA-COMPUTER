@@ -628,10 +628,28 @@ class JsHwVm:
             return bool(value_payload(word))
         return True
 
-    def _value64_load_var(self, slot: int, ip: int, op: Op) -> Optional[int]:
+    def _value64_load_var(self, slot: int, ip: int, op: Op, mode: int = 0) -> Optional[int]:
         names = self.program_image.var_names if self.program_image else ()
         if slot < len(names) and names[slot] == "__this":
             return self._value_this
+        # a1==1: global — skip env chain (MRDO palK / c).
+        if mode == 1:
+            if self._value_var_valid[slot]:
+                return self._value_vars[slot]
+            return value_pack_tagged(VALUE_KIND_UNDEFINED)
+        # a1>=2: local env slot index (mode-2). Dict is still keyed by name id.
+        if mode >= 2:
+            env = None
+            if value_kind(self._value_env) == VALUE_KIND_ENV:
+                env = self._value64_resolve_env(self._value_env, ip, op)
+            if env is not None:
+                if slot in env.slots:
+                    return env.slots[slot]
+                return value_pack_tagged(VALUE_KIND_UNDEFINED)
+            # Flat IIFE / no ENV: same as LET_VAR local with vcsp==0 → vvars.
+            if self._value_var_valid[slot]:
+                return self._value_vars[slot]
+            return value_pack_tagged(VALUE_KIND_UNDEFINED)
         env_handle = self._value_env
         while value_kind(env_handle) == VALUE_KIND_ENV:
             env = self._value64_resolve_env(env_handle, ip, op)
@@ -644,10 +662,24 @@ class JsHwVm:
             return self._value_vars[slot]
         return value_pack_tagged(VALUE_KIND_UNDEFINED)
 
-    def _value64_store_var(self, slot: int, word: int, ip: int, op: Op) -> bool:
+    def _value64_store_var(self, slot: int, word: int, ip: int, op: Op, mode: int = 0) -> bool:
         names = self.program_image.var_names if self.program_image else ()
         if slot < len(names) and names[slot] == "__this":
             self._value_this = word
+            return True
+        if mode == 1:
+            self._value_vars[slot] = word
+            self._value_var_valid[slot] = True
+            return True
+        if mode >= 2:
+            env = None
+            if value_kind(self._value_env) == VALUE_KIND_ENV:
+                env = self._value64_resolve_env(self._value_env, ip, op)
+            if env is not None:
+                env.slots[slot] = word
+                return True
+            self._value_vars[slot] = word
+            self._value_var_valid[slot] = True
             return True
         env_handle = self._value_env
         while value_kind(env_handle) == VALUE_KIND_ENV:
@@ -2419,7 +2451,7 @@ class JsHwVm:
                     )
                     return
             elif op == Op.LOAD_VAR:
-                value = self._value64_load_var(arg0, op_ip, op)
+                value = self._value64_load_var(arg0, op_ip, op, arg1)
                 if value is None or not self._value64_push(value):
                     return
             elif op in (Op.STORE_VAR, Op.LET_VAR):
@@ -2453,7 +2485,7 @@ class JsHwVm:
                 elif op == Op.LET_VAR and self._value_var_valid[arg0]:
                     pass
                 else:
-                    if not self._value64_store_var(arg0, value, op_ip, op):
+                    if not self._value64_store_var(arg0, value, op_ip, op, arg1):
                         return
             elif op in (
                 Op.ADD,

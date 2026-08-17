@@ -750,6 +750,8 @@ def _encode_v1(chunk: Chunk) -> bytes:
         elif op in (Op.LOAD_VAR, Op.STORE_VAR, Op.LET_VAR):
             name = chunk.names[args[0]]
             a0 = var_index[name] & 0xFFFF
+            if op in (Op.LOAD_VAR, Op.STORE_VAR) and len(args) > 1:
+                a1 = int(args[1]) & 0xFF
         elif op in (Op.JUMP, Op.JUMP_IF_FALSE):
             a0 = int(args[0]) & 0xFFFF
         elif op == Op.CALL_NATIVE:
@@ -921,6 +923,9 @@ def _encode_v2(
             # only for top-level LET_VAR (state survives per-frame re-runs).
             if op == Op.LET_VAR and len(args) > 1 and args[1]:
                 a1 = 1
+            # LOAD_VAR/STORE_VAR a1: 0=chain, 1=global, 2+slot=local.
+            elif op in (Op.LOAD_VAR, Op.STORE_VAR) and len(args) > 1:
+                a1 = int(args[1]) & 0xFF
         elif op in (Op.JUMP, Op.JUMP_IF_FALSE):
             a0 = int(args[0]) & 0xFFFF
         elif op == Op.CALL_NATIVE:
@@ -1270,7 +1275,11 @@ def _decode_chunk_unchecked(data: bytes, meta: _ImageMeta) -> Chunk:
             # ensure names[ni] exists for VM
             while len(names) <= ni:
                 names.append(f"v{len(names)}")
-            code.append((op, ni))
+            # Keep a1 so LOAD_VAR/STORE_VAR global/local modes survive decode.
+            if a1:
+                code.append((op, ni, a1))
+            else:
+                code.append((op, ni))
         elif op == Op.CALL_NATIVE:
             nstr = idn.get(a0, "_stub")
             ni = _intern_name(names, {n: i for i, n in enumerate(names)}, nstr)

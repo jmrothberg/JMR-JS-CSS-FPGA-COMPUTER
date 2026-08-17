@@ -65,6 +65,16 @@ win.
 is `vobj_rdata[73:64]`. Caps are the leftover-BRAM depths above. `cls_mname` /
 `cls_mip` stay 16×16 (4 Kbit method table, not a JS heap). Do not bump asset
 SRAM to 8 MB.
+**One physical heap (2026-08-17 cheat — forbidden):** exec32/exec64 must
+not carry private copies of `vvars` / `venv_*` / `vobj_*` while parent GC
+still owns the real SRAM, then skip generation so those copies would not
+“look stale.” That is not four title bugs (PACMAN black FB, rAF `fn`, Date
+throttle, INVADERS/DONKEY/MRDO skew). Unpacked array **ports** are the
+Vivado opt bomb; cloning megabit arrays inside the exec is the leftover-BRAM
+bomb **and** a stale-handle bomb. Fast `LOAD_VAR` is compiler `a1` plus
+scalar req/ack into the **same** 1-D SRAM. Handle `(generation,index)`
+stays. FPGA-SIM is this RTL; this RTL is the standalone `.bin`.
+
 `utilization_impl.rpt` after a successful `make -C tools/board_flow bit`
 (other agent, after user F9). Pre-flatten probe: Synth 8-4556 `vobj_key`
 4.2 Mbit. After env flatten, synth reached ~7 min then died on loops

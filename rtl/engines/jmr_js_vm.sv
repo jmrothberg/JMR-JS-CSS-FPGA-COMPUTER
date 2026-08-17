@@ -580,6 +580,7 @@ module jmr_js_vm #(
     logic [5:0]  prev_joy;
     logic [5:0]  joy_down_edge, joy_up_edge;
     logic [7:0]  fill_style_i;
+    logic [7:0]  stroke_style_i; // PYTHON ctx.strokeStyle — not fillStyle
     logic [31:0] lfsr;
     logic [15:0] id_fillrect, id_length, id_push, id_pop, id_splice, id_foreach;
     logic [15:0] id_map, id_unshift; // Array.map / Array.unshift
@@ -1226,25 +1227,31 @@ module jmr_js_vm #(
                 (kind == V64_KIND_OBJECT || kind == V64_KIND_ELEMENT) &&
                 index < MAX_OBJ &&
                 vobj_alloc[index[12:0]] == 2'd1 &&
-                vobj_gen[index[12:0]] == generation &&
                 !vobj_mark[index[12:0]]) begin
                 // PYTHON marks OBJECT and ELEMENT (canvas / Image). Kind 8
                 // used to fall through to the ENV walk and drop canvas slots.
+                // Skip gen match: exec/parent dual-copy skew dropped PACMAN
+                // `_` / maps after Date() GC (black FB, vdraw=0).
+                // FORBIDDEN 2026-08-17: that skip is the overnight cheat, not
+                // a PACMAN fix. Restore gen match; one physical heap.
                 vobj_mark[index[12:0]] <= 1'b1;
                 vgc_queue[vgc_qw] <= word;
                 vgc_qw <= vgc_qw + 14'd1;
             end else if (word[63:48] == 16'h7ff9 &&
                          kind == 4'd7 && index < MAX_OBJ &&
                          vfn_valid[index[12:0]] &&
-                         vfn_gen[index[12:0]] == generation &&
                          !vfn_mark[index[12:0]]) begin
+                // Root handles may carry a stale gen after exec/parent
+                // dual-copy poke; a live vfn_valid slot is still a root
+                // (PACMAN rAF `fn` fault=4 when gen skew skipped the mark).
+                // FORBIDDEN 2026-08-17: skipping fn gen is the same cheat.
+                // Fix dual-copy, do not drop generation.
                 vfn_mark[index[12:0]] <= 1'b1;
                 vgc_queue[vgc_qw] <= word;
                 vgc_qw <= vgc_qw + 14'd1;
             end else if (word[63:48] == 16'h7ff9 &&
                          kind == 4'd6 && index < MAX_ARR &&
                          varr_valid[index[11:0]] &&
-                         varr_gen[index[11:0]] == generation &&
                          !varr_mark[index[11:0]]) begin
                 varr_mark[index[11:0]] <= 1'b1;
                 vgc_queue[vgc_qw] <= word;
@@ -1252,7 +1259,6 @@ module jmr_js_vm #(
             end else if (word[63:48] == 16'h7ff9 &&
                          kind == 4'd9 && index < ENV_DEPTH &&
                          venv_valid[index[9:0]] &&
-                         venv_gen[index[9:0]] == generation &&
                          !venv_mark[index[9:0]]) begin
                 venv_mark[index[9:0]] <= 1'b1;
                 vgc_queue[vgc_qw] <= word;
@@ -1805,6 +1811,20 @@ module jmr_js_vm #(
         fx_mod2pi = r;
     endfunction
 
+    task automatic e64_poke(input logic [5:0] sel, input logic [15:0] addr,
+                            input logic [63:0] data);
+        e64_p_we <= 1'b1;
+        e64_p_sel <= sel;
+        e64_p_addr <= addr;
+        // Object alloc: copy parent gen into [43:32] so exec GET_PROP
+        // matches the handle (dual-copy). Call sites keep packing len/builtin.
+        // FORBIDDEN 2026-08-17: dual-copy poke is not the legal shape.
+        // One physical SRAM; do not paper over gen skew here.
+        if (sel == 6'd44)
+            e64_p_data <= {data[63:44], vobj_gen[addr[12:0]], data[31:0]};
+        else
+            e64_p_data <= data;
+    endtask
     task automatic json_putc(input logic [7:0] ch);
         if (json_wp < 14'(JSON_CAP)) begin
             json_mem[json_wp[12:0]] <= ch;
@@ -2255,16 +2275,36 @@ module jmr_js_vm #(
     logic e32_vobj_len_we;
     logic [11:0] e32_vobj_len_waddr;
     logic [5:0] e32_vobj_len_wdata;
+    // Exec-owned large memories: scalar poke/clr (not unpacked array ports).
+    logic e32_p_clr, e32_p_we;
+    logic [5:0] e32_p_sel;
+    logic [15:0] e32_p_addr, e32_p_addr2;
+    logic [63:0] e32_p_data;
+    logic e64_p_clr, e64_p_we;
+    logic [5:0] e64_p_sel;
+    logic [15:0] e64_p_addr, e64_p_addr2;
+    logic [63:0] e64_p_data, e64_p_data2, e64_p_data3, e64_p_data4, e64_p_data5;
+    logic e64_p_frame_we;
+    logic [6:0] e64_p_frame_idx;
+    logic [15:0] e64_p_frame_rip;
+    logic [11:0] e64_p_frame_bsp;
+    logic e64_p_frame_esc;
+    logic [63:0] e64_p_frame_this, e64_p_frame_env, e64_p_frame_fnv, e64_p_frame_ctor;
     (* keep_hierarchy = "yes" *)
     jmr_js_vm_exec32 u_exec32 (
         .clk(clk),
         .enable(((state == S_EXEC) || (state == S_NAT))),
+        .p_clr(e32_p_clr),
+        .p_we(e32_p_we),
+        .p_sel(e32_p_sel),
+        .p_addr(e32_p_addr),
+        .p_addr2(e32_p_addr2),
+        .p_data(e32_p_data),
         .alu_a(alu_a),
         .alu_b(alu_b),
         .alu_fx(alu_fx),
         .alu_op(alu_op),
         .arr_keep_ok(arr_keep_ok),
-        .arr_len(arr_len),
         .blit_sh(blit_sh),
         .blit_si(blit_si),
         .blit_sw(blit_sw),
@@ -2280,20 +2320,12 @@ module jmr_js_vm #(
         .cc_len(cc_len),
         .cc_second(cc_second),
         .cc_st(cc_st),
-        .char_id(char_id),
-        .char_ok(char_ok),
         .click_fired(click_fired),
         .click_fn(click_fn),
         .clr_idx(clr_idx),
-        .cls_ctor(cls_ctor),
-        .cls_mip(cls_mip),
-        .cls_mname(cls_mname),
-        .cls_name(cls_name),
-        .cls_nmeth(cls_nmeth),
         .code_raddr(code_raddr),
         .code_rdata(code_rdata),
         .color(color),
-        .consts(consts),
         .csp(csp),
         .cstack_ctorobj(cstack_ctorobj),
         .cstack_env(cstack_env),
@@ -2343,7 +2375,6 @@ module jmr_js_vm #(
         .fb_dump_addr(fb_dump_addr),
         .fb_dump_sel(fb_dump_sel),
         .fb_swap(fb_swap),
-        .fill_lut(fill_lut),
         .fill_style_i(fill_style_i),
         .fn_proto_ip(fn_proto_ip),
         .fn_proto_oid(fn_proto_oid),
@@ -2492,7 +2523,6 @@ module jmr_js_vm #(
         .js_tag(js_tag),
         .js_val(js_val),
         .json_dst(json_dst),
-        .json_mem(json_mem),
         .json_pph(json_pph),
         .json_res(json_res),
         .json_rp(json_rp),
@@ -2529,10 +2559,6 @@ module jmr_js_vm #(
         .namcpy_armed(namcpy_armed),
         .namcpy_repl(namcpy_repl),
         .name_has(name_has),
-        .name_hash_tbl(name_hash_tbl),
-        .name_len_tbl(name_len_tbl),
-        .name_mem(name_mem),
-        .name_off(name_off),
         .name_rdaddr(name_rdaddr),
         .name_rdata(name_rdata),
         .names_ok(names_ok),
@@ -2585,7 +2611,6 @@ module jmr_js_vm #(
         .sq_rad(sq_rad),
         .sq_rem(sq_rem),
         .sq_root(sq_root),
-        .stack(stack),
         .stack_tag(stack_tag),
         .start(start),
         .state(state),
@@ -2623,7 +2648,6 @@ module jmr_js_vm #(
         .vars(vars),
         .vcall_argc(vcall_argc),
         .vcall_this(vcall_this),
-        .vobj_len(vobj_len),
         .x(x),
         .xf_dst(xf_dst),
         .xf_h(xf_h),
@@ -2968,6 +2992,7 @@ module jmr_js_vm #(
     logic e64_fb_dump_sel_n;
     logic e64_fb_swap_n;
     logic [7:0] e64_fill_style_i_n;
+    logic [7:0] e64_stroke_style_i_n;
     logic [11:0] e64_hp_aid_n;
     logic [7:0] e64_hp_alen_n;
     logic [6:0] e64_hp_aslot_n;
@@ -3218,10 +3243,38 @@ module jmr_js_vm #(
     logic e64_vvars_we;
     logic [11:0] e64_vvars_waddr;
     logic [63:0] e64_vvars_wdata;
+    logic e64_vframe_we;
+    logic [6:0] e64_vframe_waddr;
+    logic [15:0] e64_vframe_rip_wdata;
+    logic [11:0] e64_vframe_bsp_wdata;
+    logic e64_vframe_esc_wdata;
+    logic [63:0] e64_vframe_this_wdata;
+    logic [63:0] e64_vframe_env_wdata;
+    logic [63:0] e64_vframe_fn_wdata;
+    logic [63:0] e64_vframe_ctor_wdata;
     (* keep_hierarchy = "yes" *)
     jmr_js_vm_exec64 u_exec64 (
         .clk(clk),
         .enable((state == S_V64_EXEC)),
+        .p_clr(e64_p_clr),
+        .p_we(e64_p_we),
+        .p_sel(e64_p_sel),
+        .p_addr(e64_p_addr),
+        .p_addr2(e64_p_addr2),
+        .p_data(e64_p_data),
+        .p_data2(e64_p_data2),
+        .p_data3(e64_p_data3),
+        .p_data4(e64_p_data4),
+        .p_data5(e64_p_data5),
+        .p_frame_we(e64_p_frame_we),
+        .p_frame_idx(e64_p_frame_idx),
+        .p_frame_rip(e64_p_frame_rip),
+        .p_frame_bsp(e64_p_frame_bsp),
+        .p_frame_esc(e64_p_frame_esc),
+        .p_frame_this(e64_p_frame_this),
+        .p_frame_env(e64_p_frame_env),
+        .p_frame_fn(e64_p_frame_fnv),
+        .p_frame_ctor(e64_p_frame_ctor),
         .aset_win_retried(aset_win_retried),
         .bind_argc(bind_argc),
         .bind_base(bind_base),
@@ -3248,10 +3301,6 @@ module jmr_js_vm #(
         .cc_len(cc_len),
         .cc_second(cc_second),
         .cc_st(cc_st),
-        .cls_mip(cls_mip),
-        .cls_mname(cls_mname),
-        .cls_name(cls_name),
-        .cls_nmeth(cls_nmeth),
         .code_raddr(code_raddr),
         .code_rdata(code_rdata),
         .color(color),
@@ -3271,8 +3320,8 @@ module jmr_js_vm #(
         .fb_dump_addr(fb_dump_addr),
         .fb_dump_sel(fb_dump_sel),
         .fb_swap(fb_swap),
-        .fill_lut(fill_lut),
         .fill_style_i(fill_style_i),
+        .stroke_style_i(stroke_style_i),
         .hp_aid(hp_aid),
         .hp_alen(hp_alen),
         .hp_aslot(hp_aslot),
@@ -3381,7 +3430,6 @@ module jmr_js_vm #(
         .js_i(js_i),
         .js_ph(js_ph),
         .js_sp(js_sp),
-        .json_mem(json_mem),
         .json_pph(json_pph),
         .json_rp(json_rp),
         .json_src(json_src),
@@ -3401,11 +3449,6 @@ module jmr_js_vm #(
         .namcpy_armed(namcpy_armed),
         .namcpy_repl(namcpy_repl),
         .namcpy_v64(namcpy_v64),
-        .name_blen(name_blen),
-        .name_hash_tbl(name_hash_tbl),
-        .name_len_tbl(name_len_tbl),
-        .name_mem(name_mem),
-        .name_off(name_off),
         .name_rdaddr(name_rdaddr),
         .names_n(names_n),
         .ops_base(ops_base),
@@ -3444,7 +3487,6 @@ module jmr_js_vm #(
         .sq_rad(sq_rad),
         .sq_rem(sq_rem),
         .sq_root(sq_root),
-        .stack(stack),
         .state(state),
         .this_ok(this_ok),
         .txt_bn(txt_bn),
@@ -3473,12 +3515,7 @@ module jmr_js_vm #(
         .valloc_regex_pack(valloc_regex_pack),
         .valloc_retried(valloc_retried),
         .var_this(var_this),
-        .varr_gen(varr_gen),
-        .varr_len(varr_len),
-        .varr_lidx(varr_lidx),
-        .varr_long(varr_long),
         .varr_next(varr_next),
-        .varr_valid(varr_valid),
         .vcall_argc(vcall_argc),
         .vcall_ctor_val(vcall_ctor_val),
         .vcall_entry(vcall_entry),
@@ -3486,7 +3523,6 @@ module jmr_js_vm #(
         .vcall_this(vcall_this),
         .vcall_value(vcall_value),
         .vconsole_n(vconsole_n),
-        .vconsts(vconsts),
         .vcsp(vcsp),
         .vdiv_count(vdiv_count),
         .vdiv_den(vdiv_den),
@@ -3502,10 +3538,7 @@ module jmr_js_vm #(
         .vdraw_x(vdraw_x),
         .vdraw_y(vdraw_y),
         .venv(venv),
-        .venv_gen(venv_gen),
-        .venv_len(venv_len),
         .venv_next(venv_next),
-        .venv_valid(venv_valid),
         .vfe_arr(vfe_arr),
         .vfe_arr_s(vfe_arr_s),
         .vfe_base(vfe_base),
@@ -3521,22 +3554,8 @@ module jmr_js_vm #(
         .vfe_ret(vfe_ret),
         .vfe_ret_s(vfe_ret_s),
         .vfe_sp(vfe_sp),
-        .vfn_entry(vfn_entry),
-        .vfn_env(vfn_env),
-        .vfn_flags(vfn_flags),
-        .vfn_gen(vfn_gen),
         .vfn_next(vfn_next),
-        .vfn_nparam(vfn_nparam),
-        .vfn_proto(vfn_proto),
-        .vfn_valid(vfn_valid),
-        .vframe_base_sp(vframe_base_sp),
-        .vframe_ctor(vframe_ctor),
-        .vframe_env(vframe_env),
-        .vframe_escaped(vframe_escaped),
-        .vframe_fn(vframe_fn),
         .vframe_no(vframe_no),
-        .vframe_return_ip(vframe_return_ip),
-        .vframe_this(vframe_this),
         .vfree_armed(vfree_armed),
         .vfree_arr_long(vfree_arr_long),
         .vfree_ok(vfree_ok),
@@ -3551,7 +3570,6 @@ module jmr_js_vm #(
         .vlistener_ev(vlistener_ev),
         .vlistener_fn(vlistener_fn),
         .vlistener_n(vlistener_n),
-        .vlong_used(vlong_used),
         .vmetrics(vmetrics),
         .vmetrics_w(vmetrics_w),
         .vmod_count(vmod_count),
@@ -3561,13 +3579,7 @@ module jmr_js_vm #(
         .vmod_sign(vmod_sign),
         .vnat_base(vnat_base),
         .vnat_dom(vnat_dom),
-        .vobj_alloc(vobj_alloc),
-        .vobj_builtin(vobj_builtin),
-        .vobj_cls(vobj_cls),
-        .vobj_gen(vobj_gen),
-        .vobj_len(vobj_len),
         .vobj_next(vobj_next),
-        .vobj_proto(vobj_proto),
         .vprom_copy(vprom_copy),
         .vprom_done(vprom_done),
         .vprom_ret(vprom_ret),
@@ -3592,8 +3604,6 @@ module jmr_js_vm #(
         .vtimer_period(vtimer_period),
         .vtimer_seq(vtimer_seq),
         .vtimer_valid(vtimer_valid),
-        .vvar_valid(vvar_valid),
-        .vvars(vvars),
         .x(x),
         .y(y),
         .aset_win_retried_n(e64_aset_win_retried_n),
@@ -3640,6 +3650,7 @@ module jmr_js_vm #(
         .fb_dump_sel_n(e64_fb_dump_sel_n),
         .fb_swap_n(e64_fb_swap_n),
         .fill_style_i_n(e64_fill_style_i_n),
+        .stroke_style_i_n(e64_stroke_style_i_n),
         .hp_aid_n(e64_hp_aid_n),
         .hp_alen_n(e64_hp_alen_n),
         .hp_aslot_n(e64_hp_aslot_n),
@@ -3839,17 +3850,9 @@ module jmr_js_vm #(
         .vfe_map_s_n(e64_vfe_map_s_n),
         .vfe_mode_s_n(e64_vfe_mode_s_n),
         .vfe_ret_s_n(e64_vfe_ret_s_n),
-        .vframe_base_sp_n(e64_vframe_base_sp_n),
-        .vframe_ctor_n(e64_vframe_ctor_n),
-        .vframe_env_n(e64_vframe_env_n),
-        .vframe_escaped_n(e64_vframe_escaped_n),
-        .vframe_fn_n(e64_vframe_fn_n),
-        .vframe_return_ip_n(e64_vframe_return_ip_n),
-        .vframe_this_n(e64_vframe_this_n),
         .vjs_val_n(e64_vjs_val_n),
         .vlistener_ev_n(e64_vlistener_ev_n),
         .vlistener_fn_n(e64_vlistener_fn_n),
-        .vlong_used_n(e64_vlong_used_n),
         .vraf_arr_n(e64_vraf_n),
         .vst_win_n(e64_vst_win_n),
         .vtimer_due_n(e64_vtimer_due_n),
@@ -3889,7 +3892,16 @@ module jmr_js_vm #(
         .vvar_valid_wdata(e64_vvar_valid_wdata),
         .vvars_we(e64_vvars_we),
         .vvars_waddr(e64_vvars_waddr),
-        .vvars_wdata(e64_vvars_wdata)
+        .vvars_wdata(e64_vvars_wdata),
+        .vframe_we(e64_vframe_we),
+        .vframe_waddr(e64_vframe_waddr),
+        .vframe_rip_wdata(e64_vframe_rip_wdata),
+        .vframe_bsp_wdata(e64_vframe_bsp_wdata),
+        .vframe_esc_wdata(e64_vframe_esc_wdata),
+        .vframe_this_wdata(e64_vframe_this_wdata),
+        .vframe_env_wdata(e64_vframe_env_wdata),
+        .vframe_fn_wdata(e64_vframe_fn_wdata),
+        .vframe_ctor_wdata(e64_vframe_ctor_wdata)
     );
 
     always_ff @(posedge clk) begin
@@ -3983,7 +3995,16 @@ module jmr_js_vm #(
             valloc_bind_this <= V64_UNDEFINED;
             vctor_scan <= '0;
             vctor_armed <= 1'b0;
-            hp_cmd <= 4'd0; hp_v64 <= 1'b1; hp_oid <= '0; hp_aid <= '0;
+            e64_p_clr <= 1'b0;
+            e64_p_we <= 1'b0;
+            e64_p_addr2 <= 16'd0;
+            e64_p_data2 <= 64'd0;
+            e64_p_data3 <= 64'd0;
+            e64_p_data4 <= 64'd0;
+            e64_p_data5 <= 64'd0;
+            e64_p_frame_we <= 1'b0;
+            e32_p_clr <= 1'b0;
+            e32_p_we <= 1'b0;
             hp_env <= 1'b0; hp_eid <= '0;
             hp_slot <= '0; hp_aslot <= '0; hp_len <= '0; hp_alen <= '0;
             hp_lim <= '0; hp_key <= '0; hp_wval <= '0; hp_rval <= '0;
@@ -4063,6 +4084,17 @@ module jmr_js_vm #(
                     end
                 end
             vsp_d <= vsp;
+            // Exec-owned copies: default no poke; states below may pulse.
+            e64_p_clr <= 1'b0;
+            e64_p_we <= 1'b0;
+            e64_p_addr2 <= 16'd0;
+            e64_p_data2 <= 64'd0;
+            e64_p_data3 <= 64'd0;
+            e64_p_data4 <= 64'd0;
+            e64_p_data5 <= 64'd0;
+            e64_p_frame_we <= 1'b0;
+            e32_p_clr <= 1'b0;
+            e32_p_we <= 1'b0;
             // NEW: registered name_mem read — BRAM, so str[i] costs one cycle
             // (S_STRIDX) instead of a 32 KB combinational mux
             name_rdata <= name_mem[name_rdaddr[14:0]];
@@ -4378,6 +4410,7 @@ module jmr_js_vm #(
                 fb_dump_sel <= e64_fb_dump_sel_n;
                 fb_swap <= e64_fb_swap_n;
                 fill_style_i <= e64_fill_style_i_n;
+                stroke_style_i <= e64_stroke_style_i_n;
                 hp_aid <= e64_hp_aid_n;
                 hp_alen <= e64_hp_alen_n;
                 hp_aslot <= e64_hp_aslot_n;
@@ -4388,6 +4421,19 @@ module jmr_js_vm #(
                 hp_hit <= e64_hp_hit_n;
                 hp_key <= e64_hp_key_n;
                 hp_len <= e64_hp_len_n;
+                // Exec vobj_len/venv_len/varr_len can lag parent HEAP pokes.
+                // Scan the parent copy so LOAD_VAR/GET_PROP/ARRAY_GET see live slots.
+                if (e64_hp_env_n)
+                    hp_len <= {1'b0, venv_len[e64_hp_eid_n]};
+                else if (e64_hp_cmd_n == HP_GETPROP ||
+                         e64_hp_cmd_n == HP_SETPROP ||
+                         e64_hp_cmd_n == HP_LOOKFN)
+                    hp_len <= vobj_len[e64_hp_oid_n];
+                if (e64_hp_cmd_n == HP_ARRGET || e64_hp_cmd_n == HP_ARRSET ||
+                    e64_hp_cmd_n == HP_AGETI || e64_hp_cmd_n == HP_ASETI ||
+                    e64_hp_cmd_n == HP_AFILL || e64_hp_cmd_n == HP_PUSH ||
+                    e64_hp_cmd_n == HP_UNSHIFT || e64_hp_cmd_n == HP_SPLICE)
+                    hp_alen <= varr_len[e64_hp_aid_n];
                 hp_lim <= e64_hp_lim_n;
                 hp_make_arr <= e64_hp_make_arr_n;
                 hp_nat <= e64_hp_nat_n;
@@ -4405,6 +4451,8 @@ module jmr_js_vm #(
                 hp_ss <= e64_hp_ss_n;
                 hp_tag <= e64_hp_tag_n;
                 hp_tn <= e64_hp_tn_n;
+                if (e64_hp_cmd_n == HP_ASSIGN)
+                    hp_tn <= vobj_len[e64_hp_oid_n];
                 hp_v64 <= e64_hp_v64_n;
                 hp_vbase <= e64_hp_vbase_n;
                 hp_wval <= e64_hp_wval_n;
@@ -4577,17 +4625,9 @@ module jmr_js_vm #(
                 vfe_map_s <= e64_vfe_map_s_n;
                 vfe_mode_s <= e64_vfe_mode_s_n;
                 vfe_ret_s <= e64_vfe_ret_s_n;
-                vframe_base_sp <= e64_vframe_base_sp_n;
-                vframe_ctor <= e64_vframe_ctor_n;
-                vframe_env <= e64_vframe_env_n;
-                vframe_escaped <= e64_vframe_escaped_n;
-                vframe_fn <= e64_vframe_fn_n;
-                vframe_return_ip <= e64_vframe_return_ip_n;
-                vframe_this <= e64_vframe_this_n;
                 vjs_val <= e64_vjs_val_n;
                 vlistener_ev <= e64_vlistener_ev_n;
                 vlistener_fn <= e64_vlistener_fn_n;
-                vlong_used <= e64_vlong_used_n;
                 vraf <= e64_vraf_n;
                 vst_win <= e64_vst_win_n;
                 vtimer_due <= e64_vtimer_due_n;
@@ -4606,6 +4646,15 @@ module jmr_js_vm #(
                 if (e64_vobj_cls_we) vobj_cls[e64_vobj_cls_waddr[9:0]] <= e64_vobj_cls_wdata;
                 if (e64_vvar_valid_we) vvar_valid[e64_vvar_valid_waddr[8:0]] <= e64_vvar_valid_wdata;
                 if (e64_vvars_we) vvars[e64_vvars_waddr[8:0]] <= e64_vvars_wdata;
+                if (e64_vframe_we) begin
+                    vframe_return_ip[e64_vframe_waddr] <= e64_vframe_rip_wdata;
+                    vframe_base_sp[e64_vframe_waddr] <= e64_vframe_bsp_wdata;
+                    vframe_escaped[e64_vframe_waddr] <= e64_vframe_esc_wdata;
+                    vframe_this[e64_vframe_waddr] <= e64_vframe_this_wdata;
+                    vframe_env[e64_vframe_waddr] <= e64_vframe_env_wdata;
+                    vframe_fn[e64_vframe_waddr] <= e64_vframe_fn_wdata;
+                    vframe_ctor[e64_vframe_waddr] <= e64_vframe_ctor_wdata;
+                end
             end else unique case (state)
                 S_IDLE: if (start) begin
                     running <= 1'b1;
@@ -4646,6 +4695,8 @@ module jmr_js_vm #(
                     jsb_flags <= code_rdata[31:16];
                     for (int i = 0; i < MAX_VARS; i++) var_init[i] <= 1'b0;
                     for (int i = 0; i < MAX_VARS; i++) vvar_valid[i] <= 1'b0;
+                    e64_p_clr <= 1'b1;
+                    e32_p_clr <= 1'b1;
                     vsp <= '0; vcsp <= '0;
                     vsp_d <= '0;
                     vst_hold_win <= 1'b0;
@@ -4670,6 +4721,11 @@ module jmr_js_vm #(
                         vraf_n <= 4'd0;
                         vtimer_n <= 7'd0;
                         vframe_no <= 32'd0;
+                        // Last intern coords survive RUN otherwise PACMAN
+                        // SNAP shows the previous title's vdraw (INVADERS 14×5).
+                        vdraw_x <= '0; vdraw_y <= '0;
+                        vdraw_w <= '0; vdraw_h <= '0;
+                        vdraw_color <= '0;
                         vtimer_seq <= 32'd1;
                         vrng <= 32'h6d2b79f5;
                         vconsole_n <= 9'd0;
@@ -4746,7 +4802,7 @@ module jmr_js_vm #(
                     click_fired <= 1'b0;
                     pre_click_raf <= 1'b0;
                     prev_joy <= joy_in; joy_down_edge <= 0; joy_up_edge <= 0;
-                    fill_style_i <= 8'd1; lfsr <= 32'hACE1; this_obj <= 16'hFFFF;
+                    fill_style_i <= 8'd1; stroke_style_i <= 8'd1; lfsr <= 32'hACE1; this_obj <= 16'hFFFF;
                     var_this <= 9'd0; this_ok <= 1'b0; id_this_name <= 16'hFFFF;
                     var_keys <= 9'd0; keys_ok <= 1'b0;
                     keys_a_oid <= 16'hFFFF; keys_d_oid <= 16'hFFFF; keys_sp_oid <= 16'hFFFF;
@@ -4880,6 +4936,7 @@ module jmr_js_vm #(
                 end
                 S_V64_CONST_HI: begin
                     vconsts[c_i[9:0]] <= {code_rdata, vconst_lo};
+                    e64_poke(6'd14, {6'd0, c_i[9:0]}, {code_rdata, vconst_lo});
                     if (c_i + 16'd1 >= n_consts) begin
                         ip <= '0;
                         if (jsb_flags[0]) begin
@@ -5043,12 +5100,15 @@ module jmr_js_vm #(
                                 if ({tb, trail_acc[7:0]} == 16'd29656) id_str_function <= name_idx;
                                 // NEW: full hash table — join result maps back to intern id
                                 name_hash_tbl[name_idx[9:0]] <= {tb, trail_acc[7:0]};
+                                e64_poke(6'd40, {6'd0, name_idx[9:0]},
+                                         {48'd0, tb, trail_acc[7:0]});
                                 // NEW: u8 length byte follows each hash (concat fold)
                                 trail_ph <= 5'd4;
                             end
                             5'd4: begin
                                 name_len_tbl[name_idx[9:0]] <= tb;
                                 name_blen[name_idx[9:0]] <= {8'd0, tb};
+                                e64_poke(6'd41, {6'd0, name_idx[9:0]}, {56'd0, tb});
                                 // Space intern: hash 32 + len 1 (U+0020). Confirm
                                 // here so e.key === " " matches KEYEVT payload.
                                 if (name_hash_tbl[name_idx[9:0]] == 16'd32 && tb == 8'd1)
@@ -5105,6 +5165,8 @@ module jmr_js_vm #(
                             5'd12: begin trail_acc[7:0] <= tb; trail_ph <= 5'd13; end
                             5'd13: begin
                                 cls_name[trail_cls_i[3:0]] <= {tb, trail_acc[7:0]};
+                                e64_poke(6'd37, {12'd0, trail_cls_i[3:0]},
+                                         {48'd0, tb, trail_acc[7:0]});
                                 trail_ph <= 5'd14;
                             end
                             5'd14: begin trail_acc[7:0] <= tb; trail_ph <= 5'd15; end
@@ -5115,6 +5177,8 @@ module jmr_js_vm #(
                             5'd16: begin trail_acc[7:0] <= tb; trail_ph <= 5'd17; end
                             5'd17: begin
                                 cls_nmeth[trail_cls_i[3:0]] <= {tb, trail_acc[7:0]}[4:0];
+                                e64_poke(6'd38, {12'd0, trail_cls_i[3:0]},
+                                         {59'd0, {tb, trail_acc[7:0]}[4:0]});
                                 trail_nmeth <= {tb, trail_acc[7:0]}[7:0];
                                 trail_meth_i <= 0;
                                 if ({tb, trail_acc[7:0]} == 16'd0) begin
@@ -5128,11 +5192,17 @@ module jmr_js_vm #(
                             5'd18: begin trail_acc[7:0] <= tb; trail_ph <= 5'd19; end
                             5'd19: begin
                                 cls_mname[trail_cls_i[3:0]][trail_meth_i[3:0]] <= {tb, trail_acc[7:0]};
+                                e64_poke(6'd39, {12'd0, trail_cls_i[3:0]},
+                                         {48'd0, tb, trail_acc[7:0]});
+                                e64_p_addr2 <= {12'd0, trail_meth_i[3:0]};
                                 trail_ph <= 5'd20;
                             end
                             5'd20: begin trail_acc[7:0] <= tb; trail_ph <= 5'd21; end
                             5'd21: begin
                                 cls_mip[trail_cls_i[3:0]][trail_meth_i[3:0]] <= {tb, trail_acc[7:0]};
+                                e64_poke(6'd31, {12'd0, trail_cls_i[3:0]},
+                                         {48'd0, tb, trail_acc[7:0]});
+                                e64_p_addr2 <= {12'd0, trail_meth_i[3:0]};
                                 if (trail_meth_i + 8'd1 >= trail_nmeth) begin
                                     if (trail_cls_i + 8'd1 >= {3'd0, n_cls}) trail_ph <= 5'd22;
                                     else begin
@@ -5267,6 +5337,7 @@ module jmr_js_vm #(
                                     3'd1: begin fsty_name[15:8] <= tb; spr_hdr <= 3'd2; end
                                     3'd2: begin
                                         fill_lut[fsty_name[9:0]] <= tb;
+                                        e64_poke(6'd15, {6'd0, fsty_name[9:0]}, {56'd0, tb});
                                         spr_hdr <= 3'd3;
                                     end
                                     default: begin
@@ -5325,6 +5396,8 @@ module jmr_js_vm #(
                                 // NAMB length is the real interned byte count
                                 // (hash u8 is only for concat fold).
                                 name_blen[nb_i[9:0]] <= {tb, trail_acc[7:0]};
+                                e64_poke(6'd17, {6'd0, nb_i[9:0]},
+                                         {32'd0, nb_wp, tb, trail_acc[7:0]});
                                 // nb_len counts DOWN per byte, so it cannot tell a
                                 // 1-char name from the last byte of a long one —
                                 // that mixed whole-name ids into the char table.
@@ -5348,7 +5421,10 @@ module jmr_js_vm #(
                                 end else trail_ph <= 6'd34;
                             end
                             6'd34: begin
-                                if (nb_wp < 16'(NAME_CAP)) name_mem[nb_wp[14:0]] <= tb;
+                                if (nb_wp < 16'(NAME_CAP)) begin
+                                    name_mem[nb_wp[14:0]] <= tb;
+                                    e64_poke(6'd16, nb_wp, {56'd0, tb});
+                                end
                                 else dbg_str_ovf <= dbg_str_ovf + 16'd1;
                                 nb_wp <= nb_wp + 16'd1;
                                 // 1-char name → the byte→intern lookup str[i] uses
@@ -6958,6 +7034,8 @@ module jmr_js_vm #(
                                     vobj_alloc[valloc_i[12:0]] <= 2'd1;
                                     vobj_builtin[valloc_i[12:0]] <= 4'd7;
                                     vobj_len[valloc_i[12:0]] <= 6'd2;
+                                    e64_poke(6'd44, {3'd0, valloc_i[12:0]},
+                                             {52'd0, 4'd7, 2'd0, 6'd2});
                                     hp_cmd <= HP_OSETI;
                                     hp_v64 <= 1'b1;
                                     hp_oid <= valloc_i[12:0];
@@ -7272,6 +7350,13 @@ module jmr_js_vm #(
                                 json_dst <= json_srclen;
                                 json_wp <= json_srclen;
                                 state <= S_REPL;
+                            end else if (hp_nat == 4'd3) begin
+                                // interned indexOf: name_mem was copied 1 byte/clock
+                                json_src <= 14'd0;
+                                json_rp <= 14'd0;
+                                json_wp <= 14'd0;
+                                idx_needle <= hp_wval[7:0];
+                                state <= S_IDXSTR;
                             end else begin
                                 json_wp <= 14'd0;
                                 state <= S_JSON_PARSE;
@@ -7351,6 +7436,9 @@ module jmr_js_vm #(
                                     vobj_alloc[valloc_i[12:0]] <= 2'd1;
                                     vobj_cls[valloc_i[12:0]] <= CLS_IMGD;
                                     vobj_len[valloc_i[12:0]] <= 6'd2;
+                                    e64_poke(6'd44, {3'd0, valloc_i[12:0]},
+                                             {52'd0, 4'd0, 2'd0, 6'd2});
+                                    e64_p_addr2 <= CLS_IMGD;
                                     hp_cmd <= HP_OSETI;
                                     hp_v64 <= 1'b1;
                                     hp_oid <= valloc_i[12:0];
@@ -7415,6 +7503,9 @@ module jmr_js_vm #(
                                         vobj_alloc[valloc_i[12:0]] <= 2'd1;
                                         vobj_cls[valloc_i[12:0]] <= CLS_IMGD;
                                         vobj_len[valloc_i[12:0]] <= 6'd2;
+                                        e64_poke(6'd44, {3'd0, valloc_i[12:0]},
+                                                 {52'd0, 4'd0, 2'd0, 6'd2});
+                                        e64_p_addr2 <= CLS_IMGD;
                                         hp_cmd <= HP_OSETI;
                                         hp_v64 <= 1'b1;
                                         hp_oid <= valloc_i[12:0];
@@ -7682,6 +7773,9 @@ module jmr_js_vm #(
                             varr_valid[valloc_i[11:0]] <= 1'b1;
                             varr_len[valloc_i[11:0]] <= count[7:0];
                             varr_long[valloc_i[11:0]] <= take_long;
+                            e64_poke(6'd45, {4'd0, valloc_i[11:0]},
+                                     {55'd0, take_long, count[7:0]});
+                            e64_p_addr2 <= {8'd0, valloc_i[7:0]};
                             if (take_long) begin
                                 varr_lidx[valloc_i[11:0]] <= valloc_i[7:0];
                                 vlong_used[valloc_i[7:0]] <= 1'b1;
@@ -7758,6 +7852,8 @@ module jmr_js_vm #(
                                 : vcall_argc;
                             venv_valid[valloc_i[9:0]] <= 1'b1;
                             venv_len[valloc_i[9:0]] <= 5'd0;
+                            e64_poke(6'd46, {6'd0, valloc_i[9:0]},
+                                     {52'd0, venv_gen[valloc_i[9:0]]});
                             venv_parent[valloc_i[9:0]] <= parent_env;
                             venv_next <= valloc_i[9:0] + 10'd1;
                             vframe_return_ip[vcsp] <= vcallback_raf
@@ -7771,6 +7867,19 @@ module jmr_js_vm #(
                             vframe_fn[vcsp] <= function_handle;
                             vframe_ctor[vcsp] <= vcall_ctor_val;
                             vframe_escaped[vcsp] <= 1'b0;
+                            e64_p_frame_we <= 1'b1;
+                            e64_p_frame_idx <= vcsp[6:0];
+                            e64_p_frame_rip <= vcallback_raf
+                                ? 16'hffff
+                                : vcallback_timer ? 16'hfffe
+                                : vcallback_key ? 16'hfffd
+                                : vcallback_fe ? 16'hfffc : (ip + 16'd1);
+                            e64_p_frame_bsp <= base_sp;
+                            e64_p_frame_esc <= 1'b0;
+                            e64_p_frame_this <= vthis;
+                            e64_p_frame_env <= venv;
+                            e64_p_frame_fnv <= function_handle;
+                            e64_p_frame_ctor <= vcall_ctor_val;
                             vcsp <= vcsp + 8'd1;
                             vcallback_raf <= 1'b0;
                             vcallback_timer <= 1'b0;
@@ -7834,6 +7943,11 @@ module jmr_js_vm #(
                                     vfn_bound_this[valloc_i[12:0]] <=
                                         V64_UNDEFINED;
                                     vfn_proto[valloc_i[12:0]] <= V64_UNDEFINED;
+                                    e64_poke(6'd47, {3'd0, valloc_i[12:0]},
+                                             {39'd0, 3'd0, 6'd0, 16'hfffa});
+                                    e64_p_data2 <= V64_UNDEFINED;
+                                    e64_p_data3 <= V64_UNDEFINED;
+                                    e64_p_data4 <= V64_UNDEFINED;
                                     vst_wr(vnat_base, v64_handle(
                                         4'd7, vfn_gen[valloc_i[12:0]],
                                         {19'd0, valloc_i[12:0]}
@@ -7854,6 +7968,16 @@ module jmr_js_vm #(
                                     vfn_bound_this[valloc_i[12:0]] <=
                                         valloc_bind_this;
                                     vfn_proto[valloc_i[12:0]] <= V64_UNDEFINED;
+                                    e64_poke(6'd47, {3'd0, valloc_i[12:0]},
+                                             {39'd0,
+                                              1'b1,
+                                              vfn_flags[valloc_bind_src][1],
+                                              vfn_flags[valloc_bind_src][0],
+                                              vfn_nparam[valloc_bind_src],
+                                              vfn_entry[valloc_bind_src]});
+                                    e64_p_data2 <= vfn_env[valloc_bind_src];
+                                    e64_p_data3 <= V64_UNDEFINED;
+                                    e64_p_data4 <= valloc_bind_this;
                                     vst_wr(vnat_base, v64_handle(
                                         4'd7, vfn_gen[valloc_i[12:0]],
                                         {19'd0, valloc_i[12:0]}
@@ -7872,6 +7996,20 @@ module jmr_js_vm #(
                                 vfn_bound_this[valloc_i[12:0]] <=
                                         valloc_fn_a1[7] ? vthis : V64_UNDEFINED;
                                     vfn_proto[valloc_i[12:0]] <= V64_UNDEFINED;
+                                    e64_poke(6'd47, {3'd0, valloc_i[12:0]},
+                                             {39'd0,
+                                              valloc_fn_a1[7],
+                                              valloc_fn_a1[6],
+                                              valloc_fn_a1[7],
+                                              valloc_fn_a1[5:0],
+                                              valloc_fn_entry});
+                                    e64_p_data2 <= venv;
+                                    e64_p_data3 <= V64_UNDEFINED;
+                                    e64_p_data4 <= valloc_fn_a1[7]
+                                        ? vthis : V64_UNDEFINED;
+                                    if (vcsp != 8'd0)
+                                        e64_p_addr2 <= {1'b1, 8'd0,
+                                                        vcsp - 8'd1};
                                     vst_wr(vsp, v64_handle(
                                     4'd7, vfn_gen[valloc_i[12:0]],
                                     {19'd0, valloc_i[12:0]}
@@ -7919,6 +8057,9 @@ module jmr_js_vm #(
                                 vobj_cls[valloc_i[12:0]] <= code_rdata[23:8];
                                 vobj_builtin[valloc_i[12:0]] <= 4'd0;
                                 vobj_proto[valloc_i[12:0]] <= V64_UNDEFINED;
+                                e64_poke(6'd44, {3'd0, valloc_i[12:0]},
+                                         {52'd0, 4'd0, 2'd0, 6'd0});
+                                e64_p_addr2 <= code_rdata[23:8];
                                 for (int c = 0; c < MAX_CLS; c++)
                                     if (c < n_cls &&
                                         cls_name[c] == code_rdata[23:8])
@@ -8038,6 +8179,8 @@ module jmr_js_vm #(
                                 vobj_builtin[valloc_i[12:0]] <= 4'd0;
                                 vobj_len[valloc_i[12:0]] <= 6'd0;
                                 vobj_proto[valloc_i[12:0]] <= V64_UNDEFINED;
+                                e64_poke(6'd44, {3'd0, valloc_i[12:0]},
+                                         {52'd0, 4'd0, 2'd0, 6'd0});
                                 if (valloc_proto) begin
                                     vfn_proto[valloc_proto_fn] <= handle;
                                     vst_wr(vnat_base, handle);
@@ -8068,11 +8211,15 @@ module jmr_js_vm #(
                                 end else if (vnat_dom == 3'd1) begin
                                     // querySelector style object
                                     vobj_builtin[valloc_i[12:0]] <= 4'd1;
+                                    e64_poke(6'd44, {3'd0, valloc_i[12:0]},
+                                             {52'd0, 4'd1, 2'd0, 6'd0});
                                     vnat_style <= handle;
                                     vnat_dom <= 3'd2;
                                     valloc_i <= valloc_i + 14'd1;
                                 end else if (vnat_dom == 3'd2) begin
                                     vobj_builtin[valloc_i[12:0]] <= 4'd1;
+                                    e64_poke(6'd44, {3'd0, valloc_i[12:0]},
+                                             {52'd0, 4'd1, 2'd0, 6'd0});
                                     vst_wr(vnat_base, handle);
                                     vsp <= vnat_base + 12'd1;
                                     vnat_dom <= 3'd0;
@@ -8098,15 +8245,34 @@ module jmr_js_vm #(
                                     state <= S_HEAP_WR;
                                 end else if (vnat_dom == 3'd3) begin
                                     vobj_builtin[valloc_i[12:0]] <= 4'd5;
+                                    e64_poke(6'd44, {3'd0, valloc_i[12:0]},
+                                             {52'd0, 4'd5, 2'd0, 6'd0});
                                     vst_wr(vnat_base, handle);
                                     vsp <= vnat_base + 12'd1;
                                     vnat_dom <= 3'd0;
                                     ip <= ip + 16'd1;
                                     code_raddr <=
                                         15'(ops_base + ip + 16'd1);
-                                    state <= S_FETCH_WAIT;
+                                    // Pin fillStyle@0 strokeStyle@1 so SET_PROP
+                                    // writes one slot (MRDO palK).
+                                    hp_cmd <= HP_OSETI;
+                                    hp_v64 <= 1'b1;
+                                    hp_oid <= valloc_i[12:0];
+                                    hp_slot <= 5'd0;
+                                    hp_qn <= 3'd2;
+                                    hp_qi <= 3'd0;
+                                    hp_qk[0] <= id_fillstyle;
+                                    hp_qv[0] <= v64_int32_number(32'd1);
+                                    hp_qt[0] <= 3'd0;
+                                    hp_qk[1] <= id_strokestyle;
+                                    hp_qv[1] <= v64_int32_number(32'd1);
+                                    hp_qt[1] <= 3'd0;
+                                    hp_ret <= S_FETCH_WAIT;
+                                    state <= S_HEAP_WR;
                                 end else if (vnat_dom == 3'd4) begin
                                     vobj_builtin[valloc_i[12:0]] <= 4'd2;
+                                    e64_poke(6'd44, {3'd0, valloc_i[12:0]},
+                                             {52'd0, 4'd2, 2'd0, 6'd0});
                                     vst_wr(vnat_base, handle);
                                     vsp <= vnat_base + 12'd1;
                                     vnat_dom <= 3'd0;
@@ -8177,6 +8343,8 @@ module jmr_js_vm #(
                                     state <= S_HEAP_WR;
                                 end else if (vnat_dom == 3'd6) begin
                                     vobj_builtin[valloc_i[12:0]] <= 4'd3;
+                                    e64_poke(6'd44, {3'd0, valloc_i[12:0]},
+                                             {52'd0, 4'd3, 2'd0, 6'd0});
                                     vst_wr(vnat_base, handle);
                                     vsp <= vnat_base + 12'd1;
                                     vnat_dom <= 3'd0;
@@ -8187,6 +8355,8 @@ module jmr_js_vm #(
                                 end else begin
                                     if (valloc_regex) begin
                                         vobj_builtin[valloc_i[12:0]] <= 4'd6;
+                                        e64_poke(6'd44, {3'd0, valloc_i[12:0]},
+                                                 {52'd0, 4'd6, 2'd0, 6'd0});
                                         valloc_regex <= 1'b0;
                                         vst_wr(vsp, handle);
                             vsp <= vsp + 12'd1;
@@ -8476,20 +8646,30 @@ module jmr_js_vm #(
                     end
                 end
                 S_V64_GC_SWEEP_OBJ: begin
-                    if (vobj_alloc[vgc_obj_i] == 2'd1 &&
-                        !vobj_mark[vgc_obj_i]) begin
+                    logic free_obj;
+                    logic free_fn;
+                    logic [11:0] new_fgen;
+                    // Obj and Fn share the index space; poke 48 flags each
+                    // independently so a swept object cannot clear a live fn.
+                    free_obj = (vobj_alloc[vgc_obj_i] == 2'd1 &&
+                                !vobj_mark[vgc_obj_i]);
+                    free_fn = (vfn_valid[vgc_obj_i] && !vfn_mark[vgc_obj_i]);
+                    new_fgen = (vfn_gen[vgc_obj_i] == 12'hfff)
+                        ? 12'd1 : vfn_gen[vgc_obj_i] + 12'd1;
+                    if (free_obj) begin
                         vobj_alloc[vgc_obj_i] <= 2'd0;
                         vobj_len[vgc_obj_i] <= 6'd0;
-                            vobj_gen[vgc_obj_i] <=
-                                (vobj_gen[vgc_obj_i] == 12'hfff)
-                                ? 12'd1 : vobj_gen[vgc_obj_i] + 12'd1;
+                        vobj_gen[vgc_obj_i] <=
+                            (vobj_gen[vgc_obj_i] == 12'hfff)
+                            ? 12'd1 : vobj_gen[vgc_obj_i] + 12'd1;
                     end
-                    if (vfn_valid[vgc_obj_i] && !vfn_mark[vgc_obj_i]) begin
+                    if (free_fn) begin
                         vfn_valid[vgc_obj_i] <= 1'b0;
-                        vfn_gen[vgc_obj_i] <=
-                            (vfn_gen[vgc_obj_i] == 12'hfff)
-                            ? 12'd1 : vfn_gen[vgc_obj_i] + 12'd1;
+                        vfn_gen[vgc_obj_i] <= new_fgen;
                     end
+                    if (free_obj || free_fn)
+                        e64_poke(6'd48, {3'd0, vgc_obj_i},
+                                 {20'd0, new_fgen, 30'd0, free_fn, free_obj});
                     if (vgc_obj_i + 13'd1 >= MAX_OBJ) begin
                         vgc_arr_i <= 12'd0;
                         state <= S_V64_GC_SWEEP_ARR;
@@ -8501,6 +8681,7 @@ module jmr_js_vm #(
                         !varr_mark[vgc_arr_i]) begin
                         varr_valid[vgc_arr_i] <= 1'b0;
                         varr_len[vgc_arr_i] <= 8'd0;
+                        e64_poke(6'd49, {4'd0, vgc_arr_i}, 64'd0);
                         if (varr_long[vgc_arr_i])
                             vlong_used[varr_lidx[vgc_arr_i]] <= 1'b0;
                         varr_long[vgc_arr_i] <= 1'b0;
@@ -8519,6 +8700,7 @@ module jmr_js_vm #(
                         !venv_mark[vgc_env_i]) begin
                         venv_valid[vgc_env_i] <= 1'b0;
                         venv_len[vgc_env_i] <= 5'd0;
+                        e64_poke(6'd50, {6'd0, vgc_env_i}, 64'd0);
                         venv_gen[vgc_env_i] <=
                             (venv_gen[vgc_env_i] == 12'hfff)
                             ? 12'd1 : venv_gen[vgc_env_i] + 12'd1;
@@ -8707,6 +8889,8 @@ module jmr_js_vm #(
                             valloc_retried <= 1'b0;
                             vobj_alloc[valloc_i[12:0]] <= 2'd1;
                             vobj_builtin[valloc_i[12:0]] <= 4'd7;
+                            e64_poke(6'd44, {3'd0, valloc_i[12:0]},
+                                     {52'd0, 4'd7, 2'd0, 6'd0});
                             vst_wr(vnat_base, v64_handle(
                                 4'd5, vobj_gen[valloc_i[12:0]],
                                 {19'd0, valloc_i[12:0]}
@@ -8899,6 +9083,8 @@ module jmr_js_vm #(
                                         vprom_done <= 1'b0;
                                         varr_len[vjs_val[p][11:0]] <=
                                             js_i[p] + 8'd1;
+                                        e64_poke(6'd6, {4'd0, vjs_val[p][11:0]},
+                                                 {56'd0, js_i[p] + 8'd1});
                                         js_i[p] <= js_i[p] + 8'd1;
                                         json_pph <= 3'd0;
                                         hp_cmd <= HP_ASETI;
@@ -8954,6 +9140,14 @@ module jmr_js_vm #(
                                         vlong_used[valloc_i[7:0]] <= 1'b1;
                                     end else
                                         varr_long[valloc_i[11:0]] <= 1'b0;
+                                    // Exec ARRAY_GET uses its varr_valid/len
+                                    // copy; JSON.parse must poke or finder
+                                    // sees length 0 and floods push (fault=3).
+                                    e64_poke(6'd45, {4'd0, valloc_i[11:0]},
+                                             {55'd0,
+                                              (valloc_i >= 14'(MAX_ARR_SHORT)),
+                                              8'd0});
+                                    e64_p_addr2 <= {8'd0, valloc_i[7:0]};
                                     vjs_val[js_sp] <= v64_handle(
                                         4'd6, varr_gen[valloc_i[11:0]],
                                         {20'd0, valloc_i[11:0]}
@@ -8991,6 +9185,8 @@ module jmr_js_vm #(
                                 json_rp <= json_rp + 14'd1;
                                 varr_len[vjs_val[p][11:0]] <=
                                     js_i[p] + 8'd1;
+                                e64_poke(6'd6, {4'd0, vjs_val[p][11:0]},
+                                         {56'd0, js_i[p] + 8'd1});
                                 js_i[p] <= js_i[p] + 8'd1;
                                 js_sp <= c;
                                 hp_cmd <= HP_ASETI;
@@ -9135,7 +9331,34 @@ module jmr_js_vm #(
                 S_HEAP_WAIT: state <= S_HEAP_CMP;
                 S_HEAP_CMP: begin
                     // rdata valid this cycle. Stop at len, not a 32-wide mux.
-                    if (hp_env) begin
+                    // Object GET/SET/LOOKFN: exec copies of alloc/gen can lag.
+                    // Reject stale handles here on the parent heap (keep gen).
+                    // Compare the gen latched at issue (hp_spr_w[11:0]), not
+                    // TOS — the window can hold a different word (false stale).
+                    if (!hp_env && hp_v64 && hp_phase == 3'd0 &&
+                        hp_slot == 5'd0 &&
+                        (hp_cmd == HP_GETPROP || hp_cmd == HP_SETPROP ||
+                         hp_cmd == HP_LOOKFN) &&
+                        (vobj_alloc[hp_oid] != 2'd1 ||
+                         vobj_gen[hp_oid] != hp_spr_w[11:0])) begin
+                        if (hp_cmd == HP_SETPROP) begin
+                            vst_wr(vsp - 12'd2, `VST_AT(vsp - 12'd1));
+                            vsp <= vsp - 12'd1;
+                            ip <= ip + 16'd1;
+                            code_raddr <= 15'(ops_base + ip + 16'd1);
+                            state <= S_FETCH_WAIT;
+                        end else if (hp_cmd == HP_LOOKFN) begin
+                            hp_rval <= V64_UNDEFINED;
+                            hp_hit <= 1'b0;
+                            state <= hp_ret;
+                        end else begin
+                            vst_wr(vsp - 12'd1, V64_UNDEFINED);
+                            vst_win[0] <= V64_UNDEFINED;
+                            ip <= ip + 16'd1;
+                            code_raddr <= 15'(ops_base + ip + 16'd1);
+                            state <= S_FETCH_WAIT;
+                        end
+                    end else if (hp_env) begin
                         if (hp_slot < hp_len[4:0] &&
                             venv_rdata[72:64] == hp_key[8:0]) begin
                             hp_hit <= 1'b1;
@@ -9161,6 +9384,7 @@ module jmr_js_vm #(
                                 if (!vvar_valid[hp_key[8:0]]) begin
                                     vvars[hp_key[8:0]] <= hp_wval;
                                     vvar_valid[hp_key[8:0]] <= 1'b1;
+                                    e64_poke(6'd12, {7'd0, hp_key[8:0]}, hp_wval);
                                 end
                                 hp_env <= 1'b0;
                                 vsp <= vsp - 12'd1;
@@ -9223,6 +9447,7 @@ module jmr_js_vm #(
                                     !vvar_valid[hp_key[8:0]]) begin
                                     vvars[hp_key[8:0]] <= hp_wval;
                                     vvar_valid[hp_key[8:0]] <= 1'b1;
+                                    e64_poke(6'd12, {7'd0, hp_key[8:0]}, hp_wval);
                                 end
                                 hp_env <= 1'b0;
                                 vsp <= vsp - 12'd1;
@@ -9300,7 +9525,8 @@ module jmr_js_vm #(
                                             (nsv[47:44] == V64_KIND_OBJECT ||
                                              nsv[47:44] == V64_KIND_ELEMENT) &&
                                             nsv[31:0] < MAX_OBJ &&
-                                            vobj_alloc[nsv[12:0]] == 2'd1);
+                                            vobj_alloc[nsv[12:0]] == 2'd1 &&
+                                            vobj_gen[nsv[12:0]] == nsv[43:32]);
                                         nsi = nsv[12:0];
                                     end else begin
                                         nsi = stack[hp_vbase[10:0] + {8'd0, hp_qi} + 11'd1][12:0];
@@ -9342,6 +9568,8 @@ module jmr_js_vm #(
                                 hp_slot <= hp_tn[4:0];
                                 hp_tn <= hp_tn + 6'd1;
                                 vobj_len[hp_oid] <= hp_tn + 6'd1;
+                                e64_poke(6'd2, {3'd0, hp_oid},
+                                         {58'd0, hp_tn + 6'd1});
                                 if (!hp_v64)
                                     obj_n[hp_oid] <= hp_tn + 6'd1;
                                 hp_phase <= 3'd2;
@@ -9500,6 +9728,8 @@ module jmr_js_vm #(
                                      hp_len < OBJ_SLOTS[5:0]) begin
                             hp_slot <= hp_len[4:0];
                             vobj_len[hp_oid] <= hp_len + 6'd1;
+                            e64_poke(6'd2, {3'd0, hp_oid},
+                                     {58'd0, hp_len + 6'd1});
                             if (!hp_v64)
                                 obj_n[hp_oid] <= hp_len + 6'd1;
                             state <= S_HEAP_WR;
@@ -9536,8 +9766,11 @@ module jmr_js_vm #(
                 end
                 S_HEAP_WR: begin
                     if (hp_env) begin
-                        if (!hp_hit)
+                        if (!hp_hit) begin
                             venv_len[hp_eid] <= venv_len[hp_eid] + 5'd1;
+                            e64_poke(6'd10, {6'd0, hp_eid},
+                                     {59'd0, venv_len[hp_eid] + 5'd1});
+                        end
                         vsp <= vsp - 12'd1;
                         ip <= ip + 16'd1;
                         code_raddr <= 15'(ops_base + ip + 16'd1);
@@ -9551,6 +9784,8 @@ module jmr_js_vm #(
                             if (vobj_len[hp_oid] < {3'd0, hp_qn} + {1'b0, hp_slot}) begin
                                 vobj_len[hp_oid] <=
                                     {3'd0, hp_qn} + {1'b0, hp_slot};
+                                e64_poke(6'd2, {3'd0, hp_oid},
+                                         {58'd0, {3'd0, hp_qn} + {1'b0, hp_slot}});
                                 if (!hp_v64)
                                     obj_n[hp_oid] <=
                                         {3'd0, hp_qn} + {1'b0, hp_slot};
@@ -10067,6 +10302,8 @@ module jmr_js_vm #(
                         fl = varr_len[vfe_map[11:0]];
                         if (fl < ARR_CAP[7:0]) begin
                             varr_len[vfe_map[11:0]] <= fl + 8'd1;
+                            e64_poke(6'd6, {4'd0, vfe_map[11:0]},
+                                     {56'd0, fl + 8'd1});
                             hp_cmd <= HP_ASETI;
                             hp_v64 <= 1'b1;
                             hp_from_stack <= 1'b0;

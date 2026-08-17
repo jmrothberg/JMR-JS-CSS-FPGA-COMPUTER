@@ -2601,6 +2601,11 @@ def test_donkey_hm_enter_keeps_raf_armed():
     machine.input.key_event(13, "Enter", True)
     machine.frame_tick()
     machine.input.key_event(13, "Enter", False)
+    machine.frame_tick()
+    # HTML: first Enter → character select; second Enter → game + update() rAF.
+    machine.input.key_event(13, "Enter", True)
+    machine.frame_tick()
+    machine.input.key_event(13, "Enter", False)
     for _ in range(6):
         machine.frame_tick()
         assert hw.error is None, hw.error
@@ -3757,4 +3762,131 @@ addEventListener("keyup", function(e) {
     assert vm.error is None, vm.error
     assert vm.globals.get("seenKey") == "Enter", vm.globals.get("seenKey")
     assert vm.globals.get("seenCode") == 13.0, vm.globals.get("seenCode")
+
+
+def test_load_store_var_a1_global_and_local():
+    """Compiler packs local LOAD/STORE a1>=2; globals stay a1=0 (chain)."""
+    from functional_model.bytecode import Op
+
+    chunk = compile_source(
+        "var g = 1;\n"
+        "function f() {\n"
+        "  var loc = 2;\n"
+        "  g = loc;\n"
+        "  return g;\n"
+        "}\n"
+        "var r = f();\n"
+    )
+    names = chunk.names
+    loc_i = names.index("loc") if "loc" in names else -1
+    g_i = names.index("g") if "g" in names else -1
+    local_a1 = [
+        op[2]
+        for op in chunk.code
+        if op[0] in (Op.LOAD_VAR, Op.STORE_VAR)
+        and len(op) > 2
+        and op[1] == loc_i
+    ]
+    global_packed = [
+        op
+        for op in chunk.code
+        if op[0] in (Op.LOAD_VAR, Op.STORE_VAR)
+        and len(op) > 2
+        and op[1] == g_i
+        and op[2] == 1
+    ]
+    assert any(a >= 2 for a in local_a1), (chunk.code, names)
+    assert not global_packed, global_packed
+    vm = _hw_v64(
+        "var g = 1;\n"
+        "function f() {\n"
+        "  var loc = 2;\n"
+        "  g = loc;\n"
+        "  return g;\n"
+        "}\n"
+        "var r = f();\n"
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("r") == 2.0
+
+
+def test_hw_value64_finder_temps_reclaimed():
+    """Nested coord literals must not pin the 1024-object heap after return."""
+    src = (
+        "function next() { return {x: 1, y: 2}; }\n"
+        "function finder() {\n"
+        "  var i = 0;\n"
+        "  while (i < 2000) { next(); i = i + 1; }\n"
+        "}\n"
+        "finder();\n"
+        "var live = 1;\n"
+    )
+    vm = _hw_v64(src)
+    assert vm.error is None, vm.error
+    nobj = sum(1 for slot in vm._value_objects if slot is not None)
+    nfn = sum(1 for slot in vm._value_functions if slot is not None)
+    assert nobj + nfn < 1024, (nobj, nfn)
+    assert vm.globals.get("live") == 1.0
+
+
+def test_canvas_fill_rect_row_slice():
+    """fill_rect writes clipped row slices, not a per-pixel Python loop."""
+    from functional_model.canvas_engine import CanvasEngine
+
+    c = CanvasEngine()
+    c.fill_style = 5
+    c.fill_rect(10, 20, 8, 3)
+    w = c.width
+    for y in range(20, 23):
+        row = c.back[y * w + 10 : y * w + 18]
+        assert bytes(row) == bytes([5] * 8)
+    assert c.back[19 * w + 10] != 5
+    assert c.back[20 * w + 9] != 5
+
+
+def test_hw_value64_palk_global_fillstyle_loop():
+    """palK-like: global PAL/c load + fillStyle + tiny fillRect stays correct."""
+    src = (
+        "var PAL = [0, 1, 2, 3];\n"
+        "var c = document.querySelector('canvas').getContext('2d');\n"
+        "function palK(k) {\n"
+        "  c.fillStyle = PAL[k];\n"
+        "  c.fillRect(0, 0, 2, 2);\n"
+        "}\n"
+        "palK(1);\n"
+        "swapBuffers();\n"
+    )
+    vm = _hw_v64(src)
+    assert vm.error is None, vm.error
+    assert vm.canvas.front[0] != 0
+
+
+def test_mrdo_hm_enter_paints_without_hang():
+    """MRDO PYTHON bytecode: Enter starts; a couple of paints finish."""
+    import time
+    from pathlib import Path
+
+    mrdo = Path(__file__).resolve().parents[1] / "storage" / "MRDO.HTML"
+    if not mrdo.is_file():
+        pytest.skip("MRDO.HTML missing")
+    machine = Machine()
+    machine.source_name = "MRDO.HTML"
+    t0 = time.perf_counter()
+    out = machine._run_html_bytecode(mrdo.read_text(encoding="utf-8"))
+    hw = machine._hw_vm
+    assert hw is not None, out
+    assert hw.error is None, hw.error
+    assert "ERROR" not in out[0]
+    machine.input.key_event(13, "Enter", True)
+    machine.frame_tick()
+    machine.input.key_event(13, "Enter", False)
+    t1 = time.perf_counter()
+    for _ in range(2):
+        machine.frame_tick()
+        assert hw.error is None, hw.error
+    elapsed = time.perf_counter() - t1
+    assert hw.checkpoint()["raf"] >= 1
+    # Was ~1 fps (1s+/frame). Row-slice blit + a1 globals should be well under that.
+    assert elapsed < 8.0, elapsed
+    assert (time.perf_counter() - t0) < 30.0
 

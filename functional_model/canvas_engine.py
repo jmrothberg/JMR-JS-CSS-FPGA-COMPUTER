@@ -206,10 +206,15 @@ class CanvasEngine:
         y0 = max(0, int(y))
         x1 = min(self.width, x0 + int(w))
         y1 = min(self.height, y0 + int(h))
+        if x0 >= x1 or y0 >= y1:
+            return
+        # Row slices: FM of RTL S_V64_RECT (1 write/clock, not per-pixel Python).
+        row = bytes([c]) * (x1 - x0)
+        back = self.back
+        width = self.width
         for yy in range(y0, y1):
-            row = yy * self.width
-            for xx in range(x0, x1):
-                self.back[row + xx] = c
+            start = yy * width + x0
+            back[start : start + (x1 - x0)] = row
 
     def clear_rect(self, x: int, y: int, w: int, h: int) -> None:
         self.fill_rect(x, y, w, h, 0)

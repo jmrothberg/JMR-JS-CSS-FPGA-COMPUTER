@@ -73,6 +73,16 @@ destroy WNS. Extra GET_PROP clocks are real silicon, not a reason to keep
 combo heaps so F9 “feels fast.” Details: [docs/FPGA_FIT.md](../../docs/FPGA_FIT.md),
 Constitution rule 11 + language-native method step 7.
 
+## One physical heap — do not clone then skip generation
+
+FPGA-SIM is the **same RTL** as the standalone `.bin` (`make -C tools/board_flow
+bit`). Speed work inside exec64 must address the **one** 1-D SRAM (scalar
+req/ack, rdata next clock). Do **not** give exec64 its own `vvars` / `venv_*`
+/ `vobj_*` and then strip gen-match so those copies would not “look stale.”
+That 2026-08-17 overnight cheat is **not** four title bugs (PACMAN black FB,
+rAF `fn`, Date throttle, INVADERS/DONKEY/MRDO skew). Handle
+`(generation,index)` stays. See `one-heap-keep-gen.mdc`.
+
 ## Code touchpoints
 
 - [`runtime/sim_backend.py`](../../runtime/sim_backend.py) — default RTL

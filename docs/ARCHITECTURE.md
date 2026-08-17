@@ -183,6 +183,8 @@ host blocks. Compile/parse may take many cycles — that is intentional.
 
 - **No hidden CPU.** Nothing evaluates JS by calling into V8 / QuickJS / a soft core.
 - **No merged engines.** Expression, heap, Canvas, blitter, video stay separate.
+- **No second JS heap in exec64.** One physical 1-D SRAM; do not skip generation
+  to hide exec/parent dual-copy skew. FPGA-SIM is the standalone `.bin` path.
 - **No BASIC token tables.** This is not a re-skinned BASIC machine.
 - **No Nexys A7-100T assumptions.** Primary board is **Nexys Video** (XC7A200T);
   wiring owned by `FPGA_BRINGUP.md`. PA-StarLite is a later port.

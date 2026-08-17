@@ -162,6 +162,9 @@ class App:
         self._last_prompt: str | None = None
         self._busy_prompt: str | None = None  # keep typed RUN/LIST until LINE returns
         self._arch_phase_override: str | None = None
+        # NEW: ignore leftover F9/F10 from the launch key queue / auto-repeat.
+        self._gui_t0 = time.monotonic()
+        self._fkey_t = 0.0
 
         self._build_ui()
         # MORE waiter: pump Tk + refresh glass (BASIC more_idle pattern)
@@ -179,8 +182,10 @@ class App:
         self.root.bind_all("<Control-V>", self.on_paste)
         # NEW: mouse stick OFF — click only focuses glass (no JOY overwrite of KEYBITS)
         self.canvas_label.bind("<Button-1>", lambda e: self.canvas_label.focus_set())
-        self.root.bind_all("<F9>", self.cycle_runtime)
-        self.root.bind_all("<F10>", self._toggle_arch_monitor)
+        # KeyRelease: X11 auto-repeat is extra KeyPress only. A held F9 used
+        # to PYTHON→FPGA-SIM→BOARD in one tap. bind_all covers the arch window.
+        self.root.bind_all("<KeyRelease-F9>", self.cycle_runtime)
+        self.root.bind_all("<KeyRelease-F10>", self._toggle_arch_monitor)
         self.root.bind_all("<Escape>", lambda e: self.break_program())
 
         self.machine.paint_monitor("> ")
@@ -240,9 +245,7 @@ class App:
         self.arch = ArchitectureView(self.arch_window)
         # NEW: X hides (does not quit the glass). bind_all F10 already covers focus.
         self.arch_window.protocol("WM_DELETE_WINDOW", self._hide_arch_monitor)
-        # NEW: F-keys on the monitor toplevel (bind_all also fires — debounce)
-        self.arch_window.bind("<F9>", self.cycle_runtime)
-        self.arch_window.bind("<F10>", self._toggle_arch_monitor)
+        # F9/F10: bind_all KeyRelease already covers this toplevel.
         self.arch_window.bind("<Escape>", lambda e: self.break_program())
         self._place_arch_window()
         try:
@@ -303,9 +306,11 @@ class App:
         return "break"
 
     def _fkey_ok(self) -> bool:
-        """bind_all + arch_window bind both fire — drop the duplicate."""
+        """One F-key per physical press. Drop launch-queue and auto-repeat."""
         now = time.monotonic()
-        if now - getattr(self, "_fkey_t", 0.0) < 0.08:
+        if now - getattr(self, "_gui_t0", now) < 0.40:
+            return False
+        if now - getattr(self, "_fkey_t", 0.0) < 0.25:
             return False
         self._fkey_t = now
         return True
@@ -396,9 +401,9 @@ class App:
             return
         time.sleep(0.01)
 
-    def cycle_runtime(self, _event=None) -> None:
+    def cycle_runtime(self, _event=None) -> str:
         if not self._fkey_ok():
-            return
+            return "break"
         old = self.backend
         self.backend_index = (self.backend_index + 1) % len(self.backends)
         self.backend = self.backends[self.backend_index]
@@ -417,6 +422,7 @@ class App:
         self._set_status(self._status_text())
         self._paint_prompt()
         self.canvas_label.focus_set()
+        return "break"
 
     def break_program(self) -> None:
         if not self._fkey_ok():
@@ -596,6 +602,8 @@ class App:
         return None
 
     def on_key_release(self, event: tk.Event) -> str | None:
+        if event.keysym in ("F9", "F10", "Escape"):
+            return None
         # NEW: raw keyup twin of the on_key_press key_event forward
         if self._is_running():
             jk = _js_key(event)

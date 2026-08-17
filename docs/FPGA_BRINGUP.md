@@ -60,6 +60,15 @@ arrays is **not** board-ready (Vivado `Synth 8-4556` / LUT explosion). Write
 memories as SRAM from the first RTL line — same files as the `.bin`. Rule:
 [FPGA_FIT.md](FPGA_FIT.md), Constitution § language-native method step 7.
 
+**Trap (2026-08-17 overnight cheat):** Verilator will also happily simulate
+**two** copies of `vvars` / `venv_*` / `vobj_*` (exec64 private + parent GC).
+The leftover T200 BRAM cannot hold both, and they go stale. Do **not** strip
+generation / gen-match so the copies would not “look stale.” That produced
+four glass symptoms (PACMAN black FB, rAF `fn`, Date throttle,
+INVADERS/DONKEY/MRDO skew) — it is **one** cheat, not four title bugs.
+FPGA-SIM must stay the path that `make -C tools/board_flow bit` compiles to
+a standalone `.bin` (HDMI + local keyboard). See `one-heap-keep-gen.mdc`.
+
 ### What is AMD Vivado?
 
 Vendor tool that turns FPGA RTL into a bitstream. **Linux-only** in this

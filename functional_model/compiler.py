@@ -217,6 +217,8 @@ class Compiler:
         # NEW: >0 inside function/method/arrow → let/const must STORE (not LET_VAR).
         # Top-level keeps LET_VAR for startLoop re-entry (DONKEY.JS inited etc.).
         self._fn_depth = 0
+        # NEW: per-function local name → env slot 0..15 for LOAD_VAR/STORE_VAR a1.
+        self._local_stack: List[dict[str, int]] = []
         # NEW: >0 inside while/for body. `var row = []` in a loop must STORE;
         # LET_VAR skips if the name exists, so every row aliases one array.
         self._loop_depth = 0
@@ -321,6 +323,9 @@ class Compiler:
         if kind != "ID":
             raise CompileError("EXPECTED FUNCTION NAME", line)
         fname = text
+        # Parent can close over this name while we compile the body.
+        if self._local_stack:
+            self._note_local(fname)
         self._expect("(")
         params: List[Any] = []
         if self._peek_text() != ")":
@@ -348,6 +353,7 @@ class Compiler:
         jmp_over = self._emit(Op.JUMP, 0)
         entry = len(self.code)
         self._fn_compiling = fname
+        self._local_stack.append({})
         # prologue: stack has arg0..argN-1 (last arg on top)
         # NEW: params declare into the per-call lexical env (LET_VAR).
         # arg2=1 flags "call-frame local" for RTL (flat vars: always store;
@@ -373,6 +379,8 @@ class Compiler:
                 self._statement()
         self._expect("}")
         self._fn_depth -= 1
+        if self._local_stack:
+            self._local_stack.pop()
         if not ceq_lut:
             # implicit return undefined
             self._emit(Op.LOAD_CONST, self._const(None))
@@ -662,6 +670,7 @@ class Compiler:
             self._expect(")")
             jmp_over = self._emit(Op.JUMP, 0)
             entry = len(self.code)
+            self._local_stack.append({})
             # NEW: method params declare into the per-call env (LET_VAR);
             # arg2=1 = call-frame local flag for RTL (always store there)
             for p in reversed(params):
@@ -684,6 +693,8 @@ class Compiler:
                 self._statement()
             self._expect("}")
             self._fn_depth -= 1
+            if self._local_stack:
+                self._local_stack.pop()
             self._emit(Op.LOAD_CONST, self._const(None))
             self._emit(Op.RET_VAL)
             self._patch(jmp_over, Op.JUMP, len(self.code))
@@ -758,9 +769,47 @@ class Compiler:
         if t is None and self.i > 0:
             t = self.tokens[self.i - 1]
         line = int(t[2]) if t is not None else 0
-        self.code.append(tuple(op_args))
+        args = tuple(op_args)
+        # LOAD_VAR/STORE_VAR a1: 0=chain (global/upvalue), 2+slot=local.
+        # Do not pack a1=1 (guessed global) — hoisted functions have no outer
+        # stack, so that skip missed env slots (bunkers/timestamp/`f`).
+        if args and args[0] in (Op.LOAD_VAR, Op.STORE_VAR) and len(args) == 2:
+            ni = int(args[1])
+            name = self.names[ni] if 0 <= ni < len(self.names) else ""
+            a1 = self._var_a1(name)
+            if a1:
+                args = (args[0], ni, a1)
+        if args and args[0] == Op.LET_VAR and len(args) >= 2:
+            ni = int(args[1])
+            local = len(args) > 2 and args[2]
+            if local:
+                name = self.names[ni] if 0 <= ni < len(self.names) else ""
+                self._note_local(name)
+        self.code.append(args)
         self.op_lines.append(line)
         return len(self.code) - 1
+
+    def _note_local(self, name: str) -> None:
+        if not name or not self._local_stack:
+            return
+        cur = self._local_stack[-1]
+        if name not in cur and len(cur) < 16:
+            cur[name] = len(cur)
+
+    def _var_a1(self, name: str) -> int:
+        """Pack LOAD_VAR/STORE_VAR a1. 0=chain, 2+slot=local. Never a1=1.
+
+        Hoisted `function animate` has no enclosing `_local_stack`, so a
+        guessed global skipped the env where `const bunkers` / upvalues live.
+        Chain (a1=0) walks env then vvars — same as before the fast path.
+        """
+        if not name:
+            return 0
+        if self._local_stack:
+            cur = self._local_stack[-1]
+            if name in cur:
+                return 2 + cur[name]
+        return 0
 
     def _patch(self, idx: int, *op_args: Any) -> None:
         self.code[idx] = tuple(op_args)
@@ -873,6 +922,10 @@ class Compiler:
             kind, text, line = self._advance()
             if kind != "ID":
                 raise CompileError("EXPECTED IDENTIFIER", line)
+            # Note the local before the initializer so `var fn = function(){ fn(); }`
+            # (and rAF(animate) closures) see an upvalue, not a false global a1=1.
+            if self._fn_depth:
+                self._note_local(text)
             if self._match("="):
                 # NEW: _ternary not _expression — `,` separates declarators
                 # (PACMAN `var _CONFIG=[..], _LIFE=5, _SCORE=0` got _LIFE=0)
@@ -1741,6 +1794,7 @@ class Compiler:
         """
         jmp_over = self._emit(Op.JUMP, 0)
         entry = len(self.code)
+        self._local_stack.append({})
         # NEW: params declare into the per-call env (LET_VAR); arg2=1 =
         # call-frame local flag for RTL (always store there)
         for p in reversed(params):
@@ -1754,6 +1808,8 @@ class Compiler:
             self._expression()
             self._emit(Op.RET_VAL)
         self._fn_depth -= 1
+        if self._local_stack:
+            self._local_stack.pop()
         self._patch(jmp_over, Op.JUMP, len(self.code))
         self._emit(Op.MAKE_FN, entry, len(params), 1 if is_arrow else 0)
 
