@@ -66,6 +66,7 @@ class SimBackend(RuntimeBackend):
         self._play_t = 0.0
         self._play_frames = 0
         self._play_fclk: list = []
+        self._log_vdraw = ""
         self._last_glass = ""
         self._more_page = 0
         # NEW: Architecture Monitor — cache VMSTAT/STATUS (no extra RPC while RUN)
@@ -781,17 +782,23 @@ class SimBackend(RuntimeBackend):
                     st = ""
             if st:
                 fclk = 0
+                vdraw = ""
                 for tok in st.split():
                     if tok.startswith("fclk="):
                         try:
                             fclk = int(tok.split("=", 1)[1])
                         except ValueError:
                             pass
+                    elif tok.startswith("vdraw="):
+                        vdraw = tok
                 if fclk:
                     self._play_fclk.append(fclk)
-                if capped or "fcap=1" in st:
-                    self._log.note(f"FRAME {st}")
-                elif first3:
+                vdraw_chg = bool(vdraw) and vdraw != self._log_vdraw
+                if vdraw:
+                    self._log_vdraw = vdraw
+                # Overlay/capped FRAME used to dump the same VMSTAT 100+ times.
+                # Log first3, fcap hang, and a vdraw change (maze→win overlay).
+                if first3 or "fcap=1" in st or vdraw_chg:
                     self._log.note(f"FRAME {st}")
                 # VM halt (fault=255 ARRAY_GET, heap ovf, …): drop game_mode
                 # so LIST is the console, not keys queued behind a dead FRAME.

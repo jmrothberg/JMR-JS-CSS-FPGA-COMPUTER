@@ -4630,6 +4630,111 @@ def test_rtl_value64_nested_foreach_finder():
         sim.shutdown()
 
 
+def test_rtl_value64_proto_coord_finder_after_getimagedata():
+    """Same FLAG_VALUE64 image as PYTHON proto-coord+getImageData finder."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import encode_chunk
+    from test_bytecode_js import _PROTO_COORD_FINDER_JS
+
+    sim = _sim()
+    try:
+        sim._program_image = encode_chunk(
+            compile_source(_PROTO_COORD_FINDER_JS), v2=True, value64=True
+        )
+        assert sim._stream_program_image().startswith("OK")
+        st = _wait_vm_idle_or_frame(sim)
+        if "fault=241" in st:
+            st = st + " " + sim._rpc("STK?")
+        assert "fault=0" in st, st
+        if "sname=S_WAIT_FRAME" in st:
+            sim._rpc("FRAME")
+            st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 15, 15) == 2, st
+        assert _fb_pix(raw, 45, 15) == 3, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_value64_foreach_getimagedata_then_finder():
+    """Same FLAG_VALUE64 image as PYTHON getImageData-inside-forEach then finder."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import encode_chunk
+    from test_bytecode_js import _FOREACH_GETIMG_FINDER_JS
+
+    sim = _sim()
+    try:
+        sim._program_image = encode_chunk(
+            compile_source(_FOREACH_GETIMG_FINDER_JS), v2=True, value64=True
+        )
+        assert sim._stream_program_image().startswith("OK")
+        st = _wait_vm_idle_or_frame(sim)
+        if "fault=241" in st:
+            st = st + " " + sim._rpc("STK?")
+        assert "fault=0" in st, st
+        if "sname=S_WAIT_FRAME" in st:
+            sim._rpc("FRAME")
+            st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 15, 15) == 2, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_value64_param_x_coord_array_set():
+    """Same FLAG_VALUE64 image as PYTHON position2coord(x,y) ARRAY_SET."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import encode_chunk
+    from test_bytecode_js import _PARAM_X_COORD_SET_JS
+
+    sim = _sim()
+    try:
+        sim._program_image = encode_chunk(
+            compile_source(_PARAM_X_COORD_SET_JS), v2=True, value64=True
+        )
+        assert sim._stream_program_image().startswith("OK")
+        st = _wait_vm_idle_or_frame(sim)
+        if "fault=241" in st:
+            st = st + " " + sim._rpc("STK?")
+        assert "fault=0" in st, st
+        if "sname=S_WAIT_FRAME" in st:
+            sim._rpc("FRAME")
+            st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 15, 15) == 2, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_value64_maze31_neighbor_array_set():
+    """Same FLAG_VALUE64 image as PYTHON 31×28 neighbor ARRAY_SET."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import encode_chunk
+    from test_bytecode_js import _maze31_neighbor_set_js
+
+    sim = _sim()
+    try:
+        sim._program_image = encode_chunk(
+            compile_source(_maze31_neighbor_set_js()), v2=True, value64=True
+        )
+        assert sim._stream_program_image().startswith("OK")
+        st = _wait_vm_idle_or_frame(sim)
+        if "fault=241" in st:
+            st = st + " " + sim._rpc("STK?")
+        assert "fault=0" in st, st
+        if "sname=S_WAIT_FRAME" in st:
+            sim._rpc("FRAME")
+            st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 15, 15) == 2, st
+    finally:
+        sim.shutdown()
+
+
 def test_rtl_value64_foreach_ctor_assign_function_prop():
     """Same FLAG_VALUE64 image as PYTHON forEach+new Ctor+assign; no fault=2."""
     from functional_model.compiler import compile_source
@@ -4854,6 +4959,51 @@ requestAnimationFrame(tick);
             f"maze values wrong after createMap (first bad y={vy} x={vx} got={vgot})"
         )
         assert _fb_pix(raw, 55, 15) == 5, "map.get edge behaviour wrong"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_value64_stringify_indexof_zero_keeps_beans():
+    """Value64 JSON.stringify(data).indexOf(0) must see digit 0 (beans check).
+
+    PACMAN stage.update does JSON.stringify(beans.data).indexOf(0)<0 then
+    nextStage(). Small stringify+parse tests never call indexOf(0); tagged
+    maze31 uses the other heap. Markers: (15,15)=2 small chained, (35,15)=4
+    maze chained, (55,15)=5 maze stored then indexOf, (75,15)=6 "0" needle.
+    """
+    src = (
+        "var m = [" + _MAZE31 + "];\n"
+        + r"""
+var small_hit = JSON.stringify([[1,0],[1,1]]).indexOf(0);
+var beans = {data: JSON.parse(JSON.stringify(m))};
+var chained = JSON.stringify(beans.data).indexOf(0);
+var stored = JSON.stringify(beans.data);
+var stored_hit = stored.indexOf(0);
+var str_needle = stored.indexOf("0");
+function tick() {
+  if (small_hit >= 0 && chained >= 0 && stored_hit >= 0 && str_needle >= 0)
+    fillRect(10, 10, 10, 10, 2);
+  else
+    fillRect(10, 10, 10, 10, 1);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    )
+    sim = _sim()
+    try:
+        _patch_js_v64("IDX0.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "IDX0.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        # fillRect pixels are not in FB? here; vdraw is the last paint (same
+        # as test_rtl_value64_stringify_replace_parse_opens_digit).
+        assert "vdraw=10,10,10,10,2" in st, (
+            f"stringify.indexOf digit-0 miss {st}"
+        )
     finally:
         sim.shutdown()
 

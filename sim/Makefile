@@ -91,6 +91,9 @@ CORE_SRCS := \
 	$(RTL)/engines/jmr_mini_fb.sv \
 	$(RTL)/engines/jmr_rectdemo_engine.sv \
 	$(RTL)/engines/jmr_value.sv \
+	$(RTL)/engines/jmr_js_vm_pkg.sv \
+	$(RTL)/engines/jmr_js_vm_exec32.sv \
+	$(RTL)/engines/jmr_js_vm_exec64.sv \
 	$(RTL)/engines/jmr_js_vm.sv \
 	$(RTL)/engines/jmr_sram_model.sv \
 	$(RTL)/engines/jmr_palette_bram.sv \
@@ -119,7 +122,7 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 		-Mdir $(BUILD)/obj_dir \
 		-o $(abspath $(BUILD)/jmr_js_sim_server) \
 		--top-module jmr_js_core \
-		-Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+		-Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-MULTIDRIVEN -Wno-LATCH \
 		-CFLAGS "-std=c++17 -O2" \
 		$(CORE_SRCS) \
 		sim_main.cpp

@@ -1,6 +1,6 @@
 # Session handoff
 
-**2026-08-16 night.** This file is **current truth only**.
+**2026-08-17.** This file is **current truth only**.
 
 Product plan (steps, not glass): [`working_html_fpga-sim`](/home/jonathan/.cursor/plans/working_html_fpga-sim_a719ac28.plan.md). Read that file and follow it. PYTHON glass for INVADERS / PACMAN / DONKEY is **user-confirmed**. Do not mark FPGA-SIM F9 green. **No `.bin` until F9.** INVADERS starts on **Space**.
 
@@ -10,49 +10,43 @@ Product plan (steps, not glass): [`working_html_fpga-sim`](/home/jonathan/.curso
 |---|---|---|
 | PYTHON | INVADERS / PACMAN / DONKEY | play |
 | PYTHON | MRDO | loads/plays at **~1 fps** |
-| FPGA-SIM | PACMAN | **still bounces to READY.** Newest: `traces/session_20260817_023235_222288_FPGA-SIM.log` — `S_DONE` **`fault=2` `ip=1718` `vcsp=128`** `arr=1571` `raf=0` `fclk≈2.1M` (not 241). IP 1718 is `new Stage(options)` in `createStage` (HTML ~404) during `_COIGIG.forEach`. |
+| FPGA-SIM | PACMAN | splash then skip-stages (YOU WIN). Fix is in RTL; **restart GUI** and F9. Do not treat pytest as F9. |
 
-## PACMAN bounce (fault 2 this glass, 241 was the previous one)
+## Why PACMAN bounced (not a VM crash)
 
-Do not no-op ARRAY_SET 241. Do not edit `storage/PACMAN.HTML`.
+`fault=0` the whole time. Splash → maze (`vdraw=385,419,4,4,25`, `fclk≈5M`) → overlay (`vdraw=0,0,640,480,0`, `fclk≈715k`) after ~12 maze frames. That is `nextStage()` every rAF, then YOU WIN.
 
-Previous 241 fix refilled TOS `win[1..]` from BRAM on **every BIND / forEach-done / RET_VAL**. Glass then died at **call-stack overflow** (`fault=2`, `CSTK=128`) while constructing stages — BIND refill was speculative and ran on constructors. **Reverted BIND and forEach-done WIN_FILL.** RET_VAL refill when `base>=1` stays (that is the `item.path = finder()` hole the snippet proved).
+PACMAN `stage.update` does `JSON.stringify(beans.data).indexOf(0)` (JS ToString(0) is `"0"`, character search). INVADERS / MRDO / ASTEROID never do that. No title gate. Do not rewrite `storage/PACMAN.HTML`. Do not no-op 241.
 
-Lockstep after revert: `test_hw_value64_nested_foreach_finder_paths`, `test_rtl_value64_nested_foreach_finder`, plus `test_*_foreach_ctor_assign_function_prop` (12× `new Ctor` + `Object.assign` of a function prop inside forEach — `fault=0`, pixels). `make -C sim sim_server_synth` rebuilt. **No `.bin`.**
+Root cause (Value64 dynstr `indexOf`): HP_OGETI overwrites `hp_key` with the slot name, then the scan used `hp_key[7:0]` as the needle (NUL) → always −1 → `indexOf(0)<0` every frame. Tagged CPU already kept the needle in `idx_needle`. Illegal `for (k=0;k<JSON_CAP)` in `always_ff` was the same class as the opcode hang.
 
-Restart the GUI, F9 FPGA-SIM `(RTL)`, `LOAD "PACMAN.HTML"` / `RUN`.
+FPGA-legal fix (same RTL as `.bin`): latch needle in `hp_wval` (OGETI does not touch it), walk `json_mem` one byte/clock in existing `S_IDXSTR` (`hp_v64` writes IEEE index). `test_rtl_value64_stringify_indexof_zero_keeps_beans` passes. Not F9.
 
-## MRDO speed (not a hang)
+Traces: FRAME VMSTAT is no longer dumped on every capped overlay. Log first3, `fcap=1`, and a **vdraw change** (maze→win). Iterate with the IDX0 snippet, not a full PACMAN F9.
 
-Attract/play always `paintField()`: **24×26** tiles, each dirt cell several `fillRect` + `isTun`/`cell`. Last RTL draw is a **1×1** `fillRect` (sprite `drawPix` / HUD). Compiler already lowers `palK`'s `ch==="1"`…`"e"` chain to `lut[ch]|0` and inlines tiny callees (`functional_model/compiler.py`). That is compile-on-RUN — restart the GUI to pick it up. It does **not** make 624 dirt tiles cheap; PYTHON still ~1 fps after a 52164-byte ProgramImage. FPGA-SIM `fclk≈9M` is the same paint, not `S_DONE`.
+## Vivado split — still in; needle fix after any in-flight `make bit`
 
-## FPGA-SIM RTL = `.bin` RTL
+`jmr_js_vm.sv` no longer holds the three giant opcode/native switches in one `always_ff`. Same clk, same boot (`jsb_flags[3]` → `S_V64_EXEC` else `S_EXEC`), same heap caps, no `ifdef SYNTHESIS`, no ASET heap, no title gates.
 
-Same `rtl/*.sv` as the chip. Do not debug PACMAN/MRDO with Verilator-only heaps, combo muxes, sim-sized depths, JS heap in ASET, or `unique case` on the opcode/`nat_id` switches (that last one hung Vivado at ~100 GB). Caps and the full list: `docs/AGENT_PASTE.md` § FPGA-SIM must stay `.bin`-legal, `docs/FPGA_FIT.md`. **No `.bin` until F9** — still write synthesizable RTL now.
-
-## Vivado (separate from glass)
-
-`jmr_js_vm.sv`: the giant opcode `case (code_rdata[7:0])` and native `case (nat_id)` / `case (nid)` are **plain `case`** now. `unique case` on those two made Vivado build every arm in parallel (~100 GB, no bitstream). Small `unique case`s (`state`, `trail_ph`, `spr_hdr`, `alu_op`) stay. **JS heap stays out of the 4 MB ASET SRAM.** `make -C sim sim_server_synth` rebuilt (unique→case + TOS `win[1]` refill). **No board `.bit`/`.bin`.**
+A `make bit` started this session may have snapshotted RTL **before** the dynstr `indexOf` needle fix. Do not flash that `.bit` as a PACMAN skip-stages proof. Re-run `make bit` only when you ask, after F9.
 
 ## Caps (leftover T200 BRAM — do not grow)
 
-`MAX_OBJ=1024` (fn bank independent). Arrays two-tier: `1536×32` short + `128×128` long (`MAX_ARR=1664`). `ENV_DEPTH=512`. Same numbers in PYTHON. Overflow loud. Dual FB ~0.6 MB; leftover ~1 MB is code+heap. Asset SRAM 4 MB is ASET art only.
+`MAX_OBJ=1024`. Arrays two-tier: `1536×32` short + `128×128` long (`MAX_ARR=1664`). `ENV_DEPTH=512`. Same numbers in PYTHON. Overflow loud. Dual FB ~0.6 MB; leftover ~1 MB is code+heap. Asset SRAM 4 MB is ASET art only.
 
 ## FPGA-SIM lockstep (waiting F9 — not this table as F9)
 
-`make -C sim sim_server_synth` rebuilt this session. Same ProgramImage stream as PYTHON. No host twin.
+Restart the GUI after this sim-binary change.
 
 | Title | Status |
 |---|---|
 | INVADERS | last headless held-left FB change passed; user has not F9-approved |
-| PACMAN | last F9 bounced — `fault=2` `@1718` `vcsp=128`; BIND/forEach WIN_FILL reverted; **user F9 again** |
-| DONKEY | last recorded F9 notes were older faults; re-check after PACMAN F9 |
-| MRDO | live, slow splash (`fclk≈9M`); not READY-bounce |
+| PACMAN | skip-stages RTL fix in; **user F9 again** after GUI restart |
+| DONKEY | re-check after PACMAN F9 |
+| MRDO | live, slow splash; not READY-bounce |
 
-Restart the GUI after compiler or sim-binary changes.
+## Next
 
-## Next (when you pick the bugs back up)
-
-1. User F9 FPGA-SIM `(RTL)` PACMAN after GUI restart (`LOAD "PACMAN.HTML"` / `RUN`). Newest bounce was **fault 2 / vcsp=128** at `new Stage`, not 241. **No `.bin` until F9.**
-2. MRDO: do not rewrite the HTML. Speed is VM `fillRect`/CALL_METHOD cost of the dirt field; palK LUT is already in. Keydown+keyup in one slow FRAME can miss `startHeld && !startWas`.
-3. DONKEY recheck after PACMAN 241 is gone on glass.
+1. Restart GUI, F9 FPGA-SIM PACMAN (LOAD + RUN, Enter off splash). Expect maze to hold, not YOU WIN in ~12 frames.
+2. You run `make bit` when you want this RTL (exec split + sequential dynstr indexOf) on the board. Do not start it from here.
+3. MRDO speed is `fillRect`/CALL_METHOD cost; do not rewrite the HTML.

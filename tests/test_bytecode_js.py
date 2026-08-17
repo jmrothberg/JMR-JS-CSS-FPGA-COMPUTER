@@ -2930,6 +2930,316 @@ def test_hw_value64_nested_foreach_finder_paths():
     assert vm.canvas.front[10 * vm.canvas.width + 10] != 0
 
 
+# Play-frame composition the house-only finder snippet never ran: Map.prototype
+# coord2position/position2coord/finder (CALL_METHOD + this.size), Object.assign
+# of pixel x/y onto the actor (createItem/resetItems), full-canvas getImageData,
+# then finder ARRAY_SET of to.x. Glass 241 is that ARRAY_SET (IP 818); divs=2
+# is position2coord /size, not finder wrap.
+_PROTO_COORD_FINDER_JS = r"""
+var data = [];
+var y, x;
+for (y = 0; y < 8; y++) {
+  data[y] = [];
+  for (x = 0; x < 28; x++) data[y][x] = 1;
+}
+for (x = 0; x < 28; x++) { data[0][x] = 1; data[7][x] = 1; }
+for (y = 1; y < 7; y++) { data[y][0] = 1; data[y][27] = 1; }
+for (x = 1; x < 27; x++) data[6][x] = 0;
+data[5][12] = 2; data[5][13] = 2; data[5][14] = 2; data[5][15] = 2;
+data[4][12] = 1; data[4][13] = 2; data[4][14] = 2; data[4][15] = 1;
+data[3][13] = 0; data[3][14] = 0;
+function Map() {
+  this.x = 16;
+  this.y = 8;
+  this.size = 14;
+}
+Map.prototype.coord2position = function(cx, cy) {
+  return {
+    x: this.x + cx * this.size + this.size / 2,
+    y: this.y + cy * this.size + this.size / 2
+  };
+};
+Map.prototype.position2coord = function(px, py) {
+  var fx = Math.abs(px - this.x) % this.size - this.size / 2;
+  var fy = Math.abs(py - this.y) % this.size - this.size / 2;
+  return {
+    x: Math.floor((px - this.x) / this.size),
+    y: Math.floor((py - this.y) / this.size),
+    offset: Math.sqrt(fx * fx + fy * fy)
+  };
+};
+Map.prototype.finder = function(params) {
+  var defaults = { map: null, start: {}, end: {}, type: 'path' };
+  var options = Object.assign({}, defaults, params);
+  if (options.map[options.start.y][options.start.x] ||
+      options.map[options.end.y][options.end.x]) {
+    return [];
+  }
+  var finded = false;
+  var result = [];
+  var y_length = options.map.length;
+  var x_length = options.map[0].length;
+  var steps = Array(y_length).fill(0).map(() => Array(x_length).fill(0));
+  var _getValue = function(gx, gy) {
+    if (options.map[gy] && typeof options.map[gy][gx] != 'undefined') {
+      return options.map[gy][gx];
+    }
+    return -1;
+  };
+  var _render = function(list) {
+    var new_list = [];
+    var next = function(from, to) {
+      var value = _getValue(to.x, to.y);
+      if (value < 1) {
+        if (value == -1) {
+          to.x = (to.x + x_length) % x_length;
+          to.y = (to.y + y_length) % y_length;
+          to.change = 1;
+        }
+        if (to.x == options.end.x && to.y == options.end.y) {
+          steps[to.y][to.x] = from;
+          finded = true;
+        } else if (!steps[to.y][to.x]) {
+          steps[to.y][to.x] = from;
+          new_list.push(to);
+        }
+      }
+    };
+    list.forEach(function(current) {
+      next(current, {y: current.y + 1, x: current.x});
+      next(current, {y: current.y, x: current.x + 1});
+      next(current, {y: current.y - 1, x: current.x});
+      next(current, {y: current.y, x: current.x - 1});
+    });
+    if (!finded && new_list.length) _render(new_list);
+  };
+  _render([options.start]);
+  if (finded) {
+    var cur = options.end;
+    while (cur.x != options.start.x || cur.y != options.start.y) {
+      result.unshift(cur);
+      cur = steps[cur.y][cur.x];
+    }
+  }
+  return result;
+};
+var map = new Map();
+var opened = JSON.parse(JSON.stringify(data).replace(/2/g, 0));
+var actor = { coord: {x: 13, y: 5, offset: 0}, path: [], location: map, x: 0, y: 0 };
+Object.assign(actor, map.coord2position(actor.coord.x, actor.coord.y));
+var c = document.getElementById('c').getContext('2d');
+c.getImageData(0, 0, 640, 480);
+actor.coord = map.position2coord(actor.x, actor.y);
+function update(item) {
+  item.path = map.finder({ map: opened, start: item.coord, end: {x: 2, y: 6} });
+}
+var items = [actor];
+items.forEach(function(item) {
+  update(item);
+});
+var plen = actor.path.length;
+var pxok = (actor.x > 100) ? 1 : 0;
+if (plen) fillRect(10, 10, 20, 20, 2);
+if (pxok) fillRect(40, 10, 20, 20, 3);
+swapBuffers();
+function tick() {
+  if (plen) fillRect(10, 10, 20, 20, 2);
+  if (pxok) fillRect(40, 10, 20, 20, 3);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+
+
+def test_hw_value64_proto_coord_finder_after_getimagedata():
+    """Map proto coord round-trip + getImageData then finder ARRAY_SET must path."""
+    vm = _hw_v64(_PROTO_COORD_FINDER_JS)
+    assert vm.error is None, vm.error
+    assert int(vm.globals.get("pxok") or 0) == 1, vm.globals.get("pxok")
+    assert int(vm.globals.get("plen") or 0) > 0, vm.globals.get("plen")
+    assert vm.canvas.front[10 * vm.canvas.width + 10] != 0
+
+
+# Glass play FRAME: maps.forEach → getImageData, then items.forEach → finder.
+# Natives inside a forEach callback used to share vnat_base with the iterator
+# (comment on vfe_base). House finder + getImageData *outside* forEach is green;
+# this is the order Enter actually runs.
+_FOREACH_GETIMG_FINDER_JS = r"""
+var data = [];
+var y, x;
+for (y = 0; y < 8; y++) {
+  data[y] = [];
+  for (x = 0; x < 28; x++) data[y][x] = 1;
+}
+for (x = 0; x < 28; x++) { data[0][x] = 1; data[7][x] = 1; }
+for (y = 1; y < 7; y++) { data[y][0] = 1; data[y][27] = 1; }
+for (x = 1; x < 27; x++) data[6][x] = 0;
+data[5][12] = 2; data[5][13] = 2; data[5][14] = 2; data[5][15] = 2;
+data[4][12] = 1; data[4][13] = 2; data[4][14] = 2; data[4][15] = 1;
+data[3][13] = 0; data[3][14] = 0;
+function finder(params) {
+  var defaults = { map: null, start: {}, end: {}, type: 'path' };
+  var options = Object.assign({}, defaults, params);
+  if (options.map[options.start.y][options.start.x] ||
+      options.map[options.end.y][options.end.x]) {
+    return [];
+  }
+  var finded = false;
+  var result = [];
+  var y_length = options.map.length;
+  var x_length = options.map[0].length;
+  var steps = Array(y_length).fill(0).map(() => Array(x_length).fill(0));
+  var _getValue = function(gx, gy) {
+    if (options.map[gy] && typeof options.map[gy][gx] != 'undefined') {
+      return options.map[gy][gx];
+    }
+    return -1;
+  };
+  var _render = function(list) {
+    var new_list = [];
+    var next = function(from, to) {
+      var value = _getValue(to.x, to.y);
+      if (value < 1) {
+        if (value == -1) {
+          to.x = (to.x + x_length) % x_length;
+          to.y = (to.y + y_length) % y_length;
+          to.change = 1;
+        }
+        if (to.x == options.end.x && to.y == options.end.y) {
+          steps[to.y][to.x] = from;
+          finded = true;
+        } else if (!steps[to.y][to.x]) {
+          steps[to.y][to.x] = from;
+          new_list.push(to);
+        }
+      }
+    };
+    list.forEach(function(current) {
+      next(current, {y: current.y + 1, x: current.x});
+      next(current, {y: current.y, x: current.x + 1});
+      next(current, {y: current.y - 1, x: current.x});
+      next(current, {y: current.y, x: current.x - 1});
+    });
+    if (!finded && new_list.length) _render(new_list);
+  };
+  _render([options.start]);
+  if (finded) {
+    var cur = options.end;
+    while (cur.x != options.start.x || cur.y != options.start.y) {
+      result.unshift(cur);
+      cur = steps[cur.y][cur.x];
+    }
+  }
+  return result;
+}
+var opened = JSON.parse(JSON.stringify(data).replace(/2/g, 0));
+var actor = { coord: {x: 13, y: 5, offset: 0}, path: [] };
+function update(item) {
+  item.path = finder({ map: opened, start: item.coord, end: {x: 2, y: 6} });
+}
+var c = document.getElementById('c').getContext('2d');
+var maps = [0];
+var items = [actor];
+maps.forEach(function() {
+  c.getImageData(0, 0, 640, 480);
+});
+items.forEach(function(item) {
+  update(item);
+});
+var plen = actor.path.length;
+if (plen) fillRect(10, 10, 20, 20, 2);
+swapBuffers();
+function tick() {
+  if (plen) fillRect(10, 10, 20, 20, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+
+
+def test_hw_value64_foreach_getimagedata_then_finder():
+    """getImageData inside forEach then a second forEach finder must still path."""
+    vm = _hw_v64(_FOREACH_GETIMG_FINDER_JS)
+    assert vm.error is None, vm.error
+    assert int(vm.globals.get("plen") or 0) > 0, vm.globals.get("plen")
+    assert vm.canvas.front[10 * vm.canvas.width + 10] != 0
+
+
+# PACMAN position2coord params are `x`,`y` — same intern ids as the returned
+# keys. The proto snippet above used px/py and stayed green; this is the HTML.
+_PARAM_X_COORD_SET_JS = r"""
+function Map() { this.x = 16; this.y = 8; this.size = 14; }
+Map.prototype.position2coord = function(x, y) {
+  return {
+    x: Math.floor((x - this.x) / this.size),
+    y: Math.floor((y - this.y) / this.size),
+    offset: 0
+  };
+};
+var map = new Map();
+var c = map.position2coord(205, 85);
+var steps = Array(8).fill(0).map(function() { return Array(28).fill(0); });
+var to = {y: c.y + 1, x: c.x};
+steps[to.y][to.x] = c;
+var ok = (to.x == 13 && steps[6][13]) ? 1 : 0;
+if (ok) fillRect(10, 10, 20, 20, 2);
+swapBuffers();
+function tick() {
+  if (ok) fillRect(10, 10, 20, 20, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+
+
+def test_hw_value64_param_x_coord_array_set():
+    """position2coord(x,y) return keys must ARRAY_SET steps[to.y][to.x]."""
+    vm = _hw_v64(_PARAM_X_COORD_SET_JS)
+    assert vm.error is None, vm.error
+    assert int(vm.globals.get("ok") or 0) == 1, vm.globals.get("ok")
+    assert vm.canvas.front[10 * vm.canvas.width + 10] != 0
+
+
+def _maze31_neighbor_set_js():
+    """31×28 JSON clone + forEach {y:current.y+1,x:current.x} ARRAY_SET."""
+    from test_rtl_snippets import _MAZE31
+
+    return (
+        "var data = [" + _MAZE31 + "];\n"
+        + r"""
+var opened = JSON.parse(JSON.stringify(data).replace(/2/g, 0));
+var steps = Array(opened.length).fill(0).map(function() {
+  return Array(opened[0].length).fill(0);
+});
+var start = {x: 12, y: 14};
+[start].forEach(function(current) {
+  var to = {y: current.y + 1, x: current.x};
+  if (opened[to.y][to.x] < 1) steps[to.y][to.x] = current;
+});
+var ok = steps[15][12] ? 1 : 0;
+if (ok) fillRect(10, 10, 20, 20, 2);
+swapBuffers();
+function tick() {
+  if (ok) fillRect(10, 10, 20, 20, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    )
+
+
+def test_hw_value64_maze31_neighbor_array_set():
+    """JSON 31×28 house cell neighbor ARRAY_SET must store to.x."""
+    vm = _hw_v64(_maze31_neighbor_set_js())
+    assert vm.error is None, vm.error
+    assert int(vm.globals.get("ok") or 0) == 1, vm.globals.get("ok")
+    assert vm.canvas.front[10 * vm.canvas.width + 10] != 0
+
+
 # 12× new Ctor(Object.assign this, settings, params-with-fn) inside forEach.
 # PACMAN glass fault=2 vcsp=128 was new Stage during _COIGIG.forEach, not finder.
 _FOREACH_CTOR_ASSIGN_JS = r"""

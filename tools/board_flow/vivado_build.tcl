@@ -59,6 +59,9 @@ proc jmr_add_sources {ROOT} {
       $ROOT/rtl/engines/jmr_mini_fb.sv \
       $ROOT/rtl/engines/jmr_rectdemo_engine.sv \
       $ROOT/rtl/engines/jmr_value.sv \
+      $ROOT/rtl/engines/jmr_js_vm_pkg.sv \
+      $ROOT/rtl/engines/jmr_js_vm_exec32.sv \
+      $ROOT/rtl/engines/jmr_js_vm_exec64.sv \
       $ROOT/rtl/engines/jmr_js_vm.sv \
       $ROOT/rtl/engines/font_rom.hex \
       $ROOT/rtl/engines/invaders_jsb.hex \
