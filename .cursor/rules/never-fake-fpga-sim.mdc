@@ -45,14 +45,17 @@ copy buffer — leave it. Copy working Port A: `jmr_video_vram.sv` /
 1. **Big memories: tiny write process, not the VM FSM.** Copy
    `jmr_mini_fb.sv` / `jmr_video_vram.sv` Port A. Any large unpacked array
    (today: `imgd_pix` 307200×8, `spr_mem` 256K×8, `name_mem` 32K,
-   `json_mem` 8K — and any new buffer in that class) is:
+   `json_mem` 8K, `stack` 2048×32, `name_hash_tbl` 1024×16, `varr_len`,
+   `vobj_alloc`, `vvars` — and any new buffer in that class) is:
    `always_ff if (we) mem[waddr] <= wdata; rdata <= mem[raddr];` with
    **scalar** we/addr/data. The parent FSM / case only sets those strobes.
    Do not put `mem[i] <=` back in the 7k-line `always_ff` (glass, HEAP,
    exec, new opcode — same rule). Isolated `*_rdata` reads **without**
    moving those writes still blew **71 GB** (15:22). Writes moved out
    (15:32) → ~**15 GB** hold after `e32_p_clr` instead of 8→36→70.
-   `ram_style = "block"` does not save an FSM poke. Mux **addresses**,
+   Heap tables `stack` / `name_hash_tbl` / `varr_len` / `vobj_alloc` /
+   `vvars` use the same Port A (next `make bit`). `ram_style = "block"`
+   does not save an FSM poke. Mux **addresses**,
    not forty `rdata <= mem[f()]` in one process. Template miss → 8-3967 /
    8-4767 (RAM as FFs = 70 GB).
 

@@ -110,7 +110,12 @@ module jmr_js_vm #(
     logic signed [31:0] consts [0:MAX_CONSTS-1];
     logic signed [31:0] vars   [0:MAX_VARS-1] /*verilator public_flat_rd*/;
     logic               var_init [0:MAX_VARS-1] /*verilator public_flat_rd*/;
-    logic signed [31:0] stack  [0:STACK_DEPTH-1];
+    (* ram_style = "block" *) logic signed [31:0] stack  [0:STACK_DEPTH-1];
+    // UG901 Port A: FSM pulses these; do not poke stack[i] from the 7k-line FSM.
+    logic        stack_we;
+    logic [10:0] stack_waddr;
+    logic signed [31:0] stack_wdata;
+    logic        stack_dual_pend; // FOREACH el then idx (1 write/clock)
     // NEW: public for the sim server VMSTAT? probe (FPGA-SIM bring-up only)
     logic [10:0] sp /*verilator public_flat_rd*/; // 2048-deep eval stack
     logic [15:0] ip_ff;
@@ -145,6 +150,10 @@ module jmr_js_vm #(
     // Number (do not no-op).
     logic        aset_win_retried;
     (* ram_style = "block" *) logic [63:0] vvars [0:MAX_VARS-1] /*verilator public_flat_rd*/;
+    logic        vvars_we;
+    logic [8:0]  vvars_waddr;
+    logic [63:0] vvars_wdata;
+    logic [8:0]  vvars_raddr;
     logic vvar_valid [0:MAX_VARS-1] /*verilator public_flat_rd*/;
     logic [11:0] vsp_ff;
     logic [11:0] vsp /*verilator public_flat_rd*/;
@@ -167,6 +176,10 @@ module jmr_js_vm #(
     // MAX_OBJ-slot index space; kind 1 is object and kind 2 is reserved
     // for a function slot. Generations never use zero.
     logic [1:0] vobj_alloc [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
+    logic        vobj_alloc_we;
+    logic [9:0]  vobj_alloc_waddr;
+    logic [1:0]  vobj_alloc_wdata;
+    logic [12:0] vobj_alloc_raddr;
     logic [11:0] vobj_gen [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
     logic [5:0] vobj_len [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
     // NEW_OBJ stores the interned class name so CALL_METH can find the
@@ -192,7 +205,11 @@ module jmr_js_vm #(
     logic [2:0] vfn_flags [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
     logic varr_valid [0:MAX_ARR-1] /*verilator public_flat_rd*/;
     logic [11:0] varr_gen [0:MAX_ARR-1] /*verilator public_flat_rd*/;
-    logic [7:0] varr_len [0:MAX_ARR-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [7:0] varr_len [0:MAX_ARR-1] /*verilator public_flat_rd*/;
+    logic        varr_len_we;
+    logic [11:0] varr_len_waddr;
+    logic [7:0]  varr_len_wdata;
+    logic [11:0] varr_len_raddr;
     logic varr_long [0:MAX_ARR-1] /*verilator public_flat_rd*/;
     logic [7:0] varr_lidx [0:MAX_ARR-1] /*verilator public_flat_rd*/;
     logic vlong_used [0:MAX_ARR_LONG-1];
@@ -345,6 +362,9 @@ module jmr_js_vm #(
     logic [7:0] vdraw_color;
     // NEW: tagged stack/vars for HTML heap (0=int 1=obj 2=arr 3=str 4=fn 5=undef 6=elem)
     logic [2:0]  stack_tag [0:STACK_DEPTH-1];
+    logic        stack_tag_we;
+    logic [10:0] stack_tag_waddr;
+    logic [2:0]  stack_tag_wdata;
     logic [2:0]  var_tag   [0:MAX_VARS-1] /*verilator public_flat_rd*/;
     // Slot SRAM must fit leftover T200 BRAM after dual 640×480 FB (~0.6 MB)
     // of ~1.64 MB total: leftover ~1 MB for code + heap + console. Overflow
@@ -701,7 +721,11 @@ module jmr_js_vm #(
     // u16 hash the encoder used, then maps back to an interned name so
     // string EQ (intern id compare) just works. No dynamic string heap.
     logic [15:0] id_join, id_indexof;
-    logic [15:0] name_hash_tbl [0:1023]; // intern idx -> encoder u16 hash
+    (* ram_style = "block" *) logic [15:0] name_hash_tbl [0:1023]; // intern idx -> encoder u16 hash
+    logic        name_hash_we;
+    logic [9:0]  name_hash_waddr;
+    logic [15:0] name_hash_wdata;
+    logic [9:0]  name_hash_raddr;
     logic [7:0]  name_len_tbl  [0:1023] /*verilator public_flat_rd*/; // intern idx -> byte length (concat fold)
     logic [15:0] names_n;
     logic [11:0]  jn_arr;
@@ -1686,6 +1710,39 @@ module jmr_js_vm #(
         vst_we <= 1'b1;
         vst_waddr <= addr;
         vst_wdata <= data;
+    endtask
+    // 32-bit stack / tag: same we/waddr/wdata shape as json_putc (UG901 Port A).
+    task automatic stack_wr(
+        input logic [10:0] addr,
+        input logic signed [31:0] data,
+        input logic [2:0] tag
+    );
+        stack_we <= 1'b1;
+        stack_waddr <= addr;
+        stack_wdata <= data;
+        stack_tag_we <= 1'b1;
+        stack_tag_waddr <= addr;
+        stack_tag_wdata <= tag;
+    endtask
+    task automatic name_hash_wr(input logic [9:0] addr, input logic [15:0] data);
+        name_hash_we <= 1'b1;
+        name_hash_waddr <= addr;
+        name_hash_wdata <= data;
+    endtask
+    task automatic varr_len_wr(input logic [11:0] addr, input logic [7:0] data);
+        varr_len_we <= 1'b1;
+        varr_len_waddr <= addr;
+        varr_len_wdata <= data;
+    endtask
+    task automatic vobj_alloc_wr(input logic [9:0] addr, input logic [1:0] data);
+        vobj_alloc_we <= 1'b1;
+        vobj_alloc_waddr <= addr;
+        vobj_alloc_wdata <= data;
+    endtask
+    task automatic vvars_wr(input logic [8:0] addr, input logic [63:0] data);
+        vvars_we <= 1'b1;
+        vvars_waddr <= addr;
+        vvars_wdata <= data;
     endtask
     // NEW: nursery obj/fn stored into an *old-space array* (boot snapshot).
     // Callers must check dest oid < n_arr_keep. Do not use on SET_PROP —
@@ -4824,8 +4881,126 @@ module jmr_js_vm #(
         imgd_pix_rdata <= imgd_pix[imgd_i];
     end
 
-    // Remaining small/metadata rdata. Still one process — not UG901 per-RAM
-    // yet; those arrays are hundreds of bits, not 256 KB / 307 kB.
+    // Scalar write mux (exec we same cycle; parent *_we is the json_putc NBA).
+    wire stack_ram_we = stack_we ||
+        (((state == S_EXEC) || (state == S_NAT)) && e32_stack_we);
+    wire [10:0] stack_ram_waddr = stack_we ? stack_waddr : e32_stack_waddr[10:0];
+    wire signed [31:0] stack_ram_wdata = stack_we ? stack_wdata : e32_stack_wdata;
+    wire stack_tag_ram_we = stack_tag_we ||
+        (((state == S_EXEC) || (state == S_NAT)) && e32_stack_tag_we);
+    wire [10:0] stack_tag_ram_waddr = stack_tag_we ? stack_tag_waddr
+        : e32_stack_tag_waddr[10:0];
+    wire [2:0] stack_tag_ram_wdata = stack_tag_we ? stack_tag_wdata
+        : e32_stack_tag_wdata;
+    wire name_hash_ram_we = name_hash_we ||
+        (e64_p_we && e64_p_sel == 6'd40) || e64_name_hash_we;
+    wire [9:0] name_hash_ram_waddr = name_hash_we ? name_hash_waddr :
+        (e64_p_we && e64_p_sel == 6'd40) ? e64_p_addr[9:0] : e64_name_hash_waddr;
+    wire [15:0] name_hash_ram_wdata = name_hash_we ? name_hash_wdata :
+        (e64_p_we && e64_p_sel == 6'd40) ? e64_p_data[15:0] : e64_name_hash_wdata;
+    wire varr_len_ram_we = varr_len_we ||
+        ((state == S_V64_EXEC) && e64_varr_len_we);
+    wire [11:0] varr_len_ram_waddr = varr_len_we ? varr_len_waddr
+        : e64_varr_len_waddr;
+    wire [7:0] varr_len_ram_wdata = varr_len_we ? varr_len_wdata
+        : e64_varr_len_wdata;
+    wire vvars_ram_we = vvars_we ||
+        ((state == S_V64_EXEC) && e64_vvars_we);
+    wire [8:0] vvars_ram_waddr = vvars_we ? vvars_waddr : e64_vvars_waddr[8:0];
+    wire [63:0] vvars_ram_wdata = vvars_we ? vvars_wdata : e64_vvars_wdata;
+
+    // Address mux only — not forty rdata <= mem[f()] in one process (UG901).
+    assign name_hash_raddr =
+        ((casestate_q == S_JOIN_FIND) || (state == S_JOIN_FIND)) ? jn_i[9:0] :
+        ((casestate_q == S_JSON) || (state == S_JSON)) && (js_sp != 6'd0) &&
+            (js_tag[js_sp - 6'd1] == 3'd3) ? js_val[js_sp - 6'd1][9:0] :
+        ((casestate_q == S_JSON) || (state == S_JSON)) && (js_sp != 6'd0) ?
+            vobj_rdata[73:64] :
+        ((casestate_q == S_CONCAT) || (state == S_CONCAT)) ?
+            (cc_second ? cc_bv[9:0] : cc_av[9:0]) :
+        (((casestate_q == S_JOIN) || (state == S_JOIN)) && jn_name_arm) ?
+            varr_rdata[9:0] :
+        hs64 ? e64_name_hash_raddr : e32_intern_tos;
+    assign varr_len_raddr =
+        (casestate_q == S_ARR_DCOPY || state == S_ARR_DCOPY) ? dc_src :
+        (casestate_q == S_JOIN || state == S_JOIN ||
+         casestate_q == S_IDXOF || state == S_IDXOF) ? jn_arr :
+        (casestate_q == S_GC_ARR || state == S_GC_ARR) ? gc_cur[11:0] :
+        (casestate_q == S_V64_GC_ARR || state == S_V64_GC_ARR) ?
+            vgc_cur[11:0] :
+        (casestate_q == S_ARR_PROMOTE || state == S_ARR_PROMOTE) ?
+            hp_aid :
+        (casestate_q == S_V64_FE_FILTER || state == S_V64_FE_FILTER) ?
+            vfe_map[11:0] :
+        (casestate_q == S_V64_JSON || state == S_V64_JSON) ?
+            ((js_sp != 6'd0) ? vjs_val[js_sp - 6'd1][11:0] : 12'd0) :
+        ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
+         valloc_kind == 2'd1) ? valloc_i[11:0] : e64_varr_raddr;
+    assign vobj_alloc_raddr =
+        vgc_mark_pend ? vgc_mark_word[12:0] :
+        (casestate_q == S_V64_GC_SWEEP_OBJ ||
+         state == S_V64_GC_SWEEP_OBJ) ? vgc_obj_i :
+        ((casestate_q == S_HEAP_WAIT || state == S_HEAP_WAIT ||
+          casestate_q == S_HEAP_CMP || state == S_HEAP_CMP) &&
+         valloc_rd_arm && hp_cmd == HP_ASSIGN &&
+         hp_phase == 3'd3) ?
+            `VST_AT(hp_vbase + {9'd0, hp_qi} + 12'd1)[12:0] :
+        ((casestate_q == S_HEAP_WAIT || state == S_HEAP_WAIT ||
+          casestate_q == S_HEAP_CMP || state == S_HEAP_CMP) &&
+         hp_proto_arm) ? hp_proto[12:0] :
+        (casestate_q == S_HEAP_WAIT || state == S_HEAP_WAIT ||
+         casestate_q == S_HEAP_CMP || state == S_HEAP_CMP) ? hp_oid :
+        (casestate_q == S_FREE_OBJ || state == S_FREE_OBJ) ?
+            valloc_i[12:0] :
+        (casestate_q == S_V64_OGETI_NAT || state == S_V64_OGETI_NAT) ?
+            vmetrics[12:0] :
+        ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
+         valloc_kind == 2'd0) ? valloc_i[12:0] : e64_vobj_raddr;
+    assign vvars_raddr =
+        (casestate_q == S_V64_GC_ROOT || state == S_V64_GC_ROOT) ?
+            vgc_root_i[8:0] :
+        (casestate_q == S_HEAP_WAIT || state == S_HEAP_WAIT ||
+         casestate_q == S_HEAP_CMP || state == S_HEAP_CMP ||
+         casestate_q == S_RD && ret_state == S_V64_CTOR_VARS ||
+         casestate_q == S_V64_CTOR_VARS ||
+         state == S_V64_CTOR_VARS) ? hp_key[8:0] : e64_vvars_raddr;
+
+    // True dual-port 1W2R (UG901): Port A write+TOS, Port B NOS.
+    always_ff @(posedge clk) begin
+        if (stack_ram_we) stack[stack_ram_waddr] <= stack_ram_wdata;
+        e32_stack_rdata <= (stack_ram_we && stack_ram_waddr == stack_rd_a)
+            ? stack_ram_wdata : stack[stack_rd_a];
+    end
+    always_ff @(posedge clk) begin
+        e32_stack_rdata2 <= (stack_ram_we && stack_ram_waddr == e32_stack_raddr2)
+            ? stack_ram_wdata : stack[e32_stack_raddr2];
+    end
+    always_ff @(posedge clk) begin
+        if (stack_tag_ram_we) stack_tag[stack_tag_ram_waddr] <= stack_tag_ram_wdata;
+        e32_stack_tag_rdata <= stack_tag[stack_rd_a];
+    end
+    always_ff @(posedge clk) begin
+        if (name_hash_ram_we) name_hash_tbl[name_hash_ram_waddr] <= name_hash_ram_wdata;
+        name_hash_rdata <= name_hash_tbl[name_hash_raddr];
+        e32_name_hash_tos <= name_hash_tbl[name_hash_raddr];
+    end
+    always_ff @(posedge clk) begin
+        e32_name_hash_nos <= name_hash_tbl[e32_intern_nos];
+    end
+    always_ff @(posedge clk) begin
+        if (varr_len_ram_we) varr_len[varr_len_ram_waddr] <= varr_len_ram_wdata;
+        varr_len_rdata <= varr_len[varr_len_raddr];
+    end
+    always_ff @(posedge clk) begin
+        if (vobj_alloc_we) vobj_alloc[vobj_alloc_waddr] <= vobj_alloc_wdata;
+        vobj_alloc_rdata <= vobj_alloc[vobj_alloc_raddr[9:0]];
+    end
+    always_ff @(posedge clk) begin
+        if (vvars_ram_we) vvars[vvars_ram_waddr] <= vvars_ram_wdata;
+        vvars_rdata <= vvars[vvars_raddr];
+    end
+
+    // Remaining small/metadata rdata. Heap tables above now match imgd Port A.
     always_ff @(posedge clk) begin
             vraf_rdata <= vraf[
                 (casestate_q == S_V64_GC_ROOT || state == S_V64_GC_ROOT) ?
@@ -4834,28 +5009,10 @@ module jmr_js_vm #(
             txt_buf_rdata <= txt_buf[txt_i[5:0]];
             pow31_rdata <= pow31_tbl[e32_name_len_tos[7:0]];
             name_blen_rdata <= name_blen[e64_name_blen_raddr];
-            // 1W2R: share port A with exec32 TOS (hs32) vs exec64 raddr (hs64).
-            // flatten: JOIN_FIND / JSON / CONCAT steal this port (1 compare/clock).
-            name_hash_rdata <= name_hash_tbl[
-                ((casestate_q == S_JOIN_FIND) || (state == S_JOIN_FIND)) ? jn_i[9:0] :
-                ((casestate_q == S_JSON) || (state == S_JSON)) && (js_sp != 6'd0) &&
-                    (js_tag[js_sp - 6'd1] == 3'd3) ? js_val[js_sp - 6'd1][9:0] :
-                ((casestate_q == S_JSON) || (state == S_JSON)) && (js_sp != 6'd0) ?
-                    vobj_rdata[73:64] :
-                ((casestate_q == S_CONCAT) || (state == S_CONCAT)) ?
-                    (cc_second ? cc_bv[9:0] : cc_av[9:0]) :
-                (((casestate_q == S_JOIN) || (state == S_JOIN)) && jn_name_arm) ?
-                    varr_rdata[9:0] :
-                hs64 ? e64_name_hash_raddr : e32_intern_tos];
+            // name_hash_tbl: own Port A/B processes (not this mux).
             name_off_rdata <= name_off[hs64 ? e64_name_off_raddr : e32_intern_tos];
             vconsts_rdata <= vconsts[e64_vconsts_raddr];
-            vvars_rdata <= vvars[(casestate_q == S_V64_GC_ROOT ||
-                state == S_V64_GC_ROOT) ? vgc_root_i[8:0] :
-                (casestate_q == S_HEAP_WAIT || state == S_HEAP_WAIT ||
-                 casestate_q == S_HEAP_CMP || state == S_HEAP_CMP ||
-                 casestate_q == S_RD && ret_state == S_V64_CTOR_VARS ||
-                 casestate_q == S_V64_CTOR_VARS ||
-                 state == S_V64_CTOR_VARS) ? hp_key[8:0] : e64_vvars_raddr];
+            // vvars: own Port A process (not this mux).
             vvar_valid_rdata <= vvar_valid[(casestate_q == S_V64_GC_ROOT ||
                 state == S_V64_GC_ROOT) ? vgc_root_i[8:0] :
                 (casestate_q == S_HEAP_WAIT || state == S_HEAP_WAIT ||
@@ -4904,21 +5061,7 @@ module jmr_js_vm #(
                 ((casestate_q == S_V64_GC_ENV || state == S_V64_GC_ENV) ?
                     vgc_cur[9:0] : venv[9:0])];
             // Length addr this clock; unique case uses varr_len_rdata next.
-            varr_len_rdata <= varr_len[
-                (casestate_q == S_ARR_DCOPY || state == S_ARR_DCOPY) ? dc_src :
-                (casestate_q == S_JOIN || state == S_JOIN ||
-                 casestate_q == S_IDXOF || state == S_IDXOF) ? jn_arr :
-                (casestate_q == S_GC_ARR || state == S_GC_ARR) ? gc_cur[11:0] :
-                (casestate_q == S_V64_GC_ARR || state == S_V64_GC_ARR) ?
-                    vgc_cur[11:0] :
-                (casestate_q == S_ARR_PROMOTE || state == S_ARR_PROMOTE) ?
-                    hp_aid :
-                (casestate_q == S_V64_FE_FILTER || state == S_V64_FE_FILTER) ?
-                    vfe_map[11:0] :
-                (casestate_q == S_V64_JSON || state == S_V64_JSON) ?
-                    ((js_sp != 6'd0) ? vjs_val[js_sp - 6'd1][11:0] : 12'd0) :
-                ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
-                 valloc_kind == 2'd1) ? valloc_i[11:0] : e64_varr_raddr];
+            // varr_len: own Port A process (not this mux).
             varr_valid_rdata <= varr_valid[
                 vgc_mark_pend ? vgc_mark_word[11:0] :
                 (casestate_q == S_V64_GC_SWEEP_ARR ||
@@ -5002,26 +5145,7 @@ module jmr_js_vm #(
                     valloc_i[11:0] :
                 ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
                  valloc_kind == 2'd1) ? valloc_i[11:0] : e64_varr_raddr];
-            vobj_alloc_rdata <= vobj_alloc[
-                vgc_mark_pend ? vgc_mark_word[12:0] :
-                (casestate_q == S_V64_GC_SWEEP_OBJ ||
-                 state == S_V64_GC_SWEEP_OBJ) ? vgc_obj_i :
-                ((casestate_q == S_HEAP_WAIT || state == S_HEAP_WAIT ||
-                  casestate_q == S_HEAP_CMP || state == S_HEAP_CMP) &&
-                 valloc_rd_arm && hp_cmd == HP_ASSIGN &&
-                 hp_phase == 3'd3) ?
-                    `VST_AT(hp_vbase + {9'd0, hp_qi} + 12'd1)[12:0] :
-                ((casestate_q == S_HEAP_WAIT || state == S_HEAP_WAIT ||
-                  casestate_q == S_HEAP_CMP || state == S_HEAP_CMP) &&
-                 hp_proto_arm) ? hp_proto[12:0] :
-                (casestate_q == S_HEAP_WAIT || state == S_HEAP_WAIT ||
-                 casestate_q == S_HEAP_CMP || state == S_HEAP_CMP) ? hp_oid :
-                (casestate_q == S_FREE_OBJ || state == S_FREE_OBJ) ?
-                    valloc_i[12:0] :
-                (casestate_q == S_V64_OGETI_NAT || state == S_V64_OGETI_NAT) ?
-                    vmetrics[12:0] :
-                ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
-                 valloc_kind == 2'd0) ? valloc_i[12:0] : e64_vobj_raddr];
+            // vobj_alloc: own Port A process (not this mux).
             vobj_gen_rdata <= vobj_gen[
                 vgc_mark_pend ? vgc_mark_word[12:0] :
                 (casestate_q == S_V64_GC_SWEEP_OBJ ||
@@ -5341,30 +5465,13 @@ module jmr_js_vm #(
                      (to_fire_fn != 16'd0) ? to_fire_fn[12:0] :
                      to_fn0[12:0]) :
                 e32_tfn_raddr];
-            // exec32: 1W2R parent SRAM, rdata next clock. TOS lives in exec FFs.
-            e32_stack_rdata <= (e32_stack_we && e32_stack_waddr[10:0] == stack_rd_a)
-                ? e32_stack_wdata : stack[stack_rd_a];
-            e32_stack_rdata2 <= (e32_stack_we && e32_stack_waddr[10:0] == e32_stack_raddr2)
-                ? e32_stack_wdata : stack[e32_stack_raddr2];
-            e32_stack_tag_rdata <= stack_tag[stack_rd_a];
+            // stack / name_hash_tbl: own Port A/B processes (not this mux).
             e32_name_has_tos <= name_has[
                 ((casestate_q == S_CONCAT) || (state == S_CONCAT)) ?
                     (cc_second ? cc_bv[9:0] : cc_av[9:0]) :
                 ((casestate_q == S_TXT_LD) || (state == S_TXT_LD)) ?
                     txt_val[9:0] : e32_intern_tos];
             e32_name_has_nos <= name_has[e32_intern_nos];
-            e32_name_hash_tos <= name_hash_tbl[
-                ((casestate_q == S_JOIN_FIND) || (state == S_JOIN_FIND)) ? jn_i[9:0] :
-                ((casestate_q == S_JSON) || (state == S_JSON)) && (js_sp != 6'd0) &&
-                    (js_tag[js_sp - 6'd1] == 3'd3) ? js_val[js_sp - 6'd1][9:0] :
-                ((casestate_q == S_JSON) || (state == S_JSON)) && (js_sp != 6'd0) ?
-                    vobj_rdata[73:64] :
-                ((casestate_q == S_CONCAT) || (state == S_CONCAT)) ?
-                    (cc_second ? cc_bv[9:0] : cc_av[9:0]) :
-                (((casestate_q == S_JOIN) || (state == S_JOIN)) && jn_name_arm) ?
-                    varr_rdata[9:0] :
-                hs64 ? e64_name_hash_raddr : e32_intern_tos];
-            e32_name_hash_nos <= name_hash_tbl[e32_intern_nos];
             e32_name_len_tos <= name_len_tbl[
                 ((casestate_q == S_JOIN_FIND) || (state == S_JOIN_FIND)) ? jn_i[9:0] :
                 ((casestate_q == S_JSON) || (state == S_JSON)) && (js_sp != 6'd0) &&
@@ -5546,6 +5653,13 @@ module jmr_js_vm #(
             spr_we <= 1'b0;
             name_we <= 1'b0;
             json_we <= 1'b0;
+            stack_we <= 1'b0;
+            stack_tag_we <= 1'b0;
+            name_hash_we <= 1'b0;
+            varr_len_we <= 1'b0;
+            vobj_alloc_we <= 1'b0;
+            vvars_we <= 1'b0;
+            stack_dual_pend <= 1'b0;
             vst_waddr <= '0;
             vst_wdata <= '0;
             vst_hold_win <= 1'b0;
@@ -5710,6 +5824,12 @@ module jmr_js_vm #(
             spr_we <= 1'b0;
             name_we <= 1'b0;
             json_we <= 1'b0;
+            stack_we <= 1'b0;
+            stack_tag_we <= 1'b0;
+            name_hash_we <= 1'b0;
+            varr_len_we <= 1'b0;
+            vobj_alloc_we <= 1'b0;
+            vvars_we <= 1'b0;
             csp_e32_d <= e32_csp_q;
             // TOS window follows last cycle's write + this cycle's vsp
             // (already NBA-updated from the previous op). S_V64_BIND holds
@@ -5832,10 +5952,7 @@ module jmr_js_vm #(
                 name_has[e64_p_addr[9:0]] <= 1'b1;
             end else if (e64_name_blen_we)
                 name_blen[e64_name_blen_waddr] <= e64_name_blen_wdata;
-            if (e64_p_we && e64_p_sel == 6'd40)
-                name_hash_tbl[e64_p_addr[9:0]] <= e64_p_data[15:0];
-            else if (e64_name_hash_we)
-                name_hash_tbl[e64_name_hash_waddr] <= e64_name_hash_wdata;
+            // name_hash_tbl writes: Port A process (name_hash_we / poke 40 / exec we).
             if (!(e64_p_we && e64_p_sel == 6'd17) && e64_name_has_we)
                 name_has[e64_name_has_waddr] <= e64_name_has_wdata;
             kd_fn <= kd_slot[0];
@@ -5879,7 +5996,7 @@ module jmr_js_vm #(
                     json_waddr <= e64_json_mem_waddr[12:0];
                     json_wdata <= e64_json_mem_wdata;
                 end
-                if (e64_varr_len_we) varr_len[e64_varr_len_waddr[10:0]] <= e64_varr_len_wdata;
+                // varr_len / vvars writes: Port A processes (not this FSM).
                 if (e64_varr_lidx_we) varr_lidx[e64_varr_lidx_waddr[10:0]] <= e64_varr_lidx_wdata;
                 if (e64_varr_long_we) varr_long[e64_varr_long_waddr[10:0]] <= e64_varr_long_wdata;
                 if (e64_varr_long_we && e64_varr_long_wdata && e64_varr_lidx_we)
@@ -5890,7 +6007,6 @@ module jmr_js_vm #(
                 if (e64_venv_valid_we) venv_valid[e64_venv_valid_waddr[8:0]] <= e64_venv_valid_wdata;
                 if (e64_vobj_cls_we) vobj_cls[e64_vobj_cls_waddr[9:0]] <= e64_vobj_cls_wdata;
                 if (e64_vvar_valid_we) vvar_valid[e64_vvar_valid_waddr[8:0]] <= e64_vvar_valid_wdata;
-                if (e64_vvars_we) vvars[e64_vvars_waddr[8:0]] <= e64_vvars_wdata;
                 if (e64_vframe_we) begin
                     vframe_return_ip[e64_vframe_waddr] <= e64_vframe_rip_wdata;
                     vframe_base_sp[e64_vframe_waddr] <= e64_vframe_bsp_wdata;
@@ -5913,8 +6029,7 @@ module jmr_js_vm #(
                 end
                 if (e32_obj_cls_we) obj_cls[e32_obj_cls_waddr[9:0]] <= e32_obj_cls_wdata;
                 if (e32_obj_n_we) obj_n[e32_obj_n_waddr[9:0]] <= e32_obj_n_wdata;
-                if (e32_stack_we) stack[e32_stack_waddr[10:0]] <= e32_stack_wdata;
-                if (e32_stack_tag_we) stack_tag[e32_stack_tag_waddr[10:0]] <= e32_stack_tag_wdata;
+                // stack / stack_tag writes: Port A processes (not this FSM).
                 if (e32_tenv_parent_we) tenv_parent[e32_tenv_parent_waddr[9:0]] <= e32_tenv_parent_wdata;
                 if (e32_tfn_entry_we) tfn_entry[e32_tfn_entry_waddr[9:0]] <= e32_tfn_entry_wdata;
                 if (e32_tfn_has_this_we) tfn_has_this[e32_tfn_has_this_waddr[9:0]] <= e32_tfn_has_this_wdata;
@@ -6369,7 +6484,7 @@ module jmr_js_vm #(
                             vvar_valid[heap_clr_i[8:0]] <= 1'b0;
                         end
                         if (heap_clr_i < 12'(MAX_OBJ)) begin
-                            vobj_alloc[heap_clr_i[9:0]] <= 2'd0;
+                            vobj_alloc_wr(heap_clr_i[9:0], 2'd0);
                             vobj_gen[heap_clr_i[9:0]] <= 12'd1;
                             vfn_gen[heap_clr_i[9:0]] <= 12'd1;
                             vfn_valid[heap_clr_i[9:0]] <= 1'b0;
@@ -6381,7 +6496,7 @@ module jmr_js_vm #(
                         if (heap_clr_i < 12'(MAX_ARR)) begin
                             varr_valid[heap_clr_i[11:0]] <= 1'b0;
                             varr_gen[heap_clr_i[11:0]] <= 12'd1;
-                            varr_len[heap_clr_i[11:0]] <= 8'd0;
+                            varr_len_wr(heap_clr_i[11:0], 8'd0);
                             arr_len[heap_clr_i[11:0]] <= 8'd0;
                             varr_mark[heap_clr_i[11:0]] <= 1'b0;
                             varr_long[heap_clr_i[11:0]] <= 1'b0;
@@ -6606,7 +6721,7 @@ module jmr_js_vm #(
                                 if ({tb, trail_acc[7:0]} == 16'd41791) id_str_object <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd29656) id_str_function <= name_idx;
                                 // NEW: full hash table — join result maps back to intern id
-                                name_hash_tbl[name_idx[9:0]] <= {tb, trail_acc[7:0]};
+                                name_hash_wr(name_idx[9:0], {tb, trail_acc[7:0]});
                                 nhash <= {tb, trail_acc[7:0]};
                                 // Poke 40 → exec name_hash_we. Indexed write
                                 // above is not the SRAM we port (LOAD fill).
@@ -7425,8 +7540,7 @@ module jmr_js_vm #(
                         if ((et != 3'd0 && et != 3'd7) || ev < 32'sd0 || ev > 32'sd9) begin
                             // non-digit join shape — honest miss, result undefined
                             dbg_join_miss <= dbg_join_miss + 16'd1;
-                            stack[jn_res] <= 32'sd0;
-                            stack_tag[jn_res] <= 3'd5;
+                            stack_wr(jn_res, 32'sd0, 3'd5);
                             hs_code(15'(ops_base + ip));
                             hs_st(S_FETCH_WAIT);
                         end else begin
@@ -7464,10 +7578,9 @@ module jmr_js_vm #(
                                 v64_sqrt <= 1'b0;
                                 hs_st(S_FETCH_WAIT);
                             end else begin
-                            stack[sp - 8'd1] <= {8'd0,
+                            stack_wr(sp - 8'd1, {8'd0,
                                 (rem2 >= trial) ? {sq_root[22:0], 1'b1}
-                                                : {sq_root[22:0], 1'b0}};
-                            stack_tag[sp - 8'd1] <= 3'd7;
+                                                : {sq_root[22:0], 1'b0}}, 3'd7);
                             hs_code(15'(ops_base + ip));
                             hs_st(S_FETCH_WAIT);
                             end
@@ -7493,8 +7606,7 @@ module jmr_js_vm #(
                             v64_concat <= 1'b0;
                             v64_join <= 1'b0;
                         end else begin
-                        stack[jn_res] <= {16'd0, jn_i};
-                        stack_tag[jn_res] <= 3'd3;
+                        stack_wr(jn_res, {16'd0, jn_i}, 3'd3);
                         end
                         jn_rd_arm <= 1'b0;
                         hs_code(15'(ops_base + ip));
@@ -7502,7 +7614,7 @@ module jmr_js_vm #(
                     end else if (jn_i + 16'd1 >= names_n) begin
                         jn_rd_arm <= 1'b0;
                         if (names_n < 16'd1024) begin
-                            name_hash_tbl[names_n[9:0]] <= jn_h;
+                            name_hash_wr(names_n[9:0], jn_h);
                             name_len_tbl[names_n[9:0]] <= jn_len;
                             name_blen[names_n[9:0]] <= {8'd0, jn_len};
                             // Same we port as trail (poke 40 then 17 next
@@ -7516,8 +7628,7 @@ module jmr_js_vm #(
                                 v64_concat <= 1'b0;
                             v64_join <= 1'b0;
                             end else begin
-                            stack[jn_res] <= {16'd0, names_n};
-                            stack_tag[jn_res] <= 3'd3;
+                            stack_wr(jn_res, {16'd0, names_n}, 3'd3);
                             end
                             names_n <= names_n + 16'd1;
                             // NEW: and its characters, staged in txt_buf by
@@ -7542,8 +7653,7 @@ module jmr_js_vm #(
                                 v64_concat <= 1'b0;
                             v64_join <= 1'b0;
                             end else begin
-                            stack[jn_res] <= 32'sd0;
-                            stack_tag[jn_res] <= 3'd5;
+                            stack_wr(jn_res, 32'sd0, 3'd5);
                             end
                             hs_code(15'(ops_base + ip));
                             hs_st(S_FETCH_WAIT);
@@ -7653,8 +7763,7 @@ module jmr_js_vm #(
                                 v64_concat <= 1'b0;
                             v64_join <= 1'b0;
                             end else begin
-                            stack[jn_res] <= 32'sd0;
-                            stack_tag[jn_res] <= 3'd5;
+                            stack_wr(jn_res, 32'sd0, 3'd5);
                             end
                             hs_code(15'(ops_base + ip));
                             hs_st(S_FETCH_WAIT);
@@ -7713,8 +7822,7 @@ module jmr_js_vm #(
                         // flatten: slot raddr from varr_long_rdata.
                         jn_slot_arm <= 1'b1;
                     end else if (jn_i >= 16'({8'd0, e32_arr_len_tos_rdata})) begin
-                        stack[jn_res] <= -32'sd1;
-                        stack_tag[jn_res] <= 3'd0;
+                        stack_wr(jn_res, -32'sd1, 3'd0);
                         jn_rd_arm <= 1'b0;
                         jn_slot_arm <= 1'b0;
                         hs_code(15'(ops_base + ip));
@@ -7735,8 +7843,7 @@ module jmr_js_vm #(
                              ((at2 == 3'd0 || at2 == 3'd7) &&
                               (idx_t == 3'd0 || idx_t == 3'd7));
                         if (tag_ok && av == nv) begin
-                        stack[jn_res] <= {16'd0, jn_i};
-                        stack_tag[jn_res] <= 3'd0;
+                        stack_wr(jn_res, {16'd0, jn_i}, 3'd0);
                         hs_code(15'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
                     end else jn_i <= jn_i + 16'd1;
@@ -7908,9 +8015,8 @@ module jmr_js_vm #(
                 end
                 // NEW: stack write from alu_r — binary ops already did sp--
                 S_ALU_WR: begin
-                    stack[sp - 8'd1] <= alu_r;
+                    stack_wr(sp - 8'd1, alu_r, alu_fx ? 3'd7 : 3'd0);
                     // fx ADD/SUB/NEG keep Q16.16; compares/NOT are plain ints
-                    stack_tag[sp - 8'd1] <= alu_fx ? 3'd7 : 3'd0;
                     next_op();
                 end
                 // NEW: DSP multiply into mul_prod only (no stack write this cycle)
@@ -7929,9 +8035,8 @@ module jmr_js_vm #(
                         p = (mul_fx_a && mul_fx_b) ? (mul_prod >>> 16) : mul_prod;
                         if (p > 64'sd2147483647) p = 64'sd2147483647;
                         else if (p < -64'sd2147483648) p = -64'sd2147483648;
-                        stack[sp - 8'd2] <= 32'(p);
+                        stack_wr(sp - 8'd2, 32'(p), (mul_fx_a || mul_fx_b) ? 3'd7 : 3'd0);
                     end
-                    stack_tag[sp - 8'd2] <= (mul_fx_a || mul_fx_b) ? 3'd7 : 3'd0;
                     sp <= sp - 8'd1;
                     next_op();
                 end
@@ -7953,12 +8058,10 @@ module jmr_js_vm #(
                         logic [31:0] qmag;
                         qmag = (|div_uq[47:31]) ? 32'h7FFFFFFF : div_uq[31:0];
                         if (div_int_in && qmag[15:0] == 16'd0) begin
-                            stack[sp - 8'd2] <= div_neg ? -$signed({16'd0, qmag[31:16]})
-                                                        : $signed({16'd0, qmag[31:16]});
-                            stack_tag[sp - 8'd2] <= 3'd0;
+                            stack_wr(sp - 8'd2, div_neg ? -$signed({16'd0, qmag[31:16]})
+                                                        : $signed({16'd0, qmag[31:16]}), 3'd0);
                         end else begin
-                            stack[sp - 8'd2] <= div_neg ? -$signed(qmag) : $signed(qmag);
-                            stack_tag[sp - 8'd2] <= 3'd7;
+                            stack_wr(sp - 8'd2, div_neg ? -$signed(qmag) : $signed(qmag), 3'd7);
                         end
                     end
                     sp <= sp - 8'd1;
@@ -7973,15 +8076,12 @@ module jmr_js_vm #(
                         vfe_rd_arm <= 1'b1;
                     end else if (e32_cs1_fe_i_rdata >= e32_arr_len_tos_rdata) begin
                         if (e32_cs1_map_arr_rdata == 16'hFFFD) begin
-                            stack[sp] <= -32'sd1;
-                            stack_tag[sp] <= 3'd0; // findIndex miss
+                            stack_wr(sp, -32'sd1, 3'd0);
                         end else if (e32_cs1_map_arr_rdata != 16'hFFFF &&
                             e32_cs1_map_arr_rdata != 16'hFFFE) begin
-                            stack[sp] <= {16'd0, e32_cs1_map_arr_rdata};
-                            stack_tag[sp] <= 3'd2;
+                            stack_wr(sp, {16'd0, e32_cs1_map_arr_rdata}, 3'd2);
                         end else begin
-                            stack[sp] <= 32'sd0;
-                            stack_tag[sp] <= 3'd5; // forEach void / find miss
+                            stack_wr(sp, 32'sd0, 3'd5);
                         end
                         sp <= sp + 8'd1;
                         arm_release_env(e32_cs1_env_rdata, S_FETCH_WAIT);
@@ -7998,12 +8098,19 @@ module jmr_js_vm #(
                         hs_code(15'(ops_base + e32_cs1_ip_rdata));
                         vfe_rd_arm <= 1'b0;
                         jn_slot_arm <= 1'b0;
+                        stack_dual_pend <= 1'b0;
                     end else if (!jn_slot_arm) begin
                         // flatten: slot raddr from varr_long_rdata.
                         jn_slot_arm <= 1'b1;
+                    end else if (e32_cs1_ctorobj_rdata[7:0] >= 8'd2 &&
+                                 !stack_dual_pend) begin
+                        // UG901 1 write/clock: el this beat, idx next.
+                        stack_wr(sp, varr_rdata[31:0], varr_trdata);
+                        stack_dual_pend <= 1'b1;
                     end else begin
                         vfe_rd_arm <= 1'b0;
                         jn_slot_arm <= 1'b0;
+                        stack_dual_pend <= 1'b0;
                         // bind nparam args: el, then idx if the callback asked for it
                         begin
                             logic [15:0] foid;
@@ -8013,16 +8120,14 @@ module jmr_js_vm #(
                             // Pass only parameters the callback declared.
                             // Always pushing `el` leaked one stack word per
                             // element for zero-argument map callbacks.
-                            if (e32_cs1_ctorobj_rdata[7:0] >= 8'd1) begin
-                                stack[sp] <= varr_rdata[31:0];
-                                stack_tag[sp] <= varr_trdata;
-                                if (e32_cs1_ctorobj_rdata[7:0] >= 8'd2) begin
-                                    stack[sp + 8'd1] <= {24'd0, e32_cs1_fe_i_rdata};
-                                    stack_tag[sp + 8'd1] <= 3'd0;
-                                    sp <= sp + 8'd2;
-                                end else
-                                    sp <= sp + 8'd1;
-                            end
+                            if (e32_cs1_ctorobj_rdata[7:0] >= 8'd2)
+                                stack_wr(sp + 8'd1, {24'd0, e32_cs1_fe_i_rdata}, 3'd0);
+                            else if (e32_cs1_ctorobj_rdata[7:0] >= 8'd1)
+                                stack_wr(sp, varr_rdata[31:0], varr_trdata);
+                            if (e32_cs1_ctorobj_rdata[7:0] >= 8'd2)
+                                sp <= sp + 8'd2;
+                            else if (e32_cs1_ctorobj_rdata[7:0] >= 8'd1)
+                                sp <= sp + 8'd1;
                             enter_captured_fn(foid);
                             cstk_push_ret(16'hFFFE, this_obj);
                             hs_ip(e32_tfn_entry_rdata);
@@ -8139,8 +8244,7 @@ module jmr_js_vm #(
                         // heap slots via S_HEAP_* (OSETI) — tagged KEYBITS path
                         // NEW: frame boundary — reset the eval stack (leftovers
                         // are leaks; ~1 word/frame overflowed sp at ~500 frames)
-                        stack[0] <= {16'd0, n_obj};
-                        stack_tag[0] <= 3'd1;
+                        stack_wr(0, {16'd0, n_obj}, 3'd1);
                         boundary_sp(11'd1);
                         n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
                         kev_fn <= kd_fn;
@@ -8155,8 +8259,7 @@ module jmr_js_vm #(
                         joy_up_edge <= 6'd0;
                         obj_n[n_obj[12:0]] <= 6'd2;
                         // heap slots via S_HEAP_* (OSETI) — tagged KEYBITS path
-                        stack[0] <= {16'd0, n_obj}; // frame boundary: fresh stack
-                        stack_tag[0] <= 3'd1;
+                        stack_wr(0, {16'd0, n_obj}, 3'd1);
                         boundary_sp(11'd1);
                         n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
                         kev_fn <= ku_fn;
@@ -8213,8 +8316,7 @@ module jmr_js_vm #(
                         hp_qt_ff[1] <= 3'd0;
                         hs_m_hp_qt <= 1'b1;
                         hs_hp_ret(S_KEYEV);
-                        stack[0] <= {16'd0, n_obj}; // frame boundary: fresh stack
-                        stack_tag[0] <= 3'd1;
+                        stack_wr(0, {16'd0, n_obj}, 3'd1);
                         boundary_sp(11'd1);
                         n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
                         kev_fn <= kev_q[kev_rp][8] ? kd_fn : ku_fn;
@@ -8365,8 +8467,7 @@ module jmr_js_vm #(
                                 hs_code(15'(ops_base + ip));
                                 hs_st(S_HEAP_WR);
                                 end else begin
-                                stack[sp] <= vobj_rdata[31:0];
-                                stack_tag[sp] <= vobj_trdata;
+                                stack_wr(sp, vobj_rdata[31:0], vobj_trdata);
                                 sp <= sp + 8'd1;
                             hs_code(15'(ops_base + ip));
                             hs_st(S_FETCH_WAIT);
@@ -8387,8 +8488,7 @@ module jmr_js_vm #(
                                 var_init[env_ld_slot] <= 1'b1;
                                 sp <= sp - 8'd1;
                             end else begin
-                                stack[sp] <= e32_vars_rdata;
-                                stack_tag[sp] <= e32_var_tag_rdata;
+                                stack_wr(sp, e32_vars_rdata, e32_var_tag_rdata);
                                 sp <= sp + 8'd1;
                             end
                             hs_code(15'(ops_base + ip));
@@ -8418,8 +8518,7 @@ module jmr_js_vm #(
                         hs_m_hp_qv <= 1'b1;
                         hp_qt_ff[1] <= 3'd0;
                         hs_m_hp_qt <= 1'b1;
-                        stack[json_res] <= {16'd0, n_obj};
-                        stack_tag[json_res] <= 3'd1;
+                        stack_wr(json_res, {16'd0, n_obj}, 3'd1);
                         if (n_obj >= 16'(MAX_OBJ - 1)) dbg_heap_ovf <= dbg_heap_ovf + 16'd1;
                         n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
                         sp <= json_res + 11'd1;
@@ -8614,8 +8713,7 @@ module jmr_js_vm #(
                 end
                 S_JSON_PARSE: begin
                     if (json_rp >= json_src + json_srclen) begin
-                        stack[json_res] <= (js_sp == 0) ? 32'sd0 : js_val[0];
-                        stack_tag[json_res] <= (js_sp == 0) ? 3'd5 : js_tag[0];
+                        stack_wr(json_res, (js_sp == 0) ? 32'sd0 : js_val[0], (js_sp == 0) ? 3'd5 : js_tag[0]);
                         sp <= json_res + 11'd1;
                         hs_code(15'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
@@ -8641,8 +8739,7 @@ module jmr_js_vm #(
                                         js_val[0] <= nv;
                                         js_tag[0] <= 3'd0;
                                         js_sp <= 6'd1;
-                                        stack[json_res] <= nv;
-                                        stack_tag[json_res] <= 3'd0;
+                                        stack_wr(json_res, nv, 3'd0);
                                         sp <= json_res + 11'd1;
                                         hs_code(15'(ops_base + ip));
                                         hs_st(S_FETCH_WAIT);
@@ -8674,8 +8771,7 @@ module jmr_js_vm #(
                         end else if (ch == 8'h5D) begin
                             json_rp <= json_rp + 14'd1;
                             if (js_sp <= 6'd1) begin
-                                stack[json_res] <= js_val[0];
-                                stack_tag[json_res] <= 3'd2;
+                                stack_wr(json_res, js_val[0], 3'd2);
                                 sp <= json_res + 11'd1;
                                 hs_code(15'(ops_base + ip));
                                 hs_st(S_FETCH_WAIT);
@@ -8708,8 +8804,7 @@ module jmr_js_vm #(
                         end else if (ch == 8'h7D) begin
                             json_rp <= json_rp + 14'd1;
                             if (js_sp <= 6'd1) begin
-                                stack[json_res] <= js_val[0];
-                                stack_tag[json_res] <= 3'd1;
+                                stack_wr(json_res, js_val[0], 3'd1);
                                 sp <= json_res + 11'd1;
                                 hs_code(15'(ops_base + ip));
                                 hs_st(S_FETCH_WAIT);
@@ -8742,7 +8837,7 @@ module jmr_js_vm #(
                                 vfree_armed <= 1'b0;
                                 v64_repl <= 1'b0;
                                 if (vfree_ok) begin
-                                    vobj_alloc[valloc_i[12:0]] <= 2'd1;
+                                    vobj_alloc_wr(valloc_i[9:0], 2'd1);
                                     vobj_builtin[valloc_i[12:0]] <= 4'd7;
                                     vobj_len[valloc_i[12:0]] <= 6'd2;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
@@ -8803,8 +8898,7 @@ module jmr_js_vm #(
                         hs_m_hp_qv <= 1'b1;
                         hp_qt_ff[1] <= 3'd0;
                         hs_m_hp_qt <= 1'b1;
-                        stack[json_res] <= {16'd0, n_obj};
-                        stack_tag[json_res] <= 3'd1;
+                        stack_wr(json_res, {16'd0, n_obj}, 3'd1);
                         if (n_obj >= 16'(MAX_OBJ - 1)) dbg_heap_ovf <= dbg_heap_ovf + 16'd1;
                         n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
                         sp <= json_res + 11'd1;
@@ -9163,11 +9257,9 @@ module jmr_js_vm #(
                     // name_rdata is this char. Prefetch i+1 so the next sequential
                     // str[i] hits in EXEC (string-row sprites: row[col]==="1").
                     if (e32_char_ok_rdata) begin
-                        stack[str_res] <= {16'd0, e32_char_id_rdata};
-                        stack_tag[str_res] <= 3'd3;
+                        stack_wr(str_res, {16'd0, e32_char_id_rdata}, 3'd3);
                     end else begin
-                        stack[str_res] <= 32'sd0;
-                        stack_tag[str_res] <= 3'd5;
+                        stack_wr(str_res, 32'sd0, 3'd5);
                     end
                     name_rdaddr <= name_rdaddr + 16'd1;
                     str_pf_ci <= str_pf_ci + 32'sd1;
@@ -9183,8 +9275,7 @@ module jmr_js_vm #(
                             vst_wr(hp_vbase, v64_int32_number(-32'sd1));
                             hs_vsp(hp_vbase + 12'd1);
                         end else begin
-                            stack[json_res] <= -32'sd1;
-                            stack_tag[json_res] <= 3'd0;
+                            stack_wr(json_res, -32'sd1, 3'd0);
                             sp <= json_res + 11'd1;
                         end
                         hs_code(15'(ops_base + ip));
@@ -9198,8 +9289,7 @@ module jmr_js_vm #(
                                 v64_int32_number(32'(json_rp - json_src)));
                             hs_vsp(hp_vbase + 12'd1);
                         end else begin
-                            stack[json_res] <= 32'(json_rp - json_src);
-                            stack_tag[json_res] <= 3'd0;
+                            stack_wr(json_res, 32'(json_rp - json_src), 3'd0);
                             sp <= json_res + 11'd1;
                         end
                         hs_code(15'(ops_base + ip));
@@ -9229,7 +9319,7 @@ module jmr_js_vm #(
                             end else begin
                                 vfree_armed <= 1'b0;
                                 if (vfree_ok) begin
-                                    vobj_alloc[valloc_i[12:0]] <= 2'd1;
+                                    vobj_alloc_wr(valloc_i[9:0], 2'd1);
                                     vobj_cls[valloc_i[12:0]] <= CLS_IMGD;
                                     vobj_len[valloc_i[12:0]] <= 6'd2;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
@@ -9278,8 +9368,7 @@ module jmr_js_vm #(
             // flatten: heap write via S_HEAP_* only
             // flatten: heap write via S_HEAP_* only
             // flatten: heap write via S_HEAP_* only
-                        stack[imgd_res] <= {16'd0, n_obj};
-                        stack_tag[imgd_res] <= 3'd1;
+                        stack_wr(imgd_res, {16'd0, n_obj}, 3'd1);
                         if (n_obj >= 16'(MAX_OBJ - 1)) dbg_heap_ovf <= dbg_heap_ovf + 16'd1;
                         n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
                         sp <= imgd_res + 11'd1;
@@ -9305,7 +9394,7 @@ module jmr_js_vm #(
                                 end else begin
                                     vfree_armed <= 1'b0;
                                     if (vfree_ok) begin
-                                        vobj_alloc[valloc_i[12:0]] <= 2'd1;
+                                        vobj_alloc_wr(valloc_i[9:0], 2'd1);
                                         vobj_cls[valloc_i[12:0]] <= CLS_IMGD;
                                         vobj_len[valloc_i[12:0]] <= 6'd2;
                                         e64_poke(6'd44, {3'd0, valloc_i[12:0]},
@@ -9354,8 +9443,7 @@ module jmr_js_vm #(
             // flatten: heap write via S_HEAP_* only
             // flatten: heap write via S_HEAP_* only
             // flatten: heap write via S_HEAP_* only
-                            stack[imgd_res] <= {16'd0, n_obj};
-                            stack_tag[imgd_res] <= 3'd1;
+                            stack_wr(imgd_res, {16'd0, n_obj}, 3'd1);
                             if (n_obj >= 16'(MAX_OBJ - 1)) dbg_heap_ovf <= dbg_heap_ovf + 16'd1;
                             n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
                             sp <= imgd_res + 11'd1;
@@ -9732,7 +9820,7 @@ module jmr_js_vm #(
                             take_long = need_long ||
                                 (valloc_i >= 14'(MAX_ARR_SHORT));
                             varr_valid[valloc_i[11:0]] <= 1'b1;
-                            varr_len[valloc_i[11:0]] <= count[7:0];
+                            varr_len_wr(valloc_i[11:0], count[7:0]);
                             varr_long[valloc_i[11:0]] <= take_long;
                             e64_poke(6'd45, {4'd0, valloc_i[11:0]},
                                      {55'd0, take_long, count[7:0]});
@@ -10135,7 +10223,7 @@ module jmr_js_vm #(
                             vobj_alloc_rdata == 0) begin
                             vobj_next <= valloc_i + 14'd1;
                             if (code_rdata[7:0] == OP_NEW_OBJ) begin
-                                vobj_alloc[valloc_i[12:0]] <= 2'd1;
+                                vobj_alloc_wr(valloc_i[9:0], 2'd1);
                                 vobj_len[valloc_i[12:0]] <= 6'd0;
                                 // Latched intern (vcall_entry), not code_rdata
                                 // — HEAP between `new Game` and nested
@@ -10163,7 +10251,7 @@ module jmr_js_vm #(
                                     4'd5, vobj_gen_rdata,
                                     {19'd0, valloc_i[12:0]}
                                 );
-                                vobj_alloc[valloc_i[12:0]] <= 2'd1;
+                                vobj_alloc_wr(valloc_i[9:0], 2'd1);
                                 vobj_cls[valloc_i[12:0]] <= 16'hFFFF;
                                 vobj_builtin[valloc_i[12:0]] <= 4'd0;
                                 vobj_len[valloc_i[12:0]] <= 6'd0;
@@ -10719,7 +10807,7 @@ module jmr_js_vm #(
                     new_ogen = (vobj_gen_rdata == 12'hfff)
                         ? 12'd1 : vobj_gen_rdata + 12'd1;
                     if (free_obj) begin
-                        vobj_alloc[vgc_obj_i] <= 2'd0;
+                        vobj_alloc_wr(vgc_obj_i[9:0], 2'd0);
                         vobj_len[vgc_obj_i] <= 6'd0;
                         vobj_gen[vgc_obj_i] <= new_ogen;
                     end
@@ -10744,7 +10832,7 @@ module jmr_js_vm #(
                     else begin
                     if (varr_valid_rdata && !varr_mark_rdata) begin
                         varr_valid[vgc_arr_i] <= 1'b0;
-                        varr_len[vgc_arr_i] <= 8'd0;
+                        varr_len_wr(vgc_arr_i, 8'd0);
                         e64_poke(6'd49, {4'd0, vgc_arr_i}, 64'd0);
                         if (varr_long_rdata)
                             vlong_used[varr_lidx_rdata] <= 1'b0;
@@ -11003,7 +11091,7 @@ module jmr_js_vm #(
                             vjs_rd_arm <= 1'b0;
                             if (vfree_ok) begin
                             hs_valloc_retried(1'b0);
-                            vobj_alloc[valloc_i[12:0]] <= 2'd1;
+                            vobj_alloc_wr(valloc_i[9:0], 2'd1);
                             vobj_builtin[valloc_i[12:0]] <= 4'd7;
                             e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                      {52'd0, 4'd7, 2'd0, 6'd0});
@@ -11219,8 +11307,8 @@ module jmr_js_vm #(
                                             hs_st(S_ARR_PROMOTE);
                                         end else begin
                                         vprom_done <= 1'b0;
-                                        varr_len[vjs_val[p][11:0]] <=
-                                            js_i[p] + 8'd1;
+                                        varr_len_wr(vjs_val[p][11:0],
+                                            js_i[p] + 8'd1);
                                         e64_poke(6'd6, {4'd0, vjs_val[p][11:0]},
                                                  {56'd0, js_i[p] + 8'd1});
                                         js_i[p] <= js_i[p] + 8'd1;
@@ -11267,7 +11355,7 @@ module jmr_js_vm #(
                                 end else begin
                                     hs_valloc_retried(1'b0);
                                     varr_valid[valloc_i[11:0]] <= 1'b1;
-                                    varr_len[valloc_i[11:0]] <= 8'd0;
+                                    varr_len_wr(valloc_i[11:0], 8'd0);
                                     // Spill into long handles when short is
                                     // full (aid >= MAX_ARR_SHORT). Must mark
                                     // the long bank; short is linear aid*32.
@@ -11324,8 +11412,8 @@ module jmr_js_vm #(
                                 jn_slot_arm <= 1'b0;
                                 vprom_done <= 1'b0;
                                 json_rp <= json_rp + 14'd1;
-                                varr_len[vjs_val[p][11:0]] <=
-                                    js_i[p] + 8'd1;
+                                varr_len_wr(vjs_val[p][11:0],
+                                    js_i[p] + 8'd1);
                                 e64_poke(6'd6, {4'd0, vjs_val[p][11:0]},
                                          {56'd0, js_i[p] + 8'd1});
                                 js_i[p] <= js_i[p] + 8'd1;
@@ -11651,8 +11739,7 @@ module jmr_js_vm #(
                                     vst_wr(vsp - 12'd1, V64_UNDEFINED);
                                     vst_win[0] <= V64_UNDEFINED;
                                 end else begin
-                                    stack[sp - 8'd1] <= 32'd0;
-                                    stack_tag[sp - 8'd1] <= 3'd5;
+                                    stack_wr(sp - 8'd1, 32'd0, 3'd5);
                                 end
                                 hs_ip(ip + 16'd1);
                                 hs_code(15'(ops_base + ip + 16'd1));
@@ -11669,8 +11756,7 @@ module jmr_js_vm #(
                                     vst_wr(vsp - 12'd1, V64_UNDEFINED);
                                     vst_win[0] <= V64_UNDEFINED;
                                 end else begin
-                                    stack[sp - 8'd1] <= 32'd0;
-                                    stack_tag[sp - 8'd1] <= 3'd5;
+                                    stack_wr(sp - 8'd1, 32'd0, 3'd5);
                                 end
                                 hs_ip(ip + 16'd1);
                                 hs_code(15'(ops_base + ip + 16'd1));
@@ -11736,7 +11822,7 @@ module jmr_js_vm #(
                             end else if (hp_phase == 3'd1) begin
                                 // LET_VAR non-local: env hit is not a write.
                                 if (!vvar_valid_rdata) begin
-                                    vvars[hp_key[8:0]] <= hp_wval;
+                                    vvars_wr(hp_key[8:0], hp_wval);
                                     vvar_valid[hp_key[8:0]] <= 1'b1;
                                     e64_poke(6'd12, {7'd0, hp_key[8:0]}, hp_wval);
                                 end
@@ -11806,7 +11892,7 @@ module jmr_js_vm #(
                                     end else begin
                                 if (hp_phase == 3'd0 ||
                                     !vvar_valid_rdata) begin
-                                    vvars[hp_key[8:0]] <= hp_wval;
+                                    vvars_wr(hp_key[8:0], hp_wval);
                                     vvar_valid[hp_key[8:0]] <= 1'b1;
                                     e64_poke(6'd12, {7'd0, hp_key[8:0]}, hp_wval);
                                 end
@@ -11850,7 +11936,7 @@ module jmr_js_vm #(
                             end else begin
                                 if (hp_phase == 3'd0 ||
                                     !vvar_valid_rdata) begin
-                                    vvars[hp_key[8:0]] <= hp_wval;
+                                    vvars_wr(hp_key[8:0], hp_wval);
                                     vvar_valid[hp_key[8:0]] <= 1'b1;
                                     e64_poke(6'd12, {7'd0, hp_key[8:0]}, hp_wval);
                                 end
@@ -11882,8 +11968,7 @@ module jmr_js_vm #(
                                     ? varr_rdata : V64_UNDEFINED);
                                 hs_vsp(vsp - 12'd1);
                             end else begin
-                                stack[sp - 8'd2] <= varr_rdata[31:0];
-                                stack_tag[sp - 8'd2] <= varr_trdata;
+                                stack_wr(sp - 8'd2, varr_rdata[31:0], varr_trdata);
                                 sp <= sp - 8'd1;
                             end
                             hs_ip(ip + 16'd1);
@@ -12016,12 +12101,10 @@ module jmr_js_vm #(
                                     vst_win[0] <= vobj_rdata[63:0];
                             end
                             else if (hp_cmd == HP_GETIDX) begin
-                                stack[sp - 8'd2] <= vobj_rdata[31:0];
-                                stack_tag[sp - 8'd2] <= vobj_trdata;
+                                stack_wr(sp - 8'd2, vobj_rdata[31:0], vobj_trdata);
                                 sp <= sp - 8'd1;
                             end else begin
-                                stack[sp - 8'd1] <= vobj_rdata[31:0];
-                                stack_tag[sp - 8'd1] <= vobj_trdata;
+                                stack_wr(sp - 8'd1, vobj_rdata[31:0], vobj_trdata);
                             end
                             if (hp_cmd == HP_GETIDX && hp_v64)
                                 hs_vsp(vsp - 12'd1);
@@ -12144,8 +12227,7 @@ module jmr_js_vm #(
                                 vst_wr(vsp - 12'd2, V64_UNDEFINED);
                                 hs_vsp(vsp - 12'd1);
                             end else begin
-                                stack[sp - 8'd2] <= 32'd0;
-                                stack_tag[sp - 8'd2] <= 3'd5;
+                                stack_wr(sp - 8'd2, 32'd0, 3'd5);
                                 sp <= sp - 8'd1;
                             end
                             hs_ip(ip + 16'd1);
@@ -12248,12 +12330,10 @@ module jmr_js_vm #(
                             hs_st(S_FETCH_WAIT);
                         end else begin
                             if (hp_cmd == HP_SETIDX) begin
-                                stack[sp - 8'd3] <= hp_wval[31:0];
-                                stack_tag[sp - 8'd3] <= hp_tag;
+                                stack_wr(sp - 8'd3, hp_wval[31:0], hp_tag);
                                 sp <= sp - 8'd2;
                             end else begin
-                                stack[sp - 8'd2] <= hp_wval[31:0];
-                                stack_tag[sp - 8'd2] <= hp_tag;
+                                stack_wr(sp - 8'd2, hp_wval[31:0], hp_tag);
                                 sp <= sp - 8'd1;
                             end
                             hs_ip(ip + 16'd1);
@@ -12304,8 +12384,7 @@ module jmr_js_vm #(
                             vst_wr(vsp - 12'd3, hp_wval);
                             hs_vsp(vsp - 12'd2);
                         end else begin
-                            stack[sp - 8'd3] <= hp_wval[31:0];
-                            stack_tag[sp - 8'd3] <= hp_tag;
+                            stack_wr(sp - 8'd3, hp_wval[31:0], hp_tag);
                             sp <= sp - 8'd2;
                         end
                         hs_ip(ip + 16'd1);
@@ -12339,8 +12418,7 @@ module jmr_js_vm #(
                             if (hp_v64)
                                 vst_wr(hp_vbase, hp_rval);
                             else begin
-                                stack[hp_vbase[10:0]] <= hp_rval[31:0];
-                                stack_tag[hp_vbase[10:0]] <= 3'd2;
+                                stack_wr(hp_vbase[10:0], hp_rval[31:0], 3'd2);
                             end
                             hs_hp_make_arr(1'b0);
                             hs_hp_phase(3'd0);
@@ -12608,7 +12686,21 @@ module jmr_js_vm #(
                     end
                 end
                 S_V64_MINMAX: begin
-                    if (!bind_rd_arm) begin
+                    // Exec seeds minmax_*_n on CALL_NATIVE min/max then
+                    // leave_hold. Parent FFs stay 0 unless copied — result
+                    // wrote vsp=1 and `48+Math.min(...)*16` ADDed underflow
+                    // (INVADERS Space → new Grid startY, fault 1).
+                    if (state != S_V64_MINMAX) begin
+                        hs_st(S_V64_MINMAX);
+                        minmax_base <= e64_minmax_base_q;
+                        minmax_acc <= e64_minmax_acc_q;
+                        minmax_is_min <= e64_minmax_is_min_q;
+                        minmax_k <= e64_minmax_k_q;
+                        minmax_n <= e64_minmax_n_q;
+                        bind_rd_arm <= 1'b0;
+                    end else if (casestate_q != S_V64_MINMAX)
+                        hs_st(S_V64_MINMAX);
+                    else if (!bind_rd_arm) begin
                         bind_rd_arm <= 1'b1;
                     end else if (minmax_k >= minmax_n) begin
                         vst_wr(minmax_base, minmax_acc);
@@ -12679,10 +12771,7 @@ module jmr_js_vm #(
                                 if (!jn_rd_arm)
                                     jn_rd_arm <= 1'b1;
                                 else begin
-                                    stack[sp - vcall_argc[7:0] - 8'd1 + bind_k] <=
-                                        e32_stack_rdata;
-                                    stack_tag[sp - vcall_argc[7:0] - 8'd1 + bind_k] <=
-                                        e32_stack_tag_rdata;
+                                    stack_wr(sp - vcall_argc[7:0] - 8'd1 + bind_k, e32_stack_rdata, e32_stack_tag_rdata);
                                     bind_k <= bind_k + 8'd1;
                                     jn_rd_arm <= 1'b0;
                                 end
@@ -12710,8 +12799,7 @@ module jmr_js_vm #(
                             begin
                                 logic [7:0] ac;
                                 ac = vcall_argc[7:0];
-                                stack[sp - ac - 8'd1] <= 32'sd0;
-                                stack_tag[sp - ac - 8'd1] <= 3'd5;
+                                stack_wr(sp - ac - 8'd1, 32'sd0, 3'd5);
                                 sp <= sp - ac;
                                 hs_ip(ip + 16'd1);
                                 hs_code(15'(ops_base + ip + 16'd1));
@@ -12766,8 +12854,7 @@ module jmr_js_vm #(
                         if (!vfe_rd_arm)
                             vfe_rd_arm <= 1'b1;
                         else begin
-                        stack[sp - 8'd1] <= hp_rval[31:0];
-                        stack_tag[sp - 8'd1] <= hp_tag;
+                        stack_wr(sp - 8'd1, hp_rval[31:0], hp_tag);
                         arm_release_env(e32_cs1_env_rdata, S_FETCH_WAIT);
                         hs_ip(e32_cs2_ip_rdata);
                         this_obj <= e32_cs2_this_rdata;
@@ -12807,7 +12894,7 @@ module jmr_js_vm #(
                         fl = varr_len_rdata;
                         vfe_rd_arm <= 1'b0;
                         if (fl < ARR_CAP[7:0]) begin
-                            varr_len[vfe_map[11:0]] <= fl + 8'd1;
+                            varr_len_wr(vfe_map[11:0], fl + 8'd1);
                             e64_poke(6'd6, {4'd0, vfe_map[11:0]},
                                      {56'd0, fl + 8'd1});
                             hs_hp_cmd(HP_ASETI);
@@ -12942,8 +13029,7 @@ module jmr_js_vm #(
                             end
                         end
                         4'd6: begin
-                            stack[sp - 8'd1] <= hp_rval[31:0];
-                            stack_tag[sp - 8'd1] <= 3'd0;
+                            stack_wr(sp - 8'd1, hp_rval[31:0], 3'd0);
                             hs_ip(ip + 16'd1);
                             hs_code(15'(ops_base + ip + 16'd1));
                             hs_st(S_FETCH_WAIT);
@@ -13026,8 +13112,7 @@ module jmr_js_vm #(
                                             n_obj_keep <= n_obj + 16'd1;
                                     end
                                 end
-                                stack[hp_vbase[10:0] - 11'd1] <= {16'd0, moid};
-                                stack_tag[hp_vbase[10:0] - 11'd1] <= 3'd1;
+                                stack_wr(hp_vbase[10:0] - 11'd1, {16'd0, moid}, 3'd1);
                                 sp <= hp_vbase[10:0];
                                 hs_ip(ip + 16'd1);
                                 hs_code(15'(ops_base + ip + 16'd1));

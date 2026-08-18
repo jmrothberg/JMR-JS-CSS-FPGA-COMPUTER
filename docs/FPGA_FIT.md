@@ -115,12 +115,14 @@ LUTRAM can only sit in **SLICEM** boxes (a subset of slices).
 ## Easy mistakes
 
 - **Do not write big on-chip arrays from the VM FSM.** That was the 70 GB
-  blow-up. `imgd_pix` / `spr_mem` / `name_mem` / `json_mem` must use a
+  blow-up. `imgd_pix` / `spr_mem` / `name_mem` / `json_mem` / `stack` /
+  `name_hash_tbl` / `varr_len` / `vobj_alloc` / `vvars` must use a
   tiny `if (we) mem[addr] <= data` process (copy `jmr_mini_fb` Port A).
   The FSM only pulses `*_we` / `*_waddr` / `*_wdata`. Isolated `*_rdata`
   reads while the FSM still did `imgd_pix[i] <=` / `spr_mem[spr_wp] <=`
   still hit **71 GB**. After those writes moved out (15:32), synth held
-  **~15 GB** after `e32_p_clr` instead of 8→36→70. Do not put those
+  **~15 GB** after `e32_p_clr` instead of 8→36→70. Heap-table writes
+  moved out the same way (next `make bit`). Do not put those
   array writes back into the FSM for glass, HEAP, or a new opcode.
 - **Kill on RSS, not on `e32_p_clr`.** Synth 8-6014 (`e32_p_clr_reg was
   removed`) is unused-FF housekeeping after `top_nexys_video` finishes.

@@ -12,7 +12,8 @@ Law: `never-fake-fpga-sim`, `one-heap-keep-gen`, `python-first-parity`,
 
 **Any RTL edit** (glass, HEAP, exec, new opcode): extra clocks OK. No clone
 heaps. No `leave_hold` in else. Large on-chip arrays (`imgd_pix`, `spr_mem`,
-`name_mem`, `json_mem`, and anything else MB-class) write only through
+`name_mem`, `json_mem`, `stack`, `name_hash_tbl`, `varr_len`, `vobj_alloc`,
+`vvars`, and anything else in that class) write only through
 `*_we` / `*_waddr` / `*_wdata` into a tiny `if (we) mem[addr] <= data`
 process — same as `jmr_mini_fb`. Do **not** poke `mem[i] <=` from the
 parent FSM. Isolated `*_rdata` reads with FSM writes still left in blew
@@ -28,8 +29,14 @@ poke the big on-chip pictures. `imgd_pix` (307200×8), `spr_mem` (256K×8),
 `if (we) mem[addr] <= data` process (copy `jmr_mini_fb` / `jmr_video_vram`
 Port A). The 7k-line `always_ff` sets `imgd_we` / `spr_we` / `name_we` /
 `json_we` + waddr/wdata. After `e32_p_clr` this run held **~15 GB** + one
-busy core (old curve was 8→36→70 GB in minutes). Fit: [FPGA_FIT.md](FPGA_FIT.md).
-Do **not** `bit-fresh`.
+busy core (old curve was 8→36→70 GB in minutes).
+
+**Same Port A (2026-08-18, next `make bit`):** leftover heap tables that
+were still `mem[i] <=` from the FSM + 80-array mux (`stack` 1W2R,
+`name_hash_tbl` TOS+NOS, `varr_len`, `vobj_alloc`, `vvars`). FOREACH
+el+idx is two clocks (`stack_dual_pend`) so the stack has one write port.
+The 15:32 synth already ingested the file; this is for the **next** bit.
+Fit: [FPGA_FIT.md](FPGA_FIT.md). Do **not** `bit-fresh`.
 
 **Failed (do not repeat):** named unique-case peek hunts; splitting **reads**
 only into `rdata <= mem[raddr]` while the FSM still did `imgd_pix[i] <=` /
