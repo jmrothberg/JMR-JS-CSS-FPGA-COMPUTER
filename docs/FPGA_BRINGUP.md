@@ -4,10 +4,10 @@
 (“T200” in lab shorthand).
 
 **Working sibling (do not confuse):** `JMR-BASIC-FPGA-COMPUTER` on Digilent
-**Nexys A7-100T** (“T100”) already has a **fully working** BASIC-native console
+**Nexys A7-100T** (“T100”) already has a **fully working** NLISC-BASIC console
 + USB keyboard. Steal **method** (PYTHON → real FPGA-SIM → board; PIC24
 USB→PS/2). Do **not** copy A7 pinouts, BASIC ISA, or VGA assumptions into this
-tree. This product is **JS-native** + **HDMI 640×480** on Nexys Video.
+tree. This product is **NLISC-JS** + **HDMI 640×480** on Nexys Video.
 
 **STOP:** Do **not** `make … bit` / flash until FPGA-SIM is perfect for the
 feature under test (`check_runtime_parity.py` BATTERY PASS + relevant benches).
@@ -56,9 +56,14 @@ executable. It is **not** an FPGA and **not** Vivado. It does **not** emit
 with `for (k)` inside `always_ff`. That loop **unrolls** into a combinational
 mux. Real FPGA block RAM and ASIC SRAM are: address in, write enable, **data
 out next clock**, 1–2 ports. FPGA-SIM that only works because of combo
-arrays is **not** board-ready (Vivado `Synth 8-4556` / LUT explosion). Write
-memories as SRAM from the first RTL line — same files as the `.bin`. Rule:
-[FPGA_FIT.md](FPGA_FIT.md), Constitution § language-native method step 7.
+arrays is **not** board-ready (Vivado flatten: RSS tens of GB after
+`top_nexys_video` synthesizes; unused-FF `e32_p_clr` is not the bug).
+`unique case (casestate)` that **reads** `arr_len[v]` / `obj_n[fo]` /
+`spr_mem[so]` is the same class as combo `always_comb` — one cone, every
+arm a port. Heap-name grep empty is not the cone. Write memories as SRAM
+from the first RTL line: address this clock, `*_rdata` next. Same files
+as the `.bin`. Rule: [FPGA_FIT.md](FPGA_FIT.md),
+`.cursor/rules/never-fake-fpga-sim.mdc`, Constitution § NLISC method step 7.
 
 **Trap (2026-08-17 overnight cheat):** Verilator will also happily simulate
 **two** copies of `vvars` / `venv_*` / `vobj_*` (exec64 private + parent GC).
@@ -106,7 +111,9 @@ Traces first: [../.cursor/rules/use-existing-traces.mdc](../.cursor/rules/use-ex
 
 - User-visible behaviour already matches on PYTHON and FPGA-SIM.
 - Prefer synthesizable constructs (constant-bound loops; avoid vendor
-  non-converging `while` patterns).
+  non-converging `while` patterns). Parent unique-case **reads** of heap
+  SRAMs use `*_rdata` after a wait beat — do not add `mem[idx]` in a new
+  arm. `.cursor/rules/never-fake-fpga-sim.mdc` rule 3.
 - Do not invent fit numbers — read the generated fit report after the first
   real `make … bit`.
 

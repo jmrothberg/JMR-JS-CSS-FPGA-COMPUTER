@@ -135,6 +135,27 @@ update_compile_order -fileset sources_1
 set_param messaging.defaultLimit 2000
 set_msg_config -id {Synth 8-6014} -limit 2000
 set_msg_config -id {Synth 8-4767} -limit 200
+set_msg_config -id {Synth 8-3967} -limit 200
+set_msg_config -id {Synth 8-7186} -limit 200
+
+# wait_on_run does not tick during synth_design. Side log: RSS + last runme line
+# every 10s so a frozen e32_p_clr print still shows the RAM climb.
+set rss_log $OUT/synth_rss.log
+set runme $OUT/vivado/jmr_nexys_video.runs/synth_1/runme.log
+set watch [open $rss_log w]
+puts $watch "watch start [clock format [clock seconds]]"
+close $watch
+exec bash -c "while true; do ts=\$(date '+%H:%M:%S'); rss=\$(ps -C vivado -o rss= --no-headers 2>/dev/null | awk '{if (\$1+0>m) m=\$1+0} END {printf \"%.2f\", m/1024/1024}'); last=\$(tail -n 1 '$runme' 2>/dev/null | tr -d '\\r' | cut -c1-160); echo \"\$ts rss=\${rss}GB \$last\" >> '$rss_log'; sleep 10; done" &
+
+proc jmr_rss_gb {} {
+  if {[catch {exec ps -C vivado -o rss= --no-headers} out]} { return "?" }
+  set m 0
+  foreach r [split $out "\n"] {
+    set r [string trim $r]
+    if {$r ne "" && [string is integer -strict $r] && $r > $m} { set m $r }
+  }
+  return [format "%.2f" [expr {$m / 1024.0 / 1024.0}]]
+}
 
 # Always reset: a killed synth leaves PROGRESS 0% but still "needs reset"
 # (Common 17-69). catch: no-op if the run was never launched.
@@ -144,7 +165,7 @@ proc jmr_wait_run {run} {
   while {1} {
     set st [get_property STATUS [get_runs $run]]
     set pr [get_property PROGRESS [get_runs $run]]
-    puts "HEARTBEAT [clock format [clock seconds] -format {%H:%M:%S}] $run STATUS=$st PROGRESS=$pr"
+    puts "HEARTBEAT [clock format [clock seconds] -format {%H:%M:%S}] $run STATUS=$st PROGRESS=$pr RSS=[jmr_rss_gb]GB"
     if {$pr eq "100%" ||
         [string match -nocase "*fail*" $st] ||
         [string match -nocase "*error*" $st] ||

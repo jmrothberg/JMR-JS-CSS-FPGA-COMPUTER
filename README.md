@@ -1,7 +1,8 @@
 # JMR JS Computer
 
-An original **standalone** FPGA → ASIC computer whose **native machine
-language is JavaScript** (HTML5/Canvas games; minimal CSS as needed). There
+An original **standalone** FPGA → ASIC **NLISC** computer (Native Language
+Instruction Set Computing — see below) whose **native machine language is
+JavaScript** (HTML5/Canvas games; minimal CSS as needed). There
 is no soft CPU, no browser-on-FPGA, and **no dukpy/Duktape as the machine**:
 `LOAD "NAME.HTML"` → edit → **`RUN` always compiles** that HTML → in-memory
 ProgramImage (code + ASET art) → bytecode VM + engines. Full-quality
@@ -12,8 +13,8 @@ must run the **JMR VM**. V1 does **not** ship a general CSS browser — games
 draw on Canvas. BRAM is RAM; µSD is disk; external SRAM is the asset bank.
 
 **Sibling already works:** `JMR-BASIC-FPGA-COMPUTER` on Nexys **A7-100T** (T100)
-is a fully working BASIC-native FPGA (VGA + USB keyboard + console). This repo
-is the same *kind* of machine for **JS + HDMI** on Nexys **Video** (T200 /
+is a fully working NLISC-BASIC FPGA (VGA + USB keyboard + console). This repo
+is the same *kind* of machine for **NLISC-JS + HDMI** on Nexys **Video** (T200 /
 XC7A200T) — steal method, not BASIC ISA or A7 pins.
 
 **Primary board:** Digilent **Nexys Video** (XC7A200T) — HDMI 640×480, USB
@@ -108,20 +109,57 @@ from `build/nexys_video/utilization_impl.rpt`. Do not invent counts.
 
 ---
 
+## NLISC (Native Language Instruction Set Computing)
+
+RISC and CISC argue about the *shape* of the opcode. **NLISC** is a
+different axis: **the language the human types is the instruction surface
+of the chip.** There is no second machine underneath (no Z80 + BASIC ROM,
+no RISC-V + V8). Bytecode is what fetch actually eats; engines do the work.
+The BASIC sibling is **NLISC-BASIC**. This repo is **NLISC-JS**. Same
+method; different ISA. Full ladder:
+[CONSTITUTION.md](CONSTITUTION.md#nlisc-method-js-basic-or-a-later-native-gpu).
+
+**JS, not HTML, is the ISA.** HTML is the *disk format and editor surface*:
+one title = `NAME.HTML`, line numbers from that file, Canvas in a minimal
+container. V1 is not a CSS browser. The user types `LOAD "PACMAN.HTML"`;
+the processor is still NLISC-JS. Do not call it an “HTML CPU.”
+“HTML5 Canvas computer” is fine on the box.
+
+**Why it exists (TRS-80 tax).** Level II BASIC still needed an interpreter
+*and* a copy of a processor. Collapse those into one and the hidden CPU
+goes away. That is the product: READY → LOAD → RUN, like the TRS-80, with
+Canvas engines instead of a borrowed Z80.
+
+**ASIC advantage — for this class of machine, not versus Chrome.** One
+machine, not two: die goes to heap SRAM, dual FB, blitter, and the 4 MB
+asset port, not a general CPU plus a runtime in DRAM. `fillRect` /
+`drawImage` / rAF / `GET_PROP` are datapaths (extra clocks at ~30 MHz still
+hit a 60 Hz frame). Caps are frozen and compile as SRAM; overflow is loud.
+No OS, no JIT warmup, scanout from the on-chip front FB. It will **not**
+beat a 1 GHz ARM + a browser on raw JS or run the whole web. It competes
+with “Z80 + interpreter” and “soft CPU + QuickJS.”
+
+**Naming trap:** 1990s “native” meant compiled machine code, not
+interpreted. Here **native** means the language lives in the silicon
+(bytecode is the ISA) — no interpreter sitting on a borrowed CPU.
+
+---
+
 ## Method (steal from the BASIC sibling — not the product)
 
-Same rules if you later build a **language-native graphics processing unit**
-or **update BASIC**: the language is the instruction set architecture
-(native operations); Python is the fast ruler (same **results**, not the
-same wall-clock as the chip); register-transfer level hardware must execute
-the same serialized program; lockstep before titles; RUN compiles loaded
-source; user F9 before `.bit`. Full write-up:
-[CONSTITUTION.md](CONSTITUTION.md#language-native-computer-method-js-basic-or-a-later-native-gpu).
+Same NLISC ladder if you later build a **language-native GPU** or **update
+BASIC** (steal method, not tokens/pins). Python is the fast ruler (same
+**results**, not the same wall-clock as the chip); register-transfer level
+hardware must execute the same serialized program; lockstep before titles;
+RUN compiles loaded source; user F9 before `.bit`. Ladder:
+[CONSTITUTION.md](CONSTITUTION.md#nlisc-method-js-basic-or-a-later-native-gpu).
 
 - Constitution first.
 - PYTHON functional model → hardware model on **the bytes RTL gets** → FPGA-SIM → board `.bit`.
 - FPGA-SIM RTL **is** the T200 chip: `.cursor/rules/never-fake-fpga-sim.mdc`
-  + `one-heap-keep-gen.mdc`. Same RTL becomes the `.bin`.
+  + `one-heap-keep-gen.mdc`. Same RTL becomes the `.bin`. Unique-case
+  **reads** of heap SRAMs use `*_rdata` after a wait beat from the first
+  line — do not peek `mem[idx]` and flatten later.
 - Uniform glass across F9 runtimes.
 - Read `traces/` before repro spam.
 - Surgical edits; do not delete files; one README.

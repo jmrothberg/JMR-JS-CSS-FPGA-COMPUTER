@@ -1,6 +1,7 @@
 # Game design (HTML titles for this machine)
 
-How to write a playable `.HTML` game for the JMR JS Computer. The language
+How to write a playable `.HTML` game for this NLISC-JS machine (JS is the
+ISA; HTML is the title file). The language
 and Canvas surface are specified in [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md).
 This file is the **authoring** contract: glass, files, input, and what a
 title may assume.

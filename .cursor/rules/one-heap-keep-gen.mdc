@@ -33,4 +33,7 @@ if (vobj_alloc[i] == 2'd1) mark = 1;
 if (vobj_alloc[i] == 2'd1 && vobj_gen[i] == handle[43:32]) mark = 1;
 ```
 
+The gen check stays. Indexing `vobj_alloc[i]` in the unique case is still
+illegal SRAM — address `i` this clock, compare `vobj_alloc_rdata` next.
+
 How a memory must look so Vivado can build the `.bin`: `never-fake-fpga-sim`.

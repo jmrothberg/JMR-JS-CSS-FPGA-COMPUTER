@@ -1,13 +1,14 @@
 ---
-description: HTML/JS is the ISA — not dukpy, not a browser, not a soft CPU.
+description: NLISC-JS — JS bytecode is the ISA, not dukpy, not a browser, not a soft CPU.
 alwaysApply: true
 ---
 
 # Native HTML/JS computer
 
-This is a **standalone JS-native machine** (HTML5 Canvas games, no general CSS
-engine). JavaScript bytecode is the ISA. There is no hidden CPU, no
-browser-on-FPGA, no Linux. BASIC sibling = method only, not pins or tokens.
+This is a **standalone NLISC-JS machine** (HTML5 Canvas games, no general CSS
+engine). JavaScript bytecode is the ISA; HTML is the title file. There is no
+hidden CPU, no browser-on-FPGA, no Linux. NLISC-BASIC sibling = method only,
+not pins or tokens.
 
 **Forbidden as the machine:** dukpy / Duktape / V8 / QuickJS / Node / Chrome;
 Z80 / RISC-V / MicroBlaze / any soft CPU; executing JS **source** as one giant

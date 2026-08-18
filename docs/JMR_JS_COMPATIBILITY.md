@@ -1,9 +1,9 @@
 # JMR JS compatibility matrix (target titles)
 
 Target games drive the language/API set. **Not a full web browser** — no
-Fetch/XHR, no WebGL, no general browsing. Goal (same idea as BASIC on T100):
-**HTML + JavaScript + the CSS a game actually needs**, as the machine’s native
-surface — **JMR bytecode VM** on PYTHON → FPGA-SIM → BOARD → ASIC.
+Fetch/XHR, no WebGL, no general browsing. Goal (same idea as NLISC-BASIC on
+T100): **NLISC-JS** — HTML titles, JavaScript ISA, the CSS a game actually
+needs — **JMR bytecode VM** on PYTHON → FPGA-SIM → BOARD → ASIC.
 
 **No cheats:** dukpy/Duktape/V8/QuickJS/browser must not be the product CPU.
 Chrome may open the same `.HTML` for authoring only. See `CONSTITUTION.md` and

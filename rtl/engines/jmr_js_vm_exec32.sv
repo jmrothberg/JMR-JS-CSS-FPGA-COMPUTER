@@ -1648,13 +1648,17 @@ module jmr_js_vm_exec32 (
                 cm_key <= cm_key_n;
                 cm_cls <= cm_cls_n;
                 cm_mip <= cm_mip_n;
+                newobj_ctor <= newobj_ctor_n;
                 if (cm_scan && cm_armed &&
                     ({1'b0, cm_c} < n_cls) &&
-                    cls_name[cm_c] == cm_cls &&
-                    ({1'b0, cm_m} < cls_nmeth[cm_c]) &&
-                    cls_mname[cm_c][cm_m] == cm_key)
-                    cm_mip <= cls_mip[cm_c][cm_m];
-                newobj_ctor <= newobj_ctor_n;
+                    cls_name[cm_c] == cm_cls) begin
+                    // cm_key FFFF = NEW_OBJ ctor scan (one class/clock).
+                    if (cm_key == 16'hFFFF)
+                        newobj_ctor <= cls_ctor[cm_c];
+                    else if (({1'b0, cm_m} < cls_nmeth[cm_c]) &&
+                             cls_mname[cm_c][cm_m] == cm_key)
+                        cm_mip <= cls_mip[cm_c][cm_m];
+                end
                 newobj_rdy <= newobj_rdy_n;
                 newobj_emit <= newobj_emit_n;
                 fp_left <= fp_left_n;
@@ -2734,6 +2738,17 @@ module jmr_js_vm_exec32 (
                     cm_armed_n = 1'b1;
                     cm_c_n = 4'd0;
                     cm_m_n = 4'd0;
+                end else if (cm_key == 16'hFFFF) begin
+                    // NEW_OBJ ctor: one class per clock (not a (c,m) CAM).
+                    if (({1'b0, cm_c} + 5'd1 >= n_cls) ||
+                        (cm_c == 4'(MAX_CLS - 1))) begin
+                        cm_scan_n = 1'b0;
+                        cm_armed_n = 1'b0;
+                        cm_done_n = 1'b1;
+                    end else begin
+                        cm_armed_n = 1'b1;
+                        cm_c_n = cm_c + 4'd1;
+                    end
                 end else if (cm_m == 4'(MAX_CMETH - 1)) begin
                     cm_m_n = 4'd0;
                     if (({1'b0, cm_c} + 5'd1 >= n_cls) ||
@@ -2741,8 +2756,12 @@ module jmr_js_vm_exec32 (
                         cm_scan_n = 1'b0;
                         cm_armed_n = 1'b0;
                         cm_done_n = 1'b1;
-                    end else
+                    end else begin
+                        // Keep armed: default cm_armed_n=0 restarted c=0
+                        // forever when n_cls>=2 (title hang at CALL_METH).
+                        cm_armed_n = 1'b1;
                         cm_c_n = cm_c + 4'd1;
+                    end
                 end else begin
                     cm_armed_n = 1'b1;
                     cm_c_n = cm_c;
@@ -3714,20 +3733,26 @@ module jmr_js_vm_exec32 (
                                     newobj_rdy_n = 1'b1;
                                     state_n = S_EXEC;
                                 end else begin
-                                if (!newobj_emit) begin
+                                if (!newobj_emit && !cm_done) begin
                                 begin obj_n_we = 1'b1; obj_n_waddr = n_obj[12:0]; obj_n_wdata = 0; end
                                 begin obj_cls_we = 1'b1; obj_cls_waddr = n_obj[12:0]; obj_cls_wdata = code_rdata[23:8]; end
-                                end
+                                cm_scan_n = 1'b1;
+                                cm_armed_n = 1'b0;
+                                cm_done_n = 1'b0;
+                                cm_c_n = 4'd0;
+                                cm_m_n = 4'd0;
+                                cm_mip_n = 16'hFFFF;
+                                cm_key_n = 16'hFFFF;
+                                cm_cls_n = code_rdata[23:8];
+                                newobj_ctor_n = 16'hFFFF;
+                                state_n = S_EXEC;
+                                end else begin
                                 begin
                                     logic [15:0] ctor_ip;
                                     logic [8:0] vslot;
-                                    ctor_ip = newobj_emit ? newobj_ctor : 16'hFFFF;
+                                    ctor_ip = newobj_ctor;
                                     if (!newobj_emit) begin
-                                    ctor_ip = 16'hFFFF;
-                                    for (int c = 0; c < MAX_CLS; c++) begin
-                                        if (c < n_cls && cls_name[c] == code_rdata[23:8])
-                                            ctor_ip = cls_ctor[c];
-                                    end
+                                    cm_done_n = 1'b0;
                                     // PACMAN `var Item = function` — class table ctor is FFFF
                                     if (ctor_ip == 16'hFFFF && intern_var_ok_rdata) begin
                                         vslot = intern_var_rdata;
@@ -3815,6 +3840,7 @@ module jmr_js_vm_exec32 (
                                             next_op();
                                         end
                                     end
+                                end
                                 end
                                 end
                             end

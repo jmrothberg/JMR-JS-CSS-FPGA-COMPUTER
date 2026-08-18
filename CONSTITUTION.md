@@ -3,7 +3,8 @@
 ## Project Constitution v0.2
 
 This document is the architectural specification for the JMR JS Computer
-(JavaScript-native FPGA game computer).
+(**NLISC-JS**: JavaScript-native FPGA game computer). Family name:
+[README.md](README.md#nlisc-native-language-instruction-set-computing).
 
 If there is ever a conflict between this document and the implementation,
 THIS DOCUMENT IS CORRECT.
@@ -20,9 +21,9 @@ The goal is educational elegance, not minimum code.
 
 # PROJECT GOAL
 
-Build an original **standalone** FPGA computer whose native programming
-environment is JavaScript, aimed at playing and editing HTML5/Canvas-style
-2D games.
+Build an original **standalone** NLISC-JS FPGA computer whose native
+programming environment is JavaScript, aimed at playing and editing
+HTML5/Canvas-style 2D games.
 
 The user never programs a conventional **instruction set architecture**
 (the chip’s native operations — no assembly, no hidden RISC).
@@ -35,13 +36,15 @@ dispatch FPGA execution engines (microcode + engines). This is NOT:
 - Linux, Chrome/Firefox/WebKit, or a general-purpose HTML/CSS browser
 - a port of the JMR BASIC computer with different keywords
 
-It is a new architecture: **JavaScript (+ minimal game HTML container) is the
-instruction surface.** Canvas drawing is hardware-accelerated.
+It is a new architecture: **JavaScript bytecode is the ISA**; HTML is the
+title file (minimal game container), not a second instruction set. Canvas
+drawing is hardware-accelerated.
 
 ## Vendored-titles mandate (success criteria, non-negotiable)
 
-This is a **real HTML / JavaScript / (minimal) CSS native CPU** — FPGA first,
-then ASIC. Same method as the BASIC sibling; **not** a browser or dukpy box.
+This is a **real NLISC-JS CPU** (HTML titles, JS ISA, minimal CSS as needed)
+— FPGA first, then ASIC. Same method as the NLISC-BASIC sibling; **not** a
+browser or dukpy box.
 
 The machine plays real HTML5/Canvas games. One title = one file:
 `INVADERS.HTML`, `PACMAN.HTML`, `DONKEY.HTML`. Those **MUST LOAD + RUN with
@@ -112,12 +115,15 @@ engines, not library code on a hidden CPU.
     is not required to use the machine. UART/JTAG are flash/debug only.
 11. **FPGA-SIM RTL must be synthesizable SRAM.** Same `rtl/*.sv` as the
     `.bin`. One 1-D heap, address in, **rdata next clock**. Opcode decoder
-    combo must not index arrays or drive ports — extra clocks are silicon,
-    not a reason to keep combo lookups. Caps fit leftover BRAM after dual
-    FB (~1 MB class, not 7 MB). Loud overflow; do not hide it in the 4 MB
-    asset bank. Six rules: `.cursor/rules/never-fake-fpga-sim.mdc`. One
-    heap + generation: `one-heap-keep-gen.mdc`. Numbers:
-    [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+    **and** parent `unique case (casestate)` must not combo-index large
+    SRAMs (`arr_len[v]`, `obj_n[fo]`, `spr_mem[so]`, `fn_entry()`). Read `*_rdata` after a
+    wait beat; writes `foo[i] <=` stay. Extra clocks are silicon, not a
+    reason to peek. Stale 0 → wait, never restore a combo read to make a
+    title work. `sim_server_synth` PASS is not Vivado; RSS tens of GB is
+    flatten. Caps fit leftover BRAM after dual FB (~1 MB class, not 7 MB).
+    Loud overflow; do not hide it in the 4 MB asset bank. Six rules:
+    `.cursor/rules/never-fake-fpga-sim.mdc`. One heap + generation:
+    `one-heap-keep-gen.mdc`. Numbers: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
 
 ---
 
@@ -150,20 +156,21 @@ User titles: `LOAD "NAME.HTML"` / `RUN` only. **`RUN` = compile-on-RUN**
 streams to the external SRAM asset bank).
 Cursor rules: `python-first-parity.mdc`, `no-dukpy-cheat-native-cpu.mdc`,
 `never-fake-fpga-sim.mdc` (includes: RTL heaps must be SRAM, not Verilator-only
-2-D combo arrays), `one-heap-keep-gen.mdc` (one physical heap; never skip
-generation to hide exec/parent dual-copy skew).
+2-D combo arrays; parent `unique case` reads `*_rdata`, never `arr_len[v]`),
+`one-heap-keep-gen.mdc` (one physical heap; never skip generation to hide
+exec/parent dual-copy skew).
 
 The BASIC sibling (`JMR-BASIC-FPGA-COMPUTER` on Nexys A7-100T) is a **working
 reference for method and USB-HID→PS/2 bring-up**, not a pinout or instruction
 set architecture source.
 
-## Language-native computer method (JS, BASIC, or a later native GPU)
+## NLISC method (JS, BASIC, or a later native GPU)
 
-This is how to build or **update** a machine whose native language is the
-**instruction set architecture** (the operations the chip actually runs:
-JavaScript here; BASIC on the sibling; a native graphics processing unit
-would be the same idea with a graphics language). Steal this ladder. Do
-**not** steal the other product’s tokens, pins, or microcode.
+This is how to build or **update** an NLISC machine (the native language
+*is* the ISA: JavaScript here; BASIC on the sibling; a native GPU would
+use a graphics language). Steal this ladder. Do **not** steal the other
+product’s tokens, pins, or microcode. Family name / TRS-80 / ASIC write-up:
+[README.md](README.md#nlisc-native-language-instruction-set-computing).
 
 **Speed:** Python must stay **fast**. It matches **what** the chip would do
 (same program bytes, same numbers, same errors), not **how long** the chip
@@ -199,12 +206,14 @@ simulation and the board keep real cycle time; Python does not.
    rejects. Visual play is the user’s F9, not a snippet PASS.
 7. **Write FPGA-SIM as if it were the chip.** Same SystemVerilog as the
    `.bin`. SRAM ports from day one — do not grow combo arrays “until games
-   work, then flatten.” Shape and depth: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
-   Coding rules: `.cursor/rules/never-fake-fpga-sim.mdc`. Examples in-repo:
+   work, then flatten.” New unique-case arms **read** `*_rdata` (wait beat);
+   do not add `mem[idx]` “just this once.” Shape and depth:
+   [docs/FPGA_FIT.md](docs/FPGA_FIT.md). Coding rules:
+   `.cursor/rules/never-fake-fpga-sim.mdc`. Examples in-repo:
    `rtl/engines/storage_engine.sv` (`sbuf`), `rtl/engines/jmr_video_vram.sv`
-   (Port A). Skipping generation so a second heap would not “look stale”
-   is forbidden. FPGA-SIM must remain the path that compiles to a
-   standalone `.bin`.
+   (Port A), parent JOIN `jn_rd_arm` + `varr_len_rdata`. Skipping generation
+   so a second heap would not “look stale” is forbidden. FPGA-SIM must
+   remain the path that compiles to a standalone `.bin`.
 
 A native graphics processing unit is the same machine with draw engines as
 first-class instruction-set operations (Canvas here; COLOR/SET on BASIC).
@@ -264,7 +273,7 @@ openFPGALoader
 
 # USER EXPERIENCE (V1 intent)
 
-Boot into a monitor READY prompt (JS-native glass), not a desktop or browser.
+Boot into a monitor READY prompt (NLISC-JS glass), not a desktop or browser.
 
 ```
 JMR JS READY
@@ -397,8 +406,10 @@ file** — that earlier spill design is retired.
 **On-chip arrays are SRAM, not simulation tables.** Code, heap, dual FB,
 editor buffer, and char VRAM must infer as block RAM (FPGA) / compiled
 SRAM (ASIC): 1-D, 1–2 ports, registered read. Verilator happiness is not
-proof. Combo 2-D heaps (`vobj_key[obj][slot]` compared in one cycle) are
-forbidden even if FPGA-SIM titles look right.
+proof. Combo 2-D heaps (`vobj_key[obj][slot]` compared in one cycle) and
+combo `arr_len[v]` / `obj_n[fo]` inside `unique case (casestate)` are
+forbidden even if FPGA-SIM titles look right. Address this clock; consume
+`*_rdata` next.
 
 **V1 on-chip working set** (generous — see ASIC target below):
 

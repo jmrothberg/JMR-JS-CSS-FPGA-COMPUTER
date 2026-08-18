@@ -14,4 +14,4 @@ When glass is wrong (READY with no error, TRAP, black/dark, hung GUI):
 4. Offline reads of sources / microcode / the log are fine.
 
 Live status: [docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md).
-This is the T200 JS machine — not BASIC / A7-100T.
+This is the T200 NLISC-JS machine — not NLISC-BASIC / A7-100T.

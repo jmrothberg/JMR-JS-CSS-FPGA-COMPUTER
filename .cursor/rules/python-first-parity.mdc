@@ -32,8 +32,10 @@ PYTHON. Tests = real titles, not random programs. Do not invent LUT counts
 Tether mirrors glass; when J15 works, play needs **zero** code changes. This
 board is Nexys Video T200 — not A7-100T. StarLite later.
 
-**Agents:** do not run Vivado / `make bit`. Inspect both execs against the
-six rules in `never-fake-fpga-sim` (opcode comb drives no ports; no combo
-`arr[i]`; no second heap). `sim_server_synth` PASS is not a bitstream.
-Then glass. Do not redesign the architecture, merge engines, or ship
-RTL-only glass. Traces: `use-existing-traces`.
+**Agents:** do not run Vivado / `make bit`. Inspect both execs **and** the
+parent unique case against the six rules in `never-fake-fpga-sim` (opcode
+comb drives no ports; no combo `arr[i]` in `casestate` / tasks /
+`fn_entry()`; no second heap). New glass must wait for `*_rdata`, never
+peek. `sim_server_synth` PASS is not a bitstream. Then glass. Do not
+redesign the architecture, merge engines, or ship RTL-only glass. Traces:
+`use-existing-traces`.

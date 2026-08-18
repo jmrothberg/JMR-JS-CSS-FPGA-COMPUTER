@@ -20,69 +20,68 @@ bitstream.
 Glass is **640×480** (GUI mirror matches HDMI, not a 16-line strip).
 Keyboard is **full JS** (case + punctuation); do not reintroduce an a–z fold.
 
-**Legal SRAM:** 1-D array, scalar `we` + wdata, **rdata next clock**, 1 write +
-1–2 reads. Dump/tether shares the CPU read port (not a third port). True
-dual-port only for CPU+scanout (VRAM / FB). Slot scans are FSMs, one index
-per clock, **stop at `vobj_len` / `venv_len`**, not always 32. Operand stack
-is 1W1R registered (not combo/multi-port LUTRAM). Extra GET_PROP clocks are
-silicon (~30 MHz). Caps (same in PYTHON): `MAX_OBJ=1024`, arrays
-`1536×32+128×128`, `ENV_DEPTH=512`. Do not restore `8192`/`4096` (~7 MB).
-Overflow loud. JS heap is not the 4 MB ASET bank; do not bump that bank to
-8 MB. `cls_*` 16×16 (4 Kbit) stays. Copy `storage_engine.sv` `sbuf` /
-`jmr_video_vram.sv` Port A. Synth **8-4767** on `storage_engine` `linebuf`
-is a small FAT copy buffer in registers — leave it; the hang 8-4767 was
-exec32 `stack_reg` tens of thousands of FFs. Fit numbers:
-[docs/FPGA_FIT.md](../../docs/FPGA_FIT.md). Live leftovers:
-[docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md).
+**Vivado RAM is UG901, not agent homework.** Citations: *Vivado Design Suite
+User Guide: Synthesis (UG901) 2026.1* — [Simple Dual-Port Block RAM with
+Single Clock (Verilog)](https://docs.amd.com/r/en-US/ug901-vivado-synthesis/Simple-Dual-Port-Block-RAM-with-Single-Clock-Verilog)
+(`simple_dual_one_clock.v`), [Single-Port Block RAM Write-First
+(Verilog)](https://docs.amd.com/r/en-US/ug901-vivado-synthesis/Single-Port-Block-RAM-Write-First-Mode-Verilog)
+(`rams_sp_wf.v`), [RAM_STYLE](https://docs.amd.com/r/en-US/ug901-vivado-synthesis/RAM_STYLE),
+[Case Statement](https://docs.amd.com/r/en-US/ug901-vivado-synthesis/Case-Statement)
+(`unique` → `parallel_case`), [Blocking and Non-Blocking
+Assignments](https://docs.amd.com/r/en-US/ug901-vivado-synthesis/Blocking-and-Non-Blocking-Assignments),
+[AR 56457](https://adaptivesupport.amd.com/s/article/56457) (RAM in its own
+hierarchy matching the template), [AR 58025](https://adaptivesupport.amd.com/s/article/58025)
+(Synth **8-3967** async-read template miss). Fit: [FPGA_FIT.md](../../docs/FPGA_FIT.md).
+Live leftovers: [SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md).
 
-## Six rules (do not ship a diff that breaks one)
+Caps (same in PYTHON): `MAX_OBJ=1024`, arrays `1536×32+128×128`,
+`ENV_DEPTH=512`. Do not restore `8192`/`4096`. JS heap is not the 4 MB ASET
+bank. `cls_*` 16×16 stays. `storage_engine` `linebuf` 8-4767 is a small FAT
+copy buffer — leave it. Copy working Port A: `jmr_video_vram.sv` /
+`jmr_mini_fb.sv`.
 
-1. **One copy, one owner.** Parent holds the tables. Exec: address in, data
-   next clock. Do not clone `stack` / `vvars` / `name_mem` / `intern_var` /
-   `cstack` / `json_mem` into exec to dodge a port (`one-heap-keep-gen`).
+## Rules that are actually AMD (do not ship a diff that breaks one)
 
-2. **The opcode `always_comb` assigns no ports.** It writes local `*_n` and
-   local we/addr only. Parent sees `*_q` (clocked in exec). Any combo output
-   of that block — used `stack_we`, unused `foo_n`, even `raddr = sp-1` at
-   the top — is one cone; Vivado flattens exec into the parent.
-   `keep_hierarchy` does not save it. raddr that is only registered `sp` /
-   TOS / `code_rdata` belongs in a **separate** `assign` outside that block.
+1. **Match `simple_dual_one_clock.v` / `rams_sp_wf.v`.** One write process
+   (`if (wea) ram[addra] <= dia`) and one read process (`dob <= ram[addrb]`),
+   **scalar** `addra`/`addrb`/`wea`/`dia`/`dob`. Mux the **address**, not
+   forty `rdata <= mem[f(casestate,state,…)]` in one `always_ff`. If Vivado
+   cannot match that template it prints **8-3967** (async read) / **8-4767**
+   (RAM → registers). `imgd_pix` (307200×8) + `spr_mem` (256K×8) as FFs is
+   the ~70 GB RSS hang. `ram_style = "block"` is a hint (UG901 RAM_STYLE),
+   not a primitive; it does not save a bad template.
 
-3. **No combo `arr[i]`.** Not in `always_comb`, `assign`, or
-   `function automatic` (no TOS/SRAM peek from the opcode case — that is a
-   registered window or `*_rdata`, not a third port). Decoder reads
-   `*_rdata`. No 2-D heap tables. No whole-array combo copy
-   (`to_fn_n[i] = to_fn[i]`). No `for (k) if (mem[k]==key)` CAM — a `for`
-   over slots in `always_ff` is N parallel compares, not N clocks; that is
-   an FSM. No `for (i = j; i < N)` — write `for (i = 0; i < N) if (i >= j)`.
-   No nested `for` over `ENV_DEPTH`. No reset/`p_clr` `for` that writes
-   every cell in one cycle.
+2. **Do not mix blocking `=` and NBA `<=` in one sequential block** (UG901
+   Blocking and Non-Blocking Assignments).
 
-4. **Ports are scalars or packed vectors.** Unpacked array ports flatten
-   (even unused). No nested `bus[a:b][c:d]` (packed-slice part-select, e.g.
-   `rdata[79:64][9:0]` or `pack[i +: 64][11:0]`). Unpack once to a 64-bit
-   wire, then `wire[11:0]` (or use `rdata[73:64]`).
+3. **`unique case` is `parallel_case`** (UG901 Case Statement). Every arm
+   is built in parallel. A `unique case` that combo-reads a large unpacked
+   array is N RAM ports / a giant mux. Use plain `case` on opcode/`nid`.
+   Sequential `case (state)` is fine if it does not combo-index BRAM.
 
-5. **Plain `case` on opcode and `nid`.** `unique case` on those two is every
-   arm in parallel. Small `unique case (state)` / `(p_sel)` stays.
+4. **Do not reset-clear a BRAM in one cycle.** AR 58025 / UG949: extra reset
+   on the RAM or its read-address register breaks inference. Walk one index
+   per clock (`HEAP_CLR`). A `for` over `MAX_OBJ` in `always_comb` or in
+   reset unrolls to parallel compares/writes.
 
-6. **Do not fake the chip.** No `` `ifdef SYNTHESIS `` smaller heap, no
-   `RAMB36` inside the VM, no sim-sized depths (~7 MB). Last unused-FF print
-   (`e32_p_clr_reg was removed`, 8-3936 trim) is not the cause — RSS climbing
-   after a frozen log is flatten. Kill that; fix rules 2–3 by inspection.
+5. **This machine (not UG901):** one JS heap in the parent (`one-heap-keep-gen`);
+   exec address in, `*_rdata` next clock; no unpacked array ports; no
+   `` `ifdef SYNTHESIS `` smaller heap; no `RAMB36` inside the VM. Do **not**
+   extract JOIN / JSON / GC / HEAP into new modules. Agent does not run
+   Vivado. `sim_server_synth` PASS is Verilator. `e32_p_clr` 8-6014 is unused-FF
+   housekeeping, not the hang. Kill synth only when the log is frozen **and**
+   RSS is still climbing toward ~80 GB.
 
 ```systemverilog
-// BAD — combo index, combo port, one cone with the opcode case
-always_comb begin
-  stack_raddr = sp - 1;          // still a port of the giant comb
-  vars_raddr = intern_var[idx];  // 1024-mux on a port
-  unique case (opcode) … stack_we = 1; endcase
+// UG901 simple_dual_one_clock.v (one RAM)
+always_ff @(posedge clk) if (we) ram[waddr] <= wdata;
+always_ff @(posedge clk) rdata <= ram[raddr];  // raddr is a scalar wire
+
+// BAD — MB-class arrays share one process with a combo address mux
+always_ff @(posedge clk) begin
+  imgd_pix_rdata <= imgd_pix[imgd_i];
+  spr_mem_rdata  <= spr_mem[casestate == S_X ? a : b];
+  name_rdata     <= name_mem[state == S_Y ? c : d];
+  // … 40 more …
 end
-// GOOD — locals in the case; raddr outside; parent sees *_q
-assign stack_raddr = (sp >= 1) ? (sp - 1) : 0;
-always_comb begin
-  stack_we = 1'b0;  // local
-  case (opcode) … stack_we = 1'b1; endcase
-end
-always_ff @(posedge clk) stack_we_q <= stack_we;
 ```

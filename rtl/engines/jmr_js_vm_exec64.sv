@@ -1123,6 +1123,11 @@ module jmr_js_vm_exec64 (
     // vfn_valid_rdata is the clock after raddr_q, and exec samples that
     // rdata one more clock after that (rAF fault 4 / 45 with vf0=1).
     logic opnd3_q, opnd3_n;
+    // Class method lookup: one (c,m) per clock. Opcode comb must not
+    // index cls_mip[][] (exec32 cm_scan twin).
+    logic cm_scan, cm_scan_n, cm_armed, cm_armed_n, cm_done, cm_done_n;
+    logic [3:0] cm_c, cm_c_n, cm_m, cm_m_n;
+    logic [15:0] cm_mip, cm_mip_n, cm_key, cm_key_n, cm_cls, cm_cls_n;
     // String.replace needs two name_hash_tbl keys; one SRAM port → extra beat.
     logic hash2_q, hash2_n;
     logic [6:0] tmr_i_q, tmr_i_n;
@@ -1690,6 +1695,14 @@ module jmr_js_vm_exec64 (
             leave_hold <= 1'b0;
             ctor_cur <= V64_UNDEFINED;
             ctor_csp <= 8'd0;
+            cm_scan <= 1'b0;
+            cm_armed <= 1'b0;
+            cm_done <= 1'b0;
+            cm_c <= 4'd0;
+            cm_m <= 4'd0;
+            cm_mip <= 16'hFFFF;
+            cm_key <= 16'd0;
+            cm_cls <= 16'd0;
             // Parent GOT_HDR sets identity scale; exec fillRect uses these
             // FFs (ctx_sx=0 after rst made every ctx.fillRect clip to 0 —
             // INVADERS splash 1893 swaps, FBRAW nz=0).
@@ -1714,6 +1727,21 @@ module jmr_js_vm_exec64 (
                 bind_ret <= bind_ret_n;
                 bind_src <= bind_src_n;
                 bind_vsp_next <= bind_vsp_next_n;
+                cm_scan <= cm_scan_n;
+                cm_armed <= cm_armed_n;
+                cm_done <= cm_done_n;
+                cm_c <= cm_c_n;
+                cm_m <= cm_m_n;
+                cm_key <= cm_key_n;
+                cm_cls <= cm_cls_n;
+                cm_mip <= cm_mip_n;
+                // Registered cls_mip read: one (c,m) per clock (exec32 1651).
+                if (cm_scan && cm_armed &&
+                    ({1'b0, cm_c} < n_cls) &&
+                    cls_name[cm_c] == cm_cls &&
+                    ({1'b0, cm_m} < cls_nmeth[cm_c]) &&
+                    cls_mname[cm_c][cm_m] == cm_key)
+                    cm_mip <= cls_mip[cm_c][cm_m];
                 blit_sh <= blit_sh_n;
                 blit_si <= blit_si_n;
                 blit_sw <= blit_sw_n;
@@ -2201,6 +2229,10 @@ module jmr_js_vm_exec64 (
                     machine_fault <= 1'b0;
                     fault_code <= 8'd0;
                     vcsp <= 8'd0;
+                    cm_scan <= 1'b0;
+                    cm_armed <= 1'b0;
+                    cm_done <= 1'b0;
+                    cm_mip <= 16'hFFFF;
                     ctor_cur <= V64_UNDEFINED;
                     ctor_csp <= 8'd0;
                     ctx_sx <= FX_ONE;
@@ -2782,6 +2814,14 @@ module jmr_js_vm_exec64 (
         fb_swap_n = 1'b0;
         fill_style_i_n = fill_style_i;
         stroke_style_i_n = stroke_style_i;
+        cm_scan_n = 1'b0;
+        cm_armed_n = 1'b0;
+        cm_done_n = cm_done;
+        cm_c_n = cm_c;
+        cm_m_n = cm_m;
+        cm_mip_n = cm_mip;
+        cm_key_n = cm_key;
+        cm_cls_n = cm_cls;
         hp_aid_n = hp_aid;
         hp_alen_n = hp_alen;
         hp_aslot_n = hp_aslot;
@@ -3105,6 +3145,39 @@ module jmr_js_vm_exec64 (
                         opnd3_n = 1'b1;
                         state_n = S_V64_EXEC;
                         vst_we_n = 1'b0;
+                    end else if (cm_scan) begin
+                        // One (class,method) per clock. cls_mip read is always_ff.
+                        opnd_n = 1'b1;
+                        opnd2_n = 1'b1;
+                        opnd3_n = 1'b1;
+                        cm_scan_n = 1'b1;
+                        cm_key_n = cm_key;
+                        cm_cls_n = cm_cls;
+                        cm_mip_n = cm_mip;
+                        cm_done_n = 1'b0;
+                        state_n = S_V64_EXEC;
+                        if (!cm_armed) begin
+                            cm_armed_n = 1'b1;
+                            cm_c_n = 4'd0;
+                            cm_m_n = 4'd0;
+                        end else if (cm_m == 4'(MAX_CMETH - 1)) begin
+                            cm_m_n = 4'd0;
+                            if (({1'b0, cm_c} + 5'd1 >= n_cls) ||
+                                (cm_c == 4'(MAX_CLS - 1))) begin
+                                cm_scan_n = 1'b0;
+                                cm_armed_n = 1'b0;
+                                cm_done_n = 1'b1;
+                            end else begin
+                                // Keep armed: default cm_armed_n=0 would
+                                // restart c=0 forever when n_cls>=2.
+                                cm_armed_n = 1'b1;
+                                cm_c_n = cm_c + 4'd1;
+                            end
+                        end else begin
+                            cm_armed_n = 1'b1;
+                            cm_c_n = cm_c;
+                            cm_m_n = cm_m + 4'd1;
+                        end
                     end else
                     // Small gated scalar island. Every opcode not implemented
                     // here faults with ERROR_UNSUPPORTED; it never falls into
@@ -4996,11 +5069,17 @@ module jmr_js_vm_exec64 (
                                     // code_rdata[31:24] after HEAP was a1=1
                                     // (LET_VAR) → vsp-1 wrap 4095 (INVADERS
                                     // new Player after renderLeaderboard).
+                                    // Latch class intern the same way:
+                                    // GET_PROP HEAP before nested `new Item`
+                                    // left code_rdata as Game, so ALLOC
+                                    // scanned Game's ctor (ip=1) again
+                                    // (PACMAN vcsp=126 / snippet vret=39).
                                     // IIFE CALL_VAL leaves vcall_value=1;
                                     // kind 3 would BIND as a call. Nested
                                     // `new` also needs exec vcsp+1 so ALLOC
                                     // writes vframe[e64-1], not frame[0].
                                     vcall_value_n = 1'b0;
+                                    vcall_entry_n = code_rdata[23:8];
                                     vcall_argc_n = {4'd0, code_rdata[31:24]};
                                     vcsp_n = vcsp_hs + 8'd1;
                                     valloc_kind_n = 2'd0;
@@ -6167,15 +6246,19 @@ module jmr_js_vm_exec64 (
                                            (receiver[47:44] == V64_KIND_OBJECT ||
                                             receiver[47:44] == V64_KIND_ELEMENT) &&
                                            receiver[31:0] < MAX_OBJ) begin
-                                    for (int c = 0; c < MAX_CLS; c++)
-                                        if (c < n_cls &&
-                                            cls_name[c] ==
-                                                vobj_cls_rdata)
-                                            for (int m = 0; m < MAX_CMETH; m++)
-                                                if (m < cls_nmeth[c] &&
-                                                    cls_mname[c][m] ==
-                                                        code_rdata[23:8])
-                                                    mip = cls_mip[c][m];
+                                    if (!cm_done) begin
+                                        cm_scan_n = 1'b1;
+                                        cm_armed_n = 1'b0;
+                                        cm_done_n = 1'b0;
+                                        cm_c_n = 4'd0;
+                                        cm_m_n = 4'd0;
+                                        cm_mip_n = 16'hFFFF;
+                                        cm_key_n = code_rdata[23:8];
+                                        cm_cls_n = vobj_cls_rdata;
+                                        state_n = S_V64_EXEC;
+                                    end else begin
+                                    mip = cm_mip;
+                                    cm_done_n = 1'b0;
                                     if (mip != 16'hFFFF) begin
                                         bind_mode_n = 2'd1;
                                         bind_k_n = 8'd0;
@@ -6216,6 +6299,7 @@ module jmr_js_vm_exec64 (
                                         vcall_argc_n = argc;
                                         vcall_this_n = receiver;
                                         state_n = S_HEAP_WAIT;
+                                    end
                                     end
                                 end else begin
                                     vst_wr(base, V64_UNDEFINED);
