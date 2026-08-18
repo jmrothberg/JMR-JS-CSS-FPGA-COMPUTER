@@ -24,8 +24,8 @@ host twin; never treat dukpy/Chrome as the machine. User-typed glass must match
 across F9 runtimes (no RTL-only console commands).
 
 **Status for agents:** [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md)
-(J15 USB Host is dead on this T200 — GUI/PROG tether; FPGA-SIM is ahead of
-the 03:36 flashed bit).
+(PYTHON glass user-confirmed; FPGA-SIM not F9-ready; do not `make bit`
+unless the user asks. J15 USB Host is dead — GUI/PROG tether).
 
 ```
 $ python3 run_jmr_js.py
@@ -103,8 +103,6 @@ the Constitution disagree, the code is wrong.
 **Fit / LUTs / BRAM / slices:** [docs/FPGA_FIT.md](docs/FPGA_FIT.md) — measured
 from `build/nexys_video/utilization_impl.rpt`. Do not invent counts.
 
-**Session status:** [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md)
-
 **Implement / don’t checklist (HTML, JS, CSS, Canvas — Complete or TBD):**
 [docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md#agent-surface-checklist-html--javascript--css--canvas)
 
@@ -122,7 +120,8 @@ source; user F9 before `.bit`. Full write-up:
 
 - Constitution first.
 - PYTHON functional model → hardware model on **the bytes RTL gets** → FPGA-SIM → board `.bit`.
-- FPGA-SIM RTL **is** the chip: 1-D SRAM ports (not Verilator-only 2-D combo heaps). One physical JS heap — do not clone `vvars`/`venv`/`vobj_*` in exec64 and skip generation. Same RTL becomes the standalone `.bin`. [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+- FPGA-SIM RTL **is** the T200 chip: `.cursor/rules/never-fake-fpga-sim.mdc`
+  + `one-heap-keep-gen.mdc`. Same RTL becomes the `.bin`.
 - Uniform glass across F9 runtimes.
 - Read `traces/` before repro spam.
 - Surgical edits; do not delete files; one README.

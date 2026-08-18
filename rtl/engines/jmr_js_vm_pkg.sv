@@ -160,6 +160,8 @@ package jmr_js_vm_pkg;
         S_V64_IDXSCAN,
         // Env slot scan completion (NEW_OBJ ctor lookup after S_HEAP_*).
         S_V64_CTOR_ENV,
+        // Registered vvars[intern_var] ctor lookup (no combo vvars[vslot]).
+        S_V64_CTOR_VARS,
         // Synth 8-3380 / unroll: walk tagged-env recycle and find-free
         // one index per clock (not a task for-loop over ENV_DEPTH/MAX_*).
         S_REL_ENV, S_FREE_OBJ, S_FREE_ARR,

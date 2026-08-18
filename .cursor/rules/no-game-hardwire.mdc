@@ -1,36 +1,22 @@
 ---
-description: General-purpose HTML/JS computer — never hardwire RTL/VM to the three vendored titles.
+description: Acceptance titles are tests — never hardwire RTL/VM to INVADERS/PACMAN/DONKEY.
 alwaysApply: true
 ---
 
 # Never hardwire the three games
 
-This machine **RUNS any compiled HTML**. `INVADERS.HTML` / `PACMAN.HTML` /
-`DONKEY.HTML` are **acceptance tests**, not the ISA.
+The machine **RUNS any compiled HTML**. `INVADERS.HTML` / `PACMAN.HTML` /
+`DONKEY.HTML` are acceptance tests, not the ISA.
 
-## Forbidden
+**Forbidden:** title names/stems as gates; hardcoded key maps; maze/alien/DK
+constants; buffers sized to one title; “for PACMAN” comments to skip JS
+semantics (heap/gen cheats: `one-heap-keep-gen`).
 
-- Title names, stems, or 8.3 aliases as gates in RTL, natives, compiler, or
-  console (`PACMAN`, `INVADERS`, `DONKEY`, maze size, alien grid, DK world).
-- Hardcoded key maps, door-cell `2`, `/2/g`, sprite counts, or `splice(i,1)`
-  paths that only those titles hit.
-- Buffers / FSM states / scratch sized to one title (“15×20 maze JSON”,
-  “2.3 MB Donkey wait only”).
-- Comments that say “for PACMAN” as an excuse to skip general JS semantics.
-- Skipping generation / cloning `vvars`/`venv`/`vobj_*` in exec64 “for PACMAN”
-  black FB, rAF, or Date throttle (that is one heap cheat, not a title fix).
-
-## Required
-
-Grow **language + VM + engines** (closures, timers, `String.replace` + RegExp,
-`JSON.stringify`/`parse`, heap lifetimes, LIST wrap, FAT load wait scaled by
-`.JSH` bytes). Caps are **VM constants** with loud overflow — same for every
-`NAME.HTML`.
+**Required:** grow language + VM (closures, timers, `String.replace` + RegExp,
+`JSON.stringify`/`parse`, heap lifetimes). Caps are VM-wide with loud overflow.
+FAT/load wait scales with ProgramImage bytes, not a title name.
 
 ```systemverilog
-// BAD — title gate
+// BAD
 if (stem == "PACMAN") door_cell = 2;
-
-// GOOD — general JS
-// String.replace accepts any RegExp stub; JSON is real stringify/parse
 ```

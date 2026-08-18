@@ -1,93 +1,34 @@
 ---
-description: Real HTML/JS/CSS-native CPU — no dukpy/V8/host twin as the machine.
+description: HTML/JS is the ISA — not dukpy, not a browser, not a soft CPU.
 alwaysApply: true
 ---
 
-# No dukpy cheat — native HTML/JS/CSS CPU
+# Native HTML/JS computer
 
-This product is a **real JavaScript-native computer** (HTML5 Canvas games,
-minimal CSS as needed) destined for **FPGA then ASIC** — same ladder as
-`JMR-BASIC-FPGA-COMPUTER`, not a browser wrapped around a soft CPU.
+This is a **standalone JS-native machine** (HTML5 Canvas games, no general CSS
+engine). JavaScript bytecode is the ISA. There is no hidden CPU, no
+browser-on-FPGA, no Linux. BASIC sibling = method only, not pins or tokens.
 
-## Hard cheats (forbidden)
-
-- **dukpy / Duktape / V8 / QuickJS / Node / browser** executing game logic
-  as the PYTHON / FPGA-SIM / BOARD / ASIC “machine.”
-- Silent **host twin** for F9 FPGA-SIM (`JMR_SIM_HOST=1` is opt-in debug only;
-  never default — see `never-fake-fpga-sim`).
-- Claiming BOARD/ASIC done because Chrome or dukpy looked good.
-- Shipping **same-name twin titles** (`INVADERS.JS` vs `INVADERS.HTML`) as if
-  they were the product — **one title = one `NAME.HTML`**.
-
-## Honest path (required)
+**Forbidden as the machine:** dukpy / Duktape / V8 / QuickJS / Node / Chrome;
+Z80 / RISC-V / MicroBlaze / any soft CPU; executing JS **source** as one giant
+RTL FSM (bytecode is what the chip fetches).
 
 ```
-LOAD "NAME.HTML"  →  edit (line numbers = HTML)  →  RUN
-    →  always compile current HTML  →  in-memory ProgramImage  →  JMR VM
-    →  full-quality graphics → ASET section → external SRAM asset bank,
-       never code BRAM (no NAME.DAT — that design is retired)
+LOAD "NAME.HTML" → edit (line numbers = HTML) → RUN
+  → always compile current HTML → in-memory ProgramImage (code + ASET)
+  → JMR VM. Chrome = authoring only.
 ```
 
-| Runtime | What runs the game |
-|---|---|
-| Chrome | Browser (authoring / visual check only — not the machine) |
-| PYTHON | **Bytecode VM** — **compile-on-RUN** from loaded HTML |
-| FPGA-SIM | **Verilator RTL** of that VM (same UX; compile current HTML) |
-| BOARD / ASIC | **Same RTL ISA** on silicon |
+**Compile-on-RUN:** editor HTML is truth. No `.JSH` / `.JSB` sidecar. Compile
+errors use HTML line numbers. Missing path → loud `?NH` (tracked debt, never
+done). ESC is machine BREAK to READY — titles must not steal it.
 
-Order: **PYTHON bytecode perfect → FPGA-SIM perfect → board → ASIC.**
-Never skip; never fake a rung.
+**Three rooms:** **BRAM** = dual FB + code + heap (do not shrink for a small
+die; ASIC ~30 mm², ~1 MB-class SRAM). **µSD** = disk (`NAME.HTML`). **External
+4 MB SRAM** = ASET art only (`addr[20:0]`, 16-bit, `we`/`req`/`ack`; FPGA =
+DDR3 behind that port; SIM = model behind the same port). No `NAME.DAT`. No
+64K BASIC house. Do not pack/downscale/quantize Donkey sheets into code BRAM.
 
-## Compile-on-RUN (hard rule)
-
-- **Source of truth = the loaded `.HTML`** (editor buffer).
-- **`RUN` always recompiles** that HTML → an in-memory ProgramImage.
-  Compile errors must show **line numbers from the current HTML**.
-- **Do not write or LOAD a `.JSH` file.** Compile output is ephemeral
-  (code + ASET in the ProgramImage). Card and `storage/` are HTML only.
-- FPGA-SIM/BOARD stream that ProgramImage into the VM / BRAM on RUN.
-  Missing compile path → fail loud (`?NH` debt), never Invaders hex.
-
-## Asset bank (hard rule — external SRAM, replaces the old `.DAT` spill)
-
-Great graphics must survive at **full quality**. Do **not** shrink or drop
-sprite sheets to “make it fit.” Donkey is the example: the HTML is huge
-because of `data:image` PNGs, not because JS needs megabytes of RAM.
-
-- **HTML stays the authoring file** (Chrome `data:` URIs OK). User never
-  splits art by hand.
-- **`RUN` extracts** `data:image` / fat literals at full resolution into the
-  **ASET section** of the ProgramImage (per-title 256-entry palette +
-  8-bpp indexed banks). The loader streams ASET into the **external 4 MB
-  SRAM asset bank** (2M × 16 IS61WV204816 contract; FPGA board bridges DDR3
-  behind the same simple SRAM port; FPGA-SIM uses a behavioral model behind
-  the identical port).
-- Bytecode stores **handles/descriptors only** (w, h, SRAM offset).
-  `drawImage` blits straight from asset SRAM. Pixels never enter code BRAM.
-- **No `NAME.DAT` file exists.** The ProgramImage carries code + ASET in
-  memory. EDIT HTML then RUN recompiles; there is no sidecar to prefer.
-- **Forbidden:** packing Donkey art into code BRAM; downscaling sheets to
-  squeeze into code BRAM (`180000` pixel cap trap); quantizing to 8 colors.
-- **BRAM = fast on-chip RAM** (dual FB + code + heap — ASIC target is
-  ~30 mm², custom padring, ~1 MB-class on-chip SRAM; do not shrink BRAM to
-  fit a small die). **µSD = disk** (`NAME.HTML`). **External SRAM =
-  asset bank.** Do not fake a 64K BASIC house.
-
-## Files
-
-- **Edit / LOAD / play:** `storage/*.HTML` only (`LOAD "NAME.HTML"` / `RUN`).
-- **No `.JSH` files.** Compile-on-RUN stays in memory. No separate graphics file.
-- **`storage/games_*`:** upstream archive only — not DIR, not card, not twins.
-
-## Agent checklist before marking HTML “done”
-
-PYTHON and FPGA-SIM must **look and play the same** (full game). Board is
-later, after the user F9-approves.
-
-1. Same `NAME.HTML` works in Chrome (authoring look/feel check only).
-2. PYTHON `LOAD`+`RUN` = **compile-on-RUN bytecode**, not dukpy.
-   Donkey-class art lands full quality in the external SRAM asset bank
-   (ASET section; never packed into or downscaled for code BRAM).
-3. FPGA-SIM F9 shows **RTL**, same LOAD+RUN, **same glass/keys/graphics**.
-4. Do **not** rewrite the three HTML titles down to a toy subset to “pass.”
-5. Board confirms only after PYTHON + FPGA-SIM match and the user approves.
+**Files:** `storage/*.HTML` only. `storage/games_*` = upstream, not DIR/card.
+`NAME.JS` is not a twin of `NAME.HTML`. Order of rungs: `python-first-parity`.
+FPGA-SIM default: `never-fake-fpga-sim`.

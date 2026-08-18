@@ -122,6 +122,10 @@ VALUE_KIND_ARRAY = 6
 VALUE_KIND_FUNCTION = 7
 VALUE_KIND_ELEMENT = 8
 VALUE_KIND_ENV = 9
+# Heap-less {x,y} / {} after GC compact. Identity lives in the generation
+# field so `{} !== {}`. Payload: bit31 has_x, bit30 has_y, x/y signed 15-bit.
+# SET_PROP of any other key boxes back into MAX_OBJECTS via _value_small_fwd.
+VALUE_KIND_RECORD = 10
 VALUE_UNINITIALIZED = 0x7FF9F00000000000
 ERROR_NONE = 0
 ERROR_STACK = 1
@@ -131,6 +135,37 @@ ERROR_HANDLE = 4
 ERROR_UNSUPPORTED = 5
 ERROR_DATA = 6
 ERROR_INTERNAL = 255
+
+
+def _s15(value: int) -> int:
+    """Pack a signed 15-bit integer into bits 14:0."""
+    return int(value) & 0x7FFF
+
+
+def _s15_unpack(bits: int) -> int:
+    bits &= 0x7FFF
+    return bits - 0x8000 if bits & 0x4000 else bits
+
+
+def record_pack(ident: int, has_x: bool, has_y: bool, x: int = 0, y: int = 0) -> int:
+    payload = (
+        (int(bool(has_x)) << 31)
+        | (int(bool(has_y)) << 30)
+        | (_s15(x) << 15)
+        | _s15(y)
+    )
+    return value_pack_tagged(VALUE_KIND_RECORD, ident, payload)
+
+
+def record_unpack(word: int) -> tuple[int, bool, bool, int, int]:
+    payload = value_payload(word)
+    return (
+        value_generation(word),
+        bool(payload & (1 << 31)),
+        bool(payload & (1 << 30)),
+        _s15_unpack(payload >> 15),
+        _s15_unpack(payload),
+    )
 
 
 def value_pack_tagged(kind: int, generation: int = 0, payload: int = 0) -> int:
@@ -407,6 +442,9 @@ class JsHwVm:
         self._value_timers: List[_ValueTimer] = []
         self._value_listeners: List[tuple[int, int]] = []
         self._value_pending_image_loads: List[int] = []
+        # MAKE_FN pins captured env + parents so caller RET cannot recycle
+        # an env still linked as captured_env.parent (onload LOAD_VAR `ctx`).
+        self._value_env_escaped_words: set[int] = set()
         self._value_dispatch_roots: List[int] = []
         self._value_timer_sequence = 1
         self._value_frame_no = 0
@@ -420,6 +458,9 @@ class JsHwVm:
         self._value_canvas_aux: List[dict] = [{} for _ in range(MAX_OBJECTS)]
         # Image._spr/_pix and ImageData._idx — not interned name slots.
         self._value_native_host: List[dict] = [{} for _ in range(MAX_OBJECTS)]
+        # Compacted {x,y}/{} immediates (VALUE_KIND_RECORD). ident → heap if boxed.
+        self._value_small_id = 1
+        self._value_small_fwd: dict[int, int] = {}
 
     def load_blob(self, data: bytes) -> None:
         """Validate exact serialized bytes, then load that ProgramImage."""
@@ -521,6 +562,7 @@ class JsHwVm:
         self._value_timers = []
         self._value_listeners = []
         self._value_pending_image_loads: List[int] = []
+        self._value_env_escaped_words = set()
         self._value_dispatch_roots = []
         self._value_timer_sequence = 1
         self._value_frame_no = 0
@@ -533,6 +575,8 @@ class JsHwVm:
         self._value_start_loop = False
         self._value_canvas_aux = [{} for _ in range(MAX_OBJECTS)]
         self._value_native_host = [{} for _ in range(MAX_OBJECTS)]
+        self._value_small_id = 1
+        self._value_small_fwd = {}
         names = self.program_image.names if self.program_image else ()
         for slot, name in enumerate(
             self.program_image.var_names if self.program_image else ()
@@ -800,13 +844,15 @@ class JsHwVm:
                 (0, MAX_ARRAYS_SHORT),
                 (MAX_ARRAYS_SHORT, MAX_ARRAYS),
             )
-        def _roots() -> List[int]:
-            roots = list(items)
+        def _collect() -> None:
+            n0 = len(items)
             if extra_roots is not None:
-                roots.extend(extra_roots)
-            return roots
+                items.extend(extra_roots)
+            self._value64_collect(items)
+            if extra_roots is not None:
+                del items[n0:]
         if need_long and self._value64_long_count() >= MAX_ARRAYS_LONG:
-            self._value64_collect(_roots())
+            _collect()
             if self._value64_long_count() >= MAX_ARRAYS_LONG:
                 self._value64_fault(
                     f"long array overflow ({MAX_ARRAYS_LONG + 1} > "
@@ -831,7 +877,7 @@ class JsHwVm:
             handle = _try(lo, hi)
             if handle is not None:
                 return handle
-        self._value64_collect(_roots())
+        _collect()
         for lo, hi in ranges:
             handle = _try(lo, hi)
             if handle is not None:
@@ -869,6 +915,243 @@ class JsHwVm:
         )
         return None
 
+    def _value64_new_record(self) -> int:
+        ident = self._value_small_id
+        self._value_small_id = 1 if ident >= 0xFFF else ident + 1
+        return record_pack(ident, False, False)
+
+    def _value64_record_follow(self, handle: int) -> int:
+        """Walk RECORD → box / newer RECORD. Compact rewrites fwd[ident]
+        to a new RECORD, so one hop would still unpack the stale x/y.
+        """
+        if value_kind(handle) != VALUE_KIND_RECORD:
+            return handle
+        seen: set[int] = set()
+        while value_kind(handle) == VALUE_KIND_RECORD:
+            ident = value_generation(handle)
+            if ident in seen:
+                break
+            seen.add(ident)
+            nxt = self._value_small_fwd.get(ident)
+            if nxt is None:
+                break
+            handle = nxt
+        return handle
+
+    def _value64_record_box(self, handle: int, ip: int) -> Optional[int]:
+        """Box a RECORD into a heap object so SET_PROP can mutate it.
+
+        Compact rewrites fwd[ident] to a newer RECORD. Returning that
+        RECORD made SET_PROP a no-op (primitive). Follow first; only
+        reuse an existing heap object.
+        """
+        handle = self._value64_record_follow(handle)
+        if value_kind(handle) in (VALUE_KIND_OBJECT, VALUE_KIND_ELEMENT):
+            return handle
+        if value_kind(handle) != VALUE_KIND_RECORD:
+            return handle
+        ident = value_generation(handle)
+        existing = self._value_small_fwd.get(ident)
+        if existing is not None and value_kind(existing) in (
+            VALUE_KIND_OBJECT,
+            VALUE_KIND_ELEMENT,
+        ):
+            return existing
+        boxed = self._value64_alloc_object(ip, (handle,))
+        if boxed is None:
+            return None
+        _ident, has_x, has_y, x, y = record_unpack(handle)
+        obj = self._value_objects[value_payload(boxed)]
+        if has_x:
+            key = self._value64_interned_string("x", ip)
+            if key is None:
+                return None
+            obj[value_payload(key)] = value_pack_number(x)
+        if has_y:
+            key = self._value64_interned_string("y", ip)
+            if key is None:
+                return None
+            obj[value_payload(key)] = value_pack_number(y)
+        self._value_small_fwd[ident] = boxed
+        return boxed
+
+    def _value64_compactable_record(self, index: int) -> Optional[int]:
+        """Empty or {x,y} number records can leave the 1024-slot object heap."""
+        obj = self._value_objects[index]
+        if obj is None:
+            return None
+        if self._value_object_builtins[index]:
+            return None
+        if self._value_object_classes[index] is not None:
+            return None
+        if self._value_object_protos[index]:
+            return None
+        if self._value_native_host[index]:
+            return None
+        if self._value_canvas_aux[index]:
+            return None
+        if index in self._value_regex:
+            return None
+        try:
+            xi = self._value_strings.index("x")
+            yi = self._value_strings.index("y")
+        except ValueError:
+            xi = yi = -1
+        if len(obj) == 0:
+            return None
+        extra = [key for key in obj if key != xi and key != yi]
+        if extra or xi < 0 or yi < 0:
+            return None
+        has_x = xi in obj
+        has_y = yi in obj
+        if not (has_x and has_y):
+            return None
+        x = y = 0
+        if has_x:
+            word = obj[xi]
+            if not value_is_number(word):
+                return None
+            x = value_unpack_number(word)
+            if x != int(x) or not -16384 <= int(x) <= 16383:
+                return None
+            x = int(x)
+        if has_y:
+            word = obj[yi]
+            if not value_is_number(word):
+                return None
+            y = value_unpack_number(word)
+            if y != int(y) or not -16384 <= int(y) <= 16383:
+                return None
+            y = int(y)
+        ident = self._value_small_id
+        self._value_small_id = 1 if ident >= 0xFFF else ident + 1
+        return record_pack(ident, has_x, has_y, x, y)
+
+    def _value64_rewrite_word(self, word: int, mapping: dict[int, int]) -> int:
+        kind = value_kind(word)
+        if kind not in (VALUE_KIND_OBJECT, VALUE_KIND_ELEMENT):
+            return word
+        index = value_payload(word)
+        if (
+            index in mapping
+            and value_generation(word) == self._value_object_generations[index]
+        ):
+            return mapping[index]
+        return word
+
+    def _value64_rewrite_list(self, items: list, mapping: dict[int, int]) -> None:
+        """Rewrite one list in place so Python aliases (forEach/map) stay live."""
+        rw = self._value64_rewrite_word
+        for i, word in enumerate(items):
+            items[i] = rw(word, mapping)
+
+    def _value64_rewrite_all(self, mapping: dict[int, int]) -> None:
+        """Replace compacted object handles everywhere a Value word is stored."""
+        if not mapping:
+            return
+        rw = self._value64_rewrite_word
+        self._value64_rewrite_list(self._value_stack, mapping)
+        for slot, valid in enumerate(self._value_var_valid):
+            if valid:
+                self._value_vars[slot] = rw(self._value_vars[slot], mapping)
+        self._value_this = rw(self._value_this, mapping)
+        self._value_env = rw(self._value_env, mapping)
+        if self._value_callback_result is not None:
+            self._value_callback_result = rw(
+                self._value_callback_result, mapping
+            )
+        self._value64_rewrite_list(self._value_raf, mapping)
+        self._value64_rewrite_list(self._value_dispatch_roots, mapping)
+        self._value64_rewrite_list(self._value_pending_image_loads, mapping)
+        self._value_listeners = [
+            (rw(e, mapping), rw(f, mapping)) for e, f in self._value_listeners
+        ]
+        for timer in self._value_timers:
+            timer.function_handle = rw(timer.function_handle, mapping)
+        for extra in self._value_native_host:
+            for key, item in list(extra.items()):
+                if isinstance(item, int) and not value_is_number(item):
+                    extra[key] = rw(item, mapping)
+        rewritten_frames = []
+        for frame in self._value_calls:
+            rewritten_frames.append(
+                _ValueCallFrame(
+                    return_ip=frame.return_ip,
+                    base_sp=frame.base_sp,
+                    this_value=rw(frame.this_value, mapping),
+                    lexical_env=rw(frame.lexical_env, mapping),
+                    function_handle=rw(frame.function_handle, mapping),
+                    constructor_value=rw(frame.constructor_value, mapping),
+                    env_escaped=frame.env_escaped,
+                )
+            )
+        self._value_calls = rewritten_frames
+        for index, obj in enumerate(self._value_objects):
+            if obj is None or index in mapping:
+                continue
+            for key, value in list(obj.items()):
+                obj[key] = rw(value, mapping)
+            self._value_object_protos[index] = rw(
+                self._value_object_protos[index], mapping
+            )
+        for array in self._value_arrays:
+            if array is None:
+                continue
+            for i, value in enumerate(array):
+                array[i] = rw(value, mapping)
+        for env in self._value_envs:
+            if env is None:
+                continue
+            env.parent = rw(env.parent, mapping)
+            for key, value in list(env.slots.items()):
+                env.slots[key] = rw(value, mapping)
+        for index, function in enumerate(self._value_functions):
+            if function is None:
+                continue
+            self._value_functions[index] = _ValueFunction(
+                entry=function.entry,
+                nparam=function.nparam,
+                captured_env=rw(function.captured_env, mapping),
+                is_arrow=function.is_arrow,
+                is_iife=function.is_iife,
+                bound_this=rw(function.bound_this, mapping),
+                has_bound_this=function.has_bound_this,
+            )
+            self._value_function_prototypes[index] = rw(
+                self._value_function_prototypes[index], mapping
+            )
+        for ident, boxed in list(self._value_small_fwd.items()):
+            self._value_small_fwd[ident] = rw(boxed, mapping)
+
+    def _value64_compact_records(
+        self,
+        marked_objects: set[int],
+        extra_roots: Optional[Iterable[int]] = None,
+    ) -> dict[int, int]:
+        """Move empty/{x,y} heap objects to RECORD immediates (same MAX_OBJ cap)."""
+        mapping: dict[int, int] = {}
+        for index in list(marked_objects):
+            immediate = self._value64_compactable_record(index)
+            if immediate is None:
+                continue
+            mapping[index] = immediate
+        if not mapping:
+            return mapping
+        self._value64_rewrite_all(mapping)
+        # extra_roots are Python locals; rewrite before gen bump on release.
+        if extra_roots is not None and isinstance(extra_roots, list):
+            self._value64_rewrite_list(extra_roots, mapping)
+        for index in mapping:
+            self._value64_release_handle(
+                value_pack_tagged(
+                    VALUE_KIND_OBJECT,
+                    self._value_object_generations[index],
+                    index,
+                )
+            )
+            marked_objects.discard(index)
+        return mapping
+
     def _value64_collect(self, extra_roots: Optional[Iterable[int]] = None) -> None:
         """Deterministic mark/sweep over every Value64 machine root."""
         roots = [
@@ -893,6 +1176,7 @@ class JsHwVm:
                         VALUE_KIND_ARRAY,
                         VALUE_KIND_FUNCTION,
                         VALUE_KIND_ENV,
+                        VALUE_KIND_RECORD,
                     ):
                         roots.append(item)
         for frame in self._value_calls:
@@ -968,6 +1252,13 @@ class JsHwVm:
                 function = self._value_functions[index]
                 pending.extend((function.captured_env, function.bound_this))
                 pending.append(self._value_function_prototypes[index])
+            elif kind == VALUE_KIND_RECORD:
+                boxed = self._value_small_fwd.get(value_generation(handle))
+                if boxed is not None:
+                    pending.append(boxed)
+
+        # extra_roots (invoke args, JSON walk) rewritten here, before release.
+        self._value64_compact_records(marked_objects, extra_roots)
 
         for index, slot in enumerate(self._value_objects):
             if slot is not None and index not in marked_objects:
@@ -1129,6 +1420,15 @@ class JsHwVm:
             self._value_envs[index] = None
             generation = (self._value_env_generations[index] + 1) & 0xFFF
             self._value_env_generations[index] = generation or 1
+            # Drop leftover MAKE_FN pins for this slot (old generation).
+            self._value_env_escaped_words = {
+                word
+                for word in self._value_env_escaped_words
+                if not (
+                    value_kind(word) == VALUE_KIND_ENV
+                    and value_payload(word) == index
+                )
+            }
         elif kind == VALUE_KIND_FUNCTION and index < MAX_FUNCTIONS:
             self._value_functions[index] = None
             self._value_function_prototypes[index] = 0
@@ -1152,13 +1452,40 @@ class JsHwVm:
             env_escaped=True,
         )
 
+    def _value64_pin_captured_env_chain(self, captured_env: int) -> None:
+        """Pin captured_env + parents so a caller RET cannot recycle them.
+
+        MAKE_FN only sets env_escaped on the current frame. An onload arrow
+        made inside `show()` still LOAD_VAR-walks `show`'s parent — the rAF
+        `tick`/`update` env. That parent is not env_escaped, so RET recycled
+        it (stale generation). Pin the env words only; do not mark ancestor
+        *frames* env_escaped (that skipped inner forEach/animate RET).
+        Walk by generation, do not fault — a stale parent is not a pin.
+        Not a GC root: live closures already mark captured_env → parent.
+        """
+        handle = captured_env
+        seen: set[int] = set()
+        while value_kind(handle) == VALUE_KIND_ENV and handle not in seen:
+            seen.add(handle)
+            index = value_payload(handle)
+            if index >= ENV_DEPTH:
+                break
+            if value_generation(handle) != self._value_env_generations[index]:
+                break
+            env = self._value_envs[index]
+            if env is None:
+                break
+            self._value_env_escaped_words.add(handle)
+            handle = env.parent
+
     def _value64_leave_call_frame(self, frame: _ValueCallFrame) -> None:
         """Pop one call: restore parent, free a non-escaping leaf env.
 
         palK/drawPix alloc an env per CALL_USER. Without this, ENV_DEPTH
         fills and GC runs tens of times per paint (PYTHON ~1 fps, FPGA-SIM
         ~10M clocks/frame). Closures set env_escaped so finder/forEach keep
-        their captured env.
+        their captured env. MAKE_FN also pins parent env words (onload
+        LOAD_VAR after the rAF caller returns).
         """
         leaving = self._value_env
         self._value_calls.pop()
@@ -1168,6 +1495,7 @@ class JsHwVm:
             not frame.env_escaped
             and value_kind(leaving) == VALUE_KIND_ENV
             and leaving != frame.lexical_env
+            and leaving not in self._value_env_escaped_words
         ):
             self._value64_release_handle(leaving)
 
@@ -1600,6 +1928,20 @@ class JsHwVm:
                 if name < len(self._value_strings)
             }
             active.remove(key)
+            return out
+        if kind == VALUE_KIND_RECORD:
+            followed = self._value64_record_follow(value)
+            if value_kind(followed) in (
+                VALUE_KIND_OBJECT,
+                VALUE_KIND_ELEMENT,
+            ):
+                return self._value64_json_host(followed, active)
+            _ident, has_x, has_y, x, y = record_unpack(value)
+            out = {}
+            if has_x:
+                out["x"] = x
+            if has_y:
+                out["y"] = y
             return out
         return None
 
@@ -2077,11 +2419,20 @@ class JsHwVm:
                     acc = array[0]
                     start = 1
                 saved_roots = self._value_dispatch_roots
-                self._value_dispatch_roots = list(saved_roots)
+                # Same list object as dispatch_roots so compact rewrites mapped.
+                held_map = list(saved_roots)
+                n_saved = len(held_map)
+                self._value_dispatch_roots = held_map
                 try:
-                    for index, element in enumerate(list(array)):
+                    # Re-read live slots each index. A snapshot of handles
+                    # goes stale when GC compact turns {x,y} into RECORD.
+                    n = len(array)
+                    for index in range(n):
                         if index < start:
                             continue
+                        if index >= len(array):
+                            continue
+                        element = array[index]
                         invoke_args = (
                             [acc, element, value_pack_number(index), receiver]
                             if method == "reduce"
@@ -2093,12 +2444,18 @@ class JsHwVm:
                         if result is None:
                             return None
                         if method == "map":
-                            mapped.append(result)
+                            held_map.append(result)
                         elif method == "filter":
-                            if self._value64_truthy(result):
-                                mapped.append(element)
+                            if self._value64_truthy(result) and index < len(
+                                array
+                            ):
+                                held_map.append(array[index])
                         elif method == "find" and self._value64_truthy(result):
-                            found = element
+                            found = (
+                                array[index]
+                                if index < len(array)
+                                else element
+                            )
                             break
                         elif method == "findIndex" and self._value64_truthy(
                             result
@@ -2107,11 +2464,7 @@ class JsHwVm:
                             break
                         elif method == "reduce":
                             acc = result
-                        # map/filter results are only in `mapped` until alloc.
-                        self._value_dispatch_roots = [
-                            *saved_roots,
-                            *mapped,
-                        ]
+                    mapped = held_map[n_saved:]
                 finally:
                     self._value_dispatch_roots = saved_roots
                 if method in ("map", "filter"):
@@ -2325,11 +2678,13 @@ class JsHwVm:
         # Date.now / performance.now are GET_PROP wrappers around native 35.
         if function.entry < 0:
             return self._value64_native(-function.entry, args, 0)
-        env_handle = self._value64_alloc_env(
-            function.captured_env, 0, (handle, *args)
-        )
+        # Mutable so GC compact can rewrite args before they are LET_VAR'd.
+        held = [handle, *args]
+        env_handle = self._value64_alloc_env(function.captured_env, 0, held)
         if env_handle is None:
             return None
+        handle = held[0]
+        args = held[1:]
         frame = _ValueCallFrame(
             return_ip=-1,
             base_sp=len(self._value_stack),
@@ -2816,6 +3171,26 @@ class JsHwVm:
                     ):
                         return
                     continue
+                if value_kind(handle) == VALUE_KIND_RECORD:
+                    followed = self._value64_record_follow(handle)
+                    if value_kind(followed) in (
+                        VALUE_KIND_OBJECT,
+                        VALUE_KIND_ELEMENT,
+                    ):
+                        handle = followed
+                    else:
+                        # Compact may rewrite fwd[ident] to a new RECORD;
+                        # unpack the followed word, not the stale original.
+                        _ident, has_x, has_y, x, y = record_unpack(followed)
+                        if property_name == "x" and has_x:
+                            result = value_pack_number(x)
+                        elif property_name == "y" and has_y:
+                            result = value_pack_number(y)
+                        else:
+                            result = value_pack_tagged(VALUE_KIND_UNDEFINED)
+                        if not self._value64_push(result):
+                            return
+                        continue
                 if value_kind(handle) not in (
                     VALUE_KIND_OBJECT,
                     VALUE_KIND_ELEMENT,
@@ -2931,6 +3306,12 @@ class JsHwVm:
                     if not self._value64_push(value):
                         return
                     continue
+                if kind == VALUE_KIND_RECORD:
+                    boxed = self._value64_record_box(handle, op_ip)
+                    if boxed is None:
+                        return
+                    handle = boxed
+                    kind = value_kind(handle)
                 if kind not in (VALUE_KIND_OBJECT, VALUE_KIND_ELEMENT):
                     # JS sloppy / working Chunk VM: SET_PROP on a primitive
                     # is a no-op (Date.now = fn when Date is a constructor name).
@@ -3125,6 +3506,30 @@ class JsHwVm:
                         return
                     for source_handle in args[1:]:
                         # ES: Object.assign skips null/undefined sources.
+                        source_handle = self._value64_record_follow(
+                            source_handle
+                        )
+                        if value_kind(source_handle) == VALUE_KIND_RECORD:
+                            _ident, has_x, has_y, x, y = record_unpack(
+                                source_handle
+                            )
+                            fields = []
+                            if has_x:
+                                fields.append(("x", value_pack_number(x)))
+                            if has_y:
+                                fields.append(("y", value_pack_number(y)))
+                            for name, value in fields:
+                                key = self._value64_interned_string(name, op_ip)
+                                if key is None:
+                                    return
+                                ki = value_payload(key)
+                                if ki not in target and len(target) >= OBJECT_SLOTS:
+                                    self._value64_fault(
+                                        f"object slots exceed {OBJECT_SLOTS} at IP {op_ip}"
+                                    )
+                                    return
+                                target[ki] = value
+                            continue
                         if value_kind(source_handle) not in (
                             VALUE_KIND_OBJECT,
                             VALUE_KIND_ELEMENT,
@@ -3321,6 +3726,8 @@ class JsHwVm:
                 if handle is None or not self._value64_push(handle):
                     return
                 self._value64_mark_env_escaped()
+                # Keep captured_env.parent alive across the rAF caller's RET.
+                self._value64_pin_captured_env_chain(function.captured_env)
             elif op == Op.CALL_USER:
                 if len(self._value_calls) >= CALL_DEPTH:
                     self._value64_fault(

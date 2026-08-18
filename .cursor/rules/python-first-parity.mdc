@@ -1,75 +1,39 @@
 ---
-description: Features land PYTHON bytecode first, then FPGA-SIM, then board — never dukpy as truth.
+description: PYTHON bytecode → FPGA-SIM RTL → user F9 → T200 board. Same glass. Python is fast.
 alwaysApply: true
 ---
 
-# Python → FPGA-SIM → board (uniform experience)
+# PYTHON → FPGA-SIM → board
 
-The Constitution order is mandatory for **user-visible** behaviour (console
-commands, JS/Canvas surface, disk names, errors, READY/prompt, glass text):
+User-visible glass (READY, LOAD/RUN, JS/Canvas, errors) lands in order. Skip a
+rung and the machine is fake. Status: [docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md).
 
-1. **PYTHON** (`functional_model/` **bytecode VM** + GUI) — behavioural truth
-2. **FPGA-SIM** (Verilator / sim backend) — same typed experience
-3. **Board** (`.bit` / `.bin`) — silicon confirmation
-4. **ASIC** later — only after board honesty
+1. **PYTHON** bytecode VM — behavioural truth. Fast: same **results** as the
+   chip (bytes, numbers, errors), not wall-clock. Do not throttle Python to
+   one hardware tick. Parity runs the **serialized ProgramImage**, not a
+   `Chunk`/AST the hardware never sees, and not dukpy (`no-dukpy-cheat-native-cpu`).
+2. **FPGA-SIM** — Verilator of the **same** `rtl/*.sv` as the `.bin`
+   (`never-fake-fpga-sim`). **By inspection, legal SRAM first, then glass.**
+   Do not leave combo/dual heaps in a “fix.” Do not run Vivado / `make bit`
+   (the user does that). Flatten-later already looped three times.
+3. **User F9** FPGA-SIM `(RTL)` — visual play is this, not a snippet PASS.
+4. **Board** `.bit` / `.bin` — only after F9 approval. Do not flash to debug a
+   gap FPGA-SIM has not closed. Do not start Vivado for a feature PYTHON +
+   FPGA-SIM cannot type. ASIC later.
 
-**No dukpy cheat.** PYTHON truth means the JMR VM running **compile-on-RUN**
-from the loaded HTML (in-memory ProgramImage), not Duktape and not a disk
-sidecar. See `no-dukpy-cheat-native-cpu`.
+**Titles** `INVADERS.HTML` / `PACMAN.HTML` / `DONKEY.HTML` must LOAD + RUN and
+**look the same** on PYTHON then FPGA-SIM (full game, full ASET). HTML binds
+keys; RTL delivers raw keycodes. `?NH` is never done. No RTL-only console
+verbs. Board-only smoke = parity bug. PYTHON-only → fix RTL, do not weaken
+PYTHON. Tests = real titles, not random programs. Do not invent LUT counts
+([docs/FPGA_FIT.md](../../docs/FPGA_FIT.md)).
 
-## Vendored HTML titles MUST RUN (Constitution mandate)
+**Standalone intent:** HDMI + keyboard + Pmod stick; UART/JTAG are debug.
+Tether mirrors glass; when J15 works, play needs **zero** code changes. This
+board is Nexys Video T200 — not A7-100T. StarLite later.
 
-- `INVADERS.HTML`, `PACMAN.HTML`, `DONKEY.HTML` — user types only
-  `LOAD "NAME.HTML"` / `RUN`. **`RUN` always recompiles** current HTML into
-  an in-memory ProgramImage. **The asset bank**
-  (full-quality `data:image` graphics → ASET section → external SRAM) is
-  part of compile-on-RUN on **all three** runtimes — see
-  `no-dukpy-cheat-native-cpu`. No `NAME.DAT` file. No `.JSH` on disk.
-- Must LOAD + RUN playable on **PYTHON then FPGA-SIM** via **bytecode**,
-  **looking and playing the same** (full game). Board only after user F9
-  approval. `?NH` is temporary tracked debt, never done.
-- **The HTML decides the keys**: hardware/VM deliver raw keycodes only; the
-  game's own `keydown`/`keyup` handlers define bindings. No hardcoded key
-  maps in RTL.
-- **No `.bit`/`.bin` builds** until all three HTML titles are green on
-  FPGA-SIM *and* the user has personally tested them in the GUI (F9 FPGA-SIM)
-  and approved. PYTHON bytecode is perfected first as the control.
-
-## Do not ship RTL-only UX
-
-- Do **not** add a console command or READY-path feature only in RTL while
-  PYTHON / FPGA-SIM still reject or silently ignore it.
-- Host shortcuts must grow the **same** verbs the board console has, or the
-  GUI cannot troubleshoot against silicon.
-- Board-only smoke is **not** done for a feature that F9 PYTHON / FPGA-SIM
-  cannot type the same way.
-
-## Implementation checklist (agent)
-
-When adding or changing glass-level behaviour:
-
-1. Implement + exercise in the **Python bytecode FM** (and GUI PYTHON path).
-2. Mirror in **FPGA-SIM** so F9 FPGA-SIM matches. RTL memories must be
-   **SRAM-shaped** (1-D, registered read) — Verilator-only 2-D combo heaps
-   are not a rung. One physical JS heap: do not clone `vvars`/`venv`/`vobj_*`
-   in exec64 and skip generation. FPGA-SIM is the same RTL as the standalone
-   `.bin`. See `never-fake-fpga-sim.mdc`, `one-heap-keep-gen.mdc`, and
-   [docs/FPGA_FIT.md](../../docs/FPGA_FIT.md).
-3. Only then RTL/fit if needed, build `.bit`/`.bin`, flash, smoke the **board**.
-4. Update [docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md) if status
-   changes; note any temporary parity debt explicitly (never leave it silent).
-
-## Debugging across runtimes
-
-- Same command on all three → compare traces under `traces/` (see
-  `use-existing-traces`).
-- Works on board only → **parity bug** (host path missing), not “board magic.”
-- Works in PYTHON only → SIM/RTL lag; do not “fix” by weakening PYTHON or
-  by using dukpy.
-
-## Related
-
-- [CONSTITUTION.md](../../CONSTITUTION.md) — Development Order
-- [docs/FPGA_BRINGUP.md](../../docs/FPGA_BRINGUP.md) — PYTHON / FPGA-SIM / BOARD
-- `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`
-- `.cursor/rules/one-heap-keep-gen.mdc`
+**Agents:** do not run Vivado / `make bit`. Inspect both execs against the
+six rules in `never-fake-fpga-sim` (opcode comb drives no ports; no combo
+`arr[i]`; no second heap). `sim_server_synth` PASS is not a bitstream.
+Then glass. Do not redesign the architecture, merge engines, or ship
+RTL-only glass. Traces: `use-existing-traces`.

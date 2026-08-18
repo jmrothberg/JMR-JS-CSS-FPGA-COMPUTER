@@ -16,74 +16,31 @@ not how full the chip is.
 
 ## Same RTL for FPGA-SIM, `.bin`, and ASIC
 
-**This rule is for every language-native FPGA-SIM** (this JS machine, a BASIC
-update, a later native GPU): Verilator is not a second architecture. If the
-array cannot become FPGA block RAM / an ASIC SRAM macro, do not ship it in
-`rtl/` even when titles look good in sim.
+Coding law (six rules): `.cursor/rules/never-fake-fpga-sim.mdc`. This file
+is **measured numbers**, not a second copy of that list. Live leftovers:
+[SESSION_HANDOFF.md](SESSION_HANDOFF.md). Do not quote a new bitstream until
+`make bit` actually finishes.
 
-FPGA-SIM (Verilator) and `make -C tools/board_flow bit` compile the **same**
-`rtl/*.sv`. There is no synth-only VM. `SYNTHESIS` in the board top is I/O
-(clocks, HDMI), not a second heap. ASIC later uses the same **SRAM ports**
-(address, we, wdata, registered rdata, 1–2 ports); `ram_style = "block"` is a
-Vivado hint, not a Xilinx primitive inside the VM.
+FPGA-SIM and `make -C tools/board_flow bit` compile the **same** `rtl/*.sv`.
+`SYNTHESIS` in the board top is I/O (clocks, HDMI), not a second heap.
+`ram_style = "block"` is a Vivado hint, not a Xilinx primitive inside the VM.
+Clock class **~30 MHz**. Extra GET_PROP clocks (~1 µs worst case vs 16.7
+ms/frame) are playable; combo heaps are not a speed win.
 
-Clock class is **~30 MHz** (BASIC native needed work to hold that; do not
-assume 100 MHz). Sequential SRAM keeps that clock. A combinational
-`for (k)` heap mux would **worsen** WNS. Extra GET_PROP clocks (~1 µs worst
-case at 30 MHz vs 16.7 ms/frame) are playable; combo heaps are not a speed
-win.
+**Capacity (leftover BRAM after dual FB):** T200 ≈ **365** RAMB36 ≈ **1.64 MB**.
+Dual 640×480×8 FB ≈ **0.6 MB**. Leftover ≈ **1 MB** for code + JS heap +
+console. Legal: `MAX_OBJ=1024` × 32 × 80b ≈ 320 KB plus two-tier arrays
+(`1536×32` + `128×128`) × 64b ≈ 512 KB plus `ENV_DEPTH=512` × 16 × 80b
+`venv_slot` ≈ 80 KB (same in PYTHON). Nested maps + JSON clones need ~1152
+short arrays; `push` past 32 uses the long bank. The 8192 / 4096 depths were
+~**7 MB** — Verilator runs, the chip cannot. External **4 MB** SRAM is **ASET
+art only** — do not put JS objects there or bump that bank to 8 MB.
+`cls_mname` / `cls_mip` stay 16×16 (4 Kbit, not a JS heap). True dual-port
+only for CPU+scanout (VRAM / FB); dump shares the CPU read port.
 
-**How memories must be coded** (FPGA BRAM and ASIC SRAM macros):
-
-- 1-D arrays, one write + one registered read (true dual-port only for
-  CPU+scanout, e.g. char VRAM / mini-FB). Dump shares the CPU read port.
-- No reset `for` that writes every cell in one cycle — walk CLS instead.
-- Object/array slot scans over clocks; not a combinational compare of all slots.
-- Forbidden: `` `ifdef SYNTHESIS `` smaller heaps, combo sim vs BRAM board,
-  LUTRAM for megabit arrays, shrinking HTML to fit.
-- **Capacity:** T200 ≈ **365** RAMB36 ≈ **1.64 MB**. Dual 640×480×8 FB ≈
-  **0.6 MB**. Leftover ≈ **1 MB** for code + JS heap + console. Legal slot
-  BRAMs: `MAX_OBJ=1024` × 32 × 80b ≈ 320 KB plus two-tier arrays
-  (`1536×32` + `128×128`) × 64b ≈ 512 KB plus `ENV_DEPTH=512` × 16 × 80b
-  `venv_slot` ≈ 80 KB (PYTHON `hardware_model/js_vm.py` matches). Nested
-  number-array maps plus JSON clones need ~1152 short arrays; bunker-class
-  `push` past 32 uses the long bank (same handle). The 8192 / 4096
-  / 128 depths were ~**7 MB** — same class of fake as combo 2-D (Verilator
-  runs; the chip cannot). Overflow loud. External **4 MB** SRAM is **ASET
-  art only** — do not put JS heap there or bump that bank to 8 MB.
-- **Vivado SV:** no nested part-select (`rdata[79:64][9:0]` → Synth 8-2599).
-  Use `rdata[73:64]` or a wire. No 2-D env table (`venv_val[h][k]` →
-  Synth 8-4556 at 1,048,576 bits). No `for (i = j; i < N)` (Synth 8-3380;
-  rewrite `for (i = 0; i < N) if (i >= j)`). No nested `for` over
-  `ENV_DEPTH` (walk `S_REL_ENV` / find-free FSMs). `vstack` 1W1R like
-  `vobj_slot` (Synth 8-7186 if combo/multi-port). No `function automatic`
-  peek from the giant `unique case` (Synth 8-660 `vst_at`); combo `vst_peek`
-  wire + TOS window FFs only — not a third BRAM port.
-
-**Heap flatten (2026-08-16):** 1-D `vobj_slot` / `varr_slot` / `venv_slot` 1W1R,
-`S_HEAP_*` (env via `hp_env`, stop at `venv_len`). Nested select at stringify
-is `vobj_rdata[73:64]`. Caps are the leftover-BRAM depths above. `cls_mname` /
-`cls_mip` stay 16×16 (4 Kbit method table, not a JS heap). Do not bump asset
-SRAM to 8 MB.
-**One physical heap (2026-08-17 cheat — forbidden):** exec32/exec64 must
-not carry private copies of `vvars` / `venv_*` / `vobj_*` while parent GC
-still owns the real SRAM, then skip generation so those copies would not
-“look stale.” That is not four title bugs (PACMAN black FB, rAF `fn`, Date
-throttle, INVADERS/DONKEY/MRDO skew). Unpacked array **ports** are the
-Vivado opt bomb; cloning megabit arrays inside the exec is the leftover-BRAM
-bomb **and** a stale-handle bomb. Fast `LOAD_VAR` is compiler `a1` plus
-scalar req/ack into the **same** 1-D SRAM. Handle `(generation,index)`
-stays. FPGA-SIM is this RTL; this RTL is the standalone `.bin`.
-
-`utilization_impl.rpt` after a successful `make -C tools/board_flow bit`
-(other agent, after user F9). Pre-flatten probe: Synth 8-4556 `vobj_key`
-4.2 Mbit. After env flatten, synth reached ~7 min then died on loops
-(8-3380 `remove_key_listener`, 1024×1024 `release_env_to`) and `vstack`
-8-7186. Those are now FSM / 1W1R. Next gate was Synth 8-660 `vst_at`
-(function from unique case) — now `vst_peek` wire. `$readmemh` font lives
-beside `rtl/engines/jmr_js_vm.sv`. Board asset SRAM is MIG DDR3 behind
-`jmr_ddr3_sram_bridge` (not `jmr_sram_model` in leftover BRAM). Palette BRAM
-is dual-clock; HDMI game mode reads it.
+`$readmemh` font lives beside `rtl/engines/jmr_js_vm.sv`. Board asset SRAM is
+MIG DDR3 behind `jmr_ddr3_sram_bridge`. Palette BRAM is dual-clock; HDMI game
+mode reads it.
 
 ---
 
@@ -130,8 +87,8 @@ LUTRAM can only sit in **SLICEM** boxes (a subset of slices).
 - **Synth ≠ fit.** Use `utilization_impl.rpt` (routed), not the synth report.
 - **`.bin` megabytes ≠ utilization.** The file is the whole 200T config image.
 - **Do not copy BASIC LUT history** into this product. Method only.
-- **FPGA-SIM green ≠ synthesizable.** Verilator will simulate 2-D combo heaps that
-  Vivado rejects (`Synth 8-4556`) and that ASIC SRAM cannot implement.
+- **FPGA-SIM green ≠ synthesizable.** Title RUN in Verilator is not a `.bin`.
+  Illegal SRAM patterns: `.cursor/rules/never-fake-fpga-sim.mdc`.
 - **First T200 bit is the slow one.** MIG + full VM synth; later `make -C
   tools/board_flow bit` reuses the project. `bit-fresh` / `clean` = pay first-build
   again. See [FPGA_BRINGUP.md](FPGA_BRINGUP.md).

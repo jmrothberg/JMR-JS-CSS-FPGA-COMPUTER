@@ -97,6 +97,7 @@ module jmr_js_vm #(
 
     (* ram_style = "block" *) logic [31:0] code_mem [0:CODE_WORDS-1] /*verilator public_flat_rw*/;
     initial $readmemh(CODE_HEX, code_mem);
+    logic [14:0] code_raddr_ff;
     logic [14:0] code_raddr;
     logic [31:0] code_rdata;
     // Read port (VM fetch) + write port (FAT .JSB load) — dual-port BRAM
@@ -112,6 +113,7 @@ module jmr_js_vm #(
     logic signed [31:0] stack  [0:STACK_DEPTH-1];
     // NEW: public for the sim server VMSTAT? probe (FPGA-SIM bring-up only)
     logic [10:0] sp /*verilator public_flat_rd*/; // 2048-deep eval stack
+    logic [15:0] ip_ff;
     logic [15:0] ip /*verilator public_flat_rd*/;
     logic [15:0] n_ops, n_consts;
     logic [15:0] ops_base /*verilator public_flat_rd*/;
@@ -129,6 +131,7 @@ module jmr_js_vm #(
     // resolve function automatic vst_at from the unique case). Index 0 = TOS.
     // Window only; do not combo-read vstack BRAM (vst_rdata is last beat).
     logic [63:0] vst_peek [0:15];
+    logic [1023:0] vst_win_pack;
     logic        vst_we;
     logic [11:0] vst_waddr, vst_raddr;
     logic [63:0] vst_wdata, vst_rdata;
@@ -143,7 +146,9 @@ module jmr_js_vm #(
     logic        aset_win_retried;
     (* ram_style = "block" *) logic [63:0] vvars [0:MAX_VARS-1] /*verilator public_flat_rd*/;
     logic vvar_valid [0:MAX_VARS-1] /*verilator public_flat_rd*/;
+    logic [11:0] vsp_ff;
     logic [11:0] vsp /*verilator public_flat_rd*/;
+    logic [7:0] vcsp_ff;
     logic [7:0] vcsp /*verilator public_flat_rd*/;
     logic [31:0] vconst_lo;
     // Value64 DIV/MOD use restoring integer datapaths, one quotient bit per
@@ -198,7 +203,9 @@ module jmr_js_vm #(
     logic [63:0] venv_parent [0:ENV_DEPTH-1] /*verilator public_flat_rd*/;
     logic [4:0] venv_len [0:ENV_DEPTH-1] /*verilator public_flat_rd*/;
     // Env slots are 1-D venv_slot SRAM (not 2-D combo — Synth 8-4556).
+    logic [63:0] vthis_ff;
     logic [63:0] vthis /*verilator public_flat_rd*/;
+    logic [63:0] venv_ff;
     logic [63:0] venv /*verilator public_flat_rd*/;
     logic [15:0] vframe_return_ip [0:CSTK-1] /*verilator public_flat_rd*/;
     logic [11:0] vframe_base_sp [0:CSTK-1] /*verilator public_flat_rd*/;
@@ -209,38 +216,53 @@ module jmr_js_vm #(
     // MAKE_FN in this activation captured venv; RET must not recycle it.
     logic vframe_escaped [0:CSTK-1];
     logic [63:0] vgc_queue [0:MAX_OBJ+MAX_ARR+ENV_DEPTH-1];
+    logic [13:0] vgc_qr_ff, vgc_qw_ff, vgc_clear_i_ff;
     logic [13:0] vgc_qr, vgc_qw, vgc_clear_i;
     logic [12:0] vgc_obj_i;
     logic [11:0] vgc_arr_i;
     logic [7:0] vgc_slot_i;
     logic [63:0] vgc_cur;
     logic [11:0] vgc_root_i;
+    logic [13:0] valloc_i_ff;
     logic [13:0] valloc_i;
     logic [13:0] vobj_next, varr_next, vfn_next;
     logic [9:0] venv_next;
+    logic [1:0] valloc_kind_ff;
     logic [1:0] valloc_kind;
-    logic valloc_retried, vgc_halt_after;
+    logic valloc_retried_ff;
+    logic valloc_retried;
+    logic vgc_halt_after_ff;
+    logic vgc_halt_after;
     logic venv_mark [0:ENV_DEPTH-1];
     logic [9:0] vgc_env_i;
     logic [2:0] vgc_root_phase;
+    logic vcall_value_ff;
     logic vcall_value;
+    logic [15:0] vcall_entry_ff;
     logic [15:0] vcall_entry;
+    logic [11:0] vcall_argc_ff;
     logic [11:0] vcall_argc;
     // CALL_METH / NEW_OBJ ctor: bind this + constructor_value like PYTHON.
+    logic vcall_set_this_ff;
     logic vcall_set_this;
+    logic [63:0] vcall_this_ff;
     logic [63:0] vcall_this;
+    logic [63:0] vcall_ctor_val_ff;
     logic [63:0] vcall_ctor_val;
     // PYTHON builtin objects (ELEMENT/CONTEXT/IMAGE) + listener/key dispatch.
     logic [3:0] vobj_builtin [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
+    logic [2:0] vnat_dom_ff;
     logic [2:0] vnat_dom;
     logic [63:0] vnat_style;
     // PYTHON measureText {width} — one reused object (tagged metrics_oid).
     logic [63:0] vmetrics;
+    logic        valloc_metrics_ff;
     logic        valloc_metrics;
     logic [15:0] vmetrics_w;
     logic [63:0] vkev_event;
     logic [63:0] vlistener_ev [0:15] /*verilator public_flat_rd*/;
     logic [63:0] vlistener_fn [0:15] /*verilator public_flat_rd*/;
+    logic [4:0] vlistener_n_ff;
     logic [4:0] vlistener_n /*verilator public_flat_rd*/;
     logic [4:0] vkey_li;
     logic v64_frame_armed;
@@ -267,6 +289,7 @@ module jmr_js_vm #(
     // function handles and explicit callback frames. Listener/key dispatch
     // remains an unsupported native surface until its event objects land.
     logic [63:0] vraf [0:7] /*verilator public_flat_rd*/;
+    logic [3:0] vraf_n_ff;
     logic [3:0] vraf_n /*verilator public_flat_rd*/;
     logic [63:0] vraf_snap [0:7];
     logic [3:0] vraf_snap_n, vraf_i;
@@ -282,11 +305,13 @@ module jmr_js_vm #(
     logic [8:0] vconsole_n;
     logic [6:0] vtimer_pick;
     logic vcallback_raf, vcallback_timer;
+    logic vgc_wait_after_ff;
     logic vgc_wait_after;
     // After a mid-op collect, resume the caller instead of S_V64_ALLOC.
     // 0=alloc retry  1=re-fetch current op (map/filter dest)  2=JSON.parse
     // 3=JSON.stringify result object.
     logic [1:0] vgc_resume;
+    logic [11:0] vnat_base_ff;
     logic [11:0] vnat_base;
     // Sequential find-free (S_FREE_OBJ / S_FREE_ARR) — no MAX_* combo mux.
     logic vfree_armed, vfree_ok;
@@ -305,11 +330,14 @@ module jmr_js_vm #(
     logic [7:0]  minmax_k, minmax_n;
     logic [11:0] minmax_base;
     logic [63:0] minmax_acc;
+    logic [18:0] vdraw_i_ff;
     logic [18:0] vdraw_i;
+    logic [9:0] vdraw_x_ff, vdraw_y_ff, vdraw_w_ff, vdraw_h_ff;
     logic [9:0] vdraw_x, vdraw_y, vdraw_w, vdraw_h;
     // Scan cursor so S_V64_RECT is adders, not /% per pixel (Verilator
     // combo divide made full-canvas fillRect feel frozen-slow).
     logic [9:0] vdraw_cx, vdraw_cy;
+    logic [7:0] vdraw_color_ff;
     logic [7:0] vdraw_color;
     // NEW: tagged stack/vars for HTML heap (0=int 1=obj 2=arr 3=str 4=fn 5=undef 6=elem)
     logic [2:0]  stack_tag [0:STACK_DEPTH-1];
@@ -573,6 +601,10 @@ module jmr_js_vm #(
     logic [15:0] kev_ret_ip; // after listener table: next op (dispatchEvent) or n_ops (KEYEVT)
     logic        boot_clr; // NEW: clear both FB banks before first op
     logic [1:0]  boot_clr_n;
+    // One index/clock parent heap wipe (S_HEAP_CLR). Do not parallel-clear
+    // MAX_OBJ/MAX_ARR/ENV in S_GOT_HDR2 — that is SRAM, not FFs.
+    logic        heap_clr_busy;
+    logic [11:0] heap_clr_i;
     logic [15:0] id_find; // Array.find
     logic [15:0] id_findindex, id_filter; // Array.findIndex / Array.filter
     logic        click_fired; // NEW: HTML auto-start click once
@@ -672,24 +704,35 @@ module jmr_js_vm #(
     logic        v64_repl;
     // Date.now / performance.now GET_PROP allocates a native-35 function
     // (PYTHON entry=-35). CALL_VAL sees vfn_entry 16'hfffa.
+    logic        valloc_now_fn_ff;
     logic        valloc_now_fn;
+    logic        valloc_regex_ff;
     logic        valloc_regex;
     // Packed pattern/flags from the const pool (same i32 as tagged CLS_REGEX).
+    logic [31:0] valloc_regex_pack_ff;
     logic [31:0] valloc_regex_pack;
     // Array(n) hole count for native 34 (PYTHON length-n undefined slots).
+    logic [7:0]  valloc_arr_n_ff;
     logic [7:0]  valloc_arr_n;
     // MAKE_FN entry/a1 latched at fetch. S_V64_ALLOC must not re-read
     // code_rdata — GC resume (or a JUMP-to-MAKE_FN with a skipped RET_VAL
     // a0=0 in the previous word) would store entry 0, and CALL_METHOD
     // then restarts the ProgramImage (maps IIFE nested until MAX_ARR).
+    logic [15:0] valloc_fn_entry_ff;
     logic [15:0] valloc_fn_entry;
+    logic [7:0]  valloc_fn_a1_ff;
     logic [7:0]  valloc_fn_a1;
     // GET_PROP .prototype on a function: alloc empty proto object (PYTHON).
+    logic        valloc_proto_ff;
     logic        valloc_proto;
+    logic [12:0] valloc_proto_fn_ff;
     logic [12:0] valloc_proto_fn;
     // fn.bind(this) — PYTHON copies entry/env and sets has_bound_this.
+    logic        valloc_bind_ff;
     logic        valloc_bind;
+    logic [12:0] valloc_bind_src_ff;
     logic [12:0] valloc_bind_src;
+    logic [63:0] valloc_bind_this_ff;
     logic [63:0] valloc_bind_this;
     logic [5:0]  vctor_scan;
     logic        vctor_armed;
@@ -888,6 +931,8 @@ module jmr_js_vm #(
         S_V64_IDXSCAN,
         // Env slot scan completion (NEW_OBJ ctor lookup after S_HEAP_*).
         S_V64_CTOR_ENV,
+        // Registered vvars[intern_var] ctor lookup (no combo vvars[vslot]).
+        S_V64_CTOR_VARS,
         // Synth 8-3380 / unroll: walk tagged-env recycle and find-free
         // one index per clock (not a task for-loop over ENV_DEPTH/MAX_*).
         S_REL_ENV, S_FREE_OBJ, S_FREE_ARR,
@@ -896,7 +941,9 @@ module jmr_js_vm #(
         // After a vsp drop of 16+ the TOS FF window is stale; refill from BRAM.
         S_V64_WIN_FILL,
         // Short→long array promote (same handle; copy then flip varr_long).
-        S_ARR_PROMOTE
+        S_ARR_PROMOTE,
+        // Sequential p_clr walk (one index/clock) before const load.
+        S_HEAP_CLR
     } st_t;
     st_t state /*verilator public_flat_rd*/, ret_state;
     logic vprom_done, vprom_copy, hp_prom_wr;
@@ -923,7 +970,8 @@ module jmr_js_vm #(
     logic [VENV_AW-1:0] venv_waddr, venv_raddr;
     logic [79:0] vobj_wdata, vobj_rdata;
     logic [79:0] venv_wdata, venv_rdata;
-    logic [2:0]  vobj_trdata, varr_trdata, hp_tag;
+    logic [2:0]  vobj_trdata, varr_trdata, hp_tag_ff;
+    logic [2:0]  hp_tag;
     logic [63:0] varr_wdata, varr_rdata;
 
     // Two-tier array address (not MAX_ARR×128 concat). Combo mux of the
@@ -959,38 +1007,66 @@ module jmr_js_vm #(
     localparam logic [3:0] HP_ASSIGN  = 4'd13;
     localparam logic [3:0] HP_AGETI   = 4'd14;
     localparam logic [3:0] HP_ASETI   = 4'd15;
+    logic [3:0]  hp_cmd_ff;
     logic [3:0]  hp_cmd;
+    logic        hp_v64_ff;
     logic        hp_v64;
+    logic [12:0] hp_oid_ff;
     logic [12:0] hp_oid;
+    logic [11:0] hp_aid_ff;
     logic [11:0] hp_aid;
+    logic        hp_env_ff;
     logic        hp_env; // S_HEAP_* talks to venv_slot (LOAD/STORE/LET/ctor)
+    logic [9:0]  hp_eid_ff;
     logic [9:0]  hp_eid;
+    logic [4:0]  hp_slot_ff;
     logic [4:0]  hp_slot;
+    logic [6:0]  hp_aslot_ff;
     logic [6:0]  hp_aslot;
+    logic [5:0]  hp_len_ff;
     logic [5:0]  hp_len;
+    logic [7:0]  hp_alen_ff, hp_lim_ff;
     logic [7:0]  hp_alen, hp_lim;
+    logic [15:0] hp_key_ff;
     logic [15:0] hp_key;
+    logic [63:0] hp_wval_ff, hp_rval_ff;
     logic [63:0] hp_wval, hp_rval;
+    logic        hp_hit_ff;
     logic        hp_hit;
+    st_t         hp_ret_ff;
     st_t         hp_ret;
     st_t         rel_ret, bind_ret;
     st_t         vst_refill_ret;
+    logic [2:0]  hp_phase_ff;
     logic [2:0]  hp_phase;
+    logic [63:0] hp_proto_ff;
     logic [63:0] hp_proto;
+    logic [15:0] hp_qk_ff [0:3];
     logic [15:0] hp_qk [0:3];
+    logic [63:0] hp_qv_ff [0:3];
     logic [63:0] hp_qv [0:3];
+    logic [2:0]  hp_qt_ff [0:3];
     logic [2:0]  hp_qt [0:3];
+    logic [2:0]  hp_qn_ff, hp_qi_ff;
     logic [2:0]  hp_qn, hp_qi;
     logic        vgc_rd_arm, jn_rd_arm, vfe_rd_arm, vjs_rd_arm;
-    logic [12:0] hp_si, hp_ti;
+    logic [12:0] hp_si_ff, hp_ti;
+    logic [12:0] hp_si;
+    logic [4:0]  hp_ss_ff;
     logic [4:0]  hp_ss;
+    logic [5:0]  hp_tn_ff;
     logic [5:0]  hp_tn;
     // Sequential array init copies stack[hp_vbase+i] (regs, not SRAM mux).
+    logic        hp_from_stack_ff;
     logic        hp_from_stack;
+    logic        hp_make_arr_ff;
     logic        hp_make_arr; // MAKE_ARRAY: write handle after fill (not before)
+    logic [11:0] hp_vbase_ff;
     logic [11:0] hp_vbase;
+    logic [15:0] hp_spr_w_ff, hp_spr_h_ff;
     logic [15:0] hp_spr_w, hp_spr_h;
     // OGETI continuation: 0 parse 1 putimg 2 meas 3 idxof 4 repl 5 regex
+    logic [3:0]  hp_nat_ff;
     logic [3:0]  hp_nat;
 
     // NEW: S_ARR_DCOPY scratch (SET_PROP array-over-array deep row copy)
@@ -1236,7 +1312,7 @@ module jmr_js_vm #(
                 // a PACMAN fix. Restore gen match; one physical heap.
                 vobj_mark[index[12:0]] <= 1'b1;
                 vgc_queue[vgc_qw] <= word;
-                vgc_qw <= vgc_qw + 14'd1;
+                hs_vgc_qw(vgc_qw + 14'd1);
             end else if (word[63:48] == 16'h7ff9 &&
                          kind == 4'd7 && index < MAX_OBJ &&
                          vfn_valid[index[12:0]] &&
@@ -1248,21 +1324,21 @@ module jmr_js_vm #(
                 // Fix dual-copy, do not drop generation.
                 vfn_mark[index[12:0]] <= 1'b1;
                 vgc_queue[vgc_qw] <= word;
-                vgc_qw <= vgc_qw + 14'd1;
+                hs_vgc_qw(vgc_qw + 14'd1);
             end else if (word[63:48] == 16'h7ff9 &&
                          kind == 4'd6 && index < MAX_ARR &&
                          varr_valid[index[11:0]] &&
                          !varr_mark[index[11:0]]) begin
                 varr_mark[index[11:0]] <= 1'b1;
                 vgc_queue[vgc_qw] <= word;
-                vgc_qw <= vgc_qw + 14'd1;
+                hs_vgc_qw(vgc_qw + 14'd1);
             end else if (word[63:48] == 16'h7ff9 &&
                          kind == 4'd9 && index < ENV_DEPTH &&
                          venv_valid[index[9:0]] &&
                          !venv_mark[index[9:0]]) begin
                 venv_mark[index[9:0]] <= 1'b1;
                 vgc_queue[vgc_qw] <= word;
-                vgc_qw <= vgc_qw + 14'd1;
+                hs_vgc_qw(vgc_qw + 14'd1);
             end
         end
     endtask
@@ -1504,7 +1580,7 @@ module jmr_js_vm #(
         rel_i <= saved;
         rel_nn <= env_free_n;
         rel_ret <= nxt;
-        state <= S_REL_ENV;
+        hs_st(S_REL_ENV);
     endtask
     // Combo TOS-window mux. Vivado Synth 8-660: function automatic vst_at
     // is not resolved from the giant unique case (Verilator is). Deep stack
@@ -1527,6 +1603,12 @@ module jmr_js_vm #(
         vst_peek[14] = vst_win[14];
         vst_peek[15] = vst_win[15];
     end
+    genvar gi_vst;
+    generate
+        for (gi_vst = 0; gi_vst < 16; gi_vst++) begin : g_vst_pack
+            assign vst_win_pack[64*gi_vst +: 64] = vst_win[gi_vst];
+        end
+    endgenerate
     // Relative slot from TOS (0=TOS). Out-of-window → slot 0, not BRAM.
     // No extra parens around vst_peek[i] — `(expr)[62:52]` is illegal SV
     // (Synth 8-660 site was Math.abs `vst_at(base)[62:52]`).
@@ -1811,7 +1893,87 @@ module jmr_js_vm #(
         fx_mod2pi = r;
     endfunction
 
-    task automatic e64_poke(input logic [5:0] sel, input logic [15:0] addr,
+    task automatic e32_poke(input logic [5:0] sel, input logic [15:0] addr,
+                            input logic [63:0] data);
+        e32_p_we <= 1'b1;
+        e32_p_sel <= sel;
+        e32_p_addr <= addr;
+        e32_p_data <= data;
+    endtask
+    task automatic hs_ip(input logic [15:0] v); ip_ff <= v; hs_m_ip <= 1'b1; endtask
+    task automatic hs_code(input logic [14:0] v); code_raddr_ff <= v; hs_m_code <= 1'b1; endtask
+    task automatic hs_st(input st_t s); state <= s; hs_m_state <= 1'b1; endtask
+    task automatic hs_vsp(input logic [11:0] v); vsp_ff <= v; hs_m_vsp <= 1'b1; endtask
+    task automatic hs_hp_cmd(input logic [3:0] v); hp_cmd_ff <= v; hs_m_hp_cmd <= 1'b1; endtask
+    task automatic hs_hp_v64(input logic v); hp_v64_ff <= v; hs_m_hp_v64 <= 1'b1; endtask
+    task automatic hs_hp_oid(input logic [12:0] v); hp_oid_ff <= v; hs_m_hp_oid <= 1'b1; endtask
+    task automatic hs_hp_aid(input logic [11:0] v); hp_aid_ff <= v; hs_m_hp_aid <= 1'b1; endtask
+    task automatic hs_hp_env(input logic v); hp_env_ff <= v; hs_m_hp_env <= 1'b1; endtask
+    task automatic hs_hp_eid(input logic [9:0] v); hp_eid_ff <= v; hs_m_hp_eid <= 1'b1; endtask
+    task automatic hs_hp_slot(input logic [4:0] v); hp_slot_ff <= v; hs_m_hp_slot <= 1'b1; endtask
+    task automatic hs_hp_aslot(input logic [6:0] v); hp_aslot_ff <= v; hs_m_hp_aslot <= 1'b1; endtask
+    task automatic hs_hp_len(input logic [5:0] v); hp_len_ff <= v; hs_m_hp_len <= 1'b1; endtask
+    task automatic hs_hp_alen(input logic [7:0] v); hp_alen_ff <= v; hs_m_hp_alen <= 1'b1; endtask
+    task automatic hs_hp_lim(input logic [7:0] v); hp_lim_ff <= v; hs_m_hp_lim <= 1'b1; endtask
+    task automatic hs_hp_key(input logic [15:0] v); hp_key_ff <= v; hs_m_hp_key <= 1'b1; endtask
+    task automatic hs_hp_wval(input logic [63:0] v); hp_wval_ff <= v; hs_m_hp_wval <= 1'b1; endtask
+    task automatic hs_hp_rval(input logic [63:0] v); hp_rval_ff <= v; hs_m_hp_rval <= 1'b1; endtask
+    task automatic hs_hp_hit(input logic v); hp_hit_ff <= v; hs_m_hp_hit <= 1'b1; endtask
+    task automatic hs_hp_ret(input st_t v); hp_ret_ff <= v; hs_m_hp_ret <= 1'b1; endtask
+    task automatic hs_hp_phase(input logic [2:0] v); hp_phase_ff <= v; hs_m_hp_phase <= 1'b1; endtask
+    task automatic hs_hp_proto(input logic [63:0] v); hp_proto_ff <= v; hs_m_hp_proto <= 1'b1; endtask
+    task automatic hs_hp_qn(input logic [2:0] v); hp_qn_ff <= v; hs_m_hp_qn <= 1'b1; endtask
+    task automatic hs_hp_qi(input logic [2:0] v); hp_qi_ff <= v; hs_m_hp_qi <= 1'b1; endtask
+    task automatic hs_hp_si(input logic [12:0] v); hp_si_ff <= v; hs_m_hp_si <= 1'b1; endtask
+    task automatic hs_hp_ss(input logic [4:0] v); hp_ss_ff <= v; hs_m_hp_ss <= 1'b1; endtask
+    task automatic hs_hp_tn(input logic [5:0] v); hp_tn_ff <= v; hs_m_hp_tn <= 1'b1; endtask
+    task automatic hs_hp_from_stack(input logic v); hp_from_stack_ff <= v; hs_m_hp_from_stack <= 1'b1; endtask
+    task automatic hs_hp_make_arr(input logic v); hp_make_arr_ff <= v; hs_m_hp_make_arr <= 1'b1; endtask
+    task automatic hs_hp_vbase(input logic [11:0] v); hp_vbase_ff <= v; hs_m_hp_vbase <= 1'b1; endtask
+    task automatic hs_hp_spr_w(input logic [15:0] v); hp_spr_w_ff <= v; hs_m_hp_spr_w <= 1'b1; endtask
+    task automatic hs_hp_spr_h(input logic [15:0] v); hp_spr_h_ff <= v; hs_m_hp_spr_h <= 1'b1; endtask
+    task automatic hs_hp_nat(input logic [3:0] v); hp_nat_ff <= v; hs_m_hp_nat <= 1'b1; endtask
+    task automatic hs_hp_tag(input logic [2:0] v); hp_tag_ff <= v; hs_m_hp_tag <= 1'b1; endtask
+    task automatic hs_valloc_kind(input [1:0] v); valloc_kind_ff <= v; hs_m_valloc_kind <= 1'b1; endtask
+    task automatic hs_valloc_i(input [13:0] v); valloc_i_ff <= v; hs_m_valloc_i <= 1'b1; endtask
+    task automatic hs_valloc_arr_n(input [7:0] v); valloc_arr_n_ff <= v; hs_m_valloc_arr_n <= 1'b1; endtask
+    task automatic hs_valloc_retried(input logic v); valloc_retried_ff <= v; hs_m_valloc_retried <= 1'b1; endtask
+    task automatic hs_vnat_dom(input [2:0] v); vnat_dom_ff <= v; hs_m_vnat_dom <= 1'b1; endtask
+    task automatic hs_vnat_base(input [11:0] v); vnat_base_ff <= v; hs_m_vnat_base <= 1'b1; endtask
+    task automatic hs_valloc_now_fn(input logic v); valloc_now_fn_ff <= v; hs_m_valloc_now_fn <= 1'b1; endtask
+    task automatic hs_valloc_bind(input logic v); valloc_bind_ff <= v; hs_m_valloc_bind <= 1'b1; endtask
+    task automatic hs_valloc_bind_src(input [12:0] v); valloc_bind_src_ff <= v; hs_m_valloc_bind_src <= 1'b1; endtask
+    task automatic hs_valloc_bind_this(input [63:0] v); valloc_bind_this_ff <= v; hs_m_valloc_bind_this <= 1'b1; endtask
+    task automatic hs_valloc_fn_entry(input [15:0] v); valloc_fn_entry_ff <= v; hs_m_valloc_fn_entry <= 1'b1; endtask
+    task automatic hs_valloc_fn_a1(input [7:0] v); valloc_fn_a1_ff <= v; hs_m_valloc_fn_a1 <= 1'b1; endtask
+    task automatic hs_valloc_proto(input logic v); valloc_proto_ff <= v; hs_m_valloc_proto <= 1'b1; endtask
+    task automatic hs_valloc_proto_fn(input [12:0] v); valloc_proto_fn_ff <= v; hs_m_valloc_proto_fn <= 1'b1; endtask
+    task automatic hs_valloc_metrics(input logic v); valloc_metrics_ff <= v; hs_m_valloc_metrics <= 1'b1; endtask
+    task automatic hs_valloc_regex(input logic v); valloc_regex_ff <= v; hs_m_valloc_regex <= 1'b1; endtask
+    task automatic hs_valloc_regex_pack(input [31:0] v); valloc_regex_pack_ff <= v; hs_m_valloc_regex_pack <= 1'b1; endtask
+    task automatic hs_vcall_value(input logic v); vcall_value_ff <= v; hs_m_vcall_value <= 1'b1; endtask
+    task automatic hs_vcall_argc(input [11:0] v); vcall_argc_ff <= v; hs_m_vcall_argc <= 1'b1; endtask
+    task automatic hs_vcall_entry(input [15:0] v); vcall_entry_ff <= v; hs_m_vcall_entry <= 1'b1; endtask
+    task automatic hs_vcall_set_this(input logic v); vcall_set_this_ff <= v; hs_m_vcall_set_this <= 1'b1; endtask
+    task automatic hs_vcall_this(input [63:0] v); vcall_this_ff <= v; hs_m_vcall_this <= 1'b1; endtask
+    task automatic hs_vcall_ctor_val(input [63:0] v); vcall_ctor_val_ff <= v; hs_m_vcall_ctor_val <= 1'b1; endtask
+    task automatic hs_vcsp(input [7:0] v); vcsp_ff <= v; hs_m_vcsp <= 1'b1; endtask
+    task automatic hs_vthis(input [63:0] v); vthis_ff <= v; hs_m_vthis <= 1'b1; endtask
+    task automatic hs_venv(input [63:0] v); venv_ff <= v; hs_m_venv <= 1'b1; endtask
+    task automatic hs_vraf_n(input [3:0] v); vraf_n_ff <= v; hs_m_vraf_n <= 1'b1; endtask
+    task automatic hs_vlistener_n(input [4:0] v); vlistener_n_ff <= v; hs_m_vlistener_n <= 1'b1; endtask
+    task automatic hs_vgc_halt_after(input logic v); vgc_halt_after_ff <= v; hs_m_vgc_halt_after <= 1'b1; endtask
+    task automatic hs_vgc_wait_after(input logic v); vgc_wait_after_ff <= v; hs_m_vgc_wait_after <= 1'b1; endtask
+    task automatic hs_vgc_clear_i(input [13:0] v); vgc_clear_i_ff <= v; hs_m_vgc_clear_i <= 1'b1; endtask
+    task automatic hs_vgc_qr(input [13:0] v); vgc_qr_ff <= v; hs_m_vgc_qr <= 1'b1; endtask
+    task automatic hs_vgc_qw(input [13:0] v); vgc_qw_ff <= v; hs_m_vgc_qw <= 1'b1; endtask
+    task automatic hs_vdraw_i(input [18:0] v); vdraw_i_ff <= v; hs_m_vdraw_i <= 1'b1; endtask
+    task automatic hs_vdraw_x(input [9:0] v); vdraw_x_ff <= v; hs_m_vdraw_x <= 1'b1; endtask
+    task automatic hs_vdraw_y(input [9:0] v); vdraw_y_ff <= v; hs_m_vdraw_y <= 1'b1; endtask
+    task automatic hs_vdraw_w(input [9:0] v); vdraw_w_ff <= v; hs_m_vdraw_w <= 1'b1; endtask
+    task automatic hs_vdraw_h(input [9:0] v); vdraw_h_ff <= v; hs_m_vdraw_h <= 1'b1; endtask
+    task automatic hs_vdraw_color(input [7:0] v); vdraw_color_ff <= v; hs_m_vdraw_color <= 1'b1; endtask
+        task automatic e64_poke(input logic [5:0] sel, input logic [15:0] addr,
                             input logic [63:0] data);
         e64_p_we <= 1'b1;
         e64_p_sel <= sel;
@@ -1832,16 +1994,16 @@ module jmr_js_vm #(
         end else dbg_json_ovf <= dbg_json_ovf + 16'd1;
     endtask
     task automatic next_op;
-        ip <= ip + 16'd1;
-        code_raddr <= 15'(ops_base + ip + 16'd1);
-        state <= S_FETCH_WAIT;
+        hs_ip(ip + 16'd1);
+        hs_code(15'(ops_base + ip + 16'd1));
+        hs_st(S_FETCH_WAIT);
     endtask
     // NEW: consume one trailer byte; word wrap → S_RD (must not run on intern/done)
     task automatic trail_bump;
         if (trail_off[1:0] == 2'd3) begin
-            code_raddr <= 15'(trail_off[16:2] + 15'd1);
+            hs_code(15'(trail_off[16:2] + 15'd1));
             trail_off <= trail_off + 16'd1;
-            state <= S_RD;
+            hs_st(S_RD);
             ret_state <= S_TRAIL;
         end         else trail_off <= trail_off + 16'd1;
     endtask
@@ -1857,8 +2019,9 @@ module jmr_js_vm #(
         vobj_trdata <= vobj_tmem[vobj_raddr];
         if (varr_we) begin
             varr_slot[varr_waddr] <= varr_wdata;
+            // 32-bit HEAP_FILL tag: registered (same addr as stack_rdata).
             varr_tmem[varr_waddr] <= (hp_from_stack && !hp_v64)
-                ? stack_tag[hp_vbase[10:0] + {4'd0, hp_aslot}]
+                ? e32_stack_tag_rdata
                 : hp_tag;
         end
         varr_rdata <= varr_slot[varr_raddr];
@@ -1870,7 +2033,10 @@ module jmr_js_vm #(
 
     // Value64 operand stack: 1 write + 1 registered read (same as vobj_slot).
     always_ff @(posedge clk) begin
-        if (vst_we)
+        if (state == S_V64_EXEC) begin
+            if (e64_vst_we_q)
+                vstack[e64_vst_waddr_q] <= e64_vst_wdata_q;
+        end else if (vst_we)
             vstack[vst_waddr] <= vst_wdata;
         vst_rdata <= vstack[vst_raddr];
     end
@@ -1886,14 +2052,15 @@ module jmr_js_vm #(
         vobj_raddr = VOBJ_AW'({hp_oid, hp_slot});
         varr_we = (state == S_HEAP_AWR) ||
             (state == S_HEAP_FILL &&
-             !(hp_from_stack && hp_v64 && hp_phase != 3'd1));
+             !(hp_from_stack && hp_phase != 3'd1));
         varr_waddr = hp_prom_wr
             ? VARR_AW'(VARR_SHORT_WORDS + {1'b0, hp_prom_phys, hp_aslot})
             : varr_slot_addr(hp_aid, hp_aslot);
+        // 32-bit arm: registered stack_rdata (never combo stack[i] — Synth 8-4767).
         varr_wdata = hp_from_stack
             ? (hp_v64
                 ? vst_rdata
-                : {32'd0, stack[hp_vbase[10:0] + {4'd0, hp_aslot}]})
+                : {32'd0, e32_stack_rdata})
             : hp_wval;
         varr_raddr = varr_slot_addr(hp_aid, hp_aslot);
         venv_we = (state == S_HEAP_WR) && hp_env;
@@ -1967,6 +2134,12 @@ module jmr_js_vm #(
         else if (state == S_V64_GC_ROOT && vgc_root_phase == 3'd1)
             vst_raddr = vgc_root_i;
     end
+    // HEAP_FILL 32-bit: share exec32 stack read port (rdata next clock).
+    always_comb begin
+        stack_rd_a = e32_stack_raddr;
+        if (state == S_HEAP_FILL && hp_from_stack && !hp_v64)
+            stack_rd_a = hp_vbase[10:0] + {4'd0, hp_aslot};
+    end
 
     // KEYBITS poke is sequential-heap (no combo slot mux). Tagged path
     // arms HP_SETPROP from S_WAIT_FRAME; this task is a no-op stub.
@@ -1986,238 +2159,208 @@ module jmr_js_vm #(
 
     // Hierarchical jmr_js_vm_exec32: keep_hierarchy so Vivado does not flatten
     // the opcode mux back into the parent always_ff.
-    logic signed [31:0] e32_alu_a_n;
-    logic signed [31:0] e32_alu_b_n;
-    logic e32_alu_fx_n;
-    logic [2:0] e32_alu_op_n;
-    logic [15:0] e32_blit_sh_n;
-    logic [7:0] e32_blit_si_n;
-    logic [15:0] e32_blit_sw_n;
-    logic [15:0] e32_blit_sx_n;
-    logic [15:0] e32_blit_sy_n;
-    logic [2:0] e32_cc_at_n;
-    logic signed [31:0] e32_cc_av_n;
-    logic e32_cc_bok_n;
-    logic [2:0] e32_cc_bt_n;
-    logic signed [31:0] e32_cc_bv_n;
-    logic [3:0] e32_cc_d_n;
-    logic [15:0] e32_cc_h_n;
-    logic [7:0] e32_cc_len_n;
-    logic e32_cc_second_n;
-    logic [1:0] e32_cc_st_n;
-    logic e32_click_fired_n;
-    logic [15:0] e32_click_fn_n;
-    logic [18:0] e32_clr_idx_n;
-    logic [14:0] e32_code_raddr_n;
-    logic [7:0] e32_color_n;
-    logic [6:0] e32_csp_n;
-    logic [1:0] e32_ctx_align_n;
-    logic [7:0] e32_ctx_font_px_n;
-    logic e32_ctx_smooth_n;
-    logic signed [31:0] e32_ctx_sx_n;
-    logic signed [31:0] e32_ctx_sy_n;
-    logic signed [31:0] e32_ctx_tx_n;
-    logic signed [31:0] e32_ctx_ty_n;
-    logic [15:0] e32_dbg_call_ovf_n;
-    logic [15:0] e32_dbg_cb_ip_n;
-    logic [15:0] e32_dbg_di_hit_n;
-    logic [15:0] e32_dbg_di_miss_n;
-    logic [15:0] e32_dbg_div_n_n;
-    logic [15:0] e32_dbg_find_hit_n;
-    logic [15:0] e32_dbg_heap_ovf_n;
-    logic [15:0] e32_dbg_json_ovf_n;
-    logic [15:0] e32_dbg_path_ovf_n;
-    logic [15:0] e32_dbg_splice_n_n;
-    logic [15:0] e32_dbg_stack_ovf_n;
-    logic [15:0] e32_dbg_tmr_sched_n;
-    logic [15:0] e32_dbg_to_ovf_n;
-    logic e32_did_swap_n;
-    logic [5:0] e32_div_cnt_n;
-    logic e32_div_int_in_n;
-    logic e32_div_neg_n;
-    logic [31:0] e32_div_rem_n;
-    logic [31:0] e32_div_ub_n;
-    logic [47:0] e32_div_uq_n;
-    logic [5:0] e32_env_free_n_n;
-    logic e32_env_is_store_n;
-    logic [8:0] e32_env_ld_slot_n;
-    logic [5:0] e32_env_sp_n;
-    logic [15:0] e32_env_walk_n;
-    logic [18:0] e32_fb_dump_addr_n;
-    logic e32_fb_dump_sel_n;
-    logic e32_fb_swap_n;
-    logic [7:0] e32_fill_style_i_n;
-    logic [7:0] e32_fp_left_n;
-    logic [7:0] e32_fpx_acc_n;
-    logic e32_frame_fire_n;
-    logic [11:0] e32_hp_aid_n;
-    logic [7:0] e32_hp_alen_n;
-    logic [6:0] e32_hp_aslot_n;
-    logic [3:0] e32_hp_cmd_n;
-    logic e32_hp_from_stack_n;
-    logic e32_hp_hit_n;
-    logic [15:0] e32_hp_key_n;
-    logic [5:0] e32_hp_len_n;
-    logic [7:0] e32_hp_lim_n;
-    logic e32_hp_make_arr_n;
-    logic [3:0] e32_hp_nat_n;
-    logic [12:0] e32_hp_oid_n;
-    logic [2:0] e32_hp_phase_n;
-    logic [63:0] e32_hp_proto_n;
-    logic [2:0] e32_hp_qi_n;
-    logic [2:0] e32_hp_qn_n;
-    logic [6:0] e32_hp_ret_n;
-    logic [63:0] e32_hp_rval_n;
-    logic [12:0] e32_hp_si_n;
-    logic [4:0] e32_hp_slot_n;
-    logic [4:0] e32_hp_ss_n;
-    logic [2:0] e32_hp_tag_n;
-    logic [5:0] e32_hp_tn_n;
-    logic e32_hp_v64_n;
-    logic [11:0] e32_hp_vbase_n;
-    logic [63:0] e32_hp_wval_n;
-    logic [7:0] e32_idx_needle_n;
-    logic [2:0] e32_idx_t_n;
-    logic signed [31:0] e32_idx_v_n;
-    logic e32_imgd_armed_n;
-    logic [9:0] e32_imgd_h_n;
-    logic [18:0] e32_imgd_i_n;
-    logic [18:0] e32_imgd_n_n;
-    logic [10:0] e32_imgd_res_n;
-    logic [9:0] e32_imgd_w_n;
-    logic [9:0] e32_imgd_x_n;
-    logic [9:0] e32_imgd_x0_n;
-    logic [9:0] e32_imgd_y_n;
-    logic [9:0] e32_imgd_y0_n;
-    logic [15:0] e32_ip_n;
-    logic [11:0] e32_jn_arr_n;
-    logic [15:0] e32_jn_h_n;
-    logic [15:0] e32_jn_i_n;
-    logic [10:0] e32_jn_res_n;
-    logic [5:0] e32_js_sp_n;
-    logic [13:0] e32_json_dst_n;
-    logic [2:0] e32_json_pph_n;
-    logic [10:0] e32_json_res_n;
-    logic [13:0] e32_json_rp_n;
-    logic [13:0] e32_json_src_n;
-    logic [13:0] e32_json_srclen_n;
-    logic [13:0] e32_json_wp_n;
-    logic [2:0] e32_kd_n_n;
-    logic [15:0] e32_kev_fn_n;
-    logic e32_kev_is_down_n;
-    logic [1:0] e32_kev_li_n;
-    logic [15:0] e32_kev_obj_n;
-    logic [15:0] e32_kev_ret_ip_n;
-    logic [15:0] e32_keys_a_oid_n;
-    logic [15:0] e32_keys_d_oid_n;
-    logic [15:0] e32_keys_sp_oid_n;
-    logic [2:0] e32_ku_n_n;
-    logic [31:0] e32_lfsr_n;
-    logic e32_looping_n;
-    logic [15:0] e32_metrics_oid_n;
-    logic signed [31:0] e32_mul_a_n;
-    logic signed [31:0] e32_mul_b_n;
-    logic e32_mul_fx_a_n;
-    logic e32_mul_fx_b_n;
-    logic [15:0] e32_n_arr_n;
-    logic [15:0] e32_n_arr_keep_n;
-    logic [6:0] e32_n_fn_proto_n;
-    logic [15:0] e32_n_obj_n;
-    logic [15:0] e32_n_obj_keep_n;
-    logic e32_namcpy_armed_n;
-    logic e32_namcpy_repl_n;
-    logic [15:0] e32_name_rdaddr_n;
-    logic [7:0] e32_nat_argc_n;
-    logic [7:0] e32_nat_id_n;
-    logic e32_path_active_n;
-    logic [1:0] e32_path_kind_n;
-    logic e32_path_stroke_n;
-    logic [4:0] e32_pc_n_n;
-    logic [4:0] e32_pi_n;
-    logic e32_present_pend_n;
-    logic [3:0] e32_raf_n_n;
-    logic [5:0] e32_rel_i_n;
-    logic [5:0] e32_rel_lim_n;
-    logic [5:0] e32_rel_nn_n;
-    logic [6:0] e32_rel_ret_n;
-    logic [5:0] e32_rel_saved_n;
-    logic e32_repl_did_n;
-    logic e32_repl_g_n;
-    logic [7:0] e32_repl_nlen_n;
-    logic [7:0] e32_repl_pat0_n;
-    logic [7:0] e32_repl_pat1_n;
-    logic [7:0] e32_repl_rch_n;
-    logic [9:0] e32_rh_n;
-    logic e32_running_n;
-    logic [9:0] e32_rw_n;
-    logic [9:0] e32_rx_n;
-    logic [9:0] e32_ry_n;
-    logic signed [31:0] e32_saved_sx_n;
-    logic signed [31:0] e32_saved_sy_n;
-    logic signed [31:0] e32_saved_tx_n;
-    logic signed [31:0] e32_saved_ty_n;
-    logic [10:0] e32_sp_n;
-    logic [4:0] e32_sq_i_n;
-    logic [47:0] e32_sq_rad_n;
-    logic [25:0] e32_sq_rem_n;
-    logic [23:0] e32_sq_root_n;
-    logic [6:0] e32_state_n;
-    logic signed [31:0] e32_str_pf_ci_n;
-    logic [15:0] e32_str_pf_id_n;
-    logic e32_str_pf_ok_n;
-    logic [10:0] e32_str_res_n;
-    logic [15:0] e32_this_obj_n;
-    logic [6:0] e32_to_n_n;
-    logic [15:0] e32_to_seq_n;
-    logic [6:0] e32_txt_bn_n;
-    logic [3:0] e32_txt_ph_n;
-    logic signed [15:0] e32_txt_px_n;
-    logic signed [15:0] e32_txt_py_n;
-    logic [15:0] e32_txt_rp_n;
-    logic [31:0] e32_txt_val_n;
-    logic [2:0] e32_txt_vt_n;
-    logic [11:0] e32_vcall_argc_n;
-    logic [63:0] e32_vcall_this_n;
-    logic [9:0] e32_x_n;
-    logic [1:0] e32_xf_dst_n;
-    logic signed [31:0] e32_xf_h_n;
-    logic signed [31:0] e32_xf_w_n;
-    logic signed [31:0] e32_xf_x_n;
-    logic signed [31:0] e32_xf_y_n;
-    logic [9:0] e32_y_n;
-    logic [15:0] e32_cstack_ctorobj_n [0:CSTK-1];
-    logic [5:0] e32_cstack_env_n [0:CSTK-1];
-    logic [15:0] e32_cstack_fe_arr_n [0:CSTK-1];
-    logic [15:0] e32_cstack_fe_fn_n [0:CSTK-1];
-    logic [7:0] e32_cstack_fe_i_n [0:CSTK-1];
-    logic [15:0] e32_cstack_ip_n [0:CSTK-1];
-    logic e32_cstack_isctor_n [0:CSTK-1];
-    logic e32_cstack_isfe_n [0:CSTK-1];
-    logic [15:0] e32_cstack_map_arr_n [0:CSTK-1];
-    logic [15:0] e32_cstack_this_n [0:CSTK-1];
-    logic [15:0] e32_fn_proto_ip_n [0:MAX_FN_PROTO-1];
-    logic [15:0] e32_fn_proto_oid_n [0:MAX_FN_PROTO-1];
-    logic [15:0] e32_hp_qk_n [0:3];
-    logic [2:0] e32_hp_qt_n [0:3];
-    logic [63:0] e32_hp_qv_n [0:3];
-    logic [7:0] e32_js_i_n [0:JSON_STK-1];
-    logic [2:0] e32_js_ph_n [0:JSON_STK-1];
-    logic [2:0] e32_js_tag_n [0:JSON_STK-1];
-    logic [31:0] e32_js_val_n [0:JSON_STK-1];
-    logic [15:0] e32_kd_slot_n [0:3];
-    logic [15:0] e32_ku_slot_n [0:3];
-    logic signed [31:0] e32_pc_a1_n [0:PATH_MAX-1];
-    logic signed [31:0] e32_pc_a2_n [0:PATH_MAX-1];
-    logic signed [31:0] e32_pc_a3_n [0:PATH_MAX-1];
-    logic signed [31:0] e32_pc_a4_n [0:PATH_MAX-1];
-    logic signed [31:0] e32_pc_a5_n [0:PATH_MAX-1];
-    logic e32_pc_ccw_n [0:PATH_MAX-1];
-    logic [1:0] e32_pc_op_n [0:PATH_MAX-1];
-    logic [15:0] e32_raf_fn_n [0:7];
-    logic [11:0] e32_to_delay_n [0:TIMER_DEPTH-1];
-    logic [15:0] e32_to_fn_n [0:TIMER_DEPTH-1];
-    logic [15:0] e32_to_id_n [0:TIMER_DEPTH-1];
-    logic [11:0] e32_to_period_n [0:TIMER_DEPTH-1];
+    logic signed [31:0] e32_alu_a_q;
+    logic signed [31:0] e32_alu_b_q;
+    logic e32_alu_fx_q;
+    logic [2:0] e32_alu_op_q;
+    logic [15:0] e32_blit_sh_q;
+    logic [7:0] e32_blit_si_q;
+    logic [15:0] e32_blit_sw_q;
+    logic [15:0] e32_blit_sx_q;
+    logic [15:0] e32_blit_sy_q;
+    logic [2:0] e32_cc_at_q;
+    logic signed [31:0] e32_cc_av_q;
+    logic e32_cc_bok_q;
+    logic [2:0] e32_cc_bt_q;
+    logic signed [31:0] e32_cc_bv_q;
+    logic [3:0] e32_cc_d_q;
+    logic [15:0] e32_cc_h_q;
+    logic [7:0] e32_cc_len_q;
+    logic e32_cc_second_q;
+    logic [1:0] e32_cc_st_q;
+    logic e32_click_fired_q;
+    logic [15:0] e32_click_fn_q;
+    logic [18:0] e32_clr_idx_q;
+    logic [14:0] e32_code_raddr_q;
+    logic [7:0] e32_color_q;
+    logic [6:0] e32_csp_q;
+    logic [1:0] e32_ctx_align_q;
+    logic [7:0] e32_ctx_font_px_q;
+    logic e32_ctx_smooth_q;
+    logic signed [31:0] e32_ctx_sx_q;
+    logic signed [31:0] e32_ctx_sy_q;
+    logic signed [31:0] e32_ctx_tx_q;
+    logic signed [31:0] e32_ctx_ty_q;
+    logic [15:0] e32_dbg_call_ovf_q;
+    logic [15:0] e32_dbg_cb_ip_q;
+    logic [15:0] e32_dbg_di_hit_q;
+    logic [15:0] e32_dbg_di_miss_q;
+    logic [15:0] e32_dbg_div_n_q;
+    logic [15:0] e32_dbg_find_hit_q;
+    logic [15:0] e32_dbg_heap_ovf_q;
+    logic [15:0] e32_dbg_json_ovf_q;
+    logic [15:0] e32_dbg_path_ovf_q;
+    logic [15:0] e32_dbg_splice_n_q;
+    logic [15:0] e32_dbg_stack_ovf_q;
+    logic [15:0] e32_dbg_tmr_sched_q;
+    logic [15:0] e32_dbg_to_ovf_q;
+    logic e32_did_swap_q;
+    logic [5:0] e32_div_cnt_q;
+    logic e32_div_int_in_q;
+    logic e32_div_neg_q;
+    logic [31:0] e32_div_rem_q;
+    logic [31:0] e32_div_ub_q;
+    logic [47:0] e32_div_uq_q;
+    logic [5:0] e32_env_free_n_q;
+    logic e32_env_is_store_q;
+    logic [8:0] e32_env_ld_slot_q;
+    logic [5:0] e32_env_sp_q;
+    logic [15:0] e32_env_walk_q;
+    logic [18:0] e32_fb_dump_addr_q;
+    logic e32_fb_dump_sel_q;
+    logic e32_fb_swap_q;
+    logic [7:0] e32_fill_style_i_q;
+    logic [7:0] e32_fp_left_q;
+    logic [7:0] e32_fpx_acc_q;
+    logic e32_frame_fire_q;
+    logic [11:0] e32_hp_aid_q;
+    logic [7:0] e32_hp_alen_q;
+    logic [6:0] e32_hp_aslot_q;
+    logic [3:0] e32_hp_cmd_q;
+    logic e32_hp_from_stack_q;
+    logic e32_hp_hit_q;
+    logic [15:0] e32_hp_key_q;
+    logic [5:0] e32_hp_len_q;
+    logic [7:0] e32_hp_lim_q;
+    logic e32_hp_make_arr_q;
+    logic [3:0] e32_hp_nat_q;
+    logic [12:0] e32_hp_oid_q;
+    logic [2:0] e32_hp_phase_q;
+    logic [63:0] e32_hp_proto_q;
+    logic [2:0] e32_hp_qi_q;
+    logic [2:0] e32_hp_qn_q;
+    logic [6:0] e32_hp_ret_q;
+    logic [63:0] e32_hp_rval_q;
+    logic [12:0] e32_hp_si_q;
+    logic [4:0] e32_hp_slot_q;
+    logic [4:0] e32_hp_ss_q;
+    logic [2:0] e32_hp_tag_q;
+    logic [5:0] e32_hp_tn_q;
+    logic e32_hp_v64_q;
+    logic [11:0] e32_hp_vbase_q;
+    logic [63:0] e32_hp_wval_q;
+    logic [7:0] e32_idx_needle_q;
+    logic [2:0] e32_idx_t_q;
+    logic signed [31:0] e32_idx_v_q;
+    logic e32_imgd_armed_q;
+    logic [9:0] e32_imgd_h_q;
+    logic [18:0] e32_imgd_i_q;
+    logic [18:0] e32_imgd_n_q;
+    logic [10:0] e32_imgd_res_q;
+    logic [9:0] e32_imgd_w_q;
+    logic [9:0] e32_imgd_x_q;
+    logic [9:0] e32_imgd_x0_q;
+    logic [9:0] e32_imgd_y_q;
+    logic [9:0] e32_imgd_y0_q;
+    logic [15:0] e32_ip_q;
+    logic [11:0] e32_jn_arr_q;
+    logic [15:0] e32_jn_h_q;
+    logic [15:0] e32_jn_i_q;
+    logic [10:0] e32_jn_res_q;
+    logic [5:0] e32_js_sp_q;
+    logic [13:0] e32_json_dst_q;
+    logic [2:0] e32_json_pph_q;
+    logic [10:0] e32_json_res_q;
+    logic [13:0] e32_json_rp_q;
+    logic [13:0] e32_json_src_q;
+    logic [13:0] e32_json_srclen_q;
+    logic [13:0] e32_json_wp_q;
+    logic [2:0] e32_kd_n_q;
+    logic [15:0] e32_kev_fn_q;
+    logic e32_kev_is_down_q;
+    logic [1:0] e32_kev_li_q;
+    logic [15:0] e32_kev_obj_q;
+    logic [15:0] e32_kev_ret_ip_q;
+    logic [15:0] e32_keys_a_oid_q;
+    logic [15:0] e32_keys_d_oid_q;
+    logic [15:0] e32_keys_sp_oid_q;
+    logic [2:0] e32_ku_n_q;
+    logic [31:0] e32_lfsr_q;
+    logic e32_looping_q;
+    logic [15:0] e32_metrics_oid_q;
+    logic signed [31:0] e32_mul_a_q;
+    logic signed [31:0] e32_mul_b_q;
+    logic e32_mul_fx_a_q;
+    logic e32_mul_fx_b_q;
+    logic [15:0] e32_n_arr_q;
+    logic [15:0] e32_n_arr_keep_q;
+    logic [6:0] e32_n_fn_proto_q;
+    logic [15:0] e32_n_obj_q;
+    logic [15:0] e32_n_obj_keep_q;
+    logic e32_namcpy_armed_q;
+    logic e32_namcpy_repl_q;
+    logic [15:0] e32_name_rdaddr_q;
+    logic [7:0] e32_nat_argc_q;
+    logic [7:0] e32_nat_id_q;
+    logic e32_path_active_q;
+    logic [1:0] e32_path_kind_q;
+    logic e32_path_stroke_q;
+    logic [4:0] e32_pc_n_q;
+    logic [4:0] e32_pi_q;
+    logic e32_present_pend_q;
+    logic [3:0] e32_raf_n_q;
+    logic [5:0] e32_rel_i_q;
+    logic [5:0] e32_rel_lim_q;
+    logic [5:0] e32_rel_nn_q;
+    logic [6:0] e32_rel_ret_q;
+    logic [5:0] e32_rel_saved_q;
+    logic e32_repl_did_q;
+    logic e32_repl_g_q;
+    logic [7:0] e32_repl_nlen_q;
+    logic [7:0] e32_repl_pat0_q;
+    logic [7:0] e32_repl_pat1_q;
+    logic [7:0] e32_repl_rch_q;
+    logic [9:0] e32_rh_q;
+    logic e32_running_q;
+    logic [9:0] e32_rw_q;
+    logic [9:0] e32_rx_q;
+    logic [9:0] e32_ry_q;
+    logic signed [31:0] e32_saved_sx_q;
+    logic signed [31:0] e32_saved_sy_q;
+    logic signed [31:0] e32_saved_tx_q;
+    logic signed [31:0] e32_saved_ty_q;
+    logic [10:0] e32_sp_q;
+    logic [4:0] e32_sq_i_q;
+    logic [47:0] e32_sq_rad_q;
+    logic [25:0] e32_sq_rem_q;
+    logic [23:0] e32_sq_root_q;
+    logic [6:0] e32_state_q;
+    logic signed [31:0] e32_str_pf_ci_q;
+    logic [15:0] e32_str_pf_id_q;
+    logic e32_str_pf_ok_q;
+    logic [10:0] e32_str_res_q;
+    logic [15:0] e32_this_obj_q;
+    logic [6:0] e32_to_n_q;
+    logic [15:0] e32_to_seq_q;
+    logic [6:0] e32_txt_bn_q;
+    logic [3:0] e32_txt_ph_q;
+    logic signed [15:0] e32_txt_px_q;
+    logic signed [15:0] e32_txt_py_q;
+    logic [15:0] e32_txt_rp_q;
+    logic [31:0] e32_txt_val_q;
+    logic [2:0] e32_txt_vt_q;
+    logic [11:0] e32_vcall_argc_q;
+    logic [63:0] e32_vcall_this_q;
+    logic [9:0] e32_x_q;
+    logic [1:0] e32_xf_dst_q;
+    logic signed [31:0] e32_xf_h_q;
+    logic signed [31:0] e32_xf_w_q;
+    logic signed [31:0] e32_xf_x_q;
+    logic signed [31:0] e32_xf_y_q;
+    logic [9:0] e32_y_q;
+    logic [63:0] e32_hp_qk_pack_q;
+    logic [11:0] e32_hp_qt_pack_q;
+    logic [255:0] e32_hp_qv_pack_q;
     logic e32_arr_len_we;
     logic [11:0] e32_arr_len_waddr;
     logic [7:0] e32_arr_len_wdata;
@@ -2275,11 +2418,100 @@ module jmr_js_vm #(
     logic e32_vobj_len_we;
     logic [11:0] e32_vobj_len_waddr;
     logic [5:0] e32_vobj_len_wdata;
+    logic [9:0] e32_intern_var_raddr;
+    logic [8:0] e32_intern_var_rdata;
+    logic e32_intern_var_ok_rdata;
+    logic [8:0] e32_env_oid_raddr;
+    logic [15:0] e32_env_oid_rdata;
+    logic [7:0] e32_char_id_raddr;
+    logic [15:0] e32_char_id_rdata;
+    logic e32_char_ok_rdata;
+    logic [5:0] e32_to_raddr;
+    logic [11:0] e32_to_delay_rdata, e32_to_period_rdata;
+    logic [15:0] e32_to_fn_rdata, e32_to_id_rdata;
+    logic e32_to_we;
+    logic [5:0] e32_to_waddr;
+    logic [11:0] e32_to_delay_wdata, e32_to_period_wdata;
+    logic [15:0] e32_to_fn_wdata, e32_to_id_wdata;
+    logic [6:0] e32_fn_proto_raddr;
+    logic [15:0] e32_fn_proto_ip_rdata, e32_fn_proto_oid_rdata;
+    logic e32_fn_proto_we;
+    logic [6:0] e32_fn_proto_waddr;
+    logic [15:0] e32_fn_proto_ip_wdata, e32_fn_proto_oid_wdata;
+    logic e32_cstack_we;
+    logic [6:0] e32_cstack_waddr;
+    logic [15:0] e32_cstack_ctorobj_wdata;
+    logic [5:0] e32_cstack_env_wdata;
+    logic [15:0] e32_cstack_fe_arr_wdata, e32_cstack_fe_fn_wdata;
+    logic [7:0] e32_cstack_fe_i_wdata;
+    logic [15:0] e32_cstack_ip_wdata;
+    logic e32_cstack_isctor_wdata, e32_cstack_isfe_wdata;
+    logic [15:0] e32_cstack_map_arr_wdata, e32_cstack_this_wdata;
+    logic [15:0] e32_cs1_ip_rdata, e32_cs2_ip_rdata;
+    logic [15:0] e32_cs1_this_rdata, e32_cs2_this_rdata;
+    logic e32_cs1_isctor_rdata, e32_cs2_isctor_rdata;
+    logic e32_cs1_isfe_rdata, e32_cs2_isfe_rdata;
+    logic [15:0] e32_cs1_ctorobj_rdata, e32_cs2_ctorobj_rdata;
+    logic [15:0] e32_cs1_fe_arr_rdata, e32_cs2_fe_arr_rdata;
+    logic [15:0] e32_cs1_fe_fn_rdata, e32_cs2_fe_fn_rdata;
+    logic [7:0] e32_cs1_fe_i_rdata, e32_cs2_fe_i_rdata;
+    logic [15:0] e32_cs1_map_arr_rdata, e32_cs2_map_arr_rdata;
+    logic [5:0] e32_cs1_env_rdata, e32_cs2_env_rdata;
     // Exec-owned large memories: scalar poke/clr (not unpacked array ports).
     logic e32_p_clr, e32_p_we;
+    logic e32_p_clr_busy;
+    logic e32_leave_hold;
     logic [5:0] e32_p_sel;
     logic [15:0] e32_p_addr, e32_p_addr2;
     logic [63:0] e32_p_data;
+    logic [15:0] e32_obj_cls_rdata;
+    logic [9:0] e32_obj_cls_raddr;
+    logic [5:0] e32_obj_n_rdata;
+    logic [9:0] e32_obj_n_raddr;
+    logic [15:0] e32_tfn_entry_rdata;
+    logic e32_tfn_has_this_rdata;
+    logic [7:0] e32_tfn_nparam_rdata;
+    logic [15:0] e32_tfn_parent_rdata;
+    logic [15:0] e32_tfn_this_rdata;
+    logic [2:0] e32_tfn_this_tag_rdata;
+    logic [12:0] e32_tfn_raddr;
+    logic [10:0] e32_stack_raddr, e32_stack_raddr2;
+    logic signed [31:0] e32_stack_rdata, e32_stack_rdata2;
+    logic [2:0] e32_stack_tag_rdata;
+    logic [10:0] stack_rd_a;
+    logic [9:0] e32_intern_tos, e32_intern_nos;
+    logic [11:0] e32_aid_tos, e32_aid_nos;
+    logic [8:0] e32_vars_raddr;
+    logic [15:0] e32_env_free_rdata;
+    logic e32_name_has_tos, e32_name_has_nos;
+    logic [15:0] e32_name_hash_tos, e32_name_hash_nos;
+    logic [7:0] e32_name_len_tos, e32_name_len_nos;
+    logic [15:0] e32_name_off_tos, e32_name_off_nos;
+    logic [7:0] e32_arr_len_tos_rdata, e32_arr_len_nos_rdata;
+    logic signed [31:0] e32_vars_rdata;
+    logic signed [31:0] e32_consts_rdata;
+    logic [9:0] e32_consts_raddr;
+    logic e32_var_init_rdata;
+    logic [2:0] e32_var_tag_rdata;
+    logic [255:0] spr_hh_pack, spr_nid_pack, spr_ww_pack;
+    logic [63:0] hp_qk_ff_pack;
+    logic [11:0] hp_qt_ff_pack;
+    logic [255:0] hp_qv_ff_pack;
+    // HEAP/FETCH handshake: parent writes these FFs; exec applies only
+    // the masked scalars (ip / hp_* / code_raddr / state). Not a full FF dump.
+    logic hs64, hs32;
+    logic hs_m_ip, hs_m_code, hs_m_state, hs_m_vsp;
+    logic hs_m_hp_cmd, hs_m_hp_v64, hs_m_hp_oid, hs_m_hp_aid, hs_m_hp_env;
+    logic hs_m_hp_eid, hs_m_hp_slot, hs_m_hp_aslot, hs_m_hp_len, hs_m_hp_alen;
+    logic hs_m_hp_lim, hs_m_hp_key, hs_m_hp_wval, hs_m_hp_rval, hs_m_hp_hit;
+    logic hs_m_hp_ret, hs_m_hp_phase, hs_m_hp_proto, hs_m_hp_qn, hs_m_hp_qi;
+    logic hs_m_hp_si, hs_m_hp_ss, hs_m_hp_tn, hs_m_hp_from_stack, hs_m_hp_make_arr;
+    logic hs_m_hp_vbase, hs_m_hp_spr_w, hs_m_hp_spr_h, hs_m_hp_nat, hs_m_hp_tag;
+    logic hs_m_hp_qk, hs_m_hp_qv, hs_m_hp_qt;
+    logic hs_m_valloc_kind, hs_m_valloc_i, hs_m_valloc_arr_n, hs_m_valloc_retried, hs_m_vnat_dom, hs_m_vnat_base, hs_m_valloc_now_fn, hs_m_valloc_bind, hs_m_valloc_bind_src, hs_m_valloc_bind_this, hs_m_valloc_fn_entry, hs_m_valloc_fn_a1, hs_m_valloc_proto, hs_m_valloc_proto_fn, hs_m_valloc_metrics, hs_m_valloc_regex, hs_m_valloc_regex_pack, hs_m_vcall_value, hs_m_vcall_argc, hs_m_vcall_entry, hs_m_vcall_set_this, hs_m_vcall_this, hs_m_vcall_ctor_val, hs_m_vcsp, hs_m_vthis, hs_m_venv;
+    logic hs_m_vraf_n, hs_m_vlistener_n, hs_m_vgc_halt_after, hs_m_vgc_wait_after, hs_m_vgc_clear_i, hs_m_vgc_qr, hs_m_vgc_qw;
+    logic hs_m_vdraw_i, hs_m_vdraw_x, hs_m_vdraw_y, hs_m_vdraw_w, hs_m_vdraw_h, hs_m_vdraw_color;
+
     logic e64_p_clr, e64_p_we;
     logic [5:0] e64_p_sel;
     logic [15:0] e64_p_addr, e64_p_addr2;
@@ -2293,124 +2525,145 @@ module jmr_js_vm #(
     (* keep_hierarchy = "yes" *)
     jmr_js_vm_exec32 u_exec32 (
         .clk(clk),
+        .rst_n(rst_n),
         .enable(((state == S_EXEC) || (state == S_NAT))),
+        .leave_hold(e32_leave_hold),
+        .hs_m_ip(hs_m_ip),
+        .hs_m_code(hs_m_code),
+        .hs_m_state(hs_m_state),
+        .hs_m_hp_cmd(hs_m_hp_cmd),
+        .hs_m_hp_v64(hs_m_hp_v64),
+        .hs_m_hp_oid(hs_m_hp_oid),
+        .hs_m_hp_aid(hs_m_hp_aid),
+        .hs_m_hp_slot(hs_m_hp_slot),
+        .hs_m_hp_aslot(hs_m_hp_aslot),
+        .hs_m_hp_len(hs_m_hp_len),
+        .hs_m_hp_alen(hs_m_hp_alen),
+        .hs_m_hp_lim(hs_m_hp_lim),
+        .hs_m_hp_key(hs_m_hp_key),
+        .hs_m_hp_wval(hs_m_hp_wval),
+        .hs_m_hp_rval(hs_m_hp_rval),
+        .hs_m_hp_hit(hs_m_hp_hit),
+        .hs_m_hp_ret(hs_m_hp_ret),
+        .hs_m_hp_phase(hs_m_hp_phase),
+        .hs_m_hp_proto(hs_m_hp_proto),
+        .hs_m_hp_qn(hs_m_hp_qn),
+        .hs_m_hp_qi(hs_m_hp_qi),
+        .hs_m_hp_si(hs_m_hp_si),
+        .hs_m_hp_ss(hs_m_hp_ss),
+        .hs_m_hp_tn(hs_m_hp_tn),
+        .hs_m_hp_from_stack(hs_m_hp_from_stack),
+        .hs_m_hp_make_arr(hs_m_hp_make_arr),
+        .hs_m_hp_vbase(hs_m_hp_vbase),
+        .hs_m_hp_nat(hs_m_hp_nat),
+        .hs_m_hp_tag(hs_m_hp_tag),
+        .hs_m_hp_qk(hs_m_hp_qk),
+        .hs_m_hp_qv(hs_m_hp_qv),
+        .hs_m_hp_qt(hs_m_hp_qt),
+        .p_clr_busy(e32_p_clr_busy),
         .p_clr(e32_p_clr),
         .p_we(e32_p_we),
         .p_sel(e32_p_sel),
         .p_addr(e32_p_addr),
         .p_addr2(e32_p_addr2),
         .p_data(e32_p_data),
-        .alu_a(alu_a),
-        .alu_b(alu_b),
-        .alu_fx(alu_fx),
-        .alu_op(alu_op),
+        .p_alu_a(alu_a),
+        .p_alu_b(alu_b),
+        .p_alu_fx(alu_fx),
+        .p_alu_op(alu_op),
         .arr_keep_ok(arr_keep_ok),
-        .blit_sh(blit_sh),
-        .blit_si(blit_si),
-        .blit_sw(blit_sw),
-        .blit_sx(blit_sx),
-        .blit_sy(blit_sy),
-        .cc_at(cc_at),
-        .cc_av(cc_av),
-        .cc_bok(cc_bok),
-        .cc_bt(cc_bt),
-        .cc_bv(cc_bv),
-        .cc_d(cc_d),
-        .cc_h(cc_h),
-        .cc_len(cc_len),
-        .cc_second(cc_second),
-        .cc_st(cc_st),
-        .click_fired(click_fired),
-        .click_fn(click_fn),
-        .clr_idx(clr_idx),
-        .code_raddr(code_raddr),
+        .p_blit_sh(blit_sh),
+        .p_blit_si(blit_si),
+        .p_blit_sw(blit_sw),
+        .p_blit_sx(blit_sx),
+        .p_blit_sy(blit_sy),
+        .p_cc_at(cc_at),
+        .p_cc_av(cc_av),
+        .p_cc_bok(cc_bok),
+        .p_cc_bt(cc_bt),
+        .p_cc_bv(cc_bv),
+        .p_cc_d(cc_d),
+        .p_cc_h(cc_h),
+        .p_cc_len(cc_len),
+        .p_cc_second(cc_second),
+        .p_cc_st(cc_st),
+        .p_click_fired(click_fired),
+        .p_click_fn(click_fn),
+        .p_clr_idx(clr_idx),
+        .p_code_raddr(code_raddr_ff),
         .code_rdata(code_rdata),
-        .color(color),
-        .csp(csp),
-        .cstack_ctorobj(cstack_ctorobj),
-        .cstack_env(cstack_env),
-        .cstack_fe_arr(cstack_fe_arr),
-        .cstack_fe_fn(cstack_fe_fn),
-        .cstack_fe_i(cstack_fe_i),
-        .cstack_ip(cstack_ip),
-        .cstack_isctor(cstack_isctor),
-        .cstack_isfe(cstack_isfe),
-        .cstack_map_arr(cstack_map_arr),
-        .cstack_this(cstack_this),
-        .ctx_align(ctx_align),
-        .ctx_font_px(ctx_font_px),
-        .ctx_smooth(ctx_smooth),
-        .ctx_sx(ctx_sx),
-        .ctx_sy(ctx_sy),
-        .ctx_tx(ctx_tx),
-        .ctx_ty(ctx_ty),
-        .dbg_call_ovf(dbg_call_ovf),
-        .dbg_cb_ip(dbg_cb_ip),
-        .dbg_di_hit(dbg_di_hit),
-        .dbg_di_miss(dbg_di_miss),
-        .dbg_div_n(dbg_div_n),
-        .dbg_find_hit(dbg_find_hit),
-        .dbg_heap_ovf(dbg_heap_ovf),
-        .dbg_json_ovf(dbg_json_ovf),
-        .dbg_path_ovf(dbg_path_ovf),
-        .dbg_splice_n(dbg_splice_n),
-        .dbg_stack_ovf(dbg_stack_ovf),
-        .dbg_tmr_sched(dbg_tmr_sched),
-        .dbg_to_ovf(dbg_to_ovf),
-        .did_swap(did_swap),
-        .div_cnt(div_cnt),
-        .div_int_in(div_int_in),
-        .div_neg(div_neg),
-        .div_rem(div_rem),
-        .div_ub(div_ub),
-        .div_uq(div_uq),
-        .env_cap(env_cap),
-        .env_free(env_free),
-        .env_free_n(env_free_n),
-        .env_is_store(env_is_store),
-        .env_ld_slot(env_ld_slot),
-        .env_oid(env_oid),
-        .env_sp(env_sp),
-        .env_walk(env_walk),
-        .fb_dump_addr(fb_dump_addr),
-        .fb_dump_sel(fb_dump_sel),
-        .fb_swap(fb_swap),
-        .fill_style_i(fill_style_i),
-        .fn_proto_ip(fn_proto_ip),
-        .fn_proto_oid(fn_proto_oid),
-        .fp_left(fp_left),
-        .fpx_acc(fpx_acc),
-        .frame_fire(frame_fire),
+        .p_color(color),
+        .p_csp(csp),
+        .p_ctx_align(ctx_align),
+        .p_ctx_font_px(ctx_font_px),
+        .p_ctx_smooth(ctx_smooth),
+        .p_ctx_sx(ctx_sx),
+        .p_ctx_sy(ctx_sy),
+        .p_ctx_tx(ctx_tx),
+        .p_ctx_ty(ctx_ty),
+        .p_dbg_call_ovf(dbg_call_ovf),
+        .p_dbg_cb_ip(dbg_cb_ip),
+        .p_dbg_di_hit(dbg_di_hit),
+        .p_dbg_di_miss(dbg_di_miss),
+        .p_dbg_div_n(dbg_div_n),
+        .p_dbg_find_hit(dbg_find_hit),
+        .p_dbg_heap_ovf(dbg_heap_ovf),
+        .p_dbg_json_ovf(dbg_json_ovf),
+        .p_dbg_path_ovf(dbg_path_ovf),
+        .p_dbg_splice_n(dbg_splice_n),
+        .p_dbg_stack_ovf(dbg_stack_ovf),
+        .p_dbg_tmr_sched(dbg_tmr_sched),
+        .p_dbg_to_ovf(dbg_to_ovf),
+        .p_did_swap(did_swap),
+        .p_div_cnt(div_cnt),
+        .p_div_int_in(div_int_in),
+        .p_div_neg(div_neg),
+        .p_div_rem(div_rem),
+        .p_div_ub(div_ub),
+        .p_div_uq(div_uq),
+        .env_free_rdata(e32_env_free_rdata),
+        .p_env_free_n(env_free_n),
+        .p_env_is_store(env_is_store),
+        .p_env_ld_slot(env_ld_slot),
+        .p_env_sp(env_sp),
+        .p_env_walk(env_walk),
+        .p_fb_dump_addr(fb_dump_addr),
+        .p_fb_dump_sel(fb_dump_sel),
+        .p_fb_swap(fb_swap),
+        .p_fill_style_i(fill_style_i),
+        .p_fp_left(fp_left),
+        .p_fpx_acc(fpx_acc),
+        .p_frame_fire(frame_fire),
         .frame_tick(frame_tick),
-        .hp_aid(hp_aid),
-        .hp_alen(hp_alen),
-        .hp_aslot(hp_aslot),
-        .hp_cmd(hp_cmd),
-        .hp_from_stack(hp_from_stack),
-        .hp_hit(hp_hit),
-        .hp_key(hp_key),
-        .hp_len(hp_len),
-        .hp_lim(hp_lim),
-        .hp_make_arr(hp_make_arr),
-        .hp_nat(hp_nat),
-        .hp_oid(hp_oid),
-        .hp_phase(hp_phase),
-        .hp_proto(hp_proto),
-        .hp_qi(hp_qi),
-        .hp_qk(hp_qk),
-        .hp_qn(hp_qn),
-        .hp_qt(hp_qt),
-        .hp_qv(hp_qv),
-        .hp_ret(hp_ret),
-        .hp_rval(hp_rval),
-        .hp_si(hp_si),
-        .hp_slot(hp_slot),
-        .hp_ss(hp_ss),
-        .hp_tag(hp_tag),
-        .hp_tn(hp_tn),
-        .hp_v64(hp_v64),
-        .hp_vbase(hp_vbase),
-        .hp_wval(hp_wval),
+        .p_hp_aid(hp_aid_ff),
+        .p_hp_alen(hp_alen_ff),
+        .p_hp_aslot(hp_aslot_ff),
+        .p_hp_cmd(hp_cmd_ff),
+        .p_hp_from_stack(hp_from_stack_ff),
+        .p_hp_hit(hp_hit_ff),
+        .p_hp_key(hp_key_ff),
+        .p_hp_len(hp_len_ff),
+        .p_hp_lim(hp_lim_ff),
+        .p_hp_make_arr(hp_make_arr_ff),
+        .p_hp_nat(hp_nat_ff),
+        .p_hp_oid(hp_oid_ff),
+        .p_hp_phase(hp_phase_ff),
+        .p_hp_proto(hp_proto_ff),
+        .p_hp_qi(hp_qi_ff),
+        .p_hp_qk_pack(hp_qk_ff_pack),
+        .p_hp_qn(hp_qn_ff),
+        .p_hp_qt_pack(hp_qt_ff_pack),
+        .p_hp_qv_pack(hp_qv_ff_pack),
+        .p_hp_ret(hp_ret_ff),
+        .p_hp_rval(hp_rval_ff),
+        .p_hp_si(hp_si_ff),
+        .p_hp_slot(hp_slot_ff),
+        .p_hp_ss(hp_ss_ff),
+        .p_hp_tag(hp_tag_ff),
+        .p_hp_tn(hp_tn_ff),
+        .p_hp_v64(hp_v64_ff),
+        .p_hp_vbase(hp_vbase_ff),
+        .p_hp_wval(hp_wval_ff),
         .id_a(id_a),
         .id_ael(id_ael),
         .id_arc(id_arc),
@@ -2496,723 +2749,779 @@ module jmr_js_vm #(
         .id_white(id_white),
         .id_width(id_width),
         .id_yellow(id_yellow),
-        .idx_needle(idx_needle),
-        .idx_t(idx_t),
-        .idx_v(idx_v),
-        .imgd_armed(imgd_armed),
-        .imgd_h(imgd_h),
-        .imgd_i(imgd_i),
-        .imgd_n(imgd_n),
-        .imgd_res(imgd_res),
-        .imgd_w(imgd_w),
-        .imgd_x(imgd_x),
-        .imgd_x0(imgd_x0),
-        .imgd_y(imgd_y),
-        .imgd_y0(imgd_y0),
-        .intern_var(intern_var),
-        .intern_var_ok(intern_var_ok),
-        .ip(ip),
-        .jn_arr(jn_arr),
-        .jn_h(jn_h),
-        .jn_i(jn_i),
-        .jn_res(jn_res),
+        .p_idx_needle(idx_needle),
+        .p_idx_t(idx_t),
+        .p_idx_v(idx_v),
+        .p_imgd_armed(imgd_armed),
+        .p_imgd_h(imgd_h),
+        .p_imgd_i(imgd_i),
+        .p_imgd_n(imgd_n),
+        .p_imgd_res(imgd_res),
+        .p_imgd_w(imgd_w),
+        .p_imgd_x(imgd_x),
+        .p_imgd_x0(imgd_x0),
+        .p_imgd_y(imgd_y),
+        .p_imgd_y0(imgd_y0),
+        .p_ip(ip_ff),
+        .p_jn_arr(jn_arr),
+        .p_jn_h(jn_h),
+        .p_jn_i(jn_i),
+        .p_jn_res(jn_res),
         .joy_in(joy_in),
-        .js_i(js_i),
-        .js_ph(js_ph),
-        .js_sp(js_sp),
-        .js_tag(js_tag),
-        .js_val(js_val),
-        .json_dst(json_dst),
-        .json_pph(json_pph),
-        .json_res(json_res),
-        .json_rp(json_rp),
-        .json_src(json_src),
-        .json_srclen(json_srclen),
-        .json_wp(json_wp),
-        .kd_n(kd_n),
-        .kd_slot(kd_slot),
-        .kev_fn(kev_fn),
-        .kev_is_down(kev_is_down),
-        .kev_li(kev_li),
-        .kev_obj(kev_obj),
-        .kev_ret_ip(kev_ret_ip),
-        .keys_a_oid(keys_a_oid),
-        .keys_d_oid(keys_d_oid),
-        .keys_sp_oid(keys_sp_oid),
-        .ku_n(ku_n),
-        .ku_slot(ku_slot),
-        .lfsr(lfsr),
-        .looping(looping),
-        .metrics_oid(metrics_oid),
-        .mul_a(mul_a),
-        .mul_b(mul_b),
-        .mul_fx_a(mul_fx_a),
-        .mul_fx_b(mul_fx_b),
-        .n_arr(n_arr),
-        .n_arr_keep(n_arr_keep),
+        .p_js_sp(js_sp),
+        .p_json_dst(json_dst),
+        .p_json_pph(json_pph),
+        .p_json_res(json_res),
+        .p_json_rp(json_rp),
+        .p_json_src(json_src),
+        .p_json_srclen(json_srclen),
+        .p_json_wp(json_wp),
+        .p_kd_n(kd_n),
+        .p_kev_fn(kev_fn),
+        .p_kev_is_down(kev_is_down),
+        .p_kev_li(kev_li),
+        .p_kev_obj(kev_obj),
+        .p_kev_ret_ip(kev_ret_ip),
+        .p_keys_a_oid(keys_a_oid),
+        .p_keys_d_oid(keys_d_oid),
+        .p_keys_sp_oid(keys_sp_oid),
+        .p_ku_n(ku_n),
+        .p_lfsr(lfsr),
+        .p_looping(looping),
+        .p_metrics_oid(metrics_oid),
+        .p_mul_a(mul_a),
+        .p_mul_b(mul_b),
+        .p_mul_fx_a(mul_fx_a),
+        .p_mul_fx_b(mul_fx_b),
+        .p_n_arr(n_arr),
+        .p_n_arr_keep(n_arr_keep),
         .n_cls(n_cls),
-        .n_fn_proto(n_fn_proto),
-        .n_obj(n_obj),
-        .n_obj_keep(n_obj_keep),
+        .p_n_fn_proto(n_fn_proto),
+        .p_n_obj(n_obj),
+        .p_n_obj_keep(n_obj_keep),
         .n_ops(n_ops),
         .n_spr(n_spr),
-        .namcpy_armed(namcpy_armed),
-        .namcpy_repl(namcpy_repl),
-        .name_has(name_has),
-        .name_rdaddr(name_rdaddr),
+        .p_namcpy_armed(namcpy_armed),
+        .p_namcpy_repl(namcpy_repl),
+        .name_has_tos(e32_name_has_tos),
+        .name_has_nos(e32_name_has_nos),
+        .name_hash_tos(e32_name_hash_tos),
+        .name_hash_nos(e32_name_hash_nos),
+        .name_len_tos(e32_name_len_tos),
+        .name_len_nos(e32_name_len_nos),
+        .name_off_tos(e32_name_off_tos),
+        .name_off_nos(e32_name_off_nos),
+        .fill_lut_rdata(fill_lut_rdata),
+        .arr_len_tos_rdata(e32_arr_len_tos_rdata),
+        .arr_len_nos_rdata(e32_arr_len_nos_rdata),
+        .vars_rdata(e32_vars_rdata),
+        .consts_rdata(e32_consts_rdata),
+        .consts_raddr(e32_consts_raddr),
+        .var_init_rdata(e32_var_init_rdata),
+        .var_tag_rdata(e32_var_tag_rdata),
+        .p_name_rdaddr(name_rdaddr),
         .name_rdata(name_rdata),
         .names_ok(names_ok),
-        .nat_argc(nat_argc),
-        .nat_id(nat_id),
-        .obj_cls(obj_cls),
+        .p_nat_argc(nat_argc),
+        .p_nat_id(nat_id),
+        .obj_cls_rdata(e32_obj_cls_rdata),
+        .obj_cls_raddr(e32_obj_cls_raddr),
         .obj_keep_ok(obj_keep_ok),
-        .obj_n(obj_n),
+        .obj_n_rdata(e32_obj_n_rdata),
+        .obj_n_raddr(e32_obj_n_raddr),
         .ops_base(ops_base),
-        .path_active(path_active),
-        .path_kind(path_kind),
-        .path_stroke(path_stroke),
-        .pc_a1(pc_a1),
-        .pc_a2(pc_a2),
-        .pc_a3(pc_a3),
-        .pc_a4(pc_a4),
-        .pc_a5(pc_a5),
-        .pc_ccw(pc_ccw),
-        .pc_n(pc_n),
-        .pc_op(pc_op),
-        .pi(pi),
-        .present_pend(present_pend),
-        .raf_fn(raf_fn),
-        .raf_n(raf_n),
-        .rel_i(rel_i),
-        .rel_lim(rel_lim),
-        .rel_nn(rel_nn),
-        .rel_ret(rel_ret),
-        .rel_saved(rel_saved),
-        .repl_did(repl_did),
-        .repl_g(repl_g),
-        .repl_nlen(repl_nlen),
-        .repl_pat0(repl_pat0),
-        .repl_pat1(repl_pat1),
-        .repl_rch(repl_rch),
-        .rh(rh),
-        .running(running),
-        .rw(rw),
-        .rx(rx),
-        .ry(ry),
-        .saved_sx(saved_sx),
-        .saved_sy(saved_sy),
-        .saved_tx(saved_tx),
-        .saved_ty(saved_ty),
-        .sp(sp),
-        .spr_hh(spr_hh),
-        .spr_nid(spr_nid),
-        .spr_ww(spr_ww),
-        .sq_i(sq_i),
-        .sq_rad(sq_rad),
-        .sq_rem(sq_rem),
-        .sq_root(sq_root),
-        .stack_tag(stack_tag),
+        .p_path_active(path_active),
+        .p_path_kind(path_kind),
+        .p_path_stroke(path_stroke),
+        .p_pc_n(pc_n),
+        .p_pi(pi),
+        .p_present_pend(present_pend),
+        .p_raf_n(raf_n),
+        .p_rel_i(rel_i),
+        .p_rel_lim(rel_lim),
+        .p_rel_nn(rel_nn),
+        .p_rel_ret(rel_ret),
+        .p_rel_saved(rel_saved),
+        .p_repl_did(repl_did),
+        .p_repl_g(repl_g),
+        .p_repl_nlen(repl_nlen),
+        .p_repl_pat0(repl_pat0),
+        .p_repl_pat1(repl_pat1),
+        .p_repl_rch(repl_rch),
+        .p_rh(rh),
+        .p_running(running),
+        .p_rw(rw),
+        .p_rx(rx),
+        .p_ry(ry),
+        .p_saved_sx(saved_sx),
+        .p_saved_sy(saved_sy),
+        .p_saved_tx(saved_tx),
+        .p_saved_ty(saved_ty),
+        .p_sp(sp),
+        .spr_hh_pack(spr_hh_pack),
+        .spr_nid_pack(spr_nid_pack),
+        .spr_ww_pack(spr_ww_pack),
+        .stack_raddr(e32_stack_raddr),
+        .stack_raddr2(e32_stack_raddr2),
+        .intern_tos(e32_intern_tos),
+        .intern_nos(e32_intern_nos),
+        .aid_tos(e32_aid_tos),
+        .aid_nos(e32_aid_nos),
+        .vars_raddr(e32_vars_raddr),
+        .intern_var_raddr(e32_intern_var_raddr),
+        .intern_var_rdata(e32_intern_var_rdata),
+        .intern_var_ok_rdata(e32_intern_var_ok_rdata),
+        .env_oid_raddr(e32_env_oid_raddr),
+        .env_oid_rdata(e32_env_oid_rdata),
+        .char_id_raddr(e32_char_id_raddr),
+        .char_id_rdata(e32_char_id_rdata),
+        .char_ok_rdata(e32_char_ok_rdata),
+        .to_raddr(e32_to_raddr),
+        .to_delay_rdata(e32_to_delay_rdata),
+        .to_fn_rdata(e32_to_fn_rdata),
+        .to_id_rdata(e32_to_id_rdata),
+        .to_period_rdata(e32_to_period_rdata),
+        .to_we_q(e32_to_we),
+        .to_waddr_q(e32_to_waddr),
+        .to_delay_wdata_q(e32_to_delay_wdata),
+        .to_period_wdata_q(e32_to_period_wdata),
+        .to_fn_wdata_q(e32_to_fn_wdata),
+        .to_id_wdata_q(e32_to_id_wdata),
+        .fn_proto_raddr(e32_fn_proto_raddr),
+        .fn_proto_ip_rdata(e32_fn_proto_ip_rdata),
+        .fn_proto_oid_rdata(e32_fn_proto_oid_rdata),
+        .fn_proto_we_q(e32_fn_proto_we),
+        .fn_proto_waddr_q(e32_fn_proto_waddr),
+        .fn_proto_ip_wdata_q(e32_fn_proto_ip_wdata),
+        .fn_proto_oid_wdata_q(e32_fn_proto_oid_wdata),
+        .cstack_we_q(e32_cstack_we),
+        .cstack_waddr_q(e32_cstack_waddr),
+        .cstack_ctorobj_wdata_q(e32_cstack_ctorobj_wdata),
+        .cstack_env_wdata_q(e32_cstack_env_wdata),
+        .cstack_fe_arr_wdata_q(e32_cstack_fe_arr_wdata),
+        .cstack_fe_fn_wdata_q(e32_cstack_fe_fn_wdata),
+        .cstack_fe_i_wdata_q(e32_cstack_fe_i_wdata),
+        .cstack_ip_wdata_q(e32_cstack_ip_wdata),
+        .cstack_isctor_wdata_q(e32_cstack_isctor_wdata),
+        .cstack_isfe_wdata_q(e32_cstack_isfe_wdata),
+        .cstack_map_arr_wdata_q(e32_cstack_map_arr_wdata),
+        .cstack_this_wdata_q(e32_cstack_this_wdata),
+        .cs1_ip_rdata(e32_cs1_ip_rdata),
+        .cs1_this_rdata(e32_cs1_this_rdata),
+        .cs1_isctor_rdata(e32_cs1_isctor_rdata),
+        .cs1_isfe_rdata(e32_cs1_isfe_rdata),
+        .cs1_ctorobj_rdata(e32_cs1_ctorobj_rdata),
+        .cs1_fe_arr_rdata(e32_cs1_fe_arr_rdata),
+        .cs1_fe_fn_rdata(e32_cs1_fe_fn_rdata),
+        .cs1_fe_i_rdata(e32_cs1_fe_i_rdata),
+        .cs1_map_arr_rdata(e32_cs1_map_arr_rdata),
+        .cs1_env_rdata(e32_cs1_env_rdata),
+        .cs2_ip_rdata(e32_cs2_ip_rdata),
+        .cs2_this_rdata(e32_cs2_this_rdata),
+        .cs2_isctor_rdata(e32_cs2_isctor_rdata),
+        .cs2_isfe_rdata(e32_cs2_isfe_rdata),
+        .cs2_ctorobj_rdata(e32_cs2_ctorobj_rdata),
+        .cs2_fe_arr_rdata(e32_cs2_fe_arr_rdata),
+        .cs2_fe_fn_rdata(e32_cs2_fe_fn_rdata),
+        .cs2_fe_i_rdata(e32_cs2_fe_i_rdata),
+        .cs2_map_arr_rdata(e32_cs2_map_arr_rdata),
+        .cs2_env_rdata(e32_cs2_env_rdata),
+        .stack_rdata(e32_stack_rdata),
+        .stack_rdata2(e32_stack_rdata2),
+        .p_sq_i(sq_i),
+        .p_sq_rad(sq_rad),
+        .p_sq_rem(sq_rem),
+        .p_sq_root(sq_root),
         .start(start),
-        .state(state),
-        .str_pf_ci(str_pf_ci),
-        .str_pf_id(str_pf_id),
-        .str_pf_ok(str_pf_ok),
-        .str_res(str_res),
-        .tenv_parent(tenv_parent),
-        .tfn_entry(tfn_entry),
-        .tfn_has_this(tfn_has_this),
-        .tfn_nparam(tfn_nparam),
-        .tfn_parent(tfn_parent),
-        .tfn_this(tfn_this),
-        .tfn_this_tag(tfn_this_tag),
-        .this_obj(this_obj),
+        .p_state(state),
+        .p_str_pf_ci(str_pf_ci),
+        .p_str_pf_id(str_pf_id),
+        .p_str_pf_ok(str_pf_ok),
+        .p_str_res(str_res),
+        .tfn_entry_rdata(e32_tfn_entry_rdata),
+        .tfn_has_this_rdata(e32_tfn_has_this_rdata),
+        .tfn_nparam_rdata(e32_tfn_nparam_rdata),
+        .tfn_parent_rdata(e32_tfn_parent_rdata),
+        .tfn_this_rdata(e32_tfn_this_rdata),
+        .tfn_this_tag_rdata(e32_tfn_this_tag_rdata),
+        .tfn_raddr(e32_tfn_raddr),
+        .p_this_obj(this_obj),
         .this_ok(this_ok),
         .time_ms(time_ms),
-        .to_delay(to_delay),
-        .to_fn(to_fn),
-        .to_id(to_id),
-        .to_n(to_n),
-        .to_period(to_period),
-        .to_seq(to_seq),
-        .txt_bn(txt_bn),
-        .txt_buf(txt_buf),
-        .txt_ph(txt_ph),
-        .txt_px(txt_px),
-        .txt_py(txt_py),
-        .txt_rp(txt_rp),
-        .txt_val(txt_val),
-        .txt_vt(txt_vt),
-        .var_init(var_init),
-        .var_tag(var_tag),
+        .p_to_n(to_n),
+        .p_to_seq(to_seq),
+        .p_txt_bn(txt_bn),
+        .p_txt_ph(txt_ph),
+        .p_txt_px(txt_px),
+        .p_txt_py(txt_py),
+        .p_txt_rp(txt_rp),
+        .p_txt_val(txt_val),
+        .p_txt_vt(txt_vt),
         .var_this(var_this),
-        .vars(vars),
-        .vcall_argc(vcall_argc),
-        .vcall_this(vcall_this),
-        .x(x),
-        .xf_dst(xf_dst),
-        .xf_h(xf_h),
-        .xf_w(xf_w),
-        .xf_x(xf_x),
-        .xf_y(xf_y),
-        .y(y),
-        .alu_a_n(e32_alu_a_n),
-        .alu_b_n(e32_alu_b_n),
-        .alu_fx_n(e32_alu_fx_n),
-        .alu_op_n(e32_alu_op_n),
-        .blit_sh_n(e32_blit_sh_n),
-        .blit_si_n(e32_blit_si_n),
-        .blit_sw_n(e32_blit_sw_n),
-        .blit_sx_n(e32_blit_sx_n),
-        .blit_sy_n(e32_blit_sy_n),
-        .cc_at_n(e32_cc_at_n),
-        .cc_av_n(e32_cc_av_n),
-        .cc_bok_n(e32_cc_bok_n),
-        .cc_bt_n(e32_cc_bt_n),
-        .cc_bv_n(e32_cc_bv_n),
-        .cc_d_n(e32_cc_d_n),
-        .cc_h_n(e32_cc_h_n),
-        .cc_len_n(e32_cc_len_n),
-        .cc_second_n(e32_cc_second_n),
-        .cc_st_n(e32_cc_st_n),
-        .click_fired_n(e32_click_fired_n),
-        .click_fn_n(e32_click_fn_n),
-        .clr_idx_n(e32_clr_idx_n),
-        .code_raddr_n(e32_code_raddr_n),
-        .color_n(e32_color_n),
-        .csp_n(e32_csp_n),
-        .ctx_align_n(e32_ctx_align_n),
-        .ctx_font_px_n(e32_ctx_font_px_n),
-        .ctx_smooth_n(e32_ctx_smooth_n),
-        .ctx_sx_n(e32_ctx_sx_n),
-        .ctx_sy_n(e32_ctx_sy_n),
-        .ctx_tx_n(e32_ctx_tx_n),
-        .ctx_ty_n(e32_ctx_ty_n),
-        .dbg_call_ovf_n(e32_dbg_call_ovf_n),
-        .dbg_cb_ip_n(e32_dbg_cb_ip_n),
-        .dbg_di_hit_n(e32_dbg_di_hit_n),
-        .dbg_di_miss_n(e32_dbg_di_miss_n),
-        .dbg_div_n_n(e32_dbg_div_n_n),
-        .dbg_find_hit_n(e32_dbg_find_hit_n),
-        .dbg_heap_ovf_n(e32_dbg_heap_ovf_n),
-        .dbg_json_ovf_n(e32_dbg_json_ovf_n),
-        .dbg_path_ovf_n(e32_dbg_path_ovf_n),
-        .dbg_splice_n_n(e32_dbg_splice_n_n),
-        .dbg_stack_ovf_n(e32_dbg_stack_ovf_n),
-        .dbg_tmr_sched_n(e32_dbg_tmr_sched_n),
-        .dbg_to_ovf_n(e32_dbg_to_ovf_n),
-        .did_swap_n(e32_did_swap_n),
-        .div_cnt_n(e32_div_cnt_n),
-        .div_int_in_n(e32_div_int_in_n),
-        .div_neg_n(e32_div_neg_n),
-        .div_rem_n(e32_div_rem_n),
-        .div_ub_n(e32_div_ub_n),
-        .div_uq_n(e32_div_uq_n),
-        .env_free_n_n(e32_env_free_n_n),
-        .env_is_store_n(e32_env_is_store_n),
-        .env_ld_slot_n(e32_env_ld_slot_n),
-        .env_sp_n(e32_env_sp_n),
-        .env_walk_n(e32_env_walk_n),
-        .fb_dump_addr_n(e32_fb_dump_addr_n),
-        .fb_dump_sel_n(e32_fb_dump_sel_n),
-        .fb_swap_n(e32_fb_swap_n),
-        .fill_style_i_n(e32_fill_style_i_n),
-        .fp_left_n(e32_fp_left_n),
-        .fpx_acc_n(e32_fpx_acc_n),
-        .frame_fire_n(e32_frame_fire_n),
-        .hp_aid_n(e32_hp_aid_n),
-        .hp_alen_n(e32_hp_alen_n),
-        .hp_aslot_n(e32_hp_aslot_n),
-        .hp_cmd_n(e32_hp_cmd_n),
-        .hp_from_stack_n(e32_hp_from_stack_n),
-        .hp_hit_n(e32_hp_hit_n),
-        .hp_key_n(e32_hp_key_n),
-        .hp_len_n(e32_hp_len_n),
-        .hp_lim_n(e32_hp_lim_n),
-        .hp_make_arr_n(e32_hp_make_arr_n),
-        .hp_nat_n(e32_hp_nat_n),
-        .hp_oid_n(e32_hp_oid_n),
-        .hp_phase_n(e32_hp_phase_n),
-        .hp_proto_n(e32_hp_proto_n),
-        .hp_qi_n(e32_hp_qi_n),
-        .hp_qn_n(e32_hp_qn_n),
-        .hp_ret_n(e32_hp_ret_n),
-        .hp_rval_n(e32_hp_rval_n),
-        .hp_si_n(e32_hp_si_n),
-        .hp_slot_n(e32_hp_slot_n),
-        .hp_ss_n(e32_hp_ss_n),
-        .hp_tag_n(e32_hp_tag_n),
-        .hp_tn_n(e32_hp_tn_n),
-        .hp_v64_n(e32_hp_v64_n),
-        .hp_vbase_n(e32_hp_vbase_n),
-        .hp_wval_n(e32_hp_wval_n),
-        .idx_needle_n(e32_idx_needle_n),
-        .idx_t_n(e32_idx_t_n),
-        .idx_v_n(e32_idx_v_n),
-        .imgd_armed_n(e32_imgd_armed_n),
-        .imgd_h_n(e32_imgd_h_n),
-        .imgd_i_n(e32_imgd_i_n),
-        .imgd_n_n(e32_imgd_n_n),
-        .imgd_res_n(e32_imgd_res_n),
-        .imgd_w_n(e32_imgd_w_n),
-        .imgd_x_n(e32_imgd_x_n),
-        .imgd_x0_n(e32_imgd_x0_n),
-        .imgd_y_n(e32_imgd_y_n),
-        .imgd_y0_n(e32_imgd_y0_n),
-        .ip_n(e32_ip_n),
-        .jn_arr_n(e32_jn_arr_n),
-        .jn_h_n(e32_jn_h_n),
-        .jn_i_n(e32_jn_i_n),
-        .jn_res_n(e32_jn_res_n),
-        .js_sp_n(e32_js_sp_n),
-        .json_dst_n(e32_json_dst_n),
-        .json_pph_n(e32_json_pph_n),
-        .json_res_n(e32_json_res_n),
-        .json_rp_n(e32_json_rp_n),
-        .json_src_n(e32_json_src_n),
-        .json_srclen_n(e32_json_srclen_n),
-        .json_wp_n(e32_json_wp_n),
-        .kd_n_n(e32_kd_n_n),
-        .kev_fn_n(e32_kev_fn_n),
-        .kev_is_down_n(e32_kev_is_down_n),
-        .kev_li_n(e32_kev_li_n),
-        .kev_obj_n(e32_kev_obj_n),
-        .kev_ret_ip_n(e32_kev_ret_ip_n),
-        .keys_a_oid_n(e32_keys_a_oid_n),
-        .keys_d_oid_n(e32_keys_d_oid_n),
-        .keys_sp_oid_n(e32_keys_sp_oid_n),
-        .ku_n_n(e32_ku_n_n),
-        .lfsr_n(e32_lfsr_n),
-        .looping_n(e32_looping_n),
-        .metrics_oid_n(e32_metrics_oid_n),
-        .mul_a_n(e32_mul_a_n),
-        .mul_b_n(e32_mul_b_n),
-        .mul_fx_a_n(e32_mul_fx_a_n),
-        .mul_fx_b_n(e32_mul_fx_b_n),
-        .n_arr_n(e32_n_arr_n),
-        .n_arr_keep_n(e32_n_arr_keep_n),
-        .n_fn_proto_n(e32_n_fn_proto_n),
-        .n_obj_n(e32_n_obj_n),
-        .n_obj_keep_n(e32_n_obj_keep_n),
-        .namcpy_armed_n(e32_namcpy_armed_n),
-        .namcpy_repl_n(e32_namcpy_repl_n),
-        .name_rdaddr_n(e32_name_rdaddr_n),
-        .nat_argc_n(e32_nat_argc_n),
-        .nat_id_n(e32_nat_id_n),
-        .path_active_n(e32_path_active_n),
-        .path_kind_n(e32_path_kind_n),
-        .path_stroke_n(e32_path_stroke_n),
-        .pc_n_n(e32_pc_n_n),
-        .pi_n(e32_pi_n),
-        .present_pend_n(e32_present_pend_n),
-        .raf_n_n(e32_raf_n_n),
-        .rel_i_n(e32_rel_i_n),
-        .rel_lim_n(e32_rel_lim_n),
-        .rel_nn_n(e32_rel_nn_n),
-        .rel_ret_n(e32_rel_ret_n),
-        .rel_saved_n(e32_rel_saved_n),
-        .repl_did_n(e32_repl_did_n),
-        .repl_g_n(e32_repl_g_n),
-        .repl_nlen_n(e32_repl_nlen_n),
-        .repl_pat0_n(e32_repl_pat0_n),
-        .repl_pat1_n(e32_repl_pat1_n),
-        .repl_rch_n(e32_repl_rch_n),
-        .rh_n(e32_rh_n),
-        .running_n(e32_running_n),
-        .rw_n(e32_rw_n),
-        .rx_n(e32_rx_n),
-        .ry_n(e32_ry_n),
-        .saved_sx_n(e32_saved_sx_n),
-        .saved_sy_n(e32_saved_sy_n),
-        .saved_tx_n(e32_saved_tx_n),
-        .saved_ty_n(e32_saved_ty_n),
-        .sp_n(e32_sp_n),
-        .sq_i_n(e32_sq_i_n),
-        .sq_rad_n(e32_sq_rad_n),
-        .sq_rem_n(e32_sq_rem_n),
-        .sq_root_n(e32_sq_root_n),
-        .state_n(e32_state_n),
-        .str_pf_ci_n(e32_str_pf_ci_n),
-        .str_pf_id_n(e32_str_pf_id_n),
-        .str_pf_ok_n(e32_str_pf_ok_n),
-        .str_res_n(e32_str_res_n),
-        .this_obj_n(e32_this_obj_n),
-        .to_n_n(e32_to_n_n),
-        .to_seq_n(e32_to_seq_n),
-        .txt_bn_n(e32_txt_bn_n),
-        .txt_ph_n(e32_txt_ph_n),
-        .txt_px_n(e32_txt_px_n),
-        .txt_py_n(e32_txt_py_n),
-        .txt_rp_n(e32_txt_rp_n),
-        .txt_val_n(e32_txt_val_n),
-        .txt_vt_n(e32_txt_vt_n),
-        .vcall_argc_n(e32_vcall_argc_n),
-        .vcall_this_n(e32_vcall_this_n),
-        .x_n(e32_x_n),
-        .xf_dst_n(e32_xf_dst_n),
-        .xf_h_n(e32_xf_h_n),
-        .xf_w_n(e32_xf_w_n),
-        .xf_x_n(e32_xf_x_n),
-        .xf_y_n(e32_xf_y_n),
-        .y_n(e32_y_n),
-        .cstack_ctorobj_n(e32_cstack_ctorobj_n),
-        .cstack_env_n(e32_cstack_env_n),
-        .cstack_fe_arr_n(e32_cstack_fe_arr_n),
-        .cstack_fe_fn_n(e32_cstack_fe_fn_n),
-        .cstack_fe_i_n(e32_cstack_fe_i_n),
-        .cstack_ip_n(e32_cstack_ip_n),
-        .cstack_isctor_n(e32_cstack_isctor_n),
-        .cstack_isfe_n(e32_cstack_isfe_n),
-        .cstack_map_arr_n(e32_cstack_map_arr_n),
-        .cstack_this_n(e32_cstack_this_n),
-        .fn_proto_ip_n(e32_fn_proto_ip_n),
-        .fn_proto_oid_n(e32_fn_proto_oid_n),
-        .hp_qk_n(e32_hp_qk_n),
-        .hp_qt_n(e32_hp_qt_n),
-        .hp_qv_n(e32_hp_qv_n),
-        .js_i_n(e32_js_i_n),
-        .js_ph_n(e32_js_ph_n),
-        .js_tag_n(e32_js_tag_n),
-        .js_val_n(e32_js_val_n),
-        .kd_slot_n(e32_kd_slot_n),
-        .ku_slot_n(e32_ku_slot_n),
-        .pc_a1_n(e32_pc_a1_n),
-        .pc_a2_n(e32_pc_a2_n),
-        .pc_a3_n(e32_pc_a3_n),
-        .pc_a4_n(e32_pc_a4_n),
-        .pc_a5_n(e32_pc_a5_n),
-        .pc_ccw_n(e32_pc_ccw_n),
-        .pc_op_n(e32_pc_op_n),
-        .raf_fn_n(e32_raf_fn_n),
-        .to_delay_n(e32_to_delay_n),
-        .to_fn_n(e32_to_fn_n),
-        .to_id_n(e32_to_id_n),
-        .to_period_n(e32_to_period_n),
-        .arr_len_we(e32_arr_len_we),
-        .arr_len_waddr(e32_arr_len_waddr),
-        .arr_len_wdata(e32_arr_len_wdata),
-        .env_cap_we(e32_env_cap_we),
-        .env_cap_waddr(e32_env_cap_waddr),
-        .env_cap_wdata(e32_env_cap_wdata),
-        .env_oid_we(e32_env_oid_we),
-        .env_oid_waddr(e32_env_oid_waddr),
-        .env_oid_wdata(e32_env_oid_wdata),
-        .json_mem_we(e32_json_mem_we),
-        .json_mem_waddr(e32_json_mem_waddr),
-        .json_mem_wdata(e32_json_mem_wdata),
-        .obj_cls_we(e32_obj_cls_we),
-        .obj_cls_waddr(e32_obj_cls_waddr),
-        .obj_cls_wdata(e32_obj_cls_wdata),
-        .obj_n_we(e32_obj_n_we),
-        .obj_n_waddr(e32_obj_n_waddr),
-        .obj_n_wdata(e32_obj_n_wdata),
-        .stack_we(e32_stack_we),
-        .stack_waddr(e32_stack_waddr),
-        .stack_wdata(e32_stack_wdata),
-        .stack_tag_we(e32_stack_tag_we),
-        .stack_tag_waddr(e32_stack_tag_waddr),
-        .stack_tag_wdata(e32_stack_tag_wdata),
-        .tenv_parent_we(e32_tenv_parent_we),
-        .tenv_parent_waddr(e32_tenv_parent_waddr),
-        .tenv_parent_wdata(e32_tenv_parent_wdata),
-        .tfn_entry_we(e32_tfn_entry_we),
-        .tfn_entry_waddr(e32_tfn_entry_waddr),
-        .tfn_entry_wdata(e32_tfn_entry_wdata),
-        .tfn_has_this_we(e32_tfn_has_this_we),
-        .tfn_has_this_waddr(e32_tfn_has_this_waddr),
-        .tfn_has_this_wdata(e32_tfn_has_this_wdata),
-        .tfn_nparam_we(e32_tfn_nparam_we),
-        .tfn_nparam_waddr(e32_tfn_nparam_waddr),
-        .tfn_nparam_wdata(e32_tfn_nparam_wdata),
-        .tfn_parent_we(e32_tfn_parent_we),
-        .tfn_parent_waddr(e32_tfn_parent_waddr),
-        .tfn_parent_wdata(e32_tfn_parent_wdata),
-        .tfn_this_we(e32_tfn_this_we),
-        .tfn_this_waddr(e32_tfn_this_waddr),
-        .tfn_this_wdata(e32_tfn_this_wdata),
-        .tfn_this_tag_we(e32_tfn_this_tag_we),
-        .tfn_this_tag_waddr(e32_tfn_this_tag_waddr),
-        .tfn_this_tag_wdata(e32_tfn_this_tag_wdata),
-        .var_init_we(e32_var_init_we),
-        .var_init_waddr(e32_var_init_waddr),
-        .var_init_wdata(e32_var_init_wdata),
-        .var_tag_we(e32_var_tag_we),
-        .var_tag_waddr(e32_var_tag_waddr),
-        .var_tag_wdata(e32_var_tag_wdata),
-        .vars_we(e32_vars_we),
-        .vars_waddr(e32_vars_waddr),
-        .vars_wdata(e32_vars_wdata),
-        .vobj_len_we(e32_vobj_len_we),
-        .vobj_len_waddr(e32_vobj_len_waddr),
-        .vobj_len_wdata(e32_vobj_len_wdata)
+        .p_vcall_argc(vcall_argc_ff),
+        .p_vcall_this(vcall_this_ff),
+        .p_x(x),
+        .p_xf_dst(xf_dst),
+        .p_xf_h(xf_h),
+        .p_xf_w(xf_w),
+        .p_xf_x(xf_x),
+        .p_xf_y(xf_y),
+        .p_y(y),
+        .alu_a_q(e32_alu_a_q),
+        .alu_b_q(e32_alu_b_q),
+        .alu_fx_q(e32_alu_fx_q),
+        .alu_op_q(e32_alu_op_q),
+        .blit_sh_q(e32_blit_sh_q),
+        .blit_si_q(e32_blit_si_q),
+        .blit_sw_q(e32_blit_sw_q),
+        .blit_sx_q(e32_blit_sx_q),
+        .blit_sy_q(e32_blit_sy_q),
+        .cc_at_q(e32_cc_at_q),
+        .cc_av_q(e32_cc_av_q),
+        .cc_bok_q(e32_cc_bok_q),
+        .cc_bt_q(e32_cc_bt_q),
+        .cc_bv_q(e32_cc_bv_q),
+        .cc_d_q(e32_cc_d_q),
+        .cc_h_q(e32_cc_h_q),
+        .cc_len_q(e32_cc_len_q),
+        .cc_second_q(e32_cc_second_q),
+        .cc_st_q(e32_cc_st_q),
+        .click_fired_q(e32_click_fired_q),
+        .click_fn_q(e32_click_fn_q),
+        .clr_idx_q(e32_clr_idx_q),
+        .code_raddr_q(e32_code_raddr_q),
+        .color_q(e32_color_q),
+        .csp_q(e32_csp_q),
+        .ctx_align_q(e32_ctx_align_q),
+        .ctx_font_px_q(e32_ctx_font_px_q),
+        .ctx_smooth_q(e32_ctx_smooth_q),
+        .ctx_sx_q(e32_ctx_sx_q),
+        .ctx_sy_q(e32_ctx_sy_q),
+        .ctx_tx_q(e32_ctx_tx_q),
+        .ctx_ty_q(e32_ctx_ty_q),
+        .dbg_call_ovf_q(e32_dbg_call_ovf_q),
+        .dbg_cb_ip_q(e32_dbg_cb_ip_q),
+        .dbg_di_hit_q(e32_dbg_di_hit_q),
+        .dbg_di_miss_q(e32_dbg_di_miss_q),
+        .dbg_div_n_q(e32_dbg_div_n_q),
+        .dbg_find_hit_q(e32_dbg_find_hit_q),
+        .dbg_heap_ovf_q(e32_dbg_heap_ovf_q),
+        .dbg_json_ovf_q(e32_dbg_json_ovf_q),
+        .dbg_path_ovf_q(e32_dbg_path_ovf_q),
+        .dbg_splice_n_q(e32_dbg_splice_n_q),
+        .dbg_stack_ovf_q(e32_dbg_stack_ovf_q),
+        .dbg_tmr_sched_q(e32_dbg_tmr_sched_q),
+        .dbg_to_ovf_q(e32_dbg_to_ovf_q),
+        .did_swap_q(e32_did_swap_q),
+        .div_cnt_q(e32_div_cnt_q),
+        .div_int_in_q(e32_div_int_in_q),
+        .div_neg_q(e32_div_neg_q),
+        .div_rem_q(e32_div_rem_q),
+        .div_ub_q(e32_div_ub_q),
+        .div_uq_q(e32_div_uq_q),
+        .env_free_n_q(e32_env_free_n_q),
+        .env_is_store_q(e32_env_is_store_q),
+        .env_ld_slot_q(e32_env_ld_slot_q),
+        .env_sp_q(e32_env_sp_q),
+        .env_walk_q(e32_env_walk_q),
+        .fb_dump_addr_q(e32_fb_dump_addr_q),
+        .fb_dump_sel_q(e32_fb_dump_sel_q),
+        .fb_swap_q(e32_fb_swap_q),
+        .fill_style_i_q(e32_fill_style_i_q),
+        .fp_left_q(e32_fp_left_q),
+        .fpx_acc_q(e32_fpx_acc_q),
+        .frame_fire_q(e32_frame_fire_q),
+        .hp_aid_q(e32_hp_aid_q),
+        .hp_alen_q(e32_hp_alen_q),
+        .hp_aslot_q(e32_hp_aslot_q),
+        .hp_cmd_q(e32_hp_cmd_q),
+        .hp_from_stack_q(e32_hp_from_stack_q),
+        .hp_hit_q(e32_hp_hit_q),
+        .hp_key_q(e32_hp_key_q),
+        .hp_len_q(e32_hp_len_q),
+        .hp_lim_q(e32_hp_lim_q),
+        .hp_make_arr_q(e32_hp_make_arr_q),
+        .hp_nat_q(e32_hp_nat_q),
+        .hp_oid_q(e32_hp_oid_q),
+        .hp_phase_q(e32_hp_phase_q),
+        .hp_proto_q(e32_hp_proto_q),
+        .hp_qi_q(e32_hp_qi_q),
+        .hp_qn_q(e32_hp_qn_q),
+        .hp_ret_q(e32_hp_ret_q),
+        .hp_rval_q(e32_hp_rval_q),
+        .hp_si_q(e32_hp_si_q),
+        .hp_slot_q(e32_hp_slot_q),
+        .hp_ss_q(e32_hp_ss_q),
+        .hp_tag_q(e32_hp_tag_q),
+        .hp_tn_q(e32_hp_tn_q),
+        .hp_v64_q(e32_hp_v64_q),
+        .hp_vbase_q(e32_hp_vbase_q),
+        .hp_wval_q(e32_hp_wval_q),
+        .idx_needle_q(e32_idx_needle_q),
+        .idx_t_q(e32_idx_t_q),
+        .idx_v_q(e32_idx_v_q),
+        .imgd_armed_q(e32_imgd_armed_q),
+        .imgd_h_q(e32_imgd_h_q),
+        .imgd_i_q(e32_imgd_i_q),
+        .imgd_n_q(e32_imgd_n_q),
+        .imgd_res_q(e32_imgd_res_q),
+        .imgd_w_q(e32_imgd_w_q),
+        .imgd_x_q(e32_imgd_x_q),
+        .imgd_x0_q(e32_imgd_x0_q),
+        .imgd_y_q(e32_imgd_y_q),
+        .imgd_y0_q(e32_imgd_y0_q),
+        .ip_q(e32_ip_q),
+        .jn_arr_q(e32_jn_arr_q),
+        .jn_h_q(e32_jn_h_q),
+        .jn_i_q(e32_jn_i_q),
+        .jn_res_q(e32_jn_res_q),
+        .js_sp_q(e32_js_sp_q),
+        .json_dst_q(e32_json_dst_q),
+        .json_pph_q(e32_json_pph_q),
+        .json_res_q(e32_json_res_q),
+        .json_rp_q(e32_json_rp_q),
+        .json_src_q(e32_json_src_q),
+        .json_srclen_q(e32_json_srclen_q),
+        .json_wp_q(e32_json_wp_q),
+        .kd_n_q(e32_kd_n_q),
+        .kev_fn_q(e32_kev_fn_q),
+        .kev_is_down_q(e32_kev_is_down_q),
+        .kev_li_q(e32_kev_li_q),
+        .kev_obj_q(e32_kev_obj_q),
+        .kev_ret_ip_q(e32_kev_ret_ip_q),
+        .keys_a_oid_q(e32_keys_a_oid_q),
+        .keys_d_oid_q(e32_keys_d_oid_q),
+        .keys_sp_oid_q(e32_keys_sp_oid_q),
+        .ku_n_q(e32_ku_n_q),
+        .lfsr_q(e32_lfsr_q),
+        .looping_q(e32_looping_q),
+        .metrics_oid_q(e32_metrics_oid_q),
+        .mul_a_q(e32_mul_a_q),
+        .mul_b_q(e32_mul_b_q),
+        .mul_fx_a_q(e32_mul_fx_a_q),
+        .mul_fx_b_q(e32_mul_fx_b_q),
+        .n_arr_q(e32_n_arr_q),
+        .n_arr_keep_q(e32_n_arr_keep_q),
+        .n_fn_proto_q(e32_n_fn_proto_q),
+        .n_obj_q(e32_n_obj_q),
+        .n_obj_keep_q(e32_n_obj_keep_q),
+        .namcpy_armed_q(e32_namcpy_armed_q),
+        .namcpy_repl_q(e32_namcpy_repl_q),
+        .name_rdaddr_q(e32_name_rdaddr_q),
+        .nat_argc_q(e32_nat_argc_q),
+        .nat_id_q(e32_nat_id_q),
+        .path_active_q(e32_path_active_q),
+        .path_kind_q(e32_path_kind_q),
+        .path_stroke_q(e32_path_stroke_q),
+        .pc_n_q(e32_pc_n_q),
+        .pi_q(e32_pi_q),
+        .present_pend_q(e32_present_pend_q),
+        .raf_n_q(e32_raf_n_q),
+        .rel_i_q(e32_rel_i_q),
+        .rel_lim_q(e32_rel_lim_q),
+        .rel_nn_q(e32_rel_nn_q),
+        .rel_ret_q(e32_rel_ret_q),
+        .rel_saved_q(e32_rel_saved_q),
+        .repl_did_q(e32_repl_did_q),
+        .repl_g_q(e32_repl_g_q),
+        .repl_nlen_q(e32_repl_nlen_q),
+        .repl_pat0_q(e32_repl_pat0_q),
+        .repl_pat1_q(e32_repl_pat1_q),
+        .repl_rch_q(e32_repl_rch_q),
+        .rh_q(e32_rh_q),
+        .running_q(e32_running_q),
+        .rw_q(e32_rw_q),
+        .rx_q(e32_rx_q),
+        .ry_q(e32_ry_q),
+        .saved_sx_q(e32_saved_sx_q),
+        .saved_sy_q(e32_saved_sy_q),
+        .saved_tx_q(e32_saved_tx_q),
+        .saved_ty_q(e32_saved_ty_q),
+        .sp_q(e32_sp_q),
+        .sq_i_q(e32_sq_i_q),
+        .sq_rad_q(e32_sq_rad_q),
+        .sq_rem_q(e32_sq_rem_q),
+        .sq_root_q(e32_sq_root_q),
+        .state_q(e32_state_q),
+        .str_pf_ci_q(e32_str_pf_ci_q),
+        .str_pf_id_q(e32_str_pf_id_q),
+        .str_pf_ok_q(e32_str_pf_ok_q),
+        .str_res_q(e32_str_res_q),
+        .this_obj_q(e32_this_obj_q),
+        .to_n_q(e32_to_n_q),
+        .to_seq_q(e32_to_seq_q),
+        .txt_bn_q(e32_txt_bn_q),
+        .txt_ph_q(e32_txt_ph_q),
+        .txt_px_q(e32_txt_px_q),
+        .txt_py_q(e32_txt_py_q),
+        .txt_rp_q(e32_txt_rp_q),
+        .txt_val_q(e32_txt_val_q),
+        .txt_vt_q(e32_txt_vt_q),
+        .vcall_argc_q(e32_vcall_argc_q),
+        .vcall_this_q(e32_vcall_this_q),
+        .x_q(e32_x_q),
+        .xf_dst_q(e32_xf_dst_q),
+        .xf_h_q(e32_xf_h_q),
+        .xf_w_q(e32_xf_w_q),
+        .xf_x_q(e32_xf_x_q),
+        .xf_y_q(e32_xf_y_q),
+        .y_q(e32_y_q),
+        .hp_qk_pack_q(e32_hp_qk_pack_q),
+        .hp_qt_pack_q(e32_hp_qt_pack_q),
+        .hp_qv_pack_q(e32_hp_qv_pack_q),
+        .arr_len_we_q(e32_arr_len_we),
+        .arr_len_waddr_q(e32_arr_len_waddr),
+        .arr_len_wdata_q(e32_arr_len_wdata),
+        .env_cap_we_q(e32_env_cap_we),
+        .env_cap_waddr_q(e32_env_cap_waddr),
+        .env_cap_wdata_q(e32_env_cap_wdata),
+        .env_oid_we_q(e32_env_oid_we),
+        .env_oid_waddr_q(e32_env_oid_waddr),
+        .env_oid_wdata_q(e32_env_oid_wdata),
+        .json_mem_we_q(e32_json_mem_we),
+        .json_mem_waddr_q(e32_json_mem_waddr),
+        .json_mem_wdata_q(e32_json_mem_wdata),
+        .obj_cls_we_q(e32_obj_cls_we),
+        .obj_cls_waddr_q(e32_obj_cls_waddr),
+        .obj_cls_wdata_q(e32_obj_cls_wdata),
+        .obj_n_we_q(e32_obj_n_we),
+        .obj_n_waddr_q(e32_obj_n_waddr),
+        .obj_n_wdata_q(e32_obj_n_wdata),
+        .stack_we_q(e32_stack_we),
+        .stack_waddr_q(e32_stack_waddr),
+        .stack_wdata_q(e32_stack_wdata),
+        .stack_tag_we_q(e32_stack_tag_we),
+        .stack_tag_waddr_q(e32_stack_tag_waddr),
+        .stack_tag_wdata_q(e32_stack_tag_wdata),
+        .tenv_parent_we_q(e32_tenv_parent_we),
+        .tenv_parent_waddr_q(e32_tenv_parent_waddr),
+        .tenv_parent_wdata_q(e32_tenv_parent_wdata),
+        .tfn_entry_we_q(e32_tfn_entry_we),
+        .tfn_entry_waddr_q(e32_tfn_entry_waddr),
+        .tfn_entry_wdata_q(e32_tfn_entry_wdata),
+        .tfn_has_this_we_q(e32_tfn_has_this_we),
+        .tfn_has_this_waddr_q(e32_tfn_has_this_waddr),
+        .tfn_has_this_wdata_q(e32_tfn_has_this_wdata),
+        .tfn_nparam_we_q(e32_tfn_nparam_we),
+        .tfn_nparam_waddr_q(e32_tfn_nparam_waddr),
+        .tfn_nparam_wdata_q(e32_tfn_nparam_wdata),
+        .tfn_parent_we_q(e32_tfn_parent_we),
+        .tfn_parent_waddr_q(e32_tfn_parent_waddr),
+        .tfn_parent_wdata_q(e32_tfn_parent_wdata),
+        .tfn_this_we_q(e32_tfn_this_we),
+        .tfn_this_waddr_q(e32_tfn_this_waddr),
+        .tfn_this_wdata_q(e32_tfn_this_wdata),
+        .tfn_this_tag_we_q(e32_tfn_this_tag_we),
+        .tfn_this_tag_waddr_q(e32_tfn_this_tag_waddr),
+        .tfn_this_tag_wdata_q(e32_tfn_this_tag_wdata),
+        .var_init_we_q(e32_var_init_we),
+        .var_init_waddr_q(e32_var_init_waddr),
+        .var_init_wdata_q(e32_var_init_wdata),
+        .var_tag_we_q(e32_var_tag_we),
+        .var_tag_waddr_q(e32_var_tag_waddr),
+        .var_tag_wdata_q(e32_var_tag_wdata),
+        .vars_we_q(e32_vars_we),
+        .vars_waddr_q(e32_vars_waddr),
+        .vars_wdata_q(e32_vars_wdata),
+        .vobj_len_we_q(e32_vobj_len_we),
+        .vobj_len_waddr_q(e32_vobj_len_waddr),
+        .vobj_len_wdata_q(e32_vobj_len_wdata)
     );
 
     // Hierarchical jmr_js_vm_exec64: keep_hierarchy so Vivado does not flatten
     // the opcode mux back into the parent always_ff.
-    logic e64_aset_win_retried_n;
-    logic [7:0] e64_bind_argc_n;
-    logic [11:0] e64_bind_base_n;
-    logic [15:0] e64_bind_ip_n;
-    logic [7:0] e64_bind_k_n;
-    logic [1:0] e64_bind_mode_n;
-    logic [7:0] e64_bind_n_n;
-    logic e64_bind_rd_arm_n;
-    logic [6:0] e64_bind_ret_n;
-    logic [11:0] e64_bind_src_n;
-    logic [11:0] e64_bind_vsp_next_n;
-    logic [15:0] e64_blit_sh_n;
-    logic [7:0] e64_blit_si_n;
-    logic [15:0] e64_blit_sw_n;
-    logic [15:0] e64_blit_sx_n;
-    logic [15:0] e64_blit_sy_n;
-    logic [2:0] e64_cc_at_n;
-    logic signed [31:0] e64_cc_av_n;
-    logic e64_cc_bok_n;
-    logic [2:0] e64_cc_bt_n;
-    logic signed [31:0] e64_cc_bv_n;
-    logic [3:0] e64_cc_d_n;
-    logic [15:0] e64_cc_h_n;
-    logic [7:0] e64_cc_len_n;
-    logic e64_cc_second_n;
-    logic [1:0] e64_cc_st_n;
-    logic [14:0] e64_code_raddr_n;
-    logic [7:0] e64_color_n;
-    logic [1:0] e64_ctx_align_n;
-    logic e64_ctx_smooth_n;
-    logic signed [31:0] e64_ctx_sx_n;
-    logic signed [31:0] e64_ctx_sy_n;
-    logic signed [31:0] e64_ctx_tx_n;
-    logic signed [31:0] e64_ctx_ty_n;
-    logic [15:0] e64_dbg_di_hit_n;
-    logic [15:0] e64_dbg_di_miss_n;
-    logic [15:0] e64_dbg_div_n_n;
-    logic [15:0] e64_dbg_json_ovf_n;
-    logic [15:0] e64_dbg_path_ovf_n;
-    logic [7:0] e64_fault_code_n;
-    logic [18:0] e64_fb_dump_addr_n;
-    logic e64_fb_dump_sel_n;
-    logic e64_fb_swap_n;
-    logic [7:0] e64_fill_style_i_n;
-    logic [7:0] e64_stroke_style_i_n;
-    logic [11:0] e64_hp_aid_n;
-    logic [7:0] e64_hp_alen_n;
-    logic [6:0] e64_hp_aslot_n;
-    logic [3:0] e64_hp_cmd_n;
-    logic [9:0] e64_hp_eid_n;
-    logic e64_hp_env_n;
-    logic e64_hp_from_stack_n;
-    logic e64_hp_hit_n;
-    logic [15:0] e64_hp_key_n;
-    logic [5:0] e64_hp_len_n;
-    logic [7:0] e64_hp_lim_n;
-    logic e64_hp_make_arr_n;
-    logic [3:0] e64_hp_nat_n;
-    logic [12:0] e64_hp_oid_n;
-    logic [2:0] e64_hp_phase_n;
-    logic [63:0] e64_hp_proto_n;
-    logic [2:0] e64_hp_qi_n;
-    logic [2:0] e64_hp_qn_n;
-    logic [6:0] e64_hp_ret_n;
-    logic [63:0] e64_hp_rval_n;
-    logic [12:0] e64_hp_si_n;
-    logic [4:0] e64_hp_slot_n;
-    logic [15:0] e64_hp_spr_h_n;
-    logic [15:0] e64_hp_spr_w_n;
-    logic [4:0] e64_hp_ss_n;
-    logic [2:0] e64_hp_tag_n;
-    logic [5:0] e64_hp_tn_n;
-    logic e64_hp_v64_n;
-    logic [11:0] e64_hp_vbase_n;
-    logic [63:0] e64_hp_wval_n;
-    logic e64_imgd_armed_n;
-    logic [9:0] e64_imgd_h_n;
-    logic [18:0] e64_imgd_i_n;
-    logic [18:0] e64_imgd_n_n;
-    logic e64_imgd_v64_n;
-    logic [9:0] e64_imgd_w_n;
-    logic [9:0] e64_imgd_x_n;
-    logic [9:0] e64_imgd_x0_n;
-    logic [9:0] e64_imgd_y_n;
-    logic [9:0] e64_imgd_y0_n;
-    logic [15:0] e64_ip_n;
-    logic [11:0] e64_jn_arr_n;
-    logic [15:0] e64_jn_h_n;
-    logic [15:0] e64_jn_i_n;
-    logic [10:0] e64_jn_res_n;
-    logic [5:0] e64_js_sp_n;
-    logic [2:0] e64_json_pph_n;
-    logic [13:0] e64_json_rp_n;
-    logic [13:0] e64_json_src_n;
-    logic [13:0] e64_json_srclen_n;
-    logic [13:0] e64_json_wp_n;
-    logic e64_looping_n;
-    logic e64_machine_fault_n;
-    logic [63:0] e64_minmax_acc_n;
-    logic [11:0] e64_minmax_base_n;
-    logic e64_minmax_is_min_n;
-    logic [7:0] e64_minmax_k_n;
-    logic [7:0] e64_minmax_n_n;
-    logic e64_namcpy_armed_n;
-    logic e64_namcpy_repl_n;
-    logic e64_namcpy_v64_n;
-    logic [15:0] e64_name_rdaddr_n;
-    logic e64_path_active_n;
-    logic [1:0] e64_path_kind_n;
-    logic e64_path_stroke_n;
-    logic [4:0] e64_pc_n_n;
-    logic [4:0] e64_pi_n;
-    logic e64_repl_did_n;
-    logic e64_repl_g_n;
-    logic [7:0] e64_repl_nlen_n;
-    logic [7:0] e64_repl_pat0_n;
-    logic [7:0] e64_repl_pat1_n;
-    logic [7:0] e64_repl_rch_n;
-    logic [9:0] e64_rh_n;
-    logic e64_running_n;
-    logic [9:0] e64_rw_n;
-    logic [9:0] e64_rx_n;
-    logic [9:0] e64_ry_n;
-    logic signed [31:0] e64_saved_sx_n;
-    logic signed [31:0] e64_saved_sy_n;
-    logic signed [31:0] e64_saved_tx_n;
-    logic signed [31:0] e64_saved_ty_n;
-    logic [4:0] e64_sq_i_n;
-    logic [47:0] e64_sq_rad_n;
-    logic [25:0] e64_sq_rem_n;
-    logic [23:0] e64_sq_root_n;
-    logic [6:0] e64_state_n;
-    logic [6:0] e64_txt_bn_n;
-    logic [3:0] e64_txt_ph_n;
-    logic signed [15:0] e64_txt_px_n;
-    logic signed [15:0] e64_txt_py_n;
-    logic [31:0] e64_txt_val_n;
-    logic [2:0] e64_txt_vt_n;
-    logic e64_v64_concat_n;
-    logic e64_v64_join_n;
-    logic e64_v64_repl_n;
-    logic e64_v64_sqrt_n;
-    logic [7:0] e64_valloc_arr_n_n;
-    logic e64_valloc_bind_n;
-    logic [12:0] e64_valloc_bind_src_n;
-    logic [63:0] e64_valloc_bind_this_n;
-    logic [7:0] e64_valloc_fn_a1_n;
-    logic [15:0] e64_valloc_fn_entry_n;
-    logic [13:0] e64_valloc_i_n;
-    logic [1:0] e64_valloc_kind_n;
-    logic e64_valloc_metrics_n;
-    logic e64_valloc_now_fn_n;
-    logic e64_valloc_proto_n;
-    logic [12:0] e64_valloc_proto_fn_n;
-    logic e64_valloc_regex_n;
-    logic [31:0] e64_valloc_regex_pack_n;
-    logic e64_valloc_retried_n;
-    logic [13:0] e64_varr_next_n;
-    logic [11:0] e64_vcall_argc_n;
-    logic [63:0] e64_vcall_ctor_val_n;
-    logic [15:0] e64_vcall_entry_n;
-    logic e64_vcall_set_this_n;
-    logic [63:0] e64_vcall_this_n;
-    logic e64_vcall_value_n;
-    logic [8:0] e64_vconsole_n_n;
-    logic [7:0] e64_vcsp_n;
-    logic [7:0] e64_vdiv_count_n;
-    logic [52:0] e64_vdiv_den_n;
-    logic signed [12:0] e64_vdiv_exp_n;
-    logic [106:0] e64_vdiv_num_n;
-    logic [106:0] e64_vdiv_quot_n;
-    logic [53:0] e64_vdiv_rem_n;
-    logic e64_vdiv_sign_n;
-    logic [7:0] e64_vdraw_color_n;
-    logic [9:0] e64_vdraw_h_n;
-    logic [18:0] e64_vdraw_i_n;
-    logic [9:0] e64_vdraw_w_n;
-    logic [9:0] e64_vdraw_x_n;
-    logic [9:0] e64_vdraw_y_n;
-    logic [63:0] e64_venv_n;
-    logic [9:0] e64_venv_next_n;
-    logic [63:0] e64_vfe_arr_n;
-    logic [11:0] e64_vfe_base_n;
-    logic [63:0] e64_vfe_fn_n;
-    logic [7:0] e64_vfe_i_n;
-    logic [63:0] e64_vfe_map_n;
-    logic [1:0] e64_vfe_mode_n;
-    logic [15:0] e64_vfe_ret_n;
-    logic [3:0] e64_vfe_sp_n;
-    logic e64_vfree_armed_n;
-    logic e64_vfree_arr_long_n;
-    logic [13:0] e64_vgc_clear_i_n;
-    logic e64_vgc_halt_after_n;
-    logic [13:0] e64_vgc_qr_n;
-    logic [13:0] e64_vgc_qw_n;
-    logic [1:0] e64_vgc_resume_n;
-    logic e64_vgc_wait_after_n;
-    logic e64_vjs_rd_arm_n;
-    logic [4:0] e64_vlistener_n_n;
-    logic [15:0] e64_vmetrics_w_n;
-    logic [11:0] e64_vmod_count_n;
-    logic [52:0] e64_vmod_den_n;
-    logic signed [12:0] e64_vmod_exp_n;
-    logic [52:0] e64_vmod_rem_n;
-    logic e64_vmod_sign_n;
-    logic [11:0] e64_vnat_base_n;
-    logic [2:0] e64_vnat_dom_n;
-    logic e64_vprom_copy_n;
-    logic e64_vprom_done_n;
-    logic [6:0] e64_vprom_ret_n;
-    logic [3:0] e64_vraf_n_n;
-    logic [31:0] e64_vrng_n;
-    logic [11:0] e64_vsp_n;
-    logic e64_vst_hold_win_n;
-    logic e64_vst_refill_arm_n;
-    logic [3:0] e64_vst_refill_i_n;
-    logic [6:0] e64_vst_refill_ret_n;
-    logic [11:0] e64_vst_waddr_n;
-    logic [63:0] e64_vst_wdata_n;
-    logic e64_vst_we_n;
-    logic [63:0] e64_vthis_n;
-    logic [6:0] e64_vtimer_n_n;
-    logic [31:0] e64_vtimer_seq_n;
-    logic [9:0] e64_x_n;
-    logic [9:0] e64_y_n;
-    logic [15:0] e64_hp_qk_n [0:3];
-    logic [2:0] e64_hp_qt_n [0:3];
-    logic [63:0] e64_hp_qv_n [0:3];
-    logic [7:0] e64_js_i_n [0:JSON_STK-1];
-    logic [2:0] e64_js_ph_n [0:JSON_STK-1];
-    logic signed [31:0] e64_pc_a1_n [0:PATH_MAX-1];
-    logic signed [31:0] e64_pc_a2_n [0:PATH_MAX-1];
-    logic signed [31:0] e64_pc_a3_n [0:PATH_MAX-1];
-    logic signed [31:0] e64_pc_a4_n [0:PATH_MAX-1];
-    logic signed [31:0] e64_pc_a5_n [0:PATH_MAX-1];
-    logic e64_pc_ccw_n [0:PATH_MAX-1];
-    logic [1:0] e64_pc_op_n [0:PATH_MAX-1];
-    logic [63:0] e64_vfe_arr_s_n [0:7];
-    logic [11:0] e64_vfe_base_s_n [0:7];
-    logic [63:0] e64_vfe_fn_s_n [0:7];
-    logic [7:0] e64_vfe_i_s_n [0:7];
-    logic [63:0] e64_vfe_map_s_n [0:7];
-    logic [1:0] e64_vfe_mode_s_n [0:7];
-    logic [15:0] e64_vfe_ret_s_n [0:7];
-    logic [11:0] e64_vframe_base_sp_n [0:CSTK-1];
-    logic [63:0] e64_vframe_ctor_n [0:CSTK-1];
-    logic [63:0] e64_vframe_env_n [0:CSTK-1];
-    logic e64_vframe_escaped_n [0:CSTK-1];
-    logic [63:0] e64_vframe_fn_n [0:CSTK-1];
-    logic [15:0] e64_vframe_return_ip_n [0:CSTK-1];
-    logic [63:0] e64_vframe_this_n [0:CSTK-1];
-    logic [63:0] e64_vjs_val_n [0:JSON_STK-1];
-    logic [63:0] e64_vlistener_ev_n [0:15];
-    logic [63:0] e64_vlistener_fn_n [0:15];
-    logic e64_vlong_used_n [0:MAX_ARR_LONG-1];
-    logic [63:0] e64_vraf_n [0:7];
-    logic [63:0] e64_vst_win_n [0:15];
-    logic signed [31:0] e64_vtimer_due_n [0:63];
-    logic [63:0] e64_vtimer_fn_n [0:63];
-    logic signed [31:0] e64_vtimer_id_n [0:63];
-    logic signed [63:0] e64_vtimer_period_n [0:63];
-    logic e64_vtimer_valid_n [0:63];
+    logic e64_aset_win_retried_q;
+    logic [7:0] e64_bind_argc_q;
+    logic [11:0] e64_bind_base_q;
+    logic [15:0] e64_bind_ip_q;
+    logic [7:0] e64_bind_k_q;
+    logic [1:0] e64_bind_mode_q;
+    logic [7:0] e64_bind_n_q;
+    logic e64_bind_rd_arm_q;
+    logic [6:0] e64_bind_ret_q;
+    logic [11:0] e64_bind_src_q;
+    logic [11:0] e64_bind_vsp_next_q;
+    logic [15:0] e64_blit_sh_q;
+    logic [7:0] e64_blit_si_q;
+    logic [15:0] e64_blit_sw_q;
+    logic [15:0] e64_blit_sx_q;
+    logic [15:0] e64_blit_sy_q;
+    logic [2:0] e64_cc_at_q;
+    logic signed [31:0] e64_cc_av_q;
+    logic e64_cc_bok_q;
+    logic [2:0] e64_cc_bt_q;
+    logic signed [31:0] e64_cc_bv_q;
+    logic [3:0] e64_cc_d_q;
+    logic [15:0] e64_cc_h_q;
+    logic [7:0] e64_cc_len_q;
+    logic e64_cc_second_q;
+    logic [1:0] e64_cc_st_q;
+    logic [14:0] e64_code_raddr_q;
+    logic [7:0] e64_color_q;
+    logic [1:0] e64_ctx_align_q;
+    logic e64_ctx_smooth_q;
+    logic signed [31:0] e64_ctx_sx_q;
+    logic signed [31:0] e64_ctx_sy_q;
+    logic signed [31:0] e64_ctx_tx_q;
+    logic signed [31:0] e64_ctx_ty_q;
+    logic [15:0] e64_dbg_di_hit_q;
+    logic [15:0] e64_dbg_di_miss_q;
+    logic [15:0] e64_dbg_div_n_q;
+    logic [15:0] e64_dbg_json_ovf_q;
+    logic [15:0] e64_dbg_path_ovf_q;
+    logic [7:0] e64_fault_code_q;
+    logic [18:0] e64_fb_dump_addr_q;
+    logic e64_fb_dump_sel_q;
+    logic e64_fb_swap_q;
+    logic [7:0] e64_fill_style_i_q;
+    logic [7:0] e64_stroke_style_i_q;
+    logic [11:0] e64_hp_aid_q;
+    logic [7:0] e64_hp_alen_q;
+    logic [6:0] e64_hp_aslot_q;
+    logic [3:0] e64_hp_cmd_q;
+    logic [9:0] e64_hp_eid_q;
+    logic e64_hp_env_q;
+    logic e64_hp_from_stack_q;
+    logic e64_hp_hit_q;
+    logic [15:0] e64_hp_key_q;
+    logic [5:0] e64_hp_len_q;
+    logic [7:0] e64_hp_lim_q;
+    logic e64_hp_make_arr_q;
+    logic [3:0] e64_hp_nat_q;
+    logic [12:0] e64_hp_oid_q;
+    logic [2:0] e64_hp_phase_q;
+    logic [63:0] e64_hp_proto_q;
+    logic [2:0] e64_hp_qi_q;
+    logic [2:0] e64_hp_qn_q;
+    logic [6:0] e64_hp_ret_q;
+    logic [63:0] e64_hp_rval_q;
+    logic [12:0] e64_hp_si_q;
+    logic [4:0] e64_hp_slot_q;
+    logic [15:0] e64_hp_spr_h_q;
+    logic [15:0] e64_hp_spr_w_q;
+    logic [4:0] e64_hp_ss_q;
+    logic [2:0] e64_hp_tag_q;
+    logic [5:0] e64_hp_tn_q;
+    logic e64_hp_v64_q;
+    logic [11:0] e64_hp_vbase_q;
+    logic [63:0] e64_hp_wval_q;
+    logic e64_imgd_armed_q;
+    logic [9:0] e64_imgd_h_q;
+    logic [18:0] e64_imgd_i_q;
+    logic [18:0] e64_imgd_n_q;
+    logic e64_imgd_v64_q;
+    logic [9:0] e64_imgd_w_q;
+    logic [9:0] e64_imgd_x_q;
+    logic [9:0] e64_imgd_x0_q;
+    logic [9:0] e64_imgd_y_q;
+    logic [9:0] e64_imgd_y0_q;
+    logic [15:0] e64_ip_q;
+    logic [11:0] e64_jn_arr_q;
+    logic [15:0] e64_jn_h_q;
+    logic [15:0] e64_jn_i_q;
+    logic [10:0] e64_jn_res_q;
+    logic [5:0] e64_js_sp_q;
+    logic [2:0] e64_json_pph_q;
+    logic [13:0] e64_json_rp_q;
+    logic [13:0] e64_json_src_q;
+    logic [13:0] e64_json_srclen_q;
+    logic [13:0] e64_json_wp_q;
+    logic e64_looping_q;
+    logic e64_machine_fault_q;
+    logic [63:0] e64_minmax_acc_q;
+    logic [11:0] e64_minmax_base_q;
+    logic e64_minmax_is_min_q;
+    logic [7:0] e64_minmax_k_q;
+    logic [7:0] e64_minmax_n_q;
+    logic e64_namcpy_armed_q;
+    logic e64_namcpy_repl_q;
+    logic e64_namcpy_v64_q;
+    logic [15:0] e64_name_rdaddr_q;
+    logic e64_path_active_q;
+    logic [1:0] e64_path_kind_q;
+    logic e64_path_stroke_q;
+    logic [4:0] e64_pc_n_q;
+    logic [4:0] e64_pi_q;
+    logic e64_repl_did_q;
+    logic e64_repl_g_q;
+    logic [7:0] e64_repl_nlen_q;
+    logic [7:0] e64_repl_pat0_q;
+    logic [7:0] e64_repl_pat1_q;
+    logic [7:0] e64_repl_rch_q;
+    logic [9:0] e64_rh_q;
+    logic e64_running_q;
+    logic [9:0] e64_rw_q;
+    logic [9:0] e64_rx_q;
+    logic [9:0] e64_ry_q;
+    logic signed [31:0] e64_saved_sx_q;
+    logic signed [31:0] e64_saved_sy_q;
+    logic signed [31:0] e64_saved_tx_q;
+    logic signed [31:0] e64_saved_ty_q;
+    logic [4:0] e64_sq_i_q;
+    logic [47:0] e64_sq_rad_q;
+    logic [25:0] e64_sq_rem_q;
+    logic [23:0] e64_sq_root_q;
+    logic [6:0] e64_state_q;
+    logic [6:0] e64_txt_bn_q;
+    logic [3:0] e64_txt_ph_q;
+    logic signed [15:0] e64_txt_px_q;
+    logic signed [15:0] e64_txt_py_q;
+    logic [31:0] e64_txt_val_q;
+    logic [2:0] e64_txt_vt_q;
+    logic e64_v64_concat_q;
+    logic e64_v64_join_q;
+    logic e64_v64_repl_q;
+    logic e64_v64_sqrt_q;
+    logic [7:0] e64_valloc_arr_n_q;
+    logic e64_valloc_bind_q;
+    logic [12:0] e64_valloc_bind_src_q;
+    logic [63:0] e64_valloc_bind_this_q;
+    logic [7:0] e64_valloc_fn_a1_q;
+    logic [15:0] e64_valloc_fn_entry_q;
+    logic [13:0] e64_valloc_i_q;
+    logic [1:0] e64_valloc_kind_q;
+    logic e64_valloc_metrics_q;
+    logic e64_valloc_now_fn_q;
+    logic e64_valloc_proto_q;
+    logic [12:0] e64_valloc_proto_fn_q;
+    logic e64_valloc_regex_q;
+    logic [31:0] e64_valloc_regex_pack_q;
+    logic e64_valloc_retried_q;
+    logic [13:0] e64_varr_next_q;
+    logic [11:0] e64_vcall_argc_q;
+    logic [63:0] e64_vcall_ctor_val_q;
+    logic [15:0] e64_vcall_entry_q;
+    logic e64_vcall_set_this_q;
+    logic [63:0] e64_vcall_this_q;
+    logic e64_vcall_value_q;
+    logic [8:0] e64_vconsole_n_q;
+    logic [7:0] e64_vcsp_q;
+    logic [7:0] e64_vdiv_count_q;
+    logic [52:0] e64_vdiv_den_q;
+    logic signed [12:0] e64_vdiv_exp_q;
+    logic [106:0] e64_vdiv_num_q;
+    logic [106:0] e64_vdiv_quot_q;
+    logic [53:0] e64_vdiv_rem_q;
+    logic e64_vdiv_sign_q;
+    logic [7:0] e64_vdraw_color_q;
+    logic [9:0] e64_vdraw_h_q;
+    logic [18:0] e64_vdraw_i_q;
+    logic [9:0] e64_vdraw_w_q;
+    logic [9:0] e64_vdraw_x_q;
+    logic [9:0] e64_vdraw_y_q;
+    logic [63:0] e64_venv_q;
+    logic [9:0] e64_venv_next_q;
+    logic [63:0] e64_vfe_arr_q;
+    logic [11:0] e64_vfe_base_q;
+    logic [63:0] e64_vfe_fn_q;
+    logic [7:0] e64_vfe_i_q;
+    logic [63:0] e64_vfe_map_q;
+    logic [1:0] e64_vfe_mode_q;
+    logic [15:0] e64_vfe_ret_q;
+    logic [3:0] e64_vfe_sp_q;
+    logic e64_vfree_armed_q;
+    logic e64_vfree_arr_long_q;
+    logic [13:0] e64_vgc_clear_i_q;
+    logic e64_vgc_halt_after_q;
+    logic [13:0] e64_vgc_qr_q;
+    logic [13:0] e64_vgc_qw_q;
+    logic [1:0] e64_vgc_resume_q;
+    logic e64_vgc_wait_after_q;
+    logic e64_vjs_rd_arm_q;
+    logic [4:0] e64_vlistener_n_q;
+    logic [15:0] e64_vmetrics_w_q;
+    logic [11:0] e64_vmod_count_q;
+    logic [52:0] e64_vmod_den_q;
+    logic signed [12:0] e64_vmod_exp_q;
+    logic [52:0] e64_vmod_rem_q;
+    logic e64_vmod_sign_q;
+    logic [11:0] e64_vnat_base_q;
+    logic [2:0] e64_vnat_dom_q;
+    logic e64_vprom_copy_q;
+    logic e64_vprom_done_q;
+    logic [6:0] e64_vprom_ret_q;
+    logic [3:0] e64_vraf_n_q;
+    logic [31:0] e64_vrng_q;
+    logic [11:0] e64_vsp_q;
+    logic e64_vst_hold_win_q;
+    logic e64_vst_refill_arm_q;
+    logic [3:0] e64_vst_refill_i_q;
+    logic [6:0] e64_vst_refill_ret_q;
+    logic [11:0] e64_vst_waddr_q;
+    logic [63:0] e64_vst_wdata_q;
+    logic e64_vst_we_q;
+    logic [63:0] e64_vthis_q;
+    logic [6:0] e64_vtimer_n_q;
+    logic [31:0] e64_vtimer_seq_q;
+    logic [9:0] e64_x_q;
+    logic [9:0] e64_y_q;
+    logic [63:0] e64_hp_qk_pack_q;
+    logic [11:0] e64_hp_qt_pack_q;
+    logic [255:0] e64_hp_qv_pack_q;
     logic e64_json_mem_we;
     logic [12:0] e64_json_mem_waddr;
     logic [7:0] e64_json_mem_wdata;
+    logic [9:0] e64_name_blen_raddr;
+    logic e64_name_blen_we;
+    logic [9:0] e64_name_blen_waddr;
+    logic [15:0] e64_name_blen_wdata;
+    logic [9:0] e64_name_hash_raddr;
+    logic e64_name_hash_we;
+    logic [9:0] e64_name_hash_waddr;
+    logic [15:0] e64_name_hash_wdata;
+    logic e64_name_has_we;
+    logic [9:0] e64_name_has_waddr;
+    logic e64_name_has_wdata;
+    logic [15:0] name_blen_rdata;
+    logic [15:0] name_hash_rdata;
+    // Exec64 heap raddr (parent SRAM, rdata next clock).
+    logic [8:0] e64_vvars_raddr;
+    logic [9:0] e64_venv_raddr;
+    logic [11:0] e64_varr_raddr;
+    logic [12:0] e64_vobj_raddr;
+    logic [12:0] e64_vfn_raddr;
+    logic [9:0] e64_name_off_raddr;
+    logic [9:0] e64_fill_lut_raddr;
+    logic [6:0] e64_vframe_raddr;
+    logic [5:0] e64_vtimer_raddr;
+    logic [9:0] e64_vconsts_raddr;
+    logic [63:0] vvars_rdata;
+    logic vvar_valid_rdata;
+    logic [63:0] venv_parent_rdata;
+    logic [4:0] venv_len_rdata;
+    logic [11:0] venv_gen_rdata;
+    logic venv_valid_rdata;
+    logic [7:0] varr_len_rdata;
+    logic varr_valid_rdata;
+    logic [11:0] varr_gen_rdata;
+    logic varr_long_rdata;
+    logic [7:0] varr_lidx_rdata;
+    logic [1:0] vobj_alloc_rdata;
+    logic [11:0] vobj_gen_rdata;
+    logic [63:0] vobj_proto_rdata;
+    logic [15:0] vobj_cls_rdata;
+    logic [5:0] vobj_len_rdata;
+    logic [3:0] vobj_builtin_rdata;
+    logic vfn_valid_rdata;
+    logic [11:0] vfn_gen_rdata;
+    logic [63:0] vfn_proto_rdata;
+    logic [63:0] vfn_env_rdata;
+    logic [5:0] vfn_nparam_rdata;
+    logic [15:0] vfn_entry_rdata;
+    logic [2:0] vfn_flags_rdata;
+    logic [63:0] vfn_bound_this_rdata;
+    logic [63:0] vconsts_rdata;
+    logic [15:0] vframe_rip_rdata;
+    logic [11:0] vframe_bsp_rdata;
+    logic vframe_esc_rdata;
+    logic [63:0] vframe_this_rdata;
+    logic [63:0] vframe_env_rdata;
+    logic [63:0] vframe_fn_rdata;
+    logic [63:0] vframe_ctor_rdata;
+    logic [7:0] fill_lut_rdata;
+    logic vtimer_valid_rdata;
+    logic signed [31:0] vtimer_id_rdata;
+    logic [15:0] name_off_rdata;
     logic e64_varr_len_we;
     logic [11:0] e64_varr_len_waddr;
     logic [7:0] e64_varr_len_wdata;
@@ -3252,10 +3561,108 @@ module jmr_js_vm #(
     logic [63:0] e64_vframe_env_wdata;
     logic [63:0] e64_vframe_fn_wdata;
     logic [63:0] e64_vframe_ctor_wdata;
+    logic e64_p_clr_busy;
+    logic e64_leave_hold;
+    logic e64_vraf_we;
+    logic [2:0] e64_vraf_waddr;
+    logic [63:0] e64_vraf_wdata;
+    logic e64_vtimer_we;
+    logic [5:0] e64_vtimer_waddr;
+    logic e64_vtimer_valid_wdata;
+    logic signed [31:0] e64_vtimer_due_wdata;
+    logic [63:0] e64_vtimer_fn_wdata;
+    logic signed [31:0] e64_vtimer_id_wdata;
+    logic signed [63:0] e64_vtimer_period_wdata;
+    logic e64_vlistener_we;
+    logic [3:0] e64_vlistener_waddr;
+    logic [63:0] e64_vlistener_ev_wdata;
+    logic [63:0] e64_vlistener_fn_wdata;
+    logic e64_vlistener_repl;
+    logic e64_vst_win0_we;
+    logic [63:0] e64_vst_win0_wdata;
     (* keep_hierarchy = "yes" *)
     jmr_js_vm_exec64 u_exec64 (
         .clk(clk),
+        .rst_n(rst_n),
         .enable((state == S_V64_EXEC)),
+        .leave_hold(e64_leave_hold),
+        .hs_m_ip(hs_m_ip),
+        .hs_m_code(hs_m_code),
+        .hs_m_state(hs_m_state),
+        .hs_m_vsp(hs_m_vsp),
+        .hs_m_hp_cmd(hs_m_hp_cmd),
+        .hs_m_hp_v64(hs_m_hp_v64),
+        .hs_m_hp_oid(hs_m_hp_oid),
+        .hs_m_hp_aid(hs_m_hp_aid),
+        .hs_m_hp_env(hs_m_hp_env),
+        .hs_m_hp_eid(hs_m_hp_eid),
+        .hs_m_hp_slot(hs_m_hp_slot),
+        .hs_m_hp_aslot(hs_m_hp_aslot),
+        .hs_m_hp_len(hs_m_hp_len),
+        .hs_m_hp_alen(hs_m_hp_alen),
+        .hs_m_hp_lim(hs_m_hp_lim),
+        .hs_m_hp_key(hs_m_hp_key),
+        .hs_m_hp_wval(hs_m_hp_wval),
+        .hs_m_hp_rval(hs_m_hp_rval),
+        .hs_m_hp_hit(hs_m_hp_hit),
+        .hs_m_hp_ret(hs_m_hp_ret),
+        .hs_m_hp_phase(hs_m_hp_phase),
+        .hs_m_hp_proto(hs_m_hp_proto),
+        .hs_m_hp_qn(hs_m_hp_qn),
+        .hs_m_hp_qi(hs_m_hp_qi),
+        .hs_m_hp_si(hs_m_hp_si),
+        .hs_m_hp_ss(hs_m_hp_ss),
+        .hs_m_hp_tn(hs_m_hp_tn),
+        .hs_m_hp_from_stack(hs_m_hp_from_stack),
+        .hs_m_hp_make_arr(hs_m_hp_make_arr),
+        .hs_m_hp_vbase(hs_m_hp_vbase),
+        .hs_m_hp_spr_w(hs_m_hp_spr_w),
+        .hs_m_hp_spr_h(hs_m_hp_spr_h),
+        .hs_m_hp_nat(hs_m_hp_nat),
+        .hs_m_hp_tag(hs_m_hp_tag),
+        .hs_m_hp_qk(hs_m_hp_qk),
+        .hs_m_hp_qv(hs_m_hp_qv),
+        .hs_m_hp_qt(hs_m_hp_qt),
+        .hs_m_valloc_kind(hs_m_valloc_kind),
+        .hs_m_valloc_i(hs_m_valloc_i),
+        .hs_m_valloc_arr_n(hs_m_valloc_arr_n),
+        .hs_m_valloc_retried(hs_m_valloc_retried),
+        .hs_m_vnat_dom(hs_m_vnat_dom),
+        .hs_m_vnat_base(hs_m_vnat_base),
+        .hs_m_valloc_now_fn(hs_m_valloc_now_fn),
+        .hs_m_valloc_bind(hs_m_valloc_bind),
+        .hs_m_valloc_bind_src(hs_m_valloc_bind_src),
+        .hs_m_valloc_bind_this(hs_m_valloc_bind_this),
+        .hs_m_valloc_fn_entry(hs_m_valloc_fn_entry),
+        .hs_m_valloc_fn_a1(hs_m_valloc_fn_a1),
+        .hs_m_valloc_proto(hs_m_valloc_proto),
+        .hs_m_valloc_proto_fn(hs_m_valloc_proto_fn),
+        .hs_m_valloc_metrics(hs_m_valloc_metrics),
+        .hs_m_valloc_regex(hs_m_valloc_regex),
+        .hs_m_valloc_regex_pack(hs_m_valloc_regex_pack),
+        .hs_m_vcall_value(hs_m_vcall_value),
+        .hs_m_vcall_argc(hs_m_vcall_argc),
+        .hs_m_vcall_entry(hs_m_vcall_entry),
+        .hs_m_vcall_set_this(hs_m_vcall_set_this),
+        .hs_m_vcall_this(hs_m_vcall_this),
+        .hs_m_vcall_ctor_val(hs_m_vcall_ctor_val),
+        .hs_m_vcsp(hs_m_vcsp),
+        .hs_m_vthis(hs_m_vthis),
+        .hs_m_venv(hs_m_venv),
+        .hs_m_vraf_n(hs_m_vraf_n),
+        .hs_m_vlistener_n(hs_m_vlistener_n),
+        .hs_m_vgc_halt_after(hs_m_vgc_halt_after),
+        .hs_m_vgc_wait_after(hs_m_vgc_wait_after),
+        .hs_m_vgc_clear_i(hs_m_vgc_clear_i),
+        .hs_m_vgc_qr(hs_m_vgc_qr),
+        .hs_m_vgc_qw(hs_m_vgc_qw),
+        .hs_m_vdraw_i(hs_m_vdraw_i),
+        .hs_m_vdraw_x(hs_m_vdraw_x),
+        .hs_m_vdraw_y(hs_m_vdraw_y),
+        .hs_m_vdraw_w(hs_m_vdraw_w),
+        .hs_m_vdraw_h(hs_m_vdraw_h),
+        .hs_m_vdraw_color(hs_m_vdraw_color),
+        .p_clr_busy(e64_p_clr_busy),
         .p_clr(e64_p_clr),
         .p_we(e64_p_we),
         .p_sel(e64_p_sel),
@@ -3275,86 +3682,86 @@ module jmr_js_vm #(
         .p_frame_env(e64_p_frame_env),
         .p_frame_fn(e64_p_frame_fnv),
         .p_frame_ctor(e64_p_frame_ctor),
-        .aset_win_retried(aset_win_retried),
-        .bind_argc(bind_argc),
-        .bind_base(bind_base),
-        .bind_ip(bind_ip),
-        .bind_k(bind_k),
-        .bind_mode(bind_mode),
-        .bind_n(bind_n),
-        .bind_rd_arm(bind_rd_arm),
-        .bind_ret(bind_ret),
-        .bind_src(bind_src),
-        .bind_vsp_next(bind_vsp_next),
-        .blit_sh(blit_sh),
-        .blit_si(blit_si),
-        .blit_sw(blit_sw),
-        .blit_sx(blit_sx),
-        .blit_sy(blit_sy),
-        .cc_at(cc_at),
-        .cc_av(cc_av),
-        .cc_bok(cc_bok),
-        .cc_bt(cc_bt),
-        .cc_bv(cc_bv),
-        .cc_d(cc_d),
-        .cc_h(cc_h),
-        .cc_len(cc_len),
-        .cc_second(cc_second),
-        .cc_st(cc_st),
-        .code_raddr(code_raddr),
+        .p_aset_win_retried(aset_win_retried),
+        .p_bind_argc(bind_argc),
+        .p_bind_base(bind_base),
+        .p_bind_ip(bind_ip),
+        .p_bind_k(bind_k),
+        .p_bind_mode(bind_mode),
+        .p_bind_n(bind_n),
+        .p_bind_rd_arm(bind_rd_arm),
+        .p_bind_ret(bind_ret),
+        .p_bind_src(bind_src),
+        .p_bind_vsp_next(bind_vsp_next),
+        .p_blit_sh(blit_sh),
+        .p_blit_si(blit_si),
+        .p_blit_sw(blit_sw),
+        .p_blit_sx(blit_sx),
+        .p_blit_sy(blit_sy),
+        .p_cc_at(cc_at),
+        .p_cc_av(cc_av),
+        .p_cc_bok(cc_bok),
+        .p_cc_bt(cc_bt),
+        .p_cc_bv(cc_bv),
+        .p_cc_d(cc_d),
+        .p_cc_h(cc_h),
+        .p_cc_len(cc_len),
+        .p_cc_second(cc_second),
+        .p_cc_st(cc_st),
+        .p_code_raddr(code_raddr_ff),
         .code_rdata(code_rdata),
-        .color(color),
-        .ctx_align(ctx_align),
-        .ctx_smooth(ctx_smooth),
-        .ctx_sx(ctx_sx),
-        .ctx_sy(ctx_sy),
-        .ctx_tx(ctx_tx),
-        .ctx_ty(ctx_ty),
-        .dbg_di_hit(dbg_di_hit),
-        .dbg_di_miss(dbg_di_miss),
-        .dbg_div_n(dbg_div_n),
-        .dbg_json_ovf(dbg_json_ovf),
-        .dbg_path_ovf(dbg_path_ovf),
+        .p_color(color),
+        .p_ctx_align(ctx_align),
+        .p_ctx_smooth(ctx_smooth),
+        .p_ctx_sx(ctx_sx),
+        .p_ctx_sy(ctx_sy),
+        .p_ctx_tx(ctx_tx),
+        .p_ctx_ty(ctx_ty),
+        .p_dbg_di_hit(dbg_di_hit),
+        .p_dbg_di_miss(dbg_di_miss),
+        .p_dbg_div_n(dbg_div_n),
+        .p_dbg_json_ovf(dbg_json_ovf),
+        .p_dbg_path_ovf(dbg_path_ovf),
         .dbg_str_ovf(dbg_str_ovf),
-        .fault_code(fault_code),
-        .fb_dump_addr(fb_dump_addr),
-        .fb_dump_sel(fb_dump_sel),
-        .fb_swap(fb_swap),
-        .fill_style_i(fill_style_i),
-        .stroke_style_i(stroke_style_i),
-        .hp_aid(hp_aid),
-        .hp_alen(hp_alen),
-        .hp_aslot(hp_aslot),
-        .hp_cmd(hp_cmd),
-        .hp_eid(hp_eid),
-        .hp_env(hp_env),
-        .hp_from_stack(hp_from_stack),
-        .hp_hit(hp_hit),
-        .hp_key(hp_key),
-        .hp_len(hp_len),
-        .hp_lim(hp_lim),
-        .hp_make_arr(hp_make_arr),
-        .hp_nat(hp_nat),
-        .hp_oid(hp_oid),
-        .hp_phase(hp_phase),
-        .hp_proto(hp_proto),
-        .hp_qi(hp_qi),
-        .hp_qk(hp_qk),
-        .hp_qn(hp_qn),
-        .hp_qt(hp_qt),
-        .hp_qv(hp_qv),
-        .hp_ret(hp_ret),
-        .hp_rval(hp_rval),
-        .hp_si(hp_si),
-        .hp_slot(hp_slot),
-        .hp_spr_h(hp_spr_h),
-        .hp_spr_w(hp_spr_w),
-        .hp_ss(hp_ss),
-        .hp_tag(hp_tag),
-        .hp_tn(hp_tn),
-        .hp_v64(hp_v64),
-        .hp_vbase(hp_vbase),
-        .hp_wval(hp_wval),
+        .p_fault_code(fault_code),
+        .p_fb_dump_addr(fb_dump_addr),
+        .p_fb_dump_sel(fb_dump_sel),
+        .p_fb_swap(fb_swap),
+        .p_fill_style_i(fill_style_i),
+        .p_stroke_style_i(stroke_style_i),
+        .p_hp_aid(hp_aid_ff),
+        .p_hp_alen(hp_alen_ff),
+        .p_hp_aslot(hp_aslot_ff),
+        .p_hp_cmd(hp_cmd_ff),
+        .p_hp_eid(hp_eid_ff),
+        .p_hp_env(hp_env_ff),
+        .p_hp_from_stack(hp_from_stack_ff),
+        .p_hp_hit(hp_hit_ff),
+        .p_hp_key(hp_key_ff),
+        .p_hp_len(hp_len_ff),
+        .p_hp_lim(hp_lim_ff),
+        .p_hp_make_arr(hp_make_arr_ff),
+        .p_hp_nat(hp_nat_ff),
+        .p_hp_oid(hp_oid_ff),
+        .p_hp_phase(hp_phase_ff),
+        .p_hp_proto(hp_proto_ff),
+        .p_hp_qi(hp_qi_ff),
+        .p_hp_qk_pack(hp_qk_ff_pack),
+        .p_hp_qn(hp_qn_ff),
+        .p_hp_qt_pack(hp_qt_ff_pack),
+        .p_hp_qv_pack(hp_qv_ff_pack),
+        .p_hp_ret(hp_ret_ff),
+        .p_hp_rval(hp_rval_ff),
+        .p_hp_si(hp_si_ff),
+        .p_hp_slot(hp_slot_ff),
+        .p_hp_spr_h(hp_spr_h_ff),
+        .p_hp_spr_w(hp_spr_w_ff),
+        .p_hp_ss(hp_ss_ff),
+        .p_hp_tag(hp_tag_ff),
+        .p_hp_tn(hp_tn_ff),
+        .p_hp_v64(hp_v64_ff),
+        .p_hp_vbase(hp_vbase_ff),
+        .p_hp_wval(hp_wval_ff),
         .id_ael(id_ael),
         .id_arc(id_arc),
         .id_assign(id_assign),
@@ -3411,510 +3818,700 @@ module jmr_js_vm #(
         .id_unshift(id_unshift),
         .id_white(id_white),
         .id_width(id_width),
-        .imgd_armed(imgd_armed),
-        .imgd_h(imgd_h),
-        .imgd_i(imgd_i),
-        .imgd_n(imgd_n),
-        .imgd_v64(imgd_v64),
-        .imgd_w(imgd_w),
-        .imgd_x(imgd_x),
-        .imgd_x0(imgd_x0),
-        .imgd_y(imgd_y),
-        .imgd_y0(imgd_y0),
-        .ip(ip),
-        .jn_arr(jn_arr),
-        .jn_h(jn_h),
-        .jn_i(jn_i),
-        .jn_res(jn_res),
+        .p_imgd_armed(imgd_armed),
+        .p_imgd_h(imgd_h),
+        .p_imgd_i(imgd_i),
+        .p_imgd_n(imgd_n),
+        .p_imgd_v64(imgd_v64),
+        .p_imgd_w(imgd_w),
+        .p_imgd_x(imgd_x),
+        .p_imgd_x0(imgd_x0),
+        .p_imgd_y(imgd_y),
+        .p_imgd_y0(imgd_y0),
+        .p_ip(ip_ff),
+        .p_jn_arr(jn_arr),
+        .p_jn_h(jn_h),
+        .p_jn_i(jn_i),
+        .p_jn_res(jn_res),
         .joy_in(joy_in),
-        .js_i(js_i),
-        .js_ph(js_ph),
-        .js_sp(js_sp),
-        .json_pph(json_pph),
-        .json_rp(json_rp),
-        .json_src(json_src),
-        .json_srclen(json_srclen),
-        .json_wp(json_wp),
-        .looping(looping),
-        .machine_fault(machine_fault),
-        .minmax_acc(minmax_acc),
-        .minmax_base(minmax_base),
-        .minmax_is_min(minmax_is_min),
-        .minmax_k(minmax_k),
-        .minmax_n(minmax_n),
+        .p_js_sp(js_sp),
+        .p_json_pph(json_pph),
+        .p_json_rp(json_rp),
+        .p_json_src(json_src),
+        .p_json_srclen(json_srclen),
+        .p_json_wp(json_wp),
+        .p_looping(looping),
+        .p_machine_fault(machine_fault),
+        .p_minmax_acc(minmax_acc),
+        .p_minmax_base(minmax_base),
+        .p_minmax_is_min(minmax_is_min),
+        .p_minmax_k(minmax_k),
+        .p_minmax_n(minmax_n),
         .n_cls(n_cls),
         .n_consts(n_consts),
         .n_ops(n_ops),
         .n_spr(n_spr),
-        .namcpy_armed(namcpy_armed),
-        .namcpy_repl(namcpy_repl),
-        .namcpy_v64(namcpy_v64),
-        .name_rdaddr(name_rdaddr),
+        .p_namcpy_armed(namcpy_armed),
+        .p_namcpy_repl(namcpy_repl),
+        .p_namcpy_v64(namcpy_v64),
+        .p_name_rdaddr(name_rdaddr),
+        .name_blen_rdata(name_blen_rdata),
+        .name_hash_rdata(name_hash_rdata),
+        .name_rdata(name_rdata),
+        .name_off_rdata(name_off_rdata),
+        .vvars_rdata(vvars_rdata),
+        .vvar_valid_rdata(vvar_valid_rdata),
+        .venv_len_rdata(venv_len_rdata),
+        .venv_gen_rdata(venv_gen_rdata),
+        .venv_valid_rdata(venv_valid_rdata),
+        .varr_len_rdata(varr_len_rdata),
+        .varr_valid_rdata(varr_valid_rdata),
+        .varr_gen_rdata(varr_gen_rdata),
+        .varr_long_rdata(varr_long_rdata),
+        .varr_lidx_rdata(varr_lidx_rdata),
+        .vobj_alloc_rdata(vobj_alloc_rdata),
+        .vobj_gen_rdata(vobj_gen_rdata),
+        .vobj_proto_rdata(vobj_proto_rdata),
+        .vobj_cls_rdata(vobj_cls_rdata),
+        .vobj_len_rdata(vobj_len_rdata),
+        .vobj_builtin_rdata(vobj_builtin_rdata),
+        .vfn_valid_rdata(vfn_valid_rdata),
+        .vfn_gen_rdata(vfn_gen_rdata),
+        .vfn_proto_rdata(vfn_proto_rdata),
+        .vfn_env_rdata(vfn_env_rdata),
+        .vfn_nparam_rdata(vfn_nparam_rdata),
+        .vfn_entry_rdata(vfn_entry_rdata),
+        .vfn_flags_rdata(vfn_flags_rdata),
+        .vfn_bound_this_rdata(vfn_bound_this_rdata),
+        .vconsts_rdata(vconsts_rdata),
+        .vframe_rip_rdata(vframe_rip_rdata),
+        .vframe_bsp_rdata(vframe_bsp_rdata),
+        .vframe_esc_rdata(vframe_esc_rdata),
+        .vframe_this_rdata(vframe_this_rdata),
+        .vframe_env_rdata(vframe_env_rdata),
+        .vframe_fn_rdata(vframe_fn_rdata),
+        .vframe_ctor_rdata(vframe_ctor_rdata),
+        .fill_lut_rdata(fill_lut_rdata),
+        .vtimer_valid_rdata(vtimer_valid_rdata),
+        .vtimer_id_rdata(vtimer_id_rdata),
         .names_n(names_n),
         .ops_base(ops_base),
-        .path_active(path_active),
-        .path_kind(path_kind),
-        .path_stroke(path_stroke),
-        .pc_a1(pc_a1),
-        .pc_a2(pc_a2),
-        .pc_a3(pc_a3),
-        .pc_a4(pc_a4),
-        .pc_a5(pc_a5),
-        .pc_ccw(pc_ccw),
-        .pc_n(pc_n),
-        .pc_op(pc_op),
-        .pi(pi),
-        .repl_did(repl_did),
-        .repl_g(repl_g),
-        .repl_nlen(repl_nlen),
-        .repl_pat0(repl_pat0),
-        .repl_pat1(repl_pat1),
-        .repl_rch(repl_rch),
-        .rh(rh),
-        .running(running),
-        .rw(rw),
-        .rx(rx),
-        .ry(ry),
-        .saved_sx(saved_sx),
-        .saved_sy(saved_sy),
-        .saved_tx(saved_tx),
-        .saved_ty(saved_ty),
+        .p_path_active(path_active),
+        .p_path_kind(path_kind),
+        .p_path_stroke(path_stroke),
+        .p_pc_n(pc_n),
+        .p_pi(pi),
+        .p_repl_did(repl_did),
+        .p_repl_g(repl_g),
+        .p_repl_nlen(repl_nlen),
+        .p_repl_pat0(repl_pat0),
+        .p_repl_pat1(repl_pat1),
+        .p_repl_rch(repl_rch),
+        .p_rh(rh),
+        .p_running(running),
+        .p_rw(rw),
+        .p_rx(rx),
+        .p_ry(ry),
+        .p_saved_sx(saved_sx),
+        .p_saved_sy(saved_sy),
+        .p_saved_tx(saved_tx),
+        .p_saved_ty(saved_ty),
         .sp(sp),
-        .spr_hh(spr_hh),
-        .spr_nid(spr_nid),
-        .spr_ww(spr_ww),
-        .sq_i(sq_i),
-        .sq_rad(sq_rad),
-        .sq_rem(sq_rem),
-        .sq_root(sq_root),
-        .state(state),
+        .spr_hh_pack(spr_hh_pack),
+        .spr_nid_pack(spr_nid_pack),
+        .spr_ww_pack(spr_ww_pack),
+        .p_sq_i(sq_i),
+        .p_sq_rad(sq_rad),
+        .p_sq_rem(sq_rem),
+        .p_sq_root(sq_root),
+        .p_state(state),
         .this_ok(this_ok),
-        .txt_bn(txt_bn),
-        .txt_ph(txt_ph),
-        .txt_px(txt_px),
-        .txt_py(txt_py),
-        .txt_val(txt_val),
-        .txt_vt(txt_vt),
-        .v64_concat(v64_concat),
-        .v64_join(v64_join),
-        .v64_repl(v64_repl),
-        .v64_sqrt(v64_sqrt),
-        .valloc_arr_n(valloc_arr_n),
-        .valloc_bind(valloc_bind),
-        .valloc_bind_src(valloc_bind_src),
-        .valloc_bind_this(valloc_bind_this),
-        .valloc_fn_a1(valloc_fn_a1),
-        .valloc_fn_entry(valloc_fn_entry),
-        .valloc_i(valloc_i),
-        .valloc_kind(valloc_kind),
-        .valloc_metrics(valloc_metrics),
-        .valloc_now_fn(valloc_now_fn),
-        .valloc_proto(valloc_proto),
-        .valloc_proto_fn(valloc_proto_fn),
-        .valloc_regex(valloc_regex),
-        .valloc_regex_pack(valloc_regex_pack),
-        .valloc_retried(valloc_retried),
+        .p_txt_bn(txt_bn),
+        .p_txt_ph(txt_ph),
+        .p_txt_px(txt_px),
+        .p_txt_py(txt_py),
+        .p_txt_val(txt_val),
+        .p_txt_vt(txt_vt),
+        .p_v64_concat(v64_concat),
+        .p_v64_join(v64_join),
+        .p_v64_repl(v64_repl),
+        .p_v64_sqrt(v64_sqrt),
+        .p_valloc_arr_n(valloc_arr_n_ff),
+        .p_valloc_bind(valloc_bind_ff),
+        .p_valloc_bind_src(valloc_bind_src_ff),
+        .p_valloc_bind_this(valloc_bind_this_ff),
+        .p_valloc_fn_a1(valloc_fn_a1_ff),
+        .p_valloc_fn_entry(valloc_fn_entry_ff),
+        .p_valloc_i(valloc_i_ff),
+        .p_valloc_kind(valloc_kind_ff),
+        .p_valloc_metrics(valloc_metrics_ff),
+        .p_valloc_now_fn(valloc_now_fn_ff),
+        .p_valloc_proto(valloc_proto_ff),
+        .p_valloc_proto_fn(valloc_proto_fn_ff),
+        .p_valloc_regex(valloc_regex_ff),
+        .p_valloc_regex_pack(valloc_regex_pack_ff),
+        .p_valloc_retried(valloc_retried_ff),
         .var_this(var_this),
-        .varr_next(varr_next),
-        .vcall_argc(vcall_argc),
-        .vcall_ctor_val(vcall_ctor_val),
-        .vcall_entry(vcall_entry),
-        .vcall_set_this(vcall_set_this),
-        .vcall_this(vcall_this),
-        .vcall_value(vcall_value),
-        .vconsole_n(vconsole_n),
-        .vcsp(vcsp),
-        .vdiv_count(vdiv_count),
-        .vdiv_den(vdiv_den),
-        .vdiv_exp(vdiv_exp),
-        .vdiv_num(vdiv_num),
-        .vdiv_quot(vdiv_quot),
-        .vdiv_rem(vdiv_rem),
-        .vdiv_sign(vdiv_sign),
-        .vdraw_color(vdraw_color),
-        .vdraw_h(vdraw_h),
-        .vdraw_i(vdraw_i),
-        .vdraw_w(vdraw_w),
-        .vdraw_x(vdraw_x),
-        .vdraw_y(vdraw_y),
-        .venv(venv),
-        .venv_next(venv_next),
-        .vfe_arr(vfe_arr),
-        .vfe_arr_s(vfe_arr_s),
-        .vfe_base(vfe_base),
-        .vfe_base_s(vfe_base_s),
-        .vfe_fn(vfe_fn),
-        .vfe_fn_s(vfe_fn_s),
-        .vfe_i(vfe_i),
-        .vfe_i_s(vfe_i_s),
-        .vfe_map(vfe_map),
-        .vfe_map_s(vfe_map_s),
-        .vfe_mode(vfe_mode),
-        .vfe_mode_s(vfe_mode_s),
-        .vfe_ret(vfe_ret),
-        .vfe_ret_s(vfe_ret_s),
-        .vfe_sp(vfe_sp),
+        .p_varr_next(varr_next),
+        .p_vcall_argc(vcall_argc_ff),
+        .p_vcall_ctor_val(vcall_ctor_val_ff),
+        .p_vcall_entry(vcall_entry_ff),
+        .p_vcall_set_this(vcall_set_this_ff),
+        .p_vcall_this(vcall_this_ff),
+        .p_vcall_value(vcall_value_ff),
+        .p_vconsole_n(vconsole_n),
+        .p_vcsp(vcsp_ff),
+        .p_vdiv_count(vdiv_count),
+        .p_vdiv_den(vdiv_den),
+        .p_vdiv_exp(vdiv_exp),
+        .p_vdiv_num(vdiv_num),
+        .p_vdiv_quot(vdiv_quot),
+        .p_vdiv_rem(vdiv_rem),
+        .p_vdiv_sign(vdiv_sign),
+        .p_vdraw_color(vdraw_color_ff),
+        .p_vdraw_h(vdraw_h_ff),
+        .p_vdraw_i(vdraw_i_ff),
+        .p_vdraw_w(vdraw_w_ff),
+        .p_vdraw_x(vdraw_x_ff),
+        .p_vdraw_y(vdraw_y_ff),
+        .p_venv(venv_ff),
+        .p_venv_next(venv_next),
+        .p_vfe_arr(vfe_arr),
+        .p_vfe_base(vfe_base),
+        .p_vfe_fn(vfe_fn),
+        .p_vfe_i(vfe_i),
+        .p_vfe_map(vfe_map),
+        .p_vfe_mode(vfe_mode),
+        .p_vfe_ret(vfe_ret),
+        .p_vfe_sp(vfe_sp),
         .vfn_next(vfn_next),
         .vframe_no(vframe_no),
-        .vfree_armed(vfree_armed),
-        .vfree_arr_long(vfree_arr_long),
+        .p_vfree_armed(vfree_armed),
+        .p_vfree_arr_long(vfree_arr_long),
         .vfree_ok(vfree_ok),
-        .vgc_clear_i(vgc_clear_i),
-        .vgc_halt_after(vgc_halt_after),
-        .vgc_qr(vgc_qr),
-        .vgc_qw(vgc_qw),
-        .vgc_resume(vgc_resume),
-        .vgc_wait_after(vgc_wait_after),
-        .vjs_rd_arm(vjs_rd_arm),
-        .vjs_val(vjs_val),
-        .vlistener_ev(vlistener_ev),
-        .vlistener_fn(vlistener_fn),
-        .vlistener_n(vlistener_n),
+        .p_vgc_clear_i(vgc_clear_i_ff),
+        .p_vgc_halt_after(vgc_halt_after_ff),
+        .p_vgc_qr(vgc_qr_ff),
+        .p_vgc_qw(vgc_qw_ff),
+        .p_vgc_resume(vgc_resume),
+        .p_vgc_wait_after(vgc_wait_after_ff),
+        .p_vjs_rd_arm(vjs_rd_arm),
+        .p_vlistener_n(vlistener_n_ff),
         .vmetrics(vmetrics),
-        .vmetrics_w(vmetrics_w),
-        .vmod_count(vmod_count),
-        .vmod_den(vmod_den),
-        .vmod_exp(vmod_exp),
-        .vmod_rem(vmod_rem),
-        .vmod_sign(vmod_sign),
-        .vnat_base(vnat_base),
-        .vnat_dom(vnat_dom),
+        .p_vmetrics_w(vmetrics_w),
+        .p_vmod_count(vmod_count),
+        .p_vmod_den(vmod_den),
+        .p_vmod_exp(vmod_exp),
+        .p_vmod_rem(vmod_rem),
+        .p_vmod_sign(vmod_sign),
+        .p_vnat_base(vnat_base_ff),
+        .p_vnat_dom(vnat_dom_ff),
         .vobj_next(vobj_next),
-        .vprom_copy(vprom_copy),
-        .vprom_done(vprom_done),
-        .vprom_ret(vprom_ret),
-        .vraf(vraf),
-        .vraf_n(vraf_n),
-        .vrng(vrng),
-        .vsp(vsp),
-        .vst_hold_win(vst_hold_win),
-        .vst_refill_arm(vst_refill_arm),
-        .vst_refill_i(vst_refill_i),
-        .vst_refill_ret(vst_refill_ret),
-        .vst_waddr(vst_waddr),
-        .vst_wdata(vst_wdata),
-        .vst_we(vst_we),
-        .vst_win(vst_win),
-        .vst_peek(vst_peek),
-        .vthis(vthis),
-        .vtimer_due(vtimer_due),
-        .vtimer_fn(vtimer_fn),
-        .vtimer_id(vtimer_id),
-        .vtimer_n(vtimer_n),
-        .vtimer_period(vtimer_period),
-        .vtimer_seq(vtimer_seq),
-        .vtimer_valid(vtimer_valid),
-        .x(x),
-        .y(y),
-        .aset_win_retried_n(e64_aset_win_retried_n),
-        .bind_argc_n(e64_bind_argc_n),
-        .bind_base_n(e64_bind_base_n),
-        .bind_ip_n(e64_bind_ip_n),
-        .bind_k_n(e64_bind_k_n),
-        .bind_mode_n(e64_bind_mode_n),
-        .bind_n_n(e64_bind_n_n),
-        .bind_rd_arm_n(e64_bind_rd_arm_n),
-        .bind_ret_n(e64_bind_ret_n),
-        .bind_src_n(e64_bind_src_n),
-        .bind_vsp_next_n(e64_bind_vsp_next_n),
-        .blit_sh_n(e64_blit_sh_n),
-        .blit_si_n(e64_blit_si_n),
-        .blit_sw_n(e64_blit_sw_n),
-        .blit_sx_n(e64_blit_sx_n),
-        .blit_sy_n(e64_blit_sy_n),
-        .cc_at_n(e64_cc_at_n),
-        .cc_av_n(e64_cc_av_n),
-        .cc_bok_n(e64_cc_bok_n),
-        .cc_bt_n(e64_cc_bt_n),
-        .cc_bv_n(e64_cc_bv_n),
-        .cc_d_n(e64_cc_d_n),
-        .cc_h_n(e64_cc_h_n),
-        .cc_len_n(e64_cc_len_n),
-        .cc_second_n(e64_cc_second_n),
-        .cc_st_n(e64_cc_st_n),
-        .code_raddr_n(e64_code_raddr_n),
-        .color_n(e64_color_n),
-        .ctx_align_n(e64_ctx_align_n),
-        .ctx_smooth_n(e64_ctx_smooth_n),
-        .ctx_sx_n(e64_ctx_sx_n),
-        .ctx_sy_n(e64_ctx_sy_n),
-        .ctx_tx_n(e64_ctx_tx_n),
-        .ctx_ty_n(e64_ctx_ty_n),
-        .dbg_di_hit_n(e64_dbg_di_hit_n),
-        .dbg_di_miss_n(e64_dbg_di_miss_n),
-        .dbg_div_n_n(e64_dbg_div_n_n),
-        .dbg_json_ovf_n(e64_dbg_json_ovf_n),
-        .dbg_path_ovf_n(e64_dbg_path_ovf_n),
-        .fault_code_n(e64_fault_code_n),
-        .fb_dump_addr_n(e64_fb_dump_addr_n),
-        .fb_dump_sel_n(e64_fb_dump_sel_n),
-        .fb_swap_n(e64_fb_swap_n),
-        .fill_style_i_n(e64_fill_style_i_n),
-        .stroke_style_i_n(e64_stroke_style_i_n),
-        .hp_aid_n(e64_hp_aid_n),
-        .hp_alen_n(e64_hp_alen_n),
-        .hp_aslot_n(e64_hp_aslot_n),
-        .hp_cmd_n(e64_hp_cmd_n),
-        .hp_eid_n(e64_hp_eid_n),
-        .hp_env_n(e64_hp_env_n),
-        .hp_from_stack_n(e64_hp_from_stack_n),
-        .hp_hit_n(e64_hp_hit_n),
-        .hp_key_n(e64_hp_key_n),
-        .hp_len_n(e64_hp_len_n),
-        .hp_lim_n(e64_hp_lim_n),
-        .hp_make_arr_n(e64_hp_make_arr_n),
-        .hp_nat_n(e64_hp_nat_n),
-        .hp_oid_n(e64_hp_oid_n),
-        .hp_phase_n(e64_hp_phase_n),
-        .hp_proto_n(e64_hp_proto_n),
-        .hp_qi_n(e64_hp_qi_n),
-        .hp_qn_n(e64_hp_qn_n),
-        .hp_ret_n(e64_hp_ret_n),
-        .hp_rval_n(e64_hp_rval_n),
-        .hp_si_n(e64_hp_si_n),
-        .hp_slot_n(e64_hp_slot_n),
-        .hp_spr_h_n(e64_hp_spr_h_n),
-        .hp_spr_w_n(e64_hp_spr_w_n),
-        .hp_ss_n(e64_hp_ss_n),
-        .hp_tag_n(e64_hp_tag_n),
-        .hp_tn_n(e64_hp_tn_n),
-        .hp_v64_n(e64_hp_v64_n),
-        .hp_vbase_n(e64_hp_vbase_n),
-        .hp_wval_n(e64_hp_wval_n),
-        .imgd_armed_n(e64_imgd_armed_n),
-        .imgd_h_n(e64_imgd_h_n),
-        .imgd_i_n(e64_imgd_i_n),
-        .imgd_n_n(e64_imgd_n_n),
-        .imgd_v64_n(e64_imgd_v64_n),
-        .imgd_w_n(e64_imgd_w_n),
-        .imgd_x_n(e64_imgd_x_n),
-        .imgd_x0_n(e64_imgd_x0_n),
-        .imgd_y_n(e64_imgd_y_n),
-        .imgd_y0_n(e64_imgd_y0_n),
-        .ip_n(e64_ip_n),
-        .jn_arr_n(e64_jn_arr_n),
-        .jn_h_n(e64_jn_h_n),
-        .jn_i_n(e64_jn_i_n),
-        .jn_res_n(e64_jn_res_n),
-        .js_sp_n(e64_js_sp_n),
-        .json_pph_n(e64_json_pph_n),
-        .json_rp_n(e64_json_rp_n),
-        .json_src_n(e64_json_src_n),
-        .json_srclen_n(e64_json_srclen_n),
-        .json_wp_n(e64_json_wp_n),
-        .looping_n(e64_looping_n),
-        .machine_fault_n(e64_machine_fault_n),
-        .minmax_acc_n(e64_minmax_acc_n),
-        .minmax_base_n(e64_minmax_base_n),
-        .minmax_is_min_n(e64_minmax_is_min_n),
-        .minmax_k_n(e64_minmax_k_n),
-        .minmax_n_n(e64_minmax_n_n),
-        .namcpy_armed_n(e64_namcpy_armed_n),
-        .namcpy_repl_n(e64_namcpy_repl_n),
-        .namcpy_v64_n(e64_namcpy_v64_n),
-        .name_rdaddr_n(e64_name_rdaddr_n),
-        .path_active_n(e64_path_active_n),
-        .path_kind_n(e64_path_kind_n),
-        .path_stroke_n(e64_path_stroke_n),
-        .pc_n_n(e64_pc_n_n),
-        .pi_n(e64_pi_n),
-        .repl_did_n(e64_repl_did_n),
-        .repl_g_n(e64_repl_g_n),
-        .repl_nlen_n(e64_repl_nlen_n),
-        .repl_pat0_n(e64_repl_pat0_n),
-        .repl_pat1_n(e64_repl_pat1_n),
-        .repl_rch_n(e64_repl_rch_n),
-        .rh_n(e64_rh_n),
-        .running_n(e64_running_n),
-        .rw_n(e64_rw_n),
-        .rx_n(e64_rx_n),
-        .ry_n(e64_ry_n),
-        .saved_sx_n(e64_saved_sx_n),
-        .saved_sy_n(e64_saved_sy_n),
-        .saved_tx_n(e64_saved_tx_n),
-        .saved_ty_n(e64_saved_ty_n),
-        .sq_i_n(e64_sq_i_n),
-        .sq_rad_n(e64_sq_rad_n),
-        .sq_rem_n(e64_sq_rem_n),
-        .sq_root_n(e64_sq_root_n),
-        .state_n(e64_state_n),
-        .txt_bn_n(e64_txt_bn_n),
-        .txt_ph_n(e64_txt_ph_n),
-        .txt_px_n(e64_txt_px_n),
-        .txt_py_n(e64_txt_py_n),
-        .txt_val_n(e64_txt_val_n),
-        .txt_vt_n(e64_txt_vt_n),
-        .v64_concat_n(e64_v64_concat_n),
-        .v64_join_n(e64_v64_join_n),
-        .v64_repl_n(e64_v64_repl_n),
-        .v64_sqrt_n(e64_v64_sqrt_n),
-        .valloc_arr_n_n(e64_valloc_arr_n_n),
-        .valloc_bind_n(e64_valloc_bind_n),
-        .valloc_bind_src_n(e64_valloc_bind_src_n),
-        .valloc_bind_this_n(e64_valloc_bind_this_n),
-        .valloc_fn_a1_n(e64_valloc_fn_a1_n),
-        .valloc_fn_entry_n(e64_valloc_fn_entry_n),
-        .valloc_i_n(e64_valloc_i_n),
-        .valloc_kind_n(e64_valloc_kind_n),
-        .valloc_metrics_n(e64_valloc_metrics_n),
-        .valloc_now_fn_n(e64_valloc_now_fn_n),
-        .valloc_proto_n(e64_valloc_proto_n),
-        .valloc_proto_fn_n(e64_valloc_proto_fn_n),
-        .valloc_regex_n(e64_valloc_regex_n),
-        .valloc_regex_pack_n(e64_valloc_regex_pack_n),
-        .valloc_retried_n(e64_valloc_retried_n),
-        .varr_next_n(e64_varr_next_n),
-        .vcall_argc_n(e64_vcall_argc_n),
-        .vcall_ctor_val_n(e64_vcall_ctor_val_n),
-        .vcall_entry_n(e64_vcall_entry_n),
-        .vcall_set_this_n(e64_vcall_set_this_n),
-        .vcall_this_n(e64_vcall_this_n),
-        .vcall_value_n(e64_vcall_value_n),
-        .vconsole_n_n(e64_vconsole_n_n),
-        .vcsp_n(e64_vcsp_n),
-        .vdiv_count_n(e64_vdiv_count_n),
-        .vdiv_den_n(e64_vdiv_den_n),
-        .vdiv_exp_n(e64_vdiv_exp_n),
-        .vdiv_num_n(e64_vdiv_num_n),
-        .vdiv_quot_n(e64_vdiv_quot_n),
-        .vdiv_rem_n(e64_vdiv_rem_n),
-        .vdiv_sign_n(e64_vdiv_sign_n),
-        .vdraw_color_n(e64_vdraw_color_n),
-        .vdraw_h_n(e64_vdraw_h_n),
-        .vdraw_i_n(e64_vdraw_i_n),
-        .vdraw_w_n(e64_vdraw_w_n),
-        .vdraw_x_n(e64_vdraw_x_n),
-        .vdraw_y_n(e64_vdraw_y_n),
-        .venv_n(e64_venv_n),
-        .venv_next_n(e64_venv_next_n),
-        .vfe_arr_n(e64_vfe_arr_n),
-        .vfe_base_n(e64_vfe_base_n),
-        .vfe_fn_n(e64_vfe_fn_n),
-        .vfe_i_n(e64_vfe_i_n),
-        .vfe_map_n(e64_vfe_map_n),
-        .vfe_mode_n(e64_vfe_mode_n),
-        .vfe_ret_n(e64_vfe_ret_n),
-        .vfe_sp_n(e64_vfe_sp_n),
-        .vfree_armed_n(e64_vfree_armed_n),
-        .vfree_arr_long_n(e64_vfree_arr_long_n),
-        .vgc_clear_i_n(e64_vgc_clear_i_n),
-        .vgc_halt_after_n(e64_vgc_halt_after_n),
-        .vgc_qr_n(e64_vgc_qr_n),
-        .vgc_qw_n(e64_vgc_qw_n),
-        .vgc_resume_n(e64_vgc_resume_n),
-        .vgc_wait_after_n(e64_vgc_wait_after_n),
-        .vjs_rd_arm_n(e64_vjs_rd_arm_n),
-        .vlistener_n_n(e64_vlistener_n_n),
-        .vmetrics_w_n(e64_vmetrics_w_n),
-        .vmod_count_n(e64_vmod_count_n),
-        .vmod_den_n(e64_vmod_den_n),
-        .vmod_exp_n(e64_vmod_exp_n),
-        .vmod_rem_n(e64_vmod_rem_n),
-        .vmod_sign_n(e64_vmod_sign_n),
-        .vnat_base_n(e64_vnat_base_n),
-        .vnat_dom_n(e64_vnat_dom_n),
-        .vprom_copy_n(e64_vprom_copy_n),
-        .vprom_done_n(e64_vprom_done_n),
-        .vprom_ret_n(e64_vprom_ret_n),
-        .vraf_n_n(e64_vraf_n_n),
-        .vrng_n(e64_vrng_n),
-        .vsp_n(e64_vsp_n),
-        .vst_hold_win_n(e64_vst_hold_win_n),
-        .vst_refill_arm_n(e64_vst_refill_arm_n),
-        .vst_refill_i_n(e64_vst_refill_i_n),
-        .vst_refill_ret_n(e64_vst_refill_ret_n),
-        .vst_waddr_n(e64_vst_waddr_n),
-        .vst_wdata_n(e64_vst_wdata_n),
-        .vst_we_n(e64_vst_we_n),
-        .vthis_n(e64_vthis_n),
-        .vtimer_n_n(e64_vtimer_n_n),
-        .vtimer_seq_n(e64_vtimer_seq_n),
-        .x_n(e64_x_n),
-        .y_n(e64_y_n),
-        .hp_qk_n(e64_hp_qk_n),
-        .hp_qt_n(e64_hp_qt_n),
-        .hp_qv_n(e64_hp_qv_n),
-        .js_i_n(e64_js_i_n),
-        .js_ph_n(e64_js_ph_n),
-        .pc_a1_n(e64_pc_a1_n),
-        .pc_a2_n(e64_pc_a2_n),
-        .pc_a3_n(e64_pc_a3_n),
-        .pc_a4_n(e64_pc_a4_n),
-        .pc_a5_n(e64_pc_a5_n),
-        .pc_ccw_n(e64_pc_ccw_n),
-        .pc_op_n(e64_pc_op_n),
-        .vfe_arr_s_n(e64_vfe_arr_s_n),
-        .vfe_base_s_n(e64_vfe_base_s_n),
-        .vfe_fn_s_n(e64_vfe_fn_s_n),
-        .vfe_i_s_n(e64_vfe_i_s_n),
-        .vfe_map_s_n(e64_vfe_map_s_n),
-        .vfe_mode_s_n(e64_vfe_mode_s_n),
-        .vfe_ret_s_n(e64_vfe_ret_s_n),
-        .vjs_val_n(e64_vjs_val_n),
-        .vlistener_ev_n(e64_vlistener_ev_n),
-        .vlistener_fn_n(e64_vlistener_fn_n),
-        .vraf_arr_n(e64_vraf_n),
-        .vst_win_n(e64_vst_win_n),
-        .vtimer_due_n(e64_vtimer_due_n),
-        .vtimer_fn_n(e64_vtimer_fn_n),
-        .vtimer_id_n(e64_vtimer_id_n),
-        .vtimer_period_n(e64_vtimer_period_n),
-        .vtimer_valid_n(e64_vtimer_valid_n),
-        .json_mem_we(e64_json_mem_we),
-        .json_mem_waddr(e64_json_mem_waddr),
-        .json_mem_wdata(e64_json_mem_wdata),
-        .varr_len_we(e64_varr_len_we),
-        .varr_len_waddr(e64_varr_len_waddr),
-        .varr_len_wdata(e64_varr_len_wdata),
-        .varr_lidx_we(e64_varr_lidx_we),
-        .varr_lidx_waddr(e64_varr_lidx_waddr),
-        .varr_lidx_wdata(e64_varr_lidx_wdata),
-        .varr_long_we(e64_varr_long_we),
-        .varr_long_waddr(e64_varr_long_waddr),
-        .varr_long_wdata(e64_varr_long_wdata),
-        .varr_valid_we(e64_varr_valid_we),
-        .varr_valid_waddr(e64_varr_valid_waddr),
-        .varr_valid_wdata(e64_varr_valid_wdata),
-        .venv_gen_we(e64_venv_gen_we),
-        .venv_gen_waddr(e64_venv_gen_waddr),
-        .venv_gen_wdata(e64_venv_gen_wdata),
-        .venv_len_we(e64_venv_len_we),
-        .venv_len_waddr(e64_venv_len_waddr),
-        .venv_len_wdata(e64_venv_len_wdata),
-        .venv_valid_we(e64_venv_valid_we),
-        .venv_valid_waddr(e64_venv_valid_waddr),
-        .venv_valid_wdata(e64_venv_valid_wdata),
-        .vobj_cls_we(e64_vobj_cls_we),
-        .vobj_cls_waddr(e64_vobj_cls_waddr),
-        .vobj_cls_wdata(e64_vobj_cls_wdata),
-        .vvar_valid_we(e64_vvar_valid_we),
-        .vvar_valid_waddr(e64_vvar_valid_waddr),
-        .vvar_valid_wdata(e64_vvar_valid_wdata),
-        .vvars_we(e64_vvars_we),
-        .vvars_waddr(e64_vvars_waddr),
-        .vvars_wdata(e64_vvars_wdata),
-        .vframe_we(e64_vframe_we),
-        .vframe_waddr(e64_vframe_waddr),
-        .vframe_rip_wdata(e64_vframe_rip_wdata),
-        .vframe_bsp_wdata(e64_vframe_bsp_wdata),
-        .vframe_esc_wdata(e64_vframe_esc_wdata),
-        .vframe_this_wdata(e64_vframe_this_wdata),
-        .vframe_env_wdata(e64_vframe_env_wdata),
-        .vframe_fn_wdata(e64_vframe_fn_wdata),
-        .vframe_ctor_wdata(e64_vframe_ctor_wdata)
+        .p_vprom_copy(vprom_copy),
+        .p_vprom_done(vprom_done),
+        .p_vprom_ret(vprom_ret),
+        .p_vraf_n(vraf_n_ff),
+        .p_vrng(vrng),
+        .p_vsp(vsp_ff),
+        .p_vst_hold_win(vst_hold_win),
+        .p_vst_refill_arm(vst_refill_arm),
+        .p_vst_refill_i(vst_refill_i),
+        .p_vst_refill_ret(vst_refill_ret),
+        .p_vst_waddr(vst_waddr),
+        .p_vst_wdata(vst_wdata),
+        .p_vst_we(vst_we),
+        .vst_win_pack(vst_win_pack),
+        .p_vthis(vthis_ff),
+        .p_vtimer_n(vtimer_n),
+        .p_vtimer_seq(vtimer_seq),
+        .p_x(x),
+        .p_y(y),
+        .aset_win_retried_q(e64_aset_win_retried_q),
+        .bind_argc_q(e64_bind_argc_q),
+        .bind_base_q(e64_bind_base_q),
+        .bind_ip_q(e64_bind_ip_q),
+        .bind_k_q(e64_bind_k_q),
+        .bind_mode_q(e64_bind_mode_q),
+        .bind_n_q(e64_bind_n_q),
+        .bind_rd_arm_q(e64_bind_rd_arm_q),
+        .bind_ret_q(e64_bind_ret_q),
+        .bind_src_q(e64_bind_src_q),
+        .bind_vsp_next_q(e64_bind_vsp_next_q),
+        .blit_sh_q(e64_blit_sh_q),
+        .blit_si_q(e64_blit_si_q),
+        .blit_sw_q(e64_blit_sw_q),
+        .blit_sx_q(e64_blit_sx_q),
+        .blit_sy_q(e64_blit_sy_q),
+        .cc_at_q(e64_cc_at_q),
+        .cc_av_q(e64_cc_av_q),
+        .cc_bok_q(e64_cc_bok_q),
+        .cc_bt_q(e64_cc_bt_q),
+        .cc_bv_q(e64_cc_bv_q),
+        .cc_d_q(e64_cc_d_q),
+        .cc_h_q(e64_cc_h_q),
+        .cc_len_q(e64_cc_len_q),
+        .cc_second_q(e64_cc_second_q),
+        .cc_st_q(e64_cc_st_q),
+        .code_raddr_q(e64_code_raddr_q),
+        .color_q(e64_color_q),
+        .ctx_align_q(e64_ctx_align_q),
+        .ctx_smooth_q(e64_ctx_smooth_q),
+        .ctx_sx_q(e64_ctx_sx_q),
+        .ctx_sy_q(e64_ctx_sy_q),
+        .ctx_tx_q(e64_ctx_tx_q),
+        .ctx_ty_q(e64_ctx_ty_q),
+        .dbg_di_hit_q(e64_dbg_di_hit_q),
+        .dbg_di_miss_q(e64_dbg_di_miss_q),
+        .dbg_div_n_q(e64_dbg_div_n_q),
+        .dbg_json_ovf_q(e64_dbg_json_ovf_q),
+        .dbg_path_ovf_q(e64_dbg_path_ovf_q),
+        .fault_code_q(e64_fault_code_q),
+        .fb_dump_addr_q(e64_fb_dump_addr_q),
+        .fb_dump_sel_q(e64_fb_dump_sel_q),
+        .fb_swap_q(e64_fb_swap_q),
+        .fill_style_i_q(e64_fill_style_i_q),
+        .stroke_style_i_q(e64_stroke_style_i_q),
+        .hp_aid_q(e64_hp_aid_q),
+        .hp_alen_q(e64_hp_alen_q),
+        .hp_aslot_q(e64_hp_aslot_q),
+        .hp_cmd_q(e64_hp_cmd_q),
+        .hp_eid_q(e64_hp_eid_q),
+        .hp_env_q(e64_hp_env_q),
+        .hp_from_stack_q(e64_hp_from_stack_q),
+        .hp_hit_q(e64_hp_hit_q),
+        .hp_key_q(e64_hp_key_q),
+        .hp_len_q(e64_hp_len_q),
+        .hp_lim_q(e64_hp_lim_q),
+        .hp_make_arr_q(e64_hp_make_arr_q),
+        .hp_nat_q(e64_hp_nat_q),
+        .hp_oid_q(e64_hp_oid_q),
+        .hp_phase_q(e64_hp_phase_q),
+        .hp_proto_q(e64_hp_proto_q),
+        .hp_qi_q(e64_hp_qi_q),
+        .hp_qn_q(e64_hp_qn_q),
+        .hp_ret_q(e64_hp_ret_q),
+        .hp_rval_q(e64_hp_rval_q),
+        .hp_si_q(e64_hp_si_q),
+        .hp_slot_q(e64_hp_slot_q),
+        .hp_spr_h_q(e64_hp_spr_h_q),
+        .hp_spr_w_q(e64_hp_spr_w_q),
+        .hp_ss_q(e64_hp_ss_q),
+        .hp_tag_q(e64_hp_tag_q),
+        .hp_tn_q(e64_hp_tn_q),
+        .hp_v64_q(e64_hp_v64_q),
+        .hp_vbase_q(e64_hp_vbase_q),
+        .hp_wval_q(e64_hp_wval_q),
+        .imgd_armed_q(e64_imgd_armed_q),
+        .imgd_h_q(e64_imgd_h_q),
+        .imgd_i_q(e64_imgd_i_q),
+        .imgd_n_q(e64_imgd_n_q),
+        .imgd_v64_q(e64_imgd_v64_q),
+        .imgd_w_q(e64_imgd_w_q),
+        .imgd_x_q(e64_imgd_x_q),
+        .imgd_x0_q(e64_imgd_x0_q),
+        .imgd_y_q(e64_imgd_y_q),
+        .imgd_y0_q(e64_imgd_y0_q),
+        .ip_q(e64_ip_q),
+        .jn_arr_q(e64_jn_arr_q),
+        .jn_h_q(e64_jn_h_q),
+        .jn_i_q(e64_jn_i_q),
+        .jn_res_q(e64_jn_res_q),
+        .js_sp_q(e64_js_sp_q),
+        .json_pph_q(e64_json_pph_q),
+        .json_rp_q(e64_json_rp_q),
+        .json_src_q(e64_json_src_q),
+        .json_srclen_q(e64_json_srclen_q),
+        .json_wp_q(e64_json_wp_q),
+        .looping_q(e64_looping_q),
+        .machine_fault_q(e64_machine_fault_q),
+        .minmax_acc_q(e64_minmax_acc_q),
+        .minmax_base_q(e64_minmax_base_q),
+        .minmax_is_min_q(e64_minmax_is_min_q),
+        .minmax_k_q(e64_minmax_k_q),
+        .minmax_n_q(e64_minmax_n_q),
+        .namcpy_armed_q(e64_namcpy_armed_q),
+        .namcpy_repl_q(e64_namcpy_repl_q),
+        .namcpy_v64_q(e64_namcpy_v64_q),
+        .name_rdaddr_q(e64_name_rdaddr_q),
+        .path_active_q(e64_path_active_q),
+        .path_kind_q(e64_path_kind_q),
+        .path_stroke_q(e64_path_stroke_q),
+        .pc_n_q(e64_pc_n_q),
+        .pi_q(e64_pi_q),
+        .repl_did_q(e64_repl_did_q),
+        .repl_g_q(e64_repl_g_q),
+        .repl_nlen_q(e64_repl_nlen_q),
+        .repl_pat0_q(e64_repl_pat0_q),
+        .repl_pat1_q(e64_repl_pat1_q),
+        .repl_rch_q(e64_repl_rch_q),
+        .rh_q(e64_rh_q),
+        .running_q(e64_running_q),
+        .rw_q(e64_rw_q),
+        .rx_q(e64_rx_q),
+        .ry_q(e64_ry_q),
+        .saved_sx_q(e64_saved_sx_q),
+        .saved_sy_q(e64_saved_sy_q),
+        .saved_tx_q(e64_saved_tx_q),
+        .saved_ty_q(e64_saved_ty_q),
+        .sq_i_q(e64_sq_i_q),
+        .sq_rad_q(e64_sq_rad_q),
+        .sq_rem_q(e64_sq_rem_q),
+        .sq_root_q(e64_sq_root_q),
+        .state_q(e64_state_q),
+        .txt_bn_q(e64_txt_bn_q),
+        .txt_ph_q(e64_txt_ph_q),
+        .txt_px_q(e64_txt_px_q),
+        .txt_py_q(e64_txt_py_q),
+        .txt_val_q(e64_txt_val_q),
+        .txt_vt_q(e64_txt_vt_q),
+        .v64_concat_q(e64_v64_concat_q),
+        .v64_join_q(e64_v64_join_q),
+        .v64_repl_q(e64_v64_repl_q),
+        .v64_sqrt_q(e64_v64_sqrt_q),
+        .valloc_arr_n_q(e64_valloc_arr_n_q),
+        .valloc_bind_q(e64_valloc_bind_q),
+        .valloc_bind_src_q(e64_valloc_bind_src_q),
+        .valloc_bind_this_q(e64_valloc_bind_this_q),
+        .valloc_fn_a1_q(e64_valloc_fn_a1_q),
+        .valloc_fn_entry_q(e64_valloc_fn_entry_q),
+        .valloc_i_q(e64_valloc_i_q),
+        .valloc_kind_q(e64_valloc_kind_q),
+        .valloc_metrics_q(e64_valloc_metrics_q),
+        .valloc_now_fn_q(e64_valloc_now_fn_q),
+        .valloc_proto_q(e64_valloc_proto_q),
+        .valloc_proto_fn_q(e64_valloc_proto_fn_q),
+        .valloc_regex_q(e64_valloc_regex_q),
+        .valloc_regex_pack_q(e64_valloc_regex_pack_q),
+        .valloc_retried_q(e64_valloc_retried_q),
+        .varr_next_q(e64_varr_next_q),
+        .vcall_argc_q(e64_vcall_argc_q),
+        .vcall_ctor_val_q(e64_vcall_ctor_val_q),
+        .vcall_entry_q(e64_vcall_entry_q),
+        .vcall_set_this_q(e64_vcall_set_this_q),
+        .vcall_this_q(e64_vcall_this_q),
+        .vcall_value_q(e64_vcall_value_q),
+        .vconsole_n_q(e64_vconsole_n_q),
+        .vcsp_q(e64_vcsp_q),
+        .vdiv_count_q(e64_vdiv_count_q),
+        .vdiv_den_q(e64_vdiv_den_q),
+        .vdiv_exp_q(e64_vdiv_exp_q),
+        .vdiv_num_q(e64_vdiv_num_q),
+        .vdiv_quot_q(e64_vdiv_quot_q),
+        .vdiv_rem_q(e64_vdiv_rem_q),
+        .vdiv_sign_q(e64_vdiv_sign_q),
+        .vdraw_color_q(e64_vdraw_color_q),
+        .vdraw_h_q(e64_vdraw_h_q),
+        .vdraw_i_q(e64_vdraw_i_q),
+        .vdraw_w_q(e64_vdraw_w_q),
+        .vdraw_x_q(e64_vdraw_x_q),
+        .vdraw_y_q(e64_vdraw_y_q),
+        .venv_q(e64_venv_q),
+        .venv_next_q(e64_venv_next_q),
+        .vfe_arr_q(e64_vfe_arr_q),
+        .vfe_base_q(e64_vfe_base_q),
+        .vfe_fn_q(e64_vfe_fn_q),
+        .vfe_i_q(e64_vfe_i_q),
+        .vfe_map_q(e64_vfe_map_q),
+        .vfe_mode_q(e64_vfe_mode_q),
+        .vfe_ret_q(e64_vfe_ret_q),
+        .vfe_sp_q(e64_vfe_sp_q),
+        .vfree_armed_q(e64_vfree_armed_q),
+        .vfree_arr_long_q(e64_vfree_arr_long_q),
+        .vgc_clear_i_q(e64_vgc_clear_i_q),
+        .vgc_halt_after_q(e64_vgc_halt_after_q),
+        .vgc_qr_q(e64_vgc_qr_q),
+        .vgc_qw_q(e64_vgc_qw_q),
+        .vgc_resume_q(e64_vgc_resume_q),
+        .vgc_wait_after_q(e64_vgc_wait_after_q),
+        .vjs_rd_arm_q(e64_vjs_rd_arm_q),
+        .vlistener_n_q(e64_vlistener_n_q),
+        .vmetrics_w_q(e64_vmetrics_w_q),
+        .vmod_count_q(e64_vmod_count_q),
+        .vmod_den_q(e64_vmod_den_q),
+        .vmod_exp_q(e64_vmod_exp_q),
+        .vmod_rem_q(e64_vmod_rem_q),
+        .vmod_sign_q(e64_vmod_sign_q),
+        .vnat_base_q(e64_vnat_base_q),
+        .vnat_dom_q(e64_vnat_dom_q),
+        .vprom_copy_q(e64_vprom_copy_q),
+        .vprom_done_q(e64_vprom_done_q),
+        .vprom_ret_q(e64_vprom_ret_q),
+        .vraf_n_q(e64_vraf_n_q),
+        .vrng_q(e64_vrng_q),
+        .vsp_q(e64_vsp_q),
+        .vst_hold_win_q(e64_vst_hold_win_q),
+        .vst_refill_arm_q(e64_vst_refill_arm_q),
+        .vst_refill_i_q(e64_vst_refill_i_q),
+        .vst_refill_ret_q(e64_vst_refill_ret_q),
+        .vst_waddr_q(e64_vst_waddr_q),
+        .vst_wdata_q(e64_vst_wdata_q),
+        .vst_we_q(e64_vst_we_q),
+        .vthis_q(e64_vthis_q),
+        .vtimer_n_q(e64_vtimer_n_q),
+        .vtimer_seq_q(e64_vtimer_seq_q),
+        .x_q(e64_x_q),
+        .y_q(e64_y_q),
+        .hp_qk_pack_q(e64_hp_qk_pack_q),
+        .hp_qt_pack_q(e64_hp_qt_pack_q),
+        .hp_qv_pack_q(e64_hp_qv_pack_q),
+        .json_mem_we_q(e64_json_mem_we),
+        .json_mem_waddr_q(e64_json_mem_waddr),
+        .json_mem_wdata_q(e64_json_mem_wdata),
+        .vvars_raddr_q(e64_vvars_raddr),
+        .venv_raddr_q(e64_venv_raddr),
+        .varr_raddr_q(e64_varr_raddr),
+        .vobj_raddr_q(e64_vobj_raddr),
+        .vfn_raddr_q(e64_vfn_raddr),
+        .name_off_raddr_q(e64_name_off_raddr),
+        .fill_lut_raddr_q(e64_fill_lut_raddr),
+        .vframe_raddr_q(e64_vframe_raddr),
+        .vtimer_raddr_q(e64_vtimer_raddr),
+        .vconsts_raddr_q(e64_vconsts_raddr),
+        .name_blen_raddr_q(e64_name_blen_raddr),
+        .name_blen_we_q(e64_name_blen_we),
+        .name_blen_waddr_q(e64_name_blen_waddr),
+        .name_blen_wdata_q(e64_name_blen_wdata),
+        .name_hash_raddr_q(e64_name_hash_raddr),
+        .name_hash_we_q(e64_name_hash_we),
+        .name_hash_waddr_q(e64_name_hash_waddr),
+        .name_hash_wdata_q(e64_name_hash_wdata),
+        .name_has_we_q(e64_name_has_we),
+        .name_has_waddr_q(e64_name_has_waddr),
+        .name_has_wdata_q(e64_name_has_wdata),
+        .varr_len_we_q(e64_varr_len_we),
+        .varr_len_waddr_q(e64_varr_len_waddr),
+        .varr_len_wdata_q(e64_varr_len_wdata),
+        .varr_lidx_we_q(e64_varr_lidx_we),
+        .varr_lidx_waddr_q(e64_varr_lidx_waddr),
+        .varr_lidx_wdata_q(e64_varr_lidx_wdata),
+        .varr_long_we_q(e64_varr_long_we),
+        .varr_long_waddr_q(e64_varr_long_waddr),
+        .varr_long_wdata_q(e64_varr_long_wdata),
+        .varr_valid_we_q(e64_varr_valid_we),
+        .varr_valid_waddr_q(e64_varr_valid_waddr),
+        .varr_valid_wdata_q(e64_varr_valid_wdata),
+        .venv_gen_we_q(e64_venv_gen_we),
+        .venv_gen_waddr_q(e64_venv_gen_waddr),
+        .venv_gen_wdata_q(e64_venv_gen_wdata),
+        .venv_len_we_q(e64_venv_len_we),
+        .venv_len_waddr_q(e64_venv_len_waddr),
+        .venv_len_wdata_q(e64_venv_len_wdata),
+        .venv_valid_we_q(e64_venv_valid_we),
+        .venv_valid_waddr_q(e64_venv_valid_waddr),
+        .venv_valid_wdata_q(e64_venv_valid_wdata),
+        .vobj_cls_we_q(e64_vobj_cls_we),
+        .vobj_cls_waddr_q(e64_vobj_cls_waddr),
+        .vobj_cls_wdata_q(e64_vobj_cls_wdata),
+        .vvar_valid_we_q(e64_vvar_valid_we),
+        .vvar_valid_waddr_q(e64_vvar_valid_waddr),
+        .vvar_valid_wdata_q(e64_vvar_valid_wdata),
+        .vvars_we_q(e64_vvars_we),
+        .vvars_waddr_q(e64_vvars_waddr),
+        .vvars_wdata_q(e64_vvars_wdata),
+        .vframe_we_q(e64_vframe_we),
+        .vframe_waddr_q(e64_vframe_waddr),
+        .vframe_rip_wdata_q(e64_vframe_rip_wdata),
+        .vframe_bsp_wdata_q(e64_vframe_bsp_wdata),
+        .vframe_esc_wdata_q(e64_vframe_esc_wdata),
+        .vframe_this_wdata_q(e64_vframe_this_wdata),
+        .vframe_env_wdata_q(e64_vframe_env_wdata),
+        .vframe_fn_wdata_q(e64_vframe_fn_wdata),
+        .vframe_ctor_wdata_q(e64_vframe_ctor_wdata),
+        .vraf_we_q(e64_vraf_we),
+        .vraf_waddr_q(e64_vraf_waddr),
+        .vraf_wdata_q(e64_vraf_wdata),
+        .vtimer_we_q(e64_vtimer_we),
+        .vtimer_waddr_q(e64_vtimer_waddr),
+        .vtimer_valid_wdata_q(e64_vtimer_valid_wdata),
+        .vtimer_due_wdata_q(e64_vtimer_due_wdata),
+        .vtimer_fn_wdata_q(e64_vtimer_fn_wdata),
+        .vtimer_id_wdata_q(e64_vtimer_id_wdata),
+        .vtimer_period_wdata_q(e64_vtimer_period_wdata),
+        .vlistener_we_q(e64_vlistener_we),
+        .vlistener_waddr_q(e64_vlistener_waddr),
+        .vlistener_ev_wdata_q(e64_vlistener_ev_wdata),
+        .vlistener_fn_wdata_q(e64_vlistener_fn_wdata),
+        .vlistener_repl_q(e64_vlistener_repl),
+        .vst_win0_we_q(e64_vst_win0_we),
+        .vst_win0_wdata_q(e64_vst_win0_wdata)
     );
+
+    // HEAP/FETCH use exec scalars (ip/hp_*/code_raddr/state), not a parent snapshot.
+    st_t casestate;
+    always_comb begin
+        hs64 = jsb_flags[3] && ((state == S_V64_EXEC) || (state == S_FETCH_WAIT) ||
+            (state == S_HEAP_WAIT) || (state == S_HEAP_CMP) || (state == S_HEAP_WR) ||
+            (state == S_HEAP_AWR) || (state == S_HEAP_FILL) || (state == S_V64_ALLOC) ||
+            (state == S_WAIT_FRAME) || (state == S_V64_WAIT_FRAME) ||
+            (state == S_V64_FRAME_RAF) || (state == S_V64_FRAME_TIMER) ||
+            (state == S_V64_FRAME_KEY) || (state == S_V64_BIND) ||
+            (state == S_V64_RECT) || (state == S_V64_CLEAR) ||
+            (state == S_V64_CTOR_PAD) || (state == S_V64_CTOR_ENV) ||
+            (state == S_V64_CTOR_VARS) ||
+            (state == S_V64_FOREACH) || (state == S_V64_FE_ELEM) ||
+            (state == S_V64_FE_FILTER) || (state == S_V64_METH) ||
+            (state == S_V64_MINMAX) || (state == S_V64_WIN_FILL) ||
+            (state == S_V64_JSON) || (state == S_V64_JSON_PARSE) ||
+            (state == S_V64_STRIDX) || (state == S_V64_STRIDX_WR) ||
+            (state == S_V64_DIV) || (state == S_V64_DIV_FIN) ||
+            (state == S_V64_MOD) || (state == S_V64_CONST_HI) ||
+            (state == S_V64_IDXSCAN) || (state == S_V64_OGETI_NAT) ||
+            (state == S_V64_GC_CLEAR) || (state == S_V64_GC_ROOT) ||
+            (state == S_V64_GC_POP) || (state == S_V64_GC_OBJ) ||
+            (state == S_V64_GC_ARR) || (state == S_V64_GC_FN) ||
+            (state == S_V64_GC_ENV) || (state == S_V64_GC_SWEEP_OBJ) ||
+            (state == S_V64_GC_SWEEP_ARR) || (state == S_V64_GC_SWEEP_ENV));
+        hs32 = !jsb_flags[3] && ((state == S_EXEC) || (state == S_NAT) ||
+            (state == S_FETCH_WAIT) || (state == S_HEAP_WAIT) || (state == S_HEAP_CMP) ||
+            (state == S_HEAP_WR) || (state == S_HEAP_AWR) || (state == S_HEAP_FILL));
+        if ((state == S_V64_EXEC) && e64_leave_hold)
+            casestate = st_t'(e64_state_q);
+        else if (((state == S_EXEC) || (state == S_NAT)) && e32_leave_hold)
+            casestate = st_t'(e32_state_q);
+        else
+            casestate = state;
+    end
+
+    // Live HEAP/FETCH view: these clock in exec. Masked parent writes (hs_m_*)
+    // overlay for the SRAM wait cycle after a poke.
+    assign ip = hs64 ? (hs_m_ip ? ip_ff : e64_ip_q) :
+                hs32 ? (hs_m_ip ? ip_ff : e32_ip_q) : ip_ff;
+    assign code_raddr = hs64 ? (hs_m_code ? code_raddr_ff : e64_code_raddr_q) :
+                hs32 ? (hs_m_code ? code_raddr_ff : e32_code_raddr_q) : code_raddr_ff;
+    assign vsp = hs64 ? (hs_m_vsp ? vsp_ff : e64_vsp_q) : vsp_ff;
+    assign hp_cmd = hs64 ? (hs_m_hp_cmd ? hp_cmd_ff : e64_hp_cmd_q) :
+                hs32 ? (hs_m_hp_cmd ? hp_cmd_ff : e32_hp_cmd_q) : hp_cmd_ff;
+    assign hp_v64 = hs64 ? (hs_m_hp_v64 ? hp_v64_ff : e64_hp_v64_q) :
+                hs32 ? (hs_m_hp_v64 ? hp_v64_ff : e32_hp_v64_q) : hp_v64_ff;
+    assign hp_oid = hs64 ? (hs_m_hp_oid ? hp_oid_ff : e64_hp_oid_q) :
+                hs32 ? (hs_m_hp_oid ? hp_oid_ff : e32_hp_oid_q) : hp_oid_ff;
+    assign hp_aid = hs64 ? (hs_m_hp_aid ? hp_aid_ff : e64_hp_aid_q) :
+                hs32 ? (hs_m_hp_aid ? hp_aid_ff : e32_hp_aid_q) : hp_aid_ff;
+    assign hp_env = hs64 ? (hs_m_hp_env ? hp_env_ff : e64_hp_env_q) : hp_env_ff;
+    assign hp_eid = hs64 ? (hs_m_hp_eid ? hp_eid_ff : e64_hp_eid_q) : hp_eid_ff;
+    assign hp_slot = hs64 ? (hs_m_hp_slot ? hp_slot_ff : e64_hp_slot_q) :
+                hs32 ? (hs_m_hp_slot ? hp_slot_ff : e32_hp_slot_q) : hp_slot_ff;
+    assign hp_aslot = hs64 ? (hs_m_hp_aslot ? hp_aslot_ff : e64_hp_aslot_q) :
+                hs32 ? (hs_m_hp_aslot ? hp_aslot_ff : e32_hp_aslot_q) : hp_aslot_ff;
+    assign hp_len = hs64 ? (hs_m_hp_len ? hp_len_ff : e64_hp_len_q) :
+                hs32 ? (hs_m_hp_len ? hp_len_ff : e32_hp_len_q) : hp_len_ff;
+    assign hp_alen = hs64 ? (hs_m_hp_alen ? hp_alen_ff : e64_hp_alen_q) :
+                hs32 ? (hs_m_hp_alen ? hp_alen_ff : e32_hp_alen_q) : hp_alen_ff;
+    assign hp_lim = hs64 ? (hs_m_hp_lim ? hp_lim_ff : e64_hp_lim_q) :
+                hs32 ? (hs_m_hp_lim ? hp_lim_ff : e32_hp_lim_q) : hp_lim_ff;
+    assign hp_key = hs64 ? (hs_m_hp_key ? hp_key_ff : e64_hp_key_q) :
+                hs32 ? (hs_m_hp_key ? hp_key_ff : e32_hp_key_q) : hp_key_ff;
+    assign hp_wval = hs64 ? (hs_m_hp_wval ? hp_wval_ff : e64_hp_wval_q) :
+                hs32 ? (hs_m_hp_wval ? hp_wval_ff : e32_hp_wval_q) : hp_wval_ff;
+    assign hp_rval = hs64 ? (hs_m_hp_rval ? hp_rval_ff : e64_hp_rval_q) :
+                hs32 ? (hs_m_hp_rval ? hp_rval_ff : e32_hp_rval_q) : hp_rval_ff;
+    assign hp_hit = hs64 ? (hs_m_hp_hit ? hp_hit_ff : e64_hp_hit_q) :
+                hs32 ? (hs_m_hp_hit ? hp_hit_ff : e32_hp_hit_q) : hp_hit_ff;
+    assign hp_ret = hs64 ? (hs_m_hp_ret ? hp_ret_ff : st_t'(e64_hp_ret_q)) :
+                hs32 ? (hs_m_hp_ret ? hp_ret_ff : st_t'(e32_hp_ret_q)) : hp_ret_ff;
+    assign hp_phase = hs64 ? (hs_m_hp_phase ? hp_phase_ff : e64_hp_phase_q) :
+                hs32 ? (hs_m_hp_phase ? hp_phase_ff : e32_hp_phase_q) : hp_phase_ff;
+    assign hp_proto = hs64 ? (hs_m_hp_proto ? hp_proto_ff : e64_hp_proto_q) :
+                hs32 ? (hs_m_hp_proto ? hp_proto_ff : e32_hp_proto_q) : hp_proto_ff;
+    assign hp_qn = hs64 ? (hs_m_hp_qn ? hp_qn_ff : e64_hp_qn_q) :
+                hs32 ? (hs_m_hp_qn ? hp_qn_ff : e32_hp_qn_q) : hp_qn_ff;
+    assign hp_qi = hs64 ? (hs_m_hp_qi ? hp_qi_ff : e64_hp_qi_q) :
+                hs32 ? (hs_m_hp_qi ? hp_qi_ff : e32_hp_qi_q) : hp_qi_ff;
+    assign hp_si = hs64 ? (hs_m_hp_si ? hp_si_ff : e64_hp_si_q) :
+                hs32 ? (hs_m_hp_si ? hp_si_ff : e32_hp_si_q) : hp_si_ff;
+    assign hp_ss = hs64 ? (hs_m_hp_ss ? hp_ss_ff : e64_hp_ss_q) :
+                hs32 ? (hs_m_hp_ss ? hp_ss_ff : e32_hp_ss_q) : hp_ss_ff;
+    assign hp_tn = hs64 ? (hs_m_hp_tn ? hp_tn_ff : e64_hp_tn_q) :
+                hs32 ? (hs_m_hp_tn ? hp_tn_ff : e32_hp_tn_q) : hp_tn_ff;
+    assign hp_from_stack = hs64 ? (hs_m_hp_from_stack ? hp_from_stack_ff : e64_hp_from_stack_q) :
+                hs32 ? (hs_m_hp_from_stack ? hp_from_stack_ff : e32_hp_from_stack_q) : hp_from_stack_ff;
+    assign hp_make_arr = hs64 ? (hs_m_hp_make_arr ? hp_make_arr_ff : e64_hp_make_arr_q) :
+                hs32 ? (hs_m_hp_make_arr ? hp_make_arr_ff : e32_hp_make_arr_q) : hp_make_arr_ff;
+    assign hp_vbase = hs64 ? (hs_m_hp_vbase ? hp_vbase_ff : e64_hp_vbase_q) :
+                hs32 ? (hs_m_hp_vbase ? hp_vbase_ff : e32_hp_vbase_q) : hp_vbase_ff;
+    assign hp_spr_w = hs64 ? (hs_m_hp_spr_w ? hp_spr_w_ff : e64_hp_spr_w_q) : hp_spr_w_ff;
+    assign hp_spr_h = hs64 ? (hs_m_hp_spr_h ? hp_spr_h_ff : e64_hp_spr_h_q) : hp_spr_h_ff;
+    assign hp_nat = hs64 ? (hs_m_hp_nat ? hp_nat_ff : e64_hp_nat_q) :
+                hs32 ? (hs_m_hp_nat ? hp_nat_ff : e32_hp_nat_q) : hp_nat_ff;
+    assign hp_tag = hs64 ? (hs_m_hp_tag ? hp_tag_ff : e64_hp_tag_q) :
+                hs32 ? (hs_m_hp_tag ? hp_tag_ff : e32_hp_tag_q) : hp_tag_ff;
+    // ALLOC leave: read exec valloc_*/vcall_*/vnat_*/vcsp, not a dump.
+    assign valloc_kind = hs64 ? (hs_m_valloc_kind ? valloc_kind_ff : e64_valloc_kind_q) : valloc_kind_ff;
+    assign valloc_i = hs64 ? (hs_m_valloc_i ? valloc_i_ff : e64_valloc_i_q) : valloc_i_ff;
+    assign valloc_arr_n = hs64 ? (hs_m_valloc_arr_n ? valloc_arr_n_ff : e64_valloc_arr_n_q) : valloc_arr_n_ff;
+    assign valloc_retried = hs64 ? (hs_m_valloc_retried ? valloc_retried_ff : e64_valloc_retried_q) : valloc_retried_ff;
+    assign vnat_dom = hs64 ? (hs_m_vnat_dom ? vnat_dom_ff : e64_vnat_dom_q) : vnat_dom_ff;
+    assign vnat_base = hs64 ? (hs_m_vnat_base ? vnat_base_ff : e64_vnat_base_q) : vnat_base_ff;
+    assign valloc_now_fn = hs64 ? (hs_m_valloc_now_fn ? valloc_now_fn_ff : e64_valloc_now_fn_q) : valloc_now_fn_ff;
+    assign valloc_bind = hs64 ? (hs_m_valloc_bind ? valloc_bind_ff : e64_valloc_bind_q) : valloc_bind_ff;
+    assign valloc_bind_src = hs64 ? (hs_m_valloc_bind_src ? valloc_bind_src_ff : e64_valloc_bind_src_q) : valloc_bind_src_ff;
+    assign valloc_bind_this = hs64 ? (hs_m_valloc_bind_this ? valloc_bind_this_ff : e64_valloc_bind_this_q) : valloc_bind_this_ff;
+    assign valloc_fn_entry = hs64 ? (hs_m_valloc_fn_entry ? valloc_fn_entry_ff : e64_valloc_fn_entry_q) : valloc_fn_entry_ff;
+    assign valloc_fn_a1 = hs64 ? (hs_m_valloc_fn_a1 ? valloc_fn_a1_ff : e64_valloc_fn_a1_q) : valloc_fn_a1_ff;
+    assign valloc_proto = hs64 ? (hs_m_valloc_proto ? valloc_proto_ff : e64_valloc_proto_q) : valloc_proto_ff;
+    assign valloc_proto_fn = hs64 ? (hs_m_valloc_proto_fn ? valloc_proto_fn_ff : e64_valloc_proto_fn_q) : valloc_proto_fn_ff;
+    assign valloc_metrics = hs64 ? (hs_m_valloc_metrics ? valloc_metrics_ff : e64_valloc_metrics_q) : valloc_metrics_ff;
+    assign valloc_regex = hs64 ? (hs_m_valloc_regex ? valloc_regex_ff : e64_valloc_regex_q) : valloc_regex_ff;
+    assign valloc_regex_pack = hs64 ? (hs_m_valloc_regex_pack ? valloc_regex_pack_ff : e64_valloc_regex_pack_q) : valloc_regex_pack_ff;
+    assign vcall_value = hs64 ? (hs_m_vcall_value ? vcall_value_ff : e64_vcall_value_q) : vcall_value_ff;
+    assign vcall_argc = hs64 ? (hs_m_vcall_argc ? vcall_argc_ff : e64_vcall_argc_q) : vcall_argc_ff;
+    assign vcall_entry = hs64 ? (hs_m_vcall_entry ? vcall_entry_ff : e64_vcall_entry_q) : vcall_entry_ff;
+    assign vcall_set_this = hs64 ? (hs_m_vcall_set_this ? vcall_set_this_ff : e64_vcall_set_this_q) : vcall_set_this_ff;
+    assign vcall_this = hs64 ? (hs_m_vcall_this ? vcall_this_ff : e64_vcall_this_q) : vcall_this_ff;
+    assign vcall_ctor_val = hs64 ? (hs_m_vcall_ctor_val ? vcall_ctor_val_ff : e64_vcall_ctor_val_q) : vcall_ctor_val_ff;
+    assign vcsp = hs64 ? (hs_m_vcsp ? vcsp_ff : e64_vcsp_q) : vcsp_ff;
+    assign vthis = hs64 ? (hs_m_vthis ? vthis_ff : e64_vthis_q) : vthis_ff;
+    assign venv = hs64 ? (hs_m_venv ? venv_ff : e64_venv_q) : venv_ff;
+    // rAF/GC flags: WAIT_FRAME and GC_CLEAR read exec, not parent zeros.
+    assign vraf_n = hs64 ? (hs_m_vraf_n ? vraf_n_ff : e64_vraf_n_q) : vraf_n_ff;
+    assign vlistener_n = hs64 ? (hs_m_vlistener_n ? vlistener_n_ff : e64_vlistener_n_q) : vlistener_n_ff;
+    assign vgc_halt_after = hs64 ? (hs_m_vgc_halt_after ? vgc_halt_after_ff : e64_vgc_halt_after_q) : vgc_halt_after_ff;
+    assign vgc_wait_after = hs64 ? (hs_m_vgc_wait_after ? vgc_wait_after_ff : e64_vgc_wait_after_q) : vgc_wait_after_ff;
+    assign vgc_clear_i = hs64 ? (hs_m_vgc_clear_i ? vgc_clear_i_ff : e64_vgc_clear_i_q) : vgc_clear_i_ff;
+    assign vgc_qr = hs64 ? (hs_m_vgc_qr ? vgc_qr_ff : e64_vgc_qr_q) : vgc_qr_ff;
+    assign vgc_qw = hs64 ? (hs_m_vgc_qw ? vgc_qw_ff : e64_vgc_qw_q) : vgc_qw_ff;
+    assign vdraw_i = hs64 ? (hs_m_vdraw_i ? vdraw_i_ff : e64_vdraw_i_q) : vdraw_i_ff;
+    assign vdraw_x = hs64 ? (hs_m_vdraw_x ? vdraw_x_ff : e64_vdraw_x_q) : vdraw_x_ff;
+    assign vdraw_y = hs64 ? (hs_m_vdraw_y ? vdraw_y_ff : e64_vdraw_y_q) : vdraw_y_ff;
+    assign vdraw_w = hs64 ? (hs_m_vdraw_w ? vdraw_w_ff : e64_vdraw_w_q) : vdraw_w_ff;
+    assign vdraw_h = hs64 ? (hs_m_vdraw_h ? vdraw_h_ff : e64_vdraw_h_q) : vdraw_h_ff;
+    assign vdraw_color = hs64 ? (hs_m_vdraw_color ? vdraw_color_ff : e64_vdraw_color_q) : vdraw_color_ff;
+    genvar gi_hs;
+    generate
+        for (gi_hs = 0; gi_hs < 4; gi_hs++) begin : g_hp_q
+            assign hp_qk[gi_hs] = hs64 ? (hs_m_hp_qk ? hp_qk_ff[gi_hs] : e64_hp_qk_pack_q[16*gi_hs +: 16]) :
+                hs32 ? (hs_m_hp_qk ? hp_qk_ff[gi_hs] : e32_hp_qk_pack_q[16*gi_hs +: 16]) : hp_qk_ff[gi_hs];
+            assign hp_qv[gi_hs] = hs64 ? (hs_m_hp_qv ? hp_qv_ff[gi_hs] : e64_hp_qv_pack_q[64*gi_hs +: 64]) :
+                hs32 ? (hs_m_hp_qv ? hp_qv_ff[gi_hs] : e32_hp_qv_pack_q[64*gi_hs +: 64]) : hp_qv_ff[gi_hs];
+            assign hp_qt[gi_hs] = hs64 ? (hs_m_hp_qt ? hp_qt_ff[gi_hs] : e64_hp_qt_pack_q[3*gi_hs +: 3]) :
+                hs32 ? (hs_m_hp_qt ? hp_qt_ff[gi_hs] : e32_hp_qt_pack_q[3*gi_hs +: 3]) : hp_qt_ff[gi_hs];
+        end
+    endgenerate
+    genvar gi_e32pack;
+    generate
+        for (gi_e32pack = 0; gi_e32pack < 4; gi_e32pack++) begin : g_e32_hp_pack
+            assign hp_qk_ff_pack[16*gi_e32pack +: 16] = hp_qk_ff[gi_e32pack];
+            assign hp_qt_ff_pack[3*gi_e32pack +: 3] = hp_qt_ff[gi_e32pack];
+            assign hp_qv_ff_pack[64*gi_e32pack +: 64] = hp_qv_ff[gi_e32pack];
+        end
+        for (gi_e32pack = 0; gi_e32pack < 16; gi_e32pack++) begin : g_e32_spr_pack
+            assign spr_hh_pack[16*gi_e32pack +: 16] = spr_hh[gi_e32pack];
+            assign spr_nid_pack[16*gi_e32pack +: 16] = spr_nid[gi_e32pack];
+            assign spr_ww_pack[16*gi_e32pack +: 16] = spr_ww[gi_e32pack];
+        end
+    endgenerate
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin
-            state <= S_IDLE;
+            hs_st(S_IDLE);
             running <= 1'b0;
             looping <= 1'b0;
             fb_we <= 1'b0; fb_swap <= 1'b0;
             did_swap <= 1'b0; present_pend <= 1'b0;
             fb_waddr <= '0; fb_wdata <= '0;
             fb_dump_addr <= '0; fb_dump_sel <= 1'b0;
-            sp <= '0; ip <= '0;
-            vsp <= '0; vcsp <= '0; vconst_lo <= '0;
+            sp <= '0; hs_ip('0);
+            hs_vsp('0); hs_vcsp('0); vconst_lo <= '0;
             vsp_d <= '0;
             vst_we <= 1'b0;
             vst_waddr <= '0;
@@ -3948,33 +4545,33 @@ module jmr_js_vm #(
             vdiv_sign <= 1'b0;
             vmod_rem <= '0; vmod_den <= '0; vmod_count <= '0;
             vmod_exp <= '0; vmod_sign <= 1'b0;
-            vgc_qr <= '0; vgc_qw <= '0; vgc_clear_i <= '0;
+            hs_vgc_qr('0); hs_vgc_qw('0); hs_vgc_clear_i('0);
             vgc_obj_i <= '0; vgc_arr_i <= '0; vgc_slot_i <= '0;
-            vgc_cur <= '0; vgc_root_i <= '0; valloc_i <= '0;
+            vgc_cur <= '0; vgc_root_i <= '0; hs_valloc_i('0);
             vobj_next <= '0; varr_next <= '0; vfn_next <= '0;
-            venv_next <= '0; valloc_kind <= 2'd0;
-            valloc_retried <= 1'b0;
-            vgc_halt_after <= 1'b0;
+            venv_next <= '0; hs_valloc_kind(2'd0);
+            hs_valloc_retried(1'b0);
+            hs_vgc_halt_after(1'b0);
             vgc_env_i <= '0; vgc_root_phase <= '0;
-            vcall_value <= 1'b0; vcall_entry <= '0; vcall_argc <= '0;
-            vcall_set_this <= 1'b0;
-            vcall_this <= V64_UNDEFINED;
-            vcall_ctor_val <= V64_UNDEFINED;
+            hs_vcall_value(1'b0); hs_vcall_entry('0); hs_vcall_argc('0);
+            hs_vcall_set_this(1'b0);
+            hs_vcall_this(V64_UNDEFINED);
+            hs_vcall_ctor_val(V64_UNDEFINED);
             imgd_v64 <= 1'b0;
-            vthis <= V64_UNDEFINED; venv <= V64_UNDEFINED;
-            vraf_n <= '0; vraf_snap_n <= '0; vraf_i <= '0;
+            hs_vthis(V64_UNDEFINED); hs_venv(V64_UNDEFINED);
+            hs_vraf_n('0); vraf_snap_n <= '0; vraf_i <= '0;
             vtimer_n <= '0; vframe_no <= '0; vtimer_seq <= 32'd1;
             vrng <= 32'h6d2b79f5; vconsole_n <= '0;
             vtimer_pick <= '0; vcallback_raf <= 1'b0;
-            vcallback_timer <= 1'b0; vgc_wait_after <= 1'b0;
+            vcallback_timer <= 1'b0; hs_vgc_wait_after(1'b0);
             vgc_resume <= 2'd0;
-            vnat_base <= '0; vdraw_i <= '0;
+            hs_vnat_base('0); hs_vdraw_i('0);
             vdraw_cx <= '0; vdraw_cy <= '0;
-            vnat_dom <= 3'd0; vnat_style <= V64_UNDEFINED;
+            hs_vnat_dom(3'd0); vnat_style <= V64_UNDEFINED;
             vmetrics <= V64_UNDEFINED;
-            valloc_metrics <= 1'b0;
+            hs_valloc_metrics(1'b0);
             vmetrics_w <= 16'd0;
-            vkev_event <= V64_UNDEFINED; vlistener_n <= 5'd0;
+            vkev_event <= V64_UNDEFINED; vlistener_n_ff <= 5'd0;
             vkey_li <= 5'd0;
             v64_frame_armed <= 1'b0;
             vcallback_key <= 1'b0; vcallback_fe <= 1'b0;
@@ -3982,21 +4579,34 @@ module jmr_js_vm #(
             vfe_i <= 8'd0; vfe_ret <= 16'd0; vfe_base <= '0; vfe_sp <= 4'd0;
             vfe_mode <= 2'd0;
             vfe_map <= V64_UNDEFINED;
-            valloc_now_fn <= 1'b0;
-            valloc_regex <= 1'b0;
-            valloc_regex_pack <= 32'd0;
-            valloc_arr_n <= 8'd0;
-            valloc_fn_entry <= 16'd0;
-            valloc_fn_a1 <= 8'd0;
-            valloc_proto <= 1'b0;
-            valloc_proto_fn <= 13'd0;
-            valloc_bind <= 1'b0;
-            valloc_bind_src <= 13'd0;
-            valloc_bind_this <= V64_UNDEFINED;
+            hs_valloc_now_fn(1'b0);
+            hs_valloc_regex(1'b0);
+            hs_valloc_regex_pack(32'd0);
+            hs_valloc_arr_n(8'd0);
+            hs_valloc_fn_entry(16'd0);
+            hs_valloc_fn_a1(8'd0);
+            hs_valloc_proto(1'b0);
+            hs_valloc_proto_fn(13'd0);
+            hs_valloc_bind(1'b0);
+            hs_valloc_bind_src(13'd0);
+            hs_valloc_bind_this(V64_UNDEFINED);
             vctor_scan <= '0;
             vctor_armed <= 1'b0;
             e64_p_clr <= 1'b0;
             e64_p_we <= 1'b0;
+            hs_m_ip <= 1'b0; hs_m_code <= 1'b0; hs_m_state <= 1'b0; hs_m_vsp <= 1'b0;
+            hs_m_hp_cmd <= 1'b0; hs_m_hp_v64 <= 1'b0; hs_m_hp_oid <= 1'b0;
+            hs_m_hp_aid <= 1'b0; hs_m_hp_env <= 1'b0; hs_m_hp_eid <= 1'b0;
+            hs_m_hp_slot <= 1'b0; hs_m_hp_aslot <= 1'b0; hs_m_hp_len <= 1'b0;
+            hs_m_hp_alen <= 1'b0; hs_m_hp_lim <= 1'b0; hs_m_hp_key <= 1'b0;
+            hs_m_hp_wval <= 1'b0; hs_m_hp_rval <= 1'b0; hs_m_hp_hit <= 1'b0;
+            hs_m_hp_ret <= 1'b0; hs_m_hp_phase <= 1'b0; hs_m_hp_proto <= 1'b0;
+            hs_m_hp_qn <= 1'b0; hs_m_hp_qi <= 1'b0; hs_m_hp_si <= 1'b0;
+            hs_m_hp_ss <= 1'b0; hs_m_hp_tn <= 1'b0; hs_m_hp_from_stack <= 1'b0;
+            hs_m_hp_make_arr <= 1'b0; hs_m_hp_vbase <= 1'b0;
+            hs_m_hp_spr_w <= 1'b0; hs_m_hp_spr_h <= 1'b0; hs_m_hp_nat <= 1'b0;
+            hs_m_hp_tag <= 1'b0; hs_m_hp_qk <= 1'b0; hs_m_hp_qv <= 1'b0; hs_m_hp_qt <= 1'b0;
+            hs_m_valloc_kind <= 1'b0; hs_m_valloc_i <= 1'b0; hs_m_valloc_arr_n <= 1'b0; hs_m_valloc_retried <= 1'b0; hs_m_vnat_dom <= 1'b0; hs_m_vnat_base <= 1'b0; hs_m_valloc_now_fn <= 1'b0; hs_m_valloc_bind <= 1'b0; hs_m_valloc_bind_src <= 1'b0; hs_m_valloc_bind_this <= 1'b0; hs_m_valloc_fn_entry <= 1'b0; hs_m_valloc_fn_a1 <= 1'b0; hs_m_valloc_proto <= 1'b0; hs_m_valloc_proto_fn <= 1'b0; hs_m_valloc_metrics <= 1'b0; hs_m_valloc_regex <= 1'b0; hs_m_valloc_regex_pack <= 1'b0; hs_m_vcall_value <= 1'b0; hs_m_vcall_argc <= 1'b0; hs_m_vcall_entry <= 1'b0; hs_m_vcall_set_this <= 1'b0; hs_m_vcall_this <= 1'b0; hs_m_vcall_ctor_val <= 1'b0; hs_m_vcsp <= 1'b0; hs_m_vthis <= 1'b0; hs_m_venv <= 1'b0; hs_m_vraf_n <= 1'b0; hs_m_vlistener_n <= 1'b0; hs_m_vgc_halt_after <= 1'b0; hs_m_vgc_wait_after <= 1'b0; hs_m_vgc_clear_i <= 1'b0; hs_m_vgc_qr <= 1'b0; hs_m_vgc_qw <= 1'b0; hs_m_vdraw_i <= 1'b0; hs_m_vdraw_x <= 1'b0; hs_m_vdraw_y <= 1'b0; hs_m_vdraw_w <= 1'b0; hs_m_vdraw_h <= 1'b0; hs_m_vdraw_color <= 1'b0;
             e64_p_addr2 <= 16'd0;
             e64_p_data2 <= 64'd0;
             e64_p_data3 <= 64'd0;
@@ -4005,16 +4615,16 @@ module jmr_js_vm #(
             e64_p_frame_we <= 1'b0;
             e32_p_clr <= 1'b0;
             e32_p_we <= 1'b0;
-            hp_env <= 1'b0; hp_eid <= '0;
-            hp_slot <= '0; hp_aslot <= '0; hp_len <= '0; hp_alen <= '0;
-            hp_lim <= '0; hp_key <= '0; hp_wval <= '0; hp_rval <= '0;
-            hp_hit <= 1'b0; hp_phase <= '0; hp_qn <= '0; hp_qi <= '0;
-            hp_tag <= 3'd0; vgc_rd_arm <= 1'b0; jn_rd_arm <= 1'b0;
+            hs_hp_env(1'b0); hs_hp_eid('0);
+            hs_hp_slot('0); hs_hp_aslot('0); hs_hp_len('0); hs_hp_alen('0);
+            hs_hp_lim('0); hs_hp_key('0); hs_hp_wval('0); hs_hp_rval('0);
+            hs_hp_hit(1'b0); hs_hp_phase('0); hs_hp_qn('0); hs_hp_qi('0);
+            hs_hp_tag(3'd0); vgc_rd_arm <= 1'b0; jn_rd_arm <= 1'b0;
             vfe_rd_arm <= 1'b0; vjs_rd_arm <= 1'b0;
-            hp_from_stack <= 1'b0; hp_make_arr <= 1'b0; hp_vbase <= '0;
-            hp_spr_w <= '0; hp_spr_h <= '0; hp_nat <= 4'd0;
+            hs_hp_from_stack(1'b0); hs_hp_make_arr(1'b0); hs_hp_vbase('0);
+            hs_hp_spr_w('0); hs_hp_spr_h('0); hs_hp_nat(4'd0);
             n_ops <= '0; n_consts <= '0; ops_base <= '0;
-            code_raddr <= '0;
+            hs_code('0);
             nat_id <= '0; nat_argc <= '0;
             c_i <= '0;
             gc_qr <= '0; gc_qw <= '0; gc_i <= '0; gc_root_i <= '0;
@@ -4026,6 +4636,8 @@ module jmr_js_vm #(
             sram_req <= 1'b0; sram_addr <= '0; blit_wait <= 1'b0;
             aset_mode <= 1'b0; sprd_mode <= 1'b0; hdr_w <= 16'd3;
             boot_clr <= 1'b0;
+            heap_clr_busy <= 1'b0;
+            heap_clr_i <= 12'd0;
         end else begin
             fb_we <= 1'b0;
             fb_swap <= 1'b0;
@@ -4036,17 +4648,37 @@ module jmr_js_vm #(
             // Do not skip vst_we on that release cycle — GET_PROP x then
             // SET_PROP x ({x:current.x}) stored leftover NaN while the
             // object still had x=12 (PACMAN ARRAY_SET 241, change=1 wrap).
-            if (vst_hold_win) begin
+            // leave_hold: parent unique case (ALLOC/HEAP) writes vst_wr/hs_vsp
+            // while state is still EXEC. Window must follow parent that beat
+            // or MAKE_FN+CALL_VAL / HEAP LOAD_VAR TOS is the previous value
+            // (DONKEY IIFE fault 4, inner rAF nid 27).
+            begin
+                logic [11:0] wvsp;
+                logic wvst_we;
+                logic [11:0] wvst_waddr;
+                logic [63:0] wvst_wdata;
+                logic use_e64_win;
+                // Sticky hs_m_vsp: parent vsp_ff is truth (MAKE_FN ALLOC
+                // push). Extra EXEC beat with lagged e64_vsp_q shifted the
+                // TOS window (win[0]=UNDEF, Fn in win[1]) — nonempty IIFE
+                // CALL_VAL fault 4. Empty IIFE had vsp_d==e64 so no shift.
+                use_e64_win = (state == S_V64_EXEC) && !e64_leave_hold
+                    && !hs_m_vsp;
+                wvsp = use_e64_win ? e64_vsp_q : vsp;
+                wvst_we = use_e64_win ? e64_vst_we_q : vst_we;
+                wvst_waddr = use_e64_win ? e64_vst_waddr_q : vst_waddr;
+                wvst_wdata = use_e64_win ? e64_vst_wdata_q : vst_wdata;
+            if (use_e64_win ? e64_vst_hold_win_q : vst_hold_win) begin
                 if (state != S_V64_BIND && state != S_V64_WIN_FILL) begin
-                    if (vst_we) begin
+                    if (wvst_we) begin
                         integer d;
-                        d = integer'(vsp) - 1 - integer'(vst_waddr);
+                        d = integer'(wvsp) - 1 - integer'(wvst_waddr);
                         if (d >= 0 && d < 16)
-                            vst_win[d[3:0]] <= vst_wdata;
+                            vst_win[d[3:0]] <= wvst_wdata;
                     end
                     vst_hold_win <= 1'b0;
                 end
-            end else if (vsp > vsp_d) begin
+            end else if (wvsp > vsp_d) begin
                     vst_win[15] <= vst_win[14];
                     vst_win[14] <= vst_win[13];
                     vst_win[13] <= vst_win[12];
@@ -4062,31 +4694,57 @@ module jmr_js_vm #(
                     vst_win[3] <= vst_win[2];
                     vst_win[2] <= vst_win[1];
                     vst_win[1] <= vst_win[0];
-                    vst_win[0] <= vst_wdata;
-                end else if (vsp < vsp_d) begin
+                    vst_win[0] <= wvst_wdata;
+                end else if (wvsp < vsp_d) begin
                     begin
                         integer sh, wi;
-                        sh = integer'(vsp_d) - integer'(vsp);
-                        if (vst_we && vst_waddr == (vsp - 12'd1))
-                            vst_win[0] <= vst_wdata;
+                        sh = integer'(vsp_d) - integer'(wvsp);
+                        if (wvst_we && wvst_waddr == (wvsp - 12'd1))
+                            vst_win[0] <= wvst_wdata;
                         else if (sh < 16)
                             vst_win[0] <= vst_win[sh[3:0]];
                         for (wi = 1; wi < 16; wi++)
                             if (wi + sh < 16)
                                 vst_win[wi] <= vst_win[wi[3:0] + sh[3:0]];
                     end
-                end else if (vst_we) begin
+                end else if (wvst_we) begin
                     begin
                         integer d;
-                        d = integer'(vsp) - 1 - integer'(vst_waddr);
+                        d = integer'(wvsp) - 1 - integer'(wvst_waddr);
                         if (d >= 0 && d < 16)
-                            vst_win[d[3:0]] <= vst_wdata;
+                            vst_win[d[3:0]] <= wvst_wdata;
                     end
                 end
-            vsp_d <= vsp;
+            end
+            vsp_d <= ((state == S_V64_EXEC) && !e64_leave_hold && !hs_m_vsp)
+                ? e64_vsp_q : vsp;
             // Exec-owned copies: default no poke; states below may pulse.
             e64_p_clr <= 1'b0;
             e64_p_we <= 1'b0;
+            // ip/vsp overlay must survive FETCH_WAIT after ALLOC/HEAP poke.
+            // Clearing every cycle dropped hs_m before CALL_VAL: vsp mux was
+            // e64=0 while vst_win[0] already held the Fn (IIFE fault 4).
+            if ((state == S_V64_EXEC) && !e64_leave_hold) begin
+                hs_m_ip <= 1'b0; hs_m_code <= 1'b0;
+                hs_m_state <= 1'b0; hs_m_vsp <= 1'b0;
+                hs_m_vcsp <= 1'b0; hs_m_venv <= 1'b0; hs_m_vthis <= 1'b0;
+            end else if (!hs64) begin
+                hs_m_ip <= 1'b0; hs_m_code <= 1'b0;
+                hs_m_state <= 1'b0; hs_m_vsp <= 1'b0;
+                hs_m_vcsp <= 1'b0; hs_m_venv <= 1'b0; hs_m_vthis <= 1'b0;
+            end
+            hs_m_hp_cmd <= 1'b0; hs_m_hp_v64 <= 1'b0; hs_m_hp_oid <= 1'b0;
+            hs_m_hp_aid <= 1'b0; hs_m_hp_env <= 1'b0; hs_m_hp_eid <= 1'b0;
+            hs_m_hp_slot <= 1'b0; hs_m_hp_aslot <= 1'b0; hs_m_hp_len <= 1'b0;
+            hs_m_hp_alen <= 1'b0; hs_m_hp_lim <= 1'b0; hs_m_hp_key <= 1'b0;
+            hs_m_hp_wval <= 1'b0; hs_m_hp_rval <= 1'b0; hs_m_hp_hit <= 1'b0;
+            hs_m_hp_ret <= 1'b0; hs_m_hp_phase <= 1'b0; hs_m_hp_proto <= 1'b0;
+            hs_m_hp_qn <= 1'b0; hs_m_hp_qi <= 1'b0; hs_m_hp_si <= 1'b0;
+            hs_m_hp_ss <= 1'b0; hs_m_hp_tn <= 1'b0; hs_m_hp_from_stack <= 1'b0;
+            hs_m_hp_make_arr <= 1'b0; hs_m_hp_vbase <= 1'b0;
+            hs_m_hp_spr_w <= 1'b0; hs_m_hp_spr_h <= 1'b0; hs_m_hp_nat <= 1'b0;
+            hs_m_hp_tag <= 1'b0; hs_m_hp_qk <= 1'b0; hs_m_hp_qv <= 1'b0; hs_m_hp_qt <= 1'b0;
+            hs_m_valloc_kind <= 1'b0; hs_m_valloc_i <= 1'b0; hs_m_valloc_arr_n <= 1'b0; hs_m_valloc_retried <= 1'b0; hs_m_vnat_dom <= 1'b0; hs_m_vnat_base <= 1'b0; hs_m_valloc_now_fn <= 1'b0; hs_m_valloc_bind <= 1'b0; hs_m_valloc_bind_src <= 1'b0; hs_m_valloc_bind_this <= 1'b0; hs_m_valloc_fn_entry <= 1'b0; hs_m_valloc_fn_a1 <= 1'b0; hs_m_valloc_proto <= 1'b0; hs_m_valloc_proto_fn <= 1'b0; hs_m_valloc_metrics <= 1'b0; hs_m_valloc_regex <= 1'b0; hs_m_valloc_regex_pack <= 1'b0; hs_m_vcall_value <= 1'b0; hs_m_vcall_argc <= 1'b0; hs_m_vcall_entry <= 1'b0; hs_m_vcall_set_this <= 1'b0; hs_m_vcall_this <= 1'b0; hs_m_vcall_ctor_val <= 1'b0; hs_m_vraf_n <= 1'b0; hs_m_vlistener_n <= 1'b0; hs_m_vgc_halt_after <= 1'b0; hs_m_vgc_wait_after <= 1'b0; hs_m_vgc_clear_i <= 1'b0; hs_m_vgc_qr <= 1'b0; hs_m_vgc_qw <= 1'b0; hs_m_vdraw_i <= 1'b0; hs_m_vdraw_x <= 1'b0; hs_m_vdraw_y <= 1'b0; hs_m_vdraw_w <= 1'b0; hs_m_vdraw_h <= 1'b0; hs_m_vdraw_color <= 1'b0;
             e64_p_addr2 <= 16'd0;
             e64_p_data2 <= 64'd0;
             e64_p_data3 <= 64'd0;
@@ -4097,255 +4755,227 @@ module jmr_js_vm #(
             e32_p_we <= 1'b0;
             // NEW: registered name_mem read — BRAM, so str[i] costs one cycle
             // (S_STRIDX) instead of a 32 KB combinational mux
-            name_rdata <= name_mem[name_rdaddr[14:0]];
+            name_rdata <= name_mem[
+                (state == S_V64_EXEC) ? e64_name_rdaddr_q[14:0]
+                                      : name_rdaddr[14:0]];
+            // Parent-only name_blen / name_hash_tbl: rdata next clock, no exec copy.
+            // One write port: p_clr we (exec combo) OR trail/JOIN poke 17/40
+            // (parent p_we, same posedge exec consumes the poke). Combo we
+            // from poke is a cycle late and missed the pulse — intern
+            // lengths stayed post-p_clr zero.
+            if (e64_p_we && e64_p_sel == 6'd17) begin
+                name_blen[e64_p_addr[9:0]] <= e64_p_data[15:0];
+                name_has[e64_p_addr[9:0]] <= 1'b1;
+            end else if (e64_name_blen_we)
+                name_blen[e64_name_blen_waddr] <= e64_name_blen_wdata;
+            if (e64_p_we && e64_p_sel == 6'd40)
+                name_hash_tbl[e64_p_addr[9:0]] <= e64_p_data[15:0];
+            else if (e64_name_hash_we)
+                name_hash_tbl[e64_name_hash_waddr] <= e64_name_hash_wdata;
+            if (!(e64_p_we && e64_p_sel == 6'd17) && e64_name_has_we)
+                name_has[e64_name_has_waddr] <= e64_name_has_wdata;
+            name_blen_rdata <= name_blen[e64_name_blen_raddr];
+            // 1W2R: share port A with exec32 TOS (hs32) vs exec64 raddr (hs64).
+            name_hash_rdata <= name_hash_tbl[hs64 ? e64_name_hash_raddr : e32_intern_tos];
+            name_off_rdata <= name_off[hs64 ? e64_name_off_raddr : e32_intern_tos];
+            vconsts_rdata <= vconsts[e64_vconsts_raddr];
+            vvars_rdata <= vvars[(casestate == S_V64_GC_ROOT ||
+                state == S_V64_GC_ROOT) ? vgc_root_i[8:0] :
+                (casestate == S_HEAP_WAIT || state == S_HEAP_WAIT ||
+                 casestate == S_HEAP_CMP || state == S_HEAP_CMP ||
+                 casestate == S_RD && ret_state == S_V64_CTOR_VARS ||
+                 casestate == S_V64_CTOR_VARS ||
+                 state == S_V64_CTOR_VARS) ? hp_key[8:0] : e64_vvars_raddr];
+            vvar_valid_rdata <= vvar_valid[(casestate == S_V64_GC_ROOT ||
+                state == S_V64_GC_ROOT) ? vgc_root_i[8:0] :
+                (casestate == S_HEAP_WAIT || state == S_HEAP_WAIT ||
+                 casestate == S_HEAP_CMP || state == S_HEAP_CMP ||
+                 casestate == S_RD && ret_state == S_V64_CTOR_VARS ||
+                 casestate == S_V64_CTOR_VARS ||
+                 state == S_V64_CTOR_VARS) ? hp_key[8:0] : e64_vvars_raddr];
+            // 1W1R parent env chain (HEAP_CMP must not combo venv_parent[hp_eid]).
+            venv_parent_rdata <= venv_parent[hp_eid];
+            venv_valid_rdata <= venv_valid[
+                ((casestate == S_V64_ALLOC || state == S_V64_ALLOC) &&
+                 valloc_kind == 2'd3) ? valloc_i[9:0] : e64_venv_raddr];
+            venv_len_rdata <= venv_len[
+                ((casestate == S_V64_ALLOC || state == S_V64_ALLOC) &&
+                 valloc_kind == 2'd3) ? valloc_i[9:0] : e64_venv_raddr];
+            venv_gen_rdata <= venv_gen[
+                ((casestate == S_V64_ALLOC || state == S_V64_ALLOC) &&
+                 valloc_kind == 2'd3) ? valloc_i[9:0] : e64_venv_raddr];
+            varr_len_rdata <= varr_len[
+                ((casestate == S_V64_ALLOC || state == S_V64_ALLOC) &&
+                 valloc_kind == 2'd1) ? valloc_i[11:0] : e64_varr_raddr];
+            varr_valid_rdata <= varr_valid[
+                ((casestate == S_V64_ALLOC || state == S_V64_ALLOC) &&
+                 valloc_kind == 2'd1) ? valloc_i[11:0] : e64_varr_raddr];
+            varr_gen_rdata <= varr_gen[
+                ((casestate == S_V64_ALLOC || state == S_V64_ALLOC) &&
+                 valloc_kind == 2'd1) ? valloc_i[11:0] : e64_varr_raddr];
+            varr_long_rdata <= varr_long[
+                ((casestate == S_V64_ALLOC || state == S_V64_ALLOC) &&
+                 valloc_kind == 2'd1) ? valloc_i[11:0] : e64_varr_raddr];
+            varr_lidx_rdata <= varr_lidx[
+                ((casestate == S_V64_ALLOC || state == S_V64_ALLOC) &&
+                 valloc_kind == 2'd1) ? valloc_i[11:0] : e64_varr_raddr];
+            vobj_alloc_rdata <= vobj_alloc[
+                (casestate == S_HEAP_WAIT || state == S_HEAP_WAIT ||
+                 casestate == S_HEAP_CMP || state == S_HEAP_CMP) ? hp_oid :
+                ((casestate == S_V64_ALLOC || state == S_V64_ALLOC) &&
+                 valloc_kind == 2'd0) ? valloc_i[12:0] : e64_vobj_raddr];
+            vobj_gen_rdata <= vobj_gen[
+                (casestate == S_HEAP_WAIT || state == S_HEAP_WAIT ||
+                 casestate == S_HEAP_CMP || state == S_HEAP_CMP) ? hp_oid :
+                ((casestate == S_V64_ALLOC || state == S_V64_ALLOC) &&
+                 valloc_kind == 2'd0) ? valloc_i[12:0] : e64_vobj_raddr];
+            vobj_proto_rdata <= vobj_proto[e64_vobj_raddr];
+            vobj_cls_rdata <= vobj_cls[e64_vobj_raddr];
+            vobj_len_rdata <= vobj_len[e64_vobj_raddr];
+            vobj_builtin_rdata <= vobj_builtin[e64_vobj_raddr];
+            vfn_valid_rdata <= vfn_valid[
+                ((casestate == S_V64_ALLOC || state == S_V64_ALLOC) &&
+                 valloc_kind == 2'd2) ? valloc_i[12:0] : e64_vfn_raddr];
+            vfn_gen_rdata <= vfn_gen[
+                ((casestate == S_V64_ALLOC || state == S_V64_ALLOC) &&
+                 valloc_kind == 2'd2) ? valloc_i[12:0] : e64_vfn_raddr];
+            vfn_proto_rdata <= vfn_proto[e64_vfn_raddr];
+            vfn_env_rdata <= vfn_env[e64_vfn_raddr];
+            vfn_nparam_rdata <= vfn_nparam[e64_vfn_raddr];
+            vfn_entry_rdata <= vfn_entry[e64_vfn_raddr];
+            vfn_flags_rdata <= vfn_flags[e64_vfn_raddr];
+            vfn_bound_this_rdata <= vfn_bound_this[e64_vfn_raddr];
+            vframe_rip_rdata <= vframe_return_ip[e64_vframe_raddr];
+            vframe_bsp_rdata <= vframe_base_sp[e64_vframe_raddr];
+            vframe_esc_rdata <= vframe_escaped[e64_vframe_raddr];
+            vframe_this_rdata <= vframe_this[e64_vframe_raddr];
+            vframe_env_rdata <= vframe_env[e64_vframe_raddr];
+            vframe_fn_rdata <= vframe_fn[e64_vframe_raddr];
+            vframe_ctor_rdata <= vframe_ctor[e64_vframe_raddr];
+            fill_lut_rdata <= fill_lut[hs64 ? e64_fill_lut_raddr : e32_intern_tos];
+            vtimer_valid_rdata <= vtimer_valid[e64_vtimer_raddr];
+            vtimer_id_rdata <= vtimer_id[e64_vtimer_raddr];
             // NEW: registered glyph fetch — one row of one character per cycle
             font_rdata <= font_rom[font_raddr];
+            // exec32: scalar rdata from parent 1-D arrays (no unpacked ports).
+            e32_obj_cls_rdata <= obj_cls[e32_obj_cls_raddr];
+            e32_obj_n_rdata <= obj_n[e32_obj_n_raddr];
+            e32_tfn_entry_rdata <= tfn_entry[e32_tfn_raddr];
+            e32_tfn_has_this_rdata <= tfn_has_this[e32_tfn_raddr];
+            e32_tfn_nparam_rdata <= tfn_nparam[e32_tfn_raddr];
+            e32_tfn_parent_rdata <= tfn_parent[e32_tfn_raddr];
+            e32_tfn_this_rdata <= tfn_this[e32_tfn_raddr];
+            e32_tfn_this_tag_rdata <= tfn_this_tag[e32_tfn_raddr];
+            // exec32: 1W2R parent SRAM, rdata next clock. TOS lives in exec FFs.
+            e32_stack_rdata <= (e32_stack_we && e32_stack_waddr[10:0] == stack_rd_a)
+                ? e32_stack_wdata : stack[stack_rd_a];
+            e32_stack_rdata2 <= (e32_stack_we && e32_stack_waddr[10:0] == e32_stack_raddr2)
+                ? e32_stack_wdata : stack[e32_stack_raddr2];
+            e32_stack_tag_rdata <= stack_tag[stack_rd_a];
+            e32_name_has_tos <= name_has[e32_intern_tos];
+            e32_name_has_nos <= name_has[e32_intern_nos];
+            e32_name_hash_tos <= name_hash_tbl[hs64 ? e64_name_hash_raddr : e32_intern_tos];
+            e32_name_hash_nos <= name_hash_tbl[e32_intern_nos];
+            e32_name_len_tos <= name_len_tbl[e32_intern_tos];
+            e32_name_len_nos <= name_len_tbl[e32_intern_nos];
+            e32_name_off_tos <= name_off[hs64 ? e64_name_off_raddr : e32_intern_tos];
+            e32_name_off_nos <= name_off[e32_intern_nos];
+            e32_arr_len_tos_rdata <= arr_len[e32_aid_tos];
+            e32_arr_len_nos_rdata <= arr_len[e32_aid_nos];
+            e32_vars_rdata <= vars[e32_vars_raddr];
+            e32_intern_var_rdata <= intern_var[e32_intern_var_raddr];
+            e32_intern_var_ok_rdata <= intern_var_ok[e32_intern_var_raddr];
+            e32_env_oid_rdata <= env_oid[e32_env_oid_raddr];
+            e32_char_id_rdata <= char_id[e32_char_id_raddr];
+            e32_char_ok_rdata <= char_ok[e32_char_id_raddr];
+            e32_to_delay_rdata <= to_delay[e32_to_raddr];
+            e32_to_fn_rdata <= to_fn[e32_to_raddr];
+            e32_to_id_rdata <= to_id[e32_to_raddr];
+            e32_to_period_rdata <= to_period[e32_to_raddr];
+            e32_fn_proto_ip_rdata <= fn_proto_ip[e32_fn_proto_raddr];
+            e32_fn_proto_oid_rdata <= fn_proto_oid[e32_fn_proto_raddr];
+            e32_cs1_ip_rdata <= (csp >= 7'd1) ? cstack_ip[csp - 7'd1] : 16'd0;
+            e32_cs1_this_rdata <= (csp >= 7'd1) ? cstack_this[csp - 7'd1] : 16'd0;
+            e32_cs1_isctor_rdata <= (csp >= 7'd1) ? cstack_isctor[csp - 7'd1] : 1'b0;
+            e32_cs1_isfe_rdata <= (csp >= 7'd1) ? cstack_isfe[csp - 7'd1] : 1'b0;
+            e32_cs1_ctorobj_rdata <= (csp >= 7'd1) ? cstack_ctorobj[csp - 7'd1] : 16'd0;
+            e32_cs1_fe_arr_rdata <= (csp >= 7'd1) ? cstack_fe_arr[csp - 7'd1] : 16'd0;
+            e32_cs1_fe_fn_rdata <= (csp >= 7'd1) ? cstack_fe_fn[csp - 7'd1] : 16'd0;
+            e32_cs1_fe_i_rdata <= (csp >= 7'd1) ? cstack_fe_i[csp - 7'd1] : 8'd0;
+            e32_cs1_map_arr_rdata <= (csp >= 7'd1) ? cstack_map_arr[csp - 7'd1] : 16'd0;
+            e32_cs1_env_rdata <= (csp >= 7'd1) ? cstack_env[csp - 7'd1] : 6'd0;
+            e32_cs2_ip_rdata <= (csp >= 7'd2) ? cstack_ip[csp - 7'd2] : 16'd0;
+            e32_cs2_this_rdata <= (csp >= 7'd2) ? cstack_this[csp - 7'd2] : 16'd0;
+            e32_cs2_isctor_rdata <= (csp >= 7'd2) ? cstack_isctor[csp - 7'd2] : 1'b0;
+            e32_cs2_isfe_rdata <= (csp >= 7'd2) ? cstack_isfe[csp - 7'd2] : 1'b0;
+            e32_cs2_ctorobj_rdata <= (csp >= 7'd2) ? cstack_ctorobj[csp - 7'd2] : 16'd0;
+            e32_cs2_fe_arr_rdata <= (csp >= 7'd2) ? cstack_fe_arr[csp - 7'd2] : 16'd0;
+            e32_cs2_fe_fn_rdata <= (csp >= 7'd2) ? cstack_fe_fn[csp - 7'd2] : 16'd0;
+            e32_cs2_fe_i_rdata <= (csp >= 7'd2) ? cstack_fe_i[csp - 7'd2] : 8'd0;
+            e32_cs2_map_arr_rdata <= (csp >= 7'd2) ? cstack_map_arr[csp - 7'd2] : 16'd0;
+            e32_cs2_env_rdata <= (csp >= 7'd2) ? cstack_env[csp - 7'd2] : 6'd0;
+            e32_consts_rdata <= consts[e32_consts_raddr];
+            e32_var_init_rdata <= var_init[e32_vars_raddr];
+            e32_var_tag_rdata <= var_tag[e32_vars_raddr];
+            e32_env_free_rdata <= (env_free_n != 6'd0) ? env_free[env_free_n - 6'd1] : 16'd0;
             kd_fn <= kd_slot[0];
             ku_fn <= ku_slot[0];
-            if (fb_swap) dbg_swap_n <= dbg_swap_n + 16'd1; // NEW: present count
+            if (fb_swap || ((state == S_V64_EXEC) && e64_fb_swap_q))
+                dbg_swap_n <= dbg_swap_n + 16'd1; // NEW: present count
+            // Exec nid 3 (swapBuffers) only set e64_fb_swap_q; dbg counted
+            // it but mini_fb.front never flipped, so fillRect landed in the
+            // back bank and HDMI/FB? stayed empty. Pulse on the leave_hold
+            // beat only (one present per opcode).
+            if ((state == S_V64_EXEC) && e64_leave_hold && e64_fb_swap_q)
+                fb_swap <= 1'b1;
             // NEW: capture raw host key events (any state; drained per frame)
             if (key_evt_stb && (kev_wp + 3'd1) != kev_rp) begin
                 kev_q[kev_wp] <= {key_evt_down, key_evt_code};
                 kev_wp <= kev_wp + 3'd1;
             end
-            if (stop) begin
-                running <= 1'b0;
-                looping <= 1'b0;
-                sram_req <= 1'b0; blit_wait <= 1'b0; // NEW: drop mid-blit SRAM req
-                state <= S_IDLE;
-            end else if ((state == S_EXEC) || (state == S_NAT)) begin
-                alu_a <= e32_alu_a_n;
-                alu_b <= e32_alu_b_n;
-                alu_fx <= e32_alu_fx_n;
-                alu_op <= e32_alu_op_n;
-                blit_sh <= e32_blit_sh_n;
-                blit_si <= e32_blit_si_n;
-                blit_sw <= e32_blit_sw_n;
-                blit_sx <= e32_blit_sx_n;
-                blit_sy <= e32_blit_sy_n;
-                cc_at <= e32_cc_at_n;
-                cc_av <= e32_cc_av_n;
-                cc_bok <= e32_cc_bok_n;
-                cc_bt <= e32_cc_bt_n;
-                cc_bv <= e32_cc_bv_n;
-                cc_d <= e32_cc_d_n;
-                cc_h <= e32_cc_h_n;
-                cc_len <= e32_cc_len_n;
-                cc_second <= e32_cc_second_n;
-                cc_st <= e32_cc_st_n;
-                click_fired <= e32_click_fired_n;
-                click_fn <= e32_click_fn_n;
-                clr_idx <= e32_clr_idx_n;
-                code_raddr <= e32_code_raddr_n;
-                color <= e32_color_n;
-                csp <= e32_csp_n;
-                ctx_align <= e32_ctx_align_n;
-                ctx_font_px <= e32_ctx_font_px_n;
-                ctx_smooth <= e32_ctx_smooth_n;
-                ctx_sx <= e32_ctx_sx_n;
-                ctx_sy <= e32_ctx_sy_n;
-                ctx_tx <= e32_ctx_tx_n;
-                ctx_ty <= e32_ctx_ty_n;
-                dbg_call_ovf <= e32_dbg_call_ovf_n;
-                dbg_cb_ip <= e32_dbg_cb_ip_n;
-                dbg_di_hit <= e32_dbg_di_hit_n;
-                dbg_di_miss <= e32_dbg_di_miss_n;
-                dbg_div_n <= e32_dbg_div_n_n;
-                dbg_find_hit <= e32_dbg_find_hit_n;
-                dbg_heap_ovf <= e32_dbg_heap_ovf_n;
-                dbg_json_ovf <= e32_dbg_json_ovf_n;
-                dbg_path_ovf <= e32_dbg_path_ovf_n;
-                dbg_splice_n <= e32_dbg_splice_n_n;
-                dbg_stack_ovf <= e32_dbg_stack_ovf_n;
-                dbg_tmr_sched <= e32_dbg_tmr_sched_n;
-                dbg_to_ovf <= e32_dbg_to_ovf_n;
-                did_swap <= e32_did_swap_n;
-                div_cnt <= e32_div_cnt_n;
-                div_int_in <= e32_div_int_in_n;
-                div_neg <= e32_div_neg_n;
-                div_rem <= e32_div_rem_n;
-                div_ub <= e32_div_ub_n;
-                div_uq <= e32_div_uq_n;
-                env_free_n <= e32_env_free_n_n;
-                env_is_store <= e32_env_is_store_n;
-                env_ld_slot <= e32_env_ld_slot_n;
-                env_sp <= e32_env_sp_n;
-                env_walk <= e32_env_walk_n;
-                fb_dump_addr <= e32_fb_dump_addr_n;
-                fb_dump_sel <= e32_fb_dump_sel_n;
-                fb_swap <= e32_fb_swap_n;
-                fill_style_i <= e32_fill_style_i_n;
-                fp_left <= e32_fp_left_n;
-                fpx_acc <= e32_fpx_acc_n;
-                frame_fire <= e32_frame_fire_n;
-                hp_aid <= e32_hp_aid_n;
-                hp_alen <= e32_hp_alen_n;
-                hp_aslot <= e32_hp_aslot_n;
-                hp_cmd <= e32_hp_cmd_n;
-                hp_from_stack <= e32_hp_from_stack_n;
-                hp_hit <= e32_hp_hit_n;
-                hp_key <= e32_hp_key_n;
-                hp_len <= e32_hp_len_n;
-                hp_lim <= e32_hp_lim_n;
-                hp_make_arr <= e32_hp_make_arr_n;
-                hp_nat <= e32_hp_nat_n;
-                hp_oid <= e32_hp_oid_n;
-                hp_phase <= e32_hp_phase_n;
-                hp_proto <= e32_hp_proto_n;
-                hp_qi <= e32_hp_qi_n;
-                hp_qn <= e32_hp_qn_n;
-                hp_ret <= st_t'(e32_hp_ret_n);
-                hp_rval <= e32_hp_rval_n;
-                hp_si <= e32_hp_si_n;
-                hp_slot <= e32_hp_slot_n;
-                hp_ss <= e32_hp_ss_n;
-                hp_tag <= e32_hp_tag_n;
-                hp_tn <= e32_hp_tn_n;
-                hp_v64 <= e32_hp_v64_n;
-                hp_vbase <= e32_hp_vbase_n;
-                hp_wval <= e32_hp_wval_n;
-                idx_needle <= e32_idx_needle_n;
-                idx_t <= e32_idx_t_n;
-                idx_v <= e32_idx_v_n;
-                imgd_armed <= e32_imgd_armed_n;
-                imgd_h <= e32_imgd_h_n;
-                imgd_i <= e32_imgd_i_n;
-                imgd_n <= e32_imgd_n_n;
-                imgd_res <= e32_imgd_res_n;
-                imgd_w <= e32_imgd_w_n;
-                imgd_x <= e32_imgd_x_n;
-                imgd_x0 <= e32_imgd_x0_n;
-                imgd_y <= e32_imgd_y_n;
-                imgd_y0 <= e32_imgd_y0_n;
-                ip <= e32_ip_n;
-                jn_arr <= e32_jn_arr_n;
-                jn_h <= e32_jn_h_n;
-                jn_i <= e32_jn_i_n;
-                jn_res <= e32_jn_res_n;
-                js_sp <= e32_js_sp_n;
-                json_dst <= e32_json_dst_n;
-                json_pph <= e32_json_pph_n;
-                json_res <= e32_json_res_n;
-                json_rp <= e32_json_rp_n;
-                json_src <= e32_json_src_n;
-                json_srclen <= e32_json_srclen_n;
-                json_wp <= e32_json_wp_n;
-                kd_n <= e32_kd_n_n;
-                kev_fn <= e32_kev_fn_n;
-                kev_is_down <= e32_kev_is_down_n;
-                kev_li <= e32_kev_li_n;
-                kev_obj <= e32_kev_obj_n;
-                kev_ret_ip <= e32_kev_ret_ip_n;
-                keys_a_oid <= e32_keys_a_oid_n;
-                keys_d_oid <= e32_keys_d_oid_n;
-                keys_sp_oid <= e32_keys_sp_oid_n;
-                ku_n <= e32_ku_n_n;
-                lfsr <= e32_lfsr_n;
-                looping <= e32_looping_n;
-                metrics_oid <= e32_metrics_oid_n;
-                mul_a <= e32_mul_a_n;
-                mul_b <= e32_mul_b_n;
-                mul_fx_a <= e32_mul_fx_a_n;
-                mul_fx_b <= e32_mul_fx_b_n;
-                n_arr <= e32_n_arr_n;
-                n_arr_keep <= e32_n_arr_keep_n;
-                n_fn_proto <= e32_n_fn_proto_n;
-                n_obj <= e32_n_obj_n;
-                n_obj_keep <= e32_n_obj_keep_n;
-                namcpy_armed <= e32_namcpy_armed_n;
-                namcpy_repl <= e32_namcpy_repl_n;
-                name_rdaddr <= e32_name_rdaddr_n;
-                nat_argc <= e32_nat_argc_n;
-                nat_id <= e32_nat_id_n;
-                path_active <= e32_path_active_n;
-                path_kind <= e32_path_kind_n;
-                path_stroke <= e32_path_stroke_n;
-                pc_n <= e32_pc_n_n;
-                pi <= e32_pi_n;
-                present_pend <= e32_present_pend_n;
-                raf_n <= e32_raf_n_n;
-                rel_i <= e32_rel_i_n;
-                rel_lim <= e32_rel_lim_n;
-                rel_nn <= e32_rel_nn_n;
-                rel_ret <= st_t'(e32_rel_ret_n);
-                rel_saved <= e32_rel_saved_n;
-                repl_did <= e32_repl_did_n;
-                repl_g <= e32_repl_g_n;
-                repl_nlen <= e32_repl_nlen_n;
-                repl_pat0 <= e32_repl_pat0_n;
-                repl_pat1 <= e32_repl_pat1_n;
-                repl_rch <= e32_repl_rch_n;
-                rh <= e32_rh_n;
-                running <= e32_running_n;
-                rw <= e32_rw_n;
-                rx <= e32_rx_n;
-                ry <= e32_ry_n;
-                saved_sx <= e32_saved_sx_n;
-                saved_sy <= e32_saved_sy_n;
-                saved_tx <= e32_saved_tx_n;
-                saved_ty <= e32_saved_ty_n;
-                sp <= e32_sp_n;
-                sq_i <= e32_sq_i_n;
-                sq_rad <= e32_sq_rad_n;
-                sq_rem <= e32_sq_rem_n;
-                sq_root <= e32_sq_root_n;
-                state <= st_t'(e32_state_n);
-                str_pf_ci <= e32_str_pf_ci_n;
-                str_pf_id <= e32_str_pf_id_n;
-                str_pf_ok <= e32_str_pf_ok_n;
-                str_res <= e32_str_res_n;
-                this_obj <= e32_this_obj_n;
-                to_n <= e32_to_n_n;
-                to_seq <= e32_to_seq_n;
-                txt_bn <= e32_txt_bn_n;
-                txt_ph <= e32_txt_ph_n;
-                txt_px <= e32_txt_px_n;
-                txt_py <= e32_txt_py_n;
-                txt_rp <= e32_txt_rp_n;
-                txt_val <= e32_txt_val_n;
-                txt_vt <= e32_txt_vt_n;
-                vcall_argc <= e32_vcall_argc_n;
-                vcall_this <= e32_vcall_this_n;
-                x <= e32_x_n;
-                xf_dst <= e32_xf_dst_n;
-                xf_h <= e32_xf_h_n;
-                xf_w <= e32_xf_w_n;
-                xf_x <= e32_xf_x_n;
-                xf_y <= e32_xf_y_n;
-                y <= e32_y_n;
-                cstack_ctorobj <= e32_cstack_ctorobj_n;
-                cstack_env <= e32_cstack_env_n;
-                cstack_fe_arr <= e32_cstack_fe_arr_n;
-                cstack_fe_fn <= e32_cstack_fe_fn_n;
-                cstack_fe_i <= e32_cstack_fe_i_n;
-                cstack_ip <= e32_cstack_ip_n;
-                cstack_isctor <= e32_cstack_isctor_n;
-                cstack_isfe <= e32_cstack_isfe_n;
-                cstack_map_arr <= e32_cstack_map_arr_n;
-                cstack_this <= e32_cstack_this_n;
-                fn_proto_ip <= e32_fn_proto_ip_n;
-                fn_proto_oid <= e32_fn_proto_oid_n;
-                hp_qk <= e32_hp_qk_n;
-                hp_qt <= e32_hp_qt_n;
-                hp_qv <= e32_hp_qv_n;
-                js_i <= e32_js_i_n;
-                js_ph <= e32_js_ph_n;
-                js_tag <= e32_js_tag_n;
-                js_val <= e32_js_val_n;
-                kd_slot <= e32_kd_slot_n;
-                ku_slot <= e32_ku_slot_n;
-                pc_a1 <= e32_pc_a1_n;
-                pc_a2 <= e32_pc_a2_n;
-                pc_a3 <= e32_pc_a3_n;
-                pc_a4 <= e32_pc_a4_n;
-                pc_a5 <= e32_pc_a5_n;
-                pc_ccw <= e32_pc_ccw_n;
-                pc_op <= e32_pc_op_n;
-                raf_fn <= e32_raf_fn_n;
-                to_delay <= e32_to_delay_n;
-                to_fn <= e32_to_fn_n;
-                to_id <= e32_to_id_n;
-                to_period <= e32_to_period_n;
+            // EXEC scalar we is not an else-if vs unique case: leave_hold
+            // must still enter ALLOC/RECT/BIND (casestate). Apply we here.
+            if (state == S_V64_EXEC) begin
+                if (e64_vraf_we) vraf[e64_vraf_waddr] <= e64_vraf_wdata;
+                if (e64_vtimer_we) begin
+                    vtimer_valid[e64_vtimer_waddr] <= e64_vtimer_valid_wdata;
+                    if (e64_vtimer_valid_wdata) begin
+                        vtimer_due[e64_vtimer_waddr] <= e64_vtimer_due_wdata;
+                        vtimer_fn[e64_vtimer_waddr] <= e64_vtimer_fn_wdata;
+                        vtimer_id[e64_vtimer_waddr] <= e64_vtimer_id_wdata;
+                        vtimer_period[e64_vtimer_waddr] <= e64_vtimer_period_wdata;
+                    end
+                end
+                if (e64_vlistener_we) begin
+                    vlistener_ev[e64_vlistener_waddr] <= e64_vlistener_ev_wdata;
+                    vlistener_fn[e64_vlistener_waddr] <= e64_vlistener_fn_wdata;
+                end
+                if (e64_vst_win0_we) vst_win[0] <= e64_vst_win0_wdata;
+                if (e64_json_mem_we) json_mem[e64_json_mem_waddr[12:0]] <= e64_json_mem_wdata;
+                if (e64_varr_len_we) varr_len[e64_varr_len_waddr[10:0]] <= e64_varr_len_wdata;
+                if (e64_varr_lidx_we) varr_lidx[e64_varr_lidx_waddr[10:0]] <= e64_varr_lidx_wdata;
+                if (e64_varr_long_we) varr_long[e64_varr_long_waddr[10:0]] <= e64_varr_long_wdata;
+                if (e64_varr_long_we && e64_varr_long_wdata && e64_varr_lidx_we)
+                    vlong_used[e64_varr_lidx_wdata[6:0]] <= 1'b1;
+                if (e64_varr_valid_we) varr_valid[e64_varr_valid_waddr[10:0]] <= e64_varr_valid_wdata;
+                if (e64_venv_gen_we) venv_gen[e64_venv_gen_waddr[8:0]] <= e64_venv_gen_wdata;
+                if (e64_venv_len_we) venv_len[e64_venv_len_waddr[8:0]] <= e64_venv_len_wdata;
+                if (e64_venv_valid_we) venv_valid[e64_venv_valid_waddr[8:0]] <= e64_venv_valid_wdata;
+                if (e64_vobj_cls_we) vobj_cls[e64_vobj_cls_waddr[9:0]] <= e64_vobj_cls_wdata;
+                if (e64_vvar_valid_we) vvar_valid[e64_vvar_valid_waddr[8:0]] <= e64_vvar_valid_wdata;
+                if (e64_vvars_we) vvars[e64_vvars_waddr[8:0]] <= e64_vvars_wdata;
+                if (e64_vframe_we) begin
+                    vframe_return_ip[e64_vframe_waddr] <= e64_vframe_rip_wdata;
+                    vframe_base_sp[e64_vframe_waddr] <= e64_vframe_bsp_wdata;
+                    vframe_escaped[e64_vframe_waddr] <= e64_vframe_esc_wdata;
+                    vframe_this[e64_vframe_waddr] <= e64_vframe_this_wdata;
+                    vframe_env[e64_vframe_waddr] <= e64_vframe_env_wdata;
+                    vframe_fn[e64_vframe_waddr] <= e64_vframe_fn_wdata;
+                    vframe_ctor[e64_vframe_waddr] <= e64_vframe_ctor_wdata;
+                end
+            end
+            if ((state == S_EXEC) || (state == S_NAT)) begin
+                // we_q is registered; apply on EXEC/NAT including leave_hold.
                 if (e32_arr_len_we) arr_len[e32_arr_len_waddr[10:0]] <= e32_arr_len_wdata;
                 if (e32_env_cap_we) env_cap[e32_env_cap_waddr[8:0]] <= e32_env_cap_wdata;
                 if (e32_env_oid_we) env_oid[e32_env_oid_waddr[8:0]] <= e32_env_oid_wdata;
@@ -4365,324 +4995,69 @@ module jmr_js_vm #(
                 if (e32_var_tag_we) var_tag[e32_var_tag_waddr[8:0]] <= e32_var_tag_wdata;
                 if (e32_vars_we) vars[e32_vars_waddr[8:0]] <= e32_vars_wdata;
                 if (e32_vobj_len_we) vobj_len[e32_vobj_len_waddr[9:0]] <= e32_vobj_len_wdata;
-            end else if (state == S_V64_EXEC) begin
-                aset_win_retried <= e64_aset_win_retried_n;
-                bind_argc <= e64_bind_argc_n;
-                bind_base <= e64_bind_base_n;
-                bind_ip <= e64_bind_ip_n;
-                bind_k <= e64_bind_k_n;
-                bind_mode <= e64_bind_mode_n;
-                bind_n <= e64_bind_n_n;
-                bind_rd_arm <= e64_bind_rd_arm_n;
-                bind_ret <= st_t'(e64_bind_ret_n);
-                bind_src <= e64_bind_src_n;
-                bind_vsp_next <= e64_bind_vsp_next_n;
-                blit_sh <= e64_blit_sh_n;
-                blit_si <= e64_blit_si_n;
-                blit_sw <= e64_blit_sw_n;
-                blit_sx <= e64_blit_sx_n;
-                blit_sy <= e64_blit_sy_n;
-                cc_at <= e64_cc_at_n;
-                cc_av <= e64_cc_av_n;
-                cc_bok <= e64_cc_bok_n;
-                cc_bt <= e64_cc_bt_n;
-                cc_bv <= e64_cc_bv_n;
-                cc_d <= e64_cc_d_n;
-                cc_h <= e64_cc_h_n;
-                cc_len <= e64_cc_len_n;
-                cc_second <= e64_cc_second_n;
-                cc_st <= e64_cc_st_n;
-                code_raddr <= e64_code_raddr_n;
-                color <= e64_color_n;
-                ctx_align <= e64_ctx_align_n;
-                ctx_smooth <= e64_ctx_smooth_n;
-                ctx_sx <= e64_ctx_sx_n;
-                ctx_sy <= e64_ctx_sy_n;
-                ctx_tx <= e64_ctx_tx_n;
-                ctx_ty <= e64_ctx_ty_n;
-                dbg_di_hit <= e64_dbg_di_hit_n;
-                dbg_di_miss <= e64_dbg_di_miss_n;
-                dbg_div_n <= e64_dbg_div_n_n;
-                dbg_json_ovf <= e64_dbg_json_ovf_n;
-                dbg_path_ovf <= e64_dbg_path_ovf_n;
-                fault_code <= e64_fault_code_n;
-                fb_dump_addr <= e64_fb_dump_addr_n;
-                fb_dump_sel <= e64_fb_dump_sel_n;
-                fb_swap <= e64_fb_swap_n;
-                fill_style_i <= e64_fill_style_i_n;
-                stroke_style_i <= e64_stroke_style_i_n;
-                hp_aid <= e64_hp_aid_n;
-                hp_alen <= e64_hp_alen_n;
-                hp_aslot <= e64_hp_aslot_n;
-                hp_cmd <= e64_hp_cmd_n;
-                hp_eid <= e64_hp_eid_n;
-                hp_env <= e64_hp_env_n;
-                hp_from_stack <= e64_hp_from_stack_n;
-                hp_hit <= e64_hp_hit_n;
-                hp_key <= e64_hp_key_n;
-                hp_len <= e64_hp_len_n;
-                // Exec vobj_len/venv_len/varr_len can lag parent HEAP pokes.
-                // Scan the parent copy so LOAD_VAR/GET_PROP/ARRAY_GET see live slots.
-                if (e64_hp_env_n)
-                    hp_len <= {1'b0, venv_len[e64_hp_eid_n]};
-                else if (e64_hp_cmd_n == HP_GETPROP ||
-                         e64_hp_cmd_n == HP_SETPROP ||
-                         e64_hp_cmd_n == HP_LOOKFN)
-                    hp_len <= vobj_len[e64_hp_oid_n];
-                if (e64_hp_cmd_n == HP_ARRGET || e64_hp_cmd_n == HP_ARRSET ||
-                    e64_hp_cmd_n == HP_AGETI || e64_hp_cmd_n == HP_ASETI ||
-                    e64_hp_cmd_n == HP_AFILL || e64_hp_cmd_n == HP_PUSH ||
-                    e64_hp_cmd_n == HP_UNSHIFT || e64_hp_cmd_n == HP_SPLICE)
-                    hp_alen <= varr_len[e64_hp_aid_n];
-                hp_lim <= e64_hp_lim_n;
-                hp_make_arr <= e64_hp_make_arr_n;
-                hp_nat <= e64_hp_nat_n;
-                hp_oid <= e64_hp_oid_n;
-                hp_phase <= e64_hp_phase_n;
-                hp_proto <= e64_hp_proto_n;
-                hp_qi <= e64_hp_qi_n;
-                hp_qn <= e64_hp_qn_n;
-                hp_ret <= st_t'(e64_hp_ret_n);
-                hp_rval <= e64_hp_rval_n;
-                hp_si <= e64_hp_si_n;
-                hp_slot <= e64_hp_slot_n;
-                hp_spr_h <= e64_hp_spr_h_n;
-                hp_spr_w <= e64_hp_spr_w_n;
-                hp_ss <= e64_hp_ss_n;
-                hp_tag <= e64_hp_tag_n;
-                hp_tn <= e64_hp_tn_n;
-                if (e64_hp_cmd_n == HP_ASSIGN)
-                    hp_tn <= vobj_len[e64_hp_oid_n];
-                hp_v64 <= e64_hp_v64_n;
-                hp_vbase <= e64_hp_vbase_n;
-                hp_wval <= e64_hp_wval_n;
-                imgd_armed <= e64_imgd_armed_n;
-                imgd_h <= e64_imgd_h_n;
-                imgd_i <= e64_imgd_i_n;
-                imgd_n <= e64_imgd_n_n;
-                imgd_v64 <= e64_imgd_v64_n;
-                imgd_w <= e64_imgd_w_n;
-                imgd_x <= e64_imgd_x_n;
-                imgd_x0 <= e64_imgd_x0_n;
-                imgd_y <= e64_imgd_y_n;
-                imgd_y0 <= e64_imgd_y0_n;
-                ip <= e64_ip_n;
-                jn_arr <= e64_jn_arr_n;
-                jn_h <= e64_jn_h_n;
-                jn_i <= e64_jn_i_n;
-                jn_res <= e64_jn_res_n;
-                js_sp <= e64_js_sp_n;
-                json_pph <= e64_json_pph_n;
-                json_rp <= e64_json_rp_n;
-                json_src <= e64_json_src_n;
-                json_srclen <= e64_json_srclen_n;
-                json_wp <= e64_json_wp_n;
-                looping <= e64_looping_n;
-                machine_fault <= e64_machine_fault_n;
-                minmax_acc <= e64_minmax_acc_n;
-                minmax_base <= e64_minmax_base_n;
-                minmax_is_min <= e64_minmax_is_min_n;
-                minmax_k <= e64_minmax_k_n;
-                minmax_n <= e64_minmax_n_n;
-                namcpy_armed <= e64_namcpy_armed_n;
-                namcpy_repl <= e64_namcpy_repl_n;
-                namcpy_v64 <= e64_namcpy_v64_n;
-                name_rdaddr <= e64_name_rdaddr_n;
-                path_active <= e64_path_active_n;
-                path_kind <= e64_path_kind_n;
-                path_stroke <= e64_path_stroke_n;
-                pc_n <= e64_pc_n_n;
-                pi <= e64_pi_n;
-                repl_did <= e64_repl_did_n;
-                repl_g <= e64_repl_g_n;
-                repl_nlen <= e64_repl_nlen_n;
-                repl_pat0 <= e64_repl_pat0_n;
-                repl_pat1 <= e64_repl_pat1_n;
-                repl_rch <= e64_repl_rch_n;
-                rh <= e64_rh_n;
-                running <= e64_running_n;
-                rw <= e64_rw_n;
-                rx <= e64_rx_n;
-                ry <= e64_ry_n;
-                saved_sx <= e64_saved_sx_n;
-                saved_sy <= e64_saved_sy_n;
-                saved_tx <= e64_saved_tx_n;
-                saved_ty <= e64_saved_ty_n;
-                sq_i <= e64_sq_i_n;
-                sq_rad <= e64_sq_rad_n;
-                sq_rem <= e64_sq_rem_n;
-                sq_root <= e64_sq_root_n;
-                state <= st_t'(e64_state_n);
-                txt_bn <= e64_txt_bn_n;
-                txt_ph <= e64_txt_ph_n;
-                txt_px <= e64_txt_px_n;
-                txt_py <= e64_txt_py_n;
-                txt_val <= e64_txt_val_n;
-                txt_vt <= e64_txt_vt_n;
-                v64_concat <= e64_v64_concat_n;
-                v64_join <= e64_v64_join_n;
-                v64_repl <= e64_v64_repl_n;
-                v64_sqrt <= e64_v64_sqrt_n;
-                valloc_arr_n <= e64_valloc_arr_n_n;
-                valloc_bind <= e64_valloc_bind_n;
-                valloc_bind_src <= e64_valloc_bind_src_n;
-                valloc_bind_this <= e64_valloc_bind_this_n;
-                valloc_fn_a1 <= e64_valloc_fn_a1_n;
-                valloc_fn_entry <= e64_valloc_fn_entry_n;
-                valloc_i <= e64_valloc_i_n;
-                valloc_kind <= e64_valloc_kind_n;
-                valloc_metrics <= e64_valloc_metrics_n;
-                valloc_now_fn <= e64_valloc_now_fn_n;
-                valloc_proto <= e64_valloc_proto_n;
-                valloc_proto_fn <= e64_valloc_proto_fn_n;
-                valloc_regex <= e64_valloc_regex_n;
-                valloc_regex_pack <= e64_valloc_regex_pack_n;
-                valloc_retried <= e64_valloc_retried_n;
-                varr_next <= e64_varr_next_n;
-                vcall_argc <= e64_vcall_argc_n;
-                vcall_ctor_val <= e64_vcall_ctor_val_n;
-                vcall_entry <= e64_vcall_entry_n;
-                vcall_set_this <= e64_vcall_set_this_n;
-                vcall_this <= e64_vcall_this_n;
-                vcall_value <= e64_vcall_value_n;
-                vconsole_n <= e64_vconsole_n_n;
-                vcsp <= e64_vcsp_n;
-                vdiv_count <= e64_vdiv_count_n;
-                vdiv_den <= e64_vdiv_den_n;
-                vdiv_exp <= e64_vdiv_exp_n;
-                vdiv_num <= e64_vdiv_num_n;
-                vdiv_quot <= e64_vdiv_quot_n;
-                vdiv_rem <= e64_vdiv_rem_n;
-                vdiv_sign <= e64_vdiv_sign_n;
-                vdraw_color <= e64_vdraw_color_n;
-                vdraw_h <= e64_vdraw_h_n;
-                vdraw_i <= e64_vdraw_i_n;
-                vdraw_w <= e64_vdraw_w_n;
-                vdraw_x <= e64_vdraw_x_n;
-                vdraw_y <= e64_vdraw_y_n;
-                venv <= e64_venv_n;
-                venv_next <= e64_venv_next_n;
-                vfe_arr <= e64_vfe_arr_n;
-                vfe_base <= e64_vfe_base_n;
-                vfe_fn <= e64_vfe_fn_n;
-                vfe_i <= e64_vfe_i_n;
-                vfe_map <= e64_vfe_map_n;
-                vfe_mode <= e64_vfe_mode_n;
-                vfe_ret <= e64_vfe_ret_n;
-                vfe_sp <= e64_vfe_sp_n;
-                vfree_armed <= e64_vfree_armed_n;
-                vfree_arr_long <= e64_vfree_arr_long_n;
-                vgc_clear_i <= e64_vgc_clear_i_n;
-                vgc_halt_after <= e64_vgc_halt_after_n;
-                vgc_qr <= e64_vgc_qr_n;
-                vgc_qw <= e64_vgc_qw_n;
-                vgc_resume <= e64_vgc_resume_n;
-                vgc_wait_after <= e64_vgc_wait_after_n;
-                vjs_rd_arm <= e64_vjs_rd_arm_n;
-                vlistener_n <= e64_vlistener_n_n;
-                vmetrics_w <= e64_vmetrics_w_n;
-                vmod_count <= e64_vmod_count_n;
-                vmod_den <= e64_vmod_den_n;
-                vmod_exp <= e64_vmod_exp_n;
-                vmod_rem <= e64_vmod_rem_n;
-                vmod_sign <= e64_vmod_sign_n;
-                vnat_base <= e64_vnat_base_n;
-                vnat_dom <= e64_vnat_dom_n;
-                vprom_copy <= e64_vprom_copy_n;
-                vprom_done <= e64_vprom_done_n;
-                vprom_ret <= st_t'(e64_vprom_ret_n);
-                vraf_n <= e64_vraf_n_n;
-                vrng <= e64_vrng_n;
-                vsp <= e64_vsp_n;
-                vst_hold_win <= e64_vst_hold_win_n;
-                vst_refill_arm <= e64_vst_refill_arm_n;
-                vst_refill_i <= e64_vst_refill_i_n;
-                vst_refill_ret <= st_t'(e64_vst_refill_ret_n);
-                vst_waddr <= e64_vst_waddr_n;
-                vst_wdata <= e64_vst_wdata_n;
-                vst_we <= e64_vst_we_n;
-                vthis <= e64_vthis_n;
-                vtimer_n <= e64_vtimer_n_n;
-                vtimer_seq <= e64_vtimer_seq_n;
-                x <= e64_x_n;
-                y <= e64_y_n;
-                hp_qk <= e64_hp_qk_n;
-                hp_qt <= e64_hp_qt_n;
-                hp_qv <= e64_hp_qv_n;
-                js_i <= e64_js_i_n;
-                js_ph <= e64_js_ph_n;
-                pc_a1 <= e64_pc_a1_n;
-                pc_a2 <= e64_pc_a2_n;
-                pc_a3 <= e64_pc_a3_n;
-                pc_a4 <= e64_pc_a4_n;
-                pc_a5 <= e64_pc_a5_n;
-                pc_ccw <= e64_pc_ccw_n;
-                pc_op <= e64_pc_op_n;
-                vfe_arr_s <= e64_vfe_arr_s_n;
-                vfe_base_s <= e64_vfe_base_s_n;
-                vfe_fn_s <= e64_vfe_fn_s_n;
-                vfe_i_s <= e64_vfe_i_s_n;
-                vfe_map_s <= e64_vfe_map_s_n;
-                vfe_mode_s <= e64_vfe_mode_s_n;
-                vfe_ret_s <= e64_vfe_ret_s_n;
-                vjs_val <= e64_vjs_val_n;
-                vlistener_ev <= e64_vlistener_ev_n;
-                vlistener_fn <= e64_vlistener_fn_n;
-                vraf <= e64_vraf_n;
-                vst_win <= e64_vst_win_n;
-                vtimer_due <= e64_vtimer_due_n;
-                vtimer_fn <= e64_vtimer_fn_n;
-                vtimer_id <= e64_vtimer_id_n;
-                vtimer_period <= e64_vtimer_period_n;
-                vtimer_valid <= e64_vtimer_valid_n;
-                if (e64_json_mem_we) json_mem[e64_json_mem_waddr[12:0]] <= e64_json_mem_wdata;
-                if (e64_varr_len_we) varr_len[e64_varr_len_waddr[10:0]] <= e64_varr_len_wdata;
-                if (e64_varr_lidx_we) varr_lidx[e64_varr_lidx_waddr[10:0]] <= e64_varr_lidx_wdata;
-                if (e64_varr_long_we) varr_long[e64_varr_long_waddr[10:0]] <= e64_varr_long_wdata;
-                if (e64_varr_valid_we) varr_valid[e64_varr_valid_waddr[10:0]] <= e64_varr_valid_wdata;
-                if (e64_venv_gen_we) venv_gen[e64_venv_gen_waddr[8:0]] <= e64_venv_gen_wdata;
-                if (e64_venv_len_we) venv_len[e64_venv_len_waddr[8:0]] <= e64_venv_len_wdata;
-                if (e64_venv_valid_we) venv_valid[e64_venv_valid_waddr[8:0]] <= e64_venv_valid_wdata;
-                if (e64_vobj_cls_we) vobj_cls[e64_vobj_cls_waddr[9:0]] <= e64_vobj_cls_wdata;
-                if (e64_vvar_valid_we) vvar_valid[e64_vvar_valid_waddr[8:0]] <= e64_vvar_valid_wdata;
-                if (e64_vvars_we) vvars[e64_vvars_waddr[8:0]] <= e64_vvars_wdata;
-                if (e64_vframe_we) begin
-                    vframe_return_ip[e64_vframe_waddr] <= e64_vframe_rip_wdata;
-                    vframe_base_sp[e64_vframe_waddr] <= e64_vframe_bsp_wdata;
-                    vframe_escaped[e64_vframe_waddr] <= e64_vframe_esc_wdata;
-                    vframe_this[e64_vframe_waddr] <= e64_vframe_this_wdata;
-                    vframe_env[e64_vframe_waddr] <= e64_vframe_env_wdata;
-                    vframe_fn[e64_vframe_waddr] <= e64_vframe_fn_wdata;
-                    vframe_ctor[e64_vframe_waddr] <= e64_vframe_ctor_wdata;
+                if (e32_fn_proto_we) begin
+                    fn_proto_ip[e32_fn_proto_waddr] <= e32_fn_proto_ip_wdata;
+                    fn_proto_oid[e32_fn_proto_waddr] <= e32_fn_proto_oid_wdata;
+                    n_fn_proto <= e32_n_fn_proto_q;
                 end
-            end else unique case (state)
+                if (e32_cstack_we) begin
+                    cstack_ctorobj[e32_cstack_waddr] <= e32_cstack_ctorobj_wdata;
+                    cstack_env[e32_cstack_waddr] <= e32_cstack_env_wdata;
+                    cstack_fe_arr[e32_cstack_waddr] <= e32_cstack_fe_arr_wdata;
+                    cstack_fe_fn[e32_cstack_waddr] <= e32_cstack_fe_fn_wdata;
+                    cstack_fe_i[e32_cstack_waddr] <= e32_cstack_fe_i_wdata;
+                    cstack_ip[e32_cstack_waddr] <= e32_cstack_ip_wdata;
+                    cstack_isctor[e32_cstack_waddr] <= e32_cstack_isctor_wdata;
+                    cstack_isfe[e32_cstack_waddr] <= e32_cstack_isfe_wdata;
+                    cstack_map_arr[e32_cstack_waddr] <= e32_cstack_map_arr_wdata;
+                    cstack_this[e32_cstack_waddr] <= e32_cstack_this_wdata;
+                end
+                if (e32_to_we) begin
+                    to_fn[e32_to_waddr] <= e32_to_fn_wdata;
+                    to_delay[e32_to_waddr] <= e32_to_delay_wdata;
+                    to_id[e32_to_waddr] <= e32_to_id_wdata;
+                    to_period[e32_to_waddr] <= e32_to_period_wdata;
+                end
+                to_n <= e32_to_n_q;
+                to_seq <= e32_to_seq_q;
+            end
+            if (stop) begin
+                running <= 1'b0;
+                looping <= 1'b0;
+                sram_req <= 1'b0; blit_wait <= 1'b0; // NEW: drop mid-blit SRAM req
+                        hs_st(S_IDLE);
+            end else if (((state == S_EXEC) || (state == S_NAT)) && !e32_leave_hold) begin
+                // we already applied above. Skip unique case (no EXEC arm).
+            end else if ((state == S_V64_EXEC) && !e64_leave_hold) begin
+                // we already applied above. Skip unique case (no EXEC arm).
+            end else unique case (casestate)
                 S_IDLE: if (start) begin
                     running <= 1'b1;
                     looping <= 1'b0;
                     sp <= '0;
-                    vsp <= '0;
-                    vcsp <= '0;
-                    code_raddr <= 15'd0;
-                    state <= S_RD;
+                    hs_vsp('0);
+                    hs_vcsp('0);
+                    hs_code(15'd0);
+                    hs_st(S_RD);
                     ret_state <= S_GOT_MAGIC;
                 end
-                S_RD: state <= ret_state;
+                S_RD: hs_st(ret_state);
 
                 S_GOT_MAGIC: begin
                     if (code_rdata != 32'h3142534A) begin
                         running <= 1'b0;
-                        state <= S_DONE;
+                        hs_st(S_DONE);
                     end else begin
-                        code_raddr <= 15'd1;
-                        state <= S_RD;
+                        hs_code(15'd1);
+                        hs_st(S_RD);
                         ret_state <= S_GOT_HDR1;
                     end
                 end
                 S_GOT_HDR1: begin
                     n_ops    <= code_rdata[15:0];
                     n_consts <= code_rdata[31:16];
-                    code_raddr <= 15'd2;
-                    state <= S_RD;
+                    hs_code(15'd2);
+                    hs_st(S_RD);
                     ret_state <= S_GOT_HDR2;
                 end
                 S_GOT_HDR2: begin
@@ -4693,11 +5068,11 @@ module jmr_js_vm #(
                     ops_base <= (code_rdata[17] ? 16'd4 : 16'd3)
                               + (code_rdata[19] ? (n_consts << 1) : n_consts);
                     jsb_flags <= code_rdata[31:16];
-                    for (int i = 0; i < MAX_VARS; i++) var_init[i] <= 1'b0;
-                    for (int i = 0; i < MAX_VARS; i++) vvar_valid[i] <= 1'b0;
                     e64_p_clr <= 1'b1;
                     e32_p_clr <= 1'b1;
-                    vsp <= '0; vcsp <= '0;
+                    heap_clr_busy <= 1'b1;
+                    heap_clr_i <= 12'd0;
+                    hs_vsp('0); hs_vcsp('0);
                     vsp_d <= '0;
                     vst_hold_win <= 1'b0;
                     vfree_armed <= 1'b0;
@@ -4712,27 +5087,27 @@ module jmr_js_vm #(
                         vfn_next <= 14'd0;
                         venv_next <= 10'd0;
                         vgc_resume <= 2'd0;
-                        valloc_retried <= 1'b0;
-                        vthis <= V64_UNDEFINED;
-                        venv <= V64_UNDEFINED;
-                        vcall_set_this <= 1'b0;
-                        vcall_this <= V64_UNDEFINED;
-                        vcall_ctor_val <= V64_UNDEFINED;
-                        vraf_n <= 4'd0;
+                        hs_valloc_retried(1'b0);
+                        hs_vthis(V64_UNDEFINED);
+                        hs_venv(V64_UNDEFINED);
+                        hs_vcall_set_this(1'b0);
+                        hs_vcall_this(V64_UNDEFINED);
+                        hs_vcall_ctor_val(V64_UNDEFINED);
+                        hs_vraf_n(4'd0);
                         vtimer_n <= 7'd0;
                         vframe_no <= 32'd0;
                         // Last intern coords survive RUN otherwise PACMAN
                         // SNAP shows the previous title's vdraw (INVADERS 14×5).
-                        vdraw_x <= '0; vdraw_y <= '0;
-                        vdraw_w <= '0; vdraw_h <= '0;
-                        vdraw_color <= '0;
+                        hs_vdraw_x('0); hs_vdraw_y('0);
+                        hs_vdraw_w('0); hs_vdraw_h('0);
+                        hs_vdraw_color('0);
                         vtimer_seq <= 32'd1;
                         vrng <= 32'h6d2b79f5;
                         vconsole_n <= 9'd0;
-                        vnat_dom <= 3'd0;
+                        hs_vnat_dom(3'd0);
                         vnat_style <= V64_UNDEFINED;
                         vkev_event <= V64_UNDEFINED;
-                        vlistener_n <= 5'd0;
+                        hs_vlistener_n(5'd0);
                         vkey_li <= 5'd0;
                         v64_frame_armed <= 1'b0;
                         vcallback_key <= 1'b0;
@@ -4749,34 +5124,7 @@ module jmr_js_vm #(
                         end
                         for (int i = 0; i < 64; i++)
                             vtimer_valid[i] <= 1'b0;
-                        for (int i = 0; i < MAX_OBJ; i++) begin
-                            vobj_alloc[i] <= 2'd0;
-                            vobj_gen[i] <= 12'd1;
-                            vfn_gen[i] <= 12'd1;
-                            vfn_valid[i] <= 1'b0;
-                            vfn_mark[i] <= 1'b0;
-                            vobj_len[i] <= 6'd0;
-                            vobj_mark[i] <= 1'b0;
-                            vobj_builtin[i] <= 4'd0;
-                        end
-                        for (int i = 0; i < MAX_ARR; i++) begin
-                            varr_valid[i] <= 1'b0;
-                            varr_gen[i] <= 12'd1;
-                            varr_len[i] <= 8'd0;
-                            varr_mark[i] <= 1'b0;
-                            varr_long[i] <= 1'b0;
-                            varr_lidx[i] <= 8'd0;
-                        end
-                        for (int i = 0; i < MAX_ARR_LONG; i++)
-                            vlong_used[i] <= 1'b0;
-                        for (int i = 0; i < ENV_DEPTH; i++) begin
-                            venv_valid[i] <= 1'b0;
-                            venv_gen[i] <= 12'd1;
-                            venv_len[i] <= 5'd0;
-                            venv_mark[i] <= 1'b0;
-                        end
                     end
-                    for (int i = 0; i < 1024; i++) fill_lut[i] <= 8'hFF; // NEW: FSTY default
                     n_obj <= 0; n_arr <= 0; n_cls <= 0; csp <= 0; raf_n <= 0;
                     arr_keep_ok <= 1'b0; n_arr_keep <= 0;
                     arr_keep_wait <= ARR_KEEP_DELAY[3:0];
@@ -4862,13 +5210,7 @@ module jmr_js_vm #(
                     n_fn_proto <= 7'd0;
                     enter_n <= 3'd0; enter_delay <= 4'd0; // hack retired (KEYEVT)
                     kev_wp <= 3'd0; kev_rp <= 3'd0;
-                    for (int i = 0; i < 1024; i++) intern_var_ok[i] <= 1'b0;
-                    // NEW: string bytes / char lookup start empty every LOAD
                     for (int i = 0; i < 256; i++) char_ok[i] <= 1'b0;
-                    for (int i = 0; i < 1024; i++) begin
-                        name_has[i] <= 1'b0;
-                        name_blen[i] <= 16'd0;
-                    end
                     names_ok <= 1'b0; nb_i <= 16'd0; nb_len <= 16'd0; nb_wp <= 16'd0;
                     dbg_str_ovf <= 16'd0; name_rdaddr <= 16'd0; str_res <= 11'd0;
                     str_pf_ok <= 1'b0; str_pf_id <= 16'd0; str_pf_ci <= 32'sd0;
@@ -4891,45 +5233,100 @@ module jmr_js_vm #(
                     trail_ph <= 5'd0;
                     trail_guard <= 16'd0;
                     if (n_consts == 16'd0) begin
-                        ip <= '0;
+                        hs_ip('0);
                         if (code_rdata[16]) begin
-                            code_raddr <= 15'((code_rdata[17] ? 16'd4 : 16'd3) + n_ops);
-                            state <= S_RD;
+                            hs_code(15'((code_rdata[17] ? 16'd4 : 16'd3) + n_ops));
                             ret_state <= S_TRAIL;
                         end else begin
-                            code_raddr <= code_rdata[17] ? 15'd4 : 15'd3;
-                            state <= S_FETCH_WAIT;
+                            hs_code(code_rdata[17] ? 15'd4 : 15'd3);
+                            ret_state <= S_FETCH_WAIT;
                         end
+                        hs_st(S_HEAP_CLR);
                     end else begin
                         c_i <= '0;
-                        code_raddr <= code_rdata[17] ? 15'd4 : 15'd3;
-                        state <= S_RD;
+                        hs_code(code_rdata[17] ? 15'd4 : 15'd3);
                         ret_state <= S_LD_CONST;
+                        hs_st(S_HEAP_CLR);
+                    end
+                end
+                S_HEAP_CLR: begin
+                    // One index per clock on parent 1-D banks (SRAM has no
+                    // parallel clear). Walk MAX_ARR (widest). Exec p_clr
+                    // still wipes its leftover copies the same way.
+                    if (heap_clr_busy) begin
+                        if (heap_clr_i < 12'(MAX_VARS)) begin
+                            var_init[heap_clr_i[8:0]] <= 1'b0;
+                            vars[heap_clr_i[8:0]] <= 32'sd0;
+                            vvar_valid[heap_clr_i[8:0]] <= 1'b0;
+                        end
+                        if (heap_clr_i < 12'(MAX_OBJ)) begin
+                            vobj_alloc[heap_clr_i[9:0]] <= 2'd0;
+                            vobj_gen[heap_clr_i[9:0]] <= 12'd1;
+                            vfn_gen[heap_clr_i[9:0]] <= 12'd1;
+                            vfn_valid[heap_clr_i[9:0]] <= 1'b0;
+                            vfn_mark[heap_clr_i[9:0]] <= 1'b0;
+                            vobj_len[heap_clr_i[9:0]] <= 6'd0;
+                            vobj_mark[heap_clr_i[9:0]] <= 1'b0;
+                            vobj_builtin[heap_clr_i[9:0]] <= 4'd0;
+                        end
+                        if (heap_clr_i < 12'(MAX_ARR)) begin
+                            varr_valid[heap_clr_i[11:0]] <= 1'b0;
+                            varr_gen[heap_clr_i[11:0]] <= 12'd1;
+                            varr_len[heap_clr_i[11:0]] <= 8'd0;
+                            arr_len[heap_clr_i[11:0]] <= 8'd0;
+                            varr_mark[heap_clr_i[11:0]] <= 1'b0;
+                            varr_long[heap_clr_i[11:0]] <= 1'b0;
+                            varr_lidx[heap_clr_i[11:0]] <= 8'd0;
+                        end
+                        if (heap_clr_i < 12'(MAX_ARR_LONG))
+                            vlong_used[heap_clr_i[6:0]] <= 1'b0;
+                        if (heap_clr_i < 12'(ENV_DEPTH)) begin
+                            venv_valid[heap_clr_i[8:0]] <= 1'b0;
+                            venv_gen[heap_clr_i[8:0]] <= 12'd1;
+                            venv_len[heap_clr_i[8:0]] <= 5'd0;
+                            venv_mark[heap_clr_i[8:0]] <= 1'b0;
+                        end
+                        if (heap_clr_i < 12'd1024) begin
+                            fill_lut[heap_clr_i[9:0]] <= 8'hFF;
+                            name_has[heap_clr_i[9:0]] <= 1'b0;
+                            name_blen[heap_clr_i[9:0]] <= 16'd0;
+                            intern_var_ok[heap_clr_i[9:0]] <= 1'b0;
+                        end
+                        if (heap_clr_i + 12'd1 >= 12'(MAX_ARR))
+                            heap_clr_busy <= 1'b0;
+                        else
+                            heap_clr_i <= heap_clr_i + 12'd1;
+                    end else if (!e64_p_clr_busy && !e32_p_clr_busy) begin
+                        if (ret_state == S_FETCH_WAIT)
+                            hs_st(S_FETCH_WAIT);
+                        else begin
+                            hs_st(S_RD);
+                        end
                     end
                 end
                 S_LD_CONST: begin
                     if (jsb_flags[3]) begin
                         // Value64 constants are little-endian low/high u32 pairs.
                         vconst_lo <= code_rdata;
-                        code_raddr <= 15'(hdr_w + (c_i << 1) + 16'd1);
-                        state <= S_RD;
+                        hs_code(15'(hdr_w + (c_i << 1) + 16'd1));
+                        hs_st(S_RD);
                         ret_state <= S_V64_CONST_HI;
                     end else begin
                         consts[c_i[9:0]] <= $signed(code_rdata);
                         if (c_i + 16'd1 >= n_consts) begin
-                            ip <= '0;
+                            hs_ip('0);
                             if (jsb_flags[0]) begin
-                                code_raddr <= 15'(hdr_w + n_consts + n_ops);
-                                state <= S_RD;
+                                hs_code(15'(hdr_w + n_consts + n_ops));
+                                hs_st(S_RD);
                                 ret_state <= S_TRAIL;
                             end else begin
-                                code_raddr <= 15'(hdr_w + n_consts);
-                                state <= S_FETCH_WAIT;
+                                hs_code(15'(hdr_w + n_consts));
+                                hs_st(S_FETCH_WAIT);
                             end
                         end else begin
                             c_i <= c_i + 16'd1;
-                            code_raddr <= 15'(hdr_w + c_i + 16'd1);
-                            state <= S_RD;
+                            hs_code(15'(hdr_w + c_i + 16'd1));
+                            hs_st(S_RD);
                             ret_state <= S_LD_CONST;
                         end
                     end
@@ -4938,19 +5335,19 @@ module jmr_js_vm #(
                     vconsts[c_i[9:0]] <= {code_rdata, vconst_lo};
                     e64_poke(6'd14, {6'd0, c_i[9:0]}, {code_rdata, vconst_lo});
                     if (c_i + 16'd1 >= n_consts) begin
-                        ip <= '0;
+                        hs_ip('0);
                         if (jsb_flags[0]) begin
-                            code_raddr <= 15'(ops_base + n_ops);
-                            state <= S_RD;
+                            hs_code(15'(ops_base + n_ops));
+                            hs_st(S_RD);
                             ret_state <= S_TRAIL;
                         end else begin
-                            code_raddr <= 15'(ops_base);
-                            state <= S_FETCH_WAIT;
+                            hs_code(15'(ops_base));
+                            hs_st(S_FETCH_WAIT);
                         end
                     end else begin
                         c_i <= c_i + 16'd1;
-                        code_raddr <= 15'(hdr_w + ((c_i + 16'd1) << 1));
-                        state <= S_RD;
+                        hs_code(15'(hdr_w + ((c_i + 16'd1) << 1)));
+                        hs_st(S_RD);
                         ret_state <= S_LD_CONST;
                     end
                 end
@@ -4960,8 +5357,8 @@ module jmr_js_vm #(
                     trail_guard <= trail_guard + 20'd1;
                     if (trail_guard >= 20'd200000) begin
                         // walker missed phase 22 — run ops (argc=4 fillRect still paints)
-                        code_raddr <= 15'(ops_base);
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base));
+                        hs_st(S_FETCH_WAIT);
                     end else begin
                         logic [7:0] tb;
                         case (trail_off[1:0])
@@ -5100,6 +5497,8 @@ module jmr_js_vm #(
                                 if ({tb, trail_acc[7:0]} == 16'd29656) id_str_function <= name_idx;
                                 // NEW: full hash table — join result maps back to intern id
                                 name_hash_tbl[name_idx[9:0]] <= {tb, trail_acc[7:0]};
+                                // Poke 40 → exec name_hash_we. Indexed write
+                                // above is not the SRAM we port (LOAD fill).
                                 e64_poke(6'd40, {6'd0, name_idx[9:0]},
                                          {48'd0, tb, trail_acc[7:0]});
                                 // NEW: u8 length byte follows each hash (concat fold)
@@ -5142,10 +5541,13 @@ module jmr_js_vm #(
                                 end
                                 intern_var[{tb, trail_acc[7:0]}[9:0]] <= trail_var_slot;
                                 intern_var_ok[{tb, trail_acc[7:0]}[9:0]] <= 1'b1;
+                                e32_poke(6'd17, {6'd0, {tb, trail_acc[7:0]}[9:0]},
+                                         {54'd0, 1'b1, trail_var_slot});
                                 // LOAD_VAR uses varmap slots, not intern idx (PYTHON seeds document/window)
                                 if ({tb, trail_acc[7:0]} == id_document ||
                                     {tb, trail_acc[7:0]} == id_window) begin
                                     vars[trail_var_slot] <= 32'sd0;
+                                    e32_poke(6'd20, {7'd0, trail_var_slot}, 64'd0);
                                     var_tag[trail_var_slot] <= 3'd6;
                                     var_init[trail_var_slot] <= 1'b1;
                                 end
@@ -5241,8 +5643,8 @@ module jmr_js_vm #(
                                     nb_wp <= 16'd0;
                                     trail_ph <= 6'd32;
                                 end else begin
-                                    code_raddr <= 15'(ops_base);
-                                    state <= S_FETCH_WAIT;
+                                    hs_code(15'(ops_base));
+                                    hs_st(S_FETCH_WAIT);
                                     trail_ph <= 5'd31;
                                 end
                             end
@@ -5273,7 +5675,7 @@ module jmr_js_vm #(
                                 end else begin
                                     trail_ph <= 5'd31;
                                     spr_hdr <= 3'd0;
-                                    state <= S_SPR;
+                                    hs_st(S_SPR);
                                 end
                             end
                             5'd28: begin
@@ -5301,8 +5703,8 @@ module jmr_js_vm #(
                                     3'd0: begin
                                         if (tb == 8'h46) spr_hdr <= 3'd1; // 'F'
                                         else begin
-                                            code_raddr <= 15'(ops_base);
-                                            state <= S_FETCH_WAIT;
+                                            hs_code(15'(ops_base));
+                                            hs_st(S_FETCH_WAIT);
                                             trail_ph <= 5'd31;
                                         end
                                     end
@@ -5313,8 +5715,8 @@ module jmr_js_vm #(
                                             (spr_hdr == 3'd3 && tb == 8'h59))
                                             spr_hdr <= spr_hdr + 3'd1;
                                         else begin
-                                            code_raddr <= 15'(ops_base);
-                                            state <= S_FETCH_WAIT;
+                                            hs_code(15'(ops_base));
+                                            hs_st(S_FETCH_WAIT);
                                             trail_ph <= 5'd31;
                                         end
                                     end
@@ -5323,8 +5725,8 @@ module jmr_js_vm #(
                                         fsty_n[15:8] <= tb;
                                         spr_hdr <= 3'd0;
                                         if ({tb, fsty_n[7:0]} == 16'd0) begin
-                                            code_raddr <= 15'(ops_base);
-                                            state <= S_FETCH_WAIT;
+                                            hs_code(15'(ops_base));
+                                            hs_st(S_FETCH_WAIT);
                                             trail_ph <= 5'd31;
                                         end else trail_ph <= 5'd30;
                                     end
@@ -5358,8 +5760,8 @@ module jmr_js_vm #(
                                     3'd0: begin
                                         if (tb == 8'h4E) spr_hdr <= 3'd1;
                                         else begin
-                                            code_raddr <= 15'(ops_base);
-                                            state <= S_FETCH_WAIT;
+                                            hs_code(15'(ops_base));
+                                            hs_st(S_FETCH_WAIT);
                                             trail_ph <= 5'd31;
                                         end
                                     end
@@ -5368,8 +5770,8 @@ module jmr_js_vm #(
                                             (spr_hdr == 3'd2 && tb == 8'h4D))
                                             spr_hdr <= spr_hdr + 3'd1;
                                         else begin
-                                            code_raddr <= 15'(ops_base);
-                                            state <= S_FETCH_WAIT;
+                                            hs_code(15'(ops_base));
+                                            hs_st(S_FETCH_WAIT);
                                             trail_ph <= 5'd31;
                                         end
                                     end
@@ -5380,8 +5782,8 @@ module jmr_js_vm #(
                                             nb_wp <= 16'd0;
                                             trail_ph <= 6'd32;
                                         end else begin
-                                            code_raddr <= 15'(ops_base);
-                                            state <= S_FETCH_WAIT;
+                                            hs_code(15'(ops_base));
+                                            hs_st(S_FETCH_WAIT);
                                             trail_ph <= 5'd31;
                                         end
                                     end
@@ -5411,8 +5813,8 @@ module jmr_js_vm #(
                                 if ({tb, trail_acc[7:0]} == 16'd0) begin
                                     // empty name — nothing to copy
                                     if (nb_i + 16'd1 >= names_n) begin
-                                        code_raddr <= 15'(ops_base);
-                                        state <= S_FETCH_WAIT;
+                                        hs_code(15'(ops_base));
+                                        hs_st(S_FETCH_WAIT);
                                         trail_ph <= 5'd31;
                                     end else begin
                                         nb_i <= nb_i + 16'd1;
@@ -5434,8 +5836,8 @@ module jmr_js_vm #(
                                 end
                                 if (nb_len <= 16'd1) begin
                                     if (nb_i + 16'd1 >= names_n) begin
-                                        code_raddr <= 15'(ops_base);
-                                        state <= S_FETCH_WAIT;
+                                        hs_code(15'(ops_base));
+                                        hs_st(S_FETCH_WAIT);
                                         trail_ph <= 5'd31;
                                     end else begin
                                         nb_i <= nb_i + 16'd1;
@@ -5445,15 +5847,15 @@ module jmr_js_vm #(
                             end
                             default: begin
                                 // unknown phase — do not hang HTML RUN
-                                code_raddr <= 15'(ops_base);
-                                state <= S_FETCH_WAIT;
+                                hs_code(15'(ops_base));
+                                hs_st(S_FETCH_WAIT);
                             end
                         endcase
                         if (trail_ph != 5'd31 && state != S_SPR) begin
                             if (trail_off[1:0] == 2'd3) begin
-                                code_raddr <= 15'(trail_off[16:2] + 15'd1);
+                                hs_code(15'(trail_off[16:2] + 15'd1));
                                 trail_off <= trail_off + 16'd1;
-                                state <= S_RD;
+                                hs_st(S_RD);
                                 // SPR1 pixel copy starts this cycle when count>0.
                                 // ret_state must be S_SPR — S_TRAIL + ph 31 would
                                 // skip the pack (dihit with a blank FB).
@@ -5466,27 +5868,27 @@ module jmr_js_vm #(
                         end
                         // FETCH only after SPR miss or empty pack
                         if (trail_ph == 5'd31 && state != S_SPR) begin
-                            code_raddr <= 15'(ops_base);
-                            state <= S_FETCH_WAIT;
+                            hs_code(15'(ops_base));
+                            hs_st(S_FETCH_WAIT);
                         end
                     end
                 end
 
                 S_FETCH_WAIT: begin
-                    hp_env <= 1'b0;
+                    hs_hp_env(1'b0);
                     // NEW: clear both FB banks once after header/trail, before first op
                     if (boot_clr) begin
                         color <= 8'd0;
                         clr_idx <= '0;
-                        state <= S_CLEAR;
+                        hs_st(S_CLEAR);
                     end else if (dc_arm) begin
                         // NEW: pending SET_PROP array deep copy runs between ops
                         dc_arm <= 1'b0;
-                        state <= S_ARR_DCOPY;
+                        hs_st(S_ARR_DCOPY);
                     end else if (jsb_flags[3])
-                        state <= S_V64_EXEC;
+                        hs_st(S_V64_EXEC);
                     else
-                        state <= S_EXEC;
+                        hs_st(S_EXEC);
                 end
 
                 S_ARR_DCOPY: begin
@@ -5494,30 +5896,30 @@ module jmr_js_vm #(
                     // is a later 1-D-port walk, not a 128-wide combo.
                     if (dc_i >= ((varr_len[dc_src] > arr_len[dc_src])
                             ? varr_len[dc_src] : arr_len[dc_src])) begin
-                        hp_phase <= 3'd0;
+                        hs_hp_phase(3'd0);
                         dc_arm <= 1'b0;
-                        state <= S_EXEC;
+                        hs_st(S_EXEC);
                     end else if (hp_phase == 3'd0) begin
-                        hp_cmd <= HP_AGETI;
-                        hp_v64 <= 1'b0;
-                        hp_aid <= dc_src;
-                        hp_aslot <= dc_i[6:0];
-                        hp_alen <= arr_len[dc_src];
-                        hp_ret <= S_ARR_DCOPY;
-                        hp_phase <= 3'd1;
-                        state <= S_HEAP_WAIT;
+                        hs_hp_cmd(HP_AGETI);
+                        hs_hp_v64(1'b0);
+                        hs_hp_aid(dc_src);
+                        hs_hp_aslot(dc_i[6:0]);
+                        hs_hp_alen(arr_len[dc_src]);
+                        hs_hp_ret(S_ARR_DCOPY);
+                        hs_hp_phase(3'd1);
+                        hs_st(S_HEAP_WAIT);
                     end else begin
-                        hp_cmd <= HP_ASETI;
-                        hp_v64 <= 1'b0;
-                        hp_from_stack <= 1'b0;
-                        hp_aid <= dc_dst;
-                        hp_aslot <= dc_i[6:0];
-                        hp_wval <= hp_rval;
-                        hp_tag <= hp_tag;
-                        hp_ret <= S_ARR_DCOPY;
-                        hp_phase <= 3'd0;
+                        hs_hp_cmd(HP_ASETI);
+                        hs_hp_v64(1'b0);
+                        hs_hp_from_stack(1'b0);
+                        hs_hp_aid(dc_dst);
+                        hs_hp_aslot(dc_i[6:0]);
+                        hs_hp_wval(hp_rval);
+                        hs_hp_tag(hp_tag);
+                        hs_hp_ret(S_ARR_DCOPY);
+                        hs_hp_phase(3'd0);
                         dc_i <= dc_i + 8'd1;
-                        state <= S_HEAP_AWR;
+                        hs_st(S_HEAP_AWR);
                     end
                 end
 
@@ -5533,20 +5935,20 @@ module jmr_js_vm #(
                             clr_idx <= '0;
                             if (boot_clr_n == 2'd1) begin
                                 boot_clr <= 1'b0;
-                                code_raddr <= 15'(ops_base + ip);
-                                state <= S_FETCH_WAIT;
+                                hs_code(15'(ops_base + ip));
+                                hs_st(S_FETCH_WAIT);
                             end else
                                 boot_clr_n <= boot_clr_n - 2'd1;
                         end else begin
-                            code_raddr <= 15'(ops_base + ip);
-                            state <= S_FETCH_WAIT;
+                            hs_code(15'(ops_base + ip));
+                            hs_st(S_FETCH_WAIT);
                         end
                     end else clr_idx <= clr_idx + 19'd1;
                 end
                 S_RECT: begin
                     if (rw == 10'd0 || rh == 10'd0) begin
-                        code_raddr <= 15'(ops_base + ip);
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                     end else begin
                         // NEW: bring-up latch (first pixel only)
                         if (dbg_rect_n < 5'd16 && x == rx && y == ry) begin
@@ -5564,8 +5966,8 @@ module jmr_js_vm #(
                             x <= rx;
                             if (y == (ry + rh - 10'd1)) begin
                                 // draw into back; swap once at frame end (S_WAIT_FRAME)
-                                code_raddr <= 15'(ops_base + ip);
-                                state <= S_FETCH_WAIT;
+                                hs_code(15'(ops_base + ip));
+                                hs_st(S_FETCH_WAIT);
                             end else y <= y + 10'd1;
                         end else x <= x + 10'd1;
                     end
@@ -5601,10 +6003,10 @@ module jmr_js_vm #(
                         x <= clip_u($signed({22'd0, rx}) - $signed({22'd0, rw}), MW);
                         if (y >= ry + rw || y == 10'(MH - 1)) begin
                             // NEW: chain back to the path walk
-                            if (path_active) state <= S_PWALK;
+                            if (path_active) hs_st(S_PWALK);
                             else begin
-                                code_raddr <= 15'(ops_base + ip);
-                                state <= S_FETCH_WAIT;
+                                hs_code(15'(ops_base + ip));
+                                hs_st(S_FETCH_WAIT);
                             end
                         end else y <= y + 10'd1;
                     end else x <= x + 10'd1;
@@ -5627,14 +6029,14 @@ module jmr_js_vm #(
                         if ((bl_x == bl_x1 && bl_y == bl_y1) || bl_guard == 13'd4095) begin
                             if (bl_guard == 13'd4095) dbg_path_ovf <= dbg_path_ovf + 16'd1;
                             if (path_active) begin
-                                if (qseg != 4'd0 && qseg <= 4'd8) state <= S_QSEG;
+                                if (qseg != 4'd0 && qseg <= 4'd8) hs_st(S_QSEG);
                                 else begin
                                     qseg <= 4'd0;
-                                    state <= S_PWALK;
+                                    hs_st(S_PWALK);
                                 end
                             end else begin
-                                code_raddr <= 15'(ops_base + ip);
-                                state <= S_FETCH_WAIT;
+                                hs_code(15'(ops_base + ip));
+                                hs_st(S_FETCH_WAIT);
                             end
                         end else begin
                             e2 = bl_err <<< 1;
@@ -5657,15 +6059,15 @@ module jmr_js_vm #(
                     // command's points with the CURRENT ctx transform
                     if (pi >= pc_n) begin
                         path_active <= 1'b0;
-                        code_raddr <= 15'(ops_base + ip);
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                     end else if (ctx_sx != FX_ONE || ctx_sy != FX_ONE) begin
                         xf_x <= pc_a1[pi[3:0]];
                         xf_y <= pc_a2[pi[3:0]];
                         xf_w <= pc_a3[pi[3:0]];
                         xf_h <= pc_a4[pi[3:0]];
                         xf_dst <= 2'd3;
-                        state <= S_XF_MUL;
+                        hs_st(S_XF_MUL);
                     end else begin
                         p1x <= (pc_a1[pi[3:0]] >>> 16) + ctx_tx;
                         p1y <= (pc_a2[pi[3:0]] >>> 16) + ctx_ty;
@@ -5674,7 +6076,7 @@ module jmr_js_vm #(
                              + ((pc_op[pi[3:0]] == 2'd2) ? ctx_tx : 32'sd0);
                         p2y <= (pc_a4[pi[3:0]] >>> 16)
                              + ((pc_op[pi[3:0]] == 2'd2) ? ctx_ty : 32'sd0);
-                        state <= S_PDO;
+                        hs_st(S_PDO);
                     end
                 end
                 S_PDO: begin
@@ -5695,7 +6097,7 @@ module jmr_js_vm #(
                     pi <= pi + 5'd1;
                     if (pc_op[pi[3:0]] == 2'd0) begin
                         cur_x <= p1x; cur_y <= p1y;
-                        state <= S_PWALK;
+                        hs_st(S_PWALK);
                     end else if (pc_op[pi[3:0]] == 2'd1) begin
                         bl_x <= 16'(cur_x); bl_y <= 16'(cur_y);
                         bl_x1 <= 16'(p1x); bl_y1 <= 16'(p1y);
@@ -5707,7 +6109,7 @@ module jmr_js_vm #(
                         bl_guard <= 13'd0;
                         qseg <= 4'd0;
                         cur_x <= p1x; cur_y <= p1y;
-                        state <= S_LINE;
+                        hs_st(S_LINE);
                     end else if (pc_op[pi[3:0]] == 2'd2) begin
                         // quadratic — FM subdivides into 8 line segments
                         qx0 <= cur_x; qy0 <= cur_y;
@@ -5716,7 +6118,7 @@ module jmr_js_vm #(
                         p2x <= cur_x; p2y <= cur_y; // prev bezier point
                         qseg <= 4'd1;
                         cur_x <= p2x; cur_y <= p2y;
-                        state <= S_QSEG;
+                        hs_st(S_QSEG);
                     end else begin
                         // arc — FM fill_circle: full if |a1-a0| >= 2pi, skip if
                         // a0 == a1, else angular pie with the ccw sweep
@@ -5743,7 +6145,7 @@ module jmr_js_vm #(
                         x <= clip_u(p1x - r_, MW);
                         y <= clip_u(p1y - r_, MH);
                         cur_x <= p1x; cur_y <= p1y; // FM: _path_x/_path_y = arc center
-                        state <= skip_arc ? S_PWALK : S_CIRCLE;
+                        hs_st(skip_arc ? S_PWALK : S_CIRCLE);
                     end
                 end
                 S_QSEG: begin
@@ -5754,12 +6156,12 @@ module jmr_js_vm #(
                     qk1 <= 32'((64'(u_) * 64'(u_)) >>> 16);
                     qk2 <= 32'((64'(u_) * 64'(t_)) >>> 16);
                     qk3 <= 32'((64'(t_) * 64'(t_)) >>> 16);
-                    state <= S_QPX;
+                    hs_st(S_QPX);
                 end
                 S_QPX: begin
                     p1x <= 32'((64'(qk1) * 64'(qx0) + 64'(qk2) * 64'(qcx) * 64'd2
                                + 64'(qk3) * 64'(qex)) >>> 16);
-                    state <= S_QPY;
+                    hs_st(S_QPY);
                 end
                 S_QPY: begin
                     logic signed [31:0] by_;
@@ -5775,7 +6177,7 @@ module jmr_js_vm #(
                     bl_guard <= 13'd0;
                     p2x <= p1x; p2y <= by_;
                     qseg <= qseg + 4'd1;
-                    state <= S_LINE;
+                    hs_st(S_LINE);
                 end
                 S_JOIN: begin
                     // NEW: fold single-digit elems into the encoder u16 hash
@@ -5785,7 +6187,7 @@ module jmr_js_vm #(
                             jn_i <= 16'd0;
                             jn_len <= varr_len[jn_arr];
                             jn_rd_arm <= 1'b0;
-                            state <= S_JOIN_FIND;
+                            hs_st(S_JOIN_FIND);
                         end else if (!jn_rd_arm) begin
                             jn_rd_arm <= 1'b1;
                         end else begin
@@ -5804,8 +6206,8 @@ module jmr_js_vm #(
                                 dbg_join_miss <= dbg_join_miss + 16'd1;
                                 vst_wr(jn_res, V64_UNDEFINED);
                                 v64_join <= 1'b0;
-                                code_raddr <= 15'(ops_base + ip);
-                                state <= S_FETCH_WAIT;
+                                hs_code(15'(ops_base + ip));
+                                hs_st(S_FETCH_WAIT);
                             end else begin
                                 jn_h <= 16'(32'(jn_h) * 32'd31 + 32'd48 + 32'(ev));
                                 if (jn_i < 16'(TXT_MAX)) begin
@@ -5820,7 +6222,7 @@ module jmr_js_vm #(
                         jn_i <= 16'd0;
                         jn_len <= arr_len[jn_arr]; // one char per digit elem
                         jn_rd_arm <= 1'b0;
-                        state <= S_JOIN_FIND;
+                        hs_st(S_JOIN_FIND);
                     end else if (!jn_rd_arm) begin
                         jn_rd_arm <= 1'b1;
                     end else begin
@@ -5846,8 +6248,8 @@ module jmr_js_vm #(
                             dbg_join_miss <= dbg_join_miss + 16'd1;
                             stack[jn_res] <= 32'sd0;
                             stack_tag[jn_res] <= 3'd5;
-                            code_raddr <= 15'(ops_base + ip);
-                            state <= S_FETCH_WAIT;
+                            hs_code(15'(ops_base + ip));
+                            hs_st(S_FETCH_WAIT);
                         end else begin
                             jn_h <= 16'(32'(jn_h) * 32'd31 + 32'd48 + 32'(ev));
                             if (jn_i < 16'(TXT_MAX)) begin
@@ -5877,19 +6279,18 @@ module jmr_js_vm #(
                                 vst_wr(vnat_base, v64_from_fx($signed({8'd0,
                                     (rem2 >= trial) ? {sq_root[22:0], 1'b1}
                                                     : {sq_root[22:0], 1'b0}})));
-                                vsp <= vnat_base + 12'd1;
-                                ip <= ip + 16'd1;
-                                code_raddr <=
-                                    15'(ops_base + ip + 16'd1);
+                                hs_vsp(vnat_base + 12'd1);
+                                hs_ip(ip + 16'd1);
+                                hs_code(15'(ops_base + ip + 16'd1));
                                 v64_sqrt <= 1'b0;
-                                state <= S_FETCH_WAIT;
+                                hs_st(S_FETCH_WAIT);
                             end else begin
                             stack[sp - 8'd1] <= {8'd0,
                                 (rem2 >= trial) ? {sq_root[22:0], 1'b1}
                                                 : {sq_root[22:0], 1'b0}};
                             stack_tag[sp - 8'd1] <= 3'd7;
-                            code_raddr <= 15'(ops_base + ip);
-                            state <= S_FETCH_WAIT;
+                            hs_code(15'(ops_base + ip));
+                            hs_st(S_FETCH_WAIT);
                             end
                         end else sq_i <= sq_i - 5'd1;
                     end
@@ -5921,13 +6322,17 @@ module jmr_js_vm #(
                         stack[jn_res] <= {16'd0, hidx};
                         stack_tag[jn_res] <= 3'd3;
                         end
-                        code_raddr <= 15'(ops_base + ip);
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                     end else if (jn_i + 16'd16 >= names_n) begin
                         if (names_n < 16'd1024) begin
                             name_hash_tbl[names_n[9:0]] <= jn_h;
                             name_len_tbl[names_n[9:0]] <= jn_len;
                             name_blen[names_n[9:0]] <= {8'd0, jn_len};
+                            // Same we port as trail (poke 40 then 17 next
+                            // byte-copy). Indexed writes are not the SRAM we.
+                            e64_poke(6'd40, {6'd0, names_n[9:0]},
+                                     {48'd0, jn_h});
                             if (v64_concat || v64_join) begin
                                 vst_wr(jn_res, v64_handle(
                                     4'd4, 12'd0, {16'd0, names_n}
@@ -5947,11 +6352,11 @@ module jmr_js_vm #(
                                 name_off[names_n[9:0]] <= nb_wp;
                                 name_has[names_n[9:0]] <= 1'b1;
                                 txt_i <= 7'd0;
-                                state <= S_STR_WR;
+                                hs_st(S_STR_WR);
                             end else begin
                                 if (!cc_bok) dbg_str_ovf <= dbg_str_ovf + 16'd1;
-                                code_raddr <= 15'(ops_base + ip);
-                                state <= S_FETCH_WAIT;
+                                hs_code(15'(ops_base + ip));
+                                hs_st(S_FETCH_WAIT);
                             end
                         end else begin
                             // intern table full — honest miss
@@ -5964,8 +6369,8 @@ module jmr_js_vm #(
                             stack[jn_res] <= 32'sd0;
                             stack_tag[jn_res] <= 3'd5;
                             end
-                            code_raddr <= 15'(ops_base + ip);
-                            state <= S_FETCH_WAIT;
+                            hs_code(15'(ops_base + ip));
+                            hs_st(S_FETCH_WAIT);
                         end
                     end else jn_i <= jn_i + 16'd16;
                 end
@@ -6000,7 +6405,7 @@ module jmr_js_vm #(
                                                 + 32'(name_hash_tbl[v_[9:0]]));
                                     jn_len <= cc_len + name_len_tbl[v_[9:0]];
                                     jn_i <= 16'd0;
-                                    state <= S_JOIN_FIND;
+                                    hs_st(S_JOIN_FIND);
                                 end else cc_second <= 1'b1;
                             end
                         end else if (t_ == 3'd0 || t_ == 3'd7) begin
@@ -6039,8 +6444,8 @@ module jmr_js_vm #(
                             stack[jn_res] <= 32'sd0;
                             stack_tag[jn_res] <= 3'd5;
                             end
-                            code_raddr <= 15'(ops_base + ip);
-                            state <= S_FETCH_WAIT;
+                            hs_code(15'(ops_base + ip));
+                            hs_st(S_FETCH_WAIT);
                         end
                     end else if (cc_st == 2'd1) begin
                         // digit loop: subtract P10[cc_pi] until below, fold digit
@@ -6063,7 +6468,7 @@ module jmr_js_vm #(
                                     jn_h <= 16'(32'(cc_h) * 32'd31 + 32'd48 + 32'(cc_d));
                                     jn_len <= cc_len + 8'd1;
                                     jn_i <= 16'd0;
-                                    state <= S_JOIN_FIND;
+                                    hs_st(S_JOIN_FIND);
                                 end else cc_second <= 1'b1;
                             end else cc_pi <= cc_pi - 4'd1;
                         end
@@ -6075,7 +6480,7 @@ module jmr_js_vm #(
                             if (cc_second) begin
                                 jn_h <= cc_h; jn_len <= cc_len; // folded already
                                 jn_i <= 16'd0;
-                                state <= S_JOIN_FIND;
+                                hs_st(S_JOIN_FIND);
                             end else cc_second <= 1'b1;
                         end else if (name_rdaddr == cc_cp) begin
                             name_rdaddr <= name_rdaddr + 16'd1; // prime byte 0
@@ -6093,8 +6498,8 @@ module jmr_js_vm #(
                         stack[jn_res] <= -32'sd1;
                         stack_tag[jn_res] <= 3'd0;
                         jn_rd_arm <= 1'b0;
-                        code_raddr <= 15'(ops_base + ip);
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                     end else if (!jn_rd_arm) begin
                         jn_rd_arm <= 1'b1;
                     end else begin
@@ -6114,8 +6519,8 @@ module jmr_js_vm #(
                         if (tag_ok && av == nv) begin
                         stack[jn_res] <= {16'd0, jn_i};
                         stack_tag[jn_res] <= 3'd0;
-                        code_raddr <= 15'(ops_base + ip);
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                     end else jn_i <= jn_i + 16'd1;
                     end
                 end
@@ -6126,7 +6531,7 @@ module jmr_js_vm #(
                     xfp_y <= 64'(xf_y) * 64'(ctx_sy);
                     xfp_w <= 64'(xf_w) * 64'(ctx_sx);
                     xfp_h <= 64'(xf_h) * 64'(ctx_sy);
-                    state <= S_XF_APPLY;
+                    hs_st(S_XF_APPLY);
                 end
                 S_XF_APPLY: begin
                     // NEW: FM machine.py _xf — ix=int(x*sx+tx), iw=max(1,int(w*sx))
@@ -6141,13 +6546,13 @@ module jmr_js_vm #(
                              + ((pc_op[pi[3:0]] == 2'd2) ? ctx_tx : 32'sd0);
                         p2y <= trunc32(xfp_h)
                              + ((pc_op[pi[3:0]] == 2'd2) ? ctx_ty : 32'sd0);
-                        state <= S_PDO;
+                        hs_st(S_PDO);
                     end else if (xf_dst == 2'd2) begin
                         // NEW: fillText pen — glyph size comes from ctx.font, and
                         // the pen may sit off-glass (centred text clips per pixel)
                         txt_px <= 16'(ix_);
                         txt_py <= 16'(iy_);
-                        state <= S_TXT_LD;
+                        hs_st(S_TXT_LD);
                     end else begin
                         iw_ = trunc32(xfp_w); if (iw_ < 32'sd1) iw_ = 32'sd1;
                         ih_ = trunc32(xfp_h); if (ih_ < 32'sd1) ih_ = 32'sd1;
@@ -6156,13 +6561,13 @@ module jmr_js_vm #(
                         rh <= clip_sz(ih_, clip_u(iy_, MH), MH);
                         x <= (xf_dst == 2'd1) ? 10'd0 : clip_u(ix_, MW);
                         y <= (xf_dst == 2'd1) ? 10'd0 : clip_u(iy_, MH);
-                        state <= (xf_dst == 2'd1) ? S_BLIT : S_RECT;
+                        hs_st((xf_dst == 2'd1) ? S_BLIT : S_RECT);
                     end
                 end
                 S_BLIT: begin
                     if (rw == 10'd0 || rh == 10'd0) begin
-                        code_raddr <= 15'(ops_base + ip);
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                     end else begin
                         // NEW: source coords are 16-bit (DONKEY 1470×750 sheets);
                         // so is a 22-bit byte offset into the 4 MB asset SRAM.
@@ -6200,8 +6605,8 @@ module jmr_js_vm #(
                             if (x == (rw - 10'd1)) begin
                                 x <= 10'd0;
                                 if (y == (rh - 10'd1)) begin
-                                    code_raddr <= 15'(ops_base + ip);
-                                    state <= S_FETCH_WAIT;
+                                    hs_code(15'(ops_base + ip));
+                                    hs_st(S_FETCH_WAIT);
                                 end else y <= y + 10'd1;
                             end else x <= x + 10'd1;
                         end
@@ -6257,13 +6662,13 @@ module jmr_js_vm #(
                         end
                     end
                     if (trail_off[1:0] == 2'd3) begin
-                        code_raddr <= 15'(trail_off[16:2] + 15'd1);
+                        hs_code(15'(trail_off[16:2] + 15'd1));
                         trail_off <= trail_off + 16'd1;
-                        state <= S_RD;
+                        hs_st(S_RD);
                         ret_state <= spr_end ? S_TRAIL : S_SPR;
                     end else begin
                         trail_off <= trail_off + 16'd1;
-                        if (spr_end) state <= S_TRAIL;
+                        if (spr_end) hs_st(S_TRAIL);
                     end
                 end
                 // NEW: ALU result into alu_r (no stack write this cycle)
@@ -6280,7 +6685,7 @@ module jmr_js_vm #(
                         3'd6: alu_r <= (alu_a == 0) ? 32'sd1 : 32'sd0;
                         default: alu_r <= 32'sd0;
                     endcase
-                    state <= S_ALU_WR;
+                    hs_st(S_ALU_WR);
                 end
                 // NEW: stack write from alu_r — binary ops already did sp--
                 S_ALU_WR: begin
@@ -6292,7 +6697,7 @@ module jmr_js_vm #(
                 // NEW: DSP multiply into mul_prod only (no stack write this cycle)
                 S_MUL: begin
                     mul_prod <= 64'(mul_a) * 64'(mul_b);
-                    state <= S_MUL_WR;
+                    hs_st(S_MUL_WR);
                 end
                 // NEW: stack write from registered product — closes −0.183 ns WNS
                 S_MUL_WR: begin
@@ -6320,7 +6725,7 @@ module jmr_js_vm #(
                         div_rem <= div_rnext[31:0];
                         div_uq  <= {div_uq[46:0], 1'b0};
                     end
-                    if (div_cnt == 6'd47) state <= S_DIV_FIN;
+                    if (div_cnt == 6'd47) hs_st(S_DIV_FIN);
                     else div_cnt <= div_cnt + 6'd1;
                 end
                 S_DIV_FIN: begin
@@ -6343,7 +6748,7 @@ module jmr_js_vm #(
                 S_FOREACH: begin
                     // NEW: drain arr.forEach(fn) using frame at csp-1
                     if (csp == 0) begin
-                        state <= S_WAIT_FRAME;
+                        hs_st(S_WAIT_FRAME);
                     end else if (cstack_fe_i[csp - 7'd1] >= arr_len[cstack_fe_arr[csp - 7'd1][11:0]]) begin
                         if (cstack_map_arr[csp - 7'd1] == 16'hFFFD) begin
                             stack[sp] <= -32'sd1;
@@ -6358,7 +6763,7 @@ module jmr_js_vm #(
                         end
                         sp <= sp + 8'd1;
                         arm_release_env(cstack_env[csp - 7'd1], S_FETCH_WAIT);
-                        ip <= cstack_ip[csp - 7'd1];
+                        hs_ip(cstack_ip[csp - 7'd1]);
                         this_obj <= cstack_this[csp - 7'd1];
                         if (this_ok) begin
                             vars[var_this] <= (cstack_this[csp - 7'd1] == 16'hFFFF)
@@ -6368,7 +6773,7 @@ module jmr_js_vm #(
                                                  ? 3'd5 : 3'd1;
                         end
                         csp <= csp - 7'd1;
-                        code_raddr <= 15'(ops_base + cstack_ip[csp - 7'd1]);
+                        hs_code(15'(ops_base + cstack_ip[csp - 7'd1]));
                         vfe_rd_arm <= 1'b0;
                     end else if (!vfe_rd_arm) begin
                         vfe_rd_arm <= 1'b1;
@@ -6401,9 +6806,9 @@ module jmr_js_vm #(
                             cstack_isfe[csp] <= 1'b0;
                             enter_captured_fn(foid);
                             bump_csp();
-                            ip <= tfn_entry[fo];
-                            code_raddr <= 15'(ops_base + tfn_entry[fo]);
-                            state <= S_FETCH_WAIT;
+                            hs_ip(tfn_entry[fo]);
+                            hs_code(15'(ops_base + tfn_entry[fo]));
+                            hs_st(S_FETCH_WAIT);
                         end
                     end
                 end
@@ -6413,11 +6818,11 @@ module jmr_js_vm #(
                     if (frame_tick || v64_frame_armed) begin
                         if (kev_rp != kev_wp) begin
                             v64_frame_armed <= 1'b1;
-                            vnat_dom <= 3'd5;
-                            valloc_kind <= 2'd0;
-                            valloc_i <= vobj_next;
-                            valloc_retried <= 1'b0;
-                            state <= S_V64_ALLOC;
+                            hs_vnat_dom(3'd5);
+                            hs_valloc_kind(2'd0);
+                            hs_valloc_i(vobj_next);
+                            hs_valloc_retried(1'b0);
+                            hs_st(S_V64_ALLOC);
                         end else begin
                             v64_frame_armed <= 1'b0;
                         vframe_no <= vframe_no + 32'd1;
@@ -6426,8 +6831,8 @@ module jmr_js_vm #(
                         for (int k = 0; k < 8; k++)
                             if (k < vraf_n)
                                 vraf_snap[k] <= vraf[k];
-                        vraf_n <= 4'd0;
-                        state <= S_V64_FRAME_RAF;
+                        hs_vraf_n(4'd0);
+                        hs_st(S_V64_FRAME_RAF);
                         end
                     end
                 end else if (frame_tick) begin
@@ -6464,7 +6869,7 @@ module jmr_js_vm #(
                     gc_qw <= 14'd0;
                     gc_obj_high <= 16'd0;
                     gc_arr_high <= 16'd0;
-                    state <= S_GC_CLEAR;
+                    hs_st(S_GC_CLEAR);
                     // KEYBITS level → keys.a/d/space.pressed (HTML table the animate() reads)
                     if (keys_ok) begin
                         poke_pressed(id_a, joy_in[2]);
@@ -6498,7 +6903,7 @@ module jmr_js_vm #(
                         cstack_isctor[csp] <= 1'b0;
                         cstack_isfe[csp] <= 1'b0;
                         // S_KEYEV: env alloc next cycle so it cannot clobber the event
-                        state <= S_KEYEV;
+                        hs_st(S_KEYEV);
                     end else if (ku_fn != 16'hFFFF && joy_up_edge != 0 && kev_rp == kev_wp) begin
                         joy_up_edge <= 6'd0;
                         obj_n[n_obj[12:0]] <= 6'd2;
@@ -6515,7 +6920,7 @@ module jmr_js_vm #(
                         cstack_ip[csp] <= 16'hFFFD;
                         cstack_isctor[csp] <= 1'b0;
                         cstack_isfe[csp] <= 1'b0;
-                        state <= S_KEYEV;
+                        hs_st(S_KEYEV);
                     // KEYEVT before rAF (PYTHON drains keys then rAF). Do not
                     // auto-fire click_fn — attract waits for Space / .click().
                     end else if (kev_rp != kev_wp &&
@@ -6529,14 +6934,15 @@ module jmr_js_vm #(
                         kev_rp <= kev_rp + 3'd1;
                         obj_n[n_obj[12:0]] <= 6'd2;
                         obj_cls[n_obj[12:0]] <= 0;
-                        hp_cmd <= HP_OSETI;
-                        hp_v64 <= 1'b0;
-                        hp_oid <= n_obj[12:0];
-                        hp_slot <= 5'd0;
-                        hp_qn <= 3'd2;
-                        hp_qi <= 3'd0;
-                        hp_qk[0] <= id_key;
-                        hp_qv[0] <= {48'd0,
+                        hs_hp_cmd(HP_OSETI);
+                        hs_hp_v64(1'b0);
+                        hs_hp_oid(n_obj[12:0]);
+                        hs_hp_slot(5'd0);
+                        hs_hp_qn(3'd2);
+                        hs_hp_qi(3'd0);
+                        hp_qk_ff[0] <= id_key;
+                        hs_m_hp_qk <= 1'b1;
+                        hp_qv_ff[0] <= {48'd0,
                             (kev_q[kev_rp][7:0] == 8'd13) ? id_enter :
                             (kev_q[kev_rp][7:0] == 8'd32) ? id_space :
                             (kev_q[kev_rp][7:0] == 8'd37) ? id_arrow_l :
@@ -6545,7 +6951,8 @@ module jmr_js_vm #(
                             (kev_q[kev_rp][7:0] == 8'd40) ? id_arrow_d :
                             (kev_q[kev_rp][7:0] == 8'd65) ? id_a :
                             (kev_q[kev_rp][7:0] == 8'd68) ? id_d : 16'hFFFF};
-                        hp_qt[0] <= ((kev_q[kev_rp][7:0] == 8'd13) ||
+                        hs_m_hp_qv <= 1'b1;
+                        hp_qt_ff[0] <= ((kev_q[kev_rp][7:0] == 8'd13) ||
                             (kev_q[kev_rp][7:0] == 8'd32) ||
                             (kev_q[kev_rp][7:0] == 8'd37) ||
                             (kev_q[kev_rp][7:0] == 8'd39) ||
@@ -6553,10 +6960,14 @@ module jmr_js_vm #(
                             (kev_q[kev_rp][7:0] == 8'd40) ||
                             (kev_q[kev_rp][7:0] == 8'd65) ||
                             (kev_q[kev_rp][7:0] == 8'd68)) ? 3'd3 : 3'd5;
-                        hp_qk[1] <= id_keycode;
-                        hp_qv[1] <= {56'd0, kev_q[kev_rp][7:0]};
-                        hp_qt[1] <= 3'd0;
-                        hp_ret <= S_KEYEV;
+                        hs_m_hp_qt <= 1'b1;
+                        hp_qk_ff[1] <= id_keycode;
+                        hs_m_hp_qk <= 1'b1;
+                        hp_qv_ff[1] <= {56'd0, kev_q[kev_rp][7:0]};
+                        hs_m_hp_qv <= 1'b1;
+                        hp_qt_ff[1] <= 3'd0;
+                        hs_m_hp_qt <= 1'b1;
+                        hs_hp_ret(S_KEYEV);
                         stack[0] <= {16'd0, n_obj}; // frame boundary: fresh stack
                         stack_tag[0] <= 3'd1;
                         boundary_sp(11'd1);
@@ -6570,10 +6981,10 @@ module jmr_js_vm #(
                         cstack_this[csp] <= this_obj;
                         cstack_isctor[csp] <= 1'b0;
                         cstack_isfe[csp] <= 1'b0;
-                        state <= S_HEAP_WR;
+                        hs_st(S_HEAP_WR);
                     end else if (raf_n != 0) begin
                         boundary_sp(11'd0); // frame boundary: checked eval stack
-                        ip <= fn_entry(raf_fn[0]);
+                        hs_ip(fn_entry(raf_fn[0]));
                         raf_n <= raf_n - 4'd1;
                         enter_captured_fn(raf_fn[0]);
                         raf_fn[0] <= raf_fn[1];
@@ -6588,17 +6999,17 @@ module jmr_js_vm #(
                         cstack_isctor[csp] <= 1'b0;
                         cstack_isfe[csp] <= 1'b0;
                         bump_csp();
-                        code_raddr <= 15'(ops_base + fn_entry(raf_fn[0]));
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base + fn_entry(raf_fn[0])));
+                        hs_st(S_FETCH_WAIT);
                     end else if (looping) begin
-                        ip <= '0;
+                        hs_ip('0);
                         boundary_sp(11'd0);
-                        code_raddr <= 15'(ops_base);
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base));
+                        hs_st(S_FETCH_WAIT);
                     end else begin
-                        ip <= n_ops;
-                        code_raddr <= 15'(ops_base);
-                        state <= S_FETCH_WAIT;
+                        hs_ip(n_ops);
+                        hs_code(15'(ops_base));
+                        hs_st(S_FETCH_WAIT);
                     end
                 end else if (to_n != 0 && to_delay[0] == 12'd0) begin
                     // NEW: due timer after rAF (FM drains timers after rAF)
@@ -6616,7 +7027,7 @@ module jmr_js_vm #(
                         if (fn_ok) begin
                             dbg_tmr_fire <= dbg_tmr_fire + 16'd1;
                             boundary_sp(11'd0);
-                            ip <= tfn_entry[fo];
+                            hs_ip(tfn_entry[fo]);
                         end
                         if (fn_ok && to_period[0] != 12'd0 && to_n == 7'd1) begin
                             to_delay[0] <= to_period[0]; // re-arm sole interval
@@ -6651,8 +7062,8 @@ module jmr_js_vm #(
                             cstack_isfe[csp] <= 1'b0;
                             enter_captured_fn(foid);
                             bump_csp();
-                            code_raddr <= 15'(ops_base + tfn_entry[fo]);
-                            state <= S_FETCH_WAIT;
+                            hs_code(15'(ops_base + tfn_entry[fo]));
+                            hs_st(S_FETCH_WAIT);
                         end
                     end
                 end
@@ -6660,47 +7071,50 @@ module jmr_js_vm #(
                     // Event object was allocated last cycle (n_obj already bumped).
                     enter_captured_fn(kev_fn);
                     bump_csp();
-                    ip <= fn_entry(kev_fn);
-                    code_raddr <= 15'(ops_base + fn_entry(kev_fn));
-                    state <= S_FETCH_WAIT;
+                    hs_ip(fn_entry(kev_fn));
+                    hs_code(15'(ops_base + fn_entry(kev_fn)));
+                    hs_st(S_FETCH_WAIT);
                 end
                 S_ENV_LOAD: begin
                     // Sequential env slot walk (registered SRAM). Parent is
                     // 1-D tenv_parent, not a combo vobj_slot[VOBJ_AW'({eo, 5'(0)})][63:0] mux.
                     if (hp_phase == 3'd0) begin
-                        hp_phase <= 3'd1;
+                        hs_hp_phase(3'd1);
                     end else if (hp_slot < obj_n[env_walk[12:0]]) begin
                         if (vobj_rdata[79:64] == {7'd0, env_ld_slot}) begin
                                 if (env_is_store) begin
-                                hp_cmd <= HP_OSETI;
-                                hp_v64 <= 1'b0;
-                                hp_oid <= env_walk[12:0];
-                                hp_qn <= 3'd1;
-                                hp_qi <= 3'd0;
-                                hp_qk[0] <= {7'd0, env_ld_slot};
-                                hp_qv[0] <= {32'd0, stack[sp - 8'd1]};
-                                hp_qt[0] <= stack_tag[sp - 8'd1];
-                                hp_tag <= stack_tag[sp - 8'd1];
+                                hs_hp_cmd(HP_OSETI);
+                                hs_hp_v64(1'b0);
+                                hs_hp_oid(env_walk[12:0]);
+                                hs_hp_qn(3'd1);
+                                hs_hp_qi(3'd0);
+                                hp_qk_ff[0] <= {7'd0, env_ld_slot};
+                                hs_m_hp_qk <= 1'b1;
+                                hp_qv_ff[0] <= {32'd0, stack[sp - 8'd1]};
+                                hs_m_hp_qv <= 1'b1;
+                                hp_qt_ff[0] <= stack_tag[sp - 8'd1];
+                                hs_m_hp_qt <= 1'b1;
+                                hs_hp_tag(stack_tag[sp - 8'd1]);
                                 sp <= sp - 8'd1;
-                                hp_ret <= S_FETCH_WAIT;
-                                code_raddr <= 15'(ops_base + ip);
-                                state <= S_HEAP_WR;
+                                hs_hp_ret(S_FETCH_WAIT);
+                                hs_code(15'(ops_base + ip));
+                                hs_st(S_HEAP_WR);
                                 end else begin
                                 stack[sp] <= vobj_rdata[31:0];
                                 stack_tag[sp] <= vobj_trdata;
                                 sp <= sp + 8'd1;
-                            code_raddr <= 15'(ops_base + ip);
-                            state <= S_FETCH_WAIT;
+                            hs_code(15'(ops_base + ip));
+                            hs_st(S_FETCH_WAIT);
                             end
                         end else begin
-                            hp_slot <= hp_slot + 5'd1;
-                            hp_phase <= 3'd0;
+                            hs_hp_slot(hp_slot + 5'd1);
+                            hs_hp_phase(3'd0);
                         end
                     end else if (tenv_parent[env_walk[12:0]] != 16'd0 &&
                                  tenv_parent[env_walk[12:0]] != env_walk) begin
                         env_walk <= tenv_parent[env_walk[12:0]];
-                        hp_slot <= 5'd1;
-                        hp_phase <= 3'd0;
+                        hs_hp_slot(5'd1);
+                        hs_hp_phase(3'd0);
                         end else begin
                             if (env_is_store) begin
                                 vars[env_ld_slot] <= stack[sp - 8'd1];
@@ -6712,8 +7126,8 @@ module jmr_js_vm #(
                                 stack_tag[sp] <= var_tag[env_ld_slot];
                                 sp <= sp + 8'd1;
                             end
-                            code_raddr <= 15'(ops_base + ip);
-                            state <= S_FETCH_WAIT;
+                            hs_code(15'(ops_base + ip));
+                            hs_st(S_FETCH_WAIT);
                     end
                 end
                 S_JSON: begin
@@ -6721,26 +7135,32 @@ module jmr_js_vm #(
                     if (js_sp == 6'd0) begin
                         obj_cls[n_obj[12:0]] <= CLS_DYNSTR;
                         obj_n[n_obj[12:0]] <= 6'd2;
-                        hp_cmd <= HP_OSETI;
-                        hp_v64 <= 1'b0;
-                        hp_oid <= n_obj[12:0];
-                        hp_slot <= 5'd0;
-                        hp_qn <= 3'd2;
-                        hp_qi <= 3'd0;
-                        hp_qk[0] <= 16'd0;
-                        hp_qv[0] <= 64'd0;
-                        hp_qt[0] <= 3'd0;
-                        hp_qk[1] <= 16'd1;
-                        hp_qv[1] <= {50'd0, json_wp};
-                        hp_qt[1] <= 3'd0;
+                        hs_hp_cmd(HP_OSETI);
+                        hs_hp_v64(1'b0);
+                        hs_hp_oid(n_obj[12:0]);
+                        hs_hp_slot(5'd0);
+                        hs_hp_qn(3'd2);
+                        hs_hp_qi(3'd0);
+                        hp_qk_ff[0] <= 16'd0;
+                        hs_m_hp_qk <= 1'b1;
+                        hp_qv_ff[0] <= 64'd0;
+                        hs_m_hp_qv <= 1'b1;
+                        hp_qt_ff[0] <= 3'd0;
+                        hs_m_hp_qt <= 1'b1;
+                        hp_qk_ff[1] <= 16'd1;
+                        hs_m_hp_qk <= 1'b1;
+                        hp_qv_ff[1] <= {50'd0, json_wp};
+                        hs_m_hp_qv <= 1'b1;
+                        hp_qt_ff[1] <= 3'd0;
+                        hs_m_hp_qt <= 1'b1;
                         stack[json_res] <= {16'd0, n_obj};
                         stack_tag[json_res] <= 3'd1;
                         if (n_obj >= 16'(MAX_OBJ - 1)) dbg_heap_ovf <= dbg_heap_ovf + 16'd1;
                         n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
                         sp <= json_res + 11'd1;
-                        code_raddr <= 15'(ops_base + ip);
-                        hp_ret <= S_FETCH_WAIT;
-                        state <= S_HEAP_WR;
+                        hs_code(15'(ops_base + ip));
+                        hs_hp_ret(S_FETCH_WAIT);
+                        hs_st(S_HEAP_WR);
                     end else begin
                         logic [5:0] t;
                         logic [2:0] tg, ph;
@@ -6909,8 +7329,8 @@ module jmr_js_vm #(
                         stack[json_res] <= (js_sp == 0) ? 32'sd0 : js_val[0];
                         stack_tag[json_res] <= (js_sp == 0) ? 3'd5 : js_tag[0];
                         sp <= json_res + 11'd1;
-                        code_raddr <= 15'(ops_base + ip);
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                     end else begin
                         logic [7:0] ch;
                         ch = json_mem[json_rp[12:0]];
@@ -6933,8 +7353,8 @@ module jmr_js_vm #(
                                         stack[json_res] <= nv;
                                         stack_tag[json_res] <= 3'd0;
                                         sp <= json_res + 11'd1;
-                                        code_raddr <= 15'(ops_base + ip);
-                                        state <= S_FETCH_WAIT;
+                                        hs_code(15'(ops_base + ip));
+                                        hs_st(S_FETCH_WAIT);
                                     end else begin
                                         logic [5:0] p;
                                         p = js_sp - 6'd1;
@@ -6966,8 +7386,8 @@ module jmr_js_vm #(
                                 stack[json_res] <= js_val[0];
                                 stack_tag[json_res] <= 3'd2;
                                 sp <= json_res + 11'd1;
-                                code_raddr <= 15'(ops_base + ip);
-                                state <= S_FETCH_WAIT;
+                                hs_code(15'(ops_base + ip));
+                                hs_st(S_FETCH_WAIT);
                             end else begin
                                 logic [5:0] p, c;
                                 c = js_sp - 6'd1;
@@ -7000,8 +7420,8 @@ module jmr_js_vm #(
                                 stack[json_res] <= js_val[0];
                                 stack_tag[json_res] <= 3'd1;
                                 sp <= json_res + 11'd1;
-                                code_raddr <= 15'(ops_base + ip);
-                                state <= S_FETCH_WAIT;
+                                hs_code(15'(ops_base + ip));
+                                hs_st(S_FETCH_WAIT);
                             end else js_sp <= js_sp - 6'd1;
                         end else if (json_pph == 3'd7) begin
                             json_rp <= json_rp + 14'd1;
@@ -7024,9 +7444,9 @@ module jmr_js_vm #(
                         if (v64_repl) begin
                             if (!vfree_armed) begin
                                 vfree_armed <= 1'b1;
-                                valloc_i <= 14'd0;
-                                hp_ret <= S_REPL;
-                                state <= S_FREE_OBJ;
+                                hs_valloc_i(14'd0);
+                                hs_hp_ret(S_REPL);
+                                hs_st(S_FREE_OBJ);
                             end else begin
                                 vfree_armed <= 1'b0;
                                 v64_repl <= 1'b0;
@@ -7036,58 +7456,70 @@ module jmr_js_vm #(
                                     vobj_len[valloc_i[12:0]] <= 6'd2;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd7, 2'd0, 6'd2});
-                                    hp_cmd <= HP_OSETI;
-                                    hp_v64 <= 1'b1;
-                                    hp_oid <= valloc_i[12:0];
-                                    hp_slot <= 5'd0;
-                                    hp_qn <= 3'd2;
-                                    hp_qi <= 3'd0;
-                                    hp_qk[0] <= 16'd0;
-                                    hp_qv[0] <= v64_int32_number({18'd0, json_wp});
-                                    hp_qt[0] <= 3'd0;
-                                    hp_qk[1] <= 16'd1;
-                                    hp_qv[1] <= v64_int32_number(
+                                    hs_hp_cmd(HP_OSETI);
+                                    hs_hp_v64(1'b1);
+                                    hs_hp_oid(valloc_i[12:0]);
+                                    hs_hp_slot(5'd0);
+                                    hs_hp_qn(3'd2);
+                                    hs_hp_qi(3'd0);
+                                    hp_qk_ff[0] <= 16'd0;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[0] <= v64_int32_number({18'd0, json_wp});
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[0] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
+                                    hp_qk_ff[1] <= 16'd1;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[1] <= v64_int32_number(
                                         {18'd0, json_dst - json_wp});
-                                    hp_qt[1] <= 3'd0;
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[1] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
                                     vst_wr(vnat_base, v64_handle(
                                         4'd5, vobj_gen[valloc_i[12:0]],
                                         {19'd0, valloc_i[12:0]}
                                     ));
-                                    vsp <= vnat_base + 12'd1;
+                                    hs_vsp(vnat_base + 12'd1);
                                     vobj_next <= valloc_i + 14'd1;
-                                    code_raddr <= 15'(ops_base + ip);
-                                    hp_ret <= S_FETCH_WAIT;
-                                    state <= S_HEAP_WR;
+                                    hs_code(15'(ops_base + ip));
+                                    hs_hp_ret(S_FETCH_WAIT);
+                                    hs_st(S_HEAP_WR);
                                 end else begin
                                     machine_fault <= 1'b1;
                                     fault_code <= 8'd3;
                                     running <= 1'b0;
-                                    state <= S_DONE;
+                                    hs_st(S_DONE);
                                 end
                             end
                         end else begin
                         obj_cls[n_obj[12:0]] <= CLS_DYNSTR;
                         obj_n[n_obj[12:0]] <= 6'd2;
-                        hp_cmd <= HP_OSETI;
-                        hp_v64 <= 1'b0;
-                        hp_oid <= n_obj[12:0];
-                        hp_slot <= 5'd0;
-                        hp_qn <= 3'd2;
-                        hp_qi <= 3'd0;
-                        hp_qk[0] <= 16'd0;
-                        hp_qv[0] <= {50'd0, json_wp};
-                        hp_qt[0] <= 3'd0;
-                        hp_qk[1] <= 16'd1;
-                        hp_qv[1] <= {50'd0, json_dst - json_wp};
-                        hp_qt[1] <= 3'd0;
+                        hs_hp_cmd(HP_OSETI);
+                        hs_hp_v64(1'b0);
+                        hs_hp_oid(n_obj[12:0]);
+                        hs_hp_slot(5'd0);
+                        hs_hp_qn(3'd2);
+                        hs_hp_qi(3'd0);
+                        hp_qk_ff[0] <= 16'd0;
+                        hs_m_hp_qk <= 1'b1;
+                        hp_qv_ff[0] <= {50'd0, json_wp};
+                        hs_m_hp_qv <= 1'b1;
+                        hp_qt_ff[0] <= 3'd0;
+                        hs_m_hp_qt <= 1'b1;
+                        hp_qk_ff[1] <= 16'd1;
+                        hs_m_hp_qk <= 1'b1;
+                        hp_qv_ff[1] <= {50'd0, json_dst - json_wp};
+                        hs_m_hp_qv <= 1'b1;
+                        hp_qt_ff[1] <= 3'd0;
+                        hs_m_hp_qt <= 1'b1;
                         stack[json_res] <= {16'd0, n_obj};
                         stack_tag[json_res] <= 3'd1;
                         if (n_obj >= 16'(MAX_OBJ - 1)) dbg_heap_ovf <= dbg_heap_ovf + 16'd1;
                         n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
                         sp <= json_res + 11'd1;
-                        code_raddr <= 15'(ops_base + ip);
-                        hp_ret <= S_FETCH_WAIT;
-                        state <= S_HEAP_WR;
+                        hs_code(15'(ops_base + ip));
+                        hs_hp_ret(S_FETCH_WAIT);
+                        hs_st(S_HEAP_WR);
                         end
                     end else begin
                         logic match;
@@ -7120,9 +7552,14 @@ module jmr_js_vm #(
                     // name_mem. names_n was bumped in S_JOIN_FIND, so the id
                     // being filled in is names_n-1.
                     if (txt_i >= 7'(jn_len)) begin
-                        code_raddr <= 15'(ops_base + ip);
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                     end else begin
+                        // Cycle after JOIN_FIND poke 40: fill name_blen/off
+                        // on the same we port as trail NAMB.
+                        if (txt_i == 7'd0)
+                            e64_poke(6'd17, {6'd0, (names_n - 16'd1)},
+                                     {32'd0, nb_wp, 8'd0, jn_len});
                         name_mem[nb_wp[14:0]] <= txt_buf[txt_i[5:0]];
                         if (jn_len == 8'd1 && !char_ok[txt_buf[txt_i[5:0]]]) begin
                             char_id[txt_buf[txt_i[5:0]]] <= names_n - 16'd1;
@@ -7152,8 +7589,8 @@ module jmr_js_vm #(
                         end else if (name_rdata != 8'h20)
                             fpx_acc <= 8'd0; // digits not followed by px
                         if (got || fp_left <= 8'd1) begin
-                            code_raddr <= 15'(ops_base + ip);
-                            state <= S_FETCH_WAIT;
+                            hs_code(15'(ops_base + ip));
+                            hs_st(S_FETCH_WAIT);
                         end else begin
                             fp_left <= fp_left - 8'd1;
                             name_rdaddr <= name_rdaddr + 16'd1;
@@ -7185,15 +7622,15 @@ module jmr_js_vm #(
                                 txt_ph <= (nl == 8'd0) ? 4'd6 : 4'd2;
                             end else if (txt_vt == 3'd1 &&
                                          obj_cls[txt_val[12:0]] == CLS_DYNSTR) begin
-                                hp_cmd <= HP_OGETI;
-                                hp_v64 <= 1'b0;
-                                hp_oid <= txt_val[12:0];
-                                hp_slot <= 5'd0;
-                                hp_qn <= 3'd2;
-                                hp_qi <= 3'd0;
-                                hp_nat <= 4'd9;
-                                hp_ret <= S_V64_OGETI_NAT;
-                                state <= S_HEAP_WAIT;
+                                hs_hp_cmd(HP_OGETI);
+                                hs_hp_v64(1'b0);
+                                hs_hp_oid(txt_val[12:0]);
+                                hs_hp_slot(5'd0);
+                                hs_hp_qn(3'd2);
+                                hs_hp_qi(3'd0);
+                                hs_hp_nat(4'd9);
+                                hs_hp_ret(S_V64_OGETI_NAT);
+                                hs_st(S_HEAP_WAIT);
                             end else if (txt_vt == 3'd0 || txt_vt == 3'd7) begin
                                 logic signed [31:0] iv;
                                 iv = fxi(txt_val, txt_vt);
@@ -7266,14 +7703,14 @@ module jmr_js_vm #(
                                              : 16'sd0);
                             txt_y0 <= txt_py - 16'(8 * {12'd0, txt_k});
                             if (txt_len == 7'd0) begin
-                                code_raddr <= 15'(ops_base + ip);
-                                state <= S_FETCH_WAIT;
+                                hs_code(15'(ops_base + ip));
+                                hs_st(S_FETCH_WAIT);
                             end else begin
                                 font_raddr <= {txt_buf[0][6:0], 3'd0};
                                 txt_i <= 7'd0; txt_row <= 3'd0; txt_col <= 3'd0;
                                 txt_kx <= 4'd0; txt_ky <= 4'd0;
                                 txt_ph <= 4'd0;
-                                state <= S_TXT_DRAW;
+                                hs_st(S_TXT_DRAW);
                             end
                         end
                     endcase
@@ -7320,8 +7757,8 @@ module jmr_js_vm #(
                                 font_raddr <= {txt_buf[txt_i[5:0]][6:0], txt_row + 3'd1};
                                 txt_ph <= 4'd0;
                             end else if (txt_i + 7'd1 >= txt_len) begin
-                                code_raddr <= 15'(ops_base + ip);
-                                state <= S_FETCH_WAIT;
+                                hs_code(15'(ops_base + ip));
+                                hs_st(S_FETCH_WAIT);
                             end else begin
                                 txt_i <= txt_i + 7'd1;
                                 txt_row <= 3'd0;
@@ -7345,21 +7782,21 @@ module jmr_js_vm #(
                             if (namcpy_v64) begin
                                 namcpy_v64 <= 1'b0;
                                 json_wp <= 14'd0;
-                                state <= S_V64_JSON_PARSE;
+                                hs_st(S_V64_JSON_PARSE);
                             end else if (namcpy_repl) begin
                                 json_dst <= json_srclen;
                                 json_wp <= json_srclen;
-                                state <= S_REPL;
+                                hs_st(S_REPL);
                             end else if (hp_nat == 4'd3) begin
                                 // interned indexOf: name_mem was copied 1 byte/clock
                                 json_src <= 14'd0;
                                 json_rp <= 14'd0;
                                 json_wp <= 14'd0;
                                 idx_needle <= hp_wval[7:0];
-                                state <= S_IDXSTR;
+                                hs_st(S_IDXSTR);
                             end else begin
                                 json_wp <= 14'd0;
-                                state <= S_JSON_PARSE;
+                                hs_st(S_JSON_PARSE);
                             end
                         end else begin
                             json_wp <= json_wp + 14'd1;
@@ -7368,7 +7805,7 @@ module jmr_js_vm #(
                         end
                     end
                 end
-                S_STRIDX: state <= S_STRIDX_WR; // wait: name_rdata lags name_rdaddr 1 cycle
+                S_STRIDX: hs_st(S_STRIDX_WR); // wait: name_rdata lags name_rdaddr 1 cycle
                 S_STRIDX_WR: begin
                     // name_rdata is this char. Prefetch i+1 so the next sequential
                     // str[i] hits in EXEC (string-row sprites: row[col]==="1").
@@ -7382,8 +7819,8 @@ module jmr_js_vm #(
                     name_rdaddr <= name_rdaddr + 16'd1;
                     str_pf_ci <= str_pf_ci + 32'sd1;
                     str_pf_ok <= 1'b1;
-                    code_raddr <= 15'(ops_base + ip);
-                    state <= S_FETCH_WAIT;
+                    hs_code(15'(ops_base + ip));
+                    hs_st(S_FETCH_WAIT);
                 end
                 S_IDXSTR: begin
                     // Value64 dynstr indexOf (hp_v64) writes the IEEE index;
@@ -7391,26 +7828,26 @@ module jmr_js_vm #(
                     if (json_rp >= json_src + json_srclen) begin
                         if (hp_v64) begin
                             vst_wr(hp_vbase, v64_int32_number(-32'sd1));
-                            vsp <= hp_vbase + 12'd1;
+                            hs_vsp(hp_vbase + 12'd1);
                         end else begin
                             stack[json_res] <= -32'sd1;
                             stack_tag[json_res] <= 3'd0;
                             sp <= json_res + 11'd1;
                         end
-                        code_raddr <= 15'(ops_base + ip);
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                     end else if (json_mem[json_rp[12:0]] == idx_needle) begin
                         if (hp_v64) begin
                             vst_wr(hp_vbase,
                                 v64_int32_number(32'(json_rp - json_src)));
-                            vsp <= hp_vbase + 12'd1;
+                            hs_vsp(hp_vbase + 12'd1);
                         end else begin
                             stack[json_res] <= 32'(json_rp - json_src);
                             stack_tag[json_res] <= 3'd0;
                             sp <= json_res + 11'd1;
                         end
-                        code_raddr <= 15'(ops_base + ip);
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                     end else json_rp <= json_rp + 14'd1;
                 end
                 S_IMGD_GET: begin
@@ -7427,9 +7864,9 @@ module jmr_js_vm #(
                             // Value64 ImageData handle (same snapshot buffer).
                             if (!vfree_armed) begin
                                 vfree_armed <= 1'b1;
-                                valloc_i <= 14'd0;
-                                hp_ret <= S_IMGD_GET;
-                                state <= S_FREE_OBJ;
+                                hs_valloc_i(14'd0);
+                                hs_hp_ret(S_IMGD_GET);
+                                hs_st(S_FREE_OBJ);
                             end else begin
                                 vfree_armed <= 1'b0;
                                 if (vfree_ok) begin
@@ -7439,32 +7876,38 @@ module jmr_js_vm #(
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd0, 2'd0, 6'd2});
                                     e64_p_addr2 <= CLS_IMGD;
-                                    hp_cmd <= HP_OSETI;
-                                    hp_v64 <= 1'b1;
-                                    hp_oid <= valloc_i[12:0];
-                                    hp_slot <= 5'd0;
-                                    hp_qn <= 3'd2;
-                                    hp_qi <= 3'd0;
-                                    hp_qk[0] <= id_width;
-                                    hp_qv[0] <= v64_int32_number({22'd0, imgd_w});
-                                    hp_qt[0] <= 3'd0;
-                                    hp_qk[1] <= id_height;
-                                    hp_qv[1] <= v64_int32_number({22'd0, imgd_h});
-                                    hp_qt[1] <= 3'd0;
+                                    hs_hp_cmd(HP_OSETI);
+                                    hs_hp_v64(1'b1);
+                                    hs_hp_oid(valloc_i[12:0]);
+                                    hs_hp_slot(5'd0);
+                                    hs_hp_qn(3'd2);
+                                    hs_hp_qi(3'd0);
+                                    hp_qk_ff[0] <= id_width;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[0] <= v64_int32_number({22'd0, imgd_w});
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[0] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
+                                    hp_qk_ff[1] <= id_height;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[1] <= v64_int32_number({22'd0, imgd_h});
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[1] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
                                     vst_wr(vnat_base, v64_handle(
                                         4'd5, vobj_gen[valloc_i[12:0]],
                                         {19'd0, valloc_i[12:0]}
                                     ));
-                                    vsp <= vnat_base + 12'd1;
+                                    hs_vsp(vnat_base + 12'd1);
                                     vobj_next <= valloc_i + 14'd1;
                                     imgd_v64 <= 1'b0;
                                     fb_dump_sel <= 1'b0;
-                                    code_raddr <= 15'(ops_base + ip);
-                                    hp_ret <= S_FETCH_WAIT;
-                                    state <= S_HEAP_WR;
+                                    hs_code(15'(ops_base + ip));
+                                    hs_hp_ret(S_FETCH_WAIT);
+                                    hs_st(S_HEAP_WR);
                                 end else begin
                                     machine_fault <= 1'b1; fault_code <= 8'd3;
-                                    running <= 1'b0; state <= S_DONE;
+                                    running <= 1'b0; hs_st(S_DONE);
                                 end
                             end
                         end else begin
@@ -7482,8 +7925,8 @@ module jmr_js_vm #(
                         n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
                         sp <= imgd_res + 11'd1;
                         fb_dump_sel <= 1'b0;
-                        code_raddr <= 15'(ops_base + ip);
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                         end
                     end else if (!imgd_armed) begin
                         imgd_armed <= 1'b1;
@@ -7494,9 +7937,9 @@ module jmr_js_vm #(
                             if (imgd_v64) begin
                                 if (!vfree_armed) begin
                                     vfree_armed <= 1'b1;
-                                    valloc_i <= 14'd0;
-                                    hp_ret <= S_IMGD_GET;
-                                    state <= S_FREE_OBJ;
+                                    hs_valloc_i(14'd0);
+                                    hs_hp_ret(S_IMGD_GET);
+                                    hs_st(S_FREE_OBJ);
                                 end else begin
                                     vfree_armed <= 1'b0;
                                     if (vfree_ok) begin
@@ -7506,32 +7949,38 @@ module jmr_js_vm #(
                                         e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                                  {52'd0, 4'd0, 2'd0, 6'd2});
                                         e64_p_addr2 <= CLS_IMGD;
-                                        hp_cmd <= HP_OSETI;
-                                        hp_v64 <= 1'b1;
-                                        hp_oid <= valloc_i[12:0];
-                                        hp_slot <= 5'd0;
-                                        hp_qn <= 3'd2;
-                                        hp_qi <= 3'd0;
-                                        hp_qk[0] <= id_width;
-                                        hp_qv[0] <= v64_int32_number({22'd0, imgd_w});
-                                        hp_qt[0] <= 3'd0;
-                                        hp_qk[1] <= id_height;
-                                        hp_qv[1] <= v64_int32_number({22'd0, imgd_h});
-                                        hp_qt[1] <= 3'd0;
+                                        hs_hp_cmd(HP_OSETI);
+                                        hs_hp_v64(1'b1);
+                                        hs_hp_oid(valloc_i[12:0]);
+                                        hs_hp_slot(5'd0);
+                                        hs_hp_qn(3'd2);
+                                        hs_hp_qi(3'd0);
+                                        hp_qk_ff[0] <= id_width;
+                                        hs_m_hp_qk <= 1'b1;
+                                        hp_qv_ff[0] <= v64_int32_number({22'd0, imgd_w});
+                                        hs_m_hp_qv <= 1'b1;
+                                        hp_qt_ff[0] <= 3'd0;
+                                        hs_m_hp_qt <= 1'b1;
+                                        hp_qk_ff[1] <= id_height;
+                                        hs_m_hp_qk <= 1'b1;
+                                        hp_qv_ff[1] <= v64_int32_number({22'd0, imgd_h});
+                                        hs_m_hp_qv <= 1'b1;
+                                        hp_qt_ff[1] <= 3'd0;
+                                        hs_m_hp_qt <= 1'b1;
                                         vst_wr(vnat_base, v64_handle(
                                             4'd5, vobj_gen[valloc_i[12:0]],
                                             {19'd0, valloc_i[12:0]}
                                         ));
-                                        vsp <= vnat_base + 12'd1;
+                                        hs_vsp(vnat_base + 12'd1);
                                         vobj_next <= valloc_i + 14'd1;
                                         imgd_v64 <= 1'b0;
                                         fb_dump_sel <= 1'b0;
-                                        code_raddr <= 15'(ops_base + ip);
-                                        hp_ret <= S_FETCH_WAIT;
-                                        state <= S_HEAP_WR;
+                                        hs_code(15'(ops_base + ip));
+                                        hs_hp_ret(S_FETCH_WAIT);
+                                        hs_st(S_HEAP_WR);
                                     end else begin
                                         machine_fault <= 1'b1; fault_code <= 8'd3;
-                                        running <= 1'b0; state <= S_DONE;
+                                        running <= 1'b0; hs_st(S_DONE);
                                     end
                                 end
                             end else begin
@@ -7549,8 +7998,8 @@ module jmr_js_vm #(
                             n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
                             sp <= imgd_res + 11'd1;
                             fb_dump_sel <= 1'b0;
-                            code_raddr <= 15'(ops_base + ip);
-                            state <= S_FETCH_WAIT;
+                            hs_code(15'(ops_base + ip));
+                            hs_st(S_FETCH_WAIT);
                             end
                         end else begin
                             imgd_i <= imgd_i + 19'd1;
@@ -7569,11 +8018,11 @@ module jmr_js_vm #(
                     if (imgd_w == 10'd0 || imgd_h == 10'd0) begin
                         if (imgd_v64) begin
                             vst_wr(vnat_base, V64_UNDEFINED);
-                            vsp <= vnat_base + 12'd1;
+                            hs_vsp(vnat_base + 12'd1);
                             imgd_v64 <= 1'b0;
                         end
-                        code_raddr <= 15'(ops_base + ip);
-                        state <= S_FETCH_WAIT;
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                     end else begin
                         begin
                             logic [9:0] px, py;
@@ -7590,11 +8039,11 @@ module jmr_js_vm #(
                             if (imgd_y >= (imgd_h - 10'd1)) begin
                                 if (imgd_v64) begin
                                     vst_wr(vnat_base, V64_UNDEFINED);
-                                    vsp <= vnat_base + 12'd1;
+                                    hs_vsp(vnat_base + 12'd1);
                                     imgd_v64 <= 1'b0;
                                 end
-                                code_raddr <= 15'(ops_base + ip);
-                                state <= S_FETCH_WAIT;
+                                hs_code(15'(ops_base + ip));
+                                hs_st(S_FETCH_WAIT);
                             end else begin
                                 imgd_y <= imgd_y + 10'd1;
                                 imgd_i <= imgd_i + 19'd1;
@@ -7611,7 +8060,7 @@ module jmr_js_vm #(
                         gc_arr_mark[gc_i[11:0]] <= 1'b0;
                     if (gc_i == 13'(MAX_OBJ - 1)) begin
                         gc_root_i <= 13'd0;
-                        state <= S_GC_ROOT;
+                        hs_st(S_GC_ROOT);
                     end else
                         gc_i <= gc_i + 13'd1;
                 end
@@ -7686,7 +8135,7 @@ module jmr_js_vm #(
                             gc_mark_obj(cstack_fe_fn[gc_root_i - 13'd3129]);
                     end
                     if (gc_root_i == 13'd3256)
-                        state <= S_GC_POP;
+                        hs_st(S_GC_POP);
                     else
                         gc_root_i <= gc_root_i + 13'd1;
                 end
@@ -7701,12 +8150,12 @@ module jmr_js_vm #(
                         arr_keep_ok <= 1'b1;
                         dbg_gc_n <= dbg_gc_n + 16'd1;
                         frame_fire <= 1'b1;
-                        state <= S_WAIT_FRAME;
+                        hs_st(S_WAIT_FRAME);
                     end else begin
                         gc_cur <= gc_queue[gc_qr];
                         gc_qr <= gc_qr + 14'd1;
                         gc_slot <= 7'd0;
-                        state <= gc_queue[gc_qr][13] ? S_GC_ARR : S_GC_OBJ;
+                        hs_st(gc_queue[gc_qr][13] ? S_GC_ARR : S_GC_OBJ);
                     end
                 end
                 S_GC_OBJ: begin
@@ -7732,7 +8181,7 @@ module jmr_js_vm #(
                         end
                     end else begin
                         vgc_rd_arm <= 1'b0;
-                        state <= S_GC_POP;
+                        hs_st(S_GC_POP);
                     end
                 end
                 S_GC_ARR: begin
@@ -7746,12 +8195,19 @@ module jmr_js_vm #(
                         end
                     end else begin
                         vgc_rd_arm <= 1'b0;
-                        state <= S_GC_POP;
+                        hs_st(S_GC_POP);
                     end
                 end
                 // S_V64_EXEC body moved to hierarchical exec (keep_hierarchy); applied above when state matches.
                 S_V64_ALLOC: begin
-                    if (valloc_kind == 2'd1) begin
+                    // Leave cycle: parent state is still EXEC. Stay in ALLOC
+                    // while the free-slot scan walks (same pin as RECT /
+                    // GC_CLEAR). Without this, exec re-issues MAKE_ARR from
+                    // i=0 every clock and arrays never land (INVADERS
+                    // obj=1023 arr=0).
+                    if (state != S_V64_ALLOC)
+                        hs_st(S_V64_ALLOC);
+                    else if (valloc_kind == 2'd1) begin
                             logic [15:0] count;
                         logic need_long;
                         // Latched at OP_MAKE_ARR / Array(n). Do not use
@@ -7760,12 +8216,12 @@ module jmr_js_vm #(
                         count = {8'd0, valloc_arr_n};
                         need_long = (count > 16'(ARR_SHORT_CAP));
                         if ((!need_long && valloc_i < MAX_ARR &&
-                             !varr_valid[valloc_i[11:0]] &&
+                             !varr_valid_rdata &&
                              (valloc_i < 14'(MAX_ARR_SHORT) ||
                               !vlong_used[valloc_i[7:0]])) ||
                             (need_long && valloc_i >= 14'(MAX_ARR_SHORT) &&
                              valloc_i < MAX_ARR &&
-                             !varr_valid[valloc_i[11:0]] &&
+                             !varr_valid_rdata &&
                              !vlong_used[valloc_i[7:0]])) begin
                             logic take_long;
                             take_long = need_long ||
@@ -7783,62 +8239,63 @@ module jmr_js_vm #(
                             varr_next <= valloc_i + 14'd1;
                             if (vnat_dom == 3'd7) begin
                                 vst_wr(vnat_base, v64_handle(
-                                    4'd6, varr_gen[valloc_i[11:0]],
+                                    4'd6, varr_gen_rdata,
                                     {20'd0, valloc_i[11:0]}
                                 ));
-                                vsp <= vnat_base + 12'd1;
-                                vnat_dom <= 3'd0;
-                                hp_make_arr <= 1'b0;
+                                hs_vsp(vnat_base + 12'd1);
+                                hs_vnat_dom(3'd0);
+                                hs_hp_make_arr(1'b0);
                             end else if (count == 16'd0) begin
                                 vst_wr(vsp, v64_handle(
-                                    4'd6, varr_gen[valloc_i[11:0]],
+                                    4'd6, varr_gen_rdata,
                                     {20'd0, valloc_i[11:0]}
                                 ));
-                                vsp <= vsp + 12'd1;
+                                hs_vsp(vsp + 12'd1);
                             end else begin
                                 // Leave e0..eN-1 on the stack; S_HEAP_FILL
                                 // copies them, then writes the handle at vbase.
-                                hp_make_arr <= 1'b1;
-                                hp_rval <= v64_handle(
-                                4'd6, varr_gen[valloc_i[11:0]],
+                                hs_hp_make_arr(1'b1);
+                                hs_hp_rval(v64_handle(
+                                4'd6, varr_gen_rdata,
                                 {20'd0, valloc_i[11:0]}
-                            );
-                            vsp <= vsp - count + 12'd1;
+                            ));
+                            hs_vsp(vsp - count + 12'd1);
                             end
-                            ip <= ip + 16'd1;
-                            code_raddr <= 15'(ops_base + ip + 16'd1);
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
                             if (count == 16'd0)
-                            state <= S_FETCH_WAIT;
+                            hs_st(S_FETCH_WAIT);
                             else begin
-                                hp_cmd <= HP_AFILL;
-                                hp_v64 <= 1'b1;
-                                hp_from_stack <= (vnat_dom != 3'd7);
-                                hp_aid <= valloc_i[11:0];
-                                hp_aslot <= 7'd0;
-                                hp_lim <= count[7:0];
-                                hp_vbase <= (vnat_dom == 3'd7)
-                                    ? 12'd0 : (vsp - count);
-                                hp_wval <= V64_UNDEFINED;
-                                hp_ret <= S_FETCH_WAIT;
-                                state <= S_HEAP_FILL;
+                                hs_hp_cmd(HP_AFILL);
+                                hs_hp_v64(1'b1);
+                                hs_hp_from_stack((vnat_dom != 3'd7));
+                                hs_hp_aid(valloc_i[11:0]);
+                                hs_hp_aslot(7'd0);
+                                hs_hp_lim(count[7:0]);
+                                hs_hp_vbase((vnat_dom == 3'd7)
+                                    ? 12'd0 : (vsp - count));
+                                hs_hp_wval(V64_UNDEFINED);
+                                hs_hp_ret(S_FETCH_WAIT);
+                                hs_st(S_HEAP_FILL);
                             end
                         end else if (valloc_i + 14'd1 < MAX_ARR) begin
-                            valloc_i <= valloc_i + 14'd1;
+                            hs_valloc_i(valloc_i + 14'd1);
                         end else if (!valloc_retried) begin
-                            vgc_clear_i <= 14'd0;
-                            vgc_qr <= 14'd0;
-                            vgc_qw <= 14'd0;
-                            vgc_halt_after <= 1'b0;
-                            state <= S_V64_GC_CLEAR;
+                            hs_vgc_clear_i(14'd0);
+                            hs_vgc_qr(14'd0);
+                            hs_vgc_qw(14'd0);
+                            hs_vgc_halt_after(1'b0);
+                            hs_st(S_V64_GC_CLEAR);
                         end else begin
                             machine_fault <= 1'b1; fault_code <= 8'd3;
-                            running <= 1'b0; state <= S_DONE;
+                            running <= 1'b0; hs_st(S_DONE);
                         end
                     end else if (valloc_kind == 2'd3) begin
                         if (valloc_i < ENV_DEPTH &&
-                            !venv_valid[valloc_i[9:0]]) begin
+                            !venv_valid_rdata) begin
                             logic [11:0] base_sp;
                             logic [7:0] nparam;
+                            logic [7:0] fr;
                             logic [63:0] function_handle, parent_env;
                             base_sp = vsp - vcall_argc -
                                       (vcall_value ? 12'd1 : 12'd0);
@@ -7847,56 +8304,75 @@ module jmr_js_vm #(
                                 : V64_UNDEFINED;
                             parent_env = vcall_value
                                 ? vfn_env[function_handle[12:0]] : venv;
+                            // ALLOC re-issue can see venv already this slot
+                            // (nested CALL_USER). A self-parent makes
+                            // STORE_VAR HEAP_CMP walk forever (eid=2→2).
+                            if (parent_env[63:48] == V64_TAG_PREFIX &&
+                                parent_env[47:44] == V64_KIND_ENV &&
+                                parent_env[9:0] == valloc_i[9:0])
+                                parent_env = V64_UNDEFINED;
                             nparam = vcall_value
                                 ? {2'd0, vfn_nparam[function_handle[12:0]]}
                                 : vcall_argc;
+                            // CALL_USER clocks vcsp_n=+1 before ALLOC. Write
+                            // the new slot (e64-1), not mux vcsp (would be 1
+                            // and skip vframe[0] — RET_VAL fault 2).
+                            fr = (e64_vcsp_q != 8'd0) ? (e64_vcsp_q - 8'd1)
+                                                      : vcsp;
                             venv_valid[valloc_i[9:0]] <= 1'b1;
                             venv_len[valloc_i[9:0]] <= 5'd0;
                             e64_poke(6'd46, {6'd0, valloc_i[9:0]},
                                      {52'd0, venv_gen[valloc_i[9:0]]});
                             venv_parent[valloc_i[9:0]] <= parent_env;
                             venv_next <= valloc_i[9:0] + 10'd1;
-                            vframe_return_ip[vcsp] <= vcallback_raf
+                            // CALL_USER clocks ip_n=entry before ALLOC.
+                            // ip+1 was then entry+1 (INVADERS vret=1798).
+                            // bind_ip holds call-site+1 from that EXEC beat.
+                            vframe_return_ip[fr] <= vcallback_raf
                                 ? 16'hffff
                                 : vcallback_timer ? 16'hfffe
                                 : vcallback_key ? 16'hfffd
-                                : vcallback_fe ? 16'hfffc : ip + 16'd1;
-                            vframe_base_sp[vcsp] <= base_sp;
-                            vframe_this[vcsp] <= vthis;
-                            vframe_env[vcsp] <= venv;
-                            vframe_fn[vcsp] <= function_handle;
-                            vframe_ctor[vcsp] <= vcall_ctor_val;
-                            vframe_escaped[vcsp] <= 1'b0;
+                                : vcallback_fe ? 16'hfffc
+                                : ((ip == vcall_entry) ? e64_bind_ip_q
+                                                      : (ip + 16'd1));
+                            vframe_base_sp[fr] <= base_sp;
+                            vframe_this[fr] <= vthis;
+                            vframe_env[fr] <= venv;
+                            vframe_fn[fr] <= function_handle;
+                            vframe_ctor[fr] <= vcall_ctor_val;
+                            vframe_escaped[fr] <= 1'b0;
                             e64_p_frame_we <= 1'b1;
-                            e64_p_frame_idx <= vcsp[6:0];
+                            e64_p_frame_idx <= fr[6:0];
                             e64_p_frame_rip <= vcallback_raf
                                 ? 16'hffff
                                 : vcallback_timer ? 16'hfffe
                                 : vcallback_key ? 16'hfffd
-                                : vcallback_fe ? 16'hfffc : (ip + 16'd1);
+                                : vcallback_fe ? 16'hfffc
+                                : ((ip == vcall_entry) ? e64_bind_ip_q
+                                                      : (ip + 16'd1));
                             e64_p_frame_bsp <= base_sp;
                             e64_p_frame_esc <= 1'b0;
                             e64_p_frame_this <= vthis;
                             e64_p_frame_env <= venv;
                             e64_p_frame_fnv <= function_handle;
                             e64_p_frame_ctor <= vcall_ctor_val;
-                            vcsp <= vcsp + 8'd1;
+                            hs_vcsp(fr + 8'd1);
                             vcallback_raf <= 1'b0;
                             vcallback_timer <= 1'b0;
                             vcallback_key <= 1'b0;
                             vcallback_fe <= 1'b0;
-                            venv <= v64_handle(
+                            hs_venv(v64_handle(
                                 4'd9, venv_gen[valloc_i[9:0]],
                                 {22'd0, valloc_i[9:0]}
-                            );
+                            ));
                             if (vcall_value) begin
                                 // Arrow/bound keep lexical this; CALL_METHOD
                                 // own-property sets vcall_this (game.init).
-                                vthis <= (vfn_flags[function_handle[12:0]][0] ||
+                                hs_vthis((vfn_flags[function_handle[12:0]][0] ||
                                           vfn_flags[function_handle[12:0]][2])
                                        ? vfn_bound_this[function_handle[12:0]]
                                        : vcall_set_this
-                                       ? vcall_this : V64_UNDEFINED;
+                                       ? vcall_this : V64_UNDEFINED);
                                 bind_mode <= 2'd0;
                                 bind_k <= 8'd0;
                                 bind_n <= nparam;
@@ -7907,32 +8383,33 @@ module jmr_js_vm #(
                                 bind_ip <= vfn_entry[function_handle[12:0]];
                                 bind_ret <= S_FETCH_WAIT;
                                 bind_rd_arm <= 1'b0;
-                                state <= S_V64_BIND;
+                                hs_st(S_V64_BIND);
                             end else begin
-                                vthis <= vcall_set_this
-                                       ? vcall_this : V64_UNDEFINED;
+                                hs_vthis(vcall_set_this
+                                       ? vcall_this : V64_UNDEFINED);
                                 vctor_scan <= 6'd0;
                                 vctor_armed <= 1'b0;
-                                code_raddr <= 15'(ops_base + vcall_entry);
-                                state <= S_V64_CTOR_PAD;
+                                hs_ip(vcall_entry);
+                                hs_code(15'(ops_base + vcall_entry));
+                                hs_st(S_V64_CTOR_PAD);
                             end
-                            vcall_set_this <= 1'b0;
-                            vcall_ctor_val <= V64_UNDEFINED;
+                            hs_vcall_set_this(1'b0);
+                            hs_vcall_ctor_val(V64_UNDEFINED);
                         end else if (valloc_i + 14'd1 < ENV_DEPTH) begin
-                            valloc_i <= valloc_i + 14'd1;
+                            hs_valloc_i(valloc_i + 14'd1);
                         end else if (!valloc_retried) begin
-                            vgc_clear_i <= 14'd0;
-                            vgc_qr <= 14'd0;
-                            vgc_qw <= 14'd0;
-                            vgc_halt_after <= 1'b0;
-                            state <= S_V64_GC_CLEAR;
+                            hs_vgc_clear_i(14'd0);
+                            hs_vgc_qr(14'd0);
+                            hs_vgc_qw(14'd0);
+                            hs_vgc_halt_after(1'b0);
+                            hs_st(S_V64_GC_CLEAR);
                         end else begin
                             machine_fault <= 1'b1; fault_code <= 8'd3;
-                            running <= 1'b0; state <= S_DONE;
+                            running <= 1'b0; hs_st(S_DONE);
                         end
                     end else if (valloc_kind == 2'd2) begin
                         if (valloc_i < MAX_OBJ &&
-                            !vfn_valid[valloc_i[12:0]]) begin
+                            !vfn_valid_rdata) begin
                             vfn_next <= valloc_i + 14'd1;
                             vfn_valid[valloc_i[12:0]] <= 1'b1;
                                 if (valloc_now_fn) begin
@@ -7952,8 +8429,14 @@ module jmr_js_vm #(
                                         4'd7, vfn_gen[valloc_i[12:0]],
                                         {19'd0, valloc_i[12:0]}
                                     ));
-                                    vsp <= vnat_base + 12'd1;
-                                    valloc_now_fn <= 1'b0;
+                                    // Same-cycle TOS: leave_hold ALLOC window
+                                    // otherwise sees exec vst_we=0 (IIFE CALL_VAL).
+                                    vst_win[0] <= v64_handle(
+                                        4'd7, vfn_gen[valloc_i[12:0]],
+                                        {19'd0, valloc_i[12:0]}
+                                    );
+                                    hs_vsp(vnat_base + 12'd1);
+                                    hs_valloc_now_fn(1'b0);
                                 end else if (valloc_bind) begin
                                     vfn_entry[valloc_i[12:0]] <=
                                         vfn_entry[valloc_bind_src];
@@ -7982,8 +8465,12 @@ module jmr_js_vm #(
                                         4'd7, vfn_gen[valloc_i[12:0]],
                                         {19'd0, valloc_i[12:0]}
                                     ));
-                                    vsp <= vnat_base + 12'd1;
-                                    valloc_bind <= 1'b0;
+                                    vst_win[0] <= v64_handle(
+                                        4'd7, vfn_gen[valloc_i[12:0]],
+                                        {19'd0, valloc_i[12:0]}
+                                    );
+                                    hs_vsp(vnat_base + 12'd1);
+                                    hs_valloc_bind(1'b0);
                                 end else begin
                                     vfn_entry[valloc_i[12:0]] <= valloc_fn_entry;
                                     vfn_nparam[valloc_i[12:0]] <= valloc_fn_a1[5:0];
@@ -8007,36 +8494,46 @@ module jmr_js_vm #(
                                     e64_p_data3 <= V64_UNDEFINED;
                                     e64_p_data4 <= valloc_fn_a1[7]
                                         ? vthis : V64_UNDEFINED;
+                                    // 16-bit poke: [15]=escaped, [6:0]=frame.
+                                    // `{1'b1, 8'd0, vcsp-1}` is 17 bits; the
+                                    // flag MSB was truncated so exec RET
+                                    // always recycled the captured env
+                                    // (PACMAN `_context` LOAD → undefined →
+                                    // fillRect never interned, vdraw=0,0,0,0).
                                     if (vcsp != 8'd0)
                                         e64_p_addr2 <= {1'b1, 8'd0,
-                                                        vcsp - 8'd1};
+                                                        vcsp[6:0] - 7'd1};
                                     vst_wr(vsp, v64_handle(
                                     4'd7, vfn_gen[valloc_i[12:0]],
                                     {19'd0, valloc_i[12:0]}
                                     ));
-                                    vsp <= vsp + 12'd1;
+                                    vst_win[0] <= v64_handle(
+                                    4'd7, vfn_gen[valloc_i[12:0]],
+                                    {19'd0, valloc_i[12:0]}
+                                    );
+                                    hs_vsp(vsp + 12'd1);
                                     // Closure captured this activation's env.
                                     if (vcsp != 8'd0)
                                         vframe_escaped[vcsp - 8'd1] <= 1'b1;
                                 end
-                                ip <= ip + 16'd1;
-                                code_raddr <= 15'(ops_base + ip + 16'd1);
-                                state <= S_FETCH_WAIT;
+                                hs_ip(ip + 16'd1);
+                                hs_code(15'(ops_base + ip + 16'd1));
+                                hs_st(S_FETCH_WAIT);
                         end else if (valloc_i + 14'd1 < MAX_OBJ) begin
-                            valloc_i <= valloc_i + 14'd1;
+                            hs_valloc_i(valloc_i + 14'd1);
                         end else if (!valloc_retried) begin
-                            vgc_clear_i <= 14'd0;
-                            vgc_qr <= 14'd0;
-                            vgc_qw <= 14'd0;
-                            vgc_halt_after <= 1'b0;
-                            state <= S_V64_GC_CLEAR;
+                            hs_vgc_clear_i(14'd0);
+                            hs_vgc_qr(14'd0);
+                            hs_vgc_qw(14'd0);
+                            hs_vgc_halt_after(1'b0);
+                            hs_st(S_V64_GC_CLEAR);
                             end else begin
                             machine_fault <= 1'b1; fault_code <= 8'd3;
-                            running <= 1'b0; state <= S_DONE;
+                            running <= 1'b0; hs_st(S_DONE);
                         end
                     end else begin
                         if (valloc_i < MAX_OBJ &&
-                            vobj_alloc[valloc_i[12:0]] == 0) begin
+                            vobj_alloc_rdata == 0) begin
                             vobj_next <= valloc_i + 14'd1;
                             if (code_rdata[7:0] == OP_NEW_OBJ) begin
                                 logic [15:0] ctor_ip;
@@ -8045,7 +8542,7 @@ module jmr_js_vm #(
                                 logic [8:0] vslot;
                                 logic ctor_fn_ok;
                                 ctor_ip = 16'hFFFF;
-                                argc = {4'd0, code_rdata[31:24]};
+                                argc = vcall_argc;
                                 ctor_fn = V64_UNDEFINED;
                                 ctor_fn_ok = 1'b0;
                                 handle = v64_handle(
@@ -8077,54 +8574,48 @@ module jmr_js_vm #(
                                         machine_fault <= 1'b1;
                                         fault_code <= 8'd4;
                                         running <= 1'b0;
-                                        state <= S_DONE;
+                                        hs_st(S_DONE);
                                     end else begin
                                         vslot = intern_var[code_rdata[17:8]];
-                                        vcall_entry <= ctor_ip;
-                                        hp_env <= 1'b1;
-                                        hp_cmd <= HP_GETPROP;
-                                        hp_v64 <= 1'b1;
-                                        hp_eid <= venv[9:0];
-                                        hp_len <= {1'b0, venv_len[venv[9:0]]};
-                                        hp_slot <= 5'd0;
-                                        hp_key <= {7'd0, vslot};
-                                        hp_phase <= 3'd0;
-                                        hp_hit <= 1'b0;
-                                        hp_ret <= S_V64_CTOR_ENV;
-                                        state <= S_HEAP_WAIT;
+                                        hs_vcall_entry(ctor_ip);
+                                        hs_vcall_argc(argc);
+                                        hs_hp_env(1'b1);
+                                        hs_hp_cmd(HP_GETPROP);
+                                        hs_hp_v64(1'b1);
+                                        hs_hp_eid(venv[9:0]);
+                                        hs_hp_len({1'b0, venv_len[venv[9:0]]});
+                                        hs_hp_slot(5'd0);
+                                        hs_hp_key({7'd0, vslot});
+                                        hs_hp_phase(3'd0);
+                                        hs_hp_hit(1'b0);
+                                        hs_hp_ret(S_V64_CTOR_ENV);
+                                        hs_st(S_HEAP_WAIT);
                                     end
+                                end else if (intern_var_ok[code_rdata[17:8]]) begin
+                                    // Extra beat: vvars_rdata <= vvars[intern_var]
+                                    // (no combo vvars[vslot] in ALLOC).
+                                    hs_hp_key({7'd0, intern_var[code_rdata[17:8]]});
+                                    hs_vcall_entry(ctor_ip);
+                                    hs_vcall_argc(argc);
+                                    ret_state <= S_V64_CTOR_VARS;
+                                    hs_st(S_RD);
                                 end else begin
-                                if (intern_var_ok[code_rdata[17:8]]) begin
-                                    vslot = intern_var[code_rdata[17:8]];
-                                    ctor_fn = vvar_valid[vslot]
-                                        ? vvars[vslot] : V64_UNDEFINED;
-                                    if (ctor_fn[63:48] == V64_TAG_PREFIX &&
-                                        ctor_fn[47:44] == V64_KIND_FUNCTION &&
-                                        ctor_fn[31:0] < MAX_OBJ &&
-                                        vfn_valid[ctor_fn[12:0]] &&
-                                        vfn_gen[ctor_fn[12:0]] ==
-                                            ctor_fn[43:32])
-                                        ctor_fn_ok = 1'b1;
-                                end
-                                if (ctor_fn_ok)
-                                    vobj_proto[valloc_i[12:0]] <=
-                                        vfn_proto[ctor_fn[12:0]];
                                 if (ctor_ip != 16'hFFFF) begin
                                     if (vcsp >= CSTK) begin
                                         machine_fault <= 1'b1;
                                         fault_code <= 8'd2;
                                         running <= 1'b0;
-                                        state <= S_DONE;
+                                        hs_st(S_DONE);
                                     end else begin
-                                        vcall_value <= 1'b0;
-                                        vcall_entry <= ctor_ip;
-                                        vcall_argc <= argc;
-                                        vcall_set_this <= 1'b1;
-                                        vcall_this <= handle;
-                                        vcall_ctor_val <= handle;
-                                        valloc_kind <= 2'd3;
-                                        valloc_i <= {4'd0, venv_next};
-                                        valloc_retried <= 1'b0;
+                                        hs_vcall_value(1'b0);
+                                        hs_vcall_entry(ctor_ip);
+                                        hs_vcall_argc(argc);
+                                        hs_vcall_set_this(1'b1);
+                                        hs_vcall_this(handle);
+                                        hs_vcall_ctor_val(handle);
+                                        hs_valloc_kind(2'd3);
+                                        hs_valloc_i({4'd0, venv_next});
+                                        hs_valloc_retried(1'b0);
                                     end
                                 end else if (ctor_fn_ok) begin
                                     // constructor_ip None + function ctor:
@@ -8133,7 +8624,7 @@ module jmr_js_vm #(
                                         machine_fault <= 1'b1;
                                         fault_code <= 8'd2;
                                         running <= 1'b0;
-                                        state <= S_DONE;
+                                        hs_st(S_DONE);
                                     end else begin
                                         bind_mode <= (argc == 0) ? 2'd3 : 2'd2;
                                         bind_k <= (argc == 0) ? 8'd0
@@ -8146,25 +8637,24 @@ module jmr_js_vm #(
                                         bind_vsp_next <= vsp + 12'd1;
                                         bind_ret <= S_V64_ALLOC;
                                         bind_rd_arm <= 1'b0;
-                                        vcall_value <= 1'b1;
-                                        vcall_argc <= argc;
-                                        vcall_set_this <= 1'b1;
-                                        vcall_this <= handle;
-                                        vcall_ctor_val <= handle;
-                                        valloc_kind <= 2'd3;
-                                        valloc_i <= {4'd0, venv_next};
-                                        valloc_retried <= 1'b0;
-                                        state <= S_V64_BIND;
+                                        hs_vcall_value(1'b1);
+                                        hs_vcall_argc(argc);
+                                        hs_vcall_set_this(1'b1);
+                                        hs_vcall_this(handle);
+                                        hs_vcall_ctor_val(handle);
+                                        hs_valloc_kind(2'd3);
+                                        hs_valloc_i({4'd0, venv_next});
+                                        hs_valloc_retried(1'b0);
+                                        hs_st(S_V64_BIND);
                                     end
                                 end else begin
                                     // Ctor-less NEW_OBJ: drop args, push the
                                     // instance (PYTHON constructor_ip None).
                                     vst_wr(vsp - argc, handle);
-                                    vsp <= vsp - argc + 12'd1;
-                                    ip <= ip + 16'd1;
-                                    code_raddr <=
-                                        15'(ops_base + ip + 16'd1);
-                                    state <= S_FETCH_WAIT;
+                                    hs_vsp(vsp - argc + 12'd1);
+                                    hs_ip(ip + 16'd1);
+                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_st(S_FETCH_WAIT);
                                 end
                                 end
                             end else begin
@@ -8184,115 +8674,133 @@ module jmr_js_vm #(
                                 if (valloc_proto) begin
                                     vfn_proto[valloc_proto_fn] <= handle;
                                     vst_wr(vnat_base, handle);
-                                    valloc_proto <= 1'b0;
-                                    ip <= ip + 16'd1;
-                                    code_raddr <=
-                                        15'(ops_base + ip + 16'd1);
-                                    state <= S_FETCH_WAIT;
+                                    hs_valloc_proto(1'b0);
+                                    hs_ip(ip + 16'd1);
+                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_st(S_FETCH_WAIT);
                                 end else if (valloc_metrics) begin
                                     vmetrics <= handle;
                                     vst_wr(vnat_base, handle);
-                                    valloc_metrics <= 1'b0;
-                                    ip <= ip + 16'd1;
-                                    code_raddr <=
-                                        15'(ops_base + ip + 16'd1);
-                                    hp_cmd <= HP_OSETI;
-                                    hp_v64 <= 1'b1;
-                                    hp_oid <= valloc_i[12:0];
-                                    hp_slot <= 5'd0;
-                                    hp_qn <= 3'd1;
-                                    hp_qi <= 3'd0;
-                                    hp_qk[0] <= id_width;
-                                    hp_qv[0] <=
-                                        v64_int32_number({16'd0, vmetrics_w});
-                                    hp_qt[0] <= 3'd0;
-                                    hp_ret <= S_FETCH_WAIT;
-                                    state <= S_HEAP_WR;
+                                    hs_valloc_metrics(1'b0);
+                                    hs_ip(ip + 16'd1);
+                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_hp_cmd(HP_OSETI);
+                                    hs_hp_v64(1'b1);
+                                    hs_hp_oid(valloc_i[12:0]);
+                                    hs_hp_slot(5'd0);
+                                    hs_hp_qn(3'd1);
+                                    hs_hp_qi(3'd0);
+                                    hp_qk_ff[0] <= id_width;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[0] <= v64_int32_number({16'd0, vmetrics_w});
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[0] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
+                                    hs_hp_ret(S_FETCH_WAIT);
+                                    hs_st(S_HEAP_WR);
                                 end else if (vnat_dom == 3'd1) begin
                                     // querySelector style object
                                     vobj_builtin[valloc_i[12:0]] <= 4'd1;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd1, 2'd0, 6'd0});
                                     vnat_style <= handle;
-                                    vnat_dom <= 3'd2;
-                                    valloc_i <= valloc_i + 14'd1;
+                                    hs_vnat_dom(3'd2);
+                                    hs_valloc_i(valloc_i + 14'd1);
                                 end else if (vnat_dom == 3'd2) begin
                                     vobj_builtin[valloc_i[12:0]] <= 4'd1;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd1, 2'd0, 6'd0});
                                     vst_wr(vnat_base, handle);
-                                    vsp <= vnat_base + 12'd1;
-                                    vnat_dom <= 3'd0;
-                                    ip <= ip + 16'd1;
-                                    code_raddr <=
-                                        15'(ops_base + ip + 16'd1);
-                                    hp_cmd <= HP_OSETI;
-                                    hp_v64 <= 1'b1;
-                                    hp_oid <= valloc_i[12:0];
-                                    hp_slot <= 5'd0;
-                                    hp_qn <= 3'd3;
-                                    hp_qi <= 3'd0;
-                                    hp_qk[0] <= id_style;
-                                    hp_qv[0] <= vnat_style;
-                                    hp_qt[0] <= 3'd0;
-                                    hp_qk[1] <= id_width;
-                                    hp_qv[1] <= v64_int32_number(32'd640);
-                                    hp_qt[1] <= 3'd0;
-                                    hp_qk[2] <= id_height;
-                                    hp_qv[2] <= v64_int32_number(32'd480);
-                                    hp_qt[2] <= 3'd0;
-                                    hp_ret <= S_FETCH_WAIT;
-                                    state <= S_HEAP_WR;
+                                    hs_vsp(vnat_base + 12'd1);
+                                    hs_vnat_dom(3'd0);
+                                    hs_ip(ip + 16'd1);
+                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_hp_cmd(HP_OSETI);
+                                    hs_hp_v64(1'b1);
+                                    hs_hp_oid(valloc_i[12:0]);
+                                    hs_hp_slot(5'd0);
+                                    hs_hp_qn(3'd3);
+                                    hs_hp_qi(3'd0);
+                                    hp_qk_ff[0] <= id_style;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[0] <= vnat_style;
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[0] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
+                                    hp_qk_ff[1] <= id_width;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[1] <= v64_int32_number(32'd640);
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[1] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
+                                    hp_qk_ff[2] <= id_height;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[2] <= v64_int32_number(32'd480);
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[2] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
+                                    hs_hp_ret(S_FETCH_WAIT);
+                                    hs_st(S_HEAP_WR);
                                 end else if (vnat_dom == 3'd3) begin
                                     vobj_builtin[valloc_i[12:0]] <= 4'd5;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd5, 2'd0, 6'd0});
                                     vst_wr(vnat_base, handle);
-                                    vsp <= vnat_base + 12'd1;
-                                    vnat_dom <= 3'd0;
-                                    ip <= ip + 16'd1;
-                                    code_raddr <=
-                                        15'(ops_base + ip + 16'd1);
+                                    hs_vsp(vnat_base + 12'd1);
+                                    hs_vnat_dom(3'd0);
+                                    hs_ip(ip + 16'd1);
+                                    hs_code(15'(ops_base + ip + 16'd1));
                                     // Pin fillStyle@0 strokeStyle@1 so SET_PROP
                                     // writes one slot (MRDO palK).
-                                    hp_cmd <= HP_OSETI;
-                                    hp_v64 <= 1'b1;
-                                    hp_oid <= valloc_i[12:0];
-                                    hp_slot <= 5'd0;
-                                    hp_qn <= 3'd2;
-                                    hp_qi <= 3'd0;
-                                    hp_qk[0] <= id_fillstyle;
-                                    hp_qv[0] <= v64_int32_number(32'd1);
-                                    hp_qt[0] <= 3'd0;
-                                    hp_qk[1] <= id_strokestyle;
-                                    hp_qv[1] <= v64_int32_number(32'd1);
-                                    hp_qt[1] <= 3'd0;
-                                    hp_ret <= S_FETCH_WAIT;
-                                    state <= S_HEAP_WR;
+                                    hs_hp_cmd(HP_OSETI);
+                                    hs_hp_v64(1'b1);
+                                    hs_hp_oid(valloc_i[12:0]);
+                                    hs_hp_slot(5'd0);
+                                    hs_hp_qn(3'd2);
+                                    hs_hp_qi(3'd0);
+                                    hp_qk_ff[0] <= id_fillstyle;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[0] <= v64_int32_number(32'd1);
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[0] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
+                                    hp_qk_ff[1] <= id_strokestyle;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[1] <= v64_int32_number(32'd1);
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[1] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
+                                    hs_hp_ret(S_FETCH_WAIT);
+                                    hs_st(S_HEAP_WR);
                                 end else if (vnat_dom == 3'd4) begin
                                     vobj_builtin[valloc_i[12:0]] <= 4'd2;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd2, 2'd0, 6'd0});
                                     vst_wr(vnat_base, handle);
-                                    vsp <= vnat_base + 12'd1;
-                                    vnat_dom <= 3'd0;
-                                    ip <= ip + 16'd1;
-                                    code_raddr <=
-                                        15'(ops_base + ip + 16'd1);
-                                    hp_cmd <= HP_OSETI;
-                                    hp_v64 <= 1'b1;
-                                    hp_oid <= valloc_i[12:0];
-                                    hp_slot <= 5'd0;
-                                    hp_qn <= 3'd2;
-                                    hp_qi <= 3'd0;
-                                    hp_qk[0] <= id_width;
-                                    hp_qv[0] <= v64_int32_number(32'd1);
-                                    hp_qt[0] <= 3'd0;
-                                    hp_qk[1] <= id_height;
-                                    hp_qv[1] <= v64_int32_number(32'd1);
-                                    hp_qt[1] <= 3'd0;
-                                    hp_ret <= S_FETCH_WAIT;
-                                    state <= S_HEAP_WR;
+                                    hs_vsp(vnat_base + 12'd1);
+                                    hs_vnat_dom(3'd0);
+                                    hs_ip(ip + 16'd1);
+                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_hp_cmd(HP_OSETI);
+                                    hs_hp_v64(1'b1);
+                                    hs_hp_oid(valloc_i[12:0]);
+                                    hs_hp_slot(5'd0);
+                                    hs_hp_qn(3'd2);
+                                    hs_hp_qi(3'd0);
+                                    hp_qk_ff[0] <= id_width;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[0] <= v64_int32_number(32'd1);
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[0] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
+                                    hp_qk_ff[1] <= id_height;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[1] <= v64_int32_number(32'd1);
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[1] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
+                                    hs_hp_ret(S_FETCH_WAIT);
+                                    hs_st(S_HEAP_WR);
                                 end else if (vnat_dom == 3'd5) begin
                                     key_intern = (kev_q[kev_rp][7:0] == 8'd13)
                                         ? id_enter
@@ -8311,94 +8819,106 @@ module jmr_js_vm #(
                                         : (kev_q[kev_rp][7:0] == 8'd68)
                                         ? id_d : 16'hFFFF;
                                     vkev_event <= handle;
-                                    vnat_dom <= 3'd0;
+                                    hs_vnat_dom(3'd0);
                                     vkey_li <= 5'd0;
-                                    hp_cmd <= HP_OSETI;
-                                    hp_v64 <= 1'b1;
-                                    hp_oid <= valloc_i[12:0];
-                                    hp_slot <= 5'd0;
-                                    hp_qn <= 3'd3;
-                                    hp_qi <= 3'd0;
-                                    hp_qk[0] <= id_type;
-                                    hp_qv[0] <= v64_handle(
+                                    hs_hp_cmd(HP_OSETI);
+                                    hs_hp_v64(1'b1);
+                                    hs_hp_oid(valloc_i[12:0]);
+                                    hs_hp_slot(5'd0);
+                                    hs_hp_qn(3'd3);
+                                    hs_hp_qi(3'd0);
+                                    hp_qk_ff[0] <= id_type;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[0] <= v64_handle(
                                         4'd4, 12'd0,
                                         {16'd0, kev_q[kev_rp][8]
                                             ? id_keydown : id_keyup}
                                     );
-                                    hp_qt[0] <= 3'd0;
-                                    hp_qk[1] <= id_key;
-                                    hp_qv[1] <=
-                                        (key_intern == 16'hFFFF)
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[0] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
+                                    hp_qk_ff[1] <= id_key;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[1] <= (key_intern == 16'hFFFF)
                                         ? V64_UNDEFINED
                                         : v64_handle(4'd4, 12'd0,
                                                      {16'd0, key_intern});
-                                    hp_qt[1] <= 3'd0;
-                                    hp_qk[2] <= id_keycode;
-                                    hp_qv[2] <=
-                                        v64_int32_number(
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[1] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
+                                    hp_qk_ff[2] <= id_keycode;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[2] <= v64_int32_number(
                                             {24'd0, kev_q[kev_rp][7:0]}
                                         );
-                                    hp_qt[2] <= 3'd0;
-                                    hp_ret <= S_V64_FRAME_KEY;
-                                    state <= S_HEAP_WR;
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[2] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
+                                    hs_hp_ret(S_V64_FRAME_KEY);
+                                    hs_st(S_HEAP_WR);
                                 end else if (vnat_dom == 3'd6) begin
                                     vobj_builtin[valloc_i[12:0]] <= 4'd3;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd3, 2'd0, 6'd0});
                                     vst_wr(vnat_base, handle);
-                                    vsp <= vnat_base + 12'd1;
-                                    vnat_dom <= 3'd0;
-                                    ip <= ip + 16'd1;
-                                    code_raddr <=
-                                        15'(ops_base + ip + 16'd1);
-                                    state <= S_FETCH_WAIT;
+                                    hs_vsp(vnat_base + 12'd1);
+                                    hs_vnat_dom(3'd0);
+                                    hs_ip(ip + 16'd1);
+                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_st(S_FETCH_WAIT);
                                 end else begin
                                     if (valloc_regex) begin
                                         vobj_builtin[valloc_i[12:0]] <= 4'd6;
                                         e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                                  {52'd0, 4'd6, 2'd0, 6'd0});
-                                        valloc_regex <= 1'b0;
+                                        hs_valloc_regex(1'b0);
                                         vst_wr(vsp, handle);
-                            vsp <= vsp + 12'd1;
-                            ip <= ip + 16'd1;
-                                        code_raddr <=
-                                            15'(ops_base + ip + 16'd1);
-                                        hp_cmd <= HP_OSETI;
-                                        hp_v64 <= 1'b1;
-                                        hp_oid <= valloc_i[12:0];
-                                        hp_slot <= 5'd0;
-                                        hp_qn <= 3'd1;
-                                        hp_qi <= 3'd0;
-                                        hp_qk[0] <= 16'd0;
-                                        hp_qv[0] <= {32'd0, valloc_regex_pack};
-                                        hp_qt[0] <= 3'd0;
-                                        hp_ret <= S_FETCH_WAIT;
-                                        state <= S_HEAP_WR;
+                            hs_vsp(vsp + 12'd1);
+                            hs_ip(ip + 16'd1);
+                                        hs_code(15'(ops_base + ip + 16'd1));
+                                        hs_hp_cmd(HP_OSETI);
+                                        hs_hp_v64(1'b1);
+                                        hs_hp_oid(valloc_i[12:0]);
+                                        hs_hp_slot(5'd0);
+                                        hs_hp_qn(3'd1);
+                                        hs_hp_qi(3'd0);
+                                        hp_qk_ff[0] <= 16'd0;
+                                        hs_m_hp_qk <= 1'b1;
+                                        hp_qv_ff[0] <= {32'd0, valloc_regex_pack};
+                                        hs_m_hp_qv <= 1'b1;
+                                        hp_qt_ff[0] <= 3'd0;
+                                        hs_m_hp_qt <= 1'b1;
+                                        hs_hp_ret(S_FETCH_WAIT);
+                                        hs_st(S_HEAP_WR);
                                     end else begin
                                     vst_wr(vsp, handle);
-                                    vsp <= vsp + 12'd1;
-                                    ip <= ip + 16'd1;
-                                    code_raddr <=
-                                        15'(ops_base + ip + 16'd1);
-                            state <= S_FETCH_WAIT;
+                                    hs_vsp(vsp + 12'd1);
+                                    hs_ip(ip + 16'd1);
+                                    hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
                                     end
                                 end
                             end
                         end else if (valloc_i + 14'd1 < MAX_OBJ) begin
-                            valloc_i <= valloc_i + 14'd1;
+                            hs_valloc_i(valloc_i + 14'd1);
                         end else if (!valloc_retried) begin
-                            vgc_clear_i <= 14'd0;
-                            vgc_qr <= 14'd0;
-                            vgc_qw <= 14'd0;
-                            vgc_halt_after <= 1'b0;
-                            state <= S_V64_GC_CLEAR;
+                            hs_vgc_clear_i(14'd0);
+                            hs_vgc_qr(14'd0);
+                            hs_vgc_qw(14'd0);
+                            hs_vgc_halt_after(1'b0);
+                            hs_st(S_V64_GC_CLEAR);
                         end else begin
                             machine_fault <= 1'b1; fault_code <= 8'd3;
-                            running <= 1'b0; state <= S_DONE;
+                            running <= 1'b0; hs_st(S_DONE);
                         end
                     end
                 end
                 S_V64_GC_CLEAR: begin
+                    // Leave cycle: parent state is still EXEC. Stay in CLEAR
+                    // so exec enable drops and hs_* pokes apply.
+                    if (state != S_V64_GC_CLEAR)
+                        hs_st(S_V64_GC_CLEAR);
+                    else begin
                     if (vgc_clear_i < MAX_OBJ) begin
                         vobj_mark[vgc_clear_i[12:0]] <= 1'b0;
                         vfn_mark[vgc_clear_i[12:0]] <= 1'b0;
@@ -8411,17 +8931,23 @@ module jmr_js_vm #(
                         MAX_OBJ + MAX_ARR + ENV_DEPTH) begin
                         vgc_root_i <= 12'd0;
                         vgc_root_phase <= 3'd0;
-                        state <= S_V64_GC_ROOT;
+                        hs_st(S_V64_GC_ROOT);
                     end else
-                        vgc_clear_i <= vgc_clear_i + 14'd1;
+                        hs_vgc_clear_i(vgc_clear_i + 14'd1);
+                    end
                 end
                 S_V64_GC_ROOT: begin
                     case (vgc_root_phase)
                         3'd0: begin
                             if (vgc_root_i < MAX_VARS) begin
-                                if (vvar_valid[vgc_root_i[8:0]])
-                                    v64_gc_mark_task(vvars[vgc_root_i[8:0]]);
-                                vgc_root_i <= vgc_root_i + 12'd1;
+                                if (!vgc_rd_arm)
+                                    vgc_rd_arm <= 1'b1;
+                                else begin
+                                    if (vvar_valid_rdata)
+                                        v64_gc_mark_task(vvars_rdata);
+                                    vgc_root_i <= vgc_root_i + 12'd1;
+                                    vgc_rd_arm <= 1'b0;
+                                end
                             end else begin
                                 vgc_root_i <= 12'd0;
                                 vgc_root_phase <= 3'd1;
@@ -8563,27 +9089,27 @@ module jmr_js_vm #(
                                     );
                                 vgc_root_i <= vgc_root_i + 12'd1;
                             end else
-                                state <= S_V64_GC_POP;
+                                hs_st(S_V64_GC_POP);
                         end
                     endcase
                 end
                 S_V64_GC_POP: begin
                     if (vgc_qr < vgc_qw) begin
                         vgc_cur <= vgc_queue[vgc_qr];
-                        vgc_qr <= vgc_qr + 14'd1;
+                        hs_vgc_qr(vgc_qr + 14'd1);
                         vgc_slot_i <= 8'd0;
                         if (vgc_queue[vgc_qr][47:44] == V64_KIND_OBJECT ||
                             vgc_queue[vgc_qr][47:44] == V64_KIND_ELEMENT)
-                            state <= S_V64_GC_OBJ;
+                            hs_st(S_V64_GC_OBJ);
                         else if (vgc_queue[vgc_qr][47:44] == 4'd6)
-                            state <= S_V64_GC_ARR;
+                            hs_st(S_V64_GC_ARR);
                         else if (vgc_queue[vgc_qr][47:44] == 4'd7)
-                            state <= S_V64_GC_FN;
+                            hs_st(S_V64_GC_FN);
                         else
-                            state <= S_V64_GC_ENV;
+                            hs_st(S_V64_GC_ENV);
                     end else begin
                         vgc_obj_i <= 13'd0;
-                        state <= S_V64_GC_SWEEP_OBJ;
+                        hs_st(S_V64_GC_SWEEP_OBJ);
                     end
                 end
                 S_V64_GC_OBJ: begin
@@ -8600,7 +9126,7 @@ module jmr_js_vm #(
                         v64_gc_mark_task(vobj_proto[vgc_cur[12:0]]);
                         vgc_slot_i <= vgc_slot_i + 8'd1;
                     end else
-                        state <= S_V64_GC_POP;
+                        hs_st(S_V64_GC_POP);
                 end
                 S_V64_GC_ARR: begin
                     if (vgc_slot_i < varr_len[vgc_cur[11:0]]) begin
@@ -8612,7 +9138,7 @@ module jmr_js_vm #(
                             vgc_rd_arm <= 1'b0;
                         end
                     end else
-                        state <= S_V64_GC_POP;
+                        hs_st(S_V64_GC_POP);
                 end
                 S_V64_GC_FN: begin
                     if (vgc_slot_i == 0) begin
@@ -8625,7 +9151,7 @@ module jmr_js_vm #(
                         v64_gc_mark_task(vfn_proto[vgc_cur[12:0]]);
                         vgc_slot_i <= 8'd3;
                     end else
-                        state <= S_V64_GC_POP;
+                        hs_st(S_V64_GC_POP);
                 end
                 S_V64_GC_ENV: begin
                     if (vgc_slot_i == 0) begin
@@ -8642,7 +9168,7 @@ module jmr_js_vm #(
                         end
                     end else begin
                         vgc_rd_arm <= 1'b0;
-                        state <= S_V64_GC_POP;
+                        hs_st(S_V64_GC_POP);
                     end
                 end
                 S_V64_GC_SWEEP_OBJ: begin
@@ -8672,7 +9198,7 @@ module jmr_js_vm #(
                                  {20'd0, new_fgen, 30'd0, free_fn, free_obj});
                     if (vgc_obj_i + 13'd1 >= MAX_OBJ) begin
                         vgc_arr_i <= 12'd0;
-                        state <= S_V64_GC_SWEEP_ARR;
+                        hs_st(S_V64_GC_SWEEP_ARR);
                     end else
                         vgc_obj_i <= vgc_obj_i + 13'd1;
                 end
@@ -8691,7 +9217,7 @@ module jmr_js_vm #(
                     end
                     if (vgc_arr_i + 12'd1 >= MAX_ARR) begin
                         vgc_env_i <= 10'd0;
-                        state <= S_V64_GC_SWEEP_ENV;
+                        hs_st(S_V64_GC_SWEEP_ENV);
                     end else
                         vgc_arr_i <= vgc_arr_i + 12'd1;
                 end
@@ -8716,57 +9242,61 @@ module jmr_js_vm #(
                         if (vgc_halt_after) begin
                             vgc_resume <= 2'd0;
                             if (vgc_wait_after) begin
-                                vgc_wait_after <= 1'b0;
-                                state <= S_WAIT_FRAME;
+                                hs_vgc_wait_after(1'b0);
+                                hs_st(S_WAIT_FRAME);
                             end else begin
                                 running <= 1'b0;
-                                state <= S_DONE;
+                                hs_st(S_DONE);
                             end
                         end else begin
-                            valloc_retried <= 1'b1;
-                            valloc_i <= 14'd0;
+                            hs_valloc_retried(1'b1);
+                            hs_valloc_i(14'd0);
                             if (vgc_resume == 2'd1) begin
                                 vgc_resume <= 2'd0;
-                                state <= S_FETCH_WAIT;
+                                hs_st(S_FETCH_WAIT);
                             end else if (vgc_resume == 2'd2) begin
                                 vgc_resume <= 2'd0;
-                                state <= S_V64_JSON_PARSE;
+                                hs_st(S_V64_JSON_PARSE);
                             end else if (vgc_resume == 2'd3) begin
                                 vgc_resume <= 2'd0;
-                                state <= S_V64_JSON;
+                                hs_st(S_V64_JSON);
                             end else begin
                                 vgc_resume <= 2'd0;
-                            state <= S_V64_ALLOC;
+                            hs_st(S_V64_ALLOC);
                             end
                         end
                     end else
                         vgc_env_i <= vgc_env_i + 10'd1;
                 end
                 S_V64_CLEAR: begin
+                    if (state != S_V64_CLEAR)
+                        hs_st(S_V64_CLEAR);
                     fb_we <= 1'b1;
                     fb_waddr <= vdraw_i;
                     fb_wdata <= vdraw_color;
                     if (vdraw_i + 19'd1 >= FB_PIXELS) begin
                         vst_wr(vnat_base, V64_UNDEFINED);
-                        vsp <= vnat_base + 12'd1;
-                        ip <= ip + 16'd1;
-                        code_raddr <= 15'(ops_base + ip + 16'd1);
-                        state <= S_FETCH_WAIT;
+                        hs_vsp(vnat_base + 12'd1);
+                        hs_ip(ip + 16'd1);
+                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_st(S_FETCH_WAIT);
                     end else
-                        vdraw_i <= vdraw_i + 19'd1;
+                        hs_vdraw_i(vdraw_i + 19'd1);
                 end
                 S_V64_RECT: begin
                     logic [19:0] total;
                     logic [9:0] px, py;
+                    if (state != S_V64_RECT)
+                        hs_st(S_V64_RECT);
                     total = 20'(vdraw_w) * 20'(vdraw_h);
                     px = (vdraw_i == 19'd0) ? vdraw_x : vdraw_cx;
                     py = (vdraw_i == 19'd0) ? vdraw_y : vdraw_cy;
                     if (vdraw_w == 0 || vdraw_h == 0) begin
                         vst_wr(vnat_base, V64_UNDEFINED);
-                        vsp <= vnat_base + 12'd1;
-                        ip <= ip + 16'd1;
-                        code_raddr <= 15'(ops_base + ip + 16'd1);
-                        state <= S_FETCH_WAIT;
+                        hs_vsp(vnat_base + 12'd1);
+                        hs_ip(ip + 16'd1);
+                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_st(S_FETCH_WAIT);
                     end else begin
                         if (px < MW && py < MH) begin
                             fb_we <= 1'b1;
@@ -8775,12 +9305,12 @@ module jmr_js_vm #(
                         end
                         if (vdraw_i + 19'd1 >= total) begin
                             vst_wr(vnat_base, V64_UNDEFINED);
-                            vsp <= vnat_base + 12'd1;
-                            ip <= ip + 16'd1;
-                            code_raddr <= 15'(ops_base + ip + 16'd1);
-                            state <= S_FETCH_WAIT;
+                            hs_vsp(vnat_base + 12'd1);
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
                         end else begin
-                            vdraw_i <= vdraw_i + 19'd1;
+                            hs_vdraw_i(vdraw_i + 19'd1);
                             if (10'(px - vdraw_x) + 10'd1 >= vdraw_w) begin
                                 vdraw_cx <= vdraw_x;
                                 vdraw_cy <= py + 10'd1;
@@ -8791,7 +9321,7 @@ module jmr_js_vm #(
                         end
                     end
                 end
-                S_V64_WAIT_FRAME: state <= S_WAIT_FRAME;
+                S_V64_WAIT_FRAME: hs_st(S_WAIT_FRAME);
                 S_V64_FOREACH: begin
                     if (vfe_arr[63:48] != V64_TAG_PREFIX ||
                         vfe_arr[47:44] != V64_KIND_ARRAY ||
@@ -8799,9 +9329,9 @@ module jmr_js_vm #(
                         vfe_i >= varr_len[vfe_arr[11:0]]) begin
                         vst_wr(vfe_base, (vfe_mode == 2'd2 || vfe_mode == 2'd3)
                             ? vfe_map : V64_UNDEFINED);
-                        vsp <= vfe_base + 12'd1;
-                        ip <= vfe_ret;
-                        code_raddr <= 15'(ops_base + vfe_ret);
+                        hs_vsp(vfe_base + 12'd1);
+                        hs_ip(vfe_ret);
+                        hs_code(15'(ops_base + vfe_ret));
                         if (vfe_sp != 4'd0) begin
                             vfe_arr <= vfe_arr_s[vfe_sp - 4'd1];
                             vfe_fn <= vfe_fn_s[vfe_sp - 4'd1];
@@ -8817,54 +9347,54 @@ module jmr_js_vm #(
                             vfe_mode <= 2'd0;
                             vfe_map <= V64_UNDEFINED;
                         end
-                        state <= S_FETCH_WAIT;
+                        hs_st(S_FETCH_WAIT);
                     end else if (vfe_fn[63:48] != V64_TAG_PREFIX ||
                                  vfe_fn[47:44] != V64_KIND_FUNCTION) begin
                         machine_fault <= 1'b1; fault_code <= 8'd4;
-                        running <= 1'b0; state <= S_DONE;
+                        running <= 1'b0; hs_st(S_DONE);
                     end else if (vcsp >= CSTK ||
                                  (!vfe_rd_arm &&
                                   vsp + 12'd4 > STACK_DEPTH) ||
                                  (vfe_rd_arm && vsp >= STACK_DEPTH)) begin
                         machine_fault <= 1'b1;
                         fault_code <= (vcsp >= CSTK) ? 8'd2 : 8'd1;
-                        running <= 1'b0; state <= S_DONE;
+                        running <= 1'b0; hs_st(S_DONE);
                     end else begin
                         // 1W1R + TOS window only shifts ±1 per clock, and
                         // ALLOC's `VST_AT is combo on last cycle's window —
                         // idle one beat after the last push so TOS is fn.
                         if (!vfe_rd_arm) begin
                             vst_wr(vsp, vfe_fn);
-                            vsp <= vsp + 12'd1;
+                            hs_vsp(vsp + 12'd1);
                             vfe_rd_arm <= 1'b1;
                             bind_k <= 8'd0;
                         end else if (bind_k == 8'd0) begin
                             vst_wr(vsp, varr_rdata);
-                            vsp <= vsp + 12'd1;
+                            hs_vsp(vsp + 12'd1);
                             bind_k <= 8'd1;
                         end else if (bind_k == 8'd1) begin
                             vst_wr(vsp, v64_int32_number({24'd0, vfe_i}));
-                            vsp <= vsp + 12'd1;
+                            hs_vsp(vsp + 12'd1);
                             bind_k <= 8'd2;
                         end else if (bind_k == 8'd2) begin
                             vst_wr(vsp, vfe_arr);
-                            vsp <= vsp + 12'd1;
+                            hs_vsp(vsp + 12'd1);
                             bind_k <= 8'd3;
                         end else begin
-                            vcall_value <= 1'b1;
-                            vcall_argc <= 12'd3;
+                            hs_vcall_value(1'b1);
+                            hs_vcall_argc(12'd3);
                             vcallback_fe <= 1'b1;
-                            valloc_kind <= 2'd3;
-                            valloc_i <= {4'd0, venv_next};
-                            valloc_retried <= 1'b0;
+                            hs_valloc_kind(2'd3);
+                            hs_valloc_i({4'd0, venv_next});
+                            hs_valloc_retried(1'b0);
                             vfe_i <= vfe_i + 8'd1;
                             vfe_rd_arm <= 1'b0;
                             bind_k <= 8'd0;
-                            state <= S_V64_ALLOC;
+                            hs_st(S_V64_ALLOC);
                         end
                     end
                 end
-                S_V64_STRIDX: state <= S_V64_STRIDX_WR;
+                S_V64_STRIDX: hs_st(S_V64_STRIDX_WR);
                 S_V64_STRIDX_WR: begin
                     if (char_ok[name_rdata])
                         vst_wr(vsp - 12'd1, v64_handle(
@@ -8872,21 +9402,21 @@ module jmr_js_vm #(
                         ));
                     else
                         vst_wr(vsp - 12'd1, V64_UNDEFINED);
-                    code_raddr <= 15'(ops_base + ip);
-                    state <= S_FETCH_WAIT;
+                    hs_code(15'(ops_base + ip));
+                    hs_st(S_FETCH_WAIT);
                 end
                 S_V64_JSON: begin
                     // Walk nested Value64 arrays/numbers into json_mem.
                     if (js_sp == 6'd0) begin
                         if (!vfree_armed) begin
                             vfree_armed <= 1'b1;
-                            valloc_i <= 14'd0;
-                            hp_ret <= S_V64_JSON;
-                            state <= S_FREE_OBJ;
+                            hs_valloc_i(14'd0);
+                            hs_hp_ret(S_V64_JSON);
+                            hs_st(S_FREE_OBJ);
                         end else begin
                             vfree_armed <= 1'b0;
                             if (vfree_ok) begin
-                            valloc_retried <= 1'b0;
+                            hs_valloc_retried(1'b0);
                             vobj_alloc[valloc_i[12:0]] <= 2'd1;
                             vobj_builtin[valloc_i[12:0]] <= 4'd7;
                             e64_poke(6'd44, {3'd0, valloc_i[12:0]},
@@ -8895,35 +9425,40 @@ module jmr_js_vm #(
                                 4'd5, vobj_gen[valloc_i[12:0]],
                                 {19'd0, valloc_i[12:0]}
                             ));
-                            vsp <= vnat_base + 12'd1;
+                            hs_vsp(vnat_base + 12'd1);
                             vobj_next <= valloc_i + 14'd1;
-                            ip <= ip + 16'd1;
-                            code_raddr <=
-                                15'(ops_base + ip + 16'd1);
-                            hp_cmd <= HP_OSETI;
-                            hp_v64 <= 1'b1;
-                            hp_oid <= valloc_i[12:0];
-                            hp_slot <= 5'd0;
-                            hp_qn <= 3'd2;
-                            hp_qi <= 3'd0;
-                            hp_qk[0] <= 16'd0;
-                            hp_qv[0] <= v64_int32_number(32'd0);
-                            hp_qt[0] <= 3'd0;
-                            hp_qk[1] <= 16'd1;
-                            hp_qv[1] <= v64_int32_number({18'd0, json_wp});
-                            hp_qt[1] <= 3'd0;
-                            hp_ret <= S_FETCH_WAIT;
-                            state <= S_HEAP_WR;
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_hp_cmd(HP_OSETI);
+                            hs_hp_v64(1'b1);
+                            hs_hp_oid(valloc_i[12:0]);
+                            hs_hp_slot(5'd0);
+                            hs_hp_qn(3'd2);
+                            hs_hp_qi(3'd0);
+                            hp_qk_ff[0] <= 16'd0;
+                            hs_m_hp_qk <= 1'b1;
+                            hp_qv_ff[0] <= v64_int32_number(32'd0);
+                            hs_m_hp_qv <= 1'b1;
+                            hp_qt_ff[0] <= 3'd0;
+                            hs_m_hp_qt <= 1'b1;
+                            hp_qk_ff[1] <= 16'd1;
+                            hs_m_hp_qk <= 1'b1;
+                            hp_qv_ff[1] <= v64_int32_number({18'd0, json_wp});
+                            hs_m_hp_qv <= 1'b1;
+                            hp_qt_ff[1] <= 3'd0;
+                            hs_m_hp_qt <= 1'b1;
+                            hs_hp_ret(S_FETCH_WAIT);
+                            hs_st(S_HEAP_WR);
                             end else if (!valloc_retried) begin
-                            vgc_clear_i <= 14'd0;
-                            vgc_qr <= 14'd0;
-                            vgc_qw <= 14'd0;
-                            vgc_halt_after <= 1'b0;
+                            hs_vgc_clear_i(14'd0);
+                            hs_vgc_qr(14'd0);
+                            hs_vgc_qw(14'd0);
+                            hs_vgc_halt_after(1'b0);
                             vgc_resume <= 2'd3;
-                            state <= S_V64_GC_CLEAR;
+                            hs_st(S_V64_GC_CLEAR);
                             end else begin
                             machine_fault <= 1'b1; fault_code <= 8'd3;
-                            running <= 1'b0; state <= S_DONE;
+                            running <= 1'b0; hs_st(S_DONE);
                             end
                         end
                     end else begin
@@ -9040,10 +9575,10 @@ module jmr_js_vm #(
                     if (json_rp >= json_src + json_srclen) begin
                         vst_wr(vnat_base, (js_sp == 0)
                             ? V64_NULL : vjs_val[0]);
-                        vsp <= vnat_base + 12'd1;
-                        ip <= ip + 16'd1;
-                        code_raddr <= 15'(ops_base + ip + 16'd1);
-                        state <= S_FETCH_WAIT;
+                        hs_vsp(vnat_base + 12'd1);
+                        hs_ip(ip + 16'd1);
+                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_st(S_FETCH_WAIT);
                     end else begin
                         logic [7:0] ch;
                         ch = json_mem[json_rp[12:0]];
@@ -9063,22 +9598,21 @@ module jmr_js_vm #(
                                     );
                                     if (js_sp == 6'd0) begin
                                         vst_wr(vnat_base, nv);
-                                        vsp <= vnat_base + 12'd1;
-                                        ip <= ip + 16'd1;
-                                        code_raddr <=
-                                            15'(ops_base + ip + 16'd1);
-                                        state <= S_FETCH_WAIT;
+                                        hs_vsp(vnat_base + 12'd1);
+                                        hs_ip(ip + 16'd1);
+                                        hs_code(15'(ops_base + ip + 16'd1));
+                                        hs_st(S_FETCH_WAIT);
                                     end else begin
                                         logic [5:0] p;
                                         p = js_sp - 6'd1;
                                         if (!varr_long[vjs_val[p][11:0]] &&
                                             js_i[p] >= ARR_SHORT_CAP[7:0] &&
                                             !vprom_done) begin
-                                            hp_aid <= vjs_val[p][11:0];
-                                            valloc_i <= 14'd0;
+                                            hs_hp_aid(vjs_val[p][11:0]);
+                                            hs_valloc_i(14'd0);
                                             vprom_copy <= 1'b0;
                                             vprom_ret <= S_V64_JSON_PARSE;
-                                            state <= S_ARR_PROMOTE;
+                                            hs_st(S_ARR_PROMOTE);
                                         end else begin
                                         vprom_done <= 1'b0;
                                         varr_len[vjs_val[p][11:0]] <=
@@ -9087,14 +9621,14 @@ module jmr_js_vm #(
                                                  {56'd0, js_i[p] + 8'd1});
                                         js_i[p] <= js_i[p] + 8'd1;
                                         json_pph <= 3'd0;
-                                        hp_cmd <= HP_ASETI;
-                                        hp_v64 <= 1'b1;
-                                        hp_from_stack <= 1'b0;
-                                        hp_aid <= vjs_val[p][11:0];
-                                        hp_aslot <= js_i[p][6:0];
-                                        hp_wval <= nv;
-                                        hp_ret <= S_V64_JSON_PARSE;
-                                        state <= S_HEAP_AWR;
+                                        hs_hp_cmd(HP_ASETI);
+                                        hs_hp_v64(1'b1);
+                                        hs_hp_from_stack(1'b0);
+                                        hs_hp_aid(vjs_val[p][11:0]);
+                                        hs_hp_aslot(js_i[p][6:0]);
+                                        hs_hp_wval(nv);
+                                        hs_hp_ret(S_V64_JSON_PARSE);
+                                        hs_st(S_HEAP_AWR);
                                         end
                                     end
                                 end
@@ -9103,31 +9637,31 @@ module jmr_js_vm #(
                             if (!vfree_armed) begin
                                 vfree_armed <= 1'b1;
                                 vfree_arr_long <= 1'b0;
-                                valloc_i <= 14'd0;
-                                hp_ret <= S_V64_JSON_PARSE;
-                                state <= S_FREE_ARR;
+                                hs_valloc_i(14'd0);
+                                hs_hp_ret(S_V64_JSON_PARSE);
+                                hs_st(S_FREE_ARR);
                             end else begin
                                 vfree_armed <= 1'b0;
                                 if (!vfree_ok) begin
                                     // Collect then retry this '['. Direct
                                     // fault=3 skipped frame-end reuse.
                                     if (!valloc_retried) begin
-                                        vgc_clear_i <= 14'd0;
-                                        vgc_qr <= 14'd0;
-                                        vgc_qw <= 14'd0;
-                                        vgc_halt_after <= 1'b0;
+                                        hs_vgc_clear_i(14'd0);
+                                        hs_vgc_qr(14'd0);
+                                        hs_vgc_qw(14'd0);
+                                        hs_vgc_halt_after(1'b0);
                                         vgc_resume <= 2'd2;
-                                        state <= S_V64_GC_CLEAR;
+                                        hs_st(S_V64_GC_CLEAR);
                                     end else begin
                                         machine_fault <= 1'b1;
                                         fault_code <= 8'd3;
-                                        running <= 1'b0; state <= S_DONE;
+                                        running <= 1'b0; hs_st(S_DONE);
                                     end
                                 end else if (js_sp >= JSON_STK[5:0]) begin
                                     dbg_json_ovf <= dbg_json_ovf + 16'd1;
                                     json_rp <= json_rp + 14'd1;
                                 end else begin
-                                    valloc_retried <= 1'b0;
+                                    hs_valloc_retried(1'b0);
                                     varr_valid[valloc_i[11:0]] <= 1'b1;
                                     varr_len[valloc_i[11:0]] <= 8'd0;
                                     // Spill into long handles when short is
@@ -9163,11 +9697,10 @@ module jmr_js_vm #(
                                 json_rp <= json_rp + 14'd1;
                                 vst_wr(vnat_base, (js_sp == 0)
                                     ? V64_NULL : vjs_val[0]);
-                                vsp <= vnat_base + 12'd1;
-                                ip <= ip + 16'd1;
-                                code_raddr <=
-                                    15'(ops_base + ip + 16'd1);
-                                state <= S_FETCH_WAIT;
+                                hs_vsp(vnat_base + 12'd1);
+                                hs_ip(ip + 16'd1);
+                                hs_code(15'(ops_base + ip + 16'd1));
+                                hs_st(S_FETCH_WAIT);
                             end else begin
                                 logic [5:0] p, c;
                                 c = js_sp - 6'd1;
@@ -9175,11 +9708,11 @@ module jmr_js_vm #(
                                 if (!varr_long[vjs_val[p][11:0]] &&
                                     js_i[p] >= ARR_SHORT_CAP[7:0] &&
                                     !vprom_done) begin
-                                    hp_aid <= vjs_val[p][11:0];
-                                    valloc_i <= 14'd0;
+                                    hs_hp_aid(vjs_val[p][11:0]);
+                                    hs_valloc_i(14'd0);
                                     vprom_copy <= 1'b0;
                                     vprom_ret <= S_V64_JSON_PARSE;
-                                    state <= S_ARR_PROMOTE;
+                                    hs_st(S_ARR_PROMOTE);
                                 end else begin
                                 vprom_done <= 1'b0;
                                 json_rp <= json_rp + 14'd1;
@@ -9189,14 +9722,14 @@ module jmr_js_vm #(
                                          {56'd0, js_i[p] + 8'd1});
                                 js_i[p] <= js_i[p] + 8'd1;
                                 js_sp <= c;
-                                hp_cmd <= HP_ASETI;
-                                hp_v64 <= 1'b1;
-                                hp_from_stack <= 1'b0;
-                                hp_aid <= vjs_val[p][11:0];
-                                hp_aslot <= js_i[p][6:0];
-                                hp_wval <= vjs_val[c];
-                                hp_ret <= S_V64_JSON_PARSE;
-                                state <= S_HEAP_AWR;
+                                hs_hp_cmd(HP_ASETI);
+                                hs_hp_v64(1'b1);
+                                hs_hp_from_stack(1'b0);
+                                hs_hp_aid(vjs_val[p][11:0]);
+                                hs_hp_aslot(js_i[p][6:0]);
+                                hs_hp_wval(vjs_val[c]);
+                                hs_hp_ret(S_V64_JSON_PARSE);
+                                hs_st(S_HEAP_AWR);
                                 end
                             end
                         end else if (ch == 8'h2C) begin
@@ -9229,8 +9762,8 @@ module jmr_js_vm #(
                              code_rdata[24] && vctor_scan < 6'd63) begin
                         vctor_scan <= vctor_scan + 6'd1;
                         vctor_armed <= 1'b0;
-                        code_raddr <= 15'(ops_base + vcall_entry +
-                            {10'd0, vctor_scan} + 16'd1);
+                        hs_code(15'(ops_base + vcall_entry +
+                            {10'd0, vctor_scan} + 16'd1));
                     end else begin
                         logic [11:0] base_sp;
                         logic [7:0] nparam;
@@ -9247,7 +9780,12 @@ module jmr_js_vm #(
                         bind_ret <= S_FETCH_WAIT;
                         bind_rd_arm <= 1'b0;
                         vctor_armed <= 1'b0;
-                        state <= S_V64_BIND;
+                        hs_st(S_V64_BIND);
+                        // CALL_USER ALLOC already hs_vcsp. Re-arm so
+                        // FETCH_WAIT after BIND copies vcsp_ff into exec
+                        // (RET_VAL was seeing exec vcsp=0 → fault 2).
+                        if (vcsp_ff != 8'd0)
+                            hs_vcsp(vcsp_ff);
                     end
                 end
                 S_V64_CTOR_ENV: begin
@@ -9258,7 +9796,7 @@ module jmr_js_vm #(
                         logic [11:0] argc;
                         logic ctor_fn_ok;
                         ctor_ip = vcall_entry;
-                        argc = {4'd0, code_rdata[31:24]};
+                        argc = vcall_argc;
                         handle = v64_handle(
                             4'd5, vobj_gen[valloc_i[12:0]],
                             {19'd0, valloc_i[12:0]}
@@ -9269,7 +9807,7 @@ module jmr_js_vm #(
                             ctor_fn[31:0] < MAX_OBJ &&
                             vfn_valid[ctor_fn[12:0]] &&
                             vfn_gen[ctor_fn[12:0]] == ctor_fn[43:32]);
-                        hp_env <= 1'b0;
+                        hs_hp_env(1'b0);
                         if (ctor_fn_ok)
                             vobj_proto[valloc_i[12:0]] <=
                                 vfn_proto[ctor_fn[12:0]];
@@ -9278,25 +9816,25 @@ module jmr_js_vm #(
                                 machine_fault <= 1'b1;
                                 fault_code <= 8'd2;
                                 running <= 1'b0;
-                                state <= S_DONE;
+                                hs_st(S_DONE);
                             end else begin
-                                vcall_value <= 1'b0;
-                                vcall_entry <= ctor_ip;
-                                vcall_argc <= argc;
-                                vcall_set_this <= 1'b1;
-                                vcall_this <= handle;
-                                vcall_ctor_val <= handle;
-                                valloc_kind <= 2'd3;
-                                valloc_i <= {4'd0, venv_next};
-                                valloc_retried <= 1'b0;
-                                state <= S_V64_ALLOC;
+                                hs_vcall_value(1'b0);
+                                hs_vcall_entry(ctor_ip);
+                                hs_vcall_argc(argc);
+                                hs_vcall_set_this(1'b1);
+                                hs_vcall_this(handle);
+                                hs_vcall_ctor_val(handle);
+                                hs_valloc_kind(2'd3);
+                                hs_valloc_i({4'd0, venv_next});
+                                hs_valloc_retried(1'b0);
+                                hs_st(S_V64_ALLOC);
                             end
                         end else if (ctor_fn_ok) begin
                             if (vcsp >= CSTK) begin
                                 machine_fault <= 1'b1;
                                 fault_code <= 8'd2;
                                 running <= 1'b0;
-                                state <= S_DONE;
+                                hs_st(S_DONE);
                             end else begin
                                 bind_mode <= (argc == 0) ? 2'd3 : 2'd2;
                                 bind_k <= (argc == 0) ? 8'd0
@@ -9309,26 +9847,104 @@ module jmr_js_vm #(
                                 bind_vsp_next <= vsp + 12'd1;
                                 bind_ret <= S_V64_ALLOC;
                                 bind_rd_arm <= 1'b0;
-                                vcall_value <= 1'b1;
-                                vcall_argc <= argc;
-                                vcall_set_this <= 1'b1;
-                                vcall_this <= handle;
-                                vcall_ctor_val <= handle;
-                                valloc_kind <= 2'd3;
-                                valloc_i <= {4'd0, venv_next};
-                                valloc_retried <= 1'b0;
-                                state <= S_V64_BIND;
+                                hs_vcall_value(1'b1);
+                                hs_vcall_argc(argc);
+                                hs_vcall_set_this(1'b1);
+                                hs_vcall_this(handle);
+                                hs_vcall_ctor_val(handle);
+                                hs_valloc_kind(2'd3);
+                                hs_valloc_i({4'd0, venv_next});
+                                hs_valloc_retried(1'b0);
+                                hs_st(S_V64_BIND);
                             end
                         end else begin
                             vst_wr(vsp - argc, handle);
-                            vsp <= vsp - argc + 12'd1;
-                            ip <= ip + 16'd1;
-                            code_raddr <= 15'(ops_base + ip + 16'd1);
-                            state <= S_FETCH_WAIT;
+                            hs_vsp(vsp - argc + 12'd1);
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
                         end
                     end
                 end
-                S_HEAP_WAIT: state <= S_HEAP_CMP;
+                S_V64_CTOR_VARS: begin
+                    // NEW_OBJ varmap after registered vvars_rdata (S_RD beat).
+                    begin
+                        logic [15:0] ctor_ip;
+                        logic [63:0] handle, ctor_fn;
+                        logic [11:0] argc;
+                        logic ctor_fn_ok;
+                        ctor_ip = vcall_entry;
+                        argc = vcall_argc;
+                        handle = v64_handle(
+                            4'd5, vobj_gen[valloc_i[12:0]],
+                            {19'd0, valloc_i[12:0]}
+                        );
+                        ctor_fn = vvar_valid_rdata
+                            ? vvars_rdata : V64_UNDEFINED;
+                        ctor_fn_ok = (ctor_fn[63:48] == V64_TAG_PREFIX &&
+                            ctor_fn[47:44] == V64_KIND_FUNCTION &&
+                            ctor_fn[31:0] < MAX_OBJ &&
+                            vfn_valid[ctor_fn[12:0]] &&
+                            vfn_gen[ctor_fn[12:0]] == ctor_fn[43:32]);
+                        if (ctor_fn_ok)
+                            vobj_proto[valloc_i[12:0]] <=
+                                vfn_proto[ctor_fn[12:0]];
+                        if (ctor_ip != 16'hFFFF) begin
+                            if (vcsp >= CSTK) begin
+                                machine_fault <= 1'b1;
+                                fault_code <= 8'd2;
+                                running <= 1'b0;
+                                hs_st(S_DONE);
+                            end else begin
+                                hs_vcall_value(1'b0);
+                                hs_vcall_entry(ctor_ip);
+                                hs_vcall_argc(argc);
+                                hs_vcall_set_this(1'b1);
+                                hs_vcall_this(handle);
+                                hs_vcall_ctor_val(handle);
+                                hs_valloc_kind(2'd3);
+                                hs_valloc_i({4'd0, venv_next});
+                                hs_valloc_retried(1'b0);
+                                hs_st(S_V64_ALLOC);
+                            end
+                        end else if (ctor_fn_ok) begin
+                            if (vcsp >= CSTK) begin
+                                machine_fault <= 1'b1;
+                                fault_code <= 8'd2;
+                                running <= 1'b0;
+                                hs_st(S_DONE);
+                            end else begin
+                                bind_mode <= (argc == 0) ? 2'd3 : 2'd2;
+                                bind_k <= (argc == 0) ? 8'd0
+                                    : (argc - 8'd1);
+                                bind_n <= argc;
+                                bind_argc <= argc;
+                                bind_base <= vsp - argc;
+                                bind_src <= vsp - argc;
+                                bind_ins <= ctor_fn;
+                                bind_vsp_next <= vsp + 12'd1;
+                                bind_ret <= S_V64_ALLOC;
+                                bind_rd_arm <= 1'b0;
+                                hs_vcall_value(1'b1);
+                                hs_vcall_argc(argc);
+                                hs_vcall_set_this(1'b1);
+                                hs_vcall_this(handle);
+                                hs_vcall_ctor_val(handle);
+                                hs_valloc_kind(2'd3);
+                                hs_valloc_i({4'd0, venv_next});
+                                hs_valloc_retried(1'b0);
+                                hs_st(S_V64_BIND);
+                            end
+                        end else begin
+                            vst_wr(vsp - argc, handle);
+                            hs_vsp(vsp - argc + 12'd1);
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
+                        end
+                    end
+                end
+                S_HEAP_WAIT: hs_st(S_HEAP_CMP);
                 S_HEAP_CMP: begin
                     // rdata valid this cycle. Stop at len, not a 32-wide mux.
                     // Object GET/SET/LOOKFN: exec copies of alloc/gen can lag.
@@ -9339,45 +9955,49 @@ module jmr_js_vm #(
                         hp_slot == 5'd0 &&
                         (hp_cmd == HP_GETPROP || hp_cmd == HP_SETPROP ||
                          hp_cmd == HP_LOOKFN) &&
-                        (vobj_alloc[hp_oid] != 2'd1 ||
-                         vobj_gen[hp_oid] != hp_spr_w[11:0])) begin
+                        (vobj_alloc_rdata != 2'd1 ||
+                         vobj_gen_rdata != hp_spr_w[11:0])) begin
                         if (hp_cmd == HP_SETPROP) begin
                             vst_wr(vsp - 12'd2, `VST_AT(vsp - 12'd1));
-                            vsp <= vsp - 12'd1;
-                            ip <= ip + 16'd1;
-                            code_raddr <= 15'(ops_base + ip + 16'd1);
-                            state <= S_FETCH_WAIT;
+                            hs_vsp(vsp - 12'd1);
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
                         end else if (hp_cmd == HP_LOOKFN) begin
-                            hp_rval <= V64_UNDEFINED;
-                            hp_hit <= 1'b0;
-                            state <= hp_ret;
+                            hs_hp_rval(V64_UNDEFINED);
+                            hs_hp_hit(1'b0);
+                            hs_st(hp_ret);
                         end else begin
                             vst_wr(vsp - 12'd1, V64_UNDEFINED);
                             vst_win[0] <= V64_UNDEFINED;
-                            ip <= ip + 16'd1;
-                            code_raddr <= 15'(ops_base + ip + 16'd1);
-                            state <= S_FETCH_WAIT;
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
                         end
                     end else if (hp_env) begin
                         if (hp_slot < hp_len[4:0] &&
                             venv_rdata[72:64] == hp_key[8:0]) begin
-                            hp_hit <= 1'b1;
-                            hp_rval <= venv_rdata[63:0];
+                            hs_hp_hit(1'b1);
+                            hs_hp_rval(venv_rdata[63:0]);
                             if (hp_cmd == HP_GETPROP) begin
                                 if (hp_ret == S_V64_CTOR_ENV) begin
-                                    hp_env <= 1'b0;
-                                    state <= S_V64_CTOR_ENV;
+                                    hs_hp_env(1'b0);
+                                    hs_st(S_V64_CTOR_ENV);
                                 end else begin
                                     // Drop hp_env so the next GET_PROP/SET_PROP
                                     // walks the object, not this env (`x`/`y`
                                     // after LOAD_VAR current).
-                                    hp_env <= 1'b0;
+                                    hs_hp_env(1'b0);
                                     vst_wr(vsp, venv_rdata[63:0]);
-                                    vsp <= vsp + 12'd1;
-                                    ip <= ip + 16'd1;
-                                    code_raddr <=
-                                        15'(ops_base + ip + 16'd1);
-                                    state <= S_FETCH_WAIT;
+                                    // Parent vst_we updates the TOS window
+                                    // next cycle; FETCH_WAIT→EXEC can arm
+                                    // CALL nid 27 with a stale TOS (inner
+                                    // requestAnimationFrame(fn) fault 4).
+                                    vst_win[0] <= venv_rdata[63:0];
+                                    hs_vsp(vsp + 12'd1);
+                                    hs_ip(ip + 16'd1);
+                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_st(S_FETCH_WAIT);
                                 end
                             end else if (hp_phase == 3'd1) begin
                                 // LET_VAR non-local: env hit is not a write.
@@ -9386,61 +10006,62 @@ module jmr_js_vm #(
                                     vvar_valid[hp_key[8:0]] <= 1'b1;
                                     e64_poke(6'd12, {7'd0, hp_key[8:0]}, hp_wval);
                                 end
-                                hp_env <= 1'b0;
-                                vsp <= vsp - 12'd1;
-                                ip <= ip + 16'd1;
-                                code_raddr <=
-                                    15'(ops_base + ip + 16'd1);
-                                state <= S_FETCH_WAIT;
+                                hs_hp_env(1'b0);
+                                hs_vsp(vsp - 12'd1);
+                                hs_ip(ip + 16'd1);
+                                hs_code(15'(ops_base + ip + 16'd1));
+                                hs_st(S_FETCH_WAIT);
                             end else
-                                state <= S_HEAP_WR;
+                                hs_st(S_HEAP_WR);
                         end else if (hp_slot + 5'd1 < hp_len[4:0]) begin
-                            hp_slot <= hp_slot + 5'd1;
-                            state <= S_HEAP_WAIT;
+                            hs_hp_slot(hp_slot + 5'd1);
+                            hs_st(S_HEAP_WAIT);
                         end else begin
                             if (hp_phase != 3'd2 &&
-                                venv_parent[hp_eid][63:48] == 16'h7ff9 &&
-                                venv_parent[hp_eid][47:44] == 4'd9 &&
-                                venv_parent[hp_eid][31:0] < ENV_DEPTH &&
-                                venv_valid[venv_parent[hp_eid][9:0]] &&
-                                venv_gen[venv_parent[hp_eid][9:0]] ==
-                                    venv_parent[hp_eid][43:32]) begin
+                                venv_parent_rdata[63:48] == 16'h7ff9 &&
+                                venv_parent_rdata[47:44] == 4'd9 &&
+                                venv_parent_rdata[31:0] < ENV_DEPTH &&
+                                venv_parent_rdata[9:0] != hp_eid &&
+                                venv_valid[venv_parent_rdata[9:0]] &&
+                                venv_gen[venv_parent_rdata[9:0]] ==
+                                    venv_parent_rdata[43:32]) begin
                                 // Live parent: walk. A swept/stale parent
                                 // (GC of an IIFE env still named on a
                                 // closure) falls through to vvars like
                                 // PYTHON globals — not ERROR_HANDLE.
-                                hp_eid <= venv_parent[hp_eid][9:0];
-                                hp_len <= {1'b0,
-                                    venv_len[venv_parent[hp_eid][9:0]]};
-                                hp_slot <= 5'd0;
-                                state <= S_HEAP_WAIT;
+                                hs_hp_eid(venv_parent_rdata[9:0]);
+                                hs_hp_len({1'b0,
+                                    venv_len[venv_parent_rdata[9:0]]});
+                                hs_hp_slot(5'd0);
+                                hs_st(S_HEAP_WAIT);
                             end else if (hp_cmd == HP_GETPROP) begin
-                                hp_hit <= 1'b0;
-                                hp_rval <= vvar_valid[hp_key[8:0]]
-                                    ? vvars[hp_key[8:0]] : V64_UNDEFINED;
+                                hs_hp_hit(1'b0);
+                                hs_hp_rval(vvar_valid_rdata
+                                    ? vvars_rdata : V64_UNDEFINED);
                                 if (hp_ret == S_V64_CTOR_ENV) begin
-                                    hp_env <= 1'b0;
-                                    state <= S_V64_CTOR_ENV;
+                                    hs_hp_env(1'b0);
+                                    hs_st(S_V64_CTOR_ENV);
                                 end else begin
-                                    hp_env <= 1'b0;
-                                    vst_wr(vsp, vvar_valid[hp_key[8:0]]
-                                        ? vvars[hp_key[8:0]] : V64_UNDEFINED);
-                                    vsp <= vsp + 12'd1;
-                                    ip <= ip + 16'd1;
-                                    code_raddr <=
-                                        15'(ops_base + ip + 16'd1);
-                                    state <= S_FETCH_WAIT;
+                                    hs_hp_env(1'b0);
+                                    vst_wr(vsp, vvar_valid_rdata
+                                        ? vvars_rdata : V64_UNDEFINED);
+                                    vst_win[0] <= vvar_valid_rdata
+                                        ? vvars_rdata : V64_UNDEFINED;
+                                    hs_vsp(vsp + 12'd1);
+                                    hs_ip(ip + 16'd1);
+                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_st(S_FETCH_WAIT);
                                 end
                             end else if (hp_phase == 3'd2) begin
                                 if (venv_len[hp_eid] >= 5'(ENV_SLOTS)) begin
                                     machine_fault <= 1'b1;
                                     fault_code <= 8'd3;
                                     running <= 1'b0;
-                                    state <= S_DONE;
+                                    hs_st(S_DONE);
                                 end else begin
-                                    hp_slot <= venv_len[hp_eid];
-                                    hp_hit <= 1'b0;
-                                    state <= S_HEAP_WR;
+                                    hs_hp_slot(venv_len[hp_eid]);
+                                    hs_hp_hit(1'b0);
+                                    hs_st(S_HEAP_WR);
                                 end
                             end else begin
                                 if (hp_phase == 3'd0 ||
@@ -9449,72 +10070,71 @@ module jmr_js_vm #(
                                     vvar_valid[hp_key[8:0]] <= 1'b1;
                                     e64_poke(6'd12, {7'd0, hp_key[8:0]}, hp_wval);
                                 end
-                                hp_env <= 1'b0;
-                                vsp <= vsp - 12'd1;
-                                ip <= ip + 16'd1;
-                                code_raddr <=
-                                    15'(ops_base + ip + 16'd1);
-                                state <= S_FETCH_WAIT;
+                                hs_hp_env(1'b0);
+                                hs_vsp(vsp - 12'd1);
+                                hs_ip(ip + 16'd1);
+                                hs_code(15'(ops_base + ip + 16'd1));
+                                hs_st(S_FETCH_WAIT);
                             end
                         end
                     end else if (hp_cmd == HP_OGETI) begin
-                        hp_rval <= vobj_rdata[63:0];
-                        hp_key <= vobj_rdata[79:64];
-                        hp_tag <= vobj_trdata;
+                        hs_hp_rval(vobj_rdata[63:0]);
+                        hs_hp_key(vobj_rdata[79:64]);
+                        hs_hp_tag(vobj_trdata);
                         hp_qv[hp_qi[1:0]] <= vobj_rdata[63:0];
                         hp_qk[hp_qi[1:0]] <= vobj_rdata[79:64];
                         if (hp_qi + 3'd1 < hp_qn) begin
-                            hp_qi <= hp_qi + 3'd1;
-                            hp_slot <= hp_slot + 5'd1;
-                            state <= S_HEAP_WAIT;
+                            hs_hp_qi(hp_qi + 3'd1);
+                            hs_hp_slot(hp_slot + 5'd1);
+                            hs_st(S_HEAP_WAIT);
                         end else
-                            state <= hp_ret;
+                            hs_st(hp_ret);
                     end else if (hp_cmd == HP_ARRGET || hp_cmd == HP_AGETI) begin
-                        hp_rval <= (hp_aslot < hp_alen)
-                            ? varr_rdata : (hp_v64 ? V64_UNDEFINED : 64'd0);
-                        hp_tag <= varr_trdata;
+                        hs_hp_rval((hp_aslot < hp_alen)
+                            ? varr_rdata : (hp_v64 ? V64_UNDEFINED : 64'd0));
+                        hs_hp_tag(varr_trdata);
                         if (hp_cmd == HP_ARRGET) begin
                             if (hp_v64) begin
                                 vst_wr(vsp - 12'd2, (hp_aslot < hp_alen)
                                     ? varr_rdata : V64_UNDEFINED);
-                                vsp <= vsp - 12'd1;
+                                hs_vsp(vsp - 12'd1);
                             end else begin
                                 stack[sp - 8'd2] <= varr_rdata[31:0];
                                 stack_tag[sp - 8'd2] <= varr_trdata;
                                 sp <= sp - 8'd1;
                             end
-                            ip <= ip + 16'd1;
-                            code_raddr <= 15'(ops_base + ip + 16'd1);
-                            state <= S_FETCH_WAIT;
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
                         end else if (hp_v64 && hp_ret == S_FETCH_WAIT) begin
                             // Array.pop: last slot already addressed.
                             vst_wr(vnat_base, (hp_aslot < hp_alen)
                                 ? varr_rdata : V64_UNDEFINED);
-                            vsp <= vnat_base + 12'd1;
-                            state <= S_FETCH_WAIT;
+                            hs_vsp(vnat_base + 12'd1);
+                            hs_st(S_FETCH_WAIT);
                         end else
-                            state <= hp_ret;
+                            hs_st(hp_ret);
                     end else if (hp_cmd == HP_UNSHIFT) begin
                         if (hp_phase == 3'd0) begin
-                            hp_wval <= varr_rdata;
-                            hp_aslot <= hp_aslot + 7'd1;
-                            hp_phase <= 3'd1;
-                            state <= S_HEAP_AWR;
+                            hs_hp_wval(varr_rdata);
+                            hs_hp_aslot(hp_aslot + 7'd1);
+                            hs_hp_phase(3'd1);
+                            hs_st(S_HEAP_AWR);
                         end else
-                            state <= hp_ret;
+                            hs_st(hp_ret);
                     end else if (hp_cmd == HP_SPLICE) begin
-                        hp_wval <= varr_rdata;
-                        hp_aslot <= hp_aslot - hp_lim[6:0];
-                        state <= S_HEAP_AWR;
+                        hs_hp_wval(varr_rdata);
+                        hs_hp_aslot(hp_aslot - hp_lim[6:0]);
+                        hs_st(S_HEAP_AWR);
                     end else if (hp_cmd == HP_ASSIGN) begin
                         if (hp_phase == 3'd3) begin
                             if (hp_qi + 3'd1 >= hp_qn) begin
                                 // Result already at hp_vbase-2; drop sources.
                                 if (hp_v64)
-                                    vsp <= hp_vbase - 12'd1;
-                                state <= hp_ret;
+                                    hs_vsp(hp_vbase - 12'd1);
+                                hs_st(hp_ret);
                             end else begin
-                                hp_qi <= hp_qi + 3'd1;
+                                hs_hp_qi(hp_qi + 3'd1);
                                 begin
                                     logic [63:0] nsv;
                                     logic src_ok;
@@ -9533,57 +10153,57 @@ module jmr_js_vm #(
                                         src_ok = (stack_tag[hp_vbase[10:0] + {8'd0, hp_qi} + 11'd1] == 3'd1);
                                     end
                                     if (src_ok) begin
-                                        hp_si <= nsi;
-                                        hp_ss <= 5'd0;
-                                        hp_phase <= 3'd0;
-                                        state <= S_HEAP_WAIT;
+                                        hs_hp_si(nsi);
+                                        hs_hp_ss(5'd0);
+                                        hs_hp_phase(3'd0);
+                                        hs_st(S_HEAP_WAIT);
                                     end else
-                                        state <= S_HEAP_WAIT;
+                                        hs_st(S_HEAP_WAIT);
                                 end
                             end
                         end else if (hp_phase == 3'd0) begin
                             if (hp_ss >= (hp_v64 ? vobj_len[hp_si][4:0]
                                                  : obj_n[hp_si][4:0])) begin
-                                hp_phase <= 3'd3;
-                                state <= S_HEAP_WAIT;
+                                hs_hp_phase(3'd3);
+                                hs_st(S_HEAP_WAIT);
                             end else begin
-                                hp_key <= vobj_rdata[79:64];
-                                hp_wval <= vobj_rdata[63:0];
-                                hp_tag <= vobj_trdata;
-                                hp_phase <= 3'd1;
-                                hp_slot <= 5'd0;
-                                hp_len <= hp_tn;
-                                state <= S_HEAP_WAIT;
+                                hs_hp_key(vobj_rdata[79:64]);
+                                hs_hp_wval(vobj_rdata[63:0]);
+                                hs_hp_tag(vobj_trdata);
+                                hs_hp_phase(3'd1);
+                                hs_hp_slot(5'd0);
+                                hs_hp_len(hp_tn);
+                                hs_st(S_HEAP_WAIT);
                             end
                         end else begin
                             // phase 1: scan target for hp_key
                             if (hp_slot < hp_tn[4:0] &&
                                 vobj_rdata[79:64] == hp_key) begin
-                                hp_phase <= 3'd2;
-                                state <= S_HEAP_WR;
+                                hs_hp_phase(3'd2);
+                                hs_st(S_HEAP_WR);
                             end else if (hp_slot + 5'd1 < hp_tn[4:0]) begin
-                                hp_slot <= hp_slot + 5'd1;
-                                state <= S_HEAP_WAIT;
+                                hs_hp_slot(hp_slot + 5'd1);
+                                hs_st(S_HEAP_WAIT);
                             end else if (hp_tn < OBJ_SLOTS[5:0]) begin
-                                hp_slot <= hp_tn[4:0];
-                                hp_tn <= hp_tn + 6'd1;
+                                hs_hp_slot(hp_tn[4:0]);
+                                hs_hp_tn(hp_tn + 6'd1);
                                 vobj_len[hp_oid] <= hp_tn + 6'd1;
                                 e64_poke(6'd2, {3'd0, hp_oid},
                                          {58'd0, hp_tn + 6'd1});
                                 if (!hp_v64)
                                     obj_n[hp_oid] <= hp_tn + 6'd1;
-                                hp_phase <= 3'd2;
-                                state <= S_HEAP_WR;
+                                hs_hp_phase(3'd2);
+                                hs_st(S_HEAP_WR);
                             end else begin
-                                hp_ss <= hp_ss + 5'd1;
-                                hp_phase <= 3'd0;
-                                state <= S_HEAP_WAIT;
+                                hs_hp_ss(hp_ss + 5'd1);
+                                hs_hp_phase(3'd0);
+                                hs_st(S_HEAP_WAIT);
                             end
                         end
                     end else if (hp_slot < hp_len &&
                                  vobj_rdata[79:64] == hp_key) begin
-                        hp_hit <= 1'b1;
-                        hp_rval <= vobj_rdata[63:0];
+                        hs_hp_hit(1'b1);
+                        hs_hp_rval(vobj_rdata[63:0]);
                         if (hp_cmd == HP_GETPROP || hp_cmd == HP_GETIDX) begin
                             if (hp_v64) begin
                                 vst_wr((hp_cmd == HP_GETIDX)
@@ -9603,14 +10223,14 @@ module jmr_js_vm #(
                                 stack_tag[sp - 8'd1] <= vobj_trdata;
                             end
                             if (hp_cmd == HP_GETIDX && hp_v64)
-                                vsp <= vsp - 12'd1;
-                            ip <= ip + 16'd1;
-                            code_raddr <= 15'(ops_base + ip + 16'd1);
-                            state <= S_FETCH_WAIT;
+                                hs_vsp(vsp - 12'd1);
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
                         end else if (hp_cmd == HP_SETPROP ||
                                      hp_cmd == HP_SETIDX) begin
-                            hp_key <= vobj_rdata[79:64];
-                            state <= S_HEAP_WR;
+                            hs_hp_key(vobj_rdata[79:64]);
+                            hs_st(S_HEAP_WR);
                         end else if (hp_cmd == HP_LOOKFN) begin
                             // CALL_METHOD wants a function slot, not any key.
                             if ((hp_v64 &&
@@ -9618,45 +10238,45 @@ module jmr_js_vm #(
                                   vobj_rdata[47:44] != 4'd7)) ||
                                 (!hp_v64 && vobj_trdata != 3'd4)) begin
                                 if (hp_slot + 5'd1 < hp_len[4:0]) begin
-                                    hp_slot <= hp_slot + 5'd1;
-                                    state <= S_HEAP_WAIT;
+                                    hs_hp_slot(hp_slot + 5'd1);
+                                    hs_st(S_HEAP_WAIT);
                                 end else begin
-                                    hp_hit <= 1'b0;
+                                    hs_hp_hit(1'b0);
                                     if (hp_phase == 3'd0 &&
                                         hp_proto[63:48] == V64_TAG_PREFIX &&
                                         hp_proto[47:44] == V64_KIND_OBJECT &&
                                         hp_proto[31:0] < MAX_OBJ &&
                                         vobj_alloc[hp_proto[12:0]] == 2'd1) begin
-                                        hp_phase <= 3'd1;
-                                        hp_oid <= hp_proto[12:0];
-                                        hp_len <= vobj_len[hp_proto[12:0]];
-                                        hp_slot <= 5'd0;
-                                        state <= S_HEAP_WAIT;
+                                        hs_hp_phase(3'd1);
+                                        hs_hp_oid(hp_proto[12:0]);
+                                        hs_hp_len(vobj_len[hp_proto[12:0]]);
+                                        hs_hp_slot(5'd0);
+                                        hs_st(S_HEAP_WAIT);
                                     end else begin
-                                        hp_rval <= V64_UNDEFINED;
-                                        state <= hp_ret;
+                                        hs_hp_rval(V64_UNDEFINED);
+                                        hs_st(hp_ret);
                                     end
                                 end
                             end else begin
-                                hp_rval <= vobj_rdata[63:0];
-                                hp_tag <= vobj_trdata;
-                                state <= hp_ret;
+                                hs_hp_rval(vobj_rdata[63:0]);
+                                hs_hp_tag(vobj_trdata);
+                                hs_st(hp_ret);
                             end
                         end else if (hp_cmd == HP_OGETI)
-                            state <= hp_ret;
+                            hs_st(hp_ret);
                         else
-                            state <= hp_ret;
+                            hs_st(hp_ret);
                     end else if (hp_slot + 5'd1 < hp_len[4:0]) begin
                         // Latch __proto__ while walking so tagged miss can
                         // follow it without a second combo scan.
                         if (!hp_v64 &&
                             (hp_cmd == HP_GETPROP || hp_cmd == HP_LOOKFN) &&
                             vobj_rdata[79:64] == id_proto)
-                            hp_proto <= vobj_rdata[63:0];
-                        hp_slot <= hp_slot + 5'd1;
-                        state <= S_HEAP_WAIT;
+                            hs_hp_proto(vobj_rdata[63:0]);
+                        hs_hp_slot(hp_slot + 5'd1);
+                        hs_st(S_HEAP_WAIT);
                     end else begin
-                        hp_hit <= 1'b0;
+                        hs_hp_hit(1'b0);
                         if (hp_cmd == HP_GETPROP && hp_phase == 3'd0) begin
                             begin
                                 logic [15:0] gip;
@@ -9671,31 +10291,31 @@ module jmr_js_vm #(
                                                     hp_key[14:0])
                                                 gip = cls_mip[c][m];
                                 if (gip != 16'hFFFF && hp_v64) begin
-                                    vsp <= vsp - 12'd1;
-                                    vcall_value <= 1'b0;
-                                    vcall_entry <= gip;
-                                    vcall_argc <= 12'd0;
-                                    vcall_set_this <= 1'b1;
-                                    vcall_this <= v64_handle(
+                                    hs_vsp(vsp - 12'd1);
+                                    hs_vcall_value(1'b0);
+                                    hs_vcall_entry(gip);
+                                    hs_vcall_argc(12'd0);
+                                    hs_vcall_set_this(1'b1);
+                                    hs_vcall_this(v64_handle(
                                         4'd5, vobj_gen[hp_oid],
                                         {19'd0, hp_oid}
-                                    );
-                                    vcall_ctor_val <= V64_UNDEFINED;
-                                    valloc_kind <= 2'd3;
-                                    valloc_i <= {4'd0, venv_next};
-                                    valloc_retried <= 1'b0;
-                                    state <= S_V64_ALLOC;
+                                    ));
+                                    hs_vcall_ctor_val(V64_UNDEFINED);
+                                    hs_valloc_kind(2'd3);
+                                    hs_valloc_i({4'd0, venv_next});
+                                    hs_valloc_retried(1'b0);
+                                    hs_st(S_V64_ALLOC);
                                 end else if (hp_proto[63:48] == V64_TAG_PREFIX &&
                                     hp_proto[47:44] == V64_KIND_OBJECT &&
                                     hp_proto[31:0] < MAX_OBJ &&
                                     vobj_alloc[hp_proto[12:0]] == 2'd1 &&
                                     vobj_gen[hp_proto[12:0]] ==
                                         hp_proto[43:32]) begin
-                                    hp_phase <= 3'd1;
-                                    hp_oid <= hp_proto[12:0];
-                                    hp_len <= vobj_len[hp_proto[12:0]];
-                                    hp_slot <= 5'd0;
-                                    state <= S_HEAP_WAIT;
+                                    hs_hp_phase(3'd1);
+                                    hs_hp_oid(hp_proto[12:0]);
+                                    hs_hp_len(vobj_len[hp_proto[12:0]]);
+                                    hs_hp_slot(5'd0);
+                                    hs_st(S_HEAP_WAIT);
                                 end else begin
                                     if (hp_v64) begin
                                         vst_wr(vsp - 12'd1, V64_UNDEFINED);
@@ -9704,10 +10324,9 @@ module jmr_js_vm #(
                                         stack[sp - 8'd1] <= 32'd0;
                                         stack_tag[sp - 8'd1] <= 3'd5;
                                     end
-                                    ip <= ip + 16'd1;
-                                    code_raddr <=
-                                        15'(ops_base + ip + 16'd1);
-                                    state <= S_FETCH_WAIT;
+                                    hs_ip(ip + 16'd1);
+                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_st(S_FETCH_WAIT);
                                 end
                             end
                         end else if (hp_cmd == HP_LOOKFN && hp_phase == 3'd0 &&
@@ -9717,50 +10336,50 @@ module jmr_js_vm #(
                               hp_proto[31:0] < MAX_OBJ &&
                               vobj_alloc[hp_proto[12:0]] == 2'd1) ||
                              (!hp_v64 && hp_proto[15:0] != 16'hFFFF))) begin
-                            hp_phase <= 3'd1;
-                            hp_oid <= hp_proto[12:0];
-                            hp_len <= hp_v64 ? vobj_len[hp_proto[12:0]]
-                                             : obj_n[hp_proto[12:0]];
-                            hp_slot <= 5'd0;
-                            state <= S_HEAP_WAIT;
+                            hs_hp_phase(3'd1);
+                            hs_hp_oid(hp_proto[12:0]);
+                            hs_hp_len(hp_v64 ? vobj_len[hp_proto[12:0]]
+                                             : obj_n[hp_proto[12:0]]);
+                            hs_hp_slot(5'd0);
+                            hs_st(S_HEAP_WAIT);
                         end else if ((hp_cmd == HP_SETPROP ||
                                       hp_cmd == HP_SETIDX) &&
                                      hp_len < OBJ_SLOTS[5:0]) begin
-                            hp_slot <= hp_len[4:0];
+                            hs_hp_slot(hp_len[4:0]);
                             vobj_len[hp_oid] <= hp_len + 6'd1;
                             e64_poke(6'd2, {3'd0, hp_oid},
                                      {58'd0, hp_len + 6'd1});
                             if (!hp_v64)
                                 obj_n[hp_oid] <= hp_len + 6'd1;
-                            state <= S_HEAP_WR;
+                            hs_st(S_HEAP_WR);
                         end else if (hp_cmd == HP_SETPROP ||
                                      hp_cmd == HP_SETIDX) begin
                             machine_fault <= 1'b1; fault_code <= 8'd3;
-                            running <= 1'b0; state <= S_DONE;
+                            running <= 1'b0; hs_st(S_DONE);
                         end else if (hp_cmd == HP_GETIDX) begin
                             if (hp_v64) begin
                                 vst_wr(vsp - 12'd2, V64_UNDEFINED);
-                                vsp <= vsp - 12'd1;
+                                hs_vsp(vsp - 12'd1);
                             end else begin
                                 stack[sp - 8'd2] <= 32'd0;
                                 stack_tag[sp - 8'd2] <= 3'd5;
                                 sp <= sp - 8'd1;
                             end
-                            ip <= ip + 16'd1;
-                            code_raddr <= 15'(ops_base + ip + 16'd1);
-                            state <= S_FETCH_WAIT;
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
                         end else if (hp_cmd == HP_GETPROP) begin
                             if (hp_v64) begin
                                 vst_wr(vsp - 12'd1, V64_UNDEFINED);
                                 vst_win[0] <= V64_UNDEFINED;
                             end
-                            ip <= ip + 16'd1;
-                            code_raddr <= 15'(ops_base + ip + 16'd1);
-                            state <= S_FETCH_WAIT;
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
                         end else begin
-                            hp_rval <= hp_v64 ? V64_UNDEFINED : 64'd0;
-                            hp_hit <= 1'b0;
-                            state <= hp_ret;
+                            hs_hp_rval(hp_v64 ? V64_UNDEFINED : 64'd0);
+                            hs_hp_hit(1'b0);
+                            hs_st(hp_ret);
                         end
                     end
                 end
@@ -9771,15 +10390,15 @@ module jmr_js_vm #(
                             e64_poke(6'd10, {6'd0, hp_eid},
                                      {59'd0, venv_len[hp_eid] + 5'd1});
                         end
-                        vsp <= vsp - 12'd1;
-                        ip <= ip + 16'd1;
-                        code_raddr <= 15'(ops_base + ip + 16'd1);
-                        hp_env <= 1'b0;
-                        state <= S_FETCH_WAIT;
+                        hs_vsp(vsp - 12'd1);
+                        hs_ip(ip + 16'd1);
+                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_hp_env(1'b0);
+                        hs_st(S_FETCH_WAIT);
                     end else if (hp_cmd == HP_OSETI) begin
                         if (hp_qi + 3'd1 < hp_qn) begin
-                            hp_qi <= hp_qi + 3'd1;
-                            state <= S_HEAP_WR;
+                            hs_hp_qi(hp_qi + 3'd1);
+                            hs_st(S_HEAP_WR);
                         end else begin
                             if (vobj_len[hp_oid] < {3'd0, hp_qn} + {1'b0, hp_slot}) begin
                                 vobj_len[hp_oid] <=
@@ -9791,55 +10410,55 @@ module jmr_js_vm #(
                                         {3'd0, hp_qn} + {1'b0, hp_slot};
                             end else if (!hp_v64)
                                 obj_n[hp_oid] <= vobj_len[hp_oid];
-                            state <= hp_ret;
+                            hs_st(hp_ret);
                         end
                     end else if (hp_cmd == HP_SETPROP || hp_cmd == HP_SETIDX)
                     begin
                         // Image.src jmr:spr:N also writes width/height
                         // (phase 3→4→5). Do not combo-walk slots for that.
                         if (hp_phase == 3'd3) begin
-                            hp_key <= id_width;
-                            hp_wval <= v64_int32_number({16'd0, hp_spr_w});
-                            hp_slot <= 5'd0;
-                            hp_len <= vobj_len[hp_oid];
-                            hp_phase <= 3'd4;
-                            hp_hit <= 1'b0;
-                            state <= S_HEAP_WAIT;
+                            hs_hp_key(id_width);
+                            hs_hp_wval(v64_int32_number({16'd0, hp_spr_w}));
+                            hs_hp_slot(5'd0);
+                            hs_hp_len(vobj_len[hp_oid]);
+                            hs_hp_phase(3'd4);
+                            hs_hp_hit(1'b0);
+                            hs_st(S_HEAP_WAIT);
                         end else if (hp_phase == 3'd4) begin
-                            hp_key <= id_height;
-                            hp_wval <= v64_int32_number({16'd0, hp_spr_h});
-                            hp_slot <= 5'd0;
-                            hp_len <= vobj_len[hp_oid];
-                            hp_phase <= 3'd5;
-                            hp_hit <= 1'b0;
-                            state <= S_HEAP_WAIT;
+                            hs_hp_key(id_height);
+                            hs_hp_wval(v64_int32_number({16'd0, hp_spr_h}));
+                            hs_hp_slot(5'd0);
+                            hs_hp_len(vobj_len[hp_oid]);
+                            hs_hp_phase(3'd5);
+                            hs_hp_hit(1'b0);
+                            hs_st(S_HEAP_WAIT);
                         end else if (hp_phase == 3'd6) begin
                             // Image.onload = fn — invoke now (title img ready).
                             vst_wr(vsp - 12'd2, `VST_AT(vsp - 12'd1));
-                            vsp <= vsp - 12'd1;
-                            vcall_value <= 1'b1;
-                            vcall_argc <= 12'd0;
-                            vcall_set_this <= 1'b1;
-                            vcall_this <= v64_handle(
+                            hs_vsp(vsp - 12'd1);
+                            hs_vcall_value(1'b1);
+                            hs_vcall_argc(12'd0);
+                            hs_vcall_set_this(1'b1);
+                            hs_vcall_this(v64_handle(
                                 4'd5, vobj_gen[hp_oid], {19'd0, hp_oid}
-                            );
-                            vcall_ctor_val <= V64_UNDEFINED;
-                            valloc_kind <= 2'd3;
-                            valloc_i <= {4'd0, venv_next};
-                            valloc_retried <= 1'b0;
-                            ip <= ip + 16'd1;
-                            state <= S_V64_ALLOC;
+                            ));
+                            hs_vcall_ctor_val(V64_UNDEFINED);
+                            hs_valloc_kind(2'd3);
+                            hs_valloc_i({4'd0, venv_next});
+                            hs_valloc_retried(1'b0);
+                            hs_ip(ip + 16'd1);
+                            hs_st(S_V64_ALLOC);
                         end else if (hp_v64) begin
                             if (hp_cmd == HP_SETIDX) begin
                                 vst_wr(vsp - 12'd3, hp_wval);
-                                vsp <= vsp - 12'd2;
+                                hs_vsp(vsp - 12'd2);
                             end else begin
                                 vst_wr(vsp - 12'd2, hp_wval);
-                                vsp <= vsp - 12'd1;
+                                hs_vsp(vsp - 12'd1);
                             end
-                            ip <= ip + 16'd1;
-                            code_raddr <= 15'(ops_base + ip + 16'd1);
-                            state <= S_FETCH_WAIT;
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
                         end else begin
                             if (hp_cmd == HP_SETIDX) begin
                                 stack[sp - 8'd3] <= hp_wval[31:0];
@@ -9850,74 +10469,75 @@ module jmr_js_vm #(
                                 stack_tag[sp - 8'd2] <= hp_tag;
                                 sp <= sp - 8'd1;
                             end
-                            ip <= ip + 16'd1;
-                            code_raddr <= 15'(ops_base + ip + 16'd1);
-                            state <= S_FETCH_WAIT;
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
                         end
                     end else if (hp_cmd == HP_ASSIGN) begin
-                        hp_ss <= hp_ss + 5'd1;
-                        hp_phase <= 3'd0;
-                        state <= S_HEAP_WAIT;
+                        hs_hp_ss(hp_ss + 5'd1);
+                        hs_hp_phase(3'd0);
+                        hs_st(S_HEAP_WAIT);
                     end else
-                        state <= hp_ret;
+                        hs_st(hp_ret);
                 end
                 S_HEAP_AWR: begin
                     if (hp_cmd == HP_UNSHIFT) begin
                         if (hp_aslot > 7'd1) begin
-                            hp_aslot <= hp_aslot - 7'd2;
-                            hp_phase <= 3'd0;
-                            state <= S_HEAP_WAIT;
+                            hs_hp_aslot(hp_aslot - 7'd2);
+                            hs_hp_phase(3'd0);
+                            hs_st(S_HEAP_WAIT);
                         end else begin
-                            hp_aslot <= 7'd0;
-                            hp_wval <= hp_rval;
-                            hp_cmd <= HP_ASETI;
-                            state <= S_HEAP_AWR;
+                            hs_hp_aslot(7'd0);
+                            hs_hp_wval(hp_rval);
+                            hs_hp_cmd(HP_ASETI);
+                            hs_st(S_HEAP_AWR);
                         end
                     end else if (hp_cmd == HP_SPLICE) begin
                         if (hp_aslot + hp_lim[6:0] + 7'd1 < hp_alen) begin
-                            hp_aslot <= hp_aslot + hp_lim[6:0] + 7'd1;
-                            state <= S_HEAP_WAIT;
+                            hs_hp_aslot(hp_aslot + hp_lim[6:0] + 7'd1);
+                            hs_st(S_HEAP_WAIT);
                         end else
-                            state <= hp_ret;
+                            hs_st(hp_ret);
                     end else if (hp_cmd == HP_PUSH) begin
                         if (hp_qi + 3'd1 < hp_qn) begin
-                            hp_qi <= hp_qi + 3'd1;
-                            hp_aslot <= hp_aslot + 7'd1;
-                            hp_wval <= hp_qv[hp_qi[1:0] + 2'd1];
-                            state <= S_HEAP_AWR;
+                            hs_hp_qi(hp_qi + 3'd1);
+                            hs_hp_aslot(hp_aslot + 7'd1);
+                            hs_hp_wval(hp_qv[hp_qi[1:0] + 2'd1]);
+                            hs_st(S_HEAP_AWR);
                         end else
-                            state <= hp_ret;
+                            hs_st(hp_ret);
                     end else if (hp_cmd == HP_ARRSET) begin
                         if (hp_v64) begin
                             vst_wr(vsp - 12'd3, hp_wval);
-                            vsp <= vsp - 12'd2;
+                            hs_vsp(vsp - 12'd2);
                         end else begin
                             stack[sp - 8'd3] <= hp_wval[31:0];
                             stack_tag[sp - 8'd3] <= hp_tag;
                             sp <= sp - 8'd2;
                         end
-                        ip <= ip + 16'd1;
-                        code_raddr <= 15'(ops_base + ip + 16'd1);
-                        state <= S_FETCH_WAIT;
+                        hs_ip(ip + 16'd1);
+                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_st(S_FETCH_WAIT);
                     end else
-                        state <= hp_ret;
+                        hs_st(hp_ret);
                 end
                 S_HEAP_FILL: begin
                     // Value64 stack→array: wait one clock for vst_rdata
                     // (1W1R), then write. Combo `VST_AT(hp_vbase+i) was a
                     // second port and killed ram_style=block.
-                    if (hp_from_stack && hp_v64 && hp_phase != 3'd1) begin
-                        hp_phase <= 3'd1;
-                        state <= S_HEAP_FILL;
+                    // Wait one clock for vst_rdata (v64) or stack_rdata (32-bit).
+                    if (hp_from_stack && hp_phase != 3'd1) begin
+                        hs_hp_phase(3'd1);
+                        hs_st(S_HEAP_FILL);
                     end else if ({1'b0, hp_aslot} + 8'd1 < hp_lim) begin
-                        hp_aslot <= hp_aslot + 7'd1;
-                        hp_phase <= 3'd0;
-                        state <= S_HEAP_FILL;
+                        hs_hp_aslot(hp_aslot + 7'd1);
+                        hs_hp_phase(3'd0);
+                        hs_st(S_HEAP_FILL);
                     end else if (hp_cmd == HP_ARRSET) begin
-                        hp_aslot <= hp_lim[6:0];
-                        hp_wval <= hp_rval;
-                        hp_phase <= 3'd0;
-                        state <= S_HEAP_AWR;
+                        hs_hp_aslot(hp_lim[6:0]);
+                        hs_hp_wval(hp_rval);
+                        hs_hp_phase(3'd0);
+                        hs_st(S_HEAP_AWR);
                     end else begin
                         // MAKE_ARRAY handle after SRAM copy — writing it first
                         // made a[0] the array itself (PACMAN ARRAY_GET fault=255).
@@ -9928,8 +10548,8 @@ module jmr_js_vm #(
                                 stack[hp_vbase[10:0]] <= hp_rval[31:0];
                                 stack_tag[hp_vbase[10:0]] <= 3'd2;
                             end
-                            hp_make_arr <= 1'b0;
-                            hp_phase <= 3'd0;
+                            hs_hp_make_arr(1'b0);
+                            hs_hp_phase(3'd0);
                             // MAKE_ARRAY of 16+ drops vsp by >=15; the TOS
                             // window only slides ±1/clock (or FF-copy if
                             // sh<16, which still misses `this` below 16
@@ -9945,12 +10565,12 @@ module jmr_js_vm #(
                                 // hold_win skips the vst_we window path, so
                                 // plant TOS here (handle is hp_rval).
                                 vst_win[0] <= hp_rval;
-                                state <= S_V64_WIN_FILL;
+                                hs_st(S_V64_WIN_FILL);
                             end else
-                                state <= hp_ret;
+                                hs_st(hp_ret);
                         end else begin
-                            hp_phase <= 3'd0;
-                            state <= hp_ret;
+                            hs_hp_phase(3'd0);
+                            hs_st(hp_ret);
                         end
                     end
                 end
@@ -9960,7 +10580,7 @@ module jmr_js_vm #(
                     if (env_sp == 6'd0 || rel_i >= rel_lim) begin
                         env_free_n <= rel_nn;
                         env_sp <= rel_saved;
-                        state <= rel_ret;
+                        hs_st(rel_ret);
                     end else begin
                         begin
                             logic dup;
@@ -9990,17 +10610,17 @@ module jmr_js_vm #(
                     if (valloc_i < MAX_OBJ &&
                         vobj_alloc[valloc_i[12:0]] == 2'd0) begin
                         vfree_ok <= 1'b1;
-                        state <= hp_ret;
+                        hs_st(hp_ret);
                     end else if (valloc_i + 14'd1 < MAX_OBJ) begin
-                        valloc_i <= valloc_i + 14'd1;
+                        hs_valloc_i(valloc_i + 14'd1);
                     end else begin
                         vfree_ok <= 1'b0;
-                        state <= hp_ret;
+                        hs_st(hp_ret);
                     end
                 end
                 S_FREE_ARR: begin
                     if (vfree_arr_long && valloc_i < 14'(MAX_ARR_SHORT)) begin
-                        valloc_i <= 14'(MAX_ARR_SHORT);
+                        hs_valloc_i(14'(MAX_ARR_SHORT));
                     end else if (valloc_i < MAX_ARR &&
                         !varr_valid[valloc_i[11:0]] &&
                         (valloc_i < 14'(MAX_ARR_SHORT) ||
@@ -10008,12 +10628,12 @@ module jmr_js_vm #(
                         (!vfree_arr_long ||
                          valloc_i >= 14'(MAX_ARR_SHORT))) begin
                         vfree_ok <= 1'b1;
-                        state <= hp_ret;
+                        hs_st(hp_ret);
                     end else if (valloc_i + 14'd1 < MAX_ARR) begin
-                        valloc_i <= valloc_i + 14'd1;
+                        hs_valloc_i(valloc_i + 14'd1);
                     end else begin
                         vfree_ok <= 1'b0;
-                        state <= hp_ret;
+                        hs_st(hp_ret);
                     end
                 end
                 S_ARR_PROMOTE: begin
@@ -10022,7 +10642,7 @@ module jmr_js_vm #(
                         vprom_done <= 1'b1;
                         vprom_copy <= 1'b0;
                         hp_prom_wr <= 1'b0;
-                        state <= vprom_ret;
+                        hs_st(vprom_ret);
                     end else if (!vprom_copy) begin
                         if (valloc_i < 14'(MAX_ARR_LONG) &&
                             !vlong_used[valloc_i[7:0]]) begin
@@ -10030,15 +10650,15 @@ module jmr_js_vm #(
                             hp_prom_phys <= valloc_i[7:0];
                             vprom_copy <= 1'b1;
                             dc_i <= 8'd0;
-                            hp_phase <= 3'd0;
+                            hs_hp_phase(3'd0);
                             hp_prom_wr <= 1'b0;
                         end else if (valloc_i + 14'd1 < 14'(MAX_ARR_LONG)) begin
-                            valloc_i <= valloc_i + 14'd1;
+                            hs_valloc_i(valloc_i + 14'd1);
                         end else begin
                             machine_fault <= 1'b1;
                             fault_code <= 8'd3;
                             running <= 1'b0;
-                            state <= S_DONE;
+                            hs_st(S_DONE);
                         end
                     end else if (dc_i >= varr_len[hp_aid]) begin
                         varr_long[hp_aid] <= 1'b1;
@@ -10046,35 +10666,54 @@ module jmr_js_vm #(
                         vprom_done <= 1'b1;
                         vprom_copy <= 1'b0;
                         hp_prom_wr <= 1'b0;
-                        state <= vprom_ret;
+                        hs_st(vprom_ret);
                     end else if (hp_phase == 3'd0) begin
-                        hp_cmd <= HP_AGETI;
-                        hp_v64 <= 1'b1;
-                        hp_aslot <= dc_i[6:0];
-                        hp_alen <= varr_len[hp_aid];
-                        hp_ret <= S_ARR_PROMOTE;
-                        hp_phase <= 3'd1;
+                        hs_hp_cmd(HP_AGETI);
+                        hs_hp_v64(1'b1);
+                        hs_hp_aslot(dc_i[6:0]);
+                        hs_hp_alen(varr_len[hp_aid]);
+                        hs_hp_ret(S_ARR_PROMOTE);
+                        hs_hp_phase(3'd1);
                         hp_prom_wr <= 1'b0;
-                        state <= S_HEAP_WAIT;
+                        hs_st(S_HEAP_WAIT);
                     end else begin
-                        hp_cmd <= HP_ASETI;
-                        hp_v64 <= 1'b1;
-                        hp_from_stack <= 1'b0;
-                        hp_aslot <= dc_i[6:0];
-                        hp_wval <= hp_rval;
-                        hp_ret <= S_ARR_PROMOTE;
-                        hp_phase <= 3'd0;
+                        hs_hp_cmd(HP_ASETI);
+                        hs_hp_v64(1'b1);
+                        hs_hp_from_stack(1'b0);
+                        hs_hp_aslot(dc_i[6:0]);
+                        hs_hp_wval(hp_rval);
+                        hs_hp_ret(S_ARR_PROMOTE);
+                        hs_hp_phase(3'd0);
                         dc_i <= dc_i + 8'd1;
                         hp_prom_wr <= 1'b1;
-                        state <= S_HEAP_AWR;
+                        hs_st(S_HEAP_AWR);
                     end
                 end
                 S_V64_BIND: begin
+                    if (state != S_V64_BIND) begin
+                        hs_st(S_V64_BIND);
+                        // IIFE CALL_VAL clocks bind_* in exec then leave_hold
+                        // → BIND. ALLOC/CTOR_PAD already wrote parent bind_*
+                        // and hs_st(BIND) last cycle (state==BIND here).
+                        // Same-cycle bind_n==0 used reset bind_ret=S_IDLE →
+                        // hs_st(IDLE) (eip=0, vsp=0, w0 still Fn).
+                        if (jsb_flags[3]) begin
+                            bind_mode <= e64_bind_mode_q;
+                            bind_k <= e64_bind_k_q;
+                            bind_n <= e64_bind_n_q;
+                            bind_argc <= e64_bind_argc_q;
+                            bind_base <= e64_bind_base_q;
+                            bind_src <= e64_bind_src_q;
+                            bind_vsp_next <= e64_bind_vsp_next_q;
+                            bind_ip <= e64_bind_ip_q;
+                            bind_ret <= st_t'(e64_bind_ret_q);
+                            bind_rd_arm <= e64_bind_rd_arm_q;
+                        end
                     // bind_mode 0: dest[k]=(k<argc)?src[k]:UNDEF, k=0..n-1
                     // bind_mode 1: dest[k]=dest[k+1] (drop callee), k=0..n-1
                     // bind_mode 2: dest[k+1]=src[k] downward
                     // bind_mode 3: write bind_ins at bind_base (after mode 2)
-                    if (bind_mode == 2'd3) begin
+                    end else if (bind_mode == 2'd3) begin
                         vst_wr(bind_base, bind_ins);
                         begin
                             integer fd;
@@ -10084,17 +10723,21 @@ module jmr_js_vm #(
                         end
                         bind_armed <= 1'b0;
                         bind_rd_arm <= 1'b0;
-                        vsp <= bind_vsp_next;
-                        state <= bind_ret;
+                        hs_vsp(bind_vsp_next);
+                        hs_st(bind_ret);
+                        if (vcsp_ff != 8'd0)
+                            hs_vcsp(vcsp_ff);
                     end else if (bind_n == 8'd0) begin
                         bind_armed <= 1'b0;
                         bind_rd_arm <= 1'b0;
-                        vsp <= bind_vsp_next;
+                        hs_vsp(bind_vsp_next);
                         if (bind_mode != 2'd1) begin
-                            ip <= bind_ip;
-                            code_raddr <= 15'(ops_base + bind_ip);
+                            hs_ip(bind_ip);
+                            hs_code(15'(ops_base + bind_ip));
                         end
-                        state <= bind_ret;
+                        hs_st(bind_ret);
+                        if (vcsp_ff != 8'd0)
+                            hs_vcsp(vcsp_ff);
                     end else if (!bind_rd_arm) begin
                         bind_rd_arm <= 1'b1;
                         bind_armed <= 1'b1;
@@ -10120,12 +10763,14 @@ module jmr_js_vm #(
                                 bind_k <= bind_k - 8'd1;
                         end else if (bind_k + 8'd1 >= bind_n) begin
                             bind_armed <= 1'b0;
-                            vsp <= bind_vsp_next;
+                            hs_vsp(bind_vsp_next);
                             if (bind_mode != 2'd1) begin
-                                ip <= bind_ip;
-                                code_raddr <= 15'(ops_base + bind_ip);
+                                hs_ip(bind_ip);
+                                hs_code(15'(ops_base + bind_ip));
                             end
-                            state <= bind_ret;
+                            hs_st(bind_ret);
+                            if (vcsp_ff != 8'd0)
+                                hs_vcsp(vcsp_ff);
                         end else
                             bind_k <= bind_k + 8'd1;
                     end
@@ -10135,11 +10780,11 @@ module jmr_js_vm #(
                         bind_rd_arm <= 1'b1;
                     end else if (minmax_k >= minmax_n) begin
                         vst_wr(minmax_base, minmax_acc);
-                        vsp <= minmax_base + 12'd1;
-                        ip <= ip + 16'd1;
-                        code_raddr <= 15'(ops_base + ip + 16'd1);
+                        hs_vsp(minmax_base + 12'd1);
+                        hs_ip(ip + 16'd1);
+                        hs_code(15'(ops_base + ip + 16'd1));
                         bind_rd_arm <= 1'b0;
-                        state <= S_FETCH_WAIT;
+                        hs_st(S_FETCH_WAIT);
                     end else begin
                         logic [63:0] arg;
                         arg = vst_rdata;
@@ -10158,9 +10803,20 @@ module jmr_js_vm #(
                     // two clocks (addr, then vst_rdata). Starts at i=1:
                     // win[0] already has the MAKE_ARRAY/RET_VAL handle.
                     vst_hold_win <= 1'b1;
-                    if (!vst_refill_arm) begin
+                    // Exec RET_VAL/RETURN clocks refill_* into e64_*_q and
+                    // leave_hold→WIN_FILL. Parent vst_refill_ret stays
+                    // reset-IDLE unless HEAP MAKE_ARRAY wrote it — then
+                    // hs_st(IDLE) after ctor `push(new Particle)` (INVADERS
+                    // parks before rAF(animate); IPTRACE 85 then mux ip_ff).
+                    if (vst_refill_ret == S_IDLE) begin
+                        vst_refill_i <= e64_vst_refill_i_q;
+                        vst_refill_arm <= e64_vst_refill_arm_q;
+                        vst_refill_ret <= st_t'(e64_vst_refill_ret_q);
+                        vst_hold_win <= e64_vst_hold_win_q;
+                        hs_st(S_V64_WIN_FILL);
+                    end else if (!vst_refill_arm) begin
                         vst_refill_arm <= 1'b1;
-                        state <= S_V64_WIN_FILL;
+                        hs_st(S_V64_WIN_FILL);
                     end else begin
                         vst_win[vst_refill_i] <= vst_rdata;
                         // +1 fills every live slot (ARRAY_SET needs win[2]
@@ -10169,11 +10825,13 @@ module jmr_js_vm #(
                             ({8'd0, vst_refill_i} + 12'd1 >= vsp)) begin
                             vst_hold_win <= 1'b0;
                             vst_refill_arm <= 1'b0;
-                            state <= vst_refill_ret;
+                            hs_st(vst_refill_ret);
+                            // So the next exec-initiated refill can seed.
+                            vst_refill_ret <= S_IDLE;
                         end else begin
                             vst_refill_i <= vst_refill_i + 4'd1;
                             vst_refill_arm <= 1'b0;
-                            state <= S_V64_WIN_FILL;
+                            hs_st(S_V64_WIN_FILL);
                         end
                     end
                 end
@@ -10207,9 +10865,9 @@ module jmr_js_vm #(
                                     vars[var_this] <= oid;
                                     var_tag[var_this] <= 3'd1;
                                 end
-                                ip <= fn_entry(fip);
-                                code_raddr <= 15'(ops_base + fn_entry(fip));
-                                state <= S_FETCH_WAIT;
+                                hs_ip(fn_entry(fip));
+                                hs_code(15'(ops_base + fn_entry(fip)));
+                                hs_st(S_FETCH_WAIT);
                             end
                         end else begin
                             begin
@@ -10218,9 +10876,9 @@ module jmr_js_vm #(
                                 stack[sp - ac - 8'd1] <= 32'sd0;
                                 stack_tag[sp - ac - 8'd1] <= 3'd5;
                                 sp <= sp - ac;
-                                ip <= ip + 16'd1;
-                                code_raddr <= 15'(ops_base + ip + 16'd1);
-                                state <= S_FETCH_WAIT;
+                                hs_ip(ip + 16'd1);
+                                hs_code(15'(ops_base + ip + 16'd1));
+                                hs_st(S_FETCH_WAIT);
                             end
                         end
                     end else if (hp_hit &&
@@ -10239,22 +10897,22 @@ module jmr_js_vm #(
                             if (fd >= 0 && fd < 16)
                                 vst_win[fd[3:0]] <= hp_rval;
                         end
-                        vcall_value <= 1'b1;
-                        vcall_set_this <= 1'b1;
-                        vcall_ctor_val <= V64_UNDEFINED;
-                        valloc_kind <= 2'd3;
-                        valloc_i <= {4'd0, venv_next};
-                        valloc_retried <= 1'b0;
-                        state <= S_V64_ALLOC;
+                        hs_vcall_value(1'b1);
+                        hs_vcall_set_this(1'b1);
+                        hs_vcall_ctor_val(V64_UNDEFINED);
+                        hs_valloc_kind(2'd3);
+                        hs_valloc_i({4'd0, venv_next});
+                        hs_valloc_retried(1'b0);
+                        hs_st(S_V64_ALLOC);
                     end else begin
                         vst_wr(vnat_base, (vobj_builtin[hp_oid] == 4'd6)
                             ? v64_handle(4'd3, 12'd0, 32'd0)
                             : (vobj_builtin[hp_oid] != 4'd0)
                             ? vcall_this : V64_UNDEFINED);
-                        vsp <= vnat_base + 12'd1;
-                        ip <= ip + 16'd1;
-                        code_raddr <= 15'(ops_base + ip + 16'd1);
-                        state <= S_FETCH_WAIT;
+                        hs_vsp(vnat_base + 12'd1);
+                        hs_ip(ip + 16'd1);
+                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_st(S_FETCH_WAIT);
                     end
                 end
                 S_V64_FE_ELEM: begin
@@ -10262,7 +10920,7 @@ module jmr_js_vm #(
                         stack[sp - 8'd1] <= hp_rval[31:0];
                         stack_tag[sp - 8'd1] <= hp_tag;
                         arm_release_env(cstack_env[csp - 7'd1], S_FETCH_WAIT);
-                        ip <= cstack_ip[csp - 7'd2];
+                        hs_ip(cstack_ip[csp - 7'd2]);
                         this_obj <= cstack_this[csp - 7'd2];
                         if (this_ok) begin
                             vars[var_this] <= (cstack_this[csp - 7'd2] == 16'hFFFF)
@@ -10272,12 +10930,12 @@ module jmr_js_vm #(
                                                  ? 3'd5 : 3'd1;
                         end
                         csp <= csp - 7'd2;
-                        code_raddr <= 15'(ops_base + cstack_ip[csp - 7'd2]);
+                        hs_code(15'(ops_base + cstack_ip[csp - 7'd2]));
                     end else begin
                     vst_wr(vfe_base, hp_rval);
-                    vsp <= vfe_base + 12'd1;
-                    ip <= vfe_ret;
-                    code_raddr <= 15'(ops_base + vfe_ret);
+                    hs_vsp(vfe_base + 12'd1);
+                    hs_ip(vfe_ret);
+                    hs_code(15'(ops_base + vfe_ret));
                     if (vfe_sp != 4'd0) begin
                         vfe_arr <= vfe_arr_s[vfe_sp - 4'd1];
                         vfe_fn <= vfe_fn_s[vfe_sp - 4'd1];
@@ -10293,7 +10951,7 @@ module jmr_js_vm #(
                         vfe_mode <= 2'd0;
                         vfe_map <= V64_UNDEFINED;
                     end
-                    state <= S_FETCH_WAIT;
+                    hs_st(S_FETCH_WAIT);
                     end
                 end
                 S_V64_FE_FILTER: begin
@@ -10304,30 +10962,30 @@ module jmr_js_vm #(
                             varr_len[vfe_map[11:0]] <= fl + 8'd1;
                             e64_poke(6'd6, {4'd0, vfe_map[11:0]},
                                      {56'd0, fl + 8'd1});
-                            hp_cmd <= HP_ASETI;
-                            hp_v64 <= 1'b1;
-                            hp_from_stack <= 1'b0;
-                            hp_aid <= vfe_map[11:0];
-                            hp_aslot <= fl[6:0];
-                            hp_wval <= hp_rval;
-                            hp_ret <= S_V64_FOREACH;
-                            state <= S_HEAP_AWR;
+                            hs_hp_cmd(HP_ASETI);
+                            hs_hp_v64(1'b1);
+                            hs_hp_from_stack(1'b0);
+                            hs_hp_aid(vfe_map[11:0]);
+                            hs_hp_aslot(fl[6:0]);
+                            hs_hp_wval(hp_rval);
+                            hs_hp_ret(S_V64_FOREACH);
+                            hs_st(S_HEAP_AWR);
                         end else
-                            state <= S_V64_FOREACH;
+                            hs_st(S_V64_FOREACH);
                     end
                 end
                 S_V64_IDXSCAN: begin
                     if (v64_equal(hp_rval, hp_wval)) begin
                         vst_wr(hp_vbase, v64_int32_number({24'd0, hp_aslot}));
-                        vsp <= hp_vbase + 12'd1;
-                        state <= S_FETCH_WAIT;
+                        hs_vsp(hp_vbase + 12'd1);
+                        hs_st(S_FETCH_WAIT);
                     end else if (hp_aslot + 7'd1 < hp_alen) begin
-                        hp_aslot <= hp_aslot + 7'd1;
-                        state <= S_HEAP_WAIT;
+                        hs_hp_aslot(hp_aslot + 7'd1);
+                        hs_st(S_HEAP_WAIT);
                     end else begin
                         vst_wr(hp_vbase, v64_int32_number(-32'sd1));
-                        vsp <= hp_vbase + 12'd1;
-                        state <= S_FETCH_WAIT;
+                        hs_vsp(hp_vbase + 12'd1);
+                        hs_st(S_FETCH_WAIT);
                     end
                 end
                 S_V64_OGETI_NAT: begin
@@ -10338,7 +10996,7 @@ module jmr_js_vm #(
                             json_rp <= 14'(v64_to_uint32(hp_qv[0]));
                             js_sp <= 6'd0;
                             json_pph <= 3'd0;
-                            state <= S_V64_JSON_PARSE;
+                            hs_st(S_V64_JSON_PARSE);
                         end
                         4'd1: begin
                             imgd_w <= v64_to_uint32(hp_qv[0])[9:0];
@@ -10346,7 +11004,7 @@ module jmr_js_vm #(
                             imgd_x <= 10'd0; imgd_y <= 10'd0;
                             imgd_i <= 19'd0;
                             imgd_v64 <= 1'b1;
-                            state <= S_IMGD_PUT;
+                            hs_st(S_IMGD_PUT);
                         end
                         4'd2: begin
                             begin
@@ -10358,27 +11016,29 @@ module jmr_js_vm #(
                                     vmetrics[31:0] < MAX_OBJ &&
                                     vobj_alloc[vmetrics[12:0]] == 2'd1)
                                 begin
-                                    hp_cmd <= HP_OSETI;
-                                    hp_v64 <= 1'b1;
-                                    hp_oid <= vmetrics[12:0];
-                                    hp_slot <= 5'd0;
-                                    hp_qn <= 3'd1;
-                                    hp_qi <= 3'd0;
-                                    hp_qk[0] <= id_width;
-                                    hp_qv[0] <=
-                                        v64_int32_number({16'd0, tl << 3});
-                                    hp_qt[0] <= 3'd0;
-                                    hp_ret <= S_FETCH_WAIT;
+                                    hs_hp_cmd(HP_OSETI);
+                                    hs_hp_v64(1'b1);
+                                    hs_hp_oid(vmetrics[12:0]);
+                                    hs_hp_slot(5'd0);
+                                    hs_hp_qn(3'd1);
+                                    hs_hp_qi(3'd0);
+                                    hp_qk_ff[0] <= id_width;
+                                    hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[0] <= v64_int32_number({16'd0, tl << 3});
+                                    hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[0] <= 3'd0;
+                                    hs_m_hp_qt <= 1'b1;
+                                    hs_hp_ret(S_FETCH_WAIT);
                                     vst_wr(hp_vbase, vmetrics);
-                                    vsp <= hp_vbase + 12'd1;
-                                    state <= S_HEAP_WR;
+                                    hs_vsp(hp_vbase + 12'd1);
+                                    hs_st(S_HEAP_WR);
                                 end else begin
-                                    valloc_metrics <= 1'b1;
-                                    vnat_base <= hp_vbase;
-                                    valloc_kind <= 2'd0;
-                                    valloc_i <= vobj_next;
-                                    valloc_retried <= 1'b0;
-                                    state <= S_V64_ALLOC;
+                                    hs_valloc_metrics(1'b1);
+                                    hs_vnat_base(hp_vbase);
+                                    hs_valloc_kind(2'd0);
+                                    hs_valloc_i(vobj_next);
+                                    hs_valloc_retried(1'b0);
+                                    hs_st(S_V64_ALLOC);
                                 end
                             end
                         end
@@ -10391,7 +11051,7 @@ module jmr_js_vm #(
                             // OGETI overwrites hp_key with the slot name;
                             // needle was saved in hp_wval (same as tagged S_IDXSTR).
                             idx_needle <= hp_wval[7:0];
-                            state <= S_IDXSTR;
+                            hs_st(S_IDXSTR);
                         end
                         4'd4: begin
                             json_src <= 14'(v64_to_uint32(hp_qv[0]));
@@ -10404,7 +11064,7 @@ module jmr_js_vm #(
                             if (hp_oid != 13'd0 &&
                                 vobj_builtin[hp_oid] == 4'd6)
                                 ; // regex pack already in hp_wval
-                            state <= S_REPL;
+                            hs_st(S_REPL);
                         end
                         4'd5: begin
                             begin
@@ -10415,25 +11075,25 @@ module jmr_js_vm #(
                                 repl_nlen <= preg[23:16];
                                 repl_g <= preg[24];
                                 if (hp_phase == 3'd1) begin
-                                    hp_nat <= 4'd4;
-                                    hp_cmd <= HP_OGETI;
-                                    hp_v64 <= 1'b1;
-                                    hp_oid <= hp_si;
-                                    hp_slot <= 5'd0;
-                                    hp_qn <= 3'd2;
-                                    hp_qi <= 3'd0;
-                                    hp_ret <= S_V64_OGETI_NAT;
-                                    state <= S_HEAP_WAIT;
+                                    hs_hp_nat(4'd4);
+                                    hs_hp_cmd(HP_OGETI);
+                                    hs_hp_v64(1'b1);
+                                    hs_hp_oid(hp_si);
+                                    hs_hp_slot(5'd0);
+                                    hs_hp_qn(3'd2);
+                                    hs_hp_qi(3'd0);
+                                    hs_hp_ret(S_V64_OGETI_NAT);
+                                    hs_st(S_HEAP_WAIT);
                                 end else
-                                    state <= S_NAMCPY;
+                                    hs_st(S_NAMCPY);
                             end
                         end
                         4'd6: begin
                             stack[sp - 8'd1] <= hp_rval[31:0];
                             stack_tag[sp - 8'd1] <= 3'd0;
-                            ip <= ip + 16'd1;
-                            code_raddr <= 15'(ops_base + ip + 16'd1);
-                            state <= S_FETCH_WAIT;
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
                         end
                         4'd7: begin
                             json_src <= hp_qv[0][13:0];
@@ -10442,23 +11102,23 @@ module jmr_js_vm #(
                             if (hp_lim == 8'd1) begin
                                 json_dst <= hp_qv[0][13:0] + hp_qv[1][13:0];
                                 json_wp <= hp_qv[0][13:0] + hp_qv[1][13:0];
-                                state <= S_REPL;
+                                hs_st(S_REPL);
                             end else if (hp_lim == 8'd2)
-                                state <= S_IDXSTR;
+                                hs_st(S_IDXSTR);
                             else
-                                state <= S_JSON_PARSE;
+                                hs_st(S_JSON_PARSE);
                         end
                         4'd8: begin
                             imgd_w <= hp_qv[0][9:0];
                             imgd_h <= hp_qv[1][9:0];
-                            state <= S_IMGD_PUT;
+                            hs_st(S_IMGD_PUT);
                         end
                         4'd9: begin
                             txt_rp <= 16'(hp_qv[0][13:0]);
                             txt_len <= (hp_qv[1][13:0] > 14'(TXT_MAX))
                                 ? 7'(TXT_MAX) : 7'(hp_qv[1][13:0]);
                             txt_ph <= (hp_qv[1][13:0] == 14'd0) ? 4'd6 : 4'd4;
-                            state <= S_TXT_LD;
+                            hs_st(S_TXT_LD);
                         end
                         4'd10: begin
                             repl_pat0 <= hp_qv[0][7:0];
@@ -10466,18 +11126,18 @@ module jmr_js_vm #(
                             repl_nlen <= hp_qv[0][23:16];
                             repl_g <= hp_qv[0][24];
                             if (hp_phase == 3'd1) begin
-                                hp_nat <= 4'd7;
-                                hp_lim <= 8'd1;
-                                hp_cmd <= HP_OGETI;
-                                hp_v64 <= 1'b0;
-                                hp_oid <= hp_si;
-                                hp_slot <= 5'd0;
-                                hp_qn <= 3'd2;
-                                hp_qi <= 3'd0;
-                                hp_ret <= S_V64_OGETI_NAT;
-                                state <= S_HEAP_WAIT;
+                                hs_hp_nat(4'd7);
+                                hs_hp_lim(8'd1);
+                                hs_hp_cmd(HP_OGETI);
+                                hs_hp_v64(1'b0);
+                                hs_hp_oid(hp_si);
+                                hs_hp_slot(5'd0);
+                                hs_hp_qn(3'd2);
+                                hs_hp_qi(3'd0);
+                                hs_hp_ret(S_V64_OGETI_NAT);
+                                hs_st(S_HEAP_WAIT);
                             end else
-                                state <= S_REPL;
+                                hs_st(S_REPL);
                         end
                         4'd11: begin
                             begin
@@ -10491,15 +11151,18 @@ module jmr_js_vm #(
                                 moid = (metrics_oid == 16'hFFFF) ? n_obj : metrics_oid;
                                 obj_cls[moid[12:0]] <= 16'd0;
                                 obj_n[moid[12:0]] <= 6'd1;
-                                hp_cmd <= HP_OSETI;
-                                hp_v64 <= 1'b0;
-                                hp_oid <= moid[12:0];
-                                hp_slot <= 5'd0;
-                                hp_qn <= 3'd1;
-                                hp_qi <= 3'd0;
-                                hp_qk[0] <= id_width;
-                                hp_qv[0] <= {32'd0, 32'(px_) * 32'(tl)};
-                                hp_qt[0] <= 3'd0;
+                                hs_hp_cmd(HP_OSETI);
+                                hs_hp_v64(1'b0);
+                                hs_hp_oid(moid[12:0]);
+                                hs_hp_slot(5'd0);
+                                hs_hp_qn(3'd1);
+                                hs_hp_qi(3'd0);
+                                hp_qk_ff[0] <= id_width;
+                                hs_m_hp_qk <= 1'b1;
+                                hp_qv_ff[0] <= {32'd0, 32'(px_) * 32'(tl)};
+                                hs_m_hp_qv <= 1'b1;
+                                hp_qt_ff[0] <= 3'd0;
+                                hs_m_hp_qt <= 1'b1;
                                 if (metrics_oid == 16'hFFFF) begin
                                     if (n_obj >= 16'(MAX_OBJ - 1))
                                         dbg_heap_ovf <= dbg_heap_ovf + 16'd1;
@@ -10513,13 +11176,13 @@ module jmr_js_vm #(
                                 stack[hp_vbase[10:0] - 11'd1] <= {16'd0, moid};
                                 stack_tag[hp_vbase[10:0] - 11'd1] <= 3'd1;
                                 sp <= hp_vbase[10:0];
-                                ip <= ip + 16'd1;
-                                code_raddr <= 15'(ops_base + ip + 16'd1);
-                                hp_ret <= S_FETCH_WAIT;
-                                state <= S_HEAP_WR;
+                                hs_ip(ip + 16'd1);
+                                hs_code(15'(ops_base + ip + 16'd1));
+                                hs_hp_ret(S_FETCH_WAIT);
+                                hs_st(S_HEAP_WR);
                             end
                         end
-                        default: state <= S_FETCH_WAIT;
+                        default: hs_st(S_FETCH_WAIT);
                     endcase
                 end
                 S_V64_FRAME_KEY: begin
@@ -10542,35 +11205,35 @@ module jmr_js_vm #(
                         if (vcsp >= CSTK || vsp + 12'd2 > STACK_DEPTH) begin
                             machine_fault <= 1'b1;
                             fault_code <= (vcsp >= CSTK) ? 8'd2 : 8'd1;
-                            running <= 1'b0; state <= S_DONE;
+                            running <= 1'b0; hs_st(S_DONE);
                         end else if (!bind_rd_arm) begin
                             // Beat 0: push fn. vst_wr is 1W; window follows +1.
                             vst_wr(vsp, vlistener_fn[pick]);
-                            vsp <= vsp + 12'd1;
+                            hs_vsp(vsp + 12'd1);
                             bind_rd_arm <= 1'b1;
                             bind_k <= 8'd0;
                         end else if (bind_k == 8'd0) begin
                             vst_wr(vsp, vkev_event);
-                            vsp <= vsp + 12'd1;
+                            hs_vsp(vsp + 12'd1);
                             bind_k <= 8'd1;
                         end else begin
                             // Idle: ALLOC combo-reads last cycle's TOS window.
                             bind_rd_arm <= 1'b0;
                             bind_k <= 8'd0;
-                            vcall_value <= 1'b1;
-                            vcall_argc <= 12'd1;
+                            hs_vcall_value(1'b1);
+                            hs_vcall_argc(12'd1);
                             vcallback_key <= 1'b1;
-                            valloc_kind <= 2'd3;
-                            valloc_i <= venv_next;
-                            valloc_retried <= 1'b0;
+                            hs_valloc_kind(2'd3);
+                            hs_valloc_i(venv_next);
+                            hs_valloc_retried(1'b0);
                             vkey_li <= pick + 5'd1;
-                            state <= S_V64_ALLOC;
+                            hs_st(S_V64_ALLOC);
                         end
                     end else begin
                         kev_rp <= kev_rp + 3'd1;
                         vkey_li <= 5'd0;
                         bind_rd_arm <= 1'b0;
-                        state <= S_WAIT_FRAME;
+                        hs_st(S_WAIT_FRAME);
                     end
                 end
                 S_V64_FRAME_RAF: begin
@@ -10580,13 +11243,13 @@ module jmr_js_vm #(
                             machine_fault <= 1'b1;
                             fault_code <= (vcsp >= CSTK) ? 8'd2 : 8'd1;
                             running <= 1'b0;
-                            state <= S_DONE;
+                            hs_st(S_DONE);
                         end else if (!bind_rd_arm) begin
                             // Beat 0: push fn. Two vst_wr in one cycle kept
                             // only the timestamp; window shifts ±1 so vsp+2
                             // also desynced TOS (INVADERS rAF never re-armed).
                             vst_wr(vsp, vraf_snap[vraf_i]);
-                            vsp <= vsp + 12'd1;
+                            hs_vsp(vsp + 12'd1);
                             bind_rd_arm <= 1'b1;
                             bind_k <= 8'd0;
                         end else if (bind_k == 8'd0) begin
@@ -10596,25 +11259,25 @@ module jmr_js_vm #(
                                 timestamp
                             );
                             vst_wr(vsp, timestamp);
-                            vsp <= vsp + 12'd1;
+                            hs_vsp(vsp + 12'd1);
                             bind_k <= 8'd1;
                         end else begin
                             // Idle: ALLOC combo-reads last cycle's TOS window.
                             bind_rd_arm <= 1'b0;
                             bind_k <= 8'd0;
-                            vcall_value <= 1'b1;
-                            vcall_argc <= 12'd1;
+                            hs_vcall_value(1'b1);
+                            hs_vcall_argc(12'd1);
                             vcallback_raf <= 1'b1;
-                            valloc_kind <= 2'd3;
-                            valloc_i <= venv_next;
-                            valloc_retried <= 1'b0;
+                            hs_valloc_kind(2'd3);
+                            hs_valloc_i(venv_next);
+                            hs_valloc_retried(1'b0);
                             vraf_i <= vraf_i + 4'd1;
-                            state <= S_V64_ALLOC;
+                            hs_st(S_V64_ALLOC);
                         end
                     end else begin
                         vraf_snap_n <= 4'd0;
                         bind_rd_arm <= 1'b0;
-                        state <= S_V64_FRAME_TIMER;
+                        hs_st(S_V64_FRAME_TIMER);
                     end
                 end
                 S_V64_FRAME_TIMER: begin
@@ -10641,10 +11304,10 @@ module jmr_js_vm #(
                             machine_fault <= 1'b1;
                             fault_code <= (vcsp >= CSTK) ? 8'd2 : 8'd1;
                             running <= 1'b0;
-                            state <= S_DONE;
+                            hs_st(S_DONE);
                         end else if (!bind_rd_arm) begin
                             vst_wr(vsp, vtimer_fn[pick]);
-                            vsp <= vsp + 12'd1;
+                            hs_vsp(vsp + 12'd1);
                             bind_rd_arm <= 1'b1;
                         end else begin
                             // Idle so `VST_AT sees the fn (argc 0 → TOS).
@@ -10655,23 +11318,23 @@ module jmr_js_vm #(
                             end else
                                 vtimer_due[pick] <= vtimer_due[pick] +
                                     vtimer_period[pick][31:0];
-                            vcall_value <= 1'b1;
-                            vcall_argc <= 12'd0;
+                            hs_vcall_value(1'b1);
+                            hs_vcall_argc(12'd0);
                             vcallback_timer <= 1'b1;
-                            valloc_kind <= 2'd3;
-                            valloc_i <= venv_next;
-                            valloc_retried <= 1'b0;
-                            state <= S_V64_ALLOC;
+                            hs_valloc_kind(2'd3);
+                            hs_valloc_i(venv_next);
+                            hs_valloc_retried(1'b0);
+                            hs_st(S_V64_ALLOC);
                         end
                     end else begin
                         bind_rd_arm <= 1'b0;
                         fb_swap <= 1'b1; // PYTHON present(): scanout the back
-                        vgc_clear_i <= 14'd0;
-                        vgc_qr <= 14'd0;
-                        vgc_qw <= 14'd0;
-                        vgc_halt_after <= 1'b1;
-                        vgc_wait_after <= 1'b1;
-                        state <= S_V64_GC_CLEAR;
+                        hs_vgc_clear_i(14'd0);
+                        hs_vgc_qr(14'd0);
+                        hs_vgc_qw(14'd0);
+                        hs_vgc_halt_after(1'b1);
+                        hs_vgc_wait_after(1'b1);
+                        hs_st(S_V64_GC_CLEAR);
                     end
                 end
                 S_V64_DIV: begin
@@ -10687,7 +11350,7 @@ module jmr_js_vm #(
                     vdiv_quot <= {vdiv_quot[105:0], quotient_bit};
                     vdiv_count <= vdiv_count - 8'd1;
                     if (vdiv_count == 8'd1)
-                        state <= S_V64_DIV_FIN;
+                        hs_st(S_V64_DIV_FIN);
                 end
                 S_V64_DIV_FIN: begin
                     logic [63:0] result;
@@ -10695,10 +11358,10 @@ module jmr_js_vm #(
                         vdiv_sign, vdiv_exp, vdiv_quot, vdiv_rem, result
                     );
                     vst_wr(vsp - 12'd2, result);
-                    vsp <= vsp - 12'd1;
-                    ip <= ip + 16'd1;
-                    code_raddr <= 15'(ops_base + ip + 16'd1);
-                    state <= S_FETCH_WAIT;
+                    hs_vsp(vsp - 12'd1);
+                    hs_ip(ip + 16'd1);
+                    hs_code(15'(ops_base + ip + 16'd1));
+                    hs_st(S_FETCH_WAIT);
                 end
                 S_V64_MOD: begin
                     logic [53:0] shifted_rem;
@@ -10715,18 +11378,27 @@ module jmr_js_vm #(
                             vmod_sign, vmod_exp, next_rem, result
                         );
                         vst_wr(vsp - 12'd2, result);
-                        vsp <= vsp - 12'd1;
-                        ip <= ip + 16'd1;
-                        code_raddr <= 15'(ops_base + ip + 16'd1);
-                        state <= S_FETCH_WAIT;
+                        hs_vsp(vsp - 12'd1);
+                        hs_ip(ip + 16'd1);
+                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_st(S_FETCH_WAIT);
                     end
                 end
                 S_DONE: begin
                     running <= 1'b0;
-                    state <= S_IDLE;
+                    hs_st(S_IDLE);
                 end
-                default: state <= S_IDLE;
+                default: hs_st(S_IDLE);
             endcase
+            // Exec faults lived only in e64_*_q; parent VMSTAT/FRAME saw
+            // fault=0 and S_DONE→IDLE (inner rAF / JUMP looked clean).
+            // Only while hs64. HEAP_CLR is not hs64; copying leftover
+            // e64_fault during the next title's load made PACMAN/DONKEY
+            // SNAP fault=2 and the GUI bounce to READY.
+            if (jsb_flags[3] && hs64 && e64_machine_fault_q) begin
+                machine_fault <= 1'b1;
+                fault_code <= e64_fault_code_q;
+            end
             // Capacity and stale-handle failures are architectural errors.
             // Stop once, retain a compact fault code, and never hide them by
             // resetting a stack or wrapping an allocation pointer.
@@ -10745,7 +11417,7 @@ module jmr_js_vm #(
                 else if (dbg_call_ovf != 0) fault_code <= 8'd7;
                 else fault_code <= 8'd8;
                 running <= 1'b0;
-                state <= S_DONE;
+                hs_st(S_DONE);
             end
         end
     end

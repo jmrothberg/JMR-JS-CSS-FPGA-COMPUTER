@@ -110,28 +110,14 @@ engines, not library code on a hidden CPU.
    BASIC ASIC rules by default).
 10. **Standalone required:** HDMI + local keyboard + local play controls; a PC
     is not required to use the machine. UART/JTAG are flash/debug only.
-11. **FPGA-SIM RTL must be synthesizable SRAM.** Verilator, Vivado, and ASIC
-    compile the **same** `rtl/*.sv`. A 2-D heap you scan with
-    `for (k) if (mem[h][k]==key)` inside `always_ff` is a **simulation array**
-    (the loop unrolls to a combinational mux). Vivado `Synth 8-4556` / LUTRAM
-    / failed timing are the chip refusing it — not a later “fit pass.”
-    Memories are 1-D, address in, write-enable + wdata, **rdata next clock**,
-    1 write + 1–2 read ports. Slot walks take extra clocks; that is real
-    silicon (~30 MHz class), not a reason to keep combo lookups so sim feels
-    fast. Array **depth × width must fit leftover on-chip BRAM** after dual FB
-    (~1 MB class on T200, not 7 MB of “block RAM”). Loud overflow; same caps
-    in PYTHON. Do not hide overflow in the 4 MB **asset** SRAM (art) or by
-    doubling that bank. Write SystemVerilog Vivado will parse (no nested
-    `bus[a:b][c:d]`). No runtime-trip `for (i = j; i < N)` (Synth 8-3380).
-    No nested `for` over `ENV_DEPTH` in a task (walk one index per clock).
-    Operand `vstack` is 1W1R registered, not combo/multi-port LUTRAM
-    (Synth 8-7186). No `` `ifdef SYNTHESIS `` smaller heap, no Xilinx
-    `RAMB36` inside the VM. **One physical JS heap:** do not clone
-    `vvars` / `venv_*` / `vobj_*` into exec64 and strip generation
-    checks so the copies would not “look stale.” FPGA-SIM is the same
-    `rtl/*.sv` as the standalone `.bit` / `.bin`. Handle
-    `(generation,index)` mismatch is a loud stale-handle, not a speed
-    knob. See [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+11. **FPGA-SIM RTL must be synthesizable SRAM.** Same `rtl/*.sv` as the
+    `.bin`. One 1-D heap, address in, **rdata next clock**. Opcode decoder
+    combo must not index arrays or drive ports — extra clocks are silicon,
+    not a reason to keep combo lookups. Caps fit leftover BRAM after dual
+    FB (~1 MB class, not 7 MB). Loud overflow; do not hide it in the 4 MB
+    asset bank. Six rules: `.cursor/rules/never-fake-fpga-sim.mdc`. One
+    heap + generation: `one-heap-keep-gen.mdc`. Numbers:
+    [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
 
 ---
 
@@ -212,33 +198,13 @@ simulation and the board keep real cycle time; Python does not.
    the sim default. No `.bit`/`.bin` to “define” a feature FPGA-SIM still
    rejects. Visual play is the user’s F9, not a snippet PASS.
 7. **Write FPGA-SIM as if it were the chip.** Same SystemVerilog as the
-   `.bin` and the ASIC. Heaps, framebuffers, VRAM, code RAM, and FIFOs use
-   **SRAM ports** from day one (1-D array; one index per clock; registered
-   read; dump shares the CPU read port; CLS-walk to clear, never a reset
-   `for` that writes every cell). A `for` over object slots in `always_ff`
-   is **not** 32 clocks — it is 32 parallel compares and will not map to
-   block RAM or an SRAM macro. Extra clocks per `GET_PROP` are how a
-   ~30 MHz FPGA stays closed; combinational megabit muxes blow LUTs and
-   WNS. Do not grow combo 2-D arrays “until games work, then flatten.”
-   Flatten-as-you-go, or flatten in a dedicated pass **before** more
-   opcodes that index the heap. **Shape is not enough:** `MAX_OBJ`/`MAX_ARR`
-   must fit leftover BRAM after the dual framebuffer (T200 ≈ 1.64 MB BRAM
-   total; dual 640×480 FB ≈ 0.6 MB). Legal slot depths: `MAX_OBJ=1024` ×
-   `OBJ_SLOTS=32` × 80b plus two-tier arrays (`1536×32` + `128×128`) × 64b
-   plus `ENV_DEPTH=512` × 16 × 80b ≈ 0.9 MB
-   (same numbers in PYTHON; short bank holds nested map clones, long bank
-   holds `push` past 32). 8192×32×80b + 4096×128×64b ≈ 7 MB will not
-   infer — that is the anti-pattern. Overflow loud; do not grow the 4 MB
-   asset bank to hold JS objects. Avoid Verilator-only SV (`sig[hi:lo][n:m]`
-   → Vivado Synth 8-2599; use `sig[73:64]` or a wire). Legal shape in this
-   repo:
+   `.bin`. SRAM ports from day one — do not grow combo arrays “until games
+   work, then flatten.” Shape and depth: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+   Coding rules: `.cursor/rules/never-fake-fpga-sim.mdc`. Examples in-repo:
    `rtl/engines/storage_engine.sv` (`sbuf`), `rtl/engines/jmr_video_vram.sv`
-   (Port A). Unpacked array **ports** on exec32/exec64 are a Vivado opt
-   bomb; that does **not** authorize a second copy of `vvars` / `venv_*` /
-   `vobj_*` inside the exec. Fast `LOAD_VAR` addresses the **same** SRAM
-   via scalar req/ack. Skipping generation so dual copies would not “look
-   stale” is a forbidden cheat (2026-08-17 overnight). FPGA-SIM must remain
-   the path that compiles to a standalone `.bin`.
+   (Port A). Skipping generation so a second heap would not “look stale”
+   is forbidden. FPGA-SIM must remain the path that compiles to a
+   standalone `.bin`.
 
 A native graphics processing unit is the same machine with draw engines as
 first-class instruction-set operations (Canvas here; COLOR/SET on BASIC).

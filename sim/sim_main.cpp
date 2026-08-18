@@ -308,8 +308,8 @@ static const char* vm_sname(unsigned s) {
         "S_V64_JSON","S_V64_JSON_PARSE","S_V64_CTOR_PAD",
         "S_HEAP_WAIT","S_HEAP_CMP","S_HEAP_WR","S_HEAP_AWR","S_HEAP_FILL",
         "S_V64_METH","S_V64_FE_ELEM","S_V64_FE_FILTER","S_V64_OGETI_NAT",
-        "S_V64_IDXSCAN","S_V64_CTOR_ENV","S_REL_ENV","S_FREE_OBJ","S_FREE_ARR",
-        "S_V64_BIND","S_V64_MINMAX","S_V64_WIN_FILL","S_ARR_PROMOTE"
+        "S_V64_IDXSCAN","S_V64_CTOR_ENV","S_V64_CTOR_VARS","S_REL_ENV","S_FREE_OBJ","S_FREE_ARR",
+        "S_V64_BIND","S_V64_MINMAX","S_V64_WIN_FILL","S_ARR_PROMOTE","S_HEAP_CLR"
     };
     if (s < (unsigned)(sizeof(N) / sizeof(N[0]))) return N[s];
     return "?";
@@ -743,6 +743,8 @@ int main(int argc, char** argv) {
             std::cout << "VMSTAT state=" << stn
                       << " sname=" << vm_sname(stn)
                       << " ip=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__ip)
+                      << " nops=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_ops)
+                      << " eip=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__ip)
                       << " sp=" << ((unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u)
                           ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vsp)
                           : unsigned(r->jmr_js_core__DOT__u_vm__DOT__sp))
@@ -754,9 +756,7 @@ int main(int argc, char** argv) {
                 for (unsigned i = 0; i < nfr; i++) {
                     if (i) std::cout << ",";
                     std::cout << unsigned(
-                        (unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u)
-                            ? r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__vframe_return_ip[i]
-                            : r->jmr_js_core__DOT__u_vm__DOT__vframe_return_ip[i]);
+                        r->jmr_js_core__DOT__u_vm__DOT__vframe_return_ip[i]);
                 }
             }
             std::cout << " vdraw="
@@ -827,6 +827,24 @@ int main(int argc, char** argv) {
                       << "/" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__imgd_n)
                       << " imgwh=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__imgd_w)
                       << "x" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__imgd_h)
+                      // Compact HEAP/env peek: nested STORE_VAR hung in HEAP_CMP.
+                      << " hp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_cmd)
+                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_env)
+                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_eid)
+                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_slot)
+                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_len)
+                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_phase)
+                      << " venvk=" << unsigned(
+                            (r->jmr_js_core__DOT__u_vm__DOT__venv >> 44) & 0xF)
+                      << " venvi=" << unsigned(
+                            r->jmr_js_core__DOT__u_vm__DOT__venv & 0x3FF)
+                      << " vp=" << unsigned(
+                            (r->jmr_js_core__DOT__u_vm__DOT__venv_parent[
+                                unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_eid) & 511u] >> 44) & 0xF)
+                      << "," << unsigned(
+                            r->jmr_js_core__DOT__u_vm__DOT__venv_parent[
+                                unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_eid) & 511u] & 0x3FF)
+                      << " lh=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__e64_leave_hold)
                       << std::endl;
             continue;
         }

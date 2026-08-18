@@ -1,42 +1,36 @@
 ---
-description: One physical JS heap; never skip generation checks to hide exec/parent dual-copy skew. FPGA-SIM RTL is the standalone .bin path.
+description: JS objects live in one T200 memory. Do not clone the heap so sim games look fine while the chip cannot.
 alwaysApply: true
 ---
 
-# One heap, keep generation — FPGA-SIM is the `.bin`
+# One JS heap on the T200
 
-FPGA-SIM, `make -C tools/board_flow bit` (`.bit` / `.bin`), and later ASIC
-compile the **same** `rtl/*.sv`. FPGA-SIM must stay on that standalone
-Nexys Video path (HDMI + local keyboard). Dual copies of the JS heap are
-not a speed win: leftover T200 BRAM cannot hold two `vvars`/`venv`/`vobj_*`,
-and they go stale vs parent GC.
+Goal: a **standalone Nexys Video T200** that `LOAD`/`RUN`s HTML games. After
+the two 640×480 screens, the chip has ~1 MB for code + JS objects. That is
+**one** heap. PACMAN’s ghosts and INVADERS’ aliens must live in the same
+cells the garbage collector uses — otherwise F9 can look playable while a
+real `.bin` cannot hold the machine.
 
-## The 2026-08-17 overnight cheat (forbidden)
+A JS object handle is `(generation, index)`: which slot, and which lifetime.
+If generation does not match, that object was recycled. Report it. Do not
+skip the check so a private copy “still looks alive.”
 
-Not four title bugs. Four glass symptoms of **one** cheat:
+**Do not** give the opcode unit its own `vvars` / `venv_*` / `vobj_*` /
+`name_mem` / `stack` / `intern_var` / `cstack` / `json_mem` while the parent
+still has the real tables. Two copies will not fit leftover BRAM, and they
+go stale (black PACMAN, stuck rAF, heap skew that looks like four title
+bugs). Moving those arrays inside exec to dodge illegal ports is the same
+mistake. Silent stack reset is not GC. Titles that run exec64 still
+**synthesize exec32** — inspect both.
 
-1. Teach exec64 fast paths against **its own copies** of `vvars` / `venv_*` /
-   `vobj_*` (parent still has the real heap + GC).
-2. Strip generation / gen-match so those copies would not “look stale.”
-
-Symptoms that were treated as title bugs: PACMAN black FB / skip-draw,
-PACMAN rAF `fn` / Date throttle, INVADERS / DONKEY / MRDO heap skew.
+**Do:** one 1-D SRAM. Exec: address in, data next clock. Fast `LOAD_VAR`
+(`a1`) still hits that SRAM.
 
 ```systemverilog
-// BAD — skip gen to hide dual-copy skew (“for PACMAN”)
-if (vobj_alloc[i] == 2'd1) mark = 1;  // no gen match
-
-// GOOD — one SRAM; handle (generation,index) must match
+// BAD — “alive” without checking the handle is still this object
+if (vobj_alloc[i] == 2'd1) mark = 1;
+// GOOD
 if (vobj_alloc[i] == 2'd1 && vobj_gen[i] == handle[43:32]) mark = 1;
 ```
 
-## Required
-
-- One physical 1-D SRAM per heap. Exec talks **scalar** req/ack, rdata next
-  clock. Parent GC and exec see the same cells.
-- Handle `(generation,index)` stays. Mismatch is loud stale-handle (or the
-  existing PYTHON sloppy SET_PROP no-op). Never skip gen to hide skew.
-- Fast `LOAD_VAR`/`STORE_VAR` is compiler `a1` addressing the **same** SRAM.
-- Unpacked array **ports** stay illegal (Vivado opt bomb). That does **not**
-  authorize cloning megabit arrays inside exec64.
-- Do not “fix” FPGA-SIM in a way that cannot become the standalone `.bin`.
+How a memory must look so Vivado can build the `.bin`: `never-fake-fpga-sim`.

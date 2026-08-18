@@ -203,6 +203,10 @@ class Compiler:
         self.op_lines: List[int] = []
         # NEW: user functions name → (entry_ip, params)
         self.functions: dict[str, Tuple[int, List[str]]] = {}
+        # Hoisted `function foo` names for LOAD_VAR a1=1. Do not plant
+        # functions[foo]=(0,[]) — class methods compile before bodies and
+        # CALL_USER 0 re-enters IP 0 (INVADERS star-loop / DONKEY new Game).
+        self._hoisted_fn_names: set[str] = set()
         # NEW: fname → IP after the function's last op (before MAKE_FN).
         # Used to inline tiny param-only callees at CALL_USER sites.
         self._fn_end: dict[str, int] = {}
@@ -227,6 +231,7 @@ class Compiler:
         # NEW: hoist function + class declarations first (JS-style)
         saved_i = self.i
         self._prescan_class_names()  # so `new Foo` inside functions resolves
+        self._prescan_function_names()
         self._compile_all_classes()
         self.i = 0
         self._compile_all_functions()
@@ -247,6 +252,22 @@ class Compiler:
             dict(self.classes),
             op_lines=list(self.op_lines),
         )
+
+    def _prescan_function_names(self) -> None:
+        """Register hoisted function names before emitting bodies.
+
+        Inner `requestAnimationFrame(tick)` compiles while `tick` is still
+        being emitted; `_var_a1` needs the name in `_hoisted_fn_names` so
+        a1=1 (vvars global) rather than env-chain HEAP. Do not plant
+        functions[tick]=(0,[]) — that made class-method CALL_USER jump to IP 0.
+        """
+        i = 0
+        while i < len(self.tokens) - 1:
+            if (self.tokens[i][1] == "function"
+                    and self.tokens[i + 1][0] == "ID"):
+                fname = self.tokens[i + 1][1]
+                self._hoisted_fn_names.add(fname)
+            i += 1
 
     def _prescan_class_names(self) -> None:
         """Register class names before emitting functions that `new` them."""
@@ -770,9 +791,9 @@ class Compiler:
             t = self.tokens[self.i - 1]
         line = int(t[2]) if t is not None else 0
         args = tuple(op_args)
-        # LOAD_VAR/STORE_VAR a1: 0=chain (global/upvalue), 2+slot=local.
-        # Do not pack a1=1 (guessed global) — hoisted functions have no outer
-        # stack, so that skip missed env slots (bunkers/timestamp/`f`).
+        # LOAD_VAR/STORE_VAR a1: 0=chain (global/upvalue), 1=hoisted fn
+        # global (vvars), 2+slot=local. Do not pack a1=1 for every
+        # non-local — that skipped env slots (bunkers/timestamp/`f`).
         if args and args[0] in (Op.LOAD_VAR, Op.STORE_VAR) and len(args) == 2:
             ni = int(args[1])
             name = self.names[ni] if 0 <= ni < len(self.names) else ""
@@ -797,11 +818,12 @@ class Compiler:
             cur[name] = len(cur)
 
     def _var_a1(self, name: str) -> int:
-        """Pack LOAD_VAR/STORE_VAR a1. 0=chain, 2+slot=local. Never a1=1.
+        """Pack LOAD_VAR/STORE_VAR a1. 0=chain, 1=hoisted fn global, 2+slot=local.
 
-        Hoisted `function animate` has no enclosing `_local_stack`, so a
-        guessed global skipped the env where `const bunkers` / upvalues live.
-        Chain (a1=0) walks env then vvars — same as before the fast path.
+        Do not guess a1=1 for every non-local — that skipped the env where
+        `const bunkers` / upvalues live. Hoisted `function tick` is a vvars
+        global; inner `requestAnimationFrame(tick)` must not HEAP-walk the
+        callee env (RTL TOS/gen miss → rAF fault 4).
         """
         if not name:
             return 0
@@ -809,6 +831,8 @@ class Compiler:
             cur = self._local_stack[-1]
             if name in cur:
                 return 2 + cur[name]
+        if name in self.functions or name in self._hoisted_fn_names:
+            return 1
         return 0
 
     def _patch(self, idx: int, *op_args: Any) -> None:

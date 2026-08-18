@@ -101,7 +101,10 @@ Put `storage/NAME.HTML` in the storage folder (stem ≤ 8 letters so the board
 `python3 tools/make_sd_image.py create card.img` scans `storage/` and copies
 what is there. There is no title list to edit.
 
-`LOAD` uses the HTML name. The card is HTML only.
+`LOAD` uses the HTML name. The card is HTML only. The card builder copies
+**root** `storage/*.HTML`. `storage/games_*` is the upstream archive — not
+DIR, not the card. Same-stem `NAME.JS` / `NAME.JSB` are leftover demos, not
+product twins.
 
 Library example: `MRDO.HTML` is a portrait 384×480 playfield (2× arcade
 192×240) centered in 640×480 with black side letterbox. Tunnels are one

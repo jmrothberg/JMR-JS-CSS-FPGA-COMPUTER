@@ -1,89 +1,86 @@
 ---
-description: FPGA-SIM must be real RTL by default — never silently use the PYTHON host twin.
+description: FPGA-SIM is the T200 .bin RTL — never a host twin, never a Verilator-only memory.
 alwaysApply: true
 ---
 
 # Never fake FPGA-SIM
 
-HARD RULE: **FPGA-SIM must never default to, or silently fall back to, a
-PYTHON host twin.** That trap made F9 “FPGA-SIM” look fine while BOARD RTL
-was broken.
+F9 FPGA-SIM **is** the chip in Verilator: same `rtl/*.sv` as
+`make -C tools/board_flow bit`. Default: `runtime/sim_backend.py`. GUI shows
+`FPGA-SIM (RTL)` vs `(HOST)`. Host twin (`JMR_SIM_HOST=1`) is opt-in debug
+only — never a quiet fallback when the RTL binary is missing (fail loud:
+`make -C sim sim_server_synth`). Do not pretend PYTHON is FPGA-SIM.
 
-## Defaults
+Legal SRAM first, then glass. Do not make a title playable on a
+Verilator-only heap and “flatten later.” The user runs `make bit` — **never
+the agent.** Do not start Vivado to check. Inspect **both** exec32 and
+exec64 (titles on 64 still synthesize 32). `sim_server_synth` PASS is not a
+bitstream.
 
-- **F9 FPGA-SIM** = real Verilator RTL (`sim/sim_build_synth/jmr_js_sim_server`).
-- **Host twin** (`sim/host_sim_server.py`, dukpy / full Canvas) = **explicit
-  opt-in debug only**: `JMR_SIM_HOST=1`. Never the default. Never a quiet
-  fallback when the RTL binary is missing. Dukpy is **not** the product CPU
-  (see `no-dukpy-cheat-native-cpu`).
-- If RTL is missing: **fail loud** (“build `make -C sim sim_server_synth`”).
-  Do not pretend PYTHON is FPGA-SIM.
+Glass is **640×480** (GUI mirror matches HDMI, not a 16-line strip).
+Keyboard is **full JS** (case + punctuation); do not reintroduce an a–z fold.
 
-## Product mindset (JS, not BASIC Model I)
+**Legal SRAM:** 1-D array, scalar `we` + wdata, **rdata next clock**, 1 write +
+1–2 reads. Dump/tether shares the CPU read port (not a third port). True
+dual-port only for CPU+scanout (VRAM / FB). Slot scans are FSMs, one index
+per clock, **stop at `vobj_len` / `venv_len`**, not always 32. Operand stack
+is 1W1R registered (not combo/multi-port LUTRAM). Extra GET_PROP clocks are
+silicon (~30 MHz). Caps (same in PYTHON): `MAX_OBJ=1024`, arrays
+`1536×32+128×128`, `ENV_DEPTH=512`. Do not restore `8192`/`4096` (~7 MB).
+Overflow loud. JS heap is not the 4 MB ASET bank; do not bump that bank to
+8 MB. `cls_*` 16×16 (4 Kbit) stays. Copy `storage_engine.sv` `sbuf` /
+`jmr_video_vram.sv` Port A. Fit numbers:
+[docs/FPGA_FIT.md](../../docs/FPGA_FIT.md). Live leftovers:
+[docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md).
 
-- Glass is **640×480** (GUI mirror must match HDMI field, not a 16-line strip).
-- Keyboard is **full JS** (case + punctuation); do not reintroduce a–z fold.
-- Constitution order: **PYTHON bytecode** → **real FPGA-SIM** → BOARD → ASIC.
-  Never claim a rung done via dukpy or host twin.
+## Six rules (do not ship a diff that breaks one)
 
-## RTL must map to real SRAM (not Verilator-only arrays)
+1. **One copy, one owner.** Parent holds the tables. Exec: address in, data
+   next clock. Do not clone `stack` / `vvars` / `name_mem` / `intern_var` /
+   `cstack` / `json_mem` into exec to dodge a port (`one-heap-keep-gen`).
 
-FPGA-SIM, `make -C tools/board_flow bit`, and later ASIC compile the **same**
-`rtl/*.sv`. Verilator will simulate patterns that **never** become BRAM or an
-ASIC SRAM macro. Those are fake FPGA-SIM — same class of cheat as a host twin.
+2. **The opcode `always_comb` assigns no ports.** It writes local `*_n` and
+   local we/addr only. Parent sees `*_q` (clocked in exec). Any combo output
+   of that block — used `stack_we`, unused `foo_n`, even `raddr = sp-1` at
+   the top — is one cone; Vivado flattens exec into the parent.
+   `keep_hierarchy` does not save it. raddr that is only registered `sp` /
+   TOS / `code_rdata` belongs in a **separate** `assign` outside that block.
 
-**Illegal (do not add; rewrite if you touch it):**
-- 2-D heaps: `logic [15:0] vobj_key [0:MAX_OBJ-1][0:OBJ_SLOTS-1]` or
-  `logic [63:0] venv_val [0:ENV_DEPTH-1][0:ENV_SLOTS-1]` (Synth 8-4556)
-- `for (k = 0; k < N; k++) if (mem[h][k] == key)` inside `always_ff` — that
-  **unrolls** to an N-wide combinational mux, not N clocks. Vivado
-  `Synth 8-4556` (variable > 1 Mbit) or LUTRAM instead of BRAM.
-- Reset `for` that writes every cell in one cycle (SRAM has no parallel clear).
-- `` `ifdef SYNTHESIS `` smaller heap / combo sim vs BRAM board.
-- Xilinx `RAMB36` primitives inside the VM (ASIC cannot use them).
-- **Sim-sized depths on BRAM:** do not restore `MAX_OBJ=8192` × 32 × 80b plus
-  `MAX_ARR=4096` × 128 × 64b ≈ **7 MB**. Legal leftover-BRAM caps:
-  `MAX_OBJ=1024` × 32 × 80b plus two-tier `1536×32` + `128×128` × 64b plus
-  `ENV_DEPTH=512` × 16 × 80b ≈ 0.9 MB (same numbers in PYTHON). T200 BRAM is
-  **~1.64 MB** total. Dual FB takes ~0.6 MB. Leftover ~**1 MB** is the
-  heap+code budget. Overflow **loud**; same caps in PYTHON. Do **not** put
-  JS heap in the 4 MB asset SRAM (ASET art; FPGA-SIM 4 MB = DDR3 first 4 MB
-  = IS61WV204816). Do **not** bump that bank to 8 MB to hide the heap.
-- Nested part-selects: `vobj_rdata[79:64][9:0]` — Verilator yes, Vivado
-  `Synth 8-2599`. Use `vobj_rdata[73:64]` or a wire.
-- Runtime-trip `for (i = j; i < N)` — Vivado Synth 8-3380. Rewrite
-  `for (i = 0; i < N) if (i >= j)`. Nested `for` over `ENV_DEPTH` (1024×1024)
-  is the same class as combo heap: walk one index per clock (`S_REL_ENV`).
-- Combo/multi-port `vstack` with `ram_style=block` — Synth 8-7186, LUTRAM.
-  1W1R registered like `vobj_slot`.
-- `function automatic` TOS peek from the giant `unique case` — Vivado
-  Synth 8-660 (`vst_at`). Combo `vst_peek` wire from the 16 FF window;
-  do not combo-read `vst_rdata` (last beat, not a 3rd port).
+3. **No combo `arr[i]`.** Not in `always_comb`, `assign`, or
+   `function automatic` (no TOS/SRAM peek from the opcode case — that is a
+   registered window or `*_rdata`, not a third port). Decoder reads
+   `*_rdata`. No 2-D heap tables. No whole-array combo copy
+   (`to_fn_n[i] = to_fn[i]`). No `for (k) if (mem[k]==key)` CAM — a `for`
+   over slots in `always_ff` is N parallel compares, not N clocks; that is
+   an FSM. No `for (i = j; i < N)` — write `for (i = 0; i < N) if (i >= j)`.
+   No nested `for` over `ENV_DEPTH`. No reset/`p_clr` `for` that writes
+   every cell in one cycle.
 
-**Legal (FPGA BRAM now, ASIC SRAM later — same ports):**
-- 1-D memory: address in, `we` + wdata, **rdata next clock**, 1 write + 1–2
-  reads. Dump/tether shares the CPU read port (not a third port).
-- Slot scan = FSM both sim and board wait on. Stop at `vobj_len`, not always 32.
-- Copy `rtl/engines/storage_engine.sv` `sbuf` and
-  `rtl/engines/jmr_video_vram.sv` Port A.
+4. **Ports are scalars or packed vectors.** Unpacked array ports flatten
+   (even unused). No nested `bus[a:b][c:d]` (packed-slice part-select, e.g.
+   `rdata[79:64][9:0]` or `pack[i +: 64][11:0]`). Unpack once to a 64-bit
+   wire, then `wire[11:0]` (or use `rdata[73:64]`).
 
-Clock: plan **~30 MHz** (BASIC native needed work to hold that; this VM is
-bigger). Sequential SRAM is how you **keep** that clock. Combo megabit muxes
-destroy WNS. Extra GET_PROP clocks are real silicon, not a reason to keep
-combo heaps so F9 “feels fast.” Details: [docs/FPGA_FIT.md](../../docs/FPGA_FIT.md),
-Constitution rule 11 + language-native method step 7.
+5. **Plain `case` on opcode and `nid`.** `unique case` on those two is every
+   arm in parallel. Small `unique case (state)` / `(p_sel)` stays.
 
-## One physical heap — do not clone then skip generation
+6. **Do not fake the chip.** No `` `ifdef SYNTHESIS `` smaller heap, no
+   `RAMB36` inside the VM, no sim-sized depths (~7 MB). Last unused-FF print
+   (`e32_p_clr_reg was removed`, 8-3936 trim) is not the cause — RSS climbing
+   after a frozen log is flatten. Kill that; fix rules 2–3 by inspection.
 
-FPGA-SIM is the **same RTL** as the standalone `.bin` (`make -C tools/board_flow
-bit`). Speed work inside exec64 must address the **one** 1-D SRAM (scalar
-req/ack, rdata next clock). Do **not** give exec64 its own `vvars` / `venv_*`
-/ `vobj_*` and then strip gen-match so those copies would not “look stale.”
-That 2026-08-17 overnight cheat is **not** four title bugs (PACMAN black FB,
-rAF `fn`, Date throttle, INVADERS/DONKEY/MRDO skew). Handle
-`(generation,index)` stays. See `one-heap-keep-gen.mdc`.
-
-## Code touchpoints
-
-- [`runtime/sim_backend.py`](../../runtime/sim_backend.py) — default RTL
-- GUI status must show `FPGA-SIM (RTL)` vs `FPGA-SIM (HOST)`
+```systemverilog
+// BAD — combo index, combo port, one cone with the opcode case
+always_comb begin
+  stack_raddr = sp - 1;          // still a port of the giant comb
+  vars_raddr = intern_var[idx];  // 1024-mux on a port
+  unique case (opcode) … stack_we = 1; endcase
+end
+// GOOD — locals in the case; raddr outside; parent sees *_q
+assign stack_raddr = (sp >= 1) ? (sp - 1) : 0;
+always_comb begin
+  stack_we = 1'b0;  // local
+  case (opcode) … stack_we = 1'b1; endcase
+end
+always_ff @(posedge clk) stack_we_q <= stack_we;
+```

@@ -1707,11 +1707,17 @@ def test_hw_value64_functions_share_object_heap_capacity():
     )
     root_handle = vm._value_vars[image.var_names.index("root")]
     root_slot = value64.value_payload(root_handle)
-    assert function_slot != root_slot
+    # Functions and objects are separate 1024-slot banks (same leftover-BRAM
+    # width). Both may occupy index 0; filling the object bank must not skip
+    # a function index as if it were an object hole.
+    assert value64.value_kind(vm._value_vars[image.var_names.index("f")]) == (
+        value64.VALUE_KIND_FUNCTION
+    )
+    assert value64.value_kind(root_handle) == value64.VALUE_KIND_OBJECT
 
     previous = root_slot
     for slot in range(value64.MAX_OBJECTS):
-        if slot in (function_slot, root_slot):
+        if slot == root_slot:
             continue
         vm._value_objects[slot] = {}
         vm._value_objects[previous][0] = value64.value_pack_tagged(
@@ -2532,11 +2538,47 @@ def test_hw_value64_arrow_onload_captures_constructor_this():
     assert value_kind(obj.get(names.index("image"))) == 5
 
 
+def test_hw_value64_raf_method_onload_reads_global():
+    """Image.onload in a method must still LOAD_VAR globals after the rAF caller returns.
+
+    The onload arrow captures the method env; that env's parent is the rAF
+    frame. RET must not recycle the parent or `ctx` walks a stale handle.
+    """
+    from hardware_model.js_vm import JsHwVm
+
+    source = (
+        "var ctx = 7;\n"
+        "var hits = 0;\n"
+        "class G {\n"
+        "  show() {\n"
+        "    var img = new Image();\n"
+        "    img.src = 'asset';\n"
+        "    img.onload = () => { hits = ctx; };\n"
+        "  }\n"
+        "}\n"
+        "function tick() {\n"
+        "  new G().show();\n"
+        "}\n"
+        "requestAnimationFrame(tick);\n"
+    )
+    vm = JsHwVm()
+    vm.load_blob(encode_chunk(compile_source(source), v2=True, value64=True))
+    assert vm.error is None, vm.error
+    vm.frame_tick()
+    assert vm.error is None, vm.error
+    assert vm.globals.get("hits") == 7.0
+
+
 def test_invaders_hm_held_left_changes_framebuffer():
     """INVADERS: start, then held left must change live game state."""
     from pathlib import Path
 
-    from hardware_model.js_vm import value_payload, value_unpack_number
+    from hardware_model.js_vm import (
+        VALUE_KIND_RECORD,
+        record_unpack,
+        value_kind,
+        value_payload,
+    )
 
     invaders = Path(__file__).resolve().parents[1] / "storage" / "INVADERS.HTML"
     if not invaders.is_file():
@@ -2563,17 +2605,24 @@ def test_invaders_hm_held_left_changes_framebuffer():
         machine.frame_tick()
         assert hw.error is None, hw.error
     assert prop(game_handle, "active")
-    position = prop(player_handle, "position")
-    before = hw._value64_host_value(
-        hw._value_objects[value_payload(position)].get(names.index("x"))
-    )
+
+    def player_x():
+        # GC may compact {x,y} to a RECORD immediate; SET_PROP boxes it back.
+        word = hw._value_objects[value_payload(player_handle)][
+            names.index("position")
+        ]
+        followed = hw._value64_record_follow(word)
+        if value_kind(followed) == VALUE_KIND_RECORD:
+            return float(record_unpack(followed)[3])
+        obj = hw._value_objects[value_payload(followed)]
+        return hw._value64_host_value(obj.get(names.index("x")))
+
+    before = player_x()
     machine.input.key_event(39, "ArrowRight", True)
     for _ in range(4):
         machine.frame_tick()
         assert hw.error is None, hw.error
-    after = hw._value64_host_value(
-        hw._value_objects[value_payload(position)].get(names.index("x"))
-    )
+    after = player_x()
     assert after != before, (before, after)
     assert hw.checkpoint()["raf"] >= 1
     # Glass: splash must paint more than one palette index (not solid white).
@@ -3827,6 +3876,70 @@ def test_hw_value64_finder_temps_reclaimed():
     nfn = sum(1 for slot in vm._value_functions if slot is not None)
     assert nobj + nfn < 1024, (nobj, nfn)
     assert vm.globals.get("live") == 1.0
+
+
+def test_hw_value64_stored_finder_paths_fit_object_heap():
+    """BFS `{x,y}` stored in steps/path must compact so 1024 objects still fit."""
+    src = (
+        "var head = {n: 0};\n"
+        "var cur = head;\n"
+        "var i = 1;\n"
+        "while (i < 700) {\n"
+        "  var node = {n: i};\n"
+        "  cur.next = node;\n"
+        "  cur = node;\n"
+        "  i = i + 1;\n"
+        "}\n"
+        "function finder() {\n"
+        "  var steps = [];\n"
+        "  var k = 0;\n"
+        "  while (k < 120) {\n"
+        "    var cell = {x: k, y: k};\n"
+        "    steps.push(cell);\n"
+        "    k = k + 1;\n"
+        "  }\n"
+        "  return steps;\n"
+        "}\n"
+        "var path = finder();\n"
+        "path = finder();\n"
+        "path = finder();\n"
+        "path = finder();\n"
+        "var live = path[0].x;\n"
+    )
+    vm = _hw_v64(src)
+    assert vm.error is None, vm.error
+    nobj = sum(1 for slot in vm._value_objects if slot is not None)
+    assert nobj <= 1024, nobj
+    assert vm.globals.get("live") == 0.0
+
+
+def test_hw_value64_foreach_compact_does_not_stale():
+    """forEach must re-read live `{x,y}` after GC compact (not a handle snapshot)."""
+    src = (
+        "var head = {n: 0};\n"
+        "var cur = head;\n"
+        "var i = 1;\n"
+        "while (i < 980) {\n"
+        "  var node = {n: i};\n"
+        "  cur.next = node;\n"
+        "  cur = node;\n"
+        "  i = i + 1;\n"
+        "}\n"
+        "var cells = [];\n"
+        "var k = 0;\n"
+        "while (k < 40) { cells.push({x: k, y: k}); k = k + 1; }\n"
+        "var acc = 0;\n"
+        "cells.forEach(function(current) {\n"
+        "  var tmp = {x: current.x, y: current.y};\n"
+        "  acc = acc + current.y;\n"
+        "});\n"
+        "var live = acc;\n"
+    )
+    vm = _hw_v64(src)
+    assert vm.error is None, vm.error
+    nobj = sum(1 for slot in vm._value_objects if slot is not None)
+    assert nobj <= 1024, nobj
+    assert vm.globals.get("live") == 39.0 * 40.0 / 2.0
 
 
 def test_canvas_fill_rect_row_slice():
