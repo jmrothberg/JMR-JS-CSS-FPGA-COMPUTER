@@ -284,6 +284,30 @@ static uint16_t ip_trace_prev = 0xffff;
 static unsigned last_fclk = 0;
 static unsigned last_fcap = 0;
 static unsigned fcap_n = 0;
+// Latch rAF/fn SRAM view on first fault — later IDLE ticks overwrite rdata.
+static unsigned fault_snap_code = 0;
+static unsigned fault_snap_raddr = 0;
+static unsigned fault_snap_valid = 0;
+static unsigned fault_snap_gen = 0;
+static unsigned fault_snap_akind = 0;
+static unsigned fault_snap_ai = 0;
+static unsigned fault_snap_vsp = 0;
+static unsigned fault_snap_vcsp = 0;
+static unsigned fault_snap_hvcsp = 0;
+static unsigned fault_snap_opnd = 0;
+static uint64_t fault_snap_w0 = 0;
+static uint32_t fault_snap_cr = 0;
+static unsigned fault_hold_raddr = 0;
+static unsigned fault_hold_valid = 0;
+static unsigned fault_hold_gen = 0;
+static unsigned fault_hold_akind = 0;
+static unsigned fault_hold_ai = 0;
+static unsigned fault_hold_vsp = 0;
+static unsigned fault_hold_vcsp = 0;
+static unsigned fault_hold_hvcsp = 0;
+static unsigned fault_hold_opnd = 0;
+static uint64_t fault_hold_w0 = 0;
+static uint32_t fault_hold_cr = 0;
 
 // Must match jmr_js_vm.sv st_t declaration order (VMSTAT sname=).
 static const char* vm_sname(unsigned s) {
@@ -339,6 +363,40 @@ static void tick() {
             ip_trace.push_back(cur);
             ip_trace_prev = cur;
         }
+    }
+    {
+        auto* r = top->rootp;
+        unsigned fc = unsigned(r->jmr_js_core__DOT__u_vm__DOT__fault_code);
+        if (fc == 0)
+            fault_snap_code = 0;
+        else if (fault_snap_code == 0) {
+            // Use pre-NBA hold: opcode comb saw last cycle's rdata/raddr.
+            fault_snap_code = fc;
+            fault_snap_raddr = fault_hold_raddr;
+            fault_snap_valid = fault_hold_valid;
+            fault_snap_gen = fault_hold_gen;
+            fault_snap_akind = fault_hold_akind;
+            fault_snap_ai = fault_hold_ai;
+            fault_snap_vsp = fault_hold_vsp;
+            fault_snap_vcsp = fault_hold_vcsp;
+            fault_snap_hvcsp = fault_hold_hvcsp;
+            fault_snap_opnd = fault_hold_opnd;
+            fault_snap_w0 = fault_hold_w0;
+            fault_snap_cr = fault_hold_cr;
+        }
+        fault_hold_raddr = unsigned(r->jmr_js_core__DOT__u_vm__DOT__e64_vfn_raddr);
+        fault_hold_valid = unsigned(r->jmr_js_core__DOT__u_vm__DOT__vfn_valid_rdata);
+        fault_hold_gen = unsigned(r->jmr_js_core__DOT__u_vm__DOT__vfn_gen_rdata);
+        fault_hold_akind = unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_kind);
+        fault_hold_ai = unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_i);
+        fault_hold_vsp = unsigned(r->jmr_js_core__DOT__u_vm__DOT__vsp);
+        fault_hold_vcsp = unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__vcsp);
+        fault_hold_hvcsp = unsigned(r->jmr_js_core__DOT__u_vm__DOT__hs_m_vcsp);
+        fault_hold_opnd =
+            (unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opnd_q) << 1) |
+            unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opnd2_q);
+        fault_hold_w0 = uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vst_win[0]);
+        fault_hold_cr = uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_rdata);
     }
 }
 
@@ -1325,7 +1383,32 @@ int main(int argc, char** argv) {
             for (unsigned i = 0; i < 8u; i++)
                 std::cout << " w" << i << "="
                           << uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vst_win[i]);
-            std::cout << std::dec << std::endl;
+            // ctor0: NEW_OBJ frame[0].constructor_value (RET_VAL instance).
+            std::cout << " ctor0="
+                      << uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vframe_ctor[0]);
+            // rAF fault 4: is TOS Fn slot actually valid?
+            std::cout << std::dec
+                      << " vf0=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vfn_valid[0])
+                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vfn_gen[0])
+                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vfn_entry[0])
+                      << " vf1=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vfn_valid[1])
+                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vfn_gen[1])
+                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vfn_entry[1]);
+            std::cout << " fs=" << fault_snap_code
+                      << ",ra=" << fault_snap_raddr
+                      << ",rd=" << fault_snap_valid
+                      << ",rg=" << fault_snap_gen
+                      << ",ak=" << fault_snap_akind
+                      << ",ai=" << fault_snap_ai
+                      << ",sp=" << fault_snap_vsp
+                      << ",ev=" << fault_snap_vcsp
+                      << ",hv=" << fault_snap_hvcsp
+                      << ",op=" << fault_snap_opnd
+                      << std::hex
+                      << ",w0=" << fault_snap_w0
+                      << ",cr=" << fault_snap_cr
+                      << std::dec;
+            std::cout << std::endl;
             continue;
         }
         // NEW: OBJPEEK <oid> — dump one heap object (cls, n, key/val/tag slots)

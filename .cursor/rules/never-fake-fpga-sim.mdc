@@ -29,7 +29,9 @@ silicon (~30 MHz). Caps (same in PYTHON): `MAX_OBJ=1024`, arrays
 `1536×32+128×128`, `ENV_DEPTH=512`. Do not restore `8192`/`4096` (~7 MB).
 Overflow loud. JS heap is not the 4 MB ASET bank; do not bump that bank to
 8 MB. `cls_*` 16×16 (4 Kbit) stays. Copy `storage_engine.sv` `sbuf` /
-`jmr_video_vram.sv` Port A. Fit numbers:
+`jmr_video_vram.sv` Port A. Synth **8-4767** on `storage_engine` `linebuf`
+is a small FAT copy buffer in registers — leave it; the hang 8-4767 was
+exec32 `stack_reg` tens of thousands of FFs. Fit numbers:
 [docs/FPGA_FIT.md](../../docs/FPGA_FIT.md). Live leftovers:
 [docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md).
 

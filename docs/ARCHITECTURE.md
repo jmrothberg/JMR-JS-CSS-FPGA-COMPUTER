@@ -41,31 +41,62 @@ fine print:
   lives on the ASIC board poster, not this one.
 
 **Core zoom-in poster** (sibling style to the JMR BASIC Processor Core
-zoom-in diagram) — the JS processor core itself: program sequencer, dispatch
-table, tagged eval stack, object/heap engine, native call unit, shared
-engines, compile-on-RUN front end, three memory rooms, I/O:
+zoom-in diagram) — the JS processor core itself: program sequencer,
+`exec32`/`exec64` dispatch, tagged eval stack, object/heap, native call,
+shared engines, compile-on-RUN, three memory rooms, I/O. Render
+**2026-08-18** (replaces the draft that still had 8192/4096 heap, ring
+recycle, `.JSH` on card, and `CALL_NATIVE`).
 
 ![JMR JS Processor Core — zoom-in poster](jmr_js_core_zoom_in.png)
 
-### Core zoom-in poster errata (AI-rendered image; text noise)
+### Core zoom-in poster — verified (2026-08-18)
 
-The block diagram and every number are correct and verified against the code
-(opcodes/hex from `rtl/engines/jmr_js_vm.sv`; header, const pool, and native
-IDs from `functional_model/jsb_format.py`). Known text errors baked into the
-render — trust this list, not the poster fine print:
+Checked against `rtl/engines/jmr_js_vm.sv` / `jmr_js_vm_pkg.sv` and
+`functional_model/jsb_format.py`. **No regen needed.** Block diagram,
+capacities, JSB1 header, three rooms, and compile-on-RUN match silicon:
 
-- Canvas 2D engine caption: first word is garbled — should read
-  "**fillRect** • fillText (8×8 font ROM) • getImageData".
-- Blitter engine caption: "drawingage" → "**drawImage** streams 8-bpp pixels
-  from asset SRAM, 2 px / 16-bit word".
-- Console Engine verb strip: "READV" → "**READY**".
-- Object/Heap footnote: "returnc" → "return**:**" (closures survive after
-  return: setTimeout / requestAnimationFrame).
-- Poster opcode `0D CALL_NATIVE` is the FM name; the RTL localparam is
-  `OP_CALL` — same instruction (native id in arg0). The 9-row tables are
-  samples: 34 opcodes total, 40 native IDs total.
-- Heap footnote: live objects use **stable handles** and mark/sweep at safe
-  points. The old nursery watermark / ring-recycle story is retired.
+- Parent SRAM owns the heap; exec is decode; extra clocks are silicon.
+  `exec32 | exec64` mux on `flags[3]` (`FLAG_VALUE64`). Two decoders in
+  **one** VM, not two CPUs.
+- Code BRAM 32K×32, dual-port VM-read / loader-write. IP 16-bit.
+  `op = { arg1[31:24], arg0[23:8], opcode[7:0] }`. Magic `JSB1`;
+  `n_ops` / `n_consts` / `n_vars` / `flags`; `flags.ASET` → `aset_byte_off`
+  then consts then ops. CODE → code BRAM, ASET → external 4 MB SRAM.
+  Flags: v2, ASET, source map, Value64.
+- 34 opcodes (sample `01 LOAD_CONST`, `0D CALL` with native id in arg0,
+  `1A MAKE_OBJ`, `21 MAKE_FN`). Eval stack SRAM 2048, 1W + 1–2R, rdata next
+  clock, 16 TOS window FFs. VARS 512, CONSTS 1024. Value64 when `flags[3]`.
+- Heap: `MAX_OBJ=1024×32` props, arrays `1536×32 + 128×128`,
+  `ENV_DEPTH=512`, parent-owned 1-D SRAM, overflow loud.
+  `handle = generation + index`; mark/sweep at safe points; stale gen
+  reported. `MAKE_FN` snapshots env; closures survive return
+  (`setTimeout` / rAF).
+- Native IDs sample: `0 console.log`, `2 fillRect`, `3 swapBuffers`,
+  `10 Math.floor`, `19 addEventListener`, `27 requestAnimationFrame`
+  (~40 total; ABI is 0–40).
+- Canvas: `fillRect` • `fillText` (8×8 font ROM) • `getImageData`.
+  Blitter: `drawImage` 8-bpp from asset SRAM, 2 px / 16-bit word.
+  Console: READY / LOAD / RUN / DIR / EDIT. µSD SPI FAT32.
+- Compile-on-RUN: `LOAD "NAME.HTML"` → EDIT → RUN always compiles current
+  HTML into an in-memory ProgramImage. Line numbers = HTML. Missing path
+  loud `?NH`. Never writes `.JSH` / `.JSB` to the card.
+- Three rooms: on-chip BRAM (~1 MB-class after dual 640×480 FB) = code +
+  JS heap + palette + FIFOs + font; HDMI scanout from on-chip **front** FB
+  never from asset SRAM. External 4 MB IS61WV204816 = ASET art only
+  (`addr[20:0]`, `wdata`/`rdata[15:0]`, `we`/`req`/`ack`; FPGA = DDR3
+  behind that port). Map `0x000000–0x0002FF` palette, `0x000300+` sprite
+  banks. µSD = `NAME.HTML` titles only.
+- FPGA Nexys Video XC7A200T, clock class ~30 MHz. ASIC die target ~30 mm².
+
+Leftover poster shorthand (not wrong enough to re-render):
+
+- Tag strip is a sample (`int` / `obj` / `arr` / `str` / `fn` / `undef` /
+  `elem`). Value64 also has `null` / `bool` / `env`; numbers are IEEE-754,
+  not a separate `int` tag.
+- `VARS` / `CONSTS` are sibling parent SRAMs, drawn inside the eval-stack
+  box.
+- `LOAD → EDIT → RUN` — EDIT is optional.
+- `~30 mm²` in the on-chip box is the **whole ASIC die**, not a BRAM size.
 
 **ASIC board poster (Rev A proposal)** — QFN-100 chip + external 4 MB asset
 SRAM + HDMI transmitter carrier board, sibling style to the JMR BASIC ASIC

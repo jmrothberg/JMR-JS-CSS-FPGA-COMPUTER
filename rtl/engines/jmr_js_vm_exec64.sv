@@ -83,6 +83,11 @@ module jmr_js_vm_exec64 (
     input  logic hs_m_vdraw_w,
     input  logic hs_m_vdraw_h,
     input  logic hs_m_vdraw_color,
+    // Parent FOREACH walks vfe_i / pops nest; exec owns the FFs (CALL_METHOD
+    // plants them). Without these pokes, parent vfe_* stay UNDEF and the
+    // done path jumps to ip=0 until vfe_sp>=8 (INVADERS fault 3).
+    input  logic hs_m_vfe_i,
+    input  logic hs_m_vfe_pop,
     output logic aset_win_retried_q,
     output logic [7:0] bind_argc_q,
     output logic [11:0] bind_base_q,
@@ -271,6 +276,7 @@ module jmr_js_vm_exec64 (
     output logic [11:0] vfe_base_q,
     output logic [63:0] vfe_fn_q,
     output logic [7:0] vfe_i_q,
+    output logic [7:0] vfe_len_q,
     output logic [63:0] vfe_map_q,
     output logic [1:0] vfe_mode_q,
     output logic [15:0] vfe_ret_q,
@@ -311,7 +317,7 @@ module jmr_js_vm_exec64 (
     output logic [31:0] vtimer_seq_q,
     output logic [9:0] x_q,
     output logic [9:0] y_q,
-    output logic p_clr_busy,
+    output logic p_clr_busy_q,
     input  logic p_aset_win_retried,
     input  logic [7:0] p_bind_argc,
     input  logic [11:0] p_bind_base,
@@ -1004,6 +1010,9 @@ module jmr_js_vm_exec64 (
     logic [13:0] varr_next_n;
     logic [11:0] vcall_argc_n;
     logic [63:0] vcall_ctor_val_n;
+    // ALLOC p_frame_we plants the instance here (SRAM rdata lags RET combo).
+    logic [63:0] ctor_cur_n;
+    logic [7:0] ctor_csp_n;
     logic [15:0] vcall_entry_n;
     logic vcall_set_this_n;
     logic [63:0] vcall_this_n;
@@ -1029,6 +1038,7 @@ module jmr_js_vm_exec64 (
     logic [11:0] vfe_base_n;
     logic [63:0] vfe_fn_n;
     logic [7:0] vfe_i_n;
+    logic [7:0] vfe_len_n;
     logic [63:0] vfe_map_n;
     logic [1:0] vfe_mode_n;
     logic [15:0] vfe_ret_n;
@@ -1096,13 +1106,23 @@ module jmr_js_vm_exec64 (
     logic [63:0] vfe_arr_s_wdata, vfe_fn_s_wdata, vfe_map_s_wdata;
     logic [11:0] vfe_base_s_wdata;
     logic [7:0] vfe_i_s_wdata;
+    logic [7:0] vfe_len_s_wdata;
     logic [1:0] vfe_mode_s_wdata;
     logic [15:0] vfe_ret_s_wdata;
     logic [63:0] vlistener_nev [0:15];
     logic [63:0] vlistener_nfn [0:15];
     // Parent SRAM raddr/rdata are module ports. Operand arm (opnd_q) waits
     // the registered rdata beat. Do not declare a second copy here.
+    // leftover 3 clocks raddr_q on EXEC; parent rdata is the next clock after
+    // that. One opnd beat presented the new raddr but LOAD_CONST still saw
+    // the previous const (fillRect 8x8 → 10x8, n=f() not 7). Second beat
+    // lets rdata settle. Extra clocks are silicon (never-fake-fpga-sim).
     logic opnd_q, opnd_n;
+    logic opnd2_q, opnd2_n;
+    // ALLOC (getElementById / FRAME_RAF env) freezes raddr_q. Parent
+    // vfn_valid_rdata is the clock after raddr_q, and exec samples that
+    // rdata one more clock after that (rAF fault 4 / 45 with vf0=1).
+    logic opnd3_q, opnd3_n;
     // String.replace needs two name_hash_tbl keys; one SRAM port → extra beat.
     logic hash2_q, hash2_n;
     logic [6:0] tmr_i_q, tmr_i_n;
@@ -1114,6 +1134,7 @@ module jmr_js_vm_exec64 (
 
     // Parent clr/poke + exec we into local copies. No opcode rewrite.
     // p_clr walks one index per clock (SRAM has no parallel clear).
+    logic p_clr_busy;
     assign p_clr_busy = clr_busy | p_clr;
 
     // Working regs clock here. Parent sees *_q / leave_hold, not combo *_n.
@@ -1457,6 +1478,8 @@ module jmr_js_vm_exec64 (
     assign vcall_argc_q = vcall_argc;
     logic [63:0] vcall_ctor_val;
     assign vcall_ctor_val_q = vcall_ctor_val;
+    logic [63:0] ctor_cur;
+    logic [7:0] ctor_csp;
     logic [15:0] vcall_entry;
     assign vcall_entry_q = vcall_entry;
     logic vcall_set_this;
@@ -1511,6 +1534,9 @@ module jmr_js_vm_exec64 (
     logic [7:0] vfe_i;
     assign vfe_i_q = vfe_i;
     logic [7:0] vfe_i_s [0:7];
+    logic [7:0] vfe_len;
+    assign vfe_len_q = vfe_len;
+    logic [7:0] vfe_len_s [0:7];
     logic [63:0] vfe_map;
     assign vfe_map_q = vfe_map;
     logic [63:0] vfe_map_s [0:7];
@@ -1602,12 +1628,15 @@ module jmr_js_vm_exec64 (
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             opnd_q <= 1'b0;
+            opnd2_q <= 1'b0;
+            opnd3_q <= 1'b0;
             hash2_q <= 1'b0;
             tmr_i_q <= 7'd0;
             tmr_found_q <= 1'b0;
             tmr_slot_q <= 7'd0;
             clr_busy <= 1'b0;
             clr_i <= 12'd0;
+            p_clr_busy_q <= 1'b0;
         end else if (p_clr) begin
             clr_busy <= 1'b1;
             clr_i <= 12'd0;
@@ -1633,17 +1662,22 @@ module jmr_js_vm_exec64 (
         end
         if (enable && !leave_hold) begin
             opnd_q <= opnd_n;
+            opnd2_q <= opnd2_n;
+            opnd3_q <= opnd3_n;
             hash2_q <= hash2_n;
             tmr_i_q <= tmr_i_n;
             tmr_found_q <= tmr_found_n;
             tmr_slot_q <= tmr_slot_n;
         end else begin
             opnd_q <= 1'b0;
+            opnd2_q <= 1'b0;
+            opnd3_q <= 1'b0;
             hash2_q <= 1'b0;
             tmr_i_q <= 7'd0;
             tmr_found_q <= 1'b0;
             tmr_slot_q <= 7'd0;
         end
+        p_clr_busy_q <= p_clr_busy;
     end
 
     // Sequential cell so Vivado keep_hierarchy is not dissolved as combo-only.
@@ -1654,6 +1688,17 @@ module jmr_js_vm_exec64 (
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             leave_hold <= 1'b0;
+            ctor_cur <= V64_UNDEFINED;
+            ctor_csp <= 8'd0;
+            // Parent GOT_HDR sets identity scale; exec fillRect uses these
+            // FFs (ctx_sx=0 after rst made every ctx.fillRect clip to 0 —
+            // INVADERS splash 1893 swaps, FBRAW nz=0).
+            ctx_sx <= FX_ONE;
+            ctx_sy <= FX_ONE;
+            saved_sx <= FX_ONE;
+            saved_sy <= FX_ONE;
+            ctx_tx <= 32'sd0;
+            ctx_ty <= 32'sd0;
         // leave_hold beat: parent unique case (ALLOC/HEAP/BIND) pokes *_ff.
         // enable is still 1 (parent state=EXEC). Apply hs_m here or venv/hp_*
         // stay stale and STORE_VAR walks a self-parent env forever.
@@ -1837,6 +1882,8 @@ module jmr_js_vm_exec64 (
                 varr_next <= varr_next_n;
                 vcall_argc <= vcall_argc_n;
                 vcall_ctor_val <= vcall_ctor_val_n;
+                ctor_cur <= ctor_cur_n;
+                ctor_csp <= ctor_csp_n;
                 vcall_entry <= vcall_entry_n;
                 vcall_set_this <= vcall_set_this_n;
                 vcall_this <= vcall_this_n;
@@ -1846,7 +1893,17 @@ module jmr_js_vm_exec64 (
                 // vsp_n/vcsp_n would re-clock the pre-ALLOC value and drop
                 // the MAKE_FN push (DONKEY CALL_VAL TOS=undef) / CALL_USER
                 // frame (RET_VAL fault 2).
-                if (hs_m_vcsp && (p_vcsp != 8'd0)) vcsp <= p_vcsp;
+                // Sticky hs_m_vcsp (outer BIND p=1) must not win over
+                // NEW_OBJ vcsp_n=+1 or RET_VAL vcsp_n=-1 — that kept exec
+                // at 1, nested `new` wrote frame[0], Game RET fault 2.
+                // vcsp already 0 + overlay p=1 + vcsp_n==0 re-raised the
+                // popped forEach frame on RET (one_fe idle vret=fffc).
+                // Raise-only when depth is already live; 0→1 is enable=0
+                // FOREACH/ALLOC, not this EXEC beat.
+                if (hs_m_vcsp && (p_vcsp != 8'd0) &&
+                    (vcsp_n == vcsp) && (p_vcsp > vcsp) &&
+                    (vcsp != 8'd0))
+                    vcsp <= p_vcsp;
                 else vcsp <= vcsp_n;
                 vdiv_count <= vdiv_count_n;
                 vdiv_den <= vdiv_den_n;
@@ -1870,6 +1927,7 @@ module jmr_js_vm_exec64 (
                     vfe_base_s[vfe_s_waddr] <= vfe_base_s_wdata;
                     vfe_fn_s[vfe_s_waddr] <= vfe_fn_s_wdata;
                     vfe_i_s[vfe_s_waddr] <= vfe_i_s_wdata;
+                    vfe_len_s[vfe_s_waddr] <= vfe_len_s_wdata;
                     vfe_map_s[vfe_s_waddr] <= vfe_map_s_wdata;
                     vfe_mode_s[vfe_s_waddr] <= vfe_mode_s_wdata;
                     vfe_ret_s[vfe_s_waddr] <= vfe_ret_s_wdata;
@@ -1877,6 +1935,7 @@ module jmr_js_vm_exec64 (
                 vfe_base <= vfe_base_n;
                 vfe_fn <= vfe_fn_n;
                 vfe_i <= vfe_i_n;
+                vfe_len <= vfe_len_n;
                 vfe_map <= vfe_map_n;
                 vfe_mode <= vfe_mode_n;
                 vfe_ret <= vfe_ret_n;
@@ -2142,8 +2201,75 @@ module jmr_js_vm_exec64 (
                     machine_fault <= 1'b0;
                     fault_code <= 8'd0;
                     vcsp <= 8'd0;
-                end else if (hs_m_vcsp && (p_vcsp != 8'd0)) vcsp <= p_vcsp;
-                if (hs_m_vthis) vthis <= p_vthis;
+                    ctor_cur <= V64_UNDEFINED;
+                    ctor_csp <= 8'd0;
+                    ctx_sx <= FX_ONE;
+                    ctx_sy <= FX_ONE;
+                    saved_sx <= FX_ONE;
+                    saved_sy <= FX_ONE;
+                    ctx_tx <= 32'sd0;
+                    ctx_ty <= 32'sd0;
+                    vfe_arr <= V64_UNDEFINED;
+                    vfe_fn <= V64_UNDEFINED;
+                    vfe_i <= 8'd0;
+                    vfe_ret <= 16'd0;
+                    vfe_base <= '0;
+                    vfe_mode <= 2'd0;
+                    vfe_map <= V64_UNDEFINED;
+                    vfe_len <= 8'd0;
+                    vfe_sp <= 4'd0;
+                // leave_hold EXEC: parent is still EXEC (casestate FOREACH
+                // after RET 0xfffc / ALLOC). Sticky ALLOC hs_vcsp re-raised
+                // the popped callback frame (one_fe nops fault 1, nested
+                // forEach wrote frame[0]). HEAP/BIND pokes still land —
+                // those states have enable=0. Do not skip hs_m_venv here
+                // (STORE_VAR self-parent walk).
+                // FOREACH done hs_vcsp(0) must land: the !=0 guard left
+                // parent/exec depth stuck at ALLOC (vret=fffc after nops).
+                end else if (hs_m_vcsp &&
+                             !(enable && leave_hold) &&
+                             ((p_vcsp != 8'd0 && p_vcsp >= vcsp) ||
+                              (p_vcsp == 8'd0 && p_state == S_V64_FOREACH)))
+                    vcsp <= p_vcsp;
+                // FOREACH: parent state is FOREACH so enable=0. i++ must
+                // land here or RET 0xfffc / nested CALL_METHOD save stale i.
+                // Pop restores the exec nest stack (parent vfe_arr_s is empty).
+                if (!p_clr && hs_m_vfe_pop && (vfe_sp != 4'd0)) begin
+                    vfe_arr <= vfe_arr_s[vfe_sp - 4'd1];
+                    vfe_fn <= vfe_fn_s[vfe_sp - 4'd1];
+                    vfe_i <= vfe_i_s[vfe_sp - 4'd1];
+                    vfe_len <= vfe_len_s[vfe_sp - 4'd1];
+                    vfe_ret <= vfe_ret_s[vfe_sp - 4'd1];
+                    vfe_base <= vfe_base_s[vfe_sp - 4'd1];
+                    vfe_mode <= vfe_mode_s[vfe_sp - 4'd1];
+                    vfe_map <= vfe_map_s[vfe_sp - 4'd1];
+                    vfe_sp <= vfe_sp - 4'd1;
+                end else if (!p_clr && hs_m_vfe_i)
+                    vfe_i <= p_vfe_i;
+                // ALLOC kind 3 pulses p_frame_we on the CTOR_PAD beat
+                // (enable=0). Same-cycle hs_vcall_ctor_val(UNDEF) must not
+                // wipe this — RET_VAL samples ctor_cur, not lagged SRAM.
+                // Not else-if vs hs_vcsp: ALLOC writes both the same beat.
+                // Only OBJECT: CALL_USER p_frame_ctor=UNDEF must not steal
+                // the instance (constructor that calls f() then RET).
+                if (!p_clr && p_frame_we &&
+                    p_frame_ctor[63:48] == V64_TAG_PREFIX &&
+                    p_frame_ctor[47:44] == V64_KIND_OBJECT) begin
+                    ctor_cur <= p_frame_ctor;
+                    ctor_csp <= {1'b0, p_frame_idx} + 8'd1;
+                    // LOAD_VAR __this reads vthis. hs_m_vthis from kind 3
+                    // is visible next cycle; plant now so nested `this.n=n`
+                    // is not UNDEF / the outer instance.
+                    vthis <= p_frame_ctor;
+                end
+                // Kind 3 also pulses hs_vthis(UNDEF) for CALL_USER. Do not
+                // wipe the instance we just planted (nested this.n=n).
+                if (hs_m_vthis &&
+                    !(p_vthis[63:48] == V64_TAG_PREFIX &&
+                      p_vthis[47:44] == V64_KIND_UNDEFINED &&
+                      ctor_cur[63:48] == V64_TAG_PREFIX &&
+                      ctor_cur[47:44] == V64_KIND_OBJECT))
+                    vthis <= p_vthis;
                 if (hs_m_venv) venv <= p_venv;
                 if (hs_m_vraf_n) vraf_n <= p_vraf_n;
                 if (hs_m_vlistener_n) vlistener_n <= p_vlistener_n;
@@ -2576,9 +2702,12 @@ module jmr_js_vm_exec64 (
                     : 12'd0
             )[12:0];
         else if (code_rdata[7:0] == OP_CALL)
+            // Same vsp_hs as CALL_VAL: parent hs_vsp (getContext ALLOC)
+            // is TOS truth. exec vsp lags → rAF vfn_raddr hit the
+            // previous slot (valid/gen miss, fault 4).
             vfn_raddr = `VST_AT(
-                (vsp > {4'd0, code_rdata[31:24]})
-                    ? (vsp - {4'd0, code_rdata[31:24]})
+                (vsp_hs > {4'd0, code_rdata[31:24]})
+                    ? (vsp_hs - {4'd0, code_rdata[31:24]})
                     : 12'd0
             )[12:0];
         else
@@ -2589,8 +2718,8 @@ module jmr_js_vm_exec64 (
             name_blen_raddr = `VST_AT(vsp - 12'd2)[9:0];
         else if (code_rdata[7:0] == OP_CALL)
             name_blen_raddr = `VST_AT(
-                (vsp > {4'd0, code_rdata[31:24]})
-                    ? (vsp - {4'd0, code_rdata[31:24]})
+                (vsp_hs > {4'd0, code_rdata[31:24]})
+                    ? (vsp_hs - {4'd0, code_rdata[31:24]})
                     : 12'd0
             )[9:0];
         else
@@ -2768,6 +2897,8 @@ module jmr_js_vm_exec64 (
         varr_next_n = varr_next;
         vcall_argc_n = vcall_argc;
         vcall_ctor_val_n = vcall_ctor_val;
+        ctor_cur_n = ctor_cur;
+        ctor_csp_n = ctor_csp;
         vcall_entry_n = vcall_entry;
         vcall_set_this_n = vcall_set_this;
         vcall_this_n = vcall_this;
@@ -2793,6 +2924,7 @@ module jmr_js_vm_exec64 (
         vfe_base_n = vfe_base;
         vfe_fn_n = vfe_fn;
         vfe_i_n = vfe_i;
+        vfe_len_n = vfe_len;
         vfe_map_n = vfe_map;
         vfe_mode_n = vfe_mode;
         vfe_ret_n = vfe_ret;
@@ -2827,7 +2959,8 @@ module jmr_js_vm_exec64 (
         vst_refill_ret_n = vst_refill_ret;
         vst_waddr_n = vst_waddr;
         vst_wdata_n = vst_wdata;
-        vst_we_n = vst_we;
+        // Pulse: holding we replayed the previous write on opnd2 / CALL_VAL.
+        vst_we_n = 1'b0;
         vthis_n = vthis_hs;
         vtimer_n_n = vtimer_n;
         vtimer_seq_n = vtimer_seq;
@@ -2859,6 +2992,7 @@ module jmr_js_vm_exec64 (
         vfe_base_s_wdata = '0;
         vfe_fn_s_wdata = '0;
         vfe_i_s_wdata = '0;
+        vfe_len_s_wdata = '0;
         vfe_map_s_wdata = '0;
         vfe_mode_s_wdata = '0;
         vfe_ret_s_wdata = '0;
@@ -2883,6 +3017,8 @@ module jmr_js_vm_exec64 (
         vst_win0_we = 1'b0;
         vst_win0_wdata = '0;
         opnd_n = 1'b0;
+        opnd2_n = 1'b0;
+        opnd3_n = 1'b0;
         hash2_n = 1'b0;
         tmr_i_n = 7'd0;
         tmr_found_n = 1'b0;
@@ -2937,12 +3073,38 @@ module jmr_js_vm_exec64 (
         vframe_ctor_wdata = '0;
         if (enable && !leave_hold) begin
                     opnd_n = opnd_q;
+                    opnd2_n = opnd2_q;
+                    opnd3_n = opnd3_q;
                     tmr_i_n = tmr_i_q;
                     tmr_found_n = tmr_found_q;
                     tmr_slot_n = tmr_slot_q;
                     if (!opnd_q && tmr_i_q == 7'd0) begin
+                        // Beat 1: clock raddr_q from this instruction.
                         opnd_n = 1'b1;
                         state_n = S_V64_EXEC;
+                        // Leftover vst_we must not hold through opnd2: CALL_VAL
+                        // then re-wrote MAKE_FN into TOS (nonempty IIFE fault 4).
+                        vst_we_n = 1'b0;
+                    end else if (opnd_q && !opnd2_q && tmr_i_q == 7'd0) begin
+                        // Beat 2: parent *_rdata catches raddr_q (leftover 3).
+                        opnd_n = 1'b1;
+                        opnd2_n = 1'b1;
+                        state_n = S_V64_EXEC;
+                        vst_we_n = 1'b0;
+                    end else if (opnd_q && opnd2_q && !opnd3_q &&
+                                tmr_i_q == 7'd0 &&
+                                (code_rdata[7:0] == OP_CALL ||
+                                 code_rdata[7:0] == OP_CALL_VAL ||
+                                 code_rdata[7:0] == OP_CALL_METH)) begin
+                        // Beat 3: exec samples parent rdata after ALLOC
+                        // freeze (getElementById / FRAME_RAF env). Two
+                        // waits left rAF seeing !vfn_valid_rdata while
+                        // slot 0 was already valid.
+                        opnd_n = 1'b1;
+                        opnd2_n = 1'b1;
+                        opnd3_n = 1'b1;
+                        state_n = S_V64_EXEC;
+                        vst_we_n = 1'b0;
                     end else
                     // Small gated scalar island. Every opcode not implemented
                     // here faults with ERROR_UNSUPPORTED; it never falls into
@@ -2954,7 +3116,20 @@ module jmr_js_vm_exec64 (
                         // ends, but JUMP to n_ops / IIFE-as-script still
                         // lands here (DONKEY vcsp=1, PACMAN vcsp=3).
                         if (vcsp_hs != 0) begin
-                            if (vsp_hs != vframe_bsp_rdata) begin
+                            if (vframe_rip_rdata == 16'hfffc) begin
+                                // Leftover forEach frame after the walk
+                                // continued at vfe_ret (one_fe nops fault 1
+                                // blocked GC_CLEAR; rAF never parked).
+                                vcsp_n = vcsp_hs - 8'd1;
+                                vsp_n = 12'd0;
+                                vgc_clear_i_n = 14'd0;
+                                vgc_qr_n = 14'd0;
+                                vgc_qw_n = 14'd0;
+                                vgc_halt_after_n = 1'b1;
+                                vgc_wait_after_n =
+                                    (vraf_n != 0 || vtimer_n != 0);
+                                state_n = S_V64_GC_CLEAR;
+                            end else if (vsp_hs != vframe_bsp_rdata) begin
                             machine_fault_n = 1'b1;
                             fault_code_n = 8'd1;
                             running_n = 1'b0;
@@ -3044,12 +3219,13 @@ module jmr_js_vm_exec64 (
                                     state_n = S_FETCH_WAIT;
                                 end
                             end
-                        end else if (vsp != 0) begin
-                            machine_fault_n = 1'b1;
-                            fault_code_n = 8'd1;
-                            running_n = 1'b0;
-                            state_n = S_DONE;
                         end else begin
+                            // Script end. Leftover TOS (forEach done
+                            // hs_vsp(base+1) then native CALL) is not a
+                            // machine fault — PYTHON drops it. Faulting
+                            // here skipped GC_CLEAR so rAF never parked
+                            // (fe_then_raf IDLE raf=0, PACMAN nops).
+                            vsp_n = 12'd0;
                             vgc_clear_i_n = 14'd0;
                             vgc_qr_n = 14'd0;
                             vgc_qw_n = 14'd0;
@@ -3338,7 +3514,11 @@ module jmr_js_vm_exec64 (
                                 logic signed [31:0] ms, frames, wanted;
                                 nid = code_rdata[15:8];
                                 argc = code_rdata[31:24];
-                                base = vsp - argc;
+                                // CALL_VAL already uses vsp_hs. Native rAF /
+                                // fillRect must too or getContext's hs_vsp
+                                // leaves the Fn/args off the combo window.
+                                base = (vsp_hs > argc) ? (vsp_hs - argc)
+                                                       : 12'd0;
                                 result = V64_UNDEFINED;
                                 bad_fn = 1'b0;
                                 found_slot = 1'b0;
@@ -3346,7 +3526,7 @@ module jmr_js_vm_exec64 (
                                 ms = 32'sd0;
                                 frames = 32'sd1;
                                 wanted = -32'sd1;
-                                if (vsp < argc) begin
+                                if (vsp_hs < argc) begin
                                     machine_fault_n = 1'b1;
                                     fault_code_n = 8'd1;
                                     running_n = 1'b0;
@@ -4078,6 +4258,12 @@ module jmr_js_vm_exec64 (
                                     valloc_kind_n = 2'd3;
                                     valloc_i_n = venv_next;
                                     valloc_retried_n = 1'b0;
+                                    // Same reserve as CALL_USER/NEW_OBJ:
+                                    // kind 3 ALLOC writes e64-1. Without +1,
+                                    // `constructor(){ this.n=f(); }` overwrote
+                                    // the instance frame; f() RET then Game
+                                    // RET_VAL saw vcsp=0 (fault 2).
+                                    vcsp_n = vcsp_hs + 8'd1;
                                     state_n = S_V64_ALLOC;
                                 end
                             end
@@ -4189,12 +4375,37 @@ module jmr_js_vm_exec64 (
                                     end else begin
                                         // PYTHON RET_VAL: constructor frames
                                         // yield the instance, not undefined.
-                                        vst_wr(vframe_bsp_rdata, (vframe_ctor_rdata[63:48] ==
-                                             V64_TAG_PREFIX &&
-                                             vframe_ctor_rdata[47:44] ==
-                                             V64_KIND_OBJECT)
-                                            ? vframe_ctor_rdata
-                                            : `VST_AT(vsp - 12'd1));
+                                        // Always plant win[0]: bsp==0 skipped
+                                        // win0_we, so `new M(); this.x=200`
+                                        // left SET_PROP 200 in the TOS window
+                                        // (leave_hold EXEC does not shift).
+                                        begin
+                                            logic [63:0] ret_v;
+                                            // ctor_cur is ALLOC p_frame_we (instance)
+                                            // for this frame (ctor_csp). SRAM rdata can
+                                            // still be UNDEF at this combo. Do not use
+                                            // ctor_cur on nested CALL_USER RET.
+                                            ret_v = (ctor_csp != 8'd0 &&
+                                                 vcsp_hs == ctor_csp &&
+                                                 ctor_cur[63:48] ==
+                                                 V64_TAG_PREFIX &&
+                                                 ctor_cur[47:44] ==
+                                                 V64_KIND_OBJECT)
+                                                ? ctor_cur
+                                                : (vframe_ctor_rdata[63:48] ==
+                                                 V64_TAG_PREFIX &&
+                                                 vframe_ctor_rdata[47:44] ==
+                                                 V64_KIND_OBJECT)
+                                                ? vframe_ctor_rdata
+                                                : `VST_AT(vsp - 12'd1);
+                                            vst_wr(vframe_bsp_rdata, ret_v);
+                                            vst_win0_we = 1'b1;
+                                            vst_win0_wdata = ret_v;
+                                            if (vcsp_hs == ctor_csp) begin
+                                                ctor_cur_n = V64_UNDEFINED;
+                                                ctor_csp_n = 8'd0;
+                                            end
+                                        end
                                         vsp_n =
                                             vframe_bsp_rdata + 12'd1;
                                         ip_n = vframe_rip_rdata;
@@ -4218,13 +4429,6 @@ module jmr_js_vm_exec64 (
                                             vst_refill_arm_n = 1'b0;
                                             vst_refill_ret_n = S_FETCH_WAIT;
                                             vst_hold_win_n = 1'b1;
-                                            vst_win0_we = 1'b1;
-                                            vst_win0_wdata = (vframe_ctor_rdata[63:48] ==
-                                                 V64_TAG_PREFIX &&
-                                                 vframe_ctor_rdata[47:44] ==
-                                                 V64_KIND_OBJECT)
-                                                ? vframe_ctor_rdata
-                                                : `VST_AT(vsp - 12'd1);
                                             state_n = S_V64_WIN_FILL;
                                         end else
                                         state_n = S_FETCH_WAIT;
@@ -4777,7 +4981,10 @@ module jmr_js_vm_exec64 (
                                 end
                             end
                             OP_NEW_OBJ: begin
-                                if (vsp_hs < code_rdata[31:24]) begin
+                                if (vcsp_hs >= CSTK) begin
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd2;
+                                    running_n = 1'b0; state_n = S_DONE;
+                                end else if (vsp_hs < code_rdata[31:24]) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd1;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (code_rdata[31:24] == 8'd0 &&
@@ -4789,7 +4996,13 @@ module jmr_js_vm_exec64 (
                                     // code_rdata[31:24] after HEAP was a1=1
                                     // (LET_VAR) → vsp-1 wrap 4095 (INVADERS
                                     // new Player after renderLeaderboard).
+                                    // IIFE CALL_VAL leaves vcall_value=1;
+                                    // kind 3 would BIND as a call. Nested
+                                    // `new` also needs exec vcsp+1 so ALLOC
+                                    // writes vframe[e64-1], not frame[0].
+                                    vcall_value_n = 1'b0;
                                     vcall_argc_n = {4'd0, code_rdata[31:24]};
+                                    vcsp_n = vcsp_hs + 8'd1;
                                     valloc_kind_n = 2'd0;
                                     valloc_i_n = vobj_next;
                                     valloc_retried_n = 1'b0;
@@ -4806,8 +5019,12 @@ module jmr_js_vm_exec64 (
                                 logic dup;
                                 logic [63:0] ev, fn;
                                 argc = {4'd0, code_rdata[31:24]};
-                                base = vsp - argc - 12'd1;
-                                receiver = (vsp > argc)
+                                // raddr comb already uses vsp_hs (cm_base).
+                                // Body must match or forEach/fillText/getContext
+                                // read NOS after parent hs_vsp.
+                                base = (vsp_hs > argc)
+                                    ? (vsp_hs - argc - 12'd1) : 12'd0;
+                                receiver = (vsp_hs > argc)
                                     ? `VST_AT(base)
                                     : V64_UNDEFINED;
                                 mip = 16'hFFFF;
@@ -4835,7 +5052,7 @@ module jmr_js_vm_exec64 (
                                 if (vcsp >= CSTK) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd2;
                                     running_n = 1'b0; state_n = S_DONE;
-                                end else if (vsp < argc + 12'd1) begin
+                                end else if (vsp_hs < argc + 12'd1) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd1;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (code_rdata[23:8] == id_assign &&
@@ -5029,6 +5246,7 @@ module jmr_js_vm_exec64 (
                                         vfe_arr_s_wdata = vfe_arr;
                                         vfe_fn_s_wdata = vfe_fn;
                                         vfe_i_s_wdata = vfe_i;
+                                        vfe_len_s_wdata = vfe_len;
                                         vfe_ret_s_wdata = vfe_ret;
                                         vfe_base_s_wdata = vfe_base;
                                         vfe_mode_s_wdata = vfe_mode;
@@ -5039,6 +5257,7 @@ module jmr_js_vm_exec64 (
                                             ? `VST_AT(vsp - 12'd1)
                                             : V64_UNDEFINED;
                                         vfe_i_n = 8'd0;
+                                        vfe_len_n = varr_len_rdata;
                                         vfe_ret_n = ip + 16'd1;
                                         vfe_base_n = base;
                                         vfe_mode_n = md;
@@ -5368,6 +5587,8 @@ module jmr_js_vm_exec64 (
                                     vst_wr(base, V64_UNDEFINED);
                                     vsp_n = base + 12'd1;
                                     ip_n = ip + 16'd1;
+                                    code_raddr_n =
+                                        15'(ops_base + ip + 16'd1);
                                     state_n = S_TXT_LD;
                                 end else if (obj_ok &&
                                            code_rdata[23:8] == id_measuretext) begin
@@ -5974,6 +6195,10 @@ module jmr_js_vm_exec64 (
                                         valloc_kind_n = 2'd3;
                                         valloc_i_n = venv_next;
                                         valloc_retried_n = 1'b0;
+                                        // BIND then kind 3 ALLOC. Reserve like
+                                        // CALL_USER or ALLOC writes e64-1 over
+                                        // the live constructor/method frame.
+                                        vcsp_n = vcsp_hs + 8'd1;
                                         state_n = S_V64_BIND;
                                     end else begin
                                         hp_cmd_n = HP_LOOKFN;
@@ -6037,6 +6262,8 @@ module jmr_js_vm_exec64 (
                                     jn_res_n = 11'(vsp - 12'd2);
                                     vsp_n = vsp - 12'd1;
                                     ip_n = ip + 16'd1;
+                                    code_raddr_n =
+                                        15'(ops_base + ip + 16'd1);
                                     state_n = S_CONCAT;
                                 end else begin
                                     // PYTHON ToNumber: non-Number → +0

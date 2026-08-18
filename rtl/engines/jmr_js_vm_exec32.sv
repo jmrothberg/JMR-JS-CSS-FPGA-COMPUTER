@@ -241,7 +241,7 @@ module jmr_js_vm_exec32 (
     output logic signed [31:0] xf_x_q,
     output logic signed [31:0] xf_y_q,
     output logic [9:0] y_q,
-    output logic p_clr_busy,
+    output logic p_clr_busy_q,
     input  logic signed [31:0] p_alu_a,
     input  logic signed [31:0] p_alu_b,
     input  logic p_alu_fx,
@@ -491,7 +491,7 @@ module jmr_js_vm_exec32 (
     input  logic [7:0] arr_len_nos_rdata,
     input  logic signed [31:0] vars_rdata,
     input  logic signed [31:0] consts_rdata,
-    output logic [9:0] consts_raddr,
+    output logic [9:0] consts_raddr_q,
     input  logic var_init_rdata,
     input  logic [2:0] var_tag_rdata,
     input  logic [15:0] p_name_rdaddr,
@@ -500,10 +500,10 @@ module jmr_js_vm_exec32 (
     input  logic [7:0] p_nat_argc,
     input  logic [7:0] p_nat_id,
     input  logic [15:0] obj_cls_rdata,
-    output logic [9:0] obj_cls_raddr,
+    output logic [9:0] obj_cls_raddr_q,
     input  logic obj_keep_ok,
     input  logic [5:0] obj_n_rdata,
-    output logic [9:0] obj_n_raddr,
+    output logic [9:0] obj_n_raddr_q,
     input  logic [15:0] ops_base,
     input  logic p_path_active,
     input  logic [1:0] p_path_kind,
@@ -540,24 +540,24 @@ module jmr_js_vm_exec32 (
     input  logic [47:0] p_sq_rad,
     input  logic [25:0] p_sq_rem,
     input  logic [23:0] p_sq_root,
-    output logic [10:0] stack_raddr,
-    output logic [10:0] stack_raddr2,
-    output logic [9:0] intern_tos,
-    output logic [9:0] intern_nos,
-    output logic [11:0] aid_tos,
-    output logic [11:0] aid_nos,
-    output logic [8:0] vars_raddr,
+    output logic [10:0] stack_raddr_q,
+    output logic [10:0] stack_raddr2_q,
+    output logic [9:0] intern_tos_q,
+    output logic [9:0] intern_nos_q,
+    output logic [11:0] aid_tos_q,
+    output logic [11:0] aid_nos_q,
+    output logic [8:0] vars_raddr_q,
     // Parent intern_var / env_oid / char_id / fn_proto / cstack: raddr + rdata next clock.
-    output logic [9:0] intern_var_raddr,
+    output logic [9:0] intern_var_raddr_q,
     input  logic [8:0] intern_var_rdata,
     input  logic intern_var_ok_rdata,
-    output logic [8:0] env_oid_raddr,
+    output logic [8:0] env_oid_raddr_q,
     input  logic [15:0] env_oid_rdata,
-    output logic [7:0] char_id_raddr,
+    output logic [7:0] char_id_raddr_q,
     input  logic [15:0] char_id_rdata,
     input  logic char_ok_rdata,
     // Parent timer SRAM: raddr + rdata next clock; we_q like intern_var.
-    output logic [5:0] to_raddr,
+    output logic [5:0] to_raddr_q,
     input  logic [11:0] to_delay_rdata,
     input  logic [15:0] to_fn_rdata,
     input  logic [15:0] to_id_rdata,
@@ -568,7 +568,7 @@ module jmr_js_vm_exec32 (
     output logic [11:0] to_period_wdata_q,
     output logic [15:0] to_fn_wdata_q,
     output logic [15:0] to_id_wdata_q,
-    output logic [6:0] fn_proto_raddr,
+    output logic [6:0] fn_proto_raddr_q,
     input  logic [15:0] fn_proto_ip_rdata,
     input  logic [15:0] fn_proto_oid_rdata,
     output logic fn_proto_we_q,
@@ -621,7 +621,7 @@ module jmr_js_vm_exec32 (
     input  logic [15:0] tfn_parent_rdata,
     input  logic [15:0] tfn_this_rdata,
     input  logic [2:0] tfn_this_tag_rdata,
-    output logic [12:0] tfn_raddr,
+    output logic [12:0] tfn_raddr_q,
     input  logic [15:0] p_this_obj,
     input  logic this_ok,
     input  logic [31:0] time_ms,
@@ -1020,6 +1020,8 @@ module jmr_js_vm_exec32 (
     logic signed [31:0] e32_sv [0:15];
     logic [2:0] e32_st [0:15];
     logic [2:0] stack_tag_tos, stack_tag_nos;
+    logic [9:0] intern_tos, intern_nos;
+    logic [11:0] aid_tos, aid_nos;
     assign intern_tos = e32_sv[0][9:0];
     assign intern_nos = e32_sv[1][9:0];
     assign aid_tos = e32_sv[0][11:0];
@@ -1033,6 +1035,8 @@ module jmr_js_vm_exec32 (
     logic opnd_q, opnd_n;
     localparam int E32_CLR_LIM = MAX_ARR;
 
+    // Combo raddr/TOS/busy stay local; parent sees *_q next clock.
+    logic p_clr_busy;
     assign p_clr_busy = clr_busy | p_clr;
 
     // Working regs clock here. Parent sees *_q / leave_hold, not combo *_n.
@@ -1164,6 +1168,10 @@ module jmr_js_vm_exec32 (
     logic [1:0] fp_kind, fp_kind_n;
     logic [15:0] fp_key, fp_key_n, fp_poid, fp_poid_n, newobj_ctor, newobj_ctor_n;
     logic newobj_rdy, newobj_rdy_n, newobj_emit, newobj_emit_n;
+    // Class method lookup: one (c,m) per clock. Opcode comb must not index cls_*.
+    logic cm_scan, cm_scan_n, cm_armed, cm_armed_n, cm_done, cm_done_n;
+    logic [3:0] cm_c, cm_c_n, cm_m, cm_m_n;
+    logic [15:0] cm_mip, cm_mip_n, cm_key, cm_key_n, cm_cls, cm_cls_n;
     logic to_clr_go, to_clr_busy, to_clr_fin, to_clr_armed;
     logic [15:0] to_clr_want, to_clr_want_n;
     logic [6:0] to_clr_i, to_clr_w;
@@ -1475,8 +1483,18 @@ module jmr_js_vm_exec32 (
     logic [15:0] cs1_fe_fn, cs2_fe_fn, cs1_map_arr, cs2_map_arr;
     logic [7:0] cs1_fe_i, cs2_fe_i;
     logic [5:0] cs1_env, cs2_env;
+    logic [9:0] consts_raddr;
+    logic [10:0] stack_raddr, stack_raddr2;
+    logic [9:0] obj_cls_raddr, obj_n_raddr;
+    logic [12:0] tfn_raddr;
+    logic [9:0] intern_var_raddr;
+    logic [8:0] vars_raddr;
+    logic [8:0] env_oid_raddr;
+    logic [7:0] char_id_raddr;
+    logic [5:0] to_raddr;
+    logic [6:0] fn_proto_raddr;
     assign consts_raddr = code_rdata[17:8];
-    // SRAM raddr outside opcode always_comb (combo port assign here is legal).
+    // SRAM raddr outside opcode always_comb; clocked *_q is the parent port.
     assign stack_raddr = (sp >= 11'd1) ? (sp - 11'd1) : 11'd0;
     assign stack_raddr2 = (sp >= 11'd2) ? (sp - 11'd2) : 11'd0;
     assign obj_cls_raddr = (sp >= 11'd1) ? e32_sv[0][9:0] : 10'd0;
@@ -1501,6 +1519,7 @@ module jmr_js_vm_exec32 (
             clr_busy <= 1'b0;
             clr_i <= 12'd0;
             opnd_q <= 1'b0;
+            p_clr_busy_q <= 1'b0;
         end else if (p_clr) begin
             clr_busy <= 1'b1;
             clr_i <= 12'd0;
@@ -1515,6 +1534,24 @@ module jmr_js_vm_exec32 (
             opnd_q <= opnd_n;
         else
             opnd_q <= 1'b0;
+        // Parent SRAM raddr/TOS/busy: clocked ports (never-fake-fpga-sim).
+        p_clr_busy_q <= p_clr_busy;
+        intern_tos_q <= intern_tos;
+        intern_nos_q <= intern_nos;
+        aid_tos_q <= aid_tos;
+        aid_nos_q <= aid_nos;
+        consts_raddr_q <= consts_raddr;
+        stack_raddr_q <= stack_raddr;
+        stack_raddr2_q <= stack_raddr2;
+        obj_cls_raddr_q <= obj_cls_raddr;
+        obj_n_raddr_q <= obj_n_raddr;
+        tfn_raddr_q <= tfn_raddr;
+        intern_var_raddr_q <= intern_var_raddr;
+        vars_raddr_q <= vars_raddr;
+        env_oid_raddr_q <= env_oid_raddr;
+        char_id_raddr_q <= char_id_raddr;
+        to_raddr_q <= to_raddr;
+        fn_proto_raddr_q <= fn_proto_raddr;
     end
 
     // Sequential cell so Vivado keep_hierarchy is not dissolved as combo-only.
@@ -1526,6 +1563,10 @@ module jmr_js_vm_exec32 (
         if (!rst_n) begin
             leave_hold <= 1'b0;
             fp_scan <= 1'b0;
+            cm_scan <= 1'b0;
+            cm_armed <= 1'b0;
+            cm_done <= 1'b0;
+            cm_mip <= 16'hFFFF;
             to_clr_busy <= 1'b0;
             to_clr_fin <= 1'b0;
             to_clr_armed <= 1'b0;
@@ -1599,6 +1640,20 @@ module jmr_js_vm_exec32 (
                 fp_kind <= fp_kind_n;
                 fp_key <= fp_key_n;
                 fp_poid <= fp_poid_n;
+                cm_scan <= cm_scan_n;
+                cm_armed <= cm_armed_n;
+                cm_done <= cm_done_n;
+                cm_c <= cm_c_n;
+                cm_m <= cm_m_n;
+                cm_key <= cm_key_n;
+                cm_cls <= cm_cls_n;
+                cm_mip <= cm_mip_n;
+                if (cm_scan && cm_armed &&
+                    ({1'b0, cm_c} < n_cls) &&
+                    cls_name[cm_c] == cm_cls &&
+                    ({1'b0, cm_m} < cls_nmeth[cm_c]) &&
+                    cls_mname[cm_c][cm_m] == cm_key)
+                    cm_mip <= cls_mip[cm_c][cm_m];
                 newobj_ctor <= newobj_ctor_n;
                 newobj_rdy <= newobj_rdy_n;
                 newobj_emit <= newobj_emit_n;
@@ -2580,6 +2635,14 @@ module jmr_js_vm_exec32 (
         newobj_ctor_n = newobj_ctor;
         newobj_rdy_n = 1'b0;
         newobj_emit_n = 1'b0;
+        cm_scan_n = 1'b0;
+        cm_armed_n = 1'b0;
+        cm_done_n = cm_done;
+        cm_c_n = cm_c;
+        cm_m_n = cm_m;
+        cm_mip_n = cm_mip;
+        cm_key_n = cm_key;
+        cm_cls_n = cm_cls;
         to_clr_go = 1'b0;
         to_clr_want_n = to_clr_want;
         if (enable && !leave_hold) begin
@@ -2658,6 +2721,32 @@ module jmr_js_vm_exec32 (
                         end
                     end else
                         fp_i_n = fp_i + 7'd1;
+                end
+            end else if (cm_scan) begin
+                // One (class,method) per clock. cls_mip read is always_ff.
+                cm_scan_n = 1'b1;
+                cm_key_n = cm_key;
+                cm_cls_n = cm_cls;
+                cm_mip_n = cm_mip;
+                cm_done_n = 1'b0;
+                state_n = S_EXEC;
+                if (!cm_armed) begin
+                    cm_armed_n = 1'b1;
+                    cm_c_n = 4'd0;
+                    cm_m_n = 4'd0;
+                end else if (cm_m == 4'(MAX_CMETH - 1)) begin
+                    cm_m_n = 4'd0;
+                    if (({1'b0, cm_c} + 5'd1 >= n_cls) ||
+                        (cm_c == 4'(MAX_CLS - 1))) begin
+                        cm_scan_n = 1'b0;
+                        cm_armed_n = 1'b0;
+                        cm_done_n = 1'b1;
+                    end else
+                        cm_c_n = cm_c + 4'd1;
+                end else begin
+                    cm_armed_n = 1'b1;
+                    cm_c_n = cm_c;
+                    cm_m_n = cm_m + 4'd1;
                 end
             end else if (p_state == S_EXEC && !opnd_q) begin
                 opnd_n = 1'b1;
@@ -4533,20 +4622,22 @@ module jmr_js_vm_exec32 (
                                         logic [15:0] mip, oid;
                                         logic [2:0] ot;
                                         logic [7:0] ac;
-                                        mip = 16'hFFFF;
                                         ac = code_rdata[31:24];
                                         ot = `E32_STAG(sp - ac - 8'd1);
                                         oid = `E32_AT(sp - ac - 8'd1)[15:0];
-                                        if (ot == 3'd1) begin
-                                            for (int c = 0; c < MAX_CLS; c++) begin
-                                                if (c < n_cls && cls_name[c] == obj_cls_rdata) begin
-                                                    for (int m = 0; m < MAX_CMETH; m++) begin
-                                                        if (m < cls_nmeth[c] && cls_mname[c][m] == code_rdata[23:8])
-                                                            mip = cls_mip[c][m];
-                                                    end
-                                                end
-                                            end
-                                        end
+                                        if (ot == 3'd1 && !cm_done) begin
+                                            cm_scan_n = 1'b1;
+                                            cm_armed_n = 1'b0;
+                                            cm_done_n = 1'b0;
+                                            cm_c_n = 4'd0;
+                                            cm_m_n = 4'd0;
+                                            cm_mip_n = 16'hFFFF;
+                                            cm_key_n = code_rdata[23:8];
+                                            cm_cls_n = obj_cls_rdata;
+                                            state_n = S_EXEC;
+                                        end else begin
+                                        mip = cm_done ? cm_mip : 16'hFFFF;
+                                        cm_done_n = 1'b0;
                                         if (mip != 16'hFFFF) begin
                                             for (int k = 0; k < 8; k++) begin
                                                 if (k < ac) begin
@@ -4591,6 +4682,7 @@ module jmr_js_vm_exec32 (
                                                     sp_n = sp - ac;
                                                     next_op();
                                             end
+                                        end
                                         end
                                     end
                                 end
