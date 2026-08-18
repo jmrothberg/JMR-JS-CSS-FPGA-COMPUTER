@@ -10,52 +10,50 @@ Not a browser. Not dukpy. FPGA-SIM and the `.bin` are the same `rtl/*.sv`.
 Law: `never-fake-fpga-sim`, `one-heap-keep-gen`, `python-first-parity`,
 `no-dukpy-cheat-native-cpu`. ABI: [`docs/JMR_JS_COMPATIBILITY.md`](JMR_JS_COMPATIBILITY.md).
 
-**Any RTL edit** (glass, HEAP, exec, new opcode): extra clocks OK. No clone
-heaps. No `leave_hold` in else. Large on-chip arrays (`imgd_pix`, `spr_mem`,
-`name_mem`, `json_mem`, `stack`, `name_hash_tbl`, `varr_len`, `vobj_alloc`,
-`vvars`, and anything else in that class) write only through
-`*_we` / `*_waddr` / `*_wdata` into a tiny `if (we) mem[addr] <= data`
-process — same as `jmr_mini_fb`. Do **not** poke `mem[i] <=` from the
-parent FSM. Isolated `*_rdata` reads with FSM writes still left in blew
-~70 GB. Do not mix a title-bug hunt into a flatten pass.
+**Glass / title debug (INVADERS Space, PACMAN fault 2, DONKEY art) — do
+not undo Port A.** Extra clocks OK. No clone heaps. No `leave_hold` in
+else. The 7k-line FSM must **not** write these arrays with `mem[i] <=`
+(that was the 70 GB synth hang). Use the tasks already in `jmr_js_vm.sv`:
+`stack_wr`, `vobj_alloc_wr`, `varr_len_wr`, `name_hash_wr`, `vvars_wr`,
+`json_putc`, or `imgd_we`/`spr_we`/`name_we`/`json_we`. One stack write
+per clock — FOREACH el then idx is `stack_dual_pend` (do not fire two
+`stack_wr` in one cycle). Wait `*_rdata`, never combo-peek BRAM. Do not
+extract JOIN/JSON/GC. Do not skip gen. Running `make bit` already ingested
+the file at start; further RTL edits are the **next** bit, not the live one.
 
 ---
 
 ## 1) RTL review / synthesis
 
-**What stopped the 70 GB blow-up (2026-08-18 15:32):** the FSM must **not**
-poke the big on-chip pictures. `imgd_pix` (307200×8), `spr_mem` (256K×8),
-`name_mem` (32K), `json_mem` (8K) now write only in a tiny
-`if (we) mem[addr] <= data` process (copy `jmr_mini_fb` / `jmr_video_vram`
-Port A). The 7k-line `always_ff` sets `imgd_we` / `spr_we` / `name_we` /
-`json_we` + waddr/wdata. After `e32_p_clr` this run held **~15 GB** + one
-busy core (old curve was 8→36→70 GB in minutes).
+**16:17 `make bit` (this VM file):** Port A for pictures (`imgd_pix` /
+`spr_mem` / `name_mem` / `json_mem`) **and** heap tables (`stack` 1W2R,
+`name_hash_tbl` TOS+NOS, `varr_len`, `vobj_alloc`, `vvars`). This run
+**left `e32_p_clr`**, finished RTL Elaboration + Optimization Phase 1
+(~11 min, peak ~28.5 GB), log still printing. That is further than every
+prior hang (those froze on `e32_p_clr` and never printed again). Fit:
+[FPGA_FIT.md](FPGA_FIT.md). Flatten-hunt vs Port A hang:
+[SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md). Early LUT/BRAM: `utilization_synth.rpt` when
+`synth_1` is 100%. Do **not** `bit-fresh`.
 
-**Same Port A (2026-08-18, next `make bit`):** leftover heap tables that
-were still `mem[i] <=` from the FSM + 80-array mux (`stack` 1W2R,
-`name_hash_tbl` TOS+NOS, `varr_len`, `vobj_alloc`, `vvars`). FOREACH
-el+idx is two clocks (`stack_dual_pend`) so the stack has one write port.
-The 15:32 synth already ingested the file; this is for the **next** bit.
-Fit: [FPGA_FIT.md](FPGA_FIT.md). Do **not** `bit-fresh`.
+**Failed (do not repeat):** named unique-case peek hunts; splitting
+**reads** only into `rdata <= mem[raddr]` while the FSM still did
+`imgd_pix[i] <=` / `spr_mem[spr_wp] <=` (15:22 synth still hit 71 GB).
+`casestate_q`, `unique`→`case`, pulling IEEE mul out of the case — same
+wall. `e32_p_clr` 8-6014 is unused-FF housekeeping, not the cone. Synth
+8-13159: `vobj_cls` / `arr_len` still dissolved to FFs (FSM still pokes
+them). If you touch those, Port A like the others — do not add more
+`mem[i] <=`.
 
-**Failed (do not repeat):** named unique-case peek hunts; splitting **reads**
-only into `rdata <= mem[raddr]` while the FSM still did `imgd_pix[i] <=` /
-`spr_mem[spr_wp] <=` (15:22 synth still hit 71 GB). `casestate_q`,
-`unique`→`case`, pulling IEEE mul out of the case — same wall. `e32_p_clr`
-8-6014 is unused-FF housekeeping, not the cone.
+**Tracker:** `build/nexys_video/synth_rss.log` (RSS + last runme line
+every 10 s). Watch **RSS** and whether the log still prints. Host
+**128 GB**. Kill only if the log is frozen **and** RSS is climbing toward
+~80 GB. A ~28 GB hold with new phase lines is progress, not the 70 GB
+flatten.
 
-**Tracker:** `build/nexys_video/synth_rss.log` (RSS + last runme line every
-10 s). The log stays on `e32_p_clr` during RAM infer; watch **RSS**, not a
-new print. Host **128 GB**. Kill only if log frozen **and** RSS climbing
-toward ~80 GB. Do not kill a ~15 GB hold with a busy core.
-
-Do **not** touch: glass, `leave_hold`, `keep_hierarchy`, `storage_engine`
-`linebuf` 8-4767, clone heaps. Do **not** extract JOIN/JSON/GC. Leave
-16-deep FFs (`vst_win`, `js_val`/`vjs_val`, `cls_*` 16×16,
-`spr_off`/`spr_ww`/`spr_hh`, `kd_slot`).
-
-Opcode `always_comb` locals/`*_n` only (parent sees `*_q`). Inspect both
-exec32 and exec64.
+Do **not** extract JOIN/JSON/GC. Leave 16-deep FFs (`vst_win`,
+`js_val`/`vjs_val`, `cls_*` 16×16, `spr_off`/`spr_ww`/`spr_hh`,
+`kd_slot`). `storage_engine` `linebuf` 8-4767 stays. Opcode `always_comb`
+locals/`*_n` only (parent sees `*_q`). Inspect both exec32 and exec64.
 
 ---
 
@@ -67,10 +65,12 @@ Do **one** glass step from **Next**. Do not overnight-go.
 Re-ran headless on sim binary **12:46** (after §1 `vraf_rdata` / blit /
 imgd / sin / txt_buf waits). Prior §2 numbers are stale.
 
-INVADERS splash **paints** (`nz0=19233` `vdraw=70,68,500,7` `fault=0`
-`raf=0` `WAIT_FRAME`). Enter arms HEAP (`hp_cmd=5`). **Space → fault 3**
-`S_IDLE` `eip=5127` `addEventListener` `vcsp=4`
-`vret=65533,5081,3362,2641` `obj=142` `arr=31`. Not a no-op.
+INVADERS splash **paints** (`nz0=19233` `fault=0` `raf=1` `WAIT_FRAME`
+`eip=3367`). **Space (32) starts play** (`obj=732` `fault=0`, HUD
+CONCAT / `player.update`). Play `animate()` does **not** return to
+`WAIT_FRAME` inside a `FRAME` (64M) — `S_JOIN_FIND` intern scan. Enter
+is not Start. Agent recipe:
+[SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md) (START HERE).
 
 PACMAN first TICKN `S_JOIN_FIND ip=1877` `vcsp=76` cycling
 `vret=16318,13488,13138`. Then **fault 2** `S_IDLE` `vcsp=126`
@@ -91,7 +91,7 @@ only in `gameState=="game"`.
 | nested `forEach` then rAF | **`WAIT_FRAME raf=1`** |
 | `p.update()` class method inside `forEach` then rAF | **`WAIT_FRAME raf=1`** |
 | `ctx.fillRect` after `getContext` | **`WAIT_FRAME raf=1` `nz0=800`** |
-| INVADERS title | splash `nz=19233` `raf=0`; **Space fault 3** at `addEventListener` |
+| INVADERS title | splash `nz=19233` `raf=1`; Space play `obj=732` `fault=0`; no play `WAIT_FRAME` in 64M (`JOIN_FIND`) |
 | `{n:1}.missing` then rAF | **`WAIT_FRAME raf=1 fault=0`** (was HEAP_CMP forever) |
 | PACMAN title | **fault 2** `vcsp=126` at `NEW_OBJ Game` |
 | DONKEY title | `WAIT_FRAME` `raf=0` `nz0=0` `vdraw=0,0,640,479,0` |
@@ -130,19 +130,14 @@ held in else.
 
 ### Next (glass only)
 
-1. **INVADERS Space fault 3** `eip=5127` `addEventListener` after splash
-   (`raf=0` at `WAIT_FRAME`, then key HEAP). `vret=65533,5081,3362,2641`.
-   Prove ALLOC/listener vs heap cap. Do not skip gen.
-2. **PACMAN fault 2** `vcsp=126` cycling `vret=16318,13488,13138`
-   (`POP` after top IIFE / createStage IIFE / `LET_VAR stage`). First
-   TICKN already nested at `S_JOIN_FIND ip=1877`. Prove nested CALL_VAL
-   / createStage vs ALLOC overlay. Do not skip gen. Do not rewrite HTML.
-3. **DONKEY title art.** HTML does **not** re-arm rAF on the title branch.
-   `showTitleScreen`: `clearRect` + `Image` data-URI `onload` `drawImage` +
-   `fillText` at y=500/600 in world space after `setTransform`. Headless
-   `nz=0` is the black clear; onload/drawImage/fillText must land on 640×480.
-4. Only then F9 FPGA-SIM `(RTL)` on the three games.
+1. **FIND last-4 is in** (`S_JOIN_FIND` FFs, Port A). Splash + Space
+   play start still good. First play `FRAME` still caps at 64M
+   (`FB SAME`) but sampled state is **`S_V64_EXEC` eip=4504**, not
+   `S_JOIN_FIND`. Do **not** add hash→id BRAM until asked. Next glass
+   step is whatever still burns 64M in exec/draw — not another FIND
+   CAM. Details: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
 
-**Stop:** overnight-go, `make bit` / `bit-fresh`, host twin, skip gen,
+**Stop:** overnight-go, `bit-fresh`, host twin, skip gen,
 clone heaps, restore local `name_blen[]`, rewrite HTML, delete files,
-`leave_hold` held in else, sticky `hs_m_vcsp` over `vcsp_n`.
+`leave_hold` held in else, sticky `hs_m_vcsp` over `vcsp_n`,
+`stack[i] <=` / `vobj_alloc[i] <=` in the parent FSM.

@@ -64,9 +64,11 @@ and rewrite the 8-bpp ABI. Replace these numbers from
 | Memory Interface Generator (MIG) FIFOs | extra BRAM, size unknown until impl | inside the 365 |
 
 If every on-chip array infers as BRAM, this RTL is **over** the 365 tiles.
-The 13 Aug bit below does **not** disprove that: its FB was LUTRAM, not
-native 640×480 BRAM. A synth hang (RSS tens of GB, log frozen) is flatten /
-FFs, not “needs more LUTs.”
+A synth hang (RSS tens of GB, log frozen) is flatten / FFs, not “needs more
+LUTs.” Fill the table from `utilization_synth.rpt` when this `make bit`
+finishes synth, then `utilization_impl.rpt` after WNS ≥ 0. Do not invent
+counts. Keyboard bring-up is [FPGA_BRINGUP.md](FPGA_BRINGUP.md), not a fit
+baseline for this VM.
 
 `$readmemh` font lives beside `rtl/engines/jmr_js_vm.sv`. Board asset SRAM is
 MIG DDR3 behind `jmr_ddr3_sram_bridge`. Palette BRAM is dual-clock; HDMI game
@@ -74,41 +76,27 @@ mode reads it.
 
 ---
 
-## Headline (impl, 2026-08-13 03:36, routed)
+## Headline (this `make bit` — waiting)
 
-These counts are the **last published bitstream**, not the 08:49+ RTL (native
-640×480 dual FB + card `.JSB` load). Refresh from `utilization_impl.rpt`
-after the next WNS≥0 impl before quoting new %. Do not invent counts.
+Part: `xc7a200tsbg484-1`. Early counts: `build/nexys_video/utilization_synth.rpt`
+when `synth_1` hits 100%. Trust: `utilization_impl.rpt` after WNS ≥ 0.
 
-Design: `top_nexys_video` · part: `xc7a200tsbg484-1` · source:
-`build/nexys_video/jmr_nexys_video.bin`
-
-| Resource | What it is | Used | T200 budget (XC7A200T) | T200 | T100 budget (XC7A100T) | T100 |
-|---|---|---:|---:|---:|---:|---:|
-| **LUTs** | Lookup tables — the actual **logic** (AND/OR/mux/small ROM). One LUT ≈ one 6-input function. | **33,639** | 134,600 | **25.0%** | 63,400 | **53.1%** |
-|  as logic | Combinational compute (ALU, FSMs, muxes). | 20,895 | 134,600 | 15.5% | 63,400 | 33.0% |
-|  as distributed RAM (LUTRAM) | LUTs used as **tiny memories** instead of logic. Mini-FB / work RAM fell back here (synth could not infer BRAM). | **12,744** | 46,200 | 27.6% | ~19,000 | **~67%** |
-| **FFs** | Flip-flops — **1-bit registers** that hold state across clocks. | **12,872** | 269,200 | **4.8%** | 126,800 | **10.2%** |
-| **BRAM** | Block RAM tiles — dedicated 36 Kb memory blocks (not LUTs). | **2** tiles (1× RAMB36 + 2× RAMB18) | 365 | **0.5%** | 135 | **1.5%** |
-| **DSP** | Hard multiply/add blocks (DSP48). | 7 | 740 | 1.0% | 240 | 2.9% |
-| **Slices** | Physical **packing boxes** on the die. Each 7-series slice holds 4 LUTs + 8 FFs. Vivado occupies a whole slice even if it only uses part of it, so slice % is usually **higher** than LUT %. Not a thing you write in RTL — it is place-and-route density. | **11,210** | 33,650 | **33.3%** | 15,850 | **70.7%** |
-
-**Read the chart:** LUTs / FFs / BRAM are the real “how big is the design.”
-**Slices** are “how many of those 4-LUT boxes did the placer fill.” A design can
-be 53% LUTs and ~71% slices on a T100 because packing is never 100% dense, and
-LUTRAM can only sit in **SLICEM** boxes (a subset of slices).
+| Resource | What it is | Used | T200 budget |
+|---|---|---:|---:|
+| **LUTs** | Logic (AND/OR/mux). One LUT ≈ one 6-input function. | — | 134,600 |
+|  as LUTRAM | Tiny memories in LUTs instead of Block RAM. | — | 46,200 |
+| **FFs** | 1-bit registers. | — | 269,200 |
+| **BRAM** | 36 kb tiles. Dual FB + heap must land here. | — | 365 |
+| **DSP** | Multiply/add (DSP48). | — | 740 |
+| **Slices** | Place-and-route packing (4 LUTs + 8 FFs each). | — | 33,650 |
 
 ---
 
 ## Fit verdict
 
-- **T200 (this board):** comfortable. LUTs 25%, slices 33%, FFs/BRAM almost unused.
-- **T100 (projection):** counts still fit. Tightest rows are **LUTRAM (~67%)** and
-  **slices (~71%)**, not BRAM. A T100 place-and-route could still fail on
-  congestion even though LUT/FF/BRAM math looks OK.
-- BRAM is almost empty on **this** (03:36) bit because the mini-FB did **not**
-  map to block RAM. Morning RTL puts native 640×480 dual FB in BRAM — refresh
-  this table after that impl; do not quote these BRAM counts for the new RTL.
+No measured VM bitstream yet. Compare **Used** to the T200 budget above, not
+to an I/O bring-up image. Tightest expected row is **BRAM** (paper math ~489
+tiles if everything infers). LUTRAM high + BRAM low means inference missed.
 
 ---
 
@@ -122,19 +110,22 @@ LUTRAM can only sit in **SLICEM** boxes (a subset of slices).
   reads while the FSM still did `imgd_pix[i] <=` / `spr_mem[spr_wp] <=`
   still hit **71 GB**. After those writes moved out (15:32), synth held
   **~15 GB** after `e32_p_clr` instead of 8→36→70. Heap-table writes
-  moved out the same way (next `make bit`). Do not put those
-  array writes back into the FSM for glass, HEAP, or a new opcode.
-- **Kill on RSS, not on `e32_p_clr`.** Synth 8-6014 (`e32_p_clr_reg was
-  removed`) is unused-FF housekeeping after `top_nexys_video` finishes.
-  The log then stays quiet while Vivado infers Block RAM (tens of minutes
-  is OK). Hang = RSS climbing toward ~80 GB on this 128 GB host. A **~15 GB
-  hold** with one busy core is the good curve. Do **not** kill at 20 GB
-  (12:50 was too early). Tracker: `build/nexys_video/synth_rss.log`.
+  (`stack_wr` / `vobj_alloc_wr` / …) moved out the same way. Do not put
+  `stack[i] <=` back for a title bug. FOREACH el+idx is `stack_dual_pend`
+  (one write/clock). `arr_len` / `vobj_cls` still FSM-poked (8-13159) —
+  Port A if you touch them.
+- **Kill on RSS, not on `e32_p_clr`.** Synth 8-6014 is unused-FF
+  housekeeping, not the cone. The 16:17 run **left `e32_p_clr`** and
+  finished RTL Optimization Phase 1 (~28.5 GB peak, log still printing).
+  Hang = log frozen **and** RSS climbing toward ~80 GB. Tracker:
+  `build/nexys_video/synth_rss.log`.
 - **Heap-name grep empty ≠ cone.** `spr_mem` is on-chip blit scratch
   (~0.25 MB — **not** the 4 MB ASET bank). `ram_style = "block"` does not
   save an FSM poke.
 - **Do not split JOIN/JSON/GC out of `jmr_js_vm.sv`.** Not a task. Maybe
-  never.
+  never. Linear intern find (`S_JOIN_FIND` one slot/clock, “not a 16-CAM”)
+  is **play speed**, not the 70 GB hang — see
+  [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
 - **`.bin` megabytes ≠ utilization.** The file is the whole 200T config image.
 - **Do not copy BASIC LUT history** into this product. Method only.
 - **FPGA-SIM green ≠ synthesizable.** Title RUN in Verilator is not a `.bin`.

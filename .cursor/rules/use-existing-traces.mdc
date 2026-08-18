@@ -14,4 +14,7 @@ When glass is wrong (READY with no error, TRAP, black/dark, hung GUI):
 4. Offline reads of sources / microcode / the log are fine.
 
 Live status: [docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md).
-This is the T200 NLISC-JS machine — not NLISC-BASIC / A7-100T.
+Glass RTL in `jmr_js_vm.sv` must not poke Port A arrays (`stack[i] <=`
+undoes the synth hang). Write via `stack_wr` / `vobj_alloc_wr` / … —
+`never-fake-fpga-sim`. This is the T200 NLISC-JS machine — not NLISC-BASIC /
+A7-100T.

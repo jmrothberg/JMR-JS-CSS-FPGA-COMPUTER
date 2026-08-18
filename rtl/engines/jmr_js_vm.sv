@@ -346,6 +346,16 @@ module jmr_js_vm #(
     logic [15:0] bind_ip;
     logic [63:0] bind_ins;
     logic        bind_armed, bind_rd_arm;
+    // Sticky: CTOR_ENV intern path (not combo NEW_OBJ&&bind_ins). BIND
+    // then ALLOC kind 3 must still see a FUNCTION callee (PACMAN Stage).
+    logic        intern_ctor_hold;
+    // Latched while CTOR_ENV/VARS muxes hp_rval (tfn_rd_arm). ALLOC kind 3
+    // re-sample of vfn_entry_rdata was createStage+4 on the title (PACMAN
+    // LOAD_VAR stage eip=1720, Stage frame still live, venvi invalid).
+    logic [15:0] intern_ctor_entry;
+    logic [5:0]  intern_ctor_nparam;
+    logic [2:0]  intern_ctor_flags;
+    logic [63:0] intern_ctor_env;
     // Math.min/max one arg per clock (not a 256-wide vstack mux).
     logic        minmax_is_min;
     logic [7:0]  minmax_k, minmax_n;
@@ -731,6 +741,15 @@ module jmr_js_vm #(
     logic [11:0]  jn_arr;
     logic [15:0] jn_i, jn_h;
     logic [7:0]  jn_len;
+    // Last-4 intern FIND cache (VM-wide). One Port-A probe/clock via jn_i;
+    // not a CAM in unique case. CONCAT/JOIN enter FIND with state already
+    // FIND, so the overlay beat never plants — plant on !jn_cache_try.
+    logic [15:0] jn_hit_h0, jn_hit_h1, jn_hit_h2, jn_hit_h3;
+    logic [7:0]  jn_hit_l0, jn_hit_l1, jn_hit_l2, jn_hit_l3;
+    logic [15:0] jn_hit_i0, jn_hit_i1, jn_hit_i2, jn_hit_i3;
+    logic [3:0]  jn_hit_v;
+    logic [2:0]  jn_cache_i;  // 0..3 = probe slot, 4 = linear scan this visit
+    logic        jn_cache_try;
     logic [10:0] jn_res;
     logic signed [31:0] idx_v;
     logic [2:0]  idx_t;
@@ -1728,6 +1747,20 @@ module jmr_js_vm #(
         name_hash_we <= 1'b1;
         name_hash_waddr <= addr;
         name_hash_wdata <= data;
+    endtask
+    // Remember a FIND hit/alloc in slot 0 (shift). Skip if id already cached.
+    task automatic jn_cache_remember(input logic [15:0] id);
+        if ((jn_hit_v[0] && jn_hit_i0 == id) ||
+            (jn_hit_v[1] && jn_hit_i1 == id) ||
+            (jn_hit_v[2] && jn_hit_i2 == id) ||
+            (jn_hit_v[3] && jn_hit_i3 == id)) begin
+        end else begin
+            jn_hit_h3 <= jn_hit_h2; jn_hit_l3 <= jn_hit_l2; jn_hit_i3 <= jn_hit_i2;
+            jn_hit_h2 <= jn_hit_h1; jn_hit_l2 <= jn_hit_l1; jn_hit_i2 <= jn_hit_i1;
+            jn_hit_h1 <= jn_hit_h0; jn_hit_l1 <= jn_hit_l0; jn_hit_i1 <= jn_hit_i0;
+            jn_hit_h0 <= jn_h; jn_hit_l0 <= jn_len; jn_hit_i0 <= id;
+            jn_hit_v  <= {jn_hit_v[2:0], 1'b1};
+        end
     endtask
     task automatic varr_len_wr(input logic [11:0] addr, input logic [7:0] data);
         varr_len_we <= 1'b1;
@@ -4850,11 +4883,10 @@ module jmr_js_vm #(
     // (CTOR_ENV), not VST_AT. NEW_OBJ clocks vcall_value=0; CTOR_ENV
     // hs_vcall_value(1) is one-shot, so kind 3 saw is_valcall=0 and
     // CTOR_PAD entry FFFF (PACMAN LOAD_VAR stage fault 4 after LET_VAR).
+    // Combo NEW_OBJ&&bind_ins also dropped after BIND (code_rdata no
+    // longer NEW_OBJ / bind_ins last arg). intern_ctor_hold stays.
     wire intern_ctor_fn;
-    assign intern_ctor_fn =
-        (code_rdata[7:0] == OP_NEW_OBJ) &&
-        (bind_ins[63:48] == V64_TAG_PREFIX) &&
-        (bind_ins[47:44] == V64_KIND_FUNCTION);
+    assign intern_ctor_fn = intern_ctor_hold;
 
     // Read+write are their own processes (same shape as jmr_mini_fb Port A).
     // The 7k-line FSM poking ram[i] <= made Vivado build FFs (70 GB after e32_p_clr).
@@ -5238,6 +5270,10 @@ module jmr_js_vm #(
             vfn_env_rdata <= vfn_env[
                 (casestate_q == S_V64_GC_FN || state == S_V64_GC_FN) ?
                     vgc_cur[12:0] :
+                (casestate_q == S_V64_CTOR_ENV || state == S_V64_CTOR_ENV) ?
+                    hp_rval[12:0] :
+                (casestate_q == S_V64_CTOR_VARS || state == S_V64_CTOR_VARS) ?
+                    vvars_rdata[12:0] :
                 ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
                  valloc_kind == 2'd3) ?
                     (vcallback_fe ? e64_vfe_fn_q[12:0] :
@@ -5251,6 +5287,10 @@ module jmr_js_vm #(
             vfn_nparam_rdata <= vfn_nparam[
                 (casestate_q == S_V64_GC_FN || state == S_V64_GC_FN) ?
                     vgc_cur[12:0] :
+                (casestate_q == S_V64_CTOR_ENV || state == S_V64_CTOR_ENV) ?
+                    hp_rval[12:0] :
+                (casestate_q == S_V64_CTOR_VARS || state == S_V64_CTOR_VARS) ?
+                    vvars_rdata[12:0] :
                 ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
                  valloc_kind == 2'd3) ?
                     (vcallback_fe ? e64_vfe_fn_q[12:0] :
@@ -5264,6 +5304,10 @@ module jmr_js_vm #(
             vfn_entry_rdata <= vfn_entry[
                 (casestate_q == S_V64_GC_FN || state == S_V64_GC_FN) ?
                     vgc_cur[12:0] :
+                (casestate_q == S_V64_CTOR_ENV || state == S_V64_CTOR_ENV) ?
+                    hp_rval[12:0] :
+                (casestate_q == S_V64_CTOR_VARS || state == S_V64_CTOR_VARS) ?
+                    vvars_rdata[12:0] :
                 ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
                  valloc_kind == 2'd3) ?
                     (vcallback_fe ? e64_vfe_fn_q[12:0] :
@@ -5277,6 +5321,10 @@ module jmr_js_vm #(
             vfn_flags_rdata <= vfn_flags[
                 (casestate_q == S_V64_GC_FN || state == S_V64_GC_FN) ?
                     vgc_cur[12:0] :
+                (casestate_q == S_V64_CTOR_ENV || state == S_V64_CTOR_ENV) ?
+                    hp_rval[12:0] :
+                (casestate_q == S_V64_CTOR_VARS || state == S_V64_CTOR_VARS) ?
+                    vvars_rdata[12:0] :
                 ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
                  valloc_kind == 2'd3) ?
                     (vcallback_fe ? e64_vfe_fn_q[12:0] :
@@ -5290,6 +5338,10 @@ module jmr_js_vm #(
             vfn_bound_this_rdata <= vfn_bound_this[
                 (casestate_q == S_V64_GC_FN || state == S_V64_GC_FN) ?
                     vgc_cur[12:0] :
+                (casestate_q == S_V64_CTOR_ENV || state == S_V64_CTOR_ENV) ?
+                    hp_rval[12:0] :
+                (casestate_q == S_V64_CTOR_VARS || state == S_V64_CTOR_VARS) ?
+                    vvars_rdata[12:0] :
                 ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
                  valloc_kind == 2'd3) ?
                     (vcallback_fe ? e64_vfe_fn_q[12:0] :
@@ -5681,6 +5733,11 @@ module jmr_js_vm #(
             bind_k <= '0; bind_n <= '0; bind_argc <= '0;
             bind_base <= '0; bind_src <= '0; bind_vsp_next <= '0;
             bind_ip <= '0; bind_ins <= V64_UNDEFINED;
+            intern_ctor_hold <= 1'b0;
+            intern_ctor_entry <= 16'd0;
+            intern_ctor_nparam <= 6'd0;
+            intern_ctor_flags <= 3'd0;
+            intern_ctor_env <= V64_UNDEFINED;
             bind_ret <= S_IDLE;
             bind_armed <= 1'b0; bind_rd_arm <= 1'b0;
             minmax_is_min <= 1'b0;
@@ -5773,6 +5830,7 @@ module jmr_js_vm #(
             hs_hp_lim('0); hs_hp_key('0); hs_hp_wval('0); hs_hp_rval('0);
             hs_hp_hit(1'b0); hs_hp_phase('0); hs_hp_qn('0); hs_hp_qi('0);
             hs_hp_tag(3'd0); vgc_rd_arm <= 1'b0; jn_rd_arm <= 1'b0;
+            jn_hit_v <= 4'd0; jn_cache_try <= 1'b0; jn_cache_i <= 3'd0;
             jn_name_arm <= 1'b0; vjs_name_arm <= 1'b0; tfn_rd_arm <= 1'b0;
             jn_slot_arm <= 1'b0; hp_slot_arm <= 1'b0;
             vfe_rd_arm <= 1'b0; vjs_rd_arm <= 1'b0; valloc_rd_arm <= 1'b0;
@@ -6303,6 +6361,11 @@ module jmr_js_vm #(
                         hs_vcall_set_this(1'b0);
                         hs_vcall_this(V64_UNDEFINED);
                         hs_vcall_ctor_val(V64_UNDEFINED);
+                        intern_ctor_hold <= 1'b0;
+                        intern_ctor_entry <= 16'd0;
+                        intern_ctor_nparam <= 6'd0;
+                        intern_ctor_flags <= 3'd0;
+                        intern_ctor_env <= V64_UNDEFINED;
                         hs_vraf_n(4'd0);
                         vtimer_n <= 7'd0;
                         vframe_no <= 32'd0;
@@ -6413,6 +6476,7 @@ module jmr_js_vm #(
                     id_str_function <= 16'hFFFF;
                     id_join <= 16'hFFFF; id_indexof <= 16'hFFFF; id_replace <= 16'hFFFF;
                     names_n <= 16'd0; dbg_join_miss <= 16'd0; dbg_pdo_n <= 5'd0;
+                    jn_hit_v <= 4'd0; jn_cache_try <= 1'b0; jn_cache_i <= 3'd0;
                     v64_concat <= 1'b0;
                     v64_join <= 1'b0;
                     v64_sqrt <= 1'b0;
@@ -7589,12 +7653,50 @@ module jmr_js_vm #(
                 end
                 S_JOIN_FIND: begin
                     // flatten: one intern slot/clock via name_hash_rdata (not a 16-CAM).
+                    // Last-4 FF cache probes cached ids first (same Port A). Repeat
+                    // concat must not walk names_n. CONCAT/JOIN enter with state
+                    // already FIND, so plant on !jn_cache_try (overlay never runs).
                     // Miss allocates a NEW dynamic intern slot, so the same
                     // dynamic string ('s1i3') always resolves to the same id —
                     // object keys and EQ then work with no string heap.
-                    if (state != S_JOIN_FIND)
+                    if (state != S_JOIN_FIND) begin
                         hs_st(S_JOIN_FIND);
-                    else if (!jn_rd_arm) begin
+                        jn_cache_i <= 3'd0;
+                        jn_cache_try <= 1'b0;
+                    end else if (jn_cache_i < 3'd4 && !jn_cache_try) begin
+                        // Next live cache slot, else linear from 0.
+                        // Hash/len are FFs (not intern SRAM). Skip slots that
+                        // cannot match; Port A still confirms the id.
+                        if (jn_cache_i <= 3'd0 && jn_hit_v[0] &&
+                            jn_hit_h0 == jn_h && jn_hit_l0 == jn_len) begin
+                            jn_i <= jn_hit_i0;
+                            jn_cache_i <= 3'd0;
+                            jn_cache_try <= 1'b1;
+                            jn_rd_arm <= 1'b0;
+                        end else if (jn_cache_i <= 3'd1 && jn_hit_v[1] &&
+                            jn_hit_h1 == jn_h && jn_hit_l1 == jn_len) begin
+                            jn_i <= jn_hit_i1;
+                            jn_cache_i <= 3'd1;
+                            jn_cache_try <= 1'b1;
+                            jn_rd_arm <= 1'b0;
+                        end else if (jn_cache_i <= 3'd2 && jn_hit_v[2] &&
+                            jn_hit_h2 == jn_h && jn_hit_l2 == jn_len) begin
+                            jn_i <= jn_hit_i2;
+                            jn_cache_i <= 3'd2;
+                            jn_cache_try <= 1'b1;
+                            jn_rd_arm <= 1'b0;
+                        end else if (jn_cache_i <= 3'd3 && jn_hit_v[3] &&
+                            jn_hit_h3 == jn_h && jn_hit_l3 == jn_len) begin
+                            jn_i <= jn_hit_i3;
+                            jn_cache_i <= 3'd3;
+                            jn_cache_try <= 1'b1;
+                            jn_rd_arm <= 1'b0;
+                        end else begin
+                            jn_cache_i <= 3'd4;
+                            jn_i <= 16'd0;
+                            jn_rd_arm <= 1'b0;
+                        end
+                    end else if (!jn_rd_arm) begin
                         jn_rd_arm <= 1'b1;
                     end else if (jn_i < names_n &&
                         name_hash_rdata == jn_h &&
@@ -7608,11 +7710,25 @@ module jmr_js_vm #(
                         end else begin
                         stack_wr(jn_res, {16'd0, jn_i}, 3'd3);
                         end
+                        jn_cache_remember(jn_i);
+                        jn_cache_try <= 1'b0;
+                        jn_cache_i <= 3'd0;
                         jn_rd_arm <= 1'b0;
                         hs_code(15'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
+                    end else if (jn_cache_try) begin
+                        // Cached id missed — next slot, or linear from 0.
+                        jn_cache_try <= 1'b0;
+                        jn_rd_arm <= 1'b0;
+                        if (jn_cache_i >= 3'd3) begin
+                            jn_cache_i <= 3'd4;
+                            jn_i <= 16'd0;
+                        end else
+                            jn_cache_i <= jn_cache_i + 3'd1;
                     end else if (jn_i + 16'd1 >= names_n) begin
                         jn_rd_arm <= 1'b0;
+                        jn_cache_try <= 1'b0;
+                        jn_cache_i <= 3'd0;
                         if (names_n < 16'd1024) begin
                             name_hash_wr(names_n[9:0], jn_h);
                             name_len_tbl[names_n[9:0]] <= jn_len;
@@ -7621,6 +7737,7 @@ module jmr_js_vm #(
                             // byte-copy). Indexed writes are not the SRAM we.
                             e64_poke(6'd40, {6'd0, names_n[9:0]},
                                      {48'd0, jn_h});
+                            jn_cache_remember(names_n);
                             if (v64_concat || v64_join) begin
                                 vst_wr(jn_res, v64_handle(
                                     4'd4, 12'd0, {16'd0, names_n}
@@ -9921,8 +10038,8 @@ module jmr_js_vm #(
                                 : (is_valcall
                                     ? `VST_AT(vsp - vcall_argc - 12'd1)
                                     : V64_UNDEFINED);
-                            parent_env = is_valcall
-                                ? vfn_env_rdata : venv;
+                            parent_env = intern_ctor_fn ? intern_ctor_env
+                                : (is_valcall ? vfn_env_rdata : venv);
                             // ALLOC re-issue can see venv already this slot
                             // (nested CALL_USER). A self-parent makes
                             // STORE_VAR HEAP_CMP walk forever (eid=2→2).
@@ -9930,9 +10047,11 @@ module jmr_js_vm #(
                                 parent_env[47:44] == V64_KIND_ENV &&
                                 parent_env[9:0] == valloc_i[9:0])
                                 parent_env = V64_UNDEFINED;
-                            nparam = is_valcall
+                            nparam = intern_ctor_fn
+                                ? {2'd0, intern_ctor_nparam}
+                                : (is_valcall
                                 ? {2'd0, vfn_nparam_rdata}
-                                : vcall_argc;
+                                : vcall_argc);
                             // forEach args sit at vfe_base+2 (pushed fn)
                             // then elem. Do not use exec vsp (frozen at
                             // CALL_METHOD) — that made bind_vsp_next=0
@@ -10010,8 +10129,12 @@ module jmr_js_vm #(
                                 hs_vthis((ctor_inst[63:48] == V64_TAG_PREFIX &&
                                           ctor_inst[47:44] == V64_KIND_OBJECT)
                                        ? ctor_inst
-                                       : ((vfn_flags_rdata[0] ||
-                                          vfn_flags_rdata[2])
+                                       : (((intern_ctor_fn
+                                            ? intern_ctor_flags[0]
+                                            : vfn_flags_rdata[0]) ||
+                                          (intern_ctor_fn
+                                            ? intern_ctor_flags[2]
+                                            : vfn_flags_rdata[2]))
                                        ? vfn_bound_this_rdata
                                        : vcall_set_this
                                        ? vcall_this : V64_UNDEFINED));
@@ -10024,9 +10147,11 @@ module jmr_js_vm #(
                                     ? (e64_vfe_base_q + 12'd3)
                                     : (vsp - vcall_argc);
                                 bind_vsp_next <= base_sp + nparam;
-                                bind_ip <= vfn_entry_rdata;
+                                bind_ip <= intern_ctor_fn
+                                    ? intern_ctor_entry : vfn_entry_rdata;
                                 bind_ret <= S_FETCH_WAIT;
                                 bind_rd_arm <= 1'b0;
+                                intern_ctor_hold <= 1'b0;
                                 hs_st(S_V64_BIND);
                             end else begin
                                 hs_vthis((ctor_inst[63:48] == V64_TAG_PREFIX &&
@@ -10043,6 +10168,7 @@ module jmr_js_vm #(
                                 hs_vcall_entry(vcall_entry);
                                 hs_ip(vcall_entry);
                                 hs_code(15'(ops_base + vcall_entry));
+                                intern_ctor_hold <= 1'b0;
                                 hs_st(S_V64_CTOR_PAD);
                             end
                             hs_vcall_set_this(1'b0);
@@ -11557,6 +11683,11 @@ module jmr_js_vm #(
                                 bind_base <= vsp - argc;
                                 bind_src <= vsp - argc;
                                 bind_ins <= ctor_fn;
+                                intern_ctor_hold <= 1'b1;
+                                intern_ctor_entry <= vfn_entry_rdata;
+                                intern_ctor_nparam <= vfn_nparam_rdata;
+                                intern_ctor_flags <= vfn_flags_rdata;
+                                intern_ctor_env <= vfn_env_rdata;
                                 bind_vsp_next <= vsp + 12'd1;
                                 bind_ret <= S_V64_ALLOC;
                                 bind_rd_arm <= 1'b0;
@@ -11640,6 +11771,11 @@ module jmr_js_vm #(
                                 bind_base <= vsp - argc;
                                 bind_src <= vsp - argc;
                                 bind_ins <= ctor_fn;
+                                intern_ctor_hold <= 1'b1;
+                                intern_ctor_entry <= vfn_entry_rdata;
+                                intern_ctor_nparam <= vfn_nparam_rdata;
+                                intern_ctor_flags <= vfn_flags_rdata;
+                                intern_ctor_env <= vfn_env_rdata;
                                 bind_vsp_next <= vsp + 12'd1;
                                 bind_ret <= S_V64_ALLOC;
                                 bind_rd_arm <= 1'b0;

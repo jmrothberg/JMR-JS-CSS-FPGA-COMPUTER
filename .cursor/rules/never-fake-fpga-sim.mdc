@@ -54,8 +54,12 @@ copy buffer — leave it. Copy working Port A: `jmr_video_vram.sv` /
    moving those writes still blew **71 GB** (15:22). Writes moved out
    (15:32) → ~**15 GB** hold after `e32_p_clr` instead of 8→36→70.
    Heap tables `stack` / `name_hash_tbl` / `varr_len` / `vobj_alloc` /
-   `vvars` use the same Port A (next `make bit`). `ram_style = "block"`
-   does not save an FSM poke. Mux **addresses**,
+   `vvars` use the same Port A. **Glass / title debug uses those tasks.
+   Do not put `stack[i] <=` / `vobj_alloc[i] <=` back to make a game
+   paint.** FOREACH el+idx is two clocks (`stack_dual_pend`). `arr_len` /
+   `vobj_cls` still FSM-poked (Synth 8-13159 dissolved them to FFs) — if
+   you touch those, same Port A, do not add more `mem[i] <=`. `ram_style =
+   "block"` does not save an FSM poke. Mux **addresses**,
    not forty `rdata <= mem[f()]` in one process. Template miss → 8-3967 /
    8-4767 (RAM as FFs = 70 GB).
 
@@ -81,15 +85,25 @@ copy buffer — leave it. Copy working Port A: `jmr_video_vram.sv` /
    RSS is still climbing toward ~80 GB.
 
 ```systemverilog
-// GOOD — same shape as jmr_mini_fb Port A
+// GOOD — same shape as jmr_mini_fb Port A (tasks already in jmr_js_vm.sv)
 always_ff @(posedge clk) begin
   if (we) ram[waddr] <= wdata;
   rdata <= ram[raddr];  // raddr is a scalar wire
 end
-// FSM only:
+// FSM / unique case only (glass, HEAP, new opcode — same):
+stack_wr(sp, alu_r, tag);
+vobj_alloc_wr(valloc_i[9:0], 2'd1);
+varr_len_wr(aid, len);
+name_hash_wr(idx, h);
+vvars_wr(slot, val);
+json_putc(ch);
 imgd_we <= 1'b1; imgd_waddr <= imgd_i; imgd_wdata <= pix;
 
-// BAD — 70 GB: FSM pokes the picture / sprite RAM
+// BAD — 70 GB / extra RAM port: poke from the 7k-line FSM
 imgd_pix[imgd_i] <= fb_dump_back;
-spr_mem[spr_wp]  <= trail_tb;
+stack[sp] <= alu_r;
+vobj_alloc[valloc_i] <= 2'd1;
+// BAD — two stack writes one cycle (FOREACH uses stack_dual_pend, extra clock)
+stack_wr(sp, el, t0);
+stack_wr(sp + 8'd1, idx, t1);
 ```

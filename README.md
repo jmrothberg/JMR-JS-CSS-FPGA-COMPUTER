@@ -27,6 +27,8 @@ across F9 runtimes (no RTL-only console commands).
 **Status for agents:** [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md)
 (PYTHON glass user-confirmed; FPGA-SIM not F9-ready; do not `make bit`
 unless the user asks. J15 USB Host is dead — GUI/PROG tether).
+Synth vs play-speed debt (JOIN intern scan, what to keep for Vivado):
+[docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md).
 
 ```
 $ python3 run_jmr_js.py
@@ -54,7 +56,10 @@ python3 gui_jmr_js.py
 #    F9 BOARD: PC keyboard = tether (J15 dead). F10 hides the monitor (faster).
 
 make -C sim sim_server_synth
-# 4. Verilator FPGA-SIM binary (REQUIRED for F9 FPGA-SIM; never fake with host twin)
+# 4. FAST newest-RTL rebuild (minutes, incremental obj_dir). After title/RTL
+#    fixes this is the command — same rtl/*.sv as the chip, no hours-long .bin.
+#    Do not `make -C sim clean` (that forces a full Verilator rebuild).
+#    Then restart the GUI and F9 FPGA-SIM. Never fake with host twin.
 #    Opt-in host twin ONLY for debug: JMR_SIM_HOST=1 (not product)
 
 .venv/bin/python tools/check_runtime_parity.py
