@@ -42,14 +42,19 @@ copy buffer — leave it. Copy working Port A: `jmr_video_vram.sv` /
 
 ## Rules that are actually AMD (do not ship a diff that breaks one)
 
-1. **Match `simple_dual_one_clock.v` / `rams_sp_wf.v`.** One write process
-   (`if (wea) ram[addra] <= dia`) and one read process (`dob <= ram[addrb]`),
-   **scalar** `addra`/`addrb`/`wea`/`dia`/`dob`. Mux the **address**, not
-   forty `rdata <= mem[f(casestate,state,…)]` in one `always_ff`. If Vivado
-   cannot match that template it prints **8-3967** (async read) / **8-4767**
-   (RAM → registers). `imgd_pix` (307200×8) + `spr_mem` (256K×8) as FFs is
-   the ~70 GB RSS hang. `ram_style = "block"` is a hint (UG901 RAM_STYLE),
-   not a primitive; it does not save a bad template.
+1. **Big memories: tiny write process, not the VM FSM.** Copy
+   `jmr_mini_fb.sv` / `jmr_video_vram.sv` Port A. Any large unpacked array
+   (today: `imgd_pix` 307200×8, `spr_mem` 256K×8, `name_mem` 32K,
+   `json_mem` 8K — and any new buffer in that class) is:
+   `always_ff if (we) mem[waddr] <= wdata; rdata <= mem[raddr];` with
+   **scalar** we/addr/data. The parent FSM / case only sets those strobes.
+   Do not put `mem[i] <=` back in the 7k-line `always_ff` (glass, HEAP,
+   exec, new opcode — same rule). Isolated `*_rdata` reads **without**
+   moving those writes still blew **71 GB** (15:22). Writes moved out
+   (15:32) → ~**15 GB** hold after `e32_p_clr` instead of 8→36→70.
+   `ram_style = "block"` does not save an FSM poke. Mux **addresses**,
+   not forty `rdata <= mem[f()]` in one process. Template miss → 8-3967 /
+   8-4767 (RAM as FFs = 70 GB).
 
 2. **Do not mix blocking `=` and NBA `<=` in one sequential block** (UG901
    Blocking and Non-Blocking Assignments).
@@ -73,15 +78,15 @@ copy buffer — leave it. Copy working Port A: `jmr_video_vram.sv` /
    RSS is still climbing toward ~80 GB.
 
 ```systemverilog
-// UG901 simple_dual_one_clock.v (one RAM)
-always_ff @(posedge clk) if (we) ram[waddr] <= wdata;
-always_ff @(posedge clk) rdata <= ram[raddr];  // raddr is a scalar wire
-
-// BAD — MB-class arrays share one process with a combo address mux
+// GOOD — same shape as jmr_mini_fb Port A
 always_ff @(posedge clk) begin
-  imgd_pix_rdata <= imgd_pix[imgd_i];
-  spr_mem_rdata  <= spr_mem[casestate == S_X ? a : b];
-  name_rdata     <= name_mem[state == S_Y ? c : d];
-  // … 40 more …
+  if (we) ram[waddr] <= wdata;
+  rdata <= ram[raddr];  // raddr is a scalar wire
 end
+// FSM only:
+imgd_we <= 1'b1; imgd_waddr <= imgd_i; imgd_wdata <= pix;
+
+// BAD — 70 GB: FSM pokes the picture / sprite RAM
+imgd_pix[imgd_i] <= fb_dump_back;
+spr_mem[spr_wp]  <= trail_tb;
 ```

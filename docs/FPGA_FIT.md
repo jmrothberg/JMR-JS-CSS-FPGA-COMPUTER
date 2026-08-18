@@ -114,26 +114,28 @@ LUTRAM can only sit in **SLICEM** boxes (a subset of slices).
 
 ## Easy mistakes
 
+- **Do not write big on-chip arrays from the VM FSM.** That was the 70 GB
+  blow-up. `imgd_pix` / `spr_mem` / `name_mem` / `json_mem` must use a
+  tiny `if (we) mem[addr] <= data` process (copy `jmr_mini_fb` Port A).
+  The FSM only pulses `*_we` / `*_waddr` / `*_wdata`. Isolated `*_rdata`
+  reads while the FSM still did `imgd_pix[i] <=` / `spr_mem[spr_wp] <=`
+  still hit **71 GB**. After those writes moved out (15:32), synth held
+  **~15 GB** after `e32_p_clr` instead of 8→36→70. Do not put those
+  array writes back into the FSM for glass, HEAP, or a new opcode.
 - **Kill on RSS, not on `e32_p_clr`.** Synth 8-6014 (`e32_p_clr_reg was
   removed`) is unused-FF housekeeping after `top_nexys_video` finishes.
-  It is **not** the bug. The hang is Vivado flatten: **RSS tens of GB**
-  (08:26: 11→38 GB; 09:43: **69 GB**) while `synth_design` is still 0%.
-  8-6014 can still print while RAM explodes — still kill **only** if the
-  log is frozen and RSS is still climbing toward ~80 GB on this 128 GB
-  host. Do **not** kill at 20 GB (12:50 was too early). Do not restart
-  `make bit` until remaining unique-case SRAM reads are `*_rdata`.
-- **Heap-name grep empty ≠ cone.** Last hang leftovers were on-chip
-  `spr_mem` (blit scratch, ~0.25 MB in the table above — **not** the
-  4 MB ASET bank) and `vraf`, not `vobj_*`. Any unpacked `logic foo [0:N-1]`
-  with N≳32 and a variable index in the unique case is the same bug.
+  The log then stays quiet while Vivado infers Block RAM (tens of minutes
+  is OK). Hang = RSS climbing toward ~80 GB on this 128 GB host. A **~15 GB
+  hold** with one busy core is the good curve. Do **not** kill at 20 GB
+  (12:50 was too early). Tracker: `build/nexys_video/synth_rss.log`.
+- **Heap-name grep empty ≠ cone.** `spr_mem` is on-chip blit scratch
+  (~0.25 MB — **not** the 4 MB ASET bank). `ram_style = "block"` does not
+  save an FSM poke.
 - **Do not split JOIN/JSON/GC out of `jmr_js_vm.sv`.** Not a task. Maybe
-  never. Optional later RTL re-org only if the user asks after legal SRAM
-  still cannot synth. Flatten fix is `*_rdata` in the existing unique case.
+  never.
 - **`.bin` megabytes ≠ utilization.** The file is the whole 200T config image.
 - **Do not copy BASIC LUT history** into this product. Method only.
 - **FPGA-SIM green ≠ synthesizable.** Title RUN in Verilator is not a `.bin`.
-  New RTL: unique-case **reads** go through `*_rdata` from the first line
-  (`never-fake-fpga-sim` rule 3). Do not grow combo peeks and flatten later.
 - **First T200 bit is the slow one.** MIG + full VM synth; later `make -C
   tools/board_flow bit` reuses the project. `bit-fresh` / `clean` = pay first-build
   again. See [FPGA_BRINGUP.md](FPGA_BRINGUP.md).

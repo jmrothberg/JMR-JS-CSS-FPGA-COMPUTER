@@ -1,7 +1,8 @@
 # Session handoff
 
-**2026-08-18 (headless, not an F9).** Two agents, two sections. Edit **only
-your section.** Do **not** tell the user to F9 the three games yet.
+**2026-08-18 (headless, not an F9).** Live notes. Two topics below (synth vs
+glass) — not a required two-agent split. Do **not** tell the user to F9 the
+three games yet.
 
 Product: a **standalone NLISC-JS computer** on Nexys Video **T200**.
 Not a browser. Not dukpy. FPGA-SIM and the `.bin` are the same `rtl/*.sv`.
@@ -9,52 +10,45 @@ Not a browser. Not dukpy. FPGA-SIM and the `.bin` are the same `rtl/*.sv`.
 Law: `never-fake-fpga-sim`, `one-heap-keep-gen`, `python-first-parity`,
 `no-dukpy-cheat-native-cpu`. ABI: [`docs/JMR_JS_COMPATIBILITY.md`](JMR_JS_COMPATIBILITY.md).
 
-| Agent | Owns | Does not |
-|---|---|---|
-| **1 — RTL / synth** | §1 only | glass, PACMAN/DONKEY/INVADERS bugs, F9 |
-| **2 — FPGA-SIM** | §2 only | `make bit`, flatten hunts, rewriting §1 |
-
-Agent 2, when changing RTL so FPGA-SIM can synthesize: follow **§1** (address
-this clock, `*_rdata` next, extra clocks OK, no clone heaps, no `leave_hold`
-in else). Do not mix game-bug edits into a flatten pass.
+**Any RTL edit** (glass, HEAP, exec, new opcode): extra clocks OK. No clone
+heaps. No `leave_hold` in else. Large on-chip arrays (`imgd_pix`, `spr_mem`,
+`name_mem`, `json_mem`, and anything else MB-class) write only through
+`*_we` / `*_waddr` / `*_wdata` into a tiny `if (we) mem[addr] <= data`
+process — same as `jmr_mini_fb`. Do **not** poke `mem[i] <=` from the
+parent FSM. Isolated `*_rdata` reads with FSM writes still left in blew
+~70 GB. Do not mix a title-bug hunt into a flatten pass.
 
 ---
 
 ## 1) RTL review / synthesis
 
-**`make bit` killed 2026-08-18 11:14** — flatten wall. 08:26 38 GB; 09:43
-**69 GB**; 11:14 ~26 GB. Print `e32_p_clr` is not the bug. Host is **128 GB**.
-**Do not kill at 20 GB.** Kill only if the log is frozen after 8-6155 **and**
-RSS is still climbing toward ~80 GB (the 69 GB class). 12:50 at 20 GB was
-killed too early. Fit: [FPGA_FIT.md](FPGA_FIT.md). Do **not** `bit-fresh`.
+**What stopped the 70 GB blow-up (2026-08-18 15:32):** the FSM must **not**
+poke the big on-chip pictures. `imgd_pix` (307200×8), `spr_mem` (256K×8),
+`name_mem` (32K), `json_mem` (8K) now write only in a tiny
+`if (we) mem[addr] <= data` process (copy `jmr_mini_fb` / `jmr_video_vram`
+Port A). The 7k-line `always_ff` sets `imgd_we` / `spr_we` / `name_we` /
+`json_we` + waddr/wdata. After `e32_p_clr` this run held **~15 GB** + one
+busy core (old curve was 8→36→70 GB in minutes). Fit: [FPGA_FIT.md](FPGA_FIT.md).
+Do **not** `bit-fresh`.
 
-**Done this pass:** cut SRAM `rdata <= mem[raddr]` (~4580, own
-`always_ff`) out of the unique-case process (~5333). Unique case only
-consumes `*_rdata` and does `<=` FFs / `mem[i] <=` writes. `S_BLIT` no
-longer peeks `spr_off`/`spr_ww` or divides; it uses outside `spr_so` /
-`spr_raddr`. **`sim_server_synth` PASS** (Verilator, not Vivado).
+**Failed (do not repeat):** named unique-case peek hunts; splitting **reads**
+only into `rdata <= mem[raddr]` while the FSM still did `imgd_pix[i] <=` /
+`spr_mem[spr_wp] <=` (15:22 synth still hit 71 GB). `casestate_q`,
+`unique`→`case`, pulling IEEE mul out of the case — same wall. `e32_p_clr`
+8-6014 is unused-FF housekeeping, not the cone.
 
-OK: mux `rdata <= mem[raddr]` is a **separate** process. Opcode
-`always_comb` locals/`*_n` only (parent sees `*_q`).
+**Tracker:** `build/nexys_video/synth_rss.log` (RSS + last runme line every
+10 s). The log stays on `e32_p_clr` during RAM infer; watch **RSS**, not a
+new print. Host **128 GB**. Kill only if log frozen **and** RSS climbing
+toward ~80 GB. Do not kill a ~15 GB hold with a busy core.
 
-Do **not** touch: glass, `leave_hold`, 8-3936 / `e32_p_clr`,
-`keep_hierarchy`, `storage_engine` `linebuf` 8-4767, clone heaps.
-Do **not** extract JOIN/JSON/GC into new modules (not a task; maybe never).
-
-**Hang ledger:** `keep_hierarchy` + clocked raddr `*_q` → modules synth;
-unused-FF still flattened. RSS 11→38 GB, **69 GB**, then **~26 GB**
-(11:14). 12:15 ~8 GB killed. **12:50** (env sourced, not bit-fresh):
-`top_nexys_video` 8-6155 + `e32_p_clr` 8-6014 in ~30s at ~7 GB; log then
-quiet; synth child **20 GB** at 12:55 — **killed**. Same wall. Cause:
-mux + unique case were **one** `always_ff`.
-
-**Next:** `source scripts/vivado_env.sh` then **`make bit`** (not bit-fresh).
-No further unique-case peek hunt — grep clean after mux split. `e32_p_clr`
-is not the bug. Let RSS sit in the 20–40 GB band if the log still moves.
-Kill only if log frozen **and** RSS still climbing toward ~80 GB.
-
-Leave 16-deep FFs (`vst_win`, `js_val`/`vjs_val`, `cls_*` 16×16,
+Do **not** touch: glass, `leave_hold`, `keep_hierarchy`, `storage_engine`
+`linebuf` 8-4767, clone heaps. Do **not** extract JOIN/JSON/GC. Leave
+16-deep FFs (`vst_win`, `js_val`/`vjs_val`, `cls_*` 16×16,
 `spr_off`/`spr_ww`/`spr_hh`, `kd_slot`).
+
+Opcode `always_comb` locals/`*_n` only (parent sees `*_q`). Inspect both
+exec32 and exec64.
 
 ---
 
