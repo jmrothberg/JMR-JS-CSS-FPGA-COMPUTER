@@ -276,6 +276,24 @@ static int watch_slot = -1;
 static int32_t watch_prev = 0;
 // NEW: IPTRACE — ring of executed ip values (execution path). Arm with
 // "IPTRACE <n>", dump+disarm with "IPTRACE?". Off by default.
+struct VRingEnt {
+    unsigned st; unsigned ip; uint64_t venv;
+    unsigned vvr; unsigned vk; unsigned proto; unsigned gcp;
+    unsigned vsp; uint64_t w0; uint64_t w1; uint64_t w2;
+    unsigned pcsp; unsigned ecsp; unsigned flags; unsigned est;
+};
+static int ring_stop_ip = -1;
+static VRingEnt vring[256];
+static unsigned long vring_i = 0;
+static bool vring_frozen = false;
+static unsigned long state_prof[128] = {0};
+static unsigned long prof_cycles = 0;
+// NEW: ENVWATCH — log every venv_valid[idx] transition with state/ip.
+struct EnvEvt { unsigned st; unsigned ip; unsigned val; uint64_t venv; };
+static std::vector<EnvEvt> env_evts;
+static int env_watch = -1;
+static unsigned env_watch_prev = 0;
+static unsigned env_prev[8] = {0};
 static std::vector<uint16_t> ip_trace;
 static size_t ip_trace_cap = 0;
 static uint16_t ip_trace_prev = 0xffff;
@@ -333,7 +351,8 @@ static const char* vm_sname(unsigned s) {
         "S_HEAP_WAIT","S_HEAP_CMP","S_HEAP_WR","S_HEAP_AWR","S_HEAP_FILL",
         "S_V64_METH","S_V64_FE_ELEM","S_V64_FE_FILTER","S_V64_OGETI_NAT",
         "S_V64_IDXSCAN","S_V64_CTOR_ENV","S_V64_CTOR_VARS","S_REL_ENV","S_FREE_OBJ","S_FREE_ARR",
-        "S_V64_BIND","S_V64_MINMAX","S_V64_WIN_FILL","S_ARR_PROMOTE","S_HEAP_CLR"
+        "S_V64_BIND","S_V64_MINMAX","S_V64_WIN_FILL","S_ARR_PROMOTE",
+        "S_V64_RECT_LD","S_HEAP_CLR"
     };
     if (s < (unsigned)(sizeof(N) / sizeof(N[0]))) return N[s];
     return "?";
@@ -356,6 +375,65 @@ static void tick() {
                       << "\n";
             watch_prev = v;
         }
+    }
+    {
+        unsigned st_ = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state);
+        if (st_ < 128) state_prof[st_]++;
+        prof_cycles++;
+    }
+    if (env_watch >= 0) {
+        // Watch slots 0..7 so a re-alloc into a neighbour is visible too.
+        auto* rr = top->rootp;
+        for (int sl = 0; sl < 8; sl++) {
+            unsigned v = unsigned(rr->jmr_js_core__DOT__u_vm__DOT__venv_valid[sl]);
+            if (v != env_prev[sl]) {
+                if (env_evts.size() < 64)
+                    env_evts.push_back({unsigned(rr->jmr_js_core__DOT__u_vm__DOT__state),
+                                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__ip),
+                                        (v << 8) | unsigned(sl),
+                                        uint64_t(rr->jmr_js_core__DOT__u_vm__DOT__venv)});
+                env_prev[sl] = v;
+            }
+        }
+    }
+    {
+        // NEW: rolling cycle ring for fault forensics (VRING?). Freezes the
+        // instant fault_code goes nonzero so the ring holds the run-up.
+        auto* rr = top->rootp;
+        static unsigned run_prev = 0;
+        unsigned run_now = unsigned(rr->jmr_js_core__DOT__u_vm__DOT__running);
+        if (!vring_frozen && rr->jmr_js_core__DOT__u_vm__DOT__fault_code)
+            vring_frozen = true;
+        // Also freeze on the running 1->0 edge: a clean halt (no fault code)
+        // otherwise leaves no evidence of what stopped the machine.
+        if (!vring_frozen && run_prev && !run_now)
+            vring_frozen = true;
+        run_prev = run_now;
+        if (!vring_frozen)
+        vring[vring_i & 255] = {
+            unsigned(rr->jmr_js_core__DOT__u_vm__DOT__state),
+            unsigned(rr->jmr_js_core__DOT__u_vm__DOT__ip),
+            uint64_t(rr->jmr_js_core__DOT__u_vm__DOT__venv),
+            unsigned(rr->jmr_js_core__DOT__u_vm__DOT__venv_valid_rdata),
+            unsigned(rr->jmr_js_core__DOT__u_vm__DOT__valloc_kind),
+            unsigned(rr->jmr_js_core__DOT__u_vm__DOT__hp_proto_arm),
+            unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vgc_mark_pend),
+            unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vsp),
+            uint64_t(rr->jmr_js_core__DOT__u_vm__DOT__vst_win[0]),
+            uint64_t(rr->jmr_js_core__DOT__u_vm__DOT__vst_win[1]),
+            uint64_t(rr->jmr_js_core__DOT__u_vm__DOT__vst_win[2]),
+            unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vcsp),
+            unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__vcsp),
+            unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opnd_q)
+              | (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opnd2_q) << 1)
+              | (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opnd3_q) << 2)
+              | (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__hash2_q) << 3)
+              | (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__cm_win) << 4),
+            unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state)};
+        if (ring_stop_ip >= 0 &&
+            int(rr->jmr_js_core__DOT__u_vm__DOT__ip) == ring_stop_ip)
+            vring_frozen = true;
+        if (!vring_frozen) vring_i++;
     }
     if (ip_trace.size() < ip_trace_cap) {
         uint16_t cur = uint16_t(top->rootp->jmr_js_core__DOT__u_vm__DOT__ip);
@@ -849,6 +927,23 @@ int main(int argc, char** argv) {
             std::cout
                       << " spr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_spr)
                       << " kd=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__kd_fn)
+                      << " lsn=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vlistener_n)
+                      << " kscan=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_key_scan)
+                      << " kcall=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_key_call)
+                      << " kalloc=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_key_alloc)
+                      << " fsite=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__fault_site)
+                      << " badst=" << vm_sname(unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_bad_state))
+                      << " align=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_align)
+                      << " evkey=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_evkey)
+                      << " txtw=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_txtw)
+                      << " fontpx=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__ctx_font_px)
+                      << " kcmp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_key_cmp)
+                      << " efault=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__machine_fault)
+                      << " ecode=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__fault_code)
+                      << " kevq=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__kev_rp)
+                      << "/" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__kev_wp)
+                      << " idkd=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_id_keydown)
+                      << " idku=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_id_keyup)
                       << " spr0=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__spr_nid[0])
                       << " dihit=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_di_hit)
                       << " dimiss=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_di_miss)
@@ -1512,6 +1607,119 @@ int main(int argc, char** argv) {
             continue;
         }
         // NEW: FBRAW? — nonzero counts of both FB banks + front bit (bring-up)
+        // NEW: LSNPEEK? — key listener table (ev/fn handles) as registered
+        if (line == "LSNPEEK?") {
+            auto* r = top->rootp;
+            std::ostringstream oss;
+            oss << "LSN n=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vlistener_n)
+                << " cmp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_key_cmp)
+                << std::hex
+                << " want=" << uint64_t(r->jmr_js_core__DOT__u_vm__DOT__dbg_key_want)
+                << " lastev=" << uint64_t(r->jmr_js_core__DOT__u_vm__DOT__dbg_key_lastev);
+            for (int i = 0; i < 8; i++)
+                oss << " [" << std::dec << i << std::hex
+                    << " ev=" << uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vlistener_ev[i])
+                    << " fn=" << uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vlistener_fn[i]) << "]";
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
+        // NEW: CHARPEEK? — byte -> 1-char intern id table (string index path)
+        if (line == "CHARPEEK?") {
+            auto* r = top->rootp;
+            std::ostringstream oss;
+            oss << "CHAR";
+            const char* probe = "01 abAB";
+            for (const char* q = probe; *q; q++) {
+                unsigned b = (unsigned char)*q;
+                oss << " '" << *q << "'=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__char_ok[b])
+                    << "/" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__char_id[b]);
+            }
+            unsigned nok = 0;
+            for (unsigned b = 0; b < 256; b++)
+                if (r->jmr_js_core__DOT__u_vm__DOT__char_ok[b]) nok++;
+            oss << " total_ok=" << nok;
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
+        // NEW: VENVPEEK? — current env handle vs the venv_valid/gen table
+        if (line == "VENVPEEK?") {
+            auto* r = top->rootp;
+            uint64_t venv = uint64_t(r->jmr_js_core__DOT__u_vm__DOT__venv);
+            unsigned idx = unsigned(venv & 0x3FFu);
+            std::ostringstream oss;
+            oss << "VENV h=" << std::hex << venv << std::dec
+                << " idx=" << idx
+                << " valid=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_valid[idx])
+                << " gen=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_gen[idx])
+                << " len=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_len[idx])
+                << " hgen=" << unsigned((venv >> 32) & 0xFFFu)
+                << " gcpend=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vgc_mark_pend)
+                << " gcword=" << std::hex << uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vgc_mark_word) << std::dec
+                << " bits=";
+            for (unsigned i = 0; i < 24; i++)
+                oss << unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_valid[i]);
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
+        // NEW: VRING? — last 48 cycles of state/ip/venv/venv_valid_rdata
+        if (line == "VRING?") {
+            std::ostringstream oss;
+            oss << "VRING";
+            unsigned long n = vring_i < 48 ? vring_i : 48;
+            for (unsigned long k = vring_i - n; k < vring_i; k++) {
+                const VRingEnt& e = vring[k & 255];
+                oss << " [" << vm_sname(e.st) << ">" << vm_sname(e.est)
+                    << ":" << e.ip << " sp=" << e.vsp
+                    << " f=" << e.flags << "]";
+            }
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
+        if (line.rfind("ENVWATCH ", 0) == 0) {
+            env_watch = std::stoi(line.substr(9));
+            env_evts.clear();
+            for (int sl = 0; sl < 8; sl++)
+                env_prev[sl] = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__venv_valid[sl]);
+            std::cout << "OK" << std::endl;
+            continue;
+        }
+        if (line == "ENVWATCH?") {
+            std::ostringstream oss;
+            oss << "ENVW n=" << env_evts.size();
+            for (const EnvEvt& e : env_evts)
+                oss << " [" << vm_sname(e.st) << ":" << e.ip
+                    << " slot" << (e.val & 0xFF) << "->" << (e.val >> 8)
+                    << " cur=" << std::hex << (e.venv & 0x3FF) << std::dec << "]";
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
+        if (line.rfind("RINGSTOP ", 0) == 0) {
+            ring_stop_ip = std::stoi(line.substr(9));
+            vring_frozen = false;
+            vring_i = 0;
+            std::cout << "OK" << std::endl;
+            continue;
+        }
+        if (line == "PROFCLR") {
+            for (int i = 0; i < 128; i++) state_prof[i] = 0;
+            prof_cycles = 0;
+            std::cout << "OK" << std::endl;
+            continue;
+        }
+        if (line == "PROF?") {
+            std::vector<std::pair<unsigned long, int>> v;
+            for (int i = 0; i < 128; i++)
+                if (state_prof[i]) v.push_back({state_prof[i], i});
+            std::sort(v.rbegin(), v.rend());
+            std::ostringstream oss;
+            oss << "PROF cycles=" << prof_cycles;
+            for (size_t k = 0; k < v.size() && k < 12; k++)
+                oss << " " << vm_sname(unsigned(v[k].second)) << "="
+                    << v[k].first
+                    << "(" << (prof_cycles ? v[k].first * 100 / prof_cycles : 0) << "%)";
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
         if (line == "FBRAW?") {
             unsigned nz0 = 0, nz1 = 0;
             for (unsigned i = 0; i < 307200u; i++) {
@@ -1564,7 +1772,7 @@ int main(int argc, char** argv) {
             auto* r = top->rootp;
             std::ostringstream oss;
             oss << "RECT n=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_rect_n);
-            for (int i = 0; i < 16; i++) {
+            for (int i = 0; i < 64; i++) {
                 uint64_t w = r->jmr_js_core__DOT__u_vm__DOT__dbg_rect[i];
                 unsigned c  = (unsigned)((w >> 40) & 0xFF);
                 unsigned rx = (unsigned)((w >> 30) & 0x3FF);

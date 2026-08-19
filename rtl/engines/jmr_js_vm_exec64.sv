@@ -850,6 +850,7 @@ module jmr_js_vm_exec64 (
     logic [63:0] vlistener_fn_wdata;
     logic vst_win0_we;
     logic [63:0] vst_win0_wdata;
+    logic cm_win_n;
     logic aset_win_retried_n;
     logic [7:0] bind_argc_n;
     logic [11:0] bind_base_n;
@@ -1117,22 +1118,24 @@ module jmr_js_vm_exec64 (
     // that. One opnd beat presented the new raddr but LOAD_CONST still saw
     // the previous const (fillRect 8x8 → 10x8, n=f() not 7). Second beat
     // lets rdata settle. Extra clocks are silicon (never-fake-fpga-sim).
-    logic opnd_q, opnd_n;
-    logic opnd2_q, opnd2_n;
+    logic opnd_q /*verilator public_flat_rd*/, opnd_n;
+    logic opnd2_q /*verilator public_flat_rd*/, opnd2_n;
     // ALLOC (getElementById / FRAME_RAF env) freezes raddr_q. Parent
     // vfn_valid_rdata is the clock after raddr_q, and exec samples that
     // rdata one more clock after that (rAF fault 4 / 45 with vf0=1).
-    logic opnd3_q, opnd3_n;
+    logic opnd3_q /*verilator public_flat_rd*/, opnd3_n;
     // Class method lookup: one (c,m) per clock. Opcode comb must not
     // index cls_mip[][] (exec32 cm_scan twin).
     logic cm_scan, cm_scan_n, cm_armed, cm_armed_n, cm_done, cm_done_n;
     logic [3:0] cm_c, cm_c_n, cm_m, cm_m_n;
     logic [15:0] cm_mip, cm_mip_n, cm_key, cm_key_n, cm_cls, cm_cls_n;
     // String.replace needs two name_hash_tbl keys; one SRAM port → extra beat.
-    logic hash2_q, hash2_n;
-    // fillRect/clearRect: SRAM-reload vst_win so y/w/h from GET_PROP /
-    // LOAD_VAR / ADD still see the canvas receiver (INVADERS drawBitmap).
-    logic cm_win_q, cm_win_n;
+    logic hash2_q /*verilator public_flat_rd*/, hash2_n;
+    // venv_valid_rdata settle counter (parent Port A lag after a ctor
+    // return pokes venv). Counts beats, then trusts the bit.
+    logic [2:0] venvw_q /*verilator public_flat_rd*/, venvw_n;
+    // Bring-up: which fault arm fired (source line of the assignment).
+    logic [15:0] fault_site /*verilator public_flat_rd*/, fault_site_n;
     logic [6:0] tmr_i_q, tmr_i_n;
     logic tmr_found_q, tmr_found_n;
     logic [6:0] tmr_slot_q, tmr_slot_n;
@@ -1148,6 +1151,8 @@ module jmr_js_vm_exec64 (
     // Working regs clock here. Parent sees *_q / leave_hold, not combo *_n.
     logic aset_win_retried;
     assign aset_win_retried_q = aset_win_retried;
+    // CALL_METH fillRect: one SRAM window refill when obj_ok is false.
+    logic cm_win /*verilator public_flat_rd*/;
     logic [7:0] bind_argc;
     assign bind_argc_q = bind_argc;
     logic [11:0] bind_base;
@@ -1224,7 +1229,7 @@ module jmr_js_vm_exec64 (
     assign dbg_json_ovf_q = dbg_json_ovf;
     logic [15:0] dbg_path_ovf;
     assign dbg_path_ovf_q = dbg_path_ovf;
-    logic [7:0] fault_code;
+    logic [7:0] fault_code /*verilator public_flat_rd*/;
     assign fault_code_q = fault_code;
     logic [18:0] fb_dump_addr;
     assign fb_dump_addr_q = fb_dump_addr;
@@ -1353,7 +1358,7 @@ module jmr_js_vm_exec64 (
     assign json_wp_q = json_wp;
     logic looping;
     assign looping_q = looping;
-    logic machine_fault;
+    logic machine_fault /*verilator public_flat_rd*/;
     assign machine_fault_q = machine_fault;
     logic [63:0] minmax_acc;
     assign minmax_acc_q = minmax_acc;
@@ -1498,7 +1503,7 @@ module jmr_js_vm_exec64 (
     assign vcall_value_q = vcall_value;
     logic [8:0] vconsole_n;
     assign vconsole_n_q = vconsole_n;
-    logic [7:0] vcsp;
+    logic [7:0] vcsp /*verilator public_flat_rd*/;
     assign vcsp_q = vcsp;
     logic [7:0] vdiv_count;
     assign vdiv_count_q = vdiv_count;
@@ -1639,7 +1644,7 @@ module jmr_js_vm_exec64 (
             opnd2_q <= 1'b0;
             opnd3_q <= 1'b0;
             hash2_q <= 1'b0;
-            cm_win_q <= 1'b0;
+            venvw_q <= 3'd0;
             tmr_i_q <= 7'd0;
             tmr_found_q <= 1'b0;
             tmr_slot_q <= 7'd0;
@@ -1674,7 +1679,7 @@ module jmr_js_vm_exec64 (
             opnd2_q <= opnd2_n;
             opnd3_q <= opnd3_n;
             hash2_q <= hash2_n;
-            cm_win_q <= cm_win_n;
+            venvw_q <= venvw_n;
             tmr_i_q <= tmr_i_n;
             tmr_found_q <= tmr_found_n;
             tmr_slot_q <= tmr_slot_n;
@@ -1683,11 +1688,15 @@ module jmr_js_vm_exec64 (
             opnd2_q <= 1'b0;
             opnd3_q <= 1'b0;
             hash2_q <= 1'b0;
+            venvw_q <= 3'd0;
             tmr_i_q <= 7'd0;
             tmr_found_q <= 1'b0;
             tmr_slot_q <= 7'd0;
         end
         p_clr_busy_q <= p_clr_busy;
+        // Bring-up: sticky until the next fault (read by VMSTAT).
+        if (!rst_n) fault_site <= 16'd0;
+        else fault_site <= fault_site_n;
     end
 
     // Sequential cell so Vivado keep_hierarchy is not dissolved as combo-only.
@@ -1708,6 +1717,7 @@ module jmr_js_vm_exec64 (
             cm_mip <= 16'hFFFF;
             cm_key <= 16'd0;
             cm_cls <= 16'd0;
+            cm_win <= 1'b0;
             // Parent GOT_HDR sets identity scale; exec fillRect uses these
             // FFs (ctx_sx=0 after rst made every ctx.fillRect clip to 0 —
             // INVADERS splash 1893 swaps, FBRAW nz=0).
@@ -1722,6 +1732,7 @@ module jmr_js_vm_exec64 (
         // stay stale and STORE_VAR walks a self-parent env forever.
         end else if (enable && !leave_hold) begin
                 aset_win_retried <= aset_win_retried_n;
+                cm_win <= cm_win_n;
                 bind_argc <= bind_argc_n;
                 bind_base <= bind_base_n;
                 bind_ip <= bind_ip_n;
@@ -2766,6 +2777,7 @@ module jmr_js_vm_exec64 (
 
     always_comb begin
         aset_win_retried_n = aset_win_retried;
+        cm_win_n = cm_win;
         bind_argc_n = bind_argc;
         bind_base_n = bind_base;
         bind_ip_n = bind_ip;
@@ -2873,6 +2885,7 @@ module jmr_js_vm_exec64 (
         json_wp_n = json_wp;
         looping_n = looping;
         machine_fault_n = machine_fault;
+        fault_site_n = fault_site;
         minmax_acc_n = minmax_acc;
         minmax_base_n = minmax_base;
         minmax_is_min_n = minmax_is_min;
@@ -3058,7 +3071,7 @@ module jmr_js_vm_exec64 (
         opnd2_n = 1'b0;
         opnd3_n = 1'b0;
         hash2_n = 1'b0;
-        cm_win_n = 1'b0;
+        venvw_n = 3'd0;
         tmr_i_n = 7'd0;
         tmr_found_n = 1'b0;
         tmr_slot_n = 7'd0;
@@ -3114,7 +3127,6 @@ module jmr_js_vm_exec64 (
                     opnd_n = opnd_q;
                     opnd2_n = opnd2_q;
                     opnd3_n = opnd3_q;
-                    cm_win_n = cm_win_q;
                     tmr_i_n = tmr_i_q;
                     tmr_found_n = tmr_found_q;
                     tmr_slot_n = tmr_slot_q;
@@ -3139,7 +3151,8 @@ module jmr_js_vm_exec64 (
                         // Beat 3: exec samples parent rdata after ALLOC
                         // freeze (getElementById / FRAME_RAF env). Two
                         // waits left rAF seeing !vfn_valid_rdata while
-                        // slot 0 was already valid.
+                        // slot 0 was already valid. Do not apply this to
+                        // every opcode — that stalled FRAME at ~20 ops.
                         opnd_n = 1'b1;
                         opnd2_n = 1'b1;
                         opnd3_n = 1'b1;
@@ -3196,6 +3209,7 @@ module jmr_js_vm_exec64 (
                             end else if (vsp_hs != vframe_bsp_rdata) begin
                             machine_fault_n = 1'b1;
                             fault_code_n = 8'd1;
+                            fault_site_n = 16'd3198;
                             running_n = 1'b0;
                             state_n = S_DONE;
                             end else begin
@@ -3304,12 +3318,12 @@ module jmr_js_vm_exec64 (
                         case (code_rdata[7:0])
                             OP_LOAD_CONST: begin
                                 if (vsp >= 12'(STACK_DEPTH)) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd3310;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if ((code_rdata[31:24] == 8'd0 ||
                                              code_rdata[31:24] == 8'd3) &&
                                              code_rdata[23:8] >= n_consts) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd5;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd5; fault_site_n = 16'd3315;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (code_rdata[31:24] == 8'd0 ||
                                              code_rdata[31:24] == 8'd3) begin
@@ -3349,16 +3363,16 @@ module jmr_js_vm_exec64 (
                                     valloc_retried_n = 1'b0;
                                     state_n = S_V64_ALLOC;
                                 end else begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd5;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd5; fault_site_n = 16'd3355;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end
                             end
                             OP_LOAD_VAR: begin
                                 if (vsp >= 12'(STACK_DEPTH)) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd3361;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (code_rdata[23:17] != 0) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd5;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd5; fault_site_n = 16'd3364;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (this_ok &&
                                              code_rdata[16:8] == var_this) begin
@@ -3380,10 +3394,30 @@ module jmr_js_vm_exec64 (
                                     state_n = S_FETCH_WAIT;
                                 end else if (venv[63:48] == 16'h7ff9 &&
                                              venv[47:44] == 4'd9) begin
-                                    if (venv[31:0] >= ENV_DEPTH ||
-                                        !venv_valid_rdata) begin
+                                    if (venv[31:0] >= ENV_DEPTH) begin
                                         machine_fault_n = 1'b1;
                                         fault_code_n = 8'd4;
+                                        fault_site_n = 16'd60001;
+                                        running_n = 1'b0;
+                                        state_n = S_DONE;
+                                    // venv_valid_rdata lags venv_raddr by a
+                                    // parent Port A beat. After a ctor return
+                                    // pokes venv, the same-cycle bit was the
+                                    // PREVIOUS env's — a live env read 0 and
+                                    // faulted 4 (PACMAN `new Stage()`; the
+                                    // table really held valid=1). One settle
+                                    // beat, then trust it. Extra clock is OK.
+                                    end else if (!venv_valid_rdata &&
+                                                 venvw_q < 3'd4) begin
+                                        venvw_n = venvw_q + 3'd1;
+                                        hash2_n = 1'b1;
+                                        opnd_n = 1'b1;
+                                        opnd2_n = 1'b1;
+                                        state_n = S_V64_EXEC;
+                                    end else if (!venv_valid_rdata) begin
+                                        machine_fault_n = 1'b1;
+                                        fault_code_n = 8'd4;
+                                        fault_site_n = 16'd60002;
                                         running_n = 1'b0;
                                         state_n = S_DONE;
                                     end else begin
@@ -3416,10 +3450,10 @@ module jmr_js_vm_exec64 (
                             end
                             OP_STORE_VAR, OP_LET_VAR: begin
                                 if (vsp == 0) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd3423;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (code_rdata[23:17] != 0) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd5;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd5; fault_site_n = 16'd3426;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (this_ok &&
                                              code_rdata[16:8] == var_this &&
@@ -3454,8 +3488,22 @@ module jmr_js_vm_exec64 (
                                         // renderLeaderboard LET_VAR list).
                                         machine_fault_n = 1'b1;
                                     fault_code_n = 8'd2;
+                                    fault_site_n = 16'd3456;
                                         running_n = 1'b0;
                                         state_n = S_DONE;
+                                    // Settle beat before the flat-IIFE test:
+                                    // a stale venv_valid 0 silently stored a
+                                    // local into the global table instead.
+                                    end else if (code_rdata[7:0] == OP_LET_VAR &&
+                                             code_rdata[24] &&
+                                             venv[63:48] == 16'h7ff9 &&
+                                             venv[47:44] == 4'd9 &&
+                                             venv[31:0] < ENV_DEPTH &&
+                                             !venv_valid_rdata && !hash2_q) begin
+                                        hash2_n = 1'b1;
+                                        opnd_n = 1'b1;
+                                        opnd2_n = 1'b1;
+                                        state_n = S_V64_EXEC;
                                     end else if (code_rdata[7:0] == OP_LET_VAR &&
                                              code_rdata[24] &&
                                              (venv[63:48] != 16'h7ff9 ||
@@ -3474,10 +3522,24 @@ module jmr_js_vm_exec64 (
                                     state_n = S_FETCH_WAIT;
                                 end else if (venv[63:48] == 16'h7ff9 &&
                                              venv[47:44] == 4'd9) begin
-                                    if (venv[31:0] >= ENV_DEPTH ||
-                                        !venv_valid_rdata) begin
+                                    if (venv[31:0] >= ENV_DEPTH) begin
                                             machine_fault_n = 1'b1;
                                         fault_code_n = 8'd4;
+                                        fault_site_n = 16'd60003;
+                                            running_n = 1'b0;
+                                            state_n = S_DONE;
+                                    // Same Port A lag as LOAD_VAR above.
+                                    end else if (!venv_valid_rdata &&
+                                                 venvw_q < 3'd4) begin
+                                        venvw_n = venvw_q + 3'd1;
+                                        hash2_n = 1'b1;
+                                        opnd_n = 1'b1;
+                                        opnd2_n = 1'b1;
+                                        state_n = S_V64_EXEC;
+                                    end else if (!venv_valid_rdata) begin
+                                            machine_fault_n = 1'b1;
+                                        fault_code_n = 8'd4;
+                                        fault_site_n = 16'd60004;
                                             running_n = 1'b0;
                                             state_n = S_DONE;
                                         end else begin
@@ -3534,12 +3596,12 @@ module jmr_js_vm_exec64 (
                             end
                             OP_MAKE_ARR: begin
                                 if (code_rdata[23:8] > ARR_CAP) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd3;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd3; fault_site_n = 16'd3543;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (vsp < code_rdata[19:8] ||
                                              (code_rdata[23:8] == 0 &&
                                               vsp >= 12'(STACK_DEPTH))) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd3548;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     vnat_dom_n = 3'd0;
@@ -3560,7 +3622,7 @@ module jmr_js_vm_exec64 (
                             end
                             OP_MAKE_OBJ: begin
                                 if (vsp >= 12'(STACK_DEPTH)) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd3569;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     valloc_kind_n = 2'd0;
@@ -3593,6 +3655,7 @@ module jmr_js_vm_exec64 (
                                 if (vsp_hs < argc) begin
                                     machine_fault_n = 1'b1;
                                     fault_code_n = 8'd1;
+                                    fault_site_n = 16'd3595;
                                     running_n = 1'b0;
                                     state_n = S_DONE;
                                 end else begin
@@ -3623,6 +3686,7 @@ module jmr_js_vm_exec64 (
                                             if (argc < 4) begin
                                                 machine_fault_n = 1'b1;
                                                 fault_code_n = 8'd5;
+                                                fault_site_n = 16'd3625;
                                                 running_n = 1'b0;
                                                 state_n = S_DONE;
                                             end else begin
@@ -3772,11 +3836,13 @@ module jmr_js_vm_exec64 (
                                             if (bad_fn) begin
                                                 machine_fault_n = 1'b1;
                                                 fault_code_n = 8'd4;
+                                                fault_site_n = 16'd3774;
                                                 running_n = 1'b0;
                                                 state_n = S_DONE;
                                             end else if (vraf_n >= 4'd8) begin
                                                 machine_fault_n = 1'b1;
                                                 fault_code_n = 8'd3;
+                                                fault_site_n = 16'd3779;
                                                 running_n = 1'b0;
                                                 state_n = S_DONE;
                                             end else begin
@@ -3809,11 +3875,13 @@ module jmr_js_vm_exec64 (
                                             if (bad_fn) begin
                                                 machine_fault_n = 1'b1;
                                                 fault_code_n = 8'd4;
+                                                fault_site_n = 16'd3811;
                                                 running_n = 1'b0;
                                                 state_n = S_DONE;
                                             end else if (vtimer_n >= 7'd64) begin
                                                 machine_fault_n = 1'b1;
                                                 fault_code_n = 8'd3;
+                                                fault_site_n = 16'd3816;
                                                 running_n = 1'b0;
                                                 state_n = S_DONE;
                                             end else if (tmr_i_q < 7'd64) begin
@@ -3834,6 +3902,7 @@ module jmr_js_vm_exec64 (
                                                 tmr_found_n = 1'b0;
                                                 machine_fault_n = 1'b1;
                                                 fault_code_n = 8'd3;
+                                                fault_site_n = 16'd3836;
                                                 running_n = 1'b0;
                                                 state_n = S_DONE;
                                             end else begin
@@ -3914,16 +3983,19 @@ module jmr_js_vm_exec64 (
                                                 fn[47:44] != 4'd7) begin
                                                 machine_fault_n = 1'b1;
                                                 fault_code_n = 8'd4;
+                                                fault_site_n = 16'd3916;
                                                 running_n = 1'b0;
                                                 state_n = S_DONE;
                                             end else if (!dup && same_n >= 5'd4) begin
                                                 machine_fault_n = 1'b1;
                                                 fault_code_n = 8'd3;
+                                                fault_site_n = 16'd3921;
                                                 running_n = 1'b0;
                                                 state_n = S_DONE;
                                             end else if (!dup && vlistener_n >= 5'd16) begin
                                                 machine_fault_n = 1'b1;
                                                 fault_code_n = 8'd3;
+                                                fault_site_n = 16'd3926;
                                                 running_n = 1'b0;
                                                 state_n = S_DONE;
                                             end else begin
@@ -4063,6 +4135,7 @@ module jmr_js_vm_exec64 (
                                                 if (aln > ARR_CAP) begin
                                                     machine_fault_n = 1'b1;
                                                     fault_code_n = 8'd3;
+                                                    fault_site_n = 16'd4065;
                                                     running_n = 1'b0;
                                                     state_n = S_DONE;
                                                 end else begin
@@ -4181,6 +4254,7 @@ module jmr_js_vm_exec64 (
                                         default: begin
                                             machine_fault_n = 1'b1;
                                             fault_code_n = 8'd5;
+                                            fault_site_n = 16'd4183;
                                             running_n = 1'b0;
                                             state_n = S_DONE;
                                         end
@@ -4189,7 +4263,7 @@ module jmr_js_vm_exec64 (
                             end
                             OP_MAKE_FN: begin
                                 if (vsp >= 12'(STACK_DEPTH)) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd4210;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     // Latch entry/flags: S_V64_ALLOC must not
@@ -4205,10 +4279,10 @@ module jmr_js_vm_exec64 (
                             end
                             OP_CALL_USER: begin
                                 if (vcsp_hs >= CSTK) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd2;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd2; fault_site_n = 16'd4226;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (vsp_hs < code_rdata[31:24]) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd4229;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     vcall_value_n = 1'b0;
@@ -4255,11 +4329,30 @@ module jmr_js_vm_exec64 (
                                               vfn_env_rdata[47:44] !=
                                                 V64_KIND_ENV));
                                 if (vcsp_hs >= CSTK) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd2;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd2; fault_site_n = 16'd4276;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (vsp_hs < argc + 16'd1) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd4279;
                                     running_n = 1'b0; state_n = S_DONE;
+                                // The callee sits argc+1 deep. Computed args
+                                // (ADD/MUL, a nested call) can leave that slot
+                                // of the 16-deep TOS window stale or zeroed
+                                // while the vstack SRAM holds the truth, so an
+                                // untagged word here means "window lost it",
+                                // not "not a function". Refill from SRAM once
+                                // (cm_win survives leave_hold; opnd_q does
+                                // not) and retry before faulting — same
+                                // WIN_FILL retry fillRect used to do.
+                                end else if (handle[63:48] != 16'h7ff9 &&
+                                             !cm_win && vsp_hs >= 12'd1) begin
+                                    cm_win_n = 1'b1;
+                                    vst_refill_i_n = 4'd0;
+                                    vst_refill_arm_n = 1'b0;
+                                    vst_refill_ret_n = S_V64_EXEC;
+                                    vst_hold_win_n = 1'b1;
+                                    opnd_n = 1'b1;
+                                    opnd2_n = 1'b1;
+                                    state_n = S_V64_WIN_FILL;
                                 end else if (handle[63:48] != 16'h7ff9 ||
                                              handle[47:44] != 4'd7 ||
                                              handle[31:0] >= MAX_OBJ ||
@@ -4267,6 +4360,13 @@ module jmr_js_vm_exec64 (
                                              vfn_gen_rdata !=
                                                 handle[43:32]) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd4;
+                                    cm_win_n = 1'b0;
+                                    fault_site_n =
+                                        (handle[63:48] != 16'h7ff9) ? 16'd60010 :
+                                        (handle[47:44] != 4'd7)     ? 16'd60011 :
+                                        (handle[31:0] >= MAX_OBJ)   ? 16'd60012 :
+                                        (!vfn_valid_rdata)          ? 16'd60013 :
+                                                                      16'd60014;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (vfn_entry_rdata ==
                                            16'hfffa) begin
@@ -4333,10 +4433,10 @@ module jmr_js_vm_exec64 (
                             end
                             OP_RET_VAL: begin
                                 if (vsp_hs == 0) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd4354;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (vcsp_hs == 0) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd2;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd2; fault_site_n = 16'd4357;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     // PYTHON pops result then checks sp==base.
@@ -4501,7 +4601,7 @@ module jmr_js_vm_exec64 (
                             end
                             OP_ARR_GET: begin
                                 if (vsp < 12'd2) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd4522;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     logic [63:0] handle;
@@ -4525,6 +4625,15 @@ module jmr_js_vm_exec64 (
                                             code_raddr_n =
                                                 15'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
+                                        end else if (!hash2_q) begin
+                                            // name_blen/name_off Port A lag.
+                                            // Same-cycle bounds used stale 0
+                                            // → every interned row[col] was
+                                            // undefined (INVADERS bitmaps).
+                                            hash2_n = 1'b1;
+                                            opnd_n = 1'b1;
+                                            opnd2_n = 1'b1;
+                                            state_n = S_V64_EXEC;
                                         end else if (array_index < 0 ||
                                             array_index >=
                                                 {17'd0, name_blen_rdata}) begin
@@ -4597,6 +4706,11 @@ module jmr_js_vm_exec64 (
                                         ip_n = ip + 16'd1;
                                         code_raddr_n = 15'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
+                                    end else if (!hash2_q) begin
+                                        hash2_n = 1'b1;
+                                        opnd_n = 1'b1;
+                                        opnd2_n = 1'b1;
+                                        state_n = S_V64_EXEC;
                                     end else if (!index_valid ||
                                                  array_index < 0 ||
                                                  array_index >=
@@ -4623,7 +4737,7 @@ module jmr_js_vm_exec64 (
                             end
                             OP_ARR_SET: begin
                                 if (vsp < 12'd3) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd4658;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     logic [63:0] handle;
@@ -4710,7 +4824,7 @@ module jmr_js_vm_exec64 (
                                         running_n = 1'b0; state_n = S_DONE;
                                     end else if (!varr_long_rdata &&
                                                  array_index >= ARR_SHORT_CAP &&
-                                                 !vprom_done) begin
+                                                 !vprom_done && !p_vprom_done) begin
                                         hp_aid_n = handle[11:0];
                                         valloc_i_n = 14'd0;
                                         vprom_copy_n = 1'b0;
@@ -4747,7 +4861,7 @@ module jmr_js_vm_exec64 (
                             end
                             OP_GET_PROP: begin
                                 if (vsp == 0) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd4782;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     logic [63:0] handle, result;
@@ -4762,25 +4876,24 @@ module jmr_js_vm_exec64 (
                                         // Exec varr_gen lags GC reuse. Gating
                                         // .length on it made xs.length / cells.length
                                         // undefined (INVADERS resetBunkers).
+                                        if (!hash2_q) begin
+                                            hash2_n = 1'b1;
+                                            opnd_n = 1'b1;
+                                            opnd2_n = 1'b1;
+                                            state_n = S_V64_EXEC;
+                                        end else begin
                                         if (code_rdata[23:8] == id_length)
                                             result = v64_int32_number(
                                                 {24'd0, varr_len_rdata}
                                             );
                                         vst_wr(vsp - 12'd1, result);
-                                        // leave_hold on FETCH_WAIT skips the
-                                        // parent window we path (vst_we_q
-                                        // rises the same edge). Plant TOS so
-                                        // c.fillRect(..., a.length) sees the
-                                        // number. Do not set hold_win — that
-                                        // skipped the next LOAD_CONST shift
-                                        // and CALL_METH lost the canvas
-                                        // receiver (vdraw stayed 0,0,0,0).
                                         vst_win0_we = 1'b1;
                                         vst_win0_wdata = result;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
                                             15'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
+                                        end
                                     end else if (handle[63:48] == 16'h7ff9 &&
                                                  handle[47:44] == 4'd4 &&
                                                  handle[31:0] < 32'd1024) begin
@@ -4793,6 +4906,15 @@ module jmr_js_vm_exec64 (
                                             valloc_i_n = vfn_next;
                                             valloc_retried_n = 1'b0;
                                             state_n = S_V64_ALLOC;
+                                        end else if (!hash2_q) begin
+                                            // name_blen_rdata lags raddr_q.
+                                            // Extra clock OK. Hold opnd so
+                                            // the 2-beat SRAM settle does
+                                            // not restart.
+                                            hash2_n = 1'b1;
+                                            opnd_n = 1'b1;
+                                            opnd2_n = 1'b1;
+                                            state_n = S_V64_EXEC;
                                         end else begin
                                             if (code_rdata[23:8] == id_length)
                                                 result = v64_int32_number(
@@ -4903,7 +5025,7 @@ module jmr_js_vm_exec64 (
                             end
                             OP_SET_PROP: begin
                                 if (vsp < 12'd2) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd4946;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     logic [63:0] handle;
@@ -4921,6 +5043,7 @@ module jmr_js_vm_exec64 (
                                         if (new_len > ARR_CAP) begin
                                             machine_fault_n = 1'b1;
                                             fault_code_n = 8'd3;
+                                            fault_site_n = 16'd4945;
                                             running_n = 1'b0;
                                             state_n = S_DONE;
                                         end else begin
@@ -5062,14 +5185,14 @@ module jmr_js_vm_exec64 (
                             end
                             OP_NEW_OBJ: begin
                                 if (vcsp_hs >= CSTK) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd2;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd2; fault_site_n = 16'd5106;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (vsp_hs < code_rdata[31:24]) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd5109;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (code_rdata[31:24] == 8'd0 &&
                                              vsp_hs >= 12'(STACK_DEPTH)) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd5113;
                                         running_n = 1'b0; state_n = S_DONE;
                                     end else begin
                                     // Latch argc: ALLOC/CTOR_* re-read of
@@ -5135,29 +5258,12 @@ module jmr_js_vm_exec64 (
                                 dup = 1'b0;
                                 ev = V64_UNDEFINED;
                                 fn = V64_UNDEFINED;
-                                // Consume unless this CALL_METH is the
-                                // fillRect SRAM window walk (cm_win holds
-                                // across leave_hold; opnd_q does not).
-                                cm_win_n = 1'b0;
                                 if (vcsp >= CSTK) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd2;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd2; fault_site_n = 16'd5180;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (vsp_hs < argc + 12'd1) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd5183;
                                     running_n = 1'b0; state_n = S_DONE;
-                                end else if ((code_rdata[23:8] == id_fillrect ||
-                                            code_rdata[23:8] == id_clearrect) &&
-                                           argc >= 12'd4 && !cm_win_q) begin
-                                    // TOS window lags SRAM after GET_PROP /
-                                    // ADD (drawBitmap y+r*s, scale). Reload
-                                    // win[0..min(vsp,16)) then retry native.
-                                    // Parent WIN_FILL seeds hs_vsp(e64).
-                                    vst_refill_i_n = 4'd0;
-                                    vst_refill_arm_n = 1'b0;
-                                    vst_refill_ret_n = S_V64_EXEC;
-                                    vst_hold_win_n = 1'b1;
-                                    cm_win_n = 1'b1;
-                                    state_n = S_V64_WIN_FILL;
                                 end else if (code_rdata[23:8] == id_assign &&
                                            argc >= 12'd1) begin
                                     // Object.assign(target, ...src) sequential
@@ -5211,11 +5317,12 @@ module jmr_js_vm_exec64 (
                                             ARR_CAP[7:0]) begin
                                         machine_fault_n = 1'b1;
                                         fault_code_n = 8'd3;
+                                        fault_site_n = 16'd5218;
                                         running_n = 1'b0; state_n = S_DONE;
                                     end else if (!varr_long_rdata &&
                                         (varr_len_rdata + argc[7:0] >
                                             ARR_SHORT_CAP[7:0]) &&
-                                        !vprom_done) begin
+                                        !vprom_done && !p_vprom_done) begin
                                         hp_aid_n = receiver[11:0];
                                         valloc_i_n = 14'd0;
                                         vprom_copy_n = 1'b0;
@@ -5291,6 +5398,7 @@ module jmr_js_vm_exec64 (
                                     if (vfe_sp >= 4'd8) begin
                                         machine_fault_n = 1'b1;
                                         fault_code_n = 8'd3;
+                                        fault_site_n = 16'd5298;
                                         running_n = 1'b0; state_n = S_DONE;
                                     end else begin
                                         logic [13:0] free_a;
@@ -5337,6 +5445,7 @@ module jmr_js_vm_exec64 (
                                             end else begin
                                             machine_fault_n = 1'b1;
                                             fault_code_n = 8'd3;
+                                            fault_site_n = 16'd5344;
                                             running_n = 1'b0;
                                             state_n = S_DONE;
                                             end
@@ -5413,9 +5522,15 @@ module jmr_js_vm_exec64 (
                                     valloc_i_n = vobj_next;
                                     valloc_retried_n = 1'b0;
                                     state_n = S_V64_ALLOC;
-                                end else if (obj_ok && argc >= 12'd4 &&
+                                end else if (argc >= 12'd4 &&
                                            (code_rdata[23:8] == id_fillrect ||
                                             code_rdata[23:8] == id_clearrect)) begin
+                                    // One host canvas. Do not require obj_ok:
+                                    // ADD/MUL/LOAD_VAR can shift the TOS
+                                    // window off the context (computed
+                                    // fillRect never ran; literal bars did).
+                                    // RECT_LD reads x/y/w/h from SRAM.
+                                    cm_win_n = 1'b0;
                                     if (code_rdata[23:8] != id_clearrect)
                                         paint_color = fill_style_i;
                                     // PYTHON _xf: always apply axis scale + translate
@@ -5437,11 +5552,13 @@ module jmr_js_vm_exec64 (
                                         ? 8'd0 : paint_color;
                                     vdraw_i_n = 19'd0;
                                     vnat_base_n = base;
-                                    // SRAM refill planted the window; do not
-                                    // keep exec hold_win (that skips TOS
-                                    // shift on later LOAD_CONST).
                                     vst_hold_win_n = 1'b0;
-                                    state_n = S_V64_RECT;
+                                    // Do not latch x/y/w/h from VST_AT: after
+                                    // drawBitmap ADD/MUL the TOS window can
+                                    // still hold the last literal bar
+                                    // (vdraw stuck at 70,68,500,7). Parent
+                                    // RECT_LD reads the four args from SRAM.
+                                    state_n = S_V64_RECT_LD;
                                 end else if (obj_ok && argc >= 12'd4 &&
                                            code_rdata[23:8] == id_getimgdata) begin
                                     // PYTHON ctx.getImageData — copy back buffer
@@ -5565,7 +5682,7 @@ module jmr_js_vm_exec64 (
                                             15'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                     end
-                                end else if (obj_ok && argc >= 12'd3 &&
+                                end else if (argc >= 12'd3 &&
                                            code_rdata[23:8] == id_drawimage) begin
                                     // PYTHON ctx.drawImage — ASET blit when
                                     // Image.src was jmr:spr:N (vobj_cls FFC).
@@ -5801,7 +5918,7 @@ module jmr_js_vm_exec64 (
                                         if (al < ARR_CAP[7:0] &&
                                             !varr_long_rdata &&
                                             (al + 8'd1 > ARR_SHORT_CAP[7:0]) &&
-                                            !vprom_done) begin
+                                            !vprom_done && !p_vprom_done) begin
                                             hp_aid_n = receiver[11:0];
                                             valloc_i_n = 14'd0;
                                             vprom_copy_n = 1'b0;
@@ -6200,14 +6317,17 @@ module jmr_js_vm_exec64 (
                                         fn[47:44] != 4'd7) begin
                                         machine_fault_n = 1'b1;
                                         fault_code_n = 8'd4;
+                                        fault_site_n = 16'd6215;
                                         running_n = 1'b0; state_n = S_DONE;
                                     end else if (!dup && same_n >= 5'd4) begin
                                         machine_fault_n = 1'b1;
                                         fault_code_n = 8'd3;
+                                        fault_site_n = 16'd6219;
                                         running_n = 1'b0; state_n = S_DONE;
                                     end else if (!dup && vlistener_n >= 5'd16) begin
                                         machine_fault_n = 1'b1;
                                         fault_code_n = 8'd3;
+                                        fault_site_n = 16'd6223;
                                         running_n = 1'b0; state_n = S_DONE;
                                     end else begin
                                         if (!dup) begin
@@ -6340,7 +6460,7 @@ module jmr_js_vm_exec64 (
                             end
                             OP_ADD, OP_SUB, OP_MUL: begin
                                 if (vsp < 12'd2) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6381;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (code_rdata[7:0] == OP_ADD &&
                                     ((`VST_AT(vsp - 12'd2)[63:48] == V64_TAG_PREFIX &&
@@ -6402,7 +6522,7 @@ module jmr_js_vm_exec64 (
                             end
                             OP_DIV: begin
                                 if (vsp < 12'd2) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6443;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     // PYTHON ToNumber: non-Number → +0.
@@ -6486,7 +6606,7 @@ module jmr_js_vm_exec64 (
                             end
                             OP_MOD: begin
                                 if (vsp < 12'd2) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6527;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     logic [63:0] aa, bb, immediate_result;
@@ -6553,7 +6673,7 @@ module jmr_js_vm_exec64 (
                             end
                             OP_BIT_OR, OP_BIT_AND: begin
                                 if (vsp < 12'd2) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6594;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     logic [31:0] left_int, right_int, bit_result;
@@ -6572,7 +6692,7 @@ module jmr_js_vm_exec64 (
                             end
                             OP_LT, OP_GT, OP_EQ: begin
                                 if (vsp < 12'd2) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6613;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     logic [63:0] aa, bb;
@@ -6599,7 +6719,7 @@ module jmr_js_vm_exec64 (
                             end
                             OP_JUMP: begin
                                 if (code_rdata[23:8] > n_ops) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd5;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd5; fault_site_n = 16'd6640;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     ip_n = code_rdata[23:8];
@@ -6609,10 +6729,10 @@ module jmr_js_vm_exec64 (
                             end
                             OP_JIF: begin
                                 if (vsp == 0) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6650;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (code_rdata[23:8] > n_ops) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd5;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd5; fault_site_n = 16'd6653;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     vsp_n = vsp - 12'd1;
@@ -6628,7 +6748,7 @@ module jmr_js_vm_exec64 (
                             end
                             OP_POP: begin
                                 if (vsp == 0) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6669;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     vsp_n = vsp - 12'd1;
@@ -6639,7 +6759,7 @@ module jmr_js_vm_exec64 (
                             end
                             OP_DUP: begin
                                 if (vsp == 0 || vsp >= 12'(STACK_DEPTH)) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6680;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     vst_wr(vsp, `VST_AT(vsp - 12'd1));
@@ -6651,11 +6771,11 @@ module jmr_js_vm_exec64 (
                             end
                             OP_NEG, OP_NOT: begin
                                 if (vsp == 0) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6692;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (code_rdata[7:0] == OP_NEG &&
                                              !v64_is_number(`VST_AT(vsp - 12'd1))) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd5;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd5; fault_site_n = 16'd6696;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     if (code_rdata[7:0] == OP_NEG)
@@ -6674,11 +6794,11 @@ module jmr_js_vm_exec64 (
                             end
                             OP_RETURN: begin
                                 if (vsp != 0) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6715;
                                     running_n = 1'b0;
                                     state_n = S_DONE;
                                 end else if (vcsp != 0) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd2;
+                                    machine_fault_n = 1'b1; fault_code_n = 8'd2; fault_site_n = 16'd6719;
                                     running_n = 1'b0;
                                     state_n = S_DONE;
                                 end else begin
@@ -6694,6 +6814,7 @@ module jmr_js_vm_exec64 (
                             default: begin
                                 machine_fault_n = 1'b1;
                                 fault_code_n = 8'd5;
+                                fault_site_n = 16'd6709;
                                 running_n = 1'b0;
                                 state_n = S_DONE;
                             end

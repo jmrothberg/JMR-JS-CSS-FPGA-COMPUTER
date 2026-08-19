@@ -29,6 +29,9 @@ across F9 runtimes (no RTL-only console commands).
 unless the user asks. J15 USB Host is dead — GUI/PROG tether).
 Synth vs play-speed debt (JOIN intern scan, what to keep for Vivado):
 [docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md).
+History of RTL edits from the 70 GB Vivado hunt (not a current-bug list;
+use when tracing what those edits most likely broke):
+[docs/VIVADO_FLATTEN_HUNT.md](docs/VIVADO_FLATTEN_HUNT.md).
 
 ```
 $ python3 run_jmr_js.py
@@ -73,9 +76,9 @@ sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
 
 # 7. ONLY after BATTERY PASS + timing WNS ≥ 0:
 # source scripts/vivado_env.sh && make -C tools/board_flow bit && make -C tools/board_flow flash
-# First T200 bit: 1–3 h (MIG + full VM synth). Later `bit` reuses the project.
-# `make -C tools/board_flow bit-fresh` only if MIG/XDC/file list changed.
-# JP4=boot source only. J15 USB Host is dead on this board — play via GUI tether.
+# Full VM synth is many hours (16:17 run: 8 h then OOM at tech-map).
+# Synth threads default 2 (mapping OOM); impl place/route stays 8.
+# Never bit-fresh unless MIG/XDC/file list changed. JP4=boot source only. J15 USB Host is dead.
 # Last flashed bit 2026-08-13 03:36 (WNS +0.139); tree has newer JSB/640 FB RTL.
 ```
 

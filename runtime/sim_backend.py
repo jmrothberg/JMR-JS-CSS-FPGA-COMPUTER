@@ -215,8 +215,15 @@ class SimBackend(RuntimeBackend):
     def _vmstat_snap(self, st: str, extra: str = "") -> str:
         """One-line glass snapshot — not a full VMSTAT dump."""
         keep = (
-            "sname=", "ip=", "vdraw=", "raf=", "obj=", "arr=", "spr=",
+            "sname=", "ip=", "eip=", "vdraw=", "raf=", "obj=", "arr=", "spr=",
             "dihit=", "dimiss=", "fault=", "fclk=", "gc=", "swaps=",
+            # NEW: bring-up fields so a GUI run is self-diagnosing. A silent
+            # halt (S_IDLE with fault=0) is invisible without fsite/badst,
+            # and a dead key needs kalloc/kcall/kcmp to tell "never queued"
+            # from "queued but no listener matched".
+            "fsite=", "badst=", "kalloc=", "kcall=", "kcmp=", "kevq=",
+            "align=", "vcsp=", "vret=", "lsn=", "efault=", "ecode=",
+            "evkey=", "txtw=", "fontpx=", "idkd=", "idku=",
         )
         parts = [tok for tok in st.split() if tok.startswith(keep)]
         title = (self._loaded_name or "").upper()[:16]

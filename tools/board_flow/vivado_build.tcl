@@ -16,10 +16,38 @@ if {[llength [get_parts -quiet xc7a200tsbg484-1]] == 0} {
   exit 1
 }
 
-set JOBS 2
-if {[info exists ::env(JMR_VIVADO_JOBS)] && $::env(JMR_VIVADO_JOBS) ne ""} {
-  set JOBS $::env(JMR_VIVADO_JOBS)
+# 2026-08-19: synth_design technology mapping OOM (tcmalloc 5.2 GB, RSS
+# 58→114 GB) with 7 synth workers. UG901 has one knob for all of
+# synth_design (`general.maxThreads`) — there is no "mapping only" cap.
+# Cap synth threads; leave impl place/route at 8. `-jobs` is parallel
+# *runs*, not mapping workers — do not cap impl jobs for this OOM.
+# Override synth cap: JMR_VIVADO_ALLOW_WIDE=1.
+set SYNTH_THREADS 2
+if {[info exists ::env(JMR_VIVADO_SYNTH_THREADS)] && $::env(JMR_VIVADO_SYNTH_THREADS) ne ""} {
+  set SYNTH_THREADS $::env(JMR_VIVADO_SYNTH_THREADS)
+} elseif {[info exists ::env(JMR_VIVADO_THREADS)] && $::env(JMR_VIVADO_THREADS) ne ""} {
+  set SYNTH_THREADS $::env(JMR_VIVADO_THREADS)
 }
+set IMPL_THREADS 8
+if {[info exists ::env(JMR_VIVADO_IMPL_THREADS)] && $::env(JMR_VIVADO_IMPL_THREADS) ne ""} {
+  set IMPL_THREADS $::env(JMR_VIVADO_IMPL_THREADS)
+}
+set SYNTH_JOBS 1
+set IMPL_JOBS 1
+if {[info exists ::env(JMR_VIVADO_JOBS)] && $::env(JMR_VIVADO_JOBS) ne ""} {
+  # Parallel runs (impl), not synth mapping workers.
+  set IMPL_JOBS $::env(JMR_VIVADO_JOBS)
+}
+set wide 0
+if {[info exists ::env(JMR_VIVADO_ALLOW_WIDE)] && $::env(JMR_VIVADO_ALLOW_WIDE) ne ""} {
+  set wide 1
+}
+if {!$wide && $SYNTH_THREADS > 2} {
+  puts "WARNING: synth threads=$SYNTH_THREADS capped to 2 (16:17 tech-map OOM). JMR_VIVADO_ALLOW_WIDE=1 to override."
+  set SYNTH_THREADS 2
+}
+set_param general.maxThreads $SYNTH_THREADS
+puts "INFO: synth threads=$SYNTH_THREADS impl threads=$IMPL_THREADS synth_jobs=$SYNTH_JOBS impl_jobs=$IMPL_JOBS"
 
 # Font ROM next to scanout AND next to the VM ($readmemh is relative to .sv)
 file copy -force $ROOT/vectors/font_rom.hex $ROOT/rtl/video/font_rom.hex
@@ -90,6 +118,8 @@ proc jmr_add_sources {ROOT} {
 if {$REUSE} {
   puts "INFO: reusing $XPR (incremental). make bit-fresh if MIG/XDC/file list changed."
   open_project $XPR
+  # Project may have stored 8; pin the synth OOM cap until impl.
+  set_param general.maxThreads $SYNTH_THREADS
 } else {
   if {$FRESH} {
     puts "INFO: bit-fresh — create_project -force (MIG regenerated)"
@@ -98,6 +128,8 @@ if {$REUSE} {
   }
   create_project jmr_nexys_video $OUT/vivado -part xc7a200tsbg484-1 -force
 }
+
+set_param general.maxThreads $SYNTH_THREADS
 
 set_property target_language Verilog [current_project]
 jmr_add_sources $ROOT
@@ -109,6 +141,25 @@ set_property STEPS.WRITE_BITSTREAM.ARGS.BIN_FILE true [get_runs impl_1]
 # Later bits: reuse synth/impl DCPs when RTL change is small
 catch {set_property AUTO_INCREMENTAL_CHECKPOINT 1 [get_runs synth_1]}
 catch {set_property AUTO_INCREMENTAL_CHECKPOINT 1 [get_runs impl_1]}
+# UG904: write a DCP after each *impl* step (opt/place/route). synth_design
+# is one step — first DCP is at synth_1 100%. Cannot resume mid-mapping.
+catch {set_param project.writeIntermediateCheckpoints 1}
+file mkdir $OUT/checkpoints
+proc jmr_ckpt_hook {run step dcp} {
+  global OUT
+  set hook $OUT/checkpoints/write_[file tail [file rootname $dcp]].tcl
+  set fd [open $hook w]
+  puts $fd "if {\[catch {write_checkpoint -force $dcp} err\]} {"
+  puts $fd "  puts \"WARNING: checkpoint $dcp failed: \$err\""
+  puts $fd "}"
+  close $fd
+  catch {set_property STEPS.${step}.TCL.POST $hook [get_runs $run]}
+}
+jmr_ckpt_hook synth_1 SYNTH_DESIGN $OUT/post_synth.dcp
+jmr_ckpt_hook impl_1 OPT_DESIGN $OUT/post_opt.dcp
+jmr_ckpt_hook impl_1 PLACE_DESIGN $OUT/post_place.dcp
+jmr_ckpt_hook impl_1 PHYS_OPT_DESIGN $OUT/post_phys_opt.dcp
+jmr_ckpt_hook impl_1 ROUTE_DESIGN $OUT/post_route.dcp
 
 # NEW: Nexys Video DDR3 MIG (native UI) — pinout from Digilent mig_a.prj
 # Skip create/generate when the IP already exists in a reused project.
@@ -142,6 +193,10 @@ set_msg_config -id {Synth 8-7186} -limit 200
 # every 10s so a frozen e32_p_clr print still shows the RAM climb.
 set rss_log $OUT/synth_rss.log
 set runme $OUT/vivado/jmr_nexys_video.runs/synth_1/runme.log
+# Keep the previous tracker (16:17 OOM is the tech-map benchmark).
+if {[file exists $rss_log]} {
+  file copy -force $rss_log ${rss_log}.prev
+}
 set watch [open $rss_log w]
 puts $watch "watch start [clock format [clock seconds]]"
 close $watch
@@ -156,10 +211,6 @@ proc jmr_rss_gb {} {
   }
   return [format "%.2f" [expr {$m / 1024.0 / 1024.0}]]
 }
-
-# Always reset: a killed synth leaves PROGRESS 0% but still "needs reset"
-# (Common 17-69). catch: no-op if the run was never launched.
-catch {reset_run synth_1}
 
 proc jmr_wait_run {run} {
   while {1} {
@@ -177,28 +228,79 @@ proc jmr_wait_run {run} {
   }
 }
 
-launch_runs synth_1 -jobs $JOBS
-jmr_wait_run synth_1
+# synth_design is one atomic step (UG901). No DCP until 100% — cannot
+# resume technology mapping. After a DCP exists and RTL is unchanged,
+# skip re-synth so impl crashes do not redo ~8 h. Force: JMR_VIVADO_FORCE_SYNTH=1.
+proc jmr_synth_dcp {} {
+  global OUT
+  set hits [glob -nocomplain $OUT/vivado/jmr_nexys_video.runs/synth_1/*.dcp]
+  if {[llength $hits]} { return [lindex $hits 0] }
+  if {[file exists $OUT/post_synth.dcp]} { return $OUT/post_synth.dcp }
+  return ""
+}
+proc jmr_rtl_newer_than {dcp} {
+  global ROOT
+  if {$dcp eq "" || ![file exists $dcp]} { return 1 }
+  if {[catch {
+    exec find $ROOT/rtl $ROOT/constraints $ROOT/third_party/digilent_rgb2dvi/src \
+      $ROOT/tools/board_flow/mig_a.prj \
+      ( -name {*.sv} -o -name {*.vhd} -o -name {*.xdc} -o -name mig_a.prj ) \
+      -type f -newer $dcp
+  } out]} { return 1 }
+  return [expr {[string trim $out] ne ""}]
+}
+
+set force_synth 0
+if {[info exists ::env(JMR_VIVADO_FORCE_SYNTH)] && $::env(JMR_VIVADO_FORCE_SYNTH) ne ""} {
+  set force_synth 1
+}
+set dcp [jmr_synth_dcp]
+set synth_pr ""
+set synth_st ""
+catch {set synth_pr [get_property PROGRESS [get_runs synth_1]]}
+catch {set synth_st [get_property STATUS [get_runs synth_1]]}
+set skip_synth [expr {
+  !$FRESH && !$force_synth && $dcp ne "" && $synth_pr eq "100%" &&
+  ![string match -nocase "*fail*" $synth_st] && ![jmr_rtl_newer_than $dcp]
+}]
+if {$skip_synth} {
+  puts "INFO: synth_1 already 100% ($dcp) — skip re-synth (RTL unchanged)"
+} else {
+  # Killed synth leaves PROGRESS 0% but still "needs reset" (Common 17-69).
+  catch {reset_run synth_1}
+  set_param general.maxThreads $SYNTH_THREADS
+  launch_runs synth_1 -jobs $SYNTH_JOBS
+  jmr_wait_run synth_1
+}
+
 set st [get_property STATUS [get_runs synth_1]]
 if {[get_property PROGRESS [get_runs synth_1]] != "100%" ||
     [string match -nocase "*fail*" $st] ||
     [string match -nocase "*error*" $st]} {
   puts "ERROR: synthesis failed (STATUS=$st)"
+  puts "ERROR: no mid-map DCP — re-run make bit (not bit-fresh). Mapping cannot resume."
   exit 1
 }
 
 open_run synth_1
 report_utilization -file $OUT/utilization_synth.rpt
+if {![file exists $OUT/post_synth.dcp]} {
+  catch {write_checkpoint -force $OUT/post_synth.dcp}
+}
 
 catch {reset_run impl_1}
 
-launch_runs impl_1 -to_step write_bitstream -jobs $JOBS
+# Place/route: restore 8 threads. Mapping OOM was synth_design, not impl.
+set_param general.maxThreads $IMPL_THREADS
+puts "INFO: impl maxThreads=$IMPL_THREADS jobs=$IMPL_JOBS"
+launch_runs impl_1 -to_step write_bitstream -jobs $IMPL_JOBS
 jmr_wait_run impl_1
 set st [get_property STATUS [get_runs impl_1]]
 if {[get_property PROGRESS [get_runs impl_1]] != "100%" ||
     [string match -nocase "*fail*" $st] ||
     [string match -nocase "*error*" $st]} {
   puts "ERROR: implementation failed (STATUS=$st)"
+  puts "ERROR: if post_opt/post_place/post_route.dcp exist under $OUT, open_checkpoint that file; project make bit will skip synth if RTL unchanged."
   exit 1
 }
 

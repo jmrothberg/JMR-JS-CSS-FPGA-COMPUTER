@@ -86,8 +86,12 @@ keyboard bring-up as this VM’s time.
 
 **Log:** `build/nexys_video/vivado/jmr_nexys_video.runs/synth_1/top_nexys_video.vds`  
 **RSS tracker:** `build/nexys_video/synth_rss.log` (largest Vivado process).
-Kill only if that process climbs toward ~80 GB **and** the log is frozen.
-All-Vivado-sum ~70 GB with parent still ~35 GB is helpers, not the hang.
+Kill only if the **largest** Vivado process climbs toward ~80 GB **and**
+the log is frozen, **or** RSS passes **~100 GB** during technology mapping
+(`tcmalloc large alloc` in `runme.log`) — that is the 03:15 OOM, not the
+70 GB FSM-poke hang. All-Vivado-sum ~70 GB with parent still ~35 GB is
+helpers, not the hang. **Never launch 7 synth workers** (synth cap is 2
+threads). Place/route stays 8 — do not cap impl for this OOM.
 
 Abbreviations: **RTL** = register-transfer level (Verilog). **MIG** = Memory
 Interface Generator (DDR3). **XDC** = pin/clock constraints. **FSM** =
@@ -95,29 +99,105 @@ finite-state machine. **RSS** = RAM the process is using. **synth_1** =
 Vivado synthesis. **impl_1** = place-and-route + bitstream. **WNS** =
 worst negative slack. **DCP** = design checkpoint. **BRAM** = block RAM.
 
-Started **2026-08-18 16:17:50**. Parent RSS held **~35 GB** after the
-timing engine. Snapshot below is **19:32** (~3 h 15 m in, still synth).
+Started **2026-08-18 16:17:50**. **CRASHED ~03:15 2026-08-19** (out of
+memory). No `synth_1` DCP — cannot resume mid-step. Tracker saved as
+`build/nexys_video/synth_rss.log.prev` on the next `make bit`.
 
 | Step | What it is | Status | Measured | Next-build note |
 |---|---|---|---|---|
-| Open project, skip MIG | Reuse `build/nexys_video/vivado` | Done | seconds | `bit-fresh` pays MIG again |
-| RTL elaboration | Read Verilog, build netlist | Done | **11 min** (elapsed 00:11:03, peak ~28.5 GB) | |
-| RTL optimization phase 1 | First cleanup | Done | in those 11 min | |
-| Constraints + timing engine | Apply XDC; start timing | Done | **~19 min** from synth start (peak ~35 GB) | |
-| RTL optimization phase 2 | Long quiet stretch; FSMs encoded; `name_hash_tbl` + FBs as RAM (8-3971) | Done ~18:58 | **elapsed 02:39:54** in Vivado | This was the 17:05–18:01 quiet |
-| Cross-boundary / area optimization | Merge/shrink across modules; DSP absorb | **In progress** (log last 19:11) | 20 min quiet so far | Fill elapsed when “Finished Cross Boundary…” prints |
-| Rest of synth_1 (map, write DCP) | `utilization_synth.rpt` when 100% | Not yet | — | Fill wall-clock |
-| impl_1 optimize | Cleanup before place | Not started | — | Fill |
-| Place | Sites on XC7A200T | Not started | — | Fill |
-| Route | Wiring | Not started | — | Fill |
-| Write `.bit` / `.bin` | `build/nexys_video/jmr_nexys_video.bit` | Not started | — | Fill; WNS ≥ 0 required |
-| Timing WNS | Must be ≥ 0 | Not started | — | From impl report |
+| Open project, skip MIG | Reuse `build/nexys_video/vivado` | Done (kept) | seconds | **Recovered.** Do not `bit-fresh` |
+| RTL elaboration | Read Verilog, build netlist | Done (lost in RAM) | **11 min** (elapsed 00:11:03, peak ~28.5 GB) | Must re-run |
+| RTL optimization phase 1 | First cleanup | Done (lost in RAM) | in those 11 min | Must re-run |
+| Constraints + timing engine | Apply XDC; start timing | Done (lost in RAM) | **~19 min** from synth start (peak ~35 GB) | Must re-run |
+| RTL optimization phase 2 | Long quiet; FSMs; hash/FB as RAM | Done (lost in RAM) | **elapsed 02:39:54** | Must re-run (~2 h 40 m) |
+| Cross-boundary / area optimization | Merge/shrink across modules | Done (lost in RAM) | **elapsed 07:06:36** | Must re-run |
+| ROM / RAM / DSP / retiming report | Preliminary mapping tables | Done (lost in RAM) | minutes | |
+| Apply XDC timing constraints | Clock/path constraints | Done (lost in RAM) | elapsed **07:12:34** | |
+| Timing optimization | Timing-driven logic opt | Done (lost in RAM) | elapsed **08:07:08**; peak **~54 GB**; ~55 min | |
+| Technology mapping | Map to FPGA cells | **OOM ~03:15** | Started ~00:25; `tcmalloc` **5.2 GB** alloc from 02:45; RSS **58→114 GB**; 7 synth workers | **Fix:** synth `maxThreads=2` only. Impl stays 8. No DCP to resume mapping |
+| Rest of synth_1 (write DCP) | `utilization_synth.rpt` when 100% | Never reached | — | |
+| impl_1 / place / route / `.bit` / WNS | After synth | Not started | — | |
 
-**Guess remaining (replace with measured):** finish synth 20 min–2 h after
-cross-boundary starts; then impl **~1.5–3.5 h**. Whole first VM bit from
-16:17 likely **5–8 h**, not the old 1–3 h (that was a smaller design).
+**Recovered:** Vivado project, MIG DCP, logs. **Not recovered:** in-flight
+netlist. Resume is `source scripts/vivado_env.sh && make -C
+tools/board_flow bit` (not `bit-fresh`) — redoes ~8 h to the crash point.
+Synth uses 2 threads so mapping fits 128 GB; place/route uses 8. You
+**cannot** continue at technology mapping: `synth_design` is one step
+(UG901). First `.dcp` is written at synth_1 **100%**.
+
+### Why 128 GB RAM + 96 GB swap still died
+
+Two different failures. Do not mix them.
+
+1. **70 GB hang (earlier, Port A):** one process, log frozen, heap written
+   from the VM FSM → inferred as flip-flops. **Fixed.** That was not this crash.
+2. **03:15 OOM (technology mapping):** Vivado spawned **7** parallel synth
+   workers. Each mapping a huge netlist. Tracker: `tcmalloc` asked for
+   **5.2 GB** at 02:45 while already ~32–58 GB, then RSS **58→114 GB** in
+   ~two minutes. Linux’s OOM killer looks at **physical RAM**, not swap.
+   Swap does not help a process that is allocating several GB per second,
+   and `tcmalloc` needs a big **contiguous** chunk.
+
+So: **7 workers was the mistake that made 128 GB too small.** One process
+peaked ~54 GB in timing optimization and lived. Mapping with 7 copies of
+that did not.
+
+**Thread cap (do not slow place/route):** Vivado has **one** parameter
+for all of `synth_design` — `general.maxThreads` ([UG901 Multi-Threading
+in RTL Synthesis](https://docs.amd.com/r/en-US/ug901-vivado-synthesis/Multi-Threading-in-RTL-Synthesis)).
+There is no “technology mapping only” knob. Scripts cap **synth** at 2
+and restore **8** before `impl_1`. `-jobs` is parallel *runs*, not the
+7 mapping workers. `JMR_VIVADO_JOBS` must not be used to raise synth
+threads.
+
+**Checkpoints (setting, not a second flow):** `AUTO_INCREMENTAL_CHECKPOINT`
+plus `STEPS.*.TCL.POST` write `build/nexys_video/post_synth.dcp` at synth
+100% and `post_opt.dcp` / `post_place.dcp` / `post_phys_opt.dcp` /
+`post_route.dcp` after those impl steps. A mapping crash still has
+**nothing** to reopen. After synth_1 is 100% and RTL is unchanged, the
+next `make bit` **skips re-synth** (impl crash must not redo ~8 h). Force
+a full synth with `JMR_VIVADO_FORCE_SYNTH=1`. Impl-step DCPs are for a
+manual `open_checkpoint` if place/route dies; project mode does not
+auto-resume mid-place from a setting.
+
+**Design still has a mapping cost** (not “needs 256 GB”): paper BRAM is
+over 365 tiles if everything infers; the crash log also showed some arrays
+as **LUTRAM** (`source_mem` RAM256X1S×4096, `vobj_proto`/`vconsts`
+RAM64M×352). That makes mapping heavy even at 2 threads. Do not “fix” it
+by putting `mem[i] <=` back in the FSM. After a synth_1 DCP, fill
+LUTRAM vs BRAM from `utilization_synth.rpt`. Agent recipe:
+[LUTRAM leftovers](#lutram-leftovers-not-the-70-gb-hang).
 
 ---
+
+## LUTRAM leftovers (not the 70 GB hang)
+
+16:17 crash log mapped these as **LUTRAM** (tiny memories in LUTs) even
+though some already have `ram_style = "block"`. That attribute is ignored
+when the access is not UG901 Port A (`simple_dual_one_clock.v` /
+`rams_sp_wf.v`). Adding `ram_style` and leaving `mem[i] <=` in the FSM is
+how you get 8-7186 / LUTRAM / mapping cost — or the 70 GB FF hang if the
+array is large enough.
+
+**Do not do this work to “make a title paint.”** Extra clocks OK. One
+heap. No second copy. No JOIN/JSON/GC extract. Inspect exec32 and exec64.
+Copy `jmr_mini_fb.sv` Port A. Agent does not run Vivado.
+
+| Array | File | Why it missed BRAM | Safe fix (same behaviour, extra clocks OK) |
+|---|---|---|---|
+| `source_mem` 128K×8 | `rtl/engines/jmr_console_engine.sv` | RAM process has `if (!rst_n)` **and** only reads when `src_req` (AR 58025 / UG949: reset on the RAM process; gated read ≠ template) | Tiny process: `if (src_we) source_mem[src_addr] <= src_wdata; src_rdata <= source_mem[src_addr];` **no reset** in that block. Grant/reset stay in the FSM. Do not add a second port. |
+| `vconsts` 1024×64 | `rtl/engines/jmr_js_vm.sv` | FSM `vconsts[c_i] <=` in `S_V64_CONST_HI` plus mux `vconsts_rdata <= vconsts[e64_vconsts_raddr]`. `e64_poke(6'd14, …)` must use the **same** we/addr/data, not a second write | Declare `vconsts_we/waddr/wdata` like `vvars`. Own `always_ff`. FSM and poke pulse strobes. Wait `vconsts_rdata`. |
+| `vobj_proto` 1024×64 | `rtl/engines/jmr_js_vm.sv` | No Port A. FSM `vobj_proto[valloc_i] <=` (ALLOC / proto assign) plus mux read | Same as `vobj_alloc_wr`: `vobj_proto_wr(idx, val)`. One write/clock. GC/HEAP wait `vobj_proto_rdata`. |
+
+`vfn_proto` is the same shape as `vobj_proto` — move it in the same pass
+if you touch proto, do not leave one FSM-poked. `arr_len` / `vobj_cls`
+are already listed (Synth 8-13159). After the next synth_1 100%, fill
+LUTRAM vs BRAM from `utilization_synth.rpt`. If LUTRAM is still high,
+the template still missed — do not widen threads.
+
+---
+
+## Headline (this `make bit` — waiting)
 
 
 Part: `xc7a200tsbg484-1`. Early counts: `build/nexys_video/utilization_synth.rpt`
@@ -144,6 +224,10 @@ tiles if everything infers). LUTRAM high + BRAM low means inference missed.
 
 ## Easy mistakes
 
+- **LUTRAM leftovers are not a thread-count problem.** `source_mem` /
+  `vconsts` / `vobj_proto` — Port A recipe in
+  [LUTRAM leftovers](#lutram-leftovers-not-the-70-gb-hang). Do not raise
+  synth threads. Do not put `mem[i] <=` back.
 - **Do not write big on-chip arrays from the VM FSM.** That was the 70 GB
   blow-up. `imgd_pix` / `spr_mem` / `name_mem` / `json_mem` / `stack` /
   `name_hash_tbl` / `varr_len` / `vobj_alloc` / `vvars` must use a
@@ -158,9 +242,10 @@ tiles if everything infers). LUTRAM high + BRAM low means inference missed.
   Port A if you touch them.
 - **Kill on RSS, not on `e32_p_clr`.** Synth 8-6014 is unused-FF
   housekeeping, not the cone. The 16:17 run **left `e32_p_clr`** and
-  finished RTL Optimization Phase 1 (~28.5 GB peak, log still printing).
-  Hang = log frozen **and** RSS climbing toward ~80 GB. Tracker:
-  `build/nexys_video/synth_rss.log`.
+  finished RTL Optimization Phase 1. Hang = log frozen **and** RSS climbing
+  toward ~80 GB. **Separate:** tech-map OOM = `tcmalloc large alloc` and
+  RSS past ~100 GB with **many synth workers**. Synth cap is 2 threads;
+  impl stays 8. Tracker: `build/nexys_video/synth_rss.log`.
 - **Heap-name grep empty ≠ cone.** `spr_mem` is on-chip blit scratch
   (~0.25 MB — **not** the 4 MB ASET bank). `ram_style = "block"` does not
   save an FSM poke.

@@ -1,11 +1,10 @@
 # Session handoff
 
-**2026-08-18 INVADERS splash sprites.** F9 was bars only (`nz=19233`,
-last `vdraw=70,68,500,7`). `drawBitmap` computed fillRect now SRAM-reloads
-`vst_win` (`cm_win` holds across `leave_hold`) then retries native. Parent
-WIN_FILL still seeds `hs_vsp(e64_vsp_q)`. Key in that F9 was Enter (13);
-INVADERS start is Space. User F9s. Do not `make bit`.
-STRIDX two-level lag + `name_blen` Port A already landed.
+**2026-08-18 snippet ladder (agent runs it, not F9).** fillRect no
+longer needs `obj_ok` (computed args shifted the canvas out of the TOS
+window). GET_PROP `.length` / ARR_GET intern wait one extra beat for
+Port A `name_blen`/`varr_len`. Global 3rd opcode beat reverted (stalled
+FRAME). Rebuild + pytest snippets next. Do not `make bit`.
 
 **2026-08-18 HEAP slot pipeline** in `rtl/engines/jmr_js_vm.sv`
 (`hp_slot_pend`, object GET skips the array-long arm). Still Port A. Do
@@ -37,6 +36,16 @@ the file at start; further RTL edits are the **next** bit, not the live one.
 ---
 
 ## 1) RTL review / synthesis
+
+**16:17 `make bit` OOM ~03:15 2026-08-19** at **technology mapping**
+(RSS 58→114 GB, `tcmalloc` 5.2 GB, 7 workers). No synth DCP — **cannot
+resume mapping** (`synth_design` is one step). MIG/project kept. Resume
+`make bit` (not `bit-fresh`): synth **2 threads**, impl **8**. First DCP
+is synth_1 100% (`post_synth.dcp`). LUTRAM leftovers (`source_mem`,
+`vconsts`, `vobj_proto`) — Port A, not `ram_style` + FSM poke:
+[FPGA_FIT.md](FPGA_FIT.md#lutram-leftovers-not-the-70-gb-hang). Do **not**
+`bit-fresh`. Do **not** kill a live synth to attach checkpoint hooks;
+hooks only fire at step end.
 
 **16:17 `make bit` (this VM file):** Port A for pictures (`imgd_pix` /
 `spr_mem` / `name_mem` / `json_mem`) **and** heap tables (`stack` 1W2R,

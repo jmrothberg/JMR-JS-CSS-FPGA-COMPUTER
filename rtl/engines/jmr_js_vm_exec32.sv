@@ -1497,7 +1497,17 @@ module jmr_js_vm_exec32 (
     // SRAM raddr outside opcode always_comb; clocked *_q is the parent port.
     assign stack_raddr = (sp >= 11'd1) ? (sp - 11'd1) : 11'd0;
     assign stack_raddr2 = (sp >= 11'd2) ? (sp - 11'd2) : 11'd0;
-    assign obj_cls_raddr = (sp >= 11'd1) ? e32_sv[0][9:0] : 10'd0;
+    // drawImage: Image is arg0 (window[argc-1]), not TOS (dy). TOS class
+    // is a Number — FFC miss, dihit=0 (ASET 1x pixel 0). sv[argc-1]
+    // avoids E32_AT (macro is below).
+    assign obj_cls_raddr =
+        ((code_rdata[7:0] == OP_CALL_METH) &&
+         (code_rdata[23:8] == id_drawimage) &&
+         (code_rdata[31:24] != 8'd0) &&
+         (code_rdata[31:24] <= 8'd16) &&
+         (sp >= {3'd0, code_rdata[31:24]}))
+        ? e32_sv[4'(code_rdata[31:24] - 8'd1)][9:0]
+        : ((sp >= 11'd1) ? e32_sv[0][9:0] : 10'd0);
     assign obj_n_raddr = (sp >= 11'd1) ? e32_sv[0][9:0] : 10'd0;
     assign tfn_raddr = (sp >= 11'd1) ? e32_sv[0][12:0] : 13'd0;
     assign intern_var_raddr = code_rdata[17:8];
@@ -2767,10 +2777,13 @@ module jmr_js_vm_exec32 (
                     cm_c_n = cm_c;
                     cm_m_n = cm_m + 4'd1;
                 end
-            end else if (p_state == S_EXEC && !opnd_q) begin
+            // S_NAT is exec-internal: leave_hold stays 0 so parent EXEC
+            // keeps enable (SRAM we). Default state_n=p_state would drop
+            // NAT and skip fillRect/rAF (FRAME 64M, raf=0, ip=n_ops).
+            end else if (p_state == S_EXEC && state != S_NAT && !opnd_q) begin
                 opnd_n = 1'b1;
                 state_n = S_EXEC;
-            end else if (p_state == S_EXEC) begin
+            end else if (p_state == S_EXEC && state != S_NAT) begin
                     if (ip >= n_ops) begin
                         // One implicit present per FRAME, not per pass: mark the
                         // pass end and let S_WAIT_FRAME swap once at frame_tick

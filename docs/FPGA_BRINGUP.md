@@ -177,8 +177,15 @@ in [FPGA_FIT.md](FPGA_FIT.md#wall-clock-benchmark-1617-make-bit--first-full-vm)
 **reuses** `build/nexys_video/vivado` (skip MIG generate, incremental DCP).
 Use `make -C tools/board_flow bit-fresh` only if MIG / XDC / source *list*
 changed. Do not `make -C tools/board_flow clean` between RTL tweaks — that
-forces another first-build. `JMR_VIVADO_JOBS` (default 2) — this design is
-RAM-heavy.
+forces another first-build. Synth **2 threads** (`JMR_VIVADO_SYNTH_THREADS`;
+alias `JMR_VIVADO_THREADS`) — the 16:17 run OOM'd at technology mapping with
+**7** workers (RSS 58→114 GB on 128 GB + swap). Place/route stays **8**
+(`JMR_VIVADO_IMPL_THREADS`). Vivado has no mapping-only thread knob
+(UG901 `general.maxThreads` covers all of `synth_design`). Do not raise
+synth threads unless `JMR_VIVADO_ALLOW_WIDE=1`. First DCP is at synth_1
+100% (`build/nexys_video/post_synth.dcp`); mapping cannot resume mid-step.
+Details:
+[FPGA_FIT.md](FPGA_FIT.md#wall-clock-benchmark-1617-make-bit--first-full-vm).
 
 Volatile SRAM-only load (lost on unplug): `make -C tools/board_flow flash`.
 

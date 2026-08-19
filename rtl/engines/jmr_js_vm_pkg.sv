@@ -170,6 +170,9 @@ package jmr_js_vm_pkg;
         // After a vsp drop of 16+ the TOS FF window is stale; refill from BRAM.
         S_V64_WIN_FILL,
         // Short→long array promote (same handle; copy then flip varr_long).
-        S_ARR_PROMOTE
+        S_ARR_PROMOTE,
+        // fillRect x/y/w/h from vstack SRAM (TOS window can still hold the
+        // last literal bar while ADD/MUL results are only in SRAM).
+        S_V64_RECT_LD
     } st_t;
 endpackage

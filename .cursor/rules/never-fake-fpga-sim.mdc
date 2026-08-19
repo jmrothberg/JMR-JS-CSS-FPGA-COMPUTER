@@ -58,10 +58,14 @@ copy buffer — leave it. Copy working Port A: `jmr_video_vram.sv` /
    Do not put `stack[i] <=` / `vobj_alloc[i] <=` back to make a game
    paint.** FOREACH el+idx is two clocks (`stack_dual_pend`). `arr_len` /
    `vobj_cls` still FSM-poked (Synth 8-13159 dissolved them to FFs) — if
-   you touch those, same Port A, do not add more `mem[i] <=`. `ram_style =
-   "block"` does not save an FSM poke. Mux **addresses**,
-   not forty `rdata <= mem[f()]` in one process. Template miss → 8-3967 /
-   8-4767 (RAM as FFs = 70 GB).
+   you touch those, same Port A, do not add more `mem[i] <=`. **LUTRAM
+   leftovers (16:17 map log, not the 70 GB hang):** `source_mem` (reset +
+   gated read in the RAM process), `vconsts` / `vobj_proto` (FSM
+   `mem[i] <=` + mux read). Same Port A. Do not “fix” with `ram_style`
+   while the poke stays. Recipe: [FPGA_FIT.md](../../docs/FPGA_FIT.md)
+   LUTRAM leftovers. `ram_style = "block"` does not save an FSM poke. Mux
+   **addresses**, not forty `rdata <= mem[f()]` in one process. Template
+   miss → 8-3967 / 8-4767 (RAM as FFs = 70 GB) or LUTRAM (mapping cost).
 
 2. **Do not mix blocking `=` and NBA `<=` in one sequential block** (UG901
    Blocking and Non-Blocking Assignments).

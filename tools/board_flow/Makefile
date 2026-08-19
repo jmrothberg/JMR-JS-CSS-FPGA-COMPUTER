@@ -8,8 +8,17 @@
 #
 # First T200 bit is slow (1–3 h): MIG generate + full synth of jmr_js_vm + impl.
 # Later bits open build/nexys_video/vivado, skip MIG create, incremental synth.
-# Do not `make clean` unless you want another first-build. JMR_VIVADO_JOBS=2
-# default (this VM+MIG is RAM-heavy; raise only if you have headroom).
+# Do not `make clean` unless you want another first-build.
+# Parallelism: synth_design mapping OOM'd at 7 workers (16:17). UG901 has
+# one thread knob for all of synth — cap synth at 2. Place/route stays 8.
+# `-jobs` is parallel runs, not mapping workers. Do not raise synth threads
+# unless JMR_VIVADO_ALLOW_WIDE=1. After synth_1 100%, a DCP is written;
+# mapping cannot resume mid-step. Never bit-fresh unless MIG/XDC/file list.
+JMR_VIVADO_SYNTH_THREADS ?= 2
+JMR_VIVADO_IMPL_THREADS ?= 8
+JMR_VIVADO_JOBS ?= 1
+JMR_VIVADO_THREADS ?= $(JMR_VIVADO_SYNTH_THREADS)
+export JMR_VIVADO_SYNTH_THREADS JMR_VIVADO_IMPL_THREADS JMR_VIVADO_JOBS JMR_VIVADO_THREADS
 #
 # LLM NOTE: Cursor sandbox breaks Vivado license — run on host shell.
 # openFPGALoader board id: nexysVideo
