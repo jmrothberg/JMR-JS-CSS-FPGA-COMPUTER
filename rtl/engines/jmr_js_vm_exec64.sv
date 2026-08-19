@@ -2250,6 +2250,16 @@ module jmr_js_vm_exec64 (
                     saved_sy <= FX_ONE;
                     ctx_tx <= 32'sd0;
                     ctx_ty <= 32'sd0;
+                    // Canvas state must not survive a title load. The parent
+                    // clears its own ctx_align on RUN, but exec keeps the
+                    // live copy — so a title that set textAlign="center"
+                    // (DONKEY) left every later title centred. ASTEROID and
+                    // PACMAN never set textAlign at all yet reported
+                    // align=1, and ASTEROID's self-centred text drew half a
+                    // string left of where it belonged.
+                    ctx_align <= 2'd0;
+                    fill_style_i <= 8'd0;
+                    stroke_style_i <= 8'd0;
                     vfe_arr <= V64_UNDEFINED;
                     vfe_fn <= V64_UNDEFINED;
                     vfe_i <= 8'd0;

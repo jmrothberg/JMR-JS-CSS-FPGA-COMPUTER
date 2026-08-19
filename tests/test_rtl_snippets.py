@@ -5669,3 +5669,106 @@ requestAnimationFrame(tick);
     finally:
         sim.shutdown()
 
+
+def _stream_html(sim, html: str) -> str:
+    """Compile-on-RUN HTML → ProgramImage, same path as titles."""
+    from tools.compile_js import compile_html_text, encode_html_chunk
+
+    sim._program_image = encode_html_chunk(compile_html_text(html))
+    assert sim._stream_program_image().startswith("OK")
+    st = ""
+    for _ in range(8):
+        sim._rpc("TICKN 20000")
+        st = sim._rpc("VMSTAT?")
+        if "sname=S_WAIT_FRAME" in st:
+            break
+    return st
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="potential bugs.md 15: RTL e.key intern skips w/s/p (keycode 87)",
+)
+def test_rtl_keydown_letter_w_paints():
+    """Twin of test_hw_value64_keydown_letter_w (potential bugs.md 15)."""
+    html = """<!DOCTYPE html><canvas id="c" width="640" height="480"></canvas>
+<script>
+var c = document.getElementById("c").getContext("2d");
+addEventListener("keydown", function(e) {
+  if (e.key === "w") {
+    c.fillStyle = "#fff";
+    c.fillRect(10, 10, 4, 4);
+  }
+});
+function tick() { requestAnimationFrame(tick); }
+requestAnimationFrame(tick);
+</script>
+"""
+    sim = _sim()
+    try:
+        st = _stream_html(sim, html)
+        assert "fault=0" in st, st
+        sim.key_event(87, "w", True)
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert _fb_pix(_fb_raw(sim), 11, 11) != 0, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_foreach_then_raf_paints():
+    """Twin of test_hw_value64_foreach_then_raf_paints (potential bugs.md 6)."""
+    html = """<!DOCTYPE html><canvas id="c" width="640" height="480"></canvas>
+<script>
+var c = document.getElementById("c").getContext("2d");
+c.fillStyle = "#fff";
+[1, 2].forEach(function(x) { c.fillRect(10 * x, 10, 4, 4); });
+function tick() {
+  c.fillRect(100, 10, 4, 4);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>
+"""
+    sim = _sim()
+    try:
+        st = _stream_html(sim, html)
+        assert "fault=0" in st, st
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 11, 10) != 0 or _fb_pix(raw, 21, 10) != 0, st
+        assert _fb_pix(raw, 101, 10) != 0, st
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_date_now_advances_paints():
+    """Twin of test_hw_value64_date_now_advances_on_frame (potential bugs.md 14)."""
+    html = """<!DOCTYPE html><canvas id="c" width="640" height="480"></canvas>
+<script>
+var c = document.getElementById("c").getContext("2d");
+var t0 = Date.now();
+function tick() {
+  if (Date.now() !== t0) {
+    c.fillStyle = "#fff";
+    c.fillRect(10, 10, 4, 4);
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>
+"""
+    sim = _sim()
+    try:
+        st = _stream_html(sim, html)
+        assert "fault=0" in st, st
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert _fb_pix(_fb_raw(sim), 11, 11) != 0, st
+    finally:
+        sim.shutdown()
+

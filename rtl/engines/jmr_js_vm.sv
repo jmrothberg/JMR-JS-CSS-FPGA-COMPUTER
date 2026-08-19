@@ -790,6 +790,7 @@ module jmr_js_vm #(
     logic [1:0]  dbg_align /*verilator public_flat_rd*/;
     logic [15:0] dbg_evkey /*verilator public_flat_rd*/;   // id planted as event.key
     logic [15:0] dbg_txtw  /*verilator public_flat_rd*/;   // last fillText pen width
+    logic [15:0] dbg_txt_n /*verilator public_flat_rw*/;   // fillText calls
     // NEW: string concat ('s'+_index etc.) — operand stash + digit fold
     logic signed [31:0] cc_av, cc_bv, cc_v;
     logic [2:0]  cc_at, cc_bt, cc_t;
@@ -6618,7 +6619,7 @@ module jmr_js_vm #(
                     dbg_rect_n <= 7'd0; dbg_swap_n <= 16'd0;
             dbg_last_y <= 10'd0; dbg_last_c <= 8'd0;
             dbg_key_scan <= 16'd0; dbg_key_call <= 16'd0;
-            dbg_key_alloc <= 16'd0; dbg_key_cmp <= 16'd0;
+            dbg_key_alloc <= 16'd0; dbg_key_cmp <= 16'd0; dbg_txt_n <= 16'd0;
             dbg_bad_state <= 8'd0;
             dbg_key_want <= 64'd0; dbg_key_lastev <= 64'd0;
                     dbg_line_px <= 32'd0; dbg_circ_px <= 32'd0; dbg_rect_px <= 32'd0;
@@ -9395,6 +9396,7 @@ module jmr_js_vm #(
                             logic [15:0] w_;
                             w_ = 16'(txt_len) * 16'd8 * 16'(txt_k);
                             dbg_txtw <= w_;
+                            dbg_txt_n <= dbg_txt_n + 16'd1;
                             txt_x0 <= txt_px - ((ctx_align_eff == 2'd1) ? 16'($signed(w_) >>> 1)
                                              : (ctx_align_eff == 2'd2) ? 16'($signed(w_))
                                              : 16'sd0);
@@ -13647,6 +13649,17 @@ module jmr_js_vm #(
                             // Idle: ALLOC combo-reads last cycle's TOS window.
                             bind_rd_arm <= 1'b0;
                             bind_k <= 8'd0;
+                            // Mark "a frame callback ran this frame". The
+                            // host FRAME rpc ends a frame on
+                            // (left_wait && back in S_WAIT_FRAME && cbip != 0);
+                            // dbg_cb_ip was only ever written by the 32-bit
+                            // path, so for HTML/Value64 titles FRAME could
+                            // only end via the 2000-clock idle fallback. That
+                            // works for a static splash but never during play
+                            // (the VM leaves S_WAIT_FRAME again immediately),
+                            // so every play frame burned the whole 64M cap and
+                            // the GUI blocked on the RPC.
+                            dbg_cb_ip <= vraf_snap[vraf_i][15:0];
                             hs_vcall_value(1'b1);
                             hs_vcall_argc(12'd1);
                             vcallback_raf <= 1'b1;

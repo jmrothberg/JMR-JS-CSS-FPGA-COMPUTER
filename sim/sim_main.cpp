@@ -936,6 +936,7 @@ int main(int argc, char** argv) {
                       << " align=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_align)
                       << " evkey=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_evkey)
                       << " txtw=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_txtw)
+                      << " txtn=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_txt_n)
                       << " fontpx=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__ctx_font_px)
                       << " kcmp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_key_cmp)
                       << " efault=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__machine_fault)
@@ -1847,6 +1848,16 @@ int main(int argc, char** argv) {
             int idle_run = 0;   // NEW: clocks parked in S_WAIT_FRAME after the pulse
             int dead = 0;       // NEW: VM already halted — do not burn the cap
             auto* rframe = top->rootp;
+            // A frame is finished when the VM PRESENTS. The older test
+            // (left_wait && back in S_WAIT_FRAME && cbip != 0) depended on
+            // dbg_cb_ip, which only the 32-bit path ever wrote, so an
+            // HTML/Value64 title could only end a frame via the 2000-clock
+            // idle fallback — fine for a static splash, never true during
+            // play. Every play frame therefore burned the whole 64M cap and
+            // the GUI blocked on this RPC (INVADERS "locked the terminal",
+            // PACMAN black, ASTEROID score-only). Watch the present counter.
+            unsigned swap0 =
+                unsigned(rframe->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n);
             for (; used < CAP; used++) {
                 // FPGA-SIM: one frame_tick when already in S_WAIT_FRAME, then
                 // drop it so `else if (frame_fire)` can dispatch rAF. Do not
@@ -1891,6 +1902,22 @@ int main(int argc, char** argv) {
                     unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__frame_fire) != 0;
                 if (left_wait && st == 16u && cbip != 0 &&
                     !due_timer && !frame_continue) {
+                    got = 1; used++; break;
+                }
+                // Present-based completion (see swap0 above): the frame put a
+                // new image on the glass, which is exactly what the GUI is
+                // waiting for. Still require left_wait so the present that
+                // shares the pulse cycle does not end the frame early.
+                // Deliberately NOT gated on due_timer: that reads the
+                // 32-bit to_n/to_delay registers, while a Value64 title keeps
+                // its timers in vtimer_*. For an HTML title the test could be
+                // permanently true and block completion forever — INVADERS
+                // presented ~1000 frames (swaps=1013, 34k fillText calls)
+                // inside ONE FRAME rpc while the GUI sat blocked. A present
+                // IS a finished frame; a pending timer fires on the next one.
+                if (pulsed && left_wait && !frame_continue &&
+                    unsigned(rframe->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n)
+                        != swap0) {
                     got = 1; used++; break;
                 }
                 // NEW: one-shot screen (title with no rAF re-arm, or a frame

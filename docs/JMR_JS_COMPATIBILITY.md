@@ -595,6 +595,50 @@ CSS layout engine, browsing.
 Play-blocking gaps get **one pytest per gap** in `tests/test_bytecode_js.py`
 (RTL twin in `tests/test_rtl_snippets.py` only if play-blocking).
 
+### FPGA-SIM tests: small twins, not a second title suite
+
+A **larger FPGA-SIM suite is the wrong knob**. `tests/test_rtl_snippets.py`
+already has ~100 RTL cases. Each boots Verilator. A 200-line PACMAN-finder
+clone (`test_rtl_ghost_update_leaves_start_cell`) fails as “nz < 50” and
+then the agent debugs the **test**, not exec64. Tokens burn there.
+
+**Faster and cheaper:** grow `test_hw_value64_*` (PYTHON / JsHwVm, same
+ProgramImage). That is seconds, no `sim_server`. FPGA-SIM pytest is only
+the **twin of a play-blocking RTL hole** after PYTHON already passes the
+same JS.
+
+| Do | Do not |
+|---|---|
+| One behavior, 5–15 lines of JS/HTML | Miniature INVADERS/PACMAN/DONKEY |
+| Same source string on PYTHON then RTL | RTL-only expected numbers with no HM twin |
+| `fault=0` + **one** pixel `(x,y)` or one `VMSTAT?` field | `nz >= 50` / “looks painted” |
+| Map to a `docs/potential bugs.md` ID (6, 15, 14, 31) | “cover Canvas” in one test |
+| Reuse `_sim` / `_patch_html` / `_fb_pix` already in `test_rtl_snippets.py` | New harness, new assert language, `FRAME` 64M in pytest |
+
+**Shape an agent can write without guessing** (HTML FLAG_VALUE64, like titles):
+
+```html
+<canvas id="c" width="640" height="480"></canvas>
+<script>
+var c = document.getElementById("c").getContext("2d");
+function tick() {
+  c.fillStyle = "#fff";
+  c.fillRect(10, 10, 4, 4);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>
+```
+
+Assert `fault=0` and `_fb_pix(raw, 11, 11) != 0`. That is bug **12**/G1
+shape. For **15**: `keydown` + `e.key === "w"` then one `fillRect`. For
+**6**: `forEach` that falls off the callback (no `return`) then rAF still
+paints. If the snippet needs a comment to explain the maze, it is too big
+— use the real `.HTML` + traces instead.
+
+Visual play stays **F9 FPGA-SIM**, not a snippet PASS. Do not mark a
+compat row Complete from Chrome or from a fat RTL snippet.
+
 ---
 
 ## Regression seeds

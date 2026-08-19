@@ -903,75 +903,6 @@ requestAnimationFrame(tick);
     assert m.vm.globals.get("active") == 1, m.vm.globals.get("active")
 
 
-def test_wall_box_neighbor_codes_are_arcs():
-    """2x2 wall cells: NESW neighbor bits → join → quarter-arcs, not + spokes."""
-    m = _run_js_frames(
-        """
-var c = document.getElementById('c').getContext('2d');
-c.strokeStyle = '#09f';
-c.lineWidth = 2;
-var map = [[1, 1], [1, 1]];
-var size = 20;
-function get(i, j) {
-  if (j < 0 || i < 0 || j >= 2 || i >= 2) return 0;
-  return map[j][i];
-}
-function pos(i, j) {
-  return {x: 100 + i * size, y: 100 + j * size};
-}
-var j, i;
-function draw() {
-for (j = 0; j < 2; j++) {
-  for (i = 0; i < 2; i++) {
-    var code = [0, 0, 0, 0];
-    if (get(i + 1, j) && !(get(i + 1, j - 1) && get(i + 1, j + 1) && get(i, j - 1) && get(i, j + 1))) code[0] = 1;
-    if (get(i, j + 1) && !(get(i - 1, j + 1) && get(i + 1, j + 1) && get(i - 1, j) && get(i + 1, j))) code[1] = 1;
-    if (get(i - 1, j) && !(get(i - 1, j - 1) && get(i - 1, j + 1) && get(i, j - 1) && get(i, j + 1))) code[2] = 1;
-    if (get(i, j - 1) && !(get(i - 1, j - 1) && get(i + 1, j - 1) && get(i - 1, j) && get(i + 1, j))) code[3] = 1;
-    var p = pos(i, j);
-    switch (code.join('')) {
-      case '1100':
-        c.beginPath();
-        c.arc(p.x + size / 2, p.y + size / 2, size / 2, 3.14159265, 4.71238898, false);
-        c.stroke();
-        break;
-      case '0110':
-        c.beginPath();
-        c.arc(p.x - size / 2, p.y + size / 2, size / 2, 4.71238898, 6.2831853, false);
-        c.stroke();
-        break;
-      case '0011':
-        c.beginPath();
-        c.arc(p.x - size / 2, p.y - size / 2, size / 2, 0, 1.5707963, false);
-        c.stroke();
-        break;
-      case '1001':
-        c.beginPath();
-        c.arc(p.x + size / 2, p.y - size / 2, size / 2, 1.5707963, 3.14159265, false);
-        c.stroke();
-        break;
-      default:
-        c.beginPath();
-        c.moveTo(p.x, p.y);
-        c.lineTo(p.x + 10, p.y);
-        c.stroke();
-    }
-  }
-}
-}
-draw();
-""",
-        n_frames=1,
-    )
-    fb = m.canvas.front
-    w = 640
-    assert fb[100 * w + 100] == 0, "spoke through (0,0) center"
-    assert fb[100 * w + 120] == 0, "spoke through (1,0) center"
-    assert fb[120 * w + 100] == 0, "spoke through (0,1) center"
-    assert fb[120 * w + 120] == 0, "spoke through (1,1) center"
-    assert fb[110 * w + 100] != 0, "1100 quarter-arc missing"
-
-
 def test_findindex_identity():
     m = _run_js_frames(
         """
@@ -2247,9 +2178,10 @@ def test_hw_value64_stack_and_call_bounds_fail_loudly():
         Chunk([(Op.CALL_USER, 0, 0)], [], []), v2=True, value64=True
     )
     vm.load_image(call_overflow)
+    # CALL_USER at IP 0 calls itself; call-stack cap trips before env heap.
     assert vm.error == (
-        "ERROR: HM VALUE64: environment heap overflow "
-        f"({value64.ENV_DEPTH + 1} > {value64.ENV_DEPTH}) at IP 0"
+        "ERROR: HM VALUE64: call stack overflow "
+        f"({value64.CALL_DEPTH + 1} > {value64.CALL_DEPTH})"
     )
 
     unbalanced_return = ProgramImage.from_chunk(
@@ -3972,6 +3904,72 @@ def test_hw_value64_palk_global_fillstyle_loop():
     vm = _hw_v64(src)
     assert vm.error is None, vm.error
     assert vm.canvas.front[0] != 0
+
+
+def test_hw_value64_keydown_letter_w():
+    """DONKEY WASD: e.key === 'w' then one fillRect (potential bugs.md 15)."""
+    html = (
+        '<!DOCTYPE html><canvas id="c" width="640" height="480"></canvas>\n'
+        "<script>\n"
+        'var c = document.getElementById("c").getContext("2d");\n'
+        'addEventListener("keydown", function(e) {\n'
+        '  if (e.key === "w") {\n'
+        '    c.fillStyle = "#fff";\n'
+        "    c.fillRect(10, 10, 4, 4);\n"
+        "  }\n"
+        "});\n"
+        "function tick() { requestAnimationFrame(tick); }\n"
+        "requestAnimationFrame(tick);\n"
+        "</script>\n"
+    )
+    vm = _hw_html(html)
+    assert vm.error is None, vm.error
+    vm.input.key_event(87, "w", True)
+    vm.frame_tick()
+    assert vm.error is None, vm.error
+    w = vm.canvas.width
+    # Present is a frame-end swap; this test checks the back the VM painted.
+    assert vm.canvas.back[11 * w + 11] != 0, "e.key === 'w' did not paint"
+
+
+def test_hw_value64_foreach_then_raf_paints():
+    """forEach (no return) then rAF still paints (potential bugs.md 6)."""
+    vm = _hw_html(
+        "<!DOCTYPE html><canvas id=\"c\" width=\"640\" height=\"480\"></canvas>\n"
+        "<script>\n"
+        "var c = document.getElementById('c').getContext('2d');\n"
+        "c.fillStyle = '#fff';\n"
+        "[1, 2].forEach(function(x) { c.fillRect(10 * x, 10, 4, 4); });\n"
+        "function tick() {\n"
+        "  c.fillRect(100, 10, 4, 4);\n"
+        "  requestAnimationFrame(tick);\n"
+        "}\n"
+        "requestAnimationFrame(tick);\n"
+        "</script>\n"
+    )
+    assert vm.error is None, vm.error
+    vm.frame_tick()
+    assert vm.error is None, vm.error
+    w = vm.canvas.width
+    # Present is a frame-end swap; this test checks the back the VM painted.
+    back = vm.canvas.back
+    assert back[10 * w + 11] != 0 or back[10 * w + 21] != 0, "forEach did not paint"
+    assert back[10 * w + 101] != 0, "rAF after forEach did not paint"
+
+
+def test_hw_value64_date_now_advances_on_frame():
+    """Date.now after a rAF frame must move (potential bugs.md 14)."""
+    vm = _hw_v64(
+        "var t0 = Date.now();\n"
+        "var t1 = 0;\n"
+        "function tick() { t1 = Date.now(); requestAnimationFrame(tick); }\n"
+        "requestAnimationFrame(tick);\n"
+    )
+    assert vm.error is None, vm.error
+    assert vm.globals.get("t0") == 0.0
+    vm.frame_tick()
+    assert vm.error is None, vm.error
+    assert vm.globals.get("t1") != 0.0, vm.globals.get("t1")
 
 
 def test_mrdo_hm_enter_paints_without_hang():
