@@ -1130,6 +1130,9 @@ module jmr_js_vm_exec64 (
     logic [15:0] cm_mip, cm_mip_n, cm_key, cm_key_n, cm_cls, cm_cls_n;
     // String.replace needs two name_hash_tbl keys; one SRAM port → extra beat.
     logic hash2_q, hash2_n;
+    // fillRect/clearRect: SRAM-reload vst_win so y/w/h from GET_PROP /
+    // LOAD_VAR / ADD still see the canvas receiver (INVADERS drawBitmap).
+    logic cm_win_q, cm_win_n;
     logic [6:0] tmr_i_q, tmr_i_n;
     logic tmr_found_q, tmr_found_n;
     logic [6:0] tmr_slot_q, tmr_slot_n;
@@ -1636,6 +1639,7 @@ module jmr_js_vm_exec64 (
             opnd2_q <= 1'b0;
             opnd3_q <= 1'b0;
             hash2_q <= 1'b0;
+            cm_win_q <= 1'b0;
             tmr_i_q <= 7'd0;
             tmr_found_q <= 1'b0;
             tmr_slot_q <= 7'd0;
@@ -1670,6 +1674,7 @@ module jmr_js_vm_exec64 (
             opnd2_q <= opnd2_n;
             opnd3_q <= opnd3_n;
             hash2_q <= hash2_n;
+            cm_win_q <= cm_win_n;
             tmr_i_q <= tmr_i_n;
             tmr_found_q <= tmr_found_n;
             tmr_slot_q <= tmr_slot_n;
@@ -1735,13 +1740,6 @@ module jmr_js_vm_exec64 (
                 cm_key <= cm_key_n;
                 cm_cls <= cm_cls_n;
                 cm_mip <= cm_mip_n;
-                // Registered cls_mip read: one (c,m) per clock (exec32 1651).
-                if (cm_scan && cm_armed &&
-                    ({1'b0, cm_c} < n_cls) &&
-                    cls_name[cm_c] == cm_cls &&
-                    ({1'b0, cm_m} < cls_nmeth[cm_c]) &&
-                    cls_mname[cm_c][cm_m] == cm_key)
-                    cm_mip <= cls_mip[cm_c][cm_m];
                 blit_sh <= blit_sh_n;
                 blit_si <= blit_si_n;
                 blit_sw <= blit_sw_n;
@@ -3060,6 +3058,7 @@ module jmr_js_vm_exec64 (
         opnd2_n = 1'b0;
         opnd3_n = 1'b0;
         hash2_n = 1'b0;
+        cm_win_n = 1'b0;
         tmr_i_n = 7'd0;
         tmr_found_n = 1'b0;
         tmr_slot_n = 7'd0;
@@ -3115,6 +3114,7 @@ module jmr_js_vm_exec64 (
                     opnd_n = opnd_q;
                     opnd2_n = opnd2_q;
                     opnd3_n = opnd3_q;
+                    cm_win_n = cm_win_q;
                     tmr_i_n = tmr_i_q;
                     tmr_found_n = tmr_found_q;
                     tmr_slot_n = tmr_slot_q;
@@ -3146,38 +3146,29 @@ module jmr_js_vm_exec64 (
                         state_n = S_V64_EXEC;
                         vst_we_n = 1'b0;
                     end else if (cm_scan) begin
-                        // One (class,method) per clock. cls_mip read is always_ff.
+                        // cls_* are 16×16 FFs in this exec (not intern SRAM).
+                        // One-clock match; 256-step (c,m) walk was every
+                        // object CALL. unique-case CAM over BRAM still forbidden.
                         opnd_n = 1'b1;
                         opnd2_n = 1'b1;
                         opnd3_n = 1'b1;
-                        cm_scan_n = 1'b1;
                         cm_key_n = cm_key;
                         cm_cls_n = cm_cls;
-                        cm_mip_n = cm_mip;
-                        cm_done_n = 1'b0;
-                        state_n = S_V64_EXEC;
-                        if (!cm_armed) begin
-                            cm_armed_n = 1'b1;
-                            cm_c_n = 4'd0;
-                            cm_m_n = 4'd0;
-                        end else if (cm_m == 4'(MAX_CMETH - 1)) begin
-                            cm_m_n = 4'd0;
-                            if (({1'b0, cm_c} + 5'd1 >= n_cls) ||
-                                (cm_c == 4'(MAX_CLS - 1))) begin
-                                cm_scan_n = 1'b0;
-                                cm_armed_n = 1'b0;
-                                cm_done_n = 1'b1;
-                            end else begin
-                                // Keep armed: default cm_armed_n=0 would
-                                // restart c=0 forever when n_cls>=2.
-                                cm_armed_n = 1'b1;
-                                cm_c_n = cm_c + 4'd1;
+                        cm_mip_n = 16'hFFFF;
+                        for (int ci = 0; ci < MAX_CLS; ci++) begin
+                            for (int mi = 0; mi < MAX_CMETH; mi++) begin
+                                if ((5'(ci) < n_cls) &&
+                                    (cls_name[ci] == cm_cls) &&
+                                    (5'(mi) < cls_nmeth[ci]) &&
+                                    (cls_mname[ci][mi][14:0] == cm_key[14:0]) &&
+                                    !cls_mname[ci][mi][15])
+                                    cm_mip_n = cls_mip[ci][mi];
                             end
-                        end else begin
-                            cm_armed_n = 1'b1;
-                            cm_c_n = cm_c;
-                            cm_m_n = cm_m + 4'd1;
                         end
+                        cm_scan_n = 1'b0;
+                        cm_armed_n = 1'b0;
+                        cm_done_n = 1'b1;
+                        state_n = S_V64_EXEC;
                     end else
                     // Small gated scalar island. Every opcode not implemented
                     // here faults with ERROR_UNSUPPORTED; it never falls into
@@ -4776,6 +4767,16 @@ module jmr_js_vm_exec64 (
                                                 {24'd0, varr_len_rdata}
                                             );
                                         vst_wr(vsp - 12'd1, result);
+                                        // leave_hold on FETCH_WAIT skips the
+                                        // parent window we path (vst_we_q
+                                        // rises the same edge). Plant TOS so
+                                        // c.fillRect(..., a.length) sees the
+                                        // number. Do not set hold_win — that
+                                        // skipped the next LOAD_CONST shift
+                                        // and CALL_METH lost the canvas
+                                        // receiver (vdraw stayed 0,0,0,0).
+                                        vst_win0_we = 1'b1;
+                                        vst_win0_wdata = result;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
                                             15'(ops_base + ip + 16'd1);
@@ -4798,6 +4799,12 @@ module jmr_js_vm_exec64 (
                                                     {16'd0, name_blen_rdata}
                                                 );
                                             vst_wr(vsp - 12'd1, result);
+                                            // Same TOS plant as array .length.
+                                            // hold_win would skip the next
+                                            // LOAD_CONST shift (CALL_METH lost
+                                            // the canvas; splash sprites gone).
+                                            vst_win0_we = 1'b1;
+                                            vst_win0_wdata = result;
                                             ip_n = ip + 16'd1;
                                             code_raddr_n =
                                                 15'(ops_base + ip + 16'd1);
@@ -5128,12 +5135,29 @@ module jmr_js_vm_exec64 (
                                 dup = 1'b0;
                                 ev = V64_UNDEFINED;
                                 fn = V64_UNDEFINED;
+                                // Consume unless this CALL_METH is the
+                                // fillRect SRAM window walk (cm_win holds
+                                // across leave_hold; opnd_q does not).
+                                cm_win_n = 1'b0;
                                 if (vcsp >= CSTK) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd2;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (vsp_hs < argc + 12'd1) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd1;
                                     running_n = 1'b0; state_n = S_DONE;
+                                end else if ((code_rdata[23:8] == id_fillrect ||
+                                            code_rdata[23:8] == id_clearrect) &&
+                                           argc >= 12'd4 && !cm_win_q) begin
+                                    // TOS window lags SRAM after GET_PROP /
+                                    // ADD (drawBitmap y+r*s, scale). Reload
+                                    // win[0..min(vsp,16)) then retry native.
+                                    // Parent WIN_FILL seeds hs_vsp(e64).
+                                    vst_refill_i_n = 4'd0;
+                                    vst_refill_arm_n = 1'b0;
+                                    vst_refill_ret_n = S_V64_EXEC;
+                                    vst_hold_win_n = 1'b1;
+                                    cm_win_n = 1'b1;
+                                    state_n = S_V64_WIN_FILL;
                                 end else if (code_rdata[23:8] == id_assign &&
                                            argc >= 12'd1) begin
                                     // Object.assign(target, ...src) sequential
@@ -5413,6 +5437,10 @@ module jmr_js_vm_exec64 (
                                         ? 8'd0 : paint_color;
                                     vdraw_i_n = 19'd0;
                                     vnat_base_n = base;
+                                    // SRAM refill planted the window; do not
+                                    // keep exec hold_win (that skips TOS
+                                    // shift on later LOAD_CONST).
+                                    vst_hold_win_n = 1'b0;
                                     state_n = S_V64_RECT;
                                 end else if (obj_ok && argc >= 12'd4 &&
                                            code_rdata[23:8] == id_getimgdata) begin

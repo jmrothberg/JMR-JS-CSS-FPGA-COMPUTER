@@ -171,7 +171,9 @@ make -C tools/board_flow flash        # SRAM first
 
 **First T200 `.bin` vs later:** the first `make -C tools/board_flow bit` creates
 the Vivado project, generates DDR3 MIG, and fully synthesizes `jmr_js_vm`
-(often **1–3 hours**; log may go quiet while CPU stays busy). Later `bit`
+(often **1–3 hours** on a small design; this full VM’s measured phases are
+in [FPGA_FIT.md](FPGA_FIT.md#wall-clock-benchmark-1617-make-bit--first-full-vm)
+— already **>3 h** in synthesis alone). Later `bit`
 **reuses** `build/nexys_video/vivado` (skip MIG generate, incremental DCP).
 Use `make -C tools/board_flow bit-fresh` only if MIG / XDC / source *list*
 changed. Do not `make -C tools/board_flow clean` between RTL tweaks — that

@@ -76,7 +76,49 @@ mode reads it.
 
 ---
 
-## Headline (this `make bit` — waiting)
+## Wall-clock benchmark (16:17 `make bit` — first full VM)
+
+**Update this table** when a phase finishes (clock time + RSS from
+`build/nexys_video/synth_rss.log` and `synth_1/top_nexys_video.vds`).
+Later `make -C tools/board_flow bit` runs (not `bit-fresh`) should beat
+these numbers if MIG/project already exist. Do not quote the 13 Aug
+keyboard bring-up as this VM’s time.
+
+**Log:** `build/nexys_video/vivado/jmr_nexys_video.runs/synth_1/top_nexys_video.vds`  
+**RSS tracker:** `build/nexys_video/synth_rss.log` (largest Vivado process).
+Kill only if that process climbs toward ~80 GB **and** the log is frozen.
+All-Vivado-sum ~70 GB with parent still ~35 GB is helpers, not the hang.
+
+Abbreviations: **RTL** = register-transfer level (Verilog). **MIG** = Memory
+Interface Generator (DDR3). **XDC** = pin/clock constraints. **FSM** =
+finite-state machine. **RSS** = RAM the process is using. **synth_1** =
+Vivado synthesis. **impl_1** = place-and-route + bitstream. **WNS** =
+worst negative slack. **DCP** = design checkpoint. **BRAM** = block RAM.
+
+Started **2026-08-18 16:17:50**. Parent RSS held **~35 GB** after the
+timing engine. Snapshot below is **19:32** (~3 h 15 m in, still synth).
+
+| Step | What it is | Status | Measured | Next-build note |
+|---|---|---|---|---|
+| Open project, skip MIG | Reuse `build/nexys_video/vivado` | Done | seconds | `bit-fresh` pays MIG again |
+| RTL elaboration | Read Verilog, build netlist | Done | **11 min** (elapsed 00:11:03, peak ~28.5 GB) | |
+| RTL optimization phase 1 | First cleanup | Done | in those 11 min | |
+| Constraints + timing engine | Apply XDC; start timing | Done | **~19 min** from synth start (peak ~35 GB) | |
+| RTL optimization phase 2 | Long quiet stretch; FSMs encoded; `name_hash_tbl` + FBs as RAM (8-3971) | Done ~18:58 | **elapsed 02:39:54** in Vivado | This was the 17:05–18:01 quiet |
+| Cross-boundary / area optimization | Merge/shrink across modules; DSP absorb | **In progress** (log last 19:11) | 20 min quiet so far | Fill elapsed when “Finished Cross Boundary…” prints |
+| Rest of synth_1 (map, write DCP) | `utilization_synth.rpt` when 100% | Not yet | — | Fill wall-clock |
+| impl_1 optimize | Cleanup before place | Not started | — | Fill |
+| Place | Sites on XC7A200T | Not started | — | Fill |
+| Route | Wiring | Not started | — | Fill |
+| Write `.bit` / `.bin` | `build/nexys_video/jmr_nexys_video.bit` | Not started | — | Fill; WNS ≥ 0 required |
+| Timing WNS | Must be ≥ 0 | Not started | — | From impl report |
+
+**Guess remaining (replace with measured):** finish synth 20 min–2 h after
+cross-boundary starts; then impl **~1.5–3.5 h**. Whole first VM bit from
+16:17 likely **5–8 h**, not the old 1–3 h (that was a smaller design).
+
+---
+
 
 Part: `xc7a200tsbg484-1`. Early counts: `build/nexys_video/utilization_synth.rpt`
 when `synth_1` hits 100%. Trust: `utilization_impl.rpt` after WNS ≥ 0.
@@ -131,4 +173,5 @@ tiles if everything infers). LUTRAM high + BRAM low means inference missed.
 - **FPGA-SIM green ≠ synthesizable.** Title RUN in Verilator is not a `.bin`.
 - **First T200 bit is the slow one.** MIG + full VM synth; later `make -C
   tools/board_flow bit` reuses the project. `bit-fresh` / `clean` = pay first-build
-  again. See [FPGA_BRINGUP.md](FPGA_BRINGUP.md).
+  again. Measured phases: [wall-clock benchmark](#wall-clock-benchmark-1617-make-bit--first-full-vm).
+  See [FPGA_BRINGUP.md](FPGA_BRINGUP.md).

@@ -1,12 +1,23 @@
 # START HERE — intern FIND is slow for every title
 
+**2026-08-18 INVADERS splash sprites:** F9 bars-only (`nz=19233`). CALL_METH
+fillRect/clearRect now WIN_FILL-reloads `vst_win` (SRAM truth) then retries
+native; `cm_win` holds across `leave_hold`. `hs_vsp(e64_vsp_q)` stays.
+User F9s. Do not `make bit`. Do not combo-peek BRAM.
+
+**2026-08-18 HEAP slot pipeline (FPGA-SIM, still Port A):** same-oid/eid
+key walk stays in `S_HEAP_CMP` with `hp_slot_pend` (1 extra clock for
+`*_rdata` + overlay latch). Object/env GET skips the `varr_long` arm.
+Class-table miss stays in CMP (FF match already one clock). Do not
+combo-peek BRAM. Do not `mem[i] <=` from the FSM.
+
 **2026-08-18 last-4 FIND cache (FPGA-SIM):** in `S_JOIN_FIND` only
 (`jn_hit_*` FFs, one Port-A compare/clock, no CAM, no title gate).
 Splash still `WAIT_FRAME` `fault=0` `nz=19233`. Space still starts play
 (`obj=732` `fault=0`). First play `FRAME` still `FB SAME` `fcap=1`
-`fclk=64000000`. **Sampled state is now `S_V64_EXEC` eip=4504, not
-`S_JOIN_FIND`.** FIND is no longer the cap-time stall. Ledger step 2
-(hash→id BRAM) not started — stop and ask.
+`fclk=64000000` *before* HEAP pipeline. **Sampled state moved to
+`S_V64_EXEC` / `S_HEAP_WAIT`, not `S_JOIN_FIND`.** FIND is no longer the
+cap-time stall. Ledger step 2 (hash→id BRAM) not started.
 
 **CRITICAL — do this before any other glass/RTL hunt.**
 Without a faster intern FIND, games **cannot** finish a play frame on

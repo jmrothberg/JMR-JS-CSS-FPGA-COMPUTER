@@ -1,5 +1,18 @@
 # Session handoff
 
+**2026-08-18 INVADERS splash sprites.** F9 was bars only (`nz=19233`,
+last `vdraw=70,68,500,7`). `drawBitmap` computed fillRect now SRAM-reloads
+`vst_win` (`cm_win` holds across `leave_hold`) then retries native. Parent
+WIN_FILL still seeds `hs_vsp(e64_vsp_q)`. Key in that F9 was Enter (13);
+INVADERS start is Space. User F9s. Do not `make bit`.
+STRIDX two-level lag + `name_blen` Port A already landed.
+
+**2026-08-18 HEAP slot pipeline** in `rtl/engines/jmr_js_vm.sv`
+(`hp_slot_pend`, object GET skips the array-long arm). Still Port A. Do
+not `make bit`. FIND last-4 cache already landed; play `FRAME` was still
+`FB SAME` before this HEAP change — prove INVADERS Space → play
+`WAIT_FRAME` / `FRAME` dump.
+
 **2026-08-18 (headless, not an F9).** Live notes. Two topics below (synth vs
 glass) — not a required two-agent split. Do **not** tell the user to F9 the
 three games yet.
@@ -31,7 +44,8 @@ the file at start; further RTL edits are the **next** bit, not the live one.
 **left `e32_p_clr`**, finished RTL Elaboration + Optimization Phase 1
 (~11 min, peak ~28.5 GB), log still printing. That is further than every
 prior hang (those froze on `e32_p_clr` and never printed again). Fit:
-[FPGA_FIT.md](FPGA_FIT.md). Flatten-hunt vs Port A hang:
+[FPGA_FIT.md](FPGA_FIT.md) (LUT table **and** wall-clock
+benchmark — update the phase table when a step finishes). Flatten-hunt vs Port A hang:
 [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md). Early LUT/BRAM: `utilization_synth.rpt` when
 `synth_1` is 100%. Do **not** `bit-fresh`.
 

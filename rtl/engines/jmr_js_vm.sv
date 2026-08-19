@@ -1153,6 +1153,8 @@ module jmr_js_vm #(
     logic [2:0]  hp_qn_ff, hp_qi_ff;
     logic [2:0]  hp_qn, hp_qi;
     logic        vgc_rd_arm, jn_rd_arm, vfe_rd_arm, vjs_rd_arm;
+    // S_V64_STRIDX: name_rdata then char_id_rdata (two Port A lags).
+    logic        stridx_rd_arm;
     // flatten: second beat after varr_rdata / vobj_rdata so name_hash raddr
     // can follow the intern id (stale 0 = wait, never peek).
     logic        jn_name_arm, vjs_name_arm, tfn_rd_arm;
@@ -1160,6 +1162,10 @@ module jmr_js_vm #(
     logic        jn_slot_arm;
     // flatten: HEAP_WAIT / HEAP_AWR long_rdata then slot raddr/waddr.
     logic        hp_slot_arm;
+    // Same-oid/eid slot++ stays in HEAP_CMP one extra clock (Port A rdata
+    // + overlay latch into exec hp_slot_q). Do not combo-peek; do not
+    // bounce to HEAP_WAIT (that was 3 extra beats per key).
+    logic        hp_slot_pend;
     // flatten: mark_task latches the handle; next beats consume *_rdata.
     logic        vgc_mark_pend, vgc_mark_arm;
     logic [63:0] vgc_mark_word;
@@ -2188,6 +2194,13 @@ module jmr_js_vm #(
     task automatic hs_hp_env(input logic v); hp_env_ff <= v; hs_m_hp_env <= 1'b1; endtask
     task automatic hs_hp_eid(input logic [9:0] v); hp_eid_ff <= v; hs_m_hp_eid <= 1'b1; endtask
     task automatic hs_hp_slot(input logic [4:0] v); hp_slot_ff <= v; hs_m_hp_slot <= 1'b1; endtask
+    // Next key on the same object/env: one Port-A wait in HEAP_CMP.
+    task automatic hp_next_slot();
+        begin
+            hs_hp_slot(hp_slot + 5'd1);
+            hp_slot_pend <= 1'b1;
+        end
+    endtask
     task automatic hs_hp_aslot(input logic [6:0] v); hp_aslot_ff <= v; hs_m_hp_aslot <= 1'b1; endtask
     task automatic hs_hp_len(input logic [5:0] v); hp_len_ff <= v; hs_m_hp_len <= 1'b1; endtask
     task automatic hs_hp_alen(input logic [7:0] v); hp_alen_ff <= v; hs_m_hp_alen <= 1'b1; endtask
@@ -4890,7 +4903,11 @@ module jmr_js_vm #(
 
     // Read+write are their own processes (same shape as jmr_mini_fb Port A).
     // The 7k-line FSM poking ram[i] <= made Vivado build FFs (70 GB after e32_p_clr).
-    assign name_mem_raddr = (casestate_q == S_V64_EXEC)
+    // STRIDX must keep exec's byte address while casestate_q leaves EXEC
+    // (second wait beat). Switching to parent name_rdaddr mid-op would
+    // clobber name_rdata before char_id is captured (splash sprites gone).
+    assign name_mem_raddr = ((casestate_q == S_V64_EXEC) ||
+                             (casestate_q == S_V64_STRIDX))
         ? e64_name_rdaddr_q[14:0] : name_rdaddr[14:0];
     assign json_rdaddr =
         ((casestate_q == S_REPL) && jn_name_arm) ? (json_rp[12:0] + 13'd1) :
@@ -5832,8 +5849,9 @@ module jmr_js_vm #(
             hs_hp_tag(3'd0); vgc_rd_arm <= 1'b0; jn_rd_arm <= 1'b0;
             jn_hit_v <= 4'd0; jn_cache_try <= 1'b0; jn_cache_i <= 3'd0;
             jn_name_arm <= 1'b0; vjs_name_arm <= 1'b0; tfn_rd_arm <= 1'b0;
-            jn_slot_arm <= 1'b0; hp_slot_arm <= 1'b0;
+            jn_slot_arm <= 1'b0; hp_slot_arm <= 1'b0; hp_slot_pend <= 1'b0;
             vfe_rd_arm <= 1'b0; vjs_rd_arm <= 1'b0; valloc_rd_arm <= 1'b0;
+            stridx_rd_arm <= 1'b0;
             hp_proto_arm <= 1'b0;
             json_ch0 <= 8'd0;
             vt_found <= 1'b0; vk_found <= 1'b0;
@@ -6008,6 +6026,10 @@ module jmr_js_vm #(
             if (e64_p_we && e64_p_sel == 6'd17) begin
                 name_blen[e64_p_addr[9:0]] <= e64_p_data[15:0];
                 name_has[e64_p_addr[9:0]] <= 1'b1;
+            end else if (e64_p_we && e64_p_sel == 6'd41) begin
+                // Trail phase 4 pokes 41 (u8 intern len). Same Port A as
+                // poke 17 so GET_PROP .length is not a second FSM driver.
+                name_blen[e64_p_addr[9:0]] <= {8'd0, e64_p_data[7:0]};
             end else if (e64_name_blen_we)
                 name_blen[e64_name_blen_waddr] <= e64_name_blen_wdata;
             // name_hash_tbl writes: Port A process (name_hash_we / poke 40 / exec we).
@@ -6161,48 +6183,36 @@ module jmr_js_vm #(
                 to_n <= e32_to_n_q;
                 to_seq <= e32_to_seq_q;
             end
-            // Class table scan: one index per clock (not a unique-case CAM).
+            // Class table is 16×16 FFs (not intern SRAM). Match in one clock.
+            // Sequential (c,m) was 256 clocks per GET_PROP miss — play CALL
+            // paid that every method. unique-case CAM over BRAM is still
+            // forbidden; this is FF equality outside the opcode case.
             if (cls_scan) begin
-                if (!cls_armed) begin
-                    cls_armed <= 1'b1;
-                    cls_c <= 4'd0;
-                    cls_m <= 4'd0;
-                end else if (cls_ctor_mode) begin
-                    if (({1'b0, cls_c} < n_cls) &&
-                        (cls_name[cls_c] == cls_cls)) begin
-                        cls_ctor_q <= cls_ctor[cls_c];
-                        // FFFF ctor is "class, no constructor" — not a miss.
-                        cls_hit <= 1'b1;
+                if (cls_ctor_mode) begin
+                    for (int ci = 0; ci < MAX_CLS; ci++) begin
+                        if ((5'(ci) < n_cls) && (cls_name[ci] == cls_cls)) begin
+                            cls_ctor_q <= cls_ctor[ci];
+                            cls_hit <= 1'b1;
+                        end
                     end
-                    if (({1'b0, cls_c} + 5'd1 >= n_cls) ||
-                        (cls_c == 4'(MAX_CLS - 1))) begin
-                        cls_scan <= 1'b0;
-                        cls_armed <= 1'b0;
-                        cls_done <= 1'b1;
-                    end else
-                        cls_c <= cls_c + 4'd1;
                 end else begin
-                    if (({1'b0, cls_c} < n_cls) &&
-                        (cls_name[cls_c] == cls_cls) &&
-                        ({1'b0, cls_m} < cls_nmeth[cls_c]) &&
-                        (cls_mname[cls_c][cls_m][14:0] == cls_key[14:0])) begin
-                        if (cls_mname[cls_c][cls_m][15])
-                            cls_gip_q <= cls_mip[cls_c][cls_m];
-                        else
-                            cls_mip_q <= cls_mip[cls_c][cls_m];
+                    for (int ci = 0; ci < MAX_CLS; ci++) begin
+                        for (int mi = 0; mi < MAX_CMETH; mi++) begin
+                            if ((5'(ci) < n_cls) &&
+                                (cls_name[ci] == cls_cls) &&
+                                (5'(mi) < cls_nmeth[ci]) &&
+                                (cls_mname[ci][mi][14:0] == cls_key[14:0])) begin
+                                if (cls_mname[ci][mi][15])
+                                    cls_gip_q <= cls_mip[ci][mi];
+                                else
+                                    cls_mip_q <= cls_mip[ci][mi];
+                            end
+                        end
                     end
-                    if (cls_m == 4'(MAX_CMETH - 1)) begin
-                        cls_m <= 4'd0;
-                        if (({1'b0, cls_c} + 5'd1 >= n_cls) ||
-                            (cls_c == 4'(MAX_CLS - 1))) begin
-                            cls_scan <= 1'b0;
-                            cls_armed <= 1'b0;
-                            cls_done <= 1'b1;
-                        end else
-                            cls_c <= cls_c + 4'd1;
-                    end else
-                        cls_m <= cls_m + 4'd1;
                 end
+                cls_scan <= 1'b0;
+                cls_armed <= 1'b0;
+                cls_done <= 1'b1;
             end
             if (stop) begin
                 running <= 1'b0;
@@ -6578,7 +6588,6 @@ module jmr_js_vm #(
                         if (heap_clr_i < 12'd1024) begin
                             fill_lut[heap_clr_i[9:0]] <= 8'hFF;
                             name_has[heap_clr_i[9:0]] <= 1'b0;
-                            name_blen[heap_clr_i[9:0]] <= 16'd0;
                             intern_var_ok[heap_clr_i[9:0]] <= 1'b0;
                         end
                         if (heap_clr_i + 12'd1 >= 12'(MAX_ARR))
@@ -6796,7 +6805,6 @@ module jmr_js_vm #(
                             end
                             5'd4: begin
                                 name_len_tbl[name_idx[9:0]] <= tb;
-                                name_blen[name_idx[9:0]] <= {8'd0, tb};
                                 e64_poke(6'd41, {6'd0, name_idx[9:0]}, {56'd0, tb});
                                 // Space intern: hash 32 + len 1 (U+0020). Confirm
                                 // here so e.key === " " matches KEYEVT payload.
@@ -7087,7 +7095,6 @@ module jmr_js_vm #(
                                 nb_len <= {tb, trail_acc[7:0]};
                                 // NAMB length is the real interned byte count
                                 // (hash u8 is only for concat fold).
-                                name_blen[nb_i[9:0]] <= {tb, trail_acc[7:0]};
                                 e64_poke(6'd17, {6'd0, nb_i[9:0]},
                                          {32'd0, nb_wp, tb, trail_acc[7:0]});
                                 // nb_len counts DOWN per byte, so it cannot tell a
@@ -7732,7 +7739,6 @@ module jmr_js_vm #(
                         if (names_n < 16'd1024) begin
                             name_hash_wr(names_n[9:0], jn_h);
                             name_len_tbl[names_n[9:0]] <= jn_len;
-                            name_blen[names_n[9:0]] <= {8'd0, jn_len};
                             // Same we port as trail (poke 40 then 17 next
                             // byte-copy). Indexed writes are not the SRAM we.
                             e64_poke(6'd40, {6'd0, names_n[9:0]},
@@ -11191,14 +11197,42 @@ module jmr_js_vm #(
                         end
                     end
                 end
-                S_V64_STRIDX: hs_st(S_V64_STRIDX_WR);
+                // name_rdata lags name_rdaddr 1 clock; char_id_rdata lags
+                // name_rdata another. Hopping STRIDX→WR the first beat used
+                // char_id[stale], so interned row[col]==="1" was never true
+                // (INVADERS drawBitmap painted 0 sprite pixels). Same
+                // casestate_q stay as HEAP_WAIT — extra clock, Port A, no peek.
+                S_V64_STRIDX: begin
+                    // name_rdata lags name_rdaddr 1 clock; char_id_rdata
+                    // lags name_rdata another. One casestate stay left
+                    // WR sampling char_id[stale] so row[col]==="1" never
+                    // fired (INVADERS splash bars painted, sprites not).
+                    if (casestate_q != S_V64_STRIDX) begin
+                        stridx_rd_arm <= 1'b0;
+                        hs_st(S_V64_STRIDX);
+                    end else if (!stridx_rd_arm) begin
+                        stridx_rd_arm <= 1'b1;
+                        hs_st(S_V64_STRIDX);
+                    end else begin
+                        stridx_rd_arm <= 1'b0;
+                        hs_st(S_V64_STRIDX_WR);
+                    end
+                end
                 S_V64_STRIDX_WR: begin
-                    if (e32_char_ok_rdata)
-                        vst_wr(vsp - 12'd1, v64_handle(
-                            4'd4, 12'd0, {16'd0, e32_char_id_rdata}
-                        ));
-                    else
-                        vst_wr(vsp - 12'd1, V64_UNDEFINED);
+                    // SRAM write alone leaves vst_win[0] as the original
+                    // intern (the whole row). Then `row[col]==="1"` compared
+                    // "0110" to "1" and drawBitmap painted 0 sprite pixels.
+                    // HEAP plants TOS the same way (hold_win skips the we path).
+                    begin
+                        logic [63:0] ch;
+                        ch = e32_char_ok_rdata
+                            ? v64_handle(4'd4, 12'd0,
+                                         {16'd0, e32_char_id_rdata})
+                            : V64_UNDEFINED;
+                        vst_wr(vsp - 12'd1, ch);
+                        vst_win[0] <= ch;
+                        vst_hold_win <= 1'b1;
+                    end
                     hs_code(15'(ops_base + ip));
                     hs_st(S_FETCH_WAIT);
                 end
@@ -11807,9 +11841,14 @@ module jmr_js_vm #(
                     // not combo casestate. Wait until q==WAIT so *_rdata is
                     // this HEAP, not leftover EXEC/ALLOC (intern NEW_OBJ Game
                     // re-issue hang: S_EXEC ip=NEW_OBJ hp=5 forever).
+                    hp_slot_pend <= 1'b0;
                     if (casestate_q != S_HEAP_WAIT)
                         hs_st(S_HEAP_WAIT);
-                    else if (!hp_slot_arm)
+                    else if (!hp_slot_arm &&
+                             (hp_cmd == HP_ARRGET || hp_cmd == HP_ARRSET ||
+                              hp_cmd == HP_AFILL || hp_cmd == HP_PUSH ||
+                              hp_cmd == HP_UNSHIFT || hp_cmd == HP_SPLICE ||
+                              hp_cmd == HP_AGETI || hp_cmd == HP_ASETI))
                         hp_slot_arm <= 1'b1;
                     else begin
                         hp_slot_arm <= 1'b0;
@@ -11817,8 +11856,10 @@ module jmr_js_vm #(
                     end
                 end
                 S_HEAP_CMP: begin
-                    if (cls_scan)
-                        hs_st(S_HEAP_WAIT);
+                    if (hp_slot_pend)
+                        hp_slot_pend <= 1'b0;
+                    else if (cls_scan)
+                        ; // FF class match this clock (cls_done next). Not a BRAM CAM.
                     else if (cls_done) begin
                         begin
                             logic [15:0] gip;
@@ -11969,8 +12010,7 @@ module jmr_js_vm #(
                             end else
                                 hs_st(S_HEAP_WR);
                         end else if (hp_slot + 5'd1 < hp_len[4:0]) begin
-                            hs_hp_slot(hp_slot + 5'd1);
-                            hs_st(S_HEAP_WAIT);
+                            hp_next_slot();
                         end else begin
                             if (hp_phase != 3'd2 &&
                                 venv_parent_rdata[63:48] == 16'h7ff9 &&
@@ -12090,8 +12130,7 @@ module jmr_js_vm #(
                         hp_qk[hp_qi[1:0]] <= vobj_rdata[79:64];
                         if (hp_qi + 3'd1 < hp_qn) begin
                             hs_hp_qi(hp_qi + 3'd1);
-                            hs_hp_slot(hp_slot + 5'd1);
-                            hs_st(S_HEAP_WAIT);
+                            hp_next_slot();
                         end else
                             hs_st(hp_ret);
                     end else if (hp_cmd == HP_ARRGET || hp_cmd == HP_AGETI) begin
@@ -12204,8 +12243,7 @@ module jmr_js_vm #(
                                 hs_hp_phase(3'd2);
                                 hs_st(S_HEAP_WR);
                             end else if (hp_slot + 5'd1 < hp_tn[4:0]) begin
-                                hs_hp_slot(hp_slot + 5'd1);
-                                hs_st(S_HEAP_WAIT);
+                                hp_next_slot();
                             end else if (hp_tn < OBJ_SLOTS[5:0]) begin
                                 hs_hp_slot(hp_tn[4:0]);
                                 hs_hp_tn(hp_tn + 6'd1);
@@ -12258,8 +12296,7 @@ module jmr_js_vm #(
                                   vobj_rdata[47:44] != 4'd7)) ||
                                 (!hp_v64 && vobj_trdata != 3'd4)) begin
                                 if (hp_slot + 5'd1 < vobj_len_rdata[4:0]) begin
-                                    hs_hp_slot(hp_slot + 5'd1);
-                                    hs_st(S_HEAP_WAIT);
+                                    hp_next_slot();
                                 end else begin
                                     hs_hp_hit(1'b0);
                                     if (hp_phase == 3'd0 &&
@@ -12301,8 +12338,7 @@ module jmr_js_vm #(
                             (hp_cmd == HP_GETPROP || hp_cmd == HP_LOOKFN) &&
                             vobj_rdata[79:64] == id_proto)
                             hs_hp_proto(vobj_rdata[63:0]);
-                        hs_hp_slot(hp_slot + 5'd1);
-                        hs_st(S_HEAP_WAIT);
+                        hp_next_slot();
                     end else begin
                         hs_hp_hit(1'b0);
                         if (hp_cmd == HP_GETPROP && hp_phase == 3'd0) begin
@@ -12317,7 +12353,7 @@ module jmr_js_vm #(
                             cls_key <= {1'b0, hp_key[14:0]};
                             cls_mip_q <= 16'hFFFF;
                             cls_gip_q <= 16'hFFFF;
-                            hs_st(S_HEAP_WAIT);
+                            // Stay HEAP_CMP: cls_scan match is FFs this clock.
                         end else if (hp_cmd == HP_LOOKFN && hp_phase == 3'd0 &&
                             hp_v64 &&
                             hp_proto[63:48] == V64_TAG_PREFIX &&
@@ -12873,6 +12909,12 @@ module jmr_js_vm #(
                         vst_refill_arm <= e64_vst_refill_arm_q;
                         vst_refill_ret <= st_t'(e64_vst_refill_ret_q);
                         vst_hold_win <= e64_vst_hold_win_q;
+                        // Exec vsp is truth. Sticky hs_m_vsp can leave
+                        // parent vsp_ff at 0, so raddr underflowed and
+                        // fillRect y/w from GET_PROP never saw the canvas
+                        // (vdraw stayed 0). HEAP-initiated refill already
+                        // has parent vsp (ret != IDLE).
+                        hs_vsp(e64_vsp_q);
                         hs_st(S_V64_WIN_FILL);
                     end else if (!vst_refill_arm) begin
                         vst_refill_arm <= 1'b1;

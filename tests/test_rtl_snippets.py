@@ -2702,6 +2702,102 @@ requestAnimationFrame(tick);
         sim.shutdown()
 
 
+def test_rtl_html_string_row_bitmap_draws():
+    """Value64 HTML path: row[col]==="1" then c.fillRect (INVADERS drawBitmap).
+
+    Tagged .JS used a 1-beat STRIDX that happened to match parent name_rdaddr.
+    HTML RUN is exec64: name_rdaddr is exec's FF, name_rdata/char_id each lag
+    one clock. Hopping STRIDX→WR the first beat made === "1" never true, so
+    splash aliens/saucer/cannon bitmaps stayed blank while fillRect bars painted.
+    """
+    html = """<!DOCTYPE html><canvas id="c" width="640" height="480"></canvas>
+<script>
+var c = document.getElementById('c').getContext('2d');
+var ROWS = ["0110", "1111"];
+function drawBitmap(x, y, rows, scale) {
+  var r, col, row;
+  for (r = 0; r < rows.length; r++) {
+    row = rows[r];
+    for (col = 0; col < row.length; col++) {
+      if (row[col] === "1") {
+        c.fillRect(x + col * scale, y + r * scale, scale, scale);
+      }
+    }
+  }
+}
+function tick() {
+  c.fillStyle = '#fff';
+  drawBitmap(20, 20, ROWS, 8);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>
+"""
+    from tools.compile_js import compile_html_text, encode_html_chunk
+
+    sim = _sim()
+    try:
+        sim._program_image = encode_html_chunk(compile_html_text(html))
+        assert sim._stream_program_image().startswith("OK")
+        # FRAME's 2000-clock idle abort never sees vsync (FRAME_DIV=65535),
+        # so rAF never runs. TICKN lets the divider fire.
+        st = ""
+        for _ in range(8):
+            sim._rpc("TICKN 20000")
+            st = sim._rpc("VMSTAT?")
+            if "sname=S_WAIT_FRAME" in st:
+                break
+        sim._rpc("TICKN 20000")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert _fb_nz(sim) >= 384, f"html string-row bitmap drew {_fb_nz(sim)} px ({st})"
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_html_fillrect_computed_y_w():
+    """ctx.fillRect y/w from .length, not trailing immediates (drawBitmap).
+
+    Literal c.fillRect(70,68,500,7) already paints. drawBitmap's
+    fillRect(x+col*s, y+r*s, s, s) uses ADD/MUL/LOAD_VAR, so the TOS
+    window can miss the canvas and native fillRect is skipped.
+    """
+    html = """<!DOCTYPE html><canvas id="c" width="640" height="480"></canvas>
+<script>
+var c = document.getElementById('c').getContext('2d');
+var s = 'ab';
+function tick() {
+  c.fillStyle = '#fff';
+  c.fillRect(10, s.length * 80, 8, 8);
+  c.fillRect(200, 10, s.length * 4, 8);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>
+"""
+    from tools.compile_js import compile_html_text, encode_html_chunk
+
+    sim = _sim()
+    try:
+        sim._program_image = encode_html_chunk(compile_html_text(html))
+        assert sim._stream_program_image().startswith("OK")
+        st = ""
+        for _ in range(8):
+            sim._rpc("TICKN 20000")
+            st = sim._rpc("VMSTAT?")
+            if "sname=S_WAIT_FRAME" in st:
+                break
+        sim._rpc("TICKN 20000")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        raw = _fb_raw(sim)
+        # y = 2*80 = 160; w = 2*4 = 8. Wrong slot → these pixels stay 0.
+        assert _fb_pix(raw, 12, 162) != 0, f"computed y missed ({st})"
+        assert _fb_pix(raw, 204, 12) != 0, f"computed w missed ({st})"
+    finally:
+        sim.shutdown()
+
+
 def _expect_text(text: str, x: int, y: int, k: int, align: str = "left") -> set:
     """Pixels PYTHON's canvas_engine.fill_text would set (the parity spec)."""
     from functional_model.font8 import glyph
