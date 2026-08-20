@@ -25,19 +25,23 @@ host twin; never treat dukpy/Chrome as the machine. User-typed glass must match
 across F9 runtimes (no RTL-only console commands).
 
 **Status for agents:** [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md)
-(PYTHON glass user-confirmed; FPGA-SIM not F9-ready; do not `make bit`
-unless the user asks. J15 USB Host is dead — GUI/PROG tether).
+(five HTML titles play on FPGA-SIM, slowly; do not `make bit` unless the
+user asks. Next RTL: exec32 then LUTRAM Port A —
+[docs/FPGA_FIT.md](docs/FPGA_FIT.md). J15 USB Host is dead — GUI/PROG tether).
 Synth vs play-speed debt (JOIN intern scan, what to keep for Vivado):
 [docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md).
 History of RTL edits from the 70 GB Vivado hunt (not a current-bug list;
 use when tracing what those edits most likely broke):
 [docs/VIVADO_FLATTEN_HUNT.md](docs/VIVADO_FLATTEN_HUNT.md).
 Tagged Q16 opcode unit is leftover (titles use exec64): plan to unhook
-it is [docs/REMOVING_EXEC32.md](docs/REMOVING_EXEC32.md) — after glass,
-not in parallel with parent FSM edits. After that unhook: big arrays that
+it is [docs/REMOVING_EXEC32.md](docs/REMOVING_EXEC32.md) — glass is done;
+not in parallel with a speed/FIND pass. After that unhook: big arrays that
 Vivado built from logic LUTs (LUTRAM) need the Port A RAM shape so they
 can sit in BRAM tiles — not FPGA-SIM speed, not every array into BRAM:
 [docs/FPGA_FIT.md](docs/FPGA_FIT.md#what-these-words-mean-lutram-bram-port-a).
+Failed `make bit` diaries (16:17 / 2026-08-20 OOM): [docs/OLD_RUNS.md](docs/OLD_RUNS.md).
+How to reorganize the synthesis RTL later (plan only — do not extract JOIN/JSON/GC/HEAP):
+[docs/RTL_REORG.md](docs/RTL_REORG.md).
 
 ```
 $ python3 run_jmr_js.py
@@ -199,13 +203,13 @@ tokens, microcode, or Nexys A7-100T pinouts here. Board freeze:
 | `functional_model/` | Python behavioural truth |
 | `hardware_model/` | Explicit clocks / FSMs / memories (later) |
 | `runtime/` | PYTHON / FPGA-SIM / BOARD / ASIC-SIM backends |
-| `rtl/` | SystemVerilog engines (+ `rtl/video/` HDMI scanout) |
+| `rtl/` | SystemVerilog engines (+ `rtl/video/` HDMI scanout). Reorg plan: [docs/RTL_REORG.md](docs/RTL_REORG.md) |
 | `third_party/digilent_rgb2dvi/` | Digilent HDMI TMDS IP (do not rewrite) |
 | `sim/` | Verilator + cocotb |
 | `constraints/` | Nexys Video XDC (StarLite later; not A7-100T) |
 | `storage/` | Seeds: `NAME.HTML` titles (card builder copies this folder) |
 | `docs/` | Architecture, bring-up, fit, handoff |
-| `tools/` | compile, SD image, battery, `golden_frames.py` (Chrome vs PYTHON vs RTL) |
+| `tools/` | compile, SD image, battery, `golden_frames.py`. `pmod_input_test/` + `hid_led_blink/` = **LED-only** board proofs — not FPGA-SIM ([RTL_REORG.md](docs/RTL_REORG.md#board-led-input-tests--never-fpga-sim)) |
 | `traces/` | Flight logs — read first when debugging. `traces/goldens/` = frame diffs |
 | `.cursor/rules/` | Product rules for *this* machine |
 

@@ -159,19 +159,13 @@ def _quantize_sprites(images, pal):
 
 
 def compile_one(src_path: Path, out_dir: Path | None = None) -> Path:
-    text = src_path.read_text(encoding="utf-8")
-    chunk = compile_source(text)
-    blob = encode_chunk(chunk)
-    dest = (out_dir or src_path.parent) / (src_path.stem.upper()[:8] + ".JSB")
-    dest.write_bytes(blob)
-    print(f"wrote {dest} ({len(blob)} bytes, {len(chunk.code)} ops)")
-    # Hex for RTL $readmemh (INVADERS → vectors/invaders_jsb.hex)
-    if src_path.stem.upper() == "INVADERS":
-        VECTORS.mkdir(parents=True, exist_ok=True)
-        hex_path = VECTORS / "invaders_jsb.hex"
-        hex_path.write_text(jsb_to_hex_lines(blob, width=4))
-        print(f"wrote {hex_path}")
-    return dest
+    # exec32 retirement: standalone .JS sidecar builds are not a product
+    # path (HTML compile-on-RUN only). Refuse rather than mint a .JSB /
+    # invaders_jsb.hex nobody should boot (docs/REMOVING_EXEC32.md).
+    raise SystemExit(
+        f"refusing {src_path.name}: .JS sidecar compiles are retired with "
+        "exec32 — HTML titles compile on RUN (encode_html_chunk)"
+    )
 
 
 def _js_line_to_html(spans, js_line: int) -> int:

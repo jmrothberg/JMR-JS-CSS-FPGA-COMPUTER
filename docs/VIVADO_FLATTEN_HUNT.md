@@ -7,7 +7,7 @@ likely broke**, not what is “still the hang.”
 
 File: `rtl/engines/jmr_js_vm.sv` (and exec32/exec64 if they were peeked).
 FIND play-speed: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
-Fit: [FPGA_FIT.md](FPGA_FIT.md).
+Fit: [FPGA_FIT.md](FPGA_FIT.md). Old run diaries: [OLD_RUNS.md](OLD_RUNS.md).
 
 What the hang **was** (fixed): extra SRAM **ports** inferred as FFs, not
 chip BRAM, not the 4 MB ASET bank. Last good T200 bit ~2.8 GB.

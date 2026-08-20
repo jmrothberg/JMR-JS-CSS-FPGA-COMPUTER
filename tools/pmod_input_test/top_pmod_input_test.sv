@@ -1,3 +1,6 @@
+// NOT FPGA-SIM. NOT the JS .bit / jmr_js_core. LED-only board proof.
+// Build: make -C tools/pmod_input_test → build/pmod_input_test/
+// Never add this file to sim/Makefile CORE_SRCS or tools/board_flow.
 // Standalone Pmod + J15 USB proof — no console, no HDMI, no VM.
 //   JA  Pmod PS/2  (RX-only)  → LD7 character pulse
 //   JB  Mini I2C joystick 0x5A → LD0..LD3, LD6

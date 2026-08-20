@@ -1,4 +1,6 @@
-# Foolproof J15 USB-HID → LED test. Own build dir — never touches build/nexys_video.
+# NOT FPGA-SIM. LED-only J15 proof. Own build dir — never touches
+# build/nexys_video or sim/sim_build_synth. Do not add this top to CORE_SRCS.
+# Foolproof J15 USB-HID → LED test.
 #
 #   source scripts/vivado_env.sh
 #   make -C tools/hid_led_blink bit flash

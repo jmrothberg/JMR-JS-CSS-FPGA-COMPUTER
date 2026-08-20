@@ -1,3 +1,6 @@
+// One file on disk: JS board .bit AND the LED tests compile this path.
+// FPGA-SIM does not (CORE_SRCS). Edit here = next board_flow bit + LED bits.
+// Do not add host TX (usb_ps2_try / jmr_ps2_host) to this module.
 // PS/2 receiver — Digilent Nexys-Video-Keyboard method (debounce + fall sample).
 // NEW: input-only (no host TX). Video PIC24 edges are noisy; BASIC A7 2-flop
 // alone can miss frames on this board. Debounce matches Digilent COUNT_MAX=19

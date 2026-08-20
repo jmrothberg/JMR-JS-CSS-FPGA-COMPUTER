@@ -1,3 +1,6 @@
+// NOT FPGA-SIM. Snapshot for the LED bit only (tools/pmod_input_test).
+// Live JS-board copy (same module name): rtl/phys/jmr_i2c_master.sv
+// Do not add this path to CORE_SRCS or tools/board_flow.
 // 100 kHz open-drain I2C master — one register read per `go`.
 // Drive 0 or Z only (never 1). Clock-stretch: wait for SCL high after release.
 module jmr_i2c_master #(

@@ -1,3 +1,5 @@
+// One file on disk: JS board .bit AND tools/pmod_input_test compile this path.
+// FPGA-SIM does not (CORE_SRCS). Edit here = next board_flow bit + pmod LED bit.
 // Set-2 scancode → ASCII (letters/digits/punctuation/CR/BS). Feeds keyboard_fifo.
 // Map matches hardware_model/ps2_keyboard.py _SET2_ASCII (USB HID via Digilent PIC24).
 module ps2_decode (

@@ -1,3 +1,6 @@
+// NOT FPGA-SIM. NOT the JS .bit / jmr_js_core. LED-only J15 proof.
+// Build: make -C tools/hid_led_blink → build/hid_led_blink/
+// Never add this file to sim/Makefile CORE_SRCS or tools/board_flow.
 // Standalone J15 HID proof — no console, no HDMI, no VM.
 // PIC24 USB-HID → PS/2 on W17/N13; FPGA is RX-only (do not drive clk low).
 // LED map matches the JS top so the same glance works:

@@ -109,6 +109,8 @@ proc jmr_add_sources {ROOT} {
     jmr_ensure_file $f
   }
   # NEW: jmr_ps2_host removed from build — BASIC T100 is RX-only (file kept)
+  # LED tests (tools/pmod_input_test, hid_led_blink) are a different
+  # project — do not add those paths to this JS board file list.
   if {[llength [get_files -quiet -of_objects [get_filesets constrs_1] \
       $ROOT/constraints/nexys_video.xdc]] == 0} {
     add_files -fileset constrs_1 $ROOT/constraints/nexys_video.xdc

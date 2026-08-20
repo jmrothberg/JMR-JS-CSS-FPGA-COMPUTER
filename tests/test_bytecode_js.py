@@ -1237,7 +1237,7 @@ def test_hw_vm_queue_capacity_fails_loudly():
     vm = JsHwVm()
     vm.load_image(image)
 
-    assert vm.error == "ERROR: HM CAPACITY: timer queue overflow (64 timers)"
+    assert vm.error == "ERROR: HM VALUE64: timer queue overflow (65 > 64) at IP 263"
 
 
 def test_value64_layout_and_nan_canonicalization():
@@ -3746,7 +3746,12 @@ addEventListener("keyup", function(e) {
 
 
 def test_load_store_var_a1_global_and_local():
-    """Compiler packs local LOAD/STORE a1>=2; globals stay a1=0 (chain)."""
+    """Compiler packs local LOAD/STORE a1>=2; provable globals get a1=1.
+
+    Speed pass 2026-08-20: a site whose name is declared by NO enclosing
+    function scope can only resolve to vvars, so the compiler retro-patches
+    it to a1=1 (direct global, no env walk). `g` inside `f` qualifies.
+    """
     from functional_model.bytecode import Op
 
     chunk = compile_source(
@@ -3777,7 +3782,7 @@ def test_load_store_var_a1_global_and_local():
         and op[2] == 1
     ]
     assert any(a >= 2 for a in local_a1), (chunk.code, names)
-    assert not global_packed, global_packed
+    assert global_packed, (chunk.code, names)
     vm = _hw_v64(
         "var g = 1;\n"
         "function f() {\n"
@@ -4001,3 +4006,21 @@ def test_mrdo_hm_enter_paints_without_hang():
     assert elapsed < 8.0, elapsed
     assert (time.perf_counter() - t0) < 30.0
 
+
+
+def test_encode_chunk_tagged_request_raises():
+    """The tagged (non-Value64) encoding is retired with exec32: loud refusal.
+
+    This is the ONE place value64=False may appear in-tree
+    (docs/REMOVING_EXEC32.md Phase 1).
+    """
+    import pytest as _pytest
+
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage, encode_chunk
+
+    chunk = compile_source("var x = 1;")
+    with _pytest.raises(ValueError, match="FLAG_VALUE64"):
+        encode_chunk(chunk, value64=False)
+    with _pytest.raises(ValueError, match="FLAG_VALUE64"):
+        ProgramImage.from_chunk(chunk, value64=False)

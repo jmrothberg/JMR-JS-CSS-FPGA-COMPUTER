@@ -1,3 +1,6 @@
+// NOT FPGA-SIM. Snapshot for the LED bit only (tools/pmod_input_test).
+// Live JS-board copy (same module name): rtl/phys/jmr_i2c_joy.sv
+// Do not add this path to CORE_SRCS or tools/board_flow.
 // Poll Mini I2C joystick @ 0x5A (NullLab / PH2.0 handle). NACK → bits off.
 // Analog 0..255 center 128, deadzone ±32. Y 0 = top. Idle button = 8.
 module jmr_i2c_joy #(

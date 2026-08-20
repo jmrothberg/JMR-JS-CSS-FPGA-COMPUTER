@@ -1,5 +1,7 @@
-# Foolproof Pmod PS/2 + I2C joystick LED test. Own build dir — never touches
-# build/nexys_video.
+# NOT FPGA-SIM. LED-only board proof. Own build dir — never touches
+# build/nexys_video or sim/sim_build_synth. Do not add these .sv files to
+# sim/Makefile CORE_SRCS. I2C sources here are snapshots; live PHY is rtl/phys/.
+# Foolproof Pmod PS/2 + I2C joystick LED test.
 #
 #   source scripts/vivado_env.sh
 #   make -C tools/pmod_input_test bit flash

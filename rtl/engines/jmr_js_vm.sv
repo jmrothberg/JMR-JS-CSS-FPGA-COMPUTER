@@ -44,6 +44,8 @@ module jmr_js_vm #(
     output logic [18:0] fb_dump_addr,
     output logic        fb_dump_sel,
     input  logic [7:0]  fb_dump_back,
+    // NEW: front-bank dump read (same dump_raddr) for S_FB_SYNC copy
+    input  logic [7:0]  fb_dump_front,
     // NEW: external asset SRAM read port (jmr_sram_port master, read-only) —
     // ASET sprite banks live there; blitter fetches pixels 2-per-16-bit word
     output logic        sram_req,
@@ -310,10 +312,11 @@ module jmr_js_vm #(
     // function handles and explicit callback frames. Listener/key dispatch
     // remains an unsupported native surface until its event objects land.
     logic [63:0] vraf [0:7] /*verilator public_flat_rd*/;
-    logic [3:0] vraf_n_ff;
+    logic [3:0] vraf_n_ff /*verilator public_flat_rd*/;
     logic [3:0] vraf_n /*verilator public_flat_rd*/;
     logic [63:0] vraf_snap [0:7];
-    logic [3:0] vraf_snap_n, vraf_i;
+    logic [3:0] vraf_snap_n /*verilator public_flat_rd*/;
+    logic [3:0] vraf_i /*verilator public_flat_rd*/;
     logic vtimer_valid [0:63] /*verilator public_flat_rd*/;
     logic signed [31:0] vtimer_due [0:63] /*verilator public_flat_rd*/;
     logic signed [31:0] vtimer_id [0:63] /*verilator public_flat_rd*/;
@@ -751,13 +754,13 @@ module jmr_js_vm #(
     // u16 hash the encoder used, then maps back to an interned name so
     // string EQ (intern id compare) just works. No dynamic string heap.
     logic [15:0] id_join, id_indexof;
-    (* ram_style = "block" *) logic [15:0] name_hash_tbl [0:1023]; // intern idx -> encoder u16 hash
+    (* ram_style = "block" *) logic [15:0] name_hash_tbl [0:1023] /*verilator public_flat_rd*/; // intern idx -> encoder u16 hash
     logic        name_hash_we;
     logic [9:0]  name_hash_waddr;
     logic [15:0] name_hash_wdata;
     logic [9:0]  name_hash_raddr;
     logic [7:0]  name_len_tbl  [0:1023] /*verilator public_flat_rd*/; // intern idx -> byte length (concat fold)
-    logic [15:0] names_n;
+    logic [15:0] names_n /*verilator public_flat_rd*/;
     // End of the trailer-loaded (static) names, and the byte pointer at
     // that moment. Strings built at run time (`"SCORE " + score`) intern
     // above this and are never reclaimed, so the 1024-slot table filled
@@ -906,6 +909,7 @@ module jmr_js_vm #(
     // empty bank on the very next frame_tick — the glass went black
     // while the drawn bank sat behind it.
     logic        fb_dirty;
+    logic        fbs_armed; // S_FB_SYNC dump-read settle beat
     // NEW: bring-up probes — drawImage sprite-marker hits vs misses
     logic [15:0] dbg_di_hit /*verilator public_flat_rd*/, dbg_di_miss /*verilator public_flat_rd*/;
     logic [1:0]  path_kind; // 0 none 1 arc 2 moveto 3 lineto
@@ -1112,6 +1116,9 @@ module jmr_js_vm #(
         S_V64_SLICE,
         // #41 Array.sort bubble walk.
         S_V64_SORT
+        // Post-present bank sync (MUST stay last: sim_main and
+        // debug RPCs hardcode earlier state numbers).
+        , S_FB_SYNC
     } st_t;
     st_t state /*verilator public_flat_rd*/, ret_state;
     logic vprom_done, vprom_copy, hp_prom_wr;
@@ -1224,7 +1231,7 @@ module jmr_js_vm #(
     // can follow the intern id (stale 0 = wait, never peek).
     logic        jn_name_arm, vjs_name_arm, tfn_rd_arm;
     // flatten: long_rdata then slot raddr (JOIN/IDXOF/FOREACH/JSON/GC_ARR).
-    logic        jn_slot_arm;
+    logic        jn_slot_arm /*verilator public_flat_rd*/;
     // flatten: HEAP_WAIT / HEAP_AWR long_rdata then slot raddr/waddr.
     logic        hp_slot_arm;
     // Same-oid/eid slot++ stays in HEAP_CMP one extra clock (Port A rdata
@@ -2974,7 +2981,8 @@ module jmr_js_vm #(
     logic hs_m_hp_vbase, hs_m_hp_spr_w, hs_m_hp_spr_h, hs_m_hp_nat, hs_m_hp_tag;
     logic hs_m_hp_qk, hs_m_hp_qv, hs_m_hp_qt;
     logic hs_m_valloc_kind, hs_m_valloc_i, hs_m_valloc_arr_n, hs_m_valloc_retried, hs_m_vnat_dom, hs_m_vnat_base, hs_m_valloc_now_fn, hs_m_valloc_bind, hs_m_valloc_bind_src, hs_m_valloc_bind_this, hs_m_valloc_fn_entry, hs_m_valloc_fn_a1, hs_m_valloc_proto, hs_m_valloc_proto_fn, hs_m_valloc_metrics, hs_m_valloc_regex, hs_m_valloc_regex_pack, hs_m_vcall_value, hs_m_vcall_argc, hs_m_vcall_entry, hs_m_vcall_set_this, hs_m_vcall_this, hs_m_vcall_ctor_val, hs_m_vcsp, hs_m_vthis, hs_m_venv;
-    logic hs_m_vraf_n, hs_m_vlistener_n, hs_m_vgc_halt_after, hs_m_vgc_wait_after, hs_m_vgc_clear_i, hs_m_vgc_qr, hs_m_vgc_qw;
+    logic hs_m_vraf_n /*verilator public_flat_rd*/;
+    logic hs_m_vlistener_n, hs_m_vgc_halt_after, hs_m_vgc_wait_after, hs_m_vgc_clear_i, hs_m_vgc_qr, hs_m_vgc_qw;
     logic hs_m_vdraw_i, hs_m_vdraw_x, hs_m_vdraw_y, hs_m_vdraw_w, hs_m_vdraw_h, hs_m_vdraw_color;
     logic hs_m_vfe_i, hs_m_vfe_pop;
 
@@ -3898,6 +3906,7 @@ module jmr_js_vm #(
     logic [7:0] e64_vfe_len_q;
     logic [63:0] e64_vfe_map_q;
     logic e64_vfe_reduce_q;
+    logic e64_vfe_findidx_q;
     logic [1:0] e64_vfe_mode_q;
     logic [15:0] e64_vfe_ret_q;
     logic [3:0] e64_vfe_sp_q;
@@ -4265,6 +4274,8 @@ module jmr_js_vm #(
         .id_sort(id_sort),
         .vfe_sort_q(e64_vfe_sort_q),
         .id_find(id_find),
+        .id_findindex(id_findindex),
+        .id_font(id_font),
         .id_foreach(id_foreach),
         .id_getctx(id_getctx),
         .id_getimgdata(id_getimgdata),
@@ -4721,6 +4732,7 @@ module jmr_js_vm #(
         .vfe_len_q(e64_vfe_len_q),
         .vfe_map_q(e64_vfe_map_q),
         .vfe_reduce_q(e64_vfe_reduce_q),
+        .vfe_findidx_q(e64_vfe_findidx_q),
         .id_reduce(id_reduce),
         .vfe_mode_q(e64_vfe_mode_q),
         .vfe_ret_q(e64_vfe_ret_q),
@@ -4883,7 +4895,11 @@ module jmr_js_vm #(
             (state == S_TXT_LD) || (state == S_TXT_DRAW) ||
             (state == S_CONCAT) || (state == S_JOIN) ||
             (state == S_JOIN_FIND) || (state == S_STR_WR));
-        hs32 = !jsb_flags[3] && ((state == S_EXEC) || (state == S_NAT) ||
+        // exec32 retirement Phase 2: tagged images fault at S_GOT_HDR2,
+        // so this arm can never be taken. Forced low ahead of the Phase 3
+        // unhook so a silent dependency surfaces while the module is still
+        // wired (docs/REMOVING_EXEC32.md).
+        hs32 = 1'b0 && ((state == S_EXEC) || (state == S_NAT) ||
             (state == S_FETCH_WAIT) || (state == S_HEAP_WAIT) || (state == S_HEAP_CMP) ||
             (state == S_HEAP_WR) || (state == S_HEAP_AWR) || (state == S_HEAP_FILL));
         if ((state == S_V64_EXEC) && e64_leave_hold)
@@ -4897,7 +4913,7 @@ module jmr_js_vm #(
     // overlay of e32/e64_state_q). That combo fanout into ~40 memories was the
     // post-8-6014 70 GB wall. FSM case (casestate) stays combo for same-cycle
     // leave_hold. Extra rdata beat on overlay is OK (wait already).
-    st_t casestate_q;
+    st_t casestate_q /*verilator public_flat_rd*/;
     always_ff @(posedge clk) begin
         if (!rst_n) casestate_q <= S_IDLE;
         else casestate_q <= casestate;
@@ -5184,7 +5200,14 @@ module jmr_js_vm #(
             vobj_rdata[73:64] :
         ((casestate_q == S_CONCAT) || (state == S_CONCAT)) ?
             (cc_second ? cc_bv[9:0] : cc_av[9:0]) :
-        (((casestate_q == S_JOIN) || (state == S_JOIN)) && jn_name_arm) ?
+        // jn_slot_arm, not jn_name_arm: the walk consumes hash/len one
+        // beat after jn_name_arm is SET, but the nonblocking flag reads 0
+        // during its own set beat — the raddr fell through to the exec
+        // fallback row and the registered rdata lagged a row behind. Every
+        // string-digit element then failed the len==1/digit test and
+        // coerced to 0 ("1100".join gave "0000"). jn_slot_arm is already
+        // high on the name-arm beat and varr_rdata holds this element.
+        (((casestate_q == S_JOIN) || (state == S_JOIN)) && jn_slot_arm) ?
             varr_rdata[9:0] :
         hs64 ? e64_name_hash_raddr : e32_intern_tos;
     assign varr_len_raddr =
@@ -5775,7 +5798,8 @@ module jmr_js_vm #(
                     (cc_second ? cc_bv[9:0] : cc_av[9:0]) :
                 ((casestate_q == S_TXT_LD) || (state == S_TXT_LD)) ?
                     txt_val[9:0] :
-                (((casestate_q == S_JOIN) || (state == S_JOIN)) && jn_name_arm) ?
+                // same jn_slot_arm timing as name_hash_raddr above
+                (((casestate_q == S_JOIN) || (state == S_JOIN)) && jn_slot_arm) ?
                     varr_rdata[9:0] :
                 e32_intern_tos];
             e32_name_len_nos <= name_len_tbl[e32_intern_nos];
@@ -5945,6 +5969,7 @@ module jmr_js_vm #(
             looping <= 1'b0;
             fb_we <= 1'b0; fb_swap <= 1'b0;
             did_swap <= 1'b0; present_pend <= 1'b0; fb_dirty <= 1'b0;
+            fbs_armed <= 1'b0;
             env_len_arm <= 1'b0;
             fb_waddr <= '0; fb_wdata <= '0;
             fb_dump_addr <= '0; fb_dump_sel <= 1'b0;
@@ -6324,7 +6349,12 @@ module jmr_js_vm #(
                 fb_dirty <= 1'b0;
             end
             // Any pixel written to the back bank makes this frame presentable.
-            if (fb_we) fb_dirty <= 1'b1;
+            // casestate_q term: the last copy write is registered on the
+            // final S_FB_SYNC beat and SEEN one beat later (state already
+            // S_V64_GC_CLEAR) — without it that drain write re-marked the
+            // frame dirty and every frame re-presented forever.
+            if (fb_we && state != S_FB_SYNC && casestate_q != S_FB_SYNC)
+                fb_dirty <= 1'b1;
             // S_ARR_PROMOTE completion sets vprom_done so the requester
             // stops asking. The JSON paths consume-and-clear it themselves;
             // an exec-requested promote had no such clear, and exec only ever
@@ -6652,6 +6682,16 @@ module jmr_js_vm #(
                     ret_state <= S_GOT_HDR2;
                 end
                 S_GOT_HDR2: begin
+                    // exec32 retirement Phase 2 (docs/REMOVING_EXEC32.md):
+                    // an image without FLAG_VALUE64 (flags bit3 =
+                    // code_rdata[19]) has no decoder any more. Fault loud;
+                    // never reach S_EXEC / hs32.
+                    if (!code_rdata[19]) begin
+                        machine_fault <= 1'b1;
+                        fault_code <= 8'd9; // 9 = tagged image refused
+                        running <= 1'b0;
+                        hs_st(S_DONE);
+                    end else begin
                     // NEW: flags bit1 (ASET) → u32 aset_byte_off occupies word 3,
                     // consts start at word 4; sprites blit from the asset SRAM.
                     aset_mode <= code_rdata[17];
@@ -6867,6 +6907,7 @@ module jmr_js_vm #(
                         hs_code(code_rdata[17] ? 15'd4 : 15'd3);
                         ret_state <= S_LD_CONST;
                         hs_st(S_HEAP_CLR);
+                    end
                     end
                 end
                 S_HEAP_CLR: begin
@@ -7772,6 +7813,41 @@ module jmr_js_vm #(
                             hs_st(S_FETCH_WAIT);
                         end
                     end else clr_idx <= clr_idx + 19'd1;
+                end
+                S_FB_SYNC: begin
+                    // Post-present bank sync: new-back := new-front,
+                    // 1 px/cycle like S_CLEAR / S_IMGD_GET. fb_swap pulsed
+                    // on the entry beat, so front is the just-presented
+                    // frame and fb_we still targets the (stale) back.
+                    // dump data is registered one beat behind dump_addr;
+                    // the armed beat covers slot 0 (S_IMGD discipline).
+                    fb_dump_sel <= 1'b1;
+                    if (!fbs_armed)
+                        fbs_armed <= 1'b1;
+                    else begin
+                        // measured: fb_dump_front at this beat is
+                        // mem[clr_idx - 1] (addr FF + BRAM output reg =
+                        // 2-beat lag; the probe showed a +1px shift when
+                        // this wrote at clr_idx). Trail the write by one.
+                        if (clr_idx != 19'd0) begin
+                            fb_we <= 1'b1;
+                            fb_waddr <= clr_idx - 19'd1;
+                            fb_wdata <= fb_dump_front;
+                        end
+                        fb_dump_addr <= clr_idx + 19'd1;
+                        if (clr_idx == 19'(FB_PIXELS)) begin
+                            fbs_armed <= 1'b0;
+                            fb_dump_sel <= 1'b0;
+                            clr_idx <= '0;
+                            hs_vgc_clear_i(14'd0);
+                            hs_vgc_qr(14'd0);
+                            hs_vgc_qw(14'd0);
+                            hs_vgc_halt_after(1'b1);
+                            hs_vgc_wait_after(1'b1);
+                            hs_st(S_V64_GC_CLEAR);
+                        end else
+                            clr_idx <= clr_idx + 19'd1;
+                    end
                 end
                 S_RECT: begin
                     if (rw == 10'd0 || rh == 10'd0) begin
@@ -8888,8 +8964,25 @@ module jmr_js_vm #(
                     if (state != S_WAIT_FRAME)
                         hs_st(S_WAIT_FRAME);
                     else if (jsb_flags[3]) begin
-                    if (frame_tick)
+                    if (frame_tick) begin
                         v64_frame_armed <= 1'b1;
+                        // KEYBITS edge capture (the tagged arm computed
+                        // these; the Value64 arm never did, so a joystick
+                        // press was invisible to v64 listeners).
+                        joy_down_edge <= joy_in & ~prev_joy;
+                        joy_up_edge <= prev_joy & ~joy_in;
+                        prev_joy <= joy_in;
+                        // Per-frame callback marker. dbg_cb_ip was sticky
+                        // (set at the first rAF call, cleared only at RUN),
+                        // so the host FRAME rpc's "callback done" break
+                        // fired the moment an EVENT dispatch returned to
+                        // WAIT_FRAME — every event frame ended before its
+                        // own rAF ran (events and rAF never shared a
+                        // frame; player_x/title_gamestate snippets, MRDO
+                        // startHeld). Browser order is events THEN rAF in
+                        // the same frame.
+                        dbg_cb_ip <= 16'd0;
+                    end
                     if (frame_tick || v64_frame_armed) begin
                         // frame_fire is set by the 32-bit GC and cleared
                         // only in the 32-bit WAIT_FRAME arm — a Value64 title
@@ -8898,8 +8991,58 @@ module jmr_js_vm #(
                         // forever: ~1000 presents inside one RPC and a
                         // blocked GUI. Consume it on this path too.
                         frame_fire <= 1'b0;
+                        // KEYBITS edges → synthetic KEYEVT on the Value64
+                        // path. The tagged arm dispatched joystick edges to
+                        // S_KEYEV; the Value64 arm only drained kev_q, so a
+                        // physical-joystick (KEYBITS) keydown/keyup never
+                        // reached v64 listeners (found by the exec32 cut:
+                        // DOWNUP snippet, keyup keyCode 40). Reuse the
+                        // proven kev_q dispatch below — one edge bit per
+                        // frame, guarded like the tagged arm so GUI
+                        // KEYEVT+KEYBITS does not double-fire. kev_q's only
+                        // other writer is the KEYEVT strobe beat, which runs
+                        // in its own RPC window, never during FRAME.
+                        if (kev_rp == kev_wp && vlistener_n != 5'd0 &&
+                            joy_down_edge != 0) begin
+                            v64_frame_armed <= 1'b1;
+                            jn_slot_arm <= 1'b0; // #69: restart any pending rAF snapshot
+                            kev_q[kev_wp] <= {1'b1,
+                                joy_down_edge[0] ? 8'd38 :
+                                joy_down_edge[1] ? 8'd40 :
+                                joy_down_edge[2] ? 8'd37 :
+                                joy_down_edge[3] ? 8'd39 :
+                                joy_down_edge[4] ? 8'd32 : 8'd13};
+                            kev_wp <= kev_wp + 3'd1;
+                            joy_down_edge <= 6'd0;
+                        end else if (kev_rp == kev_wp && vlistener_n != 5'd0 &&
+                            joy_up_edge != 0) begin
+                            v64_frame_armed <= 1'b1;
+                            jn_slot_arm <= 1'b0; // #69
+                            kev_q[kev_wp] <= {1'b0,
+                                joy_up_edge[0] ? 8'd38 :
+                                joy_up_edge[1] ? 8'd40 :
+                                joy_up_edge[2] ? 8'd37 :
+                                joy_up_edge[3] ? 8'd39 :
+                                joy_up_edge[4] ? 8'd32 : 8'd13};
+                            kev_wp <= kev_wp + 3'd1;
+                            joy_up_edge <= 6'd0;
+                        end else
                         if (kev_rp != kev_wp) begin
                             v64_frame_armed <= 1'b1;
+                            // #69: an event dispatch may interleave with a
+                            // snapshot the previous FRAME rpc left half-done
+                            // (jn_slot_arm=1, copy pending). The listener
+                            // scan (S_V64_FRAME_KEY) reuses bind_k, so the
+                            // resumed copy loop skipped and vraf_snap kept
+                            // STALE fns — the walk then called the keyup
+                            // listener as "the rAF callback" and the real
+                            // tick entry was lost (queue already cleared):
+                            // the game loop died after two event frames in a
+                            // row. Restart the snapshot from phase 1 after
+                            // the events drain.
+                            jn_slot_arm <= 1'b0;
+                            bind_rd_arm <= 1'b0;
+                            vfe_rd_arm <= 1'b0;
                             dbg_key_alloc <= dbg_key_alloc + 16'd1;
                             hs_vnat_dom(3'd5);
                             hs_valloc_kind(2'd0);
@@ -9759,6 +9902,20 @@ module jmr_js_vm #(
                     // NEW: ctx.font size. Walk the string for the first digit run
                     // that is followed by 'p' — the same first-match the FM regex
                     // (\d+)\s*px takes, so '12px/20px' and 'bold 24px X' agree.
+                    // Value64 entry (the only live one): exec parsed nothing —
+                    // it parks the font string's intern id in its hp_key copy
+                    // and settles stack/ip before requesting this state.
+                    // BIND-style first-entry seed from exec regs (hp_key is
+                    // NOT hs64-muxed here).
+                    if (state != S_FONTPX && jsb_flags[3] && e64_leave_hold) begin
+                        hs_st(S_FONTPX);
+                        name_rdaddr <= name_off[e64_hp_key_q[9:0]];
+                        fp_left <= name_blen[e64_hp_key_q[9:0]][7:0];
+                        txt_ph <= 4'd0;
+                        fpx_acc <= 8'd0;
+                        hs_ip(e64_ip_q);
+                        hs_vsp(e64_vsp_q);
+                    end else
                     if (txt_ph == 4'd0) begin
                         name_rdaddr <= name_rdaddr + 16'd1; // prime byte 1
                         txt_ph <= 4'd1;
@@ -11806,6 +11963,17 @@ module jmr_js_vm #(
                                 hs_vgc_wait_after(1'b0);
                                 hs_st(S_WAIT_FRAME);
                             end else begin
+                                // Script-end halt: the last ops (explicit
+                                // swapBuffers + POP tails) ran exec-only,
+                                // so the parent ip/vsp mirrors are stale
+                                // here and CHECKPOINT? hashed a leftover
+                                // stack word (value64 parity tests).
+                                // Absorb the exec truth before S_DONE.
+                                hs_ip(e64_ip_q);
+                                hs_vsp(e64_vsp_q);
+                                hs_vcsp(e64_vcsp_q);
+                                hs_vthis(e64_vthis_q);
+                                hs_venv(e64_venv_q);
                                 running <= 1'b0;
                                 hs_st(S_DONE);
                             end
@@ -12008,7 +12176,9 @@ module jmr_js_vm #(
                             vfe_rd_arm <= 1'b1;
                         else begin
                         vfe_rd_arm <= 1'b0;
-                        vst_wr(e64_vfe_base_q, (e64_vfe_mode_q == 2'd2 || e64_vfe_mode_q == 2'd3 ||
+                        vst_wr(e64_vfe_base_q,
+                            e64_vfe_findidx_q ? v64_int32_number(32'hFFFFFFFF)
+                            : (e64_vfe_mode_q == 2'd2 || e64_vfe_mode_q == 2'd3 ||
                              e64_vfe_reduce_q) // #39: reduce returns the acc
                             ? e64_vfe_map_q : V64_UNDEFINED);
                         hs_vsp(e64_vfe_base_q + 12'd1);
@@ -14205,7 +14375,10 @@ module jmr_js_vm #(
                         vfe_rd_arm <= 1'b0;
                         end
                     end else begin
-                    vst_wr(vfe_base, hp_rval);
+                    // findIndex: the AGETI slot IS the matched index.
+                    vst_wr(vfe_base, e64_vfe_findidx_q
+                        ? v64_int32_number({25'd0, hp_aslot})
+                        : hp_rval);
                     hs_vsp(vfe_base + 12'd1);
                     hs_ip(vfe_ret);
                     hs_code(15'(ops_base + vfe_ret));
@@ -14708,13 +14881,26 @@ module jmr_js_vm #(
                         if (fb_dirty) begin
                             fb_swap <= 1'b1;
                             fb_dirty <= 1'b0;
+                            // Copy the presented frame into the new back
+                            // bank before the next frame draws. A partial
+                            // redraw (DONKEY charsel repaints only the
+                            // 36x21 selector arrow) otherwise lands on the
+                            // stale two-presents-ago bank and resurrects
+                            // it ("old KONG splash returns on LUIGI").
+                            // Browser canvas semantics: content persists.
+                            clr_idx <= '0;
+                            fbs_armed <= 1'b0;
+                            fb_dump_sel <= 1'b1;
+                            fb_dump_addr <= '0;
+                            hs_st(S_FB_SYNC);
+                        end else begin
+                            hs_vgc_clear_i(14'd0);
+                            hs_vgc_qr(14'd0);
+                            hs_vgc_qw(14'd0);
+                            hs_vgc_halt_after(1'b1);
+                            hs_vgc_wait_after(1'b1);
+                            hs_st(S_V64_GC_CLEAR);
                         end
-                        hs_vgc_clear_i(14'd0);
-                        hs_vgc_qr(14'd0);
-                        hs_vgc_qw(14'd0);
-                        hs_vgc_halt_after(1'b1);
-                        hs_vgc_wait_after(1'b1);
-                        hs_st(S_V64_GC_CLEAR);
                     end
                 end
                 S_V64_DIV: begin

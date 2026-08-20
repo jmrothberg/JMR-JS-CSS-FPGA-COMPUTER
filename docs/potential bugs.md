@@ -1,5 +1,11 @@
 # Potential bugs — FPGA-SIM play RTL (code review)
 
+**2026-08-20 (user):** play correctness is **done**. All five titles run
+on FPGA-SIM (INVADERS, PACMAN, DONKEY, ASTEROID, MRDO), **slowly**.
+Do not hunt new freezes as the next job. Next RTL is T200 synth fit
+([FPGA_FIT.md](FPGA_FIT.md): unhook exec32, then LUTRAM Port A). Speed
+(FIND / clocks per frame) is separate and must not mix with that cut.
+
 Inspection of the play path: `rtl/engines/jmr_js_vm.sv` (parent FSM),
 `jmr_js_vm_exec64.sv`, `jmr_js_vm_exec32.sv`, `sim/sim_main.cpp`, vs
 `hardware_model/js_vm.py`, plus `storage/*.HTML` and
@@ -72,6 +78,168 @@ frame. Two independent causes, both directly observed:
 **Binary provenance for that run:** built 19:36:47, newer than every RTL source
 (≤19:36:29), so it **already contained** **6** and **47**. #6 is therefore
 ruled out as PACMAN's blocker.
+
+## #69 — FIXED: rAF queue died when an event dispatch interleaved a half-done snapshot
+
+**Repro (Value64, minimal):** register a keyup listener + a rAF `tick`
+that re-arms itself. `KEYEVT 40 1; FRAME; KEYEVT 40 0; FRAME; FRAME`
+(the up strobed in a DIFFERENT inter-frame window than the down, so it
+is not tap-deferred). Result: the listener runs (released=1 ✓) but
+`vraf_n` ends 0 with `rafcall` stuck at 1 — the game loop silently
+stops. Works fine when an rAF-only frame separates the two events
+(`down; F; F; up; F` is green), which is why titles play: the sim's
+tap-deferral inserts that spacing for same-window taps.
+
+**Where it lives:** the parent WAIT_FRAME v64 boundary — event dispatch
+(kev) then rAF snapshot (`vraf_snap` copy + `hs_vraf_n(0)`) then
+S_V64_FRAME_RAF callback call. In the failing interleave the callback's
+`requestAnimationFrame` re-arm (`vraf_n_n = vraf_n + 1`, exec64 ~4066)
+is lost — final muxed `vraf_n` reads 0. Prime suspect: the
+`hs_vraf_n(0)` one-shot mask/absorb ordering when the SAME boundary
+already did an event dispatch (S_V64_ALLOC handoff) before the
+snapshot; the parent mask-clear beats (6083/6273) and the exec frozen-
+absorb (`if (hs_m_vraf_n) vraf_n <= p_vraf_n`, exec64 ~2403) interleave
+differently there. Not diagnosed to the beat.
+
+**ROOT CAUSE (beat-level trace via new RAFTRACE RPC):** the FRAME rpc
+can return to the host with the boundary's rAF snapshot HALF-DONE
+(`jn_slot_arm=1`, copy loop pending). The next frame dispatches the
+queued key event first, and the listener scan (S_V64_FRAME_KEY)
+**reuses `bind_k`** — clobbering the interrupted snapshot's cursor. On
+resume the copy loop is skipped (`bind_k >= vraf_n`) and `vraf_snap[0]`
+still holds a STALE fn: the walk then "called the rAF callback" but ran
+the keyup LISTENER (trace showed the callback executing the listener's
+ips), while the real tick entry had already been cleared by
+`hs_vraf_n(0)` — game loop dead. **Fix:** every kev-dispatch branch in
+the v64 WAIT_FRAME arm now resets `jn_slot_arm`/`bind_rd_arm`/
+`vfe_rd_arm`, restarting the snapshot cleanly from phase 1 after the
+events drain. Verified: KEYBITS and KEYEVT down/up in consecutive
+frames keep raf=1 and rafcall climbing.
+
+**Blast radius:** pre-existing (reproduces on committed HEAD f242854
+and with plain KEYEVT — not from the KEYBITS bridge or Phase 1/2).
+Likely explains several event-driven snippet failures
+(player_x_moves_on_key, title_gamestate_enter_advances, DONKEY/PACMAN/
+MRDO fpga_sim tests) and can bite real play when two key events land in
+consecutive frames with no rAF frame between. Fix in its own session
+with a beat-level trace of hs_m_vraf_n / e64_vraf_n_q / vraf_n_ff
+through the failing boundary.
+
+**Fixed alongside (same triage):** (a) script-end halt now syncs
+`hs_ip(e64_ip_q)`/`hs_vsp(e64_vsp_q)` before S_DONE — the value64
+checkpoint parity tests hashed a stale parent vsp=1 + leftover stack
+word (pre-existing on HEAD); (b) KEYBITS edges now reach Value64:
+the v64 WAIT_FRAME arm never computed joy edges nor dispatched them
+(tagged-arm only), so a physical-joystick press was invisible to v64
+listeners — edges are now captured in the v64 frame beat and converted
+to synthetic kev_q entries (one edge/frame, `vlistener_n != 0` gate,
+same no-double-fire rule as the tagged arm), reusing the proven KEYEVT
+dispatch + e.key interning.
+
+## Value64 gaps closed during the exec32 cut (2026-08-20, cont.)
+
+All were tagged-only features/behaviors the encoding flip exposed; each
+verified by probe before the suite rerun:
+
+- **Events-then-rAF now share a frame** (browser order): `dbg_cb_ip` was
+  sticky — set at the first rAF ever, cleared only at RUN — so the host
+  FRAME rpc's "callback done" break fired as soon as an event dispatch
+  returned to WAIT_FRAME; every event frame ended before its own rAF.
+  Now cleared at the v64 frame_tick beat. (This plus #69 is what the
+  MRDO/player_x/title_gamestate family needed.)
+- **findIndex implemented in exec64** (existed only in exec32):
+  `vfe_findidx` flag on the find-mode walk, vfe_reduce-style
+  save/restore; hit pushes the AGETI slot (the index), miss pushes -1.
+- **join of string-digit elements** ("1100" → "0000"): the
+  name_hash/name_len raddr mux terms for S_JOIN gated on `jn_name_arm`,
+  which reads 0 during its own set beat — the reads landed one row
+  stale and every interned digit failed the len==1 test, coercing to 0.
+  Gate on `jn_slot_arm` (high during the name-arm beat, varr_rdata
+  settled). NAMEPEEK RPC added to dump the intern table.
+- **ctx.font size parse revived**: S_FONTPX had NO entry (died with the
+  tagged path) — every v64 fillText drew at the 8px default scale.
+  exec64's ctx SET_PROP arm now routes string font values to S_FONTPX
+  (intern id via hp_key, BIND-style first-entry seed); the font
+  property is not heap-stored (write-only in titles).
+- **Natural-size drawImage under setTransform**: the argc<5 dest-size
+  leg took sprite w/h raw while the explicit-dw/dh leg multiplied by
+  ctx_sx/ctx_sy — a 2x transform drew 1x (both ASET and SPR paths,
+  one shared block). Now scaled and clipped identically.
+
+## #70/#71/#72 — OPEN parity/pathology gaps (found by the exec32 cut, pre-existing)
+
+- **#70 queues-hash parity:** value64 rAF/timer queue serialization hash
+  differs RTL vs HM in `raf_timer_order_checkpoint` (frames/vars/heap
+  now match after the halt sync). Content/order of the queue words in
+  CHECKPOINT? vs the HM model. xfail'd with this id.
+- **#71 fault-state parity:** at a call-overflow fault HM keeps sp=1,
+  RTL reports 0 (`recursive_capacity_checkpoint`). Halt-sync covers the
+  clean-GC halt only, not the fault path (many fault sites). xfail'd.
+- **#72 class-in-IIFE ctor storm:** `new P()` on a class returned from
+  an IIFE allocates ~950 objects and GC-storms through S_V64_CTOR_PAD
+  before completing (`calls_checkpoint` 4th param). Pre-existing on
+  HEAD f242854 — a wall-clock flake boundary in tests and a real
+  inefficiency (likely the ctor retry loop re-allocating per pass).
+  xfail'd with this id; fix alongside the GC/alloc work.
+
+**Halt-sync (extended):** the script-end S_DONE beat now absorbs
+`ip/vsp/vcsp/vthis/venv` from exec (was ip/vsp only) — checkpoint
+`frames` parity exact for scalar + calls + closures + dom/foreach.
+The old tagged-twin scalar checkpoint test is deleted (Phase 1 doc:
+the value64 twin is the product-encoding test).
+
+## Session 2026-08-20 (evening) — user-run triage #2 (MRDO / DONKEY LUIGI / LIST)
+
+Three user reports from trace session_20260820_143114; all fixed and
+probe-verified (probe13 8/8, PACMAN/DONKEY/MRDO smokes green):
+
+1. **MRDO stuck at splash** — NOT stuck, and not slow: the game runs its
+   rAF loop fine (~9M clk/frame). Root cause chain: (a) a frame that
+   dispatches a KEYEVT does NOT run the rAF callback (the listener
+   returns to `n_ops`, ending the frame); (b) sim frames take seconds of
+   wall time, so a human Enter tap's down+up land in one batch — held
+   flags (`startHeld`) pulse 1→0 across two event-only frames and
+   `tickGame` never observes the key held. Fix in **sim_main.cpp only**
+   (real hardware runs frames in real time): KEYEVT defers a keyup that
+   arrives in the same inter-frame window as its keydown until TWO
+   FRAME rpcs later (down-dispatch frame, held rAF frame, up-dispatch
+   frame). Verified: a tap now takes MRDO ATTRACT→PLAY and the field
+   paints. False alarm during diagnosis: VVARPEEK var ids must come
+   from `chunk.names` order minus natives (the encoder's table), NOT
+   from code-traversal order — wrong mapping "showed" corrupt globals.
+2. **DONKEY: picking LUIGI brought the old KONG splash back** — the
+   frame-end present swaps banks, and the charsel repaints only a 36×21
+   selector arrow; the swap exposed the stale two-presents-ago bank
+   (the splash). The fb_dirty gate (which fixed the *flashing*) made it
+   sticky instead. Real fix: **S_FB_SYNC** — after every frame-end
+   present, copy the just-presented front bank into the new back bank
+   (1 px/cycle, ~307k clocks per dirty frame), restoring browser canvas
+   persistence semantics. Traps hit on the way, all fixed: (a) the new
+   state MUST be appended at the END of the st_t enum — sim_main
+   hardcodes state numbers (S_WAIT_FRAME=16 in the FRAME rpc's exit
+   predicate; STATEHIST indices) and a mid-enum insert wedged every
+   frame at the cap; (b) the copy's own fb_we must not re-mark
+   fb_dirty — gate checks `state != S_FB_SYNC && casestate_q !=
+   S_FB_SYNC` (the last write drains one beat after leaving the
+   state), else every frame re-presents forever; (c) dump-read data
+   lags `fb_dump_addr` by TWO beats (addr FF + BRAM output reg) — the
+   write trails `clr_idx` by one or the copy shifts +1px per present
+   (probe: green rect crept 100→102). New `fb_dump_front` port wired
+   from u_fb's front-bank dump in jmr_js_core. Verified: charsel
+   persists across LUIGI/Mario picks with no splash return; explicit
+   `swapBuffers()` (.JS probes) intentionally does not sync.
+3. **Monitor stalls on `list`** — LIST streams the CARD copy through
+   the RTL console line buffer; one 100KB+ base64 sprite line = MB of
+   SPI reads = minutes. The card copy of .HTM/.HTML is display-only
+   (compile-on-RUN reads the host storage/ file; the board runs .JSH),
+   so `tools/make_sd_image.py` now squashes card-copy lines over 200
+   chars to `<LINE n: EMBEDDED DATA k CHARS OMITTED>`
+   (`squash_long_html_lines`, applied at image build AND
+   patch_card_file). DONKEY card copy: 1.37MB → 30KB; `list` of DONKEY
+   now pages in ~1s and LOAD dropped to 0.3s. card.img rebuilt.
+
+DONKEY "moves so slowly on game screen": measured ~713k clk/frame —
+same league as PACMAN; that is Verilator wall-time, not a VM bug.
 
 ## Session 2026-08-20 (afternoon) — THE SPEED PASS (1.75× fewer clocks)
 

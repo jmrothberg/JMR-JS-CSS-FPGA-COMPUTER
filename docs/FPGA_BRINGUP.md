@@ -172,8 +172,7 @@ make -C tools/board_flow flash        # SRAM first
 **First T200 `.bin` vs later:** the first `make -C tools/board_flow bit` creates
 the Vivado project, generates DDR3 MIG, and fully synthesizes `jmr_js_vm`
 (often **1–3 hours** on a small design; this full VM’s measured phases are
-in [FPGA_FIT.md](FPGA_FIT.md#wall-clock-benchmark-1617-make-bit--first-full-vm)
-— already **>3 h** in synthesis alone). Later `bit`
+in [OLD_RUNS.md](OLD_RUNS.md) — 16:17 already **>8 h** then OOM). Later `bit`
 **reuses** `build/nexys_video/vivado` (skip MIG generate, incremental DCP).
 Use `make -C tools/board_flow bit-fresh` only if MIG / XDC / source *list*
 changed. Do not `make -C tools/board_flow clean` between RTL tweaks — that
@@ -181,11 +180,9 @@ forces another first-build. Synth **2 threads** (`JMR_VIVADO_SYNTH_THREADS`;
 alias `JMR_VIVADO_THREADS`) — the 16:17 run OOM'd at technology mapping with
 **7** workers (RSS 58→114 GB on 128 GB + swap). Place/route stays **8**
 (`JMR_VIVADO_IMPL_THREADS`). Vivado has no mapping-only thread knob
-(UG901 `general.maxThreads` covers all of `synth_design`). Do not raise
-synth threads unless `JMR_VIVADO_ALLOW_WIDE=1`. First DCP is at synth_1
-100% (`build/nexys_video/post_synth.dcp`); mapping cannot resume mid-step.
-Details:
-[FPGA_FIT.md](FPGA_FIT.md#wall-clock-benchmark-1617-make-bit--first-full-vm).
+(UG901 `general.maxThreads` covers all of `synth_design`). Do not raise synth threads to beat an OOM (2026-08-20 died at **2** workers).
+First DCP is at synth_1 100%; mapping cannot resume. Brief:
+[FPGA_FIT.md](FPGA_FIT.md). Diary: [OLD_RUNS.md](OLD_RUNS.md).
 
 Volatile SRAM-only load (lost on unplug): `make -C tools/board_flow flash`.
 
@@ -296,7 +293,7 @@ RTL path is proven by `tb_ps2_typing`. Then check hardware only:
 
 ### Foolproof HID LED blinker (if JS `.bit` never blinks LD7)
 
-This is **not** BASIC on T200. It is a tiny RX-only design: J15 PIC24 → PS/2 `W17`/`N13` → LEDs. No HDMI, no VM, no tether. Own Vivado project under `build/hid_led_blink/` so it cannot clobber the JS bit build.
+This is **not** FPGA-SIM and **not** BASIC on T200. It is a tiny RX-only design: J15 PIC24 → PS/2 `W17`/`N13` → LEDs. No HDMI, no VM, no tether. Own Vivado project under `build/hid_led_blink/` so it cannot clobber the JS bit build or `sim/sim_build_synth`. Do not add `tools/hid_led_blink/` to `CORE_SRCS`.
 
 One line (after the JS Vivado run is **idle**):
 
@@ -321,7 +318,14 @@ Known Digilent constraints (not a secret silicon workaround): FPGA must be progr
 
 ### Pmod input LED test (PS/2 keyboard + I2C joystick + J15 USB)
 
-Own Vivado project under `build/pmod_input_test/` so it cannot clobber `build/nexys_video`. JA + JB stay as before. J15 USB: **classic keyboard PASS 2026-08-15 (user).** The earlier “no scancodes / LD14 only” keyboard was HID that the PIC24 does not translate to PS/2. Use a wired boot-protocol / “classic” USB keyboard on **J15** (no hub). Gaming/NKRO/wireless often enumerates (LD14) and never clocks W17. JA Pmod + JB stick still work on this same LED bit.
+**Not FPGA-SIM.** No VM, no HDMI, no F9. Own Vivado project under
+`build/pmod_input_test/` so it cannot clobber `build/nexys_video` or
+`sim/sim_build_synth`. Do not add `tools/pmod_input_test/*.sv` to
+`sim/Makefile` `CORE_SRCS`. Same JA/JB **plugs** as the JS board top;
+different top (`top_pmod_input_test`). Wall:
+[RTL_REORG.md](RTL_REORG.md#board-led-input-tests--never-fpga-sim).
+
+JA + JB stay as before. J15 USB: **classic keyboard PASS 2026-08-15 (user).** The earlier “no scancodes / LD14 only” keyboard was HID that the PIC24 does not translate to PS/2. Use a wired boot-protocol / “classic” USB keyboard on **J15** (no hub). Gaming/NKRO/wireless often enumerates (LD14) and never clocks W17. JA Pmod + JB stick still work on this same LED bit.
 
 ```bash
 source scripts/vivado_env.sh && make -C tools/pmod_input_test bit flash

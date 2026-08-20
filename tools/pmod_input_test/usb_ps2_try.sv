@@ -1,3 +1,6 @@
+// NOT FPGA-SIM. NOT the JS top. LED-test only (tools/pmod_input_test).
+// Drives PS/2 clk for 0xF4 retry — same TX class that pulled jmr_ps2_host
+// off top_nexys_video. Never instantiate in jmr_js_core / CORE_SRCS.
 // J15 USB: retry 0xF4 until PIC24 ACKs, then RX-only.
 // One-shot F4 at 200 ms was too early (PIC24 still leaving config mode).
 // LD4 = F4 ACK'd (solid). LD5 = ps2_rx scancode after that.

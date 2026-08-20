@@ -1,3 +1,43 @@
+# Intern FIND — play speed (not the T200 OOM)
+
+**2026-08-20:** five titles **play** on FPGA-SIM; they are **slow**. This
+file is clocks-per-frame, not synth OOM. Next RTL for the bitstream is
+[FPGA_FIT.md](FPGA_FIT.md) (exec32, then LUTRAM Port A). Do not mix FIND
+work with that cut.
+
+# Measured clock sinks — PACMAN play frame (2026-08-20, STATEHIST?)
+
+3.5M clk/frame, 4 GC runs/frame. The whole frame, ranked:
+
+| State | /frame | % | What |
+|---|---:|---:|---|
+| `S_V64_GC_*` (all) | ~850k | **24%** | 4 mark-sweeps per frame. Every one is a **forced alloc-failure GC** (arr heap 1352/1536 live — ~180 slack, PACMAN churns temp arrays through it 4×/frame) plus the scheduled frame-end pass. `S_V64_GC_ARR` alone is 19% (element walk of ~1350 live arrays). |
+| `S_V64_RECT` | ~620k | 17% | fillRect at 1 px/clock (~2 full screens painted per frame). |
+| `S_IMGD_PUT` | ~615k | 17% | putImageData full-maze restore at **2 clk/px**. |
+| `S_JOIN_FIND` | ~560k | 15% | intern FIND. The last-4 cache (Step 1) landed but PACMAN mints fresh dynamic strings per frame (score text, JSON keys) — every miss is still O(names_n). **Step 2 (hash→id) is where this goes away.** |
+| `S_FB_SYNC` | ~307k | 8% | post-present bank copy (canvas persistence — cost by design, 1 px/clk). |
+| `S_V64_EXEC`+fetch | ~300k | 8% | per-op decode. |
+| `S_HEAP_*` | ~190k | 5% | walks (post speed-pass hints). |
+
+INVADERS play is the opposite shape: 10.6M clk/frame, ~66% S_V64_EXEC
+(per-op cost of JS per-pixel sprite loops), heap walks 10%.
+
+Candidate cuts, cheapest-first, each its own pass with its own FPGA-SIM
+run (all reduce clocks → speed **both** FPGA-SIM and the board):
+
+1. **FIND Step 2** (hash→id, this file's own plan): −15% PACMAN. Contained.
+2. **S_IMGD_PUT 2→1 clk/px**: pipeline the linear copy exactly like
+   S_FB_SYNC's addr/data trailing pattern. −8% PACMAN. One state.
+3. **Skip the scheduled frame-end GC when a forced GC already ran this
+   frame** (flag set by the alloc-retry GC entries, cleared at frame
+   end): −4-6%. Scheduling only; forced GCs still run on pressure.
+4. **fillRect 4 px/clock** (mini_fb write port 8→32-bit + byte enables,
+   aligned bursts; S_CLEAR/S_RECT/S_FB_SYNC writers): −12% PACMAN and
+   big for DONKEY/INVADERS full-screen paints. Touches the FB port —
+   medium risk, do LAST.
+5. GC_ARR per-array "no-refs" skip bit: biggest GC lever but easy to
+   corrupt the heap — **not** low-risk; design first.
+
 # START HERE — intern FIND is slow for every title
 
 **2026-08-18 INVADERS splash sprites:** F9 bars-only (`nz=19233`). CALL_METH

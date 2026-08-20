@@ -155,7 +155,7 @@ class ProgramImage:
         v2: bool | None = None,
         sprites=None,
         aset: bool = False,
-        value64: bool = False,
+        value64: bool = True,
     ) -> "ProgramImage":
         return cls(
             encode_chunk(
@@ -639,18 +639,26 @@ def encode_chunk(
     v2: bool | None = None,
     sprites=None,
     aset: bool = False,
-    value64: bool = False,
+    value64: bool = True,
 ) -> bytes:
     """Encode a compiled Chunk to .JSB bytes.
 
-    v1 (flags=0): ints only — simple .JS titles.
-    v2 (flags=1): name/class trailer after ops so RTL ops_base stays 3+n_consts.
+    Every image is Value64 (FLAG_VALUE64, v2 trailer) — the HTML product
+    encoding. The tagged Q16 encoding is retired with exec32
+    (docs/REMOVING_EXEC32.md); requesting it raises so nothing in-tree
+    can mint a blob the silicon no longer decodes.
+
     aset=True (flags bit1): SPRD descriptors in the trailer + ASET section
     (palette + full-res sprite banks) for the external SRAM asset bank —
     the product path for HTML titles (no pixels in code BRAM).
     """
-    if v2 is None:
-        v2 = _needs_v2(chunk)
+    if not value64:
+        raise ValueError(
+            "tagged (non-Value64) ProgramImages are retired with exec32; "
+            "every image must be FLAG_VALUE64 (docs/REMOVING_EXEC32.md)"
+        )
+    # Value64 requires the v2 trailer encoding.
+    v2 = True
     if v2 or aset:
         return _encode_v2(
             chunk,

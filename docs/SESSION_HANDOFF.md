@@ -1,6 +1,39 @@
 # Session handoff
 
-## CURRENT STATE — 2026-08-20 afternoon: THE SPEED PASS (read this first)
+## CURRENT STATE — 2026-08-20 evening (read this first)
+
+**Glass:** all **five** titles play on FPGA-SIM (INVADERS, PACMAN, DONKEY,
+ASTEROID, MRDO). Correctness bugs for play are **done**. They run
+**slowly** (many VM clocks per frame). Speed is FIND / intern / 1 px per
+fillRect — not a reason to reopen play bugs. Next agent job is **T200
+synth fit**, not another title hunt:
+[FPGA_FIT.md](FPGA_FIT.md).
+
+**Synth (user-confirmed OOM):** 2026-08-20 `make bit` died at technology
+mapping with **2** synth threads. `tcmalloc: large alloc 4896620544`
+(~4.9 GB), then OOM. Not the 70 GB FSM-poke hang. Not “needs 7 workers
+back.” 16:17 was 7 workers + fat netlist; this run proved **2 threads
+are not enough** while exec32 and LUTRAM heaps remain. No synth DCP —
+next bit redoes synth **after RTL cleanup**. Do not raise threads. Do
+not `bit-fresh`. Order: unhook exec32, then Port A LUTRAM monsters, then
+user `make bit`:
+[FPGA_FIT.md](FPGA_FIT.md#cleanup-before-the-next-make-bit-2026-08-20-oom).
+
+After the speed pass (below), a second user-run triage fixed three more:
+**MRDO splash** (sim-only KEYEVT tap batching — keyups now deferred two
+FRAMEs in sim_main so held-flags see the key; NOT an RTL/game bug),
+**DONKEY LUIGI ghost-splash** (new S_FB_SYNC state: frame-end present now
+copies front→back, ~307k clk/dirty frame — canvas persistence semantics;
+S_FB_SYNC MUST stay LAST in the enum, sim_main hardcodes state numbers),
+and **LIST stalling the monitor** (card copies of .HTM/.HTML squash
+lines >200 chars to `<LINE n: ... OMITTED>` in make_sd_image; card copy
+is display-only — compile-on-RUN reads host storage/). Full detail in
+[potential bugs.md](potential%20bugs.md) "user-run triage #2".
+MRDO (5th title) verified: tap Enter → PLAY, field paints, ~9M clk/frame.
+
+---
+
+## PREVIOUS STATE — 2026-08-20 afternoon: THE SPEED PASS
 
 All four titles still play; the presentation bugs from the user's slow-run
 report are fixed and user/harness-verified (DONKEY splash-flash → fb_dirty
@@ -165,8 +198,8 @@ hooks only fire at step end.
 **left `e32_p_clr`**, finished RTL Elaboration + Optimization Phase 1
 (~11 min, peak ~28.5 GB), log still printing. That is further than every
 prior hang (those froze on `e32_p_clr` and never printed again). Fit:
-[FPGA_FIT.md](FPGA_FIT.md) (LUT table **and** wall-clock
-benchmark — update the phase table when a step finishes). Flatten-hunt vs Port A hang:
+[FPGA_FIT.md](FPGA_FIT.md) (budgets + cleanup). Run diary:
+[OLD_RUNS.md](OLD_RUNS.md). Flatten-hunt vs Port A hang:
 [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md). Early LUT/BRAM: `utilization_synth.rpt` when
 `synth_1` is 100%. Do **not** `bit-fresh`.
 
@@ -183,11 +216,14 @@ them). If you touch those, Port A like the others — do not add more
 every 10 s). Watch **RSS** and whether the log still prints. Host
 **128 GB**. Kill only if the log is frozen **and** RSS is climbing toward
 ~80 GB. A ~28 GB hold with new phase lines is progress, not the 70 GB
-flatten. **`Synth 8-7052` on `u_fb/mem0_reg_*` (Block RAM, no extra
-output register)** = framebuffer inferred as BRAM (good) + a later
-timing hint. Not a hang. Wall of copies = one per FB tile. Quiet after
-is normal; VM mapping is still ahead. Words:
-[FPGA_FIT.md](FPGA_FIT.md#live-synth-log-what-you-are-seeing).
+flatten. **`Synth 8-7052` on `u_fb`** = FB is BRAM (ignore). `tcmalloc`
+~5 GB = mapping OOM. Diary: [OLD_RUNS.md](OLD_RUNS.md#live-log-noise-synth-8-7052).
+
+**2026-08-20 this run (user-confirmed OOM):** `u_fb` **8-7052** (ignore),
+then `tcmalloc: large alloc 4896620544` (~4.9 GB) and OOM. Same class
+as 16:17 mapping, **with the 2-thread cap already on**. No synth DCP.
+Cleanup before another `make bit`:
+[FPGA_FIT.md](FPGA_FIT.md#cleanup-before-the-next-make-bit-2026-08-20-oom).
 
 Do **not** extract JOIN/JSON/GC. Leave 16-deep FFs (`vst_win`,
 `js_val`/`vjs_val`, `cls_*` 16×16, `spr_off`/`spr_ww`/`spr_hh`,

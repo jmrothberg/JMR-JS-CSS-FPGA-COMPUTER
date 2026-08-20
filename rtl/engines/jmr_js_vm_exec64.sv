@@ -432,6 +432,7 @@ module jmr_js_vm_exec64 (
     input  logic [15:0] id_fill,
     input  logic [15:0] id_fillrect,
     input  logic [15:0] id_fillstyle,
+    input  logic [15:0] id_font,
     input  logic [15:0] id_filltext,
     input  logic [15:0] id_filter,
     input  logic [15:0] id_slice, // #40 Array.slice
@@ -439,7 +440,9 @@ module jmr_js_vm_exec64 (
     output logic vfe_sort_q,
     input  logic [15:0] id_reduce, // potential-bugs #39: Array.reduce
     output logic vfe_reduce_q,
+    output logic vfe_findidx_q,
     input  logic [15:0] id_find,
+    input  logic [15:0] id_findindex,
     input  logic [15:0] id_foreach,
     input  logic [15:0] id_getctx,
     input  logic [15:0] id_getimgdata,
@@ -1612,6 +1615,12 @@ module jmr_js_vm_exec64 (
     assign vfe_reduce_q = vfe_reduce;
     logic vfe_reduce_s [0:7];
     logic vfe_reduce_s_wdata;
+    // findIndex: find-mode walk whose result is the INDEX (or -1), not the
+    // element. Same save/restore discipline as vfe_reduce.
+    logic vfe_findidx, vfe_findidx_n;
+    assign vfe_findidx_q = vfe_findidx;
+    logic vfe_findidx_s [0:7];
+    logic vfe_findidx_s_wdata;
     // #41 Array.sort: comparator walk; cmp result rides vfe_map.
     logic vfe_sort, vfe_sort_n;
     assign vfe_sort_q = vfe_sort;
@@ -1667,7 +1676,7 @@ module jmr_js_vm_exec64 (
     assign vprom_done_q = vprom_done;
     logic [6:0] vprom_ret;
     assign vprom_ret_q = vprom_ret;
-    logic [3:0] vraf_n;
+    logic [3:0] vraf_n /*verilator public_flat_rd*/;
     assign vraf_n_q = vraf_n;
     logic [31:0] vrng;
     assign vrng_q = vrng;
@@ -2033,6 +2042,7 @@ module jmr_js_vm_exec64 (
                     vfe_map_s[vfe_s_waddr] <= vfe_map_s_wdata;
                     vfe_mode_s[vfe_s_waddr] <= vfe_mode_s_wdata;
                     vfe_reduce_s[vfe_s_waddr] <= vfe_reduce_s_wdata;
+                    vfe_findidx_s[vfe_s_waddr] <= vfe_findidx_s_wdata;
                     vfe_sort_s[vfe_s_waddr] <= vfe_sort_s_wdata;
                     vfe_ret_s[vfe_s_waddr] <= vfe_ret_s_wdata;
                 end
@@ -2043,6 +2053,7 @@ module jmr_js_vm_exec64 (
                 vfe_map <= vfe_map_n;
                 vfe_mode <= vfe_mode_n;
                 vfe_reduce <= vfe_reduce_n;
+                vfe_findidx <= vfe_findidx_n;
                 vfe_sort <= vfe_sort_n;
                 vfe_ret <= vfe_ret_n;
                 vfe_sp <= vfe_sp_n;
@@ -2342,6 +2353,7 @@ module jmr_js_vm_exec64 (
                     vfe_mode <= 2'd0;
                     vfe_map <= V64_UNDEFINED;
                     vfe_reduce <= 1'b0;
+                    vfe_findidx <= 1'b0;
                     vfe_sort <= 1'b0;
                     vfe_len <= 8'd0;
                     vfe_sp <= 4'd0;
@@ -2371,6 +2383,7 @@ module jmr_js_vm_exec64 (
                     vfe_mode <= vfe_mode_s[vfe_sp - 4'd1];
                     vfe_map <= vfe_map_s[vfe_sp - 4'd1];
                     vfe_reduce <= vfe_reduce_s[vfe_sp - 4'd1];
+                    vfe_findidx <= vfe_findidx_s[vfe_sp - 4'd1];
                     vfe_sort <= vfe_sort_s[vfe_sp - 4'd1];
                     vfe_sp <= vfe_sp - 4'd1;
                 end else if (!p_clr && hs_m_vfe_i)
@@ -3083,6 +3096,7 @@ module jmr_js_vm_exec64 (
         vfe_map_n = vfe_map;
         vfe_mode_n = vfe_mode;
         vfe_reduce_n = vfe_reduce;
+        vfe_findidx_n = vfe_findidx;
         vfe_sort_n = vfe_sort;
         vfe_ret_n = vfe_ret;
         vfe_sp_n = vfe_sp;
@@ -3153,6 +3167,7 @@ module jmr_js_vm_exec64 (
         vfe_map_s_wdata = '0;
         vfe_mode_s_wdata = '0;
         vfe_reduce_s_wdata = 1'b0;
+        vfe_findidx_s_wdata = 1'b0;
         vfe_sort_s_wdata = 1'b0;
         vfe_ret_s_wdata = '0;
         json_mem_we = 1'b0;
@@ -5423,6 +5438,34 @@ module jmr_js_vm_exec64 (
                                                     ctx_smooth_n = 1'b1;
                                             end
                                         end
+                                        if (id_font != 16'hFFFF &&
+                                            code_rdata[23:8] == id_font &&
+                                            `VST_AT(vsp - 12'd1)[63:48] ==
+                                                16'h7ff9 &&
+                                            `VST_AT(vsp - 12'd1)[47:44] ==
+                                                4'd4 &&
+                                            `VST_AT(vsp - 12'd1)[15:0] <
+                                                16'd1024) begin
+                                            // ctx.font = "NNpx ..." — parse
+                                            // the px size in the parent
+                                            // S_FONTPX walk (dead since the
+                                            // tagged entry was removed; every
+                                            // v64 fillText drew at the 8px
+                                            // default scale). The intern id
+                                            // rides hp_key; the property
+                                            // itself is not heap-stored
+                                            // (ctx.font is write-only in the
+                                            // titles). Stack/ip settled here.
+                                            hp_key_n =
+                                                `VST_AT(vsp - 12'd1)[15:0];
+                                            vst_wr(vsp - 12'd2,
+                                                   `VST_AT(vsp - 12'd1));
+                                            vsp_n = vsp - 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n =
+                                                15'(ops_base + ip + 16'd1);
+                                            state_n = S_FONTPX;
+                                        end else begin
                                         hp_cmd_n = HP_SETPROP;
                                         hp_v64_n = 1'b1;
                                         hp_env_n = 1'b0;
@@ -5463,6 +5506,7 @@ module jmr_js_vm_exec64 (
                                         // Latch fillStyle for fillRect intern;
                                         // still HEAP SETPROP so GET/stroke see it.
                                         state_n = S_HEAP_WAIT;
+                                        end // else (not ctx.font)
                                     end
                                 end
                             end
@@ -5837,6 +5881,8 @@ module jmr_js_vm_exec64 (
                                            (code_rdata[23:8] == id_foreach ||
                                             (id_find != 16'hFFFF &&
                                              code_rdata[23:8] == id_find) ||
+                                            (id_findindex != 16'hFFFF &&
+                                             code_rdata[23:8] == id_findindex) ||
                                             code_rdata[23:8] == id_map ||
                                             (id_filter != 16'hFFFF &&
                                              code_rdata[23:8] == id_filter) ||
@@ -5854,8 +5900,11 @@ module jmr_js_vm_exec64 (
                                         logic [1:0] md;
                                         found_a = 1'b0;
                                         free_a = 14'd0;
-                                        md = (id_find != 16'hFFFF &&
-                                              code_rdata[23:8] == id_find)
+                                        md = ((id_find != 16'hFFFF &&
+                                               code_rdata[23:8] == id_find) ||
+                                              (id_findindex != 16'hFFFF &&
+                                               code_rdata[23:8] ==
+                                                   id_findindex))
                                             ? 2'd1
                                             : (code_rdata[23:8] == id_map)
                                             ? 2'd2
@@ -5919,6 +5968,11 @@ module jmr_js_vm_exec64 (
                                         vfe_reduce_n =
                                             (id_reduce != 16'hFFFF &&
                                              code_rdata[23:8] == id_reduce);
+                                        vfe_findidx_s_wdata = vfe_findidx;
+                                        vfe_findidx_n =
+                                            (id_findindex != 16'hFFFF &&
+                                             code_rdata[23:8] ==
+                                                 id_findindex);
                                         vfe_sort_n = 1'b0;
                                         vfe_sort_s_wdata = vfe_sort;
                                         vfe_sp_n = vfe_sp + 4'd1;
@@ -6226,12 +6280,24 @@ module jmr_js_vm_exec64 (
                                                          * ctx_sy) >>> 16),
                                                         10'd0, MH);
                                                 end else begin
-                                                    rw_n = (spr_ww[si[3:0]] > 16'(MW))
-                                                        ? 10'(MW)
-                                                        : spr_ww[si[3:0]][9:0];
-                                                    rh_n = (spr_hh[si[3:0]] > 16'(MH))
-                                                        ? 10'(MH)
-                                                        : spr_hh[si[3:0]][9:0];
+                                                    // Natural-size drawImage
+                                                    // must still honor the
+                                                    // setTransform scale —
+                                                    // this branch took the
+                                                    // sprite w/h raw while
+                                                    // the explicit-dw/dh one
+                                                    // multiplied by ctx_sx
+                                                    // (2x transform drew 1x).
+                                                    rw_n = clip_sz(32'(
+                                                        ($signed({16'd0,
+                                                            spr_ww[si[3:0]]})
+                                                         * ctx_sx) >>> 16),
+                                                        10'd0, MW);
+                                                    rh_n = clip_sz(32'(
+                                                        ($signed({16'd0,
+                                                            spr_hh[si[3:0]]})
+                                                         * ctx_sy) >>> 16),
+                                                        10'd0, MH);
                                                 end
                                             end
                                             x_n = 10'd0; y_n = 10'd0;

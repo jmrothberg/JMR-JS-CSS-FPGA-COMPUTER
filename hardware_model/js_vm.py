@@ -504,7 +504,13 @@ class JsHwVm:
             # Phase-2 path: never decode a Chunk and never call VM.run().
             self._load_value64_words()
             return
-        self._load_legacy_decoded_image(image)
+        # Tagged Q16 images are retired with exec32 (docs/REMOVING_EXEC32.md):
+        # refuse loud rather than silently execute an encoding the silicon
+        # no longer decodes.
+        raise ValueError(
+            "ProgramImage without FLAG_VALUE64 — tagged images are retired "
+            "with exec32 (docs/REMOVING_EXEC32.md)"
+        )
 
     def _load_legacy_decoded_image(self, image: ProgramImage) -> None:
         """Explicit transitional path for pre-Value64 ProgramImages only."""

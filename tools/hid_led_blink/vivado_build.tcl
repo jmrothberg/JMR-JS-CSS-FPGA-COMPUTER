@@ -1,3 +1,4 @@
+# NOT FPGA-SIM. NOT tools/board_flow. LED-only project → build/hid_led_blink.
 # Tiny HID→LED bit. Separate project dir so this cannot clobber the JS Vivado run.
 # Usage: vivado -mode batch -source vivado_build.tcl -tclargs ROOT OUTDIR
 

@@ -1,4 +1,5 @@
-// Minimal top for FPGA-SIM / early synth smoke.
+// STUB — not the FPGA-SIM top (that is jmr_js_core). Not in CORE_SRCS.
+// Minimal top for early synth smoke.
 // BRAM: palette + FB model + input FIFOs. No DDR3 controller in this stub.
 module jmr_js_top (
     input  wire       clk,

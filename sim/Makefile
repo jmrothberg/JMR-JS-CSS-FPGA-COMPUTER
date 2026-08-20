@@ -104,6 +104,9 @@ CORE_SRCS := \
 	$(RTL)/engines/storage_engine.sv \
 	$(RTL)/phys/sd_spi_master.sv \
 	$(RTL)/jmr_js_core.sv
+# FPGA-SIM input = core key_evt_* / joy_in (GUI tether). Do not add
+# tools/pmod_input_test/ , tools/hid_led_blink/ , usb_ps2_try.sv ,
+# jmr_i2c_*.sv , or ps2_rx / ps2_decode. Those are LED tests or board PHY.
 
 JSB_HEX := $(ROOT)/vectors/invaders_jsb.hex
 # Product titles are .HTML (compile-on-RUN). Do not require storage/INVADERS.JS.

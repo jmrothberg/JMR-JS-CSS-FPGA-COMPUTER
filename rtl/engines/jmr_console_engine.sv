@@ -190,6 +190,7 @@ module jmr_console_engine (
     logic [3:0]  list_on_page;
     logic [5:0]  list_col;        // 0..63 glass wrap (FM _list_paged twin)
     logic        list_wrap_more;  // MORE after a wrap, resume same source line
+    logic        dir_more;       // MORE issued from DIR paging (resume C_DIRN)
     logic        list_eat_nl;     // drop leftover CR from LINE so first MORE waits
     logic        list_skip;       // line outside range — consume without print
     logic        list_from_card;  // HTML LIST: get_byte from FAT, not SOURCE
@@ -619,7 +620,12 @@ module jmr_console_engine (
                 end
 
                 // ---- DIR (BASIC ST_DIR*) --------------------------------
-                C_DIR0: if (!stor_busy) begin stor_dir <= 1'b1; state <= C_DIR0W; end
+                C_DIR0: if (!stor_busy) begin
+                    stor_dir <= 1'b1;
+                    list_on_page <= 0;
+                    dir_more <= 1'b0;
+                    state <= C_DIR0W;
+                end
                 C_DIR0W: if (stor_done) begin
                     if (stor_err) begin reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY; end
                     else state <= C_DIRN;
@@ -650,9 +656,21 @@ module jmr_console_engine (
                     ret_state <= C_DIR_RD;
                 end
                 C_DIR_NL: if (!video_busy) begin
+                    // DIR pages like LIST: without this a long directory
+                    // (titles + saved files) scrolled its head off the
+                    // glass and "DIR doesn't list .HTML" — the .HTM rows
+                    // printed first and were gone before READY.
                     print_nl <= 1'b1;
                     state <= C_WAIT_VIDEO;
-                    ret_state <= C_DIRN;
+                    if (list_on_page >= 4'd13) begin
+                        list_on_page <= 0;
+                        dir_more <= 1'b1;
+                        reply_sel <= 4'd8; reply_idx <= 0;
+                        ret_state <= C_LIST_MORE;
+                    end else begin
+                        list_on_page <= list_on_page + 4'd1;
+                        ret_state <= C_DIRN;
+                    end
                 end
 
                 // ---- parse filename after verb --------------------------
@@ -1273,12 +1291,17 @@ module jmr_console_engine (
                         list_eat_nl <= 1'b0;
                     end else if (kbd_data == 8'h1B || kbd_data == 8'h03) begin
                         list_eat_nl <= 1'b0;
-                        state <= list_from_card ? C_LIST_CCLOSE : C_PROMPT;
+                        state <= dir_more ? C_PROMPT
+                               : list_from_card ? C_LIST_CCLOSE : C_PROMPT;
+                        dir_more <= 1'b0;
                         msg_idx <= 0;
                     end else begin
                         list_eat_nl <= 1'b0;
                         // Space/Enter/any key → next page
-                        if (list_wrap_more) begin
+                        if (dir_more) begin
+                            dir_more <= 1'b0;
+                            state <= C_DIRN;
+                        end else if (list_wrap_more) begin
                             list_wrap_more <= 1'b0;
                             state <= list_from_card ? C_LIST_CARD_GB : C_LIST_RD_GO;
                         end else

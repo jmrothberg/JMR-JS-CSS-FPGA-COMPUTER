@@ -1,3 +1,5 @@
+// NOT FPGA-SIM. Stub for rtl/jmr_js_top.sv only (not in CORE_SRCS).
+// FPGA-SIM joystick is jmr_js_core.joy_in. Board stick is rtl/phys/jmr_i2c_joy.
 // INPUT: keyboard FIFO (BRAM/distributed) + joystick bitfield register.
 // Bits: 0=UP 1=DOWN 2=LEFT 3=RIGHT 4=FIRE1 5=FIRE2
 module jmr_input_engine (

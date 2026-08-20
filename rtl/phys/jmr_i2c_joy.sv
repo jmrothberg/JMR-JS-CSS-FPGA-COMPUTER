@@ -1,3 +1,6 @@
+// LIVE JS board PHY (top_nexys_video). Not FPGA-SIM — CORE_SRCS has no I2C.
+// Same-named LED-test snapshot: tools/pmod_input_test/jmr_i2c_joy.sv
+// Edit this file for the machine. Do not copy usb_ps2_try TX here.
 // Poll Mini I2C joystick @ 0x5A (NullLab / PH2.0 handle). NACK → bits off.
 // Analog 0..255 center 128, deadzone ±32. Y 0 = top. Idle button = 8.
 module jmr_i2c_joy #(

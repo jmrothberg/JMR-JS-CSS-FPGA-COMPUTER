@@ -292,6 +292,9 @@ static uint64_t state_cycles[128];
 static uint64_t exec_state_cycles[128];
 static uint64_t heap_split[32];
 static uint64_t envkey_hist[512];
+// RAFTRACE: log every change of the vraf_n parent/exec pair + mask (bug #69)
+static std::vector<std::string> raf_log;
+static bool raf_trace_on = false;
 #include <map>
 static std::map<unsigned, uint64_t> envip_hist;
 static bool fw_on = false;
@@ -344,6 +347,10 @@ static size_t ip_trace_cap = 0;
 static uint16_t ip_trace_prev = 0xffff;
 static std::vector<uint16_t> ip_trace_vsp; // exec vsp at each recorded ip
 static bool ip_trace_user = false; // IPTRACE <n> armed by RPC: FRAME must not wipe it
+// KEYEVT tap-deferral (see the KEYEVT handler): ups held to the next frame
+static uint64_t key_frame_counter = 1;
+static uint64_t key_last_down_frame[256] = {0};
+static uint64_t key_pending_up[256] = {0}; // 0=none, else flush at this frame counter
 // NEW: last FRAME clocks / cap — play log showed swaps<<fb_frames with no
 // clk, so a 2M-clock cap abort was invisible.
 static unsigned last_fclk = 0;
@@ -533,6 +540,30 @@ static void tick() {
                 fw_rip_prev[k] = rip;
             }
         }
+        }
+    }
+    if (raf_trace_on && raf_log.size() < 3000) {
+        auto* rr = top->rootp;
+        static unsigned prev = 0xffffffff;
+        unsigned cur =
+            (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vraf_n_ff) & 15) |
+            ((unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__vraf_n) & 15) << 4) |
+            ((unsigned(rr->jmr_js_core__DOT__u_vm__DOT__hs_m_vraf_n) & 1) << 8) |
+            ((unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vraf_snap_n) & 15) << 9) |
+            ((unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vraf_i) & 15) << 13) |
+            ((unsigned(rr->jmr_js_core__DOT__u_vm__DOT__jn_slot_arm) & 1) << 17) |
+            ((unsigned(rr->jmr_js_core__DOT__u_vm__DOT__state) & 127) << 18);
+        if (cur != prev) {
+            char b[160];
+            std::snprintf(b, sizeof b,
+                "[st=%u cst=%u ip=%u ff=%u eq=%u m=%u snap=%u i=%u jn=%u]",
+                unsigned(rr->jmr_js_core__DOT__u_vm__DOT__state),
+                unsigned(rr->jmr_js_core__DOT__u_vm__DOT__casestate_q),
+                unsigned(rr->jmr_js_core__DOT__u_vm__DOT__ip),
+                cur & 15, (cur >> 4) & 15, (cur >> 8) & 1,
+                (cur >> 9) & 15, (cur >> 13) & 15, (cur >> 17) & 1);
+            raf_log.push_back(b);
+            prev = cur;
         }
     }
     {
@@ -786,6 +817,16 @@ static void tick() {
 
 static void ticks(int n) {
     for (int i = 0; i < n; i++) tick();
+}
+
+// strobe one key event into the RTL FIFO (see KEYEVT handler)
+static void key_strobe(unsigned code, unsigned down) {
+    top->key_evt_code = code & 0xFF;
+    top->key_evt_down = down ? 1 : 0;
+    top->key_evt_stb = 1;
+    ticks(1);
+    top->key_evt_stb = 0;
+    ticks(1);
 }
 
 static int read_whole_file(const std::string& path, std::vector<uint8_t>& out) {
@@ -1136,15 +1177,31 @@ int main(int argc, char** argv) {
         }
         // NEW: KEYEVT <keyCode> <down> — raw keyboard event for games
         // (GUI forwards real keys; the HTML decides bindings)
+        // Sim frames take seconds of wall time, so a human tap's down+up
+        // both land in ONE frame's dispatch batch — a held-flag pattern
+        // (MRDO startHeld) then never observes the key as held. Defer an
+        // up that arrives in the same inter-frame window as its down to
+        // the start of the NEXT frame: the down dispatches at frame N's
+        // event phase, frame N+1's rAF callback reads held=1, and the up
+        // dispatches at frame N+1's event phase. Real hardware runs
+        // frames in real time and never batches a whole tap.
         if (line.rfind("KEYEVT ", 0) == 0) {
             unsigned code = 0, down = 0;
             std::sscanf(line.c_str() + 7, "%u %u", &code, &down);
-            top->key_evt_code = code & 0xFF;
-            top->key_evt_down = down ? 1 : 0;
-            top->key_evt_stb = 1;
-            ticks(1);
-            top->key_evt_stb = 0;
-            ticks(1);
+            code &= 0xFF;
+            if (down) {
+                key_last_down_frame[code] = key_frame_counter;
+                key_strobe(code, 1);
+            } else if (key_last_down_frame[code] == key_frame_counter) {
+                // A frame that dispatches a key event does NOT run the
+                // rAF callback (the listener returns to n_ops, ending the
+                // frame). So the tap needs: frame A = down dispatch (no
+                // rAF), frame B = rAF sees held=1, frame C = up dispatch.
+                // Flush the deferred up two FRAMEs out, not one.
+                key_pending_up[code] = key_frame_counter + 2;
+            } else {
+                key_strobe(code, 0);
+            }
             std::cout << "OK" << std::endl;
             continue;
         }
@@ -2050,6 +2107,41 @@ int main(int argc, char** argv) {
             continue;
         }
         // NEW: STATEHIST? — cumulative clocks per parent state (then reset)
+        // NAMEPEEK <id>: intern table entry — hash, len, first bytes
+        if (line.rfind("NAMEPEEK ", 0) == 0) {
+            auto* r = top->rootp;
+            unsigned id = std::stoul(line.substr(9));
+            std::ostringstream oss;
+            oss << "NAME " << id
+                << " n=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__names_n)
+                << " hash=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__name_hash_tbl[id & 1023])
+                << " len=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__name_len_tbl[id & 1023])
+                << " off=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__name_off[id & 1023])
+                << " txt=";
+            unsigned off = unsigned(r->jmr_js_core__DOT__u_vm__DOT__name_off[id & 1023]);
+            unsigned len = unsigned(r->jmr_js_core__DOT__u_vm__DOT__name_len_tbl[id & 1023]);
+            for (unsigned k = 0; k < len && k < 24; k++) {
+                char ch = (char)r->jmr_js_core__DOT__u_vm__DOT__name_mem[(off + k) & 32767];
+                oss << (ch >= 32 && ch < 127 ? ch : '?');
+            }
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
+        if (line == "RAFTRACE") {
+            raf_trace_on = true;
+            raf_log.clear();
+            std::cout << "OK" << std::endl;
+            continue;
+        }
+        if (line == "RAFTRACE?") {
+            std::ostringstream oss;
+            oss << "RT";
+            for (auto& e : raf_log) oss << " " << e;
+            raf_trace_on = false;
+            raf_log.clear();
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
         if (line == "STATEHIST?") {
             std::ostringstream oss;
             oss << "SH";
@@ -2590,6 +2682,16 @@ int main(int argc, char** argv) {
         // drawBitmap is per-pixel str[i]+fillRect, so FRAME capped mid-rAF
         // (~1 swap per 5 GUI frames) and the wave crawled. Cap is not SPI.
         if (line == "FRAME") {
+            // flush taps deferred by the KEYEVT handler: these ups enter
+            // the FIFO now and dispatch at THIS frame's event phase,
+            // after the rAF callback has seen the key held once.
+            for (int kc = 0; kc < 256; kc++)
+                if (key_pending_up[kc] &&
+                    key_pending_up[kc] <= key_frame_counter) {
+                    key_pending_up[kc] = 0;
+                    key_strobe((unsigned)kc, 0);
+                }
+            key_frame_counter++;
             // Debug ergonomics: a frame that never presents used to burn
             // 64M clocks (~30 s of wall time) with the server inside this
             // RPC, so the GUI ignored ESC and had to be restarted. The

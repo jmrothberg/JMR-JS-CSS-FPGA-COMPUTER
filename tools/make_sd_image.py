@@ -143,6 +143,37 @@ def strip_blank_bas_lines(name: str, data: bytes) -> tuple[bytes, int]:
     return out, removed
 
 
+def squash_long_html_lines(name: str, data: bytes) -> tuple[bytes, int]:
+    """Replace giant single lines in card .HTM/.HTML with a placeholder.
+
+    The card copy of an HTML title is display-only: RUN compiles the HOST
+    storage/ file (compile-on-RUN), and the board runs .JSH sidecars. LIST,
+    however, streams the card copy through the RTL console line buffer —
+    one 100KB+ base64 sprite line took megabytes of SPI reads and froze
+    the monitor for minutes ("list stalls on embedded graphics"). Keep
+    readable lines as-is; anything over 200 chars becomes
+    `<LINE n: EMBEDDED DATA ... OMITTED>` so LIST stays honest and fast.
+    Non-HTML files are left alone (a .JS/.JSB card copy IS the program).
+    """
+    up = name.upper()
+    if not (up.endswith(".HTM") or up.endswith(".HTML")):
+        return data, 0
+    limit = 200
+    out: list[bytes] = []
+    squashed = 0
+    for i, ln in enumerate(data.split(b"\n"), start=1):
+        if len(ln) > limit:
+            tag = (b"EMBEDDED DATA" if (b"base64" in ln or b"data:" in ln)
+                   else b"LONG LINE")
+            out.append(b"<LINE %d: %s %d CHARS OMITTED>" % (i, tag, len(ln)))
+            squashed += 1
+        else:
+            out.append(ln)
+    if squashed == 0:
+        return data, 0
+    return b"\n".join(out), squashed
+
+
 def sanitize_bas_files(
     files: list[tuple[str, bytes]],
 ) -> tuple[list[tuple[str, bytes]], list[str]]:
@@ -151,9 +182,12 @@ def sanitize_bas_files(
     notes: list[str] = []
     for name, data in files:
         cleaned, n = strip_blank_bas_lines(name, data)
+        cleaned, m = squash_long_html_lines(name, cleaned)
         out.append((name, cleaned))
         if n:
             notes.append(f"{name}: stripped {n} blank/whitespace-only line(s) for the board")
+        if m:
+            notes.append(f"{name}: squashed {m} over-long line(s) for LIST (card copy only)")
     return out, notes
 
 
@@ -304,6 +338,7 @@ def populate(image: bytearray, files: list[tuple[str, bytes]]) -> bytearray:
 
 def patch_card_file(img_path: Path, name: str, data: bytes) -> None:
     """Overwrite one 8.3 file in an existing card.img."""
+    data, _ = squash_long_html_lines(name, data)
     raw = bytearray(img_path.read_bytes())
     mem = Memory()
     card = SdSpiCard(mem, raw)

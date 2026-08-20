@@ -1,3 +1,6 @@
+// LIVE JS board PHY (top_nexys_video). Not FPGA-SIM — CORE_SRCS has no I2C.
+// Same-named LED-test snapshot: tools/pmod_input_test/jmr_i2c_master.sv
+// Edit this file for the machine.
 // 100 kHz open-drain I2C master — one register read per `go`.
 // Drive 0 or Z only (never 1). Clock-stretch: wait for SCL high after release.
 module jmr_i2c_master #(

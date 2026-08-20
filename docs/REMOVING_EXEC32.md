@@ -391,7 +391,7 @@ that still mints a tagged `.JSB`.
 5. PYTHON refuse tagged load. `compile_one` refuses `.JS`. `CODE_HEX` stub is Value64 or empty.
 6. Full `test_rtl_snippets.py` + `test_bytecode_js.py` green.
 
-**Phases 2–3 (only after FIND lands and FPGA-SIM is green)**
+**Phases 2–3 (FPGA-SIM play is green — five titles run, slowly; do this next)**
 
 7. Parent: missing flag → fault; `hs32` forced `1'b0`. Full suite again — silent dependencies surface here, while the module is still wired.
 8. Run the KEEP/DELETE discriminator. Confirm the three pre-checks.
@@ -401,10 +401,9 @@ that still mints a tagged `.JSB`.
 12. Phase 3b: `!hp_v64` arms + tagged stack SRAM. Its own pass, its own run.
 13. Update rules/docs. Unhooked `jmr_js_vm_exec32.sv` stays until the user allows delete.
 
-**After this cut (separate agent, next `make bit`):** the **big** arrays
-Vivado still built from logic LUTs (LUTRAM: `RAM64M` / `RAM256X1S`) need
-the Port A RAM shape so they can sit in BRAM tiles. That is Vivado fit /
-synth time, **not** FPGA-SIM speed. Not `ram_style` + FSM poke. Not
-“all BRAM” (365-tile cap). Words + recipe:
-[FPGA_FIT.md](FPGA_FIT.md#what-these-words-mean-lutram-bram-port-a).
-Do not fold that into Phases 1–3.
+**2026-08-20 mapping OOM (2 threads, user saw it)** made this cut
+**required before the next `make bit`**, not optional hygiene. Worker
+cap is not enough. After exec32: Port A for the LUTRAM monsters (separate
+agent). Full order:
+[FPGA_FIT.md](FPGA_FIT.md#cleanup-before-the-next-make-bit-2026-08-20-oom).
+Do not fold Port A into Phases 1–3.
