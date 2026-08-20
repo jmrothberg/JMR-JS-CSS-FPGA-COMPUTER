@@ -199,6 +199,27 @@ module jmr_js_vm_exec64 (
     output logic namcpy_v64_q,
     output logic [15:0] name_rdaddr_q,
     output logic path_active_q,
+    // potential-bugs #49: the parent owns the pc_* arrays that S_PWALK /
+    // S_PDO / S_LINE / S_CIRCLE / S_QSEG raster from, but nothing ever wrote
+    // them (pc_n stuck at 0 => S_PWALK aborted on its first beat and every
+    // path primitive painted nothing). Mirror this exec's writes out.
+    // potential-bugs #54: JSON.stringify seeds vjs_val[0] via js_we into
+    // exec's OWN copy; the parent S_V64_JSON arm walks the PARENT copy.
+    // Mirror the write out (same shape as the #49 pc_we mirror).
+    output logic js_we_q,
+    output logic [4:0] js_waddr_q,
+    output logic [7:0] js_i_wdata_q,
+    output logic [2:0] js_ph_wdata_q,
+    output logic [63:0] vjs_val_wdata_q,
+    output logic pc_we_q,
+    output logic [3:0] pc_waddr_q,
+    output logic [1:0] pc_op_wdata_q,
+    output logic signed [31:0] pc_a1_wdata_q,
+    output logic signed [31:0] pc_a2_wdata_q,
+    output logic signed [31:0] pc_a3_wdata_q,
+    output logic signed [31:0] pc_a4_wdata_q,
+    output logic signed [31:0] pc_a5_wdata_q,
+    output logic pc_ccw_wdata_q,
     output logic [1:0] path_kind_q,
     output logic path_stroke_q,
     output logic [4:0] pc_n_q,
@@ -426,6 +447,7 @@ module jmr_js_vm_exec64 (
     input  logic [15:0] id_join,
     input  logic [15:0] id_length,
     input  logic [15:0] id_lineto,
+    input  logic [15:0] id_quadcurve,   // #38, needs #49 to be visible
     input  logic [15:0] id_map,
     input  logic [15:0] id_measuretext,
     input  logic [15:0] id_moveto,
@@ -1099,6 +1121,21 @@ module jmr_js_vm_exec64 (
     logic [63:0] vjs_val_wdata;
     logic pc_we;
     logic [3:0] pc_waddr;
+    // #49 mirror taps (combinational, same values the local arrays take).
+    assign js_we_q        = js_we;
+    assign js_waddr_q     = js_waddr;
+    assign js_i_wdata_q   = js_i_wdata;
+    assign js_ph_wdata_q  = js_ph_wdata;
+    assign vjs_val_wdata_q = vjs_val_wdata;
+    assign pc_we_q        = pc_we;
+    assign pc_waddr_q     = pc_waddr;
+    assign pc_op_wdata_q  = pc_op_wdata;
+    assign pc_a1_wdata_q  = pc_a1_wdata;
+    assign pc_a2_wdata_q  = pc_a2_wdata;
+    assign pc_a3_wdata_q  = pc_a3_wdata;
+    assign pc_a4_wdata_q  = pc_a4_wdata;
+    assign pc_a5_wdata_q  = pc_a5_wdata;
+    assign pc_ccw_wdata_q = pc_ccw_wdata;
     logic signed [31:0] pc_a1_wdata, pc_a2_wdata, pc_a3_wdata, pc_a4_wdata, pc_a5_wdata;
     logic pc_ccw_wdata;
     logic [1:0] pc_op_wdata;
@@ -3203,7 +3240,52 @@ module jmr_js_vm_exec64 (
                         // ends, but JUMP to n_ops / IIFE-as-script still
                         // lands here (DONKEY vcsp=1, PACMAN vcsp=3).
                         if (vcsp_hs != 0) begin
-                            if (vframe_rip_rdata == 16'hfffc) begin
+                            if (vframe_rip_rdata == 16'hfffc &&
+                                vfe_arr[63:48] == V64_TAG_PREFIX &&
+                                vfe_arr[47:44] == V64_KIND_ARRAY &&
+                                vfe_i != 8'd0 && vfe_i <= vfe_len) begin
+                                // potential-bugs #6: a callback body that
+                                // runs off n_ops (JUMP to n_ops / IIFE tail,
+                                // no trailing RET_VAL) is an implicit
+                                // `return undefined`, not the end of the
+                                // program. The unguarded arm below sent EVERY
+                                // 0xfffc frame to GC_CLEAR + halt_after, so
+                                // the walk died mid-array and the later
+                                // 0xfffc -> FOREACH arm (~3262) was dead
+                                // code. Deleting that arm instead is wrong:
+                                // 0xfffc would then fall into the
+                                // `vsp_hs != vframe_bsp_rdata` fault 1, which
+                                // is exactly the one_fe failure the arm was
+                                // added for (falling off n_ops normally
+                                // leaves the last expression above bsp).
+                                // Guard on "the walk is still live": vfe_i is
+                                // pre-incremented in S_V64_FOREACH, so
+                                // mid-walk is 1..vfe_len inclusive, and the
+                                // done path clears vfe_arr to UNDEFINED at
+                                // vfe_sp==0. Same body as OP_RET_VAL 0xfffc
+                                // (~4496) minus the find/filter TOS tests —
+                                // an implicit return has no value.
+                                vthis_n = vframe_this_rdata;
+                                venv_n = vframe_env_rdata;
+                                vcsp_n = vcsp_hs - 8'd1;
+                                vsp_n = vframe_bsp_rdata;
+                                if (vfe_mode == 2'd2 &&
+                                    vfe_map[63:48] == V64_TAG_PREFIX &&
+                                    vfe_map[47:44] == V64_KIND_ARRAY &&
+                                    varr_valid_rdata &&
+                                    (vfe_i - 8'd1) < varr_len_rdata)
+                                begin
+                                    hp_cmd_n = HP_ASETI;
+                                    hp_v64_n = 1'b1;
+                                    hp_from_stack_n = 1'b0;
+                                    hp_aid_n = vfe_map[11:0];
+                                    hp_aslot_n = 7'(vfe_i - 8'd1);
+                                    hp_wval_n = V64_UNDEFINED;
+                                    hp_ret_n = S_V64_FOREACH;
+                                    state_n = S_HEAP_AWR;
+                                end else
+                                    state_n = S_V64_FOREACH;
+                            end else if (vframe_rip_rdata == 16'hfffc) begin
                                 // Leftover forEach frame after the walk
                                 // continued at vfe_ret (one_fe nops fault 1
                                 // blocked GC_CLEAR; rAF never parked).
@@ -4907,16 +4989,30 @@ module jmr_js_vm_exec64 (
                                     end else if (handle[63:48] == 16'h7ff9 &&
                                                  handle[47:44] == 4'd4 &&
                                                  handle[31:0] < 32'd1024) begin
-                                        if (code_rdata[23:8] == id_now) begin
-                                            // PYTHON: Date.now / performance.now
-                                            // on the interned constructor name.
-                                            valloc_now_fn_n = 1'b1;
-                                            vnat_base_n = vsp - 12'd1;
-                                            valloc_kind_n = 2'd2;
-                                            valloc_i_n = vfn_next;
-                                            valloc_retried_n = 1'b0;
-                                            state_n = S_V64_ALLOC;
-                                        end else if (!hash2_q) begin
+                                        // potential-bugs #14: a bare `.now`
+                                        // property READ used to S_V64_ALLOC a
+                                        // native-35 function object. Removed:
+                                        // `Date.now()` / `performance.now()`
+                                        // compile to LOAD_VAR + CALL_METHOD
+                                        // (compiler `_call` bare-ID dotted
+                                        // path), and that arm already returns
+                                        // the vframe_no timestamp in place
+                                        // with no ALLOC (~6357). The only
+                                        // property read in any title is
+                                        // PACMAN.HTML:25 `if (!Date.now)`,
+                                        // which PYTHON also answers undefined
+                                        // (js_vm.py handles `now` only on the
+                                        // method path). Its polyfill body is
+                                        // then executed but inert: `Date.now =`
+                                        // and `window.* =` are SET_PROP on a
+                                        // primitive, a sloppy-mode no-op here,
+                                        // and every call site is a bare
+                                        // requestAnimationFrame() -> nid 27.
+                                        // Falls through to the shared string
+                                        // GET_PROP path, which returns
+                                        // V64_UNDEFINED for anything but
+                                        // `.length`.
+                                        if (!hash2_q) begin
                                             // name_blen_rdata lags raddr_q.
                                             // Extra clock OK. Hold opnd so
                                             // the 2-beat SRAM settle does
@@ -5838,7 +5934,15 @@ module jmr_js_vm_exec64 (
                                         if (txt[63:48] == V64_TAG_PREFIX &&
                                             txt[47:44] == 4'd4 &&
                                             txt[31:0] < 32'd1024)
-                                            tl = {8'd0, name_blen_rdata[7:0]};
+                                            // potential-bugs #36: name_blen is
+                                            // u16 (TXT/NAME bytes), so the
+                                            // [7:0] slice wrapped any intern
+                                            // 256 bytes or longer to a short
+                                            // width. PYTHON _nat_measure_text
+                                            // is len*8*_font_scale; the font
+                                            // scale still needs #45 (exec64
+                                            // has no ctx_font_px).
+                                            tl = name_blen_rdata;
                                         else if (txt[63:48] == V64_TAG_PREFIX &&
                                                  txt[47:44] == V64_KIND_OBJECT &&
                                                  txt[31:0] < MAX_OBJ &&
@@ -6289,6 +6393,34 @@ module jmr_js_vm_exec64 (
                                             v64_to_fx(`VST_AT(base + 12'd1));
                                         pc_a2_wdata =
                                             v64_to_fx(`VST_AT(base + 12'd2));
+                                        pc_n_n = pc_n + 5'd1;
+                                    end else
+                                        dbg_path_ovf_n = dbg_path_ovf + 16'd1;
+                                    vst_wr(base, V64_UNDEFINED);
+                                    vsp_n = base + 12'd1;
+                                    ip_n = ip + 16'd1;
+                                    code_raddr_n =
+                                        15'(ops_base + ip + 16'd1);
+                                    state_n = S_FETCH_WAIT;
+                                end else if (id_quadcurve != 16'hFFFF &&
+                                           code_rdata[23:8] == id_quadcurve &&
+                                           argc >= 12'd4) begin
+                                    // potential-bugs #38: exec32 twin (~4402).
+                                    // pc_op 2 = quadratic; parent S_QSEG already
+                                    // subdivides it. Only useful once #49 makes
+                                    // the parent read this buffer.
+                                    if (pc_n < 5'(PATH_MAX)) begin
+                                        pc_we = 1'b1;
+                                        pc_waddr = pc_n[3:0];
+                                        pc_op_wdata = 2'd2;
+                                        pc_a1_wdata =
+                                            v64_to_fx(`VST_AT(base + 12'd1));
+                                        pc_a2_wdata =
+                                            v64_to_fx(`VST_AT(base + 12'd2));
+                                        pc_a3_wdata =
+                                            v64_to_fx(`VST_AT(base + 12'd3));
+                                        pc_a4_wdata =
+                                            v64_to_fx(`VST_AT(base + 12'd4));
                                         pc_n_n = pc_n + 5'd1;
                                     end else
                                         dbg_path_ovf_n = dbg_path_ovf + 16'd1;

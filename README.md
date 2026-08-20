@@ -32,6 +32,9 @@ Synth vs play-speed debt (JOIN intern scan, what to keep for Vivado):
 History of RTL edits from the 70 GB Vivado hunt (not a current-bug list;
 use when tracing what those edits most likely broke):
 [docs/VIVADO_FLATTEN_HUNT.md](docs/VIVADO_FLATTEN_HUNT.md).
+Tagged Q16 opcode unit is leftover (titles use exec64): plan to unhook
+it is [docs/REMOVING_EXEC32.md](docs/REMOVING_EXEC32.md) — tests first,
+not in parallel with glass edits.
 
 ```
 $ python3 run_jmr_js.py
@@ -43,7 +46,7 @@ READY
 >
 ```
 
-### Top 6 commands (use these a lot)
+### Top commands (use these a lot)
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
@@ -59,11 +62,14 @@ python3 gui_jmr_js.py
 #    F9 BOARD: PC keyboard = tether (J15 dead). F10 hides the monitor (faster).
 
 make -C sim sim_server_synth
-# 4. FAST newest-RTL rebuild (minutes, incremental obj_dir). After title/RTL
-#    fixes this is the command — same rtl/*.sv as the chip, no hours-long .bin.
-#    Do not `make -C sim clean` (that forces a full Verilator rebuild).
-#    Then restart the GUI and F9 FPGA-SIM. Never fake with host twin.
-#    Opt-in host twin ONLY for debug: JMR_SIM_HOST=1 (not product)
+# 4. FAST FPGA-SIM rebuild from repo root (same rtl/*.sv as the chip).
+#    Incremental: only runs Verilator if rtl/ or sim/sim_main.cpp is newer
+#    than sim/sim_build_synth/jmr_js_sim_server. If Make prints OK and skips
+#    Verilator, the binary is already current.
+#    Force without wiping obj_dir:
+#      make -C sim sim_server_synth -B
+#    Do not `make -C sim clean`. Then restart the GUI and F9 FPGA-SIM.
+#    Never fake with host twin. Opt-in debug only: JMR_SIM_HOST=1
 
 .venv/bin/python tools/check_runtime_parity.py
 # 5. PYTHON ↔ FPGA-SIM RTL glass smoke (bytecode path; no dukpy cheat)
@@ -74,19 +80,22 @@ python3 tools/make_sd_image.py create card.img
 sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
 # 6b. write card.img → physical µSD (lsblk; whole disk not partition)
 
-# 7. ONLY after BATTERY PASS + timing WNS ≥ 0:
-# source scripts/vivado_env.sh && make -C tools/board_flow bit && make -C tools/board_flow flash
-# Full VM synth is many hours (16:17 run: 8 h then OOM at tech-map).
-# Synth threads default 2 (mapping OOM); impl place/route stays 8.
-# Never bit-fresh unless MIG/XDC/file list changed. JP4=boot source only. J15 USB Host is dead.
-# Last flashed bit 2026-08-13 03:36 (WNS +0.139); tree has newer JSB/640 FB RTL.
+source scripts/vivado_env.sh && make -C tools/board_flow bit
+# 7. Vivado synthesis + place/route + .bit  (YOUR terminal, hours).
+#    Repo root. Not `bit-fresh`. Not `make clean`. Synth 2 threads /
+#    impl 8. Tracker: build/nexys_video/synth_rss.log
+#    Do not close this terminal or an agent job — that SIGTERMs Vivado
+#    (no .dcp until synth_1 is 100%). After WNS ≥ 0:
+#      make -C tools/board_flow flash
+#    Last flashed bit 2026-08-13 03:36 (WNS +0.139); tree has newer RTL.
 ```
 
 Day-one: **1 → 2 → 3 → 4 → 5**. FPGA-SIM is **real RTL** after step 4 — do not
 treat `host_sim_server.py` as FPGA-SIM unless you set `JMR_SIM_HOST=1` on purpose.
 Do not jump to Vivado before PYTHON + FPGA-SIM agree on user-visible behaviour.
 Gate: `python3 tools/check_runtime_parity.py` must print **BATTERY PASS**.
-Board flash is step 7, last — never a substitute for fixing FPGA-SIM.
+Step **7** is Vivado (hours, your terminal). Flash only after WNS ≥ 0 — never
+a substitute for fixing FPGA-SIM.
 
 **LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID / AURORA / MRDO / JOYDEMO) then `RUN`.
 New HTML titles: [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md).

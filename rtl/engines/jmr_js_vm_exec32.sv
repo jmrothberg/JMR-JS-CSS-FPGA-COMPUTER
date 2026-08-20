@@ -1572,6 +1572,21 @@ module jmr_js_vm_exec32 (
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             leave_hold <= 1'b0;
+            // potential-bugs #10: identity axis scale on reset. Parent RUN
+            // and exec64 already do this; exec32 never did, so every
+            // fillRect on the tagged path clipped to 0 after a reset.
+            ctx_sx <= FX_ONE;
+            ctx_sy <= FX_ONE;
+            // potential-bugs #10: saved_sx/sy were never initialised (only
+            // `saved_sx <= saved_sx_n`), so a ctx.restore() before any
+            // ctx.save() drove ctx_sx to X in sim / 0 on the board and
+            // collapsed every transformed draw to x=0. exec64 already resets
+            // these at rst and p_clr.
+            saved_sx <= FX_ONE;
+            saved_sy <= FX_ONE;
+            saved_tx <= '0;
+            saved_ty <= '0;
+            ctx_align <= 2'd0;
             fp_scan <= 1'b0;
             cm_scan <= 1'b0;
             cm_armed <= 1'b0;
@@ -2360,8 +2375,8 @@ module jmr_js_vm_exec32 (
         ctx_align_n = ctx_align;
         ctx_font_px_n = ctx_font_px;
         ctx_smooth_n = ctx_smooth;
-        ctx_sx_n = ctx_sx;
-        ctx_sy_n = ctx_sy;
+        ctx_sx_n = p_clr ? FX_ONE : ctx_sx;
+        ctx_sy_n = p_clr ? FX_ONE : ctx_sy;
         ctx_tx_n = ctx_tx;
         ctx_ty_n = ctx_ty;
         dbg_call_ovf_n = dbg_call_ovf;

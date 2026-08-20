@@ -2,8 +2,9 @@
 
 Linux helpers: `vivado_env.sh`, setup helpers, smoke gates.
 
-**Order:** perfect FPGA-SIM first (`make -C sim sim_server_synth` +
-`tools/check_runtime_parity.py`). Only then source Vivado and build/flash.
+**Order:** perfect FPGA-SIM first (`make -C sim sim_server_synth` from
+repo root; add `-B` to force Verilator without `clean`) +
+`tools/check_runtime_parity.py`. Only then source Vivado and build/flash.
 
 `source scripts/vivado_env.sh` then `make -C tools/board_flow bit`.
 Synth **2 threads** (16:17 mapping OOM at 7 workers). Impl **8 threads**.

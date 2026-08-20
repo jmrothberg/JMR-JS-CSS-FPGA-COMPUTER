@@ -13,6 +13,7 @@
 #include <string>
 #include <fstream>
 #include <algorithm>
+#include <map>
 #include <utility>
 #include <vector>
 
@@ -286,8 +287,24 @@ static int ring_stop_ip = -1;
 static VRingEnt vring[256];
 static unsigned long vring_i = 0;
 static bool vring_frozen = false;
+static bool ring_on = false;
+// Hot ips of a frame that hit the cap: the game is looping and this
+// says where, so a normal GUI run yields the evidence with no extra
+// steps for the user.
+static unsigned loop_ip[3] = {0, 0, 0};
+static unsigned loop_hits[3] = {0, 0, 0};
+// Total ip changes during a capped frame: few => stuck on a handful of
+// ops; many => cycling through a lot of code.
+static unsigned long loop_ipn = 0;
+static std::vector<unsigned> ip_hist;      // per-ip counts, whole frame
+static unsigned top_ip[5] = {0,0,0,0,0};
+static unsigned top_cnt[5] = {0,0,0,0,0};
+// Where a capped frame spends its instructions, in 256-op regions.
+static unsigned hot_lo[3] = {0, 0, 0};
+static unsigned long hot_n[3] = {0, 0, 0};
 static unsigned long state_prof[128] = {0};
 static unsigned long prof_cycles = 0;
+static bool prof_on = false;
 // NEW: ENVWATCH — log every venv_valid[idx] transition with state/ip.
 struct EnvEvt { unsigned st; unsigned ip; unsigned val; uint64_t venv; };
 static std::vector<EnvEvt> env_evts;
@@ -376,7 +393,7 @@ static void tick() {
             watch_prev = v;
         }
     }
-    {
+    if (prof_on) {
         unsigned st_ = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state);
         if (st_ < 128) state_prof[st_]++;
         prof_cycles++;
@@ -396,7 +413,7 @@ static void tick() {
             }
         }
     }
-    {
+    if (ring_on) {
         // NEW: rolling cycle ring for fault forensics (VRING?). Freezes the
         // instant fault_code goes nonzero so the ring holds the run-up.
         auto* rr = top->rootp;
@@ -937,6 +954,21 @@ int main(int argc, char** argv) {
                       << " evkey=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_evkey)
                       << " txtw=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_txtw)
                       << " txtn=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_txt_n)
+                      << " txtmiss=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_txt_miss)
+                      << " rafcall=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_raf_call)
+                      << " frend=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_frame_end)
+                      << " ipn=" << loop_ipn
+                      << " topip=" << top_ip[0] << "x" << top_cnt[0]
+                      << "," << top_ip[1] << "x" << top_cnt[1]
+                      << "," << top_ip[2] << "x" << top_cnt[2]
+                      << "," << top_ip[3] << "x" << top_cnt[3]
+                      << "," << top_ip[4] << "x" << top_cnt[4]
+                      << " hot=" << hot_lo[0] << "x" << hot_n[0]
+                      << "," << hot_lo[1] << "x" << hot_n[1]
+                      << "," << hot_lo[2] << "x" << hot_n[2]
+                      << " loop=" << loop_ip[0] << "x" << loop_hits[0]
+                      << "," << loop_ip[1] << "x" << loop_hits[1]
+                      << "," << loop_ip[2] << "x" << loop_hits[2]
                       << " fontpx=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__ctx_font_px)
                       << " kcmp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_key_cmp)
                       << " efault=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__machine_fault)
@@ -1572,6 +1604,24 @@ int main(int argc, char** argv) {
             std::cout << std::endl;
             continue;
         }
+        // NEW: VARRPEEK <aid> — Value64 array tables + first 8 raw slots
+        if (line.rfind("VARRPEEK ", 0) == 0) {
+            auto* r = top->rootp;
+            unsigned aid = std::stoul(line.substr(9));
+            if (aid >= VM_MAX_ARR) aid = 0;
+            std::ostringstream oss;
+            oss << "VARR " << aid
+                << " valid=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__varr_valid[aid])
+                << " len=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__varr_len[aid])
+                << " gen=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__varr_gen[aid])
+                << " long=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__varr_long[aid])
+                << " lidx=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__varr_lidx[aid])
+                << std::hex;
+            for (unsigned e = 0; e < 8; e++)
+                oss << " [" << e << "]=0x" << peek_varr_val(r, aid, e);
+            std::cout << oss.str() << std::dec << std::endl;
+            continue;
+        }
         // NEW: IPTRACE <n> arms; IPTRACE? dumps the executed-ip path
         if (line.rfind("IPTRACE ", 0) == 0) {
             ip_trace.clear();
@@ -1696,6 +1746,7 @@ int main(int argc, char** argv) {
         }
         if (line.rfind("RINGSTOP ", 0) == 0) {
             ring_stop_ip = std::stoi(line.substr(9));
+            ring_on = true;
             vring_frozen = false;
             vring_i = 0;
             std::cout << "OK" << std::endl;
@@ -1704,6 +1755,7 @@ int main(int argc, char** argv) {
         if (line == "PROFCLR") {
             for (int i = 0; i < 128; i++) state_prof[i] = 0;
             prof_cycles = 0;
+            prof_on = true;
             std::cout << "OK" << std::endl;
             continue;
         }
@@ -1718,6 +1770,59 @@ int main(int argc, char** argv) {
                 oss << " " << vm_sname(unsigned(v[k].second)) << "="
                     << v[k].first
                     << "(" << (prof_cycles ? v[k].first * 100 / prof_cycles : 0) << "%)";
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
+        // NEW: ENVDUMP <key> — walk the current env chain and report every
+        // slot, flagging the ones whose key matches. Answers "what does this
+        // variable actually resolve to" without guessing.
+        if (line.rfind("ENVDUMP ", 0) == 0) {
+            unsigned want = (unsigned)std::stoul(line.substr(8));
+            auto* r = top->rootp;
+            uint64_t venv = uint64_t(r->jmr_js_core__DOT__u_vm__DOT__venv);
+            std::ostringstream oss;
+            oss << "ENVD want=" << want;
+            {   // the global table entry this name should fall back to
+                uint64_t gv =
+                    (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vvars[want & 0x1FF];
+                oss << " vvars[" << want << "]=";
+                if ((gv >> 48) == 0x7ff9ull) oss << "handle";
+                else { double d; std::memcpy(&d, &gv, 8); oss << d; }
+                oss << " valid="
+                    << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vvar_valid[want & 0x1FF]);
+                oss << " near:";
+                for (int d = -3; d <= 3; d++) {
+                    unsigned ix = (want + d) & 0x1FF;
+                    if (!r->jmr_js_core__DOT__u_vm__DOT__vvar_valid[ix]) continue;
+                    uint64_t nv = (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vvars[ix];
+                    oss << " " << ix << "=";
+                    if ((nv >> 48) == 0x7ff9ull) oss << "h";
+                    else { double dd; std::memcpy(&dd, &nv, 8); oss << dd; }
+                }
+            }
+            unsigned eid = unsigned(venv & 0x3FF);
+            for (int depth = 0; depth < 8; depth++) {
+                unsigned len = unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_len[eid]);
+                oss << " | e" << eid << " len=" << len << " valid="
+                    << unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_valid[eid]) << ":";
+                for (unsigned sl = 0; sl < 16; sl++) {
+                    // venv_slot is {key[8:0], val[63:0]} packed in low 73 bits
+                    auto w = r->jmr_js_core__DOT__u_vm__DOT__venv_slot[eid * 16 + sl];
+                    uint64_t val = (uint64_t)w[0] | ((uint64_t)w[1] << 32);
+                    unsigned key = (unsigned)((w[2] << 0) & 0x1FF);
+                    key = (unsigned)(((uint64_t)w[2] << 0) & 0x1FF);
+                    oss << " " << (key == want ? "*" : "") << key << "=";
+                    if ((val >> 48) == 0x7ff9ull) oss << "h" << std::hex << (val & 0xFFFF) << std::dec;
+                    else {
+                        double d; std::memcpy(&d, &val, 8);
+                        oss << d;
+                    }
+                }
+                uint64_t par = uint64_t(r->jmr_js_core__DOT__u_vm__DOT__venv_parent[eid]);
+                unsigned pe = unsigned(par & 0x3FF);
+                if ((par >> 48) != 0x7ff9ull || pe == eid) break;
+                eid = pe;
+            }
             std::cout << oss.str() << std::endl;
             continue;
         }
@@ -1840,7 +1945,22 @@ int main(int argc, char** argv) {
         // drawBitmap is per-pixel str[i]+fillRect, so FRAME capped mid-rAF
         // (~1 swap per 5 GUI frames) and the wave crawled. Cap is not SPI.
         if (line == "FRAME") {
-            const int CAP = 64000000; // sequential GET_PROP is real silicon at ~30 MHz
+            // Debug ergonomics: a frame that never presents used to burn
+            // 64M clocks (~30 s of wall time) with the server inside this
+            // RPC, so the GUI ignored ESC and had to be restarted. The
+            // cap is a HOST-side responsiveness limit, not the VM's frame
+            // budget; a capped frame still reports FB SAME exactly as
+            // before, just sooner. Raise it back once frames complete.
+            // A real INVADERS play frame is ~500k instructions at ~15
+            // clocks each (~8-10M clocks): drawBitmap paints every sprite
+            // pixel as its own fillRect. An 8M cap truncated every play
+            // frame, which looked exactly like a freeze. 32M fits a real
+            // frame with margin and still bounds a stuck frame.
+            // Measured: an INVADERS play frame is ~2.2M+ instructions at
+            // ~14.5 clocks each (per-pixel fillRect sprites + nested
+            // collision loops) => 40M+ clocks. 32M truncated it. 64M is
+            // the documented cap and is not exceeded.
+            const int CAP = 64000000;
             int used = 0;
             int got = 0;
             int pulsed = 0;
@@ -1858,6 +1978,12 @@ int main(int argc, char** argv) {
             // PACMAN black, ASTEROID score-only). Watch the present counter.
             unsigned swap0 =
                 unsigned(rframe->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n);
+            unsigned long frame_ipn = 0;
+            unsigned ip_prev_f = 0xffff;
+            static unsigned long region[256];
+            for (int k = 0; k < 256; k++) region[k] = 0;
+            if (ip_hist.size() < 65536) ip_hist.assign(65536, 0);
+            else std::fill(ip_hist.begin(), ip_hist.end(), 0u);
             for (; used < CAP; used++) {
                 // FPGA-SIM: one frame_tick when already in S_WAIT_FRAME, then
                 // drop it so `else if (frame_fire)` can dispatch rAF. Do not
@@ -1880,6 +2006,14 @@ int main(int argc, char** argv) {
                 tick();
                 top->sim_frame_pulse = 0;
                 unsigned cbip = unsigned(rframe->jmr_js_core__DOT__u_vm__DOT__dbg_cb_ip);
+                {
+                    unsigned ipc = unsigned(rframe->jmr_js_core__DOT__u_vm__DOT__ip);
+                    if (ipc != ip_prev_f) {
+                        frame_ipn++; ip_prev_f = ipc;
+                        region[(ipc >> 8) & 0xFF]++;
+                        ip_hist[ipc & 0xFFFF]++;
+                    }
+                }
                 unsigned st = unsigned(rframe->jmr_js_core__DOT__u_vm__DOT__state);
                 if (rframe->jmr_js_core__DOT__u_vm__DOT__machine_fault
                     || st == 17u || st == 0u) {
@@ -1915,7 +2049,17 @@ int main(int argc, char** argv) {
                 // presented ~1000 frames (swaps=1013, 34k fillText calls)
                 // inside ONE FRAME rpc while the GUI sat blocked. A present
                 // IS a finished frame; a pending timer fires on the next one.
-                if (pulsed && left_wait && !frame_continue &&
+                // potential-bugs #31: require st == S_WAIT_FRAME. Value64
+                // swaps at FRAME_TIMER and a mid-rAF nid-3 swapBuffers also
+                // bumps dbg_swap_n — exiting on that cuts the callback and
+                // the splash stops animating.
+                // potential-bugs #31 predicate, minus frame_continue:
+                // frame_fire belongs to the 32-bit path (set by the 32-bit GC,
+                // cleared only in the 32-bit WAIT_FRAME arm), so for a
+                // Value64 title it can sit stuck and block every frame exit.
+                // st == S_WAIT_FRAME is the guard that actually protects the
+                // callback (a mid-rAF swapBuffers is not at WAIT_FRAME).
+                if (pulsed && left_wait && st == 16u && !due_timer &&
                     unsigned(rframe->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n)
                         != swap0) {
                     got = 1; used++; break;
@@ -1926,9 +2070,64 @@ int main(int argc, char** argv) {
                 // frame and delayed the next KEYEVT dispatch (DONKEY Enter).
                 idle_run = (pulsed && st == 16u) ? (idle_run + 1) : 0;
                 if (idle_run > 2000) { got = 1; used++; break; }
+                // Halfway to the cap this frame is clearly not finishing:
+                // start recording ips so the cap summary has something to show.
+                if (used == CAP / 2) {
+                    ip_trace.clear();
+                    ip_trace_cap = 4000;
+                    ip_trace_prev = 0xffff;
+                }
             }
             last_fclk = (unsigned)used;
             last_fcap = (got || dead) ? 0u : 1u;
+            if (last_fcap) {
+                loop_ipn = frame_ipn;
+                for (int k = 0; k < 5; k++) { top_ip[k] = 0; top_cnt[k] = 0; }
+                for (unsigned i2 = 0; i2 < ip_hist.size(); i2++) {
+                    unsigned c2 = ip_hist[i2];
+                    if (!c2) continue;
+                    for (int k = 0; k < 5; k++) {
+                        if (c2 > top_cnt[k]) {
+                            for (int j = 4; j > k; j--) {
+                                top_cnt[j] = top_cnt[j-1]; top_ip[j] = top_ip[j-1];
+                            }
+                            top_cnt[k] = c2; top_ip[k] = i2;
+                            break;
+                        }
+                    }
+                }
+                for (int k = 0; k < 3; k++) { hot_lo[k] = 0; hot_n[k] = 0; }
+                for (int r = 0; r < 256; r++) {
+                    for (int k = 0; k < 3; k++) {
+                        if (region[r] > hot_n[k]) {
+                            for (int j = 2; j > k; j--) {
+                                hot_n[j] = hot_n[j - 1]; hot_lo[j] = hot_lo[j - 1];
+                            }
+                            hot_n[k] = region[r]; hot_lo[k] = unsigned(r) << 8;
+                            break;
+                        }
+                    }
+                }
+                // Capped: summarise the ip ring into the three hottest ips.
+                std::map<unsigned, unsigned> hist;
+                for (uint16_t v : ip_trace) hist[v]++;
+                for (int k = 0; k < 3; k++) { loop_ip[k] = 0; loop_hits[k] = 0; }
+                for (auto& kv : hist) {
+                    for (int k = 0; k < 3; k++) {
+                        if (kv.second > loop_hits[k]) {
+                            for (int j = 2; j > k; j--) {
+                                loop_hits[j] = loop_hits[j - 1];
+                                loop_ip[j] = loop_ip[j - 1];
+                            }
+                            loop_hits[k] = kv.second;
+                            loop_ip[k] = kv.first;
+                            break;
+                        }
+                    }
+                }
+            }
+            ip_trace.clear();
+            ip_trace_cap = 0;
             if (!got && !dead) fcap_n++;
             if (top->game_mode) {
                 // Capped FRAME has not presented — skip the 640×480 dump

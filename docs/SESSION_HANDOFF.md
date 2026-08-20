@@ -76,7 +76,9 @@ flatten.
 Do **not** extract JOIN/JSON/GC. Leave 16-deep FFs (`vst_win`,
 `js_val`/`vjs_val`, `cls_*` 16×16, `spr_off`/`spr_ww`/`spr_hh`,
 `kd_slot`). `storage_engine` `linebuf` 8-4767 stays. Opcode `always_comb`
-locals/`*_n` only (parent sees `*_q`). Inspect both exec32 and exec64.
+locals/`*_n` only (parent sees `*_q`). Inspect both exec32 and exec64
+until the ISA cut in [REMOVING_EXEC32.md](REMOVING_EXEC32.md) lands
+(do not start that cut in parallel with glass).
 
 ---
 

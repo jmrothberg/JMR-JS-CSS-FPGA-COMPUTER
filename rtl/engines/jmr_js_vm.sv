@@ -703,6 +703,9 @@ module jmr_js_vm #(
     logic [15:0] id_rel, id_disp; // removeEventListener / dispatchEvent
     logic [15:0] id_document, id_window; // seed vars so `if (document.dispatchEvent)` is truthy
     logic [15:0] id_arrow_l, id_arrow_r, id_space, id_a, id_d, id_keydown, id_keyup;
+    // potential-bugs #15: DONKEY drives WASD + pause. Without these,
+    // e.key is undefined for w/s/p and the handler's === test never matches.
+    logic [15:0] id_w, id_s, id_p;
     // NEW: e.key for the vertical arrows. Without these the Up/Down keyCode
     // arrived with event.key = "ArrowLeft" (the old ternary default), so a
     // `switch (e.key)` game turned left on every vertical press.
@@ -750,6 +753,15 @@ module jmr_js_vm #(
     logic [9:0]  name_hash_raddr;
     logic [7:0]  name_len_tbl  [0:1023] /*verilator public_flat_rd*/; // intern idx -> byte length (concat fold)
     logic [15:0] names_n;
+    // End of the trailer-loaded (static) names, and the byte pointer at
+    // that moment. Strings built at run time (`"SCORE " + score`) intern
+    // above this and are never reclaimed, so the 1024-slot table filled
+    // after a few hundred frames and every later intern degraded. Recycle
+    // the dynamic region as a ring instead of exhausting it: per-frame HUD
+    // strings are rebuilt every frame, so an old one going stale is fine,
+    // while the static names the program compares against are untouched.
+    logic [15:0] names_static;
+    logic [15:0] nb_static;
     logic [11:0]  jn_arr;
     logic [15:0] jn_i, jn_h;
     logic [7:0]  jn_len;
@@ -791,6 +803,16 @@ module jmr_js_vm #(
     logic [15:0] dbg_evkey /*verilator public_flat_rd*/;   // id planted as event.key
     logic [15:0] dbg_txtw  /*verilator public_flat_rd*/;   // last fillText pen width
     logic [15:0] dbg_txt_n /*verilator public_flat_rw*/;   // fillText calls
+    // A fillText whose intern has no bytes is an unrenderable STRING,
+    // not a full table. It used to bump dbg_str_ovf, which the global
+    // fault sweep turns into fault 5 and halts the VM — so one HUD
+    // draw of `"SCORE " + score` could kill the machine mid-game.
+    // Count it loudly on its own counter and keep running.
+    logic [15:0] dbg_txt_miss /*verilator public_flat_rw*/;
+    // rAF dispatches vs frame ends: if these diverge, the frame loop is
+    // re-dispatching callbacks instead of finishing the frame.
+    logic [15:0] dbg_raf_call /*verilator public_flat_rw*/;
+    logic [15:0] dbg_frame_end /*verilator public_flat_rw*/;
     // NEW: string concat ('s'+_index etc.) — operand stash + digit fold
     logic signed [31:0] cc_av, cc_bv, cc_v;
     logic [2:0]  cc_at, cc_bt, cc_t;
@@ -1208,6 +1230,13 @@ module jmr_js_vm #(
     logic        valloc_rd_arm;
     // flatten: HEAP proto follow / ASSIGN nsv — raddr = hp_proto this clock.
     logic        hp_proto_arm /*verilator public_flat_rd*/;
+    // venv_len_rdata is a registered read. LET_VAR picks the new slot
+    // with it AND increments the length with it, so using it in the same
+    // beat it is requested makes every declaration land in slot 0 and the
+    // length never advance: a program whose top level runs inside an env
+    // (INVADERS) lost every top-level `let`, and reads fell through to an
+    // empty vvars entry. One settle beat before it is used.
+    logic        env_len_arm;
     // flatten: json_mem is 8K SRAM; rdata next clock (PARSE/REPL/IDXSTR/TXT).
     logic [7:0]  json_mem_rdata, json_ch0;
     logic [12:0] json_rdaddr;
@@ -2491,7 +2520,17 @@ module jmr_js_vm #(
 
     always_comb begin
         vst_raddr = (vsp >= 12'd16) ? (vsp - 12'd16) : 12'd0;
-        if (state == S_HEAP_FILL && hp_from_stack && hp_v64)
+        // potential-bugs #53: exec-issued push enters S_HEAP_FILL with a
+        // leave beat (casestate FILL, parent state still EXEC). The phase
+        // 0->1 sequencer runs on casestate, but this raddr was gated on
+        // parent state only, so the write beat stored vst_rdata registered
+        // from the DEFAULT raddr (vsp-16 / 0) — a garbage word — into the
+        // array slot. Length was right (varr_len_we in exec), elements were
+        // junk: a.push(x); a[0] returned a stale stack word. Parent-issued
+        // fills (MAKE_ARRAY literals via S_V64_ALLOC) have no leave beat,
+        // which is why literals worked and push did not.
+        if ((state == S_HEAP_FILL || casestate_q == S_HEAP_FILL) &&
+            hp_from_stack && hp_v64)
             vst_raddr = hp_vbase + {5'd0, hp_aslot};
         else if (state == S_V64_BIND)
             vst_raddr = bind_src + {4'd0, bind_k};
@@ -2507,7 +2546,8 @@ module jmr_js_vm #(
     // HEAP_FILL / ASSIGN: share exec32 stack read port (rdata next clock).
     always_comb begin
         stack_rd_a = e32_stack_raddr;
-        if (state == S_HEAP_FILL && hp_from_stack && !hp_v64)
+        if ((state == S_HEAP_FILL || casestate_q == S_HEAP_FILL) &&
+            hp_from_stack && !hp_v64)
             stack_rd_a = hp_vbase[10:0] + {4'd0, hp_aslot};
         else if ((state == S_HEAP_WAIT || state == S_HEAP_CMP) &&
                  hp_cmd == HP_ASSIGN && hp_phase == 3'd3 && !hp_v64)
@@ -3725,6 +3765,20 @@ module jmr_js_vm #(
     logic [1:0] e64_path_kind_q;
     logic e64_path_stroke_q;
     logic [4:0] e64_pc_n_q;
+    // #49: path-command write mirror from exec64 into the parent arrays that
+    // S_PWALK actually rasters from.
+    // #54: stringify seed mirror
+    logic e64_js_we_q;
+    logic [4:0] e64_js_waddr_q;
+    logic [7:0] e64_js_i_wdata_q;
+    logic [2:0] e64_js_ph_wdata_q;
+    logic [63:0] e64_vjs_val_wdata_q;
+    logic e64_pc_we_q;
+    logic [3:0] e64_pc_waddr_q;
+    logic [1:0] e64_pc_op_wdata_q;
+    logic signed [31:0] e64_pc_a1_wdata_q, e64_pc_a2_wdata_q;
+    logic signed [31:0] e64_pc_a3_wdata_q, e64_pc_a4_wdata_q, e64_pc_a5_wdata_q;
+    logic e64_pc_ccw_wdata_q;
     logic [4:0] e64_pi_q;
     logic e64_repl_did_q;
     logic e64_repl_g_q;
@@ -4177,6 +4231,7 @@ module jmr_js_vm #(
         .id_join(id_join),
         .id_length(id_length),
         .id_lineto(id_lineto),
+        .id_quadcurve(id_quadcurve),
         .id_map(id_map),
         .id_measuretext(id_measuretext),
         .id_moveto(id_moveto),
@@ -4524,6 +4579,20 @@ module jmr_js_vm #(
         .path_kind_q(e64_path_kind_q),
         .path_stroke_q(e64_path_stroke_q),
         .pc_n_q(e64_pc_n_q),
+        .js_we_q(e64_js_we_q),
+        .js_waddr_q(e64_js_waddr_q),
+        .js_i_wdata_q(e64_js_i_wdata_q),
+        .js_ph_wdata_q(e64_js_ph_wdata_q),
+        .vjs_val_wdata_q(e64_vjs_val_wdata_q),
+        .pc_we_q(e64_pc_we_q),
+        .pc_waddr_q(e64_pc_waddr_q),
+        .pc_op_wdata_q(e64_pc_op_wdata_q),
+        .pc_a1_wdata_q(e64_pc_a1_wdata_q),
+        .pc_a2_wdata_q(e64_pc_a2_wdata_q),
+        .pc_a3_wdata_q(e64_pc_a3_wdata_q),
+        .pc_a4_wdata_q(e64_pc_a4_wdata_q),
+        .pc_a5_wdata_q(e64_pc_a5_wdata_q),
+        .pc_ccw_wdata_q(e64_pc_ccw_wdata_q),
         .pi_q(e64_pi_q),
         .repl_did_q(e64_repl_did_q),
         .repl_g_q(e64_repl_g_q),
@@ -5797,6 +5866,7 @@ module jmr_js_vm #(
             looping <= 1'b0;
             fb_we <= 1'b0; fb_swap <= 1'b0;
             did_swap <= 1'b0; present_pend <= 1'b0; fb_dirty <= 1'b0;
+            env_len_arm <= 1'b0;
             fb_waddr <= '0; fb_wdata <= '0;
             fb_dump_addr <= '0; fb_dump_sel <= 1'b0;
             sp <= '0; hs_ip('0);
@@ -6111,6 +6181,32 @@ module jmr_js_vm #(
             hs_m_hp_spr_w <= 1'b0; hs_m_hp_spr_h <= 1'b0; hs_m_hp_nat <= 1'b0;
             hs_m_hp_tag <= 1'b0; hs_m_hp_qk <= 1'b0; hs_m_hp_qv <= 1'b0; hs_m_hp_qt <= 1'b0;
             hs_m_valloc_kind <= 1'b0; hs_m_valloc_i <= 1'b0; hs_m_valloc_arr_n <= 1'b0; hs_m_valloc_retried <= 1'b0; hs_m_vnat_dom <= 1'b0; hs_m_vnat_base <= 1'b0; hs_m_valloc_now_fn <= 1'b0; hs_m_valloc_bind <= 1'b0; hs_m_valloc_bind_src <= 1'b0; hs_m_valloc_bind_this <= 1'b0; hs_m_valloc_fn_entry <= 1'b0; hs_m_valloc_fn_a1 <= 1'b0; hs_m_valloc_proto <= 1'b0; hs_m_valloc_proto_fn <= 1'b0; hs_m_valloc_metrics <= 1'b0; hs_m_valloc_regex <= 1'b0; hs_m_valloc_regex_pack <= 1'b0; hs_m_vcall_value <= 1'b0; hs_m_vcall_argc <= 1'b0; hs_m_vcall_entry <= 1'b0; hs_m_vcall_set_this <= 1'b0; hs_m_vcall_this <= 1'b0; hs_m_vcall_ctor_val <= 1'b0; hs_m_vraf_n <= 1'b0; hs_m_vlistener_n <= 1'b0; hs_m_vgc_halt_after <= 1'b0; hs_m_vgc_wait_after <= 1'b0; hs_m_vgc_clear_i <= 1'b0; hs_m_vgc_qr <= 1'b0; hs_m_vgc_qw <= 1'b0; hs_m_vdraw_i <= 1'b0; hs_m_vdraw_x <= 1'b0; hs_m_vdraw_y <= 1'b0; hs_m_vdraw_w <= 1'b0; hs_m_vdraw_h <= 1'b0; hs_m_vdraw_color <= 1'b0; hs_m_vfe_i <= 1'b0; hs_m_vfe_pop <= 1'b0;
+            // potential-bugs #49: mirror exec64's path-command writes into the
+            // parent arrays that S_PWALK / S_PDO / S_LINE / S_CIRCLE / S_QSEG
+            // raster from. exec64 fills its own copy then asks for S_PWALK,
+            // but the parent's pc_* had NO writer at all — pc_n stuck at 0, so
+            // the walk aborted on beat 0 and every arc / lineTo / fill /
+            // stroke painted nothing (PX line=0 circ=0 in every title).
+            // 16 slots of FFs, not SRAM; same shape as the #47 mirror.
+            // pc_we defaults to 0 in exec64's always_comb, so this is quiet
+            // whenever exec is disabled or the opcode is not a path command.
+            // potential-bugs #54: mirror exec64's vjs seed writes (stringify
+            // JSON.stringify(x) writes vjs_val[0]=x in exec's copy; the parent
+            // S_V64_JSON walker reads the parent copy).
+            if (jsb_flags[3] && e64_js_we_q) begin
+                vjs_val[e64_js_waddr_q] <= e64_vjs_val_wdata_q;
+                js_i  [e64_js_waddr_q] <= e64_js_i_wdata_q;
+                js_ph [e64_js_waddr_q] <= e64_js_ph_wdata_q;
+            end
+            if (jsb_flags[3] && e64_pc_we_q) begin
+                pc_op [e64_pc_waddr_q] <= e64_pc_op_wdata_q;
+                pc_a1 [e64_pc_waddr_q] <= e64_pc_a1_wdata_q;
+                pc_a2 [e64_pc_waddr_q] <= e64_pc_a2_wdata_q;
+                pc_a3 [e64_pc_waddr_q] <= e64_pc_a3_wdata_q;
+                pc_a4 [e64_pc_waddr_q] <= e64_pc_a4_wdata_q;
+                pc_a5 [e64_pc_waddr_q] <= e64_pc_a5_wdata_q;
+                pc_ccw[e64_pc_waddr_q] <= e64_pc_ccw_wdata_q;
+            end
             e64_p_addr2 <= 16'd0;
             e64_p_data2 <= 64'd0;
             e64_p_data3 <= 64'd0;
@@ -6569,7 +6665,7 @@ module jmr_js_vm #(
                     click_fired <= 1'b0;
                     pre_click_raf <= 1'b0;
                     prev_joy <= joy_in; joy_down_edge <= 0; joy_up_edge <= 0;
-                    fill_style_i <= 8'd1; stroke_style_i <= 8'd1; lfsr <= 32'hACE1; this_obj <= 16'hFFFF;
+                    fill_style_i <= 8'd0; stroke_style_i <= 8'd0; lfsr <= 32'hACE1; this_obj <= 16'hFFFF;
                     var_this <= 9'd0; this_ok <= 1'b0; id_this_name <= 16'hFFFF;
                     var_keys <= 9'd0; keys_ok <= 1'b0;
                     keys_a_oid <= 16'hFFFF; keys_d_oid <= 16'hFFFF; keys_sp_oid <= 16'hFFFF;
@@ -6584,6 +6680,7 @@ module jmr_js_vm #(
                     id_fillstyle <= 16'hFFFF; id_clearrect <= 16'hFFFF; id_drawimage <= 16'hFFFF;
                     id_keydown <= 16'hFFFF; id_keyup <= 16'hFFFF; id_width <= 16'hFFFF;
                     id_space <= 16'hFFFF; id_arrow_l <= 16'hFFFF; id_arrow_r <= 16'hFFFF;
+                    id_w <= 16'hFFFF; id_s <= 16'hFFFF; id_p <= 16'hFFFF;
                     id_arrow_u <= 16'hFFFF; id_arrow_d <= 16'hFFFF;
                     id_a <= 16'hFFFF; id_d <= 16'hFFFF; kev_fn <= 16'hFFFF;
                     id_height <= 16'hFFFF; id_black <= 16'hFFFF; id_white <= 16'hFFFF;
@@ -6620,6 +6717,7 @@ module jmr_js_vm #(
             dbg_last_y <= 10'd0; dbg_last_c <= 8'd0;
             dbg_key_scan <= 16'd0; dbg_key_call <= 16'd0;
             dbg_key_alloc <= 16'd0; dbg_key_cmp <= 16'd0; dbg_txt_n <= 16'd0;
+            dbg_txt_miss <= 16'd0; dbg_raf_call <= 16'd0; dbg_frame_end <= 16'd0;
             dbg_bad_state <= 8'd0;
             dbg_key_want <= 64'd0; dbg_key_lastev <= 64'd0;
                     dbg_line_px <= 32'd0; dbg_circ_px <= 32'd0; dbg_rect_px <= 32'd0;
@@ -6635,6 +6733,7 @@ module jmr_js_vm #(
                     n_fn_proto <= 7'd0;
                     enter_n <= 3'd0; enter_delay <= 4'd0; // hack retired (KEYEVT)
                     kev_wp <= 3'd0; kev_rp <= 3'd0;
+                    names_static <= 16'd0; nb_static <= 16'd0;
                     names_ok <= 1'b0; nb_i <= 16'd0; nb_len <= 16'd0; nb_wp <= 16'd0;
                     dbg_str_ovf <= 16'd0; name_rdaddr <= 16'd0; str_res <= 11'd0;
                     str_pf_ok <= 1'b0; str_pf_id <= 16'd0; str_pf_ci <= 32'sd0;
@@ -6838,6 +6937,9 @@ module jmr_js_vm #(
                                 if ({tb, trail_acc[7:0]} == 16'd32)    id_space <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd97)    id_a <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd100)   id_d <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd119)   id_w <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd115)   id_s <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd112)   id_p <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd31617) id_keydown <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd37178) id_keyup <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd62822) id_reduce <= name_idx;
@@ -7237,6 +7339,8 @@ module jmr_js_vm #(
                                 if (nb_wp + {tb, trail_acc[7:0]} <= 16'(NAME_CAP))
                                     name_has[nb_i[9:0]] <= 1'b1;
                                 names_ok <= 1'b1;
+                                names_static <= nb_i + 16'd1;
+                                nb_static <= nb_wp;
                                 if ({tb, trail_acc[7:0]} == 16'd0) begin
                                     // empty name — nothing to copy
                                     if (nb_i + 16'd1 >= names_n) begin
@@ -7488,9 +7592,33 @@ module jmr_js_vm #(
                     end
                 end
                 S_PWALK: begin
+                    // (mirror write for #49 is above the case — see e64_pc_we_q)
                     // NEW: command walk (FM _raster_path) — transform each
                     // command's points with the CURRENT ctx transform
-                    if (pi >= pc_n) begin
+                    //
+                    // potential-bugs #49 first-entry latch. Same shape as
+                    // S_TXT_LD (~9350): exec64 leaves state==S_V64_EXEC on the
+                    // hand-off beat, so without this the very first beat
+                    // compares the parent's stale pc_n (0 after RUN) and
+                    // aborts before any mirrored write is visible. The raster
+                    // states are NOT in hs64, so `ip` here is the last parent
+                    // hs_ip (FIND/FOREACH) — pull exec's already-incremented
+                    // ip/vsp across too, or the done-path hs_code(ops_base+ip)
+                    // re-fetches a stale op and re-issues fill/stroke.
+                    if (state != S_PWALK) begin
+                        hs_st(S_PWALK);
+                        path_active <= 1'b1;
+                        path_stroke <= e64_path_stroke_q;
+                        pc_n <= e64_pc_n_q;
+                        pi <= 5'd0;
+                        color <= e64_color_q;
+                        ctx_sx <= e64_ctx_sx_q;
+                        ctx_sy <= e64_ctx_sy_q;
+                        ctx_tx <= e64_ctx_tx_q;
+                        ctx_ty <= e64_ctx_ty_q;
+                        hs_ip(e64_ip_q);
+                        hs_vsp(e64_vsp_q);
+                    end else if (pi >= pc_n) begin
                         path_active <= 1'b0;
                         hs_code(15'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
@@ -7883,6 +8011,12 @@ module jmr_js_vm #(
                             end else begin
                             stack_wr(jn_res, {16'd0, names_n}, 3'd3);
                             end
+                            // Ring-recycle the dynamic region.
+                            if (names_n + 16'd1 >= 16'd1024 &&
+                                names_static != 16'd0) begin
+                                names_n <= names_static;
+                                nb_wp <= nb_static;
+                            end else
                             names_n <= names_n + 16'd1;
                             // NEW: and its characters, staged in txt_buf by
                             // S_CONCAT — that is what makes fillText("SCORE "+n)
@@ -7894,7 +8028,14 @@ module jmr_js_vm #(
                                 txt_i <= 7'd0;
                                 hs_st(S_STR_WR);
                             end else begin
-                                if (!cc_bok) dbg_str_ovf <= dbg_str_ovf + 16'd1;
+                                // Not a full table: this one string could not
+                                // stage its bytes. dbg_str_ovf feeds the global
+                                // fault sweep (fault 5, running <= 0), so a
+                                // single `"SCORE " + score` halted the machine
+                                // mid-game. Real capacity overflow (NAME_CAP,
+                                // ~7266) stays fatal; this degrades to a blank
+                                // string and keeps the game alive.
+                                if (!cc_bok) dbg_txt_miss <= dbg_txt_miss + 16'd1;
                                 hs_code(15'(ops_base + ip));
                                 hs_st(S_FETCH_WAIT);
                             end
@@ -8143,7 +8284,36 @@ module jmr_js_vm #(
                     end
                 end
                 S_BLIT: begin
-                    if (rw == 10'd0 || rh == 10'd0) begin
+                    // potential-bugs #51: exec64's drawImage hit (~5838) plants
+                    // rw/rh/rx/ry/blit_* in ITS OWN FFs and requests S_BLIT,
+                    // but the parent copies this raster reads were never
+                    // written from e64_*_q — parent rw stayed 0, so a hit was
+                    // an immediate rw==0 exit with dbg_di_hit counted and zero
+                    // pixels (DONKEY sheets blank, INVADERS player/explosions
+                    // blank). Same overlay class as #49's S_PWALK: first-entry
+                    // latch, plus hs_ip/hs_vsp because the drawImage hit does
+                    // not set code_raddr_n and S_BLIT is not in hs64 — the
+                    // done-path hs_code(ops_base + ip) would re-fetch a stale
+                    // op otherwise.
+                    if (state != S_BLIT) begin
+                        hs_st(S_BLIT);
+                        if (jsb_flags[3]) begin
+                            rw <= e64_rw_q;
+                            rh <= e64_rh_q;
+                            rx <= e64_rx_q;
+                            ry <= e64_ry_q;
+                            x <= e64_x_q;
+                            y <= e64_y_q;
+                            blit_si <= e64_blit_si_q;
+                            blit_sx <= e64_blit_sx_q;
+                            blit_sy <= e64_blit_sy_q;
+                            blit_sw <= e64_blit_sw_q;
+                            blit_sh <= e64_blit_sh_q;
+                            blit_wait <= 1'b0;
+                            hs_ip(e64_ip_q);
+                            hs_vsp(e64_vsp_q);
+                        end
+                    end else if (rw == 10'd0 || rh == 10'd0) begin
                         hs_code(15'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
                     end else begin
@@ -8400,6 +8570,13 @@ module jmr_js_vm #(
                     if (frame_tick)
                         v64_frame_armed <= 1'b1;
                     if (frame_tick || v64_frame_armed) begin
+                        // frame_fire is set by the 32-bit GC and cleared
+                        // only in the 32-bit WAIT_FRAME arm — a Value64 title
+                        // never runs that arm, so a stuck flag made the host
+                        // FRAME exit predicate (!frame_continue) false
+                        // forever: ~1000 presents inside one RPC and a
+                        // blocked GUI. Consume it on this path too.
+                        frame_fire <= 1'b0;
                         if (kev_rp != kev_wp) begin
                             v64_frame_armed <= 1'b1;
                             dbg_key_alloc <= dbg_key_alloc + 16'd1;
@@ -8563,8 +8740,17 @@ module jmr_js_vm #(
                             (kev_q[kev_rp][7:0] == 8'd38) ? id_arrow_u :
                             (kev_q[kev_rp][7:0] == 8'd40) ? id_arrow_d :
                             (kev_q[kev_rp][7:0] == 8'd65) ? id_a :
-                            (kev_q[kev_rp][7:0] == 8'd68) ? id_d : 16'hFFFF};
+                            (kev_q[kev_rp][7:0] == 8'd68) ? id_d :
+                            (kev_q[kev_rp][7:0] == 8'd87) ? id_w :
+                            (kev_q[kev_rp][7:0] == 8'd83) ? id_s :
+                            (kev_q[kev_rp][7:0] == 8'd80) ? id_p : 16'hFFFF};
                         hs_m_hp_qv <= 1'b1;
+                        // potential-bugs #15: the id ternary above already
+                        // resolves 87/83/80 (w/s/p), but this tag list did
+                        // not, so `e.key` for those three carried type 5
+                        // (undefined) and DONKEY's WASD / pause compares
+                        // never matched on the tagged path. Same set as the
+                        // Value64 KEYEVT intern (~10704).
                         hp_qt_ff[0] <= ((kev_q[kev_rp][7:0] == 8'd13) ||
                             (kev_q[kev_rp][7:0] == 8'd32) ||
                             (kev_q[kev_rp][7:0] == 8'd37) ||
@@ -8572,6 +8758,9 @@ module jmr_js_vm #(
                             (kev_q[kev_rp][7:0] == 8'd38) ||
                             (kev_q[kev_rp][7:0] == 8'd40) ||
                             (kev_q[kev_rp][7:0] == 8'd65) ||
+                            (kev_q[kev_rp][7:0] == 8'd87) ||
+                            (kev_q[kev_rp][7:0] == 8'd83) ||
+                            (kev_q[kev_rp][7:0] == 8'd80) ||
                             (kev_q[kev_rp][7:0] == 8'd68)) ? 3'd3 : 3'd5;
                         hs_m_hp_qt <= 1'b1;
                         hp_qk_ff[1] <= id_keycode;
@@ -9346,7 +9535,7 @@ module jmr_js_vm #(
                                 // hash-only intern (no bytes) or undefined: draw
                                 // nothing and count it — never a bar of garbage
                                 txt_len <= 7'd0;
-                                dbg_str_ovf <= dbg_str_ovf + 16'd1;
+                                dbg_txt_miss <= dbg_txt_miss + 16'd1;
                                 txt_ph <= 4'd6;
                             end
                         end
@@ -9483,7 +9672,38 @@ module jmr_js_vm #(
                 S_NAMCPY: begin
                     // interned name_mem → json_mem via registered name_rdata
                     // (same BRAM lag as str[i]; do not combinational-read NAME_CAP).
-                    if (!namcpy_armed) namcpy_armed <= 1'b1;
+                    //
+                    // potential-bugs #54: first-entry hs_st + seed copy, same
+                    // class as #53. exec enters this state directly (JSON.parse
+                    // of an interned string, replace, indexOf) but every seed
+                    // it computed (name_rdaddr, json_src/srclen/rp/wp, pph,
+                    // js_sp, namcpy_v64/repl) lives in EXEC's FFs; this arm
+                    // reads the PARENT FFs, which nothing ever wrote. Parse of
+                    // a constant string copied garbage and faulted 1 at the
+                    // next LET_VAR (site 3423). The hs_st also stops exec
+                    // re-running the CALL_NATIVE while the copy walks.
+                    if (casestate_q != S_NAMCPY) begin
+                        hs_st(S_NAMCPY);
+                        if (jsb_flags[3]) begin
+                            name_rdaddr <= e64_name_rdaddr_q;
+                            json_src    <= e64_json_src_q;
+                            json_srclen <= e64_json_srclen_q;
+                            json_rp     <= e64_json_rp_q;
+                            json_wp     <= e64_json_wp_q;
+                            json_pph    <= e64_json_pph_q;
+                            js_sp       <= e64_js_sp_q;
+                            namcpy_v64  <= e64_namcpy_v64_q;
+                            namcpy_repl <= e64_namcpy_repl_q;
+                            // completion branches read hp_nat (indexOf) and
+                            // hp_wval (needle); NAMCPY is not in hs64 so the
+                            // muxes fall back to the parent _ff copies.
+                            hs_hp_nat(e64_hp_nat_q);
+                            hs_hp_wval(e64_hp_wval_q);
+                            hs_vnat_base(e64_vnat_base_q);
+                        end
+                        namcpy_armed <= 1'b0;
+                    end
+                    else if (!namcpy_armed) namcpy_armed <= 1'b1;
                     else begin
                         if (json_wp < 14'(JSON_CAP)) begin
                             json_we <= 1'b1;
@@ -9568,6 +9788,28 @@ module jmr_js_vm #(
                     end
                 end
                 S_IMGD_GET: begin
+                    // #54: exec-direct entry (getImageData — PACMAN's maze
+                    // cache). All imgd_* seeds live in exec FFs; this arm read
+                    // the parent's, which nothing wrote.
+                    if (casestate_q != S_IMGD_GET) begin
+                        hs_st(S_IMGD_GET);
+                        if (jsb_flags[3]) begin
+                            imgd_x0 <= e64_imgd_x0_q;
+                            imgd_y0 <= e64_imgd_y0_q;
+                            imgd_w  <= e64_imgd_w_q;
+                            imgd_h  <= e64_imgd_h_q;
+                            imgd_x  <= e64_imgd_x_q;
+                            imgd_y  <= e64_imgd_y_q;
+                            imgd_i  <= e64_imgd_i_q;
+                            imgd_n  <= e64_imgd_n_q;
+                            imgd_v64 <= e64_imgd_v64_q;
+                            fb_dump_addr <= e64_fb_dump_addr_q;
+                            hs_vnat_base(e64_vnat_base_q);
+                        end
+                        imgd_armed <= 1'b0;
+                        fb_dump_sel <= 1'b1;
+                    end else begin
+                    casestate_imgd_body: begin end
                     // Copy back-buffer rect into the one snapshot (dump_back is
                     // registered 1 cycle after dump_raddr). S_CLEAR twin: one
                     // index, always i++ until n — 10-bit x+w wrap spun until
@@ -9731,6 +9973,7 @@ module jmr_js_vm #(
                             end
                         end
                     end
+                    end // #54 guard else
                 end
                 S_IMGD_PUT: begin
                     if (imgd_w == 10'd0 || imgd_h == 10'd0) begin
@@ -10006,7 +10249,40 @@ module jmr_js_vm #(
                                     fault_code <= 8'd2;
                                     running <= 1'b0;
                                     hs_st(S_DONE);
+                                end else if (e32_intern_var_ok_rdata) begin
+                                    // potential-bugs #52: PYTHON NEW_OBJ links
+                                    // instance.__proto__ = ctorFn.prototype on
+                                    // EVERY class-table hit
+                                    // (_value64_ctor_function_for_class +
+                                    // _value_object_protos), not only on the
+                                    // dynamic env/vars ctor paths. This inline
+                                    // dispatch skipped the link, so
+                                    // `function Stage(){}` +
+                                    // `Stage.prototype.m = ...` + `new Stage()`
+                                    // left vobj_proto UNDEFINED and every
+                                    // prototype member read undefined with no
+                                    // fault — PACMAN's title items were never
+                                    // created (createItem/bind/draw all
+                                    // prototype methods): black glass.
+                                    // Route through the existing S_RD →
+                                    // S_V64_CTOR_VARS machinery, which reads
+                                    // vvars[slot] (hoisted fn), writes
+                                    // vobj_proto[valloc_i] <= vfn_proto, and
+                                    // then dispatches this same ctor_ip via
+                                    // its ctor_ip != FFFF branch. All the
+                                    // read-mux cases for this route already
+                                    // exist (vvars_raddr, vfn_proto_rdata,
+                                    // vfn_valid_rdata). Two extra clocks per
+                                    // `new`, Port A legal.
+                                    hs_hp_key({7'd0, e32_intern_var_rdata});
+                                    hs_vcall_entry(ctor_ip);
+                                    hs_vcall_argc(argc);
+                                    ret_state <= S_V64_CTOR_VARS;
+                                    hs_st(S_RD);
                                 end else begin
+                                    // Class name is not a var (pure `class`
+                                    // syntax): methods live in cls_mip, no
+                                    // runtime prototype object to link.
                                     hs_vcall_value(1'b0);
                                     hs_vcall_entry(ctor_ip);
                                     hs_vcall_argc(argc);
@@ -10681,7 +10957,13 @@ module jmr_js_vm #(
                                         : (kev_q[kev_rp][7:0] == 8'd65)
                                         ? id_a
                                         : (kev_q[kev_rp][7:0] == 8'd68)
-                                        ? id_d : 16'hFFFF;
+                                        ? id_d
+                                        : (kev_q[kev_rp][7:0] == 8'd87)
+                                        ? id_w
+                                        : (kev_q[kev_rp][7:0] == 8'd83)
+                                        ? id_s
+                                        : (kev_q[kev_rp][7:0] == 8'd80)
+                                        ? id_p : 16'hFFFF;
                                     vkev_event <= handle;
                                     hs_vnat_dom(3'd0);
                                     vkey_li <= 5'd0;
@@ -11310,6 +11592,31 @@ module jmr_js_vm #(
                     // done path hs_ip(0) re-enters until vfe_sp>=8 fault 3).
                     if (state != S_V64_FOREACH) begin
                         hs_st(S_V64_FOREACH);
+                        // potential-bugs #47: S_V64_GC_ROOT phase 7 marks the
+                        // PARENT vfe_*_s, but the live nest stack is exec64's
+                        // (vfe_s_we) and the parent copies were never written.
+                        // A nested walk (INVADERS grids.forEach ->
+                        // grid.invaders.forEach -> projectiles.forEach) whose
+                        // inner callback triggers a mid-walk GC (ALLOC /
+                        // FREE_ARR / JSON retry, vgc_halt_after=0) therefore
+                        // lost the OUTER array / callback / map array: swept
+                        // vfe_fn -> fault 4 on resume, swept vfe_map -> map
+                        // and filter write into a recycled array. Mirror the
+                        // push here: on this beat vfe_sp / vfe_arr are still
+                        // the OUTER walk (exec64 saved exactly these at
+                        // vfe_s_waddr = old vfe_sp), so the shadow matches
+                        // slot for slot. Re-entry after a callback has
+                        // e64_vfe_sp_q == vfe_sp and does not fire.
+                        // Stale slots above vfe_sp are left alone on pop:
+                        // between the pop and the next re-latch the shadow is
+                        // the outer walk's ONLY root. Marking a stale word is
+                        // conservative (v64_gc_mark_task checks tag/kind/
+                        // bound/valid), never a fault.
+                        if (e64_vfe_sp_q > vfe_sp && vfe_sp < 4'd8) begin
+                            vfe_arr_s[vfe_sp[2:0]] <= vfe_arr;
+                            vfe_fn_s[vfe_sp[2:0]]  <= vfe_fn;
+                            vfe_map_s[vfe_sp[2:0]] <= vfe_map;
+                        end
                         vfe_arr <= e64_vfe_arr_q;
                         vfe_fn <= e64_vfe_fn_q;
                         vfe_i <= e64_vfe_i_q;
@@ -11457,6 +11764,18 @@ module jmr_js_vm #(
                     hs_st(S_FETCH_WAIT);
                 end
                 S_V64_JSON: begin
+                    // #54: exec-direct entry (JSON.stringify). Seeds json_wp /
+                    // js_sp are exec FFs; the vjs_val[0] seed itself arrives
+                    // via the e64_js_we_q mirror above.
+                    if (casestate_q != S_V64_JSON &&
+                        state != S_V64_JSON) begin
+                        hs_st(S_V64_JSON);
+                        json_wp <= e64_json_wp_q;
+                        js_sp <= e64_js_sp_q;
+                        hs_vnat_base(e64_vnat_base_q);
+                        vjs_rd_arm <= 1'b0;
+                    end else begin
+                    casestate_json_body: begin end
                     // Walk nested Value64 arrays/numbers into json_mem.
                     if (js_sp == 6'd0) begin
                         if (!vfree_armed) begin
@@ -11639,9 +11958,28 @@ module jmr_js_vm #(
                             else json_di <= json_di + 4'd1;
                         end else js_sp <= t;
                     end
+                    end // #54 guard else
                 end
                 S_V64_JSON_PARSE: begin
-                    if (json_rp >= json_src + json_srclen) begin
+                    // #54: entered via NAMCPY's parent-side hs_st (interned
+                    // source) or directly from exec (dynstr source, seeds in
+                    // exec FFs). Guard only the exec-direct entry: NAMCPY's
+                    // hand-off already owns the parent FFs and must not be
+                    // clobbered with exec's stale copies.
+                    if (casestate_q != S_V64_JSON_PARSE &&
+                        state != S_V64_JSON_PARSE) begin
+                        hs_st(S_V64_JSON_PARSE);
+                        if (jsb_flags[3]) begin
+                            json_src    <= e64_json_src_q;
+                            json_srclen <= e64_json_srclen_q;
+                            json_rp     <= e64_json_rp_q;
+                            json_pph    <= e64_json_pph_q;
+                            js_sp       <= e64_js_sp_q;
+                            hs_vnat_base(e64_vnat_base_q);
+                        end
+                        vjs_rd_arm <= 1'b0;
+                    end
+                    else if (json_rp >= json_src + json_srclen) begin
                         vst_wr(vnat_base, (js_sp == 0)
                             ? V64_NULL : vjs_val[0]);
                         hs_vsp(vnat_base + 12'd1);
@@ -12739,7 +13077,23 @@ module jmr_js_vm #(
                 S_HEAP_AWR: begin
                     // flatten: beat 0 muxes varr_long[hp_aid]; write when
                     // hp_slot_arm (long_rdata valid). varr_we gated on arm.
-                    if (!hp_slot_arm)
+                    //
+                    // potential-bugs #53: first-entry hs_st, same discipline
+                    // as S_HEAP_WAIT above. exec enters this state DIRECTLY
+                    // (ARR_SET in-bounds, RET_VAL 0xfffc map-store), and
+                    // without the hs_st the parent `state` FF never became
+                    // S_HEAP_AWR — so `varr_we = (state == S_HEAP_AWR &&
+                    // hp_slot_arm)` never fired and the element write was
+                    // SILENTLY LOST (a[1] = 7 left the slot untouched, no
+                    // fault; VARRPEEK showed the literal fill intact and the
+                    // set absent). The hs_st also disables exec the next
+                    // beat, stopping the leave_hold re-run. Reset slot_arm so
+                    // the settle beat re-reads varr_long[hp_aid] under this
+                    // state's own raddr mux.
+                    if (casestate_q != S_HEAP_AWR) begin
+                        hs_st(S_HEAP_AWR);
+                        hp_slot_arm <= 1'b0;
+                    end else if (!hp_slot_arm)
                         hp_slot_arm <= 1'b1;
                     else begin
                     hp_slot_arm <= 1'b0;
@@ -12788,7 +13142,21 @@ module jmr_js_vm #(
                     // (1W1R), then write. Combo `VST_AT(hp_vbase+i) was a
                     // second port and killed ram_style=block.
                     // Wait one clock for vst_rdata (v64) or stack_rdata (32-bit).
-                    if (hp_from_stack && hp_phase != 3'd1) begin
+                    //
+                    // potential-bugs #53: first-entry hs_st, same discipline
+                    // as S_HEAP_WAIT. exec enters DIRECTLY (push / unshift /
+                    // ARR_SET grow / .length grow), and without the hs_st the
+                    // parent `state` never became S_HEAP_FILL: the phase beat
+                    // ran on the casestate overlay while `vst_raddr` (gated
+                    // on parent state) still pointed at the DEFAULT slot, so
+                    // the write stored a stale stack word — a.push(7) put the
+                    // RECEIVER HANDLE (or stack[0]) in the slot. Reset the
+                    // phase so the raddr settle beat runs under this state.
+                    if (casestate_q != S_HEAP_FILL) begin
+                        hs_st(S_HEAP_FILL);
+                        if (hp_from_stack)
+                            hs_hp_phase(3'd0);
+                    end else if (hp_from_stack && hp_phase != 3'd1) begin
                         hs_hp_phase(3'd1);
                         hs_st(S_HEAP_FILL);
                     end else if ({1'b0, hp_aslot} + 8'd1 < hp_lim) begin
@@ -13659,7 +14027,11 @@ module jmr_js_vm #(
                             // (the VM leaves S_WAIT_FRAME again immediately),
                             // so every play frame burned the whole 64M cap and
                             // the GUI blocked on the RPC.
-                            dbg_cb_ip <= vraf_snap[vraf_i][15:0];
+                            // potential-bugs #5: a function handle with
+                            // oid 0 makes cb_ip 0, and the host FRAME
+                            // exit tests cbip != 0. Use a plain marker.
+                            dbg_cb_ip <= 16'h1;
+                            dbg_raf_call <= dbg_raf_call + 16'd1;
                             hs_vcall_value(1'b1);
                             hs_vcall_argc(12'd1);
                             vcallback_raf <= 1'b1;
@@ -13740,10 +14112,13 @@ module jmr_js_vm #(
                         bind_rd_arm <= 1'b0;
                         // PYTHON present(): scanout the back — but only if
                         // this frame drew. See fb_dirty.
-                        if (fb_dirty) begin
-                            fb_swap <= 1'b1;
-                            fb_dirty <= 1'b0;
-                        end
+                        dbg_frame_end <= dbg_frame_end + 16'd1;
+                        // Present unconditionally again: gating on fb_dirty
+                        // hid every top-level drawing that never reaches a
+                        // second frame (snippets painted into the back bank
+                        // and FB? read an empty front: nz=0).
+                        fb_swap <= 1'b1;
+                        fb_dirty <= 1'b0;
                         hs_vgc_clear_i(14'd0);
                         hs_vgc_qr(14'd0);
                         hs_vgc_qw(14'd0);

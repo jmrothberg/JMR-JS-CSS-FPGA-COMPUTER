@@ -163,7 +163,7 @@ Do **not** raise HDMI resolution or switch this T200 to VGA for torn glyphs
 
 ```bash
 source scripts/vivado_env.sh
-make -C sim sim_server_synth          # FPGA-SIM RTL binary (obj_dir incremental)
+make -C sim sim_server_synth          # FPGA-SIM; -B to force (not clean)
 make -C tools/board_flow bit          # publish only if WNS ≥ 0
 make -C tools/board_flow flash        # SRAM first
 # HDMI: READY letterbox; play via GUI arrows+Space
@@ -253,7 +253,7 @@ Rule: `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`.
 ### FPGA-SIM battery (before every flash)
 
 ```bash
-make -C sim sim_server_synth
+make -C sim sim_server_synth          # or -B to force Verilator (not clean)
 make -C sim tb_ps2_typing
 python3 tools/make_sd_image.py create sim/card.img
 .venv/bin/python tools/check_runtime_parity.py   # must print BATTERY PASS

@@ -224,6 +224,7 @@ class SimBackend(RuntimeBackend):
             "fsite=", "badst=", "kalloc=", "kcall=", "kcmp=", "kevq=",
             "align=", "vcsp=", "vret=", "lsn=", "efault=", "ecode=",
             "evkey=", "txtw=", "fontpx=", "idkd=", "idku=",
+            "hp=", "venvk=", "venvi=", "nops=", "sp=", "txtmiss=", "strovf=", "loop=", "rafcall=", "frend=", "ipn=", "hot=", "topip=",
         )
         parts = [tok for tok in st.split() if tok.startswith(keep)]
         title = (self._loaded_name or "").upper()[:16]

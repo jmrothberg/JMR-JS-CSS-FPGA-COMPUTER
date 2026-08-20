@@ -127,6 +127,13 @@ Monitor verbs (`DIR`, `LOAD`, …) are Machine console, not JsHwVm; Complete
 there means the READY command works. Do **not** TBD `DIR` because INVADERS
 is unfinished.
 
+**Silicon vs this table:** Complete is PYTHON. FPGA-SIM **NOT** (no RTL arm)
+is listed in [potential bugs.md](potential%20bugs.md#compatibility-command-map-inspection-only):
+`INSERT` / `DELETE` (**42** **43**), `Array.reduce`/`slice`/`sort` (**39**–**41**),
+`quadraticCurveTo` (**38**), `toISOString` (**23**), `globalAlpha` (**33**),
+`textBaseline` (**37**), `ctx.font` (**45**). `never` rows stay refusals. On-chip
+compiler is still **NOT** (host compile-on-RUN).
+
 When a TBD language/Canvas row starts working: add `test_hw_value64_*` (or
 HTML ProgramImage on JsHwVm), then flip **this row** to Complete.
 

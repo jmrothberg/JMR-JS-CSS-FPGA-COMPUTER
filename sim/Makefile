@@ -1,8 +1,10 @@
 # Verilator FPGA-SIM for JMR JS Computer.
-# make -C sim sim_server_synth  → sim_build_synth/jmr_js_sim_server
-# Tops jmr_js_core (same DUT as board). GUI falls back to host_sim_server.py.
-# Incremental: obj_dir keeps C++ from last Verilator; only changed .sv recompile.
-# `make -C sim clean` is a full rebuild — do not use it between small RTL edits.
+# From repo root (this is the terminal command):
+#   make -C sim sim_server_synth      # rebuild if rtl/sim_main.cpp is newer
+#   make -C sim sim_server_synth -B   # force Verilator; keep obj_dir (not clean)
+# "Nothing to be done" meant the binary was already newer than those files.
+# Do not `make -C sim clean` between small RTL edits.
+
 
 ROOT := $(abspath ..)
 RTL  := $(ROOT)/rtl
@@ -83,6 +85,8 @@ $(FONT): $(ROOT)/tools/export_font_rom_hex.py $(ROOT)/functional_model/font8.py
 	cp -f $(FONT) $(RTL)/video/font_rom.hex
 
 sim_server_synth: $(BUILD)/jmr_js_sim_server
+	@echo "OK FPGA-SIM $(BUILD)/jmr_js_sim_server"
+	@echo "    already current if Make skipped Verilator. Force: make -C sim sim_server_synth -B"
 
 CORE_SRCS := \
 	$(RTL)/engines/jmr_keyboard_fifo.sv \
@@ -118,12 +122,17 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 	# DONKEY's fat .JSH load broke LOAD entirely: at clk/4 (DIV=1) and clk/2
 	# (DIV=0) the C++ card model in sim_main.cpp misses MOSI setup and every
 	# LOAD returns ?IO. Load time must be fixed above the SPI layer, not here.
+	# -O3 / native codegen: simulator speed only. This is the Verilator +
+	# host C++ build, not the RTL — synthesis is unaffected. The VM is large
+	# and the default build ran ~600k clocks/s, which made a title boot
+	# longer than a debugging cycle should ever be.
 	verilator -cc -exe -build -j 0 \
 		-Mdir $(BUILD)/obj_dir \
 		-o $(abspath $(BUILD)/jmr_js_sim_server) \
 		--top-module jmr_js_core \
+		-O3 \
 		-Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-MULTIDRIVEN -Wno-LATCH \
-		-CFLAGS "-std=c++17 -O2" \
+		-CFLAGS "-std=c++17 -O3 -march=native -fno-semantic-interposition" \
 		$(CORE_SRCS) \
 		sim_main.cpp
 

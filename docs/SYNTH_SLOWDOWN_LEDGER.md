@@ -211,7 +211,7 @@ No new module. No title name in comments as a gate.
 
 ```
 unset JMR_SIM_HOST
-make -C sim sim_server_synth
+make -C sim sim_server_synth -B
 ```
 
 Titles are tests. Prove FIND on INVADERS play (worst measured JOIN),
