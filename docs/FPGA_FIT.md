@@ -9,7 +9,18 @@ is the **same used counts** against **Nexys A7-100T / XC7A100T** budgets — “
 it fit,” not a T100 `.bin` from this repo.
 
 **Authoritative report:** `build/nexys_video/utilization_impl.rpt` after
-`make -C tools/board_flow bit`. Companion: [FPGA_BRINGUP.md](FPGA_BRINGUP.md),
+`make -C tools/board_flow bit`.
+
+**Unmeasured delta since the last fit run (2026-08-20):** glass debugging
+added **14 new exec64→parent output ports** (9 for the path-command mirror
+`pc_we`/`pc_waddr`/`pc_op_wdata`/`pc_a1..a5_wdata`/`pc_ccw_wdata` — bug
+**#49**; 5 for the JSON seed mirror `js_we`/`js_waddr`/`js_i_wdata`/
+`js_ph_wdata`/`vjs_val_wdata` — bug **#54**), plus a handful of parent FFs
+(`e64_wr_ok`, `vprom_from_exec`, the 16-entry `pc_*` shadow arrays now
+actually written). All are FFs/wires, **no new `mem[i] <=` in the 7k FSM**
+and no new SRAM — but the numbers below predate them. Verilator lint is
+clean and the warning profile is unchanged; Vivado has **not** been re-run.
+Re-measure before quoting fit. Companion: [FPGA_BRINGUP.md](FPGA_BRINGUP.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), live status [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
 
 The `.bin` file is ~9.3 MB because that is the **200T configuration image size**,

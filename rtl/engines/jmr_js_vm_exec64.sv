@@ -434,6 +434,11 @@ module jmr_js_vm_exec64 (
     input  logic [15:0] id_fillstyle,
     input  logic [15:0] id_filltext,
     input  logic [15:0] id_filter,
+    input  logic [15:0] id_slice, // #40 Array.slice
+    input  logic [15:0] id_sort, // #41 Array.sort
+    output logic vfe_sort_q,
+    input  logic [15:0] id_reduce, // potential-bugs #39: Array.reduce
+    output logic vfe_reduce_q,
     input  logic [15:0] id_find,
     input  logic [15:0] id_foreach,
     input  logic [15:0] id_getctx,
@@ -472,6 +477,11 @@ module jmr_js_vm_exec64 (
     input  logic [15:0] id_stroke,
     input  logic [15:0] id_strokestyle,
     input  logic [15:0] id_textalign,
+    input  logic [15:0] id_textbaseline, // #37
+    input  logic [15:0] id_top,
+    input  logic [15:0] id_middle,
+    input  logic [15:0] id_bottom,
+    output logic [1:0] ctx_baseline_q,
     input  logic [15:0] id_translate,
     input  logic [15:0] id_unshift,
     input  logic [15:0] id_white,
@@ -1174,6 +1184,7 @@ module jmr_js_vm_exec64 (
     // Bring-up: which fault arm fired (source line of the assignment).
     logic [15:0] fault_site /*verilator public_flat_rd*/, fault_site_n;
     logic [6:0] tmr_i_q, tmr_i_n;
+    logic [1:0] tmr_arm_q, tmr_arm_n; // #66b: 2-beat settle per slot
     logic tmr_found_q, tmr_found_n;
     logic [6:0] tmr_slot_q, tmr_slot_n;
     logic [11:0] clr_i;
@@ -1246,6 +1257,9 @@ module jmr_js_vm_exec64 (
     assign color_q = color;
     logic [1:0] ctx_align;
     assign ctx_align_q = ctx_align;
+    // #37 textBaseline: 0=alphabetic 1=top 2=middle 3=bottom
+    logic [1:0] ctx_baseline, ctx_baseline_n;
+    assign ctx_baseline_q = ctx_baseline;
     logic ctx_smooth;
     assign ctx_smooth_q = ctx_smooth;
     logic signed [31:0] ctx_sx;
@@ -1593,6 +1607,16 @@ module jmr_js_vm_exec64 (
     logic [1:0] vfe_mode;
     assign vfe_mode_q = vfe_mode;
     logic [1:0] vfe_mode_s [0:7];
+    // #39 Array.reduce: 1-bit walk flavor; the accumulator rides vfe_map.
+    logic vfe_reduce, vfe_reduce_n;
+    assign vfe_reduce_q = vfe_reduce;
+    logic vfe_reduce_s [0:7];
+    logic vfe_reduce_s_wdata;
+    // #41 Array.sort: comparator walk; cmp result rides vfe_map.
+    logic vfe_sort, vfe_sort_n;
+    assign vfe_sort_q = vfe_sort;
+    logic vfe_sort_s [0:7];
+    logic vfe_sort_s_wdata;
     logic [15:0] vfe_ret;
     assign vfe_ret_q = vfe_ret;
     logic [15:0] vfe_ret_s [0:7];
@@ -1683,6 +1707,7 @@ module jmr_js_vm_exec64 (
             hash2_q <= 1'b0;
             venvw_q <= 3'd0;
             tmr_i_q <= 7'd0;
+            tmr_arm_q <= 2'd0;
             tmr_found_q <= 1'b0;
             tmr_slot_q <= 7'd0;
             clr_busy <= 1'b0;
@@ -1718,6 +1743,7 @@ module jmr_js_vm_exec64 (
             hash2_q <= hash2_n;
             venvw_q <= venvw_n;
             tmr_i_q <= tmr_i_n;
+            tmr_arm_q <= tmr_arm_n;
             tmr_found_q <= tmr_found_n;
             tmr_slot_q <= tmr_slot_n;
         end else begin
@@ -1727,6 +1753,7 @@ module jmr_js_vm_exec64 (
             hash2_q <= 1'b0;
             venvw_q <= 3'd0;
             tmr_i_q <= 7'd0;
+            tmr_arm_q <= 2'd0;
             tmr_found_q <= 1'b0;
             tmr_slot_q <= 7'd0;
         end
@@ -1806,6 +1833,7 @@ module jmr_js_vm_exec64 (
                 code_raddr <= code_raddr_n;
                 color <= color_n;
                 ctx_align <= ctx_align_n;
+                ctx_baseline <= ctx_baseline_n;
                 ctx_smooth <= ctx_smooth_n;
                 ctx_sx <= ctx_sx_n;
                 ctx_sy <= ctx_sy_n;
@@ -2004,6 +2032,8 @@ module jmr_js_vm_exec64 (
                     vfe_len_s[vfe_s_waddr] <= vfe_len_s_wdata;
                     vfe_map_s[vfe_s_waddr] <= vfe_map_s_wdata;
                     vfe_mode_s[vfe_s_waddr] <= vfe_mode_s_wdata;
+                    vfe_reduce_s[vfe_s_waddr] <= vfe_reduce_s_wdata;
+                    vfe_sort_s[vfe_s_waddr] <= vfe_sort_s_wdata;
                     vfe_ret_s[vfe_s_waddr] <= vfe_ret_s_wdata;
                 end
                 vfe_base <= vfe_base_n;
@@ -2012,6 +2042,8 @@ module jmr_js_vm_exec64 (
                 vfe_len <= vfe_len_n;
                 vfe_map <= vfe_map_n;
                 vfe_mode <= vfe_mode_n;
+                vfe_reduce <= vfe_reduce_n;
+                vfe_sort <= vfe_sort_n;
                 vfe_ret <= vfe_ret_n;
                 vfe_sp <= vfe_sp_n;
                 vfree_armed <= vfree_armed_n;
@@ -2173,6 +2205,10 @@ module jmr_js_vm_exec64 (
                 leave_hold <= (state_n != S_V64_EXEC);
         end else begin
             leave_hold <= 1'b0;
+                // potential-bugs #66: parent vtimer_n is truth (see the
+                // parent mirror); absorb it while frozen so fire-time
+                // frees are visible to the setTimeout full-check.
+                vtimer_n <= p_vtimer_n;
                 json_mem_we_q <= 1'b0;
                 name_blen_we_q <= 1'b0;
                 name_hash_we_q <= 1'b0;
@@ -2295,6 +2331,7 @@ module jmr_js_vm_exec64 (
                     // align=1, and ASTEROID's self-centred text drew half a
                     // string left of where it belonged.
                     ctx_align <= 2'd0;
+                    ctx_baseline <= 2'd0;
                     fill_style_i <= 8'd0;
                     stroke_style_i <= 8'd0;
                     vfe_arr <= V64_UNDEFINED;
@@ -2304,6 +2341,8 @@ module jmr_js_vm_exec64 (
                     vfe_base <= '0;
                     vfe_mode <= 2'd0;
                     vfe_map <= V64_UNDEFINED;
+                    vfe_reduce <= 1'b0;
+                    vfe_sort <= 1'b0;
                     vfe_len <= 8'd0;
                     vfe_sp <= 4'd0;
                 // leave_hold EXEC: parent is still EXEC (casestate FOREACH
@@ -2331,6 +2370,8 @@ module jmr_js_vm_exec64 (
                     vfe_base <= vfe_base_s[vfe_sp - 4'd1];
                     vfe_mode <= vfe_mode_s[vfe_sp - 4'd1];
                     vfe_map <= vfe_map_s[vfe_sp - 4'd1];
+                    vfe_reduce <= vfe_reduce_s[vfe_sp - 4'd1];
+                    vfe_sort <= vfe_sort_s[vfe_sp - 4'd1];
                     vfe_sp <= vfe_sp - 4'd1;
                 end else if (!p_clr && hs_m_vfe_i)
                     vfe_i <= p_vfe_i;
@@ -2779,7 +2820,15 @@ module jmr_js_vm_exec64 (
                 vobj_raddr = `VST_AT(cm_base + 12'd1)[12:0];
             else
                 vobj_raddr = `VST_AT(cm_base)[12:0];
-        end else
+        end else if (code_rdata[7:0] == OP_SET_PROP)
+            // potential-bugs #67: SET_PROP's receiver is at vsp-2 (value on
+            // top). Reading vobj_* at vsp-1 aimed the Image.src fast-path's
+            // vobj_builtin check at the VALUE's string id, so the jmr:spr:N
+            // match never fired: no FFC class, no sprite dims — DONKEY drew
+            // no art (dihit=0) while the parent SET_PROP walk (which re-reads
+            // by hp_oid) kept plain property writes working.
+            vobj_raddr = `VST_AT(vsp - 12'd2)[12:0];
+        else
             vobj_raddr = `VST_AT(vsp - 12'd1)[12:0];
         if (code_rdata[7:0] == OP_CALL_METH)
             vfn_raddr = `VST_AT(cm_base)[12:0];
@@ -2853,6 +2902,7 @@ module jmr_js_vm_exec64 (
         code_raddr_n = code_raddr;
         color_n = color;
         ctx_align_n = ctx_align;
+        ctx_baseline_n = ctx_baseline;
         ctx_smooth_n = ctx_smooth;
         ctx_sx_n = ctx_sx;
         ctx_sy_n = ctx_sy;
@@ -3025,6 +3075,8 @@ module jmr_js_vm_exec64 (
         vfe_len_n = vfe_len;
         vfe_map_n = vfe_map;
         vfe_mode_n = vfe_mode;
+        vfe_reduce_n = vfe_reduce;
+        vfe_sort_n = vfe_sort;
         vfe_ret_n = vfe_ret;
         vfe_sp_n = vfe_sp;
         vfree_armed_n = vfree_armed;
@@ -3093,6 +3145,8 @@ module jmr_js_vm_exec64 (
         vfe_len_s_wdata = '0;
         vfe_map_s_wdata = '0;
         vfe_mode_s_wdata = '0;
+        vfe_reduce_s_wdata = 1'b0;
+        vfe_sort_s_wdata = 1'b0;
         vfe_ret_s_wdata = '0;
         json_mem_we = 1'b0;
         json_mem_waddr = '0;
@@ -3175,6 +3229,7 @@ module jmr_js_vm_exec64 (
                     opnd2_n = opnd2_q;
                     opnd3_n = opnd3_q;
                     tmr_i_n = tmr_i_q;
+        tmr_arm_n = tmr_arm_q;
                     tmr_found_n = tmr_found_q;
                     tmr_slot_n = tmr_slot_q;
                     if (!opnd_q && tmr_i_q == 7'd0) begin
@@ -3265,6 +3320,10 @@ module jmr_js_vm_exec64 (
                                 // vfe_sp==0. Same body as OP_RET_VAL 0xfffc
                                 // (~4496) minus the find/filter TOS tests —
                                 // an implicit return has no value.
+                                if (vfe_reduce)
+                                    vfe_map_n = V64_UNDEFINED; // #39
+                                if (vfe_sort)
+                                    vfe_map_n = 64'd0; // #41 cmp 0: no swap
                                 vthis_n = vframe_this_rdata;
                                 venv_n = vframe_env_rdata;
                                 vcsp_n = vcsp_hs - 8'd1;
@@ -3295,8 +3354,8 @@ module jmr_js_vm_exec64 (
                                 vgc_qr_n = 14'd0;
                                 vgc_qw_n = 14'd0;
                                 vgc_halt_after_n = 1'b1;
-                                vgc_wait_after_n =
-                                    (vraf_n != 0 || vtimer_n != 0);
+                                vgc_wait_after_n = (vraf_n != 0 ||
+                                    vtimer_n != 0 || vlistener_n != 0);
                                 state_n = S_V64_GC_CLEAR;
                             end else if (vsp_hs != vframe_bsp_rdata) begin
                             machine_fault_n = 1'b1;
@@ -3347,6 +3406,10 @@ module jmr_js_vm_exec64 (
                                 ) begin
                                     // implicit undefined: find/filter miss;
                                     // map stores undefined.
+                                    if (vfe_reduce)
+                                        vfe_map_n = V64_UNDEFINED; // #39
+                                    if (vfe_sort)
+                                        vfe_map_n = 64'd0; // #41
                                     vsp_n = vframe_bsp_rdata;
                                     if (vfe_mode == 2'd2 &&
                                         vfe_map[63:48] == V64_TAG_PREFIX &&
@@ -3400,7 +3463,8 @@ module jmr_js_vm_exec64 (
                             vgc_qr_n = 14'd0;
                             vgc_qw_n = 14'd0;
                             vgc_halt_after_n = 1'b1;
-                            vgc_wait_after_n = (vraf_n != 0 || vtimer_n != 0);
+                            vgc_wait_after_n = (vraf_n != 0 ||
+                                vtimer_n != 0 || vlistener_n != 0);
                             state_n = S_V64_GC_CLEAR;
                         end
                     end else begin
@@ -3518,11 +3582,23 @@ module jmr_js_vm_exec64 (
                                         hp_v64_n = 1'b1;
                                         hp_eid_n = venv[9:0];
                                         hp_len_n = {1'b0, venv_len_rdata};
-                                        // a1>=2: local slot — start at that index (not 0).
-                                        hp_slot_n = (code_rdata[31:24] >= 8'd2 &&
-                                            code_rdata[31:24] <= 8'd17)
-                                            ? 5'(code_rdata[31:24] - 8'd2)
-                                            : 5'd0;
+                                        // potential-bugs #55: the a1>=2 slot
+                                        // hint used to seed the scan START,
+                                        // but the parent env walk runs
+                                        // hint..len-1 and never revisits the
+                                        // skipped prefix. The compiler inliner
+                                        // can rebind a name at a LOWER slot
+                                        // than the callee body's hint (place's
+                                        // `sz` at slot 0, inlined spawn hint
+                                        // slot 1) — the walk then missed the
+                                        // key, fell to the parent env / vvars
+                                        // and returned undefined with no
+                                        // fault (ASTEROID spawnRock fields).
+                                        // PYTHON ignores the hint (dict by
+                                        // name id). Always scan from 0 —
+                                        // envs are <=16 slots, extra beats
+                                        // are legal.
+                                        hp_slot_n = 5'd0;
                                         hp_key_n = {7'd0, code_rdata[16:8]};
                                         hp_phase_n = 3'd0;
                                         hp_hit_n = 1'b0;
@@ -3640,11 +3716,23 @@ module jmr_js_vm_exec64 (
                                         hp_v64_n = 1'b1;
                                         hp_eid_n = venv[9:0];
                                         hp_len_n = {1'b0, venv_len_rdata};
-                                        // a1>=2: local slot — start at that index (not 0).
-                                        hp_slot_n = (code_rdata[31:24] >= 8'd2 &&
-                                            code_rdata[31:24] <= 8'd17)
-                                            ? 5'(code_rdata[31:24] - 8'd2)
-                                            : 5'd0;
+                                        // potential-bugs #55: the a1>=2 slot
+                                        // hint used to seed the scan START,
+                                        // but the parent env walk runs
+                                        // hint..len-1 and never revisits the
+                                        // skipped prefix. The compiler inliner
+                                        // can rebind a name at a LOWER slot
+                                        // than the callee body's hint (place's
+                                        // `sz` at slot 0, inlined spawn hint
+                                        // slot 1) — the walk then missed the
+                                        // key, fell to the parent env / vvars
+                                        // and returned undefined with no
+                                        // fault (ASTEROID spawnRock fields).
+                                        // PYTHON ignores the hint (dict by
+                                        // name id). Always scan from 0 —
+                                        // envs are <=16 slots, extra beats
+                                        // are legal.
+                                        hp_slot_n = 5'd0;
                                         hp_key_n = {7'd0, code_rdata[16:8]};
                                         hp_wval_n = `VST_AT(vsp - 12'd1);
                                         hp_hit_n = 1'b0;
@@ -3977,15 +4065,31 @@ module jmr_js_vm_exec64 (
                                                 running_n = 1'b0;
                                                 state_n = S_DONE;
                                             end else if (tmr_i_q < 7'd64) begin
-                                                // One timer slot per clock.
-                                                tmr_i_n = tmr_i_q + 7'd1;
+                                                // #66b: the registered raddr
+                                                // export + registered rdata
+                                                // lag the cursor by TWO
+                                                // beats — one-slot-per-clock
+                                                // tested slot i against
+                                                // valid[i-2], so every scan
+                                                // after the first landed on
+                                                // the same slot (all of a
+                                                // frame's setTimeouts piled
+                                                // into ONE slot; INVADERS
+                                                // kill timers vanished).
+                                                // Hold raddr two beats.
                                                 tmr_found_n = tmr_found_q;
                                                 tmr_slot_n = tmr_slot_q;
-                                                if (!tmr_found_q &&
-                                                    !vtimer_valid_rdata)
-                                                begin
-                                                    tmr_found_n = 1'b1;
-                                                    tmr_slot_n = tmr_i_q;
+                                                if (tmr_arm_q != 2'd2)
+                                                    tmr_arm_n = tmr_arm_q + 2'd1;
+                                                else begin
+                                                    tmr_arm_n = 2'd0;
+                                                    tmr_i_n = tmr_i_q + 7'd1;
+                                                    if (!tmr_found_q &&
+                                                        !vtimer_valid_rdata)
+                                                    begin
+                                                        tmr_found_n = 1'b1;
+                                                        tmr_slot_n = tmr_i_q;
+                                                    end
                                                 end
                                                 state_n = S_V64_EXEC;
                                                 opnd_n = 1'b1;
@@ -4025,14 +4129,23 @@ module jmr_js_vm_exec64 (
                                                     v64_to_uint32(`VST_AT(base))
                                                 );
                                             if (tmr_i_q < 7'd64) begin
-                                                tmr_i_n = tmr_i_q + 7'd1;
-                                                if (vtimer_valid_rdata &&
-                                                    vtimer_id_rdata == wanted)
-                                                begin
-                                                    vtimer_we = 1'b1;
-                                                    vtimer_waddr = tmr_i_q[5:0];
-                                                    vtimer_valid_wdata = 1'b0;
-                                                    vtimer_n_n = vtimer_n - 7'd1;
+                                                // #66b: same 2-beat rdata lag
+                                                // as the setTimeout scan —
+                                                // clearTimeout matched (and
+                                                // CLEARED) the wrong slot.
+                                                if (tmr_arm_q != 2'd2)
+                                                    tmr_arm_n = tmr_arm_q + 2'd1;
+                                                else begin
+                                                    tmr_arm_n = 2'd0;
+                                                    tmr_i_n = tmr_i_q + 7'd1;
+                                                    if (vtimer_valid_rdata &&
+                                                        vtimer_id_rdata == wanted)
+                                                    begin
+                                                        vtimer_we = 1'b1;
+                                                        vtimer_waddr = tmr_i_q[5:0];
+                                                        vtimer_valid_wdata = 1'b0;
+                                                        vtimer_n_n = vtimer_n - 7'd1;
+                                                    end
                                                 end
                                                 state_n = S_V64_EXEC;
                                                 opnd_n = 1'b1;
@@ -4579,7 +4692,19 @@ module jmr_js_vm_exec64 (
                                     ) begin
                                         // Array.find: truthy callback → that
                                         // element (vfe_i already advanced).
-                                        if (vfe_mode == 2'd1 &&
+                                        if (vfe_sort) begin
+                                            // #41: comparator result -> parent
+                                            // S_V64_SORT phase 3 via vfe_map.
+                                            vfe_map_n = `VST_AT(vsp - 12'd1);
+                                            vsp_n = vframe_bsp_rdata;
+                                            hp_phase_n = 3'd3;
+                                            state_n = S_V64_SORT;
+                                        end else if (vfe_reduce) begin
+                                            // #39: callback return = new acc.
+                                            vfe_map_n = `VST_AT(vsp - 12'd1);
+                                            vsp_n = vframe_bsp_rdata;
+                                            state_n = S_V64_FOREACH;
+                                        end else if (vfe_mode == 2'd1 &&
                                             v64_truthy(`VST_AT(vsp - 12'd1)))
                                         begin
                                             hp_cmd_n = HP_AGETI;
@@ -5230,6 +5355,24 @@ module jmr_js_vm_exec64 (
                                                    id_right) ? 2'd2
                                                 : 2'd0;
                                         end
+                                        if (id_textbaseline != 16'hFFFF &&
+                                            code_rdata[23:8] ==
+                                                id_textbaseline) begin
+                                            // #37 ctx.textBaseline. Unknown
+                                            // strings are IGNORED (browser
+                                            // behavior): PACMAN writes
+                                            // 'center' (invalid) after 'top'
+                                            // and 'bottom' and relies on the
+                                            // earlier value sticking.
+                                            ctx_baseline_n =
+                                                (`VST_AT(vsp - 12'd1)[15:0] ==
+                                                 id_top) ? 2'd1
+                                                : (`VST_AT(vsp - 12'd1)[15:0] ==
+                                                   id_middle) ? 2'd2
+                                                : (`VST_AT(vsp - 12'd1)[15:0] ==
+                                                   id_bottom) ? 2'd3
+                                                : ctx_baseline;
+                                        end
                                         if (code_rdata[23:8] == id_imgsmooth) begin
                                             // PYTHON ctx.imageSmoothingEnabled
                                             // Indexed blit is nearest either way.
@@ -5494,12 +5637,166 @@ module jmr_js_vm_exec64 (
                                         end
                                     end
                                 end else if (arr_ok &&
+                                           id_sort != 16'hFFFF &&
+                                           code_rdata[23:8] == id_sort) begin
+                                    // #41 Array.sort(cmp) — parent bubble
+                                    // walk S_V64_SORT; one comparator call
+                                    // per compare via the FE plumbing.
+                                    if (vfe_sp >= 4'd8) begin
+                                        machine_fault_n = 1'b1;
+                                        fault_code_n = 8'd3;
+                                        fault_site_n = 16'd5299;
+                                        running_n = 1'b0; state_n = S_DONE;
+                                    end else if (argc == 12'd0 ||
+                                               varr_len_rdata < 8'd2) begin
+                                        // no comparator (or nothing to do):
+                                        // return the receiver unchanged.
+                                        vst_wr(base, receiver);
+                                        vsp_n = base + 12'd1;
+                                        ip_n = ip + 16'd1;
+                                        code_raddr_n =
+                                            15'(ops_base + ip + 16'd1);
+                                        state_n = S_FETCH_WAIT;
+                                    end else begin
+                                        vfe_s_we = 1'b1;
+                                        vfe_s_waddr = vfe_sp[2:0];
+                                        vfe_arr_s_wdata = vfe_arr;
+                                        vfe_fn_s_wdata = vfe_fn;
+                                        vfe_i_s_wdata = vfe_i;
+                                        vfe_len_s_wdata = vfe_len;
+                                        vfe_ret_s_wdata = vfe_ret;
+                                        vfe_base_s_wdata = vfe_base;
+                                        vfe_mode_s_wdata = vfe_mode;
+                                        vfe_map_s_wdata = vfe_map;
+                                        vfe_reduce_s_wdata = vfe_reduce;
+                                        vfe_sort_s_wdata = vfe_sort;
+                                        vfe_sp_n = vfe_sp + 4'd1;
+                                        vfe_arr_n = receiver;
+                                        vfe_fn_n = `VST_AT(base + 12'd1);
+                                        vfe_i_n = 8'd0;
+                                        vfe_len_n = varr_len_rdata;
+                                        vfe_ret_n = ip + 16'd1;
+                                        vfe_base_n = base;
+                                        vfe_mode_n = 2'd0;
+                                        vfe_reduce_n = 1'b0;
+                                        vfe_sort_n = 1'b1;
+                                        vfe_map_n = V64_UNDEFINED;
+                                        vsp_n = base + 12'd2;
+                                        vnat_base_n = base;
+                                        hp_phase_n = 3'd0;
+                                        state_n = S_V64_SORT;
+                                    end
+                                end else if (arr_ok &&
+                                           id_slice != 16'hFFFF &&
+                                           code_rdata[23:8] == id_slice) begin
+                                    // #40 Array.slice(start,end) — result
+                                    // array via the S_FREE_ARR scan (same
+                                    // re-decode flow as filter/map), then
+                                    // the parent S_V64_SLICE copy walk.
+                                    if (!vfree_armed) begin
+                                        vfree_armed_n = 1'b1;
+                                        vfree_arr_long_n =
+                                            varr_long_rdata ||
+                                            (varr_len_rdata >
+                                                ARR_SHORT_CAP[7:0]);
+                                        valloc_i_n =
+                                            (varr_long_rdata ||
+                                             (varr_len_rdata >
+                                                ARR_SHORT_CAP[7:0]))
+                                            ? 14'(MAX_ARR_SHORT) : 14'd0;
+                                        hp_ret_n = S_FETCH_WAIT;
+                                        state_n = S_FREE_ARR;
+                                    end else if (!vfree_ok) begin
+                                        vfree_armed_n = 1'b0;
+                                        if (!valloc_retried) begin
+                                            vgc_clear_i_n = 14'd0;
+                                            vgc_qr_n = 14'd0;
+                                            vgc_qw_n = 14'd0;
+                                            vgc_halt_after_n = 1'b0;
+                                            vgc_resume_n = 2'd1;
+                                            state_n = S_V64_GC_CLEAR;
+                                        end else begin
+                                            machine_fault_n = 1'b1;
+                                            fault_code_n = 8'd3;
+                                            fault_site_n = 16'd5340;
+                                            running_n = 1'b0;
+                                            state_n = S_DONE;
+                                        end
+                                    end else begin
+                                        logic [13:0] sfree;
+                                        logic signed [31:0] s0, s1;
+                                        logic [7:0] scnt;
+                                        vfree_armed_n = 1'b0;
+                                        sfree = valloc_i;
+                                        valloc_retried_n = 1'b0;
+                                        s0 = (argc >= 12'd1)
+                                            ? v64_to_int32(`VST_AT(base + 1))
+                                            : 32'sd0;
+                                        s1 = (argc >= 12'd2)
+                                            ? v64_to_int32(`VST_AT(base + 2))
+                                            : 32'($signed({24'd0,
+                                                varr_len_rdata}));
+                                        if (s0 < 0)
+                                            s0 = s0 + 32'($signed({24'd0,
+                                                varr_len_rdata}));
+                                        if (s1 < 0)
+                                            s1 = s1 + 32'($signed({24'd0,
+                                                varr_len_rdata}));
+                                        if (s0 < 0) s0 = 32'sd0;
+                                        if (s1 < 0) s1 = 32'sd0;
+                                        if (s0 > 32'($signed({24'd0,
+                                                varr_len_rdata})))
+                                            s0 = 32'($signed({24'd0,
+                                                varr_len_rdata}));
+                                        if (s1 > 32'($signed({24'd0,
+                                                varr_len_rdata})))
+                                            s1 = 32'($signed({24'd0,
+                                                varr_len_rdata}));
+                                        scnt = (s1 > s0)
+                                            ? 8'(s1 - s0) : 8'd0;
+                                        begin varr_valid_we = 1'b1; varr_valid_waddr = sfree[11:0]; varr_valid_wdata = 1'b1; end
+                                        varr_len_we = 1'b1;
+                                        varr_len_waddr = sfree[11:0];
+                                        varr_len_wdata = scnt;
+                                        varr_long_we = 1'b1;
+                                        varr_long_waddr = sfree[11:0];
+                                        varr_long_wdata =
+                                            vfree_arr_long ||
+                                            (sfree >= 14'(MAX_ARR_SHORT));
+                                        if (vfree_arr_long ||
+                                            (sfree >= 14'(MAX_ARR_SHORT)))
+                                        begin
+                                            varr_lidx_we = 1'b1;
+                                            varr_lidx_waddr = sfree[11:0];
+                                            varr_lidx_wdata = sfree[7:0];
+                                        end
+                                        varr_next_n = sfree + 14'd1;
+                                        vst_wr(base, v64_handle(
+                                            4'd6, varr_gen_rdata,
+                                            {20'd0, sfree[11:0]}));
+                                        vsp_n = base + 12'd1;
+                                        if (scnt == 8'd0) begin
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n =
+                                                15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end else begin
+                                            hp_aid_n = receiver[11:0];
+                                            hp_aslot_n = s0[6:0];
+                                            hp_lim_n = 8'(s1);
+                                            hp_oid_n = sfree[12:0];
+                                            state_n = S_V64_SLICE;
+                                        end
+                                    end
+                                end else if (arr_ok &&
                                            (code_rdata[23:8] == id_foreach ||
                                             (id_find != 16'hFFFF &&
                                              code_rdata[23:8] == id_find) ||
                                             code_rdata[23:8] == id_map ||
                                             (id_filter != 16'hFFFF &&
-                                             code_rdata[23:8] == id_filter)))
+                                             code_rdata[23:8] == id_filter) ||
+                                            (id_reduce != 16'hFFFF &&
+                                             code_rdata[23:8] == id_reduce)))
                                 begin
                                     if (vfe_sp >= 4'd8) begin
                                         machine_fault_n = 1'b1;
@@ -5569,10 +5866,20 @@ module jmr_js_vm_exec64 (
                                         vfe_base_s_wdata = vfe_base;
                                         vfe_mode_s_wdata = vfe_mode;
                                         vfe_map_s_wdata = vfe_map;
+                                        vfe_reduce_s_wdata = vfe_reduce;
+                                        // #39: reduce(cb, init) — cb is at
+                                        // base+1 (NOT vsp-1: init sits above
+                                        // it); the accumulator rides vfe_map
+                                        // (GC-marked with the map shadow).
+                                        vfe_reduce_n =
+                                            (id_reduce != 16'hFFFF &&
+                                             code_rdata[23:8] == id_reduce);
+                                        vfe_sort_n = 1'b0;
+                                        vfe_sort_s_wdata = vfe_sort;
                                         vfe_sp_n = vfe_sp + 4'd1;
                                         vfe_arr_n = receiver;
                                         vfe_fn_n = (argc != 0)
-                                            ? `VST_AT(vsp - 12'd1)
+                                            ? `VST_AT(base + 12'd1)
                                             : V64_UNDEFINED;
                                         vfe_i_n = 8'd0;
                                         vfe_len_n = varr_len_rdata;
@@ -5615,7 +5922,21 @@ module jmr_js_vm_exec64 (
                                             end else
                                                 state_n = S_V64_FOREACH;
                                         end else begin
-                                            vfe_map_n = V64_UNDEFINED;
+                                            vfe_map_n =
+                                                (id_reduce != 16'hFFFF &&
+                                                 code_rdata[23:8] == id_reduce
+                                                 && argc >= 12'd2)
+                                                ? `VST_AT(base + 12'd2)
+                                                : V64_UNDEFINED;
+                                            // #39: drop the init arg — the
+                                            // iteration pushes assume vsp is
+                                            // base+2 ([recv, cb]); leaving
+                                            // init on the stack misaligned
+                                            // iteration 1's binding by one.
+                                            if (id_reduce != 16'hFFFF &&
+                                                code_rdata[23:8] == id_reduce
+                                                && argc >= 12'd2)
+                                                vsp_n = base + 12'd2;
                                             vnat_base_n = base;
                                             state_n = S_V64_FOREACH;
                                         end
@@ -6948,8 +7269,8 @@ module jmr_js_vm_exec64 (
                                     vgc_qr_n = 14'd0;
                                     vgc_qw_n = 14'd0;
                                     vgc_halt_after_n = 1'b1;
-                                    vgc_wait_after_n =
-                                        (vraf_n != 0 || vtimer_n != 0);
+                                    vgc_wait_after_n = (vraf_n != 0 ||
+                                        vtimer_n != 0 || vlistener_n != 0);
                                     state_n = S_V64_GC_CLEAR;
                                 end
                             end

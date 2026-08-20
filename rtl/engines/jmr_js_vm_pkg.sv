@@ -173,6 +173,14 @@ package jmr_js_vm_pkg;
         S_ARR_PROMOTE,
         // fillRect x/y/w/h from vstack SRAM (TOS window can still hold the
         // last literal bar while ADD/MUL results are only in SRAM).
-        S_V64_RECT_LD
+        S_V64_RECT_LD,
+        // Parent-only p_clr walk placeholder — keeps this enum numerically
+        // aligned with jmr_js_vm's local st_t (which has S_HEAP_CLR here).
+        S_HEAP_CLR,
+        // #40 Array.slice: sequential AGETI->ASETI element copy (appended
+        // so existing sname= indices stay valid).
+        S_V64_SLICE,
+        // #41 Array.sort: bubble walk, one comparator call per compare.
+        S_V64_SORT
     } st_t;
 endpackage

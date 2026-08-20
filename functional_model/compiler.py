@@ -1829,7 +1829,12 @@ class Compiler:
             self._emit(Op.LOAD_CONST, self._const(None))
             self._emit(Op.RET_VAL)
         else:
-            self._expression()
+            # #39: an expression-bodied arrow inside an argument list must
+            # stop at the argument comma — _expression's comma operator ate
+            # `, 0` in `arr.reduce((t, g) => t + g.n, 0)`: the init became
+            # part of the arrow body (callback returned 0, argc dropped to
+            # 1). Arrow bodies parse at assignment level, like arguments.
+            self._ternary()
             self._emit(Op.RET_VAL)
         self._fn_depth -= 1
         if self._local_stack:

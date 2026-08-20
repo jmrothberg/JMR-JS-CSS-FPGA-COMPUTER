@@ -687,6 +687,9 @@ module jmr_js_vm #(
     logic [11:0] heap_clr_i;
     logic [15:0] id_find; // Array.find
     logic [15:0] id_findindex, id_filter; // Array.findIndex / Array.filter
+    logic [15:0] id_slice; // #40 Array.slice
+    logic [15:0] id_sort; // #41 Array.sort
+    logic e64_vfe_sort_q;
     logic        click_fired; // NEW: HTML auto-start click once
     logic        pre_click_raf; // NEW: one rAF (Image.onload) before click
     logic [5:0]  prev_joy;
@@ -721,6 +724,8 @@ module jmr_js_vm #(
     // NEW: text state — ctx.font px size, ctx.textAlign and its two non-left
     // values, plus measureText (games right-align HUD text with its width)
     logic [15:0] id_font, id_textalign, id_center, id_right, id_measuretext;
+    logic [15:0] id_textbaseline, id_top, id_middle, id_bottom; // #37
+    logic [1:0] e64_ctx_baseline_q;
     logic [15:0] id_imgsmooth; // ctx.imageSmoothingEnabled (hash 54440)
     logic        ctx_smooth;   // 1 default; indexed blit is always nearest
     logic [15:0] metrics_oid; // the one reserved measureText result object
@@ -1102,7 +1107,11 @@ module jmr_js_vm #(
         // fillRect args from vstack SRAM (window can still be the last bar).
         S_V64_RECT_LD,
         // Sequential p_clr walk (one index/clock) before const load.
-        S_HEAP_CLR
+        S_HEAP_CLR,
+        // #40 Array.slice element copy (append-only; keep numeric order).
+        S_V64_SLICE,
+        // #41 Array.sort bubble walk.
+        S_V64_SORT
     } st_t;
     st_t state /*verilator public_flat_rd*/, ret_state;
     logic vprom_done, vprom_copy, hp_prom_wr;
@@ -1279,6 +1288,18 @@ module jmr_js_vm #(
     logic [3:0]  hp_nat_ff;
     logic [3:0]  hp_nat;
 
+    // #40 Array.slice scratch
+    logic [11:0] sl_src, sl_dst;
+    logic [7:0] sl_i, sl_end, sl_di;
+    // #41 Array.sort scratch: j cursor, pass-swapped flag, the two elements.
+    logic [7:0] so_j;
+    logic so_swapped;
+    // #60: listener-count snapshot at key-event dispatch — listeners added
+    // DURING a dispatch must not run for the same event (browser defers to
+    // the next event; DONKEY's title Enter also fired the character-select
+    // handler it had just registered, skipping that screen).
+    logic [4:0] vkey_ln;
+    logic [63:0] so_a, so_b;
     // NEW: S_ARR_DCOPY scratch (SET_PROP array-over-array deep row copy)
     logic [11:0] dc_src, dc_dst;
     logic [7:0]  dc_i;
@@ -1799,6 +1820,19 @@ module jmr_js_vm #(
         vst_waddr <= addr;
         vst_wdata <= data;
     endtask
+    // potential-bugs #56: exec's vst_we_q is REGISTERED and exec freezes
+    // after issuing a multi-beat parent op. The stale write request then
+    // REPLAYED on the returning FETCH_WAIT beat, overwriting the parent's
+    // result (join's pre-written UNDEFINED clobbered the interned handle —
+    // code.join('') read undefined with joinmiss=0). An exec write is valid
+    // exactly one beat after an enabled exec beat: the leave beat for
+    // hand-off ops, the next fetch/exec beat for 1-beat ops.
+    logic e64_wr_ok;
+    always_ff @(posedge clk) begin
+        if (!rst_n) e64_wr_ok <= 1'b0;
+        else e64_wr_ok <= (state == S_V64_EXEC) && !e64_leave_hold;
+    end
+
     // Full-depth TOS window push. Sites that plant a pushed value with
     // vst_hold_win must shift ALL 16 slots: hold_win suppresses the
     // automatic shift, so hand-shifting only win[1] left win[2..15] one
@@ -2424,7 +2458,7 @@ module jmr_js_vm #(
     // element), STRIDX_WR / S_V64_RECT lost their result the same way.
     // Still one write port — the two arms are mutually exclusive.
     always_ff @(posedge clk) begin
-        if (e64_vst_we_q &&
+        if (e64_vst_we_q && e64_wr_ok &&
             (state == S_V64_EXEC ||
              state == S_FETCH_WAIT ||
              state == S_V64_WIN_FILL)) begin
@@ -2529,7 +2563,15 @@ module jmr_js_vm #(
         // junk: a.push(x); a[0] returned a stale stack word. Parent-issued
         // fills (MAKE_ARRAY literals via S_V64_ALLOC) have no leave beat,
         // which is why literals worked and push did not.
-        if ((state == S_HEAP_FILL || casestate_q == S_HEAP_FILL) &&
+        // potential-bugs #58 (real cause): casestate_q lags one beat, so on
+        // the FIRST S_V64_WIN_FILL beat after a make_arr fill this branch was
+        // still taken (casestate_q==S_HEAP_FILL): raddr = hp_vbase+hp_aslot
+        // (the LAST ELEMENT) instead of vsp-1-refill_i. The refill's first
+        // consumed rdata was that element, so win[1] got e.g. 15.0 where the
+        // receiver object should be — SET_PROP silently dropped `{m:[16+]}`
+        // (PACMAN maze). Exclude the beat once state is WIN_FILL.
+        if ((state == S_HEAP_FILL ||
+             (casestate_q == S_HEAP_FILL && state != S_V64_WIN_FILL)) &&
             hp_from_stack && hp_v64)
             vst_raddr = hp_vbase + {5'd0, hp_aslot};
         else if (state == S_V64_BIND)
@@ -3855,6 +3897,7 @@ module jmr_js_vm #(
     logic [7:0] e64_vfe_i_q;
     logic [7:0] e64_vfe_len_q;
     logic [63:0] e64_vfe_map_q;
+    logic e64_vfe_reduce_q;
     logic [1:0] e64_vfe_mode_q;
     logic [15:0] e64_vfe_ret_q;
     logic [3:0] e64_vfe_sp_q;
@@ -4218,6 +4261,9 @@ module jmr_js_vm #(
         .id_fillstyle(id_fillstyle),
         .id_filltext(id_filltext),
         .id_filter(id_filter),
+        .id_slice(id_slice),
+        .id_sort(id_sort),
+        .vfe_sort_q(e64_vfe_sort_q),
         .id_find(id_find),
         .id_foreach(id_foreach),
         .id_getctx(id_getctx),
@@ -4256,6 +4302,11 @@ module jmr_js_vm #(
         .id_stroke(id_stroke),
         .id_strokestyle(id_strokestyle),
         .id_textalign(id_textalign),
+        .id_textbaseline(id_textbaseline),
+        .id_top(id_top),
+        .id_middle(id_middle),
+        .id_bottom(id_bottom),
+        .ctx_baseline_q(e64_ctx_baseline_q),
         .id_translate(id_translate),
         .id_unshift(id_unshift),
         .id_white(id_white),
@@ -4669,6 +4720,8 @@ module jmr_js_vm #(
         .vfe_i_q(e64_vfe_i_q),
         .vfe_len_q(e64_vfe_len_q),
         .vfe_map_q(e64_vfe_map_q),
+        .vfe_reduce_q(e64_vfe_reduce_q),
+        .id_reduce(id_reduce),
         .vfe_mode_q(e64_vfe_mode_q),
         .vfe_ret_q(e64_vfe_ret_q),
         .vfe_sp_q(e64_vfe_sp_q),
@@ -4819,6 +4872,14 @@ module jmr_js_vm #(
             (state == S_V64_GC_ARR) || (state == S_V64_GC_FN) ||
             (state == S_V64_GC_ENV) || (state == S_V64_GC_SWEEP_OBJ) ||
             (state == S_V64_GC_SWEEP_ARR) || (state == S_V64_GC_SWEEP_ENV) ||
+            (state == S_V64_SLICE) || // #40 exec-entered slice copy
+            (state == S_V64_SORT) || // #41 exec-entered sort walk
+            // potential-bugs #68: exec-entered result-array scan. Without
+            // this, hp_ret (and friends) read the PARENT ffs mid-scan —
+            // stale S_V64_FOREACH from the previous filter/map walk — so a
+            // second filter/map in one program exited its scan INTO the
+            // walk state and re-dispatched the CALL_METH per iteration.
+            (state == S_FREE_ARR) ||
             (state == S_TXT_LD) || (state == S_TXT_DRAW) ||
             (state == S_CONCAT) || (state == S_JOIN) ||
             (state == S_JOIN_FIND) || (state == S_STR_WR));
@@ -4924,8 +4985,19 @@ module jmr_js_vm #(
     // value S_IDLE — so an exec-requested promote 'returned' into a
     // silent halt with fault=0. INVADERS froze exactly there on Space
     // (startGame pushes past the short-array cap).
+    // potential-bugs #57: the unconditional e64_vprom_ret_q pick fixed the
+    // exec-requested promote (push/ARR_SET past the short cap) but broke the
+    // PARENT-requested ones: S_V64_JSON_PARSE sets the parent vprom_ret and
+    // never touches exec's, whose reset value is 0 = S_IDLE — parsing an
+    // array longer than 32 rows (PACMAN's maze) promoted correctly and then
+    // 'returned' into a silent halt (fault=0, S_IDLE; VRING showed
+    // S_ARR_PROMOTE -> S_IDLE). Track who requested the promote: the
+    // first-entry guard fires only for exec entries (parent hs_st entries
+    // arrive with state already S_ARR_PROMOTE).
+    logic vprom_from_exec;
     st_t vprom_ret_eff;
-    assign vprom_ret_eff = jsb_flags[3] ? st_t'(e64_vprom_ret_q)
+    assign vprom_ret_eff = (jsb_flags[3] && vprom_from_exec)
+                                        ? st_t'(e64_vprom_ret_q)
                                         : vprom_ret;
     assign dbg_align = ctx_align_eff;
     assign vnat_base = hs64 ? (hs_m_vnat_base ? vnat_base_ff : e64_vnat_base_q) : vnat_base_ff;
@@ -5391,6 +5463,13 @@ module jmr_js_vm #(
                 (casestate_q == S_HEAP_WAIT || state == S_HEAP_WAIT ||
                  casestate_q == S_HEAP_CMP || state == S_HEAP_CMP) ?
                     ((hp_cmd == HP_ASSIGN && hp_phase == 3'd0) ? hp_si : hp_oid) :
+                // potential-bugs #64: KEYEVT's OSETI enters S_HEAP_WR
+                // DIRECTLY (never through HEAP_WAIT/CMP), so the qi-loop's
+                // final `vobj_len_rdata < qn+slot` gate read a STALE address
+                // (exec's frozen vobj_raddr). A stale len >= 3 skipped the
+                // len write: the key-event object kept n=0, e.key/e.keyCode
+                // read undefined, and DONKEY's Enter gate never matched.
+                (casestate_q == S_HEAP_WR || state == S_HEAP_WR) ? hp_oid :
                 ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
                  valloc_kind == 2'd0) ? valloc_i[12:0] : e64_vobj_raddr];
             vobj_builtin_rdata <= vobj_builtin[
@@ -6098,7 +6177,7 @@ module jmr_js_vm #(
                 // handle read back untagged (CALL_VAL fault 4 on any call
                 // with computed args) and why fillRect saw the previous
                 // rect's x/y (INVADERS score-table sprites all on one spot).
-                use_e64_wr = e64_vst_we_q &&
+                use_e64_wr = e64_vst_we_q && e64_wr_ok &&
                     ((state == S_V64_EXEC) || (state == S_FETCH_WAIT) ||
                      (state == S_V64_WIN_FILL));
                 wvst_we = use_e64_wr ? 1'b1 : vst_we;
@@ -6281,6 +6360,19 @@ module jmr_js_vm #(
                 if (e64_vraf_we) vraf[e64_vraf_waddr] <= e64_vraf_wdata;
                 if (e64_vtimer_we) begin
                     vtimer_valid[e64_vtimer_waddr] <= e64_vtimer_valid_wdata;
+                    // potential-bugs #66: exec setTimeout/clearTimeout only
+                    // adjusted EXEC's vtimer_n copy; the parent FF (which
+                    // decrements when a timer FIRES in S_V64_FRAME_TIMER)
+                    // never saw the increments, and exec never saw the
+                    // fire-time decrements — its copy climbed monotonically
+                    // to 64 and every later setTimeout faulted 3/3816
+                    // (DONKEY throws several timers per barrel). Keep the
+                    // parent FF as truth here, and let the frozen exec
+                    // absorb p_vtimer_n below.
+                    if (e64_vtimer_valid_wdata)
+                        vtimer_n <= vtimer_n + 7'd1;
+                    else if (vtimer_n != 7'd0)
+                        vtimer_n <= vtimer_n - 7'd1;
                     if (e64_vtimer_valid_wdata) begin
                         vtimer_due[e64_vtimer_waddr] <= e64_vtimer_due_wdata;
                         vtimer_fn[e64_vtimer_waddr] <= e64_vtimer_fn_wdata;
@@ -6662,6 +6754,8 @@ module jmr_js_vm #(
                     boot_clr <= 1'b1; boot_clr_n <= 2'd2;
                     id_find <= 16'hFFFF;
                     id_findindex <= 16'hFFFF; id_filter <= 16'hFFFF;
+                    id_slice <= 16'hFFFF; // #40
+                    id_sort <= 16'hFFFF; // #41
                     click_fired <= 1'b0;
                     pre_click_raf <= 1'b0;
                     prev_joy <= joy_in; joy_down_edge <= 0; joy_up_edge <= 0;
@@ -6678,6 +6772,7 @@ module jmr_js_vm #(
                     id_rel <= 16'hFFFF; id_disp <= 16'hFFFF;
                     id_document <= 16'hFFFF; id_window <= 16'hFFFF;
                     id_fillstyle <= 16'hFFFF; id_clearrect <= 16'hFFFF; id_drawimage <= 16'hFFFF;
+                    id_reduce <= 16'hFFFF; // #39
                     id_keydown <= 16'hFFFF; id_keyup <= 16'hFFFF; id_width <= 16'hFFFF;
                     id_space <= 16'hFFFF; id_arrow_l <= 16'hFFFF; id_arrow_r <= 16'hFFFF;
                     id_w <= 16'hFFFF; id_s <= 16'hFFFF; id_p <= 16'hFFFF;
@@ -6691,6 +6786,8 @@ module jmr_js_vm #(
                     id_assign <= 16'hFFFF; id_bind <= 16'hFFFF;
                     id_proto <= 16'hFFFF; id_filltext <= 16'hFFFF; id_arc <= 16'hFFFF;
                     id_font <= 16'hFFFF; id_textalign <= 16'hFFFF;
+                    id_textbaseline <= 16'hFFFF; id_top <= 16'hFFFF;
+                    id_middle <= 16'hFFFF; id_bottom <= 16'hFFFF;
                     id_imgsmooth <= 16'hFFFF;
                     id_center <= 16'hFFFF; id_right <= 16'hFFFF;
                     id_measuretext <= 16'hFFFF; metrics_oid <= 16'hFFFF;
@@ -6919,6 +7016,8 @@ module jmr_js_vm #(
                                 if ({tb, trail_acc[7:0]} == 16'd62905) id_find <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd61081) id_findindex <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd52088) id_filter <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd15762) id_slice <= name_idx; // #40
+                                if ({tb, trail_acc[7:0]} == 16'd62878) id_sort <= name_idx; // #41
                                 if ({tb, trail_acc[7:0]} == 16'd29049) id_getctx <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd50568) id_click <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd58957) id_ael <= name_idx;
@@ -6962,6 +7061,10 @@ module jmr_js_vm #(
                                 // NEW: text metrics/state names (jsb_format._name_hash)
                                 if ({tb, trail_acc[7:0]} == 16'd3151)  id_font <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd38360) id_textalign <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd4754) id_textbaseline <= name_idx; // #37
+                                if ({tb, trail_acc[7:0]} == 16'd49493) id_top <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd55701) id_middle <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd39467) id_bottom <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd52309) id_center <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd49692) id_right <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd32683) id_measuretext <= name_idx;
@@ -7424,6 +7527,194 @@ module jmr_js_vm #(
                         hs_st(S_EXEC);
                 end
 
+                S_V64_SLICE: begin
+                    // #40 Array.slice(start,end): exec pushed the result
+                    // handle already; this walk copies src[start..end-1] ->
+                    // dst[0..] by reference. Exec passes src/start/end/dst
+                    // in hp_aid/hp_aslot/hp_lim/hp_oid (hs64-muxed).
+                    if (state != S_V64_SLICE) begin
+                        hs_st(S_V64_SLICE);
+                        sl_src <= hp_aid;
+                        sl_dst <= hp_oid[11:0];
+                        sl_i <= {1'b0, hp_aslot}; // src cursor (start)
+                        sl_end <= hp_lim;         // src end (exclusive)
+                        sl_di <= 8'd0;            // dst cursor
+                        hs_hp_phase(3'd0);
+                        hs_ip(e64_ip_q);
+                        hs_code(15'(ops_base + e64_ip_q));
+                    end else if (hp_phase == 3'd0) begin
+                        if (sl_i >= sl_end) begin
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
+                        end else begin
+                            hs_hp_cmd(HP_AGETI);
+                            hs_hp_v64(1'b1);
+                            hs_hp_aid(sl_src);
+                            hs_hp_aslot(sl_i[6:0]);
+                            hs_hp_alen(sl_end);
+                            hs_hp_ret(S_V64_SLICE);
+                            hs_hp_phase(3'd1);
+                            hs_st(S_HEAP_WAIT);
+                        end
+                    end else begin
+                        hs_hp_cmd(HP_ASETI);
+                        hs_hp_v64(1'b1);
+                        hs_hp_from_stack(1'b0);
+                        hs_hp_aid(sl_dst);
+                        hs_hp_aslot(sl_di[6:0]);
+                        hs_hp_wval(hp_rval);
+                        hs_hp_ret(S_V64_SLICE);
+                        hs_hp_phase(3'd0);
+                        sl_i <= sl_i + 8'd1;
+                        sl_di <= sl_di + 8'd1;
+                        hs_st(S_HEAP_AWR);
+                    end
+                end
+                S_V64_SORT: begin
+                    // #41 Array.sort(cmp): bubble passes over vfe_arr.
+                    // hp_phase: 0 = read a, 1 = read b, 2 = call comparator,
+                    // 3 = act on cmp (exec fffc arm re-enters with phase 3
+                    // and the result in vfe_map), 4 = swap writeback.
+                    if (state != S_V64_SORT) begin
+                        hs_st(S_V64_SORT);
+                        // Same GC-root mirror as S_V64_FOREACH first-entry:
+                        // a comparator-only fn/arr must survive a mid-sort
+                        // GC (potential-bugs #47 discipline).
+                        if (e64_vfe_sp_q > vfe_sp && vfe_sp < 4'd8) begin
+                            vfe_arr_s[vfe_sp[2:0]] <= vfe_arr;
+                            vfe_fn_s[vfe_sp[2:0]]  <= vfe_fn;
+                            vfe_map_s[vfe_sp[2:0]] <= vfe_map;
+                        end
+                        vfe_arr <= e64_vfe_arr_q;
+                        vfe_fn <= e64_vfe_fn_q;
+                        vfe_i <= e64_vfe_i_q;
+                        vfe_ret <= e64_vfe_ret_q;
+                        vfe_base <= e64_vfe_base_q;
+                        vfe_mode <= e64_vfe_mode_q;
+                        vfe_map <= e64_vfe_map_q;
+                        vfe_sp <= e64_vfe_sp_q;
+                        vfe_len <= e64_vfe_len_q;
+                        hs_vcsp(e64_vcsp_q);
+                        if (hp_phase == 3'd0) begin
+                            // fresh dispatch (not a comparator return)
+                            so_j <= 8'd0;
+                            so_swapped <= 1'b0;
+                            vfe_rd_arm <= 1'b0;
+                            bind_k <= 8'd0;
+                        end
+                    end else if (hp_phase == 3'd0) begin
+                        if (so_j + 8'd1 >= e64_vfe_len_q) begin
+                            if (!so_swapped) begin
+                                // done: sort returns the receiver.
+                                vst_wr(e64_vfe_base_q, e64_vfe_arr_q);
+                                hs_vsp(e64_vfe_base_q + 12'd1);
+                                hs_ip(e64_vfe_ret_q);
+                                hs_code(15'(ops_base + e64_vfe_ret_q));
+                                if (e64_vcsp_q != 8'd0 &&
+                                    vframe_rip_rdata == 16'hfffc &&
+                                    vframe_bsp_rdata ==
+                                        (e64_vfe_base_q + 12'd2))
+                                    hs_vcsp(e64_vcsp_q - 8'd1);
+                                else
+                                    hs_vcsp(e64_vcsp_q);
+                                if (e64_vfe_sp_q != 4'd0) begin
+                                    hs_m_vfe_pop <= 1'b1;
+                                    vfe_sp <= vfe_sp - 4'd1;
+                                end else begin
+                                    vfe_arr <= V64_UNDEFINED;
+                                    vfe_fn <= V64_UNDEFINED;
+                                    vfe_mode <= 2'd0;
+                                    vfe_map <= V64_UNDEFINED;
+                                end
+                                hs_st(S_FETCH_WAIT);
+                            end else begin
+                                so_j <= 8'd0;
+                                so_swapped <= 1'b0;
+                            end
+                        end else begin
+                            hs_hp_cmd(HP_AGETI);
+                            hs_hp_v64(1'b1);
+                            hs_hp_aid(e64_vfe_arr_q[11:0]);
+                            hs_hp_aslot(so_j[6:0]);
+                            hs_hp_alen(e64_vfe_len_q);
+                            hs_hp_ret(S_V64_SORT);
+                            hs_hp_phase(3'd1);
+                            hs_st(S_HEAP_WAIT);
+                        end
+                    end else if (hp_phase == 3'd1) begin
+                        so_a <= hp_rval;
+                        hs_hp_cmd(HP_AGETI);
+                        hs_hp_v64(1'b1);
+                        hs_hp_aid(e64_vfe_arr_q[11:0]);
+                        hs_hp_aslot(7'(so_j + 8'd1));
+                        hs_hp_alen(e64_vfe_len_q);
+                        hs_hp_ret(S_V64_SORT);
+                        hs_hp_phase(3'd2);
+                        hs_st(S_HEAP_WAIT);
+                    end else if (hp_phase == 3'd2) begin
+                        // push fn, a, b then call the comparator (same
+                        // stack shape and ALLOC reserve as S_V64_FOREACH).
+                        if (!vfe_rd_arm) begin
+                            so_b <= hp_rval;
+                            vst_wr(vsp, e64_vfe_fn_q);
+                            hs_vsp(vsp + 12'd1);
+                            vfe_rd_arm <= 1'b1;
+                            bind_k <= 8'd0;
+                        end else if (bind_k == 8'd0) begin
+                            vst_wr(vsp, so_a);
+                            hs_vsp(vsp + 12'd1);
+                            bind_k <= 8'd1;
+                        end else if (bind_k == 8'd1) begin
+                            vst_wr(vsp, so_b);
+                            hs_vsp(vsp + 12'd1);
+                            bind_k <= 8'd2;
+                        end else begin
+                            hs_vcall_value(1'b1);
+                            hs_vcall_argc(12'd2);
+                            vcallback_fe <= 1'b1;
+                            hs_valloc_kind(2'd3);
+                            hs_valloc_i({4'd0, venv_next});
+                            hs_valloc_retried(1'b0);
+                            if (e64_vcsp_q < CSTK)
+                                hs_vcsp(e64_vcsp_q + 8'd1);
+                            hs_vsp(vsp);
+                            vfe_rd_arm <= 1'b0;
+                            bind_k <= 8'd0;
+                            hs_hp_phase(3'd0);
+                            hs_st(S_V64_ALLOC);
+                        end
+                    end else if (hp_phase == 3'd3) begin
+                        // comparator returned; result (number) in exec
+                        // vfe_map. cmp > 0 -> swap.
+                        if (v64_less(64'd0, e64_vfe_map_q)) begin
+                            hs_hp_cmd(HP_ASETI);
+                            hs_hp_v64(1'b1);
+                            hs_hp_from_stack(1'b0);
+                            hs_hp_aid(e64_vfe_arr_q[11:0]);
+                            hs_hp_aslot(so_j[6:0]);
+                            hs_hp_wval(so_b);
+                            hs_hp_ret(S_V64_SORT);
+                            hs_hp_phase(3'd4);
+                            hs_st(S_HEAP_AWR);
+                        end else begin
+                            so_j <= so_j + 8'd1;
+                            hs_hp_phase(3'd0);
+                        end
+                    end else begin
+                        hs_hp_cmd(HP_ASETI);
+                        hs_hp_v64(1'b1);
+                        hs_hp_from_stack(1'b0);
+                        hs_hp_aid(e64_vfe_arr_q[11:0]);
+                        hs_hp_aslot(7'(so_j + 8'd1));
+                        hs_hp_wval(so_a);
+                        hs_hp_ret(S_V64_SORT);
+                        hs_hp_phase(3'd0);
+                        so_swapped <= 1'b1;
+                        so_j <= so_j + 8'd1;
+                        hs_st(S_HEAP_AWR);
+                    end
+                end
                 S_ARR_DCOPY: begin
                     // Sequential 1W1R copy. Nested child-array identity copy
                     // is a later 1-D-port walk, not a 128-wide combo.
@@ -7788,6 +8079,15 @@ module jmr_js_vm #(
                             v64_join <= e64_v64_join_q;
                             cc_bok <= e64_cc_bok_q;
                             txt_bn <= e64_txt_bn_q;
+                            // #54 family: JOIN_FIND's result vst_wr plants the
+                            // TOS window at depth (vsp-1-jn_res) using PARENT
+                            // vsp, and the completion hs_code uses PARENT ip.
+                            // Without these the SRAM got the joined intern but
+                            // win[0] kept the pre-written UNDEFINED —
+                            // code.join('') read back undefined with
+                            // joinmiss=0 (PACMAN maze wall switch).
+                            hs_ip(e64_ip_q);
+                            hs_vsp(e64_vsp_q);
                         end
                     end else if (!jn_rd_arm) begin
                         // Length + long/lidx share one wait (jn_arr raddr this clock).
@@ -9589,7 +9889,14 @@ module jmr_js_vm #(
                             txt_x0 <= txt_px - ((ctx_align_eff == 2'd1) ? 16'($signed(w_) >>> 1)
                                              : (ctx_align_eff == 2'd2) ? 16'($signed(w_))
                                              : 16'sd0);
-                            txt_y0 <= txt_py - 16'(8 * {12'd0, txt_k});
+                            // #37 textBaseline: top = y; middle = y - 4k;
+                            // bottom/alphabetic = y - 8k (today's default).
+                            txt_y0 <= txt_py -
+                                ((jsb_flags[3] && e64_ctx_baseline_q == 2'd1)
+                                    ? 16'sd0
+                                 : (jsb_flags[3] && e64_ctx_baseline_q == 2'd2)
+                                    ? 16'(4 * {12'd0, txt_k})
+                                    : 16'(8 * {12'd0, txt_k}));
                             if (txt_len == 7'd0) begin
                                 hs_code(15'(ops_base + ip));
                                 hs_st(S_FETCH_WAIT);
@@ -9700,6 +10007,10 @@ module jmr_js_vm #(
                             hs_hp_nat(e64_hp_nat_q);
                             hs_hp_wval(e64_hp_wval_q);
                             hs_vnat_base(e64_vnat_base_q);
+                            // completion chains end with hs_code(ops_base+ip)
+                            // — parent ip must be exec's, not a stale hs_ip.
+                            hs_ip(e64_ip_q);
+                            hs_vsp(e64_vsp_q);
                         end
                         namcpy_armed <= 1'b0;
                     end
@@ -9808,6 +10119,10 @@ module jmr_js_vm #(
                         end
                         imgd_armed <= 1'b0;
                         fb_dump_sel <= 1'b1;
+                        if (jsb_flags[3]) begin
+                            hs_ip(e64_ip_q);
+                            hs_vsp(e64_vsp_q);
+                        end
                     end else begin
                     casestate_imgd_body: begin end
                     // Copy back-buffer rect into the one snapshot (dump_back is
@@ -10967,6 +11282,7 @@ module jmr_js_vm #(
                                     vkev_event <= handle;
                                     hs_vnat_dom(3'd0);
                                     vkey_li <= 5'd0;
+                                    vkey_ln <= vlistener_n; // #60 snapshot
                                     // Seed the FRAME_KEY listener scan HERE.
                                     // Its own `state != S_V64_FRAME_KEY`
                                     // first-entry arm never runs on this path:
@@ -11456,6 +11772,20 @@ module jmr_js_vm #(
                         end else begin
                             hs_valloc_retried(1'b1);
                             hs_valloc_i(14'd0);
+                            // potential-bugs #61: resume re-enters S_V64_ALLOC
+                            // with valloc_rd_arm still 1 from the exhausted
+                            // pre-GC scan. The first scan beat then trusted
+                            // *_valid_rdata whose raddr was still the sweep's
+                            // vgc_env_i (casestate_q lag) — the just-freed
+                            // slot, rdata 0 — and committed the new env over
+                            // LIVE slot 0 (venv_next was reset to 0): len
+                            // wiped, parent rewritten, gen unchanged, so all
+                            // stale handles now resolved to the new occupant.
+                            // PACMAN's Game closure (_stages/_index/_events)
+                            // lived in e0 and died on the first mid-frame GC
+                            // (black screen, frozen Date limiter). Force a
+                            // fresh settle read before the scan trusts rdata.
+                            valloc_rd_arm <= 1'b0;
                             if (vgc_resume == 2'd1) begin
                                 vgc_resume <= 2'd0;
                                 hs_st(S_FETCH_WAIT);
@@ -11638,7 +11968,8 @@ module jmr_js_vm #(
                             vfe_rd_arm <= 1'b1;
                         else begin
                         vfe_rd_arm <= 1'b0;
-                        vst_wr(e64_vfe_base_q, (e64_vfe_mode_q == 2'd2 || e64_vfe_mode_q == 2'd3)
+                        vst_wr(e64_vfe_base_q, (e64_vfe_mode_q == 2'd2 || e64_vfe_mode_q == 2'd3 ||
+                             e64_vfe_reduce_q) // #39: reduce returns the acc
                             ? e64_vfe_map_q : V64_UNDEFINED);
                         hs_vsp(e64_vfe_base_q + 12'd1);
                         hs_ip(e64_vfe_ret_q);
@@ -11689,20 +12020,31 @@ module jmr_js_vm #(
                             vfe_rd_arm <= 1'b1;
                             bind_k <= 8'd0;
                         end else if (bind_k == 8'd0) begin
-                            vst_wr(vsp, varr_rdata);
+                            // #39 reduce: (acc, elem, i, arr) — acc first.
+                            vst_wr(vsp, e64_vfe_reduce_q
+                                ? e64_vfe_map_q : varr_rdata);
                             hs_vsp(vsp + 12'd1);
                             bind_k <= 8'd1;
                         end else if (bind_k == 8'd1) begin
-                            vst_wr(vsp, v64_int32_number({24'd0, e64_vfe_i_q}));
+                            vst_wr(vsp, e64_vfe_reduce_q
+                                ? varr_rdata
+                                : v64_int32_number({24'd0, e64_vfe_i_q}));
                             hs_vsp(vsp + 12'd1);
                             bind_k <= 8'd2;
                         end else if (bind_k == 8'd2) begin
-                            vst_wr(vsp, e64_vfe_arr_q);
+                            vst_wr(vsp, e64_vfe_reduce_q
+                                ? v64_int32_number({24'd0, e64_vfe_i_q})
+                                : e64_vfe_arr_q);
                             hs_vsp(vsp + 12'd1);
                             bind_k <= 8'd3;
+                        end else if (e64_vfe_reduce_q && bind_k == 8'd3)
+                        begin
+                            vst_wr(vsp, e64_vfe_arr_q);
+                            hs_vsp(vsp + 12'd1);
+                            bind_k <= 8'd4;
                         end else begin
                             hs_vcall_value(1'b1);
-                            hs_vcall_argc(12'd3);
+                            hs_vcall_argc(e64_vfe_reduce_q ? 12'd4 : 12'd3);
                             vcallback_fe <= 1'b1;
                             hs_valloc_kind(2'd3);
                             hs_valloc_i({4'd0, venv_next});
@@ -11773,6 +12115,8 @@ module jmr_js_vm #(
                         json_wp <= e64_json_wp_q;
                         js_sp <= e64_js_sp_q;
                         hs_vnat_base(e64_vnat_base_q);
+                        hs_ip(e64_ip_q);
+                        hs_vsp(e64_vsp_q);
                         vjs_rd_arm <= 1'b0;
                     end else begin
                     casestate_json_body: begin end
@@ -11976,6 +12320,8 @@ module jmr_js_vm #(
                             json_pph    <= e64_json_pph_q;
                             js_sp       <= e64_js_sp_q;
                             hs_vnat_base(e64_vnat_base_q);
+                            hs_ip(e64_ip_q);
+                            hs_vsp(e64_vsp_q);
                         end
                         vjs_rd_arm <= 1'b0;
                     end
@@ -12022,6 +12368,7 @@ module jmr_js_vm #(
                                             hs_valloc_i(14'd0);
                                             vprom_copy <= 1'b0;
                                             vprom_ret <= S_V64_JSON_PARSE;
+                                            vprom_from_exec <= 1'b0; // #57 parent-requested
                                             hs_st(S_ARR_PROMOTE);
                                         end else begin
                                         vprom_done <= 1'b0;
@@ -12125,6 +12472,7 @@ module jmr_js_vm #(
                                     hs_valloc_i(14'd0);
                                     vprom_copy <= 1'b0;
                                     vprom_ret <= S_V64_JSON_PARSE;
+                                    vprom_from_exec <= 1'b0; // #57 parent-requested
                                     hs_st(S_ARR_PROMOTE);
                                 end else begin
                                 jn_slot_arm <= 1'b0;
@@ -13186,7 +13534,31 @@ module jmr_js_vm #(
                             // instead of the receiver. PYTHON's stack is
                             // deep; refill win[1..] from BRAM. win[0] is
                             // the handle from vst_wr above.
-                            if (hp_v64 && hp_lim >= 8'd16 && vsp >= 12'd2) begin
+                            // potential-bugs #58 (real cause): the refill
+                            // gate was `hp_lim >= 16`, but the hazard is not
+                            // the array's length — it is how far vsp DROPS.
+                            // MAKE_ARRAY pops hp_lim and pushes 1, so the
+                            // window shifts by hp_lim-1; slots at wi where
+                            // wi + (hp_lim-1) >= 16 scroll in from BELOW the
+                            // 16-deep window and are simply left stale (the
+                            // shift loop can only copy from win[wi+sh]).
+                            // `{ m: [15 numbers] }` is the smallest failing
+                            // case: MAKE_OBJ + DUP put the object at depth
+                            // 16 during the pushes, so after MAKE_ARRAY the
+                            // object came back as garbage, LET_VAR stored the
+                            // garbage, and the object AND array were
+                            // unreachable (GC freed them: arr=0, cfg.m
+                            // undefined, no fault). PACMAN's maze is exactly
+                            // this shape — `{'map':[31 rows of 28]}` x12 —
+                            // so the maze/beans data never existed: nothing
+                            // to stroke, and empty beans read as "all eaten"
+                            // (instant YOU WIN). A bare 31-row literal with
+                            // nothing under it was fine, which is why the
+                            // isolated probes passed.
+                            // Refill iff a live slot would be stale:
+                            // vsp + hp_lim > 17. Costs <=15 x2 clocks.
+                            if (hp_v64 && vsp >= 12'd2 &&
+                                (13'(vsp) + 13'(hp_lim) > 13'd17)) begin
                                 vst_refill_i <= 4'd1;
                                 vst_refill_arm <= 1'b0;
                                 vst_refill_ret <= hp_ret;
@@ -13270,7 +13642,25 @@ module jmr_js_vm #(
                     end
                 end
                 S_FREE_ARR: begin
-                    if (vfree_arr_long && valloc_i < 14'(MAX_ARR_SHORT)) begin
+                    // potential-bugs #68: exec enters DIRECTLY for the
+                    // filter/map result-array scan (state_n = S_FREE_ARR)
+                    // with hp_ret = S_FETCH_WAIT. Without the standard
+                    // first-entry guard the parent state stayed S_V64_EXEC,
+                    // valloc_rd_arm was stale so the scan "completed" off a
+                    // stale rdata, and the completion's hs_st(S_FETCH_WAIT)
+                    // fetched from the parent's STALE code_raddr — the
+                    // CALL_METH was never re-decoded: filter()/map()
+                    // returned the callback fn and never ran it (INVADERS
+                    // leaderboard, PACMAN filter). Seed ip/code so the
+                    // FETCH_WAIT return re-decodes the SAME op.
+                    if (casestate_q != S_FREE_ARR && state != S_FREE_ARR) begin
+                        hs_st(S_FREE_ARR);
+                        valloc_rd_arm <= 1'b0;
+                        if (jsb_flags[3] && e64_leave_hold) begin
+                            hs_ip(e64_ip_q);
+                            hs_code(15'(ops_base + e64_ip_q));
+                        end
+                    end else if (vfree_arr_long && valloc_i < 14'(MAX_ARR_SHORT)) begin
                         hs_valloc_i(14'(MAX_ARR_SHORT));
                     end else if (!valloc_rd_arm)
                         valloc_rd_arm <= 1'b1;
@@ -13302,6 +13692,7 @@ module jmr_js_vm #(
                     // whole 64M frame and the game appeared to hang.
                     if (state != S_ARR_PROMOTE) begin
                         hs_st(S_ARR_PROMOTE);
+                        vprom_from_exec <= 1'b1; // #57: exec-entered
                         jn_rd_arm <= 1'b0;
                         valloc_rd_arm <= 1'b0;
                         // S_ARR_PROMOTE is NOT in the hs64 list, so every
@@ -13321,6 +13712,31 @@ module jmr_js_vm #(
                             hs_hp_aid(e64_hp_aid_q);
                             vprom_copy <= e64_vprom_copy_q;
                         end
+                    end else if (casestate_q != S_ARR_PROMOTE) begin
+                        // potential-bugs #58: PARENT-requested entry (JSON
+                        // parse). The exec guard above tests `state !=
+                        // S_ARR_PROMOTE`, which is already false here, so it
+                        // never fires — and jn_rd_arm / valloc_rd_arm kept
+                        // whatever the previous state left them at. The very
+                        // first *_rdata was then consumed a beat early:
+                        //   * stale varr_long_rdata=1 -> the promote
+                        //     "completed" with NO copy and without setting
+                        //     varr_long[aid], so the caller's next element
+                        //     wrapped into short slot (32 & 0x1F) = 0 and
+                        //     overwrote element 0;
+                        //   * stale vlong_used_rdata=0 -> handed out an
+                        //     already-occupied long row, aliasing two arrays
+                        //     onto one physical row.
+                        // Both give "length correct, early slots garbage" —
+                        // PACMAN's maze data AND beans data are >32 rows, so
+                        // the maze drew nothing and
+                        // JSON.stringify(beans.data).indexOf(0) < 0 was true
+                        // on frame 1 (instant YOU WIN). exec-requested
+                        // promotes (push / ARRAY_SET) were always fine
+                        // because the guard above reset these.
+                        // One extra beat; Port A rules unchanged.
+                        jn_rd_arm <= 1'b0;
+                        valloc_rd_arm <= 1'b0;
                     end else if (!jn_rd_arm) begin
                         jn_rd_arm <= 1'b1;
                     end else if (varr_long_rdata) begin
@@ -13402,6 +13818,41 @@ module jmr_js_vm #(
                             bind_ip <= e64_bind_ip_q;
                             bind_ret <= st_t'(e64_bind_ret_q);
                             bind_rd_arm <= e64_bind_rd_arm_q;
+                            // potential-bugs #62: the exec class-method hit
+                            // (CALL_METH cm_mip) sets valloc_kind_n=3 and
+                            // enters BIND with bind_ret=S_V64_ALLOC. But the
+                            // valloc_kind/valloc_i muxes prefer the PARENT
+                            // ff whenever state==S_V64_ALLOC, and this path
+                            // never poked the ff — the ALLOC then ran with
+                            // whatever the last exec-initiated alloc left
+                            // (junk=[] left kind=1/count=0), so the method
+                            // call pushed an empty array as its "result",
+                            // never entered the body, and left argc args on
+                            // the stack (INVADERS bunkers[bi].hitAt: vcsp
+                            // climbed on every re-issue, RET warped into
+                            // top-level code, vfe hit 8 → fault 3/5298).
+                            // Latch exec's alloc request like ALLOC's own
+                            // first-entry does.
+                            hs_valloc_kind(e64_valloc_kind_q);
+                            hs_valloc_i(e64_valloc_i_q);
+                            hs_valloc_retried(e64_valloc_retried_q);
+                            // potential-bugs #65: every BIND completion
+                            // re-pokes hs_vcsp(vcsp_ff), but parent vcsp_ff
+                            // only tracks parent POKES — exec-side RETs pop
+                            // the exec register and leave the ff stale-HIGH
+                            // (a getter dispatch inside the previous call
+                            // raised it with hs_vcsp(e64+1)). The next
+                            // exec-entered BIND then re-injected the stale
+                            // ff: the ALLOC commit saw ff == e64+1, treated
+                            // the call as parent-reserved, wrote the frame
+                            // one slot high and leaked +1 vcsp per method
+                            // call (DONKEY Mario.collision per platform per
+                            // frame -> fault 2 at CSTK, game froze on the
+                            // first game frame). Latch exec's vcsp like the
+                            // rest of this block; parent-initiated BINDs
+                            // never run this arm, so their fresh reserve
+                            // (FOREACH / FRAME_RAF / LOOKFN) is untouched.
+                            hs_vcsp(e64_vcsp_q);
                         end
                     // bind_mode 0: dest[k]=(k<argc)?src[k]:UNDEF, k=0..n-1
                     // bind_mode 1: dest[k]=dest[k+1] (drop callee), k=0..n-1
@@ -13729,6 +14180,17 @@ module jmr_js_vm #(
                             imgd_x <= 10'd0; imgd_y <= 10'd0;
                             imgd_i <= 19'd0;
                             imgd_v64 <= 1'b1;
+                            // potential-bugs #54 (putImageData leg): the
+                            // destination corner and the return ip/base were
+                            // exec FFs; the parent copies were stale (x0/y0
+                            // only worked because the previous GET's guard
+                            // left 0,0). S_IMGD_PUT is not in hs64, so its
+                            // completion vst_wr(vnat_base)/hs_code(ops_base+ip)
+                            // used the parent _ff leftovers.
+                            imgd_x0 <= e64_imgd_x0_q;
+                            imgd_y0 <= e64_imgd_y0_q;
+                            hs_vnat_base(hp_vbase);
+                            hs_ip(e64_ip_q);
                             hs_st(S_IMGD_PUT);
                         end
                         4'd2: begin
@@ -13930,13 +14392,13 @@ module jmr_js_vm #(
                         if (!bind_rd_arm)
                             bind_rd_arm <= 1'b1;
                         else begin
-                            if (bind_k < {3'd0, vlistener_n}) begin
+                            if (bind_k < {3'd0, vkey_ln}) begin
                                 dbg_key_cmp <= dbg_key_cmp + 16'd1;
                                 dbg_key_want <= want;
                                 dbg_key_lastev <= vlistener_ev_rdata;
                             end
                             if (!vk_found && bind_k >= {3'd0, vkey_li} &&
-                                bind_k < {3'd0, vlistener_n} &&
+                                bind_k < {3'd0, vkey_ln} && // #60 snapshot
                                 v64_equal(vlistener_ev_rdata, want)) begin
                                 vk_found <= 1'b1;
                                 vk_pick <= bind_k[4:0];

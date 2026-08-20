@@ -127,12 +127,67 @@ Monitor verbs (`DIR`, `LOAD`, …) are Machine console, not JsHwVm; Complete
 there means the READY command works. Do **not** TBD `DIR` because INVADERS
 is unfinished.
 
-**Silicon vs this table:** Complete is PYTHON. FPGA-SIM **NOT** (no RTL arm)
-is listed in [potential bugs.md](potential%20bugs.md#compatibility-command-map-inspection-only):
-`INSERT` / `DELETE` (**42** **43**), `Array.reduce`/`slice`/`sort` (**39**–**41**),
-`quadraticCurveTo` (**38**), `toISOString` (**23**), `globalAlpha` (**33**),
-`textBaseline` (**37**), `ctx.font` (**45**). `never` rows stay refusals. On-chip
-compiler is still **NOT** (host compile-on-RUN).
+**Silicon vs this table (updated 2026-08-20):** Complete means **PYTHON /
+JsHwVm**. A Complete row can still be broken or absent in FPGA-SIM RTL —
+that is tracked in [potential bugs.md](potential%20bugs.md), which is the
+authority for silicon.
+
+*Implemented 2026-08-20 (midday pass):* `Array.reduce` (**39**),
+`Array.slice` (**40**), `Array.sort(cmp)` (**41**), `ctx.textBaseline`
+(**37**) — all probe-verified. Found and fixed on the way: expression-bodied
+arrows swallowed the argument comma (compiler), a second `filter`/`map` per
+program returned its callback un-run (**68**), same-frame `setTimeout`s piled
+into one slot and `clearTimeout` cleared the wrong one (**66b**), and
+listeners registered during a dispatch ran for the same event (**60**
+partial — DONKEY's "Enter twice" flow now works).
+
+*No RTL arm at all* (unchanged): `INSERT` / `DELETE` (**42** **43**),
+`toISOString` (**23** — returns undefined), `globalAlpha` (**33** — writes
+ignored, fades draw opaque), `ctx.font` size parsing (**45**),
+comparator-less `sort()` (no-op). On-chip compiler is still **NOT**
+(host compile-on-RUN).
+
+*Had an RTL arm that never actually worked* — found and fixed 2026-08-20, so
+do not read the "Complete" in the Canvas/Method tables below as "silicon was
+fine":
+
+- **#49** `beginPath`/`moveTo`/`lineTo`/`arc`/`fill`/`stroke` — the parent's
+  path-command buffer had **no writer**; every path primitive painted
+  nothing in every title. Fixed (`quadraticCurveTo`, **#38**, landed in the
+  same pass).
+- **#53** `push` / `unshift` / `a[i] =` — wrote garbage or nothing.
+- **#56** `join` — returned undefined.
+- **#51** `drawImage` — a hit blitted zero pixels.
+- **#52** prototype methods on `new`-ed objects — invisible.
+- **#54** `JSON.parse` / `JSON.stringify` / `getImageData` / `putImageData`.
+- **#57** arrays longer than 32 elements — silent halt.
+
+*Fixed 2026-08-20 (later that day)* — the remaining title blockers, all
+verified by probes plus gameplay smokes (all four titles play):
+
+- **#58** WIN_FILL's first refill read used the fill's stale address — object
+  literals holding 16+-element arrays lost their receiver (PACMAN maze).
+- **#61** post-GC alloc committed over a LIVE slot (stale settle) — PACMAN's
+  Game closure env died mid-frame (black screen, frozen Date limiter).
+- **#62** class-method fast path ran its ALLOC with a stale kind — the call
+  returned an empty array without entering the body (INVADERS bunkers).
+- **#63** an event-driven title (listeners only, no rAF/timer) halted to
+  S_DONE — DONKEY's title ignored Enter.
+- **#64** key-event objects were built with len 0 — `e.key`/`e.keyCode`
+  undefined.
+- **#65** BIND re-injected a stale parent vcsp — +1 frame leak per class
+  method call after a getter (DONKEY froze at CSTK).
+- **#66** setTimeout starved at 64 (exec never saw fire-time frees).
+- **#67** `Image.src` sprite fast-path read the value's slot instead of the
+  receiver's — no sprite class, no dims, DONKEY drew no art.
+
+*Known semantics gaps (playable, not blockers):* **#60** listener scoping
+(element listeners are global; `.click()` fires every click listener;
+listeners added during a dispatch run for the same event — DONKEY's title
+Enter also triggers its character-select handler). `.find()` inside a
+setTimeout callback returns a wrong value (probe `find-in-settimeout`).
+
+`never` rows stay refusals.
 
 When a TBD language/Canvas row starts working: add `test_hw_value64_*` (or
 HTML ProgramImage on JsHwVm), then flip **this row** to Complete.

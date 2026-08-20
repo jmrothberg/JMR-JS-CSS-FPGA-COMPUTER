@@ -1,16 +1,97 @@
 # Session handoff
 
-**2026-08-18 snippet ladder (agent runs it, not F9).** fillRect no
-longer needs `obj_ok` (computed args shifted the canvas out of the TOS
-window). GET_PROP `.length` / ARR_GET intern wait one extra beat for
-Port A `name_blen`/`varr_len`. Global 3rd opcode beat reverted (stalled
-FRAME). Rebuild + pytest snippets next. Do not `make bit`.
+## CURRENT STATE — 2026-08-20 later (read this first)
 
-**2026-08-18 HEAP slot pipeline** in `rtl/engines/jmr_js_vm.sv`
-(`hp_slot_pend`, object GET skips the array-long arm). Still Port A. Do
-not `make bit`. FIND last-4 cache already landed; play `FRAME` was still
-`FB SAME` before this HEAP change — prove INVADERS Space → play
-`WAIT_FRAME` / `FRAME` dump.
+Everything below the horizontal rule is older context; the **rules** and
+**failed-fix ledgers** there are still binding, the **title status** in §2
+is superseded by this block.
+
+Live bug list + full reasoning: **[potential bugs.md](potential%20bugs.md)**
+(IDs up to **#67**). That file, not this one, is the working record.
+
+**Titles, harness-verified on the 2026-08-20 (later) binary — ALL FOUR PLAY:**
+
+| Title | State |
+|---|---|
+| ASTEROID | **plays** — Enter → PLAY, thrust/fire, vectors draw |
+| INVADERS | **plays** — Space starts, full 55-invader wave updates per frame, sprites+HUD draw, Enter safe |
+| PACMAN | **plays** — maze/beans/ghosts/score draw every frame, steering works |
+| DONKEY | **plays** — Enter enters game, sprites drawn (~60k px), animates, ArrowRight moves (one Enter reaches the game — listener-scoping quirk #60 skips the character-select stop) |
+
+Language-feature pass (same day, after the titles played): **#39 reduce** ·
+**#40 slice** · **#41 sort(cmp)** · **#37 textBaseline** implemented;
+compiler arrow-comma bug, **#68** (filter/map scan re-entry), **#66b**
+(setTimeout slot-scan 2-beat lag; clearTimeout wrong slot), **#60 partial**
+(dispatch listener snapshot — DONKEY "Enter twice" correct) fixed. 34/34
+probes + all four titles re-verified on the final binary.
+
+Fixed in this later pass: **#58 real cause** (WIN_FILL stale first read) ·
+**#61** post-GC alloc clobbers a live slot (THE PACMAN killer) · **#62**
+class-method alloc stale kind (THE INVADERS Space fault) · **#63**
+event-driven titles halted (DONKEY Enter dead) · **#64** key-event objects
+n=0 (e.key undefined) · **#65** BIND stale-vcsp frame leak (DONKEY froze) ·
+**#66** setTimeout starvation at 64 · **#67** Image.src fast-path read the
+wrong stack slot (DONKEY had no art). Regressions green: probe13 8/8, p58c
+5/5, p62/p63/pdonk suites all pass.
+
+**Fixed this run (all probe-verified, lint-clean, in the rebuilt binary):**
+**#6** forEach fall-off · **#47** GC roots for the exec nest stack ·
+**#14** `.now` ALLOC · **#36** measureText u16 · **#15** tagged w/s/p ·
+**#10** exec32 `saved_*` reset · **#49** the parent path renderer had **no
+writer at all** (every `arc`/`lineTo`/`fill`/`stroke` painted nothing in
+every title) · **#38** quadraticCurveTo · **#51** `S_BLIT` latch ·
+**#52** NEW_OBJ prototype link · **#53** `S_HEAP_AWR`/`S_HEAP_FILL` missing
+first-entry guard (**every** `push`/`unshift`/`a[i]=` wrote garbage or
+nothing) · **#54** four more unguarded direct-entry states (NAMCPY, JSON,
+JSON_PARSE, IMGD_GET) + their `hs_ip` · **#55** env-walk slot hint skipped
+the prefix · **#56** exec's registered stack write **replayed** and
+clobbered parent results (killed `join('')`) · **#57** parent-requested
+array promote returned into `S_IDLE` (silent halt).
+
+**The one pattern behind most of it:** a parent state entered *directly by
+exec64* needs the canonical first-entry guard
+(`if (casestate_q != X) begin hs_st(X); …latch seeds from e64_*_q…;
+hs_ip(e64_ip_q); hs_vsp(e64_vsp_q); end`). Without `hs_st` the parent
+`state` never advances, so state-gated write-enables never fire; without the
+seed copy the arm reads parent FFs nothing wrote; without `hs_ip` the
+completion's `hs_code(ops_base + ip)` re-fetches a stale opcode. **Audit any
+new `state_n = S_*` in exec64 against this.**
+
+**Open, in priority order:**
+1. **#58** — `S_ARR_PROMOTE` copy corrupts a >32-element array's early
+   slots. Sole remaining PACMAN blocker (maze data *and* beans data are
+   ~33 rows; corrupt beans ⇒ instant win, corrupt maze ⇒ nothing strokes).
+   Repro: `JSON.parse` a 33-row array, `VARRPEEK` the promoted long row.
+2. **#60** — listeners register globally and `.click()` fires *every* click
+   listener. INVADERS Enter → playerName handler → `saveScoreBtn.click()` →
+   start button → `animate()` re-entered 3 deep → fault 3 (`fsite=5298`).
+   Fix: store target oid in `vlistener`, match on dispatch.
+3. DONKEY art — `showTitleScreen()` defers every `drawImage` to
+   `Image.onload`; `dihit=0` means drawImage is never reached.
+4. **#59** — global `var M = function(){ this.x=… }` + `new M()` loses
+   `this` (no title hits it today).
+
+**Debug tooling added to `sim/sim_main.cpp` this run** (use these before
+theorising):
+
+| RPC | Gives you |
+|---|---|
+| `RINGSTOP -1` then `VRING?` | 48-cycle ring, **freezes on fault / running-drop** — the run-up to any halt. Armed automatically at spawn now. |
+| `VARRPEEK <aid>` | Value64 array `valid/len/gen/long/lidx` + 8 raw slots |
+| `VVARPEEK <slot>` | one Value64 global + valid bit |
+| `IDS?` | method-intern id registers + `names_n` |
+| `PXCNT?` | `line=` / `circ=` / `rect=` pixel counters — **`line=0 circ=0` means the path walker never ran** |
+
+**Harness trap that cost an hour:** `KEYEVT <code> <down>` parses **decimal**
+(`sscanf %u`). Sending `KEYEVT 0d 1` = code 0. The GUI always sent decimal;
+only agent probes were affected.
+
+**Flight log now carries fault forensics** (`runtime/sim_backend.py`): a VM
+fault logs `VRING` + `PX` lines, and RTL error replies (`?SN`, `?FN`) are
+mirrored into the GUI console (they were on the glass but the letterbox
+paints from `_typed_log`, which never received them).
+
+---
 
 **2026-08-18 (headless, not an F9).** Live notes. Two topics below (synth vs
 glass) — not a required two-agent split. Do **not** tell the user to F9 the
@@ -87,23 +168,14 @@ until the ISA cut in [REMOVING_EXEC32.md](REMOVING_EXEC32.md) lands
 PYTHON F9 glass is user-confirmed. FPGA-SIM titles are **not** F9-ready.
 Do **one** glass step from **Next**. Do not overnight-go.
 
-Re-ran headless on sim binary **12:46** (after §1 `vraf_rdata` / blit /
-imgd / sin / txt_buf waits). Prior §2 numbers are stale.
+**SUPERSEDED — see the CURRENT STATE block at the top of this file.** The
+numbers in the rest of §2 are from 2026-08-18/19 and describe failures that
+are fixed (PACMAN's `NEW_OBJ Game` fault 2; INVADERS' 64M `S_JOIN_FIND`
+cap). Kept for the *reasoning*, not the status.
 
-INVADERS splash **paints** (`nz0=19233` `fault=0` `raf=1` `WAIT_FRAME`
-`eip=3367`). **Space (32) starts play** (`obj=732` `fault=0`, HUD
-CONCAT / `player.update`). Play `animate()` does **not** return to
-`WAIT_FRAME` inside a `FRAME` (64M) — `S_JOIN_FIND` intern scan. Enter
-is not Start. Agent recipe:
-[SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md) (START HERE).
-
-PACMAN first TICKN `S_JOIN_FIND ip=1877` `vcsp=76` cycling
-`vret=16318,13488,13138`. Then **fault 2** `S_IDLE` `vcsp=126`
-`eip=13133` `NEW_OBJ Game`. Not HEAP_CMP.
-
-DONKEY **parks** `WAIT_FRAME` `raf=0` `ip=3630` (`update` `RET_VAL` after
-`showTitleScreen`). 8× `FRAME`: `nz0=0` `vdraw=0,0,640,479,0`. HTML: rAF
-only in `gameState=="game"`.
+DONKEY's diagnosis here is still accurate: it **parks** `WAIT_FRAME`
+`raf=0` because the HTML only re-arms rAF in `gameState=="game"` — that is
+correct JS, not an RTL bug.
 
 ### What worked (this session)
 
@@ -145,6 +217,10 @@ not an object, push undefined and FETCH (do not drop `cls_done` with no
 | Delay `hs_m_vcsp` clear until CALL `opnd2` | INVADERS RET 3367 still `ev=0` |
 | Wait-beat `vcsp_n = vcsp_hs` including overlay 0 | FOREACH `hs_vcsp(0)` wiped animate |
 | Skip `vfn_valid`/`gen` on rAF | Overnight cheat; forbidden |
+| **#46** "one timer per frame" (2026-08-19) | **Retracted.** `bind_k` is zeroed by `S_V64_ALLOC`/`S_V64_CTOR_PAD` on every dispatch, so the scan already restarts and all due timers already drain |
+| **#50** compiler inliner slot aliasing (2026-08-19) | **Retracted.** RTL env lookup is name-keyed (`hp_key_n`); the a1 slot is only a scan-start hint. Half-vindicated later as **#55** (the hint skipped the prefix) |
+| `casestate_q` added to the `vst_raddr` mux for #53 | `casestate_q` lags combo `casestate` by a beat — changed nothing. The real fix was the `hs_st` first-entry guard |
+| `hs_ip`/`hs_vsp` on the `S_CONCAT` guard | Unnecessary; reverted. `S_JOIN`'s **is** needed (probe VX2) |
 
 **Keep:** MAKE_FN push `win[1]` + `vst_hold_win`. CALL/CALL_VAL/CALL_METH
 **third operand wait**. ALLOC overlay-detect `fr`. Exec identity `ctx_sx`.
@@ -155,12 +231,10 @@ held in else.
 
 ### Next (glass only)
 
-1. **FIND last-4 is in** (`S_JOIN_FIND` FFs, Port A). Splash + Space
-   play start still good. First play `FRAME` still caps at 64M
-   (`FB SAME`) but sampled state is **`S_V64_EXEC` eip=4504**, not
-   `S_JOIN_FIND`. Do **not** add hash→id BRAM until asked. Next glass
-   step is whatever still burns 64M in exec/draw — not another FIND
-   CAM. Details: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
+**Superseded — the ordered queue is in the CURRENT STATE block at the top
+(#58, then #60, then DONKEY onload).** The 64M-cap hunt this section
+describes is done: no title caps any more. Do **not** add hash→id BRAM
+until asked.
 
 **Stop:** overnight-go, `bit-fresh`, host twin, skip gen,
 clone heaps, restore local `name_blen[]`, rewrite HTML, delete files,

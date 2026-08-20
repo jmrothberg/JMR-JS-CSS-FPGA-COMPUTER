@@ -73,6 +73,338 @@ frame. Two independent causes, both directly observed:
 (≤19:36:29), so it **already contained** **6** and **47**. #6 is therefore
 ruled out as PACMAN's blocker.
 
+## Session 2026-08-20 (midday) — language-feature pass
+
+With all four titles playing, the compatibility gaps that the titles actually
+use were implemented and the bugs found on the way fixed. All verified by
+probes (34/34) plus fresh gameplay smokes of all four titles on the final
+binary.
+
+**New features:**
+- **#39 Array.reduce** — rides the FE walk: 1-bit `vfe_reduce`, accumulator
+  in `vfe_map` (GC-marked with the map shadow), `(acc, elem, i, arr)` argc-4
+  binding, callback return threads the acc. INVADERS' wave-clear
+  (`grids.reduce((total,g) => total + g.invaders.length, 0)`) now counts.
+- **#40 Array.slice** — result array via the filter/map S_FREE_ARR scan, new
+  parent state `S_V64_SLICE` (AGETI→ASETI reference copy). Negative and
+  missing args clamp per spec.
+- **#41 Array.sort(cmp)** — new parent state `S_V64_SORT`: bubble passes, one
+  comparator call per compare through the FE callback plumbing
+  (`vfe_sort` flag; cmp result rides `vfe_map`). Sort returns the receiver;
+  argc==0 / len<2 is a no-op. INVADERS' leaderboard order works.
+- **#37 ctx.textBaseline** — `ctx_baseline` exec latch (top/middle/bottom;
+  unknown strings ignored, per browser), S_TXT_LD y0 offset select.
+
+**New bugs found & fixed on the way:**
+- **compiler: expression-bodied arrows ate the argument comma** —
+  `arr.reduce((t,g) => t + g.n, 0)` parsed `t+g.n, 0` as a comma expression:
+  the callback returned 0 and argc collapsed to 1. Arrow bodies now parse at
+  assignment level (`_ternary`), like arguments.
+- **#68 S_FREE_ARR had no first-entry guard and was missing from hs64** —
+  a SECOND filter/map in one program exited its result-array scan into the
+  stale parent hp_ret (S_V64_FOREACH) and re-dispatched the CALL_METH per
+  iteration: filter()/map() returned the callback fn and never ran it, or
+  clobbered a LIVE array (aid 0) with the result. Guard + hs64 added; the
+  scan now settles properly.
+- **#66b setTimeout/clearTimeout slot scans tested slot i against
+  valid[i-2]** (registered raddr export + registered rdata = 2-beat lag):
+  every same-frame setTimeout after the first piled into ONE slot (last
+  writer wins — INVADERS' deferred kill timers vanished, 6 registered → 2
+  fired), and clearTimeout cleared the wrong slot. Both scans now hold the
+  raddr two beats per slot. Probe: 6 timers register, all 6 fire in order
+  with correct captured closure values; targeted clearTimeout cancels
+  exactly its timer.
+- **#60 (partial) listeners registered during a dispatch ran for the same
+  event** — vlistener count snapshot (`vkey_ln`) at key-event dispatch.
+  DONKEY's title now stops at character select ("Enter twice" as designed).
+
+**Remaining gaps (documented, non-blocking):**
+- `toISOString` returns undefined (no char heap to build the string) —
+  INVADERS stores `at: undefined` in a saved score.
+- `globalAlpha` writes are ignored (fades draw fully opaque) — #33.
+- `sort()` without a comparator is a no-op (returns the receiver unsorted).
+- Element-targeted listeners still fire globally on raw keys, and `.click()`
+  has no Value64 arm (fires nothing) — the harmful `.click()`-fires-all
+  variant of #60 cannot occur.
+- `ctx.font` size parsing (#45), `INSERT`/`DELETE` monitor commands
+  (#42/#43): untouched.
+
+## Session 2026-08-20 (morning) — ALL FOUR TITLES PLAY
+
+Continuing the same pass: after #58/#61/#62 landed, each title's next blocker
+was root-caused and fixed in turn. **PACMAN, INVADERS, ASTEROID and DONKEY all
+enter their game screens, draw, animate and take input in FPGA-SIM.**
+
+**#63 (CLOSED) — event-driven titles halted:** RET_VAL at top of an empty
+call stack halts to S_DONE unless rAF or a timer is live
+(`vgc_wait_after = raf|timer`). DONKEY's title screen is EVENT-driven — no
+rAF, no timer, just keydown listeners — so the VM halted and Enter was never
+dispatched. Fix: `vlistener_n != 0` keeps the VM parked at S_WAIT_FRAME (all
+three exec64 sites).
+
+**#64 (CLOSED) — key-event objects built with n=0:** KEYEVT's HP_OSETI enters
+S_HEAP_WR directly (never through HEAP_WAIT/CMP), and the vobj_len raddr mux
+had no S_HEAP_WR arm — the final `vobj_len_rdata < qn+slot` gate read a STALE
+address; a stale len >= 3 skipped the len write, so e.key / e.keyCode /
+e.type all read undefined (DONKEY's `event.key === "Enter"` gate never
+matched; small probes passed by stale-luck). Fix: S_HEAP_WR arm → hp_oid.
+
+**#65 (CLOSED) — BIND completion re-injects stale parent vcsp:** every BIND
+completion pokes hs_vcsp(vcsp_ff), but vcsp_ff only tracks parent POKES; a
+getter dispatch inside the previous call raises it and exec-side RETs never
+lower it. The next exec-entered BIND (class-method call) then absorbed the
+stale ff; the kind-3 ALLOC commit saw `ff == e64+1`, treated the call as
+parent-reserved, wrote the frame one slot high and leaked +1 vcsp per call
+(DONKEY Mario.collision per platform per frame → fault 2 at CSTK). Fix: the
+exec-entered BIND first-entry latch (same block as #62) also does
+hs_vcsp(e64_vcsp_q); parent-initiated BINDs never run that arm.
+
+**#66 (CLOSED) — two vtimer_n copies, setTimeout starves:** exec's copy only
+saw exec's +1s (setTimeout) and -1s (clearTimeout); the parent decrements on
+FIRE and never told exec. Exec's count climbed monotonically to 64 and every
+later setTimeout faulted 3/3816 (DONKEY schedules several per barrel). Fix:
+the parent timer mirror now also adjusts the parent FF on exec set/clear
+(parent FF = truth), and the frozen exec absorbs p_vtimer_n.
+
+**#67 (CLOSED) — SET_PROP fast-paths aimed vobj reads at the VALUE:** exec's
+vobj_raddr mux used `VST_AT(vsp-1)` for everything but CALL_METH; SET_PROP's
+receiver is at vsp-2. The Image.src jmr:spr fast-path's
+`vobj_builtin_rdata == 2` check therefore read the string-id slot and never
+fired: no FFC sprite class, no dims — DONKEY drew NO art (dihit=0) while
+plain SET_PROPs kept working through the parent walk (it re-reads by hp_oid).
+Fix: OP_SET_PROP arm reads vsp-2. DONKEY's game screen went from 215 to
+~60,000 non-zero pixels, animating.
+
+**Semantics gap noted (not a blocker):** listeners added DURING a dispatch
+are invoked for the SAME event (browser defers to the next event) — DONKEY's
+title Enter therefore also fires the character-select startGame it just
+registered, skipping the character-select screen (single Enter instead of
+"Enter twice"). Playable; fix later by snapshotting vlistener_n at dispatch.
+
+**Verification (this build):** probe13 8/8, p58c 5/5, p62b 4/4, p63 3/3,
+pdonk 3/3, pdonk2 2/2; PACMAN plays (maze/beans/ghosts/HUD, steering);
+ASTEROID plays (mode=PLAY, vectors accumulate, thrust+fire ok); DONKEY plays
+(sprites drawn, per-frame animation, ArrowRight moves); INVADERS re-smoke in
+flight at write time (previous build after #62: full 55-invader wave, no
+fault, HUD + sprites drawn — see below if changed).
+
+## Session 2026-08-20 (early morning) — three root causes closed
+
+**#58 (CLOSED — real root cause at last):** not the promote copy and not the
+window-shift depth. The `vst_raddr` mux's S_HEAP_FILL arm keyed on
+`casestate_q == S_HEAP_FILL`, which lags one beat — so the FIRST
+`S_V64_WIN_FILL` beat after a make_arr fill still presented
+`hp_vbase + hp_aslot` (the LAST ELEMENT's slot) as the read address. The
+refill's first consumed rdata was that element: `win[1]` got e.g. 15.0 where
+the receiver object should be, and SET_PROP silently dropped `{m:[16+]}`.
+Fix: exclude the lagged beat (`&& state != S_V64_WIN_FILL`). Verified: VN8/15/
+16/17/20 all PASS; probe13 ladder 8/8. Chasing it also surfaced a LET_VAR
+first-decode-beat stale-TOS hazard that turned out to be a probe-reading
+artifact (the vvar writes were landing at the right slots — the disassembly
+operand is not the vvar slot; slot map comes from the name intern order).
+
+**#61 (NEW, CLOSED) — post-GC alloc clobbers a LIVE slot; THE PACMAN killer:**
+the GC sweep's resume path re-enters `S_V64_ALLOC` with `valloc_rd_arm` still
+set from the exhausted pre-GC scan. The first scan beat then trusted
+`*_valid_rdata` whose read address was still the sweep's `vgc_env_i`
+(casestate_q lag) — the just-freed slot, rdata 0 — and committed the new env
+over LIVE slot 0 (`venv_next` was reset to 0 by the sweep): `venv_len[0]`
+wiped, parent rewritten, gen UNCHANGED, so every stale handle now resolved to
+the new occupant. PACMAN's Game closure env (holding `_stages`, `_index`,
+`_events`) is env slot 0 (first env allocated at boot) and died on the first
+mid-frame GC — every later frame `_stages[_index]` read undefined, all draws
+silently skipped (black screen), and the Date frame-limiter froze the loop.
+Fix: `valloc_rd_arm <= 1'b0` in the sweep resume, forcing a fresh settle read.
+Same hazard covered obj/arr/fn allocs. **PACMAN NOW PLAYS** — maze, beans,
+pacman, ghosts, score HUD all draw every frame, steering works, no fault.
+
+**#62 (NEW, CLOSED) — class-method fast path allocs with stale kind (the real
+INVADERS Space fault):** exec's CALL_METH class-table hit (`cm_mip`) sets
+`valloc_kind_n = 3` and enters S_V64_BIND with `bind_ret = S_V64_ALLOC`. But
+`assign valloc_kind = (state == S_V64_ALLOC || hs_m) ? valloc_kind_ff : e64_q`
+prefers the PARENT FF once state is ALLOC, and this path never poked the FF.
+The ALLOC then ran with whatever the last exec-initiated alloc left behind —
+after `junk = []` that is kind=1/count=0 — so `bunkers[bi].hitAt(...)` pushed
+an EMPTY ARRAY as its "result", never entered the method body, left its args
+on the stack, and leaked a call frame per invocation; RETs then warped into
+top-level code (re-running the boot particles loop + `animate()`), vfe hit 8
+→ fault 3 fsite 5298. Minimal repro: `class B{...}; var b=new B();
+var junk=[]; b.hitAt(1,2,2)` — ANY object/array literal between instance use
+and a class-table method call. Fix: BIND's exec-entry first-entry latch now
+also pokes `hs_valloc_kind/i/retried` from the exec q's (same discipline as
+ALLOC's own first-entry). All p62 repro cases PASS.
+
+**Note on #60 (listener scoping):** the "animate stacked three deep" fault
+previously blamed on #60 was actually #62. Element-scoped listeners are still
+global in RTL (a real compatibility gap — `.click()` fires all click
+listeners), but with #62 fixed the Space fault is gone; whether any title
+still trips over #60 is retested below.
+
+**Debug tooling added (sim_main.cpp):** IPTRACE arm survives FRAME
+(user-armed flag) and records exec vsp per ip; `VSTWATCH <slot>` (vstack BRAM
+write watch), `VVWATCH <slot>` (vvars write watch), `BEATLOG <ip>` (per-beat
+signal log), `ENVWATCH`/`ENVDUMP`/`ESLOTS <eid>` (env valid/parent/binding
+dumps), `GCSNAP?` (roots at GC entry + mark bits at sweep), `FWATCH` (vcsp /
+vframe_return_ip transitions), `VFE?` (forEach nest stack with entry ips).
+
+## Session 2026-08-20 (late night) — user-run triage
+
+**Harness bug that poisoned this session's first hour:** `sim_main.cpp`'s
+`KEYEVT` parses codes with `sscanf("%u")` — **decimal** — and my probe harness
+sent hex ("KEYEVT 0d 1" → code 0, down 0). Every "wrong-listener dispatch"
+finding from those probes was an artifact; with decimal codes the dispatch is
+correct (probe VK4L: down event → down handler). The GUI always sent decimal,
+so no user-visible behavior was involved. Also confirmed: the CONCAT-guard
+`hs_ip/hs_vsp` I added last session was unnecessary — reverted (join's kept;
+verified needed by VX2). #56 was bisect-cleared (reverted → no change →
+restored).
+
+**INVADERS (user: "Space returns to monitor"):** the new fault handler works
+as designed — the VM FAULTED and was kicked back to the console. Forensics
+from the new trace lines: `fault=3 fsite=5298` (forEach nest cap), `vcsp=24`
+with a repeating frame group `(fffc, fffc, 416, 0,0,0, 5081)` — `animate()`
+stacked THREE deep. Root cause is **#60 (NEW): listener scoping** — RTL
+`addEventListener` on an ELEMENT registers globally, and `.click()` fires
+EVERY click listener. The user pressed **Enter** on the splash: the
+`playerName` Enter handler fired (should be scoped to that input) →
+`saveScoreBtn.click()` → all click listeners including the start button's →
+`startGame()` (possibly repeatedly) → `animate()` re-entered → 8 concurrent
+forEach walks → fault 3. **Space starts the game correctly** (verified in
+harness: obj 23→93, no fault). Fix: store the target oid in `vlistener` and
+match it on dispatch; `.click()` dispatches only to the same element.
+
+**ASTEROID (user: "does not go to the game"):** could NOT reproduce — with a
+new `VVARPEEK` RPC, after Enter the real globals read `mode=1.0 (PLAY)`,
+`tick` counting, `startHeld` edge behaving; attract rocks now draw (they did
+not before #49/#55, so the attract screen LOOKS different from last run —
+possible source of the perception). If it recurs in the GUI, the trace now
+contains enough to compare (`VVARPEEK 84` = mode).
+
+**PACMAN (maze + instant YOU WIN):** both remain explained by **#58**
+(ARR_PROMOTE copy corrupts a >32-element array's early slots). The maze data
+AND the beans data are ~33-row arrays; the corrupted beans copy makes
+`JSON.stringify(beans.data).indexOf(0) < 0` true on frame 1 → instant win,
+and the maze draw walks corrupted rows → nothing strokes. Everything else in
+the chain is now probe-verified working. **#58 is the single remaining PACMAN
+bug.**
+
+**DONKEY:** unchanged — Image-onload art path; additionally its
+`event.key === "Enter"` gate sits behind the same #60 scoping question.
+
+**Debug tooling added:** `VVARPEEK <slot>` (one Value64 global + valid bit)
+in `sim_main.cpp`; harness note: KEYEVT codes are DECIMAL.
+
+## Session 2026-08-20 (night) — six-item pass
+
+**#56 — APPLIED.** exec64's `vst_we_q` is registered; exec freezes after
+issuing a multi-beat parent op, so the stale write request REPLAYED on the
+returning FETCH_WAIT beat, overwriting the parent's result. Victim: `join('')`
+— the arm pre-writes UNDEFINED at the result slot, `S_JOIN_FIND` writes the
+interned handle, the replay clobbered it back to UNDEFINED (`joinmiss=0`, no
+fault). Ops whose real result IS undefined (fill/stroke) hid the class. Fix:
+`e64_wr_ok` — an exec write is valid exactly one beat after an enabled exec
+beat — gating both the vstack port and the window plant. **This was PACMAN's
+maze wall gate** (`switch(code.join(''))`).
+
+**#57 — APPLIED.** `vprom_ret_eff = jsb_flags[3] ? e64_vprom_ret_q : ...` had
+fixed exec-requested array promotes but broke PARENT-requested ones:
+`S_V64_JSON_PARSE` sets the parent `vprom_ret`, exec's copy is reset-0 =
+S_IDLE, so parsing an array longer than 32 rows (PACMAN's maze shape)
+promoted and then 'returned' into a **silent halt** (VRING:
+`S_ARR_PROMOTE → S_IDLE`, fault=0). Fix: `vprom_from_exec` — the promote
+first-entry guard fires only for exec entries; both JSON sites mark parent
+ownership.
+
+**#54 refinements — APPLIED.** `S_IMGD_PUT` seeds (`imgd_x0/y0` were exec FFs,
+worked only because the GET left 0,0; `hs_vnat_base(hp_vbase)`/`hs_ip` on the
+`S_V64_OGETI_NAT` nat==1 hand-off); `hs_ip`/`hs_vsp` added to the NAMCPY /
+V64_JSON / JSON_PARSE / S_JOIN / S_CONCAT first-entry guards (completions
+re-fetch code from the PARENT ip; PACMAN faulted at SET_PROP after its first
+maze `getImageData` until this landed — VRING pinned it).
+
+**Items 5+6 (GUI/monitor) — APPLIED in `runtime/sim_backend.py`:**
+the GUI letterbox paints from `_typed_log`, never the raw glass, so the RTL's
+`?FN FILE NOT FOUND` / `?SN ERROR` replies were invisible — now mirrored into
+the console log (verified: typed_log carries them in order). The LOAD wait
+loop bails on `?FN`/`?SN` instead of spinning 500×20000 ticks. Traces: the
+sim's fault-frozen cycle ring is armed at spawn (`RINGSTOP -1`) and a VM
+fault now logs `VRING` + `PX` forensics lines.
+
+**STILL OPEN after this session:**
+- **#58 — ARR_PROMOTE copy corrupts contents** (probe `VB1J`/`VB6J`:
+  33-row JSON round trip completes but early slots dangle, GC sweeps the
+  rows; arr count drops). This is the LAST blocker for PACMAN's maze —
+  everything upstream (join, indexOf, JSON, imgd, promote-return) now
+  passes in isolation; the faithful wall-draw replica (VPW2) strokes 154
+  line px. The real maze uses a >32-row data array; its promoted copy's
+  early slots are bad. Next: VARRPEEK the long row after VB6J.
+- **#59 — CTOR_VARS ctor_ip==FFFF branch loses `this`** (probe VPI2:
+  top-level `var M = function(){ this.data = 5; }; new M()` → data
+  undefined, no fault). No current title uses global var-fn ctors
+  (PACMAN's are env-local, INVADERS/DONKEY use `class`/`function`), so
+  glass-impact nil today.
+- DONKEY art: Image-onload dispatch (unchanged, see previous block).
+- INVADERS "Space does not advance": **rerun on this binary** — the old
+  freeze was `drawHud`'s inlined `drawCannon` reading `i`/`extras` via
+  the slot hints #55 removed; likely fixed, unverified.
+
+## Session 2026-08-20 (later) — PACMAN game screen + ASTEROID rocks
+
+User report: PACMAN reached the game screen but drew no maze/pacman and said
+"YOU WIN!" immediately; ASTEROID played (ship turns/shoots) but spawned no
+rocks. Probe-verified fixes, in dependency order:
+
+**#54 — APPLIED.** Four more #53-class direct-entry states without first-entry
+guards, now guarded with seed copies + `hs_ip(e64_ip_q)`/`hs_vsp(e64_vsp_q)`:
+- `S_NAMCPY` (JSON.parse of an interned string faulted 1 at the next LET_VAR,
+  fsite 3423 — every seed lived in exec FFs, parent copies never written);
+- `S_V64_JSON` (stringify: **plus** exec's `js_we` seeded `vjs_val[0]` into
+  exec's OWN array copy while the parent walker read the parent's — mirrored
+  via new `js_we_q`/`js_waddr_q`/`*_wdata_q` taps, #49-style);
+- `S_V64_JSON_PARSE` (guard gated on `state !=` too — parent-side entries from
+  NAMCPY must not be clobbered);
+- `S_IMGD_GET` (PACMAN's maze `getImageData` cache — all `imgd_*` seeds).
+The `hs_ip` matters: completions end with `hs_code(ops_base + ip)` on the
+PARENT ip; without the latch PACMAN's first maze cache completed then decoded
+a stale op and faulted 1 (VRING forensics: `RINGSTOP -1` + `VRING?` froze on
+the fault and showed IMGD completing at the right sp, then EXEC at the right
+ip with wrong code). This mattered only once #53 made the JSON round-trip
+reachable — the fault was younger than the session but the hole was not.
+Result: `JSON.parse(JSON.stringify([[..],[..]]))` — **PACMAN's maze deep-copy
+at PACMAN.HTML:291, the single cause of both "no maze" and "instant YOU
+WIN"** — passes; PACMAN runs its 1.28M-clock cache frames with fault=0.
+Still imperfect, no title uses them in play: `JSON.parse("5")` (bare scalar)
+and `JSON.parse('{"a":1}')` (object root) return wrong non-faulting values.
+
+**#55 — APPLIED.** The env-walk **slot hint** (`hp_slot = a1 - 2`) seeded the
+scan START, but the walk runs hint..len-1 and never revisits the skipped
+prefix. The compiler inliner can rebind a name at a LOWER slot than the
+inlined body's hint (probe VR1F: `function place(sz){ return spawn(sz, 1); }`
+with callee param also named `sz` — inlined, `sz` at slot 0, hint slot 1 —
+LOAD_VAR returned undefined, fell to vvars, no fault). This is the retracted
+**#50** half-vindicated: lookups ARE name-keyed, but the slot still mattered
+as a scan start. PYTHON ignores the hint entirely. Fix: both exec64 hint
+sites now `hp_slot_n = 5'd0` — always scan from 0; envs are <=16 slots,
+extra beats legal. This was **ASTEROID's missing rocks**: `spawnRock`'s
+inlined body read its fields as undefined, `rockRad(undefined)` → NaN →
+clipped. Probe VR1 (exact spawn shape) passes; bisect probes VR1A-K/Q/R all
+pass.
+
+**Verification:** full ladder 8/8 (arrays, proto, closures, forEach, class),
+JSON probes VQ2/VQ3/R2 pass, PACMAN smoke fault=0 through the maze-cache
+frames with objects growing on Enter, ASTEROID smoke fault=0. #55 was
+bisect-cleared of the transient PACMAN fault (reverted → fault persisted →
+restored).
+
+**Debug tooling added to `sim_main.cpp`:** `VARRPEEK <aid>` (Value64 array
+tables + 8 raw slots). Existing `RINGSTOP -1` + `VRING?` (fault-frozen cycle
+ring) proved decisive — use it first next time.
+
+**Still open after this round:** DONKEY art (Image-onload dispatch, see
+previous session block); JSON scalar/object roots (above); the exec-direct
+`S_HEAP_WR` measureText metrics write (same class, unguarded, glass-only);
+nested `function` declarations discarded by the compiler (MAKE_FN + POP).
+
 ## Session 2026-08-20 (late) — the common-issue hunt, verified by probes
 
 Method: minimal Value64 `.JS` probes through `SimBackend` + a new **VARRPEEK**

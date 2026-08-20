@@ -136,6 +136,12 @@ class SimBackend(RuntimeBackend):
             self._log.fault("NO_READY", repr(hello))
             raise RuntimeError(f"sim server did not READY: {hello!r}")
         self._started = True
+        # NEW: arm the sim's rolling cycle ring (freezes on fault_code /
+        # running-drop) so a play fault leaves VRING forensics in the trace.
+        try:
+            self._rpc("RINGSTOP -1")
+        except Exception:
+            pass
         self._rpc("SCREEN?")
         self._sync_glass()
 
@@ -543,6 +549,10 @@ class SimBackend(RuntimeBackend):
                     break
                 self._rpc("TICKN 20000")
                 self._rpc("SCREEN?")
+                if "?FN" in self._screen or "?SN" in self._screen:
+                    # NEW: missing file / bad name — stop waiting for LOADED
+                    self._arch_phase = "idle"
+                    break
                 if self._load_reply_ready(self._screen, stem):
                     self._arch_phase = "loaded"
                     html_path = ROOT / "storage" / f"{stem}.HTML"
@@ -610,6 +620,29 @@ class SimBackend(RuntimeBackend):
                 self._typed_log.append(loaded)
             if not self._typed_log or self._typed_log[-1] != "READY":
                 self._typed_log.append("READY")
+        # NEW: the GUI letterbox paints from _typed_log, not the raw glass —
+        # RTL error replies (?SN ERROR / ?FN FILE NOT FOUND / ?NH …) were on
+        # the glass but never shown. Mirror the reply that followed this
+        # command onto the console log, keeping READY last.
+        try:
+            self._rpc("SCREEN?")
+            rows = [r.strip() for r in self._screen.replace("\\n", "\n").splitlines()]
+            for r in reversed(rows):
+                if not r:
+                    continue
+                if r.startswith("?"):
+                    if r not in self._typed_log[-3:]:
+                        if self._typed_log and self._typed_log[-1] == "READY":
+                            self._typed_log.insert(len(self._typed_log) - 1, r)
+                        else:
+                            self._typed_log.append(r)
+                        self._log.note(f"GLASS-ERR {r[:80]}")
+                    break
+                if r.startswith(">") or r == "READY" or r.startswith("READY"):
+                    continue
+                break
+        except Exception:
+            pass
         self._sync_glass()
         if upper == "DIR" or upper.startswith("LOAD") or upper.startswith("SAVE") or upper == "LIST" or upper.startswith("LIST"):
             self._note_glass(upper.split()[0])
@@ -858,6 +891,13 @@ class SimBackend(RuntimeBackend):
                             fault_n = 0
                 if fault_n:
                     self._log.fault("VM", st)
+                    # NEW: fault forensics — the ring froze at the fault, so
+                    # this is the run-up, not noise. One line each.
+                    try:
+                        self._log.note("VRING " + self._rpc("VRING?")[:1600])
+                        self._log.note("PX " + self._rpc("PXCNT?")[:120])
+                    except Exception:
+                        pass
                     self._running = False
                     self._arch_phase = "loaded"
                     self._rpc("KEY 1b")
