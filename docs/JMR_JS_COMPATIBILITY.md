@@ -462,8 +462,8 @@ opcode. Per-API silicon status is under Frozen ISA and the
 | # | FM mnemonic | RTL | Notes |
 |---|---|---|---|
 | 1 | `LOAD_CONST` | `OP_LOAD_CONST` | |
-| 2 | `LOAD_VAR` | `OP_LOAD_VAR` | |
-| 3 | `STORE_VAR` | `OP_STORE_VAR` | |
+| 2 | `LOAD_VAR` | `OP_LOAD_VAR` | a1: 0=env-chain walk, 1=direct global (vvars), 2+slot=verified local hint (speed pass, 2026-08-20) |
+| 3 | `STORE_VAR` | `OP_STORE_VAR` | a1 same as `LOAD_VAR` |
 | 4 | `ADD` | `OP_ADD` | |
 | 5 | `SUB` | `OP_SUB` | |
 | 6 | `MUL` | `OP_MUL` | |
@@ -482,7 +482,7 @@ opcode. Per-API silicon status is under Frozen ISA and the
 | 19 | `MAKE_ARRAY` | `OP_MAKE_ARR` | |
 | 20 | `ARRAY_GET` | `OP_ARR_GET` | |
 | 21 | `ARRAY_SET` | `OP_ARR_SET` | |
-| 22 | `LET_VAR` | `OP_LET_VAR` | |
+| 22 | `LET_VAR` | `OP_LET_VAR` | a1 bit0 = call-frame local; a1[7:1] = env slot hint + 1 (0 = none; speed pass, 2026-08-20) |
 | 23 | `MOD` | `OP_MOD` | |
 | 24 | `CALL_USER` | `OP_CALL_USER` | |
 | 25 | `RET_VAL` | `OP_RET_VAL` | Leftover-frame / `forEach` fall-off: **6** |
@@ -576,6 +576,17 @@ values are one 64-bit word.
   ENV is allocated, and `LET_VAR` locals (a1 bit0) store globals. Nested
   IIFE that captured an ENV still gets a per-call environment. Same
   ProgramImage on PYTHON and FPGA-SIM.
+- `LOAD_VAR`/`STORE_VAR` a1 (speed pass, 2026-08-20): 0 = env-chain walk;
+  1 = direct global — emitted for hoisted `function` names AND any site
+  whose name is declared by **no** lexically-enclosing function scope (the
+  compiler proves the walk could only fall through to vvars; retro-patched
+  at the end of `Compiler.compile()`); 2+slot = local with a **verified**
+  slot hint — RTL (env-walk phase 5) compares the key at the hinted slot
+  first and on mismatch rescans from slot 0, so the #55 inliner-rebind
+  rule still holds. `LET_VAR` locals carry the same verified hint in
+  a1[7:1] (slot+1, 0 = none; env-walk phase 6; miss falls back to the
+  normal find-or-append). PYTHON ignores all hints (dict by name) — same
+  ProgramImage, same results, RTL just skips the scans.
 - An explicit call frame is
   `(return_ip, base_sp, this, environment, function, result_count, kind)`.
   Return and event/frame boundaries assert the expected stack depth; they do

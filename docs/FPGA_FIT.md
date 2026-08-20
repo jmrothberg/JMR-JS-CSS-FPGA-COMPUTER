@@ -183,6 +183,29 @@ LUTRAM vs BRAM from `utilization_synth.rpt`. Agent recipe:
 
 ## LUTRAM leftovers (not the 70 GB hang)
 
+### What these words mean (LUTRAM, BRAM, Port A)
+
+This is **how Vivado builds a memory**, not JavaScript and not FPGA-SIM
+speed. Verilator simulates the SystemVerilog array either way; it does
+not care about `RAM64M` vs `RAMB36`.
+
+The T200 has two places for arrays:
+
+| Word | What it is | When it is OK |
+|---|---|---|
+| **BRAM** | Dedicated RAM tiles on the chip (**365** of them). | Big tables: names, JS stack, console source, heap. |
+| **LUTRAM** | The **logic** LUTs (same 134,600 that do AND/OR) wired as a tiny RAM. Vivado prints `RAM64M` / `RAM256X1S`. | Tiny 8-deep FOREACH/rAF saves. **Not** 32K `name_mem` or a 2K stack — that makes synth slow and hungry. |
+| **Port A** | The Verilog **shape** Vivado needs to use BRAM: one write pulse, one address, one data; read data **next clock**; **no** reset-clear of the whole array in that process; the 7k-line VM `case` does **not** `mem[i] <=`. Copy `jmr_mini_fb.sv`. The FSM only pulses strobes (`stack_wr`, `imgd_we`, …). | Required for any **large** array that should be BRAM. |
+
+**“LUTRAM → Port A”** means: rewrite the **big** arrays that missed that
+template so Vivado can put them in BRAM. Extra clocks OK (wait `*_rdata`).
+The 70 GB hang was the opposite (`mem[i] <=` in the FSM → every address
+became a flip-flop). Adding `ram_style = "block"` while the poke stays
+does **not** fix it.
+
+**Not “put every array in BRAM.”** Paper math is already over 365 tiles
+if everything infers. Small 8-entry tables can stay LUTRAM.
+
 **When (serial — do not mix with glass or exec32):** (1) HTML/exec64
 glass, (2) unhook exec32 ([REMOVING_EXEC32.md](REMOVING_EXEC32.md)),
 (3) **this** Port A pass, then the user runs the next `make bit`.
@@ -225,6 +248,31 @@ if you touch proto, do not leave one FSM-poked. `arr_len` / `vobj_cls`
 are already listed (Synth 8-13159). After the next synth_1 100%, fill
 LUTRAM vs BRAM from `utilization_synth.rpt`. If LUTRAM is still high,
 the template still missed — do not widen threads.
+
+---
+
+## Live synth log (what you are seeing)
+
+Vivado prints a lot, then goes quiet for hours. That is normal. Watch
+`synth_rss.log` (RSS + last `runme` line), not chatty INFO rate.
+
+**`INFO: [Synth 8-7052]`** on `u_core…/u_fb/mem0_reg_*` **“implemented
+as a Block RAM”** / “no optional output register”:
+
+- **Good.** The 640×480 framebuffer inferred as **BRAM** (Port A in
+  `jmr_mini_fb` / `jmr_video_vram`). That is the opposite of LUTRAM.
+- The rest is a **timing hint**, not a failure. The RAMB tile has an
+  optional extra output flop Vivado did not absorb. Might matter later
+  if WNS is negative at ~30 MHz. Do **not** add registers during this
+  run to silence it. Do not treat a wall of 8-7052 as progress or as a
+  hang — one line per FB BRAM slice.
+- **Where you are:** RAM inference of the glass, **early/mid synth**.
+  The long hungry part is still ahead (VM LUTRAM / technology mapping).
+  Quiet after these lines is expected.
+
+Ignore unless STATUS becomes failed or RSS climbs toward ~80 GB with a
+**frozen** log (then kill). `8-6156` / `8-7080` RAM inference tables
+are the LUTRAM vs BRAM list; `8-7052` is not that list.
 
 ---
 

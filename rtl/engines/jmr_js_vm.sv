@@ -12954,6 +12954,19 @@ module jmr_js_vm #(
                                 hs_st(S_FETCH_WAIT);
                             end else
                                 hs_st(S_HEAP_WR);
+                        end else if (hp_phase == 3'd5 ||
+                                     hp_phase == 3'd6) begin
+                            // Verified slot-hint first guess missed (or
+                            // hint >= len): restart a FULL scan from slot
+                            // 0. The hint is never trusted (#55 — inliner
+                            // can rebind a name at a lower slot); it only
+                            // short-circuits the common case where the
+                            // key really is at its compile-time slot.
+                            // Phase 6 = hinted local LET_VAR; its full
+                            // scan is the normal phase-2 find-or-append.
+                            hs_hp_phase(hp_phase == 3'd6 ? 3'd2 : 3'd0);
+                            hs_hp_slot(5'd0);
+                            hp_slot_pend <= 1'b1;
                         end else if (hp_slot + 5'd1 < hp_len[4:0]) begin
                             hp_next_slot();
                         end else begin

@@ -34,9 +34,10 @@ use when tracing what those edits most likely broke):
 [docs/VIVADO_FLATTEN_HUNT.md](docs/VIVADO_FLATTEN_HUNT.md).
 Tagged Q16 opcode unit is leftover (titles use exec64): plan to unhook
 it is [docs/REMOVING_EXEC32.md](docs/REMOVING_EXEC32.md) — after glass,
-not in parallel with parent FSM edits. After that unhook, LUTRAM→Port A
-(not every array into BRAM):
-[docs/FPGA_FIT.md](docs/FPGA_FIT.md#lutram-leftovers-not-the-70-gb-hang).
+not in parallel with parent FSM edits. After that unhook: big arrays that
+Vivado built from logic LUTs (LUTRAM) need the Port A RAM shape so they
+can sit in BRAM tiles — not FPGA-SIM speed, not every array into BRAM:
+[docs/FPGA_FIT.md](docs/FPGA_FIT.md#what-these-words-mean-lutram-bram-port-a).
 
 ```
 $ python3 run_jmr_js.py

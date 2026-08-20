@@ -226,6 +226,14 @@ class Compiler:
         # NEW: >0 inside while/for body. `var row = []` in a loop must STORE;
         # LET_VAR skips if the name exists, so every row aliases one array.
         self._loop_depth = 0
+        # NEW: uncapped shadow sets, one per enclosing function scope (the
+        # 16-entry _local_stack maps drop overflow names, so they cannot
+        # answer "does ANY enclosing scope declare X"). Env chains are
+        # lexical: a site whose name is declared by NO enclosing function
+        # scope can only ever resolve to vvars — patched to a1=1 at the
+        # end of compile() (see _global_sites).
+        self._scope_sets: List[set] = []
+        self._global_sites: List[Tuple[int, str, tuple]] = []
 
     def compile(self) -> Chunk:
         # NEW: hoist function + class declarations first (JS-style)
@@ -244,6 +252,19 @@ class Compiler:
                 self._skip_class_decl()
                 continue
             self._statement()
+        # NEW: retro-patch provable globals to a1=1 (skip the env walk).
+        # Safe iff no lexically-enclosing function scope declares the name:
+        # the runtime walk could then never hit an env slot and always fell
+        # through to vvars — a1=1 reads/writes vvars directly (ENVWALK was
+        # 92% of S_HEAP_CMP = ~44% of all VM cycles in INVADERS play).
+        for _idx, _nm, _scopes in self._global_sites:
+            if any(_nm in s for s in _scopes):
+                continue
+            _t = self.code[_idx]
+            if (len(_t) == 2 and _t[0] in (Op.LOAD_VAR, Op.STORE_VAR)
+                    and isinstance(_t[1], int) and 0 <= _t[1] < len(self.names)
+                    and self.names[_t[1]] == _nm):
+                self.code[_idx] = (_t[0], _t[1], 1)
         return Chunk(
             self.code,
             self.consts,
@@ -375,6 +396,7 @@ class Compiler:
         entry = len(self.code)
         self._fn_compiling = fname
         self._local_stack.append({})
+        self._scope_sets.append(set())
         # prologue: stack has arg0..argN-1 (last arg on top)
         # NEW: params declare into the per-call lexical env (LET_VAR).
         # arg2=1 flags "call-frame local" for RTL (flat vars: always store;
@@ -402,6 +424,8 @@ class Compiler:
         self._fn_depth -= 1
         if self._local_stack:
             self._local_stack.pop()
+        if self._scope_sets:
+            self._scope_sets.pop()
         if not ceq_lut:
             # implicit return undefined
             self._emit(Op.LOAD_CONST, self._const(None))
@@ -692,6 +716,7 @@ class Compiler:
             jmp_over = self._emit(Op.JUMP, 0)
             entry = len(self.code)
             self._local_stack.append({})
+            self._scope_sets.append(set())
             # NEW: method params declare into the per-call env (LET_VAR);
             # arg2=1 = call-frame local flag for RTL (always store there)
             for p in reversed(params):
@@ -716,6 +741,8 @@ class Compiler:
             self._fn_depth -= 1
             if self._local_stack:
                 self._local_stack.pop()
+            if self._scope_sets:
+                self._scope_sets.pop()
             self._emit(Op.LOAD_CONST, self._const(None))
             self._emit(Op.RET_VAL)
             self._patch(jmp_over, Op.JUMP, len(self.code))
@@ -806,6 +833,14 @@ class Compiler:
             if local:
                 name = self.names[ni] if 0 <= ni < len(self.names) else ""
                 self._note_local(name)
+                # NEW: carry the env slot as a verified hint (a1[7:1] in the
+                # encoder). RTL phase-6 checks the hinted slot first and
+                # falls back to a full scan on mismatch — re-`let` in loop
+                # bodies was the top ENVWALK sink after loads got hints.
+                slot = (self._local_stack[-1].get(name)
+                        if self._local_stack else None)
+                if slot is not None:
+                    args = (args[0], args[1], args[2], slot)
         self.code.append(args)
         self.op_lines.append(line)
         return len(self.code) - 1
@@ -813,6 +848,8 @@ class Compiler:
     def _note_local(self, name: str) -> None:
         if not name or not self._local_stack:
             return
+        if self._scope_sets:
+            self._scope_sets[-1].add(name)
         cur = self._local_stack[-1]
         if name not in cur and len(cur) < 16:
             cur[name] = len(cur)
@@ -833,6 +870,11 @@ class Compiler:
                 return 2 + cur[name]
         if name in self.functions or name in self._hoisted_fn_names:
             return 1
+        # Candidate global: decided at end of compile() when the enclosing
+        # scopes' declaration sets are complete (`var` hoisting: a use can
+        # be emitted before its declaration is seen). Hold references to
+        # the live set objects — they keep filling until the scope closes.
+        self._global_sites.append((len(self.code), name, tuple(self._scope_sets)))
         return 0
 
     def _patch(self, idx: int, *op_args: Any) -> None:
@@ -1819,6 +1861,7 @@ class Compiler:
         jmp_over = self._emit(Op.JUMP, 0)
         entry = len(self.code)
         self._local_stack.append({})
+        self._scope_sets.append(set())
         # NEW: params declare into the per-call env (LET_VAR); arg2=1 =
         # call-frame local flag for RTL (always store there)
         for p in reversed(params):
@@ -1839,6 +1882,8 @@ class Compiler:
         self._fn_depth -= 1
         if self._local_stack:
             self._local_stack.pop()
+        if self._scope_sets:
+            self._scope_sets.pop()
         self._patch(jmp_over, Op.JUMP, len(self.code))
         self._emit(Op.MAKE_FN, entry, len(params), 1 if is_arrow else 0)
 

@@ -401,9 +401,10 @@ that still mints a tagged `.JSB`.
 12. Phase 3b: `!hp_v64` arms + tagged stack SRAM. Its own pass, its own run.
 13. Update rules/docs. Unhooked `jmr_js_vm_exec32.sv` stays until the user allows delete.
 
-**After this cut (separate agent, next `make bit`):** LUTRAM→Port A for
-the big arrays that still miss BRAM (`source_mem`, then `vstack` /
-`name_mem` / GC queues). Not `ram_style` + FSM poke. Not “all BRAM”
-(365-tile cap). Recipe:
-[FPGA_FIT.md](FPGA_FIT.md#lutram-leftovers-not-the-70-gb-hang). Do not
-fold that into Phases 1–3.
+**After this cut (separate agent, next `make bit`):** the **big** arrays
+Vivado still built from logic LUTs (LUTRAM: `RAM64M` / `RAM256X1S`) need
+the Port A RAM shape so they can sit in BRAM tiles. That is Vivado fit /
+synth time, **not** FPGA-SIM speed. Not `ram_style` + FSM poke. Not
+“all BRAM” (365-tile cap). Words + recipe:
+[FPGA_FIT.md](FPGA_FIT.md#what-these-words-mean-lutram-bram-port-a).
+Do not fold that into Phases 1–3.

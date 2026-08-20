@@ -923,6 +923,10 @@ def _encode_v2(
             # only for top-level LET_VAR (state survives per-frame re-runs).
             if op == Op.LET_VAR and len(args) > 1 and args[1]:
                 a1 = 1
+                # NEW: a1[7:1] = env slot hint + 1 (0 = no hint). RTL
+                # phase-6 verified first guess; mismatch rescans from 0.
+                if len(args) > 2 and args[2] is not None:
+                    a1 |= ((int(args[2]) & 0x1F) + 1) << 1
             # LOAD_VAR/STORE_VAR a1: 0=chain, 1=global, 2+slot=local.
             elif op in (Op.LOAD_VAR, Op.STORE_VAR) and len(args) > 1:
                 a1 = int(args[1]) & 0xFF

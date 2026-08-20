@@ -3602,12 +3602,21 @@ module jmr_js_vm_exec64 (
                                         // and returned undefined with no
                                         // fault (ASTEROID spawnRock fields).
                                         // PYTHON ignores the hint (dict by
-                                        // name id). Always scan from 0 —
-                                        // envs are <=16 slots, extra beats
-                                        // are legal.
-                                        hp_slot_n = 5'd0;
+                                        // name id). Never TRUST the hint —
+                                        // but a VERIFIED first guess is
+                                        // safe: phase 5 reads the hinted
+                                        // slot, compares the key, and on
+                                        // any mismatch the parent restarts
+                                        // a full scan from slot 0 (no
+                                        // prefix ever skipped). Local
+                                        // reads were the top ENVWALK sink
+                                        // (INVADERS crater loop dx/dy/r).
+                                        hp_slot_n = (code_rdata[31:24] >= 8'd2)
+                                            ? 5'(code_rdata[31:24] - 8'd2)
+                                            : 5'd0;
                                         hp_key_n = {7'd0, code_rdata[16:8]};
-                                        hp_phase_n = 3'd0;
+                                        hp_phase_n = (code_rdata[31:24] >= 8'd2)
+                                            ? 3'd5 : 3'd0;
                                         hp_hit_n = 1'b0;
                                         hp_ret_n = S_FETCH_WAIT;
                                         state_n = S_HEAP_WAIT;
@@ -3739,15 +3748,33 @@ module jmr_js_vm_exec64 (
                                         // name id). Always scan from 0 —
                                         // envs are <=16 slots, extra beats
                                         // are legal.
-                                        hp_slot_n = 5'd0;
+                                        hp_slot_n =
+                                            (code_rdata[7:0] != OP_LET_VAR &&
+                                             code_rdata[31:24] >= 8'd2)
+                                            ? 5'(code_rdata[31:24] - 8'd2)
+                                            // LET_VAR local a1[7:1] = slot
+                                            // hint + 1 (0 = none).
+                                            : (code_rdata[7:0] == OP_LET_VAR &&
+                                               code_rdata[24] &&
+                                               code_rdata[31:25] != 7'd0)
+                                            ? 5'(code_rdata[31:25] - 7'd1)
+                                            : 5'd0;
                                         hp_key_n = {7'd0, code_rdata[16:8]};
                                         hp_wval_n = `VST_AT(vsp - 12'd1);
                                         hp_hit_n = 1'b0;
                                         hp_phase_n = (code_rdata[7:0] ==
                                             OP_LET_VAR && code_rdata[24])
-                                            ? 3'd2
+                                            // local LET: phase 6 = verified
+                                            // slot-hint guess, else plain 2.
+                                            ? (code_rdata[31:25] != 7'd0
+                                               ? 3'd6 : 3'd2)
                                             : (code_rdata[7:0] == OP_LET_VAR)
-                                            ? 3'd1 : 3'd0;
+                                            ? 3'd1
+                                            // STORE_VAR a1>=2: verified
+                                            // slot-hint first guess (see
+                                            // LOAD_VAR phase 5 above).
+                                            : (code_rdata[31:24] >= 8'd2)
+                                            ? 3'd5 : 3'd0;
                                         hp_ret_n = S_FETCH_WAIT;
                                         state_n = S_HEAP_WAIT;
                                         // Function bindings also land in vvars

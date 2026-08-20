@@ -71,7 +71,7 @@ $(BUILD)/tb_ps2_typing: tb_ps2_typing.cpp tb_ps2_typing_top.sv \
 		-Mdir $(BUILD)/obj_ps2_typing \
 		-o $(abspath $(BUILD)/tb_ps2_typing) \
 		--top-module tb_ps2_typing_top \
-		-Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+		-Wno-UNOPTTHREADS -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
 		-CFLAGS "-std=c++17" \
 		tb_ps2_typing_top.sv \
 		$(RTL)/phys/ps2_rx.sv $(RTL)/phys/ps2_decode.sv \
@@ -131,7 +131,7 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 		-o $(abspath $(BUILD)/jmr_js_sim_server) \
 		--top-module jmr_js_core \
 		-O3 \
-		-Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-MULTIDRIVEN -Wno-LATCH \
+		-Wno-UNOPTTHREADS -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-MULTIDRIVEN -Wno-LATCH \
 		-CFLAGS "-std=c++17 -O3 -march=native -fno-semantic-interposition" \
 		$(CORE_SRCS) \
 		sim_main.cpp

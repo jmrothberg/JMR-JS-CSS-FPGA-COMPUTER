@@ -1,6 +1,34 @@
 # Session handoff
 
-## CURRENT STATE — 2026-08-20 later (read this first)
+## CURRENT STATE — 2026-08-20 afternoon: THE SPEED PASS (read this first)
+
+All four titles still play; the presentation bugs from the user's slow-run
+report are fixed and user/harness-verified (DONKEY splash-flash → fb_dirty
+present gate; PACMAN maze vanishing → HP_OGETI hp_qv poke; PACMAN missing
+pacman/ghosts → Object.assign stale hp_tn phase-4 re-read; PACMAN splash
+hang → S_SQRT first-entry guard; String.replace end-to-end).
+
+**Speed: INVADERS in-play went 18.6M → 10.6M VM clocks/frame (−43%).**
+Details + profile data in [potential bugs.md](potential%20bugs.md)
+("THE SPEED PASS"). Levers landed: compiler retro-patches provable
+globals to a1=1 (no env walk — lexical proof via new uncapped
+`_scope_sets`); RTL env-walk phases 5/6 = verified slot-hint first guess
+for local LOAD/STORE_VAR (a1>=2) and local LET_VAR (slot in a1[7:1]),
+falling back to a full from-0 scan on mismatch (#55 stays honored).
+Verilator `--threads` was tried and REVERTED (2 threads ran 1.5× slower;
+8 refused — one giant always block). Next speed frontier: per-op
+overhead (S_V64_EXEC 66%, fetch settles ~37% of exec beats), then
+object GET_PROP scans. New profiling RPC: `STATEHIST?` (per-state cycle
+histogram + env/cmd/phase walk splits + walk-entry ip histogram,
+resets on read).
+
+Regressions on the final binary: probe13 8/8 · p58c · prepl2 · passign2 ·
+psqrt · PACMAN full-game FBHIST (maze+dots+4 ghosts+pacman moving) ·
+DONKEY play (sprites animate under ArrowRight) — all green.
+
+---
+
+## PREVIOUS STATE — 2026-08-20 later
 
 Everything below the horizontal rule is older context; the **rules** and
 **failed-fix ledgers** there are still binding, the **title status** in §2
@@ -124,8 +152,10 @@ resume mapping** (`synth_design` is one step). MIG/project kept. Resume
 `make bit` (not `bit-fresh`): synth **2 threads**, impl **8**. First DCP
 is synth_1 100% (`post_synth.dcp`). **Serial after this bit (do not mix):**
 glass/exec64 → unhook exec32 ([REMOVING_EXEC32.md](REMOVING_EXEC32.md)) →
-LUTRAM→Port A BRAM for the big misses, not every array
-([FPGA_FIT.md](FPGA_FIT.md#lutram-leftovers-not-the-70-gb-hang)). Do **not**
+LUTRAM→Port A for the big misses, not every array (LUTRAM = logic LUTs
+used as RAM; Port A = the Verilog shape so Vivado can use BRAM tiles;
+does **not** speed FPGA-SIM):
+[FPGA_FIT.md](FPGA_FIT.md#what-these-words-mean-lutram-bram-port-a). Do **not**
 `bit-fresh`. Do **not** kill a live synth to attach checkpoint hooks;
 hooks only fire at step end.
 
@@ -153,7 +183,11 @@ them). If you touch those, Port A like the others — do not add more
 every 10 s). Watch **RSS** and whether the log still prints. Host
 **128 GB**. Kill only if the log is frozen **and** RSS is climbing toward
 ~80 GB. A ~28 GB hold with new phase lines is progress, not the 70 GB
-flatten.
+flatten. **`Synth 8-7052` on `u_fb/mem0_reg_*` (Block RAM, no extra
+output register)** = framebuffer inferred as BRAM (good) + a later
+timing hint. Not a hang. Wall of copies = one per FB tile. Quiet after
+is normal; VM mapping is still ahead. Words:
+[FPGA_FIT.md](FPGA_FIT.md#live-synth-log-what-you-are-seeing).
 
 Do **not** extract JOIN/JSON/GC. Leave 16-deep FFs (`vst_win`,
 `js_val`/`vjs_val`, `cls_*` 16×16, `spr_off`/`spr_ww`/`spr_hh`,

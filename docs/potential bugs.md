@@ -73,6 +73,56 @@ frame. Two independent causes, both directly observed:
 (≤19:36:29), so it **already contained** **6** and **47**. #6 is therefore
 ruled out as PACMAN's blocker.
 
+## Session 2026-08-20 (afternoon) — THE SPEED PASS (1.75× fewer clocks)
+
+User report: all four titles play but INVADERS is unplayably slow. Profiled
+with a new `STATEHIST?` RPC (per-state cycle counters + env/obj/cmd/phase
+splits, sim_main.cpp only). INVADERS in play burned **18.6M VM clocks per
+frame**; 48% of ALL cycles were S_HEAP_CMP, and 92% of that was **ENVWALK**
+— the env-chain scan behind every variable access, 2 beats per slot, always
+from slot 0 (the #55 rule).
+
+Three changes landed (probes 8/8, p58c, replace/assign/sqrt probes, and all
+four title smokes green; INVADERS now **10.6M clocks/frame, −43%**):
+
+1. **Compiler: provable globals get `a1=1`** (direct vvars, no walk).
+   Env chains are lexical, so a LOAD/STORE_VAR site whose name is declared
+   by NO enclosing function scope can only ever resolve to vvars. New
+   uncapped per-function shadow sets (`_scope_sets` — the 16-entry
+   `_local_stack` maps drop overflow names so they can't answer this)
+   feed a retro-patch at the end of `Compiler.compile()`. Deferred to
+   compile-end because `var` hoisting lets a use be emitted before its
+   declaration is seen. INVADERS: 713 sites now a1=1, 74 keep the walk.
+2. **RTL: verified slot-hint for local LOAD/STORE_VAR (env phase 5).**
+   a1>=2 seeds the walk at slot a1-2 and compares the key there FIRST; on
+   any mismatch (or hint >= len) the parent restarts a full scan from
+   slot 0. #55 stays honored — the hint is never trusted, it only
+   short-circuits the common case. Hot craters loop (INVADERS line
+   409-416 dx/dy/r, ~26k iterations/frame) went from full scans to one
+   compare.
+3. **RTL+compiler: verified slot-hint for local LET_VAR (env phase 6).**
+   LET_VAR local now carries its env slot in a1[7:1] (slot+1; 0 = none).
+   Phase 6 checks the hinted slot; hit → write in place, miss → normal
+   phase-2 find-or-append from slot 0. Re-`let` in loop bodies was 57%
+   of remaining walk time. First declaration in a fresh env still walks
+   (append must prove the name absent).
+
+Phase numbers 5/6 collide with the Image.src width/height chain ONLY
+lexically — those live in the `hp_cmd==HP_SETPROP && !hp_env` object arm;
+the new checks sit inside the `hp_env` arm. S_HEAP_WR's env arm is
+phase-agnostic, so hinted hits write exactly like scanned hits.
+
+**Failed experiment (reverted):** Verilator `--threads 8` refuses
+(UNOPTTHREADS — the VM is one giant sequential always block);
+`--threads 2` built but ran ~1.5× SLOWER (41.7s vs 27.5s per frame wall).
+Do not retry threads without first breaking up the FSM.
+
+**Remaining speed profile (INVADERS play, after the pass):** S_V64_EXEC
+66% (per-op decode + fetch settle — the next frontier is per-op overhead:
+~37% of exec-unit beats are S_FETCH_WAIT), S_HEAP_CMP 10% (46% of that =
+hinted loads, 31% = object GET_PROP scans). PACMAN game frames are ~0.7M
+clocks — INVADERS is the outlier because of its per-pixel JS loops.
+
 ## Session 2026-08-20 (midday) — language-feature pass
 
 With all four titles playing, the compatibility gaps that the titles actually

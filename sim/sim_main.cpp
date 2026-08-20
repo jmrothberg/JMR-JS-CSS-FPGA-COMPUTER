@@ -290,6 +290,10 @@ static std::vector<std::string> beat_log;
 static std::vector<std::string> gcsnap_log;
 static uint64_t state_cycles[128];
 static uint64_t exec_state_cycles[128];
+static uint64_t heap_split[32];
+static uint64_t envkey_hist[512];
+#include <map>
+static std::map<unsigned, uint64_t> envip_hist;
 static bool fw_on = false;
 static uint8_t fw_vcsp_prev = 0;
 static uint16_t fw_rip_prev[16];
@@ -537,6 +541,24 @@ static void tick() {
         if (sc == 60) { // S_V64_EXEC: split by exec unit state
             unsigned ec = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state) & 127;
             exec_state_cycles[ec]++;
+        }
+        if (sc == 87 || sc == 88) { // HEAP_WAIT/CMP: split env vs hp_cmd
+            unsigned env = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__hp_env) & 1;
+            unsigned cmd = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__hp_cmd) & 15;
+            unsigned ph = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__hp_phase) & 7;
+            heap_split[env ? (16 + ph * 2 + (cmd == 0 ? 0 : 1)) : cmd]++;
+        }
+        { // env-walk entry histogram by var key (LOAD/STORE name id)
+            static unsigned prev_sc = 0;
+            if ((sc == 87) && prev_sc != 87 && prev_sc != 88 &&
+                (unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__hp_env) & 1)) {
+                unsigned key = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__hp_key) & 511;
+                envkey_hist[key]++;
+                unsigned wip = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__ip) & 0xFFFF;
+                if (envip_hist.size() < 200) envip_hist[wip]++;
+                else { auto it = envip_hist.find(wip); if (it != envip_hist.end()) it->second++; }
+            }
+            prev_sc = sc;
         }
     }
     if (envw_on && gcsnap_log.size() < 1200) {
@@ -2036,6 +2058,17 @@ int main(int argc, char** argv) {
             oss << " | EXEC";
             for (int i = 0; i < 128; i++)
                 if (exec_state_cycles[i]) oss << " " << i << ":" << (unsigned long long)exec_state_cycles[i];
+            oss << " | HP";
+            for (int i = 0; i < 32; i++)
+                if (heap_split[i]) oss << " " << i << ":" << (unsigned long long)heap_split[i];
+            for (int i = 0; i < 32; i++) heap_split[i] = 0;
+            oss << " | EK";
+            for (int i = 0; i < 512; i++)
+                if (envkey_hist[i]) oss << " " << i << ":" << (unsigned long long)envkey_hist[i];
+            for (int i = 0; i < 512; i++) envkey_hist[i] = 0;
+            oss << " | EIP";
+            for (auto& kv : envip_hist) oss << " " << kv.first << ":" << (unsigned long long)kv.second;
+            envip_hist.clear();
             for (int i = 0; i < 128; i++) { state_cycles[i] = 0; exec_state_cycles[i] = 0; }
             std::cout << oss.str() << std::endl;
             continue;
