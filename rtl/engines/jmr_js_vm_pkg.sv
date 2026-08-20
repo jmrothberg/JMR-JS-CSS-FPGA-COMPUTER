@@ -182,5 +182,9 @@ package jmr_js_vm_pkg;
         S_V64_SLICE,
         // #41 Array.sort: bubble walk, one comparator call per compare.
         S_V64_SORT
+        // Keep numerically aligned with the parent's enum tail (the parent
+        // decodes exec state_n requests by the same encoding).
+        , S_FB_SYNC
+        , S_V64_DISPATCH
     } st_t;
 endpackage

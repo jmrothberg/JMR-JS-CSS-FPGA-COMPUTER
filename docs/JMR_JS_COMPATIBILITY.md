@@ -251,6 +251,25 @@ like BASIC tokens.
 | `String.replace` + RegExp stub | P1 | PACMAN | Complete |
 | `Object.assign` / `Function.bind` | P1 | PACMAN | Complete |
 
+#### Language — future Math natives (not V1)
+
+Not in the three-compile ISA freeze. Do **not** grow V1 for these unless a
+product title emits them. When added, they are ordinary `CALL_NATIVE`s
+(same shape as `Math.floor`) on PYTHON + both execs — **never** title-gated
+RTL.
+
+`storage/ASTEROID.HTML` already ships without `Math.sin`/`cos`: it embeds
+64-entry `UX`/`UY` unit-vector arrays in the HTML. That is **authoring around
+a missing general native**, not an FPGA-SIM / game hardwire. Real
+`Math.sin`/`cos` would let any title drop that LUT.
+
+| API | Pri | Why (wider HTML5) | Status |
+|---|---|---|---|
+| `Math.round` | P2 | Common rounding (many uses outside the three) | future |
+| `Math.hypot` | P2 | Distance / collision | future |
+| `Math.sin` / `Math.cos` | P2 | Motion / FX (replaces title-side LUTs) | future |
+| `Math.ceil` / `Math.atan2` | P2 | Smaller but real game use | future |
+
 #### Language — do not implement (V1)
 
 | Feature | Status | Why |
@@ -745,7 +764,7 @@ Numbered ABI (ids 0–40) is under [Native IDs](#native-ids-call_native--op_call
 
 | Construct | Titles | Status |
 |---|---|---|
-| `new KeyboardEvent(type, {key, keyCode, …})` | DONKEY boot Enter | done |
+| `new KeyboardEvent(type, {key, keyCode, …})` | DONKEY boot Enter | done (compiler desugar → `Object.assign({type}, opts)`; exec32 native retired) |
 | `new Event` / `CustomEvent` / `MouseEvent` | DONKEY | done |
 | `new Image()` | INVADERS, DONKEY | done (ASET handle) |
 | `new Date()` | INVADERS, PACMAN | done (frame clock) |

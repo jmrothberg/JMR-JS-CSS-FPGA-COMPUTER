@@ -279,6 +279,10 @@ module jmr_js_vm #(
     logic        valloc_metrics;
     logic [15:0] vmetrics_w;
     logic [63:0] vkev_event;
+    logic        vkey_custom;    // dispatchEvent scan: resume program, no kev pop
+    logic [63:0] vkey_want_ev;   // dispatchEvent: event type string handle
+    logic [15:0] vkey_ret_ip;    // dispatchEvent: program resume ip
+    logic [11:0] vkey_ret_sp;    // dispatchEvent: program resume vsp
     logic [63:0] vlistener_ev [0:15] /*verilator public_flat_rd*/;
     logic [63:0] vlistener_fn [0:15] /*verilator public_flat_rd*/;
     logic [4:0] vlistener_n_ff;
@@ -1119,6 +1123,7 @@ module jmr_js_vm #(
         // Post-present bank sync (MUST stay last: sim_main and
         // debug RPCs hardcode earlier state numbers).
         , S_FB_SYNC
+        , S_V64_DISPATCH
     } st_t;
     st_t state /*verilator public_flat_rd*/, ret_state;
     logic vprom_done, vprom_copy, hp_prom_wr;
@@ -4276,6 +4281,7 @@ module jmr_js_vm #(
         .id_find(id_find),
         .id_findindex(id_findindex),
         .id_font(id_font),
+        .id_disp(id_disp),
         .id_foreach(id_foreach),
         .id_getctx(id_getctx),
         .id_getimgdata(id_getimgdata),
@@ -5483,6 +5489,8 @@ module jmr_js_vm #(
             vobj_len_rdata <= vobj_len[
                 (casestate_q == S_V64_GC_OBJ || state == S_V64_GC_OBJ) ?
                     vgc_cur[12:0] :
+                (casestate_q == S_V64_DISPATCH || state == S_V64_DISPATCH) ?
+                    hp_oid :
                 (casestate_q == S_HEAP_WAIT || state == S_HEAP_WAIT ||
                  casestate_q == S_HEAP_CMP || state == S_HEAP_CMP) ?
                     ((hp_cmd == HP_ASSIGN && hp_phase == 3'd0) ? hp_si : hp_oid) :
@@ -6058,6 +6066,7 @@ module jmr_js_vm #(
             hs_valloc_metrics(1'b0);
             vmetrics_w <= 16'd0;
             vkev_event <= V64_UNDEFINED; vlistener_n_ff <= 5'd0;
+            vkey_custom <= 1'b0; vkey_want_ev <= 64'd0;
             vkey_li <= 5'd0;
             v64_frame_armed <= 1'b0;
             vcallback_key <= 1'b0; vcallback_fe <= 1'b0;
@@ -14510,6 +14519,16 @@ module jmr_js_vm #(
                             // OGETI overwrites hp_key with the slot name;
                             // needle was saved in hp_wval (same as tagged S_IDXSTR).
                             idx_needle <= hp_wval[7:0];
+                            // The comment above said "same latch as replace"
+                            // but the latches were missing: S_IDXSTR's
+                            // completion reads hp_vbase/ip via the PARENT
+                            // ffs (not hs64-muxed there), which were stale —
+                            // r.indexOf(...) on a dynstr wrote the result
+                            // nowhere and parked the program at the CALL ip
+                            // (WAIT_FRAME, LETs after never ran).
+                            hs_hp_vbase(e64_hp_vbase_q);
+                            hs_ip(e64_ip_q);
+                            hs_vsp(e64_vsp_q);
                             hs_st(S_IDXSTR);
                         end
                         4'd4: begin
@@ -14668,9 +14687,56 @@ module jmr_js_vm #(
                         default: hs_st(S_FETCH_WAIT);
                     endcase
                 end
+                S_V64_DISPATCH: begin
+                    // dispatchEvent(ev): find ev.type in the object's slots
+                    // (2 beats/slot, default vobj_raddr = {hp_oid, hp_slot}),
+                    // then run the FRAME_KEY listener scan in custom mode
+                    // with the REAL event object (all user fields intact).
+                    // No .type property = no listeners match = resume.
+                    if (state != S_V64_DISPATCH && jsb_flags[3] &&
+                        e64_leave_hold) begin
+                        hs_st(S_V64_DISPATCH);
+                        vkev_event <= e64_hp_wval_q;
+                        hs_hp_oid(e64_hp_wval_q[12:0]);
+                        hs_hp_slot(5'd0);
+                        hs_ip(e64_ip_q);
+                        hs_vsp(e64_vsp_q);
+                        // resume point survives the listener calls (the
+                        // muxed ip/vsp reflect the LISTENER's exec run by
+                        // the time the scan ends).
+                        vkey_ret_ip <= e64_ip_q;
+                        vkey_ret_sp <= e64_vsp_q;
+                        vkey_want_ev <= V64_UNDEFINED;
+                        bind_rd_arm <= 1'b0;
+                    end else if (!bind_rd_arm) begin
+                        bind_rd_arm <= 1'b1;
+                    end else if ({1'b0, hp_slot} < vobj_len_rdata) begin
+                        if (vobj_rdata[79:64] == id_type &&
+                            id_type != 16'hFFFF) begin
+                            vkey_want_ev <= vobj_rdata[63:0];
+                            vkey_custom <= 1'b1;
+                            vkey_li <= 5'd0;
+                            // exec copy: the parent vlistener_n_ff is stale
+                            // outside the hs64 states (registration happens
+                            // in exec).
+                            vkey_ln <= e64_vlistener_n_q;
+                            bind_rd_arm <= 1'b0;
+                            hs_st(S_V64_FRAME_KEY);
+                        end else begin
+                            hs_hp_slot(hp_slot + 5'd1);
+                            bind_rd_arm <= 1'b0;
+                        end
+                    end else begin
+                        bind_rd_arm <= 1'b0;
+                        hs_ip(vkey_ret_ip);
+                        hs_vsp(vkey_ret_sp);
+                        hs_code(15'(ops_base + vkey_ret_ip));
+                        hs_st(S_FETCH_WAIT);
+                    end
+                end
                 S_V64_FRAME_KEY: begin
                     logic [63:0] want;
-                    want = v64_handle(
+                    want = vkey_custom ? vkey_want_ev : v64_handle(
                         4'd4, 12'd0,
                         {16'd0, kev_q[kev_rp][8] ? id_keydown : id_keyup}
                     );
@@ -14731,6 +14797,17 @@ module jmr_js_vm #(
                             vkey_li <= vk_pick + 5'd1;
                             hs_st(S_V64_ALLOC);
                         end
+                    end else if (vkey_custom) begin
+                        // dispatchEvent: synchronous — all listeners ran;
+                        // resume the program (exec already advanced ip and
+                        // planted the true result). No kev entry to pop.
+                        vkey_custom <= 1'b0;
+                        vkey_li <= 5'd0;
+                        bind_rd_arm <= 1'b0;
+                        hs_ip(vkey_ret_ip);
+                        hs_vsp(vkey_ret_sp);
+                        hs_code(15'(ops_base + vkey_ret_ip));
+                        hs_st(S_FETCH_WAIT);
                     end else begin
                         kev_rp <= kev_rp + 3'd1;
                         vkey_li <= 5'd0;

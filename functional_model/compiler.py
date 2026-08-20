@@ -1609,6 +1609,35 @@ class Compiler:
             if cname == "Image":
                 self._emit(Op.CALL_NATIVE, self._name("Image"), argc)
                 return
+            # NEW: synthetic event ctors desugar to an object literal +
+            # Object.assign — `new KeyboardEvent(T, O)` becomes
+            # `Object.assign({type: T}, O)`. The tagged RTL had a native
+            # NEW_OBJ arm for these; Value64 never did (DONKEY's synthetic
+            # boot Enter faulted 1 at script end). MAKE_OBJ / SET_PROP /
+            # CALL_METHOD assign are proven on both runtimes.
+            if cname in ("KeyboardEvent", "Event", "CustomEvent",
+                         "MouseEvent"):
+                t_type = self._name("__evt")
+                t_opts = self._name("__evo")
+                for _ in range(max(0, argc - 2)):
+                    self._emit(Op.POP)
+                if argc >= 2:
+                    self._emit(Op.STORE_VAR, t_opts)
+                if argc >= 1:
+                    self._emit(Op.STORE_VAR, t_type)
+                self._emit(Op.MAKE_OBJ)
+                if argc >= 1:
+                    self._emit(Op.DUP)
+                    self._emit(Op.LOAD_VAR, t_type)
+                    self._emit(Op.SET_PROP, self._name("type"))
+                    self._emit(Op.POP)
+                if argc >= 2:
+                    self._emit(Op.DUP)
+                    self._emit(Op.DUP)
+                    self._emit(Op.LOAD_VAR, t_opts)
+                    self._emit(Op.CALL_METHOD, self._name("assign"), 2)
+                    self._emit(Op.POP)
+                return
             # NEW: new Foo() when Foo is a function (PACMAN Item/Map) or unknown soft stub
             if cname not in self.classes:
                 if cname in self.functions:

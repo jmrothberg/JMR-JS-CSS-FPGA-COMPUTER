@@ -433,6 +433,7 @@ module jmr_js_vm_exec64 (
     input  logic [15:0] id_fillrect,
     input  logic [15:0] id_fillstyle,
     input  logic [15:0] id_font,
+    input  logic [15:0] id_disp,
     input  logic [15:0] id_filltext,
     input  logic [15:0] id_filter,
     input  logic [15:0] id_slice, // #40 Array.slice
@@ -2889,6 +2890,12 @@ module jmr_js_vm_exec64 (
             else
                 name_hash_raddr = `VST_AT(cm_base + 12'd1)[9:0];
         end
+        if (code_rdata[7:0] == OP_CALL_METH &&
+            code_rdata[23:8] == id_indexof)
+            // needle char: raddr settles during FETCH_WAIT, hash rdata is
+            // valid on the dispatch beat (single-char interns hash to
+            // their byte — same contract as the replace pattern char).
+            name_hash_raddr = `VST_AT(vsp - 12'd1)[9:0];
     end
 
     always_comb begin
@@ -4086,6 +4093,42 @@ module jmr_js_vm_exec64 (
                                                 state_n = S_FETCH_WAIT;
                                             end
                                         end
+                                        8'd38, 8'd39: begin
+                                            // document/window.dispatchEvent
+                                            // (Value64 — existed only in
+                                            // exec32; DONKEY's synthetic boot
+                                            // Enter silently no-opped). The
+                                            // event object rides hp_wval to
+                                            // the parent S_V64_DISPATCH type
+                                            // walk + custom listener scan.
+                                            if (argc != 12'd0 &&
+                                                `VST_AT(base)[63:48] ==
+                                                    16'h7ff9 &&
+                                                `VST_AT(base)[47:44] ==
+                                                    4'd5 &&
+                                                `VST_AT(base)[31:0] <
+                                                    MAX_OBJ) begin
+                                                hp_wval_n = `VST_AT(base);
+                                                vst_wr(base,
+                                                    {16'h7ff9, 4'd3, 27'd0,
+                                                     1'b1, 16'd0});
+                                                vsp_n = base + 12'd1;
+                                                ip_n = ip + 16'd1;
+                                                code_raddr_n =
+                                                    15'(ops_base + ip + 16'd1);
+                                                state_n = S_V64_DISPATCH;
+                                            end else begin
+                                                // no/invalid event: false
+                                                vst_wr(base,
+                                                    {16'h7ff9, 4'd3, 27'd0,
+                                                     1'b0, 16'd0});
+                                                vsp_n = base + 12'd1;
+                                                ip_n = ip + 16'd1;
+                                                code_raddr_n =
+                                                    15'(ops_base + ip + 16'd1);
+                                                state_n = S_FETCH_WAIT;
+                                            end
+                                        end
                                         8'd28, 8'd29: begin // timeout / interval
                                             bad_fn = argc == 0 ||
                                                 `VST_AT(base)[63:48] != 16'h7ff9 ||
@@ -5269,7 +5312,36 @@ module jmr_js_vm_exec64 (
                                             result = v64_int32_number(32'd640);
                                         else if (code_rdata[23:8] == id_height)
                                             result = v64_int32_number(32'd480);
+                                        else if (id_disp != 16'hFFFF &&
+                                                 code_rdata[23:8] == id_disp)
+                                            // `if (document.dispatchEvent)`:
+                                            // document is a seeded primitive
+                                            // on v64 (no DOM object); the
+                                            // native exists, so the guard
+                                            // must read truthy.
+                                            result = {16'h7ff9, 4'd3, 27'd0,
+                                                      1'b1, 16'd0};
                                         vst_wr(vsp - 12'd1, result);
+                                        ip_n = ip + 16'd1;
+                                        code_raddr_n =
+                                            15'(ops_base + ip + 16'd1);
+                                        state_n = S_FETCH_WAIT;
+                                    end else if (handle[47:44] ==
+                                                     V64_KIND_ELEMENT &&
+                                                 id_disp != 16'hFFFF &&
+                                                 code_rdata[23:8] ==
+                                                     id_disp) begin
+                                        // `if (document.dispatchEvent)`
+                                        // guard: elements answer truthy
+                                        // (the walk would find nothing —
+                                        // dispatchEvent is a native, not a
+                                        // stored property — so the guard
+                                        // read undefined and DONKEY's
+                                        // synthetic boot Enter never even
+                                        // called the native).
+                                        vst_wr(vsp - 12'd1,
+                                            {16'h7ff9, 4'd3, 27'd0, 1'b1,
+                                             16'd0});
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
                                             15'(ops_base + ip + 16'd1);
@@ -5877,6 +5949,33 @@ module jmr_js_vm_exec64 (
                                             state_n = S_V64_SLICE;
                                         end
                                     end
+                                end else if (id_disp != 16'hFFFF &&
+                                           code_rdata[23:8] == id_disp &&
+                                           argc >= 12'd1 &&
+                                           `VST_AT(vsp - 12'd1)[63:48] ==
+                                               16'h7ff9 &&
+                                           `VST_AT(vsp - 12'd1)[47:44] ==
+                                               4'd5 &&
+                                           `VST_AT(vsp - 12'd1)[31:0] <
+                                               MAX_OBJ) begin
+                                    // dispatchEvent(ev) — Value64 (existed
+                                    // only in exec32; DONKEY's synthetic
+                                    // boot Enter was silently dropped, the
+                                    // "Enter twice" quirk). The REAL event
+                                    // object rides hp_wval to the parent
+                                    // S_V64_DISPATCH slot walk (finds
+                                    // .type), then the FRAME_KEY listener
+                                    // scan runs in custom mode and resumes
+                                    // the program. Result true; stack and
+                                    // ip settled here.
+                                    hp_wval_n = `VST_AT(vsp - 12'd1);
+                                    vst_wr(base,
+                                        {16'h7ff9, 4'd3, 27'd0, 1'b1, 16'd0});
+                                    vsp_n = base + 12'd1;
+                                    ip_n = ip + 16'd1;
+                                    code_raddr_n =
+                                        15'(ops_base + ip + 16'd1);
+                                    state_n = S_V64_DISPATCH;
                                 end else if (arr_ok &&
                                            (code_rdata[23:8] == id_foreach ||
                                             (id_find != 16'hFFFF &&
@@ -6618,7 +6717,7 @@ module jmr_js_vm_exec64 (
                                                  `VST_AT(base + 12'd1)[31:0] <
                                                      32'd1024)
                                             needle_b =
-                                                name_rdata;
+                                                name_hash_rdata[7:0];
                                         intern_hay = (receiver[47:44] == 4'd4);
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
@@ -6705,6 +6804,18 @@ module jmr_js_vm_exec64 (
                                             hash2_n = 1'b1;
                                             opnd_n = 1'b1;
                                             state_n = S_V64_EXEC;
+                                        end else if (!opnd2_q) begin
+                                            // Beat 2: raddr now points at
+                                            // the REPLACEMENT (opnd_q=1);
+                                            // its rdata lands next beat.
+                                            // Consuming here read the
+                                            // PATTERN's row — a regex
+                                            // object pattern gave a junk
+                                            // char ('c' became '0').
+                                            hash2_n = 1'b1;
+                                            opnd_n = 1'b1;
+                                            opnd2_n = 1'b1;
+                                            state_n = S_V64_EXEC;
                                         end else begin
                                         vnat_base_n = base;
                                         v64_repl_n = 1'b1;
@@ -6714,8 +6825,14 @@ module jmr_js_vm_exec64 (
                                         repl_did_n = 1'b0;
                                         if (replv[63:48] == V64_TAG_PREFIX &&
                                             replv[47:44] == 4'd4 &&
-                                            replv[31:0] < 32'd1024 &&
-                                            name_blen_rdata[7:0] == 8'd1)
+                                            replv[31:0] < 32'd1024)
+                                            // blen_rdata carries the
+                                            // RECEIVER's length here — do
+                                            // not gate the replacement on
+                                            // it. 1-char interns hash to
+                                            // their byte; multi-char takes
+                                            // hash[7:0] (same limitation
+                                            // as patterns).
                                             repl_rch_n = name_hash_rdata[7:0];
                                         else if (v64_is_number(replv))
                                             repl_rch_n = 8'h30 +

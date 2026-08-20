@@ -138,6 +138,36 @@ dispatch + e.key interning.
 
 ## Value64 gaps closed during the exec32 cut (2026-08-20, cont.)
 
+- **dispatchEvent implemented for Value64** (nid 38/39 + CALL_METH arm;
+  existed only in exec32 — DONKEY's synthetic boot Enter silently
+  no-op'd, the real cause behind the "Enter twice" quirk #60). The
+  guard `if (document.dispatchEvent)` reads truthy (primitive GET_PROP
+  arm answers id_disp), the REAL event object rides hp_wval to a new
+  S_V64_DISPATCH state (slot walk finds .type; enum tail, after
+  S_FB_SYNC, mirrored in jmr_js_vm_pkg), and the FRAME_KEY listener
+  scan runs in custom mode (vkey_custom; vkey_ln latched from
+  e64_vlistener_n_q — the parent ff is stale; resume ip/vsp latched at
+  entry because the muxed values reflect the LISTENER's exec run by
+  scan end).
+- **new KeyboardEvent/Event/CustomEvent/MouseEvent desugared in the
+  compiler**: `new KeyboardEvent(T, O)` now compiles to
+  `Object.assign({type: T}, O)` (MAKE_OBJ / SET_PROP / CALL_METHOD
+  assign — proven on both runtimes). The tagged RTL had a native ctor
+  arm; Value64 never did, so the ctor ran off n_ops with an unbalanced
+  stack (fault 1 site 3198) — this plus the missing dispatchEvent was
+  the whole DONKEY synthetic-boot-Enter story.
+- **String.replace replacement char**: consumed one settle beat early —
+  read the PATTERN's hash row ('c' became junk); and the len==1 gate
+  tested the RECEIVER's blen (that raddr moved to the receiver
+  yesterday). Third settle beat (opnd2) + gate dropped.
+- **indexOf on a dynstr receiver**: OGETI nat=3 was missing the exec
+  latches its own comment claimed ("same latch as replace") — stale
+  hp_vbase/ip parked the program at the CALL ip; and the needle byte
+  read name_rdata with an un-aimed cursor — now name_hash_raddr targets
+  the needle during FETCH_WAIT (single-char interns hash to their
+  byte) and S_IDXSTR gets hs_hp_vbase/hs_ip/hs_vsp.
+
+
 All were tagged-only features/behaviors the encoding flip exposed; each
 verified by probe before the suite rerun:
 
