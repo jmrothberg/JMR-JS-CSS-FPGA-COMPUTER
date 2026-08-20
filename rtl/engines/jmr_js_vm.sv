@@ -8184,6 +8184,26 @@ module jmr_js_vm #(
                     end
                 end
                 S_SQRT: begin
+                    // Math.sqrt first-entry (PACMAN position2coord `offset`):
+                    // exec enters directly with every seed (radicand, cursor,
+                    // v64 flag) in ITS OWN FFs; the parent copies below were
+                    // never written, so the loop ran on garbage, the
+                    // completion took the 32-bit else (v64_sqrt parent FF
+                    // stayed 0) and re-decoded the same CALL forever — the
+                    // 64M frame cap burned at the splash. Same discipline as
+                    // every other exec-entered state.
+                    if (state != S_SQRT && jsb_flags[3] && e64_leave_hold)
+                    begin
+                        hs_st(S_SQRT);
+                        sq_rad <= e64_sq_rad_q;
+                        sq_rem <= e64_sq_rem_q;
+                        sq_root <= e64_sq_root_q;
+                        sq_i <= e64_sq_i_q;
+                        v64_sqrt <= e64_v64_sqrt_q;
+                        hs_vnat_base(e64_vnat_base_q);
+                        hs_ip(e64_ip_q);
+                        hs_vsp(e64_vsp_q);
+                    end else begin
                     // NEW: restoring bit-serial sqrt — 24 cycles, Q16.16 result
                     begin
                         logic [25:0] rem2, trial;
@@ -8214,6 +8234,7 @@ module jmr_js_vm #(
                             hs_st(S_FETCH_WAIT);
                             end
                         end else sq_i <= sq_i - 5'd1;
+                    end
                     end
                 end
                 S_JOIN_FIND: begin
@@ -10001,6 +10022,25 @@ module jmr_js_vm #(
                             js_sp       <= e64_js_sp_q;
                             namcpy_v64  <= e64_namcpy_v64_q;
                             namcpy_repl <= e64_namcpy_repl_q;
+                            // String.replace parent latches (PACMAN ghost
+                            // AI: stringify(...).replace(/2/g,0)): v64_repl
+                            // and repl_rch only ever lived in EXEC's FFs, so
+                            // the S_REPL completion took the 32-BIT dynstr
+                            // path (pushed onto the wrong stack — the result
+                            // read back 0.0 / undefined). repl_pat0==0 means
+                            // "pattern is a RegExp object" — those fields
+                            // were parent-written by the nat=5 read; do not
+                            // clobber them.
+                            v64_repl <= e64_v64_repl_q;
+                            repl_rch <= e64_repl_rch_q;
+                            repl_did <= 1'b0;
+                            if (e64_repl_pat0_q != 8'd0) begin
+                                repl_pat0 <= e64_repl_pat0_q;
+                                repl_pat1 <= 8'd0;
+                                repl_nlen <= 8'd1;
+                                repl_g <= e64_repl_g_q;
+                            end
+
                             // completion branches read hp_nat (indexOf) and
                             // hp_wval (needle); NAMCPY is not in hs64 so the
                             // muxes fall back to the parent _ff copies.
@@ -13029,8 +13069,20 @@ module jmr_js_vm #(
                         hs_hp_rval(vobj_rdata[63:0]);
                         hs_hp_key(vobj_rdata[79:64]);
                         hs_hp_tag(vobj_trdata);
-                        hp_qv[hp_qi[1:0]] <= vobj_rdata[63:0];
-                        hp_qk[hp_qi[1:0]] <= vobj_rdata[79:64];
+                        // PACMAN maze-cache bug: `hp_qv[...] <=` wrote into
+                        // the hs64 MUX (multi-driven; the continuous assign
+                        // wins), so the walk's slot reads never landed —
+                        // S_V64_OGETI_NAT consumed the EXEC copy's leftovers.
+                        // putImageData worked only while those leftovers were
+                        // the creation's width/height pokes; the first
+                        // JSON.parse (PACMAN's per-frame NPC churn) replaced
+                        // them and every later putImageData saw w/h=0 (maze
+                        // vanished after frame 1). Poke hp_qv_ff + mask like
+                        // every other hp_q* writer so exec absorbs it.
+                        hp_qv_ff[hp_qi[1:0]] <= vobj_rdata[63:0];
+                        hs_m_hp_qv <= 1'b1;
+                        hp_qk_ff[hp_qi[1:0]] <= vobj_rdata[79:64];
+                        hs_m_hp_qk <= 1'b1;
                         if (hp_qi + 3'd1 < hp_qn) begin
                             hs_hp_qi(hp_qi + 3'd1);
                             hp_next_slot();
@@ -13125,12 +13177,41 @@ module jmr_js_vm #(
                                         hs_st(S_HEAP_WAIT);
                                 end
                             end
+                        end else if (hp_phase == 3'd4) begin
+                            // settled TARGET-length read (see the exec
+                            // Object.assign dispatch): raddr is hp_oid on
+                            // non-phase-0 beats.
+                            if (!valloc_rd_arm) begin
+                                valloc_rd_arm <= 1'b1;
+                                hs_st(S_HEAP_WAIT);
+                            end else begin
+                                valloc_rd_arm <= 1'b0;
+                                hs_hp_tn(hp_v64 ? vobj_len_rdata[5:0]
+                                                : e32_obj_n_rdata[5:0]);
+                                hs_hp_phase(3'd0);
+                                hs_st(S_HEAP_WAIT);
+                            end
                         end else if (hp_phase == 3'd0) begin
-                            if (hp_ss >= (hp_v64 ? vobj_len_rdata[4:0]
+                            // PACMAN ghosts/pacman invisible: this beat's
+                            // vobj_len_rdata (source length) and vobj_rdata
+                            // (source slot) are only correct one beat after
+                            // the phase-0 raddr muxes engage. The FIRST
+                            // Object.assign worked off lucky leftovers; every
+                            // later one read a stale len (0-ish), decided
+                            // `hp_ss >= len` immediately, and copied NOTHING
+                            // — resetItems left the NPC/player items with no
+                            // type/draw/update. One settle beat, same
+                            // discipline as phase 3 below.
+                            if (!valloc_rd_arm) begin
+                                valloc_rd_arm <= 1'b1;
+                                hs_st(S_HEAP_WAIT);
+                            end else if (hp_ss >= (hp_v64 ? vobj_len_rdata[4:0]
                                                  : e32_obj_n_rdata[4:0])) begin
+                                valloc_rd_arm <= 1'b0;
                                 hs_hp_phase(3'd3);
                                 hs_st(S_HEAP_WAIT);
                             end else begin
+                                valloc_rd_arm <= 1'b0;
                                 hs_hp_key(vobj_rdata[79:64]);
                                 hs_hp_wval(vobj_rdata[63:0]);
                                 hs_hp_tag(vobj_trdata);
@@ -14256,6 +14337,32 @@ module jmr_js_vm #(
                             if (hp_oid != 13'd0 &&
                                 vobj_builtin_rdata == 4'd6)
                                 ; // regex pack already in hp_wval
+                            // Dynstr-haystack leg never passes the S_NAMCPY
+                            // guard: base/ip/vsp for the completion push
+                            // also only lived in EXEC's FFs (the result
+                            // handle was written to slot 0 instead of the
+                            // receiver slot).
+                            hs_vnat_base(e64_vnat_base_q);
+                            hs_ip(e64_ip_q);
+                            hs_vsp(e64_vsp_q);
+                            // String.replace parent latches (PACMAN ghost
+                            // AI: stringify(...).replace(/2/g,0)): v64_repl
+                            // and repl_rch only ever lived in EXEC's FFs, so
+                            // the S_REPL completion took the 32-BIT dynstr
+                            // path (pushed onto the wrong stack — the result
+                            // read back 0.0 / undefined). repl_pat0==0 means
+                            // "pattern is a RegExp object" — those fields
+                            // were parent-written by the nat=5 read; do not
+                            // clobber them.
+                            v64_repl <= e64_v64_repl_q;
+                            repl_rch <= e64_repl_rch_q;
+                            repl_did <= 1'b0;
+                            if (e64_repl_pat0_q != 8'd0) begin
+                                repl_pat0 <= e64_repl_pat0_q;
+                                repl_pat1 <= 8'd0;
+                                repl_nlen <= 8'd1;
+                                repl_g <= e64_repl_g_q;
+                            end
                             hs_st(S_REPL);
                         end
                         4'd5: begin
@@ -14575,12 +14682,20 @@ module jmr_js_vm #(
                         // PYTHON present(): scanout the back — but only if
                         // this frame drew. See fb_dirty.
                         dbg_frame_end <= dbg_frame_end + 16'd1;
-                        // Present unconditionally again: gating on fb_dirty
-                        // hid every top-level drawing that never reaches a
-                        // second frame (snippets painted into the back bank
-                        // and FB? read an empty front: nz=0).
-                        fb_swap <= 1'b1;
-                        fb_dirty <= 1'b0;
+                        // Swap ONLY if this frame drew. The unconditional
+                        // swap alternated the two banks on every FRAME, so
+                        // an event-driven screen that draws ONCE (DONKEY
+                        // title, character select) flickered against the
+                        // stale other bank ("flashing splash behind the
+                        // menu"). A frame that drew still swaps (top-level
+                        // snippets included: their writes set fb_dirty and
+                        // this beat runs at that frame's end); an explicit
+                        // swapBuffers already presented and cleared
+                        // fb_dirty, so it is not double-swapped either.
+                        if (fb_dirty) begin
+                            fb_swap <= 1'b1;
+                            fb_dirty <= 1'b0;
+                        end
                         hs_vgc_clear_i(14'd0);
                         hs_vgc_qr(14'd0);
                         hs_vgc_qw(14'd0);

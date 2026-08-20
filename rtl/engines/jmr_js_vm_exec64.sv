@@ -2859,6 +2859,13 @@ module jmr_js_vm_exec64 (
                     ? (vsp_hs - {4'd0, code_rdata[31:24]})
                     : 12'd0
             )[9:0];
+        else if (code_rdata[7:0] == OP_CALL_METH &&
+                 code_rdata[23:8] == id_replace)
+            // String.replace: the interned-haystack seeds (srclen, name
+            // offset) are the RECEIVER's — the default aimed at the LAST
+            // ARG (the replacement), so S_NAMCPY copied a garbage name
+            // ("tick") instead of the string being replaced.
+            name_blen_raddr = `VST_AT(cm_base)[9:0];
         else
             name_blen_raddr = `VST_AT(vsp - 12'd1)[9:0];
         name_off_raddr = name_blen_raddr;
@@ -5548,7 +5555,18 @@ module jmr_js_vm_exec64 (
                                             hp_oid_n = tgt[12:0];
                                             hp_si_n = sv0[12:0];
                                             hp_ss_n = 5'd0;
-                                            hp_phase_n = 3'd0;
+                                            // phase 4: the parent reads the
+                                            // TARGET length with a settled
+                                            // read first. Latching
+                                            // vobj_len_rdata here took a
+                                            // stale value (the previous
+                                            // item's length): appends began
+                                            // at that offset, hit the
+                                            // 32-slot cap, and the late
+                                            // props (type/draw/update) were
+                                            // dropped — PACMAN's ghosts and
+                                            // player never drew.
+                                            hp_phase_n = 3'd4;
                                             hp_tn_n = vobj_len_rdata;
                                             hp_qi_n = 3'd0;
                                             hp_qn_n = argc[2:0] - 3'd1;
@@ -6579,8 +6597,12 @@ module jmr_js_vm_exec64 (
                                             repl_did_n = 1'b0;
                                             if (pat[63:48] == V64_TAG_PREFIX &&
                                                 pat[47:44] == 4'd4 &&
-                                                pat[31:0] < 32'd1024 &&
-                                                name_blen_rdata[7:0] == 8'd1)
+                                                pat[31:0] < 32'd1024)
+                                                // 1-char interned names hash
+                                                // to their byte; blen_rdata
+                                                // now carries the RECEIVER's
+                                                // length so it cannot gate
+                                                // the pattern any more.
                                                 repl_pat0_n = name_hash_rdata[7:0];
                                             else if (v64_is_number(pat))
                                                 repl_pat0_n = 8'h30 +
@@ -6610,9 +6632,18 @@ module jmr_js_vm_exec64 (
                                         ip_n = ip + 16'd1;
                                         if (pat[63:48] == V64_TAG_PREFIX &&
                                             pat[47:44] == V64_KIND_OBJECT &&
-                                            pat[31:0] < MAX_OBJ &&
-                                            vobj_alloc_rdata == 2'd1 &&
-                                            vobj_builtin_rdata == 4'd6) begin
+                                            pat[31:0] < MAX_OBJ) begin
+                                            // Any object-typed pattern: the
+                                            // exec cannot settle a builtin
+                                            // read on the pattern here (the
+                                            // rdata is the RECEIVER's), so
+                                            // route every object pattern
+                                            // through the parent's nat=5
+                                            // slot-0 read. In practice only
+                                            // RegExp objects are passed as
+                                            // patterns; a non-regex object
+                                            // reads garbage chars and simply
+                                            // never matches.
                                             hp_cmd_n = HP_OGETI;
                                             hp_v64_n = 1'b1;
                                             hp_oid_n = pat[12:0];

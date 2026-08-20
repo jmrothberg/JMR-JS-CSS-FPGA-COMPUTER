@@ -122,9 +122,10 @@ the file at start; further RTL edits are the **next** bit, not the live one.
 (RSS 58→114 GB, `tcmalloc` 5.2 GB, 7 workers). No synth DCP — **cannot
 resume mapping** (`synth_design` is one step). MIG/project kept. Resume
 `make bit` (not `bit-fresh`): synth **2 threads**, impl **8**. First DCP
-is synth_1 100% (`post_synth.dcp`). LUTRAM leftovers (`source_mem`,
-`vconsts`, `vobj_proto`) — Port A, not `ram_style` + FSM poke:
-[FPGA_FIT.md](FPGA_FIT.md#lutram-leftovers-not-the-70-gb-hang). Do **not**
+is synth_1 100% (`post_synth.dcp`). **Serial after this bit (do not mix):**
+glass/exec64 → unhook exec32 ([REMOVING_EXEC32.md](REMOVING_EXEC32.md)) →
+LUTRAM→Port A BRAM for the big misses, not every array
+([FPGA_FIT.md](FPGA_FIT.md#lutram-leftovers-not-the-70-gb-hang)). Do **not**
 `bit-fresh`. Do **not** kill a live synth to attach checkpoint hooks;
 hooks only fire at step end.
 

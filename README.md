@@ -33,8 +33,10 @@ History of RTL edits from the 70 GB Vivado hunt (not a current-bug list;
 use when tracing what those edits most likely broke):
 [docs/VIVADO_FLATTEN_HUNT.md](docs/VIVADO_FLATTEN_HUNT.md).
 Tagged Q16 opcode unit is leftover (titles use exec64): plan to unhook
-it is [docs/REMOVING_EXEC32.md](docs/REMOVING_EXEC32.md) — tests first,
-not in parallel with glass edits.
+it is [docs/REMOVING_EXEC32.md](docs/REMOVING_EXEC32.md) — after glass,
+not in parallel with parent FSM edits. After that unhook, LUTRAM→Port A
+(not every array into BRAM):
+[docs/FPGA_FIT.md](docs/FPGA_FIT.md#lutram-leftovers-not-the-70-gb-hang).
 
 ```
 $ python3 run_jmr_js.py
@@ -122,7 +124,9 @@ the Constitution disagree, the code is wrong.
 from `build/nexys_video/utilization_impl.rpt`. Do not invent counts.
 
 **Implement / don’t checklist (HTML, JS, CSS, Canvas — Complete or TBD):**
-[docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md#agent-surface-checklist-html--javascript--css--canvas)
+[docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md#agent-surface-checklist-html--javascript--css--canvas).
+Opcodes (34) + native ids 0–40 + READY verbs:
+[bytecode ISA](docs/JMR_JS_COMPATIBILITY.md#bytecode-opcodes-34).
 
 ---
 

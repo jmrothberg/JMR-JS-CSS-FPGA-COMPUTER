@@ -712,6 +712,9 @@ same undefined return as **39** — but **no title emits it**, so no ID.
 
 ## Compatibility command map (inspection only)
 
+Opcode numbers, FM/RTL mnemonics, and native ids 0–40:
+[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#bytecode-opcodes-34).
+
 Compat **Complete** = JsHwVm. This table is silicon vs that claim. **NOT** =
 no RTL verb/method arm (LOOKFN-miss / undefined / `?SN`). **never** = do not
 build. **host** = FPGA-SIM Python helper, not the console FSM.

@@ -288,6 +288,8 @@ static int beat_ip = -1;
 static std::vector<std::string> beat_log;
 // NEW: ENVWATCH — log venv_valid transitions (slots 0..127)
 static std::vector<std::string> gcsnap_log;
+static uint64_t state_cycles[128];
+static uint64_t exec_state_cycles[128];
 static bool fw_on = false;
 static uint8_t fw_vcsp_prev = 0;
 static uint16_t fw_rip_prev[16];
@@ -529,7 +531,49 @@ static void tick() {
         }
         }
     }
-    if (envw_on && gcsnap_log.size() < 40) {
+    {
+        unsigned sc = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state) & 127;
+        state_cycles[sc]++;
+        if (sc == 60) { // S_V64_EXEC: split by exec unit state
+            unsigned ec = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state) & 127;
+            exec_state_cycles[ec]++;
+        }
+    }
+    if (envw_on && gcsnap_log.size() < 1200) {
+        auto* rc = top->rootp;
+        static uint16_t cls_prev[4] = {0};
+        static unsigned imgd_prev_st = 0;
+        {
+            unsigned stg = unsigned(rc->jmr_js_core__DOT__u_vm__DOT__state);
+            if (stg != imgd_prev_st &&
+                (stg == 50 || stg == 51 || stg == 95 || stg == 42 || stg == 52 || stg == 100 || stg == 89 ||
+                 imgd_prev_st == 50 || imgd_prev_st == 51 || imgd_prev_st == 95 ||
+                 imgd_prev_st == 42 || imgd_prev_st == 52 || imgd_prev_st == 100 || imgd_prev_st == 89)) {
+                char b[160];
+                std::snprintf(b, sizeof b, "[I %u->%u ip=%u nb=%u vi=%u sp=%u]",
+                    imgd_prev_st, stg,
+                    unsigned(rc->jmr_js_core__DOT__u_vm__DOT__ip),
+                    unsigned(rc->jmr_js_core__DOT__u_vm__DOT__vnat_base_ff),
+                    unsigned(rc->jmr_js_core__DOT__u_vm__DOT__valloc_i_ff),
+                    unsigned(rc->jmr_js_core__DOT__u_vm__DOT__vsp_ff));
+                gcsnap_log.push_back(b);
+            }
+            imgd_prev_st = stg;
+        }
+        for (int k = 0; k < 4; k++) {
+            uint16_t v = uint16_t(rc->jmr_js_core__DOT__u_vm__DOT__vobj_cls[k]);
+            if (v != cls_prev[k]) {
+                char b[120];
+                std::snprintf(b, sizeof b, "[C%d %x->%x ip=%u st=%u]",
+                    k, cls_prev[k], v,
+                    unsigned(rc->jmr_js_core__DOT__u_vm__DOT__ip),
+                    unsigned(rc->jmr_js_core__DOT__u_vm__DOT__state));
+                gcsnap_log.push_back(b);
+                cls_prev[k] = v;
+            }
+        }
+    }
+    if (envw_on && gcsnap_log.size() < 1200) {
         auto* rt = top->rootp;
         static uint8_t tw_prev[8] = {0};
         for (int k = 0; k < 8; k++) {
@@ -546,7 +590,7 @@ static void tick() {
             }
         }
     }
-    if (envw_on && gcsnap_log.size() < 40) {
+    if (envw_on && gcsnap_log.size() < 1200) {
         auto* rg2 = top->rootp;
         unsigned st2 = unsigned(rg2->jmr_js_core__DOT__u_vm__DOT__state);
         static unsigned fa_prev = 999;
@@ -564,7 +608,7 @@ static void tick() {
             fa_prev = st2;
         }
     }
-    if (envw_on && gcsnap_log.size() < 40) {
+    if (envw_on && gcsnap_log.size() < 1200) {
         auto* rg = top->rootp;
         unsigned stt = unsigned(rg->jmr_js_core__DOT__u_vm__DOT__state);
         if (stt != gcsnap_prev_state) {
@@ -623,22 +667,21 @@ static void tick() {
             }
         }
     }
-    if (beat_ip >= 0 && beat_log.size() < 48) {
+    if (beat_ip >= 0 && beat_log.size() < 900) {
         auto* rb = top->rootp;
-        if (int(rb->jmr_js_core__DOT__u_vm__DOT__ip) >= beat_ip || !beat_log.empty()) {
-            char b[220];
+        if (int(rb->jmr_js_core__DOT__u_vm__DOT__ip) == beat_ip || !beat_log.empty()) {
+            char b[260];
             std::snprintf(b, sizeof b,
-                "[ip=%u st=%u est=%u evsp=%u pvsp=%u vspd=%u m=%u lh=%u w0=%llx w1=%llx]",
+                "[ip=%u st=%u ph=%u ss=%u si=%u qi=%u tn=%u len=%u oid=%u]",
                 unsigned(rb->jmr_js_core__DOT__u_vm__DOT__ip),
                 unsigned(rb->jmr_js_core__DOT__u_vm__DOT__state),
-                unsigned(rb->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state),
-                unsigned(rb->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__vsp),
-                unsigned(rb->jmr_js_core__DOT__u_vm__DOT__vsp_ff),
-                unsigned(rb->jmr_js_core__DOT__u_vm__DOT__vsp_d),
-                unsigned(rb->jmr_js_core__DOT__u_vm__DOT__hs_m_vsp),
-                unsigned(rb->jmr_js_core__DOT__u_vm__DOT__e64_leave_hold),
-                (unsigned long long)uint64_t(rb->jmr_js_core__DOT__u_vm__DOT__vst_win[0]),
-                (unsigned long long)uint64_t(rb->jmr_js_core__DOT__u_vm__DOT__vst_win[1]));
+                unsigned(rb->jmr_js_core__DOT__u_vm__DOT__hp_phase),
+                unsigned(rb->jmr_js_core__DOT__u_vm__DOT__hp_ss),
+                unsigned(rb->jmr_js_core__DOT__u_vm__DOT__hp_si),
+                unsigned(rb->jmr_js_core__DOT__u_vm__DOT__hp_qi),
+                unsigned(rb->jmr_js_core__DOT__u_vm__DOT__hp_tn),
+                unsigned(rb->jmr_js_core__DOT__u_vm__DOT__vobj_len_rdata),
+                unsigned(rb->jmr_js_core__DOT__u_vm__DOT__hp_oid));
             beat_log.push_back(b);
         }
     }
@@ -1880,6 +1923,7 @@ int main(int argc, char** argv) {
                       << " map=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__id_map)
                       << " find=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__id_find)
                       << " foreach=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__id_foreach)
+                      << " replace=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__id_replace)
                       << std::endl;
             continue;
         }
@@ -1934,6 +1978,81 @@ int main(int argc, char** argv) {
                 << " env=" << std::hex << (unsigned long long)uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vfn_env[fi])
                 << " bthis=" << (unsigned long long)uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vfn_bound_this[fi]) << std::dec
                 << std::endl;
+            continue;
+        }
+        // NEW: FBBOX <idx> — bounding box + count of one palette index (front)
+        if (line.rfind("FBBOX ", 0) == 0) {
+            auto* r = top->rootp;
+            unsigned want = std::stoul(line.substr(6)) & 0xff;
+            unsigned front = unsigned(r->jmr_js_core__DOT__u_fb__DOT__front);
+            int minx = 9999, miny = 9999, maxx = -1, maxy = -1; long cnt = 0;
+            for (int y = 0; y < 480; y++)
+                for (int x = 0; x < 640; x++) {
+                    int i = y * 640 + x;
+                    uint8_t px = front
+                        ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0[i]
+                        : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1[i];
+                    if (px == want) {
+                        cnt++;
+                        if (x < minx) minx = x;
+                        if (x > maxx) maxx = x;
+                        if (y < miny) miny = y;
+                        if (y > maxy) maxy = y;
+                    }
+                }
+            std::cout << "BOX idx=" << want << " n=" << cnt
+                      << " x=" << minx << ".." << maxx
+                      << " y=" << miny << ".." << maxy << std::endl;
+            continue;
+        }
+        // NEW: FBHIST? — front-buffer palette-index histogram (nonzero bins)
+        if (line == "FBHIST?") {
+            auto* r = top->rootp;
+            unsigned front = unsigned(r->jmr_js_core__DOT__u_fb__DOT__front);
+            static uint32_t bins[256];
+            for (int i = 0; i < 256; i++) bins[i] = 0;
+            for (int i = 0; i < 640*480; i++) {
+                uint8_t px = front
+                    ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0[i]
+                    : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1[i];
+                bins[px]++;
+            }
+            std::ostringstream oss;
+            oss << "HIST";
+            for (int i = 1; i < 256; i++)
+                if (bins[i]) oss << " " << i << ":" << bins[i]
+                    << "#" << std::hex
+                    << (unsigned long)top->rootp->jmr_js_core__DOT__u_palette__DOT__mem[i]
+                    << std::dec;
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
+        // NEW: STATEHIST? — cumulative clocks per parent state (then reset)
+        if (line == "STATEHIST?") {
+            std::ostringstream oss;
+            oss << "SH";
+            for (int i = 0; i < 128; i++)
+                if (state_cycles[i]) oss << " " << i << ":" << (unsigned long long)state_cycles[i];
+            oss << " | EXEC";
+            for (int i = 0; i < 128; i++)
+                if (exec_state_cycles[i]) oss << " " << i << ":" << (unsigned long long)exec_state_cycles[i];
+            for (int i = 0; i < 128; i++) { state_cycles[i] = 0; exec_state_cycles[i] = 0; }
+            std::cout << oss.str() << std::endl;
+            continue;
+        }
+        // NEW: JSONMEM <off> <n> — dump json_mem bytes as chars
+        if (line.rfind("JSONMEM ", 0) == 0) {
+            unsigned off = 0, n = 64;
+            std::sscanf(line.c_str() + 8, "%u %u", &off, &n);
+            if (n > 128) n = 128;
+            std::ostringstream oss;
+            oss << "JM \"";
+            for (unsigned i = 0; i < n; i++) {
+                uint8_t c = (uint8_t)top->rootp->jmr_js_core__DOT__u_vm__DOT__json_mem[(off + i) & 0x1fff];
+                oss << (char)((c >= 32 && c < 127) ? c : '.');
+            }
+            oss << "\"";
+            std::cout << oss.str() << std::endl;
             continue;
         }
         // NEW: TMR? — vtimer table slots 0..7

@@ -70,7 +70,9 @@ print:
 - `~30 mm²` in the on-chip BRAM box is the **whole ASIC die**, not a BRAM
   size.
 - Opcode `0D CALL` (native id in arg0) is RTL `OP_CALL`; the FM name is
-  `CALL_NATIVE`. Same instruction. 34 opcodes total.
+  `CALL_NATIVE`. Same instruction. 34 opcodes total — full table and native
+  ids 0–40:
+  [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#bytecode-opcodes-34).
 
 **ASIC board poster (Rev A proposal)** — QFN-100 chip + external 4 MB asset
 SRAM + HDMI transmitter carrier board, sibling style to the JMR BASIC ASIC

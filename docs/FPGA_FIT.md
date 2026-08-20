@@ -183,6 +183,15 @@ LUTRAM vs BRAM from `utilization_synth.rpt`. Agent recipe:
 
 ## LUTRAM leftovers (not the 70 GB hang)
 
+**When (serial — do not mix with glass or exec32):** (1) HTML/exec64
+glass, (2) unhook exec32 ([REMOVING_EXEC32.md](REMOVING_EXEC32.md)),
+(3) **this** Port A pass, then the user runs the next `make bit`.
+Exec32 leftover (`stack` 2K×32, `consts`, `stack_tag`, `tfn_*`) is
+~10% of the LUTRAM list; killing it does not fix mapping hunger.
+Do not start this during a live synth. Do not put everything in
+BRAM — paper BRAM is already over 365 tiles if every array infers.
+Small 8-deep FOREACH/rAF stacks as LUTRAM are fine.
+
 16:17 crash log mapped these as **LUTRAM** (tiny memories in LUTs) even
 though some already have `ram_style = "block"`. That attribute is ignored
 when the access is not UG901 Port A (`simple_dual_one_clock.v` /
@@ -190,9 +199,20 @@ when the access is not UG901 Port A (`simple_dual_one_clock.v` /
 how you get 8-7186 / LUTRAM / mapping cost — or the 70 GB FF hang if the
 array is large enough.
 
+**2026-08-20 live synth RAM-inference paste** still matches 16:17
+(`source_mem` RAM256X1S×4096, `vconsts`/`vobj_proto` RAM64M×352) and
+adds more JS heap as LUTRAM: `vstack` 2K×64 (×1408), `name_mem` 32K×8
+(×1536), `gc_queue` 16K×14 (×1280), `vgc_queue` 4K×64 (×1100),
+`varr_tmem` 64K×3 (×1024). That is tens of kLUTs before opcode logic.
+T200 has 134,600 LUTs so it can still fit; this is why mapping is slow
+at 2 threads. Priority after exec32: `source_mem` first, then those
+heap arrays if they still miss. Tagged `stack` 2K×32 (×704) dies with
+exec32 — do not Port-A it.
+
 **Do not do this work to “make a title paint.”** Extra clocks OK. One
-heap. No second copy. No JOIN/JSON/GC extract. Inspect exec32 and exec64.
-Copy `jmr_mini_fb.sv` Port A. Agent does not run Vivado.
+heap. No second copy. No JOIN/JSON/GC extract. After exec32 is gone,
+inspect exec64 and the parent only. Copy `jmr_mini_fb.sv` Port A.
+Agent does not run Vivado.
 
 | Array | File | Why it missed BRAM | Safe fix (same behaviour, extra clocks OK) |
 |---|---|---|---|

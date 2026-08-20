@@ -365,18 +365,31 @@ let JS resize HDMI; glass stays 640×480.
 
 #### Monitor commands (READY prompt — the BASIC verbs)
 
-From `functional_model/machine.py` HELP. Same verbs on PYTHON and FPGA-SIM;
-do not add RTL-only commands.
+From `functional_model/machine.py` HELP and `rtl/engines/jmr_console_engine.sv`.
+Same verbs on PYTHON and FPGA-SIM; do not add RTL-only commands.
+FPGA-SIM debug RPCs (`VMSTAT?`, `SRCLOAD`, …) are host helpers, not console verbs.
 
-| Command | Pri | Status | Notes |
-|---|---|---|---|
-| `DIR` | P0 | Complete | Names only (HTML / optional `.JS`) |
-| `LOAD "NAME.HTML"` | P0 | Complete | Quotes optional |
-| `RUN` | P0 | Complete | Verb works (compile-on-RUN). HTML titles not playable is Canvas/JS TBD, not this row. |
-| `LIST` / `LIST n-m` / MORE | P0 | Complete | HTML line numbers |
-| `EDIT` / `INSERT` / `DELETE` | P0 | Complete | Editor = HTML text |
-| `SAVE` / `NEW` / `CLS` / `HELP` / `MEM` | P1 | Complete | |
-| `ESC` | P0 | Complete | Machine BREAK; games must not steal Esc |
+PYTHON/RTL = the verb exists. That is **not** “known working” on a title.
+Silicon holes and HELP-text mismatch:
+[potential bugs.md — Monitor](potential%20bugs.md#monitor-ready).
+
+| Command | Pri | PYTHON | RTL | Notes |
+|---|---|---|---|---|
+| `DIR` | P0 | in | in | Names only (HTML / optional `.JS`) |
+| `LOAD "NAME.HTML"` | P0 | in | in | Quotes optional. `LOAD n` (DIR index) is PYTHON. FPGA-SIM `SRCLOAD` skips FAT. |
+| `RUN` | P0 | in | in | Compile-on-RUN (host). On-chip compiler **NOT**. Missing stream → `?NH` / `?NB`. |
+| `LIST` / `LIST n-m` / `LIST -` | P0 | in | in | HTML line numbers. `-- MORE --` is Space/Enter, not a typed verb. |
+| `EDIT n` | P0 | in | in | Next typed line replaces that source line. |
+| `INSERT n` | P0 | in | **NOT** (`?SN`) | Bug **42**. |
+| `DELETE n` | P0 | in | **NOT** (`?SN`) | Bug **43**. Editor-line delete. |
+| `REMOVE "NAME"` | P1 | in (file alias of DELETE) | in | File delete on card. Not `DELETE n`. |
+| `SAVE` | P1 | in | in | `SAVE` / `SAVE name` |
+| `NEW` | P1 | in | in | Clears source; RTL also `halt_pulse` |
+| `CLS` | P1 | in | in | RTL HELP does not print this verb |
+| `HELP` | P1 | in | in | PYTHON lists INSERT/DELETE; RTL prints `DIR LOAD SAVE NEW LIST EDIT RUN` |
+| `MEM` | P1 | in | in | RTL prints `FB 640X480` |
+| `ESC` | P0 | in | in | Machine BREAK; games must not steal Esc |
+| `10 text` (numbered replace) | P1 | in | **NOT** | PYTHON READY. RTL replace is only after `EDIT n`. |
 
 #### Asset / compile pipeline (not a JS API)
 
@@ -432,6 +445,106 @@ serialized ProgramImage bytes.
 - Every section has an explicit byte length and must fit before execution.
   Bad magic, unknown required flags, overlap, truncation, or capacity excess
   halts with a machine error; no section is silently clipped.
+
+### Bytecode opcodes (34)
+
+Source: `functional_model/bytecode.py` `Op` and `rtl/engines/jmr_js_vm.sv`
+`localparam`. There is no opcode 0. FM and RTL names differ on a few rows;
+the **number** is the ABI.
+
+There is **no “known working” column**. An opcode can decode on both rungs
+and still fail in a title because the hole is a native, a method, a heap
+path, or an unverified loop. Notes cite a
+[potential bugs.md](potential%20bugs.md) ID only when that file names this
+opcode. Per-API silicon status is under Frozen ISA and the
+[compatibility command map](potential%20bugs.md#compatibility-command-map-inspection-only).
+
+| # | FM mnemonic | RTL | Notes |
+|---|---|---|---|
+| 1 | `LOAD_CONST` | `OP_LOAD_CONST` | |
+| 2 | `LOAD_VAR` | `OP_LOAD_VAR` | |
+| 3 | `STORE_VAR` | `OP_STORE_VAR` | |
+| 4 | `ADD` | `OP_ADD` | |
+| 5 | `SUB` | `OP_SUB` | |
+| 6 | `MUL` | `OP_MUL` | |
+| 7 | `DIV` | `OP_DIV` | |
+| 8 | `LT` | `OP_LT` | |
+| 9 | `GT` | `OP_GT` | |
+| 10 | `EQ` | `OP_EQ` | |
+| 11 | `JUMP` | `OP_JUMP` | |
+| 12 | `JUMP_IF_FALSE` | `OP_JIF` | |
+| 13 | `CALL_NATIVE` | `OP_CALL` | Native id in arg0 — table below. |
+| 14 | `RETURN` | `OP_RETURN` | |
+| 15 | `POP` | `OP_POP` | |
+| 16 | `DUP` | `OP_DUP` | |
+| 17 | `NEG` | `OP_NEG` | |
+| 18 | `NOT` | `OP_NOT` | |
+| 19 | `MAKE_ARRAY` | `OP_MAKE_ARR` | |
+| 20 | `ARRAY_GET` | `OP_ARR_GET` | |
+| 21 | `ARRAY_SET` | `OP_ARR_SET` | |
+| 22 | `LET_VAR` | `OP_LET_VAR` | |
+| 23 | `MOD` | `OP_MOD` | |
+| 24 | `CALL_USER` | `OP_CALL_USER` | |
+| 25 | `RET_VAL` | `OP_RET_VAL` | Leftover-frame / `forEach` fall-off: **6** |
+| 26 | `MAKE_OBJ` | `OP_MAKE_OBJ` | |
+| 27 | `GET_PROP` | `OP_GET_PROP` | Bare `.now` vs `Date.now()`: **14** (applied) |
+| 28 | `SET_PROP` | `OP_SET_PROP` | |
+| 29 | `NEW_OBJ` | `OP_NEW_OBJ` | Nested `new` / IIFE: **7** **8** |
+| 30 | `CALL_METHOD` | `OP_CALL_METH` | Holes are per-method (Canvas / Array), not this decode. |
+| 31 | `BIT_OR` | `OP_BIT_OR` | |
+| 32 | `BIT_AND` | `OP_BIT_AND` | |
+| 33 | `MAKE_FN` | `OP_MAKE_FN` | Closures / IIFE flags: **7** **8** |
+| 34 | `CALL_VAL` | `OP_CALL_VAL` | IIFE / first-class call: **7** **8** |
+
+### Native IDs (`CALL_NATIVE` / `OP_CALL` arg0)
+
+Source: `functional_model/jsb_format.py` `NATIVE_IDS` (0–40). Aliases share
+an id: `console.warn`→0, `addEventListener`→19, `removeEventListener`→36.
+Grouped title surface is under Frozen ISA below — this is the numbered ABI.
+
+| Id | Name |
+|---|---|
+| 0 | `console.log` |
+| 1 | `clear` |
+| 2 | `fillRect` |
+| 3 | `swapBuffers` |
+| 4 | `keyLeft` |
+| 5 | `keyRight` |
+| 6 | `keyFire` |
+| 7 | `startLoop` |
+| 8 | `keyUp` |
+| 9 | `keyDown` |
+| 10 | `Math.floor` |
+| 11 | `Math.abs` |
+| 12 | `Math.min` |
+| 13 | `Math.max` |
+| 14 | `Math.random` |
+| 15 | `Math.sqrt` |
+| 16 | `document.getElementById` |
+| 17 | `document.querySelector` |
+| 18 | `document.createElement` |
+| 19 | `document.addEventListener` |
+| 20 | `window.addEventListener` |
+| 21 | `localStorage.getItem` |
+| 22 | `localStorage.setItem` |
+| 23 | `JSON.parse` |
+| 24 | `JSON.stringify` |
+| 25 | `Date` |
+| 26 | `Image` |
+| 27 | `requestAnimationFrame` |
+| 28 | `setTimeout` |
+| 29 | `setInterval` |
+| 30 | `clearTimeout` |
+| 31 | `clearInterval` |
+| 32 | `localStorage.removeItem` |
+| 33 | `_stub` (unknown CALL_NATIVE → no-op; `window.open`) |
+| 34 | `Array` |
+| 35 | `Date.now` |
+| 36 | `document.removeEventListener` |
+| 37 | `window.removeEventListener` |
+| 38 | `document.dispatchEvent` |
+| 39 | `window.dispatchEvent` |
+| 40 | `typeof` |
 
 ### 64-bit Value ABI
 
@@ -597,6 +710,8 @@ Chrome is authoring only. Fonts are **never** Chrome TTF (PYTHON 8×8 bitmap;
 RTL `fillText` is a 64×8 rect stub).
 
 ### Natives (`CALL_NATIVE` → `jsb_format.NATIVE_IDS`)
+
+Numbered ABI (ids 0–40) is under [Native IDs](#native-ids-call_native--op_call-arg0).
 
 | Native | Titles | Status |
 |---|---|---|
