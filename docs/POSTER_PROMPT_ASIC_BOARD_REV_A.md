@@ -92,7 +92,7 @@ Seven numbered sections.
 - "Process and domain values TBD — Rev A proposal."
 
 "4. INTERFACES  (Rev A carrier board)"
-- "External asset SRAM: 4M × 20, 1.8 V — A[20:0] + DQ[15:0] + CE#/OE#/WE#/UB#/LB# (async SRAM bus)"
+- "External asset SRAM: ISSI IS61WV204816, 2M × 16 (4 MB) — A[20:0] + DQ[15:0] + CE#/OE#/WE#/UB#/LB# (async SRAM bus). Bus voltage TBD."
 - "Video: 12-bit DDR RGB + HSYNC/VSYNC/DE + PCLK → external HDMI/DVI transmitter → HDMI Type-A  (proposal)"
 - "Keyboard: USB-HID → PS/2 converter MCU → PS2_CLK / PS2_DATA (RX-only)"
 - "Joystick: Mini I2C gamepad @ 0x5A — JOY_SCL / JOY_SDA (open-drain, board-side pull-ups). Same master as the FPGA prototype."
@@ -127,7 +127,10 @@ Colored legend strip below the drawing, seven keys:
 Second legend row, five keys:
 "Peripheral" · "I2C (open-drain)" · "Clock / Reset / Test" · "GND" · "NC"
 Caption under the legends, exactly:
-"Pin numbers on this drawing are illustrative placement only."
+"Pin numbers and pin names on this drawing are illustrative only — the PIN SUMMARY table is authoritative."
+Where the ring does carry names, spell them exactly: "TEST_EN" (not
+"TES1_IN"), "CLK_IN", "RESET_N", "JOY_SCL", "JOY_SDA", "PS2_CLK",
+"PS2_DATA", "CE#", "OE#", "WE#", "UB#", "LB#".
 
 PANEL 3a — "PACKAGE & PROCESS"
 Small line-art drawing of a QFN package labelled
@@ -168,8 +171,10 @@ Caption under the table, exactly:
 (There is NO "RRAM_CTRL" row. Do not add one. The counts above sum to
 exactly 100 — do not alter any number.)
 Blue note box below the table:
-"Video = 12-bit DDR RGB into an HDMI transmitter — true 24-bit color,
-640×480 @ 60 Hz. Use a standard HDMI cable.  (Rev A proposal.)"
+"Video = 12-bit DDR RGB (12 bits × 2 edges = 24 bits/pixel) into an HDMI
+transmitter. The framebuffer is 8-bpp indexed: 256 simultaneous colours from
+a 24-bit RGB888 palette, 640×480 @ 60 Hz. Standard HDMI cable.
+(Rev A proposal.)"
 
 LOWER HALF — "JMR JS COMPUTER BOARD — TOP VIEW (Rev A)"
 A flat schematic-style board drawing, left to right, with colored nets and
@@ -177,6 +182,9 @@ reference designators. Blocks, in rough left-to-right order:
 
 Power entry, top left:
 - "J1  USB-C  5 V ONLY, Power IN (no data)" → "F1 Polyfuse 500 mA" → "U1 Buck Regulator 3.3 V" → "U2 LDO 1.8 V (Core)"
+  Exactly THREE blocks in this chain, each with a distinct designator: one
+  F1, one U1, one U2. Do not duplicate a designator, do not draw two buck
+  regulators, and print "500 mA" once.
 - decoupling caps "C6", "C11"
 - rails labelled "5 V BUS", "3.3 V (I/O)", "1.8 V (Core)"
 
@@ -200,6 +208,9 @@ Right of the chip:
 Top right:
 - Box "U9  HDMI Transmitter (TFP410-class)  — Rev A proposal"
 - Nets to "J8  HDMI OUT (Type-A)": "TMDS D2+/D2−", "TMDS D1+/D1−", "TMDS D0+/D0−", "TMDS CLK+/CLK−", "+5 V", "HPD", "DDC_SCL", "DDC_SDA"
+  Draw J8 as the standard full-size HDMI Type-A receptacle outline — the
+  familiar wide trapezoid with the shorter edge at the bottom. Do NOT draw a
+  plain rectangle, a USB shell, or a micro/mini-HDMI shape.
 
 Bottom row of small blocks:
 - "X1  25.175 MHz Crystal Oscillator"
@@ -236,6 +247,9 @@ DO NOT PLACE ANYWHERE ON THIS POSTER
 - a 6-pin GPIO joystick header, "Joystick (GPIO)", or "GP[5:0]" — the
   stick is I2C on both the FPGA prototype and the ASIC
 - a pin-count table whose rows do not sum to 100
+- "4M × 20" for the asset SRAM — the part is 2M × 16 (4 MB)
+- two blocks sharing one reference designator
+- "true 24-bit color" without saying the framebuffer is 8-bpp indexed
 - any claim that the QFN-100 package, the TFP410-class transmitter, the
   12-bit DDR RGB bus, or the power values are frozen — they are proposals
 ````

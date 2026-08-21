@@ -113,7 +113,7 @@ A vertical flow of boxes joined by downward arrows:
 → "fresh ProgramImage IN RAM ONLY:  code section + ASET art section"
 → split into two side-by-side boxes: "CODE → code BRAM"  and  "ASET (palette + full-res sprite banks) → external SRAM asset bank"
 → "bytecode VM executes  (microcode drives engines)"
-→ "Canvas → framebuffer → HDMI"
+→ "Canvas → framebuffer → HDMI"   (spell it "framebuffer" — not "framebueffer")
 → "ESC hard-breaks any game back to READY"
 Three red call-out boxes down the right edge of this panel:
 - "Nothing is written back to the card. RUN recompiles every time."
@@ -181,7 +181,7 @@ Caption under the ladder, two lines:
 PANEL — "OUTPUT / PHY"
 Four rows, each with a line-art icon:
 - Monitor icon: "HDMI Source (J8): native 640×480 @ ~60 Hz, ~25.175 MHz pixel clock",
-  "8-bpp indexed, 256-entry RGB888 palette, double-buffered",
+  "8-bpp indexed: 256 simultaneous colours from a 24-bit RGB888 palette, double-buffered",
   "scanout → Digilent rgb2dvi TMDS IP",
   "One glass: READY monitor = 64×16 text letterbox inside the same 640×480 field; RUN = full-field game framebuffer."
 - Keyboard icon: "USB HOST keyboard (J15): PIC24 → PS/2 → keyboard PHY → INPUT FIFO",

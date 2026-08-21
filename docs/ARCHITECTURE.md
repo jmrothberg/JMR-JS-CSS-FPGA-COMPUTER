@@ -9,158 +9,110 @@ not a redesign.
 **Constitution:** [../CONSTITUTION.md](../CONSTITUTION.md) wins on conflict.
 **Board / HDMI / input freeze:** [FPGA_BRINGUP.md](FPGA_BRINGUP.md).
 
-**One-page poster** (sibling style to the JMR BASIC Architecture 2.0 diagram):
+**One-page poster** (sibling style to the JMR BASIC Architecture 2.0 diagram).
+Render **2026-08-21** — replaces the render whose errata ran to fifteen
+bullets. Regeneration prompt:
+[POSTER_PROMPT_ARCHITECTURE_V1.md](POSTER_PROMPT_ARCHITECTURE_V1.md).
 
 ![JMR JS Computer — Architecture V1 poster](jmr_js_architecture_v1.png)
 
-### Architecture V1 poster errata (AI-rendered image; text noise)
+### Architecture V1 poster errata (render 2026-08-21)
 
-The block diagram is correct: compile-on-RUN, three memory rooms, HDMI scanout
-from the **on-chip** dual framebuffer, external SRAM = blitter-source only.
-Known text errors baked into the render — trust this list, not the poster
-fine print:
+The previous errata list is **cleared** — `.JSH`, `rge`, `IAF`, the extra map
+zeros, "Never never", `NAME.DAT`, the jammed "microcode ROM FIFOs", the
+"SRA M" panel title, the GPIO joystick, and the five-verb console are all
+fixed in this render. One typo survives:
 
-- SRAM port contract is `addr[20:0]`, `wdata[15:0]`, `rdata[15:0]`, **`we` /
-  `req` / `ack`** at core clock — poster `rge` is a garbled **`req`**.
-- 4 MB map: **`0x000000–0x0002FF`** title palette (256 × RGB888 = 768 bytes),
-  **`0x000300+`** 8-bpp sprite banks, top reserved. Poster extra zeros
-  (`0x00000000` / `0x0003000+`) are wrong.
-- Engines: Event/Timer/**rAF** (`requestAnimationFrame`), not “IAF”.
-- Missing compile path → fail loud (**`?NH`**), never fake output. Poster
-  “(RUN)” in that warning is wrong.
-- Blitter note: “**Pixels** never enter code BRAM.” Poster “Never never”
-  is a double-word glitch. There is no `NAME.DAT` file.
-- On-chip working set: **microcode ROM** and **FIFOs** are separate items
-  (poster jammed them as “microcode ROM FIFOs”).
-- FPGA HDMI PHY on this poster (Digilent `rgb2dvi` TMDS, Nexys Video J8) is
-  the **board** path. ASIC HDMI is parallel RGB out of the chip through an
-  external transmitter — see the ASIC board poster. Neither path scans out
-  from asset SRAM.
-- ASIC rung “~30 mm² die, custom padring, ~1 MB-class on-chip SRAM” is
-  Constitution-frozen. **QFN-100** is a later Rev A package proposal and
-  lives on the ASIC board poster, not this one.
-- **`.JSH` is dead and the poster still tells its story in five places**
-  (subtitle “fresh `.JSH`”, “fresh internal `.JSH` container”, “stale
-  `.JSH`”, panel C “invisible `.JSH` compile cache”, and the µSD row
-  “HTML titles + `.JSH` cache”). `RUN` compiles to an **ephemeral
-  in-memory ProgramImage**; nothing generated is ever written to the card.
-- Dispatch is **one decoder, `exec64`** — same exec32 retirement as the
-  core zoom-in poster. A non-Value64 image faults **code 9**.
-- Input: the stick is a **Mini I2C gamepad @ `0x5A` on Pmod JB**
-  (`SCL`=JB1, `SDA`=JB2), not the poster’s “Pmod digital joystick → GPIO
-  reader” / “Joystick GPIO”. Keyboard adds a **Pmod PS/2 on JA** fallback
-  behind the USB HOST (J15) path.
-- Panel title is garbled: “EXTERNAL SRA M ASET BANK” should read
-  **“EXTERNAL SRAM ASSET BANK (4 MB)”**.
-- Console verbs are **HELP / DIR / CLS / LIST / EDIT / MEM / NEW / RUN /
-  LOAD / SAVE / REMOVE** (`rtl/engines/jmr_console_engine.sv`), not the
-  poster’s “DIR / LOAD / EDIT / RUN / ESC”.
+- COMPILE-ON-RUN flow: "Canvas → **framebueffer** → HDMI" — should read
+  **framebuffer**.
 
-**Re-rendering this poster:** the full image-generation prompt — every
-erratum above folded in, plus sizes and the board clock read out of the
-tree — is
-[POSTER_PROMPT_ARCHITECTURE_V1.md](POSTER_PROMPT_ARCHITECTURE_V1.md). When a
-good render lands, delete the bullets it fixes from the list above.
+See also the shared colour note under the ASIC board poster: "8-bpp indexed,
+256-entry RGB888 palette" is the accurate phrasing on this poster, and it is
+what the OUTPUT / PHY panel says.
 
 **Core zoom-in poster** (sibling style to the JMR BASIC Processor Core
-zoom-in diagram) — the JS processor core itself: program sequencer,
-`exec64` dispatch (the poster still shows the retired `exec32` twin — see
-the errata below), Value64 eval stack, object/heap, native call,
-shared engines, compile-on-RUN, three memory rooms, I/O. Render
-**2026-08-18** (replaces the draft that still had 8192/4096 heap, ring
-recycle, `.JSH` on card, and `CALL_NATIVE`).
+zoom-in diagram) — the JS processor core itself: program sequencer, `exec64`
+dispatch, Value64 eval stack, object/heap, native call, shared engines,
+compile-on-RUN, three memory rooms, I/O. Render **2026-08-21** (replaces the
+2026-08-18 render that still showed the retired `exec32` twin). Regeneration
+prompt: [POSTER_PROMPT_CORE_ZOOM_IN.md](POSTER_PROMPT_CORE_ZOOM_IN.md).
 
 ![JMR JS Processor Core — zoom-in poster](jmr_js_core_zoom_in.png)
 
-### Core zoom-in poster errata (AI-rendered image; 2026-08-18)
+### Core zoom-in poster errata (render 2026-08-21)
 
-The block diagram and capacities match silicon (`jmr_js_vm.sv` /
-`jmr_js_vm_pkg.sv` / `jsb_format.py`): parent SRAM owns the heap; **one
-decoder, `exec64`** (the poster's `exec32 | exec64` mux on `flags[3]` was
-real when rendered — exec32 was deleted 2026-08-21 and a non-Value64 image
-now faults code 9 instead of switching decoders); JSB1 + ASET;
-`MAX_OBJ=1024×32`; arrays
-`1536×32 + 128×128`; `ENV_DEPTH=512`; generation handles + mark/sweep;
-compile-on-RUN never writes `.JSH`/`.JSB` to the card. Known leftover
-shorthand baked into the render — trust this list, not the poster fine
-print:
+**None known.** Everything the previous errata listed is fixed: one decoder
+`exec64` with `flags[3]=0` → fault code 9; the nine NaN-boxed Value64 kinds
+under prefix `0x7FF9` with no `int` tag; the ABI stated as ids 0–41 (42
+total); `VARS` / `CONSTS` labelled parent SRAMs inside the eval stack; EDIT
+marked optional; `0D CALL` annotated as RTL `OP_CALL` = FM `CALL_NATIVE`; the
+stray `~30 mm²` removed from the BRAM box; the I2C gamepad, the JA PS/2
+fallback, the MIG `ui_clk` clock, and the 32 KB sprite scratch all correct.
 
-- Tag strip is a sample (`int` / `obj` / `arr` / `str` / `fn` / `undef` /
-  `elem`). Value64 also has `null` / `bool` / `env`; numbers are IEEE-754,
-  not a separate `int` tag.
-- Native ID table is a sample; the ABI is ids **0–41** — 40 `typeof`,
-  41 `Object.keys` (PYTHON-first; silicon faults loud rather than faking
-  it). 42 ids total (`functional_model/jsb_format.py`).
-- `VARS` / `CONSTS` are sibling parent SRAMs, drawn inside the eval-stack
-  box.
-- `LOAD → EDIT → RUN` — EDIT is optional.
-- `~30 mm²` in the on-chip BRAM box is the **whole ASIC die**, not a BRAM
-  size.
-- Opcode `0D CALL` (native id in arg0) is RTL `OP_CALL`; the FM name is
-  `CALL_NATIVE`. Same instruction. 34 opcodes total — full table and native
-  ids 0–41:
-  [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#bytecode-opcodes-34).
-
-**Re-rendering this poster:** the full image-generation prompt — every
-erratum above folded in, plus the drift found since the render (exec32
-deletion, native id 41, the I2C gamepad, the MIG/DDR3 asset port, the
-on-chip shrinks) — is
-[POSTER_PROMPT_CORE_ZOOM_IN.md](POSTER_PROMPT_CORE_ZOOM_IN.md). When a good
-render lands, delete the bullets it fixes from the list above.
+Capacities on the poster match silicon (`jmr_js_vm.sv` / `jmr_js_vm_pkg.sv` /
+`jsb_format.py`): `MAX_OBJ=1024×32`; arrays `1536×32 + 128×128`;
+`ENV_DEPTH=512`; `STACK_DEPTH=2048`; `MAX_VARS=512`; `MAX_CONSTS=1024`;
+`CODE_WORDS=32768`. Full opcode table and native ids:
+[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#bytecode-opcodes-34).
 
 **ASIC board poster (Rev A proposal)** — QFN-100 chip + external 4 MB asset
 SRAM + HDMI transmitter carrier board, sibling style to the JMR BASIC ASIC
-board poster:
+board poster. Render **2026-08-21**. Regeneration prompt:
+[POSTER_PROMPT_ASIC_BOARD_REV_A.md](POSTER_PROMPT_ASIC_BOARD_REV_A.md).
 
 ![JMR JS ASIC — Rev A board poster](jmr_js_asic_board_rev_a.png)
 
-### ASIC board poster errata (AI-rendered image; text noise)
+### ASIC board poster errata (render 2026-08-21)
 
-The block diagram, buses, and video path are correct (HDMI scans out from the
-**on-chip** front framebuffer; U8 asset SRAM feeds the blitter only). Known
-text errors baked into the render — trust this list, not the poster fine print:
+Most of the previous list is **cleared**: the frozen-vs-proposed banner, the
+`(Indicative Budget)` heading, the removal of `RRAM_CTRL`, Audio (PWM) = 2, a
+budget that sums to 100, `debug/tether`, `NAME.HTML titles`, the deleted
+compile-cache line, and the I2C joystick on `JOY_SCL` / `JOY_SDA` are all
+correct in this render. What is still wrong:
 
-- **Proposals, not frozen:** QFN-100 (12×12 mm), TFP410-class HDMI transmitter,
-  12-bit DDR RGB video bus, and the power-domain values are Rev A proposals.
-  The Constitution freezes only the die target (~30 mm², custom padring,
-  ~1 MB-class on-chip SRAM) and the IS61WV204816 asset-SRAM port contract.
-- U8 part number must read **ISSI IS61WV204816** (2M × 16, 4 MB).
-- SYSTEM RULES §1: garbled bullet should read "Game **art lives** OFF-chip in
-  the 4 MB SRAM asset bank (never in **code** RAM)."
-- SYSTEM RULES §4: SRAM bullet should read "A[20:0] + DQ[15:0] +
-  CE#/OE#/WE#/UB#/LB# (async SRAM bus)"; the microSD/UART/audio bullets are
-  garbled — correct text: "microSD SPI (CS/SCK/MOSI/MISO), FAT32:
-  NAME.HTML titles; ProgramImage is regenerated in memory", "Console UART via
-  CH340/CP2102 micro-USB (debug/tether only)", "Audio PWM → amp → 3.5 mm
-  jack (V1-later)".
-- PIN SUMMARY table: title should read "(Indicative Budget)"; the
-  "RRAM_CTRL" row is spurious; Audio (PWM) count is **2** (PWM_L, PWM_R);
-  rows do not sum — authoritative budget: SRAM addr 21 + SRAM data 16 +
-  SRAM ctrl 5 + RGB DDR 12 + video sync/clk 4 + PS/2 2 + **I2C joystick 2**
-  + SPI 4 + UART 2 + audio 2 + clk/rst/test 3 + LEDs 3 = **76 signal**,
-  + spare/NC 4 + power/gnd 20 = 100.
-- BOARD NOTES: "debug/therm" → "debug/**tether**"; "NAME.FMT tiles" →
-  "NAME.HTML titles". The ".JSlf" line is **deleted, not respelled** —
-  there is no `.JSH`/`.JSB` and no compile cache; the ProgramImage is
-  rebuilt in memory on every `RUN`.
-- Pin numbers on the QFN drawing are illustrative placement only.
-- SYSTEM RULES §1 should also carry the dispatch rule: **one decoder,
-  `exec64`**; every ProgramImage is Value64.
-- Joystick is **I2C on both boards** (user decision 2026-08-21): a Mini I2C
-  gamepad @ `0x5A` on `JOY_SCL` / `JOY_SDA`, same part and same
-  `jmr_i2c_joy` master the FPGA prototype runs. The poster's 6-pin GPIO
-  header and its `Joystick (GPIO)` / `GP[5:0]` row are wrong — it is a
-  4-pin PH2.0 header (`G` / `V` / `SDA` / `SCL`) with board-side 4.7 kΩ
-  pull-ups, costing **2 pins instead of 6**. The 4 freed pins become
-  spare/NC, and the bus is shared, so later I2C peripherals need no new
-  package pins.
+- **SYSTEM RULES §4 contradicts U8 on the same page.** The bullet reads
+  "External asset SRAM: **4M × 20**, 1.8 V"; the part is **2M × 16** (4 MB),
+  exactly as the U8 block in the board drawing says. The `4M × 20` figure was
+  carried forward from the previous render into the regeneration prompt and
+  should never have survived — corrected in the prompt now. The **1.8 V**
+  on that bullet is also doubtful: `IS61WV204816` is a 2.5 V/3.3 V part and
+  the poster's own I/O rail is 3.3 V. Treat the SRAM bus voltage as **TBD**,
+  not 1.8 V.
+- **Duplicate reference designator.** The power chain draws two adjacent
+  blocks both labelled "U1 Buck Regulator 3.3 V". There is one 3.3 V buck;
+  the second block should be a different designator or removed. "F1 Polyfuse
+  500 mA" likewise prints "500 mA" twice.
+- **QFN pin-ring labels are decorative and partly garbled** — `TES1_IN`
+  (should be `TEST_EN`), `GCES IN`, `DEEF` / `OEEF`, and `JOY_SCL` /
+  `JOY_SDA` do not appear on the ring at all. The poster already declares
+  pin numbers illustrative; extend that to the **names**. The **PIN SUMMARY
+  table is the authoritative pin list**, and it is correct.
+- **"true 24-bit color" needs its qualifier.** See the colour note below.
+- **J8 is drawn as a generic rectangular connector.** The label
+  "HDMI OUT (Type-A)" is right — it is an ordinary full-size HDMI receptacle
+  taking a standard HDMI cable. Only the glyph is wrong; nothing in the
+  design calls for a non-standard connector.
 
-**Re-rendering this poster:** the full image-generation prompt — every
-erratum above folded in, with the pin budget spelled out so it sums — is
-[POSTER_PROMPT_ASIC_BOARD_REV_A.md](POSTER_PROMPT_ASIC_BOARD_REV_A.md).
-This poster is a schematic, so expect the panels and prose to come back
-right and the QFN pin stubs to stay decorative. When a good render lands,
-delete the bullets it fixes from the list above.
+### Colour: 8-bpp indexed, 24-bit palette, 24-bit wire
+
+The three numbers on the posters describe different points in one pipeline,
+and "true 24-bit color" on the ASIC video note is about the **wire**, not the
+number of simultaneous colours. Authoritative chain
+(`rtl/video/jmr_hdmi_scanout.sv:11-56`):
+
+| Stage | Width | Meaning |
+|---|---|---|
+| Framebuffer (`fb_index`) | **8 bits/pixel** | indexed; 640×480×8 = 307,200 B per buffer, two buffers |
+| Sprite banks in asset SRAM | **8 bpp** | 2 pixels per 16-bit word |
+| Palette (`pal_rgb`) | **256 × 24-bit RGB888** | 256 simultaneous colours, each chosen from 16,777,216 |
+| HDMI wire (`vid_pData`) | **24 bits/pixel** | RGB888 into `rgb2dvi` (FPGA) or the transmitter (ASIC) |
+
+So: **256 colours on screen at once, each defined to 24-bit precision, sent
+out over a 24-bit link.** The ASIC's 12-bit DDR RGB bus carries those same 24
+bits as 12 × 2 edges per pixel. A future render should say "256 simultaneous
+colours from a 24-bit palette" rather than leaving "true 24-bit color"
+unqualified.
+
 
 ---
 
