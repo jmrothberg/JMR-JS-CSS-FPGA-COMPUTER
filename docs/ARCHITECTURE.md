@@ -66,8 +66,9 @@ print:
 - Tag strip is a sample (`int` / `obj` / `arr` / `str` / `fn` / `undef` /
   `elem`). Value64 also has `null` / `bool` / `env`; numbers are IEEE-754,
   not a separate `int` tag.
-- Native ID table is a sample of ~40; the ABI is ids **0–40** (includes
-  `typeof`).
+- Native ID table is a sample; the ABI is ids **0–41** — 40 `typeof`,
+  41 `Object.keys` (PYTHON-first; silicon faults loud rather than faking
+  it). 42 ids total (`functional_model/jsb_format.py`).
 - `VARS` / `CONSTS` are sibling parent SRAMs, drawn inside the eval-stack
   box.
 - `LOAD → EDIT → RUN` — EDIT is optional.
@@ -75,8 +76,15 @@ print:
   size.
 - Opcode `0D CALL` (native id in arg0) is RTL `OP_CALL`; the FM name is
   `CALL_NATIVE`. Same instruction. 34 opcodes total — full table and native
-  ids 0–40:
+  ids 0–41:
   [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#bytecode-opcodes-34).
+
+**Re-rendering this poster:** the full image-generation prompt — every
+erratum above folded in, plus the drift found since the render (exec32
+deletion, native id 41, the I2C gamepad, the MIG/DDR3 asset port, the
+on-chip shrinks) — is
+[POSTER_PROMPT_CORE_ZOOM_IN.md](POSTER_PROMPT_CORE_ZOOM_IN.md). When a good
+render lands, delete the bullets it fixes from the list above.
 
 **ASIC board poster (Rev A proposal)** — QFN-100 chip + external 4 MB asset
 SRAM + HDMI transmitter carrier board, sibling style to the JMR BASIC ASIC
