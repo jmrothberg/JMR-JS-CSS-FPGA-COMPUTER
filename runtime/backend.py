@@ -65,6 +65,59 @@ def _native_name_for_id(nid) -> str:
     return ""
 
 
+def _native_id_for_name(name: str):
+    """NATIVE_IDS / alias id for a name-table entry ('' when it is a user fn)."""
+    if not name:
+        return ""
+    try:
+        from functional_model.jsb_format import NATIVE_ALIASES, NATIVE_IDS
+    except ImportError:
+        return ""
+    if name in NATIVE_IDS:
+        return NATIVE_IDS[name]
+    if name in NATIVE_ALIASES:
+        return NATIVE_ALIASES[name]
+    # ctx.fillRect and friends are canvas methods, not JSB native ids.
+    return ""
+
+
+def decode_op_at(chunk, ip):
+    """(op_name, arg0, native_name, native_id) for chunk.code[ip].
+
+    CALL_NATIVE arg0 is an index into chunk.names in every artifact the
+    monitor sees (source Chunk, decoded ProgramImage, and the word image the
+    RTL executes) — never a NATIVE_IDS id. Resolving it through NATIVE_IDS
+    prints a different native than the one the op actually calls.
+    """
+    code = getattr(chunk, "code", None) or []
+    try:
+        ip = int(ip)
+    except (TypeError, ValueError):
+        return "", "", "", ""
+    if not (0 <= ip < len(code)):
+        return "", "", "", ""
+    op, *args = code[ip]
+    op_name = op.name if hasattr(op, "name") else str(op)
+    arg0 = args[0] if args else ""
+    native_name = ""
+    native_id = ""
+    if op_name == "CALL_NATIVE":
+        names = getattr(chunk, "names", None) or []
+        if isinstance(arg0, int) and 0 <= arg0 < len(names):
+            native_name = str(names[arg0])
+            native_id = _native_id_for_name(native_name)
+    return op_name, arg0, native_name, native_id
+
+
+# Ops whose Chunk arg0 indexes chunk.names. CALL_USER / MAKE_FN / JUMP carry a
+# code address instead, and the word image's own LOAD_VAR slots resolve through
+# a separate var_names table — annotating either from names[] prints a lie.
+_NAME_INDEX_OPS = frozenset((
+    "CALL_NATIVE", "CALL_METHOD", "LOAD_VAR", "STORE_VAR", "LET_VAR",
+    "GET_PROP", "SET_PROP",
+))
+
+
 def fmt_code_window(chunk, ip, span: int = 5) -> str:
     """Disassemble chunk.code around IP (BASIC detokenize analog)."""
     code = getattr(chunk, "code", None) or []
@@ -76,6 +129,7 @@ def fmt_code_window(chunk, ip, span: int = 5) -> str:
         ip = 0
     lo = max(0, ip - span)
     hi = min(len(code), ip + span + 1)
+    names = getattr(chunk, "names", None) or []
     rows = []
     for i in range(lo, hi):
         op, *args = code[i]
@@ -83,6 +137,11 @@ def fmt_code_window(chunk, ip, span: int = 5) -> str:
         extra = ""
         if args:
             extra = " " + " ".join(str(a) for a in args[:3])
+        # arg0 of a name-table op is an index — print what it names.
+        if args and name in _NAME_INDEX_OPS:
+            a0 = args[0]
+            if isinstance(a0, int) and 0 <= a0 < len(names):
+                extra += f"   ; {names[a0]}"
         mark = "→" if i == ip else " "
         rows.append(f"{mark} {i:5d}  {name}{extra}")
     return "\n".join(rows)
@@ -151,6 +210,41 @@ def _js_short(val, n: int = 24) -> str:
     return s
 
 
+# Only the shares matter for engine heat, so a ceiling costs nothing.
+_NAT_HIST_CAP = 1_000_000
+
+_VALUE_KIND_TAGS = {
+    1: "undef", 2: "null", 3: "bool", 4: "str", 5: "obj",
+    6: "arr", 7: "fn", 8: "elem", 9: "env", 10: "rec",
+}
+
+
+def _value_stack_preview(hw, stack: list[int], n: int = 8) -> str:
+    """Top-of-stack tags for the value64 word stack (no repr of heap slots)."""
+    try:
+        from hardware_model.js_vm import value_is_number, value_kind, value_payload
+    except ImportError:
+        return ""
+    parts = []
+    for word in stack[-n:]:
+        try:
+            if value_is_number(word):
+                parts.append("num")
+                continue
+            kind = value_kind(word)
+            tag = _VALUE_KIND_TAGS.get(kind, f"k{kind}")
+            if tag == "str":
+                strings = getattr(hw, "_value_strings", None) or []
+                idx = value_payload(word)
+                if 0 <= idx < len(strings):
+                    parts.append(f"str:{_js_short(strings[idx], 16)}")
+                    continue
+            parts.append(f"{tag}:{value_payload(word)}")
+        except Exception:
+            parts.append("?")
+    return ", ".join(parts)
+
+
 def _merge_jsh_catalog(catalog: list[str]) -> list[str]:
     return card_catalog(catalog)
 
@@ -213,6 +307,7 @@ class PythonBackend(RuntimeBackend):
 
     def __init__(self, machine) -> None:
         self.machine = machine
+        self._nat_hist: dict[str, int] = {}
 
     def type_line(self, text: str) -> None:
         self.machine.type_line(text)
@@ -270,10 +365,64 @@ class PythonBackend(RuntimeBackend):
         if tr is not None:
             tr.close()
 
+    def _hw_live(self) -> dict:
+        """Live fields from the JsHwVm that actually executes an HTML title.
+
+        Machine.vm is the loader's VM: it stops updating the moment
+        _run_html_bytecode hands the ProgramImage to JsHwVm, so reading it
+        during play reports ip 0 / no opcode / empty heap for the whole run.
+        Every counter below lives on the hardware VM instead.
+        """
+        hw = getattr(self.machine, "_hw_vm", None)
+        if hw is None or not getattr(hw, "_value64_active", False):
+            return {}
+        stack = list(getattr(hw, "_value_stack", None) or [])
+        return {
+            "ip": int(getattr(hw, "_value_last_ip", 0) or 0),
+            "last_op": getattr(hw, "_value_last_op", None),
+            "sp": len(stack),
+            "stack_depth": len(stack),
+            "stack_preview": _value_stack_preview(hw, stack),
+            "obj": sum(1 for o in (getattr(hw, "_value_objects", None) or []) if o is not None),
+            "arr": sum(1 for a in (getattr(hw, "_value_arrays", None) or []) if a is not None),
+            "envl": sum(1 for e in (getattr(hw, "_value_envs", None) or []) if e is not None),
+            "fn": sum(1 for f in (getattr(hw, "_value_functions", None) or []) if f is not None),
+            "strb": len(getattr(hw, "_value_strings", None) or []),
+            "raf": len(getattr(hw, "_value_raf", None) or []),
+            "ton": len(getattr(hw, "_value_timers", None) or []),
+            "lsn": len(getattr(hw, "_value_listeners", None) or []),
+            "fault": getattr(hw, "error", None) or "",
+            "natives": self._take_native_hist(hw),
+        }
+
+    def _take_native_hist(self, hw) -> dict:
+        """Natives called since the last snapshot, decayed so heat can fade.
+
+        The monitor samples faster than a frame, so draining the counter every
+        call would leave most samples empty and the engines would strobe.
+        """
+        take = getattr(hw, "arch_take_natives", None)
+        if not callable(take):
+            return {}
+        # F10 stops the monitor from sampling, so the VM-side counter can hold
+        # a whole hidden session. Cap the merge or re-opening the window shows
+        # one enormous spike that then takes many frames to decay away.
+        for name, n in take().items():
+            self._nat_hist[name] = min(
+                _NAT_HIST_CAP, self._nat_hist.get(name, 0) + n
+            )
+        # Half-life of a few frames: a native that stopped being called stops
+        # lighting its engine, without flickering between frames.
+        self._nat_hist = {
+            k: v for k, v in ((k, v * 3 // 4) for k, v in self._nat_hist.items()) if v
+        }
+        return dict(self._nat_hist)
+
     def arch_snapshot(self) -> dict:
         """PYTHON live fields for the Architecture Monitor (existing Machine/VM)."""
         m = self.machine
         vm = getattr(m, "vm", None)
+        hw = self._hw_live()
         stack = list(getattr(vm, "stack", None) or [])
         preview_parts = []
         for x in stack[-8:]:
@@ -288,6 +437,13 @@ class PythonBackend(RuntimeBackend):
         chunk = getattr(m, "_html_chunk", None)
         n_ops = len(getattr(chunk, "code", None) or []) if chunk is not None else 0
         n_consts = len(getattr(chunk, "consts", None) or []) if chunk is not None else 0
+        # JSB1 header as loaded — the sequencer panel names these fields, and
+        # the header n_consts is not len(chunk.consts) (slots vs decoded pool).
+        hwvm = getattr(m, "_hw_vm", None)
+        n_vars = int(getattr(hwvm, "n_vars", 0) or 0) if hwvm is not None else 0
+        flags = int(getattr(hwvm, "flags", 0) or 0) if hwvm is not None else 0
+        if hwvm is not None and getattr(hwvm, "n_consts", None):
+            n_consts = int(hwvm.n_consts)
         spr = len(getattr(m, "_spr_descs", None) or [])
         sram_bytes = int(getattr(getattr(m, "sram", None), "loaded_bytes", 0) or 0)
         phase = str(getattr(m, "_arch_phase", "") or "")
@@ -298,22 +454,31 @@ class PythonBackend(RuntimeBackend):
                 phase = "loaded"
             else:
                 phase = "idle"
-        ip = int(getattr(vm, "last_ip", 0) or 0) if vm is not None else 0
-        last_op = getattr(vm, "last_op", None) if vm is not None else None
-        op_name = last_op.name if last_op is not None and hasattr(last_op, "name") else ""
-        arg0 = getattr(vm, "last_arg0", None) if vm is not None else None
-        native_name = ""
-        native_id = ""
-        if op_name == "CALL_NATIVE" and arg0 is not None:
-            native_id = arg0
-            native_name = _native_name_for_id(arg0)
+        if hw:
+            ip = int(hw["ip"])
+        else:
+            ip = int(getattr(vm, "last_ip", 0) or 0) if vm is not None else 0
+        # The image is the ground truth for what op lives at IP; the VM's
+        # own last_op agrees with it and is only a fallback for a bare .JS run.
+        op_name, arg0, native_name, native_id = decode_op_at(chunk, ip)
+        if not op_name:
+            last_op = (hw.get("last_op") if hw else None) or (
+                getattr(vm, "last_op", None) if vm is not None else None
+            )
+            op_name = last_op.name if hasattr(last_op, "name") else ""
+            arg0 = getattr(vm, "last_arg0", None) if vm is not None else ""
         src_line = 0
         op_lines = getattr(chunk, "op_lines", None) if chunk is not None else None
         if op_lines and 0 <= ip < len(op_lines):
             src_line = int(op_lines[ip] or 0)
         src_lines = list(getattr(m, "source_lines", None) or [])
-        if running and op_name:
-            sname = op_name
+        if running and hw and (hw["raf"] or hw["ton"]):
+            # The GUI only ever samples PYTHON between frames, and the frame
+            # loop parks with rAF/timers queued — the same place the RTL
+            # reports S_WAIT_FRAME. Same vocabulary so the runtimes compare.
+            sname = "S_WAIT_FRAME"
+        elif running:
+            sname = "RUN"
         elif phase == "compile":
             sname = "COMPILE"
         elif phase == "load":
@@ -341,25 +506,35 @@ class PythonBackend(RuntimeBackend):
             "code_window": fmt_code_window(chunk, ip) if chunk is not None else "",
             "html_window": fmt_html_window(src_lines, src_line or 1 if src_lines else 0),
             "last_cmd": getattr(m, "_arch_cmd", "") or "",
-            "sp": len(stack),
-            "raf": len(getattr(m, "_raf_q", []) or []),
-            "ton": len(getattr(m, "_timers", []) or []),
+            "sp": hw.get("sp", len(stack)),
+            "raf": hw.get("raf", len(getattr(m, "_raf_q", []) or [])),
+            "ton": hw.get("ton", len(getattr(m, "_timers", []) or [])),
+            "lsn": hw.get("lsn", len(getattr(m, "_listeners", []) or [])),
             "source_name": getattr(m, "source_name", "") or "",
             "catalog": catalog,
             "glass": (m.screen_text() or "")[-800:],
             "hdmi_mode": "game" if running else "letterbox",
-            "stack_depth": len(stack),
-            "stack_preview": ", ".join(preview_parts),
+            "stack_depth": hw.get("stack_depth", len(stack)),
+            "stack_preview": hw.get("stack_preview") or ", ".join(preview_parts),
             "n_globals": len(getattr(vm, "globals", {}) or {}),
             "more": bool(getattr(m, "_list_more_waiting", False)),
-            "obj": len(getattr(vm, "globals", {}) or {}),
-            "arr": sum(
-                1 for v in (getattr(vm, "globals", {}) or {}).values()
-                if isinstance(v, list)
+            "obj": hw.get("obj", len(getattr(vm, "globals", {}) or {})),
+            "arr": hw.get(
+                "arr",
+                sum(
+                    1 for v in (getattr(vm, "globals", {}) or {}).values()
+                    if isinstance(v, list)
+                ),
             ),
+            "envl": hw.get("envl", ""),
+            "strb": hw.get("strb", ""),
+            "fault": hw.get("fault", ""),
+            "natives": hw.get("natives", {}),
             "spr": spr,
             "n_ops": n_ops,
             "n_consts": n_consts,
+            "n_vars": n_vars,
+            "flags": flags,
             "n_html": len(src_lines),
             "sram_bytes": sram_bytes,
         }

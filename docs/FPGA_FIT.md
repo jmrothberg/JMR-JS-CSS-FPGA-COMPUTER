@@ -138,37 +138,48 @@ both are RECURRING-BUG-CLASS material (`potential bugs.md`):
 The first shrink round set MAX_OBJ=768 and PACMAN **pegged the object
 heap in play** (fault 3 at obj=768, GC thrashing ~13/frame — the FM
 census was splash-biased). User call: stay near 1024 for future titles.
-Final caps for the FIRST .bin (user call 2026-08-21 evening: margin over
-headroom until the real utilization report exists — #79, the PACMAN
-pathfinder explosion, kills any cap equally, so extra object slots buy
-nothing yet): **MAX_OBJ 896** (non-pow2 is safe: bug #76's OBJ_PHYS
-architecture keeps the sliced side arrays at 1024 physical), **ENV_DEPTH
-256** (validated: live envs ride ~140 in play), **MAX_ARR_LONG 12**
-(measured peak 2; INVADERS bunkers use 4), **CODE_WORDS 20480** (the HM
-suite's extended PACMAN image is 19,527 words).
+Final caps for the FIRST .bin — **bisect-proven on the real titles**
+(2026-08-21 evening; the earlier "measured" shrinks were sized on
+splash-biased and between-frame data and two of them broke PACMAN):
+
+- **MAX_OBJ 960**: the attract-mode ghost-AI tick (4× JSON.parse maze +
+  BFS in ONE frame) legitimately bursts ~330 objects over ~570 steady
+  live. 896 pegged at rafcall 30; 960 clears it.
+- **ENV_DEPTH 384**: 256 CORRUPTED PACMAN — the finder's recursive BFS
+  transiently holds ~300 envs (the between-frame envl≈140 missed the
+  recursion peak); at 256, live envs were recycled mid-recursion and
+  callbacks ran on broken environments (the maze-flood). 384 proven
+  clean; 512 is the pre-fit fallback (+5 tiles).
+- **MAX_ARR_LONG 12** (play peak 2; INVADERS bunkers 4), **CODE_WORDS
+  20480** (HM suite's extended PACMAN image is 19,527 words).
 
 | Item | Tiles |
 |---|---:|
-| Dual FB (hot, product glass) | 160 |
+| Dual FB (hot, product glass) | 150–160 (see note) |
 | `varr_slot` 50688×64 | 99 |
-| `vobj_slot` 28672×80 | 70 |
-| `venv_slot` 4096×73 | ~10 |
+| `vobj_slot` 30720×80 | 75 |
+| `venv_slot` 6144×73 | ~14 |
 | `code_mem` 20480×32 | 20 |
 | `imgd_pix` | **0** (external) |
-| name/spr/json/vstack/source/work/gc leftovers | 0 (pinned distributed, ~15k LUTs) |
-| vram/font/sbuf/MIG (measured ~0 this synth) | ~1 |
-| **Sum** | **~360 of 365** |
+| name/spr/json/vstack/source/work/gc leftovers | 0 (pinned distributed) |
+| misc | ~2 |
+| **Sum** | **~360–370 of 365** |
 
-Margin ≈ 5 tiles. After the first successful `.bin`, read the REAL
-numbers from `utilization_synth.rpt` (the LAST session in runme.log) and
-revisit: if BRAM landed comfortably under, `MAX_OBJ` walks back up
-toward 1024 (960 = +5 tiles, 1024 = +10) — the user wants that headroom
-once #79 is fixed and the report says it fits. LUT-as-logic is **unknown until a clean run** — the
-1.92M number was stitch-poisoned. If the fresh synth still shows
-LUT-as-logic over ~134k, the next lever is the textual Phase 3b strip
-(REMOVING_EXEC32.md) of whatever the `v64_on` fold could not prove dead,
-then real ISA-surface decisions — do not touch the heap caps again for
-LUTs.
+**FB note:** the 160 figure (80 RAMB36/bank) was measured on the GARBAGE
+stitched netlist; the optimal TDP mapping is 75/bank = 150. A clean
+synth decides — which is the point of this build. If the report lands
+over 365, the trims in order: ENV 384 already taken; `MAX_ARR_LONG` 8
+(−1); our HM raf test shrunk so CODE can drop to 18432 (−2); then the
+real unlock is packing `vobj_slot`'s 16-bit key field down to ~10 bits
+(−8..14 tiles, mechanical but wide). If it lands comfortably under,
+ENV_DEPTH 512 (+5) buys back pre-fit attract longevity headroom.
+
+**Known-and-accepted for this build (#79):** unattended ATTRACT mode
+still dies at rafcall ≈114 (fault 3) — the same long-horizon death the
+PRE-FIT tree had at rafcall ≈103 with the full 1024/512 caps. Play mode
+is clean (400-frame steered runs). The root — why the ghost-AI burst
+grows / what the GC retains over long attract — is bug #79, the next
+debugging target, and does not change the memory shapes this build bakes.
 
 ## The next build (user runs, host terminal)
 

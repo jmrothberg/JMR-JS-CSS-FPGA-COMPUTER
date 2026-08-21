@@ -15,7 +15,51 @@ import tkinter as tk
 import tkinter.font as tkfont
 
 from functional_model.bytecode import Op
-from functional_model.jsb_format import FLAG_ASET, MAGIC, NATIVE_IDS
+from functional_model.jsb_format import (
+    FLAG_ASET, FLAG_SOURCE_MAP, FLAG_V2, FLAG_VALUE64, MAGIC, NATIVE_IDS,
+)
+
+# Derived, never typed in: a new opcode must not leave the poster saying 34.
+N_OPCODES = len(list(Op))
+
+# Capacities come from the model that mirrors jmr_js_vm_pkg.sv, so the panel
+# cannot drift from the RTL the way hand-typed numbers did (the 2026-08-21
+# T200 fit moved every one of these).
+try:  # pragma: no cover - the GUI must still open if the HM moves
+    from hardware_model.js_vm import (
+        CODE_WORDS, ENV_DEPTH, MAX_ARRAYS, MAX_CONSTS, MAX_OBJECTS,
+        MAX_VARS, STACK_DEPTH,
+    )
+except ImportError:  # keep the schematic usable, just without headroom
+    CODE_WORDS = ENV_DEPTH = MAX_ARRAYS = MAX_CONSTS = 0
+    MAX_OBJECTS = MAX_VARS = STACK_DEPTH = 0
+STACK_SLOTS = STACK_DEPTH or 2048
+
+
+def _cap(live, cap: int) -> str:
+    """`live / cap` with the percentage that tells you how close the wall is."""
+    if not cap:
+        return _dash(live)
+    try:
+        n = int(live)
+    except (TypeError, ValueError):
+        return f"—/{cap}"
+    return f"{n}/{cap} ({n * 100 // cap}%)"
+
+
+def _flag_names(flags) -> str:
+    try:
+        f = int(flags)
+    except (TypeError, ValueError):
+        return "—"
+    bits = []
+    for bit, name in (
+        (FLAG_V2, "V2"), (FLAG_ASET, "ASET"),
+        (FLAG_SOURCE_MAP, "SMAP"), (FLAG_VALUE64, "VALUE64"),
+    ):
+        if f & bit:
+            bits.append(name)
+    return f"0x{f:x} " + ("|".join(bits) if bits else "none")
 
 # Phosphor palette (BASIC Architecture Monitor — method, not ISA)
 ARCH_BG = "#0d0f0d"
@@ -48,87 +92,192 @@ def _dash(val, default: str = "—") -> str:
     return str(val)
 
 
-# VMSTAT sname → schematic keys that should light (observer heat, no TRACE)
+# VMSTAT sname → schematic keys that should light (observer heat, no TRACE).
+#
+# The RTL st_t enum is append-only and now has ~112 members. The value64 exec
+# path (FLAG_VALUE64, every current title) spends its cycles in the S_V64_*,
+# S_HEAP_*, S_GC_* and S_FREE_* families, so a table that only knew the legacy
+# 32-bit names left ~80% of real activity dark. S_V64_ is stripped first and
+# the remainder falls through to the same engine mapping.
+_STATE_ENGINES: dict[str, tuple[str, ...]] = {}
+
+
+def _reg_states(keys: tuple[str, ...], *states: str) -> None:
+    for st in states:
+        _STATE_ENGINES[st] = keys
+
+
+# fetch / image load — sequencer pulling words out of code BRAM
+_reg_states(
+    ("SEQUENCER", "COMPILER", "M_BRAM", "ARBITER", "S1"),
+    "S_RD", "S_GOT_MAGIC", "S_GOT_HDR1", "S_GOT_HDR2", "S_LD_CONST",
+    "S_TRAIL", "S_FETCH_WAIT", "S_CONST_HI",
+)
+# decode / execute
+_reg_states(
+    ("SEQUENCER", "DISPATCH", "STACK", "S2", "S3", "S4"),
+    "S_EXEC", "S_DISPATCH",
+)
+_reg_states(("SEQUENCER", "NATIVE", "DISPATCH", "S4"), "S_NAT", "S_OGETI_NAT")
+# Canvas 2D — fillRect / fillText / getImageData paint the on-chip FB
+_reg_states(
+    ("SEQUENCER", "CANVAS", "VIDEO", "M_BRAM", "ARBITER", "S4", "HDMI"),
+    "S_RECT", "S_RECT_LD", "S_CIRCLE", "S_LINE", "S_CLEAR", "S_FONTPX",
+    "S_TXT_LD", "S_TXT_DRAW", "S_IMGD_GET", "S_IMGD_PUT", "S_WIN_FILL",
+    "S_FB_SYNC",
+)
+# Blitter — asset SRAM is the source, never code BRAM
+_reg_states(
+    ("SEQUENCER", "BLIT", "M_SRAM", "ARBITER", "S4"),
+    "S_BLIT", "S_SPR", "S_PWALK", "S_PDO", "S_QSEG", "S_QPX", "S_QPY",
+    "S_XF_MUL", "S_XF_APPLY",
+)
+# event / timer / rAF — the frame edge
+_reg_states(
+    ("SEQUENCER", "RAF", "S5", "HDMI"),
+    "S_WAIT_FRAME", "S_DONE", "S_FRAME_RAF", "S_FRAME_TIMER",
+)
+_reg_states(("SEQUENCER", "RAF", "PHY_PS2", "PHY_JOY", "S4"), "S_KEYEV", "S_FRAME_KEY")
+# string engine (JSON shares this path)
+_reg_states(
+    ("SEQUENCER", "STR", "STACK", "S4"),
+    "S_JOIN", "S_JOIN_FIND", "S_IDXOF", "S_CONCAT", "S_REPL", "S_IDXSTR",
+    "S_STRIDX", "S_STRIDX_WR", "S_STR_WR", "S_NAMCPY",
+)
+_reg_states(("SEQUENCER", "STR", "HEAP", "S4"), "S_JSON", "S_JSON_PARSE")
+# ALU
+_reg_states(
+    ("SEQUENCER", "ALU", "STACK", "S4"),
+    "S_SQRT", "S_DIV", "S_DIV_FIN", "S_MUL", "S_MUL_WR", "S_ALU", "S_ALU_WR",
+    "S_MOD", "S_MINMAX",
+)
+# object / heap / env — allocation, property walks, calls, GC, free lists
+_reg_states(
+    ("SEQUENCER", "HEAP", "STACK", "M_BRAM", "ARBITER", "S4"),
+    "S_CALL", "S_FOREACH", "S_ENV_LOAD", "S_ARR_DCOPY", "S_ALLOC",
+    "S_HEAP_WAIT", "S_HEAP_CMP", "S_HEAP_WR", "S_HEAP_AWR", "S_HEAP_FILL",
+    "S_HEAP_CLR", "S_GC_CLEAR", "S_GC_ROOT", "S_GC_POP", "S_GC_OBJ",
+    "S_GC_ARR", "S_GC_SWEEP_OBJ", "S_GC_SWEEP_ARR", "S_GC_FN", "S_GC_ENV",
+    "S_GC_SWEEP_ENV", "S_REL_ENV", "S_FREE_OBJ", "S_FREE_ARR", "S_CTOR_PAD",
+    "S_CTOR_ENV", "S_CTOR_VARS", "S_METH", "S_FE_ELEM", "S_FE_FILTER",
+    "S_IDXSCAN", "S_BIND", "S_ARR_PROMOTE", "S_SLICE", "S_SORT",
+)
+
+
 def _sname_keys(sname: str) -> list[str]:
     s = (sname or "").upper()
-    keys = ["SEQUENCER"]
     if s in ("", "S_IDLE", "IDLE"):
-        return ["S5"]
+        return ["SEQUENCER", "S5"]
     if s in ("LOAD", "LOADED"):
         return ["COMPILER", "STORE", "M_SDCARD", "SD", "PHY_SD", "CONSOLE"]
-    if s in ("COMPILE",):
+    if s == "COMPILE":
         return [
             "COMPILER", "M_BRAM", "M_SRAM", "SEQUENCER", "STORE",
             "S1", "CONSOLE", "ARBITER",
         ]
-    if s.startswith("S_GOT") or s in (
-        "S_RD", "S_LD_CONST", "S_TRAIL", "S_FETCH_WAIT",
-    ):
-        keys += ["COMPILER", "M_BRAM", "S1"]
-        return keys
-    if s == "S_EXEC":
-        keys += ["DISPATCH", "STACK", "S2", "S3", "S4"]
-        return keys
-    if s == "S_NAT":
-        keys += ["NATIVE", "DISPATCH", "S4"]
-        return keys
-    if s in ("S_RECT", "S_CIRCLE", "S_LINE", "S_CLEAR", "S_FONTPX",
-             "S_TXT_LD", "S_TXT_DRAW", "S_IMGD_GET", "S_IMGD_PUT"):
-        keys += ["CANVAS", "VIDEO", "M_BRAM", "S4", "HDMI"]
-        return keys
-    if s in ("S_BLIT", "S_SPR", "S_PWALK", "S_PDO", "S_QSEG", "S_QPX", "S_QPY",
-             "S_XF_MUL", "S_XF_APPLY"):
-        keys += ["BLIT", "M_SRAM", "ARBITER", "S4"]
-        return keys
-    if s in ("S_WAIT_FRAME", "S_DONE"):
-        keys += ["RAF", "S5", "HDMI"]
-        return keys
-    if s in ("S_JOIN", "S_JOIN_FIND", "S_IDXOF", "S_CONCAT", "S_REPL",
-             "S_IDXSTR", "S_STRIDX", "S_STRIDX_WR", "S_STR_WR", "S_NAMCPY"):
-        keys += ["STR", "STACK", "S4"]
-        return keys
-    if s in ("S_JSON", "S_JSON_PARSE"):
-        keys += ["STR", "HEAP", "S4"]
-        return keys
-    if s in ("S_SQRT", "S_DIV", "S_DIV_FIN", "S_MUL", "S_MUL_WR", "S_ALU",
-             "S_ALU_WR"):
-        keys += ["ALU", "STACK", "S4"]
-        return keys
-    if s in ("S_CALL", "S_FOREACH", "S_ENV_LOAD", "S_ARR_DCOPY"):
-        keys += ["HEAP", "STACK", "S4"]
-        return keys
-    if s == "S_KEYEV":
-        keys += ["RAF", "PHY_PS2", "S4"]
-        return keys
-    keys += ["S4"]
-    return keys
+    if s == "RUN":
+        return ["SEQUENCER", "DISPATCH", "S1", "S2", "S4"]
+    # S_V64_EXEC and S_EXEC are the same stage of the same pipeline.
+    base = "S_" + s[6:] if s.startswith("S_V64_") else s
+    hit = _STATE_ENGINES.get(base)
+    if hit is not None:
+        return list(hit)
+    return ["SEQUENCER", "S4"]
 
 
-# Observer hint only — FPGA-SIM VMSTAT has sname, not the opcode byte.
-_SNAME_HINT = {
-    "S_NAT": ("CALL_NATIVE", None),
-    "S_RECT": ("CALL_NATIVE", "fillRect"),
-    "S_CIRCLE": ("CALL_NATIVE", "arc"),
-    "S_LINE": ("CALL_NATIVE", "lineTo"),
-    "S_CLEAR": ("CALL_NATIVE", "clear"),
-    "S_BLIT": ("CALL_NATIVE", "drawImage"),
-    "S_SPR": ("CALL_NATIVE", "drawImage"),
-    "S_WAIT_FRAME": ("CALL_NATIVE", "requestAnimationFrame"),
-    "S_JSON": ("CALL_NATIVE", "JSON.parse"),
-    "S_JSON_PARSE": ("CALL_NATIVE", "JSON.parse"),
-    "S_ALU": ("ADD", None),
-    "S_DIV": ("DIV", None),
-    "S_MUL": ("MUL", None),
-    "S_CALL": ("CALL_USER", None),
-    "S_KEYEV": ("CALL_NATIVE", "addEventListener"),
+# Why the VM is parked, for states that are a wait rather than an opcode.
+# This is a caption, never an opcode: the op at IP comes from the image the
+# runtime actually loaded (backend.decode_op_at), so the DISPATCH box and the
+# sequencer's own disassembly can never name two different instructions.
+_STATE_NOTE = {
+    "S_WAIT_FRAME": "parked — waiting for the frame / rAF callback",
+    "S_DONE": "statement complete — frame edge",
+    "S_IDLE": "no program running",
+    "S_FRAME_RAF": "dispatching the queued rAF callback",
+    "S_FRAME_TIMER": "dispatching a due setTimeout / setInterval",
+    "S_FRAME_KEY": "dispatching a queued key event",
+    "S_KEYEV": "key listener call",
+    "S_FETCH_WAIT": "fetch stall — code BRAM read in flight",
+    "S_HEAP_WAIT": "heap port stall",
+    "S_FB_SYNC": "framebuffer swap / scanout sync",
 }
 
 
+def _state_note(sname: str) -> str:
+    s = (sname or "").upper()
+    base = "S_" + s[6:] if s.startswith("S_V64_") else s
+    if base.startswith("S_GC_") or base.startswith("S_FREE_"):
+        return "garbage collect / free list sweep"
+    return _STATE_NOTE.get(base, "")
+
+
+# The native a wait state is parked inside. Only states where the native is
+# the actual cause, and only names the id table really has — the old table
+# claimed drawImage/arc/lineTo, which have no CALL_NATIVE id at all, so the
+# box printed "CALL_NATIVE —" under a name the ISA does not contain.
+_STATE_NATIVE = {
+    "S_WAIT_FRAME": "requestAnimationFrame",
+    "S_FRAME_RAF": "requestAnimationFrame",
+    "S_FRAME_TIMER": "setTimeout",
+    "S_JSON": "JSON.stringify",
+    "S_JSON_PARSE": "JSON.parse",
+    "S_KEYEV": "addEventListener",
+    "S_FRAME_KEY": "addEventListener",
+}
+
+
+def _state_native(sname: str) -> tuple[str, str]:
+    """(name, id) of the native a wait state is parked in, else ('', '')."""
+    s = (sname or "").upper()
+    base = "S_" + s[6:] if s.startswith("S_V64_") else s
+    name = _STATE_NATIVE.get(base, "")
+    if not name:
+        return "", ""
+    nid = NATIVE_IDS.get(name)
+    if nid is None:
+        try:
+            from functional_model.jsb_format import NATIVE_ALIASES
+
+            nid = NATIVE_ALIASES.get(name)
+        except ImportError:
+            nid = None
+    return (name, str(nid)) if nid is not None else ("", "")
+
+
+# Canvas / blitter work reaches the engines as ctx.* method natives, not as
+# bare DOM names — matching "fillRect" never fired for a real title.
+_CANVAS_NATIVES = {
+    "ctx.fillRect", "ctx.clearRect", "ctx.setFillStyle", "ctx.fillText",
+    "ctx.measureText", "ctx.strokeRect", "ctx.fillPath", "ctx.strokePath",
+    "ctx.getImageData", "ctx.putImageData", "__ctx_xform",
+    "fillRect", "clear", "swapBuffers", "setFillStyle",
+}
+_BLIT_NATIVES = {"ctx.drawImage", "drawImage"}
+# `Image` allocates a sprite handle against the asset bank; the blit itself is
+# a separate ctx.drawImage, so it lights the SRAM room rather than the blitter.
+_ASSET_NATIVES = {"Image"}
+_EVENT_NATIVES = {
+    "requestAnimationFrame", "setTimeout", "setInterval", "clearTimeout",
+    "clearInterval", "addEventListener", "removeEventListener",
+    "document.addEventListener", "window.addEventListener",
+    "document.removeEventListener", "window.removeEventListener",
+    "document.dispatchEvent", "window.dispatchEvent", "__fire_click",
+    "keyLeft", "keyRight", "keyUp", "keyDown", "keyFire", "startLoop",
+}
+_ALU_NATIVES = {
+    "Math.floor", "Math.abs", "Math.min", "Math.max", "Math.random",
+    "Math.sqrt",
+}
+_STR_NATIVES = {"JSON.parse", "JSON.stringify", "typeof", "Object.keys"}
+
+
 def _op_engine_keys(op_name: str, native_name: str) -> list[str]:
-    """PYTHON last-opcode → blocks (BASIC µop-heat analog, JS ISA)."""
+    """Executing opcode → blocks (BASIC µop-heat analog, JS ISA)."""
     op = (op_name or "").upper()
     nat = native_name or ""
-    keys = ["SEQUENCER", "DISPATCH", "S1", "S2", "S4"]
+    # Executing an op means it was fetched, decoded, and its microcode entry
+    # loaded — S3 was dark under PYTHON only because nothing ever claimed it.
+    keys = ["SEQUENCER", "DISPATCH", "S1", "S2", "S3", "S4"]
     if op in (
         "ADD", "SUB", "MUL", "DIV", "MOD", "LT", "GT", "EQ",
         "NEG", "NOT", "BIT_OR", "BIT_AND",
@@ -147,25 +296,77 @@ def _op_engine_keys(op_name: str, native_name: str) -> list[str]:
         keys += ["STACK"]
     if op == "CALL_NATIVE":
         keys += ["NATIVE"]
-        if nat in ("fillRect", "clear", "swapBuffers", "clearRect", "setFillStyle"):
-            keys += ["CANVAS", "VIDEO", "M_BRAM", "HDMI"]
-        elif nat == "drawImage":
+        if nat in _CANVAS_NATIVES:
+            keys += ["CANVAS", "VIDEO", "M_BRAM", "HDMI", "ARBITER"]
+        elif nat in _BLIT_NATIVES:
             keys += ["BLIT", "M_SRAM", "ARBITER"]
-        elif nat in (
-            "requestAnimationFrame", "setTimeout", "setInterval",
-            "clearTimeout", "clearInterval",
-            "document.addEventListener", "window.addEventListener",
-            "document.removeEventListener", "window.removeEventListener",
-            "document.dispatchEvent", "window.dispatchEvent",
-        ):
+        elif nat in _ASSET_NATIVES:
+            keys += ["M_SRAM", "HEAP", "ARBITER"]
+        elif nat in _EVENT_NATIVES:
             keys += ["RAF"]
-        elif nat in ("JSON.parse", "JSON.stringify"):
+        elif nat in _STR_NATIVES:
             keys += ["STR", "HEAP"]
-        elif nat == "console.log":
+        elif nat in _ALU_NATIVES:
+            keys += ["ALU"]
+        elif nat in ("console.log", "console.warn"):
             keys += ["CONS_ENG"]
         elif nat.startswith("localStorage"):
-            keys += ["STORE"]
+            keys += ["STORE", "M_SDCARD"]
+        elif nat.startswith("document.") or nat.startswith("Array"):
+            keys += ["HEAP"]
     return keys
+
+
+def _native_hist_keys(hist: dict) -> dict[str, float]:
+    """PYTHON native histogram → per-block heat 0..1.
+
+    The observable counterpart of the RTL's PROF? cycle histogram: PYTHON has
+    no state machine to sample, but it can say which natives the frame called.
+    Without this the Canvas / blitter / string engines stayed dark under
+    PYTHON for a title that hammers them, while FPGA-SIM lit them.
+    """
+    heat: dict[str, float] = {}
+    if not hist:
+        return heat
+    total = sum(hist.values()) or 1
+    for name, count in hist.items():
+        share = count / total
+        weight = min(1.0, 0.4 + share * 2.0)
+        for key in _op_engine_keys("CALL_NATIVE", name):
+            if weight > heat.get(key, 0.0):
+                heat[key] = weight
+    return heat
+
+
+def _prof_keys(prof: str) -> dict[str, float]:
+    """RTL PROF? cycle histogram → per-block heat 0..1.
+
+    `PROF cycles=N S_V64_GC_ARR=5686497(21%) …`. A single VMSTAT sname is one
+    sample at the frame edge (almost always S_WAIT_FRAME), so it cannot show
+    which engines the frame used. This is where the cycles actually went.
+    """
+    heat: dict[str, float] = {}
+    if not prof:
+        return heat
+    for tok in str(prof).split():
+        if "=" not in tok or not tok.startswith("S_"):
+            continue
+        state, _, rest = tok.partition("=")
+        pct = 0.0
+        if "(" in rest and rest.endswith("%)"):
+            try:
+                pct = float(rest[rest.index("(") + 1 : -2]) / 100.0
+            except ValueError:
+                pct = 0.0
+        if pct <= 0.0:
+            continue
+        # A 20%-of-cycles engine should read hot, not dim: percentages are
+        # spread across a dozen states and none of them ever reaches 1.0.
+        weight = min(1.0, 0.35 + pct * 2.6)
+        for key in _sname_keys(state):
+            if weight > heat.get(key, 0.0):
+                heat[key] = weight
+    return heat
 
 
 class ArchitectureView:
@@ -228,7 +429,7 @@ class ArchitectureView:
     }
     STAGE_BLURBS = {
         "S1": "1 FETCH — Program Sequencer reads the next 32-bit bytecode word from code BRAM.",
-        "S2": "2 DECODE — Dispatch Table maps opcode[7:0] to an engine (34 opcodes).",
+        "S2": f"2 DECODE — Dispatch Table maps opcode[7:0] to an engine ({N_OPCODES} opcodes).",
         "S3": "3 LOAD µCODE — jump to that opcode's microcode entry (not a hidden CPU).",
         "S4": "4 EXECUTE — one op strobes one engine (ALU / heap / Canvas / blitter / …).",
         "S5": "5 COMPLETE / wait — statement done, or stall for rAF / blitter / timer.",
@@ -236,8 +437,9 @@ class ArchitectureView:
     MEMORY_BLURBS = {
         "M_BRAM": (
             "ON-CHIP BRAM (room A) — working set, no fake 64K map.\n"
-            "Dual 640×480 8-bpp FB, code BRAM 32K×32, JS heap, 256-entry\n"
-            "RGB888 palette, font ROM, FIFOs. HDMI scans out from front FB."
+            f"Dual 640×480 8-bpp FB, code BRAM {CODE_WORDS or '?'}×32, JS heap,\n"
+            "256-entry RGB888 palette, font ROM, FIFOs.\n"
+            "HDMI scans out from the front FB."
         ),
         "M_SRAM": (
             "ASSET SRAM 4 MB (room B) — ISSI IS61WV204816.\n"
@@ -276,6 +478,7 @@ class ArchitectureView:
         self._snap: dict = {}
         self._line_buf = ""
         self._heat_stamp: dict[str, float] = {}
+        self._prof_heat: dict[str, float] = {}
         self.wires: list[tuple[int, str, str, str]] = []  # line, key, kind, idle fill
         self._zoom = 1.0
         self._zoom_min = 0.45
@@ -561,6 +764,20 @@ class ArchitectureView:
             16, 1020, text="", font=self.small_font, fill=TITLE_FG, anchor="w",
         )
 
+    def _eng_caption(self, label: str, *fields) -> str:
+        """Engine box: title line plus whichever counters this runtime has.
+
+        PYTHON has no dihit/swaps/divs and the RTL has no host-side ones, so a
+        missing field is dropped rather than printed as a row of em dashes.
+        """
+        parts = []
+        for key, short in fields:
+            val = self._snap.get(key)
+            if val in (None, "", "—"):
+                continue
+            parts.append(f"{short} {val}")
+        return label + ("\n" + "  ".join(parts) if parts else "")
+
     def _set(self, key: str, text: str) -> None:
         if key in self.blocks:
             self.canvas.itemconfigure(self.blocks[key][1], text=text)
@@ -573,9 +790,10 @@ class ArchitectureView:
 
     def _heat_of(self, key: str) -> float:
         stamped = self._heat_stamp.get(key)
-        if stamped is None:
-            return 0.0
-        return max(0.0, min(1.0, 1.0 - (time.monotonic() - stamped) / 0.8))
+        decayed = 0.0
+        if stamped is not None:
+            decayed = max(0.0, min(1.0, 1.0 - (time.monotonic() - stamped) / 0.8))
+        return max(decayed, self._prof_heat.get(key, 0.0))
 
     def _wire_heat(self, key: str) -> float:
         """Map a wire's tag to the block(s) that should light it."""
@@ -606,14 +824,6 @@ class ArchitectureView:
         now = time.monotonic()
         sname = str(self._g("sname", "IDLE"))
         running = bool(self._snap.get("running"))
-        hint = _SNAME_HINT.get(sname.upper())
-        if hint:
-            if not self._snap.get("op_name"):
-                self._snap["op_name"] = hint[0]
-            if hint[1] and not self._snap.get("native_name"):
-                self._snap["native_name"] = hint[1]
-                if "native_id" not in self._snap:
-                    self._snap["native_id"] = NATIVE_IDS.get(hint[1], "—")
         for key in _sname_keys(sname):
             self._heat_stamp[key] = now
         op_name = str(self._snap.get("op_name") or "")
@@ -628,6 +838,15 @@ class ArchitectureView:
             self._heat_stamp["PHY_HDMI"] = now
             if self._snap.get("tether"):
                 self._heat_stamp["PHY_UART"] = now
+        # Activity-weighted heat floor: the RTL's own cycle histogram, or the
+        # native histogram PYTHON collects for the same purpose.
+        if not running:
+            self._prof_heat = {}
+        else:
+            self._prof_heat = _prof_keys(str(self._snap.get("prof") or ""))
+            for key, val in _native_hist_keys(self._snap.get("natives") or {}).items():
+                if val > self._prof_heat.get(key, 0.0):
+                    self._prof_heat[key] = val
 
         for key, (rect, _value) in self.blocks.items():
             self.canvas.itemconfigure(
@@ -678,30 +897,51 @@ class ArchitectureView:
         op_name = self._g("op_name", "")
         self._set(
             "DISPATCH",
-            (f"→ {op_name}\n34 opcodes" if op_name not in ("", "—")
-             else "0D CALL_NATIVE\n21 MAKE_FN"),
+            (f"→ {op_name}\n{N_OPCODES} opcodes" if op_name not in ("", "—")
+             else f"{N_OPCODES} opcodes\nidle"),
         )
         depth = self._g("stack_depth", sp)
-        self._set("STACK", f"sp {depth}\n2048 tagged")
+        self._set("STACK", f"sp {depth}\n{STACK_SLOTS} tagged")
+        # envl is the live env count; esp/efree are the RTL's stack pointer and
+        # free-list head, which read 0 all through a run and looked like a dead
+        # engine in the old "env 0 free 0" caption.
+        env_live = self._g("envl", self._g("esp"))
         self._set(
             "HEAP",
-            f"obj {self._g('obj')}  arr {self._g('arr')}\n"
-            f"env {self._g('esp')} free {self._g('efree')}",
+            f"obj {self._g('obj')}  arr {self._g('arr')}\nenv {env_live}",
         )
         nid = self._g("native_id", "")
         nname = self._g("native_name", "")
         if nname not in ("", "—"):
-            self._set("NATIVE", f"CALL_NATIVE {nid}\n{nname}")
+            self._set(
+                "NATIVE",
+                f"CALL_NATIVE {nid}\n{nname}" if nid not in ("", "—")
+                else f"CALL_NATIVE\n{nname}",
+            )
         else:
-            self._set("NATIVE", "CALL_NATIVE  ~40 ids\nfillRect · rAF · JSON")
-        self._set("ALU", "Σ")
-        self._set("CANVAS", "fillRect")
-        self._set("BLIT", "drawImage")
-        self._set("RAF", f"rAF {raf}\nto {self._g('ton')}")
-        self._set("STR", "join / JSON")
-        self._set("CONS_ENG", "READY")
-        self._set("STORE", "FAT32")
-        self._set("VIDEO", "640×480")
+            # IP parks off the call while the VM waits inside a native, so the
+            # box names the native the state is parked in rather than going
+            # blank for the whole run.
+            pname, pid = _state_native(sname)
+            if pname:
+                self._set("NATIVE", f"in CALL_NATIVE {pid}\n{pname}")
+            else:
+                self._set("NATIVE", f"CALL_NATIVE  {len(NATIVE_IDS)} ids\nidle")
+        # Engine captions carry live counters, not labels — the panel says LIVE.
+        # A counter this runtime does not publish is left off instead of "—".
+        self._set("ALU", self._eng_caption("Σ", ("divs", "divs")))
+        self._set("CANVAS", self._eng_caption(
+            "fillRect", ("dihit", "di hit"), ("imgd", "imgd"),
+        ))
+        self._set("BLIT", self._eng_caption("drawImage", ("spr", "spr")))
+        self._set("RAF", f"rAF {raf}\nto {self._g('ton')}  ev {self._g('lsn')}")
+        self._set("STR", self._eng_caption("join / JSON", ("strb", "strb")))
+        self._set(
+            "CONS_ENG",
+            "MORE" if self._snap.get("more") else ("RUN" if running else "READY"),
+        )
+        self._set("STORE", f"FAT32\n{len(self._snap.get('catalog') or [])} files")
+        self._set("VIDEO", self._eng_caption("640×480", ("swaps", "swaps")))
         self._set("ARBITER", "port")
         mode = self._g("hdmi_mode", "letterbox")
         self._set(
@@ -723,10 +963,15 @@ class ArchitectureView:
             self._set("HDMI", "RUN  full field\n640×480 game FB")
         else:
             self._set("HDMI", "READY letterbox\n64×16 on 640×480")
-        self._set(
-            "REGS",
-            f"{sname}\nip {ip}  sp {sp}\nraf {raf}",
-        )
+        if self._snap.get("board_coarse"):
+            # BOARD is a UART tether with no VMSTAT — say the counters are
+            # unavailable rather than letting em dashes read as zeros.
+            self._set("REGS", f"{sname}\ncoarse tether\nno VMSTAT")
+        else:
+            self._set(
+                "REGS",
+                f"{sname}\nip {ip}  sp {sp}\nraf {raf}",
+            )
         self._set(
             "HSTATS",
             f"obj {self._g('obj')}  arr {self._g('arr')}\n"
@@ -763,16 +1008,24 @@ class ArchitectureView:
 
         fclk = self._g("fclk", "")
         fclk_s = f"  fclk {fclk}" if fclk not in ("", "—") else ""
+        if self._snap.get("board_coarse"):
+            heat_src = "heat: coarse (BOARD tether — no VMSTAT)"
+        elif self._snap.get("prof"):
+            heat_src = "heat: RTL cycle profile"
+        elif self._snap.get("natives"):
+            heat_src = "heat: native calls / frame"
+        else:
+            heat_src = "heat: state only"
         self.canvas.itemconfigure(
             self.status_text,
             text=(
                 f"{runtime}  {sname}  ip {_dash(ip)}  raf {_dash(raf)}"
-                f"{fclk_s}  ·  PYTHON / FPGA-SIM / BOARD"
+                f"{fclk_s}  ·  {heat_src}"
             ),
         )
         self.canvas.itemconfigure(
             self.path_text,
-            text=f"storage: NAME.HTML titles · compile-on-RUN in memory (code + ASET) · no NAME.DAT",
+            text="storage: NAME.HTML titles · compile-on-RUN in memory (code + ASET) · no NAME.DAT",
         )
         self._refresh_inspector()
 
@@ -869,10 +1122,13 @@ class ArchitectureView:
 
     def _live_kv(self) -> str:
         keys = (
-            "sname", "ip", "sp", "raf", "obj", "arr", "spr", "ton", "esp",
-            "efree", "fclk", "strb", "swaps", "dihit", "dimiss", "tfire",
+            "sname", "state", "ip", "eip", "sp", "raf", "obj", "arr", "envl",
+            "spr", "ton", "lsn", "esp", "efree", "gc", "fclk", "strb", "swaps",
+            "dihit", "dimiss", "tfire", "tsch", "tmis", "divs", "imgd",
+            "heapovf", "jsonovf", "spovf", "strovf", "fault", "fsite", "badst",
             "running", "hdmi_mode", "source_name", "n_ops", "n_consts",
-            "n_html", "sram_bytes", "op_name", "native_name",
+            "n_vars", "flags", "n_html", "sram_bytes", "op_name", "op_arg",
+            "native_id", "native_name",
             "phase", "src_line", "last_cmd", "html_line",
         )
         parts = []
@@ -919,21 +1175,25 @@ class ArchitectureView:
         code_win = str(self._snap.get("code_window") or "")
         html_win = str(self._snap.get("html_window") or "")
         html_line = str(self._g("html_line") or "")
+        note = _state_note(str(self._g("sname", "")))
         body = (
             self._hdr("PROGRAM SEQUENCER — fetch unit")
-            + "16-bit IP. Fetches 32-bit op-words from code BRAM (32K×32):\n"
+            + "16-bit IP. Fetches 32-bit op-words from code BRAM:\n"
             "  op = { arg1[31:24], arg0[23:8], opcode[7:0] }\n"
-            f"ProgramImage / {magic} header: n_ops, n_consts, n_vars, flags\n"
-            f"(flags bit1 = ASET present, value {FLAG_ASET}).\n"
+            f"ProgramImage / {magic} header: n_ops, n_consts, n_vars, flags.\n"
             "Bytecode is the ISA — no hidden CPU, no V8/dukpy.\n"
             "Analog of BASIC PCU LINE/tokens: IP + HTML line the op compiled from.\n\n"
             f"runtime     {self._runtime}\n"
             f"phase       {self._g('phase')}\n"
-            f"sname       {self._g('sname')}\n"
-            f"IP          {self._g('ip')}\n"
+            f"sname       {self._g('sname')}"
+            + (f"   ({note})\n" if note else "\n")
+            + f"IP          {self._g('ip')}\n"
             f"opcode      {self._g('op_name')}  arg0 {self._g('op_arg')}\n"
             f"native      {self._g('native_name')}  (id {self._g('native_id')})\n"
-            f"n_ops       {self._g('n_ops')}   n_consts {self._g('n_consts')}\n"
+            f"n_ops       {_cap(self._g('n_ops'), CODE_WORDS)}  code words\n"
+            f"n_consts    {_cap(self._g('n_consts'), MAX_CONSTS)}\n"
+            f"n_vars      {_cap(self._g('n_vars'), MAX_VARS)}\n"
+            f"flags       {_flag_names(self._snap.get('flags'))}\n"
             f"source      {self._g('source_name', '(none)')}\n"
             f"HTML line   {self._g('src_line')}   {html_line[:80]}\n"
         )
@@ -951,8 +1211,8 @@ class ArchitectureView:
             rows.append(f"{mark} {int(op):02X}    {op.name}")
         return (
             self._hdr("DISPATCH TABLE — opcode → engine")
-            + "34 opcodes. CALL_NATIVE (0D) is the FM name; RTL OP_CALL\n"
-            "is the same instruction (native id in arg0).\n"
+            + f"{N_OPCODES} opcodes. CALL_NATIVE (0D) is the FM name; RTL OP_CALL\n"
+            "is the same instruction (name-table index in arg0).\n"
             f"now: {self._g('op_name')}  native {self._g('native_name')}\n\n"
             + "\n".join(rows)
             + "\n"
@@ -962,34 +1222,41 @@ class ArchitectureView:
         preview = self._g("stack_preview", "")
         return (
             self._hdr("TAGGED EVAL STACK")
-            + "2048 entries. Each: 32-bit value + 3-bit tag.\n"
-            "Tags: int, obj, arr, str, fn, undef, elem.\n"
-            "VARS: 512 tagged slots. CONST POOL: 1024 × i32\n"
+            + f"{STACK_SLOTS} entries. A VALUE64 image stores each slot as one\n"
+            "64-bit NaN-boxed Value; legacy 32-bit images use value + tag.\n"
+            "Tags: num, str, obj, arr, fn, undef, null, elem, env.\n"
+            f"VARS: {MAX_VARS} tagged slots. CONST POOL: {MAX_CONSTS} slots\n"
             "(interned strings, IEEE-754 floats, packed RegExp).\n\n"
-            f"sp / depth  {self._g('stack_depth', self._g('sp'))}\n"
-            f"preview     {preview or '—'}\n"
+            f"sp / depth  {_cap(self._g('stack_depth', self._g('sp')), STACK_SLOTS)}\n"
+            f"top of stack {preview or '—'}\n"
         )
 
     def _inspect_heap(self) -> str:
         return (
             self._hdr("OBJECT / HEAP ENGINE")
-            + "1024 objects × 32 properties. 512 arrays × 64 elems.\n"
-            "Lexical env 32 deep. Ring recycle for temporaries\n"
-            "(upper half; boot heap stays below the wrap).\n"
+            + "Stable slots with a 12-bit generation — a slot never moves,\n"
+            "and a stale handle fails the generation check instead of\n"
+            "dereferencing someone else's object.\n"
             "Closures survive after return: setTimeout / requestAnimationFrame.\n\n"
-            f"obj {self._g('obj')}   arr {self._g('arr')}   spr {self._g('spr')}\n"
-            f"esp {self._g('esp')}   efree {self._g('efree')}\n"
-            f"heapovf {self._g('heapovf')}   jsonovf {self._g('jsonovf')}\n"
+            f"obj    {_cap(self._g('obj'), MAX_OBJECTS)}\n"
+            f"arr    {_cap(self._g('arr'), MAX_ARRAYS)}\n"
+            f"env    {_cap(self._g('envl', self._g('esp')), ENV_DEPTH)}\n"
+            f"spr    {self._g('spr')}    strings {self._g('strb')}\n"
+            f"esp {self._g('esp')}   efree {self._g('efree')}   gc {self._g('gc')}\n"
+            f"heapovf {self._g('heapovf')}   jsonovf {self._g('jsonovf')}   "
+            f"spovf {self._g('spovf')}\n"
+            f"fault   {self._g('fault')}\n"
         )
 
     def _inspect_native(self) -> str:
         rows = [f"  {nid:3}  {name}" for name, nid in sorted(NATIVE_IDS.items(), key=lambda kv: kv[1])]
         return (
             self._hdr("NATIVE CALL UNIT — CALL_NATIVE id table")
-            + "Ids resolved at compile time (~40). Samples: console.log,\n"
-            "fillRect, swapBuffers, requestAnimationFrame, JSON.parse.\n\n"
+            + f"{len(NATIVE_IDS)} ids resolved at compile time. CALL_NATIVE arg0 is an\n"
+            "index into the image name table; canvas work arrives as ctx.*\n"
+            "method natives, which are engine calls rather than JSB ids.\n\n"
             + "\n".join(rows)
-            + f"\n\nlast native  {self._g('native_name')}  (id {self._g('native_id')})\n"
+            + f"\n\nat IP  {self._g('native_name')}  (id {self._g('native_id')})\n"
         )
 
     def _inspect_compiler(self) -> str:
@@ -1042,12 +1309,33 @@ class ArchitectureView:
         )
 
     def _inspect_regs(self) -> str:
-        return (
-            self._hdr("REGISTERS / VMSTAT")
-            + f"runtime  {self._runtime}\n\n"
-            + self._live_kv()
-            + "\n"
-        )
+        body = self._hdr("REGISTERS / VMSTAT") + f"runtime  {self._runtime}\n"
+        if self._snap.get("board_coarse"):
+            body += (
+                "\nBOARD is a coarse UART tether: it mirrors the glass and\n"
+                "reports whether a framebuffer is arriving. There is no VMSTAT\n"
+                "over this link, so ip / sp / heap counters are unavailable —\n"
+                "not zero. Use FPGA-SIM for per-state detail.\n"
+            )
+        body += "\n" + self._live_kv() + "\n"
+        hist = self._snap.get("natives") or {}
+        if hist:
+            rows = sorted(hist.items(), key=lambda kv: -kv[1])[:14]
+            body += (
+                "\nnative calls (recent frames)\n"
+                + "\n".join(f"  {n:28} {c}" for n, c in rows)
+                + "\n"
+            )
+        prof = str(self._snap.get("prof") or "")
+        if prof:
+            body += (
+                "\nRTL cycle profile (PROF?, last 1 s of play)\n"
+                "Where the clocks went — one VMSTAT sname is a single sample\n"
+                "at the frame edge and cannot show this.\n"
+                + "\n".join("  " + tok for tok in prof.split() if "=" in tok)
+                + "\n"
+            )
+        return body
 
     def _inspect_hdmi(self) -> str:
         return (
@@ -1074,19 +1362,50 @@ class ArchitectureView:
     def _inspect_engine(self, key: str) -> str:
         extra = ""
         if key == "CANVAS":
-            extra = f"\ndihit {self._g('dihit')}  dimiss {self._g('dimiss')}  imgd {self._g('imgd')}\n"
+            extra = (
+                f"\ndihit {self._g('dihit')}  dimiss {self._g('dimiss')}  "
+                f"imgd {self._g('imgd')}\n"
+                f"text  txtn {self._g('txtn')}  txtw {self._g('txtw')}  "
+                f"txtmiss {self._g('txtmiss')}  fontpx {self._g('fontpx')}\n"
+                f"last rect (x,y,w,h,color,i)  {self._g('vdraw')}\n"
+            )
         elif key == "BLIT":
-            extra = f"\nspr {self._g('spr')}  (drawImage from asset SRAM)\n"
+            extra = (
+                f"\nspr {self._g('spr')}  (drawImage from asset SRAM)\n"
+                f"ASET {self._g('sram_bytes')} B loaded\n"
+            )
         elif key == "RAF":
             extra = (
                 f"\nraf {self._g('raf')}  ton {self._g('ton')}  "
-                f"tfire {self._g('tfire')}  tsch {self._g('tsch')}  tmis {self._g('tmis')}\n"
+                f"listeners {self._g('lsn')}\n"
+                f"rafcall {self._g('rafcall')}  frames ended {self._g('frend')}\n"
+                f"tfire {self._g('tfire')}  tsch {self._g('tsch')}  "
+                f"tmis {self._g('tmis')}  toovf {self._g('toovf')}\n"
+                f"key  kalloc {self._g('kalloc')}  kcall {self._g('kcall')}  "
+                f"kevq {self._g('kevq')}\n"
             )
         elif key == "ALU":
             extra = f"\ndivs {self._g('divs')}\n"
+        elif key == "STR":
+            extra = (
+                f"\ninterned bytes {self._g('strb')}  strovf {self._g('strovf')}\n"
+                f"joinmiss {self._g('joinmiss')}  jsonovf {self._g('jsonovf')}\n"
+            )
+        elif key == "VIDEO":
+            extra = (
+                f"\nswaps {self._g('swaps')}  hdmi {self._g('hdmi_mode')}  "
+                f"fclk {self._g('fclk')}\n"
+            )
+        elif key == "STORE":
+            extra = f"\nfiles {len(self._snap.get('catalog') or [])}\n"
+        elif key == "CONS_ENG":
+            extra = (
+                f"\nlast command {self._g('last_cmd')!r}  "
+                f"MORE {bool(self._snap.get('more'))}\n"
+            )
         return (
             self._hdr(self.ENGINE_BLURBS[key])
-            + f"heat (0..1): {self._heat_of(key):.2f}\n"
+            + f"runtime {self._runtime}   heat (0..1): {self._heat_of(key):.2f}\n"
             + extra
         )
 

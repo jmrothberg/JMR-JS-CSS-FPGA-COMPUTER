@@ -25,6 +25,7 @@ from functional_model.jsb_format import (
     FLAG_ASET,
     FLAG_VALUE64,
     MAGIC,
+    NATIVE_IDS,
     PROGRAM_CODE_WORDS,
     PROGRAM_MAX_CONSTS,
     PROGRAM_MAX_NAMES,
@@ -32,6 +33,11 @@ from functional_model.jsb_format import (
     ProgramImage,
 )
 from functional_model.machine import Machine
+
+# Architecture Monitor only: CALL_NATIVE id → canonical name.
+_NATIVE_NAME_BY_ID: dict[int, str] = {}
+for _name, _nid in NATIVE_IDS.items():
+    _NATIVE_NAME_BY_ID.setdefault(_nid, _name)
 
 # Match the current finite memories in rtl/engines/jmr_js_vm.sv.
 CODE_WORDS = PROGRAM_CODE_WORDS
@@ -419,6 +425,8 @@ class JsHwVm:
         self._value_env = value_pack_tagged(VALUE_KIND_UNDEFINED)
         self._value_last_ip = 0
         self._value_last_op: Optional[Op] = None
+        # Architecture Monitor: natives called since the monitor last read it.
+        self._arch_natives: dict[str, int] = {}
         # Stable heap slots never move. A Value payload is the slot index and
         # its 12-bit generation must match before any slot can be dereferenced.
         self._value_objects: List[Optional[dict[int, int]]] = [None] * MAX_OBJECTS
@@ -1595,10 +1603,28 @@ class JsHwVm:
             obj[value_payload(key)] = value
         return handle
 
+    def arch_tally(self, name: str) -> None:
+        """Count one engine call for the Architecture Monitor.
+
+        The RTL answers "which engines did this frame use?" with PROF? (a
+        per-state cycle histogram). PYTHON has no state machine, so the
+        observable equivalent is which natives ran. One dict bump per native
+        call, next to work that already allocates — the monitor reads and
+        clears it once per frame.
+        """
+        self._arch_natives[name] = self._arch_natives.get(name, 0) + 1
+
+    def arch_take_natives(self) -> dict:
+        """Hand the monitor this frame's native histogram and start a new one."""
+        hist = self._arch_natives
+        self._arch_natives = {}
+        return hist
+
     def _value64_native(
         self, native_id: int, args: List[int], ip: int
     ) -> Optional[int]:
         undefined = value_pack_tagged(VALUE_KIND_UNDEFINED)
+        self.arch_tally(_NATIVE_NAME_BY_ID.get(native_id, f"nid{native_id}"))
 
         def number(index: int, default: float = 0.0) -> float:
             if index >= len(args):
@@ -2166,6 +2192,11 @@ class JsHwVm:
             result = self._value64_native(38, args, ip)
             return undefined if result is None and not self.error else result
         if method in canvas_ops or builtin == BUILTIN_CONTEXT:
+            # Canvas work arrives as a method name, never as a CALL_NATIVE id,
+            # so the monitor's engine histogram has to be told here. Counted
+            # inside the branch: a user method reaches this function too and
+            # would otherwise be filed as a canvas op.
+            self.arch_tally(f"ctx.{method}")
             # Port of Chunk VM Canvas2D: styles live on the context object,
             # path/transform in aux, natives are ctx.* (not bare fillRect names).
             aux = self._value_canvas_aux[slot] if 0 <= slot < MAX_OBJECTS else {}

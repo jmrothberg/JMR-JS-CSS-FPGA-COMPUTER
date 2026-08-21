@@ -1,5 +1,7 @@
 # JMR JS compatibility matrix (target titles)
 
+**Learn first:** [JS_COMMANDS.md](JS_COMMANDS.md) — JavaScript you can write, and the instructions it becomes (34 opcodes + native ids). This file is title status and holes, not the teaching list.
+
 Target games drive the language/API set. **Not a full web browser** — no
 Fetch/XHR, no WebGL, no general browsing. Goal (same idea as NLISC-BASIC on
 T100): **NLISC-JS** — HTML titles, JavaScript ISA, the CSS a game actually

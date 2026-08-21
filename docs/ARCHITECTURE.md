@@ -52,7 +52,8 @@ fallback, the MIG `ui_clk` clock, and the 32 KB sprite scratch all correct.
 Capacities on the poster match silicon (`jmr_js_vm.sv` / `jmr_js_vm_pkg.sv` /
 `jsb_format.py`): `MAX_OBJ=1024×32`; arrays `1536×32 + 128×128`;
 `ENV_DEPTH=512`; `STACK_DEPTH=2048`; `MAX_VARS=512`; `MAX_CONSTS=1024`;
-`CODE_WORDS=32768`. Full opcode table and native ids:
+`CODE_WORDS=32768`. Learnable opcode + native list:
+[JS_COMMANDS.md](JS_COMMANDS.md). ABI / status tables:
 [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#bytecode-opcodes-34).
 
 **ASIC board poster (Rev A proposal)** — QFN-100 chip + external 4 MB asset

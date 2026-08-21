@@ -326,6 +326,12 @@ class Machine:
         except FileNotFoundError:
             return ["?FN FILE NOT FOUND"]
         self.source_lines = raw.splitlines()
+        # A new LOAD retires the previously compiled image. Only the frame path
+        # reads these, and it is gated on `running`, so nothing needs them
+        # between LOAD and RUN — but the Architecture Monitor was showing the
+        # last title's op count and heap under the newly loaded name.
+        self._html_chunk = None
+        self._hw_vm = None
         self._arch_phase = "loaded"
         return [f"LOADED {self.source_name} ({len(self.source_lines)} LINES)"]
 

@@ -25,13 +25,20 @@ from typing import Optional
 from functional_model.canvas_engine import CanvasEngine
 from runtime.backend import (
     ROOT, RuntimeBackend, card_catalog, parse_status_kv,
-    _native_name_for_id, fmt_code_window, fmt_html_window,
+    decode_op_at, fmt_code_window, fmt_html_window,
 )
 from runtime.flight_log import FlightLog
 
 SIM_DIR = ROOT / "sim"
 _SYNTH = SIM_DIR / "sim_build_synth" / "jmr_js_sim_server"
 _HOST_PY = SIM_DIR / "host_sim_server.py"
+
+# Observer-only probes. The sim answers an unrecognised verb with plain "ERR"
+# (one line, never a hang), so a GUI built against a newer sim_main.cpp still
+# drives an older binary — it just loses that view. These must not reach the
+# flight log as faults: the log is what you read after a crash, and one
+# "missing verb" line per second would bury the real one.
+_OPTIONAL_VERBS = frozenset(("PROF?", "PROFCLR"))
 
 
 class SimBackend(RuntimeBackend):
@@ -74,6 +81,15 @@ class SimBackend(RuntimeBackend):
         self._vmstat_raw = ""
         self._status_raw = ""
         self._vmstat_t = 0.0
+        # Architecture Monitor engine heat. VMSTAT is one sample per beat and
+        # a frame almost always ends parked in S_WAIT_FRAME, so a single sname
+        # cannot say which engines the frame used. PROF? is the RTL's own
+        # per-state cycle histogram — that is where the cycles actually went.
+        self._prof_raw = ""
+        self._prof_armed = False
+        self._prof_ok = True   # cleared for good if this sim lacks PROF?
+        self._image_meta: dict = {}
+        self._aset_bytes = 0
         # HARD RULE: RTL is default. Host twin ONLY via explicit JMR_SIM_HOST=1.
         # JMR_SIM_RTL=1 is accepted as a no-op alias (legacy scripts).
         host_opt = os.environ.get("JMR_SIM_HOST", "").strip().lower() in ("1", "true", "yes")
@@ -167,9 +183,13 @@ class SimBackend(RuntimeBackend):
         elif resp == "FB SAME":
             pass
         elif resp.startswith("ERR") or resp.startswith("FAULT"):
-            shown = f"{cmd.split()[0]} bytes={max(0, (len(cmd) - 9) // 2)}" \
-                if cmd.startswith("PROGDATA ") else repr(cmd)
-            self._log.fault("RPC", f"cmd={shown} resp={resp!r}")
+            # An optional observer probe against a sim build that predates the
+            # verb answers plain "ERR". That is a missing feature, not a fault
+            # — logging it would bury a real fault under one line per second.
+            if (cmd.split()[0] if cmd else "") not in _OPTIONAL_VERBS:
+                shown = f"{cmd.split()[0]} bytes={max(0, (len(cmd) - 9) // 2)}" \
+                    if cmd.startswith("PROGDATA ") else repr(cmd)
+                self._log.fault("RPC", f"cmd={shown} resp={resp!r}")
         if resp.startswith("VMSTAT"):
             self._vmstat_raw = resp
             self._vmstat_t = time.monotonic()
@@ -181,6 +201,7 @@ class SimBackend(RuntimeBackend):
         quiet = verb in (
             "FB?", "TICK", "TICKN", "FRAME", "SCREEN?", "STATUS?", "PAL?",
             "JOY", "KEYBITS", "VMSTAT?", "PROGBEGIN", "PROGDATA", "PROGSTART",
+            "PROF?", "PROFCLR",
         )
         if verb == "LINE":
             self._log.note(f"rpc LINE {dt_ms:.1f}ms {resp}")
@@ -468,6 +489,12 @@ class SimBackend(RuntimeBackend):
             self._html_lines = []
             self._loaded_html_text = ""
             self._program_image = b""
+            # The previous title's header would otherwise sit under the new
+            # name in the sequencer panel until this one is RUN and compiled.
+            self._image_meta = {}
+            self._aset_bytes = 0
+            self._prof_raw = ""
+            self._prof_armed = False
         skip_line = False
         ram_load = False  # NEW: SOURCE came from the host, no FAT wait needed
         if upper.startswith("LOAD") and self._html_loaded_stem() and self._use_rtl:
@@ -718,6 +745,20 @@ class SimBackend(RuntimeBackend):
         except Exception as e:
             self._log.fault("SAVE", str(e))
 
+    @staticmethod
+    def _measure_aset(chunk) -> int:
+        """ASET payload bytes streamed to asset SRAM (0 when the title has none)."""
+        palette = getattr(chunk, "palette", None)
+        if not palette:
+            return 0
+        try:
+            from functional_model.jsb_format import build_aset_payload
+
+            payload, _descs = build_aset_payload(palette, getattr(chunk, "sprites", ()))
+            return len(payload)
+        except Exception:
+            return 0
+
     def _compile_on_run_html(self) -> bool:
         """Compile the loaded/editor HTML into one ephemeral ProgramImage."""
         stem = self._html_loaded_stem()
@@ -738,7 +779,21 @@ class SimBackend(RuntimeBackend):
             chunk = compile_html_text(html)
             blob = encode_html_chunk(chunk)
             image = ProgramImage(blob)
-            self._html_chunk = chunk
+            # Observe the decoded ProgramImage, not the pre-encode Chunk: the
+            # RTL executes these words, and PYTHON's monitor reads the same
+            # artifact — otherwise the two runtimes report different n_consts
+            # for one title.
+            try:
+                self._html_chunk = image.decode()
+            except Exception:
+                self._html_chunk = chunk
+            self._image_meta = {
+                "n_ops": int(image.n_ops or 0),
+                "n_consts": int(image.n_consts or 0),
+                "n_vars": int(image.n_vars or 0),
+                "flags": int(image.flags or 0),
+            }
+            self._aset_bytes = self._measure_aset(self._html_chunk)
             self._html_lines = html.splitlines()
             self._program_image = image.data
             self._log.note(
@@ -913,6 +968,7 @@ class SimBackend(RuntimeBackend):
                     f"play fb_frames={self._play_frames} fclk_avg={avg} "
                     f"fclk_max={mx} {self._vmstat_snap(st)}"
                 )
+                self._sample_prof()
                 self._play_t = now
                 self._play_frames = 0
                 self._play_fclk = []
@@ -927,6 +983,37 @@ class SimBackend(RuntimeBackend):
                     self._paint_screen_local("> ")
         else:
             self._rpc("TICK")
+
+    def _sample_prof(self) -> None:
+        """Read the RTL per-state cycle histogram, then re-arm it for the next beat.
+
+        Two RPCs per second while a game runs. PROFCLR both zeroes the
+        counters and enables them, so the first beat only arms.
+
+        A sim binary without these verbs answers "ERR". Give up permanently on
+        the first refusal rather than asking again every second — the monitor
+        falls back to sname-only heat and nothing else changes.
+        """
+        if not self._prof_ok:
+            return
+        try:
+            if self._prof_armed:
+                resp = self._rpc("PROF?")
+                if not resp.startswith("PROF"):
+                    self._prof_ok = False
+                    self._prof_raw = ""
+                    self._log.note("PROF? unsupported by this sim — sname-only heat")
+                    return
+                self._prof_raw = resp
+            if not self._rpc("PROFCLR").startswith("OK"):
+                self._prof_ok = False
+                self._prof_raw = ""
+                self._log.note("PROFCLR unsupported by this sim — sname-only heat")
+                return
+            self._prof_armed = True
+        except Exception:
+            self._prof_ok = False
+            self._prof_raw = ""
 
     def trace_path(self) -> Optional[Path]:
         return self._log.path
@@ -951,6 +1038,11 @@ class SimBackend(RuntimeBackend):
         self._running = False
         self._more = False
         self._listing = False
+        self._prof_raw = ""
+        self._prof_armed = False
+        # Re-probe after a restart: the next _start() may launch a sim binary
+        # you just recompiled, which can have verbs the old one lacked.
+        self._prof_ok = True
         self._typed_log = []
         self._screen = ""
         self._canvas.front[:] = bytes(len(self._canvas.front))
@@ -987,13 +1079,17 @@ class SimBackend(RuntimeBackend):
         snap["last_cmd"] = self._last_cmd
         snap["more"] = bool(self._more)
         snap["catalog"] = card_catalog()
-        snap["sp"] = snap.get("sp", 0)
+        snap["prof"] = self._prof_raw
         chunk = self._html_chunk
         src_lines = list(self._html_lines or [])
-        n_ops = len(getattr(chunk, "code", None) or []) if chunk is not None else 0
-        n_consts = len(getattr(chunk, "consts", None) or []) if chunk is not None else 0
-        snap["n_ops"] = n_ops
-        snap["n_consts"] = n_consts
+        meta = self._image_meta or {}
+        snap["n_ops"] = meta.get(
+            "n_ops", len(getattr(chunk, "code", None) or []) if chunk is not None else 0
+        )
+        snap["n_consts"] = meta.get("n_consts", 0)
+        snap["n_vars"] = meta.get("n_vars", 0)
+        snap["flags"] = meta.get("flags", 0)
+        snap["sram_bytes"] = self._aset_bytes
         snap["n_html"] = len(src_lines)
         ip = int(snap.get("ip") or 0)
         src_line = 0
@@ -1009,16 +1105,19 @@ class SimBackend(RuntimeBackend):
         snap["html_window"] = fmt_html_window(
             src_lines, src_line or (1 if src_lines else 0),
         )
-        if not snap.get("op_name"):
-            sname = str(snap.get("sname") or "")
-            if phase == "compile":
-                snap["sname"] = "COMPILE"
-            elif phase == "load":
-                snap["sname"] = "LOAD"
-            elif phase == "loaded" and not running:
-                snap["sname"] = "LOADED"
-            elif sname:
-                pass
-        if snap.get("native_id") and not snap.get("native_name"):
-            snap["native_name"] = _native_name_for_id(snap.get("native_id"))
+        # VMSTAT carries no opcode byte, but the RTL executes this very image
+        # and reports the IP it is parked on — so the op is knowable exactly.
+        # Deriving it here keeps the DISPATCH caption and the sequencer's own
+        # disassembly from naming two different instructions.
+        op_name, op_arg, native_name, native_id = decode_op_at(chunk, ip)
+        snap["op_name"] = op_name
+        snap["op_arg"] = op_arg
+        snap["native_name"] = native_name
+        snap["native_id"] = native_id
+        if phase == "compile":
+            snap["sname"] = "COMPILE"
+        elif phase == "load":
+            snap["sname"] = "LOAD"
+        elif phase == "loaded" and not running:
+            snap["sname"] = "LOADED"
         return snap

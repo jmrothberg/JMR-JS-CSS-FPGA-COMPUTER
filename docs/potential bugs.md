@@ -59,12 +59,24 @@ around the same rafcall. Not a slow leak: one finder call explodes.
 Suspect list narrows to what that first big finder call does differently
 (likely the first long-path search when a ghost re-targets).
 
-**Caps finalized for the FIRST .bin (margin over headroom until the real
-report — #79 kills any cap equally):**
-MAX_OBJ **896** (safe non-pow2 via OBJ_PHYS=1024), ENV_DEPTH **256**
-(validated: envl≈140 live in play), MAX_ARR_LONG **12** (peak 2;
-INVADERS bunkers 4), CODE_WORDS **20480** (the HM suite's extended
-PACMAN image is 19527 words). Paper BRAM
+**Bisect session (2026-08-21 night): the user was RIGHT that the crash
+"related to our changes" — two of the fit shrinks broke PACMAN, found by
+single-cap bisection against the pre-fit worktree:** ENV_DEPTH=256
+corrupted the BFS (live envs recycled mid-recursion → the flood — the
+envl≈140 "validation" was a between-frame sample that missed the
+recursion peak: transient vs steady-state measurement, add to the
+lessons); MAX_OBJ 768/896 died on the legitimate ~330-object attract
+burst (4 ghosts' JSON+BFS in one frame). #78 and the v64_on fold were
+individually exonerated by toggle-revert probes. Residual: attract still
+dies at rafcall≈114 (pre-fit died at ≈103 with FULL caps — same #79
+long-horizon pathology). Also found pre-existing on BOTH trees: a
+prototype-method parity break (`function M(){this.own=...}` +
+`M.prototype.p=...` → `inst.p()` diverges from FM) — separate from the
+flood, needs its own entry when investigated.
+
+**Caps FINAL for the first .bin (bisect-proven):**
+MAX_OBJ **960**, ENV_DEPTH **384**, MAX_ARR_LONG **12**, CODE_WORDS
+**20480**. Paper BRAM
 ~365/365 — knife-edge, accepted eyes-open; the one-line fallback if
 place overflows is MAX_OBJ=896 (-5 tiles). All five cap sites in sync:
 parent, pkg, HM, jsb_format, sim_main.

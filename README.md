@@ -143,8 +143,9 @@ from `build/nexys_video/utilization_impl.rpt`. Do not invent counts.
 **V1.0 vs V2.0** (`MK.HTML`: `MAX_SPR` ≥ 518, asset bank **8 MB**+,
 dotted `new`, `Object.keys`, `Math.round`):
 [Version 1.0 vs 2.0](docs/JMR_JS_COMPATIBILITY.md#version-10-vs-20).
-Opcodes (34) + native ids 0–40 + READY verbs:
-[bytecode ISA](docs/JMR_JS_COMPATIBILITY.md#bytecode-opcodes-34).
+**Learn the language and instructions:** [docs/JS_COMMANDS.md](docs/JS_COMMANDS.md)
+(what you type → the 34 opcodes). Status / version 1.0 vs 2.0:
+[docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md#bytecode-opcodes-34).
 
 ---
 
