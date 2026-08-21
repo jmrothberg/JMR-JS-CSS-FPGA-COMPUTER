@@ -20,7 +20,7 @@ from .sram_engine import SramEngine
 from .storage_engine import StorageEngine
 from .trace import TraceLog
 
-BANNER = "JMR JS-NATIVE-CPU V0.0.1"
+BANNER = "JMR JS-NATIVE-CPU V1.0"
 READY = "READY"
 # Pattern cite: BASIC LIST_PAGE_LINES / -- MORE --
 LIST_PAGE_LINES = 14

@@ -9,6 +9,12 @@ needs — **JMR bytecode VM** on PYTHON → FPGA-SIM → BOARD → ASIC.
 Chrome may open the same `.HTML` for authoring only. See `CONSTITUTION.md` and
 `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`.
 
+**Machine state (2026-08-21, banner `V1.0`):** ONE opcode decoder —
+`jmr_js_vm_exec64.sv` (Value64). The tagged Q16 `exec32` unit is
+**deleted**; every ProgramImage is `FLAG_VALUE64` and an image without
+that flag faults loud (code 9) at header decode. Five titles play on
+FPGA-SIM: INVADERS, PACMAN, DONKEY, ASTEROID, MRDO.
+
 ## Reference titles (on disk)
 
 **One title = one file.** User always:
@@ -93,7 +99,7 @@ Documented from real traces (MKPVP on FPGA-SIM / PYTHON):
 | Wall | Symptom if ignored | V1 HTML workaround |
 |---|---|---|
 | `MAX_SPR` = 16 | `ASET has N sprites; RTL MAX_SPR is 16` | ≤16 `data:image`; atlases + crops |
-| No `Object.keys` native | `fault=5` `fsite=4183` (unknown `CALL_NATIVE`) | No `for…in` / `Object.keys`; literal keys |
+| `Object.keys` (nid 41) is **PYTHON/HM only** | FPGA-SIM `fault=5` `fsite=4183` (unknown `CALL_NATIVE`) — the RTL exec64 arm is deliberately unimplemented | No `for…in` / `Object.keys` in an FPGA-SIM title; literal keys. (Compiler lowers `for…in` to `Object.keys` since 2026-08-21, so the loop *parses* — it still faults on RTL.) |
 | Negative `setTransform` scale | Fighter draws 1px / vanishes (PYTHON `_xf`) | Left + right sheets; no `sx < 0` mirror |
 | Math | Missing native / wrong paint | Only `floor` `abs` `min` `max` `random` `sqrt` |
 
@@ -103,8 +109,20 @@ these walls (FPGA-SIM is stricter than “PYTHON Complete” for some hosts).
 
 ### V2.0 requirements — measured from `storage/MK.HTML` (2026-08-20)
 
-**Not started.** Land PYTHON → FPGA-SIM → board. No dukpy. No title-name
-gates. Numbers below are from the file on disk (re-measure if embeds change).
+**Partially started (compiler front end only).** Land PYTHON → FPGA-SIM →
+board. No dukpy. No title-name gates. Numbers below are from the file on
+disk (re-measure if embeds change).
+
+**Landed 2026-08-21 (PYTHON-side, zero RTL growth):** unary `+x`
+(→ `x-0`), `throw` (soft: evaluate + drop), the `in` operator
+(→ `o[k] !== undefined`), `for…in` (both `var k in o` and bare `k in o`,
+lowered over a new `Object.keys` native **id 41** — implemented in the
+FM and HM; **RTL arm intentionally absent**). All eight existing titles
+still compile byte-identically; bytecode suite 198/198.
+
+**Still blocking `MK.HTML` (the real V2 work):** dotted `new`, and
+`Function.prototype.call`/`apply`. Compile now stops at HTML line 738,
+`new mk.arenas.Arena({…})`.
 
 #### Inventory (current `MK.HTML`)
 
@@ -117,7 +135,7 @@ gates. Numbers below are from the file on disk (re-measure if embeds change).
 | Today’s asset SRAM contract (V1) | **4 MB** (`SRAM_BYTES`, IS61WV204816-class) |
 | V2.0 asset SRAM target | **8 MB** (or more); MK needs ~4.63 MB so 8 MB has headroom |
 | Glass | 640×480 Canvas |
-| Compile today | **Fails** — `EXPECTED '('` at HTML **line 738** (`new mk.arenas.Arena({…})`) |
+| Compile today | **Fails** — `EXPECTED '('` at HTML **line 738** (`new mk.arenas.Arena({…})`). The earlier stops (unary `+` line 15, `for…in` line 20) are fixed. |
 
 #### Caps / ASET (must change for this file)
 
@@ -563,6 +581,16 @@ serialized ProgramImage bytes.
 - Every section has an explicit byte length and must fit before execution.
   Bad magic, unknown required flags, overlap, truncation, or capacity excess
   halts with a machine error; no section is silently clipped.
+- **`FLAG_VALUE64` is mandatory** (2026-08-21). `encode_chunk(...,
+  value64=False)` raises in Python; the RTL faults **code 9** at
+  `S_GOT_HDR2` and never enters an opcode state. The tagged Q16 encoding
+  and its decoder are retired — see
+  [REMOVING_EXEC32.md](REMOVING_EXEC32.md).
+
+**Machine fault codes** (`VMSTAT fault=`): 1 eval-stack, 2 call-stack /
+frame, 3 capacity (heap, timers, arrays), 4 environment handle, 5
+unsupported opcode/native, 9 tagged image refused. `fsite=` is the RTL
+line-ish site id; `ecode=` mirrors the exec unit's copy.
 
 ### Bytecode opcodes (34)
 
@@ -616,7 +644,7 @@ opcode. Per-API silicon status is under Frozen ISA and the
 
 ### Native IDs (`CALL_NATIVE` / `OP_CALL` arg0)
 
-Source: `functional_model/jsb_format.py` `NATIVE_IDS` (0–40). Aliases share
+Source: `functional_model/jsb_format.py` `NATIVE_IDS` (0–41). Aliases share
 an id: `console.warn`→0, `addEventListener`→19, `removeEventListener`→36.
 Grouped title surface is under Frozen ISA below — this is the numbered ABI.
 
@@ -663,6 +691,7 @@ Grouped title surface is under Frozen ISA below — this is the numbered ABI.
 | 38 | `document.dispatchEvent` |
 | 39 | `window.dispatchEvent` |
 | 40 | `typeof` |
+| 41 | `Object.keys` — **PYTHON/HM only** (compiler `for…in` lowering). No exec64 arm: FPGA-SIM faults loud rather than pretending. |
 
 ### 64-bit Value ABI
 
@@ -680,7 +709,10 @@ values are one 64-bit word.
   dereferencing a free slot or mismatched generation is a loud stale-handle
   error. Handles remain stable across collection. **Do not skip gen-match**
   in FPGA-SIM RTL to hide exec64/parent dual-copy skew (2026-08-17 overnight
-  cheat). One physical SRAM; FPGA-SIM is the `.bin` path.
+  cheat). One physical SRAM; FPGA-SIM is the `.bin` path. The parent/exec
+  dual copies are still real (exec64 owns registers the parent mirrors via
+  `hs_*` pokes + one-shot masks) — that skew is the source of most
+  historical bugs; see [potential bugs.md](potential%20bugs.md).
 - `+`, `-`, `*`, `/`, `%`, comparisons, NaN, infinities, signed zero, and
   conversion use binary64 behavior in both models. `%` uses truncation toward
   zero. Bitwise operations use ECMAScript `ToInt32`: NaN, infinities, and
@@ -875,11 +907,12 @@ Numbered ABI (ids 0–40) is under [Native IDs](#native-ids-call_native--op_call
 
 | Method | Titles | Status |
 |---|---|---|
-| `join` | PACMAN (`code.join('')` maze keys) | done |
-| `indexOf` | PACMAN (neighbor bits + beans stringify) | done |
+| `join` | PACMAN (`code.join('')` maze keys) | done (digit-element walk fixed 2026-08-21 — the raddr gated a beat late and every element read as `"0"`) |
+| `indexOf` | PACMAN (neighbor bits + beans stringify) | done (array, interned string, and dynstr receivers) |
 | `fill` / `map` / `filter` / `unshift` | PACMAN finder | done |
-| `forEach` / `find` / `splice` / `push` | INVADERS, PACMAN | done |
-| `replace` (string + RegExp stub) | PACMAN | done (interned `/g` and dynstr) |
+| `forEach` / `find` / `findIndex` / `splice` / `push` / `pop` | INVADERS, PACMAN | done (`findIndex` added to exec64 2026-08-21 — it had only ever existed in exec32) |
+| `slice` / `sort(cmp)` / `reduce` | library | done (#39/#40/#41) |
+| `replace` (string + RegExp stub) | PACMAN | done (interned `/g` and dynstr; replacement-char settle fixed 2026-08-21) |
 | `assign` / `bind` | PACMAN | done |
 | `getContext` | all | done (`test_hw_value64_p0_getcontext_fillrect_paints`) |
 
@@ -887,7 +920,9 @@ Numbered ABI (ids 0–40) is under [Native IDs](#native-ids-call_native--op_call
 
 | Op | Titles | Status |
 |---|---|---|
-| `fillRect` / `clearRect` / `drawImage` / `setTransform` | INVADERS / DONKEY | done |
+| `fillRect` / `clearRect` / `drawImage` / `setTransform` | INVADERS / DONKEY | done (natural-size `drawImage(img,x,y)` honors the transform scale since 2026-08-21 — the argc<5 leg took sprite w/h raw) |
+| `ctx.font = "NNpx …"` | DONKEY, MRDO HUD | done — parsed in `S_FONTPX`; that state had **no entry** on Value64 until 2026-08-21 (every `fillText` drew at the 8px default) |
+| `document.dispatchEvent(ev)` / `new KeyboardEvent` | DONKEY boot Enter | done on Value64 2026-08-21 (`S_V64_DISPATCH` + custom listener scan). Was exec32-only — the real cause of DONKEY's "Enter twice" quirk |
 | `beginPath` / `moveTo` / `lineTo` / `arc` / `stroke` / `fill` / `quadraticCurveTo` / `closePath` | PACMAN (+ INVADERS arc) | done |
 | `imageSmoothingEnabled` | DONKEY, MRDO | done (nearest blit; false stored) |
 | `fillText` / `measureText` | PACMAN, DONKEY, INVADERS HUD | **never** Chrome font — 8×8 / rect stub (HM `fillText`/`measureText` tests exist) |

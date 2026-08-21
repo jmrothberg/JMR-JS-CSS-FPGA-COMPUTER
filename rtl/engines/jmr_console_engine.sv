@@ -227,8 +227,8 @@ module jmr_console_engine (
             9: banner_char = "T"; 10: banner_char = "I"; 11: banner_char = "V";
             12: banner_char = "E"; 13: banner_char = "-"; 14: banner_char = "C";
             15: banner_char = "P"; 16: banner_char = "U"; 17: banner_char = " ";
-            18: banner_char = "V"; 19: banner_char = "0"; 20: banner_char = ".";
-            21: banner_char = "0"; 22: banner_char = "."; 23: banner_char = "1";
+            18: banner_char = "V"; 19: banner_char = "1"; 20: banner_char = ".";
+            21: banner_char = "0";
             default: banner_char = 8'h00;
         endcase
     endfunction

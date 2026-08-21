@@ -1,6 +1,48 @@
 # Session handoff
 
-## CURRENT STATE — 2026-08-20 evening (read this first)
+## CURRENT STATE — 2026-08-21: V1.0, SYNTHESIS-READY (read this first)
+
+Banner is **V1.0** (RTL + PYTHON + README in parity). The tree is the
+one the user synthesizes — see the READY FOR SYNTHESIS block at the top
+of [FPGA_FIT.md](FPGA_FIT.md). Landed and smoke-verified on the final
+build (all five titles green: DONKEY Mario-stable charsel + game,
+PACMAN full game with banks in sync, INVADERS wave, ASTEROID vectors,
+MRDO tap→PLAY):
+
+- **exec32 REMOVED** — file deleted (user waiver; git history keeps
+  it), instantiation gone, dropped from sim/Makefile and
+  vivado_build.tcl, hs32 tied 0, tagged images fault loud at
+  S_GOT_HDR2 (fault 9). Verilator eval +16% from the smaller netlist.
+  Phase 3b (tagged-arm strip + dead-signal sweep + tagged stack SRAM
+  removal) is still TO DO — post-synthesis.
+- **Port A'd**: vgc_queue, vconsts, vobj_proto, vfn_proto, vfn_env,
+  vfn_bound_this, venv_parent (`*_pa_we/waddr/wdata` strobes, write
+  port in the read process, cleared in the FSM default section).
+- **Shrinks**: spr_mem 32KB, source_mem 64KB.
+- **Suite**: 143+ passing; remaining deltas are documented xfails
+  (#70/#71/#72) and the recalibrated DONKEY two-Enter / MRDO-budget /
+  PACMAN-wait-helper tests. Test harness uses a scratch card copy
+  (JMR_CARD_IMG) — the user's card.img stays clean.
+- **Value64 gap fixes this cycle**: #69 rAF snapshot clobber,
+  events-then-rAF per frame (dbg_cb_ip per-frame), KEYBITS bridge (+
+  real-KEYEVT supersede — the DONKEY Mario→Luigi phantom),
+  dispatchEvent + KeyboardEvent desugar, findIndex, join digit-walk,
+  ctx.font revive, natural-size drawImage scaling, replace char,
+  dynstr indexOf, halt-state sync.
+- **MK.HTML parked** (user decision): parses past the shims (unary +,
+  for-in via new Object.keys native 41 — PYTHON-only, RTL nid faults
+  loud; throw; `in`), blocked on namespaced ctors + Fn.call —
+  ~100-150 lines of exec64 when wanted, AFTER synthesis.
+- **Synthesis run**: `source scripts/vivado_env.sh` then
+  `make -C tools/board_flow bit` (host terminal, not a sandbox; the
+  .venv is irrelevant to synthesis). No bit-fresh/clean after a crash.
+- **Next after the user's run**: read utilization_synth.rpt,
+  fill the FPGA_FIT Headline, then the speed ledger items (FIND step
+  2, IMGD_PUT 2→1, GC pacing) and Phase 3b.
+
+---
+
+## PREVIOUS STATE — 2026-08-20 evening
 
 **Docs (same evening):** **V1.0 vs V2.0** for HTML games.
 V1 walls: [GAME_DESIGN.md](GAME_DESIGN.md) + `.cursor/rules/html-game-v1.mdc`.

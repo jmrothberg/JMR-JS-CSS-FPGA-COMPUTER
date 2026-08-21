@@ -25,9 +25,12 @@ host twin; never treat dukpy/Chrome as the machine. User-typed glass must match
 across F9 runtimes (no RTL-only console commands).
 
 **Status for agents:** [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md)
-(five HTML titles play on FPGA-SIM, slowly; do not `make bit` unless the
-user asks. Next RTL: exec32 then LUTRAM Port A —
-[docs/FPGA_FIT.md](docs/FPGA_FIT.md). J15 USB Host is dead — GUI/PROG tether).
+(banner **V1.0**; five HTML titles play on FPGA-SIM — INVADERS, PACMAN,
+DONKEY, ASTEROID, MRDO — still slow. exec32 is deleted and the LUTRAM
+Port A pass is done: the tree is **synthesis-ready**, see
+[docs/FPGA_FIT.md](docs/FPGA_FIT.md). Only the user runs Vivado:
+`source scripts/vivado_env.sh && make -C tools/board_flow bit`.
+J15 USB Host is dead — GUI/PROG tether).
 Synth vs play-speed debt (JOIN intern scan, what to keep for Vivado):
 [docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md).
 History of RTL edits from the 70 GB Vivado hunt (not a current-bug list;
@@ -45,7 +48,7 @@ How to reorganize the synthesis RTL later (plan only — do not extract JOIN/JSO
 
 ```
 $ python3 run_jmr_js.py
-JMR JS-NATIVE-CPU V0.0.1
+JMR JS-NATIVE-CPU V1.0
 READY
 > console.log("HELLO")
 HELLO

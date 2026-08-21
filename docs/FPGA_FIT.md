@@ -33,13 +33,19 @@ saw no longer exists. What changed since that run:
 4. Verified: probe ladder 8/8, PACMAN attract heap-stable through 118
    GCs on the strobed queue, title smokes green on the final build.
 
-**How to run it (the smarter way):**
+**How to run it (the smarter way):** `make bit` is Vivado, not Python —
+the .venv (GUI/pytest/compile_js) plays no part. From the repo root, in
+a normal host terminal (not a sandbox):
 
 ```
-make bit
+source scripts/vivado_env.sh
+make -C tools/board_flow bit
 ```
 
-with the existing guards: synth **2** threads, impl 8 — do NOT raise
+`vivado_env.sh` sets `VIVADO=`; without it Make prints `Set VIVADO=…`
+and stops. (`cd tools/board_flow && make bit` is the same thing.)
+Guards are already the Makefile defaults: synth **2** threads, impl 8 —
+do NOT raise
 `JMR_VIVADO_SYNTH_THREADS`, do NOT set `JMR_VIVADO_ALLOW_WIDE=1`, do
 NOT `bit-fresh`/`clean` after a mapping crash (no DCP until synth_1
 hits 100%). If synth_1 completes, fill the [Headline](#headline-fill-after-synth_1-100)

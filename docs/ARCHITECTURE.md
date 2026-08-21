@@ -42,7 +42,8 @@ fine print:
 
 **Core zoom-in poster** (sibling style to the JMR BASIC Processor Core
 zoom-in diagram) — the JS processor core itself: program sequencer,
-`exec32`/`exec64` dispatch, tagged eval stack, object/heap, native call,
+`exec64` dispatch (the poster still shows the retired `exec32` twin — see
+the errata below), Value64 eval stack, object/heap, native call,
 shared engines, compile-on-RUN, three memory rooms, I/O. Render
 **2026-08-18** (replaces the draft that still had 8192/4096 heap, ring
 recycle, `.JSH` on card, and `CALL_NATIVE`).
@@ -52,8 +53,11 @@ recycle, `.JSH` on card, and `CALL_NATIVE`).
 ### Core zoom-in poster errata (AI-rendered image; 2026-08-18)
 
 The block diagram and capacities match silicon (`jmr_js_vm.sv` /
-`jmr_js_vm_pkg.sv` / `jsb_format.py`): parent SRAM owns the heap; `exec32 |
-exec64` mux on `flags[3]`; JSB1 + ASET; `MAX_OBJ=1024×32`; arrays
+`jmr_js_vm_pkg.sv` / `jsb_format.py`): parent SRAM owns the heap; **one
+decoder, `exec64`** (the poster's `exec32 | exec64` mux on `flags[3]` was
+real when rendered — exec32 was deleted 2026-08-21 and a non-Value64 image
+now faults code 9 instead of switching decoders); JSB1 + ASET;
+`MAX_OBJ=1024×32`; arrays
 `1536×32 + 128×128`; `ENV_DEPTH=512`; generation handles + mark/sweep;
 compile-on-RUN never writes `.JSH`/`.JSB` to the card. Known leftover
 shorthand baked into the render — trust this list, not the poster fine
