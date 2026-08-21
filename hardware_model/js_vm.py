@@ -39,6 +39,16 @@ _NATIVE_NAME_BY_ID: dict[int, str] = {}
 for _name, _nid in NATIVE_IDS.items():
     _NATIVE_NAME_BY_ID.setdefault(_nid, _name)
 
+# Architecture Monitor execution ring: every 256th op's IP, kept in a fixed
+# list of 512. Sized so a frame's worth of sampling wraps a few times — the
+# monitor wants a representative walk through the frame, not a full trace.
+_ARCH_RING_SIZE = 512
+_ARCH_RING_WRAP = _ARCH_RING_SIZE - 1
+# Prime sampling period. A power of two aliases against loop bodies whose
+# length is also a power of two, which pinned the samples onto two hot IPs
+# and made the replay look like it was stuck.
+_ARCH_RING_PERIOD = 251
+
 # Match the current finite memories in rtl/engines/jmr_js_vm.sv.
 CODE_WORDS = PROGRAM_CODE_WORDS
 MAX_CONSTS = PROGRAM_MAX_CONSTS
@@ -427,6 +437,9 @@ class JsHwVm:
         self._value_last_op: Optional[Op] = None
         # Architecture Monitor: natives called since the monitor last read it.
         self._arch_natives: dict[str, int] = {}
+        self._arch_ring: list[int] = [0] * _ARCH_RING_SIZE
+        self._arch_ring_i = 0
+        self._arch_ring_n = _ARCH_RING_PERIOD
         # Stable heap slots never move. A Value payload is the slot index and
         # its 12-bit generation must match before any slot can be dereferenced.
         self._value_objects: List[Optional[dict[int, int]]] = [None] * MAX_OBJECTS
@@ -1620,6 +1633,21 @@ class JsHwVm:
         self._arch_natives = {}
         return hist
 
+    def arch_ip_ring(self) -> list[int]:
+        """IPs sampled during execution, oldest first.
+
+        The monitor replays these. Without them it can only read the IP
+        between frames, which is always the same rAF park — one frozen
+        instruction while millions of ops go by.
+        """
+        n = self._arch_ring_i
+        if n <= 0:
+            return []
+        if n < _ARCH_RING_SIZE:
+            return self._arch_ring[:n]
+        start = n & _ARCH_RING_WRAP
+        return self._arch_ring[start:] + self._arch_ring[:start]
+
     def _value64_native(
         self, native_id: int, args: List[int], ip: int
     ) -> Optional[int]:
@@ -2807,6 +2835,17 @@ class JsHwVm:
                 return
             steps += 1
             op_ip = ip
+            # Architecture Monitor execution ring. The GUI can only look
+            # between frames, and between frames the VM is always parked at
+            # the same rAF return — so a live read shows one frozen IP no
+            # matter how much code ran. This samples the IPs actually
+            # executed so the monitor can replay them. One mask and a store
+            # every 256th op; the ring is a fixed list, never grows.
+            self._arch_ring_n -= 1
+            if self._arch_ring_n <= 0:
+                self._arch_ring_n = _ARCH_RING_PERIOD
+                self._arch_ring[self._arch_ring_i & _ARCH_RING_WRAP] = op_ip
+                self._arch_ring_i += 1
             word = self.code_mem[self.ops_base + ip]
             opcode = word & 0xFF
             arg0 = (word >> 8) & 0xFFFF

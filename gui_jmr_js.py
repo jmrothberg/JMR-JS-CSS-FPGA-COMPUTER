@@ -332,10 +332,14 @@ class App:
                 snap["sname"] = "LOAD"
             elif override == "compile":
                 snap["sname"] = "COMPILE"
+        # Peeks are pull-only: the monitor calls this just while a drill-down
+        # is open, so a closed inspector costs no extra RPC during play.
         self.arch.update(
             runtime=self.backend.name,
             snap=snap,
             line_buf=self.line_buf,
+            peek=getattr(self.backend, "arch_peek", None),
+            decode=getattr(self.backend, "arch_decode", None),
         )
 
     def _status_text(self) -> str:

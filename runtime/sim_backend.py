@@ -25,7 +25,7 @@ from typing import Optional
 from functional_model.canvas_engine import CanvasEngine
 from runtime.backend import (
     ROOT, RuntimeBackend, card_catalog, parse_status_kv,
-    decode_op_at, fmt_code_window, fmt_html_window,
+    decode_ip, decode_op_at, fmt_code_window, fmt_html_window,
 )
 from runtime.flight_log import FlightLog
 
@@ -38,7 +38,13 @@ _HOST_PY = SIM_DIR / "host_sim_server.py"
 # drives an older binary — it just loses that view. These must not reach the
 # flight log as faults: the log is what you read after a crash, and one
 # "missing verb" line per second would bury the real one.
-_OPTIONAL_VERBS = frozenset(("PROF?", "PROFCLR"))
+_OPTIONAL_VERBS = frozenset((
+    "PROF?", "PROFCLR", "IPTRACE",
+    # Inspector peeks — the drill-downs degrade to "no view" without them.
+    "OBJPEEK", "ARRPEEK", "STK?", "VARPEEK", "VVARPEEK", "SRAMPEEK",
+    "RAFPEEK?", "TMR?", "LSNPEEK?", "ENVSTAT?", "VENVPEEK?", "FNPEEK",
+    "NAMEPEEK", "GCSNAP?", "VRING?", "IPTRACE?", "STATEHIST?", "PXCNT?",
+))
 
 
 class SimBackend(RuntimeBackend):
@@ -88,6 +94,8 @@ class SimBackend(RuntimeBackend):
         self._prof_raw = ""
         self._prof_armed = False
         self._prof_ok = True   # cleared for good if this sim lacks PROF?
+        self._ip_ring: list[int] = []
+        self._ip_trace_ok = True
         self._image_meta: dict = {}
         self._aset_bytes = 0
         # HARD RULE: RTL is default. Host twin ONLY via explicit JMR_SIM_HOST=1.
@@ -201,7 +209,7 @@ class SimBackend(RuntimeBackend):
         quiet = verb in (
             "FB?", "TICK", "TICKN", "FRAME", "SCREEN?", "STATUS?", "PAL?",
             "JOY", "KEYBITS", "VMSTAT?", "PROGBEGIN", "PROGDATA", "PROGSTART",
-            "PROF?", "PROFCLR",
+            *_OPTIONAL_VERBS,
         )
         if verb == "LINE":
             self._log.note(f"rpc LINE {dt_ms:.1f}ms {resp}")
@@ -891,7 +899,13 @@ class SimBackend(RuntimeBackend):
             return
         # NEW: while running, one VM frame (tick-to-swap) not TICK=1000
         if self._running:
+            # Record the IPs this frame executes. Between frames the VM is
+            # always parked at the same rAF return, so a live IP read shows
+            # one frozen instruction — this is what the monitor replays.
+            # A simulated FRAME costs ~1.7 s; these probes cost ~0.01 ms.
+            self._arm_ip_trace()
             resp = self._rpc("FRAME")
+            self._read_ip_trace()
             self._play_frames += 1
             now = time.monotonic()
             if self._play_t == 0.0:
@@ -900,12 +914,16 @@ class SimBackend(RuntimeBackend):
             capped = resp == "FB SAME"
             first3 = self._play_frames <= 3
             beat = now - self._play_t >= 1.0
+            # Read VMSTAT every frame so the monitor's heap / rAF / fclk move
+            # with the game. A simulated FRAME is ~1.7 s and VMSTAT? is
+            # ~0.01 ms, so the old 1 s throttle bought nothing and left every
+            # counter on screen a second stale. Logging stays throttled below.
             st = ""
-            if capped or first3 or beat:
-                try:
-                    st = self._rpc("VMSTAT?")
-                except Exception:
-                    st = ""
+            try:
+                st = self._rpc("VMSTAT?")
+            except Exception:
+                st = ""
+            log_this = capped or first3 or beat
             if st:
                 fclk = 0
                 vdraw = ""
@@ -924,7 +942,10 @@ class SimBackend(RuntimeBackend):
                     self._log_vdraw = vdraw
                 # Overlay/capped FRAME used to dump the same VMSTAT 100+ times.
                 # Log first3, fcap hang, and a vdraw change (maze→win overlay).
-                if first3 or "fcap=1" in st or vdraw_chg:
+                # `log_this` keeps the old throttle now that VMSTAT is read
+                # every frame — vdraw changes nearly every frame in play, and
+                # without it the flight log would gain a line per frame.
+                if log_this and (first3 or "fcap=1" in st or vdraw_chg):
                     if not self._run_snap_done:
                         fb = ""
                         try:
@@ -983,6 +1004,43 @@ class SimBackend(RuntimeBackend):
                     self._paint_screen_local("> ")
         else:
             self._rpc("TICK")
+
+    # How many distinct consecutive IPs to capture per frame. IPTRACE records
+    # a prefix of the frame — real work, not the park it ends on.
+    _IP_TRACE_N = 600
+
+    def _arm_ip_trace(self) -> None:
+        if not self._ip_trace_ok:
+            return
+        try:
+            if not self._rpc(f"IPTRACE {self._IP_TRACE_N}").startswith("OK"):
+                self._ip_trace_ok = False
+                self._log.note("IPTRACE unsupported by this sim — no IP replay")
+        except Exception:
+            self._ip_trace_ok = False
+
+    def _read_ip_trace(self) -> None:
+        if not self._ip_trace_ok:
+            return
+        try:
+            resp = self._rpc("IPTRACE?")
+        except Exception:
+            self._ip_trace_ok = False
+            return
+        if not resp.startswith("IPS"):
+            self._ip_trace_ok = False
+            self._ip_ring = []
+            return
+        ring = []
+        for tok in resp.split()[1:]:
+            # `<ip>` or `<ip>:<vsp>`
+            head = tok.split(":", 1)[0]
+            try:
+                ring.append(int(head))
+            except ValueError:
+                continue
+        if ring:
+            self._ip_ring = ring
 
     def _sample_prof(self) -> None:
         """Read the RTL per-state cycle histogram, then re-arm it for the next beat.
@@ -1043,12 +1101,73 @@ class SimBackend(RuntimeBackend):
         # Re-probe after a restart: the next _start() may launch a sim binary
         # you just recompiled, which can have verbs the old one lacked.
         self._prof_ok = True
+        self._ip_ring = []
+        self._ip_trace_ok = True
         self._typed_log = []
         self._screen = ""
         self._canvas.front[:] = bytes(len(self._canvas.front))
         self._canvas.back[:] = bytes(len(self._canvas.back))
         self._flush_keyevts()
         self._log.note("shutdown")
+
+    # Neutral peek name → RTL verb. `{}` slots take the caller's args.
+    _PEEK_VERBS = {
+        "obj": "OBJPEEK {0}",
+        "arr": "ARRPEEK {0}",
+        "stack": "STK?",
+        "vars": "VARPEEK {0} {1}",
+        "vvar": "VVARPEEK {0}",
+        # SRAMPEEK addresses 16-bit words; the panel speaks bytes (so do the
+        # ASET offsets in the docs). Converted in arch_peek, not here.
+        "sram": "SRAMPEEK {0} {1}",
+        "raf": "RAFPEEK?",
+        "timers": "TMR?",
+        "listeners": "LSNPEEK?",
+        "env": "ENVSTAT?",
+        "venv": "VENVPEEK?",
+        "fn": "FNPEEK {0}",
+        "name": "NAMEPEEK {0}",
+        "gc": "GCSNAP?",
+        "ring": "VRING?",
+        "iptrace": "IPTRACE?",
+        "statehist": "STATEHIST?",
+        "px": "PXCNT?",
+    }
+
+    def arch_decode(self, ip) -> dict:
+        return decode_ip(self._html_chunk, list(self._html_lines or []), ip)
+
+    def arch_peek(self, what: str, *args) -> str:
+        """One peek RPC, on demand, for an open inspector only.
+
+        Never called from the frame loop — the monitor only asks while a
+        drill-down is open and throttles its own refresh, so play still costs
+        one FRAME per tick. A build without the verb answers "ERR"; report it
+        as "no view" rather than pretending the structure is empty.
+        """
+        if not self._started or self._proc is None:
+            return ""
+        what = (what or "").lower()
+        template = self._PEEK_VERBS.get(what)
+        if template is None:
+            return ""
+        if what == "sram" and len(args) >= 2:
+            # Caller passes a byte offset and a byte count, matching the ASET
+            # layout in the docs and the PYTHON peek. The RTL indexes 16-bit
+            # words, so the same request would otherwise read a different
+            # address on each runtime.
+            args = (int(args[0]) // 2, max(1, int(args[1]) // 2)) + tuple(args[2:])
+        try:
+            cmd = template.format(*args) if "{" in template else template
+        except (IndexError, KeyError):
+            return ""
+        try:
+            resp = self._rpc(cmd)
+        except Exception:
+            return ""
+        if resp.startswith("ERR") or resp.startswith("FAULT"):
+            return f"(this sim build has no {cmd.split()[0]})"
+        return resp
 
     def arch_snapshot(self) -> dict:
         """FPGA-SIM observer: cached VMSTAT?/STATUS?/SCREEN? (no extra RPC while RUN)."""
@@ -1080,6 +1199,7 @@ class SimBackend(RuntimeBackend):
         snap["more"] = bool(self._more)
         snap["catalog"] = card_catalog()
         snap["prof"] = self._prof_raw
+        snap["ip_ring"] = list(self._ip_ring)
         chunk = self._html_chunk
         src_lines = list(self._html_lines or [])
         meta = self._image_meta or {}
