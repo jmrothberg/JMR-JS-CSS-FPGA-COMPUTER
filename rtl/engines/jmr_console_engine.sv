@@ -90,7 +90,11 @@ module jmr_console_engine (
     localparam logic [15:0] NAME_BUF        = 16'hB850;
     localparam logic [15:0] STORAGE_BUFFER  = 16'hBB00;
     // Dedicated SOURCE BRAM (INVADERS/PACMAN HTML). ASET SRAM stays art from 0.
-    localparam int unsigned SOURCE_MAX      = 131072;
+    // 131072 -> 65536: 13 BRAM tiles back. Card .HTM copies are squashed
+    // (make_sd_image) — every title's source fits except MK (85K), whose
+    // LIST shows the first 64K; oversize LOAD keeps the prefix and RUN
+    // compiles from the host file regardless (C_LD_RD "SOURCE full" arm).
+    localparam int unsigned SOURCE_MAX      = 65536;
     (* ram_style = "block" *) logic [7:0] source_mem [0:SOURCE_MAX-1] /*verilator public_flat_rw*/;
     logic        src_req, src_we, src_gnt;
     logic [16:0] src_addr;

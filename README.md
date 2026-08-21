@@ -104,7 +104,11 @@ Gate: `python3 tools/check_runtime_parity.py` must print **BATTERY PASS**.
 Step **7** is Vivado (hours, your terminal). Flash only after WNS ≥ 0 — never
 a substitute for fixing FPGA-SIM.
 
-**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID / AURORA / MRDO / JOYDEMO) then `RUN`.
+**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID / AURORA / MRDO / MKPVP / JOYDEMO) then `RUN`.
+**V1.0** library titles must stay inside the authoring walls in
+[docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) (≤16 ASET sprites, no `Object.keys` /
+`for…in`, no negative `setTransform` mirror). **`MK.HTML` is the V2.0 goal**
+(not FPGA-SIM acceptance yet) — [docs/JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](docs/JMR_JS_COMPATIBILITY.md#version-10-vs-20).
 New HTML titles: [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md).
 Only HTML titles. **`RUN` = compile-on-RUN** (in-memory ProgramImage; line
 numbers from the HTML). Fat graphics ride the ASET section into the
@@ -130,6 +134,9 @@ from `build/nexys_video/utilization_impl.rpt`. Do not invent counts.
 
 **Implement / don’t checklist (HTML, JS, CSS, Canvas — Complete or TBD):**
 [docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md#agent-surface-checklist-html--javascript--css--canvas).
+**V1.0 vs V2.0** (`MK.HTML`: `MAX_SPR` ≥ 518, asset bank **8 MB**+,
+dotted `new`, `Object.keys`, `Math.round`):
+[Version 1.0 vs 2.0](docs/JMR_JS_COMPATIBILITY.md#version-10-vs-20).
 Opcodes (34) + native ids 0–40 + READY verbs:
 [bytecode ISA](docs/JMR_JS_COMPATIBILITY.md#bytecode-opcodes-34).
 

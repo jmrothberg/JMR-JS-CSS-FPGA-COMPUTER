@@ -10,7 +10,48 @@ Diaries of failed runs: [OLD_RUNS.md](OLD_RUNS.md). Live glass:
 
 ---
 
-## What you do (so the next `make bit` does not OOM)
+## READY FOR SYNTHESIS — 2026-08-21 (read this first)
+
+Both cleanup jobs below are DONE on this tree; the netlist the last OOM
+saw no longer exists. What changed since that run:
+
+1. **exec32 is gone.** `jmr_js_vm_exec32.sv` (5,170 lines) deleted;
+   `u_exec32` uninstantiated; dropped from `sim/Makefile` and
+   `vivado_build.tcl`. `hs32` is tied 0; the 302 exec32-driven
+   `e32_*_q` wires are undriven (read as 0 — the designed raddr
+   fall-through). The 74 parent-driven `e32_`-named signals remain (see
+   the naming-trap section of REMOVING_EXEC32.md). Verilator eval got
+   +16% faster from the smaller netlist alone.
+2. **Port A'd the census monsters** (the 8-7186 killers): `vgc_queue`
+   (3072×64 — the big miss), `vconsts`, `vobj_proto`, `vfn_proto`,
+   `vfn_env`, `vfn_bound_this`, `venv_parent`. Each now has
+   `*_pa_we/waddr/wdata` strobes cleared per beat; the single write
+   port lives in the read process. FSM pokes on these are GONE.
+3. **Shrinks:** `spr_mem` 256KB→32KB (~50 tiles back; all titles are
+   ASET) and `source_mem` 128KB→64KB (~13 tiles; card copies are
+   line-squashed, only MK.HTM truncates its LIST view).
+4. Verified: probe ladder 8/8, PACMAN attract heap-stable through 118
+   GCs on the strobed queue, title smokes green on the final build.
+
+**How to run it (the smarter way):**
+
+```
+make bit
+```
+
+with the existing guards: synth **2** threads, impl 8 — do NOT raise
+`JMR_VIVADO_SYNTH_THREADS`, do NOT set `JMR_VIVADO_ALLOW_WIDE=1`, do
+NOT `bit-fresh`/`clean` after a mapping crash (no DCP until synth_1
+hits 100%). If synth_1 completes, fill the [Headline](#headline-fill-after-synth_1-100)
+from `build/nexys_video/utilization_synth.rpt` — LUTRAM high + BRAM low
+means an inference template still missed somewhere; paste the report
+and the census below finds it. The remaining narrow-table swarm
+(vobj_len/obj-cls class, ~150Kb total) is still FSM-poked by design —
+small enough to survive mapping, first candidates if LUTRAM is high.
+
+---
+
+## What was done before (kept for history)
 
 ### Cleanup before the next `make bit` (2026-08-20 OOM)
 

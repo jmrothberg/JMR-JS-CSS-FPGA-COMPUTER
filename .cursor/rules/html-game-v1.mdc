@@ -1,0 +1,45 @@
+---
+description: V1.0 HTML title authoring — stay inside frozen caps/natives; MK.HTML is V2.0 goal.
+alwaysApply: true
+---
+
+# HTML games — V1.0 now, V2.0 later
+
+**V1.0** = what PYTHON + FPGA-SIM play today for product + library titles.
+**V2.0** = machine work so **`storage/MK.HTML` as embedded today** can
+`LOAD`/`RUN`. Do **not** title-gate (`if (stem == "MK")`). Spec + measured
+numbers: [docs/JMR_JS_COMPATIBILITY.md](../../docs/JMR_JS_COMPATIBILITY.md)
+§ Version 1.0 vs 2.0. Authoring: [docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md).
+
+## V1.0 — write titles inside these walls
+
+| Cap / hole | Author around it |
+|---|---|
+| **`MAX_SPR` = 16** ASET descriptors | ≤16 `data:image` sheets. Pack frames into **atlases**; crop with **9-arg `drawImage`**. Do not ship one URI per frame (MKPVP: 274 → refuse). |
+| **`Object.keys` / `for…in`** | Compiler lowers `for (k in obj)` → `Object.keys`. RTL lacks that native (`fault=5` / `fsite=4183`). Use literal key lists or indexed loops. |
+| **`setTransform(-1, …)` mirror** | PYTHON `_xf` does `max(1, w*sx)` — negative scale → 1px. Prefer **left + right** sheets. |
+| **Math** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt` (+ `Math.PI`). No `round` native in V1. |
+| **Heap caps** | `MAX_OBJ=1024`, arrays `1536×32 + 128×128`, `ENV_DEPTH=512`, `ARR_CAP=128`. Loud overflow. |
+| **Glass / Esc** | 640×480 Canvas fill; Esc = machine BREAK. |
+
+**V1 library example:** `storage/MKPVP.HTML` (3 atlases, L/R sheets, no `for-in`).
+
+**V1 product acceptance:** `INVADERS` / `PACMAN` / `DONKEY`.
+
+## V2.0 — required for current `MK.HTML` (not vague “more”)
+
+Measured from `storage/MK.HTML` (re-measure if art changes):
+
+| Requirement | Number / behavior |
+|---|---|
+| Sprite descriptors | **`MAX_SPR` = `PROGRAM_MAX_SPRITES` ≥ 518** (unique sheets today; V1 = 16) |
+| Asset bank | **V2.0 = 8 MB** (or more) simple SRAM port — MK needs ~4.63 MB. ASIC: **single chip**, no fancy multi-bank access. V1 stays 4 MB. |
+| Compiler | Accept **`new mk.arenas.Arena(…)`** / **70** dotted `new mk.…` sites (today: `EXPECTED '('` line 738) |
+| Native | **`Object.keys`** (or real `for…in`) — **5** `for…in` loops in MK |
+| Native | **`Math.round`** — **2** call sites (shim is temporary) |
+
+```text
+// BAD V1 — one data:image per frame past MAX_SPR=16
+// GOOD V1 — atlas + 9-arg drawImage (MKPVP)
+// V2 — MK.HTML keeps 518 sheets; raise descriptor table to ≥518
+```

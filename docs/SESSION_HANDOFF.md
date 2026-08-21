@@ -2,6 +2,15 @@
 
 ## CURRENT STATE — 2026-08-20 evening (read this first)
 
+**Docs (same evening):** **V1.0 vs V2.0** for HTML games.
+V1 walls: [GAME_DESIGN.md](GAME_DESIGN.md) + `.cursor/rules/html-game-v1.mdc`.
+**`MK.HTML` = V2.0 goal** with **measured** needs: **`MAX_SPR` ≥ 518**,
+**~4.63 MB** art → rebuild ASET bank to **8 MB** (or more; ASIC: **one chip**,
+simple SRAM port), dotted **`new mk.…`**, **`Object.keys`/`for…in`**,
+**`Math.round`** —
+[JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20).
+Does **not** change the synth-fit job below.
+
 **Glass:** all **five** titles play on FPGA-SIM (INVADERS, PACMAN, DONKEY,
 ASTEROID, MRDO). Correctness bugs for play are **done**. They run
 **slowly** (many VM clocks per frame). Speed is FIND / intern / 1 px per

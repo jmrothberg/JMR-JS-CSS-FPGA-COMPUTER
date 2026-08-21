@@ -681,6 +681,8 @@ class Machine:
     def _natives(self):
         return {
             "console.log": self._nat_log,
+            # NEW: runtime key enumeration (mk.js for-in desugar)
+            "Object.keys": self._nat_object_keys,
             "fillRect": self._nat_fill_rect,
             "clearRect": self._nat_clear_rect,
             "clear": self._nat_clear,
@@ -815,6 +817,13 @@ class Machine:
             cache[s] = idx
         self.canvas.fill_style = idx
         return None
+
+    def _nat_object_keys(self, *argv):
+        # Own enumerable keys of a dict-like object; [] for anything else
+        # (matches the hardware walk: interned key names in slot order).
+        if argv and isinstance(argv[0], dict):
+            return [k for k in argv[0].keys() if not k.startswith("__")]
+        return []
 
     def _nat_log(self, *args):
         self._print(*[str(a) for a in args])

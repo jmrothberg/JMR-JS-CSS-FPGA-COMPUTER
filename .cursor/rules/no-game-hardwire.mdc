@@ -15,6 +15,11 @@ semantics (heap/gen cheats: `one-heap-keep-gen`).
 **Required:** grow language + VM (closures, timers, `String.replace` + RegExp,
 `JSON.stringify`/`parse`, heap lifetimes). Caps are VM-wide with loud overflow.
 FAT/load wait scales with ProgramImage bytes, not a title name.
+**V2.0** for `MK.HTML` (measured): `MAX_SPR`/`PROGRAM_MAX_SPRITES` **≥ 518**,
+asset bank rebuild to **8 MB** (or more; ASIC still **one chip**, simple
+SRAM port — no fancy access), compiler dotted **`new mk.…`**,
+**`Object.keys`/`for…in`**, **`Math.round`** — never `if (stem == "MK")`.
+See `html-game-v1.mdc` and `docs/JMR_JS_COMPATIBILITY.md` § Version 1.0 vs 2.0.
 
 ```systemverilog
 // BAD

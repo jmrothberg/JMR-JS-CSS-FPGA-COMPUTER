@@ -82,6 +82,10 @@ NATIVE_IDS = {
     "window.dispatchEvent": 39,
     # NEW: typeof x → interned tag string (PACMAN map hole checks)
     "typeof": 40,
+    # NEW: runtime key enumeration (mk.js for-in desugar). PYTHON-first:
+    # the RTL nid-41 arm is pending the "worth doing" decision — until
+    # then FPGA-SIM faults loud (fault 5) on titles that reach it.
+    "Object.keys": 41,
 }
 
 # NEW: aliases share an id (decode prefers the canonical NATIVE_IDS key)

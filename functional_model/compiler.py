@@ -898,6 +898,16 @@ class Compiler:
         if text == "class":
             self._skip_class_decl()
             return
+        if text == "throw":
+            # NEW: soft throw (mk.js invalid-state guards). No unwind
+            # machinery in the VM: evaluate the expression for its side
+            # effects and drop it. A thrown-in-practice path would differ from
+            # Chrome — acceptable for guards that never fire in play.
+            self._advance()
+            self._expression()
+            self._emit(Op.POP)
+            self._match(";")
+            return
         if text == "if":
             self._if_stmt()
             return
@@ -1066,12 +1076,94 @@ class Compiler:
         """
         self._advance()  # for
         self._expect("(")
+        # NEW: bare for (k in o) — no declaration keyword (mk.js shims)
+        if self._peek() and self._peek()[0] == "ID":
+            saved_b = self.i
+            bind = self._advance()[1]
+            if self._match("in"):
+                self._expression()
+                self._emit(Op.CALL_NATIVE, self._name("Object.keys"), 1)
+                arr = self._name("__a")
+                idx = self._name("__i")
+                self._emit(Op.STORE_VAR, arr)
+                self._emit(Op.LOAD_CONST, self._const(0))
+                self._emit(Op.STORE_VAR, idx)
+                self._expect(")")
+                loop = len(self.code)
+                self._emit(Op.LOAD_VAR, idx)
+                self._emit(Op.LOAD_VAR, arr)
+                self._emit(Op.GET_PROP, self._name("length"))
+                self._emit(Op.LT)
+                jmp_f = self._emit(Op.JUMP_IF_FALSE, 0)
+                self._emit(Op.LOAD_VAR, arr)
+                self._emit(Op.LOAD_VAR, idx)
+                self._emit(Op.ARRAY_GET)
+                self._emit(Op.STORE_VAR, self._name(bind))
+                self.break_stack.append([])
+                self.continue_stack.append([])
+                self._loop_depth += 1
+                self._statement()
+                self._loop_depth -= 1
+                cont = len(self.code)
+                for j in self.continue_stack.pop():
+                    self._patch(j, Op.JUMP, cont)
+                self._emit(Op.LOAD_VAR, idx)
+                self._emit(Op.LOAD_CONST, self._const(1))
+                self._emit(Op.ADD)
+                self._emit(Op.STORE_VAR, idx)
+                self._emit(Op.JUMP, loop)
+                end = len(self.code)
+                self._patch(jmp_f, Op.JUMP_IF_FALSE, end)
+                for j in self.break_stack.pop():
+                    self._patch(j, Op.JUMP, end)
+                return
+            self.i = saved_b
         # NEW: for-of — for (const x of expr)
         if self._peek_text() in ("let", "var", "const"):
             saved_i = self.i
             self._advance()  # let/var/const
             if self._peek() and self._peek()[0] == "ID":
                 bind = self._advance()[1]
+                if self._match("in"):
+                    # NEW: for (k in o) → walk Object.keys(o) (native 41).
+                    # Same temp/loop shape as for-of below.
+                    self._expression()
+                    self._emit(Op.CALL_NATIVE, self._name("Object.keys"), 1)
+                    arr = self._name("__a")
+                    idx = self._name("__i")
+                    _decl = Op.STORE_VAR
+                    self._emit(_decl, arr)
+                    self._emit(Op.LOAD_CONST, self._const(0))
+                    self._emit(_decl, idx)
+                    self._expect(")")
+                    loop = len(self.code)
+                    self._emit(Op.LOAD_VAR, idx)
+                    self._emit(Op.LOAD_VAR, arr)
+                    self._emit(Op.GET_PROP, self._name("length"))
+                    self._emit(Op.LT)
+                    jmp_f = self._emit(Op.JUMP_IF_FALSE, 0)
+                    self._emit(Op.LOAD_VAR, arr)
+                    self._emit(Op.LOAD_VAR, idx)
+                    self._emit(Op.ARRAY_GET)
+                    self._emit(_decl, self._name(bind))
+                    self.break_stack.append([])
+                    self.continue_stack.append([])
+                    self._loop_depth += 1
+                    self._statement()
+                    self._loop_depth -= 1
+                    cont = len(self.code)
+                    for j in self.continue_stack.pop():
+                        self._patch(j, Op.JUMP, cont)
+                    self._emit(Op.LOAD_VAR, idx)
+                    self._emit(Op.LOAD_CONST, self._const(1))
+                    self._emit(Op.ADD)
+                    self._emit(Op.STORE_VAR, idx)
+                    self._emit(Op.JUMP, loop)
+                    end = len(self.code)
+                    self._patch(jmp_f, Op.JUMP_IF_FALSE, end)
+                    for j in self.break_stack.pop():
+                        self._patch(j, Op.JUMP, end)
+                    return
                 if self._match("of"):
                     self._expression()
                     arr = self._name("__a")
@@ -1326,6 +1418,19 @@ class Compiler:
 
     def _comparison(self) -> None:
         self._term()
+        # NEW: `k in o` → o[k] !== undefined (mk.js). Same-key-undefined
+        # property is the only divergence from Chrome; mk.js never stores
+        # undefined values in the maps it tests.
+        while self._peek_text() == "in":
+            self._advance()
+            tmp = self._name("__ink")
+            self._emit(Op.STORE_VAR, tmp)
+            self._term()
+            self._emit(Op.LOAD_VAR, tmp)
+            self._emit(Op.ARRAY_GET)
+            self._emit(Op.LOAD_CONST, self._const(None))
+            self._emit(Op.EQ)
+            self._emit(Op.NOT)
         while self._peek_text() in ("<", ">", "<=", ">="):
             op = self._advance()[1]
             self._term()
@@ -1364,6 +1469,13 @@ class Compiler:
         if self._match("-"):
             self._unary()
             self._emit(Op.NEG)
+            return
+        # NEW: unary plus (ToNumber) — mk.js `+x + 0.5`. `x - 0` has the
+        # same binary64 coercion on both runtimes (strings parse, junk NaN).
+        if self._match("+"):
+            self._unary()
+            self._emit(Op.LOAD_CONST, self._const(0))
+            self._emit(Op.SUB)
             return
         if self._match("!"):
             self._unary()
@@ -1670,7 +1782,7 @@ class Compiler:
                 if self._peek_text() == "(":
                     self._expect("(")
                     # NEW: Math.* / console.* / document.* stay natives
-                    if text in ("Math", "console", "document", "window", "localStorage", "JSON"):
+                    if native == "Object.keys" or text in ("Math", "console", "document", "window", "localStorage", "JSON"):
                         argc = self._arg_list()
                         self._expect(")")
                         self._emit(Op.CALL_NATIVE, self._name(native), argc)

@@ -1868,6 +1868,23 @@ class JsHwVm:
                     ) is None and self.error:
                         return None
                 self._value_dispatch_roots = saved_roots
+            elif native_id == 41:
+                # Object.keys(o): own keys as interned-string handles, slot
+                # order (mirrors the RTL OGETI walk). Non-objects give [].
+                value = args[0] if args else undefined
+                keys: List[int] = []
+                if (value_kind(value) == VALUE_KIND_OBJECT
+                        and (value & 0xFFFFFFFF) < MAX_OBJECTS):
+                    slots = self._value_objects[value & 0xFFFFFFFF]
+                    if slots:
+                        keys = [
+                            (VALUE_TAG_PREFIX << 48)
+                            | (VALUE_KIND_STRING << 44)
+                            | (int(k) & 0xFFFF)
+                            for k in slots.keys()
+                        ]
+                handle = self._value64_alloc_array(keys, ip)
+                return handle
             elif native_id == 40:
                 value = args[0] if args else undefined
                 kind = value_kind(value)
@@ -3504,7 +3521,10 @@ class JsHwVm:
                     result = self._value64_native(35, args, op_ip)
                     if result is None or not self._value64_push(result):
                         return
-                elif receiver_text == "Object" and method == "assign" and args:
+                elif method == "assign" and args:
+                    # RTL keys the CALL_METH arm on id_assign alone — the
+                    # receiver is ignored (the compiler's KeyboardEvent
+                    # desugar passes the event object itself). Mirror that.
                     target = self._value64_resolve_object(
                         args[0], op_ip, op
                     )

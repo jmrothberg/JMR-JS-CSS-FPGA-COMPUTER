@@ -6,8 +6,18 @@ and Canvas surface are specified in [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILI
 This file is the **authoring** contract: glass, files, input, and what a
 title may assume.
 
+**Product generations:**
+
+| Gen | Meaning | Titles |
+|---|---|---|
+| **1.0 (now)** | Frozen Caps + natives that PYTHON **and** FPGA-SIM already run | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls (see below). `MKPVP.HTML` is the V1 MK-shaped example. |
+| **2.0 (not implemented)** | Machine changes so **`MK.HTML` as embedded today** runs | Acceptance: `MK.HTML`. Need **`MAX_SPR` ≥ 518**, asset bank **8 MB** (or more; ASIC: one chip, simple port), dotted **`new mk.…`**, **`Object.keys`/`for…in`**, **`Math.round`**. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20). |
+
+V1 vs V2 surface backlog: [JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20).
+Agent rule: `.cursor/rules/html-game-v1.mdc`.
+
 The three vendored titles (`INVADERS.HTML`, `PACMAN.HTML`, `DONKEY.HTML`)
-are **acceptance tests**, not the only games the machine may run. A new
+are **V1.0 acceptance tests**, not the only games the machine may run. A new
 title is another `NAME.HTML` on the card. Do **not** add title-name gates
 in RTL, the compiler, or natives.
 
@@ -113,11 +123,41 @@ character wide (32px).
 
 ---
 
-## Checklist before calling a new title done
+## V1.0 authoring walls (library titles — learned from MK / MKPVP)
+
+Stay on **Complete** rows **and** these machine caps. Prefer hacking the
+**HTML** for library demos; grow the **ISA** only on the V2.0 backlog (do
+not title-gate RTL).
+
+| Limitation | How to write the HTML |
+|---|---|
+| **≤16 ASET sprites** (`MAX_SPR` / SPRD descriptors) | One `data:image` per sheet, not per frame. Pack animations into **atlases**; use **9-arg `drawImage(img, sx,sy,sw,sh, dx,dy,dw,dh)`**. Compile refuses >16 (loud) — do not drop art silently. |
+| **No `Object.keys` / `for…in` on RTL** | Compiler turns `for (k in obj)` into `Object.keys`. FPGA-SIM faults unknown native. Use literal key lists (`loadOne("arena")` …) or numeric loops. |
+| **No negative `setTransform` scale** | Mirroring with `setTransform(-1,0,0,1,x,0)` collapses width on PYTHON `_xf` and is unsafe for parity. Ship **left + right** facing sheets (or always draw unmirrored). Positive scale / DONKEY-style world transforms are fine. |
+| **Math natives** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt`. Embed LUTs for angles if needed (ASTEROID pattern). |
+| **Nested literal tables** | Hundreds of tiny `MAKE_ARRAY`s for frame rects work only while under `MAX_ARR`. Prefer compact atlases + small meta, or parallel number arrays, if you approach the cap. |
+| **Glass / Esc / one file** | 640×480 fill; Esc = BREAK; no external `.js`. |
+
+**V1 MK-shaped title:** `storage/MKPVP.HTML` — 3 atlases (arena + Sub-Zero +
+Kano), L/R sheets, slim 2P engine, V1 Math only.
+
+**V2.0 goal title (Chrome / authoring today; machine later):**
+`storage/MK.HTML` — measured needs: **518** ASET sheets (`MAX_SPR` ≥ 518),
+**~4.63 MB** indexed pixels → rebuild asset bank to **8 MB** (or more;
+ASIC must stay **single-chip** with a **simple** SRAM port — no fancy
+multi-die access). Also compiler **`new mk.…`**, **`for…in`/`Object.keys`**,
+**`Math.round`**. Full table: [JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20).
+Until those land, do not expect `LOAD "MK.HTML"` + `RUN` on FPGA-SIM.
+
+---
+
+## Checklist before calling a new **V1.0** title done
 
 1. Self-contained `storage/NAME.HTML`, 640×480 canvas, keys in the file.
-2. Chrome opens it (authoring look only).
-3. `python3 tools/compile_js.py --html storage/NAME.HTML` succeeds (in memory; no sidecar file).
-4. `python3 tools/make_sd_image.py create card.img` lists the 8.3 name.
-5. PYTHON `LOAD` + `RUN` plays. FPGA-SIM then board follow the usual
-   ladder — do not claim silicon from Chrome.
+2. Stays inside **V1.0 authoring walls** (sprites ≤16, no `for-in` /
+   `Object.keys`, no negative scale mirror, V1 Math).
+3. Chrome opens it (authoring look only).
+4. `python3 tools/compile_js.py --html storage/NAME.HTML` succeeds (in memory; no sidecar file).
+5. `python3 tools/make_sd_image.py create card.img` lists the 8.3 name.
+6. PYTHON `LOAD` + `RUN` plays. **FPGA-SIM** then board follow the usual
+   ladder — do not claim silicon from Chrome or from PYTHON alone.

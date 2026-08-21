@@ -27,6 +27,8 @@ RUN
 | Aurora (library) | `AURORA.HTML` | compile → ephemeral ProgramImage (fillRect; no ASET) |
 | Joystick (library) | `JOYDEMO.HTML` | compile → ephemeral ProgramImage (stick + arrows; no ASET) |
 | Mr. Do! (library) | `MRDO.HTML` | compile → ephemeral ProgramImage (portrait 384×480 in 640×480 letterbox; no ASET) |
+| Mortal Kombat (library) | `MK.HTML` | **V2.0 goal** — `MAX_SPR`≥518, ~4.63 MB art → **8 MB ASET bank**, dotted `new mk.…`, `Object.keys`/`for…in`, `Math.round`; Chrome today |
+| MK PVP (library) | `MKPVP.HTML` | **V1.0** MK-shaped — ≤16 atlases, L/R sheets, no `Object.keys` / negative mirror |
 
 **Compile-on-RUN (hard):** source of truth = loaded `.HTML` (editor line
 numbers). `RUN` **always** recompiles into one versioned in-memory
@@ -68,6 +70,103 @@ temporary debt. Do **not** fake FPGA-SIM with `JMR_SIM_HOST=1`.
 **Constitution mandate:** product is NOT DONE until all three HTML titles
 LOAD + RUN playable on PYTHON **bytecode** → FPGA-SIM RTL → BOARD. HTML
 decides keys. No `.bit`/`.bin` until FPGA-SIM is green and the user GUI-tests.
+
+---
+
+## Version 1.0 vs 2.0
+
+This machine ships **generations** of the playable HTML/JS surface. Agents
+must not silently raise V1 caps for a library demo, and must not call a
+Chrome-only title “done on the machine.”
+
+| | **1.0 (current)** | **2.0 (planned — not implemented)** |
+|---|---|---|
+| **Meaning** | Caps + natives that product titles and **V1-compliant library** HTML run on PYTHON **and** FPGA-SIM | Machine changes required so **`storage/MK.HTML` as embedded today** can `LOAD` + `RUN` |
+| **Acceptance** | `INVADERS` / `PACMAN` / `DONKEY` (ISA freeze) | **`MK.HTML`** (mk.js Sub-Zero vs Kano, local 2P). `MKPVP.HTML` stays V1 training wheels. |
+| **Sprites** | **`MAX_SPR` = 16** (`jmr_js_vm.sv`) / **`PROGRAM_MAX_SPRITES` = 16** (`jsb_format.py`) | **`MAX_SPR` = `PROGRAM_MAX_SPRITES` ≥ 518** — measured unique `data:image` sheets in current `MK.HTML` (631 path keys → 518 after URI dedup). Raise RTL `spr_off`/`spr_ww`/`spr_hh` tables and the encode loud-check **together**. Never `if (stem=="MK")`. |
+| **Authoring** | [GAME_DESIGN.md](GAME_DESIGN.md) V1 walls; rule `html-game-v1.mdc` | Same glass/`LOAD`/`RUN`; drop V1 HTML shims once the rows below land |
+
+### V1.0 hard walls (do not “fix” in RTL for one title)
+
+Documented from real traces (MKPVP on FPGA-SIM / PYTHON):
+
+| Wall | Symptom if ignored | V1 HTML workaround |
+|---|---|---|
+| `MAX_SPR` = 16 | `ASET has N sprites; RTL MAX_SPR is 16` | ≤16 `data:image`; atlases + crops |
+| No `Object.keys` native | `fault=5` `fsite=4183` (unknown `CALL_NATIVE`) | No `for…in` / `Object.keys`; literal keys |
+| Negative `setTransform` scale | Fighter draws 1px / vanishes (PYTHON `_xf`) | Left + right sheets; no `sx < 0` mirror |
+| Math | Missing native / wrong paint | Only `floor` `abs` `min` `max` `random` `sqrt` |
+
+Product ISA freeze (three compiles) still defines **Complete** rows above.
+Library V1 titles may use only the **intersection** of Complete rows **and**
+these walls (FPGA-SIM is stricter than “PYTHON Complete” for some hosts).
+
+### V2.0 requirements — measured from `storage/MK.HTML` (2026-08-20)
+
+**Not started.** Land PYTHON → FPGA-SIM → board. No dukpy. No title-name
+gates. Numbers below are from the file on disk (re-measure if embeds change).
+
+#### Inventory (current `MK.HTML`)
+
+| Metric | Value |
+|---|---|
+| File size | ~2.56 MB |
+| Unique ASET sheets (`data:image` after dedup) | **518** |
+| Path keys before dedup | 631 |
+| Indexed pixel bytes (Σ w×h, 8 bpp) | **4 857 900 (~4.63 MB)** |
+| Today’s asset SRAM contract (V1) | **4 MB** (`SRAM_BYTES`, IS61WV204816-class) |
+| V2.0 asset SRAM target | **8 MB** (or more); MK needs ~4.63 MB so 8 MB has headroom |
+| Glass | 640×480 Canvas |
+| Compile today | **Fails** — `EXPECTED '('` at HTML **line 738** (`new mk.arenas.Arena({…})`) |
+
+#### Caps / ASET (must change for this file)
+
+| Change | Exact need for current `MK.HTML` |
+|---|---|
+| **`MAX_SPR` / `PROGRAM_MAX_SPRITES`** | Set both to **≥ 518** (RTL descriptor RAMs + encode refuse). 16 → 518 is the gap. |
+| **Asset SRAM / ASET payload** | Current embeds need **~4.63 MB** indexed pixels (+ 768 B palette) — over today’s **4 MB** V1 bank. **V2.0 rebuilds the asset bank to 8 MB** (or larger if a later title needs it). Same **simple SRAM port** style (`addr`/`wdata`/`rdata`/`we`/`req`/`ack`); widen the address enough for 8 MB+. **ASIC constraint:** still **one chip**, no multi-die / fancy banked access — pick a single parallel async SRAM (or on-die SRAM of that class) that fits the package. FPGA board may keep DDR3 behind the same port (first 8 MB used). Do not silently drop sheets. |
+| Heap | Re-check after MK compiles; mk.js allocates many objects/arrays — overflow must stay **loud**. No MK-only heap. |
+
+#### Compiler (blocks `RUN` before any VM)
+
+| Gap | Evidence in `MK.HTML` |
+|---|---|
+| **`new` on a dotted member** (`new mk.arenas.Arena(…)`, `new mk.moves.Attack(…)`, …) | **70** `new mk.…` call sites (**39** distinct ctor paths). Compiler stops at line 738 with `EXPECTED '('`. V2 compiler must accept `new Expr.Member(…)` (or an equivalent desugar), not only `new Ident(…)`. |
+
+#### Natives / language (emitted or required by this engine)
+
+| API / behavior | Evidence in `MK.HTML` | V2 action |
+|---|---|---|
+| **`for…in`** (→ needs working **`Object.keys`** on RTL, or a real `for…in` op) | **5** `for…in` loops (controllers, moves map, shim) | Implement **`Object.keys`** `CALL_NATIVE` on PYTHON + exec64 (and keep compiler lowering), **or** a dedicated `for…in` path — FPGA-SIM must not hit `fsite=4183` |
+| **`Math.round`** | **2** call sites (+ HTML shim today) | Add **`Math.round`** as a real `CALL_NATIVE` (same shape as `Math.floor`); remove the shim once present |
+| **`Math.floor` / `abs` / `min` / `max` / `random`** | Used | Already V1 — keep |
+| **`typeof`** | Used | Already V1 — keep |
+| **`setInterval` / `addEventListener` / `Image` / `drawImage` / `fillRect` / `fillText` / `createElement` / `querySelector` / `getElementById`** | Used | Already on Completeness tables — verify FPGA-SIM for MK load path |
+| **`mk.Promise`** | Custom ctor in-file (`new mk.Promise`), **not** ES `Promise`/`async` | No browser Promise ISA required if this stays a plain JS object; do **not** add `async`/`await` for MK |
+| **`Object.prototype.hasOwnProperty.call`** | Used in key-count helper | Must keep working `call` / prototype method dispatch under Value64 |
+
+**Not required by current `MK.HTML` (do not list as MK V2 drivers):**
+`Math.sin` / `cos` / `atan2` / `hypot` / `ceil` (not referenced), negative
+`setTransform` mirror (MK does not call `setTransform`), WebGL, Fetch, Audio.
+
+#### Canvas
+
+| Item | MK need |
+|---|---|
+| **3/5/9-arg `drawImage`** | Keep Complete — MK blits fighter/arena sheets |
+| Negative scale `setTransform` | **Not** an MK.HTML driver (optional wider parity; MKPVP avoided it with L/R sheets) |
+
+#### Explicitly still never (V2 does not mean “browser”)
+
+WebGL, Fetch/XHR, real audio graph, CSS layout engine, `eval`, workers,
+`window.open` as browsing, ES `async`/`await` — same as V1 **never** rows.
+
+**Done definition for V2.0:** `python3 tools/compile_js.py --html storage/MK.HTML`
+succeeds; asset bank is **8 MB** (or the chosen larger size) with the simple
+single-chip ASIC port rule; `LOAD "MK.HTML"` + `RUN` plays on PYTHON then
+FPGA-SIM (user F9) with **all 518 sheets**, **no** dropped ASET art, **no**
+`Object.keys`/`for…in` fault, **no** dotted-`new` compile error. Board after
+F9 approval.
 
 ---
 
@@ -251,12 +350,12 @@ like BASIC tokens.
 | `String.replace` + RegExp stub | P1 | PACMAN | Complete |
 | `Object.assign` / `Function.bind` | P1 | PACMAN | Complete |
 
-#### Language — future Math natives (not V1)
+#### Language — future Math natives (V2.0 backlog; not V1.0)
 
-Not in the three-compile ISA freeze. Do **not** grow V1 for these unless a
-product title emits them. When added, they are ordinary `CALL_NATIVE`s
-(same shape as `Math.floor`) on PYTHON + both execs — **never** title-gated
-RTL.
+Not in the three-compile ISA freeze. Do **not** grow **V1.0** for these
+unless a product title emits them. When scheduled, they are **V2.0**
+`CALL_NATIVE`s (same shape as `Math.floor`) on PYTHON + both execs — **never**
+title-gated RTL. See [Version 1.0 vs 2.0](#version-10-vs-20).
 
 `storage/ASTEROID.HTML` already ships without `Math.sin`/`cos`: it embeds
 64-entry `UX`/`UY` unit-vector arrays in the HTML. That is **authoring around
@@ -265,10 +364,10 @@ a missing general native**, not an FPGA-SIM / game hardwire. Real
 
 | API | Pri | Why (wider HTML5) | Status |
 |---|---|---|---|
-| `Math.round` | P2 | Common rounding (many uses outside the three) | future |
-| `Math.hypot` | P2 | Distance / collision | future |
-| `Math.sin` / `Math.cos` | P2 | Motion / FX (replaces title-side LUTs) | future |
-| `Math.ceil` / `Math.atan2` | P2 | Smaller but real game use | future |
+| `Math.round` | P2 | **`MK.HTML` V2.0** (2 call sites; shim today) | V2.0 — required for MK |
+| `Math.hypot` | P2 | Distance / collision (not used by current `MK.HTML`) | optional / later |
+| `Math.sin` / `Math.cos` | P2 | Motion / FX; ASTEROID uses LUTs instead (not used by current `MK.HTML`) | optional / later |
+| `Math.ceil` / `Math.atan2` | P2 | Smaller game use (not used by current `MK.HTML`) | optional / later |
 
 #### Language — do not implement (V1)
 
@@ -720,9 +819,10 @@ still has Invaders hex / 160×120 FB only.
 | Audio | stub | stub | stub | later |
 | WebGL / Fetch | no | no | no | NEVER |
 
-Library HTML (`ASTEROID`, `AURORA`, `JOYDEMO`, `MRDO`) uses the same V1 surface. MRDO is a
-**portrait** 384×480 tile title (side letterbox on 640×480). Do not stretch
-the cabinet raster.
+Library HTML (`ASTEROID`, `AURORA`, `JOYDEMO`, `MRDO`, `MKPVP`) uses the **V1.0**
+surface + [GAME_DESIGN.md](GAME_DESIGN.md) walls. **`MK.HTML` is the V2.0 goal**
+(not a V1 FPGA-SIM acceptance title). MRDO is a **portrait** 384×480 tile
+title (side letterbox on 640×480). Do not stretch the cabinet raster.
 
 ---
 
@@ -856,6 +956,8 @@ compat row Complete from Chrome or from a fat RTL snippet.
 | `storage/ASTEROID.HTML` | Library title (vector Asteroids). Authoring: [GAME_DESIGN.md](GAME_DESIGN.md) |
 | `storage/AURORA.HTML` | Library title (fillRect gem hopper) |
 | `storage/MRDO.HTML` | Library title (Mr. Do! arcade). Portrait 384×480 letterbox; [GAME_DESIGN.md](GAME_DESIGN.md) |
+| `storage/MK.HTML` | **V2.0 goal** — **518** sheets, **~4.63 MB** pixels → **8 MB** asset SRAM (ASIC: one chip, simple port), dotted `new mk.…`, `for…in`/`Object.keys`, `Math.round` — [§ Version 1.0 vs 2.0](#version-10-vs-20) |
+| `storage/MKPVP.HTML` | **V1.0** library (slim MK 2P). 3 ASET atlases; L/R sheets; no `for-in`/`Object.keys`; no negative mirror |
 | In-memory ProgramImage | Compile-on-RUN code + source map + descriptors + ASET; never a storage name |
 | `storage/JOYDEMO.HTML` | Library smoke (joystick / arrows on Canvas) |
 | `storage/games_*` | Upstream archive only |

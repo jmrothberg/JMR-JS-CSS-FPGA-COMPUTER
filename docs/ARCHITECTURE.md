@@ -250,6 +250,14 @@ ack            completion strobe (1+ cycles later; bridge may stall)
 top of bank           reserved (future FB / heap migration)
 ```
 
+**V2.0 asset bank (planned — not implemented):** rebuild to **8 MB** (or
+larger if a title needs it). Driver: `MK.HTML` ASET is **~4.63 MB** indexed
+pixels today. Keep the **same simple port** (`we`/`req`/`ack`, 16-bit data);
+widen `addr` for 8 MB+ words. **ASIC rule:** still **one external (or
+on-die) SRAM chip** — no multi-chip fancy access / bank gymnastics. FPGA
+board may use DDR3 behind the port (first 8 MB). Detail:
+[JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20).
+
 **ProgramImage container (JSB encoding + ASET):**
 
 - Header flags: bit0 = v2 trailer (existing), **bit1 = ASET present**. When
