@@ -57,41 +57,51 @@ Capacities on the poster match silicon (`jmr_js_vm.sv` / `jmr_js_vm_pkg.sv` /
 
 **ASIC board poster (Rev A proposal)** — QFN-100 chip + external 4 MB asset
 SRAM + HDMI transmitter carrier board, sibling style to the JMR BASIC ASIC
-board poster. Render **2026-08-21**. Regeneration prompt:
+board poster. Render **2026-08-21b**. Regeneration prompt:
 [POSTER_PROMPT_ASIC_BOARD_REV_A.md](POSTER_PROMPT_ASIC_BOARD_REV_A.md).
 
 ![JMR JS ASIC — Rev A board poster](jmr_js_asic_board_rev_a.png)
 
-### ASIC board poster errata (render 2026-08-21)
+### ASIC board poster errata (render 2026-08-21b)
 
-Most of the previous list is **cleared**: the frozen-vs-proposed banner, the
-`(Indicative Budget)` heading, the removal of `RRAM_CTRL`, Audio (PWM) = 2, a
-budget that sums to 100, `debug/tether`, `NAME.HTML titles`, the deleted
-compile-cache line, and the I2C joystick on `JOY_SCL` / `JOY_SDA` are all
-correct in this render. What is still wrong:
+This render fixed four of the five items from the previous pass. **Cleared:**
+the `4M × 20` / `2M × 16` contradiction (§4 now reads
+"ISSI IS61WV204816, 2M × 16 (4 MB) … Bus voltage TBD"); the duplicate `U1`
+buck regulator (the chain is now `F1` → `U1` → `U2`, and "500 mA" prints
+once); the pin-ring caption, which now disclaims **names as well as
+numbers** and points at the PIN SUMMARY table; and the video note, which now
+states "12 bits × 2 edges = 24 bits/pixel" and "8-bpp indexed: 256
+simultaneous colours from a 24-bit RGB888 palette".
 
-- **SYSTEM RULES §4 contradicts U8 on the same page.** The bullet reads
-  "External asset SRAM: **4M × 20**, 1.8 V"; the part is **2M × 16** (4 MB),
-  exactly as the U8 block in the board drawing says. The `4M × 20` figure was
-  carried forward from the previous render into the regeneration prompt and
-  should never have survived — corrected in the prompt now. The **1.8 V**
-  on that bullet is also doubtful: `IS61WV204816` is a 2.5 V/3.3 V part and
-  the poster's own I/O rail is 3.3 V. Treat the SRAM bus voltage as **TBD**,
-  not 1.8 V.
-- **Duplicate reference designator.** The power chain draws two adjacent
-  blocks both labelled "U1 Buck Regulator 3.3 V". There is one 3.3 V buck;
-  the second block should be a different designator or removed. "F1 Polyfuse
-  500 mA" likewise prints "500 mA" twice.
-- **QFN pin-ring labels are decorative and partly garbled** — `TES1_IN`
-  (should be `TEST_EN`), `GCES IN`, `DEEF` / `OEEF`, and `JOY_SCL` /
-  `JOY_SDA` do not appear on the ring at all. The poster already declares
-  pin numbers illustrative; extend that to the **names**. The **PIN SUMMARY
-  table is the authoritative pin list**, and it is correct.
-- **"true 24-bit color" needs its qualifier.** See the colour note below.
-- **J8 is drawn as a generic rectangular connector.** The label
-  "HDMI OUT (Type-A)" is right — it is an ordinary full-size HDMI receptacle
-  taking a standard HDMI cable. Only the glyph is wrong; nothing in the
-  design calls for a non-standard connector.
+Still open:
+
+- **J8 is still a plain vertical rectangle.** The label "HDMI OUT (Type-A)"
+  is correct — a standard full-size receptacle taking a standard HDMI cable
+  — but the connector body should be the Type-A trapezoid (wide top, shorter
+  bottom edge). This is the one requested fix the render did not take.
+- **Pin-budget caption arithmetic is garbled.** It prints
+  "… + 2 + 2 3 + 3 = 76 signal" — a `+` is lost near the end. The totals
+  either side are right (76 signal + 4 spare/NC = 80, + 20 power/ground =
+  100) and the PIN SUMMARY table itself is correct; only the running sum in
+  the caption is mangled. This is a **regression** — the previous render
+  printed it correctly.
+- **Spurious third bus label on the U5 → U8 path.** The drawing shows
+  `A[20:0] (21)`, then **`DQ[15:0] (21)`**, then `DQ[15:0] (16)`. The middle
+  one is wrong twice over — duplicated net, wrong width. There are exactly
+  two buses: `A[20:0] (21)` and `DQ[15:0] (16)`. Also a **regression**.
+- **QFN ring names remain decorative**, which the caption now admits. Known
+  issues if anyone reads them: `JOY_SDA`, `PS2_DATA`, and `LB#` are absent;
+  `RESET_N` and `TEST_EN` are drawn on two edges each; `EP` appears as a
+  ring pin when it is the exposed pad; and the supply names mix letters for
+  digits (`VDD_IV8`, `AVDD_0I8`) and use `VDD_0V33` where the rest of the
+  page says `VDD_IO` 3.3 V. **The PIN SUMMARY table is the pin list** — it
+  is correct, and it is what the caption points to.
+
+Everything else on the page is right: the frozen-vs-proposed banner, the
+`(Indicative Budget)` heading, no `RRAM_CTRL` row, Audio (PWM) = 2, the
+Spare / NC row, `debug/tether`, `NAME.HTML` titles, the absent compile-cache
+line, `exec64` in SYSTEM RULES §1, and the I2C joystick on `JOY_SCL` /
+`JOY_SDA` with the PH2.0 4-pin header and its 4.7 kΩ pull-ups.
 
 ### Colour: 8-bpp indexed, 24-bit palette, 24-bit wire
 

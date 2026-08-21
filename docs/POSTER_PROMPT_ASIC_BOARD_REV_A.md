@@ -168,6 +168,7 @@ A table with columns "Category", "Signal", "Count", "Power (Pins)",
 Final bold row: "TOTAL PINS" / "" / "80" / "20" / "100 pins"
 Caption under the table, exactly:
 "21 + 16 + 5 + 12 + 4 + 2 + 2 + 4 + 2 + 2 + 3 + 3 = 76 signal, + 4 spare/NC = 80, plus 20 power/ground = 100."
+(Every term in that caption is separated by a "+". Do not drop one.)
 (There is NO "RRAM_CTRL" row. Do not add one. The counts above sum to
 exactly 100 — do not alter any number.)
 Blue note box below the table:
@@ -196,7 +197,7 @@ Input, left edge:
 
 Centre — the chip:
 - Large box "U5  JMR JS ASIC  (Rev A / Arch V1)  100-PIN QFN"
-- Buses leaving the right side toward U8: "A[20:0]  (21)", "DQ[15:0]  (16)", and control "CE# (1)", "OE# (1)", "WE# (1)", "UB# (1)", "LB# (1)"
+- Buses leaving the right side toward U8: EXACTLY TWO — "A[20:0]  (21)" and "DQ[15:0]  (16)" — plus control "CE# (1)", "OE# (1)", "WE# (1)", "UB# (1)", "LB# (1)". Do not draw a third bus, do not repeat DQ, and never label DQ with a width other than 16.
 - Buses leaving the top-right toward U9: "RGB_DDR[11:0]  (12)", "HSYNC / VSYNC / DE / PCLK  (4)"
 - Other nets: "SPI_CS/SCK/MOSI/MISO  (4)", "UART_TX / UART_RX  (2)", "AUDIO_PWM  (2)", "JOY_SCL / JOY_SDA  (2)", "ALIVE / READY / GAME  (3)", "CLK_IN / RESET_N / TEST_EN  (3)"
 
@@ -247,6 +248,8 @@ DO NOT PLACE ANYWHERE ON THIS POSTER
 - a 6-pin GPIO joystick header, "Joystick (GPIO)", or "GP[5:0]" — the
   stick is I2C on both the FPGA prototype and the ASIC
 - a pin-count table whose rows do not sum to 100
+- a running-sum caption with a missing "+" between terms
+- a third or duplicated bus on the U5 → U8 path
 - "4M × 20" for the asset SRAM — the part is 2M × 16 (4 MB)
 - two blocks sharing one reference designator
 - "true 24-bit color" without saying the framebuffer is 8-bpp indexed
