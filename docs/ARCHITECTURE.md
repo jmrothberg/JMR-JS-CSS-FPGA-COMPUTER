@@ -39,6 +39,28 @@ fine print:
 - ASIC rung “~30 mm² die, custom padring, ~1 MB-class on-chip SRAM” is
   Constitution-frozen. **QFN-100** is a later Rev A package proposal and
   lives on the ASIC board poster, not this one.
+- **`.JSH` is dead and the poster still tells its story in five places**
+  (subtitle “fresh `.JSH`”, “fresh internal `.JSH` container”, “stale
+  `.JSH`”, panel C “invisible `.JSH` compile cache”, and the µSD row
+  “HTML titles + `.JSH` cache”). `RUN` compiles to an **ephemeral
+  in-memory ProgramImage**; nothing generated is ever written to the card.
+- Dispatch is **one decoder, `exec64`** — same exec32 retirement as the
+  core zoom-in poster. A non-Value64 image faults **code 9**.
+- Input: the stick is a **Mini I2C gamepad @ `0x5A` on Pmod JB**
+  (`SCL`=JB1, `SDA`=JB2), not the poster’s “Pmod digital joystick → GPIO
+  reader” / “Joystick GPIO”. Keyboard adds a **Pmod PS/2 on JA** fallback
+  behind the USB HOST (J15) path.
+- Panel title is garbled: “EXTERNAL SRA M ASET BANK” should read
+  **“EXTERNAL SRAM ASSET BANK (4 MB)”**.
+- Console verbs are **HELP / DIR / CLS / LIST / EDIT / MEM / NEW / RUN /
+  LOAD / SAVE / REMOVE** (`rtl/engines/jmr_console_engine.sv`), not the
+  poster’s “DIR / LOAD / EDIT / RUN / ESC”.
+
+**Re-rendering this poster:** the full image-generation prompt — every
+erratum above folded in, plus sizes and the board clock read out of the
+tree — is
+[POSTER_PROMPT_ARCHITECTURE_V1.md](POSTER_PROMPT_ARCHITECTURE_V1.md). When a
+good render lands, delete the bullets it fixes from the list above.
 
 **Core zoom-in poster** (sibling style to the JMR BASIC Processor Core
 zoom-in diagram) — the JS processor core itself: program sequencer,
