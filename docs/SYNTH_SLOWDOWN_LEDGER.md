@@ -377,7 +377,7 @@ names INVADERS `drawBitmap` + this cap.
 PYTHON F9 was never this slow (behavioral intern). Titles “used to work”
 on illegal combo/CAM/FSM pokes; legal SRAM + linear JOIN is the crawl.
 
-`GET_PROP` extra clocks at ~30 MHz were documented as playable
+`GET_PROP` extra clocks at core ≈100 MHz (MIG `ui_clk`; old notes said ~30 MHz wish) were documented as playable
 ([FPGA_FIT.md](FPGA_FIT.md) ~1 µs vs 16.7 ms/frame). **Full intern-table
 JOIN per HUD concat and per bitmap path is not in that budget.**
 
@@ -406,7 +406,7 @@ or `mem[i]` compare back inside `unique case`.
 |---|---|---|---|---|
 | **`S_JOIN_FIND`** | `jn_i++` through `names_n`; 2 clocks/slot | “not a 16-CAM” | Any title intern (`+`, join, HUD `fillText`); INVADERS play is the measured 64M miss | Last-hit intern cache (FFs, still one `name_hash_rdata` wait). Or hash-bucket. **Not** a CAM in unique case. **Not** a JOIN module. **Not** a title gate. |
 | `S_JOIN` / `S_CONCAT` / `S_IDXOF` | `jn_rd_arm` + `jn_slot_arm` + `jn_name_arm` (3 waits before one elem) | flatten: long then slot then name_hash | Every `arr.join` / `+` / `indexOf` | Keep waits (rdata is real). Do not merge into combo reads. |
-| `S_CONCAT` digit loop | one subtract/clock of `P10[cc_pi]` | serial integer fold | `"SCORE "+n` every HUD | Fine at 30 MHz if JOIN_FIND hits. JOIN is the long pole. |
+| `S_CONCAT` digit loop | one subtract/clock of `P10[cc_pi]` | serial integer fold | `"SCORE "+n` every HUD | Fine at core ≈100 MHz if JOIN_FIND hits. JOIN is the long pole. |
 | Timer due / compact | **one `to_delay` slot/clock** (“not 64 SRAM ports”) | flatten hunt | rAF/timer fire walks 64 | Sequential walk is legal; 64 combo ports are not. Leave unless a tiny due-FF set exists. |
 | cstack refill | **one slot/clock** into 2-deep window | flatten hunt | call/return | Keep window FFs; do not combo `cstack[i]` from unique case. |
 | `sin_q` / arc | 4 beats wait ROM | flatten: not function peek | `fillText`/arcs | Keep; not INVADERS play. |

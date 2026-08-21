@@ -221,7 +221,7 @@ LEGEND (bottom centre), three keyed lines:
 
 FOOTER BAR (full width, dark navy, reversed type)
 Left, large: "SIMPLE. DIRECT. NATIVE. JAVASCRIPT IN — PIXELS OUT."
-Right, two lines: "FPGA: Nexys Video XC7A200T" / "Core clock ~30 MHz (MIG ui_clk)"
+Right, two lines: "FPGA: Nexys Video XC7A200T" / "Core clock ≈100 MHz (MIG ui_clk)"
 
 DO NOT PLACE ANYWHERE ON THIS POSTER
 - "exec32", any decoder mux, or "two opcode decoders"

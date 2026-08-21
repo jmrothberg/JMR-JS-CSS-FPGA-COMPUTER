@@ -172,7 +172,7 @@ PANEL — "PROOF LADDER / F9 RUNTIMES"
 Four numbered rungs, each with a small icon:
 1. "PYTHON bytecode VM"  fine print "(functional model = behavioral truth)"
 2. "FPGA-SIM"            fine print "(real Verilator RTL — never a host twin)"
-3. "BOARD"               fine print "(Nexys Video, Artix-7 XC7A200T, core clock ~30 MHz = MIG ui_clk)"
+3. "BOARD"               fine print "(Nexys Video, Artix-7 XC7A200T, core clock ≈100 MHz = MIG ui_clk)"
 4. "ASIC"                fine print "(~30 mm² die, custom padring, ~1 MB-class on-chip SRAM)"
 Caption under the ladder, two lines:
 "Same typed glass on every rung. The HTML decides the keys"
@@ -251,5 +251,5 @@ written to (`ARCHITECTURE.md:223`, `:310`).
 | 12 | Keyboard | USB HOST only | add Pmod PS/2 on **JA** fallback | `FPGA_BRINGUP.md:131` |
 | 13 | Console verbs | "DIR / LOAD / EDIT / RUN / ESC" | HELP, DIR, CLS, LIST, EDIT, MEM, NEW, RUN, LOAD, SAVE, REMOVE | `jmr_console_engine.sv:500-600` |
 | 14 | On-chip sizes | unsized | code BRAM 32K×32, source buffer **64 KB**, string/name heap **32 KB**, sprite scratch **32 KB** | `jmr_console_engine.sv:97`, `jmr_js_vm.sv:566,978` |
-| 15 | Board rung | "XC7A200T" | add core clock **~30 MHz = MIG `ui_clk`** | `top_nexys_video.sv:88`, `FPGA_FIT.md:7` |
+| 15 | Board rung | "XC7A200T" | core clock **≈100 MHz = MIG `ui_clk`** (not an old 30 MHz wish) | `top_nexys_video.sv` `core_clk=ui_clk`, `mig_a.prj`, `FPGA_FIT.md` |
 | 16 | Card titles | 3 named | 10 on the card — name a handful and mark it a sample | `storage/` |

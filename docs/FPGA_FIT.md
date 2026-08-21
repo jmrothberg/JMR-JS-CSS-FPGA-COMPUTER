@@ -6,6 +6,14 @@ Nexys Video **XC7A200T** (365 BRAM tiles, 134,600 LUTs). Agent does
 Same `rtl/*.sv` as FPGA-SIM. Law: `.cursor/rules/never-fake-fpga-sim.mdc`.
 One JS heap. No JOIN/JSON/GC extract. Extra clocks OK.
 
+**Board core clock (fact, not a goal):** `core_clk` **is** MIG
+`ui_clk` ≈ **100 MHz** today (`tools/board_flow/mig_a.prj`: DDR
+`TimePeriod` 2500 ps → 400 MHz memory, PHY **4:1** → `ui_clk` 100 MHz;
+`rtl/top_nexys_video.sv` `assign core_clk = ui_clk`). Older notes that
+said “~30 MHz” were a wish from the BASIC board era — **not** what this
+tree wires. Changing speed means changing MIG / that assign, then a full
+rebuild — Vivado does not pick a slower clock for you.
+
 Diaries: [OLD_RUNS.md](OLD_RUNS.md). Glass: [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
 Phase 3b procedure: [REMOVING_EXEC32.md](REMOVING_EXEC32.md).
 External port map: [ARCHITECTURE.md](ARCHITECTURE.md) § External SRAM.

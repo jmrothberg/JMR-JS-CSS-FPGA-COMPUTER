@@ -173,7 +173,7 @@ Canvas engines instead of a borrowed Z80.
 **ASIC advantage — for this class of machine, not versus Chrome.** One
 machine, not two: die goes to heap SRAM, dual FB, blitter, and the 4 MB
 asset port, not a general CPU plus a runtime in DRAM. `fillRect` /
-`drawImage` / rAF / `GET_PROP` are datapaths (extra clocks at ~30 MHz still
+`drawImage` / rAF / `GET_PROP` are datapaths (extra clocks at core ≈100 MHz MIG `ui_clk` still
 hit a 60 Hz frame). Caps are frozen and compile as SRAM; overflow is loud.
 No OS, no JIT warmup, scanout from the on-chip front FB. It will **not**
 beat a 1 GHz ARM + a browser on raw JS or run the whole web. It competes
