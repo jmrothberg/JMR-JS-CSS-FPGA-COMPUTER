@@ -12,15 +12,230 @@ session on top, each entry keeping the *evidence* and the *root cause*,
 because the same bug classes keep recurring (parent/exec dual-copy skew,
 `*_rdata` lag consumed a beat early, missing first-entry guards on
 exec-entered states, one-shot mask fall-through). Entries are marked
-FIXED / OPEN / RETRACTED in place. **Open at 2026-08-21: #70** (queue-hash
+FIXED / OPEN / RETRACTED in place. **Open at 2026-08-21 (evening): #70** (queue-hash
 parity), **#71** (fault-state checkpoint parity), **#72** (class-in-IIFE
-ctor allocates ~950 objects). Everything else on this page is closed.
+ctor allocates ~950 objects — NOTE: now faults 3 at ~768 with the
+shrunk heap, still an authoring pathology). Everything else closed,
+including same-day #73/#74.
 
 Inspection of the play path: `rtl/engines/jmr_js_vm.sv` (parent FSM),
 `jmr_js_vm_exec64.sv` (the only decoder since 2026-08-21), `sim/sim_main.cpp`, vs
 `hardware_model/js_vm.py`, plus `storage/*.HTML` and
 [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md). No traces. No FPGA-SIM
 rerun.
+
+## Session 2026-08-21 (night) — #79 OPEN: PACMAN heap explosion is PRE-EXISTING; caps finalized at 960/16/256/19456
+
+**#79 — OPEN: PACMAN's object/array demand explodes over minutes of
+play/attract and eventually kills ANY heap cap.** The user's
+"bounces to READY after 4-5 minutes" is this, and it PREDATES the fit
+pass: the 2026-08-20 (pre-fit) tree failed the same pytest with
+**obj=1024 PEGGED** and fault 3 at rafcall=103. Today's caps only move
+the time of death (768 → pegged at rafcall≈33; 960 → objects fit at 921
+but the pathfinder's frontier array hit the hard ARR_CAP=128, fault 3
+fsite=5218 at ip 822).
+
+Evidence pinned by the fault trace: ip 822 = `new_list.push(to)` in
+PACMAN's BFS pathfinder (`_render`/`next` around HTML line 212). The
+frontier is guarded by `if (!steps[to.y][to.x])` — a 31-row
+array-of-arrays of visited marks. A frontier > 128 on a 28-wide maze
+means the GUARD IS FAILING (visited cells re-enqueue), which also
+explains the object churn (four `{x,y}` literals per expanded cell).
+Prime suspect: nested-array element reads/writes (`steps[y][x]`)
+degrading after GC — use-after-recycle of the row arrays or an
+element-marking gap — i.e. recurring class 1/gen-match territory. NOT
+caused by the fit caps; raising caps will not fix it.
+
+The two residual suite failures (test_pacman_fpga_sim_enter_paints_maze,
+test_donkey_fpga_sim_enter_keeps_raf) are this same pre-existing class
+plus the documented _wait helper flakiness — they were failing before
+the fit pass too.
+
+**Caps finalized (user call: keep object headroom near 1024):**
+MAX_OBJ **960** (safe non-pow2 via OBJ_PHYS=1024), ENV_DEPTH **256**
+(validated: envl≈140 live in play), MAX_ARR_LONG **12** (peak 2;
+INVADERS bunkers 4), CODE_WORDS **20480** (the HM suite's extended
+PACMAN image is 19527 words). Paper BRAM
+~365/365 — knife-edge, accepted eyes-open; the one-line fallback if
+place overflows is MAX_OBJ=896 (-5 tiles). All five cap sites in sync:
+parent, pkg, HM, jsb_format, sim_main.
+
+## Session 2026-08-21 (evening) — #77 listener dual-copy skew, #78 promote resume skew: the REAL DONKEY and INVADERS bugs
+
+The user's play reports survived the #74/#76 fixes and forced two more
+rounds. Both real causes are RECURRING CLASS 1 (dual-copy skew) — worth
+reading together as a case study in why that class is #1.
+
+**#77 — FIXED: removeEventListener compacted only EXEC's listener table.**
+User evidence: DONKEY still flipped Mario→Luigi, now traced to a REAL
+in-game ArrowRight (not a phantom key). DONKEY removes the charsel
+`choose` listener at game start (`removeEventListener("keydown",
+this.choose)`) — correct JS, works in Chrome and PYTHON. The RTL keeps
+TWO listener tables: exec64's copy (compacted by the remove, count
+handshake updated) and the parent's copy (read by the kev dispatch walk)
+— the compaction strobe `e64_vlistener_repl` reached the parent's port
+list and was NEVER APPLIED. After a mid-dispatch remove the walk ran the
+REMOVED listener and dropped a live one. Minimal repro: remove-inside-
+dispatch left the removed listener firing and lsn counting the other one.
+Fix: the removee (ev, fn) rides the single-slot wdata channel on the repl
+beat and the parent compacts its own copy — over ALL 16 slots, skipping
+UNDEFINED pairs, because on the apply beat the muxed count is already the
+NEW value.
+*Verification lesson: two earlier "Mario→Luigi fixed" verdicts (#phantom
+edges, #74) passed because the probe idled in-game. Verify with the
+user's actual gesture — press the arrow IN the game.*
+
+**#78 — FIXED: exec-requested S_ARR_PROMOTE resumed the decoder on stale
+state — every promote after the first lost its boundary element.** User
+evidence: INVADERS bunkers 2/3/4 drew with a one-block hole at the same
+cell — cells[32], the exact ARR_SHORT_CAP promote boundary — on the
+INITIAL screen (bunker 1 clean; PYTHON and Chrome clean). Beat-level
+$fdisplay tracing proved: promote copy correct, boundary WRITE correct
+when it happens, ip stable — but on resume the promote jumped straight
+back to S_V64_EXEC with a STALE code_rdata and a stale eval-stack
+window. CALL_METH push then read its receiver one slot off (got the
+pushed OBJECT, not the array), arr_ok failed, and the push fell into the
+generic method path and vanished: len never bumped, pushes 33+ landed
+one slot early, slot 32 held the NEXT iteration's object ({n:33}) whose
+`alive` read undefined — the hole. The FIRST promote survived only
+because its stale window happened to be coherent.
+Fix: exec-requested promotes resume through the standard
+`hs_ip(e64_ip_q); hs_code(ops_base+e64_ip_q); hs_st(S_FETCH_WAIT)` path
+(same idiom as every other parent state) — the re-decoded push cannot
+re-promote because `varr_long` is now set. Parent-requested promotes
+(JSON parse) keep their direct return.
+*Lesson (add to class 3, first-entry guards): the guard family has a
+mirror — the LAST-EXIT rule. A parent state that exec entered must
+return through S_FETCH_WAIT with a re-armed fetch, never jump directly
+to S_V64_EXEC; the decoder's comb inputs (code_rdata, the vst window,
+every *_rdata) are otherwise whatever the interrupted flow left behind.
+S_ARR_PROMOTE was the only state that broke this rule.*
+
+Verified after both fixes: minimal repros green (8/8 arrays, 4/4
+class-ctor bunkers, removed listener stays dead), INVADERS bunkers
+identical, and the previously-failing checkpoint/title suite tests
+rerun.
+
+## Session 2026-08-21 (afternoon) — #76 physical-vs-logical depth: the cap shrinks corrupted adjacent state
+
+**#76 — FIXED: slice-width writes into shrunk side arrays are OOB in the
+Verilated model.** User evidence: INVADERS draws its initial screen with
+one missing bunker cell at the SAME position — row 2, col 10 — in every
+bunker except the first (PYTHON and Chrome clean); PACMAN silently
+bounced to READY (no error text = not a capacity fault) minutes into
+play; DONKEY confirmed fixed.
+
+Cell (2,10) is `cells[32]` — the 33rd push, the exact `ARR_SHORT_CAP`
+short→long promote boundary. The per-handle side arrays (`vobj_alloc`,
+`vobj_gen/len/cls/builtin/mark/proto`, `vfn_*`, `venv_valid/gen/len/
+parent/mark`, `env_cap`, `vlong_used`) are written through FIXED-WIDTH
+slices (`[9:0]` obj, `[8:0]` env, `[6:0]` long) at the exec-write block,
+the pokes, and the GC. When the caps were 1024/512/128 the slice width
+equalled the depth, so any sliced index was architecturally in-bounds.
+After the fit-pass shrink to 768/256/32, a sliced write above the cap
+became an **out-of-bounds write over whatever member sits next in the
+Verilated model** — deterministic adjacent-state corruption. First
+victim: the promote path's boundary element on every promote after the
+first. PACMAN's silent death is the same corruption reaching the
+rAF/listener state (script "ends", VM halts cleanly, monitor READY).
+
+**Fix — physical depth = 2^slice-width, logical cap unchanged:** the 25
+side arrays keep 1024/512/128 physical rows (`OBJ_PHYS`/`ENV_PHYS`/
+`LONG_PHYS`); allocation is still bounded by `MAX_OBJ=768`/
+`ENV_DEPTH=256`/`MAX_ARR_LONG=32`, and rows above the cap are inert (no
+scan reads them). The BRAM savings survive intact: the big slot arrays
+(`vobj_slot` 24576, `venv_slot` 4096, `varr_slot` 53248, `code_mem`
+20480) use COMPUTED addresses from claim-bounded values, not slices.
+Also sliced the one full-width writer (`vlong_used[varr_lidx_rdata]` →
+`[6:0]` in the GC sweep).
+
+*Lesson (new recurring class): a pow2 cap is load-bearing geometry.
+Before shrinking any cap, grep every write to every array sized by it —
+if writes go through bit slices instead of compared indices, the
+physical depth must stay 2^slice-width or every slice must be re-audited.
+The non-pow2 caps that already existed (MAX_ARR_SHORT 1536) are
+compare-guarded precisely because they were never pow2.*
+
+## Session 2026-08-21 (later) — #75 stale harness caps, INVADERS bunker verdict, PACMAN 5-min fault open
+
+**#75 — FIXED (harness, class-5): sim_main's heap-scan constants lagged the
+RTL cap shrinks.** `VM_MAX_OBJ`/`VM_MAX_ARR`/`VM_ENV_DEPTH` in
+`sim/sim_main.cpp` stayed at 1024/1664/512 while the RTL arrays shrank to
+768/1568/256 — every `VMSTAT obj=`/`arr=` scan read past the end of the
+Verilated arrays and counted garbage (INVADERS printed `obj=772` with a
+768-cap heap, which cost an hour chasing a phantom allocator overflow;
+the claim paths are in fact compare-bounded and the caps are safe).
+Constants synced + a new `envl=` live-env stat added. *Lesson: the C++
+harness is a FIFTH copy of the cap numbers — add it to the drift
+checklist alongside parent/pkg/HM/jsb_format.*
+
+**INVADERS "bunker holes" — NOT A BUG.** Bunkers are ~124 `{x,y,alive}`
+cells; alien bombs call `Bunker.hitAt(cx,cy,2)` ("bunker blocks alien
+bombs", max 3 arcade bombs) and carve a ~1-block crater. Three top-edge
+craters at score 0 after a minute of marching is the game working as
+designed. PYTHON shows different damage because `Math.random` is a
+different sequence there (LFSR vs Python RNG) — bomb columns/timing will
+never match across runtimes. Headless RTL at wave start reproduces
+intact bunkers.
+
+**PACMAN faults to monitor after ~5 minutes of GUI play — OPEN, under
+measurement.** Steered headless play is clean past 220 frames (~15
+GUI-minutes equivalent), so the trigger is something the synthetic
+steering does not do (ghost-eat popups, death/restart, level clear) or a
+slow env climb against the shrunk ENV_DEPTH=256. Note the FM census that
+sized the caps was **splash-biased for some titles** (its key injection
+never started INVADERS: census said 87 objects, in-game reality is ~570
+— 55 invaders + ~496 bunker cells). The `envl=` stat exists precisely to
+re-census in-play on RTL. If env climbs: ENV 384 costs +4 tiles
+(budget 360/365); a monotonic climb would instead mean a retention bug
+worth finding. Ask the user what error text the monitor printed —
+the fault code names the resource.
+
+## Session 2026-08-21 (fit pass) — #73 imgd handshake lock, #74 DONKEY phantom second window
+
+Context: the T200 fit pass ([FPGA_FIT.md](FPGA_FIT.md)) moved `imgd_pix`
+to external SRAM, shrank MAX_OBJ/MAX_ARR_LONG/ENV_DEPTH/CODE_WORDS to
+measured envelopes, and constant-folded the 33 execution reads of
+`jsb_flags[3]` (`v64_on`). Two regressions shipped in the first build and
+were caught by the user's play test within the hour.
+
+**#73 — FIXED: PACMAN froze after splash (imgd req/ack anti-phase lock).**
+The new `imgd_pend` flag was cleared in the FSM's per-beat default
+section — the line where the old `imgd_we` BRAM strobe used to live.
+`imgd_pend` is handshake STATE (held until `sram_ack`), not a strobe.
+The SRAM model's ack is a one-beat pulse that re-fires every other beat
+while req is held; with `imgd_pend` flapping at the same period the two
+locked anti-phase and the ack was never consumed — S_IMGD_GET wedged at
+the maze cache, which is "froze right after the splash". Fix: the flag
+is not in the default-clear block. Evidence: PACMAN then played 40
+frames, fault=0, `imgd=307199/307200`.
+*Lesson (new sub-class of the shared-scratch pattern): when converting a
+strobe-based path to a req/ack path, every flag that survives more than
+one beat must move OUT of the default-clear section — grep the default
+block for the signal name before reusing a line.*
+
+**#74 — FIXED: DONKEY Mario→Luigi returned (second phantom-arrow window).**
+The 2026-08-20 fix cleared captured KEYBITS joy edges when a real KEYEVT
+DISPATCHED — which requires the real event to already be in kev_q. The
+surviving window: an edge captured at a frame_tick while `vlistener_n`
+was momentarily 0 (DONKEY re-registers listeners on screen swap) or
+before the KEYEVT RPC landed. That edge sat armed and converted into a
+synthetic arrow at the first eligible frame — seconds into the game,
+flipping the charsel listener's character. Fix: the KEYEVT ENQUEUE
+strobe also clears both edge registers and re-baselines `prev_joy`, so
+captured edges only ever convert for a real joystick (KEYBITS with no
+KEYEVT twin — the JB stick). Safe against same-beat capture: the strobe
+never coincides with frame_tick (own RPC window). Evidence: GUI-faithful
+charsel (KEYBITS+KEYEVT both channels), then 150 idle frames — histogram
+stable, no flip, `kevq=0/0`.
+*Lesson: a "fixed" race deserves a search for its siblings — the fix
+condition ("already queued") was narrower than the capture condition.*
+
+Also measured, not a bug: MAX_OBJ 768 raises PACMAN's forced-GC rate
+from ~4 to ~10 per frame (obj rides ~690). Correct, slower; the GC
+pacing item in [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md) is
+the antidote, and MAX_OBJ is the first lever to revisit if a title
+faults 3.
 
 ## RECURRING BUG CLASSES — read this before debugging anything
 

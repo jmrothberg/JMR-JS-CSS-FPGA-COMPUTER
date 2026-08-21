@@ -91,9 +91,9 @@ module jmr_js_core #(
     // NEW: 4 MB external asset SRAM (jmr_sram_port) — console writes the ASET
     // payload during RUN load; the VM blitter reads sprite pixels while running.
     // The two masters never overlap (load completes before vm_start).
-    logic        cons_sram_req, cons_sram_we, vm_sram_req;
+    logic        cons_sram_req, cons_sram_we, vm_sram_req, vm_sram_we;
     logic [20:0] cons_sram_addr, vm_sram_addr;
-    logic [15:0] cons_sram_wdata, sram_rdata;
+    logic [15:0] cons_sram_wdata, vm_sram_wdata, sram_rdata;
     logic        sram_ack, sram_req, sram_we;
     logic [20:0] sram_addr;
     logic [15:0] sram_wdata;
@@ -314,14 +314,18 @@ module jmr_js_core #(
         .fb_dump_back(dump_back_rdata),
         .fb_dump_front(dump_fb_rdata),
         .sram_req(vm_sram_req), .sram_addr(vm_sram_addr),
+        .sram_we(vm_sram_we), .sram_wdata(vm_sram_wdata),
         .sram_rdata(sram_rdata), .sram_ack(sram_ack)
     );
 
-    // NEW: asset-SRAM arbiter — console (load) wins; VM only reads while running
+    // Asset-SRAM arbiter — console (load) wins; the VM reads sprite pixels
+    // and, since 2026-08-21, also streams the ImageData snapshot (read AND
+    // write) at the top of the bank. The two masters still never overlap
+    // (load completes before vm_start).
     assign sram_req   = cons_sram_req | vm_sram_req;
-    assign sram_we    = cons_sram_req ? cons_sram_we : 1'b0;
+    assign sram_we    = cons_sram_req ? cons_sram_we : vm_sram_we;
     assign sram_addr  = cons_sram_req ? cons_sram_addr : vm_sram_addr;
-    assign sram_wdata = cons_sram_wdata;
+    assign sram_wdata = cons_sram_req ? cons_sram_wdata : vm_sram_wdata;
 
     // NEW: behavioral 4 MB SRAM (FPGA-SIM, SRAM_INTERNAL=1). Board uses
     // #(.SRAM_INTERNAL(0)) and the MIG DDR3 bridge on these ports.

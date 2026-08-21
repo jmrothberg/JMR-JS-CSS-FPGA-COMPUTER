@@ -12,6 +12,15 @@ what this file tracks; it is what makes the real FPGA fast or slow. (b)
 the netlist shrink alone, measured 2026-08-21), which only affects how
 long FPGA-SIM takes on the workstation. A win in (a) helps both.
 
+**2026-08-21 (fit pass) deltas — remeasure after the next profile:**
+the object heap shrank to 768 (PACMAN rides ~690), which raised forced
+GC from ~4 to ~10 runs/frame — the GC line below is now UNDERSTATED, and
+the "GC frame-end skip / pacing" item is promoted to the top of this
+ledger. `putImageData`/`getImageData` now stream over the external SRAM
+port (~2-3 clk/px vs 2, plus ack), so S_IMGD_PUT is modestly slower on
+the board path. Both were deliberate fit-for-speed trades
+([FPGA_FIT.md](FPGA_FIT.md)).
+
 # Measured clock sinks — PACMAN play frame (2026-08-20, STATEHIST?)
 
 3.5M clk/frame, 4 GC runs/frame. The whole frame, ranked:

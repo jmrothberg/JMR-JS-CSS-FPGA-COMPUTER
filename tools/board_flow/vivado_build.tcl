@@ -139,9 +139,14 @@ set_property top top_nexys_video [current_fileset]
 set_property verilog_define {SYNTHESIS=1} [current_fileset]
 set_property STEPS.WRITE_BITSTREAM.ARGS.BIN_FILE true [get_runs impl_1]
 # Default Vivado strategy — Explore took 30m and still missed WNS; fix RTL instead
-# Later bits: reuse synth/impl DCPs when RTL change is small
-catch {set_property AUTO_INCREMENTAL_CHECKPOINT 1 [get_runs synth_1]}
-catch {set_property AUTO_INCREMENTAL_CHECKPOINT 1 [get_runs impl_1]}
+# AUTO_INCREMENTAL_CHECKPOINT is BANNED (2026-08-21): the 04:11 place-fail
+# netlist was an incremental stitch against the pre-exec32-delete reference
+# checkpoint — it contained the core's framebuffers TWICE (u_core/u_fb AND
+# u_corei_10/u_fb, 658 = 338 VM + 160 FB + 160 stale FB) and ~2x logic.
+# Incremental synth after big RTL/file-list changes produces garbage netlists
+# that place cannot fix. Full resynthesis every bit until the design is stable.
+catch {set_property AUTO_INCREMENTAL_CHECKPOINT 0 [get_runs synth_1]}
+catch {set_property AUTO_INCREMENTAL_CHECKPOINT 0 [get_runs impl_1]}
 # UG904: write a DCP after each *impl* step (opt/place/route). synth_design
 # is one step — first DCP is at synth_1 100%. Cannot resume mid-mapping.
 catch {set_param project.writeIntermediateCheckpoints 1}

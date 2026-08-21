@@ -39,12 +39,12 @@ MAX_CONSTS = PROGRAM_MAX_CONSTS
 MAX_VARS = PROGRAM_MAX_VARS
 STACK_DEPTH = 2048
 CALL_DEPTH = 128
-MAX_OBJECTS = 1024
+MAX_OBJECTS = 960  # 2026-08-21(2): mirrors RTL; 768 pegged in PACMAN play
 # Two-tier arrays: leftover BRAM cannot hold 1024×128. Same 65536 × 64b
 # words as 1024×32+256×128; more short handles for nested map literals plus
 # wall/bean JSON clones (~1152), fewer long (bunker push still fits).
 MAX_ARRAYS_SHORT = 1536
-MAX_ARRAYS_LONG = 128
+MAX_ARRAYS_LONG = 12  # 2026-08-21(3): mirrors RTL
 MAX_ARRAYS = MAX_ARRAYS_SHORT + MAX_ARRAYS_LONG
 HEAP_SLOTS = MAX_OBJECTS  # Backward-compatible name for the object heap cap.
 OBJECT_SLOTS = 32
@@ -52,7 +52,7 @@ ARRAY_SHORT_CAP = 32
 ARRAY_ELEMENTS = 128
 # One env per live call/closure. `new Ctor()` bodies that MAKE_FN keep that
 # ctor env for as long as those closures live (empty update/draw on instances).
-ENV_DEPTH = 512
+ENV_DEPTH = 256  # 2026-08-21 fit: mirrors RTL (measured peak 157)
 ENV_SLOTS = 16
 RAF_QUEUE_DEPTH = 8
 TIMER_QUEUE_DEPTH = 64

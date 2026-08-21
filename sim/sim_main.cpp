@@ -21,15 +21,15 @@ static Vjmr_js_core* top = nullptr;
 
 // CHECKPOINT/OBJPEEK peek 1-D SRAM (not a third hardware port).
 // Match rtl/engines/jmr_js_vm.sv two-tier arrays (1536×32 + 128×128).
-static const unsigned VM_MAX_OBJ = 1024u;
+static const unsigned VM_MAX_OBJ = 960u;   // MUST track rtl MAX_OBJ (bug #75: stale caps here count OOB garbage)
 static const unsigned VM_OBJ_SLOTS = 32u;
 static const unsigned VM_MAX_ARR_SHORT = 1536u;
 static const unsigned VM_ARR_SHORT_CAP = 32u;
-static const unsigned VM_MAX_ARR_LONG = 128u;
-static const unsigned VM_MAX_ARR = 1664u;
+static const unsigned VM_MAX_ARR_LONG = 12u; // track rtl
+static const unsigned VM_MAX_ARR = 1548u;  // SHORT+LONG; track rtl
 static const unsigned VM_ARR_CAP = 128u;
 static const unsigned VM_VARR_SHORT_WORDS = VM_MAX_ARR_SHORT * VM_ARR_SHORT_CAP;
-static const unsigned VM_ENV_DEPTH = 512u;
+static const unsigned VM_ENV_DEPTH = 256u; // 2026-08-21 fit: track rtl
 static const unsigned VM_ENV_SLOTS = 16u;
 static inline unsigned vobj_addr(unsigned h, unsigned s) {
     return (h * VM_OBJ_SLOTS) + s;
@@ -1291,6 +1291,16 @@ int main(int argc, char** argv) {
                 std::cout << narr;
             } else
                 std::cout << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_arr);
+            // 2026-08-21: live env count — ENV_DEPTH shrank to 256 and the
+            // titles' env peaks were measured on splash-biased data; this
+            // makes the real in-play margin visible in every VMSTAT.
+            {
+                unsigned nenv = 0;
+                for (unsigned i = 0; i < VM_ENV_DEPTH; i++)
+                    if (r->jmr_js_core__DOT__u_vm__DOT__venv_valid[i])
+                        nenv++;
+                std::cout << " envl=" << nenv;
+            }
             std::cout
                       << " spr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_spr)
                       << " kd=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__kd_fn)

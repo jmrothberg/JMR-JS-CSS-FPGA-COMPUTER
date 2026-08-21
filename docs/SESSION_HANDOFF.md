@@ -1,44 +1,44 @@
 # Session handoff
 
-## CURRENT STATE — 2026-08-21: V1.0, SYNTHESIS-READY (read this first)
+## CURRENT STATE — 2026-08-21 (evening): FIT PASS LANDED — next build is `bit-fresh`
 
-Banner is **V1.0** (RTL + PYTHON + README in parity). The tree is the
-one the user synthesizes — see the READY FOR SYNTHESIS block at the top
-of [FPGA_FIT.md](FPGA_FIT.md). Landed and smoke-verified on the final
-build (all five titles green: DONKEY Mario-stable charsel + game,
-PACMAN full game with banks in sync, INVADERS wave, ASTEROID vectors,
-MRDO tap→PLAY):
+The 04:11 place-fail was diagnosed (three causes: an incremental-stitch
+duplicate netlist, real BRAM over-budget, and the dead tagged twin) and
+the fit pass landed the same day: `imgd_pix` → external SRAM top-of-bank,
+measured cap shrinks (MAX_OBJ 768 / MAX_ARR_LONG 32 / ENV_DEPTH 256 /
+CODE_WORDS 20480, all mirrored in pkg + HM + jsb_format), the `v64_on`
+constant fold that lets Vivado sweep the tagged twin, ram_style pinning,
+and the flow fix (`AUTO_INCREMENTAL_CHECKPOINT 0`). Two same-day
+regressions — **#73** PACMAN imgd req/ack freeze, **#74** DONKEY
+phantom-arrow second window — were fixed and play-verified (PACMAN 40
+frames `imgd=307199/307200` fault=0; DONKEY 150 idle frames, no flip).
+Paper budget ~356/365 tiles. Full story + the REQUIRED next command
+(`source scripts/vivado_env.sh && make -C tools/board_flow bit-fresh`):
+[FPGA_FIT.md](FPGA_FIT.md). Bugs: [potential bugs.md](potential%20bugs.md).
 
-- **exec32 REMOVED** — file deleted (user waiver; git history keeps
-  it), instantiation gone, dropped from sim/Makefile and
-  vivado_build.tcl, hs32 tied 0, tagged images fault loud at
-  S_GOT_HDR2 (fault 9). Verilator eval +16% from the smaller netlist.
-  Phase 3b (tagged-arm strip + dead-signal sweep + tagged stack SRAM
-  removal) is still TO DO — post-synthesis.
-- **Port A'd**: vgc_queue, vconsts, vobj_proto, vfn_proto, vfn_env,
-  vfn_bound_this, venv_parent (`*_pa_we/waddr/wdata` strobes, write
-  port in the read process, cleared in the FSM default section).
-- **Shrinks**: spr_mem 32KB, source_mem 64KB.
-- **Suite**: 143+ passing; remaining deltas are documented xfails
-  (#70/#71/#72) and the recalibrated DONKEY two-Enter / MRDO-budget /
-  PACMAN-wait-helper tests. Test harness uses a scratch card copy
-  (JMR_CARD_IMG) — the user's card.img stays clean.
-- **Value64 gap fixes this cycle**: #69 rAF snapshot clobber,
-  events-then-rAF per frame (dbg_cb_ip per-frame), KEYBITS bridge (+
-  real-KEYEVT supersede — the DONKEY Mario→Luigi phantom),
-  dispatchEvent + KeyboardEvent desugar, findIndex, join digit-walk,
-  ctx.font revive, natural-size drawImage scaling, replace char,
-  dynstr indexOf, halt-state sync.
-- **MK.HTML parked** (user decision): parses past the shims (unary +,
-  for-in via new Object.keys native 41 — PYTHON-only, RTL nid faults
-  loud; throw; `in`), blocked on namespaced ctors + Fn.call —
-  ~100-150 lines of exec64 when wanted, AFTER synthesis.
-- **Synthesis run**: `source scripts/vivado_env.sh` then
-  `make -C tools/board_flow bit` (host terminal, not a sandbox; the
-  .venv is irrelevant to synthesis). No bit-fresh/clean after a crash.
-- **Next after the user's run**: read utilization_synth.rpt,
-  fill the FPGA_FIT Headline, then the speed ledger items (FIND step
-  2, IMGD_PUT 2→1, GC pacing) and Phase 3b.
+## PREVIOUS STATE — 2026-08-21 (morning): V1.0 glass OK; fit FAILED place
+
+Banner is **V1.0**. All five titles play on FPGA-SIM. User `make bit`
+(2026-08-20 20:53 → 08-21 04:35): **synth_1 completed**, **place failed**
+on over-util (LUTs ~1424%, BRAM ~181%). Repair brief + ordered fix list:
+**[FPGA_FIT.md](FPGA_FIT.md)** (Headline filled). Diary: [OLD_RUNS.md](OLD_RUNS.md).
+
+- **Next fit work:** follow the **one-pass ~90% plan** in
+  [FPGA_FIT.md](FPGA_FIT.md) (Phase 3b → external cold buffers →
+  measure V1 peaks and right-size heap/code BRAM → BRAM whitelist →
+  Port A survivors → paper budget ≤340 → **one** `make bit`). Do not
+  synth until the spreadsheet closes. Keep hot heap/FB/code on BRAM;
+  do not park the JS heap on DDR3.
+- **exec32 Cut A only:** module deleted, `hs32` tied 0, tagged images
+  fault 9. **Phase 3b NOT done** — `gc_queue` / tagged `stack` / `tfn_*`
+  / … still in the netlist (this place run still mapped them as LUTRAM).
+  Port A on live `vgc_queue`/vconsts/vobj_proto/vfn_*/venv_parent;
+  spr_mem 32KB / source_mem 64KB. Port A monsters demoted this run —
+  budget, not missing strobes.
+- **Suite / glass / MK.HTML parked / Value64 fixes** — unchanged; do not
+  mix speed or title work into the fit pass.
+- User re-runs: `source scripts/vivado_env.sh && make -C tools/board_flow bit`.
+  No bit-fresh/clean; synth stays 2 threads.
 
 ---
 
@@ -88,9 +88,9 @@ matters here is what those runs *taught*, and it has not changed:
    climbing through elaboration with no phase transitions.
 
 For scale: the 2026-08-19 16:17 run OOM'd at technology mapping with RSS
-58→114 GB. The 2026-08-21 run (post-cut, post-Port-A) cleared RTL
-Elaboration in ~12 min at ~29 GB peak and passed constraint validation at
-~21 min / ~38 GB, on a 119 GB machine.
+58→114 GB. The 2026-08-21 V1.0 run (post-cut, post-Port-A) **finished
+synth** (~6.7 h mapping, ~38 GB peak) then **failed place** on UTLZ-1 —
+see [FPGA_FIT.md](FPGA_FIT.md).
 
 
 ## 2) FPGA-SIM glass — lessons only

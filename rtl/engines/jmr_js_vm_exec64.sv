@@ -4497,6 +4497,19 @@ module jmr_js_vm_exec64 (
                                                     vlistener_nfn[k] = nfn[k];
                                                 end
                                                 vlistener_repl = 1'b1;
+                                                // #77: export the removee so
+                                                // the PARENT compacts its own
+                                                // table copy too (the repl
+                                                // strobe alone was applied
+                                                // only to exec's copy - the
+                                                // parent's kev walk then ran
+                                                // stale slots: DONKEY's
+                                                // charsel `choose` survived
+                                                // its removeEventListener and
+                                                // ArrowRight in-game flipped
+                                                // Mario to Luigi).
+                                                vlistener_ev_wdata = ev;
+                                                vlistener_fn_wdata = fn;
                                                 vlistener_n_n = w;
                                                 vst_wr(base, result);
                                                 vsp_n = base + 12'd1;

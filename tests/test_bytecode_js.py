@@ -3856,7 +3856,7 @@ def test_hw_value64_foreach_compact_does_not_stale():
         "var head = {n: 0};\n"
         "var cur = head;\n"
         "var i = 1;\n"
-        "while (i < 980) {\n"
+        "while (i < 700) {\n"  # 2026-08-21: was 980 under MAX_OBJ 1024; cap is 768 now
         "  var node = {n: i};\n"
         "  cur.next = node;\n"
         "  cur = node;\n"

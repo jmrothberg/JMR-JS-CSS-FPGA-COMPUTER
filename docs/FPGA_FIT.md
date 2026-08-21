@@ -1,226 +1,237 @@
-# T200 fit — agent handoff (do not crash, do not overflow)
+# T200 fit — agent repair brief
 
-Nexys Video **XC7A200T**. The agent does **not** run Vivado — the user
-does, from a host terminal:
-`source scripts/vivado_env.sh && make -C tools/board_flow bit`. Same `rtl/*.sv` as FPGA-SIM.
-Law: `.cursor/rules/never-fake-fpga-sim.mdc`. Extra clocks OK. One JS
-heap. No JOIN/JSON/GC extract. Clock class ~30 MHz.
+Nexys Video **XC7A200T** (365 BRAM tiles, 134,600 LUTs). Agent does
+**not** run Vivado — user does:
+`source scripts/vivado_env.sh && make -C tools/board_flow bit`.
+Same `rtl/*.sv` as FPGA-SIM. Law: `.cursor/rules/never-fake-fpga-sim.mdc`.
+One JS heap. No JOIN/JSON/GC extract. Extra clocks OK.
 
-Diaries of failed runs: [OLD_RUNS.md](OLD_RUNS.md). Live glass:
-[SESSION_HANDOFF.md](SESSION_HANDOFF.md).
+Diaries: [OLD_RUNS.md](OLD_RUNS.md). Glass: [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
+Phase 3b procedure: [REMOVING_EXEC32.md](REMOVING_EXEC32.md).
+External port map: [ARCHITECTURE.md](ARCHITECTURE.md) § External SRAM.
 
 ---
 
-## READY FOR SYNTHESIS — 2026-08-21 (read this first)
+## Plain English — how we fit without watering down the JS Native CPU
 
-Both cleanup jobs below are DONE on this tree; the netlist the last OOM
-saw no longer exists. What changed since that run:
+**(User plan, 2026-08-21 — reviewed and EXECUTED the same day; see "What
+landed" below. Verdict on the review: steps 1/3/4/5/6 were right and are
+done — with one twist: step 1's biggest lever turned out to be a 10-line
+constant fold, not a 5k-line delete — and the plan was missing the real
+first-order cause, an incremental-synthesis stitch that duplicated the
+core. The ≤340 paper check closed at ~356/365.)**
 
-1. **exec32 is gone.** `jmr_js_vm_exec32.sv` (5,170 lines) deleted;
-   `u_exec32` uninstantiated; dropped from `sim/Makefile` and
-   `vivado_build.tcl`. `hs32` is tied 0; the 302 exec32-driven
-   `e32_*_q` wires are undriven (read as 0 — the designed raddr
-   fall-through). The 74 parent-driven `e32_`-named signals remain (see
-   the naming-trap section of REMOVING_EXEC32.md). Verilator eval got
-   +16% faster from the smaller netlist alone.
-2. **Port A'd the census monsters** (the 8-7186 killers): `vgc_queue`
-   (3072×64 — the big miss), `vconsts`, `vobj_proto`, `vfn_proto`,
-   `vfn_env`, `vfn_bound_this`, `venv_parent`. Each now has
-   `*_pa_we/waddr/wdata` strobes cleared per beat; the single write
-   port lives in the read process. FSM pokes on these are GONE.
-3. **Shrinks:** `spr_mem` 256KB→32KB (~50 tiles back; all titles are
-   ASET) and `source_mem` 128KB→64KB (~13 tiles; card copies are
-   line-squashed, only MK.HTM truncates its LIST view).
-4. Verified: probe ladder 8/8, PACMAN attract heap-stable through 118
-   GCs on the strobed queue, title smokes green on the final build.
+**What’s wrong:** the FPGA is trying to hold too much “fast memory” on
+itself, so place fails. A lot of that is (a) an old tagged/exec32 twin
+no title uses anymore, (b) big buffers that are not in the hot
+fetch→JS→paint path, or (c) empty headroom reserved beyond what the
+five V1 games actually need.
 
-**How to run it (the smarter way):** `make bit` is Vivado, not Python —
-the .venv (GUI/pytest/compile_js) plays no part. From the repo root, in
-a normal host terminal (not a sandbox):
+**How we fix it (still a real JS Native CPU):**
 
-```
+1. **Delete the dead twin** — the old decoder file is gone, but the
+   parent still builds second stacks/heaps for tagged JS. Nothing
+   Value64 uses that. Removing it does not change the language, the
+   heap model, or the games; it stops synthesizing a ghost CPU.
+   ([REMOVING_EXEC32.md](REMOVING_EXEC32.md) Phase 3b.)
+
+2. **Keep the real JS CPU fast on-chip** — dual framebuffers, bytecode,
+   eval stack, and the live object/array/env tables touched every
+   opcode stay in BRAM. We do **not** put the JS heap on DDR3 (that
+   would still be “JS” on paper and a slideshow in play).
+
+3. **Move only cold / bursty buffers outside** — ImageData pixels,
+   LIST/editor source, blit scratch, JSON scratch — already multi-cycle.
+   Same external port as ASET art; they wait on `ack` like the blitter.
+   Play loop stays on-chip.
+
+4. **Right-size empty shelves; don’t remove shelves the games use** —
+   measure peaks on INVADERS / PACMAN / DONKEY / ASTEROID / MRDO; set
+   depths to peak×1.25 with **loud overflow**. Same JS semantics and
+   APIs; stop paying BRAM rent for unused empty rooms. Bigger titles
+   later = raise caps or grow the external bank (V2/ASIC), not “delete
+   Array.”
+
+5. **BRAM whitelist only** — everything else stays small LUTRAM or
+   external. That stops Vivado stuffing everything into BRAM, running
+   out, demoting to LUTRAM, and exploding to ~2M LUTs.
+
+6. **One paper check before overnight synth** — whitelist tiles must
+   sum **≤ 340**. If not, do not run Vivado. Fix the spreadsheet first
+   so the next `make bit` has a real shot. The user cannot afford a
+   second pass.
+
+**What you still have:** HTML → compile-on-RUN → bytecode ISA on the
+chip → Canvas / heap / events in hardware. No dukpy, no soft CPU, no
+fake browser. Fit work removes a dead second machine, parks cold
+buffers where art already lives, and stops carving BRAM for empty
+rooms — it does not delete JS features.
+
+---
+
+## Status — place failed 2026-08-21 04:11; root causes found, fixes LANDED
+
+`synth_1` completed; `place_design` failed UTLZ-1 (LUT 1.92M/134.6k, BRAM
+659/365). Forensics on `synth_1/runme.log` (the log accumulates sessions —
+the current run starts at its LAST "Start of session") found **three
+separate causes**, in order of surprise:
+
+### 1. The netlist was an incremental-stitch DUPLICATE (flow bug — fixed)
+
+`AUTO_INCREMENTAL_CHECKPOINT 1` + project reuse made this synth an
+incremental run against the **pre-exec32-delete reference checkpoint**.
+The stitched netlist contains the framebuffer pair TWICE
+(`u_core/u_fb` AND `u_corei_10/u_fb`): 658 RAMB36 = 338 (VM) + 160 (FB)
++ **160 (stale duplicate FB)** — and an unknowable share of the 1.92M
+LUTs is duplicated logic. The 1.92M is therefore **not a measurement of
+the design**. Fixed: the Tcl now pins `AUTO_INCREMENTAL_CHECKPOINT 0`,
+and the next build MUST be `make -C tools/board_flow bit-fresh` — the
+file list changed (exec32 deleted), which was always the documented
+bit-fresh trigger. The old "do not bit-fresh" rule was about resuming
+after a mid-run crash, not about this.
+
+### 2. BRAM was genuinely over budget, which silently poisoned the LUTs
+
+Single-copy demand was ~500 tiles vs 365. Vivado's resource-aware
+inference then **silently demoted textbook Port-A arrays** (`name_mem`,
+`spr_mem`, `vgc_queue`, `json_mem` — perfect 1W1R registered-read shapes)
+to distributed LUTRAM: 59k LUT-as-memory (cap 46.2k) plus fabric read
+muxes and glue in LUT-as-logic. Only 4 arrays warned "Infeasible
+attribute"; the rest demoted with **no warning**. Lesson: when BRAM is
+over budget, the LUT count lies too — close BRAM first.
+
+### 3. The dead tagged twin still synthesized
+
+`gc_queue` 16K×14 (RAM64M ×1280), `stack`/`stack_tag`, `varr_tmem`
+64K×3, `vobj_tmem` 32K×3, `tfn_*` — all present in the mapping report,
+plus every `!hp_v64` FSM arm.
+
+## What landed 2026-08-21 (this tree, FPGA-SIM-verified)
+
+| Change | Effect | Verified |
+|---|---|---|
+| `AUTO_INCREMENTAL_CHECKPOINT 0` + **bit-fresh required** | kills the stitch duplication | flow only |
+| `v64_on` fold — the 33 execution reads of `jsb_flags[3]` are constant 1 (tagged images fault 9 at S_GOT_HDR2 **before** execution, reading the raw header word) | Vivado proves the tagged twin unreachable and sweeps it — the synthesis half of Phase 3b without the 5k-line hand edit | 198/198 bytecode tests; five-title behavior unchanged |
+| `imgd_pix` (300K×8, **80 tiles**) → external SRAM top-of-bank, words `IMGD_SRAM_BASE=1789952..2M` (1 px per 16-bit word); VM sram port gained a write channel; core arbiter muxes console-first | −80 tiles; getImageData/putImageData now blit-style req/ack | PACMAN plays 40 frames, `imgd=307199/307200`, fault=0 |
+| `MAX_ARR_LONG` 128→**32** (measured peak: 2 long arrays) | varr_slot 128→**104** tiles | five-title FM census + PACMAN/DONKEY RTL play |
+| `MAX_OBJ` 1024→**768** (measured peak 567; fn bank shares the cap, fn peak 510) | vobj_slot 80→**60** tiles | PACMAN play sits at obj≈690: fits, but forced-GC rate rose ~4→~10/frame — a known speed cost; the GC-pacing ledger item is the antidote. If a future title faults 3 here, raising MAX_OBJ is the FIRST lever to reconsider |
+| `ENV_DEPTH` 512→**256** (measured peak 157) | venv_slot 19→**10** tiles | same runs |
+| `CODE_WORDS` 32768→**20480** (measured high-water 16443, PACMAN) + write clamp + **loud capacity fault 3 at S_GOT_HDR2** for oversize images; `jsb_format` refuses at encode | code_mem 32→**20** tiles | tools + HM + pkg mirrored |
+| `ram_style="distributed"` pinned on `name_mem`, `spr_mem`, `json_mem`, `vstack`, `stack` (~15k LUTs, deliberate) | stops resource-management gambling; ~26 tiles stay free | build |
+
+Two same-day regressions were introduced and fixed during this pass —
+both are RECURRING-BUG-CLASS material (`potential bugs.md`):
+- **PACMAN froze after splash**: the new `imgd_pend` handshake flag was
+  cleared in the FSM's per-beat default section (where the old `imgd_we`
+  strobe lived). With the SRAM model's pulsed ack, the two flapping
+  signals anti-phase locked and the ack was never consumed. A handshake
+  flag is STATE, not a strobe — never put it in the default-clear block.
+- **DONKEY Mario→Luigi returned**: yesterday's dispatch-time supersede
+  only fires when the real KEYEVT is already queued. An edge captured
+  while `vlistener_n` was momentarily 0 (screen swap) sat armed and
+  converted into a phantom arrow seconds later. Now real KEYEVT traffic
+  clears captured KEYBITS edges at **enqueue** as well and re-baselines
+  `prev_joy`. Verified: 150 idle frames post-charsel, histogram stable.
+
+## Paper BRAM budget (single copy — FINAL after the play-test round)
+
+The first shrink round set MAX_OBJ=768 and PACMAN **pegged the object
+heap in play** (fault 3 at obj=768, GC thrashing ~13/frame — the FM
+census was splash-biased). User call: stay near 1024 for future titles.
+Final caps: **MAX_OBJ 960** (non-pow2 is safe now: bug #76's OBJ_PHYS
+architecture keeps the sliced side arrays at 1024 physical), **ENV_DEPTH
+256** (validated: live envs ride ~140 in play), **MAX_ARR_LONG 12**
+(measured peak 2; INVADERS bunkers use 4), **CODE_WORDS 20480** (the HM
+test suite's extended PACMAN image is 19,527 words — 19456 left only 71
+words of headroom, so code got its tile back from the long tier).
+
+| Item | Tiles |
+|---|---:|
+| Dual FB (hot, product glass) | 160 |
+| `varr_slot` 50688×64 | 99 |
+| `vobj_slot` 30720×80 | 75 |
+| `venv_slot` 4096×73 | ~10 |
+| `code_mem` 20480×32 | 20 |
+| `imgd_pix` | **0** (external) |
+| name/spr/json/vstack/source/work/gc leftovers | 0 (pinned distributed, ~15k LUTs) |
+| vram/font/sbuf/MIG (measured ~0 this synth) | ~1 |
+| **Sum** | **~365 of 365** |
+
+**This is knife-edge — margin ≈ 0.** The user chose object-count
+headroom over BRAM margin, eyes open. If the fresh synth's
+`utilization_synth.rpt` shows Block RAM over 365, the ONE-LINE fallback
+is `MAX_OBJ = 896` in the four cap files (−5 tiles, margin ~5) — do that
+before touching anything else. If it fits with room, `MAX_OBJ = 1024`
+(+5) is the first upgrade. LUT-as-logic is **unknown until a clean run** — the
+1.92M number was stitch-poisoned. If the fresh synth still shows
+LUT-as-logic over ~134k, the next lever is the textual Phase 3b strip
+(REMOVING_EXEC32.md) of whatever the `v64_on` fold could not prove dead,
+then real ISA-surface decisions — do not touch the heap caps again for
+LUTs.
+
+## The next build (user runs, host terminal)
+
+```bash
 source scripts/vivado_env.sh
-make -C tools/board_flow bit
+make -C tools/board_flow bit-fresh
 ```
 
-`vivado_env.sh` sets `VIVADO=`; without it Make prints `Set VIVADO=…`
-and stops. (`cd tools/board_flow && make bit` is the same thing.)
-Guards are already the Makefile defaults: synth **2** threads, impl 8 —
-do NOT raise
-`JMR_VIVADO_SYNTH_THREADS`, do NOT set `JMR_VIVADO_ALLOW_WIDE=1`, do
-NOT `bit-fresh`/`clean` after a mapping crash (no DCP until synth_1
-hits 100%). If synth_1 completes, fill the [Headline](#headline-fill-after-synth_1-100)
-from `build/nexys_video/utilization_synth.rpt` — LUTRAM high + BRAM low
-means an inference template still missed somewhere; paste the report
-and the census below finds it. The remaining narrow-table swarm
-(vobj_len/obj-cls class, ~150Kb total) is still FSM-poked by design —
-small enough to survive mapping, first candidates if LUTRAM is high.
+`bit-fresh` is REQUIRED this once: the source file list changed and the
+reused project's incremental reference is the garbage stitched netlist.
+MIG regenerates (adds time; deterministic). Synth 2 threads / impl 8
+unchanged. After synth_1 100%, fill the Headline from
+`build/nexys_video/utilization_synth.rpt` — read the **last** session in
+`runme.log` if grepping it.
 
----
 
-## What was done before (kept for history)
+## NEVER do these — they break the machine or the build
 
-### Cleanup before the next `make bit` (2026-08-20 OOM) — DONE 2026-08-21
+Violating these is how we got 70 GB hangs, OOM mapping, and fake glass.
+Law detail: `.cursor/rules/never-fake-fpga-sim.mdc`,
+`one-heap-keep-gen.mdc`, `no-dukpy-cheat-native-cpu.mdc`.
 
-2026-08-20 mapping **OOM'd at 2 synth threads**. Capping workers was
-**not enough**, so the netlist was shrunk first. All three steps below are
-complete; kept for the reasoning, not as a to-do.
+| NEVER | What breaks |
+|---|---|
+| **`mem[i] <=` / `stack[i] <=` / `vobj_alloc[i] <=`** (etc.) inside the big VM FSM `always_ff` on a large array | **~70 GB synth hang** — RAM becomes FFs. Glass/debug must use tasks too |
+| **`ram_style = "block"` while an FSM poke remains** | LUTRAM demotion or the hang; attribute does not save a bad template |
+| **Two `stack_wr` in one clock** | Illegal dual write. FOREACH uses `stack_dual_pend` (extra clock) |
+| **Peek Port A arrays same cycle** — must wait `*_rdata` | Wrong data / race; never “peek” to make a title paint |
+| **Mix blocking `=` and NBA `<=` in one sequential block** | UG901 — bad inference |
+| **Reset-clear a whole BRAM in one cycle** / reset inside the RAM process | AR 58025 — breaks BRAM inference (`source_mem`-class) |
+| **`unique case` that combo-indexes big unpacked arrays** | Parallel ports / giant mux (use plain `case` on opcode) |
+| **Second JS heap** inside exec (private `vvars` / `stack` / `vobj_*` / …) | Will not fit; goes stale; black PACMAN. One heap, keep gen-match |
+| **Skip gen-match** on object handles | Silent use-after-recycle |
+| **Extract JOIN / JSON / GC / HEAP into new modules** for fit | Forbidden architecture churn |
+| **Put whole `vobj_slot` / `varr_slot` or scanout FB on external/DDR3** | Cripples the JS Native CPU / pixel path |
+| **dukpy / V8 / soft CPU / execute JS source as one RTL FSM** | Not this machine — bytecode ISA only |
+| **Title-name gates** (`if (stem == "PACMAN")`) | Forbidden hardwire |
+| **Grow heap past** `MAX_OBJ=1024`, arrays `1536×32+128×128`, `ENV_DEPTH=512` without a measured plan | Does not fit; 8192/4096 is banned |
+| **Port-A the dead tagged twin** instead of deleting it | Wasted work; ghost stays |
+| **Claim “exec32 removed” while dead twins still synthesize** | Half-cut; place still pays for them |
+| **`bit-fresh` to "recover" a mid-run crash** (it is REQUIRED after a file-list change — those are different situations); raise `JMR_VIVADO_SYNTH_THREADS`; `JMR_VIVADO_ALLOW_WIDE=1`; `drc.disableLUTOverUtilError` | Loses MIG/project for nothing, or papers over over-util |
+| **`AUTO_INCREMENTAL_CHECKPOINT 1`** or any incremental synth while the RTL is changing | Stitches against a stale reference — the 04:11 netlist held the FB twice and ~2x logic; place cannot fix a garbage netlist |
+| **Agent runs Vivado / `make bit`** | User only, host terminal |
+| **Pretend PYTHON or host twin is FPGA-SIM** | Fake machine |
 
-**Glass is done.** All five HTML titles play on FPGA-SIM (INVADERS,
-PACMAN, DONKEY, ASTEROID, MRDO). They are **slow** (clocks per frame /
-FIND / 1 px per fillRect) — that is not this job. Do not reopen play
-bugs. Do not mix a speed pass with a fit pass on `jmr_js_vm.sv`.
+### How to write on-chip RAM (legal)
 
-| Order | Job | Result |
-|---|---|---|
-| 1 | Unhook **exec32** | **done** — file deleted, both build lists cleaned, `hs32` tied 0. [REMOVING_EXEC32.md](REMOVING_EXEC32.md) |
-| 2 | **Port A** the LUTRAM monsters | **done** — `vgc_queue` `vconsts` `vobj_proto` `vfn_proto` `vfn_env` `vfn_bound_this` `venv_parent`, plus `spr_mem` 256K→32K and `source_mem` 128K→64K. Recipe [below](#port-a-recipe). |
-| 3 | Stop. User `make bit` (synth **2** threads, impl **8**) | **the current step** — fill [Headline](#headline-fill-after-synth_1-100). LUTRAM high + BRAM low = template still missed |
+```systemverilog
+// GOOD — Port A / tasks only (FSM sets strobes)
+stack_wr(sp, alu_r, tag);
+vobj_alloc_wr(valloc_i[9:0], 2'd1);
+// BAD — 70 GB
+stack[sp] <= alu_r;
+vobj_alloc[valloc_i] <= 2'd1;
+```
 
-Do not raise `JMR_VIVADO_SYNTH_THREADS` or set `JMR_VIVADO_ALLOW_WIDE=1`.
-Do not `bit-fresh` / `clean` after a mapping crash. Mapping cannot resume
-(no DCP until synth_1 **100%**). Step 2 does not speed FPGA-SIM play.
+Copy `jmr_mini_fb.sv`. One `we`/`addr`/`data`; read next clock; **no**
+reset-clear in the RAM process; clear strobes every beat; RUN-init via
+strobe / `heap_clr`. Cold buffers (once moved) use `jmr_sram_port`
+(`req`/`ack`) — not a second on-chip poke path.
 
----
-
-## What you never do (crash / no-fit)
-
-- **`mem[i] <=` in the 7k-line VM FSM** on a big array → 70 GB hang (RAM
-  becomes flip-flops). Use `stack_wr` / `vobj_alloc_wr` / `varr_len_wr` /
-  `name_hash_wr` / `vvars_wr` / `json_putc` / `imgd_we`. One `stack_wr`
-  per clock (`stack_dual_pend` for FOREACH). Wait `*_rdata`.
-- **`ram_style = "block"` while the poke stays** → LUTRAM or that hang.
-- **Every array into BRAM** → paper math **~489 tiles vs 365** on the
-  T200. Tiny 8-deep FOREACH/rAF may stay LUTRAM. Do not Port-A the tagged
-  `stack` / `gc_queue` / `vars` / `tfn_*` family — they **disappear** with
-  the Phase 3b sweep (~430 Kb), so converting them is wasted work.
-- Grow heap past `MAX_OBJ=1024`, arrays `1536×32+128×128`, `ENV_DEPTH=512`.
-  8192/4096 does not fit. JS objects are not the 4 MB ASET SRAM.
-- Split JOIN/JSON/GC into new modules.
-
----
-
-## Words (LUTRAM, BRAM, Port A)
-
-### What these words mean (LUTRAM, BRAM, Port A)
-
-Vivado **build** of a memory. Not FPGA-SIM speed. Verilator does not care.
-
-| Word | Meaning | T200 |
-|---|---|---|
-| **BRAM** | Dedicated RAM tiles | **365** tiles (~1.64 MB). Dual 640×480 FB uses ~0.6 MB. Leftover ~1 MB for code+heap+console. |
-| **LUTRAM** | Logic LUTs used as RAM (`RAM64M`, `RAM256X1S`) | 134,600 LUTs total. Fine for 8-deep saves. Hungry if `name_mem` / `vstack` / `source_mem` land here — that is the 2026-08-20 OOM. |
-| **Port A** | Verilog shape that infers BRAM: one `we`/`addr`/`data`; read next clock; **no** reset-clear in that process; FSM only pulses strobes. Copy `jmr_mini_fb.sv`. | Required for **large** arrays. |
-
----
-
-## LUTRAM leftovers (not the 70 GB hang)
-
-## Measured FSM-poke census (2026-08-20, full scan — supersedes guesses)
-
-Every `mem[i] <=` inside the main always_ff (5951–14911), scanned
-mechanically (nested-index aware). These are the arrays Vivado will NOT
-put in BRAM today no matter the `ram_style` attribute (8-7186). The
-RUN-init region (~6394–6452, S_GOT_HDR2) also pokes many of them — a
-Port A conversion must move that init onto the strobe path or the
-`heap_clr` walker, not leave a second write port behind.
-
-**Monsters missed by the old recipe (fix these, they survive exec32):**
-
-| Array | Shape | FSM writes | Note |
-|---|---|---|---|
-| `vgc_queue` | 3072×64 = 192 Kb | 4 | **Biggest miss.** Value64 GC mark queue — stays after exec32. |
-| `vfn_env` | 1024×64 | 4 | closure env per fn |
-| `vfn_bound_this` | 1024×64 | 4 | bind() this per fn |
-| `venv_parent` | 512×64 | 1 | env parent chain |
-| `vconsts` | 1024×64 | 1 (6986) | already in recipe |
-| `vobj_proto` / `vfn_proto` | 1024×64 each | 4 / 5 | already in recipe |
-
-**Narrow-table swarm (6–16 bits × 1024–1536; individually small, ~150 Kb
-+ mux LUTs in total — Port A opportunistically after the wide ones):**
-`vobj_len`(11 wr) `vobj_cls`(5) `vobj_gen` `vobj_builtin`(11)
-`vfn_entry/nparam/gen/valid` `varr_gen/lidx` `venv_gen/len/valid`
-`vvar_valid` `name_off/blen` `name_len_tbl` `intern_var/_ok` `char_id`.
-
-**Do NOT Port-A these — they die with the exec32 tagged-arm strip
-(Phase 3b), converting them is wasted and delays the cut:**
-`gc_queue` (16384×14 = **224 Kb**, the single biggest LUTRAM item),
-`stack`/`stack_tag` (2048), `vars`/`var_tag`/`var_init` (512),
-`obj_n`/`obj_cls`, `tfn_entry/nparam/parent/this`, `tenv_parent`,
-`arr_len`, `env_oid`/`env_free`. Total ≈ 430 Kb of would-be LUTRAM
-that simply vanishes.
-
-**Fine as-is (small):** `vframe_*` (128), `vtimer_*` (64), listener/kd/ku
-slots, exec64 internals (`cls_*` 16×16). `vstack`/`vvars`/`venv_slot`/
-`vobj_slot`/`varr_slot`/`code_mem`/`name_mem`/`json_mem`/`imgd_pix`/
-`spr_mem` already use the strobe pattern (write via `*_wr` task strobes
-+ dedicated process) — verified clean.
-
-## Port A recipe
-
-| Array | File | Miss | Fix |
-|---|---|---|---|
-| `source_mem` 128K×8 | `rtl/engines/jmr_console_engine.sv` | Reset + gated read in the RAM process (AR 58025). 2026-08-20: `RAM256X1S × 4096` | `if (src_we) source_mem[src_addr] <= src_wdata; src_rdata <= source_mem[src_addr];` **no reset** in that block. |
-| `vconsts` 1024×64 | `rtl/engines/jmr_js_vm.sv` | FSM `vconsts[c_i] <=` + mux read | `vconsts_we/waddr/wdata` like `vvars`. Wait `vconsts_rdata`. Same strobes for `e64_poke`. |
-| `vobj_proto` 1024×64 | same | FSM poke + mux read | `vobj_proto_wr` like `vobj_alloc_wr`. One write/clock. |
-
-Same pass: `vfn_proto`. If you touch `arr_len` / `vobj_cls` (still FSM-poked,
-8-13159), Port A them too. 2026-08-20 also showed `vstack` / `name_mem` /
-GC queues as LUTRAM — after exec32, those next if they still miss.
-
----
-
-## T200 budgets (do not invent counts)
-
-Fill **Used** from `build/nexys_video/utilization_synth.rpt` then
-`utilization_impl.rpt` when WNS ≥ 0. `.bin` ~9.3 MB is the whole 200T
-image, not fullness. Dual FB + heap must be **BRAM**, not LUTRAM/FFs.
-ASET art is off-chip (DDR3 behind the 4 MB SRAM port). MIG FIFOs count
-inside the 365.
-
-| Component | Estimate | T200 |
-|---|---|---|
-| LUTs (if hierarchy holds) | 45k–75k | 134,600 |
-| FFs (legal SRAM) | ~15k class | 269,200 |
-| Dual FB 640×480×8 | ~0.60 MB / ~133 tiles | 365 tiles / 1.64 MB |
-| `imgd_pix` | ~0.30 MB / ~67 | same 365 |
-| `spr_mem` (blit scratch, not ASET) | **~0.03 MB / ~7** (was 0.25 MB / ~57 before the 2026-08-21 shrink) | same |
-| `source_mem` | **~0.06 MB / ~15** (was 0.13 MB / ~29) | same |
-| objects 1024×32×80b | ~0.31 MB / ~71 | same |
-| arrays 1536×32+128×128×64b | ~0.50 MB / ~114 | same |
-| env 512×16×80b | ~0.08 MB / ~18 | same |
-| **If all infer as BRAM** | **~2.2 MB / ~489 tiles** at the 2026-08-20 census; **~420 after** the exec32 cut + shrinks, and Phase 3b removes ~430 Kb more | **365 / 1.64 MB** |
-
-Paper math is a planning tool, not a measurement: several of these arrays
-legitimately stay in LUTRAM or get packed. **The synth report is the
-truth** — fill the Headline below from it before believing any row here.
-
----
-
-## Headline (fill after synth_1 100%)
-
-Part `xc7a200tsbg484-1`.
-
-| Resource | Used | T200 |
-|---|---:|---:|
-| LUTs | — | 134,600 |
-|  as LUTRAM | — | 46,200 |
-| FFs | — | 269,200 |
-| BRAM tiles | — | 365 |
-| DSP | — | 740 |
-| Slices | — | 33,650 |
-
-LUTRAM high + BRAM low = inference still missed. WNS ≥ 0 is the bit.
-
----
-
-## Three crashes (do not “fix” the wrong one)
-
-| Crash | Cause | You |
-|---|---|---|
-| 70 GB hang | `mem[i] <=` in FSM | Never put it back |
-| 16:17 OOM | **7** mapping workers | Synth stays **2** |
-| 2026-08-20 OOM | 2 workers, netlist still fat | Steps 2–3 above |
-
-Ignore `Synth 8-7052` on `u_fb` (framebuffer **is** BRAM). `tcmalloc large
-alloc` ~5 GB = mapping dying. Detail: [OLD_RUNS.md](OLD_RUNS.md).
+| Word | Meaning |
+|---|---|
+| **BRAM** | On-chip tiles (365). Hot path only. |
+| **LUTRAM** | LUTs as small RAM. OK for 8-deep; fatal for `name_mem`-class under BRAM pressure. |
+| **Port A** | Legal BRAM shape above. |
+| **Dead twin** | Tagged arrays still in the parent after Cut A — **must delete** (Phase 3b). |

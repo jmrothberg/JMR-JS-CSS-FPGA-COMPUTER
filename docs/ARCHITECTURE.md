@@ -263,8 +263,16 @@ ack            completion strobe (1+ cycles later; bridge may stall)
 ```
 0x000000 – 0x0002FF   title palette (256 × RGB888 = 768 bytes)
 0x000300 – top        sprite pixel banks (8-bpp indexed, 2-byte aligned)
-top of bank           reserved (future FB / heap migration)
+top of bank           reserved (suggested cold-buffer migration — see below)
 ```
+
+**Suggested use of “top of bank” (fit — part of one-pass plan):**
+[FPGA_FIT.md](FPGA_FIT.md) one-pass ~90% plan: keep hot paths (dual FB,
+code, stack, sized JS heap banks) in on-chip BRAM; move **cold/bursty**
+buffers (`imgd_pix`, `source_mem`, `spr_mem` scratch, `json_mem`) here
+behind the **same** `jmr_sram_port`. Do **not** move the whole heap
+off-chip. Schedule around the blitter (one outstanding `req`/`ack`).
+Right-size remaining BRAM from measured V1 title peaks before synth.
 
 **V2.0 asset bank (planned — not implemented):** rebuild to **8 MB** (or
 larger if a title needs it). Driver: `MK.HTML` ASET is **~4.63 MB** indexed

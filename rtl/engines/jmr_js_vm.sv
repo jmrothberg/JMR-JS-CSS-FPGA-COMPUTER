@@ -50,10 +50,18 @@ module jmr_js_vm #(
     // ASET sprite banks live there; blitter fetches pixels 2-per-16-bit word
     output logic        sram_req,
     output logic [20:0] sram_addr,
+    // 2026-08-21 fit: write channel added so the ImageData snapshot lives at
+    // the top of the external asset bank instead of an 80-tile on-chip BRAM.
+    // Console owns the bus outside RUN; the core mux keeps console priority.
+    output logic        sram_we,
+    output logic [15:0] sram_wdata,
     input  logic [15:0] sram_rdata,
     input  logic        sram_ack
 );
-    localparam int CODE_WORDS = 32768;
+    // 2026-08-21 fit: measured code high-water (ops_base+n_ops) across the
+    // seven card titles: PACMAN 16443 worst. 20480 = 1.25x. Console clamps
+    // writes and the tools refuse bigger images - loud, not wrap.
+    localparam int CODE_WORDS = 20480; // 2026-08-21(3): 20 tiles; the HM raf test's extended PACMAN image is 19527 words - 19456 was 71 words of headroom
     localparam int MAX_CONSTS = 1024;
     localparam int MAX_VARS   = 512;
     localparam int STACK_DEPTH = 2048; // PACMAN.HTML maze literals: FM peak 969
@@ -105,14 +113,17 @@ module jmr_js_vm #(
     // Read port (VM fetch) + write port (FAT .JSB load) — dual-port BRAM
     always_ff @(posedge clk) begin
         code_rdata <= code_mem[code_raddr];
-        if (code_we)
+        // Clamp: CODE_WORDS (20480) is below the 15-bit address space; an
+        // out-of-range write must drop, not wrap (Verilator faults on OOB).
+        // Too-big images are refused loud at S_GOT_HDR2 (capacity fault).
+        if (code_we && (code_waddr < 15'(CODE_WORDS)))
             code_mem[code_waddr] <= code_wdata;
     end
 
     logic signed [31:0] consts [0:MAX_CONSTS-1];
     logic signed [31:0] vars   [0:MAX_VARS-1] /*verilator public_flat_rd*/;
     logic               var_init [0:MAX_VARS-1] /*verilator public_flat_rd*/;
-    (* ram_style = "block" *) logic signed [31:0] stack  [0:STACK_DEPTH-1];
+    (* ram_style = "distributed" *) logic signed [31:0] stack  [0:STACK_DEPTH-1];
     // UG901 Port A: FSM pulses these; do not poke stack[i] from the 7k-line FSM.
     logic        stack_we;
     logic [10:0] stack_waddr;
@@ -125,11 +136,20 @@ module jmr_js_vm #(
     logic [15:0] n_ops, n_consts;
     logic [15:0] ops_base /*verilator public_flat_rd*/;
     logic [15:0] jsb_flags /*verilator public_flat_rd*/;
+    // 2026-08-21 fit (REMOVING_EXEC32 Phase 3b, the synthesis half): every
+    // image that reaches execution is Value64 - a non-V64 image faults code 9
+    // at S_GOT_HDR2 (which reads the RAW header word, not this bit). Reading
+    // the execution guards as constant 1 lets Vivado prove the whole tagged
+    // twin (S_EXEC/S_NAT decode, tagged GC, stack/stack_tag/gc_queue/*_tmem/
+    // tfn_*) unreachable and sweep it from the netlist. FPGA-SIM behavior is
+    // identical: the FF bit is 1 whenever running. Do NOT route new logic
+    // through v64_on; use v64_on.
+    localparam bit v64_on = 1'b1;
     logic        looping, running /*verilator public_flat_rd*/;
     // Value64 is a gated scalar island. It deliberately does not reuse the
     // legacy Q16/tag stack, so a FLAG_VALUE64 image cannot alias old state.
     (* ram_style = "block" *) logic [63:0] vconsts [0:MAX_CONSTS-1];
-    (* ram_style = "block" *) logic [63:0] vstack [0:STACK_DEPTH-1] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic [63:0] vstack [0:STACK_DEPTH-1] /*verilator public_flat_rd*/;
     // TOS window (FFs) + 1W1R BRAM. CPU combo reads vst_peek[]; writes vst_wr().
     // Vivado 8-7186: ram_style=block is ignored if the CPU always_ff also
     // combo-reads the array (LUTRAM, blows 30 MHz).
@@ -177,34 +197,34 @@ module jmr_js_vm #(
     // Stable Value64 heaps. Object and function handles share the
     // MAX_OBJ-slot index space; kind 1 is object and kind 2 is reserved
     // for a function slot. Generations never use zero.
-    logic [1:0] vobj_alloc [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
+    logic [1:0] vobj_alloc [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     logic        vobj_alloc_we;
     logic [9:0]  vobj_alloc_waddr;
     logic [1:0]  vobj_alloc_wdata;
     logic [12:0] vobj_alloc_raddr;
-    logic [11:0] vobj_gen [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
-    logic [5:0] vobj_len [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
+    logic [11:0] vobj_gen [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    logic [5:0] vobj_len [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     // NEW_OBJ stores the interned class name so CALL_METH can find the
     // class-table method (PYTHON _value_object_classes). 16'hFFFF = none.
-    logic [15:0] vobj_cls [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
+    logic [15:0] vobj_cls [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     // PYTHON _value_object_protos / _value_function_prototypes. `var Stage =
     // function` + Stage.prototype.createItem is not a JSB class-method table.
-    logic [63:0] vobj_proto [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
-    logic [63:0] vfn_proto [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
+    logic [63:0] vobj_proto [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    logic [63:0] vfn_proto [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     // Object/array slots are 1-D SRAM after the MAX_* localparams (not 2-D
     // combo arrays — Synth 8-4556 / ASIC SRAM).
-    logic [11:0] vfn_gen [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
+    logic [11:0] vfn_gen [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     // Function handles are their own leftover-BRAM bank (vfn_* already
     // 1024-wide). They must not occupy vobj_alloc — that shared the 1024
     // bump with objects and faulted MAKE_OBJ while function slots were
     // the ones that were full (same PYTHON lists, same split).
-    logic        vfn_valid [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
-    logic        vfn_mark [0:MAX_OBJ-1];
-    logic [15:0] vfn_entry [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
-    logic [5:0] vfn_nparam [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
-    logic [63:0] vfn_env [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
-    logic [63:0] vfn_bound_this [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
-    logic [2:0] vfn_flags [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
+    logic        vfn_valid [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    logic        vfn_mark [0:OBJ_PHYS-1];
+    logic [15:0] vfn_entry [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    logic [5:0] vfn_nparam [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    logic [63:0] vfn_env [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    logic [63:0] vfn_bound_this [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    logic [2:0] vfn_flags [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     logic varr_valid [0:MAX_ARR-1] /*verilator public_flat_rd*/;
     logic [11:0] varr_gen [0:MAX_ARR-1] /*verilator public_flat_rd*/;
     (* ram_style = "block" *) logic [7:0] varr_len [0:MAX_ARR-1] /*verilator public_flat_rd*/;
@@ -214,13 +234,13 @@ module jmr_js_vm #(
     logic [11:0] varr_len_raddr;
     logic varr_long [0:MAX_ARR-1] /*verilator public_flat_rd*/;
     logic [7:0] varr_lidx [0:MAX_ARR-1] /*verilator public_flat_rd*/;
-    logic vlong_used [0:MAX_ARR_LONG-1];
-    logic vobj_mark [0:MAX_OBJ-1];
+    logic vlong_used [0:LONG_PHYS-1];
+    logic vobj_mark [0:OBJ_PHYS-1];
     logic varr_mark [0:MAX_ARR-1];
-    logic venv_valid [0:ENV_DEPTH-1] /*verilator public_flat_rd*/;
-    logic [11:0] venv_gen [0:ENV_DEPTH-1] /*verilator public_flat_rd*/;
-    logic [63:0] venv_parent [0:ENV_DEPTH-1] /*verilator public_flat_rd*/;
-    logic [4:0] venv_len [0:ENV_DEPTH-1] /*verilator public_flat_rd*/;
+    logic venv_valid [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
+    logic [11:0] venv_gen [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
+    logic [63:0] venv_parent [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
+    logic [4:0] venv_len [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
     // Env slots are 1-D venv_slot SRAM (not 2-D combo — Synth 8-4556).
     logic [63:0] vthis_ff;
     logic [63:0] vthis /*verilator public_flat_rd*/;
@@ -252,7 +272,7 @@ module jmr_js_vm #(
     logic valloc_retried;
     logic vgc_halt_after_ff;
     logic vgc_halt_after;
-    logic venv_mark [0:ENV_DEPTH-1];
+    logic venv_mark [0:ENV_PHYS-1];
     logic [9:0] vgc_env_i;
     logic [2:0] vgc_root_phase;
     logic vcall_value_ff;
@@ -269,7 +289,7 @@ module jmr_js_vm #(
     logic [63:0] vcall_ctor_val_ff;
     logic [63:0] vcall_ctor_val;
     // PYTHON builtin objects (ELEMENT/CONTEXT/IMAGE) + listener/key dispatch.
-    logic [3:0] vobj_builtin [0:MAX_OBJ-1] /*verilator public_flat_rd*/;
+    logic [3:0] vobj_builtin [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     logic [2:0] vnat_dom_ff;
     logic [2:0] vnat_dom;
     logic [63:0] vnat_style;
@@ -389,7 +409,31 @@ module jmr_js_vm #(
     // Slot SRAM must fit leftover T200 BRAM after dual 640×480 FB (~0.6 MB)
     // of ~1.64 MB total: leftover ~1 MB for code + heap + console. Overflow
     // loud. Same numbers in hardware_model/js_vm.py. Not title-sized.
-    localparam int MAX_OBJ = 1024;
+    // 2026-08-21(2): 768 PEGGED in PACMAN play (fault 3 at obj=768, GC
+    // thrashing) - the FM census that said 567 was splash-biased. User call:
+    // keep near 1024 for future titles, brought down only "a little" for
+    // fit. 960 is safe as a non-pow2 LOGICAL cap because every side array
+    // keeps OBJ_PHYS=1024 physical rows (see below) and the slot array is
+    // claim-bounded. vobj_slot BRAM = 30720x80 = 75 tiles.
+    localparam int MAX_OBJ = 960;
+    // The fn bank (vfn_*) shares this cap: measured fn peak PACMAN 510 ->
+    // 768 = 1.5x. Handle-range checks all compare against MAX_OBJ.
+    //
+    // PHYSICAL vs LOGICAL depth (bug #76, 2026-08-21): the small per-handle
+    // side arrays are written through FIXED-WIDTH bit slices ([9:0] obj,
+    // [8:0] env, [6:0] long-arr) at the exec-write block and pokes. When the
+    // caps were 1024/512/128 the slice width EQUALLED the array depth, so a
+    // stray high index was architecturally in-bounds. After the cap shrink a
+    // sliced write above the cap became an OUT-OF-BOUNDS write in the
+    // Verilated model (INVADERS lost bunker cell #32 of every bunker after
+    // the first - adjacent-state corruption at the S_ARR_PROMOTE boundary).
+    // The side arrays therefore keep 2^slice-width PHYSICAL depth; the
+    // LOGICAL caps above still bound allocation (and the BRAM-heavy slot
+    // arrays, whose addresses are computed from claim-bounded values, keep
+    // their shrunk sizes). Rows above the cap are inert: no scan reads them.
+    localparam int OBJ_PHYS  = 1024; // 2^10 - e64/poke write slices are [9:0]
+    localparam int ENV_PHYS  = 512;  // 2^9  - write slices are [8:0]
+    localparam int LONG_PHYS = 128;  // 2^7  - write slices are [6:0]
     localparam int OBJ_RING = MAX_OBJ / 2; // wrap point: boot heap stays below
     localparam int OBJ_SLOTS = 32; // property slots per object (Object.assign)
     // Two-tier arrays, same total bits as 512×128: short 1024×32 (nested
@@ -399,7 +443,10 @@ module jmr_js_vm #(
     // handles for nested map + JSON clones; long bank still covers push>32.
     localparam int MAX_ARR_SHORT = 1536;
     localparam int ARR_SHORT_CAP = 32;
-    localparam int MAX_ARR_LONG = 128;
+    // 2026-08-21(2): measured long-array (len>32) peak in play is TWO
+    // (INVADERS bunkers use 4). 16 = 4x headroom; pays for MAX_OBJ 960.
+    // varr_slot BRAM = 51200x64 = 100 tiles. LONG_PHYS stays 128.
+    localparam int MAX_ARR_LONG = 12; // 2026-08-21(3): peak 2, INVADERS 4; pays the tile CODE_WORDS took back
     localparam int MAX_ARR = MAX_ARR_SHORT + MAX_ARR_LONG;
     localparam int ARR_RING = MAX_ARR / 2;
     // NEW: per-call lexical env (FM bytecode.py env dict). LIFO frames;
@@ -407,7 +454,9 @@ module jmr_js_vm #(
     // setTimeout/rAF closures keep forEach params after the call returns.
     // Slot SRAM is 1-D venv_slot (Synth 8-4556 was 2-D venv_val). Same
     // ENV_DEPTH in hardware_model/js_vm.py. Overflow loud.
-    localparam int ENV_DEPTH = 512;
+    // 2026-08-21 fit: measured live-env peak PACMAN 157; 256 = 1.63x.
+    // venv_slot BRAM 19 -> 10 tiles. Overflow is loud (fault 4 path).
+    localparam int ENV_DEPTH = 256;
     localparam int TAGGED_ENV_DEPTH = 32;
     localparam int ENV_SLOTS = 16;
     // Finite general timer queue. A legal JS loop can have one pending timeout
@@ -520,9 +569,9 @@ module jmr_js_vm #(
     logic [6:0]  csp_e32_d; // exec csp last clock (we_q is 1 cycle late)
     logic [6:0]  csp /*verilator public_flat_rd*/;
     logic [5:0]  env_sp /*verilator public_flat_rd*/; // 0 = top-level (vars[] only)
-    logic [15:0] env_oid [0:ENV_DEPTH-1]; // NEW: live heap env objects (not value snapshots)
-    logic        env_cap [0:ENV_DEPTH-1]; // NEW: MAKE_FN captured this frame
-    logic [15:0] env_free [0:ENV_DEPTH-1] /*verilator public_flat_rd*/; // NEW: recycled uncaptured env oids (peek)
+    logic [15:0] env_oid [0:ENV_PHYS-1]; // NEW: live heap env objects (not value snapshots)
+    logic        env_cap [0:ENV_PHYS-1]; // NEW: MAKE_FN captured this frame
+    logic [15:0] env_free [0:ENV_PHYS-1] /*verilator public_flat_rd*/; // NEW: recycled uncaptured env oids (peek)
     logic [5:0]  env_free_n /*verilator public_flat_rd*/;
     logic [15:0] env_walk; // heap env object id (parent chain)
     logic [8:0]  env_ld_slot;
@@ -566,7 +615,7 @@ module jmr_js_vm #(
     localparam int NAME_CAP = 32768;
     // UG901 RAM_STYLE=block (not a heuristic). Read process below matches
     // simple_dual_one_clock.v — not the 40-array mux.
-    (* ram_style = "block" *) logic [7:0]  name_mem [0:NAME_CAP-1] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic [7:0]  name_mem [0:NAME_CAP-1] /*verilator public_flat_rd*/;
     logic        name_we;
     logic [14:0] name_waddr;
     logic [7:0]  name_wdata;
@@ -634,7 +683,7 @@ module jmr_js_vm #(
     logic [7:0]  fpx_acc;               // digits seen while parsing ctx.font
     logic [7:0]  fp_left;               // bytes left in the font string
     // NEW: JSON/text scratch (stringify/parse/replace) — VM cap, sticky ovf
-    (* ram_style = "block" *) logic [7:0]  json_mem [0:JSON_CAP-1];
+    (* ram_style = "distributed" *) logic [7:0]  json_mem [0:JSON_CAP-1];
     logic        json_we;
     logic [12:0] json_waddr;
     logic [7:0]  json_wdata;
@@ -662,10 +711,13 @@ module jmr_js_vm #(
     // NEW: one ImageData snapshot (FM canvas.back copy). VM cap = 1 buffer.
     // ram_style block: a 307200-entry unpacked mux in Verilator made
     // S_IMGD_GET miss its i++ NBA and spin until the 16M FRAME cap.
-    (* ram_style = "block" *) logic [7:0] imgd_pix [0:FB_PIXELS-1];
-    logic        imgd_we;
-    logic [18:0] imgd_waddr;
-    logic [7:0]  imgd_wdata;
+    // imgd_pix BRAM removed 2026-08-21: the one ImageData snapshot now lives
+    // in external SRAM words [IMGD_SRAM_BASE .. IMGD_SRAM_BASE+FB_PIXELS-1],
+    // one pixel per 16-bit word (low byte). Top 600KB of the 4MB bank is
+    // reserved for it - ASET art must stay below IMGD_SRAM_BASE (tools cap
+    // ASET far under this; loud check lives in compile).
+    localparam logic [20:0] IMGD_SRAM_BASE = 21'd1789952; // 2*1024*1024-307200
+    logic        imgd_pend; // one outstanding IMGD sram transfer (GET wr / PUT rd)
     logic [18:0] imgd_i /*verilator public_flat_rd*/, imgd_n /*verilator public_flat_rd*/;
     logic [9:0]  imgd_x0, imgd_y0, imgd_w /*verilator public_flat_rd*/, imgd_h /*verilator public_flat_rd*/, imgd_x, imgd_y;
     logic        imgd_armed;
@@ -981,7 +1033,7 @@ module jmr_js_vm #(
     // compile_js.py fails loud if a title ever exceeds this.
     localparam int MAX_SPR = 16;
     localparam logic signed [31:0] FX_ONE = 32'sh0001_0000; // Q16.16 1.0
-    (* ram_style = "block" *) logic [7:0] spr_mem [0:SPR_BYTES-1];
+    (* ram_style = "distributed" *) logic [7:0] spr_mem [0:SPR_BYTES-1];
     logic        spr_we;
     logic [17:0] spr_waddr;
     logic [7:0]  spr_wdata;
@@ -999,7 +1051,7 @@ module jmr_js_vm #(
     logic        sprd_mode;   // NEW: trailer carries SPRD descriptors (no pixels)
     logic        blit_wait;   // NEW: SRAM read handshake inside S_BLIT
     // flatten: spr_mem 256K / imgd_pix FB — raddr this clock, rdata next.
-    logic [7:0]  spr_mem_rdata, imgd_pix_rdata;
+    logic [7:0]  spr_mem_rdata;
     logic [17:0] spr_raddr;
     logic [21:0] spr_so; // ASET word addr; spr_raddr is the low 18 for spr_mem
     logic [63:0] vraf_rdata;
@@ -4183,7 +4235,7 @@ module jmr_js_vm #(
     // HEAP/FETCH use exec scalars (ip/hp_*/code_raddr/state), not a parent snapshot.
     st_t casestate;
     always_comb begin
-        hs64 = jsb_flags[3] && ((state == S_V64_EXEC) || (state == S_FETCH_WAIT) ||
+        hs64 = v64_on && ((state == S_V64_EXEC) || (state == S_FETCH_WAIT) ||
             (state == S_HEAP_WAIT) || (state == S_HEAP_CMP) || (state == S_HEAP_WR) ||
             (state == S_HEAP_AWR) || (state == S_HEAP_FILL) || (state == S_V64_ALLOC) ||
             (state == S_WAIT_FRAME) || (state == S_V64_WAIT_FRAME) ||
@@ -4315,7 +4367,7 @@ module jmr_js_vm #(
     assign valloc_arr_n = hs64 ? (hs_m_valloc_arr_n ? valloc_arr_n_ff : e64_valloc_arr_n_q) : valloc_arr_n_ff;
     assign valloc_retried = hs64 ? (hs_m_valloc_retried ? valloc_retried_ff : e64_valloc_retried_q) : valloc_retried_ff;
     assign vnat_dom = hs64 ? (hs_m_vnat_dom ? vnat_dom_ff : e64_vnat_dom_q) : vnat_dom_ff;
-    assign ctx_align_eff = jsb_flags[3] ? e64_ctx_align_q : e32_ctx_align_q;
+    assign ctx_align_eff = v64_on ? e64_ctx_align_q : e32_ctx_align_q;
     // S_ARR_PROMOTE is requested by exec (arr.push / ARRAY_SET growing
     // past ARR_SHORT_CAP) as well as by the parent's JSON parse. Exec
     // sets its own vprom_ret (= S_V64_EXEC); the parent's copy is only
@@ -4334,7 +4386,7 @@ module jmr_js_vm #(
     // arrive with state already S_ARR_PROMOTE).
     logic vprom_from_exec;
     st_t vprom_ret_eff;
-    assign vprom_ret_eff = (jsb_flags[3] && vprom_from_exec)
+    assign vprom_ret_eff = (v64_on && vprom_from_exec)
                                         ? st_t'(e64_vprom_ret_q)
                                         : vprom_ret;
     assign dbg_align = ctx_align_eff;
@@ -4481,8 +4533,8 @@ module jmr_js_vm #(
         spr_mem_rdata <= spr_mem[spr_raddr];
     end
     always_ff @(posedge clk) begin
-        if (imgd_we) imgd_pix[imgd_waddr] <= imgd_wdata;
-        imgd_pix_rdata <= imgd_pix[imgd_i];
+        // imgd_pix array deleted - snapshot pixels stream over the external
+        // SRAM port from S_IMGD_GET / S_IMGD_PUT (blit-style req/ack).
     end
 
     // Scalar write mux (exec we same cycle; parent *_we is the json_putc NBA).
@@ -4706,7 +4758,7 @@ module jmr_js_vm #(
                     hp_aid :
                 (casestate_q == S_V64_JSON || state == S_V64_JSON ||
                  casestate_q == S_JSON || state == S_JSON) ?
-                    ((js_sp != 6'd0) ? (jsb_flags[3] ?
+                    ((js_sp != 6'd0) ? (v64_on ?
                         vjs_val[js_sp - 6'd1][11:0] :
                         js_val[js_sp - 6'd1][11:0]) : 12'd0) :
                 (casestate_q == S_V64_JSON_PARSE || state == S_V64_JSON_PARSE) ?
@@ -4740,7 +4792,7 @@ module jmr_js_vm #(
                     hp_aid :
                 (casestate_q == S_V64_JSON || state == S_V64_JSON ||
                  casestate_q == S_JSON || state == S_JSON) ?
-                    ((js_sp != 6'd0) ? (jsb_flags[3] ?
+                    ((js_sp != 6'd0) ? (v64_on ?
                         vjs_val[js_sp - 6'd1][11:0] :
                         js_val[js_sp - 6'd1][11:0]) : 12'd0) :
                 (casestate_q == S_V64_JSON_PARSE || state == S_V64_JSON_PARSE) ?
@@ -5310,7 +5362,7 @@ module jmr_js_vm #(
             rect_ld_k <= 2'd0;
             vsp_d <= '0;
             vst_we <= 1'b0;
-            imgd_we <= 1'b0;
+            imgd_pend <= 1'b0;
             spr_we <= 1'b0;
             name_we <= 1'b0;
             json_we <= 1'b0;
@@ -5466,6 +5518,7 @@ module jmr_js_vm #(
             machine_fault <= 1'b0; fault_code <= 8'd0;
             prev_joy <= 6'd0; joy_down_edge <= 6'd0; joy_up_edge <= 6'd0;
             sram_req <= 1'b0; sram_addr <= '0; blit_wait <= 1'b0;
+            sram_we <= 1'b0; sram_wdata <= '0;
             sin_ph <= 4'd0; sin_turn <= 16'd0;
             aset_mode <= 1'b0; sprd_mode <= 1'b0; hdr_w <= 16'd3;
             boot_clr <= 1'b0;
@@ -5489,7 +5542,9 @@ module jmr_js_vm #(
             fb_we <= 1'b0;
             fb_swap <= 1'b0;
             vst_we <= 1'b0;
-            imgd_we <= 1'b0;
+            // imgd_pend is HANDSHAKE STATE (held across beats until sram_ack),
+            // not a strobe - it must NOT be cleared here. The old imgd_we that
+            // lived on this line was a one-shot BRAM write strobe.
             vgc_queue_pa_we <= 1'b0; vconsts_pa_we <= 1'b0;
             vobj_proto_pa_we <= 1'b0; vfn_proto_pa_we <= 1'b0;
             vfn_env_pa_we <= 1'b0; vfn_bound_this_pa_we <= 1'b0;
@@ -5633,12 +5688,12 @@ module jmr_js_vm #(
             // potential-bugs #54: mirror exec64's vjs seed writes (stringify
             // JSON.stringify(x) writes vjs_val[0]=x in exec's copy; the parent
             // S_V64_JSON walker reads the parent copy).
-            if (jsb_flags[3] && e64_js_we_q) begin
+            if (v64_on && e64_js_we_q) begin
                 vjs_val[e64_js_waddr_q] <= e64_vjs_val_wdata_q;
                 js_i  [e64_js_waddr_q] <= e64_js_i_wdata_q;
                 js_ph [e64_js_waddr_q] <= e64_js_ph_wdata_q;
             end
-            if (jsb_flags[3] && e64_pc_we_q) begin
+            if (v64_on && e64_pc_we_q) begin
                 pc_op [e64_pc_waddr_q] <= e64_pc_op_wdata_q;
                 pc_a1 [e64_pc_waddr_q] <= e64_pc_a1_wdata_q;
                 pc_a2 [e64_pc_waddr_q] <= e64_pc_a2_wdata_q;
@@ -5704,6 +5759,18 @@ module jmr_js_vm #(
             if (key_evt_stb && (kev_wp + 3'd1) != kev_rp) begin
                 kev_q[kev_wp] <= {key_evt_down, key_evt_code};
                 kev_wp <= kev_wp + 3'd1;
+                // 2026-08-21 (DONKEY Mario->Luigi, second occurrence): the
+                // dispatch-time supersede only fires when the real event is
+                // ALREADY queued. An edge captured while vlistener_n was
+                // momentarily 0 (screen swap re-registers listeners) or
+                // before this strobe's RPC landed sat armed and converted
+                // into a phantom synthetic arrow seconds later. Supersede at
+                // ENQUEUE too: any real key traffic invalidates captured
+                // KEYBITS edges and re-baselines prev_joy, so only a real
+                // joystick (KEYBITS with no KEYEVT twin) ever converts.
+                joy_down_edge <= 6'd0;
+                joy_up_edge <= 6'd0;
+                prev_joy <= joy_in;
             end
             // EXEC scalar we is not an else-if vs unique case: leave_hold
             // must still enter ALLOC/RECT/BIND (casestate). Apply we here.
@@ -5749,6 +5816,50 @@ module jmr_js_vm #(
                 if (e64_vlistener_we) begin
                     vlistener_ev[e64_vlistener_waddr] <= e64_vlistener_ev_wdata;
                     vlistener_fn[e64_vlistener_waddr] <= e64_vlistener_fn_wdata;
+                end else if (e64_vlistener_repl) begin
+                    // #77 (DONKEY Mario->Luigi, third occurrence - the real
+                    // one): removeEventListener compacts EXEC's listener
+                    // table, but this parent copy - the one the kev dispatch
+                    // walk actually reads - was never compacted. The count
+                    // dropped (handshake scalar) while the parent slots kept
+                    // the OLD order, so after a mid-dispatch remove the walk
+                    // ran the REMOVED listener and dropped a live one:
+                    // charsel `choose` survived into the game and every
+                    // ArrowRight re-selected Luigi. Compact this copy with
+                    // the same predicate exec used; the removee (ev,fn)
+                    // rides the single-slot wdata channel on the repl beat.
+                    begin
+                        logic [63:0] cev [0:15];
+                        logic [63:0] cfn [0:15];
+                        logic [4:0] cw;
+                        cw = 5'd0;
+                        for (int k = 0; k < 16; k++) begin
+                            cev[k] = V64_UNDEFINED;
+                            cfn[k] = V64_UNDEFINED;
+                        end
+                        // All 16 slots, NOT `k < vlistener_n`: on this
+                        // apply beat the muxed count is already the NEW
+                        // (post-remove) value, which would hide the removee
+                        // in the tail. The table is dense below the old
+                        // count and UNDEFINED above it, so skipping
+                        // UNDEFINED pairs compacts exactly the live prefix.
+                        for (int k = 0; k < 16; k++)
+                            if (!(vlistener_ev[k] == V64_UNDEFINED &&
+                                  vlistener_fn[k] == V64_UNDEFINED) &&
+                                !(v64_equal(vlistener_ev[k],
+                                            e64_vlistener_ev_wdata) &&
+                                  v64_equal(vlistener_fn[k],
+                                            e64_vlistener_fn_wdata)))
+                            begin
+                                cev[cw] = vlistener_ev[k];
+                                cfn[cw] = vlistener_fn[k];
+                                cw = cw + 5'd1;
+                            end
+                        for (int k = 0; k < 16; k++) begin
+                            vlistener_ev[k] <= cev[k];
+                            vlistener_fn[k] <= cfn[k];
+                        end
+                    end
                 end
                 if (e64_json_mem_we) begin
                     json_we <= 1'b1;
@@ -5896,7 +6007,7 @@ module jmr_js_vm #(
             if (stop) begin
                 running <= 1'b0;
                 looping <= 1'b0;
-                sram_req <= 1'b0; blit_wait <= 1'b0; // NEW: drop mid-blit SRAM req
+                sram_req <= 1'b0; sram_we <= 1'b0; blit_wait <= 1'b0; // NEW: drop mid-blit SRAM req
                         hs_st(S_IDLE);
             end else if (((state == S_EXEC) || (state == S_NAT)) && !e32_leave_hold) begin
                 // we already applied above. Skip unique case (no EXEC arm).
@@ -5914,7 +6025,7 @@ module jmr_js_vm #(
                         mk = vgc_mark_word[47:44];
                         mi = vgc_mark_word[31:0];
                         oid32 = vgc_mark_word[15:0];
-                        if (jsb_flags[3] &&
+                        if (v64_on &&
                             vgc_mark_word[63:48] == 16'h7ff9 &&
                             (mk == V64_KIND_OBJECT || mk == V64_KIND_ELEMENT) &&
                             mi < MAX_OBJ &&
@@ -5925,7 +6036,7 @@ module jmr_js_vm #(
                             vgc_queue_pa_waddr <= vgc_qw;
                             vgc_queue_pa_wdata <= vgc_mark_word;
                             hs_vgc_qw(vgc_qw + 14'd1);
-                        end else if (jsb_flags[3] &&
+                        end else if (v64_on &&
                                      vgc_mark_word[63:48] == 16'h7ff9 &&
                                      mk == 4'd7 && mi < MAX_OBJ &&
                                      vfn_valid_rdata && !vfn_mark_rdata) begin
@@ -5934,7 +6045,7 @@ module jmr_js_vm #(
                             vgc_queue_pa_waddr <= vgc_qw;
                             vgc_queue_pa_wdata <= vgc_mark_word;
                             hs_vgc_qw(vgc_qw + 14'd1);
-                        end else if (jsb_flags[3] &&
+                        end else if (v64_on &&
                                      vgc_mark_word[63:48] == 16'h7ff9 &&
                                      mk == 4'd6 && mi < MAX_ARR &&
                                      varr_valid_rdata && !varr_mark_rdata) begin
@@ -5943,7 +6054,7 @@ module jmr_js_vm #(
                             vgc_queue_pa_waddr <= vgc_qw;
                             vgc_queue_pa_wdata <= vgc_mark_word;
                             hs_vgc_qw(vgc_qw + 14'd1);
-                        end else if (jsb_flags[3] &&
+                        end else if (v64_on &&
                                      vgc_mark_word[63:48] == 16'h7ff9 &&
                                      mk == 4'd9 && mi < ENV_DEPTH &&
                                      venv_valid_rdata && !venv_mark_rdata) begin
@@ -5952,7 +6063,7 @@ module jmr_js_vm #(
                             vgc_queue_pa_waddr <= vgc_qw;
                             vgc_queue_pa_wdata <= vgc_mark_word;
                             hs_vgc_qw(vgc_qw + 14'd1);
-                        end else if (!jsb_flags[3] && vgc_mark_word[16] &&
+                        end else if (!v64_on && vgc_mark_word[16] &&
                                      oid32 < n_arr && oid32 < 16'(MAX_ARR) &&
                                      !gc_arr_mark_rdata) begin
                             gc_arr_mark[oid32[11:0]] <= 1'b1;
@@ -5960,7 +6071,7 @@ module jmr_js_vm #(
                             gc_qw <= gc_qw + 14'd1;
                             if (oid32 + 16'd1 > gc_arr_high)
                                 gc_arr_high <= oid32 + 16'd1;
-                        end else if (!jsb_flags[3] && !vgc_mark_word[16] &&
+                        end else if (!v64_on && !vgc_mark_word[16] &&
                                      oid32 < n_obj && oid32 < 16'(MAX_OBJ) &&
                                      !gc_obj_mark_rdata) begin
                             gc_obj_mark[oid32[12:0]] <= 1'b1;
@@ -6033,6 +6144,19 @@ module jmr_js_vm #(
                     if (!code_rdata[19]) begin
                         machine_fault <= 1'b1;
                         fault_code <= 8'd9; // 9 = tagged image refused
+                        running <= 1'b0;
+                        hs_st(S_DONE);
+                    end else if ({16'd0, (code_rdata[17] ? 16'd4 : 16'd3)}
+                               + {15'd0, (code_rdata[19] ? {n_consts, 1'b0}
+                                                         : {1'b0, n_consts})}
+                               + {16'd0, n_ops} > 32'(CODE_WORDS)) begin
+                        // 2026-08-21 fit: CODE_WORDS shrank to the measured
+                        // envelope. An image whose header promises more words
+                        // than code_mem holds is refused LOUD here - the
+                        // write clamp above would otherwise truncate it and
+                        // the VM would fetch zeros mid-program.
+                        machine_fault <= 1'b1;
+                        fault_code <= 8'd3; // capacity
                         running <= 1'b0;
                         hs_st(S_DONE);
                     end else begin
@@ -6209,7 +6333,7 @@ module jmr_js_vm #(
                     id_hex_f00 <= 16'hFFFF; id_hex_aaa <= 16'hFFFF;
                     path_kind <= 2'd0; n_spr <= 5'd0; spr_wp <= 18'd0; spr_hdr <= 3'd0;
                     dbg_di_hit <= 16'd0; dbg_di_miss <= 16'd0;
-                    sprd_mode <= 1'b0; blit_wait <= 1'b0; sram_req <= 1'b0;
+                    sprd_mode <= 1'b0; blit_wait <= 1'b0; sram_req <= 1'b0; sram_we <= 1'b0;
                     time_ms <= 32'd0;
                     n_fn_proto <= 7'd0;
                     enter_n <= 3'd0; enter_delay <= 4'd0; // hack retired (KEYEVT)
@@ -6314,7 +6438,7 @@ module jmr_js_vm #(
                     end
                 end
                 S_LD_CONST: begin
-                    if (jsb_flags[3]) begin
+                    if (v64_on) begin
                         // Value64 constants are little-endian low/high u32 pairs.
                         vconst_lo <= code_rdata;
                         hs_code(15'(hdr_w + (c_i << 1) + 16'd1));
@@ -6908,7 +7032,7 @@ module jmr_js_vm #(
                         // NEW: pending SET_PROP array deep copy runs between ops
                         dc_arm <= 1'b0;
                         hs_st(S_ARR_DCOPY);
-                    end else if (jsb_flags[3])
+                    end else if (v64_on)
                         hs_st(S_V64_EXEC);
                     else
                         hs_st(S_EXEC);
@@ -7493,7 +7617,7 @@ module jmr_js_vm #(
                     // BIND-style plant: parent jn_* is not muxed from exec.
                     if (state != S_JOIN) begin
                         hs_st(S_JOIN);
-                        if (jsb_flags[3]) begin
+                        if (v64_on) begin
                             jn_arr <= e64_jn_arr_q;
                             jn_i <= e64_jn_i_q;
                             jn_h <= e64_jn_h_q;
@@ -7614,7 +7738,7 @@ module jmr_js_vm #(
                     // stayed 0) and re-decoded the same CALL forever — the
                     // 64M frame cap burned at the splash. Same discipline as
                     // every other exec-entered state.
-                    if (state != S_SQRT && jsb_flags[3] && e64_leave_hold)
+                    if (state != S_SQRT && v64_on && e64_leave_hold)
                     begin
                         hs_st(S_SQRT);
                         sq_rad <= e64_sq_rad_q;
@@ -7813,7 +7937,7 @@ module jmr_js_vm #(
                     // fold parent cc_av=0 (never written) and sticky-fault 5.
                     if (state != S_CONCAT) begin
                         hs_st(S_CONCAT);
-                        if (jsb_flags[3]) begin
+                        if (v64_on) begin
                             cc_av <= e64_cc_av_q;
                             cc_bv <= e64_cc_bv_q;
                             cc_at <= e64_cc_at_q;
@@ -8040,7 +8164,7 @@ module jmr_js_vm #(
                     // op otherwise.
                     if (state != S_BLIT) begin
                         hs_st(S_BLIT);
-                        if (jsb_flags[3]) begin
+                        if (v64_on) begin
                             rw <= e64_rw_q;
                             rh <= e64_rh_q;
                             rx <= e64_rx_q;
@@ -8309,7 +8433,7 @@ module jmr_js_vm #(
                 S_WAIT_FRAME: begin
                     if (state != S_WAIT_FRAME)
                         hs_st(S_WAIT_FRAME);
-                    else if (jsb_flags[3]) begin
+                    else if (v64_on) begin
                     if (frame_tick) begin
                         v64_frame_armed <= 1'b1;
                         // KEYBITS edge capture (the tagged arm computed
@@ -9262,7 +9386,7 @@ module jmr_js_vm #(
                     // and settles stack/ip before requesting this state.
                     // BIND-style first-entry seed from exec regs (hp_key is
                     // NOT hs64-muxed here).
-                    if (state != S_FONTPX && jsb_flags[3] && e64_leave_hold) begin
+                    if (state != S_FONTPX && v64_on && e64_leave_hold) begin
                         hs_st(S_FONTPX);
                         name_rdaddr <= name_off[e64_hp_key_q[9:0]];
                         fp_left <= name_blen[e64_hp_key_q[9:0]][7:0];
@@ -9302,7 +9426,7 @@ module jmr_js_vm #(
                     if (state != S_TXT_LD) begin
                         hs_st(S_TXT_LD);
                         // BIND-style: parent txt_* is not muxed from exec.
-                        if (jsb_flags[3]) begin
+                        if (v64_on) begin
                             txt_val <= e64_txt_val_q;
                             txt_vt <= e64_txt_vt_q;
                             txt_px <= e64_txt_px_q;
@@ -9425,9 +9549,9 @@ module jmr_js_vm #(
                             // #37 textBaseline: top = y; middle = y - 4k;
                             // bottom/alphabetic = y - 8k (today's default).
                             txt_y0 <= txt_py -
-                                ((jsb_flags[3] && e64_ctx_baseline_q == 2'd1)
+                                ((v64_on && e64_ctx_baseline_q == 2'd1)
                                     ? 16'sd0
-                                 : (jsb_flags[3] && e64_ctx_baseline_q == 2'd2)
+                                 : (v64_on && e64_ctx_baseline_q == 2'd2)
                                     ? 16'(4 * {12'd0, txt_k})
                                     : 16'(8 * {12'd0, txt_k}));
                             if (txt_len == 7'd0) begin
@@ -9524,7 +9648,7 @@ module jmr_js_vm #(
                     // re-running the CALL_NATIVE while the copy walks.
                     if (casestate_q != S_NAMCPY) begin
                         hs_st(S_NAMCPY);
-                        if (jsb_flags[3]) begin
+                        if (v64_on) begin
                             name_rdaddr <= e64_name_rdaddr_q;
                             json_src    <= e64_json_src_q;
                             json_srclen <= e64_json_srclen_q;
@@ -9656,7 +9780,7 @@ module jmr_js_vm #(
                     // the parent's, which nothing wrote.
                     if (casestate_q != S_IMGD_GET) begin
                         hs_st(S_IMGD_GET);
-                        if (jsb_flags[3]) begin
+                        if (v64_on) begin
                             imgd_x0 <= e64_imgd_x0_q;
                             imgd_y0 <= e64_imgd_y0_q;
                             imgd_w  <= e64_imgd_w_q;
@@ -9670,8 +9794,9 @@ module jmr_js_vm #(
                             hs_vnat_base(e64_vnat_base_q);
                         end
                         imgd_armed <= 1'b0;
+                        imgd_pend <= 1'b0;
                         fb_dump_sel <= 1'b1;
-                        if (jsb_flags[3]) begin
+                        if (v64_on) begin
                             hs_ip(e64_ip_q);
                             hs_vsp(e64_vsp_q);
                         end
@@ -9754,13 +9879,24 @@ module jmr_js_vm #(
                         hs_st(S_FETCH_WAIT);
                         end
                     end else if (!imgd_armed) begin
+                        // settle beat: fb_dump_back is registered one cycle
+                        // after fb_dump_addr - same arm as before the SRAM move
                         imgd_armed <= 1'b1;
-                    end else begin
-                        if (imgd_i < 19'(FB_PIXELS)) begin
-                            imgd_we <= 1'b1;
-                            imgd_waddr <= imgd_i;
-                            imgd_wdata <= fb_dump_back;
-                        end
+                    end else if (!imgd_pend) begin
+                        // issue: one 16-bit word per pixel (low byte), write
+                        // held until ack like S_BLIT. OOB pixels write nothing
+                        // but still take the ack beat so the walk stays uniform.
+                        sram_req   <= 1'b1;
+                        sram_we    <= (imgd_i < 19'(FB_PIXELS));
+                        sram_addr  <= IMGD_SRAM_BASE
+                                    + ((imgd_i < 19'(FB_PIXELS)) ? 21'(imgd_i) : 21'd0);
+                        sram_wdata <= {8'd0, fb_dump_back};
+                        imgd_pend  <= 1'b1;
+                    end else if (sram_ack) begin
+                        sram_req <= 1'b0;
+                        sram_we  <= 1'b0;
+                        imgd_pend <= 1'b0;
+                        imgd_armed <= 1'b0; // fresh settle after the addr advance
                         if (imgd_i == (imgd_n - 19'd1)) begin
                             if (imgd_v64) begin
                                 if (!vfree_armed) begin
@@ -9852,9 +9988,16 @@ module jmr_js_vm #(
                         hs_code(15'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
                     end else if (!blit_wait) begin
+                        // issue: fetch this pixel's word from the external
+                        // snapshot region (was a registered imgd_pix read)
                         blit_wait <= 1'b1;
-                    end else begin
+                        sram_req  <= 1'b1;
+                        sram_we   <= 1'b0;
+                        sram_addr <= IMGD_SRAM_BASE
+                                   + ((imgd_i < 19'(FB_PIXELS)) ? 21'(imgd_i) : 21'd0);
+                    end else if (sram_ack) begin
                         blit_wait <= 1'b0;
+                        sram_req  <= 1'b0;
                         begin
                             logic [9:0] px, py;
                             px = imgd_x0 + imgd_x;
@@ -9862,7 +10005,7 @@ module jmr_js_vm #(
                             if (px < 10'(MW) && py < 10'(MH) && imgd_i < 19'(FB_PIXELS)) begin
                                 fb_we <= 1'b1;
                                 fb_waddr <= 19'(py) * 19'(MW) + 19'(px);
-                                fb_wdata <= imgd_pix_rdata;
+                                fb_wdata <= sram_rdata[7:0];
                             end else fb_we <= 1'b0;
                         end
                         if (imgd_x >= (imgd_w - 10'd1)) begin
@@ -11304,7 +11447,9 @@ module jmr_js_vm #(
                         varr_len_wr(vgc_arr_i, 8'd0);
                         e64_poke(6'd49, {4'd0, vgc_arr_i}, 64'd0);
                         if (varr_long_rdata)
-                            vlong_used[varr_lidx_rdata] <= 1'b0;
+                            // #76: full-width 8-bit index into the 128-deep
+                            // occupancy map - slice like every other writer.
+                            vlong_used[varr_lidx_rdata[6:0]] <= 1'b0;
                         varr_long[vgc_arr_i] <= 1'b0;
                         varr_gen[vgc_arr_i] <=
                             (varr_gen_rdata == 12'hfff)
@@ -11905,7 +12050,7 @@ module jmr_js_vm #(
                     if (casestate_q != S_V64_JSON_PARSE &&
                         state != S_V64_JSON_PARSE) begin
                         hs_st(S_V64_JSON_PARSE);
-                        if (jsb_flags[3]) begin
+                        if (v64_on) begin
                             json_src    <= e64_json_src_q;
                             json_srclen <= e64_json_srclen_q;
                             json_rp     <= e64_json_rp_q;
@@ -13306,7 +13451,7 @@ module jmr_js_vm #(
                     if (casestate_q != S_FREE_ARR && state != S_FREE_ARR) begin
                         hs_st(S_FREE_ARR);
                         valloc_rd_arm <= 1'b0;
-                        if (jsb_flags[3] && e64_leave_hold) begin
+                        if (v64_on && e64_leave_hold) begin
                             hs_ip(e64_ip_q);
                             hs_code(15'(ops_base + e64_ip_q));
                         end
@@ -13357,7 +13502,7 @@ module jmr_js_vm #(
                         // copies from exec here — same shape as the
                         // S_V64_WIN_FILL seed — and leave the parent's own
                         // JSON-parse entry (which sets these itself) alone.
-                        if (jsb_flags[3] && state == S_V64_EXEC) begin
+                        if (v64_on && state == S_V64_EXEC) begin
                             hs_valloc_i(e64_valloc_i_q);
                             hs_hp_aid(e64_hp_aid_q);
                             vprom_copy <= e64_vprom_copy_q;
@@ -13394,7 +13539,29 @@ module jmr_js_vm #(
                         vprom_done <= 1'b1;
                         vprom_copy <= 1'b0;
                         hp_prom_wr <= 1'b0;
-                        hs_st(vprom_ret_eff);
+                        if (vprom_from_exec) begin
+                            // #78 (INVADERS bunker cell 32): an exec-requested
+                            // promote must NOT jump straight back to
+                            // S_V64_EXEC. The direct return resumed the
+                            // decoder on a STALE code_rdata and a stale
+                            // eval-stack window (the first promote survived
+                            // only because its window happened to be
+                            // coherent): CALL_METH push re-read its receiver
+                            // one slot off, arr_ok failed, and the pending
+                            // push fell into the generic method path and
+                            // vanished - every promote after the first lost
+                            // the boundary element. Resume through the
+                            // standard FETCH_WAIT path: re-arm the fetch at
+                            // exec's ip and re-enter EXEC with a coherent
+                            // window. The re-decoded op cannot re-promote:
+                            // varr_long[aid] is 1 now, which steers push /
+                            // ARRAY_SET / unshift to their normal branches.
+                            hs_ip(e64_ip_q);
+                            hs_code(15'(ops_base + e64_ip_q));
+                            hs_st(S_FETCH_WAIT);
+                        end else begin
+                            hs_st(vprom_ret_eff);
+                        end
                     end else if (!vprom_copy) begin
                         if (!valloc_rd_arm)
                             valloc_rd_arm <= 1'b1;
@@ -13426,7 +13593,29 @@ module jmr_js_vm #(
                         vprom_copy <= 1'b0;
                         hp_prom_wr <= 1'b0;
                         jn_rd_arm <= 1'b0;
-                        hs_st(vprom_ret_eff);
+                        if (vprom_from_exec) begin
+                            // #78 (INVADERS bunker cell 32): an exec-requested
+                            // promote must NOT jump straight back to
+                            // S_V64_EXEC. The direct return resumed the
+                            // decoder on a STALE code_rdata and a stale
+                            // eval-stack window (the first promote survived
+                            // only because its window happened to be
+                            // coherent): CALL_METH push re-read its receiver
+                            // one slot off, arr_ok failed, and the pending
+                            // push fell into the generic method path and
+                            // vanished - every promote after the first lost
+                            // the boundary element. Resume through the
+                            // standard FETCH_WAIT path: re-arm the fetch at
+                            // exec's ip and re-enter EXEC with a coherent
+                            // window. The re-decoded op cannot re-promote:
+                            // varr_long[aid] is 1 now, which steers push /
+                            // ARRAY_SET / unshift to their normal branches.
+                            hs_ip(e64_ip_q);
+                            hs_code(15'(ops_base + e64_ip_q));
+                            hs_st(S_FETCH_WAIT);
+                        end else begin
+                            hs_st(vprom_ret_eff);
+                        end
                     end else if (hp_phase == 3'd0) begin
                         hs_hp_cmd(HP_AGETI);
                         hs_hp_v64(1'b1);
@@ -13457,7 +13646,7 @@ module jmr_js_vm #(
                         // (state may still be EXEC on the overlay beat —
                         // only copy exec bind_* on leave_hold, else ctor
                         // field JUMP bind_ip is wiped).
-                        if (jsb_flags[3] && e64_leave_hold) begin
+                        if (v64_on && e64_leave_hold) begin
                             bind_mode <= e64_bind_mode_q;
                             bind_k <= e64_bind_k_q;
                             bind_n <= e64_bind_n_q;
@@ -14070,7 +14259,7 @@ module jmr_js_vm #(
                     // then run the FRAME_KEY listener scan in custom mode
                     // with the REAL event object (all user fields intact).
                     // No .type property = no listeners match = resume.
-                    if (state != S_V64_DISPATCH && jsb_flags[3] &&
+                    if (state != S_V64_DISPATCH && v64_on &&
                         e64_leave_hold) begin
                         hs_st(S_V64_DISPATCH);
                         vkev_event <= e64_hp_wval_q;
@@ -14447,7 +14636,7 @@ module jmr_js_vm #(
             // happens when something deliberately stops, so this cannot
             // resurrect a stale exec fault during a title load (the
             // HEAP_CLR hazard the hs64 guard was protecting against).
-            if (jsb_flags[3] && e64_machine_fault_q &&
+            if (v64_on && e64_machine_fault_q &&
                 (hs64 || casestate == S_DONE)) begin
                 machine_fault <= 1'b1;
                 fault_code <= e64_fault_code_q;
