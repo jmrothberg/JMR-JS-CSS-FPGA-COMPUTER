@@ -138,31 +138,32 @@ both are RECURRING-BUG-CLASS material (`potential bugs.md`):
 The first shrink round set MAX_OBJ=768 and PACMAN **pegged the object
 heap in play** (fault 3 at obj=768, GC thrashing ~13/frame — the FM
 census was splash-biased). User call: stay near 1024 for future titles.
-Final caps: **MAX_OBJ 960** (non-pow2 is safe now: bug #76's OBJ_PHYS
+Final caps for the FIRST .bin (user call 2026-08-21 evening: margin over
+headroom until the real utilization report exists — #79, the PACMAN
+pathfinder explosion, kills any cap equally, so extra object slots buy
+nothing yet): **MAX_OBJ 896** (non-pow2 is safe: bug #76's OBJ_PHYS
 architecture keeps the sliced side arrays at 1024 physical), **ENV_DEPTH
 256** (validated: live envs ride ~140 in play), **MAX_ARR_LONG 12**
 (measured peak 2; INVADERS bunkers use 4), **CODE_WORDS 20480** (the HM
-test suite's extended PACMAN image is 19,527 words — 19456 left only 71
-words of headroom, so code got its tile back from the long tier).
+suite's extended PACMAN image is 19,527 words).
 
 | Item | Tiles |
 |---|---:|
 | Dual FB (hot, product glass) | 160 |
 | `varr_slot` 50688×64 | 99 |
-| `vobj_slot` 30720×80 | 75 |
+| `vobj_slot` 28672×80 | 70 |
 | `venv_slot` 4096×73 | ~10 |
 | `code_mem` 20480×32 | 20 |
 | `imgd_pix` | **0** (external) |
 | name/spr/json/vstack/source/work/gc leftovers | 0 (pinned distributed, ~15k LUTs) |
 | vram/font/sbuf/MIG (measured ~0 this synth) | ~1 |
-| **Sum** | **~365 of 365** |
+| **Sum** | **~360 of 365** |
 
-**This is knife-edge — margin ≈ 0.** The user chose object-count
-headroom over BRAM margin, eyes open. If the fresh synth's
-`utilization_synth.rpt` shows Block RAM over 365, the ONE-LINE fallback
-is `MAX_OBJ = 896` in the four cap files (−5 tiles, margin ~5) — do that
-before touching anything else. If it fits with room, `MAX_OBJ = 1024`
-(+5) is the first upgrade. LUT-as-logic is **unknown until a clean run** — the
+Margin ≈ 5 tiles. After the first successful `.bin`, read the REAL
+numbers from `utilization_synth.rpt` (the LAST session in runme.log) and
+revisit: if BRAM landed comfortably under, `MAX_OBJ` walks back up
+toward 1024 (960 = +5 tiles, 1024 = +10) — the user wants that headroom
+once #79 is fixed and the report says it fits. LUT-as-logic is **unknown until a clean run** — the
 1.92M number was stitch-poisoned. If the fresh synth still shows
 LUT-as-logic over ~134k, the next lever is the textual Phase 3b strip
 (REMOVING_EXEC32.md) of whatever the `v64_on` fold could not prove dead,

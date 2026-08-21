@@ -116,7 +116,7 @@ module jmr_js_vm #(
         // Clamp: CODE_WORDS (20480) is below the 15-bit address space; an
         // out-of-range write must drop, not wrap (Verilator faults on OOB).
         // Too-big images are refused loud at S_GOT_HDR2 (capacity fault).
-        if (code_we && (code_waddr < 15'(CODE_WORDS)))
+        if (code_we && (CODE_WORDS >= 32768 || (32'(code_waddr) < CODE_WORDS)))
             code_mem[code_waddr] <= code_wdata;
     end
 
@@ -144,7 +144,7 @@ module jmr_js_vm #(
     // tfn_*) unreachable and sweep it from the netlist. FPGA-SIM behavior is
     // identical: the FF bit is 1 whenever running. Do NOT route new logic
     // through v64_on; use v64_on.
-    localparam bit v64_on = 1'b1;
+    wire v64_on = jsb_flags[3]; // TEMP BISECT: fold reverted to live flag read
     logic        looping, running /*verilator public_flat_rd*/;
     // Value64 is a gated scalar island. It deliberately does not reuse the
     // legacy Q16/tag stack, so a FLAG_VALUE64 image cannot alias old state.
@@ -416,6 +416,9 @@ module jmr_js_vm #(
     // keeps OBJ_PHYS=1024 physical rows (see below) and the slot array is
     // claim-bounded. vobj_slot BRAM = 30720x80 = 75 tiles.
     localparam int MAX_OBJ = 960;
+    // 2026-08-21(final): bisect-proven floor. The attract-mode ghost-AI tick
+    // (4x JSON.parse maze + BFS in ONE frame) legitimately bursts ~330 objects
+    // over the ~570 steady live: 896 pegged at rafcall 30, 960 clears it. // 2026-08-21(4): first-.bin margin call (user). 960 was paper 365/365; 896 = 70 tiles, margin ~5. #79 (PACMAN pathfinder explosion) kills any cap equally, so the 64 slots buy nothing until it is fixed. Revisit after the utilization report.
     // The fn bank (vfn_*) shares this cap: measured fn peak PACMAN 510 ->
     // 768 = 1.5x. Handle-range checks all compare against MAX_OBJ.
     //
@@ -446,7 +449,7 @@ module jmr_js_vm #(
     // 2026-08-21(2): measured long-array (len>32) peak in play is TWO
     // (INVADERS bunkers use 4). 16 = 4x headroom; pays for MAX_OBJ 960.
     // varr_slot BRAM = 51200x64 = 100 tiles. LONG_PHYS stays 128.
-    localparam int MAX_ARR_LONG = 12; // 2026-08-21(3): peak 2, INVADERS 4; pays the tile CODE_WORDS took back
+    localparam int MAX_ARR_LONG = 12; // 2026-08-21(final): measured peak 2 in play; INVADERS bunkers use 4
     localparam int MAX_ARR = MAX_ARR_SHORT + MAX_ARR_LONG;
     localparam int ARR_RING = MAX_ARR / 2;
     // NEW: per-call lexical env (FM bytecode.py env dict). LIFO frames;
@@ -456,7 +459,12 @@ module jmr_js_vm #(
     // ENV_DEPTH in hardware_model/js_vm.py. Overflow loud.
     // 2026-08-21 fit: measured live-env peak PACMAN 157; 256 = 1.63x.
     // venv_slot BRAM 19 -> 10 tiles. Overflow is loud (fault 4 path).
-    localparam int ENV_DEPTH = 256;
+    localparam int ENV_DEPTH = 384;
+    // 2026-08-21(final): 256 CORRUPTED PACMAN - the finder's recursive BFS
+    // transiently holds ~300 envs (between-frame envl~140 missed the
+    // recursion peak); at 256 live envs got recycled mid-recursion and the
+    // callbacks ran on broken environments (the maze-flood, #79 trail).
+    // 384 bisect-proven clean; 512 is the pre-fit fallback (+5 tiles).
     localparam int TAGGED_ENV_DEPTH = 32;
     localparam int ENV_SLOTS = 16;
     // Finite general timer queue. A legal JS loop can have one pending timeout

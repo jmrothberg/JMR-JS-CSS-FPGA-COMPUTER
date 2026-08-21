@@ -51,8 +51,17 @@ test_donkey_fpga_sim_enter_keeps_raf) are this same pre-existing class
 plus the documented _wait helper flakiness — they were failing before
 the fit pass too.
 
-**Caps finalized (user call: keep object headroom near 1024):**
-MAX_OBJ **960** (safe non-pow2 via OBJ_PHYS=1024), ENV_DEPTH **256**
+**#79 refinement from the user's own flight trace (session_20260821_165151):**
+30 frames of healthy play at obj=568/arr=1194, then **+354 objects inside
+ONE frame** at rafcall=33 — the guard fails wholesale in a single
+pathfinder invocation (fault 3 fsite=5218 ip=822), deterministically
+around the same rafcall. Not a slow leak: one finder call explodes.
+Suspect list narrows to what that first big finder call does differently
+(likely the first long-path search when a ghost re-targets).
+
+**Caps finalized for the FIRST .bin (margin over headroom until the real
+report — #79 kills any cap equally):**
+MAX_OBJ **896** (safe non-pow2 via OBJ_PHYS=1024), ENV_DEPTH **256**
 (validated: envl≈140 live in play), MAX_ARR_LONG **12** (peak 2;
 INVADERS bunkers 4), CODE_WORDS **20480** (the HM suite's extended
 PACMAN image is 19527 words). Paper BRAM

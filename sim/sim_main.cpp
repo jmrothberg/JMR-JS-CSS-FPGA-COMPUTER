@@ -29,7 +29,7 @@ static const unsigned VM_MAX_ARR_LONG = 12u; // track rtl
 static const unsigned VM_MAX_ARR = 1548u;  // SHORT+LONG; track rtl
 static const unsigned VM_ARR_CAP = 128u;
 static const unsigned VM_VARR_SHORT_WORDS = VM_MAX_ARR_SHORT * VM_ARR_SHORT_CAP;
-static const unsigned VM_ENV_DEPTH = 256u; // 2026-08-21 fit: track rtl
+static const unsigned VM_ENV_DEPTH = 384u; // track rtl
 static const unsigned VM_ENV_SLOTS = 16u;
 static inline unsigned vobj_addr(unsigned h, unsigned s) {
     return (h * VM_OBJ_SLOTS) + s;
