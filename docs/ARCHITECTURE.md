@@ -136,8 +136,9 @@ text errors baked into the render — trust this list, not the poster fine print
 - PIN SUMMARY table: title should read "(Indicative Budget)"; the
   "RRAM_CTRL" row is spurious; Audio (PWM) count is **2** (PWM_L, PWM_R);
   rows do not sum — authoritative budget: SRAM addr 21 + SRAM data 16 +
-  SRAM ctrl 5 + RGB DDR 12 + video sync/clk 4 + PS/2 2 + joystick 6 +
-  SPI 4 + UART 2 + audio 2 + clk/rst/test 3 + LEDs 3 + power/gnd 20 = 100.
+  SRAM ctrl 5 + RGB DDR 12 + video sync/clk 4 + PS/2 2 + **I2C joystick 2**
+  + SPI 4 + UART 2 + audio 2 + clk/rst/test 3 + LEDs 3 = **76 signal**,
+  + spare/NC 4 + power/gnd 20 = 100.
 - BOARD NOTES: "debug/therm" → "debug/**tether**"; "NAME.FMT tiles" →
   "NAME.HTML titles". The ".JSlf" line is **deleted, not respelled** —
   there is no `.JSH`/`.JSB` and no compile cache; the ProgramImage is
@@ -145,9 +146,14 @@ text errors baked into the render — trust this list, not the poster fine print
 - Pin numbers on the QFN drawing are illustrative placement only.
 - SYSTEM RULES §1 should also carry the dispatch rule: **one decoder,
   `exec64`**; every ProgramImage is Value64.
-- The 6-pin GPIO joystick header is the Rev A proposal and matches the pin
-  budget above. Note that the **FPGA prototype** uses a Mini I2C gamepad
-  @ `0x5A` instead — the two boards differ here on purpose.
+- Joystick is **I2C on both boards** (user decision 2026-08-21): a Mini I2C
+  gamepad @ `0x5A` on `JOY_SCL` / `JOY_SDA`, same part and same
+  `jmr_i2c_joy` master the FPGA prototype runs. The poster's 6-pin GPIO
+  header and its `Joystick (GPIO)` / `GP[5:0]` row are wrong — it is a
+  4-pin PH2.0 header (`G` / `V` / `SDA` / `SCL`) with board-side 4.7 kΩ
+  pull-ups, costing **2 pins instead of 6**. The 4 freed pins become
+  spare/NC, and the bus is shared, so later I2C peripherals need no new
+  package pins.
 
 **Re-rendering this poster:** the full image-generation prompt — every
 erratum above folded in, with the pin budget spelled out so it sums — is

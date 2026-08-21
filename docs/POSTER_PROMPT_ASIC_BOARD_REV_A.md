@@ -53,7 +53,7 @@ The previous render of this poster was ruined by garbled fine print. So:
   characters and never substitute a similar-looking word.
 - Identifiers that must survive intact: IS61WV204816, TFP410, CH340C,
   CP2102, QFN-100, NAME.HTML, ProgramImage, CE#, OE#, WE#, UB#, LB#,
-  PS2_CLK, PS2_DATA, TEST_EN, EP = GND.
+  PS2_CLK, PS2_DATA, JOY_SCL, JOY_SDA, TEST_EN, EP = GND.
 
 PAGE LAYOUT
 Upper half, three panels left to right:
@@ -95,7 +95,7 @@ Seven numbered sections.
 - "External asset SRAM: 4M × 20, 1.8 V — A[20:0] + DQ[15:0] + CE#/OE#/WE#/UB#/LB# (async SRAM bus)"
 - "Video: 12-bit DDR RGB + HSYNC/VSYNC/DE + PCLK → external HDMI/DVI transmitter → HDMI Type-A  (proposal)"
 - "Keyboard: USB-HID → PS/2 converter MCU → PS2_CLK / PS2_DATA (RX-only)"
-- "Joystick: 6 GPIO inputs (Up/Down/Left/Right + 2 buttons) on a Pmod-style header"
+- "Joystick: Mini I2C gamepad @ 0x5A — JOY_SCL / JOY_SDA (open-drain, board-side pull-ups). Same master as the FPGA prototype."
 - "microSD SPI (CS/SCK/MOSI/MISO), FAT32: NAME.HTML titles; ProgramImage is regenerated in memory"
 - "Console UART via CH340/CP2102 micro-USB (debug/tether only)"
 - "Audio PWM → amp → 3.5 mm jack (V1-later)"
@@ -125,7 +125,7 @@ Colored legend strip below the drawing, seven keys:
 "Power (1.8 V)" · "Power (3.3 V)" · "SRAM Addr" · "SRAM Data" ·
 "SRAM Ctrl" · "Video DDR" · "Video Sync/Clk"
 Second legend row, five keys:
-"Peripheral" · "GPIO" · "Clock / Reset / Test" · "GND" · "NC"
+"Peripheral" · "I2C (open-drain)" · "Clock / Reset / Test" · "GND" · "NC"
 Caption under the legends, exactly:
 "Pin numbers on this drawing are illustrative placement only."
 
@@ -145,7 +145,7 @@ Caption: "compile-on-RUN bytecode machine"
 PANEL 3b — "PIN SUMMARY (Indicative Budget)"
 (The heading reads exactly "(Indicative Budget)".)
 A table with columns "Category", "Signal", "Count", "Power (Pins)",
-"Description". Thirteen rows, in this order, with these exact counts:
+"Description". Fourteen rows, in this order, with these exact counts:
 
   "SRAM Address"      / "A[20:0]"                      / "21" / "—"  / "4 MB asset bank addr"
   "SRAM Data"         / "DQ[15:0]"                     / "16" / "—"  / "16-bit data bus"
@@ -153,17 +153,18 @@ A table with columns "Category", "Signal", "Count", "Power (Pins)",
   "Video Bus (DDR)"   / "R[3:0], G[3:0], B[3:0]"       / "12" / "—"  / "12-bit DDR RGB"
   "Video Sync / Clk"  / "HSYNC, VSYNC, DE, PCLK"       / "4"  / "—"  / "video timing"
   "PS/2 Keyboard"     / "PS2_CLK, PS2_DATA"            / "2"  / "—"  / "RX-only (do not drive clk)"
-  "Joystick (GPIO)"   / "GP[5:0]"                      / "6"  / "—"  / "Up/Down/Left/Right + 2 buttons"
+  "Joystick (I2C)"    / "JOY_SCL, JOY_SDA"             / "2"  / "—"  / "Mini I2C gamepad @ 0x5A (open-drain)"
   "microSD (SPI)"     / "CS/SCK/MOSI/MISO"             / "4"  / "—"  / "FAT32 file system"
   "UART (Console)"    / "TX, RX"                       / "2"  / "—"  / "debug/tether only"
   "Audio (PWM)"       / "PWM_L, PWM_R"                 / "2"  / "—"  / "to audio amp"
   "Clock / Reset / Test" / "CLK_IN, RESET_N, TEST_EN"  / "3"  / "—"  / "clock, reset, scan enable"
   "Status (LEDs)"     / "ALIVE, READY, GAME"           / "3"  / "—"  / "chip status outputs"
+  "Spare / NC"        / "reserved"                     / "4"  / "—"  / "headroom freed by the I2C stick"
   "Power / Ground"    / "VDD_CORE, VDD_IO, GND"        / "—"  / "20" / "supply and ground"
 
 Final bold row: "TOTAL PINS" / "" / "80" / "20" / "100 pins"
 Caption under the table, exactly:
-"21 + 16 + 5 + 12 + 4 + 2 + 6 + 4 + 2 + 2 + 3 + 3 signal = 80, plus 20 power/ground = 100."
+"21 + 16 + 5 + 12 + 4 + 2 + 2 + 4 + 2 + 2 + 3 + 3 = 76 signal, + 4 spare/NC = 80, plus 20 power/ground = 100."
 (There is NO "RRAM_CTRL" row. Do not add one. The counts above sum to
 exactly 100 — do not alter any number.)
 Blue note box below the table:
@@ -189,7 +190,7 @@ Centre — the chip:
 - Large box "U5  JMR JS ASIC  (Rev A / Arch V1)  100-PIN QFN"
 - Buses leaving the right side toward U8: "A[20:0]  (21)", "DQ[15:0]  (16)", and control "CE# (1)", "OE# (1)", "WE# (1)", "UB# (1)", "LB# (1)"
 - Buses leaving the top-right toward U9: "RGB_DDR[11:0]  (12)", "HSYNC / VSYNC / DE / PCLK  (4)"
-- Other nets: "SPI_CS/SCK/MOSI/MISO  (4)", "UART_TX / UART_RX  (2)", "AUDIO_PWM  (2)", "GP[5:0]  (6)", "ALIVE / READY / GAME  (3)", "CLK_IN / RESET_N / TEST_EN  (3)"
+- Other nets: "SPI_CS/SCK/MOSI/MISO  (4)", "UART_TX / UART_RX  (2)", "AUDIO_PWM  (2)", "JOY_SCL / JOY_SDA  (2)", "ALIVE / READY / GAME  (3)", "CLK_IN / RESET_N / TEST_EN  (3)"
 
 Right of the chip:
 - Box "U8  ISSI IS61WV204816  4 MB SRAM  (2M × 16)  ASSET BANK"
@@ -206,7 +207,7 @@ Bottom row of small blocks:
 - "J6  STAT LEDs": "ALIVE", "READY", "GAME" with "R2 330Ω", "R3 330Ω", "R5 330Ω", caption "(active high)"
 - "U7  Audio Amp (Class-D)" fed by "PWM_L" and "PWM_R", with "3.3 V" rail
 - "J9  microSD Card Socket (SD Card Out)": pins "SC", "CS", "SCK", "MOSI", "MISO", "CD", "GND (0V)"
-- "J7  JOYSTICK HEADER (Pmod-style)": pins "1 +3.3 V", "2 DOWN (GPIO1)", "3 LEFT (GPIO2)", "4 RIGHT (GPIO3)", "5 UP (GPIO0)", "6 FIRE A (GPIO4)", "7 FIRE B (GPIO5)", "8 GND"
+- "J7  JOYSTICK HEADER (PH2.0, 4-pin)": pins "1 G (GND)", "2 V (+3.3 V)", "3 SDA", "4 SCL", with pull-ups "R6 4.7 kΩ" and "R7 4.7 kΩ" to 3.3 V on SDA and SCL, and the caption "Match the labels on the stick (G V SDA SCL), not wire colors."
 
 "BOARD NOTES (Rev A)" panel down the right edge, bulleted:
 - "USB-C = power only (5 V). No data."
@@ -220,7 +221,9 @@ Bottom row of small blocks:
 - "Place decoupling caps as close as possible to device pins."
 - "STAT LED: ALIVE / READY / GAME (on pins 40 / 41 / 42)."
 - "TEST_EN for boundary scan."
-- "The FPGA prototype uses a Mini I2C gamepad @ 0x5A instead of this GPIO header; the ASIC Rev A budget spends 6 GPIO pins here."
+- "Joystick is a Mini I2C gamepad @ 0x5A on JOY_SCL / JOY_SDA — the same part and the same master the FPGA prototype uses."
+- "I2C is open-drain: R6 / R7 (4.7 kΩ to 3.3 V) are required. The ASIC does not drive either line high."
+- "The stick costs 2 pins instead of 6, and the bus is shared — further I2C peripherals can hang off the same two pins with no new package pins."
 
 DO NOT PLACE ANYWHERE ON THIS POSTER
 - ".JSH", ".JSB", ".JSlf", or any "compile cache" of any kind — there is no
@@ -230,6 +233,8 @@ DO NOT PLACE ANYWHERE ON THIS POSTER
 - "RRAM_CTRL" (no such pin group)
 - "(Unclad Busted)" or any other mangling of "(Indicative Budget)"
 - "exec32"
+- a 6-pin GPIO joystick header, "Joystick (GPIO)", or "GP[5:0]" — the
+  stick is I2C on both the FPGA prototype and the ASIC
 - a pin-count table whose rows do not sum to 100
 - any claim that the QFN-100 package, the TFP410-class transmitter, the
   12-bit DDR RGB bus, or the power values are frozen — they are proposals
@@ -265,5 +270,5 @@ V1 poster. Corrected in this commit.
 | Compile cache | "invisible, JSH compile cache" in BOARD NOTES | no cache exists — line removed, replaced with "the ProgramImage is rebuilt in memory on every RUN" | `ARCHITECTURE.md:223`, `:310` |
 | µSD contents | "NAME.FMT tiles" | "NAME.HTML titles — user titles only" | `jmr_console_engine.sv`, `storage/` |
 | Dispatch | absent | SYSTEM RULES §1 gains "One decoder: exec64. Every ProgramImage is Value64." | `jmr_js_vm.sv:6035` |
-| Joystick | GPIO header, unqualified | keep the 6-pin GPIO header (the frozen budget spends 6 pins there) **and** note that the FPGA prototype uses a Mini I2C gamepad @ `0x5A` | `rtl/phys/jmr_i2c_joy.sv`, errata pin budget |
+| Joystick | 6-pin GPIO header, "Joystick (GPIO)", `GP[5:0]` | **Mini I2C gamepad @ `0x5A`** on `JOY_SCL` / `JOY_SDA` — 2 pins, open-drain, board pull-ups. Same part and master as the FPGA prototype; the 4 freed pins become spare/NC | `rtl/phys/jmr_i2c_joy.sv`, user decision 2026-08-21 |
 | Pin total | rows did not sum | explicit "80 signal + 20 power/ground = 100" caption so a reader can check the arithmetic | errata |
