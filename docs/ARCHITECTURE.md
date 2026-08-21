@@ -139,8 +139,22 @@ text errors baked into the render — trust this list, not the poster fine print
   SRAM ctrl 5 + RGB DDR 12 + video sync/clk 4 + PS/2 2 + joystick 6 +
   SPI 4 + UART 2 + audio 2 + clk/rst/test 3 + LEDs 3 + power/gnd 20 = 100.
 - BOARD NOTES: "debug/therm" → "debug/**tether**"; "NAME.FMT tiles" →
-  "NAME.HTML titles"; ".JSlf" → ".JSH".
+  "NAME.HTML titles". The ".JSlf" line is **deleted, not respelled** —
+  there is no `.JSH`/`.JSB` and no compile cache; the ProgramImage is
+  rebuilt in memory on every `RUN`.
 - Pin numbers on the QFN drawing are illustrative placement only.
+- SYSTEM RULES §1 should also carry the dispatch rule: **one decoder,
+  `exec64`**; every ProgramImage is Value64.
+- The 6-pin GPIO joystick header is the Rev A proposal and matches the pin
+  budget above. Note that the **FPGA prototype** uses a Mini I2C gamepad
+  @ `0x5A` instead — the two boards differ here on purpose.
+
+**Re-rendering this poster:** the full image-generation prompt — every
+erratum above folded in, with the pin budget spelled out so it sums — is
+[POSTER_PROMPT_ASIC_BOARD_REV_A.md](POSTER_PROMPT_ASIC_BOARD_REV_A.md).
+This poster is a schematic, so expect the panels and prose to come back
+right and the QFN pin stubs to stay decorative. When a good render lands,
+delete the bullets it fixes from the list above.
 
 ---
 
