@@ -36,11 +36,12 @@ Synth vs play-speed debt (JOIN intern scan, what to keep for Vivado):
 History of RTL edits from the 70 GB Vivado hunt (not a current-bug list;
 use when tracing what those edits most likely broke):
 [docs/VIVADO_FLATTEN_HUNT.md](docs/VIVADO_FLATTEN_HUNT.md).
-Tagged Q16 opcode unit is leftover (titles use exec64): plan to unhook
-it is [docs/REMOVING_EXEC32.md](docs/REMOVING_EXEC32.md) — glass is done;
-not in parallel with a speed/FIND pass. After that unhook: big arrays that
-Vivado built from logic LUTs (LUTRAM) need the Port A RAM shape so they
-can sit in BRAM tiles — not FPGA-SIM speed, not every array into BRAM:
+The tagged Q16 opcode unit is **gone** (2026-08-21) — one decoder,
+`exec64`; record + the remaining tagged-array sweep is
+[docs/REMOVING_EXEC32.md](docs/REMOVING_EXEC32.md). The big arrays that
+Vivado built from logic LUTs (LUTRAM) now have the Port A RAM shape so
+they can sit in BRAM tiles — what those words mean, and the measured
+memory census:
 [docs/FPGA_FIT.md](docs/FPGA_FIT.md#what-these-words-mean-lutram-bram-port-a).
 Failed `make bit` diaries (16:17 / 2026-08-20 OOM): [docs/OLD_RUNS.md](docs/OLD_RUNS.md).
 How to reorganize the synthesis RTL later (plan only — do not extract JOIN/JSON/GC/HEAP):
@@ -122,7 +123,9 @@ demos are not the product. Ctrl-V pastes into the prompt.
 **[CONSTITUTION.md](CONSTITUTION.md) is the specification.** If the code and
 the Constitution disagree, the code is wrong.
 
-**Linux day-one:** [docs/LINUX_WORKSTATION.md](docs/LINUX_WORKSTATION.md)
+**Linux day-one:** [docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md) (board,
+toolchain, and the RTL / FPGA-SIM / Vivado / `.bit` glossary).
+`docs/LINUX_WORKSTATION.md` was folded into that file.
 
 **What is RTL / FPGA-SIM / Vivado / `.bit`?**  
 [docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md#teach-me-rtl--fpga-sim--vivado--bit--bin)

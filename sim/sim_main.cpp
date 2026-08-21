@@ -406,7 +406,11 @@ static const char* vm_sname(unsigned s) {
         "S_V64_METH","S_V64_FE_ELEM","S_V64_FE_FILTER","S_V64_OGETI_NAT",
         "S_V64_IDXSCAN","S_V64_CTOR_ENV","S_V64_CTOR_VARS","S_REL_ENV","S_FREE_OBJ","S_FREE_ARR",
         "S_V64_BIND","S_V64_MINMAX","S_V64_WIN_FILL","S_ARR_PROMOTE",
-        "S_V64_RECT_LD","S_HEAP_CLR"
+        "S_V64_RECT_LD","S_HEAP_CLR",
+        // Keep in lockstep with the parent st_t tail (RTL_REORG: the enum
+        // is append-only and this table indexes by NUMBER). Missing entries
+        // print `sname=?` and cost debugging time.
+        "S_V64_SLICE","S_V64_SORT","S_FB_SYNC","S_V64_DISPATCH"
     };
     if (s < (unsigned)(sizeof(N) / sizeof(N[0]))) return N[s];
     return "?";

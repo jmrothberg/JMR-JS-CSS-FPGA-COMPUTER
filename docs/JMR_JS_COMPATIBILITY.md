@@ -149,7 +149,7 @@ still compile byte-identically; bytecode suite 198/198.
 
 | Gap | Evidence in `MK.HTML` |
 |---|---|
-| **`new` on a dotted member** (`new mk.arenas.Arena(…)`, `new mk.moves.Attack(…)`, …) | **70** `new mk.…` call sites (**39** distinct ctor paths). Compiler stops at line 738 with `EXPECTED '('`. V2 compiler must accept `new Expr.Member(…)` (or an equivalent desugar), not only `new Ident(…)`. |
+| **`new` on a dotted member** (`new mk.arenas.Arena(…)`, `new mk.moves.Attack(…)`, …) | **70** `new mk.…` call sites (**39** distinct ctor paths — re-measured 2026-08-21). Compiler stops at line 738 with `EXPECTED '('`. V2 must accept `new Expr.Member(…)`: not just a parse fix — the callee is a **runtime function value**, so exec64 needs construct-on-a-value (allocate, set `this`, run, return the object). The 16×16 class/method intern tables cannot absorb it either (mk.js has ~25 constructor paths), so "treat them as classes" is not a shortcut. |
 
 #### Natives / language (emitted or required by this engine)
 
@@ -161,7 +161,8 @@ still compile byte-identically; bytecode suite 198/198.
 | **`typeof`** | Used | Already V1 — keep |
 | **`setInterval` / `addEventListener` / `Image` / `drawImage` / `fillRect` / `fillText` / `createElement` / `querySelector` / `getElementById`** | Used | Already on Completeness tables — verify FPGA-SIM for MK load path |
 | **`mk.Promise`** | Custom ctor in-file (`new mk.Promise`), **not** ES `Promise`/`async` | No browser Promise ISA required if this stays a plain JS object; do **not** add `async`/`await` for MK |
-| **`Object.prototype.hasOwnProperty.call`** | Used in key-count helper | Must keep working `call` / prototype method dispatch under Value64 |
+| **`Function.prototype.call` / `.apply`** (explicit `this`) | **42 sites, 11 distinct targets** — almost all the classic super-constructor pattern `mk.moves.Move.call(this, owner)`; also `Object.prototype.hasOwnProperty.call`, `callback.call`, and 4 `.apply(this, arguments)` | **A real V2 VM capability, not a shim.** exec64 must be able to invoke a runtime function value with a caller-supplied `this` (the machinery exists inside the class-ctor path — `vcall_set_this` — it is simply not exposed to a value call). Pairs with dotted `new` below; ~100–150 lines of exec64, **no new memories**. |
+| **`arguments` object** | 2 sites (inside the `.apply` forwards) | Only needed to the depth `.apply` forwarding requires; do not build a full arguments object |
 
 **Not required by current `MK.HTML` (do not list as MK V2 drivers):**
 `Math.sin` / `cos` / `atan2` / `hypot` / `ceil` (not referenced), negative
@@ -824,12 +825,20 @@ with black side letterbox, matching the vertical cabinet.
 
 ### What FPGA-SIM has today (board after next matching flash)
 
-Natives in `functional_model/jsb_format.py` / `jmr_js_vm.sv`:
+**Stale as written (it described the early `.JS` era) — corrected
+2026-08-21.** FPGA-SIM runs the **HTML** titles end to end: all five
+(INVADERS, PACMAN, DONKEY, ASTEROID, MRDO) load, compile on RUN, and play
+on the Value64 decoder with the full native table (ids 0–41 in
+`functional_model/jsb_format.py`), ASET sprite art from the external
+asset SRAM, 640×480 double-buffered glass, keyboard via KEYEVT **and**
+KEYBITS, GC, and JSON/RegExp/string machinery. The narrow early list
+(`console.log`, `clear`, `fillRect`, `swapBuffers`, `key*`, `startLoop`)
+is what the *first* `.JS` demos needed; it is not the surface any more.
 
-`console.log`, `clear`, `fillRect`, `swapBuffers`, `keyLeft`, `keyRight`,
-`keyFire`, `keyUp`, `keyDown`, `startLoop` — enough for `INVADERS.JS` /
-`PACMAN.JS` / `DONKEY.JS`, not for the HTML titles. The **03:36** board bit
-still has Invaders hex / 160×120 FB only.
+**The board is the thing that is behind:** the last flashed bit is the
+**03:36** one (Invaders hex / 160×120 FB). The current RTL has never been
+synthesized — that is the run the user is doing now
+([FPGA_FIT.md](FPGA_FIT.md)).
 
 ---
 

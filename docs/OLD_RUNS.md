@@ -1,11 +1,18 @@
 # Old Vivado runs (diary)
 
-**Not the agent brief.** Current fit laws, cleanup order, and Port A
-recipe: [FPGA_FIT.md](FPGA_FIT.md). RTL edits that likely broke glass:
+**Not the agent brief.** Current fit laws and the Port A recipe:
+[FPGA_FIT.md](FPGA_FIT.md). RTL edits that likely broke glass:
 [VIVADO_FLATTEN_HUNT.md](VIVADO_FLATTEN_HUNT.md). Live status:
 [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
 
-This file is hour-by-hour / log-noise from failed `make bit` runs so
+**Live run is first.** Failed runs below predate 2026-08-21, when
+exec32 was deleted and the LUTRAM monsters were Port A'd — that netlist
+no longer exists. The *lessons* still hold (worker caps
+alone do not fix a fat netlist; no DCP until synth_1 100%; never
+`bit-fresh` after a mapping crash); the *diagnoses* ("idle exec32 still
+dies", "do not Port-A `stack`") are already acted on.
+
+This file is hour-by-hour / log-noise from `make bit` so
 FPGA_FIT stays short. Do not resume mid-mapping. Do not raise synth
 threads. Do not `bit-fresh` to “recover” a mapping crash.
 
@@ -16,6 +23,39 @@ Kill only if the **largest** Vivado process climbs toward ~80 GB **and**
 the log is frozen, **or** RSS passes **~100 GB** during technology
 mapping (`tcmalloc large alloc`). All-Vivado-sum ~70 GB with parent
 still ~35 GB is helpers, not the 70 GB FSM-poke hang.
+
+---
+
+## V1.0 `make bit` — 2026-08-20 20:53 (in progress)
+
+Same step table as the 16:17 run. **This** netlist is V1.0: exec32 gone,
+Port A on the LUTRAM monsters, `spr_mem` 32 KB / `source_mem` 64 KB.
+**2** synth threads. Reused the existing Vivado project (not
+`bit-fresh`). Started **Thu Aug 20 20:53:46**. Elapsed times are
+Vivado’s `Time (s): elapsed` from `synth_design` start (same clock as
+16:17). Log: `synth_1/top_nexys_video.vds`. Tracker:
+`build/nexys_video/synth_rss.log`.
+
+The tracker’s first line (`tcmalloc: large alloc 4896620544`) is the
+**last line of the old concatenated `runme.log`**, not this run dying.
+
+| Step | What it is | Status | This run | 16:17 (for compare) |
+|---|---|---|---|---|
+| Open project, skip MIG | Reuse `build/nexys_video/vivado` | **Done** | seconds (20:53:34 parent; `reusing …xpr`, MIG skip) | seconds |
+| RTL elaboration | Read Verilog, build netlist | **Done** | **elapsed 00:12:08** (wall ~21:05:54); peak **29.4 GB** | 00:11:03; peak ~28.5 GB |
+| RTL optimization phase 1 | First cleanup | **Done** | **elapsed 00:12:30** (wall ~21:06:16); peak **29.4 GB** | in those 11 min |
+| Constraints + timing engine | Apply XDC; start timing | **in progress** (~21:10) | `Initializing timing engine`; RSS **~35 GB** (same peak as 16:17) | elapsed **00:18:59**; peak ~35 GB |
+| RTL optimization phase 2 | Long quiet; FSMs; hash/FB as RAM | not yet | — | elapsed **02:39:54** |
+| Cross-boundary / area optimization | Merge/shrink across modules | not yet | — | elapsed **07:06:36** |
+| ROM / RAM / DSP / retiming report | Preliminary mapping tables | not yet | — | minutes |
+| Apply XDC timing constraints | Clock/path constraints | not yet | — | elapsed **07:12:34** |
+| Timing optimization | Timing-driven logic opt | not yet | — | elapsed **08:07:08**; peak ~54 GB |
+| Technology mapping | Map to FPGA cells | not yet | 2 workers (do not raise) | **OOM ~03:15**; 7 workers; RSS 58→114 GB |
+| Rest of synth_1 (write DCP) | `utilization_synth.rpt` when 100% | not yet | — | never reached |
+| impl_1 / place / route / `.bit` / WNS | After synth | not yet | — | not started |
+
+Fill later rows from `Finished … : Time (s): elapsed =` in
+`top_nexys_video.vds` as they print. Peak RSS from the tracker.
 
 ---
 

@@ -1,9 +1,16 @@
 # Intern FIND — play speed (not the T200 OOM)
 
-**2026-08-20:** five titles **play** on FPGA-SIM; they are **slow**. This
-file is clocks-per-frame, not synth OOM. Next RTL for the bitstream is
-[FPGA_FIT.md](FPGA_FIT.md) (exec32, then LUTRAM Port A). Do not mix FIND
-work with that cut.
+**2026-08-21:** five titles **play** on FPGA-SIM; they are **slow**. This
+file is clocks-per-frame, not synth OOM. The bitstream cleanup
+([FPGA_FIT.md](FPGA_FIT.md): exec32 cut + LUTRAM Port A) is **done** — the
+tree is synthesis-ready, so the items here are now the next work after the
+user's `make bit`. Do not mix a FIND/speed pass with a fit pass.
+
+**Two different speeds — do not confuse them.** (a) *VM clocks per frame*:
+what this file tracks; it is what makes the real FPGA fast or slow. (b)
+*Verilator host throughput*: ~800k clk/s after the exec32 cut (+16% from
+the netlist shrink alone, measured 2026-08-21), which only affects how
+long FPGA-SIM takes on the workstation. A win in (a) helps both.
 
 # Measured clock sinks — PACMAN play frame (2026-08-20, STATEHIST?)
 

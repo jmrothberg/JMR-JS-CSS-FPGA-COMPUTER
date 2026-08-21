@@ -397,7 +397,6 @@ JS events (pattern cite: BASIC sibling UART/`KEY` + PS/2 FIFO merge in
 
 ## Related
 
-- [LINUX_WORKSTATION.md](LINUX_WORKSTATION.md)
 - [ARCHITECTURE.md](ARCHITECTURE.md)
 - [FPGA_FIT.md](FPGA_FIT.md)
 - [SESSION_HANDOFF.md](SESSION_HANDOFF.md)

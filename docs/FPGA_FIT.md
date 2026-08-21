@@ -1,7 +1,8 @@
 # T200 fit — agent handoff (do not crash, do not overflow)
 
-Nexys Video **XC7A200T**. Agent does **not** run Vivado / `make bit` — the
-user does, after this RTL lands. Same `rtl/*.sv` as FPGA-SIM.
+Nexys Video **XC7A200T**. The agent does **not** run Vivado — the user
+does, from a host terminal:
+`source scripts/vivado_env.sh && make -C tools/board_flow bit`. Same `rtl/*.sv` as FPGA-SIM.
 Law: `.cursor/rules/never-fake-fpga-sim.mdc`. Extra clocks OK. One JS
 heap. No JOIN/JSON/GC extract. Clock class ~30 MHz.
 
@@ -59,21 +60,22 @@ small enough to survive mapping, first candidates if LUTRAM is high.
 
 ## What was done before (kept for history)
 
-### Cleanup before the next `make bit` (2026-08-20 OOM)
+### Cleanup before the next `make bit` (2026-08-20 OOM) — DONE 2026-08-21
 
-2026-08-20 mapping **OOM'd at 2 synth threads**. Capping workers is
-**not enough**. Shrink the netlist, then the user rebuilds.
+2026-08-20 mapping **OOM'd at 2 synth threads**. Capping workers was
+**not enough**, so the netlist was shrunk first. All three steps below are
+complete; kept for the reasoning, not as a to-do.
 
 **Glass is done.** All five HTML titles play on FPGA-SIM (INVADERS,
 PACMAN, DONKEY, ASTEROID, MRDO). They are **slow** (clocks per frame /
 FIND / 1 px per fillRect) — that is not this job. Do not reopen play
-bugs. Do not mix a speed pass with 2–3 on `jmr_js_vm.sv`.
+bugs. Do not mix a speed pass with a fit pass on `jmr_js_vm.sv`.
 
-| Order | Job | Why |
+| Order | Job | Result |
 |---|---|---|
-| 1 | Unhook **exec32** | Idle tagged decoder + `stack` 2K×32 still mapped as LUTRAM. How: [REMOVING_EXEC32.md](REMOVING_EXEC32.md) |
-| 2 | **Port A** the LUTRAM monsters | Big arrays built from logic LUTs make mapping hungry. `source_mem` first, then `vstack` / `name_mem` / `gc_queue` / `vgc_queue` if still LUTRAM. Recipe [below](#port-a-recipe). |
-| 3 | Stop. User `make bit` (synth **2** threads, impl **8**) | Fill [Headline](#headline-fill-after-synth_1-100). LUTRAM high + BRAM low = template still missed |
+| 1 | Unhook **exec32** | **done** — file deleted, both build lists cleaned, `hs32` tied 0. [REMOVING_EXEC32.md](REMOVING_EXEC32.md) |
+| 2 | **Port A** the LUTRAM monsters | **done** — `vgc_queue` `vconsts` `vobj_proto` `vfn_proto` `vfn_env` `vfn_bound_this` `venv_parent`, plus `spr_mem` 256K→32K and `source_mem` 128K→64K. Recipe [below](#port-a-recipe). |
+| 3 | Stop. User `make bit` (synth **2** threads, impl **8**) | **the current step** — fill [Headline](#headline-fill-after-synth_1-100). LUTRAM high + BRAM low = template still missed |
 
 Do not raise `JMR_VIVADO_SYNTH_THREADS` or set `JMR_VIVADO_ALLOW_WIDE=1`.
 Do not `bit-fresh` / `clean` after a mapping crash. Mapping cannot resume
@@ -89,8 +91,9 @@ Do not `bit-fresh` / `clean` after a mapping crash. Mapping cannot resume
   per clock (`stack_dual_pend` for FOREACH). Wait `*_rdata`.
 - **`ram_style = "block"` while the poke stays** → LUTRAM or that hang.
 - **Every array into BRAM** → paper math **~489 tiles vs 365** on the
-  T200. Tiny 8-deep FOREACH/rAF may stay LUTRAM. Do not Port-A tagged
-  `stack` (it goes away with exec32).
+  T200. Tiny 8-deep FOREACH/rAF may stay LUTRAM. Do not Port-A the tagged
+  `stack` / `gc_queue` / `vars` / `tfn_*` family — they **disappear** with
+  the Phase 3b sweep (~430 Kb), so converting them is wasted work.
 - Grow heap past `MAX_OBJ=1024`, arrays `1536×32+128×128`, `ENV_DEPTH=512`.
   8192/4096 does not fit. JS objects are not the 4 MB ASET SRAM.
 - Split JOIN/JSON/GC into new modules.
@@ -181,12 +184,16 @@ inside the 365.
 | FFs (legal SRAM) | ~15k class | 269,200 |
 | Dual FB 640×480×8 | ~0.60 MB / ~133 tiles | 365 tiles / 1.64 MB |
 | `imgd_pix` | ~0.30 MB / ~67 | same 365 |
-| `spr_mem` (blit scratch, not ASET) | ~0.25 MB / ~57 | same |
-| `source_mem` | ~0.13 MB / ~29 | same |
+| `spr_mem` (blit scratch, not ASET) | **~0.03 MB / ~7** (was 0.25 MB / ~57 before the 2026-08-21 shrink) | same |
+| `source_mem` | **~0.06 MB / ~15** (was 0.13 MB / ~29) | same |
 | objects 1024×32×80b | ~0.31 MB / ~71 | same |
 | arrays 1536×32+128×128×64b | ~0.50 MB / ~114 | same |
 | env 512×16×80b | ~0.08 MB / ~18 | same |
-| **If all infer as BRAM** | **~2.2 MB / ~489 tiles** | **365 / 1.64 MB — over** |
+| **If all infer as BRAM** | **~2.2 MB / ~489 tiles** at the 2026-08-20 census; **~420 after** the exec32 cut + shrinks, and Phase 3b removes ~430 Kb more | **365 / 1.64 MB** |
+
+Paper math is a planning tool, not a measurement: several of these arrays
+legitimately stay in LUTRAM or get packed. **The synth report is the
+truth** — fill the Headline below from it before believing any row here.
 
 ---
 

@@ -13,9 +13,10 @@ only — never a quiet fallback when the RTL binary is missing (fail loud:
 
 Legal SRAM first, then glass. Do not make a title playable on a
 Verilator-only heap and “flatten later.” The user runs `make bit` — **never
-the agent.** Do not start Vivado to check. Inspect **both** exec32 and
-exec64 (titles on 64 still synthesize 32). `sim_server_synth` PASS is not a
-bitstream.
+the agent** (`source scripts/vivado_env.sh && make -C tools/board_flow bit`
+on the host). Do not start Vivado to check. Inspect the parent and
+**exec64** — the only decoder since 2026-08-21. `sim_server_synth` PASS is
+not a bitstream.
 
 Glass is **640×480** (GUI mirror matches HDMI, not a 16-line strip).
 Keyboard is **full JS** (case + punctuation); do not reintroduce an a–z fold.

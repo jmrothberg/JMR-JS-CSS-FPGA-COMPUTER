@@ -20,8 +20,9 @@ skip the check so a private copy “still looks alive.”
 still has the real tables. Two copies will not fit leftover BRAM, and they
 go stale (black PACMAN, stuck rAF, heap skew that looks like four title
 bugs). Moving those arrays inside exec to dodge illegal ports is the same
-mistake. Silent stack reset is not GC. Titles that run exec64 still
-**synthesize exec32** — inspect both.
+mistake. Silent stack reset is not GC. There is **one decoder** since
+2026-08-21 (`exec64`); exec32 is deleted, so inspect the parent +
+exec64.
 
 **Do:** one 1-D SRAM. Exec: address in, data next clock. Fast `LOAD_VAR`
 (`a1`) still hits that SRAM.

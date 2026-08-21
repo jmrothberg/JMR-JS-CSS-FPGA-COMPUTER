@@ -1,16 +1,122 @@
 # Potential bugs — FPGA-SIM play RTL (code review)
 
-**2026-08-20 (user):** play correctness is **done**. All five titles run
-on FPGA-SIM (INVADERS, PACMAN, DONKEY, ASTEROID, MRDO), **slowly**.
-Do not hunt new freezes as the next job. Next RTL is T200 synth fit
-([FPGA_FIT.md](FPGA_FIT.md): unhook exec32, then LUTRAM Port A). Speed
-(FIND / clocks per frame) is separate and must not mix with that cut.
+**2026-08-21 status.** Banner **V1.0**; all five titles play on FPGA-SIM
+(INVADERS, PACMAN, DONKEY, ASTEROID, MRDO), **slowly**. The T200 fit
+cleanup is **done** ([FPGA_FIT.md](FPGA_FIT.md)) and the tree is
+synthesis-ready; speed (FIND / clocks per frame,
+[SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md)) is the next pass
+after the user's `make bit`.
+
+**How to read this file:** it is a chronological working record — newest
+session on top, each entry keeping the *evidence* and the *root cause*,
+because the same bug classes keep recurring (parent/exec dual-copy skew,
+`*_rdata` lag consumed a beat early, missing first-entry guards on
+exec-entered states, one-shot mask fall-through). Entries are marked
+FIXED / OPEN / RETRACTED in place. **Open at 2026-08-21: #70** (queue-hash
+parity), **#71** (fault-state checkpoint parity), **#72** (class-in-IIFE
+ctor allocates ~950 objects). Everything else on this page is closed.
 
 Inspection of the play path: `rtl/engines/jmr_js_vm.sv` (parent FSM),
-`jmr_js_vm_exec64.sv`, `jmr_js_vm_exec32.sv`, `sim/sim_main.cpp`, vs
+`jmr_js_vm_exec64.sv` (the only decoder since 2026-08-21), `sim/sim_main.cpp`, vs
 `hardware_model/js_vm.py`, plus `storage/*.HTML` and
 [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md). No traces. No FPGA-SIM
 rerun.
+
+## RECURRING BUG CLASSES — read this before debugging anything
+
+Five patterns produced the overwhelming majority of the bugs in this file.
+If glass is wrong, start by asking which of these it is; the answer is
+usually one of them, and the fix shape is already known.
+
+### 1. Parent/exec dual-copy skew
+
+exec64 owns registers; the parent mirrors them through `hs_*` tasks that
+set a one-shot `hs_m_*` mask, and reads are muxed `hs_m ? parent_ff :
+e64_*_q`. Anything that reads a parent FF **outside** the states in the
+`hs64` mux gets a stale value.
+
+*Tells:* a value that is right inside the opcode and wrong one state
+later; a completion that pushes to the wrong stack slot; a checkpoint
+hash that differs while the heap matches.
+*Examples:* the script-end halt hashed a stale `vsp`/`vcsp`/`vthis`/`venv`;
+`vkey_ln` latched the parent's stale listener count; `v64_repl`/`repl_rch`
+only ever lived in exec FFs so `replace` completed down the 32-bit path.
+*Fix shape:* seed from `e64_*_q` at the point of use, or poke the parent
+FF **and** set its mask.
+
+### 2. Registered raddr → registered rdata: two beats, not one
+
+Every big array is Port A: address this clock, data **next** clock, and
+the address mux itself is often gated by a flag that is set with `<=`
+(so it reads 0 during its own set beat — that is a *third* beat of lag if
+you gate on it).
+
+*Tells:* every element of a walk reads the same wrong value, or reads one
+row behind; a length/flag test that "can't" fail does.
+*Examples:* `join` gated its name-hash raddr on `jn_name_arm` and every
+string digit came back `"0"` (so `"1100"` interned as `"0000"`);
+`replace`'s replacement char read the pattern's row; #58's WIN_FILL.
+*Fix shape:* gate the mux on a flag that is already high on the beat the
+data is consumed (`jn_slot_arm`), or add an explicit settle beat.
+
+### 3. Exec-entered parent state with no first-entry guard
+
+When exec sets `state_n` to a parent state, the parent's seeds may live
+only in exec FFs. Without a first-entry arm the walk runs on garbage — or
+re-decodes forever.
+
+*Tells:* a frame that burns the 64M cap in one state; a walk that starts
+from a previous walk's numbers.
+*Examples:* S_SQRT (PACMAN stuck on splash); S_FONTPX and S_V64_DISPATCH
+needed one by construction when added.
+*Fix shape:*
+```systemverilog
+if (state != S_X && jsb_flags[3] && e64_leave_hold) begin
+    hs_st(S_X);
+    /* copy seeds from e64_*_q */ hs_ip(e64_ip_q); hs_vsp(e64_vsp_q);
+end else begin /* the walk */ end
+```
+
+### 4. Shared scratch registers with no owner — **the expensive one**
+
+`bind_k`, `bind_rd_arm`, `vfe_rd_arm`, `jn_slot_arm`, `hp_proto_arm`,
+`valloc_rd_arm` and friends are reused by unrelated states. A state that
+interrupts a multi-beat walk silently destroys its cursor.
+
+*Tells:* a walk produces a plausible but wrong result; behavior depends on
+what happened in the *previous* frame.
+*Example:* **#69** — the FRAME rpc can return with the rAF snapshot
+half-done; the next frame's event dispatch reuses `bind_k` in the
+listener scan; the resumed copy loop is skipped and `vraf_snap[0]` still
+holds a stale fn, so the machine "ran the rAF callback" but executed a
+keyup **listener** and the game loop died.
+*Fix shape:* every multi-beat walk resets its own cursor in its own
+first-entry guard, and any state that dispatches mid-boundary work resets
+the cursors it may have clobbered. See
+[RTL_REORG.md](RTL_REORG.md#maintenance-backlog-do-these-instead) item 1.
+
+### 5. A test/harness artifact that looks exactly like an RTL bug
+
+*Examples this cycle:* a probe that reused one sim session "showed"
+findIndex returning a string (it was the previous program's intern
+table); a suite run raced a `rm -f` of the binary and reported 139 skips;
+DIR "not listing .HTML" was 40 leftover probe files scrolling the list
+off an unpaged screen; PACMAN "leaking objects" was a helper waiting for
+an idle window heavy frames never show.
+*Rule:* before believing a weird result, reproduce it in a **fresh sim
+with a fresh card**. The test harness now copies `card.img` to a scratch
+per session — keep it that way.
+
+### Retracted theories (do not re-derive these)
+
+| Idea | Why it was wrong |
+|---|---|
+| **#46** "one timer per frame" | `bind_k` is zeroed by `S_V64_ALLOC` / `S_V64_CTOR_PAD` on every dispatch, so the timer scan already restarts and all due timers drain. The state is a three-way chain, not a one-shot. |
+| **#50** compiler inliner slot aliasing | RTL env lookup is **name-keyed** (`hp_key_n`); the `a1` slot is only a scan hint. Half-vindicated later as **#55**: the hint was used as a scan *start* and skipped the prefix — fixed by always scanning from 0, then re-introduced safely in 2026-08-20's speed pass as a *verified* hint (compare at the hinted slot, full rescan on mismatch). |
+| "Skip gen-match to hide dual-copy skew" | Forbidden. It hides class 1 instead of fixing it, and corrupts handles across GC. |
+| "Extract JOIN/JSON/GC/HEAP into modules" | That is a second heap. See `one-heap-keep-gen`. |
+
+---
 
 ## RTL edits applied this pass (2026-08-19, no run)
 
@@ -881,7 +987,15 @@ clocks; faster is fine if SRAM and synth stay legal.
 
 ---
 
-## Correctness bugs
+## Correctness bugs — 2026-08-19 review snapshot (statuses have drifted)
+
+**Read the status column as "what we believed on 2026-08-19", not as
+current truth.** Almost everything marked *open* here was fixed later that
+week; the current open list is **#70 / #71 / #72** at the top of this file.
+Kept because the *analysis* columns (where, why, cost) are still the best
+description of those code paths — especially **#1/#2/#3**, the intern FIND
+scan, which is genuinely still open and now has measured numbers in
+[SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
 
 | ID | Status | Fix check | Where | Bug | Why it freezes | Best fix |
 |---|---|---|---|---|---|---|
@@ -958,9 +1072,16 @@ same undefined return as **39** — but **no title emits it**, so no ID.
 
 ---
 
-## Compatibility command map (inspection only)
+## Compatibility command map (inspection only) — superseded
 
-Opcode numbers, FM/RTL mnemonics, and native ids 0–40:
+**Use [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md) instead**; its
+Frozen ISA tables are maintained and carry the 2026-08-21 additions
+(`findIndex`, `dispatchEvent`, `ctx.font`, `Object.keys` nid 41, …). This
+table is a 2026-08-19 silicon-vs-claim audit, kept only because its
+per-verb "what the RTL actually does" notes occasionally explain a console
+behavior the compat doc states more briefly.
+
+Opcode numbers, FM/RTL mnemonics, and native ids 0–41:
 [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#bytecode-opcodes-34).
 
 Compat **Complete** = JsHwVm. This table is silicon vs that claim. **NOT** =
@@ -1063,7 +1184,14 @@ build. **host** = FPGA-SIM Python helper, not the console FSM.
 
 ---
 
-## Graphics that look like a freeze (HTML → RTL)
+## Graphics that look like a freeze (HTML → RTL) — **architecture lesson, keep**
+
+Per-ID statuses below are stale (**51** landed; **31** landed; the blit
+runs). The **cost model is the lesson and it is still exact**: this is a
+1-pixel-per-clock raster, so a full 640×480 paint is ~307k clocks and a
+title that paints two full screens per frame cannot be "fixed" by chasing
+a phantom infinite loop. Measured per-state numbers now live in
+[SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
 
 These are not infinite FSMs. They are **O(pixels × JS calls)** on a 1-pixel-per-clock raster. A painted frame that **finishes** should end via **31** (present), not the host cap. G1/G8 look hung when stacked with a real spin (**6**) or a method that never returns to WAIT (**39** is logic, not clocks). FIND (**1**) is extra k-clocks, not the cap by itself.
 
@@ -1108,207 +1236,21 @@ shape have to stay legal or Verilator glass and Vivado both die.
 
 ---
 
-## Confidence (bug / fix)
+## Cut 2026-08-21: "Confidence" / "Typed patches" / "Suggested order"
 
-High = seen in RTL with a single causal path from title HTML. Med = real hole, freeze story depends on another ID. Low = glass or overstated as a cap hang.
+Those three sections were the **2026-08-19 pre-fix planning** for bugs that
+have since been fixed, retracted, or superseded — a to-do list of work that
+is done. They were the most misleading thing in this file: a reader landing
+there saw open items that are closed.
 
-| ID | Bug | Fix | Why |
-|---|---|---|---|
-| **6** | **High** | **applied** | First `0xfffc` arm sits before the FOREACH arm. Fixed by adding a *guarded* arm ahead of it, **not** by deleting it — deleting drops `0xfffc` into the `vsp_hs != bsp` fault 1. |
-| **38** | **High** | **High** | exec64 has no `id_quadcurve`; parent already draws `pc_op==2`. Copy exec32 arm. |
-| **39** | **High** | **High** | `id_reduce` interned, never wired. CALL_METH returns undefined. INVADERS wave-clear is this compare. |
-| **50** | **retracted** | — | Premise disproved: RTL env lookup is name-keyed (`hp_key_n`), the a1 slot is only a scan-start hint. No aliasing. |
-| **49** | **High** | **High** (strobe **plus** first-entry/`hs64`) | `pc_*` has no writer. 9 strobes alone still abort on overlay (`pi>=pc_n`) or poke stale `ip` on the way out. See addendum. |
-| **51** | **High** | **High** | Same overlay class as 49: `S_BLIT` never latches `e64_rw_q` / `e64_blit_si_q`. Hit is a no-op. |
-| **46** | **retracted** | — | `bind_k` is zeroed by `S_V64_ALLOC` (~10346) / `S_V64_CTOR_PAD` (~11917) on every dispatch, so the scan already restarts and all due timers already drain. |
-| **47** | **Med-High** | **applied** | Parent `vfe_*_s` were write-never; exec64 owns the nest stack. Bit nested walks + mid-walk GC — both present in INVADERS. |
-| **14** | **Low** (was High) | **High** | Only `PACMAN.HTML:25 if (!Date.now)` reads it, once at load; `Date.now()` is CALL_METH and already allocation-free. |
-| **2** | **High** | **High** | Hash+u8 compare is in the hit arm. Byte stream is the only legal confirm. |
-| **37** | **Med** as glass | **High** | `txt_y0` is hard-coded — **but PYTHON is alphabetic-only too**, so this is a browser gap, not a parity hole. Judge it against the real browser, not against PYTHON. |
-| **33** **34** | **Low** as glass | **High** | PYTHON only *skips* `fillRect` at alpha==0 and never blends; INVADERS uses alpha on `drawImage`/`stroke`, which PYTHON also paints opaque. RTL matches today. |
-| **23** **40** **41** | **High** as save | **High** (23/40) / Med (41) | INVADERS `addScore` only. Play does not call them. |
-| **42** **43** | **High** as monitor | **High** | C_EXEC has no INSERT/DELETE. Host editor lies. |
-| **45** | **High** as glass | Med | `id_font` never enters exec64. PACMAN HUD + DONKEY ~966. Fix needs 3 new handshake outputs (or a parent `S_FONTPX` first-entry latch), not an FF. **36** rides on it. |
-| **1** | High as slowness; **Low as sole cap** | High as hash→id | `2*names_n` ≤ ~2k. Last-4 hits `"1"` / repeated HUD. Cap is **6** or unfinished rAF. |
-| **7** **8** | Med | High | Overlay/`leave_hold` **partial** in RTL. Nested `new` still PACMAN fault 2. Pending `fr` + latch; no `leave_hold` in enable=0 else. |
-| **15** | **Low** for HTML play | **applied** | Value64 `w`/`s`/`p` were already in; the tagged `hp_qt` leftover is now closed. |
-| **5** **31** | — | — | **Corrected.** Do not drop `st==16`. |
-| **10** | Low for HTML | **applied** (reset half) | exec32 scale was in; `saved_*` now reset too. Silent rAF drop still open. |
-| **13** | Low for Value64 PACMAN | High as hygiene | `getTime` uses `vframe_no`, which Value64 WAIT bumps. |
-| **12** | Low for HTML play | High as hygiene | CALL_METH never plants. nid 2 still untransformed. |
-| **32** | Low | High | Defaults black. Unknown CSS still white. |
-| **20** **G6** | Med | High | Empty ImageData and bbox flood are in RTL. Policy / Bresenham, no second buffer. |
-| **19** | — | — | Alias **corrected**. Do not restore `aid[9:0]`. |
-| **22** **25** | — | — | Replace wait / FETCH arms **in**. Do not delete. |
-| **24** **35** | Slow | Keep wait | Extra SRAM beats. Faster only if `*_rdata` is still valid. |
+What they contained that still matters is preserved above:
+- the retraction lessons (**#46**, **#50**) → *Retracted theories* in
+  [RECURRING BUG CLASSES](#recurring-bug-classes--read-this-before-debugging-anything);
+- the applied fixes → the dated session entries, each with its root cause;
+- the still-open speed items (FIND hash→id, the 1 px/clock raster cost) →
+  [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md), which has measured
+  per-state clock numbers instead of estimates;
+- the remaining open bugs → **#70 / #71 / #72**, listed at the top.
 
----
-
-## Typed patches (high-confidence only)
-
-**46 — RETRACTED, do not type it.** `bind_k` is zeroed by `S_V64_ALLOC`
-(~10346) and `S_V64_CTOR_PAD` (~11917) on every callback dispatch, so the scan
-already restarts on the `0xfffe` return and every due timer already drains.
-The walkthrough below is kept only to show why the "one per frame" reading of
-the state was wrong — the state *is* a three-way chain: 
-
-```
-if (state != S_V64_FRAME_TIMER)   hs_st(S_V64_FRAME_TIMER);   // overlay entry
-else if (bind_k < 8'd64)          ...scan for best due...     // 2 clk / slot
-else if (vt_found)                ...fire it, bind_k <= 65... // -> S_V64_ALLOC
-else                              ...fb_swap + GC_CLEAR...    // present
-```
-
-The callback returns with `rip == 16'hfffe` → `state_n = S_V64_FRAME_TIMER`,
-but the overlay entry only does `hs_st(...)`; `bind_k` is still 65 and
-`vt_found` is 0, so the next beat falls into the present branch. **One timer
-per frame.** In the fire branch, where it already does
-`vt_found <= 1'b0; bind_rd_arm <= 1'b0;` before `hs_st(S_V64_ALLOC)`, also
-re-arm the scan:
-
-```
-bind_k      <= 8'd0;
-vt_best_due <= 32'sh7fffffff;
-vt_best_id  <= 32'sh7fffffff;
-```
-
-so the return re-scans from slot 0 and presents only when a **full** scan
-finds nothing due. **Termination is safe:** `vframe_no` does not advance
-inside a frame, and both nid 28/29 clamp `frames >= 1`, so a timer armed or
-re-armed by a callback is due at `vframe_no + 1` at the earliest and cannot
-re-fire in the same frame. Cost is one 64-slot scan (~128 clocks) per fired
-timer — ~8k clocks for a full queue, nothing against the 8M cap. Do **not**
-raise `TIMER_QUEUE_DEPTH`; keep the `vtimer_n >= 7'd64` fault loud.
-
-**47** — mirror exec64's forEach nest stack into the parent so GC can mark it.
-exec64 already computes the push at ~5466-5476 (`vfe_s_we`, `vfe_s_waddr`,
-`vfe_arr_s_wdata` / `vfe_fn_s_wdata` / `vfe_map_s_wdata`) and the parent
-already has the symmetric **pop** handshake (`hs_m_vfe_pop`, ~11395 and
-~13341). Export those four signals from exec64 and, in the parent, write
-`vfe_arr_s[waddr] / vfe_fn_s[waddr] / vfe_map_s[waddr]` from them on the
-strobe. Root phase 7 (~11005-11020) then marks real handles instead of
-`'0`. Second choice — add read ports and walk exec64's copies directly — is
-8×64b×3 of extra parent read mux for no gain. Either way: one slot per clock,
-keep gen, do not widen the sweep. Nothing else in phase 7 changes.
-
-**6** — **corrected patch.** Do **not** just delete the first `vframe_rip_rdata == 16'hfffc` block (~3206–3218). The `if/else if` chain is
-
-```
-if (vcsp_hs != 0) begin
-    if (vframe_rip_rdata == 16'hfffc) ...GC_CLEAR...        // arm A, ~3206
-    else if (vsp_hs != vframe_bsp_rdata) fault 1;           // ~3220
-    else begin ... 0xffff / 0xfffe / 0xfffd / 0xfffc ... end // ~3262
-```
-
-so deleting arm A drops every `0xfffc` frame into the `vsp_hs != vframe_bsp_rdata`
-fault-1 check — which is exactly the `one_fe nops fault 1` that arm A's own comment
-says it was added to dodge (falling off `n_ops` normally leaves the last expression
-value above `bsp`). **Replace** arm A's body with the `OP_RET_VAL` `0xfffc`
-continuation (~4496): recycle the leaf env, `vthis_n = vframe_this_rdata`,
-`venv_n = vframe_env_rdata`, `vcsp_n = vcsp_hs - 1`, `vsp_n = vframe_bsp_rdata`,
-the `vfe_mode == 2'd2` `HP_ASETI` map-store of `V64_UNDEFINED`, then
-`state_n = S_V64_FOREACH`. The later arm (~3262) then stays dead but harmless;
-parent FOREACH-done (~11348) still pops any leftover frame whose `bsp == vfe_base+2`.
-
-**38** — in exec64 `OP_CALL_METH`, after `id_lineto` (~6279), add the exec32 twin:
-
-```
-end else if (code_rdata[23:8] == id_quadcurve && argc >= 12'd4) begin
-    if (pc_n < 5'(PATH_MAX)) begin
-        pc_we = 1'b1; pc_waddr = pc_n[3:0]; pc_op_wdata = 2'd2;
-        pc_a1_wdata = v64_to_fx(`VST_AT(base + 12'd1));
-        pc_a2_wdata = v64_to_fx(`VST_AT(base + 12'd2));
-        pc_a3_wdata = v64_to_fx(`VST_AT(base + 12'd3));
-        pc_a4_wdata = v64_to_fx(`VST_AT(base + 12'd4));
-        pc_n_n = pc_n + 5'd1;
-    end else dbg_path_ovf_n = dbg_path_ovf + 16'd1;
-    vst_wr(base, V64_UNDEFINED);
-    vsp_n = base + 12'd1; ip_n = ip + 16'd1;
-    code_raddr_n = 15'(ops_base + ip + 16'd1);
-    state_n = S_FETCH_WAIT;
-end
-```
-
-Wire `id_quadcurve` through the exec64 port list (parent already interns it). Do not add a second path SRAM.
-
-**39** — do **not** use `vfe_mode==2'd4` (`vfe_mode` is 2 bits). 1-bit `vfe_reduce` + store acc in `vfe_map` (forEach already leaves it UNDEF). Seed from `VST_AT(base+2)`. Parent FOREACH push `acc, el, idx` when the flag is set. On `0xfffc` write TOS into `vfe_map`; walk-end `vst_wr(base, vfe_map)`. Extra clock for the third stack word (`stack_dual_pend` style). **6** is applied.
-
-**49** — see Review addendum “Better 49”. Strobe mirror of `pc_we` is step 1. First-entry `hs_st(S_PWALK)` + latch `color`/`path_stroke`/`pc_n`/`pi`/`ctx_*` + `hs64` (or `hs_ip`/`hs_code` from `e64_ip_q`) is required or the walk aborts / re-fetches fill.
-
-**51** — `S_BLIT` first-entry, same shape as `S_TXT_LD`:
-
-```
-if (state != S_BLIT) begin
-    hs_st(S_BLIT);
-    rw <= e64_rw_q; rh <= e64_rh_q;
-    rx <= e64_rx_q; ry <= e64_ry_q;
-    x  <= e64_x_q;  y  <= e64_y_q;
-    blit_sx <= e64_blit_sx_q; blit_sy <= e64_blit_sy_q;
-    blit_sw <= e64_blit_sw_q; blit_sh <= e64_blit_sh_q;
-    blit_si <= e64_blit_si_q;
-    hs_ip(e64_ip_q);
-    hs_vsp(e64_vsp_q);
-    hs_code(15'(ops_base + e64_ip_q));
-end else if (rw == 10'd0 || rh == 10'd0) ...
-```
-
-Also set `code_raddr_n` on the exec64 hit arm (fillText already does). Add `S_BLIT` to `hs64` or keep the `hs_ip`/`hs_code` plant. Do not combo-peek `spr_off`.
-
-**14** (**low — do last**) — GET_PROP `id_now`: do the nid-35 `vframe_no` mul in place; do not `S_V64_ALLOC`. One wasted `vfn` slot at load is the whole cost; `Date.now()` already takes the CALL_METH arm (~6357).
-
-**37** — **corrected patch, and note there is no PYTHON reference for it.**
-Neither `id_textbaseline` nor `id_top` / `id_middle` / `id_bottom` exists
-anywhere today (parent interns `id_center` only, for `textAlign`), so this
-starts with **new parent trail hashes**, not just an exec64 arm. Then:
-exec64 SET_PROP latches a `ctx_baseline` FF (0=alphabetic, 1=top, 2=middle,
-3=bottom); parent `S_TXT_LD` default phase (**~9438**, not `S_TXT_DRAW`)
-replaces `txt_y0 <= txt_py - 16'(8 * txt_k)` with
-
-```
-top     : txt_y0 <= txt_py;
-middle  : txt_y0 <= txt_py - 16'(4 * txt_k);
-bottom  : txt_y0 <= txt_py - 16'(8 * txt_k);
-default : txt_y0 <= txt_py - 16'(8 * txt_k);   // alphabetic, today's behaviour
-```
-
-**Unknown strings must be ignored** — keep the current `ctx_baseline` — which
-is what a browser does with an invalid value, and is exactly what PACMAN's two
-`'center'` writes (~1214, ~1239) need: they follow `'top'` and `'bottom'`
-respectively. Do **not** map `center` to middle. Port A legal (FFs only).
-
-**15 leftover** — tagged KEYEVT `hp_qt_ff[0]` ternary: add `8'd87` / `8'd83` / `8'd80`. Value64 HTML already works.
-
-**23** — CALL_METH `toISOString`: intern a fixed `"1970-01-01T00:00:00.000Z"` plus `vframe_no` seconds, or the PYTHON `strftime` stub from `vframe_no * 1000/60`. No ALLOC.
-
-Do **not** re-type **31+5** — they are in.
-
----
-
-## Suggested order (revised)
-
-**6**, **47**, **14**, **36**, **15**, **10** are **applied** — see the edits
-table at the top of this file. **46** is retracted. What is left:
-
-1. **50** — compiler inline slot alias. INVADERS Space never presents
-   (`drawHud` / `drawCannon`). Compiler only; do not patch RTL.
-2. **49** + **51** — parent raster overlay. Path buffer has no writer
-   **and** no first-entry/`hs64`; `S_BLIT` never latches exec drawImage
-   scalars. Same pass: first-entry latch like `S_TXT_LD`. Turns on a
-   dormant renderer (PACMAN/ASTEROID/MRDO paths, DONKEY sheets).
-3. **38** — exec64 `quadraticCurveTo`, **in the same pass as 49**, never
-   before it.
-4. **39** — `Array.reduce` (INVADERS wave-clear). 1-bit `vfe_reduce` +
-   acc in `vfe_map`; do not widen `vfe_mode`.
-5. **7+8+9** — ALLOC / rAF RET (PACMAN `NEW_OBJ Game`).
-6. **45** (+ the **36** font scale) — `font` into exec64, then measureText.
-   **37** only if you are chasing the browser, not PYTHON.
-7. **1+2+3** — FIND (HUD / collision; not the cap).
-8. **20** + **G6** — ImageData policy; circle outline. Re-cost **G6** after
-   **49**: today it never runs.
-9. **23+40** — INVADERS save (after play works).
-10. **42+43** — READY `INSERT` / `DELETE` (board editor).
-11. **33** / **32** — alpha==0 skip, unknown-CSS: low, do last.
-12. Remaining exec32 leftovers — hygiene, or let
-    [REMOVING_EXEC32.md](REMOVING_EXEC32.md) Cut A retire them.
-
-Do not start hash→id BRAM until asked. Do not `make bit`.
+Recover the originals with `git log -- "docs/potential bugs.md"` if you
+ever need the 2026-08-19 reasoning.

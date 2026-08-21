@@ -11,7 +11,7 @@ title may assume.
 | Gen | Meaning | Titles |
 |---|---|---|
 | **1.0 (now)** | Frozen Caps + natives that PYTHON **and** FPGA-SIM already run | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls (see below). `MKPVP.HTML` is the V1 MK-shaped example. |
-| **2.0 (not implemented)** | Machine changes so **`MK.HTML` as embedded today** runs | Acceptance: `MK.HTML`. Need **`MAX_SPR` ≥ 518**, asset bank **8 MB** (or more; ASIC: one chip, simple port), dotted **`new mk.…`**, **`Object.keys`/`for…in`**, **`Math.round`**. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20). |
+| **2.0 (compiler front end started)** | Machine changes so **`MK.HTML` as embedded today** runs | Acceptance: `MK.HTML`. Need **`MAX_SPR` ≥ 518**, asset bank **8 MB** (or more; ASIC: one chip, simple port), dotted **`new mk.…`**, **`.call`/`.apply`**, **`Object.keys` on exec64**, **`Math.round`**. Parse gaps (unary `+`, `for…in`, `throw`, `in`) landed 2026-08-21. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20). |
 
 V1 vs V2 surface backlog: [JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20).
 Agent rule: `.cursor/rules/html-game-v1.mdc`.
@@ -132,7 +132,8 @@ not title-gate RTL).
 | Limitation | How to write the HTML |
 |---|---|
 | **≤16 ASET sprites** (`MAX_SPR` / SPRD descriptors) | One `data:image` per sheet, not per frame. Pack animations into **atlases**; use **9-arg `drawImage(img, sx,sy,sw,sh, dx,dy,dw,dh)`**. Compile refuses >16 (loud) — do not drop art silently. |
-| **No `Object.keys` / `for…in` on RTL** | Compiler turns `for (k in obj)` into `Object.keys`. FPGA-SIM faults unknown native. Use literal key lists (`loadOne("arena")` …) or numeric loops. |
+| **No `Object.keys` / `for…in` on RTL** | The compiler lowers `for (k in obj)` to `Object.keys` (native **41**) — that landed 2026-08-21 and works on PYTHON, but there is **no exec64 arm**, so FPGA-SIM faults loud (`fault=5` `fsite=4183`). For a title that must run on the machine, use literal key lists (`loadOne("arena")` …) or numeric loops. |
+| **`Math.round` is not a native** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt`. Shim it in the HTML (`Math.floor(+x + 0.5)`) — unary `+`, `throw`, and the `in` operator all parse since 2026-08-21. |
 | **No negative `setTransform` scale** | Mirroring with `setTransform(-1,0,0,1,x,0)` collapses width on PYTHON `_xf` and is unsafe for parity. Ship **left + right** facing sheets (or always draw unmirrored). Positive scale / DONKEY-style world transforms are fine. |
 | **Math natives** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt`. Embed LUTs for angles if needed (ASTEROID pattern). |
 | **Nested literal tables** | Hundreds of tiny `MAKE_ARRAY`s for frame rects work only while under `MAX_ARR`. Prefer compact atlases + small meta, or parallel number arrays, if you approach the cap. |
@@ -145,8 +146,10 @@ Kano), L/R sheets, slim 2P engine, V1 Math only.
 `storage/MK.HTML` — measured needs: **518** ASET sheets (`MAX_SPR` ≥ 518),
 **~4.63 MB** indexed pixels → rebuild asset bank to **8 MB** (or more;
 ASIC must stay **single-chip** with a **simple** SRAM port — no fancy
-multi-die access). Also compiler **`new mk.…`**, **`for…in`/`Object.keys`**,
-**`Math.round`**. Full table: [JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20).
+multi-die access). Also compiler **`new mk.…`** and **`Function.prototype.call`/`.apply`**
+(42 sites — the super-constructor pattern; a real VM capability, not a
+shim), plus **`Object.keys` on exec64** and **`Math.round`**. The smaller
+parse gaps (unary `+`, `for…in`, `throw`, `in`) are **done**. Full table: [JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20).
 Until those land, do not expect `LOAD "MK.HTML"` + `RUN` on FPGA-SIM.
 
 ---
