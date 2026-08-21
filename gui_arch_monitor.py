@@ -16,8 +16,11 @@ import tkinter.font as tkfont
 
 from functional_model.bytecode import Op
 from functional_model.jsb_format import (
-    FLAG_ASET, FLAG_SOURCE_MAP, FLAG_V2, FLAG_VALUE64, MAGIC, NATIVE_IDS,
+    ASET_PAL_BYTES, FLAG_ASET, FLAG_SOURCE_MAP, FLAG_V2, FLAG_VALUE64,
+    MAGIC, NATIVE_IDS,
 )
+
+ASET_PAL_ENTRIES = ASET_PAL_BYTES // 3
 
 # Derived, never typed in: a new opcode must not leave the poster saying 34.
 N_OPCODES = len(list(Op))
@@ -369,6 +372,243 @@ def _prof_keys(prof: str) -> dict[str, float]:
     return heat
 
 
+PHOSPHOR_HI = "#b6ffb6"
+PACKET_MS = 320.0
+PACKET_MAX_FLIGHT = 3
+
+
+def _polyline_point(pts, u: float) -> tuple[float, float]:
+    """Point at fraction `u` along a polyline, measured by arc length."""
+    if not pts:
+        return (0.0, 0.0)
+    if len(pts) == 1:
+        return pts[0]
+    segs = []
+    total = 0.0
+    for i in range(len(pts) - 1):
+        dx = pts[i + 1][0] - pts[i][0]
+        dy = pts[i + 1][1] - pts[i][1]
+        d = (dx * dx + dy * dy) ** 0.5
+        segs.append(d)
+        total += d
+    if total <= 0.0:
+        return pts[0]
+    want = max(0.0, min(1.0, u)) * total
+    run = 0.0
+    for i, d in enumerate(segs):
+        if run + d >= want or i == len(segs) - 1:
+            t = 0.0 if d <= 0 else (want - run) / d
+            x = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t
+            y = pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t
+            return (x, y)
+        run += d
+    return pts[-1]
+
+
+def _op_packet_hops(op_name: str, native_name: str):
+    """Executing op → the blocks a value actually travels between.
+
+    JS analog of the BASIC µop packet story: fetch, dispatch, the one engine
+    that opcode strobes, then the memory room it reaches through the arbiter.
+    """
+    op = (op_name or "").upper()
+    if not op:
+        return []
+    hops = [
+        ("SEQUENCER", "DISPATCH", "opcode", "S2"),
+    ]
+    engine = None
+    room = None
+    if op in ("ADD", "SUB", "MUL", "DIV", "MOD", "LT", "GT", "EQ",
+              "NEG", "NOT", "BIT_OR", "BIT_AND"):
+        engine, room = "ALU", None
+    elif op in ("MAKE_ARRAY", "ARRAY_GET", "ARRAY_SET", "MAKE_OBJ", "GET_PROP",
+                "SET_PROP", "NEW_OBJ", "CALL_METHOD", "MAKE_FN", "CALL_USER",
+                "CALL_VAL", "RET_VAL", "RETURN"):
+        engine, room = "HEAP", "M_BRAM"
+    elif op in ("LOAD_CONST", "LOAD_VAR", "STORE_VAR", "LET_VAR", "POP", "DUP",
+                "JUMP", "JUMP_IF_FALSE"):
+        engine, room = "STACK", None
+    elif op == "CALL_NATIVE":
+        nat = native_name or ""
+        hops.append(("DISPATCH", "NATIVE", "native id", "S3"))
+        if nat in _CANVAS_NATIVES:
+            engine, room = "CANVAS", "M_BRAM"
+        elif nat in _BLIT_NATIVES:
+            engine, room = "BLIT", "M_SRAM"
+        elif nat in _ASSET_NATIVES:
+            engine, room = "HEAP", "M_SRAM"
+        elif nat in _EVENT_NATIVES:
+            engine, room = "RAF", None
+        elif nat in _STR_NATIVES:
+            engine, room = "STR", "M_BRAM"
+        elif nat in _ALU_NATIVES:
+            engine, room = "ALU", None
+        elif nat in ("console.log", "console.warn"):
+            engine, room = "CONS_ENG", None
+        elif nat.startswith("localStorage"):
+            engine, room = "STORE", "M_SDCARD"
+        else:
+            engine, room = "HEAP", "M_BRAM"
+    if engine is None:
+        return hops
+    src = "NATIVE" if op == "CALL_NATIVE" else "DISPATCH"
+    hops.append((src, engine, "strobe", "S4"))
+    if room:
+        hops.append((engine, "ARBITER", "req", "S4"))
+        hops.append(("ARBITER", room, "addr/data", "S4"))
+    return hops
+
+
+class PacketAnimator:
+    """One-hop-at-a-time dots along the dispatch → engine → memory corridor.
+
+    Ported from the BASIC monitor's µop story. Same rule: non-preemptive, so a
+    story finishes before the newest op plays — clearing on every change made
+    the dots look random at full speed.
+    """
+
+    def __init__(self, canvas: tk.Canvas) -> None:
+        self.canvas = canvas
+        self.queue: list = []
+        self.flight: list[dict] = []
+        self._last_key: str | None = None
+        self.caption = ""
+        self.story_hops: list = []
+        self.story_op = ""
+        self.pending: tuple[str, str] | None = None
+
+    def clear(self) -> None:
+        for p in self.flight:
+            self._delete(p)
+        self.flight.clear()
+        self.queue.clear()
+        self._last_key = None
+        self.caption = ""
+        self.story_hops = []
+        self.story_op = ""
+        self.pending = None
+        try:
+            self.canvas.delete("packet")
+        except tk.TclError:
+            pass
+
+    def _delete(self, p: dict) -> None:
+        for item in (p.get("dot"), p.get("lab"), p.get("trail")):
+            if item is not None:
+                try:
+                    self.canvas.delete(item)
+                except tk.TclError:
+                    pass
+
+    def observe(self, op_name: str, native_name: str) -> None:
+        key = f"{op_name}/{native_name}"
+        if not op_name or key == self._last_key:
+            return
+        self._last_key = key
+        if self.flight or self.queue:
+            self.pending = (op_name, native_name)
+            return
+        self._start(op_name, native_name)
+
+    def _start(self, op_name: str, native_name: str) -> None:
+        hops = _op_packet_hops(op_name, native_name)
+        if not hops:
+            return
+        self.story_hops = list(hops)
+        self.story_op = op_name if op_name != "CALL_NATIVE" else (
+            f"CALL_NATIVE {native_name}" if native_name else "CALL_NATIVE"
+        )
+        self.queue.extend(hops)
+        self.caption = self._caption(self.story_op, hops)
+
+    @staticmethod
+    def _caption(op: str, hops) -> str:
+        if not hops:
+            return ""
+        out = []
+        prev_dst = None
+        for src, dst, _label, _stage in hops:
+            s = {"ARBITER": "ARB"}.get(src, src)
+            d = {"ARBITER": "ARB"}.get(dst, dst)
+            if src != prev_dst:
+                if out:
+                    out.append("  ·  ")
+                out.append(s)
+            out.append(" ──▶ ")
+            out.append(d)
+            prev_dst = dst
+        return f"DATA {op}:  " + "".join(out)
+
+    @staticmethod
+    def _hop_duration(pts, duration_ms: float) -> float:
+        plen = 0.0
+        for i in range(len(pts) - 1):
+            dx = pts[i + 1][0] - pts[i][0]
+            dy = pts[i + 1][1] - pts[i][1]
+            plen += (dx * dx + dy * dy) ** 0.5
+        base = max(0.12, duration_ms / 1000.0)
+        return max(0.20, min(base * 1.6, base * (plen / 260.0)))
+
+    def tick(self, waypoints_of, *, duration_ms: float = PACKET_MS,
+             stage_heat: dict | None = None) -> None:
+        now = time.monotonic()
+        while self.queue and len(self.flight) < PACKET_MAX_FLIGHT:
+            src, dst, label, stage = self.queue.pop(0)
+            try:
+                pts = waypoints_of(src, dst)
+            except Exception:
+                continue
+            if not pts or len(pts) < 2:
+                continue
+            flat = []
+            for x, y in pts:
+                flat.extend([x, y])
+            trail = self.canvas.create_line(
+                *flat, fill=ACCENT_FG, width=3, arrow=tk.LAST, tags=("packet",),
+            )
+            x0, y0 = pts[0]
+            dot = self.canvas.create_oval(
+                x0 - 6, y0 - 6, x0 + 6, y0 + 6,
+                fill=PHOSPHOR_HI, outline=ACCENT_FG, width=2, tags=("packet",),
+            )
+            lab = self.canvas.create_text(
+                x0 + 12, y0 - 12, text=label, fill=ACCENT_FG,
+                font=("Menlo", 9, "bold"), anchor="w", tags=("packet",),
+            )
+            self.flight.append({
+                "dot": dot, "lab": lab, "trail": trail, "pts": pts,
+                "t0": now, "dur": self._hop_duration(pts, duration_ms),
+                "src": src, "dst": dst,
+            })
+            if stage_heat is not None:
+                if stage:
+                    stage_heat[stage] = now
+                stage_heat[src] = now
+        done = []
+        for p in self.flight:
+            t = (now - p["t0"]) / p["dur"] if p["dur"] > 0 else 1.0
+            if t >= 1.0:
+                done.append(p)
+                continue
+            u = t * t * (3 - 2 * t)   # ease in-out
+            x, y = _polyline_point(p["pts"], u)
+            self.canvas.coords(p["dot"], x - 6, y - 6, x + 6, y + 6)
+            self.canvas.coords(p["lab"], x + 12, y - 12)
+        for p in done:
+            self._delete(p)
+            self.flight.remove(p)
+            if stage_heat is not None:
+                stage_heat[p["dst"]] = now
+        if not self.flight and not self.queue:
+            if self.pending:
+                nxt = self.pending
+                self.pending = None
+                self._start(*nxt)
+            elif self.story_hops:
+                self.caption = self._caption(self.story_op, self.story_hops)
+
+
 class ArchitectureView:
     """JS-native die diagram with live snapshot captions + click inspectors."""
 
@@ -479,6 +719,36 @@ class ArchitectureView:
         self._line_buf = ""
         self._heat_stamp: dict[str, float] = {}
         self._prof_heat: dict[str, float] = {}
+        # Inspector peeks: cached per (name,args) so an open panel refreshing
+        # every frame does not become one RPC per frame. Nothing is peeked
+        # while every inspector is closed.
+        self._peek_fn = None
+        self._decode_fn = None
+        self._peek_cache: dict[tuple, tuple[float, str]] = {}
+        self._peek_ttl = 0.5
+        # Re-clicking a block pages its peek window (heap slot, SRAM offset) —
+        # the panel shows one slot at a time so a peek stays one RPC.
+        self._probe_obj = 0
+        self._probe_arr = 0
+        self._probe_sram = 0
+        # Execution replay. The GUI can only sample between frames, and there
+        # the VM is always parked at the same rAF return — so a live IP read
+        # shows one frozen instruction for the whole run. The runtimes hand us
+        # the IPs they actually executed; this walks through them.
+        self._replay: list[int] = []
+        self._replay_i = 0
+        self.replay_enabled = True
+        self._replay_ip: int | None = None
+        # Packet dots along the corridor (BASIC's µop story, JS opcodes).
+        # Off by default — at 60 fps it is decoration, so it costs nothing
+        # until you ask for it with A.
+        self.packets = PacketAnimator(self.canvas)
+        self.packets_enabled = False
+        self._packet_stage_heat: dict[str, float] = {}
+        # Register-change flash: a value that just changed reads as changed.
+        self._prev_reg_vals: dict[str, str] = {}
+        self._reg_flash_until: dict[str, float] = {}
+        self.bars: dict[str, tuple] = {}
         self.wires: list[tuple[int, str, str, str]] = []  # line, key, kind, idle fill
         self._zoom = 1.0
         self._zoom_min = 0.45
@@ -497,6 +767,10 @@ class ArchitectureView:
         window.bind("<Home>", lambda _e: self._reset_view())
         window.bind("<h>", lambda _e: self._reset_view())
         window.bind("<H>", lambda _e: self._reset_view())
+        window.bind("<a>", lambda _e: self._toggle_packets())
+        window.bind("<A>", lambda _e: self._toggle_packets())
+        window.bind("<t>", lambda _e: self._toggle_replay())
+        window.bind("<T>", lambda _e: self._toggle_replay())
         self.canvas.bind("<Enter>", lambda _e: self.canvas.focus_set())
 
     def _block(self, key: str, x0: int, y0: int, x1: int, y1: int,
@@ -516,6 +790,37 @@ class ArchitectureView:
         )
         self.blocks[key] = (rect, value)
         self.block_rects[key] = (x0, y0, x1, y1)
+
+    def _bar(self, key: str) -> None:
+        """Thin activity meter along a block's bottom edge.
+
+        Heat alone is a fill colour; the bar gives the eye a magnitude, which
+        is what tells 3% of cycles from 30%.
+        """
+        x0, y0, x1, y1 = self.block_rects[key]
+        track = self.canvas.create_rectangle(
+            x0 + 6, y1 - 6, x1 - 6, y1 - 3,
+            fill=BLOCK_OUTLINE, outline="", width=0,
+        )
+        fill = self.canvas.create_rectangle(
+            x0 + 6, y1 - 6, x0 + 6, y1 - 3,
+            fill=PHOSPHOR, outline="", width=0,
+        )
+        self.bars[key] = (track, fill)
+
+    def _set_bar(self, key: str, frac: float) -> None:
+        pair = self.bars.get(key)
+        if pair is None:
+            return
+        try:
+            x0, y0, x1, y1 = self.canvas.coords(pair[0])
+        except (tk.TclError, ValueError):
+            return
+        frac = 0.0 if frac < 0.0 else 1.0 if frac > 1.0 else float(frac)
+        self.canvas.coords(pair[1], x0, y0, x0 + (x1 - x0) * frac, y1)
+        self.canvas.itemconfigure(
+            pair[1], fill=_blend(PHOSPHOR_HI, PHOSPHOR, frac),
+        )
 
     def _wire(self, key: str, *coords: float, kind: str = "ctrl") -> None:
         # NEW: poster legend — ctrl (solid), data (solid green-idle),
@@ -640,6 +945,7 @@ class ArchitectureView:
             x0 = grid_x + coli * (bw + gap)
             y0 = grid_y + rowi * (bh + gap)
             self._block(key, x0, y0, x0 + bw, y0 + bh, label)
+            self._bar(key)
         self._wire("NATIVE2", 468, 394, 468, 428)
         # engines → ARB left edge (ARB sits beside the engine row, not on the bus)
         self._wire("ENG_ARB", 708, 474, 728, 474, kind="data")
@@ -757,12 +1063,125 @@ class ArchitectureView:
         )
         c.create_text(
             16, 998,
-            text="solid = control/data  ·  dashed blue = compile-on-RUN (HTML → ProgramImage → BRAM/SRAM)  ·  F10 hides",
+            text="solid = control/data · dashed blue = compile-on-RUN · A animates · T freezes the trace replay · F10 hides",
             font=self.small_font, fill=TITLE_FG, anchor="w",
         )
         self.path_text = c.create_text(
             16, 1020, text="", font=self.small_font, fill=TITLE_FG, anchor="w",
         )
+
+    # How many recorded IPs to step past per GUI frame. 1 crawls through a
+    # 600-entry trace; this walks it at a readable pace.
+    _REPLAY_STRIDE = 7
+
+    def _advance_replay(self, ring, running: bool) -> int | None:
+        """Next IP from the executed-instruction trace, or None.
+
+        This is a replay of what already ran at full speed — not stepping, and
+        it never gates the machine. The REGISTERS panel keeps showing the true
+        parked state so the two are never confused.
+        """
+        if not running or not self.replay_enabled:
+            self._replay = []
+            self._replay_i = 0
+            self._replay_ip = None
+            return None
+        ring = list(ring or [])
+        if ring:
+            self._replay = ring
+        if not self._replay:
+            return None
+        # The cursor free-runs and is taken modulo the current ring. Resetting
+        # it whenever the ring changed pinned the display to one entry, since
+        # a new frame's samples arrive between every GUI update.
+        self._replay_i += self._REPLAY_STRIDE
+        self._replay_ip = self._replay[self._replay_i % len(self._replay)]
+        return self._replay_ip
+
+    def _toggle_replay(self) -> None:
+        self.replay_enabled = not self.replay_enabled
+        self._replay_ip = None
+
+    def _toggle_packets(self) -> None:
+        self.packets_enabled = not self.packets_enabled
+        if not self.packets_enabled:
+            self.packets.clear()
+
+    def _block_center(self, key: str) -> tuple[float, float] | None:
+        rect = self.blocks.get(key)
+        if rect is None:
+            return None
+        try:
+            x0, y0, x1, y1 = self.canvas.coords(rect[0])
+        except (tk.TclError, ValueError):
+            return None
+        return ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+
+    def _block_edge(self, key: str, toward: tuple[float, float]):
+        """Point on a block's border facing `toward` — dots leave the box, not
+        the label underneath it."""
+        rect = self.blocks.get(key)
+        if rect is None:
+            return None
+        try:
+            x0, y0, x1, y1 = self.canvas.coords(rect[0])
+        except (tk.TclError, ValueError):
+            return None
+        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        dx, dy = toward[0] - cx, toward[1] - cy
+        if abs(dx) < 1e-6 and abs(dy) < 1e-6:
+            return (cx, cy)
+        halfw, halfh = max(1.0, (x1 - x0) / 2.0), max(1.0, (y1 - y0) / 2.0)
+        scale = min(
+            halfw / abs(dx) if abs(dx) > 1e-6 else float("inf"),
+            halfh / abs(dy) if abs(dy) > 1e-6 else float("inf"),
+        )
+        return (cx + dx * scale, cy + dy * scale)
+
+    def _packet_waypoints(self, src: str, dst: str):
+        """Elbow polyline between two blocks, routed through the gap between
+        them so a dot never crosses a block it is not visiting."""
+        a = self._block_center(src)
+        b = self._block_center(dst)
+        if a is None or b is None:
+            return []
+        p0 = self._block_edge(src, b) or a
+        p1 = self._block_edge(dst, a) or b
+        if abs(p0[1] - p1[1]) < 14.0 or abs(p0[0] - p1[0]) < 14.0:
+            return [p0, p1]
+        midx = (p0[0] + p1[0]) / 2.0
+        return [p0, (midx, p0[1]), (midx, p1[1]), p1]
+
+    def _lod(self) -> str:
+        """Zoom level of detail: what a caption can afford to show."""
+        if self._zoom < 0.75:
+            return "coarse"
+        if self._zoom > 1.6:
+            return "fine"
+        return "normal"
+
+    def _peek(self, what: str, *args) -> str:
+        """Cached live peek. Returns "" when this runtime has no such view."""
+        if self._peek_fn is None:
+            return ""
+        key = (what, args)
+        now = time.monotonic()
+        hit = self._peek_cache.get(key)
+        if hit is not None and now - hit[0] < self._peek_ttl:
+            return hit[1]
+        try:
+            val = self._peek_fn(what, *args) or ""
+        except Exception as e:
+            val = f"(peek failed: {e})"
+        self._peek_cache[key] = (now, val)
+        return val
+
+    def _peek_block(self, title: str, what: str, *args) -> str:
+        """`title` + one peek line, or a clear note that the view is missing."""
+        body = self._peek(what, *args)
+        if not body:
+            return f"\n{title}\n  (not available on {self._runtime})\n"
+        return f"\n{title}\n  {body}\n"
 
     def _eng_caption(self, label: str, *fields) -> str:
         """Engine box: title line plus whichever counters this runtime has.
@@ -778,9 +1197,30 @@ class ArchitectureView:
             parts.append(f"{short} {val}")
         return label + ("\n" + "  ".join(parts) if parts else "")
 
+    _FLASH_MS = 0.45
+
     def _set(self, key: str, text: str) -> None:
-        if key in self.blocks:
-            self.canvas.itemconfigure(self.blocks[key][1], text=text)
+        """Write a block's caption, flashing it when the value actually moved.
+
+        Ported from the BASIC monitor: a counter that ticks past you is easy to
+        miss, and IP / sp / heap change far faster than the eye tracks.
+        """
+        if key not in self.blocks:
+            return
+        item = self.blocks[key][1]
+        prev = self._prev_reg_vals.get(key)
+        if prev is not None and prev != text:
+            self._reg_flash_until[key] = time.monotonic() + self._FLASH_MS
+        self._prev_reg_vals[key] = text
+        self.canvas.itemconfigure(item, text=text)
+        until = self._reg_flash_until.get(key, 0.0)
+        now = time.monotonic()
+        if until > now:
+            t = (until - now) / self._FLASH_MS
+            self.canvas.itemconfigure(item, fill=_blend(PHOSPHOR_HI, VALUE_FG, t))
+        elif until:
+            self._reg_flash_until.pop(key, None)
+            self.canvas.itemconfigure(item, fill=VALUE_FG)
 
     def _g(self, key: str, default="—"):
         snap = self._snap
@@ -817,13 +1257,35 @@ class ArchitectureView:
         return max(self._heat_of(n) for n in names)
 
     def update(self, *, runtime: str = "PYTHON", snap: dict | None = None,
-               line_buf: str = "") -> None:
+               line_buf: str = "", peek=None, decode=None) -> None:
+        if runtime != self._runtime:
+            # Peeks and the execution trace describe the machine that produced
+            # them; carrying either across F9 into another runtime's panel
+            # would be a lie.
+            self._peek_cache.clear()
+            self._replay = []
+            self._replay_ip = None
         self._runtime = runtime
+        self._peek_fn = peek
+        self._decode_fn = decode
         self._snap = dict(snap or {})
         self._line_buf = line_buf or ""
         now = time.monotonic()
         sname = str(self._g("sname", "IDLE"))
         running = bool(self._snap.get("running"))
+        # Walk the executed-IP trace and let the schematic follow it, so the
+        # sequencer shows code that really ran instead of the one park point
+        # every between-frames sample lands on.
+        rip = self._advance_replay(self._snap.get("ip_ring"), running)
+        if rip is not None and self._decode_fn is not None:
+            info = {}
+            try:
+                info = self._decode_fn(rip) or {}
+            except Exception:
+                info = {}
+            if info:
+                self._snap["ip"] = rip
+                self._snap.update(info)
         for key in _sname_keys(sname):
             self._heat_stamp[key] = now
         op_name = str(self._snap.get("op_name") or "")
@@ -848,10 +1310,22 @@ class ArchitectureView:
                 if val > self._prof_heat.get(key, 0.0):
                     self._prof_heat[key] = val
 
+        # Packet dots: their departures/arrivals also light blocks, so tick
+        # them before the fill pass or a dot lands on an unlit box.
+        if self.packets_enabled:
+            self.packets.observe(op_name, nname_live)
+            self.packets.tick(
+                self._packet_waypoints, stage_heat=self._packet_stage_heat,
+            )
+            for key, stamp in self._packet_stage_heat.items():
+                if stamp > self._heat_stamp.get(key, 0.0):
+                    self._heat_stamp[key] = stamp
         for key, (rect, _value) in self.blocks.items():
             self.canvas.itemconfigure(
                 rect, fill=_blend(BLOCK_ACTIVE, BLOCK_IDLE, self._heat_of(key)),
             )
+        for key, _label in self.ENGINES:
+            self._set_bar(key, self._heat_of(key))
         self.sd_list.configure(
             bg=_blend(BLOCK_ACTIVE, BLOCK_IDLE, self._heat_of("SD")),
         )
@@ -893,7 +1367,27 @@ class ArchitectureView:
         seq_l2 = f"IP {_dash(ip)}"
         if src_line not in ("", "—", 0, "0"):
             seq_l2 += f"  L{src_line}"
-        self._set("SEQUENCER", f"{sname}\n{seq_l2}")
+        head = sname
+        if self._replay_ip is not None:
+            # Say what this is. The IP is real and was really executed, but it
+            # is a replay of the last frame, not where the VM sits right now —
+            # REGISTERS keeps the true parked values. The op at that IP is the
+            # useful headline; the park state would contradict it.
+            seq_l2 += "  ▶trace"
+            head = str(self._g("op_name", "")) or sname
+        seq = f"{head}\n{seq_l2}"
+        lod = self._lod()
+        if lod == "fine":
+            # Zoomed in there is room for the line the op compiled from.
+            html_line = str(self._g("html_line") or "").strip()
+            note = _state_note(sname)
+            if note:
+                seq += f"\n{note}"
+            if html_line:
+                seq += f"\n{html_line[:42]}"
+        elif lod == "coarse":
+            seq = f"{sname}\n{_dash(ip)}"
+        self._set("SEQUENCER", seq)
         op_name = self._g("op_name", "")
         self._set(
             "DISPATCH",
@@ -1008,7 +1502,12 @@ class ArchitectureView:
 
         fclk = self._g("fclk", "")
         fclk_s = f"  fclk {fclk}" if fclk not in ("", "—") else ""
-        if self._snap.get("board_coarse"):
+        if self._faulted():
+            heat_src = (
+                f"FAULT {self._g('fault')} at IP {_dash(ip)} "
+                f"(L{self._g('src_line')}) — click REGISTERS"
+            )
+        elif self._snap.get("board_coarse"):
             heat_src = "heat: coarse (BOARD tether — no VMSTAT)"
         elif self._snap.get("prof"):
             heat_src = "heat: RTL cycle profile"
@@ -1023,10 +1522,16 @@ class ArchitectureView:
                 f"{fclk_s}  ·  {heat_src}"
             ),
         )
-        self.canvas.itemconfigure(
-            self.path_text,
-            text="storage: NAME.HTML titles · compile-on-RUN in memory (code + ASET) · no NAME.DAT",
-        )
+        if self.packets_enabled and self.packets.caption:
+            path = self.packets.caption
+        elif self.packets_enabled:
+            path = "packets ON (A) — waiting for an op"
+        else:
+            path = (
+                "storage: NAME.HTML titles · compile-on-RUN in memory "
+                "(code + ASET) · A = animate data path"
+            )
+        self.canvas.itemconfigure(self.path_text, text=path)
         self._refresh_inspector()
 
     # -- click inspector ---------------------------------------------------
@@ -1048,9 +1553,42 @@ class ArchitectureView:
                     hit = key
         if hit is None:
             return
+        if hit == self.inspect_key:
+            self._page_probe(hit)
+        elif hit in ("HEAP", "HSTATS"):
+            # Open on something worth reading — slot 0 is usually a hole, and
+            # an "empty slot" first impression reads as a broken panel.
+            if "empty slot" in (self._peek("obj", self._probe_obj) or ""):
+                self._probe_obj = self._next_live_slot("obj", self._probe_obj, MAX_OBJECTS)
+            if "empty slot" in (self._peek("arr", self._probe_arr) or ""):
+                self._probe_arr = self._next_live_slot("arr", self._probe_arr, MAX_ARRAYS)
         self._select_block(hit)
         self._show_inspector()
         self._refresh_inspector(force=True)
+
+    def _page_probe(self, key: str) -> None:
+        """Clicking the already-selected block advances its peek window.
+
+        One slot per peek keeps a drill-down at one RPC; paging is how you walk
+        the heap or the asset bank without the panel fetching all of it.
+        """
+        if key in ("HEAP", "HSTATS"):
+            self._probe_obj = self._next_live_slot("obj", self._probe_obj, MAX_OBJECTS)
+            self._probe_arr = self._next_live_slot("arr", self._probe_arr, MAX_ARRAYS)
+        elif key == "M_SRAM":
+            self._probe_sram = (self._probe_sram + 64) % (4 * 1024 * 1024)
+        self._peek_cache.clear()
+
+    def _next_live_slot(self, what: str, cur: int, cap: int) -> int:
+        """Next slot that actually holds something, so paging skips the holes."""
+        if not cap:
+            return 0
+        for step in range(1, min(cap, 512) + 1):
+            nxt = (cur + step) % cap
+            body = self._peek(what, nxt)
+            if body and "empty slot" not in body and "not available" not in body:
+                return nxt
+        return (cur + 1) % cap
 
     def _select_block(self, key: str) -> None:
         prev = self.inspect_key
@@ -1197,6 +1735,7 @@ class ArchitectureView:
             f"source      {self._g('source_name', '(none)')}\n"
             f"HTML line   {self._g('src_line')}   {html_line[:80]}\n"
         )
+        body += self._fault_block()
         if html_win:
             body += "\nHTML around IP\n" + html_win + "\n"
         if code_win:
@@ -1229,6 +1768,8 @@ class ArchitectureView:
             "(interned strings, IEEE-754 floats, packed RegExp).\n\n"
             f"sp / depth  {_cap(self._g('stack_depth', self._g('sp')), STACK_SLOTS)}\n"
             f"top of stack {preview or '—'}\n"
+            + self._peek_block("live stack", "stack")
+            + self._peek_block("variable slots", "vars", 0, 24)
         )
 
     def _inspect_heap(self) -> str:
@@ -1246,6 +1787,12 @@ class ArchitectureView:
             f"heapovf {self._g('heapovf')}   jsonovf {self._g('jsonovf')}   "
             f"spovf {self._g('spovf')}\n"
             f"fault   {self._g('fault')}\n"
+            + self._peek_block("allocator", "gc")
+            + self._peek_block("env chain", "env")
+            + self._peek_block("functions", "fn", 0)
+            + self._peek_block(f"object slot {self._probe_obj}", "obj", self._probe_obj)
+            + self._peek_block(f"array slot {self._probe_arr}", "arr", self._probe_arr)
+            + "\n(click OBJECT / HEAP again to step to the next live slot)\n"
         )
 
     def _inspect_native(self) -> str:
@@ -1308,6 +1855,50 @@ class ArchitectureView:
             f"tether   {_dash(self._snap.get('tether'), 'n/a')}\n"
         )
 
+    def _faulted(self) -> bool:
+        """True when the VM stopped on a fault rather than finishing."""
+        for key in ("fault", "efault", "heapovf", "jsonovf", "spovf",
+                    "cspovf", "toovf", "strovf", "pathovf"):
+            val = self._snap.get(key)
+            if val in (None, "", 0, "0", "—"):
+                continue
+            return True
+        return False
+
+    def _fault_block(self) -> str:
+        """Post-mortem: what stopped, where, and the run-up to it.
+
+        The RTL freezes its cycle ring on fault, so VRING? replays the last
+        states and IPs before the stop — the closest thing to a stack trace
+        this machine has. Only fetched once something has actually faulted.
+        """
+        if not self._faulted():
+            return ""
+        rows = [
+            "",
+            "!! FAULT — VM stopped",
+            "─" * 52,
+            f"fault {self._g('fault')}   ecode {self._g('ecode')}   "
+            f"efault {self._g('efault')}",
+            f"fsite {self._g('fsite')}   bad state {self._g('badst')}",
+            f"IP {self._g('ip')}  (eip {self._g('eip')})   "
+            f"HTML line {self._g('src_line')}",
+            f"overflow: heap {self._g('heapovf')}  json {self._g('jsonovf')}  "
+            f"stack {self._g('spovf')}  call {self._g('cspovf')}  "
+            f"timer {self._g('toovf')}  str {self._g('strovf')}  "
+            f"path {self._g('pathovf')}",
+        ]
+        line = str(self._g("html_line") or "")
+        if line.strip():
+            rows.append(f"source: {line.strip()[:88]}")
+        body = "\n".join(rows) + "\n"
+        body += self._peek_block("cycle ring before the fault", "ring")
+        body += self._peek_block("pixel counters", "px")
+        win = str(self._snap.get("code_window") or "")
+        if win:
+            body += "\nbytecode at the stop\n" + win + "\n"
+        return body
+
     def _inspect_regs(self) -> str:
         body = self._hdr("REGISTERS / VMSTAT") + f"runtime  {self._runtime}\n"
         if self._snap.get("board_coarse"):
@@ -1318,6 +1909,7 @@ class ArchitectureView:
                 "not zero. Use FPGA-SIM for per-state detail.\n"
             )
         body += "\n" + self._live_kv() + "\n"
+        body += self._fault_block()
         hist = self._snap.get("natives") or {}
         if hist:
             rows = sorted(hist.items(), key=lambda kv: -kv[1])[:14]
@@ -1383,6 +1975,9 @@ class ArchitectureView:
                 f"tmis {self._g('tmis')}  toovf {self._g('toovf')}\n"
                 f"key  kalloc {self._g('kalloc')}  kcall {self._g('kcall')}  "
                 f"kevq {self._g('kevq')}\n"
+                + self._peek_block("rAF queue", "raf")
+                + self._peek_block("timers", "timers")
+                + self._peek_block("key listeners", "listeners")
             )
         elif key == "ALU":
             extra = f"\ndivs {self._g('divs')}\n"
@@ -1412,14 +2007,31 @@ class ArchitectureView:
     def _inspect_memory(self, key: str) -> str:
         extra = ""
         if key == "M_BRAM":
-            extra = f"\nhdmi {self._g('hdmi_mode')}  strb {self._g('strb')}\n"
+            extra = (
+                f"\nhdmi {self._g('hdmi_mode')}  strb {self._g('strb')}\n"
+                f"code  {_cap(self._g('n_ops'), CODE_WORDS)} words\n"
+                + self._peek_block("variable slots", "vars", 0, 24)
+                + self._peek_block("bytecode at IP", "ring")
+            )
+            win = str(self._snap.get("code_window") or "")
+            if win:
+                extra += "\ndisassembly around IP\n" + win + "\n"
         elif key == "M_SRAM":
+            base = self._probe_sram
             extra = (
                 f"\nspr {self._g('spr')}  ASET {self._g('sram_bytes')} B\n"
                 "pixels never enter code BRAM\n"
+                f"\n0x000000-0x0002FF is the {ASET_PAL_ENTRIES}-entry RGB888 title\n"
+                "palette; sprite banks start at 0x000300.\n"
+                + self._peek_block(f"hex @ byte {base} (0x{base:06x})", "sram", base, 64)
+                + "\n(click ASSET SRAM again to page +64 bytes)\n"
             )
         elif key == "M_SDCARD":
-            extra = f"\nfiles {len(self._snap.get('catalog') or [])}\n"
+            cat = list(self._snap.get("catalog") or [])
+            extra = (
+                f"\nfiles {len(cat)}\n"
+                + ("\n".join(f"  {n}" for n in cat[:40]) + "\n" if cat else "")
+            )
         return self._hdr(self.MEMORY_BLURBS[key]) + extra
 
     def _inspect_phy(self, key: str) -> str:

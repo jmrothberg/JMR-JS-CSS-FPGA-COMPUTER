@@ -245,6 +245,171 @@ def _value_stack_preview(hw, stack: list[int], n: int = 8) -> str:
     return ", ".join(parts)
 
 
+def _val_str(hw, word: int) -> str:
+    """One packed Value as `tag:payload`, resolving interned strings."""
+    try:
+        from hardware_model.js_vm import value_is_number, value_kind, value_payload
+
+        if value_is_number(word):
+            n = __import__("struct").unpack("<d", __import__("struct").pack("<Q", word))[0]
+            return f"{n:g}" if n == n else "nan"
+        kind = value_kind(word)
+        tag = _VALUE_KIND_TAGS.get(kind, f"k{kind}")
+        pay = value_payload(word)
+        if tag == "str":
+            strings = getattr(hw, "_value_strings", None) or []
+            if 0 <= pay < len(strings):
+                return f'str"{_js_short(strings[pay], 14)}"'
+        return f"{tag}:{pay}"
+    except Exception:
+        return f"0x{word:016x}"
+
+
+def _py_peek(hw, what: str, *args) -> str:
+    """Render a JsHwVm structure in the same shape the RTL peek RPCs use."""
+    what = (what or "").lower()
+
+    if what == "obj":
+        oid = int(args[0]) if args else 0
+        objs = hw._value_objects
+        if not (0 <= oid < len(objs)) or objs[oid] is None:
+            return f"OBJ {oid} (empty slot)"
+        obj = objs[oid]
+        gen = hw._value_object_generations[oid]
+        names = getattr(hw.program_image, "names", ()) or ()
+        props = []
+        for key, val in list(obj.items())[:12]:
+            kname = names[key] if 0 <= key < len(names) else str(key)
+            props.append(f"{kname}={_val_str(hw, val)}")
+        return f"OBJ {oid} gen={gen} len={len(obj)} " + " ".join(props)
+
+    if what == "arr":
+        aid = int(args[0]) if args else 0
+        arrs = hw._value_arrays
+        if not (0 <= aid < len(arrs)) or arrs[aid] is None:
+            return f"ARR {aid} (empty slot)"
+        arr = arrs[aid]
+        head = " ".join(_val_str(hw, v) for v in arr[:12])
+        more = " …" if len(arr) > 12 else ""
+        return f"ARR {aid} len={len(arr)} [{head}{more}]"
+
+    if what == "stack":
+        st = hw._value_stack
+        head = " ".join(_val_str(hw, v) for v in st[-16:])
+        return f"STK sp={len(st)} top16[{head}]"
+
+    if what == "vars":
+        base = int(args[0]) if args else 0
+        n = int(args[1]) if len(args) > 1 else 16
+        rows = []
+        for i in range(base, min(base + n, len(hw._value_vars))):
+            if not hw._value_var_valid[i]:
+                continue
+            names = getattr(hw.program_image, "var_names", ()) or ()
+            nm = names[i] if 0 <= i < len(names) else f"v{i}"
+            rows.append(f"{i}:{nm}={_val_str(hw, hw._value_vars[i])}")
+        return "VARS " + (" ".join(rows) if rows else "(none set in range)")
+
+    if what == "sram":
+        base = int(args[0]) if args else 0
+        n = int(args[1]) if len(args) > 1 else 64
+        sram = getattr(getattr(hw, "_m", None), "sram", None)
+        mem = getattr(sram, "mem", None)
+        if mem is None:
+            return ""
+        loaded = int(getattr(sram, "loaded_bytes", 0) or 0)
+        chunk = bytes(mem[base : base + n])
+        if not chunk:
+            return f"SRAM @{base} (out of range)"
+        return f"SRAM @{base} loaded={loaded} " + chunk.hex(" ")
+
+    if what == "raf":
+        q = hw._value_raf
+        return f"RAF n={len(q)} [" + " ".join(_val_str(hw, v) for v in q[:12]) + "]"
+
+    if what == "timers":
+        ts = hw._value_timers
+        rows = [
+            f"seq={t.sequence} due={t.due_frame} period={t.period}"
+            for t in ts[:8]
+        ]
+        return f"TMR n={len(ts)} [" + "; ".join(rows) + "]"
+
+    if what == "listeners":
+        ls = hw._value_listeners
+        # Both halves are packed Values — printing the raw key as an integer
+        # showed a 19-digit NaN-box instead of the event name it encodes.
+        rows = [f"{_val_str(hw, k)} -> {_val_str(hw, f)}" for k, f in ls[:10]]
+        return f"LSN n={len(ls)} [" + "; ".join(rows) + "]"
+
+    if what == "env":
+        envs = hw._value_envs
+        live = sum(1 for e in envs if e is not None)
+        cur = ""
+        try:
+            from hardware_model.js_vm import VALUE_KIND_ENV, value_kind, value_payload
+
+            if value_kind(hw._value_env) == VALUE_KIND_ENV:
+                eid = value_payload(hw._value_env)
+                env = envs[eid] if 0 <= eid < len(envs) else None
+                if env is not None:
+                    names = getattr(hw.program_image, "names", ()) or ()
+                    slots = []
+                    for key, val in list(env.slots.items())[:10]:
+                        nm = names[key] if 0 <= key < len(names) else str(key)
+                        slots.append(f"{nm}={_val_str(hw, val)}")
+                    cur = f" cur={eid} parent={env.parent} " + " ".join(slots)
+        except Exception:
+            pass
+        return f"ENV live={live}/{len(envs)}{cur}"
+
+    if what == "fn":
+        fns = hw._value_functions
+        live = sum(1 for f in fns if f is not None)
+        rows = [
+            f"{i}:entry={f.entry} np={f.nparam}{' arrow' if f.is_arrow else ''}"
+            for i, f in enumerate(fns) if f is not None
+        ][:8]
+        return f"FN live={live}/{len(fns)} [" + "; ".join(rows) + "]"
+
+    if what == "gc":
+        return (
+            f"GCS objs={sum(1 for o in hw._value_objects if o is not None)}"
+            f" arrs={sum(1 for a in hw._value_arrays if a is not None)}"
+            f" envs={sum(1 for e in hw._value_envs if e is not None)}"
+            f" fns={sum(1 for f in hw._value_functions if f is not None)}"
+            f" strings={len(hw._value_strings or [])}"
+        )
+
+    if what == "ring":
+        # PYTHON runs a frame to completion, so there is no frozen cycle ring
+        # to replay. Say so rather than returning an empty ring.
+        return ""
+
+    return ""
+
+
+def decode_ip(chunk, src_lines, ip) -> dict:
+    """Shared arch_decode body: resolve one IP against the compiled image."""
+    op_name, op_arg, native_name, native_id = decode_op_at(chunk, ip)
+    if not op_name:
+        return {}
+    out = {
+        "op_name": op_name,
+        "op_arg": op_arg,
+        "native_name": native_name,
+        "native_id": native_id,
+    }
+    op_lines = getattr(chunk, "op_lines", None)
+    if op_lines and 0 <= ip < len(op_lines):
+        line = int(op_lines[ip] or 0)
+        if line:
+            out["src_line"] = line
+            if 0 < line <= len(src_lines):
+                out["html_line"] = src_lines[line - 1][:88]
+    return out
+
+
 def _merge_jsh_catalog(catalog: list[str]) -> list[str]:
     return card_catalog(catalog)
 
@@ -300,6 +465,26 @@ class RuntimeBackend(ABC):
     def arch_snapshot(self) -> dict:
         """Read-only Architecture Monitor fields. Missing keys are fine."""
         return {}
+
+    def arch_decode(self, ip) -> dict:
+        """What lives at `ip` in the loaded image: op, native, source line.
+
+        Pure lookup against the compiled image — no RPC, no VM access — so the
+        monitor can resolve any IP from the execution trace, not only the one
+        the VM happens to be parked on.
+        """
+        return {}
+
+    def arch_peek(self, what: str, *args) -> str:
+        """One-line peek into a live VM structure, for an open inspector only.
+
+        `what` is a neutral name (`obj`, `arr`, `stack`, `sram`, `vars`, `raf`,
+        `timers`, `listeners`, `env`, `gc`, `ring`) — never a raw RPC verb, so
+        the panel does not have to know which runtime it is talking to.
+        Returns "" when this runtime cannot answer; the caller must treat that
+        as "no view", never as an empty structure.
+        """
+        return ""
 
 
 class PythonBackend(RuntimeBackend):
@@ -393,6 +578,9 @@ class PythonBackend(RuntimeBackend):
             "lsn": len(getattr(hw, "_value_listeners", None) or []),
             "fault": getattr(hw, "error", None) or "",
             "natives": self._take_native_hist(hw),
+            "ip_ring": (
+                hw.arch_ip_ring() if hasattr(hw, "arch_ip_ring") else []
+            ),
         }
 
     def _take_native_hist(self, hw) -> dict:
@@ -417,6 +605,28 @@ class PythonBackend(RuntimeBackend):
             k: v for k, v in ((k, v * 3 // 4) for k, v in self._nat_hist.items()) if v
         }
         return dict(self._nat_hist)
+
+    def arch_decode(self, ip) -> dict:
+        m = self.machine
+        return decode_ip(
+            getattr(m, "_html_chunk", None),
+            list(getattr(m, "source_lines", None) or []),
+            ip,
+        )
+
+    def arch_peek(self, what: str, *args) -> str:
+        """PYTHON peeks — same views the RTL serves over OBJPEEK/ARRPEEK/…
+
+        Read straight off the JsHwVm so the PYTHON inspector shows the same
+        structures as FPGA-SIM instead of an empty panel.
+        """
+        hw = getattr(self.machine, "_hw_vm", None)
+        if hw is None or not getattr(hw, "_value64_active", False):
+            return ""
+        try:
+            return _py_peek(hw, what, *args)
+        except Exception as e:  # a peek must never take the GUI down
+            return f"(peek failed: {e})"
 
     def arch_snapshot(self) -> dict:
         """PYTHON live fields for the Architecture Monitor (existing Machine/VM)."""
@@ -530,6 +740,7 @@ class PythonBackend(RuntimeBackend):
             "strb": hw.get("strb", ""),
             "fault": hw.get("fault", ""),
             "natives": hw.get("natives", {}),
+            "ip_ring": hw.get("ip_ring", []),
             "spr": spr,
             "n_ops": n_ops,
             "n_consts": n_consts,
