@@ -29,6 +29,18 @@ mapping (`tcmalloc large alloc`).
 
 ---
 
+---
+
+## `bit-fresh` — 2026-08-21 14:46 → 22:29 — PLACE FAILED (again)
+
+Clean project. Synth **100%** ~22:03. `opt_design` OK. `place_design`
+**UTLZ-1** in ~36 s. Headline: LUT **1413%**, BRAM **159%** (morning was
+1424% / 181%). ~80 BRAM tiles saved (`imgd` external); LUTs almost
+unchanged. Synth log still names **both** `u_core/u_fb` and
+`u_corei_10/u_fb`. Diary detail / next: [FPGA_FIT.md](FPGA_FIT.md).
+
+---
+
 ## V1.0 `make bit` — 2026-08-20 20:53 → 08-21 04:35 — PLACE FAILED
 
 exec32 gone, Port A monsters, `spr_mem` 32 KB / `source_mem` 64 KB.

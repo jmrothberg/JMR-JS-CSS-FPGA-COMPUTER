@@ -105,20 +105,31 @@ module jmr_js_vm #(
     localparam logic [7:0] OP_MAKE_FN    = 8'd33;
     localparam logic [7:0] OP_CALL_VAL   = 8'd34;
 
-    (* ram_style = "block" *) logic [31:0] code_mem [0:CODE_WORDS-1] /*verilator public_flat_rw*/;
-    initial $readmemh(CODE_HEX, code_mem);
+    // 2026-08-21 fit: pow2-chunked (16K+4K = 20480 exact) - see the heap
+    // slot arrays for why. The boot hex (tiny stub) loads into chunk 0.
+    (* ram_style = "block" *) logic [31:0] code_mem_c0 [0:16383] /*verilator public_flat_rw*/;
+    (* ram_style = "block" *) logic [31:0] code_mem_c1 [0:4095]  /*verilator public_flat_rw*/;
+    initial $readmemh(CODE_HEX, code_mem_c0);
     logic [14:0] code_raddr_ff;
     logic [14:0] code_raddr;
     logic [31:0] code_rdata;
-    // Read port (VM fetch) + write port (FAT .JSB load) — dual-port BRAM
+    // Read port (VM fetch) + write port (FAT .JSB load) — dual-port BRAM,
+    // pow2-chunked. Registered chunk select keeps the 1-beat fetch contract.
+    // Out-of-range writes drop (too-big images refused loud at S_GOT_HDR2).
+    logic [31:0] code_r_c0, code_r_c1;
+    logic        code_rsel;
     always_ff @(posedge clk) begin
-        code_rdata <= code_mem[code_raddr];
-        // Clamp: CODE_WORDS (20480) is below the 15-bit address space; an
-        // out-of-range write must drop, not wrap (Verilator faults on OOB).
-        // Too-big images are refused loud at S_GOT_HDR2 (capacity fault).
-        if (code_we && (CODE_WORDS >= 32768 || (32'(code_waddr) < CODE_WORDS)))
-            code_mem[code_waddr] <= code_wdata;
+        code_r_c0 <= code_mem_c0[code_raddr[13:0]];
+        code_r_c1 <= code_mem_c1[(code_raddr - 15'd16384) & 15'hFFF];
+        code_rsel <= (code_raddr >= 15'd16384);
+        if (code_we) begin
+            if (code_waddr < 15'd16384)
+                code_mem_c0[code_waddr[13:0]] <= code_wdata;
+            else if (code_waddr < 15'(CODE_WORDS))
+                code_mem_c1[code_waddr[11:0] & 12'hFFF] <= code_wdata;
+        end
     end
+    assign code_rdata = code_rsel ? code_r_c1 : code_r_c0;
 
     logic signed [31:0] consts [0:MAX_CONSTS-1];
     logic signed [31:0] vars   [0:MAX_VARS-1] /*verilator public_flat_rd*/;
@@ -144,7 +155,7 @@ module jmr_js_vm #(
     // tfn_*) unreachable and sweep it from the netlist. FPGA-SIM behavior is
     // identical: the FF bit is 1 whenever running. Do NOT route new logic
     // through v64_on; use v64_on.
-    wire v64_on = jsb_flags[3]; // TEMP BISECT: fold reverted to live flag read
+    localparam bit v64_on = 1'b1;
     logic        looping, running /*verilator public_flat_rd*/;
     // Value64 is a gated scalar island. It deliberately does not reuse the
     // legacy Q16/tag stack, so a FLAG_VALUE64 image cannot alias old state.
@@ -1209,17 +1220,77 @@ module jmr_js_vm #(
     // Packed object slot {key[15:0], val[63:0]} and array val SRAM.
     // 1W1R registered — storage_engine sbuf / jmr_video_vram Port A.
     // Dump/CHECKPOINT peeks this array (not a third hardware port).
-    (* ram_style = "block" *) logic [79:0] vobj_slot [0:VOBJ_WORDS-1]
-        /*verilator public_flat_rd*/;
+    // 2026-08-21 fit: Vivado pads every BRAM to 2^(address width), so the
+    // non-pow2 heap arrays each wasted 5-32 tiles (utilization_hier.rpt).
+    // Each is decomposed into EXACT pow2 chunks (zero padding):
+    //   vobj 30720 = 16K+8K+4K+2K   varr 50688 = 32K+16K+1K+512(+256)
+    //   venv 6144  = 4K+2K          (code_mem is split at its declaration)
+    // Chunk selects are REGISTERED beside the data - the 1-beat read
+    // contract is bit-identical. Sub-indices are masked to the pow2 chunk
+    // size so no read is ever out of bounds (#76 lesson).
+    (* ram_style = "block" *) logic [79:0] vobj_slot_c0 [0:16383] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [79:0] vobj_slot_c1 [0:8191]  /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [79:0] vobj_slot_c2 [0:4095]  /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [79:0] vobj_slot_c3 [0:2047]  /*verilator public_flat_rd*/;
     (* ram_style = "block" *) logic [2:0] vobj_tmem [0:VOBJ_WORDS-1]
         /*verilator public_flat_rd*/;
-    (* ram_style = "block" *) logic [63:0] varr_slot [0:VARR_WORDS-1]
-        /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [63:0] varr_slot_c0 [0:32767] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [63:0] varr_slot_c1 [0:16383] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [63:0] varr_slot_c2 [0:2047]  /*verilator public_flat_rd*/;
     (* ram_style = "block" *) logic [2:0] varr_tmem [0:VARR_WORDS-1]
         /*verilator public_flat_rd*/;
     // Packed env slot {key[8:0], val[63:0]} in low 73 of 80. 1W1R like vobj.
-    (* ram_style = "block" *) logic [79:0] venv_slot [0:VENV_WORDS-1]
-        /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [79:0] venv_slot_c0 [0:4095] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [79:0] venv_slot_c1 [0:2047] /*verilator public_flat_rd*/;
+    // 2026-08-21 LUT fit: the vframe record arrays (6 of the 7; escaped is
+    // 128 flat FFs and keeps its partial-field writers) live in a DEDICATED
+    // write process so they infer RAM instead of ~30k FFs each dragging
+    // ~10 LUTs of 112-state decode (utilization_hier.rpt: the parent held
+    // 1.72M logic LUTs). Reads were ALREADY registered; the parent-side
+    // writer becomes a one-beat strobe (call-write vs return-read are many
+    // beats apart), the exec-side writer moves here unchanged.
+    logic        vfr_we;
+    logic [6:0]  vfr_wa;
+    logic [15:0] vfr_rip;
+    logic [11:0] vfr_bsp;
+    logic [63:0] vfr_this, vfr_env, vfr_fn, vfr_ctor;
+    always_ff @(posedge clk) begin
+        if (vfr_we) begin
+            vframe_return_ip[vfr_wa] <= vfr_rip;
+            vframe_base_sp[vfr_wa]   <= vfr_bsp;
+            vframe_this[vfr_wa]      <= vfr_this;
+            vframe_env[vfr_wa]       <= vfr_env;
+            vframe_fn[vfr_wa]        <= vfr_fn;
+            vframe_ctor[vfr_wa]      <= vfr_ctor;
+        end else if (e64_vframe_we) begin
+            vframe_return_ip[e64_vframe_waddr] <= e64_vframe_rip_wdata;
+            vframe_base_sp[e64_vframe_waddr]   <= e64_vframe_bsp_wdata;
+            vframe_this[e64_vframe_waddr]      <= e64_vframe_this_wdata;
+            vframe_env[e64_vframe_waddr]       <= e64_vframe_env_wdata;
+            vframe_fn[e64_vframe_waddr]        <= e64_vframe_fn_wdata;
+            vframe_ctor[e64_vframe_waddr]      <= e64_vframe_ctor_wdata;
+        end
+    end
+
+    // Same LUT-fit treatment for the pure-value metadata writers. vobj_len
+    // and venv_len STAY as FFs: their read-modify-write sites sit on the
+    // 2-beat heap loop where a strobed (+1 beat) write could be read stale.
+    logic        vom_we_cls, vom_we_bi, veg_we;
+    logic [12:0] vom_wa;
+    logic [15:0] vom_cls;
+    logic [3:0]  vom_bi;
+    logic [8:0]  veg_wa;
+    logic [11:0] veg_wd;
+    always_ff @(posedge clk) begin
+        if (vom_we_cls)
+            vobj_cls[vom_wa[9:0]] <= vom_cls;
+        else if (e64_vobj_cls_we)
+            vobj_cls[e64_vobj_cls_waddr[9:0]] <= e64_vobj_cls_wdata;
+        if (vom_we_bi) vobj_builtin[vom_wa[9:0]] <= vom_bi;
+        if (veg_we) venv_gen[veg_wa] <= veg_wd;
+        else if (e64_venv_gen_we) venv_gen[e64_venv_gen_waddr[8:0]] <= e64_venv_gen_wdata;
+    end
+
     logic        vobj_we, varr_we, venv_we;
     logic [VOBJ_AW-1:0] vobj_waddr, vobj_raddr;
     logic [VARR_AW-1:0] varr_waddr, varr_raddr;
@@ -2513,28 +2584,69 @@ module jmr_js_vm #(
         end         else trail_off <= trail_off + 16'd1;
     endtask
 
-    // Object/array slot SRAM: 1 write + 1 registered read (VRAM Port A).
+    // Object/array slot SRAM: 1 write + 1 registered read (VRAM Port A),
+    // now pow2-chunked. Registered chunk selects keep the 1-beat contract.
+    logic [79:0] vobj_r_c0, vobj_r_c1, vobj_r_c2, vobj_r_c3;
+    logic [1:0]  vobj_rsel;
+    logic [63:0] varr_r_c0, varr_r_c1, varr_r_c2;
+    logic [1:0]  varr_rsel;
+    logic [79:0] venv_r_c0, venv_r_c1;
+    logic        venv_rsel;
     always_ff @(posedge clk) begin
         if (vobj_we) begin
-            vobj_slot[vobj_waddr] <= vobj_wdata;
+            if (vobj_waddr < 15'd16384)
+                vobj_slot_c0[vobj_waddr[13:0]] <= vobj_wdata;
+            else if (vobj_waddr < 15'd24576)
+                vobj_slot_c1[vobj_waddr[12:0] & 13'h1FFF] <= vobj_wdata;
+            else if (vobj_waddr < 15'd28672)
+                vobj_slot_c2[vobj_waddr[11:0] & 12'hFFF] <= vobj_wdata;
+            else
+                vobj_slot_c3[vobj_waddr[10:0] & 11'h7FF] <= vobj_wdata;
             vobj_tmem[vobj_waddr] <= (hp_cmd == HP_OSETI)
                 ? hp_qt[hp_qi[1:0]] : hp_tag;
         end
-        vobj_rdata <= vobj_slot[vobj_raddr];
+        vobj_r_c0 <= vobj_slot_c0[vobj_raddr[13:0]];
+        vobj_r_c1 <= vobj_slot_c1[(vobj_raddr - 15'd16384) & 15'h1FFF];
+        vobj_r_c2 <= vobj_slot_c2[(vobj_raddr - 15'd24576) & 15'hFFF];
+        vobj_r_c3 <= vobj_slot_c3[(vobj_raddr - 15'd28672) & 15'h7FF];
+        vobj_rsel <= (vobj_raddr < 15'd16384) ? 2'd0 :
+                     (vobj_raddr < 15'd24576) ? 2'd1 :
+                     (vobj_raddr < 15'd28672) ? 2'd2 : 2'd3;
         vobj_trdata <= vobj_tmem[vobj_raddr];
         if (varr_we) begin
-            varr_slot[varr_waddr] <= varr_wdata;
+            if (varr_waddr < 16'd32768)
+                varr_slot_c0[varr_waddr[14:0]] <= varr_wdata;
+            else if (varr_waddr < 16'd49152)
+                varr_slot_c1[varr_waddr[13:0] & 14'h3FFF] <= varr_wdata;
+            else
+                varr_slot_c2[varr_waddr[10:0] & 11'h7FF] <= varr_wdata;
             // 32-bit HEAP_FILL tag: registered (same addr as stack_rdata).
             varr_tmem[varr_waddr] <= (hp_from_stack && !hp_v64)
                 ? e32_stack_tag_rdata
                 : hp_tag;
         end
-        varr_rdata <= varr_slot[varr_raddr];
+        varr_r_c0 <= varr_slot_c0[varr_raddr[14:0]];
+        varr_r_c1 <= varr_slot_c1[(varr_raddr - 16'd32768) & 16'h3FFF];
+        varr_r_c2 <= varr_slot_c2[(varr_raddr - 16'd49152) & 16'h7FF];
+        varr_rsel <= (varr_raddr < 16'd32768) ? 2'd0 :
+                     (varr_raddr < 16'd49152) ? 2'd1 : 2'd2;
         varr_trdata <= varr_tmem[varr_raddr];
-        if (venv_we)
-            venv_slot[venv_waddr] <= venv_wdata;
-        venv_rdata <= venv_slot[venv_raddr];
+        if (venv_we) begin
+            if (venv_waddr < 13'd4096)
+                venv_slot_c0[venv_waddr[11:0]] <= venv_wdata;
+            else
+                venv_slot_c1[venv_waddr[10:0] & 11'h7FF] <= venv_wdata;
+        end
+        venv_r_c0 <= venv_slot_c0[venv_raddr[11:0]];
+        venv_r_c1 <= venv_slot_c1[(venv_raddr - 13'd4096) & 13'h7FF];
+        venv_rsel <= (venv_raddr >= 13'd4096);
     end
+    assign vobj_rdata = (vobj_rsel == 2'd0) ? vobj_r_c0 :
+                        (vobj_rsel == 2'd1) ? vobj_r_c1 :
+                        (vobj_rsel == 2'd2) ? vobj_r_c2 : vobj_r_c3;
+    assign varr_rdata = (varr_rsel == 2'd0) ? varr_r_c0 :
+                        (varr_rsel == 2'd1) ? varr_r_c1 : varr_r_c2;
+    assign venv_rdata = venv_rsel ? venv_r_c1 : venv_r_c0;
 
     // Value64 operand stack: 1 write + 1 registered read (same as vobj_slot).
     // Exec keeps priority in its own states, but the arm must be
@@ -5550,6 +5662,8 @@ module jmr_js_vm #(
             fb_we <= 1'b0;
             fb_swap <= 1'b0;
             vst_we <= 1'b0;
+            vfr_we <= 1'b0;
+            vom_we_cls <= 1'b0; vom_we_bi <= 1'b0; veg_we <= 1'b0;
             // imgd_pend is HANDSHAKE STATE (held across beats until sram_ack),
             // not a strobe - it must NOT be cleared here. The old imgd_we that
             // lived on this line was a one-shot BRAM write strobe.
@@ -5880,20 +5994,15 @@ module jmr_js_vm #(
                 if (e64_varr_long_we && e64_varr_long_wdata && e64_varr_lidx_we)
                     vlong_used[e64_varr_lidx_wdata[6:0]] <= 1'b1;
                 if (e64_varr_valid_we) varr_valid[e64_varr_valid_waddr[10:0]] <= e64_varr_valid_wdata;
-                if (e64_venv_gen_we) venv_gen[e64_venv_gen_waddr[8:0]] <= e64_venv_gen_wdata;
+                // e64_venv_gen_we applies in the dedicated metadata process
                 if (e64_venv_len_we) venv_len[e64_venv_len_waddr[8:0]] <= e64_venv_len_wdata;
                 if (e64_venv_valid_we) venv_valid[e64_venv_valid_waddr[8:0]] <= e64_venv_valid_wdata;
-                if (e64_vobj_cls_we) vobj_cls[e64_vobj_cls_waddr[9:0]] <= e64_vobj_cls_wdata;
+                // e64_vobj_cls_we applies in the dedicated metadata process
                 if (e64_vvar_valid_we) vvar_valid[e64_vvar_valid_waddr[8:0]] <= e64_vvar_valid_wdata;
-                if (e64_vframe_we) begin
-                    vframe_return_ip[e64_vframe_waddr] <= e64_vframe_rip_wdata;
-                    vframe_base_sp[e64_vframe_waddr] <= e64_vframe_bsp_wdata;
+                if (e64_vframe_we)
+                    // record fields write in the dedicated vframe process;
+                    // escaped stays here (flat FFs, partial-field writers)
                     vframe_escaped[e64_vframe_waddr] <= e64_vframe_esc_wdata;
-                    vframe_this[e64_vframe_waddr] <= e64_vframe_this_wdata;
-                    vframe_env[e64_vframe_waddr] <= e64_vframe_env_wdata;
-                    vframe_fn[e64_vframe_waddr] <= e64_vframe_fn_wdata;
-                    vframe_ctor[e64_vframe_waddr] <= e64_vframe_ctor_wdata;
-                end
             end
             if ((state == S_EXEC) || (state == S_NAT)) begin
                 // we_q is registered; apply on EXEC/NAT including leave_hold.
@@ -6408,7 +6517,7 @@ module jmr_js_vm #(
                             vfn_mark[heap_clr_i[9:0]] <= 1'b0;
                             vobj_len[heap_clr_i[9:0]] <= 6'd0;
                             vobj_mark[heap_clr_i[9:0]] <= 1'b0;
-                            vobj_builtin[heap_clr_i[9:0]] <= 4'd0;
+                            vom_we_bi <= 1'b1; vom_wa <= {3'd0, heap_clr_i[9:0]}; vom_bi <= 4'd0;
                         end
                         if (heap_clr_i < 12'(MAX_ARR)) begin
                             varr_valid[heap_clr_i[11:0]] <= 1'b0;
@@ -6423,7 +6532,7 @@ module jmr_js_vm #(
                             vlong_used[heap_clr_i[6:0]] <= 1'b0;
                         if (heap_clr_i < 12'(ENV_DEPTH)) begin
                             venv_valid[heap_clr_i[8:0]] <= 1'b0;
-                            venv_gen[heap_clr_i[8:0]] <= 12'd1;
+                            veg_we <= 1'b1; veg_wa <= heap_clr_i[8:0]; veg_wd <= 12'd1;
                             venv_len[heap_clr_i[8:0]] <= 5'd0;
                             venv_mark[heap_clr_i[8:0]] <= 1'b0;
                             env_cap[heap_clr_i[8:0]] <= 1'b0;
@@ -9244,7 +9353,7 @@ module jmr_js_vm #(
                                 v64_repl <= 1'b0;
                                 if (vfree_ok) begin
                                     vobj_alloc_wr(valloc_i[9:0], 2'd1);
-                                    vobj_builtin[valloc_i[12:0]] <= 4'd7;
+                                    vom_we_bi <= 1'b1; vom_wa <= valloc_i[12:0]; vom_bi <= 4'd7;
                                     vobj_len[valloc_i[12:0]] <= 6'd2;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd7, 2'd0, 6'd2});
@@ -9830,7 +9939,7 @@ module jmr_js_vm #(
                                 vfree_armed <= 1'b0;
                                 if (vfree_ok) begin
                                     vobj_alloc_wr(valloc_i[9:0], 2'd1);
-                                    vobj_cls[valloc_i[12:0]] <= CLS_IMGD;
+                                    vom_we_cls <= 1'b1; vom_wa <= valloc_i[12:0]; vom_cls <= CLS_IMGD;
                                     vobj_len[valloc_i[12:0]] <= 6'd2;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd0, 2'd0, 6'd2});
@@ -9916,7 +10025,7 @@ module jmr_js_vm #(
                                     vfree_armed <= 1'b0;
                                     if (vfree_ok) begin
                                         vobj_alloc_wr(valloc_i[9:0], 2'd1);
-                                        vobj_cls[valloc_i[12:0]] <= CLS_IMGD;
+                                        vom_we_cls <= 1'b1; vom_wa <= valloc_i[12:0]; vom_cls <= CLS_IMGD;
                                         vobj_len[valloc_i[12:0]] <= 6'd2;
                                         e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                                  {52'd0, 4'd0, 2'd0, 6'd2});
@@ -10531,18 +10640,20 @@ module jmr_js_vm #(
                             // CALL_USER clocks ip_n=entry before ALLOC.
                             // ip+1 was then entry+1 (INVADERS vret=1798).
                             // bind_ip holds call-site+1 from that EXEC beat.
-                            vframe_return_ip[fr] <= vcallback_raf
+                            vfr_we  <= 1'b1;
+                            vfr_wa  <= fr[6:0];
+                            vfr_rip <= vcallback_raf
                                 ? 16'hffff
                                 : vcallback_timer ? 16'hfffe
                                 : vcallback_key ? 16'hfffd
                                 : vcallback_fe ? 16'hfffc
                                 : ((ip == vcall_entry) ? e64_bind_ip_q
                                                       : (ip + 16'd1));
-                            vframe_base_sp[fr] <= base_sp;
-                            vframe_this[fr] <= vthis;
-                            vframe_env[fr] <= venv;
-                            vframe_fn[fr] <= function_handle;
-                            vframe_ctor[fr] <= ctor_inst;
+                            vfr_bsp  <= base_sp;
+                            vfr_this <= vthis;
+                            vfr_env  <= venv;
+                            vfr_fn   <= function_handle;
+                            vfr_ctor <= ctor_inst;
                             vframe_escaped[fr] <= 1'b0;
                             e64_p_frame_we <= 1'b1;
                             e64_p_frame_idx <= fr[6:0];
@@ -10819,8 +10930,8 @@ module jmr_js_vm #(
                                 // Latched intern (vcall_entry), not code_rdata
                                 // — HEAP between `new Game` and nested
                                 // `new Item` reused Game's name.
-                                vobj_cls[valloc_i[12:0]] <= vcall_entry;
-                                vobj_builtin[valloc_i[12:0]] <= 4'd0;
+                                vom_we_cls <= 1'b1; vom_wa <= valloc_i[12:0]; vom_cls <= vcall_entry;
+                                vom_we_bi <= 1'b1; vom_wa <= valloc_i[12:0]; vom_bi <= 4'd0;
                                 vobj_proto_pa_we <= 1'b1;
                                 vobj_proto_pa_waddr <= valloc_i[12:0];
                                 vobj_proto_pa_wdata <= V64_UNDEFINED;
@@ -10845,8 +10956,8 @@ module jmr_js_vm #(
                                     {19'd0, valloc_i[12:0]}
                                 );
                                 vobj_alloc_wr(valloc_i[9:0], 2'd1);
-                                vobj_cls[valloc_i[12:0]] <= 16'hFFFF;
-                                vobj_builtin[valloc_i[12:0]] <= 4'd0;
+                                vom_we_cls <= 1'b1; vom_wa <= valloc_i[12:0]; vom_cls <= 16'hFFFF;
+                                vom_we_bi <= 1'b1; vom_wa <= valloc_i[12:0]; vom_bi <= 4'd0;
                                 vobj_len[valloc_i[12:0]] <= 6'd0;
                                 vobj_proto_pa_we <= 1'b1;
                                 vobj_proto_pa_waddr <= valloc_i[12:0];
@@ -10884,7 +10995,7 @@ module jmr_js_vm #(
                                     hs_st(S_HEAP_WR);
                                 end else if (vnat_dom == 3'd1) begin
                                     // querySelector style object
-                                    vobj_builtin[valloc_i[12:0]] <= 4'd1;
+                                    vom_we_bi <= 1'b1; vom_wa <= valloc_i[12:0]; vom_bi <= 4'd1;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd1, 2'd0, 6'd0});
                                     vnat_style <= handle;
@@ -10892,7 +11003,7 @@ module jmr_js_vm #(
                                     hs_valloc_i(valloc_i + 14'd1);
                                     valloc_rd_arm <= 1'b0;
                                 end else if (vnat_dom == 3'd2) begin
-                                    vobj_builtin[valloc_i[12:0]] <= 4'd1;
+                                    vom_we_bi <= 1'b1; vom_wa <= valloc_i[12:0]; vom_bi <= 4'd1;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd1, 2'd0, 6'd0});
                                     vst_wr(vnat_base, handle);
@@ -10927,7 +11038,7 @@ module jmr_js_vm #(
                                     hs_hp_ret(S_FETCH_WAIT);
                                     hs_st(S_HEAP_WR);
                                 end else if (vnat_dom == 3'd3) begin
-                                    vobj_builtin[valloc_i[12:0]] <= 4'd5;
+                                    vom_we_bi <= 1'b1; vom_wa <= valloc_i[12:0]; vom_bi <= 4'd5;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd5, 2'd0, 6'd0});
                                     vst_wr(vnat_base, handle);
@@ -10958,7 +11069,7 @@ module jmr_js_vm #(
                                     hs_hp_ret(S_FETCH_WAIT);
                                     hs_st(S_HEAP_WR);
                                 end else if (vnat_dom == 3'd4) begin
-                                    vobj_builtin[valloc_i[12:0]] <= 4'd2;
+                                    vom_we_bi <= 1'b1; vom_wa <= valloc_i[12:0]; vom_bi <= 4'd2;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd2, 2'd0, 6'd0});
                                     vst_wr(vnat_base, handle);
@@ -11065,7 +11176,7 @@ module jmr_js_vm #(
                                     hs_hp_ret(S_V64_FRAME_KEY);
                                     hs_st(S_HEAP_WR);
                                 end else if (vnat_dom == 3'd6) begin
-                                    vobj_builtin[valloc_i[12:0]] <= 4'd3;
+                                    vom_we_bi <= 1'b1; vom_wa <= valloc_i[12:0]; vom_bi <= 4'd3;
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd3, 2'd0, 6'd0});
                                     vst_wr(vnat_base, handle);
@@ -11076,7 +11187,7 @@ module jmr_js_vm #(
                                     hs_st(S_FETCH_WAIT);
                                 end else begin
                                     if (valloc_regex) begin
-                                        vobj_builtin[valloc_i[12:0]] <= 4'd6;
+                                        vom_we_bi <= 1'b1; vom_wa <= valloc_i[12:0]; vom_bi <= 4'd6;
                                         e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                                  {52'd0, 4'd6, 2'd0, 6'd0});
                                         hs_valloc_regex(1'b0);
@@ -11479,8 +11590,8 @@ module jmr_js_vm #(
                         venv_valid[vgc_env_i] <= 1'b0;
                         venv_len[vgc_env_i] <= 5'd0;
                         e64_poke(6'd50, {6'd0, vgc_env_i}, 64'd0);
-                        venv_gen[vgc_env_i] <=
-                            (venv_gen_rdata == 12'hfff)
+                        veg_we <= 1'b1; veg_wa <= vgc_env_i[8:0];
+                        veg_wd <= (venv_gen_rdata == 12'hfff)
                             ? 12'd1 : venv_gen_rdata + 12'd1;
                     end
                     vgc_rd_arm <= 1'b0;
@@ -11880,7 +11991,7 @@ module jmr_js_vm #(
                             if (vfree_ok) begin
                             hs_valloc_retried(1'b0);
                             vobj_alloc_wr(valloc_i[9:0], 2'd1);
-                            vobj_builtin[valloc_i[12:0]] <= 4'd7;
+                            vom_we_bi <= 1'b1; vom_wa <= valloc_i[12:0]; vom_bi <= 4'd7;
                             e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                      {52'd0, 4'd7, 2'd0, 6'd0});
                             vst_wr(vnat_base, v64_handle(

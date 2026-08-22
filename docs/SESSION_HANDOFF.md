@@ -19,7 +19,13 @@ This file is **copy 2** of (a) read-`traces/`-first and (b) synth hygiene.
 
 ---
 
-## CURRENT STATE — 2026-08-21 (night): titles are correct; FPGA-SIM too slow to play; next bit is `bit-fresh`; 30 fps is a **board** goal
+## CURRENT STATE — 2026-08-21 (22:29): `bit-fresh` **place failed** (same UTLZ-1 class)
+
+**Ladder / Headline:** [FPGA_FIT.md — Live build ladder](FPGA_FIT.md#live-build-ladder--bit-fresh-2026-08-21--place-failed-2229).
+Synth finished (~22:03); place died on **too big for the chip** (LUT
+**~1413%**, BRAM **~159%**). Make Error = that failure, not a HEARTBEAT
+bug. **Do not** re-run overnight until the still-present `u_core` +
+`u_corei_10` double-FB / 1.9M LUT cause is fixed.
 
 Banner **V1.0**. Five titles are **correct** on FPGA-SIM (INVADERS, PACMAN,
 DONKEY, ASTEROID, MRDO). **User: FPGA-SIM is too slow to play any of
@@ -58,14 +64,14 @@ first-round 768/256 shrink):
 | `MAX_SPR` (sprite descriptors) | **16** | Version 1.0 wall; Version 2.0 raises this for `MK.HTML` |
 
 Same numbers in the RTL package, hardware model, and `jsb_format.py`. Full
-story + the **required** next command
-(`source scripts/vivado_env.sh && make -C tools/board_flow bit-fresh`):
+story + the **live build ladder** (steps 1–11, where / ETA):
 [FPGA_FIT.md](FPGA_FIT.md). Automated tests that we leave red on purpose
 (#70/#71/#72) are **not** “the games are broken” —
 [potential bugs.md](potential%20bugs.md).
 
-**This morning (same day):** synth finished, place failed. That snapshot is
-in [OLD_RUNS.md](OLD_RUNS.md). Do not treat it as current work.
+**This morning (same day):** synth finished, place failed (LUT 1424% /
+BRAM 181%). Diary: [OLD_RUNS.md](OLD_RUNS.md). **Current** work is the
+live `bit-fresh` ladder in [FPGA_FIT.md](FPGA_FIT.md), not that place-fail.
 
 ---
 

@@ -36,6 +36,12 @@ DVI_SRCS := $(shell find $(ROOT)/third_party/digilent_rgb2dvi/src -name '*.vhd' 
 
 bit: $(BIT)
 
+# Forensic: per-instance utilization from the EXISTING checkpoint (~5 min,
+# no resynthesis). Answers "why two framebuffers / where are the LUTs".
+hier:
+	@test -n "$(VIVADO)" || { echo "Set VIVADO= (source scripts/vivado_env.sh)"; exit 1; }
+	$(VIVADO) -mode batch -nolog -nojournal -source report_hier.tcl
+
 # Recreate Vivado project + MIG (file list / pinout / IP change). Leaves RTL.
 bit-fresh:
 	$(MAKE) FRESH=1 -B bit

@@ -21,6 +21,23 @@ static Vjmr_js_core* top = nullptr;
 
 // CHECKPOINT/OBJPEEK peek 1-D SRAM (not a third hardware port).
 // Match rtl/engines/jmr_js_vm.sv two-tier arrays (1536×32 + 128×128).
+
+// 2026-08-21 fit: mini_fb banks are pow2-chunked (256K+32K+8K+4K).
+// Route a flat pixel index to the right chunk of the selected bank.
+static inline uint8_t fb_bank_pix(const Vjmr_js_core___024root* r, bool bank0, unsigned i) {
+    if (i < 262144u)
+        return bank0 ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c0[i]
+                     : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1_c0[i];
+    if (i < 294912u)
+        return bank0 ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c1[i - 262144u]
+                     : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1_c1[i - 262144u];
+    if (i < 303104u)
+        return bank0 ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c2[i - 294912u]
+                     : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1_c2[i - 294912u];
+    return bank0 ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c3[i - 303104u]
+                 : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1_c3[i - 303104u];
+}
+
 static const unsigned VM_MAX_OBJ = 960u;   // MUST track rtl MAX_OBJ (bug #75: stale caps here count OOB garbage)
 static const unsigned VM_OBJ_SLOTS = 32u;
 static const unsigned VM_MAX_ARR_SHORT = 1536u;
@@ -49,19 +66,52 @@ static inline unsigned varr_addr(Vjmr_js_core___024root* r, unsigned h, unsigned
 static inline unsigned venv_addr(unsigned h, unsigned s) {
     return (h * VM_ENV_SLOTS) + s;
 }
+
+// 2026-08-21 fit: heap slot arrays are pow2-chunked in the RTL
+// (vobj 16K+8K+4K+2K, varr 32K+16K+2K, venv 4K+2K, code 16K+4K).
+// These routers mirror the RTL boundaries exactly.
+template <typename R>
+static inline const auto& vobj_word(R* r, unsigned a) {
+    if (a < 16384u) return r->jmr_js_core__DOT__u_vm__DOT__vobj_slot_c0[a];
+    if (a < 24576u) return r->jmr_js_core__DOT__u_vm__DOT__vobj_slot_c1[a - 16384u];
+    if (a < 28672u) return r->jmr_js_core__DOT__u_vm__DOT__vobj_slot_c2[a - 24576u];
+    return r->jmr_js_core__DOT__u_vm__DOT__vobj_slot_c3[(a - 28672u) & 2047u];
+}
+template <typename R>
+static inline uint64_t varr_word(R* r, unsigned a) {
+    if (a < 32768u) return uint64_t(r->jmr_js_core__DOT__u_vm__DOT__varr_slot_c0[a]);
+    if (a < 49152u) return uint64_t(r->jmr_js_core__DOT__u_vm__DOT__varr_slot_c1[a - 32768u]);
+    return uint64_t(r->jmr_js_core__DOT__u_vm__DOT__varr_slot_c2[(a - 49152u) & 2047u]);
+}
+template <typename R>
+static inline const auto& venv_word(R* r, unsigned a) {
+    if (a < 4096u) return r->jmr_js_core__DOT__u_vm__DOT__venv_slot_c0[a];
+    return r->jmr_js_core__DOT__u_vm__DOT__venv_slot_c1[(a - 4096u) & 2047u];
+}
+template <typename R>
+static inline uint32_t code_word(R* r, unsigned a) {
+    if (a < 16384u) return uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[a]);
+    return uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[(a - 16384u) & 4095u]);
+}
+template <typename R>
+static inline void code_poke(R* r, unsigned a, uint32_t w) {
+    if (a < 16384u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[a] = w;
+    else if (a < 20480u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[a - 16384u] = w;
+}
+
 static uint16_t peek_vobj_key(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
-    const auto& w = r->jmr_js_core__DOT__u_vm__DOT__vobj_slot[vobj_addr(h, s)];
+    const auto& w = vobj_word(r, vobj_addr(h, s));
     return uint16_t(w[2] & 0xFFFFu);
 }
 static uint64_t peek_vobj_val(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
-    const auto& w = r->jmr_js_core__DOT__u_vm__DOT__vobj_slot[vobj_addr(h, s)];
+    const auto& w = vobj_word(r, vobj_addr(h, s));
     return uint64_t(w[0]) | (uint64_t(w[1]) << 32);
 }
 static uint8_t peek_vobj_tag(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
     return uint8_t(r->jmr_js_core__DOT__u_vm__DOT__vobj_tmem[vobj_addr(h, s)]);
 }
 static uint64_t peek_varr_val(Vjmr_js_core___024root* r, unsigned h, unsigned e) {
-    return uint64_t(r->jmr_js_core__DOT__u_vm__DOT__varr_slot[varr_addr(r, h, e)]);
+    return varr_word(r, varr_addr(r, h, e));
 }
 // TOS window is CPU truth; BRAM vstack lags one write. CHECKPOINT overlays.
 static uint64_t peek_vstack(Vjmr_js_core___024root* r, unsigned slot, unsigned vsp) {
@@ -76,11 +126,11 @@ static uint8_t peek_varr_tag(Vjmr_js_core___024root* r, unsigned h, unsigned e) 
     return uint8_t(r->jmr_js_core__DOT__u_vm__DOT__varr_tmem[varr_addr(r, h, e)]);
 }
 static uint16_t peek_venv_key(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
-    const auto& w = r->jmr_js_core__DOT__u_vm__DOT__venv_slot[venv_addr(h, s)];
+    const auto& w = venv_word(r, venv_addr(h, s));
     return uint16_t(w[2] & 0x1FFu);
 }
 static uint64_t peek_venv_val(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
-    const auto& w = r->jmr_js_core__DOT__u_vm__DOT__venv_slot[venv_addr(h, s)];
+    const auto& w = venv_word(r, venv_addr(h, s));
     return uint64_t(w[0]) | (uint64_t(w[1]) << 32);
 }
 
@@ -896,7 +946,7 @@ static int jsh_load_mem(const std::vector<uint8_t>& b) {
             if (i + 2 < code_len) word |= (uint32_t)b[i + 2] << 16;
             if (i + 3 < code_len) word |= (uint32_t)b[i + 3] << 24;
         }
-        rp->jmr_js_core__DOT__u_vm__DOT__code_mem[w] = word;
+        code_poke(rp, w, word);
     }
     if (has_aset && aset_off + 8 <= b.size()
         && b[aset_off] == 'A' && b[aset_off + 1] == 'S'
@@ -965,9 +1015,7 @@ static std::string fb_export_b64() {
     auto* r = top->rootp;
     unsigned front = unsigned(r->jmr_js_core__DOT__u_fb__DOT__front);
     for (int i = 0; i < W * H; i++)
-        full[(size_t)i] = front
-            ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0[i]
-            : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1[i];
+        full[(size_t)i] = fb_bank_pix(r, front, (unsigned)i);
     return b64_encode(full.data(), full.size());
 }
 
@@ -1688,9 +1736,7 @@ int main(int argc, char** argv) {
             uint64_t canvas_hash = FNV0;
             unsigned front = unsigned(r->jmr_js_core__DOT__u_fb__DOT__front);
             for (unsigned i = 0; i < 307200u; i++) {
-                uint8_t px = front
-                    ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0[i]
-                    : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1[i];
+                uint8_t px = fb_bank_pix(r, front, i);
                 canvas_hash = fnv_byte(canvas_hash, px);
             }
             uint64_t frames_hash = FNV0;
@@ -1825,8 +1871,8 @@ int main(int argc, char** argv) {
             unsigned ops_base = unsigned(
                 r->jmr_js_core__DOT__u_vm__DOT__ops_base
             );
-            unsigned op = (ops_base + ip < 32768u)
-                ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__code_mem[ops_base + ip] & 0xFFu)
+            unsigned op = (ops_base + ip < 20480u)
+                ? (code_word(r, ops_base + ip) & 0xFFu)
                 : 0u;
             unsigned error = unsigned(
                 r->jmr_js_core__DOT__u_vm__DOT__fault_code
@@ -2082,9 +2128,7 @@ int main(int argc, char** argv) {
             for (int y = 0; y < 480; y++)
                 for (int x = 0; x < 640; x++) {
                     int i = y * 640 + x;
-                    uint8_t px = front
-                        ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0[i]
-                        : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1[i];
+                    uint8_t px = fb_bank_pix(r, front, (unsigned)i);
                     if (px == want) {
                         cnt++;
                         if (x < minx) minx = x;
@@ -2105,9 +2149,7 @@ int main(int argc, char** argv) {
             static uint32_t bins[256];
             for (int i = 0; i < 256; i++) bins[i] = 0;
             for (int i = 0; i < 640*480; i++) {
-                uint8_t px = front
-                    ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0[i]
-                    : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1[i];
+                uint8_t px = fb_bank_pix(r, front, (unsigned)i);
                 bins[px]++;
             }
             std::ostringstream oss;
@@ -2239,7 +2281,7 @@ int main(int argc, char** argv) {
                 // venv_slot word: [79:64] name-id, [63:0] value
                 unsigned long long w_hi = 0; unsigned long long w_lo = 0;
                 {
-                    auto& word = r->jmr_js_core__DOT__u_vm__DOT__venv_slot[eid*16 + k];
+                    const auto& word = venv_word(r, eid*16 + k);
                     w_lo = (unsigned long long)word.at(0) | ((unsigned long long)word.at(1) << 32);
                     w_hi = (unsigned long long)word.at(2);
                 }
@@ -2558,7 +2600,7 @@ int main(int argc, char** argv) {
                     << unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_valid[eid]) << ":";
                 for (unsigned sl = 0; sl < 16; sl++) {
                     // venv_slot is {key[8:0], val[63:0]} packed in low 73 bits
-                    auto w = r->jmr_js_core__DOT__u_vm__DOT__venv_slot[eid * 16 + sl];
+                    auto w = venv_word(r, eid * 16 + sl);
                     uint64_t val = (uint64_t)w[0] | ((uint64_t)w[1] << 32);
                     unsigned key = (unsigned)((w[2] << 0) & 0x1FF);
                     key = (unsigned)(((uint64_t)w[2] << 0) & 0x1FF);
@@ -2580,8 +2622,8 @@ int main(int argc, char** argv) {
         if (line == "FBRAW?") {
             unsigned nz0 = 0, nz1 = 0;
             for (unsigned i = 0; i < 307200u; i++) {
-                if (top->rootp->jmr_js_core__DOT__u_fb__DOT__mem0[i]) nz0++;
-                if (top->rootp->jmr_js_core__DOT__u_fb__DOT__mem1[i]) nz1++;
+                if (fb_bank_pix(top->rootp, true,  i)) nz0++;
+                if (fb_bank_pix(top->rootp, false, i)) nz1++;
             }
             std::cout << "FBRAW nz0=" << nz0 << " nz1=" << nz1
                       << " front=" << unsigned(top->rootp->jmr_js_core__DOT__u_fb__DOT__front)
@@ -2648,8 +2690,7 @@ int main(int argc, char** argv) {
             std::sscanf(line.c_str() + 8, "%u", &b);
             std::vector<uint8_t> full(307200u, 0);
             for (unsigned i = 0; i < 307200u; i++)
-                full[i] = b ? (uint8_t)top->rootp->jmr_js_core__DOT__u_fb__DOT__mem1[i]
-                            : (uint8_t)top->rootp->jmr_js_core__DOT__u_fb__DOT__mem0[i];
+                full[i] = fb_bank_pix(top->rootp, b == 0, i);
             std::cout << "FB 640 480 " << b64_encode(full.data(), full.size()) << std::endl;
             continue;
         }

@@ -259,20 +259,163 @@ demo loop (nobody playing) and it died around picture-callback 114. That
 does **not** change the memory shapes this build bakes, and it is **not**
 the next glass hunt. Play is the product.
 
-## The next build (user runs, host terminal)
+## Live build ladder — `bit-fresh` 2026-08-21 — **PLACE FAILED** (22:29)
+
+**Ended** Fri Aug 21 **22:29** EDT. Synth **OK**; place **UTLZ-1** (same
+class as morning). The `make` Error / `jmr_wait_run impl_1` HEARTBEAT
+traceback is **not** a separate Tcl bug — Vivado exited because place
+refused; the wait loop just printed the stack.
+
+| # | Step | Status (this run) | Last failed (04:11) |
+|---|---|---|---|
+| 1 | MIG / project (`bit-fresh`) | **done** | reused (stale) |
+| 2–5 | Elabor → opt → map | **done** (~14:46→~21:55) | done |
+| 6 | **synth_1 100%** + DCP | **done** ~22:03 | done |
+| 7 | Util report | **new** 22:05 — see Headline | LUT 1424% / BRAM 181% |
+| 8 | `opt_design` | **done** ~22:08–22:28 | OK |
+| 9 | `place_design` | **FAILED** 22:29 UTLZ-1 | **FAILED** UTLZ-1 |
+| 10–11 | route / bit / WNS | never reached | never |
+
+### Headline (synth util 22:05) vs morning
+
+| | This `bit-fresh` | Morning place-fail |
+|---|---:|---:|
+| Slice LUTs | **1,901,313 (1413%)** | 1,917,043 (1424%) |
+| LUT as Memory | **57,851 (125%)** | 59,057 (128%) |
+| Block RAM tiles | **579 (159%)** | 659 (181%) |
+| FFs | OK (~69%) | OK |
+| DSP | OK (~21%) | OK |
+
+BRAM dropped by **~80 tiles** (matches parking `imgd_pix` off-chip). LUT
+count barely moved — still ~**14×** over the chip. Place dies in seconds
+once DRC runs; that is expected when util is this high.
+
+**Still in this synth log (problem):** both `u_core/u_fb` **and**
+`u_corei_10/u_fb` (duplicate framebuffer hierarchy again), plus
+`Synth 8-7048` BRAM over-util (Used=1157 sites). `bit-fresh` did **not**
+clear the double-FB / LUT explosion. Do **not** start another overnight
+build until that is understood — re-running the same netlist wastes ~8 h.
+
+**Do not** set `drc.disableLUTOverUtilError` to “force” a bit.
+
+Logs: `tools/board_flow/vivado.log` (UTLZ-1 block ~22:29);
+`build/nexys_video/utilization_synth.rpt` (22:05);
+`…/impl_1/.place_design.error.rst`.
+
+```bash
+# DO NOT re-run until double-FB / 1.9M LUT root cause is fixed
+# source scripts/vivado_env.sh && make -C tools/board_flow bit-fresh
+```
+
+### Forensics on this run (2026-08-21 late night)
+
+1. **The doubling is not an incremental artifact** — this was a clean
+   project. Elaboration instantiates every module ONCE (`(0#1)` in the
+   log); the second `u_corei_10/u_fb` hierarchy first appears at **Start
+   Technology Mapping**. The `i_N` / `__GCB0` names are Vivado
+   parallel-synthesis PARTITION cells — current theory: the partition
+   stitch fails to deduplicate on this design. The BRAM arithmetic says
+   the duplication is real cells: morning 659 = 2×160 (two FB pairs) +
+   339 (VM, old caps) exactly; tonight 579 = 2×160 + 208 (VM, new caps)
+   + ~51 (source_mem/work_ram/etc still carrying `ram_style="block"`).
+2. **Agent error inflated tonight's LUTs**: the `v64_on` constant fold
+   was left temporarily reverted from the PACMAN cap bisection, so this
+   run synthesized the whole dead tagged twin again (`stack`,
+   `gc_queue`, `*_tmem`, `tfn_*` are back in the mapping tables).
+   Restored and re-verified (suite green, PACMAN probe clean) — the next
+   synth sweeps them.
+
+### NEXT STEP — 5 minutes, no resynthesis, BEFORE any new build
 
 ```bash
 source scripts/vivado_env.sh
-make -C tools/board_flow bit-fresh
+make -C tools/board_flow hier
 ```
 
-`bit-fresh` is REQUIRED this once: the source file list changed and the
-reused project's incremental reference is the garbage stitched netlist.
-MIG regenerates (adds time; deterministic). Synth 2 threads / impl 8
-unchanged. After synth_1 100%, fill the Headline from
-`build/nexys_video/utilization_synth.rpt` — read the **last** session in
-`runme.log` if grepping it.
+Opens the EXISTING `post_opt.dcp` (22:27) and writes
+`build/nexys_video/utilization_hier.rpt` — per-instance LUT/BRAM to
+depth 3 — and prints whether `u_corei_10` is a real top-level cell.
+One report answers both open questions: how much of the 1.84M LUTs is
+the duplicate tree, and which module holds the rest.
 
+### VERDICT from utilization_hier.rpt (2026-08-21 22:49) — mystery solved
+
+**There is NO duplicate hierarchy.** One u_core, one u_fb — the
+`u_corei_10` names in the synth log are phantom partition labels; the
+netlist is single-copy. Forget the stitch theory; synth threads stay 2.
+
+The real attribution, from the per-instance table:
+
+| Instance | Logic LUTs | FFs | BRAM | Verdict |
+|---|---:|---:|---:|---|
+| `(u_vm)` parent FSM | **1,721,397** | 155,482 | 258 | THE problem |
+| `u_exec64` | 69,026 | 16k | 0 | healthy |
+| `u_fb` | 567 | 27 | **320** | maps at 2.1× optimal (~150) — separate fix |
+| `u_stor` | 21,442 | 4k | 0 | bloated but minor |
+| everything else | ~8k | — | 0 | fine |
+
+**Why 1.72M:** the parent holds ~155k FFs, and in one flat 112-state
+process every FF drags ~9-10 LUTs of replicated state-decode/enable
+logic. The FF count is dominated by ARRAYS still implemented as
+flip-flops — the exact pathology the Port A law exists for. The
+FF-resident census (declared arrays absent from both RAM mapping
+tables):
+
+| Array family | FF bits | Fate |
+|---|---:|---|
+| tagged twin (`consts`,`vars`,`tenv_parent`,`obj_cls`,`tfn_*`,`env_oid`) | ~100k | **swept free** next run — the v64_on fold is restored (it was accidentally reverted for THIS run) |
+| `vframe_*` (7 arrays × 128) | ~35k | reads ALREADY registered → full Port A, ≈1 BRAM tile; consolidate the two writer sites through one strobe |
+| `vobj_cls`/`vobj_len`/`vobj_builtin` | ~26k | strobe-ify writes → LUTRAM (async reads preserved) |
+| `cstack_*` (6 × 128) | ~12k | audit: partly tagged (fold may sweep) |
+| `venv_gen`/`venv_len` | ~9k | strobe-ify like venv_parent was |
+| ROMs (`font_rom`,`sin_q`,`pow31_tbl`) + small | ~19k | cheap as-is; optional |
+
+Post-campaign estimate: FF arrays ~10-15k bits + ~20k scalar FFs at a
+smaller per-FF cost (array-decode replication gone) → the honest answer
+arrives from the next `make hier`, but the path from 1.72M to the
+chip's 134k is now a sequence of PROVEN-RECIPE conversions, not a
+mystery. u_fb's 320→~150 mapping fix is the BRAM sibling task.
+
+**Per-array hazard rule for the strobe conversions:** a strobed write
+lands one beat later — scan every write→read-within-1-beat pair before
+converting (the #76/#78 lesson family).
+
+
+## Overnight campaign 2026-08-21/22 — the full restructuring (user directive: fix it, no functionality loss, launch the bit)
+
+Executed after the hier report attributed 1.72M LUTs to the parent's
+FF-resident arrays and 320 BRAM to the FB's silent triplication:
+
+1. **v64_on fold restored** — sweeps the dead tagged twin (~100k FF bits
+   + its decode).
+2. **jmr_mini_fb rewritten**: (a) Port A now has ONE write-priority
+   address (the old separate dump_raddr read made a 3rd port and Vivado
+   DUPLICATED each bank: 320 tiles); (b) each bank decomposed into exact
+   pow2 chunks 256K+32K+8K+4K (zero padding) → **75 tiles/bank, 150
+   total**. Registered chunk selects keep the 1-beat read contract.
+3. **Every big heap memory pow2-chunked** (Vivado pads BRAM to
+   2^addresswidth; the non-pow2 shrinks had saved zero tiles):
+   vobj 16K+8K+4K+2K = 75t · varr 32K+16K+2K = 99t · venv 4K+2K = 15t ·
+   code 16K+4K = 20t. All boundaries mirrored in sim_main accessors.
+4. **vframe record family (6 arrays) → dedicated write process**
+   (parent strobe + exec channel; reads were already registered) —
+   ~30k FF bits leave the big process. vframe_escaped stays as 128 flat
+   FFs (partial-field writers).
+5. **vobj_cls / vobj_builtin / venv_gen → dedicated metadata process**
+   (15+3 write sites converted to strobes; exec channels moved).
+   vobj_len / venv_len DELIBERATELY stay FFs: their read-modify-write
+   sites ride the 2-beat heap loop where a +1-beat strobed write could
+   be re-read stale.
+
+**Paper BRAM: fb 150 + vobj 75 + varr 99 + venv 15 + code 20 + misc ≈
+361/365.** LUT outcome unknown until this synth — the FF-array census
+says most of the 1.72M multiplier is gone; residuals are vobj_len/
+venv_len/escaped/scalars.
+
+Verified before launch: 198/198 bytecode suite, PACMAN 40-frame play,
+promote/listener/bunker/DONKEY-gesture reproductions, full RTL suite as
+the launch gate. The user explicitly directed the agent to launch this
+build.
 
 ## NEVER do these — they break the machine or the build
 
