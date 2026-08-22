@@ -220,11 +220,14 @@ python3 tools/make_sd_image.py create card.img
 sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
 # 6b. write card.img → physical µSD (lsblk; whole disk not partition)
 
-source scripts/vivado_env.sh && make -C tools/board_flow bit-fresh
-# 7. NEXT bitstream (2026-08-21): bit-fresh is REQUIRED this once
-#    (exec32 deleted + incremental stitch duplicated the framebuffer).
-#    After that, ordinary `make -C tools/board_flow bit` (not bit-fresh,
-#    not make clean) unless the source file *list*, MIG, or XDC changes.
+source scripts/vivado_env.sh && make -C tools/board_flow bit
+# 7. NEXT bitstream (as of 2026-08-22): ordinary `bit`. The one required
+#    bit-fresh (exec32 file deleted + incremental stitch had duplicated
+#    the framebuffer) was DONE 2026-08-21 and the 08-21 23:50 run already
+#    reused that project. The 08-22 Phase 3b hand-delete changed file
+#    *contents*, not the file *list*, so it does NOT need another one.
+#    Use bit-fresh (not `make clean`) only when the source file *list*,
+#    MIG, or XDC changes -- never to recover a mid-run crash.
 #    Synth 2 threads / impl 8. Tracker: build/nexys_video/synth_rss.log
 #    Do not close this terminal or an agent job — that SIGTERMs Vivado
 #    (no .dcp until synth_1 is 100%). After WNS ≥ 0:

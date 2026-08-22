@@ -1,4 +1,4 @@
-# Removing exec32 — Cut A done; synthesis twin swept; source cleanup optional
+# Removing exec32 — Cut A done; source cleanup DONE 2026-08-22
 
 Words: [README.md — Words used](../README.md#words-used-in-this-project).
 
@@ -13,17 +13,33 @@ read this before deleting anything named `e32_*`.
 `jmr_js_vm_exec32.sv` deleted; `u_exec32` uninstantiated; `hs32` tied 0;
 non-Value64 images fault **code 9**. No title runs that path.
 
-**Phase 3b synthesis (done 2026-08-21 via `v64_on` fold):**
-`jsb_flags[3]` is constant 1 after header decode (tagged images already
-faulted). Vivado can prove the tagged arrays unreachable and sweep them.
-That was the **fit** half of 3b — not a 5k-line hand delete. Detail:
-[FPGA_FIT.md](FPGA_FIT.md).
+**Phase 3b via the `v64_on` fold (attempted 2026-08-21) — IT DID NOT
+WORK.** `jsb_flags[3]` is constant 1 after header decode, and the theory
+was that Vivado would prove the tagged arrays unreachable and sweep them
+without a hand delete. The 2026-08-22 05:10 census on that netlist proved
+otherwise: **`gc_queue` alone survived as 229,362 flip-flop bits**, with
+consts / vars / tenv_parent / obj_cls / tfn_* / env_oid adding ~101k more
+— roughly 330k tagged FF bits at ~9 LUTs each, i.e. essentially the
+entire 1M-LUT overage. Vivado could not prove the tagged states dead
+because shared tasks (`stack_wr`, `gc_mark_value`) and runtime per-op
+flags (`imgd_v64`, kev variants) keep formal entry paths alive.
 
-**Phase 3b source cleanup (optional future plan):** the parent
-`jmr_js_vm.sv` may still *declare* tagged arrays and dead `!hp_v64` arms.
-Deleting them by hand is hygiene so the netlist cannot regrow a ghost.
-**Do not Port-A the dead twin.** If you sweep, these are the dead targets
-(live twins stay):
+**Do not trust a constant fold to remove a large array.** Cost of this
+lesson: one ~5h synthesis run. Detail: [FPGA_FIT.md](FPGA_FIT.md).
+
+**Phase 3b source cleanup — DONE 2026-08-22 (~05:05), by hand.** All 64
+tagged write sites were deleted and the tagged stack task neutered, so
+every array below is now **writerless** and synthesis can actually sweep
+it. Verified in the source: `gc_queue` / `consts` / `vars` / `var_tag` /
+`tenv_parent` / `obj_cls` / `obj_n` / `env_oid` have **zero** write sites;
+`stack` / `stack_tag` keep their Port-A write processes but both enable
+terms are constant 0 (`stack_we` is only ever assigned `1'b0`;
+`e32_stack_we` has no driver at all now that exec32 is uninstantiated).
+Verified in behavior: 198/198 bytecode suite, PACMAN plays, all five bug
+reproductions green, RTL suite with no new failures.
+
+**Do not Port-A the dead twin.** The dead targets, for reference (live
+twins stay):
 
 | Dead target (never used by V1 titles) | Size | Live twin (keep) |
 |---|---:|---|
@@ -32,10 +48,12 @@ Deleting them by hand is hygiene so the netlist cannot regrow a ghost.
 | `vars` / `var_tag` / `var_init` | 512 each | `vvars` |
 | `obj_n` / `obj_cls` / `tfn_*` / `tenv_parent` / `arr_len` / `env_oid` / `env_free` | 1024–1536 each | `vobj_*` / `vfn_*` / `varr_*` / `venv_*` |
 
-Order: strip dead tagged arms → build → dead-signal sweep → build →
-remove the tagged arrays. Three commits, three FPGA-SIM smokes. The old
-400-line execution plan is in git history
-(`git log -- docs/REMOVING_EXEC32.md`); do not resurrect it as a to-do.
+The arrays are still *declared*. That is deliberate and harmless — a
+writerless array is swept by synthesis; deleting the declarations is
+cosmetic and risks the `e32_*` naming trap for no fit gain. The LUT
+result of this delete lands with the next ~5h synth. The old 400-line
+execution plan is in git history (`git log -- docs/REMOVING_EXEC32.md`);
+do not resurrect it as a to-do.
 
 ## What landed — Cut A (Phases 1–3): complete
 

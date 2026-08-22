@@ -19,13 +19,31 @@ This file is **copy 2** of (a) read-`traces/`-first and (b) synth hygiene.
 
 ---
 
-## CURRENT STATE — 2026-08-21 (22:29): `bit-fresh` **place failed** (same UTLZ-1 class)
+## CURRENT STATE — 2026-08-22 (05:05): **BRAM SOLVED**; LUT delete landed; next synth not yet run
 
-**Ladder / Headline:** [FPGA_FIT.md — Live build ladder](FPGA_FIT.md#live-build-ladder--bit-fresh-2026-08-21--place-failed-2229).
-Synth finished (~22:03); place died on **too big for the chip** (LUT
-**~1413%**, BRAM **~159%**). Make Error = that failure, not a HEARTBEAT
-bug. **Do not** re-run overnight until the still-present `u_core` +
-`u_corei_10` double-FB / 1.9M LUT cause is fixed.
+**Ladder / Headline:** [FPGA_FIT.md — Build 2026-08-22](FPGA_FIT.md#build-2026-08-22-0000-0530--bram-solved-365365-lut-residue--the-unswept-tagged-twin).
+
+The overnight run (08-22 00:00→05:30) **won the BRAM war**: Block RAM
+**365/365 — fits for the first time**, from the framebuffer rewrite plus
+pow2-chunking every big heap memory. Place still failed, on LUTs:
+**1,196,216 (889%)** against 134,600, FFs 123,992 (46%).
+
+The 05:10 census named the residue exactly: the **unswept tagged twin**.
+The `v64_on` constant fold had NOT removed it — `gc_queue` alone was
+229,362 flip-flop bits, ~330k tagged FF bits in total at ~9 LUTs each,
+i.e. essentially the whole overage.
+
+**Fixed the same morning (~05:05):** the real Phase 3b hand-delete — all
+64 tagged write sites removed, the tagged stack task neutered. Those
+arrays are now **writerless**, so synthesis can actually sweep them.
+Projected **−800k to −1M LUTs**. Behavior re-verified after the cut:
+198/198 bytecode, PACMAN plays, all five bug reproductions green, RTL
+suite with no new failures.
+
+**The confirming ~5h synth has NOT been run yet.** That is the next
+build, and it is the only thing that turns "projected" into a number.
+The 08-21 22:29 place-fail that used to sit here is superseded; its
+diary is the ladder section in FPGA_FIT.md.
 
 Banner **V1.0**. Five titles are **correct** on FPGA-SIM (INVADERS, PACMAN,
 DONKEY, ASTEROID, MRDO). **User: FPGA-SIM is too slow to play any of
@@ -65,13 +83,22 @@ first-round 768/256 shrink):
 
 Same numbers in the RTL package, hardware model, and `jsb_format.py`. Full
 story + the **live build ladder** (steps 1–11, where / ETA):
-[FPGA_FIT.md](FPGA_FIT.md). Automated tests that we leave red on purpose
-(#70/#71/#72) are **not** “the games are broken” —
-[potential bugs.md](potential%20bugs.md).
+[FPGA_FIT.md](FPGA_FIT.md).
 
-**This morning (same day):** synth finished, place failed (LUT 1424% /
-BRAM 181%). Diary: [OLD_RUNS.md](OLD_RUNS.md). **Current** work is the
-live `bit-fresh` ladder in [FPGA_FIT.md](FPGA_FIT.md), not that place-fail.
+**Suite reading (corrected 2026-08-22).** Three tests are **xfail** — red
+on purpose, with bug ids (#70/#71/#72). Those are **not** “the games are
+broken”. The two *hard* failures that used to sit alongside them
+(`test_pacman_fpga_sim_enter_paints_maze`,
+`test_donkey_fpga_sim_enter_keeps_raf`) were **bad tests, not chip
+defects**, and are fixed: one asserted a framebuffer change on a screen
+that moves sub-pixel per frame, the other sampled `raf` at a random
+mid-frame instant. Detail: [potential bugs.md](potential%20bugs.md).
+
+**Earlier place-fails (2026-08-21, both superseded):** the 04:11 run
+(LUT 1424% / BRAM 181%) and the 22:29 `bit-fresh` (LUT 1413% / BRAM
+159%). Diary: [OLD_RUNS.md](OLD_RUNS.md). **Current** state is the
+08-22 build at the top of this page — BRAM solved, LUT delete landed,
+confirming synth still to run.
 
 ---
 

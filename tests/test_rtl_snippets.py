@@ -110,6 +110,14 @@ def _fb_pix(raw: bytes, x: int, y: int) -> int:
 def _fb_nz(sim) -> int:
     return sum(1 for b in _fb_raw(sim) if b)
 
+
+def _vmstat_int(vmstat: str, key: str) -> int:
+    """Read one `key=<int>` field out of a VMSTAT? reply (-1 if absent)."""
+    tok = key + "="
+    if tok not in vmstat:
+        return -1
+    return int(vmstat.split(tok)[1].split()[0].replace(",", ""))
+
 # (test_program_image_scalar_checkpoint_matches_python_hm deleted with the
 #  tagged encoding — docs/REMOVING_EXEC32.md Phase 1: the value64 twin below
 #  is the product-encoding checkpoint test.)
@@ -5298,17 +5306,34 @@ requestAnimationFrame(update);
 
 
 def _wait_vm_idle_or_frame(sim, slices=20):
-    # TICKN 20000 = 20M clocks. INVADERS HTML boot to first WAIT_FRAME is ~120M
-    # (splash fillText + string-row drawBitmap). TICKN 10 * 200 was only 2M.
+    """Advance the VM to a DEFINED sampling point, then return that VMSTAT.
+
+    TICKN 20000 = 20M clocks. INVADERS HTML boot to first WAIT_FRAME is ~120M
+    (splash fillText + string-row drawBitmap). TICKN 10 * 200 was only 2M.
+
+    A title whose attract mode never stops (PACMAN) will not come to rest, and
+    this loop samples only once per 20M-clock slice against a ~3.9M-clock
+    frame -- so it almost never catches the brief frame-end window. It then
+    used to return a snapshot from a RANDOM mid-frame instant, where the VM is
+    mid-drawImage inside an allocation and `raf=0` is simply correct: the
+    callback has not re-registered yet. Callers asserting "raf=0" not in vmstat
+    were reading that as a dead animation loop. It is not one -- the same
+    snapshot showed rafcall=99, fault=0, healthy obj/arr.
+
+    So on timeout, spend one FRAME rpc: it runs to the next framebuffer swap
+    and leaves the VM at S_WAIT_FRAME, the boundary the GUI also samples at,
+    where raf / obj / arr mean what the callers think they mean.
+    """
     vmstat = ""
     for _ in range(slices):
         sim._rpc("TICKN 20000")
         vmstat = sim._rpc("VMSTAT?")
         if "sname=S_WAIT_FRAME" in vmstat or "sname=S_IDLE" in vmstat:
-            break
+            return vmstat
         if "fault=" in vmstat and "fault=0" not in vmstat:
-            break
-    return vmstat
+            return vmstat
+    sim._rpc("FRAME")
+    return sim._rpc("VMSTAT?")
 
 
 def test_invaders_fpga_sim_held_left_changes_frame_within_budget():
@@ -5378,19 +5403,25 @@ def test_pacman_fpga_sim_enter_paints_maze():
         vmstat = sim._rpc("VMSTAT?")
         assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
         assert "raf=0" not in vmstat, vmstat
-        assert maze != splash
         assert sum(1 for b in maze if b) >= 1000
-        sim._rpc("FRAME")
-        later = _fb_raw(sim)
-        vmstat = sim._rpc("VMSTAT?")
-        assert "raf=0" not in vmstat, vmstat
-        assert later != maze
-        sim._rpc("FRAME")
-        sim._rpc("FRAME")
-        sim._rpc("FRAME")
+        # Do NOT assert framebuffer inequality here (the old
+        # `maze != splash` / `later != maze` pair). Those compared pixel
+        # bytes on a ONE-frame budget, which stopped meaning "the game is
+        # animating" when S_FB_SYNC (4188e01, 2026-08-20) made a
+        # same-scene frame produce a byte-identical buffer. Sprite motion
+        # can be sub-pixel for many frames -- measured 30 on DONKEY, which
+        # is exactly how that smoke turned into a permanent false failure.
+        # `rafcall` advancing is deterministic proof the rAF loop is live
+        # and does not care how fast anything moves.
+        raf0 = _vmstat_int(vmstat, "rafcall")
+        for _ in range(4):
+            sim._rpc("FRAME")
+            vmstat = sim._rpc("VMSTAT?")
+            assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
+            assert "raf=0" not in vmstat, vmstat
+        raf1 = _vmstat_int(vmstat, "rafcall")
+        assert raf1 > raf0, f"rAF loop stalled: rafcall {raf0} -> {raf1} ({vmstat})"
         still = _fb_raw(sim)
-        vmstat = sim._rpc("VMSTAT?")
-        assert "raf=0" not in vmstat, vmstat
         # nextStage must not skip every map (stringify(beans).indexOf(0)).
         assert sum(1 for b in still if b) >= 1000
     finally:
@@ -5444,15 +5475,34 @@ def test_donkey_fpga_sim_enter_keeps_raf():
         assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
         assert "raf=0" not in vmstat, vmstat
         assert sum(1 for b in play if b) >= 50
-        later = play
+        # "Keeps rAF" means the callback keeps RUNNING, not merely that the
+        # armed flag is set: every frame on this screen is ~1.03M clocks of
+        # honest redraw, so fclk is the real signal.
+        #
+        # Do NOT re-add a "framebuffer changed within N frames" check here.
+        # Measured on this screen (2026-08-22 probe): the picture is
+        # byte-identical for frames 1-30, changes at 31 (2076 bytes = one
+        # sprite stepping a single glass pixel), holds again until 44.
+        # Motion is sub-pixel per frame, so any small N is a coin flip.
+        # The old N=8 check only ever passed BEFORE S_FB_SYNC (4188e01,
+        # 2026-08-20), when the two FB banks still held different images and
+        # consecutive FB? reads differed even when the scene did not --
+        # i.e. it was passing on the bank-mismatch bug that fix removed.
+        fclk = 0
         for _ in range(8):
             sim._rpc("FRAME")
             vmstat = sim._rpc("VMSTAT?")
-            later = _fb_raw(sim)
-            if later != play:
+            if "fault=" in vmstat and "fault=0" not in vmstat:
                 break
+            if "fclk=" in vmstat:
+                fclk = max(
+                    fclk,
+                    int(vmstat.split("fclk=")[1].split()[0].replace(",", "")),
+                )
+        assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
         assert "raf=0" not in vmstat, vmstat
-        assert later != play
+        assert fclk > 100_000, f"rAF armed but idle: fclk={fclk} ({vmstat})"
+        assert fclk < 32_000_000, f"fclk={fclk} ({vmstat})"
     finally:
         sim.shutdown()
 

@@ -22,7 +22,8 @@ plan.
 **One-page poster** (sibling style to the JMR BASIC Architecture 2.0 diagram).
 Render **2026-08-21** — replaces the render whose errata ran to fifteen
 bullets. Regeneration prompt:
-[POSTER_PROMPT_ARCHITECTURE_V1.md](POSTER_PROMPT_ARCHITECTURE_V1.md).
+deleted 2026-08-22 in `e16a8f4`; recover with
+`git show e16a8f4^:docs/POSTER_PROMPT_ARCHITECTURE_V1.md`.
 
 ![JMR JS Computer — Architecture V1 poster](jmr_js_architecture_v1.png)
 
@@ -45,7 +46,8 @@ zoom-in diagram) — the JS processor core itself: program sequencer, `exec64`
 dispatch, Value64 eval stack, object/heap, native call, shared engines,
 compile-on-RUN, three memory rooms, I/O. Render **2026-08-21** (replaces the
 2026-08-18 render that still showed the retired `exec32` twin). Regeneration
-prompt: [POSTER_PROMPT_CORE_ZOOM_IN.md](POSTER_PROMPT_CORE_ZOOM_IN.md).
+prompt: deleted 2026-08-22 in `e16a8f4`; recover with
+`git show e16a8f4^:docs/POSTER_PROMPT_CORE_ZOOM_IN.md`.
 
 ![JMR JS Processor Core — zoom-in poster](jmr_js_core_zoom_in.png)
 
@@ -70,7 +72,8 @@ is [FPGA_FIT.md](FPGA_FIT.md) (`MAX_OBJ=960`, `ENV_DEPTH=384`,
 **ASIC board poster (Rev A proposal)** — QFN-100 chip + external 4 MB asset
 SRAM + HDMI transmitter carrier board, sibling style to the JMR BASIC ASIC
 board poster. Render **2026-08-21b**. Regeneration prompt:
-[POSTER_PROMPT_ASIC_BOARD_REV_A.md](POSTER_PROMPT_ASIC_BOARD_REV_A.md).
+deleted 2026-08-22 in `e16a8f4`; recover with
+`git show e16a8f4^:docs/POSTER_PROMPT_ASIC_BOARD_REV_A.md`.
 
 ![JMR JS ASIC — Rev A board poster](jmr_js_asic_board_rev_a.png)
 

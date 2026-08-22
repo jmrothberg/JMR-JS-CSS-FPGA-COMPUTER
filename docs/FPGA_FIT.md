@@ -82,9 +82,9 @@ wall-clock (half the core Hz). Extra VM states for legal SRAM stay;
 do not combo-peek BRAM to “win back” the MHz.
 
 Diaries: [OLD_RUNS.md](OLD_RUNS.md). Glass: [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
-Phase 3b **source** sweep (optional cleanup of tagged array declarations):
-[REMOVING_EXEC32.md](REMOVING_EXEC32.md). Synthesis already treats the twin
-as unreachable via the `v64_on` constant fold (below). External port map:
+Phase 3b **source** sweep: **done 2026-08-22**, and it was not optional —
+the `v64_on` constant fold did NOT sweep the twin (~330k tagged FF bits
+survived it). [REMOVING_EXEC32.md](REMOVING_EXEC32.md). External port map:
 [ARCHITECTURE.md](ARCHITECTURE.md) § External SRAM.
 
 ---
@@ -108,10 +108,12 @@ five V1 games actually need.
 
 1. **Delete the dead twin** — the old decoder file is gone. The parent
    still *declared* tagged stacks/heaps. The **`v64_on` fold** (below)
-   makes `jsb_flags[3]` constant 1 so Vivado proves those arrays
-   unreachable and sweeps them — that is the **synthesis** half of
-   Phase 3b. A later source-level delete is optional hygiene so the
-   `e32_*` naming trap goes away ([REMOVING_EXEC32.md](REMOVING_EXEC32.md)).
+   makes `jsb_flags[3]` constant 1, and the hope was that Vivado would
+   prove those arrays unreachable and sweep them. **It did not** — the
+   08-22 census found ~330k tagged flip-flop bits still present, which
+   was essentially the whole LUT overage. The source-level delete was
+   therefore mandatory, not hygiene, and was done by hand on 2026-08-22
+   ([REMOVING_EXEC32.md](REMOVING_EXEC32.md)).
    Removing the ghost does not change the language, the heap model, or
    the games.
 
@@ -191,7 +193,7 @@ plus every `!hp_v64` FSM arm.
 | Change | Effect | Verified |
 |---|---|---|
 | `AUTO_INCREMENTAL_CHECKPOINT 0` + **bit-fresh required** | kills the stitch duplication | flow only |
-| `v64_on` fold — the 33 execution reads of `jsb_flags[3]` are constant 1 (tagged images fault 9 at S_GOT_HDR2 **before** execution, reading the raw header word) | Vivado proves the tagged twin unreachable and sweeps it — the synthesis half of Phase 3b without the 5k-line hand edit | 198/198 bytecode tests; five-title behavior unchanged |
+| `v64_on` fold — the 33 execution reads of `jsb_flags[3]` are constant 1 (tagged images fault 9 at S_GOT_HDR2 **before** execution, reading the raw header word) | **Did NOT deliver.** The intent was that Vivado would prove the tagged twin unreachable and sweep it without the hand edit; the 08-22 census found ~330k tagged FF bits still in the netlist. Behavior-safe, fit-useless — the hand delete was still required | 198/198 bytecode tests; five-title behavior unchanged |
 | `imgd_pix` (300K×8, **80 tiles**) → external SRAM top-of-bank, words `IMGD_SRAM_BASE=1789952..2M` (1 px per 16-bit word); VM sram port gained a write channel; core arbiter muxes console-first | −80 tiles; getImageData/putImageData now blit-style req/ack | PACMAN plays 40 frames, `imgd=307199/307200`, fault=0 |
 | `MAX_ARR_LONG` 128→**32** (measured peak: 2 long arrays) | varr_slot 128→**104** tiles | five-title FM census + PACMAN/DONKEY RTL play |
 | `MAX_OBJ` 1024→**768** (first-round; **FINAL is 960** — see paper budget) | vobj_slot 80→**60** tiles at 768; 960 is the bisect-proven first `.bin` | PACMAN play sits at obj≈690 at 768: fits, but forced-GC rose ~4→~10/frame. Attract burst needs 960 |
@@ -259,7 +261,12 @@ demo loop (nobody playing) and it died around picture-callback 114. That
 does **not** change the memory shapes this build bakes, and it is **not**
 the next glass hunt. Play is the product.
 
-## Live build ladder — `bit-fresh` 2026-08-21 — **PLACE FAILED** (22:29)
+## Live build ladder — `bit-fresh` 2026-08-21 — **PLACE FAILED** (22:29) — SUPERSEDED
+
+> **Stale as of 2026-08-22.** A later run (08-22 00:00→05:30) solved BRAM
+> at **365/365** and cut LUTs to 1.196M. This 08-21 ladder is kept as the
+> diary of that night only. Current state:
+> [Build 2026-08-22](#build-2026-08-22-0000-0530--bram-solved-365365-lut-residue--the-unswept-tagged-twin).
 
 **Ended** Fri Aug 21 **22:29** EDT. Synth **OK**; place **UTLZ-1** (same
 class as morning). The `make` Error / `jmr_wait_run impl_1` HEARTBEAT
@@ -430,11 +437,16 @@ overage at ~9 LUT/FF). Vivado cannot prove the tagged states dead:
 shared tasks (`stack_wr`, `gc_mark_value`) and runtime per-op flags
 (`imgd_v64`, kev variants) keep formal entry paths alive.
 
-**NEXT TRANCHE (the decisive one): the Phase 3b HAND-DELETE** —
-gc_queue, consts, vars, tenv_parent, obj_cls, obj_n, tfn_*, env_oid,
-their write arms and any state only they made reachable. Follow
-REMOVING_EXEC32.md's discriminator (74 live `e32_`-named parent signals
-must survive). Then ROMs/small arrays as reserve. One ~5h synth after.
+**NEXT TRANCHE — DONE 2026-08-22 (~05:05): the Phase 3b HAND-DELETE.**
+All 64 tagged write sites deleted and the tagged stack task neutered.
+gc_queue / consts / vars / var_tag / tenv_parent / obj_cls / obj_n /
+env_oid now have **zero** write sites; stack / stack_tag keep their
+Port-A processes but both write enables are constant 0. The arrays are
+writerless, so synthesis can sweep them for real this time (the `v64_on`
+fold could not — see [REMOVING_EXEC32.md](REMOVING_EXEC32.md)).
+Projected **−800k to −1M LUTs**; the actual number lands with the next
+~5h synth, which has **not been run yet**. ROMs/small arrays are the
+reserve tranche if it is still short.
 
 ## NEVER do these — they break the machine or the build
 

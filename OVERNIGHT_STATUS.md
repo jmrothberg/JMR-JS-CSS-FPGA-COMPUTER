@@ -68,3 +68,44 @@ tagged FF bits × ~9 LUTs ≈ the whole remaining overage.
 their arms outright. Estimated effect: −700-900k LUTs → at or near the
 134,600 target, with the ROM/small-array cleanup as reserve. Synthesis
 round-trip is ~5h, so this is a daytime iteration.
+
+---
+## DONE 05:05 — Phase 3b hand-delete landed
+
+All **64 tagged write sites deleted** and the tagged stack task neutered.
+Verified in source: `gc_queue` / `consts` / `vars` / `var_tag` /
+`tenv_parent` / `obj_cls` / `obj_n` / `env_oid` now have **zero** write
+sites; `stack` / `stack_tag` keep their Port-A processes but both write
+enables are constant 0 (`stack_we` is only ever assigned `1'b0`,
+`e32_stack_we` has no driver). The arrays are **writerless**, so
+synthesis can sweep them for real — which the `v64_on` fold could not.
+Projected **−800k to −1M LUTs**.
+
+The Verilator binary (`sim/sim_build_synth/jmr_js_sim_server`, 05:05:47)
+is newer than `rtl/engines/jmr_js_vm.sv` (05:05:29) with no `.sv` newer
+than it, so the post-delete battery really did test the edited RTL.
+
+**The confirming ~5h synth has NOT been run.** Until it does, −800k-1M is
+a projection, not a result.
+
+## Suite status corrected 2026-08-22 (morning)
+
+The "148 passed / 2 pre-existing fails" line above undercounts the good
+news: **both of those failures were bad tests, not chip defects.** Each
+was run and diagnosed:
+
+- `test_donkey_fpga_sim_enter_keeps_raf` — asserted the framebuffer
+  changed within 8 frames; DONKEY's game screen moves sub-pixel per
+  frame (first change at frame 31). It had been passing on the FB
+  bank-mismatch that `S_FB_SYNC` fixed on 08-20. Now asserts per-frame
+  work (`fclk`) instead. **Fixed and passing.**
+- `test_pacman_fpga_sim_enter_paints_maze` — asserted `raf != 0` on a
+  VMSTAT sampled at a random mid-frame instant, because
+  `_wait_vm_idle_or_frame` times out on a title whose attract mode never
+  rests. The snapshot it failed on read `fault=0`, `rafcall=99`,
+  `obj=829` — a healthy machine mid-`drawImage`. Helper now lands on a
+  frame boundary (`S_WAIT_FRAME`) before sampling.
+
+PACMAN itself is healthy: the user's live session reached **rafcall 210,
+fault=0 throughout, obj peaking at 872 of 960**, objects sawtoothing (so
+GC reclaims). Detail: [docs/potential bugs.md](docs/potential%20bugs.md) #79.

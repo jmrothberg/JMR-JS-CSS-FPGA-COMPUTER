@@ -609,7 +609,7 @@ and still fail in a title because the hole is a native, a method, a heap
 path, or an unverified loop. Notes cite a
 [potential bugs.md](potential%20bugs.md) ID only when that file names this
 opcode. Per-API silicon status is under Frozen ISA and the
-[compatibility command map](potential%20bugs.md#compatibility-command-map-inspection-only).
+[compatibility command map](potential%20bugs.md#compatibility-command-map-inspection-only--superseded).
 
 | # | FM mnemonic | RTL | Notes |
 |---|---|---|---|

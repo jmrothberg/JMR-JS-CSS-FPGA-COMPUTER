@@ -37,8 +37,19 @@ Inspection of the play path: `rtl/engines/jmr_js_vm.sv` (parent FSM),
 
 ## Session 2026-08-21 (night) — #79 NOT A PLAY BLOCKER (user: titles work); analysis kept; caps FINAL 960 / 12 / 384 / 20480
 
-**#79 — user play is fine (2026-08-21 night).** Do not reopen as “PACMAN
-is broken.” A headless harness once died on long unattended attract
+**#79 — user play is fine; NOT REPRODUCED on 2026-08-22.** Do not reopen
+as “PACMAN is broken.” Fresh evidence from the user's own live FPGA-SIM
+session (`traces/session_20260822_112810`): **rafcall 210** reached with
+`fault=0` / `efault=0` / `strovf=0` / `fsite=0` at every one of 304
+samples, peak `obj=872` (cap 960), peak `envl=131` (cap 384), zero
+`txtmiss` / `dimiss`. Objects **sawtooth** — 558 → 872 → 653 → 684 — so
+the collector is reclaiming; the #79 signature was `obj` climbing
+monotonically to peg. The automated smoke independently reached
+rafcall=99 with `fault=0` and `obj=829`. The long-horizon headless
+attract death at rafcall≈114 has not been seen on today's RTL, and the
+two suite failures previously cited as its evidence were test bugs (see
+below). Keep the caps lesson; treat the pathology as unconfirmed rather
+than fixed until a long unattended run is deliberately repeated. A headless harness once died on long unattended attract
 (pathfinder `push` at ip 822 / `ARR_CAP=128`). That is a **lesson** (do
 not shrink `ENV_DEPTH` to 256; attract bursts need `MAX_OBJ=960`), not
 the current F9 status. Original write-up left below so the mistake is
@@ -63,10 +74,35 @@ degrading after GC — use-after-recycle of the row arrays or an
 element-marking gap — i.e. recurring class 1/gen-match territory. NOT
 caused by the fit caps; raising caps will not fix it.
 
-The two residual suite failures (test_pacman_fpga_sim_enter_paints_maze,
-test_donkey_fpga_sim_enter_keeps_raf) are this same pre-existing class
-plus the documented _wait helper flakiness — they were failing before
-the fit pass too.
+**RESOLVED 2026-08-22 — both were BAD TESTS, not #79 and not the chip.**
+The two residual suite failures (`test_pacman_fpga_sim_enter_paints_maze`,
+`test_donkey_fpga_sim_enter_keeps_raf`) were attributed here to "#79 plus
+the documented _wait helper flakiness". That attribution was wrong on
+both halves, and the "documented" flakiness was never documented anywhere
+— the phrase cited nothing. Each was run, and each failed for its own
+mechanical reason:
+
+- **DONKEY** failed on `assert later != play` — "the framebuffer changed
+  within 8 frames". Measured: the picture is byte-identical for frames
+  1-30, changes at 31 (2076 bytes = one sprite stepping a single glass
+  pixel), holds again to 44. Motion on that screen is **sub-pixel per
+  frame**. The check only ever passed BEFORE `S_FB_SYNC` (4188e01,
+  08-20), when the two FB banks held different images and consecutive
+  `FB?` reads differed even when the scene did not — i.e. it was passing
+  on the bank-mismatch bug that fix removed. Replaced with a per-frame
+  work check (`fclk`), which is what "keeps rAF" actually means.
+- **PACMAN** failed on `assert "raf=0" not in vmstat` at the BOOT check,
+  with `sname=S_V64_ALLOC`, `fault=0`, `rafcall=99`, `obj=829`,
+  mid-`drawImage` at pixel 307199/307200. `_wait_vm_idle_or_frame`
+  samples once per 20M-clock slice against a ~3.9M-clock frame, so it
+  practically never catches the frame-end window; on a title whose
+  attract mode never rests it timed out and returned a **random
+  mid-frame instant**, where `raf=0` is correct because the callback has
+  not re-registered yet. Fixed in the helper: on timeout spend one
+  `FRAME` rpc to land at `S_WAIT_FRAME` — the same boundary the GUI
+  samples at, where every sample in the user's live trace reads `raf=1`.
+
+Neither failure was evidence of anything about the RTL.
 
 **#79 refinement from the user's own flight trace (session_20260821_165151):**
 30 frames of healthy play at obj=568/arr=1194, then **+354 objects inside
