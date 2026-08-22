@@ -6,8 +6,12 @@
 # Run:  make -C tools/board_flow hier      (~5 minutes, reads post_opt.dcp)
 set ROOT [file normalize [file join [file dirname [info script]] ../..]]
 set OUT  $ROOT/build/nexys_video
-set DCP  $OUT/post_opt.dcp
-if {![file exists $DCP]} { set DCP $OUT/post_synth.dcp }
+# prefer the NEWER of post_opt/post_synth (a stale post_opt must not win)
+set DCP $OUT/post_synth.dcp
+if {[file exists $OUT/post_opt.dcp] &&
+    [file mtime $OUT/post_opt.dcp] > [file mtime $OUT/post_synth.dcp]} {
+    set DCP $OUT/post_opt.dcp
+}
 puts "INFO: opening $DCP"
 open_checkpoint $DCP
 puts "=== duplicate-hierarchy check ==="

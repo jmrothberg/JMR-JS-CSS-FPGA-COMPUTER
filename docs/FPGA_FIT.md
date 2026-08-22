@@ -417,6 +417,25 @@ promote/listener/bunker/DONKEY-gesture reproductions, full RTL suite as
 the launch gate. The user explicitly directed the agent to launch this
 build.
 
+## Build 2026-08-22 00:00-05:30 — BRAM SOLVED (365/365), LUT residue = the unswept tagged twin
+
+Synthesis 23:50→04:58: **Block RAM 365/365 — fits for the first time**
+(FB rewrite + pow2-chunking exact). LUTs 1.196M (−700k from the
+campaign; parent 1.02M / 96k FFs). Place fails on LUTs as expected.
+
+Fresh census verdict: the residue is the TAGGED TWIN — the `v64_on`
+constant fold did NOT sweep it (`gc_queue` 229k FF bits + consts/vars/
+tenv_parent/obj_cls/tfn/env_oid ≈ 330k bits total ≈ the whole 1M
+overage at ~9 LUT/FF). Vivado cannot prove the tagged states dead:
+shared tasks (`stack_wr`, `gc_mark_value`) and runtime per-op flags
+(`imgd_v64`, kev variants) keep formal entry paths alive.
+
+**NEXT TRANCHE (the decisive one): the Phase 3b HAND-DELETE** —
+gc_queue, consts, vars, tenv_parent, obj_cls, obj_n, tfn_*, env_oid,
+their write arms and any state only they made reachable. Follow
+REMOVING_EXEC32.md's discriminator (74 live `e32_`-named parent signals
+must survive). Then ROMs/small arrays as reserve. One ~5h synth after.
+
 ## NEVER do these — they break the machine or the build
 
 Violating these is how we got 70 GB hangs, OOM mapping, and fake glass.

@@ -1840,11 +1840,11 @@ module jmr_js_vm #(
                 if (n_obj >= 16'(MAX_OBJ - 1)) dbg_heap_ovf <= dbg_heap_ovf + 16'd1;
                 n_obj <= (n_obj >= 16'(MAX_OBJ - 1)) ? n_obj : (n_obj + 16'd1);
             end
-            obj_cls[oid[12:0]] <= CLS_ENV;
-            obj_n[oid[12:0]] <= 6'd1;
-            tenv_parent[oid[12:0]] <= parent;
+            ; // p3b: dead tagged write removed (obj_cls)
+            ; // p3b: dead tagged write removed (obj_n)
+            ; // p3b: dead tagged write removed (tenv_parent)
             vobj_len[oid[12:0]] <= 6'd1;
-            env_oid[env_sp] <= oid;
+            ; // p3b: dead tagged write removed (env_oid)
             env_cap[env_sp] <= 1'b0;
             env_sp <= env_sp + 6'd1;
         end
@@ -1865,14 +1865,14 @@ module jmr_js_vm #(
         if (e32_obj_n_rdata > 6'd3 && e32_tfn_has_this_rdata) begin
             this_obj <= e32_tfn_this_rdata;
             if (this_ok) begin
-                vars[var_this] <= {16'd0, e32_tfn_this_rdata};
-                var_tag[var_this] <= e32_tfn_this_tag_rdata;
+                ; // p3b: dead tagged write removed (vars)
+                ; // p3b: dead tagged write removed (var_tag)
             end
         end else begin
             this_obj <= 16'hFFFF;
             if (this_ok) begin
-                vars[var_this] <= 32'd0;
-                var_tag[var_this] <= 3'd5;
+                ; // p3b: dead tagged write removed (vars)
+                ; // p3b: dead tagged write removed (var_tag)
             end
         end
     endtask
@@ -2011,12 +2011,11 @@ module jmr_js_vm #(
         input logic signed [31:0] data,
         input logic [2:0] tag
     );
-        stack_we <= 1'b1;
-        stack_waddr <= addr;
-        stack_wdata <= data;
-        stack_tag_we <= 1'b1;
-        stack_tag_waddr <= addr;
-        stack_tag_wdata <= tag;
+        // p3b (2026-08-22): the tagged eval stack is unreachable (images
+        // without FLAG_VALUE64 fault 9 at load) but the v64_on fold could
+        // not prove it to synthesis - ~330k FF bits of tagged arrays
+        // survived and cost ~1M LUTs of state-decode. Writes neutered;
+        // reader logic sweeps to constants. FPGA-SIM behavior unchanged.
     endtask
     task automatic name_hash_wr(input logic [9:0] addr, input logic [15:0] data);
         name_hash_we <= 1'b1;
@@ -2135,16 +2134,16 @@ module jmr_js_vm #(
         cs_win1_env <= env_sp;
     endtask
     task automatic cstk_push_ret(input logic [15:0] ip_i, input logic [15:0] this_i);
-        cstack_ip[csp] <= ip_i;
-        cstack_this[csp] <= this_i;
+        ; // p3b: dead tagged write removed (cstack_ip)
+        ; // p3b: dead tagged write removed (cstack_this)
         cstack_isctor[csp] <= 1'b0;
         cstack_isfe[csp] <= 1'b0;
         cstk_win_shift_push(ip_i, this_i, 1'b0, 1'b0);
         bump_csp();
     endtask
     task automatic cstk_arm_frame(input logic [15:0] ip_i, input logic [15:0] this_i);
-        cstack_ip[csp] <= ip_i;
-        cstack_this[csp] <= this_i;
+        ; // p3b: dead tagged write removed (cstack_ip)
+        ; // p3b: dead tagged write removed (cstack_this)
         cstack_isctor[csp] <= 1'b0;
         cstack_isfe[csp] <= 1'b0;
         cs_pend_ip <= ip_i;
@@ -6034,16 +6033,16 @@ module jmr_js_vm #(
                     n_fn_proto <= e32_n_fn_proto_q;
                 end
                 if (e32_cstack_we) begin
-                    cstack_ctorobj[e32_cstack_waddr] <= e32_cstack_ctorobj_wdata;
+                    ; // p3b: dead tagged write removed (cstack_ctorobj)
                     cstack_env[e32_cstack_waddr] <= e32_cstack_env_wdata;
-                    cstack_fe_arr[e32_cstack_waddr] <= e32_cstack_fe_arr_wdata;
-                    cstack_fe_fn[e32_cstack_waddr] <= e32_cstack_fe_fn_wdata;
-                    cstack_fe_i[e32_cstack_waddr] <= e32_cstack_fe_i_wdata;
-                    cstack_ip[e32_cstack_waddr] <= e32_cstack_ip_wdata;
+                    ; // p3b: dead tagged write removed (cstack_fe_arr)
+                    ; // p3b: dead tagged write removed (cstack_fe_fn)
+                    ; // p3b: dead tagged write removed (cstack_fe_i)
+                    ; // p3b: dead tagged write removed (cstack_ip)
                     cstack_isctor[e32_cstack_waddr] <= e32_cstack_isctor_wdata;
                     cstack_isfe[e32_cstack_waddr] <= e32_cstack_isfe_wdata;
-                    cstack_map_arr[e32_cstack_waddr] <= e32_cstack_map_arr_wdata;
-                    cstack_this[e32_cstack_waddr] <= e32_cstack_this_wdata;
+                    ; // p3b: dead tagged write removed (cstack_map_arr)
+                    ; // p3b: dead tagged write removed (cstack_this)
                     // flatten: we_q is 1 cycle late; csp_e32_d is exec csp at issue.
                     if (e32_csp_q > csp_e32_d && e32_cstack_waddr == csp_e32_d) begin
                         cstk_win_shift_to_2();
@@ -6184,7 +6183,7 @@ module jmr_js_vm #(
                                      oid32 < n_arr && oid32 < 16'(MAX_ARR) &&
                                      !gc_arr_mark_rdata) begin
                             gc_arr_mark[oid32[11:0]] <= 1'b1;
-                            gc_queue[gc_qw] <= {1'b1, 1'b0, oid32[11:0]};
+                            ; // p3b: dead tagged write removed (gc_queue)
                             gc_qw <= gc_qw + 14'd1;
                             if (oid32 + 16'd1 > gc_arr_high)
                                 gc_arr_high <= oid32 + 16'd1;
@@ -6192,7 +6191,7 @@ module jmr_js_vm #(
                                      oid32 < n_obj && oid32 < 16'(MAX_OBJ) &&
                                      !gc_obj_mark_rdata) begin
                             gc_obj_mark[oid32[12:0]] <= 1'b1;
-                            gc_queue[gc_qw] <= {1'b0, oid32[12:0]};
+                            ; // p3b: dead tagged write removed (gc_queue)
                             gc_qw <= gc_qw + 14'd1;
                             if (oid32 + 16'd1 > gc_obj_high)
                                 gc_obj_high <= oid32 + 16'd1;
@@ -6505,8 +6504,8 @@ module jmr_js_vm #(
                         if (heap_clr_i < 12'd64)
                             vtimer_valid[heap_clr_i[5:0]] <= 1'b0;
                         if (heap_clr_i < 12'(MAX_VARS)) begin
-                            var_init[heap_clr_i[8:0]] <= 1'b0;
-                            vars[heap_clr_i[8:0]] <= 32'sd0;
+                            ; // p3b: dead tagged write removed (var_init)
+                            ; // p3b: dead tagged write removed (vars)
                             vvar_valid[heap_clr_i[8:0]] <= 1'b0;
                         end
                         if (heap_clr_i < 12'(MAX_OBJ)) begin
@@ -6562,7 +6561,7 @@ module jmr_js_vm #(
                         hs_st(S_RD);
                         ret_state <= S_V64_CONST_HI;
                     end else begin
-                        consts[c_i[9:0]] <= $signed(code_rdata);
+                        ; // p3b: dead tagged write removed (consts)
                         if (c_i + 16'd1 >= n_consts) begin
                             hs_ip('0);
                             if (jsb_flags[0]) begin
@@ -6807,10 +6806,10 @@ module jmr_js_vm #(
                                 // LOAD_VAR uses varmap slots, not intern idx (PYTHON seeds document/window)
                                 if ({tb, trail_acc[7:0]} == id_document ||
                                     {tb, trail_acc[7:0]} == id_window) begin
-                                    vars[trail_var_slot] <= 32'sd0;
+                                    ; // p3b: dead tagged write removed (vars)
                                     e32_poke(6'd20, {7'd0, trail_var_slot}, 64'd0);
-                                    var_tag[trail_var_slot] <= 3'd6;
-                                    var_init[trail_var_slot] <= 1'b1;
+                                    ; // p3b: dead tagged write removed (var_tag)
+                                    ; // p3b: dead tagged write removed (var_init)
                                 end
                                 if (trail_i <= 16'd1) trail_ph <= 5'd10;
                                 else begin
@@ -8495,11 +8494,8 @@ module jmr_js_vm #(
                         hs_ip(e32_cs1_ip_rdata);
                         this_obj <= e32_cs1_this_rdata;
                         if (this_ok) begin
-                            vars[var_this] <= (e32_cs1_this_rdata == 16'hFFFF)
-                                              ? 32'd0
-                                              : {16'd0, e32_cs1_this_rdata};
-                            var_tag[var_this] <= (e32_cs1_this_rdata == 16'hFFFF)
-                                                 ? 3'd5 : 3'd1;
+                            ; // p3b: dead tagged write removed (vars)
+                            ; // p3b: dead tagged write removed (var_tag)
                         end
                         cstk_pop1();
                         hs_code(15'(ops_base + e32_cs1_ip_rdata));
@@ -8741,8 +8737,8 @@ module jmr_js_vm #(
                     // Skip when a KEYEVT is queued so GUI KEYEVT+KEYBITS does not double-fire.
                     if (kd_fn != 16'hFFFF && joy_down_edge != 0 && kev_rp == kev_wp) begin
                         joy_down_edge <= 6'd0;
-                        obj_n[n_obj[12:0]] <= 6'd2;
-                        obj_cls[n_obj[12:0]] <= 0;
+                        ; // p3b: dead tagged write removed (obj_n)
+                        ; // p3b: dead tagged write removed (obj_cls)
                         // heap slots via S_HEAP_* (OSETI) — tagged KEYBITS path
                         // NEW: frame boundary — reset the eval stack (leftovers
                         // are leaks; ~1 word/frame overflowed sp at ~500 frames)
@@ -8759,7 +8755,7 @@ module jmr_js_vm #(
                         hs_st(S_KEYEV);
                     end else if (ku_fn != 16'hFFFF && joy_up_edge != 0 && kev_rp == kev_wp) begin
                         joy_up_edge <= 6'd0;
-                        obj_n[n_obj[12:0]] <= 6'd2;
+                        ; // p3b: dead tagged write removed (obj_n)
                         // heap slots via S_HEAP_* (OSETI) — tagged KEYBITS path
                         stack_wr(0, {16'd0, n_obj}, 3'd1);
                         boundary_sp(11'd1);
@@ -8782,8 +8778,8 @@ module jmr_js_vm #(
                         // synthetic-Enter title hack; e.keyCode is the truth,
                         // e.key interned only for codes we know (else undefined)
                         kev_rp <= kev_rp + 3'd1;
-                        obj_n[n_obj[12:0]] <= 6'd2;
-                        obj_cls[n_obj[12:0]] <= 0;
+                        ; // p3b: dead tagged write removed (obj_n)
+                        ; // p3b: dead tagged write removed (obj_cls)
                         hs_hp_cmd(HP_OSETI);
                         hs_hp_v64(1'b0);
                         hs_hp_oid(n_obj[12:0]);
@@ -8998,9 +8994,9 @@ module jmr_js_vm #(
                         hs_hp_phase(3'd0);
                         end else begin
                             if (env_is_store) begin
-                                vars[env_ld_slot] <= e32_stack_rdata;
-                                var_tag[env_ld_slot] <= e32_stack_tag_rdata;
-                                var_init[env_ld_slot] <= 1'b1;
+                                ; // p3b: dead tagged write removed (vars)
+                                ; // p3b: dead tagged write removed (var_tag)
+                                ; // p3b: dead tagged write removed (var_init)
                                 sp <= sp - 8'd1;
                             end else begin
                                 stack_wr(sp, e32_vars_rdata, e32_var_tag_rdata);
@@ -9013,8 +9009,8 @@ module jmr_js_vm #(
                 S_JSON: begin
                     // Walk nested arrays/objects/numbers into json_mem (VM cap).
                     if (js_sp == 6'd0) begin
-                        obj_cls[n_obj[12:0]] <= CLS_DYNSTR;
-                        obj_n[n_obj[12:0]] <= 6'd2;
+                        ; // p3b: dead tagged write removed (obj_cls)
+                        ; // p3b: dead tagged write removed (obj_n)
                         hs_hp_cmd(HP_OSETI);
                         hs_hp_v64(1'b0);
                         hs_hp_oid(n_obj[12:0]);
@@ -9091,7 +9087,7 @@ module jmr_js_vm #(
                                 jn_slot_arm <= 1'b1;
                             end else if (js_sp < JSON_STK[5:0]) begin
                                 js_tag[js_sp] <= varr_trdata;
-                                js_val[js_sp] <= varr_rdata[31:0];
+                                ; // p3b: dead tagged write removed (js_val)
                                 js_i[js_sp] <= 8'd0;
                                 js_ph[js_sp] <= 3'd0;
                                 js_i[t] <= ii + 8'd1;
@@ -9111,7 +9107,7 @@ module jmr_js_vm #(
                                     vjs_rd_arm <= 1'b1;
                                 else if (js_sp < JSON_STK[5:0]) begin
                                     js_tag[js_sp] <= vobj_trdata;
-                                    js_val[js_sp] <= vobj_rdata[31:0];
+                                    ; // p3b: dead tagged write removed (js_val)
                                     js_i[js_sp] <= 8'd0;
                                     js_ph[js_sp] <= 3'd0;
                                     js_i[t] <= ii + 8'd1;
@@ -9128,7 +9124,7 @@ module jmr_js_vm #(
                                 jn_slot_arm <= 1'b1;
                             end else if (js_sp < JSON_STK[5:0]) begin
                                 js_tag[js_sp] <= varr_trdata;
-                                js_val[js_sp] <= varr_rdata[31:0];
+                                ; // p3b: dead tagged write removed (js_val)
                                 js_i[js_sp] <= 8'd0;
                                 js_ph[js_sp] <= 3'd0;
                                 js_i[t] <= ii + 8'd1;
@@ -9251,7 +9247,7 @@ module jmr_js_vm #(
                                     nv = json_neg ? -json_num : json_num;
                                     json_rp <= json_rp; // complete value
                                     if (js_sp == 6'd0) begin
-                                        js_val[0] <= nv;
+                                        ; // p3b: dead tagged write removed (js_val)
                                         js_tag[0] <= 3'd0;
                                         js_sp <= 6'd1;
                                         stack_wr(json_res, nv, 3'd0);
@@ -9275,7 +9271,7 @@ module jmr_js_vm #(
                             arr_len[n_arr[11:0]] <= 8'd0;
                             if (js_sp < JSON_STK[5:0]) begin
                                 js_tag[js_sp] <= 3'd2;
-                                js_val[js_sp] <= {16'd0, n_arr};
+                                ; // p3b: dead tagged write removed (js_val)
                                 js_i[js_sp] <= 8'd0;
                                 js_ph[js_sp] <= 3'd1;
                                 js_sp <= js_sp + 6'd1;
@@ -9305,11 +9301,11 @@ module jmr_js_vm #(
                         end else if (ch == 8'h2C) begin
                             json_rp <= json_rp + 14'd1;
                         end else if (ch == 8'h7B) begin
-                            obj_n[n_obj[12:0]] <= 6'd0;
-                            obj_cls[n_obj[12:0]] <= 16'd0;
+                            ; // p3b: dead tagged write removed (obj_n)
+                            ; // p3b: dead tagged write removed (obj_cls)
                             if (js_sp < JSON_STK[5:0]) begin
                                 js_tag[js_sp] <= 3'd1;
-                                js_val[js_sp] <= {16'd0, n_obj};
+                                ; // p3b: dead tagged write removed (js_val)
                                 js_i[js_sp] <= 8'd0;
                                 js_sp <= js_sp + 6'd1;
                             end
@@ -9393,8 +9389,8 @@ module jmr_js_vm #(
                                 end
                             end
                         end else begin
-                        obj_cls[n_obj[12:0]] <= CLS_DYNSTR;
-                        obj_n[n_obj[12:0]] <= 6'd2;
+                        ; // p3b: dead tagged write removed (obj_cls)
+                        ; // p3b: dead tagged write removed (obj_n)
                         hs_hp_cmd(HP_OSETI);
                         hs_hp_v64(1'b0);
                         hs_hp_oid(n_obj[12:0]);
@@ -9979,8 +9975,8 @@ module jmr_js_vm #(
                                 end
                             end
                         end else begin
-                        obj_cls[n_obj[12:0]] <= CLS_IMGD;
-                        obj_n[n_obj[12:0]] <= 6'd2;
+                        ; // p3b: dead tagged write removed (obj_cls)
+                        ; // p3b: dead tagged write removed (obj_n)
             // flatten: heap write via S_HEAP_* only
             // flatten: heap write via S_HEAP_* only
             // flatten: heap write via S_HEAP_* only
@@ -10065,8 +10061,8 @@ module jmr_js_vm #(
                                     end
                                 end
                             end else begin
-                            obj_cls[n_obj[12:0]] <= CLS_IMGD;
-                            obj_n[n_obj[12:0]] <= 6'd2;
+                            ; // p3b: dead tagged write removed (obj_cls)
+                            ; // p3b: dead tagged write removed (obj_n)
             // flatten: heap write via S_HEAP_* only
             // flatten: heap write via S_HEAP_* only
             // flatten: heap write via S_HEAP_* only
@@ -13068,7 +13064,7 @@ module jmr_js_vm #(
                                 e64_poke(6'd2, {3'd0, hp_oid},
                                          {58'd0, hp_tn + 6'd1});
                                 if (!hp_v64)
-                                    obj_n[hp_oid] <= hp_tn + 6'd1;
+                                    ; // p3b: dead tagged write removed (obj_n)
                                 hs_hp_phase(3'd2);
                                 hs_st(S_HEAP_WR);
                             end else begin
@@ -13205,7 +13201,7 @@ module jmr_js_vm #(
                             e64_poke(6'd2, {3'd0, hp_oid},
                                      {58'd0, vobj_len_rdata + 6'd1});
                             if (!hp_v64)
-                                obj_n[hp_oid] <= vobj_len_rdata + 6'd1;
+                                ; // p3b: dead tagged write removed (obj_n)
                             hs_st(S_HEAP_WR);
                         end else if (hp_cmd == HP_SETPROP ||
                                      hp_cmd == HP_SETIDX) begin
@@ -13259,10 +13255,9 @@ module jmr_js_vm #(
                                 e64_poke(6'd2, {3'd0, hp_oid},
                                          {58'd0, {3'd0, hp_qn} + {1'b0, hp_slot}});
                                 if (!hp_v64)
-                                    obj_n[hp_oid] <=
-                                        {3'd0, hp_qn} + {1'b0, hp_slot};
+                                    ; // p3b: dead tagged write removed (obj_n)
                             end else if (!hp_v64)
-                                obj_n[hp_oid] <= vobj_len_rdata;
+                                ; // p3b: dead tagged write removed (obj_n)
                             hs_st(hp_ret);
                         end
                     end else if (hp_cmd == HP_SETPROP || hp_cmd == HP_SETIDX)
@@ -13527,7 +13522,7 @@ module jmr_js_vm #(
                                      (!obj_keep_ok ||
                                       e32_env_oid_rdata < n_obj_keep))
                             begin
-                                env_free[rel_nn] <= e32_env_oid_rdata;
+                                ; // p3b: dead tagged write removed (env_free)
                                 rel_nn <= rel_nn + 6'd1;
                             end
                         end
@@ -13985,8 +13980,8 @@ module jmr_js_vm #(
                                 cstk_push_ret(ip + 16'd1, this_obj);
                                 this_obj <= oid;
                                 if (this_ok) begin
-                                    vars[var_this] <= oid;
-                                    var_tag[var_this] <= 3'd1;
+                                    ; // p3b: dead tagged write removed (vars)
+                                    ; // p3b: dead tagged write removed (var_tag)
                                 end
                                 hs_ip(e32_tfn_entry_rdata);
                                 hs_code(15'(ops_base + e32_tfn_entry_rdata));
@@ -14058,11 +14053,8 @@ module jmr_js_vm #(
                         hs_ip(e32_cs2_ip_rdata);
                         this_obj <= e32_cs2_this_rdata;
                         if (this_ok) begin
-                            vars[var_this] <= (e32_cs2_this_rdata == 16'hFFFF)
-                                              ? 32'd0
-                                              : {16'd0, e32_cs2_this_rdata};
-                            var_tag[var_this] <= (e32_cs2_this_rdata == 16'hFFFF)
-                                                 ? 3'd5 : 3'd1;
+                            ; // p3b: dead tagged write removed (vars)
+                            ; // p3b: dead tagged write removed (var_tag)
                         end
                         cstk_pop2();
                         hs_code(15'(ops_base + e32_cs2_ip_rdata));
@@ -14337,8 +14329,8 @@ module jmr_js_vm #(
                                           + 48'sd262144) >>> 19);
                                 if (px_ == 16'd0) px_ = 16'd1;
                                 moid = (metrics_oid == 16'hFFFF) ? n_obj : metrics_oid;
-                                obj_cls[moid[12:0]] <= 16'd0;
-                                obj_n[moid[12:0]] <= 6'd1;
+                                ; // p3b: dead tagged write removed (obj_cls)
+                                ; // p3b: dead tagged write removed (obj_n)
                                 hs_hp_cmd(HP_OSETI);
                                 hs_hp_v64(1'b0);
                                 hs_hp_oid(moid[12:0]);
