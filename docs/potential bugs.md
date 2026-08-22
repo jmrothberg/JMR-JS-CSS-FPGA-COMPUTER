@@ -1,39 +1,56 @@
-# Potential bugs — FPGA-SIM play RTL (code review)
+# Potential bugs — FPGA-SIM play RTL (working record)
 
-**2026-08-21 status.** Banner **V1.0**; all five titles play on FPGA-SIM
-(INVADERS, PACMAN, DONKEY, ASTEROID, MRDO), **slowly**. The T200 fit
-cleanup is **done** ([FPGA_FIT.md](FPGA_FIT.md)) and the tree is
-synthesis-ready; speed (FIND / clocks per frame,
-[SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md)) is the next pass
-after the user's `make bit`.
+Words: [README.md — Words used](../README.md#words-used-in-this-project).
+**FPGA-SIM** = the chip simulated. **RTL** = Register-Transfer Level
+(`rtl/*.sv`). **rAF** = `requestAnimationFrame`. **GC** = Garbage Collection.
 
-**How to read this file:** it is a chronological working record — newest
-session on top, each entry keeping the *evidence* and the *root cause*,
-because the same bug classes keep recurring (parent/exec dual-copy skew,
-`*_rdata` lag consumed a beat early, missing first-entry guards on
-exec-entered states, one-shot mask fall-through). Entries are marked
-FIXED / OPEN / RETRACTED in place. **Open at 2026-08-21 (evening): #70** (queue-hash
-parity), **#71** (fault-state checkpoint parity), **#72** (class-in-IIFE
-ctor allocates ~950 objects — NOTE: now faults 3 at ~768 with the
-shrunk heap, still an authoring pathology). Everything else closed,
-including same-day #73/#74.
+This file is **copy 2** of “one heap / dual-copy skew / generation”
+debug doctrine (copy 1 is `.cursor/rules/one-heap-keep-gen.mdc`). Start at
+[RECURRING BUG CLASSES](#recurring-bug-classes--read-this-before-debugging-anything)
+before chasing a title name.
+
+**2026-08-21 night — user: all five titles work fine.** This file is no
+longer a “games are broken” list. Left below: (a) automated tests we
+leave red on purpose (#70/#71/#72 — you never see these in the GUI) and
+(b) a later **board** speed pass if pictures cost too many chip
+heartbeats ([SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md)).
+**#79** is a script that ran PACMAN’s demo loop with nobody playing; keep
+the analysis so we do not shrink `ENV_DEPTH` to 256 again. Same-day GUI
+bugs **#73/#74/#77/#78** stay **FIXED**.
+
+**How to read this file:** chronological working record — newest session
+on top. Each entry keeps *evidence* and *root cause* because the same
+classes recur. Entries are marked FIXED / OPEN / RETRACTED in place.
+
+**Do not start at the 2026-08-19 “Correctness bugs” table** — those
+statuses have drifted. It is kept because the *analysis* columns still
+describe the code paths (especially FIND speed-debt **#1/#2/#3**).
+
+Live caps: [FPGA_FIT.md](FPGA_FIT.md) (`MAX_OBJ=960`, `ENV_DEPTH=384`,
+`MAX_ARR_LONG=12`, `CODE_WORDS=20480`). Play-speed:
+[SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
 
 Inspection of the play path: `rtl/engines/jmr_js_vm.sv` (parent FSM),
 `jmr_js_vm_exec64.sv` (the only decoder since 2026-08-21), `sim/sim_main.cpp`, vs
 `hardware_model/js_vm.py`, plus `storage/*.HTML` and
-[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md). No traces. No FPGA-SIM
-rerun.
+[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md).
 
-## Session 2026-08-21 (night) — #79 OPEN: PACMAN heap explosion is PRE-EXISTING; caps finalized at 960/16/256/19456
+## Session 2026-08-21 (night) — #79 NOT A PLAY BLOCKER (user: titles work); analysis kept; caps FINAL 960 / 12 / 384 / 20480
 
-**#79 — OPEN: PACMAN's object/array demand explodes over minutes of
-play/attract and eventually kills ANY heap cap.** The user's
-"bounces to READY after 4-5 minutes" is this, and it PREDATES the fit
+**#79 — user play is fine (2026-08-21 night).** Do not reopen as “PACMAN
+is broken.” A headless harness once died on long unattended attract
+(pathfinder `push` at ip 822 / `ARR_CAP=128`). That is a **lesson** (do
+not shrink `ENV_DEPTH` to 256; attract bursts need `MAX_OBJ=960`), not
+the current F9 status. Original write-up left below so the mistake is
+not repeated.
+
+**#79 — (original, harness):** PACMAN's object/array demand exploded over
+minutes of attract and could kill a heap cap. That PREDATED the fit
 pass: the 2026-08-20 (pre-fit) tree failed the same pytest with
-**obj=1024 PEGGED** and fault 3 at rafcall=103. Today's caps only move
-the time of death (768 → pegged at rafcall≈33; 960 → objects fit at 921
-but the pathfinder's frontier array hit the hard ARR_CAP=128, fault 3
-fsite=5218 at ip 822).
+**obj=1024 PEGGED** and fault 3 at rafcall=103. Today's caps only moved
+the time of death in that harness (768 → pegged at rafcall≈33; 960 →
+objects fit at 921 but the pathfinder's frontier array hit `ARR_CAP=128`,
+fault 3 fsite=5218 at ip 822).
 
 Evidence pinned by the fault trace: ip 822 = `new_list.push(to)` in
 PACMAN's BFS pathfinder (`_render`/`next` around HTML line 212). The
@@ -261,8 +278,11 @@ faults 3.
 ## RECURRING BUG CLASSES — read this before debugging anything
 
 Five patterns produced the overwhelming majority of the bugs in this file.
-If glass is wrong, start by asking which of these it is; the answer is
-usually one of them, and the fix shape is already known.
+If **glass** (READY / the game / errors) is wrong, start by asking which
+of these it is. Teach-yourself: **parent** = `jmr_js_vm.sv` (heap, paint,
+events); **exec** = `jmr_js_vm_exec64.sv` (opcode decoder); they talk
+through `hs_*` handshake tasks. **Port A** = legal on-chip RAM (address
+this clock, data next clock).
 
 ### 1. Parent/exec dual-copy skew
 
@@ -1227,7 +1247,8 @@ clocks; faster is fine if SRAM and synth stay legal.
 
 **Read the status column as "what we believed on 2026-08-19", not as
 current truth.** Almost everything marked *open* here was fixed later that
-week; the current open list is **#70 / #71 / #72** at the top of this file.
+week; **user play is fine.** Suite xfails **#70 / #71 / #72** are at the
+top of this file. **#79** is a harness lesson, not a title bug.
 Kept because the *analysis* columns (where, why, cost) are still the best
 description of those code paths — especially **#1/#2/#3**, the intern FIND
 scan, which is genuinely still open and now has measured numbers in
@@ -1486,7 +1507,8 @@ What they contained that still matters is preserved above:
 - the still-open speed items (FIND hash→id, the 1 px/clock raster cost) →
   [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md), which has measured
   per-state clock numbers instead of estimates;
-- the remaining open bugs → **#70 / #71 / #72**, listed at the top.
+- the remaining suite notes → **#70 / #71 / #72** (xfails, not F9 play);
+  **#79** is a harness/attract lesson, not a play blocker.
 
 Recover the originals with `git log -- "docs/potential bugs.md"` if you
 ever need the 2026-08-19 reasoning.

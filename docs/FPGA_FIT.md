@@ -1,22 +1,91 @@
 # T200 fit — agent repair brief
 
-Nexys Video **XC7A200T** (365 BRAM tiles, 134,600 LUTs). Agent does
-**not** run Vivado — user does:
-`source scripts/vivado_env.sh && make -C tools/board_flow bit`.
-Same `rtl/*.sv` as FPGA-SIM. Law: `.cursor/rules/never-fake-fpga-sim.mdc`.
-One JS heap. No JOIN/JSON/GC extract. Extra clocks OK.
+Words: [README.md — Words used](../README.md#words-used-in-this-project).
 
-**Board core clock (fact, not a goal):** `core_clk` **is** MIG
-`ui_clk` ≈ **100 MHz** today (`tools/board_flow/mig_a.prj`: DDR
-`TimePeriod` 2500 ps → 400 MHz memory, PHY **4:1** → `ui_clk` 100 MHz;
-`rtl/top_nexys_video.sv` `assign core_clk = ui_clk`). Older notes that
-said “~30 MHz” were a wish from the BASIC board era — **not** what this
-tree wires. Changing speed means changing MIG / that assign, then a full
-rebuild — Vivado does not pick a slower clock for you.
+**T200** = this Nexys Video board (Artix-7 **XC7A200T**, 365 **BRAM** Block
+RAM tiles, 134,600 **LUTs** Look-Up Tables). **Fit** = does the design
+place without over-util. Agent does **not** run **Vivado** (AMD’s FPGA
+compiler) — you do:
+
+`source scripts/vivado_env.sh && make -C tools/board_flow bit-fresh`
+
+(once, 2026-08-21: source file list changed). After that, ordinary `bit`
+unless the file *list* / MIG / XDC changes. Same `rtl/*.sv` as FPGA-SIM.
+
+This file is **copy 2** of the RAM / “never fake FPGA-SIM” law (copy 1 is
+`.cursor/rules/never-fake-fpga-sim.mdc`) and **copy 2** of synth hygiene
+(with [SESSION_HANDOFF.md](SESSION_HANDOFF.md) § Synthesis).
+
+One JS heap. Do not extract JOIN / JSON / GC (Garbage Collection) / HEAP
+into new modules. Extra clocks OK. **Future plan** if the JS core misses
+100 MHz: [If timing fails](#if-timing-fails-wns--0--slow-the-js-core-not-ddr3)
+(50 MHz core, DDR3 stays 100 MHz) — not wired yet.
+
+**Board core clock (fact, not a goal):** `core_clk` **is** **MIG**
+(Memory Interface Generator) `ui_clk` ≈ **100 MHz** today
+(`tools/board_flow/mig_a.prj`: DDR `TimePeriod` 2500 ps → 400 MHz memory,
+PHY **4:1** → `ui_clk` 100 MHz; `rtl/top_nexys_video.sv`
+`assign core_clk = ui_clk`). Older notes that said “~30 MHz” were a wish
+from the BASIC board era — **not** what this tree wires. Vivado does
+**not** pick a slower clock if the VM misses 10 ns — see **If timing
+fails** below. Do not slow MIG to “fix” **WNS** (Worst Negative Slack).
+
+---
+
+## If timing fails (WNS < 0) — slow the JS core, not DDR3
+
+Publish a `.bit` only if WNS ≥ 0 ([FPGA_BRINGUP.md](FPGA_BRINGUP.md)).
+A prior VM map of code RAM to LUTRAM hit ~**−90 ns** WNS (dead tether) —
+that is a bad bit, not a board mystery. Negative WNS on the **VM / fabric**
+path is the hedge below. Negative WNS **inside MIG** is a different bug
+(do not “fix” it by clocking the core slower).
+
+**Do not:**
+
+- Lie in the XDC (`create_clock -period 20` on `clk100` while the pin is
+  still 100 MHz).
+- Ask MIG for a 50 MHz `ui_clk`. DDR3-800 + PHY 4:1 **locks** `ui_clk` at
+  100 MHz; the DRAM min clock is ~300 MHz-class. Slowing `ui_clk` breaks
+  calibration.
+- Hope Vivado inserts a clock crossing. `assign core_clk = ui_clk` is one
+  domain on purpose.
+
+**Do (50 MHz core, 100 MHz memory) — not wired yet; this is the recipe:**
+
+1. **Keep** MIG + `jmr_ddr3_sram_bridge` on `ui_clk` (100 MHz). `app_*`
+   must stay synchronous to `ui_clk`.
+2. **Make `core_clk` = `ui_clk` / 2** (BUFGCE or FF+BUFG from `ui_clk`,
+   then `create_generated_clock`). Related clocks beat a second MMCM.
+   Unused board MMCM `CLKOUT1` can also emit 50 MHz, but that MMCM is
+   **not** MIG’s — treat that pair as async.
+3. **CDC the asset port** between core and bridge. `jmr_sram_port` is
+   already hold-`req`-until-`ack`; add a two-clock slice (sync req/addr/data
+   into `ui_clk`, ack/rdata back). FPGA-SIM may keep `jmr_sram_model` on
+   one clock (`SRAM_INTERNAL=1`).
+4. **Sync reset** into the 50 MHz domain (`ui_clk_sync_rst` /
+   `init_calib_complete` are 100 MHz). HDMI `pixel_clk` (25 MHz) already
+   crosses; leave it.
+5. **Retune anything that assumes 100 MHz on `core_clk`:**
+   `ps2_rx` `DB_MAX` (Digilent ~19 @ 50 MHz; today 39 @ 100 MHz),
+   `jmr_uart_link` / `jmr_i2c_*` `CLK_HZ`, `jmr_js_core` frame tick
+   (`100e6/60` → `50e6/60`). SD `INIT_DIV`/`RUN_DIV` scale with this
+   module’s `clk` — 50 MHz is still in spec, just slower SPI.
+
+XDC: keep MIG’s 10 ns on `ui_clk`; generated 20 ns on `core_clk`;
+false-path / proper sync constraints on the new slice. Rebuild
+(`bit-fresh` if the clock net / MIG extra clocks change). Flash only
+if **both** clocks report WNS ≥ 0.
+
+This buys a 20 ns budget for the fat JS FSM. It does **not** relax 10 ns
+inside MIG+bridge, and it does not make JOIN intern walks cheaper in
+wall-clock (half the core Hz). Extra VM states for legal SRAM stay;
+do not combo-peek BRAM to “win back” the MHz.
 
 Diaries: [OLD_RUNS.md](OLD_RUNS.md). Glass: [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
-Phase 3b procedure: [REMOVING_EXEC32.md](REMOVING_EXEC32.md).
-External port map: [ARCHITECTURE.md](ARCHITECTURE.md) § External SRAM.
+Phase 3b **source** sweep (optional cleanup of tagged array declarations):
+[REMOVING_EXEC32.md](REMOVING_EXEC32.md). Synthesis already treats the twin
+as unreachable via the `v64_on` constant fold (below). External port map:
+[ARCHITECTURE.md](ARCHITECTURE.md) § External SRAM.
 
 ---
 
@@ -37,11 +106,14 @@ five V1 games actually need.
 
 **How we fix it (still a real JS Native CPU):**
 
-1. **Delete the dead twin** — the old decoder file is gone, but the
-   parent still builds second stacks/heaps for tagged JS. Nothing
-   Value64 uses that. Removing it does not change the language, the
-   heap model, or the games; it stops synthesizing a ghost CPU.
-   ([REMOVING_EXEC32.md](REMOVING_EXEC32.md) Phase 3b.)
+1. **Delete the dead twin** — the old decoder file is gone. The parent
+   still *declared* tagged stacks/heaps. The **`v64_on` fold** (below)
+   makes `jsb_flags[3]` constant 1 so Vivado proves those arrays
+   unreachable and sweeps them — that is the **synthesis** half of
+   Phase 3b. A later source-level delete is optional hygiene so the
+   `e32_*` naming trap goes away ([REMOVING_EXEC32.md](REMOVING_EXEC32.md)).
+   Removing the ghost does not change the language, the heap model, or
+   the games.
 
 2. **Keep the real JS CPU fast on-chip** — dual framebuffers, bytecode,
    eval stack, and the live object/array/env tables touched every
@@ -122,8 +194,8 @@ plus every `!hp_v64` FSM arm.
 | `v64_on` fold — the 33 execution reads of `jsb_flags[3]` are constant 1 (tagged images fault 9 at S_GOT_HDR2 **before** execution, reading the raw header word) | Vivado proves the tagged twin unreachable and sweeps it — the synthesis half of Phase 3b without the 5k-line hand edit | 198/198 bytecode tests; five-title behavior unchanged |
 | `imgd_pix` (300K×8, **80 tiles**) → external SRAM top-of-bank, words `IMGD_SRAM_BASE=1789952..2M` (1 px per 16-bit word); VM sram port gained a write channel; core arbiter muxes console-first | −80 tiles; getImageData/putImageData now blit-style req/ack | PACMAN plays 40 frames, `imgd=307199/307200`, fault=0 |
 | `MAX_ARR_LONG` 128→**32** (measured peak: 2 long arrays) | varr_slot 128→**104** tiles | five-title FM census + PACMAN/DONKEY RTL play |
-| `MAX_OBJ` 1024→**768** (measured peak 567; fn bank shares the cap, fn peak 510) | vobj_slot 80→**60** tiles | PACMAN play sits at obj≈690: fits, but forced-GC rate rose ~4→~10/frame — a known speed cost; the GC-pacing ledger item is the antidote. If a future title faults 3 here, raising MAX_OBJ is the FIRST lever to reconsider |
-| `ENV_DEPTH` 512→**256** (measured peak 157) | venv_slot 19→**10** tiles | same runs |
+| `MAX_OBJ` 1024→**768** (first-round; **FINAL is 960** — see paper budget) | vobj_slot 80→**60** tiles at 768; 960 is the bisect-proven first `.bin` | PACMAN play sits at obj≈690 at 768: fits, but forced-GC rose ~4→~10/frame. Attract burst needs 960 |
+| `ENV_DEPTH` 512→**256** (first-round; **FINAL is 384** — 256 corrupted PACMAN BFS) | venv_slot 19→**10** tiles at 256 | see paper budget |
 | `CODE_WORDS` 32768→**20480** (measured high-water 16443, PACMAN) + write clamp + **loud capacity fault 3 at S_GOT_HDR2** for oversize images; `jsb_format` refuses at encode | code_mem 32→**20** tiles | tools + HM + pkg mirrored |
 | `ram_style="distributed"` pinned on `name_mem`, `spr_mem`, `json_mem`, `vstack`, `stack` (~15k LUTs, deliberate) | stops resource-management gambling; ~26 tiles stay free | build |
 
@@ -182,12 +254,10 @@ real unlock is packing `vobj_slot`'s 16-bit key field down to ~10 bits
 (−8..14 tiles, mechanical but wide). If it lands comfortably under,
 ENV_DEPTH 512 (+5) buys back pre-fit attract longevity headroom.
 
-**Known-and-accepted for this build (#79):** unattended ATTRACT mode
-still dies at rafcall ≈114 (fault 3) — the same long-horizon death the
-PRE-FIT tree had at rafcall ≈103 with the full 1024/512 caps. Play mode
-is clean (400-frame steered runs). The root — why the ghost-AI burst
-grows / what the GC retains over long attract — is bug #79, the next
-debugging target, and does not change the memory shapes this build bakes.
+**User (2026-08-21 night): titles work.** A script once left PACMAN on the
+demo loop (nobody playing) and it died around picture-callback 114. That
+does **not** change the memory shapes this build bakes, and it is **not**
+the next glass hunt. Play is the product.
 
 ## The next build (user runs, host terminal)
 
@@ -225,9 +295,11 @@ Law detail: `.cursor/rules/never-fake-fpga-sim.mdc`,
 | **Put whole `vobj_slot` / `varr_slot` or scanout FB on external/DDR3** | Cripples the JS Native CPU / pixel path |
 | **dukpy / V8 / soft CPU / execute JS source as one RTL FSM** | Not this machine — bytecode ISA only |
 | **Title-name gates** (`if (stem == "PACMAN")`) | Forbidden hardwire |
-| **Grow heap past** `MAX_OBJ=1024`, arrays `1536×32+128×128`, `ENV_DEPTH=512` without a measured plan | Does not fit; 8192/4096 is banned |
-| **Port-A the dead tagged twin** instead of deleting it | Wasted work; ghost stays |
-| **Claim “exec32 removed” while dead twins still synthesize** | Half-cut; place still pays for them |
+| **Grow heap past live caps** without a measured plan (`MAX_OBJ=960`,
+  arrays `1536×32 + 12×128`, `ENV_DEPTH=384` — [paper budget](#paper-bram-budget-single-copy--final-after-the-play-test-round)).
+  Do not restore `8192`/`4096` | Does not fit |
+| **Port-A the dead tagged twin** instead of leaving it unreachable | Wasted work; ghost stays |
+| **Claim “exec32 removed” while ignoring the `e32_*` naming trap** | 74 parent-owned `e32_*` signals are live silicon — [REMOVING_EXEC32.md](REMOVING_EXEC32.md) |
 | **`bit-fresh` to "recover" a mid-run crash** (it is REQUIRED after a file-list change — those are different situations); raise `JMR_VIVADO_SYNTH_THREADS`; `JMR_VIVADO_ALLOW_WIDE=1`; `drc.disableLUTOverUtilError` | Loses MIG/project for nothing, or papers over over-util |
 | **`AUTO_INCREMENTAL_CHECKPOINT 1`** or any incremental synth while the RTL is changing | Stitches against a stale reference — the 04:11 netlist held the FB twice and ~2x logic; place cannot fix a garbage netlist |
 | **Agent runs Vivado / `make bit`** | User only, host terminal |
@@ -251,7 +323,9 @@ strobe / `heap_clr`. Cold buffers (once moved) use `jmr_sram_port`
 
 | Word | Meaning |
 |---|---|
-| **BRAM** | On-chip tiles (365). Hot path only. |
-| **LUTRAM** | LUTs as small RAM. OK for 8-deep; fatal for `name_mem`-class under BRAM pressure. |
-| **Port A** | Legal BRAM shape above. |
-| **Dead twin** | Tagged arrays still in the parent after Cut A — **must delete** (Phase 3b). |
+| **BRAM** (Block RAM) | On-chip tiles (**365** on this chip). Hot path only: dual framebuffer, bytecode, live JS heap |
+| **LUT** (Look-Up Table) | FPGA logic cell (~134,600). **LUTRAM** = a LUT used as tiny RAM — OK for 8-deep; fatal for `name_mem`-class under BRAM pressure |
+| **Port A** | Legal BRAM shape: `if (we) ram[waddr] <= wdata; rdata <= ram[raddr];` with **scalar** we/addr/data. FSM only pulses strobes |
+| **Dead twin** | Tagged (pre-Value64) arrays still *declared* in the parent after Cut A. **Synthesis:** `v64_on` fold makes them unreachable. **Source delete:** optional; do not Port-A them |
+| **WNS** | Worst Negative Slack — timing. Publish a `.bit` only if WNS ≥ 0 |
+| **MIG** | Memory Interface Generator — DDR3 controller. `ui_clk` ≈ 100 MHz |

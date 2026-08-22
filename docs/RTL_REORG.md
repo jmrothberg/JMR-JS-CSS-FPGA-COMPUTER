@@ -1,5 +1,15 @@
 # RTL reorganization — maintain and find bugs
 
+Words: [README.md — Words used](../README.md#words-used-in-this-project).
+**RTL** = Register-Transfer Level (`rtl/*.sv`). This page is **how to
+navigate** the two big files and **why not to split them**. It is not a
+third copy of the RAM law (`.cursor/rules/never-fake-fpga-sim.mdc` +
+[FPGA_FIT.md](FPGA_FIT.md) NEVER table).
+
+**Future plans kept below:** Maintenance backlog (scratch-register
+ownership table is highest value); Phase 0 banners / Phase 2 one-enum
+if a reorg is ever justified. **Do not start a file-move.**
+
 ## JUDGMENT (2026-08-21, written after a full debugging cycle)
 
 **Do NOT do the file-move reorg. Not now, and probably not ever.**
@@ -84,7 +94,9 @@ files**. Not a new architecture.
 ## Silicon law (do not “organize” past these)
 
 These are not style. They are why previous “clean” splits blew synth or
-skewed glass.
+skewed glass. Full RAM law: `.cursor/rules/never-fake-fpga-sim.mdc` +
+[FPGA_FIT.md](FPGA_FIT.md) NEVER table. One heap:
+`.cursor/rules/one-heap-keep-gen.mdc`.
 
 1. **One JS heap in the parent.** Exec may **address** SRAM this clock and
    consume `*_rdata` next. It must not own `vvars` / `venv_*` / `vobj_*` /
@@ -169,7 +181,7 @@ Line numbers drift. Search the **banner** (Phase 0) or the symbol. Measured
 | Slot SRAMs + `varr_slot_addr` | 1127–1360 | 1-D object/array/env words |
 | Value64 / GC / stack **tasks** | 1372–2435 | `stack_wr`, `hs_*`, `json_putc` |
 | Dedicated Port A `always_ff` | 1837, 2435+, 5143–5950 | Legal SRAM. Copy this shape. |
-| `u_exec32` port map | 2913–3971 | ~1,059 lines — dies with Cut A |
+| `u_exec32` port map | — | **gone** with Cut A (2026-08-21) |
 | `u_exec64` port map | 3972–~4850 | Handshake: `hs_m_*` in, `e64_*_q` out |
 | Main FSM `always_ff` | 5951–end | Reset, exec write-apply, then case |
 | `case (casestate)` | 6640–end | **Glass lives here** |

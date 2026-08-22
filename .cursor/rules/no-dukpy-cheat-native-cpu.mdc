@@ -5,8 +5,13 @@ alwaysApply: true
 
 # Native HTML/JS computer
 
-This is a **standalone NLISC-JS machine** (HTML5 Canvas games, no general CSS
-engine). JavaScript bytecode is the ISA; HTML is the title file. There is no
+Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+This is **copy 1** of “no dukpy / compile-on-RUN” (copy 2:
+[CONSTITUTION.md](../../CONSTITUTION.md) Vendored-titles mandate).
+
+This is a **standalone NLISC-JS** machine (Native Language Instruction Set
+Computing — JavaScript **bytecode** is the **ISA** Instruction Set
+Architecture; HTML is the title file; no general CSS engine). There is no
 hidden CPU, no browser-on-FPGA, no Linux. NLISC-BASIC sibling = method only,
 not pins or tokens.
 

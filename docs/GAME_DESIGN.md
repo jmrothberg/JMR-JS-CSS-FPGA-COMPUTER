@@ -1,10 +1,19 @@
 # Game design (HTML titles for this machine)
 
-How to write a playable `.HTML` game for this NLISC-JS machine (JS is the
-ISA; HTML is the title file). The language
-and Canvas surface are specified in [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md).
-This file is the **authoring** contract: glass, files, input, and what a
-title may assume.
+Words: [README.md — Words used](../README.md#words-used-in-this-project).
+
+How to write a playable `.HTML` game for this **NLISC-JS** machine
+(Native Language Instruction Set Computing — JavaScript is the
+**ISA** Instruction Set Architecture; HTML is the title file). The
+language and Canvas surface are specified in
+[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md). This file is the
+**authoring** contract: glass, files, input, and what a title may assume.
+
+This is **copy 2** of “do not hardwire game names / write inside Version 1.0
+walls” (copy 1 is `.cursor/rules/no-game-hardwire.mdc` +
+`html-game-v1.mdc`). Measured Version 2.0 numbers for `MK.HTML` live in
+[JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20)
+— do not raise caps in RTL for one title.
 
 **Product generations:**
 
@@ -136,7 +145,8 @@ not title-gate RTL).
 | **`Math.round` is not a native** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt`. Shim it in the HTML (`Math.floor(+x + 0.5)`) — unary `+`, `throw`, and the `in` operator all parse since 2026-08-21. |
 | **No negative `setTransform` scale** | Mirroring with `setTransform(-1,0,0,1,x,0)` collapses width on PYTHON `_xf` and is unsafe for parity. Ship **left + right** facing sheets (or always draw unmirrored). Positive scale / DONKEY-style world transforms are fine. |
 | **Math natives** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt`. Embed LUTs for angles if needed (ASTEROID pattern). |
-| **Nested literal tables** | Hundreds of tiny `MAKE_ARRAY`s for frame rects work only while under `MAX_ARR`. Prefer compact atlases + small meta, or parallel number arrays, if you approach the cap. |
+| **Heap / array caps (live silicon)** | Fit pass sized these from real titles. Overflow is **loud** (fault 3). Live numbers: [FPGA_FIT.md](FPGA_FIT.md) (`MAX_OBJ=960`, `ENV_DEPTH=384`, `MAX_ARR_LONG=12`, `ARR_CAP=128`). Do not assume the old 1024/512 headroom. |
+| **Nested literal tables** | Hundreds of tiny `MAKE_ARRAY`s for frame rects work only while under the array caps. Prefer compact atlases + small meta, or parallel number arrays, if you approach the cap. |
 | **Glass / Esc / one file** | 640×480 fill; Esc = BREAK; no external `.js`. |
 
 **V1 MK-shaped title:** `storage/MKPVP.HTML` — 3 atlases (arena + Sub-Zero +

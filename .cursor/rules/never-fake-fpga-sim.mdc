@@ -5,11 +5,17 @@ alwaysApply: true
 
 # Never fake FPGA-SIM
 
-F9 FPGA-SIM **is** the chip in Verilator: same `rtl/*.sv` as
-`make -C tools/board_flow bit`. Default: `runtime/sim_backend.py`. GUI shows
-`FPGA-SIM (RTL)` vs `(HOST)`. Host twin (`JMR_SIM_HOST=1`) is opt-in debug
-only — never a quiet fallback when the RTL binary is missing (fail loud:
-`make -C sim sim_server_synth`). Do not pretend PYTHON is FPGA-SIM.
+Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+This is **copy 1** of the RAM / “FPGA-SIM is the chip” law (copy 2:
+[docs/FPGA_FIT.md](../../docs/FPGA_FIT.md) NEVER table).
+
+**FPGA-SIM** = Field-Programmable Gate Array simulation: **Verilator** of
+the **same** `rtl/*.sv` (Register-Transfer Level) as
+`make -C tools/board_flow bit`. F9 FPGA-SIM **is** the chip. Default:
+`runtime/sim_backend.py`. GUI shows `FPGA-SIM (RTL)` vs `(HOST)`. Host
+twin (`JMR_SIM_HOST=1`) is opt-in debug only — never a quiet fallback
+when the RTL binary is missing (fail loud: `make -C sim sim_server_synth`).
+Do not pretend PYTHON is FPGA-SIM.
 
 Legal SRAM first, then glass. Do not make a title playable on a
 Verilator-only heap and “flatten later.” The user runs `make bit` — **never
@@ -35,19 +41,22 @@ hierarchy matching the template), [AR 58025](https://adaptivesupport.amd.com/s/a
 (Synth **8-3967** async-read template miss). Fit: [FPGA_FIT.md](../../docs/FPGA_FIT.md).
 Live leftovers: [SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md).
 
-Caps (same in PYTHON): `MAX_OBJ=1024`, arrays `1536×32+128×128`,
-`ENV_DEPTH=512`. Do not restore `8192`/`4096`. JS heap is not the 4 MB ASET
-bank. `cls_*` 16×16 stays. `storage_engine` `linebuf` 8-4767 is a small FAT
-copy buffer — leave it. Copy working Port A: `jmr_video_vram.sv` /
-`jmr_mini_fb.sv`.
+Live caps (PYTHON + RTL, 2026-08-21 fit): `MAX_OBJ=960`, arrays
+`1536×32 + 12×128`, `ENV_DEPTH=384`, `CODE_WORDS=20480`, `MAX_SPR=16`.
+Do not restore `8192`/`4096`. JS heap is not the 4 MB **ASET** (asset)
+bank. `cls_*` 16×16 stays. `storage_engine` `linebuf` 8-4767 is a small
+**FAT** copy buffer — leave it. Copy working **Port A** (legal Block RAM
+shape): `jmr_video_vram.sv` / `jmr_mini_fb.sv`. Numbers:
+[FPGA_FIT.md](../../docs/FPGA_FIT.md).
 
 ## Rules that are actually AMD (do not ship a diff that breaks one)
 
 1. **Big memories: tiny write process, not the VM FSM.** Copy
    `jmr_mini_fb.sv` / `jmr_video_vram.sv` Port A. Any large unpacked array
-   (today: `imgd_pix` 307200×8, `spr_mem` 256K×8, `name_mem` 32K,
+   (today: `spr_mem`, `name_mem` 32K,
    `json_mem` 8K, `stack` 2048×32, `name_hash_tbl` 1024×16, `varr_len`,
-   `vobj_alloc`, `vvars` — and any new buffer in that class) is:
+   `vobj_alloc`, `vvars` — and any new buffer in that class; `imgd_pix`
+   moved to external SRAM 2026-08-21) is:
    `always_ff if (we) mem[waddr] <= wdata; rdata <= mem[raddr];` with
    **scalar** we/addr/data. The parent FSM / case only sets those strobes.
    Do not put `mem[i] <=` back in the 7k-line `always_ff` (glass, HEAP,

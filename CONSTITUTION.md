@@ -3,8 +3,17 @@
 ## Project Constitution v0.2
 
 This document is the architectural specification for the JMR JS Computer
-(**NLISC-JS**: JavaScript-native FPGA game computer). Family name:
+(**NLISC-JS**: Native Language Instruction Set Computing with JavaScript —
+the language you type *is* the chip’s instruction surface; an **FPGA**
+Field-Programmable Gate Array game computer). Words:
+[README.md — Words used](README.md#words-used-in-this-project).
+Family name:
 [README.md](README.md#nlisc-native-language-instruction-set-computing).
+
+This file is **copy 2** of “no dukpy / compile-on-RUN / vendored HTML
+titles” (copy 1 is `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`). Other
+critical “do not”s live in two places only — see
+[README.md — Two copies](README.md#two-copies-of-every-critical-do-not).
 
 If there is ever a conflict between this document and the implementation,
 THIS DOCUMENT IS CORRECT.
@@ -26,7 +35,7 @@ programming environment is JavaScript, aimed at playing and editing
 HTML5/Canvas-style 2D games.
 
 The user never programs a conventional **instruction set architecture**
-(the chip’s native operations — no assembly, no hidden RISC).
+(ISA — the chip’s native operations — no assembly, no hidden RISC).
 
 JavaScript is parsed into compact **JMR-JS bytecode**; bytecode operations
 dispatch FPGA execution engines (microcode + engines). This is NOT:
@@ -64,8 +73,8 @@ the same glass on PYTHON → FPGA-SIM → BOARD** (then ASIC).
   the loader streams the section into the **external 4 MB SRAM asset bank**
   (see MEMORY). There is **no `NAME.DAT` file**. Do not pack Donkey art into
   code BRAM or downscale sheets to “fit.”
-- **No host-twin FPGA-SIM.** F9 FPGA-SIM = Verilator RTL. `JMR_SIM_HOST=1`
-  is explicit debug only.
+- **No host-twin FPGA-SIM** (FPGA simulation — Verilator of the same RTL).
+  F9 FPGA-SIM = Verilator RTL. `JMR_SIM_HOST=1` is explicit debug only.
 - `?NH` ("no HTML") is a **temporary, tracked debt** — never an acceptable
   final state. A runtime showing `?NH` for a vendored title means the product
   is **NOT DONE**.
@@ -91,8 +100,8 @@ We reverse this:
 
 JavaScript → bytecode → processor (engines + microcode).
 
-Language is the ISA. Canvas / blitter / event-loop are first-class machine
-engines, not library code on a hidden CPU.
+Language is the **ISA** (Instruction Set Architecture). Canvas / blitter /
+event-loop are first-class machine engines, not library code on a hidden CPU.
 
 ---
 
@@ -113,21 +122,25 @@ engines, not library code on a hidden CPU.
    BASIC ASIC rules by default).
 10. **Standalone required:** HDMI + local keyboard + local play controls; a PC
     is not required to use the machine. UART/JTAG are flash/debug only.
-11. **FPGA-SIM RTL must be synthesizable SRAM.** Same `rtl/*.sv` as the
-    `.bin`. One 1-D heap, address in, **rdata next clock**. Opcode decoder
-    **and** parent `unique case (casestate)` must not combo-index large
-    SRAMs (`arr_len[v]`, `obj_n[fo]`, `spr_mem[so]`, `fn_entry()`). Read `*_rdata` after a
-    wait beat; writes `foo[i] <=` stay. Extra clocks are silicon, not a
-    reason to peek. Stale 0 → wait, never restore a combo read to make a
-    title work. `sim_server_synth` PASS is not Vivado; RSS tens of GB is
-    flatten. Caps fit leftover BRAM after dual FB (~1 MB class, not 7 MB).
-    Loud overflow; do not hide it in the 4 MB asset bank. Six rules:
-    `.cursor/rules/never-fake-fpga-sim.mdc`. One heap + generation:
-    `one-heap-keep-gen.mdc`. Numbers: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+11. **FPGA-SIM RTL must be synthesizable SRAM** (Static Random-Access
+    Memory: address in this clock, data **next** clock). Same `rtl/*.sv`
+    as the `.bin`. One 1-D JavaScript heap. Extra clocks are silicon, not
+    a reason to peek. `sim_server_synth` PASS is Verilator, not a
+    bitstream. Loud overflow; do not hide it in the 4 MB asset bank.
+    **Copy 1** of the RAM law: `.cursor/rules/never-fake-fpga-sim.mdc`.
+    **Copy 2:** [docs/FPGA_FIT.md](docs/FPGA_FIT.md) NEVER table. One heap
+    + generation: `one-heap-keep-gen.mdc`. Live caps:
+    [docs/FPGA_FIT.md](docs/FPGA_FIT.md) paper budget.
 
 ---
 
 # DEVELOPMENT ORDER
+
+**PYTHON** = the fast functional model (same *results* as the chip, not the
+same wall-clock). **FPGA-SIM** = Verilator of the same RTL as the bitstream.
+Do not skip rungs. Spec ladder (copy 2 of the method):
+[README.md Method](README.md#method-steal-from-the-basic-sibling--not-the-product).
+Copy 1: `.cursor/rules/python-first-parity.mdc`.
 
 Architecture
 ↓
@@ -250,7 +263,7 @@ PROG tether until RMA. The freeze above is still the product jack. Live status:
 `docs/SESSION_HANDOFF.md`.
 
 **Primary development host:** Ubuntu / Debian Linux (day-one path:
-`docs/LINUX_WORKSTATION.md` — GUI, Verilator, Vivado, flash).
+[docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md) — GUI, Verilator, Vivado, flash).
 
 Mac remains usable for the Python GUI and Verilator FPGA-SIM; AMD **Vivado is
 Linux-only**. Board bitstream build and flash happen on Linux.
@@ -281,8 +294,9 @@ JMR JS READY
 ```
 
 Monitor commands (DIR / LOAD / RUN / LIST / EDIT / SAVE / …) load and edit
-ordinary `.JS` game sources. ESC hard-breaks a running game back to READY
-without depending on the program.
+ordinary `.HTML` titles (the disk format). ESC hard-breaks a running game
+back to READY without depending on the program. Same-stem `.JS` files are
+leftover demos, not product twins.
 
 V1 goal shape: a useful subset of JavaScript + Canvas for classic 2D arcade
 games — not arbitrary modern websites.
@@ -359,7 +373,7 @@ one-cycle-per-op parallelism.
 
 Execution is:
 
-.JS source
+.HTML title (JavaScript inside `<script>`)
 ↓
 tokenize / parse
 ↓
@@ -379,9 +393,10 @@ Bytecode is the native instruction representation. Microcode is architectural
 
 # MEMORY
 
-Documented map only (`docs/MEMORY_MAP.md` when created). **Do not impose a
-fake 64 KB BASIC house.** BRAM is RAM; µSD is disk; the **external SRAM
-asset bank** holds game art.
+Documented map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (external SRAM
+port + 4 MB layout). **Do not impose a fake 64 KB BASIC house.** **BRAM**
+(Block RAM, on-chip) is working RAM; **µSD** (microSD) is disk; the
+**external SRAM asset bank** holds game art.
 
 **External SRAM asset bank (architecture, 2026-08-13):** one **4 MByte SRAM,
 2M × 16 (ISSI IS61WV204816)** behind a simple synchronous port

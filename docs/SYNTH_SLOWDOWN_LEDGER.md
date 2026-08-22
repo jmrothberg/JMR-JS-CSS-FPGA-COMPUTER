@@ -1,25 +1,105 @@
-# Intern FIND — play speed (not the T200 OOM)
+# 30 pictures per second — the speed plan
 
-**2026-08-21:** five titles **play** on FPGA-SIM; they are **slow**. This
-file is clocks-per-frame, not synth OOM. The bitstream cleanup
-([FPGA_FIT.md](FPGA_FIT.md): exec32 cut + LUTRAM Port A) is **done** — the
-tree is synthesis-ready, so the items here are now the next work after the
-user's `make bit`. Do not mix a FIND/speed pass with a fit pass.
+Words: [README.md — Words used](../README.md#words-used-in-this-project).
 
-**Two different speeds — do not confuse them.** (a) *VM clocks per frame*:
-what this file tracks; it is what makes the real FPGA fast or slow. (b)
-*Verilator host throughput*: ~800k clk/s after the exec32 cut (+16% from
-the netlist shrink alone, measured 2026-08-21), which only affects how
-long FPGA-SIM takes on the workstation. A win in (a) helps both.
+## Teach-me: FPGA-SIM is slow; the board should not be slower
 
-**2026-08-21 (fit pass) deltas — remeasure after the next profile:**
-the object heap shrank to 768 (PACMAN rides ~690), which raised forced
-GC from ~4 to ~10 runs/frame — the GC line below is now UNDERSTATED, and
-the "GC frame-end skip / pacing" item is promoted to the top of this
-ledger. `putImageData`/`getImageData` now stream over the external SRAM
-port (~2-3 clk/px vs 2, plus ack), so S_IMGD_PUT is modestly slower on
-the board path. Both were deliberate fit-for-speed trades
-([FPGA_FIT.md](FPGA_FIT.md)).
+Two different computers:
+
+| Where you play | What is actually running | How fast the heartbeat is |
+|---|---|---|
+| **PYTHON** (GUI F9) | A Python program pretending to be the machine | As fast as your PC. This is the playable-on-the-PC path today |
+| **FPGA-SIM** (GUI F9) | **Verilator** — your PC simulating **every** chip step in software | About **800,000** simulated heartbeats per **second of wall-clock** |
+| **BOARD** (real FPGA) | The same RTL, on silicon | About **100 million** heartbeats per second (**100 MHz**) |
+
+**FPGA-SIM is too slow to play. That is the simulator, not the chip.**
+800k vs 100 million is about **125×**. One INVADERS picture that takes
+~13 seconds in FPGA-SIM would take ~0.1 second on the board — still not
+30 pictures/second, but **much faster than FPGA-SIM**, not slower.
+
+Verilator will **not** become 30 fps for these titles. We already tried
+more Verilator threads: they refused or ran *slower*. Do not chase
+FPGA-SIM playability as the product goal.
+
+**Product goal (this file):** all five Version 1.0 titles at **at least
+30 pictures per second on the BOARD** (100 MHz). PYTHON stays the fast
+PC ruler. FPGA-SIM stays the correctness check (it will still look like
+a slideshow).
+
+## The 30 fps budget (plain numbers)
+
+30 pictures per second means each picture may cost at most:
+
+**100,000,000 ÷ 30 ≈ 3.33 million heartbeats.**
+
+(60 fps would be 1.67 million — later, not the first target.)
+
+Measured play pictures (2026-08-20, before the last fit shrink; **remeasure**
+after the current caps / ImageData-on-SRAM):
+
+| Title | Heartbeats per picture | FPGA-SIM wait (800k/s) | Board pictures/s at 100 MHz | Hits 30 fps on board? |
+|---|---:|---:|---:|---|
+| **INVADERS** | **10.6 million** | ~13 s | **~9** | **No** — need about **3×** fewer heartbeats |
+| **PACMAN** | **3.5 million** | ~4 s | **~29** | **Barely** — GC got heavier after the fit shrink; treat as **must cut** |
+| **DONKEY** | **0.71 million** | ~0.9 s | **~140** | **Yes** on paper |
+| **ASTEROID** / **MRDO** | not in this table | ? | ? | **Remeasure** (first speed job) |
+
+INVADERS is the hard one: ~66% of its picture is **per-operation JavaScript**
+(the HTML draws sprites with a loop of tiny `fillRect`s). Killing FIND /
+Garbage Collection alone **cannot** get INVADERS to 30 fps — even if those
+went to zero, the remaining ~7 million heartbeats would still be only ~14
+pictures/s. PACMAN’s cost is the opposite shape (Garbage Collection +
+full-maze `putImageData` + `fillRect` + string FIND).
+
+## Ordered plan (no title-name gates, no Port A undo)
+
+Do **not** mix this with `bit-fresh` / fit. Extra clocks for legal RAM
+stay. Do **not** rewrite a title’s HTML to dodge the VM. Do **not**
+`if (stem == "INVADERS")`.
+
+0. **Remeasure** all five titles on current RTL (`STATEHIST?` — per-state
+   heartbeat counters already in the sim). Fit-pass Garbage Collection
+   and ImageData-over-SRAM changed the PACMAN numbers. ASTEROID / MRDO
+   have no row yet.
+1. **PACMAN / DONKEY / (likely) ASTEROID+MRDO — get comfortably under
+   3.33 million** with the cheap VM-wide cuts (already designed here):
+   - FIND Step 2 (hash→id Block RAM): −15% PACMAN. Not a CAM.
+   - Skip extra end-of-picture Garbage Collection when one already ran
+     this picture: −4–6%.
+   - `putImageData` 2→1 heartbeat per pixel.
+   - `fillRect` 4 pixels per heartbeat last (touches the screen memory
+     port). Helps full-screen paints, **not** INVADERS’ 1×1 pixels.
+2. **INVADERS — cut per-operation cost (the real 30 fps job).** After
+   the 2026-08-20 compiler pass (18.6M → 10.6M), remaining profile is
+   ~66% `S_V64_EXEC` and ~37% of those beats are **`S_FETCH_WAIT`**
+   (waiting a cycle for the next instruction). Plan, still VM-wide:
+   - Shorten FETCH wait where the next instruction is already in a
+     register (must stay legal SRAM — address this clock, data next).
+   - Make tiny `fillRect` / `CALL_METHOD` cheaper (same path every title
+     uses). A 1×1 `fillRect` today pays a full native call.
+   - Keep heap slot hints; do not skip generation checks.
+3. **Prove 30 fps** with heartbeats ≤ 3.33 million on a play picture for
+   each of the five titles, then on the board after your `.bit` (F9
+   FPGA-SIM will still be slow — judge 30 fps from the heartbeat count
+   and from HDMI, not from Verilator wall-clock).
+
+**Already landed (do not re-do):** last-4 FIND cache; compiler `a1=1`
+globals + env slot hints (the 18.6M → 10.6M INVADERS pass).
+
+**Do not:** revert Port A, clone the heap, skip generation, Verilator
+`--threads`, raise the 64-million FRAME cap to hide an unfinished
+picture, or title-gate.
+
+---
+
+# Intern FIND and the per-state shopping list
+
+**FIND** = looking up a string in the intern table (the chip’s dictionary
+of names). Every `"SCORE "+n` does a FIND.
+
+**2026-08-21:** titles are **correct** on FPGA-SIM; FPGA-SIM is **too
+slow to play** (simulator). Fit cleanup is **done**
+([FPGA_FIT.md](FPGA_FIT.md)). This file is the 30 fps **board** plan.
 
 # Measured clock sinks — PACMAN play frame (2026-08-20, STATEHIST?)
 
@@ -54,143 +134,40 @@ run (all reduce clocks → speed **both** FPGA-SIM and the board):
 5. GC_ARR per-array "no-refs" skip bit: biggest GC lever but easy to
    corrupt the heap — **not** low-risk; design first.
 
-# START HERE — intern FIND is slow for every title
+# START HERE — remaining speed work (last-4 FIND cache already landed)
 
-**2026-08-18 INVADERS splash sprites:** F9 bars-only (`nz=19233`). CALL_METH
-fillRect/clearRect now WIN_FILL-reloads `vst_win` (SRAM truth) then retries
-native; `cm_win` holds across `leave_hold`. `hs_vsp(e64_vsp_q)` stays.
-User F9s. Do not `make bit`. Do not combo-peek BRAM.
+**Step 1 (last-4 FIND cache) landed 2026-08-18.** Splash
+`WAIT_FRAME fault=0`; Space starts play; FIND is no longer the 64-million-clock
+cap-time stall. Do **not** paste the old “four flip-flops” brief again.
 
-**2026-08-18 HEAP slot pipeline (FPGA-SIM, still Port A):** same-oid/eid
-key walk stays in `S_HEAP_CMP` with `hp_slot_pend` (1 extra clock for
-`*_rdata` + overlay latch). Object/env GET skips the `varr_long` arm.
-Class-table miss stays in CMP (FF match already one clock). Do not
-combo-peek BRAM. Do not `mem[i] <=` from the FSM.
+**Still open (future plan, cheapest first):**
 
-**2026-08-18 last-4 FIND cache (FPGA-SIM):** in `S_JOIN_FIND` only
-(`jn_hit_*` FFs, one Port-A compare/clock, no CAM, no title gate).
-Splash still `WAIT_FRAME` `fault=0` `nz=19233`. Space still starts play
-(`obj=732` `fault=0`). First play `FRAME` still `FB SAME` `fcap=1`
-`fclk=64000000` *before* HEAP pipeline. **Sampled state moved to
-`S_V64_EXEC` / `S_HEAP_WAIT`, not `S_JOIN_FIND`.** FIND is no longer the
-cap-time stall. Ledger step 2 (hash→id BRAM) not started.
+1. **FIND Step 2** (hash→id Block RAM): −15% PACMAN. Contained. Not a CAM.
+   Not a JOIN module. Not a title gate.
+2. **Skip scheduled frame-end GC** when a forced GC already ran this
+   frame: −4–6%. Forced GCs still run on pressure.
+3. **`S_IMGD_PUT` 2→1 clk/px**: pipeline like `S_FB_SYNC`.
+4. **fillRect 4 px/clock**: touches the framebuffer port — do LAST.
+5. GC_ARR per-array "no-refs" skip bit: biggest GC lever, easy to corrupt
+   the heap — **design first**.
 
-**CRITICAL — do this before any other glass/RTL hunt.**
-Without a faster intern FIND, games **cannot** finish a play frame on
-FPGA-SIM. Other patches (PACMAN ctor, extra waits, HTML, FRAME cap)
-**will not help.** Headless proof: Space starts INVADERS play
-(`obj=732` `fault=0`) then **~800 million clocks** still in
-`S_JOIN_FIND`; `FRAME` returns `FB SAME`. Paint/keys/heap are far
-enough. The frame never **ends**. This FIND change is VM-wide (every
-title that does `"…" + n` / join / `fillText`). It is not optional
-polish and not a one-game hack.
+**Lesson kept:** without a working intern FIND, `"SCORE "+n` / `fillText`
+/`arr.join` cannot finish a play frame. The last-4 cache is VM-wide (every
+title). Hash→id is the next FIND lever. Never `if (stem == "INVADERS")`.
 
-**Rule 1:** never hardwire a title. No `if (stem == "INVADERS")`, no
-alien/maze/DK constants, no buffer sized to one HTML. The three games
-are **acceptance tests**. The ISA is bytecode. Law:
-`no-game-hardwire.mdc`, `never-fake-fpga-sim.mdc`, `one-heap-keep-gen.mdc`.
-
-You are **not** fixing the 70 GB Vivado hang (Port A — keep it). You are
-making **`S_JOIN_FIND` fast for any compiled HTML** that concatenates or
-interns strings (`"SCORE "+n`, maze codes, `fillText`, `arr.join`).
-That same FIND is why F9 cannot finish an INVADERS play `FRAME`; PACMAN
-and DONKEY pay the same scan whenever they intern. One VM change, all
-titles.
-
-Do not run Vivado / `make bit`. Do not start a second bug until FIND
-repeat-hits are fast and a play `FRAME` dumps FB.
+The 2026-08-18 “PASTE TO NEXT AGENT” implementation brief is **done**.
+Recover it from `git log -- docs/SYNTH_SLOWDOWN_LEDGER.md` if you need
+the four-FF recipe. Do not `git revert` Port A to go fast.
 
 ---
 
-## PASTE TO NEXT AGENT — restore play speed without undoing Port A
+## Safe to edit FIND while a `.bin` is synthesizing?
 
-**This FIND cache is mandatory for playable F9.** Skip it and no other
-fix will make a play `FRAME` complete. Do not work PACMAN/DONKEY/ctor
-until repeat intern hits are fast.
-
-**Do not `git revert`, `git reset`, or restore an old `jmr_js_vm.sv`.**
-That old tree wrote `stack[i] <=` / `imgd_pix[i] <=` from the parent FSM
-and hung Vivado at **70 GB**. The slow intern scan is **speed debt after
-Port A**, not a reason to throw Port A away.
-
-**Do not revert PACMAN ctor / ALLOC overlay / `ctx_sx` / HEAP_CMP /
-`leave_hold` / gen checks.** Those are glass correctness. FIND is the
-play-speed job.
-
-**One change, one file, one state.**
-
-File: `rtl/engines/jmr_js_vm.sv` only. State: `S_JOIN_FIND` (~line 7629).
-Today `jn_i` walks `0 .. names_n-1`, two clocks per slot, every `"SCORE "+n`.
-
-Add four flip-flops plus one try flag (names already in this file: `jn_h`,
-`jn_len`, `jn_i`, `names_n`):
-
-- `jn_hit_h`, `jn_hit_len`, `jn_hit_id`, `jn_hit_valid`
-- `jn_cache_try` (so a miss does not loop on the cached id)
-
-**Do not edit** the `name_hash_tbl` Port A process (`if (name_hash_we)` /
-`rdata <= mem[raddr]`). **Do not edit** the `name_hash_raddr` mux — it
-already uses `jn_i[9:0]` in `S_JOIN_FIND`. Point `jn_i` at the cached id
-and the existing wait (`jn_rd_arm`) + compare already works:
-
-```
-name_hash_rdata == jn_h && e32_name_len_tos == jn_len
-```
-
-(`e32_name_len_tos` is already `name_len_tbl[jn_i]` in FIND.)
-
-On FIND entry (`if (state != S_JOIN_FIND)` beat): if `jn_hit_valid`,
-`jn_i <= jn_hit_id`, `jn_cache_try <= 1`. Else `jn_i` stays 0 (today).
-
-On compare **hit** (existing `stack_wr` / `vst_wr` + FETCH): also store
-that id/hash/len into the four FFs, `valid=1`.
-
-On compare **miss** while `jn_cache_try`: `jn_i <= 0`, `jn_cache_try <= 0`,
-`jn_rd_arm <= 0`, stay in FIND (linear scan as today).
-
-On **alloc** (existing `name_hash_wr` + `names_n+1`): update the four FFs
-to the new id.
-
-Clear `jn_hit_valid` on reset and wherever `names_n` is zeroed (RUN /
-heap clear). Do not skip that or a stale id after LOAD is a wrong string.
-
-**Legal writes in this edit:** `stack_wr` / `vst_wr` / `name_hash_wr`
-already on the hit/alloc arms — do not add `stack[i] <=` or
-`name_hash_tbl[i] <=`. One `stack_wr` per clock. Extra clocks OK.
-No new module. No CAM in `unique case`. No title name as a gate.
-Do not raise the 64M `FRAME` cap. Do not `make bit`. Rebuild with
-`make -C sim sim_server_synth`, then restart the GUI / headless sim.
-
-**Prove (INVADERS is the test, not a special case):** splash
-`WAIT_FRAME` `fault=0` → `KEYEVT 32 1` → play `WAIT_FRAME` `fault=0`
-inside a `FRAME` (today: 64M clocks still in `S_JOIN_FIND`). `FRAME`
-must dump FB, not `FB SAME`. Same RTL must intern `"SCORE "+n` for any
-HTML.
-
-**If that still cannot finish a frame:** HUD often interns **several**
-different strings per `animate()` (`"SCORE "+n`, `"HI "+n`, …). A
-single last-hit thrashes. Same FIND, still FFs: last **four**
-`(hash,len,id)` slots, probe them one Port A compare each (still
-`jn_i` + `jn_rd_arm`), then linear scan. That is still this job, not
-a new architecture. If four still cannot finish a frame: **stop and
-ask** (hash→id BRAM, §4 step 2). Do not add a 16-wide CAM. Do not poke
-Port A arrays from the FSM. Do not touch PACMAN `intern_ctor` /
-DONKEY onload as a substitute.
-
----
-
-## Safe while the first `.bin` is still synthesizing?
-
-**Yes.** The 16:17 `make bit` already ingested `jmr_js_vm.sv` at start.
-Edits on disk do **not** enter that job. Do **not** kill it. Do **not**
-start a second Vivado. Do **not** `bit-fresh`.
-
-This FIND work is **FPGA-SIM only**: `make -C sim sim_server_synth`,
-restart the sim/GUI, debug. That is the minutes-long path. The running
-bitstream compile is hours and is the **previous** RTL (Port A, no
-FIND cache). After that `.bin` exists, the **next** `make -C
-tools/board_flow bit` (not `bit-fresh`) picks up FIND. Two compiles of
-the same file is normal. Do not wait for silicon to debug FIND.
+**Yes**, on FPGA-SIM only (`make -C sim sim_server_synth`). A running
+Vivado job ingested `jmr_js_vm.sv` at start; disk edits do not enter it.
+Do **not** kill it. Do **not** `bit-fresh` a live crash. After that `.bin`
+exists, the **next** `make -C tools/board_flow bit` (not `bit-fresh`,
+unless the file list changed) picks up FIND.
 
 ---
 
@@ -393,7 +370,7 @@ JOIN per HUD concat and per bitmap path is not in that budget.**
 | `*_rdata` wait; no combo peek | AR 58025 / 8-3967 |
 | No `mem[i] <=` in the 7k-line FSM, including glass/debug | Putting `stack[i] <=` back **is** the hang |
 | One `stack_wr` per cycle | Dual write = two ports / hang class |
-| Caps `MAX_OBJ=1024`, arrays 1536×32+128×128, `ENV_DEPTH=512` | Chip BRAM, not flatten |
+| Caps `MAX_OBJ=960`, arrays 1536×32+12×128, `ENV_DEPTH=384` | Live fit ([FPGA_FIT.md](FPGA_FIT.md)); do not restore 8192/4096 |
 | Generation check on handles | Product (`one-heap-keep-gen`), not synth |
 
 ### B. Speed debt — flatten hunts that were **not** the 70 GB bug
@@ -437,15 +414,11 @@ Any title’s `animate()` that concats HUD / join / `fillText` can return to
 reaches play (`obj=732`, `eip` in `drawHud` / `player.update`,
 `fault=0`). Sample: `S_JOIN_FIND` walking intern ids.
 
-**Step 1 — last-hit cache (all FIND):** FFs
-`(jn_hit_h, jn_hit_len, jn_hit_id, jn_hit_valid)`. On `S_JOIN_FIND` entry,
-set `name_hash_raddr = jn_hit_id`, wait one clock, if
-`name_hash_rdata == jn_h && e32_name_len_tos == jn_len` → same id, FETCH.
-Else linear scan; on hit/alloc update the FFs. Same Port A mux. Repeat
-`"SCORE "+0` / any interned concat hits; `char_id[]` already covers
-single-char `str[i]`.
+**Step 1 — last-hit cache (all FIND): LANDED 2026-08-18.** FFs
+`(jn_hit_h, jn_hit_len, jn_hit_id, jn_hit_valid)` plus last-4. Do not
+re-implement. Misses still linear-scan.
 
-**Step 2 — faster miss (synth, still VM-wide):** first use of a new
+**Step 2 — faster miss (future plan, still VM-wide):** first use of a new
 string must not be O(`names_n`) if frames still cannot finish. Hash→id
 Port A RAM or bucket chain — budget in [FPGA_FIT.md](FPGA_FIT.md). Not
 a CAM. Not a new JOIN module.

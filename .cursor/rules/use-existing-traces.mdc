@@ -5,7 +5,11 @@ alwaysApply: true
 
 # Use existing traces first
 
-When glass is wrong (READY with no error, TRAP, black/dark, hung GUI):
+Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+This is **copy 1** of “read traces first” (copy 2:
+[docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md) § FPGA-SIM glass).
+
+When **glass** is wrong (READY with no error, TRAP, black/dark, hung GUI):
 
 1. Newest files under `traces/` (`*_FPGA-SIM.log` and matching host `.log`).
 2. Start at the **end**: fault / trap / note / typed lines, then µop tail.
@@ -14,7 +18,5 @@ When glass is wrong (READY with no error, TRAP, black/dark, hung GUI):
 4. Offline reads of sources / microcode / the log are fine.
 
 Live status: [docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md).
-Glass RTL in `jmr_js_vm.sv` must not poke Port A arrays (`stack[i] <=`
-undoes the synth hang). Write via `stack_wr` / `vobj_alloc_wr` / … —
-`never-fake-fpga-sim`. This is the T200 NLISC-JS machine — not NLISC-BASIC /
-A7-100T.
+SRAM writes: `.cursor/rules/never-fake-fpga-sim.mdc`. This is the T200
+NLISC-JS machine — not NLISC-BASIC / A7-100T.

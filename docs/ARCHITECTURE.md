@@ -1,13 +1,23 @@
 # Architecture
 
-This document walks the NLISC-JS game machine block by block and says where
+Words: [README.md — Words used](../README.md#words-used-in-this-project).
+
+This document walks the **NLISC-JS** (Native Language Instruction Set
+Computing with JavaScript) game machine block by block and says where
 each block lives in the Python Functional Model. Every block on the
-(eventual) diagram should have exactly one module; every module corresponds to
-a block. That correspondence is the point — SystemVerilog is a translation,
-not a redesign.
+(eventual) diagram should have exactly one module; every module corresponds
+to a block. That correspondence is the point — **SystemVerilog** is a
+translation, not a redesign.
 
 **Constitution:** [../CONSTITUTION.md](../CONSTITUTION.md) wins on conflict.
 **Board / HDMI / input freeze:** [FPGA_BRINGUP.md](FPGA_BRINGUP.md).
+**Live heap/code caps:** [FPGA_FIT.md](FPGA_FIT.md) (the posters below may
+still show pre-fit 1024 / 512 / 32768 until the next render).
+
+This page is **not** a third copy of the “no dukpy / no soft CPU” creed
+(that is `no-dukpy-cheat-native-cpu.mdc` + Constitution). It owns the
+**port contract**, the **4 MB map**, and the **Version 2.0 8 MB** future
+plan.
 
 **One-page poster** (sibling style to the JMR BASIC Architecture 2.0 diagram).
 Render **2026-08-21** — replaces the render whose errata ran to fifteen
@@ -49,10 +59,11 @@ marked optional; `0D CALL` annotated as RTL `OP_CALL` = FM `CALL_NATIVE`; the
 stray `~30 mm²` removed from the BRAM box; the I2C gamepad, the JA PS/2
 fallback, the MIG `ui_clk` clock, and the 32 KB sprite scratch all correct.
 
-Capacities on the poster match silicon (`jmr_js_vm.sv` / `jmr_js_vm_pkg.sv` /
-`jsb_format.py`): `MAX_OBJ=1024×32`; arrays `1536×32 + 128×128`;
-`ENV_DEPTH=512`; `STACK_DEPTH=2048`; `MAX_VARS=512`; `MAX_CONSTS=1024`;
-`CODE_WORDS=32768`. Learnable opcode + native list:
+Capacities on the **poster** were frozen at pre-fit numbers
+(`MAX_OBJ=1024`, `ENV_DEPTH=512`, `CODE_WORDS=32768`). **Silicon today**
+is [FPGA_FIT.md](FPGA_FIT.md) (`MAX_OBJ=960`, `ENV_DEPTH=384`,
+`CODE_WORDS=20480`). Re-render the poster after the first clean
+`bit-fresh`. Learnable opcode + native list:
 [JS_COMMANDS.md](JS_COMMANDS.md). ABI / status tables:
 [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#bytecode-opcodes-34).
 
@@ -130,32 +141,19 @@ unqualified.
 ## The idea
 
 A conventional computer executes assembly (or a soft CPU), and a runtime /
-browser implements JavaScript:
-
-```
-CPU  ->  browser / VM  ->  JavaScript
-```
-
-This machine reverses that. JS source becomes compact bytecode; bytecode *is*
-the machine code:
-
-```
-JavaScript  ->  bytecode  ->  processor (microcode + engines)
-```
-
-There is no hidden general-purpose core underneath. **No dukpy/V8/browser as
-the machine.** This is **NLISC-JS**: JS bytecode is the ISA; HTML is the
-title file. V1 is a **Canvas game computer** (HTML titles → JMR bytecode).
-Family name: [../README.md](../README.md#nlisc-native-language-instruction-set-computing).
+browser implements JavaScript. This machine reverses that: JS source becomes
+compact **bytecode**; bytecode *is* the machine code. Spec:
+[../CONSTITUTION.md](../CONSTITUTION.md). Teaching name:
+[../README.md](../README.md#nlisc-native-language-instruction-set-computing).
 
 ```
 NAME.HTML  →  RUN always compiles  →  ephemeral ProgramImage
-           →  code → code BRAM, ASET → external SRAM asset bank  →  VM
+           →  code → code BRAM (Block RAM), ASET (asset section) → external SRAM asset bank  →  VM
 ```
 
 User types only `LOAD "NAME.HTML"` / `RUN`. Chrome may open the same file for
 authoring; PYTHON / FPGA-SIM / BOARD / ASIC must run the **JMR VM**.
-Not a general HTML/CSS browser in V1.
+Not a general HTML/CSS browser in Version 1.0.
 
 ---
 
@@ -267,13 +265,13 @@ ack            completion strobe (1+ cycles later; bridge may stall)
 top of bank           reserved (suggested cold-buffer migration — see below)
 ```
 
-**Suggested use of “top of bank” (fit — part of one-pass plan):**
-[FPGA_FIT.md](FPGA_FIT.md) one-pass ~90% plan: keep hot paths (dual FB,
-code, stack, sized JS heap banks) in on-chip BRAM; move **cold/bursty**
-buffers (`imgd_pix`, `source_mem`, `spr_mem` scratch, `json_mem`) here
-behind the **same** `jmr_sram_port`. Do **not** move the whole heap
-off-chip. Schedule around the blitter (one outstanding `req`/`ack`).
-Right-size remaining BRAM from measured V1 title peaks before synth.
+**Landed use of “top of bank” (fit, 2026-08-21):** `imgd_pix`
+(getImageData / putImageData pixels) now lives at
+`IMGD_SRAM_BASE=1789952..2M` behind the same `jmr_sram_port`. Still
+**future plan:** `source_mem`, blit scratch, `json_mem` if BRAM stays
+tight. Do **not** move the whole JS heap off-chip. Schedule around the
+blitter (one outstanding `req`/`ack`). Live on-chip sizes:
+[FPGA_FIT.md](FPGA_FIT.md).
 
 **V2.0 asset bank (planned — not implemented):** rebuild to **8 MB** (or
 larger if a title needs it). Driver: `MK.HTML` ASET is **~4.63 MB** indexed
@@ -317,13 +315,7 @@ As modules land, keep a table here: diagram block → `functional_model/…` →
 | Storage | `functional_model/storage_engine.py` | `storage_engine.sv` + SD SPI + console load |
 
 **Honest path:** product titles are `*.HTML`. **`RUN` always compiles** the
-loaded HTML into one in-memory ProgramImage for the **JMR bytecode VM** on
-PYTHON, FPGA-SIM, BOARD, ASIC. Full-quality graphics ride its ASET section
-into the external SRAM asset bank (no `NAME.DAT`; EDIT+RUN regenerates
-everything). Never persist or prefer a `.JSB` / `.JSH` sidecar. dukpy is a
-**cheat / debt** if used as the game engine. Never call dukpy “FPGA-SIM.”
-The user only types
-`LOAD "NAME.HTML"` / `RUN`.
+loaded HTML into one in-memory ProgramImage for the **JMR bytecode VM**.
 See [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and
 `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`.
 

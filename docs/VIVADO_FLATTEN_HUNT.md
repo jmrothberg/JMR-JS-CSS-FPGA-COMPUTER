@@ -1,22 +1,30 @@
 # History of edits — Vivado 70 GB hunt (~16–19 Aug 2026)
 
-**Not a current-bug list.** Synth compiles. This is a ledger of RTL we
-changed while chasing Vivado RSS ~70 GB / frozen log. Use it when glass
-is wrong (black, hung FRAME, dead keys, stuck rAF) to see **what we most
-likely broke**, not what is “still the hang.”
+Words: [README.md — Words used](../README.md#words-used-in-this-project).
 
-File: `rtl/engines/jmr_js_vm.sv` (and exec32/exec64 if they were peeked).
-FIND play-speed: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
-Fit: [FPGA_FIT.md](FPGA_FIT.md). Old run diaries: [OLD_RUNS.md](OLD_RUNS.md).
+**Not a current-bug list. Not a third copy of the RAM law** (that is
+`.cursor/rules/never-fake-fpga-sim.mdc` + [FPGA_FIT.md](FPGA_FIT.md)
+NEVER table). This is the **ledger of RTL we changed** while chasing
+Vivado RSS (Resident Set Size) ~70 GB / frozen log. Use it when glass is
+wrong (black, hung FRAME, dead keys, stuck `requestAnimationFrame`) to
+see **what we most likely broke**, not what is “still the hang.”
 
-What the hang **was** (fixed): extra SRAM **ports** inferred as FFs, not
-chip BRAM, not the 4 MB ASET bank. Last good T200 bit ~2.8 GB.
+**What the hang was (fixed):** extra SRAM **ports** inferred as flip-flops,
+not chip **BRAM** (Block RAM). Isolated `rdata <= mem[raddr]` while FSM
+writes stayed still hit ~71 GB. Writes moved to **Port A**. Last good T200
+bit ~2.8 GB.
 
-1. FSM `mem[i] <=` in the 7k-line `always_ff`. Isolated `rdata <= mem[raddr]`
+File: `rtl/engines/jmr_js_vm.sv` (and exec64). Play-speed:
+[SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md). Fit:
+[FPGA_FIT.md](FPGA_FIT.md). Old run diaries: [OLD_RUNS.md](OLD_RUNS.md).
+
+Two beats of the hunt (keep as a lesson):
+
+1. FSM `mem[i] <=` in the big `always_ff`. Isolated `rdata <= mem[raddr]`
    while those writes stayed still hit ~71 GB. Writes moved to Port A.
 2. Later, past `e32_p_clr`: a **third** live index in the mux `always_ff`
    (cstack TOS+NOS+GC, `to_fn[0]` plus another `to_fn` index, `env_cap[0]`
-   tap). `e32_p_clr` 8-6014 unused-FF print was not the hang.
+   tap). `e32_p_clr` Synth 8-6014 unused-FF print was **not** the hang.
 
 ---
 

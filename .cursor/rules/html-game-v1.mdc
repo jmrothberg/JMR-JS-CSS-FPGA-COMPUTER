@@ -5,11 +5,15 @@ alwaysApply: true
 
 # HTML games — V1.0 now, V2.0 later
 
+Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+This is **copy 1** of Version 1.0 walls / Version 2.0 `MK.HTML` (copy 2:
+[docs/JMR_JS_COMPATIBILITY.md](../../docs/JMR_JS_COMPATIBILITY.md)
+§ Version 1.0 vs 2.0). Authoring how-to:
+[docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md).
+
 **V1.0** = what PYTHON + FPGA-SIM play today for product + library titles.
 **V2.0** = machine work so **`storage/MK.HTML` as embedded today** can
-`LOAD`/`RUN`. Do **not** title-gate (`if (stem == "MK")`). Spec + measured
-numbers: [docs/JMR_JS_COMPATIBILITY.md](../../docs/JMR_JS_COMPATIBILITY.md)
-§ Version 1.0 vs 2.0. Authoring: [docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md).
+`LOAD`/`RUN`. Do **not** title-gate (`if (stem == "MK")`).
 
 ## V1.0 — write titles inside these walls
 
@@ -19,7 +23,7 @@ numbers: [docs/JMR_JS_COMPATIBILITY.md](../../docs/JMR_JS_COMPATIBILITY.md)
 | **`Object.keys` / `for…in`** | Compiler lowers `for (k in obj)` → `Object.keys`. RTL lacks that native (`fault=5` / `fsite=4183`). Use literal key lists or indexed loops. |
 | **`setTransform(-1, …)` mirror** | PYTHON `_xf` does `max(1, w*sx)` — negative scale → 1px. Prefer **left + right** sheets. |
 | **Math** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt` (+ `Math.PI`). No `round` native in V1. |
-| **Heap caps** | `MAX_OBJ=1024`, arrays `1536×32 + 128×128`, `ENV_DEPTH=512`, `ARR_CAP=128`. Loud overflow. |
+| **Heap caps (live silicon)** | `MAX_OBJ=960`, arrays `1536×32 + 12×128`, `ENV_DEPTH=384`, `ARR_CAP=128`. Loud overflow. Do not assume old 1024/512. [FPGA_FIT.md](../../docs/FPGA_FIT.md). |
 | **Glass / Esc** | 640×480 Canvas fill; Esc = machine BREAK. |
 
 **V1 library example:** `storage/MKPVP.HTML` (3 atlases, L/R sheets, no `for-in`).

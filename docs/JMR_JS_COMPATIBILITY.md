@@ -1,21 +1,31 @@
 # JMR JS compatibility matrix (target titles)
 
-**Learn first:** [JS_COMMANDS.md](JS_COMMANDS.md) — JavaScript you can write, and the instructions it becomes (34 opcodes + native ids). This file is title status and holes, not the teaching list.
+Words: [README.md — Words used](../README.md#words-used-in-this-project).
+
+**Learn first:** [JS_COMMANDS.md](JS_COMMANDS.md) — JavaScript you can write,
+and the instructions it becomes (34 **opcodes** + native ids). This file is
+title status, holes, and the **Version 1.0 vs 2.0** plan — not the teaching
+list.
+
+This is **copy 2** of the Version 1.0 walls / Version 2.0 `MK.HTML` plan
+(copy 1 is `.cursor/rules/html-game-v1.mdc`).
 
 Target games drive the language/API set. **Not a full web browser** — no
-Fetch/XHR, no WebGL, no general browsing. Goal (same idea as NLISC-BASIC on
-T100): **NLISC-JS** — HTML titles, JavaScript ISA, the CSS a game actually
+Fetch/XHR, no WebGL, no general browsing. Goal: **NLISC-JS** — HTML titles,
+JavaScript **ISA** (Instruction Set Architecture), the CSS a game actually
 needs — **JMR bytecode VM** on PYTHON → FPGA-SIM → BOARD → ASIC.
 
-**No cheats:** dukpy/Duktape/V8/QuickJS/browser must not be the product CPU.
-Chrome may open the same `.HTML` for authoring only. See `CONSTITUTION.md` and
-`.cursor/rules/no-dukpy-cheat-native-cpu.mdc`.
+**No cheats:** dukpy/Duktape/V8/QuickJS/browser must not be the product CPU
+(copy 1: `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`; copy 2:
+[CONSTITUTION.md](../CONSTITUTION.md) Vendored-titles).
 
-**Machine state (2026-08-21, banner `V1.0`):** ONE opcode decoder —
-`jmr_js_vm_exec64.sv` (Value64). The tagged Q16 `exec32` unit is
-**deleted**; every ProgramImage is `FLAG_VALUE64` and an image without
-that flag faults loud (code 9) at header decode. Five titles play on
-FPGA-SIM: INVADERS, PACMAN, DONKEY, ASTEROID, MRDO.
+**Machine state (2026-08-21 night, banner `V1.0`):** ONE opcode decoder —
+`jmr_js_vm_exec64.sv` (**Value64**). Five titles are **correct** on
+FPGA-SIM: INVADERS, PACMAN, DONKEY, ASTEROID, MRDO. FPGA-SIM is **too
+slow to play** (PC simulating the chip). Board target **≥ 30
+pictures/second**: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
+Live heap/code caps: [FPGA_FIT.md](FPGA_FIT.md). `MK.HTML` is still
+Version 2.0 (not V1).
 
 ## Reference titles (on disk)
 
@@ -43,18 +53,11 @@ numbers). `RUN` **always** recompiles into one versioned in-memory
 **ProgramImage**. No sidecar compile file on disk or on the card.
 
 **Asset bank (external SRAM — no `NAME.DAT`):** great graphics stay at full
-quality. `RUN` emits `data:image` art (per-title 256-entry palette +
-full-resolution 8-bpp banks) as the **ASET section** of the ProgramImage;
-the loader streams it into the **external 4 MB SRAM asset bank**
-(IS61WV204816 contract — see `docs/ARCHITECTURE.md`). Bytecode carries
-descriptors (w, h, SRAM offset) only. Do not pack Donkey sheets into code
-BRAM or downscale them to fit.
-
-**Code debt (2026-08-13):** ASET/asset-bank path is **in progress**.
-Historic trap: `tools/compile_js.py` `_extract_data_uri_sprites` packed
-pixels into the ProgramImage and downscaled (`w*h > 180000`) with an 8-color palette.
-PYTHON compile-on-RUN **is** default. Full-game PYTHON ↔ FPGA-SIM match is
-**not** done.
+quality. `RUN` emits `data:image` art as the **ASET** (asset) section of
+the ProgramImage; the loader streams it into the **external 4 MB SRAM
+asset bank** (IS61WV204816 contract — [ARCHITECTURE.md](ARCHITECTURE.md)).
+**This path is in** (five titles play with ASET art on FPGA-SIM). Do not
+pack Donkey sheets into code BRAM or downscale them to fit.
 
 Same-stem `NAME.JS` / `NAME.JSB` are **legacy**, not product twins.
 `storage/games_*` (not DIR / not card).
@@ -773,7 +776,15 @@ values are one 64-bit word.
 
 ---
 
-## Three-column gap list (honest)
+## Three-column gap list (honest) — historical planning snapshot
+
+**Statuses in this table are 2026-08-14 planning language** (“grow until
+match”). They are **not** current. FPGA-SIM now **plays** the five HTML
+titles end to end. Keep the table as a reminder of what we once listed as
+work; do not treat a “grow” cell as an open bug. Current Complete/TBD:
+[Agent surface checklist](#agent-surface-checklist-html--javascript--css--canvas).
+Current holes: [potential bugs.md](potential%20bugs.md). Board is still
+behind (last flash 2026-08-13 03:36).
 
 | Feature / API | PYTHON (bytecode VM) | FPGA-SIM (RTL VM) | FPGA board |
 |---|---|---|---|
@@ -837,14 +848,18 @@ KEYBITS, GC, and JSON/RegExp/string machinery. The narrow early list
 (`console.log`, `clear`, `fillRect`, `swapBuffers`, `key*`, `startLoop`)
 is what the *first* `.JS` demos needed; it is not the surface any more.
 
-**The board is the thing that is behind:** the last flashed bit is the
-**03:36** one (Invaders hex / 160×120 FB). The current RTL has never been
-synthesized — that is the run the user is doing now
-([FPGA_FIT.md](FPGA_FIT.md)).
+**The board is the thing that is behind:** the last *flashed* bit is the
+**03:36** one (Invaders hex / 160×120 FB). Current RTL **did** synthesize
+(2026-08-21) then failed place; fit repairs landed. Next user command:
+`bit-fresh` in [FPGA_FIT.md](FPGA_FIT.md).
 
 ---
 
-## Feature matrix (planning)
+## Feature matrix (planning) — historical
+
+What the three product HTML files used when we froze the ISA. Not an open
+todo list. Library HTML stays on Version 1.0 walls. **`MK.HTML` is the
+Version 2.0 goal.**
 
 | Feature | PACMAN.HTML | DONKEY.HTML | INVADERS.HTML | Implement |
 |---|---|---|---|---|

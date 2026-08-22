@@ -1,13 +1,22 @@
 # FPGA bring-up — Digilent Nexys Video (primary)
 
-**Primary board:** Digilent **Nexys Video** — Xilinx/AMD Artix-7 **XC7A200T-1SBG484C**
-(“T200” in lab shorthand).
+Words: [README.md — Words used](../README.md#words-used-in-this-project).
+
+**Primary board:** Digilent **Nexys Video** — Xilinx/AMD Artix-7
+**XC7A200T-1SBG484C** (“**T200**” in lab shorthand — the 200T chip).
+
+This page teaches **RTL → FPGA-SIM → Vivado → `.bit`**, the board jacks,
+and flash. It is **not** a third copy of the RAM law (that is
+`.cursor/rules/never-fake-fpga-sim.mdc` + [FPGA_FIT.md](FPGA_FIT.md)
+NEVER table). Linux workstation notes that used to live in
+`LINUX_WORKSTATION.md` are **here**.
 
 **Working sibling (do not confuse):** `JMR-BASIC-FPGA-COMPUTER` on Digilent
-**Nexys A7-100T** (“T100”) already has a **fully working** NLISC-BASIC console
-+ USB keyboard. Steal **method** (PYTHON → real FPGA-SIM → board; PIC24
-USB→PS/2). Do **not** copy A7 pinouts, BASIC ISA, or VGA assumptions into this
-tree. This product is **NLISC-JS** + **HDMI 640×480** on Nexys Video.
+**Nexys A7-100T** (“**T100**”) already has a **fully working** NLISC-BASIC
+console + USB keyboard. Steal **method** (PYTHON → real FPGA-SIM → board;
+PIC24 USB→PS/2). Do **not** copy A7 pinouts, BASIC ISA, or VGA assumptions
+into this tree. This product is **NLISC-JS** + **HDMI 640×480** on Nexys
+Video.
 
 **STOP:** Do **not** `make … bit` / flash until FPGA-SIM is perfect for the
 feature under test (`check_runtime_parity.py` BATTERY PASS + relevant benches).
@@ -36,6 +45,7 @@ Constraints: `constraints/nexys_video.xdc`.
 
 **RTL** = **Register-Transfer Level** — hardware as registers, wires, and
 clocked logic. In this repo: SystemVerilog under `rtl/` (`*.sv`).
+Full dictionary: [README.md — Words used](../README.md#words-used-in-this-project).
 
 | Term | Meaning |
 |---|---|
@@ -174,15 +184,15 @@ the Vivado project, generates DDR3 MIG, and fully synthesizes `jmr_js_vm`
 (often **1–3 hours** on a small design; this full VM’s measured phases are
 in [OLD_RUNS.md](OLD_RUNS.md) — 16:17 already **>8 h** then OOM). Later `bit`
 **reuses** `build/nexys_video/vivado` (skip MIG generate, incremental DCP).
-Use `make -C tools/board_flow bit-fresh` only if MIG / XDC / source *list*
-changed. Do not `make -C tools/board_flow clean` between RTL tweaks — that
-forces another first-build. Synth **2 threads** (`JMR_VIVADO_SYNTH_THREADS`;
-alias `JMR_VIVADO_THREADS`) — the 16:17 run OOM'd at technology mapping with
-**7** workers (RSS 58→114 GB on 128 GB + swap). Place/route stays **8**
-(`JMR_VIVADO_IMPL_THREADS`). Vivado has no mapping-only thread knob
-(UG901 `general.maxThreads` covers all of `synth_design`). Do not raise synth threads to beat an OOM (2026-08-20 died at **2** workers).
-First DCP is at synth_1 100%; mapping cannot resume. Brief:
-[FPGA_FIT.md](FPGA_FIT.md). Diary: [OLD_RUNS.md](OLD_RUNS.md).
+Use `make -C tools/board_flow bit-fresh` when the source *list*, MIG
+(Memory Interface Generator), or XDC (pin/clock constraints) changed —
+**including the 2026-08-21 next build** (exec32 deleted + incremental
+stitch). Do **not** `bit-fresh` to “recover” a crash *during* mapping:
+there is no **DCP** (Design CheckPoint) until `synth_1` is 100%, and you
+throw away MIG/project state. Do not `make -C tools/board_flow clean`
+between RTL tweaks. Synth **2 threads**. Full hygiene:
+[SESSION_HANDOFF.md](SESSION_HANDOFF.md) § Synthesis. Diary:
+[OLD_RUNS.md](OLD_RUNS.md).
 
 Volatile SRAM-only load (lost on unplug): `make -C tools/board_flow flash`.
 
@@ -260,7 +270,11 @@ Do **not** flash the board until that battery is green **and** you are
 intentionally proving silicon for a feature that already matches on FPGA-SIM.
 Also check Vivado timing (WNS ≥ 0). A prior VM build mapped code RAM to
 distributed LUT RAM and produced ~−90 ns WNS / dead tether — that is not a
-“board mystery,” it is a bad bit.
+“board mystery,” it is a bad bit. If WNS is negative on the **JS core /
+fabric** (not inside MIG), do **not** slow DDR3 and do **not** fake a
+20 ns `clk100` — split clocks: 50 MHz `core_clk` = `ui_clk`/2, keep MIG
+at 100 MHz, CDC `jmr_sram_port`. Recipe:
+[FPGA_FIT.md — If timing fails](FPGA_FIT.md#if-timing-fails-wns--0--slow-the-js-core-not-ddr3).
 
 ### T100 vs T200 keyboard (same method, different board)
 

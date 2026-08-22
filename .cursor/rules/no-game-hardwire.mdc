@@ -5,21 +5,23 @@ alwaysApply: true
 
 # Never hardwire the three games
 
+Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+This is **copy 1** of “acceptance titles are tests, not the ISA”
+(copy 2: [docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md)).
+
 The machine **RUNS any compiled HTML**. `INVADERS.HTML` / `PACMAN.HTML` /
-`DONKEY.HTML` are acceptance tests, not the ISA.
+`DONKEY.HTML` are acceptance tests, not the instruction set.
 
 **Forbidden:** title names/stems as gates; hardcoded key maps; maze/alien/DK
 constants; buffers sized to one title; “for PACMAN” comments to skip JS
-semantics (heap/gen cheats: `one-heap-keep-gen`).
+semantics (heap/generation cheats: `one-heap-keep-gen`).
 
 **Required:** grow language + VM (closures, timers, `String.replace` + RegExp,
 `JSON.stringify`/`parse`, heap lifetimes). Caps are VM-wide with loud overflow.
 FAT/load wait scales with ProgramImage bytes, not a title name.
-**V2.0** for `MK.HTML` (measured): `MAX_SPR`/`PROGRAM_MAX_SPRITES` **≥ 518**,
-asset bank rebuild to **8 MB** (or more; ASIC still **one chip**, simple
-SRAM port — no fancy access), compiler dotted **`new mk.…`**,
-**`Object.keys`/`for…in`**, **`Math.round`** — never `if (stem == "MK")`.
-See `html-game-v1.mdc` and `docs/JMR_JS_COMPATIBILITY.md` § Version 1.0 vs 2.0.
+**Version 2.0** for `MK.HTML` is measured numbers, not a title gate —
+[html-game-v1.mdc](html-game-v1.mdc) and
+[docs/JMR_JS_COMPATIBILITY.md](../../docs/JMR_JS_COMPATIBILITY.md) § Version 1.0 vs 2.0.
 
 ```systemverilog
 // BAD

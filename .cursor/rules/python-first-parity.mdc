@@ -5,8 +5,13 @@ alwaysApply: true
 
 # PYTHON → FPGA-SIM → board
 
-User-visible glass (READY, LOAD/RUN, JS/Canvas, errors) lands in order. Skip a
-rung and the machine is fake. Status: [docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md).
+Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+This is **copy 1** of the development ladder (copy 2:
+[README.md Method](../../README.md#method-steal-from-the-basic-sibling--not-the-product)).
+
+User-visible **glass** (READY, LOAD/RUN, JS/Canvas, errors) lands in order.
+Skip a rung and the machine is fake. Status:
+[docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md).
 
 1. **PYTHON** bytecode VM — behavioural truth. Fast: same **results** as the
    chip (bytes, numbers, errors), not wall-clock. Do not throttle Python to
@@ -32,13 +37,6 @@ PYTHON. Tests = real titles, not random programs. Do not invent LUT counts
 Tether mirrors glass; when J15 works, play needs **zero** code changes. This
 board is Nexys Video T200 — not A7-100T. StarLite later.
 
-**Agents:** do not run Vivado / `make bit` unless the user asked. Inspect both
-execs **and** the parent case against `never-fake-fpga-sim` (opcode comb
-drives no ports; no combo `arr[i]` in `casestate` / tasks / `fn_entry()`;
-no second heap; **no `mem[i] <=` on Port A arrays** — `stack_wr` /
-`vobj_alloc_wr` / `varr_len_wr` / `name_hash_wr` / `vvars_wr` /
-`json_putc` / `imgd_we`). New glass must wait for `*_rdata`, never peek.
-One stack write per clock (`stack_dual_pend` for FOREACH el+idx). Extra
-clocks OK. `sim_server_synth` PASS is not a bitstream. Then glass. Do not
-redesign the architecture, merge engines, or ship RTL-only glass. Traces:
-`use-existing-traces`.
+**Agents:** do not run Vivado / `make bit` unless the user asked. RAM writes
+and `*_rdata` waits: `.cursor/rules/never-fake-fpga-sim.mdc` (do not retell
+that law here). Traces: `use-existing-traces`.

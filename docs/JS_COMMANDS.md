@@ -1,11 +1,15 @@
 # JavaScript you can write — and the instructions it becomes
 
+Words: [README.md — Words used](../README.md#words-used-in-this-project).
+
 This is the page to **learn the machine**.  
 Title status and version-2.0 holes live in [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md).  
 Block diagram: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 On the BASIC sibling, every keyword **is** one instruction (`PRINT` = `0x81`).  
-Here JavaScript **source** is compiled on `RUN` into a smaller numbered instruction set. Same idea: the language **is** the processor. Different spelling of the bytes.
+Here JavaScript **source** is compiled on `RUN` into a smaller numbered
+**instruction set architecture** (ISA). Same idea: the language **is** the
+processor. Different spelling of the bytes.
 
 ---
 
@@ -14,13 +18,14 @@ Here JavaScript **source** is compiled on `RUN` into a smaller numbered instruct
 | Phrase | Meaning |
 |---|---|
 | **JavaScript-native CPU** | This computer. You write JavaScript. The chip runs JavaScript. No hidden Z80, RISC-V, V8, or browser. |
-| **Instruction set architecture** | The 34 numbered instructions the processor fetches. Same numbers in Python and on the chip. |
+| **Instruction set architecture (ISA)** | The 34 numbered instructions the processor fetches. Same numbers in Python and on the chip. |
 | **Opcode** | One instruction number (1–34). There is no opcode 0. |
 | **Functional model** | The Python program that is the truth for “what this instruction does.” |
 | **Native** | A built-in function the compiler already knows (`Math.floor`, `console.log`). It becomes instruction 13 plus an **id**. |
 | **Method** | A call on a value (`c.fillRect(…)`, `arr.push(…)`). It becomes instruction 30 plus the method **name**. |
-| **Program image** | The compiled program sitting in memory after `RUN` (code + art). Not a file you type. |
+| **Program image** | The compiled program sitting in memory after `RUN` (code + **ASET** art). Not a file you type. |
 | **READY console** | The `>` prompt: `LOAD`, `RUN`, `LIST`. Those are **not** JavaScript. |
+| **FPGA-SIM** | The same chip RTL simulated (not a browser, not Python pretending). |
 
 ---
 
