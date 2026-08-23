@@ -434,10 +434,34 @@ forbidden even if FPGA-SIM titles look right. Address this clock; consume
 - Editor/source buffer (LIST/EDIT working copy; disk HTML is master)
 - Boot / microcode ROM, FIFOs, palette, MMIO
 
-**ASIC target (frozen 2026-08-13): ~30 mm² die ("double chip"), our own
-custom padring, ~1 MB-class on-chip SRAM.** Do **not** shrink BRAM to fit a
-small die; use the BRAM the design needs for speed. The BASIC CPU's 64 KB
-on-chip budget does **not** apply to this chip.
+**ASIC target (updated 2026-08-23, supersedes the 2026-08-13 "~1 MB-class
+on-chip SRAM" line): SkyWater 130 nm, same process as the BASIC chip, ~2×
+its die.** At that node, on-die SRAM is **tens-to-low-hundreds of KB** —
+the old ~1 MB-class figure was a node assumption this process cannot meet.
+Measured requirement of the current FPGA architecture: **~1.6 MB BRAM +
+~0.35 MB LUTRAM (~1.95 MB on-chip)** — a 15-30× gap, so the ASIC is a
+**memory-hierarchy redesign, not a port**:
+
+- **On-die (hot set only):** what every opcode touches — vstack (16 KB),
+  vvars (4 KB), env/metadata tables (gen/valid/mark, ~10 KB), small caches.
+- **External 4 MB SRAM (2M × 16) holds everything else** — framebuffers,
+  code, vobj/varr slots, names, sprites. The saving grace: a sky130 core
+  clocks ~25-50 MHz (20-40 ns cycles), so the ~10 ns SRAM is
+  **one-cycle-class** — external stops being slow at this node.
+- **16-bit bus tax:** one 64-bit Value64 = four beats (pipelined ~2 cycles
+  at 25 MHz); pairing two SRAMs for a 32-bit bus halves it if the padring
+  allows.
+- **Template already built:** the 2026-08-23 single-draw-bank design
+  (draw bank on fast RAM, front bank external behind a line-FIFO + CDC)
+  is the first implemented piece of this hierarchy, not a T200 workaround.
+- **Logic area is the second constraint:** ~170k logic LUTs ≈ 2-4 M gate
+  equivalents ≈ tens of mm² at 130 nm. Every LUT the fit campaign removes
+  is future die area removed; after T200 placement, a gate-count estimate
+  against the real die budget is the next ASIC step.
+
+The BASIC CPU's 64 KB on-chip budget does not apply verbatim, but its
+*shape* — tiny on-die hot set + external main store — is now this chip's
+shape too.
 
 **Disk (µSD FAT32), not BRAM:** `NAME.HTML` is the user title and source of
 truth. `RUN` creates a ProgramImage in memory; product runtimes do not persist

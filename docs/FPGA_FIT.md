@@ -22,6 +22,11 @@ into new modules. Extra clocks OK. **Future plan** if the JS core misses
 100 MHz: [If timing fails](#if-timing-fails-wns--0--slow-the-js-core-not-ddr3)
 (50 MHz core, DDR3 stays 100 MHz) — not wired yet.
 
+**This campaign is also the ASIC diet (2026-08-23):** the target is
+SkyWater 130 nm at ~2× the BASIC die, where ~170k logic LUTs ≈ tens of
+mm² of standard cells — every LUT removed here is future die area
+removed. [CONSTITUTION.md](../CONSTITUTION.md) § ASIC target.
+
 **Board core clock (fact, not a goal):** `core_clk` **is** **MIG**
 (Memory Interface Generator) `ui_clk` ≈ **100 MHz** today
 (`tools/board_flow/mig_a.prj`: DDR `TimePeriod` 2500 ps → 400 MHz memory,

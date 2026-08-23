@@ -206,6 +206,27 @@ V1_WALL_NAMES = frozenset([
     "findIndex", "some", "every", "values", "entries",
 ])
 
+# V1 WALL EXTENSION (2026-08-23, switchable, OFF by default): candidate
+# silicon removals sized on the run-19 post-opt netlist. Per-arm LUTs:
+# JSON engine 18,795 (REMOVAL-WORTHY); HOF find/filter/reduce/map 1,053,
+# bind 601, regex replace/test 126, sort ~0 (NOT worth removing — kept).
+# The extension stays off until the replacement titles (PACMAN2.HTML
+# etc.) land and pass byte-identical framebuffer checks; the six current
+# titles MUST keep compiling until then. Enable with JMR_V1_WALL_EXT=1
+# (or =json for the JSON-only recommended line).
+import os as _os
+
+def _wall_ext_names() -> frozenset:
+    v = _os.environ.get("JMR_V1_WALL_EXT", "")
+    if not v:
+        return frozenset()
+    json_only = frozenset(["parse", "stringify"])
+    if v == "json":
+        return json_only
+    return json_only | frozenset(
+        ["find", "filter", "reduce", "map", "sort", "bind",
+         "replace", "test"])
+
 class Compiler:
     def __init__(self, src: str) -> None:
         self.tokens = _isolate_iife_modules(_tokenize(src))
@@ -1523,7 +1544,7 @@ class Compiler:
         # reach a silicon arm the V1.0 chip does not have. A user-defined
         # method with the same name would shadow a builtin that does not
         # exist on V1 silicon either way — refuse at compile time, loudly.
-        if meth in V1_WALL_NAMES:
+        if meth in V1_WALL_NAMES or meth in _wall_ext_names():
             raise CompileError(
                 f"V1 WALL: .{meth}() is not in the V1.0 chip "
                 "(see docs/JMR_JS_COMPATIBILITY.md); V2 feature",

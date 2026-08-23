@@ -582,3 +582,35 @@ LUTRAM is now 26% of its cap — the memory wall is not merely closed
 but demolished; every remaining LUT is a logic LUT. Session 2 begins:
 listener consolidation first (biggest census target, strongest
 existing test coverage: donkey lsn, KEYEVT suite, #77 repros).
+
+## Per-arm LUT sizing (run-19 post-opt) — the keep/remove line, drawn on numbers
+
+| arm | LUTs | line |
+|---|---:|---|
+| vst_win + vst_wdata funnel | 44,797 | the machine — rework only |
+| listeners | 26,917 | Session-2 #1 (consolidate) |
+| **JSON engine (js_/json_/vjs_, jn_ excluded)** | **18,349** | **REMOVE when gated** — supersedes the TOS/NOS rework |
+| name_has | 7,681 | 1W merge |
+| HOF vfe_ (find/filter/reduce/map/sort) | 1,053 | KEEP (not worth a wall) |
+| bind | 601 | KEEP |
+| regex replace/test | 126 | KEEP (practically free) |
+| jn_ join/indexOf (shared, kept) | 446 | keep |
+
+First census pass mis-bucketed jn_ under JSON (join/indexOf share the
+prefix); corrected split above. The other agent's wider removal list
+(HOF/regex/sort/bind ≈ 1.8k combined) fails the numbers test — walling
+those costs authoring surface for ~1% of the gap. Only JSON clears the
+bar, and it also kills PACMAN's parse/stringify maze-reset GC churn
+(24% of frame) — chip smaller AND game faster.
+
+**Wall extension shipped, OFF by default** (six titles keep compiling):
+`JMR_V1_WALL_EXT=json` walls parse/stringify (the recommended line);
+`=1` adds the full requested list. JSON-engine removal patch is gated
+on: (a) wall live for JSON, (b) PACMAN2.HTML (user-provided) passing
+the full battery with byte-identical framebuffer checks. Removal scope
+when gated: S_JSON/S_V64_JSON* states, json_mem + ports, js_* parse
+stack, vjs_val, JSON.parse/stringify native arms (23/24), json watchdog
+slice. jn_* stays (join/indexOf).
+
+50 MHz: timing-only rescue after placement — never an area lever
+(proven by the bit-identical run 18).

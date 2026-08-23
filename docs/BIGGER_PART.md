@@ -1,5 +1,11 @@
 # BIGGER PART — porting the tagged netlist off the XC7A200T
 
+> **RULED OUT by the user 2026-08-23 ("we are NOT changing FPGA").**
+> Kept as reference only; the T200 fit campaign is the committed path.
+> Note the fit campaign also shrinks the future SkyWater-130 ASIC die
+> (see CONSTITUTION.md § ASIC target) — a bigger FPGA would have removed
+> that pressure and left the ASIC problem unsolved.
+
 Tag: `bigger-part-candidate-207k` (commit 30f5fc6, 2026-08-23).
 This netlist is fully verified (150/150 RTL suite x5, 198/198 bytecode,
 all three games fault-free) and needs **zero RTL changes** to place on a

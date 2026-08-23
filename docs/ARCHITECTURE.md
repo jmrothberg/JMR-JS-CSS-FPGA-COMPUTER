@@ -230,10 +230,19 @@ every `RUN` and is not a persistent `.JSB` / `.JSH` sidecar. There is no
 `NAME.DAT`. Do not fake a 64K map. Do not pack Donkey `data:image` sheets into
 code BRAM or downscale them to “fit.”
 
-**ASIC target (frozen 2026-08-13): ~30 mm² die ("double chip"), our own
-custom padring, ~1 MB-class on-chip SRAM.** Use the BRAM the design needs
-for speed; never shrink BRAM to chase a small die. Live FPGA chip totals:
-[FPGA_FIT.md](FPGA_FIT.md).
+**ASIC target (updated 2026-08-23): SkyWater 130 nm, same process as the
+BASIC chip, ~2× its die — supersedes the 2026-08-13 "~1 MB-class on-chip
+SRAM" line, which that node cannot meet (realistic on-die: tens-to-low-
+hundreds of KB).** The current FPGA design uses ~1.95 MB on-chip
+(~1.6 MB BRAM + ~0.35 MB LUTRAM), so the ASIC is a memory-hierarchy
+redesign: on-die holds only the per-opcode hot set (vstack, vvars,
+metadata tables, small caches); everything else lives on the external
+4 MB SRAM, which at sky130 clock rates (~25-50 MHz core, 20-40 ns
+cycles) is one-cycle-class — the 2M×16 bus makes a Value64 access
+multi-beat (~2 pipelined cycles). The single-draw-bank front-bank-external
+architecture (2026-08-23) is the first implemented piece of this
+hierarchy. Full doctrine: [CONSTITUTION.md](../CONSTITUTION.md) § ASIC
+target. Live FPGA chip totals: [FPGA_FIT.md](FPGA_FIT.md).
 
 ---
 
