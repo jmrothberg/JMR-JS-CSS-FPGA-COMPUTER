@@ -495,3 +495,34 @@ the requirement is roughly: logic <= ~115-120k AND LUTRAM <= ~25-30k.
 Then the (already-armed) demoted-DRC placement attempt with LUT pairing
 closes the remainder, still on the 100 MHz XDC; 50 MHz BUFGCE stays the
 final timing lever only.
+
+## 2026-08-23 — relax experiment answered + the census corrects Session 2
+
+**20 ns relax: delta ZERO, bit-identical netlist.** Root cause: the XDC
+create_clock NEVER applies during top synthesis (deferred past the MIG
+black box, Project 1-498) — synth was already free of the 100 MHz
+pressure, and AreaOptimized_high had banked the area. XDC reverted to
+the truthful 10 ns (20 ns would under-constrain the real 100 MHz
+pixel/HDMI paths at implementation). Half-rate core stays the BUFGCE
+plan with an honest generated clock.
+
+**Mux census (report_design_analysis + LUT-by-driven-net on post-opt),
+as the user required before committing Session 2 — the ranking IS
+different from the assumption:**
+
+| structure | LUTs | note |
+|---|---:|---|
+| vst_wdata result funnel | 33,675 | every opcode's result muxes into the stack write — effectively exec64's datapath drain; fix = op-tiering/sharing (deep) |
+| listener complex (ev/fn/nev/nfn + we_q + compaction) | ~26,000 | 4x my 3-6k estimate — now Session 2's #1 actionable |
+| vst_win window | 11,190 | behind the deep-window test gate |
+| JSON parse (json_digs + js_i + vjs_val + js_ph) | ~15,000 | TOS/NOS + sequential digits |
+| name_has | 6,230 | STILL FF: three write statements in the poke process = unprovable 1W; merge to one prioritized write |
+| FP (vdiv/vmod/exp) | ~3,500 | NOT top-four — drops off the list |
+
+Session 2 commit list (corrected): listeners, JSON, name_has 1W merge,
+then vst_win; vst_wdata/op-tiering is the deep reserve.
+
+**Session 1 begins**: front/scanout FB bank + line-FIFO -> DDR3, draw
+bank stays BRAM (NEVER-table row consciously relaxed, user, rule-5
+style). Swap = burst copy via the existing dump path; ~75-80 tiles
+freed absorb the ~17k LUTRAM spill return.

@@ -3,10 +3,15 @@
 
 ## System clock 100 MHz
 set_property -dict { PACKAGE_PIN R4 IOSTANDARD LVCMOS33 } [get_ports { clk100 }]
-## 2026-08-23: 50 MHz is an accepted product decision — take its AREA
-## gain at synthesis (10 ns timing-driven synth replicates logic and
-## blocks resource sharing). Board bring-up target is half frame rate.
-create_clock -add -name sys_clk_pin -period 20.00 -waveform {0 10} [get_ports { clk100 }]
+## 2026-08-23 relax experiment result: create_clock NEVER applies at
+## synthesis here (XDC deferred past the MIG black box — Project 1-498),
+## so a 20 ns relax produced a BIT-IDENTICAL netlist (run 18 == run 17).
+## The area gain the relax was meant to buy was already banked by
+## AreaOptimized_high + the deferral. The period must stay TRUTHFUL:
+## the physical clock is 100 MHz, and 20 ns would under-constrain the
+## MMCM-derived pixel/HDMI paths at implementation. Half-rate core =
+## BUFGCE /2 with a real generated clock, when needed.
+create_clock -add -name sys_clk_pin -period 10.00 -waveform {0 5} [get_ports { clk100 }]
 set_property CLOCK_DEDICATED_ROUTE BACKBONE [get_nets clk100_IBUF]
 
 ## CPU reset (active low)
