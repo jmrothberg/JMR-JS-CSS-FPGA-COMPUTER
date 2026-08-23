@@ -614,3 +614,24 @@ slice. jn_* stays (join/indexOf).
 
 50 MHz: timing-only rescue after placement — never an area lever
 (proven by the bit-identical run 18).
+
+## Run 20 — JSON engine removal verdict (2026-08-23 15:36)
+
+| metric | run 19 | run 20 |
+|---|---:|---:|
+| Slice LUTs | 181,335 | **161,924 (1.20x over)** |
+| LUT as Logic | 169,383 | 150,214 |
+| LUT as Memory | 11,952 | 11,710 |
+| BRAM | 338.5 | 338.5 |
+| post-opt DRC | 170,873 | **152,203 vs 133,800** |
+
+−19.4k from the removal (census promised 18.3k ✓). Gate battery: all
+six titles fault-free with jsonmax=0 everywhere; repros intact; full
+suite in flight. Placement arithmetic: packed(152,203)+11,710 <=
+134,600 needs **19.3% pairing — inside the typical 10-20% band for the
+first time**. The clock placer still aborts pre-packing at 113%
+logical, but the LISTENER consolidation (26.9k census) alone brings
+post-opt logical UNDER the 133,800 DRC line — after it, placement gets
+to actually try. Session 2 #1 begins.
+
+Trajectory: 1,901k → 519k → 312k → 227k → 214k → 208k → 181k → 162k.
