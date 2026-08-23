@@ -93,6 +93,8 @@ proc jmr_add_sources {ROOT} {
       $ROOT/rtl/engines/font_rom.hex \
       $ROOT/rtl/engines/invaders_jsb.hex \
       $ROOT/rtl/engines/jmr_palette_bram.sv \
+      $ROOT/rtl/engines/jmr_fb_present.sv \
+      $ROOT/rtl/engines/jmr_fb_scanout.sv \
       $ROOT/rtl/engines/jmr_ddr3_sram_bridge.sv \
       $ROOT/rtl/engines/jmr_uart_link.sv \
       $ROOT/rtl/engines/jmr_ft245_async.sv \

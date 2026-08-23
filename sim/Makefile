@@ -97,6 +97,8 @@ CORE_SRCS := \
 	$(RTL)/engines/jmr_video_vram.sv \
 	$(RTL)/engines/jmr_console_engine.sv \
 	$(RTL)/engines/jmr_mini_fb.sv \
+	$(RTL)/engines/jmr_fb_present.sv \
+	$(RTL)/engines/jmr_fb_scanout.sv \
 	$(RTL)/engines/jmr_rectdemo_engine.sv \
 	$(RTL)/engines/jmr_value.sv \
 	$(RTL)/engines/jmr_js_vm_pkg.sv \

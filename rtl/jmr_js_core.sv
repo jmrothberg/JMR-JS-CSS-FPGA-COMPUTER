@@ -33,7 +33,9 @@ module jmr_js_core #(
     output logic [7:0]  scan_data,
     // Mini-canvas scanout (game mode) — native 640×480
     output logic        game_mode,
-    input  logic [18:0] fb_raddr,
+    input  logic [18:0] fb_raddr, // Session-1: unused (scanout is DDR3-side)
+    input  logic [9:0]  fb_x,
+    input  logic [9:0]  fb_y,
     output logic [7:0]  fb_rdata,
     // NEW: tether FB dump (core clk)
     input  logic [18:0] dump_fb_raddr = 19'd0,
@@ -223,7 +225,7 @@ module jmr_js_core #(
         .code_we(code_we), .code_waddr(code_waddr), .code_wdata(code_wdata),
         .sram_req(cons_sram_req), .sram_we(cons_sram_we),
         .sram_addr(cons_sram_addr), .sram_wdata(cons_sram_wdata),
-        .sram_ack(sram_ack && (sram_owner == 2'd1)),
+        .sram_ack(sram_ack && (sram_owner == 3'd2)),
         .sram_rdata(sram_rdata),
         .pal_we(pal_we), .pal_waddr(pal_waddr), .pal_wdata(pal_wdata),
         .stor_open(stor_open), .stor_mode(stor_mode), .stor_chan(stor_chan),
@@ -263,13 +265,41 @@ module jmr_js_core #(
         .spi_sck(sd_sck), .spi_mosi(sd_mosi), .spi_miso(sd_miso), .spi_cs_n(sd_cs_n)
     );
 
+    // Session-1 (2026-08-23): single persistent draw bank; present engine
+    // streams it to the DDR3 front; scanout prefetches lines back.
+    logic [18:0] fbp_copy_raddr;
+    logic [7:0]  fbp_copy_rdata;
+    logic        fb_present_busy;
+    logic        fbp_sram_req, fbp_sram_we;
+    logic [20:0] fbp_sram_addr;
+    logic [15:0] fbp_sram_wdata;
+    logic        scan_sram_req;
+    logic [20:0] scan_sram_addr;
     jmr_mini_fb u_fb (
-        .wr_clk(clk), .rd_clk(pixel_clk), .rst_n(rst_n),
-        .we(fb_we), .waddr(fb_waddr), .wdata(fb_wdata), .swap(fb_swap),
-        .raddr(fb_raddr), .rdata(fb_rdata),
+        .wr_clk(clk), .rst_n(rst_n),
+        .we(fb_we), .waddr(fb_waddr), .wdata(fb_wdata),
+        .copy_raddr(fbp_copy_raddr), .copy_rdata(fbp_copy_rdata),
         .dump_raddr(vm_dump_sel ? vm_dump_addr : dump_fb_raddr),
-        .dump_rdata(dump_fb_rdata),
-        .dump_back_rdata(dump_back_rdata)
+        .dump_rdata(dump_fb_rdata)
+    );
+    // canvas is single-surface now: back/front dumps are the same data
+    assign dump_back_rdata = dump_fb_rdata;
+    jmr_fb_present u_fbpres (
+        .clk(clk), .rst_n(rst_n),
+        .swap(fb_swap), .busy(fb_present_busy),
+        .copy_raddr(fbp_copy_raddr), .copy_rdata(fbp_copy_rdata),
+        .sram_req(fbp_sram_req), .sram_we(fbp_sram_we),
+        .sram_addr(fbp_sram_addr), .sram_wdata(fbp_sram_wdata),
+        .sram_ack(sram_ack && (sram_owner == 3'd4))
+    );
+    jmr_fb_scanout u_fbscan (
+        .clk(clk), .rst_n(rst_n),
+        .sram_req(scan_sram_req), .sram_addr(scan_sram_addr),
+        .sram_rdata(sram_rdata),
+        .sram_ack(sram_ack && (sram_owner == 3'd1)),
+        .pixel_clk(pixel_clk),
+        .fb_x(fb_x), .fb_y(fb_y),
+        .fb_rdata(fb_rdata)
     );
 
     jmr_rectdemo_engine u_demo (
@@ -307,12 +337,13 @@ module jmr_js_core #(
         .busy(vm_busy), .done(vm_done),
         .fb_we(vm_fb_we), .fb_waddr(vm_fb_waddr),
         .fb_wdata(vm_fb_wdata), .fb_swap(vm_fb_swap),
+        .fb_present_busy(fb_present_busy),
         .fb_dump_addr(vm_dump_addr), .fb_dump_sel(vm_dump_sel),
         .fb_dump_back(dump_back_rdata),
         .fb_dump_front(dump_fb_rdata),
         .sram_req(vm_sram_req), .sram_addr(vm_sram_addr),
         .sram_we(vm_sram_we), .sram_wdata(vm_sram_wdata),
-        .sram_rdata(sram_rdata), .sram_ack(sram_ack && (sram_owner == 2'd3))
+        .sram_rdata(sram_rdata), .sram_ack(sram_ack && (sram_owner == 3'd5))
     );
 
     // Asset-SRAM arbiter — console (load) wins; the VM reads sprite pixels
@@ -320,32 +351,43 @@ module jmr_js_core #(
     // write) at the top of the bank. The two masters still never overlap
     // (load completes before vm_start).
     // Owner is latched per transaction so a request that arrives mid-flight
-    // cannot steal the address/ack. Priority: console (load) > work RAM > VM.
-    logic [1:0] sram_owner_q;
-    logic [1:0] sram_owner;
+    // cannot steal the address/ack. Priority (Session-1): scanout line
+    // prefetch is TOP (a starved line buffer is visible glass) > console
+    // (load) > work RAM > FB present > VM.
+    logic [2:0] sram_owner_q;
+    logic [2:0] sram_owner;
     always_comb begin
         sram_owner = sram_owner_q;
-        if (sram_owner_q == 2'd0) begin
-            if (cons_sram_req)     sram_owner = 2'd1;
-            else if (work_req)     sram_owner = 2'd2;
-            else if (vm_sram_req)  sram_owner = 2'd3;
+        if (sram_owner_q == 3'd0) begin
+            if (scan_sram_req)      sram_owner = 3'd1;
+            else if (cons_sram_req) sram_owner = 3'd2;
+            else if (work_req)      sram_owner = 3'd3;
+            else if (fbp_sram_req)  sram_owner = 3'd4;
+            else if (vm_sram_req)   sram_owner = 3'd5;
         end
     end
     always_ff @(posedge clk) begin
-        if (!rst_n) sram_owner_q <= 2'd0;
-        else        sram_owner_q <= sram_ack ? 2'd0 : sram_owner;
+        if (!rst_n) sram_owner_q <= 3'd0;
+        else        sram_owner_q <= sram_ack ? 3'd0 : sram_owner;
     end
-    assign sram_req   = (sram_owner == 2'd1) ? cons_sram_req :
-                        (sram_owner == 2'd2) ? work_req :
-                        (sram_owner == 2'd3) ? vm_sram_req : 1'b0;
-    assign sram_we    = (sram_owner == 2'd1) ? cons_sram_we :
-                        (sram_owner == 2'd2) ? work_we_l : vm_sram_we;
-    assign sram_addr  = (sram_owner == 2'd1) ? cons_sram_addr :
-                        (sram_owner == 2'd2) ? (WORK_SRAM_BASE + 21'(work_addr_l)) :
+    assign sram_req   = (sram_owner == 3'd1) ? scan_sram_req :
+                        (sram_owner == 3'd2) ? cons_sram_req :
+                        (sram_owner == 3'd3) ? work_req :
+                        (sram_owner == 3'd4) ? fbp_sram_req :
+                        (sram_owner == 3'd5) ? vm_sram_req : 1'b0;
+    assign sram_we    = (sram_owner == 3'd2) ? cons_sram_we :
+                        (sram_owner == 3'd3) ? work_we_l :
+                        (sram_owner == 3'd4) ? fbp_sram_we :
+                        (sram_owner == 3'd5) ? vm_sram_we : 1'b0;
+    assign sram_addr  = (sram_owner == 3'd1) ? scan_sram_addr :
+                        (sram_owner == 3'd2) ? cons_sram_addr :
+                        (sram_owner == 3'd3) ? (WORK_SRAM_BASE + 21'(work_addr_l)) :
+                        (sram_owner == 3'd4) ? fbp_sram_addr :
                                                vm_sram_addr;
-    assign sram_wdata = (sram_owner == 2'd1) ? cons_sram_wdata :
-                        (sram_owner == 2'd2) ? {8'd0, work_wdata_l} : vm_sram_wdata;
-    assign work_ack   = sram_ack && (sram_owner == 2'd2);
+    assign sram_wdata = (sram_owner == 3'd2) ? cons_sram_wdata :
+                        (sram_owner == 3'd3) ? {8'd0, work_wdata_l} :
+                        (sram_owner == 3'd4) ? fbp_sram_wdata : vm_sram_wdata;
+    assign work_ack   = sram_ack && (sram_owner == 3'd3);
 
     // NEW: behavioral 4 MB SRAM (FPGA-SIM, SRAM_INTERNAL=1). Board uses
     // #(.SRAM_INTERNAL(0)) and the MIG DDR3 bridge on these ports.

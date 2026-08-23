@@ -41,6 +41,7 @@ module jmr_js_vm #(
     output logic        fb_swap,
     // NEW: getImageData reads the back bank (FM _nat_get_image_data twin).
     // Muxed onto mini_fb dump_raddr; dump_back is the non-front bank.
+    input  logic        fb_present_busy, // Session-1: DDR3 present in flight
     output logic [18:0] fb_dump_addr,
     output logic        fb_dump_sel,
     input  logic [7:0]  fb_dump_back,
@@ -162,7 +163,7 @@ module jmr_js_vm #(
     // Value64 is a gated scalar island. It deliberately does not reuse the
     // legacy Q16/tag stack, so a FLAG_VALUE64 image cannot alias old state.
     (* ram_style = "block" *) logic [63:0] vconsts [0:MAX_CONSTS-1];
-    (* ram_style = "distributed" *) logic [63:0] vstack [0:STACK_DEPTH-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [63:0] vstack [0:STACK_DEPTH-1] /*verilator public_flat_rd*/;
     // TOS window (FFs) + 1W1R BRAM. CPU combo reads vst_peek[]; writes vst_wr().
     // Vivado 8-7186: ram_style=block is ignored if the CPU always_ff also
     // combo-reads the array (LUTRAM, blows 30 MHz).
@@ -222,8 +223,8 @@ module jmr_js_vm #(
     logic [15:0] vobj_cls [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     // PYTHON _value_object_protos / _value_function_prototypes. `var Stage =
     // function` + Stage.prototype.createItem is not a JSB class-method table.
-    logic [63:0] vobj_proto [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
-    logic [63:0] vfn_proto [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [63:0] vobj_proto [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [63:0] vfn_proto [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     // Object/array slots are 1-D SRAM after the MAX_* localparams (not 2-D
     // combo arrays — Synth 8-4556 / ASIC SRAM).
     (* ram_style = "distributed" *) logic [11:0] vfn_gen [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
@@ -235,8 +236,8 @@ module jmr_js_vm #(
     (* ram_style = "distributed" *) logic vfn_mark [0:OBJ_PHYS-1];
     logic [15:0] vfn_entry [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     logic [5:0] vfn_nparam [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
-    logic [63:0] vfn_env [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
-    logic [63:0] vfn_bound_this [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [63:0] vfn_env [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [63:0] vfn_bound_this [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     logic [2:0] vfn_flags [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     (* ram_style = "distributed" *) logic varr_valid [0:MAX_ARR-1] /*verilator public_flat_rd*/;
     (* ram_style = "distributed" *) logic [11:0] varr_gen [0:MAX_ARR-1] /*verilator public_flat_rd*/;
@@ -252,7 +253,7 @@ module jmr_js_vm #(
     (* ram_style = "distributed" *) logic varr_mark [0:MAX_ARR-1];
     (* ram_style = "distributed" *) logic venv_valid [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
     (* ram_style = "distributed" *) logic [11:0] venv_gen [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
-    logic [63:0] venv_parent [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [63:0] venv_parent [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
     logic [4:0] venv_len [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
     // Env slots are 1-D venv_slot SRAM (not 2-D combo — Synth 8-4556).
     logic [63:0] vthis_ff;
@@ -654,7 +655,7 @@ module jmr_js_vm #(
     localparam int NAME_CAP = 16384; // measured peak 3,644 bytes (PACMAN); 4.5x headroom, loud refuse past cap
     // UG901 RAM_STYLE=block (not a heuristic). Read process below matches
     // simple_dual_one_clock.v — not the 40-array mux.
-    (* ram_style = "distributed" *) logic [7:0]  name_mem [0:NAME_CAP-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [7:0]  name_mem [0:NAME_CAP-1] /*verilator public_flat_rd*/;
     logic        name_we;
     logic [14:0] name_waddr;
     logic [7:0]  name_wdata;
@@ -722,7 +723,7 @@ module jmr_js_vm #(
     logic [7:0]  fpx_acc;               // digits seen while parsing ctx.font
     logic [7:0]  fp_left;               // bytes left in the font string
     // NEW: JSON/text scratch (stringify/parse/replace) — VM cap, sticky ovf
-    (* ram_style = "distributed" *) logic [7:0]  json_mem [0:JSON_CAP-1];
+    (* ram_style = "block" *) logic [7:0]  json_mem [0:JSON_CAP-1];
     logic        json_we;
     logic [12:0] json_waddr;
     logic [7:0]  json_wdata;
@@ -7586,38 +7587,22 @@ module jmr_js_vm #(
                     end else clr_idx <= clr_idx + 19'd1;
                 end
                 S_FB_SYNC: begin
-                    // Post-present bank sync: new-back := new-front,
-                    // 1 px/cycle like S_CLEAR / S_IMGD_GET. fb_swap pulsed
-                    // on the entry beat, so front is the just-presented
-                    // frame and fb_we still targets the (stale) back.
-                    // dump data is registered one beat behind dump_addr;
-                    // the armed beat covers slot 0 (S_IMGD discipline).
-                    fb_dump_sel <= 1'b1;
+                    // Session-1: the two-bank copy-back is gone — the draw
+                    // bank IS the persistent canvas. This state now only
+                    // waits out the DDR3 present (fb_swap pulsed on entry;
+                    // busy asserts the following beat, so arm one beat).
                     if (!fbs_armed)
                         fbs_armed <= 1'b1;
-                    else begin
-                        // measured: fb_dump_front at this beat is
-                        // mem[clr_idx - 1] (addr FF + BRAM output reg =
-                        // 2-beat lag; the probe showed a +1px shift when
-                        // this wrote at clr_idx). Trail the write by one.
-                        if (clr_idx != 19'd0) begin
-                            fb_we <= 1'b1;
-                            fb_waddr <= clr_idx - 19'd1;
-                            fb_wdata <= fb_dump_front;
-                        end
-                        fb_dump_addr <= clr_idx + 19'd1;
-                        if (clr_idx == 19'(FB_PIXELS)) begin
-                            fbs_armed <= 1'b0;
-                            fb_dump_sel <= 1'b0;
-                            clr_idx <= '0;
-                            hs_vgc_clear_i(14'd0);
-                            hs_vgc_qr(14'd0);
-                            hs_vgc_qw(14'd0);
-                            hs_vgc_halt_after(1'b1);
-                            hs_vgc_wait_after(1'b1);
-                            hs_st(S_V64_GC_CLEAR);
-                        end else
-                            clr_idx <= clr_idx + 19'd1;
+                    else if (!fb_present_busy) begin
+                        fbs_armed <= 1'b0;
+                        clr_idx <= '0;
+                        fb_dump_sel <= 1'b0;
+                        hs_vgc_clear_i(14'd0);
+                        hs_vgc_qr(14'd0);
+                        hs_vgc_qw(14'd0);
+                        hs_vgc_halt_after(1'b1);
+                        hs_vgc_wait_after(1'b1);
+                        hs_st(S_V64_GC_CLEAR);
                     end
                 end
                 S_RECT: begin

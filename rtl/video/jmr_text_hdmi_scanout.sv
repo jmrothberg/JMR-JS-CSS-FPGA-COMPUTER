@@ -11,6 +11,10 @@ module jmr_text_hdmi_scanout #(
     input  logic [9:0]  cursor_cell,
     input  logic        game_mode,
     output logic [18:0] fb_raddr,
+    // NEW 2026-08-23: raw beam position for the DDR3 line prefetcher
+    // (avoids a divide-by-640 on the linear address).
+    output logic [9:0]  fb_x,
+    output logic [9:0]  fb_y,
     input  logic [7:0]  fb_rdata,
     // NEW: ASET palette (pixel-clk registered BRAM in the core)
     output logic [7:0]  pal_index,
@@ -80,6 +84,8 @@ module jmr_text_hdmi_scanout #(
     assign vram_addr = in_text ? {row, col} : 10'd0;
     // NEW: 1:1 FB address (native 640×480)
     assign fb_raddr = visible ? (19'(vcnt) * 19'd640 + 19'(hcnt)) : 19'd0;
+    assign fb_x = 10'(hcnt);
+    assign fb_y = 10'(vcnt);
     // Palette read is registered; pal_rgb lines up with fb_q (same 1-cycle delay).
     assign pal_index = fb_rdata;
 

@@ -24,18 +24,13 @@ static Vjmr_js_core* top = nullptr;
 
 // 2026-08-21 fit: mini_fb banks are pow2-chunked (256K+32K+8K+4K).
 // Route a flat pixel index to the right chunk of the selected bank.
-static inline uint8_t fb_bank_pix(const Vjmr_js_core___024root* r, bool bank0, unsigned i) {
-    if (i < 262144u)
-        return bank0 ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c0[i]
-                     : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1_c0[i];
-    if (i < 294912u)
-        return bank0 ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c1[i - 262144u]
-                     : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1_c1[i - 262144u];
-    if (i < 303104u)
-        return bank0 ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c2[i - 294912u]
-                     : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1_c2[i - 294912u];
-    return bank0 ? (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c3[i - 303104u]
-                 : (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem1_c3[i - 303104u];
+// Session-1 (2026-08-23): single persistent draw bank — the canvas. FB?
+// reads it directly (post-present it equals the DDR3 front image exactly).
+static inline uint8_t fb_bank_pix(const Vjmr_js_core___024root* r, bool, unsigned i) {
+    if (i < 262144u) return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c0[i];
+    if (i < 294912u) return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c1[i - 262144u];
+    if (i < 303104u) return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c2[i - 294912u];
+    return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c3[i - 303104u];
 }
 
 static const unsigned VM_MAX_OBJ = 960u;   // MUST track rtl MAX_OBJ (bug #75: stale caps here count OOB garbage)
@@ -1035,7 +1030,7 @@ static std::string fb_export_b64() {
     // ticks ran the VM past the FRAME swap — full-canvas fillRect looked
     // black). FBBANK? already reads mem0/mem1 this way.
     auto* r = top->rootp;
-    unsigned front = unsigned(r->jmr_js_core__DOT__u_fb__DOT__front);
+    unsigned front = 1u; // single-bank canvas
     for (int i = 0; i < W * H; i++)
         full[(size_t)i] = fb_bank_pix(r, front, (unsigned)i);
     return b64_encode(full.data(), full.size());
@@ -1763,7 +1758,7 @@ int main(int argc, char** argv) {
                 }
             }
             uint64_t canvas_hash = FNV0;
-            unsigned front = unsigned(r->jmr_js_core__DOT__u_fb__DOT__front);
+            unsigned front = 1u; // single-bank canvas
             for (unsigned i = 0; i < 307200u; i++) {
                 uint8_t px = fb_bank_pix(r, front, i);
                 canvas_hash = fnv_byte(canvas_hash, px);
@@ -2152,7 +2147,7 @@ int main(int argc, char** argv) {
         if (line.rfind("FBBOX ", 0) == 0) {
             auto* r = top->rootp;
             unsigned want = std::stoul(line.substr(6)) & 0xff;
-            unsigned front = unsigned(r->jmr_js_core__DOT__u_fb__DOT__front);
+            unsigned front = 1u; // single-bank canvas
             int minx = 9999, miny = 9999, maxx = -1, maxy = -1; long cnt = 0;
             for (int y = 0; y < 480; y++)
                 for (int x = 0; x < 640; x++) {
@@ -2174,7 +2169,7 @@ int main(int argc, char** argv) {
         // NEW: FBHIST? — front-buffer palette-index histogram (nonzero bins)
         if (line == "FBHIST?") {
             auto* r = top->rootp;
-            unsigned front = unsigned(r->jmr_js_core__DOT__u_fb__DOT__front);
+            unsigned front = 1u; // single-bank canvas
             static uint32_t bins[256];
             for (int i = 0; i < 256; i++) bins[i] = 0;
             for (int i = 0; i < 640*480; i++) {
@@ -2655,7 +2650,7 @@ int main(int argc, char** argv) {
                 if (fb_bank_pix(top->rootp, false, i)) nz1++;
             }
             std::cout << "FBRAW nz0=" << nz0 << " nz1=" << nz1
-                      << " front=" << unsigned(top->rootp->jmr_js_core__DOT__u_fb__DOT__front)
+                      << " front=" << 1u /* single-bank canvas */
                       << std::endl;
             continue;
         }

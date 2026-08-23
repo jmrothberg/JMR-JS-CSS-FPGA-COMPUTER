@@ -154,6 +154,7 @@ module top_nexys_video (
     logic       ready_lit, game_mode;
     logic [5:0] joy_out;
     logic [18:0] fb_raddr;
+    logic [9:0]  fb_x, fb_y;
     logic [7:0]  fb_rdata;
     logic [7:0]  pal_index;
     logic [23:0] pal_rgb;
@@ -212,7 +213,7 @@ module top_nexys_video (
         .cursor(cursor), .ready_lit(ready_lit),
         .scan_addr(scan_addr), .scan_data(scan_data),
         .game_mode(game_mode),
-        .fb_raddr(fb_raddr), .fb_rdata(fb_rdata),
+        .fb_raddr(fb_raddr), .fb_x(fb_x), .fb_y(fb_y), .fb_rdata(fb_rdata),
         .dump_fb_raddr(dump_fb_raddr), .dump_fb_rdata(dump_fb_rdata),
         .pal_raddr(pal_index), .pal_rdata(pal_rgb),
         .sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso), .sd_cs_n(sd_cs_n),
@@ -303,7 +304,7 @@ module top_nexys_video (
         .vram_rdata(scan_data), .vram_addr(scan_addr),
         .cursor_cell(cursor),
         .game_mode(game_mode),
-        .fb_raddr(fb_raddr), .fb_rdata(fb_rdata),
+        .fb_raddr(fb_raddr), .fb_x(fb_x), .fb_y(fb_y), .fb_rdata(fb_rdata),
         .pal_index(pal_index), .pal_rgb(pal_rgb),
         .vid_pData(vid_pData), .vid_pVDE(vid_pVDE),
         .vid_pHSync(vid_pHSync), .vid_pVSync(vid_pVSync)
