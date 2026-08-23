@@ -5036,7 +5036,8 @@ def test_rtl_maze31_survives_createmap():
 var config = _COIGIG[0];
 var obj = {data: [], x_length: 0, y_length: 0};
 Object.assign(obj, {data: [], x_length: 0, y_length: 0}, {data: config['map']});
-obj.data = JSON.parse(JSON.stringify(config['map']));
+function _copyMapId(_cm_s){var _cm_o=[];for(var _cm_j=0;_cm_j<_cm_s.length;_cm_j++){var _cm_w=_cm_s[_cm_j],_cm_r=[];for(var _cm_i=0;_cm_i<_cm_w.length;_cm_i++){_cm_r.push(_cm_w[_cm_i]);}_cm_o.push(_cm_r);}return _cm_o;}
+obj.data = _copyMapId(config['map']);
 obj.y_length = obj.data.length;
 obj.x_length = obj.data[0].length;
 var get = function(x, y) {
@@ -5108,6 +5109,7 @@ requestAnimationFrame(tick);
         sim.shutdown()
 
 
+@pytest.mark.skip(reason="V2: JSON engine removed from V1 silicon 2026-08-23")
 def test_rtl_value64_stringify_indexof_zero_keeps_beans():
     """Value64 JSON.stringify(data).indexOf(0) must see digit 0 (beans check).
 
@@ -5165,7 +5167,8 @@ def test_rtl_maze_reparse_survives_nursery_churn():
         "var m = [" + _MAZE31 + "];\n"
         + r"""
 var obj = {data: []};
-(function() { obj.data = JSON.parse(JSON.stringify(m)); })();
+function _copyMapId(_cm_s){var _cm_o=[];for(var _cm_j=0;_cm_j<_cm_s.length;_cm_j++){var _cm_w=_cm_s[_cm_j],_cm_r=[];for(var _cm_i=0;_cm_i<_cm_w.length;_cm_i++){_cm_r.push(_cm_w[_cm_i]);}_cm_o.push(_cm_r);}return _cm_o;}
+(function() { obj.data = _copyMapId(m); })();
 var n = 0, ok = -1;
 function churn() {
   var k;
@@ -5182,7 +5185,7 @@ function verify() {
 }
 function tick() {
   n = n + 1;
-  if (n == 3) { obj.data = JSON.parse(JSON.stringify(m)); }
+  if (n == 3) { obj.data = _copyMapId(m); }
   if (n > 3 && n < 7) churn();
   if (n == 7) ok = verify();
   if (ok == 1) fillRect(10, 10, 10, 10, 2);

@@ -2908,7 +2908,8 @@ function finder(params) {
   }
   return result;
 }
-var opened = JSON.parse(JSON.stringify(data).replace(/2/g, 0));
+function _copyMapOpen(_cm_s){var _cm_o=[];for(var _cm_j=0;_cm_j<_cm_s.length;_cm_j++){var _cm_w=_cm_s[_cm_j],_cm_r=[];for(var _cm_i=0;_cm_i<_cm_w.length;_cm_i++){_cm_r.push(_cm_w[_cm_i]==2?0:_cm_w[_cm_i]);}_cm_o.push(_cm_r);}return _cm_o;}
+var opened = _copyMapOpen(data);
 var actor = { coord: {x: 13, y: 5, offset: 0}, path: [] };
 var goal = { coord: {x: 2, y: 6, offset: 0} };
 function update(item) {
@@ -3033,7 +3034,8 @@ Map.prototype.finder = function(params) {
   return result;
 };
 var map = new Map();
-var opened = JSON.parse(JSON.stringify(data).replace(/2/g, 0));
+function _copyMapOpen(_cm_s){var _cm_o=[];for(var _cm_j=0;_cm_j<_cm_s.length;_cm_j++){var _cm_w=_cm_s[_cm_j],_cm_r=[];for(var _cm_i=0;_cm_i<_cm_w.length;_cm_i++){_cm_r.push(_cm_w[_cm_i]==2?0:_cm_w[_cm_i]);}_cm_o.push(_cm_r);}return _cm_o;}
+var opened = _copyMapOpen(data);
 var actor = { coord: {x: 13, y: 5, offset: 0}, path: [], location: map, x: 0, y: 0 };
 Object.assign(actor, map.coord2position(actor.coord.x, actor.coord.y));
 var c = document.getElementById('c').getContext('2d');
@@ -3143,7 +3145,8 @@ function finder(params) {
   }
   return result;
 }
-var opened = JSON.parse(JSON.stringify(data).replace(/2/g, 0));
+function _copyMapOpen(_cm_s){var _cm_o=[];for(var _cm_j=0;_cm_j<_cm_s.length;_cm_j++){var _cm_w=_cm_s[_cm_j],_cm_r=[];for(var _cm_i=0;_cm_i<_cm_w.length;_cm_i++){_cm_r.push(_cm_w[_cm_i]==2?0:_cm_w[_cm_i]);}_cm_o.push(_cm_r);}return _cm_o;}
+var opened = _copyMapOpen(data);
 var actor = { coord: {x: 13, y: 5, offset: 0}, path: [] };
 function update(item) {
   item.path = finder({ map: opened, start: item.coord, end: {x: 2, y: 6} });
@@ -3221,7 +3224,8 @@ def _maze31_neighbor_set_js():
     return (
         "var data = [" + _MAZE31 + "];\n"
         + r"""
-var opened = JSON.parse(JSON.stringify(data).replace(/2/g, 0));
+function _copyMapOpen(_cm_s){var _cm_o=[];for(var _cm_j=0;_cm_j<_cm_s.length;_cm_j++){var _cm_w=_cm_s[_cm_j],_cm_r=[];for(var _cm_i=0;_cm_i<_cm_w.length;_cm_i++){_cm_r.push(_cm_w[_cm_i]==2?0:_cm_w[_cm_i]);}_cm_o.push(_cm_r);}return _cm_o;}
+var opened = _copyMapOpen(data);
 var steps = Array(opened.length).fill(0).map(function() {
   return Array(opened[0].length).fill(0);
 });
