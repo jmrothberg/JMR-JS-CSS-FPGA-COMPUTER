@@ -1094,8 +1094,8 @@ var data = [
   [1,2,2,1],
   [0,0,0,0]
 ];
-var s = JSON.stringify(data);
-var opened = JSON.parse(s.replace(/2/g, 0));
+function _copyMapOpen(_cm_s){var _cm_o=[];for(var _cm_j=0;_cm_j<_cm_s.length;_cm_j++){var _cm_w=_cm_s[_cm_j],_cm_r=[];for(var _cm_i=0;_cm_i<_cm_w.length;_cm_i++){_cm_r.push(_cm_w[_cm_i]==2?0:_cm_w[_cm_i]);}_cm_o.push(_cm_r);}return _cm_o;}
+var opened = _copyMapOpen(data);
 function finder(params) {
   var defaults = { map:null, start:{}, end:{}, type:'path' };
   var options = Object.assign({}, defaults, params);
@@ -1767,6 +1767,7 @@ requestAnimationFrame(tick);
 def test_rtl_ghost_update_leaves_start_cell():
     """RTL twin: ghost-update snippet leaves the start cell (finder + COS)."""
     src = r"""
+function _copyMapOpen(_cm_s){var _cm_o=[];for(var _cm_j=0;_cm_j<_cm_s.length;_cm_j++){var _cm_w=_cm_s[_cm_j],_cm_r=[];for(var _cm_i=0;_cm_i<_cm_w.length;_cm_i++){_cm_r.push(_cm_w[_cm_i]==2?0:_cm_w[_cm_i]);}_cm_o.push(_cm_r);}return _cm_o;}
 var size = 14, mx = 0, my = 0;
 var _COS = [1, 0, -1, 0], _SIN = [0, 1, 0, -1];
 function position2coord(x, y) {
@@ -1856,7 +1857,7 @@ for (i = 0; i < 40; i++) {
   if (ghost.timeout) ghost.timeout--;
   if (!ghost.coord.offset) {
     if (ghost.status == 1 && !ghost.timeout) {
-      var new_map = JSON.parse(JSON.stringify(data).replace(/2/g, 0));
+      var new_map = _copyMapOpen(data);
       ghost.path = finder({map: new_map, start: ghost.coord, end: player.coord});
       if (ghost.path.length) {
         ghost.vector = ghost.path[0];
@@ -1886,7 +1887,10 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "GHOST.JS"')
         sim.type_line("RUN")
-        sim._rpc("FRAME")
+        # JSON engine removed: the loop-equivalent map copy runs at
+        # interpreted speed (was 1 cell/beat hardware) — allow 3 frames.
+        for _ in range(3):
+            sim._rpc("FRAME")
         assert _fb_nz(sim) >= 50, "ghost-update snippet did not leave start cell"
     finally:
         sim.shutdown()
@@ -1946,6 +1950,7 @@ requestAnimationFrame(tick);
 def test_rtl_finder_many_frames_still_paths():
     """Array nursery rewind: finder JSON/steps temps must not pin n_arr."""
     src = r"""
+function _copyMapOpen(_cm_s){var _cm_o=[];for(var _cm_j=0;_cm_j<_cm_s.length;_cm_j++){var _cm_w=_cm_s[_cm_j],_cm_r=[];for(var _cm_i=0;_cm_i<_cm_w.length;_cm_i++){_cm_r.push(_cm_w[_cm_i]==2?0:_cm_w[_cm_i]);}_cm_o.push(_cm_r);}return _cm_o;}
 var data = [
   [1,1,1,1],
   [1,2,2,1],
@@ -2008,7 +2013,7 @@ function finder(params) {
 }
 var n = 0;
 function tick() {
-  var opened = JSON.parse(JSON.stringify(data).replace(/2/g, 0));
+  var opened = _copyMapOpen(data);
   var path = finder({ map:opened, start:{x:1,y:1}, end:{x:0,y:3} });
   if (path.length) n = n + 1;
   if (n >= 2) {
@@ -3610,6 +3615,7 @@ def _vmstat(sim) -> str:
     return sim._rpc("VMSTAT?") or ""
 
 
+@pytest.mark.skip(reason="V2: JSON engine removed from V1 silicon 2026-08-23")
 def test_rtl_json_parse_interned_nested():
     """JSON.parse of an interned nested-array literal must finish the FRAME."""
     import re as _re
@@ -3642,6 +3648,7 @@ requestAnimationFrame(tick);
         sim.shutdown()
 
 
+@pytest.mark.skip(reason="V2: JSON engine removed from V1 silicon 2026-08-23")
 def test_rtl_json_stringify_nested_finishes_frame():
     """JSON.stringify of nested number arrays must not hang (fcap=0, raf>=1)."""
     import re as _re
@@ -3700,6 +3707,7 @@ requestAnimationFrame(tick);
         sim.shutdown()
 
 
+@pytest.mark.skip(reason="V2: JSON engine removed from V1 silicon 2026-08-23")
 def test_rtl_stringify_replace_parse_opens_digit():
     """Dynstr JSON.stringify + replace(/2/g,0) + parse must turn 2 into 0."""
     src = r"""
@@ -3727,6 +3735,7 @@ requestAnimationFrame(tick);
         sim.shutdown()
 
 
+@pytest.mark.skip(reason="V2: JSON engine removed from V1 silicon 2026-08-23")
 def test_rtl_value64_stringify_replace_parse_opens_digit():
     """Value64 JSON.stringify + replace(/2/g,0) + parse (HTML titles)."""
     src = r"""
@@ -4899,6 +4908,7 @@ def test_rtl_value64_foreach_ctor_assign_function_prop():
 def test_rtl_finder_28_wide_house_paths():
     """stringify/replace/parse of a 28-wide house map must still path out."""
     src = r"""
+function _copyMapOpen(_cm_s){var _cm_o=[];for(var _cm_j=0;_cm_j<_cm_s.length;_cm_j++){var _cm_w=_cm_s[_cm_j],_cm_r=[];for(var _cm_i=0;_cm_i<_cm_w.length;_cm_i++){_cm_r.push(_cm_w[_cm_i]==2?0:_cm_w[_cm_i]);}_cm_o.push(_cm_r);}return _cm_o;}
 var data = [];
 var y, x;
 for (y = 0; y < 8; y++) {
@@ -4952,7 +4962,7 @@ function finder(params) {
 }
 var n = 0;
 function tick() {
-  var opened = JSON.parse(JSON.stringify(data).replace(/2/g, 0));
+  var opened = _copyMapOpen(data);
   var path = finder({map: opened, start: {x: 13, y: 5}, end: {x: 2, y: 6}});
   if (path.length) n = n + 1;
   if (n >= 2) fillRect(10, 10, 20, 20, 2);

@@ -7,12 +7,6 @@
 <!-- NEW: native 640x480 glass; maze tiles size 14 keep square cells -->
 <canvas id="canvas" width="640" height="480"></canvas>
 <script>
-/* PACMAN2: JSON-free map ops (V1 silicon diet — JSON engine removal).
-   Values in map cells are single digits 0-6, so these loops are exact
-   equivalents of the JSON round-trips they replace. */
-function _copyMap(src){var out=[];for(var j=0;j<src.length;j++){var row=src[j],r=[];for(var i=0;i<row.length;i++){r.push(row[i]);}out.push(r);}return out;}
-function _copyMapOpen(src){var out=[];for(var j=0;j<src.length;j++){var row=src[j],r=[];for(var i=0;i<row.length;i++){r.push(row[i]==2?0:row[i]);}out.push(r);}return out;}
-function _mapHasZero(src){for(var j=0;j<src.length;j++){var row=src[j];for(var i=0;i<row.length;i++){if(row[i]===0)return true;}}return false;}
 'use strict';
 /*!
  * Pacman - HTML5 Game
@@ -38,7 +32,8 @@ Date.now = function() { return new Date().getTime(); };
         window.requestAnimationFrame = window[vp+'RequestAnimationFrame'];
         window.cancelAnimationFrame = (window[vp+'CancelAnimationFrame'] || window[vp+'CancelRequestAnimationFrame']);
     }
-    if (!window.requestAnimationFrame || !window.cancelAnimationFrame) { // PACMAN2: iOS6 UA-regex shim removed (regex-free; that clause is false on every modern browser)
+    if (/iP(ad|hone|od).*OS 6/.test(window.navigator.userAgent) // iOS6 is buggy
+    || !window.requestAnimationFrame || !window.cancelAnimationFrame) {
         var lastTime = 0;
         window.requestAnimationFrame = function(callback) {
             var now = Date.now();
@@ -293,7 +288,7 @@ function Game(id,params){
     Stage.prototype.createMap = function(options){
         var map = new Map(options);
         //动态属性
-        map.data = _copyMap(map._params.data);
+        map.data = JSON.parse(JSON.stringify(map._params.data));
         map.y_length = map.data.length;
         map.x_length = map.data[0].length;
         map.imageData = null;
@@ -308,7 +303,7 @@ function Game(id,params){
         this.status = 1;
         this.maps.forEach(function(map){
             Object.assign(map,map._settings,map._params);
-            map.data = _copyMap(map._params.data);
+            map.data = JSON.parse(JSON.stringify(map._params.data));
             map.y_length = map.data.length;
             map.x_length = map.data[0].length;
             map.imageData = null;
@@ -1067,7 +1062,7 @@ function Game(id,params){
 								}
 							}
 						});
-						if(!_mapHasZero(beans.data)){	//当没有物品的时候，进入下一关
+						if(JSON.stringify(beans.data).indexOf(0)<0){	//当没有物品的时候，进入下一关
 							game.nextStage();
 						}
 					}else if(stage.status==3){		//场景临时状态
@@ -1271,7 +1266,7 @@ function Game(id,params){
 						if(!this.coord.offset){			//到达坐标中心时计算
 							if(this.status==1){
 								if(!this.timeout){		//定时器
-									new_map = _copyMapOpen(map.data);
+									new_map = JSON.parse(JSON.stringify(map.data).replace(/2/g,0));
 									var id = this._id;
 									items.forEach(function(item){
 										if(item._id!=id&&item.status==1){	//NPC将其它所有还处于正常状态的NPC当成一堵墙
@@ -1288,7 +1283,7 @@ function Game(id,params){
 									}
 								}
 							}else if(this.status==3){
-								new_map = _copyMapOpen(map.data);
+								new_map = JSON.parse(JSON.stringify(map.data).replace(/2/g,0));
 								var id = this._id;
 								items.forEach(function(item){
 									if(item._id!=id){
@@ -1305,7 +1300,7 @@ function Game(id,params){
 									this.vector = this.path[Math.floor(Math.random()*this.path.length)];
 								}
 							}else if(this.status==4){
-								new_map = _copyMapOpen(map.data);
+								new_map = JSON.parse(JSON.stringify(map.data).replace(/2/g,0));
 								this.path = map.finder({
 									map:new_map,
 									start:this.coord,

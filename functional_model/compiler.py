@@ -217,15 +217,19 @@ V1_WALL_NAMES = frozenset([
 import os as _os
 
 def _wall_ext_names() -> frozenset:
-    v = _os.environ.get("JMR_V1_WALL_EXT", "")
-    if not v:
-        return frozenset()
+    # 2026-08-23: JSON wall is LIVE BY DEFAULT — the gate passed
+    # (PACMAN2/INVADERS2 byte-identical, now shipping under the original
+    # filenames; originals in storage/*.V2ORIG). JMR_V1_ALLOW_JSON=1 is
+    # the archival escape for compiling the .V2ORIG titles.
     json_only = frozenset(["parse", "stringify"])
-    if v == "json":
-        return json_only
-    return json_only | frozenset(
-        ["find", "filter", "reduce", "map", "sort", "bind",
-         "replace", "test"])
+    if _os.environ.get("JMR_V1_ALLOW_JSON", ""):
+        json_only = frozenset()
+    v = _os.environ.get("JMR_V1_WALL_EXT", "")
+    if v == "1":
+        return json_only | frozenset(
+            ["find", "filter", "reduce", "map", "sort", "bind",
+             "replace", "test"])
+    return json_only
 
 class Compiler:
     def __init__(self, src: str) -> None:

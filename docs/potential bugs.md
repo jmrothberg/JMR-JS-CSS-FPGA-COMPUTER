@@ -322,6 +322,22 @@ data — but any NEW code that writes metadata and re-reads the same slot
 on the next beat will. If you add such a path, either forward the write
 (vol/vel bypass pattern) or arm the read one beat later.
 
+
+### #81 OPEN — callee `var` locals alias the caller's frame when called from a method (FM == RTL, both wrong)
+
+Minimal repro (2026-08-23, found converting the ghost-update fixture off
+JSON): a plain global function with `var i/j/row` locals, CALLED FROM AN
+OBJECT METHOD whose own scope uses the same names, loops forever — the
+callee's loop variables read/write the CALLER's bindings (i < row.length
+never terminates). The same function called from top level is correct.
+FM and RTL agree exactly (parity holds on the wrong answer), so no test
+caught it until a fixture collided. Likely the same root as the logged
+prototype-method parity break. Workaround until fixed: unique local
+names in functions callable from methods (PACMAN2's helpers and the
+suite fixtures now use `_cm_*` prefixes). Repro fixture:
+tests/test_rtl_snippets.py ghost-update test with the one-line
+`function f(src){var out,j,row,r,i...}` variant.
+
 ## RECURRING BUG CLASSES — read this before debugging anything
 
 Five patterns produced the overwhelming majority of the bugs in this file.

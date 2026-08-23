@@ -20,6 +20,21 @@ from hardware_model import js_vm as value64
 from hardware_model.js_vm import JsHwVm
 
 
+def _allow_json(fn):
+    """Fixture uses the pre-wall PACMAN JSON idiom but tests KEPT machinery
+    (finder/foreach/maze). These run on the Python FM/HM, where JSON still
+    exists; only the RTL engine was removed. Archival escape, per-test."""
+    import functools, os
+
+    @functools.wraps(fn)
+    def wrap(*a, **k):
+        os.environ["JMR_V1_ALLOW_JSON"] = "1"
+        try:
+            return fn(*a, **k)
+        finally:
+            os.environ.pop("JMR_V1_ALLOW_JSON", None)
+    return wrap
+
 def _run_js_frames(src: str, n_frames: int = 3) -> Machine:
     """Compile + run JS with rAF/timer drain (HTML bytecode path, no HTML file)."""
     m = Machine()
@@ -196,6 +211,7 @@ var left = item.timeout;
     assert m.vm.globals.get("left") == 2, m.vm.globals.get("left")
 
 
+@pytest.mark.skip(reason="V2: JSON engine removed from V1 silicon 2026-08-23")
 def test_json_stringify_replace_parse_nested_numbers():
     """stringify of nested number arrays + /2/g must open 'door' cells."""
     m = _run_js_frames(
@@ -211,6 +227,7 @@ var start = n[1][0];
     assert m.vm.globals.get("start") == 0, m.vm.globals.get("start")
 
 
+@_allow_json
 def test_array_fill_map_mini_finder():
     """Array(n).fill(0).map(() => Array(m).fill(0)) + truthy-cell early out."""
     m = _run_js_frames(
@@ -296,6 +313,7 @@ var finded = rec(0);
     assert m.vm.globals.get("finded") == 1, m.vm.globals.get("finded")
 
 
+@_allow_json
 def test_finder_opens_house_cell_and_paths():
     """stringify+replace+/2/g + real BFS from a closed (2) cell must path out.
 
@@ -644,6 +662,7 @@ switch (code.join('')) {
     assert fb[110 * w + 100] != 0, "quarter-arc occupancy missing"
 
 
+@_allow_json
 def test_ghost_update_leaves_start_cell():
     """Timeout + !offset + finder + COS step must leave the start cell."""
     m = _run_js_frames(
@@ -1717,6 +1736,7 @@ var second = mapped[1];
     assert vm.globals["second"] == 3.0
 
 
+@pytest.mark.skip(reason="V2: JSON engine removed from V1 silicon 2026-08-23")
 def test_hw_value64_json_round_trip_and_cycle_failure():
     image = ProgramImage.from_chunk(
         compile_source(
@@ -2910,6 +2930,7 @@ requestAnimationFrame(tick);
 """
 
 
+@_allow_json
 def test_hw_value64_nested_foreach_finder_paths():
     """Outer forEach → finder ARRAY_SET of to.x must path a JSON-cloned 28-wide map."""
     vm = _hw_v64(_NESTED_FOREACH_FINDER_JS)
@@ -3040,6 +3061,7 @@ requestAnimationFrame(tick);
 """
 
 
+@_allow_json
 def test_hw_value64_proto_coord_finder_after_getimagedata():
     """Map proto coord round-trip + getImageData then finder ARRAY_SET must path."""
     vm = _hw_v64(_PROTO_COORD_FINDER_JS)
@@ -3147,6 +3169,7 @@ requestAnimationFrame(tick);
 """
 
 
+@_allow_json
 def test_hw_value64_foreach_getimagedata_then_finder():
     """getImageData inside forEach then a second forEach finder must still path."""
     vm = _hw_v64(_FOREACH_GETIMG_FINDER_JS)
@@ -3220,6 +3243,7 @@ requestAnimationFrame(tick);
     )
 
 
+@_allow_json
 def test_hw_value64_maze31_neighbor_array_set():
     """JSON 31×28 house cell neighbor ARRAY_SET must store to.x."""
     vm = _hw_v64(_maze31_neighbor_set_js())

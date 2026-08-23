@@ -99,53 +99,18 @@ function drawCannon(x, y, scale) {
   c.fillRect(x, y + 5 * scale, 14 * scale, 5 * scale);
 }
 
-/* INVADERS2: JSON-free leaderboard codec (V1 silicon diet — JSON engine
-   removal). Format: rows of "name\tscore" joined by "\n"; names are
-   filtered of tab/newline at save; scores parsed with a digit map (no
-   parseInt/charCodeAt). Old JSON-format stored data decodes to an empty
-   list gracefully. */
-var _DIG={"0":0,"1":1,"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9};
-function _lbDecode(s){
-  var out=[]; if(!s) return out;
-  var i=0, n=s.length;
-  while(i<n){
-    var nl=s.indexOf("\n", i); if(nl<0) nl=n;
-    var tab=s.indexOf("\t", i);
-    if(tab>=0 && tab<nl){
-      var nm=s.slice(i,tab), num=0, ok=(tab+1<nl);
-      for(var k=tab+1;k<nl;k++){
-        var d=_DIG[s[k]];
-        if(d===undefined){ok=false;break;}
-        num=num*10+d;
-      }
-      if(ok) out.push({name:nm, score:num});
-    }
-    i=nl+1;
-  }
-  return out;
-}
-function _lbEncode(list){
-  var s="";
-  for(var i=0;i<list.length;i++){
-    var nm=""+list[i].name, clean="";
-    for(var k=0;k<nm.length;k++){var c=nm[k]; if(c!=="\t"&&c!=="\n") clean+=c;}
-    s+=clean+"\t"+list[i].score+(i<list.length-1?"\n":"");
-  }
-  return s;
-}
-
 const LB_KEY = "space_invaders_leaderboard_v1";
 
 function getLeaderboard() {
   try {
-    return _lbDecode(localStorage.getItem(LB_KEY));
+    return JSON.parse(localStorage.getItem(LB_KEY)) || [];
   } catch {
     return [];
   }
 }
 
 function setLeaderboard(list) {
-  localStorage.setItem(LB_KEY, _lbEncode(list));
+  localStorage.setItem(LB_KEY, JSON.stringify(list));
 }
 
 function addScore(name, score) {
@@ -154,6 +119,7 @@ function addScore(name, score) {
   list.push({
     name: name?.trim() || "???",
     score,
+    at: new Date().toISOString(),
   });
 
   list.sort((a, b) => b.score - a.score);
