@@ -576,6 +576,16 @@ module jmr_js_vm #(
     logic [15:0] e64_cm_key, e64_cm_cls;
     logic        cm_serving, cm_served_hold, cm_res_we;
     logic [15:0] cm_res_mip;
+    // exec listener-op service (add/remove): sequential walk over the
+    // SINGLE parent table; result is a held level (the cm lesson).
+    logic        e64_lsv_req;
+    logic [1:0]  e64_lsv_op;
+    logic [63:0] e64_lsv_ev, e64_lsv_fn;
+    logic        lsv_serving /*verilator public_flat_rd*/, lsv_served_hold, lsv_res_we /*verilator public_flat_rd*/, lsv_arm;
+    logic [2:0]  lsv_res;
+    logic [4:0]  lsv_res_n_out;
+    logic [4:0]  lsv_k, lsv_w, lsv_same;
+    logic        lsv_dup;
     logic [3:0] cls_c, cls_m;
     logic [15:0] cls_cls, cls_key, cls_ctor_q, cls_mip_q, cls_gip_q;
     logic [4:0]  n_cls;
@@ -3660,11 +3670,6 @@ module jmr_js_vm #(
     logic [63:0] e64_vtimer_fn_wdata;
     logic signed [31:0] e64_vtimer_id_wdata;
     logic signed [63:0] e64_vtimer_period_wdata;
-    logic e64_vlistener_we;
-    logic [3:0] e64_vlistener_waddr;
-    logic [63:0] e64_vlistener_ev_wdata;
-    logic [63:0] e64_vlistener_fn_wdata;
-    logic e64_vlistener_repl;
     logic e64_vst_win0_we;
     logic [63:0] e64_vst_win0_wdata;
     (* keep_hierarchy = "yes" *)
@@ -3954,6 +3959,13 @@ module jmr_js_vm #(
         .cm_cls_q(e64_cm_cls),
         .cm_res_we(cm_res_we),
         .cm_res_mip(cm_res_mip),
+        .lsv_req_q(e64_lsv_req),
+        .lsv_op_q(e64_lsv_op),
+        .lsv_ev_q(e64_lsv_ev),
+        .lsv_fn_q(e64_lsv_fn),
+        .lsv_res_we(lsv_res_we),
+        .lsv_res(lsv_res),
+        .lsv_res_n(lsv_res_n_out),
         .n_consts(n_consts),
         .n_ops(n_ops),
         .n_spr(n_spr),
@@ -4451,11 +4463,6 @@ module jmr_js_vm #(
         .vtimer_fn_wdata_q(e64_vtimer_fn_wdata),
         .vtimer_id_wdata_q(e64_vtimer_id_wdata),
         .vtimer_period_wdata_q(e64_vtimer_period_wdata),
-        .vlistener_we_q(e64_vlistener_we),
-        .vlistener_waddr_q(e64_vlistener_waddr),
-        .vlistener_ev_wdata_q(e64_vlistener_ev_wdata),
-        .vlistener_fn_wdata_q(e64_vlistener_fn_wdata),
-        .vlistener_repl_q(e64_vlistener_repl),
         .vst_win0_we_q(e64_vst_win0_we),
         .vst_win0_wdata_q(e64_vst_win0_wdata)
     );
@@ -5279,11 +5286,13 @@ module jmr_js_vm #(
                     ((bind_k < 8'd64) ? bind_k[5:0] : vt_pick[5:0]) :
                 e64_vtimer_raddr];
             vlistener_ev_rdata <= vlistener_ev[
+                lsv_serving ? lsv_k[3:0] :
                 (casestate_q == S_V64_FRAME_KEY || state == S_V64_FRAME_KEY) ?
                     ((bind_k < 8'd16) ? bind_k[3:0] : vk_pick[3:0]) :
                 (casestate_q == S_V64_GC_ROOT || state == S_V64_GC_ROOT) ?
                     vgc_root_i[4:1] : 4'd0];
             vlistener_fn_rdata <= vlistener_fn[
+                lsv_serving ? lsv_k[3:0] :
                 (casestate_q == S_V64_FRAME_KEY || state == S_V64_FRAME_KEY) ?
                     ((bind_k < 8'd16) ? bind_k[3:0] : vk_pick[3:0]) :
                 (casestate_q == S_V64_GC_ROOT || state == S_V64_GC_ROOT) ?
@@ -5655,6 +5664,8 @@ module jmr_js_vm #(
             cls_ctor_mode <= 1'b0; cls_c <= 4'd0; cls_m <= 4'd0;
             cls_seq <= 1'b0; cls_prime <= 1'b0;
             cm_serving <= 1'b0; cm_served_hold <= 1'b0; cm_res_we <= 1'b0;
+            lsv_serving <= 1'b0; lsv_served_hold <= 1'b0; lsv_res_we <= 1'b0;
+            lsv_arm <= 1'b0; lsv_k <= 5'd0; lsv_w <= 5'd0; lsv_same <= 5'd0; lsv_dup <= 1'b0; lsv_res <= 3'd0;
             cls_cls <= 16'd0; cls_key <= 16'd0;
             cls_ctor_q <= 16'hFFFF; cls_mip_q <= 16'hFFFF; cls_gip_q <= 16'hFFFF;
             hs_vcall_value(1'b0); hs_vcall_entry('0); hs_vcall_argc('0);
@@ -6058,54 +6069,8 @@ module jmr_js_vm #(
                         vtimer_period[e64_vtimer_waddr] <= e64_vtimer_period_wdata;
                     end
                 end
-                if (e64_vlistener_we) begin
-                    vlistener_ev[e64_vlistener_waddr] <= e64_vlistener_ev_wdata;
-                    vlistener_fn[e64_vlistener_waddr] <= e64_vlistener_fn_wdata;
-                end else if (e64_vlistener_repl) begin
-                    // #77 (DONKEY Mario->Luigi, third occurrence - the real
-                    // one): removeEventListener compacts EXEC's listener
-                    // table, but this parent copy - the one the kev dispatch
-                    // walk actually reads - was never compacted. The count
-                    // dropped (handshake scalar) while the parent slots kept
-                    // the OLD order, so after a mid-dispatch remove the walk
-                    // ran the REMOVED listener and dropped a live one:
-                    // charsel `choose` survived into the game and every
-                    // ArrowRight re-selected Luigi. Compact this copy with
-                    // the same predicate exec used; the removee (ev,fn)
-                    // rides the single-slot wdata channel on the repl beat.
-                    begin
-                        logic [63:0] cev [0:15];
-                        logic [63:0] cfn [0:15];
-                        logic [4:0] cw;
-                        cw = 5'd0;
-                        for (int k = 0; k < 16; k++) begin
-                            cev[k] = V64_UNDEFINED;
-                            cfn[k] = V64_UNDEFINED;
-                        end
-                        // All 16 slots, NOT `k < vlistener_n`: on this
-                        // apply beat the muxed count is already the NEW
-                        // (post-remove) value, which would hide the removee
-                        // in the tail. The table is dense below the old
-                        // count and UNDEFINED above it, so skipping
-                        // UNDEFINED pairs compacts exactly the live prefix.
-                        for (int k = 0; k < 16; k++)
-                            if (!(vlistener_ev[k] == V64_UNDEFINED &&
-                                  vlistener_fn[k] == V64_UNDEFINED) &&
-                                !(v64_equal(vlistener_ev[k],
-                                            e64_vlistener_ev_wdata) &&
-                                  v64_equal(vlistener_fn[k],
-                                            e64_vlistener_fn_wdata)))
-                            begin
-                                cev[cw] = vlistener_ev[k];
-                                cfn[cw] = vlistener_fn[k];
-                                cw = cw + 5'd1;
-                            end
-                        for (int k = 0; k < 16; k++) begin
-                            vlistener_ev[k] <= cev[k];
-                            vlistener_fn[k] <= cfn[k];
-                        end
-                    end
-                end
+                // listener table writes/compaction: the lsv service owns them
+                // now (single table; #77's dual-copy sync is structurally gone).
                 if (e64_json_mem_we) begin
                     json_we <= 1'b1;
                     json_waddr <= e64_json_mem_waddr[12:0];
@@ -6217,6 +6182,70 @@ module jmr_js_vm #(
             // Sequential (c,m) was 256 clocks per GET_PROP miss — play CALL
             // paid that every method. unique-case CAM over BRAM is still
             // forbidden; this is FF equality outside the opcode case.
+            if (lsv_served_hold) begin
+                if (!e64_lsv_req) begin
+                    lsv_served_hold <= 1'b0;
+                    lsv_res_we <= 1'b0;
+                end
+            end else if (v64_on && e64_lsv_req && !lsv_serving) begin
+                lsv_serving <= 1'b1;
+                lsv_k <= 5'd0;
+                lsv_w <= 5'd0;
+                lsv_same <= 5'd0;
+                lsv_dup <= 1'b0;
+                lsv_arm <= 1'b0;
+            end else if (lsv_serving) begin
+                if (!lsv_arm) begin
+                    if (lsv_k >= vlistener_n) begin
+                        lsv_serving <= 1'b0;
+                        lsv_served_hold <= 1'b1;
+                        lsv_res_we <= 1'b1;
+                        if (e64_lsv_op == 2'd1) begin
+                            lsv_res_n_out <= vlistener_n;
+                            if (lsv_dup) lsv_res <= 3'd1;
+                            else if (lsv_same >= 5'd4) lsv_res <= 3'd2;
+                            else if (vlistener_n >= 5'd16) lsv_res <= 3'd3;
+                            else begin
+                                lsv_res <= 3'd0;
+                                vlistener_ev[vlistener_n[3:0]] <= e64_lsv_ev;
+                                vlistener_fn[vlistener_n[3:0]] <= e64_lsv_fn;
+                                // the hs mask cannot land while exec is held
+                                // (mask applies live in the frozen branch);
+                                // the count rides the result instead.
+                                lsv_res_n_out <= vlistener_n + 5'd1;
+                                vlistener_n_ff <= vlistener_n + 5'd1;
+                            end
+                        end else begin
+                            lsv_res <= 3'd0;
+                            for (int t = 0; t < 16; t++)
+                                if (5'(t) >= lsv_w && 5'(t) < vlistener_n) begin
+                                    vlistener_ev[t] <= V64_UNDEFINED;
+                                    vlistener_fn[t] <= V64_UNDEFINED;
+                                end
+                            lsv_res_n_out <= lsv_w;
+                            vlistener_n_ff <= lsv_w;
+                        end
+                    end else
+                        lsv_arm <= 1'b1; // rdata mux is pointed at lsv_k
+                end else begin
+                    lsv_arm <= 1'b0;
+                    if (e64_lsv_op == 2'd1) begin
+                        if (v64_equal(vlistener_ev_rdata, e64_lsv_ev)) begin
+                            lsv_same <= lsv_same + 5'd1;
+                            if (v64_equal(vlistener_fn_rdata, e64_lsv_fn))
+                                lsv_dup <= 1'b1;
+                        end
+                    end else begin
+                        if (!(v64_equal(vlistener_ev_rdata, e64_lsv_ev) &&
+                              v64_equal(vlistener_fn_rdata, e64_lsv_fn))) begin
+                            vlistener_ev[lsv_w[3:0]] <= vlistener_ev_rdata;
+                            vlistener_fn[lsv_w[3:0]] <= vlistener_fn_rdata;
+                            lsv_w <= lsv_w + 5'd1;
+                        end
+                    end
+                    lsv_k <= lsv_k + 5'd1;
+                end
+            end
             if (cm_served_hold) begin
                 // Result is LEVEL, held until exec drops the request —
                 // exec's *_n consumption only lands on enable&&!leave_hold

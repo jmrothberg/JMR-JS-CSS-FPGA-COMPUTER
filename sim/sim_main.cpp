@@ -463,6 +463,7 @@ static const char* vm_sname(unsigned s) {
 
 static unsigned vsp_peak = 0, gcq_peak = 0, nbwp_peak = 0, jsonwp_peak = 0;
 static unsigned long long cm_cycles = 0, cm_lookups = 0, total_cycles = 0;
+static unsigned long long lsv_cycles = 0, lsv_reqs = 0, lsv_serv_cycles = 0, lsv_res_cycles = 0;
 static void tick() {
     top->clk = 0; top->pixel_clk = 0; top->eval();
     uint8_t miso = 1;
@@ -474,6 +475,15 @@ static void tick() {
     {   // per-clock peak trackers (transient-safe, unlike frame sampling)
         unsigned v = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__vsp);
         if (v > vsp_peak) vsp_peak = v;
+        {
+            static bool prev_lsv = false;
+            bool lv = top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__lsv_scan;
+            if (lv) lsv_cycles++;
+            if (lv && !prev_lsv) lsv_reqs++;
+            prev_lsv = lv;
+            if (top->rootp->jmr_js_core__DOT__u_vm__DOT__lsv_serving) lsv_serv_cycles++;
+            if (top->rootp->jmr_js_core__DOT__u_vm__DOT__lsv_res_we) lsv_res_cycles++;
+        }
         {
             static bool prev_cm = false;
             bool cm = top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__cm_scan;
@@ -1313,6 +1323,10 @@ int main(int argc, char** argv) {
                       << " gcqmax=" << gcq_peak
                       << " nbmax=" << nbwp_peak
                       << " jsonmax=" << jsonwp_peak
+                      << " lsvreq=" << lsv_reqs
+                      << " lsvcyc=" << lsv_cycles
+                      << " lsvserv=" << lsv_serv_cycles
+                      << " lsvres=" << lsv_res_cycles
                       << " cmcyc=" << cm_cycles
                       << " cmlkp=" << cm_lookups
                       << " totcyc=" << total_cycles

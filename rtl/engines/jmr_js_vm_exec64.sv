@@ -525,6 +525,13 @@ module jmr_js_vm_exec64 (
     output logic [15:0] cm_cls_q,
     input  logic cm_res_we,
     input  logic [15:0] cm_res_mip,
+    output logic lsv_req_q,
+    output logic [1:0] lsv_op_q,
+    output logic [63:0] lsv_ev_q,
+    output logic [63:0] lsv_fn_q,
+    input  logic lsv_res_we,
+    input  logic [2:0] lsv_res,
+    input  logic [4:0] lsv_res_n, // new listener count (mask-apply cannot land while held)
     input  logic [15:0] n_consts,
     input  logic [15:0] n_ops,
     input  logic [4:0] n_spr,
@@ -779,12 +786,7 @@ module jmr_js_vm_exec64 (
     output logic [63:0] vtimer_fn_wdata_q,
     output logic signed [31:0] vtimer_id_wdata_q,
     output logic signed [63:0] vtimer_period_wdata_q,
-    output logic vlistener_we_q,
-    output logic [3:0] vlistener_waddr_q,
-    output logic [63:0] vlistener_ev_wdata_q,
-    output logic [63:0] vlistener_fn_wdata_q,
     // Compact-remove rewrites all 16 FF slots via *_n. Add uses scalar we.
-    output logic vlistener_repl_q,
     output logic vst_win0_we_q,
     output logic [63:0] vst_win0_wdata_q,
     input  logic p_clr,
@@ -826,7 +828,6 @@ module jmr_js_vm_exec64 (
     logic json_mem_we;
     logic [12:0] json_mem_waddr;
     logic [7:0] json_mem_wdata;
-    logic vlistener_repl;
     logic name_blen_we;
     logic [9:0] name_blen_waddr;
     logic [15:0] name_blen_wdata;
@@ -885,10 +886,6 @@ module jmr_js_vm_exec64 (
     logic [63:0] vtimer_fn_wdata;
     logic signed [31:0] vtimer_id_wdata;
     logic signed [63:0] vtimer_period_wdata;
-    logic vlistener_we;
-    logic [3:0] vlistener_waddr;
-    logic [63:0] vlistener_ev_wdata;
-    logic [63:0] vlistener_fn_wdata;
     logic vst_win0_we;
     logic [63:0] vst_win0_wdata;
     logic cm_win_n;
@@ -1166,8 +1163,6 @@ module jmr_js_vm_exec64 (
     logic [7:0] vfe_len_s_wdata;
     logic [1:0] vfe_mode_s_wdata;
     logic [15:0] vfe_ret_s_wdata;
-    logic [63:0] vlistener_nev [0:15];
-    logic [63:0] vlistener_nfn [0:15];
     // Parent SRAM raddr/rdata are module ports. Operand arm (opnd_q) waits
     // the registered rdata beat. Do not declare a second copy here.
     // leftover 3 clocks raddr_q on EXEC; parent rdata is the next clock after
@@ -1186,6 +1181,17 @@ module jmr_js_vm_exec64 (
     assign cm_req_q = cm_scan;
     assign cm_key_q = cm_key;
     assign cm_cls_q = cm_cls;
+    // Listener ops (add/remove) are served by the PARENT's sequential
+    // walk over its single table — the four exec-side table copies and
+    // their one-beat 16-way scans are gone (census: ~26.9k LUTs).
+    logic lsv_scan /*verilator public_flat_rd*/, lsv_scan_n;
+    logic [1:0] lsv_op, lsv_op_n;
+    logic [63:0] lsv_ev, lsv_ev_n, lsv_fn, lsv_fn_n, lsv_push, lsv_push_n;
+    logic [11:0] lsv_base, lsv_base_n;
+    assign lsv_req_q = lsv_scan;
+    assign lsv_op_q = lsv_op;
+    assign lsv_ev_q = lsv_ev;
+    assign lsv_fn_q = lsv_fn;
     // Method-lookup cache: 8 entries of (cls,key)->mip, misses (FFFF)
     // included — builtin calls (ctx.fillRect, arr.push) repeat the same
     // miss every frame. Hit answers in the same beat the CALL op runs, so
@@ -1681,8 +1687,6 @@ module jmr_js_vm_exec64 (
     logic vjs_rd_arm;
     assign vjs_rd_arm_q = vjs_rd_arm;
     logic [63:0] vjs_val [0:JSON_STK-1];
-    logic [63:0] vlistener_ev [0:15];
-    logic [63:0] vlistener_fn [0:15];
     logic [4:0] vlistener_n;
     assign vlistener_n_q = vlistener_n;
     logic [15:0] vmetrics_w;
@@ -1824,6 +1828,8 @@ module jmr_js_vm_exec64 (
             cm_m <= 4'd0;
             cm_mip <= 16'hFFFF;
             cm_key <= 16'd0;
+            lsv_scan <= 1'b0; lsv_op <= 2'd0;
+            lsv_ev <= 64'd0; lsv_fn <= 64'd0; lsv_push <= 64'd0; lsv_base <= 12'd0;
             cm_cls <= 16'd0;
             cm_win <= 1'b0;
             // Parent GOT_HDR sets identity scale; exec fillRect uses these
@@ -1852,6 +1858,12 @@ module jmr_js_vm_exec64 (
                 bind_src <= bind_src_n;
                 bind_vsp_next <= bind_vsp_next_n;
                 cm_scan <= cm_scan_n;
+                lsv_scan <= lsv_scan_n;
+                lsv_op <= lsv_op_n;
+                lsv_ev <= lsv_ev_n;
+                lsv_fn <= lsv_fn_n;
+                lsv_push <= lsv_push_n;
+                lsv_base <= lsv_base_n;
                 cm_armed <= cm_armed_n;
                 cm_done <= cm_done_n;
                 cm_c <= cm_c_n;
@@ -2101,43 +2113,7 @@ module jmr_js_vm_exec64 (
                 vgc_resume <= vgc_resume_n;
                 vgc_wait_after <= vgc_wait_after_n;
                 vjs_rd_arm <= vjs_rd_arm_n;
-                if (vlistener_we) begin
-                    vlistener_ev[vlistener_waddr] <= vlistener_ev_wdata;
-                    vlistener_fn[vlistener_waddr] <= vlistener_fn_wdata;
-                end else if (vlistener_repl) begin
-                    vlistener_ev[0] <= vlistener_nev[0];
-                    vlistener_ev[1] <= vlistener_nev[1];
-                    vlistener_ev[2] <= vlistener_nev[2];
-                    vlistener_ev[3] <= vlistener_nev[3];
-                    vlistener_ev[4] <= vlistener_nev[4];
-                    vlistener_ev[5] <= vlistener_nev[5];
-                    vlistener_ev[6] <= vlistener_nev[6];
-                    vlistener_ev[7] <= vlistener_nev[7];
-                    vlistener_ev[8] <= vlistener_nev[8];
-                    vlistener_ev[9] <= vlistener_nev[9];
-                    vlistener_ev[10] <= vlistener_nev[10];
-                    vlistener_ev[11] <= vlistener_nev[11];
-                    vlistener_ev[12] <= vlistener_nev[12];
-                    vlistener_ev[13] <= vlistener_nev[13];
-                    vlistener_ev[14] <= vlistener_nev[14];
-                    vlistener_ev[15] <= vlistener_nev[15];
-                    vlistener_fn[0] <= vlistener_nfn[0];
-                    vlistener_fn[1] <= vlistener_nfn[1];
-                    vlistener_fn[2] <= vlistener_nfn[2];
-                    vlistener_fn[3] <= vlistener_nfn[3];
-                    vlistener_fn[4] <= vlistener_nfn[4];
-                    vlistener_fn[5] <= vlistener_nfn[5];
-                    vlistener_fn[6] <= vlistener_nfn[6];
-                    vlistener_fn[7] <= vlistener_nfn[7];
-                    vlistener_fn[8] <= vlistener_nfn[8];
-                    vlistener_fn[9] <= vlistener_nfn[9];
-                    vlistener_fn[10] <= vlistener_nfn[10];
-                    vlistener_fn[11] <= vlistener_nfn[11];
-                    vlistener_fn[12] <= vlistener_nfn[12];
-                    vlistener_fn[13] <= vlistener_nfn[13];
-                    vlistener_fn[14] <= vlistener_nfn[14];
-                    vlistener_fn[15] <= vlistener_nfn[15];
-                end
+                // listener tables live only in the parent now (lsv service)
                 vlistener_n <= vlistener_n_n;
                 vmetrics_w <= vmetrics_w_n;
                 vmod_count <= vmod_count_n;
@@ -2229,11 +2205,6 @@ module jmr_js_vm_exec64 (
                 vtimer_fn_wdata_q <= vtimer_fn_wdata;
                 vtimer_id_wdata_q <= vtimer_id_wdata;
                 vtimer_period_wdata_q <= vtimer_period_wdata;
-                vlistener_we_q <= vlistener_we;
-                vlistener_waddr_q <= vlistener_waddr;
-                vlistener_ev_wdata_q <= vlistener_ev_wdata;
-                vlistener_fn_wdata_q <= vlistener_fn_wdata;
-                vlistener_repl_q <= vlistener_repl;
                 vst_win0_we_q <= vst_win0_we;
                 vst_win0_wdata_q <= vst_win0_wdata;
                 vvars_raddr_q <= vvars_raddr;
@@ -2272,8 +2243,6 @@ module jmr_js_vm_exec64 (
                 vframe_we_q <= 1'b0;
                 vraf_we_q <= 1'b0;
                 vtimer_we_q <= 1'b0;
-                vlistener_we_q <= 1'b0;
-                vlistener_repl_q <= 1'b0;
                 vst_win0_we_q <= 1'b0;
                 if (hs_m_ip) ip <= p_ip;
                 if (hs_m_code) code_raddr <= p_code_raddr;
@@ -2989,6 +2958,12 @@ module jmr_js_vm_exec64 (
         fill_style_i_n = fill_style_i;
         stroke_style_i_n = stroke_style_i;
         cm_scan_n = 1'b0;
+        lsv_scan_n = lsv_scan; // level holds until the result is consumed
+        lsv_op_n = lsv_op;
+        lsv_ev_n = lsv_ev;
+        lsv_fn_n = lsv_fn;
+        lsv_push_n = lsv_push;
+        lsv_base_n = lsv_base;
         cm_armed_n = 1'b0;
         cm_done_n = cm_done;
         cm_c_n = cm_c;
@@ -3230,11 +3205,6 @@ module jmr_js_vm_exec64 (
         vtimer_fn_wdata = '0;
         vtimer_id_wdata = '0;
         vtimer_period_wdata = '0;
-        vlistener_we = 1'b0;
-        vlistener_waddr = '0;
-        vlistener_ev_wdata = '0;
-        vlistener_fn_wdata = '0;
-        vlistener_repl = 1'b0;
         vst_win0_we = 1'b0;
         vst_win0_wdata = '0;
         opnd_n = 1'b0;
@@ -3329,6 +3299,30 @@ module jmr_js_vm_exec64 (
                         opnd3_n = 1'b1;
                         state_n = S_V64_EXEC;
                         vst_we_n = 1'b0;
+                    end else if (lsv_scan) begin
+                        // held while the parent walks the listener table
+                        opnd_n = 1'b1;
+                        opnd2_n = 1'b1;
+                        opnd3_n = 1'b1;
+                        if (lsv_res_we) begin
+                            lsv_scan_n = 1'b0;
+                            if (lsv_res == 3'd0 || lsv_res == 3'd1) begin
+                                vlistener_n_n = lsv_res_n;
+                                vst_wr(lsv_base, lsv_push);
+                                vsp_n = lsv_base + 12'd1;
+                                ip_n = ip + 16'd1;
+                                code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                state_n = S_FETCH_WAIT;
+                            end else begin
+                                // 2 = same-event cap, 3 = table full
+                                machine_fault_n = 1'b1;
+                                fault_code_n = 8'd3;
+                                fault_site_n = 16'd8200 + 16'(lsv_res);
+                                running_n = 1'b0;
+                                state_n = S_DONE;
+                            end
+                        end else
+                            state_n = S_V64_EXEC;
                     end else if (cm_scan) begin
                         // Hold with the request level up; the parent's
                         // sequential class scanner answers on cm_res_we.
@@ -4294,20 +4288,8 @@ module jmr_js_vm_exec64 (
                                         end
                                         8'd19, 8'd20: begin // addEventListener
                                             logic [63:0] ev, fn;
-                                            logic [4:0] same_n;
-                                            logic dup;
                                             ev = (argc != 0) ? `VST_AT(base) : V64_UNDEFINED;
                                             fn = (argc > 1) ? `VST_AT(base + 1) : V64_UNDEFINED;
-                                            same_n = 5'd0;
-                                            dup = 1'b0;
-                                            for (int k = 0; k < 16; k++)
-                                                if (k < vlistener_n) begin
-                                                    if (v64_equal(vlistener_ev[k], ev) &&
-                                                        v64_equal(vlistener_fn[k], fn))
-                                                        dup = 1'b1;
-                                                    if (v64_equal(vlistener_ev[k], ev))
-                                                        same_n = same_n + 5'd1;
-                                                end
                                             if (fn[63:48] != 16'h7ff9 ||
                                                 fn[47:44] != 4'd7) begin
                                                 machine_fault_n = 1'b1;
@@ -4315,32 +4297,15 @@ module jmr_js_vm_exec64 (
                                                 fault_site_n = 16'd3916;
                                                 running_n = 1'b0;
                                                 state_n = S_DONE;
-                                            end else if (!dup && same_n >= 5'd4) begin
-                                                machine_fault_n = 1'b1;
-                                                fault_code_n = 8'd3;
-                                                fault_site_n = 16'd3921;
-                                                running_n = 1'b0;
-                                                state_n = S_DONE;
-                                            end else if (!dup && vlistener_n >= 5'd16) begin
-                                                machine_fault_n = 1'b1;
-                                                fault_code_n = 8'd3;
-                                                fault_site_n = 16'd3926;
-                                                running_n = 1'b0;
-                                                state_n = S_DONE;
                                             end else begin
-                                                if (!dup) begin
-                                                    vlistener_we = 1'b1;
-                                                    vlistener_waddr = vlistener_n[3:0];
-                                                    vlistener_ev_wdata = ev;
-                                                    vlistener_fn_wdata = fn;
-                                                    vlistener_n_n = vlistener_n + 5'd1;
-                                                end
-                                                vst_wr(base, result);
-                                                vsp_n = base + 12'd1;
-                                                ip_n = ip + 16'd1;
-                                                code_raddr_n =
-                                                    15'(ops_base + ip + 16'd1);
-                                                state_n = S_FETCH_WAIT;
+                                                // parent walks its single table; hold here (lsv)
+                                                lsv_scan_n = 1'b1;
+                                                lsv_op_n = 2'd1;
+                                                lsv_ev_n = ev;
+                                                lsv_fn_n = fn;
+                                                lsv_base_n = base;
+                                                lsv_push_n = result;
+                                                state_n = S_V64_EXEC;
                                             end
                                         end
                                         8'd21, 8'd22, 8'd32: begin
@@ -4492,60 +4457,18 @@ module jmr_js_vm_exec64 (
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd36, 8'd37: begin
-                                            // PYTHON removeEventListener —
-                                            // drop matching (event, fn).
-                                            begin
-                                                logic [63:0] ev, fn;
-                                                logic [63:0] nev [0:15];
-                                                logic [63:0] nfn [0:15];
-                                                logic [4:0] w;
-                                                ev = (argc != 0)
-                                                    ? `VST_AT(base) : V64_UNDEFINED;
-                                                fn = (argc > 1)
-                                                    ? `VST_AT(base + 1)
-                                                    : V64_UNDEFINED;
-                                                w = 5'd0;
-                                                for (int k = 0; k < 16; k++) begin
-                                                    nev[k] = V64_UNDEFINED;
-                                                    nfn[k] = V64_UNDEFINED;
-                                                end
-                                                for (int k = 0; k < 16; k++)
-                                                    if (k < vlistener_n &&
-                                                        !(v64_equal(
-                                                              vlistener_ev[k], ev) &&
-                                                          v64_equal(
-                                                              vlistener_fn[k], fn)))
-                                                    begin
-                                                        nev[w] = vlistener_ev[k];
-                                                        nfn[w] = vlistener_fn[k];
-                                                        w = w + 5'd1;
-                                                    end
-                                                for (int k = 0; k < 16; k++) begin
-                                                    vlistener_nev[k] = nev[k];
-                                                    vlistener_nfn[k] = nfn[k];
-                                                end
-                                                vlistener_repl = 1'b1;
-                                                // #77: export the removee so
-                                                // the PARENT compacts its own
-                                                // table copy too (the repl
-                                                // strobe alone was applied
-                                                // only to exec's copy - the
-                                                // parent's kev walk then ran
-                                                // stale slots: DONKEY's
-                                                // charsel `choose` survived
-                                                // its removeEventListener and
-                                                // ArrowRight in-game flipped
-                                                // Mario to Luigi).
-                                                vlistener_ev_wdata = ev;
-                                                vlistener_fn_wdata = fn;
-                                                vlistener_n_n = w;
-                                                vst_wr(base, result);
-                                                vsp_n = base + 12'd1;
-                                                ip_n = ip + 16'd1;
-                                                code_raddr_n =
-                                                    15'(ops_base + ip + 16'd1);
-                                                state_n = S_FETCH_WAIT;
-                                            end
+                                            // removeEventListener: parent compacts its single table
+                                            // sequentially (#77's dual-copy sync is GONE — one table).
+                                            logic [63:0] ev, fn;
+                                            ev = (argc != 0) ? `VST_AT(base) : V64_UNDEFINED;
+                                            fn = (argc > 1) ? `VST_AT(base + 1) : V64_UNDEFINED;
+                                            lsv_scan_n = 1'b1;
+                                            lsv_op_n = 2'd2;
+                                            lsv_ev_n = ev;
+                                            lsv_fn_n = fn;
+                                            lsv_base_n = base;
+                                            lsv_push_n = result;
+                                            state_n = S_V64_EXEC;
                                         end
                                         8'd40: begin
                                             // PYTHON typeof — interned tag
@@ -7046,44 +6969,20 @@ module jmr_js_vm_exec64 (
                                         : V64_UNDEFINED;
                                     fn = (argc > 1) ? `VST_AT(base + 2)
                                         : V64_UNDEFINED;
-                                    for (int k = 0; k < 16; k++)
-                                        if (k < vlistener_n) begin
-                                            if (v64_equal(vlistener_ev[k], ev) &&
-                                                v64_equal(vlistener_fn[k], fn))
-                                                dup = 1'b1;
-                                            if (v64_equal(vlistener_ev[k], ev))
-                                                same_n = same_n + 5'd1;
-                                        end
                                     if (fn[63:48] != 16'h7ff9 ||
                                         fn[47:44] != 4'd7) begin
                                         machine_fault_n = 1'b1;
                                         fault_code_n = 8'd4;
                                         fault_site_n = 16'd6215;
                                         running_n = 1'b0; state_n = S_DONE;
-                                    end else if (!dup && same_n >= 5'd4) begin
-                                        machine_fault_n = 1'b1;
-                                        fault_code_n = 8'd3;
-                                        fault_site_n = 16'd6219;
-                                        running_n = 1'b0; state_n = S_DONE;
-                                    end else if (!dup && vlistener_n >= 5'd16) begin
-                                        machine_fault_n = 1'b1;
-                                        fault_code_n = 8'd3;
-                                        fault_site_n = 16'd6223;
-                                        running_n = 1'b0; state_n = S_DONE;
                                     end else begin
-                                        if (!dup) begin
-                                            vlistener_we = 1'b1;
-                                            vlistener_waddr = vlistener_n[3:0];
-                                            vlistener_ev_wdata = ev;
-                                            vlistener_fn_wdata = fn;
-                                            vlistener_n_n = vlistener_n + 5'd1;
-                                        end
-                                        vst_wr(base, V64_UNDEFINED);
-                                        vsp_n = base + 12'd1;
-                                        ip_n = ip + 16'd1;
-                                        code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
-                                        state_n = S_FETCH_WAIT;
+                                        lsv_scan_n = 1'b1;
+                                        lsv_op_n = 2'd1;
+                                        lsv_ev_n = ev;
+                                        lsv_fn_n = fn;
+                                        lsv_base_n = base;
+                                        lsv_push_n = V64_UNDEFINED;
+                                        state_n = S_V64_EXEC;
                                     end
                                 end else if (code_rdata[23:8] == id_gettime ||
                                            code_rdata[23:8] == id_now ||
