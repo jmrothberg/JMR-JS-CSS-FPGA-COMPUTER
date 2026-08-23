@@ -467,7 +467,7 @@ Law detail: `.cursor/rules/never-fake-fpga-sim.mdc`,
 | **Second JS heap** inside exec (private `vvars` / `stack` / `vobj_*` / …) | Will not fit; goes stale; black PACMAN. One heap, keep gen-match |
 | **Skip gen-match** on object handles | Silent use-after-recycle |
 | **Extract WITH heap-array copies** (any submodule owning/duplicating a heap array) | Second heap; goes stale. Control-only extraction in the u_exec64 shape is ALLOWED (2026-08-22) |
-| **Put whole `vobj_slot` / `varr_slot` or scanout FB on external/DDR3** | Cripples the JS Native CPU / pixel path |
+| **Put `vobj_slot` / `varr_slot` (the heap) or the DRAW bank on external/DDR3** | Cripples the JS Native CPU: S_V64_RECT writes 1 px/clock, PACMAN paints ~620k px/frame — a DDR3 draw bank multiplies frame cost through the bridge. **CONSCIOUS RELAXATION 2026-08-23 (user, rule-5 style): the FRONT/scanout bank + line-FIFO MAY move to DDR3** — scanout is sequential/prefetchable, swap becomes a burst copy (~3ms, in budget at the accepted half frame rate), and the ~75-80 freed BRAM tiles absorb the ~17k LUTRAM spill return. The draw bank stays BRAM. |
 | **dukpy / V8 / soft CPU / execute JS source as one RTL FSM** | Not this machine — bytecode ISA only |
 | **Title-name gates** (`if (stem == "PACMAN")`) | Forbidden hardwire |
 | **Grow heap past live caps** without a measured plan (`MAX_OBJ=960`,
@@ -475,9 +475,9 @@ Law detail: `.cursor/rules/never-fake-fpga-sim.mdc`,
   Do not restore `8192`/`4096` | Does not fit |
 | **Port-A the dead tagged twin** instead of leaving it unreachable | Wasted work; ghost stays |
 | **Claim “exec32 removed” while ignoring the `e32_*` naming trap** | 74 parent-owned `e32_*` signals are live silicon — [REMOVING_EXEC32.md](REMOVING_EXEC32.md) |
-| **`bit-fresh` to "recover" a mid-run crash** (it is REQUIRED after a file-list change — those are different situations); raise `JMR_VIVADO_SYNTH_THREADS`; `JMR_VIVADO_ALLOW_WIDE=1`; `drc.disableLUTOverUtilError` | Loses MIG/project for nothing, or papers over over-util |
+| **`bit-fresh` to "recover" a mid-run crash** (it is REQUIRED after a file-list change — those are different situations); raise `JMR_VIVADO_SYNTH_THREADS`; `JMR_VIVADO_ALLOW_WIDE=1`; `drc.disableLUTOverUtilError` | Loses MIG/project for nothing. (The DRC demotion itself became a sanctioned experiment 2026-08-23 — user-directed, to let placement attempt LUT pairing; it stays set in vivado_build.tcl.) |
 | **`AUTO_INCREMENTAL_CHECKPOINT 1`** or any incremental synth while the RTL is changing | Stitches against a stale reference — the 04:11 netlist held the FB twice and ~2x logic; place cannot fix a garbage netlist |
-| **Agent runs Vivado / `make bit`** | User only, host terminal |
+| ~~Agent runs Vivado / `make bit`~~ | Overridden 2026-08-22 by the user ("start the .bin yourself"): the agent runs builds directly; kill leftover heartbeat shells by PID after any aborted run |
 | **Pretend PYTHON or host twin is FPGA-SIM** | Fake machine |
 
 ### How to write on-chip RAM (legal)

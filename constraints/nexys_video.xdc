@@ -3,7 +3,10 @@
 
 ## System clock 100 MHz
 set_property -dict { PACKAGE_PIN R4 IOSTANDARD LVCMOS33 } [get_ports { clk100 }]
-create_clock -add -name sys_clk_pin -period 10.00 -waveform {0 5} [get_ports { clk100 }]
+## 2026-08-23: 50 MHz is an accepted product decision — take its AREA
+## gain at synthesis (10 ns timing-driven synth replicates logic and
+## blocks resource sharing). Board bring-up target is half frame rate.
+create_clock -add -name sys_clk_pin -period 20.00 -waveform {0 10} [get_ports { clk100 }]
 set_property CLOCK_DEDICATED_ROUTE BACKBONE [get_nets clk100_IBUF]
 
 ## CPU reset (active low)
