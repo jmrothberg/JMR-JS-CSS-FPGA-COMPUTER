@@ -549,3 +549,36 @@ freed absorb the ~17k LUTRAM spill return.
    arbiter starvation margins are UNTESTED until the board. First
    bring-up: treat visual artifacts (torn lines, wrong lines, sparkle)
    as a known-possible scanout/CDC symptom FIRST — not a heap or VM bug.
+
+## Run 19 — Session 1 verdict (2026-08-23 13:38)
+
+| metric | run 17 | run 19 | delta |
+|---|---:|---:|---:|
+| Slice LUTs | 208,534 | **181,335** | **−27,199** |
+| LUT as Logic | 165,208 | 169,383 | +4,175 (scanout/present + spill-return glue) |
+| LUT as Memory | 43,326 | **11,952** | **−31,374** |
+| FFs | 32,048 | 47,985 | +15,937 (BRAM output regs) |
+| BRAM | 365/365 | **338.5/365** | 26.5 tiles SPARE |
+| post-opt DRC | 166,922 | 170,873 | |
+
+Checklist walk:
+1. **Mapping proof: 7 of 8 re-styled arrays landed in Block RAM.**
+   vstack stayed distributed — "Infeasible attribute" (Synth 8-6849):
+   its template already implied a second read port (704 RAM64M where
+   1W1R would be 256). Not a regression (was LUTRAM before); 2.8k of
+   planned relief unrealized; template fix deferred. The advisor's
+   check caught this in one grep — silent, all tests green.
+2. **Packing arithmetic**: packed(170,873) + 11,952 <= 134,600 needs
+   ~28% pairing vs the typical 10-20% — the predicted expected-case
+   miss. At 20% pairing the shortfall is ~14k; at 15%, ~22k. Session 2
+   needs −20-40k raw logic; the census-ranked targets (listeners ~26k,
+   JSON ~15k, vst_win 11.2k, name_has 6.2k ≈ 58k of cones) cover it
+   with margin. Clock placer still aborts before packing at this
+   overage, so the pairing rate stays unmeasured until we get closer.
+3. **CDC caveat recorded** (see run-19 checklist entry above): board
+   bring-up treats visual artifacts as scanout/CDC suspects first.
+
+LUTRAM is now 26% of its cap — the memory wall is not merely closed
+but demolished; every remaining LUT is a logic LUT. Session 2 begins:
+listener consolidation first (biggest census target, strongest
+existing test coverage: donkey lsn, KEYEVT suite, #77 repros).
