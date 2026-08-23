@@ -526,3 +526,26 @@ then vst_win; vst_wdata/op-tiering is the deep reserve.
 bank stays BRAM (NEVER-table row consciously relaxed, user, rule-5
 style). Swap = burst copy via the existing dump path; ~75-80 tiles
 freed absorb the ~17k LUTRAM spill return.
+
+## Run-19 verdict checklist (advisor review, adopted 2026-08-23)
+
+1. **Mapping-table proof for every re-styled array**: vstack, name_mem,
+   json_mem, vconsts, vobj_proto, vfn_proto, vfn_env, vfn_bound_this,
+   venv_parent must each appear under Block RAM in run 19's Final
+   Mapping tables. Source pre-check: all eight are clean 1W1R with
+   registered reads (the distributed style was BRAM scarcity, not async
+   reads) — but an attribute is not inference (name_has stayed FF with
+   the attribute present and every test green). Any absentee = the
+   16.6k relief silently didn't happen for that array.
+2. **Packing arithmetic stated up front**: ~160k logical into ~117k
+   physical sites needs ~27% LUT6_2 pairing — ABOVE the typical 10-20%
+   for control logic. A ~10k miss is the EXPECTED case, not a Session-1
+   failure; the census-ranked Session-2 targets (listeners ~26k, JSON
+   ~15k, vst_win 11.2k, name_has 6.2k) are the planned closer.
+3. **FPGA-SIM cannot prove the new scanout path**: sim_main ticks clk
+   and pixel_clk in lockstep (single effective domain), and
+   jmr_sram_model has none of the MIG's refresh stalls or variable
+   latency. The gray-coded beam-line CDC, DDR3 refresh behavior, and
+   arbiter starvation margins are UNTESTED until the board. First
+   bring-up: treat visual artifacts (torn lines, wrong lines, sparkle)
+   as a known-possible scanout/CDC symptom FIRST — not a heap or VM bug.
