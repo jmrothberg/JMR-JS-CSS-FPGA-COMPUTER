@@ -79,3 +79,9 @@ set_property -dict { PACKAGE_PIN V19 IOSTANDARD LVCMOS33 PULLUP true } [get_port
 set_property -dict { PACKAGE_PIN T21 IOSTANDARD LVCMOS33 } [get_ports { sd_d[1] }]
 set_property -dict { PACKAGE_PIN T20 IOSTANDARD LVCMOS33 } [get_ports { sd_d[2] }]
 set_property -dict { PACKAGE_PIN U18 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { sd_d[3] }]
+
+## 2026-08-23: at extreme LUT utilization the IO clock placer cannot
+## co-locate rgb2dvi's internal MMCM with its BUFR/BUFIO pair. Fabric
+## routing for the x5 serial clock is acceptable at 125 MHz for bring-up
+## (override text supplied verbatim by Place 30-149).
+set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets u_tmds/u_rgb2dvi/ClockGenInternal.ClockGenX/PixelClkInX5]
