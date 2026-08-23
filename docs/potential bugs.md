@@ -323,7 +323,7 @@ on the next beat will. If you add such a path, either forward the write
 (vol/vel bypass pattern) or arm the read one beat later.
 
 
-### #81 OPEN — callee `var` locals alias the caller's frame when called from a method (FM == RTL, both wrong)
+### #81 FIXED 2026-08-23 — callee `var` locals alias the caller's frame when called from a method (FM == RTL, both wrong)
 
 Minimal repro (2026-08-23, found converting the ghost-update fixture off
 JSON): a plain global function with `var i/j/row` locals, CALLED FROM AN
@@ -337,6 +337,35 @@ names in functions callable from methods (PACMAN2's helpers and the
 suite fixtures now use `_cm_*` prefixes). Repro fixture:
 tests/test_rtl_snippets.py ghost-update test with the one-line
 `function f(src){var out,j,row,r,i...}` variant.
+
+**FIX (compiler-only, functional_model/compiler.py for-init):** `for
+(var i...)` inside a function emitted STORE_VAR — the walk-and-write op
+that lands on the CALLER's binding when the name isn't declared in this
+frame. let/const already had the guard (LET_VAR a1=1: declare/store in
+THIS call env, still re-inits every entry); `var` now joins it, and
+for-init names are `_note_local`'d so the a1=1 global retro-patch stops
+mislabeling their sites. No FM/HM/RTL runtime change — the runtimes
+always executed LET_VAR correctly; the compiler just never emitted it
+here. Verified: repro returns 105 (was 9); 216/216 bytecode+console
+suites; all seven titles compile. The `_cm_*` collision-proof naming in
+fixtures/PACMAN2 is no longer load-bearing but harmless.
+
+### #82 OPEN — DIR's MORE pager eats typing with no visible prompt (user report 2026-08-23)
+
+User glass: after `dir`, typed characters do not echo and each Enter
+prints a bare READY line; recovery only after many Enters ("could not
+type until here"). Flight log `session_20260823_183331` shows the
+mechanism: `GLASS DIR -- MORE --` then `MORE page=1`, then every
+keystroke arrives as `rpc KEY` (pager/game path) with NO `LINE` rpcs —
+the keys are consumed as page-advances until the listing drains. The
+bug is not the pager; it is that the `-- MORE --` prompt was NOT
+visible on screen (screenshot shows bare `>`/READY cycles), so the
+modal state is silent. Suspects in order: (a) the MORE prompt/exit path
+in `jmr_console_engine.sv` regressed in the fit campaign's u_cons
+slimming (15,214 → 6,046 LUTs, file in the active diff); (b) GUI key
+routing stays in pager mode a beat too long. FM console MORE tests pass
+(216/216), so it is RTL-or-GUI, not the model. Filed during run 20 —
+console RTL deliberately untouched until the campaign tree settles.
 
 ## RECURRING BUG CLASSES — read this before debugging anything
 

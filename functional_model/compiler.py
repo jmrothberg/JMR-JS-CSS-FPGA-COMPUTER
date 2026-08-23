@@ -1258,11 +1258,21 @@ class Compiler:
             if kind != "ID":
                 raise CompileError("EXPECTED IDENTIFIER", line)
             # NEW: for (let i;;) allows missing init expr
+            # #81: note the local BEFORE deciding the op — for-init names
+            # never reached the scope set, so the a1=1 global retro-patch
+            # mislabeled their sites.
+            if self._fn_depth:
+                self._note_local(text)
             if self._match("="):
                 self._ternary()  # `,` = next declarator, not comma-op
             else:
                 self._emit(Op.LOAD_CONST, self._const(None))
-            if _kw in ("let", "const") and self._fn_depth:
+            # #81: `var` joins let/const here. Inside a function, for-init
+            # STORE_VAR of an undeclared name walks OUT of the frame and
+            # writes the caller's binding (method callers alias; FM == RTL
+            # agreed on the wrong answer). LET_VAR a1=1 always stores in
+            # THIS call env, so re-init every entry still works.
+            if self._fn_depth:
                 self._emit(Op.LET_VAR, self._name(text), 1)
             else:
                 self._emit(_decl, self._name(text))
@@ -1271,11 +1281,13 @@ class Compiler:
                 kind, text, line = self._advance()
                 if kind != "ID":
                     raise CompileError("EXPECTED IDENTIFIER", line)
+                if self._fn_depth:
+                    self._note_local(text)  # #81: same as first declarator
                 if self._match("="):
                     self._ternary()
                 else:
                     self._emit(Op.LOAD_CONST, self._const(None))
-                if _kw in ("let", "const") and self._fn_depth:
+                if self._fn_depth:  # #81: var joins let/const (see above)
                     self._emit(Op.LET_VAR, self._name(text), 1)
                 else:
                     self._emit(_decl, self._name(text))
