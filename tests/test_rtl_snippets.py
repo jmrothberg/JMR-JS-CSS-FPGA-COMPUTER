@@ -3929,6 +3929,7 @@ requestAnimationFrame(tick);
         sim.shutdown()
 
 
+@pytest.mark.skip(reason="V2: behind the V1 authoring wall (silicon arm removed 2026-08-23)")
 def test_rtl_findindex_identity():
     """arr.findIndex identity must return the matching index."""
     src = """
@@ -4206,6 +4207,7 @@ requestAnimationFrame(tick);
         sim.shutdown()
 
 
+@pytest.mark.skip(reason="V2: behind the V1 authoring wall (silicon arm removed 2026-08-23)")
 def test_rtl_stridx_find_splice_one_frame():
     """String-row blit + find+splice must finish one FRAME (do not raise CAP)."""
     import re as _re

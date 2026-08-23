@@ -191,6 +191,21 @@ def _isolate_iife_modules(
     return out
 
 
+
+# V1 AUTHORING WALL (2026-08-23): names whose silicon arms do not exist in
+# the V1.0 chip (or were removed by the V1-surface cut). Verified zero hits
+# across every playable title (INVADERS, PACMAN, DONKEY, ASTEROID, MRDO,
+# MKPVP + AURORA/JOYDEMO/PACDBG). A program referencing one of these fails
+# HERE, loudly, instead of faulting on hardware. V2 lifts the wall.
+V1_WALL_NAMES = frozenset([
+    "sin", "cos", "atan2", "pow", "round", "ceil", "hypot",
+    "charAt", "charCodeAt", "split", "match", "exec", "substring",
+    "toUpperCase", "toLowerCase", "toFixed", "toString", "String",
+    "concat", "reverse", "shift", "includes", "startsWith", "endsWith",
+    "padStart", "padEnd", "repeat",
+    "findIndex", "some", "every", "values", "entries",
+])
+
 class Compiler:
     def __init__(self, src: str) -> None:
         self.tokens = _isolate_iife_modules(_tokenize(src))
@@ -1503,6 +1518,18 @@ class Compiler:
             return
         self._call()
 
+    def _v1_wall(self, meth: str, line: int) -> None:
+        # V1 authoring wall: a method CALL through one of these names would
+        # reach a silicon arm the V1.0 chip does not have. A user-defined
+        # method with the same name would shadow a builtin that does not
+        # exist on V1 silicon either way — refuse at compile time, loudly.
+        if meth in V1_WALL_NAMES:
+            raise CompileError(
+                f"V1 WALL: .{meth}() is not in the V1.0 chip "
+                "(see docs/JMR_JS_COMPATIBILITY.md); V2 feature",
+                line,
+            )
+
     def _call(self) -> None:
         self._primary()
         while True:
@@ -1517,6 +1544,7 @@ class Compiler:
                 if self._match("("):
                     argc = self._arg_list()
                     self._expect(")")
+                    self._v1_wall(meth, line2)
                     self._emit(Op.CALL_METHOD, self._name(meth), argc)
                 else:
                     self._emit(Op.GET_PROP, self._name(meth))
@@ -1533,6 +1561,7 @@ class Compiler:
                     # NEW: always CALL_METHOD — VM handles class + array/string builtins
                     argc = self._arg_list()
                     self._expect(")")
+                    self._v1_wall(meth, line2)
                     self._emit(Op.CALL_METHOD, self._name(meth), argc)
                     continue
                 if self._match("="):
@@ -1785,11 +1814,13 @@ class Compiler:
                     if native == "Object.keys" or text in ("Math", "console", "document", "window", "localStorage", "JSON"):
                         argc = self._arg_list()
                         self._expect(")")
+                        self._v1_wall(native.split(".", 1)[-1], line)
                         self._emit(Op.CALL_NATIVE, self._name(native), argc)
                         return
                     self._emit(Op.LOAD_VAR, self._name(text))
                     argc = self._arg_list()
                     self._expect(")")
+                    self._v1_wall(meth, line)
                     self._emit(Op.CALL_METHOD, self._name(meth), argc)
                     return
                 # bare ID.prop — load var then GET_PROP (e.g. player.x)

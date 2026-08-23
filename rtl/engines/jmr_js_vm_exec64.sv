@@ -2856,8 +2856,7 @@ module jmr_js_vm_exec64 (
         fill_lut_raddr = `VST_AT(vsp - 12'd1)[9:0];
         name_hash_raddr = 10'd0;
         if (ip >= n_ops ||
-            code_rdata[7:0] == OP_RET_VAL ||
-            code_rdata[7:0] == OP_RETURN)
+            code_rdata[7:0] == OP_RET_VAL)
             varr_raddr = (vfe_mode == 2'd2) ? vfe_map[11:0] : vfe_arr[11:0];
         else if (code_rdata[7:0] == OP_ARR_GET)
             varr_raddr = `VST_AT(vsp - 12'd2)[11:0];
@@ -7530,25 +7529,9 @@ module jmr_js_vm_exec64 (
                                     state_n = S_FETCH_WAIT;
                                 end
                             end
-                            OP_RETURN: begin
-                                if (vsp != 0) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6715;
-                                    running_n = 1'b0;
-                                    state_n = S_DONE;
-                                end else if (vcsp != 0) begin
-                                    machine_fault_n = 1'b1; fault_code_n = 8'd2; fault_site_n = 16'd6719;
-                                    running_n = 1'b0;
-                                    state_n = S_DONE;
-                                end else begin
-                                    vgc_clear_i_n = 14'd0;
-                                    vgc_qr_n = 14'd0;
-                                    vgc_qw_n = 14'd0;
-                                    vgc_halt_after_n = 1'b1;
-                                    vgc_wait_after_n = (vraf_n != 0 ||
-                                        vtimer_n != 0 || vlistener_n != 0);
-                                    state_n = S_V64_GC_CLEAR;
-                                end
-                            end
+                            // OP_RETURN (14): V1 wall — the compiler has
+                            // never emitted it (programs end at ip>=n_ops /
+                            // RET_VAL); a stale .JSB carrying it now faults 5.
                             default: begin
                                 machine_fault_n = 1'b1;
                                 fault_code_n = 8'd5;

@@ -903,6 +903,7 @@ requestAnimationFrame(tick);
     assert m.vm.globals.get("active") == 1, m.vm.globals.get("active")
 
 
+@pytest.mark.skip(reason="V2: behind the V1 authoring wall (silicon arm removed 2026-08-23)")
 def test_findindex_identity():
     m = _run_js_frames(
         """
@@ -1748,6 +1749,7 @@ var result = parsed.x + parsed.values[1];
     assert "cyclic object" in vm.error
 
 
+@pytest.mark.skip(reason="V2: behind the V1 authoring wall (silicon arm removed 2026-08-23)")
 def test_hw_value64_string_replace_and_split():
     image = ProgramImage.from_chunk(
         compile_source(

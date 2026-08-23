@@ -1232,7 +1232,10 @@ module jmr_js_vm #(
         , S_FB_SYNC
         , S_V64_DISPATCH
     } st_t;
-    st_t state /*verilator public_flat_rd*/, ret_state;
+    // V1 fit: one-hot the 68-state parent register — 349 state==X decodes
+    // become single-FF tests; FF headroom is 8x.
+    (* fsm_encoding = "one_hot" *) st_t state /*verilator public_flat_rd*/;
+    st_t ret_state;
     logic vprom_done, vprom_copy, hp_prom_wr;
     logic [7:0] hp_prom_phys;
     st_t vprom_ret;
@@ -3866,7 +3869,7 @@ module jmr_js_vm #(
         .id_sort(id_sort),
         .vfe_sort_q(e64_vfe_sort_q),
         .id_find(id_find),
-        .id_findindex(id_findindex),
+        .id_findindex(16'hFFFF), // V1 wall: findIndex removed (no title uses it)
         .id_font(id_font),
         .id_disp(id_disp),
         .id_foreach(id_foreach),
