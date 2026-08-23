@@ -426,3 +426,26 @@ current netlist (207,725 LUTs, 365 BRAM, LUTRAM under cap) would place
 immediately on a Kintex-7 325T (203,800 LUTs, 445 BRAM) or any
 UltraScale part; (c) day total stands at 519k → 207.7k (−60%) with
 zero functionality loss and every game playing.
+
+## 2026-08-23 morning — new-ideas plan for a 1-2 session fit (user directive)
+
+Netlist snapshotted: commit 30f5fc6, tag `bigger-part-candidate-207k`,
+port checklist in docs/BIGGER_PART.md (Kintex-325T places it as-is).
+
+The plan, cheapest-first:
+1. **RUNNING NOW (run 15)**: `drc.disableLUTOverUtilError=1` — the
+   UTLZ-1 gate compares LOGICAL LUTs (165,989) against sites BEFORE
+   LUT6_2 pairing; control-heavy netlists pack 10-25%. If the placer
+   packs ~19%+, this places TONIGHT with zero RTL change. Either way
+   its failure report gives the true post-packing deficit.
+2. **50MHz core** (approved product decision): core_clk = MIG ui_clk
+   today, so the route is BUFGCE /2 on the core with 2-flop syncs on
+   the sram req/ack levels (the held-until-ack contract is already
+   CDC-tolerant). Helps TIMING closure after placement, not the DRC.
+3. **FB -> DDR3** (the budget lever): mini_fb's two BRAM banks are 160
+   of 365 tiles. Moving scanout to DDR3 line-prefetch frees them; the
+   17k of LUTRAM spills (fb tails, varr_c2, code_c1, vobj_tmem) return
+   to BRAM, raising the logic budget from ~91k toward ~120k. One
+   bounded session in jmr_mini_fb + scanout FIFO.
+4. **exec64 op-tiering** if still short: cold opcodes go multi-beat
+   through a shared datapath; only the hot ~40 stay one-beat comb.

@@ -151,6 +151,10 @@ catch {set_property AUTO_INCREMENTAL_CHECKPOINT 0 [get_runs synth_1]}
 # targets exactly this. First tried on run 4 of the LUT campaign.
 catch {set_property STEPS.SYNTH_DESIGN.ARGS.DIRECTIVE AreaOptimized_high [get_runs synth_1]}
 catch {set_property STEPS.OPT_DESIGN.ARGS.DIRECTIVE ExploreArea [get_runs impl_1]}
+# 2026-08-23: the UTLZ-1 DRC compares LOGICAL LUT count against sites
+# BEFORE LUT6_2 pairing is attempted; control-heavy netlists pack 10-25%.
+# Demote to warning and let the placer try (user-approved experiment).
+set_param drc.disableLUTOverUtilError 1
 catch {set_property AUTO_INCREMENTAL_CHECKPOINT 0 [get_runs impl_1]}
 # UG904: write a DCP after each *impl* step (opt/place/route). synth_design
 # is one step — first DCP is at synth_1 100%. Cannot resume mid-mapping.
