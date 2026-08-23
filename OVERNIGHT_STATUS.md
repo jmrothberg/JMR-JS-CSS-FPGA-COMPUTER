@@ -449,3 +449,49 @@ The plan, cheapest-first:
    bounded session in jmr_mini_fb + scanout FIFO.
 4. **exec64 op-tiering** if still short: cold opcodes go multi-beat
    through a shared datapath; only the hot ~40 stay one-beat comb.
+
+## Run 17 (2026-08-23 10:35) — V1 cut + one-hot verdict: flat (208,534)
+
+| metric | run 13 | run 17 |
+|---|---:|---:|
+| Slice LUTs | 207,725 | 208,534 (+809, noise) |
+| LUT as Logic | 164,401 | 165,208 |
+| post-opt DRC | 165,989 | 166,922 |
+
+Why flat, precisely:
+1. **The V1 surface was never in silicon.** Native IDs end at 41 — no
+   Math trig/pow arms exist; no string-method arms exist. Of the whole
+   removal list only id_findindex (now FFFF tie-off) and the
+   never-emitted OP_RETURN arm (now default/fault-5) had RTL — a few
+   hundred LUTs. The sin ROM is ctx.arc's table (PACMAN uses arc): KEPT.
+2. **The one-hot attribute did not take.** The synth log re-encoded 6
+   small FSMs (i2c, ft245, ddr3 bridge...) but has NO encoding line for
+   jmr_js_vm's `state` — next-state flows through hs_st()/ret_state
+   VARIABLES, so Vivado cannot extract the FSM and silently ignores
+   `fsm_encoding`. Manual one-hot would mean re-encoding the 68-value
+   st_t by hand across every compare — not a 1-session lever.
+
+Still gained (and kept): the compiler V1 wall (call-position precise —
+blunt name-table version falsely rejected `var values`), findIndex/
+RETURN silicon out, all six titles in the standing battery for the
+first time (ASTEROID/MRDO/MKPVP fault-free; MRDO interner peak 9,876 of
+16K), 148+2skip full suite, 196+2skip bytecode.
+
+## The 2-session fit plan (arithmetic-driven)
+
+Placement needs packed-logic + LUTRAM <= 134,600. At 20-25% LUT pairing
+the requirement is roughly: logic <= ~115-120k AND LUTRAM <= ~25-30k.
+- **Session 1 — FB -> DDR3**: frees ~160 BRAM tiles; fb tails +
+  varr_slot_c2 + code_mem_c1 + vobj_tmem spills (~16-17k LUTRAM) return
+  to BRAM; optionally push name_mem/vstack/protos to BRAM too ->
+  LUTRAM ~20-26k. Bounded to jmr_mini_fb + a scanout line FIFO
+  (swap = burst copy through the existing dump ports; ~3ms at half
+  frame rate is in budget per the product decision).
+- **Session 2 — logic -30-40k**: listener consolidation (parent+exec 4
+  tables + comb compaction -> sequential, events are cold), JSON stack
+  TOS/NOS rework (vjs_val/js_i comb-index muxes), sequential FP
+  add/mul (2 comb doubles remain), vst_win 16->8 behind the new
+  tests/test_stack_window_depth.py gate.
+Then the (already-armed) demoted-DRC placement attempt with LUT pairing
+closes the remainder, still on the 100 MHz XDC; 50 MHz BUFGCE stays the
+final timing lever only.
