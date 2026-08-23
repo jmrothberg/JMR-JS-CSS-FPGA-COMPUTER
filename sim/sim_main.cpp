@@ -466,6 +466,8 @@ static const char* vm_sname(unsigned s) {
     return "?";
 }
 
+static unsigned vsp_peak = 0, gcq_peak = 0, nbwp_peak = 0, jsonwp_peak = 0;
+static unsigned long long cm_cycles = 0, cm_lookups = 0, total_cycles = 0;
 static void tick() {
     top->clk = 0; top->pixel_clk = 0; top->eval();
     uint8_t miso = 1;
@@ -474,6 +476,26 @@ static void tick() {
     top->clk = 1; top->pixel_clk = 1; top->eval();
     sd.step(top->sd_cs_n != 0, top->sd_sck != 0, top->sd_mosi != 0, &miso);
     top->sd_miso = miso;
+    {   // per-clock peak trackers (transient-safe, unlike frame sampling)
+        unsigned v = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__vsp);
+        if (v > vsp_peak) vsp_peak = v;
+        {
+            static bool prev_cm = false;
+            bool cm = top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__cm_scan;
+            if (cm) cm_cycles++;
+            if (cm && !prev_cm) cm_lookups++;
+            prev_cm = cm;
+            total_cycles++;
+        }
+        unsigned nb = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__nb_wp);
+        if (nb > nbwp_peak) nbwp_peak = nb;
+        unsigned jw = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__json_wp);
+        if (jw > jsonwp_peak) jsonwp_peak = jw;
+        unsigned qr = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__vgc_qr);
+        unsigned qw = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__vgc_qw);
+        unsigned occ = (qw - qr) & 0x3FFFu;
+        if (occ > gcq_peak) gcq_peak = occ;
+    }
     if (watch_slot >= 0) {
         int32_t v = int32_t(top->rootp->jmr_js_core__DOT__u_vm__DOT__vars[watch_slot]);
         if (v != watch_prev) {
@@ -1148,7 +1170,7 @@ int main(int argc, char** argv) {
             const size_t SRC_MAX = 131072;
             size_t n = html.size() < SRC_MAX ? html.size() : SRC_MAX;
             for (size_t i = 0; i < n; i++)
-                rp->jmr_js_core__DOT__u_cons__DOT__source_mem[i] = html[i];
+                rp->jmr_js_core__DOT__g_sram__DOT__u_sram__DOT__mem[1724416u + i] = (uint16_t)(unsigned char)html[i]; // source lives in external SRAM (SRC_SRAM_BASE)
             rp->jmr_js_core__DOT__u_cons__DOT__src_len = (uint32_t)n;
             std::string base = path;
             auto slash = base.find_last_of("/\\");
@@ -1292,6 +1314,13 @@ int main(int argc, char** argv) {
             auto* r = top->rootp;
             unsigned stn = unsigned(r->jmr_js_core__DOT__u_vm__DOT__state);
             std::cout << "VMSTAT state=" << stn
+                      << " vspmax=" << vsp_peak
+                      << " gcqmax=" << gcq_peak
+                      << " nbmax=" << nbwp_peak
+                      << " jsonmax=" << jsonwp_peak
+                      << " cmcyc=" << cm_cycles
+                      << " cmlkp=" << cm_lookups
+                      << " totcyc=" << total_cycles
                       << " sname=" << vm_sname(stn)
                       << " ip=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__ip)
                       << " nops=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_ops)

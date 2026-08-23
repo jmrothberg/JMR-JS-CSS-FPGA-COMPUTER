@@ -64,7 +64,9 @@ module jmr_js_vm #(
     localparam int CODE_WORDS = 20480; // 2026-08-21(3): 20 tiles; the HM raf test's extended PACMAN image is 19527 words - 19456 was 71 words of headroom
     localparam int MAX_CONSTS = 1024;
     localparam int MAX_VARS   = 512;
-    localparam int STACK_DEPTH = 2048; // PACMAN.HTML maze literals: FM peak 969
+    localparam int STACK_DEPTH = 1024; // RTL vspmax=71 (40-frame PACMAN attract); flat
+                                       // array literals push per element, so a literal
+                                       // near 1000 slots still fits; vsp>=1008 faults (8'd7).
     // NEW: native 640×480 FB (matches PYTHON glass; no scale4)
     localparam int MW = 640;
     localparam int MH = 480;
@@ -187,7 +189,7 @@ module jmr_js_vm #(
     logic [8:0]  vvars_waddr;
     logic [63:0] vvars_wdata;
     logic [8:0]  vvars_raddr;
-    logic vvar_valid [0:MAX_VARS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic vvar_valid [0:MAX_VARS-1] /*verilator public_flat_rd*/;
     logic [11:0] vsp_ff;
     logic [11:0] vsp /*verilator public_flat_rd*/;
     logic [7:0] vcsp_ff;
@@ -213,8 +215,8 @@ module jmr_js_vm #(
     logic [9:0]  vobj_alloc_waddr;
     logic [1:0]  vobj_alloc_wdata;
     logic [12:0] vobj_alloc_raddr;
-    logic [11:0] vobj_gen [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
-    logic [5:0] vobj_len [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic [11:0] vobj_gen [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic [5:0] vobj_len [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     // NEW_OBJ stores the interned class name so CALL_METH can find the
     // class-table method (PYTHON _value_object_classes). 16'hFFFF = none.
     logic [15:0] vobj_cls [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
@@ -224,32 +226,32 @@ module jmr_js_vm #(
     logic [63:0] vfn_proto [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     // Object/array slots are 1-D SRAM after the MAX_* localparams (not 2-D
     // combo arrays — Synth 8-4556 / ASIC SRAM).
-    logic [11:0] vfn_gen [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic [11:0] vfn_gen [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     // Function handles are their own leftover-BRAM bank (vfn_* already
     // 1024-wide). They must not occupy vobj_alloc — that shared the 1024
     // bump with objects and faulted MAKE_OBJ while function slots were
     // the ones that were full (same PYTHON lists, same split).
-    logic        vfn_valid [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
-    logic        vfn_mark [0:OBJ_PHYS-1];
+    (* ram_style = "distributed" *) logic vfn_valid [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic vfn_mark [0:OBJ_PHYS-1];
     logic [15:0] vfn_entry [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     logic [5:0] vfn_nparam [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     logic [63:0] vfn_env [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     logic [63:0] vfn_bound_this [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     logic [2:0] vfn_flags [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
-    logic varr_valid [0:MAX_ARR-1] /*verilator public_flat_rd*/;
-    logic [11:0] varr_gen [0:MAX_ARR-1] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic varr_valid [0:MAX_ARR-1] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic [11:0] varr_gen [0:MAX_ARR-1] /*verilator public_flat_rd*/;
     (* ram_style = "block" *) logic [7:0] varr_len [0:MAX_ARR-1] /*verilator public_flat_rd*/;
     logic        varr_len_we;
     logic [11:0] varr_len_waddr;
     logic [7:0]  varr_len_wdata;
     logic [11:0] varr_len_raddr;
-    logic varr_long [0:MAX_ARR-1] /*verilator public_flat_rd*/;
-    logic [7:0] varr_lidx [0:MAX_ARR-1] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic varr_long [0:MAX_ARR-1] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic [7:0] varr_lidx [0:MAX_ARR-1] /*verilator public_flat_rd*/;
     logic vlong_used [0:LONG_PHYS-1];
-    logic vobj_mark [0:OBJ_PHYS-1];
-    logic varr_mark [0:MAX_ARR-1];
-    logic venv_valid [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
-    logic [11:0] venv_gen [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic vobj_mark [0:OBJ_PHYS-1];
+    (* ram_style = "distributed" *) logic varr_mark [0:MAX_ARR-1];
+    (* ram_style = "distributed" *) logic venv_valid [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic [11:0] venv_gen [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
     logic [63:0] venv_parent [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
     logic [4:0] venv_len [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
     // Env slots are 1-D venv_slot SRAM (not 2-D combo — Synth 8-4556).
@@ -265,9 +267,11 @@ module jmr_js_vm #(
     logic [63:0] vframe_ctor [0:CSTK-1] /*verilator public_flat_rd*/;
     // MAKE_FN in this activation captured venv; RET must not recycle it.
     logic vframe_escaped [0:CSTK-1];
-    logic [63:0] vgc_queue [0:MAX_OBJ+MAX_ARR+ENV_DEPTH-1];
+    // 17-bit entries: every enqueued word is a NaN-boxed heap ref
+    // ({16'h7ff9, kind[47:44], idx[12:0]}); pop rebuilds the full word.
+    logic [16:0] vgc_queue [0:MAX_OBJ+MAX_ARR+ENV_DEPTH-1];
     logic [13:0] vgc_qr_ff, vgc_qw_ff, vgc_clear_i_ff;
-    logic [13:0] vgc_qr, vgc_qw, vgc_clear_i;
+    logic [13:0] vgc_qr /*verilator public_flat_rd*/, vgc_qw /*verilator public_flat_rd*/, vgc_clear_i;
     logic [12:0] vgc_obj_i;
     logic [11:0] vgc_arr_i;
     logic [7:0] vgc_slot_i;
@@ -283,7 +287,7 @@ module jmr_js_vm #(
     logic valloc_retried;
     logic vgc_halt_after_ff;
     logic vgc_halt_after;
-    logic venv_mark [0:ENV_PHYS-1];
+    (* ram_style = "distributed" *) logic venv_mark [0:ENV_PHYS-1];
     logic [9:0] vgc_env_i;
     logic [2:0] vgc_root_phase;
     logic vcall_value_ff;
@@ -353,7 +357,7 @@ module jmr_js_vm #(
     logic [3:0] vraf_snap_n /*verilator public_flat_rd*/;
     logic [3:0] vraf_i /*verilator public_flat_rd*/;
     logic vtimer_valid [0:63] /*verilator public_flat_rd*/;
-    logic signed [31:0] vtimer_due [0:63] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic signed [31:0] vtimer_due [0:63] /*verilator public_flat_rd*/;
     logic signed [31:0] vtimer_id [0:63] /*verilator public_flat_rd*/;
     logic signed [63:0] vtimer_period [0:63] /*verilator public_flat_rd*/;
     logic [63:0] vtimer_fn [0:63] /*verilator public_flat_rd*/;
@@ -535,7 +539,7 @@ module jmr_js_vm #(
     logic [2:0]  tfn_this_tag [0:MAX_OBJ-1];
     logic        tfn_has_this [0:MAX_OBJ-1];
     logic [15:0] tenv_parent [0:MAX_OBJ-1];
-    logic [7:0]  arr_len  [0:MAX_ARR-1] /*verilator public_flat_rd*/;
+    (* ram_style = "distributed" *) logic [7:0] arr_len [0:MAX_ARR-1] /*verilator public_flat_rd*/;
     // Stable-handle collector. It traces roots at frame safe points and only
     // reclaims an unmarked tail; live object/array indices never move.
     logic        gc_obj_mark [0:MAX_OBJ-1];
@@ -551,10 +555,26 @@ module jmr_js_vm #(
     logic [15:0] cls_name [0:MAX_CLS-1];
     logic [15:0] cls_ctor [0:MAX_CLS-1];
     logic [4:0]  cls_nmeth[0:MAX_CLS-1];
-    logic [15:0] cls_mname[0:MAX_CLS-1][0:MAX_CMETH-1];
-    logic [15:0] cls_mip  [0:MAX_CLS-1][0:MAX_CMETH-1];
+    // Flattened {class,method} tables in LUTRAM; the method scan walks
+    // them one entry per beat (pipelined read), replacing the one-beat
+    // 256-way comparator forest. cls_name/cls_ctor/cls_nmeth stay FFs
+    // for the comb class find (tiny).
+    (* ram_style = "distributed" *) logic [15:0] cls_mname [0:MAX_CLS*MAX_CMETH-1];
+    (* ram_style = "distributed" *) logic [15:0] cls_mip   [0:MAX_CLS*MAX_CMETH-1];
+    logic [7:0]  clsm_raddr;
+    logic [15:0] clsm_name_rd, clsm_ip_rd;
+    logic        cmn_we, cmi_we;
+    logic [7:0]  cmn_wa, cmi_wa;
+    logic [15:0] cmn_wd, cmi_wd;
+    logic        cls_seq, cls_prime;
     // Class table scan: one (c) or (c,m) per clock. unique case must not CAM.
     logic cls_scan, cls_armed, cls_done, cls_ctor_mode, cls_hit;
+    // exec method-lookup service: exec raises cm_req (level) with key/cls;
+    // the sequential scanner runs ctor_mode=0 and the result pulses back.
+    logic        e64_cm_req;
+    logic [15:0] e64_cm_key, e64_cm_cls;
+    logic        cm_serving, cm_served_hold, cm_res_we;
+    logic [15:0] cm_res_mip;
     logic [3:0] cls_c, cls_m;
     logic [15:0] cls_cls, cls_key, cls_ctor_q, cls_mip_q, cls_gip_q;
     logic [4:0]  n_cls;
@@ -631,7 +651,7 @@ module jmr_js_vm #(
     // drawBitmap walks row[col] === "1"), while fillRect/drawImage art painted.
     // On-chip BRAM with a registered read: one-cycle random access on FPGA and
     // ASIC alike. The 4 MB external bank stays for art, never for code strings.
-    localparam int NAME_CAP = 32768;
+    localparam int NAME_CAP = 16384; // measured peak 3,644 bytes (PACMAN); 4.5x headroom, loud refuse past cap
     // UG901 RAM_STYLE=block (not a heuristic). Read process below matches
     // simple_dual_one_clock.v — not the 40-array mux.
     (* ram_style = "distributed" *) logic [7:0]  name_mem [0:NAME_CAP-1] /*verilator public_flat_rd*/;
@@ -658,7 +678,7 @@ module jmr_js_vm #(
     // no scan over the name table.
     logic [15:0] char_id [0:255] /*verilator public_flat_rd*/;
     logic        char_ok [0:255] /*verilator public_flat_rd*/;
-    logic        name_has [0:1023];   // this intern id has bytes in name_mem
+    (* ram_style = "distributed" *) logic name_has [0:1023];   // this intern id has bytes in name_mem
     logic        names_ok;            // name bytes present AND byte-aligned
     logic [15:0] nb_i, nb_len;
     logic        nb_one;              // this name is exactly 1 byte (char lookup)
@@ -675,7 +695,7 @@ module jmr_js_vm #(
     // are all expanded here, so the glyph raster (and the string concat that
     // materialises dynamic interns) has exactly one byte source.
     localparam int TXT_MAX = 64;
-    logic [7:0]  txt_buf [0:TXT_MAX-1];
+    (* ram_style = "distributed" *) logic [7:0] txt_buf [0:TXT_MAX-1];
     logic [6:0]  txt_len, txt_i, txt_bn;
     logic [3:0]  txt_ph;
     logic [2:0]  txt_row, txt_col;
@@ -706,7 +726,7 @@ module jmr_js_vm #(
     logic        json_we;
     logic [12:0] json_waddr;
     logic [7:0]  json_wdata;
-    logic [13:0] json_wp, json_rp, json_src, json_srclen, json_dst;
+    logic [13:0] json_wp /*verilator public_flat_rd*/, json_rp, json_src, json_srclen, json_dst;
     logic        namcpy_repl; // S_NAMCPY then S_REPL (else S_JSON_PARSE)
     logic        namcpy_v64;  // S_NAMCPY then S_V64_JSON_PARSE
     logic        namcpy_armed; // wait 1 cycle for registered name_rdata
@@ -991,7 +1011,7 @@ module jmr_js_vm #(
     // mapping OOM). Sites set we/waddr/wdata; the read process owns
     // the single write port. Writes land one beat later; every
     // consumer reads via registered *_rdata beats later still.
-    logic vgc_queue_pa_we; logic [11:0] vgc_queue_pa_waddr; logic [63:0] vgc_queue_pa_wdata;
+    logic vgc_queue_pa_we; logic [11:0] vgc_queue_pa_waddr; logic [16:0] vgc_queue_pa_wdata;
     logic vconsts_pa_we; logic [9:0] vconsts_pa_waddr; logic [63:0] vconsts_pa_wdata;
     logic vobj_proto_pa_we; logic [12:0] vobj_proto_pa_waddr; logic [63:0] vobj_proto_pa_wdata;
     logic vfn_proto_pa_we; logic [12:0] vfn_proto_pa_waddr; logic [63:0] vfn_proto_pa_wdata;
@@ -1052,10 +1072,10 @@ module jmr_js_vm #(
     // compile_js.py fails loud if a title ever exceeds this.
     localparam int MAX_SPR = 16;
     localparam logic signed [31:0] FX_ONE = 32'sh0001_0000; // Q16.16 1.0
-    (* ram_style = "distributed" *) logic [7:0] spr_mem [0:SPR_BYTES-1];
-    logic        spr_we;
-    logic [17:0] spr_waddr;
-    logic [7:0]  spr_wdata;
+    // spr_mem moved to external SRAM 2026-08-22 (words SPR_SRAM_BASE..+32767,
+    // one byte per word) - was 6k LUTRAM against the failing 46.2k cap.
+    localparam logic [20:0] SPR_SRAM_BASE = 21'd1691648;
+    logic        sprb_pend; // one in-flight sprite-byte write
     // NEW: ASET sprites live in the 4 MB asset SRAM — offsets are 22-bit byte
     // addresses in the payload; DONKEY sheets are 1470×750 so w/h are u16.
     logic [21:0] spr_off [0:MAX_SPR-1];
@@ -1070,7 +1090,7 @@ module jmr_js_vm #(
     logic        sprd_mode;   // NEW: trailer carries SPRD descriptors (no pixels)
     logic        blit_wait;   // NEW: SRAM read handshake inside S_BLIT
     // flatten: spr_mem 256K / imgd_pix FB — raddr this clock, rdata next.
-    logic [7:0]  spr_mem_rdata;
+    // spr_mem_rdata retired (external SRAM)
     logic [17:0] spr_raddr;
     logic [21:0] spr_so; // ASET word addr; spr_raddr is the low 18 for spr_mem
     logic [63:0] vraf_rdata;
@@ -1275,12 +1295,60 @@ module jmr_js_vm #(
     // Same LUT-fit treatment for the pure-value metadata writers. vobj_len
     // and venv_len STAY as FFs: their read-modify-write sites sit on the
     // 2-beat heap loop where a strobed (+1 beat) write could be read stale.
+    // vobj_len / venv_len: strobed writes land one beat later than the old
+    // direct writes; the read capture FORWARDS a same-address in-flight
+    // write, restoring the exact original read-after-write timing (a
+    // consumer whose raddr was armed on the write beat still sees the new
+    // value on the next edge). This closes the RMW hazard that blocked the
+    // first conversion attempt.
+    logic        vol_we, vel_we;
+    logic [12:0] vobj_len_ridx;
+    logic [9:0]  venv_len_ridx;
+    logic [12:0] vol_wa;
+    logic [5:0]  vol_wd;
+    logic [8:0]  vel_wa;
+    logic [4:0]  vel_wd;
+    always_ff @(posedge clk) begin
+        if (vol_we) vobj_len[vol_wa[9:0]] <= vol_wd;
+        else if (e32_vobj_len_we) vobj_len[e32_vobj_len_waddr[9:0]] <= e32_vobj_len_wdata;
+        if (vel_we) venv_len[vel_wa] <= vel_wd;
+        else if (e64_venv_len_we) venv_len[e64_venv_len_waddr[8:0]] <= e64_venv_len_wdata;
+    end
+
     logic        vom_we_cls, vom_we_bi, veg_we;
     logic [12:0] vom_wa;
     logic [15:0] vom_cls;
     logic [3:0]  vom_bi;
     logic [8:0]  veg_wa;
     logic [11:0] veg_wd;
+    logic        vog_we, vfg_we, vag_we;
+    logic [9:0]  vog_wa, vfg_wa;
+    logic [11:0] vag_wa;
+    logic [11:0] vog_wd, vfg_wd, vag_wd;
+    logic        vmko_we, vmkf_we, vmka_we, vmke_we;
+    logic [9:0]  vmko_wa, vmkf_wa;
+    logic [11:0] vmka_wa;
+    logic [8:0]  vmke_wa;
+    logic        vmko_wd, vmkf_wd, vmka_wd, vmke_wd;
+    logic        vfv_we, vav_we, vev_we, vvv_we, vlo_we;
+    logic [9:0]  vfv_wa;
+    logic [10:0] vav_wa, vlo_wa;
+    logic [8:0]  vev_wa, vvv_wa;
+    logic        vfv_wd, vav_wd, vev_wd, vvv_wd, vlo_wd;
+    logic        vli_we;
+    logic [10:0] vli_wa;
+    logic [7:0]  vli_wd;
+    logic        alw_we;
+    logic [10:0] alw_wa;
+    logic [7:0]  alw_wd;
+    logic        vtd_we, nh_we, txw_we, cse_we;
+    logic [5:0]  vtd_wa, txw_wa;
+    logic signed [31:0] vtd_wd;
+    logic [9:0]  nh_wa;
+    logic        nh_wd;
+    logic [7:0]  txw_wd;
+    logic [6:0]  cse_wa;
+    logic [5:0]  cse_wd;
     always_ff @(posedge clk) begin
         if (vom_we_cls)
             vobj_cls[vom_wa[9:0]] <= vom_cls;
@@ -1289,6 +1357,38 @@ module jmr_js_vm #(
         if (vom_we_bi) vobj_builtin[vom_wa[9:0]] <= vom_bi;
         if (veg_we) venv_gen[veg_wa] <= veg_wd;
         else if (e64_venv_gen_we) venv_gen[e64_venv_gen_waddr[8:0]] <= e64_venv_gen_wdata;
+        if (vog_we) vobj_gen[vog_wa] <= vog_wd;
+        if (vfg_we) vfn_gen[vfg_wa] <= vfg_wd;
+        if (vag_we) varr_gen[vag_wa] <= vag_wd;
+        if (vmko_we) vobj_mark[vmko_wa] <= vmko_wd;
+        if (vmkf_we) vfn_mark[vmkf_wa] <= vmkf_wd;
+        if (vmka_we) varr_mark[vmka_wa] <= vmka_wd;
+        if (vmke_we) venv_mark[vmke_wa] <= vmke_wd;
+        // e64_*_we are one-shot pulses (exec clears them on its first
+        // idle beat — see the exec-write region comment). The else-if
+        // drops an e64 write only if a parent strobe fires the same beat;
+        // parent metadata strobes fire mid-state, e64 pulses land on the
+        // leave-EXEC beat, so the two never coincide today. If a state
+        // ever strobes metadata on its FIRST beat, revisit this priority.
+        if (vfv_we) vfn_valid[vfv_wa] <= vfv_wd;
+        if (vav_we) varr_valid[vav_wa] <= vav_wd;
+        else if (e64_varr_valid_we) varr_valid[e64_varr_valid_waddr[10:0]] <= e64_varr_valid_wdata;
+        if (vev_we) venv_valid[vev_wa] <= vev_wd;
+        else if (e64_venv_valid_we) venv_valid[e64_venv_valid_waddr[8:0]] <= e64_venv_valid_wdata;
+        if (vvv_we) vvar_valid[vvv_wa] <= vvv_wd;
+        else if (e64_vvar_valid_we) vvar_valid[e64_vvar_valid_waddr[8:0]] <= e64_vvar_valid_wdata;
+        if (vlo_we) varr_long[vlo_wa] <= vlo_wd;
+        else if (e64_varr_long_we) varr_long[e64_varr_long_waddr[10:0]] <= e64_varr_long_wdata;
+        if (vli_we) varr_lidx[vli_wa] <= vli_wd;
+        else if (e64_varr_lidx_we) varr_lidx[e64_varr_lidx_waddr[10:0]] <= e64_varr_lidx_wdata;
+        if (alw_we) arr_len[alw_wa] <= alw_wd;
+        if (vtd_we) vtimer_due[vtd_wa] <= vtd_wd;
+        if (txw_we) txt_buf[txw_wa] <= txw_wd;
+        if (cse_we) cstack_env[cse_wa] <= cse_wd;
+        if (cmn_we) cls_mname[cmn_wa] <= cmn_wd;
+        if (cmi_we) cls_mip[cmi_wa] <= cmi_wd;
+        clsm_name_rd <= cls_mname[clsm_raddr];
+        clsm_ip_rd <= cls_mip[clsm_raddr];
     end
 
     logic        vobj_we, varr_we, venv_we;
@@ -1423,7 +1523,7 @@ module jmr_js_vm #(
     logic [15:0] to_fire_fn, to_fire_id;
     logic        e32_env_cap_rdata;
     logic [13:0] gc_queue_rdata;
-    logic [63:0] vgc_queue_rdata;
+    logic [16:0] vgc_queue_rdata;
     logic [15:0] e32_raf_fn_rdata;
     logic [15:0] e32_raf_tap1, e32_raf_tap2, e32_raf_tap3, e32_raf_tap4;
     logic [15:0] e32_raf_tap5, e32_raf_tap6, e32_raf_tap7;
@@ -1843,7 +1943,7 @@ module jmr_js_vm #(
             ; // p3b: dead tagged write removed (obj_cls)
             ; // p3b: dead tagged write removed (obj_n)
             ; // p3b: dead tagged write removed (tenv_parent)
-            vobj_len[oid[12:0]] <= 6'd1;
+            begin vol_we <= 1'b1; vol_wa <= oid[12:0]; vol_wd <= 6'd1; end
             ; // p3b: dead tagged write removed (env_oid)
             env_cap[env_sp] <= 1'b0;
             env_sp <= env_sp + 6'd1;
@@ -1858,7 +1958,7 @@ module jmr_js_vm #(
         fo = foid[12:0];
         // flatten: obj_n / tfn_* raddr last beat (FOREACH/KEYEV/rAF/METH mux).
         parent = (e32_obj_n_rdata > 6'd2) ? e32_tfn_parent_rdata : 16'd0;
-        cstack_env[csp] <= env_sp;
+        begin cse_we <= 1'b1; cse_wa <= csp; cse_wd <= env_sp; end
         push_fresh_env(parent);
         // Fn slot3 is the receiver captured by an arrow or a materialized
         // class method. Regular callbacks deliberately enter with no `this`.
@@ -2661,10 +2761,10 @@ module jmr_js_vm #(
             (state == S_V64_EXEC ||
              state == S_FETCH_WAIT ||
              state == S_V64_WIN_FILL)) begin
-            vstack[e64_vst_waddr_q] <= e64_vst_wdata_q;
+            vstack[e64_vst_waddr_q[9:0]] <= e64_vst_wdata_q;
         end else if (vst_we)
-            vstack[vst_waddr] <= vst_wdata;
-        vst_rdata <= vstack[vst_raddr];
+            vstack[vst_waddr[9:0]] <= vst_wdata;
+        vst_rdata <= vstack[vst_raddr[9:0]];
     end
 
     always_comb begin
@@ -3845,6 +3945,11 @@ module jmr_js_vm #(
         .p_minmax_k(minmax_k),
         .p_minmax_n(minmax_n),
         .n_cls(n_cls),
+        .cm_req_q(e64_cm_req),
+        .cm_key_q(e64_cm_key),
+        .cm_cls_q(e64_cm_cls),
+        .cm_res_we(cm_res_we),
+        .cm_res_mip(cm_res_mip),
         .n_consts(n_consts),
         .n_ops(n_ops),
         .n_spr(n_spr),
@@ -4648,8 +4753,7 @@ module jmr_js_vm #(
         json_mem_rdata <= json_mem[json_rdaddr];
     end
     always_ff @(posedge clk) begin
-        if (spr_we) spr_mem[spr_waddr] <= spr_wdata;
-        spr_mem_rdata <= spr_mem[spr_raddr];
+        // spr_mem external - no on-chip storage
     end
     always_ff @(posedge clk) begin
         // imgd_pix array deleted - snapshot pixels stream over the external
@@ -4822,7 +4926,7 @@ module jmr_js_vm #(
                  valloc_kind == 2'd3) ? valloc_i[9:0] :
                 ((casestate_q == S_V64_GC_ENV || state == S_V64_GC_ENV) ?
                     vgc_cur[9:0] : venv[9:0])];
-            venv_len_rdata <= venv_len[
+            venv_len_ridx =
                 (casestate_q == S_HEAP_WAIT || state == S_HEAP_WAIT ||
                  casestate_q == S_HEAP_CMP || state == S_HEAP_CMP ||
                  casestate_q == S_HEAP_WR || state == S_HEAP_WR) ?
@@ -4832,7 +4936,10 @@ module jmr_js_vm #(
                 ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
                  valloc_kind == 2'd3) ? valloc_i[9:0] :
                 ((casestate_q == S_V64_GC_ENV || state == S_V64_GC_ENV) ?
-                    vgc_cur[9:0] : venv[9:0])];
+                    vgc_cur[9:0] : venv[9:0]);
+            // same-beat write-forward: restores the old direct-write timing
+            venv_len_rdata <= (vel_we && vel_wa == venv_len_ridx[8:0])
+                ? vel_wd : venv_len[venv_len_ridx[8:0]];
             venv_gen_rdata <= venv_gen[
                 vgc_mark_pend ? vgc_mark_word[9:0] :
                 (casestate_q == S_V64_GC_SWEEP_ENV ||
@@ -4976,7 +5083,7 @@ module jmr_js_vm #(
                  casestate_q == S_HEAP_CMP || state == S_HEAP_CMP) ? hp_oid :
                 ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
                  valloc_kind == 2'd0) ? valloc_i[12:0] : e64_vobj_raddr];
-            vobj_len_rdata <= vobj_len[
+            vobj_len_ridx =
                 (casestate_q == S_V64_GC_OBJ || state == S_V64_GC_OBJ) ?
                     vgc_cur[12:0] :
                 (casestate_q == S_V64_DISPATCH || state == S_V64_DISPATCH) ?
@@ -4992,7 +5099,10 @@ module jmr_js_vm #(
                 // read undefined, and DONKEY's Enter gate never matched.
                 (casestate_q == S_HEAP_WR || state == S_HEAP_WR) ? hp_oid :
                 ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
-                 valloc_kind == 2'd0) ? valloc_i[12:0] : e64_vobj_raddr];
+                 valloc_kind == 2'd0) ? valloc_i[12:0] : e64_vobj_raddr;
+            // same-beat write-forward (see venv_len above)
+            vobj_len_rdata <= (vol_we && vol_wa[9:0] == vobj_len_ridx[9:0])
+                ? vol_wd : vobj_len[vobj_len_ridx[9:0]];
             vobj_builtin_rdata <= vobj_builtin[
                 (casestate_q == S_HEAP_WAIT || state == S_HEAP_WAIT ||
                  casestate_q == S_HEAP_CMP || state == S_HEAP_CMP ||
@@ -5482,7 +5592,7 @@ module jmr_js_vm #(
             vsp_d <= '0;
             vst_we <= 1'b0;
             imgd_pend <= 1'b0;
-            spr_we <= 1'b0;
+            sprb_pend <= 1'b0;
             name_we <= 1'b0;
             json_we <= 1'b0;
             stack_we <= 1'b0;
@@ -5539,6 +5649,8 @@ module jmr_js_vm #(
             cls_scan <= 1'b0; cls_armed <= 1'b0; cls_done <= 1'b0;
             cls_hit <= 1'b0;
             cls_ctor_mode <= 1'b0; cls_c <= 4'd0; cls_m <= 4'd0;
+            cls_seq <= 1'b0; cls_prime <= 1'b0;
+            cm_serving <= 1'b0; cm_served_hold <= 1'b0; cm_res_we <= 1'b0;
             cls_cls <= 16'd0; cls_key <= 16'd0;
             cls_ctor_q <= 16'hFFFF; cls_mip_q <= 16'hFFFF; cls_gip_q <= 16'hFFFF;
             hs_vcall_value(1'b0); hs_vcall_entry('0); hs_vcall_argc('0);
@@ -5663,6 +5775,13 @@ module jmr_js_vm #(
             vst_we <= 1'b0;
             vfr_we <= 1'b0;
             vom_we_cls <= 1'b0; vom_we_bi <= 1'b0; veg_we <= 1'b0;
+            vog_we <= 1'b0; vfg_we <= 1'b0; vag_we <= 1'b0;
+            vmko_we <= 1'b0; vmkf_we <= 1'b0; vmka_we <= 1'b0; vmke_we <= 1'b0;
+            vfv_we <= 1'b0; vav_we <= 1'b0; vev_we <= 1'b0; vvv_we <= 1'b0; vlo_we <= 1'b0;
+            vli_we <= 1'b0; alw_we <= 1'b0;
+            vtd_we <= 1'b0; nh_we <= 1'b0; txw_we <= 1'b0; cse_we <= 1'b0;
+            cmn_we <= 1'b0; cmi_we <= 1'b0;
+            vol_we <= 1'b0; vel_we <= 1'b0;
             // imgd_pend is HANDSHAKE STATE (held across beats until sram_ack),
             // not a strobe - it must NOT be cleared here. The old imgd_we that
             // lived on this line was a one-shot BRAM write strobe.
@@ -5670,7 +5789,7 @@ module jmr_js_vm #(
             vobj_proto_pa_we <= 1'b0; vfn_proto_pa_we <= 1'b0;
             vfn_env_pa_we <= 1'b0; vfn_bound_this_pa_we <= 1'b0;
             venv_parent_pa_we <= 1'b0;
-            spr_we <= 1'b0;
+            // spr strobe retired (external SRAM)
             name_we <= 1'b0;
             json_we <= 1'b0;
             stack_we <= 1'b0;
@@ -5848,6 +5967,7 @@ module jmr_js_vm #(
             // name_hash_tbl writes: Port A process (name_hash_we / poke 40 / exec we).
             if (!(e64_p_we && e64_p_sel == 6'd17) && e64_name_has_we)
                 name_has[e64_name_has_waddr] <= e64_name_has_wdata;
+            if (nh_we) name_has[nh_wa] <= nh_wd;
             kd_fn <= kd_slot[0];
             ku_fn <= ku_slot[0];
             if (fb_swap || ((state == S_V64_EXEC) && e64_fb_swap_q))
@@ -5928,7 +6048,7 @@ module jmr_js_vm #(
                     else if (vtimer_n != 7'd0)
                         vtimer_n <= vtimer_n - 7'd1;
                     if (e64_vtimer_valid_wdata) begin
-                        vtimer_due[e64_vtimer_waddr] <= e64_vtimer_due_wdata;
+                        begin vtd_we <= 1'b1; vtd_wa <= e64_vtimer_waddr; vtd_wd <= e64_vtimer_due_wdata; end
                         vtimer_fn[e64_vtimer_waddr] <= e64_vtimer_fn_wdata;
                         vtimer_id[e64_vtimer_waddr] <= e64_vtimer_id_wdata;
                         vtimer_period[e64_vtimer_waddr] <= e64_vtimer_period_wdata;
@@ -5988,16 +6108,16 @@ module jmr_js_vm #(
                     json_wdata <= e64_json_mem_wdata;
                 end
                 // varr_len / vvars writes: Port A processes (not this FSM).
-                if (e64_varr_lidx_we) varr_lidx[e64_varr_lidx_waddr[10:0]] <= e64_varr_lidx_wdata;
-                if (e64_varr_long_we) varr_long[e64_varr_long_waddr[10:0]] <= e64_varr_long_wdata;
+                // moved to Port A process (metadata evacuation)
+                // moved to Port A process (metadata evacuation)
                 if (e64_varr_long_we && e64_varr_long_wdata && e64_varr_lidx_we)
                     vlong_used[e64_varr_lidx_wdata[6:0]] <= 1'b1;
-                if (e64_varr_valid_we) varr_valid[e64_varr_valid_waddr[10:0]] <= e64_varr_valid_wdata;
+                // moved to Port A process (metadata evacuation)
                 // e64_venv_gen_we applies in the dedicated metadata process
-                if (e64_venv_len_we) venv_len[e64_venv_len_waddr[8:0]] <= e64_venv_len_wdata;
-                if (e64_venv_valid_we) venv_valid[e64_venv_valid_waddr[8:0]] <= e64_venv_valid_wdata;
+                // e64_venv_len_we applies in the dedicated len process
+                // moved to Port A process (metadata evacuation)
                 // e64_vobj_cls_we applies in the dedicated metadata process
-                if (e64_vvar_valid_we) vvar_valid[e64_vvar_valid_waddr[8:0]] <= e64_vvar_valid_wdata;
+                // moved to Port A process (metadata evacuation)
                 if (e64_vframe_we)
                     // record fields write in the dedicated vframe process;
                     // escaped stays here (flat FFs, partial-field writers)
@@ -6005,7 +6125,7 @@ module jmr_js_vm #(
             end
             if ((state == S_EXEC) || (state == S_NAT)) begin
                 // we_q is registered; apply on EXEC/NAT including leave_hold.
-                if (e32_arr_len_we) arr_len[e32_arr_len_waddr[10:0]] <= e32_arr_len_wdata;
+                // arr_len writes: Port A process (e32 channel is driverless)
                 if (e32_env_cap_we) env_cap[e32_env_cap_waddr[8:0]] <= e32_env_cap_wdata;
                 if (e32_env_oid_we) env_oid[e32_env_oid_waddr[8:0]] <= e32_env_oid_wdata;
                 if (e32_json_mem_we) begin
@@ -6026,7 +6146,7 @@ module jmr_js_vm #(
                 if (e32_var_init_we) var_init[e32_var_init_waddr[8:0]] <= e32_var_init_wdata;
                 if (e32_var_tag_we) var_tag[e32_var_tag_waddr[8:0]] <= e32_var_tag_wdata;
                 if (e32_vars_we) vars[e32_vars_waddr[8:0]] <= e32_vars_wdata;
-                if (e32_vobj_len_we) vobj_len[e32_vobj_len_waddr[9:0]] <= e32_vobj_len_wdata;
+                // e32_vobj_len_we applies in the dedicated len process
                 if (e32_fn_proto_we) begin
                     fn_proto_ip[e32_fn_proto_waddr] <= e32_fn_proto_ip_wdata;
                     fn_proto_oid[e32_fn_proto_waddr] <= e32_fn_proto_oid_wdata;
@@ -6034,7 +6154,7 @@ module jmr_js_vm #(
                 end
                 if (e32_cstack_we) begin
                     ; // p3b: dead tagged write removed (cstack_ctorobj)
-                    cstack_env[e32_cstack_waddr] <= e32_cstack_env_wdata;
+                    begin cse_we <= 1'b1; cse_wa <= e32_cstack_waddr[6:0]; cse_wd <= e32_cstack_env_wdata; end
                     ; // p3b: dead tagged write removed (cstack_fe_arr)
                     ; // p3b: dead tagged write removed (cstack_fe_fn)
                     ; // p3b: dead tagged write removed (cstack_fe_i)
@@ -6093,6 +6213,34 @@ module jmr_js_vm #(
             // Sequential (c,m) was 256 clocks per GET_PROP miss — play CALL
             // paid that every method. unique-case CAM over BRAM is still
             // forbidden; this is FF equality outside the opcode case.
+            if (cm_served_hold) begin
+                // Result is LEVEL, held until exec drops the request —
+                // exec's *_n consumption only lands on enable&&!leave_hold
+                // beats, so a one-beat pulse could be missed (livelock).
+                if (!e64_cm_req) begin
+                    cm_served_hold <= 1'b0;
+                    cm_res_we <= 1'b0;
+                end
+            end else if (v64_on && e64_cm_req && !cm_serving &&
+                         !cls_scan && !cls_seq) begin
+                cls_cls <= e64_cm_cls;
+                cls_key <= e64_cm_key;
+                cls_ctor_mode <= 1'b0;
+                cls_mip_q <= 16'hFFFF;
+                cls_scan <= 1'b1;
+                cls_armed <= 1'b0;
+                cls_done <= 1'b0;
+                cm_serving <= 1'b1;
+            end
+            if (cm_serving && cls_done) begin
+                // exec's CAM matched only non-getter entries; the walk fills
+                // cls_mip_q with exactly those, so hand that back.
+                cm_res_we <= 1'b1;
+                cm_res_mip <= cls_mip_q;
+                cm_serving <= 1'b0;
+                cm_served_hold <= 1'b1;
+                cls_done <= 1'b0;
+            end
             if (cls_scan) begin
                 if (cls_ctor_mode) begin
                     for (int ci = 0; ci < MAX_CLS; ci++) begin
@@ -6101,24 +6249,58 @@ module jmr_js_vm #(
                             cls_hit <= 1'b1;
                         end
                     end
-                end else begin
-                    for (int ci = 0; ci < MAX_CLS; ci++) begin
-                        for (int mi = 0; mi < MAX_CMETH; mi++) begin
-                            if ((5'(ci) < n_cls) &&
-                                (cls_name[ci] == cls_cls) &&
-                                (5'(mi) < cls_nmeth[ci]) &&
-                                (cls_mname[ci][mi][14:0] == cls_key[14:0])) begin
-                                if (cls_mname[ci][mi][15])
-                                    cls_gip_q <= cls_mip[ci][mi];
-                                else
-                                    cls_mip_q <= cls_mip[ci][mi];
-                            end
+                    cls_scan <= 1'b0;
+                    cls_armed <= 1'b0;
+                    cls_done <= 1'b1;
+                end else if (!cls_seq) begin
+                    // Beat 1: comb class find over the small FF arrays,
+                    // then start the method walk (or finish on miss).
+                    logic       f_hit;
+                    logic [3:0] f_ci;
+                    f_hit = 1'b0; f_ci = 4'd0;
+                    for (int ci = 0; ci < MAX_CLS; ci++)
+                        if ((5'(ci) < n_cls) && (cls_name[ci] == cls_cls)) begin
+                            f_hit = 1'b1; f_ci = 4'(ci);
                         end
+                    if (!f_hit) begin
+                        cls_scan <= 1'b0;
+                        cls_armed <= 1'b0;
+                        cls_done <= 1'b1;
+                    end else begin
+                        cls_seq <= 1'b1;
+                        cls_prime <= 1'b1;
+                        cls_c <= f_ci;
+                        cls_m <= 4'd0;
+                        clsm_raddr <= {f_ci, 4'd0};
+                    end
+                end else if (cls_prime) begin
+                    // Beat 2: first read in flight; advance the address.
+                    cls_prime <= 1'b0;
+                    cls_m <= 4'd1;
+                    clsm_raddr <= {cls_c, 4'd1};
+                end else begin
+                    // One method per beat: compare the landed read for
+                    // entry cls_m-1 while entry cls_m is in flight.
+                    logic [3:0] mprev;
+                    mprev = cls_m - 4'd1;
+                    if (({1'b0, mprev} < cls_nmeth[cls_c]) &&
+                        (clsm_name_rd[14:0] == cls_key[14:0])) begin
+                        if (clsm_name_rd[15])
+                            cls_gip_q <= clsm_ip_rd;
+                        else
+                            cls_mip_q <= clsm_ip_rd;
+                    end
+                    if (({1'b0, mprev} + 5'd1 >= cls_nmeth[cls_c]) ||
+                        (mprev == 4'(MAX_CMETH - 1))) begin
+                        cls_seq <= 1'b0;
+                        cls_scan <= 1'b0;
+                        cls_armed <= 1'b0;
+                        cls_done <= 1'b1;
+                    end else begin
+                        cls_m <= cls_m + 4'd1;
+                        clsm_raddr <= {cls_c, cls_m};
                     end
                 end
-                cls_scan <= 1'b0;
-                cls_armed <= 1'b0;
-                cls_done <= 1'b1;
             end
             if (stop) begin
                 running <= 1'b0;
@@ -6147,37 +6329,37 @@ module jmr_js_vm #(
                             mi < MAX_OBJ &&
                             vobj_alloc_rdata == 2'd1 &&
                             !vobj_mark_rdata) begin
-                            vobj_mark[mi[12:0]] <= 1'b1;
+                            begin vmko_we <= 1'b1; vmko_wa <= mi[9:0]; vmko_wd <= 1'b1; end
                             vgc_queue_pa_we <= 1'b1;
                             vgc_queue_pa_waddr <= vgc_qw;
-                            vgc_queue_pa_wdata <= vgc_mark_word;
+                            vgc_queue_pa_wdata <= {vgc_mark_word[47:44], vgc_mark_word[12:0]};
                             hs_vgc_qw(vgc_qw + 14'd1);
                         end else if (v64_on &&
                                      vgc_mark_word[63:48] == 16'h7ff9 &&
                                      mk == 4'd7 && mi < MAX_OBJ &&
                                      vfn_valid_rdata && !vfn_mark_rdata) begin
-                            vfn_mark[mi[12:0]] <= 1'b1;
+                            begin vmkf_we <= 1'b1; vmkf_wa <= mi[9:0]; vmkf_wd <= 1'b1; end
                             vgc_queue_pa_we <= 1'b1;
                             vgc_queue_pa_waddr <= vgc_qw;
-                            vgc_queue_pa_wdata <= vgc_mark_word;
+                            vgc_queue_pa_wdata <= {vgc_mark_word[47:44], vgc_mark_word[12:0]};
                             hs_vgc_qw(vgc_qw + 14'd1);
                         end else if (v64_on &&
                                      vgc_mark_word[63:48] == 16'h7ff9 &&
                                      mk == 4'd6 && mi < MAX_ARR &&
                                      varr_valid_rdata && !varr_mark_rdata) begin
-                            varr_mark[mi[11:0]] <= 1'b1;
+                            begin vmka_we <= 1'b1; vmka_wa <= mi[11:0]; vmka_wd <= 1'b1; end
                             vgc_queue_pa_we <= 1'b1;
                             vgc_queue_pa_waddr <= vgc_qw;
-                            vgc_queue_pa_wdata <= vgc_mark_word;
+                            vgc_queue_pa_wdata <= {vgc_mark_word[47:44], vgc_mark_word[12:0]};
                             hs_vgc_qw(vgc_qw + 14'd1);
                         end else if (v64_on &&
                                      vgc_mark_word[63:48] == 16'h7ff9 &&
                                      mk == 4'd9 && mi < ENV_DEPTH &&
                                      venv_valid_rdata && !venv_mark_rdata) begin
-                            venv_mark[mi[9:0]] <= 1'b1;
+                            begin vmke_we <= 1'b1; vmke_wa <= mi[8:0]; vmke_wd <= 1'b1; end
                             vgc_queue_pa_we <= 1'b1;
                             vgc_queue_pa_waddr <= vgc_qw;
-                            vgc_queue_pa_wdata <= vgc_mark_word;
+                            vgc_queue_pa_wdata <= {vgc_mark_word[47:44], vgc_mark_word[12:0]};
                             hs_vgc_qw(vgc_qw + 14'd1);
                         end else if (!v64_on && vgc_mark_word[16] &&
                                      oid32 < n_arr && oid32 < 16'(MAX_ARR) &&
@@ -6506,39 +6688,39 @@ module jmr_js_vm #(
                         if (heap_clr_i < 12'(MAX_VARS)) begin
                             ; // p3b: dead tagged write removed (var_init)
                             ; // p3b: dead tagged write removed (vars)
-                            vvar_valid[heap_clr_i[8:0]] <= 1'b0;
+                            begin vvv_we <= 1'b1; vvv_wa <= heap_clr_i[8:0]; vvv_wd <= 1'b0; end
                         end
                         if (heap_clr_i < 12'(MAX_OBJ)) begin
                             vobj_alloc_wr(heap_clr_i[9:0], 2'd0);
-                            vobj_gen[heap_clr_i[9:0]] <= 12'd1;
-                            vfn_gen[heap_clr_i[9:0]] <= 12'd1;
-                            vfn_valid[heap_clr_i[9:0]] <= 1'b0;
-                            vfn_mark[heap_clr_i[9:0]] <= 1'b0;
-                            vobj_len[heap_clr_i[9:0]] <= 6'd0;
-                            vobj_mark[heap_clr_i[9:0]] <= 1'b0;
+                            begin vog_we <= 1'b1; vog_wa <= heap_clr_i[9:0]; vog_wd <= 12'd1; end
+                            begin vfg_we <= 1'b1; vfg_wa <= heap_clr_i[9:0]; vfg_wd <= 12'd1; end
+                            begin vfv_we <= 1'b1; vfv_wa <= heap_clr_i[9:0]; vfv_wd <= 1'b0; end
+                            begin vmkf_we <= 1'b1; vmkf_wa <= heap_clr_i[9:0]; vmkf_wd <= 1'b0; end
+                            begin vol_we <= 1'b1; vol_wa <= {3'd0, heap_clr_i[9:0]}; vol_wd <= 6'd0; end
+                            begin vmko_we <= 1'b1; vmko_wa <= heap_clr_i[9:0]; vmko_wd <= 1'b0; end
                             vom_we_bi <= 1'b1; vom_wa <= {3'd0, heap_clr_i[9:0]}; vom_bi <= 4'd0;
                         end
                         if (heap_clr_i < 12'(MAX_ARR)) begin
-                            varr_valid[heap_clr_i[11:0]] <= 1'b0;
-                            varr_gen[heap_clr_i[11:0]] <= 12'd1;
+                            begin vav_we <= 1'b1; vav_wa <= heap_clr_i[10:0]; vav_wd <= 1'b0; end
+                            begin vag_we <= 1'b1; vag_wa <= heap_clr_i[11:0]; vag_wd <= 12'd1; end
                             varr_len_wr(heap_clr_i[11:0], 8'd0);
-                            arr_len[heap_clr_i[11:0]] <= 8'd0;
-                            varr_mark[heap_clr_i[11:0]] <= 1'b0;
-                            varr_long[heap_clr_i[11:0]] <= 1'b0;
-                            varr_lidx[heap_clr_i[11:0]] <= 8'd0;
+                            begin alw_we <= 1'b1; alw_wa <= heap_clr_i[10:0]; alw_wd <= 8'd0; end
+                            begin vmka_we <= 1'b1; vmka_wa <= heap_clr_i[11:0]; vmka_wd <= 1'b0; end
+                            begin vlo_we <= 1'b1; vlo_wa <= heap_clr_i[10:0]; vlo_wd <= 1'b0; end
+                            begin vli_we <= 1'b1; vli_wa <= heap_clr_i[10:0]; vli_wd <= 8'd0; end
                         end
                         if (heap_clr_i < 12'(MAX_ARR_LONG))
                             vlong_used[heap_clr_i[6:0]] <= 1'b0;
                         if (heap_clr_i < 12'(ENV_DEPTH)) begin
-                            venv_valid[heap_clr_i[8:0]] <= 1'b0;
+                            begin vev_we <= 1'b1; vev_wa <= heap_clr_i[8:0]; vev_wd <= 1'b0; end
                             veg_we <= 1'b1; veg_wa <= heap_clr_i[8:0]; veg_wd <= 12'd1;
-                            venv_len[heap_clr_i[8:0]] <= 5'd0;
-                            venv_mark[heap_clr_i[8:0]] <= 1'b0;
+                            begin vel_we <= 1'b1; vel_wa <= heap_clr_i[8:0]; vel_wd <= 5'd0; end
+                            begin vmke_we <= 1'b1; vmke_wa <= heap_clr_i[8:0]; vmke_wd <= 1'b0; end
                             env_cap[heap_clr_i[8:0]] <= 1'b0;
                         end
                         if (heap_clr_i < 12'd1024) begin
                             fill_lut[heap_clr_i[9:0]] <= 8'hFF;
-                            name_has[heap_clr_i[9:0]] <= 1'b0;
+                            begin nh_we <= 1'b1; nh_wa <= heap_clr_i[9:0]; nh_wd <= 1'b0; end
                             intern_var_ok[heap_clr_i[9:0]] <= 1'b0;
                         end
                         if (heap_clr_i + 12'd1 >= 12'(MAX_ARR))
@@ -6853,7 +7035,7 @@ module jmr_js_vm #(
                             end
                             5'd18: begin trail_acc[7:0] <= tb; trail_ph <= 5'd19; end
                             5'd19: begin
-                                cls_mname[trail_cls_i[3:0]][trail_meth_i[3:0]] <= {tb, trail_acc[7:0]};
+                                begin cmn_we <= 1'b1; cmn_wa <= {trail_cls_i[3:0], trail_meth_i[3:0]}; cmn_wd <= {tb, trail_acc[7:0]}; end
                                 e64_poke(6'd39, {12'd0, trail_cls_i[3:0]},
                                          {48'd0, tb, trail_acc[7:0]});
                                 e64_p_addr2 <= {12'd0, trail_meth_i[3:0]};
@@ -6861,7 +7043,7 @@ module jmr_js_vm #(
                             end
                             5'd20: begin trail_acc[7:0] <= tb; trail_ph <= 5'd21; end
                             5'd21: begin
-                                cls_mip[trail_cls_i[3:0]][trail_meth_i[3:0]] <= {tb, trail_acc[7:0]};
+                                begin cmi_we <= 1'b1; cmi_wa <= {trail_cls_i[3:0], trail_meth_i[3:0]}; cmi_wd <= {tb, trail_acc[7:0]}; end
                                 e64_poke(6'd31, {12'd0, trail_cls_i[3:0]},
                                          {48'd0, tb, trail_acc[7:0]});
                                 e64_p_addr2 <= {12'd0, trail_meth_i[3:0]};
@@ -7067,7 +7249,7 @@ module jmr_js_vm #(
                                 // NEW: bytes for this id are real (fillText and
                                 // str[i] both refuse hash-only ids)
                                 if (nb_wp + {tb, trail_acc[7:0]} <= 16'(NAME_CAP))
-                                    name_has[nb_i[9:0]] <= 1'b1;
+                                    begin nh_we <= 1'b1; nh_wa <= nb_i[9:0]; nh_wd <= 1'b1; end
                                 names_ok <= 1'b1;
                                 names_static <= nb_i + 16'd1;
                                 nb_static <= nb_wp;
@@ -7442,7 +7624,9 @@ module jmr_js_vm #(
                     end else begin
                         // NEW: bring-up latch (first pixel only)
                         if (dbg_rect_n < 7'd64 && x == rx && y == ry) begin
+                            `ifndef SYNTHESIS
                             dbg_rect[dbg_rect_n[5:0]] <= {color, rx, ry, rw, rh};
+                            `endif // sim-only probe store
                             dbg_rect_n <= dbg_rect_n + 7'd1;
                         end
                         if (color != 8'd0) dbg_rect_px <= dbg_rect_px + 32'd1;
@@ -7630,8 +7814,10 @@ module jmr_js_vm #(
                          (pc_op[pi[3:0]] == 2'd3 && p2x > 32'sd32) ||
                          p1x < -32'sd64 || p1x > 32'sd704 ||
                          p1y < -32'sd64 || p1y > 32'sd544)) begin
+                        `ifndef SYNTHESIS
                         dbg_pdo[dbg_pdo_n[3:0]] <= {14'd0, pc_op[pi[3:0]],
                             p1x[15:0], p1y[15:0], p2x[15:0], p2y[15:0]};
+                        `endif // sim-only probe store
                         dbg_pdo_n <= dbg_pdo_n + 5'd1;
                     end
                     if (pc_op[pi[3:0]] == 2'd0) begin
@@ -7794,7 +7980,7 @@ module jmr_js_vm #(
                             end else begin
                                 jn_h <= 16'(32'(jn_h) * 32'd31 + 32'd48 + 32'(ev));
                                 if (jn_i < 16'(TXT_MAX)) begin
-                                    txt_buf[jn_i[5:0]] <= 8'h30 + 8'(ev);
+                                    begin txw_we <= 1'b1; txw_wa <= jn_i[5:0]; txw_wd <= 8'h30 + 8'(ev); end
                                     txt_bn <= 7'(jn_i) + 7'd1;
                                     cc_bok <= 1'b1;
                                 end else cc_bok <= 1'b0;
@@ -7837,7 +8023,7 @@ module jmr_js_vm #(
                         end else begin
                             jn_h <= 16'(32'(jn_h) * 32'd31 + 32'd48 + 32'(ev));
                             if (jn_i < 16'(TXT_MAX)) begin
-                                txt_buf[jn_i[5:0]] <= 8'h30 + 8'(ev);
+                                begin txw_we <= 1'b1; txw_wa <= jn_i[5:0]; txw_wd <= 8'h30 + 8'(ev); end
                                 txt_bn <= 7'(jn_i) + 7'd1;
                                 cc_bok <= 1'b1;
                             end else cc_bok <= 1'b0;
@@ -8115,7 +8301,7 @@ module jmr_js_vm #(
                                 cc_h <= 16'(32'(cc_h) * 32'd31 + 32'd45); // '-'
                                 cc_len <= cc_len + 8'd1;
                                 if (txt_bn < 7'(TXT_MAX)) begin
-                                    txt_buf[txt_bn[5:0]] <= 8'h2D;
+                                    begin txw_we <= 1'b1; txw_wa <= txt_bn[5:0]; txw_wd <= 8'h2D; end
                                     txt_bn <= txt_bn + 7'd1;
                                 end else cc_bok <= 1'b0;
                                 iv = -iv;
@@ -8156,7 +8342,7 @@ module jmr_js_vm #(
                             cc_d <= 4'd0;
                             // NEW: same digit as a character
                             if (txt_bn < 7'(TXT_MAX)) begin
-                                txt_buf[txt_bn[5:0]] <= 8'h30 + {4'd0, cc_d};
+                                begin txw_we <= 1'b1; txw_wa <= txt_bn[5:0]; txw_wd <= 8'h30 + {4'd0, cc_d}; end
                                 txt_bn <= txt_bn + 7'd1;
                             end else cc_bok <= 1'b0;
                             if (cc_pi == 4'd0) begin
@@ -8183,7 +8369,7 @@ module jmr_js_vm #(
                         end else if (name_rdaddr == cc_cp) begin
                             name_rdaddr <= name_rdaddr + 16'd1; // prime byte 0
                         end else begin
-                            txt_buf[txt_bn[5:0]] <= name_rdata;
+                            begin txw_we <= 1'b1; txw_wa <= txt_bn[5:0]; txw_wd <= name_rdata; end
                             txt_bn <= txt_bn + 7'd1;
                             cc_cn <= cc_cn - 8'd1;
                             if (cc_cn > 8'd1) name_rdaddr <= name_rdaddr + 16'd1;
@@ -8306,11 +8492,17 @@ module jmr_js_vm #(
                         put = 1'b0;
                         pix = 8'd0;
                         if (!aset_mode) begin
-                            // flatten: wait spr_mem_rdata (raddr = spr_raddr).
-                            if (!blit_wait)
+                            // 2026-08-22: legacy .JS sprites live in external
+                            // SRAM too (SPR_SRAM_BASE, byte per word) - same
+                            // req/ack shape as the ASET branch below.
+                            if (!blit_wait) begin
+                                sram_req  <= 1'b1;
+                                sram_we   <= 1'b0;
+                                sram_addr <= SPR_SRAM_BASE + 21'(spr_raddr);
                                 blit_wait <= 1'b1;
-                            else begin
-                                pix = spr_mem_rdata;
+                            end else if (sram_ack) begin
+                                pix = sram_rdata[7:0];
+                                sram_req <= 1'b0;
                                 blit_wait <= 1'b0;
                                 put = 1'b1;
                             end
@@ -8348,8 +8540,20 @@ module jmr_js_vm #(
                     // consuming byte 3 skipped every 4th header/pixel (wrong
                     // stride / blank tiny sprites). S_TRAIL already parses
                     // then fetches; match that. NAMB follows the pixels.
+                    //
+                    // 2026-08-22 LUTRAM fit: sprite bytes go to the external
+                    // SRAM (SPR_SRAM_BASE, one byte per word). While a write
+                    // is in flight the WHOLE arm freezes (trail_off/trail_tb
+                    // hold), so the byte-per-beat parse resumes exactly.
                     logic spr_end;
                     spr_end = 1'b0;
+                    if (sprb_pend) begin
+                        if (sram_ack) begin
+                            sram_req <= 1'b0;
+                            sram_we  <= 1'b0;
+                            sprb_pend <= 1'b0;
+                        end
+                    end else
                     if (spr_left == 18'd0) begin
                         // header w/h via spr_hdr 0..3
                         if (spr_hdr == 3'd0) begin
@@ -8376,9 +8580,11 @@ module jmr_js_vm #(
                         end
                     end else begin
                         if ({1'b0, spr_wp} < 19'(SPR_BYTES)) begin
-                            spr_we <= 1'b1;
-                            spr_waddr <= spr_wp;
-                            spr_wdata <= trail_tb;
+                            sram_req   <= 1'b1;
+                            sram_we    <= 1'b1;
+                            sram_addr  <= SPR_SRAM_BASE + 21'(spr_wp);
+                            sram_wdata <= {8'd0, trail_tb};
+                            sprb_pend  <= 1'b1;
                         end
                         spr_wp <= spr_wp + 18'd1;
                         spr_left <= spr_left - 18'd1;
@@ -8393,14 +8599,18 @@ module jmr_js_vm #(
                             end
                         end
                     end
-                    if (trail_off[1:0] == 2'd3) begin
-                        hs_code(15'(trail_off[16:2] + 15'd1));
-                        trail_off <= trail_off + 16'd1;
-                        hs_st(S_RD);
-                        ret_state <= spr_end ? S_TRAIL : S_SPR;
-                    end else begin
-                        trail_off <= trail_off + 16'd1;
-                        if (spr_end) hs_st(S_TRAIL);
+                    if (!sprb_pend) begin
+                        // byte consumed this beat — advance the stream. During
+                        // a write stall the whole arm (incl. this) freezes.
+                        if (trail_off[1:0] == 2'd3) begin
+                            hs_code(15'(trail_off[16:2] + 15'd1));
+                            trail_off <= trail_off + 16'd1;
+                            hs_st(S_RD);
+                            ret_state <= spr_end ? S_TRAIL : S_SPR;
+                        end else begin
+                            trail_off <= trail_off + 16'd1;
+                            if (spr_end) hs_st(S_TRAIL);
+                        end
                     end
                 end
                 // NEW: ALU result into alu_r (no stack write this cycle)
@@ -9260,7 +9470,7 @@ module jmr_js_vm #(
                                         if (js_tag[p] == 3'd2) begin
             // flatten: heap write via S_HEAP_* only
             // flatten: heap write via S_HEAP_* only
-                                            arr_len[js_val[p][11:0]] <= js_i[p] + 8'd1;
+                                            begin alw_we <= 1'b1; alw_wa <= js_val[p][10:0]; alw_wd <= js_i[p] + 8'd1; end
                                             js_i[p] <= js_i[p] + 8'd1;
                                         end
                                         json_pph <= 3'd0;
@@ -9268,7 +9478,7 @@ module jmr_js_vm #(
                                 end
                             end
                         end else if (ch == 8'h5B) begin
-                            arr_len[n_arr[11:0]] <= 8'd0;
+                            begin alw_we <= 1'b1; alw_wa <= n_arr[10:0]; alw_wd <= 8'd0; end
                             if (js_sp < JSON_STK[5:0]) begin
                                 js_tag[js_sp] <= 3'd2;
                                 ; // p3b: dead tagged write removed (js_val)
@@ -9293,7 +9503,7 @@ module jmr_js_vm #(
                                 if (js_tag[p] == 3'd2) begin
             // flatten: heap write via S_HEAP_* only
             // flatten: heap write via S_HEAP_* only
-                                    arr_len[js_val[p][11:0]] <= js_i[p] + 8'd1;
+                                    begin alw_we <= 1'b1; alw_wa <= js_val[p][10:0]; alw_wd <= js_i[p] + 8'd1; end
                                     js_i[p] <= js_i[p] + 8'd1;
                                 end
                                 js_sp <= c;
@@ -9350,7 +9560,7 @@ module jmr_js_vm #(
                                 if (vfree_ok) begin
                                     vobj_alloc_wr(valloc_i[9:0], 2'd1);
                                     vom_we_bi <= 1'b1; vom_wa <= valloc_i[12:0]; vom_bi <= 4'd7;
-                                    vobj_len[valloc_i[12:0]] <= 6'd2;
+                                    begin vol_we <= 1'b1; vol_wa <= valloc_i[12:0]; vol_wd <= 6'd2; end
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd7, 2'd0, 6'd2});
                                     hs_hp_cmd(HP_OSETI);
@@ -9586,7 +9796,7 @@ module jmr_js_vm #(
                                 logic signed [31:0] iv;
                                 iv = fxi(txt_val, txt_vt);
                                 if (iv < 0) begin
-                                    txt_buf[0] <= 8'h2D; // '-'
+                                    begin txw_we <= 1'b1; txw_wa <= 6'd0; txw_wd <= 8'h2D; end // '-'
                                     txt_bn <= 7'd1;
                                     iv = -iv;
                                 end
@@ -9614,7 +9824,7 @@ module jmr_js_vm #(
                             txt_ph <= 4'd3;
                         end
                         4'd3: begin
-                            txt_buf[txt_i[5:0]] <= name_rdata;
+                            begin txw_we <= 1'b1; txw_wa <= txt_i[5:0]; txw_wd <= name_rdata; end
                             if (txt_i + 7'd1 >= txt_len) txt_ph <= 4'd6;
                             else begin
                                 txt_i <= txt_i + 7'd1;
@@ -9625,7 +9835,7 @@ module jmr_js_vm #(
                             if (!vjs_rd_arm)
                                 vjs_rd_arm <= 1'b1;
                             else begin
-                            txt_buf[txt_i[5:0]] <= json_mem_rdata;
+                            begin txw_we <= 1'b1; txw_wa <= txt_i[5:0]; txw_wd <= json_mem_rdata; end
                             vjs_rd_arm <= 1'b0;
                             if (txt_i + 7'd1 >= txt_len) txt_ph <= 4'd6;
                             else begin
@@ -9640,7 +9850,7 @@ module jmr_js_vm #(
                                 txt_v <= txt_v - 32'(P10[txt_pi]);
                                 txt_d <= txt_d + 4'd1;
                             end else begin
-                                txt_buf[txt_bn[5:0]] <= 8'h30 + {4'd0, txt_d};
+                                begin txw_we <= 1'b1; txw_wa <= txt_bn[5:0]; txw_wd <= 8'h30 + {4'd0, txt_d}; end
                                 txt_bn <= txt_bn + 7'd1;
                                 txt_d <= 4'd0;
                                 if (txt_pi == 4'd0) begin
@@ -9936,7 +10146,7 @@ module jmr_js_vm #(
                                 if (vfree_ok) begin
                                     vobj_alloc_wr(valloc_i[9:0], 2'd1);
                                     vom_we_cls <= 1'b1; vom_wa <= valloc_i[12:0]; vom_cls <= CLS_IMGD;
-                                    vobj_len[valloc_i[12:0]] <= 6'd2;
+                                    begin vol_we <= 1'b1; vol_wa <= valloc_i[12:0]; vol_wd <= 6'd2; end
                                     e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                              {52'd0, 4'd0, 2'd0, 6'd2});
                                     e64_p_addr2 <= CLS_IMGD;
@@ -10022,7 +10232,7 @@ module jmr_js_vm #(
                                     if (vfree_ok) begin
                                         vobj_alloc_wr(valloc_i[9:0], 2'd1);
                                         vom_we_cls <= 1'b1; vom_wa <= valloc_i[12:0]; vom_cls <= CLS_IMGD;
-                                        vobj_len[valloc_i[12:0]] <= 6'd2;
+                                        begin vol_we <= 1'b1; vol_wa <= valloc_i[12:0]; vol_wd <= 6'd2; end
                                         e64_poke(6'd44, {3'd0, valloc_i[12:0]},
                                                  {52'd0, 4'd0, 2'd0, 6'd2});
                                         e64_p_addr2 <= CLS_IMGD;
@@ -10486,14 +10696,14 @@ module jmr_js_vm #(
                             logic take_long;
                             take_long = need_long ||
                                 (valloc_i >= 14'(MAX_ARR_SHORT));
-                            varr_valid[valloc_i[11:0]] <= 1'b1;
+                            begin vav_we <= 1'b1; vav_wa <= valloc_i[10:0]; vav_wd <= 1'b1; end
                             varr_len_wr(valloc_i[11:0], count[7:0]);
-                            varr_long[valloc_i[11:0]] <= take_long;
+                            begin vlo_we <= 1'b1; vlo_wa <= valloc_i[10:0]; vlo_wd <= take_long; end
                             e64_poke(6'd45, {4'd0, valloc_i[11:0]},
                                      {55'd0, take_long, count[7:0]});
                             e64_p_addr2 <= {8'd0, valloc_i[7:0]};
                             if (take_long) begin
-                                varr_lidx[valloc_i[11:0]] <= valloc_i[7:0];
+                                begin vli_we <= 1'b1; vli_wa <= valloc_i[10:0]; vli_wd <= valloc_i[7:0]; end
                                 vlong_used[valloc_i[7:0]] <= 1'b1;
                             end
                             varr_next <= valloc_i + 14'd1;
@@ -10625,8 +10835,8 @@ module jmr_js_vm #(
                             else
                                 fr = (e64_vcsp_q != 8'd0)
                                      ? (e64_vcsp_q - 8'd1) : vcsp;
-                            venv_valid[valloc_i[9:0]] <= 1'b1;
-                            venv_len[valloc_i[9:0]] <= 5'd0;
+                            begin vev_we <= 1'b1; vev_wa <= valloc_i[8:0]; vev_wd <= 1'b1; end
+                            begin vel_we <= 1'b1; vel_wa <= valloc_i[8:0]; vel_wd <= 5'd0; end
                             e64_poke(6'd46, {6'd0, valloc_i[9:0]},
                                      {52'd0, venv_gen_rdata});
                             venv_parent_pa_we <= 1'b1;
@@ -10744,7 +10954,7 @@ module jmr_js_vm #(
                         if (valloc_i < MAX_OBJ &&
                             !vfn_valid_rdata) begin
                             vfn_next <= valloc_i + 14'd1;
-                            vfn_valid[valloc_i[12:0]] <= 1'b1;
+                            begin vfv_we <= 1'b1; vfv_wa <= valloc_i[9:0]; vfv_wd <= 1'b1; end
                                 if (valloc_now_fn) begin
                                     vfn_entry[valloc_i[12:0]] <= 16'hfffa;
                                     vfn_nparam[valloc_i[12:0]] <= 6'd0;
@@ -10922,7 +11132,7 @@ module jmr_js_vm #(
                             vobj_next <= valloc_i + 14'd1;
                             if (code_rdata[7:0] == OP_NEW_OBJ) begin
                                 vobj_alloc_wr(valloc_i[9:0], 2'd1);
-                                vobj_len[valloc_i[12:0]] <= 6'd0;
+                                begin vol_we <= 1'b1; vol_wa <= valloc_i[12:0]; vol_wd <= 6'd0; end
                                 // Latched intern (vcall_entry), not code_rdata
                                 // — HEAP between `new Game` and nested
                                 // `new Item` reused Game's name.
@@ -10954,7 +11164,7 @@ module jmr_js_vm #(
                                 vobj_alloc_wr(valloc_i[9:0], 2'd1);
                                 vom_we_cls <= 1'b1; vom_wa <= valloc_i[12:0]; vom_cls <= 16'hFFFF;
                                 vom_we_bi <= 1'b1; vom_wa <= valloc_i[12:0]; vom_bi <= 4'd0;
-                                vobj_len[valloc_i[12:0]] <= 6'd0;
+                                begin vol_we <= 1'b1; vol_wa <= valloc_i[12:0]; vol_wd <= 6'd0; end
                                 vobj_proto_pa_we <= 1'b1;
                                 vobj_proto_pa_waddr <= valloc_i[12:0];
                                 vobj_proto_pa_wdata <= V64_UNDEFINED;
@@ -11236,13 +11446,13 @@ module jmr_js_vm #(
                         hs_st(S_V64_GC_CLEAR);
                     else begin
                     if (vgc_clear_i < MAX_OBJ) begin
-                        vobj_mark[vgc_clear_i[12:0]] <= 1'b0;
-                        vfn_mark[vgc_clear_i[12:0]] <= 1'b0;
+                        begin vmko_we <= 1'b1; vmko_wa <= vgc_clear_i[9:0]; vmko_wd <= 1'b0; end
+                        begin vmkf_we <= 1'b1; vmkf_wa <= vgc_clear_i[9:0]; vmkf_wd <= 1'b0; end
                     end
                     else if (vgc_clear_i < MAX_OBJ + MAX_ARR)
-                        varr_mark[vgc_clear_i - MAX_OBJ] <= 1'b0;
+                        begin vmka_we <= 1'b1; vmka_wa <= 12'(vgc_clear_i - MAX_OBJ); vmka_wd <= 1'b0; end
                     else
-                        venv_mark[vgc_clear_i - MAX_OBJ - MAX_ARR] <= 1'b0;
+                        begin vmke_we <= 1'b1; vmke_wa <= 9'(vgc_clear_i - MAX_OBJ - MAX_ARR); vmke_wd <= 1'b0; end
                     if (vgc_clear_i + 14'd1 >=
                         MAX_OBJ + MAX_ARR + ENV_DEPTH) begin
                         vgc_root_i <= 12'd0;
@@ -11428,16 +11638,16 @@ module jmr_js_vm #(
                         if (!vgc_rd_arm)
                             vgc_rd_arm <= 1'b1;
                         else begin
-                        vgc_cur <= vgc_queue_rdata;
+                        vgc_cur <= {16'h7ff9, vgc_queue_rdata[16:13], 31'd0, vgc_queue_rdata[12:0]};
                         hs_vgc_qr(vgc_qr + 14'd1);
                         vgc_slot_i <= 8'd0;
                         vgc_rd_arm <= 1'b0;
-                        if (vgc_queue_rdata[47:44] == V64_KIND_OBJECT ||
-                            vgc_queue_rdata[47:44] == V64_KIND_ELEMENT)
+                        if (vgc_queue_rdata[16:13] == V64_KIND_OBJECT ||
+                            vgc_queue_rdata[16:13] == V64_KIND_ELEMENT)
                             hs_st(S_V64_GC_OBJ);
-                        else if (vgc_queue_rdata[47:44] == 4'd6)
+                        else if (vgc_queue_rdata[16:13] == 4'd6)
                             hs_st(S_V64_GC_ARR);
-                        else if (vgc_queue_rdata[47:44] == 4'd7)
+                        else if (vgc_queue_rdata[16:13] == 4'd7)
                             hs_st(S_V64_GC_FN);
                         else
                             hs_st(S_V64_GC_ENV);
@@ -11535,12 +11745,12 @@ module jmr_js_vm #(
                         ? 12'd1 : vobj_gen_rdata + 12'd1;
                     if (free_obj) begin
                         vobj_alloc_wr(vgc_obj_i[9:0], 2'd0);
-                        vobj_len[vgc_obj_i] <= 6'd0;
-                        vobj_gen[vgc_obj_i] <= new_ogen;
+                        begin vol_we <= 1'b1; vol_wa <= vgc_obj_i; vol_wd <= 6'd0; end
+                        begin vog_we <= 1'b1; vog_wa <= vgc_obj_i[9:0]; vog_wd <= new_ogen; end
                     end
                     if (free_fn) begin
-                        vfn_valid[vgc_obj_i] <= 1'b0;
-                        vfn_gen[vgc_obj_i] <= new_fgen;
+                        begin vfv_we <= 1'b1; vfv_wa <= vgc_obj_i[9:0]; vfv_wd <= 1'b0; end
+                        begin vfg_we <= 1'b1; vfg_wa <= vgc_obj_i[9:0]; vfg_wd <= new_fgen; end
                     end
                     if (free_obj || free_fn)
                         e64_poke(6'd48, {3'd0, vgc_obj_i},
@@ -11558,17 +11768,19 @@ module jmr_js_vm #(
                         vgc_rd_arm <= 1'b1;
                     else begin
                     if (varr_valid_rdata && !varr_mark_rdata) begin
-                        varr_valid[vgc_arr_i] <= 1'b0;
+                        begin vav_we <= 1'b1; vav_wa <= vgc_arr_i[10:0]; vav_wd <= 1'b0; end
                         varr_len_wr(vgc_arr_i, 8'd0);
                         e64_poke(6'd49, {4'd0, vgc_arr_i}, 64'd0);
                         if (varr_long_rdata)
                             // #76: full-width 8-bit index into the 128-deep
                             // occupancy map - slice like every other writer.
                             vlong_used[varr_lidx_rdata[6:0]] <= 1'b0;
-                        varr_long[vgc_arr_i] <= 1'b0;
-                        varr_gen[vgc_arr_i] <=
-                            (varr_gen_rdata == 12'hfff)
-                            ? 12'd1 : varr_gen_rdata + 12'd1;
+                        begin vlo_we <= 1'b1; vlo_wa <= vgc_arr_i[10:0]; vlo_wd <= 1'b0; end
+                        begin
+                            vag_we <= 1'b1; vag_wa <= vgc_arr_i;
+                            vag_wd <= (varr_gen_rdata == 12'hfff)
+                                ? 12'd1 : varr_gen_rdata + 12'd1;
+                        end
                     end
                     vgc_rd_arm <= 1'b0;
                     if (vgc_arr_i + 12'd1 >= MAX_ARR) begin
@@ -11583,8 +11795,8 @@ module jmr_js_vm #(
                         vgc_rd_arm <= 1'b1;
                     else begin
                     if (venv_valid_rdata && !venv_mark_rdata) begin
-                        venv_valid[vgc_env_i] <= 1'b0;
-                        venv_len[vgc_env_i] <= 5'd0;
+                        begin vev_we <= 1'b1; vev_wa <= vgc_env_i[8:0]; vev_wd <= 1'b0; end
+                        begin vel_we <= 1'b1; vel_wa <= vgc_env_i[8:0]; vel_wd <= 5'd0; end
                         e64_poke(6'd50, {6'd0, vgc_env_i}, 64'd0);
                         veg_we <= 1'b1; veg_wa <= vgc_env_i[8:0];
                         veg_wd <= (venv_gen_rdata == 12'hfff)
@@ -11737,8 +11949,10 @@ module jmr_js_vm #(
                         // counters S_RECT feeds, so RECTPEEK?/PXCNT? also see
                         // the Value64 draw path.
                         if (dbg_rect_n < 7'd64 && vdraw_i == 19'd0) begin
+                            `ifndef SYNTHESIS
                             dbg_rect[dbg_rect_n[5:0]] <=
                                 {vdraw_color, vdraw_x, vdraw_y, vdraw_w, vdraw_h};
+                            `endif // sim-only probe store
                             dbg_rect_n <= dbg_rect_n + 7'd1;
                         end
                         if (vdraw_color != 8'd0) dbg_rect_px <= dbg_rect_px + 32'd1;
@@ -12271,18 +12485,17 @@ module jmr_js_vm #(
                                     json_rp <= json_rp + 14'd1;
                                 end else begin
                                     hs_valloc_retried(1'b0);
-                                    varr_valid[valloc_i[11:0]] <= 1'b1;
+                                    begin vav_we <= 1'b1; vav_wa <= valloc_i[10:0]; vav_wd <= 1'b1; end
                                     varr_len_wr(valloc_i[11:0], 8'd0);
                                     // Spill into long handles when short is
                                     // full (aid >= MAX_ARR_SHORT). Must mark
                                     // the long bank; short is linear aid*32.
                                     if (valloc_i >= 14'(MAX_ARR_SHORT)) begin
-                                        varr_long[valloc_i[11:0]] <= 1'b1;
-                                        varr_lidx[valloc_i[11:0]] <=
-                                            valloc_i[7:0];
+                                        begin vlo_we <= 1'b1; vlo_wa <= valloc_i[10:0]; vlo_wd <= 1'b1; end
+                                        begin vli_we <= 1'b1; vli_wa <= valloc_i[10:0]; vli_wd <= valloc_i[7:0]; end
                                         vlong_used[valloc_i[7:0]] <= 1'b1;
                                     end else
-                                        varr_long[valloc_i[11:0]] <= 1'b0;
+                                        begin vlo_we <= 1'b1; vlo_wa <= valloc_i[10:0]; vlo_wd <= 1'b0; end
                                     // Exec ARRAY_GET uses its varr_valid/len
                                     // copy; JSON.parse must poke or finder
                                     // sees length 0 and floods push (fault=3).
@@ -12761,7 +12974,7 @@ module jmr_js_vm #(
                                 // LET_VAR non-local: env hit is not a write.
                                 if (!vvar_valid_rdata) begin
                                     vvars_wr(hp_key[8:0], hp_wval);
-                                    vvar_valid[hp_key[8:0]] <= 1'b1;
+                                    begin vvv_we <= 1'b1; vvv_wa <= hp_key[8:0]; vvv_wd <= 1'b1; end
                                     e64_poke(6'd12, {7'd0, hp_key[8:0]}, hp_wval);
                                 end
                                 hs_hp_env(1'b0);
@@ -12842,7 +13055,7 @@ module jmr_js_vm #(
                                 if (hp_phase == 3'd0 ||
                                     !vvar_valid_rdata) begin
                                     vvars_wr(hp_key[8:0], hp_wval);
-                                    vvar_valid[hp_key[8:0]] <= 1'b1;
+                                    begin vvv_we <= 1'b1; vvv_wa <= hp_key[8:0]; vvv_wd <= 1'b1; end
                                     e64_poke(6'd12, {7'd0, hp_key[8:0]}, hp_wval);
                                 end
                                 hs_hp_env(1'b0);
@@ -12885,7 +13098,7 @@ module jmr_js_vm #(
                                 if (hp_phase == 3'd0 ||
                                     !vvar_valid_rdata) begin
                                     vvars_wr(hp_key[8:0], hp_wval);
-                                    vvar_valid[hp_key[8:0]] <= 1'b1;
+                                    begin vvv_we <= 1'b1; vvv_wa <= hp_key[8:0]; vvv_wd <= 1'b1; end
                                     e64_poke(6'd12, {7'd0, hp_key[8:0]}, hp_wval);
                                 end
                                 hs_hp_env(1'b0);
@@ -13060,7 +13273,7 @@ module jmr_js_vm #(
                             end else if (hp_tn < OBJ_SLOTS[5:0]) begin
                                 hs_hp_slot(hp_tn[4:0]);
                                 hs_hp_tn(hp_tn + 6'd1);
-                                vobj_len[hp_oid] <= hp_tn + 6'd1;
+                                begin vol_we <= 1'b1; vol_wa <= hp_oid; vol_wd <= hp_tn + 6'd1; end
                                 e64_poke(6'd2, {3'd0, hp_oid},
                                          {58'd0, hp_tn + 6'd1});
                                 if (!hp_v64)
@@ -13197,7 +13410,7 @@ module jmr_js_vm #(
                                       hp_cmd == HP_SETIDX) &&
                                      vobj_len_rdata < OBJ_SLOTS[5:0]) begin
                             hs_hp_slot(vobj_len_rdata[4:0]);
-                            vobj_len[hp_oid] <= vobj_len_rdata + 6'd1;
+                            begin vol_we <= 1'b1; vol_wa <= hp_oid; vol_wd <= vobj_len_rdata + 6'd1; end
                             e64_poke(6'd2, {3'd0, hp_oid},
                                      {58'd0, vobj_len_rdata + 6'd1});
                             if (!hp_v64)
@@ -13236,7 +13449,7 @@ module jmr_js_vm #(
                 S_HEAP_WR: begin
                     if (hp_env) begin
                         if (!hp_hit) begin
-                            venv_len[hp_eid] <= venv_len_rdata + 5'd1;
+                            begin vel_we <= 1'b1; vel_wa <= hp_eid[8:0]; vel_wd <= venv_len_rdata + 5'd1; end
                             e64_poke(6'd10, {6'd0, hp_eid},
                                      {59'd0, venv_len_rdata + 5'd1});
                         end
@@ -13250,8 +13463,8 @@ module jmr_js_vm #(
                             hs_st(S_HEAP_WR);
                         end else begin
                             if (vobj_len_rdata < {3'd0, hp_qn} + {1'b0, hp_slot}) begin
-                                vobj_len[hp_oid] <=
-                                    {3'd0, hp_qn} + {1'b0, hp_slot};
+                                begin vol_we <= 1'b1; vol_wa <= hp_oid;
+                                      vol_wd <= {3'd0, hp_qn} + {1'b0, hp_slot}; end
                                 e64_poke(6'd2, {3'd0, hp_oid},
                                          {58'd0, {3'd0, hp_qn} + {1'b0, hp_slot}});
                                 if (!hp_v64)
@@ -13701,8 +13914,8 @@ module jmr_js_vm #(
                     end else if (!jn_rd_arm) begin
                         jn_rd_arm <= 1'b1;
                     end else if (dc_i >= varr_len_rdata) begin
-                        varr_long[hp_aid] <= 1'b1;
-                        varr_lidx[hp_aid] <= hp_prom_phys;
+                        begin vlo_we <= 1'b1; vlo_wa <= hp_aid[10:0]; vlo_wd <= 1'b1; end
+                        begin vli_we <= 1'b1; vli_wa <= hp_aid[10:0]; vli_wd <= hp_prom_phys; end
                         vprom_done <= 1'b1;
                         vprom_copy <= 1'b0;
                         hp_prom_wr <= 1'b0;
@@ -14604,9 +14817,8 @@ module jmr_js_vm #(
                                 vtimer_valid[vt_pick[5:0]] <= 1'b0;
                                 vtimer_n <= vtimer_n - 7'd1;
                             end else
-                                vtimer_due[vt_pick[5:0]] <=
-                                    vtimer_due_rdata +
-                                    vtimer_period_rdata[31:0];
+                                begin vtd_we <= 1'b1; vtd_wa <= vt_pick[5:0];
+                                      vtd_wd <= vtimer_due_rdata + vtimer_period_rdata[31:0]; end
                             hs_vcall_value(1'b1);
                             hs_vcall_argc(12'd0);
                             vcallback_timer <= 1'b1;
@@ -14751,6 +14963,13 @@ module jmr_js_vm #(
                 (hs64 || casestate == S_DONE)) begin
                 machine_fault <= 1'b1;
                 fault_code <= e64_fault_code_q;
+            end
+            // vstack is 1024 deep; fault before any index wraps (measured
+            // gameplay peak is 71, flat array literals push one slot per
+            // element, so only a ~1000-element literal can get here).
+            if (v64_on && vsp >= 12'd1008 && !machine_fault) begin
+                machine_fault <= 1'b1;
+                fault_code <= 8'd7;
             end
             // Capacity and stale-handle failures are architectural errors.
             // Stop once, retain a compact fault code, and never hide them by

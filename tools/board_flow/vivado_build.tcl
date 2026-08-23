@@ -146,6 +146,11 @@ set_property STEPS.WRITE_BITSTREAM.ARGS.BIN_FILE true [get_runs impl_1]
 # Incremental synth after big RTL/file-list changes produces garbage netlists
 # that place cannot fix. Full resynthesis every bit until the design is stable.
 catch {set_property AUTO_INCREMENTAL_CHECKPOINT 0 [get_runs synth_1]}
+# 2026-08-22: the design is control-logic-bound (flat 112-state FSM taxes
+# every FF with a decode cone; measured ~9-11 LUT/FF). AreaOptimized_high
+# targets exactly this. First tried on run 4 of the LUT campaign.
+catch {set_property STEPS.SYNTH_DESIGN.ARGS.DIRECTIVE AreaOptimized_high [get_runs synth_1]}
+catch {set_property STEPS.OPT_DESIGN.ARGS.DIRECTIVE ExploreArea [get_runs impl_1]}
 catch {set_property AUTO_INCREMENTAL_CHECKPOINT 0 [get_runs impl_1]}
 # UG904: write a DCP after each *impl* step (opt/place/route). synth_design
 # is one step — first DCP is at synth_1 100%. Cannot resume mid-mapping.
@@ -275,6 +280,10 @@ if {$skip_synth} {
   # Killed synth leaves PROGRESS 0% but still "needs reset" (Common 17-69).
   catch {reset_run synth_1}
   set_param general.maxThreads $SYNTH_THREADS
+# 2026-08-22: a killed/aborted previous run leaves synth_1 unlaunchable
+# ("needs to be reset before launching"). Reset is always safe here: with
+# AUTO_INCREMENTAL off every bit is a full resynthesis anyway.
+catch {reset_run synth_1}
   launch_runs synth_1 -jobs $SYNTH_JOBS
   jmr_wait_run synth_1
 }

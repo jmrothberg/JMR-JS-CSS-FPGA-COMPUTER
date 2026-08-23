@@ -109,3 +109,320 @@ was run and diagnosed:
 PACMAN itself is healthy: the user's live session reached **rafcall 210,
 fault=0 throughout, obj peaking at 872 of 960**, objects sawtoothing (so
 GC reclaims). Detail: [docs/potential bugs.md](docs/potential%20bugs.md) #79.
+
+## LUTRAM campaign 2026-08-22 (evening) — closing the 66k→46.2k distributed-RAM wall
+
+Run 4 verdict: 519,312 LUTs (3.9× over), BRAM 365/365 ✓, and the leading
+DRC is **LUT-as-Memory 66,059 vs 46,200 cap**. Work since, all verified
+in FPGA-SIM (games battery + 198/198 bytecode + console/storage tests):
+
+1. **source_mem → external SRAM** (SRC_SRAM_BASE=1724416) — done earlier,
+   −8,192 LUTs.
+2. **spr_mem → external SRAM** (SPR_SRAM_BASE=1691648) — S_SPR write and
+   the non-ASET blit read are req/ack now (`sprb_pend` held-until-ack,
+   NOT in the per-beat default-clear — the #73 lesson). −6,144 LUTs.
+   Legacy .JS sprite tests pass.
+3. **work_ram (console 12K, was forced LUTRAM) → external SRAM**
+   (WORK_SRAM_BASE=1634304). Both masters already stall on gnt, so the
+   variable latency is safe by construction. The core's asset-SRAM
+   arbiter is now **owner-latched** (console > work > VM) with per-owner
+   ack gating — the old "masters never overlap" comb mux would have
+   silently cross-acked. −1,536 LUTs.
+4. **vstack 2048 → 1024** — measured per-clock peak across all three
+   games: PACMAN 71, DONKEY 56, INVADERS 16 (trackers run every clock in
+   sim_main, transient-safe). Flat array literals push one slot per
+   element (MAKE_ARRAY n), so ~1000-element literals still fit;
+   vsp ≥ 1008 now faults loudly (code 7) instead of wrapping. −2,816.
+5. **vgc_queue 64b → 17b** — every enqueued word is a NaN-boxed heap ref
+   {16'h7ff9, kind[47:44], idx[12:0]}; pop rebuilds the word. Full 2892
+   depth kept (measured occupancy peak 817). ≈ −2,768.
+
+Projected LUT-as-Distributed-RAM: 66,042 − ~21,456 ≈ **44,600 — under
+the 46,200 cap** for the first time. json_mem (−1,536) and name_mem
+(−6,144) migrations stay in reserve if the real number lands high; both
+need loop re-timing (parse/REPL lookahead, FIND) so they are not free.
+
+**Run 5 launched 2026-08-22 (evening)** with all of the above plus
+AreaOptimized_high. Purposes: confirm LUTRAM under cap, and get the
+post-cleanup logic number that sets the size of the control-extraction
+campaign (rule 5, u_exec64 shape — the remaining ~453k→134k gap).
+
+False alarm during verification: `inv_cells` showed a "hole" at bunker3
+(8,5) — zoom showed it is two EXTRA pixels of palette 01 (white), i.e. a
+falling bomb in flight, time-shifted because SRAM-backed work RAM changed
+boot cycle counts and with them the Math.random() phase. Bunkers intact.
+
+## Metadata evacuation 2026-08-22 (afternoon) — the FF census found the logic wall
+
+The run-3 hier report says the flat parent runs 11.0 logic LUTs per FF
+(622,437 / 56,604) vs u_exec64's 4.19. The census question "what ARE the
+parent's ~56k FFs?" has a decisive answer: **the heap metadata arrays
+were all flip-flop-resident** — absent from both Final Mapping tables:
+
+| class | arrays | bits |
+|---|---|---:|
+| generation counters | vobj_gen, vfn_gen, varr_gen, venv_gen | ~46,200 |
+| GC marks | vobj/vfn/varr/venv_mark | ~3,900 |
+| valid flags | vfn/varr/venv/vvar_valid | ~3,900 |
+| long-handle flags | varr_long | ~1,500 |
+
+≈ 55k FF bits, each paying the flat-FSM control-cone tax **plus** the
+960:1 / 1548:1 read multiplexers — plausibly the bulk of the 453k logic.
+The blocker was never the arrays: every one already has exactly ONE
+registered `*_rdata` read port. The blocker was write style — "the
+7k-line FSM poking ram[i] <=" pattern that makes Vivado build FFs.
+
+Fix: the established strobe conversion (vom/veg/vol pattern). Each array
+got a `(* ram_style = "distributed" *)`, a dedicated Port A process
+(parent strobe first, e64 channel else-if moved in from the exec-write
+region to keep single-driver), and one-shot strobes from the FSM sites.
+As LUTRAM the whole class costs **~600 LUTs**.
+
+Verified: 198/198 bytecode, PACMAN 40 frames fault=0 (gcqmax unchanged
+at 817 — the theoretical 1-beat double-enqueue window doesn't bite),
+INVADERS pixel-identical, DONKEY clean. Full RTL suite running.
+
+New recurring-pattern note: strobe writes land +1 beat. Safe here because
+every reader goes through an armed `*_rdata` (≥2 beats); the enqueue
+mark-test race is idempotent and bounded by queue margin (2892 vs 817).
+Run 5 (launched before this work) answers LUTRAM-under-cap; run 6 with
+the evacuation measures the logic collapse.
+
+## Run 5 verdict (2026-08-22 ~14:45) + run 6 launched (~15:40)
+
+Run 5 (LUTRAM migrations + shrinks, pre-evacuation):
+
+| metric | run 4 | run 5 |
+|---|---:|---:|
+| Slice LUTs | 519,312 | **492,170** |
+| LUT as Logic | 453,253 | 445,020 |
+| LUT as Memory | 66,059 | **47,150** (cap 46,200 — 950 over) |
+| FFs | 79,728 | 75,076 |
+| BRAM | 365/365 | 365/365 |
+
+impl failed at place on logic (expected). Two corrections to the record:
+
+1. **The run-4 "all metadata is FF" census was drawn from an empty log
+   slice** — run 5's launch had already reset runme.log, so the session
+   awk matched nothing and absence-of-evidence read as evidence. Run 5's
+   real table shows gens, marks, vfn_valid, vobj_alloc were ALREADY
+   LUTRAM. Actually FF-resident (and now evacuated): varr_valid,
+   venv_valid, vvar_valid, varr_long, varr_lidx, vlong_used ≈ 16.5k FF
+   bits. The evacuation stands, with a smaller expected logic win.
+2. **json/name SRAM migrations are off the table** without exec
+   restructuring: their writes come from exec64 at full beat rate
+   (stringify / STR_WR interning); req/ack cannot keep up and a FIFO
+   would need unbounded depth.
+
+Closing the last 950 LUTRAM: measured interner pool peaks with per-clock
+trackers — nb_wp max 3,644 bytes (PACMAN), 3,070 (INVADERS), 2,298
+(DONKEY) against NAME_CAP 32,768; json_wp max 1,799 of 8,192. **NAME_CAP
+32K → 16K** (4.5x headroom, compile-time refuse in jsb_format
+PROGRAM_NAME_BYTES, runtime guards all NAME_CAP-derived): −3,072 LUTs.
+JSON left alone (−768 not worth the index-width churn).
+
+**Full RTL suite on the evacuated tree: 150 passed, 3 xfailed, 0
+failed.** 198/198 bytecode, games battery clean.
+
+Run 6 = run 5 + metadata evacuation + NAME_CAP 16K. Projected LUTRAM
+≈ 44.5k (**~1.6k under cap**); logic is the number to watch — the
+16.5k evacuated FF bits each drop their share of flat-FSM control cone
+and read-mux trees.
+
+## Run 6 verdict (2026-08-22 17:40) — LUTRAM WALL CLOSED, logic collapsed 39%
+
+| metric | run 5 | run 6 |
+|---|---:|---:|
+| Slice LUTs | 492,170 | **312,198** (2.32x over, was 6.1x at run 1) |
+| LUT as Logic | 445,020 | **269,566** |
+| LUT as Memory | 47,150 | **42,632 — UNDER the 46,200 cap (92.3%)** |
+| FFs | 75,076 | 70,745 |
+| BRAM | 365/365 | 365/365 |
+
+The metadata evacuation (16.5k FF bits) + NAME_CAP 16K removed **175k
+logic LUTs** — the flat parent now runs **3.79 LUT/FF** (was 11.0),
+BELOW u_exec64's 4.19. The "extract control into submodules" lever is
+now marginal; the real tax was FF-resident arrays and their mux trees.
+
+**Definitive FF census** (Vivado DCP query, per base name): parent still
+holds 49,148 FFs across 1,393 names. Top: arr_len 12,384 (a LIVE
+redundant twin — e32_arr_len_tos_rdata feeds live join/foreach/hp paths,
+the naming trap again; NOT deletable, but convertible), vobj_len 6,144
+(RAM inference blocked by ONE stray direct write at the HP_OSETI site —
+every other site already used vol_* strobes), cls_mip/cls_mname 4,096
+each (single-beat 256-way associative method scan — conversion means
+sequentializing, a slowdown-ledger decision, DEFERRED), vjs_val 2,048
+(comb-indexed same beat, deferred), vtimer_due 2,048.
+
+Run 7 (launched ~18:00) = run 6 + arr_len strobe conversion + vobj_len
+stray-write fix (both verified: PACMAN/DONKEY clean, 198/198). Next
+tranche staged: name_has, vtimer_due, cstack_env, txt_buf (~4.4k bits).
+
+## Run-8 tranche applied 2026-08-22 19:15 (after suite green on run-7 tree)
+
+Full RTL suite on the arr_len+vobj_len tree: **150 passed, 3 xfailed, 0
+failed** (second consecutive clean full-suite run today). Then applied
+the staged tranche: vtimer_due (64x32, RMW via registered rdata — the
+setinterval re-arm path), name_has (consolidated its two driver blocks
+into the poke process — that split was why it stayed FF), txt_buf,
+cstack_env — all to strobe/Port-A LUTRAM. Battery green: PACMAN 40f
+fault=0, INVADERS pixel-identical, DONKEY clean, 198/198 (covers
+setinterval_rearms + join/text paths). Run 8 launches when run 7's
+verdict is harvested.
+
+## Run 7 verdict + cls sequential scan (2026-08-22 evening)
+
+| metric | run 6 | run 7 |
+|---|---:|---:|
+| Slice LUTs | 312,198 | **227,502 (1.69x over)** |
+| LUT as Logic | 269,566 | 184,430 |
+| LUT as Memory | 42,632 | 43,072 (93.2% of cap) |
+| FFs | 70,745 | 52,068 |
+
+arr_len + the vobj_len stray-write fix were worth −85k logic on their
+own. Run 8 (baking) adds vtimer_due/name_has/txt_buf/cstack_env. After
+it launched, the **cls method scan went sequential**: the one-beat
+256-way comparator forest over cls_mname/cls_mip became a 1-entry/beat
+pipelined walk over flattened LUTRAM tables (the cls_c/cls_m iterator
+regs from the pre-CAM design were still there); class find stays a comb
+compare over the small FF cls_name array; ctor mode still finishes in
+one beat. Consumers were already handshake-gated on cls_done, and
+requesters keep waiting while cls_scan stays high, so no state changes.
+Verified: PACMAN (class-heavy: new Stage/Item + per-frame methods) 40f
+fault=0 with byte-identical peaks, INVADERS/DONKEY clean, 198/198.
+Goes into run 9.
+
+Remaining known FF blocks, all deferred with reasons: vjs_val (same-beat
+RMW in JSON parse), vlistener parent+exec copies (#77 skew), vst_win
+(hot TOS window). After run 8/9 verdicts, the next class of work is
+datapath sharing and the exec64 internals.
+
+## Run-8 skip trap (2026-08-22 19:38) → run 9 forced
+
+Run 8 never synthesized: the build tcl skips synth when no RTL file is
+newer than the synth DCP, and run 7's post_synth.dcp was (re)written at
+19:21 by the killed run's report step — AFTER the 19:14 tranche edits.
+So run 8 reused run 7's netlist and went straight to the impl DRC fail.
+Lesson: after killing a run mid-impl, the DCP timestamp may postdate
+your edits — launch with JMR_VIVADO_FORCE_SYNTH=1 when in doubt.
+Run 9 (forced) = tranche 8 + cls sequential scan; full RTL suite
+running in parallel on the same tree.
+
+## Run 9 verdict + evening close (2026-08-22 ~21:10)
+
+| metric | run 7 | run 9 (tranche + cls seq scan) |
+|---|---:|---:|
+| Slice LUTs | 227,502 | **214,326 (1.59x over)** |
+| LUT as Logic | 184,430 | 171,012 |
+| LUT as Memory | 43,072 | 43,314 |
+| FFs | 52,068 | 41,644 |
+
+Day trajectory: 519,312 → 492,170 → 312,198 → 227,502 → **214,326**.
+Remaining gap to the T200: −79,726 LUTs (1.59x).
+
+Run-9 DCP census (top remaining FF blocks): **exec64 keeps its own
+cls_mip/cls_mname copies (8,192 bits + its comparator forest)** — but
+exec's cm_scan runs on EVERY object method call (the source comments
+say the 256-step walk was deliberately flattened to one clock for
+speed), so sequentializing it is a slowdown-ledger tradeoff for a fresh
+session, ideally by routing exec lookups through the parent's new
+sequential scanner and deleting the duplicate (a #78-class boundary
+surgery). Then: vjs_val 2,048 (same-beat RMW), vlistener 4 copies
+(#77), vst_win 1,024 (hot TOS window), spr_hh/nid/ww 768, and
+other/linebuf+line ~3k (video line buffers, likely wired to scanout).
+After arrays: datapath sharing in the 171k logic.
+
+Also fixed tonight: txt_buf had five extra direct write sites (two
+driver locations → FF, the census caught it) and name_has/txt_buf
+lacked explicit ram_style. Battery green (fourth time today), suite
+green three full runs. **Run 10 launched (forced synth)** with those
+fixes — verdict in the morning. Zombie-monitor mystery solved: the
+build flow's own RSS heartbeat shells orphan when make dies; kill by
+PID after any aborted run.
+
+## Run 10 verdict (2026-08-22 ~22:00) — the array lever is exhausted
+
+214,772 LUTs (logic 171,448, LUTRAM 43,324, FFs 40,763) — flat vs run
+9's 214,326. txt_buf/name_has converted (FFs −881) but bought ~nothing:
+small arrays whose mux trees were already cheap. This confirms the
+remaining −80k must come from structure, not more strobe conversions:
+1. exec64's duplicate cls_mip/cls_mname + its per-call comb CAM
+   (speed-ledger tradeoff; best shape is routing exec lookups through
+   the parent's sequential scanner and deleting the duplicate),
+2. vjs_val / js_i JSON-stack restructure (TOS-cache + RAM spill),
+3. vlistener consolidation (4 copies, #77 care),
+4. datapath sharing across the remaining 171k logic (measure first:
+   per-cell LUT attribution from the DCP, not guesswork).
+Day total: **519,312 → 214,326 (−59%), LUTRAM wall closed, BRAM
+365/365, three clean full-suite runs, all games playing.** Run 10's
+impl will fail at place (still 1.59x) — that failure notification is
+expected, not news.
+
+## Night session 2026-08-22/23 — "run all night until .bin" directive
+
+User authorized speed sacrifice (half frame rate acceptable). Executed:
+
+1. **exec64 class tables deleted** (cls_mip/mname/name/nmeth, 8.6k FF
+   bits + the per-call 256-way CAM): method lookup is now a level
+   request to the parent's sequential scanner with the result held
+   until the request drops (a one-beat pulse was missed on non-enable
+   beats — livelock diagnosed by cmcyc==cmlkp cycle counters showing
+   cm_scan toggling every beat; fixed by holding the request level
+   against the comb default-clear, one line). An 8-entry (cls,key)→mip
+   cache (misses included — builtins repeat the same miss) makes
+   repeated lookups same-beat: measured 6 lookups/frame at ~6 cycles.
+   NO speed loss in the end. Battery + full suite green (4th clean run).
+2. **Vivado 2026.1 segfaults on use_dsp** at module scope on both big
+   modules (runs 11, 12 died in synth_design). Attribute removed;
+   STEPS.OPT_DESIGN.ARGS.DIRECTIVE=ExploreArea kept.
+3. **Run 13**: 207,725 total / 164,401 logic / FFs 32,118. Post-opt DRC:
+   requires 165,989 LUT-as-Logic vs 134,600. True placement budget is
+   logic ≤ sites − LUTRAM ≈ 91k → gap ≈ −75k.
+4. **Hier attribution (run 13)**: parent 84.2k logic (4.5/FF), exec64
+   60.4k (7.7/FF — now the worst cone: comb opcode breadth), MIG ~14k
+   (fixed), cons+fb 7.5k.
+5. **Comb IEEE-754 double units found in exec64**: add (2 sites), mul
+   (4 sites = 4 53x53 comb multipliers!), div/mod pack. Three mul sites
+   compute the SAME frame-clock product (vframe_no x 16.667) — now one
+   shared instance (**4 → 2 multipliers**). In run 14 (baking).
+6. **vst_win 16→8 evaluated and REJECTED for tonight**: out-of-window
+   VST_REL reads clamp to slot 0 (silently wrong data); correctness
+   relies on scattered depth-16 guards across 244 usage sites that the
+   battery cannot fully exercise. A bad shrink could ship a silent
+   wrong-value bug. Needs a session with targeted deep-stack tests.
+7. **Listener sequentialization deferred** the same way (#77 machinery:
+   4 table copies + one-beat parallel compaction).
+
+Trajectory: 519k → 492k → 312k → 227k → 214k → 207.7k (runs 4→13).
+The asymptote under SAFE surgery is converging around ~200k vs the
+134.6k budget. Remaining levers are all structural with real risk:
+vst_win shrink, listener consolidation, JSON stack, sequential FP,
+per-state datapath sharing — several sessions of careful work, each
+5-15k. The honest morning conversation: keep grinding these on T200,
+or target a larger part (XC7A200T is maxed; a Kintex/UltraScale part or
+XC7K325T would place today's netlist immediately).
+
+## Run 14 (03:00) — null result, and the honest asymptote
+
+Run 14 came back byte-identical to run 13 (207,725 / 164,401 / DRC
+165,989): Vivado's resource sharing had ALREADY merged the three
+mutually-exclusive frame-clock multiplier sites, so the manual dedup
+changed nothing. Lesson: AreaOptimized_high does share exclusive-branch
+arithmetic; manual sharing only pays across non-exclusive sites.
+
+**The overnight arithmetic, stated plainly**: the placement budget is
+logic ≤ 134,600 − 43,324 LUTRAM ≈ 91k. We are at 166k. The remaining
+levers (JSON TOS/NOS rework ~6-8k, listener consolidation ~6-10k,
+sequential FP ~8-10k, vst_win 8-deep ~10-20k, per-state datapath
+sharing ~10-20k) total ~40-70k across SEVERAL sessions of careful,
+test-scaffolded work — each with real silent-corruption risk if rushed.
+No overnight path reaches 91k. The 3am choice was: gamble the
+5x-verified green tree on surgery that cannot close the gap tonight, or
+bank the campaign. Banked.
+
+Where this leaves the .bin: (a) T200 fit remains possible but needs
+2-4 more sessions of structural work at current measured rates; (b) the
+current netlist (207,725 LUTs, 365 BRAM, LUTRAM under cap) would place
+immediately on a Kintex-7 325T (203,800 LUTs, 445 BRAM) or any
+UltraScale part; (c) day total stands at 519k → 207.7k (−60%) with
+zero functionality loss and every game playing.

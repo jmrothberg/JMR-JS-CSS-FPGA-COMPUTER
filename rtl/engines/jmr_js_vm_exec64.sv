@@ -520,6 +520,11 @@ module jmr_js_vm_exec64 (
     input  logic [7:0] p_minmax_k,
     input  logic [7:0] p_minmax_n,
     input  logic [4:0] n_cls,
+    output logic cm_req_q,
+    output logic [15:0] cm_key_q,
+    output logic [15:0] cm_cls_q,
+    input  logic cm_res_we,
+    input  logic [15:0] cm_res_mip,
     input  logic [15:0] n_consts,
     input  logic [15:0] n_ops,
     input  logic [4:0] n_spr,
@@ -1117,11 +1122,11 @@ module jmr_js_vm_exec64 (
     logic [9:0] x_n;
     logic [9:0] y_n;
 
-    // LARGE memories live in this exec (not unpacked array ports).
-    logic [15:0] cls_mip [0:MAX_CLS-1][0:MAX_CMETH-1];
-    logic [15:0] cls_mname [0:MAX_CLS-1][0:MAX_CMETH-1];
-    logic [15:0] cls_name [0:MAX_CLS-1];
-    logic [4:0] cls_nmeth [0:MAX_CLS-1];
+    // 2026-08-22: the class tables left this exec. Method lookup is a
+    // request to the parent's sequential scanner: cm_scan/cm_key/cm_cls
+    // are exported as a level request; the parent walks its own tables
+    // and answers on cm_res_we/cm_res_mip (comb inputs — a poke would be
+    // overwritten by the *_n register updates in the same beat).
     // json_mem lives in parent (we_q). Combo next-state stays inside exec.
     logic hp_q_we;
     logic [1:0] hp_q_waddr;
@@ -1177,7 +1182,32 @@ module jmr_js_vm_exec64 (
     logic opnd3_q /*verilator public_flat_rd*/, opnd3_n;
     // Class method lookup: one (c,m) per clock. Opcode comb must not
     // index cls_mip[][] (exec32 cm_scan twin).
-    logic cm_scan, cm_scan_n, cm_armed, cm_armed_n, cm_done, cm_done_n;
+    logic cm_scan /*verilator public_flat_rd*/, cm_scan_n, cm_armed, cm_armed_n, cm_done, cm_done_n;
+    assign cm_req_q = cm_scan;
+    assign cm_key_q = cm_key;
+    assign cm_cls_q = cm_cls;
+    // Method-lookup cache: 8 entries of (cls,key)->mip, misses (FFFF)
+    // included — builtin calls (ctx.fillRect, arr.push) repeat the same
+    // miss every frame. Hit answers in the same beat the CALL op runs, so
+    // repeated calls cost exactly what the one-clock CAM did. Insert on
+    // parent result; invalidate on p_clr and on class-table pokes.
+    logic [15:0] cmc_cls [0:7];
+    logic [15:0] cmc_key [0:7];
+    logic [15:0] cmc_mip [0:7];
+    logic [7:0]  cmc_valid;
+    logic [2:0]  cmc_wp;
+    logic        cmc_hit;
+    logic [15:0] cmc_hit_mip;
+    always_comb begin
+        cmc_hit = 1'b0;
+        cmc_hit_mip = 16'hFFFF;
+        for (int k = 0; k < 8; k++)
+            if (cmc_valid[k] && cmc_cls[k] == vobj_cls_rdata &&
+                cmc_key[k] == code_rdata[23:8]) begin
+                cmc_hit = 1'b1;
+                cmc_hit_mip = cmc_mip[k];
+            end
+    end
     logic [3:0] cm_c, cm_c_n, cm_m, cm_m_n;
     logic [15:0] cm_mip, cm_mip_n, cm_key, cm_key_n, cm_cls, cm_cls_n;
     // String.replace needs two name_hash_tbl keys; one SRAM port → extra beat.
@@ -1726,25 +1756,27 @@ module jmr_js_vm_exec64 (
         end else if (p_clr) begin
             clr_busy <= 1'b1;
             clr_i <= 12'd0;
+            cmc_valid <= 8'd0;
         end else if (clr_busy) begin
             // Parent HEAP_CLR owns the JS banks. This walk is only the
             // handshake delay (p_clr_busy) plus leftover class-table FFs.
-            if (clr_i < 12'(MAX_CLS)) begin
-                cls_name[clr_i[3:0]] <= 16'd0;
-                cls_nmeth[clr_i[3:0]] <= 5'd0;
-            end
+            // class tables live in the parent now (no clr here)
             if (clr_i + 12'd1 >= 12'(CLR_LIM))
                 clr_busy <= 1'b0;
             else
                 clr_i <= clr_i + 12'd1;
         end else if (p_we) begin
             unique case (p_sel)
-                6'd31: cls_mip[p_addr[3:0]][p_addr2[3:0]] <= p_data[15:0];
-                6'd37: cls_name[p_addr[3:0]] <= p_data[15:0];
-                6'd38: cls_nmeth[p_addr[3:0]] <= p_data[4:0];
-                6'd39: cls_mname[p_addr[3:0]][p_addr2[3:0]] <= p_data[15:0];
+                6'd31, 6'd37, 6'd38, 6'd39: cmc_valid <= 8'd0; // tables changed
                 default: ;
             endcase
+        end
+        if (cm_res_we && cm_scan) begin
+            cmc_cls[cmc_wp] <= cm_cls;
+            cmc_key[cmc_wp] <= cm_key;
+            cmc_mip[cmc_wp] <= cm_res_mip;
+            cmc_valid[cmc_wp] <= 1'b1;
+            cmc_wp <= cmc_wp + 3'd1;
         end
         if (enable && !leave_hold) begin
             opnd_q <= opnd_n;
@@ -1786,6 +1818,8 @@ module jmr_js_vm_exec64 (
             cm_scan <= 1'b0;
             cm_armed <= 1'b0;
             cm_done <= 1'b0;
+            cmc_valid <= 8'd0;
+            cmc_wp <= 3'd0;
             cm_c <= 4'd0;
             cm_m <= 4'd0;
             cm_mip <= 16'hFFFF;
@@ -2571,6 +2605,13 @@ module jmr_js_vm_exec64 (
             end
         end
     endtask
+    // Frame clock (performance.now / Date.now / getTime): all three
+    // opcode branches compute the SAME product, so one shared instance
+    // serves them — this removes two full 53x53 comb multipliers.
+    logic [63:0] now_v64;
+    always_comb v64_mul_task(v64_int32_number(vframe_no),
+                             64'h4030aaaaaaaaaaab, now_v64);
+
     task automatic v64_mul_task(
         input logic [63:0] aa,
         input logic [63:0] bb,
@@ -3290,28 +3331,20 @@ module jmr_js_vm_exec64 (
                         state_n = S_V64_EXEC;
                         vst_we_n = 1'b0;
                     end else if (cm_scan) begin
-                        // cls_* are 16×16 FFs in this exec (not intern SRAM).
-                        // One-clock match; 256-step (c,m) walk was every
-                        // object CALL. unique-case CAM over BRAM still forbidden.
+                        // Hold with the request level up; the parent's
+                        // sequential class scanner answers on cm_res_we.
                         opnd_n = 1'b1;
                         opnd2_n = 1'b1;
                         opnd3_n = 1'b1;
                         cm_key_n = cm_key;
                         cm_cls_n = cm_cls;
-                        cm_mip_n = 16'hFFFF;
-                        for (int ci = 0; ci < MAX_CLS; ci++) begin
-                            for (int mi = 0; mi < MAX_CMETH; mi++) begin
-                                if ((5'(ci) < n_cls) &&
-                                    (cls_name[ci] == cm_cls) &&
-                                    (5'(mi) < cls_nmeth[ci]) &&
-                                    (cls_mname[ci][mi][14:0] == cm_key[14:0]) &&
-                                    !cls_mname[ci][mi][15])
-                                    cm_mip_n = cls_mip[ci][mi];
-                            end
+                        cm_scan_n = 1'b1; // hold the request level (2951 default-clears)
+                        if (cm_res_we) begin
+                            cm_mip_n = cm_res_mip;
+                            cm_scan_n = 1'b0;
+                            cm_armed_n = 1'b0;
+                            cm_done_n = 1'b1;
                         end
-                        cm_scan_n = 1'b0;
-                        cm_armed_n = 1'b0;
-                        cm_done_n = 1'b1;
                         state_n = S_V64_EXEC;
                     end else
                     // Small gated scalar island. Every opcode not implemented
@@ -4452,11 +4485,7 @@ module jmr_js_vm_exec64 (
                                         8'd35: begin // performance.now
                                             logic [63:0] frame_number;
                                             frame_number = v64_int32_number(vframe_no);
-                                            v64_mul_task(
-                                                frame_number,
-                                                64'h4030aaaaaaaaaaab,
-                                                result
-                                            );
+                                            result = now_v64;
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
@@ -4684,11 +4713,7 @@ module jmr_js_vm_exec64 (
                                     logic [63:0] now_result;
                                     logic [11:0] now_base;
                                     now_base = vsp_hs - argc - 12'd1;
-                                    v64_mul_task(
-                                        v64_int32_number(vframe_no),
-                                        64'h4030aaaaaaaaaaab,
-                                        now_result
-                                    );
+                                    now_result = now_v64;
                                     vst_wr(now_base, now_result);
                                     vsp_n = now_base + 12'd1;
                                     ip_n = ip + 16'd1;
@@ -7077,11 +7102,7 @@ module jmr_js_vm_exec64 (
                                     // (exec32 obj_cls FFFD twin).
                                     begin
                                         logic [63:0] ts;
-                                        v64_mul_task(
-                                            v64_int32_number(vframe_no),
-                                            64'h4030aaaaaaaaaaab,
-                                            ts
-                                        );
+                                        ts = now_v64;
                                         vst_wr(base, ts);
                                         vsp_n = base + 12'd1;
                                         ip_n = ip + 16'd1;
@@ -7111,7 +7132,7 @@ module jmr_js_vm_exec64 (
                                            (receiver[47:44] == V64_KIND_OBJECT ||
                                             receiver[47:44] == V64_KIND_ELEMENT) &&
                                            receiver[31:0] < MAX_OBJ) begin
-                                    if (!cm_done) begin
+                                    if (!cm_done && !cmc_hit) begin
                                         cm_scan_n = 1'b1;
                                         cm_armed_n = 1'b0;
                                         cm_done_n = 1'b0;
@@ -7122,7 +7143,7 @@ module jmr_js_vm_exec64 (
                                         cm_cls_n = vobj_cls_rdata;
                                         state_n = S_V64_EXEC;
                                     end else begin
-                                    mip = cm_mip;
+                                    mip = cm_done ? cm_mip : cmc_hit_mip;
                                     cm_done_n = 1'b0;
                                     if (mip != 16'hFFFF) begin
                                         bind_mode_n = 2'd1;

@@ -9,6 +9,10 @@
 ROOT := $(abspath ..)
 RTL  := $(ROOT)/rtl
 BUILD := sim_build_synth
+# Simulator runtime threads. Empty = no --threads flag = today's 1-thread build.
+#   make -C sim sim_server_synth THREADS=12 -B
+THREADS ?=
+VTHREADS := $(if $(THREADS),--threads $(THREADS),)
 FONT := $(ROOT)/vectors/font_rom.hex
 
 .PHONY: sim_server_synth font tb_uart_link tb_ft245 tb_ps2_rx tb_ps2_typing clean
@@ -132,7 +136,7 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 		-Mdir $(BUILD)/obj_dir \
 		-o $(abspath $(BUILD)/jmr_js_sim_server) \
 		--top-module jmr_js_core \
-		-O3 \
+		-O3 $(VTHREADS) \
 		-Wno-UNOPTTHREADS -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-MULTIDRIVEN -Wno-LATCH \
 		-CFLAGS "-std=c++17 -O3 -march=native -fno-semantic-interposition" \
 		$(CORE_SRCS) \

@@ -53,7 +53,7 @@ _ARCH_RING_PERIOD = 251
 CODE_WORDS = PROGRAM_CODE_WORDS
 MAX_CONSTS = PROGRAM_MAX_CONSTS
 MAX_VARS = PROGRAM_MAX_VARS
-STACK_DEPTH = 2048
+STACK_DEPTH = 1024  # mirrors jmr_js_vm.sv (RTL vspmax=71; literals push per element)
 CALL_DEPTH = 128
 MAX_OBJECTS = 960  # 2026-08-21(final): mirrors RTL; attract burst needs >896
 # Two-tier arrays: leftover BRAM cannot hold 1024×128. Same 65536 × 64b

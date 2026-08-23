@@ -57,7 +57,9 @@ the file is deleted and the line counts below have changed accordingly
 (parent 14.5k, exec64 7.5k, ~22k for the two, ~29.4k all `rtl/*.sv`).
 What remains valid is everything about *how to navigate* the two big
 files: the state/handshake/`*_rdata` discipline, the leftover-file labels,
-and the "do not extract JOIN/JSON/GC/HEAP" law.
+and the extraction law (RELAXED 2026-08-22: control-only submodules in
+the u_exec64 shape are now allowed — no arrays, scalar ports, registered
+reads; duplicating heap arrays stays forbidden).
 
 FPGA-SIM **is** the synthesis RTL (`never-fake-fpga-sim`). The goal of a
 reorg is: an agent (or human) can land on the right clock, the right SRAM
@@ -101,8 +103,13 @@ skewed glass. Full RAM law: `.cursor/rules/never-fake-fpga-sim.mdc` +
 1. **One JS heap in the parent.** Exec may **address** SRAM this clock and
    consume `*_rdata` next. It must not own `vvars` / `venv_*` / `vobj_*` /
    `name_mem` / `vstack` / `json_mem` copies.
-2. **Do not extract JOIN / JSON / GC / HEAP** into new modules. Extra
-   clocks inside the parent are fine.
+2. **Extraction (RELAXED 2026-08-22, user decision):** control-only
+   submodules are allowed — a submodule owns NO arrays and reaches the
+   single heap solely through scalar addr/data/we ports with registered
+   reads (the u_exec64 shape). Duplicating any heap array inside a
+   submodule stays forbidden. Rationale: measured 4.19 LUT/FF in
+   u_exec64 vs 11.00 in the flat parent — the extraction lever is worth
+   ~385k LUTs. Extra clocks inside the parent are still fine.
 3. **Big arrays: Port A only.** FSM pulses `stack_wr` / `vobj_alloc_wr` /
    `varr_len_wr` / `vvars_wr` / `json_putc` / `imgd_we`. Never
    `mem[i] <=` in the 7k-line `always_ff`. Recipe: [FPGA_FIT.md](FPGA_FIT.md).

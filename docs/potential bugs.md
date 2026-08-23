@@ -311,6 +311,17 @@ pacing item in [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md) is
 the antidote, and MAX_OBJ is the first lever to revisit if a title
 faults 3.
 
+
+### #80 pattern note — strobe-converted metadata arrays land +1 beat (2026-08-22)
+
+The heap metadata arrays (gens, marks, valids, varr_long) moved from
+flip-flops to LUTRAM via the vom/veg strobe pattern. A strobe write lands
+one beat after the FSM site that armed it. Every current reader goes
+through an armed `*_rdata` port (≥2 beats later), so no path sees stale
+data — but any NEW code that writes metadata and re-reads the same slot
+on the next beat will. If you add such a path, either forward the write
+(vol/vel bypass pattern) or arm the read one beat later.
+
 ## RECURRING BUG CLASSES — read this before debugging anything
 
 Five patterns produced the overwhelming majority of the bugs in this file.

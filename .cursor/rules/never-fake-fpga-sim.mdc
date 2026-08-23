@@ -92,9 +92,20 @@ shape): `jmr_video_vram.sv` / `jmr_mini_fb.sv`. Numbers:
 
 5. **This machine (not UG901):** one JS heap in the parent (`one-heap-keep-gen`);
    exec address in, `*_rdata` next clock; no unpacked array ports; no
-   `` `ifdef SYNTHESIS `` smaller heap; no `RAMB36` inside the VM. Do **not**
-   extract JOIN / JSON / GC / HEAP into new modules. Agent does not run
-   Vivado. `sim_server_synth` PASS is Verilator. `e32_p_clr` 8-6014 is unused-FF
+   `` `ifdef SYNTHESIS `` smaller heap; no `RAMB36` inside the VM.
+   **Extract only control into submodules** (user decision 2026-08-22): a
+   submodule owns NO arrays and reaches the single heap solely through
+   scalar address/data/we ports with registered reads (`*_rdata` next
+   clock) — the `u_exec64` shape. Duplicating any heap array inside a
+   submodule stays forbidden. Why the old blanket ban was relaxed: it was
+   never an AMD constraint — it existed to stop a second heap copy, which
+   the replacement still stops — and it blocked the largest remaining fit
+   lever. Measured 2026-08-22: u_exec64 (submodule) runs 4.19 logic
+   LUTs/FF; the flat 112-state parent runs 11.00; bringing the parent's
+   56,604 registers toward exec64's ratio is worth ~385k LUTs of the
+   ~660k still needed. u_exec64 is the existence proof: 0 BRAM, 174
+   LUTRAM, holds no heap.
+   `sim_server_synth` PASS is Verilator. `e32_p_clr` 8-6014 is unused-FF
    housekeeping, not the hang. Kill synth only when the log is frozen **and**
    RSS is still climbing toward ~80 GB.
 

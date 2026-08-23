@@ -125,18 +125,18 @@ module jmr_js_core #(
     assign joy_out = joy_in;
 
     // ---- work RAM 0xB000-0xDFFF (12 KB) — NAME/STORAGE only -------------
-    // Indexed by addr[13:0] relative to 0xB000. Registered 1-cycle read.
-    (* ram_style = "block" *) logic [7:0] work_ram [0:12287];
+    // 2026-08-22: array moved to external SRAM (WORK_SRAM_BASE, 1 byte per
+    // 16-bit word). Both masters already stall on gnt, so the variable
+    // req/ack latency is safe by construction.
+    localparam logic [20:0] WORK_SRAM_BASE = 21'd1634304;
     logic        ram_we;
     logic [13:0] ram_addr;
     logic [7:0]  ram_wdata, ram_rdata;
-    logic        ram_req, ram_req_q;
+    logic        ram_req;
     logic        ram_sel_stor; // 1 = storage master won
-    // NEW: 2-cycle RAM — latch addr then access+gnt (closes state→RAM→rdata WNS)
-    logic        ram_pend;
-    logic        ram_pend_we, ram_pend_stor;
-    logic [13:0] ram_pend_addr;
-    logic [7:0]  ram_pend_wdata;
+    logic        work_req, work_we_l, work_ack, work_sel_stor;
+    logic [13:0] work_addr_l;
+    logic [7:0]  work_wdata_l;
 
     wire in_work_c = (c_mem_addr >= 16'hB000) && (c_mem_addr < 16'hE000);
     wire in_work_s = (s_mem_addr >= 16'hB000) && (s_mem_addr < 16'hE000);
@@ -164,34 +164,30 @@ module jmr_js_core #(
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin
-            ram_req_q <= 1'b0;
             ram_rdata <= 8'h00;
             s_mem_gnt <= 1'b0;
             c_mem_gnt <= 1'b0;
-            ram_pend <= 1'b0;
-            ram_pend_we <= 1'b0;
-            ram_pend_stor <= 1'b0;
-            ram_pend_addr <= '0;
-            ram_pend_wdata <= '0;
+            work_req <= 1'b0;
+            work_we_l <= 1'b0;
+            work_sel_stor <= 1'b0;
+            work_addr_l <= '0;
+            work_wdata_l <= '0;
         end else begin
             s_mem_gnt <= 1'b0;
             c_mem_gnt <= 1'b0;
-            if (ram_pend) begin
-                if (ram_pend_we) work_ram[ram_pend_addr] <= ram_pend_wdata;
-                ram_rdata <= ram_pend_we ? ram_pend_wdata : work_ram[ram_pend_addr];
-                if (ram_pend_stor) s_mem_gnt <= 1'b1;
-                else c_mem_gnt <= 1'b1;
-                ram_pend <= 1'b0;
-                ram_req_q <= 1'b1;
+            if (work_req) begin
+                if (work_ack) begin
+                    work_req <= 1'b0;
+                    ram_rdata <= work_we_l ? work_wdata_l : sram_rdata[7:0];
+                    if (work_sel_stor) s_mem_gnt <= 1'b1;
+                    else c_mem_gnt <= 1'b1;
+                end
             end else if (ram_req) begin
-                ram_pend <= 1'b1;
-                ram_pend_addr <= ram_addr;
-                ram_pend_we <= ram_we;
-                ram_pend_wdata <= ram_wdata;
-                ram_pend_stor <= ram_sel_stor;
-                ram_req_q <= 1'b0;
-            end else begin
-                ram_req_q <= 1'b0;
+                work_req <= 1'b1;
+                work_we_l <= ram_we;
+                work_addr_l <= ram_addr;
+                work_wdata_l <= ram_wdata;
+                work_sel_stor <= ram_sel_stor;
             end
         end
     end
@@ -227,7 +223,8 @@ module jmr_js_core #(
         .code_we(code_we), .code_waddr(code_waddr), .code_wdata(code_wdata),
         .sram_req(cons_sram_req), .sram_we(cons_sram_we),
         .sram_addr(cons_sram_addr), .sram_wdata(cons_sram_wdata),
-        .sram_ack(sram_ack),
+        .sram_ack(sram_ack && (sram_owner == 2'd1)),
+        .sram_rdata(sram_rdata),
         .pal_we(pal_we), .pal_waddr(pal_waddr), .pal_wdata(pal_wdata),
         .stor_open(stor_open), .stor_mode(stor_mode), .stor_chan(stor_chan),
         .stor_name_addr(stor_name_addr), .stor_name_len(stor_name_len),
@@ -315,17 +312,40 @@ module jmr_js_core #(
         .fb_dump_front(dump_fb_rdata),
         .sram_req(vm_sram_req), .sram_addr(vm_sram_addr),
         .sram_we(vm_sram_we), .sram_wdata(vm_sram_wdata),
-        .sram_rdata(sram_rdata), .sram_ack(sram_ack)
+        .sram_rdata(sram_rdata), .sram_ack(sram_ack && (sram_owner == 2'd3))
     );
 
     // Asset-SRAM arbiter — console (load) wins; the VM reads sprite pixels
     // and, since 2026-08-21, also streams the ImageData snapshot (read AND
     // write) at the top of the bank. The two masters still never overlap
     // (load completes before vm_start).
-    assign sram_req   = cons_sram_req | vm_sram_req;
-    assign sram_we    = cons_sram_req ? cons_sram_we : vm_sram_we;
-    assign sram_addr  = cons_sram_req ? cons_sram_addr : vm_sram_addr;
-    assign sram_wdata = cons_sram_req ? cons_sram_wdata : vm_sram_wdata;
+    // Owner is latched per transaction so a request that arrives mid-flight
+    // cannot steal the address/ack. Priority: console (load) > work RAM > VM.
+    logic [1:0] sram_owner_q;
+    logic [1:0] sram_owner;
+    always_comb begin
+        sram_owner = sram_owner_q;
+        if (sram_owner_q == 2'd0) begin
+            if (cons_sram_req)     sram_owner = 2'd1;
+            else if (work_req)     sram_owner = 2'd2;
+            else if (vm_sram_req)  sram_owner = 2'd3;
+        end
+    end
+    always_ff @(posedge clk) begin
+        if (!rst_n) sram_owner_q <= 2'd0;
+        else        sram_owner_q <= sram_ack ? 2'd0 : sram_owner;
+    end
+    assign sram_req   = (sram_owner == 2'd1) ? cons_sram_req :
+                        (sram_owner == 2'd2) ? work_req :
+                        (sram_owner == 2'd3) ? vm_sram_req : 1'b0;
+    assign sram_we    = (sram_owner == 2'd1) ? cons_sram_we :
+                        (sram_owner == 2'd2) ? work_we_l : vm_sram_we;
+    assign sram_addr  = (sram_owner == 2'd1) ? cons_sram_addr :
+                        (sram_owner == 2'd2) ? (WORK_SRAM_BASE + 21'(work_addr_l)) :
+                                               vm_sram_addr;
+    assign sram_wdata = (sram_owner == 2'd1) ? cons_sram_wdata :
+                        (sram_owner == 2'd2) ? {8'd0, work_wdata_l} : vm_sram_wdata;
+    assign work_ack   = sram_ack && (sram_owner == 2'd2);
 
     // NEW: behavioral 4 MB SRAM (FPGA-SIM, SRAM_INTERNAL=1). Board uses
     // #(.SRAM_INTERNAL(0)) and the MIG DDR3 bridge on these ports.

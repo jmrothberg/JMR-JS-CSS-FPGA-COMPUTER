@@ -42,6 +42,7 @@ module jmr_console_engine (
     output logic        sram_we,
     output logic [20:0] sram_addr,
     output logic [15:0] sram_wdata,
+    input  logic [15:0] sram_rdata,
     input  logic        sram_ack,
     // NEW: ASET palette (payload bytes 0..767 = 256×RGB888) → palette BRAM
     output logic        pal_we,
@@ -95,10 +96,17 @@ module jmr_console_engine (
     // LIST shows the first 64K; oversize LOAD keeps the prefix and RUN
     // compiles from the host file regardless (C_LD_RD "SOURCE full" arm).
     localparam int unsigned SOURCE_MAX      = 65536;
-    (* ram_style = "block" *) logic [7:0] source_mem [0:SOURCE_MAX-1] /*verilator public_flat_rw*/;
+    // 2026-08-22 LUTRAM fit: source_mem moved to the external 4MB SRAM
+    // (words SRC_SRAM_BASE..+SOURCE_MAX-1, one byte per 16-bit word). The
+    // old on-chip array was 8.2k LUTRAM against a failing 46.2k cap. The
+    // internal 1-beat req/gnt protocol is kept; consumers already wait on
+    // src_gnt, so the extra ack latency is absorbed by the protocol.
+    localparam logic [20:0] SRC_SRAM_BASE = 21'd1724416; // below IMGD region
     logic        src_req, src_we, src_gnt;
     logic [16:0] src_addr;
     logic [7:0]  src_wdata, src_rdata;
+    logic        srcb_pend, srcb_we_l;
+    logic [7:0]  srcb_wd_l;
 
     typedef enum logic [6:0] {
         C_BOOT_CLS, C_BOOT_MSG, C_PROMPT, C_IDLE, C_ECHO, C_WAIT_VIDEO,
@@ -315,21 +323,9 @@ module jmr_console_engine (
     assign stor_chan = 8'd1;
     assign stor_name_addr = NAME_BUF;
 
-    // 1-cycle SOURCE BRAM (pulse src_req; src_gnt next cycle)
-    always_ff @(posedge clk) begin
-        if (!rst_n) begin
-            src_gnt <= 1'b0;
-            src_rdata <= 8'h00;
-        end else begin
-            src_gnt <= 1'b0;
-            if (src_req) begin
-                if (src_we)
-                    source_mem[src_addr] <= src_wdata;
-                src_rdata <= src_we ? src_wdata : source_mem[src_addr];
-                src_gnt <= 1'b1;
-            end
-        end
-    end
+    // SOURCE lives in external SRAM; the req/gnt bridge is appended inside
+    // the main console FSM block (it shares the sram_* channel with the
+    // ASET flash states, which never overlap source traffic).
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin
@@ -356,6 +352,7 @@ module jmr_console_engine (
             stor_mode <= "I"; stor_name_len <= 0; stor_putc_data <= 0;
             mem_en <= 0; mem_we <= 0; mem_addr <= 0; mem_wdata <= 0;
             src_req <= 0; src_we <= 0; src_addr <= 0; src_wdata <= 0;
+            src_gnt <= 0; src_rdata <= 0; srcb_pend <= 0; srcb_we_l <= 0; srcb_wd_l <= 0;
             src_len <= 0; src_i <= 0;
             name_len_r <= 0; name_i <= 0; name_start <= 0;
             dir_n <= 0; dir_idx <= 0;
@@ -1872,6 +1869,28 @@ module jmr_console_engine (
 
                 default: state <= C_IDLE;
             endcase
+
+            // ---- SOURCE -> external SRAM bridge (appended; every beat) ----
+            // src_req is a 1-beat pulse from the states above; latch it,
+            // hold the sram request until ack, then pulse src_gnt with the
+            // byte. ASET-flash states drive sram_* too, but never in the
+            // same states as source traffic.
+            src_gnt <= 1'b0;
+            if (src_req && !srcb_pend) begin
+                srcb_pend  <= 1'b1;
+                sram_req   <= 1'b1;
+                sram_we    <= src_we;
+                sram_addr  <= SRC_SRAM_BASE + 21'(src_addr);
+                sram_wdata <= {8'd0, src_wdata};
+                srcb_we_l  <= src_we;
+                srcb_wd_l  <= src_wdata;
+            end else if (srcb_pend && sram_ack) begin
+                srcb_pend <= 1'b0;
+                sram_req  <= 1'b0;
+                sram_we   <= 1'b0;
+                src_rdata <= srcb_we_l ? srcb_wd_l : sram_rdata[7:0];
+                src_gnt   <= 1'b1;
+            end
         end
     end
 endmodule

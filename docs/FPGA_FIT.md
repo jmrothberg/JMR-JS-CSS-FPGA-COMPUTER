@@ -16,7 +16,8 @@ This file is **copy 2** of the RAM / “never fake FPGA-SIM” law (copy 1 is
 `.cursor/rules/never-fake-fpga-sim.mdc`) and **copy 2** of synth hygiene
 (with [SESSION_HANDOFF.md](SESSION_HANDOFF.md) § Synthesis).
 
-One JS heap. Do not extract JOIN / JSON / GC (Garbage Collection) / HEAP
+One JS heap. Control-only extraction allowed since 2026-08-22 (u_exec64
+shape: no arrays, scalar ports, registered reads); never extract-with-copies JOIN / JSON / GC (Garbage Collection) / HEAP
 into new modules. Extra clocks OK. **Future plan** if the JS core misses
 100 MHz: [If timing fails](#if-timing-fails-wns--0--slow-the-js-core-not-ddr3)
 (50 MHz core, DDR3 stays 100 MHz) — not wired yet.
@@ -465,7 +466,7 @@ Law detail: `.cursor/rules/never-fake-fpga-sim.mdc`,
 | **`unique case` that combo-indexes big unpacked arrays** | Parallel ports / giant mux (use plain `case` on opcode) |
 | **Second JS heap** inside exec (private `vvars` / `stack` / `vobj_*` / …) | Will not fit; goes stale; black PACMAN. One heap, keep gen-match |
 | **Skip gen-match** on object handles | Silent use-after-recycle |
-| **Extract JOIN / JSON / GC / HEAP into new modules** for fit | Forbidden architecture churn |
+| **Extract WITH heap-array copies** (any submodule owning/duplicating a heap array) | Second heap; goes stale. Control-only extraction in the u_exec64 shape is ALLOWED (2026-08-22) |
 | **Put whole `vobj_slot` / `varr_slot` or scanout FB on external/DDR3** | Cripples the JS Native CPU / pixel path |
 | **dukpy / V8 / soft CPU / execute JS source as one RTL FSM** | Not this machine — bytecode ISA only |
 | **Title-name gates** (`if (stem == "PACMAN")`) | Forbidden hardwire |
