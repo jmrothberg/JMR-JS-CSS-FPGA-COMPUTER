@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="426" viewBox="0 0 680 426" role="img">
+<title>How a JavaScript event listener works in hardware</title>
+<desc>A game registers a handler with addEventListener, which writes an event name and function into one of sixteen listener slots. When a key is pressed, the machine scans those slots for a matching event and calls the handler it finds.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#5F5E5A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.t{font-size:14px;fill:#2C2C2A}.ts{font-size:12px;fill:#5F5E5A}.th{font-size:14px;font-weight:500;fill:#2C2C2A}
+.arr{stroke:#5F5E5A;stroke-width:1.5;fill:none}
+</style>
+
+<rect x="40" y="45" width="270" height="56" rx="4" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+<text class="th" x="56" y="68" fill="#3C3489">Setup &#8212; once at boot</text>
+<text class="ts" x="56" y="88" fill="#534AB7">write event + fn to a slot</text>
+
+<rect x="370" y="45" width="270" height="56" rx="4" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+<text class="th" x="386" y="68" fill="#712B13">Runtime &#8212; every key press</text>
+<text class="ts" x="386" y="88" fill="#993C1D">scan 16 slots for a match</text>
+
+<line x1="175" y1="101" x2="175" y2="132" class="arr" marker-end="url(#arrow)"/>
+<line x1="505" y1="101" x2="505" y2="132" class="arr" marker-end="url(#arrow)"/>
+
+<rect x="40" y="135" width="600" height="187" rx="4" fill="none" stroke="#B4B2A9" stroke-width="0.5" stroke-dasharray="4 3"/>
+<text class="ts" x="56" y="157">Listener table &#8212; 16 slots, 2048 bits total</text>
+<text class="th" x="82" y="180">event</text>
+<text class="th" x="302" y="180">handler function</text>
+
+<rect x="70" y="188" width="200" height="26" rx="4" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/><text class="t" x="82" y="205">keydown</text>
+<rect x="290" y="188" width="200" height="26" rx="4" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/><text class="t" x="302" y="205">movePlayer</text>
+<rect x="70" y="218" width="200" height="26" rx="4" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/><text class="t" x="82" y="235">keyup</text>
+<rect x="290" y="218" width="200" height="26" rx="4" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/><text class="t" x="302" y="235">stopPlayer</text>
+<rect x="70" y="248" width="200" height="26" rx="4" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/><text class="t" x="82" y="265">keydown</text>
+<rect x="290" y="248" width="200" height="26" rx="4" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/><text class="t" x="302" y="265">fireBullet</text>
+<rect x="70" y="278" width="200" height="26" rx="4" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/><text class="ts" x="82" y="295">empty</text>
+<rect x="290" y="278" width="200" height="26" rx="4" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/><text class="ts" x="302" y="295">empty</text>
+
+<text class="ts" x="510" y="238">12 more<tspan x="510" dy="1.3em">slots, all</tspan><tspan x="510" dy="1.3em">empty</tspan></text>
+
+<line x1="340" y1="322" x2="340" y2="348" class="arr" marker-end="url(#arrow)"/>
+
+<rect x="205" y="350" width="270" height="56" rx="4" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text class="th" x="221" y="373" fill="#085041">Match found &#8212; call it</text>
+<text class="ts" x="221" y="393" fill="#0F6E56">movePlayer() runs, ship moves</text>
+</svg>

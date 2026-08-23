@@ -2,6 +2,58 @@
 
 Words: [README.md — Words used](../README.md#words-used-in-this-project).
 
+---
+
+## SCOREBOARD — update this table every run (one screen; diary lives in [OVERNIGHT_STATUS.md](../OVERNIGHT_STATUS.md))
+
+**Last run: 20 — synthesis 2026-08-23 15:37.** Place not yet attempted.
+
+| Resource | Used | Budget | % | State |
+|---|---:|---:|---:|---|
+| **Slice LUTs (total)** | **167,029** | 134,600 | **124%** | **over by 32,429 — the only wall** |
+| LUT as Logic | 154,850 | 134,600 | 115% | ~122.4k sites available after LUTRAM |
+| LUT as Memory | 12,179 | 46,200 | 26% | fits |
+| Slice Registers | 51,589 | 269,200 | 19% | fits |
+| Block RAM | 338.5 | 365 | 93% | fits, 26.5 tiles spare |
+| DSPs | 158 | 740 | 21% | fits |
+
+### Trajectory
+
+| Run | Slice LUTs | vs chip | What landed |
+|---|---:|---:|---|
+| 08-21 22:29 | 1,901,313 | 14.1x | (pre-campaign) |
+| overnight | 1,196,216 | 8.9x | FB rewrite + pow2 chunking; BRAM solved |
+| 08-22 09:10 | 794,989 | 5.9x | Phase 3b tagged-twin hand-delete |
+| 4 | 519,312 | 3.9x | AreaOptimized_high directive |
+| 5 | 497,275 | 3.7x | LUTRAM tier 1 |
+| 6 | 317,303 | 2.36x | metadata evacuation (mux kill, -175k) |
+| 7 | 227,502 | 1.69x | census-named cuts |
+| 8-17 | ~208,500 | 1.55x | plateau: array lever exhausted; V1 cut + one-hot both flat |
+| 19 | 186,440 | 1.39x | Session 1 — FB front bank to DDR3 |
+| **20** | **167,029** | **1.24x** | **JSON engine removal (-19.4k)** |
+
+### Levers remaining (census-sized on the run-19 post-opt netlist)
+
+| Lever | Census | State |
+|---|---:|---|
+| Listener consolidation | ~26k | **next** — see [ARCHITECTURE.md § Events and listeners](ARCHITECTURE.md#events-and-listeners-how-input-reaches-the-game) |
+| vst_win 16 to 8 | ~11k | ready, gated by `tests/test_stack_window_depth.py` |
+| name_has 1W merge | ~6.2k | known strobe recipe |
+| LUT packing at place | 10-25k equiv | armed (DRC demoted) |
+| vst_wdata funnel op-tiering | ~34k | deep reserve |
+| **Named total** | **~43k** | vs ~32.4k needed = **133% coverage** |
+
+**Dead levers — do not retry:** 20 ns clock relax (bit-identical netlist;
+XDC never applies at synthesis), one-hot `fsm_encoding` (parent FSM not
+extractable through `hs_st()`/`ret_state`), HOF/regex/sort/bind walls
+(~1.8k total, not worth the authoring surface), Verilator `--threads`
+(1 OS thread, single flat `always_ff` will not partition).
+
+**50 MHz is timing-only** — never an area lever (proven run 18). Wire it
+only if placement succeeds and routing reports WNS < 0.
+
+---
+
 **T200** = this Nexys Video board (Artix-7 **XC7A200T**, 365 **BRAM** Block
 RAM tiles, 134,600 **LUTs** Look-Up Tables). **Fit** = does the design
 place without over-util. Agent does **not** run **Vivado** (AMD’s FPGA

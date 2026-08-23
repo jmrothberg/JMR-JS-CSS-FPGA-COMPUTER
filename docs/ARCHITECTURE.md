@@ -206,6 +206,43 @@ host blocks. Compile/parse may take many cycles — that is intentional.
 
 ---
 
+## Events and listeners (how input reaches the game)
+
+A title never polls the keyboard. At boot it registers standing
+instructions — `document.addEventListener("keydown", movePlayer)` — and
+then draws. On this machine that is not a library call: `addEventListener`
+is an instruction that writes two 64-bit values (the event, the handler
+function) into one row of a fixed **16-slot listener table**.
+
+![Listener table](listener_table.svg)
+
+At runtime a key event arrives over the RPC, the machine walks the table
+comparing each stored event, and on a hit **calls the handler like any
+other user function** — push frame, jump, run, return. Several matching
+listeners run in registration order.
+
+| Fact | Value |
+|---|---|
+| Slots | **16** (hard silicon cap; a 17th `addEventListener` is refused) |
+| Storage | `vlistener_ev[0:15]` + `vlistener_fn[0:15]`, 64 bits each — **2048 bits total** |
+| Count | `vlistener_n`; live value shows as `lsn=` in `VMSTAT?` |
+| Key-event side tables | `kd_slot` / `ku_slot`, **4 each** (`add_key_listener` task) |
+| Typical use | PACMAN 2, DONKEY 4 — well under the cap |
+
+**Why this tiny table is a fit target.** 2048 bits of data drags roughly
+**26,000 LUTs** (census-measured, run 19): the arrays are flip-flops, so
+every bit carries FSM-decoded enable logic plus 16:1 read selectors 64
+bits wide — and `removeEventListener`'s compaction plus the reset clear
+are written as `for (int t = 0; t < 16; t++)`, which in hardware unrolls
+to **16 comparators and 16 write ports in parallel**, not a loop (the
+NEVER-table `for`-unroll hazard). Consolidation keeps all 16 slots and
+every event; it merges the two arrays behind one write port with a
+registered read, so removal walks one slot per clock. The cost is a few
+extra clocks per `removeEventListener` — about six times per game, at
+startup.
+
+---
+
 ## What is deliberately not here
 
 - **No hidden CPU.** Nothing evaluates JS by calling into V8 / QuickJS / a soft core.
