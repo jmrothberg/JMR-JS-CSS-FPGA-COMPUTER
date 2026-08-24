@@ -220,7 +220,7 @@ module jmr_js_vm #(
     (* ram_style = "block" *) logic [5:0] vobj_len [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     // NEW_OBJ stores the interned class name so CALL_METH can find the
     // class-table method (PYTHON _value_object_classes). 16'hFFFF = none.
-    logic [15:0] vobj_cls [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [15:0] vobj_cls [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     // PYTHON _value_object_protos / _value_function_prototypes. `var Stage =
     // function` + Stage.prototype.createItem is not a JSB class-method table.
     (* ram_style = "block" *) logic [63:0] vobj_proto [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
@@ -669,11 +669,18 @@ module jmr_js_vm #(
     logic        name_we;
     logic [14:0] name_waddr;
     logic [7:0]  name_wdata;
+    // Multi-port-by-replication (2026-08-24): 4 read sites made BRAM
+    // infeasible (Synth 8-6849) and the LUTRAM cost ~384 prims of SLICEM.
+    // Four mirrored copies, one per read port, half a tile each.
     (* ram_style = "block" *) logic [15:0] name_off [0:1023] /*verilator public_flat_rd*/;   // intern idx -> first byte in name_mem
+    (* ram_style = "block" *) logic [15:0] name_off_r1 [0:1023];
+    (* ram_style = "block" *) logic [15:0] name_off_r2 [0:1023];
+    (* ram_style = "block" *) logic [15:0] name_off_r3 [0:1023];
     // NAMB u16 byte length. Hash-table name_len_tbl is u8 (concat fold).
     // str[i] / str.length must use this or a 624-char layout literal
     // reports length 112 (624&255) and never carves tunnels.
     (* ram_style = "block" *) logic [15:0] name_blen [0:1023] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [15:0] name_blen_r1 [0:1023];
     logic [15:0] name_rdaddr;
     logic [14:0] name_mem_raddr;
     logic [7:0]  name_rdata;          // registered read (BRAM, not a mux)
@@ -998,7 +1005,7 @@ module jmr_js_vm #(
     logic [15:0] spr_nid [0:15] /*verilator public_flat_rd*/; // intern idx of "jmr:spr:0"..15
     // NEW: FSTY fillStyle LUT — compiler-resolved name→palette index so RTL
     // paints the exact indices the FM does (0xFF = not a color, use fallback)
-    logic [7:0]  fill_lut [0:1023];
+    (* ram_style = "block" *) logic [7:0] fill_lut [0:1023];
     logic [15:0] fsty_n, fsty_name;
     // NEW: pass called swapBuffers explicitly (legacy .JS) — no auto-swap
     logic        did_swap;
@@ -5500,13 +5507,13 @@ module jmr_js_vm #(
                     varr_rdata[9:0] :
                 e32_intern_tos];
             e32_name_len_nos <= name_len_tbl[e32_intern_nos];
-            e32_name_off_tos <= name_off[
+            e32_name_off_tos <= name_off_r1[
                 ((casestate_q == S_CONCAT) || (state == S_CONCAT)) ?
                     (cc_second ? cc_bv[9:0] : cc_av[9:0]) :
                 ((casestate_q == S_TXT_LD) || (state == S_TXT_LD)) ?
                     txt_val[9:0] :
                 hs64 ? e64_name_off_raddr : e32_intern_tos];
-            e32_name_off_nos <= name_off[e32_intern_nos];
+            e32_name_off_nos <= name_off_r2[e32_intern_nos];
             e32_arr_len_tos_rdata <= arr_len[
                 ((state == S_FOREACH) || (casestate_q == S_FOREACH))
                     ? e32_cs1_fe_arr_rdata[11:0] :
@@ -6044,13 +6051,13 @@ module jmr_js_vm #(
             // from poke is a cycle late and missed the pulse — intern
             // lengths stayed post-p_clr zero.
             if (e64_p_we && e64_p_sel == 6'd17) begin
-                name_blen[e64_p_addr[9:0]] <= e64_p_data[15:0];
+                begin name_blen[e64_p_addr[9:0]] <= e64_p_data[15:0]; name_blen_r1[e64_p_addr[9:0]] <= e64_p_data[15:0]; end
             end else if (e64_p_we && e64_p_sel == 6'd41) begin
                 // Trail phase 4 pokes 41 (u8 intern len). Same Port A as
                 // poke 17 so GET_PROP .length is not a second FSM driver.
-                name_blen[e64_p_addr[9:0]] <= {8'd0, e64_p_data[7:0]};
+                begin name_blen[e64_p_addr[9:0]] <= {8'd0, e64_p_data[7:0]}; name_blen_r1[e64_p_addr[9:0]] <= {8'd0, e64_p_data[7:0]}; end
             end else if (e64_name_blen_we)
-                name_blen[e64_name_blen_waddr] <= e64_name_blen_wdata;
+                begin name_blen[e64_name_blen_waddr] <= e64_name_blen_wdata; name_blen_r1[e64_name_blen_waddr] <= e64_name_blen_wdata; end
             // name_hash_tbl writes: Port A process (name_hash_we / poke 40 / exec we).
             // name_has: ONE write statement so 1W is provable (three
             // separate writes kept it FF — census: 7.7k LUTs). Priority
@@ -7365,7 +7372,7 @@ module jmr_js_vm #(
                                 // 1-char name from the last byte of a long one —
                                 // that mixed whole-name ids into the char table.
                                 nb_one <= ({tb, trail_acc[7:0]} == 16'd1);
-                                name_off[nb_i[9:0]] <= nb_wp;
+                                begin name_off[nb_i[9:0]] <= nb_wp; name_off_r1[nb_i[9:0]] <= nb_wp; name_off_r2[nb_i[9:0]] <= nb_wp; name_off_r3[nb_i[9:0]] <= nb_wp; end
                                 // NEW: bytes for this id are real (fillText and
                                 // str[i] both refuse hash-only ids)
                                 if (nb_wp + {tb, trail_acc[7:0]} <= 16'(NAME_CAP))
@@ -8296,7 +8303,7 @@ module jmr_js_vm #(
                             // and str[i] on a built string work at all
                             if (cc_bok && jn_len <= 8'(TXT_MAX) &&
                                 ({1'b0, nb_wp} + {9'd0, jn_len}) <= 17'(NAME_CAP)) begin
-                                name_off[names_n[9:0]] <= nb_wp;
+                                begin name_off[names_n[9:0]] <= nb_wp; name_off_r1[names_n[9:0]] <= nb_wp; name_off_r2[names_n[9:0]] <= nb_wp; name_off_r3[names_n[9:0]] <= nb_wp; end
                                 name_has[names_n[9:0]] <= 1'b1;
                                 txt_i <= 7'd0;
                                 hs_st(S_STR_WR);
@@ -9511,8 +9518,8 @@ module jmr_js_vm #(
                     // NOT hs64-muxed here).
                     if (state != S_FONTPX && v64_on && e64_leave_hold) begin
                         hs_st(S_FONTPX);
-                        name_rdaddr <= name_off[e64_hp_key_q[9:0]];
-                        fp_left <= name_blen[e64_hp_key_q[9:0]][7:0];
+                        name_rdaddr <= name_off_r3[e64_hp_key_q[9:0]];
+                        fp_left <= name_blen_r1[e64_hp_key_q[9:0]][7:0];
                         txt_ph <= 4'd0;
                         fpx_acc <= 8'd0;
                         hs_ip(e64_ip_q);
