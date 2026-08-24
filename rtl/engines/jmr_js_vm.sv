@@ -873,6 +873,7 @@ module jmr_js_vm #(
     logic [15:0] name_hash_wdata;
     logic [9:0]  name_hash_raddr;
     (* ram_style = "block" *) logic [7:0]  name_len_tbl  [0:1023] /*verilator public_flat_rd*/; // intern idx -> byte length (concat fold)
+    (* ram_style = "block" *) logic [7:0]  name_len_tbl_r1 [0:1023];
     logic [15:0] names_n /*verilator public_flat_rd*/;
     // End of the trailer-loaded (static) names, and the byte pointer at
     // that moment. Strings built at run time (`"SCORE " + score`) intern
@@ -1362,6 +1363,10 @@ module jmr_js_vm #(
     logic        alw_we;
     logic [10:0] alw_wa;
     logic [7:0]  alw_wd;
+    logic        nof_we, nbl_we, nlt_we, flu_we;
+    logic [9:0]  nof_wa, nbl_wa, nlt_wa, flu_wa;
+    logic [15:0] nof_wd, nbl_wd;
+    logic [7:0]  nlt_wd, flu_wd;
     logic        vtd_we, nh_we, txw_we, cse_we;
     logic [5:0]  vtd_wa, txw_wa;
     logic signed [31:0] vtd_wd;
@@ -1403,6 +1408,21 @@ module jmr_js_vm #(
         if (vli_we) varr_lidx[vli_wa] <= vli_wd;
         else if (e64_varr_lidx_we) varr_lidx[e64_varr_lidx_waddr[10:0]] <= e64_varr_lidx_wdata;
         if (alw_we) arr_len[alw_wa] <= alw_wd;
+        if (nof_we) begin
+            name_off[nof_wa] <= nof_wd;
+            name_off_r1[nof_wa] <= nof_wd;
+            name_off_r2[nof_wa] <= nof_wd;
+            name_off_r3[nof_wa] <= nof_wd;
+        end
+        if (nbl_we) begin
+            name_blen[nbl_wa] <= nbl_wd;
+            name_blen_r1[nbl_wa] <= nbl_wd;
+        end
+        if (nlt_we) begin
+            name_len_tbl[nlt_wa] <= nlt_wd;
+            name_len_tbl_r1[nlt_wa] <= nlt_wd;
+        end
+        if (flu_we) fill_lut[flu_wa] <= flu_wd;
         if (vtd_we) vtimer_due[vtd_wa] <= vtd_wd;
         if (txw_we) txt_buf[txw_wa] <= txw_wd;
         if (cse_we) cstack_env[cse_wa] <= cse_wd;
@@ -5506,7 +5526,7 @@ module jmr_js_vm #(
                 (((casestate_q == S_JOIN) || (state == S_JOIN)) && jn_slot_arm) ?
                     varr_rdata[9:0] :
                 e32_intern_tos];
-            e32_name_len_nos <= name_len_tbl[e32_intern_nos];
+            e32_name_len_nos <= name_len_tbl_r1[e32_intern_nos];
             e32_name_off_tos <= name_off_r1[
                 ((casestate_q == S_CONCAT) || (state == S_CONCAT)) ?
                     (cc_second ? cc_bv[9:0] : cc_av[9:0]) :
@@ -5874,6 +5894,7 @@ module jmr_js_vm #(
             vmko_we <= 1'b0; vmkf_we <= 1'b0; vmka_we <= 1'b0; vmke_we <= 1'b0;
             vfv_we <= 1'b0; vav_we <= 1'b0; vev_we <= 1'b0; vvv_we <= 1'b0; vlo_we <= 1'b0;
             vli_we <= 1'b0; alw_we <= 1'b0;
+            nof_we <= 1'b0; nbl_we <= 1'b0; nlt_we <= 1'b0; flu_we <= 1'b0;
             vtd_we <= 1'b0; nh_we <= 1'b0; txw_we <= 1'b0; cse_we <= 1'b0;
             cmn_we <= 1'b0; cmi_we <= 1'b0;
             vol_we <= 1'b0; vel_we <= 1'b0;
@@ -6051,13 +6072,13 @@ module jmr_js_vm #(
             // from poke is a cycle late and missed the pulse — intern
             // lengths stayed post-p_clr zero.
             if (e64_p_we && e64_p_sel == 6'd17) begin
-                begin name_blen[e64_p_addr[9:0]] <= e64_p_data[15:0]; name_blen_r1[e64_p_addr[9:0]] <= e64_p_data[15:0]; end
+                begin nbl_we <= 1'b1; nbl_wa <= e64_p_addr[9:0]; nbl_wd <= e64_p_data[15:0]; end
             end else if (e64_p_we && e64_p_sel == 6'd41) begin
                 // Trail phase 4 pokes 41 (u8 intern len). Same Port A as
                 // poke 17 so GET_PROP .length is not a second FSM driver.
-                begin name_blen[e64_p_addr[9:0]] <= {8'd0, e64_p_data[7:0]}; name_blen_r1[e64_p_addr[9:0]] <= {8'd0, e64_p_data[7:0]}; end
+                begin nbl_we <= 1'b1; nbl_wa <= e64_p_addr[9:0]; nbl_wd <= {8'd0, e64_p_data[7:0]}; end
             end else if (e64_name_blen_we)
-                begin name_blen[e64_name_blen_waddr] <= e64_name_blen_wdata; name_blen_r1[e64_name_blen_waddr] <= e64_name_blen_wdata; end
+                begin nbl_we <= 1'b1; nbl_wa <= e64_name_blen_waddr; nbl_wd <= e64_name_blen_wdata; end
             // name_hash_tbl writes: Port A process (name_hash_we / poke 40 / exec we).
             // name_has: ONE write statement so 1W is provable (three
             // separate writes kept it FF — census: 7.7k LUTs). Priority
@@ -6846,7 +6867,7 @@ module jmr_js_vm #(
                             env_cap[heap_clr_i[8:0]] <= 1'b0;
                         end
                         if (heap_clr_i < 12'd1024) begin
-                            fill_lut[heap_clr_i[9:0]] <= 8'hFF;
+                            begin flu_we <= 1'b1; flu_wa <= heap_clr_i[9:0]; flu_wd <= 8'hFF; end
                             begin nh_we <= 1'b1; nh_wa <= heap_clr_i[9:0]; nh_wd <= 1'b0; end
                             intern_var_ok[heap_clr_i[9:0]] <= 1'b0;
                         end
@@ -7075,7 +7096,7 @@ module jmr_js_vm #(
                                 trail_ph <= 5'd4;
                             end
                             5'd4: begin
-                                name_len_tbl[name_idx[9:0]] <= tb;
+                                begin nlt_we <= 1'b1; nlt_wa <= name_idx[9:0]; nlt_wd <= tb; end
                                 e64_poke(6'd41, {6'd0, name_idx[9:0]}, {56'd0, tb});
                                 // Space intern: hash 32 + len 1 (U+0020). Confirm
                                 // here so e.key === " " matches KEYEVT payload.
@@ -7307,7 +7328,7 @@ module jmr_js_vm #(
                                     3'd0: begin fsty_name[7:0] <= tb; spr_hdr <= 3'd1; end
                                     3'd1: begin fsty_name[15:8] <= tb; spr_hdr <= 3'd2; end
                                     3'd2: begin
-                                        fill_lut[fsty_name[9:0]] <= tb;
+                                        begin flu_we <= 1'b1; flu_wa <= fsty_name[9:0]; flu_wd <= tb; end
                                         e64_poke(6'd15, {6'd0, fsty_name[9:0]}, {56'd0, tb});
                                         spr_hdr <= 3'd3;
                                     end
@@ -7372,7 +7393,7 @@ module jmr_js_vm #(
                                 // 1-char name from the last byte of a long one —
                                 // that mixed whole-name ids into the char table.
                                 nb_one <= ({tb, trail_acc[7:0]} == 16'd1);
-                                begin name_off[nb_i[9:0]] <= nb_wp; name_off_r1[nb_i[9:0]] <= nb_wp; name_off_r2[nb_i[9:0]] <= nb_wp; name_off_r3[nb_i[9:0]] <= nb_wp; end
+                                begin nof_we <= 1'b1; nof_wa <= nb_i[9:0]; nof_wd <= nb_wp; end
                                 // NEW: bytes for this id are real (fillText and
                                 // str[i] both refuse hash-only ids)
                                 if (nb_wp + {tb, trail_acc[7:0]} <= 16'(NAME_CAP))
@@ -8276,7 +8297,7 @@ module jmr_js_vm #(
                         jn_cache_i <= 3'd0;
                         if (names_n < 16'd1024) begin
                             name_hash_wr(names_n[9:0], jn_h);
-                            name_len_tbl[names_n[9:0]] <= jn_len;
+                            begin nlt_we <= 1'b1; nlt_wa <= names_n[9:0]; nlt_wd <= jn_len; end
                             // Same we port as trail (poke 40 then 17 next
                             // byte-copy). Indexed writes are not the SRAM we.
                             e64_poke(6'd40, {6'd0, names_n[9:0]},
@@ -8303,7 +8324,7 @@ module jmr_js_vm #(
                             // and str[i] on a built string work at all
                             if (cc_bok && jn_len <= 8'(TXT_MAX) &&
                                 ({1'b0, nb_wp} + {9'd0, jn_len}) <= 17'(NAME_CAP)) begin
-                                begin name_off[names_n[9:0]] <= nb_wp; name_off_r1[names_n[9:0]] <= nb_wp; name_off_r2[names_n[9:0]] <= nb_wp; name_off_r3[names_n[9:0]] <= nb_wp; end
+                                begin nof_we <= 1'b1; nof_wa <= names_n[9:0]; nof_wd <= nb_wp; end
                                 name_has[names_n[9:0]] <= 1'b1;
                                 txt_i <= 7'd0;
                                 hs_st(S_STR_WR);
