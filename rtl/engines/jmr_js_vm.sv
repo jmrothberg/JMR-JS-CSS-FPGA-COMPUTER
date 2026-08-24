@@ -216,8 +216,8 @@ module jmr_js_vm #(
     logic [9:0]  vobj_alloc_waddr;
     logic [1:0]  vobj_alloc_wdata;
     logic [12:0] vobj_alloc_raddr;
-    (* ram_style = "distributed" *) logic [11:0] vobj_gen [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
-    (* ram_style = "distributed" *) logic [5:0] vobj_len [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [11:0] vobj_gen [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [5:0] vobj_len [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     // NEW_OBJ stores the interned class name so CALL_METH can find the
     // class-table method (PYTHON _value_object_classes). 16'hFFFF = none.
     logic [15:0] vobj_cls [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
@@ -227,7 +227,7 @@ module jmr_js_vm #(
     (* ram_style = "block" *) logic [63:0] vfn_proto [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     // Object/array slots are 1-D SRAM after the MAX_* localparams (not 2-D
     // combo arrays — Synth 8-4556 / ASIC SRAM).
-    (* ram_style = "distributed" *) logic [11:0] vfn_gen [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [11:0] vfn_gen [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     // Function handles are their own leftover-BRAM bank (vfn_* already
     // 1024-wide). They must not occupy vobj_alloc — that shared the 1024
     // bump with objects and faulted MAKE_OBJ while function slots were
@@ -240,19 +240,19 @@ module jmr_js_vm #(
     (* ram_style = "block" *) logic [63:0] vfn_bound_this [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     logic [2:0] vfn_flags [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     (* ram_style = "distributed" *) logic varr_valid [0:MAX_ARR-1] /*verilator public_flat_rd*/;
-    (* ram_style = "distributed" *) logic [11:0] varr_gen [0:MAX_ARR-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [11:0] varr_gen [0:MAX_ARR-1] /*verilator public_flat_rd*/;
     (* ram_style = "block" *) logic [7:0] varr_len [0:MAX_ARR-1] /*verilator public_flat_rd*/;
     logic        varr_len_we;
     logic [11:0] varr_len_waddr;
     logic [7:0]  varr_len_wdata;
     logic [11:0] varr_len_raddr;
     (* ram_style = "distributed" *) logic varr_long [0:MAX_ARR-1] /*verilator public_flat_rd*/;
-    (* ram_style = "distributed" *) logic [7:0] varr_lidx [0:MAX_ARR-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [7:0] varr_lidx [0:MAX_ARR-1] /*verilator public_flat_rd*/;
     logic vlong_used [0:LONG_PHYS-1];
     (* ram_style = "distributed" *) logic vobj_mark [0:OBJ_PHYS-1];
     (* ram_style = "distributed" *) logic varr_mark [0:MAX_ARR-1];
     (* ram_style = "distributed" *) logic venv_valid [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
-    (* ram_style = "distributed" *) logic [11:0] venv_gen [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [11:0] venv_gen [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
     (* ram_style = "block" *) logic [63:0] venv_parent [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
     logic [4:0] venv_len [0:ENV_PHYS-1] /*verilator public_flat_rd*/;
     // Env slots are 1-D venv_slot SRAM (not 2-D combo — Synth 8-4556).
@@ -270,7 +270,7 @@ module jmr_js_vm #(
     logic vframe_escaped [0:CSTK-1];
     // 17-bit entries: every enqueued word is a NaN-boxed heap ref
     // ({16'h7ff9, kind[47:44], idx[12:0]}); pop rebuilds the full word.
-    logic [16:0] vgc_queue [0:MAX_OBJ+MAX_ARR+ENV_DEPTH-1];
+    (* ram_style = "block" *) logic [16:0] vgc_queue [0:MAX_OBJ+MAX_ARR+ENV_DEPTH-1];
     logic [13:0] vgc_qr_ff, vgc_qw_ff, vgc_clear_i_ff;
     logic [13:0] vgc_qr /*verilator public_flat_rd*/, vgc_qw /*verilator public_flat_rd*/, vgc_clear_i;
     logic [12:0] vgc_obj_i;
@@ -669,11 +669,11 @@ module jmr_js_vm #(
     logic        name_we;
     logic [14:0] name_waddr;
     logic [7:0]  name_wdata;
-    logic [15:0] name_off [0:1023] /*verilator public_flat_rd*/;   // intern idx -> first byte in name_mem
+    (* ram_style = "block" *) logic [15:0] name_off [0:1023] /*verilator public_flat_rd*/;   // intern idx -> first byte in name_mem
     // NAMB u16 byte length. Hash-table name_len_tbl is u8 (concat fold).
     // str[i] / str.length must use this or a 624-char layout literal
     // reports length 112 (624&255) and never carves tunnels.
-    logic [15:0] name_blen [0:1023] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [15:0] name_blen [0:1023] /*verilator public_flat_rd*/;
     logic [15:0] name_rdaddr;
     logic [14:0] name_mem_raddr;
     logic [7:0]  name_rdata;          // registered read (BRAM, not a mux)
@@ -865,7 +865,7 @@ module jmr_js_vm #(
     logic [9:0]  name_hash_waddr;
     logic [15:0] name_hash_wdata;
     logic [9:0]  name_hash_raddr;
-    logic [7:0]  name_len_tbl  [0:1023] /*verilator public_flat_rd*/; // intern idx -> byte length (concat fold)
+    (* ram_style = "block" *) logic [7:0]  name_len_tbl  [0:1023] /*verilator public_flat_rd*/; // intern idx -> byte length (concat fold)
     logic [15:0] names_n /*verilator public_flat_rd*/;
     // End of the trailer-loaded (static) names, and the byte pointer at
     // that moment. Strings built at run time (`"SCORE " + score`) intern
