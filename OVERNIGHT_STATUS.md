@@ -658,3 +658,27 @@ Run 24 = fence + ExploreArea + sweep + name_has: projected gap
 2,114 − ~1.3-1.9k ≈ 200-800 slices. In flight, alongside a spread-
 directive shot on run 23's ExploreArea checkpoint. vst_win stays in
 reserve behind its test gate; vst_wdata op-tiering remains last resort.
+
+## vst_win 16->12 insurance attempt: REJECTED BY ITS OWN GATE (2026-08-24)
+
+Attempted per the insurance plan (staged, not synthesized). The static
+audit set the floor at 12 (max comb VST_AT depth is 9, drawImage-class).
+Build clean, PACMAN clean, 194 bytecode clean — and
+test_rtl_v64_deep_nested_add_depth14 FAILED with the exact signature the
+gate exists for: fault=0, silent wrong value.
+
+The architectural lesson: the window's pop-shift refills only from
+deeper IN-WINDOW slots. A value pushed past the window bottom leaves
+via BRAM write, but on unwind it re-enters FROM BELOW as stale garbage
+unless a refill runs. So WINDOW DEPTH BOUNDS EXPRESSION-NESTING DEPTH:
+16 supports ~14-deep nesting (operands never exit), 12 breaks 13+.
+Shrinking the window is a LANGUAGE-CONTRACT change — functionality
+loss — unless a pop-refill detector (win_valid counter + forced
+WIN_FILL interposed against a running exec, #74-class) is designed
+first. Reverted; all gates green again.
+
+Ladder status: vst_win moves BEHIND the detector-design effort. If run
+24 (fence+ExploreArea+sweep, in flight) is still short, the remaining
+levers are: ExploreArea directive variants on the swept netlist,
+smaller LUTRAM stragglers to BRAM, and then the vst_wdata/op-tiering
+class. The deep-window test file earned its keep today.
