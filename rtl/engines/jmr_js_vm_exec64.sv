@@ -1192,6 +1192,24 @@ module jmr_js_vm_exec64 (
     assign lsv_op_q = lsv_op;
     assign lsv_ev_q = lsv_ev;
     assign lsv_fn_q = lsv_fn;
+    // 53-beat shift-add FP multiply engines (one per requester class):
+    // OP_MUL (fpm_*) and the frame-clock Date.now product (nwm_*).
+    logic         fpm_busy, fpm_req, fpm_req_n;
+    logic [5:0]   fpm_cnt;
+    logic [105:0] fpm_acc, fpm_mcand;
+    logic [52:0]  fpm_mplier;
+    logic         fpm_sign, fpm_sign_n;
+    logic [10:0]  fpm_ea, fpm_eb, fpm_ea_n, fpm_eb_n;
+    logic         fpm_start_n;
+    logic [52:0]  fpm_ma_n, fpm_mb_n;
+    logic         nwm_busy;
+    logic [5:0]   nwm_cnt;
+    logic [105:0] nwm_acc, nwm_mcand;
+    logic [52:0]  nwm_mplier;
+    logic [10:0]  nwm_ea, nwm_eb;
+    logic         nwm_sign;
+    logic [63:0]  now_v64_q;
+    logic [31:0]  nwm_vf_q;
     // Method-lookup cache: 8 entries of (cls,key)->mip, misses (FFFF)
     // included — builtin calls (ctx.fillRect, arr.push) repeat the same
     // miss every frame. Hit answers in the same beat the CALL op runs, so
@@ -1829,6 +1847,8 @@ module jmr_js_vm_exec64 (
             cm_mip <= 16'hFFFF;
             cm_key <= 16'd0;
             lsv_scan <= 1'b0; lsv_op <= 2'd0;
+            fpm_busy <= 1'b0; fpm_req <= 1'b0; nwm_busy <= 1'b0;
+            now_v64_q <= 64'd0; nwm_vf_q <= 32'hFFFFFFFF;
             lsv_ev <= 64'd0; lsv_fn <= 64'd0; lsv_push <= 64'd0; lsv_base <= 12'd0;
             cm_cls <= 16'd0;
             cm_win <= 1'b0;
@@ -1858,6 +1878,52 @@ module jmr_js_vm_exec64 (
                 bind_src <= bind_src_n;
                 bind_vsp_next <= bind_vsp_next_n;
                 cm_scan <= cm_scan_n;
+                // FP mul engines: 106-bit accumulate, one add per beat (safe depth)
+                if (fpm_start_n) begin
+                    fpm_busy <= 1'b1;
+                    fpm_cnt <= 6'd0;
+                    fpm_acc <= 106'd0;
+                    fpm_mcand <= 106'(fpm_ma_n);
+                    fpm_mplier <= fpm_mb_n;
+                    fpm_sign <= fpm_sign_n;
+                    fpm_ea <= fpm_ea_n;
+                    fpm_eb <= fpm_eb_n;
+                end else if (fpm_busy) begin
+                    if (fpm_mplier[0]) fpm_acc <= fpm_acc + fpm_mcand;
+                    fpm_mcand <= fpm_mcand << 1;
+                    fpm_mplier <= fpm_mplier >> 1;
+                    fpm_cnt <= fpm_cnt + 6'd1;
+                    if (fpm_cnt == 6'd52) fpm_busy <= 1'b0;
+                end
+                fpm_req <= fpm_req_n;
+                if (nwm_busy) begin
+                    if (nwm_mplier[0]) nwm_acc <= nwm_acc + nwm_mcand;
+                    nwm_mcand <= nwm_mcand << 1;
+                    nwm_mplier <= nwm_mplier >> 1;
+                    nwm_cnt <= nwm_cnt + 6'd1;
+                    if (nwm_cnt == 6'd52) begin
+                        nwm_busy <= 1'b0;
+                        now_v64_q <= v64_mul_pack(nwm_sign, nwm_ea, nwm_eb,
+                            nwm_mplier[0] ? (nwm_acc + nwm_mcand) : nwm_acc);
+                    end
+                end else if (vframe_no != nwm_vf_q) begin
+                    // frame clock product: v64_int32_number(vframe_no) x 16.666...
+                    logic [63:0] nva;
+                    nva = v64_int32_number(vframe_no);
+                    nwm_vf_q <= vframe_no;
+                    if (nva[62:0] == 63'd0) begin
+                        now_v64_q <= {nva[63] ^ 1'b0, 63'd0};
+                    end else begin
+                        nwm_busy <= 1'b1;
+                        nwm_cnt <= 6'd0;
+                        nwm_acc <= 106'd0;
+                        nwm_mcand <= 106'({(nva[62:52] != 0), nva[51:0]});
+                        nwm_mplier <= {1'b1, 52'h0aaaaaaaaaab};
+                        nwm_sign <= nva[63];
+                        nwm_ea <= nva[62:52];
+                        nwm_eb <= 11'h403;
+                    end
+                end
                 lsv_scan <= lsv_scan_n;
                 lsv_op <= lsv_op_n;
                 lsv_ev <= lsv_ev_n;
@@ -2577,10 +2643,63 @@ module jmr_js_vm_exec64 (
     // Frame clock (performance.now / Date.now / getTime): all three
     // opcode branches compute the SAME product, so one shared instance
     // serves them — this removes two full 53x53 comb multipliers.
-    logic [63:0] now_v64;
-    always_comb v64_mul_task(v64_int32_number(vframe_no),
-                             64'h4030aaaaaaaaaaab, now_v64);
+    // now_v64 comes from the nwm engine (now_v64_q), recomputed over 53
+    // beats whenever vframe_no changes; consumers hold on nwm_busy.
 
+    // Comb pack/normalize/round on a REGISTERED 106-bit product — the
+    // 53x53 comb multiply itself (477 series CARRY4s, the -250ns path)
+    // moved to 53-beat shift-add engines (2026-08-24).
+    function automatic logic [63:0] v64_mul_pack(
+        input logic sign,
+        input logic [10:0] ea,
+        input logic [10:0] eb,
+        input logic [105:0] product
+    );
+        logic [10:0] ef;
+        logic [52:0] q;
+        logic [53:0] rounded;
+        logic guard, sticky;
+        integer p, er, shift;
+        begin
+            p = -1;
+            for (int k = 0; k < 106; k++)
+                if (product[k])
+                    p = k;
+            er = ((ea == 0) ? 1 : ea)
+               + ((eb == 0) ? 1 : eb) - 1023 + p - 104;
+            shift = p - 52;
+            ef = 11'(er);
+            if (er <= 0) begin
+                shift = shift + 1 - er;
+                ef = 11'd0;
+            end
+            q = (shift >= 106) ? 53'd0 : 53'(product >> shift);
+            guard = 1'b0;
+            sticky = 1'b0;
+            if (shift > 0 && shift <= 106) begin
+                guard = product[shift - 1];
+                for (int k = 0; k < 106; k++)
+                    if (k < shift - 1)
+                        sticky = sticky | product[k];
+            end else if (shift > 106)
+                sticky = |product;
+            rounded = {1'b0, q} + (guard && (sticky || q[0]));
+            if (ef != 0 && rounded[53]) begin
+                q = rounded[53:1];
+                er = er + 1;
+                ef = 11'(er);
+            end else
+                q = rounded[52:0];
+            if (er >= 2047)
+                v64_mul_pack = {sign, 11'h7ff, 52'd0};
+            else if (ef == 0 && q[52])
+                v64_mul_pack = {sign, 11'd1, q[51:0]};
+            else if (q == 0)
+                v64_mul_pack = {sign, 63'd0};
+            else
+                v64_mul_pack = {sign, ef, q[51:0]};
+        end
+    endfunction
     task automatic v64_mul_task(
         input logic [63:0] aa,
         input logic [63:0] bb,
@@ -2958,6 +3077,13 @@ module jmr_js_vm_exec64 (
         fill_style_i_n = fill_style_i;
         stroke_style_i_n = stroke_style_i;
         cm_scan_n = 1'b0;
+        fpm_start_n = 1'b0;
+        fpm_req_n = fpm_req;
+        fpm_sign_n = fpm_sign;
+        fpm_ea_n = fpm_ea;
+        fpm_eb_n = fpm_eb;
+        fpm_ma_n = 53'd0;
+        fpm_mb_n = 53'd0;
         lsv_scan_n = lsv_scan; // level holds until the result is consumed
         lsv_op_n = lsv_op;
         lsv_ev_n = lsv_ev;
@@ -3299,6 +3425,23 @@ module jmr_js_vm_exec64 (
                         opnd3_n = 1'b1;
                         state_n = S_V64_EXEC;
                         vst_we_n = 1'b0;
+                    end else if (fpm_req) begin
+                        // OP_MUL in the 53-beat engine: hold; complete on
+                        // the beat busy drops (acc is final that beat).
+                        opnd_n = 1'b1;
+                        opnd2_n = 1'b1;
+                        opnd3_n = 1'b1;
+                        if (!fpm_busy) begin
+                            logic [63:0] mres;
+                            mres = v64_mul_pack(fpm_sign, fpm_ea, fpm_eb, fpm_acc);
+                            fpm_req_n = 1'b0;
+                            vst_wr(vsp - 12'd2, mres);
+                            vsp_n = vsp - 12'd1;
+                            ip_n = ip + 16'd1;
+                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                            state_n = S_FETCH_WAIT;
+                        end else
+                            state_n = S_V64_EXEC;
                     end else if (lsv_scan) begin
                         // held while the parent walks the listener table
                         opnd_n = 1'b1;
@@ -4449,12 +4592,17 @@ module jmr_js_vm_exec64 (
                                         8'd35: begin // performance.now
                                             logic [63:0] frame_number;
                                             frame_number = v64_int32_number(vframe_no);
-                                            result = now_v64;
+                                            if (nwm_busy) begin
+                                                opnd_n = 1'b1; opnd2_n = 1'b1; opnd3_n = 1'b1;
+                                                state_n = S_V64_EXEC;
+                                            end else begin
+                                            result = now_v64_q;
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
                                             code_raddr_n = 15'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
+                                            end
                                         end
                                         8'd36, 8'd37: begin
                                             // removeEventListener: parent compacts its single table
@@ -4635,13 +4783,18 @@ module jmr_js_vm_exec64 (
                                     logic [63:0] now_result;
                                     logic [11:0] now_base;
                                     now_base = vsp_hs - argc - 12'd1;
-                                    now_result = now_v64;
+                                    if (nwm_busy) begin
+                                        opnd_n = 1'b1; opnd2_n = 1'b1; opnd3_n = 1'b1;
+                                        state_n = S_V64_EXEC;
+                                    end else begin
+                                    now_result = now_v64_q;
                                     vst_wr(now_base, now_result);
                                     vsp_n = now_base + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
                                         15'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
+                                    end
                                 end else if (iife_flat) begin
                                     // JSB MAKE_FN a1 bit6: top-level IIFE is
                                     // a flat call (no ENV). Same ProgramImage
@@ -7000,13 +7153,18 @@ module jmr_js_vm_exec64 (
                                     // (exec32 obj_cls FFFD twin).
                                     begin
                                         logic [63:0] ts;
-                                        ts = now_v64;
+                                        if (nwm_busy) begin
+                                            opnd_n = 1'b1; opnd2_n = 1'b1; opnd3_n = 1'b1;
+                                            state_n = S_V64_EXEC;
+                                        end else begin
+                                        ts = now_v64_q;
                                         vst_wr(base, ts);
                                         vsp_n = base + 12'd1;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
                                             15'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
+                                        end
                                     end
                                 end else if (code_rdata[23:8] == id_bind &&
                                     receiver[63:48] == V64_TAG_PREFIX &&
@@ -7141,19 +7299,63 @@ module jmr_js_vm_exec64 (
                                         ? `VST_AT(vsp - 12'd2) : 64'd0;
                                     bb = v64_is_number(`VST_AT(vsp - 12'd1))
                                         ? `VST_AT(vsp - 12'd1) : 64'd0;
-                                    if (code_rdata[7:0] == OP_ADD)
-                                        v64_add_task(aa, bb, arithmetic_result);
-                                    else if (code_rdata[7:0] == OP_SUB)
-                                        v64_add_task(aa,
-                                                     {~bb[63], bb[62:0]},
-                                                     arithmetic_result);
-                                    else
-                                        v64_mul_task(aa, bb, arithmetic_result);
-                                    vst_wr(vsp - 12'd2, arithmetic_result);
-                                    vsp_n = vsp - 12'd1;
-                                    ip_n = ip + 16'd1;
-                                    code_raddr_n = 15'(ops_base + ip + 16'd1);
-                                    state_n = S_FETCH_WAIT;
+                                    if (code_rdata[7:0] == OP_ADD ||
+                                        code_rdata[7:0] == OP_SUB) begin
+                                        if (code_rdata[7:0] == OP_ADD)
+                                            v64_add_task(aa, bb, arithmetic_result);
+                                        else
+                                            v64_add_task(aa,
+                                                         {~bb[63], bb[62:0]},
+                                                         arithmetic_result);
+                                        vst_wr(vsp - 12'd2, arithmetic_result);
+                                        vsp_n = vsp - 12'd1;
+                                        ip_n = ip + 16'd1;
+                                        code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                        state_n = S_FETCH_WAIT;
+                                    end else begin
+                                        // OP_MUL: specials resolve comb and
+                                        // complete now; the general product
+                                        // runs 53 beats in the fpm engine
+                                        // (exec holds via fpm_req).
+                                        logic msign;
+                                        logic [10:0] mea, meb;
+                                        msign = aa[63] ^ bb[63];
+                                        mea = aa[62:52]; meb = bb[62:52];
+                                        if ((mea == 11'h7ff && aa[51:0] != 0) ||
+                                            (meb == 11'h7ff && bb[51:0] != 0) ||
+                                            ((mea == 11'h7ff || meb == 11'h7ff) &&
+                                             (aa[62:0] == 0 || bb[62:0] == 0))) begin
+                                            arithmetic_result = V64_CANON_NAN;
+                                            vst_wr(vsp - 12'd2, arithmetic_result);
+                                            vsp_n = vsp - 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end else if (mea == 11'h7ff || meb == 11'h7ff) begin
+                                            arithmetic_result = {msign, 11'h7ff, 52'd0};
+                                            vst_wr(vsp - 12'd2, arithmetic_result);
+                                            vsp_n = vsp - 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end else if (aa[62:0] == 0 || bb[62:0] == 0) begin
+                                            arithmetic_result = {msign, 63'd0};
+                                            vst_wr(vsp - 12'd2, arithmetic_result);
+                                            vsp_n = vsp - 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end else begin
+                                            fpm_sign_n = msign;
+                                            fpm_ea_n = mea;
+                                            fpm_eb_n = meb;
+                                            fpm_ma_n = {(mea != 11'd0), aa[51:0]};
+                                            fpm_mb_n = {(meb != 11'd0), bb[51:0]};
+                                            fpm_start_n = 1'b1;
+                                            fpm_req_n = 1'b1;
+                                            state_n = S_V64_EXEC;
+                                        end
+                                    end
                                 end
                             end
                             OP_DIV: begin

@@ -6,16 +6,22 @@ Words: [README.md — Words used](../README.md#words-used-in-this-project).
 
 ## SCOREBOARD — update this table every run (one screen; diary lives in [OVERNIGHT_STATUS.md](../OVERNIGHT_STATUS.md))
 
-**Last run: 20 — synthesis 2026-08-23 15:37.** Place not yet attempted.
+**Last run: 28 — synthesis 2026-08-24 16:05. FIT IS SOLVED. Now fighting TIMING.**
+
+**Run 28 placed successfully — the first placement of the whole campaign.**
+Routing is in progress (no `.bit` yet). Fit is no longer the open question;
+`WNS` is.
 
 | Resource | Used | Budget | % | State |
 |---|---:|---:|---:|---|
-| **Slice LUTs (total)** | **167,029** | 134,600 | **124%** | **over by 32,429 — the only wall** |
-| LUT as Logic | 154,850 | 134,600 | 115% | ~122.4k sites available after LUTRAM |
-| LUT as Memory | 12,179 | 46,200 | 26% | fits |
-| Slice Registers | 51,589 | 269,200 | 19% | fits |
-| Block RAM | 338.5 | 365 | 93% | fits, 26.5 tiles spare |
-| DSPs | 158 | 740 | 21% | fits |
+| **Slice LUTs (total)** | **131,314** | 134,600 | **97.6%** | **fits** |
+| LUT as Logic | 122,379 | 134,600 | 90.9% | fits |
+| LUT as Memory | 8,935 | 46,200 | 19.3% | fits |
+| Slice Registers | 45,285 | 269,200 | 16.8% | fits |
+| Block RAM | 344 | 365 | 94.3% | fits |
+| DSPs | 158 | 740 | 21.4% | fits |
+| **`place_design`** | — | — | — | **completed successfully** |
+| **WNS (100 MHz, 10 ns)** | **≈ −250 ns** | ≥ 0 | — | **catastrophic — real, not artifact** |
 
 ### Trajectory
 
@@ -25,32 +31,74 @@ Words: [README.md — Words used](../README.md#words-used-in-this-project).
 | overnight | 1,196,216 | 8.9x | FB rewrite + pow2 chunking; BRAM solved |
 | 08-22 09:10 | 794,989 | 5.9x | Phase 3b tagged-twin hand-delete |
 | 4 | 519,312 | 3.9x | AreaOptimized_high directive |
-| 5 | 497,275 | 3.7x | LUTRAM tier 1 |
 | 6 | 317,303 | 2.36x | metadata evacuation (mux kill, -175k) |
 | 7 | 227,502 | 1.69x | census-named cuts |
 | 8-17 | ~208,500 | 1.55x | plateau: array lever exhausted; V1 cut + one-hot both flat |
 | 19 | 186,440 | 1.39x | Session 1 — FB front bank to DDR3 |
-| **20** | **167,029** | **1.24x** | **JSON engine removal (-19.4k)** |
+| 20 | 167,029 | 1.24x | JSON engine removal (-19.4k) |
+| 21 | 137,871 | 1.02x | listener consolidation (-24k, over census) |
+| 24-26 | ~138-141k | ~1.03x | fence (`dont_touch` on 69-member hs64 mux, fixes ExploreArea 14h stall to 4min) + LUTRAM sweep + FSM-poke-to-strobe fixes |
+| 27-28 | 131,314 | **0.976x — UNDER BUDGET** | `linebuf`->BRAM (3x its estimate); **placement succeeds** |
 
-### Levers remaining (census-sized on the run-19 post-opt netlist)
+### FIT levers — closed out, kept for the record
 
-| Lever | Census | State |
-|---|---:|---|
-| Listener consolidation | ~26k | **next** — see [ARCHITECTURE.md § Events and listeners](ARCHITECTURE.md#events-and-listeners-how-input-reaches-the-game) |
-| vst_win 16 to 8 | ~11k | ready, gated by `tests/test_stack_window_depth.py` |
-| name_has 1W merge | ~6.2k | known strobe recipe |
-| LUT packing at place | 10-25k equiv | armed (DRC demoted) |
-| vst_wdata funnel op-tiering | ~34k | deep reserve |
-| **Named total** | **~43k** | vs ~32.4k needed = **133% coverage** |
+Listener consolidation, `vst_win` (16->8 attempted, **reverted** — silent
+correctness bug at deep nesting, see `tests/test_stack_window_depth.py`),
+`name_has`/`vlong_used`/name-family 1W merges, the LUTRAM->BRAM sweep, and
+`linebuf`->BRAM collectively closed the fit gap. **Do not revisit `vst_win`
+without the pop-refill detector design — the shrink is a language-contract
+change, not a free cut.**
 
 **Dead levers — do not retry:** 20 ns clock relax (bit-identical netlist;
 XDC never applies at synthesis), one-hot `fsm_encoding` (parent FSM not
 extractable through `hs_st()`/`ret_state`), HOF/regex/sort/bind walls
-(~1.8k total, not worth the authoring surface), Verilator `--threads`
-(1 OS thread, single flat `always_ff` will not partition).
+(confirmed by real census: regex ~126 LUTs, sort's removable share <300
+LUTs — both done anyway for the correctness catch, see `potential
+bugs.md`, not for area), Verilator `--threads` (1 OS thread, single flat
+`always_ff` will not partition), Default vs ExploreArea opt-directive
+shopping (±250 slices, not a real lever — RTL fixes are).
 
-**50 MHz is timing-only** — never an area lever (proven run 18). Wire it
-only if placement succeeds and routing reports WNS < 0.
+---
+
+## THE CURRENT FIGHT — timing, not fit (opened 2026-08-24, run 28)
+
+**Root cause, confirmed via `report_timing` (real path, not a constraint
+artifact — named FDREs, `clk_pll_i` at exactly 10.000 ns, every stage a
+real nonzero-delay LUT/CARRY4):** all 50 worst paths converge on
+`vst_wdata_reg`. The worst is 620 logic levels, 477 of them `CARRY4` — an
+unpipelined ripple chain from the 53x53 double-precision multiply
+(`AreaOptimized_high` flattened it into series carries after DSP mapping
+was pulled — module-wide `use_dsp` segfaults Vivado 2026.1, see
+[BIGGER_PART.md](BIGGER_PART.md)). 248.7 ns real delay (135.4 logic +
+113.3 route). **No integer fast path exists at all** — every multiply,
+including `2*3`, currently pays this cost.
+
+**Census (FM-side, 3 of 6 titles measured, loader-path limit on the
+rest):** PACMAN ~800 muls/frame (82% both-integer); ASTEROID ~1,560
+muls/frame (35% integer, **65% genuinely fractional — rotation
+physics**); MRDO ~13,000 muls/frame (100% integer). **The FP path is
+load-bearing — not removable, not HTML-gateable.** ASTEROID's rotation
+math needs it for real; MRDO's all-integer traffic proves the missing
+fast path hurts every title, fractional or not.
+
+**The fix, in order:**
+1. Bank run 28's routed bitstream as a **placement-proof artifact only**
+   — it will not be timing-clean, never flash it to the board.
+2. Build the purpose-built gate test **first** (early-read across every
+   consumer position: store, compare, chained multiply, call argument) —
+   same discipline `vst_win` should have gotten and didn't get twice.
+3. Int fast path (single-beat, both-integer operands — the 82-100%
+   common case) + sequentialized FP residue (multi-beat hold-and-serve,
+   the `cm_scan`/`lsv` pattern, proven twice) for the genuinely
+   fractional traffic.
+4. DSP wrapper on just the 53x53 product as a complementary attempt — a
+   small dedicated module is a different risk class from the module-wide
+   attribute that crashed the tool; not the primary bet.
+
+**50 MHz does not rescue this.** 50 MHz buys a 20 ns budget; this path
+misses by 248.7 ns — 12x over even at half rate. 50 MHz remains a real
+tool for whatever smaller "next worst" path surfaces *after* the FP fix
+lands, not for this one.
 
 ---
 
