@@ -5972,7 +5972,6 @@ module jmr_js_vm #(
             // lengths stayed post-p_clr zero.
             if (e64_p_we && e64_p_sel == 6'd17) begin
                 name_blen[e64_p_addr[9:0]] <= e64_p_data[15:0];
-                name_has[e64_p_addr[9:0]] <= 1'b1;
             end else if (e64_p_we && e64_p_sel == 6'd41) begin
                 // Trail phase 4 pokes 41 (u8 intern len). Same Port A as
                 // poke 17 so GET_PROP .length is not a second FSM driver.
@@ -5980,9 +5979,24 @@ module jmr_js_vm #(
             end else if (e64_name_blen_we)
                 name_blen[e64_name_blen_waddr] <= e64_name_blen_wdata;
             // name_hash_tbl writes: Port A process (name_hash_we / poke 40 / exec we).
-            if (!(e64_p_we && e64_p_sel == 6'd17) && e64_name_has_we)
-                name_has[e64_name_has_waddr] <= e64_name_has_wdata;
-            if (nh_we) name_has[nh_wa] <= nh_wd;
+            // name_has: ONE write statement so 1W is provable (three
+            // separate writes kept it FF — census: 7.7k LUTs). Priority
+            // preserves the old semantics: poke17 sets the bit and used
+            // to exclude name_has_we; nh (heap-clr/load) never collides.
+            begin
+                logic nh_do;
+                logic [9:0] nh_a;
+                logic nh_d;
+                nh_do = 1'b0; nh_a = '0; nh_d = 1'b0;
+                if (nh_we) begin
+                    nh_do = 1'b1; nh_a = nh_wa; nh_d = nh_wd;
+                end else if (e64_p_we && e64_p_sel == 6'd17) begin
+                    nh_do = 1'b1; nh_a = e64_p_addr[9:0]; nh_d = 1'b1;
+                end else if (e64_name_has_we) begin
+                    nh_do = 1'b1; nh_a = e64_name_has_waddr; nh_d = e64_name_has_wdata;
+                end
+                if (nh_do) name_has[nh_a] <= nh_d;
+            end
             kd_fn <= kd_slot[0];
             ku_fn <= ku_slot[0];
             if (fb_swap || ((state == S_V64_EXEC) && e64_fb_swap_q))

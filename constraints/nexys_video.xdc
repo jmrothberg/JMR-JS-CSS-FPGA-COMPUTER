@@ -93,3 +93,8 @@ set_property -dict { PACKAGE_PIN U18 IOSTANDARD LVCMOS33 PULLUP true } [get_port
 ## routing for the x5 serial clock is acceptable at 125 MHz for bring-up
 ## (override text supplied verbatim by Place 30-149).
 set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets u_tmds/u_rgb2dvi/ClockGenInternal.ClockGenX/PixelClkInX5]
+
+## 2026-08-24 (Place 30-512 at ~105% packed utilization): the clock
+## placer put rgb2dvi's MMCM in X1Y1 while its BUFIO/BUFR loads must sit
+## in the HDMI bank's region. Pin the MMCM beside its loads.
+set_property LOC MMCME2_ADV_X1Y2 [get_cells {u_tmds/u_rgb2dvi/ClockGenInternal.ClockGenX/GenMMCM.DVI_ClkGenerator}]
