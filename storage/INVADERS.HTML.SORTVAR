@@ -156,19 +156,7 @@ function addScore(name, score) {
     score,
   });
 
-  // INVADER2: stable descending insertion sort (V1 silicon diet — sort
-  // engine removal). list is at most 11 entries (top-10 storage + 1 new
-  // score), so this is O(n^2) over a trivial n. Shifts only strictly
-  // smaller scores, so equal-score entries keep their original relative
-  // order — same guarantee as native Array.sort in modern engines.
-  for (var _si = 1; _si < list.length; _si++) {
-    var _cur = list[_si], _sj = _si - 1;
-    while (_sj >= 0 && list[_sj].score < _cur.score) {
-      list[_sj + 1] = list[_sj];
-      _sj--;
-    }
-    list[_sj + 1] = _cur;
-  }
+  list.sort((a, b) => b.score - a.score);
   setLeaderboard(list.slice(0, 10));
 }
 
