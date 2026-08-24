@@ -1367,6 +1367,9 @@ module jmr_js_vm #(
     logic [9:0]  nof_wa, nbl_wa, nlt_wa, flu_wa;
     logic [15:0] nof_wd, nbl_wd;
     logic [7:0]  nlt_wd, flu_wd;
+    logic        vlu_we;
+    logic [6:0]  vlu_wa;
+    logic        vlu_wd;
     logic        vtd_we, nh_we, txw_we, cse_we;
     logic [5:0]  vtd_wa, txw_wa;
     logic signed [31:0] vtd_wd;
@@ -1423,6 +1426,7 @@ module jmr_js_vm #(
             name_len_tbl_r1[nlt_wa] <= nlt_wd;
         end
         if (flu_we) fill_lut[flu_wa] <= flu_wd;
+        if (vlu_we) vlong_used[vlu_wa] <= vlu_wd;
         if (vtd_we) vtimer_due[vtd_wa] <= vtd_wd;
         if (txw_we) txt_buf[txw_wa] <= txw_wd;
         if (cse_we) cstack_env[cse_wa] <= cse_wd;
@@ -5895,6 +5899,7 @@ module jmr_js_vm #(
             vfv_we <= 1'b0; vav_we <= 1'b0; vev_we <= 1'b0; vvv_we <= 1'b0; vlo_we <= 1'b0;
             vli_we <= 1'b0; alw_we <= 1'b0;
             nof_we <= 1'b0; nbl_we <= 1'b0; nlt_we <= 1'b0; flu_we <= 1'b0;
+            vlu_we <= 1'b0;
             vtd_we <= 1'b0; nh_we <= 1'b0; txw_we <= 1'b0; cse_we <= 1'b0;
             cmn_we <= 1'b0; cmi_we <= 1'b0;
             vol_we <= 1'b0; vel_we <= 1'b0;
@@ -6195,7 +6200,7 @@ module jmr_js_vm #(
                 // moved to Port A process (metadata evacuation)
                 // moved to Port A process (metadata evacuation)
                 if (e64_varr_long_we && e64_varr_long_wdata && e64_varr_lidx_we)
-                    vlong_used[e64_varr_lidx_wdata[6:0]] <= 1'b1;
+                    begin vlu_we <= 1'b1; vlu_wa <= e64_varr_lidx_wdata[6:0]; vlu_wd <= 1'b1; end
                 // moved to Port A process (metadata evacuation)
                 // e64_venv_gen_we applies in the dedicated metadata process
                 // e64_venv_len_we applies in the dedicated len process
@@ -6858,7 +6863,7 @@ module jmr_js_vm #(
                             begin vli_we <= 1'b1; vli_wa <= heap_clr_i[10:0]; vli_wd <= 8'd0; end
                         end
                         if (heap_clr_i < 12'(MAX_ARR_LONG))
-                            vlong_used[heap_clr_i[6:0]] <= 1'b0;
+                            begin vlu_we <= 1'b1; vlu_wa <= heap_clr_i[6:0]; vlu_wd <= 1'b0; end
                         if (heap_clr_i < 12'(ENV_DEPTH)) begin
                             begin vev_we <= 1'b1; vev_wa <= heap_clr_i[8:0]; vev_wd <= 1'b0; end
                             veg_we <= 1'b1; veg_wa <= heap_clr_i[8:0]; veg_wd <= 12'd1;
@@ -10532,7 +10537,7 @@ module jmr_js_vm #(
                             e64_p_addr2 <= {8'd0, valloc_i[7:0]};
                             if (take_long) begin
                                 begin vli_we <= 1'b1; vli_wa <= valloc_i[10:0]; vli_wd <= valloc_i[7:0]; end
-                                vlong_used[valloc_i[7:0]] <= 1'b1;
+                                begin vlu_we <= 1'b1; vlu_wa <= valloc_i[6:0]; vlu_wd <= 1'b1; end
                             end
                             varr_next <= valloc_i + 14'd1;
                             if (vnat_dom == 3'd7) begin
@@ -11602,7 +11607,7 @@ module jmr_js_vm #(
                         if (varr_long_rdata)
                             // #76: full-width 8-bit index into the 128-deep
                             // occupancy map - slice like every other writer.
-                            vlong_used[varr_lidx_rdata[6:0]] <= 1'b0;
+                            begin vlu_we <= 1'b1; vlu_wa <= varr_lidx_rdata[6:0]; vlu_wd <= 1'b0; end
                         begin vlo_we <= 1'b1; vlo_wa <= vgc_arr_i[10:0]; vlo_wd <= 1'b0; end
                         begin
                             vag_we <= 1'b1; vag_wa <= vgc_arr_i;
@@ -13339,7 +13344,7 @@ module jmr_js_vm #(
                             valloc_rd_arm <= 1'b1;
                         else if (valloc_i < 14'(MAX_ARR_LONG) &&
                             !vlong_used_rdata) begin
-                            vlong_used[valloc_i[7:0]] <= 1'b1;
+                            begin vlu_we <= 1'b1; vlu_wa <= valloc_i[6:0]; vlu_wd <= 1'b1; end
                             hp_prom_phys <= valloc_i[7:0];
                             vprom_copy <= 1'b1;
                             dc_i <= 8'd0;
