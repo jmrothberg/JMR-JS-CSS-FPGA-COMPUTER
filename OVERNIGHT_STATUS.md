@@ -635,3 +635,26 @@ post-opt logical UNDER the 133,800 DRC line — after it, placement gets
 to actually try. Session 2 #1 begins.
 
 Trajectory: 1,901k → 519k → 312k → 227k → 214k → 208k → 181k → 162k.
+
+## 2026-08-24 — ExploreArea stall SOLVED (user's hypothesis confirmed exactly)
+
+The 69-member hs64 handshake mux family (grep found 69, not the
+estimated 10-15 — strengthening the case) fenced with (* dont_touch *):
+**opt_design ExploreArea including Phase 8 Resynthesis completed in
+4m01s** where the unfenced netlist stalled 14+ hours (CPU pinned, log
+frozen, near-zero I/O — the AMD-documented Retarget pattern). The
+selectors are tiny 2:1 muxes; fencing cost nothing measurable.
+
+Place-shortfall series (all fence-free checkpoints until run 23):
+Default 2,773 -> spread 2,755 -> remap 2,918 (worse: timing-biased) ->
+P22/name_has 2,405 -> **run 23 ExploreArea 2,114**. Diagnosis
+validated: a packing/density problem as much as size — control sets
+measured innocent (3,059 = 9%), FFs not binding, so the availability
+side (SLICEM slices held by LUTRAM) was the density lever:
+**LUTRAM->BRAM sweep of 10 arrays committed** (~1.9k slices to the
+placer's pool, ~8 of 26.5 spare tiles).
+
+Run 24 = fence + ExploreArea + sweep + name_has: projected gap
+2,114 − ~1.3-1.9k ≈ 200-800 slices. In flight, alongside a spread-
+directive shot on run 23's ExploreArea checkpoint. vst_win stays in
+reserve behind its test gate; vst_wdata op-tiering remains last resort.
