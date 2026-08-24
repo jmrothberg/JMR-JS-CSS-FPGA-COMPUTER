@@ -4530,65 +4530,105 @@ module jmr_js_vm #(
 
     // Live HEAP/FETCH view: these clock in exec. Masked parent writes (hs_m_*)
     // overlay for the SRAM wait cycle after a poke.
+    // The 69-member hs64 handshake mux family is (* dont_touch *): each is a
+    // tiny two-level 2:1 selector, and ExploreArea's Retarget pass hunting
+    // cross-instance sharing across a near-identical family this large is
+    // the prime suspect for the 14h opt_design stall (log frozen, CPU
+    // pinned, near-zero I/O — the AMD-documented pattern). Fencing them
+    // costs ~nothing in area; if ExploreArea still stalls, the trigger is
+    // elsewhere (see OVERNIGHT_STATUS.md 2026-08-24).
+    (* dont_touch = "true" *)
     assign ip = hs64 ? (hs_m_ip ? ip_ff : e64_ip_q) :
                 hs32 ? (hs_m_ip ? ip_ff : e32_ip_q) : ip_ff;
+    (* dont_touch = "true" *)
     assign code_raddr = hs64 ? (hs_m_code ? code_raddr_ff : e64_code_raddr_q) :
                 hs32 ? (hs_m_code ? code_raddr_ff : e32_code_raddr_q) : code_raddr_ff;
+    (* dont_touch = "true" *)
     assign vsp = hs64 ? (hs_m_vsp ? vsp_ff : e64_vsp_q) : vsp_ff;
+    (* dont_touch = "true" *)
     assign hp_cmd = hs64 ? (hs_m_hp_cmd ? hp_cmd_ff : e64_hp_cmd_q) :
                 hs32 ? (hs_m_hp_cmd ? hp_cmd_ff : e32_hp_cmd_q) : hp_cmd_ff;
+    (* dont_touch = "true" *)
     assign hp_v64 = hs64 ? (hs_m_hp_v64 ? hp_v64_ff : e64_hp_v64_q) :
                 hs32 ? (hs_m_hp_v64 ? hp_v64_ff : e32_hp_v64_q) : hp_v64_ff;
+    (* dont_touch = "true" *)
     assign hp_oid = hs64 ? (hs_m_hp_oid ? hp_oid_ff : e64_hp_oid_q) :
                 hs32 ? (hs_m_hp_oid ? hp_oid_ff : e32_hp_oid_q) : hp_oid_ff;
+    (* dont_touch = "true" *)
     assign hp_aid = hs64 ? (hs_m_hp_aid ? hp_aid_ff : e64_hp_aid_q) :
                 hs32 ? (hs_m_hp_aid ? hp_aid_ff : e32_hp_aid_q) : hp_aid_ff;
+    (* dont_touch = "true" *)
     assign hp_env = hs64 ? (hs_m_hp_env ? hp_env_ff : e64_hp_env_q) : hp_env_ff;
+    (* dont_touch = "true" *)
     assign hp_eid = hs64 ? (hs_m_hp_eid ? hp_eid_ff : e64_hp_eid_q) : hp_eid_ff;
+    (* dont_touch = "true" *)
     assign hp_slot = hs64 ? (hs_m_hp_slot ? hp_slot_ff : e64_hp_slot_q) :
                 hs32 ? (hs_m_hp_slot ? hp_slot_ff : e32_hp_slot_q) : hp_slot_ff;
+    (* dont_touch = "true" *)
     assign hp_aslot = hs64 ? (hs_m_hp_aslot ? hp_aslot_ff : e64_hp_aslot_q) :
                 hs32 ? (hs_m_hp_aslot ? hp_aslot_ff : e32_hp_aslot_q) : hp_aslot_ff;
+    (* dont_touch = "true" *)
     assign hp_len = hs64 ? (hs_m_hp_len ? hp_len_ff : e64_hp_len_q) :
                 hs32 ? (hs_m_hp_len ? hp_len_ff : e32_hp_len_q) : hp_len_ff;
+    (* dont_touch = "true" *)
     assign hp_alen = hs64 ? (hs_m_hp_alen ? hp_alen_ff : e64_hp_alen_q) :
                 hs32 ? (hs_m_hp_alen ? hp_alen_ff : e32_hp_alen_q) : hp_alen_ff;
+    (* dont_touch = "true" *)
     assign hp_lim = hs64 ? (hs_m_hp_lim ? hp_lim_ff : e64_hp_lim_q) :
                 hs32 ? (hs_m_hp_lim ? hp_lim_ff : e32_hp_lim_q) : hp_lim_ff;
+    (* dont_touch = "true" *)
     assign hp_key = hs64 ? (hs_m_hp_key ? hp_key_ff : e64_hp_key_q) :
                 hs32 ? (hs_m_hp_key ? hp_key_ff : e32_hp_key_q) : hp_key_ff;
+    (* dont_touch = "true" *)
     assign hp_wval = hs64 ? (hs_m_hp_wval ? hp_wval_ff : e64_hp_wval_q) :
                 hs32 ? (hs_m_hp_wval ? hp_wval_ff : e32_hp_wval_q) : hp_wval_ff;
+    (* dont_touch = "true" *)
     assign hp_rval = hs64 ? (hs_m_hp_rval ? hp_rval_ff : e64_hp_rval_q) :
                 hs32 ? (hs_m_hp_rval ? hp_rval_ff : e32_hp_rval_q) : hp_rval_ff;
+    (* dont_touch = "true" *)
     assign hp_hit = hs64 ? (hs_m_hp_hit ? hp_hit_ff : e64_hp_hit_q) :
                 hs32 ? (hs_m_hp_hit ? hp_hit_ff : e32_hp_hit_q) : hp_hit_ff;
+    (* dont_touch = "true" *)
     assign hp_ret = hs64 ? (hs_m_hp_ret ? hp_ret_ff : st_t'(e64_hp_ret_q)) :
                 hs32 ? (hs_m_hp_ret ? hp_ret_ff : st_t'(e32_hp_ret_q)) : hp_ret_ff;
+    (* dont_touch = "true" *)
     assign hp_phase = hs64 ? (hs_m_hp_phase ? hp_phase_ff : e64_hp_phase_q) :
                 hs32 ? (hs_m_hp_phase ? hp_phase_ff : e32_hp_phase_q) : hp_phase_ff;
+    (* dont_touch = "true" *)
     assign hp_proto = hs64 ? (hs_m_hp_proto ? hp_proto_ff : e64_hp_proto_q) :
                 hs32 ? (hs_m_hp_proto ? hp_proto_ff : e32_hp_proto_q) : hp_proto_ff;
+    (* dont_touch = "true" *)
     assign hp_qn = hs64 ? (hs_m_hp_qn ? hp_qn_ff : e64_hp_qn_q) :
                 hs32 ? (hs_m_hp_qn ? hp_qn_ff : e32_hp_qn_q) : hp_qn_ff;
+    (* dont_touch = "true" *)
     assign hp_qi = hs64 ? (hs_m_hp_qi ? hp_qi_ff : e64_hp_qi_q) :
                 hs32 ? (hs_m_hp_qi ? hp_qi_ff : e32_hp_qi_q) : hp_qi_ff;
+    (* dont_touch = "true" *)
     assign hp_si = hs64 ? (hs_m_hp_si ? hp_si_ff : e64_hp_si_q) :
                 hs32 ? (hs_m_hp_si ? hp_si_ff : e32_hp_si_q) : hp_si_ff;
+    (* dont_touch = "true" *)
     assign hp_ss = hs64 ? (hs_m_hp_ss ? hp_ss_ff : e64_hp_ss_q) :
                 hs32 ? (hs_m_hp_ss ? hp_ss_ff : e32_hp_ss_q) : hp_ss_ff;
+    (* dont_touch = "true" *)
     assign hp_tn = hs64 ? (hs_m_hp_tn ? hp_tn_ff : e64_hp_tn_q) :
                 hs32 ? (hs_m_hp_tn ? hp_tn_ff : e32_hp_tn_q) : hp_tn_ff;
+    (* dont_touch = "true" *)
     assign hp_from_stack = hs64 ? (hs_m_hp_from_stack ? hp_from_stack_ff : e64_hp_from_stack_q) :
                 hs32 ? (hs_m_hp_from_stack ? hp_from_stack_ff : e32_hp_from_stack_q) : hp_from_stack_ff;
+    (* dont_touch = "true" *)
     assign hp_make_arr = hs64 ? (hs_m_hp_make_arr ? hp_make_arr_ff : e64_hp_make_arr_q) :
                 hs32 ? (hs_m_hp_make_arr ? hp_make_arr_ff : e32_hp_make_arr_q) : hp_make_arr_ff;
+    (* dont_touch = "true" *)
     assign hp_vbase = hs64 ? (hs_m_hp_vbase ? hp_vbase_ff : e64_hp_vbase_q) :
                 hs32 ? (hs_m_hp_vbase ? hp_vbase_ff : e32_hp_vbase_q) : hp_vbase_ff;
+    (* dont_touch = "true" *)
     assign hp_spr_w = hs64 ? (hs_m_hp_spr_w ? hp_spr_w_ff : e64_hp_spr_w_q) : hp_spr_w_ff;
+    (* dont_touch = "true" *)
     assign hp_spr_h = hs64 ? (hs_m_hp_spr_h ? hp_spr_h_ff : e64_hp_spr_h_q) : hp_spr_h_ff;
+    (* dont_touch = "true" *)
     assign hp_nat = hs64 ? (hs_m_hp_nat ? hp_nat_ff : e64_hp_nat_q) :
                 hs32 ? (hs_m_hp_nat ? hp_nat_ff : e32_hp_nat_q) : hp_nat_ff;
+    (* dont_touch = "true" *)
     assign hp_tag = hs64 ? (hs_m_hp_tag ? hp_tag_ff : e64_hp_tag_q) :
                 hs32 ? (hs_m_hp_tag ? hp_tag_ff : e32_hp_tag_q) : hp_tag_ff;
     // ALLOC leave: read exec valloc_*/vcall_*/vnat_*/vcsp, not a dump.
@@ -4599,8 +4639,11 @@ module jmr_js_vm #(
                 (hs64 ? e64_valloc_kind_q : valloc_kind_ff);
     assign valloc_i = (state == S_V64_ALLOC || hs_m_valloc_i) ? valloc_i_ff :
                 (hs64 ? e64_valloc_i_q : valloc_i_ff);
+    (* dont_touch = "true" *)
     assign valloc_arr_n = hs64 ? (hs_m_valloc_arr_n ? valloc_arr_n_ff : e64_valloc_arr_n_q) : valloc_arr_n_ff;
+    (* dont_touch = "true" *)
     assign valloc_retried = hs64 ? (hs_m_valloc_retried ? valloc_retried_ff : e64_valloc_retried_q) : valloc_retried_ff;
+    (* dont_touch = "true" *)
     assign vnat_dom = hs64 ? (hs_m_vnat_dom ? vnat_dom_ff : e64_vnat_dom_q) : vnat_dom_ff;
     assign ctx_align_eff = v64_on ? e64_ctx_align_q : e32_ctx_align_q;
     // S_ARR_PROMOTE is requested by exec (arr.push / ARRAY_SET growing
@@ -4625,37 +4668,66 @@ module jmr_js_vm #(
                                         ? st_t'(e64_vprom_ret_q)
                                         : vprom_ret;
     assign dbg_align = ctx_align_eff;
+    (* dont_touch = "true" *)
     assign vnat_base = hs64 ? (hs_m_vnat_base ? vnat_base_ff : e64_vnat_base_q) : vnat_base_ff;
+    (* dont_touch = "true" *)
     assign valloc_now_fn = hs64 ? (hs_m_valloc_now_fn ? valloc_now_fn_ff : e64_valloc_now_fn_q) : valloc_now_fn_ff;
+    (* dont_touch = "true" *)
     assign valloc_bind = hs64 ? (hs_m_valloc_bind ? valloc_bind_ff : e64_valloc_bind_q) : valloc_bind_ff;
+    (* dont_touch = "true" *)
     assign valloc_bind_src = hs64 ? (hs_m_valloc_bind_src ? valloc_bind_src_ff : e64_valloc_bind_src_q) : valloc_bind_src_ff;
+    (* dont_touch = "true" *)
     assign valloc_bind_this = hs64 ? (hs_m_valloc_bind_this ? valloc_bind_this_ff : e64_valloc_bind_this_q) : valloc_bind_this_ff;
+    (* dont_touch = "true" *)
     assign valloc_fn_entry = hs64 ? (hs_m_valloc_fn_entry ? valloc_fn_entry_ff : e64_valloc_fn_entry_q) : valloc_fn_entry_ff;
+    (* dont_touch = "true" *)
     assign valloc_fn_a1 = hs64 ? (hs_m_valloc_fn_a1 ? valloc_fn_a1_ff : e64_valloc_fn_a1_q) : valloc_fn_a1_ff;
+    (* dont_touch = "true" *)
     assign valloc_proto = hs64 ? (hs_m_valloc_proto ? valloc_proto_ff : e64_valloc_proto_q) : valloc_proto_ff;
+    (* dont_touch = "true" *)
     assign valloc_proto_fn = hs64 ? (hs_m_valloc_proto_fn ? valloc_proto_fn_ff : e64_valloc_proto_fn_q) : valloc_proto_fn_ff;
+    (* dont_touch = "true" *)
     assign valloc_metrics = hs64 ? (hs_m_valloc_metrics ? valloc_metrics_ff : e64_valloc_metrics_q) : valloc_metrics_ff;
+    (* dont_touch = "true" *)
     assign valloc_regex = hs64 ? (hs_m_valloc_regex ? valloc_regex_ff : e64_valloc_regex_q) : valloc_regex_ff;
+    (* dont_touch = "true" *)
     assign valloc_regex_pack = hs64 ? (hs_m_valloc_regex_pack ? valloc_regex_pack_ff : e64_valloc_regex_pack_q) : valloc_regex_pack_ff;
+    (* dont_touch = "true" *)
     assign vcall_value = hs64 ? (hs_m_vcall_value ? vcall_value_ff : e64_vcall_value_q) : vcall_value_ff;
+    (* dont_touch = "true" *)
     assign vcall_argc = hs64 ? (hs_m_vcall_argc ? vcall_argc_ff : e64_vcall_argc_q) : vcall_argc_ff;
+    (* dont_touch = "true" *)
     assign vcall_entry = hs64 ? (hs_m_vcall_entry ? vcall_entry_ff : e64_vcall_entry_q) : vcall_entry_ff;
+    (* dont_touch = "true" *)
     assign vcall_set_this = hs64 ? (hs_m_vcall_set_this ? vcall_set_this_ff : e64_vcall_set_this_q) : vcall_set_this_ff;
+    (* dont_touch = "true" *)
     assign vcall_this = hs64 ? (hs_m_vcall_this ? vcall_this_ff : e64_vcall_this_q) : vcall_this_ff;
+    (* dont_touch = "true" *)
     assign vcall_ctor_val = hs64 ? (hs_m_vcall_ctor_val ? vcall_ctor_val_ff : e64_vcall_ctor_val_q) : vcall_ctor_val_ff;
+    (* dont_touch = "true" *)
     assign vcsp = hs64 ? (hs_m_vcsp ? vcsp_ff : e64_vcsp_q) : vcsp_ff;
+    (* dont_touch = "true" *)
     assign vthis = hs64 ? (hs_m_vthis ? vthis_ff : e64_vthis_q) : vthis_ff;
+    (* dont_touch = "true" *)
     assign venv = hs64 ? (hs_m_venv ? venv_ff : e64_venv_q) : venv_ff;
     // rAF/GC flags: WAIT_FRAME and GC_CLEAR read exec, not parent zeros.
+    (* dont_touch = "true" *)
     assign vraf_n = hs64 ? (hs_m_vraf_n ? vraf_n_ff : e64_vraf_n_q) : vraf_n_ff;
+    (* dont_touch = "true" *)
     assign vlistener_n = hs64 ? (hs_m_vlistener_n ? vlistener_n_ff : e64_vlistener_n_q) : vlistener_n_ff;
     assign dbg_id_keydown = id_keydown;
     assign dbg_id_keyup = id_keyup;
+    (* dont_touch = "true" *)
     assign vgc_halt_after = hs64 ? (hs_m_vgc_halt_after ? vgc_halt_after_ff : e64_vgc_halt_after_q) : vgc_halt_after_ff;
+    (* dont_touch = "true" *)
     assign vgc_wait_after = hs64 ? (hs_m_vgc_wait_after ? vgc_wait_after_ff : e64_vgc_wait_after_q) : vgc_wait_after_ff;
+    (* dont_touch = "true" *)
     assign vgc_clear_i = hs64 ? (hs_m_vgc_clear_i ? vgc_clear_i_ff : e64_vgc_clear_i_q) : vgc_clear_i_ff;
+    (* dont_touch = "true" *)
     assign vgc_qr = hs64 ? (hs_m_vgc_qr ? vgc_qr_ff : e64_vgc_qr_q) : vgc_qr_ff;
+    (* dont_touch = "true" *)
     assign vgc_qw = hs64 ? (hs_m_vgc_qw ? vgc_qw_ff : e64_vgc_qw_q) : vgc_qw_ff;
+    (* dont_touch = "true" *)
     assign vdraw_i = hs64 ? (hs_m_vdraw_i ? vdraw_i_ff : e64_vdraw_i_q) : vdraw_i_ff;
     assign vdraw_x = (state == S_V64_RECT) ? vdraw_x_ff :
         (hs64 ? (hs_m_vdraw_x ? vdraw_x_ff : e64_vdraw_x_q) : vdraw_x_ff);
@@ -4665,6 +4737,7 @@ module jmr_js_vm #(
         (hs64 ? (hs_m_vdraw_w ? vdraw_w_ff : e64_vdraw_w_q) : vdraw_w_ff);
     assign vdraw_h = (state == S_V64_RECT) ? vdraw_h_ff :
         (hs64 ? (hs_m_vdraw_h ? vdraw_h_ff : e64_vdraw_h_q) : vdraw_h_ff);
+    (* dont_touch = "true" *)
     assign vdraw_color = hs64 ? (hs_m_vdraw_color ? vdraw_color_ff : e64_vdraw_color_q) : vdraw_color_ff;
     genvar gi_hs;
     generate
