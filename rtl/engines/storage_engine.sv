@@ -215,8 +215,21 @@ module storage_engine #(
     logic        bare_name;
     logic [2:0]  alt_try;
 
-    // ---- line buffer (kept local so field scanning needs no RAM reads) ---
-    logic [7:0]  linebuf [0:255];
+    // ---- line buffer -----------------------------------------------------
+    // 2026-08-24: BRAM'd (was ~3k LUTs of comb-read muxing at the final
+    // 189-slice placement gap). Writes go through one strobe; the parser
+    // reads two registered ports (line_pos scans, i9 trim/copy) with a
+    // 2-beat arm per step — INPUT#/DIR are cold paths.
+    (* ram_style = "block" *) logic [7:0] linebuf [0:255];
+    logic        lbw_we;
+    logic [7:0]  lbw_wa;
+    logic [7:0]  lbw_wd;
+    logic [7:0]  lb_pos_q, lb_i9_q;
+    logic [8:0]  lb_i9_addr;
+    logic        lb_arm;
+    logic        dirfmt_l;
+    always_comb lb_i9_addr = (state == S_CPY) ? (fld_off + cpy_i)
+                                              : (fld_off + fld_len - 9'd1);
     logic [8:0]  line_n;     // bytes in linebuf
     logic [8:0]  line_pos;   // INPUT# cursor within linebuf
     logic [8:0]  fld_off, fld_len;
@@ -406,9 +419,15 @@ module storage_engine #(
     // async reset in the sensitivity list blocks inference). name83[] is still
     // reset below and stays registers, which is fine at 11 bytes.
     always_ff @(posedge clk) begin
+        if (lbw_we) linebuf[lbw_wa] <= lbw_wd;
+        lb_pos_q <= linebuf[line_pos[7:0]];
+        lb_i9_q  <= linebuf[lb_i9_addr[7:0]];
+    end
+    always_ff @(posedge clk) begin
         logic [8:0] i9;
         if (!rst_n) begin
             state <= S_IDLE;
+            lbw_we <= 1'b0; lb_arm <= 1'b0; dirfmt_l <= 1'b0;
             rsp <= 3'd0;
             sd_cmd_r <= 8'h0;
             sd_lba_r <= 32'h0;
@@ -448,6 +467,7 @@ module storage_engine #(
             rl_field <= 1'b0;
             cl_data_done <= 1'b0; // NEW: CLOSE flushes data sector once
         end else begin
+            lbw_we <= 1'b0;
             done_r <= 1'b0;
 
             unique case (state)
@@ -1062,7 +1082,7 @@ module storage_engine #(
                         end
                     end else begin
                         if (rb_byte != 8'h0D && line_n < 9'd255) begin
-                            linebuf[line_n[7:0]] <= rb_byte;
+                            begin lbw_we <= 1'b1; lbw_wa <= line_n[7:0]; lbw_wd <= rb_byte; end
                             line_n <= line_n + 9'd1;
                         end
                         push_call(S_RBA0, S_RL1);
@@ -1089,18 +1109,25 @@ module storage_engine #(
                             rl_field <= 1'b1;
                             state    <= S_RL0;
                         end
-                    end else if (linebuf[line_pos[7:0]] == 8'h20
-                              || linebuf[line_pos[7:0]] == 8'h09) begin
+                    end else if (!lb_arm) lb_arm <= 1'b1;
+                    else if (lb_pos_q == 8'h20 || lb_pos_q == 8'h09) begin
                         line_pos <= line_pos + 9'd1;
-                    end else state <= S_RF2;
+                        lb_arm <= 1'b0;
+                    end else begin
+                        lb_arm <= 1'b0;
+                        state <= S_RF2;
+                    end
                 end
                 S_RF2: begin
-                    if (linebuf[line_pos[7:0]] == 8'h22) begin  // quoted field
+                    if (!lb_arm) lb_arm <= 1'b1;
+                    else if (lb_pos_q == 8'h22) begin  // quoted field
                         fld_off  <= line_pos + 9'd1;
                         line_pos <= line_pos + 9'd1;
+                        lb_arm   <= 1'b0;
                         state    <= S_RF3;
                     end else begin
                         fld_off <= line_pos;
+                        lb_arm  <= 1'b0;
                         state   <= S_RF5;
                     end
                 end
@@ -1108,19 +1135,27 @@ module storage_engine #(
                     if (line_pos >= line_n) begin
                         fld_len <= line_pos - fld_off;
                         state   <= S_RF4;
-                    end else if (linebuf[line_pos[7:0]] == 8'h22) begin
+                    end else if (!lb_arm) lb_arm <= 1'b1;
+                    else if (lb_pos_q == 8'h22) begin
                         fld_len  <= line_pos - fld_off;
                         line_pos <= line_pos + 9'd1;
+                        lb_arm   <= 1'b0;
                         state    <= S_RF4;
-                    end else line_pos <= line_pos + 9'd1;
+                    end else begin
+                        line_pos <= line_pos + 9'd1;
+                        lb_arm <= 1'b0;
+                    end
                 end
                 S_RF4: begin
                     // after a quoted field: skip blanks then one comma
-                    if (line_pos < line_n && (linebuf[line_pos[7:0]] == 8'h20
-                                           || linebuf[line_pos[7:0]] == 8'h09)) begin
+                    if (!lb_arm) lb_arm <= 1'b1;
+                    else if (line_pos < line_n && (lb_pos_q == 8'h20
+                                           || lb_pos_q == 8'h09)) begin
                         line_pos <= line_pos + 9'd1;
+                        lb_arm <= 1'b0;
                     end else begin
-                        if (line_pos < line_n && linebuf[line_pos[7:0]] == 8'h2C)
+                        lb_arm <= 1'b0;
+                        if (line_pos < line_n && lb_pos_q == 8'h2C)
                             line_pos <= line_pos + 9'd1;
                         cpy_i <= 9'h0;
                         state <= S_CPY;
@@ -1128,22 +1163,27 @@ module storage_engine #(
                 end
                 S_RF5: begin
                     // unquoted field runs to a comma or end of line
-                    if (line_pos < line_n && linebuf[line_pos[7:0]] != 8'h2C) begin
+                    if (!lb_arm) lb_arm <= 1'b1;
+                    else if (line_pos < line_n && lb_pos_q != 8'h2C) begin
                         line_pos <= line_pos + 9'd1;
+                        lb_arm <= 1'b0;
                     end else begin
                         fld_len <= line_pos - fld_off;
                         if (line_pos < line_n) line_pos <= line_pos + 9'd1;
+                        lb_arm <= 1'b0;
                         state <= S_RF6;
                     end
                 end
                 S_RF6: begin
                     // strip trailing blanks (leading ones were skipped in S_RF1)
-                    i9 = fld_off + fld_len - 9'd1;
-                    if (fld_len != 9'h0 && (linebuf[i9[7:0]] == 8'h20
-                                         || linebuf[i9[7:0]] == 8'h09)) begin
+                    if (!lb_arm) lb_arm <= 1'b1;
+                    else if (fld_len != 9'h0 && (lb_i9_q == 8'h20
+                                         || lb_i9_q == 8'h09)) begin
                         fld_len <= fld_len - 9'd1;
+                        lb_arm <= 1'b0;
                     end else begin
                         cpy_i <= 9'h0;
+                        lb_arm <= 1'b0;
                         state <= S_CPY;
                     end
                 end
@@ -1151,11 +1191,12 @@ module storage_engine #(
                 // ---------------- linebuf -> STORAGE_BUFFER ---------------
                 S_CPY: begin
                     if (cpy_i >= fld_len) state <= S_FIN;
+                    else if (!lb_arm) lb_arm <= 1'b1;
                     else begin
-                        i9    = fld_off + cpy_i;
                         maddr <= STORAGE_BUFFER + {7'h0, cpy_i};
-                        mdata <= linebuf[i9[7:0]];
+                        mdata <= lb_i9_q;
                         cpy_i <= cpy_i + 9'd1;
+                        lb_arm <= 1'b0;
                         push_call(S_MW, S_CPY);
                     end
                 end
@@ -1415,20 +1456,20 @@ module storage_engine #(
                     // Build "NAME.EXT" in linebuf from dent[0..10]
                     if (dent_i < 5'd8) begin
                         if (dent[dent_i] != 8'h20) begin
-                            linebuf[line_n[7:0]] <= dent[dent_i];
+                            begin lbw_we <= 1'b1; lbw_wa <= line_n[7:0]; lbw_wd <= dent[dent_i]; end
                             line_n <= line_n + 9'd1;
                         end
                         dent_i <= dent_i + 5'd1;
                     end else if (dent_i == 5'd8) begin
                         if (dent[8] != 8'h20 || dent[9] != 8'h20 || dent[10] != 8'h20) begin
-                            linebuf[line_n[7:0]] <= ".";
+                            begin lbw_we <= 1'b1; lbw_wa <= line_n[7:0]; lbw_wd <= "."; end
                             line_n <= line_n + 9'd1;
                         end
                         dent_i <= 5'd9;
                     end else begin
                         // dent_i 9..11 → ext dent[8..10]
                         if (dent[dent_i - 5'd1] != 8'h20) begin
-                            linebuf[line_n[7:0]] <= dent[dent_i - 5'd1];
+                            begin lbw_we <= 1'b1; lbw_wa <= line_n[7:0]; lbw_wd <= dent[dent_i - 5'd1]; end
                             line_n <= line_n + 9'd1;
                         end
                         if (dent_i >= 5'd11) begin
@@ -1436,7 +1477,10 @@ module storage_engine #(
                             // NEW: include this cycle's optional ext byte in length
                             // .HTM on FAT → glass .HTML (PYTHON names)
                             if (dent[8] == "H" && dent[9] == "T" && dent[10] == "M") begin
-                                linebuf[line_n[7:0] + ((dent[10] != 8'h20) ? 8'd1 : 8'd0)] <= "L";
+                                // one strobe per beat: the "L" append takes
+                                // its own beat via dirfmt_l (write collision
+                                // with the ext byte above otherwise)
+                                dirfmt_l <= 1'b1;
                                 fld_len <= line_n + ((dent[dent_i - 5'd1] != 8'h20) ? 9'd1 : 9'd0) + 9'd1;
                             end else
                                 fld_len <= line_n + ((dent[dent_i - 5'd1] != 8'h20) ? 9'd1 : 9'd0);
@@ -1447,6 +1491,10 @@ module storage_engine #(
                     end
                 end
                 S_DIR_ADV: begin
+                    if (dirfmt_l) begin
+                        lbw_we <= 1'b1; lbw_wa <= 8'(fld_len - 9'd1); lbw_wd <= "L";
+                        dirfmt_l <= 1'b0;
+                    end
                     if (ds_off + 10'd32 >= 10'd512) begin
                         if (ds_sect + 8'd1 >= spc) begin
                             if (dir_yield) begin
