@@ -330,9 +330,14 @@ report_utilization -file $OUT/utilization_impl.rpt
 
 # NEW: never ship a failing-timing bit (prior build wrote .bit with WNS −0.5 ns)
 set wns [lindex [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -setup]] 0]
-puts "TIMING WNS=$wns"
+set whs [lindex [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -hold]] 0]
+puts "TIMING WNS=$wns WHS=$whs"
 if {$wns eq "" || $wns < 0} {
   puts "ERROR: timing not met (WNS=$wns) — refusing to publish .bit"
+  exit 1
+}
+if {$whs eq "" || $whs < 0} {
+  puts "ERROR: hold not met (WHS=$whs) — refusing to publish .bit"
   exit 1
 }
 
