@@ -760,3 +760,26 @@ x_n only ever written 0), so no mid-walk DDA re-seed needed.
 Correction logged: no top_nexys_video.bit ever existed on disk — run 30
 routed but never reached write_bitstream (the earlier watcher line was
 the stale-file trap again). Run 32 writes one fresh.
+
+## 2026-08-25 (later): the sim clock-gate glitch — div8 was really "div4-ish"
+
+Route-31 postmortem first: Explore hit the IDENTICAL 3,865 overlaps as
+the default router — run-31's placement was congestion-infeasible, not
+seed-unlucky. Branch closed; div8 obsoletes the 100 MHz fight anyway.
+
+Battery #1 at "div8": 178/183 passed. The two key-event failures were
+real and led somewhere important: ONE KEYEVT enqueued TWICE (kevq 0/2,
+listener called twice, player x jumped 10->50). Root cause: the
+Verilator branch gated the VM clock as raw `clk & vm_ce`; vm_ce rises
+just after a posedge while clk is still HIGH, so vm_clk glitched high
+mid-window — the VM clocked TWICE per beat window (glitch edge + real
+edge). The event latch was consumed at both edges. This is exactly the
+glitch BUFGCE's latch-CE-while-clk-low exists to prevent; the sim model
+now registers the gate on negedge (c68bc05), which is bit-exact BUFGCE
+behavior. Synth path untouched — run 32 unaffected.
+
+Lesson for the ledger: battery #1 validated a 2-edges-per-window
+hybrid, not true div8. The match-held sram shim survived double-beat
+sampling anyway (its request-identity contract is cadence-agnostic —
+good), but all div8 validation is being redone at the true cadence:
+the 5 battery failures rerun first, then gates, then full battery.
