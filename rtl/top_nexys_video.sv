@@ -116,10 +116,13 @@ module top_nexys_video (
         .ps2_clk(ps2_clk), .ps2_data(ps2_data),
         .scancode(ps2_scancode), .strobe(ps2_strobe), .parity_err(ps2_parity_err)
     );
+    logic [7:0] kev_code, pmod_kev_code;
+    logic       kev_down, kev_stb, pmod_kev_down, pmod_kev_stb;
     ps2_decode u_ps2_dec (
         .clk(core_clk), .rst_n(rst_n),
         .scancode(ps2_scancode), .strobe(ps2_strobe),
-        .ascii(kbd_ascii), .ascii_strobe(kbd_push)
+        .ascii(kbd_ascii), .ascii_strobe(kbd_push),
+        .kev_code(kev_code), .kev_down(kev_down), .kev_stb(kev_stb)
     );
     // NEW: second PS/2 RX on JA — do not attach jmr_ps2_host (J15 clk-low trap)
     logic       pmod_kbd_push;
@@ -136,7 +139,8 @@ module top_nexys_video (
     ps2_decode u_pmod_ps2_dec (
         .clk(core_clk), .rst_n(rst_n),
         .scancode(pmod_scancode), .strobe(pmod_ps2_strobe),
-        .ascii(pmod_ascii), .ascii_strobe(pmod_kbd_push)
+        .ascii(pmod_ascii), .ascii_strobe(pmod_kbd_push),
+        .kev_code(pmod_kev_code), .kev_down(pmod_kev_down), .kev_stb(pmod_kev_stb)
     );
     // NEW: I2C stick @ 0x5A — NACK leaves bits 0 so GUI KEYBITS still work
     logic ack_ok, joy_left, joy_up, joy_down, joy_right, fire_ac, fire_bd;
@@ -206,6 +210,10 @@ module top_nexys_video (
     jmr_js_core #(.SRAM_INTERNAL(0)) u_core (
         .clk(core_clk), .pixel_clk(pixel_clk), .rst_n(rst_n),
         .standalone_mode(1'b1),
+        // both PS/2 keyboards feed the game-event path (main wins a tie)
+        .key_evt_stb(kev_stb | pmod_kev_stb),
+        .key_evt_code(kev_stb ? kev_code : pmod_kev_code),
+        .key_evt_down(kev_stb ? kev_down : pmod_kev_down),
         .kbd_push(core_kbd_push), .kbd_data(core_kbd_data),
         // NEW: tether KEYBITS OR I2C stick (same 6-bit field as PYTHON)
         .joy_in(uart_joy_bits | i2c_joy_bits), .joy_out(joy_out),

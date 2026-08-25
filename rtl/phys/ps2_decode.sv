@@ -8,9 +8,52 @@ module ps2_decode (
     input  logic [7:0] scancode,
     input  logic       strobe,
     output logic [7:0] ascii,
-    output logic       ascii_strobe
+    output logic       ascii_strobe,
+    // 2026-08-25: browser-keyCode game events (make AND break, so held
+    // keys work). PACMAN on glass would not steer: the games' keydown
+    // listeners match browser keyCodes (37-40 arrows...), which only the
+    // GUI tether ever produced - the PS/2 path fed typing ASCII alone
+    // and the core's key_evt ports sat at their 1'b0 defaults.
+    output logic [7:0] kev_code,
+    output logic       kev_down,
+    output logic       kev_stb
 );
     logic shift, brk, ext;
+
+    // scancode+ext -> browser keyCode (0 = unmapped)
+    function automatic logic [7:0] kmap(input logic [7:0] sc, input logic e);
+        logic [7:0] k;
+        k = 8'd0;
+        if (e) begin
+            unique case (sc)
+                8'h6B: k = 8'd37; // Left
+                8'h75: k = 8'd38; // Up
+                8'h74: k = 8'd39; // Right
+                8'h72: k = 8'd40; // Down
+                default: k = 8'd0;
+            endcase
+        end else begin
+            unique case (sc)
+                8'h29: k = 8'd32; // Space
+                8'h5A: k = 8'd13; // Enter
+                8'h1C: k = 8'd65; 8'h32: k = 8'd66; 8'h21: k = 8'd67; // A B C
+                8'h23: k = 8'd68; 8'h24: k = 8'd69; 8'h2B: k = 8'd70; // D E F
+                8'h34: k = 8'd71; 8'h33: k = 8'd72; 8'h43: k = 8'd73; // G H I
+                8'h3B: k = 8'd74; 8'h42: k = 8'd75; 8'h4B: k = 8'd76; // J K L
+                8'h3A: k = 8'd77; 8'h31: k = 8'd78; 8'h44: k = 8'd79; // M N O
+                8'h4D: k = 8'd80; 8'h15: k = 8'd81; 8'h2D: k = 8'd82; // P Q R
+                8'h1B: k = 8'd83; 8'h2C: k = 8'd84; 8'h3C: k = 8'd85; // S T U
+                8'h2A: k = 8'd86; 8'h1D: k = 8'd87; 8'h22: k = 8'd88; // V W X
+                8'h35: k = 8'd89; 8'h1A: k = 8'd90;                   // Y Z
+                8'h45: k = 8'd48; 8'h16: k = 8'd49; 8'h1E: k = 8'd50; // 0 1 2
+                8'h26: k = 8'd51; 8'h25: k = 8'd52; 8'h2E: k = 8'd53; // 3 4 5
+                8'h36: k = 8'd54; 8'h3D: k = 8'd55; 8'h3E: k = 8'd56; // 6 7 8
+                8'h46: k = 8'd57;                                     // 9
+                default: k = 8'd0;
+            endcase
+        end
+        kmap = k;
+    endfunction
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -19,14 +62,24 @@ module ps2_decode (
             ext <= 1'b0;
             ascii <= 8'h00;
             ascii_strobe <= 1'b0;
+            kev_code <= 8'h00;
+            kev_down <= 1'b0;
+            kev_stb  <= 1'b0;
         end else begin
             ascii_strobe <= 1'b0;
+            kev_stb <= 1'b0;
             if (strobe) begin
                 if (scancode == 8'hE0) begin
                     ext <= 1'b1;
                 end else if (scancode == 8'hF0) begin
                     brk <= 1'b1;
                 end else begin
+                    // game event: every make/break of a mapped key
+                    if (kmap(scancode, ext) != 8'd0) begin
+                        kev_code <= kmap(scancode, ext);
+                        kev_down <= ~brk;
+                        kev_stb  <= 1'b1;
+                    end
                     if (scancode == 8'h12 || scancode == 8'h59) begin
                         shift <= ~brk;
                     end else if (!brk && ext) begin
