@@ -583,12 +583,17 @@ module jmr_console_engine (
                         halt_pulse <= 1'b1; // drop game_mode / stop VM (cyan stub leftover)
                         reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
                     end else if (p_run_q) begin
-                        // HTML RUN: host compile-on-RUN streams ProgramImage over
-                        // PROG (C_JSB_TETHER). Never FAT-read a sidecar; card is HTML only.
+                        // HTML RUN, standalone-first (CONSTITUTION rule 10):
+                        // try NAME.JSH from the card (the builder emits it
+                        // beside every .HTML; on-device SAVE deletes it, so a
+                        // stale image can never run silently). FAT miss falls
+                        // back to the host tether at C_JSB_OPENW.
                         // RECTDEMO → rect engine; empty NEW → rect; missing JSB → ?NB
                         if (src_is_html) begin
                             jsb_want_jsh <= 1'b1;
-                            jsb_tether_mode <= 1'b1;
+                            jsb_tether_mode <= 1'b0;
+                            name_i <= 0;
+                            dir_n <= 0;
                             jsb_waddr <= 0;
                             jsb_bi <= 0;
                             jsb_word <= 0;
@@ -596,7 +601,7 @@ module jmr_console_engine (
                             jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
                             aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
                             sram_last <= 0; pal_idx <= 0; pal_ph <= 0;
-                            state <= C_JSB_TETHER;
+                            state <= C_JSB_PREP;
                         end else if (src_is_rectdemo) begin
                             run_pulse <= 1'b1;
                             reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
@@ -1748,9 +1753,21 @@ module jmr_console_engine (
                 end
                 C_JSB_OPENW: if (stor_done) begin
                     if (stor_err) begin
-                        // HTML missing sidecar → ?NH; .JS missing → ?NB
-                        reply_sel <= jsb_want_jsh ? 4'd9 : 4'd7;
-                        reply_idx <= 0; state <= C_REPLY;
+                        if (jsb_want_jsh && !jsb_tether_mode) begin
+                            // no NAME.JSH on card → host tether fallback
+                            // (its own ESC + ~10.7s timeout end in ?NB)
+                            jsb_tether_mode <= 1'b1;
+                            jsb_waddr <= 0; jsb_bi <= 0; jsb_word <= 0;
+                            ld_err <= 0;
+                            jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
+                            aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
+                            sram_last <= 0; pal_idx <= 0; pal_ph <= 0;
+                            state <= C_JSB_TETHER;
+                        end else begin
+                            // tether-fed retry missing too → ?NH; .JS → ?NB
+                            reply_sel <= jsb_want_jsh ? 4'd9 : 4'd7;
+                            reply_idx <= 0; state <= C_REPLY;
+                        end
                     end else state <= C_JSB_GB;
                 end
                 C_JSB_GB: if (!stor_busy) begin
