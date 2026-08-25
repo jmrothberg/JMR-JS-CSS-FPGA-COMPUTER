@@ -40,9 +40,29 @@ module jmr_ddr3_sram_bridge (
     logic [2:0]  slot;
     logic [15:0] wdata_q;
     logic        cmd_sent, wdf_sent;
+    // 2026-08-25 board fix: read-reissue watchdog. If a command is ever
+    // lost, S_WAIT_RD re-issues instead of wedging the whole SRAM fabric
+    // (the arbiter holds the owner until ack, so a silent drop blacked
+    // the screen and froze every sram client).
+    logic [15:0] rd_wd;
+    // Single-entry BL8 read cache. The MIG UI costs ~25 ui cycles per
+    // read; scanout needs 320 sequential words per 32 us line (one per
+    // 100 ns), which a word-per-transaction bridge cannot sustain (the
+    // 1-cycle sim model hid this). One burst serves 8 sequential words:
+    // 40 bursts/line = well inside the line budget. Writes to the cached
+    // burst invalidate it.
+    logic         cache_valid;
+    logic [17:0]  cache_base;   // addr[20:3]
+    logic [127:0] cache_data;
 
     wire [2:0]  slot_now = addr[2:0];
-    wire [28:0] ui_addr  = {7'd0, addr, 1'b0}; // byte addr; MIG ignores [3:0]
+    // app_addr is in DDR3-device-word (16-bit) units; BL8 bursts are
+    // 8-word aligned. The old {addr,1'b0} byte-address mapping split one
+    // aligned 8-word sram block across TWO bursts (it only round-tripped
+    // because reads and writes shared the same scrambled transform) - the
+    // burst cache below requires block == burst, so use the natural
+    // mapping. DDR content is volatile; nothing persists across the change.
+    wire [28:0] ui_addr  = {8'd0, addr[20:3], 3'b000};
     wire [6:0]  bit_off  = {slot, 4'b0000};
     wire [4:0]  byte_lo  = {slot, 1'b0};
 
@@ -76,6 +96,10 @@ module jmr_ddr3_sram_bridge (
             wdata_q   <= 16'd0;
             cmd_sent  <= 1'b0;
             wdf_sent  <= 1'b0;
+            rd_wd     <= 16'd0;
+            cache_valid <= 1'b0;
+            cache_base  <= 18'd0;
+            cache_data  <= 128'd0;
         end else begin
             ack <= 1'b0;
             app_en <= 1'b0;
@@ -86,36 +110,54 @@ module jmr_ddr3_sram_bridge (
                     cmd_sent <= 1'b0;
                     wdf_sent <= 1'b0;
                     if (req && !ack) begin
-                        wr_pend <= we;
-                        slot    <= slot_now;
-                        wdata_q <= wdata;
-                        app_addr <= ui_addr;
-                        app_cmd  <= we ? CMD_WRITE : CMD_READ;
-                        state    <= S_ISSUE;
+                        if (!we && cache_valid && addr[20:3] == cache_base) begin
+                            rdata <= cache_data[{addr[2:0], 4'b0000} +: 16];
+                            ack   <= 1'b1;
+                        end else begin
+                            wr_pend <= we;
+                            slot    <= slot_now;
+                            wdata_q <= wdata;
+                            app_addr <= ui_addr;
+                            app_cmd  <= we ? CMD_WRITE : CMD_READ;
+                            state    <= S_ISSUE;
+                        end
                     end
                 end
                 S_ISSUE: begin
+                    // UG586 handshake: app_en / app_wdf_wren are accepted only
+                    // when they OVERLAP app_rdy / app_wdf_rdy in the same
+                    // cycle. The old code sampled rdy one cycle, pulsed the
+                    // enable the next - any rdy dip between (each refresh
+                    // window, ~7.8 us) silently dropped the command while the
+                    // FSM marked it sent. A dropped read parked S_WAIT_RD
+                    // forever: black FB, every sram client frozen. Hold each
+                    // enable until its own accept; write data goes first
+                    // (data may precede the command, must not trail it).
+                    logic cmd_ok, wdf_ok;
                     app_addr <= ui_addr;
                     app_cmd  <= wr_pend ? CMD_WRITE : CMD_READ;
                     app_wdf_data <= wdf_now;
                     app_wdf_mask <= mask_now;
+                    cmd_ok = cmd_sent || (app_en && app_rdy);
+                    wdf_ok = wdf_sent || (app_wdf_wren && app_wdf_rdy);
                     if (!wr_pend) begin
-                        if (app_rdy) begin
-                            app_en <= 1'b1;
+                        app_en <= !cmd_ok;
+                        if (cmd_ok) begin
+                            app_en <= 1'b0;
+                            rd_wd  <= 16'd0;
                             state  <= S_WAIT_RD;
                         end
                     end else begin
-                        if (!cmd_sent && app_rdy) begin
-                            app_en   <= 1'b1;
-                            cmd_sent <= 1'b1;
-                        end
-                        if (!wdf_sent && app_wdf_rdy) begin
-                            app_wdf_wren <= 1'b1;
-                            app_wdf_end  <= 1'b1;
-                            wdf_sent     <= 1'b1;
-                        end
-                        // Command + write-data both accepted (same cycle or split)
-                        if ((cmd_sent || app_rdy) && (wdf_sent || app_wdf_rdy)) begin
+                        app_wdf_wren <= !wdf_ok;
+                        app_wdf_end  <= !wdf_ok;
+                        wdf_sent     <= wdf_ok;
+                        app_en       <= wdf_ok && !cmd_ok;
+                        cmd_sent     <= cmd_ok;
+                        if (cmd_ok) begin
+                            app_en       <= 1'b0;
+                            app_wdf_wren <= 1'b0;
+                            app_wdf_end  <= 1'b0;
+                            if (addr[20:3] == cache_base) cache_valid <= 1'b0;
                             ack   <= 1'b1;
                             state <= S_IDLE;
                         end
@@ -124,9 +166,19 @@ module jmr_ddr3_sram_bridge (
                 S_WAIT_RD: begin
                     if (app_rd_data_valid) begin
                         rdata <= app_rd_data[bit_off +: 16];
+                        cache_data  <= app_rd_data;
+                        cache_base  <= addr[20:3];
+                        cache_valid <= 1'b1;
                         ack   <= 1'b1;
                         state <= S_IDLE;
-                    end
+                    end else if (rd_wd == 16'hFFFF) begin
+                        // command lost anyway (should be impossible now):
+                        // re-issue rather than wedge
+                        rd_wd    <= 16'd0;
+                        cmd_sent <= 1'b0;
+                        wdf_sent <= 1'b0;
+                        state    <= S_ISSUE;
+                    end else rd_wd <= rd_wd + 16'd1;
                 end
                 default: state <= S_IDLE;
             endcase
