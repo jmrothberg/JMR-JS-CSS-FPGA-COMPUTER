@@ -85,6 +85,15 @@ module sd_spi_master #(
     // NEW: SPI clock divider — half-period count-1, now from INIT_DIV/RUN_DIV.
     logic [7:0]  spi_div;
     logic [7:0]  clk_cnt;
+    // 2026-08-25 first-light: CCS (OCR bit 30) captured from CMD58.
+    // CCS=1 (SDHC/SDXC): CMD17/24 argument is a block number. CCS=0
+    // (SDSC): the argument is a BYTE address. The old code always sent
+    // the raw block number and DISCARDED the OCR, so an SDSC card
+    // silently served the WRONG sectors (byte offset = LBA): reads
+    // "succeeded", the FAT parse chewed garbage, and DIR/LOAD wedged in
+    // the chain walk. The sim card model is SDHC (OCR 0x40..), so sim
+    // behavior is unchanged by honoring CCS.
+    logic ccs_r;
     // NEW: ACMD41 retry counter (see ACMD_TRIES)
     logic [11:0] acmd_tries;
     // NEW: "MOSI has been presented, next tick raises SCK" (see ST_XFER). Always
@@ -137,6 +146,7 @@ module sd_spi_master #(
             spi_div <= 8'(INIT_DIV);   // NEW: slow clock until init succeeds
             clk_cnt <= '0;
             acmd_tries <= '0;
+            ccs_r <= 1'b0;
             mosi_rdy <= 1'b0;
             busy_cnt <= '0;
             cmd_d <= 8'h0;
@@ -189,10 +199,10 @@ module sd_spi_master #(
                         frame_i <= '0;
                         clk_cnt <= '0;
                         frame[0] <= 8'h51; // 0x40|17
-                        frame[1] <= lba[31:24];
-                        frame[2] <= lba[23:16];
-                        frame[3] <= lba[15:8];
-                        frame[4] <= lba[7:0];
+                        frame[1] <= ccs_r ? lba[31:24] : lba[22:15]; // SDSC: byte addr = lba<<9
+                        frame[2] <= ccs_r ? lba[23:16] : lba[14:7];
+                        frame[3] <= ccs_r ? lba[15:8]  : {lba[6:0], 1'b0};
+                        frame[4] <= ccs_r ? lba[7:0]   : 8'h00;
                         frame[5] <= 8'h01;
                         state <= ST_RW_FRAME;
                     end else if (cmd == 8'd3) begin
@@ -203,10 +213,10 @@ module sd_spi_master #(
                         frame_i <= '0;
                         clk_cnt <= '0;
                         frame[0] <= 8'h58; // 0x40|24
-                        frame[1] <= lba[31:24];
-                        frame[2] <= lba[23:16];
-                        frame[3] <= lba[15:8];
-                        frame[4] <= lba[7:0];
+                        frame[1] <= ccs_r ? lba[31:24] : lba[22:15]; // SDSC: byte addr = lba<<9
+                        frame[2] <= ccs_r ? lba[23:16] : lba[14:7];
+                        frame[3] <= ccs_r ? lba[15:8]  : {lba[6:0], 1'b0};
+                        frame[4] <= ccs_r ? lba[7:0]   : 8'h00;
                         frame[5] <= 8'h01;
                         state <= ST_RW_FRAME;
                     end
@@ -422,6 +432,10 @@ module sd_spi_master #(
                     sck_hi <= 1'b0;
                     clk_cnt <= '0;
                     shift_tx <= 8'hFF;
+                    // CMD58 drain: entry with byte_i==1 holds OCR[31:24] in
+                    // rx_byte (entry 0 held R1). Bit 6 of that byte is CCS.
+                    if (init_step == 3'd4 && byte_i == 10'd1)
+                        ccs_r <= rx_byte[6];
                     if (byte_i == 10'd3) begin
                         if (init_step == 3'd4) begin
                             // NEW: last OCR byte (still slow), then ST_DONE switches to fast SPI

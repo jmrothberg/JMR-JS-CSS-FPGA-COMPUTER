@@ -247,6 +247,12 @@ module storage_engine #(
     logic [7:0]  fs_i, fs_bi;
     logic [31:0] al_clus, al_prev, al_lba, al_guard;
     logic [31:0] fc_clus, fc_next, fc_guard;
+    // Dir-scan chain guard. First-light board lesson (2026-08-25): DIR
+    // and LOAD wedged forever with busy high — a FAT entry read off the
+    // real card can point back into the valid cluster range and form a
+    // cycle, which the well-formed sim card image can never produce.
+    // S_FC0 already had fc_guard; the S_DS_CHAIN walk had no bound.
+    logic [15:0] ds_guard;
     logic [9:0]  pad_i;
     logic [5:0]  ent_i;
     logic [4:0]  pub_i;
@@ -462,6 +468,7 @@ module storage_engine #(
             fs_i <= 8'h0; fs_bi <= 8'h0;
             al_clus <= 32'h0; al_prev <= 32'h0; al_lba <= 32'h0; al_guard <= 32'h0;
             fc_clus <= 32'h0; fc_next <= 32'h0; fc_guard <= 32'h0;
+            ds_guard <= 16'h0;
             pad_i <= 10'h0; ent_i <= 6'h0; pub_i <= 5'h0;
             sink_busy_r <= 1'b0;
             rl_field <= 1'b0;
@@ -727,6 +734,7 @@ module storage_engine #(
                 S_DS_START: begin
                     ds_clus <= root_clus;
                     ds_sect <= 8'h0;
+                    ds_guard <= 16'h0;
                     found_r <= 1'b0;
                     slot_ok <= 1'b0;
                     state   <= S_DS_SECT;
@@ -820,12 +828,17 @@ module storage_engine #(
                 end
                 S_DS_CHAIN: begin
                     // Next root-dir cluster after spc sectors. EOC → not found.
-                    if (fat_val < 32'd2 || fat_val >= 32'h0FFFFFF8)
+                    // Guard: a cyclic chain (garbage FAT data off a real card)
+                    // must land in ?IO, never spin busy forever.
+                    if (ds_guard > 16'd65534)
+                        state <= S_ERR;
+                    else if (fat_val < 32'd2 || fat_val >= 32'h0FFFFFF8)
                         pop_ret();
                     else begin
-                        ds_clus <= fat_val;
-                        ds_sect <= 8'h0;
-                        state   <= S_DS_SECT;
+                        ds_clus  <= fat_val;
+                        ds_sect  <= 8'h0;
+                        ds_guard <= ds_guard + 16'd1;
+                        state    <= S_DS_SECT;
                     end
                 end
 
