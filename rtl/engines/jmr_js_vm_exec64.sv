@@ -2668,6 +2668,7 @@ module jmr_js_vm_exec64 (
         logic guard, sticky;
         integer p, er, shift;
         begin
+            // highest set bit: priority scan (log-depth encoder form)
             p = -1;
             for (int k = 0; k < 106; k++)
                 if (product[k])
@@ -2684,10 +2685,11 @@ module jmr_js_vm_exec64 (
             guard = 1'b0;
             sticky = 1'b0;
             if (shift > 0 && shift <= 106) begin
+                logic [105:0] below_mask;
                 guard = product[shift - 1];
-                for (int k = 0; k < 106; k++)
-                    if (k < shift - 1)
-                        sticky = sticky | product[k];
+                // masked OR-reduce (tree form): sticky = any bit below guard
+                below_mask = (106'd1 << (shift - 1)) - 106'd1;
+                sticky = |(product & below_mask);
             end else if (shift > 106)
                 sticky = |product;
             rounded = {1'b0, q} + (guard && (sticky || q[0]));
@@ -2707,78 +2709,8 @@ module jmr_js_vm_exec64 (
                 v64_mul_pack = {sign, ef, q[51:0]};
         end
     endfunction
-    task automatic v64_mul_task(
-        input logic [63:0] aa,
-        input logic [63:0] bb,
-        output logic [63:0] result
-    );
-        logic sign;
-        logic [10:0] ea, eb, ef;
-        logic [51:0] fa, fb;
-        logic [52:0] ma, mb, q;
-        logic [53:0] rounded;
-        logic [105:0] product;
-        logic guard, sticky;
-        integer p, er, shift;
-        begin
-            sign = aa[63] ^ bb[63];
-            ea = aa[62:52]; eb = bb[62:52];
-            fa = aa[51:0]; fb = bb[51:0];
-            if ((ea == 11'h7ff && fa != 0) ||
-                (eb == 11'h7ff && fb != 0) ||
-                ((ea == 11'h7ff || eb == 11'h7ff) &&
-                 (aa[62:0] == 0 || bb[62:0] == 0))) begin
-                result = V64_CANON_NAN;
-            end else if (ea == 11'h7ff || eb == 11'h7ff) begin
-                result = {sign, 11'h7ff, 52'd0};
-            end else if (aa[62:0] == 0 || bb[62:0] == 0) begin
-                result = {sign, 63'd0};
-            end else begin
-                ma = {1'b0, fa};
-                mb = {1'b0, fb};
-                if (ea != 0) ma[52] = 1'b1;
-                if (eb != 0) mb[52] = 1'b1;
-                product = 106'(ma) * 106'(mb);
-                p = -1;
-                for (int k = 0; k < 106; k++)
-                    if (product[k])
-                        p = k;
-                er = ((ea == 0) ? 1 : ea)
-                   + ((eb == 0) ? 1 : eb) - 1023 + p - 104;
-                shift = p - 52;
-                ef = 11'(er);
-                if (er <= 0) begin
-                    shift = shift + 1 - er;
-                    ef = 11'd0;
-                end
-                q = (shift >= 106) ? 53'd0 : 53'(product >> shift);
-                guard = 1'b0;
-                sticky = 1'b0;
-                if (shift > 0 && shift <= 106) begin
-                    guard = product[shift - 1];
-                    for (int k = 0; k < 106; k++)
-                        if (k < shift - 1)
-                            sticky = sticky | product[k];
-                end else if (shift > 106)
-                    sticky = |product;
-                rounded = {1'b0, q} + (guard && (sticky || q[0]));
-                if (ef != 0 && rounded[53]) begin
-                    q = rounded[53:1];
-                    er = er + 1;
-                    ef = 11'(er);
-                end else
-                    q = rounded[52:0];
-                if (er >= 2047)
-                    result = {sign, 11'h7ff, 52'd0};
-                else if (ef == 0 && q[52])
-                    result = {sign, 11'd1, q[51:0]};
-                else if (q == 0)
-                    result = {sign, 63'd0};
-                else
-                    result = {sign, ef, q[51:0]};
-            end
-        end
-    endtask
+    // v64_mul_task deleted 2026-08-24: the comb 53x53 multiply moved to
+    // the fpm/nwm shift-add engines; packing lives in v64_mul_pack.
     task automatic v64_array_index_task(
         input logic [63:0] value,
         output logic valid,
