@@ -1623,15 +1623,21 @@ module jmr_js_vm #(
     // NEW: 10-bit coords for 640×480 (was 8-bit mini after scale4)
     logic [9:0]  rx, ry, rw, rh, x, y;
     logic [7:0]  color;
-    // flatten: spr_off/spr_ww (16-deep FFs) + divides live here, not unique case.
+    // Scaled-blit source coords: per-pixel divides replaced by an exact
+    // DDA (floor((x*sw)/rw) == x*(sw/rw) + floor(x*(sw%rw)/rw), carried
+    // incrementally). qx/rx_r/qy/ry_r come from the blit_div_ph setup
+    // divides at S_BLIT entry; the DDA advances with the put-beat walk.
+    logic [15:0] dda_sx, dda_ax, dda_sy, dda_ay;
+    logic [15:0] bdiv_qx, bdiv_rx, bdiv_qy, bdiv_ry;
+    logic [1:0]  blit_div_ph;   // 0 idle/done, 1 dividing sw/rw, 2 sh/rh
+    logic [4:0]  bdiv_i;
+    logic [15:0] bdiv_quo;
+    logic [16:0] bdiv_rem;      // one bit wider than the 16-bit divisor
+    logic [15:0] bdiv_num, bdiv_den;
     always_comb begin
-        logic [15:0] sx, sy;
-        sx = blit_sx + ((blit_sw == 16'd0 || rw == 10'd0) ? 16'd0
-             : 16'((32'(x) * 32'(blit_sw)) / 32'(rw)));
-        sy = blit_sy + ((blit_sh == 16'd0 || rh == 10'd0) ? 16'd0
-             : 16'((32'(y) * 32'(blit_sh)) / 32'(rh)));
-        spr_so = spr_off[blit_si[3:0]] + 22'(sy) * 22'(spr_ww[blit_si[3:0]])
-           + 22'(sx);
+        spr_so = spr_off[blit_si[3:0]]
+           + 22'(blit_sy + dda_sy) * 22'(spr_ww[blit_si[3:0]])
+           + 22'(blit_sx + dda_sx);
         spr_raddr = spr_so[17:0];
     end
     // flatten: sin_q raddr from sin_turn (not function peek / unique-case ROM).
@@ -8628,10 +8634,46 @@ module jmr_js_vm #(
                             blit_wait <= 1'b0;
                             hs_ip(e64_ip_q);
                             hs_vsp(e64_vsp_q);
+                            bdiv_num <= e64_blit_sw_q; bdiv_den <= {6'd0, e64_rw_q};
+                        end else begin
+                            // legacy (non-v64) entry: parent regs already valid
+                            bdiv_num <= blit_sw; bdiv_den <= {6'd0, rw};
                         end
+                        dda_sx <= 16'd0; dda_ax <= 16'd0;
+                        dda_sy <= 16'd0; dda_ay <= 16'd0;
+                        blit_div_ph <= 2'd1;
+                        bdiv_i <= 5'd15; bdiv_quo <= 16'd0; bdiv_rem <= 17'd0;
                     end else if (rw == 10'd0 || rh == 10'd0) begin
                         hs_code(15'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
+                    end else if (blit_div_ph != 2'd0) begin
+                        // 16-beat restoring divide, twice (sw/rw then sh/rh).
+                        logic [16:0] btry;
+                        btry = {bdiv_rem[15:0], bdiv_num[bdiv_i[3:0]]};
+                        if (btry >= {1'b0, bdiv_den}) begin
+                            bdiv_rem <= btry - {1'b0, bdiv_den};
+                            bdiv_quo[bdiv_i[3:0]] <= 1'b1;
+                        end else begin
+                            bdiv_rem <= btry;
+                            bdiv_quo[bdiv_i[3:0]] <= 1'b0;
+                        end
+                        if (bdiv_i[3:0] == 4'd0) begin
+                            if (blit_div_ph == 2'd1) begin
+                                bdiv_qx <= (btry >= {1'b0, bdiv_den})
+                                    ? (bdiv_quo | 16'd1) : (bdiv_quo & ~16'd1);
+                                bdiv_rx <= 16'((btry >= {1'b0, bdiv_den})
+                                    ? (btry - {1'b0, bdiv_den}) : btry);
+                                blit_div_ph <= 2'd2;
+                                bdiv_i <= 5'd15; bdiv_quo <= 16'd0; bdiv_rem <= 17'd0;
+                                bdiv_num <= blit_sh; bdiv_den <= {6'd0, rh};
+                            end else begin
+                                bdiv_qy <= (btry >= {1'b0, bdiv_den})
+                                    ? (bdiv_quo | 16'd1) : (bdiv_quo & ~16'd1);
+                                bdiv_ry <= 16'((btry >= {1'b0, bdiv_den})
+                                    ? (btry - {1'b0, bdiv_den}) : btry);
+                                blit_div_ph <= 2'd0;
+                            end
+                        end else bdiv_i <= bdiv_i - 5'd1;
                     end else begin
                         // Source offset is spr_so / spr_raddr (outside this case).
                         // 2026-08-25: dst address + bounds precompute in the
@@ -8679,11 +8721,30 @@ module jmr_js_vm #(
                             end
                             if (x == (rw - 10'd1)) begin
                                 x <= 10'd0;
+                                dda_sx <= 16'd0; dda_ax <= 16'd0;
                                 if (y == (rh - 10'd1)) begin
                                     hs_code(15'(ops_base + ip));
                                     hs_st(S_FETCH_WAIT);
-                                end else y <= y + 10'd1;
-                            end else x <= x + 10'd1;
+                                end else begin
+                                    y <= y + 10'd1;
+                                    if (16'(dda_ay + bdiv_ry) >= {6'd0, rh}) begin
+                                        dda_sy <= dda_sy + bdiv_qy + 16'd1;
+                                        dda_ay <= 16'(dda_ay + bdiv_ry) - {6'd0, rh};
+                                    end else begin
+                                        dda_sy <= dda_sy + bdiv_qy;
+                                        dda_ay <= dda_ay + bdiv_ry;
+                                    end
+                                end
+                            end else begin
+                                x <= x + 10'd1;
+                                if (16'(dda_ax + bdiv_rx) >= {6'd0, rw}) begin
+                                    dda_sx <= dda_sx + bdiv_qx + 16'd1;
+                                    dda_ax <= 16'(dda_ax + bdiv_rx) - {6'd0, rw};
+                                end else begin
+                                    dda_sx <= dda_sx + bdiv_qx;
+                                    dda_ax <= dda_ax + bdiv_rx;
+                                end
+                            end
                         end
                     end
                 end
