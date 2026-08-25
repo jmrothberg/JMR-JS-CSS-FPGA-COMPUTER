@@ -111,3 +111,13 @@ create_generated_clock -name vm_clk -divide_by 8 \
 # before console/storage traffic) yet fanned into 51 of run-32's failing
 # endpoints. Standard MIG practice: exclude it from timing.
 set_false_path -from [get_pins -hierarchical -filter {NAME =~ *u_ddr_calib_top/init_calib_complete*/C}]
+
+# 2026-08-25 congestion fix (measured: runs 33 vs 35 differ by +399 LUTs
+# at identical BRAM/DSP, yet 35 placed a 104% East window; the variable
+# is the DDR3 bridge's 128-bit cache nets anchored to the MIG hard
+# block warping the floorplan). Pin the bridge beside the MIG: the
+# pinned placement reproduces run-33's clean profile (no congestion
+# window above level 5).
+create_pblock pb_sram_br
+add_cells_to_pblock [get_pblocks pb_sram_br] [get_cells u_sram_br]
+resize_pblock [get_pblocks pb_sram_br] -add {CLOCKREGION_X1Y3}
