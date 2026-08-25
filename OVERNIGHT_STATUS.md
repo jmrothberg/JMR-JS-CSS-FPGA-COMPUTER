@@ -783,3 +783,28 @@ hybrid, not true div8. The match-held sram shim survived double-beat
 sampling anyway (its request-identity contract is cadence-agnostic —
 good), but all div8 validation is being redone at the true cadence:
 the 5 battery failures rerun first, then gates, then full battery.
+
+## 2026-08-25: FIRST LIGHT — board bring-up on run-32's div8 bitstream
+
+The Nexys Video booted NLISC-JS on glass: DDR3 trained
+(init_calib_complete), MMCM locked, SD detected, PS/2 decoding, banner
+and prompt painting. The suspected "console boot hang" (ready_lit off,
+no banner) was the MONITOR BEING OFF — logged as the bring-up lesson:
+verify the glass and cable before FSM archaeology. The div8 VM clock,
+boundary latches, match-held sram shim, and dual-clock code port are
+all in the flashed bit and survived contact with real silicon.
+
+Open items, in priority order:
+1. Timing-clean blessed .bit (run 33): working tree carries the console
+   dispatch-predicate rewrite + C_NWR name-tail capture (kills the
+   -1.249 head) and the fbscan y_core_q register (-1.17 family) —
+   UNVALIDATED in sim yet. Plus staged-not-applied: shim vm_req_match
+   delivery register (-0.13 VM boundary), XDC false_path on
+   init_calib_complete (51 paths, quasi-static), timing-directive
+   switch now that LUTs sit at 82%.
+2. Six-title fleet acceptance on glass (INVADERS, PACMAN, DONKEY,
+   ASTEROID, MRDO, MKPVP).
+3. Staged blit-DDA divide removal (scratchpad/apply_blit_dda.py,
+   ~2,000 CARRY4 back, gates already green pre-patch).
+4. LED visibility (init_calib_complete + console-state nibble on spare
+   LEDs) — useful for future bring-up, no longer blocking.
