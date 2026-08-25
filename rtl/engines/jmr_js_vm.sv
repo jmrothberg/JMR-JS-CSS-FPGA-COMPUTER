@@ -1107,7 +1107,9 @@ module jmr_js_vm #(
     logic [15:0] blit_sx, blit_sy, blit_sw, blit_sh;
     logic        aset_mode;   // NEW: header flags bit1 — sprites in asset SRAM
     logic        sprd_mode;   // NEW: trailer carries SPRD descriptors (no pixels)
-    logic        blit_wait;   // NEW: SRAM read handshake inside S_BLIT
+    logic        blit_wait;
+    logic [18:0] blit_waddr_q;
+    logic        blit_inb_q;   // NEW: SRAM read handshake inside S_BLIT
     // flatten: spr_mem 256K / imgd_pix FB — raddr this clock, rdata next.
     // spr_mem_rdata retired (external SRAM)
     logic [17:0] spr_raddr;
@@ -8624,6 +8626,9 @@ module jmr_js_vm #(
                         hs_st(S_FETCH_WAIT);
                     end else begin
                         // Source offset is spr_so / spr_raddr (outside this case).
+                        // 2026-08-25: dst address + bounds precompute in the
+                        // sram REQ beat (x/y stable until put) — the put-beat
+                        // multiply+compare cone was run 30's -58.7ns path.
                         logic [7:0] pix;
                         logic       put;
                         put = 1'b0;
@@ -8636,6 +8641,8 @@ module jmr_js_vm #(
                                 sram_req  <= 1'b1;
                                 sram_we   <= 1'b0;
                                 sram_addr <= SPR_SRAM_BASE + 21'(spr_raddr);
+                                blit_waddr_q <= 19'(ry + y) * 19'(MW) + 19'(rx + x);
+                                blit_inb_q <= ((rx + x) < 10'(MW)) && ((ry + y) < 10'(MH));
                                 blit_wait <= 1'b1;
                             end else if (sram_ack) begin
                                 pix = sram_rdata[7:0];
@@ -8647,6 +8654,8 @@ module jmr_js_vm #(
                             // NEW: ASET — fetch the 16-bit SRAM word holding this pixel
                             sram_req <= 1'b1;
                             sram_addr <= spr_so[21:1];
+                            blit_waddr_q <= 19'(ry + y) * 19'(MW) + 19'(rx + x);
+                            blit_inb_q <= ((rx + x) < 10'(MW)) && ((ry + y) < 10'(MH));
                             blit_wait <= 1'b1;
                         end else if (sram_ack) begin
                             pix = spr_so[0] ? sram_rdata[15:8] : sram_rdata[7:0];
@@ -8655,9 +8664,9 @@ module jmr_js_vm #(
                             put = 1'b1;
                         end
                         if (put) begin
-                            if (pix != 8'd0 && (rx + x) < 10'(MW) && (ry + y) < 10'(MH)) begin
+                            if (pix != 8'd0 && blit_inb_q) begin
                                 fb_we <= 1'b1;
-                                fb_waddr <= 19'(ry + y) * 19'(MW) + 19'(rx + x);
+                                fb_waddr <= blit_waddr_q;
                                 fb_wdata <= pix;
                             end
                             if (x == (rw - 10'd1)) begin
