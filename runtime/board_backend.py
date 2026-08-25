@@ -149,8 +149,17 @@ class BoardBackend(RuntimeBackend):
                     self._have_fb = True
 
     def frame_tick(self) -> None:
-        self.poll()
-        self._paint_mirror()
+        # Board directive 2026-08-25: the GUI must never die mid-session
+        # while the board keeps running (a crashed GUI stops forwarding
+        # keystrokes and masquerades as a dead board console). Any parser
+        # or paint surprise logs a fault and drops the rx buffer to
+        # resync instead of propagating.
+        try:
+            self.poll()
+            self._paint_mirror()
+        except Exception as e:
+            self._log.fault("GUI_TICK", repr(e))
+            self._rx_buf = b""
 
     def _prompt_row(self) -> int:
         for r in range(_MIRROR_ROWS - 1, -1, -1):
