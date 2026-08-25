@@ -316,7 +316,11 @@ module top_nexys_video (
         .TMDS_Data_p(hdmi_tx_p),
         .TMDS_Data_n(hdmi_tx_n),
         .aRst(~rst_n),
-        .vid_pData(vid_pData),
+        // rgb2dvi convention (third_party .../rgb2dvi.vhd:215-217): pData is
+        // R[23:16], BLUE[15:8], GREEN[7:0]. The scanout drives honest RGB;
+        // swap at the boundary. Board evidence: blue rendered green, red
+        // fine, console text (white/gray = channel-invariant) never showed it.
+        .vid_pData({vid_pData[23:16], vid_pData[7:0], vid_pData[15:8]}),
         .vid_pVDE(vid_pVDE),
         .vid_pHSync(vid_pHSync),
         .vid_pVSync(vid_pVSync),
