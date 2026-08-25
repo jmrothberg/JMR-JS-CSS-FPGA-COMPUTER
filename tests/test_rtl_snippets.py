@@ -2035,7 +2035,7 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "FINDN.JS"')
         sim.type_line("RUN")
-        for _ in range(2000):
+        for _ in range(2000 * _VMDIV):
             sim._rpc("TICK")
         assert _fb_nz(sim) >= 50, "finder temps pinned n_arr; later frames returned []"
     finally:
@@ -5393,7 +5393,7 @@ def test_invaders_fpga_sim_held_left_changes_frame_within_budget():
         # Value64 splash/game frames do per-pixel fillRect from string-row
         # sprites; sequential GET_PROP is real silicon (~30 MHz), so FRAME
         # is capped at 64M (was 16M on the combo-heap cheat).
-        assert fclk <= 64_000_000, f"frame clocks {fclk} exceed 64M FRAME cap ({vmstat})"
+        assert fclk <= 64_000_000 * _VMDIV, f"frame clocks {fclk} exceed FRAME cap ({vmstat})"
     finally:
         sim.shutdown()
 
@@ -5522,7 +5522,7 @@ def test_donkey_fpga_sim_enter_keeps_raf():
         assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
         assert "raf=0" not in vmstat, vmstat
         assert fclk > 100_000, f"rAF armed but idle: fclk={fclk} ({vmstat})"
-        assert fclk < 32_000_000, f"fclk={fclk} ({vmstat})"
+        assert fclk < 32_000_000 * _VMDIV, f"fclk={fclk} ({vmstat})"
     finally:
         sim.shutdown()
 
@@ -5563,7 +5563,7 @@ def test_rtl_fillstyle_fillrect_global_loop_fclk():
         assert "fault=0" in vmstat or "fault=" not in vmstat, vmstat
         assert "raf=0" not in vmstat, vmstat
         # 64 tiny rects must not cost millions of clocks (old MRDO was 8.8M).
-        assert fclk < 2_000_000, f"fclk={fclk} ({vmstat})"
+        assert fclk < 2_000_000 * _VMDIV, f"fclk={fclk} ({vmstat})"
         assert _fb_pix(_fb_raw(sim), 1, 1) != 0
     finally:
         sim.shutdown()
@@ -5606,7 +5606,7 @@ def test_mrdo_fpga_sim_enter_fclk_not_pathological():
         # paint + the FB_SYNC present copy). This guards the 64M-cap
         # pathology, not MRDO's inherent weight; tighten after the ledger's
         # FIND/IMGD/GC speed items land.
-        assert fclk < 12_000_000, f"fclk={fclk} ({vmstat})"
+        assert fclk < 12_000_000 * _VMDIV, f"fclk={fclk} ({vmstat})"
     finally:
         sim.shutdown()
 

@@ -2803,7 +2803,9 @@ int main(int argc, char** argv) {
             // ~14.5 clocks each (per-pixel fillRect sprites + nested
             // collision loops) => 40M+ clocks. 32M truncated it. 64M is
             // the documented cap and is not exceeded.
-            const int CAP = 64000000;
+            // div8: the VM pays 8x clocks per frame; the cap is a HOST
+            // responsiveness bound and scales with it.
+            const int CAP = 512000000;
             int used = 0;
             int got = 0;
             int pulsed = 0;
