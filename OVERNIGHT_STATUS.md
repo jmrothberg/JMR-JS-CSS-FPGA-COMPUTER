@@ -908,20 +908,18 @@ exactly the RTL no simulation exercises. The boundary IS the bug list.
 
 ## CONSTITUTIONAL GAP (user-raised, confirmed): standalone HTML RUN
 
-CONSTITUTION.md 62-64 (RUN compiles the loaded HTML in-memory, no
-sidecars) + rule 10 (PC not required; PROG is flash/debug only). The
-board's HTML RUN depends on host compile over the PROG tether -
-structurally PC-required. Violation is real; the tether path is
-legitimate only as a debug tool. Standalone today: console, editor,
-storage, rectdemo, .JS titles. NOT standalone: HTML titles - the
-machine's purpose.
+**Current (2026-08-25):** **V1.0** compiles when you **make the card**
+(`make_sd_image.py` mints `.JSH`). The chip still has no JS compiler.
+**V1.5 tries** to be standalone (compile-on-RUN on the machine).
 
-Compliant end state: SELF-HOSTED COMPILER - port compiler.py (~2.2k
-lines, ~3.8k with emitter) to the machine's own JS subset, bootstrap
-via the Python compiler once, ship as versioned system firmware image
-(firmware, not a title sidecar: the no-sidecar rule guards the HTML
-source of truth for TITLES). RUN = read HTML from card -> run compiler
-image -> fresh in-memory ProgramImage, HTML line numbers preserved.
+Historical note (pre-JSH mint): CONSTITUTION said RUN compiles HTML
+in-memory with no sidecars; board HTML RUN depended on host compile over
+PROG — structurally PC-required. Standalone then: console, editor,
+storage, rectdemo, .JS titles. NOT standalone: HTML titles.
+
+Compliant end state remains self-hosted compile on `RUN` (V1.5 try):
+read HTML → compile on the machine → fresh ProgramImage, HTML line numbers
+preserved. Until that fits, card-minted `.JSH` is the V1.0 path.
 
 Open sizing questions before committing: compiler image vs the
 CODE_WORDS=20480 clamp (likely exceeds - needs execute-from-larger

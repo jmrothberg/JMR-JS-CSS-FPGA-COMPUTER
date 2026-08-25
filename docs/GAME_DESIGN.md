@@ -19,8 +19,8 @@ walls” (copy 1 is `.cursor/rules/no-game-hardwire.mdc` +
 
 | Gen | Meaning | Titles |
 |---|---|---|
-| **1.0 (now)** | Frozen caps + natives that PYTHON **and** FPGA-SIM already run | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls (see below). `MKPVP.HTML` is the V1 MK-shaped example. |
-| **1.5 (planned)** | Console **authoring**: type, paste, or edit numbered HTML at READY; `RUN` compiles the editor buffer without the µSD | Same V1 titles/walls. Not MK. Glass + LUT/BRAM budget: [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). |
+| **1.0 (now)** | Frozen caps + natives on PYTHON **and** FPGA-SIM. **BOARD:** compile when you **make the card** (minted `.JSH`; chip does not compile) | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls (see below). `MKPVP.HTML` is the V1 MK-shaped example. |
+| **1.5 (planned)** | Console **authoring** (type / paste / edit) **and try to be standalone** (compile-on-RUN on the machine; drop card `.JSH` if it fits) | Same V1 titles/walls. Not MK. Glass + LUT/BRAM budget: [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). |
 | **2.0 (compiler front end started)** | Machine changes so **`MK.HTML` as embedded today** runs | Acceptance: `MK.HTML`. Need **`MAX_SPR` ≥ 518**, asset bank **8 MB** (or more; ASIC: one chip, simple port), dotted **`new mk.…`**, **`.call`/`.apply`**, **`Object.keys` on exec64**, **`Math.round`**. Parse gaps (unary `+`, `for…in`, `throw`, `in`) landed 2026-08-21. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20). |
 
 V1 / V1.5 / V2 surface backlog: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
@@ -41,12 +41,14 @@ RUN
 ```
 
 - **One title = one file** in `storage/`. No external `.js` / `.css`.
-- Source of truth is the loaded HTML. `RUN` always recompiles it.
+- Source of truth is the loaded HTML. PYTHON / GUI **`RUN` recompiles it**.
+- **V1.0 BOARD:** the chip does not compile — **compile when you make the
+  card** (`make_sd_image.py` mints `.JSH`).
 - Chrome may open the same file for authoring. PYTHON bytecode → FPGA-SIM
   RTL → BOARD is the machine. Dukpy / a host twin is not.
-- **V1.5 (planned, not now):** type, paste, or edit numbered HTML at READY
-  and `RUN` without the µSD; **`EDIT n` stays** (already works). Numbers go
-  by 10 so `15` inserts between `10` and `20`; `10` + Enter deletes that
+- **V1.5 (planned):** type, paste, or edit numbered HTML at READY; **`EDIT n`
+  stays**. **Try to be standalone** (compile-on-RUN on the machine). Numbers
+  go by 10 so `15` inserts between `10` and `20`; `10` + Enter deletes that
   line, `10 body` also replaces it. Spec +
   LUT/BRAM budget:
   [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
@@ -128,10 +130,13 @@ Put `storage/NAME.HTML` in the storage folder (stem ≤ 8 letters so the board
 `python3 tools/make_sd_image.py create card.img` scans `storage/` and copies
 what is there. There is no title list to edit.
 
-`LOAD` uses the HTML name. The card is HTML only. The card builder copies
-**root** `storage/*.HTML`. `storage/games_*` is the upstream archive — not
-DIR, not the card. Same-stem `NAME.JS` / `NAME.JSB` are leftover demos, not
-product twins.
+`LOAD` uses the HTML name. The card holds `.HTML` / `.HTM`. **V1.0:**
+`make_sd_image.py create` **mints** `NAME.JSH` from that HTML so the FPGA
+can `RUN` with no PC (compile is at card-build, not on the chip). Never copy
+a stale `.JSH` from `storage/`. **V1.5 tries standalone** compile-on-RUN on
+the machine. The card builder copies **root** `storage/*.HTML`. `storage/games_*`
+is the upstream archive — not DIR, not the card. Same-stem `NAME.JS` /
+`NAME.JSB` are leftover demos, not product twins.
 
 Library example: `MRDO.HTML` is a portrait 384×480 playfield (2× arcade
 192×240) centered in 640×480 with black side letterbox. Tunnels are one
@@ -177,7 +182,8 @@ Until those land, do not expect `LOAD "MK.HTML"` + `RUN` on FPGA-SIM.
 2. Stays inside **V1.0 authoring walls** (sprites ≤16, no `for-in` /
    `Object.keys`, no negative scale mirror, V1 Math).
 3. Chrome opens it (authoring look only).
-4. `python3 tools/compile_js.py --html storage/NAME.HTML` succeeds (in memory; no sidecar file).
+4. `python3 tools/compile_js.py --html storage/NAME.HTML` succeeds (in memory).
+   Card image **mints** a `.JSH` (V1.0 BOARD compile-at-card-create).
 5. `python3 tools/make_sd_image.py create card.img` lists the 8.3 name.
 6. PYTHON `LOAD` + `RUN` plays. **FPGA-SIM** then board follow the usual
    ladder — do not claim silicon from Chrome or from PYTHON alone.

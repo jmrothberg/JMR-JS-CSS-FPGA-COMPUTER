@@ -61,11 +61,19 @@ the same glass on PYTHON → FPGA-SIM → BOARD** (then ASIC).
 
 - **No dukpy cheat.** PYTHON runs the **JMR bytecode VM**. **`RUN` always
   compiles the loaded `.HTML`** (editor source of truth) into a fresh,
-  versioned in-memory **ProgramImage** — never persist or prefer a `.JSB` /
-  `.JSH` sidecar. Compile errors must report **line numbers from that HTML**.
-  dukpy/Duktape/V8/QuickJS must not be the product execution path. Chrome may
-  open the same `.HTML` for authoring only — that does not count as
-  PYTHON/FPGA proof.
+  versioned in-memory **ProgramImage**. Compile errors must report **line
+  numbers from that HTML**. dukpy/Duktape/V8/QuickJS must not be the product
+  execution path. Chrome may open the same `.HTML` for authoring only — that
+  does not count as PYTHON/FPGA proof.
+- **Temporary board standalone (V1.0):** the FPGA has **no on-chip JS
+  compiler**. **Compile happens when you make the card** —
+  `python3 tools/make_sd_image.py create card.img` **mints** `NAME.JSH` from
+  the current `.HTML` (same ProgramImage the host would stream; never copy a
+  stale `.JSH` out of `storage/`). `LOAD` still shows HTML; untethered `RUN`
+  loads that minted `.JSH`. Host / GUI / FPGA-SIM with a PC still compile
+  the HTML and must **not** prefer a stale sidecar. **V1.5 tries to be
+  standalone** (compile-on-RUN on the machine; drop the card `.JSH` if it
+  fits).
 - **Asset bank (external SRAM — replaces the retired `NAME.DAT` spill).**
   Great graphics stay at **full quality**. On every `RUN` the compiler emits
   the title's `data:image` / fat assets (per-title 256-entry palette +
@@ -87,8 +95,10 @@ the same glass on PYTHON → FPGA-SIM → BOARD** (then ASIC).
   Tether = debug mirror only. When the J15 keyboard hardware is fixed, play
   must work standalone with **zero code changes**.
 - Same-name `NAME.JS` / `NAME.JSB` are **not** product twins of the HTML
-  titles. Card seeds are `.HTML` only (plus optional library HTML like
-  `JOYDEMO.HTML`). `storage/games_*` = upstream archive only.
+  titles. Card seeds are `.HTML` (plus optional library HTML like
+  `JOYDEMO.HTML`). **V1.0:** the card builder **mints** `.JSH` when you
+  make the card (FPGA does not compile). **V1.5 tries standalone**
+  compile-on-RUN on the machine. `storage/games_*` = upstream archive only.
 
 ---
 
@@ -164,9 +174,12 @@ FPGA-SIM means **real Verilator RTL** of this design — never a silent host twi
 
 **Uniform glass (F9 PYTHON → FPGA-SIM → BOARD):** every user-typed / user-visible
 behaviour must work the same way on the **bytecode** path before board “done.”
-User titles: `LOAD "NAME.HTML"` / `RUN` only. **`RUN` = compile-on-RUN**
-(fresh in-memory ProgramImage with ASET art section; never a sidecar; art
-streams to the external SRAM asset bank).
+User titles: `LOAD "NAME.HTML"` / `RUN` only. Host / PYTHON **`RUN` =
+compile-on-RUN** (fresh in-memory ProgramImage with ASET art; art streams
+to the external SRAM asset bank). Never prefer a stale sidecar when a
+compiler is present. **V1.0 untethered BOARD:** compile when you **make
+the card** (minted `.JSH`). **V1.5 tries to be standalone** (compile on
+the machine).
 Cursor rules: `python-first-parity.mdc`, `no-dukpy-cheat-native-cpu.mdc`,
 `never-fake-fpga-sim.mdc` (includes: RTL heaps must be SRAM, not Verilator-only
 2-D combo arrays; parent `unique case` reads `*_rdata`, never `arr_len[v]`),
@@ -210,9 +223,11 @@ simulation and the board keep real cycle time; Python does not.
    frames, events). Remove a hack only when its lockstep test passes
    without it. Caps are general and fail loudly. Acceptance titles are
    tests, not `if (PACMAN)` / `if (ADVENT)` gates.
-5. **RUN compiles the loaded source.** Editor/card text is truth. Do not
-   prefer a stale sidecar (`.JSH` / leftover token file) or a different
-   host path. Fat art belongs in the asset bank, not squeezed into code
+5. **RUN compiles the loaded source** when a compiler is present
+   (PYTHON / GUI / FPGA-SIM host). Editor/card HTML is truth. Do not
+   prefer a stale sidecar. **V1.0 BOARD:** compile when you **make the
+   card** (minted `.JSH`). **V1.5 tries standalone** compile-on-RUN on
+   the machine. Fat art belongs in the asset bank, not squeezed into code
    RAM.
 6. **PYTHON → real FPGA-SIM → user F9 → board → ASIC.** No host twin as
    the sim default. No `.bit`/`.bin` to “define” a feature FPGA-SIM still
@@ -464,9 +479,12 @@ The BASIC CPU's 64 KB on-chip budget does not apply verbatim, but its
 shape too.
 
 **Disk (µSD FAT32), not BRAM:** `NAME.HTML` is the user title and source of
-truth. `RUN` creates a ProgramImage in memory; product runtimes do not persist
-or prefer `.JSB` / `.JSH` compile sidecars. Never hard-code addresses
-throughout the design. Never stuff `data:image` megabytes into code BRAM.
+truth. **V1.0:** compile when you **make the card** — the builder mints
+`.JSH` so the FPGA can `RUN` standalone (the chip does not compile).
+**V1.5 tries to be standalone** (compile-on-RUN on the machine; drop `.JSH`
+if it fits). Host compile-on-RUN must not prefer a stale `.JSH`.
+Never hard-code addresses throughout the design. Never stuff `data:image`
+megabytes into code BRAM.
 
 ---
 

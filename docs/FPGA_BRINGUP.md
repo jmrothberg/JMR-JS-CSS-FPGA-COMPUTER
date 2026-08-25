@@ -101,9 +101,9 @@ designs. Only Vivado (board flow) produces them; Verilator never does.
 
 | Runtime | What it is | Where the “CPU” lives |
 |---|---|---|
-| **PYTHON** | **JMR bytecode VM** — **compile-on-RUN** | `functional_model/` (in-memory ProgramImage, code + ASET art) |
+| **PYTHON** | **JMR bytecode VM** — **compile-on-RUN** from HTML | `functional_model/` (in-memory ProgramImage, code + ASET art) |
 | **FPGA-SIM** | Same RTL as the board, simulated | Verilator → `sim/sim_build_synth/jmr_js_sim_server` (**default**). Host twin only with `JMR_SIM_HOST=1` — never a silent fallback. |
-| **BOARD** | Real Nexys Video (standalone or tethered debug) | Silicon |
+| **BOARD** | Real Nexys Video. **V1.0 standalone:** `RUN` uses `.JSH` minted when you **make the card**. Tethered debug may still compile on the PC. **V1.5 tries** compile on the chip. | Silicon |
 | **ASIC** | Same ISA after FPGA honesty | — |
 
 Titles: `LOAD "NAME.HTML"` / `RUN` only. Never call Chrome or dukpy a rung.
@@ -245,8 +245,10 @@ Gates: `make -C sim tb_uart_link tb_ft245`.
 
 ### Silicon honesty (RUN)
 
-- User product path: `LOAD "*.HTML"` + `RUN` → **compile-on-RUN** →
-  ProgramImage into the JMR VM. Full-quality graphics stream from the
+- User product path: `LOAD "*.HTML"` + `RUN`. **PYTHON / tether:**
+  compile-on-RUN → ProgramImage. **V1.0 standalone BOARD:** compile when you
+  **make the card** (minted `.JSH`); the chip does not compile. **V1.5 tries**
+  compile on the machine. Full-quality graphics stream from the
   ASET section into the external SRAM asset bank (never pack Donkey
   art into code BRAM; no `NAME.DAT`). Never dukpy on silicon.
 - `?NH` = HTML path debt (temporary). Missing compile path → fail loud
@@ -263,6 +265,7 @@ Rule: `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`.
 make -C sim sim_server_synth          # or -B to force Verilator (not clean)
 make -C sim tb_ps2_typing
 python3 tools/make_sd_image.py create sim/card.img
+# V1.0: also mints NAME.JSH (compile at card create; chip does not compile)
 .venv/bin/python tools/check_runtime_parity.py   # must print BATTERY PASS
 ```
 

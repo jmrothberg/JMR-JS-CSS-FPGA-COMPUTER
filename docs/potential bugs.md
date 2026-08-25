@@ -1443,7 +1443,7 @@ build. **host** = FPGA-SIM Python helper, not the console FSM.
 |---|---|---|---|
 | `DIR` | in | in (`C_DIR*`) | — |
 | `LOAD "NAME.HTML"` | in | in (`C_LD_*`; FPGA-SIM `SRCLOAD` skips FAT) | — |
-| `RUN` | in (host compile-on-RUN) | in (`C_JSB_TETHER`). On-chip compiler **NOT**. Missing stream → `?NH` / `?NB` | debt, not a play ID |
+| `RUN` | in (host compile-on-RUN) | **V1.0:** tether stream **or** card-minted `.JSH`. On-chip compiler **NOT**. Missing image → `?NH` / `?NB` | **V1.5 tries** compile on the chip |
 | `LIST` / `LIST n-m` / MORE | in | in (`C_LIST*` / `C_LIST_MORE`) | — |
 | `EDIT n` | in | in (`C_EDIT*`) | — |
 | `INSERT n` | in | **NOT** (host mutates `_html_lines`, RTL `?SN`) | **42** |
@@ -1525,7 +1525,7 @@ build. **host** = FPGA-SIM Python helper, not the console FSM.
 
 | Item | PYTHON | FPGA-SIM | Bug |
 |---|---|---|---|
-| Compile-on-RUN ProgramImage | in (host) | host stream into code BRAM | on-chip compiler **NOT** |
+| Compile-on-RUN ProgramImage | in (host) | **V1.0 BOARD:** `.JSH` minted at card create; tether may stream | **V1.5 tries** compile on the chip |
 | ASET → 4 MB SRAM | in | in | **26** |
 | Dual FB 640×480 | in | in | **G10** 307k clk |
 | Raw keys | in | in (FIFO depth 8) | **16** |

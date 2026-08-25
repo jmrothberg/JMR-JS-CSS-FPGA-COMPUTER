@@ -25,9 +25,9 @@ needs — **JMR bytecode VM** on PYTHON → FPGA-SIM → BOARD → ASIC.
 FPGA-SIM: INVADERS, PACMAN, DONKEY, ASTEROID, MRDO. FPGA-SIM is **too
 slow to play** (PC simulating the chip). Board target **≥ 30
 pictures/second**: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
-Live heap/code caps: [FPGA_FIT.md](FPGA_FIT.md). Console type/paste/edit
-HTML is **Version 1.5** (planned, not now). `MK.HTML` is still
-Version 2.0 (not V1).
+Live heap/code caps: [FPGA_FIT.md](FPGA_FIT.md). **V1.0 BOARD:** compile when
+you make the card (`.JSH`). **V1.5** (planned) tries standalone compile plus
+type/paste/edit HTML. `MK.HTML` is still Version 2.0 (not V1).
 
 ## Reference titles (on disk)
 
@@ -51,8 +51,15 @@ RUN
 | MK PVP (library) | `MKPVP.HTML` | **V1.0** MK-shaped — ≤16 atlases, L/R sheets, no `Object.keys` / negative mirror |
 
 **Compile-on-RUN (hard):** source of truth = loaded `.HTML` (editor line
-numbers). `RUN` **always** recompiles into one versioned in-memory
-**ProgramImage**. No sidecar compile file on disk or on the card.
+numbers). Host / GUI / FPGA-SIM **always** recompile into one versioned
+in-memory **ProgramImage**. Do not prefer a stale sidecar when a compiler
+is present.
+
+**Temp V1.0 (untethered BOARD):** the chip has no JS compiler.
+**Compile when you make the card** — `tools/make_sd_image.py` **mints**
+`NAME.JSH` from that HTML. Never copy `.JSH` from `storage/`. **V1.5 tries
+to be standalone** (compile-on-RUN on the machine; drop the card `.JSH` if
+it fits).
 
 **Asset bank (external SRAM — no `NAME.DAT`):** great graphics stay at full
 quality. `RUN` emits `data:image` art as the **ASET** (asset) section of
@@ -76,9 +83,11 @@ LOAD "DONKEY.HTML"
 RUN
 ```
 
-FPGA-SIM / BOARD must RUN vendored HTML via **compile-on-RUN → bytecode into
-code BRAM** (never stale sidecar, never Invaders hex, never dukpy). `?NH` =
-temporary debt. Do **not** fake FPGA-SIM with `JMR_SIM_HOST=1`.
+FPGA-SIM / BOARD with a host still RUN vendored HTML via **compile-on-RUN →
+bytecode into code BRAM** (never stale sidecar, never Invaders hex, never
+dukpy). Untethered BOARD **V1.0** `RUN`s the **card-minted** `.JSH`
+(compile was at card create). `?NH` = temporary debt. Do **not** fake
+FPGA-SIM with `JMR_SIM_HOST=1`.
 
 **Constitution mandate:** product is NOT DONE until all three HTML titles
 LOAD + RUN playable on PYTHON **bytecode** → FPGA-SIM RTL → BOARD. HTML
@@ -94,8 +103,8 @@ Chrome-only title “done on the machine.”
 
 | | **1.0 (now)** | **1.5 (planned)** | **2.0 (planned)** |
 |---|---|---|---|
-| **Meaning** | Caps + natives that product + V1 library HTML run on PYTHON **and** FPGA-SIM | Console **authoring**: type / paste / edit HTML at READY, `RUN` without the µSD | Machine changes so **`storage/MK.HTML` as embedded today** can `LOAD` + `RUN` |
-| **Acceptance** | `INVADERS` / `PACMAN` / `DONKEY` | Numbered-line HTML at `>` compiles and plays; `SAVE` optional | **`MK.HTML`**. `MKPVP.HTML` stays V1 training wheels |
+| **Meaning** | Caps + natives on PYTHON **and** FPGA-SIM. **BOARD:** chip does not compile — **compile when you make the card** (minted `.JSH`) | Console **authoring** (type / paste / edit) **and try to be standalone** (compile-on-RUN on the machine; drop card `.JSH` if it fits) | Machine changes so **`storage/MK.HTML` as embedded today** can `LOAD` + `RUN` |
+| **Acceptance** | `INVADERS` / `PACMAN` / `DONKEY` | Numbered-line HTML at `>` **and** standalone `RUN` **tried** on the machine (no PC); `SAVE` optional | **`MK.HTML`**. `MKPVP.HTML` stays V1 training wheels |
 | **Sprites / ASET** | **`MAX_SPR` = 16**, 4 MB bank | **Unchanged** (do not grow heap/ASET for this) | **`MAX_SPR` ≥ 518**, **8 MB** bank |
 | **Authoring** | [GAME_DESIGN.md](GAME_DESIGN.md) V1 walls; `LOAD` from card/storage | Same walls; source is the **editor buffer** | Same glass/`LOAD`/`RUN`; drop V1 HTML shims once V2 rows land |
 
@@ -116,7 +125,7 @@ Logged 2026-08-25: BOARD `>` treats a paste or typed `<canvas…>` as a verb
 |---|---|
 | **Type** HTML | `10 <canvas…>` Enter, `20 <script>` Enter, … then `RUN` |
 | **Paste** HTML | Same path as type. Unnumbered paste auto-numbers by **10**; already-numbered lines keep their numbers |
-| **Compile / run** | `RUN` compile-on-RUN of the **editor buffer**. No extra `COMPILE` verb (each Enter already finished a line). Missing compile → loud `?NH` |
+| **Compile / run** | **V1.0 BOARD:** `RUN` loads the **card-minted** `.JSH` (compile was at `make_sd_image.py create`). **V1.5 tries** compile-on-RUN of the editor buffer **on the chip**. No extra `COMPILE` verb. Missing image → loud `?NH` |
 | **Replace a line** | `10 body` + Enter (inserts if 10 is new) |
 | **Delete a line** | `10` + Enter (number only) — **gone**, not blank. PYTHON today blanks; V1.5 deletes |
 | **Insert between** | Numbers go by **10** (`10`, `20`, `30`, …). `15 xyz` lands **between** 10 and 20. Any unused integer is legal (`11`, `25`). `LIST` and `RUN` use **number order** |
@@ -133,24 +142,25 @@ RUN
 SAVE "BOX.HTML"
 ```
 
-`RUN` compiles **current HTML in the editor**, not a sidecar and not
-“whatever `storage/` on the PC is named.” Today BOARD HTML `RUN` is host
-compile + PROG stream after a `.HTML` `LOAD` (`src_is_html`). A typed/pasted
-buffer must set that flag **without FAT**. Host compile-on-RUN stays for V1.5
-(on-chip compiler is **not** this generation).
+`RUN` on PYTHON / GUI compiles **current HTML**. Untethered BOARD **V1.0**
+does not compile — it runs the **minted** card `.JSH` from card-create.
+**V1.5 tries to be standalone:** compile-on-RUN on the machine so typed /
+pasted / loaded HTML does not need that sidecar. A typed/pasted buffer must
+set `src_is_html` **without FAT**. Missing ProgramImage → loud `?NH`.
 
 **Fit budget (run 33 routed, [FPGA_FIT.md](FPGA_FIT.md) SCOREBOARD):**
 
 | Resource | Used | Free | V1.5? |
 |---|---:|---:|---|
-| Slice LUTs | 108,777 / 134,600 (**80.8%**) | **25,823** | **Yes** — console parse + sparse line index is hundreds–low-thousands of LUTs, not 20k |
+| Slice LUTs | 108,777 / 134,600 (**80.8%**) | **25,823** | Console editor **yes**. **V1.5 standalone compile** LUT cost TBD |
 | Block RAM | 343.5 / 365 (**94.1%**) | **21.5 tiles** | **Yes if we add no SOURCE BRAM.** HTML source is already in **external SRAM** (`SOURCE_MAX`, `SRC_SRAM_BASE`). A line-number map is a small LUTRAM (prefer that — BRAM is the tight one) |
 | Flip-flops | 45,379 / 269,200 (16.9%) | ~224k | Yes |
 
-**Do not** grow `MAX_SPR`, heap, or the 4 MB ASET bank for V1.5. **Do not**
-infer a JS compiler into LUTs (that would spend the 25k headroom and more).
-Insert/delete in SOURCE is FSM memmove on the existing SRAM port (clocks,
-not tiles).
+**Do not** grow `MAX_SPR`, heap, or the 4 MB ASET bank for the console editor.
+**V1.5 tries standalone compile-on-RUN on the board** (drop card `.JSH` if
+it fits). That compiler’s LUT cost is **TBD** — leftover LUTs cover numbered
+lines, not a proven full JS compiler. Insert/delete in SOURCE is FSM memmove
+on the existing SRAM port. **Do not** grow SOURCE into BRAM.
 
 PYTHON already accepts `10 text` at READY; RTL does not. Empty `10` on
 PYTHON currently blanks the line — V1.5 is BASIC **delete**.
@@ -325,8 +335,9 @@ partial — DONKEY's "Enter twice" flow now works).
 *No RTL arm at all* (unchanged): `INSERT` / `DELETE` (**42** **43**),
 `toISOString` (**23** — returns undefined), `globalAlpha` (**33** — writes
 ignored, fades draw opaque), `ctx.font` size parsing (**45**),
-comparator-less `sort()` (no-op). On-chip compiler is still **NOT**
-(host compile-on-RUN).
+comparator-less `sort()` (no-op). **V1.0:** on-chip compiler is **NOT** —
+compile when you make the card (`.JSH`); PYTHON is host compile-on-RUN.
+**V1.5 tries** standalone compile on the machine.
 
 *Had an RTL arm that never actually worked* — found and fixed 2026-08-20, so
 do not read the "Complete" in the Canvas/Method tables below as "silicon was
@@ -577,7 +588,7 @@ Silicon holes and HELP-text mismatch:
 |---|---|---|---|---|
 | `DIR` | P0 | in | in | Names only (HTML / optional `.JS`) |
 | `LOAD "NAME.HTML"` | P0 | in | in | Quotes optional. `LOAD n` (DIR index) is PYTHON. FPGA-SIM `SRCLOAD` skips FAT. |
-| `RUN` | P0 | in | in | Compile-on-RUN (host). On-chip compiler **NOT**. Missing stream → `?NH` / `?NB`. |
+| `RUN` | P0 | in | in | **V1.0:** PYTHON compile-on-RUN; BOARD standalone = card-minted `.JSH`. On-chip compiler **NOT**. Tether may stream. Missing image → `?NH` / `?NB`. **V1.5 tries** compile on the machine. |
 | `LIST` / `LIST n-m` / `LIST -` | P0 | in | in | HTML line numbers. `-- MORE --` is Space/Enter, not a typed verb. |
 | `EDIT n` | P0 | in | in | Next typed line replaces that source line. **Keep** in V1.5 (not a workaround to drop). |
 | `INSERT n` | P0 | in | **NOT** (`?SN`) | Bug **42**. |
@@ -601,7 +612,7 @@ and LUT/BRAM budget:
 
 | Item | Pri | Status | Don’t |
 |---|---|---|---|
-| Compile-on-RUN → ephemeral ProgramImage | P0 | Complete | Do not write a sidecar file. On-chip compiler is still TBD (host compile today). |
+| Compile-on-RUN → ephemeral ProgramImage | P0 | Host Complete; **V1.0 BOARD = compile at card create** (minted `.JSH`) | Prefer stale sidecar when a host compiler exists. **V1.5 tries** compile on the machine |
 | ASET → external 4 MB SRAM | P0 | Complete | Downscale for code BRAM; `NAME.DAT` |
 | Dual FB 640×480 | P0 | Complete | 160×120 leftover |
 
@@ -852,7 +863,7 @@ behind (last flash 2026-08-13 03:36).
 
 | Feature / API | PYTHON (bytecode VM) | FPGA-SIM (RTL VM) | FPGA board |
 |---|---|---|---|
-| `LOAD` `.HTML` + `RUN` | **required** compile-on-RUN (dukpy = debt) | grow until match (no `?NH`) | same as flashed bit |
+| `LOAD` `.HTML` + `RUN` | **required** compile-on-RUN (dukpy = debt) | grow until match (no `?NH`) | **V1.0:** card `.JSH` (compile at create) or tether stream |
 | numbers / bool / strings | grow to HTML needs | grow | grow |
 | `let` / arithmetic / `if` / loops | grow | grow | grow |
 | arrays / objects / `this` / classes / functions | **required for HTML titles** | **required** (gap until done) | same |
@@ -862,7 +873,7 @@ behind (last flash 2026-08-13 03:36).
 | `drawImage` / `Image` PNG | as titles need | as titles need | same |
 | keydown/keyup (HTML decides bindings) | KEYBITS / host | `joy_in` / PS/2 | tether until J15 fixed |
 | heap / GC / objects in **JMR** VM | required (not dukpy) | required | required |
-| ProgramImage into VM / BRAM | **compile-on-RUN** → ephemeral bytes | **yes** (same bytes) | yes after matching flash |
+| ProgramImage into VM / BRAM | **compile-on-RUN** → ephemeral bytes | **yes** (same bytes) | **V1.0:** load minted `.JSH` or tether bytes |
 | external SRAM asset bank (ASET) | **required** — full-res art via FM SRAM model | **same** (stream ASET → SRAM port; blit from SRAM) | same after matching flash |
 | standalone keyboard | GUI / host | Verilator PS/2 OK | **dead J15** — PROG tether |
 
@@ -1091,8 +1102,9 @@ compat row Complete from Chrome or from a fat RTL snippet.
 
 - **Product path:** `functional_model/` **bytecode VM** — **compile-on-RUN**
   from loaded HTML (ephemeral ProgramImage; full-quality art → ASET section →
-  FM asset-SRAM model). Writing a compile sidecar, or
-  using dukpy in `js_host.py`, is **debt to remove**, not truth.
+  FM asset-SRAM model). Using dukpy in `js_host.py` is **debt to remove**,
+  not truth. **V1.0 BOARD:** compile when you make the card (minted `.JSH`).
+  **V1.5 tries** compile on the machine.
 - Use **`.venv`** (Pillow for `drawImage` on the Canvas engine).
 - Playable HTML titles declare `<canvas width="640" height="480">` and **fill**
   that field. READY letterbox is console text only. Do not letterbox a smaller

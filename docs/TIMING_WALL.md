@@ -327,6 +327,54 @@ this is a prediction pending a real `report_design_analysis -congestion`
 on run 32's own placement, which I will check the moment it reaches
 place/phys_opt.
 
+## 11. Run 35 — routed, and worse for it (the congestion tax, measured)
+
+Run 35 carried the DDR3 bridge fix, `u_stor` LBA splits, the storage
+watchdog, console parse pipe, CCS and `ds_guard`. It **routed
+successfully** — 0 overlaps after 4h35m — and came out far worse than the
+run it replaced:
+
+| | Run 33 | **Run 35** |
+|---|---|---|
+| WNS | −0.640 | **−2.735** |
+| TNS | −12.8 | **−2,058.7** |
+| WHS (hold) | +0.051 | **−0.147** |
+| Route time | ~40 min | **4h 35m** |
+
+**Cause: the router bought legality with wire.** Its own opening warning
+was the prediction — *"congestion is preventing the router from routing
+all nets; the router will prioritize the successful completion of routing
+all nets over timing optimizations."* Run 35's placement carried a **104%
+congestion window** (East, `u_exec64` 60% + `u_vm` 38%, RAMB and DSP both
+100% locally) where run 33's placement had **no window above level 5** —
+on identical BRAM (343.5, 94.11%), identical DSPs (141), +399 LUTs.
+
+**The delay split proves it is space, not structure:**
+
+| Path | Logic | Route | Levels |
+|---|---|---|---|
+| −287 ns (original wall) | 47.6% | 52.4% | 465 |
+| −58.7 ns (blit divides) | 48.5% | 51.5% | 100 |
+| **Run 35 (−2.735)** | **5.8% (0.704 ns)** | **94.2% (11.538 ns)** | **2** |
+
+Route median across the 60 worst paths: **93.9%**. And the worst
+endpoints are `u_core/u_demo` — the rectangle demo, among the simplest
+logic on the chip — evicted across the die when the router spread
+everything to escape the window. See [RTL_DESIGN_PRINCIPLES
+§2.10](RTL_DESIGN_PRINCIPLES.md).
+
+**Consequence:** no RTL change can fix a 2-level path. These endpoints
+need only 0.704 ns of logic against a 10 ns budget — they close the
+instant the wire is short. The fix is room in the window, which is what
+run 36's blit-DDA provides (~2k CARRY4 removed from that region's
+dominant occupant).
+
+**Also retired:** the `AltSpreadLogic_high` contingency placement
+(WNS −0.995, TNS −77.9 across 290 endpoints, WHS +0.051). Spreading logic
+broke the congestion but lengthened nets globally — trading the problem
+rather than removing it. Two independent attempts to rearrange the same
+netlist both failed; the netlist is what has to change.
+
 ---
 
 ## Related

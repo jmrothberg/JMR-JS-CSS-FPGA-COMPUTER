@@ -317,11 +317,12 @@ five V1 games actually need.
    so the next `make bit` has a real shot. The user cannot afford a
    second pass.
 
-**What you still have:** HTML → compile-on-RUN → bytecode ISA on the
-chip → Canvas / heap / events in hardware. No dukpy, no soft CPU, no
-fake browser. Fit work removes a dead second machine, parks cold
-buffers where art already lives, and stops carving BRAM for empty
-rooms — it does not delete JS features.
+**What you still have:** HTML → bytecode ISA on the chip → Canvas / heap /
+events in hardware. **V1.0:** compile when you **make the card** (`.JSH`);
+PYTHON is compile-on-RUN. **V1.5 tries** standalone compile on the machine.
+No dukpy, no soft CPU, no fake browser. Fit work removes a dead second
+machine, parks cold buffers where art already lives, and stops carving BRAM
+for empty rooms — it does not delete JS features.
 
 ---
 

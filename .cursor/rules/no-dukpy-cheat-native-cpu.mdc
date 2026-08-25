@@ -25,16 +25,24 @@ LOAD "NAME.HTML" → edit (line numbers = HTML) → RUN
   → JMR VM. Chrome = authoring only.
 ```
 
-**Compile-on-RUN:** editor HTML is truth. No `.JSH` / `.JSB` sidecar. Compile
-errors use HTML line numbers. Missing path → loud `?NH` (tracked debt, never
-done). ESC is machine BREAK to READY — titles must not steal it.
+**Compile-on-RUN:** editor HTML is truth. Compile errors use HTML line
+numbers. Missing path → loud `?NH` (tracked debt, never done). ESC is
+machine BREAK to READY — titles must not steal it. Host / GUI / FPGA-SIM
+must not prefer a stale `.JSH` / `.JSB` over compiling current HTML.
+
+**Temp V1.0 (board, no PC):** the chip has no JS compiler. Compile happens
+when you **make the card** — `make_sd_image.py` mints `NAME.JSH` from that
+HTML so standalone `RUN` works. **V1.5 tries to be standalone**
+(compile-on-RUN on the machine; drop the card `.JSH` if it fits).
 
 **Three rooms:** **BRAM** = dual FB + code + heap (do not shrink for a small
-die; ASIC ~30 mm², ~1 MB-class SRAM). **µSD** = disk (`NAME.HTML`). **External
-4 MB SRAM** = ASET art only (`addr[20:0]`, 16-bit, `we`/`req`/`ack`; FPGA =
-DDR3 behind that port; SIM = model behind the same port). No `NAME.DAT`. No
+die; ASIC ~30 mm², ~1 MB-class SRAM). **µSD** = disk (`NAME.HTML`; temp
+minted `.JSH` until V1.5). **External 4 MB SRAM** = ASET art only
+(`addr[20:0]`, 16-bit, `we`/`req`/`ack`; FPGA = DDR3 behind that port; SIM =
+model behind the same port). No `NAME.DAT`. No
 64K BASIC house. Do not pack/downscale/quantize Donkey sheets into code BRAM.
 
-**Files:** `storage/*.HTML` only. `storage/games_*` = upstream, not DIR/card.
-`NAME.JS` is not a twin of `NAME.HTML`. Order of rungs: `python-first-parity`.
-FPGA-SIM default: `never-fake-fpga-sim`.
+**Files:** `storage/*.HTML` only (card builder may **mint** `.JSH` onto the
+µSD; do not keep `.JSH` in `storage/`). `storage/games_*` = upstream, not
+DIR/card. `NAME.JS` is not a twin of `NAME.HTML`. Order of rungs:
+`python-first-parity`. FPGA-SIM default: `never-fake-fpga-sim`.

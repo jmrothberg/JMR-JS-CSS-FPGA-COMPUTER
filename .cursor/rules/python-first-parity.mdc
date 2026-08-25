@@ -34,7 +34,9 @@ PYTHON. Tests = real titles, not random programs. Do not invent LUT counts
 ([docs/FPGA_FIT.md](../../docs/FPGA_FIT.md)).
 
 **Standalone intent:** HDMI + keyboard + Pmod stick; UART/JTAG are debug.
-Tether mirrors glass; when J15 works, play needs **zero** code changes. This
+**V1.0 BOARD:** compile when you **make the card** (`.JSH`); the chip does
+not compile. **V1.5 tries** compile-on-RUN on the machine. Tether mirrors
+glass; when J15 works, play needs **zero** code changes. This
 board is Nexys Video T200 — not A7-100T. StarLite later.
 
 **Agents:** do not run Vivado / `make bit` unless the user asked. RAM writes

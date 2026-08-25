@@ -7,9 +7,11 @@ Title status and version-2.0 holes live in [JMR_JS_COMPATIBILITY.md](JMR_JS_COMP
 Block diagram: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 On the BASIC sibling, every keyword **is** one instruction (`PRINT` = `0x81`).  
-Here JavaScript **source** is compiled on `RUN` into a smaller numbered
-**instruction set architecture** (ISA). Same idea: the language **is** the
-processor. Different spelling of the bytes.
+Here JavaScript **source** is compiled into a smaller numbered
+**instruction set architecture** (ISA). **PYTHON / GUI:** that compile is
+on `RUN`. **V1.0 BOARD:** compile when you **make the card** (`NAME.JSH`);
+the chip fetches bytecode, it does not compile. **V1.5 tries** compile-on-RUN
+on the machine. Same idea: the language **is** the processor.
 
 ---
 
@@ -31,12 +33,20 @@ processor. Different spelling of the bytes.
 
 ## What happens when you type RUN
 
+**PYTHON / GUI (host compiler):**
+
 ```
 NAME.HTML  (JavaScript you wrote)
     →  compiler  (functional_model/compiler.py)
     →  34 instructions + native ids
     →  processor  (functional model first, then the same numbers on the chip)
 ```
+
+**V1.0 standalone BOARD:** the chip has no compiler. `make_sd_image.py create`
+already compiled that HTML into `NAME.JSH` on the card; `RUN` loads it.
+
+**V1.5 (planned)** tries to compile on the machine so a desk needs no PC and
+no `.JSH`.
 
 You never type opcode numbers. You type JavaScript. The compiler emits the numbers.
 
@@ -322,7 +332,7 @@ Typed at the `>` prompt, same idea as BASIC `LOAD` / `RUN`:
 
 `INSERT` / `DELETE` (editor line) exist in the Python functional model; the chip says `?SN` today. **`EDIT n` stays** (works on PYTHON and RTL).
 
-**V1.5 (planned):** type, paste, or edit numbered HTML at `>` and `RUN` without the card (`EDIT n` kept) —
+**V1.5 (planned)** tries to be **standalone**: type, paste, or edit numbered HTML at `>` (`EDIT n` kept) **and** compile-on-RUN on the machine (V1.0 compiles when you make the card) —
 [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 
 ---

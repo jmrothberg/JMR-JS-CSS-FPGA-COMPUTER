@@ -57,9 +57,46 @@ SECTORS_PER_CLUSTER = 8  # 4 KiB clusters
 ROOT_CLUSTER = 2
 FSINFO_SECTOR = 1
 
-# Card seeds: whatever sits in storage/ root. Never leftover compile sidecars.
+# Card seeds: whatever sits in storage/ root. Stale sidecars on the HOST are
+# still skipped — the card's .JSH is MINTED here from the HTML at build time
+# (see compile_sidecars), never copied from storage/.
 _SKIP_SUFFIX = {".JSH", ".JSB", ".MD", ".MDC", ".TXT", ".JSON"}
 _KEEP_SUFFIX = {".HTML", ".HTM", ".JS", ".PNG", ".DAT", ".BIN"}
+
+
+def compile_sidecars(files: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
+    """Mint a .JSH ProgramImage next to every HTML title on the card.
+
+    **V1.0 (2026-08-25):** compile when you **make the card** — mint `.JSH`
+    here so the FPGA can `RUN` with no PC (the chip has no JS compiler).
+    **V1.5 tries** compile-on-RUN on the machine; then this sidecar can go.
+    Byte-identical to runtime/board_backend.py:274
+    (`encode_html_chunk(compile_html_text(html))`) — same compiler, same
+    encoder, different delivery. Never copy a stale `.JSH` from `storage/`.
+
+    Compile failures are reported and skipped, never silently dropped:
+    a title without a .JSH simply has no standalone path yet.
+    """
+    from tools.compile_js import compile_html_text, encode_html_chunk
+
+    out: list[tuple[str, bytes]] = []
+    have = {n.upper() for n, _ in files}
+    for name, data in files:
+        if not name.upper().endswith(".HTM"):
+            continue
+        stem = name.rsplit(".", 1)[0]
+        side = f"{stem}.JSH"
+        if side.upper() in have:
+            continue
+        try:
+            html = data.decode("utf-8", "replace")
+            blob = encode_html_chunk(compile_html_text(html))
+        except Exception as exc:  # compile error: report, keep going
+            print(f"note: {name}: no .JSH sidecar ({type(exc).__name__}: {exc})")
+            continue
+        out.append((side, blob))
+        print(f"note: {name} -> {side} ({len(blob)} bytes, standalone RUN)")
+    return out
 
 
 def _u16(n: int) -> bytes:
@@ -371,9 +408,14 @@ def create_image(
     # NEW: blank/whitespace-only .bas lines never reach the card (see
     # strip_blank_bas_lines). Do this BEFORE check_storage so the lint sees
     # what the board will actually load.
+    # Standalone: mint .JSH from the RAW html, before squash_long_html_lines
+    # replaces fat asset lines with placeholders (the card HTML is display-only,
+    # but the sidecar must be compiled from the real source).
+    sidecars = compile_sidecars(pairs)
     pairs, strip_notes = sanitize_bas_files(pairs)
     for n in strip_notes:
         print(f"note: {n}", file=sys.stderr)
+    pairs.extend(sidecars)
     # Refuse by default to build a card the board cannot read (--force overrides).
     errors, warns = check_storage(pairs)
     for w in warns:

@@ -45,8 +45,9 @@ not slower. Play on the PC: F9 **PYTHON**. Speed goal: **≥ 30
 pictures/second on the BOARD** for all five —
 [docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md). Fit
 repairs landed; next bitstream is **`bit-fresh`** (once). J15 USB Host is
-dead on this unit — type and play from the GUI **PROG tether**. `MK.HTML`
-remains the Version 2.0 goal (not a V1 title).
+dead on this unit — type and play from the GUI **PROG tether**. **V1.0 BOARD:
+compile when you make the card** (`.JSH`). **V1.5** tries standalone compile.
+`MK.HTML` remains the Version 2.0 goal (not a V1 title).
 
 **Where to go next**
 
@@ -130,7 +131,8 @@ mention.
 | **native** | — | A built-in the compiler already knows (`Math.floor` → opcode 13 + an **id**) |
 | **ProgramImage** | — | Compiled program in memory after `RUN` (code + ASET art). Not a file you type |
 | **ASET** | asset section | Palette + sprite pixels inside the ProgramImage; streamed to the 4 MB SRAM bank |
-| **JSB** | — | On-the-wire encoding of a ProgramImage (`JSB1` magic). Not a sidecar file on the card |
+| **JSB** | — | On-the-wire encoding of a ProgramImage (`JSB1` magic) |
+| **JSH** | — | **V1.0:** ProgramImage minted when you **make the card** so the FPGA can `RUN` standalone (chip does not compile). Not copied from `storage/`. **V1.5 tries** compile-on-RUN on the machine |
 | **HTML** | HyperText Markup Language | Disk format of a title: `NAME.HTML` |
 | **JS** | JavaScript | The language / ISA. `NAME.JS` demos are **not** product twins of `NAME.HTML` |
 | **CSS** | Cascading Style Sheets | Page layout. Version 1.0 has almost none — paint on Canvas |
@@ -161,7 +163,7 @@ mention.
 | **Pmod** | Peripheral module | Digilent add-on jacks (joystick on **JB**, optional PS/2 keyboard on **JA**) |
 | **T200** | — | Lab name for this Nexys Video (Artix-7 200T) |
 | **T100** | — | Lab name for the BASIC sibling’s Nexys A7-100T |
-| **V1.0 / V1.5 / V2.0** | product generations | V1 = titles that already play. **V1.5** = type/paste/edit HTML at READY (planned). V2 = machine work so **`MK.HTML` as on disk today** can `LOAD`/`RUN` |
+| **V1.0 / V1.5 / V2.0** | product generations | **V1.0** = titles that play; BOARD compile = **when you make the card** (`.JSH`). **V1.5** tries standalone compile + type/paste/edit at READY. V2 = **`MK.HTML` as on disk today** can `LOAD`/`RUN` |
 | **`?NH`** | no HTML | Loud debt if a title path is missing. Never “done” |
 | **clock** | chip heartbeat | The FPGA steps once per clock. This board’s JS core is ≈ **100 million** clocks per second (100 MHz) |
 | **frame** | one picture | One full 640×480 image. Games aim for **60 pictures per second** (about 16.7 milliseconds each) |
@@ -218,6 +220,8 @@ make -C sim sim_server_synth
 
 python3 tools/make_sd_image.py create card.img
 # 6a. rebuild FAT32 card.img from storage/
+#     V1.0: this step COMPILES each HTML into NAME.JSH on the card
+#     (the FPGA does not compile). Then burn (6b) so standalone RUN works.
 
 sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
 # 6b. write card.img → physical µSD (lsblk; whole disk not partition)
@@ -263,13 +267,15 @@ core, the hedge is a 50 MHz `core_clk` with DDR3 still on MIG `ui_clk`
 
 **LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID / AURORA / MRDO / MKPVP / JOYDEMO) then `RUN`.
 **V1.0** library titles must stay inside the authoring walls in
-[docs/GAME_DESIGN.md](docs/GAME_DESIGN.md). **V1.5 (planned)** is type / paste /
-edit numbered HTML at READY without the card —
+[docs/GAME_DESIGN.md](docs/GAME_DESIGN.md). **V1.5 (planned)** tries to be
+**standalone**: type / paste / edit numbered HTML at READY **and**
+compile-on-RUN on the machine (V1.0 BOARD compiles when you make the card) —
 [docs/JMR_JS_COMPATIBILITY.md § V1.5](docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 **`MK.HTML` is the V2.0 goal**
 (not FPGA-SIM acceptance yet) — [docs/JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](docs/JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
-Only HTML titles. **`RUN` = compile-on-RUN**. Same-stem `.JS` demos are not
-the product. Ctrl-V pastes into the prompt.
+Titles are HTML. **V1.0 BOARD:** compile when you **make the card** (`.JSH`).
+Host **`RUN` = compile-on-RUN**. Same-stem `.JS` demos are not the product.
+Ctrl-V pastes into the prompt.
 
 **[CONSTITUTION.md](CONSTITUTION.md) is the specification.** If the code and
 the Constitution disagree, the code is wrong.
@@ -350,7 +356,7 @@ tokens, microcode, or Nexys A7-100T pinouts here. Board freeze:
 | `third_party/digilent_rgb2dvi/` | Digilent HDMI TMDS IP (do not rewrite) |
 | `sim/` | Verilator + cocotb |
 | `constraints/` | Nexys Video XDC (StarLite later; not A7-100T) |
-| `storage/` | Seeds: `NAME.HTML` titles (card builder copies this folder) |
+| `storage/` | Seeds: `NAME.HTML` titles. **V1.0:** card builder copies HTML **and mints `.JSH`** (compile at card create) |
 | `docs/` | Architecture, bring-up, fit, handoff |
 | `tools/` | compile, SD image, battery, `golden_frames.py`. `pmod_input_test/` + `hid_led_blink/` = **LED-only** board proofs — not FPGA-SIM ([RTL_REORG.md](docs/RTL_REORG.md#board-led-input-tests--never-fpga-sim)) |
 | `traces/` | Flight logs — read first when debugging. `traces/goldens/` = frame diffs |

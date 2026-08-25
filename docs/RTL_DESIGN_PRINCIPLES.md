@@ -298,7 +298,65 @@ structure entirely, so a milestone "the fix in hand" buys is rarely the
 milestone you were aiming for. Measure after every fix, not just at the
 end.
 
-### 2.10 Timing failure is a correctness problem, not an electrical one
+### 2.10 A ~95%-route path with 2 logic levels means you are out of room, not out of ideas
+
+Section 2.3 says a stable logic/route ratio means depth is the lever. The
+inverse case is just as diagnostic, and it demands the opposite response.
+
+Measured on run 35: worst path **logic 0.704 ns (5.8%) / route 11.538 ns
+(94.2%)**, at **2 logic levels**, with a 93.9% route median across the 60
+worst paths. Compare the earlier walls, all roughly half-and-half:
+−287 ns at 47.6% logic, −58.7 ns at 48.5%.
+
+**When logic levels are tiny and route is ~95%, there is no RTL fix.** You
+cannot simplify a 2-level path. The signal has almost nothing to do; it is
+spending its whole budget in transit because the router sent it on a
+detour. The cause is physical space, and the levers are: remove logic from
+the congested *region* (not from the failing path — they are usually
+different modules), or move the region.
+
+**The tell that confirms it:** the failing endpoints are often in *simple,
+innocent* modules. Run 35's worst paths were in the rectangle demo engine
+— some of the least complex logic on the chip — because it got evicted to
+the far side of the die when the router shoved everything apart to escape
+a 104% congestion window. Innocent logic failing badly is a space
+symptom, never a design symptom.
+
+**Corollary — a routed design is not a working design.** Run 35 reached
+0 overlaps and "route_design completed successfully" while WNS went
+−0.640 → **−2.735** and TNS −12.8 → **−2,058.7** against the previous run.
+The router will trade unlimited timing for legality, and it says so
+(`[Route 35-447] the router will prioritize the successful completion of
+routing all nets over timing optimizations`). Treat that warning as a
+prediction, not a note.
+
+### 2.11 Anything replaced by a behavioral model in simulation is untested
+
+The DDR3 bridge carried three composed defects — a UG586 handshake race
+(`app_en` registered one cycle after sampling `app_rdy`, so a refresh
+window silently dropped commands), no timeout on the read-wait state, and
+a burst-splitting address map. It survived ~35 build cycles and a
+183-test suite because **simulation never ran it**: the suite builds with
+`SRAM_INTERNAL=1` and a one-cycle behavioral memory that hides both the
+protocol and the latency.
+
+One dropped read wedged the arbiter permanently, which presented as a
+black screen with a perfect text console — because the text engine was
+the one display path that never touched that memory.
+
+**Rules:**
+- Enumerate every module the test suite replaces with a model. That list
+  is your untested surface, and it is invisible in coverage numbers.
+- **Vendor-IP handshakes are the highest-risk instance.** Re-read the
+  protocol spec against the RTL by hand; "enable must overlap ready in
+  the same cycle" is the exact class of detail a behavioral model erases.
+- Every wait-on-external-response state needs a timeout. The SD layer
+  above this bridge was fully guarded and still froze, because the stall
+  was one layer *below* its timeouts.
+- This was the fourth "the tests pass" failure of the campaign, after RAM
+  inference, `vst_win`, and the multi-cycle conversions ([§4.2](#42-a-broad-passing-suite-is-not-evidence-for-a-structural-change)).
+
+### 2.12 Timing failure is a correctness problem, not an electrical one
 
 A bitstream that misses timing will not damage hardware. It will produce
 metastable, unpredictable behavior — hangs, garbage, different results

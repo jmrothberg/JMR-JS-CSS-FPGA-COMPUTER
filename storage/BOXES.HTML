@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Two boxes — JMR</title></head>
+<body style="margin:0;background:#000">
+<!-- LOAD "BOXES.HTML" then RUN. Minimal LOAD/RUN test: red box, blue box, no input. -->
+<canvas id="gameCanvas" width="640" height="480"></canvas>
+<script>
+var canvas = document.querySelector("canvas");
+var c = canvas.getContext("2d");
+c.imageSmoothingEnabled = false;
+
+var W = 640;
+var H = 480;
+var n = 0;
+
+console.log("BOXES");
+
+function loop() {
+  n = n + 1;
+
+  c.fillStyle = "#000000";
+  c.fillRect(0, 0, W, H);
+
+  c.fillStyle = "#FF0000";
+  c.fillRect(80, 120, 160, 160);
+
+  c.fillStyle = "#0000FF";
+  c.fillRect(400, 120, 160, 160);
+
+  c.fillStyle = "#FFFFFF";
+  c.fillText("BOXES OK", 8, 16);
+  c.fillText("LEFT RED   RIGHT BLUE", 8, 32);
+  c.fillText("FRAME " + n, 8, 464);
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
