@@ -9,6 +9,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# div8: the VM runs on clk/8 (jmr_js_core VM_CLK_DIV). Budget ceilings for
+# VM progress scale by this; polling loops break early so passing tests
+# pay nothing. Console/RPC-side waits are unscaled.
+_VMDIV = 8
+
 
 _SCRATCH_CARD = None
 
@@ -142,7 +147,7 @@ def test_program_image_value64_scalar_checkpoint_matches_python_hm():
         sim._program_image = image.data
         assert sim._stream_program_image().startswith("OK")
         vmstat = ""
-        for _ in range(100):
+        for _ in range(100 * _VMDIV):
             sim._rpc("TICKN 10")
             vmstat = sim._rpc("VMSTAT?")
             if "sname=S_IDLE" in vmstat or "fault=" in vmstat and "fault=0" not in vmstat:
@@ -204,7 +209,7 @@ def test_program_image_value64_number_checkpoint_matches_python_hm(source):
         sim._program_image = image.data
         assert sim._stream_program_image().startswith("OK")
         vmstat = ""
-        for _ in range(100):
+        for _ in range(100 * _VMDIV):
             sim._rpc("TICKN 10")
             vmstat = sim._rpc("VMSTAT?")
             if "sname=S_IDLE" in vmstat or (
@@ -247,7 +252,7 @@ def test_program_image_value64_nested_heap_checkpoint_matches_python_hm():
         sim._program_image = image.data
         assert sim._stream_program_image().startswith("OK")
         vmstat = ""
-        for _ in range(2000):
+        for _ in range(2000 * _VMDIV):
             sim._rpc("TICKN 50")
             vmstat = sim._rpc("VMSTAT?")
             if "sname=S_IDLE" in vmstat:
@@ -289,7 +294,7 @@ def test_program_image_value64_heap_gc_reclaims_churn_matches_python_hm():
         sim._program_image = image.data
         assert sim._stream_program_image().startswith("OK")
         vmstat = ""
-        for _ in range(50000):
+        for _ in range(50000 * _VMDIV):
             sim._rpc("TICKN 1")
             vmstat = sim._rpc("VMSTAT?")
             if "sname=S_IDLE" in vmstat:
@@ -325,7 +330,7 @@ def test_program_image_value64_index_non_array_is_undefined_matches_python_hm():
         sim._program_image = image.data
         assert sim._stream_program_image().startswith("OK")
         vmstat = ""
-        for _ in range(2000):
+        for _ in range(2000 * _VMDIV):
             sim._rpc("TICKN 50")
             vmstat = sim._rpc("VMSTAT?")
             if "sname=S_IDLE" in vmstat:
@@ -366,7 +371,7 @@ def test_program_image_value64_heap_faults_match_python_hm(source):
         sim._program_image = image.data
         assert sim._stream_program_image().startswith("OK")
         vmstat = ""
-        for _ in range(2000):
+        for _ in range(2000 * _VMDIV):
             sim._rpc("TICKN 50")
             vmstat = sim._rpc("VMSTAT?")
             if "sname=S_IDLE" in vmstat:
@@ -422,7 +427,7 @@ def test_program_image_value64_calls_checkpoint_matches_python_hm(source):
         sim._program_image = image.data
         assert sim._stream_program_image().startswith("OK")
         vmstat = ""
-        for _ in range(3000):
+        for _ in range(3000 * _VMDIV):
             sim._rpc("TICKN 50")
             vmstat = sim._rpc("VMSTAT?")
             if "sname=S_IDLE" in vmstat:
@@ -462,7 +467,7 @@ def test_program_image_value64_string_math_canvas_checkpoint_matches_python_hm()
         sim._program_image = image.data
         assert sim._stream_program_image().startswith("OK")
         vmstat = ""
-        for _ in range(10000):
+        for _ in range(10000 * _VMDIV):
             sim._rpc("TICKN 100")
             vmstat = sim._rpc("VMSTAT?")
             if "sname=S_IDLE" in vmstat:
@@ -504,7 +509,7 @@ def test_program_image_value64_dom_array_foreach_checkpoint_matches_python_hm():
         sim._program_image = image.data
         assert sim._stream_program_image().startswith("OK")
         vmstat = ""
-        for _ in range(10000):
+        for _ in range(10000 * _VMDIV):
             sim._rpc("TICKN 100")
             vmstat = sim._rpc("VMSTAT?")
             if "sname=S_IDLE" in vmstat:
@@ -546,7 +551,7 @@ def test_program_image_value64_raf_timer_order_checkpoint_matches_python_hm():
         sim._program_image = image.data
         assert sim._stream_program_image().startswith("OK")
         vmstat = ""
-        for _ in range(50000):
+        for _ in range(50000 * _VMDIV):
             sim._rpc("TICKN 1")
             vmstat = sim._rpc("VMSTAT?")
             if "sname=S_WAIT_FRAME" in vmstat:
@@ -597,7 +602,7 @@ def test_program_image_value64_closure_survives_gc_matches_python_hm():
         sim._program_image = image.data
         assert sim._stream_program_image().startswith("OK")
         vmstat = ""
-        for _ in range(10000):
+        for _ in range(10000 * _VMDIV):
             sim._rpc("TICKN 100")
             vmstat = sim._rpc("VMSTAT?")
             if "sname=S_IDLE" in vmstat:
@@ -634,7 +639,7 @@ def test_program_image_value64_recursive_capacity_checkpoint_matches_python_hm()
         sim._program_image = image.data
         assert sim._stream_program_image().startswith("OK")
         vmstat = ""
-        for _ in range(5000):
+        for _ in range(5000 * _VMDIV):
             sim._rpc("TICKN 50")
             vmstat = sim._rpc("VMSTAT?")
             if "sname=S_IDLE" in vmstat:
@@ -668,7 +673,7 @@ def test_rtl_call_overflow_halts_loudly():
         sim._program_image = image.data
         assert sim._stream_program_image().startswith("OK")
         vmstat = ""
-        for _ in range(100):
+        for _ in range(100 * _VMDIV):
             sim._rpc("TICKN 10")
             vmstat = sim._rpc("VMSTAT?")
             if "fault=2" in vmstat:
@@ -698,7 +703,7 @@ def test_rtl_timer_overflow_halts_loudly():
         sim._program_image = image.data
         assert sim._stream_program_image().startswith("OK")
         vmstat = ""
-        for _ in range(100):
+        for _ in range(100 * _VMDIV):
             sim._rpc("TICKN 10")
             vmstat = sim._rpc("VMSTAT?")
             if "fault=3" in vmstat:
@@ -993,7 +998,7 @@ def test_rtl_list_after_run_is_source():
         sim.type_line('LOAD "JOYDEMO.HTML"')
         sim.type_line("RUN")
         sim.hard_break()
-        sim._rpc("TICKN 200")
+        sim._rpc(f"TICKN {200 * _VMDIV}")
         sim.type_line("LIST")
         st = sim.screen_text().replace("\\n", "\n")
         assert (
@@ -1392,7 +1397,7 @@ requestAnimationFrame(tick);
         # ~12 frame_tick periods (65536 clocks). One present/frame → ~12 swaps;
         # per-callback present → ~24.
         f0 = int(_re.search(r"frend=(\d+)", st0 or "").group(1))
-        sim._rpc("TICKN 800")
+        sim._rpc(f"TICKN {800 * _VMDIV}")
         st1 = sim._rpc("VMSTAT?")
         s1 = int(_re.search(r"swaps=(\d+)", st1 or "").group(1))
         f1 = int(_re.search(r"frend=(\d+)", st1 or "").group(1))
@@ -2779,7 +2784,7 @@ requestAnimationFrame(tick);
         # FRAME's 2000-clock idle abort never sees vsync (FRAME_DIV=65535),
         # so rAF never runs. TICKN lets the divider fire.
         st = ""
-        for _ in range(8):
+        for _ in range(8 * _VMDIV):
             sim._rpc("TICKN 20000")
             st = sim._rpc("VMSTAT?")
             if "sname=S_WAIT_FRAME" in st:
@@ -2819,7 +2824,7 @@ requestAnimationFrame(tick);
         sim._program_image = encode_html_chunk(compile_html_text(html))
         assert sim._stream_program_image().startswith("OK")
         st = ""
-        for _ in range(8):
+        for _ in range(8 * _VMDIV):
             sim._rpc("TICKN 20000")
             st = sim._rpc("VMSTAT?")
             if "sname=S_WAIT_FRAME" in st:
@@ -5784,7 +5789,7 @@ def _stream_html(sim, html: str) -> str:
     sim._program_image = encode_html_chunk(compile_html_text(html))
     assert sim._stream_program_image().startswith("OK")
     st = ""
-    for _ in range(8):
+    for _ in range(8 * _VMDIV):
         sim._rpc("TICKN 20000")
         st = sim._rpc("VMSTAT?")
         if "sname=S_WAIT_FRAME" in st:
