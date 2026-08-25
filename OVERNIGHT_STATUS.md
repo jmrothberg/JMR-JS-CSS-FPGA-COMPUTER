@@ -868,3 +868,40 @@ WHS +0.051, "routed clean", "no bitstream") belongs to the CONTINGENCY
 job (replace35.tcl, AltSpreadLogic_high, separate placement, separate
 log). Run 35's only facts so far: the 104% window, the overlap
 trajectory, and the rip-up.
+
+## 2026-08-25 (night): the board session — run 36 on glass, four more finds
+
+Run 36's bit on hardware: GRAPHICS WORK (bridge fix confirmed on
+silicon), LOAD reads 1,523 lines, LIST pages. The remaining faults,
+each root-caused live with the user driving the board:
+
+1. RUN-after-LOAD freeze: the link's jsb_tether_eof was a 1-cycle pulse
+   raised the same cycle the LAST byte strobes - the console is then in
+   C_JSB_FEED and structurally cannot see it. Every HTML RUN parked
+   after a PERFECT stream. Sim never sees it: the RPC path drives the
+   console ports directly, bypassing the link's JSH framing. eof now
+   held until consumed (6a3ab05).
+2. Escape hatches (user directive: no wait may hard-wedge): ESC +
+   ~10.7s silence timeout in C_JSB_TETHER; console-side 32s storage
+   watchdog covering the never-started/lost-done class the internal
+   21.5s op watchdog cannot see.
+3. GUI fragility: the host tether tool crashed on DIR/RUN while board/
+   PS/2/HDMI kept working - a dead GUI stops forwarding keystrokes and
+   masquerades as a dead board. frame_tick now never propagates
+   (fault-log + rx resync). Traceback requested for the real GUI bug.
+4. Blue rendered green on HDMI only: Digilent rgb2dvi pData is R,B,G
+   (rgb2dvi.vhd:215) - scanout drives honest RGB. Swap at the boundary
+   (a3607b6). White console text is channel-invariant, which is why
+   text never betrayed it. The GUI mirror (host-side palette) was
+   always right.
+
+Timing state: run 36 routed -0.415/WHS+0.053 (114 endpoints, shallow
+placement-band cones). Pblock (bridge pinned to X1Y3) reproduces the
+clean floorplan - no congestion window above level 5 - now a permanent
+XDC constraint. Run 37 = everything + pblock, the definitive flash
+candidate. pblock36 race continues as a same-netlist floorplan data
+point.
+
+Sim-boundary tally for the day: SPI edge timing, MIG UI handshake, UI
+read bandwidth, JSH eof framing - every board failure landed in
+exactly the RTL no simulation exercises. The boundary IS the bug list.
