@@ -859,3 +859,12 @@ out of exactly the congested region: cause, not arrangement. Run 35
 left running as the free second chance. Full battery re-running on the
 DDA build. Note for attribution: run 35's five-change bundle is
 hierarchy-disjoint; per-module DCP census fingerprints any regression.
+
+Clarification (user correction, for the record): run 35 is STILL
+ROUTING as of this entry — 4h+ elapsed, Global Iteration 2 after the
+rip-up reset to 94,195 overlaps, no final timing number exists for it
+yet. Every number in the paragraph above (-0.995 / TNS -76.5 /
+WHS +0.051, "routed clean", "no bitstream") belongs to the CONTINGENCY
+job (replace35.tcl, AltSpreadLogic_high, separate placement, separate
+log). Run 35's only facts so far: the 104% window, the overlap
+trajectory, and the rip-up.
