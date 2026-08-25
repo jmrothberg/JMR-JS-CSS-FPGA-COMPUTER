@@ -132,12 +132,22 @@ module jmr_js_vm #(
     end
     // Write port on the full-rate clock (console streams during load; the
     // VM is stopped then, so the domains never touch the same word live).
+    // One pipeline stage before the BRAMs: the raw console strobe fanned
+    // out to WEA pins across the die and was pblock36's routed head
+    // (-0.261, u_cons/code_we -> code_mem WEA). code_we is fire-and-
+    // forget (no handshake), so the extra cycle is invisible.
+    logic        code_we_q;
+    logic [14:0] code_waddr_q2;
+    logic [31:0] code_wdata_q2;
     always_ff @(posedge clk_code_w) begin
-        if (code_we) begin
-            if (code_waddr < 15'd16384)
-                code_mem_c0[code_waddr[13:0]] <= code_wdata;
-            else if (code_waddr < 15'(CODE_WORDS))
-                code_mem_c1[code_waddr[11:0] & 12'hFFF] <= code_wdata;
+        code_we_q     <= code_we;
+        code_waddr_q2 <= code_waddr;
+        code_wdata_q2 <= code_wdata;
+        if (code_we_q) begin
+            if (code_waddr_q2 < 15'd16384)
+                code_mem_c0[code_waddr_q2[13:0]] <= code_wdata_q2;
+            else if (code_waddr_q2 < 15'(CODE_WORDS))
+                code_mem_c1[code_waddr_q2[11:0] & 12'hFFF] <= code_wdata_q2;
         end
     end
     assign code_rdata = code_rsel ? code_r_c1 : code_r_c0;
