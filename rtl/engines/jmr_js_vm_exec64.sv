@@ -2611,14 +2611,21 @@ module jmr_js_vm_exec64 (
                     end else
                         sig = sum[55:0];
                 end else begin
+                    // log-depth normalize: LZC + one barrel shift, clamped
+                    // at the subnormal boundary (er floor 1) — replaces the
+                    // 55-step loop-carried shift (the -250ns class).
+                    integer lz, shn;
                     sig = xa - xb;
                     if (sig == 0)
                         sr = 1'b0;
-                    for (int k = 0; k < 55; k++) begin
-                        if (sig[55] == 1'b0 && sig != 0 && er > 1) begin
-                            sig = sig << 1;
-                            er = er - 1;
-                        end
+                    lz = 0;
+                    for (int k = 0; k <= 55; k++)
+                        if (sig[k]) lz = 55 - k;
+                    if (sig != 0) begin
+                        shn = (er - 1 < lz) ? (er - 1) : lz;
+                        if (shn < 0) shn = 0;
+                        sig = sig << shn;
+                        er = er - shn;
                     end
                 end
                 mant = sig[55:3];
