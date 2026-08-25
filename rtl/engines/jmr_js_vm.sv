@@ -19,6 +19,10 @@ module jmr_js_vm #(
     parameter string FONT_HEX = "font_rom.hex"
 ) (
     input  logic        clk,
+    // 2026-08-25 div8: code loads stream at the full 100 MHz console rate
+    // while the VM core runs on the /8 BUFGCE clock. The code BRAM write
+    // port keeps the full-rate clock (true dual port, one clock per port).
+    input  logic        clk_code_w,
     input  logic        rst_n,
     input  logic        start,
     input  logic        stop,
@@ -125,6 +129,10 @@ module jmr_js_vm #(
         code_r_c0 <= code_mem_c0[code_raddr[13:0]];
         code_r_c1 <= code_mem_c1[(code_raddr - 15'd16384) & 15'hFFF];
         code_rsel <= (code_raddr >= 15'd16384);
+    end
+    // Write port on the full-rate clock (console streams during load; the
+    // VM is stopped then, so the domains never touch the same word live).
+    always_ff @(posedge clk_code_w) begin
         if (code_we) begin
             if (code_waddr < 15'd16384)
                 code_mem_c0[code_waddr[13:0]] <= code_wdata;

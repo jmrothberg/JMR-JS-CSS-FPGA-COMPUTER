@@ -98,3 +98,11 @@ set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets u_tmds/u_rgb2dvi/ClockGenInte
 ## placer put rgb2dvi's MMCM in X1Y1 while its BUFIO/BUFR loads must sit
 ## in the HDMI bank's region. Pin the MMCM beside its loads.
 set_property LOC MMCME2_ADV_X1Y2 [get_cells {u_tmds/u_rgb2dvi/ClockGenInternal.ClockGenX/GenMMCM.DVI_ClkGenerator}]
+
+# div8 VM clock (2026-08-25 timing rescue): u_core/u_vm alone runs on
+# ui_clk/8 = 12.5 MHz via BUFGCE. Run-30 post-route: all 6,000 worst
+# failing paths interior to u_vm; nothing outside fails. Edges are a
+# subset of ui_clk edges, so boundary paths stay ordinary 10 ns paths.
+create_generated_clock -name vm_clk -divide_by 8 \
+    -source [get_pins u_core/g_vmclk_div.u_vm_bufgce/I] \
+    [get_pins u_core/g_vmclk_div.u_vm_bufgce/O]

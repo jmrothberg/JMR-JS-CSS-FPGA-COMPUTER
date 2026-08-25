@@ -8,7 +8,14 @@ module jmr_js_core #(
     parameter int unsigned FRAME_DIV   = 65535,
     // NEW: 1 = behavioral 4 MB SRAM (FPGA-SIM). 0 = ports for board MIG / ASIC.
     // Not `ifdef SYNTHESIS` — same RTL, board instantiates #(.SRAM_INTERNAL(0)).
-    parameter bit SRAM_INTERNAL = 1
+    parameter bit SRAM_INTERNAL = 1,
+    // 2026-08-25 div8 timing rescue: u_vm runs on clk/VM_CLK_DIV. Run-30
+    // post-route measurement: all 6,000 worst failing paths start AND end
+    // inside u_vm (WNS -58.737 at 10 ns -> +11.26 ns at 80 ns); nothing
+    // outside the VM fails, and jmr_fb_scanout needs the full 100 MHz (one
+    // SRAM fetch per 100 ns sustains 640x480). 1 = passthrough (battery
+    // speed); board default 8.
+    parameter int unsigned VM_CLK_DIV = 8
 ) (
     input  logic        clk,
     input  logic        pixel_clk,   // mini-FB read domain (board HDMI)
@@ -324,15 +331,94 @@ module jmr_js_core #(
         end
     end
 
+    // ------------------------------------------------------------------
+    // div8 VM clock. BUFGCE keeps vm_clk rising edges a subset of clk
+    // rising edges, so clk<->vm_clk boundary paths are ordinary same-tree
+    // 10 ns paths (constraints/nexys_video.xdc adds the generated clock).
+    // The Verilator branch has the same contract: vm_clk rises exactly at
+    // clk edges where the registered vm_ce is high, so sim and silicon
+    // sample identically at the boundary.
+    logic vm_ce;
+    logic vm_clk;
+    generate if (VM_CLK_DIV == 1) begin : g_vmclk_pass
+        assign vm_ce  = 1'b1;
+        assign vm_clk = clk;
+    end else begin : g_vmclk_div
+        logic [$clog2(VM_CLK_DIV)-1:0] vmdiv_cnt;
+        always_ff @(posedge clk or negedge rst_n) begin
+            if (!rst_n) begin
+                vmdiv_cnt <= '0;
+                vm_ce     <= 1'b0;
+            end else begin
+                vmdiv_cnt <= (vmdiv_cnt == VM_CLK_DIV - 1) ? '0 : vmdiv_cnt + 1'b1;
+                vm_ce     <= (vmdiv_cnt == VM_CLK_DIV - 2);
+            end
+        end
+`ifdef VERILATOR
+        assign vm_clk = clk & vm_ce;
+`else
+        BUFGCE u_vm_bufgce (.I(clk), .CE(vm_ce), .O(vm_clk));
+`endif
+    end endgenerate
+
+    // 100 MHz strobes last one clk cycle; the VM samples only on vm_ce
+    // beats. Latch each until the beat that consumes it. Set wins over
+    // clear: a strobe landing ON a beat is held for the next one (the
+    // sampling edge reads the pre-edge value, so nothing is lost).
+    logic       vm_start_lat, vm_stop_lat, vm_ftick_lat, vm_kev_lat;
+    logic [7:0] vm_kev_code_lat;
+    logic       vm_kev_down_lat;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            vm_start_lat <= 1'b0; vm_stop_lat <= 1'b0;
+            vm_ftick_lat <= 1'b0; vm_kev_lat  <= 1'b0;
+            vm_kev_code_lat <= 8'd0; vm_kev_down_lat <= 1'b0;
+        end else begin
+            if (vm_start | sim_vm_start)  vm_start_lat <= 1'b1;
+            else if (vm_ce)               vm_start_lat <= 1'b0;
+            if ((kbd_push && kbd_data == 8'h1B) || halt_pulse)
+                                          vm_stop_lat <= 1'b1;
+            else if (vm_ce)               vm_stop_lat <= 1'b0;
+            if (frame_tick | sim_frame_pulse) vm_ftick_lat <= 1'b1;
+            else if (vm_ce)               vm_ftick_lat <= 1'b0;
+            if (key_evt_stb) begin
+                vm_kev_lat      <= 1'b1;
+                vm_kev_code_lat <= key_evt_code;
+                vm_kev_down_lat <= key_evt_down;
+            end else if (vm_ce)           vm_kev_lat <= 1'b0;
+        end
+    end
+
+    // sram ack shim. The arbiter ack is one clk cycle; the VM samples on
+    // vm_ce beats only, and its FSM does not obey either simple contract:
+    // some seams re-arm sram_req for the NEXT transaction on the very
+    // consume beat (sprite demand-load -> first blit fetch), and some
+    // sites issue a request but sample the ack several beats later. So
+    // the hold is MATCH-based: latch the served request (addr/we/wdata)
+    // with the ack, deliver the ack only while the VM's live request
+    // still equals the held one, and clear only at a beat where it no
+    // longer matches (transaction consumed or superseded). A same-request
+    // re-delivery is idempotent (same-addr read returns the same data; a
+    // same-addr/wdata write already committed); a changed request drops
+    // the orphan and is re-served one beat later. The arbiter's VM grant
+    // is blocked while anything is held, so at most one serve is in
+    // flight per beat window and an ack can never race a consume.
+    logic        vm_ack_hold;
+    logic [15:0] vm_rdata_hold;
+    logic [20:0] vm_held_addr;
+    logic        vm_held_we;
+    logic [15:0] vm_held_wdata;
+    logic        vm_req_match;
+
     jmr_js_vm #(.CODE_HEX("invaders_jsb.hex")) u_vm (
-        .clk(clk), .rst_n(rst_n),
-        .start(vm_start | sim_vm_start),
-        .stop((kbd_push && kbd_data == 8'h1B) || halt_pulse),
-        .frame_tick(frame_tick | sim_frame_pulse),
+        .clk(vm_clk), .clk_code_w(clk), .rst_n(rst_n),
+        .start(vm_start_lat),
+        .stop(vm_stop_lat),
+        .frame_tick(vm_ftick_lat),
         .joy_in(joy_in),
-        .key_evt_stb(key_evt_stb),
-        .key_evt_code(key_evt_code),
-        .key_evt_down(key_evt_down),
+        .key_evt_stb(vm_kev_lat),
+        .key_evt_code(vm_kev_code_lat),
+        .key_evt_down(vm_kev_down_lat),
         .code_we(code_we), .code_waddr(code_waddr), .code_wdata(code_wdata),
         .busy(vm_busy), .done(vm_done),
         .fb_we(vm_fb_we), .fb_waddr(vm_fb_waddr),
@@ -343,8 +429,28 @@ module jmr_js_core #(
         .fb_dump_front(dump_fb_rdata),
         .sram_req(vm_sram_req), .sram_addr(vm_sram_addr),
         .sram_we(vm_sram_we), .sram_wdata(vm_sram_wdata),
-        .sram_rdata(sram_rdata), .sram_ack(sram_ack && (sram_owner == 3'd5))
+        .sram_rdata(vm_ack_hold ? vm_rdata_hold : sram_rdata),
+        .sram_ack(vm_ack_hold && vm_req_match)
     );
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            vm_ack_hold   <= 1'b0;
+            vm_rdata_hold <= 16'd0;
+        end else if (sram_ack && (sram_owner == 3'd5)) begin
+            vm_ack_hold   <= 1'b1;
+            vm_rdata_hold <= sram_rdata;
+            vm_held_addr  <= sram_addr;
+            vm_held_we    <= sram_we;
+            vm_held_wdata <= sram_wdata;
+        end else if (vm_ce && !vm_req_match) begin
+            vm_ack_hold   <= 1'b0;
+        end
+    end
+    assign vm_req_match = vm_sram_req
+        && (vm_held_addr == vm_sram_addr)
+        && (vm_held_we == vm_sram_we)
+        && (!vm_sram_we || (vm_held_wdata == vm_sram_wdata));
 
     // Asset-SRAM arbiter — console (load) wins; the VM reads sprite pixels
     // and, since 2026-08-21, also streams the ImageData snapshot (read AND
@@ -363,7 +469,7 @@ module jmr_js_core #(
             else if (cons_sram_req) sram_owner = 3'd2;
             else if (work_req)      sram_owner = 3'd3;
             else if (fbp_sram_req)  sram_owner = 3'd4;
-            else if (vm_sram_req)   sram_owner = 3'd5;
+            else if (vm_sram_req && !vm_ack_hold) sram_owner = 3'd5;
         end
     end
     always_ff @(posedge clk) begin
@@ -423,7 +529,11 @@ module jmr_js_core #(
     assign fb_we    = vm_busy ? vm_fb_we    : demo_fb_we;
     assign fb_waddr = vm_busy ? vm_fb_waddr : demo_fb_waddr;
     assign fb_wdata = vm_busy ? vm_fb_wdata : demo_fb_wdata;
-    assign fb_swap  = vm_busy ? vm_fb_swap  : demo_fb_swap;
+    // vm_fb_swap is a vm_clk-wide pulse (= VM_CLK_DIV clk cycles); the
+    // present engine consumes edges at 100 MHz, so pass only the rise.
+    logic vm_fb_swap_q;
+    always_ff @(posedge clk) vm_fb_swap_q <= vm_fb_swap;
+    assign fb_swap  = vm_busy ? (vm_fb_swap && !vm_fb_swap_q) : demo_fb_swap;
 
     always_ff @(posedge clk) begin
         if (!rst_n) game_mode <= 1'b0;

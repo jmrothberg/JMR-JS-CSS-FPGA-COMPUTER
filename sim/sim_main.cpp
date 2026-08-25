@@ -907,7 +907,10 @@ static void key_strobe(unsigned code, unsigned down) {
     top->key_evt_stb = 1;
     ticks(1);
     top->key_evt_stb = 0;
-    ticks(1);
+    // div8: the VM samples events on its /8 beat via the core's latch; a
+    // second strobe within 8 clks would overwrite it. 9 clks guarantees a
+    // beat between strobes (board PS/2 cannot burst this fast anyway).
+    ticks(9);
 }
 
 static int read_whole_file(const std::string& path, std::vector<uint8_t>& out) {
