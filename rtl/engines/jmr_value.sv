@@ -79,9 +79,10 @@ package jmr_value_pkg;
                 shifted = 56'd0;
                 shifted[0] = |value;
             end else if (shift > 0) begin
-                for (int k = 0; k < 56; k++)
-                    if (k < shift)
-                        sticky = sticky | value[k];
+                // masked tree-reduce (structurally log-depth, like mul_pack)
+                logic [55:0] below_mask;
+                below_mask = (56'd1 << shift) - 56'd1;
+                sticky = |(value & below_mask);
                 shifted = value >> shift;
                 shifted[0] = shifted[0] | sticky;
             end
