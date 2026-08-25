@@ -164,6 +164,13 @@ module jmr_console_engine (
     // most recent char. RECTDEMO likewise compares src_name, which the
     // same walk already captures upcased at fixed indices.
     logic [7:0] name_tail [0:4];
+    // Number-parse char pipeline (run-33 residual: name_i -> 127:1 line
+    // mux -> digit classify -> state CE was 13 LUT levels, -0.496). The
+    // parse states read ch_ni_q and stall one beat via (ni_q != name_i)
+    // whenever the index moved, so each loop iteration self-paces to two
+    // beats. line[] is frozen post-Enter, so the pipe is always coherent.
+    logic [7:0] ch_ni_q;
+    logic [6:0] ni_q;
     logic [7:0] dir_n, dir_idx;
     logic [17:0] src_len /*verilator public_flat_rw*/;     // bytes in SOURCE BRAM (0..131072)
     logic [17:0] src_i;
@@ -255,6 +262,10 @@ module jmr_console_engine (
         p_load_q <= (line_len >= 5 && up(line[0])=="L" && up(line[1])=="O" && up(line[2])=="A" && up(line[3])=="D" && is_sp(line[4]));
         p_save_q <= (line_len >= 5 && up(line[0])=="S" && up(line[1])=="A" && up(line[2])=="V" && up(line[3])=="E" && is_sp(line[4]));
         p_remove_q <= (line_len >= 7 && up(line[0])=="R" && up(line[1])=="E" && up(line[2])=="M" && up(line[3])=="O" && up(line[4])=="V" && up(line[5])=="E" && is_sp(line[6]));
+    end
+    always_ff @(posedge clk) begin
+        ch_ni_q <= line[name_i];
+        ni_q    <= name_i;
     end
 
 
@@ -1015,11 +1026,13 @@ module jmr_console_engine (
 
                 // ---- LIST parse: LIST - / LIST n / LIST n-m --------------
                 C_LIST_PARSE: begin
-                    if (name_i >= line_len) begin
+                    if (ni_q != name_i) begin
+                        // char pipe settling
+                    end else if (name_i >= line_len) begin
                         state <= C_LIST_INIT;
-                    end else if (is_sp(line[name_i])) begin
+                    end else if (is_sp(ch_ni_q)) begin
                         name_i <= name_i + 1'b1;
-                    end else if (line[name_i] == "-") begin
+                    end else if (ch_ni_q == "-") begin
                         // LIST -  or LIST -m
                         if (name_i + 1'b1 >= line_len) begin
                             list_page <= 1'b1;
@@ -1031,7 +1044,7 @@ module jmr_console_engine (
                             name_i <= name_i + 1'b1;
                             state <= C_LIST_PAR_HI;
                         end
-                    end else if (line[name_i] >= "0" && line[name_i] <= "9") begin
+                    end else if (ch_ni_q >= "0" && ch_ni_q <= "9") begin
                         list_page <= 1'b0;
                         peel_mag <= 0;
                         state <= C_LIST_PAR_LO;
@@ -1040,15 +1053,17 @@ module jmr_console_engine (
                     end
                 end
                 C_LIST_PAR_LO: begin
-                    if (name_i >= line_len) begin
+                    if (ni_q != name_i) begin
+                        // char pipe settling
+                    end else if (name_i >= line_len) begin
                         // NEW: list_hi must use peel_mag — same-cycle list_lo is still old
                         list_lo <= (peel_mag == 0) ? 16'd10 : peel_mag;
                         list_hi <= (peel_mag == 0) ? 16'd10 : peel_mag;
                         state <= C_LIST_INIT;
-                    end else if (line[name_i] >= "0" && line[name_i] <= "9") begin
-                        peel_mag <= peel_mag * 16'd10 + {12'h0, line[name_i] - "0"};
+                    end else if (ch_ni_q >= "0" && ch_ni_q <= "9") begin
+                        peel_mag <= peel_mag * 16'd10 + {12'h0, ch_ni_q - "0"};
                         name_i <= name_i + 1'b1;
-                    end else if (line[name_i] == "-") begin
+                    end else if (ch_ni_q == "-") begin
                         list_lo <= (peel_mag == 0) ? 16'd10 : peel_mag;
                         name_i <= name_i + 1'b1;
                         peel_mag <= 0;
@@ -1060,11 +1075,13 @@ module jmr_console_engine (
                     end
                 end
                 C_LIST_PAR_HI: begin
-                    if (name_i >= line_len) begin
+                    if (ni_q != name_i) begin
+                        // char pipe settling
+                    end else if (name_i >= line_len) begin
                         list_hi <= (peel_mag == 0) ? 16'hFFFF : peel_mag;
                         state <= C_LIST_INIT;
-                    end else if (line[name_i] >= "0" && line[name_i] <= "9") begin
-                        peel_mag <= peel_mag * 16'd10 + {12'h0, line[name_i] - "0"};
+                    end else if (ch_ni_q >= "0" && ch_ni_q <= "9") begin
+                        peel_mag <= peel_mag * 16'd10 + {12'h0, ch_ni_q - "0"};
                         name_i <= name_i + 1'b1;
                     end else begin
                         list_hi <= (peel_mag == 0) ? 16'hFFFF : peel_mag;
@@ -1419,7 +1436,9 @@ module jmr_console_engine (
 
                 // ---- EDIT n ---------------------------------------------
                 C_EDIT_PARSE: begin
-                    if (name_i >= line_len) begin
+                    if (ni_q != name_i) begin
+                        // char pipe settling
+                    end else if (name_i >= line_len) begin
                         if (peel_mag == 0) begin
                             reply_sel <= 4'd3; reply_idx <= 0; state <= C_REPLY;
                         end else begin
@@ -1429,10 +1448,10 @@ module jmr_console_engine (
                             edit_start <= 0;
                             state <= C_EDIT_FIND;
                         end
-                    end else if (is_sp(line[name_i])) begin
+                    end else if (is_sp(ch_ni_q)) begin
                         name_i <= name_i + 1'b1;
-                    end else if (line[name_i] >= "0" && line[name_i] <= "9") begin
-                        peel_mag <= peel_mag * 16'd10 + {12'h0, line[name_i] - "0"};
+                    end else if (ch_ni_q >= "0" && ch_ni_q <= "9") begin
+                        peel_mag <= peel_mag * 16'd10 + {12'h0, ch_ni_q - "0"};
                         name_i <= name_i + 1'b1;
                     end else if (peel_mag == 0) begin
                         reply_sel <= 4'd3; reply_idx <= 0; state <= C_REPLY;
