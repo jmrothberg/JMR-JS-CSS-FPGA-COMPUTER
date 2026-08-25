@@ -808,3 +808,31 @@ Open items, in priority order:
    ~2,000 CARRY4 back, gates already green pre-patch).
 4. LED visibility (init_calib_complete + console-state nibble on spare
    LEDs) — useful for future bring-up, no longer blocking.
+
+## 2026-08-25: the black screen was the DDR3 bridge — the unsimulated module
+
+Board isolation (user): rectdemo correct in mini_fb (GUI dump), HDMI
+black on run 32 AND run 33 — where u_fbpres (+0.009) and u_fbscan
+(+0.198) CLOSE timing. Functional, and in exactly the module no
+simulation ever exercises: jmr_ddr3_sram_bridge (sim runs
+SRAM_INTERNAL=1; the 1-cycle behavioral model hides both protocol and
+latency). Three composed defects fixed (f26cdc5):
+1. UG586 handshake race: enables pulsed one cycle AFTER sampling rdy;
+   any rdy dip (every ~7.8us refresh window) silently dropped the
+   command. A dropped read parked S_WAIT_RD forever -> arbiter wedged at
+   the scan owner -> linebuf zeros -> black FB, console text fine, all
+   sram clients frozen (the LOAD asset-upload wedge rides this too).
+   Fix: hold each enable until its own same-cycle accept; wdf first.
+   Plus a read-reissue watchdog: a lost command can never wedge again.
+2. Bandwidth: one word per ~25-cycle UI read cannot sustain 320 words
+   per 32us scan line. BL8 single-entry read cache (8 sequential words
+   per burst, write-invalidate) — 40 bursts/line.
+3. Addressing: {addr,1'b0} byte-mapping split an aligned 8-word block
+   across two bursts (worked only by write/read transform symmetry;
+   cache requires block==burst). Natural DDR-word mapping now.
+
+Also landed: u_stor LBA splits + op watchdog (e8296f8), console parse
+pipe (c65f293). Run 34 killed pre-route (predates the bridge fix);
+run 35 carries everything. Lesson for the ledger: the sim boundary IS
+the bug boundary — first-light failures cluster precisely in what the
+battery cannot see (SPI edge timing before, MIG UI protocol now).
