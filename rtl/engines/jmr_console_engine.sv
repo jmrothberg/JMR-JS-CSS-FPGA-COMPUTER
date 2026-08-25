@@ -1766,11 +1766,13 @@ module jmr_console_engine (
                         teth_wd <= 30'd0;
                         jsb_din <= jsb_tether_data;
                         state <= C_JSB_FEED;
-                    end else if ((kbd_push && kbd_data == 8'h1B)
+                    end else if ((!kbd_empty && kbd_data == 8'h1B)
                                  || (&teth_wd)) begin
-                        // ESC or ~10.7s of host silence: fail loud (?NB),
-                        // never a dead console (PS/2 RUN cannot trigger the
-                        // host compile - the protocol has no board request)
+                        // ESC (head of the kbd FIFO) or ~10.7s of host
+                        // silence: fail loud (?NB), never a dead console
+                        // (a PS/2 RUN cannot trigger the host compile -
+                        // the protocol has no board request)
+                        if (!kbd_empty && kbd_data == 8'h1B) kbd_pop <= 1'b1;
                         teth_wd <= 30'd0;
                         ld_err <= 1'b1;
                         reply_sel <= 4'd7; reply_idx <= 0;
