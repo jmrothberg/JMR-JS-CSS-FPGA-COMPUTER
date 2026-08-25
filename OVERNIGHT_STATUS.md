@@ -682,3 +682,18 @@ Ladder status: vst_win moves BEHIND the detector-design effort. If run
 levers are: ExploreArea directive variants on the swept netlist,
 smaller LUTRAM stragglers to BRAM, and then the vst_wdata/op-tiering
 class. The deep-window test file earned its keep today.
+
+## Approved cleanup queue (post-bitstream)
+
+- Consolidate the five hand-rolled highest-set-bit scans
+  (v64_int32_number 32b, v64_u32_fraction 32b, v64_mul_pack 106b,
+  v64_div_pack/v64_mod_pack 53b) into ONE macro-generated per-width
+  family. NOTE (2026-08-24): functions INLINE per call site — this is a
+  single-source-of-truth win, NOT a LUT win (~0 expected, not the
+  150-350 first estimated; merging would need equal widths, and padding
+  the narrow scans to 106b makes them bigger). Deferred deliberately:
+  runs 29/30 are a controlled ranking experiment and their diff must be
+  exactly the committed norm/pack fixes.
+- Delete the .V2ORIG / .SORTVAR title variants once board bring-up
+  confirms the 2-variants on glass.
+- storage_engine name83 & dent arrays: tiny, FF-fine, ignore.
