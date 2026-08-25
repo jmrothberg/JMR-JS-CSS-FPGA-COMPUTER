@@ -836,3 +836,26 @@ pipe (c65f293). Run 34 killed pre-route (predates the bridge fix);
 run 35 carries everything. Lesson for the ledger: the sim boundary IS
 the bug boundary — first-light failures cluster precisely in what the
 battery cannot see (SPI edge timing before, MIG UI protocol now).
+
+## 2026-08-25 (evening): run-35 congestion fight
+
+Run 35 (bridge + u_stor splits + watchdog + console pipe + CCS +
+ds_guard) placed with a 104% East congestion window (u_exec64 60% +
+u_vm 38%, RAMB/DSP 100% local; run 33 placed the same resources with no
+window above level 5 — arrangement, not capacity). Route converged
+80k -> 24.6k -> 7.9k -> 471 overlaps, then RIPPED UP to 94k: could not
+legalize the last few hundred inside the window.
+
+Contingency (user-designed, scripted as replace35.tcl):
+AltSpreadLogic_high re-place from run 35's post_opt.dcp DID break the
+window (no congestion above level 5) and routed clean — but at
+WNS -0.995 / TNS -76.5 over 290 endpoints (hold +0.051): the spread
+trades congestion for longer nets. Gate (now setup+hold, permanent
+tcl change) correctly refused.
+
+Response: run 36 launched in build/nexys_video_r36 (fresh project) on
+the DDA netlist (a131c9e) — the blit divide removal takes ~2k CARRY4
+out of exactly the congested region: cause, not arrangement. Run 35
+left running as the free second chance. Full battery re-running on the
+DDA build. Note for attribution: run 35's five-change bundle is
+hierarchy-disjoint; per-module DCP census fingerprints any regression.
