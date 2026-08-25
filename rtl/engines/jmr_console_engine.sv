@@ -183,6 +183,17 @@ module jmr_console_engine (
     logic        src_is_html /*verilator public_flat_rw*/;   // .HTM / .HTML — RUN loads .JSH (else ?NH)
     logic        src_is_js /*verilator public_flat_rw*/;     // .JS — RUN loads companion .JSB
     logic        jsb_want_jsh;  // NEW: HTML sidecar uses .JSH not .JSB
+    // Board directive 2026-08-25: no wait may hard-wedge the console.
+    // C_JSB_TETHER waits on the HOST (the protocol has no board->host
+    // request: the host only compiles when it saw RUN typed through the
+    // GUI, so a PS/2 RUN waits forever). ESC aborts; ~10.7s of stream
+    // silence (2^30 clks, reset per byte) aborts too. And a generic
+    // storage watchdog: armed on any stor strobe, cleared on stor_done,
+    // ~32s (longer than storage's own 21.5s op watchdog, so storage
+    // always errors first and this is pure belt-and-braces).
+    logic [29:0] teth_wd;
+    logic [31:0] cons_stor_wd;
+    logic        cons_stor_arm;
     logic        jsb_tether_mode; // NEW: HTML RUN — bytes from PROG, not FAT
     logic [7:0]  jsb_din;         // NEW: latched stream byte (FAT or tether)
     // NEW: JSB stream packer
@@ -403,6 +414,9 @@ module jmr_console_engine (
             jsb_waddr <= 0; jsb_bi <= 0; jsb_word <= 0; jsb_name_len <= 0;
             jsb_want_jsh <= 1'b0;
             jsb_tether_mode <= 1'b0;
+            teth_wd <= 30'd0;
+            cons_stor_wd <= 32'd0;
+            cons_stor_arm <= 1'b0;
             jsb_din <= 8'h0;
             ld_err <= 0;
             ld_nlines <= 0; ld_need_eol <= 0; ld_ann <= 0;
@@ -1749,9 +1763,19 @@ module jmr_console_engine (
                     if (jsb_tether_eof)
                         state <= C_JSB_TEOF;
                     else if (jsb_tether_stb) begin
+                        teth_wd <= 30'd0;
                         jsb_din <= jsb_tether_data;
                         state <= C_JSB_FEED;
-                    end
+                    end else if ((kbd_push && kbd_data == 8'h1B)
+                                 || (&teth_wd)) begin
+                        // ESC or ~10.7s of host silence: fail loud (?NB),
+                        // never a dead console (PS/2 RUN cannot trigger the
+                        // host compile - the protocol has no board request)
+                        teth_wd <= 30'd0;
+                        ld_err <= 1'b1;
+                        reply_sel <= 4'd7; reply_idx <= 0;
+                        state <= C_REPLY;
+                    end else teth_wd <= teth_wd + 30'd1;
                 end
                 C_JSB_TEOF: begin
                     if (jsb_bi != 2'd0) begin
@@ -1887,6 +1911,30 @@ module jmr_console_engine (
 
                 default: state <= C_IDLE;
             endcase
+            // Console-side storage watchdog (after the case, so it wins the
+            // beat). Armed by any stor strobe (read one cycle late - the
+            // strobes are 1-cycle registers), cleared on stor_done; the DIR
+            // pager is naturally unarmed between pages (done pulses per
+            // page). Storage's own 21.5s op watchdog errors first in every
+            // storage-side stall, so this fires only for the class where
+            // the command never started or done was lost - fail to ?IO,
+            // never a dead console.
+            if (stor_dir || stor_dir_next || stor_open || stor_readline
+                || stor_close || stor_delete || stor_nl_scan
+                || stor_get_byte || stor_putc)
+                cons_stor_arm <= 1'b1;
+            else if (stor_done)
+                cons_stor_arm <= 1'b0;
+            if (stor_done || !cons_stor_arm)
+                cons_stor_wd <= 32'd0;
+            else begin
+                cons_stor_wd <= cons_stor_wd + 32'd1;
+                if (cons_stor_wd[31] && cons_stor_wd[30]) begin // ~32s
+                    cons_stor_arm <= 1'b0;
+                    cons_stor_wd  <= 32'd0;
+                    reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY;
+                end
+            end
 
             // ---- SOURCE -> external SRAM bridge (appended; every beat) ----
             // src_req is a 1-beat pulse from the states above; latch it,

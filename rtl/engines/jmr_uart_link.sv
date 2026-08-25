@@ -170,11 +170,18 @@ module jmr_uart_link #(
     jsh_t jsh_st;
     logic [31:0] jsh_left;
     logic        jsh_eof_pend;
+    // Board freeze root cause (2026-08-25): eof was a 1-cycle pulse
+    // raised the same cycle the LAST data byte strobes - the console is
+    // then in C_JSB_FEED processing that byte and returns to
+    // C_JSB_TETHER only cycles later, so it could never see the pulse:
+    // every HTML RUN parked forever after a perfect stream. Hold eof
+    // until the console (jsb_tether_rdy) samples it.
+    logic        jsh_eof_hold;
     wire jsh_hold = (jsh_st == JSH_DATA) && !jsb_tether_rdy;
     assign rx_pop = rx_ready && !jsh_hold;
     assign jsb_tether_stb = rx_ready && (jsh_st == JSH_DATA) && jsb_tether_rdy;
     assign jsb_tether_data = rx_data;
-    assign jsb_tether_eof = jsh_eof_pend;
+    assign jsb_tether_eof = jsh_eof_hold;
 
     generate
         if (USE_DPTI) begin : g_dpti
@@ -212,9 +219,12 @@ module jmr_uart_link #(
             jsh_st <= JSH_IDLE;
             jsh_left <= 32'd0;
             jsh_eof_pend <= 1'b0;
+            jsh_eof_hold <= 1'b0;
         end else begin
             kbd_push <= 1'b0;
             jsh_eof_pend <= 1'b0;
+            if (jsh_eof_pend)                       jsh_eof_hold <= 1'b1;
+            else if (jsh_eof_hold && jsb_tether_rdy) jsh_eof_hold <= 1'b0;
             if (rx_ready && rx_pop) begin
                 if (jsh_st == JSH_L0) begin
                     jsh_left[7:0] <= rx_data;
