@@ -154,10 +154,10 @@ module storage_engine #(
         S_MNT0, S_MNT1, S_MNT2, S_MNT2A, S_MNT2B, S_MNT2C, // mount (+ BRAM gather)
         S_MNT3, S_MNT3G, S_MNT3C,
         S_NM_RD, S_NM_CAP,                       // fetch + encode 8.3 name
-        S_DS_START, S_DS_SECT, S_DS_ENT,         // root-directory scan
+        S_DS_START, S_DS_BASE, S_DS_SECT, S_DS_ENT, // root-directory scan
         S_DS_LD, S_DS_LDC, S_DS_EVAL,            // NEW: load dent[] then evaluate
         S_FG0, S_FG1, S_FG1A, S_FG1B,            // FAT get (+ BRAM gather)
-        S_FS0, S_FS1, S_FS2, S_FS3, S_FS4,       // FAT set (all FAT copies)
+        S_FS0, S_FS1, S_FS1B, S_FS2, S_FS3, S_FS4, // FAT set (all FAT copies)
         S_AL0, S_AL1, S_AL1R, S_AL1C, S_AL1D, S_AL2, S_AL3, // allocate
         S_FC0, S_FC1, S_FC2,                     // free cluster chain
         S_RB0, S_RB0C, S_RB1, S_RBA0, S_RBA1, S_RBA1B, // read byte / pipelined LBA
@@ -253,6 +253,21 @@ module storage_engine #(
     // cycle, which the well-formed sim card image can never produce.
     // S_FC0 already had fc_guard; the S_DS_CHAIN walk had no bound.
     logic [15:0] ds_guard;
+    // Run-33 timing (post-console-fix head): the cluster->LBA arithmetic
+    // fed sd_lba_r/buf_lba in one beat (DSP product + barrel shift + two
+    // 32-bit adds; l1 DSP -> sd_lba_r -0.727, ds_clus -> buf_lba 16
+    // levels). Same recipe as the S_RBA1/S_RBA1B split: one settle beat.
+    // ds_base is per-cluster loop-invariant across the sector walk.
+    logic [31:0] ds_base;
+    logic [31:0] fs_pre;
+    // Op watchdog (board directive 2026-08-25: a storage stall must never
+    // freeze the machine with no escape). Storage returns to S_IDLE
+    // between DIR pages — the console strobes the next step only when
+    // !busy — so every busy episode is pure SD/FAT work with no user
+    // pacing. Any single episode over ~21 s (2^31 clks) forces S_ERR,
+    // whose existing cleanup (done_r + err_r + poison) unblocks the
+    // console through the normal ?IO path.
+    logic [31:0] op_wd;
     logic [9:0]  pad_i;
     logic [5:0]  ent_i;
     logic [4:0]  pub_i;
@@ -469,6 +484,8 @@ module storage_engine #(
             al_clus <= 32'h0; al_prev <= 32'h0; al_lba <= 32'h0; al_guard <= 32'h0;
             fc_clus <= 32'h0; fc_next <= 32'h0; fc_guard <= 32'h0;
             ds_guard <= 16'h0;
+            ds_base <= 32'h0; fs_pre <= 32'h0;
+            op_wd <= 32'h0;
             pad_i <= 10'h0; ent_i <= 6'h0; pub_i <= 5'h0;
             sink_busy_r <= 1'b0;
             rl_field <= 1'b0;
@@ -737,16 +754,17 @@ module storage_engine #(
                     ds_guard <= 16'h0;
                     found_r <= 1'b0;
                     slot_ok <= 1'b0;
+                    state   <= S_DS_BASE;
+                end
+                S_DS_BASE: begin
+                    ds_base <= data_start + ((ds_clus - 32'd2) << spc_shift);
                     state   <= S_DS_SECT;
                 end
                 S_DS_SECT: begin
                     ds_off  <= 10'h0;
-                    ds_lba  <= data_start + ((ds_clus - 32'd2) << spc_shift)
-                             + {24'h0, ds_sect};
-                    buf_lba <= data_start + ((ds_clus - 32'd2) << spc_shift)
-                             + {24'h0, ds_sect};
-                    sd_go(8'd2, data_start + ((ds_clus - 32'd2) << spc_shift)
-                                + {24'h0, ds_sect}, S_DS_ENT);
+                    ds_lba  <= ds_base + {24'h0, ds_sect};
+                    buf_lba <= ds_base + {24'h0, ds_sect};
+                    sd_go(8'd2, ds_base + {24'h0, ds_sect}, S_DS_ENT);
                 end
                 // NEW: load 32-byte dirent into dent[] via BRAM, then evaluate
                 S_DS_ENT: begin
@@ -838,7 +856,7 @@ module storage_engine #(
                         ds_clus  <= fat_val;
                         ds_sect  <= 8'h0;
                         ds_guard <= ds_guard + 16'd1;
-                        state    <= S_DS_SECT;
+                        state    <= S_DS_BASE;
                     end
                 end
 
@@ -881,11 +899,15 @@ module storage_engine #(
                 S_FS1: begin
                     if (fs_i >= nfats) pop_ret();
                     else begin
-                        fs_lba  <= fat_start + {24'h0, fs_i} * spf + (fs_clus >> 7);
-                        buf_lba <= fat_start + {24'h0, fs_i} * spf + (fs_clus >> 7);
-                        fs_bi   <= 8'h0;
-                        sd_go(8'd2, fat_start + {24'h0, fs_i} * spf + (fs_clus >> 7), S_FS2);
+                        fs_pre <= {24'h0, fs_i} * spf + (fs_clus >> 7);
+                        state  <= S_FS1B;
                     end
+                end
+                S_FS1B: begin
+                    fs_lba  <= fat_start + fs_pre;
+                    buf_lba <= fat_start + fs_pre;
+                    fs_bi   <= 8'h0;
+                    sd_go(8'd2, fat_start + fs_pre, S_FS2);
                 end
                 S_FS2: begin
                     // fs_buf_we patches one byte per cycle (see always_comb)
@@ -1522,12 +1544,9 @@ module storage_engine #(
                         end else begin
                             ds_sect <= ds_sect + 8'd1;
                             ds_off  <= 10'h0;
-                            ds_lba  <= data_start + ((ds_clus - 32'd2) << spc_shift)
-                                     + {24'h0, ds_sect + 8'd1};
-                            buf_lba <= data_start + ((ds_clus - 32'd2) << spc_shift)
-                                     + {24'h0, ds_sect + 8'd1};
-                            sd_go(8'd2, data_start + ((ds_clus - 32'd2) << spc_shift)
-                                        + {24'h0, ds_sect + 8'd1},
+                            ds_lba  <= ds_base + {24'h0, ds_sect + 8'd1};
+                            buf_lba <= ds_base + {24'h0, ds_sect + 8'd1};
+                            sd_go(8'd2, ds_base + {24'h0, ds_sect + 8'd1},
                                   dir_yield ? S_CPY : S_DIR_N);
                         end
                     end else begin
@@ -1538,6 +1557,15 @@ module storage_engine #(
 
                 default: state <= S_IDLE;
             endcase
+            // watchdog override (after the case, so it wins the beat)
+            if (state == S_IDLE) op_wd <= 32'h0;
+            else begin
+                op_wd <= op_wd + 32'd1;
+                if (op_wd[31]) begin
+                    op_wd <= 32'h0;
+                    state <= S_ERR;
+                end
+            end
         end
     end
 endmodule
