@@ -157,6 +157,13 @@ module jmr_console_engine (
     logic [3:0] reply_sel;
     logic [6:0] reply_idx;
     logic [6:0] name_i, name_start, name_len_r;
+    // C_NWR walk keeps the last five upcased name chars in a shift
+    // register, so the .HTM/.HTML/.JS suffix classify at walk end reads
+    // fixed positions instead of five 127:1 dynamic muxes off
+    // name_start+name_len_r (run-32's -1.06 path family). tail[0] is the
+    // most recent char. RECTDEMO likewise compares src_name, which the
+    // same walk already captures upcased at fixed indices.
+    logic [7:0] name_tail [0:4];
     logic [7:0] dir_n, dir_idx;
     logic [17:0] src_len /*verilator public_flat_rw*/;     // bytes in SOURCE BRAM (0..131072)
     logic [17:0] src_i;
@@ -226,6 +233,30 @@ module jmr_console_engine (
     function automatic logic is_sp(input logic [7:0] c);
         is_sp = (c == " ");
     endfunction
+
+    // C_EXEC dispatch predicates, registered every clk. line/line_len
+    // change at most one char per keystroke, and C_EXEC always runs at
+    // least two cycles after the last edit (Enter -> C_WAIT_VIDEO ->
+    // C_EXEC), so the one-cycle predicate lag can never be observed.
+    // This kills run-32's residual worst path (-1.249ns, 14 LUT levels:
+    // the priority chain ANDed each arm's len+char compares in one
+    // cycle); the chain now selects among registered single bits.
+    logic p_help_q, p_dir_q, p_cls_q, p_list_q, p_edit_q, p_mem_q,
+          p_new_q, p_run_q, p_load_q, p_save_q, p_remove_q;
+    always_ff @(posedge clk) begin
+        p_help_q <= (line_len == 4 && up(line[0])=="H" && up(line[1])=="E" && up(line[2])=="L" && up(line[3])=="P");
+        p_dir_q  <= (line_len == 3 && up(line[0])=="D" && up(line[1])=="I" && up(line[2])=="R");
+        p_cls_q  <= (line_len == 3 && up(line[0])=="C" && up(line[1])=="L" && up(line[2])=="S");
+        p_list_q <= (line_len >= 4 && up(line[0])=="L" && up(line[1])=="I" && up(line[2])=="S" && up(line[3])=="T" && (line_len == 4 || is_sp(line[4])));
+        p_edit_q <= (line_len >= 5 && up(line[0])=="E" && up(line[1])=="D" && up(line[2])=="I" && up(line[3])=="T" && is_sp(line[4]));
+        p_mem_q  <= (line_len == 3 && up(line[0])=="M" && up(line[1])=="E" && up(line[2])=="M");
+        p_new_q  <= (line_len == 3 && up(line[0])=="N" && up(line[1])=="E" && up(line[2])=="W");
+        p_run_q  <= (line_len >= 3 && up(line[0])=="R" && up(line[1])=="U" && up(line[2])=="N" && (line_len == 3 || is_sp(line[3])));
+        p_load_q <= (line_len >= 5 && up(line[0])=="L" && up(line[1])=="O" && up(line[2])=="A" && up(line[3])=="D" && is_sp(line[4]));
+        p_save_q <= (line_len >= 5 && up(line[0])=="S" && up(line[1])=="A" && up(line[2])=="V" && up(line[3])=="E" && is_sp(line[4]));
+        p_remove_q <= (line_len >= 7 && up(line[0])=="R" && up(line[1])=="E" && up(line[2])=="M" && up(line[3])=="O" && up(line[4])=="V" && up(line[5])=="E" && is_sp(line[6]));
+    end
+
 
     function automatic logic [7:0] banner_char(input logic [6:0] i);
         case (i)
@@ -493,23 +524,14 @@ module jmr_console_engine (
                     end else if (line_len == 0) begin
                         msg_idx <= 0;
                         state <= C_PROMPT;
-                    end else if (line_len == 4 &&
-                               up(line[0])=="H" && up(line[1])=="E" &&
-                               up(line[2])=="L" && up(line[3])=="P") begin
+                    end else if (p_help_q) begin
                         reply_sel <= 4'd0; reply_idx <= 0; state <= C_REPLY;
-                    end else if (line_len == 3 &&
-                               up(line[0])=="D" && up(line[1])=="I" &&
-                               up(line[2])=="R") begin
+                    end else if (p_dir_q) begin
                         state <= C_DIR0;
-                    end else if (line_len == 3 &&
-                               up(line[0])=="C" && up(line[1])=="L" &&
-                               up(line[2])=="S") begin
+                    end else if (p_cls_q) begin
                         // NEW: CLS like BASIC
                         state <= C_CLS;
-                    end else if (line_len >= 4 &&
-                               up(line[0])=="L" && up(line[1])=="I" &&
-                               up(line[2])=="S" && up(line[3])=="T" &&
-                               (line_len == 4 || is_sp(line[4]))) begin
+                    end else if (p_list_q) begin
                         // NEW: LIST / LIST - / LIST n-m — parse then numbered dump
                         list_page <= 1'b1;
                         list_lo <= 16'd10;
@@ -523,29 +545,19 @@ module jmr_console_engine (
                             name_i <= 5;
                             state <= C_LIST_PARSE;
                         end
-                    end else if (line_len >= 5 &&
-                               up(line[0])=="E" && up(line[1])=="D" &&
-                               up(line[2])=="I" && up(line[3])=="T" &&
-                               is_sp(line[4])) begin
+                    end else if (p_edit_q) begin
                         // NEW: EDIT n
                         name_i <= 5;
                         peel_mag <= 0;
                         state <= C_EDIT_PARSE;
-                    end else if (line_len == 3 &&
-                               up(line[0])=="M" && up(line[1])=="E" &&
-                               up(line[2])=="M") begin
+                    end else if (p_mem_q) begin
                         reply_sel <= 4'd1; reply_idx <= 0; state <= C_REPLY;
-                    end else if (line_len == 3 &&
-                               up(line[0])=="N" && up(line[1])=="E" &&
-                               up(line[2])=="W") begin
+                    end else if (p_new_q) begin
                         src_len <= 0; src_name_len <= 0;
                         src_is_rectdemo <= 0; src_is_html <= 0; src_is_js <= 0;
                         halt_pulse <= 1'b1; // drop game_mode / stop VM (cyan stub leftover)
                         reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
-                    end else if (line_len >= 3 &&
-                               up(line[0])=="R" && up(line[1])=="U" &&
-                               up(line[2])=="N" &&
-                               (line_len == 3 || is_sp(line[3]))) begin
+                    end else if (p_run_q) begin
                         // HTML RUN: host compile-on-RUN streams ProgramImage over
                         // PROG (C_JSB_TETHER). Never FAT-read a sidecar; card is HTML only.
                         // RECTDEMO → rect engine; empty NEW → rect; missing JSB → ?NB
@@ -579,21 +591,11 @@ module jmr_console_engine (
                         end else begin
                             reply_sel <= 4'd7; reply_idx <= 0; state <= C_REPLY; // ?NB
                         end
-                    end else if (line_len >= 5 &&
-                               up(line[0])=="L" && up(line[1])=="O" &&
-                               up(line[2])=="A" && up(line[3])=="D" &&
-                               is_sp(line[4])) begin
+                    end else if (p_load_q) begin
                         cmd_is_load <= 1'b1; name_start <= 5; state <= C_PF;
-                    end else if (line_len >= 5 &&
-                               up(line[0])=="S" && up(line[1])=="A" &&
-                               up(line[2])=="V" && up(line[3])=="E" &&
-                               is_sp(line[4])) begin
+                    end else if (p_save_q) begin
                         cmd_is_save <= 1'b1; name_start <= 5; state <= C_PF;
-                    end else if (line_len >= 7 &&
-                               up(line[0])=="R" && up(line[1])=="E" &&
-                               up(line[2])=="M" && up(line[3])=="O" &&
-                               up(line[4])=="V" && up(line[5])=="E" &&
-                               is_sp(line[6])) begin
+                    end else if (p_remove_q) begin
                         cmd_is_remove <= 1'b1; name_start <= 7; state <= C_PF;
                     end else begin
                         reply_idx <= 0; state <= C_REPLY;
@@ -715,43 +717,35 @@ module jmr_console_engine (
                             // RECTDEMO.JS or RECTDEMO → silicon demo allowed
                             src_is_rectdemo <=
                                 (name_len_r >= 8 &&
-                                 up(line[name_start+0])=="R" && up(line[name_start+1])=="E" &&
-                                 up(line[name_start+2])=="C" && up(line[name_start+3])=="T" &&
-                                 up(line[name_start+4])=="D" && up(line[name_start+5])=="E" &&
-                                 up(line[name_start+6])=="M" && up(line[name_start+7])=="O");
+                                 src_name[0]=="R" && src_name[1]=="E" &&
+                                 src_name[2]=="C" && src_name[3]=="T" &&
+                                 src_name[4]=="D" && src_name[5]=="E" &&
+                                 src_name[6]=="M" && src_name[7]=="O");
                             // Extension classify — never use INVADERS prefix as bytecode gate
                             // .HTM / .HTML → html; .JS → js (FAT may store .HTM for .HTML)
+                            // (name_tail is upcased; "." has no case)
                             src_is_html <=
                                 (name_len_r >= 4 &&
-                                 line[name_start+name_len_r-4]=="." &&
-                                 up(line[name_start+name_len_r-3])=="H" &&
-                                 up(line[name_start+name_len_r-2])=="T" &&
-                                 up(line[name_start+name_len_r-1])=="M")
+                                 name_tail[3]=="." && name_tail[2]=="H" &&
+                                 name_tail[1]=="T" && name_tail[0]=="M")
                                 ||
                                 (name_len_r >= 5 &&
-                                 line[name_start+name_len_r-5]=="." &&
-                                 up(line[name_start+name_len_r-4])=="H" &&
-                                 up(line[name_start+name_len_r-3])=="T" &&
-                                 up(line[name_start+name_len_r-2])=="M" &&
-                                 up(line[name_start+name_len_r-1])=="L");
+                                 name_tail[4]=="." && name_tail[3]=="H" &&
+                                 name_tail[2]=="T" && name_tail[1]=="M" &&
+                                 name_tail[0]=="L");
                             src_is_js <=
                                 (name_len_r >= 3 &&
-                                 line[name_start+name_len_r-3]=="." &&
-                                 up(line[name_start+name_len_r-2])=="J" &&
-                                 up(line[name_start+name_len_r-1])=="S")
+                                 name_tail[2]=="." && name_tail[1]=="J" &&
+                                 name_tail[0]=="S")
                                 &&
                                 !(name_len_r >= 4 &&
-                                  line[name_start+name_len_r-4]=="." &&
-                                  up(line[name_start+name_len_r-3])=="H" &&
-                                  up(line[name_start+name_len_r-2])=="T" &&
-                                  up(line[name_start+name_len_r-1])=="M")
+                                  name_tail[3]=="." && name_tail[2]=="H" &&
+                                  name_tail[1]=="T" && name_tail[0]=="M")
                                 &&
                                 !(name_len_r >= 5 &&
-                                  line[name_start+name_len_r-5]=="." &&
-                                  up(line[name_start+name_len_r-4])=="H" &&
-                                  up(line[name_start+name_len_r-3])=="T" &&
-                                  up(line[name_start+name_len_r-2])=="M" &&
-                                  up(line[name_start+name_len_r-1])=="L");
+                                  name_tail[4]=="." && name_tail[3]=="H" &&
+                                  name_tail[2]=="T" && name_tail[1]=="M" &&
+                                  name_tail[0]=="L");
                         end
                         if (cmd_is_load) state <= C_LD_OPEN;
                         else if (cmd_is_save) state <= C_SV_OPEN;
@@ -763,6 +757,11 @@ module jmr_console_engine (
                         mem_wdata <= up(line[name_start + name_i]);
                         if (name_i < 16)
                             src_name[name_i[3:0]] <= up(line[name_start + name_i]);
+                        name_tail[0] <= up(line[name_start + name_i]);
+                        name_tail[1] <= name_tail[0];
+                        name_tail[2] <= name_tail[1];
+                        name_tail[3] <= name_tail[2];
+                        name_tail[4] <= name_tail[3];
                         state <= C_NWR_W;
                     end
                 end

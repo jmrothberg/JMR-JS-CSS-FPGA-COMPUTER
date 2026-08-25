@@ -106,3 +106,8 @@ set_property LOC MMCME2_ADV_X1Y2 [get_cells {u_tmds/u_rgb2dvi/ClockGenInternal.C
 create_generated_clock -name vm_clk -divide_by 8 \
     -source [get_pins u_core/g_vmclk_div.u_vm_bufgce/I] \
     [get_pins u_core/g_vmclk_div.u_vm_bufgce/O]
+
+# init_calib_complete is quasi-static (asserts once at power-up, long
+# before console/storage traffic) yet fanned into 51 of run-32's failing
+# endpoints. Standard MIG practice: exclude it from timing.
+set_false_path -from [get_pins -hierarchical -filter {NAME =~ *u_ddr_calib_top/init_calib_complete*/C}]

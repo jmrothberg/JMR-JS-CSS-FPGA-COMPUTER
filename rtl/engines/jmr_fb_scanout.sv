@@ -50,6 +50,12 @@ module jmr_fb_scanout #(
         for (int i = 8; i >= 0; i--) g[i] = g[i] ^ g[i+1];
         y_core = g;
     end
+    // Registered decode: the gray prefix-XOR plus the +1/compare/x320
+    // address cone was 10-11 LUT levels and set run-32's residual WNS
+    // (-1.17). One register here lags the prefetch decision a single
+    // 10 ns cycle behind the beam - noise against the 32 us line time.
+    logic [9:0] y_core_q;
+    always_ff @(posedge clk) y_core_q <= y_core;
 
     logic [9:0]  fetched_line;   // last line fully fetched
     logic [9:0]  tgt;            // line being fetched
@@ -65,7 +71,7 @@ module jmr_fb_scanout #(
         end else if (!busy) begin
             // want the line AFTER the beam (wraps 479 -> 0)
             logic [9:0] want;
-            want = (y_core >= 10'd479) ? 10'd0 : (y_core + 10'd1);
+            want = (y_core_q >= 10'd479) ? 10'd0 : (y_core_q + 10'd1);
             if (want != fetched_line) begin
                 busy <= 1'b1;
                 tgt <= want;

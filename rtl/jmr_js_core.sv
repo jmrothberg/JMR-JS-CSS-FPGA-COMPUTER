@@ -438,7 +438,7 @@ module jmr_js_core #(
         .sram_req(vm_sram_req), .sram_addr(vm_sram_addr),
         .sram_we(vm_sram_we), .sram_wdata(vm_sram_wdata),
         .sram_rdata(vm_ack_hold ? vm_rdata_hold : sram_rdata),
-        .sram_ack(vm_ack_hold && vm_req_match)
+        .sram_ack(vm_ack_hold && vm_req_match_q)
     );
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -459,6 +459,15 @@ module jmr_js_core #(
         && (vm_held_addr == vm_sram_addr)
         && (vm_held_we == vm_sram_we)
         && (!vm_sram_we || (vm_held_wdata == vm_sram_wdata));
+    // Registered copy for the DELIVERY side only (run-32: the comb
+    // compare fed VM clock-enables at -0.13). Both compare operands are
+    // stable from the ack to the beat that consumes it (the VM holds its
+    // request while waiting; held_* freeze at the ack), so the one-clk
+    // lag never changes the delivered value: an ack at clk j is
+    // consumable at the beat >= j+1, exactly as before. The hold-clear
+    // keeps the comb match (core-internal, short).
+    logic vm_req_match_q;
+    always_ff @(posedge clk) vm_req_match_q <= vm_req_match;
 
     // Asset-SRAM arbiter — console (load) wins; the VM reads sprite pixels
     // and, since 2026-08-21, also streams the ImageData snapshot (read AND
