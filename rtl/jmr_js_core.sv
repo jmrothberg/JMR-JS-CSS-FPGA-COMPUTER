@@ -355,7 +355,15 @@ module jmr_js_core #(
             end
         end
 `ifdef VERILATOR
-        assign vm_clk = clk & vm_ce;
+        // BUFGCE latches CE while clk is LOW; gating with the raw vm_ce
+        // glitches (vm_ce rises just after a posedge while clk is still
+        // high -> spurious vm_clk edge mid-window, VM clocks twice per
+        // beat: the event latch was consumed at the glitch edge AND the
+        // real edge, double-enqueuing every key event). Register the
+        // gate on negedge = exact BUFGCE semantics.
+        logic vm_ce_n;
+        always_ff @(negedge clk) vm_ce_n <= vm_ce;
+        assign vm_clk = clk & vm_ce_n;
 `else
         BUFGCE u_vm_bufgce (.I(clk), .CE(vm_ce), .O(vm_clk));
 `endif
