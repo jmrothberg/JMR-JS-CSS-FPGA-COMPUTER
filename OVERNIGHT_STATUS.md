@@ -697,3 +697,66 @@ class. The deep-window test file earned its keep today.
 - Delete the .V2ORIG / .SORTVAR title variants once board bring-up
   confirms the 2-variants on glass.
 - storage_engine name83 & dent arrays: tiny, FF-fine, ignore.
+
+## 2026-08-25 (day): div8 VM clock — the product decision lands in RTL
+
+Directive: ship a working .bit now, improve while in use. Measurement
+(user, run-30 post_route.dcp): ALL 6,000 worst failing paths start AND
+end inside u_core/u_vm; nothing outside fails; scanout needs the full
+100 MHz (one SRAM fetch per 100 ns sustains 640x480). At 80 ns the VM's
+routed -58.737 becomes +11.26. So: u_vm alone moves to ui_clk/8 =
+12.5 MHz (BUFGCE + create_generated_clock, edges a subset of ui_clk's,
+boundary paths stay ordinary 10 ns paths). VM_CLK_DIV core parameter,
+default 8; Verilator branch `clk & vm_ce` has identical edge semantics,
+so the FULL battery validates the real config (synchronous divide —
+unlike the async CDC class, sim covers this).
+
+Boundary inventory and fixes (commit a032820):
+- Pulse inputs (start/stop/frame_tick/key events): latch-until-beat in
+  core; set wins over clear, exactly-once delivery. sim key_strobe paced
+  9 clks (burst inside one beat window would overwrite the event latch).
+- code BRAM: write port moved to full-rate clk_code_w (console streams
+  loads at 100 MHz; true dual port, one clock per port).
+- vm_fb_swap: VM pulse is now 8 clks wide; rising-edge detect before
+  the present engine (double-present otherwise).
+- fb_we held 8 clks per pixel: idempotent rewrites into mini_fb, no
+  change needed.
+- sram ack: MATCH-HELD shim. Three designs tried, two failed with
+  purpose-built gates catching each:
+  (1) req-drop clear: VM FSM seams re-arm sram_req for the next
+      transaction ON the consume beat (sprite demand-load -> first blit
+      fetch), req never drops, stale held ack ate the first blit pixel
+      (exactly 1 wrong pixel per blit — invisible to every solid-color
+      test in the battery; caught by the new awkward-ratio exact gates).
+  (2) clear-on-beat: some sites issue a request and sample the ack
+      SEVERAL beats later — hold too short, VM hung (64M-cap frames).
+  (3) shipped: latch served request identity (addr/we/wdata) with the
+      ack; deliver only while the VM's live request matches; clear only
+      at a beat where it no longer matches. Same-request re-delivery is
+      idempotent; changed requests drop the orphan and re-serve one
+      beat later. Arbiter VM grant blocked while held (one serve per
+      beat window, ack can never race a consume).
+- New gate file tests/test_blit_scale_exact.py: 4 exact scaled-blit
+  gates (7x5->10x9, 12x6->5x4, 16x16->23x11, 9-arg source rect),
+  per-pixel floor-semantics expectations. These caught BOTH failed shim
+  designs; the whole existing battery caught neither.
+
+Validation at true div8: 14 FP/stack gates + 19 blit/imagedata tests
+green. Test budgets scaled by _VMDIV=8 (poll ceilings; passing tests
+break early and pay nothing). Full battery running at div8.
+
+In flight: run 32 (div8 netlist, full flow, expect first TIMING-CLEAN
+bitstream: intra-VM at 80 ns, remaining 10 ns domains never failed);
+route-31 Explore re-route of the -45.4 placed checkpoint (insurance,
+overlaps converging 128k->44k->19k->8.7k).
+
+Staged, NOT queued (scratchpad/apply_blit_dda.py): the jmr_js_vm 1626
+per-pixel combinational divide pair (run-30/-31 worst-path root, user
+census) -> per-blit 16-beat setup divides + exact per-pixel DDA.
+~2,000 CARRY4 back; area/cleanup move, timing already met at div8.
+Gates exist and are green pre-patch. Blits always enter x=y=0 (exec64
+x_n only ever written 0), so no mid-walk DDA re-seed needed.
+
+Correction logged: no top_nexys_video.bit ever existed on disk — run 30
+routed but never reached write_bitstream (the earlier watcher line was
+the stale-file trap again). Run 32 writes one fresh.
