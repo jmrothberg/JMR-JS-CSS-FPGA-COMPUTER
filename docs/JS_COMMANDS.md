@@ -247,7 +247,7 @@ Bare names the compiler already knows. Source of the ids: `functional_model/jsb_
 
 `Math.PI` is **not** a call. It is `LOAD_CONST` of 3.14159…
 
-**Id 41 note:** `Object.keys` (and therefore `for (k in obj)`) runs on the Python functional model. The chip does not have that native yet — it faults instead of guessing. Version 1.0 titles use a literal key list or an index loop. See [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#version-10-vs-20).
+**Id 41 note:** `Object.keys` (and therefore `for (k in obj)`) runs on the Python functional model. The chip does not have that native yet — it faults instead of guessing. Version 1.0 titles use a literal key list or an index loop. See [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
 
 ---
 
@@ -320,7 +320,10 @@ Typed at the `>` prompt, same idea as BASIC `LOAD` / `RUN`:
 `DIR` `LOAD "NAME.HTML"` `RUN` `LIST` `EDIT` `SAVE` `NEW` `CLS` `HELP` `MEM` `REMOVE`  
 `ESC` is machine BREAK (games must not steal it).
 
-`INSERT` / `DELETE` (editor line) exist in the Python functional model; the chip says `?SN` today.
+`INSERT` / `DELETE` (editor line) exist in the Python functional model; the chip says `?SN` today. **`EDIT n` stays** (works on PYTHON and RTL).
+
+**V1.5 (planned):** type, paste, or edit numbered HTML at `>` and `RUN` without the card (`EDIT n` kept) —
+[JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 
 ---
 

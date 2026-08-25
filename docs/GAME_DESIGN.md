@@ -12,17 +12,18 @@ language and Canvas surface are specified in
 This is **copy 2** of “do not hardwire game names / write inside Version 1.0
 walls” (copy 1 is `.cursor/rules/no-game-hardwire.mdc` +
 `html-game-v1.mdc`). Measured Version 2.0 numbers for `MK.HTML` live in
-[JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20)
+[JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20)
 — do not raise caps in RTL for one title.
 
 **Product generations:**
 
 | Gen | Meaning | Titles |
 |---|---|---|
-| **1.0 (now)** | Frozen Caps + natives that PYTHON **and** FPGA-SIM already run | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls (see below). `MKPVP.HTML` is the V1 MK-shaped example. |
-| **2.0 (compiler front end started)** | Machine changes so **`MK.HTML` as embedded today** runs | Acceptance: `MK.HTML`. Need **`MAX_SPR` ≥ 518**, asset bank **8 MB** (or more; ASIC: one chip, simple port), dotted **`new mk.…`**, **`.call`/`.apply`**, **`Object.keys` on exec64**, **`Math.round`**. Parse gaps (unary `+`, `for…in`, `throw`, `in`) landed 2026-08-21. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20). |
+| **1.0 (now)** | Frozen caps + natives that PYTHON **and** FPGA-SIM already run | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls (see below). `MKPVP.HTML` is the V1 MK-shaped example. |
+| **1.5 (planned)** | Console **authoring**: type, paste, or edit numbered HTML at READY; `RUN` compiles the editor buffer without the µSD | Same V1 titles/walls. Not MK. Glass + LUT/BRAM budget: [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). |
+| **2.0 (compiler front end started)** | Machine changes so **`MK.HTML` as embedded today** runs | Acceptance: `MK.HTML`. Need **`MAX_SPR` ≥ 518**, asset bank **8 MB** (or more; ASIC: one chip, simple port), dotted **`new mk.…`**, **`.call`/`.apply`**, **`Object.keys` on exec64**, **`Math.round`**. Parse gaps (unary `+`, `for…in`, `throw`, `in`) landed 2026-08-21. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20). |
 
-V1 vs V2 surface backlog: [JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20).
+V1 / V1.5 / V2 surface backlog: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
 Agent rule: `.cursor/rules/html-game-v1.mdc`.
 
 The three vendored titles (`INVADERS.HTML`, `PACMAN.HTML`, `DONKEY.HTML`)
@@ -43,6 +44,12 @@ RUN
 - Source of truth is the loaded HTML. `RUN` always recompiles it.
 - Chrome may open the same file for authoring. PYTHON bytecode → FPGA-SIM
   RTL → BOARD is the machine. Dukpy / a host twin is not.
+- **V1.5 (planned, not now):** type, paste, or edit numbered HTML at READY
+  and `RUN` without the µSD; **`EDIT n` stays** (already works). Numbers go
+  by 10 so `15` inserts between `10` and `20`; `10` + Enter deletes that
+  line, `10 body` also replaces it. Spec +
+  LUT/BRAM budget:
+  [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 
 After adding or changing a title:
 
@@ -159,7 +166,7 @@ ASIC must stay **single-chip** with a **simple** SRAM port — no fancy
 multi-die access). Also compiler **`new mk.…`** and **`Function.prototype.call`/`.apply`**
 (42 sites — the super-constructor pattern; a real VM capability, not a
 shim), plus **`Object.keys` on exec64** and **`Math.round`**. The smaller
-parse gaps (unary `+`, `for…in`, `throw`, `in`) are **done**. Full table: [JMR_JS_COMPATIBILITY.md § Version 1.0 vs 2.0](JMR_JS_COMPATIBILITY.md#version-10-vs-20).
+parse gaps (unary `+`, `for…in`, `throw`, `in`) are **done**. Full table: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
 Until those land, do not expect `LOAD "MK.HTML"` + `RUN` on FPGA-SIM.
 
 ---

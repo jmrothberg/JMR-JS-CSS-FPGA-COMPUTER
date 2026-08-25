@@ -6,22 +6,88 @@ Words: [README.md — Words used](../README.md#words-used-in-this-project).
 
 ## SCOREBOARD — update this table every run (one screen; diary lives in [OVERNIGHT_STATUS.md](../OVERNIGHT_STATUS.md))
 
-**Last run: 28 — synthesis 2026-08-24 16:05. FIT IS SOLVED. Now fighting TIMING.**
+**Last bitstream on disk: run 33 — routed 2026-08-25 09:58**
+(`build/nexys_video/jmr_nexys_video_-1ns.bin`, also `.bit` + `post_route_-1ns.dcp`).
+Vivado refused to publish `jmr_nexys_video.bit` because WNS &lt; 0.
+**Fit is solved.** Timing is close, not clean.
 
-**Run 28 placed successfully — the first placement of the whole campaign.**
-Routing is in progress (no `.bit` yet). Fit is no longer the open question;
-`WNS` is.
+Source: `build/nexys_video/utilization_impl.rpt` (Design State: Routed).
+Chip: XC7A200T, 134,600 LUTs / 269,200 FFs / 365 BRAM tiles / 740 DSP48E1.
 
 | Resource | Used | Budget | % | State |
 |---|---:|---:|---:|---|
-| **Slice LUTs (total)** | **131,314** | 134,600 | **97.6%** | **fits** |
-| LUT as Logic | 122,379 | 134,600 | 90.9% | fits |
-| LUT as Memory | 8,935 | 46,200 | 19.3% | fits |
-| Slice Registers | 45,285 | 269,200 | 16.8% | fits |
-| Block RAM | 344 | 365 | 94.3% | fits |
-| DSPs | 158 | 740 | 21.4% | fits |
-| **`place_design`** | — | — | — | **completed successfully** |
-| **WNS (100 MHz, 10 ns)** | **≈ −250 ns** | ≥ 0 | — | **catastrophic — real, not artifact** |
+| **Slice LUTs (total)** | **108,777** | 134,600 | **80.8%** | **fits** |
+| LUT as Logic | 99,938 | 134,600 | 74.3% | fits |
+| LUT as Memory (LUTRAM) | 8,839 | 46,200 | 19.1% | fits |
+| Slice Registers (FF) | 45,379 | 269,200 | 16.9% | fits |
+| Slice (packing) | 31,022 | 33,650 | 92.2% | tight pack, not a LUT miss |
+| F7 Muxes | 7,989 | 67,300 | 11.9% | fits |
+| F8 Muxes | 3,480 | 33,650 | 10.3% | fits |
+| Unique control sets | 3,003 | 33,650 | 8.9% | fits |
+| Block RAM tiles | 343.5 | 365 | 94.1% | fits (21.5 tiles free) |
+| RAMB36 | 323 | 365 | 88.5% | — |
+| RAMB18 | 41 | 730 | 5.6% | — |
+| DSP48E1 | 141 | 740 | 19.1% | fits |
+| Bonded IOB | 93 | 285 | 32.6% | fits |
+| BUFGCTRL | 5 | 32 | 15.6% | fits |
+| MMCME2 | 3 | 10 | 30.0% | fits |
+| PLLE2 | 1 | 10 | 10.0% | MIG |
+| CARRY4 (primitives) | 5,054 | — | — | still the timing cone |
+| **`place_design` / `route_design`** | — | — | — | **completed** |
+| **WNS (100 MHz, 10 ns)** | **−0.640 ns** | ≥ 0 | — | **miss — not published** |
+
+**LUT types** (mapped primitives; slice LUT **108,777** is after combining):
+
+| Primitive | Used | What it is |
+|---|---:|---|
+| LUT6 | 47,625 | 6-input look-up |
+| LUT5 | 22,431 | 5-input look-up |
+| LUT4 | 15,546 | 4-input look-up |
+| LUT3 | 15,478 | 3-input look-up |
+| LUT2 | 15,357 | 2-input look-up |
+| LUT1 | 2,002 | buffer / invert glue |
+| INV | 3 | dedicated inverter |
+| LUT as Logic | 99,938 | of the 108,777 slice LUTs |
+| LUT as Memory | 8,839 | LUTRAM (cap 46,200) |
+| — Distributed RAM | 8,822 | RAMD64E / RAM32 |
+| — SRL16E | 17 | shift register |
+
+**Flip-flops** (45,377 FF + 2 latches = 45,379 slice registers):
+
+| Primitive | Used | What it is |
+|---|---:|---|
+| FDRE | 42,801 | CE + sync reset (almost all) |
+| FDSE | 1,925 | CE + sync set |
+| FDCE | 547 | CE + async reset |
+| FDPE | 104 | CE + async set |
+| LDCE | 2 | latch |
+
+**BRAM** (343.5 tiles = 323×RAMB36 + 41×RAMB18×½):
+
+| Primitive | Used | Tile weight | Tiles |
+|---|---:|---:|---:|
+| RAMB36E1 | 323 | 1.0 | 323 |
+| RAMB18E1 | 41 | 0.5 | 20.5 |
+| **tiles** | — | — | **343.5 / 365** |
+
+**Other** (not LUT / FF / BRAM):
+
+| Primitive | Used | Available | % |
+|---|---:|---:|---:|
+| DSP48E1 | 141 | 740 | 19.1 |
+| CARRY4 | 5,054 | — | — |
+| MUXF7 | 7,989 | 67,300 | 11.9 |
+| MUXF8 | 3,480 | 33,650 | 10.3 |
+| Unique control sets | 3,003 | 33,650 | 8.9 |
+| Slices occupied | 31,022 | 33,650 | 92.2 |
+| Bonded IOB | 93 | 285 | 32.6 |
+| BUFGCTRL | 5 | 32 | 15.6 |
+| MMCME2_ADV | 3 | 10 | 30.0 |
+| PLLE2_ADV | 1 | 10 | 10.0 |
+| BUFIO / BUFR / BUFH | 1 / 2 / 1 | — | — |
+| XADC | 1 | 1 | 100 |
+
+Vs run 28 (last scoreboard): LUTs 131,314 → **108,777** (−22.5k, 97.6% → 80.8%). FFs ~same (45.3k). BRAM 344 → 343.5. DSP 158 → 141. WNS was ≈ −250 ns then −58.7 (run 30) then **−1.249 (run 32, `-2ns`)** then **−0.640 (run 33, `-1ns`)**.
 
 ### Trajectory
 
@@ -39,6 +105,8 @@ Routing is in progress (no `.bit` yet). Fit is no longer the open question;
 | 21 | 137,871 | 1.02x | listener consolidation (-24k, over census) |
 | 24-26 | ~138-141k | ~1.03x | fence (`dont_touch` on 69-member hs64 mux, fixes ExploreArea 14h stall to 4min) + LUTRAM sweep + FSM-poke-to-strobe fixes |
 | 27-28 | 131,314 | **0.976x — UNDER BUDGET** | `linebuf`->BRAM (3x its estimate); **placement succeeds** |
+| 32 (`-2ns` bit) | — | — | div8 VM clock; WNS **−1.249 ns**; first light on HDMI text |
+| **33 (`-1ns` bit)** | **108,777** | **0.808x** | routed 09:58; WNS **−0.640 ns**; LUT headroom for timing directives |
 
 ### FIT levers — closed out, kept for the record
 

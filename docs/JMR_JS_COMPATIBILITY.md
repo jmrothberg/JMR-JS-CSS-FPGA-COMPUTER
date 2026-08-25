@@ -4,10 +4,11 @@ Words: [README.md — Words used](../README.md#words-used-in-this-project).
 
 **Learn first:** [JS_COMMANDS.md](JS_COMMANDS.md) — JavaScript you can write,
 and the instructions it becomes (34 **opcodes** + native ids). This file is
-title status, holes, and the **Version 1.0 vs 2.0** plan — not the teaching
+title status, holes, and the **Version 1.0 / 1.5 / 2.0** plan — not the teaching
 list.
 
-This is **copy 2** of the Version 1.0 walls / Version 2.0 `MK.HTML` plan
+This is **copy 2** of the Version 1.0 walls / Version 1.5 console HTML /
+Version 2.0 `MK.HTML` plan
 (copy 1 is `.cursor/rules/html-game-v1.mdc`).
 
 Target games drive the language/API set. **Not a full web browser** — no
@@ -24,7 +25,8 @@ needs — **JMR bytecode VM** on PYTHON → FPGA-SIM → BOARD → ASIC.
 FPGA-SIM: INVADERS, PACMAN, DONKEY, ASTEROID, MRDO. FPGA-SIM is **too
 slow to play** (PC simulating the chip). Board target **≥ 30
 pictures/second**: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
-Live heap/code caps: [FPGA_FIT.md](FPGA_FIT.md). `MK.HTML` is still
+Live heap/code caps: [FPGA_FIT.md](FPGA_FIT.md). Console type/paste/edit
+HTML is **Version 1.5** (planned, not now). `MK.HTML` is still
 Version 2.0 (not V1).
 
 ## Reference titles (on disk)
@@ -84,18 +86,74 @@ decides keys. No `.bit`/`.bin` until FPGA-SIM is green and the user GUI-tests.
 
 ---
 
-## Version 1.0 vs 2.0
+## Version 1.0, 1.5, and 2.0
 
 This machine ships **generations** of the playable HTML/JS surface. Agents
 must not silently raise V1 caps for a library demo, and must not call a
 Chrome-only title “done on the machine.”
 
-| | **1.0 (current)** | **2.0 (planned — not implemented)** |
-|---|---|---|
-| **Meaning** | Caps + natives that product titles and **V1-compliant library** HTML run on PYTHON **and** FPGA-SIM | Machine changes required so **`storage/MK.HTML` as embedded today** can `LOAD` + `RUN` |
-| **Acceptance** | `INVADERS` / `PACMAN` / `DONKEY` (ISA freeze) | **`MK.HTML`** (mk.js Sub-Zero vs Kano, local 2P). `MKPVP.HTML` stays V1 training wheels. |
-| **Sprites** | **`MAX_SPR` = 16** (`jmr_js_vm.sv`) / **`PROGRAM_MAX_SPRITES` = 16** (`jsb_format.py`) | **`MAX_SPR` = `PROGRAM_MAX_SPRITES` ≥ 518** — measured unique `data:image` sheets in current `MK.HTML` (631 path keys → 518 after URI dedup). Raise RTL `spr_off`/`spr_ww`/`spr_hh` tables and the encode loud-check **together**. Never `if (stem=="MK")`. |
-| **Authoring** | [GAME_DESIGN.md](GAME_DESIGN.md) V1 walls; rule `html-game-v1.mdc` | Same glass/`LOAD`/`RUN`; drop V1 HTML shims once the rows below land |
+| | **1.0 (now)** | **1.5 (planned)** | **2.0 (planned)** |
+|---|---|---|---|
+| **Meaning** | Caps + natives that product + V1 library HTML run on PYTHON **and** FPGA-SIM | Console **authoring**: type / paste / edit HTML at READY, `RUN` without the µSD | Machine changes so **`storage/MK.HTML` as embedded today** can `LOAD` + `RUN` |
+| **Acceptance** | `INVADERS` / `PACMAN` / `DONKEY` | Numbered-line HTML at `>` compiles and plays; `SAVE` optional | **`MK.HTML`**. `MKPVP.HTML` stays V1 training wheels |
+| **Sprites / ASET** | **`MAX_SPR` = 16**, 4 MB bank | **Unchanged** (do not grow heap/ASET for this) | **`MAX_SPR` ≥ 518**, **8 MB** bank |
+| **Authoring** | [GAME_DESIGN.md](GAME_DESIGN.md) V1 walls; `LOAD` from card/storage | Same walls; source is the **editor buffer** | Same glass/`LOAD`/`RUN`; drop V1 HTML shims once V2 rows land |
+
+Do **not** title-gate (`if (stem == "MK")`).
+
+### V1.5 — type, paste, compile, edit HTML at READY (no card required)
+
+Not now. Do **not** build until a timing-clean bit is the daily board image
+and HDMI game scanout works. Ladder: PYTHON → FPGA-SIM → BOARD. Not a new
+ISA. Card stays HTML-only on `SAVE`.
+
+Logged 2026-08-25: BOARD `>` treats a paste or typed `<canvas…>` as a verb
+→ `?SN ERROR`. BASIC numbered lines are the glass.
+
+**What the user can do (all the same editor):**
+
+| Action | Glass |
+|---|---|
+| **Type** HTML | `10 <canvas…>` Enter, `20 <script>` Enter, … then `RUN` |
+| **Paste** HTML | Same path as type. Unnumbered paste auto-numbers by **10**; already-numbered lines keep their numbers |
+| **Compile / run** | `RUN` compile-on-RUN of the **editor buffer**. No extra `COMPILE` verb (each Enter already finished a line). Missing compile → loud `?NH` |
+| **Replace a line** | `10 body` + Enter (inserts if 10 is new) |
+| **Delete a line** | `10` + Enter (number only) — **gone**, not blank. PYTHON today blanks; V1.5 deletes |
+| **Insert between** | Numbers go by **10** (`10`, `20`, `30`, …). `15 xyz` lands **between** 10 and 20. Any unused integer is legal (`11`, `25`). `LIST` and `RUN` use **number order** |
+| **Edit** | Keep **`EDIT n`** — it already works (PYTHON and RTL: next typed line replaces that source line). **Also** `10 body` numbered replace at READY. Do **not** add `INSERT` / `DELETE` verbs for V1.5 — insert is an unused number (`15`); delete is `10` + Enter |
+| **Save** | `SAVE` / `SAVE name` optional. `RUN` must work with **no** µSD |
+| **List** | `LIST` keeps printing those line numbers |
+
+```text
+10 <canvas id="c" width="640" height="480"></canvas>
+20 <script>
+30 var c = document.getElementById("c").getContext("2d");
+15 <!-- comment between 10 and 20 -->
+RUN
+SAVE "BOX.HTML"
+```
+
+`RUN` compiles **current HTML in the editor**, not a sidecar and not
+“whatever `storage/` on the PC is named.” Today BOARD HTML `RUN` is host
+compile + PROG stream after a `.HTML` `LOAD` (`src_is_html`). A typed/pasted
+buffer must set that flag **without FAT**. Host compile-on-RUN stays for V1.5
+(on-chip compiler is **not** this generation).
+
+**Fit budget (run 33 routed, [FPGA_FIT.md](FPGA_FIT.md) SCOREBOARD):**
+
+| Resource | Used | Free | V1.5? |
+|---|---:|---:|---|
+| Slice LUTs | 108,777 / 134,600 (**80.8%**) | **25,823** | **Yes** — console parse + sparse line index is hundreds–low-thousands of LUTs, not 20k |
+| Block RAM | 343.5 / 365 (**94.1%**) | **21.5 tiles** | **Yes if we add no SOURCE BRAM.** HTML source is already in **external SRAM** (`SOURCE_MAX`, `SRC_SRAM_BASE`). A line-number map is a small LUTRAM (prefer that — BRAM is the tight one) |
+| Flip-flops | 45,379 / 269,200 (16.9%) | ~224k | Yes |
+
+**Do not** grow `MAX_SPR`, heap, or the 4 MB ASET bank for V1.5. **Do not**
+infer a JS compiler into LUTs (that would spend the 25k headroom and more).
+Insert/delete in SOURCE is FSM memmove on the existing SRAM port (clocks,
+not tiles).
+
+PYTHON already accepts `10 text` at READY; RTL does not. Empty `10` on
+PYTHON currently blanks the line — V1.5 is BASIC **delete**.
 
 ### V1.0 hard walls (do not “fix” in RTL for one title)
 
@@ -379,7 +437,7 @@ like BASIC tokens.
 Not in the three-compile ISA freeze. Do **not** grow **V1.0** for these
 unless a product title emits them. When scheduled, they are **V2.0**
 `CALL_NATIVE`s (same shape as `Math.floor`) on PYTHON + both execs — **never**
-title-gated RTL. See [Version 1.0 vs 2.0](#version-10-vs-20).
+title-gated RTL. See [Version 1.0, 1.5, and 2.0](#version-10-15-and-20).
 
 `storage/ASTEROID.HTML` already ships without `Math.sin`/`cos`: it embeds
 64-entry `UX`/`UY` unit-vector arrays in the HTML. That is **authoring around
@@ -521,7 +579,7 @@ Silicon holes and HELP-text mismatch:
 | `LOAD "NAME.HTML"` | P0 | in | in | Quotes optional. `LOAD n` (DIR index) is PYTHON. FPGA-SIM `SRCLOAD` skips FAT. |
 | `RUN` | P0 | in | in | Compile-on-RUN (host). On-chip compiler **NOT**. Missing stream → `?NH` / `?NB`. |
 | `LIST` / `LIST n-m` / `LIST -` | P0 | in | in | HTML line numbers. `-- MORE --` is Space/Enter, not a typed verb. |
-| `EDIT n` | P0 | in | in | Next typed line replaces that source line. |
+| `EDIT n` | P0 | in | in | Next typed line replaces that source line. **Keep** in V1.5 (not a workaround to drop). |
 | `INSERT n` | P0 | in | **NOT** (`?SN`) | Bug **42**. |
 | `DELETE n` | P0 | in | **NOT** (`?SN`) | Bug **43**. Editor-line delete. |
 | `REMOVE "NAME"` | P1 | in (file alias of DELETE) | in | File delete on card. Not `DELETE n`. |
@@ -532,6 +590,12 @@ Silicon holes and HELP-text mismatch:
 | `MEM` | P1 | in | in | RTL prints `FB 640X480` |
 | `ESC` | P0 | in | in | Machine BREAK; games must not steal Esc |
 | `10 text` (numbered replace) | P1 | in | **NOT** | PYTHON READY. RTL replace is only after `EDIT n`. |
+
+##### Version 1.5 (planned) — type / paste / edit HTML at READY
+
+**V1.0** today: typed HTML at `>` is `?SN ERROR`. Full glass, compile path,
+and LUT/BRAM budget:
+[§ V1.5](#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 
 #### Asset / compile pipeline (not a JS API)
 
@@ -1017,7 +1081,7 @@ compat row Complete from Chrome or from a fat RTL snippet.
 | `storage/ASTEROID.HTML` | Library title (vector Asteroids). Authoring: [GAME_DESIGN.md](GAME_DESIGN.md) |
 | `storage/AURORA.HTML` | Library title (fillRect gem hopper) |
 | `storage/MRDO.HTML` | Library title (Mr. Do! arcade). Portrait 384×480 letterbox; [GAME_DESIGN.md](GAME_DESIGN.md) |
-| `storage/MK.HTML` | **V2.0 goal** — **518** sheets, **~4.63 MB** pixels → **8 MB** asset SRAM (ASIC: one chip, simple port), dotted `new mk.…`, `for…in`/`Object.keys`, `Math.round` — [§ Version 1.0 vs 2.0](#version-10-vs-20) |
+| `storage/MK.HTML` | **V2.0 goal** — **518** sheets, **~4.63 MB** pixels → **8 MB** asset SRAM (ASIC: one chip, simple port), dotted `new mk.…`, `for…in`/`Object.keys`, `Math.round` — [§ Version 1.0, 1.5, and 2.0](#version-10-15-and-20) |
 | `storage/MKPVP.HTML` | **V1.0** library (slim MK 2P). 3 ASET atlases; L/R sheets; no `for-in`/`Object.keys`; no negative mirror |
 | In-memory ProgramImage | Compile-on-RUN code + source map + descriptors + ASET; never a storage name |
 | `storage/JOYDEMO.HTML` | Library smoke (joystick / arrows on Canvas) |
