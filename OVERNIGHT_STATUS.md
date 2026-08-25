@@ -905,3 +905,27 @@ point.
 Sim-boundary tally for the day: SPI edge timing, MIG UI handshake, UI
 read bandwidth, JSH eof framing - every board failure landed in
 exactly the RTL no simulation exercises. The boundary IS the bug list.
+
+## CONSTITUTIONAL GAP (user-raised, confirmed): standalone HTML RUN
+
+CONSTITUTION.md 62-64 (RUN compiles the loaded HTML in-memory, no
+sidecars) + rule 10 (PC not required; PROG is flash/debug only). The
+board's HTML RUN depends on host compile over the PROG tether -
+structurally PC-required. Violation is real; the tether path is
+legitimate only as a debug tool. Standalone today: console, editor,
+storage, rectdemo, .JS titles. NOT standalone: HTML titles - the
+machine's purpose.
+
+Compliant end state: SELF-HOSTED COMPILER - port compiler.py (~2.2k
+lines, ~3.8k with emitter) to the machine's own JS subset, bootstrap
+via the Python compiler once, ship as versioned system firmware image
+(firmware, not a title sidecar: the no-sidecar rule guards the HTML
+source of truth for TITLES). RUN = read HTML from card -> run compiler
+image -> fresh in-memory ProgramImage, HTML line numbers preserved.
+
+Open sizing questions before committing: compiler image vs the
+CODE_WORDS=20480 clamp (likely exceeds - needs execute-from-larger
+region or raised budget); compile time at 12.5 MHz (tens of seconds
+per title plausible); VM-subset coverage of the compiler's own idioms.
+First move: census the Python compiler over the six-title fleet
+(ops/allocs) and convert to VM-cycle + code-size estimates.
