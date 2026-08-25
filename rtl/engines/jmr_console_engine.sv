@@ -171,6 +171,12 @@ module jmr_console_engine (
     // beats. line[] is frozen post-Enter, so the pipe is always coherent.
     logic [7:0] ch_ni_q;
     logic [6:0] ni_q;
+    // Same recipe for the reply-message ROM (run-38 head, 13 levels:
+    // reply_char's sel*idx case fed state/reply CEs combinationally).
+    // Registered lookup + a one-beat settle whenever sel/idx moved.
+    logic [7:0] reply_ch_q;
+    logic [6:0] ridx_q;
+    logic [3:0] rsel_q;
     logic [7:0] dir_n, dir_idx;
     logic [17:0] src_len /*verilator public_flat_rw*/;     // bytes in SOURCE BRAM (0..131072)
     logic [17:0] src_i;
@@ -194,6 +200,11 @@ module jmr_console_engine (
     logic [29:0] teth_wd;
     logic [31:0] cons_stor_wd;
     logic        cons_stor_arm;
+    // Universal progress watchdog (board directive: DIR must NOT be able
+    // to freeze, root cause known or not). Any state that is not an
+    // interactive wait must make progress; ~21.5s parked anywhere else
+    // forces ?IO + prompt. The tether wait has its own shorter timeout.
+    logic [31:0] cons_prog_wd;
     logic        jsb_tether_mode; // NEW: HTML RUN — bytes from PROG, not FAT
     logic [7:0]  jsb_din;         // NEW: latched stream byte (FAT or tether)
     // NEW: JSB stream packer
@@ -277,6 +288,9 @@ module jmr_console_engine (
     always_ff @(posedge clk) begin
         ch_ni_q <= line[name_i];
         ni_q    <= name_i;
+        reply_ch_q <= reply_char(reply_sel, reply_idx);
+        ridx_q     <= reply_idx;
+        rsel_q     <= reply_sel;
     end
 
 
@@ -417,6 +431,7 @@ module jmr_console_engine (
             teth_wd <= 30'd0;
             cons_stor_wd <= 32'd0;
             cons_stor_arm <= 1'b0;
+            cons_prog_wd <= 32'd0;
             jsb_din <= 8'h0;
             ld_err <= 0;
             ld_nlines <= 0; ld_need_eol <= 0; ld_ann <= 0;
@@ -632,7 +647,9 @@ module jmr_console_engine (
                     end
                 end
                 C_REPLY: begin
-                    if (reply_char(reply_sel, reply_idx) == 8'h00) begin
+                    if (ridx_q != reply_idx || rsel_q != reply_sel) begin
+                        // reply ROM pipe settling
+                    end else if (reply_ch_q == 8'h00) begin
                         if (ld_ann && reply_sel == 4'd5) begin
                             // NEW: same line as PYTHON — LOADED NAME (N LINES)
                             name_i <= 0;
@@ -645,7 +662,7 @@ module jmr_console_engine (
                         end
                     end else if (!video_busy) begin
                         put_en <= 1'b1;
-                        put_char <= reply_char(reply_sel, reply_idx);
+                        put_char <= reply_ch_q;
                         reply_idx <= reply_idx + 1'b1;
                         state <= C_WAIT_VIDEO;
                         ret_state <= C_REPLY;
@@ -1316,13 +1333,15 @@ module jmr_console_engine (
                     end else state <= list_from_card ? C_LIST_CARD_GB : C_LIST_RD_GO;
                 end
                 C_LIST_MORE: begin
-                    if (reply_char(reply_sel, reply_idx) == 8'h00) begin
+                    if (ridx_q != reply_idx || rsel_q != reply_sel) begin
+                        // reply ROM pipe settling
+                    end else if (reply_ch_q == 8'h00) begin
                         print_nl <= 1'b1;
                         state <= C_WAIT_VIDEO;
                         ret_state <= C_LIST_WAIT;
                     end else if (!video_busy) begin
                         put_en <= 1'b1;
-                        put_char <= reply_char(reply_sel, reply_idx);
+                        put_char <= reply_ch_q;
                         reply_idx <= reply_idx + 1'b1;
                         state <= C_WAIT_VIDEO;
                         ret_state <= C_LIST_MORE;
@@ -1960,6 +1979,16 @@ module jmr_console_engine (
                 if (cons_stor_wd[31] && cons_stor_wd[30]) begin // ~32s
                     cons_stor_arm <= 1'b0;
                     cons_stor_wd  <= 32'd0;
+                    reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY;
+                end
+            end
+            if (state == C_IDLE || state == C_PROMPT || state == C_ECHO
+                || state == C_LIST_WAIT)
+                cons_prog_wd <= 32'd0;
+            else begin
+                cons_prog_wd <= cons_prog_wd + 32'd1;
+                if (cons_prog_wd[31]) begin // ~21.5s
+                    cons_prog_wd <= 32'd0;
                     reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY;
                 end
             end
