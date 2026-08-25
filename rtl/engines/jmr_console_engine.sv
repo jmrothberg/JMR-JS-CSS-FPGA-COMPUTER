@@ -657,12 +657,21 @@ module jmr_console_engine (
                 C_DIR0W: if (stor_done) begin
                     if (stor_err) begin reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY; end
                     else state <= C_DIRN;
+                end else if (!kbd_empty && kbd_data == 8'h1B) begin
+                    // ESC while storage works: consume it, bail to prompt.
+                    // A late stor_done pulse with nobody waiting is ignored;
+                    // storage completes or watchdogs out on its own.
+                    kbd_pop <= 1'b1;
+                    msg_idx <= 0; state <= C_PROMPT;
                 end
                 C_DIRN: if (!stor_busy) begin stor_dir_next <= 1'b1; state <= C_DIRNW; end
                 C_DIRNW: if (stor_done) begin
                     if (stor_err) begin reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY; end
                     else if (stor_eof) begin msg_idx <= 0; state <= C_PROMPT; end
                     else begin dir_n <= stor_line_len; dir_idx <= 0; state <= C_DIR_RD; end
+                end else if (!kbd_empty && kbd_data == 8'h1B) begin
+                    kbd_pop <= 1'b1;
+                    msg_idx <= 0; state <= C_PROMPT;
                 end
                 C_DIR_RD: begin
                     if (dir_idx >= dir_n) state <= C_DIR_NL;
