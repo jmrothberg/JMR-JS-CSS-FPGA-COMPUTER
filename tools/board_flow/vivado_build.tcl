@@ -327,7 +327,9 @@ catch {reset_run impl_1}
 set_param general.maxThreads $IMPL_THREADS
 puts "INFO: impl maxThreads=$IMPL_THREADS jobs=$IMPL_JOBS"
 launch_runs impl_1 -to_step write_bitstream -jobs $IMPL_JOBS
-jmr_wait_run impl_1
+# catch: a failed route ERRORs out of wait_on_runs and would kill the
+# script before the checkpoint-recovery branch below ever ran (run 45).
+catch { jmr_wait_run impl_1 }
 set st [get_property STATUS [get_runs impl_1]]
 set RECOVERED 0
 if {[get_property PROGRESS [get_runs impl_1]] != "100%" ||
