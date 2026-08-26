@@ -780,6 +780,15 @@ class SimBackend(RuntimeBackend):
             from tools.compile_js import compile_html_text, encode_html_chunk
 
             html = self._loaded_html_text
+            # The card copy of an HTML title is display-only: giant asset
+            # lines are squashed to `<LINE n: ... CHARS OMITTED>` for LIST
+            # (make_sd_image.squash_long_html_lines). A mirror populated
+            # from that copy compiles into a title with no sprites (DONKEY
+            # background-only, 2026-08-25). Compile the source of truth.
+            if html and "CHARS OMITTED>" in html and html_path.is_file():
+                self._log.note(
+                    f"squashed card copy in editor mirror - compiling {html_path.name}")
+                html = ""
             if not html:
                 html = html_path.read_text(encoding="utf-8")
                 self._loaded_html_text = html
