@@ -160,6 +160,8 @@ module top_nexys_video (
     logic [9:0] scan_addr, cursor;
     logic [7:0] scan_data, dump_data;
     logic       ready_lit, game_mode, game_view;
+    logic [31:0] vm_vdbg;
+    logic        vm_vdbg_fault;
     logic [6:0] stor_dbg_state;
     logic [5:0] joy_out;
     logic [18:0] fb_raddr;
@@ -206,6 +208,7 @@ module top_nexys_video (
         .ps2_strobe(ps2_strobe),
         .ps2_code(ps2_scancode),
         .stor_state(stor_dbg_state),
+        .vm_vdbg(vm_vdbg), .vm_vdbg_fault(vm_vdbg_fault),
         .jsb_tether_stb(uart_jsb_stb), .jsb_tether_data(uart_jsb_data),
         .jsb_tether_eof(uart_jsb_eof), .jsb_tether_rdy(uart_jsb_rdy)
     );
@@ -220,6 +223,7 @@ module top_nexys_video (
         .sd_card_present(~sd_cd),
         .stor_dbg_state_o(stor_dbg_state),
         .game_view_o(game_view),
+        .vdbg_o(vm_vdbg), .vdbg_fault_o(vm_vdbg_fault),
         // both PS/2 keyboards feed the game-event path (main wins a tie)
         .key_evt_stb(kev_stb | pmod_kev_stb),
         .key_evt_code(kev_stb ? kev_code : pmod_kev_code),

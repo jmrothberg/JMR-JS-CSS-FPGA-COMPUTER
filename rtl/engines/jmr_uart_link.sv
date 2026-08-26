@@ -155,6 +155,10 @@ module jmr_uart_link #(
     // storage state telemetry: "Dxx" line when it CHANGES while busy
     // (a stalled DIR parks in one state - one line names it)
     input  logic [6:0] stor_state = 7'd0,
+    // BOARD VM heartbeat: packed {0,st[6:0],fault[7:0],ip[15:0]}, already
+    // registered in the VM domain - sampled here as a plain register.
+    input  logic [31:0] vm_vdbg = 32'd0,
+    input  logic        vm_vdbg_fault = 1'b0,
     // NEW: HTML RUN .JSH stream (0xFD + u32 LE length + payload)
     output logic       jsb_tether_stb,
     output logic [7:0] jsb_tether_data,
@@ -274,7 +278,8 @@ module jmr_uart_link #(
     //   game:  "P<rr>:" + 160 hex nibbles + "\n" (subsample of 640×480)
     //   key:   "K\n" once when ps2_strobe fires (between dumps)
     typedef enum logic [3:0] {
-        HB_IDLE, HB_HDR, HB_ROW, HB_ROW2, HB_COLON, HB_BYTE, HB_NL, HB_K, HB_KH, HB_KL, HB_KNL
+        HB_IDLE, HB_HDR, HB_ROW, HB_ROW2, HB_COLON, HB_BYTE, HB_NL, HB_K, HB_KH, HB_KL, HB_KNL,
+        HB_V, HB_VN, HB_VNL
     } hb_t;
     hb_t hb_state;
     logic        dump_active;
@@ -288,6 +293,10 @@ module jmr_uart_link #(
     logic [6:0]  stor_q;
     logic        d_pending, d_sel;
     logic [7:0]  d_code_q;
+    logic        v_pending;
+    logic [31:0] v_latch;
+    logic [2:0]  v_nib;
+    logic        vfault_q, dump_active_q;
     logic [26:0] d_dwell;  // continuous-busy dwell (board: the old
     // single-state equality never fired - a stall can LOOP between states)
     // NEW: register pixel/char before wr_data (dump_addr→RAM→wr was WNS −0.025)
@@ -312,6 +321,8 @@ module jmr_uart_link #(
             k_pending <= 1'b0;
             ps2_strobe_q <= 1'b0;
             stor_q <= 7'd0; d_pending <= 1'b0; d_sel <= 1'b0;
+            v_pending <= 1'b0; v_latch <= 32'd0; v_nib <= 3'd0;
+            vfault_q <= 1'b0; dump_active_q <= 1'b0;
             d_code_q <= 8'd0; d_dwell <= 26'd0;
             dump_byte_q <= 8'h20;
         end else begin
@@ -321,6 +332,14 @@ module jmr_uart_link #(
             // Rising edge of USB scancode strobe → one tether note
             if (ps2_strobe && !ps2_strobe_q)
                 begin k_pending <= 1'b1; k_code_q <= ps2_code; end
+                // VM heartbeat: one V line per completed S/P dump, plus one on a
+                // machine_fault rise (spec: V<st2><fault2><ip4>).
+                dump_active_q <= dump_active;
+                vfault_q <= vm_vdbg_fault;
+                if ((dump_active_q && !dump_active) || (vm_vdbg_fault && !vfault_q)) begin
+                    v_pending <= 1'b1;
+                    v_latch   <= vm_vdbg;
+                end
                 // storage stall telemetry: after ~0.67s of CONTINUOUS busy,
                 // emit the current state every ~0.17s. Catches parked AND
                 // looping stalls; normal ops idle between console strobes and
@@ -348,6 +367,10 @@ module jmr_uart_link #(
                         d_pending <= 1'b0;
                         d_sel <= 1'b1;
                         hb_state <= HB_K;
+                    end else if (v_pending && !tx_busy && !dump_active) begin
+                        v_pending <= 1'b0;
+                        v_nib <= 3'd7;
+                        hb_state <= HB_V;
                     end else if (dump_active && !tx_busy) begin
                         hb_state <= HB_HDR;
                     end else if (dump_div == 22'h3FFFFF && !tx_busy) begin
@@ -374,6 +397,22 @@ module jmr_uart_link #(
                     wr_en <= 1'b1;
                     wr_data <= hex_digit(d_sel ? d_code_q[3:0] : k_code_q[3:0]);
                     hb_state <= HB_KNL;
+                end
+                HB_V: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= "V";
+                    hb_state <= HB_VN;
+                end
+                HB_VN: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= hex_digit(v_latch[{v_nib, 2'b00} +: 4]);
+                    if (v_nib == 3'd0) hb_state <= HB_VNL;
+                    else v_nib <= v_nib - 3'd1;
+                end
+                HB_VNL: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= 8'h0A;
+                    hb_state <= HB_IDLE;
                 end
                 HB_KNL: if (!tx_busy) begin
                     wr_en <= 1'b1;

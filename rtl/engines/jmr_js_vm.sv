@@ -39,6 +39,11 @@ module jmr_js_vm #(
     input  logic [31:0] code_wdata,
     output logic        busy,
     output logic        done,
+    // BOARD tether VM heartbeat (spec 2026-08-26): flopped scalars only,
+    // packed on the VM clock - the link samples a register, never the
+    // FSM cone. {1'b0, st[6:0], fault[7:0], ip[15:0]}.
+    output logic [31:0] vdbg_o,
+    output logic        vdbg_fault_o,
     output logic        fb_we,
     output logic [18:0] fb_waddr,
     output logic [7:0]  fb_wdata,
@@ -4584,6 +4589,11 @@ module jmr_js_vm #(
     always_ff @(posedge clk) begin
         if (!rst_n) casestate_q <= S_IDLE;
         else casestate_q <= casestate;
+    end
+    always_ff @(posedge clk) begin
+        vdbg_o       <= {1'b0, 7'(casestate_q), fault_code, ip};
+        vdbg_fault_o <= machine_fault;
+
     end
 
     // Live HEAP/FETCH view: these clock in exec. Masked parent writes (hs_m_*)

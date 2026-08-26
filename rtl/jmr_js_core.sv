@@ -27,6 +27,8 @@ module jmr_js_core #(
     output logic [5:0]  joy_out,
     output logic [6:0]  stor_dbg_state_o,
     output logic        game_view_o,
+    output logic [31:0] vdbg_o,
+    output logic        vdbg_fault_o,
     // FPGA-SIM keyboard/joystick ARE these ports (GUI KEYEVT / KEYBITS).
     // No PS/2 or I2C in this module. Board PHY is top_nexys_video only.
     // LED proofs: tools/pmod_input_test + tools/hid_led_blink — not this file.
@@ -449,6 +451,7 @@ module jmr_js_core #(
         .key_evt_down(vm_kev_down_lat),
         .code_we(code_we), .code_waddr(code_waddr), .code_wdata(code_wdata),
         .busy(vm_busy), .done(vm_done),
+        .vdbg_o(vdbg_o), .vdbg_fault_o(vdbg_fault_o),
         .fb_we(vm_fb_we), .fb_waddr(vm_fb_waddr),
         .fb_wdata(vm_fb_wdata), .fb_swap(vm_fb_swap),
         .fb_present_busy(fb_present_busy),
