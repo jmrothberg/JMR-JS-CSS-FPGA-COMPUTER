@@ -151,6 +151,7 @@ module jmr_uart_link #(
     input  logic       game_mode = 1'b0,
     // NEW: log USB scancodes to tether (flight-log proof without guessing LEDs)
     input  logic       ps2_strobe = 1'b0,
+    input  logic [7:0] ps2_code = 8'h00,
     // NEW: HTML RUN .JSH stream (0xFD + u32 LE length + payload)
     output logic       jsb_tether_stb,
     output logic [7:0] jsb_tether_data,
@@ -270,7 +271,7 @@ module jmr_uart_link #(
     //   game:  "P<rr>:" + 160 hex nibbles + "\n" (subsample of 640×480)
     //   key:   "K\n" once when ps2_strobe fires (between dumps)
     typedef enum logic [3:0] {
-        HB_IDLE, HB_HDR, HB_ROW, HB_ROW2, HB_COLON, HB_BYTE, HB_NL, HB_K, HB_KNL
+        HB_IDLE, HB_HDR, HB_ROW, HB_ROW2, HB_COLON, HB_BYTE, HB_NL, HB_K, HB_KH, HB_KL, HB_KNL
     } hb_t;
     hb_t hb_state;
     logic        dump_active;
@@ -280,6 +281,7 @@ module jmr_uart_link #(
     logic [7:0]  fb_col;        // 0..159
     logic        k_pending;
     logic        ps2_strobe_q;
+    logic [7:0]  k_code_q;
     // NEW: register pixel/char before wr_data (dump_addr→RAM→wr was WNS −0.025)
     logic [7:0]  dump_byte_q;
 
@@ -308,7 +310,7 @@ module jmr_uart_link #(
             ps2_strobe_q <= ps2_strobe;
             // Rising edge of USB scancode strobe → one tether note
             if (ps2_strobe && !ps2_strobe_q)
-                k_pending <= 1'b1;
+                begin k_pending <= 1'b1; k_code_q <= ps2_code; end
             // Sample VRAM/FB one cycle ahead of HB_BYTE consume
             if (dump_game)
                 dump_byte_q <= hex_digit(dump_fb_rdata[3:0]);
@@ -335,6 +337,16 @@ module jmr_uart_link #(
                 HB_K: if (!tx_busy) begin
                     wr_en <= 1'b1;
                     wr_data <= "K";
+                    hb_state <= HB_KH;
+                end
+                HB_KH: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= hex_digit(k_code_q[7:4]);
+                    hb_state <= HB_KL;
+                end
+                HB_KL: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= hex_digit(k_code_q[3:0]);
                     hb_state <= HB_KNL;
                 end
                 HB_KNL: if (!tx_busy) begin

@@ -199,6 +199,7 @@ module top_nexys_video (
         .dump_fb_raddr(dump_fb_raddr), .dump_fb_rdata(dump_fb_rdata),
         .game_mode(game_mode),
         .ps2_strobe(ps2_strobe),
+        .ps2_code(ps2_scancode),
         .jsb_tether_stb(uart_jsb_stb), .jsb_tether_data(uart_jsb_data),
         .jsb_tether_eof(uart_jsb_eof), .jsb_tether_rdy(uart_jsb_rdy)
     );
