@@ -6478,7 +6478,17 @@ module jmr_js_vm #(
                         cls_done <= 1'b1;
                     end else begin
                         cls_m <= cls_m + 4'd1;
-                        clsm_raddr <= {cls_c, cls_m};
+                        // 2026-08-26 DONKEY root cause: issuing the
+                        // pre-increment index re-read the entry the
+                        // prime beat already issued, lagging every
+                        // later comparison by one entry - the LAST
+                        // method's data landed one beat after the
+                        // walk terminated and was NEVER compared. Any
+                        // class with >=3 methods could not resolve
+                        // its final method (Mario/DK/Barrel .update
+                        // are all declared last: no player, no kong,
+                        // no barrels). Issue one ahead.
+                        clsm_raddr <= {cls_c, cls_m + 4'd1};
                     end
                 end
             end
