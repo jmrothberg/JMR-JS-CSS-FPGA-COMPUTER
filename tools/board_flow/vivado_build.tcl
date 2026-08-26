@@ -317,15 +317,34 @@ puts "INFO: impl maxThreads=$IMPL_THREADS jobs=$IMPL_JOBS"
 launch_runs impl_1 -to_step write_bitstream -jobs $IMPL_JOBS
 jmr_wait_run impl_1
 set st [get_property STATUS [get_runs impl_1]]
+set RECOVERED 0
 if {[get_property PROGRESS [get_runs impl_1]] != "100%" ||
     [string match -nocase "*fail*" $st] ||
     [string match -nocase "*error*" $st]} {
-  puts "ERROR: implementation failed (STATUS=$st)"
-  puts "ERROR: if post_opt/post_place/post_route.dcp exist under $OUT, open_checkpoint that file; project make bit will skip synth if RTL unchanged."
-  exit 1
+  # 2026-08-26 checkpoint recovery (run-41 lesson: a route SIGKILLed by
+  # something outside Vivado discarded 3h of converged routing while the
+  # step checkpoints sat on disk). Resume from the newest checkpoint
+  # instead of failing the whole run; only a run with no checkpoints at
+  # all is a true failure.
+  set idir [get_property DIRECTORY [get_runs impl_1]]
+  set CKPT ""
+  foreach cand {top_nexys_video_routed.dcp top_nexys_video_physopt.dcp top_nexys_video_placed.dcp top_nexys_video_opt.dcp} {
+    if {[file exists "$idir/$cand"]} { set CKPT "$idir/$cand"; break }
+  }
+  if {$CKPT eq ""} {
+    puts "ERROR: implementation failed (STATUS=$st) and no checkpoint to resume from"
+    exit 1
+  }
+  puts "RECOVER: implementation failed (STATUS=$st) — resuming from $CKPT"
+  open_checkpoint $CKPT
+  if {![string match "*routed*" $CKPT]} {
+    if {[string match "*_opt.dcp" $CKPT]} { place_design; phys_opt_design }
+    route_design
+  }
+  set RECOVERED 1
 }
 
-open_run impl_1
+if {!$RECOVERED} { open_run impl_1 }
 report_utilization -file $OUT/utilization_impl.rpt
 
 # NEW: never ship a failing-timing bit (prior build wrote .bit with WNS −0.5 ns)
@@ -341,6 +360,9 @@ if {$whs eq "" || $whs < 0} {
   exit 1
 }
 
+if {$RECOVERED} {
+  write_bitstream -force [get_property DIRECTORY [get_runs impl_1]]/top_nexys_video.bit
+}
 file copy -force \
   [get_property DIRECTORY [get_runs impl_1]]/top_nexys_video.bit \
   $OUT/jmr_nexys_video.bit
