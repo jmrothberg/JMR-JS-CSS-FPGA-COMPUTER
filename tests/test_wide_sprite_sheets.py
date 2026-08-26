@@ -5,7 +5,7 @@ computes every source offset with a wrapped row stride: the WHOLE sheet
 blits garbage, not just the far columns. DONKEY's character sheets are
 936/1398/1470 wide; its platforms (small sheets) drew fine - exactly
 the board and sim symptom. The FM loses them identically, so no parity
-test could catch it; this gate pins the contract for the widening fix.
+test could catch it; FIXED 2026-08-26 (full 16-bit parse); this gate keeps it fixed.
 Constitution: "Great graphics stay at full quality... do not downscale
 sheets to fit"; silent truncation also violates "loud overflow".
 """
@@ -21,7 +21,6 @@ sys.path.insert(0, str(ROOT))
 from tests.test_rtl_snippets import _fb_pix, _fb_raw, _patch_js_spr, _sim
 
 
-@pytest.mark.xfail(reason="10-bit sprite width parse; fix = widen to 16-bit + loud compiler limit", strict=True)
 def test_rtl_wide_sheet_blits_exact():
     W, H = 1400, 20
     pix = bytearray(W * H)

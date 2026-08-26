@@ -8802,17 +8802,23 @@ module jmr_js_vm #(
                             trail_acc[7:0] <= trail_tb;
                             spr_hdr <= 3'd1;
                         end else if (spr_hdr == 3'd1) begin
-                            spr_ww[spr_i[3:0]] <= {6'd0, {trail_tb, trail_acc[7:0]}[9:0]};
+                            // 2026-08-26 (user diff): full 16-bit width like the
+                            // SPRD path - the [9:0] mask wrapped any sheet wider
+                            // than 1023 px into a garbage row stride
+                            // (tests/test_wide_sprite_sheets.py gate).
+                            spr_ww[spr_i[3:0]] <= {trail_tb, trail_acc[7:0]};
                             spr_hdr <= 3'd2;
                         end else if (spr_hdr == 3'd2) begin
                             trail_acc[7:0] <= trail_tb;
                             spr_hdr <= 3'd3;
                         end else begin
-                            spr_hh[spr_i[3:0]] <= {6'd0, {trail_tb, trail_acc[7:0]}[9:0]};
+                            spr_hh[spr_i[3:0]] <= {trail_tb, trail_acc[7:0]};
                             spr_off[spr_i[3:0]] <= 22'(spr_wp);
-                            spr_left <= 18'({trail_tb, trail_acc[7:0]}[9:0]) * 18'(spr_ww[spr_i[3:0]][9:0]);
+                            // 18-bit stream count bounds SPR-path sprites at
+                            // 256K pixels; larger art rides ASET (unchanged).
+                            spr_left <= 18'({trail_tb, trail_acc[7:0]}) * 18'(spr_ww[spr_i[3:0]]);
                             spr_hdr <= 3'd0;
-                            if (18'({trail_tb, trail_acc[7:0]}[9:0]) * 18'(spr_ww[spr_i[3:0]][9:0]) == 18'd0) begin
+                            if (18'({trail_tb, trail_acc[7:0]}) * 18'(spr_ww[spr_i[3:0]]) == 18'd0) begin
                                 if (spr_i + 5'd1 >= n_spr) begin
                                     spr_hdr <= 3'd0;
                                     trail_ph <= 6'd35;
