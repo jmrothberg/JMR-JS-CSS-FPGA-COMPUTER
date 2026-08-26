@@ -108,6 +108,7 @@ function loadOne(key) {
   var im = new Image();
   im.onload = function () {
     loaded = loaded + 1;
+    /* rule 3: fillText takes the number */
   };
   im.src = MK_IMG[key];
   imgs[key] = im;
@@ -153,16 +154,17 @@ function stickBits() {
   try { j = joy() | 0; } catch (e) { j = 0; }
   return j;
 }
+var p1Pad = { left: 0, right: 0, up: 0, down: 0, punch: 0, kick: 0 };
 function p1Keys() {
   var j = stickBits();
-  return {
-    left: k1.left || (j & 4),
-    right: k1.right || (j & 8),
-    up: k1.up || (j & 1),
-    down: k1.down || (j & 2),
-    punch: k1.punch || (j & 16),
-    kick: k1.kick || (j & 32)
-  };
+  /* Rule 4: reuse one pad object — do not alloc {left,right,...} every frame. */
+  p1Pad.left = k1.left || (j & 4);
+  p1Pad.right = k1.right || (j & 8);
+  p1Pad.up = k1.up || (j & 1);
+  p1Pad.down = k1.down || (j & 2);
+  p1Pad.punch = k1.punch || (j & 16);
+  p1Pad.kick = k1.kick || (j & 32);
+  return p1Pad;
 }
 
 function resetFight() {
@@ -414,7 +416,8 @@ function draw() {
     c.fillRect(180, 200, 280, 40);
     c.fillStyle = "#e8c14a";
     c.font = "14px monospace";
-    c.fillText("Loading " + loaded + "/" + need, 240, 225);
+    c.fillText("Loading", 240, 225);
+    c.fillText(loaded, 300, 225);
   } else if (mode === ATTRACT) {
     c.fillStyle = "#000";
     c.fillRect(160, 160, 320, 100);

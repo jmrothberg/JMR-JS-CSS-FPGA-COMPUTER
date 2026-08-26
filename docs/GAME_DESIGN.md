@@ -93,7 +93,9 @@ That seeds the FAT image from `storage/` root files (8.3 names on the card).
 - Joystick bits are optional extras; they must not replace HTML bindings.
   Poll `joy()` each frame (bits: 1=up 2=down 4=left 8=right 16=FIRE1 32=FIRE2)
   and OR into the same held flags as keys (`JOYDEMO.HTML`). RTL may also
-  synthesize Arrow/Space/Enter — still read `keyCode`.
+  synthesize Arrow/Space/Enter — still read `keyCode`. The stick’s four face
+  buttons are only two bits: A + C + stick-click = FIRE1 (Space); B + D =
+  FIRE2 (Enter). Map those to fire / start / jump — not four distinct actions.
 
 ---
 
@@ -176,6 +178,172 @@ multi-die access). Also compiler **`new mk.…`** and **`Function.prototype.call
 shim), plus **`Object.keys` on exec64** and **`Math.round`**. The smaller
 parse gaps (unary `+`, `for…in`, `throw`, `in`) are **done**. Full table: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
 Until those land, do not expect `LOAD "MK.HTML"` + `RUN` on FPGA-SIM.
+
+---
+
+## Writing a title that is FAST (measured, not guessed)
+
+Correctness gets you a title that runs. This section gets you one that
+plays. Every number here is **measured** — from the PACMAN and INVADERS
+frame profiles in
+[SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md#measured-clock-sinks--pacman-play-frame-2026-08-20-statehist), not estimated.
+
+### The budget — this is the number that matters
+
+The board's VM runs at **12.5 MHz** (`ui_clk`÷8; see
+[TIMING_WALL.md](TIMING_WALL.md)). So one frame at 30 fps is:
+
+| | |
+|---|---|
+| **30 fps budget** | **416,667 VM clocks per frame** |
+| 60 fps budget | 208,333 clocks |
+
+Measured against that budget, today's titles:
+
+| Title | clocks/frame | actual fps | over budget |
+|---|---:|---:|---:|
+| PACMAN play | 3,500,000 | **3.6 fps** | **8×** |
+| INVADERS play | 10,600,000 | **1.2 fps** | **25×** |
+
+**Read that before optimizing anything.** These are not titles that need
+trimming; they need a different drawing strategy. And note the budget is
+8× tighter than the 100 MHz numbers the ledger was profiled at.
+
+### What each primitive actually costs
+
+| Operation | Cost | Full-screen (640×480) | % of a 30fps frame |
+|---|---|---:|---:|
+| `fillRect` | **1 px/clock** | 307,200 clk | **74%** |
+| `putImageData` | **2 clk/px** | 614,400 clk | **148%** |
+| string `+` / join | **~2,000 clk each** (intern FIND, O(names)) | — | 0.5% each |
+| per-op decode | ~1 clk/op | — | — |
+
+**One full-screen clear costs three quarters of your entire frame.** One
+full-screen `putImageData` is over budget by itself, before any game
+logic runs.
+
+### The four rules, ranked by measured impact
+
+**1. Never draw sprites with per-pixel JavaScript loops.**
+This is why INVADERS is the slowest title on the machine: it paints
+sprites as a loop of tiny `fillRect`s, and **66% of its 10.6M-clock frame
+is per-op execution cost**. A 1×1 `fillRect` pays a full native call —
+the call overhead dwarfs the one pixel it paints. Use `drawImage` with a
+sprite `Image`, which moves the pixels inside the chip instead of one JS
+op per pixel. This single change is worth more than everything else here
+combined.
+
+**2. Do not repaint what did not change.**
+`fillRect` is 1 px/clock, so painted **area** is the cost — not the number
+of calls. Clearing the whole screen each frame spends 74% of the budget
+before drawing anything. Repaint only dirty regions: the sprites that
+moved, plus the background patch they vacated. PACMAN spends 17% of its
+frame on `fillRect` painting roughly two full screens.
+
+**3. Never turn a number into a string. Pass the number to `fillText`.**
+
+> ⚠️ **This rule was wrong in an earlier revision of this file and broke
+> five titles.** The earlier text said "build strings once, not per frame,"
+> which read as an invitation to hoist `""+score` into a variable. Doing
+> that **converts a free path into a leaking one.** Corrected below.
+
+The intern table holds **1024 entries and never releases them.** Every
+*distinct* string a title creates takes a permanent slot. So this:
+
+```javascript
+_SCORE_STR = "" + _SCORE;                    // WRONG — new slot per score value
+context.fillText(_SCORE_STR, x, y);
+```
+
+mints a new permanent entry for every score value the player reaches —
+0, 10, 20, 30 … — and after ~750 of them the machine halts with
+`ERROR: HM VALUE64: string table overflow (1025 > 1024)`. Chrome has no
+such table, so this passes in a browser and dies here.
+
+`fillText` renders a **number** argument without interning anything:
+
+```javascript
+context.fillText(_SCORE, x, y);              // RIGHT — costs nothing, leaks nothing
+```
+
+**Rules:**
+- **Pass numbers directly to `fillText`.** Never `"" + n`, never a
+  `*_STR` mirror variable.
+- **Draw a label and its value as two `fillText` calls**, not one joined
+  string: `fillText("SCORE", x, y)` then `fillText(score, x+48, y)`.
+  Literals cost one permanent slot each — fine. *Values* must never
+  become strings.
+- **Only if a title already builds strings every frame** is there
+  anything to optimize, and the fix is to remove the concatenation, not
+  to cache it. Caching a value-derived string still leaks one slot per
+  distinct value.
+- A string built from a **bounded** set (level names, a fixed menu) is
+  safe. A string built from a score, timer, coordinate, or any unbounded
+  counter is a leak.
+
+Cost, for reference: each intern FIND walks up to ~2,000 clocks, and
+PACMAN spends **15%** of its frame in `S_JOIN_FIND`. But the overflow is
+the real hazard — it stops the machine, not just slows it.
+
+**4. Reduce allocation — but do NOT convert temporaries into permanents.**
+
+> ⚠️ **This rule was also wrong in an earlier revision and broke PACMAN.**
+> It said "allocate your arrays once at startup and reuse them." On this
+> machine that trades a *transient* cost for a *permanent* one, and there
+> is almost no permanent capacity left.
+
+Allocation churn does cost: GC is PACMAN's largest sink at **24% of the
+frame, 4 mark-sweeps per frame**. But the array heap holds **1536 arrays**
+and PACMAN already sits at **1352 live — about 180 slack.** Hoisting a
+few per-frame grids to startup made it permanent and produced
+`ERROR: HM VALUE64: array heap overflow (1549 > 1548)`.
+
+**A temporary array is free capacity — GC reclaims it. A hoisted one is
+capacity you never get back.**
+
+**Rules:**
+- **Do not pre-allocate grids, maps, or scratch structures at startup**
+  to avoid per-frame allocation. That is the trade that breaks titles.
+- The right fix is to **allocate less**, not to allocate earlier:
+  compute values without building an intermediate array, avoid `.map` /
+  `.slice` / `.split` where a plain loop over the existing array works,
+  and do not build a lookup table for something you can index directly.
+- **Reuse is safe only for a small, fixed number of objects** — one
+  reusable event object or coordinate object, not a per-cell grid.
+- **Check the budget before hoisting anything:** the `arr=` field in the
+  monitor `SNAP` line shows live arrays. If a title is near 1536, it has
+  no room for a permanent structure of any size.
+
+**The general lesson behind rules 3 and 4:** this machine's limits are
+**capacity**, not just speed — 1024 interned strings, 1536 arrays, and
+neither is released. An optimization that converts per-frame work into a
+permanent allocation can turn a slow title into one that will not start.
+Measure capacity headroom before trading for speed.
+
+### Quick self-check for a new title
+
+- Sprites drawn with `drawImage`, not per-pixel loops? *(rule 1)*
+- Any full-screen clear or `putImageData` in the frame loop? *(rule 2 — that alone can exceed the budget)*
+- Any `"" + number`, or a `*_STR` variable holding a score/timer/coordinate? *(rule 3 — this overflows the 1024-entry intern table and halts the machine)*
+- Any `[]`, `{}`, `new`, `.map`, `.slice`, `.split` inside the frame loop? *(rule 4 — reduce them; do NOT hoist them to startup)*
+- Does the title have array-heap headroom (`arr=` in SNAP, cap 1536) before you make anything permanent? *(rule 4)*
+
+A title that answers "no" to the last three and "yes" to the first has a
+real chance at 30 fps. One that answers the other way will land where
+INVADERS is.
+
+### What is being fixed in the machine (do not design around these)
+
+Some of the cost is the chip's, and is on the roadmap — do not contort a
+title to dodge these:
+
+- intern FIND hash→id (removes most of the 15% string cost)
+- `putImageData` 2→1 clk/px
+- `fillRect` 4 px/clock
+- skipping the scheduled frame-end GC when a forced GC already ran
+
+Rules 1–4 above are the **authoring** half, and they are worth more than
+the machine-side fixes for a title shaped like INVADERS.
 
 ---
 

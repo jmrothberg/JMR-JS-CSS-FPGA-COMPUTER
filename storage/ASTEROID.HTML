@@ -57,11 +57,20 @@ var thrustFlick = 0;
 
 var hs = localStorage.getItem("ASTEROID_HI");
 if (hs) hi = hs - 0;
+/* rule 3: fillText takes the number */
 
 function wrapN(n, m) {
   while (n < 0) n = n + m;
   while (n >= m) n = n - m;
   return n;
+}
+
+/* JOYDEMO bits. This handle’s electrical DOWN (bit 2) is physical forward.
+   Do not treat stick Y as hyperspace — that was ArrowDown KEYEVT. */
+function stickBits() {
+  var j = 0;
+  try { j = joy() | 0; } catch (e) { j = 0; }
+  return j;
 }
 
 function dirx(h) {
@@ -169,12 +178,14 @@ function aimH(dx, dy) {
 
 function addScore(n) {
   score = score + n;
+  /* rule 3: fillText takes the number */
   if (score >= nextLife) {
     lives = lives + 1;
     nextLife = nextLife + 10000;
   }
   if (score > hi) {
     hi = score;
+    /* rule 3: fillText takes the number */
     localStorage.setItem("ASTEROID_HI", "" + hi);
   }
 }
@@ -240,6 +251,7 @@ function resetShip() {
 
 function startGame() {
   score = 0;
+  /* rule 3: fillText takes the number */
   lives = 3;
   wave = 1;
   nextLife = 10000;
@@ -340,8 +352,10 @@ function keyOn(e, down) {
   if (k === "ArrowRight" || k === "d" || k === "D" || cde === 39 || cde === 68) rightHeld = down;
   if (k === "ArrowUp" || k === "w" || k === "W" || cde === 38 || cde === 87) thrustHeld = down;
   if (k === " " || cde === 32) fireHeld = down;
-  if (k === "ArrowDown" || k === "s" || k === "S" || k === "Shift" || k === "h" || k === "H" || cde === 40 || cde === 16 || cde === 72 || cde === 83) hyperHeld = down;
-  if (k === "Enter" || cde === 13) startHeld = down;
+  /* Stick-forward KEYEVT is ArrowDown on this handle — do not warp from that.
+     Keyboard hyper: H / Shift. Stick: FIRE2 (Enter / B / D). */
+  if (k === "Shift" || k === "h" || k === "H" || cde === 16 || cde === 72) hyperHeld = down;
+  if (k === "Enter" || cde === 13) { startHeld = down; hyperHeld = down; }
 }
 
 addEventListener("keydown", function (e) {
@@ -425,7 +439,8 @@ function drawUfoWrapped() {
 function drawShipWrapped() {
   var rad = 18;
   var h = ship.h;
-  var fl = thrustHeld;
+  var jfl = stickBits();
+  var fl = (jfl & 2) || (thrustHeld && !(jfl & 1));
   drawShipAt(ship.x, ship.y, h, fl);
   if (ship.x < rad) drawShipAt(ship.x + W, ship.y, h, fl);
   if (ship.x > W - rad) drawShipAt(ship.x - W, ship.y, h, fl);
@@ -435,8 +450,9 @@ function drawShipWrapped() {
 
 function drawHud() {
   c.fillStyle = "#ffffff";
-  c.fillText("" + score, 24, 20);
-  c.fillText("HI " + hi, 280, 20);
+  c.fillText(score, 24, 20);
+  c.fillText("HI", 280, 20);
+  c.fillText(hi, 304, 20);
   var i = 0;
   while (i < lives && i < 8) {
     drawShipAt(28 + i * 18, 42, 0, 0);
@@ -448,10 +464,10 @@ function drawAttract() {
   c.fillStyle = "#ffffff";
   c.fillText("ASTEROIDS", 268, 160);
   c.fillText("1 COIN 1 PLAY", 248, 200);
-  c.fillText("ENTER TO START", 240, 320);
+  c.fillText("FIRE2 / ENTER TO START", 216, 320);
   c.fillText("LEFT RIGHT ROTATE", 220, 360);
-  c.fillText("UP THRUST   SPACE FIRE", 200, 380);
-  c.fillText("DOWN HYPERSPACE", 232, 400);
+  c.fillText("STICK FWD THRUST   FIRE1 FIRE", 176, 380);
+  c.fillText("FIRE2 / H HYPERSPACE", 208, 400);
 }
 
 function stepRocks() {
@@ -599,9 +615,19 @@ function collidePlay() {
 }
 
 function stepShip() {
-  if (leftHeld) ship.h = wrapN(ship.h - 4, 256);
-  if (rightHeld) ship.h = wrapN(ship.h + 4, 256);
-  if (thrustHeld && ship.hyper === 0) {
+  var j = stickBits();
+  /* Electrical DOWN = physical forward on this stick → thrust. Poll joy() so
+     LEFT is not dropped when RTL emits only one KEYEVT per frame. Mask
+     thrustHeld when stick UP is held so KEYEVT ArrowUp (stick back) does not
+     keep thrusting. */
+  var leftOn = leftHeld || (j & 4);
+  var rightOn = rightHeld || (j & 8);
+  var thrustOn = (j & 2) || (thrustHeld && !(j & 1));
+  var fireOn = fireHeld || (j & 16);
+  var hyperOn = hyperHeld || (j & 32);
+  if (leftOn) ship.h = wrapN(ship.h - 4, 256);
+  if (rightOn) ship.h = wrapN(ship.h + 4, 256);
+  if (thrustOn && ship.hyper === 0) {
     ship.vx = ship.vx + dirx(ship.h) * 0.18;
     ship.vy = ship.vy + diry(ship.h) * 0.18;
     thrustFlick = 1 - thrustFlick;
@@ -632,12 +658,12 @@ function stepShip() {
     }
   }
   if (fireWait > 0) fireWait = fireWait - 1;
-  var fireEdge = fireHeld && !fireWas;
-  if (fireEdge || (fireHeld && fireWait === 0)) {
+  var fireEdge = fireOn && !fireWas;
+  if (fireEdge || (fireOn && fireWait === 0)) {
     firePlayer();
     fireWait = 10;
   }
-  if (hyperHeld && !hyperWas) doHyper();
+  if (hyperOn && !hyperWas) doHyper();
 }
 
 function stepBits() {
@@ -658,7 +684,9 @@ function stepBits() {
 
 function tickGame() {
   tick = tick + 1;
-  if ((startHeld && !startWas) && (mode === ATTRACT || mode === OVER)) startGame();
+  var j0 = stickBits();
+  var startOn = startHeld || (j0 & 32);
+  if ((startOn && !startWas) && (mode === ATTRACT || mode === OVER)) startGame();
   stepRocks();
   stepShots(shots);
   stepShots(sshots);
@@ -701,9 +729,10 @@ function tickGame() {
     }
   }
 
-  fireWas = fireHeld;
-  hyperWas = hyperHeld;
-  startWas = startHeld;
+  var jw = stickBits();
+  fireWas = fireHeld || (jw & 16);
+  hyperWas = hyperHeld || (jw & 32);
+  startWas = startHeld || (jw & 32);
 }
 
 function paint() {

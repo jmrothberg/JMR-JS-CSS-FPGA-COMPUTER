@@ -115,10 +115,12 @@ module jmr_i2c_joy #(
                     end else begin
                         if (batch_ok) begin
                             ack_ok <= 1'b1;
-                            left  <= (vx < 8'd96);
-                            right <= (vx > 8'd160);
-                            up    <= (vy < 8'd96);
-                            down  <= (vy > 8'd160);
+                            /* Hysteresis: engage at 96/160, release at 112/144 so analog
+                               chatter on LEFT (near the 96 edge) does not flip every poll. */
+                            left  <= (vx < 8'd96) || (left && vx < 8'd112);
+                            right <= (vx > 8'd160) || (right && vx > 8'd144);
+                            up    <= (vy < 8'd96) || (up && vy < 8'd112);
+                            down  <= (vy > 8'd160) || (down && vy > 8'd144);
                             fire_ac <= btn_held(va) | btn_held(vc) | btn_held(vok);
                             fire_bd <= btn_held(vb) | btn_held(vd);
                         end else begin

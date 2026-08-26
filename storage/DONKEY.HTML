@@ -725,6 +725,11 @@ class Game {
         this.score = 0
         this.highScore = 0
         this.lives = 3
+        this.scoreStr = "Score: 0"
+        this.livesStr = "Lives: 3"
+        this.livesX = 0
+        this.livesHudDirty = true
+        this.hiScoreStr = "HIGH SCORE: 0"
 
         this.choose = (event) => {
             // NEW: arrows work same as a/d on character select
@@ -860,6 +865,7 @@ class Game {
         for (let i = 0; i < this.barrels.length; i++) {
             if (this.barrels[i].scored) {
                 this.score += 100
+                this.scoreStr = "Score: " + this.score
                 this.barrels[i].scored = false
             }
         }
@@ -867,7 +873,7 @@ class Game {
 
     drawPoints() {
         ctx.fillStyle = 'white'
-        ctx.fillText(`Score: ${this.score}`, 90, 20)
+        ctx.fillText(this.scoreStr, 90, 20)
     }
 
     resetGame() {
@@ -883,22 +889,28 @@ class Game {
         for (let i = 0; i < this.barrels.length; i++) {
             if (this.barrels[i].dead) {
                 this.lives -= 1
+                this.livesStr = "Lives: " + this.lives
+                this.livesHudDirty = true
                 this.resetGame()
             }
         }
 
         if (this.mario.y > this.height) {
             this.lives -= 1
+            this.livesStr = "Lives: " + this.lives
+            this.livesHudDirty = true
             this.resetGame()
         }
     }
 
     playerLives() {
         ctx.fillStyle = 'white'
-        const text = `Lives: ${this.lives}`
-        const textWidth = ctx.measureText(text).width
-        const x = canvas.width - textWidth - 10 
-        ctx.fillText(text, x + 60, 20)
+        /* Rule 3: rebuild Lives string + measureText only when lives change. */
+        if (this.livesHudDirty) {
+            this.livesX = canvas.width - ctx.measureText(this.livesStr).width - 10
+            this.livesHudDirty = false
+        }
+        ctx.fillText(this.livesStr, this.livesX + 60, 20)
     }
 
     gameOver() {
@@ -910,6 +922,7 @@ class Game {
             gameState = "title"
             if (this.score > this.highScore) {
                 this.highScore = this.score
+                this.hiScoreStr = "HIGH SCORE: " + this.highScore
             }
         }
     }
@@ -920,6 +933,9 @@ class Game {
 
         this.lives = 3
         this.score = 0
+        this.scoreStr = "Score: 0"
+        this.livesStr = "Lives: 3"
+        this.livesHudDirty = true
         this.resetGame()
 
         const img = new Image()
@@ -935,7 +951,7 @@ class Game {
         ctx.font = '16px "Press Start 2P", Arial'
         ctx.textAlign = "center"
         ctx.fillText("Press Enter to Start", this.width / 2, 500)
-        ctx.fillText(`HIGH SCORE: ${this.highScore}`, this.width / 2, 600)
+        ctx.fillText(this.hiScoreStr, this.width / 2, 600)
         
         // Add event listener for enter key press to start the game
         document.addEventListener("keydown", this.startSelect)

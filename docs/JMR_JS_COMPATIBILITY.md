@@ -895,8 +895,9 @@ Columns mean **JMR VM parity**, never “dukpy can do it so PYTHON is done.”
 
 ### What INVADERS.HTML (PNG) forces onto the queue
 
-- `Image.onload` after `src` (must fire even if onload assigned later)
-- `drawImage` for ship/invader PNGs; audio `play()` stubs
+- One ASET atlas + 9-arg `drawImage` for aliens / saucer / cannon (DONKEY-style;
+  not per-pixel `fillRect` sprites)
+- `drawImage` for the fleet; audio `play()` stubs
 - DOM `button.click` to skip a CSS START menu
 
 ### What MRDO.HTML forces onto the queue

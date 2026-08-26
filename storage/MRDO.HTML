@@ -136,6 +136,7 @@ var startWas = 0;
 
 var hs = localStorage.getItem("MRDO_HI");
 if (hs) hi = hs - 0;
+/* rule 3: fillText takes the number */
 
 function dirtBright() {
   if (frozen) return "#FF3030";
@@ -219,8 +220,10 @@ function py(row, frac) {
 function addScore(n) {
   var before = Math.floor(score / 5000);
   score = score + n;
+  /* rule 3: fillText takes the number */
   if (score > hi) {
     hi = score;
+    /* rule 3: fillText takes the number */
     localStorage.setItem("MRDO_HI", "" + hi);
   }
   if (mode === PLAY && Math.floor(score / 5000) > before) spawnAlpha(extraWalk);
@@ -366,8 +369,10 @@ function buildScene() {
 
 function startGame() {
   score = 0;
+  /* rule 3: fillText takes the number */
   lives = 3;
   scene = 1;
+  /* rule 3: fillText takes the number */
   appleSet = 0;
   throwUses = 0;
   extraLit = [0, 0, 0, 0, 0];
@@ -380,6 +385,7 @@ function startGame() {
 
 function nextScene() {
   scene = scene + 1;
+  /* rule 3: fillText takes the number */
   appleSet = appleSet + 1;
   buildScene();
   mode = PLAY;
@@ -946,6 +952,12 @@ function stepCreeps() {
 
 var PAL = ["", "#FF0000", "#FFFFFF", "#000000", "#2040E8", "#FFFF00", "#20E020", "#008800", "#990000", "#FF8800", "#FF6666", "#00E8E8", "#E000C0", "#884400", "#88FF88"];
 
+/* Rule 1: one ASET atlas (16×16 cells). drawImage, not per-pixel fillRect. */
+var sprAtlas = new Image();
+sprAtlas.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAAQCAYAAAD506FJAAADWElEQVR4nO2Z0ZHbIBCGfzLXQ+7NuJJzZlzEVeBzCSpBLcQVpIjMxFeJ8ZtTxebBhwwYEKuVhTLWP6M5zPGtdm2WBUkhEAHkflaACsfkJOVr+1M7/mfn9ebi8eb4OilvcPR4jc2k/NTynAt/vGBgbyBSvrYvteN/dj5MXlcliSzlw+Tt7BYmsZSPqd2Cmt/Diqg2mgDAaJPku38QUfLL6wYrlTQk5ce0NYSfQ/w1E7Bj3TACd3M2pLxN3tOf717/+sffrp1LYilvk3dFb17/WX1e7fcksZRPqd2Cmi2AhrkItCD9rq++/TJJ/gW4TV6lFIio++v22XGxSSzlY7ZCNrTd5wuHn0P8fQsIAdnvTsq7cn0eooWX8VYEkNoC+l3DNIYHN1AGhmw7Neybd8PbRO1Wb04gUj5lD34SPYyfW/y1JPX5f+bP6rPjbfWekgcA2u3I7qioAU7agK57q/LAWhAaKDRQaLM7w6+bzmALXNOXOcRvz2wx5c5xY/HLM4D6zwBot7vaOBySY3q/S5v8fX342gGUTN7cOCk/pq0h/Jzir6nUxCp9gCvlU0la+iRfyttEXdFbd5bnJK+U75K/b1xuJ5BI9NRO4AW4ViY7OdfntTfgtDrBjkndU8qHtoBbsnDtDeFte2gFlfJzkgKUO8G4b2+kvDm+KreSs1/jCXhbwe3vaXAkgyNxdwBD+VGUe1gY+Z/XUXsLWtuXOcTvvropeY3TZ4PDAfL36K6NIWxY3bgLiGuDy4Z+D4lj6OJzV/0zRwCrWHypxTfV7z0EBG4VMmyXSsrX9mdu8XMVJn9uUXrI/Z2k0ZsL5c7lj5Cb/OwHZ0K5sbPjPxz8a4AIIPc1bPcgMdEPLDuAJFerArfUEgA0qlFuewhvP3N4vbmQWwG51S82nmOHALIVym1z2ZL+OalooWr9j6oJKrzz1ss3Hu+PfifaaLIT2G1zZDlp9anhi/SeITN1BZbKLiBhm8uW9C/yZXcsyau9XWw2cgGRI4BUbvWzVbRGEtj7Wj9c33Lar/bYr/Z37VKFDJevLXe3wNk55MZz7SyaTnc/zCO2oFwbY/gyph+LFk2lnwVHgY/EcSbGfgAq1Q/M/Fy0aNEzKrcIpJI/xrpjU/3LArBo0UyVStox9Q8168+jYIBnlQAAAABJRU5ErkJggg==";
+var FI_DO_R0 = 0, FI_DO_R1 = 1, FI_DO_L0 = 2, FI_DO_L1 = 3, FI_DO_D0 = 4, FI_DO_D1 = 5, FI_DO_U0 = 6, FI_DO_U1 = 7;
+var FI_DINO0 = 8, FI_DINO1 = 9, FI_MUNCH0 = 10, FI_MUNCH1 = 11, FI_ALPHA0 = 12, FI_ALPHA1 = 13, FI_APPLE = 14, FI_CHERRY = 15;
+
 var SPR_DO_R0 = [
   "0000111100000000",
   "0001111111000000",
@@ -1274,6 +1286,30 @@ function drawPix(x, y, rows, sc) {
   }
 }
 
+function blitSpr(x, y, fi, sc) {
+  if (sprAtlas.width) {
+    c.drawImage(sprAtlas, fi * 16, 0, 16, 16, x, y, 16 * sc, 16 * sc);
+    return;
+  }
+  var rows = SPR_DO_R0;
+  if (fi === FI_DO_R1) rows = SPR_DO_R1;
+  else if (fi === FI_DO_L0) rows = SPR_DO_L0;
+  else if (fi === FI_DO_L1) rows = SPR_DO_L1;
+  else if (fi === FI_DO_D0) rows = SPR_DO_D0;
+  else if (fi === FI_DO_D1) rows = SPR_DO_D1;
+  else if (fi === FI_DO_U0) rows = SPR_DO_U0;
+  else if (fi === FI_DO_U1) rows = SPR_DO_U1;
+  else if (fi === FI_DINO0) rows = SPR_DINO0;
+  else if (fi === FI_DINO1) rows = SPR_DINO1;
+  else if (fi === FI_MUNCH0) rows = SPR_MUNCH0;
+  else if (fi === FI_MUNCH1) rows = SPR_MUNCH1;
+  else if (fi === FI_ALPHA0) rows = SPR_ALPHA0;
+  else if (fi === FI_ALPHA1) rows = SPR_ALPHA1;
+  else if (fi === FI_APPLE) rows = SPR_APPLE;
+  else if (fi === FI_CHERRY) rows = SPR_CHERRY;
+  drawPix(x, y, rows, sc);
+}
+
 function isTun(col, row) {
   var t = cell(col, row);
   return t === 0 || t === 3;
@@ -1282,12 +1318,12 @@ function isTun(col, row) {
 function pixDo(x, y, face) {
   var fr = 0;
   if (pprog > 0) fr = walkFr();
-  var spr = SPR_DO_R0;
-  if (face === 1) spr = fr ? SPR_DO_R1 : SPR_DO_R0;
-  else if (face === 3) spr = fr ? SPR_DO_L1 : SPR_DO_L0;
-  else if (face === 0) spr = fr ? SPR_DO_U1 : SPR_DO_U0;
-  else spr = fr ? SPR_DO_D1 : SPR_DO_D0;
-  drawPix(x, y, spr, 2);
+  var fi = FI_DO_R0;
+  if (face === 1) fi = fr ? FI_DO_R1 : FI_DO_R0;
+  else if (face === 3) fi = fr ? FI_DO_L1 : FI_DO_L0;
+  else if (face === 0) fi = fr ? FI_DO_U1 : FI_DO_U0;
+  else fi = fr ? FI_DO_D1 : FI_DO_D0;
+  blitSpr(x, y, fi, 2);
 }
 
 function pixDino(x, y, drill, flash) {
@@ -1295,23 +1331,23 @@ function pixDino(x, y, drill, flash) {
     c.fillStyle = "#FFF8C0";
     c.fillRect(x + 2, y + 2, 28, 28);
   }
-  drawPix(x, y, walkFr() ? SPR_DINO1 : SPR_DINO0, 2);
+  blitSpr(x, y, walkFr() ? FI_DINO1 : FI_DINO0, 2);
 }
 
 function pixMunch(x, y) {
-  drawPix(x, y, walkFr() ? SPR_MUNCH1 : SPR_MUNCH0, 2);
+  blitSpr(x, y, walkFr() ? FI_MUNCH1 : FI_MUNCH0, 2);
 }
 
 function pixAlpha(x, y) {
-  drawPix(x, y, walkFr() ? SPR_ALPHA1 : SPR_ALPHA0, 2);
+  blitSpr(x, y, walkFr() ? FI_ALPHA1 : FI_ALPHA0, 2);
 }
 
 function pixApple(x, y) {
-  drawPix(x, y, SPR_APPLE, 2);
+  blitSpr(x, y, FI_APPLE, 2);
 }
 
 function pixCherry(x, y) {
-  drawPix(x, y, SPR_CHERRY, 1);
+  blitSpr(x, y, FI_CHERRY, 1);
 }
 
 function pixTreat(x, y) {
@@ -1454,7 +1490,7 @@ function paintHud() {
   c.fillStyle = "#FFFF00";
   c.fillText("1ST", OX + 8, 12);
   c.fillStyle = "#FFFFFF";
-  c.fillText("" + score, OX + 8, 26);
+  c.fillText(score, OX + 8, 26);
   var letters = "EXTRA";
   var i = 0;
   var extraX = OX + 118;
@@ -1475,13 +1511,15 @@ function paintHud() {
   }
   i = 0;
   while (i < lives && i < 4) {
-    drawPix(OX + 8 + i * 22, H - FOOT + 8, SPR_DO_R0, 1);
+    blitSpr(OX + 8 + i * 22, H - FOOT + 8, FI_DO_R0, 1);
     i = i + 1;
   }
   c.fillStyle = "#FFFF00";
-  c.fillText("SCENE . . . . " + scene, OX + 220, H - 18);
+  c.fillText("SCENE . . . .", OX + 220, H - 18);
+  c.fillText(scene, OX + 332, H - 18);
   c.fillStyle = "#FF0000";
-  c.fillText("TOP " + hi, OX + 220, H - 6);
+  c.fillText("TOP", OX + 220, H - 6);
+  c.fillText(hi, OX + 250, H - 6);
 }
 
 function howName(h) {
