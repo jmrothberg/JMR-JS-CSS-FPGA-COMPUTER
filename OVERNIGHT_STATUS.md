@@ -966,3 +966,28 @@ the parse to the tables' existing 16 bits, audit spr_wp/spr_left
 (18-bit) and the 32KB SPR region vs the ASET path for big sheets, FM
 twin parity, and a LOUD compiler error for anything the hardware
 cannot represent. Not in run 41.
+
+## DONKEY hunt: complete elimination tree (for the next session)
+
+Everything piecewise PASSES on the RTL - each probe in scratchpad/:
+- multi-sheet ASET, wide (1400px) ASET sheets, >64KB ASET offsets,
+  fractional source coords, 9-arg crops (probe_multispr/wide_aset/
+  aset_off).
+- DONKEY's exact transform (setTransform 0.4238,0.7007 incl. computed
+  640/1510 division) + world-coord dest + fractional dest-y (608.555)
+  + NEGATIVE dest-y (-5): all paint at the right spots (probe_xf/xf2/
+  probe_char).
+- id_drawimage resolves (=11, matches Python hash; IDS?).
+- ctx transform LIVE in-game (ctxsx=27776 = 0.4238 Q16.16).
+- e64 drawImage dispatch RUNS (e64dihit=3475 by mid-game).
+- The FM paints the characters; args logged: 501x sheet-3 tile draws
+  (RTL paints these) + 1x sheet-0 (mario) + 1x sheet-2 (kong) per
+  frame (RTL drops these). FM arg log: probe_dk_args.py.
+Dead instrument found and exposed: parent dbg_di_hit never synced from
+exec64 (dihit=0 forever); IDS? now reads the raw counter.
+NEXT MOVE: $fdisplay probe at S_BLIT entry logging si/sx/sy/rw/rh/
+rx/ry per blit in a DONKEY game frame; diff against the FM arg log.
+The divergent parameter names the bug. Suspects that survive: state
+accumulated across the deep helper-call stacks (vst_win=16 contract),
+or per-object class/si binding for the mario/kong Image objects
+specifically.
