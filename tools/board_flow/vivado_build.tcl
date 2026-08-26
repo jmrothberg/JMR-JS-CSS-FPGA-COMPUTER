@@ -22,6 +22,14 @@ if {[llength [get_parts -quiet xc7a200tsbg484-1]] == 0} {
 # Cap synth threads; leave impl place/route at 8. `-jobs` is parallel
 # *runs*, not mapping workers — do not cap impl jobs for this OOM.
 # Override synth cap: JMR_VIVADO_ALLOW_WIDE=1.
+# NEW: build-variant defines (JMR_VIVADO_DEFINES=JMR_NOCACHE = the
+# PACMAN-freeze read-cache A/B build)
+if {[info exists ::env(JMR_VIVADO_DEFINES)] && $::env(JMR_VIVADO_DEFINES) ne ""} {
+  set JMR_DEFINES [split $::env(JMR_VIVADO_DEFINES) ","]
+} else {
+  set JMR_DEFINES {}
+}
+
 set SYNTH_THREADS 2
 if {[info exists ::env(JMR_VIVADO_SYNTH_THREADS)] && $::env(JMR_VIVADO_SYNTH_THREADS) ne ""} {
   set SYNTH_THREADS $::env(JMR_VIVADO_SYNTH_THREADS)
@@ -290,6 +298,10 @@ if {$skip_synth} {
 # ("needs to be reset before launching"). Reset is always safe here: with
 # AUTO_INCREMENTAL off every bit is a full resynthesis anyway.
 catch {reset_run synth_1}
+  if {[llength $JMR_DEFINES] > 0} {
+    puts "INFO: verilog_define $JMR_DEFINES"
+    set_property verilog_define $JMR_DEFINES [current_fileset]
+  }
   launch_runs synth_1 -jobs $SYNTH_JOBS
   jmr_wait_run synth_1
 }

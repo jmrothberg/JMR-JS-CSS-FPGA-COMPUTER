@@ -814,6 +814,17 @@ class Compiler:
                 self._emit(Op.RET_VAL)
                 ctor_entry = fi_entry
             self._patch(jmp_over, Op.JUMP, len(self.code))
+        if ctor_entry is None:
+            # NEW 2026-08-26: constructorless class - synthesize an empty
+            # ctor so `new T()` stamps the instance's class. Without one
+            # the RTL object never received its class field and EVERY
+            # method call on it silently missed (Defect B; gate:
+            # tests/test_class_method_scan.py ctorless case).
+            jmp_over2 = self._emit(Op.JUMP, 0)
+            ctor_entry = len(self.code)
+            self._emit(Op.LOAD_CONST, self._const(None))
+            self._emit(Op.RET_VAL)
+            self._patch(jmp_over2, Op.JUMP, len(self.code))
         self.classes[cname] = {"ctor": ctor_entry, "methods": methods, "getters": getters}
 
     def _done(self) -> bool:

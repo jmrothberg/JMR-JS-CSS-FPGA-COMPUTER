@@ -8645,6 +8645,10 @@ module jmr_js_vm #(
                     // done-path hs_code(ops_base + ip) would re-fetch a stale
                     // op otherwise.
                     if (state != S_BLIT) begin
+                        // debug counters ride the blit handoff (the ctx-block
+                        // sync never ran on this path - VMSTAT dihit was 0)
+                        dbg_di_hit  <= e64_dbg_di_hit_q;
+                        dbg_di_miss <= e64_dbg_di_miss_q;
                         hs_st(S_BLIT);
                         if (v64_on) begin
                             rw <= e64_rw_q;

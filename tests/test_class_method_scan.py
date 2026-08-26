@@ -7,8 +7,8 @@ resolve (silent undefined: DONKEY's Mario/DK/Barrel .update are all
 declared last -> ramps and ladders with no player, no kong, no
 barrels). Fixed by issuing one ahead; these gates pin every boundary.
 
-Defect B (separate, still open): a CONSTRUCTORLESS class misses even
-with 2 methods - strict xfail below until the class-stamp fix lands.
+Defect B FIXED 2026-08-26: the compiler now synthesizes an empty ctor
+for constructorless classes, so `new T()` always stamps the class.
 """
 
 import sys
@@ -78,6 +78,5 @@ requestAnimationFrame(tick);
     assert _run(src) == 5
 
 
-@pytest.mark.xfail(reason="Defect B: constructorless class never consults the method lookup", strict=True)
 def test_rtl_ctorless_class_method():
     assert _run(_cls_src(1, with_ctor=False)) == 5

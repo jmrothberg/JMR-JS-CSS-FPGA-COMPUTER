@@ -14,6 +14,7 @@ Native IDs (CALL_NATIVE arg0) — resolved at compile time from name:
 
 from __future__ import annotations
 
+import os
 import struct
 from dataclasses import dataclass
 from typing import Any, List, Tuple
@@ -114,6 +115,17 @@ SOURCE_MAP_MAGIC = b"SMAP"
 SOURCE_MAP_VERSION = 1
 ASET_PAL_BYTES = 768  # 256 × RGB888 at asset-SRAM offset 0
 SRAM_BYTES = 4 * 1024 * 1024  # 2M × 16 IS61WV204816 contract (see docs/ARCHITECTURE.md)
+# V2.0 MK.HTML: compile_js sets JMR_SRAM_BYTES=8M and JMR_MAX_SPR=518.
+
+
+def asset_sram_bytes() -> int:
+    v = os.environ.get("JMR_SRAM_BYTES")
+    return int(v) if v else SRAM_BYTES
+
+
+def program_max_sprites() -> int:
+    v = os.environ.get("JMR_MAX_SPR")
+    return int(v) if v else PROGRAM_MAX_SPRITES
 # LOAD_CONST a1: 0=i32  1=string intern  2=None  3=IEEE-754 bits in const pool
 # 4=RegExp packed in const pool (pattern bytes + flags — RTL has no char heap)
 _LC_I32, _LC_STR, _LC_NONE, _LC_F32, _LC_REGEX = 0, 1, 2, 3, 4
@@ -387,9 +399,21 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
             off += 4
             n_spr = u16(off, "SPR1 count", code_limit)
             off += 2
-            if n_spr > PROGRAM_MAX_SPRITES:
+            # CONSTITUTION "loud overflow": the legacy SPR pack streams
+            # w*h through an 18-bit count - a sprite over 262144 pixels
+            # (or a 16-bit-overflowing dimension) must refuse at build
+            # time, never silently misdraw. Big art belongs in ASET.
+            for _si, (_w, _h, _pix) in enumerate(sprites or []):
+                if _w >= 65536 or _h >= 65536:
+                    raise ValueError(
+                        f"sprite {_si}: {_w}x{_h} exceeds 16-bit dimensions")
+                if _w * _h >= 262144:
+                    raise ValueError(
+                        f"sprite {_si}: {_w}x{_h} = {_w*_h} px exceeds the "
+                        f"SPR pack 262144-pixel stream bound (use ASET)")
+            if n_spr > program_max_sprites():
                 raise ValueError(
-                    f"sprite count {n_spr} > MAX_SPRITES {PROGRAM_MAX_SPRITES}"
+                    f"sprite count {n_spr} > MAX_SPRITES {program_max_sprites()}"
                 )
             for _ in range(n_spr):
                 need(off, 4, "SPR1 descriptor", code_limit)
