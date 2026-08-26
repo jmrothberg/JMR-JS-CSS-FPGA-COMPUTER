@@ -288,7 +288,8 @@ module jmr_uart_link #(
     logic [6:0]  stor_q;
     logic        d_pending, d_sel;
     logic [7:0]  d_code_q;
-    logic [25:0] d_dwell;   // ~0.67s in one non-idle state = a stall
+    logic [26:0] d_dwell;  // continuous-busy dwell (board: the old
+    // single-state equality never fired - a stall can LOOP between states)
     // NEW: register pixel/char before wr_data (dump_addr→RAM→wr was WNS −0.025)
     logic [7:0]  dump_byte_q;
 
@@ -320,16 +321,16 @@ module jmr_uart_link #(
             // Rising edge of USB scancode strobe → one tether note
             if (ps2_strobe && !ps2_strobe_q)
                 begin k_pending <= 1'b1; k_code_q <= ps2_code; end
-                // storage stall telemetry: one D-line per distinct stalled state
-                if (stor_state != stor_q) begin
-                    stor_q  <= stor_state;
-                    d_dwell <= 26'd0;
-                end else if (stor_state != 7'd0 && !(&d_dwell)) begin
-                    d_dwell <= d_dwell + 26'd1;
-                    if (d_dwell == 26'h2000000) begin
-                        d_pending <= 1'b1;
-                        d_code_q  <= {1'b0, stor_state};
-                    end
+                // storage stall telemetry: after ~0.67s of CONTINUOUS busy,
+                // emit the current state every ~0.17s. Catches parked AND
+                // looping stalls; normal ops idle between console strobes and
+                // never accumulate a second of busy.
+                if (stor_state == 7'd0) d_dwell <= 27'd0;
+                else if (!(&d_dwell)) d_dwell <= d_dwell + 27'd1;
+                if (stor_state != stor_q) stor_q <= stor_state;
+                if (d_dwell >= 27'h4000000 && d_dwell[23:0] == 24'd0) begin
+                    d_pending <= 1'b1;
+                    d_code_q  <= {1'b0, stor_state};
                 end
             // Sample VRAM/FB one cycle ahead of HB_BYTE consume
             if (dump_game)

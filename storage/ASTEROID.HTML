@@ -65,7 +65,9 @@ function wrapN(n, m) {
   return n;
 }
 
-/* JOYDEMO bits. This handle’s electrical DOWN (bit 2) is physical forward.
+/* JOYDEMO bits. 2026-08-26: the RTL now inverts stick Y at the board
+   boundary (top_nexys_video i2c_joy_bits), so bit 1 (UP) IS physical
+   forward — the old electrical-DOWN compensation is removed here.
    Do not treat stick Y as hyperspace — that was ArrowDown KEYEVT. */
 function stickBits() {
   var j = 0;
@@ -622,7 +624,7 @@ function stepShip() {
      keep thrusting. */
   var leftOn = leftHeld || (j & 4);
   var rightOn = rightHeld || (j & 8);
-  var thrustOn = (j & 2) || (thrustHeld && !(j & 1));
+  var thrustOn = (j & 1) || (thrustHeld && !(j & 2));
   var fireOn = fireHeld || (j & 16);
   var hyperOn = hyperHeld || (j & 32);
   if (leftOn) ship.h = wrapN(ship.h - 4, 256);

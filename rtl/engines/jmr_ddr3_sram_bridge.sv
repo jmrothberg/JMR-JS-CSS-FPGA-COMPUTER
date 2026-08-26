@@ -110,7 +110,11 @@ module jmr_ddr3_sram_bridge (
                     cmd_sent <= 1'b0;
                     wdf_sent <= 1'b0;
                     if (req && !ack) begin
+`ifdef JMR_NOCACHE
+                        if (1'b0) begin // read cache disabled (PACMAN-freeze A/B build)
+`else
                         if (!we && cache_valid && addr[20:3] == cache_base) begin
+`endif
                             rdata <= cache_data[{addr[2:0], 4'b0000} +: 16];
                             ack   <= 1'b1;
                         end else begin

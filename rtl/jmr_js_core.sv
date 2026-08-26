@@ -26,6 +26,7 @@ module jmr_js_core #(
     input  logic [5:0]  joy_in,
     output logic [5:0]  joy_out,
     output logic [6:0]  stor_dbg_state_o,
+    output logic        game_view_o,
     // FPGA-SIM keyboard/joystick ARE these ports (GUI KEYEVT / KEYBITS).
     // No PS/2 or I2C in this module. Board PHY is top_nexys_video only.
     // LED proofs: tools/pmod_input_test + tools/hid_led_blink — not this file.
@@ -297,8 +298,18 @@ module jmr_js_core #(
     // canvas is single-surface now: back/front dumps are the same data
     assign dump_back_rdata = dump_fb_rdata;
     assign stor_dbg_state_o = stor_dbg_state;
+    assign game_view_o = game_view;
     logic game_mode_q2;
     always_ff @(posedge clk) game_mode_q2 <= game_mode;
+    // Board 2026-08-26: the run-44 FB zero-fill ran, but scan switched
+    // to the FB view immediately on game entry and showed the OLD DDR3
+    // content during the ~10ms clear (the "previous game flash"). Hold
+    // the view on the console until the clear pass completes.
+    logic game_view;
+    always_ff @(posedge clk) begin
+        if (!rst_n || !game_mode) game_view <= 1'b0;
+        else if (game_mode && game_mode_q2 && !fb_present_busy) game_view <= 1'b1;
+    end
     jmr_fb_present u_fbpres (
         .clk(clk), .rst_n(rst_n),
         .clear_go(game_mode && !game_mode_q2), // scrub old FB on game entry

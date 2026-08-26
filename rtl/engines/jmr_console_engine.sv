@@ -275,6 +275,8 @@ module jmr_console_engine (
     // walked right by the number of presses). Drain on the game->console
     // transition (enable rising edge).
     logic enable_q;
+    logic [16:0] drain_ctr; // hold kbd_clear ~1.3ms: a PS/2 scancode
+    // mid-flight at ESC lands AFTER a 1-cycle clear (board: one key leaked)
     logic p_help_q, p_dir_q, p_cls_q, p_list_q, p_edit_q, p_mem_q,
           p_new_q, p_run_q, p_load_q, p_save_q, p_remove_q;
     always_ff @(posedge clk) begin
@@ -459,7 +461,9 @@ module jmr_console_engine (
         end else begin
             enable_q <= enable;
             kbd_pop <= 0;
-            kbd_clear <= (enable && !enable_q); // drain game-era keypresses
+            if (enable && !enable_q) drain_ctr <= 17'h1FFFF;
+            else if (drain_ctr != 17'd0) drain_ctr <= drain_ctr - 17'd1;
+            kbd_clear <= (enable && !enable_q) || (drain_ctr != 17'd0);
             cls <= 0;
             put_en <= 0;
             print_nl <= 0;

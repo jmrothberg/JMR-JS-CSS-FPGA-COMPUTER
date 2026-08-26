@@ -151,11 +151,15 @@ module top_nexys_video (
         .left(joy_left), .up(joy_up), .down(joy_down), .right(joy_right),
         .fire_ac(fire_ac), .fire_bd(fire_bd)
     );
-    wire [5:0] i2c_joy_bits = {fire_bd, fire_ac, joy_right, joy_left, joy_down, joy_up};
+    // Board 2026-08-26: this stick's electrical DOWN is physical forward
+    // (ASTEROID hand-compensated; every other title read Y reversed).
+    // Invert once here; ASTEROID's compensation removed in the same
+    // change so it is not doubly inverted.
+    wire [5:0] i2c_joy_bits = {fire_bd, fire_ac, joy_right, joy_left, joy_up, joy_down};
 
     logic [9:0] scan_addr, cursor;
     logic [7:0] scan_data, dump_data;
-    logic       ready_lit, game_mode;
+    logic       ready_lit, game_mode, game_view;
     logic [6:0] stor_dbg_state;
     logic [5:0] joy_out;
     logic [18:0] fb_raddr;
@@ -215,6 +219,7 @@ module top_nexys_video (
         .standalone_mode(1'b1),
         .sd_card_present(~sd_cd),
         .stor_dbg_state_o(stor_dbg_state),
+        .game_view_o(game_view),
         // both PS/2 keyboards feed the game-event path (main wins a tie)
         .key_evt_stb(kev_stb | pmod_kev_stb),
         .key_evt_code(kev_stb ? kev_code : pmod_kev_code),
@@ -316,7 +321,7 @@ module top_nexys_video (
         .pixel_clk(pixel_clk), .rst_n(rst_n),
         .vram_rdata(scan_data), .vram_addr(scan_addr),
         .cursor_cell(cursor),
-        .game_mode(game_mode),
+        .game_mode(game_view),
         .fb_raddr(fb_raddr), .fb_x(fb_x), .fb_y(fb_y), .fb_rdata(fb_rdata),
         .pal_index(pal_index), .pal_rgb(pal_rgb),
         .vid_pData(vid_pData), .vid_pVDE(vid_pVDE),
