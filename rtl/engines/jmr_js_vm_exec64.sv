@@ -7140,9 +7140,6 @@ module jmr_js_vm_exec64 (
                                         state_n = S_V64_EXEC;
                                     end else begin
                                     mip = cm_done ? cm_mip : cmc_hit_mip;
-                                    $fdisplay(32'h80000002, "[CMD] ip=%0d n=%0d done=%b hit=%b mip=%0d",
-                                        ip, code_rdata[23:8], cm_done, cmc_hit,
-                                        cm_done ? cm_mip : cmc_hit_mip);
                                     cm_done_n = 1'b0;
                                     if (mip != 16'hFFFF) begin
                                         bind_mode_n = 2'd1;

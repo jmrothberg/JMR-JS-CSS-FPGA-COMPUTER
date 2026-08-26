@@ -6417,7 +6417,6 @@ module jmr_js_vm #(
                 // cls_mip_q with exactly those, so hand that back.
                 cm_res_we <= 1'b1;
                 cm_res_mip <= cls_mip_q;
-                $fdisplay(32'h80000002, "[CMR] key=%0d cls=%0d mip=%0d", e64_cm_key, e64_cm_cls, cls_mip_q);
                 cm_serving <= 1'b0;
                 cm_served_hold <= 1'b1;
                 cls_done <= 1'b0;
@@ -7217,7 +7216,6 @@ module jmr_js_vm #(
                             5'd18: begin trail_acc[7:0] <= tb; trail_ph <= 5'd19; end
                             5'd19: begin
                                 begin cmn_we <= 1'b1; cmn_wa <= {trail_cls_i[3:0], trail_meth_i[3:0]}; cmn_wd <= {tb, trail_acc[7:0]}; end
-                                $fdisplay(32'h80000002, "[CTU] cls=%0d m=%0d name=%0d", trail_cls_i, trail_meth_i, {tb, trail_acc[7:0]});
                                 e64_poke(6'd39, {12'd0, trail_cls_i[3:0]},
                                          {48'd0, tb, trail_acc[7:0]});
                                 e64_p_addr2 <= {12'd0, trail_meth_i[3:0]};
@@ -7226,7 +7224,6 @@ module jmr_js_vm #(
                             5'd20: begin trail_acc[7:0] <= tb; trail_ph <= 5'd21; end
                             5'd21: begin
                                 begin cmi_we <= 1'b1; cmi_wa <= {trail_cls_i[3:0], trail_meth_i[3:0]}; cmi_wd <= {tb, trail_acc[7:0]}; end
-                                $fdisplay(32'h80000002, "[CTU] cls=%0d m=%0d ip=%0d", trail_cls_i, trail_meth_i, {tb, trail_acc[7:0]});
                                 e64_poke(6'd31, {12'd0, trail_cls_i[3:0]},
                                          {48'd0, tb, trail_acc[7:0]});
                                 e64_p_addr2 <= {12'd0, trail_meth_i[3:0]};
