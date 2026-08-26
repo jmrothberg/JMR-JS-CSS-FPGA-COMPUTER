@@ -991,3 +991,26 @@ The divergent parameter names the bug. Suspects that survive: state
 accumulated across the deep helper-call stacks (vst_win=16 contract),
 or per-object class/si binding for the mario/kong Image objects
 specifically.
+
+## Run-41 postmortem (user forensics) + flow hardening
+
+Run 41's route was SIGKILLed at 23:23 during Phase 5.3 (ISEWrap "Killed",
+790 overlaps, converged) - NOT timing, NOT Tcl, NOT OOM (74GB free,
+Vivado ~4.7GB peak, no kernel OOM entries). Killer UNIDENTIFIED - watch
+for recurrence. Contributing hygiene: Verilator rebuilds + sim jobs
+were sharing the box during the route (contention, not a kill source);
+heavy sim work stays out of route windows from now on.
+
+Durable fix (cf55796): vivado_build.tcl now RESUMES from the newest
+impl checkpoint when a step dies (routed > physopt > placed > opt),
+re-runs only the missing steps, and goes through the same gate+publish
+tail. Only a checkpoint-less run is a true failure. Run 41's own
+checkpoints were already clobbered by run 42's launch - the recovery
+lands for run 44+; note for the future: preserve the impl dir before
+relaunching over a corpse.
+
+DIR conditional-mount completion (user patch, afdd9c5): 86011a9 left
+push_call(S_MNT0,S_DIR0) unconditional - DIR still re-init'd a live
+card. Now the S_OP0/S_DEL0 idiom. Sim cannot validate (its card model
+accepts re-init - sim-boundary class #4 tonight); run 43 A/Bs it
+against run 42 on the board.
