@@ -25,6 +25,7 @@ module jmr_js_core #(
     input  logic [7:0]  kbd_data,
     input  logic [5:0]  joy_in,
     output logic [5:0]  joy_out,
+    output logic [6:0]  stor_dbg_state_o,
     // FPGA-SIM keyboard/joystick ARE these ports (GUI KEYEVT / KEYBITS).
     // No PS/2 or I2C in this module. Board PHY is top_nexys_video only.
     // LED proofs: tools/pmod_input_test + tools/hid_led_blink — not this file.
@@ -101,6 +102,7 @@ module jmr_js_core #(
     // NEW: 4 MB external asset SRAM (jmr_sram_port) — console writes the ASET
     // payload during RUN load; the VM blitter reads sprite pixels while running.
     // The two masters never overlap (load completes before vm_start).
+    logic [6:0]  stor_dbg_state;
     logic        cons_sram_req, cons_sram_we, vm_sram_req, vm_sram_we;
     logic [20:0] cons_sram_addr, vm_sram_addr;
     logic [15:0] cons_sram_wdata, vm_sram_wdata, sram_rdata;
@@ -266,6 +268,7 @@ module jmr_js_core #(
         .start_dir(stor_dir), .start_dir_next(stor_dir_next),
         .start_delete(stor_delete),
         .card_present(sd_card_present),
+        .dbg_state(stor_dbg_state),
         .line_len(stor_line_len), .eof(stor_eof), .err(stor_err),
         .done(stor_done), .busy(stor_busy),
         .sink_wr_en(1'b0), .sink_wr_char(8'h0), .sink_busy(),
@@ -293,8 +296,12 @@ module jmr_js_core #(
     );
     // canvas is single-surface now: back/front dumps are the same data
     assign dump_back_rdata = dump_fb_rdata;
+    assign stor_dbg_state_o = stor_dbg_state;
+    logic game_mode_q2;
+    always_ff @(posedge clk) game_mode_q2 <= game_mode;
     jmr_fb_present u_fbpres (
         .clk(clk), .rst_n(rst_n),
+        .clear_go(game_mode && !game_mode_q2), // scrub old FB on game entry
         .swap(fb_swap), .busy(fb_present_busy),
         .copy_raddr(fbp_copy_raddr), .copy_rdata(fbp_copy_rdata),
         .sram_req(fbp_sram_req), .sram_we(fbp_sram_we),

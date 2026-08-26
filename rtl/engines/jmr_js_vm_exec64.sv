@@ -5696,6 +5696,7 @@ module jmr_js_vm_exec64 (
                                           (receiver[47:44] == V64_KIND_OBJECT ||
                                            receiver[47:44] == V64_KIND_ELEMENT) &&
                                           receiver[31:0] < MAX_OBJ);
+
                                 // Keep valid; do not gate on exec varr_gen
                                 // (GC reuse: handle gen=2, exec copy still 1
                                 // → push/forEach no-op. INVADERS cells.push,
@@ -7139,6 +7140,9 @@ module jmr_js_vm_exec64 (
                                         state_n = S_V64_EXEC;
                                     end else begin
                                     mip = cm_done ? cm_mip : cmc_hit_mip;
+                                    $fdisplay(32'h80000002, "[CMD] ip=%0d n=%0d done=%b hit=%b mip=%0d",
+                                        ip, code_rdata[23:8], cm_done, cmc_hit,
+                                        cm_done ? cm_mip : cmc_hit_mip);
                                     cm_done_n = 1'b0;
                                     if (mip != 16'hFFFF) begin
                                         bind_mode_n = 2'd1;

@@ -53,6 +53,7 @@ module storage_engine #(
     output logic        err,              // file not found / no space / SD error
     output logic        done,             // one-cycle command completion
     output logic        busy,
+    output logic [6:0]  dbg_state, // board telemetry: which state a stall parks in
 
     // -- print_engine character sink (FILE_PRINT_VALUE) --------------------
     // Same hand-shake shape as video_engine: hold wr_en until sink_busy rises.
@@ -282,6 +283,7 @@ module storage_engine #(
     logic [15:0] nl_acc;
 
     assign busy      = (state != S_IDLE);
+    assign dbg_state = state;
     assign done      = done_r;
     assign eof       = eof_r;
     assign err       = err_r;

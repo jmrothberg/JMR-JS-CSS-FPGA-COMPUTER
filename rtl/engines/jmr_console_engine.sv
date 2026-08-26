@@ -270,6 +270,11 @@ module jmr_console_engine (
     // This kills run-32's residual worst path (-1.249ns, 14 LUT levels:
     // the priority chain ANDed each arm's len+char compares in one
     // cycle); the chain now selects among registered single bits.
+    // Board 2026-08-26: game keypresses queued into the kbd FIFO while
+    // game_mode was on and replayed into the console line on ESC (cursor
+    // walked right by the number of presses). Drain on the game->console
+    // transition (enable rising edge).
+    logic enable_q;
     logic p_help_q, p_dir_q, p_cls_q, p_list_q, p_edit_q, p_mem_q,
           p_new_q, p_run_q, p_load_q, p_save_q, p_remove_q;
     always_ff @(posedge clk) begin
@@ -304,6 +309,10 @@ module jmr_console_engine (
             15: banner_char = "P"; 16: banner_char = "U"; 17: banner_char = " ";
             18: banner_char = "V"; 19: banner_char = "1"; 20: banner_char = ".";
             21: banner_char = "0";
+            // run number - bump by hand each build (user: know which bit
+            // is on the board from the glass)
+            22: banner_char = " "; 23: banner_char = "R";
+            24: banner_char = "4"; 25: banner_char = "4";
             default: banner_char = 8'h00;
         endcase
     endfunction
@@ -448,8 +457,9 @@ module jmr_console_engine (
             edit_pending <= 0; edit_disp <= 0;
             edit_start <= 0; edit_end <= 0;
         end else begin
+            enable_q <= enable;
             kbd_pop <= 0;
-            kbd_clear <= 0;
+            kbd_clear <= (enable && !enable_q); // drain game-era keypresses
             cls <= 0;
             put_en <= 0;
             print_nl <= 0;
@@ -637,6 +647,11 @@ module jmr_console_engine (
                             reply_sel <= 4'd7; reply_idx <= 0; state <= C_REPLY; // ?NB
                         end
                     end else if (p_load_q) begin
+                        // Board 2026-08-26: LOAD must stop/reset the VM the way
+                        // NEW does - stale VM state from the previous title
+                        // (heap/objects/sprites) made the NEXT title misbehave
+                        // (MRDO "froze" until NEW+RUN first).
+                        halt_pulse <= 1'b1;
                         cmd_is_load <= 1'b1; name_start <= 5; state <= C_PF;
                     end else if (p_save_q) begin
                         cmd_is_save <= 1'b1; name_start <= 5; state <= C_PF;

@@ -1014,3 +1014,32 @@ push_call(S_MNT0,S_DIR0) unconditional - DIR still re-init'd a live
 card. Now the S_OP0/S_DEL0 idiom. Sim cannot validate (its card model
 accepts re-init - sim-boundary class #4 tonight); run 43 A/Bs it
 against run 42 on the board.
+
+## DONKEY endgame state (2026-08-26): class-method dispatch, two defects
+
+Chain proven by probes (all in scratchpad/, instrumentation committed):
+update() runs -> game.draw ladders/platforms blit (ips 139/205) ->
+updateMario/updateBarrels/updateDK DISPATCH (objok=1) -> mario.update /
+dk.update method calls NEVER ENTER their bodies. drawImage itself is
+fully exonerated (dispatch+blit prove out at every shape).
+
+Defect A (DONKEY): the parent method-lookup service returns mip=65535
+for key=167(update) cls=141(Mario) and cls=143(DK) even though the
+trailer upload writes the entry correctly (verified via [CTU] on the
+minimal case) and the scan pipeline reads clean on paper. [CMR] probe
+shows the service IS consulted and misses. NOTE: misses are NEGATIVE-
+CACHED in exec's 8-entry cmc - one wrong miss is permanent.
+
+Defect B (minimal, 15 lines): a CONSTRUCTORLESS class (ctor: None -
+`class T { m1(){} update(){} }; new T()`) never reaches the generic
+method arm at all ([CMD]/[CMR] both silent) - likely the instance's
+class field is never stamped without a ctor, sending dispatch down an
+earlier arm silently. FWD3 (same shape WITH a ctor) works. probe_lastm*.
+
+Next session: (1) fix B first (stamp vobj class in the ctorless new-
+object path) - cheap, gate-able; (2) for A, dump the parent cls_mname
+table contents for Mario's class id at runtime (one more [CTU]-style
+probe on DONKEY) and compare cls_name[] find - the class-ID indirection
+(cls=141 name idx) is the remaining suspect. Probes live: [CMR] (service
+result), [CMD] (generic-arm decision), [CTU] (trailer upload) - all
+$fdisplay/stderr, sim-only, synthesis-inert.

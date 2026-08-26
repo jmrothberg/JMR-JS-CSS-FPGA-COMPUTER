@@ -13,6 +13,10 @@ module jmr_fb_present #(
     input  logic        clk,
     input  logic        rst_n,
     input  logic        swap,
+    // Board 2026-08-26: zero-fill pass (game entry scrubs the previous
+    // title's DDR3 framebuffer - it used to flash until the new title's
+    // first present, surviving even NEW)
+    input  logic        clear_go,
     output logic        busy,
     // draw-bank copy read port (1-beat registered read)
     output logic [18:0] copy_raddr,
@@ -31,6 +35,7 @@ module jmr_fb_present #(
     logic [17:0] w;      // word index
     logic [7:0]  px0;
     logic        swap_pend; // explicit swapBuffers can land mid-present
+    logic        clr_mode;
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin
@@ -41,12 +46,19 @@ module jmr_fb_present #(
             w <= '0;
             copy_raddr <= '0;
             swap_pend <= 1'b0;
+            clr_mode <= 1'b0;
         end else begin
             if (swap && busy) swap_pend <= 1'b1;
             unique case (pst)
-                P_IDLE: if (swap || swap_pend) begin
+                P_IDLE: if (clear_go) begin
+                    busy <= 1'b1;
+                    clr_mode <= 1'b1;
+                    w <= '0;
+                    pst <= P_L1;   // skip the copy reads; write zeros
+                end else if (swap || swap_pend) begin
                     swap_pend <= 1'b0;
                     busy <= 1'b1;
+                    clr_mode <= 1'b0;
                     w <= '0;
                     copy_raddr <= 19'd0;
                     pst <= P_A0;
@@ -63,7 +75,7 @@ module jmr_fb_present #(
                     sram_req <= 1'b1;
                     sram_we <= 1'b1;
                     sram_addr <= FB_SRAM_BASE + 21'(w);
-                    sram_wdata <= {copy_rdata, px0};
+                    sram_wdata <= clr_mode ? 16'h0000 : {copy_rdata, px0};
                     pst <= P_WR;
                 end
                 P_WR: if (sram_ack) begin
@@ -75,7 +87,7 @@ module jmr_fb_present #(
                     end else begin
                         w <= w + 18'd1;
                         copy_raddr <= {w + 18'd1, 1'b0};
-                        pst <= P_A0;
+                        pst <= clr_mode ? P_L1 : P_A0;
                     end
                 end
                 default: pst <= P_IDLE;

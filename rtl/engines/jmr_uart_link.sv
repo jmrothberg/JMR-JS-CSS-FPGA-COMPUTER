@@ -152,6 +152,9 @@ module jmr_uart_link #(
     // NEW: log USB scancodes to tether (flight-log proof without guessing LEDs)
     input  logic       ps2_strobe = 1'b0,
     input  logic [7:0] ps2_code = 8'h00,
+    // storage state telemetry: "Dxx" line when it CHANGES while busy
+    // (a stalled DIR parks in one state - one line names it)
+    input  logic [6:0] stor_state = 7'd0,
     // NEW: HTML RUN .JSH stream (0xFD + u32 LE length + payload)
     output logic       jsb_tether_stb,
     output logic [7:0] jsb_tether_data,
@@ -282,6 +285,10 @@ module jmr_uart_link #(
     logic        k_pending;
     logic        ps2_strobe_q;
     logic [7:0]  k_code_q;
+    logic [6:0]  stor_q;
+    logic        d_pending, d_sel;
+    logic [7:0]  d_code_q;
+    logic [25:0] d_dwell;   // ~0.67s in one non-idle state = a stall
     // NEW: register pixel/char before wr_data (dump_addr→RAM→wr was WNS −0.025)
     logic [7:0]  dump_byte_q;
 
@@ -303,6 +310,8 @@ module jmr_uart_link #(
             wr_data <= 8'h0;
             k_pending <= 1'b0;
             ps2_strobe_q <= 1'b0;
+            stor_q <= 7'd0; d_pending <= 1'b0; d_sel <= 1'b0;
+            d_code_q <= 8'd0; d_dwell <= 26'd0;
             dump_byte_q <= 8'h20;
         end else begin
             wr_en <= 1'b0;
@@ -311,6 +320,17 @@ module jmr_uart_link #(
             // Rising edge of USB scancode strobe → one tether note
             if (ps2_strobe && !ps2_strobe_q)
                 begin k_pending <= 1'b1; k_code_q <= ps2_code; end
+                // storage stall telemetry: one D-line per distinct stalled state
+                if (stor_state != stor_q) begin
+                    stor_q  <= stor_state;
+                    d_dwell <= 26'd0;
+                end else if (stor_state != 7'd0 && !(&d_dwell)) begin
+                    d_dwell <= d_dwell + 26'd1;
+                    if (d_dwell == 26'h2000000) begin
+                        d_pending <= 1'b1;
+                        d_code_q  <= {1'b0, stor_state};
+                    end
+                end
             // Sample VRAM/FB one cycle ahead of HB_BYTE consume
             if (dump_game)
                 dump_byte_q <= hex_digit(dump_fb_rdata[3:0]);
@@ -321,6 +341,11 @@ module jmr_uart_link #(
                 HB_IDLE: begin
                     if (k_pending && !tx_busy && !dump_active) begin
                         k_pending <= 1'b0;
+                        d_sel <= 1'b0;
+                        hb_state <= HB_K;
+                    end else if (d_pending && !tx_busy && !dump_active) begin
+                        d_pending <= 1'b0;
+                        d_sel <= 1'b1;
                         hb_state <= HB_K;
                     end else if (dump_active && !tx_busy) begin
                         hb_state <= HB_HDR;
@@ -336,17 +361,17 @@ module jmr_uart_link #(
                 end
                 HB_K: if (!tx_busy) begin
                     wr_en <= 1'b1;
-                    wr_data <= "K";
+                    wr_data <= d_sel ? "D" : "K";
                     hb_state <= HB_KH;
                 end
                 HB_KH: if (!tx_busy) begin
                     wr_en <= 1'b1;
-                    wr_data <= hex_digit(k_code_q[7:4]);
+                    wr_data <= hex_digit(d_sel ? {1'b0, d_code_q[6:4]} : k_code_q[7:4]);
                     hb_state <= HB_KL;
                 end
                 HB_KL: if (!tx_busy) begin
                     wr_en <= 1'b1;
-                    wr_data <= hex_digit(k_code_q[3:0]);
+                    wr_data <= hex_digit(d_sel ? d_code_q[3:0] : k_code_q[3:0]);
                     hb_state <= HB_KNL;
                 end
                 HB_KNL: if (!tx_busy) begin
