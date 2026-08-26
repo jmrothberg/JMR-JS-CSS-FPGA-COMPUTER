@@ -927,3 +927,25 @@ region or raised budget); compile time at 12.5 MHz (tens of seconds
 per title plausible); VM-subset coverage of the compiler's own idioms.
 First move: census the Python compiler over the six-title fleet
 (ops/allocs) and convert to VM-cycle + code-size estimates.
+
+## OPEN: DONKEY in-game characters missing (FM/RTL divergence, pre-existing)
+
+Board + FPGA-SIM both show DONKEY's game screen as background-only.
+Reproduced and bisected tonight:
+- NOT the blit DDA (pre-DDA worktree renders bit-identical: 54113px/7
+  colors in-game either side).
+- NOT multi-sprite indexing, NOT fractional source coords (both proven
+  green by targeted probes: scratchpad probe_multispr.py).
+- NOT the card squash (sim compiles full source post-d0c503c).
+- FM oracle DIVERGES: game frame = 60072px/20 colors (FM) vs 54113/7
+  (RTL) - but the FM's game frame makes ZERO ctx.drawImage native calls,
+  so the gap may be clear/residue semantics, not dropped blits, and the
+  title's `this.ctx.drawImage` may route through a different call path
+  than the "ctx.drawImage" native key.
+Reproducers: scratchpad/probe_dk.py (RTL), probe_dk_fm2.py (FM+spy).
+Next: trace how DONKEY's compiled drawImage calls dispatch in the FM
+(CALL_METHOD vs CALL_NATIVE), then instrument the same in RTL VMSTAT.
+Also open: PACMAN board freeze needs the user's VMSTAT-at-freeze read
+(sim steers and dispatches fine); stale-FB flash between titles
+(cosmetic, clear-on-start); INVADERS pace = div8 frame cost (product
+decision, 50 MHz lever exists); standalone get_byte ~1.1k clks/byte.
