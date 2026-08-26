@@ -33,6 +33,7 @@ module storage_engine #(
     input  logic [15:0] name_addr,        // address of first file-name char
     input  logic [7:0]  name_len,
     input  logic        start_close,      // CLOSE
+    input  logic        card_present = 1'b1, // hot-swap detect (board sd_cd)
     input  logic        start_readline,   // LINE INPUT# -> STORAGE_BUFFER
     input  logic        start_readfield,  // INPUT#      -> STORAGE_BUFFER
     // NEW: raw file byte for PATCH.BIN boot loader (after OPEN "I")
@@ -268,6 +269,7 @@ module storage_engine #(
     // whose existing cleanup (done_r + err_r + poison) unblocks the
     // console through the normal ?IO path.
     logic [31:0] op_wd;
+    logic        cp_q;
     logic [9:0]  pad_i;
     logic [5:0]  ent_i;
     logic [4:0]  pub_i;
@@ -549,7 +551,10 @@ module storage_engine #(
                     end else if (start_dir) begin
                         err_r <= 1'b0; eof_r <= 1'b0; fld_len <= 9'h0;
                         cat_on <= 1'b1;
-                        mounted <= 1'b0; // NEW: force SPI init + BPB re-read
+                        // 2026-08-25: no forced remount. DIR was the ONLY
+                        // command that re-initialized a live card (its board
+                        // wedge slice); hot-swap is handled by card_present
+                        // clearing `mounted` below, same as an SPI error.
                         push_call(S_MNT0, S_DIR0);
                     end else if (start_dir_next) begin
                         err_r <= 1'b0; eof_r <= 1'b0; fld_len <= 9'h0;
@@ -1557,6 +1562,9 @@ module storage_engine #(
 
                 default: state <= S_IDLE;
             endcase
+            // hot-swap: any card-detect change poisons the mount
+            cp_q <= card_present;
+            if (cp_q != card_present) mounted <= 1'b0;
             // watchdog override (after the case, so it wins the beat)
             if (state == S_IDLE) op_wd <= 32'h0;
             else begin

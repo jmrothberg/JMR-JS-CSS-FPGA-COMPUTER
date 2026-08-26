@@ -293,7 +293,11 @@ module sd_spi_master #(
                     clk_cnt <= '0;
                     shift_tx <= 8'hFF;
                     spi_cs_n <= 1'b0;   // NEW: select the card now that it is awake
-                    if (byte_i == 10'd1) begin
+                    // 2026-08-25: 10 lead bytes (80 clocks), not 2. A COLD card
+                    // tolerated 16 clocks, but DIR re-inits a LIVE card whose
+                    // input may not be byte-aligned mid-flush; generous lead-in
+                    // is spec-hygiene either way (board DIR-wedge candidate).
+                    if (byte_i == 10'd9) begin
                         byte_i <= '0;
                         frame_i <= '0;
                         ret_state <= ST_INIT_FRAME;

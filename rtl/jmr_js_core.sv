@@ -29,6 +29,7 @@ module jmr_js_core #(
     // No PS/2 or I2C in this module. Board PHY is top_nexys_video only.
     // LED proofs: tools/pmod_input_test + tools/hid_led_blink — not this file.
     // NEW: raw keyboard events for games (sim KEYEVT / board PS/2 decode)
+    input  logic        sd_card_present = 1'b1,
     input  logic        key_evt_stb = 1'b0,
     input  logic [7:0]  key_evt_code = 8'd0,
     input  logic        key_evt_down = 1'b0,
@@ -264,6 +265,7 @@ module jmr_js_core #(
         .start_putc(stor_putc), .putc_data(stor_putc_data),
         .start_dir(stor_dir), .start_dir_next(stor_dir_next),
         .start_delete(stor_delete),
+        .card_present(sd_card_present),
         .line_len(stor_line_len), .eof(stor_eof), .err(stor_err),
         .done(stor_done), .busy(stor_busy),
         .sink_wr_en(1'b0), .sink_wr_char(8'h0), .sink_busy(),

@@ -210,6 +210,7 @@ module top_nexys_video (
     jmr_js_core #(.SRAM_INTERNAL(0)) u_core (
         .clk(core_clk), .pixel_clk(pixel_clk), .rst_n(rst_n),
         .standalone_mode(1'b1),
+        .sd_card_present(~sd_cd),
         // both PS/2 keyboards feed the game-event path (main wins a tie)
         .key_evt_stb(kev_stb | pmod_kev_stb),
         .key_evt_code(kev_stb ? kev_code : pmod_kev_code),
