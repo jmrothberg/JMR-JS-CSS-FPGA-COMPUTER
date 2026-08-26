@@ -442,62 +442,27 @@ class Mario {
         this.loopIndex = 0
         this.timeSinceLastFrameChange = 0
         this.timeBetweenFrames = 60
+        this._joy = 0
 
         document.addEventListener("keydown", (e) => {
-            // NEW: Arrow* aliases — GUI / host send arrows, not only WASD
-            switch(e.key) {
-                case "w":
-                case "ArrowUp":
-                    this.keys.w.pressed = true;
-                    break;
-
-                case "s":
-                case "ArrowDown":
-                    this.keys.s.pressed = true;
-                    break;
-
-                case "a":
-                case "ArrowLeft":
-                    this.keys.a.pressed = true;
-                    break;
-
-                case "d":
-                case "ArrowRight":
-                    this.keys.d.pressed = true;
-                    break;
-
-                case " ":
-                    this.keys.space.pressed = true;
-                    break;
-            }
+            // NEW: Arrow* + keyCode so Pmod stick KEYEVT still moves (same as ASTEROID)
+            var k = e.key;
+            var cde = e.keyCode;
+            if (k === "w" || k === "ArrowUp" || cde === 87 || cde === 38) this.keys.w.pressed = true;
+            else if (k === "s" || k === "ArrowDown" || cde === 83 || cde === 40) this.keys.s.pressed = true;
+            else if (k === "a" || k === "ArrowLeft" || cde === 65 || cde === 37) this.keys.a.pressed = true;
+            else if (k === "d" || k === "ArrowRight" || cde === 68 || cde === 39) this.keys.d.pressed = true;
+            else if (k === " " || cde === 32) this.keys.space.pressed = true;
         })
 
         document.addEventListener("keyup", (e) => {
-            switch(e.key) {
-                case "w":
-                case "ArrowUp":
-                    this.keys.w.pressed = false;
-                    break;
-
-                case "s":
-                case "ArrowDown":
-                    this.keys.s.pressed = false;
-                    break;
-
-                case "a":
-                case "ArrowLeft":
-                    this.keys.a.pressed = false;
-                    break;
-
-                case "d":
-                case "ArrowRight":
-                    this.keys.d.pressed = false;
-                    break;
-
-                case " ":
-                    this.keys.space.pressed = false;
-                    break;
-            }
+            var k = e.key;
+            var cde = e.keyCode;
+            if (k === "w" || k === "ArrowUp" || cde === 87 || cde === 38) this.keys.w.pressed = false;
+            else if (k === "s" || k === "ArrowDown" || cde === 83 || cde === 40) this.keys.s.pressed = false;
+            else if (k === "a" || k === "ArrowLeft" || cde === 65 || cde === 37) this.keys.a.pressed = false;
+            else if (k === "d" || k === "ArrowRight" || cde === 68 || cde === 39) this.keys.d.pressed = false;
+            else if (k === " " || cde === 32) this.keys.space.pressed = false;
         })
     }
 
@@ -551,11 +516,11 @@ class Mario {
         }
 
         // Standing
-        else if (this.facingLeft && !this.keys.a.pressed) {
+        else if (this.facingLeft && !(this.keys.a.pressed || (this._joy & 4))) {
             this.drawFrame(standLeft[0], standLeft[1])
         }
 
-        else if (this.facingRight && !this.keys.d.pressed) {
+        else if (this.facingRight && !(this.keys.d.pressed || (this._joy & 8))) {
             this.drawFrame(standRight[0], standRight[1])
         }
 
@@ -635,19 +600,19 @@ class Mario {
         }
 
         // Mario is touching a ladder and the w key is pressed
-        if (touchingLadder == true && this.keys.w.pressed) {
+        if (touchingLadder == true && (this.keys.w.pressed || (this._joy & 1))) {
             this.speed = 0
             this.y -= 0.2
         }
 
         // Mario is touching a ladder and the s key is pressed
-        else if (touchingLadder == true && this.keys.s.pressed) {
+        else if (touchingLadder == true && (this.keys.s.pressed || (this._joy & 2))) {
             this.speed = 0
             this.y += 0.2
         }
         
         /* If you let go of W or S while on a ladder */
-        if (this.currentLadder && !this.keys.w.pressed && !this.keys.s.pressed) {
+        if (this.currentLadder && !(this.keys.w.pressed || (this._joy & 1)) && !(this.keys.s.pressed || (this._joy & 2))) {
             this.force = 0
             this.speed = 0
         }
@@ -658,18 +623,18 @@ class Mario {
         }
 
         // Mario is above a ladder and the s key is pressed
-        if (aboveLadder && this.keys.s.pressed) {
+        if (aboveLadder && (this.keys.s.pressed || (this._joy & 2))) {
             this.isClimbingDown = true
         }
 
-        if (this.keys.a.pressed || this.keys.d.pressed) {
+        if (this.keys.a.pressed || (this._joy & 4) || this.keys.d.pressed || (this._joy & 8)) {
             this.currentLadder = null
         }
     }
 
     move() {
 
-        if (this.keys.space.pressed && !this.isJumping) {
+        if ((this.keys.space.pressed || (this._joy & 16)) && !this.isJumping) {
             this.isJumping = true
             this.jumpHeight = 1000
             this.jumpHeight -= 2
@@ -680,14 +645,14 @@ class Mario {
             this.jumpHeight -= 2
         }
 
-        if (this.keys.a.pressed) {
+        if (this.keys.a.pressed || (this._joy & 4)) {
             this.x -= 1
             this.movingLeft = true
             this.movingRight = false
             this.lastKeyPressed = 'a'
         } 
 
-        if (this.keys.d.pressed) {
+        if (this.keys.d.pressed || (this._joy & 8)) {
             this.x += 1
             this.movingRight = true
             this.movingLeft = false
@@ -707,6 +672,8 @@ class Mario {
 
     update(ctx, platforms, ladders, character, elapsed) {
         console.log(this.x, this.y);
+        this._joy = 0;
+        try { this._joy = joy() | 0; } catch (e) { this._joy = 0; }
 
         this.setCharacter(character)
 
@@ -761,7 +728,9 @@ class Game {
 
         this.choose = (event) => {
             // NEW: arrows work same as a/d on character select
-            if (event.key === "a" || event.key === "ArrowLeft") {
+            var k = event.key;
+            var cde = event.keyCode;
+            if (k === "a" || k === "ArrowLeft" || cde === 65 || cde === 37) {
                 character = "Mario"
                 ctx.clearRect(590, 400, 85, 30)
                 ctx.fillStyle = "red"
@@ -770,7 +739,7 @@ class Game {
                 ctx.fillText("Luigi", 882, 420)
             } 
             
-            else if (event.key === "d" || event.key === "ArrowRight") {
+            else if (k === "d" || k === "ArrowRight" || cde === 68 || cde === 39) {
                 character = "Luigi"
                 ctx.clearRect(840, 400, 85, 30)
                 ctx.fillStyle = "lime"
@@ -973,7 +942,7 @@ class Game {
     }
 
     startSelect = (event) => {
-        if (event.key === "Enter" && gameState === "title") {
+        if ((event.key === "Enter" || event.key === " " || event.keyCode === 13 || event.keyCode === 32) && gameState === "title") {
             document.removeEventListener("keydown", this.startSelect)
             gameState = "character"
             this.characterSelect()
@@ -1001,7 +970,7 @@ class Game {
     }
 
     startGame(event) {
-        if (event.key === "Enter" && gameState === "character") {
+        if ((event.key === "Enter" || event.key === " " || event.keyCode === 13 || event.keyCode === 32) && gameState === "character") {
 
             // Remove event listener
             document.removeEventListener("keydown", (event) => this.startGame(event))

@@ -139,7 +139,7 @@ Traces first: [../.cursor/rules/use-existing-traces.mdc](../.cursor/rules/use-ex
 | Video | **HDMI Source** (J8) — native **640×480 @ ~60 Hz**, ~25.175 MHz pixel clock |
 | Framebuffer | 8 bpp indexed, **256-entry RGB888 palette**. FPGA-SIM / next bit: dual **640×480** BRAM. Last flash (03:36): 160×120 scaled |
 | Keyboard | USB HOST (J15) → PIC24 → PS/2. **Classic boot-protocol keyboard PASS 2026-08-15.** Some modern HID keyboards light LD14 but never clock PS/2. Pmod JA is the fallback. |
-| Play controls | GUI arrows+Space → KEYBITS (BOARD: PROG `0xFE`+bits). Mouse stick **off**. Pmod joy later |
+| Play controls | PS/2 arrows/Space/Enter → KEYEVT (`keyCode` 37–40 / 32 / 13). GUI arrows+Space → KEYBITS (BOARD: PROG `0xFE`+bits). Pmod stick on **JB**. |
 | Mouse | **Not V1 standalone USB** |
 | Host link | PROG FT245 (ch A / `.0`) — flash + tether glass + play keys |
 | Storage | µSD SPI + FAT32: `NAME.HTML` (LOAD). Compile-on-RUN stays in memory. |

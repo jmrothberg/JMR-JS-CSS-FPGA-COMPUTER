@@ -584,6 +584,48 @@ const keys = {
   space: { pressed: false },
 };
 
+// NEW: Pmod stick (same bits as JOYDEMO). Keyboard still works.
+let canShoot = true;
+var joyFireWas = 0;
+function stickBits() {
+  var j = 0;
+  try { j = joy() | 0; } catch (e) { j = 0; }
+  return j;
+}
+function playerShoot() {
+  if (game.over || !game.active || playerDying) return;
+  if (projectiles.length > 0) return;
+  if (!canShoot) return;
+  canShoot = false;
+  setTimeout(function () {
+    canShoot = true;
+  }, 100);
+  keys.space.pressed = true;
+  shotCount++;
+  projectiles.push(
+    new Projectile({
+      position: {
+        x: player.position.x + player.width / 2,
+        y: player.position.y,
+      },
+      velocity: { x: 0, y: -10 },
+    })
+  );
+  const music = document.getElementById("laser");
+  if (music && music.play) {
+    music.currentTime = 0;
+    music.play().catch((err) => console.warn("Autoplay blocked:", err));
+    music.volume = 0.25;
+  }
+}
+function applyStick() {
+  var j = stickBits();
+  var fireOn = (j & 16) || (j & 32);
+  if (!game.active && fireOn && !joyFireWas) startGame();
+  else if (fireOn && !joyFireWas) playerShoot();
+  joyFireWas = fireOn ? 1 : 0;
+}
+
 let frames = 0;
 let randomInterval = Math.floor(Math.random() * 500 + 500);
 let game = { over: false, active: false };
@@ -915,6 +957,7 @@ function showGameOver() {
 
 function animate() {
   // NEW: identity transform only — canvas is already 640x480 (no viewport scale)
+  applyStick();
   if (!game.active) {
     c.fillStyle = "black";
     c.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
@@ -1213,12 +1256,15 @@ function animate() {
   checkVictory();
 
   // player movement (cannon does not tilt)
+  var jMove = stickBits();
+  var goL = keys.a.pressed || (jMove & 4);
+  var goR = keys.d.pressed || (jMove & 8);
   if (playerDying) {
     player.velocity.x = 0;
-  } else if (keys.a.pressed && !keys.d.pressed) {
+  } else if (goL && !goR) {
     player.velocity.x = -5;
     player.rotation = 0;
-  } else if (keys.d.pressed && !keys.a.pressed) {
+  } else if (goR && !goL) {
     player.velocity.x = 5;
     player.rotation = 0;
   } else {
@@ -1329,70 +1375,34 @@ document.getElementById("clearLB")?.addEventListener("click", () => {
   renderLeaderboard();
 });
 
-let canShoot = true;
-
 addEventListener("keydown", (e) => {
-  const { key } = e;
-  if (!game.active && key === " ") {
+  const key = e.key;
+  const code = e.keyCode;
+  if (!game.active && (key === " " || key === "Enter" || code === 32 || code === 13)) {
     startGame();
     return;
   }
   if (game.over || !game.active || playerDying) return;
 
-  switch (key) {
-    case "a":
-    case "ArrowLeft":
-      keys.a.pressed = true;
-      break;
-    case "d":
-    case "ArrowRight":
-      keys.d.pressed = true;
-      break;
-    case " ":
-      // arcade: only one player laser on screen
-      if (projectiles.length > 0) return;
-      if (!canShoot) return;
-      canShoot = false;
-      setTimeout(() => {
-        canShoot = true;
-      }, 100);
-
-      keys.space.pressed = true;
-      shotCount++;
-      projectiles.push(
-        new Projectile({
-          position: {
-            x: player.position.x + player.width / 2,
-            y: player.position.y,
-          },
-          velocity: { x: 0, y: -10 },
-        })
-      );
-      const music = document.getElementById("laser");
-      if (music && music.play) {
-        music.currentTime = 0;
-        music.play().catch((err) => console.warn("Autoplay blocked:", err));
-        music.volume = 0.25;
-      }
-      break;
+  if (key === "a" || key === "ArrowLeft" || code === 65 || code === 37) {
+    keys.a.pressed = true;
+  } else if (key === "d" || key === "ArrowRight" || code === 68 || code === 39) {
+    keys.d.pressed = true;
+  } else if (key === " " || code === 32) {
+    playerShoot();
   }
 });
 
 addEventListener("keyup", (e) => {
   if (!game.active) return;
-  const { key } = e;
-  switch (key) {
-    case "a":
-    case "ArrowLeft":
-      keys.a.pressed = false;
-      break;
-    case "d":
-    case "ArrowRight":
-      keys.d.pressed = false;
-      break;
-    case " ":
-      keys.space.pressed = false;
-      break;
+  const key = e.key;
+  const code = e.keyCode;
+  if (key === "a" || key === "ArrowLeft" || code === 65 || code === 37) {
+    keys.a.pressed = false;
+  } else if (key === "d" || key === "ArrowRight" || code === 68 || code === 39) {
+    keys.d.pressed = false;
+  } else if (key === " " || code === 32) {
+    keys.space.pressed = false;
   }
 });
 

@@ -24,15 +24,14 @@ module ps2_decode (
     function automatic logic [7:0] kmap(input logic [7:0] sc, input logic e);
         logic [7:0] k;
         k = 8'd0;
-        if (e) begin
-            unique case (sc)
-                8'h6B: k = 8'd37; // Left
-                8'h75: k = 8'd38; // Up
-                8'h74: k = 8'd39; // Right
-                8'h72: k = 8'd40; // Down
-                default: k = 8'd0;
-            endcase
-        end else begin
+        // Dedicated arrows are E0+6B/75/74/72. Some PS/2 / PIC24 HID
+        // translators drop E0 (and numpad 4/8/6/2 with NumLock off is the
+        // same make), so those four codes are arrows with OR without ext.
+        if (sc == 8'h6B) k = 8'd37;
+        else if (sc == 8'h75) k = 8'd38;
+        else if (sc == 8'h74) k = 8'd39;
+        else if (sc == 8'h72) k = 8'd40;
+        else if (!e) begin
             unique case (sc)
                 8'h29: k = 8'd32; // Space
                 8'h5A: k = 8'd13; // Enter

@@ -131,9 +131,10 @@ class InputEngine:
         if info is None:
             return
         key_code, key = info
-        # Arrow makes are only valid with E0
-        if make in (0x75, 0x72, 0x6B, 0x74) and not ext:
-            return
+        # Arrows are E0+make on a spec keyboard. Some PS/2 / PIC24 HID
+        # translators drop E0, so accept 6B/75/74/72 with or without it
+        # (same as rtl/phys/ps2_decode.sv kmap).
+        _ = ext
         self._set_key(key_code, key, pressed=not brk)
 
     def _set_key(self, key_code: int, key: str, pressed: bool) -> None:

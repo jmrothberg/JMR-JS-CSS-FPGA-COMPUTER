@@ -583,10 +583,12 @@ function killCreep(i, byBall) {
 }
 
 function wantDir() {
-  if (upHeld) return 0;
-  if (rightHeld) return 1;
-  if (downHeld) return 2;
-  if (leftHeld) return 3;
+  var j = 0;
+  try { j = joy() | 0; } catch (e) { j = 0; }
+  if (upHeld || (j & 1)) return 0;
+  if (rightHeld || (j & 8)) return 1;
+  if (downHeld || (j & 2)) return 2;
+  if (leftHeld || (j & 4)) return 3;
   return -1;
 }
 
@@ -1515,11 +1517,15 @@ function paintOverlay() {
 
 function tickGame() {
   tick = tick + 1;
-  if (startHeld && !startWas && (mode === ATTRACT || mode === OVER)) startGame();
+  var j = 0;
+  try { j = joy() | 0; } catch (e) { j = 0; }
+  var startOn = startHeld || (j & 32) || (j & 16);
+  var fireOn = fireHeld || (j & 16) || (j & 32);
+  if (startOn && !startWas && (mode === ATTRACT || mode === OVER)) startGame();
   if (mode === PLAY) {
     if (blink > 0) blink = blink - 1;
     stepPlayer();
-    if (fireHeld && !fireWas) fireBall();
+    if (fireOn && !fireWas) fireBall();
     stepBall();
     stepApples();
     stepCreeps();
@@ -1552,8 +1558,8 @@ function tickGame() {
     wait = wait - 1;
     if (wait <= 0) nextScene();
   }
-  fireWas = fireHeld;
-  startWas = startHeld;
+  fireWas = fireOn ? 1 : 0;
+  startWas = startOn ? 1 : 0;
 }
 
 function paint() {
@@ -1570,13 +1576,15 @@ function loop() {
 
 function keyOn(e, down) {
   var k = e.key;
-  var cde = e.keyCode;
-  if (k === "ArrowLeft" || k === "a" || k === "A" || cde === 37 || cde === 65) leftHeld = down;
-  if (k === "ArrowRight" || k === "d" || k === "D" || cde === 39 || cde === 68) rightHeld = down;
-  if (k === "ArrowUp" || k === "w" || k === "W" || cde === 38 || cde === 87) upHeld = down;
-  if (k === "ArrowDown" || k === "s" || k === "S" || cde === 40 || cde === 83) downHeld = down;
-  if (k === " " || cde === 32) fireHeld = down;
-  if (k === "Enter" || cde === 13) startHeld = down;
+  // NEW: PS/2 KEYEVT may deliver keyCode as a number-like value; |0 so
+  // 37 still matches. which is the same code on older event objects.
+  var cde = (e.keyCode | 0) || (e.which | 0);
+  if (k === "ArrowLeft" || k === "Left" || k === "a" || k === "A" || cde == 37 || cde == 65) leftHeld = down;
+  if (k === "ArrowRight" || k === "Right" || k === "d" || k === "D" || cde == 39 || cde == 68) rightHeld = down;
+  if (k === "ArrowUp" || k === "Up" || k === "w" || k === "W" || cde == 38 || cde == 87) upHeld = down;
+  if (k === "ArrowDown" || k === "Down" || k === "s" || k === "S" || cde == 40 || cde == 83) downHeld = down;
+  if (k === " " || cde == 32) fireHeld = down;
+  if (k === "Enter" || cde == 13) startHeld = down;
 }
 
 addEventListener("keydown", function (e) {

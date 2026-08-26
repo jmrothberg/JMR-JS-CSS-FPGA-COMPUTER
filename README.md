@@ -62,6 +62,7 @@ compile when you make the card** (`.JSH`). **V1.5** tries standalone compile.
 | Board, Vivado, flash, HDMI | [docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md) |
 | **Writing RTL well — area, speed, templates (read BEFORE new RTL or a new chip)** | [docs/RTL_DESIGN_PRINCIPLES.md](docs/RTL_DESIGN_PRINCIPLES.md) |
 | **The timing wall — measured logic/route split, root cause, max clock, held fixes** | [docs/TIMING_WALL.md](docs/TIMING_WALL.md) |
+| GUI / tooling bugs (host-side only — not the .bit) | [docs/GUI_TOOLING_BUGS.md](docs/GUI_TOOLING_BUGS.md) |
 | Fit numbers, next `.bit`, RAM law | [docs/FPGA_FIT.md](docs/FPGA_FIT.md) |
 | This week’s status + failed-fix table | [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) |
 | If a game looks slow *on the real board* / 30 fps plan | [docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md) |

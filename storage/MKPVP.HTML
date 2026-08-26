@@ -147,6 +147,24 @@ var p2 = makeFighter("kano", 450, -1);
 var k1 = { left: 0, right: 0, up: 0, down: 0, punch: 0, kick: 0 };
 var k2 = { left: 0, right: 0, up: 0, down: 0, punch: 0, kick: 0 };
 
+// NEW: Pmod stick is P1 (WASD/F/G still work). P2 stays keyboard arrows/O/P.
+function stickBits() {
+  var j = 0;
+  try { j = joy() | 0; } catch (e) { j = 0; }
+  return j;
+}
+function p1Keys() {
+  var j = stickBits();
+  return {
+    left: k1.left || (j & 4),
+    right: k1.right || (j & 8),
+    up: k1.up || (j & 1),
+    down: k1.down || (j & 2),
+    punch: k1.punch || (j & 16),
+    kick: k1.kick || (j & 32)
+  };
+}
+
 function resetFight() {
   p1.x = 140; p1.y = GROUND; p1.vx = 0; p1.vy = 0; p1.face = 1;
   p1.hp = 100; p1.stun = 0; p1.atk = 0; p1.block = 0; p1.onGround = 1;
@@ -300,15 +318,16 @@ function separate() {
 
 function update() {
   tick = tick + 1;
+  var pk = p1Keys();
   if (mode === ATTRACT) {
-    if (k1.punch || k2.punch || k1.kick || k2.kick) resetFight();
+    if (pk.punch || k2.punch || pk.kick || k2.kick) resetFight();
     return;
   }
   if (mode === OVER) {
-    if (k1.punch || k2.punch) resetFight();
+    if (pk.punch || k2.punch) resetFight();
     return;
   }
-  control(p1, k1);
+  control(p1, pk);
   control(p2, k2);
   physics(p1);
   physics(p2);
@@ -423,7 +442,7 @@ function draw() {
   c.font = "11px monospace";
   c.fillText("MKPVP — L/R sheets (no mirror; under MAX_SPR=16)", 8, H - 28);
   c.fillStyle = "#fff";
-  c.fillText("P1: A/D move W jump S block F punch G kick", 8, H - 10);
+  c.fillText("P1: stick + FIRE1/2  (or WASD F G)", 8, H - 10);
   c.fillText("P2: arrows  Enter block  O punch  P kick", 320, H - 10);
 }
 
@@ -436,17 +455,19 @@ function frame() {
 function setKey(e, down) {
   var code = e.keyCode;
   var key = e.key;
+  var j = stickBits();
   if (key === "a" || key === "A" || code === 65) k1.left = down;
   if (key === "d" || key === "D" || code === 68) k1.right = down;
   if (key === "w" || key === "W" || code === 87) k1.up = down;
   if (key === "s" || key === "S" || code === 83) k1.down = down;
   if (key === "f" || key === "F" || code === 70) k1.punch = down;
   if (key === "g" || key === "G" || code === 71) k1.kick = down;
-  if (code === 37 || key === "ArrowLeft") k2.left = down;
-  if (code === 39 || key === "ArrowRight") k2.right = down;
-  if (code === 38 || key === "ArrowUp") k2.up = down;
-  if (code === 40 || key === "ArrowDown") k2.down = down;
-  if (code === 13 || key === "Enter") k2.down = down;
+  // RTL maps stick → arrows/Enter; those must not drive P2 while the stick is held
+  if ((code === 37 || key === "ArrowLeft") && !(j & 4)) k2.left = down;
+  if ((code === 39 || key === "ArrowRight") && !(j & 8)) k2.right = down;
+  if ((code === 38 || key === "ArrowUp") && !(j & 1)) k2.up = down;
+  if ((code === 40 || key === "ArrowDown") && !(j & 2)) k2.down = down;
+  if ((code === 13 || key === "Enter") && !(j & 32)) k2.down = down;
   if (key === "o" || key === "O" || code === 79) k2.punch = down;
   if (key === "p" || key === "P" || code === 80) k2.kick = down;
 }

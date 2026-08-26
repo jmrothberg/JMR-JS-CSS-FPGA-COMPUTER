@@ -91,6 +91,9 @@ That seeds the FAT image from `storage/` root files (8.3 names on the card).
   so a missing `key` string still plays.
 - **Do not steal Esc.** Esc is machine BREAK / READY.
 - Joystick bits are optional extras; they must not replace HTML bindings.
+  Poll `joy()` each frame (bits: 1=up 2=down 4=left 8=right 16=FIRE1 32=FIRE2)
+  and OR into the same held flags as keys (`JOYDEMO.HTML`). RTL may also
+  synthesize Arrow/Space/Enter — still read `keyCode`.
 
 ---
 
