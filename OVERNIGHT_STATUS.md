@@ -949,3 +949,20 @@ Also open: PACMAN board freeze needs the user's VMSTAT-at-freeze read
 (sim steers and dispatches fine); stale-FB flash between titles
 (cosmetic, clear-on-start); INVADERS pace = div8 frame cost (product
 decision, 50 MHz lever exists); standalone get_byte ~1.1k clks/byte.
+
+## DONKEY ROOT-CAUSED: sprite sheets wider than 1023 px blit garbage
+
+The sprite-geometry parse truncates width to 10 bits
+(jmr_js_vm.sv:8788 {...}[9:0]); a wider sheet wraps its row stride so
+the ENTIRE sheet blits garbage (proven: 1400-wide reproducer fails even
+a left-edge crop). DONKEY's character sheets are 936/1398/1470 wide;
+platforms (small sheets) drew fine - exactly the board+sim symptom,
+and the FM loses them identically so parity never caught it. The
+in-game rAF loop was never dead (503 drawImage/frame, measured); the
+ASET pixel data is healthy (probe: all six sheets rich).
+Gate: tests/test_wide_sprite_sheets.py (strict xfail until fixed).
+Fix direction (constitution: full-quality art, loud overflow): widen
+the parse to the tables' existing 16 bits, audit spr_wp/spr_left
+(18-bit) and the 32KB SPR region vs the ASET path for big sheets, FM
+twin parity, and a LOUD compiler error for anything the hardware
+cannot represent. Not in run 41.
