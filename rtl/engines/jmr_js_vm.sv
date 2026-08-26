@@ -847,7 +847,8 @@ module jmr_js_vm #(
     // arrived with event.key = "ArrowLeft" (the old ternary default), so a
     // `switch (e.key)` game turned left on every vertical press.
     logic [15:0] id_arrow_u, id_arrow_d;
-    logic [15:0] id_reduce, id_draw, id_update, id_fillstyle, id_clearrect, id_drawimage;
+    logic [15:0] id_reduce, id_draw, id_update, id_fillstyle, id_clearrect;
+    logic [15:0] id_drawimage /*verilator public_flat_rd*/;
     logic [15:0] id_this_name, id_black, id_white, id_red, id_yellow, id_cyan, id_gold;
     logic [15:0] id_src, id_onload, id_width, id_height;
     logic [15:0] id_style; // nested canvas.style for GET_PROP/SET_PROP
@@ -3397,11 +3398,11 @@ module jmr_js_vm #(
     logic [7:0] e64_color_q;
     logic [1:0] e64_ctx_align_q;
     logic e64_ctx_smooth_q;
-    logic signed [31:0] e64_ctx_sx_q;
+    logic signed [31:0] e64_ctx_sx_q /*verilator public_flat_rd*/;
     logic signed [31:0] e64_ctx_sy_q;
     logic signed [31:0] e64_ctx_tx_q;
     logic signed [31:0] e64_ctx_ty_q;
-    logic [15:0] e64_dbg_di_hit_q;
+    logic [15:0] e64_dbg_di_hit_q /*verilator public_flat_rd*/;
     logic [15:0] e64_dbg_di_miss_q;
     logic [15:0] e64_dbg_div_n_q;
     logic [15:0] e64_dbg_json_ovf_q;
@@ -7916,6 +7917,12 @@ module jmr_js_vm #(
                         ctx_sy <= e64_ctx_sy_q;
                         ctx_tx <= e64_ctx_tx_q;
                         ctx_ty <= e64_ctx_ty_q;
+                        // 2026-08-25: the drawImage debug counters were
+                        // never absorbed from exec64 - VMSTAT reported
+                        // dihit=0/dimiss=0 forever (a dead instrument that
+                        // cost a night of misdirection on DONKEY).
+                        dbg_di_hit  <= e64_dbg_di_hit_q;
+                        dbg_di_miss <= e64_dbg_di_miss_q;
                         hs_ip(e64_ip_q);
                         hs_vsp(e64_vsp_q);
                     end else if (pi >= pc_n) begin

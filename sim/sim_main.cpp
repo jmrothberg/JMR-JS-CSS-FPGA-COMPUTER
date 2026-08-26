@@ -2104,6 +2104,9 @@ int main(int argc, char** argv) {
                       << " find=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__id_find)
                       << " foreach=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__id_foreach)
                       << " replace=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__id_replace)
+                      << " drawimage=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__id_drawimage)
+                      << " ctxsx=" << int(r->jmr_js_core__DOT__u_vm__DOT__e64_ctx_sx_q)
+                      << " e64dihit=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__e64_dbg_di_hit_q)
                       << std::endl;
             continue;
         }
