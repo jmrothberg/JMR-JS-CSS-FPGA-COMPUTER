@@ -48,6 +48,11 @@ module ps2_decode (
                 8'h26: k = 8'd51; 8'h25: k = 8'd52; 8'h2E: k = 8'd53; // 3 4 5
                 8'h36: k = 8'd54; 8'h3D: k = 8'd55; 8'h3E: k = 8'd56; // 6 7 8
                 8'h46: k = 8'd57;                                     // 9
+                // PIC24 USB->PS/2 translators sometimes emit arrows as
+                // the plain (non-E0) keypad codes; map those too. The
+                // ascii path still types keypad digits independently.
+                8'h6B: k = 8'd37; 8'h75: k = 8'd38;                   // KP-left/up
+                8'h74: k = 8'd39; 8'h72: k = 8'd40;                   // KP-right/down
                 default: k = 8'd0;
             endcase
         end
