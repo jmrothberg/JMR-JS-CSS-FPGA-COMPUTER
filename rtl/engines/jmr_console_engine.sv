@@ -1983,7 +1983,11 @@ module jmr_console_engine (
                 end
             end
             if (state == C_IDLE || state == C_PROMPT || state == C_ECHO
-                || state == C_LIST_WAIT)
+                || state == C_LIST_WAIT || stor_done)
+                // stor_done counts as progress: a standalone DONKEY.JSH
+                // load is 2.36MB of get_byte pulses over minutes - alive
+                // the whole time. A wedged op stops pulsing done and the
+                // 21.5s clock runs out as before.
                 cons_prog_wd <= 32'd0;
             else begin
                 cons_prog_wd <= cons_prog_wd + 32'd1;
