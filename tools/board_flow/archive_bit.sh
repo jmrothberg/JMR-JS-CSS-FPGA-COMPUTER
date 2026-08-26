@@ -7,3 +7,12 @@ BIT="${2:-build/nexys_video/vivado/jmr_nexys_video.runs/impl_1/top_nexys_video.b
 mkdir -p build/bits
 cp "$BIT" "build/bits/${LABEL}.bit"
 echo "archived: build/bits/${LABEL}.bit ($(stat -c %s "$BIT") bytes)"
+# The board's SD/flash path takes the .bin, not the .bit — archive both or
+# the saved run is not directly flashable.
+BIN="${BIT%.bit}.bin"
+if [ -f "$BIN" ]; then
+  cp "$BIN" "build/bits/${LABEL}.bin"
+  echo "archived: build/bits/${LABEL}.bin ($(stat -c %s "$BIN") bytes)"
+else
+  echo "note: no $BIN alongside the .bit — .bin not archived"
+fi

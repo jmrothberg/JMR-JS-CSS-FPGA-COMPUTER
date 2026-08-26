@@ -128,6 +128,10 @@ class BoardBackend(RuntimeBackend):
         while b"\n" in self._rx_buf:
             raw, self._rx_buf = self._rx_buf.split(b"\n", 1)
             line = raw.decode("ascii", errors="replace").rstrip("\r")
+            if len(line) == 3 and line[0] == "D":
+                # storage stalled >0.67s in one state - names the wedge
+                self._log.note(f"STOR-STALL state=0x{line[1:]}")
+                continue
             if line == "K" or (len(line) == 3 and line[0] == "K"):
                 # K or Kxx (scancode hex, 2026-08-25 arrows debug)
                 # NEW: USB Host scancode reached RTL (ps2_strobe)
