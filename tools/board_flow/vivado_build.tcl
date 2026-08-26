@@ -22,6 +22,16 @@ if {[llength [get_parts -quiet xc7a200tsbg484-1]] == 0} {
 # Cap synth threads; leave impl place/route at 8. `-jobs` is parallel
 # *runs*, not mapping workers — do not cap impl jobs for this OOM.
 # Override synth cap: JMR_VIVADO_ALLOW_WIDE=1.
+# NEW: impl strategy (congestion campaign): JMR_VIVADO_STRATEGY names a
+# Vivado impl_1 strategy, e.g. Performance_Explore or
+# Congestion_SpreadLogic_low. Default placement failed/died 3 of the
+# last 4 routes (35, 41, 45); directed placements route.
+if {[info exists ::env(JMR_VIVADO_STRATEGY)] && $::env(JMR_VIVADO_STRATEGY) ne ""} {
+  set JMR_STRATEGY $::env(JMR_VIVADO_STRATEGY)
+} else {
+  set JMR_STRATEGY ""
+}
+
 # NEW: build-variant defines (JMR_VIVADO_DEFINES=JMR_NOCACHE = the
 # PACMAN-freeze read-cache A/B build)
 if {[info exists ::env(JMR_VIVADO_DEFINES)] && $::env(JMR_VIVADO_DEFINES) ne ""} {
@@ -326,6 +336,10 @@ catch {reset_run impl_1}
 # Place/route: restore 8 threads. Mapping OOM was synth_design, not impl.
 set_param general.maxThreads $IMPL_THREADS
 puts "INFO: impl maxThreads=$IMPL_THREADS jobs=$IMPL_JOBS"
+if {$JMR_STRATEGY ne ""} {
+  puts "INFO: impl strategy $JMR_STRATEGY"
+  set_property strategy $JMR_STRATEGY [get_runs impl_1]
+}
 launch_runs impl_1 -to_step write_bitstream -jobs $IMPL_JOBS
 # catch: a failed route ERRORs out of wait_on_runs and would kill the
 # script before the checkpoint-recovery branch below ever ran (run 45).
