@@ -555,7 +555,12 @@ module storage_engine #(
                         // command that re-initialized a live card (its board
                         // wedge slice); hot-swap is handled by card_present
                         // clearing `mounted` below, same as an SPI error.
-                        push_call(S_MNT0, S_DIR0);
+                        // 2026-08-26: the remount is now CONDITIONAL, matching
+                        // start_open (:1246) and S_DEL0 (:1423). 86011a9 removed
+                        // `mounted <= 1'b0` but left this push_call unconditional,
+                        // so DIR still re-ran full SPI init on a live card.
+                        if (!mounted) push_call(S_MNT0, S_DIR0);
+                        else state <= S_DIR0;
                     end else if (start_dir_next) begin
                         err_r <= 1'b0; eof_r <= 1'b0; fld_len <= 9'h0;
                         if (!cat_on) begin
