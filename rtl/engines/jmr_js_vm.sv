@@ -6198,6 +6198,16 @@ module jmr_js_vm #(
             // frame dirty and every frame re-presented forever.
             if (fb_we && state != S_FB_SYNC && casestate_q != S_FB_SYNC)
                 fb_dirty <= 1'b1;
+            // C1: the engine draws on the VM's behalf now, so the VM's own
+            // fb_we never fires for rect/clear/blit/imgd — the implicit
+            // frame-end present (fb_dirty at 14423) starved and legacy .JS
+            // titles stopped presenting (battery: swaps stuck at 2 across
+            // 43 frames). Any engine issue marks the frame dirty. (A blit
+            // of only-transparent pixels now also marks dirty — one benign
+            // extra present of an unchanged FB, matching the "this frame
+            // drew" intent.)
+            if (rast_go)
+                fb_dirty <= 1'b1;
             // S_ARR_PROMOTE completion sets vprom_done so the requester
             // stops asking. The JSON paths consume-and-clear it themselves;
             // an exec-requested promote had no such clear, and exec only ever
