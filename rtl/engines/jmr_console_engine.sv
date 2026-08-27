@@ -778,7 +778,17 @@ module jmr_console_engine (
                 end
                 C_DIR_CH: if (mem_gnt) begin
                     rd_ch <= mem_rdata;
+                    dir_hs_wd <= 22'd0;
                     state <= C_DIR_PUT;
+                end else if (dir_hs_hit) begin
+                    // 2026-08-27: the mem request is a 1-cycle pulse into a
+                    // shared latch — if the latch was busy that cycle the
+                    // pulse is DROPPED and nothing re-asks (board R49:
+                    // console parked here, cons=0x0D, 21.5s ?IO). Re-issue
+                    // the identical read; repeats until granted.
+                    dir_hs_wd <= 22'd0;
+                    mem_en <= 1'b1; mem_we <= 1'b0;
+                    mem_addr <= STORAGE_BUFFER + {8'h0, dir_idx};
                 end
                 C_DIR_PUT: if (!video_busy) begin
                     put_en <= 1'b1;
@@ -2040,6 +2050,9 @@ module jmr_console_engine (
             // DIR handshake silence counter: counts only while waiting in the
             // DIR wait states with storage idle and no done this cycle.
             if ((state == C_DIR0W || state == C_DIRNW) && !stor_busy && !stor_done) begin
+                if (!(&dir_hs_wd)) dir_hs_wd <= dir_hs_wd + 22'd1;
+            end
+            if (state == C_DIR_CH && !mem_gnt) begin
                 if (!(&dir_hs_wd)) dir_hs_wd <= dir_hs_wd + 22'd1;
             end
             // single-cycle qualifier: self-clearing so one timeout = one retry
