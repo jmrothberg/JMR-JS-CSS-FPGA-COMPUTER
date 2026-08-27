@@ -1369,7 +1369,7 @@ int main(int argc, char** argv) {
                       << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_w)
                       << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_h)
                       << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_color)
-                      << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_i)
+                      << ",0" // vdraw_i: walk moved to jmr_raster_engine (C1)
                       << " raf=" << ((unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u)
                           ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vraf_n)
                           : unsigned(r->jmr_js_core__DOT__u_vm__DOT__raf_n))

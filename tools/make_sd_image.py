@@ -48,8 +48,8 @@ LINE_NO_MAX = 65535
 # longer (e.g. SET(x,y,color) × 6). Overflow used to wrap and corrupt the line.
 TOK_MAX = 128
 
-# Default geometry: 16 MiB (JS/HTML demos + room to grow).
-DEFAULT_SIZE = 16 * 1024 * 1024
+# Default geometry: 32 MiB (FAST title copies + MK atlas .JSH no longer fit in 16 MiB).
+DEFAULT_SIZE = 32 * 1024 * 1024
 PART_LBA = 2048
 RESERVED = 32
 FAT_COUNT = 2
@@ -609,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_create = sub.add_parser("create", help="create a FAT32 card image")
     p_create.add_argument("image", type=Path)
-    p_create.add_argument("--size", default="16M")
+    p_create.add_argument("--size", default="32M")
     p_create.add_argument(
         "--files",
         nargs="*",
@@ -635,7 +635,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_burn.add_argument("device", help="whole-disk device of the card, e.g. /dev/sdb")
     p_burn.add_argument("--image", type=Path, default=ROOT / "card.img")
-    p_burn.add_argument("--size", default="16M")
+    p_burn.add_argument("--size", default="32M")
     p_burn.add_argument(
         "--keep-image",
         action="store_true",

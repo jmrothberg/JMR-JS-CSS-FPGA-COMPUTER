@@ -19,6 +19,9 @@ var rightHeld = 0;
 var upHeld = 0;
 var downHeld = 0;
 var fireHeld = 0;
+var _jx = 300;
+var _jy = 220;
+var _joyBg = 0;
 
 console.log("JOY DEMO");
 
@@ -73,14 +76,35 @@ function loop() {
   if (y < 40) y = 40;
   if (y > H - 48) y = H - 48;
 
-  c.fillStyle = "#000000";
-  c.fillRect(0, 0, W, H);
+  if (!_joyBg) {
+    c.fillStyle = "#000000";
+    c.fillRect(0, 0, W, H);
+    _joyBg = 1;
+  } else {
+    c.fillStyle = "#000000";
+    c.fillRect(_jx, _jy, 40, 40);
+    c.fillRect(0, 0, W, 40);
+    c.fillRect(0, 448, W, 32);
+  }
   c.fillStyle = fire ? "#FFFF00" : "#3DFF9A";
   c.fillRect(x, y, 40, 40);
+  _jx = x;
+  _jy = y;
   c.fillStyle = "#FFFFFF";
   c.fillText("JOY DEMO", 8, 16);
   c.fillText("ARROWS / WASD / STICK   SPACE FIRE", 8, 32);
-  c.fillText("U" + u + " D" + d + " L" + l + " R" + r + " F" + fire + " JOY " + j, 8, 464);
+  c.fillText("U", 8, 464);
+  c.fillText(u, 20, 464);
+  c.fillText("D", 40, 464);
+  c.fillText(d, 52, 464);
+  c.fillText("L", 72, 464);
+  c.fillText(l, 84, 464);
+  c.fillText("R", 104, 464);
+  c.fillText(r, 116, 464);
+  c.fillText("F", 136, 464);
+  c.fillText(fire, 148, 464);
+  c.fillText("JOY", 176, 464);
+  c.fillText(j, 208, 464);
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);

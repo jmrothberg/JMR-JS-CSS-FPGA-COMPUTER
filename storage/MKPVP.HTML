@@ -18,6 +18,21 @@ var c = canvas.getContext("2d");
 c.imageSmoothingEnabled = false;
 var W = 640;
 var H = 480;
+var _mkBg = 0;
+var _mkMode = -1;
+var _p1x = 0, _p1y = 0, _p1w = 80, _p1h = 120;
+var _p2x = 0, _p2y = 0, _p2w = 80, _p2h = 120;
+function mkPatch(arena, x, y, w, h) {
+  if (w < 1 || h < 1) return;
+  if (x < 0) { w = w + x; x = 0; }
+  if (y < 0) { h = h + y; y = 0; }
+  if (x + w > W) w = W - x;
+  if (y + h > H) h = H - y;
+  if (w < 1 || h < 1) return;
+  if (arena) c.drawImage(arena, x, y, w, h, x, y, w, h);
+  else { c.fillStyle = "#1a1028"; c.fillRect(x, y, w, h); }
+}
+
 var GROUND = 420;
 var ATTRACT = 0;
 var PLAY = 1;
@@ -436,11 +451,17 @@ function drawFighter(f) {
 
 function draw() {
   var arena = imgs["arena"];
-  if (arena && arena.width) {
-    c.drawImage(arena, 0, 0, W, H);
+  if (mode !== _mkMode || loaded < need) { _mkBg = 0; _mkMode = mode; }
+  if (!_mkBg) {
+    if (arena) c.drawImage(arena, 0, 0, W, H);
+    else {
+      c.fillStyle = "#1a1028";
+      c.fillRect(0, 0, W, H);
+    }
+    _mkBg = 1;
   } else {
-    c.fillStyle = "#1a1028";
-    c.fillRect(0, 0, W, H);
+    mkPatch(arena, _p1x, _p1y, _p1w, _p1h);
+    mkPatch(arena, _p2x, _p2y, _p2w, _p2h);
   }
   c.fillStyle = "#000";
   c.fillRect(0, 0, W, 32);
@@ -454,13 +475,23 @@ function draw() {
   c.font = "12px monospace";
   c.fillText("SUB-ZERO", 8, 24);
   c.fillText("KANO", W - 208, 24);
-  c.fillText("P1 " + p1Wins, 270, 24);
-  c.fillText("P2 " + p2Wins, 350, 24);
+  c.fillText("P1", 270, 24);
+  c.fillText(p1Wins, 300, 24);
+  c.fillText("P2", 350, 24);
+  c.fillText(p2Wins, 380, 24);
 
   if (mode === PLAY || mode === OVER || mode === ATTRACT) {
     if (loaded >= need) {
       drawFighter(p1);
       drawFighter(p2);
+      _p1w = (p1.w || 40) + 8;
+      _p1h = (p1.h || 80) + 8;
+      _p1x = p1.x - Math.floor(_p1w / 2);
+      _p1y = p1.y - _p1h;
+      _p2w = (p2.w || 40) + 8;
+      _p2h = (p2.h || 80) + 8;
+      _p2x = p2.x - Math.floor(_p2w / 2);
+      _p2y = p2.y - _p2h;
     }
   }
 
@@ -489,7 +520,10 @@ function draw() {
     c.fillText(winner, 180, 190);
     c.fillStyle = "#fff";
     c.font = "14px monospace";
-    c.fillText("SCORE  P1 " + p1Wins + "  P2 " + p2Wins, 200, 220);
+    c.fillText("SCORE  P1", 200, 220);
+    c.fillText(p1Wins, 290, 220);
+    c.fillText("P2", 320, 220);
+    c.fillText(p2Wins, 350, 220);
     if (matchDone) {
       c.fillText("F/O or P punch = new match", 200, 250);
     } else {

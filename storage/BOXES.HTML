@@ -12,25 +12,32 @@ c.imageSmoothingEnabled = false;
 var W = 640;
 var H = 480;
 var n = 0;
+var _boxesOnce = 0;
 
 console.log("BOXES");
 
 function loop() {
   n = n + 1;
 
-  c.fillStyle = "#000000";
-  c.fillRect(0, 0, W, H);
-
-  c.fillStyle = "#FF0000";
-  c.fillRect(80, 120, 160, 160);
-
-  c.fillStyle = "#0000FF";
-  c.fillRect(400, 120, 160, 160);
+  if (!_boxesOnce) {
+    c.fillStyle = "#000000";
+    c.fillRect(0, 0, W, H);
+    c.fillStyle = "#FF0000";
+    c.fillRect(80, 120, 160, 160);
+    c.fillStyle = "#0000FF";
+    c.fillRect(400, 120, 160, 160);
+    _boxesOnce = 1;
+  } else {
+    c.fillStyle = "#000000";
+    c.fillRect(0, 0, W, 40);
+    c.fillRect(0, 448, W, 32);
+  }
 
   c.fillStyle = "#FFFFFF";
   c.fillText("BOXES OK", 8, 16);
   c.fillText("LEFT RED   RIGHT BLUE", 8, 32);
-  c.fillText("FRAME " + n, 8, 464);
+  c.fillText("FRAME", 8, 464);
+  c.fillText(n, 64, 464);
 
   requestAnimationFrame(loop);
 }

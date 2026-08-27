@@ -35,6 +35,46 @@ var frame = 0;
 var leftHeld = 0;
 var rightHeld = 0;
 var fireHeld = 0;
+var _auDid = 0;
+var _aux = 288;
+var _auy = 428;
+var _auw = 84;
+var _auh = 24;
+var _gx = [];
+var _gy = [];
+var _gw = [];
+var _gh = [];
+var _gn = 0;
+var _bandX = [0, 0, 0, 0, 0, 0, 0, 0];
+var _starX = [];
+var _starY = [];
+function auroraErase() {
+  var b;
+  var i;
+  ctx.fillStyle = PAL[0];
+  if (!_auDid) {
+    ctx.fillRect(0, 0, 640, 480);
+    _auDid = 1;
+    return;
+  }
+  b = 0;
+  while (b < 8) {
+    ctx.fillRect(_bandX[b], 0, 72, 16);
+    b = b + 1;
+  }
+  i = 0;
+  while (i < 28) {
+    if (_starX[i] !== undefined) ctx.fillRect(_starX[i], _starY[i], 2, 2);
+    i = i + 1;
+  }
+  ctx.fillRect(0, 16, 640, 16);
+  ctx.fillRect(_aux, _auy, _auw, _auh);
+  i = 0;
+  while (i < _gn) {
+    ctx.fillRect(_gx[i], _gy[i], _gw[i], _gh[i]);
+    i = i + 1;
+  }
+}
 
 addEventListener("keydown", function(e) {
   if (e.key === "ArrowLeft") leftHeld = 1;
@@ -52,17 +92,11 @@ addEventListener("keyup", function(e) {
 function paint(x, y, w, h, n) {
   ctx.fillStyle = PAL[n] || "#ffffff";
   ctx.fillRect(x, y, w, h);
-  try {
-    fillRect(x, y, w, h, n);
-  } catch (e) {}
 }
 
 function wipe() {
   ctx.fillStyle = PAL[0];
   ctx.fillRect(0, 0, 640, 480);
-  try {
-    clear(0);
-  } catch (e) {}
 }
 
 function hit(a, b) {
@@ -119,14 +153,17 @@ function tick() {
     }
   }
 
-  wipe();
+  auroraErase();
   var band;
   for (band = 0; band < 8; band++) {
-    paint(((frame * 4) + band * 80) % 640, 0, 72, 16, (band % 6) + 2);
+    _bandX[band] = ((frame * 4) + band * 80) % 640;
+    paint(_bandX[band], 0, 72, 16, (band % 6) + 2);
   }
   var star;
   for (star = 0; star < 28; star++) {
-    paint((star * 97 + frame * 2) % 640, 24 + (star * 53) % 360, 2, 2, (star % 6) + 2);
+    _starX[star] = (star * 97 + frame * 2) % 640;
+    _starY[star] = 24 + (star * 53) % 360;
+    paint(_starX[star], _starY[star], 2, 2, (star % 6) + 2);
   }
   var tickN = score;
   if (tickN > 48) tickN = 48;
@@ -149,6 +186,18 @@ function tick() {
     paint(g.x - 2, g.y - 2, g.w + 4, g.h + 4, 1);
     paint(g.x, g.y, g.w, g.h, g.c);
     paint(g.x + 3, g.y + 3, 4, 4, 1);
+  }
+  _aux = px - 6;
+  _auy = pdy;
+  _auw = pw + 12;
+  _auh = ph + 10;
+  _gn = gems.length;
+  for (i = 0; i < _gn; i++) {
+    g = gems[i];
+    _gx[i] = g.x - 2;
+    _gy[i] = g.y - 2;
+    _gw[i] = g.w + 4;
+    _gh[i] = g.h + 4;
   }
   requestAnimationFrame(tick);
 }

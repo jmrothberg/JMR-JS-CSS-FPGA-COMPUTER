@@ -66,7 +66,27 @@ module jmr_js_vm #(
     output logic        sram_we,
     output logic [15:0] sram_wdata,
     input  logic [15:0] sram_rdata,
-    input  logic        sram_ack
+    input  logic        sram_ack,
+    // C1 (run 50/51): full-rate raster engine handshake. The VM latches
+    // the op's scalars, pulses rast_go for ONE beat, then blocks until
+    // rast_busy has risen and fallen. Engine: jmr_raster_engine.sv.
+    output logic        rast_go,
+    output logic [1:0]  rast_mode,
+    output logic [9:0]  rast_dx,
+    output logic [9:0]  rast_dy,
+    output logic [9:0]  rast_w,
+    output logic [9:0]  rast_h,
+    output logic [7:0]  rast_color,
+    output logic [15:0] rast_sx,
+    output logic [15:0] rast_sy,
+    output logic [15:0] rast_qx,
+    output logic [15:0] rast_rxr,
+    output logic [15:0] rast_qy,
+    output logic [15:0] rast_ryr,
+    output logic [21:0] rast_sbase,
+    output logic [15:0] rast_stride,
+    output logic        rast_aset,
+    input  logic        rast_busy
 );
     // 2026-08-21 fit: measured code high-water (ops_base+n_ops) across the
     // seven card titles: PACMAN 16443 worst. 20480 = 1.25x. Console clamps
@@ -1665,6 +1685,10 @@ module jmr_js_vm #(
     // flatten: sin_q raddr from sin_turn (not function peek / unique-case ROM).
     assign sin_raddr = sin_turn[14] ? (8'd255 - sin_turn[13:6]) : sin_turn[13:6];
     logic [18:0] clr_idx;
+    // C1: engine-wait flags. rast_go is a STROBE (default-cleared every
+    // beat); rast_wait/rast_started are STATE (potential-bugs #73 class:
+    // never put a handshake flag in the default-clear block).
+    logic rast_wait, rast_started;
     logic [7:0]  nat_id, nat_argc;
     logic signed [31:0] a_s, b_s;
 
@@ -5744,6 +5768,7 @@ module jmr_js_vm #(
             running <= 1'b0;
             looping <= 1'b0;
             fb_we <= 1'b0; fb_swap <= 1'b0;
+            rast_go <= 1'b0; rast_wait <= 1'b0; rast_started <= 1'b0;
             did_swap <= 1'b0; present_pend <= 1'b0; fb_dirty <= 1'b0;
             fbs_armed <= 1'b0;
             env_len_arm <= 1'b0;
@@ -5939,6 +5964,7 @@ module jmr_js_vm #(
         end else begin
             fb_we <= 1'b0;
             fb_swap <= 1'b0;
+            rast_go <= 1'b0;
             vst_we <= 1'b0;
             vfr_we <= 1'b0;
             vom_we_cls <= 1'b0; vom_we_bi <= 1'b0; veg_we <= 1'b0;
@@ -7775,10 +7801,20 @@ module jmr_js_vm #(
                 // S_EXEC body moved to hierarchical exec (keep_hierarchy); applied above when state matches.
                 // S_NAT body moved to hierarchical exec (keep_hierarchy); applied above when state matches.
                 S_CLEAR: begin
-                    fb_we <= 1'b1;
-                    fb_waddr <= clr_idx;
-                    fb_wdata <= color;
-                    if (clr_idx == 19'(FB_PIXELS - 1)) begin
+                    if (!rast_wait) begin
+                        // C1: full-screen fill through the engine
+                        rast_go <= 1'b1;
+                        rast_mode <= 2'd0;
+                        rast_dx <= 10'd0;
+                        rast_dy <= 10'd0;
+                        rast_w <= 10'(MW);
+                        rast_h <= 10'(MH);
+                        rast_color <= color;
+                        rast_wait <= 1'b1;
+                        rast_started <= 1'b0;
+                    end else if (rast_busy) rast_started <= 1'b1;
+                    else if (rast_started) begin
+                        rast_wait <= 1'b0;
                         if (boot_clr) begin
                             fb_swap <= 1'b1;
                             clr_idx <= '0;
@@ -7792,7 +7828,7 @@ module jmr_js_vm #(
                             hs_code(15'(ops_base + ip));
                             hs_st(S_FETCH_WAIT);
                         end
-                    end else clr_idx <= clr_idx + 19'd1;
+                    end
                 end
                 S_FB_SYNC: begin
                     // Session-1: the two-bank copy-back is gone — the draw
@@ -7826,29 +7862,32 @@ module jmr_js_vm #(
                     if (rw == 10'd0 || rh == 10'd0) begin
                         hs_code(15'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
-                    end else begin
-                        // NEW: bring-up latch (first pixel only)
-                        if (dbg_rect_n < 7'd64 && x == rx && y == ry) begin
+                    end else if (!rast_wait) begin
+                        // C1: engine fill at 1 px/clk (dest bounds checked
+                        // per pixel in the engine — the old per-pixel clip)
+                        if (dbg_rect_n < 7'd64) begin
                             `ifndef SYNTHESIS
                             dbg_rect[dbg_rect_n[5:0]] <= {color, rx, ry, rw, rh};
                             `endif // sim-only probe store
                             dbg_rect_n <= dbg_rect_n + 7'd1;
                         end
-                        if (color != 8'd0) dbg_rect_px <= dbg_rect_px + 32'd1;
-                        // Clip: never wrap out of FB (BOARD sparse-pixel bug)
-                        if (x < 10'(MW) && y < 10'(MH)) begin
-                            fb_we <= 1'b1;
-                            fb_waddr <= 19'(y) * 19'(MW) + 19'(x);
-                            fb_wdata <= color;
-                        end
-                        if (x == (rx + rw - 10'd1)) begin
-                            x <= rx;
-                            if (y == (ry + rh - 10'd1)) begin
-                                // draw into back; swap once at frame end (S_WAIT_FRAME)
-                                hs_code(15'(ops_base + ip));
-                                hs_st(S_FETCH_WAIT);
-                            end else y <= y + 10'd1;
-                        end else x <= x + 10'd1;
+                        if (color != 8'd0)
+                            dbg_rect_px <= dbg_rect_px + 32'(20'(rw) * 20'(rh));
+                        rast_go <= 1'b1;
+                        rast_mode <= 2'd0;
+                        rast_dx <= rx;
+                        rast_dy <= ry;
+                        rast_w <= rw;
+                        rast_h <= rh;
+                        rast_color <= color;
+                        rast_wait <= 1'b1;
+                        rast_started <= 1'b0;
+                    end else if (rast_busy) rast_started <= 1'b1;
+                    else if (rast_started) begin
+                        rast_wait <= 1'b0;
+                        // draw into back; swap once at frame end (S_WAIT_FRAME)
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                     end
                 end
                 S_CIRCLE: begin
@@ -11852,17 +11891,26 @@ module jmr_js_vm #(
                 S_V64_CLEAR: begin
                     if (state != S_V64_CLEAR)
                         hs_st(S_V64_CLEAR);
-                    fb_we <= 1'b1;
-                    fb_waddr <= vdraw_i;
-                    fb_wdata <= vdraw_color;
-                    if (vdraw_i + 19'd1 >= FB_PIXELS) begin
+                    else if (!rast_wait) begin
+                        // C1: full-screen fill through the engine
+                        rast_go <= 1'b1;
+                        rast_mode <= 2'd0;
+                        rast_dx <= 10'd0;
+                        rast_dy <= 10'd0;
+                        rast_w <= 10'(MW);
+                        rast_h <= 10'(MH);
+                        rast_color <= vdraw_color;
+                        rast_wait <= 1'b1;
+                        rast_started <= 1'b0;
+                    end else if (rast_busy) rast_started <= 1'b1;
+                    else if (rast_started) begin
+                        rast_wait <= 1'b0;
                         vst_wr(vnat_base, V64_UNDEFINED);
                         hs_vsp(vnat_base + 12'd1);
                         hs_ip(ip + 16'd1);
                         hs_code(15'(ops_base + ip + 16'd1));
                         hs_st(S_FETCH_WAIT);
-                    end else
-                        hs_vdraw_i(vdraw_i + 19'd1);
+                    end
                 end
                 S_V64_RECT_LD: begin
                     // Two clocks per arg (addr, then vst_rdata). Extra clocks
@@ -11916,50 +11964,43 @@ module jmr_js_vm #(
                         hs_vdraw_h(e64_vdraw_h_q);
                     end
                     total = 20'(vdraw_w) * 20'(vdraw_h);
-                    px = (vdraw_i == 19'd0) ? vdraw_x : vdraw_cx;
-                    py = (vdraw_i == 19'd0) ? vdraw_y : vdraw_cy;
+                    px = 10'd0; py = 10'd0; // C1: walk lives in the engine
                     if (vdraw_w == 0 || vdraw_h == 0) begin
                         vst_wr(vnat_base, V64_UNDEFINED);
                         hs_vsp(vnat_base + 12'd1);
                         hs_ip(ip + 16'd1);
                         hs_code(15'(ops_base + ip + 16'd1));
                         hs_st(S_FETCH_WAIT);
-                    end else begin
-                        // Bring-up latch (first pixel only) — same counters
-                        // S_RECT feeds, so RECTPEEK?/PXCNT? also see the
-                        // Value64 draw path (they were blind for HTML titles).
-                        // Bring-up latch (first pixel of each rect) — same
-                        // counters S_RECT feeds, so RECTPEEK?/PXCNT? also see
-                        // the Value64 draw path.
-                        if (dbg_rect_n < 7'd64 && vdraw_i == 19'd0) begin
+                    end else if (!rast_wait) begin
+                        // C1: hand the clipped rect to the full-rate engine
+                        // (1 px/clk instead of 1 px/beat) and block on the
+                        // rise-then-fall of rast_busy.
+                        if (dbg_rect_n < 7'd64) begin
                             `ifndef SYNTHESIS
                             dbg_rect[dbg_rect_n[5:0]] <=
                                 {vdraw_color, vdraw_x, vdraw_y, vdraw_w, vdraw_h};
                             `endif // sim-only probe store
                             dbg_rect_n <= dbg_rect_n + 7'd1;
                         end
-                        if (vdraw_color != 8'd0) dbg_rect_px <= dbg_rect_px + 32'd1;
-                        if (px < MW && py < MH) begin
-                            fb_we <= 1'b1;
-                            fb_waddr <= 19'(py) * 19'(MW) + 19'(px);
-                            fb_wdata <= vdraw_color;
-                        end
-                        if (vdraw_i + 19'd1 >= total) begin
-                            vst_wr(vnat_base, V64_UNDEFINED);
-                            hs_vsp(vnat_base + 12'd1);
-                            hs_ip(ip + 16'd1);
-                            hs_code(15'(ops_base + ip + 16'd1));
-                            hs_st(S_FETCH_WAIT);
-                        end else begin
-                            hs_vdraw_i(vdraw_i + 19'd1);
-                            if (10'(px - vdraw_x) + 10'd1 >= vdraw_w) begin
-                                vdraw_cx <= vdraw_x;
-                                vdraw_cy <= py + 10'd1;
-                            end else begin
-                                vdraw_cx <= px + 10'd1;
-                                vdraw_cy <= py;
-                            end
-                        end
+                        if (vdraw_color != 8'd0)
+                            dbg_rect_px <= dbg_rect_px + 32'(total);
+                        rast_go <= 1'b1;
+                        rast_mode <= 2'd0;
+                        rast_dx <= vdraw_x;
+                        rast_dy <= vdraw_y;
+                        rast_w <= vdraw_w;
+                        rast_h <= vdraw_h;
+                        rast_color <= vdraw_color;
+                        rast_wait <= 1'b1;
+                        rast_started <= 1'b0;
+                    end else if (rast_busy) rast_started <= 1'b1;
+                    else if (rast_started) begin
+                        rast_wait <= 1'b0;
+                        vst_wr(vnat_base, V64_UNDEFINED);
+                        hs_vsp(vnat_base + 12'd1);
+                        hs_ip(ip + 16'd1);
+                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_st(S_FETCH_WAIT);
                     end
                 end
                 S_V64_WAIT_FRAME: hs_st(S_WAIT_FRAME);

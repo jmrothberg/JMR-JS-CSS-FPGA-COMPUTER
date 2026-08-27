@@ -1,0 +1,1308 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Mr. Do! — JMR</title></head>
+<body style="margin:0;background:#000">
+<!-- Library title: LOAD "MRDO.HTML" then RUN. Arcade look from cabinet screenshots. -->
+<!-- Portrait 384x480 (2x 192x240) centered in 640x480 with side letterbox. -->
+<!-- 12x13 character cells (32px tunnels) expanded to 24x26 of 16px. Scene 1 = .D, scene 3 = 3. -->
+<canvas id="gameCanvas" width="640" height="480"></canvas>
+<script>
+var canvas = document.querySelector("canvas");
+var c = canvas.getContext("2d");
+c.imageSmoothingEnabled = false;
+
+var W = 640;
+var H = 480;
+var COLS = 24;
+var OX = 128;
+var PLAY_W = 384;
+var ROWS = 26;
+var CELL = 16;
+var HUD = 32;
+var FOOT = 32;
+
+var LAY = [
+  "##########........################........#######CC###A###..CC##CCA.#####CC#######..CC##CC..#####CC#######..CC##CC..#####CC#######..CC##CC..##############..######..##############..######..#####CC#######..CCA###..#####CC#######..CC####..#####CC#######..CC####A.#####CC#######..CC####..##########A###..##NN##..##############..##NN##..#####CC#######..####CC..#####CC#######..####CC..#####CC#######..####CC..A####CC#######..####CC..##############..######..##############..######..####......####..########..##......####..########..##..##..####..######..####..##..####..######..####......####P...................####..............",
+  "####................########................####..................######..................#######CC#A###CC######CCA...###CC#####CC######CC....############..######################..#############CC#####A#..####........#CC#######..####........#CC###..............#####CC###..............########A.####NN######A#########..####NN#############CC#..##########CC#######CC#..##########CC#######CC#..............#######CC#..............######################A###..######################..##########CC..####........########CC..####..........................######..................##########......P.........########................####",
+  "######............############............#######CC#..############..#####CC#..############..####....####A###########........################......####..##..######A###....####..##..##########..#CC#######..####CC####..#CC#######..####CC####..#CC#######NN####AC####..#CC#######NN####CC####..#CC#######..####CC##....#CC#######..####CC##....#CC###....A.......A.#####CC###..............########A#######..########..############..########..########................########..................########..########......########..########........######..####CC##........######..####CC##....####......P.........########................####",
+  "####..######..##############..######..###########CC#..##CC##..##CC#######CC#..##CC##..##CC#######CC#A.##CC##..##CCA######CC#..##CC##..##CC##########..######..##############..######..###########CC#....A.............###CC#..................###CC#..######..##CC#######CC#..######..##CC##########A.####NN..####A#########..####NN..##########..................######..................#######CC#######..####CC#######CC#######..####CC################..####A#################..####################CC..####################CC..####################CC..####################CC..######################P.######################..############",
+  "####................########................#####CC#..##CC######CC#######CC#..##CC######CC#######CC#A.##CC######CCA######CC#..##CC######CC##########..............##########..............#######CC#####A#######CC##..###CC#############CC##..###CC#######..####CC#######CC#######..####CC##########A#####NN####..A.....##########NN####........#CC###..............#####CC###..............####....................####....................####################A#....####################....##########CC..####################CC..############..................######..................##########......P.........########................####",
+  "####................########................#####CC#..##CC######CC#######CC#..##CC######CC#######CC#A.##CC######CCA######CC#..##CC######CC##########..............##########..............#######CC#..##A#######CC....###CC#..##########CC....###CC#..######..##CC......#CC#..######..##CC......####A.####NN......A.########..####NN........#####CC#..######..##CC#######CC#..######..##CC#######CC#..######..##CC#######CC#..######..##CC##########............A.....######..................######..##CC########....######..##CC########....##..................######..................##########......P.........########................####",
+  "####................########................####....................####....................#####CC#A###CC######..A######CC#####CC######..################..####..################..####..#######CC#####A#..####..#######CC#######..####..#######CC#######..####..#######CC#######..####..##########A#####NN####..A###############NN####..#######CC#######..####..#######CC#######..####..#######CC#######..####..#######CC#######..####..################..####A.################..####..##############CC..####..##############CC..####..##############CC..####..##############CC..####..################P.####..################..####..######",
+  "####................########................#####CC#..##CC######CC..#####CC#..##CC######CC..#####CC#A.##CC######CCA.#####CC#..##CC######CC..########................########................#####CC#..##A#######CC..#####CC#..##########CC..#####CC#..##########CC..#####CC#..##########CC..########A.....NN......A.########......NN........#####CC#..##########CC..#####CC#..##########CC..#####CC#..##########CC..#####CC#..##########CC..########..##########A#..########..############..########..##CC########..########..##CC########..########................########................########......P.........########................####",
+  "####................########................#####CC#..##CC######CC..#####CC#..##CC######CC..#####CC#A.##CC######CCA.#####CC#..##CC######CC..########..############..########..############..#####CC#....A...........#####CC#................#####CC#######..####..#######CC#######..####..##########A#####NN####..A###############NN####..#######CC###..............#####CC###..............####....................####....................####################A#..######################..############CC..####################CC..############..................######..................##########......P.........########................####",
+  "####................########................#####CC#..##CC######CC..#####CC#..##CC######CC..#####CC#A.##CC######CCA.#####CC#..##CC######CC..########..############..########..############..#####CC#..##A#######CC..#####CC#..##########CC..#####CC#..##########CC..#####CC#..##########CC..########A.####NN..####A.########..####NN..####..#####CC#..####..####CC..#####CC#..####..####CC..#####CC#..##########CC..#####CC#..##########CC..########..##########A#..########..############..########..##CC########..########..##CC########..########................########................########......P.........########................####"
+];
+
+// Scene-1 dirt is arcade neon green; later scenes cycle hue. Line = brick hatch.
+var DIRT_B = ["#00FF00", "#3080FF", "#C040E0", "#FF3030", "#20E0D0", "#E0C020", "#E07020", "#E04090", "#40C0E0", "#80E040"];
+var DIRT_L = ["#00CC00", "#2060CC", "#A020C0", "#CC2020", "#10B0A0", "#C0A010", "#C05010", "#C02070", "#20A0C0", "#60C020"];
+var TREAT = ["CAKE", "CRACKERS", "SUNDAE", "BURGER", "PIE", "PRETZEL", "POPCORN", "HOTDOG", "ICE", "DONUT"];
+var DX = [0, 1, 0, -1];
+var DY = [-1, 0, 1, 0];
+
+var ATTRACT = 0;
+var PLAY = 1;
+var DEAD = 2;
+var CLEAR = 3;
+var INTER = 4;
+var OVER = 5;
+
+var mode = ATTRACT;
+var score = 0;
+var hi = 0;
+var lives = 3;
+var scene = 1;
+var tick = 0;
+var wait = 0;
+var clearHow = 0;
+var lastHow = [];
+var howN = 0;
+
+var dirt = [];
+var di = 0;
+while (di < ROWS) {
+  var drow = [];
+  var dj = 0;
+  while (dj < COLS) {
+    drow.push(1);
+    dj = dj + 1;
+  }
+  dirt.push(drow);
+  di = di + 1;
+}
+
+var pcx = 11;
+var pcy = 22;
+var pdx = 0;
+var pdy = 0;
+var pprog = 0;
+var pface = 1;
+var pspd = 4;
+var blink = 0;
+
+var ballHeld = 1;
+var ballLive = 0;
+var bcx = 0;
+var bcy = 0;
+var bdx = 0;
+var bdy = 0;
+var bprog = 0;
+var throwUses = 0;
+var reformWait = 0;
+
+var apples = [];
+var ai = 0;
+while (ai < 6) {
+  apples.push({ cx: 0, cy: 0, fall: 0, dist: 0, dead: 0, fy: 0 });
+  ai = ai + 1;
+}
+
+var creeps = [];
+var ci = 0;
+while (ci < 12) {
+  creeps.push({ live: 0, cx: 0, cy: 0, dx: 0, dy: 0, kind: 0, wait: 0, drill: 0, letter: 0, prog: 0, spd: 2 });
+  ci = ci + 1;
+}
+
+var spawnMax = 6;
+var spawned = 0;
+var spawnWait = 0;
+var cherriesLeft = 0;
+var cherryStreak = 0;
+var prizeReady = 0;
+var prizeTaken = 0;
+var frozen = 0;
+var _fieldCache = null;
+function dirtDirty() { _fieldCache = null; }
+var diamond = 0;
+var diaX = 0;
+var diaY = 0;
+var extraLit = [0, 0, 0, 0, 0];
+var extraWalk = 0;
+var extraWalkT = 0;
+var nestX = 11;
+var nestY = 10;
+var spawnX = 11;
+var spawnY = 22;
+var appleSet = 0;
+
+var leftHeld = 0;
+var rightHeld = 0;
+var upHeld = 0;
+var downHeld = 0;
+var fireHeld = 0;
+var fireWas = 0;
+var startHeld = 0;
+var startWas = 0;
+
+var hs = localStorage.getItem("MRDO_HI");
+if (hs) hi = hs - 0;
+
+function dirtBright() {
+  if (frozen) return "#FF3030";
+  var s = scene - 1;
+  if (s < 0) s = 0;
+  return DIRT_B[s % 10];
+}
+
+function dirtLine() {
+  if (frozen) return "#CC2020";
+  var s = scene - 1;
+  if (s < 0) s = 0;
+  return DIRT_L[s % 10];
+}
+
+function prizePts(sc) {
+  if (sc <= 1) return 1000;
+  if (sc === 2) return 1500;
+  if (sc === 3) return 2000;
+  if (sc === 4) return 2500;
+  if (sc <= 6) return 3000;
+  if (sc <= 8) return 3500;
+  if (sc <= 10) return 4000;
+  if (sc <= 12) return 4500;
+  if (sc <= 15) return 5000;
+  if (sc <= 18) return 6000;
+  if (sc <= 21) return 7000;
+  return 8000;
+}
+
+function crushPts(n) {
+  if (n <= 1) return 1000;
+  if (n === 2) return 2000;
+  if (n === 3) return 4000;
+  if (n === 4) return 6000;
+  return 8000;
+}
+
+function layI() {
+  return (scene - 1) % 10;
+}
+
+function cellCh(col, row) {
+  var s = LAY[layI()];
+  var i = row * COLS + col;
+  if (i < 0 || i >= s.length) return "#";
+  return s[i];
+}
+
+function inb(col, row) {
+  return col >= 0 && row >= 0 && col < COLS && row < ROWS;
+}
+
+function cell(col, row) {
+  if (!inb(col, row)) return 1;
+  return dirt[row][col];
+}
+
+function setCell(col, row, v) {
+  if (inb(col, row)) {
+    if (dirt[row][col] !== v) dirtDirty();
+    dirt[row][col] = v;
+  }
+}
+
+function isOpen(col, row) {
+  var t = cell(col, row);
+  return t === 0 || t === 3;
+}
+
+function isSolid(col, row) {
+  var t = cell(col, row);
+  return t === 1 || t === 2;
+}
+
+function px(col, frac) {
+  return OX + col * CELL + frac;
+}
+
+function py(row, frac) {
+  return HUD + row * CELL + frac;
+}
+
+function addScore(n) {
+  var before = Math.floor(score / 5000);
+  score = score + n;
+  if (score > hi) {
+    hi = score;
+    localStorage.setItem("MRDO_HI", "" + hi);
+  }
+  if (mode === PLAY && Math.floor(score / 5000) > before) spawnAlpha(extraWalk);
+}
+
+function countLit() {
+  var n = 0;
+  var i = 0;
+  while (i < 5) {
+    if (extraLit[i]) n = n + 1;
+    i = i + 1;
+  }
+  return n;
+}
+
+function setApple(i, x, y) {
+  apples[i].cx = x;
+  apples[i].cy = y;
+  apples[i].fall = 0;
+  apples[i].dist = 0;
+  apples[i].dead = 0;
+  apples[i].fy = 0;
+}
+
+function snapDirt(x, y) {
+  if (isSolid(x, y) && cell(x, y) !== 3) return [x, y];
+  var r = 1;
+  while (r < 4) {
+    var d = 0;
+    while (d < 4) {
+      var nx = x + DX[d] * r;
+      var ny = y + DY[d] * r;
+      if (isSolid(nx, ny) && cell(nx, ny) !== 3) {
+        var out = [nx, ny];
+        return out;
+      }
+      d = d + 1;
+    }
+    r = r + 1;
+  }
+  return [x, y];
+}
+
+function placeApples() {
+  // Apple cells marked A in LAY (screenshot positions for scene 1 and 3).
+  var n = 0;
+  var r = 0;
+  while (r < ROWS) {
+    var col = 0;
+    while (col < COLS) {
+      if (cellCh(col, r) === "A" && n < 6) {
+        setApple(n, col, r);
+        n = n + 1;
+      }
+      col = col + 1;
+    }
+    r = r + 1;
+  }
+  while (n < 6) {
+    apples[n].dead = 1;
+    n = n + 1;
+  }
+}
+
+function appleAt(col, row) {
+  var i = 0;
+  while (i < 6) {
+    var a = apples[i];
+    if (!a.dead && a.cx === col && a.cy === row) return i;
+    i = i + 1;
+  }
+  return -1;
+}
+
+function creepAt(col, row) {
+  var i = 0;
+  while (i < 12) {
+    var e = creeps[i];
+    if (e.live && e.cx === col && e.cy === row) return i;
+    i = i + 1;
+  }
+  return -1;
+}
+
+function buildScene() {
+  var r = 0;
+  cherriesLeft = 0;
+  nestX = 11;
+  nestY = 10;
+  pcx = 11;
+  pcy = 22;
+  while (r < ROWS) {
+    var col = 0;
+    while (col < COLS) {
+      var ch = cellCh(col, r);
+      var v = 1;
+      if (ch === ".") v = 0;
+      else if (ch === "C") {
+        v = 2;
+        cherriesLeft = cherriesLeft + 1;
+      } else if (ch === "N") {
+        v = 3;
+        nestX = col;
+        nestY = r;
+      } else if (ch === "P") {
+        v = 0;
+        pcx = col;
+        pcy = r;
+      } else if (ch === "\\") v = 0;
+      else v = 1;
+      setCell(col, r, v);
+      col = col + 1;
+    }
+    r = r + 1;
+  }
+  spawnX = pcx;
+  spawnY = pcy;
+  pdx = 0;
+  pdy = 0;
+  pprog = 0;
+  pface = 1;
+  ballHeld = 1;
+  ballLive = 0;
+  reformWait = 0;
+  spawned = 0;
+  spawnWait = 40;
+  spawnMax = 6;
+  if (scene >= 3) spawnMax = 7;
+  if (scene >= 6) spawnMax = 8;
+  prizeReady = 0;
+  prizeTaken = 0;
+  frozen = 0;
+  dirtDirty();
+  diamond = 0;
+  cherryStreak = 0;
+  blink = 0;
+  ci = 0;
+  while (ci < 12) {
+    creeps[ci].live = 0;
+    ci = ci + 1;
+  }
+  placeApples();
+}
+
+function startGame() {
+  score = 0;
+  lives = 3;
+  scene = 1;
+  appleSet = 0;
+  throwUses = 0;
+  extraLit = [0, 0, 0, 0, 0];
+  extraWalk = 0;
+  extraWalkT = 0;
+  howN = 0;
+  buildScene();
+  mode = PLAY;
+}
+
+function nextScene() {
+  scene = scene + 1;
+  appleSet = appleSet + 1;
+  buildScene();
+  mode = PLAY;
+}
+
+function redAlive() {
+  var n = 0;
+  var i = 0;
+  while (i < 12) {
+    var e = creeps[i];
+    if (e.live && (e.kind === 0 || e.kind === 1)) n = n + 1;
+    i = i + 1;
+  }
+  return n;
+}
+
+function munchAlive() {
+  var n = 0;
+  var i = 0;
+  while (i < 12) {
+    if (creeps[i].live && creeps[i].kind === 3) n = n + 1;
+    i = i + 1;
+  }
+  return n;
+}
+
+function alphaAlive() {
+  var i = 0;
+  while (i < 12) {
+    if (creeps[i].live && creeps[i].kind === 2) return 1;
+    i = i + 1;
+  }
+  return 0;
+}
+
+function freeCreep() {
+  var i = 0;
+  while (i < 12) {
+    if (!creeps[i].live) return i;
+    i = i + 1;
+  }
+  return -1;
+}
+
+function spawnCreep(kind, col, row, letter) {
+  var i = freeCreep();
+  if (i < 0) return;
+  var e = creeps[i];
+  e.live = 1;
+  e.cx = col;
+  e.cy = row;
+  e.dx = 0;
+  e.dy = 1;
+  e.kind = kind;
+  e.wait = 0;
+  e.drill = 0;
+  e.letter = letter;
+  e.prog = 0;
+  e.spd = 2;
+  if (kind === 1) e.spd = 1;
+  if (kind === 3) e.spd = 3;
+  if (scene > 8) e.spd = e.spd + 1;
+}
+
+function spawnAlpha(letter) {
+  if (mode !== PLAY) return;
+  spawnCreep(2, 11, 0, letter);
+}
+
+function triggerPrize() {
+  prizeTaken = 1;
+  prizeReady = 0;
+  addScore(prizePts(scene));
+  throwUses = 0;
+  reformWait = 0;
+  ballHeld = 1;
+  frozen = 1;
+  dirtDirty();
+  var ax = nestX;
+  var ay = nestY;
+  var i = 0;
+  while (i < 12) {
+    if (creeps[i].live && creeps[i].kind === 2) {
+      ax = creeps[i].cx;
+      ay = creeps[i].cy;
+    }
+    i = i + 1;
+  }
+  if (!alphaAlive()) spawnCreep(2, ax, ay, extraWalk);
+  spawnCreep(3, ax, ay, 0);
+  spawnCreep(3, ax + 1, ay, 0);
+  spawnCreep(3, ax, ay + 1, 0);
+}
+
+function endFreezeIfDone() {
+  if (!frozen) return;
+  if (munchAlive() === 0 || !alphaAlive()) {
+    if (!alphaAlive()) {
+      var i = 0;
+      while (i < 12) {
+        var e = creeps[i];
+        if (e.live && e.kind === 3) {
+          var slot = appleAt(e.cx, e.cy);
+          if (slot < 0) {
+            var a = 0;
+            while (a < 6) {
+              if (apples[a].dead) {
+                setApple(a, e.cx, e.cy);
+                break;
+              }
+              a = a + 1;
+            }
+          }
+          e.live = 0;
+        }
+        i = i + 1;
+      }
+    }
+    frozen = 0;
+    dirtDirty();
+  }
+}
+
+function doClear(how) {
+  clearHow = how;
+  lastHow[howN] = how;
+  howN = howN + 1;
+  if (howN > 10) howN = 10;
+  wait = 90;
+  mode = CLEAR;
+}
+
+function checkClear() {
+  if (mode !== PLAY) return;
+  if (diamond === 2) {
+    doClear(3);
+    return;
+  }
+  if (cherriesLeft <= 0) {
+    doClear(0);
+    return;
+  }
+  if (spawned >= spawnMax && redAlive() === 0) {
+    doClear(1);
+    return;
+  }
+  if (countLit() >= 5) {
+    lives = lives + 1;
+    extraLit = [0, 0, 0, 0, 0];
+    doClear(2);
+  }
+}
+
+function killPlayer() {
+  if (mode !== PLAY) return;
+  if (blink > 0) return;
+  lives = lives - 1;
+  frozen = 0;
+  dirtDirty();
+  ballLive = 0;
+  ballHeld = 1;
+  wait = 80;
+  mode = DEAD;
+}
+
+function killCreep(i, byBall) {
+  var e = creeps[i];
+  if (!e.live) return;
+  var kind = e.kind;
+  var letter = e.letter;
+  var cx = e.cx;
+  var cy = e.cy;
+  e.live = 0;
+  if (byBall) {
+    addScore(500);
+    ballLive = 0;
+    ballHeld = 0;
+    if (throwUses <= 1) reformWait = 0;
+    else reformWait = 40 + throwUses * 25;
+    if (kind === 2) {
+      extraLit[letter] = 1;
+      var a = 0;
+      while (a < 6) {
+        if (apples[a].dead) {
+          setApple(a, cx, cy);
+          break;
+        }
+        a = a + 1;
+      }
+    }
+    if (kind === 3) {
+      var b = 0;
+      while (b < 6) {
+        if (apples[b].dead) {
+          setApple(b, cx, cy);
+          break;
+        }
+        b = b + 1;
+      }
+    }
+  }
+  endFreezeIfDone();
+  checkClear();
+}
+
+function wantDir() {
+  var j = 0;
+  try { j = joy() | 0; } catch (e) { j = 0; }
+  if (upHeld || (j & 1)) return 0;
+  if (rightHeld || (j & 8)) return 1;
+  if (downHeld || (j & 2)) return 2;
+  if (leftHeld || (j & 4)) return 3;
+  return -1;
+}
+
+function canEnter(col, row, asDrill) {
+  if (!inb(col, row)) return 0;
+  if (appleAt(col, row) >= 0) return 0;
+  var t = cell(col, row);
+  if (t === 0 || t === 3) return 1;
+  if (t === 1 || t === 2) return 1;
+  return asDrill ? 1 : 0;
+}
+
+function stepPlayer() {
+  if (pprog > 0) {
+    pprog = pprog + pspd;
+    if (pprog >= CELL) {
+      pcx = pcx + pdx;
+      pcy = pcy + pdy;
+      pprog = 0;
+      var t = cell(pcx, pcy);
+      if (t === 1 || t === 2) {
+        if (t === 2) {
+          addScore(50);
+          cherryStreak = cherryStreak + 1;
+          cherriesLeft = cherriesLeft - 1;
+          if (cherryStreak >= 8) {
+            addScore(500);
+            cherryStreak = 0;
+          }
+        } else {
+          cherryStreak = 0;
+        }
+        setCell(pcx, pcy, 0);
+      } else if (t === 3) {
+        cherryStreak = 0;
+        if (prizeReady && !prizeTaken) triggerPrize();
+      } else {
+        cherryStreak = 0;
+      }
+      if (diamond === 1 && pcx === diaX && pcy === diaY) {
+        diamond = 2;
+        addScore(8000);
+      }
+      checkClear();
+    }
+    return;
+  }
+  var d = wantDir();
+  if (d < 0) return;
+  pface = d;
+  var nx = pcx + DX[d];
+  var ny = pcy + DY[d];
+  var ap = appleAt(nx, ny);
+  if (ap >= 0 && (d === 1 || d === 3)) {
+    var a = apples[ap];
+    var hx = nx + DX[d];
+    var hy = ny;
+    if (inb(hx, hy) && appleAt(hx, hy) < 0 && creepAt(hx, hy) < 0) {
+      a.cx = hx;
+      a.cy = hy;
+    }
+    return;
+  }
+  if (ap >= 0) return;
+  if (!canEnter(nx, ny, 1)) return;
+  pdx = DX[d];
+  pdy = DY[d];
+  pprog = 1;
+  var dest = cell(nx, ny);
+  if (dest === 1 || dest === 2) pspd = 2;
+  else pspd = 4;
+}
+
+function fireBall() {
+  if (!ballHeld || ballLive || reformWait > 0) return;
+  ballHeld = 0;
+  ballLive = 1;
+  throwUses = throwUses + 1;
+  bdx = DX[pface];
+  bdy = DY[pface];
+  bcx = pcx;
+  bcy = pcy;
+  bprog = CELL / 2;
+}
+
+function pickBallDir() {
+  var cur = -1;
+  var d = 0;
+  while (d < 4) {
+    if (DX[d] === bdx && DY[d] === bdy) cur = d;
+    d = d + 1;
+  }
+  var nOpen = 0;
+  var o0 = 0;
+  var o1 = 0;
+  var o2 = 0;
+  var o3 = 0;
+  d = 0;
+  while (d < 4) {
+    if (isOpen(bcx + DX[d], bcy + DY[d])) {
+      nOpen = nOpen + 1;
+      if (d === 0) o0 = 1;
+      if (d === 1) o1 = 1;
+      if (d === 2) o2 = 1;
+      if (d === 3) o3 = 1;
+    }
+    d = d + 1;
+  }
+  var ahead = 0;
+  if (cur === 0) ahead = o0;
+  if (cur === 1) ahead = o1;
+  if (cur === 2) ahead = o2;
+  if (cur === 3) ahead = o3;
+  if (nOpen <= 2 && ahead) return;
+  var rev = (cur + 2) % 4;
+  var opts = 0;
+  if (o0 && 0 !== rev) opts = opts + 1;
+  if (o1 && 1 !== rev) opts = opts + 1;
+  if (o2 && 2 !== rev) opts = opts + 1;
+  if (o3 && 3 !== rev) opts = opts + 1;
+  if (opts === 0) {
+    bdx = -bdx;
+    bdy = -bdy;
+    return;
+  }
+  var pick = Math.floor(Math.random() * opts);
+  d = 0;
+  while (d < 4) {
+    var ok = 0;
+    if (d === 0) ok = o0;
+    if (d === 1) ok = o1;
+    if (d === 2) ok = o2;
+    if (d === 3) ok = o3;
+    if (ok && d !== rev) {
+      if (pick === 0) {
+        bdx = DX[d];
+        bdy = DY[d];
+        return;
+      }
+      pick = pick - 1;
+    }
+    d = d + 1;
+  }
+}
+
+function stepBall() {
+  if (reformWait > 0 && !ballLive) {
+    reformWait = reformWait - 1;
+    if (reformWait <= 0) ballHeld = 1;
+  }
+  if (!ballLive) return;
+  if (bcx === pcx && bcy === pcy && bprog < 8) {
+    ballLive = 0;
+    ballHeld = 1;
+    return;
+  }
+  var hit = creepAt(bcx, bcy);
+  if (hit >= 0) {
+    killCreep(hit, 1);
+    return;
+  }
+  bprog = bprog + 6;
+  if (bprog >= CELL) {
+    bcx = bcx + bdx;
+    bcy = bcy + bdy;
+    bprog = 0;
+    if (!inb(bcx, bcy) || !isOpen(bcx, bcy)) {
+      bcx = bcx - bdx;
+      bcy = bcy - bdy;
+      bdx = -bdx;
+      bdy = -bdy;
+    } else {
+      pickBallDir();
+    }
+    hit = creepAt(bcx, bcy);
+    if (hit >= 0) killCreep(hit, 1);
+  }
+}
+
+function stepApples() {
+  var i = 0;
+  while (i < 6) {
+    var a = apples[i];
+    if (a.dead) {
+      i = i + 1;
+      continue;
+    }
+    if (a.fall) {
+      a.fy = a.fy + 6;
+      if (a.fy >= CELL) {
+        a.cy = a.cy + 1;
+        a.fy = 0;
+        a.dist = a.dist + 1;
+        var crushed = 0;
+        if (pcx === a.cx && pcy === a.cy) {
+          killPlayer();
+        }
+        var k = 0;
+        while (k < 12) {
+          var e = creeps[k];
+          if (e.live && e.cx === a.cx && e.cy === a.cy) {
+            if (e.kind === 2 || e.kind === 3) {
+              e.live = 0;
+            } else {
+              e.live = 0;
+              crushed = crushed + 1;
+            }
+          }
+          k = k + 1;
+        }
+        if (crushed > 0) addScore(crushPts(crushed));
+        var below = cell(a.cx, a.cy + 1);
+        if (!inb(a.cx, a.cy + 1) || isSolid(a.cx, a.cy + 1) || appleAt(a.cx, a.cy + 1) >= 0) {
+          a.fall = 0;
+          if (a.dist >= 2) {
+            a.dead = 1;
+            if (Math.random() < 0.08) {
+              diamond = 1;
+              diaX = a.cx;
+              diaY = a.cy;
+            }
+          }
+        }
+        endFreezeIfDone();
+        checkClear();
+      }
+    } else {
+      if (inb(a.cx, a.cy + 1) && isOpen(a.cx, a.cy + 1) && appleAt(a.cx, a.cy + 1) < 0) {
+        a.fall = 1;
+        a.fy = 1;
+        if (a.dist === 0) a.dist = 0;
+      }
+    }
+    i = i + 1;
+  }
+}
+
+function creepToward(e, flee) {
+  var tx = pcx;
+  var ty = pcy;
+  var best = -1;
+  var bestD = 9999;
+  if (flee) bestD = -1;
+  var d = 0;
+  while (d < 4) {
+    var nx = e.cx + DX[d];
+    var ny = e.cy + DY[d];
+    var open = isOpen(nx, ny);
+    if (!open && e.drill && isSolid(nx, ny)) open = 1;
+    if (open && appleAt(nx, ny) < 0) {
+      var md = Math.abs(nx - tx) + Math.abs(ny - ty);
+      if (flee) {
+        if (md > bestD) {
+          bestD = md;
+          best = d;
+        }
+      } else if (md < bestD) {
+        bestD = md;
+        best = d;
+      }
+    }
+    d = d + 1;
+  }
+  if (best < 0) {
+    d = 0;
+    while (d < 4) {
+      if (isOpen(e.cx + DX[d], e.cy + DY[d])) {
+        best = d;
+        break;
+      }
+      d = d + 1;
+    }
+  }
+  if (best >= 0) {
+    e.dx = DX[best];
+    e.dy = DY[best];
+  }
+}
+
+function stepCreeps() {
+  if (spawned < spawnMax) {
+    spawnWait = spawnWait - 1;
+    if (spawnWait <= 0) {
+      spawnCreep(0, nestX, nestY, 0);
+      spawned = spawned + 1;
+      spawnWait = 50;
+      if (spawned >= spawnMax) prizeReady = 1;
+    }
+  }
+  extraWalkT = extraWalkT + 1;
+  var dwell = extraLit[extraWalk] ? 60 : 300;
+  if (extraWalkT >= dwell) {
+    extraWalkT = 0;
+    extraWalk = extraWalk + 1;
+    if (extraWalk > 4) extraWalk = 0;
+  }
+  var i = 0;
+  while (i < 12) {
+    var e = creeps[i];
+    if (!e.live) {
+      i = i + 1;
+      continue;
+    }
+    if (e.kind === 2 || e.kind === 3) {
+      var ap = appleAt(e.cx, e.cy);
+      if (ap >= 0) apples[ap].dead = 1;
+    }
+    if (frozen && (e.kind === 0 || e.kind === 1)) {
+      i = i + 1;
+      continue;
+    }
+    if (e.kind === 0 && e.wait <= 0 && Math.random() < 0.004 + scene * 0.0004) {
+      e.wait = 40;
+    }
+    if (e.wait > 0) {
+      e.wait = e.wait - 1;
+      if (e.wait === 0) {
+        e.kind = 1;
+        e.drill = 1;
+        e.spd = 1;
+      }
+      i = i + 1;
+      continue;
+    }
+    if (e.prog === 0) {
+      var flee = e.kind === 2 && ballHeld;
+      creepToward(e, flee);
+      if (e.kind === 2 && tick > 1200 && Math.random() < 0.002) {
+        e.live = 0;
+        i = i + 1;
+        continue;
+      }
+    }
+    if (e.dx === 0 && e.dy === 0) {
+      i = i + 1;
+      continue;
+    }
+    e.prog = e.prog + e.spd;
+    if (e.prog >= CELL) {
+      e.cx = e.cx + e.dx;
+      e.cy = e.cy + e.dy;
+      e.prog = 0;
+      var t = cell(e.cx, e.cy);
+      if (t === 1 || t === 2) {
+        if (t === 2) cherriesLeft = cherriesLeft - 1;
+        setCell(e.cx, e.cy, 0);
+        checkClear();
+      }
+    }
+    if (e.cx === pcx && e.cy === pcy && blink === 0) killPlayer();
+    i = i + 1;
+  }
+}
+
+
+/* Rule 1: one ASET atlas (16×16 cells). drawImage, not per-pixel fillRect.
+   Blit unconditionally — Image.width is undefined on the V1 chip. */
+var sprAtlas = new Image();
+sprAtlas.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAAQCAYAAAD506FJAAADWElEQVR4nO2Z0ZHbIBCGfzLXQ+7NuJJzZlzEVeBzCSpBLcQVpIjMxFeJ8ZtTxebBhwwYEKuVhTLWP6M5zPGtdm2WBUkhEAHkflaACsfkJOVr+1M7/mfn9ebi8eb4OilvcPR4jc2k/NTynAt/vGBgbyBSvrYvteN/dj5MXlcliSzlw+Tt7BYmsZSPqd2Cmt/Diqg2mgDAaJPku38QUfLL6wYrlTQk5ce0NYSfQ/w1E7Bj3TACd3M2pLxN3tOf717/+sffrp1LYilvk3dFb17/WX1e7fcksZRPqd2Cmi2AhrkItCD9rq++/TJJ/gW4TV6lFIio++v22XGxSSzlY7ZCNrTd5wuHn0P8fQsIAdnvTsq7cn0eooWX8VYEkNoC+l3DNIYHN1AGhmw7Neybd8PbRO1Wb04gUj5lD34SPYyfW/y1JPX5f+bP6rPjbfWekgcA2u3I7qioAU7agK57q/LAWhAaKDRQaLM7w6+bzmALXNOXOcRvz2wx5c5xY/HLM4D6zwBot7vaOBySY3q/S5v8fX342gGUTN7cOCk/pq0h/Jzir6nUxCp9gCvlU0la+iRfyttEXdFbd5bnJK+U75K/b1xuJ5BI9NRO4AW4ViY7OdfntTfgtDrBjkndU8qHtoBbsnDtDeFte2gFlfJzkgKUO8G4b2+kvDm+KreSs1/jCXhbwe3vaXAkgyNxdwBD+VGUe1gY+Z/XUXsLWtuXOcTvvropeY3TZ4PDAfL36K6NIWxY3bgLiGuDy4Z+D4lj6OJzV/0zRwCrWHypxTfV7z0EBG4VMmyXSsrX9mdu8XMVJn9uUXrI/Z2k0ZsL5c7lj5Cb/OwHZ0K5sbPjPxz8a4AIIPc1bPcgMdEPLDuAJFerArfUEgA0qlFuewhvP3N4vbmQWwG51S82nmOHALIVym1z2ZL+OalooWr9j6oJKrzz1ss3Hu+PfifaaLIT2G1zZDlp9anhi/SeITN1BZbKLiBhm8uW9C/yZXcsyau9XWw2cgGRI4BUbvWzVbRGEtj7Wj9c33Lar/bYr/Z37VKFDJevLXe3wNk55MZz7SyaTnc/zCO2oFwbY/gyph+LFk2lnwVHgY/EcSbGfgAq1Q/M/Fy0aNEzKrcIpJI/xrpjU/3LArBo0UyVStox9Q8168+jYIBnlQAAAABJRU5ErkJggg==";
+var FI_DO_R0 = 0, FI_DO_R1 = 1, FI_DO_L0 = 2, FI_DO_L1 = 3, FI_DO_D0 = 4, FI_DO_D1 = 5, FI_DO_U0 = 6, FI_DO_U1 = 7;
+var FI_DINO0 = 8, FI_DINO1 = 9, FI_MUNCH0 = 10, FI_MUNCH1 = 11, FI_ALPHA0 = 12, FI_ALPHA1 = 13, FI_APPLE = 14, FI_CHERRY = 15;
+
+function walkFr() {
+  return Math.floor(tick / 8) % 2;
+}
+
+function blitSpr(x, y, fi, sc) {
+  // Unconditional ASET blit. Do not read sprAtlas.width — undefined on the
+  // chip, and the compiler now refuses that DOM property on Image vars.
+  c.drawImage(sprAtlas, fi * 16, 0, 16, 16, x, y, 16 * sc, 16 * sc);
+}
+
+function isTun(col, row) {
+  var t = cell(col, row);
+  return t === 0 || t === 3;
+}
+
+function pixDo(x, y, face) {
+  var fr = 0;
+  if (pprog > 0) fr = walkFr();
+  var fi = FI_DO_R0;
+  if (face === 1) fi = fr ? FI_DO_R1 : FI_DO_R0;
+  else if (face === 3) fi = fr ? FI_DO_L1 : FI_DO_L0;
+  else if (face === 0) fi = fr ? FI_DO_U1 : FI_DO_U0;
+  else fi = fr ? FI_DO_D1 : FI_DO_D0;
+  blitSpr(x, y, fi, 2);
+}
+
+function pixDino(x, y, drill, flash) {
+  if (drill && flash) {
+    c.fillStyle = "#FFF8C0";
+    c.fillRect(x + 2, y + 2, 28, 28);
+  }
+  blitSpr(x, y, walkFr() ? FI_DINO1 : FI_DINO0, 2);
+}
+
+function pixMunch(x, y) {
+  blitSpr(x, y, walkFr() ? FI_MUNCH1 : FI_MUNCH0, 2);
+}
+
+function pixAlpha(x, y) {
+  blitSpr(x, y, walkFr() ? FI_ALPHA1 : FI_ALPHA0, 2);
+}
+
+function pixApple(x, y) {
+  blitSpr(x, y, FI_APPLE, 2);
+}
+
+function pixCherry(x, y) {
+  blitSpr(x, y, FI_CHERRY, 1);
+}
+
+function pixTreat(x, y) {
+  var t = (scene - 1) % 10;
+  if (t === 0) {
+    c.fillStyle = "#F0E0D0";
+    c.fillRect(x + 4, y + 12, 24, 16);
+    c.fillStyle = "#E04080";
+    c.fillRect(x + 4, y + 8, 24, 8);
+  } else {
+    c.fillStyle = "#C07030";
+    c.fillRect(x + 4, y + 12, 24, 16);
+    c.fillStyle = "#40A040";
+    c.fillRect(x + 8, y + 6, 16, 8);
+  }
+}
+
+function pixBall(x, y) {
+  c.fillStyle = "#FFFFFF";
+  c.fillRect(x + 10, y + 10, 12, 12);
+  c.fillStyle = "#CCCCCC";
+  c.fillRect(x + 12, y + 12, 4, 4);
+}
+
+function pixDia(x, y) {
+  c.fillStyle = "#80E0FF";
+  c.fillRect(x + 12, y + 6, 8, 20);
+  c.fillRect(x + 6, y + 12, 20, 8);
+}
+
+function boxPath(x, y, w, h) {
+  c.beginPath();
+  c.moveTo(x, y);
+  c.lineTo(x + w, y);
+  c.lineTo(x + w, y + h);
+  c.lineTo(x, y + h);
+  c.closePath();
+  c.stroke();
+}
+
+function drawDirtTile(x, y, col, row) {
+  var si = (scene - 1) % 10;
+  if (frozen) {
+    c.fillStyle = "#FF3030";
+    c.fillRect(x, y, CELL, CELL);
+  } else if (si === 2) {
+    // Scene 3 arcade: magenta field + cyan diamond lattice
+    c.fillStyle = "#C000A0";
+    c.fillRect(x, y, CELL, CELL);
+    c.fillStyle = "#00E8E8";
+    var p = 0;
+    while (p < CELL) {
+      c.fillRect(x + p, y + (p % CELL), 2, 2);
+      c.fillRect(x + CELL - 1 - p, y + (p % CELL), 2, 2);
+      p = p + 4;
+    }
+  } else {
+    c.fillStyle = dirtBright();
+    c.fillRect(x, y, CELL, CELL);
+    c.fillStyle = dirtLine();
+    var by = 0;
+    while (by < CELL) {
+      c.fillRect(x, y + by, CELL, 1);
+      by = by + 4;
+    }
+  }
+  // Smooth tunnel edge: 2px bevel + 4px inner-corner chamfer (character-wide paths).
+  var edge = dirtLine();
+  if (frozen) edge = "#AA2020";
+  c.fillStyle = edge;
+  if (isTun(col - 1, row)) c.fillRect(x, y, 2, CELL);
+  if (isTun(col + 1, row)) c.fillRect(x + CELL - 2, y, 2, CELL);
+  if (isTun(col, row - 1)) c.fillRect(x, y, CELL, 2);
+  if (isTun(col, row + 1)) c.fillRect(x, y + CELL - 2, CELL, 2);
+  c.fillStyle = "#000000";
+  if (isTun(col - 1, row) && isTun(col, row - 1)) c.fillRect(x, y, 4, 4);
+  if (isTun(col + 1, row) && isTun(col, row - 1)) c.fillRect(x + CELL - 4, y, 4, 4);
+  if (isTun(col - 1, row) && isTun(col, row + 1)) c.fillRect(x, y + CELL - 4, 4, 4);
+  if (isTun(col + 1, row) && isTun(col, row + 1)) c.fillRect(x + CELL - 4, y + CELL - 4, 4, 4);
+}
+
+function paintDirtLayer() {
+  c.fillStyle = "#000000";
+  c.fillRect(0, 0, W, H);
+  var r = 0;
+  while (r < ROWS) {
+    var col = 0;
+    while (col < COLS) {
+      var t = dirt[r][col];
+      var x = OX + col * CELL;
+      var y = HUD + r * CELL;
+      if (t === 1) {
+        drawDirtTile(x, y, col, r);
+      } else if (t === 2) {
+        drawDirtTile(x, y, col, r);
+        pixCherry(x, y);
+      } else {
+        c.fillStyle = "#000000";
+        c.fillRect(x, y, CELL, CELL);
+      }
+      col = col + 1;
+    }
+    r = r + 1;
+  }
+}
+function paintField() {
+  if (!_fieldCache) {
+    paintDirtLayer();
+    _fieldCache = c.getImageData(OX, HUD, PLAY_W, H - HUD - FOOT);
+  } else {
+    c.putImageData(_fieldCache, OX, HUD);
+  }
+  if (prizeReady && !prizeTaken) pixTreat(OX + nestX * CELL, HUD + nestY * CELL);
+  if (diamond === 1) pixDia(OX + diaX * CELL, HUD + diaY * CELL);
+  var i = 0;
+  while (i < 6) {
+    var a = apples[i];
+    if (!a.dead) pixApple(OX + a.cx * CELL, HUD + a.cy * CELL + a.fy);
+    i = i + 1;
+  }
+  i = 0;
+  while (i < 12) {
+    var e = creeps[i];
+    if (e.live) {
+      var ex = OX + e.cx * CELL + e.dx * e.prog;
+      var ey = HUD + e.cy * CELL + e.dy * e.prog;
+      if (e.kind === 3) pixMunch(ex, ey);
+      else if (e.kind === 2) pixAlpha(ex, ey);
+      else pixDino(ex, ey, e.kind === 1, e.wait > 0 && (tick % 8 < 4));
+    }
+    i = i + 1;
+  }
+  if (mode === PLAY || mode === CLEAR) {
+    if (blink === 0 || tick % 4 < 2) {
+      var x = OX + pcx * CELL + pdx * pprog;
+      var y = HUD + pcy * CELL + pdy * pprog;
+      pixDo(x, y, pface);
+      if (ballHeld) pixBall(x, y);
+    }
+  }
+  if (ballLive) pixBall(OX + bcx * CELL + bdx * bprog, HUD + bcy * CELL + bdy * bprog);
+}
+
+function paintHud() {
+  c.fillStyle = "#000000";
+  c.fillRect(OX, 0, PLAY_W, HUD);
+  c.fillRect(OX, H - FOOT, PLAY_W, FOOT);
+  c.fillStyle = "#FFFF00";
+  c.fillText("1ST", OX + 8, 12);
+  c.fillStyle = "#FFFFFF";
+  c.fillText(score, OX + 8, 26);
+  var letters = "EXTRA";
+  var i = 0;
+  var extraX = OX + 118;
+  c.strokeStyle = "#FFFF00";
+  c.lineWidth = 2;
+  boxPath(extraX - 6, 2, 148, 28);
+  while (i < 5) {
+    var x = extraX + i * 28;
+    if (extraWalk === i) {
+      c.fillStyle = "#2038E0";
+      c.fillRect(x, 6, 22, 20);
+      c.strokeStyle = "#FFFF00";
+      boxPath(x - 1, 5, 24, 22);
+    }
+    c.fillStyle = extraLit[i] ? "#FFFF00" : "#C0C0C0";
+    c.fillText(letters[i], x + 6, 22);
+    i = i + 1;
+  }
+  i = 0;
+  while (i < lives && i < 4) {
+    blitSpr(OX + 8 + i * 22, H - FOOT + 8, FI_DO_R0, 1);
+    i = i + 1;
+  }
+  c.fillStyle = "#FFFF00";
+  c.fillText("SCENE . . . .", OX + 220, H - 18);
+  c.fillText(scene, OX + 332, H - 18);
+  c.fillStyle = "#FF0000";
+  c.fillText("TOP", OX + 220, H - 6);
+  c.fillText(hi, OX + 250, H - 6);
+}
+
+function howName(h) {
+  if (h === 0) return "CHERRIES";
+  if (h === 1) return "DINOS";
+  if (h === 2) return "EXTRA";
+  return "DIAMOND";
+}
+
+function paintOverlay() {
+  if (mode === ATTRACT) {
+    c.fillStyle = "#ffffff";
+    c.fillText("MR. DO!", OX + 140, 160);
+    c.fillText("ENTER TO START", OX + 100, 220);
+    c.fillText("ARROWS / WASD MOVE", OX + 80, 280);
+    c.fillText("SPACE FIRE   ENTER START", OX + 60, 304);
+  }
+  if (mode === OVER) {
+    c.fillStyle = "#ffffff";
+    c.fillText("GAME OVER", OX + 128, 220);
+    c.fillText("ENTER TO START", OX + 100, 250);
+  }
+  if (mode === INTER) {
+    c.fillStyle = "#ffffff";
+    c.fillText("STATUS", OX + 140, 80);
+    var i = 0;
+    while (i < howN) {
+      c.fillText("SCENE " + (i + 1) + " " + howName(lastHow[i]), OX + 60, 120 + i * 20);
+      i = i + 1;
+    }
+  }
+}
+
+function tickGame() {
+  tick = tick + 1;
+  var j = 0;
+  try { j = joy() | 0; } catch (e) { j = 0; }
+  var startOn = startHeld || (j & 32) || (j & 16);
+  var fireOn = fireHeld || (j & 16) || (j & 32);
+  if (startOn && !startWas && (mode === ATTRACT || mode === OVER)) startGame();
+  if (mode === PLAY) {
+    if (blink > 0) blink = blink - 1;
+    stepPlayer();
+    if (fireOn && !fireWas) fireBall();
+    stepBall();
+    stepApples();
+    stepCreeps();
+    checkClear();
+  } else if (mode === DEAD) {
+    wait = wait - 1;
+    if (wait <= 0) {
+      if (lives <= 0) mode = OVER;
+      else {
+        pcx = spawnX;
+        pcy = spawnY;
+        pprog = 0;
+        ballHeld = 1;
+        ballLive = 0;
+        blink = 60;
+        frozen = 0;
+        dirtDirty();
+        mode = PLAY;
+      }
+    }
+  } else if (mode === CLEAR) {
+    wait = wait - 1;
+    if (wait <= 0) {
+      var smod = scene % 10;
+      if (smod === 3 || smod === 6 || smod === 9 || smod === 0) {
+        mode = INTER;
+        wait = smod === 0 ? 180 : 120;
+      } else nextScene();
+    }
+  } else if (mode === INTER) {
+    wait = wait - 1;
+    if (wait <= 0) nextScene();
+  }
+  fireWas = fireOn ? 1 : 0;
+  startWas = startOn ? 1 : 0;
+}
+
+function paint() {
+  paintField();
+  paintHud();
+  paintOverlay();
+}
+
+function loop() {
+  tickGame();
+  paint();
+  requestAnimationFrame(loop);
+}
+
+function keyOn(e, down) {
+  var k = e.key;
+  // NEW: PS/2 KEYEVT may deliver keyCode as a number-like value; |0 so
+  // 37 still matches. which is the same code on older event objects.
+  var cde = (e.keyCode | 0) || (e.which | 0);
+  if (k === "ArrowLeft" || k === "Left" || k === "a" || k === "A" || cde == 37 || cde == 65) leftHeld = down;
+  if (k === "ArrowRight" || k === "Right" || k === "d" || k === "D" || cde == 39 || cde == 68) rightHeld = down;
+  if (k === "ArrowUp" || k === "Up" || k === "w" || k === "W" || cde == 38 || cde == 87) upHeld = down;
+  if (k === "ArrowDown" || k === "Down" || k === "s" || k === "S" || cde == 40 || cde == 83) downHeld = down;
+  if (k === " " || cde == 32) fireHeld = down;
+  if (k === "Enter" || cde == 13) startHeld = down;
+}
+
+addEventListener("keydown", function (e) {
+  keyOn(e, 1);
+});
+addEventListener("keyup", function (e) {
+  keyOn(e, 0);
+});
+
+buildScene();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

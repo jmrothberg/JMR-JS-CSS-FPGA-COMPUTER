@@ -12,6 +12,27 @@
 var cvs=document.getElementById("c");
 var ctx=cvs.getContext("2d");
 var W=640,H=480;
+var _skyFull=1;
+var _sx=[],_sy=[],_sw=[],_sh=[],_sn=0;
+function skyMark(x,y,w,h){
+  var _noinl=0;
+  if(_sn>=80){_skyFull=1;return;}
+  if(x<0){w=w+x;x=0;}
+  if(y<0){h=h+y;y=0;}
+  if(x+w>W)w=W-x;
+  if(y+h>H)h=H-y;
+  if(w<1||h<1)return;
+  _sx[_sn]=x;_sy[_sn]=y;_sw[_sn]=w;_sh[_sn]=h;_sn=_sn+1;
+}
+function skyFlush(){
+  var _noinl=0;
+  var i;
+  ctx.fillStyle="#05071a";
+  if(_skyFull){ctx.fillRect(0,0,W,H);_skyFull=0;_sn=0;return;}
+  i=0;
+  while(i<_sn){ctx.fillRect(_sx[i],_sy[i],_sw[i],_sh[i]);i=i+1;}
+  _sn=0;
+}
 var BASE_X=W/2, BASE_Y=H-36, CITY_Y=H-26;
 var cityXs=[60,160,260,380,480,580];
 var state={
@@ -93,6 +114,7 @@ function playBits(){
   return j;
 }
 function reset(){
+  _skyFull=1;
   state.score=0;
   state.wave=1;
   state.over=false;
@@ -309,14 +331,15 @@ function drawTrail(pts,mx,my,col){
   while(j<pts.length){
     p=pts[j];
     ctx.fillRect(p.x-1,p.y-1,2,2);
+    skyMark(p.x-2,p.y-2,4,4);
     j=j+1;
   }
   ctx.fillRect(mx-1,my-1,2,2);
+  skyMark(mx-2,my-2,4,4);
 }
 function draw(){
   var i,s,ph,m,e,ch,r;
-  ctx.fillStyle="#05071a";
-  ctx.fillRect(0,0,W,H);
+  skyFlush();
   i=0;
   while(i<state.stars.length){
     s=state.stars[i];
@@ -345,6 +368,7 @@ function draw(){
     drawTrail(m.trail,m.x,m.y,"#ff5a5a");
     ctx.fillStyle="#ff5a5a";
     ctx.fillRect(m.x-2,m.y-2,5,5);
+    skyMark(m.x-4,m.y-4,10,10);
     i=i+1;
   }
   i=0;
@@ -353,6 +377,7 @@ function draw(){
     drawTrail(m.trail,m.x,m.y,"#9fd8ff");
     ctx.fillStyle="#9fd8ff";
     ctx.fillRect(m.x-2,m.y-2,4,4);
+    skyMark(m.x-4,m.y-4,10,10);
     i=i+1;
   }
   i=0;
@@ -363,6 +388,7 @@ function draw(){
     ctx.beginPath();
     ctx.arc(e.x,e.y,r,0,6.28);
     ctx.fill();
+    skyMark(e.x-r-2,e.y-r-2,r*2+4,r*2+4);
     i=i+1;
   }
   ch=state.crosshair;
@@ -379,16 +405,23 @@ function draw(){
   ctx.stroke();
   ctx.fillStyle="#78dcff";
   ctx.fillRect(ch.x-2,ch.y-2,4,4);
+  skyMark(ch.x-26,ch.y-26,52,52);
+  ctx.fillStyle="#05071a";
+  ctx.fillRect(0,0,W,64);
   ctx.fillStyle="#ffffff";
   ctx.textAlign="left";
-  ctx.fillText("SCORE "+state.score,12,24);
-  ctx.fillText("WAVE "+state.wave,12,40);
-  ctx.fillText("CITIES "+citiesAliveCount(state.cities),12,56);
+  ctx.fillText("SCORE",12,24);
+  ctx.fillText(state.score,72,24);
+  ctx.fillText("WAVE",12,40);
+  ctx.fillText(state.wave,64,40);
+  ctx.fillText("CITIES",12,56);
+  ctx.fillText(citiesAliveCount(state.cities),80,56);
   ctx.fillText("ARROWS/STICK AIM  SPACE FIRE  R RESTART",12,H-8);
   if(!state.waveActive && !state.over && state.waveBreakTimer>0){
     ctx.textAlign="center";
     ctx.fillStyle="#96dcff";
-    ctx.fillText("WAVE "+state.wave,W/2,H/2-8);
+    ctx.fillText("WAVE",W/2-24,H/2-8);
+    ctx.fillText(state.wave,W/2+24,H/2-8);
     ctx.textAlign="left";
   }
   if(state.over){
@@ -398,7 +431,8 @@ function draw(){
     ctx.textAlign="center";
     ctx.fillText("GAME OVER",W/2,H/2-20);
     ctx.fillStyle="#ffffff";
-    ctx.fillText("SCORE "+state.score,W/2,H/2+8);
+    ctx.fillText("SCORE",W/2-40,H/2+8);
+    ctx.fillText(state.score,W/2+24,H/2+8);
     ctx.fillText("PRESS R",W/2,H/2+32);
     ctx.textAlign="left";
   }

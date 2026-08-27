@@ -317,6 +317,34 @@ module jmr_js_core #(
     logic [15:0] fbp_sram_wdata;
     logic        scan_sram_req;
     logic [20:0] scan_sram_addr;
+    // C1 (run 50/51): full-rate raster/blit/imgd engine — the VM hands
+    // per-op scalars over a go/busy handshake; the engine writes the FB
+    // port at core rate and reads sprites/ImageData as arbiter owner 6.
+    logic        rast_go, rast_busy, rast_aset;
+    logic [1:0]  rast_mode;
+    logic [9:0]  rast_dx, rast_dy, rast_w, rast_h;
+    logic [7:0]  rast_color;
+    logic [15:0] rast_sx, rast_sy, rast_qx, rast_rxr, rast_qy, rast_ryr;
+    logic [21:0] rast_sbase;
+    logic [15:0] rast_stride;
+    logic        rast_fb_we;
+    logic [18:0] rast_fb_waddr;
+    logic [7:0]  rast_fb_wdata;
+    logic        rast_sram_req;
+    logic [20:0] rast_sram_addr;
+    jmr_raster_engine u_rast (
+        .clk(clk), .rst_n(rst_n),
+        .go(rast_go), .mode(rast_mode),
+        .dx(rast_dx), .dy(rast_dy), .w(rast_w), .h(rast_h),
+        .color(rast_color),
+        .sx(rast_sx), .sy(rast_sy),
+        .qx(rast_qx), .rxr(rast_rxr), .qy(rast_qy), .ryr(rast_ryr),
+        .sbase(rast_sbase), .stride(rast_stride), .aset(rast_aset),
+        .busy(rast_busy),
+        .fb_we(rast_fb_we), .fb_waddr(rast_fb_waddr), .fb_wdata(rast_fb_wdata),
+        .sram_req(rast_sram_req), .sram_addr(rast_sram_addr),
+        .sram_rdata(sram_rdata), .sram_ack(sram_ack && (sram_owner == 3'd6))
+    );
     jmr_mini_fb u_fb (
         .wr_clk(clk), .rst_n(rst_n),
         .we(fb_we), .waddr(fb_waddr), .wdata(fb_wdata),
@@ -488,7 +516,17 @@ module jmr_js_core #(
         .sram_req(vm_sram_req), .sram_addr(vm_sram_addr),
         .sram_we(vm_sram_we), .sram_wdata(vm_sram_wdata),
         .sram_rdata(vm_ack_hold ? vm_rdata_hold : sram_rdata),
-        .sram_ack(vm_ack_hold && vm_req_match_q)
+        .sram_ack(vm_ack_hold && vm_req_match_q),
+        .rast_go(rast_go), .rast_mode(rast_mode),
+        .rast_dx(rast_dx), .rast_dy(rast_dy),
+        .rast_w(rast_w), .rast_h(rast_h),
+        .rast_color(rast_color),
+        .rast_sx(rast_sx), .rast_sy(rast_sy),
+        .rast_qx(rast_qx), .rast_rxr(rast_rxr),
+        .rast_qy(rast_qy), .rast_ryr(rast_ryr),
+        .rast_sbase(rast_sbase), .rast_stride(rast_stride),
+        .rast_aset(rast_aset),
+        .rast_busy(rast_busy)
     );
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -536,6 +574,7 @@ module jmr_js_core #(
             else if (cons_sram_req) sram_owner = 3'd2;
             else if (work_req)      sram_owner = 3'd3;
             else if (fbp_sram_req)  sram_owner = 3'd4;
+            else if (rast_sram_req) sram_owner = 3'd6;
             else if (vm_sram_req && !vm_ack_hold) sram_owner = 3'd5;
         end
     end
@@ -547,15 +586,17 @@ module jmr_js_core #(
                         (sram_owner == 3'd2) ? cons_sram_req :
                         (sram_owner == 3'd3) ? work_req :
                         (sram_owner == 3'd4) ? fbp_sram_req :
+                        (sram_owner == 3'd6) ? rast_sram_req :
                         (sram_owner == 3'd5) ? vm_sram_req : 1'b0;
     assign sram_we    = (sram_owner == 3'd2) ? cons_sram_we :
                         (sram_owner == 3'd3) ? work_we_l :
                         (sram_owner == 3'd4) ? fbp_sram_we :
-                        (sram_owner == 3'd5) ? vm_sram_we : 1'b0;
+                        (sram_owner == 3'd5) ? vm_sram_we : 1'b0; // 6: read-only
     assign sram_addr  = (sram_owner == 3'd1) ? scan_sram_addr :
                         (sram_owner == 3'd2) ? cons_sram_addr :
                         (sram_owner == 3'd3) ? (WORK_SRAM_BASE + 21'(work_addr_l)) :
                         (sram_owner == 3'd4) ? fbp_sram_addr :
+                        (sram_owner == 3'd6) ? rast_sram_addr :
                                                vm_sram_addr;
     assign sram_wdata = (sram_owner == 3'd2) ? cons_sram_wdata :
                         (sram_owner == 3'd3) ? {8'd0, work_wdata_l} :
@@ -593,9 +634,12 @@ module jmr_js_core #(
     );
 
     // Mux FB writers — VM preferred while busy
-    assign fb_we    = vm_busy ? vm_fb_we    : demo_fb_we;
-    assign fb_waddr = vm_busy ? vm_fb_waddr : demo_fb_waddr;
-    assign fb_wdata = vm_busy ? vm_fb_wdata : demo_fb_wdata;
+    // C1: the raster engine owns the FB write port while busy — the VM
+    // is blocked on rast_busy then, so the paths are mutually exclusive
+    // by the handshake, and the mux only arbitrates the idle default.
+    assign fb_we    = rast_busy ? rast_fb_we    : vm_busy ? vm_fb_we    : demo_fb_we;
+    assign fb_waddr = rast_busy ? rast_fb_waddr : vm_busy ? vm_fb_waddr : demo_fb_waddr;
+    assign fb_wdata = rast_busy ? rast_fb_wdata : vm_busy ? vm_fb_wdata : demo_fb_wdata;
     // vm_fb_swap is a vm_clk-wide pulse (= VM_CLK_DIV clk cycles); the
     // present engine consumes edges at 100 MHz, so pass only the rise.
     logic vm_fb_swap_q;
