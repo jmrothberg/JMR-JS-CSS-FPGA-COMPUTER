@@ -117,6 +117,7 @@ proc jmr_add_sources {ROOT} {
       $ROOT/rtl/engines/jmr_video_vram.sv \
       $ROOT/rtl/engines/jmr_console_engine.sv \
       $ROOT/rtl/engines/jmr_mini_fb.sv \
+      $ROOT/rtl/engines/jmr_raster_engine.sv \
       $ROOT/rtl/engines/jmr_rectdemo_engine.sv \
       $ROOT/rtl/engines/jmr_value.sv \
       $ROOT/rtl/engines/jmr_js_vm_pkg.sv \
