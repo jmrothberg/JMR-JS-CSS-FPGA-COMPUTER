@@ -451,6 +451,13 @@ RESETS run step options — BIN_FILE must be re-applied after it (fixed
 in the tcl), and a stale `jmr_nexys_video.bin` from an old run sat in
 build/nexys_video ready to be mis-archived (deleted).
 
+**Run 48 (2026-08-27): WNS +0.130 / WHS +0.050 — best ever, strategy
+3-for-3.** Carries: continuous D-line stall telemetry (dwell re-arms),
+E-line free-running storage-state beat, console-idle V heartbeat,
+phantom "-- MORE --" fix (page decision moved to C_DIRNW), DIR ds_base
+fix, banner R48. tb_uart_link proved the D-line RTL good — the board's
+D silence is downstream (TX-stream freeze during stall is the lead).
+
 **Run 47 (2026-08-27): WNS +0.039 / WHS +0.036 — clean again.**
 Congestion_SpreadLogic_high is now 2-for-2 on timing closure; treat it
 as the default strategy. Run 47 carries the DIR ds_base fix (cold DIR
