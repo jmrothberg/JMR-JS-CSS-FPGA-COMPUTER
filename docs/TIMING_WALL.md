@@ -442,10 +442,90 @@ dispatch cluster packed against the BRAM columns — not diffuse
 pressure — so router effort cannot fix it; only spreading placement can.
 The VM runs at 12.5 MHz (80 ns period), so spreading it is timing-free.
 
+**Run 46 (2026-08-27, Congestion_SpreadLogic_high): WNS +0.017,
+WHS +0.055 — the first timing-clean bit in project history**, after ten
+runs of negative slack. The nocache A/B twin (JMR_NOCACHE, same
+strategy) routed at WNS -0.174 / WHS +0.050 (placement noise; identical
+RTL apart from the bridge cache). Traps found: `set_property strategy`
+RESETS run step options — BIN_FILE must be re-applied after it (fixed
+in the tcl), and a stale `jmr_nexys_video.bin` from an old run sat in
+build/nexys_video ready to be mis-archived (deleted).
+
 Flow changes landed for run 46: `JMR_VIVADO_STRATEGY` env var selects
 the impl_1 strategy, and `wait_on_runs` is wrapped in `catch` so the
 checkpoint-recovery branch is actually reachable after a route failure
 (run 45's recovery never ran — the error aborted the script first).
+
+## Run 46 — the wall came down (2026-08-26 23:50)
+
+**WNS +0.017 · WHS +0.055 · TNS 0.000 · THS 0.000.** Vivado's own gate
+published the bitstream. Every run from 32 onward had been a negative-WNS
+override; this is the first that did not need one.
+
+Published: `build/bits/run46_heartbeat_spr16_ctorless_CLEAN-TIMING.bit`
+(+ `.bin`). Wall clock 22:02:11 → 23:51:13 = **1 h 49 m**.
+
+### What the flow actually ran
+
+| Step | Directive | Elapsed | Outcome |
+|---|---|---:|---|
+| `synth_design` | `AreaOptimized_high` | 32:06 | peak RSS 11.9 GB |
+| `opt_design` | `ExploreArea` | 1:45 | |
+| `place_design` | **`AltSpreadLogic_high`** | **4:41** | via strategy `Congestion_SpreadLogic_high` |
+| `phys_opt_design` | **`AggressiveExplore`** | 0:16 | WNS +0.032 / TNS 0.000 / WHS −0.274 / THS −10.793 |
+| `route_design` | **`AlternateCLBRouting`** | 1:06:16 | **0 overlaps** |
+| `write_bitstream` | — | 0:54 | gate passed, published |
+
+Strategy is selected by `JMR_VIVADO_STRATEGY=Congestion_SpreadLogic_high`
+(the knob added in 5b8f045). Note the placer took **4 m 41 s** — spreading
+is cheap. It was the *router* that ran long, and it converged.
+
+### The router's climb
+
+Unlike run 45, run 46's route recovered instead of collapsing:
+
+| Route checkpoint | WNS | TNS | WHS | THS |
+|---|---:|---:|---:|---:|
+| initial | −0.083 | −0.083 | −0.531 | −547.023 |
+| iter (congestion warning fires) | −0.429 | −3.359 | — | — |
+| | −0.275 | −1.288 | — | — |
+| | −0.233 | −0.233 | — | — |
+| | −0.017 | −0.017 | — | — |
+| | **+0.015** | **0.000** | — | — |
+| hold fix begins | +0.015 | 0.000 | −0.129 | −0.390 |
+| hold fix done | +0.015 | 0.000 | **+0.051** | **0.000** |
+| **post-route final** | **+0.017** | **0.000** | **+0.055** | **0.000** |
+
+`[Route 35-447]` (congestion prioritised over timing) still fired — the
+design is still congested. The difference is that the spread placement let
+the router *converge out of it*. Note also that hold closed without eating
+setup slack: THS went −547 → 0 while WNS held at +0.015.
+
+### The finding that matters: size did not decide any of this
+
+| | run 44 | run 45 | **run 46** |
+|---|---:|---:|---:|
+| Slice LUTs | 105,532 | 106,079 | **110,532** |
+| LUT as Logic | 96,691 | 97,238 | **101,691** |
+| Slice Registers | 46,092 | 46,132 | **46,186** |
+| BRAM tiles | 344 | 344 | **344** |
+| DSP48E1 | 139 | 139 | **139** |
+| Placement | default | default / Explore | **AltSpreadLogic_high** |
+| Result | routed, WNS −0.897 | **FAILED**, 2,426 overlaps | **routed, WNS +0.017** |
+
+Run 46 carries **+5,000 LUTs over run 44** and **+4,453 over run 45**, on
+identical BRAM and DSP, and it is the only one of the three that both
+routed and closed timing. The BRAM-pressure hypothesis (344/365 = 94.2%
+pinning logic to fixed columns) is **not** what blocked run 45: the same
+344 tiles routed clean once the surrounding logic was spread. 94.2% BRAM
+remains real fragility, but placement strategy is the operative variable.
+
+**Standing rule from this run:** a route failure on this design is a
+*placement* diagnosis until proven otherwise. Read the congestion window
+composition from `report_design_analysis -congestion` before touching RTL
+or resource counts. Reaching for utilization cuts first cost most of
+2026-08-26.
+
 
 ---
 
