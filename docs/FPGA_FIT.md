@@ -6,30 +6,29 @@ Words: [README.md — Words used](../README.md#words-used-in-this-project).
 
 ## SCOREBOARD — update this table every run (one screen; diary lives in [OVERNIGHT_STATUS.md](../OVERNIGHT_STATUS.md))
 
-**Last bitstream on disk: run 46 — routed 2026-08-26 23:50, TIMING CLEAN**
-(`build/bits/run46_heartbeat_spr16_ctorless_CLEAN-TIMING.bit` + `.bin`).
-**WNS +0.017 / WHS +0.055 / TNS 0.000 / THS 0.000** — Vivado published it
-through the gate on its own for the **first time in the campaign**. Every
-prior run from 32 on was a negative-WNS override.
-**Fit is solved. Timing is now solved.**
+**Last bitstream on disk: run 49b — routed 2026-08-27 16:38, TIMING CLEAN**
+(`build/bits/run49_DIR-self-heal.bit` + `.bin`).
+**WNS +0.180 / WHS +0.051** — best margin of the campaign, and the fifth
+gate-published bit in seven runs on `Congestion_SpreadLogic_high`.
+**Fit is solved. Timing is solved.** Ledger: [TIMING_WALL.md](TIMING_WALL.md).
 
 Source: `build/nexys_video/utilization_impl.rpt` (Design State: Routed,
-2026-08-26 23:51). Chip: XC7A200T, 134,600 LUTs / 269,200 FFs / 365 BRAM
+2026-08-27 16:38). Chip: XC7A200T, 134,600 LUTs / 269,200 FFs / 365 BRAM
 tiles / 740 DSP48E1.
 
 | Resource | Used | Budget | % | State |
 |---|---:|---:|---:|---|
-| **Slice LUTs (total)** | **110,532** | 134,600 | **82.1%** | **fits** |
-| LUT as Logic | 101,691 | 134,600 | 75.6% | fits |
+| **Slice LUTs (total)** | **106,111** | 134,600 | **78.8%** | **fits** |
+| LUT as Logic | 97,270 | 134,600 | 72.3% | fits |
 | LUT as Memory (LUTRAM) | 8,841 | 46,200 | 19.1% | fits — 37k free |
 | — Distributed RAM | 8,824 | — | — | RAMD64E 7,836 + RAMD32 1,490 + RAMS32 470 |
 | — Shift register | 17 | — | — | SRL16E |
-| Slice Registers (FF) | 46,186 | 269,200 | 17.2% | fits |
-| **Slice (packing)** | **32,122** | 33,650 | **95.5%** | **tightest resource on the chip** |
-| — SLICEL / SLICEM | 20,981 / 11,141 | — | — | — |
-| F7 Muxes | 7,725 | 67,300 | 11.5% | fits |
-| F8 Muxes | 3,360 | 33,650 | 10.0% | fits |
-| Unique control sets | 3,044 | 33,650 | 9.0% | fits |
+| Slice Registers (FF) | 46,259 | 269,200 | 17.2% | fits |
+| **Slice (packing)** | **31,784** | 33,650 | **94.5%** | **tightest resource on the chip** |
+| — SLICEL / SLICEM | 20,638 / 11,146 | — | — | — |
+| F7 Muxes | 7,561 | 67,300 | 11.2% | fits |
+| F8 Muxes | 3,316 | 33,650 | 9.9% | fits |
+| Unique control sets | 3,077 | 33,650 | 9.1% | fits |
 | **Block RAM tiles** | **344** | 365 | **94.2%** | fits — 21 tiles free |
 | RAMB36 | 323 | 365 | 88.5% | — |
 | RAMB18 | 42 | 730 | 5.8% | ×0.5 = 21 tiles |
@@ -38,85 +37,33 @@ tiles / 740 DSP48E1.
 | BUFGCTRL | 5 | 32 | 15.6% | fits |
 | MMCME2 | 3 | 10 | 30.0% | fits |
 | PLLE2 | 1 | 10 | 10.0% | MIG |
-| CARRY4 (primitives) | 5,016 | — | — | timing cone — no longer binding |
+| CARRY4 (primitives) | 5,029 | — | — | timing cone — no longer binding |
 | **`place_design` / `route_design`** | — | — | — | **completed, 0 overlaps** |
-| **WNS (100 MHz, 10 ns)** | **+0.017 ns** | ≥ 0 | — | **MET — published by the gate** |
-| **WHS (hold)** | **+0.055 ns** | ≥ 0 | — | **MET** |
+| **WNS (100 MHz, 10 ns)** | **+0.180 ns** | ≥ 0 | — | **MET — published by the gate** |
+| **WHS (hold)** | **+0.051 ns** | ≥ 0 | — | **MET** |
 
-**LUT types** (mapped primitives; slice LUT **110,532** is after combining):
+**Primitive detail** (run 49b; regenerate from `utilization_impl.rpt`
+section 8 — do not hand-maintain):
 
-| Primitive | Used | What it is |
-|---|---:|---|
-| LUT6 | 47,645 | 6-input look-up |
-| LUT5 | 23,352 | 5-input look-up |
-| LUT4 | 16,274 | 4-input look-up |
-| LUT2 | 15,871 | 2-input look-up |
-| LUT3 | 14,803 | 3-input look-up |
-| LUT1 | 2,081 | buffer / invert glue |
-| INV | 3 | dedicated inverter |
-| LUT as Logic | 101,691 | of the 110,532 slice LUTs |
-| LUT as Memory | 8,841 | LUTRAM (cap 46,200) |
+| LUT | | Flop & Latch | | Memory / other | |
+|---|---:|---|---:|---|---:|
+| LUT6 | 45,566 | FDRE | 44,414 | RAMD64E | 7,836 |
+| LUT5 | 19,259 | FDSE | 1,038 | RAMD32 | 1,490 |
+| LUT3 | 16,148 | FDCE | 700 | RAMS32 | 470 |
+| LUT4 | 15,845 | FDPE | 105 | SRL16E | 17 |
+| LUT2 | 12,585 | LDCE | 2 | RAMB36 / RAMB18 | 323 / 42 |
+| LUT1 | 4,210 | | | MUXF7 / MUXF8 | 7,561 / 3,316 |
+| INV | 3 | | | CARRY4 | 5,029 |
 
-**Flip-flops** (46,184 FF + 2 latches = 46,186 slice registers):
+BRAM tiles = 323 × RAMB36 + 42 × RAMB18 × ½ = **344 / 365**.
 
-| Primitive | Used | What it is |
-|---|---:|---|
-| FDRE | 44,402 | CE + sync reset (almost all) |
-| FDSE | 1,016 | CE + sync set |
-| FDCE | 661 | CE + async reset |
-| FDPE | 105 | CE + async set |
-| LDCE | 2 | latch |
+### Why placement, not size, decides whether this design routes
 
-**BRAM** (344 tiles = 323×RAMB36 + 42×RAMB18×½):
-
-| Primitive | Used | Tile weight | Tiles |
-|---|---:|---:|---:|
-| RAMB36E1 | 323 | 1.0 | 323 |
-| RAMB18E1 | 42 | 0.5 | 21 |
-| **tiles** | — | — | **344 / 365** |
-
-**Other** (not LUT / FF / BRAM):
-
-| Primitive | Used | Available | % |
-|---|---:|---:|---:|
-| DSP48E1 | 139 | 740 | 18.8 |
-| CARRY4 | 5,016 | — | — |
-| MUXF7 | 7,725 | 67,300 | 11.5 |
-| MUXF8 | 3,360 | 33,650 | 10.0 |
-| Unique control sets | 3,044 | 33,650 | 9.0 |
-| Slices occupied | 32,122 | 33,650 | 95.5 |
-| Bonded IOB | 93 | 285 | 32.6 |
-| BUFGCTRL | 5 | 32 | 15.6 |
-| MMCME2_ADV | 3 | 10 | 30.0 |
-| PLLE2_ADV | 1 | 10 | 10.0 |
-| BUFIO / BUFR / BUFH | 1 / 2 / 1 | — | — |
-| XADC | 1 | 1 | 100 |
-
-### Runs 44 → 46: the size/route decoupling
-
-| | run 44 (routed) | run 45 (route FAILED) | **run 46 (routed, clean)** |
-|---|---:|---:|---:|
-| Slice LUTs | 105,532 (78.4%) | 106,079 (79.3%) | **110,532 (82.1%)** |
-| LUT as Logic | 96,691 | 97,238 | **101,691** |
-| LUTRAM | 8,841 | 8,841 | **8,841** |
-| Slice Registers | 46,092 | 46,132 | **46,186** |
-| BRAM tiles | 344 (94.2%) | 344 (94.2%) | **344 (94.2%)** |
-| DSP48E1 | 139 | 139 | **139** |
-| Placement | default | default → Explore | **AltSpreadLogic_high** |
-| Route result | routed 14:29 | **2,426 overlaps, 1,754 nets unrouted, 4h26m** | **routed 1:06:16, 0 overlaps** |
-| WNS / WHS | −0.897 / +0.050 | — | **+0.017 / +0.055** |
-
-**Read this table before blaming utilization for a route failure.** Run 46
-is **+5,000 LUTs larger than run 44** and **+4,453 larger than run 45**, on
-identical BRAM and DSP — and it is the one that routed *and* closed timing.
-Size did not decide any of these three outcomes; **placement strategy did**.
-BRAM at 94.2% is real fragility (it pins BRAM-adjacent logic to fixed
-columns) but it was **not** the blocker — the same 344 tiles routed fine
-once the logic around them was spread.
-
-Vs run 33 (previous scoreboard): LUTs 108,777 → **110,532** (+1.8k, 80.8% →
-82.1%). FFs 45,379 → 46,186. BRAM 343.5 → 344. DSP 141 → 139. WNS **−0.640
-→ +0.017 — first non-negative in the campaign.**
+Runs 44–46 are the controlled proof: run 46 carries **+5,000 LUTs over run 44**
+on identical BRAM and DSP, and it is the one that both routed and closed
+timing. **A route failure here is a placement diagnosis until proven
+otherwise** — full experiment and the standing rule in
+[TIMING_WALL.md](TIMING_WALL.md#why-the-wall-came-down--the-placement-finding).
 
 ### Trajectory
 
@@ -141,6 +88,10 @@ Vs run 33 (previous scoreboard): LUTs 108,777 → **110,532** (+1.8k, 80.8% →
 | 44 | 105,532 | 0.784x | routed 14:29; WNS **−0.897 ns**; published by override |
 | 45 | 106,079 | 0.788x | **route FAILED** — 2,426 overlaps after 4h26m; recovered at −0.502 via AltSpreadLogic_high |
 | **46** | **110,532** | **0.821x** | **WNS +0.017 / WHS +0.055 — first gate-published bitstream. Congestion_SpreadLogic_high.** |
+| 47 | — | — | WNS **+0.039**; DIR `ds_base` fix aboard |
+| 48 | — | — | WNS **+0.130**; telemetry (D/E/V) + phantom `-- MORE --` fix |
+| 49 | — | — | WNS **−0.166** — gate refused; DIR self-heal landed in the console dispatch cone |
+| **49b** | **106,111** | **0.788x** | **WNS +0.180 / WHS +0.051 — best margin to date.** Retry qualifier registered out of the cone |
 
 ### FIT levers — closed out, kept for the record
 

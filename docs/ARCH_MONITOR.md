@@ -95,13 +95,21 @@ The bitstream emits four line types (`runtime/board_backend.py`):
 | `S<rowhex>:<64 chars>` | text console row | 64×16 glass, letterboxed like HDMI |
 | `P<rr>:<160 hex nibbles>` | mini-FB row | 160×120, scaled ×4 to 640×480 |
 | `K` | keystrobe | PS/2 scancode proof (J15) |
-| `D<hh>` | `stor_state` | **storage stall telemetry** |
+| `D<hh>` | `stor_state` | **storage stall telemetry** (during a qualifying stall) |
+| `E<hh>` | `stor_state` | **free-running state beat** — always on, incl. idle |
 | `V<st2><fault2><ip4>` | `{casestate, fault, ip}` | **VM heartbeat / fault** |
 
 ### The V-line — VM heartbeat
 
-Added 2026-08-26 (`2b0f1f3`). Emitted once per dump **and on every
-`machine_fault` rising edge**. Parsed by `_parse_vm_v_line`; a torn or short
+Added 2026-08-26 (`2b0f1f3`). Three arms: once per completed S/P glass dump, on
+every `machine_fault` rising edge, and — since `eb93865` — on a free-running
+~0.67 s beat.
+
+That third arm matters: with only the dump-edge trigger the heartbeat was
+lively during games (where FB rows stream continuously) and **silent at the
+console**, because a static glass produces no dumps. The Architecture Monitor
+looked dead whenever the machine was at READY, which is exactly when you most
+want to watch it. Parsed by `_parse_vm_v_line`; a torn or short
 line returns `None` and is ignored, never raised.
 
 **This is the whole payload: state, fault code, ip.** Three fields.
@@ -142,13 +150,9 @@ tells them apart. `MAX_OBJ = 960` (`jmr_js_vm.sv:457`).
 
 ### The D-line — storage stall telemetry
 
-Rewritten 2026-08-26 (`5968932`). Fires after **~0.67 s of CONTINUOUS storage
-busy**, then repeats every ~0.17 s carrying `stor_state`. Normal operations
-idle between console strobes and never accumulate enough busy to trigger.
-
-The previous version could **never fire** — it compared for equality on a
-saturating counter, which is why the board logs showed zero D-lines. If you are
-reading an old log, absence of D-lines before this commit proves nothing.
+Fires after **~0.67 s of continuous storage busy**, then repeats every ~0.17 s
+carrying `stor_state`, for as long as the stall lasts. Normal operations idle
+between console strobes and never accumulate enough busy to trigger.
 
 Storage state codes (`storage_engine.sv`, 103 states):
 
@@ -156,12 +160,52 @@ Storage state codes (`storage_engine.sv`, 103 states):
 |---|---|---|
 | `0x00` | `S_IDLE` | not busy |
 | `0x02` | `S_ERR` | errored |
+| `0x09` | `S_SD_WAIT` | waiting on `sd_ack` — an SD read/write in flight |
 | `0x0B`–`0x13` | `S_MNT0`…`S_MNT3C` | **mounting the card** |
 | `0x16`–`0x1C`, `0x66` | `S_DS_*`, `S_DS_CHAIN` | **root-directory scan** |
 | `0x5F`–`0x65` | `S_DIR0`…`S_DIR_ADV` | **DIR itself** |
 
-**No D-lines during a failure is itself a reading**: storage was never busy, so
-the fault is not in the storage engine.
+**No D-lines during a failure is itself a reading**: storage was never
+continuously busy, so the fault is not a storage-side stall.
+
+### The E-line — free-running storage-state beat
+
+`E<state2>`, emitted every ~1.34 s **plus** on any state change (rate-capped at
+10 ms so churn cannot flood TX), **regardless of dwell or busy** — including
+`E00` at idle. Host logs it change-only as `STOR-BEAT`.
+
+This is the one to reach for first. The D-line only speaks during a qualifying
+stall; the E-line always says where storage is, so it answers "where is it
+parked" without requiring the failure to match the stall heuristic.
+
+### Two defects this telemetry has already had — check the emit before trusting silence
+
+Both were found only by running a real stall with a capture attached. Neither
+was visible in normal use.
+
+1. **Pre-`5968932`: could never fire.** The dwell test compared for equality on
+   a *saturating* counter. Zero D-lines in any board log older than that commit
+   proves nothing at all.
+2. **`5968932` → `eb93865`: fired four times, then went silent forever.**
+   `d_dwell` is 27 bits and saturated at `0x7FFFFFF` (1.342 s) while the emit
+   needed `d_dwell[23:0] == 0`, so a stall got **exactly four lines between
+   0.671 s and 1.174 s** and nothing after — despite a comment claiming "every
+   ~0.17 s". Fixed in `eb93865`: the dwell re-arms at saturation.
+
+**And the silence has been observed on silicon with the RTL proven good.** On
+run 47 a real DIR stall (21.5 s, storage continuously non-idle — `op_wd[31]`
+fired, and `op_wd` hard-resets on `S_IDLE`) produced **zero** D-lines with the
+GUI attached and the link demonstrably live (13 keystrokes captured, including
+the `D`-`I`-`R`-`Enter` scancodes `23/43/2D/5A`). A `tb_uart_link` test then
+emitted exactly the four predicted `D09` lines from the *same* RTL. So the
+board-side silence is downstream of `jmr_uart_link`, and as of run 48 remains
+unexplained; the leading suspect is a TX-stream freeze during the stall.
+
+**Operational rule: prove the instrument before trusting a reading from it.**
+At an idle READY prompt you should see `STOR-BEAT state=0x00` and periodic
+V-lines. If those are absent, the telemetry is dead and any conclusion drawn
+from its silence is worthless. That single check would have saved most of
+2026-08-27.
 
 ### What BOARD still cannot do
 
