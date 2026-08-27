@@ -1676,11 +1676,13 @@ module jmr_js_vm #(
     logic [15:0] bdiv_quo;
     logic [16:0] bdiv_rem;      // one bit wider than the 16-bit divisor
     logic [15:0] bdiv_num, bdiv_den;
+    // spr_so multiply deleted (run 50/51 C1): the per-pixel source
+    // offset lives in jmr_raster_engine as an incremental DDA — the
+    // 16x22 multiply left the netlist with it. spr_so/spr_raddr are
+    // unread now (S_SPR uploads use spr_wp).
     always_comb begin
-        spr_so = spr_off[blit_si[3:0]]
-           + 22'(blit_sy + dda_sy) * 22'(spr_ww[blit_si[3:0]])
-           + 22'(blit_sx + dda_sx);
-        spr_raddr = spr_so[17:0];
+        spr_so = 22'd0;
+        spr_raddr = 18'd0;
     end
     // flatten: sin_q raddr from sin_turn (not function peek / unique-case ROM).
     assign sin_raddr = sin_turn[14] ? (8'd255 - sin_turn[13:6]) : sin_turn[13:6];
@@ -8771,78 +8773,32 @@ module jmr_js_vm #(
                                 blit_div_ph <= 2'd0;
                             end
                         end else bdiv_i <= bdiv_i - 5'd1;
-                    end else begin
-                        // Source offset is spr_so / spr_raddr (outside this case).
-                        // 2026-08-25: dst address + bounds precompute in the
-                        // sram REQ beat (x/y stable until put) — the put-beat
-                        // multiply+compare cone was run 30's -58.7ns path.
-                        logic [7:0] pix;
-                        logic       put;
-                        put = 1'b0;
-                        pix = 8'd0;
-                        if (!aset_mode) begin
-                            // 2026-08-22: legacy .JS sprites live in external
-                            // SRAM too (SPR_SRAM_BASE, byte per word) - same
-                            // req/ack shape as the ASET branch below.
-                            if (!blit_wait) begin
-                                sram_req  <= 1'b1;
-                                sram_we   <= 1'b0;
-                                sram_addr <= SPR_SRAM_BASE + 21'(spr_raddr);
-                                blit_waddr_q <= 19'(ry + y) * 19'(MW) + 19'(rx + x);
-                                blit_inb_q <= ((rx + x) < 10'(MW)) && ((ry + y) < 10'(MH));
-                                blit_wait <= 1'b1;
-                            end else if (sram_ack) begin
-                                pix = sram_rdata[7:0];
-                                sram_req <= 1'b0;
-                                blit_wait <= 1'b0;
-                                put = 1'b1;
-                            end
-                        end else if (!blit_wait) begin
-                            // NEW: ASET — fetch the 16-bit SRAM word holding this pixel
-                            sram_req <= 1'b1;
-                            sram_addr <= spr_so[21:1];
-                            blit_waddr_q <= 19'(ry + y) * 19'(MW) + 19'(rx + x);
-                            blit_inb_q <= ((rx + x) < 10'(MW)) && ((ry + y) < 10'(MH));
-                            blit_wait <= 1'b1;
-                        end else if (sram_ack) begin
-                            pix = spr_so[0] ? sram_rdata[15:8] : sram_rdata[7:0];
-                            sram_req <= 1'b0;
-                            blit_wait <= 1'b0;
-                            put = 1'b1;
-                        end
-                        if (put) begin
-                            if (pix != 8'd0 && blit_inb_q) begin
-                                fb_we <= 1'b1;
-                                fb_waddr <= blit_waddr_q;
-                                fb_wdata <= pix;
-                            end
-                            if (x == (rw - 10'd1)) begin
-                                x <= 10'd0;
-                                dda_sx <= 16'd0; dda_ax <= 16'd0;
-                                if (y == (rh - 10'd1)) begin
-                                    hs_code(15'(ops_base + ip));
-                                    hs_st(S_FETCH_WAIT);
-                                end else begin
-                                    y <= y + 10'd1;
-                                    if (16'(dda_ay + bdiv_ry) >= {6'd0, rh}) begin
-                                        dda_sy <= dda_sy + bdiv_qy + 16'd1;
-                                        dda_ay <= 16'(dda_ay + bdiv_ry) - {6'd0, rh};
-                                    end else begin
-                                        dda_sy <= dda_sy + bdiv_qy;
-                                        dda_ay <= dda_ay + bdiv_ry;
-                                    end
-                                end
-                            end else begin
-                                x <= x + 10'd1;
-                                if (16'(dda_ax + bdiv_rx) >= {6'd0, rw}) begin
-                                    dda_sx <= dda_sx + bdiv_qx + 16'd1;
-                                    dda_ax <= 16'(dda_ax + bdiv_rx) - {6'd0, rw};
-                                end else begin
-                                    dda_sx <= dda_sx + bdiv_qx;
-                                    dda_ax <= dda_ax + bdiv_rx;
-                                end
-                            end
-                        end
+                    end else if (!rast_wait) begin
+                        // C1: the DDA walk lives in jmr_raster_engine now —
+                        // one SRAM fetch per WORD (one-word cache) at core
+                        // rate, ~1 clk/px instead of >=2 VM beats/px. The
+                        // engine reproduces the exact floor DDA (gated by
+                        // test_blit_scale_exact + the word-boundary gates).
+                        rast_go <= 1'b1;
+                        rast_mode <= 2'd1;
+                        rast_dx <= rx;
+                        rast_dy <= ry;
+                        rast_w <= rw;
+                        rast_h <= rh;
+                        rast_sx <= blit_sx;
+                        rast_sy <= blit_sy;
+                        rast_qx <= bdiv_qx;
+                        rast_rxr <= bdiv_rx;
+                        rast_qy <= bdiv_qy;
+                        rast_ryr <= bdiv_ry;
+                        rast_sbase <= spr_off[blit_si[3:0]];
+                        rast_stride <= spr_ww[blit_si[3:0]];
+                        rast_aset <= aset_mode;
+                        rast_wait <= 1'b1;
+                    end else if (rast_done) begin
+                        rast_wait <= 1'b0;
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                     end
                 end
                 S_SPR: begin
@@ -10324,45 +10280,27 @@ module jmr_js_vm #(
                         end
                         hs_code(15'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
-                    end else if (!blit_wait) begin
-                        // issue: fetch this pixel's word from the external
-                        // snapshot region (was a registered imgd_pix read)
-                        blit_wait <= 1'b1;
-                        sram_req  <= 1'b1;
-                        sram_we   <= 1'b0;
-                        sram_addr <= IMGD_SRAM_BASE
-                                   + ((imgd_i < 19'(FB_PIXELS)) ? 21'(imgd_i) : 21'd0);
-                    end else if (sram_ack) begin
-                        blit_wait <= 1'b0;
-                        sram_req  <= 1'b0;
-                        begin
-                            logic [9:0] px, py;
-                            px = imgd_x0 + imgd_x;
-                            py = imgd_y0 + imgd_y;
-                            if (px < 10'(MW) && py < 10'(MH) && imgd_i < 19'(FB_PIXELS)) begin
-                                fb_we <= 1'b1;
-                                fb_waddr <= 19'(py) * 19'(MW) + 19'(px);
-                                fb_wdata <= sram_rdata[7:0];
-                            end else fb_we <= 1'b0;
+                    end else if (!rast_wait) begin
+                        // C1: linear DMA from the external snapshot region
+                        // through the engine (was one arbiter round trip
+                        // per PIXEL at VM-beat pace — MRDOFAST's 63% sink).
+                        rast_go <= 1'b1;
+                        rast_mode <= 2'd2;
+                        rast_dx <= imgd_x0;
+                        rast_dy <= imgd_y0;
+                        rast_w <= imgd_w;
+                        rast_h <= imgd_h;
+                        rast_sbase <= 22'(imgd_i);
+                        rast_wait <= 1'b1;
+                    end else if (rast_done) begin
+                        rast_wait <= 1'b0;
+                        if (imgd_v64) begin
+                            vst_wr(vnat_base, V64_UNDEFINED);
+                            hs_vsp(vnat_base + 12'd1);
+                            imgd_v64 <= 1'b0;
                         end
-                        if (imgd_x >= (imgd_w - 10'd1)) begin
-                            imgd_x <= 10'd0;
-                            if (imgd_y >= (imgd_h - 10'd1)) begin
-                                if (imgd_v64) begin
-                                    vst_wr(vnat_base, V64_UNDEFINED);
-                                    hs_vsp(vnat_base + 12'd1);
-                                    imgd_v64 <= 1'b0;
-                                end
-                                hs_code(15'(ops_base + ip));
-                                hs_st(S_FETCH_WAIT);
-                            end else begin
-                                imgd_y <= imgd_y + 10'd1;
-                                imgd_i <= imgd_i + 19'd1;
-                            end
-                        end else begin
-                            imgd_x <= imgd_x + 10'd1;
-                            imgd_i <= imgd_i + 19'd1;
-                        end
+                        hs_code(15'(ops_base + ip));
+                        hs_st(S_FETCH_WAIT);
                     end
                 end
                 S_GC_CLEAR: begin
