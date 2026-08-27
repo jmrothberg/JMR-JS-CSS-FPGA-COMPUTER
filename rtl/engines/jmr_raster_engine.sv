@@ -83,6 +83,14 @@ module jmr_raster_engine #(
     logic [21:0] row_step;        // stride*qy, latched at go
     logic [18:0] imgd_i;          // linear imgd source index
     logic        fetch_wait;
+    // dest address, incremental (peer review pre-run-51): fb_row is the
+    // current row's first pixel, fb_addr the current pixel. One constant
+    // multiply per OP at go; per pixel the address is an incrementer,
+    // not a 3-level multiply-add replicated in four case arms. Advanced
+    // in adv() UNCONDITIONALLY (OOB pixels skip the write but still
+    // step), and re-anchored to fb_row+MW at every row wrap so OOB
+    // drift never carries across rows.
+    logic [18:0] fb_row, fb_addr;
     // one-word source cache (blit): tag is the WORD address
     logic        cw_valid;
     logic [20:0] cw_tag;
@@ -120,6 +128,8 @@ module jmr_raster_engine #(
             x  <= 10'd0;
             ax <= 16'd0;
             y  <= y + 10'd1;
+            fb_row  <= fb_row + 19'(MW);
+            fb_addr <= fb_row + 19'(MW);
             // row DDA: row_so += stride*qy (+stride on carry)
             if (16'(ay + ryr_q) >= {6'd0, h_q}) begin
                 row_so <= row_so + row_step + 22'(stride_q);
@@ -132,6 +142,7 @@ module jmr_raster_engine #(
             end
         end else begin
             x <= x + 10'd1;
+            fb_addr <= fb_addr + 19'd1;
             if (16'(ax + rxr_q) >= {6'd0, w_q}) begin
                 so <= so + 22'(qx_q) + 22'd1;
                 ax <= 16'(ax + rxr_q) - {6'd0, w_q};
@@ -163,6 +174,8 @@ module jmr_raster_engine #(
                     x <= 10'd0; y <= 10'd0;
                     ax <= 16'd0; ay <= 16'd0;
                     // row-0 source base: two 16-bit DSP products, once per op
+                    fb_row  <= 19'(dy) * 19'(MW) + 19'(dx);
+                    fb_addr <= 19'(dy) * 19'(MW) + 19'(dx);
                     so     <= sbase + 22'(sy) * 22'(stride) + 22'(sx);
                     row_so <= sbase + 22'(sy) * 22'(stride) + 22'(sx);
                     row_step <= 22'(qy) * 22'(stride);
@@ -182,7 +195,7 @@ module jmr_raster_engine #(
                         // 1 px/clk, unconditional colour
                         if (inb) begin
                             fb_we <= 1'b1;
-                            fb_waddr <= 19'(pxy) * 19'(MW) + 19'(pxx);
+                            fb_waddr <= fb_addr;
                             fb_wdata <= color_q;
                         end
                         if (last_px) busy <= 1'b0;
@@ -195,7 +208,7 @@ module jmr_raster_engine #(
                             pix = px_hi ? cw_word[15:8] : cw_word[7:0];
                             if (pix != 8'd0 && inb) begin
                                 fb_we <= 1'b1;
-                                fb_waddr <= 19'(pxy) * 19'(MW) + 19'(pxx);
+                                fb_waddr <= fb_addr;
                                 fb_wdata <= pix;
                             end
                             if (last_px) busy <= 1'b0;
@@ -214,7 +227,7 @@ module jmr_raster_engine #(
                             pix = px_hi ? sram_rdata[15:8] : sram_rdata[7:0];
                             if (pix != 8'd0 && inb) begin
                                 fb_we <= 1'b1;
-                                fb_waddr <= 19'(pxy) * 19'(MW) + 19'(pxx);
+                                fb_waddr <= fb_addr;
                                 fb_wdata <= pix;
                             end
                             if (last_px) busy <= 1'b0;
@@ -237,7 +250,7 @@ module jmr_raster_engine #(
                             fetch_wait <= 1'b0;
                             if (inb) begin
                                 fb_we <= 1'b1;
-                                fb_waddr <= 19'(pxy) * 19'(MW) + 19'(pxx);
+                                fb_waddr <= fb_addr;
                                 fb_wdata <= sram_rdata[7:0];
                             end
                             if (last_px) busy <= 1'b0;
