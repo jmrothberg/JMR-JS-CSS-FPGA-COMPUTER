@@ -339,6 +339,9 @@ puts "INFO: impl maxThreads=$IMPL_THREADS jobs=$IMPL_JOBS"
 if {$JMR_STRATEGY ne ""} {
   puts "INFO: impl strategy $JMR_STRATEGY"
   set_property strategy $JMR_STRATEGY [get_runs impl_1]
+  # setting a strategy RESETS the run's step options — re-apply BIN_FILE
+  # or the flow silently ships no .bin (run 46: stale Aug-13 .bin trap)
+  set_property STEPS.WRITE_BITSTREAM.ARGS.BIN_FILE true [get_runs impl_1]
 }
 launch_runs impl_1 -to_step write_bitstream -jobs $IMPL_JOBS
 # catch: a failed route ERRORs out of wait_on_runs and would kill the
