@@ -1318,6 +1318,18 @@ int main(int argc, char** argv) {
             continue;
         }
         // NEW: minimal VM probe for RTL bring-up (state/ip/raf/heap counters)
+        // NEW: DIR-wedge probe — storage FSM (port), console FSM, handshake
+        if (line == "STOR?") {
+            auto* r = top->rootp;
+            std::cout << "STOR st=" << unsigned(top->stor_dbg_state_o)
+                      << " cons=" << unsigned(r->jmr_js_core__DOT__u_cons__DOT__state)
+                      << " eof=" << unsigned(r->jmr_js_core__DOT__u_stor__DOT__eof_r)
+                      << " err=" << unsigned(r->jmr_js_core__DOT__u_stor__DOT__err_r)
+                      << " cat=" << unsigned(r->jmr_js_core__DOT__u_stor__DOT__cat_on)
+                      << " cur=" << unsigned(r->jmr_js_core__DOT__u_vid__DOT__cur) << " vst=" << unsigned(r->jmr_js_core__DOT__u_vid__DOT__state) << " pc=" << unsigned(r->jmr_js_core__DOT__u_vid__DOT__put_cnt) << " nc=" << unsigned(r->jmr_js_core__DOT__u_vid__DOT__nl_cnt)
+                      << std::endl;
+            continue;
+        }
         if (line == "VMSTAT?") {
             auto* r = top->rootp;
             unsigned stn = unsigned(r->jmr_js_core__DOT__u_vm__DOT__state);

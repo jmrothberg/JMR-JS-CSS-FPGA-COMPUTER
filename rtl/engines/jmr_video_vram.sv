@@ -44,6 +44,30 @@ module jmr_video_vram (
 
     assign cursor = cur;
     assign busy = (state != V_IDLE);
+`ifdef VERILATOR
+    logic [15:0] put_cnt /*verilator public_flat_rd*/ = 16'd0;
+    logic [15:0] nl_cnt  /*verilator public_flat_rd*/ = 16'd0;
+    integer vtf = 0;
+    logic [31:0] vcyc = 0;
+    always_ff @(posedge clk) begin
+        vcyc <= vcyc + 1;
+        if (vtf == 0) vtf = $fopen("vidtrace.log", "w");
+        if (put_en) begin
+            put_cnt <= put_cnt + 1;
+            $fdisplay(vtf, "c=%0d PUT ch=%02x cur=%0d st=%0d", vcyc, put_char, cur, state);
+            $fflush(vtf);
+        end
+        if (print_nl) begin
+            nl_cnt <= nl_cnt + 1;
+            $fdisplay(vtf, "c=%0d NL cur=%0d st=%0d", vcyc, cur, state);
+            $fflush(vtf);
+        end
+        if (cls) begin
+            $fdisplay(vtf, "c=%0d CLS st=%0d", vcyc, state);
+            $fflush(vtf);
+        end
+    end
+`endif
     assign dump_data = porta_rdata;
 
     // Port B @ pixel_clk — HDMI scan (BASIC memory_arbiter method)

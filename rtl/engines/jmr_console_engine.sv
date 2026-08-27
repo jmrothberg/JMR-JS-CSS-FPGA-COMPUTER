@@ -148,7 +148,13 @@ module jmr_console_engine (
         C_JSB_PEEK, C_JSB_PEEKW, // NEW: code-BRAM full — fail loud if more bytes
         C_JSB_TETHER, C_JSB_FEED, C_JSB_TEOF // NEW: PROG/host .JSH stream (no FAT)
     } cstate_t;
-    cstate_t state, ret_state;
+`ifdef VERILATOR
+    integer ctrace_fd = 0;
+    cstate_t ctrace_last;
+    logic [31:0] ctrace_cyc = 0;
+`endif
+    // public_flat_rd: sim-only STOR? probe (metacomment, no synthesis effect)
+    cstate_t state /*verilator public_flat_rd*/, ret_state;
 
     logic [7:0] line [0:127];
     logic [6:0] line_len;
@@ -314,7 +320,7 @@ module jmr_console_engine (
             // run number - bump by hand each build (user: know which bit
             // is on the board from the glass)
             22: banner_char = " "; 23: banner_char = "R";
-            24: banner_char = "4"; 25: banner_char = "6";
+            24: banner_char = "4"; 25: banner_char = "7";
             default: banner_char = 8'h00;
         endcase
     endfunction
@@ -1977,6 +1983,19 @@ module jmr_console_engine (
 
                 default: state <= C_IDLE;
             endcase
+`ifdef VERILATOR
+            ctrace_cyc <= ctrace_cyc + 1;
+            if (state inside {C_DIRN, C_DIRNW, C_DIR_RD, C_DIR_NL, C_LIST_MORE,
+                              C_LIST_WAIT, C_PROMPT}) begin
+                if (ctrace_fd == 0) ctrace_fd = $fopen("constrace.log", "w");
+                if (state != ctrace_last) begin
+                    $fdisplay(ctrace_fd, "c=%0d cst=%0d dirn=%0d page=%0d dmore=%0d",
+                              ctrace_cyc, state, dir_n, list_on_page, dir_more);
+                    ctrace_last <= state;
+                    $fflush(ctrace_fd);
+                end
+            end
+`endif
             // Console-side storage watchdog (after the case, so it wins the
             // beat). Armed by any stor strobe (read one cycle late - the
             // strobes are 1-cycle registers), cleared on stor_done; the DIR

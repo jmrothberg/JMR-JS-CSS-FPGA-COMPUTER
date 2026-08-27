@@ -212,7 +212,8 @@ module storage_engine #(
     logic [9:0]  dir_off, slot_off;
     logic        slot_ok, found_r;
     logic [31:0] ent_clus, ent_size;
-    logic        eof_r, err_r, done_r;
+    // public_flat_rd: sim-only STOR? probe (metacomment, no synthesis effect)
+    logic        eof_r /*verilator public_flat_rd*/, err_r /*verilator public_flat_rd*/, done_r;
     // NEW: bare OPEN "ADV01" retries .BAS/.DAT/.JMR/.TXT (matches FM resolve_storage_name)
     logic        bare_name;
     logic [2:0]  alt_try;
@@ -278,7 +279,12 @@ module storage_engine #(
     // 0 = LINE INPUT# consumer, 1 = INPUT# field scanner refill
     logic        rl_field;
     logic        cl_data_done; // NEW: CLOSE data-sector flush latch
-    logic        cat_on;       // NEW: DIR catalog scan active
+    logic        cat_on /*verilator public_flat_rd*/;
+`ifdef VERILATOR
+    integer dirtrace_fd = 0;
+    state_t dirtrace_last;
+    logic [31:0] trace_cyc = 0;
+`endif       // NEW: DIR catalog scan active
     logic        dir_yield;    // NEW: S_DIR_ADV should S_CPY after advancing
     logic [15:0] nl_acc;
 
@@ -1460,6 +1466,11 @@ module storage_engine #(
                     ds_sect   <= 8'h0;
                     ds_off    <= 10'h0;
                     dir_yield <= 1'b0;
+                    // ds_base steers every S_DIR_ADV sector advance; without
+                    // this a cold DIR inherits stale ds_base (0 after reset)
+                    // and reads LBA 1 instead of root sector 1 — the listing
+                    // silently truncates at 16 entries (sim-traced 2026-08-27).
+                    ds_base   <= data_start + ((root_clus - 32'd2) << spc_shift);
                     ds_lba    <= data_start + ((root_clus - 32'd2) << spc_shift);
                     buf_lba   <= data_start + ((root_clus - 32'd2) << spc_shift);
                     sd_go(8'd2, data_start + ((root_clus - 32'd2) << spc_shift), S_FIN);
@@ -1569,6 +1580,23 @@ module storage_engine #(
 
                 default: state <= S_IDLE;
             endcase
+`ifdef VERILATOR
+            trace_cyc <= trace_cyc + 1;
+            // Sim-only DIR-walk trace to file (never stdout: RPC stream).
+            if (state inside {S_DIR0, S_DIR_N, S_DIR_LD, S_DIR_LDC, S_DIR_EV,
+                              S_DIR_FMT, S_DIR_ADV, S_CPY}
+                || (cat_on && state inside {S_FIN, S_SD_WAIT})) begin
+                if (dirtrace_fd == 0)
+                    dirtrace_fd = $fopen("dirtrace.log", "w");
+                if (state != dirtrace_last) begin
+                    $fdisplay(dirtrace_fd, "c=%0d st=%0d off=%0d sect=%0d yield=%0d cat=%0d d0=%02x spc=%0d eof=%0d fl=%0d ln=%0d lba=%0d",
+                              trace_cyc, state, ds_off, ds_sect, dir_yield, cat_on,
+                              dent[0], spc, eof_r, fld_len, line_n, ds_lba);
+                    dirtrace_last <= state;
+                    $fflush(dirtrace_fd);
+                end
+            end
+`endif
             // hot-swap: any card-detect change poisons the mount
             cp_q <= card_present;
             if (cp_q != card_present) mounted <= 1'b0;
