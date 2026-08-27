@@ -151,6 +151,15 @@ module jmr_js_core #(
     logic        ram_req;
     logic        ram_sel_stor; // 1 = storage master won
     logic        work_req, work_we_l, work_ack, work_sel_stor;
+    // 2026-08-27 DIR wedge (board E-telemetry: console stuck C_DIR_CH,
+    // storage idle, 21.5s ?IO): the work-RAM request latch waits on the
+    // sram fabric (DDR3 bridge on board) with no reissue protection — a
+    // lost/misattributed ack starves it forever. Same class the VM port
+    // already guards against (vm_ack_hold). Reissue after 2^12 idle-held
+    // cycles (41us >> any legit bridge latency); work ops are idempotent
+    // (byte reads / same-value writes) so reissue is safe.
+    logic [11:0] work_wd;
+    logic        work_pause;
     logic [13:0] work_addr_l;
     logic [7:0]  work_wdata_l;
 
@@ -184,6 +193,8 @@ module jmr_js_core #(
             s_mem_gnt <= 1'b0;
             c_mem_gnt <= 1'b0;
             work_req <= 1'b0;
+            work_wd <= 12'd0;
+            work_pause <= 1'b0;
             work_we_l <= 1'b0;
             work_sel_stor <= 1'b0;
             work_addr_l <= '0;
@@ -191,12 +202,26 @@ module jmr_js_core #(
         end else begin
             s_mem_gnt <= 1'b0;
             c_mem_gnt <= 1'b0;
-            if (work_req) begin
+            if (work_pause) begin
+                // one-cycle gap: fabric sees req fall, then the same latched
+                // request re-presents (addr/data/sel untouched)
+                work_pause <= 1'b0;
+                work_req   <= 1'b1;
+            end else if (work_req) begin
                 if (work_ack) begin
                     work_req <= 1'b0;
+                    work_wd  <= 12'd0;
                     ram_rdata <= work_we_l ? work_wdata_l : sram_rdata[7:0];
                     if (work_sel_stor) s_mem_gnt <= 1'b1;
                     else c_mem_gnt <= 1'b1;
+                end else begin
+                    work_wd <= work_wd + 12'd1;
+                    if (&work_wd) begin
+                        // ack lost: withdraw for one cycle and reissue
+                        work_req   <= 1'b0;
+                        work_pause <= 1'b1;
+                        work_wd    <= 12'd0;
+                    end
                 end
             end else if (ram_req) begin
                 work_req <= 1'b1;
