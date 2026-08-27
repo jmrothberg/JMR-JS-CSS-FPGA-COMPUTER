@@ -392,6 +392,15 @@ if {[get_property PROGRESS [get_runs impl_1]] != "100%" ||
 
 if {!$RECOVERED} { open_run impl_1 }
 report_utilization -file $OUT/utilization_impl.rpt
+# run-51 observability (2026-08-27): record congestion + timing
+# DISTRIBUTIONS every run. Every failed-run postmortem so far starved on
+# -max_paths 1 headlines (the project had exactly ONE saved intra-VM
+# path until a checkpoint was re-mined) and congestion was never
+# recorded per run, so strategy regressions were invisible until a
+# route died. Cheap (seconds), archived with the run.
+catch {report_design_analysis -congestion -file $OUT/congestion_impl.rpt}
+catch {report_timing -from [get_clocks vm_clk] -to [get_clocks vm_clk] -max_paths 100 -unique_pins -file $OUT/timing_vmclk_dist.rpt}
+catch {report_timing -max_paths 100 -unique_pins -file $OUT/timing_dist.rpt}
 
 # NEW: never ship a failing-timing bit (prior build wrote .bit with WNS −0.5 ns)
 set wns [lindex [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -setup]] 0]
