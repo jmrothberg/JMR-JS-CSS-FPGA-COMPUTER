@@ -451,6 +451,12 @@ RESETS run step options — BIN_FILE must be re-applied after it (fixed
 in the tcl), and a stale `jmr_nexys_video.bin` from an old run sat in
 build/nexys_video ready to be mis-archived (deleted).
 
+**Run 47 (2026-08-27): WNS +0.039 / WHS +0.036 — clean again.**
+Congestion_SpreadLogic_high is now 2-for-2 on timing closure; treat it
+as the default strategy. Run 47 carries the DIR ds_base fix (cold DIR
+read LBA 1 past 16 entries — sim-traced and sim-proven) and banner R47.
+BIN_FILE re-apply verified: the flow shipped a fresh .bin.
+
 Flow changes landed for run 46: `JMR_VIVADO_STRATEGY` env var selects
 the impl_1 strategy, and `wait_on_runs` is wrapped in `catch` so the
 checkpoint-recovery branch is actually reachable after a route failure
