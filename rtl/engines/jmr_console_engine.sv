@@ -251,6 +251,8 @@ module jmr_console_engine (
     // the request. Bounded; the watchdogs still backstop.
     logic [21:0] dir_hs_wd;
     logic [1:0]  dir_hs_retry;
+    logic        dir_hs_hit; // registered (&dir_hs_wd): keeps the 22-wide AND
+                             // out of the dispatch cone (run 49 WNS -0.166)
     logic [5:0]  list_col;        // 0..63 glass wrap (FM _list_paged twin)
     logic        list_wrap_more;  // MORE after a wrap, resume same source line
     logic        dir_more;       // MORE issued from DIR paging (resume C_DIRN)
@@ -724,7 +726,7 @@ module jmr_console_engine (
                         end else begin reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY; end
                     end
                     else state <= C_DIRN;
-                end else if (!stor_busy && &dir_hs_wd && dir_hs_retry != 2'd3) begin
+                end else if (!stor_busy && dir_hs_hit && dir_hs_retry != 2'd3) begin
                     dir_hs_retry <= dir_hs_retry + 2'd1;
                     dir_hs_wd <= 22'd0;
                     stor_dir <= 1'b1; // lost handshake: restart the catalog
@@ -758,7 +760,7 @@ module jmr_console_engine (
                             state <= C_LIST_MORE;
                         end else state <= C_DIR_RD;
                     end
-                end else if (!stor_busy && &dir_hs_wd && dir_hs_retry != 2'd3) begin
+                end else if (!stor_busy && dir_hs_hit && dir_hs_retry != 2'd3) begin
                     dir_hs_retry <= dir_hs_retry + 2'd1;
                     dir_hs_wd <= 22'd0;
                     stor_dir_next <= 1'b1; // lost handshake: fetch next name
@@ -2040,6 +2042,8 @@ module jmr_console_engine (
             if ((state == C_DIR0W || state == C_DIRNW) && !stor_busy && !stor_done) begin
                 if (!(&dir_hs_wd)) dir_hs_wd <= dir_hs_wd + 22'd1;
             end
+            // single-cycle qualifier: self-clearing so one timeout = one retry
+            dir_hs_hit <= (&dir_hs_wd) && !dir_hs_hit;
             // Console-side storage watchdog (after the case, so it wins the
             // beat). Armed by any stor strobe (read one cycle late - the
             // strobes are 1-cycle registers), cleared on stor_done; the DIR
