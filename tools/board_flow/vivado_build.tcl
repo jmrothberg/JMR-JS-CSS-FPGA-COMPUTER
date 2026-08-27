@@ -10,6 +10,20 @@ if {[llength $argv] >= 3 && [lindex $argv 2] eq "fresh"} {
   set FRESH 1
 }
 file mkdir $OUT
+# NEVER-SMASH GUARD (2026-08-27, user directive): before this flow touches
+# anything, auto-archive whatever bit/bin the PREVIOUS run left in impl_1.
+# Runs unconditionally — a launch can no longer destroy an untested bit.
+set _prev_impl "$OUT/vivado/jmr_nexys_video.runs/impl_1"
+if {[file exists "$_prev_impl/top_nexys_video.bit"]} {
+  set _stamp [clock format [clock seconds] -format %Y%m%d_%H%M%S]
+  file mkdir "$ROOT/build/bits/auto"
+  foreach _f {top_nexys_video.bit top_nexys_video.bin} {
+    if {[file exists "$_prev_impl/$_f"]} {
+      file copy -force "$_prev_impl/$_f" "$ROOT/build/bits/auto/${_stamp}_$_f"
+    }
+  }
+  puts "INFO: never-smash: previous impl bit auto-archived to build/bits/auto/${_stamp}_*"
+}
 
 if {[llength [get_parts -quiet xc7a200tsbg484-1]] == 0} {
   puts "ERROR: xc7a200tsbg484-1 not installed — enable Artix-7 in xsetup"
@@ -384,6 +398,16 @@ set whs [lindex [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -ho
 puts "TIMING WNS=$wns WHS=$whs"
 if {$wns eq "" || $wns < 0} {
   puts "ERROR: timing not met (WNS=$wns) — refusing to publish .bit"
+  # never-smash: the refused bit is still preserved, clearly labeled
+  set _stamp [clock format [clock seconds] -format %Y%m%d_%H%M%S]
+  file mkdir "$ROOT/build/bits/auto"
+  foreach _f {top_nexys_video.bit top_nexys_video.bin} {
+    set _src "$OUT/vivado/jmr_nexys_video.runs/impl_1/$_f"
+    if {[file exists $_src]} {
+      file copy -force $_src "$ROOT/build/bits/auto/${_stamp}_WNSFAIL${wns}_$_f"
+    }
+  }
+  puts "INFO: never-smash: refused bit preserved in build/bits/auto/ (WNSFAIL label)"
   exit 1
 }
 if {$whs eq "" || $whs < 0} {
