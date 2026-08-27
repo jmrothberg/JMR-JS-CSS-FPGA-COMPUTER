@@ -311,6 +311,12 @@ module jmr_js_vm #(
     logic valloc_retried;
     logic vgc_halt_after_ff;
     logic vgc_halt_after;
+    // C4 (run 50): a forced (alloc-retry) GC already collected this
+    // frame; the scheduled frame-end GC is then pure re-walk of the
+    // same heap (~24% of an old PACMAN frame ran 4 GCs). Scheduling
+    // only: forced GCs still fire on pressure. Set at the four forced
+    // entries, consumed+cleared at the S_FB_SYNC frame-end decision.
+    logic gc_ran_this_frame;
     (* ram_style = "distributed" *) logic venv_mark [0:ENV_PHYS-1];
     logic [9:0] vgc_env_i;
     logic [2:0] vgc_root_phase;
@@ -1794,78 +1800,9 @@ module jmr_js_vm #(
 
     // Synthesizable 53x53 integer multiply with binary64 normalization and
     // round-to-nearest-even.
-    task automatic v64_mul_task(
-        input logic [63:0] aa,
-        input logic [63:0] bb,
-        output logic [63:0] result
-    );
-        logic sign;
-        logic [10:0] ea, eb, ef;
-        logic [51:0] fa, fb;
-        logic [52:0] ma, mb, q;
-        logic [53:0] rounded;
-        logic [105:0] product;
-        logic guard, sticky;
-        integer p, er, shift;
-        begin
-            sign = aa[63] ^ bb[63];
-            ea = aa[62:52]; eb = bb[62:52];
-            fa = aa[51:0]; fb = bb[51:0];
-            if ((ea == 11'h7ff && fa != 0) ||
-                (eb == 11'h7ff && fb != 0) ||
-                ((ea == 11'h7ff || eb == 11'h7ff) &&
-                 (aa[62:0] == 0 || bb[62:0] == 0))) begin
-                result = V64_CANON_NAN;
-            end else if (ea == 11'h7ff || eb == 11'h7ff) begin
-                result = {sign, 11'h7ff, 52'd0};
-            end else if (aa[62:0] == 0 || bb[62:0] == 0) begin
-                result = {sign, 63'd0};
-            end else begin
-                ma = {1'b0, fa};
-                mb = {1'b0, fb};
-                if (ea != 0) ma[52] = 1'b1;
-                if (eb != 0) mb[52] = 1'b1;
-                product = 106'(ma) * 106'(mb);
-                p = -1;
-                for (int k = 0; k < 106; k++)
-                    if (product[k])
-                        p = k;
-                er = ((ea == 0) ? 1 : ea)
-                   + ((eb == 0) ? 1 : eb) - 1023 + p - 104;
-                shift = p - 52;
-                ef = 11'(er);
-                if (er <= 0) begin
-                    shift = shift + 1 - er;
-                    ef = 11'd0;
-                end
-                q = (shift >= 106) ? 53'd0 : 53'(product >> shift);
-                guard = 1'b0;
-                sticky = 1'b0;
-                if (shift > 0 && shift <= 106) begin
-                    guard = product[shift - 1];
-                    for (int k = 0; k < 106; k++)
-                        if (k < shift - 1)
-                            sticky = sticky | product[k];
-                end else if (shift > 106)
-                    sticky = |product;
-                rounded = {1'b0, q} + (guard && (sticky || q[0]));
-                if (ef != 0 && rounded[53]) begin
-                    q = rounded[53:1];
-                    er = er + 1;
-                    ef = 11'(er);
-                end else
-                    q = rounded[52:0];
-                if (er >= 2047)
-                    result = {sign, 11'h7ff, 52'd0};
-                else if (ef == 0 && q[52])
-                    result = {sign, 11'd1, q[51:0]};
-                else if (q == 0)
-                    result = {sign, 63'd0};
-                else
-                    result = {sign, ef, q[51:0]};
-            end
-        end
-    endtask
+    // v64_mul_task deleted 2026-08-27 (run 50): its only caller was the
+    // rAF timestamp; that product is now the sequential raf engine (see
+    // raf_pack_n). exec64 made the same move on 2026-08-24 (fpm/nwm).
 
     // v64_norm_shift / v64_unbiased_exp / v64_handle: jmr_value_pkg
 
@@ -4860,7 +4797,7 @@ module jmr_js_vm #(
     // (14:01 bit: ~72 GB RSS, log frozen after e32_p_clr). One always_comb
     // here is one mul/pack, not one copy per case arm. Unique case only
     // consumes the wires.
-    logic [63:0] raf_ts_n, vdiv_pack_n, vmod_pack_n;
+    logic [63:0] vdiv_pack_n, vmod_pack_n;
     logic [53:0] vmod_shifted_n;
     logic [52:0] vmod_next_rem_n;
     assign vmod_shifted_n = {vmod_rem, 1'b0};
@@ -4868,12 +4805,85 @@ module jmr_js_vm #(
         ? 53'(vmod_shifted_n - {1'b0, vmod_den})
         : vmod_shifted_n[52:0];
     always_comb begin
-        v64_mul_task(v64_int32_number(vframe_no), 64'h4030aaaaaaaaaaab,
-                     raf_ts_n);
         v64_div_pack_task(vdiv_sign, vdiv_exp, vdiv_quot, vdiv_rem,
                           vdiv_pack_n);
         v64_mod_pack_task(vmod_sign, vmod_exp, vmod_next_rem_n, vmod_pack_n);
     end
+
+    // C3 (run 50): the rAF timestamp vframe_no * 50/3 was the parent's
+    // ONLY combinational 53x53 double multiply (v64_mul_task, deleted)
+    // and the measured worst intra-VM cone (run 49 checkpoint: 75.3 ns
+    // of the 80 ns budget, 86 levels, every worst path vframe_no ->
+    // vst_wdata). Free-running engine, one beat per multiplier bit:
+    // acc = vframe_no * RAF_TS_M exactly (85-bit integer product), then
+    // one pack beat (leading-bit scan of the REGISTERED product, round
+    // to nearest even) = bit-identical to the IEEE double product for
+    // every n, since both inputs are exact. ~34 VM beats once per
+    // frame; the rAF push stalls on raf_ts_rdy so a stale value is
+    // unobservable by construction (covers program-start vframe_no
+    // resets and the same-beat increment hazard alike).
+    localparam logic [52:0] RAF_TS_M = 53'h10AAAAAAAAAAAB; // mant(50/3)
+    logic [31:0] raf_n_q, raf_n_cap, raf_nsh;
+    logic [84:0] raf_acc, raf_msh;
+    logic [5:0]  raf_i;
+    logic        raf_run, raf_pck;
+    logic [63:0] raf_ts_q;
+    logic        raf_ts_rdy;
+    logic [63:0] raf_pack_n;
+    always_comb begin
+        logic [6:0]  rp;
+        logic [6:0]  rsh;
+        logic [52:0] rmant;
+        logic        rg, rst_s;
+        logic [53:0] rrnd;
+        rp = 7'd0;
+        for (int k = 0; k < 85; k++)
+            if (raf_acc[k]) rp = 7'(k);          // fixed-bit scan (log depth)
+        rsh = rp - 7'd52;                        // rp >= 52 for any n >= 1
+        rmant = 53'(raf_acc >> rsh);
+        rg = (rsh != 7'd0) ? raf_acc[rsh - 7'd1] : 1'b0;
+        rst_s = 1'b0;
+        for (int k = 0; k < 85; k++)
+            if (7'(k) + 7'd1 < rsh && raf_acc[k]) rst_s = 1'b1;
+        rrnd = {1'b0, rmant} + 54'(rg && (rst_s || rmant[0]));
+        if (rrnd[53]) begin
+            rmant = rrnd[53:1];
+            rp = rp + 7'd1;
+        end else rmant = rrnd[52:0];
+        // value = acc * 2^-48 -> biased exponent = 1023 + rp - 48
+        raf_pack_n = (raf_acc == 85'd0)
+            ? 64'd0
+            : {1'b0, 11'(11'd975 + 11'(rp)), rmant[51:0]};
+    end
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            raf_n_q <= 32'hFFFFFFFF;   // != any real vframe_no: recompute
+            raf_ts_q <= 64'd0;
+            raf_run <= 1'b0;
+            raf_pck <= 1'b0;
+        end else if (raf_run) begin
+            if (raf_nsh[0]) raf_acc <= raf_acc + raf_msh;
+            raf_msh <= raf_msh << 1;
+            raf_nsh <= raf_nsh >> 1;
+            raf_i <= raf_i + 6'd1;
+            if (raf_i == 6'd31) begin
+                raf_run <= 1'b0;
+                raf_pck <= 1'b1;
+            end
+        end else if (raf_pck) begin
+            raf_ts_q <= raf_pack_n;
+            raf_n_q <= raf_n_cap;
+            raf_pck <= 1'b0;
+        end else if (vframe_no != raf_n_q) begin
+            raf_n_cap <= vframe_no;
+            raf_nsh <= vframe_no;
+            raf_msh <= {32'd0, RAF_TS_M};
+            raf_acc <= 85'd0;
+            raf_i <= 6'd0;
+            raf_run <= 1'b1;
+        end
+    end
+    assign raf_ts_rdy = !raf_run && !raf_pck && (raf_n_q == vframe_no);
 
     // Intern `new Stage` (`var Stage = function`): ctor handle is bind_ins
     // (CTOR_ENV), not VST_AT. NEW_OBJ clocks vcall_value=0; CTOR_ENV
@@ -5799,6 +5809,7 @@ module jmr_js_vm #(
             venv_next <= '0; hs_valloc_kind(2'd0);
             hs_valloc_retried(1'b0);
             hs_vgc_halt_after(1'b0);
+            gc_ran_this_frame <= 1'b0;
             vgc_env_i <= '0; vgc_root_phase <= '0;
             cls_scan <= 1'b0; cls_armed <= 1'b0; cls_done <= 1'b0;
             cls_hit <= 1'b0;
@@ -6698,6 +6709,7 @@ module jmr_js_vm #(
                         hs_vraf_n(4'd0);
                         vtimer_n <= 7'd0;
                         vframe_no <= 32'd0;
+                        gc_ran_this_frame <= 1'b0; // C4
                         // Last intern coords survive RUN otherwise PACMAN
                         // SNAP shows the previous title's vdraw (INVADERS 14×5).
                         hs_vdraw_x('0); hs_vdraw_y('0);
@@ -7793,12 +7805,21 @@ module jmr_js_vm #(
                         fbs_armed <= 1'b0;
                         clr_idx <= '0;
                         fb_dump_sel <= 1'b0;
-                        hs_vgc_clear_i(14'd0);
-                        hs_vgc_qr(14'd0);
-                        hs_vgc_qw(14'd0);
-                        hs_vgc_halt_after(1'b1);
-                        hs_vgc_wait_after(1'b1);
-                        hs_st(S_V64_GC_CLEAR);
+                        gc_ran_this_frame <= 1'b0; // C4: consume the flag
+                        if (gc_ran_this_frame) begin
+                            // C4: a forced GC already collected this
+                            // frame -- the scheduled pass would re-walk
+                            // the same heap for nothing. Cursor rewinds
+                            // happened at that GC's own exit.
+                            hs_st(S_WAIT_FRAME);
+                        end else begin
+                            hs_vgc_clear_i(14'd0);
+                            hs_vgc_qr(14'd0);
+                            hs_vgc_qw(14'd0);
+                            hs_vgc_halt_after(1'b1);
+                            hs_vgc_wait_after(1'b1);
+                            hs_st(S_V64_GC_CLEAR);
+                        end
                     end
                 end
                 S_RECT: begin
@@ -10714,6 +10735,7 @@ module jmr_js_vm #(
                             hs_vgc_qr(14'd0);
                             hs_vgc_qw(14'd0);
                             hs_vgc_halt_after(1'b0);
+                            gc_ran_this_frame <= 1'b1; // C4
                             hs_st(S_V64_GC_CLEAR);
                         end else begin
                             machine_fault <= 1'b1; fault_code <= 8'd3;
@@ -10903,6 +10925,7 @@ module jmr_js_vm #(
                             hs_vgc_qr(14'd0);
                             hs_vgc_qw(14'd0);
                             hs_vgc_halt_after(1'b0);
+                            gc_ran_this_frame <= 1'b1; // C4
                             hs_st(S_V64_GC_CLEAR);
                         end else begin
                             machine_fault <= 1'b1; fault_code <= 8'd3;
@@ -11079,6 +11102,7 @@ module jmr_js_vm #(
                             hs_vgc_qr(14'd0);
                             hs_vgc_qw(14'd0);
                             hs_vgc_halt_after(1'b0);
+                            gc_ran_this_frame <= 1'b1; // C4
                             hs_st(S_V64_GC_CLEAR);
                             end else begin
                             machine_fault <= 1'b1; fault_code <= 8'd3;
@@ -11390,6 +11414,7 @@ module jmr_js_vm #(
                             hs_vgc_qr(14'd0);
                             hs_vgc_qw(14'd0);
                             hs_vgc_halt_after(1'b0);
+                            gc_ran_this_frame <= 1'b1; // C4
                             hs_st(S_V64_GC_CLEAR);
                         end else begin
                             machine_fault <= 1'b1; fault_code <= 8'd3;
@@ -14305,11 +14330,16 @@ module jmr_js_vm #(
                             bind_rd_arm <= 1'b1;
                             bind_k <= 8'd0;
                         end else if (bind_k == 8'd0) begin
-                            // flatten: IEEE mul lives in always_comb raf_ts_n
-                            // (not v64_mul_task in this unique-case arm).
-                            vst_wr(vsp, raf_ts_n);
-                            hs_vsp(vsp + 12'd1);
-                            bind_k <= 8'd1;
+                            // C3: sequential raf engine (see raf_pack_n).
+                            // Stall this beat until the frame's timestamp
+                            // is packed (~34 beats after vframe_no moved;
+                            // dispatch reaches here much later, but the
+                            // guard makes it correct, not just likely).
+                            if (raf_ts_rdy) begin
+                                vst_wr(vsp, raf_ts_q);
+                                hs_vsp(vsp + 12'd1);
+                                bind_k <= 8'd1;
+                            end
                         end else begin
                             // Idle: ALLOC combo-reads last cycle's TOS window.
                             bind_rd_arm <= 1'b0;
