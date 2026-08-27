@@ -170,8 +170,8 @@ Two file lists must stay twins if anything moves:
 
 `$readmemh` paths are **relative to the `.sv`**. `font_rom.hex` and
 `invaders_jsb.hex` are copied next to the VM and into `sim/` by Make /
-Vivado. Product titles are HTML; **V1.0 BOARD** bytecode comes from
-card-minted `.JSH` (compile at create) or host compile-on-RUN — the hex is a
+Vivado. Product titles are HTML; **V1.0** bytecode comes from
+card-minted `.JSH` on `card.img` (PYTHON / FPGA-SIM / BOARD) — the hex is a
 BRAM placeholder, not a sidecar game.
 
 ---

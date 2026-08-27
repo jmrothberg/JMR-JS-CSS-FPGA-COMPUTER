@@ -183,9 +183,9 @@ def strip_blank_bas_lines(name: str, data: bytes) -> tuple[bytes, int]:
 def squash_long_html_lines(name: str, data: bytes) -> tuple[bytes, int]:
     """Replace giant single lines in card .HTM/.HTML with a placeholder.
 
-    The card copy of an HTML title is display-only: RUN compiles the HOST
-    storage/ file (compile-on-RUN), and the board runs .JSH sidecars. LIST,
-    however, streams the card copy through the RTL console line buffer —
+    The card copy of an HTML title is display-only: PYTHON / FPGA-SIM / BOARD
+    `RUN` the minted `.JSH` on card.img. LIST, however, streams the card copy
+    through the RTL console line buffer —
     one 100KB+ base64 sprite line took megabytes of SPI reads and froze
     the monitor for minutes ("list stalls on embedded graphics"). Keep
     readable lines as-is; anything over 200 chars becomes

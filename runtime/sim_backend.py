@@ -504,34 +504,12 @@ class SimBackend(RuntimeBackend):
             self._prof_raw = ""
             self._prof_armed = False
         skip_line = False
-        ram_load = False  # NEW: SOURCE came from the host, no FAT wait needed
-        if upper.startswith("LOAD") and self._html_loaded_stem() and self._use_rtl:
-            # FPGA-SIM: fill source BRAM from the host file (no SPI of fat HTML).
-            stem = self._html_loaded_stem()
-            html_path = ROOT / "storage" / f"{stem}.HTML"
-            if not html_path.is_file():
-                html_path = ROOT / "storage" / f"{stem}.HTM"
-            if html_path.is_file():
-                resp = self._rpc(f"SRCLOAD {html_path}")
-                if resp.startswith("OK"):
-                    # NEW: SRCLOAD only fills SOURCE + arms the no-FAT LOAD.
-                    # The typed line still goes to the console so the glass
-                    # echoes it and prints LOADED at the cursor (no row jump).
-                    ram_load = True
-                    self._arch_phase = "loaded"
-                    try:
-                        self._loaded_html_text = html_path.read_text(encoding="utf-8")
-                        self._html_lines = self._loaded_html_text.splitlines()
-                    except Exception:
-                        self._loaded_html_text = ""
-                        self._html_lines = []
-                    self._rpc("SCREEN?")
-                else:
-                    self._log.fault("SRCLOAD", resp)
-        # Compile-on-RUN: ephemeral ProgramImage → RAM stream (no sidecar).
+        ram_load = False  # SOURCE from RTL FAT LOAD (wait for LOADED)
+        # Compile-on-RUN of storage/ HTML is not the product path. V1.0 RUN
+        # streams the minted NAME.JSH from card.img (same bytes as the board).
         if upper == "RUN" or upper.startswith("RUN "):
             self._arch_phase = "compile"
-            if self._html_loaded_stem() and not self._compile_on_run_html():
+            if self._html_loaded_stem() and not self._load_card_jsh():
                 self._arch_phase = "loaded"
                 self._sync_glass("> ")
                 return
@@ -567,7 +545,7 @@ class SimBackend(RuntimeBackend):
             self._more_page = 0
             self._pump_until_more_or_ready()
         # HTML LOAD: wait for THIS stem+LINES, not a stale LOADED still on glass.
-        # SRCLOAD already set loaded — do not SPI-wait.
+        # FAT SPI of the (squashed) card HTML — same path as the chip.
         if (
             upper.startswith("LOAD")
             and self._html_loaded_stem()
@@ -590,16 +568,8 @@ class SimBackend(RuntimeBackend):
                     break
                 if self._load_reply_ready(self._screen, stem):
                     self._arch_phase = "loaded"
-                    html_path = ROOT / "storage" / f"{stem}.HTML"
-                    if not html_path.is_file():
-                        html_path = ROOT / "storage" / f"{stem}.HTM"
-                    if html_path.is_file():
-                        try:
-                            self._loaded_html_text = html_path.read_text(encoding="utf-8")
-                            self._html_lines = self._loaded_html_text.splitlines()
-                        except Exception:
-                            self._loaded_html_text = ""
-                            self._html_lines = []
+                    # Mirror SOURCE from the card (squashed HTML), not storage/.
+                    self._mirror_card_html(stem)
                     break
         if upper.startswith("SAVE"):
             self._persist_save(stripped)
@@ -642,14 +612,7 @@ class SimBackend(RuntimeBackend):
             loaded = ""
             if self._html_lines:
                 stem = self._html_loaded_stem()
-                html_path = ROOT / "storage" / f"{stem}.HTML"
-                if not html_path.is_file():
-                    html_path = ROOT / "storage" / f"{stem}.HTM"
-                name = (
-                    html_path.name.upper()
-                    if html_path.is_file()
-                    else (self._loaded_name or "").upper()
-                )
+                name = (self._loaded_name or f"{stem}.HTM").upper()
                 loaded = f"LOADED {name} ({len(self._html_lines)} LINES)"
             if loaded:
                 self._typed_log.append(loaded)
@@ -699,6 +662,60 @@ class SimBackend(RuntimeBackend):
         if name.endswith(".HTML") or name.endswith(".HTM"):
             return Path(name).stem[:8]
         return ""
+
+    def _card_storage(self):
+        """Same card.img FPGA-SIM SPI uses ($JMR_CARD_IMG or project card.img)."""
+        from functional_model.storage_engine import StorageEngine
+
+        return StorageEngine()
+
+    def _mirror_card_html(self, stem: str) -> None:
+        """Editor mirror from the card HTML (display-only; may be squashed)."""
+        st = self._card_storage()
+        for name in (f"{stem}.HTM", f"{stem}.HTML"):
+            try:
+                text = st.load_text(name)
+            except FileNotFoundError:
+                continue
+            self._loaded_html_text = text
+            self._html_lines = text.splitlines()
+            return
+        self._loaded_html_text = ""
+        self._html_lines = []
+
+    def _load_card_jsh(self) -> bool:
+        """V1.0 RUN: minted NAME.JSH bytes from card.img (not a storage/ recompile)."""
+        stem = self._html_loaded_stem()
+        if not stem:
+            return False
+        try:
+            blob = self._card_storage().load_bytes(f"{stem}.JSH")
+        except FileNotFoundError:
+            self._log.fault("COMPILE", f"no {stem}.JSH on card — refuse RUN (?NH)")
+            return False
+        try:
+            from functional_model.jsb_format import ProgramImage
+
+            image = ProgramImage(blob)
+            try:
+                self._html_chunk = image.decode()
+            except Exception:
+                self._html_chunk = None
+            self._image_meta = {
+                "n_ops": int(image.n_ops or 0),
+                "n_consts": int(image.n_consts or 0),
+                "n_vars": int(image.n_vars or 0),
+                "flags": int(image.flags or 0),
+            }
+            self._aset_bytes = self._measure_aset(self._html_chunk) if self._html_chunk else 0
+            self._program_image = image.data
+            self._log.note(
+                f"card {stem}.JSH → ProgramImage ({len(blob)} bytes, RAM stream)"
+            )
+            return True
+        except Exception as e:
+            self._log.fault("COMPILE", str(e))
+            return False
 
     def _editor_index(self, display_n: int) -> int:
         """Map monitor display lines (10,20,...) or 1-based rows to an index."""

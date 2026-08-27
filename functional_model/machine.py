@@ -55,7 +55,7 @@ class Machine:
         self.html_host: Optional[HtmlJsHost] = None
         # NEW: one-shot RUN keeps pixels until next command / CLS
         self._keep_fb: bool = False
-        # NEW: bytecode HTML path is compile-on-RUN ProgramImage (dukpy only if JMR_HTML_DUKPY=1)
+        # NEW: bytecode HTML path is card-minted .JSH (dukpy only if JMR_HTML_DUKPY=1)
         self._bytecode_html: bool = False
         self._html_chunk = None
         self._raf_q: list = []
@@ -554,10 +554,14 @@ class Machine:
         src = "\n".join(self.source_lines)
         if not src.strip():
             return ["ERROR: NO PROGRAM"]
-        # HTML Canvas games → bytecode ProgramImage (product). Simple .JS → bytecode VM.
+        # HTML Canvas games → minted .JSH on card.img (same bytes as FPGA-SIM / BOARD).
+        # Simple .JS → bytecode VM from the loaded source.
         name_u = self.source_name.upper()
-        if name_u.endswith(".HTML") or name_u.endswith(".HTM") or "<canvas" in src.lower():
-            return self._run_html(src)
+        if name_u.endswith(".HTML") or name_u.endswith(".HTM"):
+            return self._run_html_card_jsh()
+        if "<canvas" in src.lower():
+            # V1.0: typed buffer with no card .JSH — same loud miss as the chip.
+            return ["?NH"]
         return self._run_source(src)
 
     def _run_html(self, html: str) -> List[str]:
@@ -580,10 +584,27 @@ class Machine:
                 return [f"ERROR: HTML/JS {e}"]
         return self._run_html_bytecode(html)
 
-    def _run_html_bytecode(self, html: str) -> List[str]:
-        """Compile-on-RUN: current HTML → ephemeral ProgramImage → VM.
+    def _run_html_card_jsh(self) -> List[str]:
+        """V1.0 product RUN: minted NAME.JSH from card.img (same bytes as the board)."""
+        from .jsb_format import ProgramImage
 
-        Never read or write a .JSB/.JSH sidecar (HTML is the program).
+        stem = Path(self.source_name).stem.upper()[:8]
+        try:
+            blob = self.storage.load_bytes(stem + ".JSH")
+        except FileNotFoundError:
+            self._arch_phase = "loaded"
+            return ["?NH"]
+        image = ProgramImage(blob)
+        self.trace.edge(
+            "COMPILE",
+            f"card {stem}.JSH → ProgramImage ({len(blob)} bytes)",
+        )
+        return self._start_html_image(image)
+
+    def _run_html_bytecode(self, html: str) -> List[str]:
+        """Compile HTML → ProgramImage → VM (unit tests / in-memory snippet).
+
+        Product LOAD/RUN of a title uses `_run_html_card_jsh` (card.img .JSH).
         CompileError.line is the HTML editor line, not a sidecar.
         """
         from .compiler import CompileError
@@ -601,17 +622,21 @@ class Machine:
             self._arch_phase = "loaded"
             return [f"ERROR: HTML/JS {e}"]
         blob = encode_html_chunk(chunk)
-        # Execute only the serialized ProgramImage. The decoded Chunk is the
-        # Architecture Monitor / ASET observer, never the executor.
-        from .jsb_format import ProgramImage, build_aset_payload
-        from hardware_model.js_vm import JsHwVm
+        from .jsb_format import ProgramImage
 
         image = ProgramImage(blob)
-        observed = image.decode()
         self.trace.edge(
             "COMPILE",
             f"compile-on-RUN {self.source_name} → ProgramImage ({len(blob)} bytes)",
         )
+        return self._start_html_image(image)
+
+    def _start_html_image(self, image) -> List[str]:
+        """Execute a ProgramImage (card .JSH or in-memory compile) on JsHwVm."""
+        from .jsb_format import build_aset_payload
+        from hardware_model.js_vm import JsHwVm
+
+        observed = image.decode()
         # Prompt/LIST Space must not arrive as the first game keydown.
         self.input.discard_queued_keys()
         self.html_host = None

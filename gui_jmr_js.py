@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#! /usr/bin/env python3
 """Graphical host for the JMR JS Computer — single 640×480 glass.
 
 Pattern cite: JMR-BASIC-FPGA-COMPUTER/gui_jmr.py — one phosphor for console+program.

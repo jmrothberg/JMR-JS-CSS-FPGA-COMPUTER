@@ -20,20 +20,22 @@ Z80 / RISC-V / MicroBlaze / any soft CPU; executing JS **source** as one giant
 RTL FSM (bytecode is what the chip fetches).
 
 ```
-LOAD "NAME.HTML" → edit (line numbers = HTML) → RUN
-  → always compile current HTML → in-memory ProgramImage (code + ASET)
-  → JMR VM. Chrome = authoring only.
+LOAD "NAME.HTML" → RUN
+  → V1.0: minted NAME.JSH from card.img → JMR VM
+  → PYTHON / FPGA-SIM / BOARD share that image. Chrome = authoring only.
 ```
 
-**Compile-on-RUN:** editor HTML is truth. Compile errors use HTML line
-numbers. Missing path → loud `?NH` (tracked debt, never done). ESC is
-machine BREAK to READY — titles must not steal it. Host / GUI / FPGA-SIM
-must not prefer a stale `.JSH` / `.JSB` over compiling current HTML.
+**V1.0 disk is `card.img`.** `storage/` is the seed — rebuild with
+`make_sd_image.py create`. `LOAD` shows HTML; `RUN` loads the minted `.JSH`.
+Compile errors at card create use HTML line numbers. Missing path → loud
+`?NH` (tracked debt, never done). ESC is machine BREAK to READY — titles
+must not steal it. Do **not** compile `storage/*.HTML` on host `RUN` while
+the board plays the card.
 
-**Temp V1.0 (board, no PC):** the chip has no JS compiler. Compile happens
-when you **make the card** — `make_sd_image.py` mints `NAME.JSH` from that
-HTML so standalone `RUN` works. **V1.5 tries to be standalone**
-(compile-on-RUN on the machine; drop the card `.JSH` if it fits).
+**Temp V1.0 (no on-chip compiler):** compile happens when you **make the
+card** — `make_sd_image.py` mints `NAME.JSH` from that HTML. **V1.5 tries
+to be standalone** (compile-on-RUN on the machine; drop the card `.JSH` if
+it fits).
 
 **Three rooms:** **BRAM** = dual FB + code + heap (do not shrink for a small
 die; ASIC ~30 mm², ~1 MB-class SRAM). **µSD** = disk (`NAME.HTML`; temp

@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>Pac-Man — JMR</title></head>
+<head><meta charset="utf-8"><title>Pac-Man ORIG — JMR</title></head>
 <body style="margin:0;background:#000">
-<!-- Self-contained: drag into Chrome or LOAD "PACMAN.HTML" then RUN. No other files. -->
+<!-- Original recursive BFS ghosts. LOAD "PACORIG.HTML" then RUN. Board freezes. -->
 <!-- Upstream source tree kept in games_pacman/. Chrome: open this file. -->
 <!-- NEW: native 640x480 glass; maze tiles size 14 keep square cells -->
 <canvas id="canvas" width="640" height="480"></canvas>
@@ -13,89 +13,6 @@
 function _copyMap(src){var out=[];for(var j=0;j<src.length;j++){var row=src[j],r=[];for(var i=0;i<row.length;i++){r.push(row[i]);}out.push(r);}return out;}
 function _copyMapOpen(src){var out=[];for(var j=0;j<src.length;j++){var row=src[j],r=[];for(var i=0;i<row.length;i++){r.push(row[i]==2?0:row[i]);}out.push(r);}return out;}
 function _mapHasZero(src){for(var j=0;j<src.length;j++){var row=src[j];for(var i=0;i<row.length;i++){if(row[i]===0)return true;}}return false;}
-// BOARD #84: one-step only (same shape as MRDO creepToward, which runs on
-// silicon). Door/house 2 is walkable. On a 2, prefer smaller y then column
-// 13 (the door) — greedy-toward-player goes down and they never leave.
-// No maze clone, no BFS, no Array.fill/map, no while(qh<qt) flood.
-// Iterative flood still froze HDMI (~15 dots). Original flood is PACORIG.HTML.
-var _gs={x:0,y:0,ok:0,change:0};
-function _ghostOpen(data,x,y){
-    var yl,v;
-    yl=data.length;
-    if(y<0||y>=yl||x<0||x>=data[0].length) return 0;
-    v=data[y][x];
-    return (v<1||v==2)?1:0;
-}
-// mode 0 = chase / eyes home, 1 = flee, 2 = chase + leave-house.
-// while + d=d+1 (not for/d++). ≤16 env slots — extra names become GLOBAL
-// and a for(d++) that does not increment never leaves rAF (#84).
-function _ghostStep(data,sx,sy,ex,ey,dir,mode){
-    var d,nx,ny,dist,bestD,on2,rev,yl;
-    _gs.ok=0; _gs.change=0;
-    yl=data.length;
-    on2 = data[sy]&&data[sy][sx]==2;
-    rev = (dir+2)%4;
-    if(on2&&mode==2){
-        bestD=9999;
-        d=0;
-        while(d<4){
-            nx=sx+(d==0?1:d==2?-1:0);
-            ny=sy+(d==1?1:d==3?-1:0);
-            if(ny<0||ny>=yl||nx<0||nx>=data[0].length){
-                nx=(nx+data[0].length)%data[0].length; ny=(ny+yl)%yl;
-            }
-            if(_ghostOpen(data,nx,ny)){
-                dist = ny*100+(nx>13?nx-13:13-nx);
-                if(dist<bestD){
-                    bestD=dist; _gs.x=nx; _gs.y=ny; _gs.ok=1;
-                    _gs.change=(nx-sx>1||sx-nx>1||ny-sy>1||sy-ny>1)?1:0;
-                }
-            }
-            d=d+1;
-        }
-        return _gs;
-    }
-    if(mode==1) bestD=-1; else bestD=9999;
-    d=0;
-    while(d<4){
-        if(!(dir>=0&&!on2&&d==rev)){
-            nx=sx+(d==0?1:d==2?-1:0);
-            ny=sy+(d==1?1:d==3?-1:0);
-            if(ny<0||ny>=yl||nx<0||nx>=data[0].length){
-                nx=(nx+data[0].length)%data[0].length; ny=(ny+yl)%yl;
-            }
-            if(_ghostOpen(data,nx,ny)){
-                dist=(nx>ex?nx-ex:ex-nx)+(ny>ey?ny-ey:ey-ny);
-                if(mode==1){
-                    if(dist>bestD){
-                        bestD=dist; _gs.x=nx; _gs.y=ny; _gs.ok=1;
-                        _gs.change=(nx-sx>1||sx-nx>1||ny-sy>1||sy-ny>1)?1:0;
-                    }
-                }else if(dist<bestD){
-                    bestD=dist; _gs.x=nx; _gs.y=ny; _gs.ok=1;
-                    _gs.change=(nx-sx>1||sx-nx>1||ny-sy>1||sy-ny>1)?1:0;
-                }
-            }
-        }
-        d=d+1;
-    }
-    if(!_gs.ok){
-        d=0;
-        while(d<4){
-            nx=sx+(d==0?1:d==2?-1:0);
-            ny=sy+(d==1?1:d==3?-1:0);
-            if(ny<0||ny>=yl||nx<0||nx>=data[0].length){
-                nx=(nx+data[0].length)%data[0].length; ny=(ny+yl)%yl;
-            }
-            if(_ghostOpen(data,nx,ny)){
-                _gs.x=nx; _gs.y=ny; _gs.ok=1;
-                _gs.change=(nx-sx>1||sx-nx>1||ny-sy>1||sy-ny>1)?1:0;
-                d=4;
-            }else d=d+1;
-        }
-    }
-    return _gs;
-}
 'use strict';
 /*!
  * Pacman - HTML5 Game
@@ -247,10 +164,87 @@ function Game(id,params){
             offset:Math.sqrt(fx*fx+fy*fy)
         };
     };
-    //寻址算法 — empty. Ghosts call _ghostStep directly. Original BFS is PACORIG.HTML.
-    // A/B: return [] here → board did not freeze. Do not put a maze walk back.
+    //寻址算法 — ORIGINAL recursive BFS (shortest path). Board HDMI freezes.
     Map.prototype.finder = function(params){
-        return [];
+        var defaults = {
+            map:null,
+            start:{},
+            end:{},
+            type:'path'
+        };
+        var options = Object.assign({},defaults,params);
+        if(options.map[options.start.y][options.start.x]||options.map[options.end.y][options.end.x]){ //当起点或终点设置在墙上
+            return [];
+        }
+        var finded = false;
+        var result = [];
+        var y_length  = options.map.length;
+        var x_length = options.map[0].length;
+        var steps = Array(y_length).fill(0).map(()=>Array(x_length).fill(0));     //步骤的映射
+        var _getValue = function(x,y){  //获取地图上的值
+            if(options.map[y]&&typeof options.map[y][x]!='undefined'){
+                return options.map[y][x];
+            }
+            return -1;
+        };
+        var _next = function(to){ //判定是否可走,可走放入列表
+            var value = _getValue(to.x,to.y);
+            if(value<1){
+                if(value==-1){
+                    to.x = (to.x+x_length)%x_length;
+                    to.y = (to.y+y_length)%y_length;
+                    to.change = 1;
+                }
+                if(!steps[to.y][to.x]){
+                    result.push(to);
+                }
+            }
+        };
+        var _render = function(list){//找线路
+            var new_list = [];
+            var next = function(from,to){
+                var value = _getValue(to.x,to.y);
+                if(value<1){	//当前点是否可以走
+                    if(value==-1){
+                        to.x = (to.x+x_length)%x_length;
+                        to.y = (to.y+y_length)%y_length;
+                        to.change = 1;
+                    }
+                    if(to.x==options.end.x&&to.y==options.end.y){
+                        steps[to.y][to.x] = from;
+                        finded = true;
+                    }else if(!steps[to.y][to.x]){
+                        steps[to.y][to.x] = from;
+                        new_list.push(to);
+                    }
+                }
+            };
+            list.forEach(function(current){
+				next(current,{y:current.y+1,x:current.x});
+                next(current,{y:current.y,x:current.x+1});
+                next(current,{y:current.y-1,x:current.x});
+                next(current,{y:current.y,x:current.x-1});
+            });
+            if(!finded&&new_list.length){
+                _render(new_list);
+            }
+        };
+        _render([options.start]);
+        if(finded){
+            var current=options.end;
+            if(options.type=='path'){
+                while(current.x!=options.start.x||current.y!=options.start.y){
+                    result.unshift(current);
+                    current=steps[current.y][current.x];
+                }
+            }else if(options.type=='next'){
+                _next({x:current.x+1,y:current.y});
+                _next({x:current.x,y:current.y+1});
+                _next({x:current.x-1,y:current.y});
+                _next({x:current.x,y:current.y-1});
+            }
+        }
+        return result;
     };
     //布景对象构造器
     var Stage = function(params){
@@ -1015,7 +1009,7 @@ function Game(id,params){
 				context.textAlign = 'center';
 				context.textBaseline = 'middle';
 				context.fillStyle = '#FFF';
-				context.fillText('Pac-Man',this.x,this.y);
+				context.fillText('Pac-Man ORIG',this.x,this.y);
 			}
 		});
 		// 提示
@@ -1295,18 +1289,50 @@ function Game(id,params){
 						if(!this.coord.offset){			//到达坐标中心时计算
 							if(this.status==1){
 								if(!this.timeout){		//定时器
-									_ghostStep(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y,this.orientation,2);
-									if(_gs.ok){ this.vector.x=_gs.x; this.vector.y=_gs.y; this.vector.change=_gs.change; }
+									new_map = _copyMapOpen(map.data);
+									var id = this._id;
+									items.forEach(function(item){
+										if(item._id!=id&&item.status==1){	//NPC将其它所有还处于正常状态的NPC当成一堵墙
+											new_map[item.coord.y][item.coord.x]=1;
+										}
+									});
+									this.path = map.finder({
+										map:new_map,
+										start:this.coord,
+										end:player.coord
+									});
+									if(this.path.length){
+										this.vector = this.path[0];
+									}
 								}
 							}else if(this.status==3){
-								_ghostStep(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y,this.orientation,1);
-								if(_gs.ok){ this.vector.x=_gs.x; this.vector.y=_gs.y; this.vector.change=_gs.change; }
+								new_map = _copyMapOpen(map.data);
+								var id = this._id;
+								items.forEach(function(item){
+									if(item._id!=id){
+										new_map[item.coord.y][item.coord.x]=1;
+									}
+								});
+								this.path = map.finder({
+									map:new_map,
+									start:player.coord,
+									end:this.coord,
+									type:'next'
+								});
+								if(this.path.length){
+									this.vector = this.path[Math.floor(Math.random()*this.path.length)];
+								}
 							}else if(this.status==4){
-								if(this.coord.x==this._params.coord.x&&this.coord.y==this._params.coord.y){
-									this.status = 1;
+								new_map = _copyMapOpen(map.data);
+								this.path = map.finder({
+									map:new_map,
+									start:this.coord,
+									end:this._params.coord
+								});
+								if(this.path.length){
+									this.vector = this.path[0];
 								}else{
-									_ghostStep(map.data,this.coord.x,this.coord.y,this._params.coord.x,this._params.coord.y,this.orientation,0);
-									if(_gs.ok){ this.vector.x=_gs.x; this.vector.y=_gs.y; this.vector.change=_gs.change; }
+									this.status = 1;
 								}
 							}
 							//是否转变方向

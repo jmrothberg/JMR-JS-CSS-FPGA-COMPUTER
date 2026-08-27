@@ -50,16 +50,13 @@ RUN
 | Mortal Kombat (library) | `MK.HTML` | **V2.0 goal** — `MAX_SPR`≥518, ~4.63 MB art → **8 MB ASET bank**, dotted `new mk.…`, `Object.keys`/`for…in`, `Math.round`; Chrome today |
 | MK PVP (library) | `MKPVP.HTML` | **V1.0** MK-shaped — ≤16 atlases, L/R sheets, no `Object.keys` / negative mirror |
 
-**Compile-on-RUN (hard):** source of truth = loaded `.HTML` (editor line
-numbers). Host / GUI / FPGA-SIM **always** recompile into one versioned
-in-memory **ProgramImage**. Do not prefer a stale sidecar when a compiler
-is present.
-
-**Temp V1.0 (untethered BOARD):** the chip has no JS compiler.
-**Compile when you make the card** — `tools/make_sd_image.py` **mints**
-`NAME.JSH` from that HTML. Never copy `.JSH` from `storage/`. **V1.5 tries
-to be standalone** (compile-on-RUN on the machine; drop the card `.JSH` if
-it fits).
+**V1.0 disk is `card.img` (hard):** PYTHON, FPGA-SIM, and BOARD all
+`LOAD`/`RUN` that FAT image. `storage/` is the seed — rebuild the card after
+edits. Compile is at **card create** (`make_sd_image.py` **mints** `NAME.JSH`).
+`LOAD` shows HTML; `RUN` loads that `.JSH`. Do **not** compile `storage/*.HTML`
+on host `RUN` as a second path. Never copy `.JSH` from `storage/`. **V1.5
+tries to be standalone** (compile-on-RUN on the machine; drop the card `.JSH`
+if it fits).
 
 **Asset bank (external SRAM — no `NAME.DAT`):** great graphics stay at full
 quality. `RUN` emits `data:image` art as the **ASET** (asset) section of
@@ -74,7 +71,7 @@ Same-stem `NAME.JS` / `NAME.JSB` are **legacy**, not product twins.
 ```text
 LOAD "INVADERS.HTML"
 RUN
-# PYTHON / FPGA-SIM / BOARD — compile current HTML → ProgramImage → JMR VM
+# PYTHON / FPGA-SIM / BOARD — same card.img; RUN = minted .JSH → JMR VM
 
 LOAD "PACMAN.HTML"
 RUN
@@ -83,11 +80,10 @@ LOAD "DONKEY.HTML"
 RUN
 ```
 
-FPGA-SIM / BOARD with a host still RUN vendored HTML via **compile-on-RUN →
-bytecode into code BRAM** (never stale sidecar, never Invaders hex, never
-dukpy). Untethered BOARD **V1.0** `RUN`s the **card-minted** `.JSH`
-(compile was at card create). `?NH` = temporary debt. Do **not** fake
-FPGA-SIM with `JMR_SIM_HOST=1`.
+PYTHON / FPGA-SIM / BOARD `RUN` vendored HTML via the **card-minted** `.JSH`
+(compile was at card create). Do not host-compile `storage/` on `RUN` while
+the board plays a different image. Never Invaders hex, never dukpy. `?NH` =
+temporary debt. Do **not** fake FPGA-SIM with `JMR_SIM_HOST=1`.
 
 **Constitution mandate:** product is NOT DONE until all three HTML titles
 LOAD + RUN playable on PYTHON **bytecode** → FPGA-SIM RTL → BOARD. HTML
@@ -103,18 +99,22 @@ Chrome-only title “done on the machine.”
 
 | | **1.0 (now)** | **1.5 (planned)** | **2.0 (planned)** |
 |---|---|---|---|
-| **Meaning** | Caps + natives on PYTHON **and** FPGA-SIM. **BOARD:** chip does not compile — **compile when you make the card** (minted `.JSH`) | Console **authoring** (type / paste / edit) **and try to be standalone** (compile-on-RUN on the machine; drop card `.JSH` if it fits) | Machine changes so **`storage/MK.HTML` as embedded today** can `LOAD` + `RUN` |
+| **Meaning** | Caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Chip does not compile — **compile when you make the card** (minted `.JSH`). Console is **view-only** (`LIST` / `DIR` / `LOAD`) | Console **authoring** (type / paste / edit) **only after** compile-on-RUN on the machine (drop card `.JSH` if it fits). Edit verbs are pointless until `RUN` compiles the buffer | Machine changes so **`storage/MK.HTML` as embedded today** can `LOAD` + `RUN` |
 | **Acceptance** | `INVADERS` / `PACMAN` / `DONKEY` | Numbered-line HTML at `>` **and** standalone `RUN` **tried** on the machine (no PC); `SAVE` optional | **`MK.HTML`**. `MKPVP.HTML` stays V1 training wheels |
 | **Sprites / ASET** | **`MAX_SPR` = 16**, 4 MB bank | **Unchanged** (do not grow heap/ASET for this) | **`MAX_SPR` ≥ 518**, **8 MB** bank |
-| **Authoring** | [GAME_DESIGN.md](GAME_DESIGN.md) V1 walls; `LOAD` from card/storage | Same walls; source is the **editor buffer** | Same glass/`LOAD`/`RUN`; drop V1 HTML shims once V2 rows land |
+| **Authoring** | PC + remake `card.img`. `LIST` to learn. Do **not** treat `EDIT` as V1.0 play | Same walls; source is the **editor buffer**; `RUN` compiles it | Same glass/`LOAD`/`RUN`; drop V1 HTML shims once V2 rows land |
 
 Do **not** title-gate (`if (stem == "MK")`).
 
 ### V1.5 — type, paste, compile, edit HTML at READY (no card required)
 
-Not now. Do **not** build until a timing-clean bit is the daily board image
-and HDMI game scanout works. Ladder: PYTHON → FPGA-SIM → BOARD. Not a new
-ISA. Card stays HTML-only on `SAVE`.
+Not now. **V1.0 cannot author on the glass.** No on-chip compiler → `RUN`
+ignores the editor buffer and loads the minted `.JSH`. `LIST` / `DIR` /
+`LOAD` are to **view / learn**. `EDIT` / `SAVE` / `NEW` / numbered replace
+do not make a title until this version’s compile-on-RUN. Do **not** build
+until a timing-clean bit is the daily board image and HDMI game scanout
+works. Ladder: PYTHON → FPGA-SIM → BOARD. Not a new ISA. Card stays
+HTML-only on `SAVE`.
 
 Logged 2026-08-25: BOARD `>` treats a paste or typed `<canvas…>` as a verb
 → `?SN ERROR`. BASIC numbered lines are the glass.
@@ -125,11 +125,11 @@ Logged 2026-08-25: BOARD `>` treats a paste or typed `<canvas…>` as a verb
 |---|---|
 | **Type** HTML | `10 <canvas…>` Enter, `20 <script>` Enter, … then `RUN` |
 | **Paste** HTML | Same path as type. Unnumbered paste auto-numbers by **10**; already-numbered lines keep their numbers |
-| **Compile / run** | **V1.0 BOARD:** `RUN` loads the **card-minted** `.JSH` (compile was at `make_sd_image.py create`). **V1.5 tries** compile-on-RUN of the editor buffer **on the chip**. No extra `COMPILE` verb. Missing image → loud `?NH` |
+| **Compile / run** | **V1.0:** `RUN` loads the **card-minted** `.JSH` from `card.img` (PYTHON / FPGA-SIM / BOARD). Compile was at `make_sd_image.py create`. **V1.5 tries** compile-on-RUN of the editor buffer **on the chip**. No extra `COMPILE` verb. Missing image → loud `?NH` |
 | **Replace a line** | `10 body` + Enter (inserts if 10 is new) |
 | **Delete a line** | `10` + Enter (number only) — **gone**, not blank. PYTHON today blanks; V1.5 deletes |
 | **Insert between** | Numbers go by **10** (`10`, `20`, `30`, …). `15 xyz` lands **between** 10 and 20. Any unused integer is legal (`11`, `25`). `LIST` and `RUN` use **number order** |
-| **Edit** | Keep **`EDIT n`** — it already works (PYTHON and RTL: next typed line replaces that source line). **Also** `10 body` numbered replace at READY. Do **not** add `INSERT` / `DELETE` verbs for V1.5 — insert is an unused number (`15`); delete is `10` + Enter |
+| **Edit** | Keep **`EDIT n`** for V1.5 (next typed line replaces that source line). **Also** `10 body` numbered replace at READY. Do **not** add `INSERT` / `DELETE` verbs — insert is an unused number (`15`); delete is `10` + Enter. V1.0 `EDIT` exists but cannot change `RUN` |
 | **Save** | `SAVE` / `SAVE name` optional. `RUN` must work with **no** µSD |
 | **List** | `LIST` keeps printing those line numbers |
 
@@ -142,9 +142,9 @@ RUN
 SAVE "BOX.HTML"
 ```
 
-`RUN` on PYTHON / GUI compiles **current HTML**. Untethered BOARD **V1.0**
-does not compile — it runs the **minted** card `.JSH` from card-create.
-**V1.5 tries to be standalone:** compile-on-RUN on the machine so typed /
+`RUN` on **V1.0** (PYTHON / FPGA-SIM / BOARD) loads the **minted** card
+`.JSH` from `card.img`. Untethered BOARD does not compile — compile was at
+card-create. **V1.5 tries to be standalone:** compile-on-RUN on the machine so typed /
 pasted / loaded HTML does not need that sidecar. A typed/pasted buffer must
 set `src_is_html` **without FAT**. Missing ProgramImage → loud `?NH`.
 
@@ -175,6 +175,7 @@ Documented from real traces (MKPVP on FPGA-SIM / PYTHON):
 | `Object.keys` (nid 41) is **PYTHON/HM only** | FPGA-SIM `fault=5` `fsite=4183` (unknown `CALL_NATIVE`) — the RTL exec64 arm is deliberately unimplemented | No `for…in` / `Object.keys` in an FPGA-SIM title; literal keys. (Compiler lowers `for…in` to `Object.keys` since 2026-08-21, so the loop *parses* — it still faults on RTL.) |
 | Negative `setTransform` scale | Fighter draws 1px / vanishes (PYTHON `_xf`) | Left + right sheets; no `sx < 0` mirror |
 | Math | Missing native / wrong paint | Only `floor` `abs` `min` `max` `random` `sqrt` |
+| Per-tick maze flood / recursive BFS | Board HDMI **freezes** (one `rAF` never returns). No `ERROR`. PYTHON / FPGA-SIM still look playable. | One-step chase or short **iterative** walk. No `Array(n).fill().map(()=>Array(m))`, no recursive `_render`, no nested `forEach` closures on a tick. PACMAN 2026-08-26. |
 
 Product ISA freeze (three compiles) still defines **Complete** rows above.
 Library V1 titles may use only the **intersection** of Complete rows **and**
@@ -275,7 +276,7 @@ inside it. This product is a **Canvas game computer**, not a browser.
 
 | Layer | What it is | Who owns it on this machine | User analogy |
 |---|---|---|---|
-| **HTML** | Document structure: tags, ids, one `<canvas>`, `<script>` | Tiny DOM stub + compile-on-RUN loader | The *file* you `LOAD` |
+| **HTML** | Document structure: tags, ids, one `<canvas>`, `<script>` | Tiny DOM stub + card `LOAD` (HTML) / `RUN` (`.JSH`) | The *file* you `LOAD` |
 | **JavaScript** | Language: variables, functions, objects, events, timers | **The CPU ISA** (bytecode → VM engines) | BASIC statements |
 | **CSS** | How HTML *elements* look (layout, fonts, page colors) | **Almost none in V1** | Not BASIC `COLOR` — that is Canvas paint |
 | **Canvas** | A **bitmap drawing API** from `canvas.getContext("2d")` | Hardware Canvas / blitter / FB | BASIC `PLOT` / `LINE` / sprites |
@@ -336,7 +337,8 @@ partial — DONKEY's "Enter twice" flow now works).
 `toISOString` (**23** — returns undefined), `globalAlpha` (**33** — writes
 ignored, fades draw opaque), `ctx.font` size parsing (**45**),
 comparator-less `sort()` (no-op). **V1.0:** on-chip compiler is **NOT** —
-compile when you make the card (`.JSH`); PYTHON is host compile-on-RUN.
+compile when you make the card (`.JSH`); PYTHON / FPGA-SIM / BOARD all
+`RUN` that image from `card.img`.
 **V1.5 tries** standalone compile on the machine.
 
 *Had an RTL arm that never actually worked* — found and fixed 2026-08-20, so
@@ -578,7 +580,7 @@ let JS resize HDMI; glass stays 640×480.
 
 From `functional_model/machine.py` HELP and `rtl/engines/jmr_console_engine.sv`.
 Same verbs on PYTHON and FPGA-SIM; do not add RTL-only commands.
-FPGA-SIM debug RPCs (`VMSTAT?`, `SRCLOAD`, …) are host helpers, not console verbs.
+FPGA-SIM debug RPCs (`VMSTAT?`, …) are host helpers, not console verbs.
 
 PYTHON/RTL = the verb exists. That is **not** “known working” on a title.
 Silicon holes and HELP-text mismatch:
@@ -587,32 +589,32 @@ Silicon holes and HELP-text mismatch:
 | Command | Pri | PYTHON | RTL | Notes |
 |---|---|---|---|---|
 | `DIR` | P0 | in | in | Names only (HTML / optional `.JS`) |
-| `LOAD "NAME.HTML"` | P0 | in | in | Quotes optional. `LOAD n` (DIR index) is PYTHON. FPGA-SIM `SRCLOAD` skips FAT. |
-| `RUN` | P0 | in | in | **V1.0:** PYTHON compile-on-RUN; BOARD standalone = card-minted `.JSH`. On-chip compiler **NOT**. Tether may stream. Missing image → `?NH` / `?NB`. **V1.5 tries** compile on the machine. |
+| `LOAD "NAME.HTML"` | P0 | in | in | Quotes optional. `LOAD n` (DIR index) is PYTHON. **V1.0:** FAT on `card.img` for PYTHON / FPGA-SIM / BOARD. |
+| `RUN` | P0 | in | in | **V1.0:** all three rungs load the **card-minted** `.JSH` from `card.img`. On-chip compiler **NOT**. Missing image → `?NH` / `?NB`. **V1.5 tries** compile on the machine. |
 | `LIST` / `LIST n-m` / `LIST -` | P0 | in | in | HTML line numbers. `-- MORE --` is Space/Enter, not a typed verb. |
-| `EDIT n` | P0 | in | in | Next typed line replaces that source line. **Keep** in V1.5 (not a workaround to drop). |
-| `INSERT n` | P0 | in | **NOT** (`?SN`) | Bug **42**. |
-| `DELETE n` | P0 | in | **NOT** (`?SN`) | Bug **43**. Editor-line delete. |
+| `EDIT n` | P0 | in | in | **V1.0 view-only era:** buffer change does not play (`RUN` is minted `.JSH`). **Keep** for V1.5 compile-on-RUN. |
+| `INSERT n` | P0 | in | **NOT** (`?SN`) | **42** — not a V1.0 hole. V1.5: unused number, no `INSERT` verb. |
+| `DELETE n` | P0 | in | **NOT** (`?SN`) | **43** — not a V1.0 hole. V1.5: `10` + Enter. |
 | `REMOVE "NAME"` | P1 | in (file alias of DELETE) | in | File delete on card. Not `DELETE n`. |
-| `SAVE` | P1 | in | in | `SAVE` / `SAVE name` |
-| `NEW` | P1 | in | in | Clears source; RTL also `halt_pulse` |
+| `SAVE` | P1 | in | in | **V1.0:** does not change `RUN` (still `.JSH`). Authoring save is V1.5. |
+| `NEW` | P1 | in | in | Clears source; RTL also `halt_pulse`. Same: not authoring until V1.5. |
 | `CLS` | P1 | in | in | RTL HELP does not print this verb |
 | `HELP` | P1 | in | in | PYTHON lists INSERT/DELETE; RTL prints `DIR LOAD SAVE NEW LIST EDIT RUN` |
 | `MEM` | P1 | in | in | RTL prints `FB 640X480` |
 | `ESC` | P0 | in | in | Machine BREAK; games must not steal Esc |
-| `10 text` (numbered replace) | P1 | in | **NOT** | PYTHON READY. RTL replace is only after `EDIT n`. |
+| `10 text` (numbered replace) | P1 | in | **NOT** | PYTHON READY only. Same as `EDIT`: not product until V1.5 compile-on-RUN. |
 
 ##### Version 1.5 (planned) — type / paste / edit HTML at READY
 
-**V1.0** today: typed HTML at `>` is `?SN ERROR`. Full glass, compile path,
-and LUT/BRAM budget:
+**V1.0:** `LIST` to learn; typed HTML at `>` is `?SN ERROR` on BOARD. Edit
+verbs do not change `RUN`. Full glass, compile path, and LUT/BRAM budget:
 [§ V1.5](#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 
 #### Asset / compile pipeline (not a JS API)
 
 | Item | Pri | Status | Don’t |
 |---|---|---|---|
-| Compile-on-RUN → ephemeral ProgramImage | P0 | Host Complete; **V1.0 BOARD = compile at card create** (minted `.JSH`) | Prefer stale sidecar when a host compiler exists. **V1.5 tries** compile on the machine |
+| Minted `.JSH` ProgramImage from `card.img` | P0 | **V1.0:** PYTHON / FPGA-SIM / BOARD `RUN` this file (compile at card create) | Host-compile `storage/` on `RUN` as a second path. **V1.5 tries** compile on the machine |
 | ASET → external 4 MB SRAM | P0 | Complete | Downscale for code BRAM; `NAME.DAT` |
 | Dual FB 640×480 | P0 | Complete | 160×120 leftover |
 
@@ -863,7 +865,7 @@ behind (last flash 2026-08-13 03:36).
 
 | Feature / API | PYTHON (bytecode VM) | FPGA-SIM (RTL VM) | FPGA board |
 |---|---|---|---|
-| `LOAD` `.HTML` + `RUN` | **required** compile-on-RUN (dukpy = debt) | grow until match (no `?NH`) | **V1.0:** card `.JSH` (compile at create) or tether stream |
+| `LOAD` `.HTML` + `RUN` | **V1.0:** `card.img` HTML + minted `.JSH` (dukpy = debt) | **same** `card.img` (no `?NH`) | **same** `card.img` (or tether debug) |
 | numbers / bool / strings | grow to HTML needs | grow | grow |
 | `let` / arithmetic / `if` / loops | grow | grow | grow |
 | arrays / objects / `this` / classes / functions | **required for HTML titles** | **required** (gap until done) | same |
@@ -873,7 +875,7 @@ behind (last flash 2026-08-13 03:36).
 | `drawImage` / `Image` PNG | as titles need | as titles need | same |
 | keydown/keyup (HTML decides bindings) | KEYBITS / host | `joy_in` / PS/2 | tether until J15 fixed |
 | heap / GC / objects in **JMR** VM | required (not dukpy) | required | required |
-| ProgramImage into VM / BRAM | **compile-on-RUN** → ephemeral bytes | **yes** (same bytes) | **V1.0:** load minted `.JSH` or tether bytes |
+| ProgramImage into VM / BRAM | **V1.0:** load minted `.JSH` from `card.img` | **same bytes** | **same** (or tether debug) |
 | external SRAM asset bank (ASET) | **required** — full-res art via FM SRAM model | **same** (stream ASET → SRAM port; blit from SRAM) | same after matching flash |
 | standalone keyboard | GUI / host | Verilator PS/2 OK | **dead J15** — PROG tether |
 
@@ -1095,17 +1097,17 @@ compat row Complete from Chrome or from a fat RTL snippet.
 | `storage/MRDO.HTML` | Library title (Mr. Do! arcade). Portrait 384×480 letterbox; [GAME_DESIGN.md](GAME_DESIGN.md) |
 | `storage/MK.HTML` | **V2.0 goal** — **518** sheets, **~4.63 MB** pixels → **8 MB** asset SRAM (ASIC: one chip, simple port), dotted `new mk.…`, `for…in`/`Object.keys`, `Math.round` — [§ Version 1.0, 1.5, and 2.0](#version-10-15-and-20) |
 | `storage/MKPVP.HTML` | **V1.0** library (slim MK 2P). 3 ASET atlases; L/R sheets; no `for-in`/`Object.keys`; no negative mirror |
-| In-memory ProgramImage | Compile-on-RUN code + source map + descriptors + ASET; never a storage name |
+| In-memory ProgramImage | **V1.0:** minted `.JSH` from `card.img` (code + ASET). Not a `storage/` name |
 | `storage/JOYDEMO.HTML` | Library smoke (joystick / arrows on Canvas) |
 | `storage/games_*` | Upstream archive only |
 
 ## Host notes (PYTHON)
 
-- **Product path:** `functional_model/` **bytecode VM** — **compile-on-RUN**
-  from loaded HTML (ephemeral ProgramImage; full-quality art → ASET section →
-  FM asset-SRAM model). Using dukpy in `js_host.py` is **debt to remove**,
-  not truth. **V1.0 BOARD:** compile when you make the card (minted `.JSH`).
-  **V1.5 tries** compile on the machine.
+- **Product path:** `functional_model/` **bytecode VM** — **V1.0** `LOAD`/`RUN`
+  from project `card.img` (HTML + minted `.JSH`; ASET → FM asset-SRAM model).
+  Using dukpy in `js_host.py` is **debt to remove**, not truth. Do not compile
+  `storage/*.HTML` on `RUN` as a second path. **V1.5 tries** compile on the
+  machine.
 - Use **`.venv`** (Pillow for `drawImage` on the Canvas engine).
 - Playable HTML titles declare `<canvas width="640" height="480">` and **fill**
   that field. READY letterbox is console text only. Do not letterbox a smaller

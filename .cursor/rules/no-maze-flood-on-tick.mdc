@@ -1,0 +1,37 @@
+---
+description: Do not flood a maze on a tick. Chip is full — do not grow ENV_DEPTH/CSTK.
+alwaysApply: true
+---
+
+# No maze flood on a tick (#84)
+
+Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+Copy 1 (copy 2: [docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md) FAST rule 5).
+
+Board VM is **÷8 (~12.5 MHz)**. A recursive BFS + `_copyMapOpen` (31 arrays)
++ `Array(n).fill().map(()=>Array(m))` **every actor every cell** never
+returns from `rAF`. HDMI freezes on the last maze frame with **no ERROR**.
+PYTHON / FPGA-SIM still look playable. Empty `finder` → no freeze.
+
+**Do not grow `ENV_DEPTH` 384 or `CSTK` 128** to “make PACORIG fit.” The
+T200 is out of room; new bits already fail routing. Author the HTML.
+Do **not** add a pathfinding opcode.
+
+**Every-tick chase / flee:** four neighbors of the **existing** map
+(MRDO `creepToward`). Treat house/door **`2` as open**. While on a `2`,
+prefer **smaller y, then column 13** (door) or they never leave the box
+(greedy-toward-player goes down). No maze clone. No `forEach` stamping
+ghosts as walls.
+
+**Rare shortest path** (eaten eyes → spawn only): original `finder` +
+`_copyMapOpen` is OK **once per eye tile**, not for all ghosts every
+cell. `storage/PACMAN.HTML` = chase one-step + eyes original.
+`storage/PACORIG.HTML` = original flood; board freezes. Do not title-gate.
+
+```javascript
+// BAD — every ghost, every cell (PACORIG / board freeze)
+new_map = _copyMapOpen(map.data);
+this.path = map.finder({map:new_map, start:this.coord, end:player.coord});
+// GOOD — one step, door 2 walks up out of the house (PACMAN chase)
+_ghostStep(map.data, this.coord.x, this.coord.y, player.coord.x, player.coord.y, this.orientation, 0, 1);
+```

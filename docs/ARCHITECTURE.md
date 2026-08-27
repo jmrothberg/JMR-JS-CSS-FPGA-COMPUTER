@@ -261,11 +261,11 @@ startup.
 Prefer BRAM for palette, microcode, FIFOs, font, line buffers, bounded stacks,
 **and the V1 working set.** Dual **640×480** FB lives in `jmr_mini_fb.sv`
 BRAM. Also on-chip: code BRAM, JS heap. Game art lives in the **external
-SRAM asset bank** (see below), never in code BRAM. µSD holds `NAME.HTML`.
+SRAM asset bank** (see below), never in code BRAM. µSD / project `card.img`
+holds `NAME.HTML`. PYTHON, FPGA-SIM, and BOARD all play that image.
 **V1.0:** also a minted `NAME.JSH` from **card create** (the chip does not
-compile). **V1.5 tries** compile-on-RUN on the machine. Host `RUN` still
-compiles HTML in memory (not a stale sidecar). There is
-no `NAME.DAT`. Do not fake a 64K map. Do not pack Donkey `data:image` sheets into
+compile; `RUN` loads it). **V1.5 tries** compile-on-RUN on the machine.
+There is no `NAME.DAT`. Do not fake a 64K map. Do not pack Donkey `data:image` sheets into
 code BRAM or downscale them to “fit.”
 
 **ASIC target (updated 2026-08-23): SkyWater 130 nm, same process as the

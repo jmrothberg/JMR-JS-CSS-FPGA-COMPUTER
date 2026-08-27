@@ -36,20 +36,19 @@ def parse_status_kv(line: str) -> dict:
 
 
 def card_catalog(extra: list[str] | None = None) -> list[str]:
-    """HTML/JS titles from storage/ (no compile sidecars)."""
+    """HTML/JS titles from card.img DIR (no compile sidecars)."""
     names: list[str] = []
     seen: set[str] = set()
     for n in extra or []:
         if n and n not in seen:
             seen.add(n)
             names.append(n)
-    if STORAGE_DIR.is_dir():
-        for p in sorted(STORAGE_DIR.iterdir()):
-            if not p.is_file() or p.name.startswith("."):
-                continue
-            if p.suffix.upper() in (".HTML", ".HTM", ".JS") and p.name not in seen:
-                seen.add(p.name)
-                names.append(p.name)
+    from functional_model.storage_engine import StorageEngine
+
+    for n in StorageEngine().catalog():
+        if n not in seen:
+            seen.add(n)
+            names.append(n)
     return names
 
 

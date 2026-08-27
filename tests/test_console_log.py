@@ -48,9 +48,9 @@ def test_dir_and_load_joydemo():
     c = Console(m)
     c.boot()
     names = m.storage.catalog()
-    assert "JOYDEMO.HTML" in names
+    assert any(n.upper().startswith("JOYDEMO") for n in names), names
     out = c.handle_line("DIR")
-    assert any(x == "JOYDEMO.HTML" or x.endswith("JOYDEMO.HTML") for x in out)
+    assert any("JOYDEMO" in x.upper() for x in out), out
     for row in out:
         if "JOYDEMO" in row:
             assert not row[:1].isdigit() or not row[1:2].isspace(), row
@@ -66,7 +66,7 @@ def test_dir_names_only_hides_jsb():
     assert names, names
     assert not any(n.upper().endswith(".JSB") or n.upper().endswith(".JSH") for n in names)
     assert not any(n[:1].isdigit() and (len(n) > 1 and n[1] in " \t") for n in names)
-    assert any("INVADERS.HTML" in n or n == "INVADERS.HTML" for n in names)
+    assert any("INVADERS" in n.upper() for n in names)
 
 
 def test_joy_bits():
@@ -183,7 +183,7 @@ def test_sim_run_wait_honors_break():
 
     sim._rpc = rpc  # type: ignore[method-assign]
     sim._html_loaded_stem = lambda: "X"  # type: ignore[method-assign]
-    sim._compile_on_run_html = lambda: True  # type: ignore[method-assign]
+    sim._load_card_jsh = lambda: True  # type: ignore[method-assign]
     sim._sync_glass = lambda *a, **k: None  # type: ignore[method-assign]
     sim._sync_palette = lambda: None  # type: ignore[method-assign]
     sim._abort_more = lambda: None  # type: ignore[method-assign]
@@ -252,7 +252,7 @@ def test_sim_edit_updates_compile_source():
 
 
 def test_load_wait_ignores_stale_loaded():
-    """FPGA-SIM LOAD of storage HTML uses SRCLOAD (no SPI TICKN)."""
+    """FPGA-SIM LOAD waits for THIS stem on FAT glass, not a leftover LOADED."""
     from runtime.sim_backend import SimBackend
 
     sim = SimBackend()
@@ -260,17 +260,15 @@ def test_load_wait_ignores_stale_loaded():
     sim._use_rtl = True
     sim._loaded_name = "DONKEY.HTML"
     sim._screen = "LOADED INVADERS.HTML (1038 LINES)\nREADY\n> "
-    calls = {"tickn": 0, "srcload": 0}
+    calls = {"tickn": 0, "line": 0}
 
     def rpc(cmd: str) -> str:
-        if str(cmd).startswith("SRCLOAD"):
-            calls["srcload"] += 1
-            sim._screen = "LOADED DONKEY.HTML (1121 LINES)\nREADY\n> "
-            return "OK bytes=1 lines=1121"
         if str(cmd).startswith("LINE"):
+            calls["line"] += 1
             return "OK"
         if str(cmd).startswith("TICKN"):
             calls["tickn"] += 1
+            sim._screen = "LOADED DONKEY.HTM (1121 LINES)\nREADY\n> "
             return "OK"
         if cmd == "SCREEN?":
             return "SCREEN " + sim._screen.replace("\n", "\\n")
@@ -282,14 +280,15 @@ def test_load_wait_ignores_stale_loaded():
 
     sim._rpc = rpc  # type: ignore[method-assign]
     sim._html_loaded_stem = lambda: "DONKEY"  # type: ignore[method-assign]
+    sim._mirror_card_html = lambda stem: None  # type: ignore[method-assign]
     sim._sync_glass = lambda *a, **k: None  # type: ignore[method-assign]
     sim._sync_palette = lambda: None  # type: ignore[method-assign]
     sim._abort_more = lambda: None  # type: ignore[method-assign]
     sim._log.type_line = lambda t: None  # type: ignore[method-assign]
     sim._log.note = lambda t: None  # type: ignore[method-assign]
     sim.type_line('LOAD "DONKEY.HTML"')
-    assert calls["srcload"] == 1, calls
-    assert calls["tickn"] == 0, calls["tickn"]
+    assert calls["line"] == 1, calls
+    assert calls["tickn"] >= 1, calls
     assert "DONKEY" in sim._screen
 
 
@@ -298,7 +297,7 @@ def test_python_sim_dir_load_list_shape():
     m = Machine()
     names = m.execute_line("DIR")
     assert not any(n.upper().endswith((".JSB", ".JSH")) for n in names)
-    assert any("INVADERS.HTML" in n for n in names)
+    assert any("INVADERS" in n.upper() for n in names)
     loaded = m.execute_line('LOAD "INVADERS.HTML"')
     assert loaded and loaded[0].startswith("LOADED") and "LINES" in loaded[0]
     assert "INVADERS" in loaded[0].upper()
@@ -333,15 +332,34 @@ def test_python_sim_dir_load_list_shape():
 
 
 def test_save_after_load_roundtrip_line_count():
-    m = Machine()
-    m.execute_line('LOAD "JOYDEMO.HTML"')
-    n0 = len(m.source_lines)
-    m.execute_line('SAVE "savetest.js"')
-    m.execute_line("NEW")
-    out = m.execute_line('LOAD "savetest.js"')
-    assert out[0].startswith("LOADED"), out
-    assert f"({n0} LINES)" in out[0], out[0]
-    assert len(m.source_lines) == n0
+    import os
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    real = root / "card.img"
+    if not real.is_file():
+        return
+    scratch = Path(tempfile.gettempdir()) / "jmr_save_test_card.img"
+    shutil.copy2(real, scratch)
+    prev = os.environ.get("JMR_CARD_IMG")
+    os.environ["JMR_CARD_IMG"] = str(scratch)
+    try:
+        m = Machine()
+        m.execute_line('LOAD "JOYDEMO.HTML"')
+        n0 = len(m.source_lines)
+        m.execute_line('SAVE "savetest.js"')
+        m.execute_line("NEW")
+        out = m.execute_line('LOAD "savetest.js"')
+        assert out[0].startswith("LOADED"), out
+        assert f"({n0} LINES)" in out[0], out[0]
+        assert len(m.source_lines) == n0
+    finally:
+        if prev is None:
+            os.environ.pop("JMR_CARD_IMG", None)
+        else:
+            os.environ["JMR_CARD_IMG"] = prev
 
 
 def test_edit_cursor_insert_middle():

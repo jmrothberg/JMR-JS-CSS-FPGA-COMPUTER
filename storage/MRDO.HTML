@@ -136,7 +136,6 @@ var startWas = 0;
 
 var hs = localStorage.getItem("MRDO_HI");
 if (hs) hi = hs - 0;
-/* rule 3: fillText takes the number */
 
 function dirtBright() {
   if (frozen) return "#FF3030";
@@ -220,10 +219,8 @@ function py(row, frac) {
 function addScore(n) {
   var before = Math.floor(score / 5000);
   score = score + n;
-  /* rule 3: fillText takes the number */
   if (score > hi) {
     hi = score;
-    /* rule 3: fillText takes the number */
     localStorage.setItem("MRDO_HI", "" + hi);
   }
   if (mode === PLAY && Math.floor(score / 5000) > before) spawnAlpha(extraWalk);
@@ -369,10 +366,8 @@ function buildScene() {
 
 function startGame() {
   score = 0;
-  /* rule 3: fillText takes the number */
   lives = 3;
   scene = 1;
-  /* rule 3: fillText takes the number */
   appleSet = 0;
   throwUses = 0;
   extraLit = [0, 0, 0, 0, 0];
@@ -385,7 +380,6 @@ function startGame() {
 
 function nextScene() {
   scene = scene + 1;
-  /* rule 3: fillText takes the number */
   appleSet = appleSet + 1;
   buildScene();
   mode = PLAY;
@@ -950,364 +944,21 @@ function stepCreeps() {
 }
 
 
-var PAL = ["", "#FF0000", "#FFFFFF", "#000000", "#2040E8", "#FFFF00", "#20E020", "#008800", "#990000", "#FF8800", "#FF6666", "#00E8E8", "#E000C0", "#884400", "#88FF88"];
-
-/* Rule 1: one ASET atlas (16×16 cells). drawImage, not per-pixel fillRect. */
+/* Rule 1: one ASET atlas (16×16 cells). drawImage, not per-pixel fillRect.
+   Blit unconditionally — Image.width is undefined on the V1 chip. */
 var sprAtlas = new Image();
 sprAtlas.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAAQCAYAAAD506FJAAADWElEQVR4nO2Z0ZHbIBCGfzLXQ+7NuJJzZlzEVeBzCSpBLcQVpIjMxFeJ8ZtTxebBhwwYEKuVhTLWP6M5zPGtdm2WBUkhEAHkflaACsfkJOVr+1M7/mfn9ebi8eb4OilvcPR4jc2k/NTynAt/vGBgbyBSvrYvteN/dj5MXlcliSzlw+Tt7BYmsZSPqd2Cmt/Diqg2mgDAaJPku38QUfLL6wYrlTQk5ce0NYSfQ/w1E7Bj3TACd3M2pLxN3tOf717/+sffrp1LYilvk3dFb17/WX1e7fcksZRPqd2Cmi2AhrkItCD9rq++/TJJ/gW4TV6lFIio++v22XGxSSzlY7ZCNrTd5wuHn0P8fQsIAdnvTsq7cn0eooWX8VYEkNoC+l3DNIYHN1AGhmw7Neybd8PbRO1Wb04gUj5lD34SPYyfW/y1JPX5f+bP6rPjbfWekgcA2u3I7qioAU7agK57q/LAWhAaKDRQaLM7w6+bzmALXNOXOcRvz2wx5c5xY/HLM4D6zwBot7vaOBySY3q/S5v8fX342gGUTN7cOCk/pq0h/Jzir6nUxCp9gCvlU0la+iRfyttEXdFbd5bnJK+U75K/b1xuJ5BI9NRO4AW4ViY7OdfntTfgtDrBjkndU8qHtoBbsnDtDeFte2gFlfJzkgKUO8G4b2+kvDm+KreSs1/jCXhbwe3vaXAkgyNxdwBD+VGUe1gY+Z/XUXsLWtuXOcTvvropeY3TZ4PDAfL36K6NIWxY3bgLiGuDy4Z+D4lj6OJzV/0zRwCrWHypxTfV7z0EBG4VMmyXSsrX9mdu8XMVJn9uUXrI/Z2k0ZsL5c7lj5Cb/OwHZ0K5sbPjPxz8a4AIIPc1bPcgMdEPLDuAJFerArfUEgA0qlFuewhvP3N4vbmQWwG51S82nmOHALIVym1z2ZL+OalooWr9j6oJKrzz1ss3Hu+PfifaaLIT2G1zZDlp9anhi/SeITN1BZbKLiBhm8uW9C/yZXcsyau9XWw2cgGRI4BUbvWzVbRGEtj7Wj9c33Lar/bYr/Z37VKFDJevLXe3wNk55MZz7SyaTnc/zCO2oFwbY/gyph+LFk2lnwVHgY/EcSbGfgAq1Q/M/Fy0aNEzKrcIpJI/xrpjU/3LArBo0UyVStox9Q8168+jYIBnlQAAAABJRU5ErkJggg==";
 var FI_DO_R0 = 0, FI_DO_R1 = 1, FI_DO_L0 = 2, FI_DO_L1 = 3, FI_DO_D0 = 4, FI_DO_D1 = 5, FI_DO_U0 = 6, FI_DO_U1 = 7;
 var FI_DINO0 = 8, FI_DINO1 = 9, FI_MUNCH0 = 10, FI_MUNCH1 = 11, FI_ALPHA0 = 12, FI_ALPHA1 = 13, FI_APPLE = 14, FI_CHERRY = 15;
 
-var SPR_DO_R0 = [
-  "0000111100000000",
-  "0001111111000000",
-  "0022222222200000",
-  "0223232232220000",
-  "0222221222220000",
-  "0022222222200000",
-  "0222222222220000",
-  "0022666622000000",
-  "0006666666000000",
-  "0006266266000000",
-  "0006666666000000",
-  "0000660660000000",
-  "0000660660000000",
-  "0000ee0ee0000000",
-  "0000000000000000",
-  "0000000000000000"
-];
-var SPR_DO_R1 = [
-  "0000111100000000",
-  "0001111111000000",
-  "0022222222200000",
-  "0223232232220000",
-  "0222221222220000",
-  "0022222222200000",
-  "0222222222220000",
-  "0022666622000000",
-  "0006666666000000",
-  "0006266266000000",
-  "0006666666000000",
-  "0000066600000000",
-  "0000660066000000",
-  "0000ee00ee000000",
-  "0000000000000000",
-  "0000000000000000"
-];
-var SPR_DO_L0 = [
-  "0000000011110000",
-  "0000001111111000",
-  "0000022222222200",
-  "0000222322323220",
-  "0000222221222220",
-  "0000022222222200",
-  "0000222222222220",
-  "0000002266662200",
-  "0000006666666000",
-  "0000006626626000",
-  "0000006666666000",
-  "0000000660660000",
-  "0000000660660000",
-  "0000000ee0ee0000",
-  "0000000000000000",
-  "0000000000000000"
-];
-var SPR_DO_L1 = [
-  "0000000011110000",
-  "0000001111111000",
-  "0000022222222200",
-  "0000222322323220",
-  "0000222221222220",
-  "0000022222222200",
-  "0000222222222220",
-  "0000002266662200",
-  "0000006666666000",
-  "0000006626626000",
-  "0000006666666000",
-  "0000000066600000",
-  "0000006600660000",
-  "000000ee00ee0000",
-  "0000000000000000",
-  "0000000000000000"
-];
-var SPR_DO_D0 = [
-  "0000111100000000",
-  "0001111111000000",
-  "0022222222200000",
-  "0223232232220000",
-  "0222221222220000",
-  "0022222222200000",
-  "0222222222220000",
-  "0006666666000000",
-  "0006666666000000",
-  "0006266266000000",
-  "0000660660000000",
-  "0000660660000000",
-  "0000ee0ee0000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000"
-];
-var SPR_DO_D1 = [
-  "0000111100000000",
-  "0001111111000000",
-  "0022222222200000",
-  "0223232232220000",
-  "0222221222220000",
-  "0022222222200000",
-  "0222222222220000",
-  "0006666666000000",
-  "0006666666000000",
-  "0006266266000000",
-  "0000066000000000",
-  "0000660060000000",
-  "0000ee00e0000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000"
-];
-var SPR_DO_U0 = [
-  "0000111100000000",
-  "0001111111000000",
-  "0001111111000000",
-  "0022222222200000",
-  "0022222222200000",
-  "0006666666000000",
-  "0006666666000000",
-  "0006666666000000",
-  "0000660660000000",
-  "0000660660000000",
-  "0000ee0ee0000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000"
-];
-var SPR_DO_U1 = [
-  "0000111100000000",
-  "0001111111000000",
-  "0001111111000000",
-  "0022222222200000",
-  "0022222222200000",
-  "0006666666000000",
-  "0006666666000000",
-  "0006666666000000",
-  "0000066000000000",
-  "0000660060000000",
-  "0000ee00e0000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000"
-];
-var SPR_DINO0 = [
-  "0000111100000000",
-  "0001111111000000",
-  "0011222111100000",
-  "0011232111100000",
-  "0011222111100000",
-  "0001111111000000",
-  "0000111110000000",
-  "0000011100000000",
-  "0000444400000000",
-  "0000444400000000",
-  "0000400400000000",
-  "0000e00e00000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000"
-];
-var SPR_DINO1 = [
-  "0000111100000000",
-  "0001111111000000",
-  "0011222111100000",
-  "0011232111100000",
-  "0011222111100000",
-  "0001111111000000",
-  "0000111110000000",
-  "0000011100000000",
-  "0000044000000000",
-  "0000440440000000",
-  "0004000004000000",
-  "000e00000e000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000"
-];
-var SPR_MUNCH0 = [
-  "0000444400000000",
-  "0004444444000000",
-  "0044222244400000",
-  "0044232244400000",
-  "0044222244400000",
-  "0004444444000000",
-  "0000444440000000",
-  "0000044400000000",
-  "0000111100000000",
-  "0000111100000000",
-  "0000100100000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000"
-];
-var SPR_MUNCH1 = [
-  "0000444400000000",
-  "0004444444000000",
-  "0044222244400000",
-  "0044232244400000",
-  "0044222244400000",
-  "0004444444000000",
-  "0000444440000000",
-  "0000044400000000",
-  "0000011000000000",
-  "0000110110000000",
-  "0001000001000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000"
-];
-var SPR_ALPHA0 = [
-  "0000cccc00000000",
-  "000cccccc0000000",
-  "00cc2222cc000000",
-  "00cc2322cc000000",
-  "00ccc22ccc000000",
-  "000cccccc0000000",
-  "0000c22c00000000",
-  "000cc00cc0000000",
-  "0004400440000000",
-  "0004400440000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000"
-];
-var SPR_ALPHA1 = [
-  "0000cccc00000000",
-  "000cccccc0000000",
-  "00cc2222cc000000",
-  "00cc2322cc000000",
-  "00ccc22ccc000000",
-  "000cccccc0000000",
-  "0000c22c00000000",
-  "000cc00cc0000000",
-  "0000444000000000",
-  "0004400440000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000",
-  "0000000000000000"
-];
-var SPR_APPLE = [
-  "0000000000000000",
-  "00000000d0000000",
-  "00000000d7000000",
-  "0000000176000000",
-  "00000a1111110000",
-  "0000aa1111111000",
-  "000aaa1111111100",
-  "000aaa1111111100",
-  "00aaaa1111111110",
-  "0011111111111110",
-  "0011111111199990",
-  "0001111111199900",
-  "0001111111199900",
-  "0000888888888000",
-  "0000088888880000",
-  "0000000888000000"
-];
-var SPR_CHERRY = [
-  "0000000000000000",
-  "0000000660000000",
-  "0000007667000000",
-  "0000000770000000",
-  "0000007007000000",
-  "0000070000700000",
-  "0000700000070000",
-  "0000000000000000",
-  "0000111000111000",
-  "0001211101211100",
-  "0012211112211110",
-  "0011111111111110",
-  "0011111111111110",
-  "0008888808888800",
-  "0000888000888000",
-  "0000000000000000"
-];
-
-function palK(ch) {
-  if (ch === "1") return 1;
-  if (ch === "2") return 2;
-  if (ch === "3") return 3;
-  if (ch === "4") return 4;
-  if (ch === "5") return 5;
-  if (ch === "6") return 6;
-  if (ch === "7") return 7;
-  if (ch === "8") return 8;
-  if (ch === "9") return 9;
-  if (ch === "a") return 10;
-  if (ch === "b") return 11;
-  if (ch === "c") return 12;
-  if (ch === "d") return 13;
-  if (ch === "e") return 14;
-  return 0;
-}
-
 function walkFr() {
   return Math.floor(tick / 8) % 2;
 }
 
-function drawPix(x, y, rows, sc) {
-  var r = 0;
-  while (r < rows.length) {
-    var row = rows[r];
-    var col = 0;
-    while (col < row.length) {
-      var k = palK(row[col]);
-      if (k) {
-        c.fillStyle = PAL[k];
-        c.fillRect(x + col * sc, y + r * sc, sc, sc);
-      }
-      col = col + 1;
-    }
-    r = r + 1;
-  }
-}
-
 function blitSpr(x, y, fi, sc) {
-  if (sprAtlas.width) {
-    c.drawImage(sprAtlas, fi * 16, 0, 16, 16, x, y, 16 * sc, 16 * sc);
-    return;
-  }
-  var rows = SPR_DO_R0;
-  if (fi === FI_DO_R1) rows = SPR_DO_R1;
-  else if (fi === FI_DO_L0) rows = SPR_DO_L0;
-  else if (fi === FI_DO_L1) rows = SPR_DO_L1;
-  else if (fi === FI_DO_D0) rows = SPR_DO_D0;
-  else if (fi === FI_DO_D1) rows = SPR_DO_D1;
-  else if (fi === FI_DO_U0) rows = SPR_DO_U0;
-  else if (fi === FI_DO_U1) rows = SPR_DO_U1;
-  else if (fi === FI_DINO0) rows = SPR_DINO0;
-  else if (fi === FI_DINO1) rows = SPR_DINO1;
-  else if (fi === FI_MUNCH0) rows = SPR_MUNCH0;
-  else if (fi === FI_MUNCH1) rows = SPR_MUNCH1;
-  else if (fi === FI_ALPHA0) rows = SPR_ALPHA0;
-  else if (fi === FI_ALPHA1) rows = SPR_ALPHA1;
-  else if (fi === FI_APPLE) rows = SPR_APPLE;
-  else if (fi === FI_CHERRY) rows = SPR_CHERRY;
-  drawPix(x, y, rows, sc);
+  // Unconditional ASET blit. Do not read sprAtlas.width — undefined on the
+  // chip, and the compiler now refuses that DOM property on Image vars.
+  c.drawImage(sprAtlas, fi * 16, 0, 16, 16, x, y, 16 * sc, 16 * sc);
 }
 
 function isTun(col, row) {

@@ -19,7 +19,7 @@ walls” (copy 1 is `.cursor/rules/no-game-hardwire.mdc` +
 
 | Gen | Meaning | Titles |
 |---|---|---|
-| **1.0 (now)** | Frozen caps + natives on PYTHON **and** FPGA-SIM. **BOARD:** compile when you **make the card** (minted `.JSH`; chip does not compile) | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls (see below). `MKPVP.HTML` is the V1 MK-shaped example. |
+| **1.0 (now)** | Frozen caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Compile when you **make the card** (minted `.JSH`; chip does not compile) | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls (see below). `MKPVP.HTML` is the V1 MK-shaped example. |
 | **1.5 (planned)** | Console **authoring** (type / paste / edit) **and try to be standalone** (compile-on-RUN on the machine; drop card `.JSH` if it fits) | Same V1 titles/walls. Not MK. Glass + LUT/BRAM budget: [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). |
 | **2.0 (compiler front end started)** | Machine changes so **`MK.HTML` as embedded today** runs | Acceptance: `MK.HTML`. Need **`MAX_SPR` ≥ 518**, asset bank **8 MB** (or more; ASIC: one chip, simple port), dotted **`new mk.…`**, **`.call`/`.apply`**, **`Object.keys` on exec64**, **`Math.round`**. Parse gaps (unary `+`, `for…in`, `throw`, `in`) landed 2026-08-21. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20). |
 
@@ -40,9 +40,12 @@ LOAD "NAME.HTML"
 RUN
 ```
 
-- **One title = one file** in `storage/`. No external `.js` / `.css`.
-- Source of truth is the loaded HTML. PYTHON / GUI **`RUN` recompiles it**.
-- **V1.0 BOARD:** the chip does not compile — **compile when you make the
+- **One title = one file** in `storage/` (seed). Rebuild `card.img` after
+  edits. No external `.js` / `.css`.
+- **V1.0 disk is `card.img`:** PYTHON, FPGA-SIM, and BOARD all `LOAD` that
+  HTML from the FAT and **`RUN` the minted `.JSH`**. Compile is at card
+  create, not a host recompile of `storage/` on `RUN`.
+- **V1.0:** the chip does not compile — **compile when you make the
   card** (`make_sd_image.py` mints `.JSH`).
 - Chrome may open the same file for authoring. PYTHON bytecode → FPGA-SIM
   RTL → BOARD is the machine. Dukpy / a host twin is not.
@@ -60,6 +63,8 @@ python3 tools/make_sd_image.py create card.img
 ```
 
 That seeds the FAT image from `storage/` root files (8.3 names on the card).
+PYTHON, FPGA-SIM, and BOARD all play this `card.img` — rebuild it before F9
+if you changed a title.
 
 ---
 
@@ -119,7 +124,7 @@ Vector titles (asteroids-style): stroke polylines on black. Close a polygon
 by `lineTo` back to the first point (`closePath` is not required).
 
 Bitmap titles: `fillRect` and/or `drawImage`. Keep `data:image` at full
-quality; compile-on-RUN puts art in the ASET section, not code BRAM.
+quality; card-create compile puts art in the ASET section, not code BRAM.
 
 Shatter / split / particles are **ordinary JS arrays** of points or objects.
 There is no engine primitive for “break an asteroid.” Caps are VM-wide
@@ -136,8 +141,9 @@ Put `storage/NAME.HTML` in the storage folder (stem ≤ 8 letters so the board
 what is there. There is no title list to edit.
 
 `LOAD` uses the HTML name. The card holds `.HTML` / `.HTM`. **V1.0:**
-`make_sd_image.py create` **mints** `NAME.JSH` from that HTML so the FPGA
-can `RUN` with no PC (compile is at card-build, not on the chip). Never copy
+`make_sd_image.py create` **mints** `NAME.JSH` from that HTML. PYTHON,
+FPGA-SIM, and BOARD all `RUN` that sidecar from `card.img` (compile is at
+card-build, not on the chip, not a host recompile of `storage/`). Never copy
 a stale `.JSH` from `storage/`. **V1.5 tries standalone** compile-on-RUN on
 the machine. The card builder copies **root** `storage/*.HTML`. `storage/games_*`
 is the upstream archive — not DIR, not the card. Same-stem `NAME.JS` /
@@ -163,6 +169,7 @@ not title-gate RTL).
 | **No negative `setTransform` scale** | Mirroring with `setTransform(-1,0,0,1,x,0)` collapses width on PYTHON `_xf` and is unsafe for parity. Ship **left + right** facing sheets (or always draw unmirrored). Positive scale / DONKEY-style world transforms are fine. |
 | **Math natives** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt`. Embed LUTs for angles if needed (ASTEROID pattern). |
 | **Heap / array caps (live silicon)** | Fit pass sized these from real titles. Overflow is **loud** (fault 3). Live numbers: [FPGA_FIT.md](FPGA_FIT.md) (`MAX_OBJ=960`, `ENV_DEPTH=384`, `MAX_ARR_LONG=12`, `ARR_CAP=128`). Do not assume the old 1024/512 headroom. |
+| **No per-tick maze flood** | Recursive BFS + `Array(n).fill().map(()=>Array(m))` every ghost cell **froze the board** (HDMI last frame, no `ERROR`). Empty `finder` → no freeze. One-step on the existing map; door `2` walks **up**. Do **not** grow `ENV_DEPTH`/`CSTK` (chip full). [no-maze-flood-on-tick](../.cursor/rules/no-maze-flood-on-tick.mdc). |
 | **Nested literal tables** | Hundreds of tiny `MAKE_ARRAY`s for frame rects work only while under the array caps. Prefer compact atlases + small meta, or parallel number arrays, if you approach the cap. |
 | **Glass / Esc / one file** | 640×480 fill; Esc = BREAK; no external `.js`. |
 
@@ -320,9 +327,61 @@ neither is released. An optimization that converts per-frame work into a
 permanent allocation can turn a slow title into one that will not start.
 Measure capacity headroom before trading for speed.
 
+**5. Do not flood-fill the maze (or any large grid) on a tick.**
+PACMAN ghosts called a recursive BFS that built a fresh 2-D
+`Array.fill`/`map` grid plus nested closures every cell. The board VM
+runs at **12.5 MHz**; that search never finished inside one
+`requestAnimationFrame`, so HDMI froze on the last frame with **no
+ERROR**. PYTHON and FPGA-SIM still looked playable (not 60 Hz glass).
+Empty `finder` → no freeze, ghosts boxed. Chase with **one-step** on the
+existing map (door cell `2` walks **up** out of the house). Do **not**
+grow `ENV_DEPTH` / `CSTK` — the T200 is full and new bits fail routing.
+Do not add a pathfinding opcode. Rule:
+[no-maze-flood-on-tick.mdc](../.cursor/rules/no-maze-flood-on-tick.mdc).
+`storage/PACMAN.HTML` = one-step chase + original `finder` for **eyes
+home only**. `storage/PACORIG.HTML` = original flood (board freezes).
+
+### Never gate drawing on an `Image` object's properties
+
+```javascript
+if (sprAtlas.width) {                    // WRONG — undefined on the chip
+    c.drawImage(sprAtlas, ...);
+}                                        // silently falls through to your
+                                         // fallback path: game renders WRONG
+```
+
+The chip serves `.width`/`.height` **only as the 640×480 canvas default,
+and only when the receiver is a primitive**
+(`jmr_js_vm_exec64.sv:5361` — *"Not a live object"*). A sprite handle
+created by `Image.src = "data:image/..."` **is** a live object, so reading
+`.width` on it returns `undefined`. The guard fails, your fallback runs,
+and you get a working-but-wrong game with **no error** — MRDO's player
+drew as a white block and its apples and enemies vanished, for exactly
+this.
+
+Chrome and PYTHON both return the real width, so **this only bites on
+silicon** — which makes it expensive to find.
+
+**Rule: blit unconditionally.** The ASET atlas is compiled into the
+ProgramImage and is always present by the time your code runs; there is
+nothing to wait for and nothing to check.
+
+```javascript
+c.drawImage(sprAtlas, fi * 16, 0, 16, 16, x, y, 16 * sc, 16 * sc);
+```
+
+Same for `.complete`, `.naturalWidth`, `.naturalHeight`, and `onload`
+gating — none of them mean on the chip what they mean in a browser.
+`canvas.width` is fine; it is only `Image` receivers that are affected.
+
+The compiler now refuses these at build time (`V1 WALL: <var>.<prop> is
+not readable on the V1.0 chip`), scoped to variables provably assigned
+`new Image()`.
+
 ### Quick self-check for a new title
 
 - Sprites drawn with `drawImage`, not per-pixel loops? *(rule 1)*
+- Any `if (img.width)` / `.complete` / `onload` guard around a draw? *(never — undefined on the chip, renders wrong with no error)*
 - Any full-screen clear or `putImageData` in the frame loop? *(rule 2 — that alone can exceed the budget)*
 - Any `"" + number`, or a `*_STR` variable holding a score/timer/coordinate? *(rule 3 — this overflows the 1024-entry intern table and halts the machine)*
 - Any `[]`, `{}`, `new`, `.map`, `.slice`, `.split` inside the frame loop? *(rule 4 — reduce them; do NOT hoist them to startup)*
@@ -354,7 +413,8 @@ the machine-side fixes for a title shaped like INVADERS.
    `Object.keys`, no negative scale mirror, V1 Math).
 3. Chrome opens it (authoring look only).
 4. `python3 tools/compile_js.py --html storage/NAME.HTML` succeeds (in memory).
-   Card image **mints** a `.JSH` (V1.0 BOARD compile-at-card-create).
+   Card image **mints** a `.JSH` (V1.0 compile-at-card-create).
 5. `python3 tools/make_sd_image.py create card.img` lists the 8.3 name.
-6. PYTHON `LOAD` + `RUN` plays. **FPGA-SIM** then board follow the usual
-   ladder — do not claim silicon from Chrome or from PYTHON alone.
+6. PYTHON `LOAD` + `RUN` from **that `card.img`** plays. **FPGA-SIM** then
+   board use the same image — do not claim silicon from Chrome or from a
+   `storage/`-only PYTHON path.

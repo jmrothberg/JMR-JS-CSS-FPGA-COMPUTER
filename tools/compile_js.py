@@ -186,6 +186,37 @@ def _js_line_to_html(spans, js_line: int) -> int:
     return h0 + n - 1
 
 
+# V1 wall for Image DOM properties (2026-08-26). The chip serves
+# `.width`/`.height` only as the 640/480 CANVAS default, and only when the
+# receiver is a primitive (jmr_js_vm_exec64.sv:5361 "Not a live object").
+# A sprite handle from `Image.src = data:...` IS a live object, so reading
+# `.width` on it returns undefined — the guard `if (img.width)` then takes a
+# silent fallback path and the title renders WRONG rather than failing.
+# Chrome and PYTHON both return the real width, so this only bites on
+# silicon. MRDO.HTML lost its player sprite to exactly this.
+# Scoped to variables provably assigned `new Image()` — `canvas.width` and
+# any other receiver stay legal.
+_IMG_DOM_PROPS = ("width", "height", "complete", "naturalWidth", "naturalHeight")
+
+
+def _lint_image_dom_props(src: str) -> "list[tuple[int,str,str]]":
+    """Return [(js_line, var, prop)] for DOM-property reads on Image vars."""
+    img_vars = set(
+        re.findall(r"(?:var|let|const)?\s*([A-Za-z_$][\w$]*)\s*=\s*new\s+Image\s*\(", src)
+    )
+    if not img_vars:
+        return []
+    hits = []
+    for i, line in enumerate(src.splitlines(), 1):
+        if line.lstrip().startswith(("//", "*", "/*")):
+            continue
+        for v in img_vars:
+            for prop in _IMG_DOM_PROPS:
+                if re.search(r"\b" + re.escape(v) + r"\s*\.\s*" + prop + r"\b", line):
+                    hits.append((i, v, prop))
+    return hits
+
+
 def compile_html_text(html: str):
     """Compile-on-RUN: current HTML <script> → Chunk. CompileError.line is HTML line."""
     from functional_model.compiler import CompileError, compile_source
@@ -207,6 +238,15 @@ def compile_html_text(html: str):
     harvested = _harvest_source_colors(src)
     palette = _build_title_palette(images, harvested)
     sprites = _quantize_sprites(images, palette)
+    for js_line, var, prop in _lint_image_dom_props(src):
+        raise CompileError(
+            f"V1 WALL: {var}.{prop} is not readable on the V1.0 chip — an "
+            f"Image is a live object, so GET_PROP returns undefined (the "
+            f"640/480 canvas default only serves primitives). Guarding a "
+            f"draw on it silently takes the fallback path and renders WRONG. "
+            f"Blit unconditionally; the ASET atlas is always present.",
+            _js_line_to_html(spans, js_line),
+        )
     try:
         chunk = compile_source(src)
     except CompileError as e:

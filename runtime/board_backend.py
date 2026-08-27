@@ -8,6 +8,8 @@ UART — the bitstream speaks that FIFO, and Linux still exposes it as a tty
   S<rowhex>:<64 chars>\\n   — text console (64×16), letterboxed like HDMI
   P<rr>:<160 hex nibbles>\\n — mini-FB row (160×120) scaled ×4 → 640×480
   K\\n                      — PS/2 scancode strobe (J15 keyboard proof)
+  V<st2><fault2><ip4>\\n    — optional VM heartbeat (casestate/fault/ip).
+                            Absent on current bits — ignore; do not require.
 
 Port autodetect: JMR_JS_SERIAL env wins; otherwise FT2232 (pid 0x6010) channel A
 (location ".0") — channel B is JTAG. Optional FT232R on J13 is a fallback only.
@@ -57,6 +59,63 @@ _HINT = "\n".join([
 _ROW_RE = re.compile(r"^S([0-9A-Fa-f]):(.*)$")
 _FB_RE = re.compile(r"^P([0-9A-Fa-f]{2}):([0-9A-Fa-f]*)$")
 
+# Lockstep with sim/sim_main.cpp vm_sname[] / jmr_js_vm.sv st_t (append-only).
+# Unknown index → S_<hex>; never raise. Host-only: RTL V line may not exist yet.
+_VM_SNAME = (
+    "S_IDLE", "S_RD", "S_GOT_MAGIC", "S_GOT_HDR1", "S_GOT_HDR2", "S_LD_CONST",
+    "S_TRAIL", "S_FETCH_WAIT", "S_EXEC", "S_NAT", "S_CLEAR", "S_RECT", "S_CIRCLE",
+    "S_LINE", "S_BLIT", "S_SPR", "S_WAIT_FRAME", "S_DONE", "S_XF_MUL", "S_XF_APPLY",
+    "S_PWALK", "S_PDO", "S_QSEG", "S_QPX", "S_QPY", "S_JOIN", "S_JOIN_FIND",
+    "S_IDXOF", "S_CONCAT", "S_SQRT", "S_DIV", "S_DIV_FIN", "S_MUL", "S_MUL_WR",
+    "S_ALU", "S_ALU_WR", "S_CALL", "S_FOREACH", "S_KEYEV", "S_ENV_LOAD",
+    "S_JSON", "S_JSON_PARSE", "S_REPL", "S_IDXSTR", "S_STRIDX", "S_STRIDX_WR",
+    "S_FONTPX", "S_TXT_LD", "S_TXT_DRAW", "S_STR_WR", "S_IMGD_GET", "S_IMGD_PUT",
+    "S_NAMCPY", "S_ARR_DCOPY",
+    "S_GC_CLEAR", "S_GC_ROOT", "S_GC_POP", "S_GC_OBJ", "S_GC_ARR",
+    "S_V64_CONST_HI", "S_V64_EXEC", "S_V64_DIV", "S_V64_DIV_FIN", "S_V64_MOD",
+    "S_V64_ALLOC", "S_V64_GC_CLEAR", "S_V64_GC_ROOT", "S_V64_GC_POP",
+    "S_V64_GC_OBJ", "S_V64_GC_ARR", "S_V64_GC_SWEEP_OBJ",
+    "S_V64_GC_SWEEP_ARR", "S_V64_GC_FN", "S_V64_GC_ENV",
+    "S_V64_GC_SWEEP_ENV", "S_V64_CLEAR", "S_V64_RECT",
+    "S_V64_WAIT_FRAME", "S_V64_FRAME_RAF", "S_V64_FRAME_TIMER",
+    "S_V64_FOREACH", "S_V64_FRAME_KEY", "S_V64_STRIDX", "S_V64_STRIDX_WR",
+    "S_V64_JSON", "S_V64_JSON_PARSE", "S_V64_CTOR_PAD",
+    "S_HEAP_WAIT", "S_HEAP_CMP", "S_HEAP_WR", "S_HEAP_AWR", "S_HEAP_FILL",
+    "S_V64_METH", "S_V64_FE_ELEM", "S_V64_FE_FILTER", "S_V64_OGETI_NAT",
+    "S_V64_IDXSCAN", "S_V64_CTOR_ENV", "S_V64_CTOR_VARS", "S_REL_ENV",
+    "S_FREE_OBJ", "S_FREE_ARR",
+    "S_V64_BIND", "S_V64_MINMAX", "S_V64_WIN_FILL", "S_ARR_PROMOTE",
+    "S_V64_RECT_LD", "S_HEAP_CLR",
+    "S_V64_SLICE", "S_V64_SORT", "S_FB_SYNC", "S_V64_DISPATCH",
+)
+
+
+def _vm_sname(st: int) -> str:
+    if isinstance(st, int) and 0 <= st < len(_VM_SNAME):
+        return _VM_SNAME[st]
+    try:
+        return f"S_{int(st) & 0xFF:02X}"
+    except (TypeError, ValueError):
+        return "S_??"
+
+
+def _parse_vm_v_line(line: str):
+    """Parse optional `V<st2><fault2><ip4>`. None if missing/torn. Never raises."""
+    if not isinstance(line, str) or not line or (line[0] != "V" and line[0] != "v"):
+        return None
+    body = line[1:].strip()
+    if len(body) < 8:
+        return None
+    hex8 = body[:8]
+    try:
+        int(hex8, 16)
+    except ValueError:
+        return None
+    try:
+        return (int(hex8[0:2], 16), int(hex8[2:4], 16), int(hex8[4:8], 16))
+    except (TypeError, ValueError):
+        return None
+
 
 def _find_serial_port() -> Optional[str]:
     env_port = os.environ.get("JMR_JS_SERIAL", "").strip()
@@ -97,6 +156,12 @@ class BoardBackend(RuntimeBackend):
         self._have_fb = False
         self._ps2_strobes = 0
         self._loaded_name = ""
+        # Optional RTL V-line sample. Stay None until a well-formed V arrives
+        # so today's bitstream (no V) keeps F10 on board_coarse / no VMSTAT.
+        self._vm_st = None
+        self._vm_fault = None
+        self._vm_ip = None
+        self._vm_logged = None  # (st, fault) last NOTE — change-only, no spam
         port = _find_serial_port()
         if port:
             try:
@@ -137,6 +202,23 @@ class BoardBackend(RuntimeBackend):
                 # NEW: USB Host scancode reached RTL (ps2_strobe)
                 self._ps2_strobes += 1
                 self._log.note(f"ps2_strobe n={self._ps2_strobes} code={line[1:] or '??'}")
+                continue
+            # Optional VM heartbeat. Malformed / absent → ignore (old bits).
+            parsed_v = _parse_vm_v_line(line)
+            if parsed_v is not None:
+                st, fault, ip = parsed_v
+                self._vm_st = st
+                self._vm_fault = fault
+                self._vm_ip = ip
+                key = (st, fault)
+                if key != self._vm_logged:
+                    self._vm_logged = key
+                    try:
+                        self._log.note(
+                            f"VM st={_vm_sname(st)} fault={fault} ip={ip:04X}"
+                        )
+                    except Exception:
+                        pass
                 continue
             m = _ROW_RE.match(line)
             if m:
@@ -333,15 +415,31 @@ class BoardBackend(RuntimeBackend):
                 pass
 
     def arch_snapshot(self) -> dict:
-        """BOARD coarse tether snapshot — no µop stream."""
+        """BOARD tether snapshot — coarse until an optional V line arrives."""
         running = bool(self._have_fb)
-        return {
+        try:
+            glass = self.screen_text()[-800:]
+        except Exception:
+            glass = ""
+        try:
+            catalog = card_catalog()
+        except Exception:
+            catalog = []
+        snap = {
             "running": running,
             "sname": "RUN" if running else "IDLE",
             "hdmi_mode": "game" if running else "letterbox",
-            "glass": self.screen_text()[-800:],
+            "glass": glass,
             "board_coarse": True,
             "tether": self._ser is not None,
-            "catalog": card_catalog(),
+            "catalog": catalog,
             "more": False,
         }
+        # V line present (new bit): F10 gets real sname/ip/fault. No V: leave
+        # board_coarse so the monitor still says "no VMSTAT" instead of zeros.
+        if self._vm_st is not None:
+            snap["sname"] = _vm_sname(self._vm_st)
+            snap["ip"] = self._vm_ip
+            snap["fault"] = self._vm_fault
+            snap["board_coarse"] = False
+        return snap

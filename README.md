@@ -15,16 +15,19 @@ LOAD "NAME.HTML"
 RUN
 ```
 
-`RUN` **always compiles** the loaded HTML into an in-memory **ProgramImage**
-(bytecode + **ASET** art section) and feeds the **JMR VM** (virtual machine —
-the bytecode engine). Full-quality graphics stream into the **external 4 MB
-SRAM asset bank** (Static Random-Access Memory; ISSI IS61WV204816 contract).
-On the FPGA board, **DDR3** (board DRAM) sits *behind* that same simple SRAM
-port. There is no `NAME.DAT` file. Chrome may open the same `.HTML` for
-authoring; **PYTHON / FPGA-SIM / BOARD** must run the JMR VM. Version 1.0 does
-**not** ship a general CSS browser — games draw on **Canvas**. **BRAM** (Block
-RAM, on-chip) is working RAM; **µSD** (microSD card) is disk; external SRAM is
-the art bank.
+**V1.0 disk is `card.img`.** PYTHON, FPGA-SIM, and BOARD all `LOAD`/`RUN`
+from that same FAT image (board = `card.img` burned to µSD). `storage/` is
+the **seed** only — rebuild with `make_sd_image.py create card.img`. That
+step **compiles** each HTML into a minted **`.JSH`** (ProgramImage:
+bytecode + **ASET** art). `LOAD` still shows HTML; `RUN` feeds the **JMR
+VM** from that `.JSH` (the chip does not compile). Full-quality graphics
+stream into the **external 4 MB SRAM asset bank** (Static Random-Access
+Memory; ISSI IS61WV204816 contract). On the FPGA board, **DDR3** (board
+DRAM) sits *behind* that same simple SRAM port. There is no `NAME.DAT`
+file. Chrome may open the same `.HTML` for authoring; **PYTHON / FPGA-SIM /
+BOARD** must run the JMR VM. Version 1.0 does **not** ship a general CSS
+browser — games draw on **Canvas**. **BRAM** (Block RAM, on-chip) is working
+RAM; **µSD** (microSD card) is disk; external SRAM is the art bank.
 
 **Sibling already works:** `JMR-BASIC-FPGA-COMPUTER` on Nexys **A7-100T**
 (**T100**) is a working NLISC-BASIC FPGA (VGA + USB keyboard + console). This
@@ -68,6 +71,97 @@ compile when you make the card** (`.JSH`). **V1.5** tries standalone compile.
 | If a game looks slow *on the real board* / 30 fps plan | [docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md) |
 | Debug doctrine (recurring bug classes) | [docs/potential bugs.md](docs/potential%20bugs.md) |
 
+```
+$ python3 run_jmr_js.py
+JMR JS-NATIVE-CPU V1.0
+READY
+> console.log("HELLO")
+HELLO
+READY
+>
+```
+
+### Top commands (use these a lot)
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+# 1. host env (once)
+
+python3 run_jmr_js.py
+# 2. terminal glass — PYTHON functional model
+
+python3 gui_jmr_js.py
+# 3. GUI — one 640×480 glass (text+games); F9 runtimes; F10 Architecture Monitor
+#    Window size is locked at startup (status text must not grow the alleys).
+#    Prefers .venv. V1.0 HTML RUN = minted .JSH from card.img (not dukpy).
+#    F9 BOARD: PC keyboard = tether (J15 dead). F10 hides the monitor (faster).
+
+make -C sim sim_server_synth
+# 4. FAST FPGA-SIM rebuild from repo root (same rtl/*.sv as the chip).
+#    Incremental: only runs Verilator if rtl/ or sim/sim_main.cpp is newer
+#    than sim/sim_build_synth/jmr_js_sim_server. If Make prints OK and skips
+#    Verilator, the binary is already current.
+#    Force without wiping obj_dir:
+#      make -C sim sim_server_synth -B
+#    Do not `make -C sim clean`. Then restart the GUI and F9 FPGA-SIM.
+#    Never fake with host twin. Opt-in debug only: JMR_SIM_HOST=1
+
+.venv/bin/python tools/check_runtime_parity.py
+# 5. PYTHON ↔ FPGA-SIM RTL glass smoke (bytecode path; no dukpy cheat)
+
+python3 tools/make_sd_image.py create card.img
+# 6a. make only — rebuild FAT32 card.img from storage/
+#     V1.0: this step COMPILES each HTML into NAME.JSH on the card
+#     (the chip does not compile). PYTHON, FPGA-SIM, and BOARD all
+#     LOAD/RUN this image. Edit storage/ → rebuild here before F9.
+
+sudo python3 tools/make_sd_image.py burn /dev/sdX
+# 6b. make AND burn — rebuild card.img from storage/, then raw-write µSD
+#     lsblk first; whole disk (sdb / mmcblk0), not a partition (sdb1)
+
+sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
+# 6c. burn only — write the existing card.img as-is (skip rebuild)
+
+source scripts/vivado_env.sh && make -C tools/board_flow bit
+# 7. NEXT bitstream (as of 2026-08-22): ordinary `bit`. The one required
+#    bit-fresh (exec32 file deleted + incremental stitch had duplicated
+#    the framebuffer) was DONE 2026-08-21 and the 08-21 23:50 run already
+#    reused that project. The 08-22 Phase 3b hand-delete changed file
+#    *contents*, not the file *list*, so it does NOT need another one.
+#    Use bit-fresh (not `make clean`) only when the source file *list*,
+#    MIG, or XDC changes -- never to recover a mid-run crash.
+#    Synth 2 threads / impl 8. Tracker: build/nexys_video/synth_rss.log
+#    Do not close this terminal or an agent job — that SIGTERMs Vivado
+#    (no .dcp until synth_1 is 100%). Writes both
+#    build/nexys_video/jmr_nexys_video.bit (JTAG) and .bin (QSPI).
+#    After WNS ≥ 0 → step 8. Last flashed 2026-08-13 03:36 (WNS +0.139).
+
+make -C tools/board_flow flash
+# 8. put the new bitstream ON the Nexys Video (PROG USB J12 plugged in).
+#    SRAM / JTAG — HDMI live in seconds, GONE when you unplug. Uses the
+#    existing .bit. If Make starts Vivado, stop it — rtl/ is newer than
+#    the file you already built; load that file instead:
+#      openFPGALoader -b nexysVideo build/nexys_video/jmr_nexys_video.bit
+#    Survives power-cycle (QSPI, minutes; JP4 = QSPI):
+#      make -C tools/board_flow flash-qspi
+#    or: openFPGALoader -b nexysVideo -f build/nexys_video/jmr_nexys_video.bin
+#    After flash-qspi the monitor goes blank and BUSY blinks (flash-helper,
+#    not a fault). Press PROG or power-cycle; DONE lights. Live AND
+#    persistent: flash-qspi first, then flash last.
+```
+
+Day-one: **1 → 2 → 3 → 4 → 5**. FPGA-SIM is **real RTL** after step 4 — do not
+treat `host_sim_server.py` as FPGA-SIM unless you set `JMR_SIM_HOST=1` on purpose.
+Do not jump to Vivado before PYTHON + FPGA-SIM agree on user-visible behaviour.
+Gate: `python3 tools/check_runtime_parity.py` must print **BATTERY PASS**.
+Step **6b** is a new card (make + burn); **6c** burns an image you already
+made. Step **7** is Vivado (hours, **your** terminal). Step **8** puts the
+`.bit` / `.bin` on the board. Flash only after WNS ≥ 0 — never a substitute
+for fixing FPGA-SIM. If that bit **misses** 100 MHz on the JS
+core, the hedge is a 50 MHz `core_clk` with DDR3 still on MIG `ui_clk`
+(100 MHz) — not a slower DRAM. Future plan:
+[docs/FPGA_FIT.md — If timing fails](docs/FPGA_FIT.md#if-timing-fails-wns--0--slow-the-js-core-not-ddr3).
+
 ---
 
 ## Two copies of every critical “do not”
@@ -81,7 +175,7 @@ always-on Cursor rule (agents) and one teaching/human page. Other documents
 |---|---|---|
 | FPGA-SIM **is** the chip. Legal on-chip RAM (**Port A**). Never `mem[i] <=` in the big VM state machine | `.cursor/rules/never-fake-fpga-sim.mdc` | [docs/FPGA_FIT.md](docs/FPGA_FIT.md) **NEVER** table |
 | One JavaScript heap; keep **generation** checks | `.cursor/rules/one-heap-keep-gen.mdc` | [docs/potential bugs.md](docs/potential%20bugs.md) Recurring class 1 |
-| No dukpy / V8 / browser / soft CPU as the machine; `RUN` compiles HTML | `.cursor/rules/no-dukpy-cheat-native-cpu.mdc` | [CONSTITUTION.md](CONSTITUTION.md) Vendored-titles mandate |
+| No dukpy / V8 / browser / soft CPU as the machine; V1.0 `RUN` is minted `.JSH` from `card.img` | `.cursor/rules/no-dukpy-cheat-native-cpu.mdc` | [CONSTITUTION.md](CONSTITUTION.md) Vendored-titles mandate |
 | PYTHON → FPGA-SIM → your F9 → board. Agent does not run Vivado | `.cursor/rules/python-first-parity.mdc` | [Method](#method-steal-from-the-basic-sibling--not-the-product) (this page) |
 | Do not hardwire `INVADERS` / `PACMAN` / `DONKEY` into the chip | `.cursor/rules/no-game-hardwire.mdc` | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) |
 | Version 1.0 authoring walls; V1.5 console HTML; `MK.HTML` is Version 2.0 | `.cursor/rules/html-game-v1.mdc` | [docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md) § Version 1.0, 1.5, and 2.0 |
@@ -133,7 +227,7 @@ mention.
 | **ProgramImage** | — | Compiled program in memory after `RUN` (code + ASET art). Not a file you type |
 | **ASET** | asset section | Palette + sprite pixels inside the ProgramImage; streamed to the 4 MB SRAM bank |
 | **JSB** | — | On-the-wire encoding of a ProgramImage (`JSB1` magic) |
-| **JSH** | — | **V1.0:** ProgramImage minted when you **make the card** so the FPGA can `RUN` standalone (chip does not compile). Not copied from `storage/`. **V1.5 tries** compile-on-RUN on the machine |
+| **JSH** | — | **V1.0:** ProgramImage minted when you **make the card**. PYTHON, FPGA-SIM, and BOARD all `RUN` this file from `card.img` (chip does not compile). Not copied from `storage/`. **V1.5 tries** compile-on-RUN on the machine |
 | **HTML** | HyperText Markup Language | Disk format of a title: `NAME.HTML` |
 | **JS** | JavaScript | The language / ISA. `NAME.JS` demos are **not** product twins of `NAME.HTML` |
 | **CSS** | Cascading Style Sheets | Page layout. Version 1.0 has almost none — paint on Canvas |
@@ -164,7 +258,7 @@ mention.
 | **Pmod** | Peripheral module | Digilent add-on jacks (joystick on **JB**, optional PS/2 keyboard on **JA**) |
 | **T200** | — | Lab name for this Nexys Video (Artix-7 200T) |
 | **T100** | — | Lab name for the BASIC sibling’s Nexys A7-100T |
-| **V1.0 / V1.5 / V2.0** | product generations | **V1.0** = titles that play; BOARD compile = **when you make the card** (`.JSH`). **V1.5** tries standalone compile + type/paste/edit at READY. V2 = **`MK.HTML` as on disk today** can `LOAD`/`RUN` |
+| **V1.0 / V1.5 / V2.0** | product generations | **V1.0** = titles that play; **one disk** = `card.img` for PYTHON / FPGA-SIM / BOARD; compile = **when you make the card** (`.JSH`). **V1.5** tries standalone compile + type/paste/edit at READY. V2 = **`MK.HTML` as on disk today** can `LOAD`/`RUN` |
 | **`?NH`** | no HTML | Loud debt if a title path is missing. Never “done” |
 | **clock** | chip heartbeat | The FPGA steps once per clock. This board’s JS core is ≈ **100 million** clocks per second (100 MHz) |
 | **frame** | one picture | One full 640×480 image. Games aim for **60 pictures per second** (about 16.7 milliseconds each) |
@@ -179,103 +273,20 @@ when we fit the chip. **One** source of truth:
 [docs/FPGA_FIT.md](docs/FPGA_FIT.md) paper budget. Do not copy stale 1024/512
 caps from older paragraphs.
 
----
-
-```
-$ python3 run_jmr_js.py
-JMR JS-NATIVE-CPU V1.0
-READY
-> console.log("HELLO")
-HELLO
-READY
->
-```
-
-### Top commands (use these a lot)
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
-# 1. host env (once)
-
-python3 run_jmr_js.py
-# 2. terminal glass — PYTHON functional model
-
-python3 gui_jmr_js.py
-# 3. GUI — one 640×480 glass (text+games); F9 runtimes; F10 Architecture Monitor
-#    Window size is locked at startup (status text must not grow the alleys).
-#    Prefers .venv. HTML RUN = compile-on-RUN bytecode (not dukpy).
-#    F9 BOARD: PC keyboard = tether (J15 dead). F10 hides the monitor (faster).
-
-make -C sim sim_server_synth
-# 4. FAST FPGA-SIM rebuild from repo root (same rtl/*.sv as the chip).
-#    Incremental: only runs Verilator if rtl/ or sim/sim_main.cpp is newer
-#    than sim/sim_build_synth/jmr_js_sim_server. If Make prints OK and skips
-#    Verilator, the binary is already current.
-#    Force without wiping obj_dir:
-#      make -C sim sim_server_synth -B
-#    Do not `make -C sim clean`. Then restart the GUI and F9 FPGA-SIM.
-#    Never fake with host twin. Opt-in debug only: JMR_SIM_HOST=1
-
-.venv/bin/python tools/check_runtime_parity.py
-# 5. PYTHON ↔ FPGA-SIM RTL glass smoke (bytecode path; no dukpy cheat)
-
-python3 tools/make_sd_image.py create card.img
-# 6a. rebuild FAT32 card.img from storage/
-#     V1.0: this step COMPILES each HTML into NAME.JSH on the card
-#     (the FPGA does not compile). Then burn (6b) so standalone RUN works.
-
-sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
-# 6b. write card.img → physical µSD (lsblk; whole disk not partition)
-
-source scripts/vivado_env.sh && make -C tools/board_flow bit
-# 7. NEXT bitstream (as of 2026-08-22): ordinary `bit`. The one required
-#    bit-fresh (exec32 file deleted + incremental stitch had duplicated
-#    the framebuffer) was DONE 2026-08-21 and the 08-21 23:50 run already
-#    reused that project. The 08-22 Phase 3b hand-delete changed file
-#    *contents*, not the file *list*, so it does NOT need another one.
-#    Use bit-fresh (not `make clean`) only when the source file *list*,
-#    MIG, or XDC changes -- never to recover a mid-run crash.
-#    Synth 2 threads / impl 8. Tracker: build/nexys_video/synth_rss.log
-#    Do not close this terminal or an agent job — that SIGTERMs Vivado
-#    (no .dcp until synth_1 is 100%). Writes both
-#    build/nexys_video/jmr_nexys_video.bit (JTAG) and .bin (QSPI).
-#    After WNS ≥ 0 → step 8. Last flashed 2026-08-13 03:36 (WNS +0.139).
-
-make -C tools/board_flow flash
-# 8. put the new bitstream ON the Nexys Video (PROG USB J12 plugged in).
-#    SRAM / JTAG — HDMI live in seconds, GONE when you unplug. Uses the
-#    existing .bit. If Make starts Vivado, stop it — rtl/ is newer than
-#    the file you already built; load that file instead:
-#      openFPGALoader -b nexysVideo build/nexys_video/jmr_nexys_video.bit
-#    Survives power-cycle (QSPI, minutes; JP4 = QSPI):
-#      make -C tools/board_flow flash-qspi
-#    or: openFPGALoader -b nexysVideo -f build/nexys_video/jmr_nexys_video.bin
-#    After flash-qspi the monitor goes blank and BUSY blinks (flash-helper,
-#    not a fault). Press PROG or power-cycle; DONE lights. Live AND
-#    persistent: flash-qspi first, then flash last.
-```
-
-Day-one: **1 → 2 → 3 → 4 → 5**. FPGA-SIM is **real RTL** after step 4 — do not
-treat `host_sim_server.py` as FPGA-SIM unless you set `JMR_SIM_HOST=1` on purpose.
-Do not jump to Vivado before PYTHON + FPGA-SIM agree on user-visible behaviour.
-Gate: `python3 tools/check_runtime_parity.py` must print **BATTERY PASS**.
-Step **7** is Vivado (hours, **your** terminal). Step **8** puts the `.bit` /
-`.bin` on the board. Flash only after WNS ≥ 0 — never a substitute for
-fixing FPGA-SIM. If that bit **misses** 100 MHz on the JS
-core, the hedge is a 50 MHz `core_clk` with DDR3 still on MIG `ui_clk`
-(100 MHz) — not a slower DRAM. Future plan:
-[docs/FPGA_FIT.md — If timing fails](docs/FPGA_FIT.md#if-timing-fails-wns--0--slow-the-js-core-not-ddr3).
-
-**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID / AURORA / MRDO / MKPVP / JOYDEMO) then `RUN`.
+**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID / AURORA / MRDO / MKPVP / JOYDEMO / PACORIG) then `RUN`.
 **V1.0** library titles must stay inside the authoring walls in
-[docs/GAME_DESIGN.md](docs/GAME_DESIGN.md). **V1.5 (planned)** tries to be
+[docs/GAME_DESIGN.md](docs/GAME_DESIGN.md). On the machine, **V1.0 `LIST`
+is view / learn** — no on-chip compiler, so `EDIT` cannot change `RUN`
+(that still loads the minted `.JSH`). **V1.5 (planned)** tries to be
 **standalone**: type / paste / edit numbered HTML at READY **and**
-compile-on-RUN on the machine (V1.0 BOARD compiles when you make the card) —
+compile-on-RUN on the machine (V1.0 compiles when you make the card;
+PYTHON / FPGA-SIM / BOARD all `RUN` that `card.img`) —
 [docs/JMR_JS_COMPATIBILITY.md § V1.5](docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 **`MK.HTML` is the V2.0 goal**
 (not FPGA-SIM acceptance yet) — [docs/JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](docs/JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
-Titles are HTML. **V1.0 BOARD:** compile when you **make the card** (`.JSH`).
-Host **`RUN` = compile-on-RUN**. Same-stem `.JS` demos are not the product.
+Titles are HTML. **V1.0:** compile when you **make the card** (`.JSH`);
+PYTHON, FPGA-SIM, and BOARD all `RUN` that image from `card.img`.
+Same-stem `.JS` demos are not the product.
 Ctrl-V pastes into the prompt.
 
 **[CONSTITUTION.md](CONSTITUTION.md) is the specification.** If the code and
@@ -329,8 +340,9 @@ This is **copy 2** of the PYTHON → FPGA-SIM → board law (copy 1 is
 build a **language-native GPU** or **update BASIC** (steal method, not
 tokens/pins). Python is the fast ruler (same **results**, not the same
 wall-clock as the chip). Register-transfer level hardware must execute the
-same serialized program. Lockstep before titles. `RUN` compiles loaded
-source. User F9 before `.bit`. Spec write-up:
+same serialized program. Lockstep before titles. **V1.0:** PYTHON,
+FPGA-SIM, and BOARD `LOAD`/`RUN` the same `card.img` (minted `.JSH` on
+`RUN`). User F9 before `.bit`. Spec write-up:
 [CONSTITUTION.md](CONSTITUTION.md#nlisc-method-js-basic-or-a-later-native-gpu).
 
 - Constitution first.
@@ -357,7 +369,8 @@ tokens, microcode, or Nexys A7-100T pinouts here. Board freeze:
 | `third_party/digilent_rgb2dvi/` | Digilent HDMI TMDS IP (do not rewrite) |
 | `sim/` | Verilator + cocotb |
 | `constraints/` | Nexys Video XDC (StarLite later; not A7-100T) |
-| `storage/` | Seeds: `NAME.HTML` titles. **V1.0:** card builder copies HTML **and mints `.JSH`** (compile at card create) |
+| `storage/` | Seed only: `NAME.HTML` titles. Rebuild `card.img` after edits |
+| `card.img` | **V1.0 disk** for PYTHON / FPGA-SIM / BOARD. FAT HTML + minted `.JSH` |
 | `docs/` | Architecture, bring-up, fit, handoff |
 | `tools/` | compile, SD image, battery, `golden_frames.py`. `pmod_input_test/` + `hid_led_blink/` = **LED-only** board proofs — not FPGA-SIM ([RTL_REORG.md](docs/RTL_REORG.md#board-led-input-tests--never-fpga-sim)) |
 | `traces/` | Flight logs — read first when debugging. `traces/goldens/` = frame diffs |

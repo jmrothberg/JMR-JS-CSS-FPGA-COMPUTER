@@ -8,10 +8,10 @@ Block diagram: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 On the BASIC sibling, every keyword **is** one instruction (`PRINT` = `0x81`).  
 Here JavaScript **source** is compiled into a smaller numbered
-**instruction set architecture** (ISA). **PYTHON / GUI:** that compile is
-on `RUN`. **V1.0 BOARD:** compile when you **make the card** (`NAME.JSH`);
-the chip fetches bytecode, it does not compile. **V1.5 tries** compile-on-RUN
-on the machine. Same idea: the language **is** the processor.
+**instruction set architecture** (ISA). **V1.0:** compile when you **make
+the card** (`NAME.JSH` on `card.img`); PYTHON / FPGA-SIM / BOARD all `RUN`
+that image. The chip fetches bytecode, it does not compile. **V1.5 tries**
+compile-on-RUN on the machine. Same idea: the language **is** the processor.
 
 ---
 
@@ -33,17 +33,16 @@ on the machine. Same idea: the language **is** the processor.
 
 ## What happens when you type RUN
 
-**PYTHON / GUI (host compiler):**
+**V1.0 (PYTHON / FPGA-SIM / BOARD — same `card.img`):**
 
 ```
-NAME.HTML  (JavaScript you wrote)
-    →  compiler  (functional_model/compiler.py)
-    →  34 instructions + native ids
-    →  processor  (functional model first, then the same numbers on the chip)
+storage/NAME.HTML  (seed — author here)
+    →  make_sd_image.py create card.img   (compiler mints NAME.JSH)
+    →  LOAD "NAME.HTML"   (FAT HTML for LIST)
+    →  RUN                (minted NAME.JSH → JMR VM)
 ```
 
-**V1.0 standalone BOARD:** the chip has no compiler. `make_sd_image.py create`
-already compiled that HTML into `NAME.JSH` on the card; `RUN` loads it.
+The chip has no compiler. Rebuild `card.img` after you edit `storage/`.
 
 **V1.5 (planned)** tries to compile on the machine so a desk needs no PC and
 no `.JSH`.
@@ -327,12 +326,17 @@ Version 1.0 games: `INVADERS.HTML` `PACMAN.HTML` `DONKEY.HTML` (and the other pl
 
 Typed at the `>` prompt, same idea as BASIC `LOAD` / `RUN`:
 
-`DIR` `LOAD "NAME.HTML"` `RUN` `LIST` `EDIT` `SAVE` `NEW` `CLS` `HELP` `MEM` `REMOVE`  
+**V1.0 (now):** `DIR` `LOAD "NAME.HTML"` `LIST` `RUN` `CLS` `HELP` `MEM` `REMOVE`  
 `ESC` is machine BREAK (games must not steal it).
 
-`INSERT` / `DELETE` (editor line) exist in the Python functional model; the chip says `?SN` today. **`EDIT n` stays** (works on PYTHON and RTL).
+`LIST` is to **view / learn**. The chip has **no compiler**. `RUN` loads the
+card-minted `.JSH`. `EDIT` / `SAVE` / `NEW` / numbered replace / `INSERT` /
+`DELETE` can exist in the model, but they **cannot change what plays** until
+**V1.5 compile-on-RUN**. Author on the PC; remake `card.img`. Do not add
+`INSERT` / `DELETE` verbs — V1.5 insert is an unused number (`15`); delete
+is `10` + Enter. `EDIT n` is kept **then**, not as V1.0 authoring.
 
-**V1.5 (planned)** tries to be **standalone**: type, paste, or edit numbered HTML at `>` (`EDIT n` kept) **and** compile-on-RUN on the machine (V1.0 compiles when you make the card) —
+**V1.5 (planned)** tries to be **standalone**: type, paste, or edit numbered HTML at `>` **and** compile-on-RUN on the machine (V1.0 compiles when you make the card; PYTHON / FPGA-SIM / BOARD `RUN` that `card.img`) —
 [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 
 ---

@@ -319,7 +319,7 @@ five V1 games actually need.
 
 **What you still have:** HTML → bytecode ISA on the chip → Canvas / heap /
 events in hardware. **V1.0:** compile when you **make the card** (`.JSH`);
-PYTHON is compile-on-RUN. **V1.5 tries** standalone compile on the machine.
+PYTHON / FPGA-SIM / BOARD all `RUN` that image from `card.img`. **V1.5 tries** standalone compile on the machine.
 No dukpy, no soft CPU, no fake browser. Fit work removes a dead second
 machine, parks cold buffers where art already lives, and stops carving BRAM
 for empty rooms — it does not delete JS features.
@@ -406,7 +406,12 @@ splash-biased and between-frame data and two of them broke PACMAN):
   transiently holds ~300 envs (the between-frame envl≈140 missed the
   recursion peak); at 256, live envs were recycled mid-recursion and
   callbacks ran on broken environments (the maze-flood). 384 proven
-  clean; 512 is the pre-fit fallback (+5 tiles).
+  clean on FPGA-SIM; 512 is the pre-fit fallback (+5 tiles).
+  **BOARD 2026-08-26 (#84):** 384 + recursive `finder` still froze HDMI
+  (SIM Pac-Man still moved). **Do not raise `ENV_DEPTH` 384→512 or
+  `CSTK`** — the T200 is full and new bits fail routing. V1 HTML:
+  one-step chase (`storage/PACMAN.HTML`); original flood is
+  `PACORIG.HTML` (will freeze). Do not add a pathfinding opcode.
 - **MAX_ARR_LONG 12** (play peak 2; INVADERS bunkers 4), **CODE_WORDS
   20480** (HM suite's extended PACMAN image is 19,527 words).
 

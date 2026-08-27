@@ -452,7 +452,42 @@ Census the actual netlist before committing effort to a lever, and verify
 the result afterward. Estimates from source reading are for *ranking*
 candidates, never for deciding they are done.
 
-### 4.5 Trust artifacts, not reports of artifacts
+### 4.5 A model that uses a different algorithm cannot validate yours
+
+FM==RTL parity testing proves the two produce the same *answers* on the
+cases you tried. It does not prove the RTL's **algorithm** is correct,
+and when the model solves the problem a different way, an entire class of
+bug becomes structurally invisible.
+
+Measured case (bug #83): the RTL resolves a class method by **scanning a
+table**; PYTHON's functional model resolves it from a **dict**. The RTL
+scanner had a one-entry pipeline lag — after its priming beat it
+re-issued an entry it had already read, so every later comparison
+examined the wrong row, and **the last-declared method of any class with
+three or more methods could never be found.** DONKEY drew platforms and
+ladders but no player, Kong or barrels. PYTHON rendered it perfectly,
+because a dict lookup has no index to get wrong.
+
+That divergence cost hours: correct behaviour on the model made it look
+like a board or timing problem.
+
+**Rules:**
+- **Write down where the model and the RTL use different algorithms.**
+  Dict vs linear scan, sort vs insertion, hash vs compare-chain. Each is
+  a place parity testing is blind.
+- **Test the RTL's algorithm on its own terms**, not just its outputs:
+  for a table scan that means first entry, last entry, a middle entry,
+  and a full table — bug #83 needed exactly last-of-3, last-of-10 and
+  last-of-16 to pin it.
+- **Boundary indices are where scan pipelines fail.** A priming beat plus
+  an off-by-one in re-issue is invisible everywhere except the last
+  element.
+- **When the model is right and the hardware is wrong, suspect an
+  algorithm the model does not share** before suspecting timing or the
+  board. This is the third class of "the tests pass" failure, after
+  untested modules (§2.11) and shape-dependent inference (§1.1).
+
+### 4.6 Trust artifacts, not reports of artifacts
 
 Multiple times a number was believed, restated, and acted on before any
 file on disk contained it. Reports also go stale: a hierarchy report three
