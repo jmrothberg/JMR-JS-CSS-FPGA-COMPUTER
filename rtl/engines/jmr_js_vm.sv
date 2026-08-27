@@ -86,7 +86,7 @@ module jmr_js_vm #(
     output logic [21:0] rast_sbase,
     output logic [15:0] rast_stride,
     output logic        rast_aset,
-    input  logic        rast_busy
+    input  logic        rast_done   // op completed (level; cleared at next go)
 );
     // 2026-08-21 fit: measured code high-water (ops_base+n_ops) across the
     // seven card titles: PACMAN 16443 worst. 20480 = 1.25x. Console clamps
@@ -1688,7 +1688,7 @@ module jmr_js_vm #(
     // C1: engine-wait flags. rast_go is a STROBE (default-cleared every
     // beat); rast_wait/rast_started are STATE (potential-bugs #73 class:
     // never put a handshake flag in the default-clear block).
-    logic rast_wait, rast_started;
+    logic rast_wait;
     logic [7:0]  nat_id, nat_argc;
     logic signed [31:0] a_s, b_s;
 
@@ -5768,7 +5768,7 @@ module jmr_js_vm #(
             running <= 1'b0;
             looping <= 1'b0;
             fb_we <= 1'b0; fb_swap <= 1'b0;
-            rast_go <= 1'b0; rast_wait <= 1'b0; rast_started <= 1'b0;
+            rast_go <= 1'b0; rast_wait <= 1'b0;
             did_swap <= 1'b0; present_pend <= 1'b0; fb_dirty <= 1'b0;
             fbs_armed <= 1'b0;
             env_len_arm <= 1'b0;
@@ -7811,9 +7811,7 @@ module jmr_js_vm #(
                         rast_h <= 10'(MH);
                         rast_color <= color;
                         rast_wait <= 1'b1;
-                        rast_started <= 1'b0;
-                    end else if (rast_busy) rast_started <= 1'b1;
-                    else if (rast_started) begin
+                    end else if (rast_done) begin
                         rast_wait <= 1'b0;
                         if (boot_clr) begin
                             fb_swap <= 1'b1;
@@ -7881,9 +7879,7 @@ module jmr_js_vm #(
                         rast_h <= rh;
                         rast_color <= color;
                         rast_wait <= 1'b1;
-                        rast_started <= 1'b0;
-                    end else if (rast_busy) rast_started <= 1'b1;
-                    else if (rast_started) begin
+                    end else if (rast_done) begin
                         rast_wait <= 1'b0;
                         // draw into back; swap once at frame end (S_WAIT_FRAME)
                         hs_code(15'(ops_base + ip));
@@ -11901,9 +11897,7 @@ module jmr_js_vm #(
                         rast_h <= 10'(MH);
                         rast_color <= vdraw_color;
                         rast_wait <= 1'b1;
-                        rast_started <= 1'b0;
-                    end else if (rast_busy) rast_started <= 1'b1;
-                    else if (rast_started) begin
+                    end else if (rast_done) begin
                         rast_wait <= 1'b0;
                         vst_wr(vnat_base, V64_UNDEFINED);
                         hs_vsp(vnat_base + 12'd1);
@@ -11992,9 +11986,7 @@ module jmr_js_vm #(
                         rast_h <= vdraw_h;
                         rast_color <= vdraw_color;
                         rast_wait <= 1'b1;
-                        rast_started <= 1'b0;
-                    end else if (rast_busy) rast_started <= 1'b1;
-                    else if (rast_started) begin
+                    end else if (rast_done) begin
                         rast_wait <= 1'b0;
                         vst_wr(vnat_base, V64_UNDEFINED);
                         hs_vsp(vnat_base + 12'd1);

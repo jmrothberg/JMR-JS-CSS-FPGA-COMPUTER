@@ -332,6 +332,23 @@ module jmr_js_core #(
     logic [7:0]  rast_fb_wdata;
     logic        rast_sram_req;
     logic [20:0] rast_sram_addr;
+    // rast_done: busy can rise AND fall between two VM beats (a 1x1
+    // fill is ~2 clk) — a level the VM samples at beat rate, set on the
+    // falling edge of busy, cleared at the next op's go edge (the
+    // latch-until-beat pattern from TIMING_WALL Class A).
+    logic rast_go_q, rast_busy_q, rast_done;
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            rast_go_q <= 1'b0;
+            rast_busy_q <= 1'b0;
+            rast_done <= 1'b0;
+        end else begin
+            rast_go_q <= rast_go;
+            rast_busy_q <= rast_busy;
+            if (rast_go && !rast_go_q) rast_done <= 1'b0;
+            else if (rast_busy_q && !rast_busy) rast_done <= 1'b1;
+        end
+    end
     jmr_raster_engine u_rast (
         .clk(clk), .rst_n(rst_n),
         .go(rast_go), .mode(rast_mode),
@@ -526,7 +543,7 @@ module jmr_js_core #(
         .rast_qy(rast_qy), .rast_ryr(rast_ryr),
         .rast_sbase(rast_sbase), .rast_stride(rast_stride),
         .rast_aset(rast_aset),
-        .rast_busy(rast_busy)
+        .rast_done(rast_done)
     );
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -637,9 +654,12 @@ module jmr_js_core #(
     // C1: the raster engine owns the FB write port while busy — the VM
     // is blocked on rast_busy then, so the paths are mutually exclusive
     // by the handshake, and the mux only arbitrates the idle default.
-    assign fb_we    = rast_busy ? rast_fb_we    : vm_busy ? vm_fb_we    : demo_fb_we;
-    assign fb_waddr = rast_busy ? rast_fb_waddr : vm_busy ? vm_fb_waddr : demo_fb_waddr;
-    assign fb_wdata = rast_busy ? rast_fb_wdata : vm_busy ? vm_fb_wdata : demo_fb_wdata;
+    // Select on busy OR the write itself: the engine's LAST pixel write
+    // asserts one clk after busy falls (registered fb_we), and a 1x1 op
+    // IS its last pixel — keying on busy alone dropped it.
+    assign fb_we    = (rast_busy || rast_fb_we) ? rast_fb_we    : vm_busy ? vm_fb_we    : demo_fb_we;
+    assign fb_waddr = (rast_busy || rast_fb_we) ? rast_fb_waddr : vm_busy ? vm_fb_waddr : demo_fb_waddr;
+    assign fb_wdata = (rast_busy || rast_fb_we) ? rast_fb_wdata : vm_busy ? vm_fb_wdata : demo_fb_wdata;
     // vm_fb_swap is a vm_clk-wide pulse (= VM_CLK_DIV clk cycles); the
     // present engine consumes edges at 100 MHz, so pass only the rise.
     logic vm_fb_swap_q;
