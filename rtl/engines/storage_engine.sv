@@ -508,6 +508,8 @@ module storage_engine #(
                 // ---------------- command dispatch ------------------------
                 S_IDLE: begin
                     sink_busy_r <= 1'b0;
+                    rsp <= 3'd0; // clean slate per op: no cross-op stack drift
+
                     if (start_open) begin
                         mode_r  <= mode_in;
                         chan_r  <= chan_in;
@@ -1578,7 +1580,10 @@ module storage_engine #(
                     end
                 end
 
-                default: state <= S_IDLE;
+                // 2026-08-27: a garbage state used to fall back to S_IDLE
+                // SILENTLY (no done) — the console then waited 32 s for a
+                // pulse that never came. Fail loud instead.
+                default: state <= S_ERR;
             endcase
 `ifdef VERILATOR
             trace_cyc <= trace_cyc + 1;

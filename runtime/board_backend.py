@@ -194,6 +194,18 @@ class BoardBackend(RuntimeBackend):
             self._log.fault("SERIAL", str(e))
             self._ser = None
             return
+        # 2026-08-27: host RX heartbeat — every ~3s log how many tether
+        # bytes arrived. Distinguishes "board TX went silent" (rx=+0) from
+        # "GUI stopped polling" (no TETHER lines at all) — the DIR-freeze
+        # flight log ended at TYPE dir with neither side identifiable.
+        now = time.monotonic()
+        self._rx_total = getattr(self, "_rx_total", 0) + (n or 0)
+        last = getattr(self, "_rx_beat_t", 0.0)
+        if now - last >= 3.0:
+            self._rx_beat_t = now
+            delta = self._rx_total - getattr(self, "_rx_beat_total", 0)
+            self._rx_beat_total = self._rx_total
+            self._log.note(f"TETHER rx=+{delta}B")
         while b"\n" in self._rx_buf:
             raw, self._rx_buf = self._rx_buf.split(b"\n", 1)
             line = raw.decode("ascii", errors="replace").rstrip("\r")
@@ -201,11 +213,15 @@ class BoardBackend(RuntimeBackend):
                 # storage stalled >0.67s in one state - names the wedge
                 self._log.note(f"STOR-STALL state=0x{line[1:]}")
                 continue
-            if len(line) == 3 and line[0] == "E":
-                # free-running storage-state beat (change-only log)
+            if line and line[0] == "E" and len(line) in (3, 5):
+                # free-running storage(+console)-state beat (change-only log).
+                # len 3 = run-48 bits (stor only); len 5 = run-49+ (stor+cons)
                 if line[1:] != getattr(self, "_stor_beat", None):
                     self._stor_beat = line[1:]
-                    self._log.note(f"STOR-BEAT state=0x{line[1:]}")
+                    tag = f"stor=0x{line[1:3]}"
+                    if len(line) == 5:
+                        tag += f" cons=0x{line[3:5]}"
+                    self._log.note(f"STOR-BEAT {tag}")
                 continue
             if line == "K" or (len(line) == 3 and line[0] == "K"):
                 # K or Kxx (scancode hex, 2026-08-25 arrows debug)

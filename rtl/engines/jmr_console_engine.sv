@@ -27,6 +27,7 @@ module jmr_console_engine (
     output logic        print_nl,
     // Status
     output logic        ready_lit,
+    output logic [6:0]  dbg_state,    // 2026-08-27: E-line console-state telemetry
     // Silicon games ladder: pulse when monitor sees RUN (RECTDEMO only)
     output logic        run_pulse,
     // NEW: start bytecode VM after .JSB loaded into code BRAM
@@ -155,6 +156,7 @@ module jmr_console_engine (
 `endif
     // public_flat_rd: sim-only STOR? probe (metacomment, no synthesis effect)
     cstate_t state /*verilator public_flat_rd*/, ret_state;
+    assign dbg_state = 7'(state);
 
     logic [7:0] line [0:127];
     logic [6:0] line_len;
@@ -242,6 +244,13 @@ module jmr_console_engine (
     logic        list_page;
     logic [15:0] list_lo, list_hi, list_disp;
     logic [3:0]  list_on_page;
+    // 2026-08-27 DIR handshake self-heal: board capture proved storage can
+    // return to idle without the console ever seeing done (32 s ?IO with
+    // both sides idle). If the wait state sees storage idle AND silent for
+    // 2^22 clks (42 ms — impossible mid-op, busy is high then), re-issue
+    // the request. Bounded; the watchdogs still backstop.
+    logic [21:0] dir_hs_wd;
+    logic [1:0]  dir_hs_retry;
     logic [5:0]  list_col;        // 0..63 glass wrap (FM _list_paged twin)
     logic        list_wrap_more;  // MORE after a wrap, resume same source line
     logic        dir_more;       // MORE issued from DIR paging (resume C_DIRN)
@@ -320,7 +329,7 @@ module jmr_console_engine (
             // run number - bump by hand each build (user: know which bit
             // is on the board from the glass)
             22: banner_char = " "; 23: banner_char = "R";
-            24: banner_char = "4"; 25: banner_char = "8";
+            24: banner_char = "4"; 25: banner_char = "9";
             default: banner_char = 8'h00;
         endcase
     endfunction
@@ -699,11 +708,26 @@ module jmr_console_engine (
                     stor_dir <= 1'b1;
                     list_on_page <= 0;
                     dir_more <= 1'b0;
+                    dir_hs_wd <= 22'd0;
+                    dir_hs_retry <= 2'd0;
                     state <= C_DIR0W;
                 end
                 C_DIR0W: if (stor_done) begin
-                    if (stor_err) begin reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY; end
+                    dir_hs_wd <= 22'd0;
+                    if (stor_err) begin
+                        // transient SPI/mount error: retry (S_ERR poisoned the
+                        // mount, so this re-strobe remounts cleanly) — heals
+                        // the long-standing intermittent ?IO on DIR/LIST
+                        if (dir_hs_retry != 2'd3) begin
+                            dir_hs_retry <= dir_hs_retry + 2'd1;
+                            stor_dir <= 1'b1;
+                        end else begin reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY; end
+                    end
                     else state <= C_DIRN;
+                end else if (!stor_busy && &dir_hs_wd && dir_hs_retry != 2'd3) begin
+                    dir_hs_retry <= dir_hs_retry + 2'd1;
+                    dir_hs_wd <= 22'd0;
+                    stor_dir <= 1'b1; // lost handshake: restart the catalog
                 end else if (!kbd_empty && kbd_data == 8'h1B) begin
                     // ESC while storage works: consume it, bail to prompt.
                     // A late stor_done pulse with nobody waiting is ignored;
@@ -711,8 +735,13 @@ module jmr_console_engine (
                     kbd_pop <= 1'b1;
                     msg_idx <= 0; state <= C_PROMPT;
                 end
-                C_DIRN: if (!stor_busy) begin stor_dir_next <= 1'b1; state <= C_DIRNW; end
+                C_DIRN: if (!stor_busy) begin
+                    stor_dir_next <= 1'b1;
+                    dir_hs_wd <= 22'd0;
+                    state <= C_DIRNW;
+                end
                 C_DIRNW: if (stor_done) begin
+                    dir_hs_wd <= 22'd0;
                     if (stor_err) begin reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY; end
                     else if (stor_eof) begin msg_idx <= 0; state <= C_PROMPT; end
                     else begin
@@ -729,6 +758,10 @@ module jmr_console_engine (
                             state <= C_LIST_MORE;
                         end else state <= C_DIR_RD;
                     end
+                end else if (!stor_busy && &dir_hs_wd && dir_hs_retry != 2'd3) begin
+                    dir_hs_retry <= dir_hs_retry + 2'd1;
+                    dir_hs_wd <= 22'd0;
+                    stor_dir_next <= 1'b1; // lost handshake: fetch next name
                 end else if (!kbd_empty && kbd_data == 8'h1B) begin
                     kbd_pop <= 1'b1;
                     msg_idx <= 0; state <= C_PROMPT;
@@ -2002,6 +2035,11 @@ module jmr_console_engine (
                 end
             end
 `endif
+            // DIR handshake silence counter: counts only while waiting in the
+            // DIR wait states with storage idle and no done this cycle.
+            if ((state == C_DIR0W || state == C_DIRNW) && !stor_busy && !stor_done) begin
+                if (!(&dir_hs_wd)) dir_hs_wd <= dir_hs_wd + 22'd1;
+            end
             // Console-side storage watchdog (after the case, so it wins the
             // beat). Armed by any stor strobe (read one cycle late - the
             // strobes are 1-cycle registers), cleared on stor_done; the DIR

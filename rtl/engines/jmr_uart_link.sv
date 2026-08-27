@@ -155,6 +155,7 @@ module jmr_uart_link #(
     // storage state telemetry: "Dxx" line when it CHANGES while busy
     // (a stalled DIR parks in one state - one line names it)
     input  logic [6:0] stor_state = 7'd0,
+    input  logic [6:0] cons_state = 7'd0,
     // BOARD VM heartbeat: packed {0,st[6:0],fault[7:0],ip[15:0]}, already
     // registered in the VM domain - sampled here as a plain register.
     input  logic [31:0] vm_vdbg = 32'd0,
@@ -279,7 +280,7 @@ module jmr_uart_link #(
     //   key:   "K\n" once when ps2_strobe fires (between dumps)
     typedef enum logic [3:0] {
         HB_IDLE, HB_HDR, HB_ROW, HB_ROW2, HB_COLON, HB_BYTE, HB_NL, HB_K, HB_KH, HB_KL, HB_KNL,
-        HB_V, HB_VN, HB_VNL
+        HB_V, HB_VN, HB_VNL, HB_E2, HB_E3
     } hb_t;
     hb_t hb_state;
     logic        dump_active;
@@ -300,6 +301,7 @@ module jmr_uart_link #(
     logic        vfault_q, dump_active_q;
     logic        e_pending, e_chg;
     logic [7:0]  e_code_q;
+    logic [7:0]  e_cons_q;
     logic [26:0] e_beat;
     logic        v_beat_q;
     logic [26:0] d_dwell;  // continuous-busy dwell (board: the old
@@ -329,7 +331,7 @@ module jmr_uart_link #(
             v_pending <= 1'b0; v_latch <= 32'd0; v_nib <= 3'd0;
             vfault_q <= 1'b0; dump_active_q <= 1'b0;
             d_code_q <= 8'd0; d_dwell <= 26'd0;
-            e_pending <= 1'b0; e_chg <= 1'b0; e_code_q <= 8'd0; e_beat <= 27'd0; v_beat_q <= 1'b0;
+            e_pending <= 1'b0; e_chg <= 1'b0; e_code_q <= 8'd0; e_cons_q <= 8'd0; e_beat <= 27'd0; v_beat_q <= 1'b0;
             dump_byte_q <= 8'h20;
         end else begin
             wr_en <= 1'b0;
@@ -375,6 +377,7 @@ module jmr_uart_link #(
                 if (e_beat == 27'd0 || (e_chg && e_beat[19:0] == 20'd0)) begin
                     e_pending <= 1'b1;
                     e_code_q  <= {1'b0, stor_state};
+                    e_cons_q  <= {1'b0, cons_state};
                     e_chg     <= 1'b0;
                 end
             // Sample VRAM/FB one cycle ahead of HB_BYTE consume
@@ -430,6 +433,17 @@ module jmr_uart_link #(
                     wr_data <= hex_digit((d_sel == 2'd2) ? e_code_q[3:0]
                                        : (d_sel == 2'd1) ? d_code_q[3:0]
                                        : k_code_q[3:0]);
+                    hb_state <= (d_sel == 2'd2) ? HB_E2 : HB_KNL;
+                end
+                // E line carries console state too: Exxyy = stor, cons
+                HB_E2: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= hex_digit({1'b0, e_cons_q[6:4]});
+                    hb_state <= HB_E3;
+                end
+                HB_E3: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= hex_digit(e_cons_q[3:0]);
                     hb_state <= HB_KNL;
                 end
                 HB_V: if (!tx_busy) begin

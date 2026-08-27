@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
                 std::string ln = tx_seen.substr(0, nl2);
                 tx_seen.erase(0, nl2 + 1);
                 if (ln == "D09") d_at.push_back(i);
-                else if (ln == "E09") e09++;
+                else if (ln.rfind("E09", 0) == 0) e09++;  // E09 or E09xx (cons state)
                 else if (!ln.empty() && ln[0] == 'V') vlines++;
             }
         }
