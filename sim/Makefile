@@ -30,6 +30,7 @@ $(BUILD)/tb_uart_link: tb_uart_link.cpp $(RTL)/engines/jmr_uart_link.sv
 		-o $(abspath $(BUILD)/tb_uart_link) \
 		--top-module jmr_uart_link \
 		-GCLK_HZ=1000000 -GBAUD=100000 \
+		-Wno-WIDTHEXPAND \
 		-CFLAGS "-std=c++17" \
 		$(RTL)/engines/jmr_uart_link.sv \
 		tb_uart_link.cpp

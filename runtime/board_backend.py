@@ -8,8 +8,12 @@ UART — the bitstream speaks that FIFO, and Linux still exposes it as a tty
   S<rowhex>:<64 chars>\\n   — text console (64×16), letterboxed like HDMI
   P<rr>:<160 hex nibbles>\\n — mini-FB row (160×120) scaled ×4 → 640×480
   K\\n                      — PS/2 scancode strobe (J15 keyboard proof)
-  V<st2><fault2><ip4>\\n    — optional VM heartbeat (casestate/fault/ip).
-                            Absent on current bits — ignore; do not require.
+  V<st2><fault2><ip4>\\n    — VM heartbeat (casestate/fault/ip). Emitted per
+                            dump and on every machine_fault rise; present from
+                            run 46 (2b0f1f3). Still optional — older bits do
+                            not send it, so parse defensively, never require.
+  D<hh>\\n                  — storage stall telemetry (stor_state) after ~0.67s
+                            of continuous storage busy, then every ~0.17s.
 
 Port autodetect: JMR_JS_SERIAL env wins; otherwise FT2232 (pid 0x6010) channel A
 (location ".0") — channel B is JTAG. Optional FT232R on J13 is a fallback only.
@@ -196,6 +200,12 @@ class BoardBackend(RuntimeBackend):
             if len(line) == 3 and line[0] == "D":
                 # storage stalled >0.67s in one state - names the wedge
                 self._log.note(f"STOR-STALL state=0x{line[1:]}")
+                continue
+            if len(line) == 3 and line[0] == "E":
+                # free-running storage-state beat (change-only log)
+                if line[1:] != getattr(self, "_stor_beat", None):
+                    self._stor_beat = line[1:]
+                    self._log.note(f"STOR-BEAT state=0x{line[1:]}")
                 continue
             if line == "K" or (len(line) == 3 and line[0] == "K"):
                 # K or Kxx (scancode hex, 2026-08-25 arrows debug)

@@ -92,9 +92,10 @@ int main(int argc, char** argv) {
     // Find "S0:AAAA" and "SF:PPPP" style rows
     bool row0 = tx_seen.find("S0:AAAA") != std::string::npos;
     bool rowF = tx_seen.find("SF:PPPP") != std::string::npos;
-    size_t nl = tx_seen.find('\n');
+    size_t s0 = tx_seen.find("S0:");
+    size_t nl = (s0 == std::string::npos) ? std::string::npos : tx_seen.find('\n', s0);
     bool rowlen_ok = false;
-    if (nl != std::string::npos && nl >= 66) rowlen_ok = true; // "S0:" + 64
+    if (nl != std::string::npos && nl - s0 >= 66) rowlen_ok = true; // "S0:" + 64
     if (!row0 || !rowF || !rowlen_ok) {
         printf("FAIL dump: row0=%d rowF=%d len_ok=%d bytes=%zu\n",
                row0, rowF, rowlen_ok, tx_seen.size());
@@ -102,6 +103,47 @@ int main(int argc, char** argv) {
         return 1;
     }
     printf("OK TX dump rows 0..F, 64 chars each (%zu bytes captured)\n", tx_seen.size());
+
+    // 4) Storage/heartbeat telemetry: hold stor_state at 0x09 (S_SD_WAIT)
+    // continuously for 210M clks. Expect:
+    //  - D09 stall lines: first ~67.1M, then every ~16.8M FOREVER (dwell
+    //    re-arms instead of saturating) => >= 7 lines
+    //  - E-beat lines reporting stor_state regardless of dwell (change-
+    //    triggered + every 2^27): at least one E09
+    //  - periodic V heartbeat lines (console-idle beat): >= 2
+    tx_seen.clear();
+    top->stor_state = 0x09;
+    std::vector<long> d_at;
+    int e09 = 0, vlines = 0;
+    for (long i = 0; i < 210'000'000; i++) {
+        tick();
+        if ((i & 0xFFFFF) == 0) {
+            size_t nl2;
+            while ((nl2 = tx_seen.find('\n')) != std::string::npos) {
+                std::string ln = tx_seen.substr(0, nl2);
+                tx_seen.erase(0, nl2 + 1);
+                if (ln == "D09") d_at.push_back(i);
+                else if (ln == "E09") e09++;
+                else if (!ln.empty() && ln[0] == 'V') vlines++;
+            }
+        }
+    }
+    top->stor_state = 0;
+    printf("D09=%zu (first at %ld), E09=%d, V=%d\n",
+           d_at.size(), d_at.empty() ? -1 : d_at[0], e09, vlines);
+    if (d_at.size() < 7 || d_at[0] < 67'000'000 || d_at[0] > 72'000'000) {
+        printf("FAIL D-line telemetry\n");
+        return 1;
+    }
+    for (size_t i = 1; i < d_at.size(); i++)
+        if (d_at[i] - d_at[i-1] > 20'000'000) {
+            printf("FAIL D-line gap %ld at %zu (saturation regression)\n",
+                   d_at[i] - d_at[i-1], i);
+            return 1;
+        }
+    if (e09 < 1) { printf("FAIL E-beat\n"); return 1; }
+    if (vlines < 2) { printf("FAIL periodic V heartbeat\n"); return 1; }
+    printf("OK telemetry: continuous D, E-beat, periodic V\n");
     printf("PASS jmr_uart_link\n");
     delete top;
     return 0;

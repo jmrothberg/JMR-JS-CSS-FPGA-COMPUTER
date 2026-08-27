@@ -715,7 +715,20 @@ module jmr_console_engine (
                 C_DIRNW: if (stor_done) begin
                     if (stor_err) begin reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY; end
                     else if (stor_eof) begin msg_idx <= 0; state <= C_PROMPT; end
-                    else begin dir_n <= stor_line_len; dir_idx <= 0; state <= C_DIR_RD; end
+                    else begin
+                        dir_n <= stor_line_len; dir_idx <= 0;
+                        // 2026-08-27: page decision moved HERE from C_DIR_NL —
+                        // pause only when another entry is KNOWN to exist.
+                        // C_DIR_NL paged after the 14th row before asking
+                        // storage, so a 14-entry card printed a phantom
+                        // "-- MORE --" with nothing behind it.
+                        if (list_on_page >= 4'd14) begin
+                            list_on_page <= 0;
+                            dir_more <= 1'b1;
+                            reply_sel <= 4'd8; reply_idx <= 0;
+                            state <= C_LIST_MORE;
+                        end else state <= C_DIR_RD;
+                    end
                 end else if (!kbd_empty && kbd_data == 8'h1B) begin
                     kbd_pop <= 1'b1;
                     msg_idx <= 0; state <= C_PROMPT;
@@ -740,21 +753,12 @@ module jmr_console_engine (
                     ret_state <= C_DIR_RD;
                 end
                 C_DIR_NL: if (!video_busy) begin
-                    // DIR pages like LIST: without this a long directory
-                    // (titles + saved files) scrolled its head off the
-                    // glass and "DIR doesn't list .HTML" — the .HTM rows
-                    // printed first and were gone before READY.
+                    // DIR pages like LIST (head must not scroll off), but the
+                    // page decision lives in C_DIRNW where eof is known.
                     print_nl <= 1'b1;
                     state <= C_WAIT_VIDEO;
-                    if (list_on_page >= 4'd13) begin
-                        list_on_page <= 0;
-                        dir_more <= 1'b1;
-                        reply_sel <= 4'd8; reply_idx <= 0;
-                        ret_state <= C_LIST_MORE;
-                    end else begin
-                        list_on_page <= list_on_page + 4'd1;
-                        ret_state <= C_DIRN;
-                    end
+                    list_on_page <= list_on_page + 4'd1;
+                    ret_state <= C_DIRN;
                 end
 
                 // ---- parse filename after verb --------------------------
@@ -1389,7 +1393,9 @@ module jmr_console_engine (
                         // Space/Enter/any key → next page
                         if (dir_more) begin
                             dir_more <= 1'b0;
-                            state <= C_DIRN;
+                            // the paused entry is already fetched — print it,
+                            // do NOT re-request (C_DIRN would skip a name)
+                            state <= C_DIR_RD;
                         end else if (list_wrap_more) begin
                             list_wrap_more <= 1'b0;
                             state <= list_from_card ? C_LIST_CARD_GB : C_LIST_RD_GO;

@@ -291,12 +291,17 @@ module jmr_uart_link #(
     logic        ps2_strobe_q;
     logic [7:0]  k_code_q;
     logic [6:0]  stor_q;
-    logic        d_pending, d_sel;
+    logic        d_pending;
+    logic [1:0]  d_sel; // 0=K 1=D 2=E line
     logic [7:0]  d_code_q;
     logic        v_pending;
     logic [31:0] v_latch;
     logic [2:0]  v_nib;
     logic        vfault_q, dump_active_q;
+    logic        e_pending, e_chg;
+    logic [7:0]  e_code_q;
+    logic [26:0] e_beat;
+    logic        v_beat_q;
     logic [26:0] d_dwell;  // continuous-busy dwell (board: the old
     // single-state equality never fired - a stall can LOOP between states)
     // NEW: register pixel/char before wr_data (dump_addr→RAM→wr was WNS −0.025)
@@ -320,10 +325,11 @@ module jmr_uart_link #(
             wr_data <= 8'h0;
             k_pending <= 1'b0;
             ps2_strobe_q <= 1'b0;
-            stor_q <= 7'd0; d_pending <= 1'b0; d_sel <= 1'b0;
+            stor_q <= 7'd0; d_pending <= 1'b0; d_sel <= 2'd0;
             v_pending <= 1'b0; v_latch <= 32'd0; v_nib <= 3'd0;
             vfault_q <= 1'b0; dump_active_q <= 1'b0;
             d_code_q <= 8'd0; d_dwell <= 26'd0;
+            e_pending <= 1'b0; e_chg <= 1'b0; e_code_q <= 8'd0; e_beat <= 27'd0; v_beat_q <= 1'b0;
             dump_byte_q <= 8'h20;
         end else begin
             wr_en <= 1'b0;
@@ -336,7 +342,12 @@ module jmr_uart_link #(
                 // machine_fault rise (spec: V<st2><fault2><ip4>).
                 dump_active_q <= dump_active;
                 vfault_q <= vm_vdbg_fault;
-                if ((dump_active_q && !dump_active) || (vm_vdbg_fault && !vfault_q)) begin
+                v_beat_q <= e_beat[25];
+                if ((dump_active_q && !dump_active) || (vm_vdbg_fault && !vfault_q)
+                    || (e_beat[25] && !v_beat_q)) begin
+                    // 2026-08-27: third arm = free-running ~0.67s beat, so the
+                    // heartbeat is alive at the console too (was dump/fault
+                    // only: lively in games, silent at READY).
                     v_pending <= 1'b1;
                     v_latch   <= vm_vdbg;
                 end
@@ -345,11 +356,26 @@ module jmr_uart_link #(
                 // looping stalls; normal ops idle between console strobes and
                 // never accumulate a second of busy.
                 if (stor_state == 7'd0) d_dwell <= 27'd0;
-                else if (!(&d_dwell)) d_dwell <= d_dwell + 27'd1;
+                else if (&d_dwell) d_dwell <= 27'h4000000; // 2026-08-27: re-arm,
+                // don't saturate - a long stall used to get 4 D lines
+                // (0.671..1.174s) then permanent silence; now one per ~0.67s
+                // for the stall's whole duration.
+                else d_dwell <= d_dwell + 27'd1;
                 if (stor_state != stor_q) stor_q <= stor_state;
                 if (d_dwell >= 27'h4000000 && d_dwell[23:0] == 24'd0) begin
                     d_pending <= 1'b1;
                     d_code_q  <= {1'b0, stor_state};
+                end
+                // 2026-08-27: free-running storage-state beat (E line, ~1.34s):
+                // reports the state REGARDLESS of dwell - replaces inferring
+                // storage health from timeout durations. Change-triggered too
+                // capped at one per 2^20 clks (~10ms) so churn can't flood TX.
+                e_beat <= e_beat + 27'd1;
+                if (stor_state != stor_q) e_chg <= 1'b1;
+                if (e_beat == 27'd0 || (e_chg && e_beat[19:0] == 20'd0)) begin
+                    e_pending <= 1'b1;
+                    e_code_q  <= {1'b0, stor_state};
+                    e_chg     <= 1'b0;
                 end
             // Sample VRAM/FB one cycle ahead of HB_BYTE consume
             if (dump_game)
@@ -361,11 +387,15 @@ module jmr_uart_link #(
                 HB_IDLE: begin
                     if (k_pending && !tx_busy && !dump_active) begin
                         k_pending <= 1'b0;
-                        d_sel <= 1'b0;
+                        d_sel <= 2'd0;
                         hb_state <= HB_K;
                     end else if (d_pending && !tx_busy && !dump_active) begin
                         d_pending <= 1'b0;
-                        d_sel <= 1'b1;
+                        d_sel <= 2'd1;
+                        hb_state <= HB_K;
+                    end else if (e_pending && !tx_busy && !dump_active) begin
+                        e_pending <= 1'b0;
+                        d_sel <= 2'd2;
                         hb_state <= HB_K;
                     end else if (v_pending && !tx_busy && !dump_active) begin
                         v_pending <= 1'b0;
@@ -385,17 +415,21 @@ module jmr_uart_link #(
                 end
                 HB_K: if (!tx_busy) begin
                     wr_en <= 1'b1;
-                    wr_data <= d_sel ? "D" : "K";
+                    wr_data <= (d_sel == 2'd2) ? "E" : (d_sel == 2'd1) ? "D" : "K";
                     hb_state <= HB_KH;
                 end
                 HB_KH: if (!tx_busy) begin
                     wr_en <= 1'b1;
-                    wr_data <= hex_digit(d_sel ? {1'b0, d_code_q[6:4]} : k_code_q[7:4]);
+                    wr_data <= hex_digit((d_sel == 2'd2) ? {1'b0, e_code_q[6:4]}
+                                       : (d_sel == 2'd1) ? {1'b0, d_code_q[6:4]}
+                                       : k_code_q[7:4]);
                     hb_state <= HB_KL;
                 end
                 HB_KL: if (!tx_busy) begin
                     wr_en <= 1'b1;
-                    wr_data <= hex_digit(d_sel ? d_code_q[3:0] : k_code_q[3:0]);
+                    wr_data <= hex_digit((d_sel == 2'd2) ? e_code_q[3:0]
+                                       : (d_sel == 2'd1) ? d_code_q[3:0]
+                                       : k_code_q[3:0]);
                     hb_state <= HB_KNL;
                 end
                 HB_V: if (!tx_busy) begin
