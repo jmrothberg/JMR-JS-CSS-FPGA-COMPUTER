@@ -375,6 +375,78 @@ broke the congestion but lengthened nets globally — trading the problem
 rather than removing it. Two independent attempts to rearrange the same
 netlist both failed; the netlist is what has to change.
 
+## 12. Where timing landed (runs 40–44)
+
+After the ÷8 clock and the bridge fix, timing became a tail-chase rather
+than a wall. Trajectory at the 100 MHz domain (the VM's ÷8 paths have
+never failed since):
+
+| Run | WNS | WHS | Note |
+|---|---:|---:|---|
+| 32 | −1.249 | +0.052 | first ÷8 route |
+| 33 | −0.640 | +0.051 | |
+| 36 | −0.415 | +0.053 | bridge fix + blit-DDA |
+| 40 | ~−0.3 | + | sidecar RUN, DIR ESC, PS/2 keyCode |
+| 41 | — | — | **route process SIGKILLed** at ~3 h, 790 overlaps, no verdict |
+| 42 | −0.112 | +0.054 | |
+| **43** | **−0.112** | **+0.054** | identical to 42 |
+
+**Run 43's entire failing set is two paths:**
+
+| Slack | Endpoint | Levels | Logic / route |
+|---|---:|---|---|
+| −0.112 | `u_core/u_stor/state_reg[1]` | 6 | 3.198 ns (33%) / 6.547 ns (67%) |
+| −0.018 | `u_core/u_cons/state_reg[4]` | 11 | 2.414 ns (24%) / 7.451 ns (76%) |
+
+Both are **route-dominated with shallow logic** — 6 and 11 levels. By
+[§2.10](RTL_DESIGN_PRINCIPLES.md) that means placement, not structure:
+there is essentially no logic left to remove. A **placement seed sweep**
+is the appropriate lever, not further RTL. Runs 42 and 43 landing on an
+identical WNS suggests the same path under the same placement strategy
+rather than a hard structural floor.
+
+**Process lessons from this stretch:**
+
+- **Run 41 was lost to a `Killed` route process, not a timing failure** —
+  ~3 hours of converged routing discarded because the flow has no
+  checkpoint recovery and treats a killed step as a failed run.
+- **Runs share one output directory.** `build/nexys_video/` holds a single
+  `post_*.dcp` set and one `impl_1` bitstream slot, so each run erases the
+  previous one's checkpoints and reports. Only `run<N>_console.log` and
+  anything copied to `build/bits/` survive. Run 36 got its own directory
+  when it needed to run in parallel — that pattern is worth making the
+  default.
+- **`archive_bit.sh` saved only the `.bit`.** The board's SD/flash path
+  takes the `.bin`, so archived runs were not directly flashable; fixed
+  2026-08-26 to archive both.
+
+## Run-45 congestion campaign (2026-08-26)
+
+Run 45's default-placement route failed (2,426 overlaps). Re-placed the
+same post-opt netlist from its checkpoint to isolate the placement
+variable:
+
+| Placement | Router | Result |
+|---|---|---|
+| default (impl_1) | default | FAIL — 2,426 overlaps |
+| `-directive Explore` | Explore | FAIL — 3,171 overlaps |
+| `-directive AltSpreadLogic_high` | default | **ROUTED** — WNS −0.502, WHS +0.050 |
+
+The Explore placement's own congestion report names the problem: one
+**level-5 East window at 120%** (CLB X49Y54–X80Y85), composition 61%
+`u_exec64` + 38% rest of `u_vm`, LUTRAM 29% / MUXF 43% of the window,
+BRAM columns inside it 100% occupied. AltSpreadLogic_high cut it to 104% (window moved north,
+LUTRAM 65% of contents — the incompressible core; the spread logic
+left) and the default router closed it. It is a single over-dense VM
+dispatch cluster packed against the BRAM columns — not diffuse
+pressure — so router effort cannot fix it; only spreading placement can.
+The VM runs at 12.5 MHz (80 ns period), so spreading it is timing-free.
+
+Flow changes landed for run 46: `JMR_VIVADO_STRATEGY` env var selects
+the impl_1 strategy, and `wait_on_runs` is wrapped in `catch` so the
+checkpoint-recovery branch is actually reachable after a route failure
+(run 45's recovery never ran — the error aborted the script first).
+
 ---
 
 ## Related
