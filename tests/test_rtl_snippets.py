@@ -9,10 +9,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# div8: the VM runs on clk/8 (jmr_js_core VM_CLK_DIV). Budget ceilings for
+# div7 (run 51; was div8): the VM runs on clk/VM_CLK_DIV. Budget ceilings for
 # VM progress scale by this; polling loops break early so passing tests
 # pay nothing. Console/RPC-side waits are unscaled.
-_VMDIV = 8
+_VMDIV = 7
 
 
 _SCRATCH_CARD = None

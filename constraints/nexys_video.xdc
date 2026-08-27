@@ -99,11 +99,14 @@ set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets u_tmds/u_rgb2dvi/ClockGenInte
 ## in the HDMI bank's region. Pin the MMCM beside its loads.
 set_property LOC MMCME2_ADV_X1Y2 [get_cells {u_tmds/u_rgb2dvi/ClockGenInternal.ClockGenX/GenMMCM.DVI_ClkGenerator}]
 
-# div8 VM clock (2026-08-25 timing rescue): u_core/u_vm alone runs on
-# ui_clk/8 = 12.5 MHz via BUFGCE. Run-30 post-route: all 6,000 worst
+# div7 VM clock (run 51; was div8, the 2026-08-25 rescue): u_core/u_vm
+# runs on ui_clk/7 ~= 14.3 MHz via BUFGCE. Run-49 checkpoint: post-C3
+# wall ~71 ns, 20-26% logic / ~80% route on a pressure-free placement —
+# the divide-by must match jmr_js_core VM_CLK_DIV and
+# tests/test_rtl_snippets._VMDIV or the constraint lies to the tools. Run-30 post-route: all 6,000 worst
 # failing paths interior to u_vm; nothing outside fails. Edges are a
 # subset of ui_clk edges, so boundary paths stay ordinary 10 ns paths.
-create_generated_clock -name vm_clk -divide_by 8 \
+create_generated_clock -name vm_clk -divide_by 7 \
     -source [get_pins u_core/g_vmclk_div.u_vm_bufgce/I] \
     [get_pins u_core/g_vmclk_div.u_vm_bufgce/O]
 

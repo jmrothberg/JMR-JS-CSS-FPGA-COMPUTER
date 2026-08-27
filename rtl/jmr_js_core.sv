@@ -15,7 +15,7 @@ module jmr_js_core #(
     // outside the VM fails, and jmr_fb_scanout needs the full 100 MHz (one
     // SRAM fetch per 100 ns sustains 640x480). 1 = passthrough (battery
     // speed); board default 8.
-    parameter int unsigned VM_CLK_DIV = 8
+    parameter int unsigned VM_CLK_DIV = 7
 ) (
     input  logic        clk,
     input  logic        pixel_clk,   // mini-FB read domain (board HDMI)
