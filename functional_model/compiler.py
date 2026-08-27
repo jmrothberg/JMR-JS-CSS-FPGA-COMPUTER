@@ -196,7 +196,8 @@ def _isolate_iife_modules(
 # the V1.0 chip (or were removed by the V1-surface cut). Verified zero hits
 # across every playable title (INVADERS, PACMAN, DONKEY, ASTEROID, MRDO,
 # MKPVP + AURORA/JOYDEMO/PACDBG). A program referencing one of these fails
-# HERE, loudly, instead of faulting on hardware. V2 lifts the wall.
+# HERE, loudly, instead of faulting on hardware. V1.5 lifts popular
+# language on this list; V2 is MK (dotted new / .call / Object.keys RTL).
 V1_WALL_NAMES = frozenset([
     "sin", "cos", "atan2", "pow", "round", "ceil", "hypot",
     "charAt", "charCodeAt", "split", "match", "exec", "substring",
@@ -1574,7 +1575,7 @@ class Compiler:
         if meth in V1_WALL_NAMES or meth in _wall_ext_names():
             raise CompileError(
                 f"V1 WALL: .{meth}() is not in the V1.0 chip "
-                "(see docs/JMR_JS_COMPATIBILITY.md); V2 feature",
+                "(see docs/JMR_JS_COMPATIBILITY.md); V1.5 feature",
                 line,
             )
 

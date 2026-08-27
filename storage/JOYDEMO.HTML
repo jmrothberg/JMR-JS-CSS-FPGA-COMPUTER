@@ -22,30 +22,38 @@ var fireHeld = 0;
 
 console.log("JOY DEMO");
 
+// Stick on the chip is KEYEVT + joy_in, not e.key. PACMAN reads keyCode;
+// missing "ArrowLeft" intern still plays. 37/39/38/40/32/13 = arrows/Space/Enter.
 addEventListener("keydown", function (e) {
   var k = e.key;
-  if (k === "ArrowLeft" || k === "a" || k === "A") leftHeld = 1;
-  if (k === "ArrowRight" || k === "d" || k === "D") rightHeld = 1;
-  if (k === "ArrowUp" || k === "w" || k === "W") upHeld = 1;
-  if (k === "ArrowDown" || k === "s" || k === "S") downHeld = 1;
-  if (k === " " || k === "Enter") fireHeld = 1;
+  var c = e.keyCode;
+  if (k === "ArrowLeft" || k === "a" || k === "A" || c === 37 || c === 65) leftHeld = 1;
+  if (k === "ArrowRight" || k === "d" || k === "D" || c === 39 || c === 68) rightHeld = 1;
+  if (k === "ArrowUp" || k === "w" || k === "W" || c === 38 || c === 87) upHeld = 1;
+  if (k === "ArrowDown" || k === "s" || k === "S" || c === 40 || c === 83) downHeld = 1;
+  if (k === " " || k === "Enter" || c === 32 || c === 13) fireHeld = 1;
 });
 addEventListener("keyup", function (e) {
   var k = e.key;
-  if (k === "ArrowLeft" || k === "a" || k === "A") leftHeld = 0;
-  if (k === "ArrowRight" || k === "d" || k === "D") rightHeld = 0;
-  if (k === "ArrowUp" || k === "w" || k === "W") upHeld = 0;
-  if (k === "ArrowDown" || k === "s" || k === "S") downHeld = 0;
-  if (k === " " || k === "Enter") fireHeld = 0;
+  var c = e.keyCode;
+  if (k === "ArrowLeft" || k === "a" || k === "A" || c === 37 || c === 65) leftHeld = 0;
+  if (k === "ArrowRight" || k === "d" || k === "D" || c === 39 || c === 68) rightHeld = 0;
+  if (k === "ArrowUp" || k === "w" || k === "W" || c === 38 || c === 87) upHeld = 0;
+  if (k === "ArrowDown" || k === "s" || k === "S" || c === 40 || c === 83) downHeld = 0;
+  if (k === " " || k === "Enter" || c === 32 || c === 13) fireHeld = 0;
 });
 
+// joy() is a host helper; the card .JSH compiles it to CALL_NATIVE stub 33
+// (not in NATIVE_IDS) so it is always 0 on FPGA-SIM/BOARD. keyLeft/Right/
+// Up/Down/Fire are natives 4/5/8/9/6 and read joy_in (Pmod JB + GUI KEYBITS).
 function bits() {
   var j = 0;
-  try {
-    j = joy() | 0;
-  } catch (e) {
-    j = 0;
-  }
+  try { j = joy() | 0; } catch (e) { j = 0; }
+  try { if (keyUp()) j = j | 1; } catch (e) {}
+  try { if (keyDown()) j = j | 2; } catch (e) {}
+  try { if (keyLeft()) j = j | 4; } catch (e) {}
+  try { if (keyRight()) j = j | 8; } catch (e) {}
+  try { if (keyFire()) j = j | 16; } catch (e) {}
   return j;
 }
 

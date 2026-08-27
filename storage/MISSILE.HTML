@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Missile Command — JMR</title></head>
+<body style="margin:0;background:#000">
+<!-- V1.0: no shift/every/isFinite/performance.now/gradients/mouse/e.code.
+     hypot() not sqrt(dx*dx+dy*dy) (RTL Q16.16 wraps). Trails=fillRect not
+     polyline (PATH_MAX=16). Arrows/stick aim; Space/FIRE fire; R restart. -->
+<canvas id="c" width="640" height="480"></canvas>
+<script>
+(function(){
+"use strict";
+var cvs=document.getElementById("c");
+var ctx=cvs.getContext("2d");
+var W=640,H=480;
+var BASE_X=W/2, BASE_Y=H-36, CITY_Y=H-26;
+var cityXs=[60,160,260,380,480,580];
+var state={
+  score:0,wave:1,over:false,t:0,
+  crosshair:{x:W/2,y:H/3},
+  incomingMissiles:[],
+  counterMissiles:[],
+  explosions:[],
+  cities:[],
+  waveMissilesTotal:0,waveMissilesSpawned:0,
+  waveActive:false,waveBreakTimer:1.5,
+  spawnTimer:0,spawnInterval:1.2,
+  lastFireTime:-1,fireCooldown:0.15,
+  stars:[]
+};
+var leftHeld=0,rightHeld=0,upHeld=0,downHeld=0,fireHeld=0,rHeld=0;
+// V1: no Array.shift (wall). Copy down + shrink. V1.5 list: Array.shift.
+function trailDrop(a){
+  var i=0;
+  if(a.length<1) return;
+  while(i<a.length-1){ a[i]=a[i+1]; i=i+1; }
+  a.length=a.length-1;
+}
+function arrDropAt(a,i){
+  // Body local keeps this a CALL_USER. Inlining LET_VAR a/i into update()
+  // overflows ENV_SLOTS=16 (FPGA-SIM fault=3 at the inlined LET_VAR a).
+  var _noinl=0;
+  while(i<a.length-1){ a[i]=a[i+1]; i=i+1; }
+  a.length=a.length-1;
+}
+function citiesAllDead(cs){
+  var i=0;
+  while(i<cs.length){ if(cs[i].alive) return false; i=i+1; }
+  return true;
+}
+function citiesAliveCount(cs){
+  var n=0,i=0;
+  while(i<cs.length){ if(cs[i].alive) n=n+1; i=i+1; }
+  return n;
+}
+function pickAliveCity(){
+  var n=citiesAliveCount(state.cities);
+  if(n<1) return null;
+  var k=Math.floor(Math.random()*n);
+  var i=0;
+  while(i<state.cities.length){
+    if(state.cities[i].alive){
+      if(k===0) return state.cities[i];
+      k=k-1;
+    }
+    i=i+1;
+  }
+  return null;
+}
+function makeCities(){
+  state.cities=[];
+  var i=0;
+  while(i<cityXs.length){
+    state.cities.push({x:cityXs[i],y:CITY_Y,alive:true});
+    i=i+1;
+  }
+}
+function makeStars(){
+  state.stars=[];
+  var i=0;
+  while(i<40){
+    state.stars.push({x:Math.random()*W,y:Math.random()*(H-60),tw:Math.random()*2});
+    i=i+1;
+  }
+}
+function playBits(){
+  var j=0;
+  try { j=joy()|0; } catch(e) { j=0; }
+  try { if(keyUp()) j=j|1; } catch(e) {}
+  try { if(keyDown()) j=j|2; } catch(e) {}
+  try { if(keyLeft()) j=j|4; } catch(e) {}
+  try { if(keyRight()) j=j|8; } catch(e) {}
+  try { if(keyFire()) j=j|16; } catch(e) {}
+  return j;
+}
+function reset(){
+  state.score=0;
+  state.wave=1;
+  state.over=false;
+  state.t=0;
+  state.crosshair.x=W/2;
+  state.crosshair.y=H/3;
+  state.incomingMissiles.length=0;
+  state.counterMissiles.length=0;
+  state.explosions.length=0;
+  makeCities();
+  state.waveMissilesTotal=0;
+  state.waveMissilesSpawned=0;
+  state.waveActive=false;
+  state.waveBreakTimer=1.5;
+  state.spawnTimer=0;
+  state.spawnInterval=1.2;
+  state.lastFireTime=-1;
+  makeStars();
+}
+function startWave(n){
+  var _noinl=0;
+  state.waveMissilesTotal=6+n*2;
+  state.waveMissilesSpawned=0;
+  state.spawnInterval=Math.max(0.35,1.3-n*0.08);
+  state.spawnTimer=0.5;
+  state.waveActive=true;
+}
+function hypot(dx,dy){
+  // RTL Math.sqrt is Q16.16 (PACMAN-scale). sqrt(dx*dx+dy*dy) for a
+  // ~280 px shot wraps (~80k) and missiles detonate in one frame.
+  // Unit-scale first so the radicand is <= 2.
+  var m,nx,ny;
+  m=Math.max(Math.abs(dx),Math.abs(dy));
+  if(m<1) return 1;
+  nx=dx/m;
+  ny=dy/m;
+  return Math.sqrt(nx*nx+ny*ny)*m;
+}
+function spawnEnemy(){
+  var tgt=pickAliveCity();
+  if(!tgt) return;
+  var x=30+Math.random()*(W-60);
+  var speed=60+state.wave*14+Math.random()*30;
+  var dx=tgt.x-x,dy=tgt.y-(-10);
+  var len=hypot(dx,dy);
+  state.incomingMissiles.push({
+    x:x,y:-10,
+    vx:(dx/len)*speed,
+    vy:(dy/len)*speed,
+    tx:tgt.x,ty:tgt.y,
+    trail:[],alive:true
+  });
+}
+function fire(){
+  if(state.over) return;
+  if(state.lastFireTime>=0 && state.t-state.lastFireTime<state.fireCooldown) return;
+  state.lastFireTime=state.t;
+  var sx=BASE_X,sy=BASE_Y;
+  var tx=state.crosshair.x,ty=state.crosshair.y;
+  var dx=tx-sx,dy=ty-sy;
+  var len=hypot(dx,dy);
+  var speed=520;
+  state.counterMissiles.push({
+    x:sx,y:sy,
+    vx:(dx/len)*speed,
+    vy:(dy/len)*speed,
+    tx:tx,ty:ty,
+    trail:[],alive:true
+  });
+}
+function detonate(x,y){
+  var _noinl=0;
+  state.explosions.push({x:x,y:y,r:4,maxR:65,life:0,maxLife:0.9});
+}
+function update(dt){
+  var j,kx,ky,cs,i,m,dx,dy,distLeft,stepLen,c,e,f;
+  if(state.over){
+    if(rHeld) reset();
+    return;
+  }
+  if(rHeld){ reset(); return; }
+  j=playBits();
+  state.t+=dt;
+  kx=(leftHeld||(j&4)?-1:0)+(rightHeld||(j&8)?1:0);
+  ky=(upHeld||(j&1)?-1:0)+(downHeld||(j&2)?1:0);
+  if(kx||ky){
+    cs=380;
+    state.crosshair.x+=kx*cs*dt;
+    state.crosshair.y+=ky*cs*dt;
+  }
+  state.crosshair.x=Math.max(8,Math.min(W-8,state.crosshair.x));
+  state.crosshair.y=Math.max(8,Math.min(H-50,state.crosshair.y));
+  if(fireHeld||(j&16)||(j&32)) fire();
+  if(!state.waveActive){
+    state.waveBreakTimer-=dt;
+    if(state.waveBreakTimer<=0) startWave(state.wave);
+  } else {
+    state.spawnTimer-=dt;
+    if(state.waveMissilesSpawned<state.waveMissilesTotal && state.spawnTimer<=0){
+      spawnEnemy();
+      state.waveMissilesSpawned++;
+      state.spawnTimer=state.spawnInterval*(0.6+Math.random()*0.8);
+    }
+    if(state.waveMissilesSpawned>=state.waveMissilesTotal && state.incomingMissiles.length===0){
+      state.wave++;
+      state.waveActive=false;
+      state.waveBreakTimer=2.0;
+    }
+  }
+  i=state.counterMissiles.length-1;
+  while(i>=0){
+    m=state.counterMissiles[i];
+    m.trail.push({x:m.x,y:m.y});
+    if(m.trail.length>12) trailDrop(m.trail);
+    m.x+=m.vx*dt;
+    m.y+=m.vy*dt;
+    dx=m.tx-m.x; dy=m.ty-m.y;
+    distLeft=hypot(dx,dy);
+    stepLen=hypot(m.vx,m.vy)*dt;
+    if(distLeft<=stepLen+1 || m.y<=0){
+      detonate(m.tx,m.ty);
+      arrDropAt(state.counterMissiles,i);
+    }
+    i=i-1;
+  }
+  i=state.incomingMissiles.length-1;
+  while(i>=0){
+    m=state.incomingMissiles[i];
+    if(!m.alive){ arrDropAt(state.incomingMissiles,i); i=i-1; continue; }
+    m.trail.push({x:m.x,y:m.y});
+    if(m.trail.length>12) trailDrop(m.trail);
+    m.x+=m.vx*dt;
+    m.y+=m.vy*dt;
+    if(m.y>=H-16){
+      m.alive=false;
+      detonate(m.x,H-12);
+      var cj=0;
+      while(cj<state.cities.length){
+        c=state.cities[cj];
+        if(c.alive && Math.abs(c.x-m.x)<28){ c.alive=false; break; }
+        cj=cj+1;
+      }
+      arrDropAt(state.incomingMissiles,i);
+      if(citiesAllDead(state.cities)) state.over=true;
+    }
+    i=i-1;
+  }
+  i=state.explosions.length-1;
+  while(i>=0){
+    e=state.explosions[i];
+    e.life+=dt;
+    if(e.life<0.35){
+      e.r=4+(e.maxR-4)*(e.life/0.35);
+    } else if(e.life<0.55){
+      e.r=e.maxR;
+    } else {
+      f=1-(e.life-0.55)/(e.maxLife-0.55);
+      e.r=e.maxR*Math.max(0,f);
+    }
+    if(e.life>=e.maxLife) arrDropAt(state.explosions,i);
+    i=i-1;
+  }
+  i=state.incomingMissiles.length-1;
+  while(i>=0){
+    m=state.incomingMissiles[i];
+    if(m.alive){
+      var ej=0;
+      while(ej<state.explosions.length){
+        e=state.explosions[ej];
+        if(e.r>=6){
+          dx=m.x-e.x; dy=m.y-e.y;
+          if(dx*dx+dy*dy<=e.r*e.r){
+            m.alive=false;
+            state.score+=25;
+            detonate(m.x,m.y);
+            arrDropAt(state.incomingMissiles,i);
+            break;
+          }
+        }
+        ej=ej+1;
+      }
+    }
+    i=i-1;
+  }
+  i=0;
+  while(i<state.stars.length){ state.stars[i].tw+=dt*2; i=i+1; }
+}
+function drawCity(x,y){
+  ctx.fillStyle="#3a6ea5";
+  ctx.fillRect(x-14,y-18,10,18);
+  ctx.fillRect(x-2,y-26,10,26);
+  ctx.fillRect(x+8,y-16,10,16);
+  ctx.fillStyle="#ffe9a8";
+  ctx.fillRect(x-12,y-14,2,2);
+  ctx.fillRect(x-6,y-14,2,2);
+  ctx.fillRect(x,y-14,2,2);
+}
+function drawBase(x,y){
+  ctx.fillStyle="#4a6a9a";
+  ctx.beginPath();
+  ctx.moveTo(x-22,y+6);
+  ctx.lineTo(x-14,y-10);
+  ctx.lineTo(x+14,y-10);
+  ctx.lineTo(x+22,y+6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle="#7ab6ff";
+  ctx.fillRect(x-4,y-16,8,8);
+}
+function drawTrail(pts,mx,my,col){
+  // fillRect dots, not stroke polylines (RTL PATH_MAX=16 drops extra lineTo).
+  var j=0,p;
+  ctx.fillStyle=col;
+  while(j<pts.length){
+    p=pts[j];
+    ctx.fillRect(p.x-1,p.y-1,2,2);
+    j=j+1;
+  }
+  ctx.fillRect(mx-1,my-1,2,2);
+}
+function draw(){
+  var i,s,ph,m,e,ch,r;
+  ctx.fillStyle="#05071a";
+  ctx.fillRect(0,0,W,H);
+  i=0;
+  while(i<state.stars.length){
+    s=state.stars[i];
+    ph=s.tw;
+    while(ph>=2) ph=ph-2;
+    if(ph>1) ph=2-ph;
+    ctx.fillStyle=ph>0.5?"#c8dcff":"#5a6a88";
+    ctx.fillRect(s.x,s.y,2,2);
+    i=i+1;
+  }
+  ctx.fillStyle="#1a2240";
+  ctx.fillRect(0,H-16,W,16);
+  i=0;
+  while(i<state.cities.length){
+    if(state.cities[i].alive) drawCity(state.cities[i].x,state.cities[i].y);
+    else {
+      ctx.fillStyle="#3a2a2a";
+      ctx.fillRect(state.cities[i].x-14,state.cities[i].y-6,28,8);
+    }
+    i=i+1;
+  }
+  drawBase(BASE_X,BASE_Y);
+  i=0;
+  while(i<state.incomingMissiles.length){
+    m=state.incomingMissiles[i];
+    drawTrail(m.trail,m.x,m.y,"#ff5a5a");
+    ctx.fillStyle="#ff5a5a";
+    ctx.fillRect(m.x-2,m.y-2,5,5);
+    i=i+1;
+  }
+  i=0;
+  while(i<state.counterMissiles.length){
+    m=state.counterMissiles[i];
+    drawTrail(m.trail,m.x,m.y,"#9fd8ff");
+    ctx.fillStyle="#9fd8ff";
+    ctx.fillRect(m.x-2,m.y-2,4,4);
+    i=i+1;
+  }
+  i=0;
+  while(i<state.explosions.length){
+    e=state.explosions[i];
+    r=Math.max(1,Math.min(80,e.r));
+    ctx.fillStyle=e.life>0.55?"#ff3c14":"#fff0b4";
+    ctx.beginPath();
+    ctx.arc(e.x,e.y,r,0,6.28);
+    ctx.fill();
+    i=i+1;
+  }
+  ch=state.crosshair;
+  ctx.strokeStyle="#78dcff";
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  ctx.arc(ch.x,ch.y,16,0,6.28);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(ch.x-24,ch.y);ctx.lineTo(ch.x-10,ch.y);
+  ctx.moveTo(ch.x+10,ch.y);ctx.lineTo(ch.x+24,ch.y);
+  ctx.moveTo(ch.x,ch.y-24);ctx.lineTo(ch.x,ch.y-10);
+  ctx.moveTo(ch.x,ch.y+10);ctx.lineTo(ch.x,ch.y+24);
+  ctx.stroke();
+  ctx.fillStyle="#78dcff";
+  ctx.fillRect(ch.x-2,ch.y-2,4,4);
+  ctx.fillStyle="#ffffff";
+  ctx.textAlign="left";
+  ctx.fillText("SCORE "+state.score,12,24);
+  ctx.fillText("WAVE "+state.wave,12,40);
+  ctx.fillText("CITIES "+citiesAliveCount(state.cities),12,56);
+  ctx.fillText("ARROWS/STICK AIM  SPACE FIRE  R RESTART",12,H-8);
+  if(!state.waveActive && !state.over && state.waveBreakTimer>0){
+    ctx.textAlign="center";
+    ctx.fillStyle="#96dcff";
+    ctx.fillText("WAVE "+state.wave,W/2,H/2-8);
+    ctx.textAlign="left";
+  }
+  if(state.over){
+    ctx.fillStyle="#000000";
+    ctx.fillRect(80,160,480,140);
+    ctx.fillStyle="#ff6b6b";
+    ctx.textAlign="center";
+    ctx.fillText("GAME OVER",W/2,H/2-20);
+    ctx.fillStyle="#ffffff";
+    ctx.fillText("SCORE "+state.score,W/2,H/2+8);
+    ctx.fillText("PRESS R",W/2,H/2+32);
+    ctx.textAlign="left";
+  }
+}
+function frame(){
+  update(0.016);
+  draw();
+  requestAnimationFrame(frame);
+}
+function down(e){
+  var k=e.key, c=e.keyCode;
+  if(k==="ArrowLeft"||k==="a"||k==="A"||c===37||c===65) leftHeld=1;
+  if(k==="ArrowRight"||k==="d"||k==="D"||c===39||c===68) rightHeld=1;
+  if(k==="ArrowUp"||k==="w"||k==="W"||c===38||c===87) upHeld=1;
+  if(k==="ArrowDown"||k==="s"||k==="S"||c===40||c===83) downHeld=1;
+  if(k===" "||k==="Enter"||c===32||c===13) fireHeld=1;
+  if(k==="r"||k==="R"||c===82) rHeld=1;
+}
+function up(e){
+  var k=e.key, c=e.keyCode;
+  if(k==="ArrowLeft"||k==="a"||k==="A"||c===37||c===65) leftHeld=0;
+  if(k==="ArrowRight"||k==="d"||k==="D"||c===39||c===68) rightHeld=0;
+  if(k==="ArrowUp"||k==="w"||k==="W"||c===38||c===87) upHeld=0;
+  if(k==="ArrowDown"||k==="s"||k==="S"||c===40||c===83) downHeld=0;
+  if(k===" "||k==="Enter"||c===32||c===13) fireHeld=0;
+  if(k==="r"||k==="R"||c===82) rHeld=0;
+}
+addEventListener("keydown",down);
+addEventListener("keyup",up);
+reset();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

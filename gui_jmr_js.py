@@ -784,7 +784,13 @@ class App:
             self._set_status(self._status_text())
             self._update_arch_monitor()
             self._after_id = self.root.after(FRAME_MS, self._frame)
-        except tk.TclError:
+        except tk.TclError as e:
+            # dying gasp: a TclError here silently ends the GUI frame loop
+            # (frozen GUI, silent flight log) — name it before stopping
+            try:
+                self.backend._log.fault("GUI_FRAME", repr(e))
+            except Exception:
+                pass
             self._alive = False
             self._after_id = None
 

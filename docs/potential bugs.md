@@ -9,9 +9,9 @@ This file is **copy 2** of “one heap / generation / dual-copy skew”
 [Recurring classes](#recurring-bug-classes) before chasing a title name.
 
 **F9 play (2026-08-22):** INVADERS / PACMAN / DONKEY / ASTEROID / MRDO
-work on FPGA-SIM. **BOARD PACMAN** froze after a few dots (2026-08-26)
-until `finder` stopped recursing — **#84**. This is **not** a “games are
-broken” list.
+work on FPGA-SIM. **BOARD PACMAN #84:** chase is one-step (2026-08-26);
+eyes home is in-place `_ghostHome` (2026-08-27) — not `finder`. This is
+**not** a “games are broken” list.
 
 **How to read:** start at **Open now**. **Fixed** is a catalog (what it
 was, what caused it, how it was closed). Session essays live in
@@ -36,7 +36,6 @@ as V1.0 silicon holes.
 
 | ID | Status | What | How to close |
 |---|---|---|---|
-| **#84** | **OPEN** on BOARD (HTML workaround 2026-08-26) | PACMAN HDMI **freezes** after a few unsteered dots. Empty `finder` → no freeze (ghosts boxed). FPGA-SIM still moves Pac-Man. Recursive BFS froze ~5–10 dots; **iterative flood still froze ~15 dots** — the hang is the **maze walk**, not only the call stack. | **V1 HTML, not more BRAM:** one-step chase in `storage/PACMAN.HTML` (door `2` exits **up**). Original BFS only for **eyes home**; full flood is `storage/PACORIG.HTML`. Do **not** raise `ENV_DEPTH` 384→512 or `CSTK` — T200 is full, new bits fail routing. Do **not** add a pathfinding opcode. [no-maze-flood-on-tick](../.cursor/rules/no-maze-flood-on-tick.mdc). |
 | **#82** | **OPEN** (cause known 2026-08-26) | `LIST` / `DIR` print `-- MORE --` when the listing is already done. Content that lands on an exact multiple of 14 glass rows (`BOXES.HTML` = 42 = 3×14) eats the next keystrokes as page-advances (`?SN` / bare READY). The prompt **does** draw; the old “MORE invisible” theory was wrong. | Before paging, test end-of-content: LIST `src_i >= src_len \|\| list_disp > list_hi`; DIR when the catalog is drained. Sites: `C_DIR_NL`, `C_LIST_NL`, `C_LIST_WRAP_PAGE` (`list_on_page >= 13`). |
 | **#42** | V1.5 (not V1.0) | READY `INSERT n` — PYTHON edits; RTL `?SN`. Useless until compile-on-RUN. | V1.5 insert is an unused number (`15` between `10`/`20`). Do **not** add an `INSERT` verb. |
 | **#43** | V1.5 (not V1.0) | READY `DELETE n` — PYTHON editor-delete; RTL `REMOVE` is **file** delete. Useless until compile-on-RUN. | V1.5 delete is `10` + Enter. Keep `REMOVE "NAME"` for the card. |
@@ -226,6 +225,7 @@ first theory.
 | **78** | INVADERS bunker hole at cells[32] | promote resumed EXEC on stale window | Resume via `S_FETCH_WAIT`. |
 | **81** | `for (var i…)` in a method-called fn looped forever | compiler emitted STORE_VAR (caller’s binding) | Emit LET_VAR; note for-init locals. FM==RTL were both wrong. |
 | **83** | DONKEY platforms, **no characters** | class-method scan re-issued one index; last method of 3+ never found | Issue the read one entry ahead. PYTHON dict never saw it. |
+| **84** | PACMAN HDMI freeze; then eyes never home | `finder` cloned 31×28 + objects every ghost cell (`MAX_OBJ` 960, ~676 live). Empty `finder` stopped the freeze; greedy `_ghostStep` could not go around the house wall. | Chase = `_ghostStep`. Eyes = in-place `_ghostHome` (no clone). Do not restore `finder`. |
 
 MRDO “stuck splash” was KEYEVT down+up in one Verilator frame — **sim_main**
 defers same-window keyup (real HDMI is real-time). DONKEY Luigi→splash was

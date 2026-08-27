@@ -23,10 +23,14 @@ prefer **smaller y, then column 13** (door) or they never leave the box
 (greedy-toward-player goes down). No maze clone. No `forEach` stamping
 ghosts as walls.
 
-**Rare shortest path** (eaten eyes → spawn only): original `finder` +
-`_copyMapOpen` is OK **once per eye tile**, not for all ghosts every
-cell. `storage/PACMAN.HTML` = chase one-step + eyes original.
-`storage/PACORIG.HTML` = original flood; board freezes. Do not title-gate.
+**Rare shortest path** (eaten eyes → spawn only): in-place BFS on the
+existing map (`_ghostHome`), **once per eye tile**. Do **not** restore
+`finder` / `_copyMapOpen` — that is ~36 heap objects before the walk
+(31 row-arrays + options/start/end) then more per `push`; PACMAN already
+holds ~676 of `MAX_OBJ=960` and one call can `fault 3`. Do **not** run
+any maze flood on chase/flee. `storage/PACMAN.HTML` = one-step chase +
+zero-heap eyes home. `storage/PACORIG.HTML` = original flood; board
+freezes. Do not title-gate.
 
 ```javascript
 // BAD — every ghost, every cell (PACORIG / board freeze)

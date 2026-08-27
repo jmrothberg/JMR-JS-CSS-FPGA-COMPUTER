@@ -45,7 +45,8 @@ storage/NAME.HTML  (seed — author here)
 The chip has no compiler. Rebuild `card.img` after you edit `storage/`.
 
 **V1.5 (planned)** tries to compile on the machine so a desk needs no PC and
-no `.JSH`.
+no `.JSH`, **and** popular JS V1.0 does not have (see
+[JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required)).
 
 You never type opcode numbers. You type JavaScript. The compiler emits the numbers.
 
@@ -336,7 +337,7 @@ card-minted `.JSH`. `EDIT` / `SAVE` / `NEW` / numbered replace / `INSERT` /
 `INSERT` / `DELETE` verbs — V1.5 insert is an unused number (`15`); delete
 is `10` + Enter. `EDIT n` is kept **then**, not as V1.0 authoring.
 
-**V1.5 (planned)** tries to be **standalone**: type, paste, or edit numbered HTML at `>` **and** compile-on-RUN on the machine (V1.0 compiles when you make the card; PYTHON / FPGA-SIM / BOARD `RUN` that `card.img`) —
+**V1.5 (planned)** tries to be **standalone**: type, paste, or edit numbered HTML at `>` **and** compile-on-RUN on the machine **and** popular JS V1 lacks (`Array.shift`, `Math.sin`/`round`, `isFinite`, …). V1.0 compiles when you make the card; PYTHON / FPGA-SIM / BOARD `RUN` that `card.img` —
 [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 
 ---

@@ -228,6 +228,34 @@ whose USB location ends in `.0`. Channel B (`.1`) is **JTAG** — never the
 tether. `JMR_JS_SERIAL` overrides autodetect.
 Gates: `make -C sim tb_uart_link tb_ft245`.
 
+### Live board telemetry — the machine reports its own faults (2026-08-26)
+
+Two more line types ride the same tether. They are the **only** crash forensics
+that exist on silicon, and they are what identified the PACMAN halt
+(`fault 3` at `ip 263`) after timing closure and a DDR3 cache A/B had both
+failed to explain it.
+
+- **`V<st2><fault2><ip4>`** — VM heartbeat (`2b0f1f3`). One line per dump **and
+  on every `machine_fault` rising edge**. Carries `{casestate, fault, ip}`.
+- **`D<hh>`** — storage stall telemetry (`5968932`). Fires after **~0.67 s of
+  continuous storage busy**, then every ~0.17 s, carrying `stor_state`.
+
+Two things to know before reading either:
+
+1. **A fault is a deliberate halt, not a hang.** Every `machine_fault` site does
+   `running <= 1'b0; hs_st(S_DONE)`. From the glass a halt and a wedge look
+   identical — the V-line is the only thing that distinguishes them.
+2. **In the Inspector, `—` means NOT TRANSMITTED, not zero.** The V-line's whole
+   payload is three numbers. `fsite`, `ecode`, the `overflow:` row and the rest
+   are blank on BOARD because the board never sends them. Reading
+   `overflow: heap —` as "heap is fine" is a wrong conclusion the panel invites.
+
+The pre-`5968932` D-line **could never fire** (equality test on a saturating
+counter), so zero D-lines in any older board log proves nothing.
+
+Full decode tables — fault codes, storage state ranges, and what BOARD still
+cannot report — are in **[ARCH_MONITOR.md](ARCH_MONITOR.md)**.
+
 ### Buttons & LEDs (frozen — do not reshuffle)
 
 - **BTNC (center button, B22) = reset**, like the T100/BASIC board habit.
@@ -247,7 +275,35 @@ Gates: `make -C sim tb_uart_link tb_ft245`.
 
 - User product path: `LOAD "*.HTML"` + `RUN`. **V1.0:** PYTHON, FPGA-SIM,
   and BOARD all play project `card.img` (`RUN` = minted `.JSH`; the chip
-  does not compile). Rebuild the card after `storage/` edits. **V1.5 tries**
+  does not compile). Rebuild the card after `storage/` edits.
+
+> ### ⚠️ A stale `card.img` makes the board run a program you already fixed
+>
+> The board never reads `storage/*.HTML`. It reads the **minted `.JSH`
+> baked into `card.img`**. Edit a title, skip the card rebuild, and the
+> board keeps playing the old code — silently, with no warning anywhere.
+>
+> **This cost a full day, 2026-08-26/27.** `card.img` was minted 21:51;
+> `storage/PACMAN.HTML` was fixed at 22:09 — **18 minutes later**. The
+> board then ran the *unfixed* PACMAN across runs 45, 46 and the nocache
+> A/B, faulting every time, while the working version sat in the repo for
+> ~13 hours. Bitstreams, timing closure and a DDR3 cache A/B were all
+> investigated before anyone checked the card's timestamp. Rebuilding the
+> card fixed it outright.
+>
+> Worse, it silently invalidates sim-vs-board comparisons: FPGA-SIM
+> compiles from `storage/`, the board plays the card. "It faults on the
+> board but not in sim" meant only that the two were running **different
+> programs**.
+>
+> **Check before every board debugging session:**
+>
+> ```bash
+> ls -l --time-style=+"%m-%d %H:%M" card.img storage/*.HTML | sort -k6,7
+> ```
+>
+> If any title is newer than `card.img`, rebuild the card before drawing
+> a single conclusion from the board. **V1.5 tries**
   compile on the machine. Full-quality graphics stream from the
   ASET section into the external SRAM asset bank (never pack Donkey
   art into code BRAM; no `NAME.DAT`). Never dukpy on silicon.
@@ -414,6 +470,7 @@ JS events (pattern cite: BASIC sibling UART/`KEY` + PS/2 FIFO merge in
 
 ## Related
 
+- [ARCH_MONITOR.md](ARCH_MONITOR.md) — V-line / D-line decode tables, and what BOARD cannot report
 - [ARCHITECTURE.md](ARCHITECTURE.md)
 - [FPGA_FIT.md](FPGA_FIT.md)
 - [SESSION_HANDOFF.md](SESSION_HANDOFF.md)

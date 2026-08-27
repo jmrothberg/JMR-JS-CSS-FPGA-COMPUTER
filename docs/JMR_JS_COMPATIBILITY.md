@@ -7,7 +7,7 @@ and the instructions it becomes (34 **opcodes** + native ids). This file is
 title status, holes, and the **Version 1.0 / 1.5 / 2.0** plan — not the teaching
 list.
 
-This is **copy 2** of the Version 1.0 walls / Version 1.5 console HTML /
+This is **copy 2** of the Version 1.0 walls / Version 1.5 console + popular JS /
 Version 2.0 `MK.HTML` plan
 (copy 1 is `.cursor/rules/html-game-v1.mdc`).
 
@@ -27,7 +27,7 @@ slow to play** (PC simulating the chip). Board target **≥ 30
 pictures/second**: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
 Live heap/code caps: [FPGA_FIT.md](FPGA_FIT.md). **V1.0 BOARD:** compile when
 you make the card (`.JSH`). **V1.5** (planned) tries standalone compile plus
-type/paste/edit HTML. `MK.HTML` is still Version 2.0 (not V1).
+type/paste/edit HTML **and** popular JS V1.0 does not have. `MK.HTML` is still Version 2.0 (not V1).
 
 ## Reference titles (on disk)
 
@@ -56,7 +56,8 @@ edits. Compile is at **card create** (`make_sd_image.py` **mints** `NAME.JSH`).
 `LOAD` shows HTML; `RUN` loads that `.JSH`. Do **not** compile `storage/*.HTML`
 on host `RUN` as a second path. Never copy `.JSH` from `storage/`. **V1.5
 tries to be standalone** (compile-on-RUN on the machine; drop the card `.JSH`
-if it fits).
+if it fits) **and** lifts popular JS V1 walls (stdlib + globals; not Canvas
+gradients / mouse).
 
 **Asset bank (external SRAM — no `NAME.DAT`):** great graphics stay at full
 quality. `RUN` emits `data:image` art as the **ASET** (asset) section of
@@ -99,10 +100,10 @@ Chrome-only title “done on the machine.”
 
 | | **1.0 (now)** | **1.5 (planned)** | **2.0 (planned)** |
 |---|---|---|---|
-| **Meaning** | Caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Chip does not compile — **compile when you make the card** (minted `.JSH`). Console is **view-only** (`LIST` / `DIR` / `LOAD`) | Console **authoring** (type / paste / edit) **only after** compile-on-RUN on the machine (drop card `.JSH` if it fits). Edit verbs are pointless until `RUN` compiles the buffer | Machine changes so **`storage/MK.HTML` as embedded today** can `LOAD` + `RUN` |
+| **Meaning** | Caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Chip does not compile — **compile when you make the card** (minted `.JSH`). Console is **view-only** (`LIST` / `DIR` / `LOAD`) | Console **authoring** (type / paste / edit) **after** compile-on-RUN **and** popular JS V1 does not have (stdlib + globals). Same heap/ASET/Canvas caps. Not MK. | Machine changes so **`storage/MK.HTML` as embedded today** can `LOAD` + `RUN` |
 | **Acceptance** | `INVADERS` / `PACMAN` / `DONKEY` | Numbered-line HTML at `>` **and** standalone `RUN` **tried** on the machine (no PC); `SAVE` optional | **`MK.HTML`**. `MKPVP.HTML` stays V1 training wheels |
 | **Sprites / ASET** | **`MAX_SPR` = 16**, 4 MB bank | **Unchanged** (do not grow heap/ASET for this) | **`MAX_SPR` ≥ 518**, **8 MB** bank |
-| **Authoring** | PC + remake `card.img`. `LIST` to learn. Do **not** treat `EDIT` as V1.0 play | Same walls; source is the **editor buffer**; `RUN` compiles it | Same glass/`LOAD`/`RUN`; drop V1 HTML shims once V2 rows land |
+| **Authoring** | PC + remake `card.img`. `LIST` to learn. Do **not** treat `EDIT` as V1.0 play | Source is the **editor buffer**; `RUN` compiles it. Language: popular stdlib/globals (table below). Canvas caps stay | Same glass/`LOAD`/`RUN`; drop V1 HTML shims once V2 rows land |
 
 Do **not** title-gate (`if (stem == "MK")`).
 
@@ -165,6 +166,25 @@ on the existing SRAM port. **Do not** grow SOURCE into BRAM.
 PYTHON already accepts `10 text` at READY; RTL does not. Empty `10` on
 PYTHON currently blanks the line — V1.5 is BASIC **delete**.
 
+**Language V1.5 should add** (popular JS V1.0 does not have — author around
+on the card today; do **not** grow V1 RTL for one title). Same Canvas caps
+(`fillRect` / `arc` / hex `fillStyle`). **Not** this list: Canvas gradients /
+`globalCompositeOperation` / mouse (`clientX`) — indexed FB / no mouse port
+(**never**).
+
+| Kind | V1.0 today | V1.5 |
+|---|---|---|
+| **Array** | `push` `pop` `splice` `slice` `join` `indexOf` `filter` `map` `forEach` | **`shift` `unshift` `reverse` `every` `some` `includes` `findIndex`** |
+| **Math** | `floor` `abs` `min` `max` `random` `sqrt` `PI` | **`round` `ceil` `sin` `cos` `atan2` `pow` `hypot`** (`round` also on the V2 MK row until it lands) |
+| **String** | `length` `+` concat, intern compare | **`charAt` `charCodeAt` `substring`/`slice` `split` `concat` `toUpperCase` `toLowerCase` `includes` `startsWith` `endsWith` `trim` `repeat` `padStart`/`padEnd` `toFixed`** |
+| **Number / global** | numbers, `NaN` via ops | **`isFinite` `isNaN` `parseInt` `parseFloat` `Number(...)`** (MISSILE `isFinite` was FPGA-SIM `fault=4` `fsite=60011`) |
+| **Time / rAF** | `Date.now()`, `requestAnimationFrame` | **`performance.now`** (alias of frame clock) **`cancelAnimationFrame`** |
+| **Keys** | `e.key` + `keyCode` + `joy()` bits | **`e.code`** (`ArrowLeft` / `Space` / `KeyR`) so `keys[e.code]` works |
+
+Regex `match`/`exec` and JSON `parse`/`stringify` stay **walled** (LUT). MK dotted `new` / `.call` / `Object.keys` on RTL stay **V2.0**.
+
+Do **not** add a `shift` opcode to V1 RTL for one title.
+
 ### V1.0 hard walls (do not “fix” in RTL for one title)
 
 Documented from real traces (MKPVP on FPGA-SIM / PYTHON):
@@ -174,8 +194,13 @@ Documented from real traces (MKPVP on FPGA-SIM / PYTHON):
 | `MAX_SPR` = 16 | `ASET has N sprites; RTL MAX_SPR is 16` | ≤16 `data:image`; atlases + crops |
 | `Object.keys` (nid 41) is **PYTHON/HM only** | FPGA-SIM `fault=5` `fsite=4183` (unknown `CALL_NATIVE`) — the RTL exec64 arm is deliberately unimplemented | No `for…in` / `Object.keys` in an FPGA-SIM title; literal keys. (Compiler lowers `for…in` to `Object.keys` since 2026-08-21, so the loop *parses* — it still faults on RTL.) |
 | Negative `setTransform` scale | Fighter draws 1px / vanishes (PYTHON `_xf`) | Left + right sheets; no `sx < 0` mirror |
-| Math | Missing native / wrong paint | Only `floor` `abs` `min` `max` `random` `sqrt` |
-| Per-tick maze flood / recursive BFS | Board HDMI **freezes** (one `rAF` never returns). No `ERROR`. PYTHON / FPGA-SIM still look playable. | One-step chase or short **iterative** walk. No `Array(n).fill().map(()=>Array(m))`, no recursive `_render`, no nested `forEach` closures on a tick. PACMAN 2026-08-26. |
+| Math | Missing native / wrong paint | Only `floor` `abs` `min` `max` `random` `sqrt`. **V1.5:** `round` `ceil` `sin` `cos` `pow` … |
+| **`Array.shift()` / `every` / `includes`** | Card mint `CompileError` / `?NH` | Copy down / loops. **V1.5** natives. |
+| `isFinite` / `performance.now` / `cancelAnimationFrame` | FPGA-SIM `fault=4` `fsite=60011` (CALL_VAL not a function) | Skip in V1. **V1.5** globals. |
+| Canvas gradients / `globalCompositeOperation` / `rgba()` | Missing method or indexed FB | Hex `fillStyle` + `fillRect` / `arc`. **never** (not V1.5). |
+| `e.code` | Stick/keys never set `keys.ArrowLeft` | V1: `e.key` + `keyCode`. **V1.5:** intern `e.code`. |
+| mouse `clientX` | No mouse port | Arrows + `joy()` bits. **never**. |
+| Per-tick maze flood / recursive BFS | Board HDMI **freezes** (one `rAF` never returns). No `ERROR`. PYTHON / FPGA-SIM still look playable. Old `finder` also `fault 3` (~36 objects/call vs 284 free slots). | One-step **chase**. Eyes home = in-place `_ghostHome` once per tile (**not** `finder` / `_copyMapOpen`). No `Array(n).fill().map(()=>Array(m))` on a tick. |
 
 Product ISA freeze (three compiles) still defines **Complete** rows above.
 Library V1 titles may use only the **intersection** of Complete rows **and**

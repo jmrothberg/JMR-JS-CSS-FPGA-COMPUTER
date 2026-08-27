@@ -373,6 +373,7 @@ See [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and
 
 ## Related
 
+- [ARCH_MONITOR.md](ARCH_MONITOR.md) — watching the machine run (F10 monitor, Inspector, board telemetry)
 - [FPGA_BRINGUP.md](FPGA_BRINGUP.md)
 - [FPGA_FIT.md](FPGA_FIT.md)
 - [SESSION_HANDOFF.md](SESSION_HANDOFF.md)

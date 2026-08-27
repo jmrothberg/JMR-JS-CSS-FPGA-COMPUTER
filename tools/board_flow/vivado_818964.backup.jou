@@ -3,8 +3,8 @@
 # SW Build 6511674 on Tue Jun 16 11:01:26 MDT 2026
 # IP Build 6504888 on Tue Jun 09 09:05:25 MDT 2026
 # SharedData Build 6501428 on Mon Jun 08 17:34:18 MDT 2026
-# Start of session at: Mon Aug 24 19:35:20 2026
-# Process ID         : 1871571
+# Start of session at: Wed Aug 26 22:02:11 2026
+# Process ID         : 818964
 # Current directory  : /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/tools/board_flow
 # Command line       : vivado -mode batch -source /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/tools/board_flow/vivado_build.tcl -tclargs /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/nexys_video
 # Log file           : /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/tools/board_flow/vivado.log
@@ -13,12 +13,12 @@
 # Platform           : Ubuntu
 # Operating System   : Ubuntu 26.04 LTS
 # Processor Detail   : AMD Ryzen AI 9 HX 470 w/ Radeon 890M
-# CPU Frequency      : 5215.549 MHz
+# CPU Frequency      : 5214.926 MHz
 # CPU Physical cores : 12
 # CPU Logical cores  : 24
 # Host memory        : 128308 MB
 # Swap memory        : 111669 MB
 # Total Virtual      : 239977 MB
-# Available Virtual  : 226243 MB
+# Available Virtual  : 226946 MB
 #-----------------------------------------------------------
 source /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/tools/board_flow/vivado_build.tcl

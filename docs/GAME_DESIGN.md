@@ -20,7 +20,7 @@ walls” (copy 1 is `.cursor/rules/no-game-hardwire.mdc` +
 | Gen | Meaning | Titles |
 |---|---|---|
 | **1.0 (now)** | Frozen caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Compile when you **make the card** (minted `.JSH`; chip does not compile) | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls (see below). `MKPVP.HTML` is the V1 MK-shaped example. |
-| **1.5 (planned)** | Console **authoring** (type / paste / edit) **and try to be standalone** (compile-on-RUN on the machine; drop card `.JSH` if it fits) | Same V1 titles/walls. Not MK. Glass + LUT/BRAM budget: [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). |
+| **1.5 (planned)** | Console **authoring** (type / paste / edit) **and try to be standalone** (compile-on-RUN) **and** popular JS V1 does not have (`shift`, `Math.sin`/`round`, `isFinite`, `e.code`, …). Same heap/ASET/Canvas. Not MK. | Same V1 titles. Language + LUT: [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). |
 | **2.0 (compiler front end started)** | Machine changes so **`MK.HTML` as embedded today** runs | Acceptance: `MK.HTML`. Need **`MAX_SPR` ≥ 518**, asset bank **8 MB** (or more; ASIC: one chip, simple port), dotted **`new mk.…`**, **`.call`/`.apply`**, **`Object.keys` on exec64**, **`Math.round`**. Parse gaps (unary `+`, `for…in`, `throw`, `in`) landed 2026-08-21. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20). |
 
 V1 / V1.5 / V2 surface backlog: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
@@ -50,9 +50,10 @@ RUN
 - Chrome may open the same file for authoring. PYTHON bytecode → FPGA-SIM
   RTL → BOARD is the machine. Dukpy / a host twin is not.
 - **V1.5 (planned):** type, paste, or edit numbered HTML at READY; **`EDIT n`
-  stays**. **Try to be standalone** (compile-on-RUN on the machine). Numbers
-  go by 10 so `15` inserts between `10` and `20`; `10` + Enter deletes that
-  line, `10 body` also replaces it. Spec +
+  stays**. **Try to be standalone** (compile-on-RUN on the machine) **and**
+  popular JS V1 does not have (`shift`, `Math.sin`/`round`, `isFinite`,
+  `e.code`, …). Numbers go by 10 so `15` inserts between `10` and `20`;
+  `10` + Enter deletes that line, `10 body` also replaces it. Spec +
   LUT/BRAM budget:
   [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 
@@ -338,8 +339,20 @@ existing map (door cell `2` walks **up** out of the house). Do **not**
 grow `ENV_DEPTH` / `CSTK` — the T200 is full and new bits fail routing.
 Do not add a pathfinding opcode. Rule:
 [no-maze-flood-on-tick.mdc](../.cursor/rules/no-maze-flood-on-tick.mdc).
-`storage/PACMAN.HTML` = one-step chase + original `finder` for **eyes
-home only**. `storage/PACORIG.HTML` = original flood (board freezes).
+`storage/PACMAN.HTML` = one-step chase; `finder` stays `[]`. Eyes home
+is `_ghostHome` (in-place BFS, no clone, once per eye tile) — **not**
+the old `finder`. `storage/PACORIG.HTML` = original flood (board freezes).
+
+**Confirmed on silicon 2026-08-27.** The old `finder` allocated, *per
+call*: `Array(31).fill(0).map(()=>Array(28).fill(0))` = **32 array
+objects**, plus `Object.assign({},defaults,params)` and the `start:{}` /
+`end:{}` literals = **~36 heap objects before the search even starts**,
+then more per `push`. Four ghosts × 60 fps is ~8,600 objects/second
+against **284 free slots** (`MAX_OBJ` 960, PACMAN's steady live 676).
+A *single frame* of it eats half the headroom. The replacement
+`_ghostStep` (chase) and `_ghostHome` (eyes) allocate **no maze clone** —
+they write into `_gs` / `_eh` and one reused number queue. That is the
+difference between `fault 3` and a playable board.
 
 ### Never gate drawing on an `Image` object's properties
 

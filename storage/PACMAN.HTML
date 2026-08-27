@@ -13,11 +13,12 @@
 function _copyMap(src){var out=[];for(var j=0;j<src.length;j++){var row=src[j],r=[];for(var i=0;i<row.length;i++){r.push(row[i]);}out.push(r);}return out;}
 function _copyMapOpen(src){var out=[];for(var j=0;j<src.length;j++){var row=src[j],r=[];for(var i=0;i<row.length;i++){r.push(row[i]==2?0:row[i]);}out.push(r);}return out;}
 function _mapHasZero(src){for(var j=0;j<src.length;j++){var row=src[j];for(var i=0;i<row.length;i++){if(row[i]===0)return true;}}return false;}
-// BOARD #84: one-step only (same shape as MRDO creepToward, which runs on
-// silicon). Door/house 2 is walkable. On a 2, prefer smaller y then column
-// 13 (the door) — greedy-toward-player goes down and they never leave.
-// No maze clone, no BFS, no Array.fill/map, no while(qh<qt) flood.
-// Iterative flood still froze HDMI (~15 dots). Original flood is PACORIG.HTML.
+// BOARD #84: chase/flee are one-step only (same shape as MRDO creepToward).
+// Door/house 2 is walkable. On a 2, prefer smaller y then column 13 (the
+// door) — greedy-toward-player goes down and they never leave.
+// No maze clone, no finder, no Array.fill/map. Iterative flood on every
+// ghost every cell still froze HDMI (~15 dots). Eyes home is _ghostHome
+// once per tile. Original flood is PACORIG.HTML.
 var _gs={x:0,y:0,ok:0,change:0};
 function _ghostOpen(data,x,y){
     var yl,v;
@@ -93,6 +94,66 @@ function _ghostStep(data,sx,sy,ex,ey,dir,mode){
                 d=4;
             }else d=d+1;
         }
+    }
+    return _gs;
+}
+// Eyes home only. Shortest path on the EXISTING map (door/house 2 is open).
+// Do NOT restore Map.finder / _copyMapOpen — that clones 31 row-arrays plus
+// start/end/options (~36 objects) before the walk, then more per push.
+// PACMAN already holds ~676 of MAX_OBJ=960; one finder call can fault 3.
+// Do NOT run this on chase/flee (HDMI freeze, #84). Marks visited as orig+10
+// then restores. Queue is numbers in one reused array (cap 128), not a grid.
+var _eh={qh:0,qt:0,x:0,y:0,d:0,nx:0,ny:0,v:0,xl:0,yl:0};
+var _eyeQ=[];
+function _ghostHome(data,sx,sy,ex,ey){
+    _gs.ok=0; _gs.change=0;
+    _eh.yl=data.length;
+    _eh.xl=data[0].length;
+    if(!_ghostOpen(data,sx,sy)) return _gs;
+    if(!_ghostOpen(data,ex,ey)) return _gs;
+    _eh.qh=0; _eh.qt=0;
+    _eyeQ[0]=ey*100+ex;
+    _eh.qt=1;
+    data[ey][ex]=data[ey][ex]+10;
+    while(_eh.qh<_eh.qt){
+        _eh.v=_eyeQ[_eh.qh%128];
+        _eh.qh=_eh.qh+1;
+        _eh.x=_eh.v%100;
+        _eh.y=Math.floor(_eh.v/100);
+        _eh.d=0;
+        while(_eh.d<4){
+            _eh.nx=_eh.x+(_eh.d==0?1:_eh.d==2?-1:0);
+            _eh.ny=_eh.y+(_eh.d==1?1:_eh.d==3?-1:0);
+            if(_eh.ny<0||_eh.ny>=_eh.yl||_eh.nx<0||_eh.nx>=_eh.xl){
+                _eh.nx=(_eh.nx+_eh.xl)%_eh.xl;
+                _eh.ny=(_eh.ny+_eh.yl)%_eh.yl;
+            }
+            if(_eh.nx==sx&&_eh.ny==sy){
+                _gs.x=_eh.x; _gs.y=_eh.y; _gs.ok=1;
+                _gs.change=(_gs.x-sx>1||sx-_gs.x>1||_gs.y-sy>1||sy-_gs.y>1)?1:0;
+                _eh.d=4;
+                _eh.qh=_eh.qt;
+            }else if(_ghostOpen(data,_eh.nx,_eh.ny)){
+                data[_eh.ny][_eh.nx]=data[_eh.ny][_eh.nx]+10;
+                if(_eh.qt-_eh.qh>=128){
+                    _eh.d=4; _eh.qh=_eh.qt;
+                }else{
+                    _eyeQ[_eh.qt%128]=_eh.ny*100+_eh.nx;
+                    _eh.qt=_eh.qt+1;
+                }
+            }
+            if(_eh.d<4) _eh.d=_eh.d+1;
+        }
+    }
+    _eh.y=0;
+    while(_eh.y<_eh.yl){
+        _eh.x=0;
+        while(_eh.x<_eh.xl){
+            _eh.v=data[_eh.y][_eh.x];
+            if(_eh.v>=10) data[_eh.y][_eh.x]=_eh.v%10;
+            _eh.x=_eh.x+1;
+        }
+        _eh.y=_eh.y+1;
     }
     return _gs;
 }
@@ -1305,7 +1366,9 @@ function Game(id,params){
 								if(this.coord.x==this._params.coord.x&&this.coord.y==this._params.coord.y){
 									this.status = 1;
 								}else{
-									_ghostStep(map.data,this.coord.x,this.coord.y,this._params.coord.x,this._params.coord.y,this.orientation,0);
+									// Eyes: in-place BFS to spawn. Not finder (heap). Not every-tick chase.
+									_ghostHome(map.data,this.coord.x,this.coord.y,this._params.coord.x,this._params.coord.y);
+									if(!_gs.ok) _ghostStep(map.data,this.coord.x,this.coord.y,this._params.coord.x,this._params.coord.y,this.orientation,0);
 									if(_gs.ok){ this.vector.x=_gs.x; this.vector.y=_gs.y; this.vector.change=_gs.change; }
 								}
 							}
