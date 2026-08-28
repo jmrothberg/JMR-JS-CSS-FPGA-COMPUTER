@@ -10,19 +10,46 @@ if {[llength $argv] >= 3 && [lindex $argv 2] eq "fresh"} {
   set FRESH 1
 }
 file mkdir $OUT
+# Stem for build/bits/auto names. Prefer JMR_RUN_LABEL; else the newest
+# run*_console.log in $OUT (strip _console.log). need_timing=1 skips a
+# log that has not printed TIMING WNS= — that is the incoming tee, so a
+# PREV snapshot names the finished run, not the one just launching.
+proc jmr_run_stem_from_logs {dir {need_timing 0}} {
+  set best ""
+  set best_t -1
+  foreach f [glob -nocomplain "$dir/run*_console.log"] {
+    if {$need_timing} {
+      set fh [open $f r]
+      set txt [read $fh]
+      close $fh
+      if {![regexp {TIMING WNS=} $txt]} { continue }
+    }
+    set t [file mtime $f]
+    if {$t >= $best_t} {
+      set best_t $t
+      set best $f
+    }
+  }
+  if {$best eq ""} { return "UNKNOWN" }
+  set b [file tail $best]
+  return [string range $b 0 end-[string length "_console.log"]]
+}
 # NEVER-SMASH GUARD (2026-08-27, user directive): before this flow touches
 # anything, auto-archive whatever bit/bin the PREVIOUS run left in impl_1.
 # Runs unconditionally — a launch can no longer destroy an untested bit.
+# Name includes the previous run stem — timestamp-only names were opaque.
 set _prev_impl "$OUT/vivado/jmr_nexys_video.runs/impl_1"
 if {[file exists "$_prev_impl/top_nexys_video.bit"]} {
   set _stamp [clock format [clock seconds] -format %Y%m%d_%H%M%S]
+  set _prev_stem [jmr_run_stem_from_logs $OUT 1]
   file mkdir "$ROOT/build/bits/auto"
-  foreach _f {top_nexys_video.bit top_nexys_video.bin} {
-    if {[file exists "$_prev_impl/$_f"]} {
-      file copy -force "$_prev_impl/$_f" "$ROOT/build/bits/auto/${_stamp}_$_f"
+  foreach _ext {bit bin} {
+    set _src "$_prev_impl/top_nexys_video.$_ext"
+    if {[file exists $_src]} {
+      file copy -force $_src "$ROOT/build/bits/auto/${_stamp}_${_prev_stem}_PREV.$_ext"
     }
   }
-  puts "INFO: never-smash: previous impl bit auto-archived to build/bits/auto/${_stamp}_*"
+  puts "INFO: never-smash: previous impl bit auto-archived to build/bits/auto/${_stamp}_${_prev_stem}_PREV.*"
 }
 
 if {[llength [get_parts -quiet xc7a200tsbg484-1]] == 0} {
@@ -357,6 +384,13 @@ if {$JMR_STRATEGY ne ""} {
   # setting a strategy RESETS the run's step options — re-apply BIN_FILE
   # or the flow silently ships no .bin (run 46: stale Aug-13 .bin trap)
   set_property STEPS.WRITE_BITSTREAM.ARGS.BIN_FILE true [get_runs impl_1]
+  # ...and the TCL.POST checkpoint hooks (run 51: post_opt/place/physopt
+  # on disk were silently run 50's — the strategy reset wiped the hooks;
+  # only Vivado's native impl_1/*.dcp existed for recovery/contingency)
+  jmr_ckpt_hook impl_1 OPT_DESIGN $OUT/post_opt.dcp
+  jmr_ckpt_hook impl_1 PLACE_DESIGN $OUT/post_place.dcp
+  jmr_ckpt_hook impl_1 PHYS_OPT_DESIGN $OUT/post_phys_opt.dcp
+  jmr_ckpt_hook impl_1 ROUTE_DESIGN $OUT/post_route.dcp
 }
 launch_runs impl_1 -to_step write_bitstream -jobs $IMPL_JOBS
 # catch: a failed route ERRORs out of wait_on_runs and would kill the
@@ -408,16 +442,21 @@ set whs [lindex [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -ho
 puts "TIMING WNS=$wns WHS=$whs"
 if {$wns eq "" || $wns < 0} {
   puts "ERROR: timing not met (WNS=$wns) — refusing to publish .bit"
-  # never-smash: the refused bit is still preserved, clearly labeled
+  # never-smash: the refused bit is still preserved, labeled with run stem
   set _stamp [clock format [clock seconds] -format %Y%m%d_%H%M%S]
+  if {[info exists ::env(JMR_RUN_LABEL)] && $::env(JMR_RUN_LABEL) ne ""} {
+    set _stem $::env(JMR_RUN_LABEL)
+  } else {
+    set _stem [jmr_run_stem_from_logs $OUT 0]
+  }
   file mkdir "$ROOT/build/bits/auto"
-  foreach _f {top_nexys_video.bit top_nexys_video.bin} {
-    set _src "$OUT/vivado/jmr_nexys_video.runs/impl_1/$_f"
+  foreach _ext {bit bin} {
+    set _src "$OUT/vivado/jmr_nexys_video.runs/impl_1/top_nexys_video.$_ext"
     if {[file exists $_src]} {
-      file copy -force $_src "$ROOT/build/bits/auto/${_stamp}_WNSFAIL${wns}_$_f"
+      file copy -force $_src "$ROOT/build/bits/auto/${_stamp}_${_stem}_WNSFAIL${wns}.$_ext"
     }
   }
-  puts "INFO: never-smash: refused bit preserved in build/bits/auto/ (WNSFAIL label)"
+  puts "INFO: never-smash: refused bit preserved in build/bits/auto/${_stamp}_${_stem}_WNSFAIL${wns}.*"
   exit 1
 }
 if {$whs eq "" || $whs < 0} {
