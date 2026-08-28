@@ -598,6 +598,38 @@ Utilization (synth): the 2x payload is congestion-NEGATIVE — LUTs
 Board next: flash run 51 — DIR regression check (run 50 was the first
 working DIR; run 51 carries the same fixes), then the FAST fleet.
 
+## Run 52 — clean on the first attempt, and the route collapsed to 16 minutes (2026-08-28 05:54)
+
+**WNS +0.007 / WHS +0.050, gate self-published, div7 aboard.**
+`build/bits/run52_present-del_vstack_div7_WNS+0.007.bit`
+(tree 7324fb9; full archive + sim snapshot in
+`build/runs/run52_present-del_vstack_div7_WNS+0.007/`).
+
+**The route took 15m52s** — against 1h06m (run 46), 2h+ (run 50), and
+6h+ (run 51's doomed horse). The payload REMOVED the congestion that
+made routing a coin flip:
+
+| Piece | Effect |
+|---|---|
+| present pipeline deleted (scanout reads mini_fb Port B) | S_FB_SYNC's 768,008 clk/frame gone from EVERY title; 2 SRAM clients + the DDR3 front deleted; scanout can never starve on the bridge (run-32/33 class dead). Cost: single-buffer tearing (user-accepted) |
+| vstack -> BRAM (1W merge, name_has recipe) | Infeasible-attribute warning GONE from synth — ~700 SLICEM freed inside the old hot cluster after 9 runs of silent LUTRAM |
+| stor name_hit registered | run-50's -0.208 family retired (zero beats; dent[0..10] stable >=21 beats pre-EVAL) |
+| div7 (12.5 -> 14.3 MHz) | the 1.3 ns route-recovery bet PAID: vm_clk closed at the 70 ns budget |
+
+Measured (FPGA-SIM, swap-to-swap fclk = core clk = board wall-clock):
+MRDOFAST **891k clk/frame at div8** = 4.52x vs the 2026-08-27 baseline
+(S_FB_SYNC absent from the profile); with div7 ≈ ~120 fps class.
+DNKFAST projected ~2.6x. Battery: 380 passed / 1 known content failure
+(extended-PACMAN image 20,680 > CODE_WORDS — HTML-side trim item).
+
+Flow fixes proven in this run: the strategy-reset hook-wipe fix (all
+post_*.dcp written) and the per-run congestion/timing-distribution
+reports (auto-archived).
+
+Board queue: run 51 (+0.002, div8, engine-only) then run 52 (+0.007,
+div7 + present-deletion). DIR regression check on each — both carry the
+run-50 DIR fixes.
+
 ---
 
 ## Related

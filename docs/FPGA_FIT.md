@@ -16,7 +16,12 @@ policy) — DIR WORKS, the first working directory on glass.**
 `build/bits/run51_engine2x_raster_div8_WNS+0.002.bit`, the 2x raster
 engine set (DNKFAST 2.10x, MRDOFAST ~2.2x in FPGA-SIM), closed by the
 AltSpreadLogic_low contingency after the in-flow placement was timing-
-dead at −1.8.** Diary:
+dead at −1.8.**
+**RUN 52 (2026-08-28 05:54): WNS +0.007/WHS +0.050 first-attempt clean,
+route 16 MINUTES — present pipeline deleted (scanout reads the draw
+bank; S_FB_SYNC 768k/frame gone), vstack finally BRAM, div7 =
+14.3 MHz. `build/bits/run52_present-del_vstack_div7_WNS+0.007.bit`.
+MRDOFAST ~4.5-4.9x vs baseline, DNKFAST ~2.6x.** Diary:
 [TIMING_WALL.md — Run 50](TIMING_WALL.md#run-50--dir-works-on-the-board-2026-08-27-first-working-directory).
 Run 51 (raster engine 2x set, div8) baking.
 **Fit is solved. Timing is solved.** Ledger: [TIMING_WALL.md](TIMING_WALL.md).
