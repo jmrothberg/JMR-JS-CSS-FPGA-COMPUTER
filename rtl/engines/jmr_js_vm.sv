@@ -2796,14 +2796,26 @@ module jmr_js_vm #(
     // only in vst_win (nested [[..],[..]] read back the inner's first
     // element), STRIDX_WR / S_V64_RECT lost their result the same way.
     // Still one write port — the two arms are mutually exclusive.
+    // Run 52 (P2): ONE write statement so 1W is provable — the if/else
+    // pair kept vstack "Infeasible attribute ram_style=block" (LUTRAM,
+    // 704 RAM64M of SLICEM inside the congested cluster) since run 19.
+    // Same recipe that fixed name_has (census: 7.7k LUTs from a split
+    // writer). Priority preserved: exec-qualified write wins, exactly
+    // as the old else-if. Gate: run 52's Final Mapping table must say
+    // Block RAM — the attribute alone is not inference (run-19 lesson).
     always_ff @(posedge clk) begin
-        if (e64_vst_we_q && e64_wr_ok &&
+        logic        vst_do;
+        logic [9:0]  vst_a;
+        logic [63:0] vst_d;
+        logic        e64_w;
+        e64_w = e64_vst_we_q && e64_wr_ok &&
             (state == S_V64_EXEC ||
              state == S_FETCH_WAIT ||
-             state == S_V64_WIN_FILL)) begin
-            vstack[e64_vst_waddr_q[9:0]] <= e64_vst_wdata_q;
-        end else if (vst_we)
-            vstack[vst_waddr[9:0]] <= vst_wdata;
+             state == S_V64_WIN_FILL);
+        vst_do = e64_w || vst_we;
+        vst_a  = e64_w ? e64_vst_waddr_q[9:0] : vst_waddr[9:0];
+        vst_d  = e64_w ? e64_vst_wdata_q : vst_wdata;
+        if (vst_do) vstack[vst_a] <= vst_d;
         vst_rdata <= vstack[vst_raddr[9:0]];
     end
 

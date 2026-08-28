@@ -9,10 +9,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# div8 (run 51 holds 8; div7 = run 52's single variable). Budget ceilings for
+# div7 (run 52). Budget ceilings for
 # VM progress scale by this; polling loops break early so passing tests
 # pay nothing. Console/RPC-side waits are unscaled.
-_VMDIV = 8
+_VMDIV = 7
 
 
 _SCRATCH_CARD = None

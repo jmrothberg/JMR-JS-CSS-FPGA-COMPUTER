@@ -99,15 +99,14 @@ set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets u_tmds/u_rgb2dvi/ClockGenInte
 ## in the HDMI bank's region. Pin the MMCM beside its loads.
 set_property LOC MMCME2_ADV_X1Y2 [get_cells {u_tmds/u_rgb2dvi/ClockGenInternal.ClockGenX/GenMMCM.DVI_ClkGenerator}]
 
-# div8 VM clock (run 51 decision: hold 8; div7 is run 52's ONE variable,
-# decided from run 51's auto-generated timing_vmclk_dist.rpt — post-C3
-# wall measured ~71 ns vs the 70 ns div7 budget as-placed, and div7
-# spends the slack that makes Congestion_SpreadLogic_high free). The
-# divide-by must match jmr_js_core VM_CLK_DIV and
+# div7 VM clock (run 52): run 51's WINNING placement measured vm_clk at
+# +8.673 ns of the 80 ns budget (wall 71.3 ns) — div7's 70 ns needs
+# ~1.3 ns of route recovery under real pressure, a fair bet with the
+# div8 fallback. The divide-by must match jmr_js_core VM_CLK_DIV and
 # tests/test_rtl_snippets._VMDIV or the constraint lies to the tools. Run-30 post-route: all 6,000 worst
 # failing paths interior to u_vm; nothing outside fails. Edges are a
 # subset of ui_clk edges, so boundary paths stay ordinary 10 ns paths.
-create_generated_clock -name vm_clk -divide_by 8 \
+create_generated_clock -name vm_clk -divide_by 7 \
     -source [get_pins u_core/g_vmclk_div.u_vm_bufgce/I] \
     [get_pins u_core/g_vmclk_div.u_vm_bufgce/O]
 

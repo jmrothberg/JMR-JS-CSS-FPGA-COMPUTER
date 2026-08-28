@@ -305,12 +305,19 @@ module storage_engine #(
     endfunction
 
     // NEW: name/attr compare against dent[] window (filled via S_DS_LD*)
+    // Run 52 (P1b): the 11-byte compare fed the S_DS_EVAL state decode
+    // combinationally — run 50's -0.208 family (dent -> state, LL11).
+    // dent[0..10] are written >=21 beats before EVAL (bytes 11..31 load
+    // after them), so a free-running register costs zero beats and takes
+    // the 88-bit AND out of the dispatch cone (the 7f4f113 recipe).
     wire name_hit = (dent[0]  == name83[0])  && (dent[1]  == name83[1])
                  && (dent[2]  == name83[2])  && (dent[3]  == name83[3])
                  && (dent[4]  == name83[4])  && (dent[5]  == name83[5])
                  && (dent[6]  == name83[6])  && (dent[7]  == name83[7])
                  && (dent[8]  == name83[8])  && (dent[9]  == name83[9])
                  && (dent[10] == name83[10]);
+    logic name_hit_q;
+    always_ff @(posedge clk) name_hit_q <= name_hit;
     wire [7:0] ds_attr = dent[11];
 
     // FAT entry byte offset inside its sector
@@ -842,7 +849,7 @@ module storage_engine #(
                             ds_off <= ds_off + 10'd32;
                             state  <= S_DS_ENT;
                         end
-                    end else if (name_hit) begin
+                    end else if (name_hit_q) begin
                         found_r  <= 1'b1;
                         dir_lba  <= ds_lba;
                         dir_off  <= ds_off;
