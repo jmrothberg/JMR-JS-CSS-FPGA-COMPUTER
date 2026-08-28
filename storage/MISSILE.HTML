@@ -48,7 +48,10 @@ var state={
   lastFireTime:-1,fireCooldown:0.15,
   stars:[]
 };
-var leftHeld=0,rightHeld=0,upHeld=0,downHeld=0,fireHeld=0,rHeld=0;
+// 2026-08-28: one object instead of 6 top-level names — this IIFE's
+// whole body is one function scope, subject to the 16-local RTL wall
+// (MISSILE.HTML hit it: held.right was the 17th name).
+var held={left:0,right:0,up:0,down:0,fire:0,r:0};
 // V1: no Array.shift (wall). Copy down + shrink. V1.5 list: Array.shift.
 function trailDrop(a){
   var i=0;
@@ -192,14 +195,14 @@ function detonate(x,y){
 function update(dt){
   var j,kx,ky,cs,i,m,dx,dy,distLeft,stepLen,c,e,f;
   if(state.over){
-    if(rHeld) reset();
+    if(held.r) reset();
     return;
   }
-  if(rHeld){ reset(); return; }
+  if(held.r){ reset(); return; }
   j=playBits();
   state.t+=dt;
-  kx=(leftHeld||(j&4)?-1:0)+(rightHeld||(j&8)?1:0);
-  ky=(upHeld||(j&1)?-1:0)+(downHeld||(j&2)?1:0);
+  kx=(held.left||(j&4)?-1:0)+(held.right||(j&8)?1:0);
+  ky=(held.up||(j&1)?-1:0)+(held.down||(j&2)?1:0);
   if(kx||ky){
     cs=380;
     state.crosshair.x+=kx*cs*dt;
@@ -207,7 +210,7 @@ function update(dt){
   }
   state.crosshair.x=Math.max(8,Math.min(W-8,state.crosshair.x));
   state.crosshair.y=Math.max(8,Math.min(H-50,state.crosshair.y));
-  if(fireHeld||(j&16)||(j&32)) fire();
+  if(held.fire||(j&16)||(j&32)) fire();
   if(!state.waveActive){
     state.waveBreakTimer-=dt;
     if(state.waveBreakTimer<=0) startWave(state.wave);
@@ -444,21 +447,21 @@ function frame(){
 }
 function down(e){
   var k=e.key, c=e.keyCode;
-  if(k==="ArrowLeft"||k==="a"||k==="A"||c===37||c===65) leftHeld=1;
-  if(k==="ArrowRight"||k==="d"||k==="D"||c===39||c===68) rightHeld=1;
-  if(k==="ArrowUp"||k==="w"||k==="W"||c===38||c===87) upHeld=1;
-  if(k==="ArrowDown"||k==="s"||k==="S"||c===40||c===83) downHeld=1;
-  if(k===" "||k==="Enter"||c===32||c===13) fireHeld=1;
-  if(k==="r"||k==="R"||c===82) rHeld=1;
+  if(k==="ArrowLeft"||k==="a"||k==="A"||c===37||c===65) held.left=1;
+  if(k==="ArrowRight"||k==="d"||k==="D"||c===39||c===68) held.right=1;
+  if(k==="ArrowUp"||k==="w"||k==="W"||c===38||c===87) held.up=1;
+  if(k==="ArrowDown"||k==="s"||k==="S"||c===40||c===83) held.down=1;
+  if(k===" "||k==="Enter"||c===32||c===13) held.fire=1;
+  if(k==="r"||k==="R"||c===82) held.r=1;
 }
 function up(e){
   var k=e.key, c=e.keyCode;
-  if(k==="ArrowLeft"||k==="a"||k==="A"||c===37||c===65) leftHeld=0;
-  if(k==="ArrowRight"||k==="d"||k==="D"||c===39||c===68) rightHeld=0;
-  if(k==="ArrowUp"||k==="w"||k==="W"||c===38||c===87) upHeld=0;
-  if(k==="ArrowDown"||k==="s"||k==="S"||c===40||c===83) downHeld=0;
-  if(k===" "||k==="Enter"||c===32||c===13) fireHeld=0;
-  if(k==="r"||k==="R"||c===82) rHeld=0;
+  if(k==="ArrowLeft"||k==="a"||k==="A"||c===37||c===65) held.left=0;
+  if(k==="ArrowRight"||k==="d"||k==="D"||c===39||c===68) held.right=0;
+  if(k==="ArrowUp"||k==="w"||k==="W"||c===38||c===87) held.up=0;
+  if(k==="ArrowDown"||k==="s"||k==="S"||c===40||c===83) held.down=0;
+  if(k===" "||k==="Enter"||c===32||c===13) held.fire=0;
+  if(k==="r"||k==="R"||c===82) held.r=0;
 }
 addEventListener("keydown",down);
 addEventListener("keyup",up);

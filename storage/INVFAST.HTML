@@ -1253,8 +1253,10 @@ function animate() {
       grid.invaders.length > 0 &&
       invaderProjectiles.length < 3
     ) {
-      var sh = pickShooter(grid);
-      if (sh) sh.shoot(invaderProjectiles);
+      /* reuse `inv` — not written until the per-invader loop below (17th
+         local previously; the RTL wall is 16 per function). */
+      inv = pickShooter(grid);
+      if (inv) inv.shoot(invaderProjectiles);
     }
 
     vx = grid.velocity.x;
@@ -1298,15 +1300,17 @@ function animate() {
   checkVictory();
 
   // player movement (cannon does not tilt)
-  var jMove = stickBits();
-  var goL = keys.a.pressed || (jMove & 4);
-  var goR = keys.d.pressed || (jMove & 8);
+  // reuse vx/blocked/bi (all loop-scoped, done by this point) instead of
+  // 3 new names — animate() is already at the 16-per-function RTL wall.
+  vx = stickBits();
+  blocked = keys.a.pressed || (vx & 4);
+  bi = keys.d.pressed || (vx & 8);
   if (playerDying) {
     player.velocity.x = 0;
-  } else if (goL && !goR) {
+  } else if (blocked && !bi) {
     player.velocity.x = -5;
     player.rotation = 0;
-  } else if (goR && !goL) {
+  } else if (bi && !blocked) {
     player.velocity.x = 5;
     player.rotation = 0;
   } else {

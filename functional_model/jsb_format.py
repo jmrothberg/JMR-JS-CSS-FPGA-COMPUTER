@@ -116,6 +116,14 @@ SOURCE_MAP_VERSION = 1
 ASET_PAL_BYTES = 768  # 256 × RGB888 at asset-SRAM offset 0
 SRAM_BYTES = 4 * 1024 * 1024  # 2M × 16 IS61WV204816 contract (see docs/ARCHITECTURE.md)
 # V2.0 MK.HTML: compile_js sets JMR_SRAM_BYTES=8M and JMR_MAX_SPR=518.
+# Lowest runtime-reserved SRAM address on the standard (4MB) board config —
+# framebuffer/work/spr/src/imgd all live contiguously from here to the top
+# of the bank. word 1,480,704 * 2 bytes/word, must track FB_SRAM_BASE in
+# rtl/engines/jmr_fb_present.sv (and jmr_fb_scanout.sv's copy of the same
+# param). Only meaningful for the default 4MB SRAM_BYTES; a JMR_SRAM_BYTES
+# override implies a different board/region layout this constant doesn't
+# know about, so the mint-time check below is skipped in that case.
+_FB_SRAM_BASE_BYTES = 1_480_704 * 2
 
 
 def asset_sram_bytes() -> int:
@@ -658,6 +666,27 @@ def build_aset_payload(palette, sprites):
     if len(out) > SRAM_BYTES:
         raise ValueError(
             f"ASET payload {len(out)} bytes exceeds the 4 MB asset SRAM bank"
+        )
+    # 2026-08-28: the 4MB check above is necessary but not sufficient — the
+    # asset SRAM bank is SHARED with fixed runtime regions (framebuffer,
+    # work RAM, legacy sprite RAM, source RAM, ImageData snapshot), all
+    # placed contiguously from FB_SRAM_BASE to the top of the bank (see
+    # rtl/jmr_js_core.sv WORK_SRAM_BASE, rtl/engines/jmr_fb_present.sv
+    # FB_SRAM_BASE, rtl/engines/jmr_js_vm.sv SPR_SRAM_BASE/IMGD_SRAM_BASE,
+    # rtl/engines/jmr_console_engine.sv SRC_SRAM_BASE). Art that reaches
+    # FB_SRAM_BASE silently OVERLAPS live runtime data — every present-
+    # engine frame copy trampled it, corrupting whichever pixels of the
+    # art happened to land past this line (MKPVP/MKCPU/MKBIG/MKBIGCPU all
+    # shipped this way; each was fixed by shrinking the art, not raising
+    # this number). This check must never be silently bypassed again.
+    if asset_sram_bytes() == SRAM_BYTES and len(out) > _FB_SRAM_BASE_BYTES:
+        raise ValueError(
+            f"ASET payload {len(out)} bytes reaches into runtime-reserved "
+            f"SRAM (framebuffer/work/spr/src/imgd start at byte "
+            f"{_FB_SRAM_BASE_BYTES}) — art would be corrupted by every "
+            f"frame's display copy. Shrink the art (dedupe/repack sprite "
+            f"sheets); do not raise this boundary without moving the "
+            f"colliding RTL region."
         )
     return bytes(out), descs
 

@@ -447,10 +447,12 @@ class Compiler:
                 tmp = self._name("__arg")
                 self._emit(Op.LET_VAR, tmp, 1)
                 for key in p[1]:
+                    self._note_local(key)
                     self._emit(Op.LOAD_VAR, tmp)
                     self._emit(Op.GET_PROP, self._name(key))
                     self._emit(Op.LET_VAR, self._name(key), 1)
             else:
+                self._note_local(p)
                 self._emit(Op.LET_VAR, self._name(p), 1)
         self._expect("{")
         self._fn_depth += 1  # NEW: function body locals use LET_VAR (env)
@@ -765,10 +767,12 @@ class Compiler:
                     tmp = self._name("__arg")
                     self._emit(Op.LET_VAR, tmp, 1)
                     for key in p[1]:
+                        self._note_local(key)
                         self._emit(Op.LOAD_VAR, tmp)
                         self._emit(Op.GET_PROP, self._name(key))
                         self._emit(Op.LET_VAR, self._name(key), 1)
                 else:
+                    self._note_local(p)
                     self._emit(Op.LET_VAR, self._name(p), 1)
             # NEW: after params so _value64_entry_nparam still sees LET_VAR
             # at constructor_ip (class-field inits jump in after binding).
@@ -903,8 +907,30 @@ class Compiler:
         if self._scope_sets:
             self._scope_sets[-1].add(name)
         cur = self._local_stack[-1]
-        if name not in cur and len(cur) < 16:
-            cur[name] = len(cur)
+        if name in cur:
+            return
+        # 2026-08-28: this used to silently drop the 17th+ name (RTL
+        # ENV_SLOTS=16 per call frame — params + declared locals share the
+        # budget). INVFAST's animate() grew to 24 during a rewrite and the
+        # silence turned a compile-time-detectable mistake into a runtime
+        # fault-3 hunt (fault=3, obj/arr/env all healthy — nothing LOOKED
+        # wrong). Loud, not silent: split the function instead (the wall
+        # is per-function, so pulling a self-contained block into its own
+        # helper resets the budget on both sides — see updateInvaderCollision
+        # in storage/INVFAST.HTML for the pattern).
+        if len(cur) >= 16:
+            t = self._peek()
+            if t is None and self.i > 0:
+                t = self.tokens[self.i - 1]
+            line = int(t[2]) if t is not None else 0
+            fn = self._fn_compiling or "<anonymous>"
+            raise CompileError(
+                f"{fn}(): {len(cur) + 1} locals/params (name {name!r}) — "
+                f"over the 16-per-function limit (RTL ENV_SLOTS). Split a "
+                f"self-contained block into its own function.",
+                line,
+            )
+        cur[name] = len(cur)
 
     def _var_a1(self, name: str) -> int:
         """Pack LOAD_VAR/STORE_VAR a1. 0=chain, 1=hoisted fn global, 2+slot=local.
@@ -2086,6 +2112,7 @@ class Compiler:
         # NEW: params declare into the per-call env (LET_VAR); arg2=1 =
         # call-frame local flag for RTL (always store there)
         for p in reversed(params):
+            self._note_local(p)
             self._emit(Op.LET_VAR, self._name(p), 1)
         self._fn_depth += 1  # NEW: arrow locals use LET_VAR (env)
         if self._peek_text() == "{":
