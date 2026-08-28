@@ -43,6 +43,11 @@ const GAME_HEIGHT = 480;
 // Arcade HUD / ground (green overlay band like the 1978 cabinet)
 const GROUND_Y = 454;
 const UFO_Y = 28;
+/* FAST: bunkers live at this y — do not cell-test the formation until it
+   actually reaches them (was ~26k dx*dx tests per frame at the top). */
+const BUNKER_Y = 350;
+var _bunkerDirty = 1;
+var _formBottom = 0;
 // Original UFO points by player-shot count (ROM nibble table × 10)
 const UFO_SCORES = [100, 50, 50, 100, 150, 100, 100, 50, 300, 100, 100, 100, 50, 150, 100, 50];
 let invaderFrame = 0;
@@ -365,9 +370,11 @@ class Invader {
     else drawAlien(this.type, fr, x, y, 3);
   }
 
-  update({ velocity }) {
-    this.position.x += velocity.x;
-    this.position.y += velocity.y;
+  /* FAST: pass vx/vy scalars — `update({ velocity: grid.velocity })` minted
+     a fresh object per alien per frame (55 × MAX_OBJ=960). */
+  update(vx, vy) {
+    this.position.x += vx;
+    this.position.y += vy;
     this.draw();
   }
 
@@ -403,6 +410,7 @@ class Grid {
     const rowType = [0, 1, 1, 2, 2];
 
     this.width = columns * stepX;
+    this.bottom = startY + (rows - 1) * stepY + 24;
 
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < columns; x++) {
@@ -445,6 +453,7 @@ class Grid {
     if (hitEdge) {
       this.dir = -this.dir;
       this.velocity.y = 16;
+      this.bottom += 16;
     } else {
       this.velocity.x = this.dir * step;
     }
@@ -478,40 +487,50 @@ class Bunker {
   }
 
   draw() {
+    /* FAST: bunkers do not move — do not markErase them (that forced a
+       56×40 black + 118 fillRect rebuild every rAF). Redraw only when
+       dirty or the formation is overlapping this band. */
     c.fillStyle = "#2ecc40";
     for (let i = 0; i < this.cells.length; i++) {
       const cell = this.cells[i];
       if (cell.alive) c.fillRect(cell.x, cell.y, this.cell, this.cell);
     }
-    markErase(this.ox - 2, this.oy - 2, this.ow + 4, this.oh + 4);
   }
 
   // absorb a point hit; carve a small crater
   hitAt(px, py, radius) {
+    /* FAST: AABB reject before the ~118-cell walk. */
+    var pad = (radius + 1) * 2;
+    if (px < this.ox - pad || py < this.oy - pad ||
+        px > this.ox + this.ow + pad || py > this.oy + this.oh + pad) {
+      return false;
+    }
     let hit = false;
     const r = radius + 1;
+    const r2 = r * r * 4;
+    const half = this.cell / 2;
     for (let i = 0; i < this.cells.length; i++) {
       const cell = this.cells[i];
       if (!cell.alive) continue;
-      const cx = cell.x + this.cell / 2;
-      const cy = cell.y + this.cell / 2;
-      const dx = px - cx;
-      const dy = py - cy;
-      if (dx * dx + dy * dy <= r * r * 4) {
+      const dx = px - (cell.x + half);
+      const dy = py - (cell.y + half);
+      if (dx * dx + dy * dy <= r2) {
         cell.alive = false;
         hit = true;
       }
     }
+    if (hit) _bunkerDirty = 1;
     return hit;
   }
 }
 
 function resetBunkers() {
   bunkers.length = 0;
-  const y = 350;
+  const y = BUNKER_Y;
   // four bunkers across 640 glass
   const xs = [70, 210, 350, 490];
   for (let i = 0; i < xs.length; i++) bunkers.push(new Bunker(xs[i], y));
+  _bunkerDirty = 1;
 }
 
 // Arcade mystery ship (red overlay band). Score from shot-count table.
@@ -593,7 +612,7 @@ const keys = {
 };
 
 // NEW: Pmod stick (same bits as JOYDEMO). Keyboard still works.
-let canShoot = true;
+let canShootAt = 0;
 var joyFireWas = 0;
 function stickBits() {
   var j = 0;
@@ -603,11 +622,9 @@ function stickBits() {
 function playerShoot() {
   if (game.over || !game.active || playerDying) return;
   if (projectiles.length > 0) return;
-  if (!canShoot) return;
-  canShoot = false;
-  setTimeout(function () {
-    canShoot = true;
-  }, 100);
+  /* FAST: frame cooldown, not setTimeout (timer + closure per shot). */
+  if (frames < canShootAt) return;
+  canShootAt = frames + 6;
   keys.space.pressed = true;
   shotCount++;
   projectiles.push(
@@ -707,10 +724,12 @@ function activateBonus() {
 function checkVictory() {
   if (!game.active || game.over || !levelHasSpawned) return;
 
-  const totalInvaders = grids.reduce(
-    (total, grid) => total + grid.invaders.length,
-    0
-  );
+  /* FAST: no Array.reduce callback per frame. */
+  var totalInvaders = 0;
+  var gi;
+  for (gi = 0; gi < grids.length; gi++) {
+    totalInvaders += grids[gi].invaders.length;
+  }
 
   if (totalInvaders === 0 && grids.length === 0) {
     if (nextLevelTimer) return;
@@ -764,8 +783,7 @@ function bumpScore(n) {
   score += n;
   if (scoreEl) scoreEl.innerHTML = score;
   if (score > hiScore) hiScore = score;
-  scoreHud = "SCORE " + score;
-  hiHud = "HI " + hiScore;
+  /* FAST: do not intern "SCORE "+n — drawHud already fillText(score). */
 }
 
 function drawHud() {
@@ -864,6 +882,33 @@ function drawFormation() {
   saucer.draw();
 }
 
+/* FAST: recompute formation width/bottom after a kill (no Array.find). */
+function refreshGridBounds(grid) {
+  var list = grid.invaders;
+  var i, inv, minX, maxX, maxW, bot;
+  if (list.length === 0) {
+    grid.width = 0;
+    grid.bottom = 0;
+    return;
+  }
+  minX = list[0].position.x;
+  maxX = minX;
+  maxW = list[0].width;
+  bot = list[0].position.y + list[0].height;
+  for (i = 1; i < list.length; i++) {
+    inv = list[i];
+    if (inv.position.x < minX) minX = inv.position.x;
+    if (inv.position.x > maxX) {
+      maxX = inv.position.x;
+      maxW = inv.width;
+    }
+    if (inv.position.y + inv.height > bot) bot = inv.position.y + inv.height;
+  }
+  grid.width = maxX - minX + maxW;
+  grid.position.x = minX;
+  grid.bottom = bot;
+}
+
 var _pickLowest = [null, null, null, null, null, null, null, null, null, null, null];
 var _pickShooters = [];
 function pickShooter(grid) {
@@ -906,7 +951,7 @@ function killPlayer() {
   lives--;
   player.opacity = 0;
   projectiles.length = 0;
-  createParticles({ object: player, color: "white", fades: true });
+  createParticles(player, "white");
 }
 
 function finishDie() {
@@ -948,24 +993,36 @@ for (let i = 0; i < 24; i++) {
   );
 }
 
-function createParticles({ object, color, fades }) {
-  // NEW: ~8 small rects instead of 15 arcs (keeps PNG sprites readable after hit)
-  for (let i = 0; i < 8; i++) {
-    particles.push(
-      new Particle({
-        position: {
-          x: object.position.x + object.width / 2,
-          y: object.position.y + object.height / 2,
-        },
-        velocity: {
-          x: (Math.random() - 0.5) * 2,
-          y: (Math.random() - 0.5) * 2,
-        },
-        radius: 1,
-        color: color || "#BAA0DE",
-        fades: true,
-      })
-    );
+/* FAST: 8 reused explosion particles — no per-hit `new` / `{x,y}` literals. */
+var _fx = [];
+for (var _fxi = 0; _fxi < 8; _fxi++) {
+  _fx.push(
+    new Particle({
+      position: { x: 0, y: 0 },
+      velocity: { x: 0, y: 0 },
+      radius: 1,
+      color: "#BAA0DE",
+      fades: true,
+    })
+  );
+  _fx[_fxi].alive = 0;
+}
+
+function createParticles(obj, color) {
+  var ox = obj.position.x + obj.width / 2;
+  var oy = obj.position.y + obj.height / 2;
+  var col = color || "#BAA0DE";
+  var i, p;
+  for (i = 0; i < 8; i++) {
+    p = _fx[i];
+    p.position.x = ox;
+    p.position.y = oy;
+    p.velocity.x = (Math.random() - 0.5) * 2;
+    p.velocity.y = (Math.random() - 0.5) * 2;
+    p.color = col;
+    p.opacity = 1;
+    p.fades = true;
+    p.alive = 1;
   }
 }
 
@@ -983,20 +1040,72 @@ function showGameOver() {
   nameEl.focus();
 }
 
+// 2026-08-28: split out of animate() — that function had grown to 24+
+// locals (ix/iy/iw/ih/ibot/prx/pry/prr/j among them), over the platform's
+// <=16-locals-per-function wall (RTL ENV_SLOTS=16; the 17th var faults
+// with a healthy heap, exactly what showed up here: fault 3, ip in this
+// block, obj/arr/env all comfortable). Splitting the per-invader bunker/
+// invasionOver/bullet-collision work into its own function is the fix —
+// the wall is per-function, so each side of the split gets its own budget.
+// Returns 1 if this invader was killed by a player bullet this call.
+function updateInvaderCollision(inv, grid, i, py, ph) {
+  var ix, iy, iw, ih, bi, pr, prx, pry, prr, j;
+  var invaders = grid.invaders;
+  ix = inv.position.x;
+  iy = inv.position.y;
+  iw = inv.width;
+  ih = inv.height;
+  if (iy + ih > _formBottom) _formBottom = iy + ih;
+  /* FAST: only chew bunkers when this alien is in the bunker band. */
+  if (iy + ih >= BUNKER_Y) {
+    for (bi = 0; bi < bunkers.length; bi++) {
+      if (ix + iw < bunkers[bi].ox || ix > bunkers[bi].ox + bunkers[bi].ow) continue;
+      bunkers[bi].hitAt(ix + iw / 2, iy + ih, 6);
+    }
+  }
+  if (!game.over && !playerDying && ph > 0 && iy + ih >= py) {
+    invasionOver();
+  }
+  for (j = projectiles.length - 1; j >= 0; j--) {
+    pr = projectiles[j];
+    prx = pr.position.x;
+    pry = pr.position.y;
+    prr = pr.radius;
+    if (
+      pry - prr <= iy + ih &&
+      prx + prr >= ix &&
+      prx - prr <= ix + iw &&
+      pry + prr >= iy
+    ) {
+      bumpScore(inv.points());
+      createParticles(inv, "#BAA0DE");
+      invaders.splice(i, 1);
+      projectiles.splice(j, 1);
+      if (invaders.length > 0) refreshGridBounds(grid);
+      return 1;
+    }
+  }
+  return 0;
+}
+
 function animate() {
   // NEW: identity transform only — canvas is already 640x480 (no viewport scale)
+  var i, p, ip, pr, bi, gi, grid, inv, invaders, vx, vy;
+  var blocked;
+  var px, py, pw, ph;
   applyStick();
   if (game.active !== _wasActive) { _needFull = 1; _wasActive = game.active; }
   if (!game.active) {
     flushErase();
 
-    particles.forEach((p) => {
+    for (i = 0; i < particles.length; i++) {
+      p = particles[i];
       p.update();
       if (p.position.y - p.radius >= GAME_HEIGHT) {
         p.position.x = Math.random() * GAME_WIDTH;
         p.position.y = -p.radius;
       }
-    });
+    }
 
     // keep the wave on glass after death / game over (arcade: aliens stay)
     if (game.over) {
@@ -1019,145 +1128,117 @@ function animate() {
 
   flushErase();
 
-  // NEW: draw classic bunkers under the formation
-  for (let bi = 0; bi < bunkers.length; bi++) bunkers[bi].draw();
+  /* FAST: bunkers are static — redraw only when a cell died or the
+     formation is overlapping the bunker band (alien erase would punch
+     holes otherwise). */
+  if (_bunkerDirty || _formBottom >= BUNKER_Y) {
+    for (bi = 0; bi < bunkers.length; bi++) bunkers[bi].draw();
+    _bunkerDirty = 0;
+  }
 
-  // background particles
-  particles.forEach((particle, i) => {
-    if (particle.position.y - particle.radius >= GAME_HEIGHT) {
-      particle.position.x = Math.random() * GAME_WIDTH;
-      particle.position.y = -particle.radius;
+  // background stars (fixed 24 — never splice)
+  for (i = 0; i < particles.length; i++) {
+    p = particles[i];
+    if (p.position.y - p.radius >= GAME_HEIGHT) {
+      p.position.x = Math.random() * GAME_WIDTH;
+      p.position.y = -p.radius;
     }
+    p.update();
+  }
+  for (i = 0; i < 8; i++) {
+    p = _fx[i];
+    if (!p.alive) continue;
+    if (p.opacity <= 0) { p.alive = 0; continue; }
+    p.update();
+  }
 
-    if (particle.opacity <= 0) {
-      setTimeout(() => {
-        particles.splice(i, 1);
-      }, 0);
-    } else {
-      particle.update();
+  px = player.position.x;
+  py = player.position.y;
+  pw = player.width;
+  ph = player.height;
+
+  // invader bullets — reverse index, splice now (no setTimeout / forEach)
+  for (i = invaderProjectiles.length - 1; i >= 0; i--) {
+    ip = invaderProjectiles[i];
+    if (ip.position.y + ip.height >= GAME_HEIGHT) {
+      invaderProjectiles.splice(i, 1);
+      continue;
     }
-  });
-
-  // invader bullets
-  invaderProjectiles.forEach((invaderProjectile, index) => {
-    if (
-      invaderProjectile.position.y + invaderProjectile.height >=
-      GAME_HEIGHT
-    ) {
-      setTimeout(() => {
-        invaderProjectiles.splice(index, 1);
-      }, 0);
-    } else {
-      invaderProjectile.update();
-    }
-
-    // NEW: bunker blocks alien bombs
-    {
-      const cx =
-        invaderProjectile.position.x + invaderProjectile.width / 2;
-      const cy =
-        invaderProjectile.position.y + invaderProjectile.height;
-      let blocked = false;
-      for (let bi = 0; bi < bunkers.length; bi++) {
-        if (bunkers[bi].hitAt(cx, cy, 2)) {
-          blocked = true;
+    ip.update();
+    /* FAST: same bunker-band gate as player shots. Testing hitAt all the
+       way down to the cannon let a bunker absorb steal the life. */
+    if (ip.position.y + ip.height >= BUNKER_Y && ip.position.y <= BUNKER_Y + 40) {
+      blocked = 0;
+      for (bi = 0; bi < bunkers.length; bi++) {
+        if (bunkers[bi].hitAt(ip.position.x + ip.width / 2, ip.position.y + ip.height, 2)) {
+          blocked = 1;
           break;
         }
       }
       if (blocked) {
-        setTimeout(() => {
-          invaderProjectiles.splice(index, 1);
-        }, 0);
-        return;
+        invaderProjectiles.splice(i, 1);
+        continue;
       }
     }
-
-    // hit player
     if (
       !playerDying &&
       player.opacity > 0 &&
-      invaderProjectile.position.y + invaderProjectile.height >=
-        player.position.y &&
-      invaderProjectile.position.x + invaderProjectile.width >=
-        player.position.x &&
-      invaderProjectile.position.x <= player.position.x + player.width
+      ip.position.y + ip.height >= py &&
+      ip.position.x + ip.width >= px &&
+      ip.position.x <= px + pw
     ) {
+      invaderProjectiles.splice(i, 1);
       if (shieldActive) {
-        setTimeout(() => {
-          invaderProjectiles.splice(index, 1);
-        }, 0);
-        createParticles({ object: player, color: "cyan", fades: true });
-        return;
+        createParticles(player, "cyan");
+        continue;
       }
-
-      setTimeout(() => {
-        invaderProjectiles.splice(index, 1);
-        const music = document.getElementById("explosion");
-        if (music && music.play) {
-          music.currentTime = 0;
-          music.play().catch((err) => console.warn("Autoplay blocked:", err));
-          music.volume = 5.0;
-        }
-      }, 0);
-
+      /* Die first — Audio.play is a stub; .catch on a non-Promise used to
+         abort the rAF callback after the bomb was already spliced. */
       killPlayer();
     }
-  });
+  }
 
   // player bullets
-  projectiles.forEach((projectile, index) => {
-    if (projectile.position.y + projectile.radius <= 0) {
-      setTimeout(() => {
-        projectiles.splice(index, 1);
-      }, 0);
-    } else {
-      projectile.update();
+  for (i = projectiles.length - 1; i >= 0; i--) {
+    pr = projectiles[i];
+    if (pr.position.y + pr.radius <= 0) {
+      projectiles.splice(i, 1);
+      continue;
     }
-
-    // NEW: bunker blocks player shots
-    {
-      let blocked = false;
-      for (let bi = 0; bi < bunkers.length; bi++) {
-        if (
-          bunkers[bi].hitAt(
-            projectile.position.x,
-            projectile.position.y,
-            projectile.radius
-          )
-        ) {
-          blocked = true;
+    pr.update();
+    blocked = 0;
+    /* FAST: player shot is only near bunkers for a few rows, not the whole climb. */
+    if (pr.position.y + 12 >= BUNKER_Y && pr.position.y <= BUNKER_Y + 40) {
+      for (bi = 0; bi < bunkers.length; bi++) {
+        if (bunkers[bi].hitAt(pr.position.x, pr.position.y, pr.radius)) {
+          blocked = 1;
           break;
         }
       }
-      if (blocked) {
-        setTimeout(() => {
-          projectiles.splice(index, 1);
-        }, 0);
-        return;
-      }
     }
-
-    // player laser vs mystery ship
+    if (blocked) {
+      projectiles.splice(i, 1);
+      continue;
+    }
     if (
       saucer.alive &&
-      projectile.position.y - projectile.radius <= saucer.position.y + saucer.height &&
-      projectile.position.x + projectile.radius >= saucer.position.x &&
-      projectile.position.x - projectile.radius <= saucer.position.x + saucer.width &&
-      projectile.position.y + projectile.radius >= saucer.position.y
+      pr.position.y - pr.radius <= saucer.position.y + saucer.height &&
+      pr.position.x + pr.radius >= saucer.position.x &&
+      pr.position.x - pr.radius <= saucer.position.x + saucer.width &&
+      pr.position.y + pr.radius >= saucer.position.y
     ) {
-      const pts = UFO_SCORES[shotCount & 15];
-      bumpScore(pts);
+      bumpScore(UFO_SCORES[shotCount & 15]);
       saucer.alive = false;
       saucerClock = 0;
-      createParticles({ object: saucer, color: "#ff3344", fades: true });
-      setTimeout(() => {
-        projectiles.splice(index, 1);
-      }, 0);
+      createParticles(saucer, "#ff3344");
+      projectiles.splice(i, 1);
     }
-  });
+  }
 
   // grids + invaders
-  grids.forEach((grid, gridIndex) => {
+  _formBottom = 0;
+  for (gi = grids.length - 1; gi >= 0; gi--) {
+    grid = grids[gi];
     if (playerDying) {
       grid.velocity.x = 0;
       grid.velocity.y = 0;
@@ -1166,119 +1247,52 @@ function animate() {
     }
 
     // front-row column shots only, max 3 bombs (arcade)
-    const shootingFrequency = Math.max(40, 90 - level * 8);
     if (
       !playerDying &&
-      frames % shootingFrequency === 0 &&
+      frames % Math.max(40, 90 - level * 8) === 0 &&
       grid.invaders.length > 0 &&
       invaderProjectiles.length < 3
     ) {
-      const sh = pickShooter(grid);
+      var sh = pickShooter(grid);
       if (sh) sh.shoot(invaderProjectiles);
     }
 
-    grid.invaders.forEach((invader, i) => {
-      invader.update({ velocity: grid.velocity });
-
-      // descending ranks chew the bunkers
-      for (let bi = 0; bi < bunkers.length; bi++) {
-        bunkers[bi].hitAt(
-          invader.position.x + invader.width / 2,
-          invader.position.y + invader.height,
-          6
-        );
+    vx = grid.velocity.x;
+    vy = grid.velocity.y;
+    invaders = grid.invaders;
+    for (i = invaders.length - 1; i >= 0; i--) {
+      inv = invaders[i];
+      inv.update(vx, vy);
+      if (updateInvaderCollision(inv, grid, i, py, ph) && invaders.length === 0) {
+        grids.splice(gi, 1);
       }
-
-      if (
-        !game.over &&
-        !playerDying &&
-        player.height > 0 &&
-        invader.position.y + invader.height >= player.position.y
-      ) {
-        invasionOver();
-      }
-
-      // player projectile vs invader
-      projectiles.forEach((projectile, j) => {
-        if (
-          projectile.position.y - projectile.radius <=
-            invader.position.y + invader.height &&
-          projectile.position.x + projectile.radius >= invader.position.x &&
-          projectile.position.x - projectile.radius <=
-            invader.position.x + invader.width &&
-          projectile.position.y + projectile.radius >= invader.position.y
-        ) {
-          setTimeout(() => {
-            const invaderFound = grid.invaders.find(
-              (invader2) => invader2 === invader
-            );
-            const projectileFound = projectiles.find(
-              (projectile2) => projectile2 === projectile
-            );
-
-            if (invaderFound && projectileFound) {
-              bumpScore(invader.points());
-
-              createParticles({
-                object: invader,
-                fades: true,
-              });
-
-              grid.invaders.splice(i, 1);
-              projectiles.splice(j, 1);
-
-              if (grid.invaders.length > 0) {
-                // NEW: min/max by position.x (array order != leftmost/rightmost)
-                let minX = grid.invaders[0].position.x;
-                let maxX = minX;
-                let maxW = grid.invaders[0].width;
-                for (let k = 1; k < grid.invaders.length; k++) {
-                  const inv = grid.invaders[k];
-                  if (inv.position.x < minX) minX = inv.position.x;
-                  if (inv.position.x > maxX) {
-                    maxX = inv.position.x;
-                    maxW = inv.width;
-                  }
-                }
-                grid.width = maxX - minX + maxW;
-                grid.position.x = minX;
-              } else {
-                grids.splice(gridIndex, 1);
-              }
-            }
-          }, 0);
-        }
-      });
-    });
-  });
+    }
+  }
 
   // POWER-UPS: update, cull, and collect
-  powerUps.forEach((p, i) => {
+  for (i = powerUps.length - 1; i >= 0; i--) {
+    p = powerUps[i];
     p.update();
-
-    // remove if off-screen
     if (p.position.y > GAME_HEIGHT) {
-      setTimeout(() => powerUps.splice(i, 1), 0);
-      return;
+      powerUps.splice(i, 1);
+      continue;
     }
-
-    // AABB collision with player
     if (
-      p.position.x < player.position.x + player.width &&
-      p.position.x + p.width > player.position.x &&
-      p.position.y < player.position.y + player.height &&
-      p.position.y + p.height > player.position.y
+      p.position.x < px + pw &&
+      p.position.x + p.width > px &&
+      p.position.y < py + ph &&
+      p.position.y + p.height > py
     ) {
       if (p.type === "shield") {
         activateShield();
-        createParticles({ object: player, color: "cyan", fades: true });
+        createParticles(player, "cyan");
       } else if (p.type === "points") {
         activateBonus();
-        createParticles({ object: player, color: "gold", fades: true });
+        createParticles(player, "gold");
       }
-      setTimeout(() => powerUps.splice(i, 1), 0);
+      powerUps.splice(i, 1);
     }
-  });
+  }
 
   // Check for victory condition
   checkVictory();
@@ -1358,6 +1372,7 @@ function startGame() {
   game.over = false;
   game.active = true;
   _needFull = 1;
+  _formBottom = 0;
 
   grids.length = 0;
   invaderProjectiles.length = 0;
@@ -1374,6 +1389,7 @@ function startGame() {
   keys.space.pressed = false;
 
   frames = 1;
+  canShootAt = 0;
   grids.push(new Grid());
   levelHasSpawned = true;
 
