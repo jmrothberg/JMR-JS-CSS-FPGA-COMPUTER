@@ -6,12 +6,9 @@ Words: [README.md — Words used](../README.md#words-used-in-this-project).
 Nexys Video T200 (365 Block RAM tiles).
 
 This page is **this week’s status** plus the **failed-fix table** (glass
-mistakes we must not repeat). Fit numbers and the next bitstream command
-live in [FPGA_FIT.md](FPGA_FIT.md). Recurring debug classes live in
-[potential bugs.md](potential%20bugs.md). **30 pictures/second on the
-board:** [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md). FPGA-SIM
-is a slideshow (PC faking the chip); the board should be ~125× faster,
-not slower.
+mistakes we must not repeat). Fit numbers: [FPGA_FIT.md](FPGA_FIT.md).
+Recurring debug classes: [potential bugs.md](potential%20bugs.md).
+**30 pictures/second on the board:** [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
 
 Critical “do not”s: two copies only — see
 [README.md — Two copies](../README.md#two-copies-of-every-critical-do-not).
@@ -19,86 +16,20 @@ This file is **copy 2** of (a) read-`traces/`-first and (b) synth hygiene.
 
 ---
 
-## CURRENT STATE — 2026-08-22 (05:05): **BRAM SOLVED**; LUT delete landed; next synth not yet run
+## CURRENT STATE
 
-**Ladder / Headline:** [FPGA_FIT.md — Build 2026-08-22](FPGA_FIT.md#build-2026-08-22-0000-0530--bram-solved-365365-lut-residue--the-unswept-tagged-twin).
+Live numbers: [FPGA_FIT.md](FPGA_FIT.md) SCOREBOARD. Timing runs:
+[TIMING_WALL.md](TIMING_WALL.md). Board fps plan:
+[SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md). exec32 / Phase 3b:
+[REMOVING_EXEC32.md](REMOVING_EXEC32.md).
 
-The overnight run (08-22 00:00→05:30) **won the BRAM war**: Block RAM
-**365/365 — fits for the first time**, from the framebuffer rewrite plus
-pow2-chunking every big heap memory. Place still failed, on LUTs:
-**1,196,216 (889%)** against 134,600, FFs 123,992 (46%).
+**Fit and timing are solved** (run 49b WNS +0.180). **BOARD 2026-08-27:**
+run 50 flashed — DIR works. Run 51 baking. Caps: [FPGA_FIT.md](FPGA_FIT.md)
+paper budget (`MAX_OBJ=960`, `ENV_DEPTH=384`).
 
-The 05:10 census named the residue exactly: the **unswept tagged twin**.
-The `v64_on` constant fold had NOT removed it — `gc_queue` alone was
-229,362 flip-flop bits, ~330k tagged FF bits in total at ~9 LUTs each,
-i.e. essentially the whole overage.
-
-**Fixed the same morning (~05:05):** the real Phase 3b hand-delete — all
-64 tagged write sites removed, the tagged stack task neutered. Those
-arrays are now **writerless**, so synthesis can actually sweep them.
-Projected **−800k to −1M LUTs**. Behavior re-verified after the cut:
-198/198 bytecode, PACMAN plays, all five bug reproductions green, RTL
-suite with no new failures.
-
-**The confirming ~5h synth has NOT been run yet.** That is the next
-build, and it is the only thing that turns "projected" into a number.
-The 08-21 22:29 place-fail that used to sit here is superseded; its
-diary is the ladder section in FPGA_FIT.md.
-
-Banner **V1.0**. Five titles are **correct** on FPGA-SIM (INVADERS, PACMAN,
-DONKEY, ASTEROID, MRDO). **User: FPGA-SIM is too slow to play any of
-them.** That is Verilator on a PC (~800k heartbeats/s), not the chip.
-The real FPGA is ~100 million heartbeats/s — about **125×** faster than
-FPGA-SIM, **not slower**. Play on the PC today = F9 **PYTHON**. Product
-speed goal = **≥ 30 pictures/second on the BOARD**. Ordered cuts:
-[SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
-
-**30 pictures/s at 100 MHz** allows **3.33 million heartbeats per
-picture.** The FPGA-SIM wait (your PC faking the chip at ~800k
-heartbeats/s) is why F9 FPGA-SIM is a slideshow. **Board pictures/s** is
-what HDMI should feel like *before* we cut work (measured 2026-08-20;
-remeasure after the fit shrink):
-
-| Title | Heartbeats per picture | Board pictures/s | 30 fps? |
-|---|---:|---:|---|
-| **INVADERS** | **10.6 million** | **~9** | **No** — needs about **3×** less work |
-| **PACMAN** | **3.5 million** | **~29** | **Barely** — treat as must-cut |
-| **DONKEY** | **0.71 million** | **~140** | **Yes** on paper |
-| **ASTEROID** / **MRDO** | not measured yet | ? | First speed job: measure |
-
-INVADERS is the hard one: most of its picture is JavaScript doing a tiny
-`fillRect` per pixel. PACMAN’s cost is garbage collection + maze restore +
-string FIND. Do not mix this speed work with `bit-fresh`.
-
-Fit repairs landed. **Live caps** (bisect-proven; do not use the
-first-round 768/256 shrink):
-
-| Cap | Live | Why not smaller |
-|---|---:|---|
-| `MAX_OBJ` (JS objects) | **960** | Attract-mode burst ~330 extra objects; 896 pegged |
-| `ENV_DEPTH` (call environments) | **384** | 256 recycled PACMAN’s BFS (breadth-first search) mid-recursion |
-| `MAX_ARR_LONG` | **12** | Play peak 2; INVADERS bunkers 4 |
-| `CODE_WORDS` | **20480** | High-water ~19,527 on the extended PACMAN image |
-| `MAX_SPR` (sprite descriptors) | **16** | Version 1.0 wall; Version 2.0 raises this for `MK.HTML` |
-
-Same numbers in the RTL package, hardware model, and `jsb_format.py`. Full
-story + the **live build ladder** (steps 1–11, where / ETA):
-[FPGA_FIT.md](FPGA_FIT.md).
-
-**Suite reading (corrected 2026-08-22).** Three tests are **xfail** — red
-on purpose, with bug ids (#70/#71/#72). Those are **not** “the games are
-broken”. The two *hard* failures that used to sit alongside them
-(`test_pacman_fpga_sim_enter_paints_maze`,
-`test_donkey_fpga_sim_enter_keeps_raf`) were **bad tests, not chip
-defects**, and are fixed: one asserted a framebuffer change on a screen
-that moves sub-pixel per frame, the other sampled `raf` at a random
-mid-frame instant. Detail: [potential bugs.md](potential%20bugs.md).
-
-**Earlier place-fails (2026-08-21, both superseded):** the 04:11 run
-(LUT 1424% / BRAM 181%) and the 22:29 `bit-fresh` (LUT 1413% / BRAM
-159%). Diary: [OLD_RUNS.md](OLD_RUNS.md). **Current** state is the
-08-22 build at the top of this page — BRAM solved, LUT delete landed,
-confirming synth still to run.
+Three tests are **xfail** (#70/#71/#72) — not “the games are broken”.
+Detail: [potential bugs.md](potential%20bugs.md). 08-21 place-fails:
+[OLD_RUNS.md](OLD_RUNS.md).
 
 ---
 

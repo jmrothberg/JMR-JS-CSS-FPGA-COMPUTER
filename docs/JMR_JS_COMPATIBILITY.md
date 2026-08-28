@@ -191,7 +191,7 @@ Documented from real traces (MKPVP on FPGA-SIM / PYTHON):
 
 | Wall | Symptom if ignored | V1 HTML workaround |
 |---|---|---|
-| `MAX_SPR` = 16 | `ASET has N sprites; RTL MAX_SPR is 16` | ≤16 `data:image`; atlases + crops |
+| `MAX_SPR` = 16 | `ASET has N sprites; RTL MAX_SPR is 16` | ≤16 `data:image`; atlases + crops. Keep sheets **modest** — not one multi-thousand-pixel-wide image (address math + SRAM traffic per lookup). |
 | `Object.keys` (nid 41) is **PYTHON/HM only** | FPGA-SIM `fault=5` `fsite=4183` (unknown `CALL_NATIVE`) — the RTL exec64 arm is deliberately unimplemented | No `for…in` / `Object.keys` in an FPGA-SIM title; literal keys. (Compiler lowers `for…in` to `Object.keys` since 2026-08-21, so the loop *parses* — it still faults on RTL.) |
 | Negative `setTransform` scale | Fighter draws 1px / vanishes (PYTHON `_xf`) | Left + right sheets; no `sx < 0` mirror |
 | Math | Missing native / wrong paint | Only `floor` `abs` `min` `max` `random` `sqrt`. **V1.5:** `round` `ceil` `sin` `cos` `pow` … |
@@ -201,6 +201,8 @@ Documented from real traces (MKPVP on FPGA-SIM / PYTHON):
 | `e.code` | Stick/keys never set `keys.ArrowLeft` | V1: `e.key` + `keyCode`. **V1.5:** intern `e.code`. |
 | mouse `clientX` | No mouse port | Arrows + `joy()` bits. **never**. |
 | Per-tick maze flood / recursive BFS | Board HDMI **freezes** (one `rAF` never returns). No `ERROR`. PYTHON / FPGA-SIM still look playable. Old `finder` also `fault 3` (~36 objects/call vs 284 free slots). | One-step **chase**. Eyes home = in-place `_ghostHome` once per tile (**not** `finder` / `_copyMapOpen`). No `Array(n).fill().map(()=>Array(m))` on a tick. |
+| Fresh `{x,y}` / object literals every frame | Object-heap overflow (`MAX_OBJ=960`, loud `fault 3`) | Reuse one mutable object; write fields. Do **not** hoist per-frame grids to startup (array-heap trap). |
+| Assuming a hidden back buffer | Scanout tears through in-progress draws (present pipeline deleted, run 52) | Draw fast with `fillRect` / `drawImage` / `putImageData` (hardware ~1 px/clk). No isolation until you “present.” |
 
 Product ISA freeze (three compiles) still defines **Complete** rows above.
 Library V1 titles may use only the **intersection** of Complete rows **and**
@@ -1122,6 +1124,8 @@ compat row Complete from Chrome or from a fat RTL snippet.
 | `storage/MRDO.HTML` | Library title (Mr. Do! arcade). Portrait 384×480 letterbox; [GAME_DESIGN.md](GAME_DESIGN.md) |
 | `storage/MK.HTML` | **V2.0 goal** — **518** sheets, **~4.63 MB** pixels → **8 MB** asset SRAM (ASIC: one chip, simple port), dotted `new mk.…`, `for…in`/`Object.keys`, `Math.round` — [§ Version 1.0, 1.5, and 2.0](#version-10-15-and-20) |
 | `storage/MKPVP.HTML` | **V1.0** library (slim MK 2P). 3 ASET atlases; L/R sheets; no `for-in`/`Object.keys`; no negative mirror |
+| `storage/MKBIG.HTML` | **V1.0** library (MK frames packed to 4 MB / 3 atlases). Same engine as MKPVP |
+| `storage/MKBIGCPU.HTML` | **V1.0** library (MKBIG art + CPU Kano). Ice ball (Sub-Zero) + flame (Kano); 4th tiny shots atlas; still ≤16 SPR / 4 MB |
 | In-memory ProgramImage | **V1.0:** minted `.JSH` from `card.img` (code + ASET). Not a `storage/` name |
 | `storage/JOYDEMO.HTML` | Library smoke (joystick / arrows on Canvas) |
 | `storage/games_*` | Upstream archive only |

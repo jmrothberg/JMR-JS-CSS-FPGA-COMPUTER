@@ -29,33 +29,12 @@ mapping (`tcmalloc large alloc`).
 
 ---
 
----
+## 2026-08-21 place-fails (superseded)
 
-## `bit-fresh` — 2026-08-21 14:46 → 22:29 — PLACE FAILED (again)
-
-Clean project. Synth **100%** ~22:03. `opt_design` OK. `place_design`
-**UTLZ-1** in ~36 s. Headline: LUT **1413%**, BRAM **159%** (morning was
-1424% / 181%). ~80 BRAM tiles saved (`imgd` external); LUTs almost
-unchanged. Synth log still names **both** `u_core/u_fb` and
-`u_corei_10/u_fb`. Diary detail / next: [FPGA_FIT.md](FPGA_FIT.md).
-
----
-
-## V1.0 `make bit` — 2026-08-20 20:53 → 08-21 04:35 — PLACE FAILED
-
-exec32 gone, Port A monsters, `spr_mem` 32 KB / `source_mem` 64 KB.
-**2** synth threads. Reused project (not `bit-fresh`).
-
-| Outcome | Detail |
-|---|---|
-| synth_1 | **100%** — first full DCP on this netlist |
-| Technology mapping | elapsed **06:42:11**; peak ~38 GB (held; no OOM) |
-| opt_design | OK |
-| place_design | **FAILED** — DRC UTLZ-1 (LUT ~1424%, BRAM ~181%, LUTRAM 128%) + REQP-1962 on `imgd_pix` ADDR15 |
-| Root cause | BRAM oversub → demote large arrays to LUTRAM → LUT blowup. Fix order: [FPGA_FIT.md](FPGA_FIT.md) |
-
-Do **not** treat this place-fail as current work — the same-day fit
-repairs landed; next command is `bit-fresh` in [FPGA_FIT.md](FPGA_FIT.md).
+Both **UTLZ-1**, not current work. Morning 04:11: LUT ~1424% / BRAM ~181%
+(incremental stitch duplicated the framebuffer). Night 22:29 `bit-fresh`:
+LUT ~1413% / BRAM ~159% (`imgd` off-chip; LUTs barely moved). Causes and
+what landed: [FPGA_FIT.md](FPGA_FIT.md) § Fit forensics.
 
 ---
 

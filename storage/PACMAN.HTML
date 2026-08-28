@@ -11,15 +11,16 @@
    Values in map cells are single digits 0-6, so these loops are exact
    equivalents of the JSON round-trips they replace. */
 function _copyMap(src){var out=[];for(var j=0;j<src.length;j++){var row=src[j],r=[];for(var i=0;i<row.length;i++){r.push(row[i]);}out.push(r);}return out;}
-function _copyMapOpen(src){var out=[];for(var j=0;j<src.length;j++){var row=src[j],r=[];for(var i=0;i<row.length;i++){r.push(row[i]==2?0:row[i]);}out.push(r);}return out;}
 function _mapHasZero(src){for(var j=0;j<src.length;j++){var row=src[j];for(var i=0;i<row.length;i++){if(row[i]===0)return true;}}return false;}
 // BOARD #84: chase/flee are one-step only (same shape as MRDO creepToward).
 // Door/house 2 is walkable. On a 2, prefer smaller y then column 13 (the
 // door) — greedy-toward-player goes down and they never leave.
 // No maze clone, no finder, no Array.fill/map. Iterative flood on every
 // ghost every cell still froze HDMI (~15 dots). Eyes home is _ghostHome
-// once per tile. Original flood is PACORIG.HTML.
+// once per tile. Chase may use _ghostHome once per frame (_g1).
+// Original flood is PACORIG.HTML.
 var _gs={x:0,y:0,ok:0,change:0};
+var _g1=0;
 function _ghostOpen(data,x,y){
     var yl,v;
     yl=data.length;
@@ -31,11 +32,10 @@ function _ghostOpen(data,x,y){
 // while + d=d+1 (not for/d++). ≤16 env slots — extra names become GLOBAL
 // and a for(d++) that does not increment never leaves rAF (#84).
 function _ghostStep(data,sx,sy,ex,ey,dir,mode){
-    var d,nx,ny,dist,bestD,on2,rev,yl;
+    var d,nx,ny,dist,bestD,on2,yl;
     _gs.ok=0; _gs.change=0;
     yl=data.length;
     on2 = data[sy]&&data[sy][sx]==2;
-    rev = (dir+2)%4;
     if(on2&&mode==2){
         bestD=9999;
         d=0;
@@ -59,23 +59,21 @@ function _ghostStep(data,sx,sy,ex,ey,dir,mode){
     if(mode==1) bestD=-1; else bestD=9999;
     d=0;
     while(d<4){
-        if(!(dir>=0&&!on2&&d==rev)){
-            nx=sx+(d==0?1:d==2?-1:0);
-            ny=sy+(d==1?1:d==3?-1:0);
-            if(ny<0||ny>=yl||nx<0||nx>=data[0].length){
-                nx=(nx+data[0].length)%data[0].length; ny=(ny+yl)%yl;
-            }
-            if(_ghostOpen(data,nx,ny)){
-                dist=(nx>ex?nx-ex:ex-nx)+(ny>ey?ny-ey:ey-ny);
-                if(mode==1){
-                    if(dist>bestD){
-                        bestD=dist; _gs.x=nx; _gs.y=ny; _gs.ok=1;
-                        _gs.change=(nx-sx>1||sx-nx>1||ny-sy>1||sy-ny>1)?1:0;
-                    }
-                }else if(dist<bestD){
+        nx=sx+(d==0?1:d==2?-1:0);
+        ny=sy+(d==1?1:d==3?-1:0);
+        if(ny<0||ny>=yl||nx<0||nx>=data[0].length){
+            nx=(nx+data[0].length)%data[0].length; ny=(ny+yl)%yl;
+        }
+        if(_ghostOpen(data,nx,ny)){
+            dist=(nx>ex?nx-ex:ex-nx)+(ny>ey?ny-ey:ey-ny);
+            if(mode==1){
+                if(dist>bestD){
                     bestD=dist; _gs.x=nx; _gs.y=ny; _gs.ok=1;
                     _gs.change=(nx-sx>1||sx-nx>1||ny-sy>1||sy-ny>1)?1:0;
                 }
+            }else if(dist<bestD){
+                bestD=dist; _gs.x=nx; _gs.y=ny; _gs.ok=1;
+                _gs.change=(nx-sx>1||sx-nx>1||ny-sy>1||sy-ny>1)?1:0;
             }
         }
         d=d+1;
@@ -101,7 +99,8 @@ function _ghostStep(data,sx,sy,ex,ey,dir,mode){
 // Do NOT restore Map.finder / _copyMapOpen — that clones 31 row-arrays plus
 // start/end/options (~36 objects) before the walk, then more per push.
 // PACMAN already holds ~676 of MAX_OBJ=960; one finder call can fault 3.
-// Do NOT run this on chase/flee (HDMI freeze, #84). Marks visited as orig+10
+// Chase may call this ONCE per frame (_g1), not every ghost every cell.
+// Do NOT restore finder / every-tick flood (#84). Marks visited as orig+10
 // then restores. Queue is numbers in one reused array (cap 128), not a grid.
 var _eh={qh:0,qt:0,x:0,y:0,d:0,nx:0,ny:0,v:0,xl:0,yl:0};
 var _eyeQ=[];
@@ -170,29 +169,6 @@ function _ghostHome(data,sx,sy,ex,ey){
 /*
 * 小型游戏引擎
 */
-
-// requestAnimationFrame polyfill
-if (!Date.now)
-Date.now = function() { return new Date().getTime(); };
-(function() {
-    'use strict';
-    var vendors = ['webkit', 'moz'];
-    for (var i = 0; i < vendors.length && !window.requestAnimationFrame; ++i) {
-        var vp = vendors[i];
-        window.requestAnimationFrame = window[vp+'RequestAnimationFrame'];
-        window.cancelAnimationFrame = (window[vp+'CancelAnimationFrame'] || window[vp+'CancelRequestAnimationFrame']);
-    }
-    if (!window.requestAnimationFrame || !window.cancelAnimationFrame) { // PACMAN2: iOS6 UA-regex shim removed (regex-free; that clause is false on every modern browser)
-        var lastTime = 0;
-        window.requestAnimationFrame = function(callback) {
-            var now = Date.now();
-            var nextTime = Math.max(lastTime + 16, now);
-            return setTimeout(function() { callback(lastTime = nextTime); },
-            nextTime - now);
-        };
-        window.cancelAnimationFrame = clearTimeout;
-    }
-}());
 
 function Game(id,params){
     var _ = this;
@@ -310,9 +286,7 @@ function Game(id,params){
     };
     //寻址算法 — empty. Ghosts call _ghostStep directly. Original BFS is PACORIG.HTML.
     // A/B: return [] here → board did not freeze. Do not put a maze walk back.
-    Map.prototype.finder = function(params){
-        return [];
-    };
+    // Omit Map.finder stub (dead; CODE_WORDS).
     //布景对象构造器
     var Stage = function(params){
         this._params = params||{};
@@ -424,9 +398,12 @@ function Game(id,params){
                 if (cb) cb({keyCode: 13, key: 'Enter'});
             }
             _joyFireWas = fireOn ? 1 : 0;
+            // Skip full-screen wipe when maze ImageData will replace every pixel.
+            if(!stage.maps.length || !stage.maps[0].imageData){
             _context.clearRect(0,0,_.width,_.height);		//清除画布
             _context.fillStyle = '#000000';
             _context.fillRect(0,0,_.width,_.height);
+            }
             f++;
             if(stage.timeout){
                 stage.timeout--;
@@ -1131,6 +1108,7 @@ function Game(id,params){
 					var stage = this;
 					// NEW: stick bits OR into pac-man intent (0 right, 1 down, 2 left, 3 up)
 					var pj = 0;
+					_g1=0;
 					try { pj = joy() | 0; } catch (je) { pj = 0; }
 					if (pj & 8) player.control = {orientation:0};
 					else if (pj & 2) player.control = {orientation:1};
@@ -1349,14 +1327,19 @@ function Game(id,params){
 					speed:1,
 					timeout:Math.floor(Math.random()*120),
 					update:function(){
-						var new_map;
 						if(this.status==3&&!this.timeout){
 							this.status = 1;
 						}
 						if(!this.coord.offset){			//到达坐标中心时计算
 							if(this.status==1){
 								if(!this.timeout){		//定时器
-									_ghostStep(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y,this.orientation,2);
+									if(!_g1){
+										_ghostHome(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y);
+										_g1=1;
+										if(!_gs.ok) _ghostStep(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y,this.orientation,2);
+									}else{
+										_ghostStep(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y,this.orientation,2);
+									}
 									if(_gs.ok){ this.vector.x=_gs.x; this.vector.y=_gs.y; this.vector.change=_gs.change; }
 								}
 							}else if(this.status==3){

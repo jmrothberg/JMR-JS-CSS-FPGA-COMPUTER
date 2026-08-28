@@ -40,17 +40,14 @@ keyboard jack **J15**, Pmod joystick. **PA-StarLite** is a later port.
 Development order: **PYTHON bytecode → real FPGA-SIM (perfect) → board → ASIC**.
 Do **not** flash the board until the FPGA-SIM battery is green.
 
-**Status (2026-08-21 night):** banner **V1.0**. Five HTML titles are
-**correct** on FPGA-SIM (INVADERS, PACMAN, DONKEY, ASTEROID, MRDO).
-**FPGA-SIM is too slow to play** — that is the PC simulating the chip
-(~800k heartbeats/s). The **board** should be ~125× faster (100 MHz),
-not slower. Play on the PC: F9 **PYTHON**. Speed goal: **≥ 30
-pictures/second on the BOARD** for all five —
-[docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md). Fit
-repairs landed; next bitstream is **`bit-fresh`** (once). J15 USB Host is
-dead on this unit — type and play from the GUI **PROG tether**. **V1.0 BOARD:
-compile when you make the card** (`.JSH`). **V1.5** tries standalone compile **and** popular JS V1 lacks.
-`MK.HTML` remains the Version 2.0 goal (not a V1 title).
+**Status (2026-08-27):** banner **V1.0**. Five titles play on FPGA-SIM;
+**DIR works on the board** (run 50). Clean bit: run 49b
+(`build/bits/run49_DIR-self-heal.bit`). Scoreboard:
+[docs/FPGA_FIT.md](docs/FPGA_FIT.md). Speed plan:
+[docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md). J15 USB
+Host is dead on this unit — type and play from the GUI **PROG tether**.
+**V1.0:** compile when you make the card (`.JSH`). **V1.5** tries
+standalone compile **and** popular JS V1 lacks. `MK.HTML` is Version 2.0.
 
 **Where to go next**
 
@@ -59,7 +56,7 @@ compile when you make the card** (`.JSH`). **V1.5** tries standalone compile **a
 | Words / abbreviations used everywhere | [Words used](#words-used-in-this-project) (this page) |
 | What the machine *is* (spec) | [CONSTITUTION.md](CONSTITUTION.md) |
 | Blocks, posters, asset-bank port | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| How to write a game | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) |
+| How to write a game | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) (walls + FAST rules) |
 | What JS/Canvas is Complete vs later | [docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md) |
 | Learn the 34 instructions | [docs/JS_COMMANDS.md](docs/JS_COMMANDS.md) |
 | Board, Vivado, flash, HDMI | [docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md) |
@@ -274,7 +271,7 @@ when we fit the chip. **One** source of truth:
 [docs/FPGA_FIT.md](docs/FPGA_FIT.md) paper budget. Do not copy stale 1024/512
 caps from older paragraphs.
 
-**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID / AURORA / MRDO / MKPVP / JOYDEMO / PACORIG) then `RUN`.
+**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID / AURORA / MRDO / MKPVP / MKBIG / MKBIGCPU / MKCPU / JOYDEMO / PACORIG) then `RUN`.
 **V1.0** library titles must stay inside the authoring walls in
 [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md). On the machine, **V1.0 `LIST`
 is view / learn** — no on-chip compiler, so `EDIT` cannot change `RUN`

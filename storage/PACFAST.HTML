@@ -92,21 +92,14 @@ function _ghostStep(data,sx,sy,ex,ey,dir,mode){
             }else d=d+1;
         }
     }
-    /* Greedy orbit: no reverse + tie→right loops the block when Pacman stands
-       still. Reverse is allowed above. If still not closer, ok=0 so caller
-       uses _ghostHome once — not finder, not every-tick flood. After the
-       fallback so a first-open pick does not hide a local min. */
-    if(mode!=1&&_gs.ok){
-        dist=(sx>ex?sx-ex:ex-sx)+(sy>ey?sy-ey:ey-sy);
-        if(bestD>=dist) _gs.ok=0;
-    }
     return _gs;
 }
 // Eyes home only. Shortest path on the EXISTING map (door/house 2 is open).
 // Do NOT restore Map.finder / _copyMapOpen — that clones 31 row-arrays plus
 // start/end/options (~36 objects) before the walk, then more per push.
 // PACMAN already holds ~676 of MAX_OBJ=960; one finder call can fault 3.
-// Do NOT run this on chase/flee (HDMI freeze, #84). Marks visited as orig+10
+// Chase may call this ONCE per frame (_g1), not every ghost every cell.
+// Do NOT restore finder / every-tick flood (#84). Marks visited as orig+10
 // then restores. Queue is numbers in one reused array (cap 128), not a grid.
 var _eh={qh:0,qt:0,x:0,y:0,d:0,nx:0,ny:0,v:0,xl:0,yl:0};
 var _eyeQ=[];
@@ -1339,8 +1332,13 @@ function Game(id,params){
 						if(!this.coord.offset){			//到达坐标中心时计算
 							if(this.status==1){
 								if(!this.timeout){		//定时器
-									_ghostStep(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y,this.orientation,2);
-									if(!_gs.ok&&!_g1){ _ghostHome(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y); _g1=1; }
+									if(!_g1){
+										_ghostHome(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y);
+										_g1=1;
+										if(!_gs.ok) _ghostStep(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y,this.orientation,2);
+									}else{
+										_ghostStep(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y,this.orientation,2);
+									}
 									if(_gs.ok){ this.vector.x=_gs.x; this.vector.y=_gs.y; this.vector.change=_gs.change; }
 								}
 							}else if(this.status==3){

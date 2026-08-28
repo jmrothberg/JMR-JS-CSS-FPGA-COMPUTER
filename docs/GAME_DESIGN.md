@@ -77,6 +77,12 @@ if you changed a title.
   (192×240, 224×256, …) with side gutters to “preserve cabinet aspect.”
   READY console letterbox is monitor text only. After `RUN`, the title
   owns every pixel. Scale play (tiles, sprites, HUD) to 640×480.
+- **No hidden back buffer.** Run 52 deleted the present pipeline;
+  scanout reads the same bank you draw into. Budget for tearing — do
+  not rely on “the frame I’m drawing into is invisible until I say so.”
+  If a logic step needs an atomic-looking screen, draw fast with the
+  hardware paint natives (`fillRect` / `drawImage` / `putImageData`)
+  rather than assuming isolation.
 - `setTransform` is for a title’s own world (DONKEY) if it needs one — not
   a rule to keep original-resolution bars.
 - Do **not** assign `canvas.width` / `canvas.height` after load (that
@@ -164,15 +170,15 @@ not title-gate RTL).
 
 | Limitation | How to write the HTML |
 |---|---|
-| **≤16 ASET sprites** (`MAX_SPR` / SPRD descriptors) | One `data:image` per sheet, not per frame. Pack animations into **atlases**; use **9-arg `drawImage(img, sx,sy,sw,sh, dx,dy,dw,dh)`**. Compile refuses >16 (loud) — do not drop art silently. |
+| **≤16 ASET sprites** (`MAX_SPR` / SPRD descriptors) | One `data:image` per sheet, not per frame. Pack animations into **atlases**; use **9-arg `drawImage(img, sx,sy,sw,sh, dx,dy,dw,dh)`**. Compile refuses >16 (loud) — do not drop art silently. Keep sheets **modest** — not one enormous multi-thousand-pixel-wide image. Wide atlases mean bigger address math per lookup and more SRAM traffic per frame; let the atlas packer split. |
 | **No `Object.keys` / `for…in` on RTL** | The compiler lowers `for (k in obj)` to `Object.keys` (native **41**) — that landed 2026-08-21 and works on PYTHON, but there is **no exec64 arm**, so FPGA-SIM faults loud (`fault=5` `fsite=4183`). For a title that must run on the machine, use literal key lists (`loadOne("arena")` …) or numeric loops. |
 | **`Math.round` is not a native** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt`. Shim it in the HTML (`Math.floor(+x + 0.5)`) — unary `+`, `throw`, and the `in` operator all parse since 2026-08-21. |
 | **No negative `setTransform` scale** | Mirroring with `setTransform(-1,0,0,1,x,0)` collapses width on PYTHON `_xf` and is unsafe for parity. Ship **left + right** facing sheets (or always draw unmirrored). Positive scale / DONKEY-style world transforms are fine. |
 | **Math natives** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt`. Embed LUTs for angles if needed (ASTEROID pattern). |
-| **Heap / array caps (live silicon)** | Fit pass sized these from real titles. Overflow is **loud** (fault 3). Live numbers: [FPGA_FIT.md](FPGA_FIT.md) (`MAX_OBJ=960`, `ENV_DEPTH=384`, `MAX_ARR_LONG=12`, `ARR_CAP=128`). Do not assume the old 1024/512 headroom. |
+| **Heap / array caps (live silicon)** | Fit pass sized these from real titles. Overflow is **loud** (fault 3). Live numbers: [FPGA_FIT.md](FPGA_FIT.md) (`MAX_OBJ=960`, `ENV_DEPTH=384`, `MAX_ARR_LONG=12`, `ARR_CAP=128`). Do not assume the old 1024/512 headroom. **Reuse objects across frames** — a fresh `{x,y,…}` literal every tick burns the 960-object pool (PACMAN-adjacent object-exhaustion). Keep one mutable object and write its fields. Do **not** hoist per-frame **grids/arrays** to startup to dodge GC (that trades slack for a permanent allocation and overflows the array heap). |
 | **No per-tick maze flood** | Recursive BFS + `Array(n).fill().map(()=>Array(m))` every ghost cell **froze the board** (HDMI last frame, no `ERROR`). Empty `finder` → no freeze. One-step on the existing map; door `2` walks **up**. Do **not** grow `ENV_DEPTH`/`CSTK` (chip full). [no-maze-flood-on-tick](../.cursor/rules/no-maze-flood-on-tick.mdc). |
 | **Nested literal tables** | Hundreds of tiny `MAKE_ARRAY`s for frame rects work only while under the array caps. Prefer compact atlases + small meta, or parallel number arrays, if you approach the cap. |
-| **Glass / Esc / one file** | 640×480 fill; Esc = BREAK; no external `.js`. |
+| **Glass / Esc / one file** | 640×480 fill; Esc = BREAK; no external `.js`. Present is **gone** (run 52) — scanout reads the draw bank; budget tearing, draw fast. |
 
 **V1 MK-shaped title:** `storage/MKPVP.HTML` — 3 atlases (arena + Sub-Zero +
 Kano), L/R sheets, slim 2P engine, V1 Math only.
@@ -191,43 +197,70 @@ Until those land, do not expect `LOAD "MK.HTML"` + `RUN` on FPGA-SIM.
 
 ## Writing a title that is FAST (measured, not guessed)
 
-> **RUN-53 SILICON UPDATE (2026-08-28) — the cost model below this box
-> is the OLD chip. Read this box first; the historic text is kept for
-> the reasoning style.** The raster engine (run 51+) moved every paint
-> walk to the 100 MHz clock, and the VM runs div7 (14.3 MHz):
+Rules for writing faster HTML games on this machine, from what has
+actually been measured to matter, **roughly in order of impact:**
+
+1. **Never do per-tick pathfinding / flood work.** A maze BFS or
+   full-grid clone every frame is the one thing proven to **hard-freeze
+   the board** (PACMAN / `PACORIG`). One-step “move toward target” on
+   the existing map is fine; full recompute is not. Detail below and
+   [no-maze-flood-on-tick.mdc](../.cursor/rules/no-maze-flood-on-tick.mdc).
+2. **Never mirror sprites with `setTransform(-1, …)`.** Negative scale
+   collapses to **1 pixel** here (`max(1, w*sx)`). Draw two pre-made
+   sheets (left-facing and right-facing) and pick between them — which
+   is what the MK-style titles already do.
+3. **Avoid `for…in` / `Object.keys`.** Not on this VM (FPGA-SIM
+   `fault=5` / `fsite=4183`). Index arrays or use a fixed key list.
+4. **Reuse objects across frames instead of allocating new ones.** The
+   heap is a hard-capped pool (`MAX_OBJ=960`). A fresh `{x,y,…}` literal
+   every frame burns that pool and is the shape of the PACMAN-adjacent
+   object-exhaustion fault. Keep **one mutable object** and write into
+   its fields. (Do **not** hoist per-frame *grids/arrays* to startup —
+   that is a different trap; see rule 4 in the historic notes below.)
+5. **Prefer the built-in draw calls** (`fillRect`, `drawImage`,
+   `putImageData`) **over manual pixel loops.** As of run 50/51 these
+   run through a dedicated hardware engine at close to **1 pixel per
+   clock**. A hand-written loop of `setPixel`-equivalents runs at
+   VM-instruction speed, which is dramatically slower.
+6. **Keep sprite sheets modest** and let the atlas system pack them,
+   rather than one enormous multi-thousand-pixel-wide image. Wide
+   atlases mean bigger address math per lookup and more SRAM traffic
+   per frame.
+7. **Budget for tearing now that present is gone.** Scanout reads the
+   draw bank (run 52 deleted the present pipeline). Do not rely on
+   “the frame I’m drawing into is invisible until I say so.” If a
+   game-logic step needs an atomic-looking screen, draw fast (rule 5
+   already helps) rather than assuming isolation.
+
+> **Silicon cost model (run 51 engine + run 52 present-delete) — the
+> numbered historic text below this box is the OLD chip.** The raster
+> engine (run 51+) moved every paint walk to the 100 MHz clock, and
+> the VM runs div7 (14.3 MHz). Present is **gone**, not “burst.”
 >
-> | Operation | OLD cost | NEW cost (run 53) |
+> | Operation | OLD cost | NEW cost |
 > |---|---|---|
 > | `fillRect` / `clearRect` | 1 px/VM-clock | **~1 px/100MHz clk — ~14x cheaper** |
 > | `drawImage` (atlas) | >=2 VM-clocks/px | **~1 px/clk (word-cached)** |
 > | `putImageData` | 2+ clk/px | **~2-3 px per 100MHz clk-pair (DMA)** |
 > | `fillText` | glyph px via slow rect | rides the engine — cheap |
-> | swapBuffers/present | 768k clk WAIT per frame | **burst present, ~1/5th (run 53)** |
+> | swapBuffers/present | 768k clk WAIT per frame | **deleted (run 52) — scanout reads the draw bank; tearing is real** |
 > | per-op JS, property access | ~1 VM-beat/op | **UNCHANGED — now the dominant cost** |
 > | string `+` / join (intern FIND) | ~2,000 clk | UNCHANGED |
 > | per-frame allocs / GC churn | GC walks | UNCHANGED (one redundant frame-end GC now skipped) |
 >
-> **The new rules, ranked:**
-> 1. **JavaScript ops are the currency now, not pixels.** INVFAST proves
->    it: paint is 1.3% of its frame, per-op execution is 75%. Fewer ops
->    per frame beats every paint trick. Hoist invariants out of loops,
->    prefer `while` over closure-heavy iteration, keep hot loops simple.
-> 2. **Property access costs**: `obj.prop` walks keys (~12% of DNKFAST/
->    INVFAST frames in `S_HEAP_CMP`). Cache `var p = obj.prop` outside
->    loops; prefer locals in hot code.
-> 3. **Paint freely, within reason.** Full-screen clears and big
->    `putImageData` restores are cheap now — a clean clear+redraw beats
->    clever dirty-rect JS whose op cost exceeds the paint it saves.
->    (The dirty-rect advice below is OBSOLETE for area; it still helps
->    if it removes JS work.)
-> 4. **Unchanged laws**: `fillText(number)` never `""+n` (intern table
->    is 1024, never released); no per-frame grid hoists to startup;
->    `Array.slice`/allocs in the frame path still cost GC.
+> Once paint is hardware, **JavaScript ops are the remaining currency.**
+> INVFAST: paint is 1.3% of its frame, per-op execution is 75%. Hoist
+> invariants out of loops; cache `var p = obj.prop` outside hot loops
+> (`S_HEAP_CMP` is ~12% of DNKFAST/INVFAST). Full-screen clears are
+> cheap now — clever dirty-rect JS whose op cost exceeds the paint it
+> saves is a loss. Unchanged capacity laws: `fillText(number)` never
+> `""+n` (intern table is 1024, never released); no per-frame grid
+> hoists to startup; `Array.slice`/allocs in the frame path still cost
+> GC.
 >
 > Budget at div7: 60 fps = **238,000 VM beats/frame** of JS+logic (paint
-> no longer counts against it in practice). DNKFAST/MRDOFAST run at the
-> 60 Hz cap on run 53; INVFAST-style per-pixel-JS remains the one
-> pattern the chip cannot save.
+> no longer counts against it in practice). INVFAST-style per-pixel-JS
+> remains the one pattern the chip cannot save.
 
 
 
@@ -356,8 +389,11 @@ capacity you never get back.**
   compute values without building an intermediate array, avoid `.map` /
   `.slice` / `.split` where a plain loop over the existing array works,
   and do not build a lookup table for something you can index directly.
-- **Reuse is safe only for a small, fixed number of objects** — one
-  reusable event object or coordinate object, not a per-cell grid.
+- **Reuse is required for per-frame *objects*** — one mutable
+  `{x,y,…}` written in place, not a new literal every tick
+  (`MAX_OBJ=960`). That is not the same as hoisting a *grid*:
+  reuse a handful of coordinate / event objects; do not make a
+  per-cell array permanent.
 - **Check the budget before hoisting anything:** the `arr=` field in the
   monitor `SNAP` line shows live arrays. If a title is near 1536, it has
   no room for a permanent structure of any size.
@@ -433,16 +469,21 @@ not readable on the V1.0 chip`), scoped to variables provably assigned
 
 ### Quick self-check for a new title
 
-- Sprites drawn with `drawImage`, not per-pixel loops? *(rule 1)*
+- Per-tick BFS / grid clone / `finder`? *(FAST rule 1 — freezes the board)*
+- `setTransform(-1, …)` to flip a sprite? *(FAST rule 2 — draws 1 px; use L/R sheets)*
+- `for…in` / `Object.keys`? *(FAST rule 3 — faults on the chip)*
+- Fresh `{x,y}` / `new` / `{}` every frame instead of one reused object? *(FAST rule 4 — burns `MAX_OBJ=960`)*
+- Sprites drawn with `drawImage` / `fillRect` / `putImageData`, not per-pixel JS loops? *(FAST rule 5 — hardware ~1 px/clk)*
+- One enormous multi-thousand-pixel-wide sheet? *(FAST rule 6 — split; let the atlas packer work)*
+- Assuming a hidden back buffer / `present` isolation? *(FAST rule 7 — present is gone; budget tearing)*
 - Any `if (img.width)` / `.complete` / `onload` guard around a draw? *(never — undefined on the chip, renders wrong with no error)*
-- Any full-screen clear or `putImageData` in the frame loop? *(rule 2 — that alone can exceed the budget)*
-- Any `"" + number`, or a `*_STR` variable holding a score/timer/coordinate? *(rule 3 — this overflows the 1024-entry intern table and halts the machine)*
-- Any `[]`, `{}`, `new`, `.map`, `.slice`, `.split` inside the frame loop? *(rule 4 — reduce them; do NOT hoist them to startup)*
-- Does the title have array-heap headroom (`arr=` in SNAP, cap 1536) before you make anything permanent? *(rule 4)*
+- Any `"" + number`, or a `*_STR` variable holding a score/timer/coordinate? *(intern table is 1024, never released)*
+- Any `.map` / `.slice` / `.split` / per-frame **grid** hoisted to startup? *(reduce them; do NOT make grids permanent)*
+- Array-heap headroom (`arr=` in SNAP, cap 1536) before you make anything permanent?
 
-A title that answers "no" to the last three and "yes" to the first has a
-real chance at 30 fps. One that answers the other way will land where
-INVADERS is.
+A title that answers the FAST rules above and keeps intern/array
+capacity has a real chance at 60 fps on the engine. One that paints
+sprites as per-pixel JS will land where INVADERS is.
 
 ### What is being fixed in the machine (do not design around these)
 

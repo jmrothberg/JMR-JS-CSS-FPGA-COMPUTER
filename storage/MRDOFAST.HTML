@@ -956,9 +956,10 @@ function stepCreeps() {
 /* Rule 1: one ASET atlas (16×16 cells). drawImage, not per-pixel fillRect.
    Blit unconditionally — Image.width is undefined on the V1 chip. */
 var sprAtlas = new Image();
-sprAtlas.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAAQCAYAAAD506FJAAADWElEQVR4nO2Z0ZHbIBCGfzLXQ+7NuJJzZlzEVeBzCSpBLcQVpIjMxFeJ8ZtTxebBhwwYEKuVhTLWP6M5zPGtdm2WBUkhEAHkflaACsfkJOVr+1M7/mfn9ebi8eb4OilvcPR4jc2k/NTynAt/vGBgbyBSvrYvteN/dj5MXlcliSzlw+Tt7BYmsZSPqd2Cmt/Diqg2mgDAaJPku38QUfLL6wYrlTQk5ce0NYSfQ/w1E7Bj3TACd3M2pLxN3tOf717/+sffrp1LYilvk3dFb17/WX1e7fcksZRPqd2Cmi2AhrkItCD9rq++/TJJ/gW4TV6lFIio++v22XGxSSzlY7ZCNrTd5wuHn0P8fQsIAdnvTsq7cn0eooWX8VYEkNoC+l3DNIYHN1AGhmw7Neybd8PbRO1Wb04gUj5lD34SPYyfW/y1JPX5f+bP6rPjbfWekgcA2u3I7qioAU7agK57q/LAWhAaKDRQaLM7w6+bzmALXNOXOcRvz2wx5c5xY/HLM4D6zwBot7vaOBySY3q/S5v8fX342gGUTN7cOCk/pq0h/Jzir6nUxCp9gCvlU0la+iRfyttEXdFbd5bnJK+U75K/b1xuJ5BI9NRO4AW4ViY7OdfntTfgtDrBjkndU8qHtoBbsnDtDeFte2gFlfJzkgKUO8G4b2+kvDm+KreSs1/jCXhbwe3vaXAkgyNxdwBD+VGUe1gY+Z/XUXsLWtuXOcTvvropeY3TZ4PDAfL36K6NIWxY3bgLiGuDy4Z+D4lj6OJzV/0zRwCrWHypxTfV7z0EBG4VMmyXSsrX9mdu8XMVJn9uUXrI/Z2k0ZsL5c7lj5Cb/OwHZ0K5sbPjPxz8a4AIIPc1bPcgMdEPLDuAJFerArfUEgA0qlFuewhvP3N4vbmQWwG51S82nmOHALIVym1z2ZL+OalooWr9j6oJKrzz1ss3Hu+PfifaaLIT2G1zZDlp9anhi/SeITN1BZbKLiBhm8uW9C/yZXcsyau9XWw2cgGRI4BUbvWzVbRGEtj7Wj9c33Lar/bYr/Z37VKFDJevLXe3wNk55MZz7SyaTnc/zCO2oFwbY/gyph+LFk2lnwVHgY/EcSbGfgAq1Q/M/Fy0aNEzKrcIpJI/xrpjU/3LArBo0UyVStox9Q8168+jYIBnlQAAAABJRU5ErkJggg==";
+sprAtlas.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAAgCAYAAAD9qabkAAAFfElEQVR42u2cv2sbSRTHv88Y4iJ/gMNJRAEXClwhQyAuDqLrXKZUOh0Y0h7cFfkTXCSQNpDCnV2mzFXngxQyCC5FwC4M1hEdl8JFChdKNVfIu55dzY83M7taBb8vGJbZ+cyP9bx5b2Z3BBikDEKAUvmm29B0/1fh+YtWQ5ejbq3/u3XT4AEAtNvA58+FdCIizuBL4QtlZLouK7gNEXzT/W+c73SsA44mk9r57mBm5c+ONmrnJzi28h30a+erVGcy/19MOvbnTk7DMQwk1yBK5RfKKLHBbQjkm+5/47zDeDlGnMq7jJdjxKm8y3g5RpzK58/x5aaxHPr9C38C2YfqDDrzdh1NgBcg5wTADRODjCeAb7odIWGyqe7vnTca8MXFzfWDB14jTuXLBnx6eCe/fvjsm9eIU/myAd9XT/Lrf+gvrxGn8jbDj54I9jEvz2L8hSUAEZE+iIgI5THlMt5U3laOqayQdnD5jLO0O0+z1V0V74pc6uQXdHFh/B9u98/Qw3xgfTxwhNSJ/NnRBnCoCoZ7+mFrftFqKZpOyePpk/gO+lBQBcN9OtwBAPQwU86+R/Dq5abCb//dJLy654wQvJPAPlRu+Pp1SWsOT3wTQkYoldfZ6D2sCH4hb7u9VB5A0Xhjnl8qX+6L5r0z+Qwglc/Yghf/6Ty47bH8BMe5F888+buDUS081/OzmbLBvwDl0UDwHkCA50jlV6EtTT+DxnnPOn67f+Y03lTetY4//bAFn+dO5V3r+KfDHe/EFcPnxuyLALL71/eMUYDD25vurS8MHIvHyO57196RPLcc325+Cu9kGW8RUvnkiKkK3reBd7DRHO8x3rp5TtSTxDvCfrYc633TvbWCd3ANHs/ASuXZedttJBmRg3f2gVFvKt+05BXgir8CfHXPO0koQGV/nHRie07PDJrKF8pqtZRvfev0xJG8z4Ozlw+RvK/tnOeXwruitNAITs+Xwt6G+mP2AExLAAUoKAVo1RBAtvTCEoCIKGXwZJ3Ty6DpNC8zJPzSOaMn9bWlVG+hTb43CIb2qlZLseotPYNCOwK9/0L9Ec8u9vmLlqwfNyPBL4vGb4gIbOkEUOFLwGyXtBwudQcz1QUUJ4wql0HTKYXwWX0PLe0AABxtBPFZGzhsvlOs5TOlcctIYZdd//Yv36Lu+fJx2UqWkKZ8TLbx/idv0lBYOgyfAotur6bjd1H3fPm47B9fv0bd8+Xjsk31n3Y/kpr2WVHeyd4YALDz/qqSiK4wAVx+MjfUls7NG8JX0Y6UNlTd/ir6vqz6Lz8NKOaeLx+X3b2yD2rXPV8+Lttk/6l1zJ4ETMZPAL3B4rv+5470wiagSCRaDY127yoAePz2UbDX1439uWbftnSRSCQSiUS3UbxTXTogH4Qs5YOQLAzkhn4iUSUTgJwJb/ZM+Gj3rsrWfrpO9sYyEYgq17rVeC1nudmeP4LXjdd2lrtOXjde21nuOnmb8QPzDaHR3ljJJCCqPALoDW8M5+/jbsGA8zPdjh90SOWB4tdu+rHN08M7ICJ0BzOnB0/l9T7oxzbvqycgovx4p82Dp/Iu45dIQFSX1gDLKaVrg+WcZU/ldZWNN7SMVD4zXv0ct268dfEc4w/JJxIF7wH0hjOVe/CI9Xsqn3ly1w83+DbxUvnecKZcP/zg28SL4Y3e/4c/gX9/lihAVH8EoHtyzi69KxJI4YFbcOabK4vxi0S1TQAcL72MtwR17vJz+Dp3+Tm8SNTIEuB6vSxnwhuon/sdODD/blyGrqgKyWnAFdHJ3hiPf93y53t9Lg9LVN8EIGfCm+n/zvsrGuFcuSaBk9fnsvknqncCkDPhzfXfNQmI8YuWsgcgWg3JWQCRSCQSiUQiUT36H7ZlDHLQUyMdAAAAAElFTkSuQmCC";
 var FI_DO_R0 = 0, FI_DO_R1 = 1, FI_DO_L0 = 2, FI_DO_L1 = 3, FI_DO_D0 = 4, FI_DO_D1 = 5, FI_DO_U0 = 6, FI_DO_U1 = 7;
 var FI_DINO0 = 8, FI_DINO1 = 9, FI_MUNCH0 = 10, FI_MUNCH1 = 11, FI_ALPHA0 = 12, FI_ALPHA1 = 13, FI_APPLE = 14, FI_CHERRY = 15;
+var FI_DINO_L0 = 16, FI_DINO_L1 = 17, FI_MUNCH_L0 = 18, FI_MUNCH_L1 = 19, FI_ALPHA_L0 = 20, FI_ALPHA_L1 = 21, FI_BALL = 22;
 
 function walkFr() {
   return Math.floor(tick / 8) % 2;
@@ -967,7 +968,14 @@ function walkFr() {
 function blitSpr(x, y, fi, sc) {
   // Unconditional ASET blit. Do not read sprAtlas.width — undefined on the
   // chip, and the compiler now refuses that DOM property on Image vars.
-  c.drawImage(sprAtlas, fi * 16, 0, 16, 16, x, y, 16 * sc, 16 * sc);
+  // Atlas is 2 rows of 16×16: fi 0-15 row 0, fi 16+ row 1.
+  var sx = fi * 16;
+  var sy = 0;
+  if (fi >= 16) {
+    sx = (fi - 16) * 16;
+    sy = 16;
+  }
+  c.drawImage(sprAtlas, sx, sy, 16, 16, x, y, 16 * sc, 16 * sc);
 }
 
 function isTun(col, row) {
@@ -986,20 +994,29 @@ function pixDo(x, y, face) {
   blitSpr(x, y, fi, 2);
 }
 
-function pixDino(x, y, drill, flash) {
+function pixDino(x, y, drill, flash, left) {
   if (drill && flash) {
     c.fillStyle = "#FFF8C0";
     c.fillRect(x + 2, y + 2, 28, 28);
   }
-  blitSpr(x, y, walkFr() ? FI_DINO1 : FI_DINO0, 2);
+  var fi = FI_DINO0;
+  if (left) fi = walkFr() ? FI_DINO_L1 : FI_DINO_L0;
+  else fi = walkFr() ? FI_DINO1 : FI_DINO0;
+  blitSpr(x, y, fi, 2);
 }
 
-function pixMunch(x, y) {
-  blitSpr(x, y, walkFr() ? FI_MUNCH1 : FI_MUNCH0, 2);
+function pixMunch(x, y, left) {
+  var fi = FI_MUNCH0;
+  if (left) fi = walkFr() ? FI_MUNCH_L1 : FI_MUNCH_L0;
+  else fi = walkFr() ? FI_MUNCH1 : FI_MUNCH0;
+  blitSpr(x, y, fi, 2);
 }
 
-function pixAlpha(x, y) {
-  blitSpr(x, y, walkFr() ? FI_ALPHA1 : FI_ALPHA0, 2);
+function pixAlpha(x, y, left) {
+  var fi = FI_ALPHA0;
+  if (left) fi = walkFr() ? FI_ALPHA_L1 : FI_ALPHA_L0;
+  else fi = walkFr() ? FI_ALPHA1 : FI_ALPHA0;
+  blitSpr(x, y, fi, 2);
 }
 
 function pixApple(x, y) {
@@ -1026,10 +1043,7 @@ function pixTreat(x, y) {
 }
 
 function pixBall(x, y) {
-  c.fillStyle = "#FFFFFF";
-  c.fillRect(x + 10, y + 10, 12, 12);
-  c.fillStyle = "#CCCCCC";
-  c.fillRect(x + 12, y + 12, 4, 4);
+  blitSpr(x, y, FI_BALL, 1);
 }
 
 function pixDia(x, y) {
@@ -1134,9 +1148,9 @@ function paintField() {
     if (e.live) {
       var ex = OX + e.cx * CELL + e.dx * e.prog;
       var ey = HUD + e.cy * CELL + e.dy * e.prog;
-      if (e.kind === 3) pixMunch(ex, ey);
-      else if (e.kind === 2) pixAlpha(ex, ey);
-      else pixDino(ex, ey, e.kind === 1, e.wait > 0 && (tick % 8 < 4));
+      if (e.kind === 3) pixMunch(ex, ey, e.dx < 0);
+      else if (e.kind === 2) pixAlpha(ex, ey, e.dx < 0);
+      else pixDino(ex, ey, e.kind === 1, e.wait > 0 && (tick % 8 < 4), e.dx < 0);
     }
     i = i + 1;
   }

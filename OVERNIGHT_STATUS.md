@@ -1,5 +1,9 @@
 # Overnight build status — night of 2026-08-21 → 22
 
+**Not live status.** Scoreboard: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+Timing: [docs/TIMING_WALL.md](docs/TIMING_WALL.md). This file is the
+08-21/22 fit-campaign diary only.
+
 (Agent-written before launching the build; check the tail of this file
 and `build/nexys_video/` for the outcome.)
 
