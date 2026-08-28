@@ -91,6 +91,17 @@ module jmr_raster_engine #(
     // step), and re-anchored to fb_row+MW at every row wrap so OOB
     // drift never carries across rows.
     logic [18:0] fb_row, fb_addr;
+    // Run 53 post-route fix: the row-wrap DDA (ay+ryr>=h compare
+    // selecting row_so + row_step (+stride)) was the worst routed family
+    // (-0.53, 9 levels). Precompute the next row's so/ay into registers
+    // every clk; the wrap consumes registers only. nxt_ok guards the one
+    // stale beat right after a wrap (or go): a wrap that arrives before
+    // the precompute settles simply holds one beat — the pixel beat
+    // re-runs idempotently (same fetch, same write). Only 1-px-wide
+    // rows ever hit the hold (covered by the 1-px-wide exact gate).
+    logic [21:0] nxt_row_so;
+    logic [15:0] nxt_ay;
+    logic        nxt_ok;
     // one-word source cache (blit): tag is the WORD address
     logic        cw_valid;
     logic [20:0] cw_tag;
@@ -124,21 +135,23 @@ module jmr_raster_engine #(
     assign last_px = (x == w_q - 10'd1) && (y == h_q - 10'd1);
 
     task automatic adv();
+        logic held;
+        held = (x == w_q - 10'd1) && !nxt_ok;
         if (x == w_q - 10'd1) begin
-            x  <= 10'd0;
-            ax <= 16'd0;
-            y  <= y + 10'd1;
-            fb_row  <= fb_row + 19'(MW);
-            fb_addr <= fb_row + 19'(MW);
-            // row DDA: row_so += stride*qy (+stride on carry)
-            if (16'(ay + ryr_q) >= {6'd0, h_q}) begin
-                row_so <= row_so + row_step + 22'(stride_q);
-                so     <= row_so + row_step + 22'(stride_q);
-                ay     <= 16'(ay + ryr_q) - {6'd0, h_q};
+            if (!nxt_ok) begin
+                // precompute not settled (wrap right after wrap/go, i.e.
+                // w==1): hold this beat; the caller's pixel beat re-runs
+                // idempotently and the wrap proceeds next clk.
             end else begin
-                row_so <= row_so + row_step;
-                so     <= row_so + row_step;
-                ay     <= ay + ryr_q;
+                x  <= 10'd0;
+                ax <= 16'd0;
+                y  <= y + 10'd1;
+                fb_row  <= fb_row + 19'(MW);
+                fb_addr <= fb_row + 19'(MW);
+                row_so <= nxt_row_so;
+                so     <= nxt_row_so;
+                ay     <= nxt_ay;
+                nxt_ok <= 1'b0;
             end
         end else begin
             x <= x + 10'd1;
@@ -151,7 +164,7 @@ module jmr_raster_engine #(
                 ax <= ax + rxr_q;
             end
         end
-        imgd_i <= imgd_i + 19'd1;
+        if (!held) imgd_i <= imgd_i + 19'd1;
     endtask
 
     always_ff @(posedge clk) begin
@@ -163,6 +176,15 @@ module jmr_raster_engine #(
             cw_valid <= 1'b0;
         end else begin
             fb_we <= 1'b0;
+            // continuous next-row precompute (valid 1 clk after row regs settle)
+            if (16'(ay + ryr_q) >= {6'd0, h_q}) begin
+                nxt_row_so <= row_so + row_step + 22'(stride_q);
+                nxt_ay     <= 16'(ay + ryr_q) - {6'd0, h_q};
+            end else begin
+                nxt_row_so <= row_so + row_step;
+                nxt_ay     <= ay + ryr_q;
+            end
+            nxt_ok <= 1'b1;
             if (!busy) begin
                 if (go_edge) begin
                     m_q <= mode;
@@ -181,6 +203,7 @@ module jmr_raster_engine #(
                     row_step <= 22'(qy) * 22'(stride);
                     imgd_i <= 19'(sbase[18:0]);
                     fetch_wait <= 1'b0;
+                    nxt_ok <= 1'b0;     // precompute settles next clk
                     cw_valid <= 1'b0;   // never serve across ops (re-uploads)
                     // busy always rises, even for a degenerate op, so the
                     // VM's rise-then-fall wait can never hang; the first
