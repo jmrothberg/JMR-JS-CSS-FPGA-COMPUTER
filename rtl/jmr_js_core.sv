@@ -265,7 +265,7 @@ module jmr_js_core #(
         .code_we(code_we), .code_waddr(code_waddr), .code_wdata(code_wdata),
         .sram_req(cons_sram_req), .sram_we(cons_sram_we),
         .sram_addr(cons_sram_addr), .sram_wdata(cons_sram_wdata),
-        .sram_ack(sram_ack && (sram_owner == 3'd2)),
+        .sram_ack(sram_ack && (sram_owner_q == 3'd2)),
         .sram_rdata(sram_rdata),
         .pal_we(pal_we), .pal_waddr(pal_waddr), .pal_wdata(pal_wdata),
         .stor_open(stor_open), .stor_mode(stor_mode), .stor_chan(stor_chan),
@@ -360,7 +360,7 @@ module jmr_js_core #(
         .busy(rast_busy),
         .fb_we(rast_fb_we), .fb_waddr(rast_fb_waddr), .fb_wdata(rast_fb_wdata),
         .sram_req(rast_sram_req), .sram_addr(rast_sram_addr),
-        .sram_rdata(sram_rdata), .sram_ack(sram_ack && (sram_owner == 3'd6))
+        .sram_rdata(sram_rdata), .sram_ack(sram_ack && (sram_owner_q == 3'd6))
     );
     jmr_mini_fb u_fb (
         .wr_clk(clk), .rst_n(rst_n),
@@ -391,13 +391,13 @@ module jmr_js_core #(
         .copy_raddr(fbp_copy_raddr), .copy_rdata(fbp_copy_rdata),
         .sram_req(fbp_sram_req), .sram_we(fbp_sram_we),
         .sram_addr(fbp_sram_addr), .sram_wdata(fbp_sram_wdata),
-        .sram_ack(sram_ack && (sram_owner == 3'd4))
+        .sram_ack(sram_ack && (sram_owner_q == 3'd4))
     );
     jmr_fb_scanout u_fbscan (
         .clk(clk), .rst_n(rst_n),
         .sram_req(scan_sram_req), .sram_addr(scan_sram_addr),
         .sram_rdata(sram_rdata),
-        .sram_ack(sram_ack && (sram_owner == 3'd1)),
+        .sram_ack(sram_ack && (sram_owner_q == 3'd1)),
         .pixel_clk(pixel_clk),
         .fb_x(fb_x), .fb_y(fb_y),
         .fb_rdata(fb_rdata)
@@ -550,7 +550,7 @@ module jmr_js_core #(
         if (!rst_n) begin
             vm_ack_hold   <= 1'b0;
             vm_rdata_hold <= 16'd0;
-        end else if (sram_ack && (sram_owner == 3'd5)) begin
+        end else if (sram_ack && (sram_owner_q == 3'd5)) begin
             vm_ack_hold   <= 1'b1;
             vm_rdata_hold <= sram_rdata;
             vm_held_addr  <= sram_addr;
@@ -582,6 +582,16 @@ module jmr_js_core #(
     // cannot steal the address/ack. Priority (Session-1): scanout line
     // prefetch is TOP (a starved line buffer is visible glass) > console
     // (load) > work RAM > FB present > VM.
+    // Run 55 (-0.270 family, run 54): per-client ACK gates use the
+    // REGISTERED owner. The comb sram_owner resolves the next grant from
+    // live requests (incl. vm_sram_req on vm_clk), so gating acks with
+    // it dragged the whole request cone into every client's clock-enable
+    // (worst: vm_sram_req -> fbscan linebuf CE, 8 levels). Logically a
+    // false path — an ack implies the owner was latched — but the tools
+    // cannot see that. Every ack source (sim model, bridge cache/merge/
+    // read) is registered >=1 cycle after grant, so sram_owner_q is
+    // always valid at ack time. Request-side muxes stay comb (they must
+    // present the request at grant).
     logic [2:0] sram_owner_q;
     logic [2:0] sram_owner;
     always_comb begin
@@ -618,7 +628,7 @@ module jmr_js_core #(
     assign sram_wdata = (sram_owner == 3'd2) ? cons_sram_wdata :
                         (sram_owner == 3'd3) ? {8'd0, work_wdata_l} :
                         (sram_owner == 3'd4) ? fbp_sram_wdata : vm_sram_wdata;
-    assign work_ack   = sram_ack && (sram_owner == 3'd3);
+    assign work_ack   = sram_ack && (sram_owner_q == 3'd3);
 
     // NEW: behavioral 4 MB SRAM (FPGA-SIM, SRAM_INTERNAL=1). Board uses
     // #(.SRAM_INTERNAL(0)) and the MIG DDR3 bridge on these ports.
