@@ -35,7 +35,12 @@ module jmr_i2c_joy #(
     //      better than the original 55 ms ASTEROID lag).
     //   2) HOLD last state on a transient bad batch; only 8 consecutive
     //      failures (~0.2 s = genuine unplug) clear the outputs.
-    localparam int WAIT_POLL = CLK_HZ / 40; // 25 ms between full polls
+    localparam int WAIT_POLL = CLK_HZ / 25;  // 40 ms between full polls
+    // Run 55 (board: works-then-JAMS at 25 ms, jam holds the last pushed
+    // direction = the device MCU wedged and repeats its last sample):
+    // the burst of 7 back-to-back register reads is the real stressor —
+    // give the device firmware breathing room BETWEEN reads too.
+    localparam int READ_GAP  = CLK_HZ / 4000; // 250 us between registers
 
     logic        go, done, rd_ack;
     logic [7:0]  regn, rdata;
@@ -51,7 +56,7 @@ module jmr_i2c_joy #(
     endfunction
 
     typedef enum logic [3:0] {
-        ST_GO, ST_WAIT, ST_LATCH, ST_PAUSE
+        ST_GO, ST_WAIT, ST_LATCH, ST_GAP, ST_PAUSE
     } st_t;
     st_t st;
     logic [2:0]  step; // 0..6 register index
@@ -117,8 +122,14 @@ module jmr_i2c_joy #(
                         st <= ST_PAUSE;
                     end else begin
                         step <= step + 3'd1;
-                        st <= ST_GO;
+                        pause <= READ_GAP[22:0];
+                        st <= ST_GAP;
                     end
+                end
+                ST_GAP: begin
+                    // inter-register breathing room for the device MCU
+                    if (pause != 0) pause <= pause - 23'd1;
+                    else st <= ST_GO;
                 end
                 ST_PAUSE: begin
                     if (pause != 0) begin
