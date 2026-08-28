@@ -191,6 +191,46 @@ Until those land, do not expect `LOAD "MK.HTML"` + `RUN` on FPGA-SIM.
 
 ## Writing a title that is FAST (measured, not guessed)
 
+> **RUN-53 SILICON UPDATE (2026-08-28) — the cost model below this box
+> is the OLD chip. Read this box first; the historic text is kept for
+> the reasoning style.** The raster engine (run 51+) moved every paint
+> walk to the 100 MHz clock, and the VM runs div7 (14.3 MHz):
+>
+> | Operation | OLD cost | NEW cost (run 53) |
+> |---|---|---|
+> | `fillRect` / `clearRect` | 1 px/VM-clock | **~1 px/100MHz clk — ~14x cheaper** |
+> | `drawImage` (atlas) | >=2 VM-clocks/px | **~1 px/clk (word-cached)** |
+> | `putImageData` | 2+ clk/px | **~2-3 px per 100MHz clk-pair (DMA)** |
+> | `fillText` | glyph px via slow rect | rides the engine — cheap |
+> | swapBuffers/present | 768k clk WAIT per frame | **burst present, ~1/5th (run 53)** |
+> | per-op JS, property access | ~1 VM-beat/op | **UNCHANGED — now the dominant cost** |
+> | string `+` / join (intern FIND) | ~2,000 clk | UNCHANGED |
+> | per-frame allocs / GC churn | GC walks | UNCHANGED (one redundant frame-end GC now skipped) |
+>
+> **The new rules, ranked:**
+> 1. **JavaScript ops are the currency now, not pixels.** INVFAST proves
+>    it: paint is 1.3% of its frame, per-op execution is 75%. Fewer ops
+>    per frame beats every paint trick. Hoist invariants out of loops,
+>    prefer `while` over closure-heavy iteration, keep hot loops simple.
+> 2. **Property access costs**: `obj.prop` walks keys (~12% of DNKFAST/
+>    INVFAST frames in `S_HEAP_CMP`). Cache `var p = obj.prop` outside
+>    loops; prefer locals in hot code.
+> 3. **Paint freely, within reason.** Full-screen clears and big
+>    `putImageData` restores are cheap now — a clean clear+redraw beats
+>    clever dirty-rect JS whose op cost exceeds the paint it saves.
+>    (The dirty-rect advice below is OBSOLETE for area; it still helps
+>    if it removes JS work.)
+> 4. **Unchanged laws**: `fillText(number)` never `""+n` (intern table
+>    is 1024, never released); no per-frame grid hoists to startup;
+>    `Array.slice`/allocs in the frame path still cost GC.
+>
+> Budget at div7: 60 fps = **238,000 VM beats/frame** of JS+logic (paint
+> no longer counts against it in practice). DNKFAST/MRDOFAST run at the
+> 60 Hz cap on run 53; INVFAST-style per-pixel-JS remains the one
+> pattern the chip cannot save.
+
+
+
 Correctness gets you a title that runs. This section gets you one that
 plays. Every number here is **measured** — from the PACMAN and INVADERS
 frame profiles in
