@@ -62,6 +62,14 @@ module jmr_i2c_joy #(
     logic [2:0]  step; // 0..6 register index
     logic [22:0] pause;
     logic [2:0]  fail_n;   // consecutive failed batches
+    // Run 55 (board JOYDEMO forensics): live L1 while R1 stuck 20 s =
+    // the pot RESTS right of nominal center (~145-155), and absolute
+    // thresholds (release at 144) never release at rest. Capture the
+    // true rest position on the first good batch (stick untouched at
+    // power-on) and threshold RELATIVE to it — tolerant of any worn or
+    // mis-centered stick. Same +-32 engage / +-16 release geometry.
+    logic       cal;
+    logic [7:0] cx, cy;
     logic        batch_ok;
     logic [7:0]  vx, vy, vok, vc, va, vb, vd;
 
@@ -74,6 +82,9 @@ module jmr_i2c_joy #(
             pause <= '0;
             batch_ok <= 1'b1;
             fail_n <= 3'd0;
+            cal <= 1'b0;
+            cx <= 8'd128;
+            cy <= 8'd128;
             ack_ok <= 1'b0;
             left <= 1'b0;
             up <= 1'b0;
@@ -138,14 +149,27 @@ module jmr_i2c_joy #(
                         if (batch_ok) begin
                             ack_ok <= 1'b1;
                             fail_n <= 3'd0;
-                            /* Hysteresis: engage at 96/160, release at 112/144 so analog
-                               chatter on LEFT (near the 96 edge) does not flip every poll. */
-                            left  <= (vx < 8'd96) || (left && vx < 8'd112);
-                            right <= (vx > 8'd160) || (right && vx > 8'd144);
-                            up    <= (vy < 8'd96) || (up && vy < 8'd112);
-                            down  <= (vy > 8'd160) || (down && vy > 8'd144);
-                            fire_ac <= btn_held(va) | btn_held(vc) | btn_held(vok);
-                            fire_bd <= btn_held(vb) | btn_held(vd);
+                            if (!cal) begin
+                                // first good batch = the stick's true rest
+                                cal <= 1'b1;
+                                cx <= vx;
+                                cy <= vy;
+                            end else begin
+                                /* Hysteresis relative to the captured rest:
+                                   engage at rest+-32, release at rest+-16 —
+                                   a pot resting off nominal center can
+                                   never latch a direction it is not held
+                                   in. 9-bit signed math avoids wrap. */
+                                logic signed [9:0] dx9, dy9;
+                                dx9 = $signed({2'b0, vx}) - $signed({2'b0, cx});
+                                dy9 = $signed({2'b0, vy}) - $signed({2'b0, cy});
+                                left  <= (dx9 < -10'sd32) || (left  && dx9 < -10'sd16);
+                                right <= (dx9 >  10'sd32) || (right && dx9 >  10'sd16);
+                                up    <= (dy9 < -10'sd32) || (up    && dy9 < -10'sd16);
+                                down  <= (dy9 >  10'sd32) || (down  && dy9 >  10'sd16);
+                                fire_ac <= btn_held(va) | btn_held(vc) | btn_held(vok);
+                                fire_bd <= btn_held(vb) | btn_held(vd);
+                            end
                         end else if (fail_n != 3'd7) begin
                             // transient NACK/garbage batch: HOLD last state
                             fail_n <= fail_n + 3'd1;
