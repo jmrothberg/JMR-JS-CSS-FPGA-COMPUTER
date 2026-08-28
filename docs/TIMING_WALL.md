@@ -562,6 +562,42 @@ variable (run 50 measured the vm_clk wall at 73.8 ns as-placed — div7
 needs ~3.8 ns of route recovery under pressure). The flow now archives
 `congestion_impl.rpt` + 100-path timing distributions every run.
 
+## Run 51 — the 2x engine bit, timing clean via contingency (2026-08-28 03:38)
+
+**WNS +0.002 / WHS +0.025 — publishable.**
+`build/bits/run51_engine2x_raster_div8_WNS+0.002.bit` (+ routed DCP in
+`build/runs/run51_engine2x_WNS+0.002/`). Payload: C3 sequential rAF
+timestamp, C4 GC skip, full C1 raster/blit/imgd engine (incremental
+dest address per peer review), div8, on the run-50 DIR fixes. FPGA-SIM
+measured before launch: DNKFAST in-game 2.10x, MRDOFAST ~2.2x.
+
+**How it closed — the two-horse lesson, again.** The in-flow placement
+(AltSpreadLogic_high via the 3-for-3 strategy) produced a timing-dead
+arrangement: converged to 0 overlaps at WNS −1.83 / TNS −4,685, then
+spent 6+ hours ripping up for ~0.4 ns of recovery. A parallel re-place
+from the SAME netlist's opt checkpoint under **AltSpreadLogic_low**
+placed+routed in **58 minutes** straight to +0.002. Same class as run
+35-vs-36 and the 46nc A/B: on this design, placement arrangement
+dominates everything, and a second directive from the opt checkpoint is
+minutes-cheap insurance that should run by default whenever a route's
+first intermediate WNS lands worse than −1.
+
+Two flow traps caught tonight, both fixed in the tcl:
+- `set_property strategy` RESETS step options and silently wiped the
+  TCL.POST checkpoint hooks (run-46 BIN_FILE class): run 51 wrote no
+  flow-level post_*.dcp all night — the ones on disk were run 50's.
+  Vivado's native impl_1/*.dcp saved the contingency. Hooks re-applied
+  after strategy, next to BIN_FILE.
+- Per-run congestion + timing-distribution reports now archive with
+  every run (run 51 is the first carrier).
+
+Utilization (synth): the 2x payload is congestion-NEGATIVE — LUTs
++1,324 (+1.2%) for the whole engine, registers −2.6k, DSP −11 (the
+53x53 and spr_so multiply cones), BRAM −0.5 vs run 49b.
+
+Board next: flash run 51 — DIR regression check (run 50 was the first
+working DIR; run 51 carries the same fixes), then the FAST fleet.
+
 ---
 
 ## Related
