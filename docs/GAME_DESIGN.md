@@ -258,6 +258,13 @@ actually been measured to matter, **roughly in order of impact:**
 > hoists to startup; `Array.slice`/allocs in the frame path still cost
 > GC.
 >
+> **HARD WALL — max 16 locals per function** (params + every `var`).
+> The 17th env slot faults 3 on the FIRST call, with healthy heap
+> counters (INVFAST 2026-08-28: `animate()` hoisted 24 loop temps and
+> black-screened at frame 0). Note the trap: the inlining advice above
+> pushes loop temps into one function — split hot logic into helper
+> functions instead; the wall is per-function and calls are cheap.
+>
 > Budget at div7: 60 fps = **238,000 VM beats/frame** of JS+logic (paint
 > no longer counts against it in practice). INVFAST-style per-pixel-JS
 > remains the one pattern the chip cannot save.
