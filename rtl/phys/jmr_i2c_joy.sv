@@ -26,13 +26,16 @@ module jmr_i2c_joy #(
     localparam logic [7:0] REG_A  = 8'h22;
     localparam logic [7:0] REG_B  = 8'h23;
     localparam logic [7:0] REG_D  = 8'h24;
-    // Run 53: 50 ms between polls made the stick up to ~55 ms stale
-    // (20 Hz sampling + ~3-5 ms I2C batch) — 3+ frames behind at 60 fps,
-    // felt on the board as ASTEROID inputs "buffered behind" fast play
-    // (keys were fine: PS/2 is event-driven, not polled). 10 ms keeps
-    // ~77 Hz effective updates; the I2C batch itself is ~3 ms so the
-    // bus duty stays low.
-    localparam int WAIT_POLL = CLK_HZ / 100; // 10 ms between full polls
+    // Run 54 (board-verified regression fix): 10 ms polls KILLED the
+    // stick — the peripheral's firmware needs the idle gap (50 ms was
+    // empirical device tolerance, not laziness), and the old failure
+    // branch forced all directions OFF on any bad batch, so a starved
+    // device played dead. Two layers now:
+    //   1) 25 ms polls (40 Hz; worst staleness ~28 ms — still ~2x
+    //      better than the original 55 ms ASTEROID lag).
+    //   2) HOLD last state on a transient bad batch; only 8 consecutive
+    //      failures (~0.2 s = genuine unplug) clear the outputs.
+    localparam int WAIT_POLL = CLK_HZ / 40; // 25 ms between full polls
 
     logic        go, done, rd_ack;
     logic [7:0]  regn, rdata;
@@ -53,6 +56,7 @@ module jmr_i2c_joy #(
     st_t st;
     logic [2:0]  step; // 0..6 register index
     logic [22:0] pause;
+    logic [2:0]  fail_n;   // consecutive failed batches
     logic        batch_ok;
     logic [7:0]  vx, vy, vok, vc, va, vb, vd;
 
@@ -64,6 +68,7 @@ module jmr_i2c_joy #(
             regn <= REG_X;
             pause <= '0;
             batch_ok <= 1'b1;
+            fail_n <= 3'd0;
             ack_ok <= 1'b0;
             left <= 1'b0;
             up <= 1'b0;
@@ -121,6 +126,7 @@ module jmr_i2c_joy #(
                     end else begin
                         if (batch_ok) begin
                             ack_ok <= 1'b1;
+                            fail_n <= 3'd0;
                             /* Hysteresis: engage at 96/160, release at 112/144 so analog
                                chatter on LEFT (near the 96 edge) does not flip every poll. */
                             left  <= (vx < 8'd96) || (left && vx < 8'd112);
@@ -129,7 +135,12 @@ module jmr_i2c_joy #(
                             down  <= (vy > 8'd160) || (down && vy > 8'd144);
                             fire_ac <= btn_held(va) | btn_held(vc) | btn_held(vok);
                             fire_bd <= btn_held(vb) | btn_held(vd);
+                        end else if (fail_n != 3'd7) begin
+                            // transient NACK/garbage batch: HOLD last state
+                            fail_n <= fail_n + 3'd1;
                         end else begin
+                            // ~8 consecutive bad batches (~0.2 s): real
+                            // disconnect — release everything, loudly off
                             ack_ok <= 1'b0;
                             left <= 1'b0;
                             up <= 1'b0;
