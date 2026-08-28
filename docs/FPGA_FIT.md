@@ -10,6 +10,10 @@ Words: [README.md — Words used](../README.md#words-used-in-this-project).
 (`build/bits/run49_DIR-self-heal.bit` + `.bin`).
 **WNS +0.180 / WHS +0.051** — best margin of the campaign, and the fifth
 gate-published bit in seven runs on `Congestion_SpreadLogic_high`.
+**BOARD 2026-08-27: run 50 flashed (WNSFAIL −0.214, small-negative
+policy) — DIR WORKS, the first working directory on glass.** Diary:
+[TIMING_WALL.md — Run 50](TIMING_WALL.md#run-50--dir-works-on-the-board-2026-08-27-first-working-directory).
+Run 51 (raster engine 2x set, div8) baking.
 **Fit is solved. Timing is solved.** Ledger: [TIMING_WALL.md](TIMING_WALL.md).
 
 Source: `build/nexys_video/utilization_impl.rpt` (Design State: Routed,

@@ -520,6 +520,48 @@ reported, in a program that had already been fixed — `card.img` had been minte
 trusting any board-vs-sim comparison. See
 [FPGA_BRINGUP.md](FPGA_BRINGUP.md#-a-stale-cardimg-makes-the-board-run-a-program-you-already-fixed).
 
+## Run 50 — DIR WORKS ON THE BOARD (2026-08-27, first working directory)
+
+**The board verdict that matters: the user flashed run 50 and DIR works
+— the first bit in project history with a working directory.** The
+runs-long wedge family (stale `ds_base` run 47, phantom `-- MORE --` run
+48, C_DIR_CH starvation + lost work-port acks runs 49/50) is closed by a
+three-layer defense, all netlist-verified in run 50's `post_synth.dcp`
+before flashing:
+
+| Layer | Commit | Cells in run 50 |
+|---|---|---|
+| DIR catalog restart (3 retries, then loud ?IO) | 7f4f113 | dir_hs_retry x9 |
+| C_DIR_CH dropped mem-pulse reissue (idempotent, until granted) | 11c2869 | dir_hs_wd x60 |
+| work-port ack-loss watchdog (41 us reissue, vm_ack_hold class) | 86a6af2 | work_wd x35 |
+
+Run 50 also carried the first two pieces of the run-51 speed set:
+**C3** (rAF timestamp sequential — `vm_clk` slack measured **+4.73 →
++6.23 ns** at div8, the comb 53x53 deleted) and **C4** (redundant
+frame-end GC skip).
+
+**Timing: WNS −0.214 / WHS +0.050 — publish refused**, bit preserved
+(WNSFAIL label) and flashed under the standing small-negative policy;
+the board result above is its vindication. The three failing families
+are shallow placement-band paths (fbscan y_core_q→sram_addr −0.214
+LL10-11, stor dent→state −0.208 LL11, cons line_len→reply_idx −0.147
+LL14) — inside the ±0.19 noise the run-46 nocache A/B measured on
+identical RTL, untouched by the speed set. Archived complete:
+`build/runs/run50_dir-fixes_c3c4_WNS-0.214/` (checkpoints + WNSFAIL
+bit). Run 49b (same DIR self-heal base, pre-C_DIR_CH-reissue) published
+clean at +0.180 — `build/bits/run49_DIR-self-heal.bit` remains the best
+clean bit on disk.
+
+**Run 51** (launched 2026-08-27 ~21:20, bit-fresh — file list grew
+`jmr_raster_engine.sv`): everything above plus the full-rate
+raster/blit/imgd engine at div8. FPGA-SIM measured before launch:
+DNKFAST in-game 3.98M → 1.89M core clk/frame (**2.10x**), MRDOFAST
+4.03M → ~1.75M (**~2.2x**); 187/187 battery + 193/193 bytecode + 22
+exact-pixel gates at the launch configuration. div7 is run 52's single
+variable (run 50 measured the vm_clk wall at 73.8 ns as-placed — div7
+needs ~3.8 ns of route recovery under pressure). The flow now archives
+`congestion_impl.rpt` + 100-path timing distributions every run.
+
 ---
 
 ## Related
