@@ -731,6 +731,12 @@ class Game {
         this.livesHudDirty = true
         this.hiScoreStr = "HIGH SCORE: 0"
 
+        // 2026-08-28: startGame was registered/removed with a FRESH arrow
+        // closure each time — removeEventListener never matched (dormant
+        // here since this game never returns to title; matches the fix
+        // applied to DNKFAST, which does bounce and hit the listener cap).
+        this._startGameBound = (event) => this.startGame(event)
+
         this.choose = (event) => {
             // NEW: arrows work same as a/d on character select
             var k = event.key;
@@ -982,14 +988,14 @@ class Game {
         
         document.addEventListener("keydown", this.choose)
 
-        document.addEventListener("keydown", (event) => this.startGame(event))
+        document.addEventListener("keydown", this._startGameBound)
     }
 
     startGame(event) {
         if ((event.key === "Enter" || event.key === " " || event.keyCode === 13 || event.keyCode === 32) && gameState === "character") {
 
             // Remove event listener
-            document.removeEventListener("keydown", (event) => this.startGame(event))
+            document.removeEventListener("keydown", this._startGameBound)
             document.removeEventListener("keydown", this.choose)
             
             gameState = "game"
