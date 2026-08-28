@@ -117,11 +117,18 @@ def _fb_nz(sim) -> int:
 
 
 def _vmstat_int(vmstat: str, key: str) -> int:
-    """Read one `key=<int>` field out of a VMSTAT? reply (-1 if absent)."""
-    tok = key + "="
-    if tok not in vmstat:
+    """Read one `key=<int>` field out of a VMSTAT? reply (-1 if absent).
+
+    2026-08-28: token must match at a FIELD boundary — the naive
+    split matched "fault=" inside "efault=" (which precedes it in
+    VMSTAT), so every fault==0 assertion in the suite was silently
+    reading efault. Found by a cross-agent VMSTAT discrepancy on the
+    INVFAST fault-3."""
+    tok = " " + key + "="
+    padded = " " + vmstat
+    if tok not in padded:
         return -1
-    return int(vmstat.split(tok)[1].split()[0].replace(",", ""))
+    return int(padded.split(tok)[1].split()[0].replace(",", ""))
 
 # (test_program_image_scalar_checkpoint_matches_python_hm deleted with the
 #  tagged encoding — docs/REMOVING_EXEC32.md Phase 1: the value64 twin below
