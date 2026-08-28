@@ -94,6 +94,26 @@ Loud miss or PYTHON-matching no-op. Grow only if a title needs it.
 
 ---
 
+## SOLVED 2026-08-28: the recurring "blurred sprite" was art/RAM oversubscription
+
+The MKPVP red-player blur (chased and "fixed" repeatedly across runs;
+back on 51/53, absent on 52) was never RTL. **MKPVP sheet 2 (2036x850)
+occupies SRAM bytes 2,091,728..3,822,328 — straight through FRONT
+(2,961,408..3,268,608), WORK, SPR, SRC and IMGD.** Every present writes
+the framebuffer through the middle of the red player's art; a direction
+flip switches to sheet 1 (below FRONT) and is instantly sharp. Run 52
+was "clean" only because it deleted the present (no front writes).
+Every historical fix that moved regions changed WHICH art died.
+
+**MKPVP oversubscribes the 4 MB asset SRAM by 860,920 bytes** — the art
+ceiling with the current map is byte 2,961,408. No RTL change can fix
+capacity. Fixes (HTML/tools side): mint-time LOUD refuse when art top >
+art ceiling (the documented compile check did not fire — third silent
+over-capacity mint after PACFAST and the extended-PACMAN test image),
+and shrink sheet 2 (mirror-at-author-time if both facings are stored).
+Until then, the red player blurs on every present-carrying build — that
+is expected, not a regression.
+
 ## Recurring bug classes
 
 <a id="recurring-bug-classes--read-this-before-debugging-anything"></a>
