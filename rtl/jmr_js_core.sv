@@ -309,11 +309,14 @@ module jmr_js_core #(
 
     // Session-1 (2026-08-23): single persistent draw bank; present engine
     // streams it to the DDR3 front; scanout prefetches lines back.
-    // Run 52: present pipeline deleted — scanout reads the draw bank's
-    // Port B directly (single-buffer; user-accepted tearing). Two SRAM
-    // clients (scan owner 1, present owner 4) gone with it.
-    logic [18:0] scan_copy_raddr;
-    logic [7:0]  scan_copy_rdata;
+    logic [18:0] fbp_copy_raddr;
+    logic [7:0]  fbp_copy_rdata;
+    logic        fb_present_busy;
+    logic        fbp_sram_req, fbp_sram_we;
+    logic [20:0] fbp_sram_addr;
+    logic [15:0] fbp_sram_wdata;
+    logic        scan_sram_req;
+    logic [20:0] scan_sram_addr;
     // C1 (run 50/51): full-rate raster/blit/imgd engine — the VM hands
     // per-op scalars over a go/busy handshake; the engine writes the FB
     // port at core rate and reads sprites/ImageData as arbiter owner 6.
@@ -362,7 +365,7 @@ module jmr_js_core #(
     jmr_mini_fb u_fb (
         .wr_clk(clk), .rst_n(rst_n),
         .we(fb_we), .waddr(fb_waddr), .wdata(fb_wdata),
-        .copy_raddr(scan_copy_raddr), .copy_rdata(scan_copy_rdata),
+        .copy_raddr(fbp_copy_raddr), .copy_rdata(fbp_copy_rdata),
         .dump_raddr(vm_dump_sel ? vm_dump_addr : dump_fb_raddr),
         .dump_rdata(dump_fb_rdata)
     );
@@ -372,24 +375,29 @@ module jmr_js_core #(
     assign game_view_o = game_view;
     logic game_mode_q2;
     always_ff @(posedge clk) game_mode_q2 <= game_mode;
-    // Board 2026-08-26 "previous game flash", run-52 form: scanout shows
-    // the draw bank LIVE now, so hold the console view until the FIRST
-    // raster-engine op after game entry completes — always the boot
-    // clear (S_FETCH_WAIT boot_clr precedes any op), so stale
-    // previous-title pixels never reach the glass.
-    logic entry_clr_done;
-    always_ff @(posedge clk) begin
-        if (!rst_n || !game_mode) entry_clr_done <= 1'b0;
-        else if (rast_busy_q && !rast_busy) entry_clr_done <= 1'b1;
-    end
+    // Board 2026-08-26: the run-44 FB zero-fill ran, but scan switched
+    // to the FB view immediately on game entry and showed the OLD DDR3
+    // content during the ~10ms clear (the "previous game flash"). Hold
+    // the view on the console until the clear pass completes.
     logic game_view;
     always_ff @(posedge clk) begin
         if (!rst_n || !game_mode) game_view <= 1'b0;
-        else if (game_mode && game_mode_q2 && entry_clr_done) game_view <= 1'b1;
+        else if (game_mode && game_mode_q2 && !fb_present_busy) game_view <= 1'b1;
     end
+    jmr_fb_present u_fbpres (
+        .clk(clk), .rst_n(rst_n),
+        .clear_go(game_mode && !game_mode_q2), // scrub old FB on game entry
+        .swap(fb_swap), .busy(fb_present_busy),
+        .copy_raddr(fbp_copy_raddr), .copy_rdata(fbp_copy_rdata),
+        .sram_req(fbp_sram_req), .sram_we(fbp_sram_we),
+        .sram_addr(fbp_sram_addr), .sram_wdata(fbp_sram_wdata),
+        .sram_ack(sram_ack && (sram_owner == 3'd4))
+    );
     jmr_fb_scanout u_fbscan (
         .clk(clk), .rst_n(rst_n),
-        .copy_raddr(scan_copy_raddr), .copy_rdata(scan_copy_rdata),
+        .sram_req(scan_sram_req), .sram_addr(scan_sram_addr),
+        .sram_rdata(sram_rdata),
+        .sram_ack(sram_ack && (sram_owner == 3'd1)),
         .pixel_clk(pixel_clk),
         .fb_x(fb_x), .fb_y(fb_y),
         .fb_rdata(fb_rdata)
@@ -518,7 +526,7 @@ module jmr_js_core #(
         .vdbg_o(vdbg_o), .vdbg_fault_o(vdbg_fault_o),
         .fb_we(vm_fb_we), .fb_waddr(vm_fb_waddr),
         .fb_wdata(vm_fb_wdata), .fb_swap(vm_fb_swap),
-        .fb_present_busy(1'b0), // run 52: present deleted; S_FB_SYNC falls through
+        .fb_present_busy(fb_present_busy),
         .fb_dump_addr(vm_dump_addr), .fb_dump_sel(vm_dump_sel),
         .fb_dump_back(dump_back_rdata),
         .fb_dump_front(dump_fb_rdata),
@@ -579,8 +587,10 @@ module jmr_js_core #(
     always_comb begin
         sram_owner = sram_owner_q;
         if (sram_owner_q == 3'd0) begin
-            if (cons_sram_req)      sram_owner = 3'd2;
+            if (scan_sram_req)      sram_owner = 3'd1;
+            else if (cons_sram_req) sram_owner = 3'd2;
             else if (work_req)      sram_owner = 3'd3;
+            else if (fbp_sram_req)  sram_owner = 3'd4;
             else if (rast_sram_req) sram_owner = 3'd6;
             else if (vm_sram_req && !vm_ack_hold) sram_owner = 3'd5;
         end
@@ -589,19 +599,25 @@ module jmr_js_core #(
         if (!rst_n) sram_owner_q <= 3'd0;
         else        sram_owner_q <= sram_ack ? 3'd0 : sram_owner;
     end
-    assign sram_req   = (sram_owner == 3'd2) ? cons_sram_req :
+    assign sram_req   = (sram_owner == 3'd1) ? scan_sram_req :
+                        (sram_owner == 3'd2) ? cons_sram_req :
                         (sram_owner == 3'd3) ? work_req :
+                        (sram_owner == 3'd4) ? fbp_sram_req :
                         (sram_owner == 3'd6) ? rast_sram_req :
                         (sram_owner == 3'd5) ? vm_sram_req : 1'b0;
     assign sram_we    = (sram_owner == 3'd2) ? cons_sram_we :
                         (sram_owner == 3'd3) ? work_we_l :
+                        (sram_owner == 3'd4) ? fbp_sram_we :
                         (sram_owner == 3'd5) ? vm_sram_we : 1'b0; // 6: read-only
-    assign sram_addr  = (sram_owner == 3'd2) ? cons_sram_addr :
+    assign sram_addr  = (sram_owner == 3'd1) ? scan_sram_addr :
+                        (sram_owner == 3'd2) ? cons_sram_addr :
                         (sram_owner == 3'd3) ? (WORK_SRAM_BASE + 21'(work_addr_l)) :
+                        (sram_owner == 3'd4) ? fbp_sram_addr :
                         (sram_owner == 3'd6) ? rast_sram_addr :
                                                vm_sram_addr;
     assign sram_wdata = (sram_owner == 3'd2) ? cons_sram_wdata :
-                        (sram_owner == 3'd3) ? {8'd0, work_wdata_l} : vm_sram_wdata;
+                        (sram_owner == 3'd3) ? {8'd0, work_wdata_l} :
+                        (sram_owner == 3'd4) ? fbp_sram_wdata : vm_sram_wdata;
     assign work_ack   = sram_ack && (sram_owner == 3'd3);
 
     // NEW: behavioral 4 MB SRAM (FPGA-SIM, SRAM_INTERNAL=1). Board uses

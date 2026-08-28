@@ -26,7 +26,13 @@ module jmr_i2c_joy #(
     localparam logic [7:0] REG_A  = 8'h22;
     localparam logic [7:0] REG_B  = 8'h23;
     localparam logic [7:0] REG_D  = 8'h24;
-    localparam int WAIT_50MS = CLK_HZ / 20; // 50 ms between full polls
+    // Run 53: 50 ms between polls made the stick up to ~55 ms stale
+    // (20 Hz sampling + ~3-5 ms I2C batch) — 3+ frames behind at 60 fps,
+    // felt on the board as ASTEROID inputs "buffered behind" fast play
+    // (keys were fine: PS/2 is event-driven, not polled). 10 ms keeps
+    // ~77 Hz effective updates; the I2C batch itself is ~3 ms so the
+    // bus duty stays low.
+    localparam int WAIT_POLL = CLK_HZ / 100; // 10 ms between full polls
 
     logic        go, done, rd_ack;
     logic [7:0]  regn, rdata;
@@ -102,7 +108,7 @@ module jmr_i2c_joy #(
                     endcase
                     if (step == 3'd6 || !rd_ack) begin
                         step <= '0;
-                        pause <= WAIT_50MS[22:0];
+                        pause <= WAIT_POLL[22:0];
                         st <= ST_PAUSE;
                     end else begin
                         step <= step + 3'd1;

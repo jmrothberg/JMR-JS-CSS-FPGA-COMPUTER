@@ -32,7 +32,8 @@ module jmr_ddr3_sram_bridge (
     typedef enum logic [1:0] {
         S_IDLE    = 2'd0,
         S_ISSUE   = 2'd1,
-        S_WAIT_RD = 2'd2
+        S_WAIT_RD = 2'd2,
+        S_WFLUSH  = 2'd3
     } st_t;
 
     st_t state;
@@ -54,6 +55,19 @@ module jmr_ddr3_sram_bridge (
     logic         cache_valid;
     logic [17:0]  cache_base;   // addr[20:3]
     logic [127:0] cache_data;
+    // Run 53 (JMR_NOBURST reverts): single-entry BL8 WRITE-COMBINE
+    // buffer, the write-side twin of the read cache above. The present
+    // engine streams 153,600 perfectly sequential words; per-word UI
+    // transactions made that the dominant frame cost (768k core clk of
+    // S_FB_SYNC wait, measured). Sequential writes into one BL8 block
+    // merge here and ack SAME-CYCLE; the block flushes as ONE masked
+    // burst on: a write to a different block, or a read touching the
+    // buffered block. Demand-flush is complete — every reader goes
+    // through this port, so no timeout is needed and none is a wait.
+    logic         wc_valid;
+    logic [17:0]  wc_base;      // addr[20:3]
+    logic [127:0] wc_data;
+    logic [15:0]  wc_ben;       // bytes WRITTEN (flush mask = ~wc_ben)
 
     wire [2:0]  slot_now = addr[2:0];
     // app_addr is in DDR3-device-word (16-bit) units; BL8 bursts are
@@ -100,6 +114,10 @@ module jmr_ddr3_sram_bridge (
             cache_valid <= 1'b0;
             cache_base  <= 18'd0;
             cache_data  <= 128'd0;
+            wc_valid <= 1'b0;
+            wc_base  <= 18'd0;
+            wc_data  <= 128'd0;
+            wc_ben   <= 16'd0;
         end else begin
             ack <= 1'b0;
             app_en <= 1'b0;
@@ -110,6 +128,25 @@ module jmr_ddr3_sram_bridge (
                     cmd_sent <= 1'b0;
                     wdf_sent <= 1'b0;
                     if (req && !ack) begin
+`ifndef JMR_NOBURST
+                        if (we && (!wc_valid || addr[20:3] == wc_base)) begin
+                            // write-combine: merge and ack same-cycle
+                            wc_valid <= 1'b1;
+                            wc_base  <= addr[20:3];
+                            wc_data[{addr[2:0], 4'b0000} +: 16] <= wdata;
+                            wc_ben[{addr[2:0], 1'b0} +: 2] <= 2'b11;
+                            if (!wc_valid) wc_ben <= 16'd0 | (16'b11 << {addr[2:0], 1'b0});
+                            if (addr[20:3] == cache_base) cache_valid <= 1'b0;
+                            ack <= 1'b1;
+                        end else if (we) begin
+                            // different block: flush the buffer first;
+                            // the held req is served on return to IDLE
+                            state <= S_WFLUSH;
+                        end else if (wc_valid && addr[20:3] == wc_base) begin
+                            // read touching the buffered block: flush first
+                            state <= S_WFLUSH;
+                        end else
+`endif
 `ifdef JMR_NOCACHE
                         if (1'b0) begin // read cache disabled (PACMAN-freeze A/B build)
 `else
@@ -125,6 +162,31 @@ module jmr_ddr3_sram_bridge (
                             app_cmd  <= we ? CMD_WRITE : CMD_READ;
                             state    <= S_ISSUE;
                         end
+                    end
+                end
+                S_WFLUSH: begin
+                    // one masked BL8 burst carrying the whole combined block
+                    // (UG586 hold-until-accept discipline, data first)
+                    logic fcmd_ok, fwdf_ok;
+                    app_addr <= {8'd0, wc_base, 3'b000};
+                    app_cmd  <= CMD_WRITE;
+                    app_wdf_data <= wc_data;
+                    app_wdf_mask <= ~wc_ben;
+                    fcmd_ok = cmd_sent || (app_en && app_rdy);
+                    fwdf_ok = wdf_sent || (app_wdf_wren && app_wdf_rdy);
+                    app_wdf_wren <= !fwdf_ok;
+                    app_wdf_end  <= !fwdf_ok;
+                    wdf_sent     <= fwdf_ok;
+                    app_en       <= fwdf_ok && !fcmd_ok;
+                    cmd_sent     <= fcmd_ok;
+                    if (fcmd_ok) begin
+                        app_en       <= 1'b0;
+                        app_wdf_wren <= 1'b0;
+                        app_wdf_end  <= 1'b0;
+                        wc_valid <= 1'b0;
+                        cmd_sent <= 1'b0;
+                        wdf_sent <= 1'b0;
+                        state    <= S_IDLE;  // held req re-evaluated there
                     end
                 end
                 S_ISSUE: begin

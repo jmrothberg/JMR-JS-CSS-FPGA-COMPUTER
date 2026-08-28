@@ -316,3 +316,53 @@ requestAnimationFrame(tick);
         # plus invalidation on code_we by construction.
     finally:
         sim.shutdown()
+
+
+# ------------------------------------------------------------- joystick
+
+def test_gate_joystick_move_delivers_release():
+    """A stick MOVE is a simultaneous release+press (joy 4 -> 8 = up[L] +
+    down[R] in one tick). The old dispatch enqueued the top-priority down
+    bit then cleared BOTH edge masks, losing the keyup — the title
+    believed the old direction was still held (ASTEROID board lag/ghost
+    turning). Correct behavior: every transition is delivered; after
+    L -> R -> release, the title's held set is empty."""
+    src = """
+var c = document.getElementById('c').getContext('2d');
+var held = {};
+document.addEventListener("keydown", function(e) { held[e.keyCode] = 1; });
+document.addEventListener("keyup", function(e) { held[e.keyCode] = 0; });
+function tick() {
+  c.fillStyle = '#000000';
+  c.fillRect(0, 0, 40, 8);
+  c.fillStyle = '#ff0000';
+  if (held[37]) { c.fillRect(10, 3, 1, 1); } else { c.fillRect(10, 5, 1, 1); }
+  if (held[39]) { c.fillRect(20, 3, 1, 1); } else { c.fillRect(20, 5, 1, 1); }
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("GJOY1.JS", src, [(2, 2, bytes([1] * 4))])
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "GJOY1.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")            # listeners attached
+        sim._rpc("JOY 4")            # press Left
+        sim._rpc("FRAME")
+        sim._rpc("JOY 8")            # MOVE: release Left + press Right
+        sim._rpc("FRAME")
+        sim._rpc("JOY 0")            # release Right
+        sim._rpc("FRAME")
+        sim._rpc("FRAME")            # settle: deliver + repaint
+        st = sim._rpc("VMSTAT?")
+        assert _vmstat_int(st, "fault") == 0, st
+        raw = _fb_raw(sim)
+        l_held = _fb_pix(raw, 10, 3) != 0
+        r_held = _fb_pix(raw, 20, 3) != 0
+        assert not l_held, "Left still held: the move's keyup was lost"
+        assert not r_held, "Right still held: the release keyup was lost"
+    finally:
+        sim.shutdown()

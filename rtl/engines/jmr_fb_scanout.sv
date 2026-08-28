@@ -1,29 +1,25 @@
-// Draw-bank line prefetcher + 2-line ping-pong buffer.
+// DDR3 front-image line prefetcher + 2-line ping-pong buffer.
 //
-// Run 52 (2026-08-28): scanout reads the PERSISTENT DRAW BANK directly
-// (jmr_mini_fb Port B, freed by deleting jmr_fb_present) instead of a
-// DDR3 front image. The whole present pipeline is gone: no S_FB_SYNC
-// wait (768,008 core clk per frame in every presenting title, measured),
-// no DDR3 front region, two fewer SRAM arbiter clients — and scanout
-// can never starve on the DDR3 bridge again (the run-32/33 black-screen
-// class is structurally deleted). Cost, accepted by the user: single-
-// buffer tearing, small now that draws run at ~1 px/clk in the raster
-// engine.
+// Session-1 (2026-08-23): the scanout FB moved to DDR3 (front image at
+// FB_SRAM_BASE, 2 px per 16-bit word, little pixel first). This module
+// keeps the NEXT beam line resident in a dual-clock 2x640 BRAM while the
+// current line scans out, so the pixel side sees the same 1-beat
+// registered-read contract the old BRAM bank gave jmr_text_hdmi_scanout.
 //
-// This module keeps the NEXT beam line resident in a dual-clock 2x640
-// BRAM while the current line scans out, so the pixel side sees the
-// same 1-beat registered-read contract as before. Fetch: streaming
-// 1 px/clk through Port B's registered read (~641 clk per line against
-// a 32 us line period).
-//
-// CDC: the beam line number crosses core-ward as gray code through 2
-// FFs — unchanged.
-module jmr_fb_scanout (
-    // core-clock side (draw-bank Port B master)
+// CDC: the beam line number crosses core-ward as gray code through 2 FFs.
+// Budget: 320 words/line, held-until-ack sram reads; the arbiter gives
+// this channel TOP priority, so a line lands in ~2k core cycles against a
+// 32 us line period.
+module jmr_fb_scanout #(
+    parameter logic [20:0] FB_SRAM_BASE = 21'd1480704
+) (
+    // core-clock side (sram master)
     input  logic        clk,
     input  logic        rst_n,
-    output logic [18:0] copy_raddr,
-    input  logic [7:0]  copy_rdata,
+    output logic        sram_req,
+    output logic [20:0] sram_addr,
+    input  logic [15:0] sram_rdata,
+    input  logic        sram_ack,
     // pixel-clock side
     input  logic        pixel_clk,
     input  logic [9:0]  fb_x,
@@ -54,51 +50,45 @@ module jmr_fb_scanout (
         for (int i = 8; i >= 0; i--) g[i] = g[i] ^ g[i+1];
         y_core = g;
     end
-    // Registered decode (run-32 lesson): keep the gray prefix-XOR +
-    // compare cone off the address path.
+    // Registered decode: the gray prefix-XOR plus the +1/compare/x320
+    // address cone was 10-11 LUT levels and set run-32's residual WNS
+    // (-1.17). One register here lags the prefetch decision a single
+    // 10 ns cycle behind the beam - noise against the 32 us line time.
     logic [9:0] y_core_q;
     always_ff @(posedge clk) y_core_q <= y_core;
 
     logic [9:0]  fetched_line;   // last line fully fetched
     logic [9:0]  tgt;            // line being fetched
-    logic [9:0]  wx;             // Port B address cursor
-    logic [9:0]  wxo;            // write-back cursor (rdata lags 1 beat)
-    logic        busy, primed;
+    logic [9:0]  wx;             // pixel within line (steps by 2)
+    logic        busy;
     always_ff @(posedge clk) begin
         if (!rst_n) begin
+            sram_req <= 1'b0;
             busy <= 1'b0;
-            primed <= 1'b0;
             fetched_line <= 10'd1023;
             tgt <= 10'd0;
             wx <= 10'd0;
-            wxo <= 10'd0;
-            copy_raddr <= 19'd0;
         end else if (!busy) begin
             // want the line AFTER the beam (wraps 479 -> 0)
             logic [9:0] want;
             want = (y_core_q >= 10'd479) ? 10'd0 : (y_core_q + 10'd1);
             if (want != fetched_line) begin
                 busy <= 1'b1;
-                primed <= 1'b0;
                 tgt <= want;
                 wx <= 10'd0;
-                wxo <= 10'd0;
-                copy_raddr <= 19'(want) * 19'd640;
+                sram_req <= 1'b1;
+                sram_addr <= FB_SRAM_BASE + 21'(want) * 21'd320;
             end
-        end else begin
-            // streaming: advance the address every clk; rdata lags one
-            // beat, so the write-back cursor trails the address cursor.
-            if (wx != 10'd639) begin
-                wx <= wx + 10'd1;
-                copy_raddr <= copy_raddr + 19'd1;
-            end
-            if (!primed) primed <= 1'b1;
-            else begin
-                linebuf[{tgt[0], wxo}] <= copy_rdata;
-                if (wxo == 10'd639) begin
-                    busy <= 1'b0;
-                    fetched_line <= tgt;
-                end else wxo <= wxo + 10'd1;
+        end else if (sram_ack) begin
+            linebuf[{tgt[0], wx}]           <= sram_rdata[7:0];
+            linebuf[{tgt[0], wx | 10'd1}]   <= sram_rdata[15:8];
+            if (wx == 10'd638) begin
+                sram_req <= 1'b0;
+                busy <= 1'b0;
+                fetched_line <= tgt;
+            end else begin
+                wx <= wx + 10'd2;
+                sram_addr <= sram_addr + 21'd1;
             end
         end
     end
