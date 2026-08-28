@@ -19,6 +19,7 @@ function _mapHasZero(src){for(var j=0;j<src.length;j++){var row=src[j];for(var i
 // ghost every cell still froze HDMI (~15 dots). Eyes home is _ghostHome
 // once per tile. Original flood is PACORIG.HTML.
 var _gs={x:0,y:0,ok:0,change:0};
+var _g1=0;
 function _ghostOpen(data,x,y){
     var yl,v;
     yl=data.length;
@@ -30,11 +31,10 @@ function _ghostOpen(data,x,y){
 // while + d=d+1 (not for/d++). ≤16 env slots — extra names become GLOBAL
 // and a for(d++) that does not increment never leaves rAF (#84).
 function _ghostStep(data,sx,sy,ex,ey,dir,mode){
-    var d,nx,ny,dist,bestD,on2,rev,yl;
+    var d,nx,ny,dist,bestD,on2,yl;
     _gs.ok=0; _gs.change=0;
     yl=data.length;
     on2 = data[sy]&&data[sy][sx]==2;
-    rev = (dir+2)%4;
     if(on2&&mode==2){
         bestD=9999;
         d=0;
@@ -58,23 +58,21 @@ function _ghostStep(data,sx,sy,ex,ey,dir,mode){
     if(mode==1) bestD=-1; else bestD=9999;
     d=0;
     while(d<4){
-        if(!(dir>=0&&!on2&&d==rev)){
-            nx=sx+(d==0?1:d==2?-1:0);
-            ny=sy+(d==1?1:d==3?-1:0);
-            if(ny<0||ny>=yl||nx<0||nx>=data[0].length){
-                nx=(nx+data[0].length)%data[0].length; ny=(ny+yl)%yl;
-            }
-            if(_ghostOpen(data,nx,ny)){
-                dist=(nx>ex?nx-ex:ex-nx)+(ny>ey?ny-ey:ey-ny);
-                if(mode==1){
-                    if(dist>bestD){
-                        bestD=dist; _gs.x=nx; _gs.y=ny; _gs.ok=1;
-                        _gs.change=(nx-sx>1||sx-nx>1||ny-sy>1||sy-ny>1)?1:0;
-                    }
-                }else if(dist<bestD){
+        nx=sx+(d==0?1:d==2?-1:0);
+        ny=sy+(d==1?1:d==3?-1:0);
+        if(ny<0||ny>=yl||nx<0||nx>=data[0].length){
+            nx=(nx+data[0].length)%data[0].length; ny=(ny+yl)%yl;
+        }
+        if(_ghostOpen(data,nx,ny)){
+            dist=(nx>ex?nx-ex:ex-nx)+(ny>ey?ny-ey:ey-ny);
+            if(mode==1){
+                if(dist>bestD){
                     bestD=dist; _gs.x=nx; _gs.y=ny; _gs.ok=1;
                     _gs.change=(nx-sx>1||sx-nx>1||ny-sy>1||sy-ny>1)?1:0;
                 }
+            }else if(dist<bestD){
+                bestD=dist; _gs.x=nx; _gs.y=ny; _gs.ok=1;
+                _gs.change=(nx-sx>1||sx-nx>1||ny-sy>1||sy-ny>1)?1:0;
             }
         }
         d=d+1;
@@ -93,6 +91,14 @@ function _ghostStep(data,sx,sy,ex,ey,dir,mode){
                 d=4;
             }else d=d+1;
         }
+    }
+    /* Greedy orbit: no reverse + tie→right loops the block when Pacman stands
+       still. Reverse is allowed above. If still not closer, ok=0 so caller
+       uses _ghostHome once — not finder, not every-tick flood. After the
+       fallback so a first-open pick does not hide a local min. */
+    if(mode!=1&&_gs.ok){
+        dist=(sx>ex?sx-ex:ex-sx)+(sy>ey?sy-ey:ey-sy);
+        if(bestD>=dist) _gs.ok=0;
     }
     return _gs;
 }
@@ -1108,6 +1114,7 @@ function Game(id,params){
 					var stage = this;
 					// NEW: stick bits OR into pac-man intent (0 right, 1 down, 2 left, 3 up)
 					var pj = 0;
+					_g1=0;
 					try { pj = joy() | 0; } catch (je) { pj = 0; }
 					if (pj & 8) player.control = {orientation:0};
 					else if (pj & 2) player.control = {orientation:1};
@@ -1326,7 +1333,6 @@ function Game(id,params){
 					speed:1,
 					timeout:Math.floor(Math.random()*120),
 					update:function(){
-						var new_map;
 						if(this.status==3&&!this.timeout){
 							this.status = 1;
 						}
@@ -1334,6 +1340,7 @@ function Game(id,params){
 							if(this.status==1){
 								if(!this.timeout){		//定时器
 									_ghostStep(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y,this.orientation,2);
+									if(!_gs.ok&&!_g1){ _ghostHome(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y); _g1=1; }
 									if(_gs.ok){ this.vector.x=_gs.x; this.vector.y=_gs.y; this.vector.change=_gs.change; }
 								}
 							}else if(this.status==3){
