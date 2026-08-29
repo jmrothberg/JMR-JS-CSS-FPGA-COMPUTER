@@ -61,7 +61,34 @@ module jmr_fb_scanout #(
     logic [9:0]  tgt;            // line being fetched
     logic [9:0]  wx;             // pixel within line (steps by 2)
     logic        busy;
+    logic        wr_hi;          // staggered high-byte write pending
+    logic [7:0]  hi_byte;
+    logic [10:0] hi_addr;
     always_ff @(posedge clk) begin
+        /* SINGLE write statement (vstack 1W recipe, run 58 census):
+           the ack arm wrote BOTH bytes of the sram word in one cycle —
+           two write ports made ram_style="block" infeasible, and this
+           2048-deep buffer fell back to 16,496 FFs + ~10.6k LUTs of
+           read muxes instead of ONE BRAM tile. The high byte now lands
+           the cycle after the ack: bridge acks are >=2 cycles apart
+           (req && !ack handshake), so the stagger can never collide
+           with the next ack's low byte. wr_hi priority is belt-and-
+           suspenders for that impossible case. */
+        logic        lb_we;
+        logic [10:0] lb_wa;
+        logic [7:0]  lb_wd;
+        lb_we = rst_n && (wr_hi || (busy && sram_ack));
+        lb_wa = wr_hi ? hi_addr : {tgt[0], wx};
+        lb_wd = wr_hi ? hi_byte : sram_rdata[7:0];
+        if (lb_we) linebuf[lb_wa] <= lb_wd;
+`ifndef SYNTHESIS
+        // the stagger's one assumption, checked on every sim cycle:
+        if (wr_hi && busy && sram_ack)
+            $error("fbscan: ack collided with staggered high-byte write");
+`endif
+        wr_hi   <= rst_n && busy && sram_ack;
+        hi_addr <= {tgt[0], wx | 10'd1};
+        hi_byte <= sram_rdata[15:8];
         if (!rst_n) begin
             sram_req <= 1'b0;
             busy <= 1'b0;
@@ -80,8 +107,7 @@ module jmr_fb_scanout #(
                 sram_addr <= FB_SRAM_BASE + 21'(want) * 21'd320;
             end
         end else if (sram_ack) begin
-            linebuf[{tgt[0], wx}]           <= sram_rdata[7:0];
-            linebuf[{tgt[0], wx | 10'd1}]   <= sram_rdata[15:8];
+            // byte writes handled by the single-port stanza above
             if (wx == 10'd638) begin
                 sram_req <= 1'b0;
                 busy <= 1'b0;
