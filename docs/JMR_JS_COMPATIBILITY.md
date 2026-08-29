@@ -203,6 +203,7 @@ Documented from real traces (MKPVP on FPGA-SIM / PYTHON):
 | Per-tick maze flood / recursive BFS | Board HDMI **freezes** (one `rAF` never returns). No `ERROR`. PYTHON / FPGA-SIM still look playable. Old `finder` also `fault 3` (~36 objects/call vs 284 free slots). | One-step **chase**. Eyes home = in-place `_ghostHome` once per tile (**not** `finder` / `_copyMapOpen`). No `Array(n).fill().map(()=>Array(m))` on a tick. |
 | Fresh `{x,y}` / object literals every frame | Object-heap overflow (`MAX_OBJ=960`, loud `fault 3`) | Reuse one mutable object; write fields. Do **not** hoist per-frame grids to startup (array-heap trap). |
 | Assuming a hidden back buffer | Scanout tears through in-progress draws (present pipeline deleted, run 52) | Draw fast with `fillRect` / `drawImage` / `putImageData` (hardware ~1 px/clk). No isolation until you “present.” |
+| **`fillText` is one 8×8 bitmap** | 16px HUD after world `setTransform` (`sx≈0.42`) still **k=1** (8 glass px) — “small text” missing on FPGA-SIM. `"Press Start 2P"` / TTF does nothing. Em-dash → `?` | `k = max(1, round(N * sx / 8))`. Glass-space: **8px or 16px**. DNKFAST-style HUD: **32px on Score/Lives only** — do not enlarge title/pause/select. ASCII 32–126. Do **not** add a small font to RTL. [GAME_DESIGN.md](GAME_DESIGN.md) |
 
 Product ISA freeze (three compiles) still defines **Complete** rows above.
 Library V1 titles may use only the **intersection** of Complete rows **and**
@@ -584,9 +585,17 @@ Only `"2d"`. `"webgl"` is never.
 | `getImageData` / `putImageData` | P1 | PACMAN cache | Complete |
 | `canvas.width` / `height` | P0 | all | Complete |
 
-Fonts are **never** Chrome TTF (PYTHON 8×8 bitmap; RTL may be a rect stub
-until the bitmap path matches). Indexed FB may stub `globalAlpha`. Do not
-let JS resize HDMI; glass stays 640×480.
+Fonts are **never** Chrome TTF. PYTHON and RTL `fillText` share one 8×8
+bitmap (READY scanout ROM, codes 32–126). `ctx.font = "NNpx …"` stores
+**N only** — family/weight are ignored. Glyph scale is
+`k = max(1, min(15, round(N * sx / 8)))` (`sx` = `setTransform` a).
+Authoring sizes that actually change the picture: at `sx=1`, **8px** (k=1)
+and **16px** (k=2). After a DONKEY-style world shrink (`sx ≈ 0.42`), **16px
+is still k=1** (8 glass pixels) — bump **only Score/Lives** to **32px**, not
+every `fillText`. Do not add a second (small) font to the chip — write the
+HTML to the bitmap.
+Indexed FB may stub `globalAlpha`. Do not let JS resize HDMI; glass stays
+640×480.
 
 #### Common in HTML5 games — do not grow V1 unless a title emits it
 
@@ -1052,7 +1061,7 @@ Numbered ABI (ids 0–40) is under [Native IDs](#native-ids-call_native--op_call
 | Op | Titles | Status |
 |---|---|---|
 | `fillRect` / `clearRect` / `drawImage` / `setTransform` | INVADERS / DONKEY | done (natural-size `drawImage(img,x,y)` honors the transform scale since 2026-08-21 — the argc<5 leg took sprite w/h raw) |
-| `ctx.font = "NNpx …"` | DONKEY, MRDO HUD | done — parsed in `S_FONTPX`; that state had **no entry** on Value64 until 2026-08-21 (every `fillText` drew at the 8px default) |
+| `ctx.font = "NNpx …"` | DONKEY, MRDO HUD | done — parsed in `S_FONTPX`; that state had **no entry** on Value64 until 2026-08-21 (every `fillText` drew at the 8px default). **N is integer scale of the 8×8 ROM**, not a TTF. World-scaled Score/Lives need 32px — [GAME_DESIGN.md](GAME_DESIGN.md) fillText wall |
 | `document.dispatchEvent(ev)` / `new KeyboardEvent` | DONKEY boot Enter | done on Value64 2026-08-21 (`S_V64_DISPATCH` + custom listener scan). Was exec32-only — the real cause of DONKEY's "Enter twice" quirk |
 | `beginPath` / `moveTo` / `lineTo` / `arc` / `stroke` / `fill` / `quadraticCurveTo` / `closePath` | PACMAN (+ INVADERS arc) | done |
 | `imageSmoothingEnabled` | DONKEY, MRDO | done (nearest blit; false stored) |

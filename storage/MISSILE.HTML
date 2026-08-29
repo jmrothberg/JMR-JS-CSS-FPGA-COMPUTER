@@ -51,7 +51,7 @@ var state={
 // 2026-08-28: one object instead of 6 top-level names — this IIFE's
 // whole body is one function scope, subject to the 16-local RTL wall
 // (MISSILE.HTML hit it: held.right was the 17th name).
-var held={left:0,right:0,up:0,down:0,fire:0,r:0};
+var held={left:0,right:0,up:0,down:0,fire:0,r:0,stickSeen:0};
 // V1: no Array.shift (wall). Copy down + shrink. V1.5 list: Array.shift.
 function trailDrop(a){
   var i=0;
@@ -114,6 +114,15 @@ function playBits(){
   try { if(keyLeft()) j=j|4; } catch(e) {}
   try { if(keyRight()) j=j|8; } catch(e) {}
   try { if(keyFire()) j=j|16; } catch(e) {}
+  // TEMP: RTL can drop stick KEYEVT keyup (held stays 1 → aim/fire jam).
+  // Live joy()/key* bits are truth. After the Pmod has been seen, idle
+  // bits drop the latches. Keyboard-only: j stays 0 so stickSeen never arms.
+  // Do not clear held.r (keyboard R restart).
+  if(j) held.stickSeen=1;
+  if(!j && held.stickSeen){
+    held.left=0; held.right=0; held.up=0; held.down=0; held.fire=0;
+    held.stickSeen=0;
+  }
   return j;
 }
 function reset(){

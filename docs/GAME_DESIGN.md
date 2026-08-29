@@ -124,7 +124,7 @@ Stay on the **Complete** rows in the compatibility checklist. In particular:
 | `beginPath` `moveTo` `lineTo` `arc` `stroke` `fill` `closePath` | `scale()` as a separate call; prefer `setTransform` if you must |
 | `strokeStyle` `lineWidth` `save` `restore` `translate` `rotate` | shadows, `globalCompositeOperation`, `strokeRect` |
 | `imageSmoothingEnabled = false` | bilinear / filtered upscale (indexed FB is nearest) |
-| `fillText` (8×8 bitmap on the machine, not TTF) | CSS layout, overlay DOM score |
+| `fillText` — one 8×8 bitmap; `ctx.font = "NNpx …"` size only (see wall below) | TTF / `@font-face` / `"Press Start 2P"` / CSS overlay HUD |
 | `drawImage` / `Image` + `data:image` (ASET → external SRAM) | packing fat art into code, downscaling to “fit BRAM” |
 
 Vector titles (asteroids-style): stroke polylines on black. Close a polygon
@@ -178,6 +178,7 @@ not title-gate RTL).
 | **Heap / array caps (live silicon)** | Fit pass sized these from real titles. Overflow is **loud** (fault 3). Live numbers: [FPGA_FIT.md](FPGA_FIT.md) (`MAX_OBJ=960`, `ENV_DEPTH=384`, `MAX_ARR_LONG=12`, `ARR_CAP=128`). Do not assume the old 1024/512 headroom. **Reuse objects across frames** — a fresh `{x,y,…}` literal every tick burns the 960-object pool (PACMAN-adjacent object-exhaustion). Keep one mutable object and write its fields. Do **not** hoist per-frame **grids/arrays** to startup to dodge GC (that trades slack for a permanent allocation and overflows the array heap). |
 | **No per-tick maze flood** | Recursive BFS + `Array(n).fill().map(()=>Array(m))` every ghost cell **froze the board** (HDMI last frame, no `ERROR`). Empty `finder` → no freeze. One-step on the existing map; door `2` walks **up**. Do **not** grow `ENV_DEPTH`/`CSTK` (chip full). [no-maze-flood-on-tick](../.cursor/rules/no-maze-flood-on-tick.mdc). |
 | **Nested literal tables** | Hundreds of tiny `MAKE_ARRAY`s for frame rects work only while under the array caps. Prefer compact atlases + small meta, or parallel number arrays, if you approach the cap. |
+| **`fillText` is one 8×8 bitmap (no small TTF)** | Family/weight are ignored. Glyph scale is `k = max(1, min(15, round(N * sx / 8)))` where `sx` is the current `setTransform` x-scale (default 1). Each character is **8k × 8k glass pixels**. There is no 6px/10px/12px face — 10px at `sx=1` still paints the same 8×8 as 8px. **Glass-space HUD (PACMAN / INVADERS):** `8px` (native) or `16px` (2×). **World canvas then `setTransform` onto 640×480 (DONKEY / DNKFAST, `sx ≈ 640/1510 ≈ 0.42`):** `16px` still rounds to **k=1** (8 glass px — easy to miss on FPGA-SIM). Use **`32px` minimum** (k=2) for HUD, **`48px`** (k=3) for titles; drop the baseline so `8*k` glass pixels of height stay on screen; ASCII only (codes 32–126 — em-dash paints `?`). Do not add a second font to RTL. |
 | **Glass / Esc / one file** | 640×480 fill; Esc = BREAK; no external `.js`. Present is **gone** (run 52) — scanout reads the draw bank; budget tearing, draw fast. |
 
 **V1 MK-shaped title:** `storage/MKPVP.HTML` — 3 atlases (arena + Sub-Zero +

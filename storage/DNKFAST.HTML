@@ -936,9 +936,15 @@ class Game {
     }
 
     drawPoints() {
+        /* HUD in glass space: world setTransform shrinks 16px to k=1 (8 glass
+           px) which vanishes on FPGA-SIM. Identity + 16px → k=2, actually visible. */
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
         ctx.fillStyle = 'white'
-        ctx.fillText("Score", 90, 20)
-        ctx.fillText(this.score, 160, 20)
+        ctx.font = "16px sans-serif"
+        ctx.textAlign = "left"
+        ctx.fillText("Score", 8, 22)
+        ctx.fillText(this.score, 104, 22)
+        ctx.setTransform(GLASS_W / WORLD_W, 0, 0, GLASS_H / WORLD_H, 0, 0)
     }
 
     resetGame() {
@@ -970,14 +976,14 @@ class Game {
     }
 
     playerLives() {
+        /* Same glass-space HUD as drawPoints. x=408 is right of HELP (glass ~241–267). */
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
         ctx.fillStyle = 'white'
-        /* Rule 3: rebuild Lives string + measureText only when lives change. */
-        if (this.livesHudDirty) {
-            this.livesX = canvas.width - ctx.measureText("Lives: 0").width - 10
-            this.livesHudDirty = false
-        }
-        ctx.fillText("Lives", this.livesX + 60, 20)
-        ctx.fillText(this.lives, this.livesX + 120, 20)
+        ctx.font = "16px sans-serif"
+        ctx.textAlign = "left"
+        ctx.fillText("Lives", 408, 22)
+        ctx.fillText(this.lives, 512, 22)
+        ctx.setTransform(GLASS_W / WORLD_W, 0, 0, GLASS_H / WORLD_H, 0, 0)
     }
 
     gameOver() {
@@ -1214,8 +1220,6 @@ function update(timestamp) {
         const elapsed = timestamp - previous || 0
         previous = timestamp
         
-        game.drawPoints()
-        game.playerLives()
         game.getPoints()
         game.loseLife()
         game.gameOver()
@@ -1231,6 +1235,9 @@ function update(timestamp) {
         else if (paused) {
             game.pauseScreen()
         }
+        /* HUD last so Kong / HELP cannot cover Score and Lives. */
+        game.drawPoints()
+        game.playerLives()
     }
 
     else {

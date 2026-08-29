@@ -45,6 +45,7 @@ var hyperHeld = 0;
 var hyperWas = 0;
 var startHeld = 0;
 var startWas = 0;
+var _stickSeen = 0; // TEMP: RTL can drop stick keyup (R57 jam)
 
 var ship = { x: 320, y: 240, vx: 0, vy: 0, h: 0, hyper: 0, blink: 0 };
 var rocks = [];
@@ -137,6 +138,19 @@ function astFlush() {
 function stickBits() {
   var j = 0;
   try { j = joy() | 0; } catch (e) { j = 0; }
+  // TEMP: RTL can drop stick KEYEVT keyup (held stays 1 → rotate/thrust/fire jam).
+  // Live joy() is truth. After the Pmod has been seen, idle bits drop the
+  // latches. Keyboard-only: joy() stays 0 so _stickSeen never arms.
+  if (j) _stickSeen = 1;
+  if (!j && _stickSeen) {
+    leftHeld = 0;
+    rightHeld = 0;
+    thrustHeld = 0;
+    fireHeld = 0;
+    hyperHeld = 0;
+    startHeld = 0;
+    _stickSeen = 0;
+  }
   return j;
 }
 

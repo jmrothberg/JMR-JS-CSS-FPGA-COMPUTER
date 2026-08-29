@@ -650,6 +650,33 @@ static void tick() {
     {
         unsigned sc = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state) & 127;
         state_cycles[sc]++;
+        // run-59 piece-1 checker: during EXEC the op word register must
+        // equal code memory at the executing ip — a stale or mis-invalidated
+        // prefetch dies loudly on the FIRST wrong op, across every test.
+        unsigned esc = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state) & 127;
+        if (sc == 60 && esc == 60) {
+            // both the parent view AND exec64's own state must say EXEC —
+            // the parent lags exec64 by a handshake beat around
+            // transitions (first version false-fired on that lag beat,
+            // reading the advanced ip against the not-yet-captured word).
+            unsigned eip = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__ip);
+            unsigned ob = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__ops_base);
+            unsigned ca = (ob + eip) & 0x7fff;
+            uint32_t want = (ca < 16384)
+                ? top->rootp->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[ca]
+                : top->rootp->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[(ca - 16384) & 0xfff];
+            uint32_t got = top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opw_q;
+            if (got != want) {
+                FILE* pf = fopen("/tmp/pf_check.log", "a");
+                if (pf) {
+                    fprintf(pf, "PF-CHECK FAIL ip=%u opw_q=%08x code=%08x ops_base=%u\n",
+                            eip, got, want, ob);
+                    fclose(pf);
+                }
+                fprintf(stderr, "PF-CHECK FAIL ip=%u opw_q=%08x code=%08x\n", eip, got, want);
+                abort();
+            }
+        }
         if (sc == 60) { // S_V64_EXEC: split by exec unit state
             unsigned ec = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state) & 127;
             exec_state_cycles[ec]++;
