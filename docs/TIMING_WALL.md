@@ -742,6 +742,22 @@ verdict decides long-session confidence.
 
 ---
 
+## Run 56 — the control arm: eviction alone was NOT enough (2026-08-29 08:45, WNS -0.396 refused)
+
+Same tree as run 57 minus the fbscan fix and joystick v3b. 5.5-hour
+route to -0.396, leader `cons line_len -> state_reg` (the LIST-parse
+`line_len == 4`, shallow enough to close in a healthy chip — run 57
+closed it with identical console RTL — but the first casualty under
+placement stress; retired anyway with p_len4_q for run 58).
+
+Read as an A/B against run 57 (+0.063, 80-minute flow): the LUTRAM
+eviction helped but **the fbscan linebuf conversion was the decisive
+congestion lever** — one dual-write line buffer masquerading as
+16,496 FFs + 10.6k LUTs was the difference between a 5.5 h failing
+route and an 80-minute clean one.
+
+---
+
 ## Related
 
 - [FPGA_FIT.md](FPGA_FIT.md) — caps, NEVER table, live scoreboard
