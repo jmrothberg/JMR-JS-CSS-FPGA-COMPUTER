@@ -681,6 +681,35 @@ battery re-run under honest assertions: 188 passed, 0 failures.
 
 ---
 
+## Run 55 — vm_clk CLOSED (+4.05), sunk by two clk100 stragglers (2026-08-29 01:36, WNS -0.466)
+
+The all-fixes run (owner_q ack gates + DDA precompute + calibrated
+joystick PHY + present restored + BL8 burst + div7). The headline: the
+owner_q and DDA fixes WORKED — **vm_clk met with +4.052 ns to spare**,
+the deepest margin the VM has ever posted at div7. Both run-53/54
+structural cones are dead.
+
+What failed was the 100 MHz side, 49 endpoints in exactly two families:
+- `u_cons line_len -> reply_idx CE` (-0.466, the run-50 -0.147 item,
+  deferred then as "if it resurfaces" — it did, 3x bigger): the C_EXEC
+  dispatch ladder was fully predicated EXCEPT the raw `line_len == 0`
+  at the ladder ROOT, above every registered p_*_q. Fixed for run 56
+  with `p_empty_q` (same 2-cycle-stable contract).
+- `u_sram_br wc_data/rdata CE` (-0.116 down to -0.004): the new BL8
+  write-combine's 128-bit CE fan — route-recovery class, left to run
+  56's placement relief (bridge semantics stay untouched: sim-invisible,
+  board-critical).
+
+Lesson recorded: a deferred small-negative path does not stay small —
+the placer spends the slack you leave on the table. Retire the whole
+gate-band family when the recipe is one registered predicate.
+
+Board note: the -0.466 bit is preserved (never-smash) but NOT for
+long-session play; run 54's -0.270 showed content-independent fine, so
+55's bit is a valid joystick-feel A/B if wanted before 56 lands.
+
+---
+
 ## Related
 
 - [FPGA_FIT.md](FPGA_FIT.md) — caps, NEVER table, live scoreboard

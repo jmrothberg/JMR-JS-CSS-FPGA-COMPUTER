@@ -295,8 +295,9 @@ module jmr_console_engine (
     logic [16:0] drain_ctr; // hold kbd_clear ~1.3ms: a PS/2 scancode
     // mid-flight at ESC lands AFTER a 1-cycle clear (board: one key leaked)
     logic p_help_q, p_dir_q, p_cls_q, p_list_q, p_edit_q, p_mem_q,
-          p_new_q, p_run_q, p_load_q, p_save_q, p_remove_q;
+          p_new_q, p_run_q, p_load_q, p_save_q, p_remove_q, p_empty_q;
     always_ff @(posedge clk) begin
+        p_empty_q <= (line_len == 0);
         p_help_q <= (line_len == 4 && up(line[0])=="H" && up(line[1])=="E" && up(line[2])=="L" && up(line[3])=="P");
         p_dir_q  <= (line_len == 3 && up(line[0])=="D" && up(line[1])=="I" && up(line[2])=="R");
         p_cls_q  <= (line_len == 3 && up(line[0])=="C" && up(line[1])=="L" && up(line[2])=="S");
@@ -592,7 +593,10 @@ module jmr_console_engine (
                         edit_copy_i <= 0;
                         edit_new_len <= {9'h0, line_len};
                         state <= C_EDIT_REPL;
-                    end else if (line_len == 0) begin
+                    end else if (p_empty_q) begin
+                        // run-55 -0.466 leader: raw line_len==0 at the ladder
+                        // root put line_len into every arm's CE. Registered
+                        // predicate, same 2-cycle-stable contract as p_*_q.
                         msg_idx <= 0;
                         state <= C_PROMPT;
                     end else if (p_help_q) begin
