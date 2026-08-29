@@ -70,6 +70,8 @@ module jmr_i2c_joy #(
     // mis-centered stick. Same +-32 engage / +-16 release geometry.
     logic       cal;
     logic [7:0] cx, cy;
+    logic [2:0] good_n;   // consecutive good batches; outputs muted until 7
+    logic       ac_p, bd_p; // previous raw button samples (release filter)
     logic        batch_ok;
     logic [7:0]  vx, vy, vok, vc, va, vb, vd;
 
@@ -85,6 +87,9 @@ module jmr_i2c_joy #(
             cal <= 1'b0;
             cx <= 8'd128;
             cy <= 8'd128;
+            good_n <= 3'd0;
+            ac_p <= 1'b0;
+            bd_p <= 1'b0;
             ack_ok <= 1'b0;
             left <= 1'b0;
             up <= 1'b0;
@@ -149,11 +154,23 @@ module jmr_i2c_joy #(
                         if (batch_ok) begin
                             ack_ok <= 1'b1;
                             fail_n <= 3'd0;
-                            if (!cal) begin
-                                // first good batch = the stick's true rest
+                            if (good_n != 3'd7) begin
+                                /* SETTLE WINDOW (board 2026-08-29: buttons
+                                   double-fired and directions mislatched at
+                                   power-on — early batches glitch). Outputs
+                                   stay 0 for the first 8 consecutive good
+                                   batches (~320 ms) and the rest position is
+                                   re-captured through the whole window, so
+                                   calibration is the SETTLED rest, not the
+                                   first reading. A bad batch restarts it. */
+                                good_n <= good_n + 3'd1;
                                 cal <= 1'b1;
                                 cx <= vx;
                                 cy <= vy;
+                                left <= 1'b0; right <= 1'b0;
+                                up <= 1'b0; down <= 1'b0;
+                                fire_ac <= 1'b0; fire_bd <= 1'b0;
+                                ac_p <= 1'b0; bd_p <= 1'b0;
                             end else begin
                                 /* Hysteresis relative to the captured rest:
                                    engage at rest+-32, release at rest+-16 —
@@ -161,22 +178,50 @@ module jmr_i2c_joy #(
                                    never latch a direction it is not held
                                    in. 9-bit signed math avoids wrap. */
                                 logic signed [9:0] dx9, dy9;
+                                logic ac_now, bd_now;
                                 dx9 = $signed({2'b0, vx}) - $signed({2'b0, cx});
                                 dy9 = $signed({2'b0, vy}) - $signed({2'b0, cy});
                                 left  <= (dx9 < -10'sd32) || (left  && dx9 < -10'sd16);
                                 right <= (dx9 >  10'sd32) || (right && dx9 >  10'sd16);
                                 up    <= (dy9 < -10'sd32) || (up    && dy9 < -10'sd16);
                                 down  <= (dy9 >  10'sd32) || (down  && dy9 >  10'sd16);
-                                fire_ac <= btn_held(va) | btn_held(vc) | btn_held(vok);
-                                fire_bd <= btn_held(vb) | btn_held(vd);
+                                /* DRIFT RE-CENTER (board 2026-08-29: stick
+                                   held Left/Right "for a while" — the pot
+                                   rest drifts, the one-shot boot center went
+                                   stale, and the +-16 release band could no
+                                   longer be reached). When an axis is idle
+                                   and near rest, slew its center 1 LSB/batch
+                                   (~25 LSB/s ceiling) toward the reading. A
+                                   real hold (engaged or far from rest) never
+                                   re-centers. */
+                                if (!left && !right && dx9 > -10'sd12 && dx9 < 10'sd12 && dx9 != 10'sd0)
+                                    cx <= (dx9 > 10'sd0) ? cx + 8'd1 : cx - 8'd1;
+                                if (!up && !down && dy9 > -10'sd12 && dy9 < 10'sd12 && dy9 != 10'sd0)
+                                    cy <= (dy9 > 10'sd0) ? cy + 8'd1 : cy - 8'd1;
+                                /* PHANTOM-RELEASE FILTER (double-fire fix):
+                                   press passes immediately; release needs
+                                   TWO consecutive released batches, so a
+                                   one-batch glitch can't mint a new press
+                                   edge. Zero added press latency. */
+                                ac_now = btn_held(va) | btn_held(vc) | btn_held(vok);
+                                bd_now = btn_held(vb) | btn_held(vd);
+                                fire_ac <= ac_now || (fire_ac && ac_p);
+                                fire_bd <= bd_now || (fire_bd && bd_p);
+                                ac_p <= ac_now;
+                                bd_p <= bd_now;
                             end
                         end else if (fail_n != 3'd7) begin
                             // transient NACK/garbage batch: HOLD last state
                             fail_n <= fail_n + 3'd1;
+                            // NOTE: good_n deliberately NOT reset here — a
+                            // transient fail after settle must hold-last-
+                            // state, not re-mute the stick for 320 ms.
                         end else begin
                             // ~8 consecutive bad batches (~0.2 s): real
                             // disconnect — release everything, loudly off
                             ack_ok <= 1'b0;
+                            good_n <= 3'd0; // real disconnect: full resettle+recal on return
+                            cal <= 1'b0;
                             left <= 1'b0;
                             up <= 1'b0;
                             down <= 1'b0;
