@@ -72,6 +72,7 @@ module jmr_i2c_joy #(
     logic [7:0] cx, cy;
     logic [2:0] good_n;   // consecutive good batches; outputs muted until 7
     logic       ac_p, bd_p; // previous raw button samples (release filter)
+    logic [4:0] stkx_n, stky_n; // stuck-release watchdog counters
     logic        batch_ok;
     logic [7:0]  vx, vy, vok, vc, va, vb, vd;
 
@@ -90,6 +91,8 @@ module jmr_i2c_joy #(
             good_n <= 3'd0;
             ac_p <= 1'b0;
             bd_p <= 1'b0;
+            stkx_n <= 5'd0;
+            stky_n <= 5'd0;
             ack_ok <= 1'b0;
             left <= 1'b0;
             up <= 1'b0;
@@ -194,10 +197,34 @@ module jmr_i2c_joy #(
                                    (~25 LSB/s ceiling) toward the reading. A
                                    real hold (engaged or far from rest) never
                                    re-centers. */
-                                if (!left && !right && dx9 > -10'sd12 && dx9 < 10'sd12 && dx9 != 10'sd0)
+                                if (!left && !right && dx9 > -10'sd28 && dx9 < 10'sd28 && dx9 != 10'sd0)
                                     cx <= (dx9 > 10'sd0) ? cx + 8'd1 : cx - 8'd1;
-                                if (!up && !down && dy9 > -10'sd12 && dy9 < 10'sd12 && dy9 != 10'sd0)
+                                if (!up && !down && dy9 > -10'sd28 && dy9 < 10'sd28 && dy9 != 10'sd0)
                                     cy <= (dy9 > 10'sd0) ? cy + 8'd1 : cy - 8'd1;
+                                /* STUCK-RELEASE WATCHDOG (board 2026-08-29:
+                                   MISSILE/ASTEROIDS jammed right after a
+                                   flick — the pot RETURNED to a rest shifted
+                                   past the +-16 release band, and idle
+                                   re-centering never runs while engaged, so
+                                   the jam self-sustained). A real hold sits
+                                   near full deflection, far past engage; a
+                                   direction that stays engaged for ~1 s
+                                   while |delta| is BELOW the engage
+                                   threshold is a stuck return, not a hold:
+                                   snap the center to the reading — the
+                                   compare releases next batch. */
+                                if ((left || right) && dx9 > -10'sd32 && dx9 < 10'sd32) begin
+                                    if (stkx_n == 5'd24) begin
+                                        cx <= vx; stkx_n <= 5'd0;
+                                        left <= 1'b0; right <= 1'b0;
+                                    end else stkx_n <= stkx_n + 5'd1;
+                                end else stkx_n <= 5'd0;
+                                if ((up || down) && dy9 > -10'sd32 && dy9 < 10'sd32) begin
+                                    if (stky_n == 5'd24) begin
+                                        cy <= vy; stky_n <= 5'd0;
+                                        up <= 1'b0; down <= 1'b0;
+                                    end else stky_n <= stky_n + 5'd1;
+                                end else stky_n <= 5'd0;
                                 /* PHANTOM-RELEASE FILTER (double-fire fix):
                                    press passes immediately; release needs
                                    TWO consecutive released batches, so a
