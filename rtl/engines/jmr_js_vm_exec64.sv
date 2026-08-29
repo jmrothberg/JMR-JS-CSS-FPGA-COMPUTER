@@ -115,6 +115,7 @@ module jmr_js_vm_exec64 (
     output logic cc_second_q,
     output logic [1:0] cc_st_q,
     output logic [14:0] code_raddr_q,
+    output logic [31:0] opw_out, // run-59: op word as EXEC sees it (captured)
     output logic [7:0] color_q,
     output logic [1:0] ctx_align_q,
     output logic ctx_smooth_q,
@@ -815,10 +816,55 @@ module jmr_js_vm_exec64 (
        BRAM output. Bit-identical today (nothing refetches mid-op); it
        frees the code port so piece 1 can prefetch op N+1 during EXEC
        without the immediates under op N shifting. */
-    logic [31:0] opw_q;
+    logic [31:0] opw_q /*verilator public_flat_rd*/;
+    logic        opw_cap_n; // piece 1: central-skip capture pulse (comb)
+    logic [31:0] dbg_pf_n /*verilator public_flat_rd*/; // skips taken
+    logic        dbg_pfa_c, dbg_pfb_c, dbg_pfc_c; // cascade probes (comb)
+    logic [14:0] pf_addr_s; // probe copy
+    logic [31:0] dbg_pfa /*verilator public_flat_rd*/;
+    logic [31:0] dbg_pfb /*verilator public_flat_rd*/;
+    logic [31:0] dbg_pfc /*verilator public_flat_rd*/;
+    logic [15:0] dbg_pf_addr /*verilator public_flat_rd*/;
+    logic [15:0] dbg_pf_want /*verilator public_flat_rd*/;
+    logic [15:0] dbg_pf_mask /*verilator public_flat_rd*/;
+    logic [15:0] dbg_pf_want2 /*verilator public_flat_rd*/;
+    logic        pf_ok; // port-streams-ip+1 provenance (see mirror + skip)
+    always_ff @(posedge clk) begin
+        if (enable && opw_cap_n) dbg_pf_n <= dbg_pf_n + 32'd1;
+        if (enable && dbg_pfa_c) dbg_pfa <= dbg_pfa + 32'd1;
+        if (enable && dbg_pfb_c) dbg_pfb <= dbg_pfb + 32'd1;
+        if (enable && dbg_pfb_c && dbg_pf_want == 16'd0) begin
+            dbg_pf_addr <= {1'b0, pf_addr_s};
+            dbg_pf_want <= {1'b0, 15'(ops_base + ip_n)};
+            dbg_pf_mask <= {15'd0, hs_m_code};
+        end
+        if (enable && dbg_pfc_c) dbg_pfc <= dbg_pfc + 32'd1;
+    end
     always_ff @(posedge clk)
-        if (state == S_FETCH_WAIT) opw_q <= code_rdata;
+        // BEAT-gated (caught by the PF checker on first run: ungated, the
+        // capture fired on every CORE clk and overwrote the current op's
+        // word mid-beat). All beat registers gate on enable; so does this.
+        // fetch-wait: ungated (code_rdata stable all beat; exec64's enable
+        // is not asserted under parent-owned states — gating it starved the
+        // FIRST op's capture entirely). Skip-capture: beat-edge only.
+        if ((state == S_FETCH_WAIT) || (enable && opw_cap_n))
+            opw_q <= code_rdata;
     wire [31:0] opw = (state == S_FETCH_WAIT) ? code_rdata : opw_q;
+    assign opw_out = opw;
+    // piece 1 fast-path class: the prefetched op's operand pre-latch needs
+    // only code bits (or nothing) — no vsp-relative addressing, no heap or
+    // parent flow at ENTRY. Everything else falls through to the real
+    // S_FETCH_WAIT via the central override's address equality.
+    function automatic logic pf_safe(input logic [7:0] op);
+        pf_safe = (op == OP_LOAD_CONST) || (op == OP_LOAD_VAR) ||
+                  (op == OP_STORE_VAR)  || (op == OP_LET_VAR)  ||
+                  (op == OP_ADD) || (op == OP_SUB) || (op == OP_MUL) ||
+                  (op == OP_DIV) || (op == OP_LT)  || (op == OP_GT)  ||
+                  (op == OP_EQ)  || (op == OP_MOD) || (op == OP_NEG) ||
+                  (op == OP_NOT) || (op == OP_BIT_OR) || (op == OP_BIT_AND) ||
+                  (op == OP_POP) || (op == OP_DUP) ||
+                  (op == OP_JUMP) || (op == OP_JIF);
+    endfunction
 
 
     // Combo D-pins are local. Parent sees *_q only (never-fake-fpga-sim).
@@ -1452,7 +1498,7 @@ module jmr_js_vm_exec64 (
     assign imgd_y_q = imgd_y;
     logic [9:0] imgd_y0;
     assign imgd_y0_q = imgd_y0;
-    logic [15:0] ip;
+    logic [15:0] ip /*verilator public_flat_rd*/;
     assign ip_q = ip;
     logic [11:0] jn_arr;
     assign jn_arr_q = jn_arr;
@@ -2297,6 +2343,8 @@ module jmr_js_vm_exec64 (
                 name_blen_raddr_q <= name_blen_raddr;
                 name_hash_raddr_q <= name_hash_raddr;
                 leave_hold <= (state_n != S_V64_EXEC);
+                if (state_n != S_V64_EXEC || leave_hold) pf_ok <= 1'b0;
+                else if (opw_cap_n) pf_ok <= 1'b1;
         end else begin
             leave_hold <= 1'b0;
                 // potential-bugs #66: parent vtimer_n is truth (see the
@@ -2323,7 +2371,18 @@ module jmr_js_vm_exec64 (
                 vst_win0_we_q <= 1'b0;
                 if (hs_m_ip) ip <= p_ip;
                 if (hs_m_code) code_raddr <= p_code_raddr;
-                if (hs_m_state) state <= p_state;
+                if (hs_m_state) begin
+                    state <= p_state;
+                    /* pf_ok: TRUE only for the EXEC entry that came from
+                       the parent's S_FETCH_WAIT dispatch — the one path
+                       whose handover makes the code port stream ip+1
+                       through EXEC (the parent-side mux applies it with
+                       the parent-registered mask; OUR mirror of the
+                       address lags a beat, so no local address compare
+                       can verify it — provenance can). Re-entries from
+                       ALLOC/event/call flows leave it 0. */
+                    pf_ok <= (state == S_FETCH_WAIT && p_state == S_V64_EXEC);
+                end
                 if (hs_m_vsp) vsp <= p_vsp;
                 if (hs_m_hp_cmd) hp_cmd <= p_hp_cmd;
                 if (hs_m_hp_v64) hp_v64 <= p_hp_v64;
@@ -2882,12 +2941,18 @@ module jmr_js_vm_exec64 (
     endtask
 
     // Dedicated SRAM raddr comb — not the opcode decoder (never-fake-fpga-sim).
+    // run-59 SPLIT: vconsts/vvars address from the INCOMING word
+    // (code_rdata — the prefetch pre-latch; their rdata is consumed only
+    // by single-beat first-touch ops in the fast path). Every other raddr
+    // addresses from the CAPTURED word (opw) and stays stable through
+    // EXEC — multi-beat consumers (vframe for call/return, varr walks,
+    // venv) broke instantly when these moved mid-op (DONKEY rafcall=1).
     always_comb begin
         logic [11:0] cm_argc, cm_base;
         cm_argc = {4'd0, opw[31:24]};
         cm_base = (vsp_hs > cm_argc) ? (vsp_hs - cm_argc - 12'd1) : 12'd0;
-        vconsts_raddr = opw[17:8];
-        vvars_raddr = opw[16:8];
+        vconsts_raddr = code_rdata[17:8];
+        vvars_raddr = code_rdata[16:8];
         venv_raddr = venv_hs[9:0];
         vtimer_raddr = tmr_i_q[5:0];
         vframe_raddr = (vcsp_hs != 8'd0) ? 7'(vcsp_hs - 8'd1) : 7'd0;
@@ -7606,6 +7671,62 @@ module jmr_js_vm_exec64 (
             name_has_we = 1'b1;
             name_has_waddr = clr_i[9:0];
             name_has_wdata = 1'b0;
+        end
+
+        /* ===== run-59 piece 1: central S_FETCH_WAIT skip =====
+           Every op-end funnels through state_n = S_FETCH_WAIT; this one
+           stanza retires the wait beat when — and only when —
+           (a) the op ended inside EXEC (parent between-op work like
+               dc_arm / boot_clr / hp_env-clear happens only after parent
+               flows, which end in parent states and never match here),
+           (b) the site asked for exactly the address the port has been
+               prefetching since EXEC entry (any branch, ctor jump,
+               WIN_FILL detour, or parent redirect differs -> real wait),
+           (c) the incoming opcode is in the fast-path class, and
+           (d) no vvars write (this beat's comb intent OR last beat's
+               in-flight _q) collides with an incoming LOAD_VAR read.
+           The capture pulse rolls opw_q to the new word at this edge. */
+        opw_cap_n = 1'b0;
+        begin
+            logic [14:0] pf_addr;
+            /* The prefetch address as the BRAM actually sees it THIS beat:
+               the parent's handover (hs_code at dispatch) is visible via
+               the hs mask one beat before our mirror latches it — without
+               looking through the mask, single-beat ops (the whole fast
+               path) compared a stale code_raddr and the skip never fired
+               (caught by a digit-identical fclk on the first live test). */
+            pf_addr = hs_m_code ? p_code_raddr : code_raddr;
+            pf_addr_s = pf_addr;
+            dbg_pfa_c = (state == S_V64_EXEC && state_n == S_FETCH_WAIT);
+            dbg_pfb_c = dbg_pfa_c && ip_n == 16'(ip + 16'd1);
+            dbg_pfc_c = dbg_pfb_c && pf_ok;
+        /* (cascade probes, DONKEY in-game: pfa=170k op-ends, pfb=0 —
+           most single-beat ops end via a common tail that never touches
+           code_raddr_n, so equality against the prefetch could never
+           hold. Sequentiality is checked on ip_n directly; the port is
+           checked against the handover; an op that deliberately
+           redirects the code port with ip_n==ip+1 is excluded by the
+           code_raddr_n clause.) */
+        if (state == S_V64_EXEC && state_n == S_FETCH_WAIT &&
+            pf_ok &&
+            ip_n == 16'(ip + 16'd1) &&
+            (code_raddr_n == code_raddr ||
+             code_raddr_n == 15'(ops_base + ip_n)) &&
+            pf_safe(code_rdata[7:0]) &&
+            !((code_rdata[7:0] == OP_LOAD_VAR) &&
+              ((vvars_we   && vvars_waddr[8:0]   == code_rdata[16:8]) ||
+               (vvars_we_q && vvars_waddr_q[8:0] == code_rdata[16:8])))) begin
+            state_n = S_V64_EXEC;
+            code_raddr_n = 15'(ops_base + ip_n + 16'd1);
+            opw_cap_n = 1'b1;
+            // pf_ok stays set: the skip re-points the port sequentially.
+            /* Boundary services the parent's S_FETCH_WAIT arm performs
+               (found by A/B: DONKEY never armed rAF with skips on):
+               vprom_done retires at every instruction boundary — sticky,
+               it re-spins the promote/push exactly as the 6254 comment's
+               INVADERS-after-Space hang describes. Perform it here. */
+            vprom_done_n = 1'b0;
+        end
         end
     end
     `undef VST_AT

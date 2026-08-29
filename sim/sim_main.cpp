@@ -1431,6 +1431,14 @@ int main(int argc, char** argv) {
             }
             std::cout
                       << " spr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_spr)
+                      << " pfn=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_n)
+                      << " pfa=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pfa)
+                      << " pfb=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pfb)
+                      << " pfc=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pfc)
+                      << " pfA=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_addr)
+                      << " pfW=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_want)
+                      << " pfM=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_mask)
+                      << " pfE=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_want2)
                       << " kd=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__kd_fn)
                       << " lsn=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vlistener_n)
                       << " kscan=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_key_scan)

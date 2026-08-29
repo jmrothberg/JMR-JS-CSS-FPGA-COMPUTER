@@ -3706,6 +3706,7 @@ module jmr_js_vm #(
     logic [11:0] e64_vvars_waddr;
     logic [63:0] e64_vvars_wdata;
     logic e64_vframe_we;
+    logic [31:0] e64_opw;
     logic [6:0] e64_vframe_waddr;
     logic [15:0] e64_vframe_rip_wdata;
     logic [11:0] e64_vframe_bsp_wdata;
@@ -3860,6 +3861,7 @@ module jmr_js_vm #(
         .p_cc_st(cc_st),
         .p_code_raddr(code_raddr_ff),
         .code_rdata(code_rdata),
+        .opw_out(e64_opw),
         .p_color(color),
         .p_ctx_align(ctx_align),
         .p_ctx_smooth(ctx_smooth),
@@ -5664,14 +5666,18 @@ module jmr_js_vm #(
                 (gc_root_i < 13'd512) ? gc_root_i[8:0] :
                 (casestate_q == S_ENV_LOAD || state == S_ENV_LOAD) ?
                     env_ld_slot : e32_vars_raddr];
+            // run-59: during EXEC the code port already streams op N+1
+            // (prefetch handover) — these reads must use the CAPTURED op
+            // word, or MAKE_FN's identity interning reads a garbage row
+            // (DONKEY: rAF callback identity corrupted, rafcall stuck 1).
             e32_intern_var_rdata <= intern_var[
                 ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
                  valloc_kind == 2'd0) ? vcall_entry[9:0] :
-                hs64 ? code_rdata[17:8] : e32_intern_var_raddr];
+                hs64 ? e64_opw[17:8] : e32_intern_var_raddr];
             e32_intern_var_ok_rdata <= intern_var_ok[
                 ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
                  valloc_kind == 2'd0) ? vcall_entry[9:0] :
-                hs64 ? code_rdata[17:8] : e32_intern_var_raddr];
+                hs64 ? e64_opw[17:8] : e32_intern_var_raddr];
             e32_env_oid_rdata <= env_oid[
                 (casestate_q == S_GC_ROOT || state == S_GC_ROOT) &&
                 (gc_root_i >= 13'd2640 && gc_root_i < 13'd2672) ?
@@ -7616,9 +7622,17 @@ module jmr_js_vm #(
                         // NEW: pending SET_PROP array deep copy runs between ops
                         dc_arm <= 1'b0;
                         hs_st(S_ARR_DCOPY);
-                    end else if (v64_on)
+                    end else if (v64_on) begin
                         hs_st(S_V64_EXEC);
-                    else
+                        /* run-59 piece 1: hand the code port the NEXT op's
+                           address for the whole EXEC window. opw_q (piece 0)
+                           keeps op N's immediates stable; the BRAM streams
+                           N+1 so the central skip in exec64 can retire
+                           S_FETCH_WAIT for the fast-path op class. The
+                           hs mirror (exec64 latches p_code_raddr on
+                           hs_m_code) persists this through EXEC. */
+                        hs_code(15'(ops_base + ip + 16'd1));
+                    end else
                         hs_st(S_EXEC);
                 end
 
