@@ -285,11 +285,14 @@ function placeApples() {
   }
 }
 
-function appleAt(col, row) {
+function appleAt(col, row, skip) {
   var i = 0;
   while (i < 6) {
     var a = apples[i];
-    if (!a.dead && a.cx === col && a.cy === row) return i;
+    /* 32px apple (blit sc=2) covers 2×2 dirt cells. Origin-only let
+       dinos walk through the other three. skip = this apple's index
+       so a falling/pushed apple does not collide with itself. */
+    if (i !== skip && !a.dead && col >= a.cx && col < a.cx + 2 && row >= a.cy && row < a.cy + 2) return i;
     i = i + 1;
   }
   return -1;
@@ -481,7 +484,7 @@ function endFreezeIfDone() {
       while (i < 12) {
         var e = creeps[i];
         if (e.live && e.kind === 3) {
-          var slot = appleAt(e.cx, e.cy);
+          var slot = appleAt(e.cx, e.cy, -1);
           if (slot < 0) {
             var a = 0;
             while (a < 6) {
@@ -594,7 +597,7 @@ function wantDir() {
 
 function canEnter(col, row, asDrill) {
   if (!inb(col, row)) return 0;
-  if (appleAt(col, row) >= 0) return 0;
+  if (appleAt(col, row, -1) >= 0) return 0;
   var t = cell(col, row);
   if (t === 0 || t === 3) return 1;
   if (t === 1 || t === 2) return 1;
@@ -641,12 +644,12 @@ function stepPlayer() {
   pface = d;
   var nx = pcx + DX[d];
   var ny = pcy + DY[d];
-  var ap = appleAt(nx, ny);
+  var ap = appleAt(nx, ny, -1);
   if (ap >= 0 && (d === 1 || d === 3)) {
     var a = apples[ap];
-    var hx = nx + DX[d];
-    var hy = ny;
-    if (inb(hx, hy) && appleAt(hx, hy) < 0 && creepAt(hx, hy) < 0) {
+    var hx = a.cx + DX[d];
+    var hy = a.cy;
+    if (inb(hx, hy) && appleAt(hx, hy, ap) < 0 && creepAt(hx, hy) < 0) {
       a.cx = hx;
       a.cy = hy;
     }
@@ -783,13 +786,13 @@ function stepApples() {
         a.fy = 0;
         a.dist = a.dist + 1;
         var crushed = 0;
-        if (pcx === a.cx && pcy === a.cy) {
+        if (pcx >= a.cx && pcx < a.cx + 2 && pcy >= a.cy && pcy < a.cy + 2) {
           killPlayer();
         }
         var k = 0;
         while (k < 12) {
           var e = creeps[k];
-          if (e.live && e.cx === a.cx && e.cy === a.cy) {
+          if (e.live && e.cx >= a.cx && e.cx < a.cx + 2 && e.cy >= a.cy && e.cy < a.cy + 2) {
             if (e.kind === 2 || e.kind === 3) {
               e.live = 0;
             } else {
@@ -801,7 +804,7 @@ function stepApples() {
         }
         if (crushed > 0) addScore(crushPts(crushed));
         var below = cell(a.cx, a.cy + 1);
-        if (!inb(a.cx, a.cy + 1) || isSolid(a.cx, a.cy + 1) || appleAt(a.cx, a.cy + 1) >= 0) {
+        if (!inb(a.cx, a.cy + 1) || isSolid(a.cx, a.cy + 1) || appleAt(a.cx, a.cy + 1, i) >= 0) {
           a.fall = 0;
           if (a.dist >= 2) {
             a.dead = 1;
@@ -816,7 +819,7 @@ function stepApples() {
         checkClear();
       }
     } else {
-      if (inb(a.cx, a.cy + 1) && isOpen(a.cx, a.cy + 1) && appleAt(a.cx, a.cy + 1) < 0) {
+      if (inb(a.cx, a.cy + 1) && isOpen(a.cx, a.cy + 1) && appleAt(a.cx, a.cy + 1, i) < 0) {
         a.fall = 1;
         a.fy = 1;
         if (a.dist === 0) a.dist = 0;
@@ -838,7 +841,7 @@ function creepToward(e, flee) {
     var ny = e.cy + DY[d];
     var open = isOpen(nx, ny);
     if (!open && e.drill && isSolid(nx, ny)) open = 1;
-    if (open && appleAt(nx, ny) < 0) {
+    if (open && (e.kind === 2 || e.kind === 3 || appleAt(nx, ny, -1) < 0)) {
       var md = Math.abs(nx - tx) + Math.abs(ny - ty);
       if (flee) {
         if (md > bestD) {
@@ -855,7 +858,9 @@ function creepToward(e, flee) {
   if (best < 0) {
     d = 0;
     while (d < 4) {
-      if (isOpen(e.cx + DX[d], e.cy + DY[d])) {
+      var ox = e.cx + DX[d];
+      var oy = e.cy + DY[d];
+      if (isOpen(ox, oy) && (e.kind === 2 || e.kind === 3 || appleAt(ox, oy, -1) < 0)) {
         best = d;
         break;
       }
@@ -893,7 +898,7 @@ function stepCreeps() {
       continue;
     }
     if (e.kind === 2 || e.kind === 3) {
-      var ap = appleAt(e.cx, e.cy);
+      var ap = appleAt(e.cx, e.cy, -1);
       if (ap >= 0) apples[ap].dead = 1;
     }
     if (frozen && (e.kind === 0 || e.kind === 1)) {

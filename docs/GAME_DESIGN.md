@@ -252,8 +252,10 @@ actually been measured to matter, **roughly in order of impact:**
 > INVFAST: paint is 1.3% of its frame, per-op execution is 75%. Hoist
 > invariants out of loops; cache `var p = obj.prop` outside hot loops
 > (`S_HEAP_CMP` is ~12% of DNKFAST/INVFAST). Full-screen clears are
-> cheap now — clever dirty-rect JS whose op cost exceeds the paint it
-> saves is a loss. Unchanged capacity laws: `fillText(number)` never
+> cheap now. Full-screen `putImageData` is **not** — DNKFAST measured
+> **~0.92M VM clocks** for one 640×480 blit. Dirty-rect that *redraws
+> girder tiles under movers* beat that blit. Dirty-rect whose extra JS
+> exceeds a cheap `fillRect` is still a loss. Unchanged capacity laws: `fillText(number)` never
 > `""+n` (intern table is 1024, never released); no per-frame grid
 > hoists to startup; `Array.slice`/allocs in the frame path still cost
 > GC.
@@ -269,7 +271,31 @@ actually been measured to matter, **roughly in order of impact:**
 > no longer counts against it in practice). INVFAST-style per-pixel-JS
 > remains the one pattern the chip cannot save.
 
-
+> **FAST vs original (FPGA-SIM play `fclk`, 2026-08-29).** Same pixels
+> as PACMAN / DONKEY — not fillRect ghosts or stick mazes. Skip the
+> first-play `getImageData` hitch; numbers are steady `rafcall` play.
+>
+> | Title | clocks/frame | vs original |
+> |---|---:|---:|
+> | PACMAN | **17.38M** | — |
+> | PACFAST | **6.26M** | **2.8×** |
+> | DONKEY | **2.72M** | — |
+> | DNKFAST | **1.65M** | **1.65×** |
+>
+> PACFAST: maze ImageData is snapshotted *after* the first beans stamp
+> so regular 4×4 pellets live in the blit; later frames draw only the
+> four pulsing power arcs and punch eaten cells (`data[y][x]=3`).
+> `item.coord = position2coord(...)` must mint a new `{x,y,offset}` —
+> writing into `item.coord` mutates `_params.coord` (spawn), so
+> `resetItems` respawns on the ghost and drains every life. `ARR_CAP=128`
+> — one remaining-pellet array of ~300 dots faults at boot.
+>
+> DNKFAST: first frame draws every girder. Later frames **black-fill**
+> Mario/barrel/**Kong** last boxes, then restore overlapping tiles
+> (`Platform.drawDirty`). Dirty-only (no erase) smears in empty space.
+> Kong poses do not cover each other — erase the 140×144 box or the
+> previous animation frame stays. Do not put `_pel` / frame numbers on
+> Mario (`OBJ_SLOTS=32`).
 
 Correctness gets you a title that runs. This section gets you one that
 plays. Every number here is **measured** — from the PACMAN and INVADERS

@@ -440,37 +440,38 @@ function draw() {
     c.fillText("Loading", 240, 225);
     c.fillText(loaded, 300, 225);
   } else if (mode === ATTRACT) {
+    /* 16px/8px: machine glyphs are 8×8 × round(px/8). 26px was 3× and clipped. */
     c.fillStyle = "#000";
     c.fillRect(160, 160, 320, 100);
     c.fillStyle = "#e8c14a";
-    c.font = "26px monospace";
-    c.fillText("MK CPU", 270, 200);
+    c.font = "16px monospace";
+    c.fillText("MK CPU", 272, 196);
     c.fillStyle = "#fff";
-    c.font = "14px monospace";
-    c.fillText("You vs Kano. F or O to start", 210, 235);
+    c.font = "8px monospace";
+    c.fillText("You vs Kano", 276, 220);
+    c.fillText("F or O to start", 260, 236);
   }
   if (mode === OVER) {
     c.fillStyle = "#000";
     c.fillRect(140, 150, 360, 120);
     c.fillStyle = "#e8c14a";
-    c.font = "22px monospace";
-    c.fillText(winner, 180, 190);
+    c.font = "16px monospace";
+    c.fillText(winner, 168, 190);
     c.fillStyle = "#fff";
-    c.font = "14px monospace";
+    c.font = "8px monospace";
     c.fillText("SCORE  YOU " + p1Wins + "  CPU " + p2Wins, 200, 220);
     if (matchDone) {
-      c.fillText("F O or Enter = new match", 210, 250);
+      c.fillText("F O or Enter = new match", 216, 250);
     } else {
-      c.fillText("F O or Enter = next round", 210, 250);
+      c.fillText("F O or Enter = next round", 216, 250);
     }
   }
 
   c.fillStyle = "#000";
   c.fillRect(0, H - 44, W, 44);
-  c.fillStyle = "#e8c14a";
-  c.font = "11px monospace";
   c.fillStyle = "#fff";
-  c.fillText("WASD or arrows or stick  Enter block  F/O punch  G/P kick", 8, H - 10);
+  c.font = "8px monospace";
+  c.fillText("WASD/stick/arrows  Enter block  F/O punch  G/P kick", 8, H - 10);
 }
 
 function frame() {

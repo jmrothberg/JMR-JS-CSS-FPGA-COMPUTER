@@ -442,23 +442,24 @@ function draw() {
     c.fillText("Loading", 240, 225);
     c.fillText(loaded, 300, 225);
   } else if (mode === ATTRACT) {
+    /* 16px/8px: machine glyphs are 8×8 × round(px/8). 26px was 3× and clipped. */
     c.fillStyle = "#000";
     c.fillRect(160, 160, 320, 100);
     c.fillStyle = "#e8c14a";
-    c.font = "26px monospace";
-    c.fillText("MK PVP", 270, 200);
+    c.font = "16px monospace";
+    c.fillText("MK PVP", 272, 196);
     c.fillStyle = "#fff";
-    c.font = "14px monospace";
-    c.fillText("Digitized fighters. F or O to start", 190, 235);
+    c.font = "8px monospace";
+    c.fillText("F or O to start", 260, 228);
   }
   if (mode === OVER) {
     c.fillStyle = "#000";
     c.fillRect(140, 150, 360, 120);
     c.fillStyle = "#e8c14a";
-    c.font = "22px monospace";
-    c.fillText(winner, 180, 190);
+    c.font = "16px monospace";
+    c.fillText(winner, 168, 190);
     c.fillStyle = "#fff";
-    c.font = "14px monospace";
+    c.font = "8px monospace";
     c.fillText("SCORE  P1", 200, 220);
     c.fillText(p1Wins, 290, 220);
     c.fillText("P2", 320, 220);
@@ -472,10 +473,9 @@ function draw() {
 
   c.fillStyle = "#000";
   c.fillRect(0, H - 44, W, 44);
-  c.fillStyle = "#e8c14a";
-  c.font = "11px monospace";
   c.fillStyle = "#fff";
-  c.fillText("P1: stick + FIRE1/2  (or WASD F G)", 8, H - 28);
+  c.font = "8px monospace";
+  c.fillText("P1: WASD/stick  F/fire1 punch  G/fire2 kick", 8, H - 28);
   c.fillText("P2: arrows  Enter block  O punch  P kick", 8, H - 10);
 }
 
