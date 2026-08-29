@@ -710,6 +710,38 @@ long-session play; run 54's -0.270 showed content-independent fine, so
 
 ---
 
+## Run 57 — CLEAN (+0.063), and the route collapsed again (2026-08-29 08:15)
+
+First publishable bit since run 52. Payload on top of run 56's tree:
+joystick PHY v3b (settle window + drift re-centering + stuck-release
+watchdog + phantom-release filter), the fbscan linebuf 1W byte-stagger,
+banner R57. Whole flow — synth to bit — in ~80 minutes, against 4-6 h
+routes for runs 53-55.
+
+What closed it (the congestion campaign, by the numbers):
+- LUTRAM eviction (run 56 payload): 9 arrays to BRAM, LUT-as-RAM
+  6,072 -> 2,628; six 1,843-fanout LUTRAM read-mux nets deleted.
+- fbscan linebuf: ram_style="block" had been silently infeasible since
+  the module was born (dual-write) — 2048-deep buffer built from
+  16,496 FFs + ~10.6k LUTs of muxes, the largest non-VM LUT sink on
+  the chip. The 1W byte-stagger merge collapsed it to the 1 BRAM tile
+  its own comment always claimed. Found by hierarchical checkpoint
+  census (report_utilization -hierarchical on run 55's post_route).
+- cons p_empty_q retired run 55's -0.466 leader.
+
+**Rule earned:** grep every build's synth log for `Synth 8-6849`
+(Infeasible ram_style) — three of the design's biggest congestion
+sources (vstack, the LUTRAM nine, fbscan) were all this one warning,
+ignored across dozens of runs. Remaining known: name tables x3 +
+vobj_len (shared-read-register class, documented, deferred).
+
+Bit: build/bits/run57_joyv3b_fbscan-bram_evict_div7_WNS+0.063.bit —
+the board-acceptance bit for joystick v3b. +0.063 is 30x the margin of
+run 51's +0.002 (the MK-marginality bit) but still modest: board
+verdict decides long-session confidence.
+
+---
+
 ## Related
 
 - [FPGA_FIT.md](FPGA_FIT.md) — caps, NEVER table, live scoreboard
