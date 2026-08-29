@@ -366,3 +366,54 @@ requestAnimationFrame(tick);
         assert not r_held, "Right still held: the release keyup was lost"
     finally:
         sim.shutdown()
+
+
+def test_joy_concurrent_edges_none_lost():
+    """R57 board bug: fire pressed in the same frame as a direction edge was
+    silently erased (clear-all dispatch + the tether-supersede wipe hitting
+    our own synthetic entries). A lost keyup left held-flags stuck: the
+    stick jam and burst-fire. Every edge must reach listeners, in order."""
+    import base64
+    html = (
+        "<canvas id=c width=640 height=480></canvas><script>"
+        "var g=document.getElementById('c').getContext('2d');var nd=0,nu=0;"
+        "g.fillStyle='#fff';"
+        "addEventListener('keydown',function(e){if(e.keyCode===32){g.fillRect(nd,0,1,1);nd=nd+1;}});"
+        "addEventListener('keyup',function(e){if(e.keyCode===32){g.fillRect(nu,1,1,1);nu=nu+1;}});"
+        "function loop(){requestAnimationFrame(loop);}requestAnimationFrame(loop);"
+        "</script>"
+    )
+    from tools.compile_js import compile_html_text
+    from functional_model.jsb_format import ProgramImage
+    sim = _sim()
+    blob = bytes(ProgramImage.from_chunk(compile_html_text(html)))
+    assert sim._rpc(f"PROGBEGIN {len(blob)}").startswith("OK")
+    for off in range(0, len(blob), 32768):
+        sim._rpc("PROGDATA " + blob[off:off + 32768].hex())
+    assert sim._rpc("PROGSTART").startswith("OK")
+    for _ in range(6):
+        sim._rpc("FRAME")
+
+    last = [0, 0]
+    def counts():
+        fb = sim._rpc("FB?")
+        if fb.startswith("FB 640"):
+            raw = base64.b64decode(fb.split(None, 3)[3])
+            last[0] = sum(1 for x in raw[0:640] if x)
+            last[1] = sum(1 for x in raw[640:1280] if x)
+        return tuple(last)
+
+    def run(seq):
+        before = counts()
+        for cmd in seq:
+            sim._rpc("FRAME") if cmd is None else sim._rpc(f"JOY {cmd}")
+        for _ in range(4):
+            sim._rpc("FRAME")
+        after = counts()
+        return after[0] - before[0], after[1] - before[1]
+
+    F = None
+    assert run([16, F, F, F, 0, F, F]) == (1, 1), "clean press"
+    assert run([20, F, F, 0, F, F]) == (1, 1), "fire beside direction edge"
+    assert run([16, F, 0, F, 16, F, 0, F]) == (2, 2), "two rapid presses"
+    sim.shutdown()

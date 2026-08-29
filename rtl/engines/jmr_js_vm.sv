@@ -1177,6 +1177,7 @@ module jmr_js_vm #(
     logic [3:0]  enter_delay;
     // NEW: raw key-event FIFO (host → keydown/keyup dispatch, one per frame)
     logic [8:0]  kev_q [0:7]; // {down, keyCode}
+    logic        kev_src_joy [0:7]; // 1 = synthetic joystick edge, 0 = GUI KEYEVT
     logic [2:0]  kev_wp /*verilator public_flat_rd*/, kev_rp /*verilator public_flat_rd*/;
     logic [15:0] kev_fn; // handler for S_KEYEV (event alloc + env must be 2-cycle)
     logic [15:0] id_keys_name, id_pressed, id_kspace; // keys.a.pressed table
@@ -1598,6 +1599,7 @@ module jmr_js_vm #(
     logic        hp_slot_pend;
     // flatten: mark_task latches the handle; next beats consume *_rdata.
     logic        vgc_mark_pend /*verilator public_flat_rd*/, vgc_mark_arm;
+    logic        vgc_arr_ph;   // GC_ARR stream phase (data-lag toggle)
     logic [63:0] vgc_mark_word /*verilator public_flat_rd*/;
     // ALLOC free-scan wait. Do not reuse jn_rd_arm — JOIN after a take
     // would skip its length beat (arm stays 1).
@@ -1846,7 +1848,14 @@ module jmr_js_vm #(
     task automatic v64_gc_mark_task(input logic [63:0] word);
         begin
             vgc_mark_word <= word;
-            vgc_mark_pend <= 1'b1;
+            /* run-58 GC accel, piece 1: numbers/undefined can never mark —
+               every v64 consumer branch requires word[63:48]==16'h7ff9 (the
+               handle prefix), so a non-handle word only burned the 2-beat
+               arm/act machinery to discover a no-op. Skip it. PACMAN-class
+               (number-heavy arrays) spent 34% of frame in GC_ARR at 5 beats
+               per slot; this alone cuts that to 3. Legacy (!v64_on) tagging
+               differs — its behavior is unchanged. */
+            vgc_mark_pend <= v64_on ? (word[63:48] == 16'h7ff9) : 1'b1;
         end
     endtask
 
@@ -4999,7 +5008,11 @@ module jmr_js_vm #(
 
     // Address mux only — not forty rdata <= mem[f()] in one process (UG901).
     assign name_hash_raddr =
-        ((casestate_q == S_JOIN_FIND) || (state == S_JOIN_FIND)) ? jn_i[9:0] :
+        // run-58 FIND stream: while armed (comparing jn_i's row), present
+        // jn_i+1 so a mismatch advances 1 beat/candidate (was 2: the old
+        // walk disarmed and re-paid the read every miss).
+        ((casestate_q == S_JOIN_FIND) || (state == S_JOIN_FIND)) ?
+            (jn_rd_arm ? 10'(jn_i[9:0] + 10'd1) : jn_i[9:0]) :
         ((casestate_q == S_JSON) || (state == S_JSON)) && (js_sp != 6'd0) &&
             (js_tag[js_sp - 6'd1] == 3'd3) ? js_val[js_sp - 6'd1][9:0] :
         ((casestate_q == S_JSON) || (state == S_JSON)) && (js_sp != 6'd0) ?
@@ -5611,7 +5624,8 @@ module jmr_js_vm #(
                     txt_val[9:0] : e32_intern_tos];
             e32_name_has_nos <= name_has[e32_intern_nos];
             e32_name_len_tos <= name_len_tbl[
-                ((casestate_q == S_JOIN_FIND) || (state == S_JOIN_FIND)) ? jn_i[9:0] :
+                ((casestate_q == S_JOIN_FIND) || (state == S_JOIN_FIND)) ?
+                    (jn_rd_arm ? 10'(jn_i[9:0] + 10'd1) : jn_i[9:0]) : // FIND stream (see name_hash_raddr)
                 ((casestate_q == S_JSON) || (state == S_JSON)) && (js_sp != 6'd0) &&
                     (js_tag[js_sp - 6'd1] == 3'd3) ? js_val[js_sp - 6'd1][9:0] :
                 ((casestate_q == S_JSON) || (state == S_JSON)) && (js_sp != 6'd0) ?
@@ -6241,6 +6255,7 @@ module jmr_js_vm #(
             // NEW: capture raw host key events (any state; drained per frame)
             if (key_evt_stb && (kev_wp + 3'd1) != kev_rp) begin
                 kev_q[kev_wp] <= {key_evt_down, key_evt_code};
+                kev_src_joy[kev_wp] <= 1'b0;
                 kev_wp <= kev_wp + 3'd1;
                 // 2026-08-21 (DONKEY Mario->Luigi, second occurrence): the
                 // dispatch-time supersede only fires when the real event is
@@ -8501,8 +8516,9 @@ module jmr_js_vm #(
                             hs_st(S_FETCH_WAIT);
                         end
                     end else begin
+                        // FIND stream: arm stays high — jn_i+1's row was
+                        // presented during this compare beat (raddr mux).
                         jn_i <= jn_i + 16'd1;
-                        jn_rd_arm <= 1'b0;
                     end
                 end
                 S_CONCAT: begin
@@ -9067,8 +9083,16 @@ module jmr_js_vm #(
                         // KEYBITS edge capture (the tagged arm computed
                         // these; the Value64 arm never did, so a joystick
                         // press was invisible to v64 listeners).
-                        joy_down_edge <= joy_in & ~prev_joy;
-                        joy_up_edge <= prev_joy & ~joy_in;
+                        // run-58 board fix (R57: stick jams + burst fire):
+                        // ACCUMULATE edges. The old assign overwrote both
+                        // vectors every tick, and dispatch cleared the WHOLE
+                        // vector after sending ONE bit — any concurrent
+                        // edge (fire during a turn, a release beside any
+                        // press) was silently erased. A lost keyup left the
+                        // game's held-flag stuck: the jam, and held-fire
+                        // burst shots.
+                        joy_down_edge <= joy_down_edge | (joy_in & ~prev_joy);
+                        joy_up_edge   <= joy_up_edge   | (prev_joy & ~joy_in);
                         prev_joy <= joy_in;
                         // Per-frame callback marker. dbg_cb_ip was sticky
                         // (set at the first rAF call, cleared only at RUN),
@@ -9101,41 +9125,56 @@ module jmr_js_vm #(
                         // other writer is the KEYEVT strobe beat, which runs
                         // in its own RPC window, never during FRAME.
                         if (kev_rp == kev_wp && vlistener_n != 5'd0 &&
-                            joy_down_edge != 0) begin
+                            (joy_down_edge != 6'd0 || joy_up_edge != 6'd0)) begin
+                            /* One event per iteration, clearing ONLY the
+                               dispatched bit — the drain loop re-enters
+                               until both vectors empty, so nothing is
+                               erased. A key with BOTH edges pending
+                               resolves order by its CURRENT level: held
+                               now means the release came first. */
+                            logic [5:0] up_first;
+                            logic [5:0] dn_ok;
+                            logic [2:0] ki;
+                            logic       is_up;
+                            up_first = joy_up_edge &
+                                       (~joy_down_edge | joy_in);
+                            dn_ok    = joy_down_edge &
+                                       (~joy_up_edge | ~joy_in);
+                            is_up = (up_first != 6'd0);
+                            ki = is_up ?
+                                (up_first[0] ? 3'd0 : up_first[1] ? 3'd1 :
+                                 up_first[2] ? 3'd2 : up_first[3] ? 3'd3 :
+                                 up_first[4] ? 3'd4 : 3'd5) :
+                                (dn_ok[0] ? 3'd0 : dn_ok[1] ? 3'd1 :
+                                 dn_ok[2] ? 3'd2 : dn_ok[3] ? 3'd3 :
+                                 dn_ok[4] ? 3'd4 : 3'd5);
                             v64_frame_armed <= 1'b1;
                             jn_slot_arm <= 1'b0; // #69: restart any pending rAF snapshot
-                            kev_q[kev_wp] <= {1'b1,
-                                joy_down_edge[0] ? 8'd38 :
-                                joy_down_edge[1] ? 8'd40 :
-                                joy_down_edge[2] ? 8'd37 :
-                                joy_down_edge[3] ? 8'd39 :
-                                joy_down_edge[4] ? 8'd32 : 8'd13};
+                            kev_q[kev_wp] <= {!is_up,
+                                (ki == 3'd0) ? 8'd38 :
+                                (ki == 3'd1) ? 8'd40 :
+                                (ki == 3'd2) ? 8'd37 :
+                                (ki == 3'd3) ? 8'd39 :
+                                (ki == 3'd4) ? 8'd32 : 8'd13};
+                            kev_src_joy[kev_wp] <= 1'b1;
                             kev_wp <= kev_wp + 3'd1;
-                            joy_down_edge <= 6'd0;
-                        end else if (kev_rp == kev_wp && vlistener_n != 5'd0 &&
-                            joy_up_edge != 0) begin
-                            v64_frame_armed <= 1'b1;
-                            jn_slot_arm <= 1'b0; // #69
-                            kev_q[kev_wp] <= {1'b0,
-                                joy_up_edge[0] ? 8'd38 :
-                                joy_up_edge[1] ? 8'd40 :
-                                joy_up_edge[2] ? 8'd37 :
-                                joy_up_edge[3] ? 8'd39 :
-                                joy_up_edge[4] ? 8'd32 : 8'd13};
-                            kev_wp <= kev_wp + 3'd1;
-                            joy_up_edge <= 6'd0;
+                            if (is_up) joy_up_edge[ki]   <= 1'b0;
+                            else       joy_down_edge[ki] <= 1'b0;
                         end else
                         if (kev_rp != kev_wp) begin
                             v64_frame_armed <= 1'b1;
-                            // A real KEYEVT supersedes the KEYBITS tether:
-                            // the GUI sends arrows BOTH ways, and a captured
-                            // joy edge that survived this dispatch converted
-                            // into a SECOND synthetic arrow once the queue
-                            // drained — a late ArrowRight flipped DONKEY's
-                            // chosen character (Mario → Luigi) seconds into
-                            // the game.
-                            joy_down_edge <= 6'd0;
-                            joy_up_edge <= 6'd0;
+                            // A real GUI KEYEVT supersedes the KEYBITS
+                            // tether (arrows arrive BOTH ways — the DONKEY
+                            // Mario->Luigi duplicate). But run-58 board fix:
+                            // our OWN synthetic joystick entries must NOT
+                            // wipe the accumulated edges — that erased the
+                            // second edge of every multi-edge frame (fire
+                            // during a turn lost; a lost keyup = the R57
+                            // stick jam and stuck-fire burst).
+                            if (!kev_src_joy[kev_rp]) begin
+                                joy_down_edge <= 6'd0;
+                                joy_up_edge <= 6'd0;
+                            end
                             // #69: an event dispatch may interleave with a
                             // snapshot the previous FRAME rpc left half-done
                             // (jn_slot_arm=1, copy pending). The listener
@@ -11659,17 +11698,30 @@ module jmr_js_vm #(
                         hs_st(S_V64_GC_POP);
                 end
                 S_V64_GC_ARR: begin
+                    /* run-58 GC accel, piece 2: STREAM the walk. The old
+                       shape disarmed both read stages after every slot and
+                       re-paid them: 3 beats per slot (5 with the mark
+                       machinery piece 1 now skips for numbers). Hold the
+                       arms, advance the slot index, and consume on a 2-beat
+                       cadence (registered raddr + BRAM read = 2-beat data
+                       lag). A slot that IS a handle still stalls for the
+                       pend arm/act service exactly as before. */
                     if (!vgc_rd_arm)
                         vgc_rd_arm <= 1'b1;
-                    else if (!jn_slot_arm)
+                    else if (!jn_slot_arm) begin
                         jn_slot_arm <= 1'b1;
-                    else if (vgc_slot_i < varr_len_rdata) begin
-                        v64_gc_mark_task(varr_rdata);
-                        vgc_slot_i <= vgc_slot_i + 8'd1;
-                        vgc_rd_arm <= 1'b0;
-                        jn_slot_arm <= 1'b0;
+                        vgc_arr_ph <= 1'b1; // first data lands after this beat
+                    end else if (vgc_slot_i < varr_len_rdata) begin
+                        if (vgc_arr_ph)
+                            vgc_arr_ph <= 1'b0; // rdata settling beat
+                        else begin
+                            v64_gc_mark_task(varr_rdata);
+                            vgc_slot_i <= vgc_slot_i + 8'd1;
+                            vgc_arr_ph <= 1'b1;
+                        end
                     end else begin
                         jn_slot_arm <= 1'b0;
+                        vgc_rd_arm <= 1'b0;
                         hs_st(S_V64_GC_POP);
                     end
                 end
