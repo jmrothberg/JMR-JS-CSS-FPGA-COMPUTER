@@ -303,12 +303,12 @@ module jmr_js_vm #(
     logic [63:0] vthis /*verilator public_flat_rd*/;
     logic [63:0] venv_ff;
     logic [63:0] venv /*verilator public_flat_rd*/;
-    logic [15:0] vframe_return_ip [0:CSTK-1] /*verilator public_flat_rd*/;
-    logic [11:0] vframe_base_sp [0:CSTK-1] /*verilator public_flat_rd*/;
-    logic [63:0] vframe_this [0:CSTK-1] /*verilator public_flat_rd*/;
-    logic [63:0] vframe_env [0:CSTK-1] /*verilator public_flat_rd*/;
-    logic [63:0] vframe_fn [0:CSTK-1] /*verilator public_flat_rd*/;
-    logic [63:0] vframe_ctor [0:CSTK-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [15:0] vframe_return_ip [0:CSTK-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [11:0] vframe_base_sp [0:CSTK-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [63:0] vframe_this [0:CSTK-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [63:0] vframe_env [0:CSTK-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [63:0] vframe_fn [0:CSTK-1] /*verilator public_flat_rd*/;
+    (* ram_style = "block" *) logic [63:0] vframe_ctor [0:CSTK-1] /*verilator public_flat_rd*/;
     // MAKE_FN in this activation captured venv; RET must not recycle it.
     logic vframe_escaped [0:CSTK-1];
     // 17-bit entries: every enqueued word is a NaN-boxed heap ref
@@ -1349,20 +1349,19 @@ module jmr_js_vm #(
     logic [11:0] vfr_bsp;
     logic [63:0] vfr_this, vfr_env, vfr_fn, vfr_ctor;
     always_ff @(posedge clk) begin
-        if (vfr_we) begin
-            vframe_return_ip[vfr_wa] <= vfr_rip;
-            vframe_base_sp[vfr_wa]   <= vfr_bsp;
-            vframe_this[vfr_wa]      <= vfr_this;
-            vframe_env[vfr_wa]       <= vfr_env;
-            vframe_fn[vfr_wa]        <= vfr_fn;
-            vframe_ctor[vfr_wa]      <= vfr_ctor;
-        end else if (e64_vframe_we) begin
-            vframe_return_ip[e64_vframe_waddr] <= e64_vframe_rip_wdata;
-            vframe_base_sp[e64_vframe_waddr]   <= e64_vframe_bsp_wdata;
-            vframe_this[e64_vframe_waddr]      <= e64_vframe_this_wdata;
-            vframe_env[e64_vframe_waddr]       <= e64_vframe_env_wdata;
-            vframe_fn[e64_vframe_waddr]        <= e64_vframe_fn_wdata;
-            vframe_ctor[e64_vframe_waddr]      <= e64_vframe_ctor_wdata;
+        // Single write statement per array (vstack 1W recipe, run 52):
+        // two write branches read as two ports and make ram_style="block"
+        // infeasible. Priority unchanged: vfr_we wins.
+        logic vfr_do; logic [6:0] vfr_a;
+        vfr_do = vfr_we || e64_vframe_we;
+        vfr_a  = vfr_we ? vfr_wa : e64_vframe_waddr;
+        if (vfr_do) begin
+            vframe_return_ip[vfr_a] <= vfr_we ? vfr_rip  : e64_vframe_rip_wdata;
+            vframe_base_sp[vfr_a]   <= vfr_we ? vfr_bsp  : e64_vframe_bsp_wdata;
+            vframe_this[vfr_a]      <= vfr_we ? vfr_this : e64_vframe_this_wdata;
+            vframe_env[vfr_a]       <= vfr_we ? vfr_env  : e64_vframe_env_wdata;
+            vframe_fn[vfr_a]        <= vfr_we ? vfr_fn   : e64_vframe_fn_wdata;
+            vframe_ctor[vfr_a]      <= vfr_we ? vfr_ctor : e64_vframe_ctor_wdata;
         end
     end
 
@@ -1431,13 +1430,18 @@ module jmr_js_vm #(
     logic [6:0]  cse_wa;
     logic [5:0]  cse_wd;
     always_ff @(posedge clk) begin
-        if (vom_we_cls)
-            vobj_cls[vom_wa[9:0]] <= vom_cls;
-        else if (e64_vobj_cls_we)
-            vobj_cls[e64_vobj_cls_waddr[9:0]] <= e64_vobj_cls_wdata;
+        // 1W merges (vstack recipe) so ram_style="block" can take:
+        logic voc_do; logic [9:0] voc_a; logic [15:0] voc_d;
+        logic veg_do; logic [8:0] veg_a; logic [11:0] veg_d;
+        voc_do = vom_we_cls || e64_vobj_cls_we;
+        voc_a  = vom_we_cls ? vom_wa[9:0] : e64_vobj_cls_waddr[9:0];
+        voc_d  = vom_we_cls ? vom_cls : e64_vobj_cls_wdata;
+        if (voc_do) vobj_cls[voc_a] <= voc_d;
         if (vom_we_bi) vobj_builtin[vom_wa[9:0]] <= vom_bi;
-        if (veg_we) venv_gen[veg_wa] <= veg_wd;
-        else if (e64_venv_gen_we) venv_gen[e64_venv_gen_waddr[8:0]] <= e64_venv_gen_wdata;
+        veg_do = veg_we || e64_venv_gen_we;
+        veg_a  = veg_we ? veg_wa : e64_venv_gen_waddr[8:0];
+        veg_d  = veg_we ? veg_wd : e64_venv_gen_wdata;
+        if (veg_do) venv_gen[veg_a] <= veg_d;
         if (vog_we) vobj_gen[vog_wa] <= vog_wd;
         if (vfg_we) vfn_gen[vfg_wa] <= vfg_wd;
         if (vag_we) varr_gen[vag_wa] <= vag_wd;
@@ -1460,8 +1464,13 @@ module jmr_js_vm #(
         else if (e64_vvar_valid_we) vvar_valid[e64_vvar_valid_waddr[8:0]] <= e64_vvar_valid_wdata;
         if (vlo_we) varr_long[vlo_wa] <= vlo_wd;
         else if (e64_varr_long_we) varr_long[e64_varr_long_waddr[10:0]] <= e64_varr_long_wdata;
-        if (vli_we) varr_lidx[vli_wa] <= vli_wd;
-        else if (e64_varr_lidx_we) varr_lidx[e64_varr_lidx_waddr[10:0]] <= e64_varr_lidx_wdata;
+        begin  // 1W merge (vstack recipe) so ram_style="block" can take
+            logic vli_do; logic [10:0] vli_a; logic [7:0] vli_d;
+            vli_do = vli_we || e64_varr_lidx_we;
+            vli_a  = vli_we ? vli_wa : e64_varr_lidx_waddr[10:0];
+            vli_d  = vli_we ? vli_wd : e64_varr_lidx_wdata;
+            if (vli_do) varr_lidx[vli_a] <= vli_d;
+        end
         if (alw_we) arr_len[alw_wa] <= alw_wd;
         if (nof_we) begin
             name_off[nof_wa] <= nof_wd;

@@ -632,6 +632,55 @@ run-50 DIR fixes.
 
 ---
 
+## Runs 53/54 — two structural cones, priced by four failed placements (2026-08-28)
+
+Run 53 (present restored + BL8 burst writes + joystick VM fix + div7):
+**WNS -0.530**, all worst paths through the raster engine's row-wrap DDA
+(ay -> so recompute, 9 logic levels born in one combinational wrap arm).
+Run 54 (DDA precomputed into registers + I2C joystick PHY rework):
+**WNS -0.270**, new leader `vm_sram_req -> fbscan linebuf CE` — the
+arbiter's per-client ACK gates keyed on the COMBINATIONAL `sram_owner`,
+dragging the VM's request cone into every client's clock enable. A
+logically-false path (owner can't change mid-grant) made physically real.
+
+Both cones were then priced as STRUCTURAL by re-placement A/B on their
+own post-opt netlists (replace51.tcl, minutes each, no resynth):
+
+| Netlist | Directive | WNS |
+|---|---|---|
+| run 53 | Default | -0.765 |
+| run 53 | AltSpreadLogic_high | (worse, abandoned) |
+| run 54 | AltSpreadLogic_low (51's winner) | -0.635 |
+
+No directive could rescue either — placement was already near-optimal;
+the logic depth itself was the wall. Both got RTL fixes in run 55:
+DDA next-row precompute registers (with an imgd hold-guard for w==1
+rows) and ACK gates moved to the REGISTERED `sram_owner_q` (every ack
+source already lands >=1 cycle after grant, so _q is always valid).
+
+**Rule earned:** when a re-place sweep can't move WNS by more than
+~0.1, stop sweeping — the cone is structural; fix the RTL.
+
+Board findings this cycle (run 54 flashed at -0.270 for testing only):
+DIR fine, display clean (present restored), but DNKFAST bounced to
+monitor and INVFAST black-screened — both proved CONTENT bugs, not
+marginality (DNKFAST: rAF listener leak, HTML-side fbf7b6a; INVFAST:
+animate() carried 24 locals against the 16-env-slot wall — fault 3 on
+frame 0; found via bytecode prologue disassembly, fixed HTML-side by
+splitting a helper, and the new compile-time locals check found the
+same class latent in MISSILE). Joystick lag/jam root-caused in the I2C
+PHY: 10 ms polls starved the NullLab device; final PHY = 40 ms polls,
+250 us inter-register gaps, hold-last-state on transient bad batches,
+and boot-time center calibration with relative hysteresis (don't touch
+the stick during the first second after power-on).
+
+Suite hardening from the same investigation: `_vmstat_int` matched
+"fault=" inside "efault=" — every fault assertion in the battery read
+the wrong field (1218c78 fixes it to field-boundary tokens). The full
+battery re-run under honest assertions: 188 passed, 0 failures.
+
+---
+
 ## Related
 
 - [FPGA_FIT.md](FPGA_FIT.md) — caps, NEVER table, live scoreboard
