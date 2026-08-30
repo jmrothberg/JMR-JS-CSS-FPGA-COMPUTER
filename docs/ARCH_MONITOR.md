@@ -259,13 +259,23 @@ that deliberately, not reflexively.
   `S_FRAME_KEY` dispatch state — a single-cycle state a ~0.67s board V-line
   heartbeat is very unlikely to ever sample. On PYTHON/FPGA-SIM the same gap
   existed, just less visibly (per-op VMSTAT samples faster, but still not
-  every cycle). Fixed at the GUI layer instead of the RTL layer: `gui_jmr_js.
-  py` now stamps `self._kbd_last_t` on every key that actually reaches
-  `backend.key_event(...)`, passes it through `arch_snapshot()`'s consumer as
-  `snap["kbd_last_t"]`, and `ArchitectureView.update()` feeds it straight into
-  the same `_heat_stamp`/decay mechanism every other block already uses — so
-  it blinks on every real keypress, on every runtime, with no RTL change and
-  no dependency on catching a fleeting dispatch state.
+  every cycle). Fixed with two stamps that merge, because no single side
+  sees all keyboards:
+  - **GUI side** (`gui_jmr_js.py`): `self._kbd_last_t` on every key
+    press/release except GUI chrome (F9/F10) — same semantic as the
+    board's K-line, connector-level activity. Deliberately NOT gated on
+    `backend.key_event` existing: `BoardBackend` has no `key_event`, so
+    that gate would have left BOARD dark — the very runtime the gap was
+    reported on.
+  - **BOARD side** (`runtime/board_backend.py`): the tether `K`-line
+    stamps `_kbd_last_t` and `arch_snapshot()` reports it — the board's
+    own keyboard never passes through the GUI, so GUI events can't see it.
+  `_update_arch_monitor` merges the two (newest wins) into
+  `snap["kbd_last_t"]`; `ArchitectureView.update()` feeds it into the same
+  `_heat_stamp`/decay every other block uses, refusing to move the stamp
+  backwards (a stale feeder must never regress live heat). Verified
+  end-to-end headless (fake-serial K/H/F/T/V/S/P streams + real Tk App
+  under xvfb): 60 checks, plus the 222-test fast gate.
 
 ---
 

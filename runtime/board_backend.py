@@ -256,6 +256,9 @@ class BoardBackend(RuntimeBackend):
         self._heap_live = None  # (env, arr, obj) from the H-line
         self._fault_snap = None  # dict from the F-line
         self._fault_ip_trail = None  # list[8] from the T-line
+        # Last K-line arrival (monotonic) — board-keyboard keystroke proof
+        # for the Architecture Monitor's Keyboard block heat.
+        self._kbd_last_t: Optional[float] = None
         port = _find_serial_port()
         if port:
             try:
@@ -317,6 +320,11 @@ class BoardBackend(RuntimeBackend):
                 # K or Kxx (scancode hex, 2026-08-25 arrows debug)
                 # NEW: USB Host scancode reached RTL (ps2_strobe)
                 self._ps2_strobes += 1
+                # Keystroke evidence for the Architecture Monitor's Keyboard
+                # block. On BOARD the keyboard plugs into the board itself,
+                # so GUI key events never see these — the K-line is the ONLY
+                # proof a keystroke reached the RTL.
+                self._kbd_last_t = time.monotonic()
                 self._log.note(f"ps2_strobe n={self._ps2_strobes} code={line[1:] or '??'}")
                 continue
             # Optional run-60+ heap gauge / fault forensics. Malformed or
@@ -578,6 +586,11 @@ class BoardBackend(RuntimeBackend):
             snap["ip"] = self._vm_ip
             snap["fault"] = self._vm_fault
             snap["board_coarse"] = False
+        # Board-keyboard keystrokes (K-lines) — lights the Architecture
+        # Monitor's Keyboard block. GUI-side key events can't cover this
+        # runtime: the keyboard is plugged into the board, not the host.
+        if self._kbd_last_t is not None:
+            snap["kbd_last_t"] = self._kbd_last_t
         # Run-60+ H-line: live pool counts. Reuses the same keys PYTHON/
         # FPGA-SIM already populate so _inspect_heap() needs no changes.
         if self._heap_live is not None:

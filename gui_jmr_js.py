@@ -164,11 +164,13 @@ class App:
         self._key_trace: collections.deque = collections.deque(maxlen=200)
         self._key_repeat_total = 0
         self._last_key_event: tuple | None = None  # (t, keysym, down, repeat)
-        # Absolute monotonic time a keystroke actually reached the running
-        # machine (not just the GUI) — feeds the Architecture Monitor's
+        # Last GUI keystroke (monotonic) — feeds the Architecture Monitor's
         # Keyboard/PHY_PS2 block so it blinks on real input instead of never
         # (the RTL's own S_KEYEV dispatch state is one board V-line sample
-        # in ~0.67s away from being caught; this is visible every press).
+        # in ~0.67s away from being caught). Semantic matches the board's
+        # K-line: connector-level activity, any key except GUI chrome
+        # (F9/F10). BOARD adds its own stamp from tether K-lines — the
+        # board keyboard never passes through the GUI (merge takes newest).
         self._kbd_last_t: float | None = None
         self._ppm_bytes: bytes | None = None
         # NEW: letterbox cursor blink (~2 Hz) — HDMI already blinks via frame_div[5]
@@ -356,13 +358,21 @@ class App:
                 snap = getter() or {}
             except Exception:
                 snap = {}
-        # NEW: real keystrokes reaching the running machine — lights the
+        # NEW: real keystrokes reaching the machine — lights the
         # Keyboard/PHY_PS2 block the same way every other engine block
         # lights (gui_arch_monitor.py's heat_stamp/decay), instead of
         # relying on catching the RTL's one-cycle S_KEYEV dispatch state
-        # on a coarse board heartbeat.
-        if self._kbd_last_t is not None:
-            snap["kbd_last_t"] = self._kbd_last_t
+        # on a coarse board heartbeat. Newest evidence wins: the backend
+        # may already carry its own stamp (BOARD sets kbd_last_t from
+        # tether K-lines — the board keyboard never passes through the
+        # GUI, so neither side alone covers both input paths).
+        backend_t = snap.get("kbd_last_t")
+        backend_t = backend_t if isinstance(backend_t, (int, float)) else None
+        gui_t = self._kbd_last_t
+        newest = max(t for t in (backend_t, gui_t) if t is not None) \
+            if (backend_t is not None or gui_t is not None) else None
+        if newest is not None:
+            snap["kbd_last_t"] = newest
         override = getattr(self, "_arch_phase_override", None)
         if override:
             snap["phase"] = override
@@ -571,6 +581,11 @@ class App:
             self._keys_down.add(event.keysym)
         self._log_key_event(event, down=True, repeat=is_repeat)
         self._set_key_status(self._key_status_text())
+        # Keyboard-block heat: same semantic as the board's K-line (any
+        # scancode on the connector, even a bare Shift). F9/F10 are GUI
+        # chrome, not machine input; Escape IS (break_program pushes it).
+        if event.keysym not in ("F9", "F10"):
+            self._kbd_last_t = time.monotonic()
         if event.keysym in ("F9", "F10", "Escape"):
             return None
         # Ctrl/Cmd+V handled by on_paste binds — do not also type 'v'
@@ -586,7 +601,6 @@ class App:
             jk = _js_key(event)
             if jk is not None and hasattr(self.backend, "key_event"):
                 self.backend.key_event(jk[0], jk[1], True)
-                self._kbd_last_t = time.monotonic()
         # Play keys only while a game is running (or MORE paging).
         # At the monitor prompt, Left/Right move the insert cursor.
         playing = self._is_running()
@@ -707,6 +721,8 @@ class App:
         self._keys_down.discard(event.keysym)
         self._log_key_event(event, down=False, repeat=False)
         self._set_key_status(self._key_status_text())
+        if event.keysym not in ("F9", "F10"):
+            self._kbd_last_t = time.monotonic()
         if event.keysym in ("F9", "F10", "Escape"):
             return None
         # NEW: raw keyup twin of the on_key_press key_event forward
@@ -714,7 +730,6 @@ class App:
             jk = _js_key(event)
             if jk is not None and hasattr(self.backend, "key_event"):
                 self.backend.key_event(jk[0], jk[1], False)
-                self._kbd_last_t = time.monotonic()
         if event.keysym == "Left":
             self._key_left = False
             self._emit_keys()
