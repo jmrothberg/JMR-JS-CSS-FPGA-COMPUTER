@@ -102,6 +102,10 @@ if you changed a title.
   `"ArrowDown"`, `" "` (Space), `"Enter"`. Also read `keyCode` (37/39/38/40/32/13)
   so a missing `key` string still plays.
 - **Do not steal Esc.** Esc is machine BREAK / READY.
+- **No mouse port.** `clientX` / `mousedown` never fire on PYTHON / FPGA-SIM /
+  BOARD. Chrome may still bind mouse for authoring, but keys + `joy()` must
+  play the **same** game (place, sell, aim, start). A mouse-only title
+  `LOAD`s then cannot be played on the machine.
 - Joystick bits are optional extras; they must not replace HTML bindings.
   Poll `joy()` each frame (bits: 1=up 2=down 4=left 8=right 16=FIRE1 32=FIRE2)
   and OR into the same held flags as keys (`JOYDEMO.HTML`). RTL may also
@@ -188,8 +192,11 @@ not title-gate RTL).
 | **`Math.round` is not a native** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt`. Shim it in the HTML (`Math.floor(+x + 0.5)`) — unary `+`, `throw`, and the `in` operator all parse since 2026-08-21. |
 | **No negative `setTransform` scale** | Mirroring with `setTransform(-1,0,0,1,x,0)` collapses width on PYTHON `_xf` and is unsafe for parity. Ship **left + right** facing sheets (or always draw unmirrored). Positive scale / DONKEY-style world transforms are fine. |
 | **Math natives** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt`. Embed LUTs for angles if needed (ASTEROID pattern). |
-| **Heap / array caps (live silicon)** | Fit pass sized these from real titles. Overflow is **loud** (fault 3). Live numbers: [FPGA_FIT.md](FPGA_FIT.md) (`MAX_OBJ=960`, `ENV_DEPTH=384`, `MAX_ARR_LONG=12`, `ARR_CAP=128`). Do not assume the old 1024/512 headroom. **Reuse objects across frames** — a fresh `{x,y,…}` literal every tick burns the 960-object pool (PACMAN-adjacent object-exhaustion). Keep one mutable object and write its fields. Do **not** hoist per-frame **grids/arrays** to startup to dodge GC (that trades slack for a permanent allocation and overflows the array heap). |
-| **No per-tick maze flood** | Recursive BFS + `Array(n).fill().map(()=>Array(m))` every ghost cell **froze the board** (HDMI last frame, no `ERROR`). Empty `finder` → no freeze. One-step on the existing map; door `2` walks **up**. Do **not** grow `ENV_DEPTH`/`CSTK` (chip full). [no-maze-flood-on-tick](../.cursor/rules/no-maze-flood-on-tick.mdc). |
+| **Heap / array caps (live silicon)** | Fit pass sized these from real titles. Overflow is **loud** (fault 3). Live numbers: [FPGA_FIT.md](FPGA_FIT.md) (`MAX_OBJ=960`, `ENV_DEPTH=384`, `MAX_ARR_LONG=12`, `ARR_CAP=128`). Do not assume the old 1024/512 headroom. **Reuse objects across frames** — a fresh `{x,y,…}` literal every tick burns the 960-object pool (PACMAN-adjacent object-exhaustion). Keep one mutable object and write its fields. Do **not** hoist per-frame **grids/arrays** to startup to dodge GC (that trades slack for a permanent allocation and overflows the array heap). A map bigger than 128 cells is **row arrays** (20×18 → 18 of 20), not one 360-slot array — split the BFS queue the same way. Do **not** shrink the playfield to dodge `ARR_CAP`. |
+| **16 locals per function** (`ENV_SLOTS`) | Params + every `var`/`let`/`const` in that function. The 17th is a card-mint `CompileError` (`bfs(): 17 locals…`). **`LOAD` still shows the HTML; `RUN` is `?NH` / FPGA-SIM bounces to READY.** Split a helper. Do **not** cut game systems to “fit 16.” |
+| **No typed arrays / `shift` / `charCodeAt` / `performance.now`** | Not on the V1 chip (mint skip or `fault=4`). Ordinary arrays; index/copy-down instead of `shift`; packed digits instead of `charCodeAt`; frame counter instead of `performance.now`. |
+| **No mouse port** | Keys + `joy()` must play the same game. Chrome may also bind `clientX`. Mouse-only → machine cannot place/aim. |
+| **No per-tick maze flood** | Recursive BFS + `Array(n).fill().map(()=>Array(m))` every ghost cell **froze the board** (HDMI last frame, no `ERROR`). Empty `finder` → no freeze. One-step on the existing map; door `2` walks **up**. Event-driven in-place flood on place/sell/reset is allowed — **keep the maze**. Do **not** grow `ENV_DEPTH`/`CSTK` (chip full). [no-maze-flood-on-tick](../.cursor/rules/no-maze-flood-on-tick.mdc). |
 | **Nested literal tables** | Hundreds of tiny `MAKE_ARRAY`s for frame rects work only while under the array caps. Prefer compact atlases + small meta, or parallel number arrays, if you approach the cap. |
 | **`fillText` is one 8×8 bitmap (no small TTF)** | Family/weight are ignored. Glyph scale is `k = max(1, min(15, round(N * sx / 8)))` where `sx` is the current `setTransform` x-scale (default 1). Each character is **8k × 8k glass pixels**. There is no 6px/10px/12px face — 10px at `sx=1` still paints the same 8×8 as 8px. **Glass-space HUD (PACMAN / INVADERS):** `8px` (native) or `16px` (2×). **World canvas then `setTransform` onto 640×480 (DONKEY / DNKFAST, `sx ≈ 640/1510 ≈ 0.42`):** `16px` still rounds to **k=1** (8 glass px — easy to miss on FPGA-SIM). Use **`32px` minimum** (k=2) for HUD, **`48px`** (k=3) for titles; drop the baseline so `8*k` glass pixels of height stay on screen; ASCII only (codes 32–126 — em-dash paints `?`). Do not add a second font to RTL. |
 | **Glass / Esc / one file** | 640×480 fill; Esc = BREAK; no external `.js`. Present is **gone** (run 52) — scanout reads the draw bank; budget tearing, draw fast. |
@@ -756,6 +763,10 @@ not readable on the V1.0 chip`), scoped to variables provably assigned
 ### Quick self-check for a new title
 
 - Per-tick BFS / grid clone / `finder`? *(FAST rule 1 — freezes the board)*
+- Event-driven maze flood using one `Array(COLS*ROWS)` over 128? *(ARR_CAP — split rows/queue, do not shrink the map)*
+- 17+ locals in one function? *(ENV_SLOTS — mint skip, LOAD works, RUN `?NH`)*
+- `Int32Array` / `Uint8Array` / `Array.shift` / `charCodeAt` / `performance.now`? *(V1.5 — mint skip or fault 4)*
+- Mouse as the only place/aim path? *(no mouse port — keys + joy() must play the same game)*
 - `setTransform(-1, …)` to flip a sprite? *(FAST rule 2 — draws 1 px; use L/R sheets)*
 - `for…in` / `Object.keys`? *(FAST rule 3 — faults on the chip)*
 - Fresh `{x,y}` / `new` / `{}` every frame instead of one reused object? *(FAST rule 4 — burns `MAX_OBJ=960`)*
@@ -790,10 +801,14 @@ the machine-side fixes for a title shaped like INVADERS.
 
 1. Self-contained `storage/NAME.HTML`, 640×480 canvas, keys in the file.
 2. Stays inside **V1.0 authoring walls** (sprites ≤16, no `for-in` /
-   `Object.keys`, no negative scale mirror, V1 Math).
+   `Object.keys`, no negative scale mirror, V1 Math, **≤16 locals/function**,
+   no typed arrays / `shift` / `charCodeAt` / `performance.now`, keys+joy
+   play the same game as Chrome mouse).
 3. Chrome opens it (authoring look only).
 4. `python3 tools/compile_js.py --html storage/NAME.HTML` succeeds (in memory).
    Card image **mints** a `.JSH` (V1.0 compile-at-card-create).
+   **If `LOAD` works and `RUN` is `?NH` / bounce to monitor, mint failed —
+   that compile is the log; remake `card.img` after the HTML fix.**
 5. `python3 tools/make_sd_image.py create card.img` lists the 8.3 name.
 6. PYTHON `LOAD` + `RUN` from **that `card.img`** plays. **FPGA-SIM** then
    board use the same image — do not claim silicon from Chrome or from a

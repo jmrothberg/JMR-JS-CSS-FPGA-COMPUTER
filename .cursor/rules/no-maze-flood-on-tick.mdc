@@ -23,14 +23,17 @@ prefer **smaller y, then column 13** (door) or they never leave the box
 (greedy-toward-player goes down). No maze clone. No `forEach` stamping
 ghosts as walls.
 
-**Rare shortest path** (eaten eyes → spawn only): in-place BFS on the
-existing map (`_ghostHome`), **once per eye tile**. Do **not** restore
-`finder` / `_copyMapOpen` — that is ~36 heap objects before the walk
-(31 row-arrays + options/start/end) then more per `push`; PACMAN already
-holds ~676 of `MAX_OBJ=960` and one call can `fault 3`. Do **not** run
-any maze flood on chase/flee. `storage/PACMAN.HTML` = one-step chase +
-zero-heap eyes home. `storage/PACORIG.HTML` = original flood; board
-freezes. Do not title-gate.
+**Rare shortest path** (eaten eyes → spawn only, or a tower-defense
+place/sell): in-place BFS on the existing map (`_ghostHome`), **once per
+event**, not per `rAF`. Do **not** restore `finder` / `_copyMapOpen` —
+that is ~36 heap objects before the walk (31 row-arrays + options/start/end)
+then more per `push`; PACMAN already holds ~676 of `MAX_OBJ=960` and one
+call can `fault 3`. Do **not** run any maze flood on chase/flee. Keep the
+maze: split the grid/queue at `ARR_CAP=128` (row arrays + a 3×128 BFS
+queue for a 360-cell field). Do **not** shrink the playfield or drop
+pathfinding to “fit.” `storage/PACMAN.HTML` = one-step chase + zero-heap
+eyes home. `storage/PACORIG.HTML` = original flood; board freezes. Do not
+title-gate.
 
 ```javascript
 // BAD — every ghost, every cell (PACORIG / board freeze)

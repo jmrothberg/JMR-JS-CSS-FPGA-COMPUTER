@@ -257,7 +257,7 @@ mention.
 | **T200** | — | Lab name for this Nexys Video (Artix-7 200T) |
 | **T100** | — | Lab name for the BASIC sibling’s Nexys A7-100T |
 | **V1.0 / V1.5 / V2.0** | product generations | **V1.0** = titles that play; **one disk** = `card.img` for PYTHON / FPGA-SIM / BOARD; compile = **when you make the card** (`.JSH`). **V1.5** tries standalone compile + type/paste/edit at READY **and** popular JS V1 lacks. V2 = **`MK.HTML` as on disk today** can `LOAD`/`RUN` |
-| **`?NH`** | no HTML | Loud debt if a title path is missing. Never “done” |
+| **`?NH`** | no HTML / no minted `.JSH` | Loud miss: missing title path, **or** card-create compile failed so `LOAD` shows HTML and `RUN` refuses. Never “done” |
 | **clock** | chip heartbeat | The FPGA steps once per clock. This board’s JS core is ≈ **100 million** clocks per second (100 MHz) |
 | **frame** | one picture | One full 640×480 image. Games aim for **60 pictures per second** (about 16.7 milliseconds each) |
 | **clocks per frame** | heartbeats to finish one picture | How many clock steps the JavaScript engine needs to draw the next picture. **You do not type this.** **FPGA-SIM is a slideshow** (~800k heartbeats per second of *your* time). The **board** is ~100 million/s (~125× faster), not slower. **30 pictures/s on the board** allows **3.33 million** heartbeats per picture. INVADERS was measured at **10.6 million** (~9 pictures/s on silicon until we cut work). Plan: [docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md) |

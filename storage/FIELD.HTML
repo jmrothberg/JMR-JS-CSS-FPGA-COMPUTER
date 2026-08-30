@@ -1,0 +1,1225 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Field Run TD</title>
+<style>
+  :root { color-scheme: dark; }
+  html,body { margin:0; height:100%; background:#0b1020; color:#e7ecff;
+    font:16px/1.4 system-ui,sans-serif; overflow:hidden; }
+  #wrap { position:fixed; inset:0; display:grid; place-items:center; }
+  canvas { background:#10162e; image-rendering:pixelated; box-shadow:0 10px 40px #0008;
+    max-width:96vw; max-height:94vh; touch-action:none; }
+</style></head>
+<body>
+<div id="wrap"><canvas id="c" width="640" height="480"></canvas></div>
+<script>
+/* Field Run TD — V1.0 HTML for this machine (same play as the Chrome TD).
+   LOAD "FIELD.HTML" then RUN.
+   Chrome: LMB place, RMB sell, mouse aims (leave those).
+   FPGA-SIM/BOARD (same as MISSILE.HTML): stick/arrows aim the cell cursor;
+     FIRE1/Space = start wave; FIRE2/Enter = place (or sell if occupied).
+     RIGHT into BUILD, UP/DOWN pick a tower (or keys 1-6 / Q/E).
+   Esc is machine BREAK — do not steal it. */
+var cvs = document.getElementById("c");
+var ctx = cvs.getContext("2d");
+ctx.imageSmoothingEnabled = false;
+
+/* ---------- ONE shared palette ---------- */
+var PAL = ["#000000","#232838","#8b93a7","#5b6272","#ffcf3c","#ff5a3c",
+           "#3ec9ff","#57c74a","#b06cff","#3a2a14",
+           "#3f7d34","#4a8f3c","#6b5230","#8a6b3c","#20263a","#e8ecf5"];
+
+/* Pixel maps packed as 1 + 10 digit-rows (no charCodeAt — V1.5). */
+var SPR_GUN = [10011111100,10122222210,11233223321,11232112321,11221111221,
+               11221111221,11232112321,11233223321,10122222210,10011111100];
+var SPR_MIS = [10011111100,10177777710,11755115571,11755115571,11777777771,
+               11733333371,11733333371,11777777771,10177777710,10011111100];
+var SPR_GOO = [10011111100,10166666610,11626626661,11666666661,11662662661,
+               11666666661,11626626661,11666666661,10166666610,10011111100];
+var SPR_MOR = [10001111000,10013333100,10013333100,10013333100,10133333310,
+               11322222231,11323333231,11322222231,10133333310,10011111100];
+var SPR_TES = [10801111080,10881111880,10018888100,10018228100,10018888100,
+               10188888810,10133333310,11322222231,10133333310,10011111100];
+var SPR_FLA = [10001111000,10015555100,10015445100,10155555510,10133333310,
+               11355555531,11354444531,11355555531,10133333310,10011111100];
+var SPR_CAR = [10000000000,10001111000,10016666100,10155555510,11555555551,
+               11555555551,10110001100,10110001100];
+var SPR_TRU = [10000000000,10011111100,10012222710,10111111110,11222222271,
+               11222222271,10110001100,10110001100];
+var SPR_BIK = [10000000000,10000110000,10001441000,10011111100,10111111110,
+               10110011000,10110011000,10000000000];
+var SPR_TNK = [10000000000,10001111000,10018888100,10111111111,11333333331,
+               11333333331,11111111111,10111111110];
+var SPR_T = [SPR_GUN, SPR_MIS, SPR_GOO, SPR_MOR, SPR_TES, SPR_FLA];
+var SPR_E = [SPR_CAR, SPR_BIK, SPR_TRU, SPR_TNK];
+
+/* ---------- layout (20x18 / CELL 24 — same playfield) ---------- */
+var FX = 0, FY = 48, COLS = 20, ROWS = 18, CELL = 24, SBX = 480;
+var DX = [1, -1, 0, 0], DY = [0, 0, 1, -1];
+var DT = 0.0166666667;
+var entCol = 0, entRow = 9, exitCol = 19, exitRow = 9;
+
+/* Parallel defs — same numbers as TDEF/EDEF. kind 0..5 / type 0..3. */
+var T_NAME = ["RAPID GUN","MISSILE","GOO","MORTAR","TESLA","FLAME"];
+var T_KEY = ["1","2","3","4","5","6"];
+var T_COST = [50, 100, 70, 120, 150, 130];
+var T_RNG = [95, 135, 85, 185, 115, 78];
+var T_CD = [0.30, 1.50, 0.85, 2.30, 0.28, 0.12];
+var T_DMG = [7, 18, 4, 28, 9, 3];
+var T_PS = [340, 200, 240, 1, 1, 1];
+var T_SPLASH = [0, 34, 0, 50, 0, 0];
+var T_SLOW = [0, 0, 1.4, 0, 0, 0];
+var T_BURN = [0, 0, 0, 0, 0, 2.0];
+var E_HP = [30, 20, 95, 210];
+var E_SP = [62, 110, 44, 34];
+var E_PAY = [8, 10, 18, 35];
+var E_DMG = [1, 1, 2, 3];
+
+var state = {
+  towers: [], enemies: [], shots: [], fx: [],
+  money: 300, lives: 20, wave: 0, score: 0, hpMul: 1,
+  running: 0, spawnT: 0, msg: "", msgN: 0, msgT: 0,
+  over: 0, paused: 0, t: 0, kills: 0
+};
+window.state = state;
+
+var sel = 0;
+var hoverC = 10, hoverR = 9;
+var frames = 0, canMoveAt = 0, canPlaceAt = 0, canWaveAt = 0;
+var leftHeld = 0, rightHeld = 0, upHeld = 0, downHeld = 0;
+var fire1Held = 0, fire2Held = 0, stickSeen = 0;
+var blocked, dist, tAt, grass;
+var q0, q1, q2, qHead, qTail;
+var queue, qAt, qLen;
+
+function R(x) { return Math.floor(x + 0.5); }
+
+/* Unpack one palette index from a packed digit-row (prefix 1 + 10 digits). */
+function cellPal(packed, c) {
+  var i, n;
+  n = packed;
+  i = 9 - c;
+  while (i > 0) {
+    n = Math.floor(n / 10);
+    i = i - 1;
+  }
+  return n % 10;
+}
+
+function blit(map, x, y, s) {
+  var r, c, v;
+  r = 0;
+  while (r < map.length) {
+    c = 0;
+    while (c < 10) {
+      v = cellPal(map[r], c);
+      if (v) {
+        ctx.fillStyle = PAL[v];
+        ctx.fillRect(x + c * s, y + r * s, s, s);
+      }
+      c = c + 1;
+    }
+    r = r + 1;
+  }
+}
+
+function cellCX(c) { return FX + c * CELL + 12; }
+function cellCY(r) { return FY + r * CELL + 12; }
+
+function makeGrid(fill) {
+  var g, r, row, c;
+  g = [];
+  r = 0;
+  while (r < ROWS) {
+    row = [];
+    c = 0;
+    while (c < COLS) {
+      row[c] = fill;
+      c = c + 1;
+    }
+    g[r] = row;
+    r = r + 1;
+  }
+  return g;
+}
+
+function makeLong() {
+  var a, i;
+  a = [];
+  i = 0;
+  while (i < 128) {
+    a[i] = 0;
+    i = i + 1;
+  }
+  return a;
+}
+
+function fillGrass(g) {
+  var r, c;
+  r = 0;
+  while (r < ROWS) {
+    c = 0;
+    while (c < COLS) {
+      g[r][c] = Math.floor(Math.random() * 5);
+      c = c + 1;
+    }
+    r = r + 1;
+  }
+}
+
+/* BFS queue split across 3x128 (ARR_CAP=128; 20*18=360 cells). */
+function qPush(v) {
+  var i;
+  i = qTail;
+  if (i >= 384) return;
+  if (i < 128) q0[i] = v;
+  else if (i < 256) q1[i - 128] = v;
+  else q2[i - 256] = v;
+  qTail = i + 1;
+}
+
+function qPop() {
+  var i, v;
+  i = qHead;
+  if (i < 128) v = q0[i];
+  else if (i < 256) v = q1[i - 128];
+  else v = q2[i - 256];
+  qHead = i + 1;
+  return v;
+}
+
+/* Event-driven flood from the exit (place/sell/reset only — not per tick).
+   Creeps then one-step down dist[] — same shortest path as the old BFS list. */
+function flood() {
+  var r, c, cur, cx, cy, i, nx, ny, d;
+  r = 0;
+  while (r < ROWS) {
+    c = 0;
+    while (c < COLS) {
+      dist[r][c] = 9999;
+      c = c + 1;
+    }
+    r = r + 1;
+  }
+  qHead = 0;
+  qTail = 0;
+  dist[exitRow][exitCol] = 0;
+  qPush(exitRow * COLS + exitCol);
+  while (qHead < qTail) {
+    cur = qPop();
+    cx = cur % COLS;
+    cy = Math.floor(cur / COLS);
+    d = dist[cy][cx] + 1;
+    i = 0;
+    while (i < 4) {
+      nx = cx + DX[i];
+      ny = cy + DY[i];
+      if (nx >= 0 && ny >= 0 && nx < COLS && ny < ROWS) {
+        if (!blocked[ny][nx] && dist[ny][nx] === 9999) {
+          dist[ny][nx] = d;
+          qPush(ny * COLS + nx);
+        }
+      }
+      i = i + 1;
+    }
+  }
+}
+
+function flash(m, n) {
+  state.msg = m;
+  state.msgN = n;
+  state.msgT = 1.6;
+}
+
+/* ---------- build / sell ---------- */
+function placeTower(c, r, kind, quiet) {
+  var t, x, y;
+  if (state.over) return 0;
+  if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return 0;
+  if (c === entCol && r === entRow) return 0;
+  if (c === exitCol && r === exitRow) return 0;
+  if (kind < 0 || kind > 5) return 0;
+  if (tAt[r][c]) {
+    if (!quiet) flash("TILE OCCUPIED", 0);
+    return 0;
+  }
+  if (state.money < T_COST[kind]) {
+    if (!quiet) flash("NOT ENOUGH CASH", 0);
+    return 0;
+  }
+  blocked[r][c] = 1;
+  flood();
+  if (dist[entRow][entCol] === 9999) {
+    blocked[r][c] = 0;
+    flood();
+    if (!quiet) flash("WALL-OFF BLOCKED", 0);
+    return 0;
+  }
+  state.money = state.money - T_COST[kind];
+  x = cellCX(c);
+  y = cellCY(r);
+  t = {col:c, row:r, kind:kind, x:x, y:y, cd:0, flash:0, beamT:0, bx:0, by:0, ang:0, dead:0};
+  state.towers.push(t);
+  tAt[r][c] = t;
+  return 1;
+}
+
+function sweepTowers() {
+  var i, w, t;
+  w = 0;
+  i = 0;
+  while (i < state.towers.length) {
+    t = state.towers[i];
+    if (!t.dead) {
+      state.towers[w] = t;
+      w = w + 1;
+    }
+    i = i + 1;
+  }
+  state.towers.length = w;
+}
+
+function sellAt(c, r) {
+  var t, refund;
+  if (r < 0 || c < 0 || r >= ROWS || c >= COLS) return 0;
+  t = tAt[r][c];
+  if (!t) return 0;
+  refund = Math.floor(T_COST[t.kind] * 0.75);
+  state.money = state.money + refund;
+  blocked[r][c] = 0;
+  tAt[r][c] = 0;
+  t.dead = 1;
+  sweepTowers();
+  flood();
+  flash("SOLD", refund);
+  return 1;
+}
+
+/* ---------- waves (same composition) ---------- */
+function startWave() {
+  var n, i;
+  if (state.running || state.over) return;
+  state.wave = state.wave + 1;
+  state.hpMul = 1 + 0.12 * state.wave;
+  state.running = 1;
+  state.spawnT = 0.15;
+  qAt = 0;
+  qLen = 0;
+  n = 5 + state.wave * 2;
+  if (n > 26) n = 26;
+  i = 0;
+  while (i < n) {
+    queue[qLen] = 0;
+    qLen = qLen + 1;
+    i = i + 1;
+  }
+  if (state.wave >= 3) {
+    n = Math.floor(state.wave / 2);
+    i = 0;
+    while (i < n) {
+      queue[qLen] = 2;
+      qLen = qLen + 1;
+      i = i + 1;
+    }
+  }
+  if (state.wave >= 4) {
+    n = Math.floor(state.wave * 0.7);
+    i = 0;
+    while (i < n) {
+      queue[qLen] = 1;
+      qLen = qLen + 1;
+      i = i + 1;
+    }
+  }
+  if (state.wave >= 6) {
+    n = Math.floor(state.wave / 3);
+    i = 0;
+    while (i < n) {
+      queue[qLen] = 3;
+      qLen = qLen + 1;
+      i = i + 1;
+    }
+  }
+  flash("WAVE INCOMING", state.wave);
+}
+
+function spawn(type) {
+  var e, ccx, ccy;
+  ccx = cellCX(entCol);
+  ccy = cellCY(entRow);
+  e = {
+    type: type, px: ccx - CELL, py: ccy,
+    hp: E_HP[type] * state.hpMul, max: E_HP[type] * state.hpMul,
+    sp: E_SP[type], pay: E_PAY[type], dmg: E_DMG[type],
+    col: entCol, row: entRow, nc: entCol, nr: entRow,
+    slow: 0, burn: 0, dead: 0, hit: 0, atExit: 0
+  };
+  state.enemies.push(e);
+}
+
+/* ---------- combat ---------- */
+function pickTarget(t) {
+  var rng, best, bi, i, e, dx, dy;
+  rng = T_RNG[t.kind];
+  best = 0;
+  bi = 9999;
+  i = 0;
+  while (i < state.enemies.length) {
+    e = state.enemies[i];
+    i = i + 1;
+    if (e.dead) continue;
+    dx = e.px - t.x;
+    dy = e.py - t.y;
+    if (dx * dx + dy * dy > rng * rng) continue;
+    if (dist[e.row][e.col] < bi) {
+      bi = dist[e.row][e.col];
+      best = e;
+    }
+  }
+  return best;
+}
+
+function hurt(e, dmg, burn) {
+  if (e.dead) return;
+  e.hp = e.hp - dmg;
+  e.hit = 0.09;
+  if (burn) e.burn = burn;
+  if (e.hp <= 0) {
+    e.dead = 1;
+    state.money = state.money + e.pay;
+    state.score = state.score + e.pay * 2;
+    state.kills = state.kills + 1;
+    boom(e.px, e.py, 10);
+  }
+}
+
+function splash(x, y, rad, dmg, burn) {
+  var i, e, dx, dy;
+  i = 0;
+  while (i < state.enemies.length) {
+    e = state.enemies[i];
+    i = i + 1;
+    if (e.dead) continue;
+    dx = e.px - x;
+    dy = e.py - y;
+    if (dx * dx + dy * dy <= rad * rad) hurt(e, dmg, burn);
+  }
+  boom(x, y, rad);
+}
+
+function boom(x, y, r) {
+  state.fx.push({x:x, y:y, r:r, t:0.3, max:0.3});
+}
+
+function towerFire(t) {
+  var e, dx, dy, dd, k;
+  if (t.dead) return;
+  k = t.kind;
+  if (t.cd > 0) t.cd = t.cd - DT;
+  if (t.beamT > 0) t.beamT = t.beamT - DT;
+  if (t.flash > 0) t.flash = t.flash - DT;
+  if (t.cd > 0) return;
+  e = pickTarget(t);
+  if (!e) return;
+  t.cd = T_CD[k];
+  t.flash = 0.07;
+  t.bx = e.px;
+  t.by = e.py;
+  dx = e.px - t.x;
+  dy = e.py - t.y;
+  dd = Math.sqrt(dx * dx + dy * dy);
+  if (dd < 1) dd = 1;
+  t.ang = dx / dd;
+  if (k === 4 || k === 5) {
+    if (k === 5) t.beamT = 0.14;
+    else t.beamT = 0.12;
+    hurt(e, T_DMG[k], T_BURN[k]);
+    return;
+  }
+  if (k === 3) {
+    state.shots.push({k:3, x0:t.x, y0:t.y - 8, x1:e.px, y1:e.py, t:0, dur:0.75,
+      dmg:T_DMG[k], rad:T_SPLASH[k], burn:0, slow:0, tgt:0, x:t.x, y:t.y - 8, done:0});
+    return;
+  }
+  state.shots.push({k:k, x0:t.x, y0:t.y, x1:e.px, y1:e.py, t:0, dur:dd / T_PS[k],
+    dmg:T_DMG[k], rad:T_SPLASH[k], burn:0, slow:T_SLOW[k], tgt:e, x:t.x, y:t.y, done:0});
+}
+
+function shotUpdate(p) {
+  var u;
+  p.t = p.t + DT;
+  u = p.t / p.dur;
+  if (u > 1) u = 1;
+  if (p.k === 3) {
+    p.x = p.x0 + (p.x1 - p.x0) * u;
+    p.y = p.y0 + (p.y1 - p.y0) * u - 90 * 4 * u * (1 - u);
+  } else if (p.tgt && !p.tgt.dead) {
+    p.x = p.tgt.px;
+    p.y = p.tgt.py;
+    p.x1 = p.tgt.px;
+    p.y1 = p.tgt.py;
+  } else {
+    p.x = p.x1;
+    p.y = p.y1;
+  }
+  if (p.t < p.dur) return;
+  if (p.rad > 0) splash(p.x, p.y, p.rad, p.dmg, p.burn);
+  else {
+    if (p.tgt && !p.tgt.dead) {
+      hurt(p.tgt, p.dmg, p.burn);
+      if (p.slow) p.tgt.slow = p.slow;
+    }
+  }
+  p.done = 1;
+}
+
+/* ---------- update ---------- */
+function pickNext(e) {
+  var i, nx, ny, bestC, bestR, bd, d, c, r;
+  c = e.col;
+  r = e.row;
+  if (c === exitCol && r === exitRow) {
+    e.atExit = 1;
+    return;
+  }
+  bd = 9999;
+  bestC = c;
+  bestR = r;
+  i = 0;
+  while (i < 4) {
+    nx = c + DX[i];
+    ny = r + DY[i];
+    i = i + 1;
+    if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+    if (blocked[ny][nx]) continue;
+    d = dist[ny][nx];
+    if (d < bd) {
+      bd = d;
+      bestC = nx;
+      bestR = ny;
+    }
+  }
+  e.nc = bestC;
+  e.nr = bestR;
+}
+
+function enemyUpdate(e) {
+  var tx, ty, dx, dy, d, step, mul;
+  if (e.dead) return;
+  if (e.burn > 0) {
+    e.burn = e.burn - DT;
+    e.hp = e.hp - 6 * DT;
+    if (e.hp <= 0) {
+      e.dead = 1;
+      state.money = state.money + e.pay;
+      state.score = state.score + e.pay * 2;
+      state.kills = state.kills + 1;
+      boom(e.px, e.py, 9);
+      return;
+    }
+  }
+  if (e.hit > 0) e.hit = e.hit - DT;
+  mul = 1;
+  if (e.slow > 0) {
+    e.slow = e.slow - DT;
+    mul = 0.45;
+  }
+  if (e.atExit) {
+    e.dead = 1;
+    state.lives = state.lives - e.dmg;
+    boom(e.px, e.py, 7);
+    flash("LEAK", e.dmg);
+    if (state.lives <= 0) {
+      state.lives = 0;
+      state.over = 1;
+    }
+    return;
+  }
+  tx = cellCX(e.nc);
+  ty = cellCY(e.nr);
+  dx = tx - e.px;
+  dy = ty - e.py;
+  d = Math.sqrt(dx * dx + dy * dy);
+  step = e.sp * mul * DT;
+  if (d < 0.001) d = 0.001;
+  if (step >= d) {
+    e.px = tx;
+    e.py = ty;
+    e.col = e.nc;
+    e.row = e.nr;
+    pickNext(e);
+  } else {
+    e.px = e.px + dx / d * step;
+    e.py = e.py + dy / d * step;
+  }
+}
+
+function sweepEnemies() {
+  var i, w, e;
+  w = 0;
+  i = 0;
+  while (i < state.enemies.length) {
+    e = state.enemies[i];
+    if (!e.dead) {
+      state.enemies[w] = e;
+      w = w + 1;
+    }
+    i = i + 1;
+  }
+  state.enemies.length = w;
+}
+
+function sweepShots() {
+  var i, w, p;
+  w = 0;
+  i = 0;
+  while (i < state.shots.length) {
+    p = state.shots[i];
+    if (!p.done) {
+      state.shots[w] = p;
+      w = w + 1;
+    }
+    i = i + 1;
+  }
+  state.shots.length = w;
+}
+
+function sweepFx() {
+  var i, w, f;
+  w = 0;
+  i = 0;
+  while (i < state.fx.length) {
+    f = state.fx[i];
+    if (f.t > 0) {
+      state.fx[w] = f;
+      w = w + 1;
+    }
+    i = i + 1;
+  }
+  state.fx.length = w;
+}
+
+function updateSpawn() {
+  var live, i;
+  state.spawnT = state.spawnT - DT;
+  if (state.spawnT <= 0 && qAt < qLen) {
+    spawn(queue[qAt]);
+    qAt = qAt + 1;
+    state.spawnT = Math.max(0.35, 1.1 - state.wave * 0.04);
+  }
+  live = 0;
+  i = 0;
+  while (i < state.enemies.length) {
+    if (!state.enemies[i].dead) live = live + 1;
+    i = i + 1;
+  }
+  if (qAt >= qLen && live === 0) {
+    state.running = 0;
+    state.money = state.money + 40 + state.wave * 6;
+    state.score = state.score + 50 * state.wave;
+    flash("WAVE CLEARED", 40 + state.wave * 6);
+  }
+}
+
+function playBits() {
+  var j;
+  j = 0;
+  try { j = joy() | 0; } catch (e) { j = 0; }
+  try { if (keyUp()) j = j | 1; } catch (e) {}
+  try { if (keyDown()) j = j | 2; } catch (e) {}
+  try { if (keyLeft()) j = j | 4; } catch (e) {}
+  try { if (keyRight()) j = j | 8; } catch (e) {}
+  try { if (keyFire()) j = j | 16; } catch (e) {}
+  /* Same latch as MISSILE.HTML: RTL can drop stick KEYEVT keyup.
+     Live joy()/key* bits are truth. After the Pmod has been seen, idle
+     bits drop the latches. Keyboard-only: j stays 0 so stickSeen never arms. */
+  if (j) stickSeen = 1;
+  if (!j && stickSeen) {
+    leftHeld = 0;
+    rightHeld = 0;
+    upHeld = 0;
+    downHeld = 0;
+    fire1Held = 0;
+    fire2Held = 0;
+    stickSeen = 0;
+  }
+  return j;
+}
+
+function tickCursor() {
+  var j, step;
+  j = playBits();
+  step = 0;
+  if (frames >= canMoveAt) {
+    if (leftHeld || (j & 4)) {
+      hoverC = hoverC - 1;
+      step = 1;
+    }
+    if (rightHeld || (j & 8)) {
+      hoverC = hoverC + 1;
+      step = 1;
+    }
+    if (upHeld || (j & 1)) {
+      if (hoverC >= COLS) {
+        sel = sel - 1;
+        if (sel < 0) sel = 5;
+      } else hoverR = hoverR - 1;
+      step = 1;
+    }
+    if (downHeld || (j & 2)) {
+      if (hoverC >= COLS) {
+        sel = sel + 1;
+        if (sel > 5) sel = 0;
+      } else hoverR = hoverR + 1;
+      step = 1;
+    }
+    if (hoverC < 0) hoverC = 0;
+    if (hoverC > COLS) hoverC = COLS;
+    if (hoverR < 0) hoverR = 0;
+    if (hoverR > ROWS - 1) hoverR = ROWS - 1;
+    if (step) canMoveAt = frames + 8;
+  }
+  /* Two stick buttons like MISSILE: poll held + bits, cooldown (not edge). */
+  if ((fire2Held || (j & 32)) && frames >= canPlaceAt) {
+    tryBuild();
+    canPlaceAt = frames + 9;
+  }
+  if ((fire1Held || (j & 16)) && frames >= canWaveAt) {
+    startWave();
+    canWaveAt = frames + 9;
+  }
+}
+
+function tryBuild() {
+  if (state.over) {
+    reset();
+    return;
+  }
+  if (hoverC >= COLS || hoverC < 0 || hoverR < 0) return;
+  if (tAt[hoverR][hoverC]) sellAt(hoverC, hoverR);
+  else placeTower(hoverC, hoverR, sel, 0);
+}
+
+function update() {
+  var i;
+  frames = frames + 1;
+  state.t = state.t + DT;
+  if (state.msgT > 0) state.msgT = state.msgT - DT;
+  tickCursor();
+  if (state.over || state.paused) return;
+  if (state.running) updateSpawn();
+  i = 0;
+  while (i < state.towers.length) {
+    towerFire(state.towers[i]);
+    i = i + 1;
+  }
+  i = 0;
+  while (i < state.enemies.length) {
+    enemyUpdate(state.enemies[i]);
+    i = i + 1;
+  }
+  i = 0;
+  while (i < state.shots.length) {
+    shotUpdate(state.shots[i]);
+    i = i + 1;
+  }
+  i = 0;
+  while (i < state.fx.length) {
+    state.fx[i].t = state.fx[i].t - DT;
+    i = i + 1;
+  }
+  sweepEnemies();
+  sweepShots();
+  sweepFx();
+}
+
+/* ---------- draw ---------- */
+function drawGates() {
+  ctx.fillStyle = PAL[13];
+  ctx.fillRect(FX + entCol * CELL, FY + entRow * CELL, CELL, CELL);
+  ctx.fillRect(FX + exitCol * CELL, FY + exitRow * CELL, CELL, CELL);
+  ctx.fillStyle = PAL[4];
+  ctx.fillRect(FX + entCol * CELL + 6, FY + entRow * CELL + 4, 3, 16);
+  ctx.fillRect(FX + entCol * CELL + 12, FY + entRow * CELL + 8, 3, 8);
+  ctx.fillStyle = PAL[5];
+  ctx.fillRect(FX + exitCol * CELL + 6, FY + exitRow * CELL + 4, 3, 16);
+  ctx.fillRect(FX + exitCol * CELL + 1, FY + exitRow * CELL + 8, 3, 8);
+}
+
+function drawPathDots() {
+  var c, r, n, nx, ny, bd, d, bc, br, k;
+  c = entCol;
+  r = entRow;
+  n = 0;
+  ctx.fillStyle = PAL[12];
+  while (n < 128) {
+    ctx.fillRect(R(cellCX(c)) - 2, R(cellCY(r)) - 2, 4, 4);
+    if (c === exitCol && r === exitRow) break;
+    bd = 9999;
+    bc = c;
+    br = r;
+    k = 0;
+    while (k < 4) {
+      nx = c + DX[k];
+      ny = r + DY[k];
+      k = k + 1;
+      if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+      if (blocked[ny][nx]) continue;
+      d = dist[ny][nx];
+      if (d < bd) {
+        bd = d;
+        bc = nx;
+        br = ny;
+      }
+    }
+    if (bc === c && br === r) break;
+    c = bc;
+    r = br;
+    n = n + 1;
+  }
+}
+
+function drawField() {
+  var r, c, x, y, gi;
+  r = 0;
+  while (r < ROWS) {
+    c = 0;
+    while (c < COLS) {
+      x = FX + c * CELL;
+      y = FY + r * CELL;
+      if ((r + c) & 1) ctx.fillStyle = PAL[10];
+      else ctx.fillStyle = PAL[11];
+      ctx.fillRect(x, y, CELL, CELL);
+      gi = grass[r][c];
+      if (gi > 2) {
+        ctx.fillStyle = PAL[10];
+        ctx.fillRect(x + 5 + gi, y + 7, 3, 2);
+      }
+      c = c + 1;
+    }
+    r = r + 1;
+  }
+  drawGates();
+  drawPathDots();
+}
+
+function drawTower(t) {
+  var ux, uy, len, k;
+  k = t.kind;
+  blit(SPR_T[k], R(t.x - 10), R(t.y - 10), 2);
+  if (k === 4) return;
+  ux = 1;
+  uy = 0;
+  if (t.ang) ux = t.ang;
+  if (k === 3) len = 9;
+  else len = 11;
+  ctx.fillStyle = PAL[1];
+  ctx.fillRect(R(t.x - 1 + ux * 3), R(t.y - 1 + uy * 3), 3, 3);
+  ctx.fillRect(R(t.x - 1 + ux * len), R(t.y - 1 + uy * len), 3, 3);
+  if (t.flash > 0) {
+    ctx.fillStyle = PAL[4];
+    ctx.fillRect(R(t.x - 2 + ux * (len + 2)), R(t.y - 2 + uy * (len + 2)), 5, 5);
+  }
+}
+
+function drawBeam(t) {
+  var x0, y0, x1, y1, dx, dy, d, px, py, k, o;
+  if (t.beamT <= 0) return;
+  x0 = t.x;
+  y0 = t.y - 10;
+  x1 = t.bx;
+  y1 = t.by;
+  dx = x1 - x0;
+  dy = y1 - y0;
+  d = Math.sqrt(dx * dx + dy * dy);
+  if (d < 1) d = 1;
+  px = -dy / d;
+  py = dx / d;
+  if (t.kind === 5) {
+    ctx.fillStyle = PAL[5];
+    ctx.fillRect(R(x0) - 2, R(y0), 4, R(d));
+    ctx.fillStyle = PAL[4];
+    k = 0;
+    while (k < 6) {
+      ctx.fillRect(R(x0 + dx * k / 6) + px * 2, R(y0 + dy * k / 6) + py * 2, 3, 3);
+      k = k + 1;
+    }
+    return;
+  }
+  ctx.fillStyle = PAL[6];
+  k = 0;
+  while (k < 8) {
+    if (k & 1) o = 3;
+    else o = -3;
+    ctx.fillRect(R(x0 + dx * k / 8 + px * o), R(y0 + dy * k / 8 + py * o), 2, 2);
+    k = k + 1;
+  }
+  ctx.fillStyle = PAL[15];
+  ctx.fillRect(R(x1) - 2, R(y1) - 2, 4, 4);
+}
+
+function drawEnemy(e) {
+  var w;
+  blit(SPR_E[e.type], R(e.px - 10), R(e.py - 8), 2);
+  if (e.slow > 0) {
+    ctx.fillStyle = PAL[6];
+    ctx.fillRect(R(e.px - 10), R(e.py + 8), 20, 2);
+  }
+  if (e.burn > 0) {
+    ctx.fillStyle = PAL[5];
+    ctx.fillRect(R(e.px + 6), R(e.py - 10), 3, 3);
+  }
+  w = R(20 * e.hp / e.max);
+  if (w < 0) w = 0;
+  ctx.fillStyle = PAL[1];
+  ctx.fillRect(R(e.px - 10), R(e.py - 12), 20, 3);
+  if (e.hit > 0) ctx.fillStyle = PAL[15];
+  else ctx.fillStyle = PAL[7];
+  ctx.fillRect(R(e.px - 10), R(e.py - 12), w, 3);
+}
+
+function drawShots() {
+  var i, p;
+  i = 0;
+  while (i < state.shots.length) {
+    p = state.shots[i];
+    i = i + 1;
+    if (p.k === 3) {
+      ctx.fillStyle = PAL[1];
+      ctx.fillRect(R(p.x - 2), R(p.y - 2), 5, 5);
+    } else if (p.k === 1) {
+      ctx.fillStyle = PAL[5];
+      ctx.fillRect(R(p.x - 3), R(p.y - 2), 6, 4);
+      ctx.fillStyle = PAL[4];
+      ctx.fillRect(R(p.x - 5), R(p.y - 1), 3, 2);
+    } else if (p.k === 2) {
+      ctx.fillStyle = PAL[6];
+      ctx.fillRect(R(p.x - 2), R(p.y - 2), 4, 4);
+    } else {
+      ctx.fillStyle = PAL[4];
+      ctx.fillRect(R(p.x - 1), R(p.y - 1), 3, 3);
+    }
+  }
+}
+
+function drawFx() {
+  var i, f, u, r;
+  i = 0;
+  while (i < state.fx.length) {
+    f = state.fx[i];
+    i = i + 1;
+    u = f.t / f.max;
+    r = R(f.r * (1 - u) + 2);
+    if (u > 0.5) ctx.fillStyle = PAL[4];
+    else ctx.fillStyle = PAL[5];
+    ctx.fillRect(R(f.x) - r, R(f.y) - 2, r * 2, 4);
+    ctx.fillRect(R(f.x) - 2, R(f.y) - r, 4, r * 2);
+  }
+}
+
+function drawRange(hx, hy, rng, can) {
+  var x0, y0, s;
+  x0 = R(hx + 12 - rng);
+  y0 = R(hy + 12 - rng);
+  s = R(rng * 2);
+  if (can) ctx.fillStyle = PAL[7];
+  else ctx.fillStyle = PAL[5];
+  ctx.fillRect(x0, y0, s, 1);
+  ctx.fillRect(x0, y0 + s - 1, s, 1);
+  ctx.fillRect(x0, y0, 1, s);
+  ctx.fillRect(x0 + s - 1, y0, 1, s);
+}
+
+function drawTop() {
+  ctx.fillStyle = PAL[14];
+  ctx.fillRect(0, 0, 640, 48);
+  ctx.fillRect(SBX, 0, 160, 480);
+  ctx.fillStyle = PAL[3];
+  ctx.fillRect(0, 47, 640, 1);
+  ctx.fillRect(SBX, 0, 1, 480);
+  ctx.font = "8px monospace";
+  ctx.fillStyle = PAL[4];
+  ctx.fillText("CASH", 8, 16);
+  ctx.fillText(state.money, 48, 16);
+  if (state.lives <= 5) ctx.fillStyle = PAL[5];
+  else ctx.fillStyle = PAL[15];
+  ctx.fillText("LIVES", 8, 32);
+  ctx.fillText(state.lives, 56, 32);
+  ctx.fillStyle = PAL[15];
+  ctx.fillText("WAVE", 110, 16);
+  ctx.fillText(state.wave, 150, 16);
+  ctx.fillText("KILLS", 110, 32);
+  ctx.fillText(state.kills, 158, 32);
+  ctx.fillStyle = PAL[7];
+  ctx.fillText("SCORE", 210, 16);
+  ctx.fillText(state.score, 258, 16);
+  if (state.running) {
+    ctx.fillStyle = PAL[5];
+    ctx.fillText("WAVE RUNNING", 210, 32);
+  } else {
+    ctx.fillStyle = PAL[6];
+    ctx.fillText("PRESS SPACE", 210, 32);
+  }
+  if (state.msgT > 0) {
+    ctx.fillStyle = PAL[4];
+    ctx.fillText(state.msg, 340, 32);
+    if (state.msgN) ctx.fillText(state.msgN, 340, 42);
+  }
+}
+
+function drawSide() {
+  var i, y, ok;
+  ctx.font = "8px monospace";
+  ctx.fillStyle = PAL[15];
+  ctx.fillText("BUILD", SBX + 10, 62);
+  i = 0;
+  while (i < 6) {
+    y = 72 + i * 52;
+    ok = state.money >= T_COST[i];
+    if (sel === i) ctx.fillStyle = PAL[3];
+    else ctx.fillStyle = PAL[1];
+    ctx.fillRect(SBX + 4, y, 152, 48);
+    blit(SPR_T[i], SBX + 10, y + 14, 2);
+    if (ok) ctx.fillStyle = PAL[15];
+    else ctx.fillStyle = PAL[3];
+    ctx.fillText(T_NAME[i], SBX + 38, y + 18);
+    if (ok) ctx.fillStyle = PAL[4];
+    else ctx.fillStyle = PAL[5];
+    ctx.fillText("$", SBX + 38, y + 32);
+    ctx.fillText(T_COST[i], SBX + 46, y + 32);
+    ctx.fillText("R", SBX + 90, y + 32);
+    ctx.fillText(T_RNG[i], SBX + 98, y + 32);
+    ctx.fillStyle = PAL[6];
+    ctx.fillText(T_KEY[i], SBX + 126, y + 44);
+    i = i + 1;
+  }
+  ctx.fillStyle = PAL[15];
+  ctx.fillText("ARROWS/STICK move", SBX + 8, 390);
+  ctx.fillText("ENTER/FIRE2 place", SBX + 8, 404);
+  ctx.fillText("SPACE/FIRE1 wave", SBX + 8, 418);
+  ctx.fillText("1-6  LMB/RMB also", SBX + 8, 432);
+  ctx.fillStyle = PAL[3];
+  ctx.fillText("Towers maze the field", SBX + 8, 448);
+  ctx.fillText("creeps BFS the gap.", SBX + 8, 462);
+}
+
+function drawHover() {
+  var hx, hy, can, rng, y;
+  if (state.over) return;
+  if (hoverC >= COLS) {
+    y = 72 + sel * 52;
+    ctx.fillStyle = PAL[4];
+    ctx.fillRect(SBX + 2, y - 2, 156, 2);
+    ctx.fillRect(SBX + 2, y + 48, 156, 2);
+    ctx.fillRect(SBX + 2, y - 2, 2, 52);
+    ctx.fillRect(SBX + 156, y - 2, 2, 52);
+    return;
+  }
+  if (hoverC < 0 || hoverR < 0 || hoverR >= ROWS) return;
+  hx = FX + hoverC * CELL;
+  hy = FY + hoverR * CELL;
+  can = !tAt[hoverR][hoverC] && state.money >= T_COST[sel];
+  if (can) ctx.fillStyle = PAL[7];
+  else ctx.fillStyle = PAL[5];
+  ctx.fillRect(hx, hy, CELL, 3);
+  ctx.fillRect(hx, hy + CELL - 3, CELL, 3);
+  ctx.fillRect(hx, hy, 3, CELL);
+  ctx.fillRect(hx + CELL - 3, hy, 3, CELL);
+  rng = T_RNG[sel];
+  drawRange(hx, hy, rng, can);
+}
+
+function draw() {
+  var i;
+  ctx.fillStyle = PAL[14];
+  ctx.fillRect(0, 0, 640, 480);
+  drawField();
+  i = 0;
+  while (i < state.towers.length) {
+    if (!state.towers[i].dead) drawTower(state.towers[i]);
+    i = i + 1;
+  }
+  i = 0;
+  while (i < state.towers.length) {
+    if (!state.towers[i].dead) drawBeam(state.towers[i]);
+    i = i + 1;
+  }
+  drawShots();
+  i = 0;
+  while (i < state.enemies.length) {
+    if (!state.enemies[i].dead) drawEnemy(state.enemies[i]);
+    i = i + 1;
+  }
+  drawFx();
+  drawTop();
+  drawSide();
+  drawHover();
+  if (state.paused) {
+    ctx.font = "16px monospace";
+    ctx.fillStyle = PAL[4];
+    ctx.fillText("PAUSED", 200, 250);
+  }
+  if (state.over) {
+    ctx.fillStyle = PAL[1];
+    ctx.fillRect(110, 170, 420, 120);
+    ctx.font = "16px monospace";
+    ctx.fillStyle = PAL[5];
+    ctx.fillText("GAME OVER", 210, 210);
+    ctx.fillStyle = PAL[15];
+    ctx.fillText("WAVE", 180, 240);
+    ctx.fillText(state.wave, 224, 240);
+    ctx.fillText("SCORE", 268, 240);
+    ctx.fillText(state.score, 320, 240);
+    ctx.fillStyle = PAL[4];
+    ctx.fillText("PRESS ENTER TO RESTART", 180, 268);
+  }
+}
+
+/* ---------- reset ---------- */
+function reset() {
+  var r, c;
+  state.towers.length = 0;
+  state.enemies.length = 0;
+  state.shots.length = 0;
+  state.fx.length = 0;
+  qAt = 0;
+  qLen = 0;
+  r = 0;
+  while (r < ROWS) {
+    c = 0;
+    while (c < COLS) {
+      blocked[r][c] = 0;
+      tAt[r][c] = 0;
+      c = c + 1;
+    }
+    r = r + 1;
+  }
+  state.money = 300;
+  state.lives = 20;
+  state.wave = 0;
+  state.score = 0;
+  state.kills = 0;
+  state.hpMul = 1;
+  state.running = 0;
+  state.spawnT = 0;
+  state.over = 0;
+  state.paused = 0;
+  sel = 0;
+  state.msg = "";
+  state.msgN = 0;
+  state.msgT = 0;
+  flood();
+}
+
+/* ---------- input (keys + joy on the chip; mouse is Chrome-only) ---------- */
+addEventListener("keydown", function (e) {
+  var k, c;
+  k = e.key;
+  c = e.keyCode;
+  if (k === " " || c === 32) fire1Held = 1;
+  else if (k === "Enter" || c === 13) fire2Held = 1;
+  else if (k === "q" || k === "Q" || c === 81) {
+    sel = sel - 1;
+    if (sel < 0) sel = 5;
+  } else if (k === "e" || k === "E" || c === 69) {
+    sel = sel + 1;
+    if (sel > 5) sel = 0;
+  } else if (k === "p" || k === "P" || c === 80) {
+    if (!state.over) {
+      if (state.paused) state.paused = 0;
+      else state.paused = 1;
+    }
+  } else if (k === "s" || k === "S" || c === 83) {
+    if (frames >= canPlaceAt) {
+      sellAt(hoverC, hoverR);
+      canPlaceAt = frames + 9;
+    }
+  }
+  if (k === "1" || c === 49) sel = 0;
+  if (k === "2" || c === 50) sel = 1;
+  if (k === "3" || c === 51) sel = 2;
+  if (k === "4" || c === 52) sel = 3;
+  if (k === "5" || c === 53) sel = 4;
+  if (k === "6" || c === 54) sel = 5;
+  if (k === "ArrowLeft" || k === "a" || k === "A" || c === 37 || c === 65) leftHeld = 1;
+  if (k === "ArrowRight" || k === "d" || k === "D" || c === 39 || c === 68) rightHeld = 1;
+  if (k === "ArrowUp" || k === "w" || k === "W" || c === 38 || c === 87) upHeld = 1;
+  if (k === "ArrowDown" || c === 40) downHeld = 1;
+});
+addEventListener("keyup", function (e) {
+  var k, c;
+  k = e.key;
+  c = e.keyCode;
+  if (k === "ArrowLeft" || k === "a" || k === "A" || c === 37 || c === 65) leftHeld = 0;
+  if (k === "ArrowRight" || k === "d" || k === "D" || c === 39 || c === 68) rightHeld = 0;
+  if (k === "ArrowUp" || k === "w" || k === "W" || c === 38 || c === 87) upHeld = 0;
+  if (k === "ArrowDown" || c === 40) downHeld = 0;
+  if (k === " " || c === 32) fire1Held = 0;
+  if (k === "Enter" || c === 13) fire2Held = 0;
+});
+
+function toLocalX(ev) {
+  var box;
+  box = cvs.getBoundingClientRect();
+  return (ev.clientX - box.left) * (640 / box.width);
+}
+function toLocalY(ev) {
+  var box;
+  box = cvs.getBoundingClientRect();
+  return (ev.clientY - box.top) * (480 / box.height);
+}
+
+cvs.addEventListener("mousemove", function (ev) {
+  var p0, p1;
+  p0 = toLocalX(ev);
+  p1 = toLocalY(ev);
+  hoverC = Math.floor((p0 - FX) / CELL);
+  hoverR = Math.floor((p1 - FY) / CELL);
+});
+cvs.addEventListener("mouseleave", function () {
+  hoverC = -1;
+  hoverR = -1;
+});
+cvs.addEventListener("mousedown", function (ev) {
+  var p0, p1, i, y, c, r;
+  p0 = toLocalX(ev);
+  p1 = toLocalY(ev);
+  if (p0 >= SBX) {
+    i = 0;
+    while (i < 6) {
+      y = 72 + i * 52;
+      if (p1 >= y && p1 <= y + 48) sel = i;
+      i = i + 1;
+    }
+    return;
+  }
+  c = Math.floor((p0 - FX) / CELL);
+  r = Math.floor((p1 - FY) / CELL);
+  if (ev.button === 2) sellAt(c, r);
+  else placeTower(c, r, sel, 0);
+});
+cvs.addEventListener("contextmenu", function (ev) {
+  ev.preventDefault();
+});
+
+window.game = {reset: reset, placeTower: placeTower, startWave: startWave, sellAt: sellAt};
+
+blocked = makeGrid(0);
+dist = makeGrid(9999);
+tAt = makeGrid(0);
+grass = makeGrid(0);
+fillGrass(grass);
+q0 = makeLong();
+q1 = makeLong();
+q2 = makeLong();
+queue = makeLong();
+reset();
+
+function frame() {
+  update();
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body></html>
