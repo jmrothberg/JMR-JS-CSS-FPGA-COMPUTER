@@ -346,6 +346,9 @@ class BoardBackend(RuntimeBackend):
             parsed_t = _parse_t_line(line)
             if parsed_t is not None:
                 self._fault_ip_trail = parsed_t
+                self._log.note(
+                    "TRAIL " + " ".join(f"{ip:04X}" for ip in parsed_t)
+                )
                 continue
             # Optional VM heartbeat. Malformed / absent → ignore (old bits).
             parsed_v = _parse_vm_v_line(line)

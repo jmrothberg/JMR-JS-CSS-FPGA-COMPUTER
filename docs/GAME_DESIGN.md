@@ -584,6 +584,27 @@ score/effect/state-change call. Mark it dead; sweep once, after.**
 > anything. Current priority order: (1) increase VM speed without
 > increasing placement/routing congestion, (2) fix this saucer freeze —
 > the last known content-breaking bug.
+>
+> **2026-08-30 SOLVED (mechanism): run 60's F/T capture named it.**
+> First saucer kill on the run-60 bit, forensics on the glass:
+> `kind=env retried=False vcsp=2 vsp=1, pools at fault: env 4, arr 21,
+> obj 689`. The **env allocator** faulted with **4 of 384 env slots
+> live** — the pool was ~99 % empty. Not exhaustion, not a leak, not
+> the value 300: the env free-list said "no free slot" while nearly
+> everything was free, and it never attempted a GC retry first. The
+> T-line approach path (`05F4 05F6 05F7 05F8 05F9 05FA 05FB → 14D9`)
+> decodes to the ENTIRE `Saucer.points()` body completing cleanly —
+> param bind, `UFO_SCORES[shotCount & 15]`, `RET_VAL` — and the return
+> LANDING back at the call site (`14D9` = the inlined `bumpScore`'s
+> `LET_VAR n`). The machine dies on the method-return seam: the
+> `CALL_METHOD` frame's env teardown/re-entry. That is why every
+> content reshaping only *moved* the fault — each variant still crossed
+> a method-frame env boundary at this site. Content-side there is
+> nothing left to do; this is an RTL env-allocator free-list state bug,
+> handed to the RTL session with the full decode. (Also note `05F5`,
+> the body's `JUMP`, is absent from the committed-ip ring — jump-class
+> ops evidently don't commit an entry; remember that when reading
+> future trails.)
 
 INVFAST froze on the board — **only** on a hit, never on a miss, 100%
 repeatable — the instant a bullet actually killed an alien. Fault 3,
