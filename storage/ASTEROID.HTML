@@ -38,6 +38,12 @@ var wait = 0;
 var fireWait = 0;
 var fireHeld = 0;
 var fireWas = 0;
+/* Board run-60: a physical/keyboard tap stays "held" for ~40-80ms, which
+   quantizes to 2-3 polls at 60fps — fireWait alone (edge + 10-frame
+   repeat throttle) isn't a hard backstop against that. canShootAt is the
+   INVFAST playerShoot() pattern: pure frame-counter rate-limit, never an
+   edge-gate, so hold-to-repeat still works. */
+var canShootAt = 0;
 var leftHeld = 0;
 var rightHeld = 0;
 var thrustHeld = 0;
@@ -340,6 +346,7 @@ function startGame() {
   resetShip();
   startWave();
   mode = PLAY;
+  canShootAt = 0;
 }
 
 function splitRock(i) {
@@ -386,6 +393,8 @@ function explodeShip() {
 function firePlayer() {
   if (shots.length >= 4) return;
   if (ship.hyper > 0) return;
+  if (tick < canShootAt) return;
+  canShootAt = tick + 9;
   var fx = dirx(ship.h);
   var fy = diry(ship.h);
   shots.push({

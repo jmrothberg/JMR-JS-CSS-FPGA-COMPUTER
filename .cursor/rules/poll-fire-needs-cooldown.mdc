@@ -1,0 +1,56 @@
+---
+description: A title that polls held-fire every frame for hold-to-repeat must gate the fire handler with a frame-counter cooldown, or a single tap fires 2-3 shots.
+alwaysApply: true
+---
+
+# Poll-fire needs a cooldown (run-60 board fault)
+
+Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+Copy 1 (copy 2: [docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md) Input section).
+
+Board testing on run 60 found that a physical tap of the fire button fired
+2-3 bullets in `ASTEROID.HTML` and `MISSILE COMMAND` (1 bullet under heavy
+frame load). Root cause traced RTL-side, confirmed **not** an event bug:
+both titles poll the held-fire state every frame — required for
+hold-to-repeat, which must keep working — and a physical (or keyboard) tap
+stays "held" for ~40-80ms (I2C batch quantum + finger dwell), which
+quantizes to 2-3 polls at 60fps. It scales with frame rate, so it gets
+worse as sim speed increases. An RTL-side fix was rejected as too risky
+for hold-repeat semantics — the fix has to be content-side, in the fire
+handler.
+
+`setTimeout` is off the table (a per-call allocation), and a `dt`-based
+clock is a trap on this platform: there is no `performance.now`, so `dt`
+is usually a hardcoded per-call constant, not measured wall time — which
+makes a `state.t`-style cooldown a disguised call-counter that quietly
+re-couples to whatever the true poll rate turns out to be. Use a real
+integer frame counter instead.
+
+**Fix: gate the fire handler with a frame-counter cooldown — rate-limit
+only, never edge-gate, so hold-to-repeat still works.**
+
+```javascript
+// BAD — bare poll, no cooldown: a 40-80ms tap is 2-3 polls at 60fps
+function playerShoot() {
+  if (game.over || !game.active) return;
+  projectiles.push(makeShot());
+}
+
+// GOOD — INVFAST.HTML's playerShoot() pattern: frames-based, no
+// setTimeout, no allocation. N≈9 for ~150ms at 60fps.
+let canShootAt = 0;
+function playerShoot() {
+  if (game.over || !game.active) return;
+  if (frames < canShootAt) return;
+  canShootAt = frames + 9;
+  projectiles.push(makeShot());
+}
+```
+
+`storage/INVFAST.HTML`'s `playerShoot()` is the reference pattern.
+`storage/ASTEROID.HTML`'s `firePlayer()` and `storage/MISSILE.HTML`'s
+`fire()` both carry this gate as of the run-60 fix (`MISSILE.HTML` keeps
+its counter on the `state` object — that file's top-level IIFE scope is
+already at the 16-locals-per-function-scope RTL wall, so no new top-level
+`var` may be added there; see `functional_model/compiler.py`'s
+`_note_local`).

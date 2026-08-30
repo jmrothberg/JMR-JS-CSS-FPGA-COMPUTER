@@ -45,7 +45,7 @@ var state={
   waveMissilesTotal:0,waveMissilesSpawned:0,
   waveActive:false,waveBreakTimer:1.5,
   spawnTimer:0,spawnInterval:1.2,
-  lastFireTime:-1,fireCooldown:0.15,
+  frames:0,canShootAt:0,
   stars:[]
 };
 // 2026-08-28: one object instead of 6 top-level names — this IIFE's
@@ -143,7 +143,8 @@ function reset(){
   state.waveBreakTimer=1.5;
   state.spawnTimer=0;
   state.spawnInterval=1.2;
-  state.lastFireTime=-1;
+  state.frames=0;
+  state.canShootAt=0;
   makeStars();
 }
 function startWave(n){
@@ -181,9 +182,15 @@ function spawnEnemy(){
   });
 }
 function fire(){
+  // Board run-60: frame() always calls update(0.016) — dt is a hardcoded
+  // constant, not measured wall time, so a state.t-based cooldown is
+  // really a disguised call-counter that decouples from real elapsed
+  // time whenever the true poll rate changes. state.frames is a true
+  // integer per-call counter instead (INVFAST playerShoot() pattern:
+  // pure rate-limit, never an edge-gate, so hold-to-repeat still works).
   if(state.over) return;
-  if(state.lastFireTime>=0 && state.t-state.lastFireTime<state.fireCooldown) return;
-  state.lastFireTime=state.t;
+  if(state.frames<state.canShootAt) return;
+  state.canShootAt=state.frames+9;
   var sx=BASE_X,sy=BASE_Y;
   var tx=state.crosshair.x,ty=state.crosshair.y;
   var dx=tx-sx,dy=ty-sy;
@@ -210,6 +217,7 @@ function update(dt){
   if(held.r){ reset(); return; }
   j=playBits();
   state.t+=dt;
+  state.frames=state.frames+1;
   kx=(held.left||(j&4)?-1:0)+(held.right||(j&8)?1:0);
   ky=(held.up||(j&1)?-1:0)+(held.down||(j&2)?1:0);
   if(kx||ky){

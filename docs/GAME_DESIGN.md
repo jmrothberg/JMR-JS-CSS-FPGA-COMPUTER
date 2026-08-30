@@ -108,6 +108,19 @@ if you changed a title.
   synthesize Arrow/Space/Enter — still read `keyCode`. The stick’s four face
   buttons are only two bits: A + C + stick-click = FIRE1 (Space); B + D =
   FIRE2 (Enter). Map those to fire / start / jump — not four distinct actions.
+- **Poll-fire needs a cooldown** — tap duration quantizes to 1-3 frames
+  depending on frame rate. A physical (or keyboard) tap stays "held" for
+  ~40-80ms, which is 2-5 polls at 60fps and more as sim speed increases;
+  a title that polls the held-fire state every frame to support
+  hold-to-repeat will double- or triple-fire on a single tap unless the
+  fire handler gates itself. Use `INVFAST.HTML`'s `playerShoot()` as the
+  reference pattern: `if (frames < canShootAt) return; canShootAt =
+  frames + N;` (N≈9 for ~150ms at 60fps) — a frame-counter, not
+  `setTimeout` (per-call allocation) and not a `dt`-accumulated clock
+  (this platform has no `performance.now`, so a hardcoded per-call `dt`
+  is really a disguised call-counter that decouples from real elapsed
+  time if the true poll rate ever changes). The gate must only
+  rate-limit, never edge-gate, or hold-to-repeat breaks.
 
 ---
 
