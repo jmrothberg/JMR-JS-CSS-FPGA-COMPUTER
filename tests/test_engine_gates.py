@@ -433,5 +433,22 @@ def test_joy_concurrent_edges_none_lost():
         return after[0] - before[0], after[1] - before[1]
     assert run_dual() == (1, 1), "dual-path press must dedup to one"
     for _ in range(10): sim._rpc("FRAME")  # dedup window expires
+
+    # reverse arrival order (board run 59: race won synthetic-first when a
+    # press lands just before an I2C poll batch) — the mirror guard must
+    # swallow the REAL twin too.
+    def run_dual_rev():
+        before = counts()
+        sim._rpc("JOY 16")
+        sim._rpc("FRAME")
+        sim._rpc("KEYEVT 32 1")
+        sim._rpc("FRAME")
+        sim._rpc("JOY 0")
+        sim._rpc("KEYEVT 32 0")
+        for _ in range(4): sim._rpc("FRAME")
+        after = counts()
+        return after[0] - before[0], after[1] - before[1]
+    assert run_dual_rev() == (1, 1), "reverse-order dual press must dedup"
+    for _ in range(10): sim._rpc("FRAME")
     assert run([16, F, F, 0, F, F]) == (1, 1), "joy-only press after window"
     sim.shutdown()

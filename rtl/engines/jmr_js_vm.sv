@@ -1185,6 +1185,11 @@ module jmr_js_vm #(
     // same keyCode are swallowed for ~8 frames (both edges of the press).
     logic [7:0]  kev_dedup_code;
     logic [3:0]  kev_dedup_ctr;
+    // ...and the mirror (board run 59: still multi-fired — the race can
+    // arrive synthetic-first when a press lands just before an I2C poll
+    // batch; the one-directional guard only caught real-first ordering).
+    logic [7:0]  syn_dedup_code;
+    logic [3:0]  syn_dedup_ctr;
     logic [2:0]  kev_wp /*verilator public_flat_rd*/, kev_rp /*verilator public_flat_rd*/;
     logic [15:0] kev_fn; // handler for S_KEYEV (event alloc + env must be 2-cycle)
     logic [15:0] id_keys_name, id_pressed, id_kspace; // keys.a.pressed table
@@ -6280,13 +6285,20 @@ module jmr_js_vm #(
             if (state == S_FETCH_WAIT) vprom_done <= 1'b0;
             // NEW: capture raw host key events (any state; drained per frame)
             if (key_evt_stb && (kev_wp + 3'd1) != kev_rp) begin
-                kev_q[kev_wp] <= {key_evt_down, key_evt_code};
-                kev_src_joy[kev_wp] <= 1'b0;
-                if (key_evt_down) begin
-                    kev_dedup_code <= key_evt_code;
-                    kev_dedup_ctr <= 4'd8;
+                if (syn_dedup_ctr != 4'd0 &&
+                    key_evt_code == syn_dedup_code) begin
+                    // symmetric swallow: this press already arrived as a
+                    // SYNTHETIC joy edge (dual-interface pad, reverse
+                    // arrival order) — drop the real twin, both edges.
+                end else begin
+                    kev_q[kev_wp] <= {key_evt_down, key_evt_code};
+                    kev_src_joy[kev_wp] <= 1'b0;
+                    if (key_evt_down) begin
+                        kev_dedup_code <= key_evt_code;
+                        kev_dedup_ctr <= 4'd8;
+                    end
+                    kev_wp <= kev_wp + 3'd1;
                 end
-                kev_wp <= kev_wp + 3'd1;
                 // 2026-08-21 (DONKEY Mario->Luigi, second occurrence): the
                 // dispatch-time supersede only fires when the real event is
                 // ALREADY queued. An edge captured while vlistener_n was
@@ -6868,6 +6880,7 @@ module jmr_js_vm #(
                     dbg_stack_ovf <= 0; dbg_call_ovf <= 0;
                     machine_fault <= 1'b0; fault_code <= 8'd0;
                     kd_fn <= 16'hFFFF; ku_fn <= 16'hFFFF; click_fn <= 16'hFFFF;
+                    kev_dedup_ctr <= 4'd0; syn_dedup_ctr <= 4'd0;
                     kd_n <= 3'd0; ku_n <= 3'd0; kev_li <= 2'd0;
                     kd_slot[0] <= 16'hFFFF; kd_slot[1] <= 16'hFFFF;
                     kd_slot[2] <= 16'hFFFF; kd_slot[3] <= 16'hFFFF;
@@ -9126,6 +9139,8 @@ module jmr_js_vm #(
                         prev_joy <= joy_in;
                         if (kev_dedup_ctr != 4'd0)
                             kev_dedup_ctr <= kev_dedup_ctr - 4'd1;
+                        if (syn_dedup_ctr != 4'd0)
+                            syn_dedup_ctr <= syn_dedup_ctr - 4'd1;
                         // Per-frame callback marker. dbg_cb_ip was sticky
                         // (set at the first rAF call, cleared only at RUN),
                         // so the host FRAME rpc's "callback done" break
@@ -9200,7 +9215,14 @@ module jmr_js_vm #(
                                 kev_src_joy[kev_wp] <= 1'b1;
                                 kev_wp <= kev_wp + 3'd1;
                                 if (is_up) joy_up_edge[ki]   <= 1'b0;
-                                else       joy_down_edge[ki] <= 1'b0;
+                                else begin
+                                    joy_down_edge[ki] <= 1'b0;
+                                    // arm the mirror: a real twin arriving
+                                    // AFTER this synthetic press gets
+                                    // swallowed by the branch above.
+                                    syn_dedup_code <= kcode;
+                                    syn_dedup_ctr <= 4'd8;
+                                end
                             end
                         end else
                         if (kev_rp != kev_wp) begin
