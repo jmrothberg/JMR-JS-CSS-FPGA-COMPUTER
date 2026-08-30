@@ -8,11 +8,22 @@ alwaysApply: true
 Words: [README.md — Words used](../../README.md#words-used-in-this-project).
 Copy 1 (copy 2: [docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md) FAST rule 6).
 
+> ⚠️ **Status 2026-08-29: mitigation, not a proven fix.** This fixed
+> the invader-kill site (board-confirmed) but did **not** fix the
+> saucer-kill site despite the identical shape — same fault, still
+> reproduces. So "calls then splice" isn't the whole mechanism; leading
+> theory is a slow cross-frame leak an early kill survives and a kill
+> late in a long session (saucer needs ~720 frames) doesn't. Apply this
+> pattern anyway (it's free and it did fix one real site), but don't
+> treat a title as safe just because it follows the rule — if a kill
+> still freezes after converting it, report it, don't assume a second
+> bug. RTL side is instrumenting the actual pool now.
+
 INVFAST froze on the board — **only** on a hit, never a miss, 100%
-repeatable — the instant a bullet actually killed an alien, hit the
-saucer, or a power-up was collected. Fault 3, `obj=`/`arr=`/`envl=`
-completely flat right up to the exact frame it happens. **Does not
-reproduce in Chrome** — a machine-specific wall, not a JS bug.
+repeatable — the instant a bullet actually killed an alien. Fault 3,
+`obj=`/`arr=`/`envl=` completely flat right up to the exact frame it
+happens. **Does not reproduce in Chrome** — a machine-specific wall,
+not a JS bug.
 
 Every broken site had the same shape: several calls (score, particle
 effect, state flip), **then** `.splice()`, all synchronous, often
@@ -54,5 +65,10 @@ function sweepInvaders(list) {
 `sweepGridInvaders` / `sweepProjectiles` / `sweepInvaderProjectiles` /
 `sweepPowerUps` are the reference pattern. A **bare** removal with no
 score/effect call before it (offscreen cull, plain bounds check) never
-froze — splice directly there. The wall is "several calls, then
-remove," not array removal itself.
+froze — splice directly there.
+
+Do not read this rule as "convert every kill site and the title is
+safe." It fixed one real site and left a second, identically-shaped
+site still broken — the underlying wall is a machine resource that
+isn't fully understood yet, not a pattern you can code around with
+certainty. Apply the pattern (it's free), then verify on hardware.

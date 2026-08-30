@@ -467,12 +467,26 @@ difference between `fault 3` and a playable board.
 **6. Never splice an array in the same synchronous burst as a
 score/effect/state-change call. Mark it dead; sweep once, after.**
 
+> ⚠️ **Status 2026-08-29: mitigation, not a proven fix.** Applying this
+> to the invader-kill path fixed it, board-confirmed. Applying the
+> *identical* shape to the saucer-kill path did **not** fix it — same
+> fault, still reproduces. So "several calls then splice, synchronous"
+> is not the whole mechanism; the leading theory now is a slow, cross-
+> frame resource leak (something not fully reclaimed run over run) that
+> an early kill can survive and a kill late in a long session (the
+> saucer only appears after ~720 frames) cannot. RTL side is
+> instrumenting this now. Apply the pattern below anyway — it is free
+> and it did fix one real site — but do **not** treat a title as safe
+> just because it follows this rule. If a kill event still freezes
+> after converting it, that is expected until the underlying pool is
+> found; report it, don't assume a second content bug.
+
 INVFAST froze on the board — **only** on a hit, never on a miss, 100%
-repeatable — the instant a bullet actually killed an alien, hit the
-saucer, or a power-up was collected. Fault 3, heap counters (`obj=`,
-`arr=`, `envl=`) completely flat right up to the exact frame it happens.
-**It does not reproduce in Chrome** — this is a machine-specific wall,
-not a JS bug; testing in a browser will not catch it.
+repeatable — the instant a bullet actually killed an alien. Fault 3,
+heap counters (`obj=`, `arr=`, `envl=`) completely flat right up to the
+exact frame it happens. **It does not reproduce in Chrome** — this is a
+machine-specific wall, not a JS bug; testing in a browser will not
+catch it.
 
 The shape every broken site shared:
 
@@ -515,9 +529,12 @@ function sweepInvaders(list) {
 ```
 
 Same O(n) cost as the splice it replaces — this is not a speed
-trade-off, it is free. `storage/INVFAST.HTML`'s
-`updateInvaderCollision`/`sweepGridInvaders`/`sweepProjectiles`/
-`sweepInvaderProjectiles`/`sweepPowerUps` are the reference pattern.
+trade-off, it is free, and it did fix the invader-kill site. It did
+**not** fix the saucer-kill site despite the identical shape — apply
+the pattern for the free win, but treat the underlying wall as
+unresolved. `storage/INVFAST.HTML`'s `updateInvaderCollision`/
+`sweepGridInvaders`/`sweepProjectiles`/`sweepInvaderProjectiles`/
+`sweepPowerUps` are the reference pattern.
 
 **Rules:**
 - Any array holding game entities that can be "killed" (invaders,
