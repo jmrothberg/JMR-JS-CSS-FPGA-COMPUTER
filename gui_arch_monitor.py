@@ -1511,9 +1511,20 @@ class ArchitectureView:
         fclk = self._g("fclk", "")
         fclk_s = f"  fclk {fclk}" if fclk not in ("", "—") else ""
         if self._faulted():
+            # F-line forensics (run 60+): name the failing allocator and its
+            # at-fault pool counts right on the main window — the headline
+            # fact should not require opening an inspector.
+            forensic = ""
+            if "board_fault_kind_name" in self._snap:
+                forensic = (
+                    f" [{self._g('board_fault_kind_name')} alloc — pools "
+                    f"env {self._g('board_fault_env')} "
+                    f"arr {self._g('board_fault_arr')} "
+                    f"obj {self._g('board_fault_obj')}]"
+                )
             heat_src = (
                 f"FAULT {self._g('fault')} at IP {_dash(ip)} "
-                f"(L{self._g('src_line')}) — click REGISTERS"
+                f"(L{self._g('src_line')}){forensic} — click REGISTERS"
             )
         elif self._snap.get("board_coarse"):
             heat_src = "heat: coarse (BOARD tether — no VMSTAT)"

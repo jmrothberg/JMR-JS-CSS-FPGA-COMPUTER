@@ -123,7 +123,10 @@ line returns `None` and is ignored, never raised.
 >
 > Reading `overflow: heap —` as "heap is fine" is a wrong conclusion the panel
 > invites. Those fields exist for PYTHON and FPGA-SIM, where the whole VM is
-> visible. The board sends three numbers.
+> visible. The V-line itself is three numbers — run 60+ bits add the H/F/T
+> lines below, which fill in live pool counts and fault forensics, but every
+> field NOT carried by one of those four line types still renders `—` on
+> BOARD, and it still means "not transmitted".
 
 Fault codes (`fault_code` in `rtl/engines/jmr_js_vm.sv`):
 
@@ -166,6 +169,44 @@ already ran, and the pool counts show what was actually full. The
 T-line shows the real approach path instead of one in-flight ip.
 The H-line makes slow pool growth (the INVFAST grids-leak class)
 visible as a stair-step long before any fault.
+
+**First hardware capture (2026-08-30, INVFAST saucer kill):** one F/T
+pair named a bug three days of theory-testing hadn't — `kind=env` with
+4/384 slots live (allocator refused a ~99 %-empty pool, no GC retry),
+and the T-line walked the entire `Saucer.points()` body to the
+`CALL_METHOD` return seam. Two reading notes from that capture:
+**jump-class ops do not commit T-line entries** (the body's `JUMP` was
+absent from the trail), and the newest trail entry can be the op
+*after* the fault ip — the fault latches mid-op while the ring has
+already committed the successor.
+
+### Where the run-60 telemetry appears in the GUI
+
+**Main window — no clicks needed:**
+- **OBJECT/HEAP** core block and **HEAP STATS** block captions show
+  live `obj` / `arr` / `env` counts (H-line). Before run 60 these were
+  `—` on BOARD.
+- The bottom status line on a fault names the failing allocator and
+  the at-fault pools inline:
+  `FAULT 3 at IP 1531 (L—) [env alloc — pools env 4 arr 21 obj 689] — click REGISTERS`.
+- The **Keyboard** connector block blinks on every real keystroke
+  (see Traps below — GUI keys on all runtimes, tether K-lines on
+  BOARD).
+
+**Inspectors (click a block):**
+- **REGISTERS** or **1 PROGRAM SEQUENCER** → the `!! FAULT` block adds
+  "BOARD run-60+ fault forensics (F-line)" (kind / retried / state /
+  vcsp / vsp / pools) and "BOARD approach path (T-line, newest
+  first)" — the last 8 committed ips.
+- **OBJECT/HEAP** or **HEAP STATS** → live `obj n/960`-style capacity
+  rows (H-line). Slot peeks still say "(not available on BOARD)" —
+  counts are transmitted, contents are not.
+
+**Flight log (`traces/session_*_BOARD.log`):** every parsed line
+leaves a note — `VM st=… fault=… ip=…`, `FAULT kind=… pools…`,
+`TRAIL <8 hex ips>`, `KEY DOWN/UP … repeat=…` — so a session is
+reconstructable after the fact and a held-key storm can be lined up
+against a fault by timestamp.
 
 ### The D-line — storage stall telemetry
 
@@ -228,9 +269,11 @@ from its silence is worthless. That single check would have saved most of
 
 ### What BOARD still cannot do
 
-No `VMSTAT`, no heap/object peeks, no IP ring, no per-state profile. The board
-reports *that* it stopped, its state, and *where* — not *why*. Anything needing
-`vobj_next`, `vfree_ok`, or the object pool must be reproduced in **FPGA-SIM**;
+No `VMSTAT`, no heap/object slot peeks (counts yes — H-line; contents no), no
+per-state profile, no live executed-IP replay (the T-line ring is 8 entries,
+latched only at fault). Run 60 moved "why" a long way onto the board — the
+F-line names the allocator and shows the pools — but anything needing slot
+*contents*, `vobj_next`, or `vfree_ok` must still be reproduced in **FPGA-SIM**;
 `functional_model/machine.py` has no object pool and no fault handling at all,
 so PYTHON cannot reproduce a capacity fault by construction.
 
