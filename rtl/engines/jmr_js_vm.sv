@@ -6381,9 +6381,17 @@ module jmr_js_vm #(
                 // ENQUEUE too: any real key traffic invalidates captured
                 // KEYBITS edges and re-baselines prev_joy, so only a real
                 // joystick (KEYBITS with no KEYEVT twin) ever converts.
-                joy_down_edge <= 6'd0;
-                joy_up_edge <= 6'd0;
-                prev_joy <= joy_in;
+                // run-60 scope fix (gate caught it: reverse-order keyup
+                // vanished): a SWALLOWED twin must not supersede — in
+                // reverse arrival the synthetic edges are the authoritative
+                // delivery; wiping/rebaselining here erased the pending
+                // synthetic keyup before its capture.
+                if (!(syn_dedup_ctr != 4'd0 &&
+                      key_evt_code == syn_dedup_code)) begin
+                    joy_down_edge <= 6'd0;
+                    joy_up_edge <= 6'd0;
+                    prev_joy <= joy_in;
+                end
             end
             // EXEC scalar we is not an else-if vs unique case: leave_hold
             // must still enter ALLOC/RECT/BIND (casestate). Apply we here.
