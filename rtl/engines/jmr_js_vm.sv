@@ -2266,7 +2266,22 @@ module jmr_js_vm #(
         name_hash_wdata <= data;
     endtask
     // Remember a FIND hit/alloc in slot 0 (shift). Skip if id already cached.
+    /* run-61 FIND bucket: a PURE CACHE of the linear walk's answer.
+       Direct-mapped 1024 x {gen8, id16} by hash[9:0], generation-tagged so
+       name-table resets/recycles invalidate in O(1). A hit yields ONE
+       candidate that the EXISTING jn_cache_try confirm verifies (hash+len
+       via Port A); any miss/stale/collision falls back to the linear walk
+       and the remember hook re-inserts the winner. Wrong contents can only
+       cost cycles, never correctness. PACMAN measured JOIN_FIND at 14%
+       post-run-58; dynamic per-cell keys defeat the 4-way FF cache. */
+    (* ram_style = "block" *) logic [23:0] jn_bucket [0:1023];
+    logic [7:0]  jn_bucket_gen;
+    logic [23:0] jn_bucket_rdata;
+    logic        jn_bucket_tried;
+    logic [15:0] jn_btry /*verilator public_flat_rd*/; // 5th-way fires
+    logic [15:0] jn_bmiss /*verilator public_flat_rd*/; // bucket candidates that failed confirm
     task automatic jn_cache_remember(input logic [15:0] id);
+        jn_bucket[jn_h[9:0]] <= {jn_bucket_gen, id};
         if ((jn_hit_v[0] && jn_hit_i0 == id) ||
             (jn_hit_v[1] && jn_hit_i1 == id) ||
             (jn_hit_v[2] && jn_hit_i2 == id) ||
@@ -3802,6 +3817,13 @@ module jmr_js_vm #(
     logic [63:0] e64_vframe_ctor_wdata;
     logic e64_p_clr_busy;
     logic e64_leave_hold /*verilator public_flat_rd*/;
+    /* run-61 skip guard: after ANY parent-flow excursion, the next op must
+       take the REAL fetch-wait (its dispatch arm carries return
+       bookkeeping). Armed from the PARENT's muxed state — the only vantage
+       that sees excursions (exec64's internal state stays parked in EXEC
+       through them; both exec64-side provenance schemes were blind).
+       Cleared only by the fetch-wait dispatch arm itself. */
+    logic pf_post_parent /*verilator public_flat_rd*/;
     logic e64_vraf_we;
     logic [2:0] e64_vraf_waddr;
     logic [63:0] e64_vraf_wdata;
@@ -3826,7 +3848,12 @@ module jmr_js_vm #(
            scan is armed — their between-op work lives in the fetch
            boundary the skip retires (class micro-test: fault 1 on the
            FIRST ctor skip). forEach is gated exec64-side (vfe_mode). */
-        .p_pf_block((vctor_lets != 6'd0) || (vctor_jmp != 16'hFFFF)),
+        /* vctor_jmp's idle is FFFF only after a console RUN init —
+           PROGSTART-launched programs left it at power-on 0, sticking
+           this gate TRUE forever (cascade probes: 55 eligible ends,
+           !p_pf_block=0 in a class-free micro). vctor_lets!=0 alone is
+           the real ctor-scan-active condition. */
+        .p_pf_block(pf_post_parent || (vctor_lets != 6'd0)),
         .hs_m_state(hs_m_state),
         .hs_m_vsp(hs_m_vsp),
         .hs_m_hp_cmd(hs_m_hp_cmd),
@@ -5715,6 +5742,12 @@ module jmr_js_vm #(
                 ((casestate_q == S_TXT_LD) || (state == S_TXT_LD)) ?
                     txt_val[9:0] : e32_intern_tos];
             e32_name_has_nos <= name_has[e32_intern_nos];
+            jn_bucket_rdata <= jn_bucket[
+                // pre-warm during CONCAT: jn_h updates at the handoff beat,
+                // and the 5th way fires the very next beat — presenting the
+                // concat's final hash here has the row ready in time.
+                (casestate_q == S_CONCAT || state == S_CONCAT)
+                    ? cc_h[9:0] : jn_h[9:0]];
             e32_name_len_tos <= name_len_tbl[
                 ((casestate_q == S_JOIN_FIND) || (state == S_JOIN_FIND)) ?
                     (jn_rd_arm ? 10'(jn_i[9:0] + 10'd1) : jn_i[9:0]) : // FIND stream (see name_hash_raddr)
@@ -6320,6 +6353,10 @@ module jmr_js_vm #(
             end
             kd_fn <= kd_slot[0];
             ku_fn <= ku_slot[0];
+            // run-61 skip guard set (clear lives in the FETCH_WAIT dispatch
+            // arm below — same ff, single driver)
+            if (state != S_V64_EXEC && state != S_FETCH_WAIT)
+                pf_post_parent <= 1'b1;
             if (fb_swap || ((state == S_V64_EXEC) && e64_fb_swap_q))
                 dbg_swap_n <= dbg_swap_n + 16'd1; // NEW: present count
             // Exec nid 3 (swapBuffers) only set e64_fb_swap_q; dbg counted
@@ -7021,6 +7058,7 @@ module jmr_js_vm #(
                     id_str_function <= 16'hFFFF;
                     id_join <= 16'hFFFF; id_indexof <= 16'hFFFF; id_replace <= 16'hFFFF;
                     names_n <= 16'd0; dbg_join_miss <= 16'd0; dbg_pdo_n <= 5'd0;
+                    jn_bucket_gen <= jn_bucket_gen + 8'd1; // O(1) bucket flush
                     jn_hit_v <= 4'd0; jn_cache_try <= 1'b0; jn_cache_i <= 3'd0;
                     v64_concat <= 1'b0;
                     v64_join <= 1'b0;
@@ -7740,9 +7778,10 @@ module jmr_js_vm #(
                         // NEW: pending SET_PROP array deep copy runs between ops
                         dc_arm <= 1'b0;
                         hs_st(S_ARR_DCOPY);
-                    end else if (v64_on)
+                    end else if (v64_on) begin
                         hs_st(S_V64_EXEC);
-                    else
+                        pf_post_parent <= 1'b0; // excursion serviced
+                    end else
                         hs_st(S_EXEC);
                 end
 
@@ -8515,6 +8554,7 @@ module jmr_js_vm #(
                         hs_st(S_JOIN_FIND);
                         jn_cache_i <= 3'd0;
                         jn_cache_try <= 1'b0;
+                        jn_bucket_tried <= 1'b0;
                     end else if (jn_cache_i < 3'd4 && !jn_cache_try) begin
                         // Next live cache slot, else linear from 0.
                         // Hash/len are FFs (not intern SRAM). Skip slots that
@@ -8541,6 +8581,17 @@ module jmr_js_vm #(
                             jn_hit_h3 == jn_h && jn_hit_l3 == jn_len) begin
                             jn_i <= jn_hit_i3;
                             jn_cache_i <= 3'd3;
+                            jn_cache_try <= 1'b1;
+                            jn_rd_arm <= 1'b0;
+                        end else if (!jn_bucket_tried &&
+                                     jn_bucket_rdata[23:16] == jn_bucket_gen &&
+                                     jn_bucket_rdata[15:0] < names_n) begin
+                            // 5th way: the bucket's candidate, confirmed by
+                            // the same Port-A compare as the FF ways.
+                            jn_bucket_tried <= 1'b1;
+                            jn_btry <= jn_btry + 16'd1;
+                            jn_i <= jn_bucket_rdata[15:0];
+                            jn_cache_i <= 3'd3; // miss falls to linear next
                             jn_cache_try <= 1'b1;
                             jn_rd_arm <= 1'b0;
                         end else begin
@@ -8570,6 +8621,7 @@ module jmr_js_vm #(
                         hs_st(S_FETCH_WAIT);
                     end else if (jn_cache_try) begin
                         // Cached id missed — next slot, or linear from 0.
+                        if (jn_bucket_tried) jn_bmiss <= jn_bmiss + 16'd1;
                         jn_cache_try <= 1'b0;
                         jn_rd_arm <= 1'b0;
                         if (jn_cache_i >= 3'd3) begin
@@ -8602,6 +8654,7 @@ module jmr_js_vm #(
                             if (names_n + 16'd1 >= 16'd1024 &&
                                 names_static != 16'd0) begin
                                 names_n <= names_static;
+                                jn_bucket_gen <= jn_bucket_gen + 8'd1; // ring recycle: flush bucket
                                 nb_wp <= nb_static;
                             end else
                             names_n <= names_n + 16'd1;
@@ -8709,6 +8762,8 @@ module jmr_js_vm #(
                                     jn_len <= cc_len + e32_name_len_tos;
                                     jn_i <= 16'd0;
                                     jn_rd_arm <= 1'b0;
+                                    jn_cache_i <= 3'd0; jn_cache_try <= 1'b0;
+                                    jn_bucket_tried <= 1'b0; // arm caches (concat handoff)
                                     hs_st(S_JOIN_FIND);
                                 end else cc_second <= 1'b1;
                             end
@@ -8771,6 +8826,8 @@ module jmr_js_vm #(
                                     jn_h <= 16'(32'(cc_h) * 32'd31 + 32'd48 + 32'(cc_d));
                                     jn_len <= cc_len + 8'd1;
                                     jn_i <= 16'd0;
+                                    jn_cache_i <= 3'd0; jn_cache_try <= 1'b0;
+                                    jn_bucket_tried <= 1'b0;
                                     hs_st(S_JOIN_FIND);
                                 end else cc_second <= 1'b1;
                             end else cc_pi <= cc_pi - 4'd1;
@@ -8783,6 +8840,8 @@ module jmr_js_vm #(
                             if (cc_second) begin
                                 jn_h <= cc_h; jn_len <= cc_len; // folded already
                                 jn_i <= 16'd0;
+                                jn_cache_i <= 3'd0; jn_cache_try <= 1'b0;
+                                jn_bucket_tried <= 1'b0;
                                 hs_st(S_JOIN_FIND);
                             end else cc_second <= 1'b1;
                         end else if (name_rdaddr == cc_cp) begin
@@ -11843,8 +11902,11 @@ module jmr_js_vm #(
                         hs_st(S_V64_GC_POP);
                 end
                 S_V64_GC_ARR: begin
-                    /* run-58 GC accel, piece 2: STREAM the walk (arms held,
-                       2-beat cadence; see run-58 notes). */
+                    /* run-58 streamed walk (arms held, 2-beat cadence).
+                       NOTE run-61: the 1-beat variant was tried and has a
+                       pend-stall hazard — the data lag collapses during the
+                       mark service and a slot's mark gets skipped (live
+                       object swept). Keep 2-beat unless made stall-aware. */
                     if (!vgc_rd_arm)
                         vgc_rd_arm <= 1'b1;
                     else if (!jn_slot_arm) begin

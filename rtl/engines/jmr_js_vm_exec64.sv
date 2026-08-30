@@ -820,6 +820,7 @@ module jmr_js_vm_exec64 (
     logic [31:0] opw_q /*verilator public_flat_rd*/;
     logic        opw_cap_n; // piece 1: central-skip capture pulse (comb)
     logic [31:0] dbg_pf_n /*verilator public_flat_rd*/; // skips taken
+    logic [15:0] dbg_pf_last_ip /*verilator public_flat_rd*/; // ip of last skip (the op skipped INTO)
     logic        dbg_pfa_c, dbg_pfb_c, dbg_pfc_c; // cascade probes (comb)
     logic [14:0] pf_addr_s; // probe copy
     logic [31:0] dbg_pfa /*verilator public_flat_rd*/;
@@ -830,8 +831,17 @@ module jmr_js_vm_exec64 (
     logic [15:0] dbg_pf_mask /*verilator public_flat_rd*/;
     logic [15:0] dbg_pf_want2 /*verilator public_flat_rd*/;
     logic        pf_ok; // port-streams-ip+1 provenance (see mirror + skip)
+    logic        post_parent_q; // one-shot: first op after a PARENT-flow
+                                // return must take the real fetch-wait (its
+                                // beat carries ctor/heap return bookkeeping
+                                // — pflip=10 forensics: the skip right after
+                                // NEW_OBJ's return underflowed the stack 2
+                                // ops later).
     always_ff @(posedge clk) begin
-        if (enable && opw_cap_n) dbg_pf_n <= dbg_pf_n + 32'd1;
+        if (enable && opw_cap_n) begin
+            dbg_pf_n <= dbg_pf_n + 32'd1;
+            dbg_pf_last_ip <= ip_n;
+        end
         if (enable && dbg_pfa_c) dbg_pfa <= dbg_pfa + 32'd1;
         if (enable && dbg_pfb_c) dbg_pfb <= dbg_pfb + 32'd1;
         if (enable && dbg_pfb_c && dbg_pf_want == 16'd0) begin
@@ -2346,6 +2356,9 @@ module jmr_js_vm_exec64 (
                 leave_hold <= (state_n != S_V64_EXEC);
                 if (state_n != S_V64_EXEC || leave_hold) pf_ok <= 1'b0;
                 else if (opw_cap_n) pf_ok <= 1'b1;
+                // consume the post-parent one-shot at the first op-end
+                if (state == S_V64_EXEC && state_n == S_FETCH_WAIT)
+                    post_parent_q <= 1'b0;
         end else begin
             leave_hold <= 1'b0;
                 // potential-bugs #66: parent vtimer_n is truth (see the
@@ -2374,6 +2387,7 @@ module jmr_js_vm_exec64 (
                 if (hs_m_code) code_raddr <= p_code_raddr;
                 if (hs_m_state) begin
                     state <= p_state;
+                    if (p_state == S_V64_EXEC) post_parent_q <= 1'b1;
                     /* pf_ok: TRUE only for the EXEC entry that came from
                        the parent's S_FETCH_WAIT dispatch — the one path
                        whose handover makes the code port stream ip+1
@@ -7722,9 +7736,14 @@ module jmr_js_vm_exec64 (
                (caught by a digit-identical fclk on the first live test). */
             pf_addr = hs_m_code ? p_code_raddr : code_raddr;
             pf_addr_s = pf_addr;
-            dbg_pfa_c = (state == S_V64_EXEC && state_n == S_FETCH_WAIT);
-            dbg_pfb_c = dbg_pfa_c && ip_n == 16'(ip + 16'd1);
-            dbg_pfc_c = dbg_pfb_c && (code_raddr == 15'(ops_base + ip_n));
+            dbg_pfa_c = (state == S_V64_EXEC && state_n == S_FETCH_WAIT) &&
+                        ip_n == 16'(ip + 16'd1) &&
+                        (code_raddr == 15'(ops_base + ip_n));
+            dbg_pfb_c = dbg_pfa_c && post_parent_q; // blocked-by-oneshot count
+            dbg_pfc_c = dbg_pfa_c && vfe_mode == 2'd0 &&
+                        !((code_rdata[7:0] == OP_LOAD_VAR) &&
+                          ((vvars_we   && vvars_waddr[8:0]   == code_rdata[16:8]) ||
+                           (vvars_we_q && vvars_waddr_q[8:0] == code_rdata[16:8])));
         /* (cascade probes, DONKEY in-game: pfa=170k op-ends, pfb=0 —
            most single-beat ops end via a common tail that never touches
            code_raddr_n, so equality against the prefetch could never
@@ -7733,6 +7752,13 @@ module jmr_js_vm_exec64 (
            redirects the code port with ip_n==ip+1 is excluded by the
            code_raddr_n clause.) */
         if (state == S_V64_EXEC && state_n == S_FETCH_WAIT &&
+            opw[7:0] != OP_LET_VAR && // ctor_after_let keys on LET_VAR ends:
+                                      // its redirect rides the fetch path we
+                                      // bypass (pflip=10 forensics: the skip
+                                      // FROM the post-ctor LET_VAR faulted;
+                                      // every provenance scheme was blind to
+                                      // it). Prologue-only cost.
+            !post_parent_q &&
             !p_pf_block && vfe_mode == 2'd0 &&
             opnd_q && opnd2_q &&
             ip_n == 16'(ip + 16'd1) &&

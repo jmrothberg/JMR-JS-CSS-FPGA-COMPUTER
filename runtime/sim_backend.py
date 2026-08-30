@@ -30,7 +30,10 @@ from runtime.backend import (
 from runtime.flight_log import FlightLog
 
 SIM_DIR = ROOT / "sim"
-_SYNTH = SIM_DIR / "sim_build_synth" / "jmr_js_sim_server"
+# JMR_SIM_BUILD: pick an alternate build dir (A/B binaries, e.g. the
+# JMR_PF_SKIP experimental build in sim_build_pf) without touching the
+# default. The suite and GUI keep using sim_build_synth.
+_SYNTH = SIM_DIR / os.environ.get("JMR_SIM_BUILD", "sim_build_synth") / "jmr_js_sim_server"
 _HOST_PY = SIM_DIR / "host_sim_server.py"
 
 # Observer-only probes. The sim answers an unrecognised verb with plain "ERR"
