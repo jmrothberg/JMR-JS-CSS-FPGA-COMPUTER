@@ -758,6 +758,31 @@ route and an 80-minute clean one.
 
 ---
 
+## Runs 58/59 — the console parse family retired for good (2026-08-29 evening)
+
+Run 58 (joy VM edge fix + GC/FIND accel): WNS -0.261, TNS -0.261 — ONE
+path, `cons line_len -> reply_idx/R` через the C_PF2 filename parse:
+`line[line_len-1]` is a 128:1 char mux evaluated inside the reply
+steering. Two placement horses (Default -0.040, AltSpreadLogic_high
+-0.085) narrowed but could not close a mux that size.
+
+Run 59 (dual-path keydown dedup + PHY v3c + the line_tail_q hoist +
+PF-skip machinery dormant behind JMR_PF_SKIP): **WNS +0.034 CLEAN**.
+The hoist moved the char mux into the registered predicate block
+(line_len is >=2 beats stable there — the same contract as every
+p_*_q). That is the THIRD console-parse cone to fail a run (p_empty_q,
+p_len4_q, line_tail_q) — the family is now fully registered; nothing
+raw remains between line_len/line[] and dispatch or reply logic.
+
+Bit: build/bits/run59_dedup_cons-tail_v3c_div7_WNS+0.034.bit — boots
+R59. Board acceptance: single-shot fire per press (the dual-interface
+pad dedup), joystick v3c, DIR, display. NOTE: the INVFAST saucer fault
+is NOT expected to change on 59 (keyboard-input bug, prime suspect =
+grids-leak object exhaustion, MAX_OBJ 960 — see the plan's open-debt
+entry; H-line telemetry queued for run 60 makes it visible live).
+
+---
+
 ## Related
 
 - [FPGA_FIT.md](FPGA_FIT.md) — caps, NEVER table, live scoreboard
