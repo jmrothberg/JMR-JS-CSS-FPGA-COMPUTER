@@ -464,6 +464,76 @@ A *single frame* of it eats half the headroom. The replacement
 they write into `_gs` / `_eh` and one reused number queue. That is the
 difference between `fault 3` and a playable board.
 
+**6. Never splice an array in the same synchronous burst as a
+score/effect/state-change call. Mark it dead; sweep once, after.**
+
+INVFAST froze on the board — **only** on a hit, never on a miss, 100%
+repeatable — the instant a bullet actually killed an alien, hit the
+saucer, or a power-up was collected. Fault 3, heap counters (`obj=`,
+`arr=`, `envl=`) completely flat right up to the exact frame it happens.
+**It does not reproduce in Chrome** — this is a machine-specific wall,
+not a JS bug; testing in a browser will not catch it.
+
+The shape every broken site shared:
+
+```javascript
+// WRONG — several calls, THEN splice, all in one synchronous pass
+bumpScore(invader.points());
+createParticles(invader, "#BAA0DE");
+invaders.splice(i, 1);
+projectiles.splice(j, 1);
+```
+
+The *original*, never-rewritten `INVADERS.HTML` never hit this: it
+wrapped its entire kill (score, particles, splice) in
+`setTimeout(() => {...})`, which by construction only ever runs after
+that frame's loops have fully finished — never nested inside them. The
+FAST rewrite correctly removed `setTimeout` (rule elsewhere: it is a
+per-call allocation) but made the splice synchronous instead, so a kill
+now runs several function calls deep, mid-iteration, over the very
+arrays it's mutating. Whatever pool that pressures (under RTL
+investigation — see `docs/TIMING_WALL.md`/ledger; the leading theory is
+the per-call environment pool, exhausted faster than sweep reclaims it)
+is a real, load-bearing limit, and the old code never exercised it by
+accident.
+
+**The fix — mark-and-sweep, not deferred-and-slow:**
+
+```javascript
+// RIGHT — mark now (cheap, no allocation); one array-length pass later
+invader.dead = true;
+bullet.dead = true;
+// ... later, once, after this array's iteration is fully done:
+function sweepInvaders(list) {
+  var i, w;
+  w = 0;
+  for (i = 0; i < list.length; i++) {
+    if (!list[i].dead) { list[w] = list[i]; w = w + 1; }
+  }
+  list.length = w;
+}
+```
+
+Same O(n) cost as the splice it replaces — this is not a speed
+trade-off, it is free. `storage/INVFAST.HTML`'s
+`updateInvaderCollision`/`sweepGridInvaders`/`sweepProjectiles`/
+`sweepInvaderProjectiles`/`sweepPowerUps` are the reference pattern.
+
+**Rules:**
+- Any array holding game entities that can be "killed" (invaders,
+  projectiles, power-ups, particles-with-effects) gets a `.dead`
+  (or `.alive`) flag set in its constructor.
+- On a kill: run the score/effect/state calls, then set the flag. Do
+  **not** call `.splice()` in the same statement block.
+- Compact with a plain index-rebuilding loop (shown above) called
+  **once**, after the loop that was iterating/checking hits is
+  completely finished — never from inside a nested helper that's still
+  mid-iteration one or two calls up the stack.
+- A **bare** removal with no score/effect call before it (an offscreen
+  cull, a simple bounds check) is fine to splice directly — it never
+  froze. The wall is specifically "several calls, then remove," not
+  array removal itself.
+
 ### Never gate drawing on an `Image` object's properties
 
 ```javascript

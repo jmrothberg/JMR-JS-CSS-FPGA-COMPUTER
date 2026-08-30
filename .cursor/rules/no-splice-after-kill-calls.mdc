@@ -1,0 +1,58 @@
+---
+description: Never splice an array in the same synchronous burst as a score/effect call. Mark dead, sweep once, after.
+alwaysApply: true
+---
+
+# No splice after kill-calls (#invfast-fault3)
+
+Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+Copy 1 (copy 2: [docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md) FAST rule 6).
+
+INVFAST froze on the board — **only** on a hit, never a miss, 100%
+repeatable — the instant a bullet actually killed an alien, hit the
+saucer, or a power-up was collected. Fault 3, `obj=`/`arr=`/`envl=`
+completely flat right up to the exact frame it happens. **Does not
+reproduce in Chrome** — a machine-specific wall, not a JS bug.
+
+Every broken site had the same shape: several calls (score, particle
+effect, state flip), **then** `.splice()`, all synchronous, often
+nested a call or two deep. The never-rewritten `INVADERS.HTML` avoided
+this by accident — it deferred the whole kill into
+`setTimeout(() => {...})`, which only ever runs after that frame's
+loops are fully finished, never nested inside them. The FAST rewrite
+correctly dropped `setTimeout` (a per-call allocation) but made the
+splice synchronous instead, landing it mid-iteration over the arrays
+it mutates. Whatever pool that pressures is a real limit (RTL side is
+chasing the mechanism — leading theory: the per-call environment pool,
+exhausted faster than sweep reclaims it); the old code just never
+exercised it.
+
+**Fix: mark dead now, sweep once later — same O(n) cost, not slower.**
+
+```javascript
+// BAD — calls then splice, synchronous, mid-iteration (board fault 3)
+bumpScore(invader.points());
+createParticles(invader, "#BAA0DE");
+invaders.splice(i, 1);
+projectiles.splice(j, 1);
+
+// GOOD — mark now (free), sweep once after this loop is fully done
+invader.dead = true;
+bullet.dead = true;
+// ...
+function sweepInvaders(list) {
+  var i, w;
+  w = 0;
+  for (i = 0; i < list.length; i++) {
+    if (!list[i].dead) { list[w] = list[i]; w = w + 1; }
+  }
+  list.length = w;
+}
+```
+
+`storage/INVFAST.HTML`'s `updateInvaderCollision` /
+`sweepGridInvaders` / `sweepProjectiles` / `sweepInvaderProjectiles` /
+`sweepPowerUps` are the reference pattern. A **bare** removal with no
+score/effect call before it (offscreen cull, plain bounds check) never
+froze — splice directly there. The wall is "several calls, then
+remove," not array removal itself.
