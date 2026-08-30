@@ -137,6 +137,7 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 	# and the default build ran ~600k clocks/s, which made a title boot
 	# longer than a debugging cycle should ever be.
 	verilator -cc -exe -build -j 0 \
+		$(if $(JMR_SIM_DEFINES),$(patsubst %,+define+%,$(JMR_SIM_DEFINES))) \
 		-Mdir $(BUILD)/obj_dir \
 		-o $(abspath $(BUILD)/jmr_js_sim_server) \
 		--top-module jmr_js_core \

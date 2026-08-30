@@ -339,7 +339,7 @@ module jmr_console_engine (
             // run number - bump by hand each build (user: know which bit
             // is on the board from the glass)
             22: banner_char = " "; 23: banner_char = "R";
-            24: banner_char = "5"; 25: banner_char = "9";
+            24: banner_char = "6"; 25: banner_char = "0";
             default: banner_char = 8'h00;
         endcase
     endfunction
