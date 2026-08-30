@@ -471,15 +471,47 @@ score/effect/state-change call. Mark it dead; sweep once, after.**
 > to the invader-kill path fixed it, board-confirmed. Applying the
 > *identical* shape to the saucer-kill path did **not** fix it — same
 > fault, still reproduces. So "several calls then splice, synchronous"
-> is not the whole mechanism; the leading theory now is a slow, cross-
-> frame resource leak (something not fully reclaimed run over run) that
-> an early kill can survive and a kill late in a long session (the
-> saucer only appears after ~720 frames) cannot. RTL side is
-> instrumenting this now. Apply the pattern below anyway — it is free
-> and it did fix one real site — but do **not** treat a title as safe
-> just because it follows this rule. If a kill event still freezes
-> after converting it, that is expected until the underlying pool is
-> found; report it, don't assume a second content bug.
+> is not the whole mechanism. Board telemetry pinned the fault
+> precisely: `fault 3` at the exact instruction that enters
+> `bumpScore()`'s call frame from the saucer-hit call site
+> (`bumpScore(UFO_SCORES[shotCount & 15])`) — a specific, deterministic
+> site, not a vague accumulation (an earlier draft of this note guessed
+> "slow cross-frame leak" without that data; retracted — don't repeat
+> the guess, follow the telemetry). Why THIS call to `bumpScore`
+> faults while the invader-kill's call to the same function does not is
+> still open — RTL side is instrumenting the env pool at exactly this
+> call boundary. Apply the pattern below anyway — it is free and it did
+> fix one real site — but do **not** treat a title as safe just because
+> it follows this rule. If a kill event still freezes after converting
+> it, get the exact fault `ip` from the architecture monitor and decode
+> it against the compiled bytecode before theorizing further.
+>
+> **2026-08-29 update — disassembled both sites, found the real
+> discriminator.** `bumpScore` is small enough that the compiler's
+> tiny-callee inliner (`compiler.py:_try_inline_user_call`) splices it
+> directly into the caller at **every** call site — it never emits
+> `CALL_USER` at all (verified: zero `CALL_USER` targets point at
+> `bumpScore`'s nominal entry; that entry is dead code). So "inlined vs
+> not" is not the difference — both are inlined, byte-identical bodies
+> (`LET_VAR n → score+=n → …`). What differs is the single instruction
+> immediately before that inlined body:
+> - invader-kill (works): `LOAD_VAR inv` → **`CALL_METHOD`** (`inv.points()`, a class-method call/return) → inlined `bumpScore`.
+> - saucer-kill (faults): `LOAD_VAR shotCount` → `LOAD_CONST 15` → `BIT_AND` → **`ARRAY_GET`** (`UFO_SCORES[shotCount & 15]`, no call at all) → inlined `bumpScore`.
+>
+> So the saucer path is actually *shallower* (no method call/return
+> immediately before the inline), not deeper — ruling out "more nesting
+> pressures the pool." Two live, precise hypotheses for RTL to test at
+> this exact boundary: (a) a `CALL_METHOD` return does something (frees
+> a slot / advances a generation counter) that a bare `ARRAY_GET` never
+> does, so the pool is only ever "fresh" going into `bumpScore` when a
+> call preceded it; (b) the user's original theory — the *value* itself
+> (`UFO_SCORES` reaches 300; `invader.points()` tops out at 30) drives
+> a different runtime path once bound to `n`. Compile-time constant
+> encoding is identical for both magnitudes (checked — not a storage
+> difference), so if (b) is right the divergence is at runtime bind,
+> not at compile time. This is as far as static bytecode reading can
+> narrow it; the rest needs RTL-side instrumentation at ip ~5328 (was
+> 5313 before later edits shifted addresses).
 
 INVFAST froze on the board — **only** on a hit, never on a miss, 100%
 repeatable — the instant a bullet actually killed an alien. Fault 3,
