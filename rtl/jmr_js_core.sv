@@ -95,7 +95,7 @@ module jmr_js_core #(
     logic halt_pulse;
     logic demo_busy, demo_done;
     logic vm_busy, vm_done;
-    logic fb_we, fb_swap, demo_fb_we, demo_fb_swap, vm_fb_we, vm_fb_swap;
+    logic fb_we /*verilator public_flat_rd*/; logic fb_swap, demo_fb_we, demo_fb_swap, vm_fb_we, vm_fb_swap;
     logic [18:0] fb_waddr, demo_fb_waddr, vm_fb_waddr;
     logic [7:0]  fb_wdata, demo_fb_wdata, vm_fb_wdata;
     logic frame_tick;
@@ -315,7 +315,7 @@ module jmr_js_core #(
     // streams it to the DDR3 front; scanout prefetches lines back.
     logic [18:0] fbp_copy_raddr;
     logic [7:0]  fbp_copy_rdata;
-    logic        fb_present_busy;
+    logic        fb_present_busy /*verilator public_flat_rd*/;
     logic        fbp_sram_req, fbp_sram_we;
     logic [20:0] fbp_sram_addr;
     logic [15:0] fbp_sram_wdata;
