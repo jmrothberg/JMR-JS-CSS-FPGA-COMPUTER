@@ -306,7 +306,7 @@ module jmr_js_vm #(
     // Env slots are 1-D venv_slot SRAM (not 2-D combo — Synth 8-4556).
     logic [63:0] vthis_ff;
     logic [63:0] vthis /*verilator public_flat_rd*/;
-    logic [63:0] venv_ff;
+    logic [63:0] venv_ff /*verilator public_flat_rd*/;
     logic [63:0] venv /*verilator public_flat_rd*/;
     (* ram_style = "block" *) logic [15:0] vframe_return_ip [0:CSTK-1] /*verilator public_flat_rd*/;
     (* ram_style = "block" *) logic [11:0] vframe_base_sp [0:CSTK-1] /*verilator public_flat_rd*/;
@@ -1632,13 +1632,13 @@ module jmr_js_vm #(
     logic        hp_v64_ff;
     logic        hp_v64;
     logic [12:0] hp_oid_ff;
-    logic [12:0] hp_oid;
+    logic [12:0] hp_oid /*verilator public_flat_rd*/;
     logic [11:0] hp_aid_ff;
     logic [11:0] hp_aid;
     logic        hp_env_ff;
     logic        hp_env; // S_HEAP_* talks to venv_slot (LOAD/STORE/LET/ctor)
     logic [9:0]  hp_eid_ff /*verilator public_flat_rd*/;
-    logic [9:0]  hp_eid;
+    logic [9:0]  hp_eid /*verilator public_flat_rd*/;
     logic [4:0]  hp_slot_ff;
     logic [4:0]  hp_slot;
     logic [6:0]  hp_aslot_ff;
@@ -1648,7 +1648,7 @@ module jmr_js_vm #(
     logic [7:0]  hp_alen_ff, hp_lim_ff;
     logic [7:0]  hp_alen, hp_lim;
     logic [15:0] hp_key_ff /*verilator public_flat_rd*/;
-    logic [15:0] hp_key;
+    logic [15:0] hp_key /*verilator public_flat_rd*/;
     logic [63:0] hp_wval_ff, hp_rval_ff;
     logic [63:0] hp_wval, hp_rval;
     logic        hp_hit_ff;
@@ -3443,7 +3443,7 @@ module jmr_js_vm #(
     logic hs_m_hp_si, hs_m_hp_ss, hs_m_hp_tn, hs_m_hp_from_stack, hs_m_hp_make_arr;
     logic hs_m_hp_vbase, hs_m_hp_spr_w, hs_m_hp_spr_h, hs_m_hp_nat, hs_m_hp_tag;
     logic hs_m_hp_qk, hs_m_hp_qv, hs_m_hp_qt;
-    logic hs_m_valloc_kind, hs_m_valloc_i, hs_m_valloc_arr_n, hs_m_valloc_retried, hs_m_vnat_dom, hs_m_vnat_base, hs_m_valloc_now_fn, hs_m_valloc_bind, hs_m_valloc_bind_src, hs_m_valloc_bind_this, hs_m_valloc_fn_entry, hs_m_valloc_fn_a1, hs_m_valloc_proto, hs_m_valloc_proto_fn, hs_m_valloc_metrics, hs_m_valloc_regex, hs_m_valloc_regex_pack, hs_m_vcall_value, hs_m_vcall_argc, hs_m_vcall_entry, hs_m_vcall_set_this, hs_m_vcall_this, hs_m_vcall_ctor_val, hs_m_vcsp, hs_m_vthis, hs_m_venv;
+    logic hs_m_valloc_kind, hs_m_valloc_i, hs_m_valloc_arr_n, hs_m_valloc_retried, hs_m_vnat_dom, hs_m_vnat_base, hs_m_valloc_now_fn, hs_m_valloc_bind, hs_m_valloc_bind_src, hs_m_valloc_bind_this, hs_m_valloc_fn_entry, hs_m_valloc_fn_a1, hs_m_valloc_proto, hs_m_valloc_proto_fn, hs_m_valloc_metrics, hs_m_valloc_regex, hs_m_valloc_regex_pack, hs_m_vcall_value, hs_m_vcall_argc, hs_m_vcall_entry, hs_m_vcall_set_this, hs_m_vcall_this, hs_m_vcall_ctor_val, hs_m_vcsp, hs_m_vthis; logic hs_m_venv /*verilator public_flat_rd*/;
     logic hs_m_vraf_n /*verilator public_flat_rd*/;
     logic hs_m_vlistener_n, hs_m_vgc_halt_after, hs_m_vgc_wait_after, hs_m_vgc_clear_i, hs_m_vgc_qr, hs_m_vgc_qw;
     logic hs_m_vdraw_i, hs_m_vdraw_x, hs_m_vdraw_y, hs_m_vdraw_w, hs_m_vdraw_h, hs_m_vdraw_color;
@@ -3660,7 +3660,7 @@ module jmr_js_vm #(
     logic [9:0] e64_vdraw_w_q;
     logic [9:0] e64_vdraw_x_q;
     logic [9:0] e64_vdraw_y_q;
-    logic [63:0] e64_venv_q;
+    logic [63:0] e64_venv_q /*verilator public_flat_rd*/;
     logic [9:0] e64_venv_next_q;
     logic [63:0] e64_vfe_arr_q;
     logic [11:0] e64_vfe_base_q;

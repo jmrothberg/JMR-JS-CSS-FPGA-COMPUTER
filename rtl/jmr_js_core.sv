@@ -101,9 +101,9 @@ module jmr_js_core #(
     logic frame_tick;
     logic [15:0] frame_div /*verilator public_flat_rw*/;
     // NEW: console loads .JSB into VM code BRAM
-    logic        code_we;
-    logic [14:0]  code_waddr;
-    logic [31:0] code_wdata;
+    logic        code_we /*verilator public_flat_rd*/;
+    logic [14:0]  code_waddr /*verilator public_flat_rd*/;
+    logic [31:0] code_wdata /*verilator public_flat_rd*/;
     logic        stor_get_byte, stor_nl_scan;
     logic [7:0]  stor_get_data;
     logic [15:0] stor_nl_count;

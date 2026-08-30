@@ -90,6 +90,7 @@ static inline uint32_t code_word(R* r, unsigned a) {
 }
 template <typename R>
 static inline void code_poke(R* r, unsigned a, uint32_t w) {
+    if (a == 4360u) fprintf(stderr, "HOST-POKE 4360 <= %08x\n", w);
     if (a < 16384u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[a] = w;
     else if (a < 20480u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[a - 16384u] = w;
 }
@@ -405,6 +406,14 @@ static unsigned fcap_n = 0;
 static unsigned fault_snap_code = 0;
 static unsigned fault_snap_raddr = 0;
 static unsigned fault_snap_valid = 0;
+// ENVSNAP: the faulting env, latched at the fault EDGE (pre-NBA hold), so the
+// 16-slot wall's true tenant is unambiguous. VMSTAT reads live regs long after
+// the fault and named the wrong env once already.
+static unsigned envsnap_eid = 0, envsnap_len = 0, envsnap_key = 0, envsnap_phase = 0;
+static unsigned envsnap_slots[16];
+static unsigned hold_eid = 0, hold_len = 0, hold_key = 0, hold_phase = 0;
+static unsigned hold_venv_ff = 0, hold_venv_q = 0, hold_m_venv = 0;
+static unsigned envsnap_venv_ff = 0, envsnap_venv_q = 0, envsnap_m_venv = 0;
 static unsigned fault_snap_gen = 0;
 static unsigned fault_snap_akind = 0;
 static unsigned fault_snap_ai = 0;
@@ -459,6 +468,56 @@ static const char* vm_sname(unsigned s) {
     };
     if (s < (unsigned)(sizeof(N) / sizeof(N[0]))) return N[s];
     return "?";
+}
+static int vm_sidx(const char* name) {
+    for (unsigned i = 0; i < 127; i++)
+        if (!strcmp(vm_sname(i), name)) return (int)i;
+    return -1;
+}
+// SYNCPROF (JMR_SYNCPROF=1): per-present, cycles of the S_FB_SYNC stall and
+// the distance from sync ENTRY to the frame's first draw-state entry — the
+// exact bound on a present/VM overlap win (run-62 planning; peer's 30% stall).
+static FILE* syncprof_f = nullptr;
+static int syncprof_gate = -1;
+static uint64_t sp_clk = 0, sp_sync_entry = 0, sp_sync_exit = 0;
+static int sp_wait_draw = 0;
+static unsigned sp_prev_st = 255;
+static void syncprof_tick(unsigned st) {
+    static int fb_sync = -2, dr[6];
+    if (syncprof_gate < 0) {
+        const char* g = getenv("JMR_SYNCPROF");
+        syncprof_gate = (g && *g == '1') ? 1 : 0;
+        if (syncprof_gate) {
+            fb_sync = vm_sidx("S_FB_SYNC");
+            dr[0] = vm_sidx("S_V64_RECT"); dr[1] = vm_sidx("S_V64_CLEAR");
+            dr[2] = vm_sidx("S_BLIT");     dr[3] = vm_sidx("S_CLEAR");
+            dr[4] = vm_sidx("S_IMGD_PUT"); dr[5] = vm_sidx("S_V64_RECT_LD");
+            syncprof_f = fopen("/tmp/syncprof.log", "w");
+            if (syncprof_f) fprintf(syncprof_f, "# fb_sync=%d draws=%d,%d,%d,%d,%d,%d\n",
+                fb_sync, dr[0], dr[1], dr[2], dr[3], dr[4], dr[5]);
+            if (syncprof_f) fflush(syncprof_f);
+        }
+    }
+    if (!syncprof_gate) return;
+    sp_clk++;
+    if (st != sp_prev_st) {
+        if ((int)st == fb_sync) { sp_sync_entry = sp_clk; }
+        else if ((int)sp_prev_st == fb_sync) {
+            sp_sync_exit = sp_clk; sp_wait_draw = 1;
+        }
+        if (sp_wait_draw)
+            for (int k = 0; k < 6; k++)
+                if ((int)st == dr[k] && dr[k] >= 0) {
+                    if (syncprof_f) fprintf(syncprof_f,
+                        "stall=%llu headroom=%llu exit2draw=%llu\n",
+                        (unsigned long long)(sp_sync_exit - sp_sync_entry),
+                        (unsigned long long)(sp_clk - sp_sync_entry),
+                        (unsigned long long)(sp_clk - sp_sync_exit));
+                    if (syncprof_f) fflush(syncprof_f);
+                    sp_wait_draw = 0; break;
+                }
+        sp_prev_st = st;
+    }
 }
 
 static unsigned vsp_peak = 0, gcq_peak = 0, nbwp_peak = 0, jsonwp_peak = 0;
@@ -662,6 +721,7 @@ static void tick() {
     {
         unsigned sc = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state) & 127;
         state_cycles[sc]++;
+        syncprof_tick(sc);
         // run-59 piece-1 checker: during EXEC the op word register must
         // equal code memory at the executing ip — a stale or mis-invalidated
         // prefetch dies loudly on the FIRST wrong op, across every test.
@@ -677,10 +737,34 @@ static void tick() {
                 static FILE* lf = nullptr; static int lgate = -1;
                 if (lgate < 0) { const char* g = getenv("JMR_LENLOG"); lgate = (g && *g == '1') ? 1 : 0; }
                 static unsigned lx_ip = 0, lx_opw = 0;
+                // GENUINE exec beat: BOTH the parent and exec64 sit in S_V64_EXEC.
+                // (exec64 parks in EXEC during parent flows — gating only on it
+                // made this tracker chase parent fetches. That burned hours.)
                 if (lgate == 1 &&
+                    (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__state) & 127) == 60 &&
                     (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state) & 127) == 60) {
                     lx_ip = unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__ip);
                     lx_opw = unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opw_q);
+                }
+                static FILE* cwf = nullptr;
+                static uint32_t w4360_prev = 0xdeadbeef;
+                {
+                    uint32_t w = unsigned(rr->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[4360]);
+                    if (w != w4360_prev) {
+                        if (!cwf) cwf = fopen("/tmp/codewe.log", "w");
+                        if (cwf) fprintf(cwf, "CLK-CHANGE 4360: %08x -> %08x st=%u ip=%u\n",
+                            w4360_prev, w,
+                            unsigned(rr->jmr_js_core__DOT__u_vm__DOT__state) & 127,
+                            unsigned(rr->jmr_js_core__DOT__u_vm__DOT__ip));
+                        if (cwf) fflush(cwf);
+                        w4360_prev = w;
+                    }
+                }
+                if (lgate == 1 && unsigned(rr->jmr_js_core__DOT__code_we)) {
+                    if (!cwf) cwf = fopen("/tmp/codewe.log", "w");
+                    if (cwf) fprintf(cwf, "waddr=%u wdata=%08x\n",
+                        unsigned(rr->jmr_js_core__DOT__code_waddr),
+                        unsigned(rr->jmr_js_core__DOT__code_wdata));
                 }
                 if (lgate == 1 && unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vel_we)) {
                     if (!lf) lf = fopen("/tmp/lenlife.log", "w");
@@ -1039,12 +1123,29 @@ static void tick() {
             fault_snap_opnd = fault_hold_opnd;
             fault_snap_w0 = fault_hold_w0;
             fault_snap_cr = fault_hold_cr;
+            envsnap_venv_ff = hold_venv_ff; envsnap_venv_q = hold_venv_q;
+            envsnap_m_venv = hold_m_venv;
+            envsnap_eid = hold_eid; envsnap_len = hold_len;
+            envsnap_key = hold_key; envsnap_phase = hold_phase;
+            for (int sl = 0; sl < 16; sl++) {
+                unsigned a = hold_eid * 16 + sl;
+                envsnap_slots[sl] = (a < 4096)
+                    ? (unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_slot_c0[a][2]) & 0xffff)
+                    : (unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_slot_c1[(a - 4096) & 0x7ff][2]) & 0xffff);
+            }
         }
         fault_hold_raddr = unsigned(r->jmr_js_core__DOT__u_vm__DOT__e64_vfn_raddr);
         fault_hold_valid = unsigned(r->jmr_js_core__DOT__u_vm__DOT__vfn_valid_rdata);
         fault_hold_gen = unsigned(r->jmr_js_core__DOT__u_vm__DOT__vfn_gen_rdata);
         fault_hold_akind = unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_kind);
         fault_hold_ai = unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_i);
+        hold_eid = unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_eid) & 0x1ff;
+        hold_len = unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_len[hold_eid]);
+        hold_key = unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_key);
+        hold_phase = unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_phase);
+        hold_venv_ff = unsigned(uint64_t(r->jmr_js_core__DOT__u_vm__DOT__venv_ff) & 0x3ff);
+        hold_venv_q = unsigned(uint64_t(r->jmr_js_core__DOT__u_vm__DOT__e64_venv_q) & 0x3ff);
+        hold_m_venv = unsigned(r->jmr_js_core__DOT__u_vm__DOT__hs_m_venv);
         fault_hold_vsp = unsigned(r->jmr_js_core__DOT__u_vm__DOT__vsp);
         fault_hold_vcsp = unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__vcsp);
         fault_hold_hvcsp = unsigned(r->jmr_js_core__DOT__u_vm__DOT__hs_m_vcsp);
@@ -1601,6 +1702,14 @@ int main(int argc, char** argv) {
                       << " vretr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_retried)
                       << " vali=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_i)
                       << " fsite=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__fault_site)
+                      << " fenv=" << envsnap_eid
+                      << " flen=" << envsnap_len
+                      << " fkey=" << envsnap_key
+                      << " fphase=" << envsnap_phase
+                      << " fvff=" << envsnap_venv_ff
+                      << " fvq=" << envsnap_venv_q
+                      << " fmv=" << envsnap_m_venv
+                      << " fslots=" << [&]{ std::string o; for (int i = 0; i < 16; i++) { o += std::to_string(envsnap_slots[i]); if (i < 15) o += ","; } return o; }()
                       << " hpoid=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_oid)
                       << " eidff=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_eid_ff)
                       << " eidq=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__hp_eid)
