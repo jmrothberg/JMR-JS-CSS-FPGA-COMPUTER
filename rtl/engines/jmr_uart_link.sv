@@ -160,6 +160,11 @@ module jmr_uart_link #(
     // registered in the VM domain - sampled here as a plain register.
     input  logic [31:0] vm_vdbg = 32'd0,
     input  logic        vm_vdbg_fault = 1'b0,
+    // run-60 observability: heap gauge + fault snapshot + ip trace
+    input  logic [31:0] vm_hdbg = 32'd0,
+    input  logic [31:0] vm_fdbg = 32'd0,
+    input  logic        vm_fdbg_v = 1'b0,
+    input  logic [127:0] vm_ftrace = 128'd0,
     // NEW: HTML RUN .JSH stream (0xFD + u32 LE length + payload)
     output logic       jsb_tether_stb,
     output logic [7:0] jsb_tether_data,
@@ -278,11 +283,19 @@ module jmr_uart_link #(
     //   text:  "S<rowhex>:" + 64 chars + "\n"   (rows 0..F)
     //   game:  "P<rr>:" + 160 hex nibbles + "\n" (subsample of 640×480)
     //   key:   "K\n" once when ps2_strobe fires (between dumps)
-    typedef enum logic [3:0] {
+    typedef enum logic [4:0] {
         HB_IDLE, HB_HDR, HB_ROW, HB_ROW2, HB_COLON, HB_BYTE, HB_NL, HB_K, HB_KH, HB_KL, HB_KNL,
-        HB_V, HB_VN, HB_VNL, HB_E2, HB_E3
+        HB_V, HB_VN, HB_VNL, HB_E2, HB_E3,
+        HB_H, HB_HN, HB_F, HB_FN, HB_T, HB_TN
     } hb_t;
     hb_t hb_state;
+    // run-60 observability serializers
+    logic        h_pending, f_pending, t_pending, fdbg_v_q;
+    logic [31:0] h_latch, f_latch, fp_latch;
+    logic [127:0] t_latch;
+    logic [2:0]  h_nib;
+    logic [3:0]  f_nib;
+    logic [4:0]  t_nib;
     logic        dump_active;
     logic        dump_game;     // latched at dump start
     logic [21:0] dump_div;
@@ -329,6 +342,10 @@ module jmr_uart_link #(
             ps2_strobe_q <= 1'b0;
             stor_q <= 7'd0; d_pending <= 1'b0; d_sel <= 2'd0;
             v_pending <= 1'b0; v_latch <= 32'd0; v_nib <= 3'd0;
+            h_pending <= 1'b0; h_latch <= 32'd0;
+            f_pending <= 1'b0; f_latch <= 32'd0; fp_latch <= 32'd0;
+            t_pending <= 1'b0; t_latch <= 128'd0; t_nib <= 5'd0;
+            fdbg_v_q <= 1'b0;
             vfault_q <= 1'b0; dump_active_q <= 1'b0;
             d_code_q <= 8'd0; d_dwell <= 26'd0;
             e_pending <= 1'b0; e_chg <= 1'b0; e_code_q <= 8'd0; e_cons_q <= 8'd0; e_beat <= 27'd0; v_beat_q <= 1'b0;
@@ -352,6 +369,21 @@ module jmr_uart_link #(
                     // only: lively in games, silent at READY).
                     v_pending <= 1'b1;
                     v_latch   <= vm_vdbg;
+                    // H-line rides the same triggers: heap gauge beside
+                    // every heartbeat (obj/arr/env live counts).
+                    h_pending <= 1'b1;
+                    h_latch   <= vm_hdbg;
+                end
+                // F+T lines: once per fault edge — the full forensic
+                // snapshot (alloc kind/retried, state, vsp/vcsp, pool
+                // counts at fault) and the last-8 committed ips.
+                fdbg_v_q <= vm_fdbg_v;
+                if (vm_fdbg_v && !fdbg_v_q) begin
+                    f_pending <= 1'b1;
+                    f_latch   <= vm_fdbg;
+                    fp_latch  <= vm_hdbg;
+                    t_pending <= 1'b1;
+                    t_latch   <= vm_ftrace;
                 end
                 // storage stall telemetry: after ~0.67s of CONTINUOUS busy,
                 // emit the current state every ~0.17s. Catches parked AND
@@ -404,6 +436,18 @@ module jmr_uart_link #(
                         v_pending <= 1'b0;
                         v_nib <= 3'd7;
                         hb_state <= HB_V;
+                    end else if (f_pending && !tx_busy && !dump_active) begin
+                        f_pending <= 1'b0;
+                        f_nib <= 4'd15;
+                        hb_state <= HB_F;
+                    end else if (t_pending && !tx_busy && !dump_active) begin
+                        t_pending <= 1'b0;
+                        t_nib <= 5'd31;
+                        hb_state <= HB_T;
+                    end else if (h_pending && !tx_busy && !dump_active) begin
+                        h_pending <= 1'b0;
+                        h_nib <= 3'd7;
+                        hb_state <= HB_H;
                     end else if (dump_active && !tx_busy) begin
                         hb_state <= HB_HDR;
                     end else if (dump_div == 22'h3FFFFF && !tx_busy) begin
@@ -456,6 +500,35 @@ module jmr_uart_link #(
                     wr_data <= hex_digit(v_latch[{v_nib, 2'b00} +: 4]);
                     if (v_nib == 3'd0) hb_state <= HB_VNL;
                     else v_nib <= v_nib - 3'd1;
+                end
+                HB_H: if (!tx_busy) begin
+                    wr_en <= 1'b1; wr_data <= "H"; hb_state <= HB_HN;
+                end
+                HB_HN: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= hex_digit(h_latch[{h_nib, 2'b00} +: 4]);
+                    if (h_nib == 3'd0) hb_state <= HB_VNL;
+                    else h_nib <= h_nib - 3'd1;
+                end
+                HB_F: if (!tx_busy) begin
+                    wr_en <= 1'b1; wr_data <= "F"; hb_state <= HB_FN;
+                end
+                HB_FN: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= hex_digit(f_nib[3]
+                        ? f_latch[{f_nib[2:0], 2'b00} +: 4]
+                        : fp_latch[{f_nib[2:0], 2'b00} +: 4]);
+                    if (f_nib == 4'd0) hb_state <= HB_VNL;
+                    else f_nib <= f_nib - 4'd1;
+                end
+                HB_T: if (!tx_busy) begin
+                    wr_en <= 1'b1; wr_data <= "T"; hb_state <= HB_TN;
+                end
+                HB_TN: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= hex_digit(t_latch[{t_nib, 2'b00} +: 4]);
+                    if (t_nib == 5'd0) hb_state <= HB_VNL;
+                    else t_nib <= t_nib - 5'd1;
                 end
                 HB_VNL: if (!tx_busy) begin
                     wr_en <= 1'b1;

@@ -44,6 +44,11 @@ module jmr_js_vm #(
     // FSM cone. {1'b0, st[6:0], fault[7:0], ip[15:0]}.
     output logic [31:0] vdbg_o,
     output logic        vdbg_fault_o,
+    // run-60 observability (see the LIVE OBSERVABILITY block)
+    output logic [31:0] vm_hdbg,
+    output logic [31:0] vm_fdbg,
+    output logic        vm_fdbg_v,
+    output logic [127:0] vm_ftrace,
     output logic        fb_we,
     output logic [18:0] fb_waddr,
     output logic [7:0]  fb_wdata,
@@ -322,13 +327,13 @@ module jmr_js_vm #(
     logic [63:0] vgc_cur;
     logic [11:0] vgc_root_i;
     logic [13:0] valloc_i_ff;
-    logic [13:0] valloc_i;
+    logic [13:0] valloc_i /*verilator public_flat_rd*/;
     logic [13:0] vobj_next, varr_next, vfn_next;
     logic [9:0] venv_next;
     logic [1:0] valloc_kind_ff;
     logic [1:0] valloc_kind /*verilator public_flat_rd*/;
     logic valloc_retried_ff;
-    logic valloc_retried;
+    logic valloc_retried /*verilator public_flat_rd*/;
     logic vgc_halt_after_ff;
     logic vgc_halt_after;
     // C4 (run 50): a forced (alloc-retry) GC already collected this
@@ -567,6 +572,74 @@ module jmr_js_vm #(
     localparam int MAX_CLS = 16;
     localparam int MAX_CMETH = 16;
     localparam int CSTK = 128;
+
+    /* ===== run-60 LIVE OBSERVABILITY (board debugging, zero-cost) =====
+       Everything here is observation-only: dedicated async read ports on
+       the valid LUTRAMs (pure fanout — the hot muxes are untouched), a
+       free-running background scanner, and shadow latches on the
+       machine_fault edge. No execution path reads, waits on, or gates
+       against any of it; the no-slowdown proof is a digit-identical
+       fclk/STATEHIST profile. Serialized by jmr_uart_link as H/F/T
+       lines (see ARCH_MONITOR.md BOARD section). */
+    logic [10:0] scn_i;          // walks 0..2047 (covers every pool)
+    logic [10:0] scn_obj_acc, scn_arr_acc, scn_env_acc;
+    logic [10:0] dbg_obj_live /*verilator public_flat_rd*/;
+    logic [10:0] dbg_arr_live /*verilator public_flat_rd*/;
+    logic [10:0] dbg_env_live /*verilator public_flat_rd*/;
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            scn_i <= '0;
+            scn_obj_acc <= '0; scn_arr_acc <= '0; scn_env_acc <= '0;
+            dbg_obj_live <= '0; dbg_arr_live <= '0; dbg_env_live <= '0;
+        end else begin
+            scn_i <= scn_i + 11'd1;
+            if (scn_i == 11'd2047) begin
+                dbg_obj_live <= scn_obj_acc; dbg_arr_live <= scn_arr_acc;
+                dbg_env_live <= scn_env_acc;
+                scn_obj_acc <= '0; scn_arr_acc <= '0; scn_env_acc <= '0;
+            end else begin
+                if (scn_i < 11'(OBJ_PHYS) && vobj_alloc[scn_i[9:0]] == 2'd1)
+                    scn_obj_acc <= scn_obj_acc + 11'd1;
+                if (scn_i < 11'(MAX_ARR) && varr_valid[scn_i])
+                    scn_arr_acc <= scn_arr_acc + 11'd1;
+                if (scn_i < 11'(ENV_PHYS) && venv_valid[scn_i[8:0]])
+                    scn_env_acc <= scn_env_acc + 11'd1;
+            end
+        end
+    end
+    // committed-ip ring (last 8), frozen the moment machine_fault rises
+    logic [15:0] ipring [0:7] /*verilator public_flat_rd*/;
+    logic [2:0]  ipring_w;
+    logic [15:0] ipring_prev;
+    // fault snapshot (latched once per fault edge)
+    logic        fsnap_v /*verilator public_flat_rd*/;
+    logic [31:0] fsnap /*verilator public_flat_rd*/;   // {kind2,retr1,state7,vcsp8,vsp12,2'b0}
+    logic [31:0] fsnap_pools /*verilator public_flat_rd*/; // {2'b0,obj10,arr10,env10}
+    logic        mf_q;
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            ipring_w <= '0; ipring_prev <= 16'hFFFF;
+            fsnap_v <= 1'b0; fsnap <= '0; fsnap_pools <= '0; mf_q <= 1'b0;
+        end else begin
+            mf_q <= machine_fault;
+            if (!machine_fault && ip != ipring_prev) begin
+                ipring[ipring_w] <= ip;
+                ipring_prev <= ip;
+                ipring_w <= ipring_w + 3'd1;
+            end
+            if (machine_fault && !mf_q) begin
+                fsnap_v <= 1'b1;
+                fsnap <= {valloc_kind, valloc_retried, state, vcsp, vsp, 2'b00};
+                fsnap_pools <= {dbg_env_live[9:0], dbg_arr_live, dbg_obj_live};
+            end
+            if (!machine_fault) fsnap_v <= 1'b0;
+        end
+    end
+    assign vm_hdbg = {dbg_env_live[9:0], dbg_arr_live, dbg_obj_live};
+    assign vm_fdbg = fsnap;
+    assign vm_fdbg_v = fsnap_v;
+    assign vm_ftrace = {ipring[7], ipring[6], ipring[5], ipring[4],
+                        ipring[3], ipring[2], ipring[1], ipring[0]};
     logic [15:0] n_obj /*verilator public_flat_rd*/, n_arr /*verilator public_flat_rd*/;
     logic [15:0] n_arr_keep;
     logic        arr_keep_ok;

@@ -464,7 +464,18 @@ static const char* vm_sname(unsigned s) {
 static unsigned vsp_peak = 0, gcq_peak = 0, nbwp_peak = 0, jsonwp_peak = 0;
 static unsigned long long cm_cycles = 0, cm_lookups = 0, total_cycles = 0;
 static unsigned long long lsv_cycles = 0, lsv_reqs = 0, lsv_serv_cycles = 0, lsv_res_cycles = 0;
+static unsigned long realtick_period = 0;
+static unsigned long realtick_ctr = 0;
 static void tick() {
+    // REALTICK: board-faithful async frame_tick — pulses on a free-running
+    // divider REGARDLESS of VM state (the FRAME rpc's pulse is gated on
+    // S_WAIT_FRAME and can never land mid-JS; the real 60 Hz vsync can).
+    if (realtick_period) {
+        if (++realtick_ctr >= realtick_period) {
+            realtick_ctr = 0;
+            top->sim_frame_pulse = 1;
+        }
+    }
     top->clk = 0; top->pixel_clk = 0; top->eval();
     uint8_t miso = 1;
     sd.step(top->sd_cs_n != 0, top->sd_sck != 0, top->sd_mosi != 0, &miso);
@@ -472,6 +483,7 @@ static void tick() {
     top->clk = 1; top->pixel_clk = 1; top->eval();
     sd.step(top->sd_cs_n != 0, top->sd_sck != 0, top->sd_mosi != 0, &miso);
     top->sd_miso = miso;
+    if (realtick_period && realtick_ctr == 0) top->sim_frame_pulse = 0; // end REALTICK pulse
     {   // per-clock peak trackers (transient-safe, unlike frame sampling)
         unsigned v = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__vsp);
         if (v > vsp_peak) vsp_peak = v;
@@ -1454,6 +1466,14 @@ int main(int argc, char** argv) {
             }
             std::cout
                       << " spr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_spr)
+                      << " venvnx=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_next)
+                      << " venvfree=" << [&]{ unsigned f=0; for (int i=0;i<512;i++)
+                            if (!r->jmr_js_core__DOT__u_vm__DOT__venv_valid[i]) f++; return f; }()
+                      << " efreen=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_free_n)
+                      << " vkind=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_kind)
+                      << " vretr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_retried)
+                      << " vali=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_i)
+                      << " mkpend=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vgc_mark_pend)
                       << " pfn=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_n)
                       << " pfa=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pfa)
                       << " pfb=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pfb)
@@ -1554,6 +1574,12 @@ int main(int argc, char** argv) {
             continue;
         }
         // Canonical safe-point checkpoint for Python/RTL differential tests.
+        if (line.rfind("REALTICK ", 0) == 0) {
+            realtick_period = std::stoul(line.substr(9));
+            realtick_ctr = 0;
+            std::cout << "OK realtick=" << realtick_period << std::endl;
+            continue;
+        }
         // Keep this one compact: detailed OBJPEEK/VARPEEK remain opt-in.
         if (line.rfind("VARPEEK ", 0) == 0) {
             unsigned i = std::stoul(line.substr(8)) & 511;
