@@ -142,7 +142,7 @@ module jmr_js_vm #(
     (* ram_style = "block" *) logic [31:0] code_mem_c0 [0:16383] /*verilator public_flat_rw*/;
     (* ram_style = "block" *) logic [31:0] code_mem_c1 [0:4095]  /*verilator public_flat_rw*/;
     initial $readmemh(CODE_HEX, code_mem_c0);
-    logic [14:0] code_raddr_ff;
+    logic [14:0] code_raddr_ff /*verilator public_flat_rd*/;
     logic [14:0] code_raddr;
     logic [31:0] code_rdata;
     // Read port (VM fetch) + write port (FAT .JSB load) — dual-port BRAM,
@@ -1178,6 +1178,13 @@ module jmr_js_vm #(
     // NEW: raw key-event FIFO (host → keydown/keyup dispatch, one per frame)
     logic [8:0]  kev_q [0:7]; // {down, keyCode}
     logic        kev_src_joy [0:7]; // 1 = synthetic joystick edge, 0 = GUI KEYEVT
+    // run-59 dual-path dedup (JOYDEMO forensics: the pad's buttons arrive
+    // BOTH as an I2C joy bit AND as a real PS/2 key event via the pmod
+    // path — every press delivered keydown(32) twice; typematic repeat
+    // made it thrice). After a REAL keydown, synthetic joy edges for the
+    // same keyCode are swallowed for ~8 frames (both edges of the press).
+    logic [7:0]  kev_dedup_code;
+    logic [3:0]  kev_dedup_ctr;
     logic [2:0]  kev_wp /*verilator public_flat_rd*/, kev_rp /*verilator public_flat_rd*/;
     logic [15:0] kev_fn; // handler for S_KEYEV (event alloc + env must be 2-cycle)
     logic [15:0] id_keys_name, id_pressed, id_kspace; // keys.a.pressed table
@@ -3334,7 +3341,7 @@ module jmr_js_vm #(
     // HEAP/FETCH handshake: parent writes these FFs; exec applies only
     // the masked scalars (ip / hp_* / code_raddr / state). Not a full FF dump.
     logic hs64, hs32;
-    logic hs_m_ip, hs_m_code, hs_m_state, hs_m_vsp;
+    logic hs_m_ip /*verilator public_flat_rd*/, hs_m_code /*verilator public_flat_rd*/, hs_m_state /*verilator public_flat_rd*/, hs_m_vsp;
     logic hs_m_hp_cmd, hs_m_hp_v64, hs_m_hp_oid, hs_m_hp_aid, hs_m_hp_env;
     logic hs_m_hp_eid, hs_m_hp_slot, hs_m_hp_aslot, hs_m_hp_len, hs_m_hp_alen;
     logic hs_m_hp_lim, hs_m_hp_key, hs_m_hp_wval, hs_m_hp_rval, hs_m_hp_hit;
@@ -3716,7 +3723,7 @@ module jmr_js_vm #(
     logic [63:0] e64_vframe_fn_wdata;
     logic [63:0] e64_vframe_ctor_wdata;
     logic e64_p_clr_busy;
-    logic e64_leave_hold;
+    logic e64_leave_hold /*verilator public_flat_rd*/;
     logic e64_vraf_we;
     logic [2:0] e64_vraf_waddr;
     logic [63:0] e64_vraf_wdata;
@@ -3737,6 +3744,11 @@ module jmr_js_vm #(
         .leave_hold(e64_leave_hold),
         .hs_m_ip(hs_m_ip),
         .hs_m_code(hs_m_code),
+        /* skip-suppress while the parent's ctor-LET redirect or field
+           scan is armed — their between-op work lives in the fetch
+           boundary the skip retires (class micro-test: fault 1 on the
+           FIRST ctor skip). forEach is gated exec64-side (vfe_mode). */
+        .p_pf_block((vctor_lets != 6'd0) || (vctor_jmp != 16'hFFFF)),
         .hs_m_state(hs_m_state),
         .hs_m_vsp(hs_m_vsp),
         .hs_m_hp_cmd(hs_m_hp_cmd),
@@ -5673,11 +5685,19 @@ module jmr_js_vm #(
             e32_intern_var_rdata <= intern_var[
                 ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
                  valloc_kind == 2'd0) ? vcall_entry[9:0] :
+`ifdef JMR_PF_SKIP
                 hs64 ? e64_opw[17:8] : e32_intern_var_raddr];
+`else
+                hs64 ? code_rdata[17:8] : e32_intern_var_raddr];
+`endif
             e32_intern_var_ok_rdata <= intern_var_ok[
                 ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
                  valloc_kind == 2'd0) ? vcall_entry[9:0] :
+`ifdef JMR_PF_SKIP
                 hs64 ? e64_opw[17:8] : e32_intern_var_raddr];
+`else
+                hs64 ? code_rdata[17:8] : e32_intern_var_raddr];
+`endif
             e32_env_oid_rdata <= env_oid[
                 (casestate_q == S_GC_ROOT || state == S_GC_ROOT) &&
                 (gc_root_i >= 13'd2640 && gc_root_i < 13'd2672) ?
@@ -6262,6 +6282,10 @@ module jmr_js_vm #(
             if (key_evt_stb && (kev_wp + 3'd1) != kev_rp) begin
                 kev_q[kev_wp] <= {key_evt_down, key_evt_code};
                 kev_src_joy[kev_wp] <= 1'b0;
+                if (key_evt_down) begin
+                    kev_dedup_code <= key_evt_code;
+                    kev_dedup_ctr <= 4'd8;
+                end
                 kev_wp <= kev_wp + 3'd1;
                 // 2026-08-21 (DONKEY Mario->Luigi, second occurrence): the
                 // dispatch-time supersede only fires when the real event is
@@ -7622,17 +7646,9 @@ module jmr_js_vm #(
                         // NEW: pending SET_PROP array deep copy runs between ops
                         dc_arm <= 1'b0;
                         hs_st(S_ARR_DCOPY);
-                    end else if (v64_on) begin
+                    end else if (v64_on)
                         hs_st(S_V64_EXEC);
-                        /* run-59 piece 1: hand the code port the NEXT op's
-                           address for the whole EXEC window. opw_q (piece 0)
-                           keeps op N's immediates stable; the BRAM streams
-                           N+1 so the central skip in exec64 can retire
-                           S_FETCH_WAIT for the fast-path op class. The
-                           hs mirror (exec64 latches p_code_raddr on
-                           hs_m_code) persists this through EXEC. */
-                        hs_code(15'(ops_base + ip + 16'd1));
-                    end else
+                    else
                         hs_st(S_EXEC);
                 end
 
@@ -9108,6 +9124,8 @@ module jmr_js_vm #(
                         joy_down_edge <= joy_down_edge | (joy_in & ~prev_joy);
                         joy_up_edge   <= joy_up_edge   | (prev_joy & ~joy_in);
                         prev_joy <= joy_in;
+                        if (kev_dedup_ctr != 4'd0)
+                            kev_dedup_ctr <= kev_dedup_ctr - 4'd1;
                         // Per-frame callback marker. dbg_cb_ip was sticky
                         // (set at the first rAF call, cleared only at RUN),
                         // so the host FRAME rpc's "callback done" break
@@ -9150,6 +9168,7 @@ module jmr_js_vm #(
                             logic [5:0] dn_ok;
                             logic [2:0] ki;
                             logic       is_up;
+                            logic [7:0] kcode;
                             up_first = joy_up_edge &
                                        (~joy_down_edge | joy_in);
                             dn_ok    = joy_down_edge &
@@ -9162,18 +9181,27 @@ module jmr_js_vm #(
                                 (dn_ok[0] ? 3'd0 : dn_ok[1] ? 3'd1 :
                                  dn_ok[2] ? 3'd2 : dn_ok[3] ? 3'd3 :
                                  dn_ok[4] ? 3'd4 : 3'd5);
+                            kcode = (ki == 3'd0) ? 8'd38 :
+                                    (ki == 3'd1) ? 8'd40 :
+                                    (ki == 3'd2) ? 8'd37 :
+                                    (ki == 3'd3) ? 8'd39 :
+                                    (ki == 3'd4) ? 8'd32 : 8'd13;
                             v64_frame_armed <= 1'b1;
                             jn_slot_arm <= 1'b0; // #69: restart any pending rAF snapshot
-                            kev_q[kev_wp] <= {!is_up,
-                                (ki == 3'd0) ? 8'd38 :
-                                (ki == 3'd1) ? 8'd40 :
-                                (ki == 3'd2) ? 8'd37 :
-                                (ki == 3'd3) ? 8'd39 :
-                                (ki == 3'd4) ? 8'd32 : 8'd13};
-                            kev_src_joy[kev_wp] <= 1'b1;
-                            kev_wp <= kev_wp + 3'd1;
-                            if (is_up) joy_up_edge[ki]   <= 1'b0;
-                            else       joy_down_edge[ki] <= 1'b0;
+                            if (kev_dedup_ctr != 4'd0 &&
+                                kcode == kev_dedup_code) begin
+                                // this press already arrived as a REAL key
+                                // event (dual-interface pad): swallow the
+                                // synthetic twin, both edges.
+                                if (is_up) joy_up_edge[ki]   <= 1'b0;
+                                else       joy_down_edge[ki] <= 1'b0;
+                            end else begin
+                                kev_q[kev_wp] <= {!is_up, kcode};
+                                kev_src_joy[kev_wp] <= 1'b1;
+                                kev_wp <= kev_wp + 3'd1;
+                                if (is_up) joy_up_edge[ki]   <= 1'b0;
+                                else       joy_down_edge[ki] <= 1'b0;
+                            end
                         end else
                         if (kev_rp != kev_wp) begin
                             v64_frame_armed <= 1'b1;
@@ -11712,22 +11740,16 @@ module jmr_js_vm #(
                         hs_st(S_V64_GC_POP);
                 end
                 S_V64_GC_ARR: begin
-                    /* run-58 GC accel, piece 2: STREAM the walk. The old
-                       shape disarmed both read stages after every slot and
-                       re-paid them: 3 beats per slot (5 with the mark
-                       machinery piece 1 now skips for numbers). Hold the
-                       arms, advance the slot index, and consume on a 2-beat
-                       cadence (registered raddr + BRAM read = 2-beat data
-                       lag). A slot that IS a handle still stalls for the
-                       pend arm/act service exactly as before. */
+                    /* run-58 GC accel, piece 2: STREAM the walk (arms held,
+                       2-beat cadence; see run-58 notes). */
                     if (!vgc_rd_arm)
                         vgc_rd_arm <= 1'b1;
                     else if (!jn_slot_arm) begin
                         jn_slot_arm <= 1'b1;
-                        vgc_arr_ph <= 1'b1; // first data lands after this beat
+                        vgc_arr_ph <= 1'b1;
                     end else if (vgc_slot_i < varr_len_rdata) begin
                         if (vgc_arr_ph)
-                            vgc_arr_ph <= 1'b0; // rdata settling beat
+                            vgc_arr_ph <= 1'b0;
                         else begin
                             v64_gc_mark_task(varr_rdata);
                             vgc_slot_i <= vgc_slot_i + 8'd1;
@@ -11739,6 +11761,7 @@ module jmr_js_vm #(
                         hs_st(S_V64_GC_POP);
                     end
                 end
+
                 S_V64_GC_FN: begin
                     if (!vgc_rd_arm)
                         vgc_rd_arm <= 1'b1;

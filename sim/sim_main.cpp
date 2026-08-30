@@ -654,6 +654,29 @@ static void tick() {
         // equal code memory at the executing ip — a stale or mis-invalidated
         // prefetch dies loudly on the FIRST wrong op, across every test.
         unsigned esc = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state) & 127;
+        // run-59 handshake trace: log every core clk around fetch-wait/EXEC
+        // transitions for the first 400 interesting clks after RUN.
+        {
+            static int hst_n = 0;
+            static FILE* hst = nullptr;
+            unsigned psc = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state) & 127;
+            if (hst_n < 400 && (psc == 60 || psc == 7 || esc == 60 || esc == 7)) {
+                if (!hst) hst = fopen("/tmp/hs_trace.log", "w");
+                if (hst) {
+                    fprintf(hst,
+                        "clk p=%u e=%u mS=%u mC=%u ff=%u eCR=%u lh=%u ip=%u en?\n",
+                        psc, esc,
+                        unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__hs_m_state),
+                        unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__hs_m_code),
+                        unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__code_raddr_ff),
+                        unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__code_raddr),
+                        unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__e64_leave_hold),
+                        unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__ip));
+                    hst_n++;
+                    if (hst_n == 400) fclose(hst);
+                }
+            }
+        }
         if (sc == 60 && esc == 60) {
             // both the parent view AND exec64's own state must say EXEC —
             // the parent lags exec64 by a handshake beat around
@@ -1532,6 +1555,15 @@ int main(int argc, char** argv) {
         }
         // Canonical safe-point checkpoint for Python/RTL differential tests.
         // Keep this one compact: detailed OBJPEEK/VARPEEK remain opt-in.
+        if (line.rfind("VARPEEK ", 0) == 0) {
+            unsigned i = std::stoul(line.substr(8)) & 511;
+            auto* r = top->rootp;
+            std::cout << "VAR " << i
+                      << " valid=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vvar_valid[i])
+                      << " val=" << std::hex << uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vvars[i])
+                      << std::dec << std::endl;
+            continue;
+        }
         if (line == "CHECKPOINT?") {
             auto* r = top->rootp;
             const uint64_t FNV0 = UINT64_C(0xCBF29CE484222325);

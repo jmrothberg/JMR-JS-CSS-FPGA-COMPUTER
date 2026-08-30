@@ -9,6 +9,7 @@ module jmr_js_vm_exec64 (
     output logic leave_hold,
     input  logic hs_m_ip,
     input  logic hs_m_code,
+    input  logic p_pf_block, // parent ctor-scan/redirect machinery armed
     input  logic hs_m_state,
     input  logic hs_m_vsp,
     input  logic hs_m_hp_cmd,
@@ -2951,8 +2952,21 @@ module jmr_js_vm_exec64 (
         logic [11:0] cm_argc, cm_base;
         cm_argc = {4'd0, opw[31:24]};
         cm_base = (vsp_hs > cm_argc) ? (vsp_hs - cm_argc - 12'd1) : 12'd0;
+        /* Phase-aware lookahead (suite caught the naive form: raddr_q
+           free-runs every beat, so once the port streams N+1 mid-warmup,
+           op N's own operand address was overwritten before N executed).
+           Warmup/settle beats address the CURRENT op (opw); only the
+           execute phase (both warmup flags set) pre-latches the incoming
+           word's operands for the skip. */
+`ifdef JMR_PF_SKIP
+        vconsts_raddr = (opnd_q && opnd2_q) ? code_rdata[17:8] : opw[17:8];
+        vvars_raddr   = (opnd_q && opnd2_q) ? code_rdata[16:8] : opw[16:8];
+`else
+        // PF off: bit-original — parent-owned flows (forEach FE walk) rely
+        // on code_rdata addressing here while the port carries THEIR word.
         vconsts_raddr = code_rdata[17:8];
         vvars_raddr = code_rdata[16:8];
+`endif
         venv_raddr = venv_hs[9:0];
         vtimer_raddr = tmr_i_q[5:0];
         vframe_raddr = (vcsp_hs != 8'd0) ? 7'(vcsp_hs - 8'd1) : 7'd0;
@@ -3419,6 +3433,16 @@ module jmr_js_vm_exec64 (
                         // Leftover vst_we must not hold through opnd2: CALL_VAL
                         // then re-wrote MAKE_FN into TOS (nonempty IIFE fault 4).
                         vst_we_n = 1'b0;
+                        /* run-59 prefetch v2 (built from the hs-trace, not the
+                           handshake myth): exec64 SELF-dispatches here; opw_q
+                           holds this op's word from the wait beats, so the
+                           code port is free from this beat on — advance it to
+                           ip+1 now. Word N+1 is on code_rdata through the
+                           execute beats; the op-end override can then retire
+                           the whole wait/warmup sequence for sequential flow. */
+`ifdef JMR_PF_SKIP
+                        code_raddr_n = 15'(ops_base + ip + 16'd1);
+`endif
                     end else if (opnd_q && !opnd2_q && tmr_i_q == 7'd0) begin
                         // Beat 2: parent *_rdata catches raddr_q (leftover 3).
                         opnd_n = 1'b1;
@@ -7687,6 +7711,7 @@ module jmr_js_vm_exec64 (
                in-flight _q) collides with an incoming LOAD_VAR read.
            The capture pulse rolls opw_q to the new word at this edge. */
         opw_cap_n = 1'b0;
+`ifdef JMR_PF_SKIP
         begin
             logic [14:0] pf_addr;
             /* The prefetch address as the BRAM actually sees it THIS beat:
@@ -7699,7 +7724,7 @@ module jmr_js_vm_exec64 (
             pf_addr_s = pf_addr;
             dbg_pfa_c = (state == S_V64_EXEC && state_n == S_FETCH_WAIT);
             dbg_pfb_c = dbg_pfa_c && ip_n == 16'(ip + 16'd1);
-            dbg_pfc_c = dbg_pfb_c && pf_ok;
+            dbg_pfc_c = dbg_pfb_c && (code_raddr == 15'(ops_base + ip_n));
         /* (cascade probes, DONKEY in-game: pfa=170k op-ends, pfb=0 —
            most single-beat ops end via a common tail that never touches
            code_raddr_n, so equality against the prefetch could never
@@ -7708,18 +7733,31 @@ module jmr_js_vm_exec64 (
            redirects the code port with ip_n==ip+1 is excluded by the
            code_raddr_n clause.) */
         if (state == S_V64_EXEC && state_n == S_FETCH_WAIT &&
-            pf_ok &&
+            !p_pf_block && vfe_mode == 2'd0 &&
+            opnd_q && opnd2_q &&
             ip_n == 16'(ip + 16'd1) &&
-            (code_raddr_n == code_raddr ||
-             code_raddr_n == 15'(ops_base + ip_n)) &&
+            ip_n < n_ops &&  // never skip past end-of-script (the ip>=n_ops
+                             // end check lives in the fetch path we bypass)
+            code_raddr == 15'(ops_base + ip_n) &&
             pf_safe(code_rdata[7:0]) &&
             !((code_rdata[7:0] == OP_LOAD_VAR) &&
               ((vvars_we   && vvars_waddr[8:0]   == code_rdata[16:8]) ||
                (vvars_we_q && vvars_waddr_q[8:0] == code_rdata[16:8])))) begin
             state_n = S_V64_EXEC;
-            code_raddr_n = 15'(ops_base + ip_n + 16'd1);
+            code_raddr_n = 15'(ops_base + ip_n + 16'd1); // next prefetch
             opw_cap_n = 1'b1;
-            // pf_ok stays set: the skip re-points the port sequentially.
+            /* land at warmup beat 2: beat-1's raddr clocking happened via
+               the decode comb on the incoming word during our execute
+               beats; the operand rdata regs need one settle beat. This
+               retires the lh + fetch beats: 4-beat ops become 2. */
+            opnd_n = 1'b1;
+            opnd2_n = 1'b0;
+            opnd3_n = 1'b0;
+            /* NOTE: do NOT clear vst_we_n here (first attempt did, and
+               erased the finishing op's own push — LET_VAR then stored 0:
+               the VARPEEK trace). Beat-1's hygiene clears LEFTOVER intent
+               at op START; at op END the write must land via _q on the
+               settle beat, and beat-2's own vst_we_n=0 prevents re-apply. */
             /* Boundary services the parent's S_FETCH_WAIT arm performs
                (found by A/B: DONKEY never armed rAF with skips on):
                vprom_done retires at every instruction boundary — sticky,
@@ -7728,6 +7766,7 @@ module jmr_js_vm_exec64 (
             vprom_done_n = 1'b0;
         end
         end
+`endif
     end
     `undef VST_AT
     `undef VST_REL

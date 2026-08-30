@@ -297,8 +297,13 @@ module jmr_console_engine (
     logic p_help_q, p_dir_q, p_cls_q, p_list_q, p_edit_q, p_mem_q,
           p_new_q, p_run_q, p_load_q, p_save_q, p_remove_q, p_empty_q,
           p_len4_q;
+    logic [7:0] line_tail_q;
     always_ff @(posedge clk) begin
         p_empty_q <= (line_len == 0);
+        // run-58's -0.261 leader: C_PF2 indexed line[line_len-1] (a 128:1
+        // char mux) inside its reply steering. line_len is >=2 beats stable
+        // by any C_PF2 (same contract as every p_*_q), so hoist the mux.
+        line_tail_q <= (line_len != 0) ? line[line_len - 1'b1] : 8'd0;
         p_len4_q  <= (line_len == 4);
         p_help_q <= (line_len == 4 && up(line[0])=="H" && up(line[1])=="E" && up(line[2])=="L" && up(line[3])=="P");
         p_dir_q  <= (line_len == 3 && up(line[0])=="D" && up(line[1])=="I" && up(line[2])=="R");
@@ -334,7 +339,7 @@ module jmr_console_engine (
             // run number - bump by hand each build (user: know which bit
             // is on the board from the glass)
             22: banner_char = " "; 23: banner_char = "R";
-            24: banner_char = "5"; 25: banner_char = "8";
+            24: banner_char = "5"; 25: banner_char = "9";
             default: banner_char = 8'h00;
         endcase
     endfunction
@@ -829,17 +834,18 @@ module jmr_console_engine (
                     end
                 end
                 C_PF2: begin
-                    // trailing quote strip + length
+                    // trailing quote strip + length (line_tail_q = the
+                    // hoisted line[line_len-1] — see the predicate block)
                     if (line_len > name_start &&
-                        (line[line_len - 1] == "\"" || line[line_len - 1] == "'"))
+                        (line_tail_q == "\"" || line_tail_q == "'"))
                         name_len_r <= line_len - name_start - 1'b1;
                     else
                         name_len_r <= line_len - name_start;
                     if ((line_len > name_start &&
-                         (line[line_len - 1] == "\"" || line[line_len - 1] == "'") &&
+                         (line_tail_q == "\"" || line_tail_q == "'") &&
                          (line_len - name_start - 1'b1) == 0) ||
                         (!(line_len > name_start &&
-                           (line[line_len - 1] == "\"" || line[line_len - 1] == "'")) &&
+                           (line_tail_q == "\"" || line_tail_q == "'")) &&
                          (line_len - name_start) == 0)) begin
                         reply_sel <= 4'd6; reply_idx <= 0; state <= C_REPLY;
                     end else begin

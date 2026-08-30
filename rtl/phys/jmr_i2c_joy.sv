@@ -233,7 +233,16 @@ module jmr_i2c_joy #(
                                 ac_now = btn_held(va) | btn_held(vc) | btn_held(vok);
                                 bd_now = btn_held(vb) | btn_held(vd);
                                 fire_ac <= ac_now || (fire_ac && ac_p);
-                                fire_bd <= bd_now || (fire_bd && bd_p);
+                                /* v3c (board on run 58: fire 2-3x per press,
+                                   game-dependent): the old VM edge bug ERASED
+                                   concurrent edges and masked the device
+                                   twitching a second button register during
+                                   one press. Primary fire stays instant;
+                                   the SECONDARY group's press now needs two
+                                   consecutive held batches, so a one-batch
+                                   crosstalk twitch can't mint an extra
+                                   keydown(13) beside every keydown(32). */
+                                fire_bd <= (bd_now && bd_p) || (fire_bd && bd_p);
                                 ac_p <= ac_now;
                                 bd_p <= bd_now;
                             end

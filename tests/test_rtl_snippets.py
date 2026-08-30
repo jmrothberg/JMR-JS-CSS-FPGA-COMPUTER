@@ -31,7 +31,10 @@ def _scratch_card():
         import tempfile
 
         scratch = Path(tempfile.gettempdir()) / "jmr_test_card.img"
-        real = ROOT / "card.img"
+        # JMR_CARD_SRC: pin the suite to a frozen card copy (the repo card
+        # is re-minted by the content lane mid-session; measurement doctrine
+        # says validate against a frozen snapshot when content moves).
+        real = Path(os.environ.get("JMR_CARD_SRC", ROOT / "card.img"))
         if real.is_file():
             shutil.copyfile(real, scratch)
             os.environ["JMR_CARD_IMG"] = str(scratch)

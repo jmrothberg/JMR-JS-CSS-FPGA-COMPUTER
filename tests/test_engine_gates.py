@@ -416,4 +416,22 @@ def test_joy_concurrent_edges_none_lost():
     assert run([16, F, F, F, 0, F, F]) == (1, 1), "clean press"
     assert run([20, F, F, 0, F, F]) == (1, 1), "fire beside direction edge"
     assert run([16, F, 0, F, 16, F, 0, F]) == (2, 2), "two rapid presses"
+
+    # Dual-interface pad (board 2026-08-29 JOYDEMO): the same press arrives
+    # as a REAL key event AND as a joy bit — the synthetic twin must be
+    # swallowed (one keydown, one keyup), while a joy-only press after the
+    # dedup window still delivers normally.
+    def run_dual():
+        before = counts()
+        sim._rpc("KEYEVT 32 1")
+        sim._rpc("JOY 16")
+        sim._rpc("FRAME"); sim._rpc("FRAME")
+        sim._rpc("KEYEVT 32 0")
+        sim._rpc("JOY 0")
+        for _ in range(4): sim._rpc("FRAME")
+        after = counts()
+        return after[0] - before[0], after[1] - before[1]
+    assert run_dual() == (1, 1), "dual-path press must dedup to one"
+    for _ in range(10): sim._rpc("FRAME")  # dedup window expires
+    assert run([16, F, F, 0, F, F]) == (1, 1), "joy-only press after window"
     sim.shutdown()
