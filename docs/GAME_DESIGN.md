@@ -562,6 +562,28 @@ score/effect/state-change call. Mark it dead; sweep once, after.**
 > launching >1 bullet per press), not the joystick PHY fix landing in
 > run 59. Relayed to RTL immediately — don't expect run 59's joystick
 > dedup to touch this bug.
+>
+> **2026-08-29 status: still open, now the last known bug.** Run 59
+> (joystick dedup + keydown fix, `ce72170`) is on the board and runs
+> well, confirmed board-tested — but as expected it does not touch this
+> bug (unrelated input path). `playerShoot()` in `storage/INVFAST.HTML`
+> already guards against extra bullets (`projectiles.length > 0` + a
+> 6-frame cooldown; checked while adding key-event capture below), so a
+> keyboard auto-repeat storm shouldn't itself double a shot at the
+> content layer. Real-time key display + capture landed in
+> `gui_jmr_js.py` (commit `1d08748`) so a held-key storm can be lined up
+> against a future board fault by timestamp, and the Keyboard/`PHY_PS2`
+> block in the Architecture Monitor now blinks on every real keystroke
+> (commit follows) instead of staying dark. Run 60's F/T-line fault
+> forensics (docs/ARCH_MONITOR.md) is the endgame here: one capture at
+> a saucer kill names which allocator ran out. Separately, the Pmod
+> joystick fire button still fires multiple shots per press even after
+> run 59's dual-path dedup (`jmr_js_vm.sv`) and PHY v3c
+> (`jmr_i2c_joy.sv`) — **not a priority**, flagged to RTL with a
+> specific gap in the dedup's ordering assumption, but not blocking
+> anything. Current priority order: (1) increase VM speed without
+> increasing placement/routing congestion, (2) fix this saucer freeze —
+> the last known content-breaking bug.
 
 INVFAST froze on the board — **only** on a hit, never on a miss, 100%
 repeatable — the instant a bullet actually killed an alien. Fault 3,

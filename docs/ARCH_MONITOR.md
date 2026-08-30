@@ -148,6 +148,25 @@ else begin machine_fault <= 1'b1; fault_code <= 8'd3;
 from the glass the two look identical, and the V-line is the only thing that
 tells them apart. `MAX_OBJ = 960` (`jmr_js_vm.sv:457`).
 
+### H / F / T lines — heap gauge and fault forensics (run 60+)
+
+Three observation-only additions (zero execution cost — background
+scanner on dedicated LUTRAM read ports, shadow latches on the fault
+edge; proof of harmlessness is a digit-identical fclk profile):
+
+| Line | Payload (hex nibbles after the letter) | When |
+|---|---|---|
+| `H<8>` | `{env[9:0], arr[10:0], obj[10:0]}` live counts (background scan, ~20 µs refresh) | beside every V heartbeat |
+| `F<16>` | `{kind[1:0], retried, state[6:0], vcsp[7:0], vsp[11:0], 00}` then `{env10, arr11, obj11}` at-fault pools | once per machine_fault rise |
+| `T<32>` | last 8 committed ips, newest first (16 bits each) | once per machine_fault rise |
+
+The F-line kills the frozen-IP trap: `kind` names WHICH allocator
+faulted (0=obj 1=arr 2=fn 3=env), `retried` says whether forced GC
+already ran, and the pool counts show what was actually full. The
+T-line shows the real approach path instead of one in-flight ip.
+The H-line makes slow pool growth (the INVFAST grids-leak class)
+visible as a stair-step long before any fault.
+
 ### The D-line — storage stall telemetry
 
 Fires after **~0.67 s of continuous storage busy**, then repeats every ~0.17 s
@@ -235,6 +254,18 @@ that deliberately, not reflexively.
   `sim/sim_main.cpp` ends its command loop with a bare `ERR`, so an unknown verb
   costs one line and never hangs — but an unlisted verb makes `_rpc` fault-log
   every refusal and buries the real fault in the flight log.
+- **The Keyboard (`PHY_PS2`) block never blinked** (2026-08-29) because its
+  only heat source was `_reg_states` matching the RTL's `S_KEYEV`/
+  `S_FRAME_KEY` dispatch state — a single-cycle state a ~0.67s board V-line
+  heartbeat is very unlikely to ever sample. On PYTHON/FPGA-SIM the same gap
+  existed, just less visibly (per-op VMSTAT samples faster, but still not
+  every cycle). Fixed at the GUI layer instead of the RTL layer: `gui_jmr_js.
+  py` now stamps `self._kbd_last_t` on every key that actually reaches
+  `backend.key_event(...)`, passes it through `arch_snapshot()`'s consumer as
+  `snap["kbd_last_t"]`, and `ArchitectureView.update()` feeds it straight into
+  the same `_heat_stamp`/decay mechanism every other block already uses — so
+  it blinks on every real keypress, on every runtime, with no RTL change and
+  no dependency on catching a fleeting dispatch state.
 
 ---
 

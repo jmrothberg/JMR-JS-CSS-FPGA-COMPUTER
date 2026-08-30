@@ -1300,6 +1300,13 @@ class ArchitectureView:
             self._heat_stamp["PHY_HDMI"] = now
             if self._snap.get("tether"):
                 self._heat_stamp["PHY_UART"] = now
+        # NEW: real keystroke reaching the machine (gui_jmr_js.py, every
+        # runtime) — was previously dark on BOARD in practice because the
+        # RTL's own S_KEYEV dispatch state is one cycle wide against a
+        # ~0.67s V-line heartbeat; this stamps on every actual keypress.
+        kbd_t = self._snap.get("kbd_last_t")
+        if isinstance(kbd_t, (int, float)):
+            self._heat_stamp["PHY_PS2"] = kbd_t
         # Activity-weighted heat floor: the RTL's own cycle histogram, or the
         # native histogram PYTHON collects for the same purpose.
         if not running:

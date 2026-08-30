@@ -164,6 +164,12 @@ class App:
         self._key_trace: collections.deque = collections.deque(maxlen=200)
         self._key_repeat_total = 0
         self._last_key_event: tuple | None = None  # (t, keysym, down, repeat)
+        # Absolute monotonic time a keystroke actually reached the running
+        # machine (not just the GUI) — feeds the Architecture Monitor's
+        # Keyboard/PHY_PS2 block so it blinks on real input instead of never
+        # (the RTL's own S_KEYEV dispatch state is one board V-line sample
+        # in ~0.67s away from being caught; this is visible every press).
+        self._kbd_last_t: float | None = None
         self._ppm_bytes: bytes | None = None
         # NEW: letterbox cursor blink (~2 Hz) — HDMI already blinks via frame_div[5]
         self._cursor_on = True
@@ -350,6 +356,13 @@ class App:
                 snap = getter() or {}
             except Exception:
                 snap = {}
+        # NEW: real keystrokes reaching the running machine — lights the
+        # Keyboard/PHY_PS2 block the same way every other engine block
+        # lights (gui_arch_monitor.py's heat_stamp/decay), instead of
+        # relying on catching the RTL's one-cycle S_KEYEV dispatch state
+        # on a coarse board heartbeat.
+        if self._kbd_last_t is not None:
+            snap["kbd_last_t"] = self._kbd_last_t
         override = getattr(self, "_arch_phase_override", None)
         if override:
             snap["phase"] = override
@@ -573,6 +586,7 @@ class App:
             jk = _js_key(event)
             if jk is not None and hasattr(self.backend, "key_event"):
                 self.backend.key_event(jk[0], jk[1], True)
+                self._kbd_last_t = time.monotonic()
         # Play keys only while a game is running (or MORE paging).
         # At the monitor prompt, Left/Right move the insert cursor.
         playing = self._is_running()
@@ -700,6 +714,7 @@ class App:
             jk = _js_key(event)
             if jk is not None and hasattr(self.backend, "key_event"):
                 self.backend.key_event(jk[0], jk[1], False)
+                self._kbd_last_t = time.monotonic()
         if event.keysym == "Left":
             self._key_left = False
             self._emit_keys()
