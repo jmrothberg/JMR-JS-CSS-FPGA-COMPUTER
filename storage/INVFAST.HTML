@@ -275,6 +275,8 @@ class Projectile {
     this.velocity = velocity;
     // thin arcade laser (radius kept for existing hit tests)
     this.radius = 2;
+    // 2026-08-29: mark-and-sweep kill flag (see updateInvaderCollision).
+    this.dead = false;
   }
 
   draw() {
@@ -354,6 +356,8 @@ class Invader {
     this.width = 36;
     this.height = 24;
     this.position = { x: position.x, y: position.y };
+    // 2026-08-29: mark-and-sweep kill flag (see updateInvaderCollision).
+    this.dead = false;
   }
 
   points() {
@@ -1047,10 +1051,22 @@ function showGameOver() {
 // block, obj/arr/env all comfortable). Splitting the per-invader bunker/
 // invasionOver/bullet-collision work into its own function is the fix —
 // the wall is per-function, so each side of the split gets its own budget.
-// Returns 1 if this invader was killed by a player bullet this call.
-function updateInvaderCollision(inv, grid, i, py, ph) {
+// 2026-08-29: was splicing invaders/projectiles synchronously from inside
+// a nested loop-within-a-loop (grids -> invaders -> this function's own
+// projectiles scan) — board fault 3 fired every time a shot actually
+// connected, never on a miss (obj/arr/env stayed flat right up to the
+// fault frame, ruling out gradual exhaustion; it's the splice-during-
+// nested-iteration itself). The original INVADERS.HTML never hit this
+// because it deferred the whole kill (splice included) into a
+// setTimeout callback, which only ever runs after all of that frame's
+// iteration has finished — by construction never nested inside it.
+// Fix: mark dead here (cheap, no allocation), remove the setTimeout
+// (that's a real per-shot allocation the FAST rules already avoid
+// elsewhere) and sweep both arrays once, AFTER their iteration is
+// fully done — sweepGridInvaders()/sweepProjectiles() below. Same O(n)
+// cost as splice, just moved to a safe point; no slower.
+function updateInvaderCollision(inv, grid, py, ph) {
   var ix, iy, iw, ih, bi, pr, prx, pry, prr, j;
-  var invaders = grid.invaders;
   ix = inv.position.x;
   iy = inv.position.y;
   iw = inv.width;
@@ -1068,6 +1084,7 @@ function updateInvaderCollision(inv, grid, i, py, ph) {
   }
   for (j = projectiles.length - 1; j >= 0; j--) {
     pr = projectiles[j];
+    if (pr.dead) continue;
     prx = pr.position.x;
     pry = pr.position.y;
     prr = pr.radius;
@@ -1079,13 +1096,44 @@ function updateInvaderCollision(inv, grid, i, py, ph) {
     ) {
       bumpScore(inv.points());
       createParticles(inv, "#BAA0DE");
-      invaders.splice(i, 1);
-      projectiles.splice(j, 1);
-      if (invaders.length > 0) refreshGridBounds(grid);
-      return 1;
+      inv.dead = true;
+      pr.dead = true;
+      return;
     }
   }
-  return 0;
+}
+
+// Compact grid.invaders in place (no splice-during-iteration); recomputes
+// grid bounds only if something actually died this frame. Returns the
+// post-sweep invader count.
+function sweepGridInvaders(grid) {
+  var invaders = grid.invaders;
+  var i, w, n;
+  n = invaders.length;
+  w = 0;
+  for (i = 0; i < n; i++) {
+    if (!invaders[i].dead) {
+      invaders[w] = invaders[i];
+      w = w + 1;
+    }
+  }
+  invaders.length = w;
+  if (w !== n && w > 0) refreshGridBounds(grid);
+  return w;
+}
+
+// Compact the shared projectiles array once per frame, after every grid's
+// invader loop has had a chance to mark a hit.
+function sweepProjectiles() {
+  var i, w;
+  w = 0;
+  for (i = 0; i < projectiles.length; i++) {
+    if (!projectiles[i].dead) {
+      projectiles[w] = projectiles[i];
+      w = w + 1;
+    }
+  }
+  projectiles.length = w;
 }
 
 function animate() {
@@ -1265,11 +1313,11 @@ function animate() {
     for (i = invaders.length - 1; i >= 0; i--) {
       inv = invaders[i];
       inv.update(vx, vy);
-      if (updateInvaderCollision(inv, grid, i, py, ph) && invaders.length === 0) {
-        grids.splice(gi, 1);
-      }
+      updateInvaderCollision(inv, grid, py, ph);
     }
+    if (sweepGridInvaders(grid) === 0) grids.splice(gi, 1);
   }
+  sweepProjectiles();
 
   // POWER-UPS: update, cull, and collect
   for (i = powerUps.length - 1; i >= 0; i--) {
