@@ -14,6 +14,13 @@ UART — the bitstream speaks that FIFO, and Linux still exposes it as a tty
                             not send it, so parse defensively, never require.
   D<hh>\\n                  — storage stall telemetry (stor_state) after ~0.67s
                             of continuous storage busy, then every ~0.17s.
+  H<8 hex>\\n               — run-60+: live {env,arr,obj} pool counts, beside
+                            every V heartbeat (background scan, ~20us refresh).
+  F<16 hex>\\n              — run-60+: at-fault forensics {kind,retried,state,
+                            vcsp,vsp}+{env,arr,obj at fault}, once per
+                            machine_fault rise.
+  T<32 hex>\\n              — run-60+: last 8 committed ips, newest first,
+                            once per machine_fault rise.
 
 Port autodetect: JMR_JS_SERIAL env wins; otherwise FT2232 (pid 0x6010) channel A
 (location ".0") — channel B is JTAG. Optional FT232R on J13 is a fallback only.
@@ -121,6 +128,84 @@ def _parse_vm_v_line(line: str):
         return None
 
 
+def _parse_heap_hex8(hex8: str):
+    """Unpack a 32-bit {env[9:0], arr[10:0], obj[10:0]} hex8 word. None if bad."""
+    try:
+        val = int(hex8, 16)
+    except ValueError:
+        return None
+    obj = val & 0x7FF
+    arr = (val >> 11) & 0x7FF
+    env = (val >> 22) & 0x3FF
+    return (env, arr, obj)
+
+
+_FAULT_KIND_NAME = {0: "obj", 1: "arr", 2: "fn", 3: "env"}
+
+
+def _parse_h_line(line: str):
+    """Parse `H<8 hex>` — live {env,arr,obj} pool counts. None if missing/torn."""
+    if not isinstance(line, str) or not line or line[0] not in ("H", "h"):
+        return None
+    body = line[1:].strip()
+    if len(body) < 8:
+        return None
+    return _parse_heap_hex8(body[:8])
+
+
+def _parse_f_line(line: str):
+    """Parse `F<16 hex>` — at-fault forensics snapshot. None if missing/torn.
+
+    Layout (docs/ARCH_MONITOR.md): first 8 hex = {kind2,retried1,state7,
+    vcsp8,vsp12,00} packed MSB-first; last 8 hex = {env10,arr11,obj11} at
+    the moment of fault (same packing as the H-line).
+    """
+    if not isinstance(line, str) or not line or line[0] not in ("F", "f"):
+        return None
+    body = line[1:].strip()
+    if len(body) < 16:
+        return None
+    try:
+        head = int(body[:8], 16)
+    except ValueError:
+        return None
+    pools = _parse_heap_hex8(body[8:16])
+    if pools is None:
+        return None
+    vsp = (head >> 2) & 0xFFF
+    vcsp = (head >> 14) & 0xFF
+    state = (head >> 22) & 0x7F
+    retried = bool((head >> 29) & 0x1)
+    kind = (head >> 30) & 0x3
+    env, arr, obj = pools
+    return {
+        "kind": kind,
+        "kind_name": _FAULT_KIND_NAME.get(kind, "?"),
+        "retried": retried,
+        "state": state,
+        "vcsp": vcsp,
+        "vsp": vsp,
+        "env": env,
+        "arr": arr,
+        "obj": obj,
+    }
+
+
+def _parse_t_line(line: str):
+    """Parse `T<32 hex>` — last 8 committed ips, newest first. None if torn."""
+    if not isinstance(line, str) or not line or line[0] not in ("T", "t"):
+        return None
+    body = line[1:].strip()
+    if len(body) < 32:
+        return None
+    hex32 = body[:32]
+    try:
+        int(hex32, 16)
+    except ValueError:
+        return None
+    return [int(hex32[i * 4:(i + 1) * 4], 16) for i in range(8)]
+
+
 def _find_serial_port() -> Optional[str]:
     env_port = os.environ.get("JMR_JS_SERIAL", "").strip()
     if env_port:
@@ -166,6 +251,11 @@ class BoardBackend(RuntimeBackend):
         self._vm_fault = None
         self._vm_ip = None
         self._vm_logged = None  # (st, fault) last NOTE — change-only, no spam
+        # Optional run-60+ H/F/T telemetry (docs/ARCH_MONITOR.md). Stay None
+        # until a well-formed line arrives so older bits keep dashed fields.
+        self._heap_live = None  # (env, arr, obj) from the H-line
+        self._fault_snap = None  # dict from the F-line
+        self._fault_ip_trail = None  # list[8] from the T-line
         port = _find_serial_port()
         if port:
             try:
@@ -228,6 +318,26 @@ class BoardBackend(RuntimeBackend):
                 # NEW: USB Host scancode reached RTL (ps2_strobe)
                 self._ps2_strobes += 1
                 self._log.note(f"ps2_strobe n={self._ps2_strobes} code={line[1:] or '??'}")
+                continue
+            # Optional run-60+ heap gauge / fault forensics. Malformed or
+            # absent → ignore (older bits never send these).
+            parsed_h = _parse_h_line(line)
+            if parsed_h is not None:
+                self._heap_live = parsed_h
+                continue
+            parsed_f = _parse_f_line(line)
+            if parsed_f is not None:
+                self._fault_snap = parsed_f
+                self._log.note(
+                    f"FAULT kind={parsed_f['kind_name']} retried={parsed_f['retried']} "
+                    f"state=0x{parsed_f['state']:02X} vcsp={parsed_f['vcsp']} "
+                    f"vsp={parsed_f['vsp']} env={parsed_f['env']} arr={parsed_f['arr']} "
+                    f"obj={parsed_f['obj']}"
+                )
+                continue
+            parsed_t = _parse_t_line(line)
+            if parsed_t is not None:
+                self._fault_ip_trail = parsed_t
                 continue
             # Optional VM heartbeat. Malformed / absent → ignore (old bits).
             parsed_v = _parse_vm_v_line(line)
@@ -468,4 +578,27 @@ class BoardBackend(RuntimeBackend):
             snap["ip"] = self._vm_ip
             snap["fault"] = self._vm_fault
             snap["board_coarse"] = False
+        # Run-60+ H-line: live pool counts. Reuses the same keys PYTHON/
+        # FPGA-SIM already populate so _inspect_heap() needs no changes.
+        if self._heap_live is not None:
+            env, arr, obj = self._heap_live
+            snap["envl"] = env
+            snap["arr"] = arr
+            snap["obj"] = obj
+        # Run-60+ F/T-line: at-fault forensics, BOARD-specific field names
+        # (distinct from PYTHON/FPGA-SIM's fsite/badst/heapovf vocabulary,
+        # which mean something more precise there and would be misleading
+        # to overload with this coarser hardware snapshot).
+        if self._fault_snap is not None:
+            snap["board_fault_kind"] = self._fault_snap["kind"]
+            snap["board_fault_kind_name"] = self._fault_snap["kind_name"]
+            snap["board_fault_retried"] = self._fault_snap["retried"]
+            snap["board_fault_state"] = self._fault_snap["state"]
+            snap["board_fault_vcsp"] = self._fault_snap["vcsp"]
+            snap["board_fault_vsp"] = self._fault_snap["vsp"]
+            snap["board_fault_env"] = self._fault_snap["env"]
+            snap["board_fault_arr"] = self._fault_snap["arr"]
+            snap["board_fault_obj"] = self._fault_snap["obj"]
+        if self._fault_ip_trail is not None:
+            snap["board_ip_trail"] = self._fault_ip_trail
         return snap

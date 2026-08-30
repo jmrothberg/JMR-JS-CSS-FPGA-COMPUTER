@@ -1891,6 +1891,28 @@ class ArchitectureView:
         line = str(self._g("html_line") or "")
         if line.strip():
             rows.append(f"source: {line.strip()[:88]}")
+        if "board_fault_kind_name" in self._snap:
+            state = self._snap.get("board_fault_state")
+            state_str = f"0x{state:02X}" if isinstance(state, int) else self._g("board_fault_state")
+            rows.append("")
+            rows.append("BOARD run-60+ fault forensics (F-line):")
+            rows.append(
+                f"  kind {self._g('board_fault_kind_name')}   "
+                f"retried {self._g('board_fault_retried')}   state {state_str}"
+            )
+            rows.append(
+                f"  vcsp {self._g('board_fault_vcsp')}   "
+                f"vsp {self._g('board_fault_vsp')}"
+            )
+            rows.append(
+                f"  pools at fault — env {self._g('board_fault_env')}  "
+                f"arr {self._g('board_fault_arr')}  obj {self._g('board_fault_obj')}"
+            )
+        trail = self._snap.get("board_ip_trail")
+        if trail:
+            hexips = ", ".join(f"{ip:04X}" for ip in trail)
+            rows.append("BOARD approach path (T-line, newest first):")
+            rows.append(f"  {hexips}")
         body = "\n".join(rows) + "\n"
         body += self._peek_block("cycle ring before the fault", "ring")
         body += self._peek_block("pixel counters", "px")
