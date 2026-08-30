@@ -90,7 +90,6 @@ static inline uint32_t code_word(R* r, unsigned a) {
 }
 template <typename R>
 static inline void code_poke(R* r, unsigned a, uint32_t w) {
-    if (a == 4360u) fprintf(stderr, "HOST-POKE 4360 <= %08x\n", w);
     if (a < 16384u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[a] = w;
     else if (a < 20480u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[a - 16384u] = w;
 }
@@ -480,6 +479,8 @@ static int vm_sidx(const char* name) {
 static FILE* syncprof_f = nullptr;
 static int syncprof_gate = -1;
 static uint64_t sp_clk = 0, sp_sync_entry = 0, sp_sync_exit = 0;
+static uint64_t tear_count_live = 0;
+static unsigned hiwater_arr = 0, hiwater_obj = 0;
 static int sp_wait_draw = 0;
 static unsigned sp_prev_st = 255;
 static void syncprof_tick(unsigned st) {
@@ -722,6 +723,39 @@ static void tick() {
         unsigned sc = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state) & 127;
         state_cycles[sc]++;
         syncprof_tick(sc);
+        // HIWATER: max slot-store addresses ever written — the truth about
+        // how much of the 100-tile varr / 73-tile vobj stores titles touch.
+        {
+            static unsigned hw_arr = 0, hw_obj = 0;
+            auto* rr3 = top->rootp;
+            if (unsigned(rr3->jmr_js_core__DOT__u_vm__DOT__varr_we)) {
+                unsigned a = unsigned(rr3->jmr_js_core__DOT__u_vm__DOT__varr_waddr);
+                if (a > hw_arr) hw_arr = a;
+            }
+            if (unsigned(rr3->jmr_js_core__DOT__u_vm__DOT__vobj_we)) {
+                unsigned a = unsigned(rr3->jmr_js_core__DOT__u_vm__DOT__vobj_waddr);
+                if (a > hw_obj) hw_obj = a;
+            }
+            hiwater_arr = hw_arr; hiwater_obj = hw_obj;
+        }
+        // TEARCHECK: any fb write while the DDR3 present is copying = the
+        // display-tear window. Counted always; JMR_TEARLOG=1 logs first 32.
+        {
+            static uint64_t tear_n = 0; static int tgate = -1; static FILE* tf = nullptr;
+            auto* rr2 = top->rootp;
+            if (unsigned(rr2->jmr_js_core__DOT__fb_we) &&
+                unsigned(rr2->jmr_js_core__DOT__fb_present_busy)) {
+                tear_n++;
+                if (tgate < 0) { const char* g = getenv("JMR_TEARLOG"); tgate = (g && *g == '1') ? 1 : 0; }
+                if (tgate == 1 && tear_n <= 32) {
+                    if (!tf) tf = fopen("/tmp/tear.log", "w");
+                    if (tf) { fprintf(tf, "tear#%llu st=%u ip=%u\n",
+                        (unsigned long long)tear_n, sc,
+                        unsigned(rr2->jmr_js_core__DOT__u_vm__DOT__ip)); fflush(tf); }
+                }
+            }
+            tear_count_live = tear_n;
+        }
         // run-59 piece-1 checker: during EXEC the op word register must
         // equal code memory at the executing ip — a stale or mis-invalidated
         // prefetch dies loudly on the FIRST wrong op, across every test.
@@ -1702,6 +1736,8 @@ int main(int argc, char** argv) {
                       << " vretr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_retried)
                       << " vali=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_i)
                       << " fsite=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__fault_site)
+                      << " tear=" << tear_count_live
+                      << " hwarr=" << hiwater_arr << " hwobj=" << hiwater_obj
                       << " fenv=" << envsnap_eid
                       << " flen=" << envsnap_len
                       << " fkey=" << envsnap_key

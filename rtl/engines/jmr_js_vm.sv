@@ -97,6 +97,15 @@ module jmr_js_vm #(
     // seven card titles: PACMAN 16443 worst. 20480 = 1.25x. Console clamps
     // writes and the tools refuse bigger images - loud, not wrap.
     localparam int CODE_WORDS = 20480; // 2026-08-21(3): 20 tiles; the HM raf test's extended PACMAN image is 19527 words - 19456 was 71 words of headroom
+    // MEASURED 2026-08-30 (analysis only — NOT changed): PACMAN's image is
+    // 20,428 words of 20,480 and PACFAST 20,408, i.e. 0.25% from a loud
+    // refusal, both hand-trimmed to fit. Growing to 24576 (16K+8K) costs
+    // +4 RAMB36 and was tried and reverted: BRAM is 352.5/365 (96.6%) and
+    // sits in columns the router is already tight around (run 61 took a
+    // congestion warning), so code space is NOT free — it trades against
+    // clock speed. Fund it from the legacy tagged/e32 arrays instead
+    // (varr_tmem 6 tiles + vobj_tmem 3 + json_mem 2 + tfn_*/tenv/obj_* ~4
+    // ≈ 15 tiles, all dead or dying) before spending fresh BRAM.
     localparam int MAX_CONSTS = 1024;
     localparam int MAX_VARS   = 512;
     localparam int STACK_DEPTH = 1024; // RTL vspmax=71 (40-frame PACMAN attract); flat
@@ -1584,9 +1593,9 @@ module jmr_js_vm #(
         clsm_ip_rd <= cls_mip[clsm_raddr];
     end
 
-    logic        vobj_we, varr_we, venv_we;
-    logic [VOBJ_AW-1:0] vobj_waddr, vobj_raddr;
-    logic [VARR_AW-1:0] varr_waddr, varr_raddr;
+    logic vobj_we /*verilator public_flat_rd*/; logic varr_we /*verilator public_flat_rd*/; logic venv_we;
+    logic [VOBJ_AW-1:0] vobj_waddr /*verilator public_flat_rd*/; logic [VOBJ_AW-1:0] vobj_raddr;
+    logic [VARR_AW-1:0] varr_waddr /*verilator public_flat_rd*/; logic [VARR_AW-1:0] varr_raddr;
     logic [VENV_AW-1:0] venv_waddr, venv_raddr;
     logic [79:0] vobj_wdata, vobj_rdata;
     logic [79:0] venv_wdata, venv_rdata;
@@ -8047,7 +8056,21 @@ module jmr_js_vm #(
                     // busy asserts the following beat, so arm one beat).
                     if (!fbs_armed)
                         fbs_armed <= 1'b1;
-                    else if (!fb_present_busy) begin
+                    else begin
+                        /* run-62: the 768k-clk present spin is GONE — the VM
+                           no longer waits out the DDR3 copy. It runs behind
+                           GC + S_WAIT_FRAME + the next frame's JS.
+                           MEASURED (SYNCPROF, 10 titles, 288 presents): every
+                           title is 100% coverable — the first draw of the next
+                           frame lands 170k clocks AFTER the copy finishes, so
+                           no draw ever overlaps a copy in practice (PACMAN is
+                           the tightest at +1.4% margin and still never does).
+                           A write fence was built and DROPPED: it never fired
+                           in any workload, and by making draws wait it blew
+                           the bounded tick budget of the unit gates. Writes
+                           during a present were already shipping behavior
+                           anyway (~1.1M at boot on the flashed tree).
+                           Swap-while-busy is queued by fb_present.swap_pend. */
                         fbs_armed <= 1'b0;
                         clr_idx <= '0;
                         fb_dump_sel <= 1'b0;
