@@ -13,6 +13,7 @@ F10 toggles the Architecture Monitor (JS schematic). Arrows + Space = play.
 from __future__ import annotations
 
 import argparse
+import collections
 import sys
 import time
 import tkinter as tk
@@ -155,6 +156,14 @@ class App:
         self._key_up = False
         self._key_down = False
         self._key_fire = False
+        # NEW: real-time key display + capture (2026-08-29 — diagnosing
+        # whether X11 auto-repeat masquerades as distinct keydowns; the
+        # keysym-already-down check works because this desktop runs
+        # detectable autorepeat — see on_key_release's existing note).
+        self._keys_down: set[str] = set()
+        self._key_trace: collections.deque = collections.deque(maxlen=200)
+        self._key_repeat_total = 0
+        self._last_key_event: tuple | None = None  # (t, keysym, down, repeat)
         self._ppm_bytes: bytes | None = None
         # NEW: letterbox cursor blink (~2 Hz) — HDMI already blinks via frame_div[5]
         self._cursor_on = True
@@ -203,6 +212,8 @@ class App:
         self.root.resizable(False, False)
         self._status_shown = None
         self._set_status(self._status_text())
+        self._key_status_shown = None
+        self._set_key_status(self._key_status_text())
         # NEW: Architecture Monitor is a second window (does not grow the glass)
         self._build_arch_monitor()
         self._after_id = self.root.after(FRAME_MS, self._frame)
@@ -218,6 +229,20 @@ class App:
             width=80,
         )
         self.status.pack(fill=tk.X, padx=6, pady=4)
+
+        # NEW: real-time key state readout, same fixed-width discipline as
+        # `status` — must never grow the window (geometry is locked right
+        # after _build_ui in __init__).
+        self.key_status = tk.Label(
+            self.root,
+            text=self._key_status_text(),
+            fg="#ffe08a",
+            bg="#1a1a1a",
+            anchor="w",
+            font=("Courier", 11),
+            width=80,
+        )
+        self.key_status.pack(fill=tk.X, padx=6, pady=(0, 4))
 
         self.photo = tk.PhotoImage(width=WIDTH, height=HEIGHT)
         self.canvas_label = tk.Label(
@@ -370,6 +395,50 @@ class App:
         except tk.TclError:
             pass
 
+    def _log_key_event(self, event: tk.Event, down: bool, repeat: bool) -> None:
+        """Capture: every keydown/keyup, tagged with X11-autorepeat detection.
+
+        Written to the active backend's flight log (same file the V/F/T-line
+        fault forensics land in) so a held-key storm can be lined up against
+        a board fault by timestamp after the fact.
+        """
+        jk = _js_key(event)
+        code, key = jk if jk is not None else (None, event.keysym)
+        t = time.monotonic() - self._gui_t0
+        self._last_key_event = (t, event.keysym, down, repeat)
+        self._key_trace.append(self._last_key_event)
+        log = getattr(self.backend, "_log", None)
+        if log is not None:
+            try:
+                log.note(
+                    f"KEY {'DOWN' if down else 'UP'} keysym={event.keysym} "
+                    f"jscode={code} key={key!r} repeat={repeat} t={t:.3f}"
+                )
+            except Exception:
+                pass
+
+    def _key_status_text(self) -> str:
+        held = " ".join(sorted(self._keys_down)) or "(none)"
+        last = self._last_key_event
+        if last is None:
+            last_str = "(none yet)"
+        else:
+            t, keysym, down, repeat = last
+            last_str = f"{keysym} {'DOWN' if down else 'UP'}{' REPEAT' if repeat else ''} t=+{t:.2f}s"
+        return f"KEYS held:[{held}]  last:{last_str}  repeats={self._key_repeat_total}"
+
+    def _set_key_status(self, text: str) -> None:
+        max_ch = 80
+        if len(text) > max_ch:
+            text = text[: max_ch - 1] + "…"
+        if text == getattr(self, "_key_status_shown", None):
+            return
+        self._key_status_shown = text
+        try:
+            self.key_status.configure(text=text)
+        except tk.TclError:
+            pass
+
     def _is_running(self) -> bool:
         """Game owns the glass — PYTHON loop / last frame or FPGA-SIM game_mode.
 
@@ -477,6 +546,18 @@ class App:
         return "break"
 
     def on_key_press(self, event: tk.Event) -> str | None:
+        # NEW: real-time capture, before any early return, so nothing is
+        # missed. This desktop runs detectable X11 autorepeat (see
+        # on_key_release below) — a held key resends KeyPress with no
+        # KeyRelease in between, so "keysym already in _keys_down" IS the
+        # repeat signal; no timestamp trick needed.
+        is_repeat = event.keysym in self._keys_down
+        if is_repeat:
+            self._key_repeat_total += 1
+        else:
+            self._keys_down.add(event.keysym)
+        self._log_key_event(event, down=True, repeat=is_repeat)
+        self._set_key_status(self._key_status_text())
         if event.keysym in ("F9", "F10", "Escape"):
             return None
         # Ctrl/Cmd+V handled by on_paste binds — do not also type 'v'
@@ -606,6 +687,12 @@ class App:
         return None
 
     def on_key_release(self, event: tk.Event) -> str | None:
+        # NEW: real-time capture (see on_key_press). Detectable autorepeat
+        # means this fires exactly once per physical release, never
+        # mid-hold — so no repeat filtering needed on the release side.
+        self._keys_down.discard(event.keysym)
+        self._log_key_event(event, down=False, repeat=False)
+        self._set_key_status(self._key_status_text())
         if event.keysym in ("F9", "F10", "Escape"):
             return None
         # NEW: raw keyup twin of the on_key_press key_event forward
@@ -782,6 +869,7 @@ class App:
                         self._last_prompt = prompt
             self._refresh_fb()
             self._set_status(self._status_text())
+            self._set_key_status(self._key_status_text())
             self._update_arch_monitor()
             self._after_id = self.root.after(FRAME_MS, self._frame)
         except tk.TclError as e:
