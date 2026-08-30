@@ -36,6 +36,32 @@ const canvas = document.querySelector("canvas");
 const c = canvas.getContext("2d");
 c.imageSmoothingEnabled = false;
 
+/* Chrome SFX: playSfx(packed). Packed = freq,vol,frames,slide,ch repeating.
+   ch 0-2 square, 3 noise. Missing r is silent. Do not call sound() until FPGA nid 42. */
+function playSfx(r) {
+  if (!r) return;
+  if (typeof _chromePlay === "function") _chromePlay(r);
+}
+var sfxShoot = [880, 12, 8, -80, 0];
+var sfxExplode = [80, 12, 12, 0, 3, 140, 8, 10, -10, 1];
+var sfxDie = [400, 12, 24, -14, 0, 90, 10, 20, 0, 3];
+var sfxUfo = [280, 10, 48, 8, 0];
+var sfxUfoDie = [200, 12, 16, -8, 0, 70, 12, 14, 0, 3];
+var sfxWin = [523, 10, 10, 0, 0, 659, 10, 10, 0, 0, 784, 12, 16, 0, 0];
+var sfxMarch0 = [196, 8, 10, 0, 0];
+var sfxMarch1 = [174, 8, 10, 0, 0];
+var sfxMarch2 = [164, 8, 10, 0, 0];
+var sfxMarch3 = [146, 8, 10, 0, 0];
+var sfxMarchI = 0;
+function playMarch() {
+  if (sfxMarchI === 0) playSfx(sfxMarch0);
+  else if (sfxMarchI === 1) playSfx(sfxMarch1);
+  else if (sfxMarchI === 2) playSfx(sfxMarch2);
+  else playSfx(sfxMarch3);
+  sfxMarchI = sfxMarchI + 1;
+  if (sfxMarchI > 3) sfxMarchI = 0;
+}
+
 // NEW: native HDMI / GUI glass size (never reassign canvas.width after load)
 const GAME_WIDTH = 640;
 const GAME_HEIGHT = 480;
@@ -385,6 +411,7 @@ class Grid {
     this.moveClock++;
     if (this.moveClock < this.moveDelay) return;
     this.moveClock = 0;
+    playMarch();
     invaderFrame = 1 - invaderFrame;
 
     const step = 8;
@@ -569,12 +596,7 @@ function playerShoot() {
       velocity: { x: 0, y: -10 },
     })
   );
-  const music = document.getElementById("laser");
-  if (music && music.play) {
-    music.currentTime = 0;
-    music.play().catch((err) => console.warn("Autoplay blocked:", err));
-    music.volume = 0.25;
-  }
+  playSfx(sfxShoot);
 }
 function applyStick() {
   var j = stickBits();
@@ -674,12 +696,7 @@ function checkVictory() {
 }
 
 function playVictorySound() {
-  const music = document.getElementById("victory");
-  if (music) {
-    music.currentTime = 0;
-    music.play().catch((err) => console.warn("Victory sound failed:", err));
-    music.volume = 0.7;
-  }
+  playSfx(sfxWin);
 }
 
 function showNextLevelScreen() {
@@ -848,6 +865,7 @@ function killPlayer() {
   player.opacity = 0;
   projectiles.length = 0;
   createParticles({ object: player, color: "white", fades: true });
+  playSfx(sfxDie);
 }
 
 function finishDie() {
@@ -1091,6 +1109,7 @@ function animate() {
       saucer.alive = false;
       saucerClock = 0;
       createParticles({ object: saucer, color: "#ff3344", fades: true });
+      playSfx(sfxUfoDie);
       setTimeout(() => {
         projectiles.splice(index, 1);
       }, 0);
@@ -1164,6 +1183,7 @@ function animate() {
                 object: invader,
                 fades: true,
               });
+              playSfx(sfxExplode);
 
               grid.invaders.splice(i, 1);
               projectiles.splice(j, 1);
@@ -1254,6 +1274,7 @@ function animate() {
         grids[0].invaders.length >= 8
       ) {
         saucer.spawn();
+        playSfx(sfxUfo);
         saucerClock = 0;
         saucerDelay = 600 + Math.floor(Math.random() * 360);
       }
@@ -1315,13 +1336,6 @@ function startGame() {
   frames = 1;
   grids.push(new Grid());
   levelHasSpawned = true;
-
-  const music = document.getElementById("backgroundMusic");
-  if (music && music.play) {
-    music.currentTime = 0;
-    music.play().catch((err) => console.warn("Autoplay blocked:", err));
-    music.volume = 0.5;
-  }
 }
 
 document.getElementById("start").addEventListener("click", () => {
@@ -1380,6 +1394,54 @@ addEventListener("keyup", (e) => {
 </script>
 <script>
 /* Attract splash on LOAD+RUN / Chrome — PRESS SPACE to start (no auto-click). */
+</script>
+<script data-host="chrome">
+(function(){
+var ctx=null,noise=null;
+function ac(){
+  var AC,i,d;
+  if(ctx) return ctx;
+  AC=window.AudioContext||window.webkitAudioContext;
+  if(!AC) return null;
+  ctx=new AC();
+  noise=ctx.createBuffer(1,ctx.sampleRate,ctx.sampleRate);
+  d=noise.getChannelData(0);
+  for(i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+  return ctx;
+}
+window._chromePlay=function(r){
+  var a,i,freq,vol,frames,slide,ch,dur,t0,osc,g,endF;
+  a=ac();
+  if(!a||!r||!r.length) return;
+  if(a.state==="suspended") a.resume();
+  t0=a.currentTime;
+  for(i=0;i+4<r.length;i=i+5){
+    freq=r[i]; vol=r[i+1]; frames=r[i+2]; slide=r[i+3]; ch=r[i+4];
+    if(vol<=0||frames<=0) continue;
+    dur=frames/60;
+    if(dur<0.02) dur=0.02;
+    g=a.createGain();
+    g.gain.setValueAtTime((vol/15)*0.1,t0);
+    g.gain.exponentialRampToValueAtTime(0.001,t0+dur);
+    g.connect(a.destination);
+    if(ch===3){
+      osc=a.createBufferSource();
+      osc.buffer=noise;
+      osc.loop=true;
+    }else{
+      osc=a.createOscillator();
+      osc.type="square";
+      osc.frequency.setValueAtTime(Math.max(20,freq),t0);
+      endF=freq+slide*frames;
+      if(endF<20) endF=20;
+      osc.frequency.linearRampToValueAtTime(endF,t0+dur);
+    }
+    osc.connect(g);
+    osc.start(t0);
+    osc.stop(t0+dur);
+  }
+};
+})();
 </script>
 </body>
 </html>

@@ -87,6 +87,9 @@ NATIVE_IDS = {
     # the RTL nid-41 arm is pending the "worth doing" decision — until
     # then FPGA-SIM faults loud (fault 5) on titles that reach it.
     "Object.keys": 41,
+    # sound(ch, freqHz, vol0_15, frames, slideHzPerFrame) — always succeed
+    # (no-op until ADAU1761 PHY). Unknown nid is fault 5; do not omit this.
+    "sound": 42,
 }
 
 # NEW: aliases share an id (decode prefers the canonical NATIVE_IDS key)

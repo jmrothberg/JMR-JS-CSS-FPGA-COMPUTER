@@ -768,6 +768,8 @@ class Machine:
             "clearInterval": self._nat_clear_timer,
             # NEW: JSB v2 unknown CALL_NATIVE
             "_stub": self._nat_noop,
+            # sound() nid 42 — always succeed (PHY later; silent no-op here)
+            "sound": self._nat_noop,
             # NEW: Canvas2D methods via ctx.* (HTML bytecode path)
             "ctx.fillRect": self._nat_fill_rect,
             "ctx.clearRect": self._nat_clear_rect,

@@ -1955,6 +1955,9 @@ class JsHwVm:
                 else:
                     text = "object"
                 return self._value64_interned_string(text, ip)
+            elif native_id == 42:
+                # sound(ch, freq, vol, frames, slide) — always succeed
+                pass
             else:
                 self._value64_fault(
                     f"unsupported native ID {native_id} at IP {ip}"

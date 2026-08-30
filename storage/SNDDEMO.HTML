@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Sound demo — JMR</title></head>
+<body style="margin:0;background:#000">
+<!-- LOAD "SNDDEMO.HTML" then RUN. Auto-walks every playSfx recipe.
+     FIRE replay, L/R step. Chrome: Web Audio. Card: sound() nid 42.
+     Never `function sound()` — that would compile as a user stub, not the native. -->
+<canvas id="gameCanvas" width="640" height="480"></canvas>
+<script>
+var canvas = document.querySelector("canvas");
+var c = canvas.getContext("2d");
+c.imageSmoothingEnabled = false;
+
+var W = 640;
+var H = 480;
+var frames = 0;
+var wait = 0;
+var cur = 0;
+var nextBtn = 0;
+var started = 0;
+var leftHeld = 0;
+var rightHeld = 0;
+var fireHeld = 0;
+
+/* Packed recipe: freqHz, vol0_15, frames, slideHzPerFrame, ch, ...
+   ch 0-2 square, 3 noise. Missing r is silent. */
+function playSfx(r) {
+  var i;
+  if (!r) return;
+  if (typeof _chromePlay === "function") {
+    _chromePlay(r);
+    return;
+  }
+  i = 0;
+  while (i + 4 < r.length) {
+    sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
+    i = i + 5;
+  }
+}
+
+var NTEST = 14;
+var names = [
+  "SQ CH0",
+  "SQ CH1",
+  "SQ CH2",
+  "NOISE CH3",
+  "SLIDE DOWN",
+  "SLIDE UP",
+  "VOL 15 LOUD",
+  "VOL 3 QUIET",
+  "SHORT 4 FR",
+  "LONG SLIDE",
+  "2-VOICE BLAST",
+  "3-VOICE CHORD",
+  "RETRIG CH0",
+  "SILENCE"
+];
+var recs = [
+  [523, 12, 24, 0, 0],
+  [659, 12, 24, 0, 1],
+  [784, 12, 24, 0, 2],
+  [0, 12, 20, 0, 3],
+  [880, 12, 16, -80, 0],
+  [220, 10, 16, 18, 0],
+  [392, 15, 24, 0, 0],
+  [392, 3, 24, 0, 1],
+  [900, 10, 4, 0, 0],
+  [280, 10, 48, 8, 1],
+  [80, 12, 12, 0, 3, 140, 8, 10, -10, 1],
+  [523, 10, 10, 0, 0, 659, 10, 10, 0, 1, 784, 12, 16, 0, 2],
+  [880, 12, 8, -80, 0],
+  0
+];
+
+function fireNow() {
+  playSfx(recs[cur]);
+  if (cur === 12) playSfx(recs[cur]);
+}
+
+addEventListener("keydown", function (e) {
+  var k = e.key;
+  var code = e.keyCode;
+  if (k === "ArrowLeft" || k === "a" || k === "A" || code === 37 || code === 65) leftHeld = 1;
+  if (k === "ArrowRight" || k === "d" || k === "D" || code === 39 || code === 68) rightHeld = 1;
+  if (k === " " || k === "Enter" || code === 32 || code === 13) fireHeld = 1;
+});
+addEventListener("keyup", function (e) {
+  var k = e.key;
+  var code = e.keyCode;
+  if (k === "ArrowLeft" || k === "a" || k === "A" || code === 37 || code === 65) leftHeld = 0;
+  if (k === "ArrowRight" || k === "d" || k === "D" || code === 39 || code === 68) rightHeld = 0;
+  if (k === " " || k === "Enter" || code === 32 || code === 13) fireHeld = 0;
+});
+
+function bits() {
+  var j = 0;
+  try { j = joy() | 0; } catch (e) { j = 0; }
+  try { if (keyLeft()) j = j | 4; } catch (e) {}
+  try { if (keyRight()) j = j | 8; } catch (e) {}
+  try { if (keyFire()) j = j | 16; } catch (e) {}
+  return j;
+}
+
+function loop() {
+  var j, fire, left, right, rec, i, x, y, host;
+  j = bits();
+  fire = fireHeld || (j & 16);
+  left = leftHeld || (j & 4);
+  right = rightHeld || (j & 8);
+  frames = frames + 1;
+  if (wait > 0) wait = wait - 1;
+  if (frames >= nextBtn) {
+    if (fire) {
+      nextBtn = frames + 12;
+      fireNow();
+      wait = 90;
+    } else if (right) {
+      nextBtn = frames + 12;
+      cur = cur + 1;
+      if (cur >= NTEST) cur = 0;
+      fireNow();
+      wait = 90;
+    } else if (left) {
+      nextBtn = frames + 12;
+      cur = cur - 1;
+      if (cur < 0) cur = NTEST - 1;
+      fireNow();
+      wait = 90;
+    } else if (wait === 0) {
+      if (started) {
+        cur = cur + 1;
+        if (cur >= NTEST) cur = 0;
+      }
+      started = 1;
+      fireNow();
+      wait = 90;
+    }
+  }
+
+  c.fillStyle = "#000000";
+  c.fillRect(0, 0, W, H);
+  c.fillStyle = "#3DFF9A";
+  c.font = "16px sans-serif";
+  c.fillText("SND DEMO", 8, 24);
+  c.fillStyle = "#FFFFFF";
+  c.font = "8px sans-serif";
+  c.fillText("FIRE REPLAY   L/R STEP   AUTO", 8, 48);
+  c.fillText("NOW", 8, 72);
+  c.fillText(cur + 1, 40, 72);
+  c.fillText("/", 64, 72);
+  c.fillText(NTEST, 80, 72);
+  c.fillStyle = "#FFFF00";
+  c.fillText(names[cur], 8, 96);
+  c.fillStyle = "#AAAAAA";
+  c.fillText("FREQ  VOL  FRAMES  SLIDE  CH", 8, 120);
+  rec = recs[cur];
+  c.fillStyle = "#FFFFFF";
+  if (!rec) {
+    c.fillText("NO RECIPE  (playSfx silent)", 8, 136);
+  } else {
+    x = 8;
+    y = 136;
+    i = 0;
+    while (i < rec.length) {
+      c.fillText(rec[i], x, y);
+      x = x + 48;
+      i = i + 1;
+      if (i % 5 === 0) {
+        x = 8;
+        y = y + 16;
+      }
+    }
+  }
+  c.fillStyle = "#8888FF";
+  c.fillText("CH 0 1 2 SQUARE    CH 3 NOISE", 8, 168);
+  c.fillText("ONE poke per 5 nums. Retrig = two pokes.", 8, 184);
+  host = "CARD  sound() nid 42";
+  if (typeof _chromePlay === "function") host = "CHROME  Web Audio";
+  c.fillStyle = "#3DFF9A";
+  c.fillText(host, 8, 216);
+  c.fillStyle = "#666666";
+  c.fillText("PHY later: same numbers, line-out. Mute on READY.", 8, 232);
+  c.fillStyle = "#FFFFFF";
+  c.fillText("L", 8, 464);
+  c.fillText(left, 20, 464);
+  c.fillText("R", 48, 464);
+  c.fillText(right, 60, 464);
+  c.fillText("F", 88, 464);
+  c.fillText(fire, 100, 464);
+  c.fillText("WAIT", 128, 464);
+  c.fillText(wait, 168, 464);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+<script data-host="chrome">
+(function(){
+var ctx=null,noise=null;
+function ac(){
+  var AC,i,d;
+  if(ctx) return ctx;
+  AC=window.AudioContext||window.webkitAudioContext;
+  if(!AC) return null;
+  ctx=new AC();
+  noise=ctx.createBuffer(1,ctx.sampleRate,ctx.sampleRate);
+  d=noise.getChannelData(0);
+  for(i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+  return ctx;
+}
+window._chromePlay=function(r){
+  var a,i,freq,vol,frames,slide,ch,dur,t0,osc,g,endF;
+  a=ac();
+  if(!a||!r||!r.length) return;
+  if(a.state==="suspended") a.resume();
+  t0=a.currentTime;
+  for(i=0;i+4<r.length;i=i+5){
+    freq=r[i]; vol=r[i+1]; frames=r[i+2]; slide=r[i+3]; ch=r[i+4];
+    if(vol<=0||frames<=0) continue;
+    dur=frames/60;
+    if(dur<0.02) dur=0.02;
+    g=a.createGain();
+    g.gain.setValueAtTime((vol/15)*0.1,t0);
+    g.gain.exponentialRampToValueAtTime(0.001,t0+dur);
+    g.connect(a.destination);
+    if(ch===3){
+      osc=a.createBufferSource();
+      osc.buffer=noise;
+      osc.loop=true;
+    }else{
+      osc=a.createOscillator();
+      osc.type="square";
+      osc.frequency.setValueAtTime(Math.max(20,freq),t0);
+      endF=freq+slide*frames;
+      if(endF<20) endF=20;
+      osc.frequency.linearRampToValueAtTime(endF,t0+dur);
+    }
+    osc.connect(g);
+    osc.start(t0);
+    osc.stop(t0+dur);
+  }
+};
+})();
+</script>
+</body>
+</html>

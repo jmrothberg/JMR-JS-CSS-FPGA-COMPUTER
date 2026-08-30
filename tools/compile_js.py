@@ -223,9 +223,14 @@ def compile_html_text(html: str):
 
     spans = []
     bodies = []
-    for m in re.finditer(r"<script[^>]*>(.*?)</script>", html, re.S | re.I):
-        body = m.group(1)
-        h0 = html[: m.start(1)].count("\n") + 1
+    # data-host=chrome is a browser-only Web Audio player. Skip it on mint
+    # so AudioContext never lands in the .JSH (board has no sound() native yet).
+    for m in re.finditer(r"<script([^>]*)>(.*?)</script>", html, re.S | re.I):
+        attrs = m.group(1) or ""
+        if re.search(r'data-host\s*=\s*["\']chrome["\']', attrs, re.I):
+            continue
+        body = m.group(2)
+        h0 = html[: m.start(2)].count("\n") + 1
         bodies.append(body)
         spans.append((h0, body.count("\n") + 1))
     if not any(b.strip() for b in bodies):

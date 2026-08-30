@@ -46,6 +46,7 @@ RUN
 | Asteroids (library) | `ASTEROID.HTML` | compile → ephemeral ProgramImage (vector stroke; no ASET) |
 | Aurora (library) | `AURORA.HTML` | compile → ephemeral ProgramImage (fillRect; no ASET) |
 | Joystick (library) | `JOYDEMO.HTML` | compile → ephemeral ProgramImage (stick + arrows; no ASET) |
+| Sound (library) | `SNDDEMO.HTML` | compile → ephemeral ProgramImage (playSfx catalog; Chrome audio, card `sound()` nid 42; no ASET) |
 | Mr. Do! (library) | `MRDO.HTML` | compile → ephemeral ProgramImage (portrait 384×480 in 640×480 letterbox; no ASET) |
 | Mortal Kombat (library) | `MK.HTML` | **V2.0 goal** — `MAX_SPR`≥518, ~4.63 MB art → **8 MB ASET bank**, dotted `new mk.…`, `Object.keys`/`for…in`, `Math.round`; Chrome today |
 | MK PVP (library) | `MKPVP.HTML` | **V1.0** MK-shaped — ≤16 atlases, L/R sheets, no `Object.keys` / negative mirror |
@@ -991,7 +992,7 @@ Version 2.0 goal.**
 | drawImage PNG | no (paths) | **yes** | **yes** | engines |
 | keyboard (HTML binds) | yes | yes | yes | KEYBITS / joy_in |
 | CSS (game HUD) | wanted | wanted | wanted | later tiny subset |
-| Audio | stub | stub | stub | later |
+| Audio | `playSfx` / `sound` nid 42 | Chrome | no-op until PHY | ADAU1761 later |
 | WebGL / Fetch | no | no | no | NEVER |
 
 Library HTML (`ASTEROID`, `AURORA`, `JOYDEMO`, `MRDO`, `MKPVP`) uses the **V1.0**
@@ -1140,6 +1141,7 @@ compat row Complete from Chrome or from a fat RTL snippet.
 | `storage/MKBIGCPU.HTML` | **V1.0** library (MKBIG art + CPU Kano). Ice ball (Sub-Zero) + flame (Kano); 4th tiny shots atlas; still ≤16 SPR / 4 MB |
 | In-memory ProgramImage | **V1.0:** minted `.JSH` from `card.img` (code + ASET). Not a `storage/` name |
 | `storage/JOYDEMO.HTML` | Library smoke (joystick / arrows on Canvas) |
+| `storage/SNDDEMO.HTML` | Library smoke (playSfx recipes; Chrome Web Audio, card `sound()` nid 42) |
 | `storage/games_*` | Upstream archive only |
 
 ## Host notes (PYTHON)

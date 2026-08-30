@@ -271,7 +271,7 @@ when we fit the chip. **One** source of truth:
 [docs/FPGA_FIT.md](docs/FPGA_FIT.md) paper budget. Do not copy stale 1024/512
 caps from older paragraphs.
 
-**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID / AURORA / MRDO / MKPVP / MKBIG / MKBIGCPU / MKCPU / JOYDEMO / PACORIG / PACFAST / DNKFAST) then `RUN`. FAST copies keep the original look; measured clocks are in [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) (PACFAST **2.8×** PACMAN, DNKFAST **1.65×** DONKEY on FPGA-SIM play `fclk`).
+**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID / AURORA / MRDO / MKPVP / MKBIG / MKBIGCPU / MKCPU / JOYDEMO / SNDDEMO / PACORIG / PACFAST / DNKFAST) then `RUN`. FAST copies keep the original look; measured clocks are in [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) (PACFAST **2.8×** PACMAN, DNKFAST **1.65×** DONKEY on FPGA-SIM play `fclk`).
 **V1.0** library titles must stay inside the authoring walls in
 [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md). On the machine, **V1.0 `LIST`
 is view / learn** — no on-chip compiler, so `EDIT` cannot change `RUN`

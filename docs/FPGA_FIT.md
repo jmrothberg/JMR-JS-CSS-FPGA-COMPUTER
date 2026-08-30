@@ -6,70 +6,72 @@ Words: [README.md — Words used](../README.md#words-used-in-this-project).
 
 ## SCOREBOARD — update this table every run (one screen; timing diary: [TIMING_WALL.md](TIMING_WALL.md); 08-21/22 campaign diary: [OVERNIGHT_STATUS.md](../OVERNIGHT_STATUS.md))
 
-**Last bitstream on disk: run 49b — routed 2026-08-27 16:38, TIMING CLEAN**
-(`build/bits/run49_DIR-self-heal.bit` + `.bin`).
-**WNS +0.180 / WHS +0.051** — best margin of the campaign, and the fifth
-gate-published bit in seven runs on `Congestion_SpreadLogic_high`.
-**BOARD 2026-08-27: run 50 flashed (WNSFAIL −0.214, small-negative
-policy) — DIR WORKS, the first working directory on glass.**
-**RUN 51 (2026-08-28 03:38): WNS +0.002/WHS +0.025 PUBLISHABLE —
-`build/bits/run51_engine2x_raster_div8_WNS+0.002.bit`, the 2x raster
-engine set (DNKFAST 2.10x, MRDOFAST ~2.2x in FPGA-SIM), closed by the
-AltSpreadLogic_low contingency after the in-flow placement was timing-
-dead at −1.8.**
-**RUN 52 (2026-08-28 05:54): WNS +0.007/WHS +0.050 first-attempt clean,
-route 16 MINUTES — present pipeline deleted (scanout reads the draw
-bank; S_FB_SYNC 768k/frame gone), vstack finally BRAM, div7 =
-14.3 MHz. `build/bits/run52_present-del_vstack_div7_WNS+0.007.bit`.
-MRDOFAST ~4.5-4.9x vs baseline, DNKFAST ~2.6x.** Diary:
-[TIMING_WALL.md — Run 50](TIMING_WALL.md#run-50--dir-works-on-the-board-2026-08-27-first-working-directory).
-Run 51 (raster engine 2x set, div8) baking.
-**Fit is solved. Timing is solved.** Ledger: [TIMING_WALL.md](TIMING_WALL.md).
+**Last bitstream on disk: run 61 — routed 2026-08-30 14:03, TIMING CLEAN**
+(`build/bits/run61_findcache_bucket_WNS+0.120.bit`). Live board bit.
+**WNS +0.120 / WHS +0.050.** Payload: FIND 1024-entry hash→id bucket +
+concat-handoff cache arming (the 4-way FF cache had been blind to concat
+since birth). PACMAN 11.58M → 10.90M VM beats/frame (×1.54 vs run 57).
+div7 = 14.3 MHz. Reports:
+`build/runs/run61_findcache_bucket_dedup_WNS+0.120/`.
+Prior published (diary): run 49b WNS +0.180; run 50 DIR-on-glass
+(WNSFAIL −0.214); run 51 raster 2× / div8; run 52 present-delete +
+vstack BRAM + div7; run 60 H/F/T telemetry WNS +0.143.
+[TIMING_WALL.md](TIMING_WALL.md).
+**Fit is solved. Timing is solved.**
 
-Source: `build/nexys_video/utilization_impl.rpt` (Design State: Routed,
-2026-08-27 16:38). Chip: XC7A200T, 134,600 LUTs / 269,200 FFs / 365 BRAM
-tiles / 740 DSP48E1.
+Source: `build/runs/run61_findcache_bucket_dedup_WNS+0.120/utilization_impl.rpt`
+(Design State: Routed, 2026-08-30 14:03). Chip: XC7A200T, 134,600 LUTs /
+269,200 FFs / 365 BRAM tiles / 740 DSP48E1.
 
 | Resource | Used | Budget | % | State |
 |---|---:|---:|---:|---|
-| **Slice LUTs (total)** | **106,111** | 134,600 | **78.8%** | **fits** |
-| LUT as Logic | 97,270 | 134,600 | 72.3% | fits |
-| LUT as Memory (LUTRAM) | 8,841 | 46,200 | 19.1% | fits — 37k free |
-| — Distributed RAM | 8,824 | — | — | RAMD64E 7,836 + RAMD32 1,490 + RAMS32 470 |
+| **Slice LUTs (total)** | **100,429** | 134,600 | **74.6%** | **fits — 34,171 free** |
+| LUT as Logic | 97,428 | 134,600 | 72.4% | fits |
+| LUT as Memory (LUTRAM) | 3,001 | 46,200 | 6.5% | fits — 43k free |
+| — Distributed RAM | 2,984 | — | — | RAMD64E 1,988 + RAMD32 1,500 + RAMS32 472 |
 | — Shift register | 17 | — | — | SRL16E |
-| Slice Registers (FF) | 46,259 | 269,200 | 17.2% | fits |
-| **Slice (packing)** | **31,784** | 33,650 | **94.5%** | **tightest resource on the chip** |
-| — SLICEL / SLICEM | 20,638 / 11,146 | — | — | — |
-| F7 Muxes | 7,561 | 67,300 | 11.2% | fits |
-| F8 Muxes | 3,316 | 33,650 | 9.9% | fits |
-| Unique control sets | 3,077 | 33,650 | 9.1% | fits |
-| **Block RAM tiles** | **344** | 365 | **94.2%** | fits — 21 tiles free |
-| RAMB36 | 323 | 365 | 88.5% | — |
-| RAMB18 | 42 | 730 | 5.8% | ×0.5 = 21 tiles |
-| DSP48E1 | 139 | 740 | 18.8% | fits |
+| Slice Registers (FF) | 55,200 | 269,200 | 20.5% | fits — see FIND-bucket note |
+| **Slice (packing)** | **31,633** | 33,650 | **94.0%** | **tightest resource on the chip** |
+| — SLICEL / SLICEM | 20,636 / 10,997 | — | — | — |
+| F7 Muxes | 8,271 | 67,300 | 12.3% | fits |
+| F8 Muxes | 2,868 | 33,650 | 8.5% | fits |
+| Unique control sets | 2,778 | 33,650 | 8.3% | fits |
+| **Block RAM tiles** | **352.5** | 365 | **96.6%** | fits — 12.5 tiles free |
+| RAMB36 | 329 | 365 | 90.1% | — |
+| RAMB18 | 47 | 730 | 6.4% | ×0.5 = 23.5 tiles |
+| DSP48E1 | 128 | 740 | 17.3% | fits |
 | Bonded IOB | 93 | 285 | 32.6% | fits |
 | BUFGCTRL | 5 | 32 | 15.6% | fits |
 | MMCME2 | 3 | 10 | 30.0% | fits |
 | PLLE2 | 1 | 10 | 10.0% | MIG |
-| CARRY4 (primitives) | 5,029 | — | — | timing cone — no longer binding |
+| CARRY4 (primitives) | 4,632 | — | — | timing cone — no longer binding |
 | **`place_design` / `route_design`** | — | — | — | **completed, 0 overlaps** |
-| **WNS (100 MHz, 10 ns)** | **+0.180 ns** | ≥ 0 | — | **MET — published by the gate** |
-| **WHS (hold)** | **+0.051 ns** | ≥ 0 | — | **MET** |
+| **WNS (100 MHz, 10 ns)** | **+0.120 ns** | ≥ 0 | — | **MET — published by the gate** |
+| **WHS (hold)** | **+0.050 ns** | ≥ 0 | — | **MET** |
 
-**Primitive detail** (run 49b; regenerate from `utilization_impl.rpt`
+**FIND-bucket note (why FFs jumped vs run 60):** `jn_bucket` is 1024×24
+with `ram_style = "block"` but inferred as flip-flops — BRAM tiles are
+**identical** to run 60 (352.5), LUTRAM identical (3,001), FFs
+30,468 → **55,200** (+24,732 ≈ 1024×24). Control-sets report names
+`jn_bucket[N][23]_i_1` per row. Write is still an FSM poke
+(`jn_cache_remember` → `jn_bucket[jn_h] <=` from the parent case).
+`ram_style` does not save that. The extra ~13.8k LUTs are the decode /
+1024:1 read mux, not new JS state.
+
+**Primitive detail** (run 61; regenerate from `utilization_impl.rpt`
 section 8 — do not hand-maintain):
 
 | LUT | | Flop & Latch | | Memory / other | |
 |---|---:|---|---:|---|---:|
-| LUT6 | 45,566 | FDRE | 44,414 | RAMD64E | 7,836 |
-| LUT5 | 19,259 | FDSE | 1,038 | RAMD32 | 1,490 |
-| LUT3 | 16,148 | FDCE | 700 | RAMS32 | 470 |
-| LUT4 | 15,845 | FDPE | 105 | SRL16E | 17 |
-| LUT2 | 12,585 | LDCE | 2 | RAMB36 / RAMB18 | 323 / 42 |
-| LUT1 | 4,210 | | | MUXF7 / MUXF8 | 7,561 / 3,316 |
-| INV | 3 | | | CARRY4 | 5,029 |
+| LUT6 | 48,487 | FDRE | 53,306 | RAMD64E | 1,988 |
+| LUT5 | 20,411 | FDSE | 836 | RAMD32 | 1,500 |
+| LUT4 | 15,785 | FDCE | 949 | RAMS32 | 472 |
+| LUT3 | 13,812 | FDPE | 107 | SRL16E | 17 |
+| LUT2 | 12,938 | LDCE | 2 | RAMB36 / RAMB18 | 329 / 47 |
+| LUT1 | 2,149 | | | MUXF7 / MUXF8 | 8,271 / 2,868 |
+| INV | 3 | | | CARRY4 | 4,632 |
 
-BRAM tiles = 323 × RAMB36 + 42 × RAMB18 × ½ = **344 / 365**.
+BRAM tiles = 329 × RAMB36 + 47 × RAMB18 × ½ = **352.5 / 365**.
 
 ### Why placement, not size, decides whether this design routes
 
@@ -106,6 +108,9 @@ otherwise** — full experiment and the standing rule in
 | 48 | — | — | WNS **+0.130**; telemetry (D/E/V) + phantom `-- MORE --` fix |
 | 49 | — | — | WNS **−0.166** — gate refused; DIR self-heal landed in the console dispatch cone |
 | **49b** | **106,111** | **0.788x** | **WNS +0.180 / WHS +0.051 — best margin to date.** Retry qualifier registered out of the cone |
+| 52 | 95,066 | 0.706x | present-delete + vstack BRAM + div7; WNS **+0.007** |
+| 60 | 86,628 | 0.644x | H/F/T telemetry; WNS **+0.143**; FFs 30,468 — leanest published |
+| **61 (live)** | **100,429** | **0.746x** | **WNS +0.120 / WHS +0.050.** FIND bucket + concat-handoff. LUTs +13,801 / FFs +24,732 vs 60 = `jn_bucket` as FFs, not BRAM. |
 
 ### FIT levers — closed out, kept for the record
 

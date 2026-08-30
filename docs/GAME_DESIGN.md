@@ -136,7 +136,7 @@ Stay on the **Complete** rows in the compatibility checklist. In particular:
 |---|---|
 | `var` / `let` / `const`, `if`, `for` / `while`, functions, objects, arrays | `eval`, `async`/`await`, `fetch`, modules as a real loader |
 | `Math.floor` `abs` `min` `max` `random` `sqrt` `Math.PI` | `Math.sin` `cos` `atan2` (not V1 natives — use a lookup table) |
-| `requestAnimationFrame`, `setTimeout` | `Audio` / `.play()` (stub / never) |
+| `requestAnimationFrame`, `setTimeout`, `playSfx(packed)` (Chrome) | HTML `Audio` / `.play()` (stub). Catalog: `SNDDEMO.HTML`. `sound(ch,freq,vol,frames,slide)` is nid **42** (always succeeds; silent until ADAU1761 PHY). Do **not** write `function sound()` in HTML. Line-out PSG is Cursor plan `board_line-out_psg` Part B. |
 | `getContext("2d")`, `fillRect`, `clearRect`, `fillStyle` | `getContext("webgl")`, gradients, filters |
 | `beginPath` `moveTo` `lineTo` `arc` `stroke` `fill` `closePath` | `scale()` as a separate call; prefer `setTransform` if you must |
 | `strokeStyle` `lineWidth` `save` `restore` `translate` `rotate` | shadows, `globalCompositeOperation`, `strokeRect` |

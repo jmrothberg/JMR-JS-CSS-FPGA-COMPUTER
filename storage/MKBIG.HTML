@@ -100,6 +100,17 @@ function stickBits() {
   try { j = joy() | 0; } catch (e) { j = 0; }
   return j;
 }
+/* Chrome SFX: playSfx(packed). Packed = freq,vol,frames,slide,ch repeating.
+   ch 0-2 square, 3 noise. Missing r is silent. Do not call sound() until FPGA nid 42. */
+function playSfx(r) {
+  if (!r) return;
+  if (typeof _chromePlay === "function") _chromePlay(r);
+}
+var sfxHit = [220, 12, 8, 0, 3, 180, 10, 6, 0, 1];
+var sfxBlock = [140, 8, 6, 0, 3];
+var sfxJump = [380, 8, 8, 22, 0];
+var sfxPunch = [160, 10, 5, 0, 1];
+var sfxKick = [120, 10, 6, 0, 2];
 var p1Pad = { left: 0, right: 0, up: 0, down: 0, punch: 0, kick: 0 };
 function p1Keys() {
   var j = stickBits();
@@ -213,8 +224,10 @@ function tryHit(att, def) {
   if (def.block) {
     dmg = Math.floor(dmg / 4);
     kb = Math.floor(kb / 2);
+    playSfx(sfxBlock);
   } else {
     setAnim(def, "endure");
+    playSfx(sfxHit);
   }
   def.atk = 0;
   def.hp = def.hp - dmg;
@@ -262,16 +275,19 @@ function control(f, k) {
     f.vy = -12;
     f.onGround = 0;
     setAnim(f, "jumping");
+    playSfx(sfxJump);
   }
   if (!f.block && f.onGround) {
     if (k.punch) {
       f.atk = 1;
       f.atkKind = 1;
       setAnim(f, "high-punch");
+      playSfx(sfxPunch);
     } else if (k.kick) {
       f.atk = 1;
       f.atkKind = 2;
       setAnim(f, "high-kick");
+      playSfx(sfxKick);
     }
   }
   advanceAnim(f);
@@ -480,6 +496,54 @@ loadAll();
 requestAnimationFrame(frame);
 
 
+</script>
+<script data-host="chrome">
+(function(){
+var ctx=null,noise=null;
+function ac(){
+  var AC,i,d;
+  if(ctx) return ctx;
+  AC=window.AudioContext||window.webkitAudioContext;
+  if(!AC) return null;
+  ctx=new AC();
+  noise=ctx.createBuffer(1,ctx.sampleRate,ctx.sampleRate);
+  d=noise.getChannelData(0);
+  for(i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+  return ctx;
+}
+window._chromePlay=function(r){
+  var a,i,freq,vol,frames,slide,ch,dur,t0,osc,g,endF;
+  a=ac();
+  if(!a||!r||!r.length) return;
+  if(a.state==="suspended") a.resume();
+  t0=a.currentTime;
+  for(i=0;i+4<r.length;i=i+5){
+    freq=r[i]; vol=r[i+1]; frames=r[i+2]; slide=r[i+3]; ch=r[i+4];
+    if(vol<=0||frames<=0) continue;
+    dur=frames/60;
+    if(dur<0.02) dur=0.02;
+    g=a.createGain();
+    g.gain.setValueAtTime((vol/15)*0.1,t0);
+    g.gain.exponentialRampToValueAtTime(0.001,t0+dur);
+    g.connect(a.destination);
+    if(ch===3){
+      osc=a.createBufferSource();
+      osc.buffer=noise;
+      osc.loop=true;
+    }else{
+      osc=a.createOscillator();
+      osc.type="square";
+      osc.frequency.setValueAtTime(Math.max(20,freq),t0);
+      endF=freq+slide*frames;
+      if(endF<20) endF=20;
+      osc.frequency.linearRampToValueAtTime(endF,t0+dur);
+    }
+    osc.connect(g);
+    osc.start(t0);
+    osc.stop(t0+dur);
+  }
+};
+})();
 </script>
 </body>
 </html>

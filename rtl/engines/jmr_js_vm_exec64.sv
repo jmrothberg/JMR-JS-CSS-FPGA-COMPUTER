@@ -4713,6 +4713,16 @@ module jmr_js_vm_exec64 (
                                                 state_n = S_FETCH_WAIT;
                                             end
                                         end
+                                        8'd42: begin
+                                            // sound(ch, freq, vol, frames, slide)
+                                            // Always succeed. PHY (ADAU1761) later
+                                            // latches args; unwired = silent, no fault.
+                                            vst_wr(base, result);
+                                            vsp_n = base + 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end
                                         default: begin
                                             machine_fault_n = 1'b1;
                                             fault_code_n = 8'd5;
