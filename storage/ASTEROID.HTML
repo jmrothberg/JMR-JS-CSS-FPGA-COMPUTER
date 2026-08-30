@@ -38,11 +38,10 @@ var wait = 0;
 var fireWait = 0;
 var fireHeld = 0;
 var fireWas = 0;
-/* Board run-60: a physical/keyboard tap stays "held" for ~40-80ms, which
-   quantizes to 2-3 polls at 60fps — fireWait alone (edge + 10-frame
-   repeat throttle) isn't a hard backstop against that. canShootAt is the
-   INVFAST playerShoot() pattern: pure frame-counter rate-limit, never an
-   edge-gate, so hold-to-repeat still works. */
+/* Board run-60 / run-61: a stick tap stays held 2-3 frames (I2C dwell).
+   fireEdge used to bypass fireWait, so a bounce/second sample fired
+   again. Rate-limit only (fireOn && fireWait===0); hold-repeat stays.
+   canShootAt is a decrementing backstop inside firePlayer. */
 var canShootAt = 0;
 var leftHeld = 0;
 var rightHeld = 0;
@@ -393,8 +392,11 @@ function explodeShip() {
 function firePlayer() {
   if (shots.length >= 4) return;
   if (ship.hyper > 0) return;
-  if (tick < canShootAt) return;
-  canShootAt = tick + 9;
+  /* Decrementing cool, not tick<canShootAt — a compare of two globals
+     did not stop stick multi-fire on the board (keyboard tap is 1 frame
+     so it looked fine). */
+  if (canShootAt > 0) return;
+  canShootAt = 9;
   var fx = dirx(ship.h);
   var fy = diry(ship.h);
   shots.push({
@@ -748,11 +750,15 @@ function stepShip() {
     }
   }
   if (fireWait > 0) fireWait = fireWait - 1;
-  var fireEdge = fireOn && !fireWas;
-  if (fireEdge || (fireOn && fireWait === 0)) {
+  /* Do not OR fireEdge here: a stick bounce / second stickBits() sample
+     looked like a new press and ignored fireWait (2 shots on one tap).
+     Held fire still repeats when fireWait hits 0. Movement bits above
+     are unchanged. */
+  if (fireOn && fireWait === 0) {
     firePlayer();
     fireWait = 10;
   }
+  fireWas = fireOn ? 1 : 0;
   if (hyperOn && !hyperWas) doHyper();
 }
 
@@ -774,6 +780,7 @@ function stepBits() {
 
 function tickGame() {
   tick = tick + 1;
+  if (canShootAt > 0) canShootAt = canShootAt - 1;
   var j0 = stickBits();
   var startOn = startHeld || (j0 & 32);
   if ((startOn && !startWas) && (mode === ATTRACT || mode === OVER)) startGame();
@@ -820,7 +827,8 @@ function tickGame() {
   }
 
   var jw = stickBits();
-  fireWas = fireHeld || (jw & 16);
+  /* fireWas is latched in stepShip from the same fireOn as the shot —
+     do not resample joy() here (that extra edge was a second bullet). */
   hyperWas = hyperHeld || (jw & 32);
   startWas = startHeld || (jw & 32);
 }

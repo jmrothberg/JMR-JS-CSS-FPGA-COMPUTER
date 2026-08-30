@@ -672,6 +672,46 @@ static void tick() {
             static uint64_t ring[4096]; static unsigned rw = 0; static bool dumped = false;
             auto* rr = top->rootp;
             unsigned st = unsigned(rr->jmr_js_core__DOT__u_vm__DOT__state) & 127;
+            // venv_len lifecycle log (JMR_LENLOG=1): every len write + context.
+            {
+                static FILE* lf = nullptr; static int lgate = -1;
+                if (lgate < 0) { const char* g = getenv("JMR_LENLOG"); lgate = (g && *g == '1') ? 1 : 0; }
+                static unsigned lx_ip = 0, lx_opw = 0;
+                if (lgate == 1 &&
+                    (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state) & 127) == 60) {
+                    lx_ip = unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__ip);
+                    lx_opw = unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opw_q);
+                }
+                if (lgate == 1 && unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vel_we)) {
+                    if (!lf) lf = fopen("/tmp/lenlife.log", "w");
+                    if (lf) fprintf(lf, "wa=%u wd=%u st=%u cs=%u eid=%u key=%u ip=%u\n",
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vel_wa),
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vel_wd),
+                        st, unsigned(rr->jmr_js_core__DOT__u_vm__DOT__casestate_q) & 127,
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__hp_eid_ff),
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__hp_key_ff),
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__ip));
+                    if (lf) fprintf(lf, "  eip=%u eopw=%08x eeid=%u ekey=%u ephase=%u\n",
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__ip),
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opw_q),
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__hp_eid),
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__hp_key),
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__hp_phase));
+                    if (lf) fprintf(lf, "  lastexec ip=%u opw=%08x\n", lx_ip, lx_opw);
+                    if (lf) fprintf(lf, "  bind k=%u n=%u ip=%u ent=%u lets=%u scan=%u\n",
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__bind_k),
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__bind_n),
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__bind_ip),
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vcall_entry_ff),
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vctor_lets),
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vctor_scan));
+                    if (lf) fprintf(lf, "  hs64=%u meid=%u\n",
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__hs64),
+                        unsigned(rr->jmr_js_core__DOT__u_vm__DOT__hs_m_hp_eid));
+                    if (lf && rr->jmr_js_core__DOT__u_vm__DOT__machine_fault) fflush(lf);
+                }
+                if (lgate == 1 && lf && rr->jmr_js_core__DOT__u_vm__DOT__machine_fault) fflush(lf);
+            }
             if (st == 64 && (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__valloc_kind) & 3) == 3) {
                 uint64_t e = 0;
                 e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__valloc_i) & 0x3fff);
@@ -1450,6 +1490,35 @@ int main(int argc, char** argv) {
                       << std::endl;
             continue;
         }
+        if (line.rfind("ENVKEYS", 0) == 0) {
+            unsigned oid = std::stoul(line.substr(8));
+            auto* rr = top->rootp;
+            std::cout << "ENVKEYS oid=" << oid;
+            for (int sl = 0; sl < 16; sl++) {
+                unsigned a = oid * 16 + sl;
+                unsigned k, vhi;
+                if (a < 4096) { k = (rr->jmr_js_core__DOT__u_vm__DOT__venv_slot_c0[a][2]) & 0xffff;
+                                vhi = rr->jmr_js_core__DOT__u_vm__DOT__venv_slot_c0[a][1]; }
+                else { unsigned b = (a - 4096) & 0x7ff;
+                       k = (rr->jmr_js_core__DOT__u_vm__DOT__venv_slot_c1[b][2]) & 0xffff;
+                       vhi = rr->jmr_js_core__DOT__u_vm__DOT__venv_slot_c1[b][1]; }
+                std::cout << " s" << sl << "=" << k << ":" << std::hex << vhi << std::dec;
+            }
+            std::cout << "\n" << std::flush;
+            continue;
+        }
+        if (line.rfind("CODEPEEK", 0) == 0) {
+            unsigned a = std::stoul(line.substr(9));
+            auto* rr = top->rootp;
+            std::cout << "CODEPEEK";
+            for (unsigned i = a; i < a + 16; i++) {
+                unsigned w = (i < 16384) ? unsigned(rr->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[i])
+                                         : unsigned(rr->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[(i - 16384) & 4095]);
+                std::cout << " " << std::hex << w << std::dec;
+            }
+            std::cout << " opsbase=" << unsigned(rr->jmr_js_core__DOT__u_vm__DOT__ops_base) << "\n" << std::flush;
+            continue;
+        }
         if (line == "VMSTAT?") {
             auto* r = top->rootp;
             unsigned stn = unsigned(r->jmr_js_core__DOT__u_vm__DOT__state);
@@ -1531,6 +1600,16 @@ int main(int argc, char** argv) {
                       << " vkind=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_kind)
                       << " vretr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_retried)
                       << " vali=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_i)
+                      << " fsite=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__fault_site)
+                      << " hpoid=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_oid)
+                      << " eidff=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_eid_ff)
+                      << " eidq=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__hp_eid)
+                      << " meid=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__hs_m_hp_eid)
+                      << " lenff=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_len[r->jmr_js_core__DOT__u_vm__DOT__hp_eid_ff & 0x1ff])
+                      << " keyff=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__hp_key_ff)
+                      << " keyq=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__hp_key)
+                      << " ridx=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_len_ridx)
+                      << " lrd=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_len_rdata)
                       << " mkpend=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vgc_mark_pend)
                       << " pfn=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_n)
                       << " pflip=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_last_ip)

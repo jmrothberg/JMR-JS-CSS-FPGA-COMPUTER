@@ -437,10 +437,10 @@ module jmr_js_vm #(
     // Tagged-env recycle FSM (S_REL_ENV) — not nested ENV_DEPTH×ENV_DEPTH.
     logic [5:0] rel_saved, rel_lim, rel_i, rel_nn;
     // Sequential vstack copy/shift (S_V64_BIND).
-    logic [1:0]  bind_mode;
-    logic [7:0]  bind_k, bind_n, bind_argc;
+    logic [1:0]  bind_mode /*verilator public_flat_rd*/;
+    logic [7:0]  bind_k /*verilator public_flat_rd*/; logic [7:0] bind_n /*verilator public_flat_rd*/; logic [7:0] bind_argc;
     logic [11:0] bind_base, bind_src, bind_vsp_next;
-    logic [15:0] bind_ip;
+    logic [15:0] bind_ip /*verilator public_flat_rd*/;
     logic [63:0] bind_ins;
     logic        bind_armed, bind_rd_arm /*verilator public_flat_rd*/;
     // Sticky: CTOR_ENV intern path (not combo NEW_OBJ&&bind_ins). BIND
@@ -753,6 +753,7 @@ module jmr_js_vm #(
     logic [15:0] dbg_stack_ovf /*verilator public_flat_rd*/;
     logic [15:0] dbg_call_ovf /*verilator public_flat_rd*/;
     logic        machine_fault /*verilator public_flat_rd*/;
+    logic [15:0] fault_site /*verilator public_flat_rd*/;  // src line of the fault assignment; debug-only
     logic [7:0]  fault_code /*verilator public_flat_rd*/;
     logic [15:0] to_fn [0:TIMER_DEPTH-1] /*verilator public_flat_rd*/; // setTimeout/setInterval Fn handles
     // flatten: WAIT_FRAME obj_cls/tfn raddr must not combo-read to_fn[0]
@@ -1111,12 +1112,12 @@ module jmr_js_vm #(
     logic [12:0] valloc_bind_src;
     logic [63:0] valloc_bind_this_ff;
     logic [63:0] valloc_bind_this;
-    logic [5:0]  vctor_scan;
+    logic [5:0]  vctor_scan /*verilator public_flat_rd*/;
     logic        vctor_armed;
     // Class-field trampoline (compiler JUMP after param LET_VARs). Last
     // ctor LET_VAR HEAP_WR skips that JUMP so startSelect lands (DONKEY).
     logic [15:0] vctor_jmp;
-    logic [5:0]  vctor_lets;
+    logic [5:0]  vctor_lets /*verilator public_flat_rd*/;
     logic [15:0] pow31_tbl [0:255]; // 31^i mod 2^16 (concat hash fold)
     initial begin
         pow31_tbl[0] = 16'd1;
@@ -1460,13 +1461,13 @@ module jmr_js_vm #(
     // consumer whose raddr was armed on the write beat still sees the new
     // value on the next edge). This closes the RMW hazard that blocked the
     // first conversion attempt.
-    logic        vol_we, vel_we;
+    logic        vol_we; logic vel_we /*verilator public_flat_rd*/;
     logic [12:0] vobj_len_ridx;
-    logic [9:0]  venv_len_ridx;
+    logic [9:0]  venv_len_ridx /*verilator public_flat_rd*/;
     logic [12:0] vol_wa;
     logic [5:0]  vol_wd;
-    logic [8:0]  vel_wa;
-    logic [4:0]  vel_wd;
+    logic [8:0]  vel_wa /*verilator public_flat_rd*/;
+    logic [4:0]  vel_wd /*verilator public_flat_rd*/;
     always_ff @(posedge clk) begin
         if (vol_we) vobj_len[vol_wa[9:0]] <= vol_wd;
         else if (e32_vobj_len_we) vobj_len[e32_vobj_len_waddr[9:0]] <= e32_vobj_len_wdata;
@@ -1636,7 +1637,7 @@ module jmr_js_vm #(
     logic [11:0] hp_aid;
     logic        hp_env_ff;
     logic        hp_env; // S_HEAP_* talks to venv_slot (LOAD/STORE/LET/ctor)
-    logic [9:0]  hp_eid_ff;
+    logic [9:0]  hp_eid_ff /*verilator public_flat_rd*/;
     logic [9:0]  hp_eid;
     logic [4:0]  hp_slot_ff;
     logic [4:0]  hp_slot;
@@ -1646,7 +1647,7 @@ module jmr_js_vm #(
     logic [5:0]  hp_len;
     logic [7:0]  hp_alen_ff, hp_lim_ff;
     logic [7:0]  hp_alen, hp_lim;
-    logic [15:0] hp_key_ff;
+    logic [15:0] hp_key_ff /*verilator public_flat_rd*/;
     logic [15:0] hp_key;
     logic [63:0] hp_wval_ff, hp_rval_ff;
     logic [63:0] hp_wval, hp_rval;
@@ -1657,7 +1658,7 @@ module jmr_js_vm #(
     st_t         rel_ret, bind_ret;
     st_t         vst_refill_ret;
     logic [2:0]  hp_phase_ff;
-    logic [2:0]  hp_phase;
+    logic [2:0]  hp_phase /*verilator public_flat_rd*/;
     logic [63:0] hp_proto_ff;
     logic [63:0] hp_proto;
     logic [15:0] hp_qk_ff [0:3];
@@ -3433,10 +3434,10 @@ module jmr_js_vm #(
     logic [255:0] hp_qv_ff_pack;
     // HEAP/FETCH handshake: parent writes these FFs; exec applies only
     // the masked scalars (ip / hp_* / code_raddr / state). Not a full FF dump.
-    logic hs64, hs32;
+    logic hs64 /*verilator public_flat_rd*/; logic hs32;
     logic hs_m_ip /*verilator public_flat_rd*/, hs_m_code /*verilator public_flat_rd*/, hs_m_state /*verilator public_flat_rd*/, hs_m_vsp;
     logic hs_m_hp_cmd, hs_m_hp_v64, hs_m_hp_oid, hs_m_hp_aid, hs_m_hp_env;
-    logic hs_m_hp_eid, hs_m_hp_slot, hs_m_hp_aslot, hs_m_hp_len, hs_m_hp_alen;
+    logic hs_m_hp_eid /*verilator public_flat_rd*/; logic hs_m_hp_slot, hs_m_hp_aslot, hs_m_hp_len, hs_m_hp_alen;
     logic hs_m_hp_lim, hs_m_hp_key, hs_m_hp_wval, hs_m_hp_rval, hs_m_hp_hit;
     logic hs_m_hp_ret, hs_m_hp_phase, hs_m_hp_proto, hs_m_hp_qn, hs_m_hp_qi;
     logic hs_m_hp_si, hs_m_hp_ss, hs_m_hp_tn, hs_m_hp_from_stack, hs_m_hp_make_arr;
@@ -3515,7 +3516,7 @@ module jmr_js_vm #(
     logic [7:0] e64_hp_alen_q;
     logic [6:0] e64_hp_aslot_q;
     logic [3:0] e64_hp_cmd_q;
-    logic [9:0] e64_hp_eid_q;
+    logic [9:0] e64_hp_eid_q /*verilator public_flat_rd*/;
     logic e64_hp_env_q;
     logic e64_hp_from_stack_q;
     logic e64_hp_hit_q;
@@ -3741,7 +3742,7 @@ module jmr_js_vm #(
     logic [63:0] vvars_rdata;
     logic vvar_valid_rdata;
     logic [63:0] venv_parent_rdata;
-    logic [4:0] venv_len_rdata;
+    logic [4:0] venv_len_rdata /*verilator public_flat_rd*/;
     logic [11:0] venv_gen_rdata;
     logic venv_valid_rdata /*verilator public_flat_rd*/;
     logic [7:0] varr_len_rdata;
@@ -6112,7 +6113,7 @@ module jmr_js_vm #(
             gc_slot <= '0; gc_cur <= '0;
             gc_obj_high <= '0; gc_arr_high <= '0; dbg_gc_n <= '0;
             dbg_stack_ovf <= '0; dbg_call_ovf <= '0;
-            machine_fault <= 1'b0; fault_code <= 8'd0;
+            machine_fault <= 1'b0; fault_code <= 8'd0; fault_site <= 16'd6115;
             prev_joy <= 6'd0; joy_down_edge <= 6'd0; joy_up_edge <= 6'd0;
             sram_req <= 1'b0; sram_addr <= '0; blit_wait <= 1'b0;
             sram_we <= 1'b0; sram_wdata <= '0;
@@ -6886,7 +6887,7 @@ module jmr_js_vm #(
                     // never reach S_EXEC / hs32.
                     if (!code_rdata[19]) begin
                         machine_fault <= 1'b1;
-                        fault_code <= 8'd9; // 9 = tagged image refused
+                        fault_code <= 8'd9; fault_site <= 16'd6889; // 9 = tagged image refused
                         running <= 1'b0;
                         hs_st(S_DONE);
                     end else if ({16'd0, (code_rdata[17] ? 16'd4 : 16'd3)}
@@ -6899,7 +6900,7 @@ module jmr_js_vm #(
                         // write clamp above would otherwise truncate it and
                         // the VM would fetch zeros mid-program.
                         machine_fault <= 1'b1;
-                        fault_code <= 8'd3; // capacity
+                        fault_code <= 8'd3; fault_site <= 16'd6902; // capacity
                         running <= 1'b0;
                         hs_st(S_DONE);
                     end else begin
@@ -6996,7 +6997,7 @@ module jmr_js_vm #(
                     env_sp <= 0; env_free_n <= 0; to_n <= 0; to_seq <= 16'd1; dbg_heap_ovf <= 0; dbg_to_ovf <= 0;
                     dbg_json_ovf <= 0; js_sp <= 0; json_wp <= 0;
                     dbg_stack_ovf <= 0; dbg_call_ovf <= 0;
-                    machine_fault <= 1'b0; fault_code <= 8'd0;
+                    machine_fault <= 1'b0; fault_code <= 8'd0; fault_site <= 16'd6999;
                     kd_fn <= 16'hFFFF; ku_fn <= 16'hFFFF; click_fn <= 16'hFFFF;
                     kev_dedup_ctr <= 4'd0; syn_dedup_ctr <= 4'd0;
                     kd_n <= 3'd0; ku_n <= 3'd0; kev_li <= 2'd0;
@@ -9773,7 +9774,7 @@ module jmr_js_vm #(
                     // sweeps; json_mem + json_rp/wp/putc STAY (REPL/IDXSTR/
                     // TXT dynstr pool — shared, kept features).
                     machine_fault <= 1'b1;
-                    fault_code <= 8'd5;
+                    fault_code <= 8'd5; fault_site <= 16'd9776;
                     running <= 1'b0;
                     hs_st(S_DONE);
                 end
@@ -9786,7 +9787,7 @@ module jmr_js_vm #(
                     // sweeps; json_mem + json_rp/wp/putc STAY (REPL/IDXSTR/
                     // TXT dynstr pool — shared, kept features).
                     machine_fault <= 1'b1;
-                    fault_code <= 8'd5;
+                    fault_code <= 8'd5; fault_site <= 16'd9789;
                     running <= 1'b0;
                     hs_st(S_DONE);
                 end
@@ -9837,7 +9838,7 @@ module jmr_js_vm #(
                                     hs_st(S_HEAP_WR);
                                 end else begin
                                     machine_fault <= 1'b1;
-                                    fault_code <= 8'd3;
+                                    fault_code <= 8'd3; fault_site <= 16'd9840;
                                     running <= 1'b0;
                                     hs_st(S_DONE);
                                 end
@@ -10424,7 +10425,7 @@ module jmr_js_vm #(
                                     hs_hp_ret(S_FETCH_WAIT);
                                     hs_st(S_HEAP_WR);
                                 end else begin
-                                    machine_fault <= 1'b1; fault_code <= 8'd3;
+                                    machine_fault <= 1'b1; fault_code <= 8'd3; fault_site <= 16'd10427;
                                     running <= 1'b0; hs_st(S_DONE);
                                 end
                             end
@@ -10510,7 +10511,7 @@ module jmr_js_vm #(
                                         hs_hp_ret(S_FETCH_WAIT);
                                         hs_st(S_HEAP_WR);
                                     end else begin
-                                        machine_fault <= 1'b1; fault_code <= 8'd3;
+                                        machine_fault <= 1'b1; fault_code <= 8'd3; fault_site <= 16'd10513;
                                         running <= 1'b0; hs_st(S_DONE);
                                     end
                                 end
@@ -10805,7 +10806,7 @@ module jmr_js_vm #(
                             if (cls_hit && ctor_ip != 16'hFFFF) begin
                                 if (vcsp >= CSTK) begin
                                     machine_fault <= 1'b1;
-                                    fault_code <= 8'd2;
+                                    fault_code <= 8'd2; fault_site <= 16'd10808;
                                     running <= 1'b0;
                                     hs_st(S_DONE);
                                 end else if (e32_intern_var_ok_rdata) begin
@@ -10861,7 +10862,7 @@ module jmr_js_vm #(
                                     !venv_valid_rdata ||
                                     venv_gen_rdata != venv[43:32]) begin
                                     machine_fault <= 1'b1;
-                                    fault_code <= 8'd4;
+                                    fault_code <= 8'd4; fault_site <= 16'd10864;
                                     running <= 1'b0;
                                     hs_st(S_DONE);
                                 end else begin
@@ -10985,7 +10986,7 @@ module jmr_js_vm #(
                             gc_ran_this_frame <= 1'b1; // C4
                             hs_st(S_V64_GC_CLEAR);
                         end else begin
-                            machine_fault <= 1'b1; fault_code <= 8'd3;
+                            machine_fault <= 1'b1; fault_code <= 8'd3; fault_site <= 16'd10988;
                             running <= 1'b0; hs_st(S_DONE);
                         end
                     end else if (valloc_kind == 2'd3) begin
@@ -11175,7 +11176,7 @@ module jmr_js_vm #(
                             gc_ran_this_frame <= 1'b1; // C4
                             hs_st(S_V64_GC_CLEAR);
                         end else begin
-                            machine_fault <= 1'b1; fault_code <= 8'd3;
+                            machine_fault <= 1'b1; fault_code <= 8'd3; fault_site <= 16'd11178;
                             running <= 1'b0; hs_st(S_DONE);
                         end
                     end else if (valloc_kind == 2'd2) begin
@@ -11352,7 +11353,7 @@ module jmr_js_vm #(
                             gc_ran_this_frame <= 1'b1; // C4
                             hs_st(S_V64_GC_CLEAR);
                             end else begin
-                            machine_fault <= 1'b1; fault_code <= 8'd3;
+                            machine_fault <= 1'b1; fault_code <= 8'd3; fault_site <= 16'd11355;
                             running <= 1'b0; hs_st(S_DONE);
                         end
                     end else begin
@@ -11664,7 +11665,7 @@ module jmr_js_vm #(
                             gc_ran_this_frame <= 1'b1; // C4
                             hs_st(S_V64_GC_CLEAR);
                         end else begin
-                            machine_fault <= 1'b1; fault_code <= 8'd3;
+                            machine_fault <= 1'b1; fault_code <= 8'd3; fault_site <= 16'd11667;
                             running <= 1'b0; hs_st(S_DONE);
                         end
                     end
@@ -12306,7 +12307,7 @@ module jmr_js_vm #(
                         end
                     end else if (e64_vfe_fn_q[63:48] != V64_TAG_PREFIX ||
                                  e64_vfe_fn_q[47:44] != V64_KIND_FUNCTION) begin
-                        machine_fault <= 1'b1; fault_code <= 8'd4;
+                        machine_fault <= 1'b1; fault_code <= 8'd4; fault_site <= 16'd12309;
                         running <= 1'b0; hs_st(S_DONE);
                     end else if (vcsp >= CSTK ||
                                  (!vfe_rd_arm &&
@@ -12419,7 +12420,7 @@ module jmr_js_vm #(
                     // sweeps; json_mem + json_rp/wp/putc STAY (REPL/IDXSTR/
                     // TXT dynstr pool — shared, kept features).
                     machine_fault <= 1'b1;
-                    fault_code <= 8'd5;
+                    fault_code <= 8'd5; fault_site <= 16'd12422;
                     running <= 1'b0;
                     hs_st(S_DONE);
                 end
@@ -12432,7 +12433,7 @@ module jmr_js_vm #(
                     // sweeps; json_mem + json_rp/wp/putc STAY (REPL/IDXSTR/
                     // TXT dynstr pool — shared, kept features).
                     machine_fault <= 1'b1;
-                    fault_code <= 8'd5;
+                    fault_code <= 8'd5; fault_site <= 16'd12435;
                     running <= 1'b0;
                     hs_st(S_DONE);
                 end
@@ -12516,7 +12517,7 @@ module jmr_js_vm #(
                         if (ctor_ip != 16'hFFFF) begin
                             if (vcsp >= CSTK) begin
                                 machine_fault <= 1'b1;
-                                fault_code <= 8'd2;
+                                fault_code <= 8'd2; fault_site <= 16'd12519;
                                 running <= 1'b0;
                                 hs_st(S_DONE);
                             end else begin
@@ -12534,7 +12535,7 @@ module jmr_js_vm #(
                         end else if (ctor_fn_ok) begin
                             if (vcsp >= CSTK) begin
                                 machine_fault <= 1'b1;
-                                fault_code <= 8'd2;
+                                fault_code <= 8'd2; fault_site <= 16'd12537;
                                 running <= 1'b0;
                                 hs_st(S_DONE);
                             end else begin
@@ -12606,7 +12607,7 @@ module jmr_js_vm #(
                         if (ctor_ip != 16'hFFFF) begin
                             if (vcsp >= CSTK) begin
                                 machine_fault <= 1'b1;
-                                fault_code <= 8'd2;
+                                fault_code <= 8'd2; fault_site <= 16'd12609;
                                 running <= 1'b0;
                                 hs_st(S_DONE);
                             end else begin
@@ -12624,7 +12625,7 @@ module jmr_js_vm #(
                         end else if (ctor_fn_ok) begin
                             if (vcsp >= CSTK) begin
                                 machine_fault <= 1'b1;
-                                fault_code <= 8'd2;
+                                fault_code <= 8'd2; fault_site <= 16'd12627;
                                 running <= 1'b0;
                                 hs_st(S_DONE);
                             end else begin
@@ -12899,7 +12900,7 @@ module jmr_js_vm #(
                                     end else if (hp_phase == 3'd2) begin
                                 if (venv_len_rdata >= 5'(ENV_SLOTS)) begin
                                     machine_fault <= 1'b1;
-                                    fault_code <= 8'd3;
+                                    fault_code <= 8'd3; fault_site <= 16'd12902;
                                     running <= 1'b0;
                                     hs_st(S_DONE);
                                 end else begin
@@ -12942,7 +12943,7 @@ module jmr_js_vm #(
                             end else if (hp_phase == 3'd2) begin
                                 if (venv_len_rdata >= 5'(ENV_SLOTS)) begin
                                     machine_fault <= 1'b1;
-                                    fault_code <= 8'd3;
+                                    fault_code <= 8'd3; fault_site <= 16'd12945;
                                     running <= 1'b0;
                                     hs_st(S_DONE);
                                 end else begin
@@ -13274,7 +13275,7 @@ module jmr_js_vm #(
                             hs_st(S_HEAP_WR);
                         end else if (hp_cmd == HP_SETPROP ||
                                      hp_cmd == HP_SETIDX) begin
-                            machine_fault <= 1'b1; fault_code <= 8'd3;
+                            machine_fault <= 1'b1; fault_code <= 8'd3; fault_site <= 16'd13277;
                             running <= 1'b0; hs_st(S_DONE);
                         end else if (hp_cmd == HP_GETIDX) begin
                             if (hp_v64) begin
@@ -13763,7 +13764,7 @@ module jmr_js_vm #(
                             valloc_rd_arm <= 1'b0;
                         end else begin
                             machine_fault <= 1'b1;
-                            fault_code <= 8'd3;
+                            fault_code <= 8'd3; fault_site <= 16'd13766;
                             running <= 1'b0;
                             hs_st(S_DONE);
                         end
@@ -14830,7 +14831,7 @@ module jmr_js_vm #(
             // element, so only a ~1000-element literal can get here).
             if (v64_on && vsp >= 12'd1008 && !machine_fault) begin
                 machine_fault <= 1'b1;
-                fault_code <= 8'd7;
+                fault_code <= 8'd7; fault_site <= 16'd14833;
             end
             // Capacity and stale-handle failures are architectural errors.
             // Stop once, retain a compact fault code, and never hide them by
@@ -14841,14 +14842,14 @@ module jmr_js_vm #(
                  dbg_str_ovf != 0 || dbg_stack_ovf != 0 ||
                  dbg_call_ovf != 0 || dbg_tmr_mis != 0)) begin
                 machine_fault <= 1'b1;
-                if (dbg_heap_ovf != 0) fault_code <= 8'd1;
-                else if (dbg_to_ovf != 0) fault_code <= 8'd2;
-                else if (dbg_json_ovf != 0) fault_code <= 8'd3;
-                else if (dbg_path_ovf != 0) fault_code <= 8'd4;
-                else if (dbg_str_ovf != 0) fault_code <= 8'd5;
-                else if (dbg_stack_ovf != 0) fault_code <= 8'd6;
-                else if (dbg_call_ovf != 0) fault_code <= 8'd7;
-                else fault_code <= 8'd8;
+                if (dbg_heap_ovf != 0) begin fault_code <= 8'd1; fault_site <= 16'd14844; end
+                else if (dbg_to_ovf != 0) begin fault_code <= 8'd2; fault_site <= 16'd14845; end
+                else if (dbg_json_ovf != 0) begin fault_code <= 8'd3; fault_site <= 16'd14846; end
+                else if (dbg_path_ovf != 0) begin fault_code <= 8'd4; fault_site <= 16'd14847; end
+                else if (dbg_str_ovf != 0) begin fault_code <= 8'd5; fault_site <= 16'd14848; end
+                else if (dbg_stack_ovf != 0) begin fault_code <= 8'd6; fault_site <= 16'd14849; end
+                else if (dbg_call_ovf != 0) begin fault_code <= 8'd7; fault_site <= 16'd14850; end
+                else begin fault_code <= 8'd8; fault_site <= 16'd14851; end
                 running <= 1'b0;
                 hs_st(S_DONE);
             end

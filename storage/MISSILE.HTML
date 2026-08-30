@@ -182,15 +182,13 @@ function spawnEnemy(){
   });
 }
 function fire(){
-  // Board run-60: frame() always calls update(0.016) — dt is a hardcoded
-  // constant, not measured wall time, so a state.t-based cooldown is
-  // really a disguised call-counter that decouples from real elapsed
-  // time whenever the true poll rate changes. state.frames is a true
-  // integer per-call counter instead (INVFAST playerShoot() pattern:
-  // pure rate-limit, never an edge-gate, so hold-to-repeat still works).
+  // Board: stick tap stays held 2-3 frames; keyboard tap is 1. A
+  // frames<canShootAt compare did not block those extra polls.
+  // Decrementing canShootAt (tickGame-style) is the rate-limit —
+  // hold-repeat still works when it hits 0. Aim path is untouched.
   if(state.over) return;
-  if(state.frames<state.canShootAt) return;
-  state.canShootAt=state.frames+9;
+  if(state.canShootAt>0) return;
+  state.canShootAt=10;
   var sx=BASE_X,sy=BASE_Y;
   var tx=state.crosshair.x,ty=state.crosshair.y;
   var dx=tx-sx,dy=ty-sy;
@@ -227,6 +225,7 @@ function update(dt){
   }
   state.crosshair.x=Math.max(8,Math.min(W-8,state.crosshair.x));
   state.crosshair.y=Math.max(8,Math.min(H-50,state.crosshair.y));
+  if(state.canShootAt>0) state.canShootAt=state.canShootAt-1;
   if(held.fire||(j&16)||(j&32)) fire();
   if(!state.waveActive){
     state.waveBreakTimer-=dt;

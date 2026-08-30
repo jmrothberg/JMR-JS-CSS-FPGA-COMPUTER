@@ -1426,7 +1426,7 @@ module jmr_js_vm_exec64 (
     assign hp_aslot_q = hp_aslot;
     logic [3:0] hp_cmd;
     assign hp_cmd_q = hp_cmd;
-    logic [9:0] hp_eid;
+    logic [9:0] hp_eid /*verilator public_flat_rd*/;
     assign hp_eid_q = hp_eid;
     logic hp_env;
     assign hp_env_q = hp_env;
@@ -1434,7 +1434,7 @@ module jmr_js_vm_exec64 (
     assign hp_from_stack_q = hp_from_stack;
     logic hp_hit;
     assign hp_hit_q = hp_hit;
-    logic [15:0] hp_key;
+    logic [15:0] hp_key /*verilator public_flat_rd*/;
     assign hp_key_q = hp_key;
     logic [5:0] hp_len;
     assign hp_len_q = hp_len;
