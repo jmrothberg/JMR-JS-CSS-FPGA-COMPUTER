@@ -548,6 +548,20 @@ score/effect/state-change call. Mark it dead; sweep once, after.**
 > only the one worth 300? That distinguishes "the value 300 specifically
 > is poisonous" from "an array-sourced return value is poisonous
 > regardless of magnitude" — the two remaining live theories.
+>
+> **2026-08-29 answer: every saucer kill faults, not just the 300s.**
+> Kills "value 300 is specifically poisonous" — with 16 equally-likely
+> `UFO_SCORES` entries only one of which is 300, a value-magnitude
+> theory would predict ~15/16 saucer kills survive. They don't; it's
+> 100%. Also: **the user plays this on keyboard, not joystick.** RTL
+> proposed a double-hit theory pinned on run 58's un-deduped *joystick*
+> fire button (multiple bullets per press → possible double-kill in one
+> frame) — that mechanism cannot apply here; the keyboard input path is
+> unrelated hardware. If a double-fire/double-hit mechanism is still
+> right, it has to be a keyboard-side analog (e.g. key-repeat/debounce
+> launching >1 bullet per press), not the joystick PHY fix landing in
+> run 59. Relayed to RTL immediately — don't expect run 59's joystick
+> dedup to touch this bug.
 
 INVFAST froze on the board — **only** on a hit, never on a miss, 100%
 repeatable — the instant a bullet actually killed an alien. Fault 3,
