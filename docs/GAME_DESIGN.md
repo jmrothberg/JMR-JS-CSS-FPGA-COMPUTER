@@ -532,6 +532,22 @@ score/effect/state-change call. Mark it dead; sweep once, after.**
 > after this change would mean the discriminator is something the
 > CALL_METHOD theory doesn't explain — check timing/speed next, not
 > another inlining variant.
+>
+> **2026-08-29 board result: fault MOVED, didn't clear.** New fault ip
+> 1531 decodes to the `RET_VAL` inside the new `Saucer.points()` —
+> literally the instruction that returns `UFO_SCORES[shotCount & 15]`
+> to its caller. This kills the CALL_METHOD theory outright: wrapping
+> the lookup in a method call didn't add safety, it just relocated the
+> exact same `ARRAY_GET` → return sequence one level in, and the fault
+> followed it there. `Invader.points()` also ends every branch in a
+> `RET_VAL` (`return 30;` / `return 20;` / `return 10;`) with zero
+> issue, so returning a value is not the problem — returning **this
+> specific array-derived value** is. Open question only hardware
+> testing can answer: does *every* saucer kill freeze regardless of
+> which of the 16 `UFO_SCORES` entries `shotCount & 15` lands on, or
+> only the one worth 300? That distinguishes "the value 300 specifically
+> is poisonous" from "an array-sourced return value is poisonous
+> regardless of magnitude" — the two remaining live theories.
 
 INVFAST froze on the board — **only** on a hit, never on a miss, 100%
 repeatable — the instant a bullet actually killed an alien. Fault 3,
