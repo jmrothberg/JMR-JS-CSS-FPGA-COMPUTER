@@ -512,6 +512,26 @@ score/effect/state-change call. Mark it dead; sweep once, after.**
 > not at compile time. This is as far as static bytecode reading can
 > narrow it; the rest needs RTL-side instrumentation at ip ~5328 (was
 > 5313 before later edits shifted addresses).
+>
+> **2026-08-29 later — tried the cheap fix, and a data point that cuts
+> against it.** Changed the saucer-kill call site to route through a new
+> `Saucer.points(shotCount)` method (returns `UFO_SCORES[shotCount &
+> 15]`), so it now compiles to `CALL_METHOD` immediately before the
+> inlined `bumpScore`, byte-for-byte the same shape as the working
+> invader-kill site (verified by disassembly: both are now `LOAD_VAR →
+> CALL_METHOD → LET_VAR n → …`). **Untested on hardware — user tests.**
+> Caveat found while checking this: the original, never-rewritten
+> `INVADERS.HTML` also computes the saucer score as a bare
+> `UFO_SCORES[shotCount & 15]` array index (no method call) and does
+> **not** freeze on the board. So a bare array index isn't fatal by
+> itself elsewhere in the same codebase — which points back at the
+> user's competing theory (INVFAST's ~60fps leaves the VM no idle time
+> to reclaim/GC between calls the way INVADERS's much-slower loop does)
+> as at least as plausible as the CALL_METHOD-vs-ARRAY_GET theory. Both
+> remain open; this fix is cheap and harmless either way, but a fault
+> after this change would mean the discriminator is something the
+> CALL_METHOD theory doesn't explain — check timing/speed next, not
+> another inlining variant.
 
 INVFAST froze on the board — **only** on a hit, never on a miss, 100%
 repeatable — the instant a bullet actually killed an alien. Fault 3,

@@ -523,6 +523,9 @@ class Bunker {
       if (dx * dx + dy * dy <= r2) {
         cell.alive = false;
         hit = true;
+        /* Dead cells stayed green: draw() only paints alive bricks, and
+           bunkers are not markErase'd every frame. Black this brick. */
+        markErase(cell.x, cell.y, this.cell, this.cell);
       }
     }
     if (hit) _bunkerDirty = 1;
@@ -575,6 +578,15 @@ class Saucer {
       return;
     }
     this.draw();
+  }
+
+  // 2026-08-29: mirrors Invader.points() shape on purpose — the saucer-kill
+  // freeze site (docs/GAME_DESIGN.md FAST rule 6) differs from the working
+  // invader-kill site in that the score value came from a bare array
+  // index instead of a class-method call/return right before bumpScore.
+  // Routing it through a method call here tests that exact difference.
+  points(shotCount) {
+    return UFO_SCORES[shotCount & 15];
   }
 }
 
@@ -780,6 +792,9 @@ function nextLevel() {
   saucerClock = 0;
   invaderProjectiles.length = 0;
   projectiles.length = 0;
+  /* startGame resets this; without it frames=1 leaves frames < canShootAt
+     from wave 1 and the cannon never fires again. */
+  canShootAt = 0;
 
   grids.length = 0;
   grids.push(new Grid());
@@ -1314,7 +1329,7 @@ function animate() {
       pr.position.x - pr.radius <= saucer.position.x + saucer.width &&
       pr.position.y + pr.radius >= saucer.position.y
     ) {
-      bumpScore(UFO_SCORES[shotCount & 15]);
+      bumpScore(saucer.points(shotCount));
       saucer.alive = false;
       saucerClock = 0;
       createParticles(saucer, "#ff3344");
