@@ -206,15 +206,16 @@ function addScore(name, score) {
 }
 
 function renderLeaderboard() {
-  const list = getLeaderboard();
-  const ol = document.getElementById("leaderboardList");
-  if (!ol) return;
-  ol.innerHTML = "";
-  list.forEach((row, idx) => {
-    const li = document.createElement("li");
-    li.textContent = `${row.name} — ${row.score}`;
-    li.style.marginBottom = "2px";
-    ol.appendChild(li);
+  /* DEATHWALL: g/bi/inv reuse subtree keys (were list/ol/li). */
+  var g = getLeaderboard();
+  var bi = document.getElementById("leaderboardList");
+  if (!bi) return;
+  bi.innerHTML = "";
+  g.forEach((row, idx) => {
+    var inv = document.createElement("li");
+    inv.textContent = `${row.name} — ${row.score}`;
+    inv.style.marginBottom = "2px";
+    bi.appendChild(inv);
   });
 }
 
@@ -385,14 +386,15 @@ class Invader {
   }
 
   shoot(invaderProjectiles) {
-    const projectileSpeed = Math.min(4 + (level - 1) * 0.4, 7);
+    /* DEATHWALL: inlined (was const projectileSpeed) — every distinct keyed
+       let/const in the call subtree spends the shared 16-slot env budget. */
     invaderProjectiles.push(
       new InvaderProjectile({
         position: {
           x: this.position.x + this.width / 2 - 1,
           y: this.position.y + this.height,
         },
-        velocity: { x: 0, y: projectileSpeed },
+        velocity: { x: 0, y: Math.min(4 + (level - 1) * 0.4, 7) },
       })
     );
   }
@@ -935,36 +937,42 @@ function refreshGridBounds(grid) {
 var _pickLowest = [null, null, null, null, null, null, null, null, null, null, null];
 var _pickShooters = [];
 function pickShooter(grid) {
-  var lowest = _pickLowest;
-  for (let col = 0; col < 11; col++) lowest[col] = null;
-  for (let i = 0; i < grid.invaders.length; i++) {
-    const inv = grid.invaders[i];
-    const col = inv.col;
-    if (!lowest[col] || inv.position.y > lowest[col].position.y) {
-      lowest[col] = inv;
+  /* DEATHWALL: the death-flow call subtree shares ONE 16-keyed-slot env
+     pool, so every DISTINCT let/const name here spends it. This body now
+     reuses names already keyed elsewhere in the subtree (i/inv/col from
+     the grids loops, g/bi from drawFormation, ph/iy from
+     updateInvaderCollision) and adds ZERO new keys. lowest/shooters were
+     aliases of the module arrays; cx and d fold into col. */
+  var i, inv, col, g, ph, iy, bi;
+  for (col = 0; col < 11; col++) _pickLowest[col] = null;
+  for (i = 0; i < grid.invaders.length; i++) {
+    inv = grid.invaders[i];
+    col = inv.col;
+    if (!_pickLowest[col] || inv.position.y > _pickLowest[col].position.y) {
+      _pickLowest[col] = inv;
     }
   }
-  const shooters = _pickShooters;
-  shooters.length = 0;
-  for (let col = 0; col < 11; col++) {
-    if (lowest[col]) shooters.push(lowest[col]);
+  g = _pickShooters;
+  g.length = 0;
+  for (col = 0; col < 11; col++) {
+    if (_pickLowest[col]) g.push(_pickLowest[col]);
   }
-  if (shooters.length === 0) return null;
+  if (g.length === 0) return null;
   if (Math.random() < 0.5 && player.width) {
-    const px = player.position.x + player.width / 2;
-    let best = shooters[0];
-    let bestD = 9999;
-    for (let i = 0; i < shooters.length; i++) {
-      const cx = shooters[i].position.x + shooters[i].width / 2;
-      const d = cx > px ? cx - px : px - cx;
-      if (d < bestD) {
-        bestD = d;
-        best = shooters[i];
+    ph = player.position.x + player.width / 2;
+    bi = g[0];
+    iy = 9999;
+    for (i = 0; i < g.length; i++) {
+      col = g[i].position.x + g[i].width / 2;
+      col = col > ph ? col - ph : ph - col;
+      if (col < iy) {
+        iy = col;
+        bi = g[i];
       }
     }
-    return best;
+    return bi;
   }
-  return shooters[Math.floor(Math.random() * shooters.length)];
+  return g[Math.floor(Math.random() * g.length)];
 }
 
 function killPlayer() {
@@ -1179,6 +1187,38 @@ function sweepPowerUps() {
   powerUps.length = w;
 }
 
+// DEATHWALL: the idle/game-over frame lives in its OWN function so its
+// name burst (particles walk, drawFormation/drawHud/drawSplash, GAME OVER
+// text) keys a fresh callee env instead of landing as the 17th+ keys in
+// animate's already-full 16-slot pool the first time a death flips
+// game.active. Do not fold this back into animate().
+function drawIdleFrame() {
+  var i, p;
+  flushErase();
+
+  for (i = 0; i < particles.length; i++) {
+    p = particles[i];
+    p.update();
+    if (p.position.y - p.radius >= GAME_HEIGHT) {
+      p.position.x = Math.random() * GAME_WIDTH;
+      p.position.y = -p.radius;
+    }
+  }
+
+  // keep the wave on glass after death / game over (arcade: aliens stay)
+  if (game.over) {
+    drawFormation();
+    player.draw();
+    drawHud();
+    c.fillStyle = "#ffffff";
+    c.fillText("GAME OVER", 260, 240);
+    c.fillText("SPACE TO RESTART", 220, 268);
+    markErase(200, 220, 280, 60);
+  } else {
+    drawSplash();
+  }
+}
+
 function animate() {
   // NEW: identity transform only — canvas is already 640x480 (no viewport scale)
   var i, p, ip, pr, bi, gi, grid, inv, invaders, vx, vy;
@@ -1187,30 +1227,7 @@ function animate() {
   applyStick();
   if (game.active !== _wasActive) { _needFull = 1; _wasActive = game.active; }
   if (!game.active) {
-    flushErase();
-
-    for (i = 0; i < particles.length; i++) {
-      p = particles[i];
-      p.update();
-      if (p.position.y - p.radius >= GAME_HEIGHT) {
-        p.position.x = Math.random() * GAME_WIDTH;
-        p.position.y = -p.radius;
-      }
-    }
-
-    // keep the wave on glass after death / game over (arcade: aliens stay)
-    if (game.over) {
-      drawFormation();
-      player.draw();
-      drawHud();
-      c.fillStyle = "#ffffff";
-      c.fillText("GAME OVER", 260, 240);
-      c.fillText("SPACE TO RESTART", 220, 268);
-      markErase(200, 220, 280, 60);
-    } else {
-      drawSplash();
-    }
-
+    drawIdleFrame();
     requestAnimationFrame(animate);
     return;
   }
