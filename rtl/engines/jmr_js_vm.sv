@@ -346,9 +346,9 @@ module jmr_js_vm #(
     logic [9:0] vgc_env_i;
     logic [2:0] vgc_root_phase;
     logic vcall_value_ff;
-    logic vcall_value;
+    logic vcall_value /*verilator public_flat_rd*/;
     logic [15:0] vcall_entry_ff;
-    logic [15:0] vcall_entry;
+    logic [15:0] vcall_entry /*verilator public_flat_rd*/;
     logic [11:0] vcall_argc_ff;
     logic [11:0] vcall_argc;
     // CALL_METH / NEW_OBJ ctor: bind this + constructor_value like PYTHON.
@@ -357,7 +357,7 @@ module jmr_js_vm #(
     logic [63:0] vcall_this_ff;
     logic [63:0] vcall_this;
     logic [63:0] vcall_ctor_val_ff;
-    logic [63:0] vcall_ctor_val;
+    logic [63:0] vcall_ctor_val /*verilator public_flat_rd*/;
     // PYTHON builtin objects (ELEMENT/CONTEXT/IMAGE) + listener/key dispatch.
     logic [3:0] vobj_builtin [0:OBJ_PHYS-1] /*verilator public_flat_rd*/;
     logic [2:0] vnat_dom_ff;
@@ -379,7 +379,7 @@ module jmr_js_vm #(
     logic [4:0] vlistener_n /*verilator public_flat_rd*/;
     logic [4:0] vkey_li;
     logic v64_frame_armed;
-    logic vcallback_key, vcallback_fe;
+    logic vcallback_key, vcallback_fe /*verilator public_flat_rd*/;
     logic [63:0] vfe_arr, vfe_fn;
     logic [7:0] vfe_i;
     logic [15:0] vfe_ret;
@@ -442,7 +442,7 @@ module jmr_js_vm #(
     logic [11:0] bind_base, bind_src, bind_vsp_next;
     logic [15:0] bind_ip;
     logic [63:0] bind_ins;
-    logic        bind_armed, bind_rd_arm;
+    logic        bind_armed, bind_rd_arm /*verilator public_flat_rd*/;
     // Sticky: CTOR_ENV intern path (not combo NEW_OBJ&&bind_ins). BIND
     // then ALLOC kind 3 must still see a FUNCTION callee (PACMAN Stage).
     logic        intern_ctor_hold;
@@ -1688,7 +1688,7 @@ module jmr_js_vm #(
     logic [63:0] vgc_mark_word /*verilator public_flat_rd*/;
     // ALLOC free-scan wait. Do not reuse jn_rd_arm — JOIN after a take
     // would skip its length beat (arm stays 1).
-    logic        valloc_rd_arm;
+    logic        valloc_rd_arm /*verilator public_flat_rd*/;
     // flatten: HEAP proto follow / ASSIGN nsv — raddr = hp_proto this clock.
     logic        hp_proto_arm /*verilator public_flat_rd*/;
     // venv_len_rdata is a registered read. LET_VAR picks the new slot

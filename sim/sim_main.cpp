@@ -666,6 +666,64 @@ static void tick() {
         // equal code memory at the executing ip — a stale or mis-invalidated
         // prefetch dies loudly on the FIRST wrong op, across every test.
         unsigned esc = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state) & 127;
+        // env-alloc scan trace: ring of the last 4096 clks inside
+        // S_V64_ALLOC kind=3, dumped at machine_fault rise.
+        {
+            static uint64_t ring[4096]; static unsigned rw = 0; static bool dumped = false;
+            auto* rr = top->rootp;
+            unsigned st = unsigned(rr->jmr_js_core__DOT__u_vm__DOT__state) & 127;
+            if (st == 64 && (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__valloc_kind) & 3) == 3) {
+                uint64_t e = 0;
+                e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__valloc_i) & 0x3fff);
+                e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__venv_valid_rdata) & 1) << 14;
+                e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__hp_proto_arm) & 1) << 15;
+                e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vgc_mark_pend) & 1) << 16;
+                e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__casestate_q) & 127) << 17;
+                e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__venv_next) & 0x3ff) << 24;
+                e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vcall_value) & 1) << 34;
+                e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vcallback_fe) & 1) << 35;
+                {
+                    uint64_t ve = 0;
+                    ve = (uint64_t)rr->jmr_js_core__DOT__u_vm__DOT__venv;
+                    e |= (uint64_t)(((ve >> 48) == 0x7ff9ull && ((ve >> 44) & 0xf) == 9) ? 1 : 0) << 36;
+                    uint64_t cv = (uint64_t)rr->jmr_js_core__DOT__u_vm__DOT__vcall_ctor_val;
+                    e |= (uint64_t)(((cv >> 48) == 0x7ff9ull && ((cv >> 44) & 0xf) == 4) ? 1 : 0) << 37;
+                }
+                e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__vcall_entry) & 0xff) << 38;
+                e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__valloc_rd_arm) & 1) << 46;
+                e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__bind_rd_arm) & 1) << 47;
+                e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__hs_m_state) & 1) << 48;
+                e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__hs_m_ip) & 1) << 49;
+                ring[rw++ & 4095] = e | (1ull << 63);
+            }
+            if (!dumped && rr->jmr_js_core__DOT__u_vm__DOT__machine_fault) {
+                dumped = true;
+                FILE* f = fopen("/tmp/envscan.log", "w");
+                if (f) {
+                    for (unsigned i = 0; i < 4096; i++) {
+                        uint64_t e = ring[(rw + i) & 4095];
+                        if (!(e >> 63)) continue;
+                        fprintf(f, "vi=%llu ok=%llu proto=%llu pend=%llu cs=%llu nx=%llu cv=%llu fe=%llu envh=%llu ctoro=%llu ent=%llu ra=%llu ba=%llu mS=%llu mI=%llu\n",
+                            (unsigned long long)(e & 0x3fff),
+                            (unsigned long long)((e >> 14) & 1),
+                            (unsigned long long)((e >> 15) & 1),
+                            (unsigned long long)((e >> 16) & 1),
+                            (unsigned long long)((e >> 17) & 127),
+                            (unsigned long long)((e >> 24) & 0x3ff),
+                            (unsigned long long)((e >> 34) & 1),
+                            (unsigned long long)((e >> 35) & 1),
+                            (unsigned long long)((e >> 36) & 1),
+                            (unsigned long long)((e >> 37) & 1),
+                            (unsigned long long)((e >> 38) & 0xff),
+                            (unsigned long long)((e >> 46) & 1),
+                            (unsigned long long)((e >> 47) & 1),
+                            (unsigned long long)((e >> 48) & 1),
+                            (unsigned long long)((e >> 49) & 1));
+                    }
+                    fclose(f);
+                }
+            }
+        }
         // run-59 handshake trace: log every core clk around fetch-wait/EXEC
         // transitions for the first 400 interesting clks after RUN.
         {
