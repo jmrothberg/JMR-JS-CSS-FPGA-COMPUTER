@@ -618,6 +618,33 @@ score/effect/state-change call. Mark it dead; sweep once, after.**
 > the body's `JUMP`, is absent from the committed-ip ring — jump-class
 > ops evidently don't commit an entry; remember that when reading
 > future trails.)
+>
+> **2026-08-30 ACTUALLY SOLVED — and the paragraph above got the organ
+> wrong.** RTL traced the fault site: the `S_HEAP_CMP` check
+> `venv_len_rdata >= ENV_SLOTS` (=16) — the documented **per-frame
+> 16-keyed-slot wall**, NOT the allocator ("kind=env" in the F-line was
+> a stale latch from the previous frame's alloc; instrument accordingly
+> — RTL is adding fault-site tags so the F-line names this wall
+> directly). The true chain: `animate()` has EXACTLY 16 declared locals
+> (the earlier trim landed precisely at the wall), and the compiler's
+> tiny-callee inliner (`_try_inline_user_call`) spliced `bumpScore`'s
+> `n` param bind into `animate`'s frame as a **17th keyed slot** —
+> invisible to the loud 16-locals checker, which counted only source
+> declarations. First saucer kill = first execution of that inline =
+> fault 3. Explains every observation: value-independent,
+> input-independent, 100 % of kills, the fault following every code
+> reshape (each variant kept an inlined param), and the invader path
+> being safe (its inline lands in `updateInvaderCollision`'s 14-name
+> frame). **Fix (compiler, this commit):** `_try_inline_user_call` now
+> refuses to inline when the caller's locals + callee's params would
+> exceed 16 — or on name capture — and falls back to `CALL_USER` (own
+> frame, always correct); when it does inline, it registers the params
+> as caller locals so the 16-wall check counts the true post-inline
+> total and stays loud forever. Verified by disassembly: the saucer
+> site now emits `CALL_USER → bumpScore`, the invader site keeps its
+> free inline. **Authoring lesson: the 16-slot budget is spent by
+> declared locals + params + any inlined callee's params — when in
+> doubt, stay a couple under the wall.**
 
 INVFAST froze on the board — **only** on a hit, never on a miss, 100%
 repeatable — the instant a bullet actually killed an alien. Fault 3,

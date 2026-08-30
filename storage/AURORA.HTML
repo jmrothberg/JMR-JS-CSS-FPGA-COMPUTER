@@ -154,16 +154,17 @@ function tick() {
   }
 
   auroraErase();
-  var band;
-  for (band = 0; band < 8; band++) {
-    _bandX[band] = ((frame * 4) + band * 80) % 640;
-    paint(_bandX[band], 0, 72, 16, (band % 6) + 2);
+  /* reuse `i` for the draw loops — tick() was 17 keyed slots post-inline
+     (16 ENV_SLOTS wall; hit/paint inlined params count too — see
+     docs/GAME_DESIGN.md 16-locals note). Now 14. */
+  for (i = 0; i < 8; i++) {
+    _bandX[i] = ((frame * 4) + i * 80) % 640;
+    paint(_bandX[i], 0, 72, 16, (i % 6) + 2);
   }
-  var star;
-  for (star = 0; star < 28; star++) {
-    _starX[star] = (star * 97 + frame * 2) % 640;
-    _starY[star] = 24 + (star * 53) % 360;
-    paint(_starX[star], _starY[star], 2, 2, (star % 6) + 2);
+  for (i = 0; i < 28; i++) {
+    _starX[i] = (i * 97 + frame * 2) % 640;
+    _starY[i] = 24 + (i * 53) % 360;
+    paint(_starX[i], _starY[i], 2, 2, (i % 6) + 2);
   }
   var tickN = score;
   if (tickN > 48) tickN = 48;
@@ -171,9 +172,8 @@ function tick() {
   for (s = 0; s < tickN; s++) {
     paint(8 + s * 6, 20, 4, 10, 5);
   }
-  var L;
-  for (L = 0; L < lives; L++) {
-    paint(600 + L * 12, 20, 10, 10, 2);
+  for (i = 0; i < lives; i++) {
+    paint(600 + i * 12, 20, 10, 10, 2);
   }
   paint(0, 458, 640, 22, 4);
   paint(0, 462, 640, 6, 6);

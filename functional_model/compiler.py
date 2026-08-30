@@ -616,6 +616,27 @@ class Compiler:
         end = self._fn_end[fname]
         if not self._fn_body_inlineable(entry, end):
             return False
+        # 2026-08-30 (board saucer-kill fault 3, run-60 forensics): the spliced
+        # body's LET_VAR param binds become KEYED SLOTS IN THE CALLER'S FRAME.
+        # A caller already at the 16-slot wall (RTL ENV_SLOTS — animate() in
+        # INVFAST sat at exactly 16) gained a 17th name on the FIRST execution
+        # of the inline and the VM faulted at the S_HEAP_CMP env-slot wall —
+        # invisible to _note_local's loud check, which counted only source
+        # declarations. Refuse and fall back to CALL_USER (own frame, always
+        # correct) when the params would not fit; also refuse on name capture
+        # (a param name already keyed in the caller would alias the caller's
+        # variable). When we DO inline, register the params as caller locals
+        # so the 16-wall check stays loud for everything declared after this
+        # call site.
+        cur = self._local_stack[-1] if self._local_stack else None
+        if cur is None:
+            return False
+        if any(p in cur for p in params):
+            return False
+        if len(cur) + len(params) > 16:
+            return False
+        for p in params:
+            self._note_local(p)
         delta = len(self.code) - entry
         ret_sites: List[int] = []
         for ip in range(entry, end):

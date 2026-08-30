@@ -8,16 +8,19 @@ alwaysApply: true
 Words: [README.md — Words used](../../README.md#words-used-in-this-project).
 Copy 1 (copy 2: [docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md) FAST rule 6).
 
-> ⚠️ **Status 2026-08-29: mitigation, not a proven fix.** This fixed
-> the invader-kill site (board-confirmed) but did **not** fix the
-> saucer-kill site despite the identical shape — same fault, still
-> reproduces. So "calls then splice" isn't the whole mechanism; leading
-> theory is a slow cross-frame leak an early kill survives and a kill
-> late in a long session (saucer needs ~720 frames) doesn't. Apply this
-> pattern anyway (it's free and it did fix one real site), but don't
-> treat a title as safe just because it follows the rule — if a kill
-> still freezes after converting it, report it, don't assume a second
-> bug. RTL side is instrumenting the actual pool now.
+> ✅ **RESOLVED 2026-08-30 — the residual saucer freeze was a DIFFERENT
+> bug** (full saga: docs/GAME_DESIGN.md FAST rule 6 status chain): the
+> compiler's tiny-callee inliner spliced the callee's param binds into
+> the CALLER's frame as extra keyed slots, blowing the 16-per-function
+> ENV_SLOTS wall in a caller already at 16 — invisible to the loud
+> locals checker, which counted only source declarations. Fixed in
+> `_try_inline_user_call` (refuses to inline past the wall or on name
+> capture; falls back to CALL_USER; registers inlined params as caller
+> locals so the wall stays loud). The mark-and-sweep rule below stands
+> on its own merits — the invader-kill freeze it fixed was real — but
+> the "don't treat a title as safe" warning below is now history, kept
+> for the lesson: two overlapping bugs at one site cost days because
+> the first fix "not working" was read as the pattern failing.
 
 INVFAST froze on the board — **only** on a hit, never a miss, 100%
 repeatable — the instant a bullet actually killed an alien. Fault 3,
