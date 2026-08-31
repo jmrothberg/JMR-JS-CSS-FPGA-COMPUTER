@@ -1,6 +1,38 @@
 // Shared VM FSM enum + opcode/heap command ids.
 // Enum order is the VMSTAT sname table in sim/sim_main.cpp — do not reorder.
 package jmr_js_vm_pkg;
+    // ---- V1.5 standalone-compile arena ------------------------------
+    // Mirrors functional_model/jsb_format.py. Live only while a compiler
+    // program runs, when no title is loaded, so ASET art, SPR and IMGD are
+    // all dead and can be borrowed.
+    //   CART  art staging, packed 2 B/word at its final RUN-time addresses
+    //   CSCR  compiler scratch (the hole above WORK, plus SPR), 1 B/word
+    //   CIMG  assembled image (the IMGD snapshot region), 1 B/word
+    // stgRead/stgWrite see CSCR and CIMG as ONE flat byte arena.
+    localparam logic [20:0] SRC_SRAM_BASE  = 21'd1724416; // = console SOURCE
+    localparam logic [20:0] CART_SRAM_BASE = 21'd0;
+    localparam int unsigned CART_WORDS     = 1480704;     // = FB_SRAM_BASE
+    localparam logic [20:0] CSCR_SRAM_BASE = 21'd1650688;
+    localparam int unsigned CSCR_WORDS     = 73728;
+    localparam logic [20:0] CIMG_SRAM_BASE = 21'd1789952;
+    localparam int unsigned CIMG_WORDS     = 307200;
+    localparam int unsigned CSTG_WORDS     = CSCR_WORDS + CIMG_WORDS;
+    // SOURCE window, 1 B/word. srcWrite (nid 49) bounds against this; it is
+    // also the ring modulus for src_fill_mode on titles larger than the
+    // window (PACFAST is already 65,946 B).
+    localparam int unsigned SOURCE_MAX     = 65536;
+    // Arena header: 16-byte filename at byte offset 96, read by C_CMP_WAIT
+    // for the cdone file-op dispatch (SAVE/DELETE/LOAD/mint-as).
+    localparam int unsigned CSTG_HDR_NAME  = 96;
+    localparam int unsigned CSTG_HDR_NAMEN = 16;
+
+    // Flat arena byte index -> absolute SRAM word.
+    function automatic logic [20:0] cstg_word(input logic [20:0] i);
+        cstg_word = (i < 21'(CSCR_WORDS))
+            ? (CSCR_SRAM_BASE + i)
+            : (CIMG_SRAM_BASE + (i - 21'(CSCR_WORDS)));
+    endfunction
+
     localparam logic [7:0] OP_LOAD_CONST = 8'd1;
     localparam logic [7:0] OP_LOAD_VAR   = 8'd2;
     localparam logic [7:0] OP_STORE_VAR  = 8'd3;
@@ -186,5 +218,10 @@ package jmr_js_vm_pkg;
         // decodes exec state_n requests by the same encoding).
         , S_FB_SYNC
         , S_V64_DISPATCH
+        // V1.5 standalone compile. ONE state serves srcByte / stgRead /
+        // stgWrite / artWrite2 via a mode select, so six natives cost a
+        // single encoding — the scarce resource here is st_t entries
+        // (112 of 128 before this), not LUTs.
+        , S_CSRAM
     } st_t;
 endpackage

@@ -19,7 +19,8 @@ semantics (heap/generation cheats: `one-heap-keep-gen`).
 **Required:** grow language + VM (closures, timers, `String.replace` + RegExp,
 `JSON.stringify`/`parse`, heap lifetimes). Caps are VM-wide with loud overflow.
 FAT/load wait scales with ProgramImage bytes, not a title name.
-**Version 2.0** for `MK.HTML` is measured numbers, not a title gate —
+**Version 2.0** is measured machine numbers (ASET size, natives), not a
+title gate and **not** a missing `MK.HTML` —
 [html-game-v1.mdc](html-game-v1.mdc) and
 [docs/JMR_JS_COMPATIBILITY.md](../../docs/JMR_JS_COMPATIBILITY.md) § Version 1.0 vs 2.0.
 

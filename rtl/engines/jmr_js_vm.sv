@@ -25,6 +25,16 @@ module jmr_js_vm #(
     input  logic        clk_code_w,
     input  logic        rst_n,
     input  logic        start,
+    // V1.5 standalone compile: the console publishes how much source it
+    // parked, and reads back the compiler's exit report.
+    input  logic [17:0] src_len_i,
+    // srcSetLen (nid 50) -> console: a PROGRAM edited SOURCE.
+    output logic [17:0] src_setlen_o,
+    output logic        src_setlen_stb_o,
+    output logic        cmp_done_o,
+    output logic [7:0]  cmp_status_o,
+    output logic [20:0] cmp_len_o,
+    output logic [6:0]  cmp_msglen_o,
     input  logic        stop,
     input  logic        frame_tick,
     input  logic [5:0]  joy_in,
@@ -1163,6 +1173,15 @@ module jmr_js_vm #(
     // empty bank on the very next frame_tick — the glass went black
     // while the drawn bank sat behind it.
     logic        fb_dirty;
+    logic        csr_pend;  // S_CSRAM request issued, waiting on sram_ack
+    // S_CSRAM mode map (3 bits — was 2, widened for mode 4):
+    //   0 srcByte  1 stgRead  2 stgWrite  3 artWrite2  4 srcWrite
+    // WRITE modes are named explicitly rather than tested as (mode >= 2), so
+    // a future READ mode above 4 cannot silently be treated as a write and
+    // scribble on the framebuffer/SOURCE/WORK arenas.
+    wire csr_is_write = (e64_csr_mode_q == 3'd2)
+                     || (e64_csr_mode_q == 3'd3)
+                     || (e64_csr_mode_q == 3'd4);
     logic        fbs_armed; // S_FB_SYNC dump-read settle beat
     // run-62 board fix: draws must NOT race the DDR3 present. Sim measured
     // 170k clk of margin and zero fence hits — but the present's true
@@ -1415,6 +1434,11 @@ module jmr_js_vm #(
         // debug RPCs hardcode earlier state numbers).
         , S_FB_SYNC
         , S_V64_DISPATCH
+        // V1.5 standalone compile. ONE state serves srcByte / stgRead /
+        // stgWrite / artWrite2 via a mode select, so six natives cost a
+        // single encoding — the scarce resource here is st_t entries
+        // (112 of 128 before this), not LUTs.
+        , S_CSRAM
     } st_t;
     // V1 fit: one-hot the 68-state parent register — 349 state==X decodes
     // become single-FF tests; FF headroom is 8x.
@@ -3605,6 +3629,10 @@ module jmr_js_vm #(
     logic e64_looping_q;
     logic e64_machine_fault_q;
     logic [63:0] e64_minmax_acc_q;
+    logic [2:0]  e64_csr_mode_q;
+    logic [20:0] e64_csr_addr_q;
+    logic [15:0] e64_csr_wdata_q;
+    logic        e64_csr_oob_q;
     logic [11:0] e64_minmax_base_q;
     logic e64_minmax_is_min_q;
     logic [7:0] e64_minmax_k_q;
@@ -4458,6 +4486,17 @@ module jmr_js_vm #(
         .looping_q(e64_looping_q),
         .machine_fault_q(e64_machine_fault_q),
         .minmax_acc_q(e64_minmax_acc_q),
+        .src_len_i(src_len_i),
+        .cmp_done_q(cmp_done_o),
+        .cmp_status_q(cmp_status_o),
+        .cmp_len_q(cmp_len_o),
+        .cmp_msglen_q(cmp_msglen_o),
+        .csr_mode_q(e64_csr_mode_q),
+        .csr_addr_q(e64_csr_addr_q),
+        .csr_wdata_q(e64_csr_wdata_q),
+        .src_setlen_q(src_setlen_o),
+        .src_setlen_stb_q(src_setlen_stb_o),
+        .csr_oob_q(e64_csr_oob_q),
         .minmax_base_q(e64_minmax_base_q),
         .minmax_is_min_q(e64_minmax_is_min_q),
         .minmax_k_q(e64_minmax_k_q),
@@ -4712,6 +4751,10 @@ module jmr_js_vm #(
             (state == S_V64_GC_SWEEP_ARR) || (state == S_V64_GC_SWEEP_ENV) ||
             (state == S_V64_SLICE) || // #40 exec-entered slice copy
             (state == S_V64_SORT) || // #41 exec-entered sort walk
+            // Exec-entered compile-ABI memory op. Omitting this is bug
+            // class #51 verbatim: it would read the PARENT ip/vsp and
+            // re-dispatch the native forever.
+            (state == S_CSRAM) ||
             // potential-bugs #68: exec-entered result-array scan. Without
             // this, hp_ret (and friends) read the PARENT ffs mid-scan —
             // stale S_V64_FOREACH from the previous filter/map walk — so a
@@ -14062,6 +14105,52 @@ module jmr_js_vm #(
                                 hs_vcsp(vcsp_ff);
                         end else
                             bind_k <= bind_k + 8'd1;
+                    end
+                end
+                S_CSRAM: begin
+                    // The compile ABI's one memory state. Modes: 0 srcByte,
+                    // 1 stgRead, 2 stgWrite, 3 artWrite2 (packed pair).
+                    //
+                    // This is the FIRST VM-side SRAM READ in the design —
+                    // every other VM transaction is a write. The core's
+                    // ack-hold shim accepts it for free provided the request
+                    // is held stable until sram_ack, which is why the request
+                    // is issued once and then frozen behind csr_pend.
+                    if (state != S_CSRAM) begin
+                        hs_st(S_CSRAM);
+                        csr_pend <= 1'b0;
+                    end else if (casestate_q != S_CSRAM) begin
+                        hs_st(S_CSRAM);
+                    end else if (!csr_pend) begin
+                        if (e64_csr_oob_q) begin
+                            // Out of range is -1, not a fault: the tokenizer
+                            // probes past the end on every token.
+                            vst_wr(vnat_base, v64_int32_number(32'hFFFFFFFF));
+                            hs_vsp(vnat_base + 12'd1);
+                            hs_ip(ip + 16'd1);
+                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_st(S_FETCH_WAIT);
+                        end else begin
+                            sram_req   <= 1'b1;
+                            sram_we    <= csr_is_write;
+                            sram_addr  <= e64_csr_addr_q;
+                            sram_wdata <= e64_csr_wdata_q;
+                            csr_pend   <= 1'b1;
+                        end
+                    end else if (sram_ack) begin
+                        sram_req <= 1'b0;
+                        sram_we  <= 1'b0;
+                        csr_pend <= 1'b0;
+                        // Writes answer undefined; reads answer the low byte
+                        // (every arena region is one byte per word, except
+                        // CART which is written packed and never read back).
+                        vst_wr(vnat_base, csr_is_write
+                            ? V64_UNDEFINED
+                            : v64_int32_number({24'd0, sram_rdata[7:0]}));
+                        hs_vsp(vnat_base + 12'd1);
+                        hs_ip(ip + 16'd1);
+                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_st(S_FETCH_WAIT);
                     end
                 end
                 S_V64_MINMAX: begin

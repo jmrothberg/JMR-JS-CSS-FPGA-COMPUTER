@@ -1,13 +1,13 @@
 ---
-description: V1.0 walls; BOARD compile = card create (.JSH). V1.5 = console compile + popular JS V1 lacks. MK is V2.0.
+description: V1.0 walls; BOARD compile = card create (.JSH). V1.5 = console compile + popular JS V1 lacks. V2.0 = bigger ISA/ASET, not a title name.
 alwaysApply: true
 ---
 
-# HTML games — V1.0 now, V1.5 console + popular JS later, V2.0 MK later
+# HTML games — V1.0 now, V1.5 console + popular JS later, V2.0 ISA later
 
 Words: [README.md — Words used](../../README.md#words-used-in-this-project).
 This is **copy 1** of Version 1.0 walls / Version 1.5 console + popular JS /
-Version 2.0 `MK.HTML` (copy 2:
+Version 2.0 machine work (copy 2:
 [docs/JMR_JS_COMPATIBILITY.md](../../docs/JMR_JS_COMPATIBILITY.md)
 § Version 1.0, 1.5, and 2.0). Authoring how-to:
 [docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md).
@@ -20,8 +20,9 @@ host-compile `storage/` on `RUN` as a second path.
 standalone** (compile-on-RUN on the machine so a desk needs no PC and no
 card `.JSH`; LUT cost TBD), **and** popular JS V1.0 does not have (stdlib +
 globals; not Canvas gradients / mouse).
-**V2.0** = machine work so **`storage/MK.HTML` as embedded today** can
-`LOAD`/`RUN`. Do **not** title-gate (`if (stem == "MK")`).
+**V2.0** = grow the ISA past V1 walls (sprite descriptors, ASET size,
+`Object.keys`, `Math.round`, dotted `new`, `.call`/`.apply`). **No title
+is the V2 example.** Do **not** title-gate (`if (stem == "…")`).
 
 ## V1.0 — write titles inside these walls
 
@@ -40,7 +41,7 @@ globals; not Canvas gradients / mouse).
 | **Glass / Esc** | 640×480 Canvas fill; Esc = machine BREAK. Present is **gone** (run 52) — scanout reads the draw bank; budget tearing, draw fast. |
 | **Disk / compile (V1.0)** | PYTHON / FPGA-SIM / BOARD `LOAD`/`RUN` `card.img`. Chip has no JS compiler. **Compile when you make the card** (`NAME.JSH` minted). **`LOAD` works + `RUN` is `?NH` / bounce to monitor** means mint skipped that title — `python3 tools/compile_js.py --html storage/NAME.HTML` prints the wall, then remake `card.img`. **V1.5** tries standalone compile-on-RUN. |
 
-**V1 library example:** `storage/MKPVP.HTML` (3 atlases, L/R sheets, no `for-in`).
+**V1 library example:** `storage/MKBIG.HTML` / `MKBIGCPU.HTML` (atlases, L/R sheets, V1 Math).
 
 **V1 product acceptance:** `INVADERS` / `PACMAN` / `DONKEY`.
 
@@ -62,20 +63,22 @@ Glass is BASIC numbered lines at `>`:
 
 **Fit (run 33):** console editor LUTs **yes** (~25.8k free). BRAM **yes only if SOURCE stays in external SRAM**. **V1.5 tries standalone compile-on-RUN** (drop card `.JSH`) — LUT cost TBD, do not grow SOURCE into BRAM. Language natives’ LUT cost is **TBD** (not MK). Full table: [JMR_JS_COMPATIBILITY.md § V1.5](../../docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 
-## V2.0 — required for current `MK.HTML` (not vague “more”)
+## V2.0 — grow the ISA (not a named title)
 
-Measured from `storage/MK.HTML` (re-measure if art changes):
+No `storage/MK.HTML` — that file is gone; do not treat a missing name as
+acceptance. V2 is **machine** work. Historical sizing (2026-08-20 census of
+the lost fighter HTML) still informs the caps:
 
 | Requirement | Number / behavior |
 |---|---|
-| Sprite descriptors | **`MAX_SPR` = `PROGRAM_MAX_SPRITES` ≥ 518** (unique sheets today; V1 = 16) |
-| Asset bank | **V2.0 = 8 MB** (or more) simple SRAM port — MK needs ~4.63 MB. ASIC: **single chip**, no fancy multi-bank access. V1 stays 4 MB. |
-| Compiler | Accept **`new mk.arenas.Arena(…)`** / **70** dotted `new mk.…` sites (today: `EXPECTED '('` line 738) |
-| Native | **`Object.keys`** (or real `for…in`) — **5** `for…in` loops in MK |
-| Native | **`Math.round`** — **2** call sites (shim is temporary) |
+| Sprite descriptors | **`MAX_SPR` = `PROGRAM_MAX_SPRITES` ≥ 518** (V1 = 16) |
+| Asset bank | **V2.0 = 8 MB** (or more) simple SRAM port. ASIC: **single chip**, no fancy multi-bank access. V1 stays 4 MB. |
+| Compiler | Accept dotted `new Foo.Bar(…)` (runtime construct-on-a-value) |
+| Native | **`Object.keys`** (or real `for…in`) on exec64 |
+| Native | **`Math.round`** |
 
 ```text
 // BAD V1 — one data:image per frame past MAX_SPR=16
-// GOOD V1 — atlas + 9-arg drawImage (MKPVP)
-// V2 — MK.HTML keeps 518 sheets; raise descriptor table to ≥518
+// GOOD V1 — atlas + 9-arg drawImage (MKBIG)
+// V2 — raise the descriptor table when a title actually needs >16 sheets
 ```

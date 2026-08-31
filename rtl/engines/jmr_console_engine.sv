@@ -27,6 +27,18 @@ module jmr_console_engine (
     output logic        print_nl,
     // Status
     output logic        ready_lit,
+    // V1.5 standalone compile: the VM's srcLen() reads this. A wire, not a
+    // state — poking the value through memory would cost two encodings.
+    output logic [17:0] src_len_o,
+    // srcSetLen (VM nid 50): a PROGRAM edited SOURCE — adopt its length so
+    // LIST / SAVE / COMPILE see the edit. Strobe is a one-shot from the VM.
+    input  logic [17:0] src_setlen_i,
+    input  logic        src_setlen_stb_i,
+    input  logic        cmp_done_i,
+    input  logic [7:0]  cmp_status_i,
+    input  logic [20:0] cmp_len_i,
+    input  logic        vm_busy_i,
+    output logic        cmp_arm_o,   // high across a compile: no game_mode
     output logic [6:0]  dbg_state,    // 2026-08-27: E-line console-state telemetry
     // Silicon games ladder: pulse when monitor sees RUN (RECTDEMO only)
     output logic        run_pulse,
@@ -103,6 +115,81 @@ module jmr_console_engine (
     // internal 1-beat req/gnt protocol is kept; consumers already wait on
     // src_gnt, so the extra ack latency is absorbed by the protocol.
     localparam logic [20:0] SRC_SRAM_BASE = 21'd1724416; // below IMGD region
+    // V1.5 standalone-compile arena (mirror of jmr_js_vm_pkg / jsb_format).
+    localparam logic [20:0] CSCR_SRAM_BASE = 21'd1650688;
+    localparam int unsigned CSCR_WORDS     = 73728;
+    localparam logic [20:0] CIMG_SRAM_BASE = 21'd1789952;
+    localparam logic [20:0] CSTG_HDR_OUT   = 21'd76;  // u32: image offset
+    localparam logic [20:0] CSTG_HDR_PSEL  = 21'd64;  // u8: next program
+
+    function automatic logic [20:0] cstg_word(input logic [20:0] i);
+        cstg_word = (i < 21'(CSCR_WORDS))
+            ? (CSCR_SRAM_BASE + i)
+            : (CIMG_SRAM_BASE + (i - 21'(CSCR_WORDS)));
+    endfunction
+
+    // Chain-program names. Literals, because these are system programs the
+    // machine loads by identity, not titles the user names.
+    // Chain-program name ROM, 8 rows x 12 chars, indexed by PROGSEL.
+    // THIS ORDER IS A CONTRACT: append only, NEVER renumber — the Python
+    // side (jsb_format.COMPILE_CHAIN) indexes the same numbers, and a
+    // renumber would silently chain-load the wrong program.
+    //   0 ARTSCAN  1 ARTPNG  2 COMPILER  3 COMPIL2
+    //   4 MINTASM  5 EDIT    6/7 spare (blank -> caller must not chain)
+    // Rows 1/3/4/5 exist so those programs ship as CARD FILES with no RTL
+    // change; that is the difference between "copy a file" and "re-synthesise".
+    function automatic logic [7:0] cmp_name_char(input logic [2:0] sel,
+                                                 input logic [6:0] i);
+        logic [7:0] c;
+        c = 8'h20;
+        case (sel)
+        3'd0: case (i)                      // "ARTSCAN.JSH"
+                7'd0: c = "A"; 7'd1: c = "R"; 7'd2: c = "T"; 7'd3: c = "S";
+                7'd4: c = "C"; 7'd5: c = "A"; 7'd6: c = "N"; 7'd7: c = ".";
+                7'd8: c = "J"; 7'd9: c = "S"; default: c = "H";
+              endcase
+        3'd1: case (i)                      // "ARTPNG.JSH"
+                7'd0: c = "A"; 7'd1: c = "R"; 7'd2: c = "T"; 7'd3: c = "P";
+                7'd4: c = "N"; 7'd5: c = "G"; 7'd6: c = "."; 7'd7: c = "J";
+                7'd8: c = "S"; default: c = "H";
+              endcase
+        3'd2: case (i)                      // "COMPILER.JSH"
+                7'd0: c = "C"; 7'd1: c = "O"; 7'd2: c = "M"; 7'd3: c = "P";
+                7'd4: c = "I"; 7'd5: c = "L"; 7'd6: c = "E"; 7'd7: c = "R";
+                7'd8: c = "."; 7'd9: c = "J"; 7'd10: c = "S"; default: c = "H";
+              endcase
+        3'd3: case (i)                      // "COMPIL2.JSH"
+                7'd0: c = "C"; 7'd1: c = "O"; 7'd2: c = "M"; 7'd3: c = "P";
+                7'd4: c = "I"; 7'd5: c = "L"; 7'd6: c = "2"; 7'd7: c = ".";
+                7'd8: c = "J"; 7'd9: c = "S"; default: c = "H";
+              endcase
+        3'd4: case (i)                      // "MINTASM.JSH"
+                7'd0: c = "M"; 7'd1: c = "I"; 7'd2: c = "N"; 7'd3: c = "T";
+                7'd4: c = "A"; 7'd5: c = "S"; 7'd6: c = "M"; 7'd7: c = ".";
+                7'd8: c = "J"; 7'd9: c = "S"; default: c = "H";
+              endcase
+        3'd5: case (i)                      // "EDIT.JSH"
+                7'd0: c = "E"; 7'd1: c = "D"; 7'd2: c = "I"; 7'd3: c = "T";
+                7'd4: c = "."; 7'd5: c = "J"; 7'd6: c = "S"; 7'd7: c = "H";
+                default: c = 8'h20;
+              endcase
+        default: c = 8'h20;                 // 6/7 spare: blank name
+        endcase
+        cmp_name_char = c;
+    endfunction
+    // Length of each chain-ROM row. MUST track cmp_name_char above — a
+    // mismatch truncates or over-reads the filename passed to storage.
+    function automatic logic [7:0] cmp_name_len(input logic [2:0] sel);
+        case (sel)
+            3'd0: cmp_name_len = 8'd11; // ARTSCAN.JSH
+            3'd1: cmp_name_len = 8'd10; // ARTPNG.JSH
+            3'd2: cmp_name_len = 8'd12; // COMPILER.JSH
+            3'd3: cmp_name_len = 8'd11; // COMPIL2.JSH
+            3'd4: cmp_name_len = 8'd11; // MINTASM.JSH
+            3'd5: cmp_name_len = 8'd8;  // EDIT.JSH
+            default: cmp_name_len = 8'd0; // spare rows: no name
+        endcase
+    endfunction
     logic        src_req, src_we, src_gnt;
     logic [16:0] src_addr;
     logic [7:0]  src_wdata, src_rdata;
@@ -125,6 +212,7 @@ module jmr_console_engine (
         C_SV_OPEN, C_SV_OPENW, C_SV_RD, C_SV_RDW, C_SV_PUT, C_SV_PUTW, C_SV_CLOSE, C_SV_CLOSEW,
         // REMOVE
         C_RM, C_RMW,
+        C_CMP_WAIT,   // V1.5: poll the compiler, chain, then mint
         // NEW: numbered LIST + MORE + ranges (BASIC method)
         C_LIST_PARSE, C_LIST_PAR_LO, C_LIST_PAR_HI,
         C_LIST_INIT, C_LIST_LINE, C_LIST_PEEL, C_LIST_EMIT_DIG,
@@ -165,6 +253,23 @@ module jmr_console_engine (
     logic [3:0] reply_sel;
     logic [6:0] reply_idx;
     logic [6:0] name_i, name_start, name_len_r;
+    // V1.5 standalone compile
+    // 0 = NAME.JSH derived from src_name; 1 = chain-program ROM row
+    // selected by cmp_progsel; 2 = filename from the arena header
+    // (CSTG_HDR_NAME) for the cdone SAVE/DELETE/LOAD/mint-as ops.
+    logic [1:0]  jsb_name_src;
+    logic [2:0]  cmp_progsel;   // PROGSEL -> cmp_name_char row (a contract)
+    logic        cmp_save_mode;  // C_SV_* pumps the arena instead of SOURCE
+    logic        cmp_arm_r;      // held across the whole chain (no game_mode)
+    logic [3:0]  cmp_ph;
+    logic        cmp_pend;
+    logic [20:0] cmp_rd_addr;
+    logic [20:0] cmp_out_off;
+    logic [20:0] cmp_img_len;
+    logic [20:0] cmp_i;
+    logic [33:0] cmp_wd;
+    logic        src_bank;
+    assign cmp_arm_o = cmp_arm_r;
     // C_NWR walk keeps the last five upcased name chars in a shift
     // register, so the .HTM/.HTML/.JS suffix classify at walk end reads
     // fixed positions instead of five 127:1 dynamic muxes off
@@ -187,6 +292,7 @@ module jmr_console_engine (
     logic [3:0] rsel_q;
     logic [7:0] dir_n, dir_idx;
     logic [17:0] src_len /*verilator public_flat_rw*/;     // bytes in SOURCE BRAM (0..131072)
+    assign src_len_o = src_len;
     logic [17:0] src_i;
     logic [7:0]  rd_ch;
     logic        cmd_is_load, cmd_is_save, cmd_is_remove;
@@ -295,7 +401,7 @@ module jmr_console_engine (
     logic [16:0] drain_ctr; // hold kbd_clear ~1.3ms: a PS/2 scancode
     // mid-flight at ESC lands AFTER a 1-cycle clear (board: one key leaked)
     logic p_help_q, p_dir_q, p_cls_q, p_list_q, p_edit_q, p_mem_q,
-          p_new_q, p_run_q, p_load_q, p_save_q, p_remove_q, p_empty_q,
+          p_new_q, p_run_q, p_load_q, p_save_q, p_remove_q, p_compile_q, p_empty_q,
           p_len4_q;
     logic [7:0] line_tail_q;
     always_ff @(posedge clk) begin
@@ -316,6 +422,11 @@ module jmr_console_engine (
         p_load_q <= (line_len >= 5 && up(line[0])=="L" && up(line[1])=="O" && up(line[2])=="A" && up(line[3])=="D" && is_sp(line[4]));
         p_save_q <= (line_len >= 5 && up(line[0])=="S" && up(line[1])=="A" && up(line[2])=="V" && up(line[3])=="E" && is_sp(line[4]));
         p_remove_q <= (line_len >= 7 && up(line[0])=="R" && up(line[1])=="E" && up(line[2])=="M" && up(line[3])=="O" && up(line[4])=="V" && up(line[5])=="E" && is_sp(line[6]));
+        // COMPILE takes no argument: LOAD already parked the source and
+        // latched the name, and the VM has no argument register.
+        p_compile_q <= (line_len == 7 && up(line[0])=="C" && up(line[1])=="O"
+                     && up(line[2])=="M" && up(line[3])=="P" && up(line[4])=="I"
+                     && up(line[5])=="L" && up(line[6])=="E");
     end
     always_ff @(posedge clk) begin
         ch_ni_q <= line[name_i];
@@ -417,6 +528,21 @@ module jmr_console_engine (
                 0: reply_char="(";1: reply_char="H";2: reply_char="T";3: reply_char="M";
                 4: reply_char="L";5: reply_char=")"; default: reply_char=8'h00;
             endcase
+            // ---- V1.5 standalone compile ----
+            4'd12: case (i)   // COMPILING
+                0: reply_char="C";1: reply_char="O";2: reply_char="M";3: reply_char="P";
+                4: reply_char="I";5: reply_char="L";6: reply_char="I";7: reply_char="N";
+                8: reply_char="G"; default: reply_char=8'h00;
+            endcase
+            4'd13: case (i)   // COMPILED
+                0: reply_char="C";1: reply_char="O";2: reply_char="M";3: reply_char="P";
+                4: reply_char="I";5: reply_char="L";6: reply_char="E";7: reply_char="D";
+                default: reply_char=8'h00;
+            endcase
+            4'd14: case (i)   // ?CE — the compiler refused or faulted
+                0: reply_char="?";1: reply_char="C";2: reply_char="E";
+                default: reply_char=8'h00;
+            endcase
             default: case (i)
                 // ?SN ERROR — unknown verb (laod)
                 0: reply_char="?";1: reply_char="S";2: reply_char="N";3: reply_char=" ";
@@ -461,6 +587,11 @@ module jmr_console_engine (
             src_req <= 0; src_we <= 0; src_addr <= 0; src_wdata <= 0;
             src_gnt <= 0; src_rdata <= 0; srcb_pend <= 0; srcb_we_l <= 0; srcb_wd_l <= 0;
             src_len <= 0; src_i <= 0;
+            jsb_name_src <= 2'd0; cmp_progsel <= 3'd0;
+            cmp_save_mode <= 1'b0; cmp_arm_r <= 1'b0;
+            cmp_ph <= 4'd0; cmp_pend <= 1'b0; cmp_rd_addr <= '0;
+            cmp_out_off <= '0; cmp_img_len <= '0; cmp_i <= '0; cmp_wd <= '0;
+            src_bank <= 1'b0;
             name_len_r <= 0; name_i <= 0; name_start <= 0;
             dir_n <= 0; dir_idx <= 0;
             cmd_is_load <= 0; cmd_is_save <= 0; cmd_is_remove <= 0;
@@ -507,6 +638,11 @@ module jmr_console_engine (
             src_req <= 0; src_we <= 0;
             pal_we <= 0; // NEW: 1-cycle palette write strobes (sram_req holds to ack)
 
+            // srcSetLen (VM nid 50): a PROGRAM edited SOURCE. Placed BEFORE
+            // the state case on purpose — a console action in the same beat
+            // (LOAD/EDIT writing src_len) must win, since the console owns
+            // the buffer whenever it is not parked waiting on the VM.
+            if (src_setlen_stb_i) src_len <= src_setlen_i;
             unique case (state)
                 C_BOOT_CLS: begin
                     cls <= 1'b1;
@@ -696,6 +832,23 @@ module jmr_console_engine (
                         cmd_is_save <= 1'b1; name_start <= 5; state <= C_PF;
                     end else if (p_remove_q) begin
                         cmd_is_remove <= 1'b1; name_start <= 7; state <= C_PF;
+                    end else if (p_compile_q) begin
+                        if (!src_is_html || src_len == 18'd0) begin
+                            reply_sel <= 4'd7; reply_idx <= 0; state <= C_REPLY;
+                        end else begin
+                            cmp_arm_r <= 1'b1;
+                            jsb_name_src <= 2'd1; cmp_progsel <= 3'd0; // ARTSCAN
+                            cmp_save_mode <= 1'b0;
+                            jsb_want_jsh <= 1'b1; jsb_tether_mode <= 1'b0;
+                            name_i <= 0; dir_n <= 0; jsb_waddr <= 0;
+                            jsb_bi <= 0; jsb_word <= 0; ld_err <= 0;
+                            jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
+                            aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
+                            sram_last <= 0; cmp_wd <= '0; cmp_ph <= 4'd0;
+                            cmp_pend <= 1'b0;
+                            reply_sel <= 4'd12; reply_idx <= 0;  // COMPILING
+                            state <= C_JSB_PREP;
+                        end
                     end else begin
                         reply_idx <= 0; state <= C_REPLY;
                     end
@@ -1118,7 +1271,16 @@ module jmr_console_engine (
                     else state <= C_SV_RD;
                 end
                 C_SV_RD: begin
-                    if (src_i >= src_len) state <= C_SV_CLOSE;
+                    if (cmp_save_mode) begin
+                        // Mint: pump the assembled image out of the arena.
+                        if (cmp_i >= cmp_img_len) state <= C_SV_CLOSE;
+                        else begin
+                            src_req <= 1'b1; src_we <= 1'b0;
+                            src_bank <= 1'b1;
+                            cmp_rd_addr <= cstg_word(cmp_out_off + cmp_i);
+                            state <= C_SV_RDW;
+                        end
+                    end else if (src_i >= src_len) state <= C_SV_CLOSE;
                     else begin
                         src_req <= 1'b1; src_we <= 1'b0;
                         src_addr <= src_i[16:0];
@@ -1136,14 +1298,95 @@ module jmr_console_engine (
                 end
                 C_SV_PUTW: if (stor_done) begin
                     if (stor_err) begin reply_sel <= 4'd4; reply_idx <= 0; state <= C_SV_CLOSE; end
+                    else if (cmp_save_mode) begin cmp_i <= cmp_i + 21'd1; state <= C_SV_RD; end
                     else begin src_i <= src_i + 1'b1; state <= C_SV_RD; end
                 end
                 C_SV_CLOSE: if (!stor_busy) begin stor_close <= 1'b1; state <= C_SV_CLOSEW; end
                 C_SV_CLOSEW: if (stor_done) begin
-                    reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
+                    // A mint says COMPILED; an ordinary SAVE says OK.
+                    reply_sel <= cmp_save_mode ? 4'd13 : 4'd2;
+                    cmp_save_mode <= 1'b0;
+                    reply_idx <= 0; state <= C_REPLY;
                 end
 
                 // ---- REMOVE ---------------------------------------------
+                // ---- V1.5 standalone compile ---------------------------
+                // One state, phase-stepped, because console encodings are
+                // the scarce resource (117 of 128 before this).
+                //   0 wait for cdone   1-4 read the published image offset
+                //   5 read PROGSEL     6 relaunch / mint / fail
+                C_CMP_WAIT: begin
+                    kbd_clear <= 1'b1;   // an ESC that killed the VM is not a command
+                    if (cmp_ph == 4'd0) begin
+                        if (cmp_done_i) begin
+                            cmp_img_len <= cmp_len_i;
+                            cmp_ph <= 4'd1;
+                            cmp_out_off <= 21'd0;
+                        end else if (&cmp_wd) begin
+                            // The compile watchdog. cons_prog_wd is also
+                            // held off for this state; without both, a real
+                            // compile dies at 21.5 s looking like ?IO.
+                            cmp_arm_r <= 1'b0; halt_pulse <= 1'b1;
+                            reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY;
+                        end else if (!vm_busy_i && cmp_wd[20]) begin
+                            // VM stopped without reporting: fault or ESC.
+                            cmp_arm_r <= 1'b0;
+                            reply_sel <= 4'd14; reply_idx <= 0; state <= C_REPLY;
+                        end else begin
+                            cmp_wd <= cmp_wd + 1'b1;
+                        end
+                    end else if (cmp_ph <= 4'd5) begin
+                        // Read one arena byte per phase: 4 for the image
+                        // offset the compiler published, 1 for PROGSEL.
+                        if (!cmp_pend) begin
+                            src_req <= 1'b1; src_we <= 1'b0;
+                            src_bank <= 1'b1;
+                            cmp_rd_addr <= (cmp_ph == 4'd5)
+                                ? cstg_word(CSTG_HDR_PSEL)
+                                : cstg_word(CSTG_HDR_OUT + 21'(cmp_ph) - 21'd1);
+                            cmp_pend <= 1'b1;
+                        end else if (src_gnt) begin
+                            cmp_pend <= 1'b0;
+                            if (cmp_ph == 4'd5) begin
+                                // PROGSEL indexes the 8-row chain ROM directly.
+                                jsb_name_src <= 2'd1;
+                                cmp_progsel  <= src_rdata[2:0];
+                                cmp_ph <= 4'd6;
+                            end else begin
+                                case (cmp_ph)
+                                    4'd1: cmp_out_off[7:0]   <= src_rdata;
+                                    4'd2: cmp_out_off[15:8]  <= src_rdata;
+                                    default: cmp_out_off[20:16] <= src_rdata[4:0];
+                                endcase
+                                cmp_ph <= cmp_ph + 4'd1;
+                            end
+                        end
+                    end else begin
+                        src_bank <= 1'b0;
+                        if (cmp_status_i == 8'h80) begin
+                            // NEXT: load the program PROGSEL named and rerun.
+                            name_i <= 0; dir_n <= 0; jsb_waddr <= 0;
+                            jsb_bi <= 0; jsb_word <= 0; ld_err <= 0;
+                            jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
+                            aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
+                            sram_last <= 0; cmp_wd <= '0; cmp_ph <= 4'd0;
+                            state <= C_JSB_PREP;
+                        end else if (cmp_status_i == 8'd0) begin
+                            // DONE: mint NAME.JSH from the staged image.
+                            cmp_arm_r <= 1'b0;
+                            cmp_save_mode <= 1'b1;
+                            jsb_name_src <= 2'd0;
+                            jsb_want_jsh <= 1'b1;
+                            cmp_i <= 21'd0;
+                            name_i <= 0; dir_n <= 0;
+                            state <= C_JSB_PREP;
+                        end else begin
+                            cmp_arm_r <= 1'b0;
+                            reply_sel <= 4'd14; reply_idx <= 0;  // ?CE
+                            state <= C_REPLY;
+                        end
+                    end
+                end
                 C_RM: if (!stor_busy) begin stor_delete <= 1'b1; state <= C_RMW; end
                 C_RMW: if (stor_done) begin
                     if (stor_err) reply_sel <= 4'd4; else reply_sel <= 4'd2;
@@ -1799,7 +2042,18 @@ module jmr_console_engine (
                 // dir_n: 0=copy base, 1=write J, 2=write S, 3=write B, 4=done
                 // No '.' in name (LOAD "invaders") → append ".JSB" after full name
                 C_JSB_PREP: begin
-                    if (dir_n == 8'd0) begin
+                    if (jsb_name_src != 2'd0) begin
+                        // A chain program, loaded by identity not by title.
+                        if ({1'b0, name_i} >= cmp_name_len(cmp_progsel)) begin
+                            stor_name_len <= cmp_name_len(cmp_progsel);
+                            state <= C_JSB_OPEN;
+                        end else begin
+                            mem_en <= 1'b1; mem_we <= 1'b1;
+                            mem_addr <= NAME_BUF + {9'h0, name_i};
+                            mem_wdata <= cmp_name_char(cmp_progsel, name_i);
+                            state <= C_JSB_NWR_W;
+                        end
+                    end else if (dir_n == 8'd0) begin
                         if (name_i >= src_name_len) begin
                             // end of name with no '.' — append .JSB here
                             jsb_name_len <= {3'b0, name_i} + 8'd4;
@@ -1847,7 +2101,9 @@ module jmr_console_engine (
                         state <= C_JSB_PREP;
                     end else if (dir_n == 8'd4) begin
                         stor_name_len <= jsb_name_len;
-                        state <= C_JSB_OPEN;
+                        // The mint reuses this name builder, then goes to the
+                        // byte-transparent SAVE pump instead of the loader.
+                        state <= cmp_save_mode ? C_SV_OPEN : C_JSB_OPEN;
                     end else
                         state <= C_JSB_PREP;
                 end
@@ -2029,7 +2285,12 @@ module jmr_console_engine (
                 C_JSB_CLOSEW: if (stor_done) begin
                     if (ld_err)
                         state <= C_REPLY;
-                    else begin
+                    else if (jsb_name_src != 2'd0) begin
+                        // Compiler program aboard: run it, then poll cdone.
+                        vm_start <= 1'b1;
+                        cmp_ph <= 4'd0; cmp_pend <= 1'b0; cmp_wd <= '0;
+                        state <= C_CMP_WAIT;
+                    end else begin
                         vm_start <= 1'b1;
                         reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
                     end
@@ -2093,15 +2354,21 @@ module jmr_console_engine (
             if (stor_done || !cons_stor_arm)
                 cons_stor_wd <= 32'd0;
             else begin
-                cons_stor_wd <= cons_stor_wd + 32'd1;
-                if (cons_stor_wd[31] && cons_stor_wd[30]) begin // ~32s
+                cons_stor_wd <= (state == C_CMP_WAIT) ? 32'd0
+                                                      : (cons_stor_wd + 32'd1);
+                if (state != C_CMP_WAIT && cons_stor_wd[31] && cons_stor_wd[30]) begin // ~32s
                     cons_stor_arm <= 1'b0;
                     cons_stor_wd  <= 32'd0;
                     reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY;
                 end
             end
+            // C_CMP_WAIT is progress by definition: the VM is computing and
+            // issues no storage ops for the whole compile. Without this the
+            // 21.5 s clock fires mid-compile and reports ?IO, which looks
+            // like a disk fault rather than a watchdog. Its own cmp_wd
+            // (~172 s) bounds the compile instead.
             if (state == C_IDLE || state == C_PROMPT || state == C_ECHO
-                || state == C_LIST_WAIT || stor_done)
+                || state == C_LIST_WAIT || state == C_CMP_WAIT || stor_done)
                 // stor_done counts as progress: a standalone DONKEY.JSH
                 // load is 2.36MB of get_byte pulses over minutes - alive
                 // the whole time. A wedged op stops pulsing done and the
@@ -2125,7 +2392,11 @@ module jmr_console_engine (
                 srcb_pend  <= 1'b1;
                 sram_req   <= 1'b1;
                 sram_we    <= src_we;
-                sram_addr  <= SRC_SRAM_BASE + 21'(src_addr);
+                // src_bank picks the arena for the compile paths; the
+                // dedicated cmp_rd_addr avoids widening src_addr, which is
+                // shared with LOAD / SAVE / the EDIT memmove.
+                sram_addr  <= src_bank ? cmp_rd_addr
+                                       : (SRC_SRAM_BASE + 21'(src_addr));
                 sram_wdata <= {8'd0, src_wdata};
                 srcb_we_l  <= src_we;
                 srcb_wd_l  <= src_wdata;

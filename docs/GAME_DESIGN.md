@@ -11,9 +11,9 @@ language and Canvas surface are specified in
 
 This is **copy 2** of “do not hardwire game names / write inside Version 1.0
 walls” (copy 1 is `.cursor/rules/no-game-hardwire.mdc` +
-`html-game-v1.mdc`). Measured Version 2.0 numbers for `MK.HTML` live in
-[JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20)
-— do not raise caps in RTL for one title.
+`html-game-v1.mdc`). Version 2.0 is **machine** work (bigger ASET / more
+natives), not a named title — [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
+Do not raise caps in RTL for one game.
 
 **Product generations:**
 
@@ -21,7 +21,7 @@ walls” (copy 1 is `.cursor/rules/no-game-hardwire.mdc` +
 |---|---|---|
 | **1.0 (now)** | Frozen caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Compile when you **make the card** (minted `.JSH`; chip does not compile) | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls (see below). `MKPVP.HTML` is the V1 MK-shaped example. |
 | **1.5 (planned)** | Console **authoring** (type / paste / edit) **and try to be standalone** (compile-on-RUN) **and** popular JS V1 does not have (`shift`, `Math.sin`/`round`, `isFinite`, `e.code`, …). Same heap/ASET/Canvas. Not MK. | Same V1 titles. Language + LUT: [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). |
-| **2.0 (compiler front end started)** | Machine changes so **`MK.HTML` as embedded today** runs | Acceptance: `MK.HTML`. Need **`MAX_SPR` ≥ 518**, asset bank **8 MB** (or more; ASIC: one chip, simple port), dotted **`new mk.…`**, **`.call`/`.apply`**, **`Object.keys` on exec64**, **`Math.round`**. Parse gaps (unary `+`, `for…in`, `throw`, `in`) landed 2026-08-21. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20). |
+| **2.0 (planned)** | Grow the ISA past V1 walls: more sprite descriptors, a larger simple ASET bank, `Object.keys` on the chip, `Math.round`, dotted `new`, `.call`/`.apply`. **No title is the V2 example** (`MK.HTML` is gone). Do **not** title-gate. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20). | Any `NAME.HTML` that needs those caps. Library MK-shaped play today: `MKBIG.HTML` / `MKBIGCPU.HTML` (V1, ≤16 sheets / 4 MB). |
 
 V1 / V1.5 / V2 surface backlog: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
 Agent rule: `.cursor/rules/html-game-v1.mdc`.
@@ -319,18 +319,8 @@ not title-gate RTL).
 | **`fillText` is one 8×8 bitmap (no small TTF)** | Family/weight are ignored. Glyph scale is `k = max(1, min(15, round(N * sx / 8)))` where `sx` is the current `setTransform` x-scale (default 1). Each character is **8k × 8k glass pixels**. There is no 6px/10px/12px face — 10px at `sx=1` still paints the same 8×8 as 8px. **Glass-space HUD (PACMAN / INVADERS):** `8px` (native) or `16px` (2×). **World canvas then `setTransform` onto 640×480 (DONKEY / DNKFAST, `sx ≈ 640/1510 ≈ 0.42`):** `16px` still rounds to **k=1** (8 glass px — easy to miss on FPGA-SIM). Use **`32px` minimum** (k=2) for HUD, **`48px`** (k=3) for titles; drop the baseline so `8*k` glass pixels of height stay on screen; ASCII only (codes 32–126 — em-dash paints `?`). Do not add a second font to RTL. |
 | **Glass / Esc / one file** | 640×480 fill; Esc = BREAK; no external `.js`. Present is **gone** (run 52) — scanout reads the draw bank; budget tearing, draw fast. |
 
-**V1 MK-shaped title:** `storage/MKPVP.HTML` — 3 atlases (arena + Sub-Zero +
-Kano), L/R sheets, slim 2P engine, V1 Math only.
-
-**V2.0 goal title (Chrome / authoring today; machine later):**
-`storage/MK.HTML` — measured needs: **518** ASET sheets (`MAX_SPR` ≥ 518),
-**~4.63 MB** indexed pixels → rebuild asset bank to **8 MB** (or more;
-ASIC must stay **single-chip** with a **simple** SRAM port — no fancy
-multi-die access). Also compiler **`new mk.…`** and **`Function.prototype.call`/`.apply`**
-(42 sites — the super-constructor pattern; a real VM capability, not a
-shim), plus **`Object.keys` on exec64** and **`Math.round`**. The smaller
-parse gaps (unary `+`, `for…in`, `throw`, `in`) are **done**. Full table: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
-Until those land, do not expect `LOAD "MK.HTML"` + `RUN` on FPGA-SIM.
+**V1 MK-shaped titles in `storage/`:** `MKBIG.HTML` / `MKBIGCPU.HTML` —
+atlases, L/R sheets, V1 Math, ≤16 SPR / 4 MB.
 
 ---
 

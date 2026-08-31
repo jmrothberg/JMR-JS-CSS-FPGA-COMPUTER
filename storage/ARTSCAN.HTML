@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>ARTSCAN — JMR self-hosted compiler, pass A</title></head>
+<body style="margin:0;background:#000">
+<!--
+  ARTSCAN.HTML — entry point of the on-machine compiler chain.
+
+  Reads the LOADed HTML source one byte at a time through srcByte() and emits
+  a SPAN MAP: an ordered description of how to read the residual JavaScript as
+  a virtual byte stream over the source. Nothing is copied. That is what lets
+  a 2 MB title compile in a machine whose scratch arena is 372 KB.
+
+  Spans also carry the ASI fix: a synthetic ';' between script blocks, so
+  concatenating two bodies cannot glue the last statement of one onto the
+  first of the next. Same rule the host applies in tools/compile_js.py.
+  (Do not write a literal script tag in this comment - the block scanner
+  matches it and would start compiling the prose.)
+
+  Art (data:image) is detected and REFUSED here for now — decoding it is
+  ARTPNG's job (PNG inflate + unfilter + palette), a later phase. Refusing is
+  deliberate: a title that silently compiled without its sprites would look
+  like a rendering bug, not a missing feature.
+
+  AUTHORING RULES (this file is compiled BY the machine's own walls):
+    - no string methods exist: everything is byte offsets + char codes
+    - no << >> ^ ~ operators: bit work is arithmetic
+    - 16 locals+params per function, hard: keep functions small
+    - avoid arrays: state lives in the scratch arena via stgRead/stgWrite
+-->
+<canvas id="gameCanvas" width="640" height="480"></canvas>
+<script>
+// ---- arena layout (mirror of functional_model/jsb_format.py) -------------
+var HDR_PROGSEL = 64;
+var HDR_SPAN_N = 70;
+var SPAN_OFF = 128;
+var SPAN_STRIDE = 12;
+var SPAN_MAX = 256;
+var MSG_OFF = 0;
+
+var KIND_SOURCE = 0;
+var KIND_SEMI = 2;
+
+var PROG_COMPILER = 2;
+var ST_NEXT = 128;
+var ST_ERR_ART = 3;
+var ST_ERR_SPANS = 4;
+var ST_ERR_NOSCRIPT = 5;
+
+// ---- shim: the only window on the outside --------------------------------
+// Kept as named functions so a host-side build can swap them for array-backed
+// fakes and run this exact source off-machine (the CTEST path).
+function _sb(i) { return srcByte(i); }
+function _gw(i, b) { stgWrite(i, b); }
+
+function _lc(b) {
+  if (b >= 65 && b <= 90) { return b + 32; }
+  return b;
+}
+
+function _w16(off, v) {
+  _gw(off, v % 256);
+  _gw(off + 1, Math.floor(v / 256) % 256);
+}
+
+function _w32(off, v) {
+  _gw(off, v % 256);
+  _gw(off + 1, Math.floor(v / 256) % 256);
+  _gw(off + 2, Math.floor(v / 65536) % 256);
+  _gw(off + 3, Math.floor(v / 16777216) % 256);
+}
+
+// Report an ASCII diagnostic and stop. The console prints "?CE" then this.
+function _fail(code, a, b, c, d, e, f, g) {
+  var n = 0;
+  if (a) { _gw(MSG_OFF + n, a); n = n + 1; }
+  if (b) { _gw(MSG_OFF + n, b); n = n + 1; }
+  if (c) { _gw(MSG_OFF + n, c); n = n + 1; }
+  if (d) { _gw(MSG_OFF + n, d); n = n + 1; }
+  if (e) { _gw(MSG_OFF + n, e); n = n + 1; }
+  if (f) { _gw(MSG_OFF + n, f); n = n + 1; }
+  if (g) { _gw(MSG_OFF + n, g); n = n + 1; }
+  cdone(code, 0, n);
+}
+
+// ---- span emit -----------------------------------------------------------
+var spanN = 0;
+var spanOver = 0;
+
+function emitSpan(kind, off, len, line) {
+  if (spanN >= SPAN_MAX) { spanOver = 1; return; }
+  var base = SPAN_OFF + spanN * SPAN_STRIDE;
+  _gw(base, kind);
+  _gw(base + 1, 0);
+  _w32(base + 2, off);
+  _w32(base + 6, len);
+  _w16(base + 10, line);
+  spanN = spanN + 1;
+}
+
+// ---- byte matching -------------------------------------------------------
+// No string compares exist, so needles are spelled as char codes.
+function isWord(p, c0, c1, c2, c3, c4, c5) {
+  if (_lc(_sb(p)) !== c0) { return 0; }
+  if (_lc(_sb(p + 1)) !== c1) { return 0; }
+  if (_lc(_sb(p + 2)) !== c2) { return 0; }
+  if (_lc(_sb(p + 3)) !== c3) { return 0; }
+  if (c4 === 0) { return 1; }
+  if (_lc(_sb(p + 4)) !== c4) { return 0; }
+  if (c5 === 0) { return 1; }
+  if (_lc(_sb(p + 5)) !== c5) { return 0; }
+  return 1;
+}
+
+// "<script" — caller has already matched '<'
+function atScript(p) {
+  return isWord(p + 1, 115, 99, 114, 105, 112, 116);
+}
+
+// "</script"
+function atEndScript(p) {
+  if (_sb(p + 1) !== 47) { return 0; }
+  return isWord(p + 2, 115, 99, 114, 105, 112, 116);
+}
+
+// "data:image" anywhere in [from, to)
+function findArt(from, to) {
+  var p = from;
+  while (p < to) {
+    if (_lc(_sb(p)) === 100 && isWord(p, 100, 97, 116, 97, 58, 105)) {
+      if (isWord(p + 5, 105, 109, 97, 103, 101, 0)) { return p; }
+    }
+    p = p + 1;
+  }
+  return -1;
+}
+
+// data-host="chrome" inside a <script ...> tag: those bodies are browser-only
+// (Web Audio) and the card mint strips them, so we must too.
+function tagIsChrome(from, to) {
+  var p = from;
+  while (p < to) {
+    if (_lc(_sb(p)) === 99 && isWord(p, 99, 104, 114, 111, 109, 101)) { return 1; }
+    p = p + 1;
+  }
+  return 0;
+}
+
+function countLines(from, to, line) {
+  var p = from;
+  var n = line;
+  while (p < to) {
+    if (_sb(p) === 10) { n = n + 1; }
+    p = p + 1;
+  }
+  return n;
+}
+
+// ---- main scan -----------------------------------------------------------
+function scan() {
+  var len = srcLen();
+  var p = 0;
+  var line = 1;
+  var bodies = 0;
+  var tagEnd = 0;
+  var bodyEnd = 0;
+  var art = 0;
+
+  while (p < len) {
+    if (_sb(p) !== 60) {
+      if (_sb(p) === 10) { line = line + 1; }
+      p = p + 1;
+    } else if (atScript(p) === 0) {
+      p = p + 1;
+    } else {
+      // walk to the '>' that closes the opening tag
+      tagEnd = p + 7;
+      while (tagEnd < len && _sb(tagEnd) !== 62) { tagEnd = tagEnd + 1; }
+      line = countLines(p, tagEnd, line);
+      // body runs to "</script"
+      bodyEnd = tagEnd + 1;
+      while (bodyEnd < len && atEndScript(bodyEnd) === 0) { bodyEnd = bodyEnd + 1; }
+      if (tagIsChrome(p, tagEnd) === 0) {
+        art = findArt(tagEnd + 1, bodyEnd);
+        if (art >= 0) { return ST_ERR_ART; }
+        if (bodies > 0) { emitSpan(KIND_SEMI, 0, 0, line); }
+        emitSpan(KIND_SOURCE, tagEnd + 1, bodyEnd - tagEnd - 1, line + 1);
+        bodies = bodies + 1;
+      }
+      line = countLines(tagEnd, bodyEnd, line);
+      p = bodyEnd;
+    }
+  }
+
+  if (spanOver) { return ST_ERR_SPANS; }
+  if (bodies === 0) { return ST_ERR_NOSCRIPT; }
+  return 0;
+}
+
+var st = scan();
+if (st === 0) {
+  _w16(HDR_SPAN_N, spanN);
+  _gw(HDR_PROGSEL, PROG_COMPILER);
+  cdone(ST_NEXT, 0, 0);
+} else if (st === ST_ERR_ART) {
+  // "ART V1.5" — art needs ARTPNG (PNG inflate), not yet on the card.
+  _fail(st, 65, 82, 84, 32, 86, 49, 53);
+} else if (st === ST_ERR_SPANS) {
+  // "SPANS"
+  _fail(st, 83, 80, 65, 78, 83, 0, 0);
+} else {
+  // "NO JS"
+  _fail(st, 78, 79, 32, 74, 83, 0, 0);
+}
+</script>
+</body>
+</html>

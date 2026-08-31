@@ -90,6 +90,19 @@ NATIVE_IDS = {
     # sound(ch, freqHz, vol0_15, frames, slideHzPerFrame) — always succeed
     # (no-op until ADAU1761 PHY). Unknown nid is fault 5; do not omit this.
     "sound": 42,
+    # --- V1.5 standalone compile ABI (43..48) -------------------------
+    # The self-hosted compiler runs as an ordinary program and reaches the
+    # outside world only through these. 44/45/46/48 are one RTL state
+    # (S_CSRAM) with a mode select; 43/47 are single-beat.
+    # Reads return -1 out of range so the tokenizer can probe cheaply;
+    # writes fault (code 5) because a stray write corrupts FB/SOURCE/WORK
+    # invisibly. artWrite2's bound is the framebuffer wall in silicon.
+    "srcLen": 43,
+    "srcByte": 44,
+    "stgRead": 45,
+    "stgWrite": 46,
+    "cdone": 47,
+    "artWrite2": 48,
 }
 
 # NEW: aliases share an id (decode prefers the canonical NATIVE_IDS key)
@@ -118,7 +131,10 @@ SOURCE_MAP_MAGIC = b"SMAP"
 SOURCE_MAP_VERSION = 1
 ASET_PAL_BYTES = 768  # 256 × RGB888 at asset-SRAM offset 0
 SRAM_BYTES = 4 * 1024 * 1024  # 2M × 16 IS61WV204816 contract (see docs/ARCHITECTURE.md)
-# V2.0 MK.HTML: compile_js sets JMR_SRAM_BYTES=8M and JMR_MAX_SPR=518.
+# V2.0 MK.HTML would need JMR_SRAM_BYTES=8M / JMR_MAX_SPR=518. NOTE (2026-08-31):
+# nothing in tools/ actually sets those today — MK mints under the default 4MB
+# config with the wall below ACTIVE (MKBIGCPU is 2,801,304 ASET bytes, 5.4%
+# under it). Do not read this comment as "the wall is off for MK".
 # Lowest runtime-reserved SRAM address on the standard (4MB) board config —
 # framebuffer/work/spr/src/imgd all live contiguously from here to the top
 # of the bank. word 1,480,704 * 2 bytes/word, must track FB_SRAM_BASE in
@@ -127,6 +143,137 @@ SRAM_BYTES = 4 * 1024 * 1024  # 2M × 16 IS61WV204816 contract (see docs/ARCHITE
 # override implies a different board/region layout this constant doesn't
 # know about, so the mint-time check below is skipped in that case.
 _FB_SRAM_BASE_BYTES = 1_480_704 * 2
+
+# --- V1.5 standalone-compile arena (word addresses; mirror of the RTL
+# localparams in rtl/engines/jmr_js_vm.sv). Only live while a compiler
+# program runs: no title is loaded, so ASET art, SPR and IMGD are all dead.
+#
+#   CART  art staging, PACKED 2 bytes/word, at its final RUN-time addresses
+#         (that packing is what makes MKBIGCPU's 2.8MB fit under FB_SRAM_BASE
+#         — one byte per word would blow straight through it)
+#   CSCR  compiler scratch (the 40,960-word hole above WORK, plus SPR), 1 B/word
+#   CIMG  assembled image (the IMGD snapshot region), 1 B/word
+#
+# stgRead/stgWrite (nids 45/46) see CSCR and CIMG as ONE flat byte arena:
+#   [0, CSCR_WORDS)                      -> CSCR_SRAM_BASE + i
+#   [CSCR_WORDS, CSCR_WORDS+CIMG_WORDS)  -> CIMG_SRAM_BASE + i - CSCR_WORDS
+CART_SRAM_BASE = 0
+CART_WORDS = 1_480_704  # == FB_SRAM_BASE; artWrite2 faults at or past this
+CART_MAX_BYTES = _FB_SRAM_BASE_BYTES
+CSCR_SRAM_BASE = 1_650_688
+CSCR_WORDS = 73_728
+CIMG_SRAM_BASE = 1_789_952
+CIMG_WORDS = 307_200
+CSTG_WORDS = CSCR_WORDS + CIMG_WORDS  # flat arena the compiler addresses
+CSTG_MSG_OFF = 0  # 64-byte ASCII diagnostic for a failed compile
+CSTG_MSG_MAX = 64
+# Handoff header — the only bytes of the arena the console understands. Every
+# other byte above CSTG_OUT_OFF + cmp_len is compiler-private.
+#   +0 u8  PROGSEL   next program index (read by the console on status 0x80)
+#   +1 u8  PHASE     ARTPNG sink select: 0 = histogram, 1 = quantize
+#   +2 u32 ART_LEN   packed art bytes, the mint pump's second range
+#   +6 u16 SPAN_N    span-map records ARTSCAN emitted
+CSTG_HDR_OFF = 64
+CSTG_HDR_PROGSEL = CSTG_HDR_OFF + 0
+CSTG_HDR_PHASE = CSTG_HDR_OFF + 1
+CSTG_HDR_ART_LEN = CSTG_HDR_OFF + 2
+CSTG_HDR_SPAN_N = CSTG_HDR_OFF + 6
+#   +12 u32 OUT_OFF  where the assembled image starts in the arena
+# The image offset is published rather than fixed because the parser's tables
+# are sized by the title: PACFAST's token array alone is 188KB, so a constant
+# output slot would either collide with the tables or waste the arena on every
+# small title. MINTASM writes the image over the token array, which is dead by
+# then, and says so here.
+CSTG_HDR_OUT_OFF = CSTG_HDR_OFF + 12
+CSTG_HDR_BYTES = 64
+
+# Span map — how the residual JS is read as a virtual byte stream over the
+# card source, so a 2MB title never has to be materialised anywhere. Written
+# by ARTSCAN, walked by the tokenizer. One more span kind (INLINE_TEXT) is
+# what substitutes `jmr:spr:N` for a stripped data URI, exactly as the host
+# does in tools/compile_js.py before compile_source ever sees the text.
+#   +0  u8  KIND     0 = SOURCE (srcOff..+srcLen), 1 = INLINE, 2 = SEMI
+#   +1  u8  LEN      INLINE: bytes held in the record itself (max 9)
+#   +2  u32 SRC_OFF  SOURCE: absolute source byte offset
+#   +6  u32 SRC_LEN  SOURCE: length
+#   +10 u16 LINE     first HTML line of this span (CompileError parity)
+CSTG_SPAN_OFF = 128
+CSTG_SPAN_STRIDE = 12
+CSTG_SPAN_MAX = 256
+SPAN_KIND_SOURCE = 0
+SPAN_KIND_INLINE = 1
+SPAN_KIND_SEMI = 2
+# Token stream — fixed stride so the four read-only prescans can index it
+# freely. Variable-length records would force re-tokenizing, and the compiler
+# is a multi-pass design; the source is forward-only, the tokens are not.
+#   +0 u8  KIND
+#   +1 u8  SUB      OP: which operator. KEYWORD: which keyword.
+#   +2 u24 SRC_OFF  where the token text lives in the source
+#   +5 u8  SRC_LEN  capped at 255
+#
+# There is deliberately no LINE field. Carrying one costs 2 bytes on every
+# token — 63KB on PACFAST alone — to serve an error path that runs at most
+# once per compile. The line number is recovered when a CompileError is
+# actually raised, by counting newlines up to SRC_OFF. Rare work stays where
+# it belongs. The parser's own tables start immediately after the token
+# array (TOK_OFF + tok_n * STRIDE), so nothing is reserved for tokens that
+# a small title never uses.
+CSTG_TOK_OFF = CSTG_SPAN_OFF + CSTG_SPAN_STRIDE * CSTG_SPAN_MAX
+CSTG_TOK_STRIDE = 6
+TOK_EOF = 0
+TOK_ID = 1
+TOK_NUM = 2
+TOK_STR = 3
+TOK_TMPL = 4
+TOK_OP = 5
+TOK_REGEX = 6
+TOK_KEYWORD = 7
+CSTG_HDR_TOK_N = CSTG_HDR_OFF + 8  # u32: tokens the tokenizer produced
+
+# Operator SUB codes. Maximal munch means the longest-first order in the
+# tokenizer must match this table's multi-char entries; a wrong order is a
+# silent mis-parse, not an error, so both live here as one contract.
+OP_TOKENS = (
+    "===", "!==", "==", "!=", "<=", ">=", "&&", "||", "++", "--", "=>", "?.",
+    "+=", "-=", "*=", "/=", "%=",
+    "+", "-", "*", "/", "%", "<", ">", "=", "!", "(", ")", ";", ":", "{", "}",
+    ",", ".", "[", "]", "|", "&", "?",
+)
+
+# Keyword SUB codes.
+KEYWORDS = (
+    "var", "let", "const", "function", "return", "if", "else", "while", "for",
+    "break", "continue", "new", "typeof", "class", "this", "true", "false",
+    "null", "undefined", "switch", "case", "default", "do", "in", "of",
+    "try", "catch", "finally", "throw",
+)
+CSTG_OUT_OFF = CSCR_WORDS  # assembled .JSH starts at the CIMG boundary
+
+# cdone() status: 0 = mint, 0x80 = launch PROGSEL, anything else = error.
+CMP_STATUS_DONE = 0x00
+CMP_STATUS_NEXT = 0x80
+
+# PROGSEL ROM. Mirrored as literal rows in the RTL C_JSB_PREP name ROM, so
+# the order is a contract — append only, never renumber.
+COMPILE_CHAIN = (
+    "ARTSCAN.JSH",  # 0 — entry point: spans, sprite table, palette seeds
+    "ARTPNG.JSH",  # 1 — inflate + unfilter; histogram or quantize
+    "COMPILER.JSH",  # 2 — tokenize / parse / emit the residual JS
+    "COMPIL2.JSH",  # 3 — overlay half of the above, if the split is needed
+    "MINTASM.JSH",  # 4 — assemble the image and cdone()
+)
+COMPILE_ENTRY = 0
+SRC_SRAM_BASE = 1_724_416
+SOURCE_MAX = 65_536
+
+
+def cstg_word(i: int) -> int:
+    """Flat compiler-arena byte index -> absolute SRAM word. -1 if out of range."""
+    if i < 0 or i >= CSTG_WORDS:
+        return -1
+    if i < CSCR_WORDS:
+        return CSCR_SRAM_BASE + i
+    return CIMG_SRAM_BASE + (i - CSCR_WORDS)
 
 
 def asset_sram_bytes() -> int:
@@ -164,6 +311,10 @@ class _ImageMeta:
     names: Tuple[str, ...]
     classes: Tuple[ProgramClass, ...]
     var_names: Tuple[str, ...]
+    # Words the loader streams into code BRAM beyond its 20,480-word depth.
+    # 0 for every well-behaved image. Not fatal — see the note at the
+    # CODE_WORDS checks below — but worth surfacing to tools.
+    code_bram_overflow: int = 0
 
 
 class ProgramImage:
@@ -197,6 +348,19 @@ class ProgramImage:
     @property
     def version(self) -> int:
         return 2 if self.flags & FLAG_VALUE64 else PROGRAM_IMAGE_VERSION
+
+    @property
+    def code_bram_overflow(self) -> int:
+        """Words this image streams past code BRAM's 20,480-word depth.
+
+        0 for a well-behaved image. Non-zero means the loader DROPS that many
+        words off the end (jmr_js_vm.sv:194-196 guards the write). The tail of
+        the image is the NAMB name blob, so every instruction survives and the
+        title runs — but its last names are lost, which shows up as a wrong or
+        empty string somewhere rather than as a crash. A title to shrink, not
+        a title to refuse.
+        """
+        return self._meta.code_bram_overflow
 
     @property
     def data(self) -> bytes:
@@ -554,16 +718,33 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
             if a0 >= n_names:
                 raise ValueError(f"name index {a0} at IP {ip} is out of bounds")
 
+    # The EXECUTABLE extent is what silicon refuses: jmr_js_vm.sv:6942 faults
+    # code 3 on `ops_base + n_ops > CODE_WORDS`, and nothing else. Enforce
+    # exactly that, so the model rejects what the board rejects and no more.
+    exec_words = (ops_off + 4 * n_ops) // 4
+    if exec_words > PROGRAM_CODE_WORDS:
+        raise ValueError(
+            f"executable {exec_words} words > CODE_WORDS {PROGRAM_CODE_WORDS}"
+        )
+
+    # The whole pre-ASET stream (header + consts + ops + v2 trailer) is what
+    # the console pumps into code BRAM, and that BRAM is exactly 20,480 words
+    # (jmr_js_vm.sv:163-164, c0[0:16383] + c1[0:4095]). Words past that are
+    # DROPPED by the write port, not wrapped — jmr_js_vm.sv:194-196 guards
+    # with `else if (code_waddr_q2 < CODE_WORDS)`. Since the trailer's last
+    # section is the NAMB name blob, an over-long image loses the tail of its
+    # names and keeps every instruction. PACFAST is the live example: 17,604
+    # executable words (2,876 to spare) and 20,631 total, and it plays on the
+    # board. This used to be a hard refusal here, which meant PYTHON alone
+    # could not run a title the silicon runs. Record it; do not refuse it.
+    image_words = ((aset_off if flags & FLAG_ASET else size) + 3) // 4
+    code_bram_overflow = max(0, image_words - PROGRAM_CODE_WORDS)
+
     if flags & FLAG_ASET:
         if off > aset_off:
             raise ValueError("ProgramImage trailer overlaps ASET section")
         if any(data[off:aset_off]):
             raise ValueError("non-zero bytes in ProgramImage ASET alignment padding")
-        if (aset_off + 3) // 4 > PROGRAM_CODE_WORDS:
-            raise ValueError(
-                f"code image {(aset_off + 3) // 4} words > "
-                f"CODE_WORDS {PROGRAM_CODE_WORDS}"
-            )
         need(aset_off, 8, "ASET header")
         if data[aset_off : aset_off + 4] != ASET_MAGIC:
             raise ValueError("bad ASET magic")
@@ -586,11 +767,6 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
     else:
         if off != size:
             raise ValueError("unexpected bytes after ProgramImage trailer")
-        if (size + 3) // 4 > PROGRAM_CODE_WORDS:
-            raise ValueError(
-                f"code image {(size + 3) // 4} words > "
-                f"CODE_WORDS {PROGRAM_CODE_WORDS}"
-            )
         code_end = size
 
     return _ImageMeta(
@@ -608,6 +784,7 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
             if flags & FLAG_V2
             else tuple(f"v{i}" for i in range(n_vars))
         ),
+        code_bram_overflow=code_bram_overflow,
     )
 
 

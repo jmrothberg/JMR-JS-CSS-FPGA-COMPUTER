@@ -192,6 +192,25 @@ module jmr_js_vm_exec64 (
     output logic looping_q,
     output logic machine_fault_q,
     output logic [63:0] minmax_acc_q,
+    // Bytes of HTML the console made available at SRC_SRAM_BASE. A wire,
+    // not a state: exporting a console register is ~18 flops, where poking
+    // the value through memory would cost two encodings we do not have.
+    input  logic [17:0] src_len_i,
+    // cdone() handshake — the compiler's only exit report.
+    output logic        cmp_done_q,
+    output logic [7:0]  cmp_status_q,
+    output logic [20:0] cmp_len_q,
+    output logic [6:0]  cmp_msglen_q,
+    // V1.5 standalone compile: the scalars S_CSRAM needs. mode selects
+    // 0 srcByte, 1 stgRead, 2 stgWrite, 3 artWrite2.
+    output logic [2:0]  csr_mode_q,
+    output logic [20:0] csr_addr_q,
+    output logic [15:0] csr_wdata_q,
+    // srcSetLen (nid 50): SOURCE length published to the console so an
+    // edit made by a PROGRAM is visible to LIST / SAVE / COMPILE.
+    output logic [17:0] src_setlen_q,
+    output logic        src_setlen_stb_q,
+    output logic        csr_oob_q,
     output logic [11:0] minmax_base_q,
     output logic minmax_is_min_q,
     output logic [7:0] minmax_k_q,
@@ -1087,6 +1106,16 @@ module jmr_js_vm_exec64 (
     logic looping_n;
     logic machine_fault_n;
     logic [63:0] minmax_acc_n;
+    logic        cmp_done_n;
+    logic [7:0]  cmp_status_n;
+    logic [20:0] cmp_len_n;
+    logic [6:0]  cmp_msglen_n;
+    logic [2:0]  csr_mode_n;
+    logic [20:0] csr_addr_n;
+    logic [15:0] csr_wdata_n;
+    logic [17:0] src_setlen_n;
+    logic src_setlen_stb_n;
+    logic        csr_oob_n;
     logic [11:0] minmax_base_n;
     logic minmax_is_min_n;
     logic [7:0] minmax_k_n;
@@ -1570,6 +1599,25 @@ module jmr_js_vm_exec64 (
     assign machine_fault_q = machine_fault;
     logic [63:0] minmax_acc;
     assign minmax_acc_q = minmax_acc;
+    logic        cmp_done;
+    logic [7:0]  cmp_status;
+    logic [20:0] cmp_len;
+    logic [6:0]  cmp_msglen;
+    assign cmp_done_q   = cmp_done;
+    assign cmp_status_q = cmp_status;
+    assign cmp_len_q    = cmp_len;
+    assign cmp_msglen_q = cmp_msglen;
+    logic [2:0]  csr_mode;
+    logic [20:0] csr_addr;
+    logic [15:0] csr_wdata;
+    logic        csr_oob;
+    assign csr_mode_q  = csr_mode;
+    assign csr_addr_q  = csr_addr;
+    assign csr_wdata_q = csr_wdata;
+    logic [17:0] src_setlen; logic src_setlen_stb;
+    assign src_setlen_q = src_setlen;
+    assign src_setlen_stb_q = src_setlen_stb;
+    assign csr_oob_q   = csr_oob;
     logic [11:0] minmax_base;
     assign minmax_base_q = minmax_base;
     logic minmax_is_min;
@@ -1934,6 +1982,12 @@ module jmr_js_vm_exec64 (
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             leave_hold <= 1'b0;
+            // cdone() is sticky within one program; the console clears its
+            // own copy before each chained launch.
+            cmp_done <= 1'b0;
+            cmp_status <= 8'd0;
+            cmp_len <= 21'd0;
+            cmp_msglen <= 7'd0;
             ctor_cur <= V64_UNDEFINED;
             ctor_csp <= 8'd0;
             cm_scan <= 1'b0;
@@ -2135,6 +2189,16 @@ module jmr_js_vm_exec64 (
                 looping <= looping_n;
                 machine_fault <= machine_fault_n;
                 minmax_acc <= minmax_acc_n;
+                cmp_done <= cmp_done_n;
+                cmp_status <= cmp_status_n;
+                cmp_len <= cmp_len_n;
+                cmp_msglen <= cmp_msglen_n;
+                csr_mode <= csr_mode_n;
+                csr_addr <= csr_addr_n;
+                csr_wdata <= csr_wdata_n;
+                src_setlen <= src_setlen_n;
+                src_setlen_stb <= src_setlen_stb_n;
+                csr_oob <= csr_oob_n;
                 minmax_base <= minmax_base_n;
                 minmax_is_min <= minmax_is_min_n;
                 minmax_k <= minmax_k_n;
@@ -3226,6 +3290,16 @@ module jmr_js_vm_exec64 (
         machine_fault_n = machine_fault;
         fault_site_n = fault_site;
         minmax_acc_n = minmax_acc;
+        cmp_done_n = cmp_done;
+        cmp_status_n = cmp_status;
+        cmp_len_n = cmp_len;
+        cmp_msglen_n = cmp_msglen;
+        csr_mode_n = csr_mode;
+        csr_addr_n = csr_addr;
+        csr_wdata_n = csr_wdata;
+        src_setlen_n = src_setlen;
+        src_setlen_stb_n = 1'b0; // one-shot
+        csr_oob_n = csr_oob;
         minmax_base_n = minmax_base;
         minmax_is_min_n = minmax_is_min;
         minmax_k_n = minmax_k;
@@ -4771,6 +4845,180 @@ module jmr_js_vm_exec64 (
                                             ip_n = ip + 16'd1;
                                             code_raddr_n = 15'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
+                                        end
+                                        // ---- V1.5 standalone compile ABI ----
+                                        // The self-hosted compiler runs as an
+                                        // ordinary program; these six are its
+                                        // whole window on the machine. Reads
+                                        // answer -1 out of range so the
+                                        // tokenizer can probe cheaply; writes
+                                        // FAULT, because a stray write lands
+                                        // in FB / SOURCE / WORK and corrupts
+                                        // the machine invisibly.
+                                        8'd43: begin // srcLen()
+                                            vst_wr(base, v64_int32_number(
+                                                32'(src_len_i)));
+                                            vsp_n = base + 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end
+                                        8'd44: begin // srcByte(i)
+                                            begin
+                                                logic signed [31:0] si;
+                                                si = (argc != 0)
+                                                    ? v64_to_int32(`VST_AT(base))
+                                                    : -32'sd1;
+                                                csr_mode_n = 3'd0;
+                                                csr_oob_n = (si < 0) ||
+                                                    (si >= 32'(src_len_i));
+                                                csr_addr_n =
+                                                    SRC_SRAM_BASE + 21'(si[20:0]);
+                                                vnat_base_n = base;
+                                                state_n = S_CSRAM;
+                                            end
+                                        end
+                                        8'd45: begin // stgRead(i)
+                                            begin
+                                                logic signed [31:0] si;
+                                                si = (argc != 0)
+                                                    ? v64_to_int32(`VST_AT(base))
+                                                    : -32'sd1;
+                                                csr_mode_n = 3'd1;
+                                                csr_oob_n = (si < 0) ||
+                                                    (si >= 32'(CSTG_WORDS));
+                                                csr_addr_n = cstg_word(si[20:0]);
+                                                vnat_base_n = base;
+                                                state_n = S_CSRAM;
+                                            end
+                                        end
+                                        8'd46: begin // stgWrite(i, b)
+                                            begin
+                                                logic signed [31:0] si;
+                                                si = (argc != 0)
+                                                    ? v64_to_int32(`VST_AT(base))
+                                                    : -32'sd1;
+                                                if (si < 0 || si >= 32'(CSTG_WORDS)) begin
+                                                    machine_fault_n = 1'b1;
+                                                    fault_code_n = 8'd5;
+                                                    fault_site_n = 16'd4460;
+                                                    running_n = 1'b0;
+                                                    state_n = S_DONE;
+                                                end else begin
+                                                    csr_mode_n = 3'd2;
+                                                    csr_oob_n = 1'b0;
+                                                    csr_addr_n = cstg_word(si[20:0]);
+                                                    csr_wdata_n = {8'd0,
+                                                        v64_to_uint32(
+                                                            `VST_AT(base + 1))[7:0]};
+                                                    vnat_base_n = base;
+                                                    state_n = S_CSRAM;
+                                                end
+                                            end
+                                        end
+                                        8'd47: begin // cdone(status, len, msglen)
+                                            cmp_done_n = 1'b1;
+                                            cmp_status_n = v64_to_uint32(
+                                                `VST_AT(base))[7:0];
+                                            cmp_len_n = (argc > 1)
+                                                ? v64_to_uint32(`VST_AT(base + 1))[20:0]
+                                                : 21'd0;
+                                            cmp_msglen_n = (argc > 2)
+                                                ? v64_to_uint32(`VST_AT(base + 2))[6:0]
+                                                : 7'd0;
+                                            vst_wr(base, result);
+                                            vsp_n = base + 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end
+                                        8'd48: begin // artWrite2(word, lo, hi)
+                                            begin
+                                                logic signed [31:0] sw;
+                                                sw = (argc != 0)
+                                                    ? v64_to_int32(`VST_AT(base))
+                                                    : -32'sd1;
+                                                // This bound IS the framebuffer
+                                                // wall, enforced in silicon.
+                                                if (sw < 0 || sw >= 32'(CART_WORDS)) begin
+                                                    machine_fault_n = 1'b1;
+                                                    fault_code_n = 8'd5;
+                                                    fault_site_n = 16'd4480;
+                                                    running_n = 1'b0;
+                                                    state_n = S_DONE;
+                                                end else begin
+                                                    csr_mode_n = 3'd3;
+                                                    csr_oob_n = 1'b0;
+                                                    csr_addr_n = 21'(sw[20:0]);
+                                                    csr_wdata_n = {
+                                                        v64_to_uint32(
+                                                            `VST_AT(base + 2))[7:0],
+                                                        v64_to_uint32(
+                                                            `VST_AT(base + 1))[7:0]};
+                                                    vnat_base_n = base;
+                                                    state_n = S_CSRAM;
+                                                end
+                                            end
+                                        end
+                                        8'd49: begin // srcWrite(i, b)
+                                            begin
+                                                logic signed [31:0] si;
+                                                si = (argc != 0)
+                                                    ? v64_to_int32(`VST_AT(base))
+                                                    : -32'sd1;
+                                                // WRITE: out of range FAULTS.
+                                                // Reads answer -1 (the tokenizer
+                                                // probes past the end); a stray
+                                                // WRITE would corrupt the edit
+                                                // buffer invisibly.
+                                                if (si < 0 ||
+                                                    si >= 32'(SOURCE_MAX)) begin
+                                                    machine_fault_n = 1'b1;
+                                                    fault_code_n = 8'd5;
+                                                    fault_site_n = 16'd4497;
+                                                    running_n = 1'b0;
+                                                    state_n = S_DONE;
+                                                end else begin
+                                                    csr_mode_n = 3'd4;
+                                                    csr_oob_n = 1'b0;
+                                                    csr_addr_n =
+                                                        SRC_SRAM_BASE + si[20:0];
+                                                    csr_wdata_n = {8'd0,
+                                                        v64_to_uint32(
+                                                            `VST_AT(base + 1))[7:0]};
+                                                    vnat_base_n = base;
+                                                    state_n = S_CSRAM;
+                                                end
+                                            end
+                                        end
+                                        8'd50: begin // srcSetLen(n)
+                                            // Single beat: publish the new
+                                            // SOURCE length to the console so
+                                            // LIST / SAVE / COMPILE see an edit
+                                            // made by a PROGRAM.
+                                            begin
+                                                logic signed [31:0] sn;
+                                                sn = (argc != 0)
+                                                    ? v64_to_int32(`VST_AT(base))
+                                                    : -32'sd1;
+                                                if (sn < 0 ||
+                                                    sn > 32'(SOURCE_MAX)) begin
+                                                    machine_fault_n = 1'b1;
+                                                    fault_code_n = 8'd5;
+                                                    fault_site_n = 16'd4523;
+                                                    running_n = 1'b0;
+                                                    state_n = S_DONE;
+                                                end else begin
+                                                    src_setlen_n = sn[17:0];
+                                                    src_setlen_stb_n = 1'b1;
+                                                    vst_wr(base, V64_UNDEFINED);
+                                                    vsp_n = base + 12'd1;
+                                                    ip_n = ip + 16'd1;
+                                                    code_raddr_n =
+                                                        15'(ops_base + ip + 16'd1);
+                                                    state_n = S_FETCH_WAIT;
+                                                end
+                                            end
                                         end
                                         default: begin
                                             machine_fault_n = 1'b1;

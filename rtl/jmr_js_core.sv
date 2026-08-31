@@ -118,6 +118,8 @@ module jmr_js_core #(
     // payload during RUN load; the VM blitter reads sprite pixels while running.
     // The two masters never overlap (load completes before vm_start).
     logic [6:0]  stor_dbg_state;
+    logic [17:0] vm_src_setlen;
+    logic        vm_src_setlen_stb;
     logic        cons_sram_req, cons_sram_we, vm_sram_req, vm_sram_we;
     logic [20:0] cons_sram_addr, vm_sram_addr;
     logic [15:0] cons_sram_wdata, vm_sram_wdata, sram_rdata;
@@ -261,6 +263,11 @@ module jmr_js_core #(
         .dump_addr(dump_addr), .dump_data(dump_data)
     );
 
+    // Compile handshake: the console owns storage and the SOURCE window,
+    // the VM runs the compiler as an ordinary program.
+    logic [17:0] cons_src_len;
+    logic        cmp_arm;
+
     jmr_console_engine u_cons (
         .clk(clk), .rst_n(rst_n),
         .enable(standalone_mode && !game_mode),
@@ -269,6 +276,14 @@ module jmr_js_core #(
         .video_busy(video_busy),
         .cls(cls), .put_en(put_en), .put_char(put_char), .print_nl(print_nl),
         .ready_lit(ready_lit),
+        .src_len_o(cons_src_len),
+        .src_setlen_i(vm_src_setlen),
+        .src_setlen_stb_i(vm_src_setlen_stb),
+        .cmp_done_i(vm_cmp_done),
+        .cmp_status_i(vm_cmp_status),
+        .cmp_len_i(vm_cmp_len),
+        .vm_busy_i(vm_busy),
+        .cmp_arm_o(cmp_arm),
         .dbg_state(cons_dbg_state_o),
         .run_pulse(run_pulse),
         .vm_start(vm_start),
@@ -523,9 +538,24 @@ module jmr_js_core #(
     logic [15:0] vm_held_wdata;
     logic        vm_req_match;
 
+    // Compile handshake between the console (which owns storage and the
+    // SOURCE window) and the VM (which runs the compiler as a program).
+    logic        vm_cmp_done;
+    logic [7:0]  vm_cmp_status;
+    logic [20:0] vm_cmp_len;
+    logic [6:0]  vm_cmp_msglen;
+
     jmr_js_vm #(.CODE_HEX("invaders_jsb.hex")) u_vm (
         .clk(vm_clk), .clk_code_w(clk), .rst_n(rst_n),
         .start(vm_start_lat),
+        // V1.5 standalone compile: source length in, exit report out.
+        .src_len_i(cons_src_len),
+        .src_setlen_o(vm_src_setlen),
+        .src_setlen_stb_o(vm_src_setlen_stb),
+        .cmp_done_o(vm_cmp_done),
+        .cmp_status_o(vm_cmp_status),
+        .cmp_len_o(vm_cmp_len),
+        .cmp_msglen_o(vm_cmp_msglen),
         .stop(vm_stop_lat),
         .frame_tick(vm_ftick_lat),
         .joy_in(joy_in),
@@ -696,7 +726,11 @@ module jmr_js_core #(
         else if ((kbd_push && kbd_data == 8'h1B) || halt_pulse) game_mode <= 1'b0;
         // Enter on RUN/vm_start only. demo_busy/vm_busy must not retrigger
         // after ESC — console enable is !game_mode, so LIST after RUN died.
-        else if (run_pulse || vm_start || sim_vm_start)
+        // cmp_arm: a compile runs the VM without becoming a GAME. The text
+        // screen stays up, READY stays dark, and the RUN path is untouched.
+        // Cheaper and safer than consuming vm_done to undo a game_mode we
+        // never needed to enter — that edge would touch every title.
+        else if ((run_pulse || vm_start || sim_vm_start) && !cmp_arm)
             game_mode <= 1'b1;
     end
 endmodule

@@ -16,6 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STORAGE = ROOT / "storage"
 DEFAULT_CARD = ROOT / "card.img"
 _HIDE_SUFFIX = {".JSH", ".JSB"}
+# DIR is the catalog of TITLES. The self-hosted compiler's programs live on
+# the card as ordinary .HTML/.JSH pairs — that is what lets the machine one
+# day recompile its own compiler — but they are system software, not games,
+# and listing them buries the titles. Hidden by stem, so both halves go.
+_SYSTEM_STEMS = {"ARTSCAN", "ARTPNG", "COMPILER", "COMPIL2", "MINTASM"}
 
 
 class StorageEngine:
@@ -38,10 +43,14 @@ class StorageEngine:
             for n in self._mount().catalog():
                 if Path(n).suffix.upper() in _HIDE_SUFFIX:
                     continue
+                if Path(n).stem.upper() in _SYSTEM_STEMS:
+                    continue
                 names.append(n)
             return names
         for p in sorted(self.root.iterdir()):
             if not p.is_file() or p.name.startswith("."):
+                continue
+            if p.stem.upper() in _SYSTEM_STEMS:
                 continue
             # Monitor DIR shows game/program files only.
             if p.suffix.upper() in (".JS", ".HTML", ".HTM", ".PNG", ".DAT"):
@@ -100,6 +109,22 @@ class StorageEngine:
             return
         path = self._resolve(name)
         path.write_text(text, encoding="utf-8")
+
+    def save_bytes(self, name: str, data: bytes) -> None:
+        """Write a binary file to the card — the on-machine mint path.
+
+        Deliberately NOT save_text: that one deletes STEM.JSH whenever an
+        HTML is saved, which would erase the image a COMPILE just minted.
+        """
+        if self.card_img is not None:
+            if not self.card_img.is_file():
+                raise FileNotFoundError(name)
+            vol = self._mount()
+            vol.write_file(name, bytes(data))
+            self.card_img.write_bytes(bytes(vol.card.image))
+            return
+        path = self._resolve(name)
+        path.write_bytes(bytes(data))
 
     def delete(self, name: str) -> None:
         if self.card_img is not None:

@@ -463,7 +463,9 @@ static const char* vm_sname(unsigned s) {
         // Keep in lockstep with the parent st_t tail (RTL_REORG: the enum
         // is append-only and this table indexes by NUMBER). Missing entries
         // print `sname=?` and cost debugging time.
-        "S_V64_SLICE","S_V64_SORT","S_FB_SYNC","S_V64_DISPATCH"
+        "S_V64_SLICE","S_V64_SORT","S_FB_SYNC","S_V64_DISPATCH",
+        // V1.5 standalone compile: one state for the whole memory ABI.
+        "S_CSRAM"
     };
     if (s < (unsigned)(sizeof(N) / sizeof(N[0]))) return N[s];
     return "?";

@@ -8,7 +8,7 @@ title status, holes, and the **Version 1.0 / 1.5 / 2.0** plan — not the teachi
 list.
 
 This is **copy 2** of the Version 1.0 walls / Version 1.5 console + popular JS /
-Version 2.0 `MK.HTML` plan
+Version 2.0 machine-work plan
 (copy 1 is `.cursor/rules/html-game-v1.mdc`).
 
 Target games drive the language/API set. **Not a full web browser** — no
@@ -27,7 +27,8 @@ slow to play** (PC simulating the chip). Board target **≥ 30
 pictures/second**: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
 Live heap/code caps: [FPGA_FIT.md](FPGA_FIT.md). **V1.0 BOARD:** compile when
 you make the card (`.JSH`). **V1.5** (planned) tries standalone compile plus
-type/paste/edit HTML **and** popular JS V1.0 does not have. `MK.HTML` is still Version 2.0 (not V1).
+type/paste/edit HTML **and** popular JS V1.0 does not have. Version 2.0 is
+ISA/ASET growth, **not** a named title.
 
 ## Reference titles (on disk)
 
@@ -48,7 +49,7 @@ RUN
 | Joystick (library) | `JOYDEMO.HTML` | compile → ephemeral ProgramImage (stick + arrows; no ASET) |
 | Sound (library) | `SNDDEMO.HTML` | compile → ephemeral ProgramImage (playSfx catalog; Chrome audio, card `sound()` nid 42; no ASET) |
 | Mr. Do! (library) | `MRDO.HTML` | compile → ephemeral ProgramImage (portrait 384×480 in 640×480 letterbox; no ASET) |
-| Mortal Kombat (library) | `MK.HTML` | **V2.0 goal** — `MAX_SPR`≥518, ~4.63 MB art → **8 MB ASET bank**, dotted `new mk.…`, `Object.keys`/`for…in`, `Math.round`; Chrome today |
+| Mortal Kombat (library) | `MKBIG.HTML` / `MKBIGCPU.HTML` | **V1.0** — atlases inside 4 MB / 16 SPR. No `MK.HTML` in `storage/` |
 | MK PVP (library) | `MKPVP.HTML` | **V1.0** MK-shaped — ≤16 atlases, L/R sheets, no `Object.keys` / negative mirror |
 
 **V1.0 disk is `card.img` (hard):** PYTHON, FPGA-SIM, and BOARD all
@@ -101,12 +102,12 @@ Chrome-only title “done on the machine.”
 
 | | **1.0 (now)** | **1.5 (planned)** | **2.0 (planned)** |
 |---|---|---|---|
-| **Meaning** | Caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Chip does not compile — **compile when you make the card** (minted `.JSH`). Console is **view-only** (`LIST` / `DIR` / `LOAD`) | Console **authoring** (type / paste / edit) **after** compile-on-RUN **and** popular JS V1 does not have (stdlib + globals). Same heap/ASET/Canvas caps. Not MK. | Machine changes so **`storage/MK.HTML` as embedded today** can `LOAD` + `RUN` |
-| **Acceptance** | `INVADERS` / `PACMAN` / `DONKEY` | Numbered-line HTML at `>` **and** standalone `RUN` **tried** on the machine (no PC); `SAVE` optional | **`MK.HTML`**. `MKPVP.HTML` stays V1 training wheels |
+| **Meaning** | Caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Chip does not compile — **compile when you make the card** (minted `.JSH`). Console is **view-only** (`LIST` / `DIR` / `LOAD`) | Console **authoring** (type / paste / edit) **after** compile-on-RUN **and** popular JS V1 does not have (stdlib + globals). Same heap/ASET/Canvas caps. | Grow the ISA past V1 walls (sprite count, ASET size, `Object.keys` on RTL, `Math.round`, dotted `new`, `.call`/`.apply`). **No title is the V2 example.** |
+| **Acceptance** | `INVADERS` / `PACMAN` / `DONKEY` | Numbered-line HTML at `>` **and** standalone `RUN` **tried** on the machine (no PC); `SAVE` optional | Any `NAME.HTML` that needs those caps. `MKBIG.HTML` / `MKBIGCPU.HTML` stay V1 |
 | **Sprites / ASET** | **`MAX_SPR` = 16**, 4 MB bank | **Unchanged** (do not grow heap/ASET for this) | **`MAX_SPR` ≥ 518**, **8 MB** bank |
 | **Authoring** | PC + remake `card.img`. `LIST` to learn. Do **not** treat `EDIT` as V1.0 play | Source is the **editor buffer**; `RUN` compiles it. Language: popular stdlib/globals (table below). Canvas caps stay | Same glass/`LOAD`/`RUN`; drop V1 HTML shims once V2 rows land |
 
-Do **not** title-gate (`if (stem == "MK")`).
+Do **not** title-gate (`if (stem == "…")`).
 
 ### V1.5 — type, paste, compile, edit HTML at READY (no card required)
 
@@ -127,7 +128,7 @@ Logged 2026-08-25: BOARD `>` treats a paste or typed `<canvas…>` as a verb
 |---|---|
 | **Type** HTML | `10 <canvas…>` Enter, `20 <script>` Enter, … then `RUN` |
 | **Paste** HTML | Same path as type. Unnumbered paste auto-numbers by **10**; already-numbered lines keep their numbers |
-| **Compile / run** | **V1.0:** `RUN` loads the **card-minted** `.JSH` from `card.img` (PYTHON / FPGA-SIM / BOARD). Compile was at `make_sd_image.py create`. **V1.5 tries** compile-on-RUN of the editor buffer **on the chip**. No extra `COMPILE` verb. Missing image → loud `?NH` |
+| **Compile / run** | **V1.0:** `RUN` loads the **card-minted** `.JSH` from `card.img` (PYTHON / FPGA-SIM / BOARD). Compile was at `make_sd_image.py create`. **V1.5 (decided 2026-08-31): a bare `COMPILE` verb**, three explicit steps `LOAD` → `COMPILE` → `RUN`. Supersedes the earlier "no extra COMPILE verb / compile-on-RUN" wording: the verb takes no argument (LOAD already parked the source and latched the name, and the VM has **no argument register** on silicon), and separating it keeps a failed compile from looking like a failed RUN. `RUN` itself is **unchanged** — it loads whatever `.JSH` is on the card, minted by the host or by the machine. Missing image → loud `?NH`; a failed compile → `?CE` + the compiler's line message |
 | **Replace a line** | `10 body` + Enter (inserts if 10 is new) |
 | **Delete a line** | `10` + Enter (number only) — **gone**, not blank. PYTHON today blanks; V1.5 deletes |
 | **Insert between** | Numbers go by **10** (`10`, `20`, `30`, …). `15 xyz` lands **between** 10 and 20. Any unused integer is legal (`11`, `25`). `LIST` and `RUN` use **number order** |
@@ -213,11 +214,12 @@ Product ISA freeze (three compiles) still defines **Complete** rows above.
 Library V1 titles may use only the **intersection** of Complete rows **and**
 these walls (FPGA-SIM is stricter than “PYTHON Complete” for some hosts).
 
-### V2.0 requirements — measured from `storage/MK.HTML` (2026-08-20)
+### V2.0 requirements — machine targets (no `MK.HTML`)
 
-**Partially started (compiler front end only).** Land PYTHON → FPGA-SIM →
-board. No dukpy. No title-name gates. Numbers below are from the file on
-disk (re-measure if embeds change).
+**`storage/MK.HTML` is gone.** Do not `LOAD` it or treat it as acceptance.
+Numbers below are a **2026-08-20 census** of that lost file — they still
+size the V2 caps. Land PYTHON → FPGA-SIM → board. No dukpy. No title-name
+gates. Re-measure from a real `storage/*.HTML` when one needs them.
 
 **Landed 2026-08-21 (PYTHON-side, zero RTL growth):** unary `+x`
 (→ `x-0`), `throw` (soft: evaluate + drop), the `in` operator
@@ -226,11 +228,10 @@ lowered over a new `Object.keys` native **id 41** — implemented in the
 FM and HM; **RTL arm intentionally absent**). All eight existing titles
 still compile byte-identically; bytecode suite 198/198.
 
-**Still blocking `MK.HTML` (the real V2 work):** dotted `new`, and
-`Function.prototype.call`/`apply`. Compile now stops at HTML line 738,
-`new mk.arenas.Arena({…})`.
+**Still V2 work (no current title exercises it):** dotted `new`, and
+`Function.prototype.call`/`apply`.
 
-#### Inventory (current `MK.HTML`)
+#### Inventory (historical — lost `MK.HTML`, 2026-08-20)
 
 | Metric | Value |
 |---|---|
@@ -245,53 +246,68 @@ still compile byte-identically; bytecode suite 198/198.
 
 #### Caps / ASET (must change for this file)
 
-| Change | Exact need for current `MK.HTML` |
+**Read this row against shipped files (measured 2026-08-31).** The census
+above is the **lost** fighter HTML. What ships and plays today are
+`MKBIG.HTML` / `MKBIGCPU.HTML` (`tools/mkbig.py`), **inside** the V1 bank:
+
+| shipped title | unique sheets | ASET bytes | vs 2,961,408 B wall |
+|---|---:|---:|---|
+| `MKBIGCPU.JSH` (2.700 MB) | 4 | 2,801,304 | **fits**, 5.4% under |
+| `MKBIG.JSH` (2.692 MB) | 3 | 2,797,208 | fits |
+| `DNKFAST.JSH` (2.260 MB) | 6 (of 12 URIs — identical ones dedupe) | 2,336,898 | fits |
+
+Nothing in `tools/` sets `JMR_SRAM_BYTES`, so those mints ran with the
+`_FB_SRAM_BASE_BYTES` check **active** — the fit is real, not an artefact of
+a disabled wall. Locked by
+`tests/test_self_hosted_compile.py::test_every_shipped_title_fits_under_the_art_wall`.
+
+| Change | Exact need (historical census) |
 |---|---|
 | **`MAX_SPR` / `PROGRAM_MAX_SPRITES`** | Set both to **≥ 518** (RTL descriptor RAMs + encode refuse). 16 → 518 is the gap. |
 | **Asset SRAM / ASET payload** | Current embeds need **~4.63 MB** indexed pixels (+ 768 B palette) — over today’s **4 MB** V1 bank. **V2.0 rebuilds the asset bank to 8 MB** (or larger if a later title needs it). Same **simple SRAM port** style (`addr`/`wdata`/`rdata`/`we`/`req`/`ack`); widen the address enough for 8 MB+. **ASIC constraint:** still **one chip**, no multi-die / fancy banked access — pick a single parallel async SRAM (or on-die SRAM of that class) that fits the package. FPGA board may keep DDR3 behind the same port (first 8 MB used). Do not silently drop sheets. |
-| Heap | Re-check after MK compiles; mk.js allocates many objects/arrays — overflow must stay **loud**. No MK-only heap. |
+| Heap | Re-check when a title actually needs V2; overflow must stay **loud**. No title-only heap. |
 
 #### Compiler (blocks `RUN` before any VM)
 
-| Gap | Evidence in `MK.HTML` |
+| Gap | Evidence (historical census) |
 |---|---|
 | **`new` on a dotted member** (`new mk.arenas.Arena(…)`, `new mk.moves.Attack(…)`, …) | **70** `new mk.…` call sites (**39** distinct ctor paths — re-measured 2026-08-21). Compiler stops at line 738 with `EXPECTED '('`. V2 must accept `new Expr.Member(…)`: not just a parse fix — the callee is a **runtime function value**, so exec64 needs construct-on-a-value (allocate, set `this`, run, return the object). The 16×16 class/method intern tables cannot absorb it either (mk.js has ~25 constructor paths), so "treat them as classes" is not a shortcut. |
 
 #### Natives / language (emitted or required by this engine)
 
-| API / behavior | Evidence in `MK.HTML` | V2 action |
+| API / behavior | Evidence (historical census) | V2 action |
 |---|---|---|
 | **`for…in`** (→ needs working **`Object.keys`** on RTL, or a real `for…in` op) | **5** `for…in` loops (controllers, moves map, shim) | Implement **`Object.keys`** `CALL_NATIVE` on PYTHON + exec64 (and keep compiler lowering), **or** a dedicated `for…in` path — FPGA-SIM must not hit `fsite=4183` |
 | **`Math.round`** | **2** call sites (+ HTML shim today) | Add **`Math.round`** as a real `CALL_NATIVE` (same shape as `Math.floor`); remove the shim once present |
 | **`Math.floor` / `abs` / `min` / `max` / `random`** | Used | Already V1 — keep |
 | **`typeof`** | Used | Already V1 — keep |
-| **`setInterval` / `addEventListener` / `Image` / `drawImage` / `fillRect` / `fillText` / `createElement` / `querySelector` / `getElementById`** | Used | Already on Completeness tables — verify FPGA-SIM for MK load path |
+| **`setInterval` / `addEventListener` / `Image` / `drawImage` / `fillRect` / `fillText` / `createElement` / `querySelector` / `getElementById`** | Used | Already on Completeness tables |
 | **`mk.Promise`** | Custom ctor in-file (`new mk.Promise`), **not** ES `Promise`/`async` | No browser Promise ISA required if this stays a plain JS object; do **not** add `async`/`await` for MK |
 | **`Function.prototype.call` / `.apply`** (explicit `this`) | **42 sites, 11 distinct targets** — almost all the classic super-constructor pattern `mk.moves.Move.call(this, owner)`; also `Object.prototype.hasOwnProperty.call`, `callback.call`, and 4 `.apply(this, arguments)` | **A real V2 VM capability, not a shim.** exec64 must be able to invoke a runtime function value with a caller-supplied `this` (the machinery exists inside the class-ctor path — `vcall_set_this` — it is simply not exposed to a value call). Pairs with dotted `new` below; ~100–150 lines of exec64, **no new memories**. |
 | **`arguments` object** | 2 sites (inside the `.apply` forwards) | Only needed to the depth `.apply` forwarding requires; do not build a full arguments object |
 
-**Not required by current `MK.HTML` (do not list as MK V2 drivers):**
+**Not required by that census (do not list as V2 drivers):**
 `Math.sin` / `cos` / `atan2` / `hypot` / `ceil` (not referenced), negative
 `setTransform` mirror (MK does not call `setTransform`), WebGL, Fetch, Audio.
 
 #### Canvas
 
-| Item | MK need |
+| Item | V2 need |
 |---|---|
-| **3/5/9-arg `drawImage`** | Keep Complete — MK blits fighter/arena sheets |
-| Negative scale `setTransform` | **Not** an MK.HTML driver (optional wider parity; MKPVP avoided it with L/R sheets) |
+| **3/5/9-arg `drawImage`** | Keep Complete — fighter/arena sheets blit the same as V1 |
+| Negative scale `setTransform` | **Not** a V2 driver (optional wider parity; MKBIG uses L/R sheets) |
 
 #### Explicitly still never (V2 does not mean “browser”)
 
 WebGL, Fetch/XHR, real audio graph, CSS layout engine, `eval`, workers,
 `window.open` as browsing, ES `async`/`await` — same as V1 **never** rows.
 
-**Done definition for V2.0:** `python3 tools/compile_js.py --html storage/MK.HTML`
-succeeds; asset bank is **8 MB** (or the chosen larger size) with the simple
-single-chip ASIC port rule; `LOAD "MK.HTML"` + `RUN` plays on PYTHON then
-FPGA-SIM (user F9) with **all 518 sheets**, **no** dropped ASET art, **no**
-`Object.keys`/`for…in` fault, **no** dotted-`new` compile error. Board after
-F9 approval.
+**Done definition for V2.0:** a real `storage/NAME.HTML` that needs the V2
+caps compiles; asset bank is **8 MB** (or the chosen larger size) with the
+simple single-chip ASIC port rule; `LOAD` + `RUN` plays on PYTHON then
+FPGA-SIM (user F9) with **no** dropped ASET art, **no** `Object.keys` /
+`for…in` fault, **no** dotted-`new` compile error. Board after F9 approval.
+There is **no** `MK.HTML` to compile.
 
 ---
 
@@ -491,10 +507,10 @@ a missing general native**, not an FPGA-SIM / game hardwire. Real
 
 | API | Pri | Why (wider HTML5) | Status |
 |---|---|---|---|
-| `Math.round` | P2 | **`MK.HTML` V2.0** (2 call sites; shim today) | V2.0 — required for MK |
-| `Math.hypot` | P2 | Distance / collision (not used by current `MK.HTML`) | optional / later |
-| `Math.sin` / `Math.cos` | P2 | Motion / FX; ASTEROID uses LUTs instead (not used by current `MK.HTML`) | optional / later |
-| `Math.ceil` / `Math.atan2` | P2 | Smaller game use (not used by current `MK.HTML`) | optional / later |
+| `Math.round` | P2 | Wider HTML5 / historical fighter census | V2.0 |
+| `Math.hypot` | P2 | Distance / collision | optional / later |
+| `Math.sin` / `Math.cos` | P2 | Motion / FX; ASTEROID uses LUTs instead | optional / later |
+| `Math.ceil` / `Math.atan2` | P2 | Smaller game use | optional / later |
 
 #### Language — do not implement (V1)
 
@@ -977,8 +993,8 @@ is what the *first* `.JS` demos needed; it is not the surface any more.
 ## Feature matrix (planning) — historical
 
 What the three product HTML files used when we froze the ISA. Not an open
-todo list. Library HTML stays on Version 1.0 walls. **`MK.HTML` is the
-Version 2.0 goal.**
+todo list. Library HTML stays on Version 1.0 walls. **V2.0 is ISA/ASET
+growth, not a named title.**
 
 | Feature | PACMAN.HTML | DONKEY.HTML | INVADERS.HTML | Implement |
 |---|---|---|---|---|
@@ -996,10 +1012,10 @@ Version 2.0 goal.**
 | Audio | `playSfx` / `sound` nid 42 | Chrome `_chromePlay` | card `sound()` nid 42 | ADAU1761 PHY in |
 | WebGL / Fetch | no | no | no | NEVER |
 
-Library HTML (`ASTEROID`, `AURORA`, `JOYDEMO`, `MRDO`, `MKPVP`) uses the **V1.0**
-surface + [GAME_DESIGN.md](GAME_DESIGN.md) walls. **`MK.HTML` is the V2.0 goal**
-(not a V1 FPGA-SIM acceptance title). MRDO is a **portrait** 384×480 tile
-title (side letterbox on 640×480). Do not stretch the cabinet raster.
+Library HTML (`ASTEROID`, `AURORA`, `JOYDEMO`, `MKBIG`) uses the **V1.0**
+surface + [GAME_DESIGN.md](GAME_DESIGN.md) walls. **No `MK.HTML`.** MRDOFAST
+is a **portrait** 384×480 tile title (side letterbox on 640×480). Do not
+stretch the cabinet raster.
 
 ---
 
@@ -1137,10 +1153,8 @@ compat row Complete from Chrome or from a fat RTL snippet.
 | `storage/ASTEROID.HTML` | Library title (vector Asteroids). Authoring: [GAME_DESIGN.md](GAME_DESIGN.md) |
 | `storage/AURORA.HTML` | Library title (fillRect gem hopper) |
 | `storage/MRDO.HTML` | Library title (Mr. Do! arcade). Portrait 384×480 letterbox; [GAME_DESIGN.md](GAME_DESIGN.md) |
-| `storage/MK.HTML` | **V2.0 goal** — **518** sheets, **~4.63 MB** pixels → **8 MB** asset SRAM (ASIC: one chip, simple port), dotted `new mk.…`, `for…in`/`Object.keys`, `Math.round` — [§ Version 1.0, 1.5, and 2.0](#version-10-15-and-20) |
-| `storage/MKPVP.HTML` | **V1.0** library (slim MK 2P). 3 ASET atlases; L/R sheets; no `for-in`/`Object.keys`; no negative mirror |
-| `storage/MKBIG.HTML` | **V1.0** library (MK frames packed to 4 MB / 3 atlases). Same engine as MKPVP |
-| `storage/MKBIGCPU.HTML` | **V1.0** library (MKBIG art + CPU Kano). Ice ball (Sub-Zero) + flame (Kano); 4th tiny shots atlas; still ≤16 SPR / 4 MB |
+| `storage/MKBIG.HTML` | **V1.0** library (MK frames packed to 4 MB / 3 atlases) |
+| `storage/MKBIGCPU.HTML` | **V1.0** library (MKBIG art + CPU Kano). Ice ball + flame; 4th tiny shots atlas; still ≤16 SPR / 4 MB |
 | In-memory ProgramImage | **V1.0:** minted `.JSH` from `card.img` (code + ASET). Not a `storage/` name |
 | `storage/JOYDEMO.HTML` | Library smoke (joystick / arrows on Canvas) |
 | `storage/SNDDEMO.HTML` | Library smoke (playSfx recipes; Chrome Web Audio, card `sound()` nid 42) |

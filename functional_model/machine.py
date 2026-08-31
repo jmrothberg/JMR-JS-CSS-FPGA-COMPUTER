@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from . import jsb_format
 from .bytecode import VM
 from .canvas_engine import CONSOLE_VISIBLE_LINES, FB_BYTES, HEIGHT, WIDTH, CanvasEngine
 from .compiler import CompileError, compile_source
@@ -38,6 +39,15 @@ class Machine:
         # NEW: external SRAM asset bank model (ASET payload lives here)
         self.sram = SramEngine()
         self._spr_descs: list = []  # (w, h, sram_off) per sprite handle
+        # V1.5 standalone compile: SOURCE window + the cdone handshake the
+        # console reads back after a compiler program halts.
+        self._src_len: int = 0
+        self._src_rp: int = 0
+        self._src_bytes: bytes = b""
+        self._cmp_done: bool = False
+        self._cmp_status: int = 0
+        self._cmp_len: int = 0
+        self._cmp_msglen: int = 0
         self.lines_out: List[str] = []
         self.console_log: List[str] = []
         self.source_name: str = "UNTITLED.JS"
@@ -276,8 +286,17 @@ class Machine:
         if upper.startswith("DELETE"):
             return self._cmd_delete(text)
         if upper.startswith("REMOVE"):
-            # NEW: same verb as RTL REMOVE (alias of DELETE)
-            return self._cmd_delete("DELETE" + text[6:])
+            # REMOVE deletes a FILE, matching RTL (p_remove_q -> C_RM ->
+            # stor_delete). It was aliased to _cmd_delete, which parses an
+            # int line number, so REMOVE "X.HTML" raised ValueError here
+            # while the board deleted the file — an FM/RTL split that no
+            # test caught because none ever typed REMOVE with a filename.
+            # DELETE <n> stays the source-line delete.
+            return self._cmd_remove(text)
+        if upper == "COMPILE":
+            # Bare verb: compiles what LOAD parked in SOURCE, mints to the
+            # latched name. RUN afterwards is the ordinary, untouched path.
+            return self._cmd_compile()
         if upper == "RUN" or upper.startswith("RUN "):
             return self._cmd_run(text)
         if upper == "MEM":
@@ -532,12 +551,113 @@ class Machine:
         rest = text[6:].strip()
         if not rest:
             return ["ERROR: DELETE N"]
-        n = int(rest.split()[0])
+        head = rest.split()[0]
+        if not head.isdigit():
+            # DELETE takes a line number; a filename means they wanted REMOVE.
+            return ["ERROR: DELETE N (use REMOVE for a file)"]
+        n = int(head)
         idx = self._editor_index(n if n >= 10 else n * 10)
         if 0 <= idx < len(self.source_lines):
             del self.source_lines[idx]
             return ["OK"]
         return ["ERROR: NO LINE"]
+
+    def _cmd_compile(self) -> List[str]:
+        """COMPILE — mint NAME.JSH from the loaded source, on the machine.
+
+        Bare verb by design: LOAD already parked the source and latched the
+        name, and the VM has no argument register on silicon, so there is
+        nothing to pass. Chain-loads the compiler programs, each of which
+        gets the whole 20,480-word code RAM to itself; they hand off through
+        the scratch arena. RUN afterwards is the ordinary, untouched path.
+        """
+        if not self.source_name or not self.source_lines:
+            return ["?NB"]
+        if Path(self.source_name).suffix.upper() not in (".HTML", ".HTM"):
+            return ["?NB"]
+
+        body = "\n".join(self.source_lines)
+        if body and not body.endswith("\n"):
+            body += "\n"
+        self._stage_source(body)
+
+        out = ["COMPILING"]
+        try:
+            status, message = self._run_compile_chain()
+        except FileNotFoundError as exc:
+            # No compiler on the card. Loud, like a missing .JSH on RUN.
+            return out + ["?NH", str(exc)]
+        except Exception as exc:  # a compiler fault is a failed compile
+            return out + ["?CE", str(exc)[:64]]
+
+        if status != jsb_format.CMP_STATUS_DONE:
+            return out + ["?CE"] + ([message] if message else [])
+
+        image_bytes = self._cmp_output()
+        try:
+            # The FM validator is the acceptance gate. RTL checks only magic,
+            # FLAG_VALUE64 and word count, and JSB1 carries no checksum, so a
+            # malformed image would load on silicon and fault thousands of
+            # ops later. Refuse it here instead.
+            jsb_format.ProgramImage(image_bytes)
+        except Exception as exc:
+            return out + ["?CE", f"BAD IMAGE: {str(exc)[:48]}"]
+
+        stem = Path(self.source_name).stem.upper()[:8]
+        self.storage.save_bytes(stem + ".JSH", image_bytes)
+        return out + [f"COMPILED {stem}.JSH ({len(image_bytes)} BYTES)"]
+
+    def _run_compile_chain(self) -> tuple:
+        """Drive the chained compiler programs; return (status, message).
+
+        One VM across the chain so the scratch arena and staged art survive
+        the handoffs — that persistence is the whole point of the arena.
+        """
+        from hardware_model.js_vm import JsHwVm
+
+        hw = JsHwVm()
+        hw._m = self  # share this Machine's SRAM, source window and handshake
+        # A compile is not a frame. Tokenizing a 64KB title is ~6-8M ops and
+        # an MK-class source runs far past that; the 8M default is a fuse
+        # sized for one rAF paint. On the board this is seconds to minutes,
+        # which is what the plan budgets for. Still bounded, so a runaway
+        # compiler program still trips rather than hanging the glass.
+        hw.step_budget = 4_000_000_000
+        sel = jsb_format.COMPILE_ENTRY
+        for _ in range(len(jsb_format.COMPILE_CHAIN) * 4):  # cheap runaway bound
+            name = jsb_format.COMPILE_CHAIN[sel]
+            blob = self.storage.load_bytes(name)
+            self._cmp_reset()
+            hw.load_image(jsb_format.ProgramImage(blob))
+            if hw.error:
+                raise RuntimeError(hw.error)
+            if not self._cmp_done:
+                raise RuntimeError(f"{name} ended without cdone()")
+            if self._cmp_status != jsb_format.CMP_STATUS_NEXT:
+                return self._cmp_status, self._cmp_message()
+            sel = int(self.sram.mem[jsb_format.cstg_word(jsb_format.CSTG_HDR_PROGSEL) * 2])
+            if sel >= len(jsb_format.COMPILE_CHAIN):
+                raise RuntimeError(f"PROGSEL {sel} out of range")
+        raise RuntimeError("compile chain did not terminate")
+
+    def _cmd_remove(self, text: str) -> List[str]:
+        """REMOVE "NAME" — delete a file from the card. Matches RTL C_RM."""
+        rest = self._parse_filename(text[6:])
+        if not rest:
+            return ["ERROR: REMOVE NAME"]
+        if rest.isdigit():
+            # REMOVE n — same 1-based index as DIR, like LOAD n.
+            names = self.storage.catalog()
+            i = int(rest) - 1
+            if i < 0 or i >= len(names):
+                return ["ERROR: NO ENTRY"]
+            rest = names[i]
+        try:
+            name = self.storage.resolve_name(rest)
+        except FileNotFoundError:
+            return ["?FN FILE NOT FOUND"]
+        self.storage.delete(name)
+        return ["OK"]
 
     def _cmd_run(self, text: str) -> List[str]:
         rest = text[3:].strip()
@@ -594,7 +714,16 @@ class Machine:
         except FileNotFoundError:
             self._arch_phase = "loaded"
             return ["?NH"]
-        image = ProgramImage(blob)
+        try:
+            image = ProgramImage(blob)
+        except Exception as exc:
+            # A minted image that busts a wall (PACFAST is 20,631 words against
+            # CODE_WORDS 20,480 today) used to raise straight out of RUN as a
+            # traceback. The board faults loudly on the same image, so say so
+            # here too — and COMPILE writing images on-device makes a bad one
+            # a routine possibility rather than a theoretical one.
+            self._arch_phase = "loaded"
+            return ["?NB", str(exc)[:64]]
         self.trace.edge(
             "COMPILE",
             f"card {stem}.JSH → ProgramImage ({len(blob)} bytes)",
@@ -770,6 +899,14 @@ class Machine:
             "_stub": self._nat_noop,
             # sound() nid 42 — always succeed (PHY later; silent no-op here)
             "sound": self._nat_noop,
+            # V1.5 standalone-compile ABI (nids 43..48). See jsb_format
+            # NATIVE_IDS and the arena constants beside _FB_SRAM_BASE_BYTES.
+            "srcLen": self._nat_src_len,
+            "srcByte": self._nat_src_byte,
+            "stgRead": self._nat_stg_read,
+            "stgWrite": self._nat_stg_write,
+            "cdone": self._nat_cdone,
+            "artWrite2": self._nat_art_write2,
             # NEW: Canvas2D methods via ctx.* (HTML bytecode path)
             "ctx.fillRect": self._nat_fill_rect,
             "ctx.clearRect": self._nat_clear_rect,
@@ -1188,6 +1325,126 @@ class Machine:
 
     def _nat_noop(self, *_a):
         return None
+
+    # --- V1.5 standalone-compile ABI (nids 43..48) --------------------
+    # The self-hosted compiler is an ordinary program; these are its only
+    # window on the outside. Reads return -1 out of range so the tokenizer
+    # can probe cheaply; writes raise, which is the FM's stand-in for the
+    # RTL machine_fault code 5 — a stray write would land in FB/SOURCE/WORK
+    # and corrupt the machine invisibly.
+
+    def _nat_src_len(self):
+        return float(self._src_len)
+
+    def _nat_src_byte(self, i):
+        i = int(i)
+        if i < 0 or i >= self._src_len:
+            return -1.0
+        # Mirrors the RTL src_rp_o latch: on silicon this is what lets the
+        # console refill the SOURCE ring behind a forward-only reader.
+        self._src_rp = i
+        # The ABI contract is "a forward-only stream of src_len bytes". RTL
+        # honours it with a 64KB ring over the open card file; the FM just
+        # holds the whole thing, so titles past SOURCE_MAX behave the same
+        # here as on silicon. The SRAM mirror below is the first window's
+        # worth, kept real so arena/region bugs still show up in the model.
+        return float(self._src_bytes[i])
+
+    def _nat_stg_read(self, i):
+        word = jsb_format.cstg_word(int(i))
+        if word < 0:
+            return -1.0
+        return float(self.sram.mem[word * 2])
+
+    def _nat_stg_write(self, i, b):
+        word = jsb_format.cstg_word(int(i))
+        if word < 0:
+            raise RuntimeError(
+                f"stgWrite({int(i)}) out of compile arena "
+                f"[0,{jsb_format.CSTG_WORDS}) — RTL faults code 5 here"
+            )
+        self.sram.mem[word * 2] = int(b) & 0xFF
+        return None
+
+    def _nat_art_write2(self, word_idx, lo, hi):
+        w = int(word_idx)
+        if w < 0 or w >= jsb_format.CART_WORDS:
+            # This bound IS the framebuffer wall, enforced the way silicon
+            # enforces it. Stronger than the mint-time Python check, which
+            # jsb_format skips whenever JMR_SRAM_BYTES is set.
+            raise RuntimeError(
+                f"artWrite2({w}) past the framebuffer wall "
+                f"({jsb_format.CART_WORDS} words) — RTL faults code 5 here"
+            )
+        base = (jsb_format.CART_SRAM_BASE + w) * 2
+        self.sram.mem[base] = int(lo) & 0xFF
+        self.sram.mem[base + 1] = int(hi) & 0xFF
+        return None
+
+    def _nat_cdone(self, status=0, out_len=0, msg_len=0):
+        self._cmp_done = True
+        self._cmp_status = int(status) & 0xFF
+        self._cmp_len = int(out_len)
+        self._cmp_msglen = max(0, min(int(msg_len), jsb_format.CSTG_MSG_MAX))
+        return None
+
+    def _cmp_reset(self) -> None:
+        """Clear the compile handshake registers (RTL clears these on start)."""
+        self._cmp_done = False
+        self._cmp_status = 0
+        self._cmp_len = 0
+        self._cmp_msglen = 0
+
+    def _cmp_message(self) -> str:
+        """ASCII diagnostic the compiler left at CSTG_MSG_OFF."""
+        out = []
+        for k in range(self._cmp_msglen):
+            word = jsb_format.cstg_word(jsb_format.CSTG_MSG_OFF + k)
+            if word < 0:
+                break
+            ch = self.sram.mem[word * 2]
+            if ch == 0:
+                break
+            out.append(chr(ch))
+        return "".join(out)
+
+    def _cmp_output(self) -> bytes:
+        """The assembled image the compiler staged, at the offset it published.
+
+        Dynamic because the parser's tables are sized by the title; MINTASM
+        writes the image over the dead token array and records where.
+        """
+        base = 0
+        for k in range(4):
+            word = jsb_format.cstg_word(jsb_format.CSTG_HDR_OUT_OFF + k)
+            base |= self.sram.mem[word * 2] << (8 * k)
+        if base == 0:
+            base = jsb_format.CSTG_OUT_OFF
+        out = bytearray()
+        for k in range(self._cmp_len):
+            word = jsb_format.cstg_word(base + k)
+            if word < 0:
+                break
+            out.append(self.sram.mem[word * 2])
+        return bytes(out)
+
+    def _stage_source(self, text: str) -> int:
+        """Present HTML source to the compile ABI, as LOAD does on the board.
+
+        Full text is the stream srcByte() reads; the first SOURCE_MAX bytes
+        are also mirrored into the real SOURCE region so region arithmetic
+        stays exercised. On silicon that region is a sliding ring over the
+        open card file, which is how a 2MB title is read through a 64KB
+        window — the contract either way is forward-only.
+        """
+        data = text.encode("utf-8", errors="replace")
+        self._src_bytes = data
+        window = data[: jsb_format.SOURCE_MAX]
+        for k, byte in enumerate(window):
+            self.sram.mem[(jsb_format.SRC_SRAM_BASE + k) * 2] = byte
+        self._src_len = len(data)
+        self._src_rp = 0
+        return len(data)
 
     def _nat_ls_get(self, key):
         if not hasattr(self, "_ls"):

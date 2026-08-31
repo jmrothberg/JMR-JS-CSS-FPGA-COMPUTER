@@ -1,0 +1,2007 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>COMPILER — JMR self-hosted compiler, pass B</title></head>
+<body style="margin:0;background:#000">
+<!--
+  COMPILER.HTML — the machine compiling its own titles.
+
+  Reads the span map ARTSCAN left in the arena, walks the residual JavaScript
+  as a virtual byte stream, and writes a fixed-stride token array back into
+  the arena for the parser to index.
+
+  Why a virtual stream: the source is forward-only (on silicon it arrives
+  through a 64 KB ring over the open card file), but a parser needs random
+  access. Tokens are the smallest thing worth materialising, so the source
+  stays streamed and the tokens get indexed.
+
+  AUTHORING RULES - this file is compiled BY the machine's own walls:
+    - NO string methods exist. There is no charCodeAt, no substring, no
+      split. The compiler therefore never builds a JS string: identifiers
+      and literals are (offset, length) pairs into the source, always.
+    - NO shift or xor operators. Bit packing is arithmetic on binary64.
+    - 16 locals+params per function, hard. Split, do not economise.
+    - Avoid arrays. Only 12 may exceed 32 elements; state lives in the arena.
+    - Divide and modulo are ~53-beat iterative operations. Keep them out of
+      per-byte loops; per-token is fine.
+-->
+<canvas id="gameCanvas" width="640" height="480"></canvas>
+<script>
+// ---- arena layout (mirror of functional_model/jsb_format.py) -------------
+var MSG_OFF = 0;
+var HDR_PROGSEL = 64;
+var HDR_SPAN_N = 70;
+var HDR_TOK_N = 72;
+var HDR_OUT_OFF = 76;   // where the assembled image starts (console reads this)
+var HDR_PHASE = 65;     // 1 = stop after tokenizing (keeps tokens readable)
+var SPAN_OFF = 128;
+var SPAN_STRIDE = 12;
+var TOK_OFF = 3200;
+var TOK_STRIDE = 6;
+// Cap is the arena, not a guess: tokens grow from TOK_OFF and the parser's
+// tables start right after the last one, so a small title reserves nothing.
+var TOK_MAX = 48000;
+
+var K_EOF = 0;
+var K_ID = 1;
+var K_NUM = 2;
+var K_STR = 3;
+var K_TMPL = 4;
+var K_OP = 5;
+var K_REGEX = 6;
+var K_KEY = 7;
+
+var ST_ERR_TOKENS = 6;
+var ST_ERR_STR = 7;
+var ST_ERR_REGEX = 8;
+var ST_ERR_PARSE = 9;
+
+// ---- shim ---------------------------------------------------------------
+function _sb(i) { return srcByte(i); }
+function _gr(i) { return stgRead(i); }
+function _gw(i, b) { stgWrite(i, b); }
+
+function _r16(o) { return _gr(o) + _gr(o + 1) * 256; }
+function _r32(o) {
+  return _gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536 + _gr(o + 3) * 16777216;
+}
+function _w16(o, v) {
+  _gw(o, v % 256);
+  _gw(o + 1, Math.floor(v / 256) % 256);
+}
+function _w32(o, v) {
+  _gw(o, v % 256);
+  _gw(o + 1, Math.floor(v / 256) % 256);
+  _gw(o + 2, Math.floor(v / 65536) % 256);
+  _gw(o + 3, Math.floor(v / 16777216) % 256);
+}
+
+// The length field is free on an error path, so it carries the token index
+// the parser stopped at. That turns "SYNTAX" into something locatable.
+function _fail(code, a, b, c, d, e, f, g) {
+  var n = 0;
+  if (a) { _gw(MSG_OFF + n, a); n = n + 1; }
+  if (b) { _gw(MSG_OFF + n, b); n = n + 1; }
+  if (c) { _gw(MSG_OFF + n, c); n = n + 1; }
+  if (d) { _gw(MSG_OFF + n, d); n = n + 1; }
+  if (e) { _gw(MSG_OFF + n, e); n = n + 1; }
+  if (f) { _gw(MSG_OFF + n, f); n = n + 1; }
+  if (g) { _gw(MSG_OFF + n, g); n = n + 1; }
+  cdone(code, perr, n);
+}
+
+// ---- the virtual source stream ------------------------------------------
+// Spans describe the residual JS as a sequence of source ranges plus
+// synthetic semicolons. vAt(vp) is the byte at virtual position vp. The
+// current span is cached so sequential reads never re-walk the map.
+var spanN = 0;
+var vLen = 0;
+var cSpan = -1;
+var cStart = 0;
+var cEnd = 0;
+var cSrc = 0;
+var cKind = 0;
+
+function spanKind(i) { return _gr(SPAN_OFF + i * SPAN_STRIDE); }
+function spanOff(i) { return _r32(SPAN_OFF + i * SPAN_STRIDE + 2); }
+function spanLen(i) { return _r32(SPAN_OFF + i * SPAN_STRIDE + 6); }
+
+function measure() {
+  var i = 0;
+  var t = 0;
+  while (i < spanN) {
+    if (spanKind(i) === 0) { t = t + spanLen(i); } else { t = t + 1; }
+    i = i + 1;
+  }
+  vLen = t;
+}
+
+// Point the cache at the span containing vp. Returns 0 if vp is past the end.
+function seek(vp) {
+  var i = 0;
+  var base = 0;
+  var n = 0;
+  while (i < spanN) {
+    if (spanKind(i) === 0) { n = spanLen(i); } else { n = 1; }
+    if (vp < base + n) {
+      cSpan = i;
+      cStart = base;
+      cEnd = base + n;
+      cSrc = spanOff(i);
+      cKind = spanKind(i);
+      return 1;
+    }
+    base = base + n;
+    i = i + 1;
+  }
+  cSpan = -1;
+  return 0;
+}
+
+function vAt(vp) {
+  if (vp < 0 || vp >= vLen) { return -1; }
+  if (cSpan < 0 || vp < cStart || vp >= cEnd) {
+    if (seek(vp) === 0) { return -1; }
+  }
+  if (cKind === 0) { return _sb(cSrc + (vp - cStart)); }
+  return 59;
+}
+
+// Source offset behind a virtual position, so token records point at the
+// real file and the parser never needs the text copied anywhere.
+function vSrc(vp) {
+  if (cSpan < 0 || vp < cStart || vp >= cEnd) {
+    if (seek(vp) === 0) { return 0; }
+  }
+  if (cKind === 0) { return cSrc + (vp - cStart); }
+  return 0;
+}
+
+// ---- character classes ---------------------------------------------------
+function isDigit(b) { return b >= 48 && b <= 57; }
+function isIdStart(b) {
+  if (b >= 97 && b <= 122) { return 1; }
+  if (b >= 65 && b <= 90) { return 1; }
+  if (b === 95 || b === 36) { return 1; }
+  return 0;
+}
+function isIdPart(b) {
+  if (isIdStart(b)) { return 1; }
+  return isDigit(b) ? 1 : 0;
+}
+function isSpace(b) {
+  return b === 32 || b === 9 || b === 10 || b === 13;
+}
+
+// ---- token emit ----------------------------------------------------------
+var tokN = 0;
+var tokOver = 0;
+
+function emitTok(kind, sub, off, len) {
+  if (tokN >= TOK_MAX) { tokOver = 1; return; }
+  var b = TOK_OFF + tokN * TOK_STRIDE;
+  _gw(b, kind);
+  _gw(b + 1, sub);
+  _gw(b + 2, off % 256);
+  _gw(b + 3, Math.floor(off / 256) % 256);
+  _gw(b + 4, Math.floor(off / 65536) % 256);
+  _gw(b + 5, len > 255 ? 255 : len);
+  tokN = tokN + 1;
+}
+
+function tokKind(i) { return _gr(TOK_OFF + i * TOK_STRIDE); }
+function tokSub(i) { return _gr(TOK_OFF + i * TOK_STRIDE + 1); }
+
+// ---- trivia --------------------------------------------------------------
+// Returns the position of the next real character, or vLen at end.
+function skipTrivia(vp) {
+  var b = 0;
+  var run = 1;
+  while (run) {
+    run = 0;
+    b = vAt(vp);
+    while (b >= 0 && isSpace(b)) { vp = vp + 1; b = vAt(vp); }
+    if (b === 47 && vAt(vp + 1) === 47) {
+      while (b >= 0 && b !== 10) { vp = vp + 1; b = vAt(vp); }
+      run = 1;
+    } else if (b === 47 && vAt(vp + 1) === 42) {
+      vp = vp + 2;
+      while (vAt(vp) >= 0) {
+        if (vAt(vp) === 42 && vAt(vp + 1) === 47) { vp = vp + 2; break; }
+        vp = vp + 1;
+      }
+      run = 1;
+    }
+  }
+  return vp;
+}
+
+// ---- keyword recognition -------------------------------------------------
+// No string compares exist, so identifiers are hashed with the SAME
+// h = (h*31 + b) & 0xFFFF the image format uses for its name table, then
+// verified byte-by-byte against the keyword table. Hash alone would risk a
+// collision renaming a variable into a keyword.
+function hashAt(vp, len) {
+  var h = 0;
+  var i = 0;
+  while (i < len) {
+    h = (h * 31 + vAt(vp + i)) % 65536;
+    i = i + 1;
+  }
+  return h;
+}
+
+// Keyword table lives in the arena as (hash, len, code) triples so this
+// function stays inside its 16 locals. Built once at startup.
+var KW_OFF = 2560;
+var KW_N = 0;
+
+function kwAdd(code, len, a, b, c, d, e, f, g, h) {
+  var o = KW_OFF + KW_N * 6;
+  var t = 0;
+  t = (t * 31 + a) % 65536;
+  if (len > 1) { t = (t * 31 + b) % 65536; }
+  if (len > 2) { t = (t * 31 + c) % 65536; }
+  if (len > 3) { t = (t * 31 + d) % 65536; }
+  if (len > 4) { t = (t * 31 + e) % 65536; }
+  if (len > 5) { t = (t * 31 + f) % 65536; }
+  if (len > 6) { t = (t * 31 + g) % 65536; }
+  if (len > 7) { t = (t * 31 + h) % 65536; }
+  _w16(o, t);
+  _gw(o + 2, len);
+  _gw(o + 3, code);
+  KW_N = KW_N + 1;
+}
+
+function kwInit() {
+  kwAdd(0, 3, 118, 97, 114, 0, 0, 0, 0, 0);            // var
+  kwAdd(1, 3, 108, 101, 116, 0, 0, 0, 0, 0);           // let
+  kwAdd(2, 5, 99, 111, 110, 115, 116, 0, 0, 0);        // const
+  kwAdd(3, 8, 102, 117, 110, 99, 116, 105, 111, 110);  // function
+  kwAdd(4, 6, 114, 101, 116, 117, 114, 110, 0, 0);     // return
+  kwAdd(5, 2, 105, 102, 0, 0, 0, 0, 0, 0);             // if
+  kwAdd(6, 4, 101, 108, 115, 101, 0, 0, 0, 0);         // else
+  kwAdd(7, 5, 119, 104, 105, 108, 101, 0, 0, 0);       // while
+  kwAdd(8, 3, 102, 111, 114, 0, 0, 0, 0, 0);           // for
+  kwAdd(9, 5, 98, 114, 101, 97, 107, 0, 0, 0);         // break
+  kwAdd(10, 8, 99, 111, 110, 116, 105, 110, 117, 101); // continue
+  kwAdd(11, 3, 110, 101, 119, 0, 0, 0, 0, 0);          // new
+  kwAdd(12, 6, 116, 121, 112, 101, 111, 102, 0, 0);    // typeof
+  kwAdd(13, 5, 99, 108, 97, 115, 115, 0, 0, 0);        // class
+  kwAdd(14, 4, 116, 104, 105, 115, 0, 0, 0, 0);        // this
+  kwAdd(15, 4, 116, 114, 117, 101, 0, 0, 0, 0);        // true
+  kwAdd(16, 5, 102, 97, 108, 115, 101, 0, 0, 0);       // false
+  kwAdd(17, 4, 110, 117, 108, 108, 0, 0, 0, 0);        // null
+  kwAdd(18, 9, 117, 110, 100, 101, 102, 105, 110, 101);// undefined (len>8: verify)
+  kwAdd(19, 6, 115, 119, 105, 116, 99, 104, 0, 0);     // switch
+  kwAdd(20, 4, 99, 97, 115, 101, 0, 0, 0, 0);          // case
+  kwAdd(21, 7, 100, 101, 102, 97, 117, 108, 116, 0);   // default
+  kwAdd(22, 2, 100, 111, 0, 0, 0, 0, 0, 0);            // do
+  kwAdd(23, 2, 105, 110, 0, 0, 0, 0, 0, 0);            // in
+  kwAdd(24, 2, 111, 102, 0, 0, 0, 0, 0, 0);            // of
+  kwAdd(25, 3, 116, 114, 121, 0, 0, 0, 0, 0);          // try
+  kwAdd(26, 5, 99, 97, 116, 99, 104, 0, 0, 0);         // catch
+  kwAdd(27, 7, 102, 105, 110, 97, 108, 108, 121, 0);   // finally
+  kwAdd(28, 5, 116, 104, 114, 111, 119, 0, 0, 0);      // throw
+}
+
+// Returns keyword code, or -1. Hash narrows; length must agree too.
+function kwLookup(vp, len) {
+  if (len > 9) { return -1; }
+  var h = hashAt(vp, len);
+  var i = 0;
+  var o = 0;
+  while (i < KW_N) {
+    o = KW_OFF + i * 6;
+    if (_gr(o + 2) === len && _r16(o) === h) { return _gr(o + 3); }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// ---- scanners ------------------------------------------------------------
+function scanIdent(vp) {
+  var s = vp;
+  while (isIdPart(vAt(vp))) { vp = vp + 1; }
+  var len = vp - s;
+  var kw = kwLookup(s, len);
+  if (kw >= 0) {
+    emitTok(K_KEY, kw, vSrc(s), len);
+  } else {
+    emitTok(K_ID, 0, vSrc(s), len);
+  }
+  return vp;
+}
+
+function scanNum(vp) {
+  var s = vp;
+  while (isDigit(vAt(vp))) { vp = vp + 1; }
+  if (vAt(vp) === 46) {
+    vp = vp + 1;
+    while (isDigit(vAt(vp))) { vp = vp + 1; }
+  }
+  emitTok(K_NUM, 0, vSrc(s), vp - s);
+  return vp;
+}
+
+// String bodies keep their quotes out of the record: (off,len) covers the
+// text between them. Escapes are left raw for the parser to decode, since
+// decoding needs a destination and the parser owns the name blob.
+function scanStr(vp, quote) {
+  var s = vp + 1;
+  var p = s;
+  var b = vAt(p);
+  while (b >= 0 && b !== quote) {
+    if (b === 92) { p = p + 1; }
+    p = p + 1;
+    b = vAt(p);
+  }
+  if (b !== quote) { return -1; }
+  emitTok(quote === 96 ? K_TMPL : K_STR, 0, vSrc(s), p - s);
+  return p + 1;
+}
+
+// ---- operators -----------------------------------------------------------
+// Maximal munch, longest first. The order here IS the contract with
+// jsb_format.OP_TOKENS; getting it wrong is a silent mis-parse.
+function op3(a, b, c) {
+  if (a === 61 && b === 61 && c === 61) { return 0; }  // ===
+  if (a === 33 && b === 61 && c === 61) { return 1; }  // !==
+  return -1;
+}
+
+function op2(a, b) {
+  if (a === 61 && b === 61) { return 2; }   // ==
+  if (a === 33 && b === 61) { return 3; }   // !=
+  if (a === 60 && b === 61) { return 4; }   // <=
+  if (a === 62 && b === 61) { return 5; }   // >=
+  if (a === 38 && b === 38) { return 6; }   // &&
+  if (a === 124 && b === 124) { return 7; } // ||
+  if (a === 43 && b === 43) { return 8; }   // ++
+  if (a === 45 && b === 45) { return 9; }   // --
+  if (a === 61 && b === 62) { return 10; }  // =>
+  if (a === 63 && b === 46) { return 11; }  // ?.
+  if (a === 43 && b === 61) { return 12; }  // +=
+  if (a === 45 && b === 61) { return 13; }  // -=
+  if (a === 42 && b === 61) { return 14; }  // *=
+  if (a === 47 && b === 61) { return 15; }  // /=
+  if (a === 37 && b === 61) { return 16; }  // %=
+  return -1;
+}
+
+function op1(a) {
+  if (a === 43) { return 17; }
+  if (a === 45) { return 18; }
+  if (a === 42) { return 19; }
+  if (a === 47) { return 20; }
+  if (a === 37) { return 21; }
+  if (a === 60) { return 22; }
+  if (a === 62) { return 23; }
+  if (a === 61) { return 24; }
+  if (a === 33) { return 25; }
+  if (a === 40) { return 26; }
+  if (a === 41) { return 27; }
+  if (a === 59) { return 28; }
+  if (a === 58) { return 29; }
+  if (a === 123) { return 30; }
+  if (a === 125) { return 31; }
+  if (a === 44) { return 32; }
+  if (a === 46) { return 33; }
+  if (a === 91) { return 34; }
+  if (a === 93) { return 35; }
+  if (a === 124) { return 36; }
+  if (a === 38) { return 37; }
+  if (a === 63) { return 38; }
+  return -1;
+}
+
+// A '/' is a regex literal, not division, when the previous token cannot end
+// an expression. Lexing it is mandatory even though V1.5 refuses to compile
+// it: treating /foo/g as division corrupts every token after it.
+function regexHere() {
+  if (tokN === 0) { return 1; }
+  var k = tokKind(tokN - 1);
+  var s = tokSub(tokN - 1);
+  if (k === K_ID || k === K_NUM || k === K_STR) { return 0; }
+  if (k === K_KEY) {
+    if (s === 14 || s === 15 || s === 16 || s === 17 || s === 18) { return 0; }
+    return 1;
+  }
+  if (k === K_OP) {
+    if (s === 27 || s === 31 || s === 35) { return 0; }  // ) } ]
+    if (s === 8 || s === 9) { return 0; }                // ++ --
+    return 1;
+  }
+  return 1;
+}
+
+function scanRegex(vp) {
+  var p = vp + 1;
+  var b = vAt(p);
+  while (b >= 0 && b !== 47 && b !== 10) {
+    if (b === 92) { p = p + 1; }
+    p = p + 1;
+    b = vAt(p);
+  }
+  if (b !== 47) { return -1; }
+  p = p + 1;
+  while (isIdPart(vAt(p))) { p = p + 1; }
+  return p;
+}
+
+// ---- numeric literals ----------------------------------------------------
+// Every numeric constant in the image is an 8-byte IEEE-754 binary64, and
+// there is no DataView, no shifts and no Math.log here. This is the most
+// parity-fragile function in the whole port: one wrong bit and the title
+// runs with a different constant. It is exact by construction, not by
+// rounding — see the note on the mantissa scale below.
+
+// Parse the digits of a NUM token into a double.
+// Integers are exact to 2^53. Fractions accumulate then divide once, so the
+// result is a single correctly-rounded division rather than a chain of them.
+function numAt(off, len) {
+  var i = 0;
+  var whole = 0;
+  var frac = 0;
+  var scale = 1;
+  var b = 0;
+  var dot = 0;
+  while (i < len) {
+    b = _sb(off + i);
+    if (b === 46) {
+      dot = 1;
+    } else if (dot === 0) {
+      whole = whole * 10 + (b - 48);
+    } else {
+      frac = frac * 10 + (b - 48);
+      scale = scale * 10;
+    }
+    i = i + 1;
+  }
+  if (dot === 0) { return whole; }
+  return whole + frac / scale;
+}
+
+// Write v as 8 little-endian binary64 bytes at arena offset o.
+function w64(o, v) {
+  var sign = 0;
+  var e = 0;
+  var m = 0;
+  var i = 0;
+  var b = 0;
+  if (v < 0) { sign = 1; v = 0 - v; }
+  if (v === 0) {
+    i = 0;
+    while (i < 8) { _gw(o + i, 0); i = i + 1; }
+    if (sign) { _gw(o + 7, 128); }
+    return;
+  }
+  // Normalise into [1,2) by doubling/halving. No Math.log exists, and a
+  // loop is exact where a log would round.
+  while (v >= 2) { v = v / 2; e = e + 1; }
+  while (v < 1) { v = v * 2; e = e - 1; }
+  // v is now a double in [1,2), so v-1 has exactly 52 fractional bits and
+  // (v-1) * 2^52 is an exact integer below 2^52. No rounding happens here.
+  m = (v - 1) * 4503599627370496;
+  e = e + 1023;
+  i = 0;
+  while (i < 6) {
+    _gw(o + i, m % 256);
+    m = Math.floor(m / 256);
+    i = i + 1;
+  }
+  // byte 6 = low 4 bits of the exponent, then the top 4 mantissa bits
+  _gw(o + 6, (e % 16) * 16 + m % 16);
+  // byte 7 = sign, then the high 7 exponent bits
+  b = Math.floor(e / 16);
+  _gw(o + 7, sign * 128 + b);
+}
+
+// ---- the tokenizer loop --------------------------------------------------
+function tokenize() {
+  var vp = 0;
+  var b = 0;
+  var n = 0;
+  while (1) {
+    vp = skipTrivia(vp);
+    b = vAt(vp);
+    if (b < 0) { break; }
+    if (isIdStart(b)) {
+      vp = scanIdent(vp);
+    } else if (isDigit(b) || (b === 46 && isDigit(vAt(vp + 1)))) {
+      vp = scanNum(vp);
+    } else if (b === 34 || b === 39 || b === 96) {
+      vp = scanStr(vp, b);
+      if (vp < 0) { return ST_ERR_STR; }
+    } else if (b === 47 && regexHere()) {
+      emitTok(K_REGEX, 0, vSrc(vp), 1);
+      vp = scanRegex(vp);
+      if (vp < 0) { return ST_ERR_REGEX; }
+    } else {
+      n = op3(b, vAt(vp + 1), vAt(vp + 2));
+      if (n >= 0) {
+        emitTok(K_OP, n, vSrc(vp), 3);
+        vp = vp + 3;
+      } else {
+        n = op2(b, vAt(vp + 1));
+        if (n >= 0) {
+          emitTok(K_OP, n, vSrc(vp), 2);
+          vp = vp + 2;
+        } else {
+          n = op1(b);
+          if (n < 0) { return ST_ERR_PARSE; }
+          emitTok(K_OP, n, vSrc(vp), 1);
+          vp = vp + 1;
+        }
+      }
+    }
+    if (tokOver) { return ST_ERR_TOKENS; }
+  }
+  emitTok(K_EOF, 0, 0, 0);
+  return 0;
+}
+
+// ==========================================================================
+// PARSER
+//
+// Recursive descent over the token array, emitting packed opcodes into the
+// arena. Structure mirrors compiler.py: function bodies are emitted FIRST,
+// each behind a skip JUMP, then the top-level statements. Operands here are
+// NAME indices and const-record indices; the assembler below maps them to the
+// var indices and native ids the image format actually stores, which is the
+// same split the host uses between compiler.py and jsb_format.
+// ==========================================================================
+
+var OPS_OFF = 0;
+var CREC_OFF = 0;
+var NIDX_OFF = 0;
+var NBLOB_OFF = 0;
+var LOC_OFF = 0;
+var FSET_OFF = 0;
+var GS_OFF = 0;
+var NAT_OFF = 0;
+var FN_OFF = 0;
+var IMG_OFF = 0;
+
+var OPS_MAX = 20480;
+var CREC_MAX = 6144;
+var NAME_MAX = 1024;
+var BLOB_MAX = 16384;
+var GS_MAX = 6144;
+var FN_MAX = 128;
+
+var nOps = 0;
+var nCrec = 0;
+var nNames = 0;
+var blobLen = 0;
+var nGs = 0;
+var nNat = 0;
+var nFn = 0;
+var over = 0;
+var perr = 0;
+
+function layout() {
+  IMG_OFF = TOK_OFF;                      // the image later overwrites tokens
+  OPS_OFF = TOK_OFF + tokN * TOK_STRIDE;
+  CREC_OFF = OPS_OFF + OPS_MAX * 4;
+  NIDX_OFF = CREC_OFF + CREC_MAX * 12;
+  NBLOB_OFF = NIDX_OFF + NAME_MAX * 8;
+  LOC_OFF = NBLOB_OFF + BLOB_MAX;
+  FSET_OFF = LOC_OFF + 8192; // names any function declares
+  GS_OFF = FSET_OFF + 2048;
+  NAT_OFF = GS_OFF + GS_MAX * 8;
+  FN_OFF = NAT_OFF + 64 * 4;
+}
+
+// ---- opcodes -------------------------------------------------------------
+var O_LOADC = 1;
+var O_LOADV = 2;
+var O_STOREV = 3;
+var O_ADD = 4;
+var O_SUB = 5;
+var O_MUL = 6;
+var O_DIV = 7;
+var O_LT = 8;
+var O_GT = 9;
+var O_EQ = 10;
+var O_JUMP = 11;
+var O_JF = 12;
+var O_CALLN = 13;
+var O_POP = 15;
+var O_DUP = 16;
+var O_NEG = 17;
+var O_NOT = 18;
+var O_MKARR = 19;
+var O_AGET = 20;
+var O_ASET = 21;
+var O_LETV = 22;
+var O_MOD = 23;
+var O_CALLU = 24;
+var O_RETV = 25;
+var O_MKOBJ = 26;
+var O_GETP = 27;
+var O_SETP = 28;
+var O_CALLM = 30;
+var O_BOR = 31;
+var O_BAND = 32;
+var O_MKFN = 33;
+var O_CALLVAL = 34;
+
+function emit(op, a0, a1) {
+  if (nOps >= OPS_MAX) { over = 1; return 0; }
+  var o = OPS_OFF + nOps * 4;
+  _gw(o, op);
+  _gw(o + 1, a0 % 256);
+  _gw(o + 2, Math.floor(a0 / 256) % 256);
+  _gw(o + 3, a1);
+  nOps = nOps + 1;
+  return nOps - 1;
+}
+
+function patchA0(i, a0) {
+  _gw(OPS_OFF + i * 4 + 1, a0 % 256);
+  _gw(OPS_OFF + i * 4 + 2, Math.floor(a0 / 256) % 256);
+}
+
+function opCode(i) { return _gr(OPS_OFF + i * 4); }
+function opA0(i) { return _gr(OPS_OFF + i * 4 + 1) + _gr(OPS_OFF + i * 4 + 2) * 256; }
+function opA1(i) { return _gr(OPS_OFF + i * 4 + 3); }
+function setA1(i, v) { _gw(OPS_OFF + i * 4 + 3, v); }
+
+// ---- names ---------------------------------------------------------------
+function nLen(i) { return _gr(NIDX_OFF + i * 8 + 3); }
+function nHash(i) { return _r16(NIDX_OFF + i * 8 + 4); }
+function nBlob(i) {
+  var o = NIDX_OFF + i * 8;
+  return _gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536;
+}
+
+function nameNew(len, h) {
+  if (nNames >= NAME_MAX || blobLen + len > BLOB_MAX) { over = 1; return 0; }
+  var o = NIDX_OFF + nNames * 8;
+  _gw(o, blobLen % 256);
+  _gw(o + 1, Math.floor(blobLen / 256) % 256);
+  _gw(o + 2, Math.floor(blobLen / 65536) % 256);
+  _gw(o + 3, len);
+  _w16(o + 4, h);
+  nNames = nNames + 1;
+  return nNames - 1;
+}
+
+// Intern raw source bytes. Verified byte-by-byte after the hash narrows, so
+// a collision cannot silently merge two identifiers into one variable.
+function internSrc(off, len) {
+  var h = 0;
+  var i = 0;
+  while (i < len) { h = (h * 31 + _sb(off + i)) % 65536; i = i + 1; }
+  i = 0;
+  var b = 0;
+  var k = 0;
+  var same = 0;
+  while (i < nNames) {
+    if (nLen(i) === len && nHash(i) === h) {
+      b = nBlob(i);
+      k = 0;
+      same = 1;
+      while (k < len) {
+        if (_gr(NBLOB_OFF + b + k) !== _sb(off + k)) { same = 0; k = len; }
+        k = k + 1;
+      }
+      if (same) { return i; }
+    }
+    i = i + 1;
+  }
+  var idx = nameNew(len, h);
+  i = 0;
+  while (i < len) { _gw(NBLOB_OFF + blobLen + i, _sb(off + i)); i = i + 1; }
+  blobLen = blobLen + len;
+  return idx;
+}
+
+// Intern "A.B" as one name — a dotted native is a single table entry, not a
+// property load (document.querySelector is CALL_NATIVE, not GET_PROP).
+function internDot(o1, l1, o2, l2) {
+  var h = 0;
+  var i = 0;
+  while (i < l1) { h = (h * 31 + _sb(o1 + i)) % 65536; i = i + 1; }
+  h = (h * 31 + 46) % 65536;
+  i = 0;
+  while (i < l2) { h = (h * 31 + _sb(o2 + i)) % 65536; i = i + 1; }
+  var len = l1 + l2 + 1;
+  i = 0;
+  while (i < nNames) {
+    if (nLen(i) === len && nHash(i) === h) { return i; }
+    i = i + 1;
+  }
+  var idx = nameNew(len, h);
+  i = 0;
+  while (i < l1) { _gw(NBLOB_OFF + blobLen + i, _sb(o1 + i)); i = i + 1; }
+  _gw(NBLOB_OFF + blobLen + l1, 46);
+  i = 0;
+  while (i < l2) { _gw(NBLOB_OFF + blobLen + l1 + 1 + i, _sb(o2 + i)); i = i + 1; }
+  blobLen = blobLen + len;
+  return idx;
+}
+
+// String literals intern into the SAME table as identifiers, exactly as the
+// image format does — a string "canvas" and a variable canvas share an entry.
+// Escapes are decoded here because the blob holds the real bytes.
+function internStr(off, len) {
+  var h = 0;
+  var i = 0;
+  var b = 0;
+  var start = blobLen;
+  var n = 0;
+  if (nNames >= NAME_MAX) { over = 1; return 0; }
+  while (i < len) {
+    b = _sb(off + i);
+    if (b === 92 && i + 1 < len) {
+      i = i + 1;
+      b = _sb(off + i);
+      if (b === 110) { b = 10; }
+      else if (b === 116) { b = 9; }
+      else if (b === 114) { b = 13; }
+      else if (b === 48) { b = 0; }
+    }
+    if (start + n >= BLOB_MAX) { over = 1; return 0; }
+    _gw(NBLOB_OFF + start + n, b);
+    h = (h * 31 + b) % 65536;
+    n = n + 1;
+    i = i + 1;
+  }
+  // look for an existing identical entry before committing the bytes
+  i = 0;
+  var k = 0;
+  var same = 0;
+  var bo = 0;
+  while (i < nNames) {
+    if (nLen(i) === n && nHash(i) === h) {
+      bo = nBlob(i);
+      k = 0;
+      same = 1;
+      while (k < n) {
+        if (_gr(NBLOB_OFF + bo + k) !== _gr(NBLOB_OFF + start + k)) { same = 0; k = n; }
+        k = k + 1;
+      }
+      if (same) { return i; }
+    }
+    i = i + 1;
+  }
+  var idx = nameNew(n, h);
+  blobLen = blobLen + n;
+  return idx;
+}
+
+// ---- native lookup -------------------------------------------------------
+// (hash, length) pairs generated from jsb_format.NATIVE_IDS. No collisions
+// across the 52 entries. A name the program declares itself always wins, so
+// `function sound()` shadows the native rather than silently stealing it.
+function nt(h, l, id) {
+  var o = NAT_OFF + nNat * 4;
+  _w16(o, h);
+  _gw(o + 2, l);
+  _gw(o + 3, id);
+  nNat = nNat + 1;
+}
+
+function natInit() {
+  nt(268,7,44); nt(1847,20,22); nt(2220,8,11); nt(2268,7,45); nt(7968,11,3);
+  nt(10181,14,24); nt(13726,8,13); nt(13964,8,12); nt(14949,5,47);
+  nt(16427,20,21); nt(18935,28,36); nt(18951,8,2); nt(19595,23,20);
+  nt(22269,8,5); nt(24758,8,35); nt(25138,13,31); nt(25550,4,25);
+  nt(27398,7,4); nt(27842,20,39); nt(29734,9,15); nt(29814,9,48);
+  nt(31405,22,38); nt(33337,5,34); nt(33607,11,29); nt(36186,5,8);
+  nt(36294,10,10); nt(36682,19,36); nt(37209,8,46); nt(38988,26,37);
+  nt(39715,11,41); nt(40493,10,23); nt(42173,12,0); nt(43316,22,17);
+  nt(45641,11,14); nt(46669,5,1); nt(46737,6,40); nt(47419,5,26);
+  nt(49461,7,6); nt(49549,5,33); nt(49869,22,18); nt(51384,21,27);
+  nt(51471,5,42); nt(52693,23,32); nt(54943,10,28); nt(58603,23,16);
+  nt(58957,16,19); nt(60973,11,0); nt(61012,12,30); nt(61345,7,9);
+  nt(61841,6,43); nt(62144,25,19); nt(65062,9,7);
+  // Host-only natives: PYTHON implements these, the image format has no id
+  // for them, so the encoder maps them to _stub (33). Same on the chip.
+  nt(39892,3,33); nt(19614,6,33); nt(38353,9,33); nt(25516,12,33);
+}
+
+function natLookup(h, l) {
+  var i = 0;
+  var o = 0;
+  while (i < nNat) {
+    o = NAT_OFF + i * 4;
+    if (_r16(o) === h && _gr(o + 2) === l) { return _gr(o + 3); }
+    i = i + 1;
+  }
+  return -1;
+}
+
+function natIdOf(ni) {
+  return natLookup(nHash(ni), nLen(ni));
+}
+
+// Hash "A.B" WITHOUT interning it. Probing has to be free of side effects:
+// interning first and asking later left c.fillRect and canvas.getContext in
+// the name table as phantom variables, each burning a var slot.
+function dotHash(o1, l1, o2, l2) {
+  var h = 0;
+  var i = 0;
+  while (i < l1) { h = (h * 31 + _sb(o1 + i)) % 65536; i = i + 1; }
+  h = (h * 31 + 46) % 65536;
+  i = 0;
+  while (i < l2) { h = (h * 31 + _sb(o2 + i)) % 65536; i = i + 1; }
+  return h;
+}
+
+// ---- declared functions --------------------------------------------------
+function fnAdd(ni, entry, nparams) {
+  if (nFn >= FN_MAX) { over = 1; return; }
+  var o = FN_OFF + nFn * 8;
+  _w16(o, ni);
+  _w16(o + 2, entry);
+  _gw(o + 4, nparams);
+  nFn = nFn + 1;
+}
+
+function fnFind(ni) {
+  var i = 0;
+  while (i < nFn) {
+    if (_r16(FN_OFF + i * 8) === ni) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+function fnEntry(i) { return _r16(FN_OFF + i * 8 + 2); }
+
+// ---- locals and scopes ---------------------------------------------------
+// Frames stack, because function expressions nest: a callback declared
+// inside another function must not clobber its parent's slot table.
+var nLoc = 0;
+var inFn = 0;
+var nDecl = 0;
+var locBase = 0;
+var declBase = 512;
+
+function locFind(ni) {
+  var i = 0;
+  while (i < nLoc) {
+    if (_r16(LOC_OFF + (locBase + i) * 2) === ni) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+function locAdd(ni) {
+  if (locFind(ni) >= 0) { return; }
+  if (nLoc >= 16) { over = 2; return; }   // ENV_SLOTS — loud, like the host
+  _w16(LOC_OFF + (locBase + nLoc) * 2, ni);
+  nLoc = nLoc + 1;
+}
+
+var nFset = 0;
+
+// Names declared inside SOME function anywhere in the program.
+//
+// The host resolves each global site against its own enclosing scopes, held
+// as live set objects that keep filling until compile() ends. Flat arrays
+// cannot hold live references, and function bodies are emitted before the
+// enclosing scope has even been walked — which is why checking the frame
+// stack at emit time marked MISSILE's `state` a global and broke it.
+// Resolving against the whole-program set instead is strictly more
+// conservative: a name any function owns keeps the env-chain walk (a1=0),
+// which is always correct, just not always the fastest path.
+function fsetAdd(ni) {
+  var i = 0;
+  while (i < nFset) {
+    if (_r16(FSET_OFF + i * 2) === ni) { return; }
+    i = i + 1;
+  }
+  if (nFset < 1024) { _w16(FSET_OFF + nFset * 2, ni); nFset = nFset + 1; }
+}
+
+function fsetHas(ni) {
+  var i = 0;
+  while (i < nFset) {
+    if (_r16(FSET_OFF + i * 2) === ni) { return 1; }
+    i = i + 1;
+  }
+  return 0;
+}
+
+function declAdd(ni) {
+  if (inFn) { fsetAdd(ni); }
+  var i = 0;
+  while (i < nDecl) {
+    if (_r16(LOC_OFF + (declBase + i) * 2) === ni) { return; }
+    i = i + 1;
+  }
+  if (nDecl < 128) { _w16(LOC_OFF + (declBase + nDecl) * 2, ni); nDecl = nDecl + 1; }
+}
+
+function declHas(ni) {
+  var i = 0;
+  while (i < nDecl) {
+    if (_r16(LOC_OFF + (declBase + i) * 2) === ni) { return 1; }
+    i = i + 1;
+  }
+  return 0;
+}
+
+// Every ENCLOSING function scope, not just the innermost one. Frames stack
+// upward from 512, so the whole live range is one scan. Getting this wrong
+// is subtle and fatal: a nested callback reading a variable owned by the
+// enclosing IIFE would be marked a1=1 and read vvars, where the value never
+// was — MISSILE's `state` came back undefined and .push landed on a number.
+function declHasAny(ni) {
+  var i = 512;
+  var top = declBase + nDecl;
+  while (i < top) {
+    if (_r16(LOC_OFF + i * 2) === ni) { return 1; }
+    i = i + 1;
+  }
+  return 0;
+}
+
+// ---- global sites --------------------------------------------------------
+// A reference that is neither a local nor a known function cannot be resolved
+// yet: `var` hoists, so a use may be emitted before its declaration is seen.
+// Record the site and settle it once the enclosing scope is complete.
+function gsAdd(opIdx, ni, fnDepth) {
+  if (nGs >= GS_MAX) { over = 1; return; }
+  var o = GS_OFF + nGs * 8;
+  _gw(o, opIdx % 256);
+  _gw(o + 1, Math.floor(opIdx / 256) % 256);
+  _gw(o + 2, Math.floor(opIdx / 65536) % 256);
+  _gw(o + 3, fnDepth);
+  _w16(o + 4, ni);
+  nGs = nGs + 1;
+}
+
+// Settle every site once the whole program has been walked, so a name a
+// function declares later still counts.
+function gsResolveAll() {
+  var i = 0;
+  var o = 0;
+  var idx = 0;
+  while (i < nGs) {
+    o = GS_OFF + i * 8;
+    if (fsetHas(_r16(o + 4)) === 0) {
+      idx = _gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536;
+      setA1(idx, 1);
+    }
+    i = i + 1;
+  }
+}
+
+// ---- const records -------------------------------------------------------
+// One record per literal OCCURRENCE, in emission order. The assembler folds
+// duplicates; folding here would reorder the pool relative to the host.
+var CK_NUM = 0;
+var CK_STR = 1;
+var CK_NONE = 2;
+
+function crecNum(off, len) {
+  if (nCrec >= CREC_MAX) { over = 1; return 0; }
+  var o = CREC_OFF + nCrec * 12;
+  _gw(o, CK_NUM);
+  w64(o + 4, numAt(off, len));
+  nCrec = nCrec + 1;
+  return nCrec - 1;
+}
+
+function crecVal(v) {
+  if (nCrec >= CREC_MAX) { over = 1; return 0; }
+  var o = CREC_OFF + nCrec * 12;
+  _gw(o, CK_NUM);
+  w64(o + 4, v);
+  nCrec = nCrec + 1;
+  return nCrec - 1;
+}
+
+function crecStr(ni) {
+  if (nCrec >= CREC_MAX) { over = 1; return 0; }
+  var o = CREC_OFF + nCrec * 12;
+  _gw(o, CK_STR);
+  _w16(o + 1, ni);
+  nCrec = nCrec + 1;
+  return nCrec - 1;
+}
+
+function crecNone() {
+  if (nCrec >= CREC_MAX) { over = 1; return 0; }
+  _gw(CREC_OFF + nCrec * 12, CK_NONE);
+  nCrec = nCrec + 1;
+  return nCrec - 1;
+}
+
+// ---- token cursor --------------------------------------------------------
+var ti = 0;
+
+function tKind(i) { return _gr(TOK_OFF + i * TOK_STRIDE); }
+function tSub(i) { return _gr(TOK_OFF + i * TOK_STRIDE + 1); }
+function tOff(i) {
+  var b = TOK_OFF + i * TOK_STRIDE;
+  return _gr(b + 2) + _gr(b + 3) * 256 + _gr(b + 4) * 65536;
+}
+function tLen(i) { return _gr(TOK_OFF + i * TOK_STRIDE + 5); }
+function isOp(i, s) { return tKind(i) === K_OP && tSub(i) === s; }
+function isKw(i, s) { return tKind(i) === K_KEY && tSub(i) === s; }
+
+function eatOp(s) {
+  if (isOp(ti, s)) { ti = ti + 1; return 1; }
+  if (perr === 0) { perr = ti + 1; }
+  return 0;
+}
+
+// ---- variable access -----------------------------------------------------
+// Returns the op index, so an assignment target's load can be rolled back:
+// primary() has to emit the load before it can know an '=' follows.
+function loadVar(ni) {
+  var slot = -1;
+  var idx = 0;
+  if (inFn) { slot = locFind(ni); }
+  if (slot >= 0) { return emit(O_LOADV, ni, 2 + slot); }
+  if (fnFind(ni) >= 0) { return emit(O_LOADV, ni, 1); }
+  idx = emit(O_LOADV, ni, 0);
+  gsAdd(idx, ni, inFn);
+  return idx;
+}
+
+// Undo the most recent loadVar when it turns out to be an assignment target.
+function dropLoad(idx) {
+  if (idx !== nOps - 1) { return; }
+  nOps = nOps - 1;
+  if (nGs > 0) {
+    var o = GS_OFF + (nGs - 1) * 8;
+    if (_gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536 === idx) { nGs = nGs - 1; }
+  }
+}
+
+function storeVar(ni) {
+  var slot = -1;
+  if (inFn) { slot = locFind(ni); }
+  if (slot >= 0) { emit(O_STOREV, ni, 2 + slot); return; }
+  if (fnFind(ni) >= 0) { emit(O_STOREV, ni, 1); return; }
+  gsAdd(emit(O_STOREV, ni, 0), ni, inFn);
+}
+
+// ---- expressions ---------------------------------------------------------
+// Precedence: assign -> ternary -> || -> && -> | -> & -> equality ->
+// comparison -> additive -> multiplicative -> unary -> postfix -> primary.
+//
+// lvKind/lvName carry what the last postfix chain ended on, so the assignment
+// level can turn `x`, `o.p` and `a[i]` into STORE_VAR / SET_PROP / ARRAY_SET
+// without re-parsing. 0 = not assignable, 1 = variable, 2 = property (object
+// already on the stack), 3 = index (object and index on the stack).
+var lvKind = 0;
+var lvName = 0;
+var lvOp = -1;
+
+function argList() {
+  var n = 0;
+  eatOp(26);
+  while (!isOp(ti, 27) && tKind(ti) !== K_EOF) {
+    expr();
+    n = n + 1;
+    if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
+  }
+  eatOp(27);
+  return n;
+}
+
+// A bare call: native if the table knows the name and the program did not
+// declare it, a user function if it did, else a call on a value.
+function bareCall(ni) {
+  var fi = fnFind(ni);
+  var argc = 0;
+  if (fi >= 0) {
+    argc = argList();
+    emit(O_CALLU, fnEntry(fi), argc);
+    return;
+  }
+  if (natIdOf(ni) >= 0) {
+    argc = argList();
+    emit(O_CALLN, ni, argc);
+    return;
+  }
+  loadVar(ni);
+  argc = argList();
+  emit(O_CALLVAL, 0, argc);
+}
+
+function primary() {
+  var k = tKind(ti);
+  var ni = 0;
+  lvKind = 0;
+  if (k === K_NUM) { emit(O_LOADC, crecNum(tOff(ti), tLen(ti)), 0); ti = ti + 1; return; }
+  if (k === K_STR) { emit(O_LOADC, crecStr(internStr(tOff(ti), tLen(ti))), 0); ti = ti + 1; return; }
+  if (k === K_KEY) {
+    if (tSub(ti) === 15) { emit(O_LOADC, crecVal(1), 0); ti = ti + 1; return; }
+    if (tSub(ti) === 16) { emit(O_LOADC, crecVal(0), 0); ti = ti + 1; return; }
+    if (tSub(ti) === 17 || tSub(ti) === 18) { emit(O_LOADC, crecNone(), 0); ti = ti + 1; return; }
+    if (tSub(ti) === 3) {                        // function expression
+      ti = ti + 1;
+      if (tKind(ti) === K_ID) { ti = ti + 1; }   // optional name, not bound
+      fnLiteral();
+      lvKind = 0;
+      return;
+    }
+    if (tSub(ti) === 12) {                       // typeof x
+      ti = ti + 1;
+      unary();
+      emit(O_CALLN, internSrcLit(0), 1);
+      return;
+    }
+  }
+  if (k === K_ID) {
+    // A dotted native (document.querySelector, Math.floor) is ONE name, not
+    // a property load. Probe by hash first so a plain method call like
+    // c.fillRect never leaves "c.fillRect" behind in the name table.
+    if (isOp(ti + 1, 33) && (tKind(ti + 2) === K_ID) && isOp(ti + 3, 26)) {
+      if (natLookup(dotHash(tOff(ti), tLen(ti), tOff(ti + 2), tLen(ti + 2)),
+                    tLen(ti) + tLen(ti + 2) + 1) >= 0) {
+        ni = internDot(tOff(ti), tLen(ti), tOff(ti + 2), tLen(ti + 2));
+        ti = ti + 3;
+        emit(O_CALLN, ni, argList());
+        return;
+      }
+    }
+    ni = internSrc(tOff(ti), tLen(ti));
+    ti = ti + 1;
+    if (isOp(ti, 26)) { bareCall(ni); return; }
+    lvOp = loadVar(ni);
+    lvKind = 1;
+    lvName = ni;
+    return;
+  }
+  if (isOp(ti, 26)) { ti = ti + 1; expr(); eatOp(27); lvKind = 0; return; }
+  if (isOp(ti, 34)) {                            // [ ... ]
+    ti = ti + 1;
+    var n = 0;
+    while (!isOp(ti, 35) && tKind(ti) !== K_EOF) {
+      expr();
+      n = n + 1;
+      if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
+    }
+    eatOp(35);
+    emit(O_MKARR, n, 0);
+    lvKind = 0;
+    return;
+  }
+  if (isOp(ti, 30)) {                            // { k: v }
+    ti = ti + 1;
+    emit(O_MKOBJ, 0, 0);
+    while (!isOp(ti, 31) && tKind(ti) !== K_EOF) {
+      if (tKind(ti) === K_STR) { ni = internStr(tOff(ti), tLen(ti)); }
+      else { ni = internSrc(tOff(ti), tLen(ti)); }
+      ti = ti + 1;
+      eatOp(29);
+      // SET_PROP consumes the object, so each field needs its own copy or
+      // the literal evaporates after the first key.
+      //   [obj] DUP [obj,obj] value [obj,obj,v] SET_PROP [obj,v] POP [obj]
+      emit(O_DUP, 0, 0);
+      expr();
+      emit(O_SETP, ni, 0);
+      emit(O_POP, 0, 0);
+      if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
+    }
+    eatOp(31);
+    lvKind = 0;
+    return;
+  }
+  if (perr === 0) { perr = ti + 1; }
+  ti = ti + 1;
+}
+
+// typeof is native id 40; its name has to exist in the table to be emitted.
+var TYPEOF_NI = -1;
+function internSrcLit(which) {
+  return TYPEOF_NI;
+}
+
+function postfix() {
+  primary();
+  var ni = 0;
+  while (1) {
+    if (isOp(ti, 33) && (tKind(ti + 1) === K_ID || tKind(ti + 1) === K_KEY)) {
+      ni = internSrc(tOff(ti + 1), tLen(ti + 1));
+      if (isOp(ti + 2, 26)) {                    // o.m(args)
+        ti = ti + 2;
+        emit(O_CALLM, ni, argList());
+        lvKind = 0;
+        continue;
+      }
+      ti = ti + 2;
+      if (isAssignAhead()) { lvKind = 2; lvName = ni; return; }
+      emit(O_GETP, ni, 0);
+      lvKind = 0;
+      continue;
+    }
+    if (isOp(ti, 34)) {                          // a[i]
+      ti = ti + 1;
+      expr();
+      eatOp(35);
+      if (isAssignAhead()) { lvKind = 3; return; }
+      emit(O_AGET, 0, 0);
+      lvKind = 0;
+      continue;
+    }
+    if (isOp(ti, 26)) {                          // value call
+      emit(O_CALLVAL, 0, argList());
+      lvKind = 0;
+      continue;
+    }
+    return;
+  }
+}
+
+// ++ and -- count: a property being incremented has to stay an lvalue, or
+// `state.count++` reads the field and then throws the read away.
+function isAssignAhead() {
+  if (isOp(ti, 24)) { return 1; }
+  if (isOp(ti, 8) || isOp(ti, 9)) { return 1; }
+  if (isOp(ti, 12) || isOp(ti, 13) || isOp(ti, 14) || isOp(ti, 15) || isOp(ti, 16)) { return 1; }
+  return 0;
+}
+
+function unary() {
+  if (isOp(ti, 25)) { ti = ti + 1; unary(); emit(O_NOT, 0, 0); lvKind = 0; return; }
+  if (isOp(ti, 18)) { ti = ti + 1; unary(); emit(O_NEG, 0, 0); lvKind = 0; return; }
+  if (isOp(ti, 17)) { ti = ti + 1; unary(); lvKind = 0; return; }
+  if (isOp(ti, 8) || isOp(ti, 9)) {              // ++x / --x
+    var dec = isOp(ti, 9);
+    ti = ti + 1;
+    unary();
+    emit(O_LOADC, crecVal(1), 0);
+    emit(dec ? O_SUB : O_ADD, 0, 0);
+    if (lvKind === 1) { storeVar(lvName); loadVar(lvName); }
+    lvKind = 0;
+    return;
+  }
+  postfix();
+  if (isOp(ti, 8) || isOp(ti, 9)) {
+    var d2 = isOp(ti, 9);
+    var nm = lvName;
+    if (lvKind === 1) {                                 // x++ / x--
+      ti = ti + 1;
+      emit(O_LOADC, crecVal(1), 0);
+      emit(d2 ? O_SUB : O_ADD, 0, 0);
+      storeVar(nm);
+      loadVar(nm);
+      lvKind = 0;
+    } else if (lvKind === 2) {                          // o.p++ / o.p--
+      // [obj] DUP [obj,obj] GETP [obj,v] 1 ADD [obj,v+1] SETP [v+1]
+      ti = ti + 1;
+      emit(O_DUP, 0, 0);
+      emit(O_GETP, nm, 0);
+      emit(O_LOADC, crecVal(1), 0);
+      emit(d2 ? O_SUB : O_ADD, 0, 0);
+      emit(O_SETP, nm, 0);
+      lvKind = 0;
+    } else if (lvKind === 3) {
+      if (perr === 0) { perr = ti + 1; }                // a[i]++ — not yet
+    }
+  }
+  // A property or index that was held as an lvalue but never assigned still
+  // has to produce its value.
+  if (lvKind === 2 && !isAssignAhead()) { emit(O_GETP, lvName, 0); lvKind = 0; }
+  else if (lvKind === 3 && !isAssignAhead()) { emit(O_AGET, 0, 0); lvKind = 0; }
+}
+
+function mulE() {
+  unary();
+  while (isOp(ti, 19) || isOp(ti, 20) || isOp(ti, 21)) {
+    var s = tSub(ti);
+    ti = ti + 1;
+    unary();
+    if (s === 19) { emit(O_MUL, 0, 0); } else if (s === 20) { emit(O_DIV, 0, 0); } else { emit(O_MOD, 0, 0); }
+    lvKind = 0;
+  }
+}
+
+function addE() {
+  mulE();
+  while (isOp(ti, 17) || isOp(ti, 18)) {
+    var s = tSub(ti);
+    ti = ti + 1;
+    mulE();
+    emit(s === 17 ? O_ADD : O_SUB, 0, 0);
+    lvKind = 0;
+  }
+}
+
+function cmpE() {
+  addE();
+  while (isOp(ti, 22) || isOp(ti, 23) || isOp(ti, 4) || isOp(ti, 5)) {
+    var s = tSub(ti);
+    ti = ti + 1;
+    addE();
+    if (s === 22) { emit(O_LT, 0, 0); }
+    else if (s === 23) { emit(O_GT, 0, 0); }
+    else if (s === 4) { emit(O_GT, 0, 0); emit(O_NOT, 0, 0); }
+    else { emit(O_LT, 0, 0); emit(O_NOT, 0, 0); }
+    lvKind = 0;
+  }
+}
+
+function eqE() {
+  cmpE();
+  while (isOp(ti, 0) || isOp(ti, 1) || isOp(ti, 2) || isOp(ti, 3)) {
+    var s = tSub(ti);
+    ti = ti + 1;
+    cmpE();
+    emit(O_EQ, 0, 0);
+    if (s === 1 || s === 3) { emit(O_NOT, 0, 0); }
+    lvKind = 0;
+  }
+}
+
+function bandE() {
+  eqE();
+  while (isOp(ti, 37)) { ti = ti + 1; eqE(); emit(O_BAND, 0, 0); lvKind = 0; }
+}
+
+function borE() {
+  bandE();
+  while (isOp(ti, 36)) { ti = ti + 1; bandE(); emit(O_BOR, 0, 0); lvKind = 0; }
+}
+
+// && and || keep the tested value on the stack when they short-circuit, so
+// the skipped branch must not leave a second one behind.
+// JUMP_IF_FALSE CONSUMES its operand, so the value a short-circuit has to
+// keep must be duplicated first. Without the DUP, the taken branch underflows
+// and the untaken one loses the result.
+function andE() {
+  borE();
+  var j = 0;
+  while (isOp(ti, 6)) {
+    ti = ti + 1;
+    emit(O_DUP, 0, 0);
+    j = emit(O_JF, 0, 0);
+    emit(O_POP, 0, 0);
+    borE();
+    patchA0(j, nOps);
+    lvKind = 0;
+  }
+}
+
+function orE() {
+  andE();
+  var j = 0;
+  var k = 0;
+  while (isOp(ti, 7)) {
+    ti = ti + 1;
+    emit(O_DUP, 0, 0);
+    j = emit(O_JF, 0, 0);
+    k = emit(O_JUMP, 0, 0);
+    patchA0(j, nOps);
+    emit(O_POP, 0, 0);
+    andE();
+    patchA0(k, nOps);
+    lvKind = 0;
+  }
+}
+
+function ternE() {
+  orE();
+  if (isOp(ti, 38)) {
+    ti = ti + 1;
+    var j = emit(O_JF, 0, 0);
+    expr();
+    var k = emit(O_JUMP, 0, 0);
+    patchA0(j, nOps);
+    eatOp(29);
+    expr();
+    patchA0(k, nOps);
+    lvKind = 0;
+  }
+}
+
+function emitBinOp(s) {
+  if (s === 12) { emit(O_ADD, 0, 0); }
+  else if (s === 13) { emit(O_SUB, 0, 0); }
+  else if (s === 14) { emit(O_MUL, 0, 0); }
+  else if (s === 15) { emit(O_DIV, 0, 0); }
+  else { emit(O_MOD, 0, 0); }
+}
+
+// Assignment. Compound forms re-read the target, so `x += e` is `x = x + e`.
+function expr() {
+  ternE();
+  var k = lvKind;
+  var nm = lvName;
+  var lo = lvOp;
+  var s = 0;
+  if (k === 0) { return; }
+  if (isOp(ti, 24)) {                     // plain =
+    ti = ti + 1;
+    // The target's own load was speculative; a plain assignment does not
+    // read it. Drop it before the RHS lands on the stack.
+    if (k === 1) { dropLoad(lo); }
+    expr();
+    if (k === 1) { storeVar(nm); loadVar(nm); }
+    else if (k === 2) { emit(O_SETP, nm, 0); }
+    else { emit(O_ASET, 0, 0); }
+    lvKind = 0;
+    return;
+  }
+  if (isOp(ti, 12) || isOp(ti, 13) || isOp(ti, 14) || isOp(ti, 15) || isOp(ti, 16)) {
+    s = tSub(ti);
+    ti = ti + 1;
+    if (k === 2) {
+      // o.p += v — the object is on the stack; read the field, combine,
+      // then store it back. DUP keeps the object for the SET_PROP.
+      emit(O_DUP, 0, 0);
+      emit(O_GETP, nm, 0);
+      expr();
+      emitBinOp(s);
+      emit(O_SETP, nm, 0);
+      lvKind = 0;
+      return;
+    }
+    if (k !== 1) { if (perr === 0) { perr = ti; } return; }
+    // Compound assignment DOES read the target, so primary's load stays.
+    expr();
+    emitBinOp(s);
+    storeVar(nm);
+    loadVar(nm);
+    lvKind = 0;
+  }
+}
+
+// ---- statements ----------------------------------------------------------
+var BRK_OFF = 0;
+var nBrk = 0;
+var nCont = 0;
+
+function stmt() {
+  var k = 0;
+  var ni = 0;
+  var j = 0;
+  var top = 0;
+  if (tKind(ti) === K_EOF) { return; }
+  if (isOp(ti, 28)) { ti = ti + 1; return; }             // stray ;
+  if (isOp(ti, 30)) {                                    // { block }
+    ti = ti + 1;
+    while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
+    eatOp(31);
+    return;
+  }
+  if (tKind(ti) === K_KEY) {
+    k = tSub(ti);
+    if (k === 0 || k === 1 || k === 2) { varDecl(); return; }
+    if (k === 3) { skipFn(); return; }                   // already emitted
+    if (k === 5) { ifStmt(); return; }
+    if (k === 7) { whileStmt(); return; }
+    if (k === 8) { forStmt(); return; }
+    if (k === 4) {                                       // return
+      ti = ti + 1;
+      if (isOp(ti, 28) || isOp(ti, 31)) { emit(O_LOADC, crecNone(), 0); }
+      else { expr(); }
+      if (isOp(ti, 28)) { ti = ti + 1; }
+      emit(O_RETV, 0, 0);
+      return;
+    }
+    if (k === 25) {                                      // try { } catch { }
+      ti = ti + 1;
+      stmt();
+      if (isKw(ti, 26)) {
+        ti = ti + 1;
+        if (isOp(ti, 26)) { while (!isOp(ti, 27) && tKind(ti) !== K_EOF) { ti = ti + 1; } ti = ti + 1; }
+        // The VM has no exceptions, so the handler is unreachable: skip it
+        // rather than emit dead ops. Same call the host makes.
+        skipBlock();
+      }
+      if (isKw(ti, 27)) { ti = ti + 1; stmt(); }
+      return;
+    }
+    if (k === 28) {                                      // throw expr;
+      ti = ti + 1;
+      expr();
+      emit(O_POP, 0, 0);
+      if (isOp(ti, 28)) { ti = ti + 1; }
+      return;
+    }
+    if (k === 9) {                                       // break
+      ti = ti + 1;
+      if (isOp(ti, 28)) { ti = ti + 1; }
+      brkAdd(emit(O_JUMP, 0, 0), 0);
+      return;
+    }
+    if (k === 10) {                                      // continue
+      ti = ti + 1;
+      if (isOp(ti, 28)) { ti = ti + 1; }
+      brkAdd(emit(O_JUMP, 0, 0), 1);
+      return;
+    }
+  }
+  expr();
+  emit(O_POP, 0, 0);
+  if (isOp(ti, 28)) { ti = ti + 1; }
+}
+
+// Skip one statement or balanced block without emitting anything.
+function skipBlock() {
+  var depth = 0;
+  if (!isOp(ti, 30)) {
+    while (tKind(ti) !== K_EOF && !isOp(ti, 28)) { ti = ti + 1; }
+    if (isOp(ti, 28)) { ti = ti + 1; }
+    return;
+  }
+  while (tKind(ti) !== K_EOF) {
+    if (isOp(ti, 30)) { depth = depth + 1; }
+    if (isOp(ti, 31)) {
+      depth = depth - 1;
+      ti = ti + 1;
+      if (depth <= 0) { return; }
+      continue;
+    }
+    ti = ti + 1;
+  }
+}
+
+function varDecl() {
+  ti = ti + 1;
+  var ni = 0;
+  while (tKind(ti) === K_ID) {
+    ni = internSrc(tOff(ti), tLen(ti));
+    ti = ti + 1;
+    declAdd(ni);
+    if (isOp(ti, 24)) { ti = ti + 1; expr(); } else { emit(O_LOADC, crecNone(), 0); }
+    if (inFn) {
+      locAdd(ni);
+      emit(O_LETV, ni, 1 + ((locFind(ni) & 31) + 1) * 2);
+    } else {
+      emit(O_LETV, ni, 0);
+    }
+    if (isOp(ti, 32)) { ti = ti + 1; continue; }
+    break;
+  }
+  if (isOp(ti, 28)) { ti = ti + 1; }
+}
+
+function ifStmt() {
+  ti = ti + 1;
+  eatOp(26);
+  expr();
+  eatOp(27);
+  var j = emit(O_JF, 0, 0);
+  stmt();
+  if (isKw(ti, 6)) {
+    ti = ti + 1;
+    var k = emit(O_JUMP, 0, 0);
+    patchA0(j, nOps);
+    stmt();
+    patchA0(k, nOps);
+  } else {
+    patchA0(j, nOps);
+  }
+}
+
+function whileStmt() {
+  ti = ti + 1;
+  var top = nOps;
+  var b0 = nBrk;
+  eatOp(26);
+  expr();
+  eatOp(27);
+  var j = emit(O_JF, 0, 0);
+  stmt();
+  emit(O_JUMP, top, 0);
+  patchA0(j, nOps);
+  brkPatch(b0, nOps, top);
+}
+
+function forStmt() {
+  ti = ti + 1;
+  eatOp(26);
+  if (!isOp(ti, 28)) {
+    if (tKind(ti) === K_KEY && tSub(ti) <= 2) { varDecl(); }
+    else { expr(); emit(O_POP, 0, 0); if (isOp(ti, 28)) { ti = ti + 1; } }
+  } else { ti = ti + 1; }
+  var top = nOps;
+  var b0 = nBrk;
+  var j = -1;
+  if (!isOp(ti, 28)) { expr(); j = emit(O_JF, 0, 0); }
+  eatOp(28);
+  // The step runs after the body, but it is written before it. Emit it into
+  // a scratch region first, then replay — cheaper than a second parse pass.
+  var stepTi = ti;
+  var depth = 0;
+  while (tKind(ti) !== K_EOF) {
+    if (isOp(ti, 26)) { depth = depth + 1; }
+    if (isOp(ti, 27)) { if (depth === 0) { break; } depth = depth - 1; }
+    ti = ti + 1;
+  }
+  var bodyTi = ti;
+  eatOp(27);
+  stmt();
+  var contTarget = nOps;
+  if (stepTi !== bodyTi) {
+    var save = ti;
+    ti = stepTi;
+    expr();
+    emit(O_POP, 0, 0);
+    ti = save;
+  }
+  emit(O_JUMP, top, 0);
+  if (j >= 0) { patchA0(j, nOps); }
+  brkPatch(b0, nOps, contTarget);
+}
+
+function brkAdd(opIdx, isCont) {
+  if (nBrk >= 256) { return; }
+  var o = BRK_OFF + nBrk * 4;
+  _gw(o, opIdx % 256);
+  _gw(o + 1, Math.floor(opIdx / 256) % 256);
+  _gw(o + 2, Math.floor(opIdx / 65536) % 256);
+  _gw(o + 3, isCont);
+  nBrk = nBrk + 1;
+}
+
+function brkPatch(base, endTarget, contTarget) {
+  var i = base;
+  var o = 0;
+  var idx = 0;
+  while (i < nBrk) {
+    o = BRK_OFF + i * 4;
+    idx = _gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536;
+    patchA0(idx, _gr(o + 3) ? contTarget : endTarget);
+    i = i + 1;
+  }
+  nBrk = base;
+}
+
+// Skip a function declaration at the top level — its body was already emitted.
+function skipFn() {
+  ti = ti + 1;
+  if (tKind(ti) === K_ID) { ti = ti + 1; }
+  var depth = 0;
+  while (tKind(ti) !== K_EOF) {
+    if (isOp(ti, 30)) { depth = depth + 1; }
+    if (isOp(ti, 31)) { depth = depth - 1; ti = ti + 1; if (depth <= 0) { return; } continue; }
+    ti = ti + 1;
+  }
+}
+
+// ---- function bodies -----------------------------------------------------
+// Emitted before any top-level statement, each behind a skip JUMP, so a call
+// can name a callee declared further down the file. This is why the op stream
+// of every title starts with a JUMP.
+function prescanFns() {
+  var i = 0;
+  var ni = 0;
+  while (tKind(i) !== K_EOF) {
+    if (isKw(i, 3) && tKind(i + 1) === K_ID) {
+      ni = internSrc(tOff(i + 1), tLen(i + 1));
+      if (fnFind(ni) < 0) { fnAdd(ni, 0, 0); }
+    }
+    i = i + 1;
+  }
+}
+
+function bindParams(p0, np) {
+  var i = np;
+  var k = 0;
+  var pn = 0;
+  var save = ti;
+  // Reverse order: the last argument is on top of the stack when the frame
+  // is entered, so the last parameter binds first.
+  while (i > 0) {
+    i = i - 1;
+    ti = p0;
+    k = 0;
+    while (k < i) { ti = ti + 2; k = k + 1; }
+    pn = internSrc(tOff(ti), tLen(ti));
+    locAdd(pn);
+    declAdd(pn);
+    emit(O_LETV, pn, 1 + ((locFind(pn) & 31) + 1) * 2);
+  }
+  ti = save;
+}
+
+// One function literal: `function f(a){...}` and `function(a){...}` differ
+// only in whether a name is bound afterwards. Emits JUMP-over-body, the body,
+// then MAKE_FN, leaving the function value on the stack.
+function fnLiteral() {
+  var jmp = emit(O_JUMP, 0, 0);
+  var entry = nOps;
+  var np = 0;
+  var p0 = 0;
+  var pLoc = locBase;
+  var pNLoc = nLoc;
+  var pDecl = declBase;
+  var pNDecl = nDecl;
+  eatOp(26);
+  p0 = ti;
+  while (tKind(ti) === K_ID) {
+    ti = ti + 1;
+    np = np + 1;
+    if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
+  }
+  eatOp(27);
+  locBase = locBase + nLoc;
+  declBase = declBase + nDecl;
+  nLoc = 0;
+  nDecl = 0;
+  inFn = inFn + 1;
+  bindParams(p0, np);
+  eatOp(30);
+  while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
+  eatOp(31);
+  emit(O_LOADC, crecNone(), 0);
+  emit(O_RETV, 0, 0);
+  inFn = inFn - 1;
+  locBase = pLoc;
+  nLoc = pNLoc;
+  declBase = pDecl;
+  nDecl = pNDecl;
+  patchA0(jmp, nOps);
+  emit(O_MKFN, entry, np);
+  return entry;
+}
+
+function compileFn() {
+  var ni = internSrc(tOff(ti + 1), tLen(ti + 1));
+  ti = ti + 2;
+  var entry = fnLiteral();
+  var fi = fnFind(ni);
+  if (fi >= 0) { _w16(FN_OFF + fi * 8 + 2, entry); }
+  emit(O_STOREV, ni, 1);
+}
+
+function compileAllFns() {
+  ti = 0;
+  var depth = 0;
+  while (tKind(ti) !== K_EOF && perr === 0) {
+    if (isKw(ti, 3) && tKind(ti + 1) === K_ID) { compileFn(); continue; }
+    if (isOp(ti, 30)) { depth = depth + 1; }
+    if (isOp(ti, 31)) { depth = depth - 1; }
+    ti = ti + 1;
+  }
+}
+
+// `(function(){ ... })();` wrapping the whole program is the standard way a
+// title avoids leaking globals, but the machine has no closures over an IIFE
+// frame: named functions are emitted at top level, so a var owned by the
+// wrapper would be unreachable from them. Unwrap it and compile the body at
+// top level, which is what the host's IIFE-isolation pass achieves.
+// Returns the first body token, or 0 when the program is not one IIFE.
+function unwrapIife() {
+  var i = 2;
+  if (!isOp(0, 26)) { return 0; }
+  if (!isKw(1, 3)) { return 0; }
+  if (tKind(i) === K_ID) { i = i + 1; }
+  if (!isOp(i, 26)) { return 0; }
+  while (!isOp(i, 27) && tKind(i) !== K_EOF) { i = i + 1; }
+  i = i + 1;
+  if (!isOp(i, 30)) { return 0; }
+  return i + 1;
+}
+
+function parse() {
+  prescanFns();
+  compileAllFns();
+  ti = unwrapIife();
+  if (ti > 0) {
+    while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0 && over === 0) { stmt(); }
+    gsResolveAll();
+    if (over === 2) { return 10; }
+    if (over) { return 11; }
+    if (perr) { return 12; }
+    return 0;
+  }
+  ti = 0;
+  while (tKind(ti) !== K_EOF && perr === 0 && over === 0) { stmt(); }
+  gsResolveAll();
+  if (over === 2) { return 10; }
+  if (over) { return 11; }
+  if (perr) { return 12; }
+  return 0;
+}
+
+// ==========================================================================
+// ASSEMBLER — build the .JSH image
+//
+// Mirrors jsb_format._encode_v2: fold the constant records into a pool,
+// derive var indices from the names that are not natives, rewrite every
+// operand accordingly, then lay out header, consts, ops and the v2 trailer.
+// ==========================================================================
+
+var POOL_OFF = 0;
+var VMAP_OFF = 0;
+var LC_OFF = 0;
+var nPool = 0;
+var nVars = 0;
+
+// LOAD_CONST a1 tags: 0 = const-pool slot, 1 = name-table index, 2 = undefined.
+var LC_I32 = 0;
+var LC_STR = 1;
+var LC_NONE = 2;
+
+function poolFind(o) {
+  var i = 0;
+  var k = 0;
+  var same = 0;
+  while (i < nPool) {
+    k = 0;
+    same = 1;
+    while (k < 8) {
+      if (_gr(POOL_OFF + i * 8 + k) !== _gr(o + k)) { same = 0; k = 8; }
+      k = k + 1;
+    }
+    if (same) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+function buildPool() {
+  var i = 0;
+  var o = 0;
+  var kind = 0;
+  var idx = 0;
+  var k = 0;
+  while (i < nCrec) {
+    o = CREC_OFF + i * 12;
+    kind = _gr(o);
+    if (kind === CK_STR) {
+      _w16(LC_OFF + i * 4, _r16(o + 1));
+      _gw(LC_OFF + i * 4 + 2, LC_STR);
+    } else if (kind === CK_NONE) {
+      _w16(LC_OFF + i * 4, 0);
+      _gw(LC_OFF + i * 4 + 2, LC_NONE);
+    } else {
+      idx = poolFind(o + 4);
+      if (idx < 0) {
+        idx = nPool;
+        k = 0;
+        while (k < 8) { _gw(POOL_OFF + nPool * 8 + k, _gr(o + 4 + k)); k = k + 1; }
+        nPool = nPool + 1;
+      }
+      _w16(LC_OFF + i * 4, idx);
+      _gw(LC_OFF + i * 4 + 2, LC_I32);
+    }
+    i = i + 1;
+  }
+}
+
+// var index = position among names that are not natives, in name order.
+function buildVars() {
+  var i = 0;
+  nVars = 0;
+  while (i < nNames) {
+    if (natIdOf(i) >= 0) { _w16(VMAP_OFF + i * 2, 65535); }
+    else { _w16(VMAP_OFF + i * 2, nVars); nVars = nVars + 1; }
+    i = i + 1;
+  }
+}
+
+function varOf(ni) {
+  var v = _r16(VMAP_OFF + ni * 2);
+  return v === 65535 ? 0 : v;
+}
+
+function rewriteOps() {
+  var i = 0;
+  var c = 0;
+  var a0 = 0;
+  var nid = 0;
+  var fi = 0;
+  while (i < nOps) {
+    c = opCode(i);
+    a0 = opA0(i);
+    if (c === O_LOADC) {
+      patchA0(i, _r16(LC_OFF + a0 * 4));
+      setA1(i, _gr(LC_OFF + a0 * 4 + 2));
+    } else if (c === O_LOADV || c === O_STOREV || c === O_LETV) {
+      patchA0(i, varOf(a0));
+    } else if (c === O_CALLN) {
+      fi = fnFind(a0);
+      if (fi >= 0) {
+        _gw(OPS_OFF + i * 4, O_CALLU);
+        patchA0(i, fnEntry(fi));
+      } else {
+        nid = natIdOf(a0);
+        patchA0(i, nid < 0 ? 33 : nid);
+      }
+    }
+    i = i + 1;
+  }
+}
+
+// ---- image emit ----------------------------------------------------------
+var ip = 0;
+
+function ob(b) { _gw(IMG_OFF + ip, b % 256); ip = ip + 1; }
+function o16(v) { ob(v); ob(Math.floor(v / 256)); }
+
+function emitImage() {
+  var i = 0;
+  var k = 0;
+  var b = 0;
+  ip = 0;
+  ob(74); ob(83); ob(66); ob(49);           // 'JSB1'
+  o16(nOps);
+  o16(nPool);
+  o16(nVars);
+  o16(9);                                   // FLAG_V2 | FLAG_VALUE64
+  i = 0;
+  while (i < nPool) {
+    k = 0;
+    while (k < 8) { ob(_gr(POOL_OFF + i * 8 + k)); k = k + 1; }
+    i = i + 1;
+  }
+  i = 0;
+  while (i < nOps) {
+    k = 0;
+    while (k < 4) { ob(_gr(OPS_OFF + i * 4 + k)); k = k + 1; }
+    i = i + 1;
+  }
+  // v2 trailer: name table, var->name map, class count, then the name blob.
+  o16(nNames);
+  i = 0;
+  while (i < nNames) {
+    o16(nHash(i));
+    ob(nLen(i) > 255 ? 255 : nLen(i));
+    i = i + 1;
+  }
+  o16(nVars);
+  i = 0;
+  while (i < nNames) {
+    if (_r16(VMAP_OFF + i * 2) !== 65535) { o16(i); }
+    i = i + 1;
+  }
+  o16(0);                                   // no classes
+  ob(78); ob(65); ob(77); ob(66);           // 'NAMB'
+  i = 0;
+  while (i < nNames) {
+    o16(nLen(i));
+    b = nBlob(i);
+    k = 0;
+    while (k < nLen(i)) { ob(_gr(NBLOB_OFF + b + k)); k = k + 1; }
+    i = i + 1;
+  }
+  return ip;
+}
+
+// ---- entry ---------------------------------------------------------------
+spanN = _r16(HDR_SPAN_N);
+measure();
+kwInit();
+var st = tokenize();
+_w32(HDR_TOK_N, tokN);
+
+// The assembled image is written over the token array, which is dead by
+// then — that is how an MK-class token stream and its output share one
+// arena. It also means tokens cannot be inspected after a full compile, so
+// the harness can ask for tokenize-only when it wants to check them.
+if (st === 0 && _gr(HDR_PHASE) === 1) {
+  cdone(13, tokN, 0);
+} else if (st === 0) {
+  layout();
+  BRK_OFF = FN_OFF + FN_MAX * 8;
+  POOL_OFF = BRK_OFF + 1024;
+  VMAP_OFF = POOL_OFF + 1024 * 8;
+  LC_OFF = VMAP_OFF + NAME_MAX * 2;
+  natInit();
+  TYPEOF_NI = -1;
+  st = parse();
+  if (st === 0) {
+    buildPool();
+    buildVars();
+    rewriteOps();
+    var len = emitImage();
+    _w32(HDR_OUT_OFF, IMG_OFF);
+    cdone(0, len, 0);
+  }
+}
+
+if (st === ST_ERR_TOKENS) { _fail(st, 84, 79, 75, 78, 0, 0, 0); }        // TOKN
+else if (st === ST_ERR_STR) { _fail(st, 83, 84, 82, 0, 0, 0, 0); }       // STR
+else if (st === ST_ERR_REGEX) { _fail(st, 82, 69, 71, 69, 88, 0, 0); }   // REGEX
+else if (st === 10) { _fail(st, 76, 79, 67, 65, 76, 83, 0); }            // LOCALS
+else if (st === 11) { _fail(st, 66, 73, 71, 0, 0, 0, 0); }               // BIG
+else if (st === 12) { _fail(st, 83, 89, 78, 84, 65, 88, 0); }            // SYNTAX
+else if (st !== 0) { _fail(st, 67, 72, 65, 82, 0, 0, 0); }               // CHAR
+</script>
+</body>
+</html>

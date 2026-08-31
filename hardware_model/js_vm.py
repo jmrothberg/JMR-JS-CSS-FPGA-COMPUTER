@@ -419,6 +419,11 @@ class JsHwVm:
         self._m.canvas = self.canvas
         self._m.input = self.input
         self.program_image: Optional[ProgramImage] = None
+        # Runaway fuse for one execute. A game frame is ~2M ops, so 8M is a
+        # generous default — but a compiler program is not a frame: tokenizing
+        # a 64KB title is ~6-8M ops and an MK-class source is far more. The
+        # COMPILE chain raises this; nothing else should.
+        self.step_budget: int = 8_000_000
         self._capacity_error: Optional[str] = None
         self.error: Optional[str] = None
         self._error_code = ERROR_NONE
@@ -497,7 +502,11 @@ class JsHwVm:
         pad = (-len(code_bytes)) % 4
         raw = code_bytes + b"\x00" * pad
         nwords = len(raw) // 4
-        for i in range(nwords):
+        # Words past code BRAM are dropped, exactly as the write port does it
+        # (jmr_js_vm.sv:194-196 guards with `code_waddr_q2 < CODE_WORDS`).
+        # Modelling the drop rather than raising is what lets PACFAST — whose
+        # v2 trailer runs 151 words long — load here as it does on the board.
+        for i in range(min(nwords, CODE_WORDS)):
             self.code_mem[i] = int.from_bytes(raw[i * 4 : i * 4 + 4], "little")
         for i in range(nwords, CODE_WORDS):
             self.code_mem[i] = 0
@@ -1958,6 +1967,33 @@ class JsHwVm:
             elif native_id == 42:
                 # sound(ch, freq, vol, frames, slide) — always succeed
                 pass
+            elif 43 <= native_id <= 48:
+                # V1.5 standalone-compile ABI. Delegate to the inner Machine
+                # so FM and HM cannot drift: one arena, one set of bounds,
+                # one -1 sentinel. Out-of-range writes raise there, which is
+                # this model's stand-in for RTL machine_fault code 5.
+                def _arg(k: int) -> float:
+                    if k >= len(args):
+                        return 0.0
+                    a = args[k]
+                    return value_unpack_number(a) if value_is_number(a) else 0.0
+
+                try:
+                    if native_id == 43:
+                        return value_pack_number(self._m._nat_src_len())
+                    if native_id == 44:
+                        return value_pack_number(self._m._nat_src_byte(_arg(0)))
+                    if native_id == 45:
+                        return value_pack_number(self._m._nat_stg_read(_arg(0)))
+                    if native_id == 46:
+                        self._m._nat_stg_write(_arg(0), _arg(1))
+                    elif native_id == 47:
+                        self._m._nat_cdone(_arg(0), _arg(1), _arg(2))
+                    else:  # 48
+                        self._m._nat_art_write2(_arg(0), _arg(1), _arg(2))
+                except RuntimeError as exc:
+                    self._value64_fault(f"native ID {native_id} at IP {ip}: {exc}")
+                    return None
             else:
                 self._value64_fault(
                     f"unsupported native ID {native_id} at IP {ip}"
@@ -2800,14 +2836,19 @@ class JsHwVm:
         )
 
     def _execute_value64_words(
-        self, max_steps: int = 8_000_000, *, start_ip: int = 0, top_level: bool = True
+        self, max_steps: int = 0, *, start_ip: int = 0, top_level: bool = True
     ) -> None:
         """Fetch packed opcodes and 64-bit constants from finite code BRAM.
+
+        max_steps=0 means "use self.step_budget" (8M default; the COMPILE
+        chain raises it, since a compile is not a frame).
 
         8M is a runaway fuse (true infinite still trips). One rAF paint of a
         24×26 tile field plus per-pixel sprite palK if-chains is ~2M ops —
         the old 1M cap false-triggered after init queued rAF.
         """
+        if max_steps <= 0:
+            max_steps = self.step_budget
         const_base = 4 if (self.flags & FLAG_ASET) else 3
         ip = start_ip
         steps = 0

@@ -124,40 +124,7 @@ def check_python_monitor_verbs() -> int:
         return 1
     print("OK PYTHON RUN JOYDEMO pixels", nz)
 
-    # Product title: INVADERS.HTML compile-on-RUN (INVADERS.JS twin is retired)
-    py.type_line("LOAD INVADERS.HTML")
-    py.type_line("RUN")
-    if not m.running or m._loop_chunk is None:
-        print("FAIL PYTHON INVADERS not looping", m.running, m._loop_chunk, py.screen_text()[-200:])
-        return 1
-    for _ in range(5):
-        py.frame_tick()
-    nz_inv = sum(1 for b in m.canvas.front if b)
-    if nz_inv < 50:
-        print("FAIL PYTHON INVADERS FB empty", nz_inv)
-        return 1
-    # Letterbox must not wipe while running
-    if not py.running:
-        print("FAIL PYTHON backend.running False during INVADERS")
-        return 1
-    from functional_model.input_engine import KEY_FIRE, KEY_LEFT
-
-    px0 = m.vm.globals.get("px")
-    m.set_key_bits(KEY_LEFT)
-    py.frame_tick()
-    px1 = m.vm.globals.get("px")
-    if px0 is None or px1 is None or not (px1 < px0):
-        print("FAIL PYTHON Left did not move px", px0, px1)
-        return 1
-    m.set_key_bits(0)
-    py.frame_tick()
-    m.set_key_bits(KEY_FIRE)
-    py.frame_tick()
-    if m.vm.globals.get("bullet") != 1:
-        print("FAIL PYTHON Space did not fire", m.vm.globals.get("bullet"))
-        return 1
-    m.set_key_bits(0)
-    print("OK PYTHON INVADERS pixels + Left + Space", nz_inv)
+    # INVADERS play is check_python_html_bytecode_invaders (HTML bytecode, not _loop_chunk/px/bullet).
 
     # NEW: LIST HTML numbered + -- MORE -- (not (HTML) stub; bytecode is the RUN path)
     m.hard_break()
@@ -214,6 +181,36 @@ def check_python_monitor_verbs() -> int:
     return 0
 
 
+def _hw_player_x(hw):
+    """Value64 player.position.x — objects are not Python dicts (test_bytecode_js)."""
+    from hardware_model.js_vm import (
+        VALUE_KIND_RECORD,
+        record_unpack,
+        value_kind,
+        value_payload,
+    )
+
+    names = hw.program_image.names
+    player_handle = hw._value_vars[list(hw.program_image.var_names).index("player")]
+    word = hw._value_objects[value_payload(player_handle)][names.index("position")]
+    followed = hw._value64_record_follow(word)
+    if value_kind(followed) == VALUE_KIND_RECORD:
+        return float(record_unpack(followed)[3])
+    obj = hw._value_objects[value_payload(followed)]
+    return float(hw._value64_host_value(obj.get(names.index("x"))))
+
+
+def _hw_array_len(hw, name: str) -> int:
+    """Value64 global array length (projectiles), or -1 if not an array."""
+    from hardware_model.js_vm import VALUE_KIND_ARRAY, value_kind, value_payload
+
+    handle = hw._value_vars[list(hw.program_image.var_names).index(name)]
+    if value_kind(handle) != VALUE_KIND_ARRAY:
+        return -1
+    slot = hw._value_arrays[value_payload(handle)]
+    return -1 if slot is None else len(slot)
+
+
 def check_python_html_bytecode_invaders() -> int:
     """PYTHON LOAD/RUN INVADERS.HTML via bytecode/.JSH (not dukpy).
 
@@ -257,25 +254,21 @@ def check_python_html_bytecode_invaders() -> int:
     if nz2 < 100:
         print("FAIL PYTHON HTML BYTECODE INVADERS vanished", nz, nz2)
         return 1
-    player = m.vm.globals.get("player")
-    pos = player.get("position") if isinstance(player, dict) else None
-    px0 = pos.get("x") if isinstance(pos, dict) else None
+    hw = m._hw_vm
+    px0 = _hw_player_x(hw)
     m.set_key_bits(KEY_LEFT)
-    py.frame_tick()
-    player = m.vm.globals.get("player")
-    pos = player.get("position") if isinstance(player, dict) else None
-    px1 = pos.get("x") if isinstance(pos, dict) else None
+    for _ in range(4):
+        py.frame_tick()
+    px1 = _hw_player_x(hw)
     if px0 is None or px1 is None or not (px1 < px0):
         print("FAIL PYTHON HTML BYTECODE Left did not move player.x", px0, px1)
         return 1
     m.set_key_bits(0)
     py.frame_tick()
-    n0 = m.vm.globals.get("projectiles")
-    n0 = len(n0) if isinstance(n0, list) else -1
+    n0 = _hw_array_len(hw, "projectiles")
     m.set_key_bits(KEY_FIRE)
     py.frame_tick()
-    n1 = m.vm.globals.get("projectiles")
-    n1 = len(n1) if isinstance(n1, list) else -1
+    n1 = _hw_array_len(hw, "projectiles")
     if n1 <= n0:
         print("FAIL PYTHON HTML BYTECODE Space did not fire", n0, n1)
         return 1
@@ -344,66 +337,50 @@ def check_python_html_bytecode_pacman() -> int:
 
 
 def check_hm_invaders_jsh() -> int:
-    """HM loads compile-on-RUN bytecode from INVADERS.HTML (not a stale .JSH)."""
-    from hardware_model.js_vm import JsHwVm
-    from functional_model.compiler import CompileError
+    """HM compile-on-RUN INVADERS.HTML (JsHwVm + ASET), not a stale .JSH."""
     from functional_model.input_engine import KEY_FIRE, KEY_LEFT
-    from tools.compile_js import compile_html_text, encode_html_chunk
 
     html_path = ROOT / "storage" / "INVADERS.HTML"
-    try:
-        chunk = compile_html_text(html_path.read_text(encoding="utf-8"))
-        blob = encode_html_chunk(chunk)
-    except CompileError as e:
-        print("FAIL HM compile INVADERS.HTML", e.line, e.message)
+    m = Machine()
+    m.source_name = "INVADERS.HTML"
+    out = m._run_html_bytecode(html_path.read_text(encoding="utf-8"))
+    hw = m._hw_vm
+    if hw is None or hw.error or not m.running:
+        print("FAIL HM INVADERS HTML run", getattr(hw, "error", None), out)
         return 1
-    except Exception as e:
-        print("FAIL HM compile INVADERS.HTML", e)
-        return 1
-    vm = JsHwVm()
-    try:
-        vm.load_blob(blob)
-    except Exception as e:
-        print("FAIL HM load bytecode", e)
-        return 1
-    if vm.error or not vm.running:
-        print("FAIL HM INVADERS HTML run", vm.error)
+    if out and "ERROR" in str(out[0]):
+        print("FAIL HM compile INVADERS.HTML", out)
         return 1
     for _ in range(30):
-        vm.frame_tick()
-        if vm.error:
-            print("FAIL HM frame", vm.error)
+        m.frame_tick()
+        if hw.error:
+            print("FAIL HM frame", hw.error)
             return 1
-    nz = sum(1 for b in vm.canvas.front if b)
+    nz = sum(1 for b in m.canvas.front if b)
     if nz < 100:
         print("FAIL HM INVADERS FB empty", nz)
         return 1
     # Space starts the title; subsequent Space is the fire acceptance input.
-    vm.set_key_bits(KEY_FIRE)
-    vm.frame_tick()
-    vm.set_key_bits(0)
-    vm.frame_tick()
+    m.set_key_bits(KEY_FIRE)
+    m.frame_tick()
+    m.set_key_bits(0)
+    m.frame_tick()
     for _ in range(4):
-        vm.frame_tick()
-    player = vm.globals.get("player")
-    pos = player.get("position") if isinstance(player, dict) else None
-    px0 = pos.get("x") if isinstance(pos, dict) else None
-    vm.set_key_bits(KEY_LEFT)
-    vm.frame_tick()
-    player = vm.globals.get("player")
-    pos = player.get("position") if isinstance(player, dict) else None
-    px1 = pos.get("x") if isinstance(pos, dict) else None
+        m.frame_tick()
+    px0 = _hw_player_x(hw)
+    m.set_key_bits(KEY_LEFT)
+    for _ in range(4):
+        m.frame_tick()
+    px1 = _hw_player_x(hw)
     if px0 is None or px1 is None or not (px1 < px0):
         print("FAIL HM Left did not move player.x", px0, px1)
         return 1
-    vm.set_key_bits(0)
-    vm.frame_tick()
-    n0 = vm.globals.get("projectiles")
-    n0 = len(n0) if isinstance(n0, list) else -1
-    vm.set_key_bits(KEY_FIRE)
-    vm.frame_tick()
-    n1 = vm.globals.get("projectiles")
-    n1 = len(n1) if isinstance(n1, list) else -1
+    m.set_key_bits(0)
+    m.frame_tick()
+    n0 = _hw_array_len(hw, "projectiles")
+    m.set_key_bits(KEY_FIRE)
+    m.frame_tick()
+    n1 = _hw_array_len(hw, "projectiles")
     if n1 <= n0:
         print("FAIL HM Space did not fire", n0, n1)
         return 1

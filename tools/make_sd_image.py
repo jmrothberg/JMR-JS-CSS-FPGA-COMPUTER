@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from functional_model.jsb_format import COMPILE_CHAIN  # noqa: E402
 from functional_model.memory import Memory  # noqa: E402
 from hardware_model.fat32 import Fat32Volume  # noqa: E402
 from hardware_model.sd_spi import SECTOR_SIZE, SdSpiCard  # noqa: E402
@@ -404,11 +405,20 @@ def create_image(
     include_storage: bool = True,
     force: bool = False,
     sound: bool = True,
+    jsh: bool = True,
 ) -> Path:
     """Format a FAT32 image, optionally seed from storage/, then add `files`.
 
     sound=True (default) mints sound() as nid 42. sound=False (-soundoff)
     stubs those calls for old bits that lack the native.
+
+    jsh=True (default) mints a .JSH sidecar per title, so RUN is instant.
+    jsh=False (--nojsh) ships HTML only: the machine has to compile each
+    title itself with COMPILE before RUN will find an image. That is the
+    card you want to prove standalone compile on real hardware — with the
+    sidecars present, a working RUN proves nothing about the compiler.
+    The compiler's own programs are always minted; they are what does the
+    compiling, so the machine cannot bootstrap them from source.
     """
     image = format_fat32(size_bytes)
     pairs: list[tuple[str, bytes]] = []
@@ -427,6 +437,15 @@ def create_image(
     # replaces fat asset lines with placeholders (the card HTML is display-only,
     # but the sidecar must be compiled from the real source).
     sidecars = compile_sidecars(pairs, sound=sound)
+    if not jsh:
+        keep = {n.upper() for n in COMPILE_CHAIN}
+        dropped = [n for n, _ in sidecars if n.upper() not in keep]
+        sidecars = [(n, d) for n, d in sidecars if n.upper() in keep]
+        print(
+            f"note: --nojsh — {len(dropped)} title sidecar(s) left off the card; "
+            f"COMPILE builds them on the machine",
+            file=sys.stderr,
+        )
     pairs, strip_notes = sanitize_bas_files(pairs)
     for n in strip_notes:
         print(f"note: {n}", file=sys.stderr)
@@ -647,6 +666,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="mint .JSH without sound() (nid 42); old bits that lack the native do not fault",
     )
+    p_create.add_argument(
+        "--nojsh",
+        action="store_true",
+        help="ship HTML only, no precompiled title sidecars — the machine "
+        "must COMPILE each title itself before RUN can find an image "
+        "(the compiler's own programs are still minted)",
+    )
 
     sub.add_parser("check", help="lint storage/ against the board's LOAD limits")
 
@@ -697,6 +723,7 @@ def main(argv: list[str] | None = None) -> int:
             include_storage=not args.no_storage,
             force=args.force,
             sound=not args.soundoff,
+            jsh=not args.nojsh,
         )
         # Report what landed on the card.
         vol = open_volume(args.image)

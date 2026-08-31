@@ -47,7 +47,8 @@ Do **not** flash the board until the FPGA-SIM battery is green.
 [docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md). J15 USB
 Host is dead on this unit — type and play from the GUI **PROG tether**.
 **V1.0:** compile when you make the card (`.JSH`). **V1.5** tries
-standalone compile **and** popular JS V1 lacks. `MK.HTML` is Version 2.0.
+standalone compile **and** popular JS V1 lacks. **V2.0** grows the ISA/ASET
+(no named title).
 
 **Where to go next**
 
@@ -178,7 +179,7 @@ always-on Cursor rule (agents) and one teaching/human page. Other documents
 | No dukpy / V8 / browser / soft CPU as the machine; V1.0 `RUN` is minted `.JSH` from `card.img` | `.cursor/rules/no-dukpy-cheat-native-cpu.mdc` | [CONSTITUTION.md](CONSTITUTION.md) Vendored-titles mandate |
 | PYTHON → FPGA-SIM → your F9 → board. Agent does not run Vivado | `.cursor/rules/python-first-parity.mdc` | [Method](#method-steal-from-the-basic-sibling--not-the-product) (this page) |
 | Do not hardwire `INVADERS` / `PACMAN` / `DONKEY` into the chip | `.cursor/rules/no-game-hardwire.mdc` | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) |
-| Version 1.0 authoring walls; V1.5 console + popular JS; `MK.HTML` is Version 2.0 | `.cursor/rules/html-game-v1.mdc` | [docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md) § Version 1.0, 1.5, and 2.0 |
+| Version 1.0 authoring walls; V1.5 console + popular JS; V2.0 is ISA/ASET growth (no title name) | `.cursor/rules/html-game-v1.mdc` | [docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md) § Version 1.0, 1.5, and 2.0 |
 | Read `traces/` before re-running the GUI | `.cursor/rules/use-existing-traces.mdc` | [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) |
 | Synth hygiene: 2 workers; when **not** to `bit-fresh`; incremental stitch | [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) § Synthesis | [docs/FPGA_FIT.md](docs/FPGA_FIT.md) + [docs/OLD_RUNS.md](docs/OLD_RUNS.md) |
 
@@ -260,7 +261,7 @@ mention.
 | **Pmod** | Peripheral module | Digilent add-on jacks (joystick on **JB**, optional PS/2 keyboard on **JA**) |
 | **T200** | — | Lab name for this Nexys Video (Artix-7 200T) |
 | **T100** | — | Lab name for the BASIC sibling’s Nexys A7-100T |
-| **V1.0 / V1.5 / V2.0** | product generations | **V1.0** = titles that play; **one disk** = `card.img` for PYTHON / FPGA-SIM / BOARD; compile = **when you make the card** (`.JSH`). **V1.5** tries standalone compile + type/paste/edit at READY **and** popular JS V1 lacks. V2 = **`MK.HTML` as on disk today** can `LOAD`/`RUN` |
+| **V1.0 / V1.5 / V2.0** | product generations | **V1.0** = titles that play; **one disk** = `card.img` for PYTHON / FPGA-SIM / BOARD; compile = **when you make the card** (`.JSH`). **V1.5** tries standalone compile + type/paste/edit at READY **and** popular JS V1 lacks. **V2.0** = bigger ISA/ASET (`MAX_SPR`, 8 MB bank, `Object.keys`, `Math.round`, dotted `new`) — **not** a named title |
 | **`?NH`** | no HTML / no minted `.JSH` | Loud miss: missing title path, **or** card-create compile failed so `LOAD` shows HTML and `RUN` refuses. Never “done” |
 | **clock** | chip heartbeat | The FPGA steps once per clock. This board’s JS core is ≈ **100 million** clocks per second (100 MHz) |
 | **frame** | one picture | One full 640×480 image. Games aim for **60 pictures per second** (about 16.7 milliseconds each) |
@@ -285,8 +286,8 @@ compile-on-RUN on the machine **and** popular JS V1 does not have
 (`Array.shift`, `Math.sin`/`round`, `isFinite`, …). V1.0 compiles when you make the card;
 PYTHON / FPGA-SIM / BOARD all `RUN` that `card.img`) —
 [docs/JMR_JS_COMPATIBILITY.md § V1.5](docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
-**`MK.HTML` is the V2.0 goal**
-(not FPGA-SIM acceptance yet) — [docs/JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](docs/JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
+**V2.0** is ISA/ASET growth, not a named title
+([docs/JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](docs/JMR_JS_COMPATIBILITY.md#version-10-15-and-20)).
 Titles are HTML. **V1.0:** compile when you **make the card** (`.JSH`);
 PYTHON, FPGA-SIM, and BOARD all `RUN` that image from `card.img`.
 Same-stem `.JS` demos are not the product.

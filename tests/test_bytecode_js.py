@@ -1918,6 +1918,13 @@ def test_hw_value64_every_registered_native_has_dispatch(native_id):
         38: [event],
         39: [event],
         40: [value64.value_pack_number(1)],
+        # V1.5 standalone-compile ABI. Index 0 is in range for every arena,
+        # so these exercise the real path rather than the -1 sentinel.
+        44: [value64.value_pack_number(0)],
+        45: [value64.value_pack_number(0)],
+        46: [value64.value_pack_number(0), value64.value_pack_number(65)],
+        47: [value64.value_pack_number(0)] * 3,
+        48: [value64.value_pack_number(0)] * 3,
     }
     vm.error = None
     vm._value64_native(native_id, args_by_id.get(native_id, []), 0)
