@@ -224,6 +224,8 @@ mention.
 | **bytecode** | — | Compact numbered instructions the compiler emits on `RUN` |
 | **opcode** | — | One instruction number (1–34) |
 | **native** | — | A built-in the compiler already knows (`Math.floor` → opcode 13 + an **id**) |
+| **playSfx** | — | Title helper: packed `[freq, vol, frames, slide, ch, …]`. Chrome: `_chromePlay`. Card: `sound()` nid 42. Catalog: `SNDDEMO.HTML` |
+| **sound()** | nid 42 | `sound(ch, freqHz, vol0_15, frames, slide)`. 4-voice PSG (ch 0–2 square, 3 noise). Do **not** write `function sound()`. Mint default-on; `-soundoff` stubs |
 | **ProgramImage** | — | Compiled program in memory after `RUN` (code + ASET art). Not a file you type |
 | **ASET** | asset section | Palette + sprite pixels inside the ProgramImage; streamed to the 4 MB SRAM bank |
 | **JSB** | — | On-the-wire encoding of a ProgramImage (`JSB1` magic) |

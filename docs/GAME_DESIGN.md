@@ -155,7 +155,48 @@ quality; card-create compile puts art in the ASET section, not code BRAM.
 Shatter / split / particles are **ordinary JS arrays** of points or objects.
 There is no engine primitive for “break an asteroid.” Caps are VM-wide
 (`MAX_OBJ` / `MAX_ARR` / `ARR_CAP`) with loud overflow — size effects to
-fit, same as every other `NAME.HTML`.
+fit, same as every other `NAME.HTML`. A 0.3s boom/flash on kill crawls on
+the board: **vanish the sprite** and `playSfx` (one native poke, no per-frame
+mixer). Catalog: `SNDDEMO.HTML`.
+
+---
+
+## Sound
+
+Line-out is a 4-voice PSG (square 0–2, noise 3) through the Nexys Video
+ADAU1761 jack. The chip native is always-succeed; missing PHY / PYTHON
+is a silent no-op, not a fault.
+
+**Do not write `function sound()` in HTML** — that steals the native
+(same trap as `function joy()`).
+
+```javascript
+/* Packed recipe: freqHz, vol0_15, frames, slideHzPerFrame, ch, … */
+function playSfx(r) {
+  var i;
+  if (!r) return;
+  if (typeof _chromePlay === "function") {
+    _chromePlay(r);
+    return;
+  }
+  i = 0;
+  while (i + 4 < r.length) {
+    sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
+    i = i + 5;
+  }
+}
+```
+
+| Path | What runs |
+|---|---|
+| Chrome (`storage/NAME.HTML`) | `<script data-host="chrome">` defines `_chromePlay` (Web Audio). Mint **strips** that tag so `AudioContext` never lands in the `.JSH`. |
+| Card / FPGA / PYTHON | `_chromePlay` is absent → `sound(ch, freq, vol, frames, slide)` nid **42**. Envelope lives in the PHY; JS does not tick the beep. |
+| Card mint | Default writes nid 42. `python3 tools/make_sd_image.py create card.img -soundoff` stubs those calls (`_stub`) for old bits. |
+
+`vol<=0` or `frames<=0` → skip that group. Missing `r` → silence. Two
+pokes on different channels overlap (explode = noise ch 3 + square ch 1).
+Do **not** put `tickSfx` in `rAF` — that hitch is real. `playSfx` is
+cheap (one `CALL_NATIVE`); a particle boom loop is not.
 
 ---
 
@@ -775,6 +816,7 @@ not readable on the V1.0 chip`), scoped to variables provably assigned
 - Sprites drawn with `drawImage` / `fillRect` / `putImageData`, not per-pixel JS loops? *(FAST rule 5 — hardware ~1 px/clk)*
 - One enormous multi-thousand-pixel-wide sheet? *(FAST rule 6 — split; let the atlas packer work)*
 - Assuming a hidden back buffer / `present` isolation? *(FAST rule 7 — present is gone; budget tearing)*
+- A 0.3s boom / hit-flash / particle burst on kill? *(vanish + `playSfx`; the fx loop crawls on the board)*
 - Any `if (img.width)` / `.complete` / `onload` guard around a draw? *(never — undefined on the chip, renders wrong with no error)*
 - Any `"" + number`, or a `*_STR` variable holding a score/timer/coordinate? *(intern table is 1024, never released)*
 - Any `.map` / `.slice` / `.split` / per-frame **grid** hoisted to startup? *(reduce them; do NOT make grids permanent)*

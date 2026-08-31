@@ -430,7 +430,8 @@ function splash(x, y, rad, dmg, burn) {
     dy = e.py - y;
     if (dx * dx + dy * dy <= rad * rad) hurt(e, dmg, burn);
   }
-  boom(x, y, rad);
+  /* No boom — splash kill is instant vanish (0.3s fx crawls on the board).
+     hurt() already playSfx(sfxDestroy); that poke is fire-and-forget. */
 }
 
 function boom(x, y, r) {

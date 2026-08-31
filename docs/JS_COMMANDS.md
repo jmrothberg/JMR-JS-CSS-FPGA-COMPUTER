@@ -254,10 +254,13 @@ Bare names the compiler already knows. Source of the ids: `functional_model/jsb_
 | `window.dispatchEvent` | 39 |
 | `typeof` | 40 |
 | `Object.keys` | 41 |
+| `sound` | 42 |
 
 `Math.PI` is **not** a call. It is `LOAD_CONST` of 3.14159…
 
 **Id 41 note:** `Object.keys` (and therefore `for (k in obj)`) runs on the Python functional model. The chip does not have that native yet — it faults instead of guessing. Version 1.0 titles use a literal key list or an index loop. See [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
+
+**Id 42 note:** `sound(ch, freqHz, vol0_15, frames, slideHzPerFrame)` always succeeds. Channel 0–2 square, 3 noise. The PHY owns the envelope (no per-frame JS mixer). PYTHON / FPGA-SIM with no jack are silent no-ops. Chrome titles call `playSfx(packed)` and keep Web Audio in `<script data-host="chrome">` (card mint strips that tag). Do **not** write `function sound()` — that compiles as a user stub and steals the native. Catalog: `storage/SNDDEMO.HTML`. Authoring: [GAME_DESIGN.md](GAME_DESIGN.md) Sound. Card mint: default on; `make_sd_image.py create -soundoff` stubs nid 42 for old bits.
 
 ---
 

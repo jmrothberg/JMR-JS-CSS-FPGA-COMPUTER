@@ -670,6 +670,7 @@ verbs do not change `RUN`. Full glass, compile path, and LUT/BRAM budget:
 | Item | Pri | Status |
 |---|---|---|
 | `Audio.play` | never | never |
+| `playSfx(packed)` / `sound(ch,freq,vol,frames,slide)` nid 42 | P0 | Complete (Chrome `_chromePlay`; card nid 42; mint `-soundoff` stubs) |
 | Fetch / XHR / WebSocket | never | never |
 | `localStorage` | P1 | Complete (in-memory; card persist not required yet) |
 
@@ -1035,6 +1036,7 @@ Numbered ABI (ids 0–40) is under [Native IDs](#native-ids-call_native--op_call
 | `typeof` | PACMAN | done PYTHON+RTL (interned result; `"number"` not intern-0) |
 | `window.open` | PACMAN | **never** (no-op / `_stub`) |
 | `console.log` / `console.warn` | INVADERS, DONKEY | done |
+| `sound` nid 42 | library (`playSfx` → card native) | done (always succeed; PHY envelope; PYTHON silent no-op) |
 
 ### Constructors (`NEW_OBJ` / `NEW`)
 
