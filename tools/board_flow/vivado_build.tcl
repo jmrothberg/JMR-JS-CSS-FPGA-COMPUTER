@@ -163,6 +163,8 @@ proc jmr_add_sources {ROOT} {
       $ROOT/rtl/phys/ps2_decode.sv \
       $ROOT/rtl/phys/jmr_i2c_master.sv \
       $ROOT/rtl/phys/jmr_i2c_joy.sv \
+      $ROOT/rtl/phys/jmr_adau1761_cfg.sv \
+      $ROOT/rtl/phys/jmr_psg.sv \
       $ROOT/rtl/phys/sd_spi_master.sv \
       $ROOT/rtl/jmr_js_core.sv \
       $ROOT/rtl/top_nexys_video.sv \

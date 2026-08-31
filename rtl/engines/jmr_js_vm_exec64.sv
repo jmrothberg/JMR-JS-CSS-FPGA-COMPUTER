@@ -766,6 +766,15 @@ module jmr_js_vm_exec64 (
     output logic [11:0] vvar_valid_waddr_q,
     output logic [31:0] vvar_valid_wdata_q,
     output logic vvars_we_q,
+    // sound(ch,freq,vol,frames,slide) nid 42 — registered poke to the PSG
+    // (plan fpga_line-out_psg). snd_tgl flips per call; args hold until the
+    // next call, so the PSG's 2FF toggle-sync samples a stable bus.
+    output logic        snd_tgl,
+    output logic [1:0]  snd_ch,
+    output logic [15:0] snd_freq,
+    output logic [3:0]  snd_vol,
+    output logic [7:0]  snd_frames,
+    output logic [7:0]  snd_slide,
     output logic [11:0] vvars_waddr_q,
     output logic [63:0] vvars_wdata_q,
     output logic vframe_we_q,
@@ -837,6 +846,22 @@ module jmr_js_vm_exec64 (
                                 // — pflip=10 forensics: the skip right after
                                 // NEW_OBJ's return underflowed the stack 2
                                 // ops later).
+    // sound-native poke register: capture args + flip the toggle on the
+    // execute beat. rst clears the toggle so the PSG's edge-detect can
+    // never fire from a stale power-on level.
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            snd_tgl <= 1'b0; snd_ch <= '0; snd_freq <= '0;
+            snd_vol <= '0; snd_frames <= '0; snd_slide <= '0;
+        end else if (enable && snd_stb_c) begin
+            snd_tgl    <= ~snd_tgl;
+            snd_ch     <= snd_ch_c;
+            snd_freq   <= snd_freq_c;
+            snd_vol    <= snd_vol_c;
+            snd_frames <= snd_frames_c;
+            snd_slide  <= snd_slide_c;
+        end
+    end
     always_ff @(posedge clk) begin
         if (enable && opw_cap_n) begin
             dbg_pf_n <= dbg_pf_n + 32'd1;
@@ -933,6 +958,12 @@ module jmr_js_vm_exec64 (
     logic [11:0] vvar_valid_waddr;
     logic [31:0] vvar_valid_wdata;
     logic vvars_we;
+    logic snd_stb_c; // comb: nid-42 executes this beat (registered below)
+    logic [1:0]  snd_ch_c;
+    logic [15:0] snd_freq_c;
+    logic [3:0]  snd_vol_c;
+    logic [7:0]  snd_frames_c;
+    logic [7:0]  snd_slide_c;
     logic [11:0] vvars_waddr;
     logic [63:0] vvars_wdata;
     logic vframe_we;
@@ -3421,6 +3452,9 @@ module jmr_js_vm_exec64 (
         vvar_valid_waddr = '0;
         vvar_valid_wdata = '0;
         vvars_we = 1'b0;
+        snd_stb_c = 1'b0;
+        snd_ch_c = '0; snd_freq_c = '0; snd_vol_c = '0;
+        snd_frames_c = '0; snd_slide_c = '0;
         vvars_waddr = '0;
         vvars_wdata = '0;
         vframe_we = 1'b0;
@@ -4715,8 +4749,23 @@ module jmr_js_vm_exec64 (
                                         end
                                         8'd42: begin
                                             // sound(ch, freq, vol, frames, slide)
-                                            // Always succeed. PHY (ADAU1761) later
-                                            // latches args; unwired = silent, no fault.
+                                            // Always succeed. snd_stb_c registers
+                                            // the args and flips snd_tgl for the
+                                            // PSG PHY (absent PHY = silent).
+                                            // Out-of-range values saturate at the
+                                            // field width — a wild slide is a weird
+                                            // noise, never a fault.
+                                            snd_stb_c = 1'b1;
+                                            snd_ch_c = 2'(v64_to_int32(
+                                                `VST_AT(base + 1)));
+                                            snd_freq_c = 16'(v64_to_int32(
+                                                `VST_AT(base + 2)));
+                                            snd_vol_c = 4'(v64_to_int32(
+                                                `VST_AT(base + 3)));
+                                            snd_frames_c = 8'(v64_to_int32(
+                                                `VST_AT(base + 4)));
+                                            snd_slide_c = 8'(v64_to_int32(
+                                                `VST_AT(base + 5)));
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;

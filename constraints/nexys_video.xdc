@@ -76,6 +76,24 @@ set_property -dict { PACKAGE_PIN AB20 IOSTANDARD LVCMOS33 PULLUP true } [get_por
 set_property -dict { PACKAGE_PIN V9 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { joy_scl }]
 set_property -dict { PACKAGE_PIN V8 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { joy_sda }]
 
+## ADAU1761 audio codec (J5 line-out) — pins per Digilent master XDC; same
+## set proven by tools/audio_beep_test. I2C has board pull-ups: open-drain only.
+set_property -dict { PACKAGE_PIN U6 IOSTANDARD LVCMOS33 } [get_ports { ac_mclk }]
+set_property -dict { PACKAGE_PIN T5 IOSTANDARD LVCMOS33 } [get_ports { ac_bclk }]
+set_property -dict { PACKAGE_PIN U5 IOSTANDARD LVCMOS33 } [get_ports { ac_lrclk }]
+set_property -dict { PACKAGE_PIN W6 IOSTANDARD LVCMOS33 } [get_ports { ac_dac_sdata }]
+set_property -dict { PACKAGE_PIN W5 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { ac_scl }]
+set_property -dict { PACKAGE_PIN V5 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { ac_sda }]
+
+## Audio CDC: quasi-static levels + toggle-sync cross into the 12 MHz mclk
+## domain through 2FF chains; cut timing analysis on those crossings.
+set_false_path -to [get_pins -hierarchical -filter {NAME =~ *mrst_sync_reg[0]*/D}] -quiet
+set_false_path -to [get_pins -hierarchical -filter {NAME =~ *acfg_sync_reg[0]*/D}] -quiet
+set_false_path -to [get_pins -hierarchical -filter {NAME =~ *mute_sync_reg[0]*/D}] -quiet
+set_false_path -to [get_pins -hierarchical -filter {NAME =~ *u_psg/tgl_sync_reg[0]*/D}] -quiet
+set_false_path -from [get_clocks -of_objects [get_pins u_mmcm/CLKOUT1]] -to [get_clocks -of_objects [get_pins u_mmcm/CLKOUT0]] -quiet
+set_false_path -from [get_cells -hierarchical -filter {NAME =~ *u_exec64/snd_*_reg*}] -quiet
+
 ## µSD slot
 ## µSD — SPI: SCK=cclk MOSI=cmd MISO=d[0] CS=d[3] (LiteX/Digilent)
 ## NEW: PULLUP on MISO/CMD/CS — card tri-states DAT0 between transfers

@@ -34,6 +34,13 @@ module jmr_js_core #(
     output logic [31:0] vm_fdbg,
     output logic        vm_fdbg_v,
     output logic [127:0] vm_ftrace,
+    // sound-native poke (core clock; PSG leaf + CDC live in the top)
+    output logic        snd_tgl,
+    output logic [1:0]  snd_ch,
+    output logic [15:0] snd_freq,
+    output logic [3:0]  snd_vol,
+    output logic [7:0]  snd_frames,
+    output logic [7:0]  snd_slide,
     // FPGA-SIM keyboard/joystick ARE these ports (GUI KEYEVT / KEYBITS).
     // No PS/2 or I2C in this module. Board PHY is top_nexys_video only.
     // LED proofs: tools/pmod_input_test + tools/hid_led_blink — not this file.
@@ -530,6 +537,8 @@ module jmr_js_core #(
         .vdbg_o(vdbg_o), .vdbg_fault_o(vdbg_fault_o),
         .vm_hdbg(vm_hdbg), .vm_fdbg(vm_fdbg), .vm_fdbg_v(vm_fdbg_v),
         .vm_ftrace(vm_ftrace),
+        .snd_tgl(snd_tgl), .snd_ch(snd_ch), .snd_freq(snd_freq),
+        .snd_vol(snd_vol), .snd_frames(snd_frames), .snd_slide(snd_slide),
         .fb_we(vm_fb_we), .fb_waddr(vm_fb_waddr),
         .fb_wdata(vm_fb_wdata), .fb_swap(vm_fb_swap),
         .fb_present_busy(fb_present_busy),

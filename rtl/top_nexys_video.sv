@@ -31,6 +31,13 @@ module top_nexys_video (
     // NEW: Mini I2C joystick @ 0x5A on JB (SCL=JB1 SDA=JB2)
     inout  wire       joy_scl,
     inout  wire       joy_sda,
+    // ADAU1761 audio codec (J5 line-out) — line-out PSG plan phase 1
+    output wire       ac_mclk,
+    output wire       ac_bclk,
+    output wire       ac_lrclk,
+    output wire       ac_dac_sdata,
+    inout  wire       ac_scl,
+    inout  wire       ac_sda,
     // µSD SPI
     output wire       sd_reset,
     output wire       sd_cclk,
@@ -62,6 +69,14 @@ module top_nexys_video (
     assign sd_reset = 1'b0;
 
     wire core_clk, pixel_clk, mmcm_locked, clkfb, clk200;
+    wire mclk_raw, mclk;
+    // sound-native poke bus, core -> PSG (see the audio block at the bottom)
+    logic snd_tgl;
+    logic [1:0]  snd_ch;
+    logic [15:0] snd_freq;
+    logic [3:0]  snd_vol;
+    logic [7:0]  snd_frames;
+    logic [7:0]  snd_slide;
     wire rst_n;
     wire ui_clk, ui_clk_sync_rst, init_calib_complete;
     wire mig_sys_rst_n;
@@ -71,14 +86,14 @@ module top_nexys_video (
         .CLKIN1_PERIOD(10.0),
         .CLKFBOUT_MULT_F(6.0),
         .CLKOUT0_DIVIDE_F(24.0),
-        .CLKOUT1_DIVIDE(6),
+        .CLKOUT1_DIVIDE(50),  // 600 MHz VCO / 50 = 12 MHz audio MCLK (was unused /6)
         .CLKOUT2_DIVIDE(3)
     ) u_mmcm (
         .CLKIN1(clk100),
         .CLKFBIN(clkfb),
         .CLKFBOUT(clkfb),
         .CLKOUT0(pixel_clk),
-        .CLKOUT1(),
+        .CLKOUT1(mclk_raw),
         .CLKOUT2(clk200),
         .LOCKED(mmcm_locked),
         .PWRDWN(1'b0),
@@ -243,6 +258,8 @@ module top_nexys_video (
         .joy_in(uart_joy_bits | i2c_joy_bits), .joy_out(joy_out),
         .dump_addr(uart_dump_addr), .dump_data(dump_data),
         .cursor(cursor), .ready_lit(ready_lit),
+        .snd_tgl(snd_tgl), .snd_ch(snd_ch), .snd_freq(snd_freq),
+        .snd_vol(snd_vol), .snd_frames(snd_frames), .snd_slide(snd_slide),
         .scan_addr(scan_addr), .scan_data(scan_data),
         .game_mode(game_mode),
         .fb_raddr(fb_raddr), .fb_x(fb_x), .fb_y(fb_y), .fb_rdata(fb_rdata),
@@ -376,4 +393,45 @@ module top_nexys_video (
     end
     // sd_cd is active-low on Digilent boards (0 = card present)
     assign led = {key_blink, ps2_clk, ps2_data, ~sd_cd, mmcm_locked, ready_lit, game_mode, 1'b1};
+
+    // ================= audio: ADAU1761 line-out PSG =================
+    // Leaf modules only — nothing here touches the VM/core datapaths.
+    // MCLK = MMCM CLKOUT1 (12 MHz); codec init on core_clk (~100 MHz I2C
+    // master); PSG + I2S on mclk. CDC: snd_tgl toggle-sync inside the PSG;
+    // cfg_done/ready_lit are quasi-static levels, 2FF each.
+    BUFG u_mclk_bufg (.I(mclk_raw), .O(mclk));
+    assign ac_mclk = mclk;
+
+    logic [1:0] mrst_sync;
+    logic       mrst_n;
+    always_ff @(posedge mclk) begin
+        mrst_sync <= {mrst_sync[0], (cpu_resetn & mmcm_locked)};
+        mrst_n    <= mrst_sync[1];
+    end
+
+    logic cfg_scl_oe, cfg_sda_oe, cfg_done, cfg_nack;
+    logic [5:0] cfg_step;
+    jmr_adau1761_cfg #(
+        .CLK_HZ(100_000_000), .I2C_HZ(100_000), .START_DLY(1_000_000)
+    ) u_ac_cfg (
+        .clk(core_clk), .rst_n(rst_n),
+        .scl_oe(cfg_scl_oe), .sda_oe(cfg_sda_oe), .sda_i(ac_sda),
+        .done(cfg_done), .ack_fail(cfg_nack), .step_o(cfg_step)
+    );
+    assign ac_scl = cfg_scl_oe ? 1'b0 : 1'bz;
+    assign ac_sda = cfg_sda_oe ? 1'b0 : 1'bz;
+
+    logic [1:0] acfg_sync, mute_sync;
+    always_ff @(posedge mclk) begin
+        acfg_sync <= {acfg_sync[0], cfg_done};
+        mute_sync <= {mute_sync[0], ready_lit};
+    end
+
+    jmr_psg u_psg (
+        .mclk(mclk), .rst_n(mrst_n),
+        .enable(acfg_sync[1]), .mute(mute_sync[1]),
+        .snd_tgl(snd_tgl), .snd_ch(snd_ch), .snd_freq(snd_freq),
+        .snd_vol(snd_vol), .snd_frames(snd_frames), .snd_slide(snd_slide),
+        .bclk(ac_bclk), .lrclk(ac_lrclk), .dac_sdata(ac_dac_sdata)
+    );
 endmodule
