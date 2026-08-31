@@ -101,19 +101,10 @@ function stickBits() {
   return j;
 }
 /* Chrome SFX: playSfx(packed). Packed = freq,vol,frames,slide,ch repeating.
-   ch 0-2 square, 3 noise. Missing r is silent. Chrome: _chromePlay. Card: sound() nid 42. */
+   ch 0-2 square, 3 noise. Missing r is silent. Do not call sound() until FPGA nid 42. */
 function playSfx(r) {
-  var i;
   if (!r) return;
-  if (typeof _chromePlay === "function") {
-    _chromePlay(r);
-    return;
-  }
-  i = 0;
-  while (i + 4 < r.length) {
-    sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
-    i = i + 5;
-  }
+  if (typeof _chromePlay === "function") _chromePlay(r);
 }
 var sfxHit = [220, 12, 8, 0, 3, 180, 10, 6, 0, 1];
 var sfxBlock = [140, 8, 6, 0, 3];
@@ -286,34 +277,19 @@ function control(f, k) {
     setAnim(f, "jumping");
     playSfx(sfxJump);
   }
-  /* EDGE-TRIGGERED ATTACKS (2026-08-31). This block polled the HELD
-     button every frame, so one physical tap (~40-80ms = 2-5 frames, and
-     more as the machine gets faster) re-fired playSfx every frame: the
-     punch sound stuttered 2-3x per press and f.atk was re-asserted the
-     whole time the button was down. setAnim self-guards so the animation
-     looked fine, which is why this hid for so long.
-     Fire on the RISING EDGE only — one press, one punch. A fighting game
-     wants exactly that; hold-to-repeat would be wrong here, unlike the
-     shooters where GAME_DESIGN.md's frames-cooldown pattern applies.
-     pPunch/pKick are OBJECT PROPERTIES, not locals, so they cost no env
-     slots against the 16-per-function wall. */
   if (!f.block && f.onGround) {
-    if (k.punch && !f.pPunch) {
+    if (k.punch) {
       f.atk = 1;
       f.atkKind = 1;
       setAnim(f, "high-punch");
       playSfx(sfxPunch);
-    } else if (k.kick && !f.pKick) {
+    } else if (k.kick) {
       f.atk = 1;
       f.atkKind = 2;
       setAnim(f, "high-kick");
       playSfx(sfxKick);
     }
   }
-  /* Track outside the block/onGround gate: a button held through a block
-     or a jump must not re-fire the instant the gate reopens. */
-  f.pPunch = k.punch ? 1 : 0;
-  f.pKick = k.kick ? 1 : 0;
   advanceAnim(f);
 }
 
