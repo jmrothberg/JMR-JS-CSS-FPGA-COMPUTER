@@ -2302,13 +2302,26 @@ module jmr_js_vm #(
        cost cycles, never correctness. PACMAN measured JOIN_FIND at 14%
        post-run-58; dynamic per-cell keys defeat the 4-way FF cache. */
     (* ram_style = "block" *) logic [23:0] jn_bucket [0:1023];
+    // 1W merge (the vstack/vframe recipe). jn_cache_remember has TWO call
+    // sites, so writing the array inside the task put two write statements
+    // on it and Vivado refused the attribute outright — "not inferred as
+    // ram due to incorrect usage" (run 64 synth log) — landing the whole
+    // 1024x24 bucket in fabric: ~13.8k LUTs + ~24.7k FFs on a design that
+    // is already fighting the router. One registered write port fixes it.
+    // The insert lands a cycle later; harmless here because the bucket is a
+    // pure cache whose candidate is confirm-verified before use, and a miss
+    // just falls through to the linear walk.
+    logic        jnb_we;
+    logic [9:0]  jnb_wa;
+    logic [23:0] jnb_wd;
     logic [7:0]  jn_bucket_gen;
     logic [23:0] jn_bucket_rdata;
     logic        jn_bucket_tried;
     logic [15:0] jn_btry /*verilator public_flat_rd*/; // 5th-way fires
     logic [15:0] jn_bmiss /*verilator public_flat_rd*/; // bucket candidates that failed confirm
     task automatic jn_cache_remember(input logic [15:0] id);
-        jn_bucket[jn_h[9:0]] <= {jn_bucket_gen, id};
+        begin jnb_we <= 1'b1; jnb_wa <= jn_h[9:0];
+              jnb_wd <= {jn_bucket_gen, id}; end
         if ((jn_hit_v[0] && jn_hit_i0 == id) ||
             (jn_hit_v[1] && jn_hit_i1 == id) ||
             (jn_hit_v[2] && jn_hit_i2 == id) ||
@@ -5771,7 +5784,8 @@ module jmr_js_vm #(
                 ((casestate_q == S_TXT_LD) || (state == S_TXT_LD)) ?
                     txt_val[9:0] : e32_intern_tos];
             e32_name_has_nos <= name_has[e32_intern_nos];
-            jn_bucket_rdata <= jn_bucket[
+            if (jnb_we) jn_bucket[jnb_wa] <= jnb_wd; // the ONLY write statement
+        jn_bucket_rdata <= jn_bucket[
                 // pre-warm during CONCAT: jn_h updates at the handoff beat,
                 // and the 5th way fires the very next beat — presenting the
                 // concat's final hash here has the row ready in time.
@@ -6179,7 +6193,7 @@ module jmr_js_vm #(
             vlu_we <= 1'b0;
             vtd_we <= 1'b0; nh_we <= 1'b0; txw_we <= 1'b0; cse_we <= 1'b0;
             cmn_we <= 1'b0; cmi_we <= 1'b0;
-            vol_we <= 1'b0; vel_we <= 1'b0;
+            vol_we <= 1'b0; vel_we <= 1'b0; jnb_we <= 1'b0;
             // imgd_pend is HANDSHAKE STATE (held across beats until sram_ack),
             // not a strobe - it must NOT be cleared here. The old imgd_we that
             // lived on this line was a one-shot BRAM write strobe.
