@@ -339,7 +339,11 @@ module jmr_console_engine (
             // run number - bump by hand each build (user: know which bit
             // is on the board from the glass)
             22: banner_char = " "; 23: banner_char = "R";
-            24: banner_char = "6"; 25: banner_char = "1";
+            // 2026-08-31: was stuck at 61 through runs 62 AND 63 — three
+            // bitstreams all announcing R61 on the glass is exactly what
+            // this string exists to prevent. Bump it IN THE SAME COMMIT as
+            // the payload, not as an afterthought at launch time.
+            24: banner_char = "6"; 25: banner_char = "4";
             default: banner_char = 8'h00;
         endcase
     endfunction

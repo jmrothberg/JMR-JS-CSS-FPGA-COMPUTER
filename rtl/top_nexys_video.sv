@@ -424,7 +424,16 @@ module top_nexys_video (
     logic [1:0] acfg_sync, mute_sync;
     always_ff @(posedge mclk) begin
         acfg_sync <= {acfg_sync[0], cfg_done};
-        mute_sync <= {mute_sync[0], ready_lit};
+        // MUTE = "no program is running", i.e. ~game_mode.
+        // Do NOT use ready_lit here (run 63 shipped that and was silent in
+        // every game): ready_lit means "console FSM is in C_IDLE/C_PROMPT",
+        // and the console is DISABLED during game_mode
+        // (jmr_js_core .enable(standalone_mode && !game_mode)), so its FSM
+        // parks in C_IDLE and ready_lit reads TRUE for the whole of a game —
+        // muting exactly when sound is wanted. game_mode clears on ESC and
+        // on halt_pulse, so BREAK->READY still silences a lingering note,
+        // and a halted program is silenced too (ready_lit would not).
+        mute_sync <= {mute_sync[0], ~game_mode};
     end
 
     jmr_psg u_psg (
