@@ -1164,6 +1164,16 @@ module jmr_js_vm #(
     // while the drawn bank sat behind it.
     logic        fb_dirty;
     logic        fbs_armed; // S_FB_SYNC dump-read settle beat
+    // run-62 board fix: draws must NOT race the DDR3 present. Sim measured
+    // 170k clk of margin and zero fence hits — but the present's true
+    // duration is SIM-INVISIBLE (bridge shared with scanout; run-32/33
+    // lesson). On glass, clear-first titles wiped the bank mid-copy:
+    // flashing INVFAST/MISSILE/ASTEROID/FLDFAST, vanishing DNKFAST player.
+    // The fence holds any fb write while a v64 frame-end present runs.
+    // Boot/console presents keep their proven overlap-tolerant semantics.
+    logic        fence_arm;   // set at S_FB_SYNC arm; cleared when copy ends
+    logic        fence_seen;  // busy actually observed high since the arm
+    logic [12:0] fence_wait;  // start-up watchdog (see below)
     // Port A write strobes (FPGA_FIT census): the FSM must not poke
     // these BRAM-attributed arrays directly (Vivado 8-7186 ignores
     // ram_style when the CPU always_ff writes them — the 2026-08-20
@@ -6393,6 +6403,28 @@ module jmr_js_vm #(
             // frame dirty and every frame re-presented forever.
             if (fb_we && state != S_FB_SYNC && casestate_q != S_FB_SYNC)
                 fb_dirty <= 1'b1;
+            // Fence lifecycle. busy rises a beat or two after the swap
+            // pulse, so we cannot simply wait for !busy. Track whether the
+            // copy was ever actually seen running:
+            //   seen && !busy  -> the copy finished; release.
+            //   never seen     -> this S_FB_SYNC did not start a present at
+            //                     all (paths that reach it without a swap,
+            //                     e.g. console/legacy). Release after a
+            //                     short watchdog or the fence would block
+            //                     EVERY later draw forever — that deadlock
+            //                     is what the joystick gate caught, and it
+            //                     would have been a black screen on glass.
+            // 8191 clks ~= 82 us: orders of magnitude beyond the 1-2 clk
+            // swap->busy latency, and negligible against a frame.
+            if (fence_arm) begin
+                if (fb_present_busy) fence_seen <= 1'b1;
+                if (fence_seen && !fb_present_busy)
+                    fence_arm <= 1'b0;
+                else if (!fence_seen && !fb_present_busy) begin
+                    if (fence_wait == 13'h1FFF) fence_arm <= 1'b0;
+                    else fence_wait <= fence_wait + 13'd1;
+                end
+            end
             // C1: the engine draws on the VM's behalf now, so the VM's own
             // fb_we never fires for rect/clear/blit/imgd — the implicit
             // frame-end present (fb_dirty at 14423) starved and legacy .JS
@@ -8031,7 +8063,13 @@ module jmr_js_vm #(
                 // S_EXEC body moved to hierarchical exec (keep_hierarchy); applied above when state matches.
                 // S_NAT body moved to hierarchical exec (keep_hierarchy); applied above when state matches.
                 S_CLEAR: begin
-                    if (!rast_wait) begin
+                    if (fence_arm && fb_present_busy) ; // present fence: HOLD ONLY.
+                    // Never fold this into the !rast_wait condition: the
+                    // next arm is `else if (rast_done)`, so a fenced beat
+                    // would finish the op without ever issuing it and the
+                    // draw vanishes (caught by the joystick gate: pixels
+                    // silently missing).
+                    else if (!rast_wait) begin
                         // C1: full-screen fill through the engine
                         rast_go <= 1'b1;
                         rast_mode <= 2'd0;
@@ -8063,9 +8101,12 @@ module jmr_js_vm #(
                     // bank IS the persistent canvas. This state now only
                     // waits out the DDR3 present (fb_swap pulsed on entry;
                     // busy asserts the following beat, so arm one beat).
-                    if (!fbs_armed)
+                    if (!fbs_armed) begin
                         fbs_armed <= 1'b1;
-                    else begin
+                        fence_arm <= 1'b1;
+                        fence_seen <= 1'b0;
+                        fence_wait <= '0;
+                    end else begin
                         /* run-62: the 768k-clk present spin is GONE — the VM
                            no longer waits out the DDR3 copy. It runs behind
                            GC + S_WAIT_FRAME + the next frame's JS.
@@ -8104,7 +8145,13 @@ module jmr_js_vm #(
                     if (rw == 10'd0 || rh == 10'd0) begin
                         hs_code(15'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
-                    end else if (!rast_wait) begin
+                    end else if (fence_arm && fb_present_busy) ; // present fence: HOLD ONLY.
+                    // Never fold this into the !rast_wait condition: the
+                    // next arm is `else if (rast_done)`, so a fenced beat
+                    // would finish the op without ever issuing it and the
+                    // draw vanishes (caught by the joystick gate: pixels
+                    // silently missing).
+                    else if (!rast_wait) begin
                         // C1: engine fill at 1 px/clk (dest bounds checked
                         // per pixel in the engine — the old per-pixel clip)
                         if (dbg_rect_n < 7'd64) begin
@@ -8134,6 +8181,7 @@ module jmr_js_vm #(
                     // rx,ry center; rw radius; x,y walk bbox; path_stroke = outline
                     // NEW: arc_ang = angular pie test (FM fill_circle a0/a1) via
                     // cross products against the sector edge vectors (no atan2)
+                    if (!(fence_arm && fb_present_busy)) begin // present fence
                     begin
                         logic signed [11:0] dx, dy;
                         logic [21:0] d2, r2, r2in;
@@ -8168,12 +8216,13 @@ module jmr_js_vm #(
                             end
                         end else y <= y + 10'd1;
                     end else x <= x + 10'd1;
+                    end // present fence
                 end
                 S_LINE: begin
                     // NEW: signed Bresenham (FM machine._line twin) — endpoints
                     // may sit offscreen; per-pixel bounds check, guard bails
                     // pathological walks loudly via dbg_path_ovf
-                    begin
+                    if (!(fence_arm && fb_present_busy)) begin // present fence
                         logic signed [17:0] e2;
                         logic signed [15:0] nx, ny;
                         logic signed [17:0] nerr;
@@ -9036,7 +9085,13 @@ module jmr_js_vm #(
                                 blit_div_ph <= 2'd0;
                             end
                         end else bdiv_i <= bdiv_i - 5'd1;
-                    end else if (!rast_wait) begin
+                    end else if (fence_arm && fb_present_busy) ; // present fence: HOLD ONLY.
+                    // Never fold this into the !rast_wait condition: the
+                    // next arm is `else if (rast_done)`, so a fenced beat
+                    // would finish the op without ever issuing it and the
+                    // draw vanishes (caught by the joystick gate: pixels
+                    // silently missing).
+                    else if (!rast_wait) begin
                         // C1: the DDA walk lives in jmr_raster_engine now —
                         // one SRAM fetch per WORD (one-word cache) at core
                         // rate, ~1 clk/px instead of >=2 VM beats/px. The
@@ -10179,7 +10234,9 @@ module jmr_js_vm #(
                         hs_st(S_TXT_DRAW);
                     // NEW: 8x8 glyph raster, one pixel per cycle, scaled k*k.
                     // Set bits only (transparent background, like FM fill_text).
-                    if (txt_ph == 4'd4)
+                    if (fence_arm && fb_present_busy)
+                        ; // present fence (whole-glyph-walk hold)
+                    else if (txt_ph == 4'd4)
                         txt_ph <= 4'd5; // wait txt_buf_rdata of new txt_i
                     else if (txt_ph == 4'd5) begin
                         font_raddr <= {txt_buf_rdata[6:0], 3'd0};
@@ -10587,7 +10644,13 @@ module jmr_js_vm #(
                         end
                         hs_code(15'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
-                    end else if (!rast_wait) begin
+                    end else if (fence_arm && fb_present_busy) ; // present fence: HOLD ONLY.
+                    // Never fold this into the !rast_wait condition: the
+                    // next arm is `else if (rast_done)`, so a fenced beat
+                    // would finish the op without ever issuing it and the
+                    // draw vanishes (caught by the joystick gate: pixels
+                    // silently missing).
+                    else if (!rast_wait) begin
                         // C1: linear DMA from the external snapshot region
                         // through the engine (was one arbiter round trip
                         // per PIXEL at VM-beat pace — MRDOFAST's 63% sink).
@@ -12143,6 +12206,12 @@ module jmr_js_vm #(
                 S_V64_CLEAR: begin
                     if (state != S_V64_CLEAR)
                         hs_st(S_V64_CLEAR);
+                    else if (fence_arm && fb_present_busy) ; // present fence: HOLD ONLY.
+                    // Never fold this into the !rast_wait condition: the
+                    // next arm is `else if (rast_done)`, so a fenced beat
+                    // would finish the op without ever issuing it and the
+                    // draw vanishes (caught by the joystick gate: pixels
+                    // silently missing).
                     else if (!rast_wait) begin
                         // C1: full-screen fill through the engine
                         rast_go <= 1'b1;
@@ -12221,7 +12290,13 @@ module jmr_js_vm #(
                         hs_ip(ip + 16'd1);
                         hs_code(15'(ops_base + ip + 16'd1));
                         hs_st(S_FETCH_WAIT);
-                    end else if (!rast_wait) begin
+                    end else if (fence_arm && fb_present_busy) ; // present fence: HOLD ONLY.
+                    // Never fold this into the !rast_wait condition: the
+                    // next arm is `else if (rast_done)`, so a fenced beat
+                    // would finish the op without ever issuing it and the
+                    // draw vanishes (caught by the joystick gate: pixels
+                    // silently missing).
+                    else if (!rast_wait) begin
                         // C1: hand the clipped rect to the full-rate engine
                         // (1 px/clk instead of 1 px/beat) and block on the
                         // rise-then-fall of rast_busy.
