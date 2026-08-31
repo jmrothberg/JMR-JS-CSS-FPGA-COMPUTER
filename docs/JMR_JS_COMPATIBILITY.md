@@ -992,7 +992,7 @@ Version 2.0 goal.**
 | drawImage PNG | no (paths) | **yes** | **yes** | engines |
 | keyboard (HTML binds) | yes | yes | yes | KEYBITS / joy_in |
 | CSS (game HUD) | wanted | wanted | wanted | later tiny subset |
-| Audio | `playSfx` / `sound` nid 42 | Chrome | no-op until PHY | ADAU1761 later |
+| Audio | `playSfx` / `sound` nid 42 | Chrome `_chromePlay` | card `sound()` nid 42 | ADAU1761 PHY in |
 | WebGL / Fetch | no | no | no | NEVER |
 
 Library HTML (`ASTEROID`, `AURORA`, `JOYDEMO`, `MRDO`, `MKPVP`) uses the **V1.0**

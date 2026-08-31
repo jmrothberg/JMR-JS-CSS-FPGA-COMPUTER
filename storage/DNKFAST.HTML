@@ -9,10 +9,19 @@
 <script>
 var sprites, Platform, Ladder, Barrel, DK, Mario;
 /* Chrome SFX: playSfx(packed). Packed = freq,vol,frames,slide,ch repeating.
-   ch 0-2 square, 3 noise. Missing r is silent. Do not call sound() until FPGA nid 42. */
+   ch 0-2 square, 3 noise. Missing r is silent. Chrome: _chromePlay. Card: sound() nid 42. */
 function playSfx(r) {
+  var i;
   if (!r) return;
-  if (typeof _chromePlay === "function") _chromePlay(r);
+  if (typeof _chromePlay === "function") {
+    _chromePlay(r);
+    return;
+  }
+  i = 0;
+  while (i + 4 < r.length) {
+    sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
+    i = i + 5;
+  }
 }
 var sfxJump = [420, 10, 10, 18, 0];
 var sfxDie = [280, 12, 28, -8, 0, 70, 10, 18, 0, 3];

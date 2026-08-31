@@ -112,6 +112,8 @@ python3 tools/make_sd_image.py create card.img
 #     V1.0: this step COMPILES each HTML into NAME.JSH on the card
 #     (the chip does not compile). PYTHON, FPGA-SIM, and BOARD all
 #     LOAD/RUN this image. Edit storage/ → rebuild here before F9.
+#     Default mints sound() (nid 42). Pass -soundoff to stub those
+#     calls (old bits that lack the native). Chrome Web Audio is never minted.
 
 sudo python3 tools/make_sd_image.py burn /dev/sdX
 # 6b. make AND burn — rebuild card.img from storage/, then raw-write µSD

@@ -13,11 +13,20 @@ var cvs=document.getElementById("c");
 var ctx=cvs.getContext("2d");
 var W=640,H=480;
 /* Chrome SFX: playSfx(packed). Packed = freq,vol,frames,slide,ch repeating.
-   ch 0-2 square, 3 noise. Missing r is silent. Do not call sound() until FPGA nid 42.
+   ch 0-2 square, 3 noise. Missing r is silent. Chrome: _chromePlay. Card: sound() nid 42.
    Recipes live on `state` — this IIFE is already at the 16-local ENV_SLOTS wall. */
 function playSfx(r) {
+  var i;
   if (!r) return;
-  if (typeof _chromePlay === "function") _chromePlay(r);
+  if (typeof _chromePlay === "function") {
+    _chromePlay(r);
+    return;
+  }
+  i = 0;
+  while (i + 4 < r.length) {
+    sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
+    i = i + 5;
+  }
 }
 var _skyFull=1;
 var _sx=[],_sy=[],_sw=[],_sh=[],_sn=0;
@@ -193,14 +202,16 @@ function spawnEnemy(){
   });
   playSfx(state.sfxIncoming);
 }
-function fire(){
+function fire(stick){
   // Board: stick tap stays held 2-3 frames; keyboard tap is 1. A
   // frames<canShootAt compare did not block those extra polls.
   // Decrementing canShootAt (tickGame-style) is the rate-limit —
   // hold-repeat still works when it hits 0. Aim path is untouched.
+  // Mushy Pmod FIRE stays held ~300-400ms; stick-only 24 so one press
+  // is one shot. Keyboard keep 10 — cadence unchanged.
   if(state.over) return;
   if(state.canShootAt>0) return;
-  state.canShootAt=10;
+  state.canShootAt=stick?24:10;
   var sx=BASE_X,sy=BASE_Y;
   var tx=state.crosshair.x,ty=state.crosshair.y;
   var dx=tx-sx,dy=ty-sy;
@@ -240,7 +251,7 @@ function update(dt){
   state.crosshair.x=Math.max(8,Math.min(W-8,state.crosshair.x));
   state.crosshair.y=Math.max(8,Math.min(H-50,state.crosshair.y));
   if(state.canShootAt>0) state.canShootAt=state.canShootAt-1;
-  if(held.fire||(j&16)||(j&32)) fire();
+  if(held.fire||(j&16)||(j&32)) fire((j&16)||(j&32));
   if(!state.waveActive){
     state.waveBreakTimer-=dt;
     if(state.waveBreakTimer<=0) startWave(state.wave);

@@ -61,6 +61,8 @@ After adding or changing a title:
 
 ```bash
 python3 tools/make_sd_image.py create card.img
+# default: minted .JSH includes sound() nid 42
+# python3 tools/make_sd_image.py create card.img -soundoff
 ```
 
 That seeds the FAT image from `storage/` root files (8.3 names on the card).
@@ -136,7 +138,7 @@ Stay on the **Complete** rows in the compatibility checklist. In particular:
 |---|---|
 | `var` / `let` / `const`, `if`, `for` / `while`, functions, objects, arrays | `eval`, `async`/`await`, `fetch`, modules as a real loader |
 | `Math.floor` `abs` `min` `max` `random` `sqrt` `Math.PI` | `Math.sin` `cos` `atan2` (not V1 natives — use a lookup table) |
-| `requestAnimationFrame`, `setTimeout`, `playSfx(packed)` (Chrome) | HTML `Audio` / `.play()` (stub). Catalog: `SNDDEMO.HTML`. `sound(ch,freq,vol,frames,slide)` is nid **42** (always succeeds; silent until ADAU1761 PHY). Do **not** write `function sound()` in HTML. Line-out PSG is Cursor plan `board_line-out_psg` Part B. |
+| `requestAnimationFrame`, `setTimeout`, `playSfx(packed)` | HTML `Audio` / `.play()` (stub). Catalog: `SNDDEMO.HTML`. Chrome: `_chromePlay`. Card: `sound(ch,freq,vol,frames,slide)` nid **42**. Do **not** write `function sound()` in HTML. |
 | `getContext("2d")`, `fillRect`, `clearRect`, `fillStyle` | `getContext("webgl")`, gradients, filters |
 | `beginPath` `moveTo` `lineTo` `arc` `stroke` `fill` `closePath` | `scale()` as a separate call; prefer `setTransform` if you must |
 | `strokeStyle` `lineWidth` `save` `restore` `translate` `rotate` | shadows, `globalCompositeOperation`, `strokeRect` |

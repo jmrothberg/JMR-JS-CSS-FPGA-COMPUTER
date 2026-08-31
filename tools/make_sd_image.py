@@ -7,10 +7,15 @@ lands on the card as 8.3 names.
 
 Usage:
   python3 tools/make_sd_image.py create card.img
+  python3 tools/make_sd_image.py create card.img -soundoff
   python3 tools/make_sd_image.py list card.img
   python3 tools/make_sd_image.py check
   sudo python3 tools/make_sd_image.py burn /dev/sdX
   sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
+
+Default mint writes sound() (nid 42) into each .JSH. Pass -soundoff to
+stub those calls so an old bitstream that lacks the native does not
+fault 5. Chrome Web Audio (<script data-host=chrome>) is never minted.
 
 Board FAT is 8.3 only — `NAME.HTML` becomes `NAME.HTM` via card_name_83.
 """
@@ -64,7 +69,9 @@ _SKIP_SUFFIX = {".JSH", ".JSB", ".MD", ".MDC", ".TXT", ".JSON"}
 _KEEP_SUFFIX = {".HTML", ".HTM", ".JS", ".PNG", ".DAT", ".BIN"}
 
 
-def compile_sidecars(files: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
+def compile_sidecars(
+    files: list[tuple[str, bytes]], *, sound: bool = True
+) -> list[tuple[str, bytes]]:
     """Mint a .JSH ProgramImage next to every HTML title on the card.
 
     **V1.0 (2026-08-25):** compile when you **make the card** — mint `.JSH`
@@ -73,6 +80,9 @@ def compile_sidecars(files: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
     Byte-identical to runtime/board_backend.py:274
     (`encode_html_chunk(compile_html_text(html))`) — same compiler, same
     encoder, different delivery. Never copy a stale `.JSH` from `storage/`.
+
+    sound=True (default): sound() stays nid 42. sound=False (-soundoff):
+    those calls become _stub so old bits without the native do not fault.
 
     Compile failures are reported and skipped, never silently dropped:
     a title without a .JSH simply has no standalone path yet.
@@ -90,7 +100,7 @@ def compile_sidecars(files: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
             continue
         try:
             html = data.decode("utf-8", "replace")
-            blob = encode_html_chunk(compile_html_text(html))
+            blob = encode_html_chunk(compile_html_text(html, sound=sound))
         except Exception as exc:  # compile error: report, keep going
             print(f"note: {name}: no .JSH sidecar ({type(exc).__name__}: {exc})")
             continue
@@ -393,8 +403,13 @@ def create_image(
     *,
     include_storage: bool = True,
     force: bool = False,
+    sound: bool = True,
 ) -> Path:
-    """Format a FAT32 image, optionally seed from storage/, then add `files`."""
+    """Format a FAT32 image, optionally seed from storage/, then add `files`.
+
+    sound=True (default) mints sound() as nid 42. sound=False (-soundoff)
+    stubs those calls for old bits that lack the native.
+    """
     image = format_fat32(size_bytes)
     pairs: list[tuple[str, bytes]] = []
     if include_storage:
@@ -411,7 +426,7 @@ def create_image(
     # Standalone: mint .JSH from the RAW html, before squash_long_html_lines
     # replaces fat asset lines with placeholders (the card HTML is display-only,
     # but the sidecar must be compiled from the real source).
-    sidecars = compile_sidecars(pairs)
+    sidecars = compile_sidecars(pairs, sound=sound)
     pairs, strip_notes = sanitize_bas_files(pairs)
     for n in strip_notes:
         print(f"note: {n}", file=sys.stderr)
@@ -626,6 +641,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="build the card even if a program breaks a board limit",
     )
+    p_create.add_argument(
+        "-soundoff",
+        "--soundoff",
+        action="store_true",
+        help="mint .JSH without sound() (nid 42); old bits that lack the native do not fault",
+    )
 
     sub.add_parser("check", help="lint storage/ against the board's LOAD limits")
 
@@ -648,6 +669,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_burn.add_argument("--no-verify", action="store_true")
     p_burn.add_argument("--force", action="store_true", help="ignore program problems")
+    p_burn.add_argument(
+        "-soundoff",
+        "--soundoff",
+        action="store_true",
+        help="mint .JSH without sound() (nid 42); old bits that lack the native do not fault",
+    )
 
     p_list = sub.add_parser("list", help="list root directory")
     p_list.add_argument("image", type=Path)
@@ -669,6 +696,7 @@ def main(argv: list[str] | None = None) -> int:
             pairs or None,
             include_storage=not args.no_storage,
             force=args.force,
+            sound=not args.soundoff,
         )
         # Report what landed on the card.
         vol = open_volume(args.image)
@@ -706,6 +734,7 @@ def main(argv: list[str] | None = None) -> int:
             create_image(
                 args.image, _parse_size(args.size), None,
                 include_storage=True, force=args.force,
+                sound=not args.soundoff,
             )
             print(f"built {args.image} from storage/")
         print(_lsblk(args.device))

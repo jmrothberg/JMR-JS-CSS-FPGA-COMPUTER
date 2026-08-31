@@ -217,19 +217,37 @@ def _lint_image_dom_props(src: str) -> "list[tuple[int,str,str]]":
     return hits
 
 
-def compile_html_text(html: str):
-    """Compile-on-RUN: current HTML <script> → Chunk. CompileError.line is HTML line."""
+def _stub_sound_calls(src: str) -> str:
+    """Replace sound(...) with _stub(...) so minted .JSH has no nid 42.
+
+    Used only by make_sd_image -soundoff (old bits that lack the native
+    fault 5 on unknown nid). Default mint keeps sound() as CALL_NATIVE 42.
+    Word-boundary + '(' so comments like "the sound native" stay put.
+    """
+    return re.sub(r"\bsound\s*\(", "_stub(", src)
+
+
+def compile_html_text(html: str, *, sound: bool = True):
+    """Compile-on-RUN: current HTML <script> → Chunk. CompileError.line is HTML line.
+
+    sound=True (default): sound() is nid 42. sound=False: those calls
+    become _stub (make_sd_image -soundoff). Chrome Web Audio stays out
+    either way — data-host=chrome is never minted.
+    """
     from functional_model.compiler import CompileError, compile_source
 
     spans = []
     bodies = []
-    # data-host=chrome is a browser-only Web Audio player. Skip it on mint
-    # so AudioContext never lands in the .JSH (board has no sound() native yet).
+    # data-host=chrome is a browser-only Web Audio player. Always skip it
+    # on mint so AudioContext never lands in the .JSH. Card audio is the
+    # sound() native (nid 42), default-on; -soundoff stubs those calls.
     for m in re.finditer(r"<script([^>]*)>(.*?)</script>", html, re.S | re.I):
         attrs = m.group(1) or ""
         if re.search(r'data-host\s*=\s*["\']chrome["\']', attrs, re.I):
             continue
         body = m.group(2)
+        if not sound:
+            body = _stub_sound_calls(body)
         h0 = html[: m.start(2)].count("\n") + 1
         bodies.append(body)
         spans.append((h0, body.count("\n") + 1))

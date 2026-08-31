@@ -8,10 +8,19 @@
 <canvas id="canvas" width="640" height="480"></canvas>
 <script>
 /* Chrome SFX: playSfx(packed). Packed = freq,vol,frames,slide,ch repeating.
-   ch 0-2 square, 3 noise. Missing r is silent. Do not call sound() until FPGA nid 42. */
+   ch 0-2 square, 3 noise. Missing r is silent. Chrome: _chromePlay. Card: sound() nid 42. */
 function playSfx(r) {
+  var i;
   if (!r) return;
-  if (typeof _chromePlay === "function") _chromePlay(r);
+  if (typeof _chromePlay === "function") {
+    _chromePlay(r);
+    return;
+  }
+  i = 0;
+  while (i + 4 < r.length) {
+    sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
+    i = i + 5;
+  }
 }
 var sfxWaka0 = [196, 10, 6, 0, 0];
 var sfxWaka1 = [246, 10, 6, 0, 0];

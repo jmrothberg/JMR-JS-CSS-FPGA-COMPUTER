@@ -12,10 +12,19 @@ var W = 640;
 var H = 480;
 
 /* Chrome SFX: playSfx(packed). Packed = freq,vol,frames,slide,ch repeating.
-   ch 0-2 square, 3 noise. Missing r is silent. Do not call sound() until FPGA nid 42. */
+   ch 0-2 square, 3 noise. Missing r is silent. Chrome: _chromePlay. Card: sound() nid 42. */
 function playSfx(r) {
+  var i;
   if (!r) return;
-  if (typeof _chromePlay === "function") _chromePlay(r);
+  if (typeof _chromePlay === "function") {
+    _chromePlay(r);
+    return;
+  }
+  i = 0;
+  while (i + 4 < r.length) {
+    sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
+    i = i + 5;
+  }
 }
 var sfxFire = [1200, 10, 4, -120, 0];
 var sfxExplode = [70, 12, 14, 0, 3, 90, 8, 10, -6, 1];
@@ -772,7 +781,10 @@ function stepShip() {
      are unchanged. */
   if (fireOn && fireWait === 0) {
     firePlayer();
-    fireWait = 10;
+    /* Keyboard tap is 1 tick; mushy Pmod FIRE1 stays held ~300-400ms.
+       Stick-only longer gap so one press is one shot. Keyboard keep 10
+       — hold-repeat and cadence stay the same. */
+    fireWait = (j & 16) ? 24 : 10;
   }
   fireWas = fireOn ? 1 : 0;
   if (hyperOn && !hyperWas) doHyper();
