@@ -138,7 +138,7 @@ Stay on the **Complete** rows in the compatibility checklist. In particular:
 |---|---|
 | `var` / `let` / `const`, `if`, `for` / `while`, functions, objects, arrays | `eval`, `async`/`await`, `fetch`, modules as a real loader |
 | `Math.floor` `abs` `min` `max` `random` `sqrt` `Math.PI` | `Math.sin` `cos` `atan2` (not V1 natives — use a lookup table) |
-| `requestAnimationFrame`, `setTimeout`, `playSfx(packed)` | HTML `Audio` / `.play()` (stub). Catalog: `SNDDEMO.HTML`. Chrome: `_chromePlay`. Card: `sound(ch,freq,vol,frames,slide)` nid **42**. Do **not** write `function sound()` in HTML. |
+| `requestAnimationFrame`, `setTimeout`, `playSfx(packed)` | HTML `Audio` / `.play()` (stub). **How:** [Sound](#sound) below. Catalog: `SNDDEMO.HTML`. |
 | `getContext("2d")`, `fillRect`, `clearRect`, `fillStyle` | `getContext("webgl")`, gradients, filters |
 | `beginPath` `moveTo` `lineTo` `arc` `stroke` `fill` `closePath` | `scale()` as a separate call; prefer `setTransform` if you must |
 | `strokeStyle` `lineWidth` `save` `restore` `translate` `rotate` | shadows, `globalCompositeOperation`, `strokeRect` |
@@ -163,15 +163,33 @@ mixer). Catalog: `SNDDEMO.HTML`.
 
 ## Sound
 
-Line-out is a 4-voice PSG (square 0–2, noise 3) through the Nexys Video
-ADAU1761 jack. The chip native is always-succeed; missing PHY / PYTHON
-is a silent no-op, not a fault.
+Teach this once. Copy it into every title that should beep. Walk the
+numbers in `LOAD "SNDDEMO.HTML"` then `RUN` (FIRE replay, L/R step).
 
-**Do not write `function sound()` in HTML** — that steals the native
-(same trap as `function joy()`).
+The jack is a **4-voice PSG**: channels **0–2** are square, channel **3**
+is noise. You do **not** mix audio in JavaScript. You poke a recipe; the
+PHY (or Chrome Web Audio) owns the envelope and turns it off.
+
+### Three files, two speakers, one recipe
+
+| Where you listen | What actually plays |
+|---|---|
+| Chrome (open `storage/NAME.HTML`) | `_chromePlay` inside `<script data-host="chrome">` (Web Audio) |
+| Card / FPGA / PYTHON (`LOAD` + `RUN`) | native `sound(ch, freq, vol, frames, slide)` — nid **42** |
+
+Same packed array. Mint **strips** `data-host="chrome"` so `AudioContext`
+never lands in the `.JSH`. Default `make_sd_image.py create card.img`
+keeps `sound()`. Pass `-soundoff` only for an old bit that lacks nid 42.
+
+**Never write `function sound()` in the game script.** That compiles as
+a user function and **steals** the native (same trap as `function joy()`).
+Chrome may set `window._chromePlay`. The game script only calls `playSfx`.
+
+### Step 1 — paste `playSfx` near the top of `<script>`
 
 ```javascript
-/* Packed recipe: freqHz, vol0_15, frames, slideHzPerFrame, ch, … */
+/* Packed: freqHz, vol0_15, frames, slideHzPerFrame, ch  repeating.
+   ch 0-2 square, 3 noise. Missing r is silent. */
 function playSfx(r) {
   var i;
   if (!r) return;
@@ -187,18 +205,75 @@ function playSfx(r) {
 }
 ```
 
-| Path | What runs |
-|---|---|
-| Chrome (`storage/NAME.HTML`) | `<script data-host="chrome">` defines `_chromePlay` (Web Audio). Mint **strips** that tag so `AudioContext` never lands in the `.JSH`. |
-| Card / FPGA / PYTHON | `_chromePlay` is absent → `sound(ch, freq, vol, frames, slide)` nid **42**. Envelope lives in the PHY; JS does not tick the beep. |
-| Card mint | Default writes nid 42. `python3 tools/make_sd_image.py create card.img -soundoff` stubs those calls (`_stub`) for old bits. |
+That is **two locals** (`r`, `i`) — well under the 16-local wall.
 
-`vol<=0` or `frames<=0` → skip that group. Missing `r` → silence. Two
-pokes on different channels overlap (explode = noise ch 3 + square ch 1).
-Do **not** put `tickSfx` in `rAF` — that hitch is real. `playSfx` is
-cheap (one `CALL_NATIVE`); a particle boom loop is not.
+### Step 2 — write recipes as number arrays
+
+Five numbers = one voice. Concatenate for overlap (two voices = ten
+numbers). `frames` is duration at 60 fps (`12` ≈ 200 ms). `slide` is
+Hz per frame (negative = drop). `vol` is 0–15.
+
+```javascript
+var sfxFire    = [1200, 10, 4, -120, 0];           /* short chirp, ch 0 */
+var sfxExplode = [70, 12, 14, 0, 3, 90, 8, 10, -6, 1]; /* noise + square */
+var sfxDie     = [200, 12, 28, -6, 0];
+```
+
+| Index | Field | Typical |
+|---|---|---|
+| 0 | `freqHz` | 55 thump … 1200 laser. Noise (`ch===3`) ignores pitch; still pass a number. |
+| 1 | `vol` 0–15 | 8–12 in game. 0 = skip that group. |
+| 2 | `frames` | 4 = tick, 12–16 = hit, 24–36 = die. 0 = skip. |
+| 3 | `slide` | `0` flat. `-80` laser drop. `+18` jump up. |
+| 4 | `ch` | `0` `1` `2` square (retrigger overlap). `3` noise. |
+
+A new poke on a **live** channel **retriggers** it (arcade overlap).
+Use two channels for explode, not two recipes on channel 0.
+
+### Step 3 — call it at the event, then return
+
+```javascript
+function firePlayer() {
+  if (shots.length >= 4) return;
+  playSfx(sfxFire);   /* one poke; do not tick this in rAF */
+  shots.push(makeShot());
+}
+```
+
+Do **not** put `tickSfx` / oscillators / `setTimeout` beeps in the game
+loop. `playSfx` is one `CALL_NATIVE`. A 0.3 s particle boom is what
+crawls the board — **vanish the sprite** and play the recipe.
+
+`playSfx(0)` and `playSfx()` are silent on purpose (`if (!r) return`).
+
+### Step 4 — Chrome preview (paste once, before `</body>`)
+
+Copy the whole tag from `storage/SNDDEMO.HTML` (search `data-host="chrome"`).
+It defines `window._chromePlay` so Step 1’s `typeof` check takes the Web
+Audio path. Card mint skips this tag. If you omit it, Chrome is silent
+and the board still beeps.
+
+### Step 5 — remint after you edit HTML
+
+```bash
+python3 tools/make_sd_image.py create card.img
+# board: sudo python3 tools/make_sd_image.py burn /dev/sdb
+```
+
+PYTHON / FPGA-SIM / BOARD `RUN` the minted `.JSH`, not live `storage/`.
+
+### Do not
+
+| Don’t | Why |
+|---|---|
+| `function sound() { … }` in the game `<script>` | Steals nid 42; chip plays your stub (silence). |
+| `<audio>` / `.play()` / `new Audio` | Stub. Never a product path. |
+| `tickSfx` in `requestAnimationFrame` | Per-frame mixer hitch (FIELD class). |
+| Call `sound()` only, skip `playSfx` | Chrome has no `sound` native; use the helper so both hosts hear. |
+| One `data:image` of a waveform | There is no PCM / sample RAM. Recipes only. |
 
 ---
+
 
 ## Disk names
 
