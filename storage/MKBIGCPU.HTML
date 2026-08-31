@@ -106,10 +106,19 @@ function stickBits() {
   return j;
 }
 /* Chrome SFX: playSfx(packed). Packed = freq,vol,frames,slide,ch repeating.
-   ch 0-2 square, 3 noise. Missing r is silent. Do not call sound() until FPGA nid 42. */
+   ch 0-2 square, 3 noise. Missing r is silent. Chrome: _chromePlay. Card: sound() nid 42. */
 function playSfx(r) {
+  var i;
   if (!r) return;
-  if (typeof _chromePlay === "function") _chromePlay(r);
+  if (typeof _chromePlay === "function") {
+    _chromePlay(r);
+    return;
+  }
+  i = 0;
+  while (i + 4 < r.length) {
+    sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
+    i = i + 5;
+  }
 }
 var sfxHit = [220, 12, 8, 0, 3, 180, 10, 6, 0, 1];
 var sfxBlock = [140, 8, 6, 0, 3];
@@ -322,26 +331,37 @@ function control(f, k) {
     setAnim(f, "jumping");
     playSfx(sfxJump);
   }
+  /* EDGE-TRIGGERED ATTACKS (2026-08-31) — see the same fix in MKBIG.HTML.
+     Polling the HELD button re-fired playSfx every frame, so one tap
+     (~40-80ms = 2-5 frames, worse as the machine speeds up) stuttered the
+     punch sound 2-3x and held f.atk asserted. setAnim self-guards, so the
+     animation looked right and this hid. One press, one attack.
+     pPunch/pKick/pSpecial are object PROPERTIES — no env-slot cost. */
   if (!f.block && f.onGround) {
-    if (k.special) {
+    if (k.special && !f.pSpecial) {
       if (tryThrow(f)) {
         f.atk = 1;
         f.atkKind = 3;
         setAnim(f, "uppercut");
         playSfx(sfxThrow);
       }
-    } else if (k.punch) {
+    } else if (k.punch && !f.pPunch) {
       f.atk = 1;
       f.atkKind = 1;
       setAnim(f, "high-punch");
       playSfx(sfxPunch);
-    } else if (k.kick) {
+    } else if (k.kick && !f.pKick) {
       f.atk = 1;
       f.atkKind = 2;
       setAnim(f, "high-kick");
       playSfx(sfxKick);
     }
   }
+  /* Track outside the gate so a button held through a block or jump does
+     not re-fire the moment the gate reopens. */
+  f.pPunch = k.punch ? 1 : 0;
+  f.pKick = k.kick ? 1 : 0;
+  f.pSpecial = k.special ? 1 : 0;
   advanceAnim(f);
 }
 
