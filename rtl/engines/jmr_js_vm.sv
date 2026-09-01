@@ -1173,6 +1173,20 @@ module jmr_js_vm #(
     // empty bank on the very next frame_tick — the glass went black
     // while the drawn bank sat behind it.
     logic        fb_dirty;
+    // srcLen (nid 43) reads the console's src_len. That register lives in
+    // the CORE clock domain while the VM runs on clk/VM_CLK_DIV, and feeding
+    // it straight into exec64 put a cross-domain combinational path into the
+    // vst_wdata funnel — the worst cone in the design (103 logic levels).
+    // Run 65 routed at WNS -0.661 with EVERY violator on that path.
+    // Two flops in the VM domain fix both problems: they break the path and
+    // make the crossing a proper synchroniser. src_len is quasi-static (it
+    // changes on LOAD / EDIT, never mid-compile), so the extra beat of
+    // latency is invisible to the compiler reading it.
+    logic [17:0] src_len_q1, src_len_q2;
+    always_ff @(posedge clk) begin
+        src_len_q1 <= src_len_i;
+        src_len_q2 <= src_len_q1;
+    end
     logic        csr_pend;  // S_CSRAM request issued, waiting on sram_ack
     // S_CSRAM mode map (3 bits — was 2, widened for mode 4):
     //   0 srcByte  1 stgRead  2 stgWrite  3 artWrite2  4 srcWrite
@@ -4486,7 +4500,7 @@ module jmr_js_vm #(
         .looping_q(e64_looping_q),
         .machine_fault_q(e64_machine_fault_q),
         .minmax_acc_q(e64_minmax_acc_q),
-        .src_len_i(src_len_i),
+        .src_len_i(src_len_q2),
         .cmp_done_q(cmp_done_o),
         .cmp_status_q(cmp_status_o),
         .cmp_len_q(cmp_len_o),
