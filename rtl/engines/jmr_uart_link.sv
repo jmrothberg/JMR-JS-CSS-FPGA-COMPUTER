@@ -164,6 +164,7 @@ module jmr_uart_link #(
     input  logic [31:0] vm_hdbg = 32'd0,
     input  logic [31:0] vm_fdbg = 32'd0,
     input  logic        vm_fdbg_v = 1'b0,
+    input  logic [47:0] vm_gdbg = 48'd0,
     input  logic [127:0] vm_ftrace = 128'd0,
     // NEW: HTML RUN .JSH stream (0xFD + u32 LE length + payload)
     output logic       jsb_tether_stb,
@@ -286,7 +287,7 @@ module jmr_uart_link #(
     typedef enum logic [4:0] {
         HB_IDLE, HB_HDR, HB_ROW, HB_ROW2, HB_COLON, HB_BYTE, HB_NL, HB_K, HB_KH, HB_KL, HB_KNL,
         HB_V, HB_VN, HB_VNL, HB_E2, HB_E3,
-        HB_H, HB_HN, HB_F, HB_FN, HB_T, HB_TN
+        HB_H, HB_HN, HB_F, HB_FN, HB_T, HB_TN, HB_G, HB_GN
     } hb_t;
     hb_t hb_state;
     // run-60 observability serializers
@@ -296,6 +297,9 @@ module jmr_uart_link #(
     logic [2:0]  h_nib;
     logic [3:0]  f_nib;
     logic [4:0]  t_nib;
+    logic        g_pending;
+    logic [47:0] g_latch;
+    logic [3:0]  g_nib;
     logic        dump_active;
     logic        dump_game;     // latched at dump start
     logic [21:0] dump_div;
@@ -345,6 +349,7 @@ module jmr_uart_link #(
             h_pending <= 1'b0; h_latch <= 32'd0;
             f_pending <= 1'b0; f_latch <= 32'd0; fp_latch <= 32'd0;
             t_pending <= 1'b0; t_latch <= 128'd0; t_nib <= 5'd0;
+            g_pending <= 1'b0; g_latch <= 48'd0; g_nib <= 4'd0;
             fdbg_v_q <= 1'b0;
             vfault_q <= 1'b0; dump_active_q <= 1'b0;
             d_code_q <= 8'd0; d_dwell <= 26'd0;
@@ -384,6 +389,10 @@ module jmr_uart_link #(
                     fp_latch  <= vm_hdbg;
                     t_pending <= 1'b1;
                     t_latch   <= vm_ftrace;
+                    // G-line: {fault_site16, fault_arg32} — the site that
+                    // faulted and the value it refused (index / nid).
+                    g_pending <= 1'b1;
+                    g_latch   <= vm_gdbg;
                 end
                 // storage stall telemetry: after ~0.67s of CONTINUOUS busy,
                 // emit the current state every ~0.17s. Catches parked AND
@@ -444,6 +453,10 @@ module jmr_uart_link #(
                         t_pending <= 1'b0;
                         t_nib <= 5'd31;
                         hb_state <= HB_T;
+                    end else if (g_pending && !tx_busy && !dump_active) begin
+                        g_pending <= 1'b0;
+                        g_nib <= 4'd11;
+                        hb_state <= HB_G;
                     end else if (h_pending && !tx_busy && !dump_active) begin
                         h_pending <= 1'b0;
                         h_nib <= 3'd7;
@@ -523,6 +536,15 @@ module jmr_uart_link #(
                 end
                 HB_T: if (!tx_busy) begin
                     wr_en <= 1'b1; wr_data <= "T"; hb_state <= HB_TN;
+                end
+                HB_G: if (!tx_busy) begin
+                    wr_en <= 1'b1; wr_data <= "G"; hb_state <= HB_GN;
+                end
+                HB_GN: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= hex_digit(g_latch[{g_nib, 2'b00} +: 4]);
+                    if (g_nib == 4'd0) hb_state <= HB_VNL;
+                    else g_nib <= g_nib - 4'd1;
                 end
                 HB_TN: if (!tx_busy) begin
                     wr_en <= 1'b1;

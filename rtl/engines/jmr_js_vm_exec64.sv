@@ -130,6 +130,8 @@ module jmr_js_vm_exec64 (
     output logic [15:0] dbg_json_ovf_q,
     output logic [15:0] dbg_path_ovf_q,
     output logic [7:0] fault_code_q,
+    output logic [15:0] fault_site_q,
+    output logic [31:0] fault_arg_q,   // G-line: the value that faulted (index/nid)
     output logic [18:0] fb_dump_addr_q,
     output logic fb_dump_sel_q,
     output logic fb_swap_q,
@@ -1369,6 +1371,7 @@ module jmr_js_vm_exec64 (
     logic [2:0] venvw_q /*verilator public_flat_rd*/, venvw_n;
     // Bring-up: which fault arm fired (source line of the assignment).
     logic [15:0] fault_site /*verilator public_flat_rd*/, fault_site_n;
+    logic [31:0] fault_arg, fault_arg_n;
     logic [6:0] tmr_i_q, tmr_i_n;
     logic [1:0] tmr_arm_q, tmr_arm_n; // #66b: 2-beat settle per slot
     logic tmr_found_q, tmr_found_n;
@@ -1468,6 +1471,8 @@ module jmr_js_vm_exec64 (
     assign dbg_path_ovf_q = dbg_path_ovf;
     logic [7:0] fault_code /*verilator public_flat_rd*/;
     assign fault_code_q = fault_code;
+    assign fault_site_q = fault_site;
+    assign fault_arg_q  = fault_arg;
     logic [18:0] fb_dump_addr;
     assign fb_dump_addr_q = fb_dump_addr;
     logic fb_dump_sel;
@@ -1988,6 +1993,7 @@ module jmr_js_vm_exec64 (
             cmp_status <= 8'd0;
             cmp_len <= 21'd0;
             cmp_msglen <= 7'd0;
+            fault_arg <= 32'd0;
             ctor_cur <= V64_UNDEFINED;
             ctor_csp <= 8'd0;
             cm_scan <= 1'b0;
@@ -2188,6 +2194,7 @@ module jmr_js_vm_exec64 (
                 json_wp <= json_wp_n;
                 looping <= looping_n;
                 machine_fault <= machine_fault_n;
+                fault_arg <= fault_arg_n;
                 minmax_acc <= minmax_acc_n;
                 cmp_done <= cmp_done_n;
                 cmp_status <= cmp_status_n;
@@ -3297,6 +3304,7 @@ module jmr_js_vm_exec64 (
         looping_n = looping;
         machine_fault_n = machine_fault;
         fault_site_n = fault_site;
+        fault_arg_n = fault_arg;
         minmax_acc_n = minmax_acc;
         cmp_done_n = cmp_done;
         cmp_status_n = cmp_status;
@@ -4910,6 +4918,7 @@ module jmr_js_vm_exec64 (
                                                     machine_fault_n = 1'b1;
                                                     fault_code_n = 8'd5;
                                                     fault_site_n = 16'd4460;
+                                                    fault_arg_n = 32'(si);
                                                     running_n = 1'b0;
                                                     state_n = S_DONE;
                                                 end else begin
@@ -4952,6 +4961,7 @@ module jmr_js_vm_exec64 (
                                                     machine_fault_n = 1'b1;
                                                     fault_code_n = 8'd5;
                                                     fault_site_n = 16'd4480;
+                                                    fault_arg_n = 32'(sw);
                                                     running_n = 1'b0;
                                                     state_n = S_DONE;
                                                 end else begin
@@ -4984,6 +4994,7 @@ module jmr_js_vm_exec64 (
                                                     machine_fault_n = 1'b1;
                                                     fault_code_n = 8'd5;
                                                     fault_site_n = 16'd4497;
+                                                    fault_arg_n = 32'(si);
                                                     running_n = 1'b0;
                                                     state_n = S_DONE;
                                                 end else begin
@@ -5014,6 +5025,7 @@ module jmr_js_vm_exec64 (
                                                     machine_fault_n = 1'b1;
                                                     fault_code_n = 8'd5;
                                                     fault_site_n = 16'd4523;
+                                                    fault_arg_n = 32'(sn);
                                                     running_n = 1'b0;
                                                     state_n = S_DONE;
                                                 end else begin
@@ -5032,6 +5044,7 @@ module jmr_js_vm_exec64 (
                                             machine_fault_n = 1'b1;
                                             fault_code_n = 8'd5;
                                             fault_site_n = 16'd4183;
+                                            fault_arg_n = {24'd0, opw[15:8]}; // the unknown nid
                                             running_n = 1'b0;
                                             state_n = S_DONE;
                                         end

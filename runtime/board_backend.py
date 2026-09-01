@@ -191,6 +191,25 @@ def _parse_f_line(line: str):
     }
 
 
+def _parse_g_line(line: str):
+    """Parse `G<12 hex>` — {fault_site16, fault_arg32}: the RTL site id that
+    faulted and the value it refused (an index or an unknown native id).
+    None if missing/torn (older bits never send G)."""
+    if not isinstance(line, str) or not line or line[0] not in ("G", "g"):
+        return None
+    body = line[1:].strip()
+    if len(body) < 12:
+        return None
+    try:
+        v = int(body[:12], 16)
+    except ValueError:
+        return None
+    site = (v >> 32) & 0xFFFF
+    arg = v & 0xFFFFFFFF
+    arg_signed = arg - 0x100000000 if arg & 0x80000000 else arg
+    return {"fsite": site, "arg": arg, "arg_signed": arg_signed}
+
+
 def _parse_t_line(line: str):
     """Parse `T<32 hex>` — last 8 committed ips, newest first. None if torn."""
     if not isinstance(line, str) or not line or line[0] not in ("T", "t"):
@@ -255,6 +274,7 @@ class BoardBackend(RuntimeBackend):
         # until a well-formed line arrives so older bits keep dashed fields.
         self._heap_live = None  # (env, arr, obj) from the H-line
         self._fault_snap = None  # dict from the F-line
+        self._fault_gsnap = None  # dict from the G-line (fsite + faulting value)
         self._fault_ip_trail = None  # list[8] from the T-line
         # Last K-line arrival (monotonic) — board-keyboard keystroke proof
         # for the Architecture Monitor's Keyboard block heat.
@@ -341,6 +361,14 @@ class BoardBackend(RuntimeBackend):
                     f"state=0x{parsed_f['state']:02X} vcsp={parsed_f['vcsp']} "
                     f"vsp={parsed_f['vsp']} env={parsed_f['env']} arr={parsed_f['arr']} "
                     f"obj={parsed_f['obj']}"
+                )
+                continue
+            parsed_g = _parse_g_line(line)
+            if parsed_g is not None:
+                self._fault_gsnap = parsed_g
+                self._log.note(
+                    f"GSITE fsite={parsed_g['fsite']} "
+                    f"arg={parsed_g['arg_signed']} (0x{parsed_g['arg']:08X})"
                 )
                 continue
             parsed_t = _parse_t_line(line)
@@ -617,6 +645,11 @@ class BoardBackend(RuntimeBackend):
             snap["board_fault_env"] = self._fault_snap["env"]
             snap["board_fault_arr"] = self._fault_snap["arr"]
             snap["board_fault_obj"] = self._fault_snap["obj"]
+        if self._fault_gsnap is not None:
+            # G-line: exact RTL fault site + the value it refused. Feed the
+            # generic fsite slot too — for exec64 faults it is now real.
+            snap["fsite"] = self._fault_gsnap["fsite"]
+            snap["board_fault_arg"] = self._fault_gsnap["arg_signed"]
         if self._fault_ip_trail is not None:
             snap["board_ip_trail"] = self._fault_ip_trail
         return snap

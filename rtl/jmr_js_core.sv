@@ -34,6 +34,7 @@ module jmr_js_core #(
     output logic [31:0] vm_fdbg,
     output logic        vm_fdbg_v,
     output logic [127:0] vm_ftrace,
+    output logic [47:0]  vm_gdbg,
     // sound-native poke (core clock; PSG leaf + CDC live in the top)
     output logic        snd_tgl,
     output logic [1:0]  snd_ch,
@@ -567,7 +568,7 @@ module jmr_js_core #(
         .busy(vm_busy), .done(vm_done),
         .vdbg_o(vdbg_o), .vdbg_fault_o(vdbg_fault_o),
         .vm_hdbg(vm_hdbg), .vm_fdbg(vm_fdbg), .vm_fdbg_v(vm_fdbg_v),
-        .vm_ftrace(vm_ftrace),
+        .vm_ftrace(vm_ftrace), .vm_gdbg(vm_gdbg),
         .snd_tgl(snd_tgl), .snd_ch(snd_ch), .snd_freq(snd_freq),
         .snd_vol(snd_vol), .snd_frames(snd_frames), .snd_slide(snd_slide),
         .fb_we(vm_fb_we), .fb_waddr(vm_fb_waddr),

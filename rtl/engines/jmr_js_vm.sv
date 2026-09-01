@@ -59,6 +59,7 @@ module jmr_js_vm #(
     output logic [31:0] vm_fdbg,
     output logic        vm_fdbg_v,
     output logic [127:0] vm_ftrace,
+    output logic [47:0]  vm_gdbg,   // {fault_site, fault_arg} — latch on vm_fdbg_v edge
     // sound(ch,freq,vol,frames,slide) poke -> PSG PHY (top-level leaf)
     output logic        snd_tgl,
     output logic [1:0]  snd_ch,
@@ -664,6 +665,7 @@ module jmr_js_vm #(
     assign vm_hdbg = {dbg_env_live[9:0], dbg_arr_live, dbg_obj_live};
     assign vm_fdbg = fsnap;
     assign vm_fdbg_v = fsnap_v;
+    assign vm_gdbg = {fault_site, e64_fault_arg_q};
     assign vm_ftrace = {ipring[7], ipring[6], ipring[5], ipring[4],
                         ipring[3], ipring[2], ipring[1], ipring[0]};
     logic [15:0] n_obj /*verilator public_flat_rd*/, n_arr /*verilator public_flat_rd*/;
@@ -3584,6 +3586,8 @@ module jmr_js_vm #(
     logic [15:0] e64_dbg_json_ovf_q;
     logic [15:0] e64_dbg_path_ovf_q;
     logic [7:0] e64_fault_code_q;
+    logic [15:0] e64_fault_site_q;
+    logic [31:0] e64_fault_arg_q;
     logic [18:0] e64_fb_dump_addr_q;
     logic e64_fb_dump_sel_q;
     logic e64_fb_swap_q;
@@ -4441,6 +4445,8 @@ module jmr_js_vm #(
         .dbg_json_ovf_q(e64_dbg_json_ovf_q),
         .dbg_path_ovf_q(e64_dbg_path_ovf_q),
         .fault_code_q(e64_fault_code_q),
+        .fault_site_q(e64_fault_site_q),
+        .fault_arg_q(e64_fault_arg_q),
         .fb_dump_addr_q(e64_fb_dump_addr_q),
         .fb_dump_sel_q(e64_fb_dump_sel_q),
         .fb_swap_q(e64_fb_swap_q),
@@ -15049,6 +15055,9 @@ module jmr_js_vm #(
                 (hs64 || casestate == S_DONE)) begin
                 machine_fault <= 1'b1;
                 fault_code <= e64_fault_code_q;
+                // G-line: exec64's site never reached this register before —
+                // every exec64 fault reported the parent's stale fsite.
+                fault_site <= e64_fault_site_q;
             end
             // vstack is 1024 deep; fault before any index wraps (measured
             // gameplay peak is 71, flat array literals push one slot per
