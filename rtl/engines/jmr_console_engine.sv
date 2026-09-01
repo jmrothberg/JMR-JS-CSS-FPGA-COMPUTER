@@ -533,7 +533,7 @@ module jmr_console_engine (
             // bitstreams all announcing R61 on the glass is exactly what
             // this string exists to prevent. Bump it IN THE SAME COMMIT as
             // the payload, not as an afterthought at launch time.
-            24: banner_char = "6"; 25: banner_char = "6";
+            24: banner_char = "6"; 25: banner_char = "7";
             default: banner_char = 8'h00;
         endcase
     endfunction
