@@ -108,14 +108,15 @@ make -C sim sim_server_synth
 .venv/bin/python tools/check_runtime_parity.py
 # 5. PYTHON ↔ FPGA-SIM RTL glass smoke (bytecode path; no dukpy cheat)
 
-python3 tools/make_artx.py MYGAME      # PNGs → quantized MYGAME.ARTX
-python3 tools/make_artjs.py MYGAME --patch-html   # ARTX → Chrome MYGAME.ARTJS
+python3 tools/make_artx.py MYGAME      # PNGs → ARTX + ARTJS; wires Chrome __jmrSpr hook
+python3 tools/make_artx.py /path/to/game.html  # copy HTML+ARTX+ARTJS into storage/; PNGs stay put
 python3 tools/make_sd_image.py create card.img
 python3 tools/make_sd_image.py create card.img -nojsh
 # 6a. new art title, then card. You write HTML + MYGAME-0.png, MYGAME-1.png, …
 #     and `img.src = "jmr:spr:N"` plus window.JMR_SPR listing those PNGs.
 #     Do not write .ARTX / .ARTJS by hand (those two tools do). After a PNG
-#     edit, re-run make_artx + make_artjs + card create.
+#     edit, re-run make_artx + card create (make_artx also writes ARTJS and
+#     wires the Chrome __jmrSpr hook).
 #     Card gets HTML + .ARTX (as .ART) + minted .JSH. PNG / ARTJS stay
 #     on the host. V1.0 default COMPILES each HTML into NAME.JSH here
 #     (the chip does not compile). PYTHON, FPGA-SIM, and BOARD all

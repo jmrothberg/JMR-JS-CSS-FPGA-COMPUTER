@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import base64
 import io
+import re
 import sys
 from pathlib import Path
 
@@ -100,6 +101,31 @@ _IIFE_GUARD = (
     '  if (typeof __jmrSpr === "undefined") { return; }\n'
     "  var d = Object.getOwnPropertyDescriptor"
 )
+# Minified one-liner (BOMBERMA): var P=window.JMR_SPR; ... m?P[+m[1]]:v
+# Pretty-printed _PNG_SET does not match that, so Chrome kept loading PNGs.
+_MIN_PNG_IIFE = re.compile(
+    r"\(function\s*\(\)\s*\{\s*"
+    r"var P\s*=\s*window\.JMR_SPR\s*;"
+    r".*?"
+    r"d\.set\.call\(this,\s*m\s*\?\s*P\[\+m\[1\]\]\s*:\s*v\)\s*;"
+    r".*?"
+    r"\}\)\s*\(\)\s*;",
+    re.S,
+)
+_ARTJS_IIFE = (
+    "(function () {\n"
+    '  if (typeof __jmrSpr === "undefined") { return; }\n'
+    "  var d = Object.getOwnPropertyDescriptor("
+    'HTMLImageElement.prototype, "src");\n'
+    '  Object.defineProperty(HTMLImageElement.prototype, "src", {\n'
+    "    get: function () { return d.get.call(this); },\n"
+    "    set: function (v) {\n"
+    "      var m = /^jmr:spr:(\\d+)$/.exec(String(v));\n"
+    "      d.set.call(this, m ? (__jmrSpr[+m[1]] || v) : v);\n"
+    "    }\n"
+    "  });\n"
+    "})();"
+)
 
 
 def patch_html(stem: str) -> str:
@@ -133,6 +159,11 @@ def patch_html(stem: str) -> str:
     if _PNG_SET in html:
         html = html.replace(_PNG_SET, _ART_SET, 1)
         notes.append("interceptor → __jmrSpr")
+    elif "__jmrSpr[+m" not in html:
+        # lambda so (\d+) in the IIFE is not a re.sub backref
+        html, nsub = _MIN_PNG_IIFE.subn(lambda _m: _ARTJS_IIFE, html, count=1)
+        if nsub:
+            notes.append("interceptor → __jmrSpr")
 
     if _ART_SET in html and 'typeof __jmrSpr === "undefined"' not in html:
         if _IIFE_OPEN in html:

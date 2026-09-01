@@ -4,10 +4,14 @@
 New game (HTML already has jmr:spr:N + window.JMR_SPR listing STEM-N.png):
 
   python3 tools/make_artx.py MYGAME
+  python3 tools/make_artx.py /path/to/bomberman.html
 
-That reads the PNGs in JMR_SPR order and writes MYGAME.ARTX. Then:
+A path is looked up as-is (not uppercased). The tool copies STEM.HTML,
+writes STEM.ARTX + STEM.ARTJS, and wires the Chrome shim so jmr:spr
+loads __jmrSpr from the .ARTJS (same hook as INVF/DNKF). PNGs stay next
+to the source HTML. Stem is the filename, card 8.3 (bomberman.html →
+BOMBERMA). A bare MYGAME still reads storage/MYGAME.HTML. Then:
 
-  python3 tools/make_artjs.py MYGAME --patch-html   # ARTX → Chrome .ARTJS
   python3 tools/make_sd_image.py create card.img
 
 No args still migrates the old inlined-base64 titles to short names
@@ -145,41 +149,82 @@ def _artx_table(path: Path) -> list[tuple[int, int]]:
     return [(w, h) for w, h, _pix in sprites]
 
 
-def _images_from_jmr_spr(names: list[str]):
+def _images_from_jmr_spr(names: list[str], *, base: Path = STORAGE):
     from PIL import Image as PILImage
 
     out = []
     for name in names:
-        path = STORAGE / name
+        path = Path(name)
+        if not path.is_absolute():
+            path = base / name
         if not path.is_file():
             raise SystemExit(f"JMR_SPR lists {name} but {path} is missing")
         out.append(PILImage.open(path).convert("RGBA"))
     return out
 
 
-def pack_from_pngs(stem: str) -> str:
-    """Quantize STEM-N.png (JMR_SPR order) → STEM.ARTX. Does not rewrite HTML."""
-    html_path = STORAGE / f"{stem}.HTML"
-    if not html_path.is_file():
-        raise SystemExit(f"missing {html_path}")
-    html = html_path.read_text(encoding="utf-8")
+def _card_stem(filename: str) -> str:
+    """8.3 card stem from a filename. bomberman.html → BOMBERMA."""
+    return Path(filename).stem.upper()[:8]
+
+
+def _is_html_path(arg: str) -> bool:
+    """True when ARG is a filesystem path, not a storage/ stem.
+
+    Do not uppercase before lookup — Linux paths are case-sensitive.
+    A bare MYGAME / MYGAME.HTML is still the storage/ stem.
+    """
+    if "/" in arg or arg.startswith("~"):
+        return True
+    return Path(arg).is_file()
+
+
+def pack_from_pngs(stem: str, *, html_path: Path | None = None) -> str:
+    """Quantize JMR_SPR PNGs → storage/STEM.ARTX.
+
+    html_path: read that file (any case) and copy it to storage/STEM.HTML.
+    PNGs stay next to the source HTML — they are not copied into storage/.
+    No html_path: existing title already in storage/ (PNGs also there).
+    """
+    dest_html = STORAGE / f"{stem}.HTML"
+    dest_artx = STORAGE / f"{stem}.ARTX"
+    if html_path is None:
+        src_html_path = dest_html
+        png_dir = STORAGE
+        copy_html = False
+    else:
+        src_html_path = html_path.expanduser().resolve()
+        png_dir = src_html_path.parent
+        copy_html = src_html_path != dest_html.resolve()
+    if not src_html_path.is_file():
+        raise SystemExit(f"missing {src_html_path}")
+    html = src_html_path.read_text(encoding="utf-8")
     names = read_jmr_spr(html)
     if not names:
         raise SystemExit(
-            f"{stem}: no window.JMR_SPR in {html_path.name} — list the PNG "
+            f"{stem}: no window.JMR_SPR in {src_html_path.name} — list the PNG "
             f"filenames so this tool knows sheet order"
         )
-    images = _images_from_jmr_spr(names)
+    images = _images_from_jmr_spr(names, base=png_dir)
     src = _game_source(html)
     harvested = _harvest_source_colors(src)
     palette = _build_title_palette(images, harvested)
     sprites = _quantize_sprites(images, palette)
     artx = build_artx(palette, sprites)
-    dest = STORAGE / f"{stem}.ARTX"
-    dest.write_bytes(artx)
+    if copy_html:
+        dest_html.write_text(html, encoding="utf-8")
+    dest_artx.write_bytes(artx)
+    # Chrome cannot read .ARTX. Write .ARTJS and point jmr:spr at __jmrSpr
+    # (not the PNG names). PNGs stay next to the source HTML.
+    from tools.make_artjs import artjs_for, patch_html  # noqa: E402
+
+    dest_artjs = STORAGE / f"{stem}.ARTJS"
+    dest_artjs.write_text(artjs_for(artx), encoding="utf-8")
+    chrome = patch_html(stem)
+    copied = f"{dest_html.name} + " if copy_html else ""
     return (
-        f"ok {html_path.name} + {len(names)} png → {dest.name} "
-        f"({len(artx)} bytes)"
+        f"ok {src_html_path} + {len(names)} png → {copied}{dest_artx.name} "
+        f"+ {dest_artjs.name} ({len(artx)} bytes) [{chrome.strip()}]"
     )
 
 
@@ -294,7 +339,8 @@ def main(argv=None) -> int:
     ap.add_argument(
         "names",
         nargs="*",
-        help="MYGAME (PNG→ARTX) or INVADERS (migrate). Default: migrate the seven.",
+        help="MYGAME (storage stem), /path/to/game.html (copy HTML+ARTX+ARTJS "
+        "into storage/, wire Chrome), or INVADERS (migrate). Default: migrate the seven.",
     )
     ap.add_argument(
         "--no-check",
@@ -302,15 +348,17 @@ def main(argv=None) -> int:
         help="skip the byte-identical mint compare (faster, not the gate)",
     )
     args = ap.parse_args(argv)
-    wanted = [
-        n.upper().removesuffix(".HTML").removesuffix(".ARTX") for n in args.names
-    ]
     check = not args.no_check
-    if not wanted:
+    if not args.names:
         for src_stem, dst_stem in TITLES.items():
             print(migrate_one(src_stem, dst_stem, check=check))
         return 0
-    for stem in wanted:
+    for raw in args.names:
+        if _is_html_path(raw):
+            src = Path(raw)
+            print(pack_from_pngs(_card_stem(src.name), html_path=src))
+            continue
+        stem = raw.upper().removesuffix(".HTML").removesuffix(".ARTX")
         if stem in TITLES:
             print(migrate_one(stem, TITLES[stem], check=check))
         else:

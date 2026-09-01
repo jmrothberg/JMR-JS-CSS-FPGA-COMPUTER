@@ -43,16 +43,23 @@ into game code, and never hand-write `.ARTX` or `.ARTJS`.
 | You write | Then run | Tool writes |
 |---|---|---|
 | `MYGAME.HTML` (stem ≤ 8, source **< 65,536 bytes**) with `img.src = "jmr:spr:N"` | `python3 tools/make_artx.py MYGAME` | `MYGAME.ARTX` — quantized pixels the **machine** reads |
-| `MYGAME-0.png`, `MYGAME-1.png`, … (≤ **16** sheets) listed in `window.JMR_SPR` | `python3 tools/make_artjs.py MYGAME --patch-html` | `MYGAME.ARTJS` — same pixels for **Chrome**. Wires the HTML to load that file. |
+| `MYGAME-0.png`, `MYGAME-1.png`, … (≤ **16** sheets) listed in `window.JMR_SPR` | `python3 tools/make_artx.py MYGAME` (also writes `.ARTJS` and wires the Chrome `__jmrSpr` hook) | `MYGAME.ARTJS` — same pixels for **Chrome** |
 | | `python3 tools/make_sd_image.py create card.img` | `MYGAME.JSH` on the card (bytecode + art). PNG and ARTJS stay on the host. |
 
 ```bash
 python3 tools/make_artx.py MYGAME
-python3 tools/make_artjs.py MYGAME --patch-html
+python3 tools/make_artx.py /path/to/bomberman.html
 python3 tools/make_sd_image.py create card.img
 ```
 
-After you change a PNG, run those three again (or at least `make_artx` + `make_artjs` + card create).
+A path is looked up as-is (Linux is case-sensitive). The tool copies
+`STEM.HTML`, writes `STEM.ARTX` + `STEM.ARTJS`, and patches the HTML so
+Chrome loads `STEM.ARTJS` (`__jmrSpr`) — the same hook as INVF/DNKF.
+PNGs stay next to the source HTML and are **not** copied. Stem is the
+filename, card 8.3 (`bomberman.html` → `BOMBERMA`). A bare `MYGAME`
+still means `storage/MYGAME.HTML`.
+
+After you change a PNG, run `make_artx` then card create (`make_artx` rewrites `.ARTJS` and the Chrome hook).
 
 ### What each file is
 
