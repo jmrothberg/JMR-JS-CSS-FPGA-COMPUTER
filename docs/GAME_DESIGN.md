@@ -184,6 +184,22 @@ RUN
 - Chrome may open the same file for authoring. PYTHON bytecode → FPGA-SIM
   RTL → BOARD is the machine. Dukpy / a host twin is not.
 
+### Machine programs in `storage/` — do not delete
+
+These three HTML files are **the machine**, not titles. `DIR` hides them
+so they do not bury the games. Removing them from `storage/` (or dropping
+them from `card.img`) breaks `EDIT` / `COMPILE`.
+
+| File | READY verb | What it is |
+|---|---|---|
+| `storage/EDITOR.HTML` | `EDIT` | Full-screen editor (`EDITOR.JSH`). Edits whatever `LOAD` parked. |
+| `storage/ARTSCAN.HTML` | `COMPILE` (first) | Compiler pass A: span map + art check (`ARTSCAN.JSH`). |
+| `storage/COMPILER.HTML` | `COMPILE` (then) | Compiler pass B: tokenize / parse / emit (`COMPILER.JSH`). |
+
+Keep the matching minted `.JSH` on the card (card-create mints them). Detail:
+[JS_COMMANDS.md](JS_COMMANDS.md) READY console, [ARCHITECTURE.md](ARCHITECTURE.md)
+standalone compile.
+
 After adding or changing a title:
 
 ```bash

@@ -55,7 +55,7 @@ Host is dead on this unit — type and play from the GUI **PROG tether**.
 | Words / abbreviations used everywhere | [Words used](#words-used-in-this-project) (this page) |
 | What the machine *is* (spec) | [CONSTITUTION.md](CONSTITUTION.md) |
 | Blocks, posters, asset-bank port | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| How to write a game | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) (art, input, FAST) |
+| How to write a game | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) (art, input, FAST; **do not delete** `EDITOR` / `ARTSCAN` / `COMPILER`) |
 | What JS/Canvas is Complete vs later | [docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md) |
 | Learn the 34 instructions | [docs/JS_COMMANDS.md](docs/JS_COMMANDS.md) |
 | Board, Vivado, flash, HDMI | [docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md) |
@@ -235,6 +235,7 @@ mention.
 | **ARTJS** | Chrome art | Same quantized sheets as `.ARTX`, as a `.js` file Chrome can load. Built by `make_artjs.py`. **Not** on the card. Open `storage/NAME.HTML` in Chrome to see it. |
 | **JSB** | — | On-the-wire encoding of a ProgramImage (`JSB1` magic) |
 | **JSH** | — | **V1.0:** ProgramImage minted when you **make the card**. PYTHON, FPGA-SIM, and BOARD all `RUN` this file from `card.img`. Not copied from `storage/`. **V1.5:** `COMPILE` on the machine mints the same sidecar; `RUN` is unchanged |
+| **ARTSCAN / COMPILER / EDITOR** | machine programs | HTML in `storage/` plus minted `.JSH` on the card. **Not games.** `EDIT` / `COMPILE` chain-load them. `DIR` hides the stems. **Do not delete.** [GAME_DESIGN.md](docs/GAME_DESIGN.md#machine-programs-in-storage--do-not-delete) |
 | **HTML** | HyperText Markup Language | Disk format of a title: `NAME.HTML` |
 | **JS** | JavaScript | The language / ISA. `NAME.JS` demos are **not** product twins of `NAME.HTML` |
 | **CSS** | Cascading Style Sheets | Page layout. Version 1.0 has almost none — paint on Canvas |

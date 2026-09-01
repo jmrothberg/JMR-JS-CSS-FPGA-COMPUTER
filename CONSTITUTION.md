@@ -75,7 +75,9 @@ the same glass on PYTHON → FPGA-SIM → BOARD** (then ASIC).
   minted `.JSH`. Do **not** give PYTHON or FPGA-SIM a host compile-on-RUN
   of `storage/*.HTML` while the board runs the card. **V1.5 compile is
   live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. `RUN` still loads `.JSH`
-  from the card. Compiler/editor are ordinary card programs, not a new ISA.
+  from the card. Compiler/editor are ordinary card programs
+  (`storage/EDITOR.HTML`, `ARTSCAN.HTML`, `COMPILER.HTML` — **do not
+  delete**; `DIR` hides them), not a new ISA.
   Typed-at-READY numbered authoring of *new* programs is leftover.
 - **Asset bank (external SRAM — replaces the retired `NAME.DAT` spill).**
   Great graphics stay at **full quality**. You draw PNG sheets; `make_artx.py`

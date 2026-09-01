@@ -394,6 +394,11 @@ is **REMOVE**, not DELETE. `ESC` is machine BREAK (games must not steal it).
                           the message area is arena byte 128).
     RUN                 → plays the freshly minted .JSH.
 
+**Do not delete** `storage/EDITOR.HTML`, `storage/ARTSCAN.HTML`, or
+`storage/COMPILER.HTML`. They are the machine programs behind `EDIT` /
+`COMPILE`, not titles. `DIR` hides those stems on purpose. Authoring note:
+[GAME_DESIGN.md](GAME_DESIGN.md#machine-programs-in-storage--do-not-delete).
+
 `RUN` always prefers the card's `.JSH`, so a FAILED compile leaves the old
 version playable — REMOVE the stale `.JSH` if that would mislead. On-device
 SAVE writes the HTML back to the card under the loaded title's name.

@@ -159,12 +159,14 @@ maps the split. Art is written packed because MKBIGCPU's 2.8 MB payload fits
 under `FB_SRAM_BASE` at two bytes per word and would blow straight through it
 at one.
 
-The chain is ordinary programs, launched by name:
+The chain is ordinary programs, launched by name. **Do not delete** the
+HTML sources in `storage/` — they are not games; `DIR` hides them:
 
 ```
-ARTSCAN.JSH   span map, sprite table, colour harvest   (art refused for now)
-COMPILER.JSH  tokenize -> parse -> assemble -> cdone
-[MINTASM /  ARTPNG / COMPIL2 / EDITOR — rows reserved in the console ROM]
+EDITOR.JSH    bare EDIT — full-screen editor (SOURCE stays the title)
+ARTSCAN.JSH   COMPILE pass A — span map, sprite table, colour harvest
+COMPILER.JSH  COMPILE pass B — tokenize -> parse -> assemble -> cdone
+[MINTASM / ARTPNG / COMPIL2 — rows reserved in the console ROM]
 ```
 
 `cdone(status, len, msglen)` is the whole protocol: `0x00` mint the staged

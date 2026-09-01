@@ -17,7 +17,9 @@ card-create still works (`make_sd_image.py create` mints `NAME.JSH`). Do not
 host-compile `storage/` on `RUN` as a second path.
 **V1.5 compile is live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. `RUN`
 still loads `.JSH` from the card. Compiler/editor are ordinary card programs
-(`EDITOR.JSH`, `ARTSCAN.JSH`, `COMPILER.JSH`), not a new ISA. Typed-at-READY
+(`EDITOR.JSH`, `ARTSCAN.JSH`, `COMPILER.JSH`), not a new ISA. **Do not
+delete** `storage/EDITOR.HTML`, `ARTSCAN.HTML`, `COMPILER.HTML` (`DIR`
+hides them). Typed-at-READY
 numbered authoring of *new* programs is still leftover. Popular JS V1.0 does
 not have (`shift`, `Math.sin`/`round`, …) is still the language backlog
 (stdlib + globals; not Canvas gradients / mouse).

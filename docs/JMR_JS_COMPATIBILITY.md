@@ -131,7 +131,9 @@ yet built (typed-at-READY authoring of NEW programs, numbered edits):
 real verb; the compiler is `ARTSCAN.JSH` + `COMPILER.JSH`, **ordinary
 programs on the card** written in the machine's own JS subset and executed by
 the same VM that runs the games. The editor is `EDITOR.JSH`, launched by a
-bare `EDIT`. Nothing about the ISA changed.
+bare `EDIT`. Nothing about the ISA changed. **Do not delete**
+`storage/EDITOR.HTML`, `storage/ARTSCAN.HTML`, or `storage/COMPILER.HTML`
+(`DIR` hides them). [GAME_DESIGN.md](GAME_DESIGN.md#machine-programs-in-storage--do-not-delete).
 
 ```
 LOAD "BOXES.HTML"      source into SOURCE SRAM
