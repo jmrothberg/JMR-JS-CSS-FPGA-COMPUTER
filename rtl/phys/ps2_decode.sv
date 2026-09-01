@@ -31,6 +31,14 @@ module ps2_decode (
         else if (sc == 8'h75) k = 8'd38;
         else if (sc == 8'h74) k = 8'd39;
         else if (sc == 8'h72) k = 8'd40;
+        // Nav cluster: same E0-may-be-dropped treatment as the arrows.
+        // (0x71/0x70/0x6C/0x69/0x7D/0x7A without NumLock are the same make.)
+        else if (sc == 8'h71) k = 8'd46;  // Delete
+        else if (sc == 8'h70) k = 8'd45;  // Insert
+        else if (sc == 8'h6C) k = 8'd36;  // Home
+        else if (sc == 8'h69) k = 8'd35;  // End
+        else if (sc == 8'h7D) k = 8'd33;  // PgUp
+        else if (sc == 8'h7A) k = 8'd34;  // PgDn
         else if (!e) begin
             unique case (sc)
                 8'h29: k = 8'd32; // Space
@@ -48,6 +56,25 @@ module ps2_decode (
                 8'h26: k = 8'd51; 8'h25: k = 8'd52; 8'h2E: k = 8'd53; // 3 4 5
                 8'h36: k = 8'd54; 8'h3D: k = 8'd55; 8'h3E: k = 8'd56; // 6 7 8
                 8'h46: k = 8'd57;                                     // 9
+                // RUN 66: EDITOR.JSH runs as a game (kev path), so the
+                // keyCode map must cover everything an editor needs.
+                // F2-save/F3-exit were dead on glass — sim's KEYEVT
+                // injects keyCodes below this decoder and never saw it.
+                8'h05: k = 8'd112; 8'h06: k = 8'd113;                 // F1 F2
+                8'h04: k = 8'd114; 8'h0C: k = 8'd115;                 // F3 F4
+                8'h03: k = 8'd116; 8'h0B: k = 8'd117;                 // F5 F6
+                8'h83: k = 8'd118; 8'h0A: k = 8'd119;                 // F7 F8
+                8'h01: k = 8'd120; 8'h09: k = 8'd121;                 // F9 F10
+                8'h78: k = 8'd122; 8'h07: k = 8'd123;                 // F11 F12
+                8'h66: k = 8'd8;   8'h0D: k = 8'd9;                   // BS Tab
+                8'h12: k = 8'd16;  8'h59: k = 8'd16;                  // Shift L/R
+                8'h58: k = 8'd20;  8'h76: k = 8'd27;                  // Caps Esc
+                8'h4E: k = 8'd189; 8'h55: k = 8'd187;                 // -_ =+
+                8'h54: k = 8'd219; 8'h5B: k = 8'd221;                 // [{ ]}
+                8'h5D: k = 8'd220; 8'h4C: k = 8'd186;                 // \| ;:
+                8'h52: k = 8'd222; 8'h41: k = 8'd188;                 // '" ,<
+                8'h49: k = 8'd190; 8'h4A: k = 8'd191;                 // .> /?
+                8'h0E: k = 8'd192;                                    // `~
                 // PIC24 USB->PS/2 translators sometimes emit arrows as
                 // the plain (non-E0) keypad codes; map those too. The
                 // ascii path still types keypad digits independently.

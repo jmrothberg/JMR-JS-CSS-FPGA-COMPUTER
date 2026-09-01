@@ -1011,10 +1011,17 @@ class SimBackend(RuntimeBackend):
                 return
             # rAF paint (FRAME). TICKN if the VM is still loading EDITOR.JSH
             # (FRAME dead-exits in S_IDLE and would never advance FAT).
+            # 2026-09-01: 20M-clock chunks froze Tk for ~10 s per rpc — the
+            # whole EDIT chain-load read as a GUI hang and Esc never landed.
+            # 5M-clock chunks keep the window live between rpcs; the load
+            # takes the same sim time either way.
             resp = self._rpc("FRAME")
             if resp == "FB SAME":
-                self._rpc("TICKN 20000")
+                self._arch_phase = "load"
+                self._rpc("TICKN 5000")
                 self._rpc("FB?")
+            else:
+                self._arch_phase = "run"
             return
         # NEW: while running, one VM frame (tick-to-swap) not TICK=1000
         if self._running:

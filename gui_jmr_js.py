@@ -58,9 +58,18 @@ _TK_TO_JS = {
     "Down": (40, "ArrowDown"),
     "BackSpace": (8, "Backspace"),
     "Tab": (9, "Tab"),
-    # Editor: F2 save. Unused F-keys (F3…) leave a running program at the GUI;
-    # they are not title keys. Esc is machine BREAK.
+    # Editor keys: F2 save, F3 quit — forwarded to a running title (run-66
+    # board parity: the PS/2 decoder now delivers all F-keys). F12 leaves a
+    # running program at the GUI. Esc is machine BREAK.
+    "F1": (112, "F1"),
     "F2": (113, "F2"),
+    "F3": (114, "F3"),
+    "F4": (115, "F4"),
+    "F5": (116, "F5"),
+    "F6": (117, "F6"),
+    "F7": (118, "F7"),
+    "F8": (119, "F8"),
+    "F11": (122, "F11"),
     "Shift_L": (16, "Shift"),
     "Shift_R": (16, "Shift"),
     "Control_L": (17, "Control"),
@@ -264,7 +273,7 @@ class App:
 
         self.hint = tk.Label(
             self.root,
-            text="F9=runtime  F10=monitor  ESC=break  F3=leave  Ctrl-V paste  EDIT n / LIST -  arrows+space=play  type+Enter",
+            text="F9=runtime  F10=monitor  ESC=break  F12=leave  F2=save F3=quit (editor)  Ctrl-V paste  arrows+space=play  type+Enter",
             fg="#888",
             bg="#1a1a1a",
             anchor="w",
@@ -605,11 +614,18 @@ class App:
             self._kbd_last_t = time.monotonic()
         if event.keysym in ("F9", "F10", "Escape"):
             return None
-        # F3 and the other unused F-keys leave a running program (READY).
-        # F2 stays a title key (editor save). F9/F10 are GUI chrome.
-        if event.keysym in ("F1", "F3", "F4", "F5", "F6", "F7", "F8", "F11", "F12"):
+        # F12 leaves a running program (READY). Every other F-key is a
+        # TITLE key while running (editor: F2 save, F3 quit — board parity
+        # with the run-66 PS/2 map). F9/F10 are GUI chrome.
+        if event.keysym == "F12":
             if self._is_running():
                 self.leave_program()
+            return "break"
+        if event.keysym in ("F1", "F3", "F4", "F5", "F6", "F7", "F8", "F11"):
+            if self._is_running():
+                jk = _js_key(event)
+                if jk is not None and hasattr(self.backend, "key_event"):
+                    self.backend.key_event(jk[0], jk[1], True)
             return "break"
         # Ctrl/Cmd+V handled by on_paste binds — do not also type 'v'
         state = int(getattr(event, "state", 0) or 0)
@@ -750,7 +766,13 @@ class App:
             self._kbd_last_t = time.monotonic()
         if event.keysym in ("F9", "F10", "Escape"):
             return None
-        if event.keysym in ("F1", "F3", "F4", "F5", "F6", "F7", "F8", "F11", "F12"):
+        if event.keysym == "F12":
+            return "break"
+        if event.keysym in ("F1", "F3", "F4", "F5", "F6", "F7", "F8", "F11"):
+            if self._is_running():
+                jk = _js_key(event)
+                if jk is not None and hasattr(self.backend, "key_event"):
+                    self.backend.key_event(jk[0], jk[1], False)
             return "break"
         # NEW: raw keyup twin of the on_key_press key_event forward
         if self._is_running():

@@ -1616,6 +1616,11 @@ int main(int argc, char** argv) {
             std::sscanf(line.c_str() + 6, "%u", &n);
             if (n > 100000u) n = 100000u;
             ticks(1000u * n);
+            // 2026-09-01: on-machine COMPILE mints NAME.JSH during TICKN
+            // pumping (not LINE), and RUN reads the .JSH from DISK — flush
+            // here too or the machine's own mint is invisible to RUN.
+            // sd_save_image() is a no-op unless the machine wrote the card.
+            sd_save_image();
             std::cout << "OK" << std::endl;
             continue;
         }
@@ -3406,6 +3411,10 @@ int main(int argc, char** argv) {
                 ip_trace_cap = 0;
             }
             if (!got && !dead) fcap_n++;
+            // 2026-09-01: same reason as the TICKN flush — the editor's F2
+            // save and the compile mint land during FRAME pumping; RUN and
+            // the GUI read card.img from disk. No-op unless the card is dirty.
+            sd_save_image();
             // game_mode OR canvas editor (cmp_arm holds game_mode off).
             if (top->game_mode || !top->ready_lit) {
                 // Capped FRAME has not presented — skip the 640×480 dump

@@ -2571,6 +2571,14 @@ module jmr_js_vm_exec64 (
                 if (p_clr) begin
                     machine_fault <= 1'b0;
                     fault_code <= 8'd0;
+                    // cdone() is sticky; without this clear the NEXT chained
+                    // program (COMPILE after the editor's F2) instantly
+                    // consumes the stale status in C_CMP_WAIT — COMPILE
+                    // printed SAVED. and never compiled (sim 2026-09-01).
+                    cmp_done <= 1'b0;
+                    cmp_status <= 8'd0;
+                    cmp_len <= 21'd0;
+                    cmp_msglen <= 7'd0;
                     vcsp <= 8'd0;
                     cm_scan <= 1'b0;
                     cm_armed <= 1'b0;

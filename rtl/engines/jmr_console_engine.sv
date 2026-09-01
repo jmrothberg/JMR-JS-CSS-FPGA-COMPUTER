@@ -526,7 +526,7 @@ module jmr_console_engine (
             // bitstreams all announcing R61 on the glass is exactly what
             // this string exists to prevent. Bump it IN THE SAME COMMIT as
             // the payload, not as an afterthought at launch time.
-            24: banner_char = "6"; 25: banner_char = "5";
+            24: banner_char = "6"; 25: banner_char = "6";
             default: banner_char = 8'h00;
         endcase
     endfunction
@@ -540,7 +540,7 @@ module jmr_console_engine (
     endfunction
 
     // 0=HELP 1=MEM 2=OK 3=?SN ERROR 4=?IO 5=LOADED 6=?FN FILE NOT FOUND 7=?NB 8=-- MORE --
-    // 9=?NH (HTML not runnable yet) 10=?LS 11=HTML (LIST stub)
+    // 9=?NH (HTML not runnable yet) 10=?LS 11=SAVED.
     function automatic logic [7:0] reply_char(input logic [3:0] sel, input logic [6:0] i);
         case (sel)
             4'd0: case (i)
@@ -596,9 +596,11 @@ module jmr_console_engine (
                 0: reply_char="?";1: reply_char="L";2: reply_char="S"; default: reply_char=8'h00;
             endcase
             4'd11: case (i)
-                // LIST stub for HTML titles
-                0: reply_char="(";1: reply_char="H";2: reply_char="T";3: reply_char="M";
-                4: reply_char="L";5: reply_char=")"; default: reply_char=8'h00;
+                // SAVED — loud acknowledgment for SAVE and the editor's F2
+                // (board 2026-09-01: a silent save is indistinguishable from
+                // a dead key). Row was the dead "(HTML)" LIST stub.
+                0: reply_char="S";1: reply_char="A";2: reply_char="V";3: reply_char="E";
+                4: reply_char="D";5: reply_char="."; default: reply_char=8'h00;
             endcase
             // ---- V1.5 standalone compile ----
             4'd12: case (i)   // COMPILING
@@ -1597,8 +1599,9 @@ module jmr_console_engine (
                 end
                 C_SV_CLOSE: if (!stor_busy) begin stor_close <= 1'b1; state <= C_SV_CLOSEW; end
                 C_SV_CLOSEW: if (stor_done) begin
-                    // A mint says COMPILED; an ordinary SAVE says OK.
-                    reply_sel <= cmp_save_mode ? 4'd13 : 4'd2;
+                    // A mint says COMPILED; SAVE (typed or editor F2) says
+                    // SAVED. — matching the functional model's reply.
+                    reply_sel <= cmp_save_mode ? 4'd13 : 4'd11;
                     cmp_save_mode <= 1'b0;
                     reply_idx <= 0; state <= C_REPLY;
                 end
