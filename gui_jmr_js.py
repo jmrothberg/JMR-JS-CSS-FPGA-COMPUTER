@@ -692,6 +692,8 @@ class App:
                 or up.startswith("LOAD")
                 or up == "LIST"
                 or up.startswith("LIST")
+                or up == "COMPILE"
+                or up == "EDIT"
             )
             if busy:
                 # RTL already echoes the typed line on glass. Overlaying

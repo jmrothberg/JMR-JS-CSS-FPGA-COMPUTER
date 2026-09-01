@@ -61,6 +61,7 @@ class SimBackend(RuntimeBackend):
         self._running = False  # NEW: RTL game_mode — skip prompt overlay
         self._more = False     # NEW: parked on -- MORE --
         self._listing = False  # LIST/DIR until READY — no '>' between pages
+        self._editor_live = False  # bare EDIT: VM runs with game_mode=0
         self._typed_log: list[str] = []  # typed monitor rows; never drop them
         self._edit_prefill: Optional[str] = None
         self._loaded_name: str = ""
@@ -321,13 +322,13 @@ class SimBackend(RuntimeBackend):
 
     @property
     def running(self) -> bool:
-        """True while RTL game_mode — GUI must not paint a monitor prompt on top."""
-        return self._running
+        """True while a title or the canvas editor owns the glass."""
+        return self._running or self._editor_live
 
     @property
     def more_waiting(self) -> bool:
-        """True while LIST/DIR parked on -- MORE -- (Space/Enter continues)."""
-        return self._more
+        """True while LIST/DIR is on glass (MORE or mid-page). Enter must page, not LINE."""
+        return self._more or self._listing
 
     def edit_prefill(self) -> Optional[str]:
         """Body text after EDIT n (for GUI line_buf)."""
@@ -400,13 +401,14 @@ class SimBackend(RuntimeBackend):
         self._rpc("SCREEN?")
         self._more = self._screen_has_more()
         resp = self._rpc("FB?")
-        if resp.startswith("FB ") and len(resp.split(None, 3)) == 4:
-            # Real pixels from RTL mini-FB — keep them; do not letterbox on top
-            self._running = True
+        st = self._rpc("STATUS?")
+        if self._editor_live and "ready=1" in st:
+            self._editor_live = False
+        self._running = "running=1" in st or self._editor_live
+        # game_mode OR the canvas editor (cmp_arm holds game_mode off).
+        if self._running and resp.startswith("FB ") and len(resp.split(None, 3)) == 4:
             self._run_snap_done = False
             return
-        st = self._rpc("STATUS?")
-        self._running = "running=1" in st
         if self._running:
             return
         last = self._last_glass_line()
@@ -440,6 +442,28 @@ class SimBackend(RuntimeBackend):
                 break
             # TICKN 20000 = 20M clocks (same as fat RUN)
             self._rpc("TICKN 20000")
+
+    def _pump_compile(self) -> None:
+        """LINE yields while COMPILE is still in C_CMP_WAIT — tick until READY."""
+        self._break_run_wait = False
+        for _ in range(500):
+            pump = getattr(self, "run_wait_idle", None)
+            if pump is not None:
+                pump()
+            if getattr(self, "_break_run_wait", False):
+                break
+            st = self._rpc("STATUS?")
+            if "ready=1" in st:
+                break
+            self._rpc("TICKN 20000")
+            self._rpc("SCREEN?")
+            last = self._last_glass_line()
+            if last.startswith("?") or last.startswith("COMPIL"):
+                if last not in self._typed_log[-3:]:
+                    if self._typed_log and self._typed_log[-1] == "READY":
+                        self._typed_log.insert(len(self._typed_log) - 1, last)
+                    else:
+                        self._typed_log.append(last)
 
     def type_line(self, text: str) -> None:
         self._log.type_line(text)
@@ -541,6 +565,13 @@ class SimBackend(RuntimeBackend):
                         self._log.note(f"GLASS-ERR {last[:80]}")
                 except Exception:
                     pass
+            if upper == "EDIT":
+                st = self._rpc("STATUS?")
+                if "ready=0" in st:
+                    self._editor_live = True
+                    self._running = True
+            if upper == "COMPILE":
+                self._pump_compile()
         # LIST/DIR may park on -- MORE --; LINE now waits, but keep pumping
         # until MORE or prompt so we never paint '>' over a mid-page.
         if upper == "LIST" or upper.startswith("LIST ") or upper == "DIR":
@@ -641,6 +672,15 @@ class SimBackend(RuntimeBackend):
                     break
                 if r.startswith(">") or r == "READY" or r.startswith("READY"):
                     continue
+                # COMPILED / COMPILING / OK — same letterbox as ?CE. LIST
+                # pages stay on SCREEN, not this log. Bare EDIT owns the
+                # glass; do not steal a leftover VRAM row onto the letterbox.
+                if (upper == "COMPILE" or (upper.startswith("EDIT") and not self._editor_live)) and r not in self._typed_log[-5:]:
+                    if self._typed_log and self._typed_log[-1] == "READY":
+                        self._typed_log.insert(len(self._typed_log) - 1, r)
+                    else:
+                        self._typed_log.append(r)
+                    self._log.note(f"GLASS {r[:80]}")
                 break
         except Exception:
             pass
@@ -887,7 +927,7 @@ class SimBackend(RuntimeBackend):
         if not self._started:
             self._start()
         # NEW: game owns the glass (BASIC method) — never overlay `>` on FB
-        if self._running or self._more:
+        if self._running or self._more or self._listing:
             return
         if self._use_rtl:
             self._paint_screen_local(prompt, cursor_on=cursor_on, cursor_col=cursor_col)
@@ -900,6 +940,7 @@ class SimBackend(RuntimeBackend):
 
     def hard_break(self) -> None:
         self._running = False
+        self._editor_live = False
         self._arch_phase = "loaded"
         self._flush_keyevts()
         self._log.note("BREAK")
@@ -925,6 +966,22 @@ class SimBackend(RuntimeBackend):
 
     def frame_tick(self) -> None:
         if not self._started:
+            return
+        if self._editor_live:
+            st = self._rpc("STATUS?")
+            if "ready=1" in st:
+                self._editor_live = False
+                self._running = False
+                if not self._typed_log or self._typed_log[-1] != "READY":
+                    self._typed_log.append("READY")
+                self._sync_glass("> ")
+                return
+            # rAF paint (FRAME). TICKN if the VM is still loading EDITOR.JSH
+            # (FRAME dead-exits in S_IDLE and would never advance FAT).
+            resp = self._rpc("FRAME")
+            if resp == "FB SAME":
+                self._rpc("TICKN 20000")
+                self._rpc("FB?")
             return
         # NEW: while running, one VM frame (tick-to-swap) not TICK=1000
         if self._running:
@@ -1004,6 +1061,7 @@ class SimBackend(RuntimeBackend):
                     except Exception:
                         pass
                     self._running = False
+                    self._editor_live = False
                     self._arch_phase = "loaded"
                     self._rpc("KEY 1b")
                     if not self._typed_log or self._typed_log[-1] != "READY":

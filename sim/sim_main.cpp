@@ -1512,17 +1512,22 @@ int main(int argc, char** argv) {
             std::string text = line.substr(5);
             for (char c : text) push_key(uint8_t(c));
             push_key(0x0D);
-            // Tick until prompt, game_mode (RUN started), or -- MORE --.
-            // Missing game_mode burned the full 100M-clock cap after RUN.
+            // Tick until prompt, game_mode (RUN), -- MORE --, or a long
+            // console chain (EDIT/COMPILE: ready=0, game_mode=0). Waiting
+            // 100M clocks for EDIT froze the GUI then letterboxed READY
+            // while the editor was still in C_CMP_WAIT.
             unsigned clk = 0;
             int capped = 1;
             int game_slices = 0;
+            int left_prompt = 0;
             for (int i = 0; i < 400; ++i) {
                 ticks(250000);
                 clk += 250000;
-                if (top->ready_lit) { capped = 0; break; }
-                // RUN: stop shortly after game_mode (not another 100M clocks).
-                // A few extra slices let boot rAF (DONKEY Enter at frames 4/12) run.
+                if (!top->ready_lit) left_prompt = 1;
+                if (top->ready_lit && (left_prompt || i >= 3)) {
+                    capped = 0;
+                    break;
+                }
                 if (top->game_mode) {
                     game_slices++;
                     if (game_slices >= 16) { capped = 0; break; }
@@ -1530,6 +1535,10 @@ int main(int argc, char** argv) {
                 if ((i & 3) == 3) {
                     std::string s = screen_text();
                     if (s.find("-- MORE") != std::string::npos) { capped = 0; break; }
+                }
+                if (left_prompt && !top->ready_lit && !top->game_mode && i >= 7) {
+                    capped = 0;
+                    break;
                 }
             }
             sd_save_image();
@@ -3183,7 +3192,10 @@ int main(int argc, char** argv) {
         }
         if (line == "FB?") {
             // NEW: real mini-FB pixels when game_mode (RECTDEMO / VM)
-            if (top->game_mode) {
+            // game_mode OR a chained program (EDIT: cmp_arm holds game_mode
+            // off). Without this, FB? is always SAME during EDIT and the
+            // GUI letterboxes READY over the editor.
+            if (top->game_mode || !top->ready_lit) {
                 std::cout << "FB 640 480 " << fb_export_b64() << std::endl;
             } else {
                 std::cout << "FB SAME" << std::endl;
@@ -3394,7 +3406,8 @@ int main(int argc, char** argv) {
                 ip_trace_cap = 0;
             }
             if (!got && !dead) fcap_n++;
-            if (top->game_mode) {
+            // game_mode OR canvas editor (cmp_arm holds game_mode off).
+            if (top->game_mode || !top->ready_lit) {
                 // Capped FRAME has not presented — skip the 640×480 dump
                 // (was ~5 wasted FB encodes per visual frame).
                 if (got)
