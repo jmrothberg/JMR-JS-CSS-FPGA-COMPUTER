@@ -33,6 +33,145 @@ in RTL, the compiler, or natives.
 
 ---
 
+## Art: PNG in, tools write `.ARTX` (do this from the start)
+
+**Never paste `data:image/...;base64,...` into game code.** That is how the
+first library was built, and every one of those titles had to be taken
+apart again. **Never hand-write `.ARTX` or `.ARTJS`.** Those are compile
+outputs.
+
+### Tell a game-writing agent this
+
+| The agent writes | Tools write (you run these) | Nobody writes by hand |
+|---|---|---|
+| `MYGAME.HTML` (stem ≤ 8, source **< 65,536 bytes**) | `MYGAME.ARTX` via `make_artx.py` | `.ARTX` bytes |
+| `MYGAME-0.png`, `MYGAME-1.png`, … (≤ **16** sheets) | `MYGAME.ARTJS` via `make_artjs.py` | `.ARTJS` / inline base64 in the game script |
+| `img.src = "jmr:spr:N"` and `window.JMR_SPR = ["MYGAME-0.png", …]` | `MYGAME.JSH` via `make_sd_image.py create` | a second Chrome interceptor |
+
+Then:
+
+```bash
+python3 tools/make_artx.py MYGAME
+python3 tools/make_artjs.py MYGAME --patch-html
+python3 tools/make_sd_image.py create card.img
+```
+
+### What each file is
+
+```text
+storage/MYGAME.HTML      code — readable, under 64 KB. Handles, not pixels.
+storage/MYGAME-0.png     editable art (agent / artist). Manifest order.
+storage/MYGAME.ARTX      quantized pixels + palette. The machine reads this.
+storage/MYGAME.ARTJS     Chrome preview, rebuilt FROM the .ARTX. Not on the card.
+card.img  MYGAME.JSH     minted bytecode + ASET. RUN uses this.
+```
+
+Card 8.3: `MYGAME.ARTX` → `MYGAME.ART`. Keep the stem ≤ 8 so FPGA-SIM and
+the board see the same name. `.ARTJS` is **not** in the card keep-list.
+
+### Game code — handles only
+
+In the HTML you never write a URI. You write a **sprite handle**. `N` is
+the index in `JMR_SPR` / in the `.ARTX` sprite table (identical images
+share one handle — first appearance wins):
+
+```javascript
+var img = new Image();
+img.src = "jmr:spr:0";          // MYGAME-0.png → first sheet in MYGAME.ARTX
+ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+```
+
+That line is what **all five** targets run. Only Chrome rewrites the handle.
+
+### `JMR_SPR` is the manifest (append-only)
+
+Put this **before** the game script so `make_artx.py` can read the PNG
+list, and so a browser can resolve handles while you still have only PNGs.
+Copy the block from a shipped title (`storage/INVA.HTML`) or:
+
+```html
+<script data-host="chrome">
+// Chrome-only until make_artjs.py patches in ARTJS. Mint strips this tag.
+// This list is the art manifest: index N is jmr:spr:N and ARTX sprite N.
+window.JMR_SPR = ["MYGAME-0.png", "MYGAME-1.png"];
+(function () {
+  var d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+  Object.defineProperty(HTMLImageElement.prototype, "src", {
+    get: function () { return d.get.call(this); },
+    set: function (v) {
+      var m = /^jmr:spr:(\d+)$/.exec(v);
+      d.set.call(this, m ? window.JMR_SPR[+m[1]] : v);
+    }
+  });
+})();
+</script>
+```
+
+Reorder that array and every `jmr:spr:N` in the title silently paints the
+wrong sheet. **Append only.**
+
+### Chrome is the control — quantized, no web server
+
+`jmr:spr:N` means nothing to a browser by itself. After you have an
+`.ARTX`, `make_artjs.py --patch-html` writes `MYGAME.ARTJS` (one `data:`
+URL per sprite) and inserts:
+
+```html
+<script data-host="chrome" src="MYGAME.ARTJS"></script>
+<script data-host="chrome"> ...resolve jmr:spr:N to those URLs... </script>
+```
+
+A classic `<script src>` loads from `file://`, so **double-clicking the
+HTML into Chrome just works.** (`fetch()` and ES modules are blocked by
+CORS on `file://`.)
+
+Those images are rebuilt **from the `.ARTX`**, not from the artist PNGs —
+Chrome previews the quantized art the machine will actually draw.
+
+The card mint strips every `data-host="chrome"` block (same as Web Audio).
+The minted `.JSH` is byte-identical with or without the tags. Do **not**
+leave two src interceptors in the file (`JMR_SPR` and `__jmrSpr`); after
+`--patch-html`, ARTJS is the Chrome path. `JMR_SPR` can stay as the PNG
+manifest `make_artx.py` reads.
+
+| target | where the pixels come from |
+|---|---|
+| Chrome (after `make_artjs.py`) | `.ARTJS` (quantized, from `.ARTX`) |
+| host mint (`card.img`) | PNGs → quantized → `ASET` inside the `.JSH`, plus `MYGAME.ARTX` |
+| PYTHON sim · FPGA-SIM · board `RUN` | the `.JSH` — art already inside as `ASET` |
+| board `COMPILE` | small HTML + `MYGAME.ARTX` (pre-quantized) → the same `.JSH` |
+
+### Why this is a rule, not a preference
+
+- **The machine can compile it.** `COMPILE` reads the card copy as source.
+  A megabyte of base64 does not fit the 65,536-byte SOURCE window; the code
+  alone always does. MKBIG went from 2,194,397 bytes of source to 20,314.
+- **The editor can open it.** `EDIT` on an inline-art title shows a wall of
+  base64. On a `.ARTX` title it shows the game.
+- **No PNG decoder on the machine.** `.ARTX` is already quantized to the
+  title palette — the same bytes that land in the `.JSH`.
+- **`LIST` stays fast.** No 690 KB single lines to stream over SPI.
+
+### Rules that follow
+
+| Rule | Why |
+|---|---|
+| Agent writes **PNGs + HTML**, not `.ARTX` / `.ARTJS` | those are `make_artx.py` / `make_artjs.py` outputs |
+| HTML under **65,536 bytes** | SOURCE window `EDIT` and `COMPILE` read |
+| at most **16 sheets** per title | `MAX_SPR`; RTL descriptor RAM is fixed |
+| ASET payload under **2,961,408 bytes** | framebuffer wall, enforced in silicon |
+| 8.3-safe stem (≤8 chars) | FAT truncates; `MKBIGCPU` → `MKCA` |
+| colours as `#rgb` / `#rrggbb` literals | compiler `FSTY` table; a colour it cannot parse paints **white** on hardware |
+| `data-host="chrome"` for browser-only tags | mint strips them; the machine never faults on them |
+| `JMR_SPR` order **append-only** | it **is** the `jmr:spr:N` numbering |
+
+Existing inline-art titles were migrated with `tools/make_artx.py` to short
+names (`INVADERS`→`INVA`, `INVFAST`→`INVF`, `FLDFAST`→`FLDF`,
+`MRDOFAST`→`MRDOF`, `DNKFAST`→`DNKF`, `MKBIG`→`MKBA`, `MKBIGCPU`→`MKCA`).
+The originals stay in `storage/` untouched for reference.
+
+---
+
 ## Product loop
 
 ```text

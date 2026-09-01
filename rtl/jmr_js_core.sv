@@ -281,6 +281,7 @@ module jmr_js_core #(
         .src_setlen_stb_i(vm_src_setlen_stb),
         .cmp_done_i(vm_cmp_done),
         .cmp_status_i(vm_cmp_status),
+        .cmp_msglen_i(vm_cmp_msglen),
         .cmp_len_i(vm_cmp_len),
         .vm_busy_i(vm_busy),
         .cmp_arm_o(cmp_arm),

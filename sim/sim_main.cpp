@@ -3131,6 +3131,28 @@ int main(int argc, char** argv) {
             std::cout << "FB 640 480 " << b64_encode(full.data(), full.size()) << std::endl;
             continue;
         }
+        // SRAMDUMP <word> <n> — bulk arena read as base64 (byte-comparing a
+        // minted image against the host mint needs thousands of bytes, which
+        // SRAMPEEK's hex-per-word output cannot carry). Sim-only: no fabric.
+        // Returns the LOW byte of each word — how every 1 B/word arena
+        // region (CSCR / SRC / CIMG) is stored.
+        if (line.rfind("SRAMDUMP ", 0) == 0) {
+            unsigned a = 0, n = 0;
+            if (std::sscanf(line.c_str() + 9, "%u %u", &a, &n) != 2 || n == 0) {
+                std::cout << "ERR args" << std::endl;
+                continue;
+            }
+            if (n > (1u << 20)) n = 1u << 20;
+            std::vector<uint8_t> b;
+            b.reserve(n);
+            for (unsigned i = 0; i < n && (a + i) < 2097152u; i++)
+                b.push_back((uint8_t)(
+                    top->rootp->jmr_js_core__DOT__g_sram__DOT__u_sram__DOT__mem[a + i]
+                    & 0xFFu));
+            std::cout << "SRAMDUMP " << a << " " << b.size() << " "
+                      << b64_encode(b.data(), b.size()) << std::endl;
+            continue;
+        }
         // NEW: SRAMPEEK <word_addr> <n> — dump asset-SRAM words (bring-up only)
         if (line.rfind("SRAMPEEK ", 0) == 0) {
             unsigned a = 0, n = 8;
