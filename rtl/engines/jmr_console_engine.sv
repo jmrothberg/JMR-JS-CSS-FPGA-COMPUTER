@@ -739,6 +739,22 @@ module jmr_console_engine (
                     end
                 end
                 C_PROMPT: begin
+                    // Returning to the prompt is the ONE place every flow
+                    // passes through, so the SOURCE/arena bridge selector and
+                    // the mint-mode flag are cleared here rather than on each
+                    // exit path. src_bank is set by 8 different sites and was
+                    // cleared by only 4: after a COMPILE watchdog, a VM fault
+                    // exit, or an editor quit, every later SOURCE access
+                    // (EDIT memmove, LIST, SAVE) went to the arena at a stale
+                    // address — the edit "succeeded" into the wrong memory and
+                    // SOURCE was untouched. cmp_save_mode leaks the same way
+                    // if a mint aborts before C_SV_CLOSEW (card error on open
+                    // or put), which would make the NEXT plain SAVE pump the
+                    // arena and reply COMPILED instead of OK.
+                    src_bank <= 1'b0;
+                    cmp_save_mode <= 1'b0;
+                    cmp_art_mode <= 1'b0;
+                    jsb_want_art <= 1'b0;
                     if (msg_idx < 5) begin
                         if (!video_busy) begin
                             put_en <= 1'b1;
@@ -1578,7 +1594,17 @@ module jmr_console_engine (
                 //   0 wait for cdone   1-4 read the published image offset
                 //   5 read PROGSEL     6 relaunch / mint / fail
                 C_CMP_WAIT: begin
-                    kbd_clear <= 1'b1;   // an ESC that killed the VM is not a command
+                    // Swallow the keystroke that got us here (an ESC which
+                    // killed a previous VM must not become a command) — but
+                    // ONLY on the first beat. Holding kbd_clear for the whole
+                    // wait drained the FIFO continuously, so an INTERACTIVE
+                    // chain program could never receive a keypress: the
+                    // editor launched by EDIT looked hung, sat there until
+                    // the 172 s compile watchdog fired, and reported ?IO.
+                    // Typing RUN afterwards started the same loaded program
+                    // outside this state, which is why it then worked. The
+                    // compiler needs no input; the editor does.
+                    kbd_clear <= (cmp_wd == 34'd0);
                     if (cmp_ph == 5'd0) begin
                         if (cmp_done_i) begin
                             cmp_img_len <= cmp_len_i;
@@ -1589,10 +1615,12 @@ module jmr_console_engine (
                             // held off for this state; without both, a real
                             // compile dies at 21.5 s looking like ?IO.
                             cmp_arm_r <= 1'b0; halt_pulse <= 1'b1;
+                            src_bank <= 1'b0;   // belt: see C_PROMPT
                             reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY;
                         end else if (!vm_busy_i && cmp_wd[20]) begin
                             // VM stopped without reporting: fault or ESC.
                             cmp_arm_r <= 1'b0;
+                            src_bank <= 1'b0;   // belt: see C_PROMPT
                             reply_sel <= 4'd14; reply_idx <= 0; state <= C_REPLY;
                         end else begin
                             cmp_wd <= cmp_wd + 1'b1;
@@ -1723,6 +1751,7 @@ module jmr_console_engine (
                             // acknowledge and return to READY. (The compiler
                             // always reports a non-zero image length here.)
                             cmp_arm_r <= 1'b0;
+                            src_bank <= 1'b0;   // belt: see C_PROMPT
                             reply_sel <= 4'd2; reply_idx <= 0; // OK
                             state <= C_REPLY;
                         end else if (cmp_status_i == 8'h85) begin

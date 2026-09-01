@@ -61,6 +61,7 @@ class SimBackend(RuntimeBackend):
         self._running = False  # NEW: RTL game_mode — skip prompt overlay
         self._more = False     # NEW: parked on -- MORE --
         self._listing = False  # LIST/DIR until READY — no '>' between pages
+        self._paging = False   # push_key already pumping — do not nest Enter
         self._editor_live = False  # bare EDIT: VM runs with game_mode=0
         self._typed_log: list[str] = []  # typed monitor rows; never drop them
         self._edit_prefill: Optional[str] = None
@@ -335,9 +336,24 @@ class SimBackend(RuntimeBackend):
         return self._edit_prefill
 
     def _screen_has_more(self) -> bool:
-        # MORE may sit above later rows if a leftover CR paged once.
+        # Parked MORE is the last nonempty row. Scanning all 16 VRAM rows
+        # kept Enter bound to paging after DIR (leftover "-- MORE --" above
+        # new names), so one page needed a dozen Returns to reach READY.
         nonempty = [ln.strip() for ln in self._screen.splitlines() if ln.strip()]
-        return any(t.startswith("-- MORE") for t in nonempty[-16:])
+        return bool(nonempty) and nonempty[-1].startswith("-- MORE")
+
+    def _capture_listing_rows(self) -> None:
+        """DIR/LIST names live on 16-row SCREEN. PYTHON console_log keeps them;
+        FPGA-SIM letterbox uses _typed_log — copy each page across or READY
+        paints an empty monitor after MORE."""
+        for ln in self._screen.replace("\\n", "\n").splitlines():
+            t = ln.strip()
+            if not t or t in (">", "> ") or t.startswith(">"):
+                continue
+            if t.startswith("-- MORE") or t == "READY" or t.startswith("READY"):
+                continue
+            if t not in self._typed_log[-24:]:
+                self._typed_log.append(t)
 
     def _abort_more(self) -> None:
         """Esc out of -- MORE -- so the next LINE is not eaten as a page key."""
@@ -404,6 +420,11 @@ class SimBackend(RuntimeBackend):
         st = self._rpc("STATUS?")
         if self._editor_live and "ready=1" in st:
             self._editor_live = False
+        last = self._last_glass_line()
+        if self._listing:
+            self._capture_listing_rows()
+            if "ready=1" in st or last in ("READY",) or last.startswith("READY"):
+                self._listing = False
         self._running = "running=1" in st or self._editor_live
         # game_mode OR the canvas editor (cmp_arm holds game_mode off).
         if self._running and resp.startswith("FB ") and len(resp.split(None, 3)) == 4:
@@ -411,9 +432,6 @@ class SimBackend(RuntimeBackend):
             return
         if self._running:
             return
-        last = self._last_glass_line()
-        if last in ("READY",) or last.startswith("READY"):
-            self._listing = False
         if self._use_rtl or resp == "FB SAME" or not resp.startswith("FB "):
             if self._use_rtl or not any(self._canvas.front):
                 # LIST/DIR: keep -- MORE -- (or the current page) without '>'
@@ -431,6 +449,13 @@ class SimBackend(RuntimeBackend):
             if getattr(self, "_break_run_wait", False):
                 break
             self._rpc("SCREEN?")
+            st = self._rpc("STATUS?")
+            if self._listing:
+                self._capture_listing_rows()
+            if "ready=1" in st:
+                self._listing = False
+                self._more = False
+                break
             has = self._screen_has_more()
             if leave_more:
                 if not has:
@@ -894,17 +919,25 @@ class SimBackend(RuntimeBackend):
         """
         if not self._started:
             self._start()
-        if ch == "\x1b":
-            self._rpc("KEY 1b")
-        elif ch in (" ", "\r", "\n"):
-            self._rpc("KEY 20" if ch == " " else "KEY 0d")
-        else:
-            self._rpc(f"KEY {ord(ch):02x}")
-        # Leave the current MORE page first (SCREEN still shows the old -- MORE --)
-        self._pump_until_more_or_ready(leave_more=True)
-        # Then wait until the next -- MORE -- or prompt (same as type_line LIST)
-        self._pump_until_more_or_ready()
-        self._sync_glass()
+        # root.update() during the pump re-enters here; extra Enter would
+        # queue page keys that become empty LINE once DIR hits READY.
+        if self._paging and ch != "\x1b":
+            return
+        self._paging = True
+        try:
+            if ch == "\x1b":
+                self._rpc("KEY 1b")
+            elif ch in (" ", "\r", "\n"):
+                self._rpc("KEY 20" if ch == " " else "KEY 0d")
+            else:
+                self._rpc(f"KEY {ord(ch):02x}")
+            # Leave the current MORE page first (SCREEN still shows the old -- MORE --)
+            self._pump_until_more_or_ready(leave_more=True)
+            # Then wait until the next -- MORE -- or prompt (same as type_line LIST)
+            self._pump_until_more_or_ready()
+            self._sync_glass()
+        finally:
+            self._paging = False
 
     def screen_text(self) -> str:
         if not self._started:
