@@ -27,18 +27,17 @@ Nothing here blocks the five titles on F9. Left:
 
 ### Glass / console (you can see these)
 
-**V1.0 editor is view-only.** The chip has **no compiler**. `RUN` loads the
-card-minted `.JSH`. Changing the numbered buffer (`EDIT n`, `10 body`,
-`INSERT`/`DELETE`, `SAVE` of that buffer) cannot change what plays. Use
-`LIST` / `DIR` / `LOAD` to **learn**. Author on the PC, remake `card.img`.
-**Edit + play** waits on **V1.5 compile-on-RUN**. Do not treat #42 / #43
+**V1.0 editor is view-only unless you `COMPILE`.** `RUN` loads the
+card `.JSH`. Host mint at card-create still works. **V1.5 compile is live:**
+`LOAD` → `EDIT` → **`COMPILE`** → `RUN`. Leftover is typed-at-READY numbered
+authoring of *new* programs, and popular JS natives. Do not treat #42 / #43
 as V1.0 silicon holes.
 
 | ID | Status | What | How to close |
 |---|---|---|---|
 | **#82** | **OPEN** (cause known 2026-08-26) | `LIST` / `DIR` print `-- MORE --` when the listing is already done. Content that lands on an exact multiple of 14 glass rows (`BOXES.HTML` = 42 = 3×14) eats the next keystrokes as page-advances (`?SN` / bare READY). The prompt **does** draw; the old “MORE invisible” theory was wrong. | Before paging, test end-of-content: LIST `src_i >= src_len \|\| list_disp > list_hi`; DIR when the catalog is drained. Sites: `C_DIR_NL`, `C_LIST_NL`, `C_LIST_WRAP_PAGE` (`list_on_page >= 13`). |
-| **#42** | V1.5 (not V1.0) | READY `INSERT n` — PYTHON edits; RTL `?SN`. Useless until compile-on-RUN. | V1.5 insert is an unused number (`15` between `10`/`20`). Do **not** add an `INSERT` verb. |
-| **#43** | V1.5 (not V1.0) | READY `DELETE n` — PYTHON editor-delete; RTL `REMOVE` is **file** delete. Useless until compile-on-RUN. | V1.5 delete is `10` + Enter. Keep `REMOVE "NAME"` for the card. |
+| **#42** | leftover numbered authoring | READY `INSERT n` — PYTHON edits; RTL `?SN`. | V1.5 insert is an unused number (`15` between `10`/`20`). Do **not** add an `INSERT` verb. |
+| **#43** | leftover numbered authoring | READY `DELETE n` — PYTHON editor-delete; RTL `REMOVE` is **file** delete. | V1.5 delete is `10` + Enter. Keep `REMOVE "NAME"` for the card. |
 
 ### Tests only (not F9)
 
@@ -271,13 +270,14 @@ verbs. **in** = the verb exists, not “every title is proven.”
 
 **V1.0 product:** `DIR` / `LOAD` / `LIST` / `RUN` / `ESC` (and `CLS` /
 `HELP` / `MEM` / `REMOVE`). `LIST` is to **read**. Edit verbs below do
-not make a title until **V1.5 compile-on-RUN**.
+not make a title until you **`COMPILE`**. Typed-READY numbered authoring of
+*new* programs is leftover.
 
 | Command | PYTHON | FPGA-SIM / board RTL | V1.0? | Open |
 |---|---|---|---|---|
 | `DIR` | in | in (`C_DIR*`) | view | **#82** extra MORE |
 | `LOAD "NAME.HTML"` | in (FAT `card.img`) | in (`C_LD_*`) | view | — |
-| `RUN` | minted `.JSH` from `card.img` | same `.JSH`. No on-chip compiler. `?NH` / `?NB` | play | V1.5 compile-on-RUN |
+| `RUN` | minted `.JSH` from `card.img` | same `.JSH`. `?NH` / `?NB` | play | V1.5: `COMPILE` then `RUN` |
 | `LIST` / MORE | in | in | **view / learn** | **#82** |
 | `EDIT n` | in | in | **no** — buffer change, `RUN` still `.JSH` | V1.5 |
 | `INSERT n` | in | **NOT** (`?SN`) | **no** | **#42** V1.5 (no verb) |
@@ -290,12 +290,10 @@ Host builtins, language methods, and Canvas **Complete** rows:
 [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md). Do not use the old
 2026-08-19 snapshot in git as current silicon status.
 
-## Compatibility command map (inspection only) — superseded
+## Compatibility command map — superseded
 
-The old per-API table here mixed **open** with rows that later landed
-(#49 paths, #51 blit, #37 baseline, #39–41 arrays). Current map:
-[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md). Holes that are still
-real: [Open now](#open-now). Monitor verbs: [above](#monitor-ready).
+Current map: [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md). Open holes:
+[Open now](#open-now). Monitor verbs: [above](#monitor-ready).
 
 
 ---

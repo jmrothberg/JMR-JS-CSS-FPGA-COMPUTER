@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>UTILITY — card catalog</title></head>
+<body style="margin:0;background:#000">
+<!--
+  UTILITY.HTML — list every file on the card, including .JSH.
+
+  DIR hides .JSH. After COMPILE you LOAD this title and RUN it to see
+  the sidecar (name + byte size). Yellow rows are .JSH.
+
+  Launch:  LOAD "UTILITY.HTML"   then   RUN
+  Keys: Up/Down or W/S scroll. Esc is machine BREAK.
+  No string methods. fillText numbers, not ""+n. 16 locals/function.
+
+  PYTHON RUN parks the catalog in the scratch arena (stgRead):
+      bytes 0-3  'U' 'T' 'L' 1
+      then records: u8 nlen, name bytes, u32 size LE
+      nlen=0 ends
+-->
+<canvas id="gameCanvas" width="640" height="480"></canvas>
+<script>
+var G = [
+  " ","!","\"","#","$","%","&","'","(",")","*","+",
+  ",","-",".","/","0","1","2","3","4","5","6","7",
+  "8","9",":",";","<","=",">","?","@","A","B","C",
+  "D","E","F","G","H","I","J","K","L","M","N","O",
+  "P","Q","R","S","T","U","V","W","X","Y","Z","[",
+  "\\","]","^","_","`","a","b","c","d","e","f","g",
+  "h","i","j","k","l","m","n","o","p","q","r","s",
+  "t","u","v","w","x","y","z","{","|","}","~"
+];
+var ctx = document.querySelector("canvas").getContext("2d");
+ctx.imageSmoothingEnabled = false;
+
+var ROWS = 22;
+var top = 0;
+var nFiles = 0;
+var nJsh = 0;
+var haveCat = 0;
+var needDraw = 1;
+
+function _gr(i) { return stgRead(i); }
+
+function magicOk() {
+  return _gr(0) === 85 && _gr(1) === 84 && _gr(2) === 76 && _gr(3) === 1;
+}
+
+function recOff(idx) {
+  var p, n, i;
+  p = 4;
+  i = 0;
+  while (i < idx) {
+    n = _gr(p);
+    if (n <= 0) return -1;
+    p = p + 1 + n + 4;
+    i = i + 1;
+  }
+  return p;
+}
+
+function countFiles() {
+  var p, n, nj;
+  p = 4;
+  nFiles = 0;
+  nj = 0;
+  while (nFiles < 400) {
+    n = _gr(p);
+    if (n <= 0) break;
+    if (isJshAt(p)) nj = nj + 1;
+    p = p + 1 + n + 4;
+    nFiles = nFiles + 1;
+  }
+  nJsh = nj;
+}
+
+function isJshAt(p) {
+  var n, a, b, c;
+  n = _gr(p);
+  if (n < 4) return 0;
+  a = _gr(p + n - 2);
+  b = _gr(p + n - 1);
+  c = _gr(p + n);
+  return a === 74 && b === 83 && c === 72;
+}
+
+function recSize(p) {
+  var n, q;
+  n = _gr(p);
+  q = p + 1 + n;
+  return _gr(q) + _gr(q + 1) * 256 + _gr(q + 2) * 65536 + _gr(q + 3) * 16777216;
+}
+
+function glyph(code) {
+  if (code < 32 || code > 126) return "?";
+  return G[code - 32];
+}
+
+function drawName(p, x, y) {
+  var n, i, ch;
+  n = _gr(p);
+  i = 0;
+  while (i < n) {
+    ch = _gr(p + 1 + i);
+    ctx.fillText(glyph(ch), x + i * 8, y);
+    i = i + 1;
+  }
+}
+
+function draw() {
+  var i, p, y, sz;
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, 640, 480);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "16px monospace";
+  ctx.textBaseline = "top";
+  ctx.fillText("CARD CATALOG", 8, 6);
+  if (!haveCat) {
+    ctx.fillStyle = "#ff6666";
+    ctx.fillText("No catalog (LOAD UTILITY.HTML then RUN on PYTHON).", 8, 40);
+    ctx.fillStyle = "#ffffee";
+    ctx.fillText("DIR hides .JSH. Esc = BREAK", 8, 72);
+    return;
+  }
+  ctx.fillText("FILES", 200, 6);
+  ctx.fillText(nFiles, 256, 6);
+  ctx.fillText("JSH", 360, 6);
+  ctx.fillText(nJsh, 400, 6);
+  ctx.fillStyle = "#888888";
+  ctx.fillText("NAME             BYTES", 8, 28);
+  i = 0;
+  while (i < ROWS) {
+    p = recOff(top + i);
+    if (p < 0 || _gr(p) <= 0) break;
+    y = 48 + i * 16;
+    if (isJshAt(p)) ctx.fillStyle = "#ffff66";
+    else ctx.fillStyle = "#ffffff";
+    drawName(p, 8, y);
+    sz = recSize(p);
+    ctx.fillText(sz, 200, y);
+    i = i + 1;
+  }
+  ctx.fillStyle = "#888888";
+  ctx.fillText("Up/Down scroll   Esc BREAK", 8, 460);
+}
+
+function onKey(e) {
+  var c;
+  c = e.keyCode;
+  if (c === 38 || c === 87) {
+    if (top > 0) top = top - 1;
+    needDraw = 1;
+  }
+  if (c === 40 || c === 83) {
+    if (top + ROWS < nFiles) top = top + 1;
+    needDraw = 1;
+  }
+}
+
+function loop() {
+  if (needDraw) {
+    draw();
+    needDraw = 0;
+  }
+  requestAnimationFrame(loop);
+}
+
+addEventListener("keydown", onKey);
+haveCat = 0;
+try {
+  haveCat = magicOk() ? 1 : 0;
+  if (haveCat) countFiles();
+} catch (e) {
+  haveCat = 0;
+}
+needDraw = 1;
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

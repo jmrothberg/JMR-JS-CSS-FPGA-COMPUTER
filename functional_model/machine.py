@@ -648,6 +648,32 @@ class Machine:
             jsb_format.ProgramImage(blob), share_machine=True
         )
 
+    def _stage_card_catalog(self) -> None:
+        """Park every FAT file (name + size) in the compile arena.
+
+        Layout: bytes 0-3 = 'U' 'T' 'L' 1, then records
+        (u8 nlen, name bytes, u32 size LE), then nlen=0. DIR still hides
+        .JSH; this dump is what UTILITY.HTML reads via stgRead.
+        """
+        off = 0
+        for b in (0x55, 0x54, 0x4C, 0x01):
+            self._nat_stg_write(off, b)
+            off += 1
+        for name, size in self.storage.list_all():
+            raw = name.encode("ascii", "replace")[:15]
+            self._nat_stg_write(off, len(raw))
+            off += 1
+            for ch in raw:
+                self._nat_stg_write(off, ch)
+                off += 1
+            sz = int(size) & 0xFFFFFFFF
+            self._nat_stg_write(off, sz & 255)
+            self._nat_stg_write(off + 1, (sz >> 8) & 255)
+            self._nat_stg_write(off + 2, (sz >> 16) & 255)
+            self._nat_stg_write(off + 3, (sz >> 24) & 255)
+            off += 4
+        self._nat_stg_write(off, 0)
+
     def _finish_program_op(self, status: int, message: str) -> List[str]:
         """Act on what a chained program reported through cdone().
 
@@ -802,6 +828,11 @@ class Machine:
             "COMPILE",
             f"card {stem}.JSH → ProgramImage ({len(blob)} bytes)",
         )
+        if stem == "UTILITY":
+            # HTML catalog viewer: park every FAT name+size so stgRead works.
+            # Not a READY verb. LOAD "UTILITY.HTML" then RUN.
+            self._stage_card_catalog()
+            return self._start_html_image(image, share_machine=True)
         return self._start_html_image(image)
 
     def _run_html_bytecode(self, html: str) -> List[str]:

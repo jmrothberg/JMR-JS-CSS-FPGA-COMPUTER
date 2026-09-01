@@ -40,15 +40,13 @@ keyboard jack **J15**, Pmod joystick. **PA-StarLite** is a later port.
 Development order: **PYTHON bytecode → real FPGA-SIM (perfect) → board → ASIC**.
 Do **not** flash the board until the FPGA-SIM battery is green.
 
-**Status (2026-08-27):** banner **V1.0**. Five titles play on FPGA-SIM;
-**DIR works on the board** (run 50). Clean bit: run 49b
-(`build/bits/run49_DIR-self-heal.bit`). Scoreboard:
-[docs/FPGA_FIT.md](docs/FPGA_FIT.md). Speed plan:
+**Status (2026-09-01):** five titles play on FPGA-SIM; DIR works on the
+board. Live numbers: [docs/FPGA_FIT.md](docs/FPGA_FIT.md). Board fps plan:
 [docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md). J15 USB
 Host is dead on this unit — type and play from the GUI **PROG tether**.
-**V1.0:** compile when you make the card (`.JSH`). **V1.5** tries
-standalone compile **and** popular JS V1 lacks. **V2.0** grows the ISA/ASET
-(no named title).
+**V1.0:** compile when you make the card (`.JSH`). **V1.5 compile is live:**
+`LOAD` → `EDIT` → **`COMPILE`** → `RUN`. Popular JS V1 lacks is leftover.
+**V2.0** grows the ISA/ASET (no named title).
 
 **Where to go next**
 
@@ -57,12 +55,14 @@ standalone compile **and** popular JS V1 lacks. **V2.0** grows the ISA/ASET
 | Words / abbreviations used everywhere | [Words used](#words-used-in-this-project) (this page) |
 | What the machine *is* (spec) | [CONSTITUTION.md](CONSTITUTION.md) |
 | Blocks, posters, asset-bank port | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| How to write a game | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) (walls + FAST rules) |
+| How to write a game | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) (art, input, FAST) |
 | What JS/Canvas is Complete vs later | [docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md) |
 | Learn the 34 instructions | [docs/JS_COMMANDS.md](docs/JS_COMMANDS.md) |
 | Board, Vivado, flash, HDMI | [docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md) |
-| **Writing RTL well — area, speed, templates (read BEFORE new RTL or a new chip)** | [docs/RTL_DESIGN_PRINCIPLES.md](docs/RTL_DESIGN_PRINCIPLES.md) |
-| **The timing wall — measured logic/route split, root cause, max clock, held fixes** | [docs/TIMING_WALL.md](docs/TIMING_WALL.md) |
+| F10 Architecture Monitor (line decode) | [docs/ARCH_MONITOR.md](docs/ARCH_MONITOR.md) |
+| Navigate parent + exec64 RTL | [docs/RTL_REORG.md](docs/RTL_REORG.md) |
+| **Writing RTL well — area, speed, templates (read BEFORE new RTL)** | [docs/RTL_DESIGN_PRINCIPLES.md](docs/RTL_DESIGN_PRINCIPLES.md) |
+| Clock / timing (slow the JS core, not DDR3) | [docs/FPGA_FIT.md](docs/FPGA_FIT.md) numbers + hedge; [RTL_DESIGN_PRINCIPLES.md](docs/RTL_DESIGN_PRINCIPLES.md) how to write. Phrase: [TIMING_WALL.md](docs/TIMING_WALL.md) |
 | GUI / tooling bugs (host-side only — not the .bit) | [docs/GUI_TOOLING_BUGS.md](docs/GUI_TOOLING_BUGS.md) |
 | Fit numbers, next `.bit`, RAM law | [docs/FPGA_FIT.md](docs/FPGA_FIT.md) |
 | This week’s status + failed-fix table | [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) |
@@ -125,14 +125,10 @@ python3 tools/make_sd_image.py create card.img -nojsh
 #     edit, re-run make_artx + card create (make_artx also writes ARTJS and
 #     wires the Chrome __jmrSpr hook).
 #     Card gets HTML + .ARTX (as .ART) + minted .JSH. PNG / ARTJS stay
-#     on the host. V1.0 default COMPILES each HTML into NAME.JSH here
-#     (the chip does not compile). PYTHON, FPGA-SIM, and BOARD all
-#     LOAD/RUN this image. Edit storage/ → rebuild here before F9.
-#     Default mints sound() (nid 42). Pass -soundoff to stub those
-#     calls (old bits that lack the native). Pass -nojsh to leave
-#     title .JSH off so FPGA COMPILE can be tested (compiler-chain
-#     .JSH still minted). Chrome Web Audio / ARTJS are never minted.
-#     Authoring: docs/GAME_DESIGN.md (Art).
+#     on the host. Default COMPILES each HTML into NAME.JSH here.
+#     PYTHON, FPGA-SIM, and BOARD LOAD/RUN this image. Edit storage/ →
+#     rebuild before F9. -nojsh leaves title .JSH off so COMPILE can be
+#     tested. Authoring: docs/GAME_DESIGN.md (Art).
 
 sudo python3 tools/make_sd_image.py burn /dev/sdX
 # 6b. make AND burn — rebuild card.img from storage/, then raw-write µSD
@@ -143,31 +139,16 @@ sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
 # 6c. burn only — write the existing card.img as-is (skip rebuild)
 
 source scripts/vivado_env.sh && make -C tools/board_flow bit
-# 7. NEXT bitstream (as of 2026-08-22): ordinary `bit`. The one required
-#    bit-fresh (exec32 file deleted + incremental stitch had duplicated
-#    the framebuffer) was DONE 2026-08-21 and the 08-21 23:50 run already
-#    reused that project. The 08-22 Phase 3b hand-delete changed file
-#    *contents*, not the file *list*, so it does NOT need another one.
-#    Use bit-fresh (not `make clean`) only when the source file *list*,
-#    MIG, or XDC changes -- never to recover a mid-run crash.
-#    Synth 2 threads / impl 8. Tracker: build/nexys_video/synth_rss.log
-#    Do not close this terminal or an agent job — that SIGTERMs Vivado
-#    (no .dcp until synth_1 is 100%). Writes both
-#    build/nexys_video/jmr_nexys_video.bit (JTAG) and .bin (QSPI).
-#    After WNS ≥ 0 → step 8. Last flashed 2026-08-13 03:36 (WNS +0.139).
+# 7. NEXT bitstream — ordinary `bit`. bit-fresh only when the source file
+#    *list*, MIG, or XDC changes — never to recover a mid-run crash.
+#    Hygiene: docs/SESSION_HANDOFF.md § Synthesis. Pins/flash:
+#    docs/FPGA_BRINGUP.md. Writes .bit (JTAG) and .bin (QSPI).
 
 make -C tools/board_flow flash
-# 8. put the new bitstream ON the Nexys Video (PROG USB J12 plugged in).
-#    SRAM / JTAG — HDMI live in seconds, GONE when you unplug. Uses the
-#    existing .bit. If Make starts Vivado, stop it — rtl/ is newer than
-#    the file you already built; load that file instead:
-#      openFPGALoader -b nexysVideo build/nexys_video/jmr_nexys_video.bit
-#    Survives power-cycle (QSPI, minutes; JP4 = QSPI):
-#      make -C tools/board_flow flash-qspi
-#    or: openFPGALoader -b nexysVideo -f build/nexys_video/jmr_nexys_video.bin
-#    After flash-qspi the monitor goes blank and BUSY blinks (flash-helper,
-#    not a fault). Press PROG or power-cycle; DONE lights. Live AND
-#    persistent: flash-qspi first, then flash last.
+# 8. SRAM-load the existing .bit (PROG USB J12). If Make starts Vivado,
+#    stop it and load the file you already built. QSPI:
+#    make -C tools/board_flow flash-qspi
+#    Detail: docs/FPGA_BRINGUP.md.
 ```
 
 Day-one: **1 → 2 → 3 → 4 → 5**. FPGA-SIM is **real RTL** after step 4 — do not
@@ -198,15 +179,17 @@ always-on Cursor rule (agents) and one teaching/human page. Other documents
 | No dukpy / V8 / browser / soft CPU as the machine; V1.0 `RUN` is minted `.JSH` from `card.img` | `.cursor/rules/no-dukpy-cheat-native-cpu.mdc` | [CONSTITUTION.md](CONSTITUTION.md) Vendored-titles mandate |
 | PYTHON → FPGA-SIM → your F9 → board. Agent does not run Vivado | `.cursor/rules/python-first-parity.mdc` | [Method](#method-steal-from-the-basic-sibling--not-the-product) (this page) |
 | Do not hardwire `INVADERS` / `PACMAN` / `DONKEY` into the chip | `.cursor/rules/no-game-hardwire.mdc` | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) |
-| Version 1.0 authoring walls; V1.5 console + popular JS; V2.0 is ISA/ASET growth (no title name) | `.cursor/rules/html-game-v1.mdc` | [docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md) § Version 1.0, 1.5, and 2.0 |
+| Version 1.0 authoring walls; V1.5 COMPILE live + leftover typed-READY / popular JS; V2.0 is ISA/ASET growth (no title name) | `.cursor/rules/html-game-v1.mdc` | [docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md) § Version 1.0, 1.5, and 2.0 |
 | Read `traces/` before re-running the GUI | `.cursor/rules/use-existing-traces.mdc` | [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) |
-| Synth hygiene: 2 workers; when **not** to `bit-fresh`; incremental stitch | [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) § Synthesis | [docs/FPGA_FIT.md](docs/FPGA_FIT.md) + [docs/OLD_RUNS.md](docs/OLD_RUNS.md) |
+| Synth hygiene: 2 workers; when **not** to `bit-fresh`; incremental stitch | [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) § Synthesis | [docs/FPGA_FIT.md](docs/FPGA_FIT.md) NEVER + [docs/OLD_RUNS.md](docs/OLD_RUNS.md) taxonomy |
+| Poll-fire cooldown (hold-to-repeat, not edge-gate) | `.cursor/rules/poll-fire-needs-cooldown.mdc` | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) Input / FAST |
+| No splice after kill-calls | `.cursor/rules/no-splice-after-kill-calls.mdc` | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) FAST |
+| No maze flood on a tick | `.cursor/rules/no-maze-flood-on-tick.mdc` | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) FAST |
 
-**Lesson books that are not a third copy of those laws** (unique history —
-keep): [docs/VIVADO_FLATTEN_HUNT.md](docs/VIVADO_FLATTEN_HUNT.md) (what we
-broke chasing 70 GB), [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md)
-failed-fix table (specific glass mistakes), [docs/RTL_REORG.md](docs/RTL_REORG.md)
-JUDGMENT (do not file-move; leftover files).
+**Lesson pages that are not a third copy of those laws:**
+[docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) failed-fix table,
+[docs/RTL_REORG.md](docs/RTL_REORG.md) JUDGMENT,
+[docs/VIVADO_FLATTEN_HUNT.md](docs/VIVADO_FLATTEN_HUNT.md) glass-suspect table.
 
 ---
 
@@ -251,7 +234,7 @@ mention.
 | **ARTX** | art sidecar | Quantized ASET payload beside `NAME.HTML` (`NAME.ARTX`; card 8.3 = `NAME.ART`). Built from `NAME-N.png` by `make_artx.py`. Title source uses `jmr:spr:N`, never inline base64. |
 | **ARTJS** | Chrome art | Same quantized sheets as `.ARTX`, as a `.js` file Chrome can load. Built by `make_artjs.py`. **Not** on the card. Open `storage/NAME.HTML` in Chrome to see it. |
 | **JSB** | — | On-the-wire encoding of a ProgramImage (`JSB1` magic) |
-| **JSH** | — | **V1.0:** ProgramImage minted when you **make the card**. PYTHON, FPGA-SIM, and BOARD all `RUN` this file from `card.img` (chip does not compile). Not copied from `storage/`. **V1.5 tries** compile-on-RUN on the machine |
+| **JSH** | — | **V1.0:** ProgramImage minted when you **make the card**. PYTHON, FPGA-SIM, and BOARD all `RUN` this file from `card.img`. Not copied from `storage/`. **V1.5:** `COMPILE` on the machine mints the same sidecar; `RUN` is unchanged |
 | **HTML** | HyperText Markup Language | Disk format of a title: `NAME.HTML` |
 | **JS** | JavaScript | The language / ISA. `NAME.JS` demos are **not** product twins of `NAME.HTML` |
 | **CSS** | Cascading Style Sheets | Page layout. Version 1.0 has almost none — paint on Canvas |
@@ -282,7 +265,7 @@ mention.
 | **Pmod** | Peripheral module | Digilent add-on jacks (joystick on **JB**, optional PS/2 keyboard on **JA**) |
 | **T200** | — | Lab name for this Nexys Video (Artix-7 200T) |
 | **T100** | — | Lab name for the BASIC sibling’s Nexys A7-100T |
-| **V1.0 / V1.5 / V2.0** | product generations | **V1.0** = titles that play; **one disk** = `card.img` for PYTHON / FPGA-SIM / BOARD; compile = **when you make the card** (`.JSH`). **V1.5** tries standalone compile + type/paste/edit at READY **and** popular JS V1 lacks. **V2.0** = bigger ISA/ASET (`MAX_SPR`, 8 MB bank, `Object.keys`, `Math.round`, dotted `new`) — **not** a named title |
+| **V1.0 / V1.5 / V2.0** | product generations | **V1.0** = titles that play; **one disk** = `card.img`; compile = **when you make the card** (`.JSH`). **V1.5 compile is live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. Typed-READY + popular JS V1 lacks is leftover. **V2.0** = bigger ISA/ASET (`MAX_SPR`, 8 MB bank, `Object.keys`, `Math.round`, dotted `new`) — **not** a named title |
 | **`?NH`** | no HTML / no minted `.JSH` | Loud miss: missing title path, **or** card-create compile failed so `LOAD` shows HTML and `RUN` refuses. Never “done” |
 | **clock** | chip heartbeat | The FPGA steps once per clock. This board’s JS core is ≈ **100 million** clocks per second (100 MHz) |
 | **frame** | one picture | One full 640×480 image. Games aim for **60 pictures per second** (about 16.7 milliseconds each) |
@@ -299,13 +282,12 @@ caps from older paragraphs.
 
 **LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID / AURORA / MRDO / MKPVP / MKBIG / MKBIGCPU / MKCPU / JOYDEMO / SNDDEMO / PACORIG / PACFAST / DNKFAST) then `RUN`. FAST copies keep the original look; measured clocks are in [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) (PACFAST **2.8×** PACMAN, DNKFAST **1.65×** DONKEY on FPGA-SIM play `fclk`).
 **V1.0** library titles must stay inside the authoring walls in
-[docs/GAME_DESIGN.md](docs/GAME_DESIGN.md). On the machine, **V1.0 `LIST`
-is view / learn** — no on-chip compiler, so `EDIT` cannot change `RUN`
-(that still loads the minted `.JSH`). **V1.5 (planned)** tries to be
-**standalone**: type / paste / edit numbered HTML at READY **and**
-compile-on-RUN on the machine **and** popular JS V1 does not have
-(`Array.shift`, `Math.sin`/`round`, `isFinite`, …). V1.0 compiles when you make the card;
-PYTHON / FPGA-SIM / BOARD all `RUN` that `card.img`) —
+[docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md)
+(how-to: [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md)). **V1.0 `LIST` is
+view / learn.** **V1.5 compile is live:** `LOAD` → `EDIT` → **`COMPILE`**
+→ `RUN`. Typed-at-READY numbered authoring of *new* programs, and popular
+JS V1 does not have (`Array.shift`, `Math.sin`/`round`, `isFinite`, …),
+are leftover —
 [docs/JMR_JS_COMPATIBILITY.md § V1.5](docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 **V2.0** is ISA/ASET growth, not a named title
 ([docs/JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](docs/JMR_JS_COMPATIBILITY.md#version-10-15-and-20)).

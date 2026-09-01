@@ -810,6 +810,25 @@ def test_dir_lists_only_titles(tmp_path):
     assert m.storage.catalog() == ["GAME.HTML"]
 
 
+def test_list_all_includes_jsh_and_catalog_dump(tmp_path):
+    """UTILITY needs every FAT file (DIR still hides .JSH)."""
+    (tmp_path / "GAME.HTML").write_text("<html></html>")
+    (tmp_path / "GAME.JSH").write_bytes(b"abcd")
+    m = Machine(storage_root=tmp_path)
+    info = {n: s for n, s in m.storage.list_all()}
+    assert info["GAME.HTML"] == 13
+    assert info["GAME.JSH"] == 4
+    assert m.storage.catalog() == ["GAME.HTML"]
+    m._stage_card_catalog()
+    assert int(m._nat_stg_read(0)) == 0x55
+    assert int(m._nat_stg_read(1)) == 0x54
+    assert int(m._nat_stg_read(2)) == 0x4C
+    assert int(m._nat_stg_read(3)) == 1
+    nlen = int(m._nat_stg_read(4))
+    name = "".join(chr(int(m._nat_stg_read(5 + i))) for i in range(nlen))
+    assert name in ("GAME.HTML", "GAME.JSH")
+
+
 # --- the editor -----------------------------------------------------------
 
 

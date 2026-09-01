@@ -11,6 +11,12 @@ This is **copy 2** of the Version 1.0 walls / Version 1.5 console + popular JS /
 Version 2.0 machine-work plan
 (copy 1 is `.cursor/rules/html-game-v1.mdc`).
 
+**On this page:** [Reference titles](#reference-titles-on-disk) ·
+[Version 1.0, 1.5, and 2.0](#version-10-15-and-20) ·
+[Agent surface checklist](#agent-surface-checklist-html--javascript--css--canvas) ·
+[Frozen machine contract](#frozen-machine-contract) (ABI) ·
+[Regression seeds](#regression-seeds)
+
 Target games drive the language/API set. **Not a full web browser** — no
 Fetch/XHR, no WebGL, no general browsing. Goal: **NLISC-JS** — HTML titles,
 JavaScript **ISA** (Instruction Set Architecture), the CSS a game actually
@@ -20,15 +26,15 @@ needs — **JMR bytecode VM** on PYTHON → FPGA-SIM → BOARD → ASIC.
 (copy 1: `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`; copy 2:
 [CONSTITUTION.md](../CONSTITUTION.md) Vendored-titles).
 
-**Machine state (2026-08-21 night, banner `V1.0`):** ONE opcode decoder —
-`jmr_js_vm_exec64.sv` (**Value64**). Five titles are **correct** on
-FPGA-SIM: INVADERS, PACMAN, DONKEY, ASTEROID, MRDO. FPGA-SIM is **too
-slow to play** (PC simulating the chip). Board target **≥ 30
-pictures/second**: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
-Live heap/code caps: [FPGA_FIT.md](FPGA_FIT.md). **V1.0 BOARD:** compile when
-you make the card (`.JSH`). **V1.5** (LIVE 2026-09-01) adds standalone compile plus
-type/paste/edit HTML **and** popular JS V1.0 does not have. Version 2.0 is
-ISA/ASET growth, **not** a named title.
+**Machine state (2026-09-01):** ONE opcode decoder — `jmr_js_vm_exec64.sv`
+(**Value64**). Five titles are **correct** on FPGA-SIM: INVADERS, PACMAN,
+DONKEY, ASTEROID, MRDO. FPGA-SIM is a slideshow (PC simulating the chip);
+board target **≥ 30 pictures/second**: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
+Live heap/code caps: [FPGA_FIT.md](FPGA_FIT.md). **V1.0:** compile when you
+make the card (`.JSH`). **V1.5 compile is live:** `LOAD` → `EDIT` →
+**`COMPILE`** → `RUN`. `RUN` still loads `.JSH`. Typed-at-READY numbered
+authoring of *new* programs, and popular JS V1.0 does not have, are leftover.
+Version 2.0 is ISA/ASET growth, **not** a named title.
 
 ## Reference titles (on disk)
 
@@ -39,16 +45,16 @@ LOAD "NAME.HTML"
 RUN
 ```
 
-| Game | Source (LOAD) | On RUN (invisible) |
+| Game | Source (LOAD) | On RUN |
 |---|---|---|
-| Space Invaders | `INVADERS.HTML` | compile → ephemeral ProgramImage (code + ASET art) |
-| Pac-Man | `PACMAN.HTML` | compile → ephemeral ProgramImage (code + ASET art) |
-| Donkey Kong | `DONKEY.HTML` | compile → ephemeral ProgramImage (code + **full-res** ASET art) |
-| Asteroids (library) | `ASTEROID.HTML` | compile → ephemeral ProgramImage (vector stroke; no ASET) |
-| Aurora (library) | `AURORA.HTML` | compile → ephemeral ProgramImage (fillRect; no ASET) |
-| Joystick (library) | `JOYDEMO.HTML` | compile → ephemeral ProgramImage (stick + arrows; no ASET) |
-| Sound (library) | `SNDDEMO.HTML` | compile → ephemeral ProgramImage (playSfx catalog; Chrome audio, card `sound()` nid 42; no ASET) |
-| Mr. Do! (library) | `MRDO.HTML` | compile → ephemeral ProgramImage (portrait 384×480 in 640×480 letterbox; no ASET) |
+| Space Invaders | `INVADERS.HTML` | minted `.JSH` from `card.img` (code + ASET art) |
+| Pac-Man | `PACMAN.HTML` | minted `.JSH` from `card.img` (code + ASET art) |
+| Donkey Kong | `DONKEY.HTML` | minted `.JSH` from `card.img` (code + **full-res** ASET art) |
+| Asteroids (library) | `ASTEROID.HTML` | minted `.JSH` from `card.img` (vector stroke; no ASET) |
+| Aurora (library) | `AURORA.HTML` | minted `.JSH` from `card.img` (fillRect; no ASET) |
+| Joystick (library) | `JOYDEMO.HTML` | minted `.JSH` from `card.img` (stick + arrows; no ASET) |
+| Sound (library) | `SNDDEMO.HTML` | minted `.JSH` from `card.img` (playSfx catalog; Chrome audio, card `sound()` nid 42; no ASET) |
+| Mr. Do! (library) | `MRDO.HTML` | minted `.JSH` from `card.img` (portrait 384×480 in 640×480 letterbox; no ASET) |
 | Mortal Kombat (library) | `MKBIG.HTML` / `MKBIGCPU.HTML` | **V1.0** — atlases inside 4 MB / 16 SPR. No `MK.HTML` in `storage/` |
 | MK PVP (library) | `MKPVP.HTML` | **V1.0** MK-shaped — ≤16 atlases, L/R sheets, no `Object.keys` / negative mirror |
 
@@ -57,9 +63,10 @@ RUN
 edits. Compile is at **card create** (`make_sd_image.py` **mints** `NAME.JSH`).
 `LOAD` shows HTML; `RUN` loads that `.JSH`. Do **not** compile `storage/*.HTML`
 on host `RUN` as a second path. Never copy `.JSH` from `storage/`. **V1.5
-tries to be standalone** (compile-on-RUN on the machine; drop the card `.JSH`
-if it fits) **and** lifts popular JS V1 walls (stdlib + globals; not Canvas
-gradients / mouse).
+compile is live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. `RUN` still
+loads `.JSH` from the card. Typed-at-READY numbered authoring of *new*
+programs, and popular JS V1 walls (stdlib + globals; not Canvas gradients /
+mouse), are leftover.
 
 **Asset bank (external SRAM — no `NAME.DAT`):** great graphics stay at full
 quality. You draw **PNG sheets**; `make_artx.py` writes `NAME.ARTX`. `RUN`
@@ -102,12 +109,12 @@ This machine ships **generations** of the playable HTML/JS surface. Agents
 must not silently raise V1 caps for a library demo, and must not call a
 Chrome-only title “done on the machine.”
 
-| | **1.0 (now)** | **1.5 (planned)** | **2.0 (planned)** |
+| | **1.0 (now)** | **1.5 (COMPILE live; leftover below)** | **2.0 (planned)** |
 |---|---|---|---|
-| **Meaning** | Caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Chip does not compile — **compile when you make the card** (minted `.JSH`). Console is **view-only** (`LIST` / `DIR` / `LOAD`) | Console **authoring** (type / paste / edit) **after** compile-on-RUN **and** popular JS V1 does not have (stdlib + globals). Same heap/ASET/Canvas caps. | Grow the ISA past V1 walls (sprite count, ASET size, `Object.keys` on RTL, `Math.round`, dotted `new`, `.call`/`.apply`). **No title is the V2 example.** |
-| **Acceptance** | `INVADERS` / `PACMAN` / `DONKEY` | Numbered-line HTML at `>` **and** standalone `RUN` **tried** on the machine (no PC); `SAVE` optional | Any `NAME.HTML` that needs those caps. `MKBIG.HTML` / `MKBIGCPU.HTML` stay V1 |
+| **Meaning** | Caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Host mint at card-create (`.JSH`). Console is **view-only** (`LIST` / `DIR` / `LOAD`) unless you `COMPILE`. | **Live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. `RUN` still loads `.JSH`. Compiler/editor are card programs, not a new ISA. **Leftover:** typed-at-READY numbered authoring of *new* programs, and popular JS V1 does not have. Same heap/ASET/Canvas caps. | Grow the ISA past V1 walls (sprite count, ASET size, `Object.keys` on RTL, `Math.round`, dotted `new`, `.call`/`.apply`). **No title is the V2 example.** |
+| **Acceptance** | `INVADERS` / `PACMAN` / `DONKEY` | Non-art titles compile on the machine (`COMPILE` then `RUN`). Art titles refuse until `ARTPNG.JSH`. Typed-READY `SAVE` optional leftover. | Any `NAME.HTML` that needs those caps. `MKBIG.HTML` / `MKBIGCPU.HTML` stay V1 |
 | **Sprites / ASET** | **`MAX_SPR` = 16**, 4 MB bank | **Unchanged** (do not grow heap/ASET for this) | **`MAX_SPR` ≥ 518**, **8 MB** bank |
-| **Authoring** | PC + remake `card.img`. `LIST` to learn. Do **not** treat `EDIT` as V1.0 play | Source is the **editor buffer**; `RUN` compiles it. Language: popular stdlib/globals (table below). Canvas caps stay | Same glass/`LOAD`/`RUN`; drop V1 HTML shims once V2 rows land |
+| **Authoring** | PC + remake `card.img`. `LIST` to learn. Do **not** treat `EDIT` as V1.0 play | **Live:** `EDIT` launches `EDITOR.JSH`; `COMPILE` mints `.JSH`. **Leftover:** numbered lines at `>` for *new* programs; language stdlib/globals (table below). Canvas caps stay | Same glass/`LOAD`/`RUN`; drop V1 HTML shims once V2 rows land |
 
 Do **not** title-gate (`if (stem == "…")`).
 
@@ -176,11 +183,10 @@ RUN
 SAVE "BOX.HTML"
 ```
 
-`RUN` on **V1.0** (PYTHON / FPGA-SIM / BOARD) loads the **minted** card
-`.JSH` from `card.img`. Untethered BOARD does not compile — compile was at
-card-create. **V1.5 tries to be standalone:** compile-on-RUN on the machine so typed /
-pasted / loaded HTML does not need that sidecar. A typed/pasted buffer must
-set `src_is_html` **without FAT**. Missing ProgramImage → loud `?NH`.
+`RUN` on **V1.0** loads the **minted** card `.JSH` from `card.img`. **V1.5
+compile is live:** `COMPILE` mints that sidecar on the machine; `RUN` is
+unchanged. Typed/pasted numbered HTML at READY (no `LOAD`) is leftover and
+must set `src_is_html` **without FAT**. Missing ProgramImage → loud `?NH`.
 
 **Fit budget (run 33 routed, [FPGA_FIT.md](FPGA_FIT.md) SCOREBOARD):**
 
@@ -191,9 +197,8 @@ set `src_is_html` **without FAT**. Missing ProgramImage → loud `?NH`.
 | Flip-flops | 45,379 / 269,200 (16.9%) | ~224k | Yes |
 
 **Do not** grow `MAX_SPR`, heap, or the 4 MB ASET bank for the console editor.
-**V1.5 tries standalone compile-on-RUN on the board** (drop card `.JSH` if
-it fits). That compiler’s LUT cost is **TBD** — leftover LUTs cover numbered
-lines, not a proven full JS compiler. Insert/delete in SOURCE is FSM memmove
+**V1.5 `COMPILE` is live** (drop card `.JSH` with `--nojsh` to prove it).
+Language natives’ LUT cost is **TBD**. Insert/delete in SOURCE is FSM memmove
 on the existing SRAM port. **Do not** grow SOURCE into BRAM.
 
 PYTHON already accepts `10 text` at READY; RTL does not. Empty `10` on
@@ -418,7 +423,7 @@ ignored, fades draw opaque), `ctx.font` size parsing (**45**),
 comparator-less `sort()` (no-op). **V1.0:** on-chip compiler is **NOT** —
 compile when you make the card (`.JSH`); PYTHON / FPGA-SIM / BOARD all
 `RUN` that image from `card.img`.
-**V1.5 tries** standalone compile on the machine.
+**V1.5 compile is live** (`COMPILE` on the machine).
 
 *Had an RTL arm that never actually worked* — found and fixed 2026-08-20, so
 do not read the "Complete" in the Canvas/Method tables below as "silicon was
@@ -677,9 +682,9 @@ Silicon holes and HELP-text mismatch:
 |---|---|---|---|---|
 | `DIR` | P0 | in | in | Names only (HTML / optional `.JS`) |
 | `LOAD "NAME.HTML"` | P0 | in | in | Quotes optional. `LOAD n` (DIR index) is PYTHON. **V1.0:** FAT on `card.img` for PYTHON / FPGA-SIM / BOARD. |
-| `RUN` | P0 | in | in | **V1.0:** all three rungs load the **card-minted** `.JSH` from `card.img`. On-chip compiler **NOT**. Missing image → `?NH` / `?NB`. **V1.5 tries** compile on the machine. |
+| `RUN` | P0 | in | in | **V1.0:** all three rungs load the **card-minted** `.JSH` from `card.img`. Missing image → `?NH` / `?NB`. **V1.5:** `COMPILE` then `RUN`. |
 | `LIST` / `LIST n-m` / `LIST -` | P0 | in | in | HTML line numbers. `-- MORE --` is Space/Enter, not a typed verb. |
-| `EDIT n` | P0 | in | in | **V1.0 view-only era:** buffer change does not play (`RUN` is minted `.JSH`). **Keep** for V1.5 compile-on-RUN. |
+| `EDIT n` | P0 | in | in | **V1.0 view-only era:** buffer change does not play (`RUN` is minted `.JSH`). **V1.5 live:** bare `EDIT` launches `EDITOR.JSH`. |
 | `INSERT n` | P0 | in | **NOT** (`?SN`) | **42** — not a V1.0 hole. V1.5: unused number, no `INSERT` verb. |
 | `DELETE n` | P0 | in | **NOT** (`?SN`) | **43** — not a V1.0 hole. V1.5: `10` + Enter. |
 | `REMOVE "NAME"` | P1 | in (file alias of DELETE) | in | File delete on card. Not `DELETE n`. |
@@ -689,9 +694,9 @@ Silicon holes and HELP-text mismatch:
 | `HELP` | P1 | in | in | PYTHON lists INSERT/DELETE; RTL prints `DIR LOAD SAVE NEW LIST EDIT RUN` |
 | `MEM` | P1 | in | in | RTL prints `FB 640X480` |
 | `ESC` | P0 | in | in | Machine BREAK; games must not steal Esc |
-| `10 text` (numbered replace) | P1 | in | **NOT** | PYTHON READY only. Same as `EDIT`: not product until V1.5 compile-on-RUN. |
+| `10 text` (numbered replace) | P1 | in | **NOT** | PYTHON READY only. Leftover typed-READY authoring, not the shipped `EDIT`/`COMPILE` loop. |
 
-##### Version 1.5 (planned) — type / paste / edit HTML at READY
+##### Version 1.5 — COMPILE live; typed-READY leftover
 
 **V1.0:** `LIST` to learn; typed HTML at `>` is `?SN ERROR` on BOARD. Edit
 verbs do not change `RUN`. Full glass, compile path, and LUT/BRAM budget:
@@ -701,7 +706,7 @@ verbs do not change `RUN`. Full glass, compile path, and LUT/BRAM budget:
 
 | Item | Pri | Status | Don’t |
 |---|---|---|---|
-| Minted `.JSH` ProgramImage from `card.img` | P0 | **V1.0:** PYTHON / FPGA-SIM / BOARD `RUN` this file (compile at card create) | Host-compile `storage/` on `RUN` as a second path. **V1.5 tries** compile on the machine |
+| Minted `.JSH` ProgramImage from `card.img` | P0 | **V1.0:** PYTHON / FPGA-SIM / BOARD `RUN` this file (compile at card create). **V1.5:** `COMPILE` on the machine mints the same sidecar | Host-compile `storage/` on `RUN` as a second path |
 | ASET → external 4 MB SRAM | P0 | Complete | Downscale for code BRAM; `NAME.DAT` |
 | Dual FB 640×480 | P0 | Complete | 160×120 leftover |
 
@@ -941,238 +946,13 @@ values are one 64-bit word.
 
 ---
 
-## Three-column gap list (honest) — historical planning snapshot
+## Historical snapshots (superseded)
 
-**Statuses in this table are 2026-08-14 planning language** (“grow until
-match”). They are **not** current. FPGA-SIM now **plays** the five HTML
-titles end to end. Keep the table as a reminder of what we once listed as
-work; do not treat a “grow” cell as an open bug. Current Complete/TBD:
-[Agent surface checklist](#agent-surface-checklist-html--javascript--css--canvas).
-Current holes: [potential bugs.md](potential%20bugs.md). Board is still
-behind (last flash 2026-08-13 03:36).
-
-| Feature / API | PYTHON (bytecode VM) | FPGA-SIM (RTL VM) | FPGA board |
-|---|---|---|---|
-| `LOAD` `.HTML` + `RUN` | **V1.0:** `card.img` HTML + minted `.JSH` (dukpy = debt) | **same** `card.img` (no `?NH`) | **same** `card.img` (or tether debug) |
-| numbers / bool / strings | grow to HTML needs | grow | grow |
-| `let` / arithmetic / `if` / loops | grow | grow | grow |
-| arrays / objects / `this` / classes / functions | **required for HTML titles** | **required** (gap until done) | same |
-| `setInterval` / `setTimeout` / rAF | required | required | required |
-| `canvas.getContext('2d')` 640×480 | required | required | required |
-| `fillRect` / paths / transform / `fillText` | as titles need | as titles need | same |
-| `drawImage` / `Image` PNG | as titles need | as titles need | same |
-| keydown/keyup (HTML decides bindings) | KEYBITS / host | `joy_in` / PS/2 | tether until J15 fixed |
-| heap / GC / objects in **JMR** VM | required (not dukpy) | required | required |
-| ProgramImage into VM / BRAM | **V1.0:** load minted `.JSH` from `card.img` | **same bytes** | **same** (or tether debug) |
-| external SRAM asset bank (ASET) | **required** — full-res art via FM SRAM model | **same** (stream ASET → SRAM port; blit from SRAM) | same after matching flash |
-| standalone keyboard | GUI / host | Verilator PS/2 OK | **dead J15** — PROG tether |
-
-Columns mean **JMR VM parity**, never “dukpy can do it so PYTHON is done.”
-
-### What PACMAN forces onto the queue
-
-- Path drawing (`arc` maze + characters), `getImageData` cache, `FontFace` stub
-- Multiple `<script>` eval (strict `game.js` must not poison `index.js` globals)
-- Dynamic palette so maze/sprites are not 8 VGA slots
-- Objects / timers / rAF in the **bytecode VM** (not a host JS engine)
-
-### What sprite DONKEY (DKJS) forces onto the queue
-
-- ES modules → flattened IIFE bundle (host `html_loader` skips `type=module`)
-- `drawImage` PNG sprites, `measureText`, `setTransform`, WASD + Enter
-- Canvas element is **640×480**; DKJS world stays 1510×685 via `setTransform`
-- Title → character select → play (auto-Enter ×2 after rAF)
-
-### What INVADERS.HTML (PNG) forces onto the queue
-
-- One ASET atlas + 9-arg `drawImage` for aliens / saucer / cannon (DONKEY-style;
-  not per-pixel `fillRect` sprites)
-- `drawImage` for the fleet; audio `play()` stubs
-- DOM `button.click` to skip a CSS START menu
-
-### What MRDO.HTML forces onto the queue
-
-Library title (not ISA freeze). Universal 1982 arcade rules from StrategyWiki /
-Wikipedia / KLOV — **portrait 384×480** (2× 192×240) centered in 640×480
-with black side letterbox, matching the vertical cabinet.
-
-- Tile dirt grid + 4-way dig; cherries in 2×4 groups; six apples that crush
-- Bouncing power ball (reform delay grows; prize resets it)
-- Red creeps → striped drillers; center prize → freeze + Alphamonster + 3 Munchers
-- EXTRA pen (letter every 5000); four clear conditions including diamond
-- Pixel `fillRect` sprites; `imageSmoothingEnabled = false`; HUD on Canvas
-
-### What FPGA-SIM has today (board after next matching flash)
-
-**Stale as written (it described the early `.JS` era) — corrected
-2026-08-21.** FPGA-SIM runs the **HTML** titles end to end: all five
-(INVADERS, PACMAN, DONKEY, ASTEROID, MRDO) load, compile on RUN, and play
-on the Value64 decoder with the full native table (ids 0–41 in
-`functional_model/jsb_format.py`), ASET sprite art from the external
-asset SRAM, 640×480 double-buffered glass, keyboard via KEYEVT **and**
-KEYBITS, GC, and JSON/RegExp/string machinery. The narrow early list
-(`console.log`, `clear`, `fillRect`, `swapBuffers`, `key*`, `startLoop`)
-is what the *first* `.JS` demos needed; it is not the surface any more.
-
-**The board is the thing that is behind:** the last *flashed* bit is the
-**03:36** one (Invaders hex / 160×120 FB). Current RTL **did** synthesize
-(2026-08-21) then failed place; fit repairs landed. Next user command:
-`bit-fresh` in [FPGA_FIT.md](FPGA_FIT.md).
-
----
-
-## Feature matrix (planning) — historical
-
-What the three product HTML files used when we froze the ISA. Not an open
-todo list. Library HTML stays on Version 1.0 walls. **V2.0 is ISA/ASET
-growth, not a named title.**
-
-| Feature | PACMAN.HTML | DONKEY.HTML | INVADERS.HTML | Implement |
-|---|---|---|---|---|
-| numbers / bool / strings | yes | yes | yes | V1 bytecode |
-| arrays / objects / prototypes | yes | yes | yes | JMR VM (not dukpy) |
-| ES6 class / modules | no | **yes** (flattened) | no | JMR VM |
-| functions | yes | yes | yes | JMR VM |
-| setInterval / rAF | yes | yes | yes | JMR VM |
-| fillRect / clearRect | yes | yes | yes | engines |
-| path / arc | **yes** | some | no | engines |
-| fillText | HUD | **yes** | HUD | engines |
-| drawImage PNG | no (paths) | **yes** | **yes** | engines |
-| keyboard (HTML binds) | yes | yes | yes | KEYBITS / joy_in |
-| CSS (game HUD) | wanted | wanted | wanted | later tiny subset |
-| Audio | `playSfx` / `sound` nid 42 | Chrome `_chromePlay` | card `sound()` nid 42 | ADAU1761 PHY in |
-| WebGL / Fetch | no | no | no | NEVER |
-
-Library HTML (`ASTEROID`, `AURORA`, `JOYDEMO`, `MKBIG`) uses the **V1.0**
-surface + [GAME_DESIGN.md](GAME_DESIGN.md) walls. **No `MK.HTML`.** MRDOFAST
-is a **portrait** 384×480 tile title (side letterbox on 640×480). Do not
-stretch the cabinet raster.
-
----
-
-## Frozen ISA (three HTML compiles, 2026-08-14)
-
-This is the **actual** `CALL_NATIVE` / `CALL_METHOD` / Canvas surface emitted
-by `INVADERS.HTML` / `PACMAN.HTML` / `DONKEY.HTML`. It is the ISA. Do **not**
-grow “popular HTML5” past this list.
-
-**Agents:** product Complete/TBD lives in **Agent surface checklist** above.
-Rows here that say **done** mean “the compile emits it / some code exists,”
-not that PYTHON + FPGA-SIM titles are accepted. Chrome is authoring only.
-
-Chrome is authoring only. Fonts are **never** Chrome TTF (PYTHON 8×8 bitmap;
-RTL `fillText` is a 64×8 rect stub).
-
-### Natives (`CALL_NATIVE` → `jsb_format.NATIVE_IDS`)
-
-Numbered ABI (ids 0–40) is under [Native IDs](#native-ids-call_native--op_call-arg0).
-
-| Native | Titles | Status |
-|---|---|---|
-| `document.getElementById` / `querySelector` / `createElement` | all | done |
-| `addEventListener` / `removeEventListener` (document/window) | all | done |
-| `document.dispatchEvent` / `window.dispatchEvent` | DONKEY | done |
-| `new KeyboardEvent` / `Event` / `CustomEvent` / `MouseEvent` | DONKEY boot Enter | done PYTHON+RTL (`NEW_OBJ` copies type+options) |
-| `requestAnimationFrame` / `setTimeout` / `clearTimeout` | all | done |
-| `Math.floor` / `abs` / `min` / `max` / `random` / `sqrt` | INVADERS, PACMAN | done |
-| `JSON.parse` / `JSON.stringify` | INVADERS, PACMAN | done (nested + interned parse; stringify finishes FRAME) |
-| `Array` ctor | PACMAN | done (`fill`+`map` nested rows writable) |
-| `Image` | INVADERS, DONKEY | done (ASET handle) |
-| `Date` / `Date.now` | INVADERS, PACMAN | done (frame clock) |
-| `localStorage.*` | INVADERS | done (in-memory) |
-| `typeof` | PACMAN | done PYTHON+RTL (interned result; `"number"` not intern-0) |
-| `window.open` | PACMAN | **never** (no-op / `_stub`) |
-| `console.log` / `console.warn` | INVADERS, DONKEY | done |
-| `sound` nid 42 | library (`playSfx` → card native) | done (always succeed; PHY envelope; PYTHON silent no-op) |
-
-### Constructors (`NEW_OBJ` / `NEW`)
-
-| Construct | Titles | Status |
-|---|---|---|
-| `new KeyboardEvent(type, {key, keyCode, …})` | DONKEY boot Enter | done (compiler desugar → `Object.assign({type}, opts)`; exec32 native retired) |
-| `new Event` / `CustomEvent` / `MouseEvent` | DONKEY | done |
-| `new Image()` | INVADERS, DONKEY | done (ASET handle) |
-| `new Date()` | INVADERS, PACMAN | done (frame clock) |
-| `Array(n)` | PACMAN finder `steps` | done (`fill`+`map` nested) |
-| `RegExp` literal / `new RegExp` | PACMAN `replace` | done (stub + flags; interned `/g`) |
-
-### Methods (language / VM — not title gates)
-
-| Method | Titles | Status |
-|---|---|---|
-| `join` | PACMAN (`code.join('')` maze keys) | done (digit-element walk fixed 2026-08-21 — the raddr gated a beat late and every element read as `"0"`) |
-| `indexOf` | PACMAN (neighbor bits + beans stringify) | done (array, interned string, and dynstr receivers) |
-| `fill` / `map` / `filter` / `unshift` | PACMAN finder | done |
-| `forEach` / `find` / `findIndex` / `splice` / `push` / `pop` | INVADERS, PACMAN | done (`findIndex` added to exec64 2026-08-21 — it had only ever existed in exec32) |
-| `slice` / `sort(cmp)` / `reduce` | library | done (#39/#40/#41) |
-| `replace` (string + RegExp stub) | PACMAN | done (interned `/g` and dynstr; replacement-char settle fixed 2026-08-21) |
-| `assign` / `bind` | PACMAN | done |
-| `getContext` | all | done (`test_hw_value64_p0_getcontext_fillrect_paints`) |
-
-### Canvas ops
-
-| Op | Titles | Status |
-|---|---|---|
-| `fillRect` / `clearRect` / `drawImage` / `setTransform` | INVADERS / DONKEY | done (natural-size `drawImage(img,x,y)` honors the transform scale since 2026-08-21 — the argc<5 leg took sprite w/h raw) |
-| `ctx.font = "NNpx …"` | DONKEY, MRDO HUD | done — parsed in `S_FONTPX`; that state had **no entry** on Value64 until 2026-08-21 (every `fillText` drew at the 8px default). **N is integer scale of the 8×8 ROM**, not a TTF. World-scaled Score/Lives need 32px — [GAME_DESIGN.md](GAME_DESIGN.md) fillText wall |
-| `document.dispatchEvent(ev)` / `new KeyboardEvent` | DONKEY boot Enter | done on Value64 2026-08-21 (`S_V64_DISPATCH` + custom listener scan). Was exec32-only — the real cause of DONKEY's "Enter twice" quirk |
-| `beginPath` / `moveTo` / `lineTo` / `arc` / `stroke` / `fill` / `quadraticCurveTo` / `closePath` | PACMAN (+ INVADERS arc) | done |
-| `imageSmoothingEnabled` | DONKEY, MRDO | done (nearest blit; false stored) |
-| `fillText` / `measureText` | PACMAN, DONKEY, INVADERS HUD | **never** Chrome font — 8×8 / rect stub (HM `fillText`/`measureText` tests exist) |
-| `getImageData` / `putImageData` | PACMAN map cache | done |
-| `lineWidth` / `strokeStyle` | PACMAN | done |
-
-### Never (not in the three compiles as a product API)
-
-WebGL, Fetch/XHR, Audio (`.play` is a stub), TTF/`FontFace`, real `window.open`,
-CSS layout engine, browsing.
-
-Play-blocking gaps get **one pytest per gap** in `tests/test_bytecode_js.py`
-(RTL twin in `tests/test_rtl_snippets.py` only if play-blocking).
-
-### FPGA-SIM tests: small twins, not a second title suite
-
-A **larger FPGA-SIM suite is the wrong knob**. `tests/test_rtl_snippets.py`
-already has ~100 RTL cases. Each boots Verilator. A 200-line PACMAN-finder
-clone (`test_rtl_ghost_update_leaves_start_cell`) fails as “nz < 50” and
-then the agent debugs the **test**, not exec64. Tokens burn there.
-
-**Faster and cheaper:** grow `test_hw_value64_*` (PYTHON / JsHwVm, same
-ProgramImage). That is seconds, no `sim_server`. FPGA-SIM pytest is only
-the **twin of a play-blocking RTL hole** after PYTHON already passes the
-same JS.
-
-| Do | Do not |
-|---|---|
-| One behavior, 5–15 lines of JS/HTML | Miniature INVADERS/PACMAN/DONKEY |
-| Same source string on PYTHON then RTL | RTL-only expected numbers with no HM twin |
-| `fault=0` + **one** pixel `(x,y)` or one `VMSTAT?` field | `nz >= 50` / “looks painted” |
-| Map to a `docs/potential bugs.md` ID (6, 15, 14, 31) | “cover Canvas” in one test |
-| Reuse `_sim` / `_patch_html` / `_fb_pix` already in `test_rtl_snippets.py` | New harness, new assert language, `FRAME` 64M in pytest |
-
-**Shape an agent can write without guessing** (HTML FLAG_VALUE64, like titles):
-
-```html
-<canvas id="c" width="640" height="480"></canvas>
-<script>
-var c = document.getElementById("c").getContext("2d");
-function tick() {
-  c.fillStyle = "#fff";
-  c.fillRect(10, 10, 4, 4);
-  requestAnimationFrame(tick);
-}
-requestAnimationFrame(tick);
-</script>
-```
-
-Assert `fault=0` and `_fb_pix(raw, 11, 11) != 0`. That is bug **12**/G1
-shape. For **15**: `keydown` + `e.key === "w"` then one `fillRect`. For
-**6**: `forEach` that falls off the callback (no `return`) then rAF still
-paints. If the snippet needs a comment to explain the maze, it is too big
-— use the real `.HTML` + traces instead.
-
-Visual play stays **F9 FPGA-SIM**, not a snippet PASS. Do not mark a
-compat row Complete from Chrome or from a fat RTL snippet.
+The 2026-08-14 three-column gap list, feature matrix, and Frozen ISA table
+do not teach anything the live sections above do not. Git has that snapshot
+(`git log -p -- docs/JMR_JS_COMPATIBILITY.md`). Use
+[Agent surface checklist](#agent-surface-checklist-html--javascript--css--canvas)
+and [Frozen machine contract](#frozen-machine-contract).
 
 ---
 
@@ -1196,7 +976,7 @@ compat row Complete from Chrome or from a fat RTL snippet.
 - **Product path:** `functional_model/` **bytecode VM** — **V1.0** `LOAD`/`RUN`
   from project `card.img` (HTML + minted `.JSH`; ASET → FM asset-SRAM model).
   Using dukpy in `js_host.py` is **debt to remove**, not truth. Do not compile
-  `storage/*.HTML` on `RUN` as a second path. **V1.5 tries** compile on the
+  `storage/*.HTML` on `RUN` as a second path. **V1.5:** `COMPILE` on the
   machine.
 - Use **`.venv`** (Pillow for `drawImage` on the Canvas engine).
 - Playable HTML titles declare `<canvas width="640" height="480">` and **fill**

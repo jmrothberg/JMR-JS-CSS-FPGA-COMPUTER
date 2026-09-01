@@ -518,8 +518,9 @@ Check the timestamp inside the report. Re-generate before deciding.
 ## Related
 
 - [FPGA_FIT.md](FPGA_FIT.md) — this chip's numbers, caps, NEVER table, live scoreboard
-- [TIMING_WALL.md](TIMING_WALL.md) — the measured case study behind §2.3 and §2.5–2.8
+- [TIMING_WALL.md](TIMING_WALL.md) — what “missed 100 MHz” meant (one page)
 - [potential bugs.md](potential%20bugs.md) — incident history and the recurring bug-class taxonomy
 - [ARCHITECTURE.md](ARCHITECTURE.md) — what each block is and where it lives
 - [CONSTITUTION.md](../CONSTITUTION.md) — what the machine is; wins on conflict
-- `.cursor/rules/` — always-on agent laws (copy 1 of the critical prohibitions)
+- Always-on agent laws (copy 1): `never-fake-fpga-sim.mdc`, `one-heap-keep-gen.mdc`,
+  `python-first-parity.mdc`, `no-dukpy-cheat-native-cpu.mdc`

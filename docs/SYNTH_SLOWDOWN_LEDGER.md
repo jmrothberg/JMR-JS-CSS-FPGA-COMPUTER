@@ -134,33 +134,6 @@ run (all reduce clocks → speed **both** FPGA-SIM and the board):
 5. GC_ARR per-array "no-refs" skip bit: biggest GC lever but easy to
    corrupt the heap — **not** low-risk; design first.
 
-# START HERE — remaining speed work (last-4 FIND cache already landed)
-
-**Step 1 (last-4 FIND cache) landed 2026-08-18.** Splash
-`WAIT_FRAME fault=0`; Space starts play; FIND is no longer the 64-million-clock
-cap-time stall. Do **not** paste the old “four flip-flops” brief again.
-
-**Still open (future plan, cheapest first):**
-
-1. **FIND Step 2** (hash→id Block RAM): −15% PACMAN. Contained. Not a CAM.
-   Not a JOIN module. Not a title gate.
-2. **Skip scheduled frame-end GC** when a forced GC already ran this
-   frame: −4–6%. Forced GCs still run on pressure.
-3. **`S_IMGD_PUT` 2→1 clk/px**: pipeline like `S_FB_SYNC`.
-4. **fillRect 4 px/clock**: touches the framebuffer port — do LAST.
-5. GC_ARR per-array "no-refs" skip bit: biggest GC lever, easy to corrupt
-   the heap — **design first**.
-
-**Lesson kept:** without a working intern FIND, `"SCORE "+n` / `fillText`
-/`arr.join` cannot finish a play frame. The last-4 cache is VM-wide (every
-title). Hash→id is the next FIND lever. Never `if (stem == "INVADERS")`.
-
-The 2026-08-18 “PASTE TO NEXT AGENT” implementation brief is **done**.
-Recover it from `git log -- docs/SYNTH_SLOWDOWN_LEDGER.md` if you need
-the four-FF recipe. Do not `git revert` Port A to go fast.
-
----
-
 ## Safe to edit FIND while a `.bin` is synthesizing?
 
 **Yes**, on FPGA-SIM only (`make -C sim sim_server_synth`). A running
@@ -168,34 +141,6 @@ Vivado job ingested `jmr_js_vm.sv` at start; disk edits do not enter it.
 Do **not** kill it. Do **not** `bit-fresh` a live crash. After that `.bin`
 exists, the **next** `make -C tools/board_flow bit` (not `bit-fresh`,
 unless the file list changed) picks up FIND.
-
----
-
-## Other flatten-hunt mistakes — would they make it 10×?
-
-**Almost none.** The measured 64 million clock stall is intern FIND
-walking up to 1024 names, twice, **every** `"…" + n`. That is ~2000
-clocks per concat. Extra `*_rdata` waits are 1–4 clocks. Do not “fix”
-those this pass — they are the legal SRAM shape.
-
-| Flatten leftover | Clocks (order) | 10× play? | This pass |
-|---|---|---|---|
-| **`S_JOIN_FIND` linear intern** | ~2 × `names_n` (up to ~2000) **per concat**, many concats per frame | **Yes. This is the 10×–1000×.** | **Do this** |
-| Last-1 cache vs 3–4 HUD strings | Last-1 misses all but one concat/frame | Maybe the difference between “better” and a finished `FRAME` | Last-**4** FFs if last-1 is not enough |
-| `S_JOIN` / `S_CONCAT` 3 waits (`jn_rd_arm` / slot / name) | +2 clocks on an already-legal path | No (2 vs 2000) | Keep waits. Do not combo-read |
-| CONCAT digit loop | one subtract/clock of the integer | No once FIND hits | Leave |
-| Class scan `cls_scan` | 16 classes × 16 methods FFs | No (~256 clocks) | Leave. Not 1024 objects |
-| `intern_var[id]` | already index + wait | No | Leave |
-| Timer due / compact | 64 slots × 2 clocks **once per frame** | No (~128 vs 64M) | Leave |
-| cstack refill | 2-deep window | No | Leave |
-| `sin_q` / arc 4 beats | per trig, not HUD intern | No | Leave |
-| HEAP extra wait beat | +1 per GET_PROP | No (~1 µs, already in FPGA_FIT) | Leave |
-| Exec CALL third-operand wait | +1 per call | No | Leave (glass) |
-| `casestate_q` / `unique`→`case` / IEEE mul moved | decode shape, failed 70 GB hunts | No intern O(n) | Do not churn |
-
-So: **one real speed revert** (FIND cache). Everything else on that list
-was either required for Port A or is noise next to FIND. Do not open a
-second flatten hunt while INVADERS play still dies in `S_JOIN_FIND`.
 
 ---
 
@@ -291,39 +236,6 @@ required to keep Port A. Every title that builds strings needs FIND
 fast on **repeats**. The last-hit FFs are language/VM, not a game.
 
 Background / later hash→id BRAM: §1–4 below.
-
----
-
-## 1) The bug that was actually synthesis
-
-**Symptom:** Vivado RSS 8 → 36 → **70 GB**, log frozen. Heap as FFs
-(Synth **8-3967** / **8-4767**).
-
-**Cause:** large unpacked arrays written from the parent VM `always_ff`
-(`imgd_pix[i] <=`, `spr_mem[spr_wp] <=`, later the same class:
-`stack[i] <=`, `vobj_alloc[i] <=`, …). Isolated `rdata <= mem[raddr]`
-**while those writes stayed in the FSM** still blew 71 GB (15:22). Moves
-writes to a tiny Port A process (`if (we) mem[waddr] <= wdata`) → ~15 GB
-hold after `e32_p_clr` (15:32). That is UG901 simple dual-port / AR 58025
-territory.
-
-**Keep forever:**
-
-- Pictures + heap tables: `jmr_mini_fb`-shaped Port A. FSM only pulses
-  `*_we` / `*_waddr` / `*_wdata` (`stack_wr`, `vobj_alloc_wr`,
-  `varr_len_wr`, `name_hash_wr`, `vvars_wr`, `json_putc`, `imgd_we` / …).
-- One stack write per clock (`stack_dual_pend` for FOREACH el then idx).
-- Address in this clock, `*_rdata` next. No combo `mem[f()]` in
-  `unique case`.
-- No one-cycle reset-clear of BRAM. No `ifdef SYNTHESIS` smaller heap.
-- `arr_len` / `vobj_cls` are still FSM-poked (8-13159) — Port A if touched.
-
-`e32_p_clr` Synth 8-6014 is unused-FF housekeeping, **not** the hang.
-Kill synth only if the log is frozen **and** RSS is climbing toward ~80 GB.
-
-Failed hunts that did **not** stop the 70 GB wall (do not repeat as “the
-fix”): named unique-case peek hunts; `casestate_q`; `unique` → `case`;
-pulling IEEE mul out of the case; read-port-only splits.
 
 ---
 

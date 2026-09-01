@@ -16,34 +16,9 @@ see while the board is running.
 
 ## Why this document exists
 
-On 2026-08-26 a PACMAN bug that had survived timing closure, a DDR3 cache A/B,
-and three bitstreams was identified in one reading of the board's own
-telemetry: **`fault 3` at `ip 263`**. Before the V-line existed the same bug
-presented as "the screen stops and nothing happens."
-
-That is the entire case for this tier. On silicon there is no debugger, no
-`printf`, and no waveform. Either the design reports its own state or the
-failure is a black box. Everything below is what the machine can currently say
-about itself, and — just as important — what it **cannot**.
-
-**How that case closed (2026-08-27).** `fault 3` was correct and led straight
-to the answer: PACMAN's old `Map.prototype.finder` allocated ~36 heap objects
-per call (a `Array(31).fill(0).map(...)` grid plus an `Object.assign` options
-object), four ghosts per frame, against 284 free object slots. The fix — a
-non-allocating one-step chase writing into a single reused `_gs` object — was
-already committed, but **`card.img` had been minted 18 minutes earlier**, so
-the board kept running the unfixed program. Rebuilding the card resolved it.
-See [GAME_DESIGN.md § rule 5](GAME_DESIGN.md) for the allocation numbers and
-[FPGA_BRINGUP.md](FPGA_BRINGUP.md) for the stale-card check.
-
-Two lessons worth carrying, because both cost real time here:
-
-- **The fault code told the truth immediately.** Every hour spent on timing
-  closure, the DDR3 read cache and the flash path was spent *before* anyone
-  read it, and none of those were the cause.
-- **Telemetry cannot see a stale artifact.** The board faithfully reported a
-  genuine `fault 3` in a program that had already been fixed. Verify what the
-  board is actually running before trusting any comparison against sim.
+On silicon there is no debugger. Either the design reports its own state or
+the failure is a black box. Decode tables are under [BOARD](#board--live-watching-real-silicon).
+PACMAN `fault 3` / stale-card case: [below](#case-stale-card-looks-like-a-vm-bug).
 
 ---
 
@@ -317,6 +292,39 @@ so PYTHON cannot reproduce a capacity fault by construction.
 
 Widening the V-line is an RTL change and costs a full rebuild (~1h50m). Decide
 that deliberately, not reflexively.
+
+---
+
+## Case: stale card looks like a VM bug
+
+On 2026-08-26 a PACMAN bug that had survived timing closure, a DDR3 cache A/B,
+and three bitstreams was identified in one reading of the board's own
+telemetry: **`fault 3` at `ip 263`**. Before the V-line existed the same bug
+presented as "the screen stops and nothing happens."
+
+That is the entire case for this tier. On silicon there is no debugger, no
+`printf`, and no waveform. Either the design reports its own state or the
+failure is a black box. Everything below is what the machine can currently say
+about itself, and — just as important — what it **cannot**.
+
+**How that case closed (2026-08-27).** `fault 3` was correct and led straight
+to the answer: PACMAN's old `Map.prototype.finder` allocated ~36 heap objects
+per call (a `Array(31).fill(0).map(...)` grid plus an `Object.assign` options
+object), four ghosts per frame, against 284 free object slots. The fix — a
+non-allocating one-step chase writing into a single reused `_gs` object — was
+already committed, but **`card.img` had been minted 18 minutes earlier**, so
+the board kept running the unfixed program. Rebuilding the card resolved it.
+See [GAME_DESIGN.md § rule 5](GAME_DESIGN.md) for the allocation numbers and
+[FPGA_BRINGUP.md](FPGA_BRINGUP.md) for the stale-card check.
+
+Two lessons worth carrying, because both cost real time here:
+
+- **The fault code told the truth immediately.** Every hour spent on timing
+  closure, the DDR3 read cache and the flash path was spent *before* anyone
+  read it, and none of those were the cause.
+- **Telemetry cannot see a stale artifact.** The board faithfully reported a
+  genuine `fault 3` in a program that had already been fixed. Verify what the
+  board is actually running before trusting any comparison against sim.
 
 ---
 

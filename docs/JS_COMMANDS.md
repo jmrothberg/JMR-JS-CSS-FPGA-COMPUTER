@@ -10,8 +10,9 @@ On the BASIC sibling, every keyword **is** one instruction (`PRINT` = `0x81`).
 Here JavaScript **source** is compiled into a smaller numbered
 **instruction set architecture** (ISA). **V1.0:** compile when you **make
 the card** (`NAME.JSH` on `card.img`); PYTHON / FPGA-SIM / BOARD all `RUN`
-that image. The chip fetches bytecode, it does not compile. **V1.5 tries**
-compile-on-RUN on the machine. Same idea: the language **is** the processor.
+that image. The chip fetches bytecode. **V1.5 compile is live:** `LOAD` →
+`EDIT` → **`COMPILE`** → `RUN`. `RUN` still loads `.JSH`. Same idea: the
+language **is** the processor.
 
 ---
 
@@ -44,9 +45,11 @@ storage/NAME.HTML  (seed — author here)
 
 The chip has no compiler. Rebuild `card.img` after you edit `storage/`.
 
-**V1.5 (planned)** tries to compile on the machine so a desk needs no PC and
-no `.JSH`, **and** popular JS V1.0 does not have (see
-[JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required)).
+**V1.5 compile is live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. `RUN`
+still loads `.JSH` from the card. Compiler/editor are ordinary card
+programs, not a new ISA. Typed-at-READY numbered authoring of *new*
+programs, and popular JS V1.0 does not have, are leftover — see
+[JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 
 You never type opcode numbers. You type JavaScript. The compiler emits the numbers.
 
@@ -268,10 +271,11 @@ Bare names the compiler already knows. Source of the ids: `functional_model/jsb_
 
 **Id 41 note:** `Object.keys` (and therefore `for (k in obj)`) runs on the Python functional model. The chip does not have that native yet — it faults instead of guessing. Version 1.0 titles use a literal key list or an index loop. See [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
 
-**Ids 43–50 note — the V1.5 standalone-compile ABI.** These are not for
-games. They are the window through which the **self-hosted compiler** (an
-ordinary program on the card) reaches the outside world, so the machine can
-compile without a PC: `LOAD "X.HTML"` → `COMPILE` → `RUN`.
+**Ids 43–50 note — the V1.5 compile ABI.** These are not for games. Memory
+map: [ARCHITECTURE.md](ARCHITECTURE.md) (standalone compile). This page lists
+the native ids. They are the window through which the **self-hosted compiler**
+(an ordinary program on the card) reaches the outside world:
+`LOAD "X.HTML"` → `COMPILE` → `RUN`.
 
 | Id | Call | Meaning |
 |---|---|---|
@@ -394,7 +398,9 @@ is **REMOVE**, not DELETE. `ESC` is machine BREAK (games must not steal it).
 version playable — REMOVE the stale `.JSH` if that would mislead. On-device
 SAVE writes the HTML back to the card under the loaded title's name.
 
-**V1.5 (planned)** tries to be **standalone**: type, paste, or edit numbered HTML at `>` **and** compile-on-RUN on the machine **and** popular JS V1 lacks (`Array.shift`, `Math.sin`/`round`, `isFinite`, …). V1.0 compiles when you make the card; PYTHON / FPGA-SIM / BOARD `RUN` that `card.img` —
+**Leftover (not the shipped loop):** type/paste numbered HTML at `>` for
+*new* programs, and popular JS V1 lacks (`Array.shift`, `Math.sin`/`round`,
+`isFinite`, …). Detail:
 [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 
 ---

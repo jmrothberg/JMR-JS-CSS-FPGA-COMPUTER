@@ -10,7 +10,7 @@ Field-Programmable Gate Array game computer). Words:
 Family name:
 [README.md](README.md#nlisc-native-language-instruction-set-computing).
 
-This file is **copy 2** of “no dukpy / compile-on-RUN / vendored HTML
+This file is **copy 2** of “no dukpy / vendored HTML
 titles” (copy 1 is `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`). Other
 critical “do not”s live in two places only — see
 [README.md — Two copies](README.md#two-copies-of-every-critical-do-not).
@@ -73,9 +73,10 @@ the same glass on PYTHON → FPGA-SIM → BOARD** (then ASIC).
   builder **mints** `NAME.JSH` from the current `.HTML` (never copy a stale
   `.JSH` out of `storage/`). `LOAD` still shows HTML; `RUN` loads that
   minted `.JSH`. Do **not** give PYTHON or FPGA-SIM a host compile-on-RUN
-  of `storage/*.HTML` while the board runs the card. **V1.5 tries to be
-  standalone** (compile-on-RUN on the machine; drop the card `.JSH` if it
-  fits).
+  of `storage/*.HTML` while the board runs the card. **V1.5 compile is
+  live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. `RUN` still loads `.JSH`
+  from the card. Compiler/editor are ordinary card programs, not a new ISA.
+  Typed-at-READY numbered authoring of *new* programs is leftover.
 - **Asset bank (external SRAM — replaces the retired `NAME.DAT` spill).**
   Great graphics stay at **full quality**. You draw PNG sheets; `make_artx.py`
   writes `NAME.ARTX`. On every `RUN` the minted `.JSH` carries that art
@@ -100,9 +101,8 @@ the same glass on PYTHON → FPGA-SIM → BOARD** (then ASIC).
 - Same-name `NAME.JS` / `NAME.JSB` are **not** product twins of the HTML
   titles.   Card seeds are `.HTML` (plus optional library HTML like
   `JOYDEMO.HTML`). **V1.0:** PYTHON / FPGA-SIM / BOARD play `card.img`; the
-  builder **mints** `.JSH` when you make the card (FPGA does not compile).
-  **V1.5 tries standalone** compile-on-RUN on the machine.
-  `storage/games_*` = upstream archive only.
+  builder **mints** `.JSH` when you make the card. **V1.5:** `COMPILE` on
+  the machine mints the same sidecar (`RUN` is unchanged). See Vendored-titles.
 
 ---
 
@@ -182,8 +182,8 @@ User titles: `LOAD "NAME.HTML"` / `RUN` only. **V1.0:** PYTHON, FPGA-SIM,
 and BOARD all `LOAD`/`RUN` the same `card.img` (`LOAD` = HTML on FAT;
 `RUN` = minted `.JSH` ProgramImage with ASET art; art streams to the
 external SRAM asset bank). Do **not** compile `storage/*.HTML` on host
-`RUN` as a second path. **V1.5 tries to be standalone** (compile on
-the machine).
+`RUN` as a second path. **V1.5:** `COMPILE` on the machine; `RUN` still
+loads `.JSH`. See Vendored-titles.
 Cursor rules: `python-first-parity.mdc`, `no-dukpy-cheat-native-cpu.mdc`,
 `never-fake-fpga-sim.mdc` (includes: RTL heaps must be SRAM, not Verilator-only
 2-D combo arrays; parent `unique case` reads `*_rdata`, never `arr_len[v]`),
@@ -230,7 +230,8 @@ simulation and the board keep real cycle time; Python does not.
 5. **V1.0 `RUN` loads the minted `.JSH` from `card.img`.** PYTHON,
    FPGA-SIM, and BOARD share that image. Compile is at **card create**
    (`make_sd_image.py`), not a host recompile of `storage/` on `RUN`.
-   **V1.5 tries standalone** compile-on-RUN on the machine. Fat art
+   **V1.5:** `COMPILE` on the machine mints `.JSH`; `RUN` is unchanged.
+   See Vendored-titles. Fat art
    belongs in the asset bank, not squeezed into code RAM.
 6. **PYTHON → real FPGA-SIM → user F9 → board → ASIC.** No host twin as
    the sim default. No `.bit`/`.bin` to “define” a feature FPGA-SIM still
@@ -484,9 +485,8 @@ shape too.
 **Disk (µSD FAT32 / project `card.img`), not BRAM:** PYTHON, FPGA-SIM, and
 BOARD all play this image. `NAME.HTML` is the user title (`LOAD` / `LIST`).
 **V1.0:** compile when you **make the card** — the builder mints `.JSH` so
-`RUN` is the same ProgramImage on every rung (the chip does not compile).
-**V1.5 tries to be standalone** (compile-on-RUN on the machine; drop `.JSH`
-if it fits). Never copy a stale `.JSH` from `storage/`.
+`RUN` is the same ProgramImage on every rung. **V1.5:** `COMPILE` on the
+machine mints that sidecar; `RUN` is unchanged. See Vendored-titles.
 Never hard-code addresses throughout the design. Never stuff sprite
 megabytes into code BRAM (PNG → `.ARTX` → ASET SRAM).
 

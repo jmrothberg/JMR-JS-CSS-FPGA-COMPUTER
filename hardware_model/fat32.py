@@ -387,6 +387,20 @@ class Fat32Volume:
             names.append(self.decode_83(ent[0:11]))
         return names
 
+    def list_root_info(self) -> list[tuple[str, int]]:
+        """Every root file, including .JSH/.JSB/.ART (DIR hides those)."""
+        out: list[tuple[str, int]] = []
+        for _c, _s, _o, ent in self._dir_entries():
+            if ent[0] == 0x00:
+                break
+            if ent[0] == 0xE5:
+                continue
+            attr = ent[11]
+            if attr == ATTR_LFN or attr & ATTR_VOLUME or attr & ATTR_DIR:
+                continue
+            out.append((self.decode_83(ent[0:11]), self._entry_size(ent)))
+        return out
+
     def _entry_cluster(self, ent: bytes) -> int:
         return (
             ent[26]

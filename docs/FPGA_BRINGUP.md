@@ -103,7 +103,7 @@ designs. Only Vivado (board flow) produces them; Verilator never does.
 |---|---|---|
 | **PYTHON** | **JMR bytecode VM** — **V1.0:** `card.img` HTML + minted `.JSH` | `functional_model/` (same ProgramImage as FPGA-SIM / BOARD) |
 | **FPGA-SIM** | Same RTL as the board, simulated — **same `card.img`** | Verilator → `sim/sim_build_synth/jmr_js_sim_server` (**default**). Host twin only with `JMR_SIM_HOST=1` — never a silent fallback. |
-| **BOARD** | Real Nexys Video. **V1.0:** `RUN` uses `.JSH` from the burned `card.img`. **V1.5 tries** compile on the chip. | Silicon |
+| **BOARD** | Real Nexys Video. **V1.0:** `RUN` uses `.JSH` from the burned `card.img`. **V1.5:** `COMPILE` on the chip mints that sidecar. | Silicon |
 | **ASIC** | Same ISA after FPGA honesty | — |
 
 Titles: `LOAD "NAME.HTML"` / `RUN` only. Never call Chrome or dukpy a rung.
@@ -228,42 +228,16 @@ whose USB location ends in `.0`. Channel B (`.1`) is **JTAG** — never the
 tether. `JMR_JS_SERIAL` overrides autodetect.
 Gates: `make -C sim tb_uart_link tb_ft245`.
 
-### Live board telemetry — the machine reports its own faults (2026-08-26)
+### Live board telemetry
 
-Two more line types ride the same tether. They are the **only** crash forensics
-that exist on silicon, and they are what identified the PACMAN halt
-(`fault 3` at `ip 263`) after timing closure and a DDR3 cache A/B had both
-failed to explain it.
+The machine reports its own faults on the PROG tether. **Decode tables:**
+[ARCH_MONITOR.md](ARCH_MONITOR.md).
 
-- **`V<st2><fault2><ip4>`** — VM heartbeat. Per glass dump, on every
-  `machine_fault` rise, and (since `eb93865`) on a free-running ~0.67 s beat —
-  without that third arm it was silent at the console, alive only in games.
-- **`D<hh>`** — storage stall telemetry. Fires after **~0.67 s of continuous
-  storage busy**, then every ~0.17 s for the stall's duration.
-- **`E<hh>`** — free-running storage-state beat (`eb93865`): every ~1.34 s plus
-  on change, **regardless of busy**, including `E00` at idle. Reach for this
-  one first — it always says where storage is.
-
-Two things to know before reading either:
-
-1. **A fault is a deliberate halt, not a hang.** Every `machine_fault` site does
-   `running <= 1'b0; hs_st(S_DONE)`. From the glass a halt and a wedge look
-   identical — the V-line is the only thing that distinguishes them.
-2. **In the Inspector, `—` means NOT TRANSMITTED, not zero.** The V-line's whole
-   payload is three numbers. `fsite`, `ecode`, the `overflow:` row and the rest
-   are blank on BOARD because the board never sends them. Reading
-   `overflow: heap —` as "heap is fine" is a wrong conclusion the panel invites.
-
-**Prove the instrument before trusting its silence.** At an idle READY prompt
-you should see `STOR-BEAT state=0x00` and periodic V-lines in the flight log.
-This telemetry has already shipped broken twice — pre-`5968932` it could never
-fire (equality test on a saturating counter), and `5968932`→`eb93865` it fired
-exactly four times in a 0.5 s window then saturated silent. A real 21.5 s DIR
-stall on run 47 produced **zero** D-lines with the link demonstrably live,
-while `tb_uart_link` emitted the predicted lines from the same RTL — so a
-board-side silence downstream of `jmr_uart_link` is still unexplained. Zero
-D-lines in any log older than `eb93865` proves nothing.
-Decode tables: **[ARCH_MONITOR.md](ARCH_MONITOR.md)**.
+**Stale `card.img` looks like a VM bug.** If HTML in `storage/` is newer than
+`card.img`, the board is running an old program. Rebuild before drawing a
+conclusion from a fault. A halt and a hang look the same on glass — the V-line
+is what distinguishes them. In the Inspector, `—` means **not transmitted**,
+not zero.
 
 
 ### Buttons & LEDs (frozen — do not reshuffle)
@@ -313,10 +287,10 @@ Decode tables: **[ARCH_MONITOR.md](ARCH_MONITOR.md)**.
 > ```
 >
 > If any title is newer than `card.img`, rebuild the card before drawing
-> a single conclusion from the board. **V1.5 tries**
-  compile on the machine. Full-quality graphics stream from the
-  ASET section into the external SRAM asset bank (never pack Donkey
-  art into code BRAM; no `NAME.DAT`). Never dukpy on silicon.
+> a single conclusion from the board. **V1.5:** `COMPILE` on the machine
+> mints `.JSH`; `RUN` is unchanged. Full-quality graphics stream from the
+> ASET section into the external SRAM asset bank (never pack Donkey
+> art into code BRAM; no `NAME.DAT`). Never dukpy on silicon.
 - `?NH` = HTML path debt (temporary). Missing compile path → fail loud
   (not Invaders hex lie).
 - Esc exits game_mode
@@ -484,3 +458,4 @@ JS events (pattern cite: BASIC sibling UART/`KEY` + PS/2 FIFO merge in
 - [ARCHITECTURE.md](ARCHITECTURE.md)
 - [FPGA_FIT.md](FPGA_FIT.md)
 - [SESSION_HANDOFF.md](SESSION_HANDOFF.md)
+- Isolated J5 line-out beep (not JS `board_flow`): [../tools/audio_beep_test/README.md](../tools/audio_beep_test/README.md)

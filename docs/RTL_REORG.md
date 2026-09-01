@@ -95,36 +95,22 @@ files**. Not a new architecture.
 
 ## Silicon law (do not “organize” past these)
 
-These are not style. They are why previous “clean” splits blew synth or
-skewed glass. Full RAM law: `.cursor/rules/never-fake-fpga-sim.mdc` +
-[FPGA_FIT.md](FPGA_FIT.md) NEVER table. One heap:
-`.cursor/rules/one-heap-keep-gen.mdc`.
+RAM / one-heap / Port A: `.cursor/rules/never-fake-fpga-sim.mdc` +
+[FPGA_FIT.md](FPGA_FIT.md) NEVER, and `.cursor/rules/one-heap-keep-gen.mdc`.
+Do not retell those here.
 
-1. **One JS heap in the parent.** Exec may **address** SRAM this clock and
-   consume `*_rdata` next. It must not own `vvars` / `venv_*` / `vobj_*` /
-   `name_mem` / `vstack` / `json_mem` copies.
-2. **Extraction (RELAXED 2026-08-22, user decision):** control-only
-   submodules are allowed — a submodule owns NO arrays and reaches the
-   single heap solely through scalar addr/data/we ports with registered
-   reads (the u_exec64 shape). Duplicating any heap array inside a
-   submodule stays forbidden. Rationale: measured 4.19 LUT/FF in
-   u_exec64 vs 11.00 in the flat parent — the extraction lever is worth
-   ~385k LUTs. Extra clocks inside the parent are still fine.
-3. **Big arrays: Port A only.** FSM pulses `stack_wr` / `vobj_alloc_wr` /
-   `varr_len_wr` / `vvars_wr` / `json_putc` / `imgd_we`. Never
-   `mem[i] <=` in the 7k-line `always_ff`. Recipe: [FPGA_FIT.md](FPGA_FIT.md).
-4. **`st_t` is append-only.** New states go at the **end**. `sim/sim_main.cpp`
+Org-specific (this file owns):
+
+1. **`st_t` is append-only.** New states go at the **end**. `sim/sim_main.cpp`
    `vm_sname[]` and debug RPCs index by **number**. `S_FB_SYNC` must stay last
    in the parent enum (comment in `jmr_js_vm.sv`).
-5. **Do not delete files** *without asking*. Leftovers get a header comment
-   and stay out of the FPGA-SIM / Vivado file list. (The user waived this
-   for `jmr_js_vm_exec32.sv` on 2026-08-21 so Vivado could not compile it;
-   git history keeps it. Removing a file from both file lists is what
-   actually stops synthesis — deletion is only tidiness on top.)
-6. **Do not `\`include` case arms** out of the parent `always_ff`. That hides
+2. **Do not delete files** *without asking*. Leftovers get a header comment
+   and stay out of the FPGA-SIM / Vivado file list.
+3. **Do not `\`include` case arms** out of the parent `always_ff`. That hides
    the one-process Port A audit and does not shrink the netlist.
-7. **Do not merge engines.** Console, storage, mini-FB, HDMI, SPI stay
+4. **Do not merge engines.** Console, storage, mini-FB, HDMI, SPI stay
    separate — they already are.
+5. **exec32 is gone.** Naming trap: [REMOVING_EXEC32.md](REMOVING_EXEC32.md).
 
 ---
 
@@ -436,71 +422,12 @@ the pattern: a tiny script in CI beats a module split. Extend it to
 
 ---
 
-## How to reorganize (phases) — DEFERRED, see JUDGMENT
+## How to reorganize — deferred
 
-Kept because the analysis is sound *if* a reorg is ever justified. Phase 0
-(navigation banners) and Phase 2 (one enum / one opcode table) are the only
-parts worth doing on their own; both are covered more concretely by the
-Maintenance backlog above.
-
-Do these **in order**. Each phase is one dedicated agent. Tests / probes
-before claiming done. Do not `make bit` unless the user asks.
-
-### Phase 0 — navigation only (no netlist)
-
-Safe any time. Does not move logic.
-
-1. Searchable banners in the parent `always_ff` and exec64 opcode `always_comb`,
-   e.g. `// === VM:HEAP ===` `// === VM:GC ===` `// === EXEC:GET_PROP ===`.
-2. Replace the stale header “section map” in `jmr_js_vm.sv` with the table
-   above (HEAP / V64 / FB_SYNC included).
-3. One comment at each leftover file: “not in FPGA-SIM core” or “board PHY
-   only” or “exec32 leftover — see REMOVING_EXEC32.md”.
-4. Keep this document’s line map honest when the file moves a lot.
-
-### Phase 1 — unhook exec32 ✅ DONE 2026-08-21
-
-Already specified: [REMOVING_EXEC32.md](REMOVING_EXEC32.md) Cut A.
-**Largest maintainability win.** Removes ~5k lines, ~1k-line port map,
-~379 `e32_*` signals, and the tagged LUTRAM that mapping OOMs on.
-
-Do not run Phase 2–4 in parallel with that cut. Do not bundle Cut B
-(console `.JS` sidecar tidy).
-
-### Phase 2 — one enum, one opcode table
-
-After exec32 is gone (or at least after its port map is not being edited):
-
-1. Parent `import jmr_js_vm_pkg::*;` — delete the local `OP_*` block and
-   the **duplicate** `typedef enum … st_t` (keep one type).
-2. Put `S_FB_SYNC` on the pkg enum (last). Then `vm_sname[]` in
-   `sim_main.cpp` **in the same commit**.
-3. Small checker (Python is fine): pkg enum names/order vs parent (until
-   unified) vs `vm_sname[]` vs `functional_model/bytecode.py` `Op`. Fail
-   CI / `check_runtime_parity` if they diverge.
-4. Caps: prefer pkg + `jsb_format.py` as the two poles; parent should
-   use the pkg constants, not a second `localparam` copy.
-
-This is the reorg that **finds bugs**. A missing `sname` today already
-proves it.
-
-### Phases 3–5 — cut 2026-08-21
-
-Removed: leftover-engine rewiring, folder moves, and the handshake-card /
-struct plan. All three were "if we reorganize" work, and the JUDGMENT at
-the top says we are not. The parts that carried real information are
-already elsewhere: leftover-file labels in the table above,
-[FPGA_FIT.md](FPGA_FIT.md) for the Port A recipe, and the
-[Maintenance backlog](#maintenance-backlog-do-these-instead) for the
-handshake / first-entry-guard discipline (item 5) and the secondary
-Python/C++/test organization notes (items 3, 4, 6).
-
-If someone revives a folder move, the two rules that matter are: update
-`sim/Makefile` `CORE_SRCS` and `tools/board_flow/vivado_build.tcl`
-**together**, and remember `$readmemh` paths are relative to the `.sv`.
-
----
-
+See JUDGMENT at the top: do not file-split the parent. Phase 0 (banners)
+and Phase 2 (one enum) are the only leftover org ideas; they are already
+on the Maintenance backlog. The old phase list is git history
+(`git log -- docs/RTL_REORG.md`). exec32: [REMOVING_EXEC32.md](REMOVING_EXEC32.md).
 
 ## Related
 

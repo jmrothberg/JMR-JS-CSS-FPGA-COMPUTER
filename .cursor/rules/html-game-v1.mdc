@@ -1,9 +1,9 @@
 ---
-description: V1.0 walls; BOARD compile = card create (.JSH). V1.5 = console compile + popular JS V1 lacks. V2.0 = bigger ISA/ASET, not a title name.
+description: V1.0 walls; BOARD compile = card create (.JSH). V1.5 COMPILE is live; popular JS V1 lacks is still backlog. V2.0 = bigger ISA/ASET, not a title name.
 alwaysApply: true
 ---
 
-# HTML games — V1.0 now, V1.5 console + popular JS later, V2.0 ISA later
+# HTML games — V1.0 now, V1.5 COMPILE live, V2.0 ISA later
 
 Words: [README.md — Words used](../../README.md#words-used-in-this-project).
 This is **copy 1** of Version 1.0 walls / Version 1.5 console + popular JS /
@@ -12,14 +12,15 @@ Version 2.0 machine work (copy 2:
 § Version 1.0, 1.5, and 2.0). Authoring how-to:
 [docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md).
 
-**V1.0** = PYTHON + FPGA-SIM + BOARD all play from `card.img`. The chip
-does **not** compile — **compile happens when you make the card**
-(`make_sd_image.py create` mints `NAME.JSH` from that HTML). Do not
+**V1.0** = PYTHON + FPGA-SIM + BOARD all play from `card.img`. Host mint at
+card-create still works (`make_sd_image.py create` mints `NAME.JSH`). Do not
 host-compile `storage/` on `RUN` as a second path.
-**V1.5** = type / paste / edit numbered HTML at READY, **and try to be
-standalone** (compile-on-RUN on the machine so a desk needs no PC and no
-card `.JSH`; LUT cost TBD), **and** popular JS V1.0 does not have (stdlib +
-globals; not Canvas gradients / mouse).
+**V1.5 compile is live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. `RUN`
+still loads `.JSH` from the card. Compiler/editor are ordinary card programs
+(`EDITOR.JSH`, `ARTSCAN.JSH`, `COMPILER.JSH`), not a new ISA. Typed-at-READY
+numbered authoring of *new* programs is still leftover. Popular JS V1.0 does
+not have (`shift`, `Math.sin`/`round`, …) is still the language backlog
+(stdlib + globals; not Canvas gradients / mouse).
 **V2.0** = grow the ISA past V1 walls (sprite descriptors, ASET size,
 `Object.keys`, `Math.round`, dotted `new`, `.call`/`.apply`). **No title
 is the V2 example.** Do **not** title-gate (`if (stem == "…")`).
@@ -39,29 +40,31 @@ is the V2 example.** Do **not** title-gate (`if (stem == "…")`).
 | **No per-tick maze flood** | Do **not** recursive BFS / `_copyMapOpen` / `Array(n).fill().map(()=>Array(m))` every actor every cell. HDMI freezes, **no ERROR**. One-step chase; door **`2` walks up**. Event-driven in-place flood on place/sell/reset is the eyes-home class — keep the maze. Split the BFS queue at `ARR_CAP=128` (e.g. 3×128 for 360 cells). Do **not** grow `ENV_DEPTH`/`CSTK`. [no-maze-flood-on-tick.mdc](no-maze-flood-on-tick.mdc). |
 | **`fillText` 8×8 only** | One bitmap font (READY glyphs). `ctx.font` parses `NNpx` only — no TTF / `"Press Start 2P"`. Scale `k = max(1, round(N * sx / 8))` (cap 15). Glass-space: **8px or 16px**. World→glass shrink (DNKFAST `sx≈0.42`): **32px only on Score/Lives** (16px stays 8 glass px and vanishes). Do **not** enlarge title/pause/select. ASCII 32–126. Do not add small fonts to RTL. [GAME_DESIGN.md](../../docs/GAME_DESIGN.md). |
 | **Glass / Esc** | 640×480 Canvas fill; Esc = machine BREAK. Present is **gone** (run 52) — scanout reads the draw bank; budget tearing, draw fast. |
-| **Disk / compile (V1.0)** | PYTHON / FPGA-SIM / BOARD `LOAD`/`RUN` `card.img`. Chip has no JS compiler. **Compile when you make the card** (`NAME.JSH` minted). **`LOAD` works + `RUN` is `?NH` / bounce to monitor** means mint skipped that title — `python3 tools/compile_js.py --html storage/NAME.HTML` prints the wall, then remake `card.img`. **V1.5** tries standalone compile-on-RUN. |
+| **Disk / compile (V1.0)** | PYTHON / FPGA-SIM / BOARD `LOAD`/`RUN` `card.img`. Host mint at card-create (`NAME.JSH`). **`LOAD` works + `RUN` is `?NH` / bounce to monitor** means mint skipped that title — `python3 tools/compile_js.py --html storage/NAME.HTML` prints the wall, then remake `card.img`. **V1.5:** `COMPILE` on the machine mints the same sidecar. |
 
 **V1 library example:** `storage/MKBIG.HTML` / `MKBIGCPU.HTML` (atlases, L/R sheets, V1 Math).
 
 **V1 product acceptance:** `INVADERS` / `PACMAN` / `DONKEY`.
 
-## V1.5 — console HTML authoring + popular JS V1 lacks (planned, not now)
+## V1.5 — COMPILE live; typed-READY + popular JS still leftover
 
 Not a title generation. Caps stay V1 (`MAX_SPR` = 16, 4 MB ASET, same heap).
-Glass is BASIC numbered lines at `>`:
+Shipped glass: `LOAD` → `EDIT` (`EDITOR.JSH`) → **`COMPILE`** (`ARTSCAN.JSH` +
+`COMPILER.JSH`) → `RUN`. `RUN` is unchanged — it loads whatever `.JSH` is
+on the card. Typed-at-READY numbered authoring of *new* programs is leftover.
 
 | Action | Glass |
 |---|---|
-| Type | `10 …` Enter, `20 …` Enter, … then `RUN` |
-| Paste | Same path. Unnumbered paste auto-numbers by 10; numbered paste keeps numbers |
-| Compile | **V1.5 tries standalone compile-on-RUN** on the machine (`RUN` of the editor buffer; no extra `COMPILE` verb). **V1.0:** compile when you make the card (minted `.JSH`). |
-| Replace | `10 body` + Enter |
-| Delete | `10` + Enter (number only) — **gone**, not blank |
-| Insert between | Step by 10 so `15 xyz` lands between `10` and `20` |
-| Edit | **V1.0:** `LIST` / `DIR` / `LOAD` only (view / learn). No on-chip compiler → `EDIT` / `SAVE` / numbered replace cannot change `RUN` (minted `.JSH`). **V1.5:** keep **`EDIT n`** + `10 body`. Do not add `INSERT` / `DELETE` verbs — insert is an unused number (`15`); delete is `10` + Enter |
-| **Language** | Popular JS V1 walls/faults: `Array.shift`/`every`/`includes`, `Math.round`/`sin`/`ceil`, `String.split`/`charAt`/`toUpperCase`, `isFinite`/`isNaN`/`parseInt`, `performance.now`, `cancelAnimationFrame`, `e.code`. Full table: [JMR_JS_COMPATIBILITY.md § V1.5](../../docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). **Never:** Canvas gradients / `globalCompositeOperation` / mouse |
+| Type | leftover: `10 …` Enter, `20 …` Enter, … then `COMPILE` then `RUN` |
+| Paste | leftover. Unnumbered paste auto-numbers by 10; numbered paste keeps numbers |
+| Compile | **V1.5 live:** bare `COMPILE` verb. **V1.0:** compile when you make the card (minted `.JSH`). `RUN` always loads `.JSH`. |
+| Replace | leftover: `10 body` + Enter |
+| Delete | leftover: `10` + Enter (number only) — **gone**, not blank |
+| Insert between | leftover: step by 10 so `15 xyz` lands between `10` and `20` |
+| Edit | **V1.5 live:** bare `EDIT` launches `EDITOR.JSH`. Do **not** add `INSERT` / `DELETE` verbs — insert is an unused number (`15`); delete is `10` + Enter. V1.0 `LIST` / `DIR` / `LOAD` still view / learn |
+| **Language** | Popular JS V1 walls/faults (still backlog): `Array.shift`/`every`/`includes`, `Math.round`/`sin`/`ceil`, `String.split`/`charAt`/`toUpperCase`, `isFinite`/`isNaN`/`parseInt`, `performance.now`, `cancelAnimationFrame`, `e.code`. Full table: [JMR_JS_COMPATIBILITY.md § V1.5](../../docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). **Never:** Canvas gradients / `globalCompositeOperation` / mouse |
 
-**Fit (run 33):** console editor LUTs **yes** (~25.8k free). BRAM **yes only if SOURCE stays in external SRAM**. **V1.5 tries standalone compile-on-RUN** (drop card `.JSH`) — LUT cost TBD, do not grow SOURCE into BRAM. Language natives’ LUT cost is **TBD** (not MK). Full table: [JMR_JS_COMPATIBILITY.md § V1.5](../../docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
+**Fit:** SOURCE stays in external SRAM. Do not grow SOURCE into BRAM. Language natives’ LUT cost is **TBD**. Full table: [JMR_JS_COMPATIBILITY.md § V1.5](../../docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 
 ## V2.0 — grow the ISA (not a named title)
 

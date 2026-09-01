@@ -57,6 +57,19 @@ class StorageEngine:
                 names.append(p.name)
         return names
 
+    def list_all(self) -> list[tuple[str, int]]:
+        """Every card file with size. Includes .JSH/.JSB/.ART DIR hides."""
+        out: list[tuple[str, int]] = []
+        if self.card_img is not None:
+            if not self.card_img.is_file():
+                return []
+            return self._mount().list_root_info()
+        for p in sorted(self.root.iterdir()):
+            if not p.is_file() or p.name.startswith("."):
+                continue
+            out.append((p.name, p.stat().st_size))
+        return out
+
     def load_text(self, name: str) -> str:
         data = self.load_bytes(name)
         return data.decode("utf-8")

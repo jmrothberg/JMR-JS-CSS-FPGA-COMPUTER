@@ -9,17 +9,18 @@ language and Canvas surface are specified in
 [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md). This file is the
 **authoring** contract: glass, files, input, and what a title may assume.
 
-This is **copy 2** of “do not hardwire game names / write inside Version 1.0
-walls” (copy 1 is `.cursor/rules/no-game-hardwire.mdc` +
-`html-game-v1.mdc`). Version 2.0 is **machine** work (bigger ASET / more
-natives), not a named title — [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
-Do not raise caps in RTL for one game.
+This is **copy 2** of “do not hardwire game names”
+(copy 1 is `.cursor/rules/no-game-hardwire.mdc`). Version 1.0 walls live in
+[JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20)
+(agent rule: `.cursor/rules/html-game-v1.mdc`). Version 2.0 is **machine**
+work (bigger ASET / more natives), not a named title. Do not raise caps in
+RTL for one game.
 
 **Product generations:**
 
 | Gen | Meaning | Titles |
 |---|---|---|
-| **1.0 (now)** | Frozen caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Host mint at card-create still works. | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls (see below). `MKPVP.HTML` is the V1 MK-shaped example. |
+| **1.0 (now)** | Frozen caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Host mint at card-create still works. | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls ([JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#v10-hard-walls-do-not-fix-in-rtl-for-one-title)). `MKPVP.HTML` is the V1 MK-shaped example. |
 | **1.5 (now)** | Console **authoring and compile on the machine:** `LOAD` → `EDIT` → `COMPILE` → `RUN`. Editor and compiler are ordinary card programs (`EDITOR.JSH`, `COMPILER.JSH`), not a new ISA. Same heap/ASET/Canvas. Popular JS V1 still lacks (`shift`, `Math.sin`/`round`, `isFinite`, `e.code`, …) — that language backlog is not MK. | Same V1 titles. How-to: [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). |
 | **2.0 (planned)** | Grow the ISA past V1 walls: more sprite descriptors, a larger simple ASET bank, `Object.keys` on the chip, `Math.round`, dotted `new`, `.call`/`.apply`. **No title is the V2 example** (`MK.HTML` is gone). Do **not** title-gate. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20). | Any `NAME.HTML` that needs those caps. Library MK-shaped play today: `MKBIG.HTML` / `MKBIGCPU.HTML` (V1, ≤16 sheets / 4 MB). |
 
@@ -425,27 +426,19 @@ character wide (32px).
 
 ---
 
-## V1.0 authoring walls (library titles — learned from MK / MKPVP)
+## V1.0 authoring extras (not in the walls table)
 
-Stay on **Complete** rows **and** these machine caps. Prefer hacking the
-**HTML** for library demos; grow the **ISA** only on the V2.0 backlog (do
-not title-gate RTL).
+Machine caps and workarounds:
+[JMR_JS_COMPATIBILITY.md § V1.0 hard walls](JMR_JS_COMPATIBILITY.md#v10-hard-walls-do-not-fix-in-rtl-for-one-title)
+(agent: `.cursor/rules/html-game-v1.mdc`). Maze / fire / splice recipes are
+in [FAST](#writing-a-title-that-is-fast-measured-not-guessed) below.
 
-| Limitation | How to write the HTML |
+Two author recipes that page does not spell out:
+
+| Extra | How to write the HTML |
 |---|---|
-| **≤16 ASET sprites** (`MAX_SPR` / SPRD descriptors) | One **PNG sheet** per `jmr:spr:N`, not per frame. Pack animations into **atlases**; use **9-arg `drawImage(img, sx,sy,sw,sh, dx,dy,dw,dh)`**. Compile refuses >16 (loud) — do not drop art silently. Keep sheets **modest** — not one enormous multi-thousand-pixel-wide image. Wide atlases mean bigger address math per lookup and more SRAM traffic per frame; let the atlas packer split. |
-| **No `Object.keys` / `for…in` on RTL** | The compiler lowers `for (k in obj)` to `Object.keys` (native **41**) — that landed 2026-08-21 and works on PYTHON, but there is **no exec64 arm**, so FPGA-SIM faults loud (`fault=5` `fsite=4183`). For a title that must run on the machine, use literal key lists (`loadOne("arena")` …) or numeric loops. |
-| **`Math.round` is not a native** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt`. Shim it in the HTML (`Math.floor(+x + 0.5)`) — unary `+`, `throw`, and the `in` operator all parse since 2026-08-21. |
-| **No negative `setTransform` scale** | Mirroring with `setTransform(-1,0,0,1,x,0)` collapses width on PYTHON `_xf` and is unsafe for parity. Ship **left + right** facing sheets (or always draw unmirrored). Positive scale / DONKEY-style world transforms are fine. |
-| **Math natives** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt`. Embed LUTs for angles if needed (ASTEROID pattern). |
-| **Heap / array caps (live silicon)** | Fit pass sized these from real titles. Overflow is **loud** (fault 3). Live numbers: [FPGA_FIT.md](FPGA_FIT.md) (`MAX_OBJ=960`, `ENV_DEPTH=384`, `MAX_ARR_LONG=12`, `ARR_CAP=128`). Do not assume the old 1024/512 headroom. **Reuse objects across frames** — a fresh `{x,y,…}` literal every tick burns the 960-object pool (PACMAN-adjacent object-exhaustion). Keep one mutable object and write its fields. Do **not** hoist per-frame **grids/arrays** to startup to dodge GC (that trades slack for a permanent allocation and overflows the array heap). A map bigger than 128 cells is **row arrays** (20×18 → 18 of 20), not one 360-slot array — split the BFS queue the same way. Do **not** shrink the playfield to dodge `ARR_CAP`. |
-| **16 locals per function** (`ENV_SLOTS`) | Params + every `var`/`let`/`const` in that function. The 17th is a card-mint `CompileError` (`bfs(): 17 locals…`). **`LOAD` still shows the HTML; `RUN` is `?NH` / FPGA-SIM bounces to READY.** Split a helper. Do **not** cut game systems to “fit 16.” |
-| **No typed arrays / `shift` / `charCodeAt` / `performance.now`** | Not on the V1 chip (mint skip or `fault=4`). Ordinary arrays; index/copy-down instead of `shift`; packed digits instead of `charCodeAt`; frame counter instead of `performance.now`. |
-| **No mouse port** | Keys + `joy()` must play the same game. Chrome may also bind `clientX`. Mouse-only → machine cannot place/aim. |
-| **No per-tick maze flood** | Recursive BFS + `Array(n).fill().map(()=>Array(m))` every ghost cell **froze the board** (HDMI last frame, no `ERROR`). Empty `finder` → no freeze. One-step on the existing map; door `2` walks **up**. Event-driven in-place flood on place/sell/reset is allowed — **keep the maze**. Do **not** grow `ENV_DEPTH`/`CSTK` (chip full). [no-maze-flood-on-tick](../.cursor/rules/no-maze-flood-on-tick.mdc). |
 | **Nested literal tables** | Hundreds of tiny `MAKE_ARRAY`s for frame rects work only while under the array caps. Prefer compact atlases + small meta, or parallel number arrays, if you approach the cap. |
-| **`fillText` is one 8×8 bitmap (no small TTF)** | Family/weight are ignored. Glyph scale is `k = max(1, min(15, round(N * sx / 8)))` where `sx` is the current `setTransform` x-scale (default 1). Each character is **8k × 8k glass pixels**. There is no 6px/10px/12px face — 10px at `sx=1` still paints the same 8×8 as 8px. **Glass-space HUD (PACMAN / INVADERS):** `8px` (native) or `16px` (2×). **World canvas then `setTransform` onto 640×480 (DONKEY / DNKFAST, `sx ≈ 640/1510 ≈ 0.42`):** `16px` still rounds to **k=1** (8 glass px — easy to miss on FPGA-SIM). Use **`32px` minimum** (k=2) for HUD, **`48px`** (k=3) for titles; drop the baseline so `8*k` glass pixels of height stay on screen; ASCII only (codes 32–126 — em-dash paints `?`). Do not add a second font to RTL. |
-| **Glass / Esc / one file** | 640×480 fill; Esc = BREAK; no external `.js`. Present is **gone** (run 52) — scanout reads the draw bank; budget tearing, draw fast. |
+| **`fillText` glass-space sizes** | Family/weight are ignored. Glyph scale is `k = max(1, min(15, round(N * sx / 8)))` where `sx` is the current `setTransform` x-scale (default 1). Each character is **8k × 8k glass pixels**. There is no 6px/10px/12px face — 10px at `sx=1` still paints the same 8×8 as 8px. **Glass-space HUD (PACMAN / INVADERS):** `8px` (native) or `16px` (2×). **World canvas then `setTransform` onto 640×480 (DONKEY / DNKFAST, `sx ≈ 640/1510 ≈ 0.42`):** `16px` still rounds to **k=1** (8 glass px — easy to miss on FPGA-SIM). Use **`32px` minimum** (k=2) for HUD, **`48px`** (k=3) for titles; drop the baseline so `8*k` glass pixels of height stay on screen; ASCII only (codes 32–126 — em-dash paints `?`). Do not add a second font to RTL. |
 
 **V1 MK-shaped titles in `storage/`:** `MKBIG.HTML` / `MKBIGCPU.HTML` —
 atlases, L/R sheets, V1 Math, ≤16 SPR / 4 MB.
@@ -561,8 +554,9 @@ frame profiles in
 
 ### The budget — this is the number that matters
 
-The board's VM runs at **12.5 MHz** (`ui_clk`÷8; see
-[TIMING_WALL.md](TIMING_WALL.md)). So one frame at 30 fps is:
+The board's JS core runs on a divided clock (today ÷7 ≈ 14.3 MHz; see
+[FPGA_FIT.md](FPGA_FIT.md) and [TIMING_WALL.md](TIMING_WALL.md)).
+So one frame at 30 fps is:
 
 | | |
 |---|---|
@@ -914,7 +908,7 @@ FAST rewrite correctly removed `setTimeout` (rule elsewhere: it is a
 per-call allocation) but made the splice synchronous instead, so a kill
 now runs several function calls deep, mid-iteration, over the very
 arrays it's mutating. Whatever pool that pressures (under RTL
-investigation — see `docs/TIMING_WALL.md`/ledger; the leading theory is
+investigation — see [potential bugs.md](potential%20bugs.md); the leading theory is
 the per-call environment pool, exhausted faster than sweep reclaims it)
 is a real, load-bearing limit, and the old code never exercised it by
 accident.

@@ -36,8 +36,8 @@ PYTHON. Tests = real titles, not random programs. Do not invent LUT counts
 **Standalone intent:** HDMI + keyboard + Pmod stick; UART/JTAG are debug.
 **V1.0 disk:** PYTHON, FPGA-SIM, and BOARD `LOAD`/`RUN` the same `card.img`
 (HTML + minted `.JSH`). `storage/` is the seed; rebuild the card after
-edits. The chip does not compile. **V1.5 tries** compile-on-RUN on the
-machine. Tether mirrors glass; when J15 works, play needs **zero** code
+edits. Host mint at card-create still works. **V1.5:** `COMPILE` on the
+machine mints `.JSH`; `RUN` is unchanged. Tether mirrors glass; when J15 works, play needs **zero** code
 changes. This board is Nexys Video T200 — not A7-100T. StarLite later.
 
 **Agents:** do not run Vivado / `make bit` unless the user asked. RAM writes

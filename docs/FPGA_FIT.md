@@ -4,7 +4,7 @@ Words: [README.md — Words used](../README.md#words-used-in-this-project).
 
 ---
 
-## SCOREBOARD — update this table every run (one screen; timing diary: [TIMING_WALL.md](TIMING_WALL.md); 08-21/22 campaign diary: [OVERNIGHT_STATUS.md](../OVERNIGHT_STATUS.md))
+## SCOREBOARD — update this table every run (one screen)
 
 **Last bitstream on disk: run 61 — routed 2026-08-30 14:03, TIMING CLEAN**
 (`build/bits/run61_findcache_bucket_WNS+0.120.bit`). Live board bit.
@@ -13,11 +13,9 @@ concat-handoff cache arming (the 4-way FF cache had been blind to concat
 since birth). PACMAN 11.58M → 10.90M VM beats/frame (×1.54 vs run 57).
 div7 = 14.3 MHz. Reports:
 `build/runs/run61_findcache_bucket_dedup_WNS+0.120/`.
-Prior published (diary): run 49b WNS +0.180; run 50 DIR-on-glass
-(WNSFAIL −0.214); run 51 raster 2× / div8; run 52 present-delete +
-vstack BRAM + div7; run 60 H/F/T telemetry WNS +0.143.
-[TIMING_WALL.md](TIMING_WALL.md).
-**Fit is solved. Timing is solved.**
+**Fit is solved. Timing is solved.** The JS core runs on a divided clock
+so 100 MHz fabric/DDR3 still close. Hedge:
+[If timing fails](#if-timing-fails-wns--0--slow-the-js-core-not-ddr3).
 
 Source: `build/runs/run61_findcache_bucket_dedup_WNS+0.120/utilization_impl.rpt`
 (Design State: Routed, 2026-08-30 14:03). Chip: XC7A200T, 134,600 LUTs /
@@ -78,39 +76,19 @@ BRAM tiles = 329 × RAMB36 + 47 × RAMB18 × ½ = **352.5 / 365**.
 Runs 44–46 are the controlled proof: run 46 carries **+5,000 LUTs over run 44**
 on identical BRAM and DSP, and it is the one that both routed and closed
 timing. **A route failure here is a placement diagnosis until proven
-otherwise** — full experiment and the standing rule in
-[TIMING_WALL.md](TIMING_WALL.md#why-the-wall-came-down--the-placement-finding).
+otherwise.** How to write: [RTL_DESIGN_PRINCIPLES.md](RTL_DESIGN_PRINCIPLES.md).
 
-### Trajectory
+### Trajectory (milestones only)
 
-| Run | Slice LUTs | vs chip | What landed |
-|---|---:|---:|---|
-| 08-21 22:29 | 1,901,313 | 14.1x | (pre-campaign) |
-| overnight | 1,196,216 | 8.9x | FB rewrite + pow2 chunking; BRAM solved |
-| 08-22 09:10 | 794,989 | 5.9x | Phase 3b tagged-twin hand-delete |
-| 4 | 519,312 | 3.9x | AreaOptimized_high directive |
-| 6 | 317,303 | 2.36x | metadata evacuation (mux kill, -175k) |
-| 7 | 227,502 | 1.69x | census-named cuts |
-| 8-17 | ~208,500 | 1.55x | plateau: array lever exhausted; V1 cut + one-hot both flat |
-| 19 | 186,440 | 1.39x | Session 1 — FB front bank to DDR3 |
-| 20 | 167,029 | 1.24x | JSON engine removal (-19.4k) |
-| 21 | 137,871 | 1.02x | listener consolidation (-24k, over census) |
-| 24-26 | ~138-141k | ~1.03x | fence (`dont_touch` on 69-member hs64 mux, fixes ExploreArea 14h stall to 4min) + LUTRAM sweep + FSM-poke-to-strobe fixes |
-| 27-28 | 131,314 | **0.976x — UNDER BUDGET** | `linebuf`->BRAM (3x its estimate); **placement succeeds** |
-| 32 (`-2ns` bit) | — | — | div8 VM clock; WNS **−1.249 ns**; first light on HDMI text |
-| **33 (`-1ns` bit)** | **108,777** | **0.808x** | routed 09:58; WNS **−0.640 ns**; LUT headroom for timing directives |
-| 36 | — | — | bridge fix + blit-DDA; WNS **−0.415 ns** |
-| 42-43 | — | — | WNS **−0.112 ns** — plateau under default placement |
-| 44 | 105,532 | 0.784x | routed 14:29; WNS **−0.897 ns**; published by override |
-| 45 | 106,079 | 0.788x | **route FAILED** — 2,426 overlaps after 4h26m; recovered at −0.502 via AltSpreadLogic_high |
-| **46** | **110,532** | **0.821x** | **WNS +0.017 / WHS +0.055 — first gate-published bitstream. Congestion_SpreadLogic_high.** |
-| 47 | — | — | WNS **+0.039**; DIR `ds_base` fix aboard |
-| 48 | — | — | WNS **+0.130**; telemetry (D/E/V) + phantom `-- MORE --` fix |
-| 49 | — | — | WNS **−0.166** — gate refused; DIR self-heal landed in the console dispatch cone |
-| **49b** | **106,111** | **0.788x** | **WNS +0.180 / WHS +0.051 — best margin to date.** Retry qualifier registered out of the cone |
-| 52 | 95,066 | 0.706x | present-delete + vstack BRAM + div7; WNS **+0.007** |
-| 60 | 86,628 | 0.644x | H/F/T telemetry; WNS **+0.143**; FFs 30,468 — leanest published |
-| **61 (live)** | **100,429** | **0.746x** | **WNS +0.120 / WHS +0.050.** FIND bucket + concat-handoff. LUTs +13,801 / FFs +24,732 vs 60 = `jn_bucket` as FFs, not BRAM. |
+| Milestone | Slice LUTs | Lesson |
+|---|---:|---|
+| Pre-campaign | 1,901,313 | FSM-as-FF + duplicated FB |
+| First under budget (run 27–28) | 131,314 | BRAM first, then place |
+| First timing-clean (run 46) | 110,532 | Placement strategy, not fewer LUTs |
+| Leanest published (run 60) | 86,628 | |
+| **Live (run 61)** | **100,429** | SCOREBOARD above |
+
+Git has every intermediate run. Closed/dead levers stay below.
 
 ### FIT levers — closed out, kept for the record
 
@@ -132,8 +110,6 @@ shopping (±250 slices, not a real lever — RTL fixes are).
 
 ---
 
-Timing path history (divides, ÷8, placement): [TIMING_WALL.md](TIMING_WALL.md).
-
 **T200** = this Nexys Video board (Artix-7 **XC7A200T**, 365 **BRAM** Block
 RAM tiles, 134,600 **LUTs** Look-Up Tables). **Fit** = does the design
 place without over-util. Agent does **not** run **Vivado** (AMD’s FPGA
@@ -145,8 +121,9 @@ compiler) — you do:
 unless the file *list* / MIG / XDC changes. Same `rtl/*.sv` as FPGA-SIM.
 
 This file is **copy 2** of the RAM / “never fake FPGA-SIM” law (copy 1 is
-`.cursor/rules/never-fake-fpga-sim.mdc`) and **copy 2** of synth hygiene
-(with [SESSION_HANDOFF.md](SESSION_HANDOFF.md) § Synthesis).
+`.cursor/rules/never-fake-fpga-sim.mdc`). Synth hygiene **copy 1** is
+[SESSION_HANDOFF.md](SESSION_HANDOFF.md) § Synthesis; this NEVER table
+plus [OLD_RUNS.md](OLD_RUNS.md) are the taxonomy.
 
 One JS heap. Control-only extraction allowed since 2026-08-22 (u_exec64
 shape: no arrays, scalar ports, registered reads); never extract-with-copies JOIN / JSON / GC (Garbage Collection) / HEAP
@@ -225,6 +202,31 @@ Phase 3b: [REMOVING_EXEC32.md](REMOVING_EXEC32.md). External port map:
 
 ---
 
+## JS core clock and crossing strobes
+
+**Depth is the lever.** Slow paths were ~50% logic / ~50% route because they
+were deep, not because placement was unlucky. Combinational divides in sprite
+math were the worst cone. Product fix: **run the JS VM on a divided clock**
+(today ÷7 ≈ 14.3 MHz) and keep DDR3 / scanout on 100 MHz. Do not slow MIG.
+Hedge recipe: [If timing fails](#if-timing-fails-wns--0--slow-the-js-core-not-ddr3).
+How to write so this does not come back: [RTL_DESIGN_PRINCIPLES.md](RTL_DESIGN_PRINCIPLES.md).
+
+**If you change `VM_CLK_DIV`, these crossings are silent when wrong.**
+
+**Class A — fast→slow strobes the VM will miss** (1-fast-cycle pulse). Stretch
+to ≥N fast cycles or handshake: `sram_ack`, `code_we` (burst), `frame_tick`,
+`key_evt_stb`, `stop`, `start`.
+
+**Class B — slow→fast strobes that become N cycles wide.** Edge-qualify in the
+fast domain: `fb_swap`, `fb_we` (idempotent, low risk), `sram_req` (safe if
+`sram_ack` is Class A–fixed).
+
+**Class C — levels / data qualified by a listed strobe:** `joy_in`,
+`fb_present_busy`, `busy`, `done`, `sram_addr/we/wdata`, key codes, code write
+addr/data.
+
+---
+
 ## Paper BRAM budget (single copy — FINAL after the play-test round)
 
 The first shrink round set MAX_OBJ=768 and PACMAN **pegged the object
@@ -271,25 +273,12 @@ real unlock is packing `vobj_slot`'s 16-bit key field down to ~10 bits
 (−8..14 tiles, mechanical but wide). If it lands comfortably under,
 ENV_DEPTH 512 (+5) buys back pre-fit attract longevity headroom.
 
-## Fit forensics (2026-08-21/22, SUPERSEDED)
+## Fit forensics (lesson only)
 
-Place-fails 04:11 and 22:29 were **UTLZ-1**, not current work. Three
-causes, all landed:
-
-1. `AUTO_INCREMENTAL_CHECKPOINT` stitched a duplicate framebuffer — Tcl
-   now pins it 0; `bit-fresh` after a file-list change.
-2. BRAM oversub silently demoted Port-A arrays to LUTRAM — close BRAM
-   first; the LUT count lies until then.
-3. Tagged twin still synthesized — the `v64_on` fold did **not** sweep
-   it. Hand-delete: [REMOVING_EXEC32.md](REMOVING_EXEC32.md).
-
-LUT path: [Trajectory](#trajectory). Night-by-night campaign diary:
-[OVERNIGHT_STATUS.md](../OVERNIGHT_STATUS.md). Place-fail index:
+Place-fails were **UTLZ-1**: incremental stitch duplicated the framebuffer;
+BRAM oversub demoted Port-A arrays to LUTRAM; tagged twin survived a constant
+fold. Hand-delete: [REMOVING_EXEC32.md](REMOVING_EXEC32.md). Taxonomy:
 [OLD_RUNS.md](OLD_RUNS.md).
-
-Same-day regressions (do not repeat): `imgd_pend` is STATE, not a strobe
-— never default-clear a handshake flag. DONKEY phantom arrows: clear
-captured KEYBITS at KEYEVT enqueue, not only at dispatch.
 
 ## NEVER do these — they break the machine or the build
 

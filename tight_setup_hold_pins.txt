@@ -1,10 +1,10 @@
-+====================+===================+=================================+
-| Launch Setup Clock | Launch Hold Clock | Pin                             |
-+====================+===================+=================================+
-| clk_pll_i          | vm_clk            | u_core/u_vm/sram_wdata_reg[4]/D |
-| clk_pll_i          | vm_clk            | u_core/u_vm/sram_wdata_reg[7]/D |
-| clk_pll_i          | vm_clk            | u_core/u_vm/hs_m_code_reg/D     |
-| clk_pll_i          | vm_clk            | u_core/u_vm/cc_second_reg/D     |
-| clk_pll_i          | vm_clk            | u_core/u_vm/hs_m_state_reg/D    |
-| clk_pll_i          | vm_clk            | u_core/u_vm/sram_wdata_reg[6]/D |
-+--------------------+-------------------+---------------------------------+
++====================+===================+====================================+
+| Launch Setup Clock | Launch Hold Clock | Pin                                |
++====================+===================+====================================+
+| clk_pll_i          | vm_clk            | u_core/u_vm/sram_wdata_reg[4]/D    |
+| clk_pll_i          | vm_clk            | u_core/u_vm/hs_m_state_reg/D       |
+| clk_pll_i          | vm_clk            | u_core/u_vm/state_reg[4]/D         |
+| clk_pll_i          | vm_clk            | u_core/u_vm/syn_dedup_ctr_reg[2]/D |
+| clk_pll_i          | vm_clk            | u_core/u_vm/syn_dedup_ctr_reg[1]/D |
+| clk_pll_i          | vm_clk            | u_core/u_vm/syn_dedup_ctr_reg[3]/D |
++--------------------+-------------------+------------------------------------+

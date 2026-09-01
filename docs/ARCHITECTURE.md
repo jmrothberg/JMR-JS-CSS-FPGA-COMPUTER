@@ -44,7 +44,7 @@ what the OUTPUT / PHY panel says.
 **Core zoom-in poster** (sibling style to the JMR BASIC Processor Core
 zoom-in diagram) — the JS processor core itself: program sequencer, `exec64`
 dispatch, Value64 eval stack, object/heap, native call, shared engines,
-compile-on-RUN, three memory rooms, I/O. Render **2026-08-21** (replaces the
+compile-on-machine (`COMPILE` verb), three memory rooms, I/O. Render **2026-08-21** (replaces the
 2026-08-18 render that still showed the retired `exec32` twin). Regeneration
 prompt: deleted 2026-08-22 in `e16a8f4`; recover with
 `git show e16a8f4^:docs/POSTER_PROMPT_CORE_ZOOM_IN.md`.
@@ -190,7 +190,8 @@ compact **bytecode**; bytecode *is* the machine code. Spec:
 [../README.md](../README.md#nlisc-native-language-instruction-set-computing).
 
 ```
-NAME.HTML  →  RUN always compiles  →  ephemeral ProgramImage
+NAME.HTML  →  V1.0: card-create mints NAME.JSH; RUN loads it
+           →  V1.5: LOAD → EDIT → COMPILE mints NAME.JSH; RUN loads it
            →  code → code BRAM (Block RAM), ASET (asset section) → external SRAM asset bank  →  VM
 ```
 
@@ -303,25 +304,14 @@ Prefer BRAM for palette, microcode, FIFOs, font, line buffers, bounded stacks,
 BRAM. Also on-chip: code BRAM, JS heap. Game art lives in the **external
 SRAM asset bank** (see below), never in code BRAM. µSD / project `card.img`
 holds `NAME.HTML`. PYTHON, FPGA-SIM, and BOARD all play that image.
-**V1.0:** also a minted `NAME.JSH` from **card create** (the chip does not
-compile; `RUN` loads it). **V1.5 tries** compile-on-RUN on the machine.
+**V1.0:** also a minted `NAME.JSH` from **card create** (`RUN` loads it).
+**V1.5:** `COMPILE` on the machine mints that sidecar; `RUN` is unchanged.
 There is no `NAME.DAT`. Do not fake a 64K map. Do not pack Donkey sheets into
 code BRAM or downscale them to “fit.” Art is PNG → `.ARTX` → ASET SRAM
 ([GAME_DESIGN.md](GAME_DESIGN.md) Art).
 
-**ASIC target (updated 2026-08-23): SkyWater 130 nm, same process as the
-BASIC chip, ~2× its die — supersedes the 2026-08-13 "~1 MB-class on-chip
-SRAM" line, which that node cannot meet (realistic on-die: tens-to-low-
-hundreds of KB).** The current FPGA design uses ~1.95 MB on-chip
-(~1.6 MB BRAM + ~0.35 MB LUTRAM), so the ASIC is a memory-hierarchy
-redesign: on-die holds only the per-opcode hot set (vstack, vvars,
-metadata tables, small caches); everything else lives on the external
-4 MB SRAM, which at sky130 clock rates (~25-50 MHz core, 20-40 ns
-cycles) is one-cycle-class — the 2M×16 bus makes a Value64 access
-multi-beat (~2 pipelined cycles). The single-draw-bank front-bank-external
-architecture (2026-08-23) is the first implemented piece of this
-hierarchy. Full doctrine: [CONSTITUTION.md](../CONSTITUTION.md) § ASIC
-target. Live FPGA chip totals: [FPGA_FIT.md](FPGA_FIT.md).
+**ASIC:** SkyWater 130 nm doctrine is [CONSTITUTION.md](../CONSTITUTION.md)
+§ ASIC target. Live FPGA totals: [FPGA_FIT.md](FPGA_FIT.md).
 
 ---
 

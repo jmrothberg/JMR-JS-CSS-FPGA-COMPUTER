@@ -6,7 +6,7 @@ alwaysApply: true
 # Native HTML/JS computer
 
 Words: [README.md — Words used](../../README.md#words-used-in-this-project).
-This is **copy 1** of “no dukpy / compile-on-RUN” (copy 2:
+This is **copy 1** of “no dukpy / vendored HTML titles” (copy 2:
 [CONSTITUTION.md](../../CONSTITUTION.md) Vendored-titles mandate).
 
 This is a **standalone NLISC-JS** machine (Native Language Instruction Set
@@ -32,14 +32,13 @@ Compile errors at card create use HTML line numbers. Missing path → loud
 must not steal it. Do **not** compile `storage/*.HTML` on host `RUN` while
 the board plays the card.
 
-**Temp V1.0 (no on-chip compiler):** compile happens when you **make the
-card** — `make_sd_image.py` mints `NAME.JSH` from that HTML. **V1.5 tries
-to be standalone** (compile-on-RUN on the machine; drop the card `.JSH` if
-it fits).
+**Temp V1.0 (host mint):** compile happens when you **make the
+card** — `make_sd_image.py` mints `NAME.JSH` from that HTML. **V1.5 compile
+is live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. `RUN` still loads `.JSH`.
 
 **Three rooms:** **BRAM** = dual FB + code + heap (do not shrink for a small
 die; ASIC ~30 mm², ~1 MB-class SRAM). **µSD** = disk (`NAME.HTML`; temp
-minted `.JSH` until V1.5). **External 4 MB SRAM** = ASET art only
+minted `.JSH` until V1.5 `COMPILE`). **External 4 MB SRAM** = ASET art only
 (`addr[20:0]`, 16-bit, `we`/`req`/`ack`; FPGA = DDR3 behind that port; SIM =
 model behind the same port). No `NAME.DAT`. No
 64K BASIC house. Do not pack/downscale/quantize Donkey sheets into code BRAM.

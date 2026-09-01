@@ -28,38 +28,6 @@ Two beats of the hunt (keep as a lesson):
 
 ---
 
-## Edits that did **not** fix the hang
-
-Tried, then dropped or left as noise. Do not treat as “the synth bug.”
-
-| Edit | Intent |
-|---|---|
-| Named unique-case peek hunts | combo `mem[f()]` |
-| Split **reads** only; FSM still `mem[i] <=` | AR 58025; still ~71 GB |
-| `unique case` → `case`, `casestate_q` | decode shape |
-| IEEE mul pulled out of the case | mul in case |
-| `ram_style = "block"` with FSM poke still there | hint vs inference |
-| JOIN / JSON / GC extracted to new modules | **not done** — dual heap |
-| Clone `vvars` / `venv_*` / `vobj_*` in exec | **not done** |
-| `` `ifdef SYNTHESIS `` smaller heap | **not done** |
-| One-cycle BRAM reset-clear | hang class |
-| Two `stack_wr` one clock | extra port; used `stack_dual_pend` |
-| Re-edit `S_BLIT` / `spr_mem` / `vraf` / mux split | already done; left |
-| Global 3rd opcode wait beat | stalled FRAME; **reverted** |
-
----
-
-## Edits we kept (synth)
-
-Port A (copy `jmr_mini_fb.sv`): FSM pulses `*_we`/`*_waddr`/`*_wdata` only.
-Address this clock, `*_rdata` next. One JS heap, gen check stays. One
-`stack_wr` per clock. Mux `always_ff` vs unique-case FSM stay split.
-
-16-deep FFs left as FFs (`vst_win`, `js_val`, `cls_*`, `spr_off`, `kd_slot`).
-`storage_engine` `linebuf` left. Opcode `always_comb` locals/`*_n` only.
-
----
-
 ## Edits most likely to have broken glass
 
 Legal SRAM / extra clocks / registered copies. If a title misbehaves, check
