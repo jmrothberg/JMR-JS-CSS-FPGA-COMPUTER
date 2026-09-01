@@ -302,6 +302,13 @@ module jmr_console_engine (
     // NEW 2: filename source for a cdone file op — 1 = the loaded title's
     // name (src_name), 0 = the 16-byte name in the arena header.
     logic        cmp_use_srcname;
+    // Bare EDIT runs the editor AS A GAME: game_mode rises (framebuffer
+    // visible, key events flow) and the 172 s compile watchdog is held off —
+    // an interactive session has no deadline. The compiler stays a batch
+    // tool on the text screen (cmp_arm). Board evidence for why: under the
+    // old cmp_arm EDIT, the editor ran INVISIBLY behind the text screen
+    // until the watchdog reported ?IO.
+    logic        cmp_interactive;
     // ARTX (art titles compiled on the machine). The payload is staged in
     // the CART arena at COMPILE time and appended to NAME.JSH after the
     // compiler's image. It CANNOT be streamed file-to-file: storage_engine
@@ -660,6 +667,7 @@ module jmr_console_engine (
             cmp_save_mode <= 1'b0; cmp_arm_r <= 1'b0;
             cmp_ph <= 5'd0; cmp_nw <= 1'b0; cmp_nm_len <= 8'd0; cmp_pend <= 1'b0; cmp_rd_addr <= '0;
             src_trunc <= 1'b0; cmp_use_srcname <= 1'b0;
+            cmp_interactive <= 1'b0;
             cmp_art_mode <= 1'b0; cmp_art_len <= '0;
             art_i <= '0; art_found <= 1'b0; art_hi <= 1'b0; art_word <= '0;
             art_nspr <= '0;
@@ -755,6 +763,11 @@ module jmr_console_engine (
                     cmp_save_mode <= 1'b0;
                     cmp_art_mode <= 1'b0;
                     jsb_want_art <= 1'b0;
+                    cmp_interactive <= 1'b0;
+                    // THE "RUN opened the editor" bug: jsb_name_src=1 leaked
+                    // from a chain-load, so RUN's reload built the CHAIN
+                    // program's name (EDITOR.JSH) instead of the title's.
+                    jsb_name_src <= 2'd0;
                     if (msg_idx < 5) begin
                         if (!video_busy) begin
                             put_en <= 1'b1;
@@ -961,7 +974,10 @@ module jmr_console_engine (
                             reply_sel <= 4'd7; reply_idx <= 0; // ?NB
                             state <= C_REPLY;
                         end else begin
-                            cmp_arm_r <= 1'b1;
+                            // NO cmp_arm: the editor is a GAME (visible,
+                            // interactive). cdone still reaches C_CMP_WAIT.
+                            cmp_arm_r <= 1'b0;
+                            cmp_interactive <= 1'b1;
                             jsb_name_src <= 2'd1; cmp_progsel <= 3'd5; // EDITOR
                             cmp_save_mode <= 1'b0;
                             jsb_want_jsh <= 1'b1; jsb_tether_mode <= 1'b0;
@@ -1610,7 +1626,7 @@ module jmr_console_engine (
                             cmp_img_len <= cmp_len_i;
                             cmp_ph <= 5'd1;
                             cmp_out_off <= 21'd0;
-                        end else if (&cmp_wd) begin
+                        end else if (&cmp_wd && !cmp_interactive) begin
                             // The compile watchdog. cons_prog_wd is also
                             // held off for this state; without both, a real
                             // compile dies at 21.5 s looking like ?IO.
@@ -1708,8 +1724,10 @@ module jmr_console_engine (
                     end else begin
                         src_bank <= 1'b0;
                         if (cmp_status_i == 8'h81) begin
-                            // SAVE: SOURCE -> the arena-named file.
+                            // SAVE: SOURCE -> the loaded title's file.
                             cmp_arm_r <= 1'b0;
+                            halt_pulse <= 1'b1;      // leave game view
+                            cmp_interactive <= 1'b0;
                             cmp_save_mode <= 1'b0; // plain source, not an image
                             stor_name_len <= cmp_nm_len;
                             src_i <= 0; src_bank <= 1'b0;
@@ -1752,6 +1770,10 @@ module jmr_console_engine (
                             // always reports a non-zero image length here.)
                             cmp_arm_r <= 1'b0;
                             src_bank <= 1'b0;   // belt: see C_PROMPT
+                            // interactive quit: leave game view or the
+                            // console prints READY behind the frozen frame
+                            halt_pulse <= 1'b1;
+                            cmp_interactive <= 1'b0;
                             reply_sel <= 4'd2; reply_idx <= 0; // OK
                             state <= C_REPLY;
                         end else if (cmp_status_i == 8'h85) begin
