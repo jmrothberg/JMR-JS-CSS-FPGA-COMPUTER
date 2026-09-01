@@ -3,7 +3,8 @@
 <head><meta charset="utf-8"><title>COMPILER — JMR self-hosted compiler, pass B</title></head>
 <body style="margin:0;background:#000">
 <!--
-  COMPILER.HTML — the machine compiling its own titles.
+  COMPILER.HTML — DO NOT DELETE. Pass B of the on-machine compiler (not a game).
+  `COMPILE` chain-loads this after ARTSCAN. DIR hides this stem on purpose.
 
   Reads the span map ARTSCAN left in the arena, walks the residual JavaScript
   as a virtual byte stream, and writes a fixed-stride token array back into
@@ -1344,7 +1345,7 @@ function bareCall(ni) {
   }
   loadVar(ni);
   argc = argList();
-  emit(O_CALLVAL, 0, argc);
+  emit(O_CALLVAL, argc, 0);   // argc is arg0 (RTL reads opw[23:8])
 }
 
 function primary() {
@@ -1548,7 +1549,13 @@ function postfix() {
       continue;
     }
     if (isOp(ti, 26)) {                          // value call
-      emit(O_CALLVAL, 0, argList());
+      // IIFE: the callee is the MAKE_FN emitted immediately before —
+      // set a1 bit6 (flat call, caller-chained env) like the host, or the
+      // wrapper's "globals" land in a private env and the title is dead.
+      if (nOps > 0 && opCode(nOps - 1) === O_MKFN) {
+        setA1(nOps - 1, _gr(OPS_OFF + (nOps - 1) * 4 + 3) + 64);
+      }
+      emit(O_CALLVAL, argList(), 0);   // argc is arg0 (RTL reads opw[23:8])
       lvKind = 0;
       continue;
     }
