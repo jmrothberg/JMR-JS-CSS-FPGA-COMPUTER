@@ -161,6 +161,10 @@ RTL candidates, in priority order:
    time window.
 4. Minor: ?CE VM-stopped exit can stream a stale message area; audit
    cmp_msglen handling on the no-cdone path.
+5. **SAVE-as drops the .ART sidecar**: console SAVE "NEW.HTM" copies SOURCE
+   only, so a jmr:spr title saved under a new name cannot compile (ARTSCAN
+   now says "NO ART"). C_SV flow should copy NAME.ART -> NEW.ART when the
+   loaded title has one (or the mint-as path should stage by original name).
 
 Content/toolchain (not run-gated, mostly peer lane):
 - window.open-class browser APIs now stub to 33 in the on-machine compiler
