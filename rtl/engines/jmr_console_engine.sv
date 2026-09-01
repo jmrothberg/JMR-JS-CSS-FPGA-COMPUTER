@@ -525,7 +525,7 @@ module jmr_console_engine (
             12: banner_char = "E"; 13: banner_char = "-"; 14: banner_char = "C";
             15: banner_char = "P"; 16: banner_char = "U"; 17: banner_char = " ";
             18: banner_char = "V"; 19: banner_char = "1"; 20: banner_char = ".";
-            21: banner_char = "0";
+            21: banner_char = "5"; // V1.5: on-machine EDIT + COMPILE live
             // run number - bump by hand each build (user: know which bit
             // is on the board from the glass)
             22: banner_char = " "; 23: banner_char = "R";
@@ -533,7 +533,7 @@ module jmr_console_engine (
             // bitstreams all announcing R61 on the glass is exactly what
             // this string exists to prevent. Bump it IN THE SAME COMMIT as
             // the payload, not as an afterthought at launch time.
-            24: banner_char = "6"; 25: banner_char = "7";
+            24: banner_char = "6"; 25: banner_char = "8";
             default: banner_char = 8'h00;
         endcase
     endfunction
