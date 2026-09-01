@@ -27,7 +27,7 @@
 <canvas id="gameCanvas" width="640" height="480"></canvas>
 <script>
 // ---- arena layout (mirror of functional_model/jsb_format.py) -------------
-var MSG_OFF = 0;
+var MSG_OFF = 128;  // 2026-09-01: console prints from CSTG_HDR_MSG=128 — 0 made every ?CE mute
 var HDR_PROGSEL = 64;
 var HDR_ART = 65;
 var HDR_SPAN_N = 70;
@@ -59,7 +59,7 @@ var ST_ERR_PARSE = 9;
 // ---- shim ---------------------------------------------------------------
 function _sb(i) { return srcByte(i); }
 function _gr(i) { return stgRead(i); }
-function _gw(i, b) { stgWrite(i, b); }
+function _gw(i, b) { if (i < 0 || i >= 380928) { dgFail(i); return; } stgWrite(i, b); }
 
 function _r16(o) { return _gr(o) + _gr(o + 1) * 256; }
 function _r32(o) {
@@ -76,9 +76,45 @@ function _w32(o, v) {
   _gw(o + 3, Math.floor(v / 16777216) % 256);
 }
 
+// ---- board diagnostics (2026-09-01): print the numbers, don't fault ----
+// A bad arena handoff used to run all the way to buildPalette and die as a
+// silent fault 5 on glass. These write ASCII decimals straight to the
+// message area (raw stgWrite: _gw guards must not recurse) and cdone so
+// the console prints them after ?CE.
+var DGN = 0;
+var DGONCE = 0;
+var HA_RAW = 0;
+function dgC(c) { if (DGN < 120) { stgWrite(MSG_OFF + DGN, c); DGN = DGN + 1; } }
+function dgD(v) {
+  if (v < 0) { dgC(45); v = 0 - v; }
+  var d = 1000000000; var s = 0;
+  while (d >= 1) {
+    var q = Math.floor(v / d) % 10;
+    if (q > 0 || s || d === 1) { dgC(48 + q); s = 1; }
+    d = Math.floor(d / 10);
+    if (d === 0) { break; }
+  }
+}
+function dgT(a, b, c) { dgC(32); dgC(a); if (b) { dgC(b); } if (c) { dgC(c); } dgC(61); }
+function dgFail(i) {
+  if (DGONCE) { return; }
+  DGONCE = 1;
+  DGN = 0;
+  dgC(79); dgC(79); dgC(66);            // "OOB"
+  dgT(73, 0, 0); dgD(i);                // " I=<bad index>"
+  dgT(83, 80, 0); dgD(spanN);           // " SP=<spanN>"
+  dgT(84, 75, 0); dgD(tokN);            // " TK=<tokN>"
+  dgT(80, 65, 0); dgD(PAL_OFF);         // " PA=<PAL_OFF>"
+  dgT(78, 77, 0); dgD(nNames);          // " NM=<nNames>"
+  dgT(86, 76, 0); dgD(vLen);            // " VL=<vLen>"
+  dgT(72, 65, 0); dgD(HA_RAW);          // " HA=<raw art flag>"
+  cdone(15, 0, DGN);
+}
+
 // The length field is free on an error path, so it carries the token index
 // the parser stopped at. That turns "SYNTAX" into something locatable.
 function _fail(code, a, b, c, d, e, f, g) {
+  if (DGONCE) { return; }
   var n = 0;
   if (a) { _gw(MSG_OFF + n, a); n = n + 1; }
   if (b) { _gw(MSG_OFF + n, b); n = n + 1; }
@@ -2590,7 +2626,11 @@ function artHdrLen() {
   return 8 + _r16(ART_KEEP + 6) * 8 + 4;
 }
 
-function artNspr() { return _r16(ART_KEEP + 6); }
+function artNspr() {
+  var n = _r16(ART_KEEP + 6);
+  if (n < 0 || n > 64) { dgFail(0 - 5); return 0; }
+  return n;
+}
 
 function palFind(r, g, b) {
   var i = 0;
@@ -2778,12 +2818,20 @@ function emitImage() {
 
 // ---- entry ---------------------------------------------------------------
 hasArt = _gr(HDR_ART);
+HA_RAW = hasArt;
+// 2026-09-01 board: the flag byte read back as garbage for a title with NO
+// .ART, sending the compiler down the art-append path where a payload
+// length computed from token junk ran the copy off the arena end (the
+// I=380928 OOB). Only an exact 1 means art; anything else is no-art.
+if (hasArt !== 1) { hasArt = 0; }
 if (hasArt) {
   var ai = 0;
   while (ai < 4096) { _gw(ART_KEEP + ai, _gr(8192 + ai)); ai = ai + 1; }
 }
 spanN = _r16(HDR_SPAN_N);
+if (spanN < 0 || spanN > 4096) { dgFail(0 - 2); }
 measure();
+if (vLen < 0 || vLen > 65536) { dgFail(0 - 3); }
 kwInit();
 var st = tokenize();
 _w32(HDR_TOK_N, tokN);
