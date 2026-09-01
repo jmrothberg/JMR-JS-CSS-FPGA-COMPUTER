@@ -516,21 +516,29 @@ function w64(o, v) {
   // loop is exact where a log would round.
   while (v >= 2) { v = v / 2; e = e + 1; }
   while (v < 1) { v = v * 2; e = e - 1; }
-  // v is now a double in [1,2), so v-1 has exactly 52 fractional bits and
-  // (v-1) * 2^52 is an exact integer below 2^52. No rounding happens here.
-  m = (v - 1) * 4503599627370496;
   e = e + 1023;
+  // 2026-09-01 (PACFAST half-scale maze): the old (v-1)*2^52 multiply and
+  // the m%256 byte chain lost every mantissa bit on the machine — each
+  // constant collapsed to its leading power of two (0.64->0.5, 640->512).
+  // The VM has never before multiplied at 2^52 magnitude; do not start.
+  // Extract the 52 mantissa bits MSB-first by repeated doubling: v stays
+  // in [0,2), *2 is exact, floor and subtract are exact — no big numbers.
+  v = v - 1;
+  m = 0;
   i = 0;
-  while (i < 6) {
-    _gw(o + i, m % 256);
-    m = Math.floor(m / 256);
-    i = i + 1;
-  }
+  while (i < 4) { v = v * 2; b = Math.floor(v); v = v - b; m = m * 2 + b; i = i + 1; }
   // byte 6 = low 4 bits of the exponent, then the top 4 mantissa bits
-  _gw(o + 6, (e % 16) * 16 + m % 16);
+  _gw(o + 6, (e % 16) * 16 + m);
+  i = 5;
+  while (i >= 0) {
+    m = 0;
+    b = 0;
+    while (b < 8) { v = v * 2; var t = Math.floor(v); v = v - t; m = m * 2 + t; b = b + 1; }
+    _gw(o + i, m);
+    i = i - 1;
+  }
   // byte 7 = sign, then the high 7 exponent bits
-  b = Math.floor(e / 16);
-  _gw(o + 7, sign * 128 + b);
+  _gw(o + 7, sign * 128 + Math.floor(e / 16));
 }
 
 // ---- template literals ---------------------------------------------------
