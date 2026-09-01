@@ -1360,7 +1360,10 @@ function primary() {
     if (tSub(ti) === 12) {                       // typeof x
       ti = ti + 1;
       unary();
-      emit(O_CALLN, internSrcLit(0), 1);
+      // typeof IS native id 40 (2026-09-01: TYPEOF_NI was forever -1 — the
+      // emitted nid was garbage and the first typeof poisoned the program;
+      // PACFAST's per-cell map check made that "compiles but does not run").
+      emit(O_CALLN, 40, 1);
       return;
     }
     if (tSub(ti) === 14) {                       // this → __this
