@@ -39,7 +39,23 @@ ctx.imageSmoothingEnabled=false;
 if(!window.JMR_SPR){window.JMR_SPR=["BOMBERMA-0.png","BOMBERMA-1.png","BOMBERMA-2.png","BOMBERMA-3.png","BOMBERMA-4.png","BOMBERMA-5.png","BOMBERMA-6.png","BOMBERMA-7.png","BOMBERMA-8.png","BOMBERMA-9.png","BOMBERMA-10.png","BOMBERMA-11.png","BOMBERMA-12.png","BOMBERMA-13.png"];}
 var COLS=20,ROWS=15,TILE=32;
 var IMG=[];
-(function(){for(var i=0;i<14;i++){var im=new Image();im.src="jmr:spr:"+i;IMG[i]=im;}})();
+// RTL Image.src binds ASET only when "jmr:spr:N" is an interned literal
+// (spr_nid[] filled at load). Concat "jmr:spr:"+i never plants those names,
+// so FPGA-SIM stays dihit=0 (fillRect HUD only). PYTHON parses the string.
+IMG[0]=new Image();IMG[0].src="jmr:spr:0";
+IMG[1]=new Image();IMG[1].src="jmr:spr:1";
+IMG[2]=new Image();IMG[2].src="jmr:spr:2";
+IMG[3]=new Image();IMG[3].src="jmr:spr:3";
+IMG[4]=new Image();IMG[4].src="jmr:spr:4";
+IMG[5]=new Image();IMG[5].src="jmr:spr:5";
+IMG[6]=new Image();IMG[6].src="jmr:spr:6";
+IMG[7]=new Image();IMG[7].src="jmr:spr:7";
+IMG[8]=new Image();IMG[8].src="jmr:spr:8";
+IMG[9]=new Image();IMG[9].src="jmr:spr:9";
+IMG[10]=new Image();IMG[10].src="jmr:spr:10";
+IMG[11]=new Image();IMG[11].src="jmr:spr:11";
+IMG[12]=new Image();IMG[12].src="jmr:spr:12";
+IMG[13]=new Image();IMG[13].src="jmr:spr:13";
 function rnd(a,b){return a+Math.floor(Math.random()*(b-a+1));}
 function rd(x){return Math.floor(x+0.5);}
 

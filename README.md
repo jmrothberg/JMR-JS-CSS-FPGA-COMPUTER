@@ -82,6 +82,13 @@ READY
 ### Top commands (use these a lot)
 
 ```bash
+openFPGALoader -b nexysVideo build/nexys_video/jmr_nexys_video.bit
+# MOST COMMON — SRAM-load the .bit onto the Nexys Video (PROG USB J12).
+#    HDMI live in seconds; gone when you unplug. Named keepers in build/bits/:
+#      openFPGALoader -b nexysVideo build/bits/<run>.bit
+#    QSPI (survives power-cycle; JP4 = QSPI):
+#      openFPGALoader -b nexysVideo -f build/nexys_video/jmr_nexys_video.bin
+
 python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 # 1. host env (once)
 
