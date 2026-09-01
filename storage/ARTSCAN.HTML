@@ -3,7 +3,8 @@
 <head><meta charset="utf-8"><title>ARTSCAN — JMR self-hosted compiler, pass A</title></head>
 <body style="margin:0;background:#000">
 <!--
-  ARTSCAN.HTML — entry point of the on-machine compiler chain.
+  ARTSCAN.HTML — DO NOT DELETE. Pass A of the on-machine compiler (not a game).
+  `COMPILE` chain-loads ARTSCAN.JSH first. DIR hides this stem on purpose.
 
   Reads the LOADed HTML source one byte at a time through srcByte() and emits
   a SPAN MAP: an ordered description of how to read the residual JavaScript as
@@ -48,6 +49,7 @@ var ST_ERR_ART = 3;
 var ST_ERR_SPANS = 4;
 var ST_ERR_NOSCRIPT = 5;
 var ST_ERR_SQUASH = 14;
+var ST_ERR_NOART = 16;   // jmr:spr title compiled under a name with no .ART
 
 // ---- shim: the only window on the outside --------------------------------
 // Kept as named functions so a host-side build can swap them for array-backed
@@ -213,7 +215,10 @@ function scan() {
       if (tagIsChrome(p, tagEnd) === 0) {
         art = findArt(tagEnd + 1, bodyEnd);
         if (art >= 0) { return ST_ERR_ART; }
-        if (hasArt === 0 && findJmrSpr(tagEnd + 1, bodyEnd) >= 0) { return ST_ERR_ART; }
+        // jmr:spr refs but no NAME.ART staged: the title was saved under a
+        // NEW name and the sidecar did not follow (SAVE copies SOURCE only).
+        // Say so — "ART V1.5" sent the user hunting inline art (2026-09-01).
+        if (hasArt === 0 && findJmrSpr(tagEnd + 1, bodyEnd) >= 0) { return ST_ERR_NOART; }
         if (findSquash(tagEnd + 1, bodyEnd) >= 0) { return ST_ERR_SQUASH; }
         if (bodies > 0) { emitSpan(KIND_SEMI, 0, 0, line); }
         emitSpan(KIND_SOURCE, tagEnd + 1, bodyEnd - tagEnd - 1, line + 1);
@@ -237,6 +242,9 @@ if (st === 0) {
 } else if (st === ST_ERR_ART) {
   // "ART V1.5" — art needs ARTPNG (PNG inflate), not yet on the card.
   _fail(st, 65, 82, 84, 32, 86, 49, 53);
+} else if (st === ST_ERR_NOART) {
+  // "NO ART" — compile under the original title name, or copy NAME.ART
+  _fail(st, 78, 79, 32, 65, 82, 84, 0);
 } else if (st === ST_ERR_SQUASH) {
   // "NO SRC" — the card copy had a line omitted; rebuild the card.
   _fail(st, 78, 79, 32, 83, 82, 67, 0);
