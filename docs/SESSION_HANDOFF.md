@@ -161,10 +161,17 @@ RTL candidates, in priority order:
    time window.
 4. Minor: ?CE VM-stopped exit can stream a stale message area; audit
    cmp_msglen handling on the no-cdone path.
-5. **SAVE-as drops the .ART sidecar**: console SAVE "NEW.HTM" copies SOURCE
-   only, so a jmr:spr title saved under a new name cannot compile (ARTSCAN
-   now says "NO ART"). C_SV flow should copy NAME.ART -> NEW.ART when the
-   loaded title has one (or the mint-as path should stage by original name).
+5. **SAVE-as drops the .ART sidecar** (user 2026-09-01: "we don't want to
+   go back to the host"). DESIGN CHOSEN: the HTML declares its art bank —
+   `<script data-art="INVF.ART">` beside the sprite shim. ARTSCAN reads it,
+   writes the name to the arena NAME_BUF area, cdone(0x86 = "stage this
+   named art, then chain to PROGSEL"); the console reuses the mint-as
+   name path (jsb_name_src=2) into the existing C_ART_OPEN..C_ART_FLAG
+   staging, then loads COMPILER. No declaration → today's by-title-name
+   staging (backward compatible). Forks share one art bank, no copies,
+   reboot-safe. Host mint (make_sd_image, peer lane) must honor the same
+   declaration so host and machine mints agree. Copy-on-save rejected:
+   duplicates 100KB+ per fork, single-channel storage makes it awkward.
 
 Content/toolchain (not run-gated, mostly peer lane):
 - window.open-class browser APIs now stub to 33 in the on-machine compiler
