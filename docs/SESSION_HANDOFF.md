@@ -12,24 +12,22 @@ Recurring debug classes: [potential bugs.md](potential%20bugs.md).
 
 Critical “do not”s: two copies only — see
 [README.md — Two copies](../README.md#two-copies-of-every-critical-do-not).
-This file is **copy 2** of (a) read-`traces/`-first and (b) synth hygiene.
+This file is **copy 2** of read-`traces/`-first and **copy 1** of synth
+hygiene (copy 2 of hygiene: [FPGA_FIT.md](FPGA_FIT.md) NEVER +
+[OLD_RUNS.md](OLD_RUNS.md) taxonomy).
 
 ---
 
 ## CURRENT STATE
 
-Live numbers: [FPGA_FIT.md](FPGA_FIT.md) SCOREBOARD. Timing runs:
-[TIMING_WALL.md](TIMING_WALL.md). Board fps plan:
-[SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md). exec32 / Phase 3b:
-[REMOVING_EXEC32.md](REMOVING_EXEC32.md).
+Live numbers: [FPGA_FIT.md](FPGA_FIT.md) SCOREBOARD. Clock hedge:
+[FPGA_FIT.md — If timing fails](FPGA_FIT.md#if-timing-fails-wns--0--slow-the-js-core-not-ddr3).
+Board fps plan: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
+exec32: [REMOVING_EXEC32.md](REMOVING_EXEC32.md).
 
-**Fit and timing are solved** (run 49b WNS +0.180). **BOARD 2026-08-27:**
-run 50 flashed — DIR works. Run 51 baking. Caps: [FPGA_FIT.md](FPGA_FIT.md)
-paper budget (`MAX_OBJ=960`, `ENV_DEPTH=384`).
-
-Three tests are **xfail** (#70/#71/#72) — not “the games are broken”.
-Detail: [potential bugs.md](potential%20bugs.md). 08-21 place-fails:
-[OLD_RUNS.md](OLD_RUNS.md).
+Caps: [FPGA_FIT.md](FPGA_FIT.md) paper budget. Three tests are **xfail**
+(#70/#71/#72) — not “the games are broken”:
+[potential bugs.md](potential%20bugs.md).
 
 ---
 
@@ -50,8 +48,8 @@ Per-bug root causes: **[potential bugs.md](potential%20bugs.md)**. Start at
 
 ## 1) Synthesis — the rules that survive every run
 
-This is **copy 2** of synth hygiene (copy 1 is the NEVER table in
-[FPGA_FIT.md](FPGA_FIT.md); run diary [OLD_RUNS.md](OLD_RUNS.md)).
+This is **copy 1** of synth hygiene (copy 2 is the NEVER table in
+[FPGA_FIT.md](FPGA_FIT.md); failure taxonomy [OLD_RUNS.md](OLD_RUNS.md)).
 
 1. **`synth_design` is one step.** There is no **DCP** (Design CheckPoint)
    until `synth_1` hits **100%**. A crash during mapping cannot be resumed —
@@ -147,3 +145,26 @@ Cross-lane facts every session needs:
   flat byte space). PAL_OFF ≈ 137K is normal.
 - The editor is a GAME (running=1 while editing); F2 save prints SAVED.;
   the delete verb is REMOVE. GUI forwards F-keys to titles; F12 = leave.
+
+### RUN 69 BUG LIST (2026-09-01 — collected, NOT started; user gate)
+
+RTL candidates, in priority order:
+1. **VM f64 MUL loses the mantissa at ~2^52-scale operands** — root of the
+   w64 constant collapse (0.64->0.5, 640->512). Compiler sidesteps it now;
+   the VM corner remains. Needs: FM≡HM extreme-magnitude MUL/MOD/DIV tests,
+   then the RTL fix or a documented precision envelope.
+2. **Art-flag byte misread** (console SRAM write -> VM read via the DDR3
+   bridge; board-only, sim-invisible). Shielded by content sanitation;
+   R68's G-line reports {fsite, arg} when it next fires — root-cause then.
+3. **Post-exit console drain eats fast typed input** (the type-COMPILE-
+   twice effect). Drain should swallow only the terminating key, not a
+   time window.
+4. Minor: ?CE VM-stopped exit can stream a stale message area; audit
+   cmp_msglen handling on the no-cdone path.
+
+Content/toolchain (not run-gated, mostly peer lane):
+- window.open-class browser APIs now stub to 33 in the on-machine compiler
+  (574bbb4) — extend natInit as real needs appear.
+- Inline-art titles: migrate remaining data-URI titles to .ARTX; that (not
+  removing the LIST squash) is what makes every title compile unhacked —
+  ARTSCAN refuses inline art regardless of squash.
