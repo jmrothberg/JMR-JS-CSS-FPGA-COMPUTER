@@ -1,7 +1,10 @@
-+====================+===================+=======================================================================================================================================================================================================================================+
-| Launch Setup Clock | Launch Hold Clock | Pin                                                                                                                                                                                                                                   |
-+====================+===================+=======================================================================================================================================================================================================================================+
-| oserdes_clk_2      | oserdes_clk_2     | u_mig/u_mig_7series_0_mig/u_memc_ui_top_std/mem_intfc0/ddr_phy_top0/u_ddr_mc_phy_wrapper/u_ddr_mc_phy/ddr_phy_4lanes_0.u_ddr_phy_4lanes/ddr_byte_lane_C.ddr_byte_lane_C/ddr_byte_group_io/output_[9].oserdes_dq_.ddr.oserdes_dq_i/RST |
-| oserdes_clk_2      | oserdes_clk_2     | u_mig/u_mig_7series_0_mig/u_memc_ui_top_std/mem_intfc0/ddr_phy_top0/u_ddr_mc_phy_wrapper/u_ddr_mc_phy/ddr_phy_4lanes_0.u_ddr_phy_4lanes/ddr_byte_lane_C.ddr_byte_lane_C/ddr_byte_group_io/output_[7].oserdes_dq_.ddr.oserdes_dq_i/RST |
-| oserdes_clk_2      | oserdes_clk_2     | u_mig/u_mig_7series_0_mig/u_memc_ui_top_std/mem_intfc0/ddr_phy_top0/u_ddr_mc_phy_wrapper/u_ddr_mc_phy/ddr_phy_4lanes_0.u_ddr_phy_4lanes/ddr_byte_lane_C.ddr_byte_lane_C/ddr_byte_group_io/output_[8].oserdes_dq_.ddr.oserdes_dq_i/RST |
-+--------------------+-------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++====================+===================+=================================+
+| Launch Setup Clock | Launch Hold Clock | Pin                             |
++====================+===================+=================================+
+| clk_pll_i          | vm_clk            | u_core/u_vm/sram_wdata_reg[4]/D |
+| clk_pll_i          | vm_clk            | u_core/u_vm/sram_wdata_reg[7]/D |
+| clk_pll_i          | vm_clk            | u_core/u_vm/hs_m_code_reg/D     |
+| clk_pll_i          | vm_clk            | u_core/u_vm/cc_second_reg/D     |
+| clk_pll_i          | vm_clk            | u_core/u_vm/hs_m_state_reg/D    |
+| clk_pll_i          | vm_clk            | u_core/u_vm/sram_wdata_reg[6]/D |
++--------------------+-------------------+---------------------------------+
