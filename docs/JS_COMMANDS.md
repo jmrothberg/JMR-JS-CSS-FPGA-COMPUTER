@@ -261,12 +261,14 @@ Bare names the compiler already knows. Source of the ids: `functional_model/jsb_
 | `stgWrite` | 46 |
 | `cdone` | 47 |
 | `artWrite2` | 48 |
+| `srcWrite` | 49 |
+| `srcSetLen` | 50 |
 
 `Math.PI` is **not** a call. It is `LOAD_CONST` of 3.14159…
 
 **Id 41 note:** `Object.keys` (and therefore `for (k in obj)`) runs on the Python functional model. The chip does not have that native yet — it faults instead of guessing. Version 1.0 titles use a literal key list or an index loop. See [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
 
-**Ids 43–48 note — the V1.5 standalone-compile ABI.** These are not for
+**Ids 43–50 note — the V1.5 standalone-compile ABI.** These are not for
 games. They are the window through which the **self-hosted compiler** (an
 ordinary program on the card) reaches the outside world, so the machine can
 compile without a PC: `LOAD "X.HTML"` → `COMPILE` → `RUN`.
@@ -279,12 +281,25 @@ compile without a PC: `LOAD "X.HTML"` → `COMPILE` → `RUN`.
 | 46 | `stgWrite(i, b)` | scratch-arena write; out of range **faults** |
 | 47 | `cdone(status, len, msgLen)` | report: 0 = mint, 0x80 = run the next chained program, else error |
 | 48 | `artWrite2(word, lo, hi)` | packed art staging; past the framebuffer wall **faults** |
+| 49 | `srcWrite(i, b)` | write a SOURCE byte — this is what makes an editor a PROGRAM |
+| 50 | `srcSetLen(n)` | set the SOURCE length after an insert or delete |
 
 Reads return −1 so a tokenizer can probe cheaply; **writes fault**, because a
 stray write lands in the framebuffer / SOURCE / WORK and corrupts the machine
-invisibly. Ids 44/45/46/48 are one RTL state with a mode select. The compiler
-never builds a JS string — there are no string methods — so everything it does
-is byte offsets through these calls.
+invisibly. Ids 44/45/46/48/49 are **one** RTL state (`S_CSRAM`) with a mode
+select, so eight natives cost a single FSM encoding — encodings are the scarce
+resource on this chip, not LUTs.
+
+`cdone(status, …)` is also how a program asks the console for a file
+operation, since the console owns storage: `0x00` mint the staged image (or,
+with length 0, just return to READY), `0x80` chain-load the next program,
+`0x81` save SOURCE, `0x82` delete, `0x83` load, `0x84` mint under a given
+name. That table is why an editor needs no storage natives of its own.
+
+The compiler never builds a JS string — there are no string methods — so
+everything it does is byte offsets through these calls. A program that must
+DRAW text indexes a table of one-character string literals (`G[code - 32]`),
+because there is no `String.fromCharCode` either.
 
 **Id 42 note:** `sound(ch, freqHz, vol0_15, frames, slideHzPerFrame)` always succeeds. Channel 0–2 square, 3 noise. The PHY owns the envelope (no per-frame JS mixer). PYTHON / FPGA-SIM with no jack are silent no-ops. Chrome titles call `playSfx(packed)` and keep Web Audio in `<script data-host="chrome">` (card mint strips that tag). Do **not** write `function sound()` — that compiles as a user stub and steals the native. Catalog: `storage/SNDDEMO.HTML`. Authoring: [GAME_DESIGN.md](GAME_DESIGN.md) Sound. Card mint: default on; `make_sd_image.py create -soundoff` stubs nid 42 for old bits.
 

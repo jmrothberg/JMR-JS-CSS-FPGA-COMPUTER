@@ -512,8 +512,8 @@ class PythonBackend(RuntimeBackend):
     def push_key(self, ch: str) -> None:
         self.machine.push_key(ch)
 
-    def hard_break(self) -> None:
-        self.machine.hard_break()
+    def hard_break(self, quiet: bool = False) -> None:
+        self.machine.hard_break(quiet=quiet)
 
     @property
     def more_waiting(self) -> bool:

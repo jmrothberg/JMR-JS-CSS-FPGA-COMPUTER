@@ -1967,7 +1967,7 @@ class JsHwVm:
             elif native_id == 42:
                 # sound(ch, freq, vol, frames, slide) — always succeed
                 pass
-            elif 43 <= native_id <= 48:
+            elif 43 <= native_id <= 50:
                 # V1.5 standalone-compile ABI. Delegate to the inner Machine
                 # so FM and HM cannot drift: one arena, one set of bounds,
                 # one -1 sentinel. Out-of-range writes raise there, which is
@@ -1989,8 +1989,12 @@ class JsHwVm:
                         self._m._nat_stg_write(_arg(0), _arg(1))
                     elif native_id == 47:
                         self._m._nat_cdone(_arg(0), _arg(1), _arg(2))
-                    else:  # 48
+                    elif native_id == 48:
                         self._m._nat_art_write2(_arg(0), _arg(1), _arg(2))
+                    elif native_id == 49:
+                        self._m._nat_src_write(_arg(0), _arg(1))
+                    else:  # 50
+                        self._m._nat_src_setlen(_arg(0))
                 except RuntimeError as exc:
                     self._value64_fault(f"native ID {native_id} at IP {ip}: {exc}")
                     return None

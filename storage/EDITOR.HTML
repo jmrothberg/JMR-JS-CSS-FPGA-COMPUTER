@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>EDITOR — JMR standalone source editor</title></head>
+<body style="margin:0;background:#000">
+<!--
+  EDITOR.HTML — the machine's own source editor, as an ordinary program.
+
+  Edits the HTML that LOAD parked in SOURCE, in place, through srcByte /
+  srcWrite / srcSetLen. Nothing else on the machine has to change: when you
+  are done it asks the console to SAVE, and the next thing you type is
+  COMPILE.
+
+      LOAD "BOXES.HTML"     source lands in SOURCE
+      EDIT                  this program, editing that source
+      COMPILE               mint BOXES.JSH from what you just wrote
+      RUN                   play it
+
+  EDIT must be a CHAIN-LOADED verb, not LOAD+RUN. Loading this file the
+  ordinary way would put the editor's own text in SOURCE and it would edit
+  itself. The console launches it by name the same way COMPILE launches the
+  compiler, which leaves SOURCE untouched.
+
+  Keys: arrows move, printable keys insert, Backspace deletes, Enter splits
+  a line, F2 saves, F3 quits without saving. Esc is machine BREAK — do not
+  bind it here.
+
+  AUTHORING RULES - compiled BY the machine's own walls:
+    - no string methods: everything is byte offsets and char codes
+    - no shift/xor operators; / and % are slow, keep them off hot paths
+    - 16 locals+params per function, hard
+    - avoid arrays: state lives in the scratch arena
+-->
+<canvas id="gameCanvas" width="640" height="480"></canvas>
+<script>
+// ---- glass ---------------------------------------------------------------
+// There is no String.fromCharCode on this machine, and ctx.fillText needs a
+// string. So a character is drawn by indexing a table of one-character
+// literals: G[code - 32]. 95 entries, inside ARR_CAP.
+var G = [
+  " ","!","\"","#","$","%","&","'","(",")","*","+",
+  ",","-",".","/","0","1","2","3","4","5","6","7",
+  "8","9",":",";","<","=",">","?","@","A","B","C",
+  "D","E","F","G","H","I","J","K","L","M","N","O",
+  "P","Q","R","S","T","U","V","W","X","Y","Z","[",
+  "\\","]","^","_","`","a","b","c","d","e","f","g",
+  "h","i","j","k","l","m","n","o","p","q","r","s",
+  "t","u","v","w","x","y","z","{","|","}","~"
+];
+
+var ctx = document.querySelector("canvas").getContext("2d");
+
+var CW = 8;          // character cell
+var CH = 16;
+var COLS = 78;
+var ROWS = 27;
+
+// ---- arena ---------------------------------------------------------------
+// A line index is built once and rebuilt after every structural edit; it is
+// the only thing standing between "move the cursor" and "rescan the file".
+var LINE_OFF = 4096;     // u32 per line: byte offset of its first character
+var LINE_MAX = 4096;
+
+var nLines = 0;
+var curLine = 0;
+var curCol = 0;
+var topLine = 0;
+var dirty = 0;
+var quit = 0;
+var saved = 0;
+
+// ---- shim ----------------------------------------------------------------
+function _sb(i) { return srcByte(i); }
+function _sw(i, b) { srcWrite(i, b); }
+function _gr(i) { return stgRead(i); }
+function _gw(i, b) { stgWrite(i, b); }
+
+function _w32(o, v) {
+  _gw(o, v % 256);
+  _gw(o + 1, Math.floor(v / 256) % 256);
+  _gw(o + 2, Math.floor(v / 65536) % 256);
+  _gw(o + 3, Math.floor(v / 16777216) % 256);
+}
+function _r32(o) {
+  return _gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536 + _gr(o + 3) * 16777216;
+}
+
+function lineStart(i) { return _r32(LINE_OFF + i * 4); }
+
+// ---- line index ----------------------------------------------------------
+function reindex() {
+  var n = srcLen();
+  var p = 0;
+  var k = 1;
+  _w32(LINE_OFF, 0);
+  while (p < n && k < LINE_MAX) {
+    if (_sb(p) === 10) { _w32(LINE_OFF + k * 4, p + 1); k = k + 1; }
+    p = p + 1;
+  }
+  nLines = k;
+}
+
+function lineLen(i) {
+  var s = lineStart(i);
+  var e = (i + 1 < nLines) ? (lineStart(i + 1) - 1) : srcLen();
+  if (e < s) { return 0; }
+  return e - s;
+}
+
+// ---- editing -------------------------------------------------------------
+// SOURCE is one flat byte array, so an insert is a memmove. Lines are short
+// and edits are human-paced; a rope would be the wrong complexity here.
+function shiftUp(at, by) {
+  var n = srcLen();
+  var i = n;
+  while (i > at) {
+    i = i - 1;
+    _sw(i + by, _sb(i));
+  }
+  srcSetLen(n + by);
+}
+
+function shiftDown(at, by) {
+  var n = srcLen();
+  var i = at;
+  while (i + by < n) {
+    _sw(i, _sb(i + by));
+    i = i + 1;
+  }
+  srcSetLen(n - by);
+}
+
+function insertByte(at, b) {
+  shiftUp(at, 1);
+  _sw(at, b);
+  dirty = 1;
+}
+
+function deleteByte(at) {
+  shiftDown(at, 1);
+  dirty = 1;
+}
+
+// ---- drawing -------------------------------------------------------------
+function drawLine(row, li) {
+  var s = lineStart(li);
+  var n = lineLen(li);
+  var c = 0;
+  var b = 0;
+  var y = row * CH + CH;
+  if (n > COLS) { n = COLS; }
+  while (c < n) {
+    b = _sb(s + c);
+    if (b >= 32 && b < 127) { ctx.fillText(G[b - 32], c * CW, y); }
+    c = c + 1;
+  }
+}
+
+function drawStatus() {
+  var y = ROWS * CH + CH;
+  ctx.fillStyle = "#FF0000";
+  ctx.fillText("LINE", 0, y);
+  ctx.fillText(curLine + 1, 40, y);
+  if (dirty) { ctx.fillText("*", 96, y); }
+  ctx.fillText("F2=SAVE  F3=QUIT", 160, y);
+  ctx.fillStyle = "#FFFFFF";
+}
+
+function redraw() {
+  var r = 0;
+  var li = 0;
+  if (curLine < topLine) { topLine = curLine; }
+  if (curLine >= topLine + ROWS) { topLine = curLine - ROWS + 1; }
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, 640, 480);
+  // cursor block first, so the character sits on top of it
+  ctx.fillStyle = "#0000FF";
+  ctx.fillRect(curCol * CW, (curLine - topLine) * CH + 3, CW, CH - 2);
+  ctx.fillStyle = "#FFFFFF";
+  while (r < ROWS) {
+    li = topLine + r;
+    if (li < nLines) { drawLine(r, li); }
+    r = r + 1;
+  }
+  drawStatus();
+  // Present is gone: scanout / PYTHON present() read the draw bank. A
+  // swapBuffers here left the picture on FRONT and an empty BACK; the next
+  // frame present() copied that empty BACK over the glass (blank EDIT).
+}
+
+// ---- keys ----------------------------------------------------------------
+function clampCol() {
+  var n = lineLen(curLine);
+  if (curCol > n) { curCol = n; }
+  if (curCol < 0) { curCol = 0; }
+}
+
+function moveUp() {
+  if (curLine > 0) { curLine = curLine - 1; clampCol(); }
+}
+
+function moveDown() {
+  if (curLine + 1 < nLines) { curLine = curLine + 1; clampCol(); }
+}
+
+function typeChar(b) {
+  insertByte(lineStart(curLine) + curCol, b);
+  curCol = curCol + 1;
+  reindex();
+}
+
+function pressEnter() {
+  insertByte(lineStart(curLine) + curCol, 10);
+  curLine = curLine + 1;
+  curCol = 0;
+  reindex();
+}
+
+function pressBack() {
+  var at = 0;
+  if (curCol > 0) {
+    at = lineStart(curLine) + curCol - 1;
+    deleteByte(at);
+    curCol = curCol - 1;
+    reindex();
+  } else if (curLine > 0) {
+    at = lineStart(curLine) - 1;      // the newline joining us to the line above
+    curCol = lineLen(curLine - 1);
+    deleteByte(at);
+    curLine = curLine - 1;
+    reindex();
+  }
+}
+
+// F2 hands the buffer back to the console, which owns storage. cdone status
+// 0x81 = "write SOURCE to the loaded name"; the program ends there, and the
+// next thing the user types is COMPILE.
+function doSave() {
+  saved = 1;
+  cdone(129, 0, 0);
+}
+
+function onKey(e) {
+  var k = e.keyCode;
+  if (k === 38) { moveUp(); }
+  else if (k === 40) { moveDown(); }
+  else if (k === 37) { if (curCol > 0) { curCol = curCol - 1; } }
+  else if (k === 39) { if (curCol < lineLen(curLine)) { curCol = curCol + 1; } }
+  else if (k === 13) { pressEnter(); }
+  else if (k === 8) { pressBack(); }
+  else if (k === 113) { doSave(); }        // F2
+  else if (k === 114) { quit = 1; cdone(0, 0, 0); }  // F3 — not Esc (BREAK)
+  else if (k >= 32 && k < 127) { typeChar(k); }
+  redraw();
+}
+
+function tick() {
+  if (quit || saved) { return; }
+  requestAnimationFrame(tick);
+}
+
+reindex();
+addEventListener("keydown", onKey);
+redraw();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

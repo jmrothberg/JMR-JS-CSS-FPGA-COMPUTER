@@ -15,12 +15,12 @@ from typing import List, Optional
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STORAGE = ROOT / "storage"
 DEFAULT_CARD = ROOT / "card.img"
-_HIDE_SUFFIX = {".JSH", ".JSB"}
+_HIDE_SUFFIX = {".JSH", ".JSB", ".ART", ".ARTX"}
 # DIR is the catalog of TITLES. The self-hosted compiler's programs live on
 # the card as ordinary .HTML/.JSH pairs — that is what lets the machine one
 # day recompile its own compiler — but they are system software, not games,
 # and listing them buries the titles. Hidden by stem, so both halves go.
-_SYSTEM_STEMS = {"ARTSCAN", "ARTPNG", "COMPILER", "COMPIL2", "MINTASM"}
+_SYSTEM_STEMS = {"ARTSCAN", "ARTPNG", "COMPILER", "COMPIL2", "MINTASM", "EDITOR"}
 
 
 class StorageEngine:

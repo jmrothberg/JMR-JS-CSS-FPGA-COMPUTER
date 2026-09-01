@@ -813,7 +813,7 @@ class SimBackend(RuntimeBackend):
                 html = html_path.read_text(encoding="utf-8")
                 self._loaded_html_text = html
                 self._html_lines = html.splitlines()
-            chunk = compile_html_text(html)
+            chunk = compile_html_text(html, source_path=html_path)
             blob = encode_html_chunk(chunk)
             image = ProgramImage(blob)
             # Observe the decoded ProgramImage, not the pre-encode Chunk: the

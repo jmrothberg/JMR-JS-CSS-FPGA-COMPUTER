@@ -505,7 +505,9 @@ class BoardBackend(RuntimeBackend):
             from tools.compile_js import compile_html_text, encode_html_chunk
 
             html = html_path.read_text(encoding="utf-8")
-            blob = encode_html_chunk(compile_html_text(html))
+            blob = encode_html_chunk(
+                compile_html_text(html, source_path=html_path)
+            )
             self._log.note(f"compile-on-RUN {html_path.name} ({len(blob)} bytes, PROG stream)")
             return blob
         except CompileError as e:

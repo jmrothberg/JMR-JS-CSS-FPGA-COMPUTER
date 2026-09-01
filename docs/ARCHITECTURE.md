@@ -141,6 +141,46 @@ unqualified.
 
 ---
 
+## Standalone compile — the compile-time memory map
+
+While a compiler program runs, **no title is loaded**, so the regions a title
+owns are dead and get borrowed. This is what lets a machine with 372 KB of
+scratch compile a title whose own image is megabytes.
+
+| Region | Base (word) | Size | Use during a compile |
+|---|---:|---:|---|
+| CART | 0 | 1,480,704 w | art staging, **packed 2 B/word** at final RUN addresses |
+| CSCR | 1,650,688 | 73,728 w | compiler scratch (the hole above WORK, plus SPR), 1 B/word |
+| SRC | 1,724,416 | 65,536 w | SOURCE, as `LOAD` left it, 1 B/word |
+| CIMG | 1,789,952 | 307,200 w | assembled image, 1 B/word |
+
+`stgRead` / `stgWrite` see CSCR and CIMG as **one flat byte arena**; the RTL
+maps the split. Art is written packed because MKBIGCPU's 2.8 MB payload fits
+under `FB_SRAM_BASE` at two bytes per word and would blow straight through it
+at one.
+
+The chain is ordinary programs, launched by name:
+
+```
+ARTSCAN.JSH   span map, sprite table, colour harvest   (art refused for now)
+COMPILER.JSH  tokenize -> parse -> assemble -> cdone
+[MINTASM /  ARTPNG / COMPIL2 / EDITOR — rows reserved in the console ROM]
+```
+
+`cdone(status, len, msglen)` is the whole protocol: `0x00` mint the staged
+image (length 0 = quit, mint nothing), `0x80` chain-load the next program,
+`0x81` save SOURCE, `0x82` delete, `0x83` load, `0x84` mint under a named
+file. The console owns storage, so that table is how a program reaches the
+card without any storage native of its own.
+
+**Colour is not parsed by the chip.** `ctx.fillStyle` resolves through the
+`FSTY` table the compiler emits (name index → palette index) plus the palette
+in the `ASET` section. Anything missing from `FSTY` paints index 1 — white.
+An image without those tables looks perfect on the Python model, which parses
+the string itself, and draws every rectangle white on real hardware.
+
+---
+
 ## The idea
 
 A conventional computer executes assembly (or a soft CPU), and a runtime /
@@ -265,8 +305,9 @@ SRAM asset bank** (see below), never in code BRAM. µSD / project `card.img`
 holds `NAME.HTML`. PYTHON, FPGA-SIM, and BOARD all play that image.
 **V1.0:** also a minted `NAME.JSH` from **card create** (the chip does not
 compile; `RUN` loads it). **V1.5 tries** compile-on-RUN on the machine.
-There is no `NAME.DAT`. Do not fake a 64K map. Do not pack Donkey `data:image` sheets into
-code BRAM or downscale them to “fit.”
+There is no `NAME.DAT`. Do not fake a 64K map. Do not pack Donkey sheets into
+code BRAM or downscale them to “fit.” Art is PNG → `.ARTX` → ASET SRAM
+([GAME_DESIGN.md](GAME_DESIGN.md) Art).
 
 **ASIC target (updated 2026-08-23): SkyWater 130 nm, same process as the
 BASIC chip, ~2× its die — supersedes the 2026-08-13 "~1 MB-class on-chip

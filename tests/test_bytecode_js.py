@@ -1925,6 +1925,8 @@ def test_hw_value64_every_registered_native_has_dispatch(native_id):
         46: [value64.value_pack_number(0), value64.value_pack_number(65)],
         47: [value64.value_pack_number(0)] * 3,
         48: [value64.value_pack_number(0)] * 3,
+        49: [value64.value_pack_number(0), value64.value_pack_number(65)],
+        50: [value64.value_pack_number(0)],
     }
     vm.error = None
     vm._value64_native(native_id, args_by_id.get(native_id, []), 0)

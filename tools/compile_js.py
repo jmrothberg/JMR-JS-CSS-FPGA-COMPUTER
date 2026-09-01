@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from functional_model.compiler import compile_source  # noqa: E402
-from functional_model.jsb_format import encode_chunk, jsb_to_hex_lines  # noqa: E402
+from functional_model.jsb_format import encode_chunk, jsb_to_hex_lines, read_artx  # noqa: E402
 
 STORAGE = ROOT / "storage"
 VECTORS = ROOT / "vectors"
@@ -70,6 +70,42 @@ def _extract_data_uri_sprites(src: str):
         return f"jmr:spr:{n}"
 
     return pat.sub(repl, src), images
+
+
+def _resolve_artx_bytes(html: str, source_path=None, artx=None):
+    """Find NAME.ARTX for a title whose HTML already has jmr:spr:N handles.
+
+    Prefer caller-supplied bytes, then a sibling of source_path, then a
+    storage/ HTML whose text matches (tests that compile_html_text(read_text())
+    without a path). Card 8.3 truncates .ARTX → .ART; try both suffixes.
+    """
+    if artx is not None:
+        return artx
+    paths = []
+    if source_path is not None:
+        p = Path(source_path)
+        paths.append(p.with_suffix(".ARTX"))
+        paths.append(p.with_suffix(".ART"))
+        paths.append(STORAGE / (p.stem + ".ARTX"))
+        paths.append(STORAGE / (p.stem + ".ART"))
+    for cand in paths:
+        if cand.is_file():
+            return cand.read_bytes()
+    if not STORAGE.is_dir():
+        return None
+    html_len = len(html.encode("utf-8"))
+    for hp in STORAGE.glob("*.HTML"):
+        artx_path = hp.with_suffix(".ARTX")
+        if not artx_path.is_file():
+            continue
+        try:
+            if hp.stat().st_size != html_len:
+                continue
+            if hp.read_text(encoding="utf-8") == html:
+                return artx_path.read_bytes()
+        except OSError:
+            continue
+    return None
 
 
 # String literals that might be CSS colors ('#fff', 'rgb(…)', 'orange', …)
@@ -227,12 +263,17 @@ def _stub_sound_calls(src: str) -> str:
     return re.sub(r"\bsound\s*\(", "_stub(", src)
 
 
-def compile_html_text(html: str, *, sound: bool = True):
+def compile_html_text(html: str, *, sound: bool = True, source_path=None, artx=None):
     """Compile-on-RUN: current HTML <script> → Chunk. CompileError.line is HTML line.
 
     sound=True (default): sound() is nid 42. sound=False: those calls
     become _stub (make_sd_image -soundoff). Chrome Web Audio stays out
     either way — data-host=chrome is never minted.
+
+    Art: leftover data:image URIs still decode+quantize (un-migrated titles).
+    If the source already has jmr:spr:N and no data URIs, sprites+palette
+    come from NAME.ARTX — same bytes the host mint already quantized, so
+    the emitted .JSH stays identical. Do not re-quantize that path.
     """
     from functional_model.compiler import CompileError, compile_source
 
@@ -257,10 +298,21 @@ def compile_html_text(html: str, *, sound: bool = True):
     # boundaries; a bare "\n" join glued DONKEY's `rAF(update)` to the next
     # script's `(function(){...})()` as a call chain (ASI hazard).
     src = ";\n".join(bodies)
-    src, images = _extract_data_uri_sprites(src)
-    harvested = _harvest_source_colors(src)
-    palette = _build_title_palette(images, harvested)
-    sprites = _quantize_sprites(images, palette)
+    has_uri = "data:image/" in src
+    has_handle = "jmr:spr:" in src
+    if has_handle and not has_uri:
+        # Migrated title: pixels already live in NAME.ARTX (no PNG decode).
+        blob = _resolve_artx_bytes(html, source_path=source_path, artx=artx)
+        if blob is None:
+            raise CompileError(
+                "NO ARTX FOR jmr:spr HANDLES — run tools/make_artx.py", 1
+            )
+        palette, sprites, _payload = read_artx(blob)
+    else:
+        src, images = _extract_data_uri_sprites(src)
+        harvested = _harvest_source_colors(src)
+        palette = _build_title_palette(images, harvested)
+        sprites = _quantize_sprites(images, palette)
     for js_line, var, prop in _lint_image_dom_props(src):
         raise CompileError(
             f"V1 WALL: {var}.{prop} is not readable on the V1.0 chip — an "
@@ -301,7 +353,7 @@ def encode_html_chunk(chunk) -> bytes:
 def compile_html_one(src_path: Path, out_dir: Path | None = None) -> Path:
     """Compile HTML <script> and print size; do not write a sidecar file."""
     html = src_path.read_text(encoding="utf-8")
-    chunk = compile_html_text(html)
+    chunk = compile_html_text(html, source_path=src_path)
     blob = encode_html_chunk(chunk)
     print(f"ok {src_path} ({len(blob)} bytes, {len(chunk.code)} ops)")
     return src_path

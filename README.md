@@ -108,17 +108,28 @@ make -C sim sim_server_synth
 .venv/bin/python tools/check_runtime_parity.py
 # 5. PYTHON ↔ FPGA-SIM RTL glass smoke (bytecode path; no dukpy cheat)
 
+python3 tools/make_artx.py MYGAME      # PNGs → quantized MYGAME.ARTX
+python3 tools/make_artjs.py MYGAME --patch-html   # ARTX → Chrome MYGAME.ARTJS
 python3 tools/make_sd_image.py create card.img
-# 6a. make only — rebuild FAT32 card.img from storage/
-#     V1.0: this step COMPILES each HTML into NAME.JSH on the card
+python3 tools/make_sd_image.py create card.img -nojsh
+# 6a. new art title, then card. You write HTML + MYGAME-0.png, MYGAME-1.png, …
+#     and `img.src = "jmr:spr:N"` plus window.JMR_SPR listing those PNGs.
+#     Do not write .ARTX / .ARTJS by hand (those two tools do). After a PNG
+#     edit, re-run make_artx + make_artjs + card create.
+#     Card gets HTML + .ARTX (as .ART) + minted .JSH. PNG / ARTJS stay
+#     on the host. V1.0 default COMPILES each HTML into NAME.JSH here
 #     (the chip does not compile). PYTHON, FPGA-SIM, and BOARD all
 #     LOAD/RUN this image. Edit storage/ → rebuild here before F9.
 #     Default mints sound() (nid 42). Pass -soundoff to stub those
-#     calls (old bits that lack the native). Chrome Web Audio is never minted.
+#     calls (old bits that lack the native). Pass -nojsh to leave
+#     title .JSH off so FPGA COMPILE can be tested (compiler-chain
+#     .JSH still minted). Chrome Web Audio / ARTJS are never minted.
+#     Authoring: docs/GAME_DESIGN.md (Art).
 
 sudo python3 tools/make_sd_image.py burn /dev/sdX
 # 6b. make AND burn — rebuild card.img from storage/, then raw-write µSD
 #     lsblk first; whole disk (sdb / mmcblk0), not a partition (sdb1)
+#     Same -soundoff / -nojsh as create. --keep-image ignores them.
 
 sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
 # 6c. burn only — write the existing card.img as-is (skip rebuild)
@@ -229,6 +240,8 @@ mention.
 | **sound()** | nid 42 | `sound(ch, freqHz, vol0_15, frames, slide)`. 4-voice PSG (ch 0–2 square, 3 noise). Do **not** write `function sound()`. Mint default-on; `-soundoff` stubs |
 | **ProgramImage** | — | Compiled program in memory after `RUN` (code + ASET art). Not a file you type |
 | **ASET** | asset section | Palette + sprite pixels inside the ProgramImage; streamed to the 4 MB SRAM bank |
+| **ARTX** | art sidecar | Quantized ASET payload beside `NAME.HTML` (`NAME.ARTX`; card 8.3 = `NAME.ART`). Built from `NAME-N.png` by `make_artx.py`. Title source uses `jmr:spr:N`, never inline base64. |
+| **ARTJS** | Chrome art | Same quantized sheets as `.ARTX`, as a `.js` file Chrome can load. Built by `make_artjs.py`. **Not** on the card. Open `storage/NAME.HTML` in Chrome to see it. |
 | **JSB** | — | On-the-wire encoding of a ProgramImage (`JSB1` magic) |
 | **JSH** | — | **V1.0:** ProgramImage minted when you **make the card**. PYTHON, FPGA-SIM, and BOARD all `RUN` this file from `card.img` (chip does not compile). Not copied from `storage/`. **V1.5 tries** compile-on-RUN on the machine |
 | **HTML** | HyperText Markup Language | Disk format of a title: `NAME.HTML` |

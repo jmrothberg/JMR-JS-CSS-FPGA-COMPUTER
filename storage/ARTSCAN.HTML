@@ -16,10 +16,11 @@
   (Do not write a literal script tag in this comment - the block scanner
   matches it and would start compiling the prose.)
 
-  Art (data:image) is detected and REFUSED here for now — decoding it is
-  ARTPNG's job (PNG inflate + unfilter + palette), a later phase. Refusing is
-  deliberate: a title that silently compiled without its sprites would look
-  like a rendering bug, not a missing feature.
+  Art: `data:image` is still REFUSED (title not migrated). Migrated sprite
+  handles (the jmr spr colon form) are allowed when the console set
+  CSTG_HDR_ART (byte 65) — NAME.ART is already in the arena. Without that
+  flag those handles are the same refuse as data:image so a missing sidecar
+  cannot look like a rendering bug.
 
   AUTHORING RULES (this file is compiled BY the machine's own walls):
     - no string methods exist: everything is byte offsets + char codes
@@ -31,6 +32,7 @@
 <script>
 // ---- arena layout (mirror of functional_model/jsb_format.py) -------------
 var HDR_PROGSEL = 64;
+var HDR_ART = 65;
 var HDR_SPAN_N = 70;
 var SPAN_OFF = 128;
 var SPAN_STRIDE = 12;
@@ -45,11 +47,13 @@ var ST_NEXT = 128;
 var ST_ERR_ART = 3;
 var ST_ERR_SPANS = 4;
 var ST_ERR_NOSCRIPT = 5;
+var ST_ERR_SQUASH = 14;
 
 // ---- shim: the only window on the outside --------------------------------
 // Kept as named functions so a host-side build can swap them for array-backed
 // fakes and run this exact source off-machine (the CTEST path).
 function _sb(i) { return srcByte(i); }
+function _gr(i) { return stgRead(i); }
 function _gw(i, b) { stgWrite(i, b); }
 
 function _lc(b) {
@@ -122,12 +126,38 @@ function atEndScript(p) {
   return isWord(p + 2, 115, 99, 114, 105, 112, 116);
 }
 
-// "data:image" anywhere in [from, to)
+// "<LINE " — the card builder's placeholder for a line it left out. An art
+// title's base64 is stripped from the card copy, so the source the machine
+// can see is not the source the title was written from. Say that plainly
+// instead of letting the compiler trip over the placeholder and blame the
+// user's syntax.
+function findSquash(from, to) {
+  var p = from;
+  while (p < to) {
+    if (_sb(p) === 60 && isWord(p + 1, 108, 105, 110, 101, 32, 0)) { return p; }
+    p = p + 1;
+  }
+  return -1;
+}
+
+// "data:image" anywhere in [from, to) — unmigrated PNG-in-HTML.
 function findArt(from, to) {
   var p = from;
   while (p < to) {
     if (_lc(_sb(p)) === 100 && isWord(p, 100, 97, 116, 97, 58, 105)) {
       if (isWord(p + 5, 105, 109, 97, 103, 101, 0)) { return p; }
+    }
+    p = p + 1;
+  }
+  return -1;
+}
+
+// Migrated sprite handles (j + m + r + colon + spr + colon). Legal only with CSTG_HDR_ART.
+function findJmrSpr(from, to) {
+  var p = from;
+  while (p < to) {
+    if (_lc(_sb(p)) === 106 && isWord(p, 106, 109, 114, 58, 115, 112)) {
+      if (_lc(_sb(p + 6)) === 114 && _sb(p + 7) === 58) { return p; }
     }
     p = p + 1;
   }
@@ -164,6 +194,7 @@ function scan() {
   var tagEnd = 0;
   var bodyEnd = 0;
   var art = 0;
+  var hasArt = _gr(HDR_ART);
 
   while (p < len) {
     if (_sb(p) !== 60) {
@@ -182,6 +213,8 @@ function scan() {
       if (tagIsChrome(p, tagEnd) === 0) {
         art = findArt(tagEnd + 1, bodyEnd);
         if (art >= 0) { return ST_ERR_ART; }
+        if (hasArt === 0 && findJmrSpr(tagEnd + 1, bodyEnd) >= 0) { return ST_ERR_ART; }
+        if (findSquash(tagEnd + 1, bodyEnd) >= 0) { return ST_ERR_SQUASH; }
         if (bodies > 0) { emitSpan(KIND_SEMI, 0, 0, line); }
         emitSpan(KIND_SOURCE, tagEnd + 1, bodyEnd - tagEnd - 1, line + 1);
         bodies = bodies + 1;
@@ -204,6 +237,9 @@ if (st === 0) {
 } else if (st === ST_ERR_ART) {
   // "ART V1.5" — art needs ARTPNG (PNG inflate), not yet on the card.
   _fail(st, 65, 82, 84, 32, 86, 49, 53);
+} else if (st === ST_ERR_SQUASH) {
+  // "NO SRC" — the card copy had a line omitted; rebuild the card.
+  _fail(st, 78, 79, 32, 83, 82, 67, 0);
 } else if (st === ST_ERR_SPANS) {
   // "SPANS"
   _fail(st, 83, 80, 65, 78, 83, 0, 0);

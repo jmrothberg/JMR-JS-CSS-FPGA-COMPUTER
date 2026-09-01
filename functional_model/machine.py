@@ -48,6 +48,7 @@ class Machine:
         self._cmp_status: int = 0
         self._cmp_len: int = 0
         self._cmp_msglen: int = 0
+        self._edit_active: bool = False
         self.lines_out: List[str] = []
         self.console_log: List[str] = []
         self.source_name: str = "UNTITLED.JS"
@@ -147,11 +148,12 @@ class Machine:
             self._more_key = ch
         self.input.push_key(ch)
 
-    def hard_break(self) -> None:
+    def hard_break(self, quiet: bool = False) -> None:
         more_abort = bool(self._list_more_waiting)
         self.running = False
         self._loop_chunk = None
         self._keep_fb = False
+        self._edit_active = False
         # NEW: clear bytecode-HTML frame state
         self._bytecode_html = False
         self._html_chunk = None
@@ -171,12 +173,14 @@ class Machine:
         else:
             self.input.clear_escape()
             self.break_requested = False
-        self._print("^BREAK")
+        # F3 leave: same STOP, no ^BREAK on glass. Esc still prints it.
+        if not quiet:
+            self._print("^BREAK")
         self._ready()
         self.paint_monitor("> ")
         # NEW: HTML still in the editor; bytecode chunk was cleared above
         self._arch_phase = "loaded" if self.source_lines else "idle"
-        self.trace.edge("BREAK", "hard_break")
+        self.trace.edge("LEAVE" if quiet else "BREAK", "hard_break")
         # NEW: one VM telemetry line on BREAK (minimal, no spam)
         self.trace.edge(
             "NOTE",
@@ -279,6 +283,12 @@ class Machine:
             return []
         if upper == "LIST" or upper.startswith("LIST"):
             return self._cmd_list(text)
+        if upper == "EDIT":
+            # Bare EDIT runs the editor PROGRAM on whatever LOAD parked.
+            # It must be chain-loaded, not LOADed: loading the editor the
+            # ordinary way would put its own text in SOURCE and it would
+            # edit itself. "EDIT n" below stays the numbered-line editor.
+            return self._cmd_edit_program()
         if upper.startswith("EDIT"):
             return self._cmd_edit(text)
         if upper.startswith("INSERT"):
@@ -580,6 +590,7 @@ class Machine:
         if body and not body.endswith("\n"):
             body += "\n"
         self._stage_source(body)
+        self._preload_art()
 
         out = ["COMPILING"]
         try:
@@ -590,10 +601,15 @@ class Machine:
         except Exception as exc:  # a compiler fault is a failed compile
             return out + ["?CE", str(exc)[:64]]
 
-        if status != jsb_format.CMP_STATUS_DONE:
+        if status not in (
+            jsb_format.CMP_STATUS_DONE,
+            jsb_format.CMP_STATUS_MINT_ART,
+        ):
             return out + ["?CE"] + ([message] if message else [])
 
         image_bytes = self._cmp_output()
+        if status == jsb_format.CMP_STATUS_MINT_ART:
+            image_bytes = self._append_artx(image_bytes)
         try:
             # The FM validator is the acceptance gate. RTL checks only magic,
             # FLAG_VALUE64 and word count, and JSB1 carries no checksum, so a
@@ -607,7 +623,63 @@ class Machine:
         self.storage.save_bytes(stem + ".JSH", image_bytes)
         return out + [f"COMPILED {stem}.JSH ({len(image_bytes)} BYTES)"]
 
-    def _run_compile_chain(self) -> tuple:
+    def _cmd_edit_program(self) -> List[str]:
+        """EDIT — run EDITOR.JSH against the loaded source."""
+        if not self.source_name or not self.source_lines:
+            return ["?NB"]
+        body = "\n".join(self.source_lines)
+        if body and not body.endswith("\n"):
+            body += "\n"
+        self._stage_source(body)
+        try:
+            blob = self.storage.load_bytes("EDITOR.JSH")
+        except FileNotFoundError:
+            return ["?NH", "EDITOR.JSH"]
+        self._cmp_reset()
+        # The editor is INTERACTIVE, so it starts the way a title does and the
+        # frame loop drives it. It ends by calling cdone(), which frame_tick
+        # notices below — a compiler program, by contrast, runs to completion
+        # inside the chain driver and never needs a frame.
+        self._edit_active = True
+        # share_machine: COMPILE already does hw._m = self so srcByte sees
+        # the staged title. EDIT must too — a fresh JsHwVm has srcLen=0 and
+        # paints a blank page over whatever LOAD parked.
+        return self._start_html_image(
+            jsb_format.ProgramImage(blob), share_machine=True
+        )
+
+    def _finish_program_op(self, status: int, message: str) -> List[str]:
+        """Act on what a chained program reported through cdone().
+
+        The console owns storage, so a program asks for file work by status
+        rather than reaching for it itself. Mirrors the RTL dispatch.
+        """
+        if status == jsb_format.CMP_STATUS_SAVE:
+            text = self._src_bytes[: self._src_len].decode("utf-8", "replace")
+            self.storage.save_text(self.source_name, text)
+            self.source_lines = text.splitlines()
+            return ["SAVED " + self.source_name]
+        if status == jsb_format.CMP_STATUS_DONE and self._cmp_len == 0:
+            # Quit without saving. Minting here would truncate-open the
+            # title's .JSH and write zero bytes, destroying a working image.
+            return ["OK"]
+        if status in (
+            jsb_format.CMP_STATUS_DONE,
+            jsb_format.CMP_STATUS_MINT_ART,
+        ):
+            image = self._cmp_output()
+            if status == jsb_format.CMP_STATUS_MINT_ART:
+                image = self._append_artx(image)
+            try:
+                jsb_format.ProgramImage(image)
+            except Exception as exc:
+                return ["?CE", f"BAD IMAGE: {str(exc)[:48]}"]
+            stem = Path(self.source_name).stem.upper()[:8]
+            self.storage.save_bytes(stem + ".JSH", image)
+            return [f"COMPILED {stem}.JSH ({len(image)} BYTES)"]
+        return ["?CE"] + ([message] if message else [])
+
+    def _run_compile_chain(self, entry: str | None = None) -> tuple:
         """Drive the chained compiler programs; return (status, message).
 
         One VM across the chain so the scratch arena and staged art survive
@@ -624,8 +696,10 @@ class Machine:
         # compiler program still trips rather than hanging the glass.
         hw.step_budget = 4_000_000_000
         sel = jsb_format.COMPILE_ENTRY
+        first = entry
         for _ in range(len(jsb_format.COMPILE_CHAIN) * 4):  # cheap runaway bound
-            name = jsb_format.COMPILE_CHAIN[sel]
+            name = first or jsb_format.COMPILE_CHAIN[sel]
+            first = None
             blob = self.storage.load_bytes(name)
             self._cmp_reset()
             hw.load_image(jsb_format.ProgramImage(blob))
@@ -742,7 +816,12 @@ class Machine:
         # NEW: compiler front-end is live now (GUI paints this before the wait)
         self._arch_phase = "compile"
         try:
-            chunk = compile_html_text(html)
+            src_path = None
+            if self.source_name:
+                src_path = self.storage.root / Path(self.source_name).name
+                if not src_path.is_file():
+                    src_path = None
+            chunk = compile_html_text(html, source_path=src_path)
         except CompileError as e:
             self._arch_phase = "loaded"
             where = f" LINE {e.line}" if e.line else ""
@@ -760,7 +839,7 @@ class Machine:
         )
         return self._start_html_image(image)
 
-    def _start_html_image(self, image) -> List[str]:
+    def _start_html_image(self, image, share_machine: bool = False) -> List[str]:
         """Execute a ProgramImage (card .JSH or in-memory compile) on JsHwVm."""
         from .jsb_format import build_aset_payload
         from hardware_model.js_vm import JsHwVm
@@ -786,6 +865,10 @@ class Machine:
         self.canvas.clear_front(0)
         self.canvas.clear(0)
         hw = JsHwVm()
+        if share_machine:
+            # One Machine: SOURCE + compile arena stay where LOAD staged them.
+            # RUN of a title keeps a private _m (games do not read srcByte).
+            hw._m = self
         hw.canvas = self.canvas
         hw.input = self.input
         hw._m.canvas = self.canvas
@@ -907,6 +990,8 @@ class Machine:
             "stgWrite": self._nat_stg_write,
             "cdone": self._nat_cdone,
             "artWrite2": self._nat_art_write2,
+            "srcWrite": self._nat_src_write,
+            "srcSetLen": self._nat_src_setlen,
             # NEW: Canvas2D methods via ctx.* (HTML bytecode path)
             "ctx.fillRect": self._nat_fill_rect,
             "ctx.clearRect": self._nat_clear_rect,
@@ -1381,6 +1466,32 @@ class Machine:
         self.sram.mem[base + 1] = int(hi) & 0xFF
         return None
 
+    def _nat_src_write(self, i, b):
+        i = int(i)
+        if i < 0 or i >= jsb_format.SOURCE_MAX:
+            raise RuntimeError(
+                f"srcWrite({i}) outside SOURCE [0,{jsb_format.SOURCE_MAX}) "
+                "— RTL faults code 5 here"
+            )
+        buf = bytearray(self._src_bytes)
+        if i >= len(buf):
+            buf.extend(b"\x00" * (i + 1 - len(buf)))
+        buf[i] = int(b) & 0xFF
+        self._src_bytes = bytes(buf)
+        self.sram.mem[(jsb_format.SRC_SRAM_BASE + i) * 2] = int(b) & 0xFF
+        return None
+
+    def _nat_src_setlen(self, n):
+        n = int(n)
+        if n < 0 or n > jsb_format.SOURCE_MAX:
+            raise RuntimeError(f"srcSetLen({n}) outside SOURCE")
+        buf = bytearray(self._src_bytes)
+        if n > len(buf):
+            buf.extend(b"\x00" * (n - len(buf)))
+        self._src_bytes = bytes(buf[:n])
+        self._src_len = n
+        return None
+
     def _nat_cdone(self, status=0, out_len=0, msg_len=0):
         self._cmp_done = True
         self._cmp_status = int(status) & 0xFF
@@ -1445,6 +1556,46 @@ class Machine:
         self._src_len = len(data)
         self._src_rp = 0
         return len(data)
+
+    def _preload_art(self) -> None:
+        """Mirror the console: first 4096 B of NAME.ART into CSTG_ART_OFF.
+
+        Sets CSTG_HDR_ART = 1 when a sidecar exists. The ASET payload is
+        kept on the Machine so cdone(0x85) can append it; CART staging is
+        the RTL path for the same bytes.
+        """
+        import struct
+
+        self._art_payload = None
+        flag_word = jsb_format.cstg_word(jsb_format.CSTG_HDR_ART)
+        stem = Path(self.source_name).stem.upper()[:8] if self.source_name else ""
+        blob = None
+        if stem:
+            for name in (stem + ".ARTX", stem + ".ART"):
+                try:
+                    blob = self.storage.load_bytes(name)
+                    break
+                except FileNotFoundError:
+                    continue
+        if not blob:
+            self.sram.mem[flag_word * 2] = 0
+            return
+        self.sram.mem[flag_word * 2] = 1
+        hdr = blob[: jsb_format.CSTG_ART_HDRB]
+        for i, b in enumerate(hdr):
+            w = jsb_format.cstg_word(jsb_format.CSTG_ART_OFF + i)
+            if w >= 0:
+                self.sram.mem[w * 2] = b
+        n = struct.unpack_from("<H", blob, 6)[0]
+        hlen = 8 + n * 8 + 4
+        self._art_payload = blob[hlen:]
+
+    def _append_artx(self, image: bytes) -> bytes:
+        """Console mint 0x85: image, then ASET magic + u32 len + payload."""
+        import struct
+
+        payload = getattr(self, "_art_payload", None) or b""
+        return image + b"ASET" + struct.pack("<I", len(payload)) + payload
 
     def _nat_ls_get(self, key):
         if not hasattr(self, "_ls"):
@@ -1601,6 +1752,18 @@ class Machine:
             except Exception as e:
                 self._print(f"ERROR: JS {e}")
                 self.hard_break()
+            return
+        # The editor signals completion through cdone(); act on it and hand
+        # the glass back, rather than leaving a finished program running.
+        if getattr(self, "_edit_active", False) and self._cmp_done:
+            self._edit_active = False
+            self.running = False
+            self._bytecode_html = False
+            for line in self._finish_program_op(
+                self._cmp_status, self._cmp_message()
+            ):
+                self._print(line)
+            self._print(READY)
             return
         # NEW: bytecode HTML path — fire key listeners + drain rAF
         if getattr(self, "_bytecode_html", False) and self.running:

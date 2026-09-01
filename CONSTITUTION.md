@@ -77,9 +77,10 @@ the same glass on PYTHON → FPGA-SIM → BOARD** (then ASIC).
   standalone** (compile-on-RUN on the machine; drop the card `.JSH` if it
   fits).
 - **Asset bank (external SRAM — replaces the retired `NAME.DAT` spill).**
-  Great graphics stay at **full quality**. On every `RUN` the compiler emits
-  the title's `data:image` / fat assets (per-title 256-entry palette +
-  full-resolution sprite banks) as the **ASET section** of that ProgramImage;
+  Great graphics stay at **full quality**. You draw PNG sheets; `make_artx.py`
+  writes `NAME.ARTX`. On every `RUN` the minted `.JSH` carries that art
+  (per-title 256-entry palette + full-resolution sprite banks) as the
+  **ASET section** of that ProgramImage;
   the loader streams the section into the **external 4 MB SRAM asset bank**
   (see MEMORY). There is **no `NAME.DAT` file**. Do not pack Donkey art into
   code BRAM or downscale sheets to “fit.”
@@ -486,8 +487,8 @@ BOARD all play this image. `NAME.HTML` is the user title (`LOAD` / `LIST`).
 `RUN` is the same ProgramImage on every rung (the chip does not compile).
 **V1.5 tries to be standalone** (compile-on-RUN on the machine; drop `.JSH`
 if it fits). Never copy a stale `.JSH` from `storage/`.
-Never hard-code addresses throughout the design. Never stuff `data:image`
-megabytes into code BRAM.
+Never hard-code addresses throughout the design. Never stuff sprite
+megabytes into code BRAM (PNG → `.ARTX` → ASET SRAM).
 
 ---
 

@@ -103,6 +103,10 @@ NATIVE_IDS = {
     "stgWrite": 46,
     "cdone": 47,
     "artWrite2": 48,
+    # Source WRITE. Without these an editor can only ever be RTL, never a
+    # program: it could read the buffer but never change it.
+    "srcWrite": 49,
+    "srcSetLen": 50,
 }
 
 # NEW: aliases share an id (decode prefers the canonical NATIVE_IDS key)
@@ -170,14 +174,18 @@ CSTG_MSG_MAX = 64
 # Handoff header — the only bytes of the arena the console understands. Every
 # other byte above CSTG_OUT_OFF + cmp_len is compiler-private.
 #   +0 u8  PROGSEL   next program index (read by the console on status 0x80)
-#   +1 u8  PHASE     ARTPNG sink select: 0 = histogram, 1 = quantize
+#   +1 u8  ART       1 = console pre-loaded NAME.ART into CSTG_ART_OFF
 #   +2 u32 ART_LEN   packed art bytes, the mint pump's second range
 #   +6 u16 SPAN_N    span-map records ARTSCAN emitted
+#   +16 u8 PHASE     1 = stop after tokenizing (test harness; was +1)
 CSTG_HDR_OFF = 64
 CSTG_HDR_PROGSEL = CSTG_HDR_OFF + 0
-CSTG_HDR_PHASE = CSTG_HDR_OFF + 1
+CSTG_HDR_ART = CSTG_HDR_OFF + 1
 CSTG_HDR_ART_LEN = CSTG_HDR_OFF + 2
 CSTG_HDR_SPAN_N = CSTG_HDR_OFF + 6
+CSTG_HDR_PHASE = CSTG_HDR_OFF + 16  # tokenize-only; +1 is the ART flag
+CSTG_ART_OFF = 8192
+CSTG_ART_HDRB = 4096
 #   +12 u32 OUT_OFF  where the assembled image starts in the arena
 # The image offset is published rather than fixed because the parser's tables
 # are sized by the title: PACFAST's token array alone is 188KB, so a constant
@@ -252,6 +260,11 @@ CSTG_OUT_OFF = CSCR_WORDS  # assembled .JSH starts at the CIMG boundary
 # cdone() status: 0 = mint, 0x80 = launch PROGSEL, anything else = error.
 CMP_STATUS_DONE = 0x00
 CMP_STATUS_NEXT = 0x80
+CMP_STATUS_SAVE = 0x81   # write SOURCE back to the loaded name
+CMP_STATUS_DELETE = 0x82
+CMP_STATUS_LOAD = 0x83
+CMP_STATUS_MINT_NAMED = 0x84
+CMP_STATUS_MINT_ART = 0x85  # mint, then append the title's .ARTX payload
 
 # PROGSEL ROM. Mirrored as literal rows in the RTL C_JSB_PREP name ROM, so
 # the order is a contract — append only, never renumber.
@@ -869,6 +882,65 @@ def build_aset_payload(palette, sprites):
             f"colliding RTL region."
         )
     return bytes(out), descs
+
+
+# .ARTX sidecar — the ASET payload plus the SPRD rows, so a title's HTML
+# does not have to carry base64 PNG. Host mint rebuilds the payload with
+# build_aset_payload; off is the same value that lands in the .JSH SPRD row.
+ARTX_MAGIC = b"ARTX"
+ARTX_VERSION = 1
+
+
+def build_artx(palette, sprites) -> bytes:
+    """Sprite table + the same ASET payload encode_chunk embeds in the .JSH."""
+    payload, descs = build_aset_payload(palette, sprites)
+    out = bytearray(ARTX_MAGIC)
+    out += struct.pack("<HH", ARTX_VERSION, len(descs))
+    for w, h, soff in descs:
+        out += struct.pack(
+            "<HHI", int(w) & 0xFFFF, int(h) & 0xFFFF, int(soff) & 0xFFFFFFFF
+        )
+    out += struct.pack("<I", len(payload))
+    out += payload
+    return bytes(out)
+
+
+def read_artx(data: bytes):
+    """Return (palette, sprites, payload) from an .ARTX blob.
+
+    sprites are (w, h, pix) so encode_chunk → build_aset_payload rebuilds
+    the identical payload (same alignment rules, same palette bytes).
+    """
+    if len(data) < 12 or data[:4] != ARTX_MAGIC:
+        raise ValueError("bad ARTX magic")
+    ver, n = struct.unpack_from("<HH", data, 4)
+    if ver != ARTX_VERSION:
+        raise ValueError(f"unsupported ARTX version {ver}")
+    need = 8 + n * 8 + 4
+    if len(data) < need:
+        raise ValueError("truncated ARTX header")
+    descs = []
+    off = 8
+    for _ in range(n):
+        w, h, soff = struct.unpack_from("<HHI", data, off)
+        descs.append((int(w), int(h), int(soff)))
+        off += 8
+    (plen,) = struct.unpack_from("<I", data, off)
+    off += 4
+    payload = data[off : off + plen]
+    if len(payload) != plen:
+        raise ValueError("truncated ARTX payload")
+    if plen < ASET_PAL_BYTES:
+        raise ValueError("ARTX payload is missing the 256-entry palette")
+    palette = [
+        (payload[i * 3], payload[i * 3 + 1], payload[i * 3 + 2])
+        for i in range(256)
+    ]
+    sprites = []
+    for w, h, soff in descs:
+        npi = w * h
+        sprites.append((w, h, bytes(payload[soff : soff + npi])))
+    return palette, sprites, payload
 
 
 def encode_chunk(

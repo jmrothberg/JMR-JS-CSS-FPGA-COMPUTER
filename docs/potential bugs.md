@@ -315,3 +315,42 @@ ran, not a blit miss.
 (sub-pixel DONKEY; mid-frame `raf=0` sample), not the chip.
 
 Full dated write-ups: `git log -p -- "docs/potential bugs.md"`.
+
+---
+
+## Standalone-compile traps (2026-08-31)
+
+**The chip does not parse colour strings.** `ctx.fillStyle` resolves through
+the compiler-emitted `FSTY` table plus the `ASET` palette; a miss paints
+`parsed = 8'd1` — **white** (`jmr_js_vm_exec64.sv`, the fillStyle arm). A
+machine-compiled image without those sections renders perfectly on the Python
+model and draws every rectangle white on hardware. Found on FPGA-SIM by the
+user, not by any test.
+
+**A parity gate that compares the wrong encoding proves nothing.** The real
+card mint is `encode_html_chunk`; a plain `ProgramImage.from_chunk(...)` has
+no ASET and no FSTY, so diffing against it hides the entire colour path. Gate
+on **resolved RGB** against the real mint, not on palette indices — a
+compiler that builds its own palette may legitimately use different indices
+for an identical picture.
+
+**Any exec-entered VM state must be in `hs64`.** `S_CSRAM` is the compile
+ABI's single memory state; omitting it from the list reads the parent's
+`ip`/`vsp` and re-dispatches forever. Recurring bug class #51.
+
+**Both console watchdogs fire during a compile.** `cons_prog_wd` (~21.5 s) and
+`cons_stor_arm` (~32 s) both have to be held off in `C_CMP_WAIT`: the VM
+computes for minutes issuing no storage ops, and the failure reports `?IO`,
+which reads as a disk fault rather than a watchdog.
+
+**A program that quits must not mint an empty image.** `cdone(0, 0, 0)` from
+the editor means "quit without saving". Minting on it would truncate-open the
+title's `.JSH` and write zero bytes, destroying a working compiled title. The
+console guards on `cmp_len == 0`.
+
+**`CODE_WORDS` limits the executable, not the image.** Silicon faults only on
+`ops_base + n_ops`; words past code BRAM are **dropped** by the write port,
+not wrapped. PACFAST is 17,604 executable words (fits) and 20,631 total, so it
+loses the tail of its name blob and keeps every instruction — it plays. A
+model that refuses on the total is stricter than the chip and will reject
+titles the board runs.

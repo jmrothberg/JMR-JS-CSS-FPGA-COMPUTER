@@ -33,22 +33,18 @@ in RTL, the compiler, or natives.
 
 ---
 
-## Art: PNG in, tools write `.ARTX` (do this from the start)
+## Art: PNG in, tools write `.ARTX` and `.ARTJS`
 
-**Never paste `data:image/...;base64,...` into game code.** That is how the
-first library was built, and every one of those titles had to be taken
-apart again. **Never hand-write `.ARTX` or `.ARTJS`.** Those are compile
-outputs.
+**You draw PNG files. Tools convert them.** Never paste `data:image/...;base64,...`
+into game code, and never hand-write `.ARTX` or `.ARTJS`.
 
-### Tell a game-writing agent this
+### New game — what you make vs what the tools make
 
-| The agent writes | Tools write (you run these) | Nobody writes by hand |
+| You write | Then run | Tool writes |
 |---|---|---|
-| `MYGAME.HTML` (stem ≤ 8, source **< 65,536 bytes**) | `MYGAME.ARTX` via `make_artx.py` | `.ARTX` bytes |
-| `MYGAME-0.png`, `MYGAME-1.png`, … (≤ **16** sheets) | `MYGAME.ARTJS` via `make_artjs.py` | `.ARTJS` / inline base64 in the game script |
-| `img.src = "jmr:spr:N"` and `window.JMR_SPR = ["MYGAME-0.png", …]` | `MYGAME.JSH` via `make_sd_image.py create` | a second Chrome interceptor |
-
-Then:
+| `MYGAME.HTML` (stem ≤ 8, source **< 65,536 bytes**) with `img.src = "jmr:spr:N"` | `python3 tools/make_artx.py MYGAME` | `MYGAME.ARTX` — quantized pixels the **machine** reads |
+| `MYGAME-0.png`, `MYGAME-1.png`, … (≤ **16** sheets) listed in `window.JMR_SPR` | `python3 tools/make_artjs.py MYGAME --patch-html` | `MYGAME.ARTJS` — same pixels for **Chrome**. Wires the HTML to load that file. |
+| | `python3 tools/make_sd_image.py create card.img` | `MYGAME.JSH` on the card (bytecode + art). PNG and ARTJS stay on the host. |
 
 ```bash
 python3 tools/make_artx.py MYGAME
@@ -56,18 +52,20 @@ python3 tools/make_artjs.py MYGAME --patch-html
 python3 tools/make_sd_image.py create card.img
 ```
 
+After you change a PNG, run those three again (or at least `make_artx` + `make_artjs` + card create).
+
 ### What each file is
 
 ```text
 storage/MYGAME.HTML      code — readable, under 64 KB. Handles, not pixels.
-storage/MYGAME-0.png     editable art (agent / artist). Manifest order.
-storage/MYGAME.ARTX      quantized pixels + palette. The machine reads this.
-storage/MYGAME.ARTJS     Chrome preview, rebuilt FROM the .ARTX. Not on the card.
+storage/MYGAME-0.png     editable art (you / the agent). Manifest order.
+storage/MYGAME.ARTX      quantized pixels + palette. PYTHON / FPGA-SIM / board.
+storage/MYGAME.ARTJS     Chrome copy of that same quantized art. Not on the card.
 card.img  MYGAME.JSH     minted bytecode + ASET. RUN uses this.
 ```
 
 Card 8.3: `MYGAME.ARTX` → `MYGAME.ART`. Keep the stem ≤ 8 so FPGA-SIM and
-the board see the same name. `.ARTJS` is **not** in the card keep-list.
+the board see the same name. `.ARTJS` and `.png` are **not** in the card keep-list.
 
 ### Game code — handles only
 
@@ -83,61 +81,40 @@ ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
 
 That line is what **all five** targets run. Only Chrome rewrites the handle.
 
-### `JMR_SPR` is the manifest (append-only)
+### `JMR_SPR` is the PNG list (append-only)
 
-Put this **before** the game script so `make_artx.py` can read the PNG
-list, and so a browser can resolve handles while you still have only PNGs.
-Copy the block from a shipped title (`storage/INVA.HTML`) or:
+Put this **before** the game script so `make_artx.py` knows which PNG is
+sheet 0, 1, …. Copy the chrome block from a shipped title (`storage/INVA.HTML`)
+or start with:
 
 ```html
 <script data-host="chrome">
-// Chrome-only until make_artjs.py patches in ARTJS. Mint strips this tag.
-// This list is the art manifest: index N is jmr:spr:N and ARTX sprite N.
+// PNG list make_artx.py reads. Index N is jmr:spr:N and ARTX sprite N.
+// make_artjs.py --patch-html will load MYGAME.ARTJS and paint from that.
 window.JMR_SPR = ["MYGAME-0.png", "MYGAME-1.png"];
-(function () {
-  var d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
-  Object.defineProperty(HTMLImageElement.prototype, "src", {
-    get: function () { return d.get.call(this); },
-    set: function (v) {
-      var m = /^jmr:spr:(\d+)$/.exec(v);
-      d.set.call(this, m ? window.JMR_SPR[+m[1]] : v);
-    }
-  });
-})();
 </script>
 ```
 
 Reorder that array and every `jmr:spr:N` in the title silently paints the
 wrong sheet. **Append only.**
 
-### Chrome is the control — quantized, no web server
+`make_artjs.py --patch-html` then adds `<script src="MYGAME.ARTJS">` and
+makes Chrome resolve `jmr:spr:N` to those quantized images (not the raw PNGs).
+Mint strips every `data-host="chrome"` block. Do **not** leave two src
+rewrites (`JMR_SPR` loading PNG files **and** `__jmrSpr`); after
+`--patch-html`, ARTJS is what Chrome paints.
 
-`jmr:spr:N` means nothing to a browser by itself. After you have an
-`.ARTX`, `make_artjs.py --patch-html` writes `MYGAME.ARTJS` (one `data:`
-URL per sprite) and inserts:
+### Chrome vs the machine
 
-```html
-<script data-host="chrome" src="MYGAME.ARTJS"></script>
-<script data-host="chrome"> ...resolve jmr:spr:N to those URLs... </script>
-```
-
-A classic `<script src>` loads from `file://`, so **double-clicking the
-HTML into Chrome just works.** (`fetch()` and ES modules are blocked by
-CORS on `file://`.)
-
-Those images are rebuilt **from the `.ARTX`**, not from the artist PNGs —
-Chrome previews the quantized art the machine will actually draw.
-
-The card mint strips every `data-host="chrome"` block (same as Web Audio).
-The minted `.JSH` is byte-identical with or without the tags. Do **not**
-leave two src interceptors in the file (`JMR_SPR` and `__jmrSpr`); after
-`--patch-html`, ARTJS is the Chrome path. `JMR_SPR` can stay as the PNG
-manifest `make_artx.py` reads.
+Open `storage/MYGAME.HTML` in Chrome on the PC to see the game while you
+author. That is not LOAD/RUN and not the card. Chrome cannot read `.ARTX`,
+so `.ARTJS` exists: same quantized pictures, in a form the browser can load
+without a web server (`<script src>` works from a file).
 
 | target | where the pixels come from |
 |---|---|
-| Chrome (after `make_artjs.py`) | `.ARTJS` (quantized, from `.ARTX`) |
-| host mint (`card.img`) | PNGs → quantized → `ASET` inside the `.JSH`, plus `MYGAME.ARTX` |
+| Chrome (after `make_artjs.py --patch-html`) | `.ARTJS` (quantized, from `.ARTX`) |
+| host mint (`card.img`) | `.ARTX` copied into the `.JSH` as `ASET` (no PNG decode) |
 | PYTHON sim · FPGA-SIM · board `RUN` | the `.JSH` — art already inside as `ASET` |
 | board `COMPILE` | small HTML + `MYGAME.ARTX` (pre-quantized) → the same `.JSH` |
 
@@ -179,7 +156,8 @@ LOAD "NAME.HTML"
 RUN
 ```
 
-- **One title = one file** in `storage/` (seed). Rebuild `card.img` after
+- **One title = one `NAME.HTML`** in `storage/` (seed), plus `NAME-N.png` if it has
+  sprites. Tools add `.ARTX` / `.ARTJS`. Rebuild `card.img` after
   edits. No external `.js` / `.css`.
 - **V1.0 disk is `card.img`:** PYTHON, FPGA-SIM, and BOARD all `LOAD` that
   HTML from the FAT and **`RUN` the minted `.JSH`**. Compile is at card
@@ -283,13 +261,14 @@ Stay on the **Complete** rows in the compatibility checklist. In particular:
 | `strokeStyle` `lineWidth` `save` `restore` `translate` `rotate` | shadows, `globalCompositeOperation`, `strokeRect` |
 | `imageSmoothingEnabled = false` | bilinear / filtered upscale (indexed FB is nearest) |
 | `fillText` — one 8×8 bitmap; `ctx.font = "NNpx …"` size only (see wall below) | TTF / `@font-face` / `"Press Start 2P"` / CSS overlay HUD |
-| `drawImage` / `Image` + `data:image` (ASET → external SRAM) | packing fat art into code, downscaling to “fit BRAM” |
+| `drawImage` / `Image` + `jmr:spr:N` (PNG → `.ARTX` → ASET SRAM) | packing fat art into code, downscaling to “fit BRAM”, inline `data:image` base64 |
 
 Vector titles (asteroids-style): stroke polylines on black. Close a polygon
 by `lineTo` back to the first point (`closePath` is not required).
 
-Bitmap titles: `fillRect` and/or `drawImage`. Keep `data:image` at full
-quality; card-create compile puts art in the ASET section, not code BRAM.
+Bitmap titles: `fillRect` and/or `drawImage`. Put sheets in `NAME-N.png`
+and `img.src = "jmr:spr:N"`; `make_artx.py` quantizes them into `.ARTX`.
+Do not inline `data:image` in the HTML. Art lands in the ASET bank, not code BRAM.
 
 Shatter / split / particles are **ordinary JS arrays** of points or objects.
 There is no engine primitive for “break an asteroid.” Caps are VM-wide
@@ -444,7 +423,7 @@ not title-gate RTL).
 
 | Limitation | How to write the HTML |
 |---|---|
-| **≤16 ASET sprites** (`MAX_SPR` / SPRD descriptors) | One `data:image` per sheet, not per frame. Pack animations into **atlases**; use **9-arg `drawImage(img, sx,sy,sw,sh, dx,dy,dw,dh)`**. Compile refuses >16 (loud) — do not drop art silently. Keep sheets **modest** — not one enormous multi-thousand-pixel-wide image. Wide atlases mean bigger address math per lookup and more SRAM traffic per frame; let the atlas packer split. |
+| **≤16 ASET sprites** (`MAX_SPR` / SPRD descriptors) | One **PNG sheet** per `jmr:spr:N`, not per frame. Pack animations into **atlases**; use **9-arg `drawImage(img, sx,sy,sw,sh, dx,dy,dw,dh)`**. Compile refuses >16 (loud) — do not drop art silently. Keep sheets **modest** — not one enormous multi-thousand-pixel-wide image. Wide atlases mean bigger address math per lookup and more SRAM traffic per frame; let the atlas packer split. |
 | **No `Object.keys` / `for…in` on RTL** | The compiler lowers `for (k in obj)` to `Object.keys` (native **41**) — that landed 2026-08-21 and works on PYTHON, but there is **no exec64 arm**, so FPGA-SIM faults loud (`fault=5` `fsite=4183`). For a title that must run on the machine, use literal key lists (`loadOne("arena")` …) or numeric loops. |
 | **`Math.round` is not a native** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt`. Shim it in the HTML (`Math.floor(+x + 0.5)`) — unary `+`, `throw`, and the `in` operator all parse since 2026-08-21. |
 | **No negative `setTransform` scale** | Mirroring with `setTransform(-1,0,0,1,x,0)` collapses width on PYTHON `_xf` and is unsafe for parity. Ship **left + right** facing sheets (or always draw unmirrored). Positive scale / DONKEY-style world transforms are fine. |

@@ -221,6 +221,10 @@ class CanvasEngine:
 
     def swap(self) -> None:
         self.front, self.back = self.back, self.front
+        # Scanout is FRONT. After a swap the picture is already there —
+        # leave dirty False so PYTHON present() cannot copy the now-empty
+        # BACK over it (EDITOR.HTML blank screen: draw, swap, then frame_tick).
+        self.dirty = False
 
     def present(self) -> None:
         """Snapshot the JS draw buffer to scanout. Canvas stays one bitmap."""

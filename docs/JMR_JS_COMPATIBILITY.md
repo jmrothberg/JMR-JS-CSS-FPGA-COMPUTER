@@ -62,11 +62,13 @@ if it fits) **and** lifts popular JS V1 walls (stdlib + globals; not Canvas
 gradients / mouse).
 
 **Asset bank (external SRAM — no `NAME.DAT`):** great graphics stay at full
-quality. `RUN` emits `data:image` art as the **ASET** (asset) section of
-the ProgramImage; the loader streams it into the **external 4 MB SRAM
-asset bank** (IS61WV204816 contract — [ARCHITECTURE.md](ARCHITECTURE.md)).
+quality. You draw **PNG sheets**; `make_artx.py` writes `NAME.ARTX`. `RUN`
+loads that art as the **ASET** (asset) section of the minted ProgramImage;
+the loader streams it into the **external 4 MB SRAM asset bank**
+(IS61WV204816 contract — [ARCHITECTURE.md](ARCHITECTURE.md)).
 **This path is in** (five titles play with ASET art on FPGA-SIM). Do not
-pack Donkey sheets into code BRAM or downscale them to fit.
+pack Donkey sheets into code BRAM or downscale them to fit. Authoring:
+[GAME_DESIGN.md](GAME_DESIGN.md) (Art).
 
 Same-stem `NAME.JS` / `NAME.JSB` are **legacy**, not product twins.
 `storage/games_*` (not DIR / not card).
@@ -111,13 +113,35 @@ Do **not** title-gate (`if (stem == "…")`).
 
 ### V1.5 — type, paste, compile, edit HTML at READY (no card required)
 
-Not now. **V1.0 cannot author on the glass.** No on-chip compiler → `RUN`
-ignores the editor buffer and loads the minted `.JSH`. `LIST` / `DIR` /
-`LOAD` are to **view / learn**. `EDIT` / `SAVE` / `NEW` / numbered replace
-do not make a title until this version’s compile-on-RUN. Do **not** build
-until a timing-clean bit is the daily board image and HDMI game scanout
-works. Ladder: PYTHON → FPGA-SIM → BOARD. Not a new ISA. Card stays
-HTML-only on `SAVE`.
+**Built, 2026-08-31.** The machine compiles its own titles. `COMPILE` is a
+real verb; the compiler is `ARTSCAN.JSH` + `COMPILER.JSH`, **ordinary
+programs on the card** written in the machine's own JS subset and executed by
+the same VM that runs the games. The editor is `EDITOR.JSH`, launched by a
+bare `EDIT`. Nothing about the ISA changed.
+
+```
+LOAD "BOXES.HTML"      source into SOURCE SRAM
+EDIT                   edit it in place (F2 saves, F3 quits; Esc is BREAK)
+COMPILE                mint BOXES.JSH on the card
+RUN                    the ordinary, untouched RUN path
+```
+
+`EDIT` and `COMPILE` **chain-load** their programs rather than `LOAD`ing
+them: loading the editor the ordinary way would put the editor's own text in
+SOURCE and it would edit itself.
+
+**Status:** all six non-art titles (BOXES, JOYDEMO, SNDDEMO, AURORA, MISSILE,
+ASTEROID) compile on the machine and render **RGB-identical** to the host
+mint. Art titles refuse loudly with `ART V15` until `ARTPNG.JSH` lands — the
+PNG inflate pass. Build a card without sidecars to prove it:
+
+```
+python3 tools/make_sd_image.py create card.img --nojsh
+```
+
+That ships HTML only, so the machine has to compile each title itself before
+`RUN` can find an image. With sidecars present, a working `RUN` proves
+nothing about the compiler.
 
 Logged 2026-08-25: BOARD `>` treats a paste or typed `<canvas…>` as a verb
 → `?SN ERROR`. BASIC numbered lines are the glass.
@@ -193,7 +217,7 @@ Documented from real traces (MKPVP on FPGA-SIM / PYTHON):
 
 | Wall | Symptom if ignored | V1 HTML workaround |
 |---|---|---|
-| `MAX_SPR` = 16 | `ASET has N sprites; RTL MAX_SPR is 16` | ≤16 `data:image`; atlases + crops. Keep sheets **modest** — not one multi-thousand-pixel-wide image (address math + SRAM traffic per lookup). |
+| `MAX_SPR` = 16 | `ASET has N sprites; RTL MAX_SPR is 16` | ≤16 PNG sheets (`jmr:spr:N`); atlases + crops. Keep sheets **modest** — not one multi-thousand-pixel-wide image (address math + SRAM traffic per lookup). |
 | `Object.keys` (nid 41) is **PYTHON/HM only** | FPGA-SIM `fault=5` `fsite=4183` (unknown `CALL_NATIVE`) — the RTL exec64 arm is deliberately unimplemented | No `for…in` / `Object.keys` in an FPGA-SIM title; literal keys. (Compiler lowers `for…in` to `Object.keys` since 2026-08-21, so the loop *parses* — it still faults on RTL.) |
 | Negative `setTransform` scale | Fighter draws 1px / vanishes (PYTHON `_xf`) | Left + right sheets; no `sx < 0` mirror |
 | Math | Missing native / wrong paint | Only `floor` `abs` `min` `max` `random` `sqrt`. **V1.5:** `round` `ceil` `sin` `cos` `pow` … |
@@ -451,7 +475,7 @@ canvas. The machine does not paginate, reflow, or browse.
 | `document.createElement` | P1 | Titles construct nodes | Complete |
 | `hidden` / ignore overlay markup | P0 | INVADERS has START/HUD divs; **paint HUD on Canvas** | Complete |
 | Multiple `<script>` in one file | P1 | Concatenate; don’t poison globals | Complete |
-| `<img>` / `data:image` in HTML | P1 | Art → ASET → SRAM on RUN | Complete |
+| `<img>` / `jmr:spr:N` (PNG → `.ARTX`) | P1 | Art → ASET → SRAM on RUN | Complete |
 | `<title>`, charset, comments | P2 | Ignore | Complete |
 
 #### Do not implement

@@ -1,0 +1,1343 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Donkey Kong — JMR</title></head>
+<body style="margin:0;background:#000">
+<!-- Self-contained: drag into Chrome or LOAD "DONKEY.HTML" then RUN. No other files. -->
+<!-- Upstream source tree kept in games_donkey/. Enter twice, WASD/arrows, Space jump. -->
+<!-- NEW: glass is 640x480; world stays 1510x685 and is setTransform-scaled -->
+<canvas id="myCanvas" width="640" height="480"></canvas>
+<script data-host="chrome" src="DNKF.ARTJS"></script>
+<script data-host="chrome">
+// Chrome-only. Maps the machine's sprite handles to the real PNGs.
+// This list is ALSO the art manifest make_artx.py reads — one source of
+// truth, so the browser and the .ARTX can never disagree about order.
+window.JMR_SPR = ["DNKF-0.png", "DNKF-1.png", "DNKF-2.png", "DNKF-3.png", "DNKF-4.png", "DNKF-5.png"];
+(function () {
+  if (typeof __jmrSpr === "undefined") { return; }
+  var d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+  Object.defineProperty(HTMLImageElement.prototype, "src", {
+    get: function () { return d.get.call(this); },
+    set: function (v) {
+      var m = /^jmr:spr:(\d+)$/.exec(v);
+      d.set.call(this, m ? (__jmrSpr[+m[1]] || v) : v);
+    }
+  });
+})();
+</script>
+<script>
+var sprites, Platform, Ladder, Barrel, DK, Mario;
+/* Chrome SFX: playSfx(packed). Packed = freq,vol,frames,slide,ch repeating.
+   ch 0-2 square, 3 noise. Missing r is silent. Chrome: _chromePlay. Card: sound() nid 42. */
+function playSfx(r) {
+  var i;
+  if (!r) return;
+  if (typeof _chromePlay === "function") {
+    _chromePlay(r);
+    return;
+  }
+  i = 0;
+  while (i + 4 < r.length) {
+    sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
+    i = i + 5;
+  }
+}
+var sfxJump = [420, 10, 10, 18, 0];
+var sfxDie = [280, 12, 28, -8, 0, 70, 10, 18, 0, 3];
+
+/* ---- sprites.js ---- */
+sprites = (function(){
+let img = new Image()
+img.src = 'jmr:spr:0'
+
+let img2 = new Image()
+img2.src = 'jmr:spr:1'
+
+let img3 = new Image()
+img3.src = 'jmr:spr:2'
+
+class sprites {
+    constructor(ctx) {
+        this.ctx = ctx
+    }
+
+    drawSprite(spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight) {
+        this.ctx.drawImage(img, spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight)
+    }
+
+    drawSpriteBarrel(spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight) {
+        this.ctx.drawImage(img2, spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight)
+    }
+
+    drawSpriteDK(spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight) {
+        this.ctx.drawImage(img3, spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight)
+    }
+}
+return sprites;
+})();
+
+/* ---- Platform.js ---- */
+Platform = (function(){
+let img = new Image()
+img.src = 'jmr:spr:3'
+
+class Platform {
+    constructor(x, y, w) {
+        this.x = x
+        this.y = y
+        this.w = w
+    }
+
+    drawPlatform(ctx) {
+        /* DNKF-3.png is packed from DNKF-3-full.png: Pauline, barrel, girder, ladder. */
+        const spriteX = 37
+        const spriteY = 0
+        const spriteWidth = 9
+        const spriteHeight = 8
+        
+        for (let i = 0; i < this.w; i++) {
+            const x = this.x + i * 15
+            ctx.drawImage(img, spriteX, spriteY, spriteWidth, spriteHeight, x, this.y, 20, 24)
+        }
+    }
+    /* FAST: only tiles that overlap a mover dirty box (not the whole girder). */
+    drawDirty(ctx, x, y, w, h) {
+        var i, tx
+        i = 0
+        while (i < this.w) {
+            tx = this.x + i * 15
+            if (x < tx + 20 && x + w > tx && y < this.y + 24 && y + h > this.y) {
+                ctx.drawImage(img, 37, 0, 9, 8, tx, this.y, 20, 24)
+            }
+            i = i + 1
+        }
+    }
+}
+return Platform;
+})();
+
+/* ---- Ladder.js ---- */
+Ladder = (function(){
+let img = new Image()
+img.src = 'jmr:spr:3'
+
+class Ladder {
+    constructor(x, y, h) {
+        this.x = x
+        this.y = y
+        this.h = h
+    }
+
+    drawLadder(ctx) {
+        const spriteX = 47
+        const spriteY = 0
+        const spriteWidth = 11
+        const spriteHeight = 9
+        
+        for (let i = 0; i < this.h; i++) {
+            const y = this.y - i * 15
+            ctx.drawImage(img, spriteX, spriteY, spriteWidth, spriteHeight, this.x, y, 38, 38)
+        }
+    }
+}
+return Ladder;
+})();
+
+/* ---- Barrel.js ---- */
+Barrel = (function(){
+
+let img = new Image()
+img.src = 'jmr:spr:3'
+
+class Barrel {
+    constructor(x, y, width, height) {
+        this.x = x
+        this.y = y
+        this.width = width
+        this.height = height
+        this.force = 0.5
+        this.left = false
+        this.right = false
+        this.rollingLeft = [45, 30, 15, 0]
+        this.rollingRight = [0, 15, 30, 45]
+        this.rollingDown = [59, 78]
+        this.loopIndex = 0
+        this.scored = false
+        this.hasScored = false
+        this.scoreTimer = null
+        this.scoreDelay = 800
+        /* FAST: count down in update() — VM setTimeout per jump-over is expensive. */
+        this._scoreWait = 0
+        this.dead = false
+        this.timeSinceLastFrameChange = 0
+        this.timeBetweenFrames = 100
+        /* FAST: share one sprites helper (assigned in Game after ctx exists). */
+        this.sprites = _dkSpr
+    }
+
+    drawFrame(frameX) {
+        this._drawX = this.x
+        this._drawY = this.y
+        this.sprites.drawSpriteBarrel(frameX, 0, 14, 12, this.x, this.y, this.width, this.height)
+    }
+
+    drawFalling(x) {
+        this._drawX = this.x
+        this._drawY = this.y
+        this.sprites.drawSpriteBarrel(x, 0, 18, 18, this.x, this.y, this.width + 5, this.height + 5)
+    }
+
+    step(ctx, elapsed) {
+        if (this.right) {
+            this.timeSinceLastFrameChange += elapsed
+            if (this.timeSinceLastFrameChange >= this.timeBetweenFrames) {
+                this.timeSinceLastFrameChange = 0
+                this.loopIndex++
+                
+                if (this.loopIndex >= this.rollingRight.length) {
+                    this.loopIndex = 0
+                }
+
+            }
+            this.drawFrame(this.rollingRight[this.loopIndex])
+        }
+
+        else if (this.left) {
+            this.timeSinceLastFrameChange += elapsed
+            if (this.timeSinceLastFrameChange >= this.timeBetweenFrames) {
+                this.timeSinceLastFrameChange = 0
+                this.loopIndex++
+                
+                if (this.loopIndex >= this.rollingLeft.length) {
+                    this.loopIndex = 0
+                }
+
+            }
+            this.drawFrame(this.rollingLeft[this.loopIndex])
+        }
+
+        else if (!this.left && !this.right) {
+            this.timeSinceLastFrameChange += elapsed
+            if (this.timeSinceLastFrameChange >= this.timeBetweenFrames) {
+                this.timeSinceLastFrameChange = 0
+                this.loopIndex++
+                
+                if (this.loopIndex >= this.rollingDown.length) {
+                    this.loopIndex = 0
+                }
+
+            }
+            this.drawFalling(this.rollingDown[this.loopIndex])
+        }
+    }
+    
+    gravity() {
+        this.y += this.force
+    }
+
+    move() {
+        if (this.left) {
+            this.x -= 1
+        }
+        
+        else if (this.right) {
+            this.x += 1
+        }
+    
+        if (this.x < 1245 && this.y <= 106) {
+            this.right = true
+            this.left = false
+        } 
+        
+        else if (this.x === 1245) {
+            this.right = false
+            this.left = false
+        }
+    
+        if (this.y === 186 || this.y === 401 || this.y === 603) {
+            this.left = true
+        } 
+        
+        else if (this.x === 230 && this.y < 608) {
+            this.left = false
+        }
+    
+        if (this.y === 287 || this.y === 507) {
+            this.right = true
+        }
+    
+        if (this.x === 225 && this.y === 608) {
+            this.left = true
+            this.right = false
+        }
+    }    
+    
+    get barrelLeft() {
+        return this.x
+    }
+
+    get barrelRight() {
+        return this.x + this.width
+    }
+
+    get barrelTop() {
+        return this.y
+    }
+
+    get barrelBottom() {
+        return this.y + this.height
+    }
+
+    get barrelMiddle() {
+        return (this.x + this.width) / 2
+    }
+
+    collision(i) {
+        /* FAST: _dkP* arrays; score/death once after the platform walk. Same boxes. */
+        var py = _dkPY[i]
+        if (this.y + this.height > py && this.y + this.height - this.force < py + 24 &&
+            this.x + this.width - 7 > _dkPX[i] && this.x < _dkPX[i] + (_dkPW[i] * 20) - 40) {
+          this.y = py - this.height
+        }
+    }
+    
+    update(ctx, platforms, player, elapsed) {
+
+        this.move()
+        this.step(ctx, elapsed)
+        this.gravity()
+        if (this.hasScored) {
+            this._scoreWait -= elapsed
+            if (this._scoreWait <= 0) this.hasScored = false
+        }
+        
+        /* FAST: player AABB once, not 53×; score/death after platforms (same tests). */
+        _ppL = player.x
+        _ppR = player.x + player.width
+        _ppT = player.y
+        _ppB = player.y + player.height
+        _ppM = (player.x + player.width) / 2
+        var i = 0
+        while (i < _dkPN) {
+            this.collision(i)
+            i = i + 1
+        }
+        var bM = (this.x + this.width) / 2
+        if (!this.hasScored && player.isJumping && ((_ppM >= bM - 2 && _ppM <= bM + 2) && (_ppB < this.y && _ppB > this.y - 20))) {
+            this.scored = true
+            this.hasScored = true
+            this._scoreWait = this.scoreDelay
+        } else if (this.x + 5 < _ppR &&
+                 this.x + this.width - 5 > _ppL &&
+                 this.y + 5 < _ppB &&
+                 this.y + this.height - 5 > _ppT) {
+            this.dead = true
+        }
+    }
+}
+return Barrel;
+})();
+
+/* ---- DK.js ---- */
+DK = (function(){
+
+let img = new Image()
+img.src = 'jmr:spr:2'
+
+let img2 = new Image()
+img2.src = 'jmr:spr:3'
+
+class DK {
+	constructor(x, y) {
+		this.x = x
+		this.y = y
+		/* DNKF-2.png is packed from DNKF-2-full.png. Throw pose is x==235. */
+		this.loop = [
+		[0, 45],
+		[46, 45],
+		[92, 45],
+		[46, 45],
+		[92, 45],
+		[138, 50],
+		[189, 45],
+		[235, 50]
+		]
+		this.loopIndex = 0
+        this.isThrowing = false
+        this.hasThrown = false
+        this.throwingDelay = 10
+        this.thrownDelay = 2000
+        this.throwingTimer = null
+        this.thrownTimer = null
+        this.visible = false
+        this.timeSinceLastFrameChange = 0
+        this.timeBetweenFrames = 600
+        /* FAST: elapsed countdowns instead of setTimeout; share sprites helper. */
+        this._thrownT = 0
+        this._helpT = 0
+        this.sprites = _dkSpr
+	}
+
+	drawDK(ctx) {	
+		/* Stationary barrels */
+		ctx.drawImage(img2, 21, 0, 15, 16, 150, 88, 50, 50)
+		ctx.drawImage(img2, 21, 0, 15, 16, 150, 40, 50, 50)
+		ctx.drawImage(img2, 21, 0, 15, 16, 195, 88, 50, 50)
+		ctx.drawImage(img2, 21, 0, 15, 16, 195, 40, 50, 50)
+
+		/* Pauline */
+		ctx.drawImage(img2, 0, 0, 20, 22, 510, 5, 50, 50)
+	}
+
+    drawHelp(ctx, elapsed) {
+        /* FAST: blink with elapsed — setTimeout every frame queued a timer storm. */
+        this._helpT += elapsed
+        if (this._helpT >= 800) {
+            this._helpT = 0
+            this.visible = !this.visible
+        }
+        if (this.visible) {
+            ctx.drawImage(img, 286, 0, 25, 30, 570, 0, 60, 60)
+        }
+    }
+
+	drawFrame(frameData) {
+		const x = frameData[0]
+    	const width = frameData[1]
+        this._drawX = this.x
+        this._drawY = this.y
+        this.sprites.drawSpriteDK(x, 0, width, 38, this.x, this.y, 140, 144)
+
+        if (x == 235 && !this.hasThrown) {
+            // Start timer and set isThrowing to true
+            this.isThrowing = true
+            this.hasThrown = true
+            /* FAST: 2000ms cooldown via elapsed in step(), not setTimeout. */
+            this._thrownT = this.thrownDelay
+        }
+          
+        else {
+            // Reset timer and set isThrowing to false
+            this.isThrowing = false
+        }
+	}
+
+	step(ctx, elapsed) {
+        this.timeSinceLastFrameChange += elapsed
+        if (this.timeSinceLastFrameChange >= this.timeBetweenFrames) {
+            this.timeSinceLastFrameChange = 0
+            this.loopIndex++
+            if (this.loopIndex >= this.loop.length) {
+                this.loopIndex = 0
+            }
+        }
+
+        const frameData = this.loop[this.loopIndex]
+        this.drawFrame(frameData)
+        if (this.hasThrown) {
+            this._thrownT -= elapsed
+            if (this._thrownT <= 0) this.hasThrown = false
+        }
+	}
+
+    update(ctx, elapsed) {
+        this.step(ctx, elapsed)
+        this.drawDK(ctx)
+        this.drawHelp(ctx, elapsed)
+    }
+}
+return DK;
+})();
+
+/* ---- Mario.js ---- */
+Mario = (function(){
+
+const keys = {
+    w: {
+        pressed: false,
+    },
+    
+    a: {
+        pressed: false,
+    },
+
+    s: {
+        pressed: false,
+    },
+
+    d: {
+        pressed: false,
+    },
+
+    space: {
+        pressed: false,
+    },
+}
+
+let img = new Image()
+img.src = 'jmr:spr:3'
+
+class Mario {
+    constructor(x, y, width, height) {
+        this.x = x
+        this.y = y
+        this.width = width
+        this.height = height
+        this.force = 5
+        this.speed = 0
+        this.keys = keys
+        this.currentLadder = null
+        this.isJumping = false
+        this.isClimbingDown = false
+        this.movingLeft = false
+        this.movingRight = false
+        this.facingLeft = false
+        this.facingRight = true
+        this.loopLeft = [0, 17, 35.5]
+        this.loopRight = [55, 38, 20]
+        this.loopIndex = 0
+        this.timeSinceLastFrameChange = 0
+        this.timeBetweenFrames = 60
+        this._joy = 0
+        /* FAST: share sprites helper; frame numbers filled in setCharacter. */
+        this.sprites = _dkSpr
+
+        document.addEventListener("keydown", (e) => {
+            // NEW: Arrow* + keyCode so Pmod stick KEYEVT still moves (same as ASTEROID)
+            var k = e.key;
+            var cde = e.keyCode;
+            if (k === "w" || k === "ArrowUp" || cde === 87 || cde === 38) this.keys.w.pressed = true;
+            else if (k === "s" || k === "ArrowDown" || cde === 83 || cde === 40) this.keys.s.pressed = true;
+            else if (k === "a" || k === "ArrowLeft" || cde === 65 || cde === 37) this.keys.a.pressed = true;
+            else if (k === "d" || k === "ArrowRight" || cde === 68 || cde === 39) this.keys.d.pressed = true;
+            else if (k === " " || cde === 32) this.keys.space.pressed = true;
+        })
+
+        document.addEventListener("keyup", (e) => {
+            var k = e.key;
+            var cde = e.keyCode;
+            if (k === "w" || k === "ArrowUp" || cde === 87 || cde === 38) this.keys.w.pressed = false;
+            else if (k === "s" || k === "ArrowDown" || cde === 83 || cde === 40) this.keys.s.pressed = false;
+            else if (k === "a" || k === "ArrowLeft" || cde === 65 || cde === 37) this.keys.a.pressed = false;
+            else if (k === "d" || k === "ArrowRight" || cde === 68 || cde === 39) this.keys.d.pressed = false;
+            else if (k === " " || cde === 32) this.keys.space.pressed = false;
+        })
+    }
+
+    setCharacter(character) {
+        if (this.character == character && _dkFramed) return
+        this.character = character
+        /* FAST: numbers in globals (see _dkStL0), not new [x,y] and not on this. */
+        if (character == "Mario") {
+            _dkStL0 = 0
+            _dkStL1 = -1
+            _dkStR0 = 55
+            _dkStR1 = 17
+            _dkJpL0 = 52
+            _dkJpL1 = -1
+            _dkJpR0 = 2
+            _dkJpR1 = 18.5
+            _dkMvL = -1
+            _dkMvR = 17.1
+        } else if (character == "Luigi") {
+            _dkStL0 = 0
+            _dkStL1 = 35
+            _dkStR0 = 55
+            _dkStR1 = 53
+            _dkJpL0 = 52
+            _dkJpL1 = 36.5
+            _dkJpR0 = 2
+            _dkJpR1 = 54.5
+            _dkMvL = 35.1
+            _dkMvR = 53.1
+        }
+        _dkFramed = 1
+    }
+
+    drawFrame(spriteX, spriteY) {
+        _mdx = this.x
+        _mdy = this.y
+        _mdHas = 1
+        this.sprites.drawSprite(spriteX, spriteY, 15, 18, this.x, this.y, this.width, this.height)
+    }
+    
+    drawMario(ctx, elapsed) {
+        // Jumping
+        if (this.isJumping) {
+            
+            if (this.movingLeft) {
+                this.drawFrame(_dkJpL0, _dkJpL1)
+            }
+
+            else if (this.movingRight || this.facingRight) {
+                this.drawFrame(_dkJpR0, _dkJpR1)
+            }
+        }
+
+        // Standing
+        else if (this.facingLeft && !(this.keys.a.pressed || (this._joy & 4))) {
+            this.drawFrame(_dkStL0, _dkStL1)
+        }
+
+        else if (this.facingRight && !(this.keys.d.pressed || (this._joy & 8))) {
+            this.drawFrame(_dkStR0, _dkStR1)
+        }
+
+        // Running
+        else if (!this.isJumping) {
+            
+            // Increase time since last frame change by elapsed time
+            this.timeSinceLastFrameChange += elapsed
+
+            // If it's time for a new frame
+            if (this.timeSinceLastFrameChange >= this.timeBetweenFrames) {
+
+                // Reset the timer
+                this.timeSinceLastFrameChange = 0
+
+                // Move to the next frame
+                this.loopIndex++
+
+                // If we've reached the end of the animation sequence, start over
+                if (this.loopIndex >= this.loopRight.length) {
+                    this.loopIndex = 0
+                }
+            }
+
+            if (this.movingLeft) {
+                this.drawFrame(this.loopLeft[this.loopIndex], _dkMvL)
+            }
+            
+            else if (this.movingRight) {
+                this.drawFrame(this.loopRight[this.loopIndex], _dkMvR)
+            }
+        }
+    }
+      
+    gravity() {
+        this.y += (this.speed + this.force) / 9
+        this.speed += 0.2
+    }
+    
+    get marioBottom() {
+        return this.y + this.height
+    }
+
+    collision(i) {
+        var marioBottom = this.y + this.height
+        var py = _dkPY[i]
+        // Check if the bottom of Mario overlaps with the platform
+        if (!this.isClimbingDown && !(this.jumpHeight >= 750) &&
+            (marioBottom > py && marioBottom - this.speed < py + 24 &&
+            this.x + this.width - 7 > _dkPX[i] && this.x < _dkPX[i] + (_dkPW[i] * 20) -50)) {
+            // Collision detected
+            this.isJumping = false
+            this.y = py - this.height
+            this.force = 5
+            this.speed = 0
+        }
+
+        // Invisible wall
+        else if (this.y <= 86 && this.x < 500) {
+            this.x = 500
+        }
+    }
+
+    get marioMiddle() {
+        return this.x + this.width / 2
+    }
+    
+    ladderDetection(ladder) {
+        let ladderEnd = ladder.x + 38
+        let touchingLadder = false
+        let aboveLadder = false
+        const marioMiddle = this.x + this.width / 2
+
+        // If Mario is touching a ladder
+        if (marioMiddle >= ladder.x && marioMiddle <= ladderEnd && (this.y <= ladder.y && this.y >= ladder.y - (ladder.h * 10 + 70))) {
+            this.currentLadder = ladder
+            this.isClimbingDown = false
+            this.speed = 0
+            touchingLadder = true
+        }
+
+        // Mario is touching a ladder and the w key is pressed
+        if (touchingLadder == true && (this.keys.w.pressed || (this._joy & 1))) {
+            this.speed = 0
+            this.y -= 0.2
+        }
+
+        // Mario is touching a ladder and the s key is pressed
+        else if (touchingLadder == true && (this.keys.s.pressed || (this._joy & 2))) {
+            this.speed = 0
+            this.y += 0.2
+        }
+        
+        /* If you let go of W or S while on a ladder */
+        if (this.currentLadder && !(this.keys.w.pressed || (this._joy & 1)) && !(this.keys.s.pressed || (this._joy & 2))) {
+            this.force = 0
+            this.speed = 0
+        }
+
+        // Mario is above a ladder
+        else if (marioMiddle >= ladder.x && marioMiddle <= ladderEnd && (this.y < ladder.y - 50 && this.y > ladder.y - 200)) {
+            aboveLadder = true
+        }
+
+        // Mario is above a ladder and the s key is pressed
+        if (aboveLadder && (this.keys.s.pressed || (this._joy & 2))) {
+            this.isClimbingDown = true
+        }
+
+        if (this.keys.a.pressed || (this._joy & 4) || this.keys.d.pressed || (this._joy & 8)) {
+            this.currentLadder = null
+        }
+    }
+
+    move() {
+
+        if ((this.keys.space.pressed || (this._joy & 16)) && !this.isJumping) {
+            this.isJumping = true
+            this.jumpHeight = 1000
+            this.jumpHeight -= 2
+            playSfx(sfxJump)
+        }
+      
+        if (this.isJumping) {
+            this.y -= 2
+            this.jumpHeight -= 2
+        }
+
+        if (this.keys.a.pressed || (this._joy & 4)) {
+            this.x -= 1
+            this.movingLeft = true
+            this.movingRight = false
+            this.lastKeyPressed = 'a'
+        } 
+
+        if (this.keys.d.pressed || (this._joy & 8)) {
+            this.x += 1
+            this.movingRight = true
+            this.movingLeft = false
+            this.lastKeyPressed = 'd'
+        }
+
+        if (this.lastKeyPressed === 'a') {
+            this.facingLeft = true
+            this.facingRight = false
+        } 
+        
+        else if (this.lastKeyPressed === 'd') {
+            this.facingLeft = false
+            this.facingRight = true
+        }
+    }
+
+    update(ctx, platforms, ladders, character, elapsed) {
+        this._joy = 0;
+        try { this._joy = joy() | 0; } catch (e) { this._joy = 0; }
+
+        this.setCharacter(character)
+
+        this.gravity()
+        
+        this.drawMario(ctx, elapsed)
+
+        this.move()
+
+        var i = 0
+        while (i < _dkPN) {
+            this.collision(i)
+            i = i + 1
+        }
+
+        for (let i = 0; i < ladders.length; i++) {
+            this.ladderDetection(ladders[i])
+        }
+    }
+}
+return Mario;
+})();
+
+/* ---- main.js ---- */
+
+const canvas = document.getElementById("myCanvas")
+const ctx = canvas.getContext("2d")
+/* FAST: one sprites helper for Mario / DK / every barrel (not new per draw). */
+var _dkSpr = new sprites(ctx)
+/* Mario already has 24 own fields. OBJ_SLOTS=32. Putting frame numbers
+   and last-blit pos on `this` was the 33rd+ SET_PROP → fault 3 / bounce
+   to monitor (FPGA-SIM ip=1934 drawFrame). Globals, not instance slots. */
+var _mdx = 0, _mdy = 0, _mdHas = 0, _dkFramed = 0
+var _dkStL0 = 0, _dkStL1 = 0, _dkStR0 = 0, _dkStR1 = 0
+var _dkJpL0 = 0, _dkJpL1 = 0, _dkJpR0 = 0, _dkJpR1 = 0
+var _dkMvL = 0, _dkMvR = 0
+/* FAST: platform x/y/w as number arrays (ARR_CAP=128). Collision reads these,
+   not platforms[i].x 53 times per actor (S_HEAP_CMP). Same hit boxes. */
+var _dkPX=[], _dkPY=[], _dkPW=[], _dkPN=0
+var _ppL=0, _ppR=0, _ppT=0, _ppB=0, _ppM=0
+ctx.imageSmoothingEnabled = false
+// NEW: keep DKJS world coords; scale onto 640x480 glass each frame
+const WORLD_W = 1510
+const WORLD_H = 685
+const GLASS_W = 640
+const GLASS_H = 480
+
+let gameState = "title"
+let character = "Mario"
+
+let spriteSheet = new Image()
+spriteSheet.src = 'jmr:spr:0'
+
+let paused = false
+
+class Game {
+    
+    constructor(width, height) {
+        this.width = width
+        this.height = height
+        this.mario = new Mario(200, 608, 35, 52)
+        this.dk = new DK(250, -5)
+        this.barrels = []
+        this.score = 0
+        this.highScore = 0
+        this.lives = 3
+        this.livesX = 0
+        this.livesHudDirty = true
+        this.hiScoreStr = "HIGH SCORE: 0"
+        this._spawnedThisThrow = 0
+        this._titleDrawn = 0
+        this._pauseImg = null
+
+        // 2026-08-28: startGame was registered/removed with a FRESH arrow
+        // closure each time — removeEventListener never matched, so every
+        // title/character-select bounce added another keydown listener.
+        // Harmless in DONKEY (game never returns to title); in DNKFAST the
+        // 5th bounce hits the 4-per-type listener cap (fault 3). Bind once,
+        // reuse the same reference for add/remove.
+        this._startGameBound = (event) => this.startGame(event)
+
+        this.choose = (event) => {
+            // NEW: arrows work same as a/d on character select
+            var k = event.key;
+            var cde = event.keyCode;
+            if (k === "a" || k === "ArrowLeft" || cde === 65 || cde === 37) {
+                character = "Mario"
+                ctx.clearRect(590, 400, 85, 30)
+                ctx.fillStyle = "red"
+                ctx.fillText("Mario", 632, 420)
+                ctx.fillStyle = "white"
+                ctx.fillText("Luigi", 882, 420)
+            } 
+            
+            else if (k === "d" || k === "ArrowRight" || cde === 68 || cde === 39) {
+                character = "Luigi"
+                ctx.clearRect(840, 400, 85, 30)
+                ctx.fillStyle = "lime"
+                ctx.fillText("Luigi", 882, 420)
+                ctx.fillStyle = "white"
+                ctx.fillText("Mario", 632, 420)
+            }
+        }
+
+        this.platforms = [
+            new Platform(122, 138, 8),
+            new Platform(245, 138, 8),
+            new Platform(368, 138, 8),
+            new Platform(491, 138, 8),
+            new Platform(614, 138, 9), 
+            
+            new Platform(120, 660, 42),
+            new Platform(752, 657, 8),
+            new Platform(875, 654, 8),
+            new Platform(998, 651, 8),
+            new Platform(1121, 648, 8),
+            new Platform(1244, 645, 8),
+
+            new Platform(1121, 575, 8),
+            new Platform(998, 572, 8),
+            new Platform(875, 569, 8),
+            new Platform(752, 566, 8),
+            new Platform(629, 563, 8),
+            new Platform(506, 561, 8),
+            new Platform(383, 558, 8),
+            new Platform(260, 555, 8),
+            new Platform(182, 552, 5),
+
+            new Platform(260, 483, 8),
+            new Platform(383, 478, 8),
+            new Platform(506, 473, 8),
+            new Platform(629, 468, 8),
+            new Platform(752, 463, 8),
+            new Platform(875, 458, 8),
+            new Platform(998, 453, 8),
+            new Platform(1121, 448, 8),
+            new Platform(1244, 443, 5),    
+
+            new Platform(1121, 375, 8),
+            new Platform(998, 370, 8),
+            new Platform(875, 365, 8),
+            new Platform(752, 360, 8),
+            new Platform(629, 355, 8),
+            new Platform(506, 350, 8),
+            new Platform(383, 345, 8),
+            new Platform(260, 340, 8),
+            new Platform(182, 335, 5),
+
+            new Platform(260, 268, 8),
+            new Platform(383, 263, 8),
+            new Platform(506, 258, 8),
+            new Platform(629, 253, 8),
+            new Platform(752, 248, 8),
+            new Platform(875, 243, 8),
+            new Platform(998, 238, 8),
+            new Platform(1121, 233, 8),
+            new Platform(1244, 228, 5),
+
+            new Platform(1121, 158, 8),
+            new Platform(998, 153, 8),
+            new Platform(875, 148, 8),
+            new Platform(752, 143, 8),
+
+            new Platform(500, 57, 25),
+
+            new Platform(408, 80, 6),
+        ]
+
+        this.ladders = [
+            new Ladder(1125, 612, 2),
+            new Ladder(350, 521, 2),
+            new Ladder(1125, 413, 2),
+            new Ladder(350, 306, 2),
+            new Ladder(1125, 196, 2),
+            new Ladder(680, 526, 3),
+            new Ladder(760, 428, 4),
+            new Ladder(845, 110, 3),
+            new Ladder(410, 100, 7),
+            new Ladder(470, 100, 7),
+        ]
+        /* FAST: snapshot platform numbers once (platforms never move). */
+        _dkPN = this.platforms.length
+        var _pi = 0
+        while (_pi < _dkPN) {
+            _dkPX[_pi] = this.platforms[_pi].x
+            _dkPY[_pi] = this.platforms[_pi].y
+            _dkPW[_pi] = this.platforms[_pi].w
+            _pi = _pi + 1
+        }
+    }
+
+    draw(ctx) {
+        var i = 0
+        while (i < this.ladders.length) {
+            this.ladders[i].drawLadder(ctx)
+            i = i + 1
+        }
+        i = 0
+        while (i < this.platforms.length) {
+            this.platforms[i].drawPlatform(ctx)
+            i = i + 1
+        }
+    }
+
+    updateMario(elapsed) {
+        this.mario.update(ctx, this.platforms, this.ladders, character, elapsed)
+    }
+
+    updateBarrels(elapsed) {
+        /* FAST: one barrel per throw pose (isThrowing can stay true across slow frames). */
+        if (this.dk.isThrowing) {
+            if (!this._spawnedThisThrow) {
+                this.barrels.push(new Barrel(350, 90, 27, 42))
+                this._spawnedThisThrow = 1
+            }
+        } else {
+            this._spawnedThisThrow = 0
+        }
+
+        var i = 0
+        while (i < this.barrels.length) {
+            this.barrels[i].update(ctx, this.platforms, this.mario, elapsed)
+            i = i + 1
+        }
+    }
+
+    updateDK(elapsed) {
+        this.dk.update(ctx, elapsed)
+    }
+
+    getPoints() {
+        for (let i = 0; i < this.barrels.length; i++) {
+            if (this.barrels[i].scored) {
+                this.score += 100
+                this.barrels[i].scored = false
+            }
+        }
+    }
+
+    drawPoints() {
+        /* HUD in glass space: world setTransform shrinks 16px to k=1 (8 glass
+           px) which vanishes on FPGA-SIM. Identity + 16px → k=2, actually visible. */
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.fillStyle = 'white'
+        ctx.font = "16px sans-serif"
+        ctx.textAlign = "left"
+        ctx.fillText("Score", 8, 22)
+        ctx.fillText(this.score, 104, 22)
+        ctx.setTransform(GLASS_W / WORLD_W, 0, 0, GLASS_H / WORLD_H, 0, 0)
+    }
+
+    resetGame() {
+        // Reset player's position to the starting position
+        this.mario.x = 200
+        this.mario.y = 608
+
+        // Reset the barrels
+        this.barrels = []
+        /* Full redraw next frame — barrels vanish and Mario teleports;
+           dirty-only would leave the last sprites. */
+        _dkBgOn = 0
+    }
+
+    loseLife() {
+        for (let i = 0; i < this.barrels.length; i++) {
+            if (this.barrels[i].dead) {
+                this.lives -= 1
+                this.livesHudDirty = true
+                playSfx(sfxDie)
+                this.resetGame()
+            }
+        }
+
+        if (this.mario.y > this.height) {
+            this.lives -= 1
+            this.livesHudDirty = true
+            playSfx(sfxDie)
+            this.resetGame()
+        }
+    }
+
+    playerLives() {
+        /* Same glass-space HUD as drawPoints. x=408 is right of HELP (glass ~241–267). */
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.fillStyle = 'white'
+        ctx.font = "16px sans-serif"
+        ctx.textAlign = "left"
+        ctx.fillText("Lives", 408, 22)
+        ctx.fillText(this.lives, 512, 22)
+        ctx.setTransform(GLASS_W / WORLD_W, 0, 0, GLASS_H / WORLD_H, 0, 0)
+    }
+
+    gameOver() {
+        if (this.lives < 0) {
+            gameState = "title"
+            this._titleDrawn = 0
+        }
+
+        else if (this.mario.y + this.mario.height == 57) {
+            gameState = "title"
+            this._titleDrawn = 0
+            if (this.score > this.highScore) {
+                this.highScore = this.score
+                this.hiScoreStr = "HIGH SCORE: " + this.highScore
+            }
+        }
+    }
+
+    showTitleScreen() {
+        /* FAST: title runs from rAF after gameOver; skip rebuild + new Image. */
+        if (this._titleDrawn) return
+        this._titleDrawn = 1
+        // Clear canvas
+        ctx.clearRect(0, 0, this.width, this.height)
+        _dkWipe = 0
+
+        this.lives = 3
+        this.score = 0
+        this.livesHudDirty = true
+        this.resetGame()
+
+        if (!this._titleImg) {
+            this._titleImg = new Image()
+            this._titleImg.src = 'jmr:spr:4'
+
+            this._titleImg.onload = () => {
+            // Draw the title
+            const x = (this.width - 700) / 2
+            ctx.drawImage(this._titleImg, x, 10, 700, 400)
+            }
+        } else {
+            const x = (this.width - 700) / 2
+            ctx.drawImage(this._titleImg, x, 10, 700, 400)
+        }
+        
+        ctx.fillStyle = 'white'
+        ctx.font = '16px "Press Start 2P", Arial'
+        ctx.textAlign = "center"
+        ctx.fillText("Press Enter to Start", this.width / 2, 500)
+        ctx.fillText(this.hiScoreStr, this.width / 2, 600)
+        
+        // Add event listener for enter key press to start the game
+        document.addEventListener("keydown", this.startSelect)
+    }
+
+    startSelect = (event) => {
+        if ((event.key === "Enter" || event.key === " " || event.keyCode === 13 || event.keyCode === 32) && gameState === "title") {
+            document.removeEventListener("keydown", this.startSelect)
+            gameState = "character"
+            this.characterSelect()
+        }
+    }
+
+    characterSelect() {
+
+        ctx.clearRect(0, 0, this.width, this.height)
+
+        ctx.fillStyle = 'white'
+        ctx.textAlign = "center"
+        ctx.fillText("Select your character", this.width / 2, 200)
+
+        ctx.drawImage(spriteSheet, 38, 17, 15, 18, 600, 300, 60, 90)
+        ctx.drawImage(spriteSheet, 38, 53, 15, 18, 850, 300, 60, 90)
+
+        ctx.fillText("Luigi", 882, 420)
+        ctx.fillStyle = 'red'
+        ctx.fillText("Mario", 632, 420)
+        
+        document.addEventListener("keydown", this.choose)
+
+        document.addEventListener("keydown", this._startGameBound)
+    }
+
+    startGame(event) {
+        if ((event.key === "Enter" || event.key === " " || event.keyCode === 13 || event.keyCode === 32) && gameState === "character") {
+
+            // Remove event listener
+            document.removeEventListener("keydown", this._startGameBound)
+            document.removeEventListener("keydown", this.choose)
+            
+            gameState = "game"
+
+            ctx.setTransform(GLASS_W / WORLD_W, 0, 0, GLASS_H / WORLD_H, 0, 0)
+            ctx.clearRect(0, 0, WORLD_W, WORLD_H)
+            _dkWipe = 1
+            _dkBgOn = 0
+            _dkBg = null
+
+            // Call the update function to start the game loop
+            update()
+        }
+    }
+
+    pauseScreen() {
+        const w = 550
+        const h = 200
+        const x = this.width / 2 - w / 2
+        const y = this.height / 2 - h / 2
+
+        /* FAST: one pause sheet, not a new Image + intern every paused frame. */
+        if (!this._pauseImg) {
+            this._pauseImg = new Image()
+            this._pauseImg.src = 'jmr:spr:5'
+
+        }
+        ctx.drawImage(this._pauseImg, x, y, w, h)
+
+        ctx.beginPath()
+        ctx.fillStyle = 'yellow'
+        ctx.textAlign = "center"
+        ctx.fillText("— Paused —", this.width / 2, 400)
+    }
+}
+
+window.addEventListener('keydown', function (e) {
+    switch (e.key) {
+        case "p":
+            togglePause()
+    }
+})
+    
+function togglePause() {
+    if (!paused) {
+        paused = true
+    } 
+    
+    else if (paused) {
+        paused = false
+    }
+}
+    
+const game = new Game(WORLD_W, WORLD_H)
+
+let previous
+var _dkWipe = 0
+var _dkBg = null
+var _dkBgOn = 0
+function _dkEraseMovers() {
+    // Erase last DRAWN boxes (jump/gravity move after blit — using x/y left a trail to the top).
+    ctx.fillStyle = '#000000'
+    ctx.fillRect(0, 0, WORLD_W, 40)
+    ctx.fillRect(560, 0, 80, 70)
+    var m = game.mario
+    if (_mdHas) ctx.fillRect(_mdx - 16, _mdy - 16, m.width + 32, m.height + 32)
+    var i = 0
+    while (i < game.barrels.length) {
+        var b = game.barrels[i]
+        if (b._drawX !== undefined) ctx.fillRect(b._drawX - 12, b._drawY - 12, b.width + 30, b.height + 30)
+        i = i + 1
+    }
+    var d = game.dk
+    if (d._drawX !== undefined) ctx.fillRect(d._drawX - 12, d._drawY - 12, 164, 168)
+}
+function _dkDirty1(x, y, w, h) {
+    /* FAST: redraw only platform/ladder tiles that overlap a mover's last box.
+       Full putImageData(640×480) was ~0.92M VM clocks; full platform draw was ~1.55M. */
+    var i, px, py, pw, L
+    i = 0
+    while (i < _dkPN) {
+        px = _dkPX[i]
+        py = _dkPY[i]
+        pw = _dkPW[i] * 20
+        if (x < px + pw && x + w > px && y < py + 24 && y + h > py) {
+            game.platforms[i].drawDirty(ctx, x, y, w, h)
+        }
+        i = i + 1
+    }
+    i = 0
+    while (i < game.ladders.length) {
+        L = game.ladders[i]
+        if (x < L.x + 38 && x + w > L.x && y < L.y + 38 && y + h > L.y - L.h * 15) {
+            L.drawLadder(ctx)
+        }
+        i = i + 1
+    }
+}
+function _dkBlitBg() {
+    ctx.setTransform(GLASS_W / WORLD_W, 0, 0, GLASS_H / WORLD_H, 0, 0)
+    if (!_dkBgOn) {
+        ctx.clearRect(0, 0, WORLD_W, WORLD_H)
+        game.draw(ctx)
+        _dkBgOn = 1
+    } else {
+        /* Black the last sprite first. Dirty-tiles-only left pixels in
+           empty space (jump / climb / between girders) — no tile overlap,
+           nothing redrew, smear. Same as DONKEY: black then restore
+           girders/ladders under the box. Kong animation: same erase
+           (poses do not cover each other). */
+        ctx.fillStyle = '#000000'
+        var m = game.mario
+        if (_mdHas) {
+            ctx.fillRect(_mdx - 24, _mdy - 24, m.width + 48, m.height + 48)
+            _dkDirty1(_mdx - 24, _mdy - 24, m.width + 48, m.height + 48)
+        }
+        ctx.fillRect(m.x - 24, m.y - 24, m.width + 48, m.height + 48)
+        _dkDirty1(m.x - 24, m.y - 24, m.width + 48, m.height + 48)
+        var i = 0
+        while (i < game.barrels.length) {
+            var b = game.barrels[i]
+            if (b._drawX !== undefined) {
+                ctx.fillRect(b._drawX - 16, b._drawY - 16, b.width + 40, b.height + 40)
+                _dkDirty1(b._drawX - 16, b._drawY - 16, b.width + 40, b.height + 40)
+            }
+            ctx.fillRect(b.x - 16, b.y - 16, b.width + 40, b.height + 40)
+            _dkDirty1(b.x - 16, b.y - 16, b.width + 40, b.height + 40)
+            i = i + 1
+        }
+        /* Kong poses differ (chest-beat vs throw). Transparent pixels in
+           the new 140×144 blit do not erase the old pose — smear.
+           Black the last box, restore girders, then drawSpriteDK. */
+        var d = game.dk
+        if (d._drawX !== undefined) {
+            ctx.fillRect(d._drawX - 12, d._drawY - 12, 164, 168)
+            _dkDirty1(d._drawX - 12, d._drawY - 12, 164, 168)
+        }
+    }
+}
+    
+function update(timestamp) {
+    ctx.setTransform(GLASS_W / WORLD_W, 0, 0, GLASS_H / WORLD_H, 0, 0)
+    if (gameState == "game") {
+        _dkBlitBg()
+
+        const elapsed = timestamp - previous || 0
+        previous = timestamp
+        
+        game.getPoints()
+        game.loseLife()
+        game.gameOver()
+        requestAnimationFrame(update)
+        
+        
+        if (!paused) {
+            game.updateMario(elapsed)
+            game.updateBarrels(elapsed)
+            game.updateDK(elapsed)
+        }
+
+        else if (paused) {
+            game.pauseScreen()
+        }
+        /* HUD last so Kong / HELP cannot cover Score and Lives. */
+        game.drawPoints()
+        game.playerLives()
+    }
+
+    else {
+        ctx.clearRect(0, 0, WORLD_W, WORLD_H)
+        if (gameState == "title") {
+        game.showTitleScreen()
+        }
+    }
+}
+
+requestAnimationFrame(update)
+</script>
+<script data-host="chrome">
+(function(){
+var ctx=null,noise=null;
+function ac(){
+  var AC,i,d;
+  if(ctx) return ctx;
+  AC=window.AudioContext||window.webkitAudioContext;
+  if(!AC) return null;
+  ctx=new AC();
+  noise=ctx.createBuffer(1,ctx.sampleRate,ctx.sampleRate);
+  d=noise.getChannelData(0);
+  for(i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+  return ctx;
+}
+window._chromePlay=function(r){
+  var a,i,freq,vol,frames,slide,ch,dur,t0,osc,g,endF;
+  a=ac();
+  if(!a||!r||!r.length) return;
+  if(a.state==="suspended") a.resume();
+  t0=a.currentTime;
+  for(i=0;i+4<r.length;i=i+5){
+    freq=r[i]; vol=r[i+1]; frames=r[i+2]; slide=r[i+3]; ch=r[i+4];
+    if(vol<=0||frames<=0) continue;
+    dur=frames/60;
+    if(dur<0.02) dur=0.02;
+    g=a.createGain();
+    g.gain.setValueAtTime((vol/15)*0.1,t0);
+    g.gain.exponentialRampToValueAtTime(0.001,t0+dur);
+    g.connect(a.destination);
+    if(ch===3){
+      osc=a.createBufferSource();
+      osc.buffer=noise;
+      osc.loop=true;
+    }else{
+      osc=a.createOscillator();
+      osc.type="square";
+      osc.frequency.setValueAtTime(Math.max(20,freq),t0);
+      endF=freq+slide*frames;
+      if(endF<20) endF=20;
+      osc.frequency.linearRampToValueAtTime(endF,t0+dur);
+    }
+    osc.connect(g);
+    osc.start(t0);
+    osc.stop(t0+dur);
+  }
+};
+})();
+</script>
+</body>
+</html>

@@ -28,7 +28,7 @@ is the V2 example.** Do **not** title-gate (`if (stem == "…")`).
 
 | Cap / hole | Author around it |
 |---|---|
-| **`MAX_SPR` = 16** ASET descriptors | ≤16 `data:image` sheets. Pack frames into **atlases**; crop with **9-arg `drawImage`**. Do not ship one URI per frame (MKPVP: 274 → refuse). Keep sheets **modest** (not one multi-thousand-pixel-wide image — extra address math + SRAM traffic). |
+| **`MAX_SPR` = 16** ASET descriptors | ≤16 **PNG sheets** (`jmr:spr:N`). Pack frames into **atlases**; crop with **9-arg `drawImage`**. Do not ship one URI per frame (MKPVP: 274 → refuse). Keep sheets **modest** (not one multi-thousand-pixel-wide image — extra address math + SRAM traffic). |
 | **`Object.keys` / `for…in`** | Compiler lowers `for (k in obj)` → `Object.keys`. RTL lacks that native (`fault=5` / `fsite=4183`). Use literal key lists or indexed loops. |
 | **`setTransform(-1, …)` mirror** | PYTHON `_xf` does `max(1, w*sx)` — negative scale → 1px. Prefer **left + right** sheets. |
 | **Math** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt` (+ `Math.PI`). No `round` native in V1. |

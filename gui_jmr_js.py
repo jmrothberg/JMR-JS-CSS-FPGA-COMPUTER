@@ -58,6 +58,9 @@ _TK_TO_JS = {
     "Down": (40, "ArrowDown"),
     "BackSpace": (8, "Backspace"),
     "Tab": (9, "Tab"),
+    # Editor: F2 save. Unused F-keys (F3…) leave a running program at the GUI;
+    # they are not title keys. Esc is machine BREAK.
+    "F2": (113, "F2"),
     "Shift_L": (16, "Shift"),
     "Shift_R": (16, "Shift"),
     "Control_L": (17, "Control"),
@@ -261,7 +264,7 @@ class App:
 
         self.hint = tk.Label(
             self.root,
-            text="F9=runtime  F10=monitor  ESC=break  Ctrl-V paste  EDIT n / LIST -  arrows+space=play  type+Enter",
+            text="F9=runtime  F10=monitor  ESC=break  F3=leave  Ctrl-V paste  EDIT n / LIST -  arrows+space=play  type+Enter",
             fg="#888",
             bg="#1a1a1a",
             anchor="w",
@@ -531,6 +534,20 @@ class App:
         self._paint_prompt()
         self.canvas_label.focus_set()
 
+    def leave_program(self) -> None:
+        """F3 / unused F-keys: stop the title and restore READY, no ^BREAK."""
+        if not self._fkey_ok():
+            return
+        hb = self.backend.hard_break
+        try:
+            hb(quiet=True)
+        except TypeError:
+            hb()
+        self.line_buf = ""
+        self.line_col = 0
+        self._paint_prompt()
+        self.canvas_label.focus_set()
+
     def _play_key_held(self) -> bool:
         return (
             self._key_left
@@ -588,6 +605,12 @@ class App:
             self._kbd_last_t = time.monotonic()
         if event.keysym in ("F9", "F10", "Escape"):
             return None
+        # F3 and the other unused F-keys leave a running program (READY).
+        # F2 stays a title key (editor save). F9/F10 are GUI chrome.
+        if event.keysym in ("F1", "F3", "F4", "F5", "F6", "F7", "F8", "F11", "F12"):
+            if self._is_running():
+                self.leave_program()
+            return "break"
         # Ctrl/Cmd+V handled by on_paste binds — do not also type 'v'
         state = int(getattr(event, "state", 0) or 0)
         if (state & 0x4) or (state & 0x40):  # Control or Mod4/Super
@@ -725,6 +748,8 @@ class App:
             self._kbd_last_t = time.monotonic()
         if event.keysym in ("F9", "F10", "Escape"):
             return None
+        if event.keysym in ("F1", "F3", "F4", "F5", "F6", "F7", "F8", "F11", "F12"):
+            return "break"
         # NEW: raw keyup twin of the on_key_press key_event forward
         if self._is_running():
             jk = _js_key(event)

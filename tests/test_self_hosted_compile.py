@@ -210,24 +210,31 @@ def test_every_shipped_title_fits_under_the_art_wall():
     pytest.importorskip("PIL")
     from PIL import Image
 
+    from functional_model.jsb_format import read_artx
+
     pat = re.compile(r"data:image/[a-zA-Z0-9+./;=,_-]+")
     worst = 0
     for path in sorted((ROOT / "storage").glob("*.HTML")):
-        uris = [
-            u
-            for u in pat.findall(path.read_text(errors="replace"))
-            if "," in u and "base64" in u.split(",", 1)[0].lower()
-        ]
-        off = jsb_format.ASET_PAL_BYTES
-        for uri in dict.fromkeys(uris):  # dedupe, as _extract_data_uri_sprites does
-            blob = base64.b64decode(uri.split(",", 1)[1] + "===")
-            try:
-                w, h = Image.open(io.BytesIO(blob)).size
-            except Exception:
-                continue
-            if off & 1:
-                off += 1
-            off += w * h
+        artx_path = path.with_suffix(".ARTX")
+        if artx_path.is_file():
+            _pal, _spr, payload = read_artx(artx_path.read_bytes())
+            off = len(payload)
+        else:
+            uris = [
+                u
+                for u in pat.findall(path.read_text(errors="replace"))
+                if "," in u and "base64" in u.split(",", 1)[0].lower()
+            ]
+            off = jsb_format.ASET_PAL_BYTES
+            for uri in dict.fromkeys(uris):  # dedupe, as _extract_data_uri_sprites does
+                blob = base64.b64decode(uri.split(",", 1)[1] + "===")
+                try:
+                    w, h = Image.open(io.BytesIO(blob)).size
+                except Exception:
+                    continue
+                if off & 1:
+                    off += 1
+                off += w * h
         worst = max(worst, off)
         assert off <= jsb_format.CART_MAX_BYTES, f"{path.name} needs {off} bytes"
     assert worst > 2_000_000, "expected MK-class art in storage/; did the corpus change?"
@@ -464,6 +471,11 @@ def _run_chain(src: str, programs=("ARTSCAN.JSH", "COMPILER.JSH"), tokens_only=F
     images = [_chain_image(p) for p in programs]
     m = Machine(storage_root=_STORAGE)
     m._stage_source(src)
+    # Art titles: the console pre-loads NAME.ART before ARTSCAN. Tests that
+    # pass a real title's HTML should see the same flag (stem from the file
+    # is not known here; callers that need art set m.source_name first).
+    if m.source_name:
+        m._preload_art()
     if tokens_only:
         m._nat_stg_write(jsb_format.CSTG_HDR_PHASE, 1)
     hw = JsHwVm()
@@ -595,41 +607,72 @@ def test_machine_compiled_title_renders_identically_to_the_host(title):
     Byte-parity is not the bar — the machine drops the host's inlining and
     source map, so its images are smaller. Pixels are the bar.
     """
-    from tools.compile_js import compile_html_text
+    from tools.compile_js import compile_html_text, encode_html_chunk
     from tools.selfhost import self_compile
 
     if not (_STORAGE / "COMPILER.HTML").is_file():
         pytest.skip("compiler not authored yet")
     src = (_STORAGE / f"{title}.HTML").read_text()
     mine = self_compile(title)
-    host = ProgramImage.from_chunk(
-        compile_html_text(src), v2=True, value64=True
-    ).data
+    # encode_html_chunk is the REAL card mint. Comparing against a plain
+    # from_chunk() encoding hides the whole colour path, because that form
+    # carries no ASET palette and no FSTY table — which is exactly how
+    # machine-compiled titles came to draw every rectangle white on the
+    # board while looking perfect here.
+    host = encode_html_chunk(
+        compile_html_text(src, source_path=_STORAGE / f"{title}.HTML")
+    )
 
-    def render(blob):
+    def render_rgb(blob):
         vm = JsHwVm()
         vm.load_image(ProgramImage(blob))
         for _ in range(6):
             vm.frame_tick()
             if vm.error:
                 break
-        return vm.error, bytes(vm.canvas.back)
+        pal = vm.canvas.palette
+        return vm.error, bytes(c for px in vm.canvas.back for c in pal[px])
 
-    err_a, fb_a = render(mine)
-    err_b, fb_b = render(host)
+    err_a, rgb_a = render_rgb(mine)
+    err_b, rgb_b = render_rgb(host)
     assert err_a is None, err_a
     assert err_b is None, err_b
-    assert sum(1 for b in fb_a if b) > 0, "machine image drew nothing"
-    assert fb_a == fb_b, f"{title}: machine and host framebuffers differ"
+    assert any(rgb_a), "machine image drew nothing"
+    # Resolved RGB, not palette indices: the machine builds its own palette,
+    # so indices may legitimately differ while the picture is identical.
+    diff = sum(1 for x, y in zip(rgb_a, rgb_b) if x != y)
+    assert diff == 0, f"{title}: {diff} of {len(rgb_a)} RGB bytes differ"
 
 
-def test_machine_compiled_image_is_smaller_than_the_host_one():
-    """Sanity that we are not accidentally emitting the host's inlined ops."""
+def test_machine_image_carries_the_colour_tables_the_rtl_needs():
+    """The RTL does not parse colour strings. It resolves ctx.fillStyle through
+    the FSTY table and paints index 1 — WHITE — for anything missing from it.
+    An image without FSTY renders perfectly on the model and all-white on
+    hardware, so pin both the table and the palette that backs it."""
+    import struct
+
     from tools.selfhost import self_compile
 
     if not (_STORAGE / "COMPILER.HTML").is_file():
         pytest.skip("compiler not authored yet")
-    assert len(self_compile("BOXES")) < 1203
+    blob = self_compile("BOXES")
+    flags = struct.unpack_from("<H", blob, 10)[0]
+    assert flags & jsb_format.FLAG_ASET, "no ASET section: palette never loads"
+    i = blob.find(b"FSTY")
+    assert i > 0, "no FSTY table: every fillStyle would paint white"
+    n = struct.unpack_from("<H", blob, i + 4)[0]
+    names = ProgramImage(blob).names
+    got = {}
+    for k in range(n):
+        ni, pi = struct.unpack_from("<HH", blob, i + 6 + 4 * k)
+        got[names[ni]] = pi
+    assert got == {"#000000": 0, "#FF0000": 2, "#0000FF": 4, "#FFFFFF": 1}, got
+    # ...and the palette those indices point into is the frozen legacy 8.
+    aset = struct.unpack_from("<I", blob, 12)[0]
+    pal = blob[aset + 8 : aset + 8 + 24]
+    assert [tuple(pal[j * 3 : j * 3 + 3]) for j in range(5)] == [
+        (0, 0, 0), (255, 255, 255), (255, 0, 0), (0, 255, 0), (0, 0, 255)
+    ]
 
 
 def test_short_circuit_keeps_its_value():
@@ -765,6 +808,148 @@ def test_dir_lists_only_titles(tmp_path):
     (tmp_path / "GAME.JSH").write_bytes(b"x")
     m = Machine(storage_root=tmp_path)
     assert m.storage.catalog() == ["GAME.HTML"]
+
+
+# --- the editor -----------------------------------------------------------
+
+
+def _drive_editor(driver_js: str, source_text: str):
+    """Run EDITOR.HTML's own code with a driver appended.
+
+    Same CTEST shape as the compiler tests: the functions under test are the
+    shipped ones, so they cannot drift from a copy.
+    """
+    import re
+
+    if not (_STORAGE / "EDITOR.HTML").is_file():
+        pytest.skip("editor not authored yet")
+    html = (_STORAGE / "EDITOR.HTML").read_text()
+    body = re.search(r"<script>(.*?)</script>", html, re.S).group(1)
+    body = body.split("reindex();\naddEventListener")[0]
+    m = Machine(storage_root=_STORAGE)
+    m._stage_source(source_text)
+    hw = JsHwVm()
+    hw._m = m
+    hw.step_budget = 2_000_000_000
+    hw.load_image(
+        ProgramImage.from_chunk(
+            compile_source(body + "\n" + driver_js), v2=True, value64=True
+        )
+    )
+    assert hw.error is None, hw.error
+    return m, m._src_bytes[: m._src_len].decode("utf8", "replace")
+
+
+_ED_SRC = "one\ntwo\nthree\n"
+
+
+@pytest.mark.parametrize(
+    "driver,want",
+    [
+        ("reindex(); curLine = 1; curCol = 0; typeChar(88);", "one\nXtwo\nthree\n"),
+        ("reindex(); curLine = 0; curCol = 1; pressEnter();", "o\nne\ntwo\nthree\n"),
+        ("reindex(); curLine = 1; curCol = 2; pressBack();", "one\nto\nthree\n"),
+        # backspace at column 0 joins to the line above
+        ("reindex(); curLine = 1; curCol = 0; pressBack();", "onetwo\nthree\n"),
+    ],
+)
+def test_editor_edits_the_source_in_place(driver, want):
+    _, got = _drive_editor(driver, _ED_SRC)
+    assert got == want
+
+
+def test_editor_key_handler_moves_and_types():
+    """The real listener path: an event object into onKey, as the browser
+    style listener delivers it."""
+    drv = "reindex(); var e = {};\n" + "".join(
+        f"e.keyCode = {k}; onKey(e);\n" for k in (40, 39, 39, 88)
+    )
+    _, got = _drive_editor(drv, _ED_SRC)
+    assert got == "one\ntwXo\nthree\n"
+
+
+def test_editor_save_and_quit_report_distinct_statuses():
+    """F2 asks the console to save; F3 must report a status the console will
+    NOT mint on — minting a zero-length image would truncate-open the title's
+    .JSH and destroy a working compiled title. Esc is machine BREAK, not quit."""
+    m, _ = _drive_editor("reindex(); var e = {}; e.keyCode = 113; onKey(e);", _ED_SRC)
+    assert m._cmp_status == jsb_format.CMP_STATUS_SAVE
+    m, _ = _drive_editor("reindex(); var e = {}; e.keyCode = 114; onKey(e);", _ED_SRC)
+    assert m._cmp_status == jsb_format.CMP_STATUS_DONE and m._cmp_len == 0
+
+
+def test_editor_round_trips_a_real_title_untouched():
+    src = (_STORAGE / "BOXES.HTML").read_text()
+    _, got = _drive_editor("reindex();", src)
+    assert got == src
+
+
+def test_edit_verb_refuses_with_nothing_loaded(tmp_path):
+    assert Machine(storage_root=tmp_path).execute_line("EDIT") == ["?NB"]
+
+
+def test_edit_verb_paints_the_loaded_title(tmp_path):
+    """Bare EDIT must share the console Machine so srcByte sees LOAD's SOURCE.
+
+    A fresh JsHwVm has srcLen=0; the editor then fillRects black and the glass
+    looks like a hang. Same share as the COMPILE chain (hw._m = self).
+    """
+    from tools.selfhost import mint, source_path
+
+    if not source_path("EDITOR.JSH").is_file():
+        pytest.skip("editor not authored yet")
+    (tmp_path / "EDITOR.JSH").write_bytes(mint("EDITOR.JSH").data)
+    (tmp_path / "BOXES.HTML").write_text((_STORAGE / "BOXES.HTML").read_text())
+    m = Machine(storage_root=tmp_path)
+    m.execute_line("LOAD BOXES.HTML")
+    out = m.execute_line("EDIT")
+    assert m.running, out
+    assert m._hw_vm._m is m
+    # GUI pumps frame_tick; present() used to copy an empty BACK over a
+    # swapped FRONT and wipe the glyphs. One tick must still show SOURCE.
+    m.frame_tick()
+    # Palette 1 is #FFFFFF — the editor's body glyphs. Cursor/status alone
+    # are blue/red (4/2); white means SOURCE text actually landed.
+    assert any(p == 1 for p in m.canvas.front), "editor painted no source glyphs"
+
+
+def test_edit_verb_f2_save_updates_list(tmp_path):
+    """F2 must write SOURCE back so LIST shows the edit. Esc is BREAK, not save."""
+    from tools.selfhost import mint, source_path
+
+    if not source_path("EDITOR.JSH").is_file():
+        pytest.skip("editor not authored yet")
+    (tmp_path / "EDITOR.JSH").write_bytes(mint("EDITOR.JSH").data)
+    (tmp_path / "BOXES.HTML").write_text((_STORAGE / "BOXES.HTML").read_text())
+    m = Machine(storage_root=tmp_path)
+    m.execute_line("LOAD BOXES.HTML")
+    before = list(m.source_lines)
+    m.execute_line("EDIT")
+    m.input.key_event(88, "X", True)   # insert 'X' at the cursor
+    m.frame_tick()
+    m.input.key_event(113, "F2", True)  # save
+    m.frame_tick()
+    m.frame_tick()  # console acts on cdone the tick after the key
+    assert not m.running
+    assert m.source_lines[0].startswith("X"), m.source_lines[0][:40]
+    assert m.source_lines[0] != before[0]
+
+
+def test_edit_verb_still_leaves_edit_n_as_the_line_editor(tmp_path):
+    """Bare EDIT runs the program; `EDIT n` stays the numbered-line editor."""
+    m = Machine(storage_root=tmp_path)
+    m.source_lines = ["a", "b", "c"]
+    out = m.execute_line("EDIT 20")
+    assert "20" in " ".join(out)
+
+
+def test_editor_fits_the_code_ram_wall():
+    from tools.selfhost import check, mint, source_path
+
+    if not source_path("EDITOR.JSH").is_file():
+        pytest.skip("editor not authored yet")
+    for label, used, cap in check(mint("EDITOR.JSH")):
+        assert used <= cap, f"EDITOR {label} {used} > {cap}"
 
 
 def test_token_record_stays_six_bytes():

@@ -29,10 +29,11 @@
 // ---- arena layout (mirror of functional_model/jsb_format.py) -------------
 var MSG_OFF = 0;
 var HDR_PROGSEL = 64;
+var HDR_ART = 65;
 var HDR_SPAN_N = 70;
 var HDR_TOK_N = 72;
 var HDR_OUT_OFF = 76;   // where the assembled image starts (console reads this)
-var HDR_PHASE = 65;     // 1 = stop after tokenizing (keeps tokens readable)
+var HDR_PHASE = 80;     // 1 = stop after tokenizing (keeps tokens readable)
 var SPAN_OFF = 128;
 var SPAN_STRIDE = 12;
 var TOK_OFF = 3200;
@@ -496,6 +497,37 @@ function w64(o, v) {
   _gw(o + 7, sign * 128 + b);
 }
 
+// ---- template literals ---------------------------------------------------
+// Desugared in the TOKENIZER, so the parser never learns a new construct:
+//     `a ${x} b`   ->   ( "a" + ( x ) + " b" )
+// which is the same LOAD_CONST/ADD chain the host emits.
+var tmplOn = 0;
+var tmplBrace = 0;
+
+function tmplText(vp) {
+  var s = vp;
+  var b = 0;
+  while (1) {
+    b = vAt(vp);
+    if (b < 0) { tmplOn = 0; return vp; }
+    if (b === 96) {                          // closing backtick
+      emitTok(K_STR, 0, vSrc(s), vp - s);
+      emitTok(K_OP, 27, 0, 0);               // )
+      tmplOn = 0;
+      return vp + 1;
+    }
+    if (b === 36 && vAt(vp + 1) === 123) {   // ${
+      emitTok(K_STR, 0, vSrc(s), vp - s);
+      emitTok(K_OP, 17, 0, 0);               // +
+      emitTok(K_OP, 26, 0, 0);               // (
+      tmplBrace = 0;
+      return vp + 2;
+    }
+    if (b === 92) { vp = vp + 1; }
+    vp = vp + 1;
+  }
+}
+
 // ---- the tokenizer loop --------------------------------------------------
 function tokenize() {
   var vp = 0;
@@ -505,11 +537,26 @@ function tokenize() {
     vp = skipTrivia(vp);
     b = vAt(vp);
     if (b < 0) { break; }
-    if (isIdStart(b)) {
+    if (tmplOn) {
+      // Inside a ${ } hole: the brace that closes it is not an operator.
+      if (b === 125 && tmplBrace === 0) {
+        emitTok(K_OP, 27, 0, 0);             // )
+        emitTok(K_OP, 17, 0, 0);             // +
+        vp = tmplText(vp + 1);
+        continue;
+      }
+      if (b === 123) { tmplBrace = tmplBrace + 1; }
+      if (b === 125) { tmplBrace = tmplBrace - 1; }
+    }
+    if (b === 96) {                          // `template`
+      emitTok(K_OP, 26, 0, 0);               // (
+      tmplOn = 1;
+      vp = tmplText(vp + 1);
+    } else if (isIdStart(b)) {
       vp = scanIdent(vp);
     } else if (isDigit(b) || (b === 46 && isDigit(vAt(vp + 1)))) {
       vp = scanNum(vp);
-    } else if (b === 34 || b === 39 || b === 96) {
+    } else if (b === 34 || b === 39) {
       vp = scanStr(vp, b);
       if (vp < 0) { return ST_ERR_STR; }
     } else if (b === 47 && regexHere()) {
@@ -561,13 +608,30 @@ var GS_OFF = 0;
 var NAT_OFF = 0;
 var FN_OFF = 0;
 var IMG_OFF = 0;
+var PAL_OFF = 0;
+var FSTY_OFF = 0;
+var CLS_OFF = 0;
+var nPal = 0;
+var nFsty = 0;
+var nCls = 0;
+var clsW = 0;
+var hasArt = 0;
+var THIS_NI = -1;
+var ARG_NI = -1;
+var SW_NI = -1;
+var clsCtor = -1;
+var clsCtorAP = 0;
+var clsCtorBody = 0;
+var METH_N = 0;
+var FLD_N = 0;
 
 var OPS_MAX = 20480;
-var CREC_MAX = 6144;
+var CREC_MAX = 1024;
 var NAME_MAX = 1024;
 var BLOB_MAX = 16384;
-var GS_MAX = 6144;
+var GS_MAX = 2048;
 var FN_MAX = 128;
+var ART_KEEP = 376832;  // copy of CSTG_ART_OFF; tokens would overwrite 8192
 
 var nOps = 0;
 var nCrec = 0;
@@ -583,13 +647,15 @@ function layout() {
   IMG_OFF = TOK_OFF;                      // the image later overwrites tokens
   OPS_OFF = TOK_OFF + tokN * TOK_STRIDE;
   CREC_OFF = OPS_OFF + OPS_MAX * 4;
-  NIDX_OFF = CREC_OFF + CREC_MAX * 12;
+  NIDX_OFF = CREC_OFF + (CREC_MAX + 1) * 12;
   NBLOB_OFF = NIDX_OFF + NAME_MAX * 8;
   LOC_OFF = NBLOB_OFF + BLOB_MAX;
   FSET_OFF = LOC_OFF + 8192; // names any function declares
-  GS_OFF = FSET_OFF + 2048;
-  NAT_OFF = GS_OFF + GS_MAX * 8;
+  NAT_OFF = FSET_OFF + 2048;
   FN_OFF = NAT_OFF + 64 * 4;
+  CLS_OFF = FN_OFF + FN_MAX * 8;
+  PAL_OFF = CLS_OFF + 2048;
+  FSTY_OFF = PAL_OFF + 768;           // 4 bytes per row
 }
 
 // ---- opcodes -------------------------------------------------------------
@@ -625,6 +691,7 @@ var O_BOR = 31;
 var O_BAND = 32;
 var O_MKFN = 33;
 var O_CALLVAL = 34;
+var O_NEWOBJ = 29;
 
 function emit(op, a0, a1) {
   if (nOps >= OPS_MAX) { over = 1; return 0; }
@@ -771,6 +838,64 @@ function internStr(off, len) {
   return idx;
 }
 
+function internThis() {
+  var h = ((((95 * 31 + 95) % 65536) * 31 + 116) % 65536);
+  h = (((h * 31 + 104) % 65536) * 31 + 105) % 65536;
+  h = (h * 31 + 115) % 65536;
+  var i = 0;
+  while (i < nNames) {
+    if (nLen(i) === 6 && nHash(i) === h) { THIS_NI = i; return i; }
+    i = i + 1;
+  }
+  i = nameNew(6, h);
+  _gw(NBLOB_OFF + blobLen, 95);
+  _gw(NBLOB_OFF + blobLen + 1, 95);
+  _gw(NBLOB_OFF + blobLen + 2, 116);
+  _gw(NBLOB_OFF + blobLen + 3, 104);
+  _gw(NBLOB_OFF + blobLen + 4, 105);
+  _gw(NBLOB_OFF + blobLen + 5, 115);
+  blobLen = blobLen + 6;
+  THIS_NI = i;
+  return i;
+}
+
+function internArg() {
+  var h = ((((95 * 31 + 95) % 65536) * 31 + 97) % 65536);
+  h = (((h * 31 + 114) % 65536) * 31 + 103) % 65536;
+  var i = 0;
+  while (i < nNames) {
+    if (nLen(i) === 5 && nHash(i) === h) { ARG_NI = i; return i; }
+    i = i + 1;
+  }
+  i = nameNew(5, h);
+  _gw(NBLOB_OFF + blobLen, 95);
+  _gw(NBLOB_OFF + blobLen + 1, 95);
+  _gw(NBLOB_OFF + blobLen + 2, 97);
+  _gw(NBLOB_OFF + blobLen + 3, 114);
+  _gw(NBLOB_OFF + blobLen + 4, 103);
+  blobLen = blobLen + 5;
+  ARG_NI = i;
+  return i;
+}
+
+function internSw() {
+  var h = ((((95 * 31 + 95) % 65536) * 31 + 115) % 65536);
+  h = (h * 31 + 119) % 65536;
+  var i = 0;
+  while (i < nNames) {
+    if (nLen(i) === 4 && nHash(i) === h) { SW_NI = i; return i; }
+    i = i + 1;
+  }
+  i = nameNew(4, h);
+  _gw(NBLOB_OFF + blobLen, 95);
+  _gw(NBLOB_OFF + blobLen + 1, 95);
+  _gw(NBLOB_OFF + blobLen + 2, 115);
+  _gw(NBLOB_OFF + blobLen + 3, 119);
+  blobLen = blobLen + 4;
+  SW_NI = i;
+  return i;
+}
+
 // ---- native lookup -------------------------------------------------------
 // (hash, length) pairs generated from jsb_format.NATIVE_IDS. No collisions
 // across the 52 entries. A name the program declares itself always wins, so
@@ -850,6 +975,33 @@ function fnFind(ni) {
 }
 
 function fnEntry(i) { return _r16(FN_OFF + i * 8 + 2); }
+
+// `new Foo()` when Foo is a function (PACFAST Item/Map/Stage/Game), not an
+// ES6 class: the host registers the function's entry as the class ctor so
+// NEW_OBJ can find it. Unknown names get a ctor-less stub (0xFFFF).
+function ensureFnClass(ni) {
+  var i = 0;
+  var k = CLS_OFF + 2;
+  var b = 0;
+  var fi = 0;
+  var ctor = 65535;
+  while (i < nCls) {
+    if (_r16(k) === ni) { return; }
+    b = _r16(k + 4);
+    k = k + 6 + b * 4;
+    i = i + 1;
+  }
+  fi = fnFind(ni);
+  // fnAdd plants entry 0 until compileFn writes the real IP. A ctor of 0
+  // is CALL_USER 0: re-enter IP 0 (host: do not plant functions[foo]=(0,[])).
+  if (fi >= 0) { ctor = fnEntry(fi); }
+  if (ctor === 0) { ctor = 65535; }
+  _w16(clsW, ni);
+  _w16(clsW + 2, ctor);
+  _w16(clsW + 4, 0);
+  clsW = clsW + 6;
+  nCls = nCls + 1;
+}
 
 // ---- locals and scopes ---------------------------------------------------
 // Frames stack, because function expressions nest: a callback declared
@@ -971,45 +1123,68 @@ function gsResolveAll() {
   }
 }
 
-// ---- const records -------------------------------------------------------
-// One record per literal OCCURRENCE, in emission order. The assembler folds
-// duplicates; folding here would reorder the pool relative to the host.
+// Unique literals only — PACFAST had thousands of occurrence-slots of
+// `0` and `1`, which blew CREC_MAX. The assembler still folds into the
+// pool; emitting uniques first just means CREC_MAX can equal the 1024
+// pool wall. GS lives in the leftover after LC, sized from ART_KEEP.
 var CK_NUM = 0;
 var CK_STR = 1;
 var CK_NONE = 2;
 
-function crecNum(off, len) {
-  if (nCrec >= CREC_MAX) { over = 1; return 0; }
+function crecSame(a, b) {
+  var k = 0;
+  while (k < 12) {
+    if (_gr(a + k) !== _gr(b + k)) { return 0; }
+    k = k + 1;
+  }
+  return 1;
+}
+
+function crecCommit() {
+  var i = 0;
   var o = CREC_OFF + nCrec * 12;
-  _gw(o, CK_NUM);
-  w64(o + 4, numAt(off, len));
+  while (i < nCrec) {
+    if (crecSame(CREC_OFF + i * 12, o)) { return i; }
+    i = i + 1;
+  }
+  if (nCrec >= CREC_MAX) { over = 1; return 0; }
   nCrec = nCrec + 1;
   return nCrec - 1;
+}
+
+function crecNum(off, len) {
+  var o = CREC_OFF + nCrec * 12;
+  var k = 0;
+  while (k < 12) { _gw(o + k, 0); k = k + 1; }
+  _gw(o, CK_NUM);
+  w64(o + 4, numAt(off, len));
+  return crecCommit();
 }
 
 function crecVal(v) {
-  if (nCrec >= CREC_MAX) { over = 1; return 0; }
   var o = CREC_OFF + nCrec * 12;
+  var k = 0;
+  while (k < 12) { _gw(o + k, 0); k = k + 1; }
   _gw(o, CK_NUM);
   w64(o + 4, v);
-  nCrec = nCrec + 1;
-  return nCrec - 1;
+  return crecCommit();
 }
 
 function crecStr(ni) {
-  if (nCrec >= CREC_MAX) { over = 1; return 0; }
   var o = CREC_OFF + nCrec * 12;
+  var k = 0;
+  while (k < 12) { _gw(o + k, 0); k = k + 1; }
   _gw(o, CK_STR);
   _w16(o + 1, ni);
-  nCrec = nCrec + 1;
-  return nCrec - 1;
+  return crecCommit();
 }
 
 function crecNone() {
-  if (nCrec >= CREC_MAX) { over = 1; return 0; }
-  _gw(CREC_OFF + nCrec * 12, CK_NONE);
-  nCrec = nCrec + 1;
-  return nCrec - 1;
+  var o = CREC_OFF + nCrec * 12;
+  var k = 0;
+  while (k < 12) { _gw(o + k, 0); k = k + 1; }
+  _gw(o, CK_NONE);
+  return crecCommit();
 }
 
 // ---- token cursor --------------------------------------------------------
@@ -1089,15 +1264,13 @@ function argList() {
 
 // A bare call: native if the table knows the name and the program did not
 // declare it, a user function if it did, else a call on a value.
+// User calls stay CALLN (name index) until rewriteOps: compileAllFns is
+// sequential, so a forward `rebuildPath()` still has fnEntry 0. CALL_USER 0
+// re-enters IP 0 and re-runs top-level (FLDF makeLong ×13). Host never
+// plants functions[foo]=(0,[]) for the same reason; encode rewrites CALLN.
 function bareCall(ni) {
-  var fi = fnFind(ni);
   var argc = 0;
-  if (fi >= 0) {
-    argc = argList();
-    emit(O_CALLU, fnEntry(fi), argc);
-    return;
-  }
-  if (natIdOf(ni) >= 0) {
+  if (fnFind(ni) >= 0 || natIdOf(ni) >= 0) {
     argc = argList();
     emit(O_CALLN, ni, argc);
     return;
@@ -1110,6 +1283,7 @@ function bareCall(ni) {
 function primary() {
   var k = tKind(ti);
   var ni = 0;
+  var o = 0;
   lvKind = 0;
   if (k === K_NUM) { emit(O_LOADC, crecNum(tOff(ti), tLen(ti)), 0); ti = ti + 1; return; }
   if (k === K_STR) { emit(O_LOADC, crecStr(internStr(tOff(ti), tLen(ti))), 0); ti = ti + 1; return; }
@@ -1124,14 +1298,59 @@ function primary() {
       lvKind = 0;
       return;
     }
+    if (tSub(ti) === 11) {                       // new Foo(...)
+      ti = ti + 1;
+      if (tKind(ti) === K_ID) {
+        ni = internSrc(tOff(ti), tLen(ti));
+        ti = ti + 1;
+        // `new Date()` / `new Image()` are natives with their own ids; any
+        // other constructor is a real NEW_OBJ against the class name.
+        if (natIdOf(ni) >= 0) { emit(O_CALLN, ni, argList()); }
+        else { ensureFnClass(ni); emit(O_NEWOBJ, ni, argList()); }
+        lvKind = 0;
+        return;
+      }
+      if (perr === 0) { perr = ti + 1; }
+      return;
+    }
     if (tSub(ti) === 12) {                       // typeof x
       ti = ti + 1;
       unary();
       emit(O_CALLN, internSrcLit(0), 1);
       return;
     }
+    if (tSub(ti) === 14) {                       // this → __this
+      emit(O_LOADV, internThis(), 0);
+      ti = ti + 1;
+      lvKind = 1;
+      lvName = THIS_NI;
+      return;
+    }
+  }
+  if (k === K_ID && isOp(ti + 1, 10)) {          // x => ...
+    arrowLiteral(1);
+    lvKind = 0;
+    return;
+  }
+  if (isOp(ti, 26) && arrowAhead()) {             // (a, b) => ...
+    arrowLiteral(0);
+    lvKind = 0;
+    return;
   }
   if (k === K_ID) {
+    // Host folds Math.PI (no call) to LOAD_CONST. GET_PROP on undefined Math
+    // is None, and PACFAST stroke/arc dies on that.
+    if (isOp(ti + 1, 33) && tKind(ti + 2) === K_ID && !isOp(ti + 3, 26)
+        && tLen(ti) === 4 && tLen(ti + 2) === 2) {
+      o = tOff(ti);
+      if (_sb(o) === 77 && _sb(o + 1) === 97 && _sb(o + 2) === 116 && _sb(o + 3) === 104
+          && _sb(tOff(ti + 2)) === 80 && _sb(tOff(ti + 2) + 1) === 73) {
+        emit(O_LOADC, crecVal(Math.PI), 0);
+        ti = ti + 3;
+        lvKind = 0;
+        return;
+      }
+    }
     // A dotted native (document.querySelector, Math.floor) is ONE name, not
     // a property load. Probe by hash first so a plain method call like
     // c.fillRect never leaves "c.fillRect" behind in the name table.
@@ -1173,12 +1392,17 @@ function primary() {
       if (tKind(ti) === K_STR) { ni = internStr(tOff(ti), tLen(ti)); }
       else { ni = internSrc(tOff(ti), tLen(ti)); }
       ti = ti + 1;
-      eatOp(29);
       // SET_PROP consumes the object, so each field needs its own copy or
       // the literal evaporates after the first key.
       //   [obj] DUP [obj,obj] value [obj,obj,v] SET_PROP [obj,v] POP [obj]
       emit(O_DUP, 0, 0);
-      expr();
+      if (isOp(ti, 29)) {
+        ti = ti + 1;
+        expr();
+      } else {
+        // shorthand `{ score }` is `{ score: score }`
+        loadVar(ni);
+      }
       emit(O_SETP, ni, 0);
       emit(O_POP, 0, 0);
       if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
@@ -1200,18 +1424,33 @@ function internSrcLit(which) {
 function postfix() {
   primary();
   var ni = 0;
+  var jf = 0;
+  var opt = 0;
   while (1) {
-    if (isOp(ti, 33) && (tKind(ti + 1) === K_ID || tKind(ti + 1) === K_KEY)) {
+    if ((isOp(ti, 33) || isOp(ti, 11))
+        && (tKind(ti + 1) === K_ID || tKind(ti + 1) === K_KEY)) {
+      // `a?.b` — JUMP_IF_FALSE consumes the test, so DUP first and let the
+      // falsy value itself stand as the result, which is what the host does.
+      opt = isOp(ti, 11);
+      jf = 0;
+      if (opt) {
+        emit(O_DUP, 0, 0);
+        jf = emit(O_JF, 0, 0);
+      }
       ni = internSrc(tOff(ti + 1), tLen(ti + 1));
       if (isOp(ti + 2, 26)) {                    // o.m(args)
         ti = ti + 2;
         emit(O_CALLM, ni, argList());
+        if (opt) { patchA0(jf, nOps); }
         lvKind = 0;
         continue;
       }
       ti = ti + 2;
-      if (isAssignAhead()) { lvKind = 2; lvName = ni; return; }
+      // NOT `opt === 0`: isOp() yields a BOOLEAN and `false === 0` is false
+      // in JS, so that form silently skipped every property assignment.
+      if (isAssignAhead() && !opt) { lvKind = 2; lvName = ni; return; }
       emit(O_GETP, ni, 0);
+      if (opt) { patchA0(jf, nOps); }
       lvKind = 0;
       continue;
     }
@@ -1286,111 +1525,72 @@ function unary() {
   else if (lvKind === 3 && !isAssignAhead()) { emit(O_AGET, 0, 0); lvKind = 0; }
 }
 
-function mulE() {
-  unary();
-  while (isOp(ti, 19) || isOp(ti, 20) || isOp(ti, 21)) {
-    var s = tSub(ti);
-    ti = ti + 1;
-    unary();
-    if (s === 19) { emit(O_MUL, 0, 0); } else if (s === 20) { emit(O_DIV, 0, 0); } else { emit(O_MOD, 0, 0); }
-    lvKind = 0;
-  }
+// Pratt climb for every binop through ternary. The old 10-function chain
+// (mulE…ternE) sat 10 frames on CSTK for EVERY leaf; INVA's nested
+// forEach/setTimeout arrows and PACFAST's Game body overflowed 128.
+// opPrec returns 0 for anything that is not a binary operator.
+function opPrec(s) {
+  if (s === 19 || s === 20 || s === 21) { return 9; }
+  if (s === 17 || s === 18) { return 8; }
+  if (s === 22 || s === 23 || s === 4 || s === 5) { return 7; }
+  if (s === 0 || s === 1 || s === 2 || s === 3) { return 6; }
+  if (s === 37) { return 5; }
+  if (s === 36) { return 4; }
+  if (s === 6) { return 3; }
+  if (s === 7) { return 2; }
+  if (s === 38) { return 1; }
+  return 0;
 }
 
-function addE() {
-  mulE();
-  while (isOp(ti, 17) || isOp(ti, 18)) {
-    var s = tSub(ti);
-    ti = ti + 1;
-    mulE();
-    emit(s === 17 ? O_ADD : O_SUB, 0, 0);
-    lvKind = 0;
-  }
-}
-
-function cmpE() {
-  addE();
-  while (isOp(ti, 22) || isOp(ti, 23) || isOp(ti, 4) || isOp(ti, 5)) {
-    var s = tSub(ti);
-    ti = ti + 1;
-    addE();
-    if (s === 22) { emit(O_LT, 0, 0); }
-    else if (s === 23) { emit(O_GT, 0, 0); }
-    else if (s === 4) { emit(O_GT, 0, 0); emit(O_NOT, 0, 0); }
-    else { emit(O_LT, 0, 0); emit(O_NOT, 0, 0); }
-    lvKind = 0;
-  }
-}
-
-function eqE() {
-  cmpE();
-  while (isOp(ti, 0) || isOp(ti, 1) || isOp(ti, 2) || isOp(ti, 3)) {
-    var s = tSub(ti);
-    ti = ti + 1;
-    cmpE();
-    emit(O_EQ, 0, 0);
-    if (s === 1 || s === 3) { emit(O_NOT, 0, 0); }
-    lvKind = 0;
-  }
-}
-
-function bandE() {
-  eqE();
-  while (isOp(ti, 37)) { ti = ti + 1; eqE(); emit(O_BAND, 0, 0); lvKind = 0; }
-}
-
-function borE() {
-  bandE();
-  while (isOp(ti, 36)) { ti = ti + 1; bandE(); emit(O_BOR, 0, 0); lvKind = 0; }
-}
-
-// && and || keep the tested value on the stack when they short-circuit, so
-// the skipped branch must not leave a second one behind.
-// JUMP_IF_FALSE CONSUMES its operand, so the value a short-circuit has to
-// keep must be duplicated first. Without the DUP, the taken branch underflows
-// and the untaken one loses the result.
-function andE() {
-  borE();
-  var j = 0;
-  while (isOp(ti, 6)) {
-    ti = ti + 1;
-    emit(O_DUP, 0, 0);
-    j = emit(O_JF, 0, 0);
-    emit(O_POP, 0, 0);
-    borE();
-    patchA0(j, nOps);
-    lvKind = 0;
-  }
-}
-
-function orE() {
-  andE();
+function exprP(minP) {
+  var s = 0;
+  var p = 0;
   var j = 0;
   var k = 0;
-  while (isOp(ti, 7)) {
+  unary();
+  while (tKind(ti) === K_OP) {
+    s = tSub(ti);
+    p = opPrec(s);
+    if (p < minP || p === 0) { break; }
     ti = ti + 1;
-    emit(O_DUP, 0, 0);
-    j = emit(O_JF, 0, 0);
-    k = emit(O_JUMP, 0, 0);
-    patchA0(j, nOps);
-    emit(O_POP, 0, 0);
-    andE();
-    patchA0(k, nOps);
-    lvKind = 0;
-  }
-}
-
-function ternE() {
-  orE();
-  if (isOp(ti, 38)) {
-    ti = ti + 1;
-    var j = emit(O_JF, 0, 0);
-    expr();
-    var k = emit(O_JUMP, 0, 0);
-    patchA0(j, nOps);
-    eatOp(29);
-    expr();
-    patchA0(k, nOps);
+    if (s === 6) {
+      emit(O_DUP, 0, 0);
+      j = emit(O_JF, 0, 0);
+      emit(O_POP, 0, 0);
+      exprP(p + 1);
+      patchA0(j, nOps);
+    } else if (s === 7) {
+      emit(O_DUP, 0, 0);
+      j = emit(O_JF, 0, 0);
+      k = emit(O_JUMP, 0, 0);
+      patchA0(j, nOps);
+      emit(O_POP, 0, 0);
+      exprP(p + 1);
+      patchA0(k, nOps);
+    } else if (s === 38) {
+      j = emit(O_JF, 0, 0);
+      exprP(1);
+      k = emit(O_JUMP, 0, 0);
+      patchA0(j, nOps);
+      eatOp(29);
+      exprP(1);
+      patchA0(k, nOps);
+    } else {
+      exprP(p + 1);
+      if (s === 19) { emit(O_MUL, 0, 0); }
+      else if (s === 20) { emit(O_DIV, 0, 0); }
+      else if (s === 21) { emit(O_MOD, 0, 0); }
+      else if (s === 17) { emit(O_ADD, 0, 0); }
+      else if (s === 18) { emit(O_SUB, 0, 0); }
+      else if (s === 22) { emit(O_LT, 0, 0); }
+      else if (s === 23) { emit(O_GT, 0, 0); }
+      else if (s === 4) { emit(O_GT, 0, 0); emit(O_NOT, 0, 0); }
+      else if (s === 5) { emit(O_LT, 0, 0); emit(O_NOT, 0, 0); }
+      else if (s === 0 || s === 2) { emit(O_EQ, 0, 0); }
+      else if (s === 1 || s === 3) { emit(O_EQ, 0, 0); emit(O_NOT, 0, 0); }
+      else if (s === 37) { emit(O_BAND, 0, 0); }
+      else { emit(O_BOR, 0, 0); }
+    }
     lvKind = 0;
   }
 }
@@ -1405,7 +1605,7 @@ function emitBinOp(s) {
 
 // Assignment. Compound forms re-read the target, so `x += e` is `x = x + e`.
 function expr() {
-  ternE();
+  exprP(1);
   var k = lvKind;
   var nm = lvName;
   var lo = lvOp;
@@ -1452,6 +1652,15 @@ var BRK_OFF = 0;
 var nBrk = 0;
 var nCont = 0;
 
+function exprComma() {
+  expr();
+  while (isOp(ti, 32)) {
+    emit(O_POP, 0, 0);
+    ti = ti + 1;
+    expr();
+  }
+}
+
 function stmt() {
   var k = 0;
   var ni = 0;
@@ -1469,6 +1678,7 @@ function stmt() {
     k = tSub(ti);
     if (k === 0 || k === 1 || k === 2) { varDecl(); return; }
     if (k === 3) { skipFn(); return; }                   // already emitted
+    if (k === 13) { skipFn(); return; }                  // class, already emitted
     if (k === 5) { ifStmt(); return; }
     if (k === 7) { whileStmt(); return; }
     if (k === 8) { forStmt(); return; }
@@ -1500,6 +1710,7 @@ function stmt() {
       if (isOp(ti, 28)) { ti = ti + 1; }
       return;
     }
+    if (k === 19) { switchStmt(); return; }              // switch
     if (k === 9) {                                       // break
       ti = ti + 1;
       if (isOp(ti, 28)) { ti = ti + 1; }
@@ -1513,9 +1724,55 @@ function stmt() {
       return;
     }
   }
-  expr();
+  exprComma();
   emit(O_POP, 0, 0);
   if (isOp(ti, 28)) { ti = ti + 1; }
+}
+
+// switch(disc){ case a: case b: stmts; break; default: ... }
+// Same grouping as the host: consecutive case labels OR together, then a
+// JUMP_IF_FALSE over the body; break lands at the closing brace.
+function switchStmt() {
+  var b0 = 0;
+  var first = 0;
+  var skip = 0;
+  ti = ti + 1;
+  eatOp(26);
+  expr();
+  eatOp(27);
+  internSw();
+  emit(O_STOREV, SW_NI, 1);
+  eatOp(30);
+  b0 = nBrk;
+  while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) {
+    if (isKw(ti, 20)) {
+      first = 1;
+      while (isKw(ti, 20) && perr === 0) {
+        ti = ti + 1;
+        emit(O_LOADV, SW_NI, 1);
+        expr();
+        eatOp(29);
+        emit(O_EQ, 0, 0);
+        if (first === 0) { emit(O_BOR, 0, 0); }
+        first = 0;
+      }
+      skip = emit(O_JF, 0, 0);
+      while (!isKw(ti, 20) && !isKw(ti, 21) && !isOp(ti, 31)
+          && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
+      brkAdd(emit(O_JUMP, 0, 0), 0);
+      patchA0(skip, nOps);
+    } else if (isKw(ti, 21)) {
+      ti = ti + 1;
+      eatOp(29);
+      while (!isKw(ti, 20) && !isKw(ti, 21) && !isOp(ti, 31)
+          && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
+    } else {
+      if (perr === 0) { perr = ti + 1; }
+      return;
+    }
+  }
+  eatOp(31);
+  brkPatch(b0, nOps, nOps);
 }
 
 // Skip one statement or balanced block without emitting anything.
@@ -1595,7 +1852,7 @@ function forStmt() {
   eatOp(26);
   if (!isOp(ti, 28)) {
     if (tKind(ti) === K_KEY && tSub(ti) <= 2) { varDecl(); }
-    else { expr(); emit(O_POP, 0, 0); if (isOp(ti, 28)) { ti = ti + 1; } }
+    else { exprComma(); emit(O_POP, 0, 0); if (isOp(ti, 28)) { ti = ti + 1; } }
   } else { ti = ti + 1; }
   var top = nOps;
   var b0 = nBrk;
@@ -1618,7 +1875,7 @@ function forStmt() {
   if (stepTi !== bodyTi) {
     var save = ti;
     ti = stepTi;
-    expr();
+    exprComma();
     emit(O_POP, 0, 0);
     ti = save;
   }
@@ -1650,11 +1907,24 @@ function brkPatch(base, endTarget, contTarget) {
   nBrk = base;
 }
 
-// Skip a function declaration at the top level — its body was already emitted.
+// Skip a function or class declaration whose body was already emitted.
+// Functions: skip the param list first so a destructure `{ a, b }` is not
+// taken as the body (host `_skip_function_decl`). Classes have no params
+// and fall through to the brace walk (host `_skip_class_decl`).
 function skipFn() {
   ti = ti + 1;
   if (tKind(ti) === K_ID) { ti = ti + 1; }
   var depth = 0;
+  var pd = 0;
+  if (isOp(ti, 26)) {
+    pd = 1;
+    ti = ti + 1;
+    while (pd && tKind(ti) !== K_EOF) {
+      if (isOp(ti, 26)) { pd = pd + 1; }
+      if (isOp(ti, 27)) { pd = pd - 1; }
+      ti = ti + 1;
+    }
+  }
   while (tKind(ti) !== K_EOF) {
     if (isOp(ti, 30)) { depth = depth + 1; }
     if (isOp(ti, 31)) { depth = depth - 1; ti = ti + 1; if (depth <= 0) { return; } continue; }
@@ -1678,22 +1948,76 @@ function prescanFns() {
   }
 }
 
-function bindParams(p0, np) {
-  var i = np;
-  var k = 0;
+function skipPat(t) {
+  var d = 0;
+  if (isOp(t, 30)) {
+    d = 1;
+    t = t + 1;
+    while (d && tKind(t) !== K_EOF) {
+      if (isOp(t, 30)) { d = d + 1; }
+      if (isOp(t, 31)) { d = d - 1; }
+      t = t + 1;
+    }
+    return t;
+  }
+  return t + 1;
+}
+
+function scanParams() {
+  var np = 0;
+  while (!isOp(ti, 27) && tKind(ti) !== K_EOF) {
+    if (isOp(ti, 30) || tKind(ti) === K_ID) {
+      ti = skipPat(ti);
+      np = np + 1;
+      if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
+    } else { break; }
+  }
+  return np;
+}
+
+function bindOne(t) {
   var pn = 0;
-  var save = ti;
-  // Reverse order: the last argument is on top of the stack when the frame
-  // is entered, so the last parameter binds first.
-  while (i > 0) {
-    i = i - 1;
-    ti = p0;
-    k = 0;
-    while (k < i) { ti = ti + 2; k = k + 1; }
-    pn = internSrc(tOff(ti), tLen(ti));
+  if (isOp(t, 30)) {
+    internArg();
+    locAdd(ARG_NI);
+    declAdd(ARG_NI);
+    emit(O_LETV, ARG_NI, 1 + ((locFind(ARG_NI) & 31) + 1) * 2);
+    t = t + 1;
+    while (!isOp(t, 31) && tKind(t) !== K_EOF) {
+      if (tKind(t) === K_ID) {
+        pn = internSrc(tOff(t), tLen(t));
+        locAdd(pn);
+        declAdd(pn);
+        emit(O_LOADV, ARG_NI, 0);
+        emit(O_GETP, pn, 0);
+        emit(O_LETV, pn, 1 + ((locFind(pn) & 31) + 1) * 2);
+      }
+      t = t + 1;
+      if (isOp(t, 32)) { t = t + 1; }
+    }
+  } else {
+    pn = internSrc(tOff(t), tLen(t));
     locAdd(pn);
     declAdd(pn);
     emit(O_LETV, pn, 1 + ((locFind(pn) & 31) + 1) * 2);
+  }
+}
+
+function bindParams(p0, np) {
+  var i = np;
+  var t = 0;
+  var k = 0;
+  var save = ti;
+  while (i > 0) {
+    i = i - 1;
+    t = p0;
+    k = 0;
+    while (k < i) {
+      t = skipPat(t);
+      if (isOp(t, 32)) { t = t + 1; }
+      k = k + 1;
+    }
+    bindOne(t);
   }
   ti = save;
 }
@@ -1712,11 +2036,7 @@ function fnLiteral() {
   var pNDecl = nDecl;
   eatOp(26);
   p0 = ti;
-  while (tKind(ti) === K_ID) {
-    ti = ti + 1;
-    np = np + 1;
-    if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
-  }
+  np = scanParams();
   eatOp(27);
   locBase = locBase + nLoc;
   declBase = declBase + nDecl;
@@ -1737,6 +2057,69 @@ function fnLiteral() {
   patchA0(jmp, nOps);
   emit(O_MKFN, entry, np);
   return entry;
+}
+
+// Is the '(' at ti the start of an arrow parameter list rather than a
+// parenthesised expression? Only the token after the matching ')' says so.
+function arrowAhead() {
+  var i = ti + 1;
+  var d = 0;
+  while (tKind(i) !== K_EOF) {
+    if (isOp(i, 26)) {
+      d = d + 1;
+    } else if (isOp(i, 27)) {
+      if (d === 0) { return isOp(i + 1, 10); }
+      d = d - 1;
+    }
+    i = i + 1;
+  }
+  return 0;
+}
+
+// `x => e`, `(a, b) => e`, `(a, b) => { ... }`. Same shape as a function
+// literal; an expression body is an implicit return.
+function arrowLiteral(single) {
+  var jmp = emit(O_JUMP, 0, 0);
+  var entry = nOps;
+  var np = 0;
+  var p0 = 0;
+  var pLoc = locBase;
+  var pNLoc = nLoc;
+  var pDecl = declBase;
+  var pNDecl = nDecl;
+  if (single) {
+    p0 = ti;
+    np = 1;
+    ti = ti + 1;
+  } else {
+    eatOp(26);
+    p0 = ti;
+    np = scanParams();
+    eatOp(27);
+  }
+  eatOp(10);
+  locBase = locBase + nLoc;
+  declBase = declBase + nDecl;
+  nLoc = 0;
+  nDecl = 0;
+  inFn = inFn + 1;
+  bindParams(p0, np);
+  if (isOp(ti, 30)) {
+    ti = ti + 1;
+    while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
+    eatOp(31);
+    emit(O_LOADC, crecNone(), 0);
+  } else {
+    expr();
+  }
+  emit(O_RETV, 0, 0);
+  inFn = inFn - 1;
+  locBase = pLoc;
+  nLoc = pNLoc;
+  declBase = pDecl;
+  nDecl = pNDecl;
+  patchA0(jmp, nOps);
+  emit(O_MKFN, entry, np + 128);
 }
 
 function compileFn() {
@@ -1777,8 +2160,201 @@ function unwrapIife() {
   return i + 1;
 }
 
+function isGetId(i) {
+  if (tKind(i) !== K_ID || tLen(i) !== 3) { return 0; }
+  var o = tOff(i);
+  return (_sb(o) === 103 && _sb(o + 1) === 101 && _sb(o + 2) === 116) ? 1 : 0;
+}
+
+function isSetId(i) {
+  if (tKind(i) !== K_ID || tLen(i) !== 3) { return 0; }
+  var o = tOff(i);
+  return (_sb(o) === 115 && _sb(o + 1) === 101 && _sb(o + 2) === 116) ? 1 : 0;
+}
+
+function isCtorId(i) {
+  if (tKind(i) !== K_ID || tLen(i) !== 11) { return 0; }
+  var o = tOff(i);
+  return (_sb(o) === 99 && _sb(o + 1) === 111 && _sb(o + 2) === 110) ? 1 : 0;
+}
+
+function methAdd(ni, en, isG) {
+  var o = CLS_OFF + 1024 + METH_N * 6;
+  if (isG) { ni = ni + 32768; }
+  _w16(o, ni);
+  _w16(o + 2, en);
+  METH_N = METH_N + 1;
+}
+
+function fldAdd(ni, en, np) {
+  var o = CLS_OFF + 1536 + FLD_N * 8;
+  _w16(o, ni);
+  _w16(o + 2, en);
+  _gw(o + 4, np);
+  FLD_N = FLD_N + 1;
+}
+
+function classField(ni) {
+  var entry = 0;
+  var np = 0;
+  if (tKind(ti) === K_ID && isOp(ti + 1, 10)) { arrowLiteral(1); }
+  else if (isOp(ti, 26) && arrowAhead()) { arrowLiteral(0); }
+  else { expr(); emit(O_POP, 0, 0); return; }
+  nOps = nOps - 1;
+  entry = opA0(nOps);
+  np = opA1(nOps);
+  patchA0(entry - 1, nOps);
+  fldAdd(ni, entry, np);
+}
+
+function classMeth(isC, isG, ni) {
+  var jmp = emit(O_JUMP, 0, 0);
+  var entry = nOps;
+  var np = 0;
+  var p0 = 0;
+  var pLoc = locBase;
+  var pNLoc = nLoc;
+  var pDecl = declBase;
+  var pNDecl = nDecl;
+  var ap = 0;
+  var body = 0;
+  eatOp(26);
+  p0 = ti;
+  np = scanParams();
+  eatOp(27);
+  locBase = locBase + nLoc;
+  declBase = declBase + nDecl;
+  nLoc = 0;
+  nDecl = 0;
+  inFn = inFn + 1;
+  bindParams(p0, np);
+  ap = emit(O_JUMP, 0, 0);
+  body = nOps;
+  eatOp(30);
+  while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
+  eatOp(31);
+  emit(O_LOADC, crecNone(), 0);
+  emit(O_RETV, 0, 0);
+  inFn = inFn - 1;
+  locBase = pLoc;
+  nLoc = pNLoc;
+  declBase = pDecl;
+  nDecl = pNDecl;
+  patchA0(jmp, nOps);
+  patchA0(ap, body);
+  if (isC) {
+    clsCtor = entry;
+    clsCtorAP = ap;
+    clsCtorBody = body;
+  } else {
+    methAdd(ni, entry, isG);
+  }
+}
+
+function classMember() {
+  var isG = 0;
+  var isC = 0;
+  var ni = 0;
+  if (isGetId(ti) && tKind(ti + 1) === K_ID && isOp(ti + 2, 26)) {
+    isG = 1;
+    ti = ti + 1;
+  } else if (isSetId(ti) && tKind(ti + 1) === K_ID && isOp(ti + 2, 26)) {
+    ti = ti + 1;
+  }
+  if (tKind(ti) !== K_ID) { if (perr === 0) { perr = ti + 1; } return; }
+  ni = internSrc(tOff(ti), tLen(ti));
+  isC = isCtorId(ti);
+  ti = ti + 1;
+  if (isOp(ti, 24)) {
+    ti = ti + 1;
+    classField(ni);
+    if (isOp(ti, 28)) { ti = ti + 1; }
+    return;
+  }
+  classMeth(isC, isG, ni);
+}
+
+function classFinish(cname) {
+  var i = 0;
+  var o = 0;
+  var fi = 0;
+  var jmp = 0;
+  if (FLD_N && clsCtor >= 0) {
+    jmp = emit(O_JUMP, 0, 0);
+    fi = nOps;
+    while (i < FLD_N) {
+      o = CLS_OFF + 1536 + i * 8;
+      emit(O_LOADV, THIS_NI, 0);
+      emit(O_MKFN, _r16(o + 2), _gr(o + 4));
+      emit(O_SETP, _r16(o), 0);
+      emit(O_POP, 0, 0);
+      i = i + 1;
+    }
+    emit(O_JUMP, clsCtorBody, 0);
+    patchA0(jmp, nOps);
+    patchA0(clsCtorAP, fi);
+  }
+  if (clsCtor < 0) {
+    jmp = emit(O_JUMP, 0, 0);
+    clsCtor = nOps;
+    emit(O_LOADC, crecNone(), 0);
+    emit(O_RETV, 0, 0);
+    patchA0(jmp, nOps);
+  }
+  _w16(clsW, cname);
+  _w16(clsW + 2, clsCtor);
+  _w16(clsW + 4, METH_N);
+  clsW = clsW + 6;
+  i = 0;
+  while (i < METH_N) {
+    o = CLS_OFF + 1024 + i * 6;
+    _w16(clsW, _r16(o));
+    _w16(clsW + 2, _r16(o + 2));
+    clsW = clsW + 4;
+    i = i + 1;
+  }
+  nCls = nCls + 1;
+}
+
+function compileClass() {
+  var cname = 0;
+  ti = ti + 1;
+  cname = internSrc(tOff(ti), tLen(ti));
+  ti = ti + 1;
+  eatOp(30);
+  clsCtor = -1;
+  METH_N = 0;
+  FLD_N = 0;
+  internThis();
+  while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { classMember(); }
+  eatOp(31);
+  classFinish(cname);
+}
+
+function compileAllClasses() {
+  var i = 0;
+  var save = ti;
+  clsW = CLS_OFF + 2;
+  nCls = 0;
+  internThis();
+  while (tKind(i) !== K_EOF && perr === 0) {
+    if (isKw(i, 13) && tKind(i + 1) === K_ID) {
+      ti = i;
+      compileClass();
+      i = ti;
+    } else {
+      i = i + 1;
+    }
+  }
+  ti = save;
+  _w16(CLS_OFF, nCls);
+}
+
 function parse() {
+  internThis();
+  internArg();
   prescanFns();
+  compileAllClasses();
   compileAllFns();
   ti = unwrapIife();
   if (ti > 0) {
@@ -1886,6 +2462,24 @@ function rewriteOps() {
   var a0 = 0;
   var nid = 0;
   var fi = 0;
+  var k = CLS_OFF + 2;
+  var b = 0;
+  // Class rows from `new Foo` during compileFn still have ctor 0xFFFF
+  // (entry was 0). Fill the real IP now that every body exists.
+  while (i < nCls) {
+    a0 = _r16(k + 2);
+    if (a0 === 0 || a0 === 65535) {
+      fi = fnFind(_r16(k));
+      if (fi >= 0) {
+        nid = fnEntry(fi);
+        if (nid !== 0) { _w16(k + 2, nid); }
+      }
+    }
+    b = _r16(k + 4);
+    k = k + 6 + b * 4;
+    i = i + 1;
+  }
+  i = 0;
   while (i < nOps) {
     c = opCode(i);
     a0 = opA0(i);
@@ -1908,11 +2502,178 @@ function rewriteOps() {
   }
 }
 
+// ---- colours -------------------------------------------------------------
+// The RTL does NOT parse colour strings. It resolves ctx.fillStyle through
+// the FSTY table the compiler emits (name index -> palette index) and paints
+// index 1 — WHITE — for anything it cannot find. So an image without FSTY
+// draws every rectangle white on real hardware while looking perfect on the
+// Python model, which parses the string itself. Emit the table.
+function hexOf(b) {
+  if (b >= 48 && b <= 57) { return b - 48; }
+  if (b >= 97 && b <= 102) { return b - 87; }
+  if (b >= 65 && b <= 70) { return b - 55; }
+  return -1;
+}
+
+// "#rgb" / "#rrggbb" -> r*65536 + g*256 + b, or -1 when not a colour.
+function colorOf(ni) {
+  var o = NBLOB_OFF + nBlob(ni);
+  var n = nLen(ni);
+  var a = 0;
+  var b = 0;
+  var c = 0;
+  var d = 0;
+  var e = 0;
+  var f = 0;
+  if (_gr(o) !== 35) { return -1; }
+  if (n === 4) {
+    a = hexOf(_gr(o + 1)); b = hexOf(_gr(o + 2)); c = hexOf(_gr(o + 3));
+    if (a < 0 || b < 0 || c < 0) { return -1; }
+    return (a * 17) * 65536 + (b * 17) * 256 + (c * 17);
+  }
+  if (n === 7) {
+    a = hexOf(_gr(o + 1)); b = hexOf(_gr(o + 2)); c = hexOf(_gr(o + 3));
+    d = hexOf(_gr(o + 4)); e = hexOf(_gr(o + 5)); f = hexOf(_gr(o + 6));
+    if (a < 0 || b < 0 || c < 0 || d < 0 || e < 0 || f < 0) { return -1; }
+    return (a * 16 + b) * 65536 + (c * 16 + d) * 256 + (e * 16 + f);
+  }
+  return namedRgb(o, n);
+}
+
+function namedRgb(o, n) {
+  var a = _gr(o);
+  if (n === 5 && a === 119 && _gr(o + 1) === 104 && _gr(o + 2) === 105
+      && _gr(o + 3) === 116 && _gr(o + 4) === 101) { return 16777215; } // white
+  if (n === 5 && a === 98 && _gr(o + 1) === 108 && _gr(o + 2) === 97
+      && _gr(o + 3) === 99 && _gr(o + 4) === 107) { return 0; } // black
+  if (n === 3 && a === 114 && _gr(o + 1) === 101 && _gr(o + 2) === 100) {
+    return 16711680; } // red
+  if (n === 4 && a === 108 && _gr(o + 1) === 105 && _gr(o + 2) === 109
+      && _gr(o + 3) === 101) { return 65280; } // lime
+  if (n === 6 && a === 121 && _gr(o + 1) === 101 && _gr(o + 2) === 108
+      && _gr(o + 3) === 108 && _gr(o + 4) === 111 && _gr(o + 5) === 119) {
+    return 16776960; } // yellow
+  if (n === 4 && a === 99 && _gr(o + 1) === 121 && _gr(o + 2) === 97
+      && _gr(o + 3) === 110) { return 65535; } // cyan
+  if (n === 4 && a === 103 && _gr(o + 1) === 111 && _gr(o + 2) === 108
+      && _gr(o + 3) === 100) { return 16766720; } // gold
+  return -1;
+}
+
+function palSet(i, r, g, b) {
+  _gw(PAL_OFF + i * 3, r);
+  _gw(PAL_OFF + i * 3 + 1, g);
+  _gw(PAL_OFF + i * 3 + 2, b);
+}
+
+function palNear(r, g, b) {
+  var i = 1;
+  var best = 1;
+  var bd = 99999999;
+  var d = 0;
+  var dr = 0;
+  var dg = 0;
+  var db = 0;
+  if (r === 0 && g === 0 && b === 0) { return 0; }
+  while (i < 256) {
+    dr = r - _gr(PAL_OFF + i * 3);
+    dg = g - _gr(PAL_OFF + i * 3 + 1);
+    db = b - _gr(PAL_OFF + i * 3 + 2);
+    d = dr * dr + dg * dg + db * db;
+    if (d < bd) { bd = d; best = i; if (d === 0) { return i; } }
+    i = i + 1;
+  }
+  return best;
+}
+
+function artHdrLen() {
+  return 8 + _r16(ART_KEEP + 6) * 8 + 4;
+}
+
+function artNspr() { return _r16(ART_KEEP + 6); }
+
+function palFind(r, g, b) {
+  var i = 0;
+  while (i < nPal) {
+    if (_gr(PAL_OFF + i * 3) === r && _gr(PAL_OFF + i * 3 + 1) === g
+        && _gr(PAL_OFF + i * 3 + 2) === b) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// Entries 0..7 are the frozen legacy palette the monitor glass also uses;
+// title colours are appended after them, exactly as the host does.
+function buildPalette() {
+  var i = 0;
+  var rgb = 0;
+  var r = 0;
+  var g = 0;
+  var b = 0;
+  var idx = 0;
+  var pbase = 0;
+  nFsty = 0;
+  if (hasArt) {
+    pbase = ART_KEEP + artHdrLen();
+    while (i < 256) {
+      palSet(i, _gr(pbase + i * 3), _gr(pbase + i * 3 + 1), _gr(pbase + i * 3 + 2));
+      i = i + 1;
+    }
+    nPal = 256;
+    i = 0;
+    while (i < nNames) {
+      rgb = colorOf(i);
+      if (rgb >= 0) {
+        r = Math.floor(rgb / 65536) % 256;
+        g = Math.floor(rgb / 256) % 256;
+        b = rgb % 256;
+        idx = palNear(r, g, b);
+        if (nFsty < 1024) {
+          _w16(FSTY_OFF + nFsty * 4, i);
+          _w16(FSTY_OFF + nFsty * 4 + 2, idx);
+          nFsty = nFsty + 1;
+        }
+      }
+      i = i + 1;
+    }
+    return;
+  }
+  palSet(0, 0, 0, 0);       palSet(1, 255, 255, 255);
+  palSet(2, 255, 0, 0);     palSet(3, 0, 255, 0);
+  palSet(4, 0, 0, 255);     palSet(5, 255, 255, 0);
+  palSet(6, 0, 255, 255);   palSet(7, 255, 0, 255);
+  nPal = 8;
+  i = 0;
+  while (i < nNames) {
+    rgb = colorOf(i);
+    if (rgb >= 0) {
+      r = Math.floor(rgb / 65536) % 256;
+      g = Math.floor(rgb / 256) % 256;
+      b = rgb % 256;
+      idx = palFind(r, g, b);
+      if (idx < 0 && nPal < 256) { idx = nPal; palSet(nPal, r, g, b); nPal = nPal + 1; }
+      if (idx >= 0 && nFsty < 1024) {
+        _w16(FSTY_OFF + nFsty * 4, i);
+        _w16(FSTY_OFF + nFsty * 4 + 2, idx);
+        nFsty = nFsty + 1;
+      }
+    }
+    i = i + 1;
+  }
+  while (nPal < 256) { palSet(nPal, 0, 0, 0); nPal = nPal + 1; }
+}
+
 // ---- image emit ----------------------------------------------------------
 var ip = 0;
 
 function ob(b) { _gw(IMG_OFF + ip, b % 256); ip = ip + 1; }
 function o16(v) { ob(v); ob(Math.floor(v / 256)); }
+function o32(v) {
+  ob(v);
+  ob(Math.floor(v / 256));
+  ob(Math.floor(v / 65536));
+  ob(Math.floor(v / 16777216));
+}
 
 function emitImage() {
   var i = 0;
@@ -1923,7 +2684,8 @@ function emitImage() {
   o16(nOps);
   o16(nPool);
   o16(nVars);
-  o16(9);                                   // FLAG_V2 | FLAG_VALUE64
+  o16(11);                                  // V2 | ASET | VALUE64
+  o32(0);                                   // aset_off, backpatched below
   i = 0;
   while (i < nPool) {
     k = 0;
@@ -1950,7 +2712,44 @@ function emitImage() {
     if (_r16(VMAP_OFF + i * 2) !== 65535) { o16(i); }
     i = i + 1;
   }
-  o16(0);                                   // no classes
+  o16(nCls);
+  i = 0;
+  k = CLS_OFF + 2;
+  while (i < nCls) {
+    o16(_r16(k));
+    o16(_r16(k + 2));
+    b = _r16(k + 4);
+    o16(b);
+    k = k + 6;
+    var m = 0;
+    while (m < b) {
+      o16(_r16(k));
+      o16(_r16(k + 2));
+      k = k + 4;
+      m = m + 1;
+    }
+    i = i + 1;
+  }
+  // SPRD from the arena sprite table (ARTX), or empty.
+  ob(83); ob(80); ob(82); ob(68);           // 'SPRD'
+  b = hasArt ? artNspr() : 0;
+  o16(b);
+  i = 0;
+  while (i < b) {
+    o16(_r16(ART_KEEP + 8 + i * 8));
+    o16(_r16(ART_KEEP + 10 + i * 8));
+    o32(_r32(ART_KEEP + 12 + i * 8));
+    i = i + 1;
+  }
+  // FSTY: what the RTL actually uses to colour fillStyle.
+  ob(70); ob(83); ob(84); ob(89);           // 'FSTY'
+  o16(nFsty);
+  i = 0;
+  while (i < nFsty) {
+    o16(_r16(FSTY_OFF + i * 4));
+    o16(_r16(FSTY_OFF + i * 4 + 2));
+    i = i + 1;
+  }
   ob(78); ob(65); ob(77); ob(66);           // 'NAMB'
   i = 0;
   while (i < nNames) {
@@ -1960,10 +2759,29 @@ function emitImage() {
     while (k < nLen(i)) { ob(_gr(NBLOB_OFF + b + k)); k = k + 1; }
     i = i + 1;
   }
+  // 4-align. Art titles: aset_off points here; the console appends ASET.
+  while (ip % 4 !== 0) { ob(0); }
+  var aoff = ip;
+  if (hasArt === 0) {
+    ob(65); ob(83); ob(69); ob(84);           // 'ASET'
+    o32(768);
+    i = 0;
+    while (i < 768) { ob(_gr(PAL_OFF + i)); i = i + 1; }
+  }
+  // backpatch aset_off (header bytes 12..15)
+  _gw(IMG_OFF + 12, aoff % 256);
+  _gw(IMG_OFF + 13, Math.floor(aoff / 256) % 256);
+  _gw(IMG_OFF + 14, Math.floor(aoff / 65536) % 256);
+  _gw(IMG_OFF + 15, Math.floor(aoff / 16777216) % 256);
   return ip;
 }
 
 // ---- entry ---------------------------------------------------------------
+hasArt = _gr(HDR_ART);
+if (hasArt) {
+  var ai = 0;
+  while (ai < 4096) { _gw(ART_KEEP + ai, _gr(8192 + ai)); ai = ai + 1; }
+}
 spanN = _r16(HDR_SPAN_N);
 measure();
 kwInit();
@@ -1978,20 +2796,25 @@ if (st === 0 && _gr(HDR_PHASE) === 1) {
   cdone(13, tokN, 0);
 } else if (st === 0) {
   layout();
-  BRK_OFF = FN_OFF + FN_MAX * 8;
+  BRK_OFF = FSTY_OFF + 1024 * 4;
   POOL_OFF = BRK_OFF + 1024;
   VMAP_OFF = POOL_OFF + 1024 * 8;
   LC_OFF = VMAP_OFF + NAME_MAX * 2;
+  // Global-site table uses whatever is left before the ART copy.
+  GS_OFF = LC_OFF + CREC_MAX * 4;
+  GS_MAX = Math.floor((ART_KEEP - GS_OFF) / 8);
+  if (GS_MAX < 1) { GS_MAX = 1; }
   natInit();
   TYPEOF_NI = -1;
   st = parse();
   if (st === 0) {
     buildPool();
     buildVars();
+    buildPalette();
     rewriteOps();
     var len = emitImage();
     _w32(HDR_OUT_OFF, IMG_OFF);
-    cdone(0, len, 0);
+    cdone(hasArt ? 133 : 0, len, 0);
   }
 }
 

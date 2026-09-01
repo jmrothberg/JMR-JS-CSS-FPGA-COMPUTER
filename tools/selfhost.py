@@ -42,7 +42,7 @@ def mint(jsh_name: str) -> ProgramImage:
     path = source_path(jsh_name)
     if not path.is_file():
         raise FileNotFoundError(path)
-    chunk = compile_html_text(path.read_text(encoding="utf-8"))
+    chunk = compile_html_text(path.read_text(encoding="utf-8"), source_path=path)
     return ProgramImage.from_chunk(chunk, v2=True, value64=True)
 
 
@@ -71,20 +71,30 @@ def self_compile(title: str):
 
     src = (STORAGE / f"{title}.HTML").read_text(encoding="utf-8")
     m = Machine(storage_root=STORAGE)
+    m.source_name = f"{title}.HTML"
     m._stage_source(src)
+    m._preload_art()
     hw = JsHwVm()
     hw._m = m
     hw.step_budget = 4_000_000_000
-    for name in ("ARTSCAN.JSH", "COMPILER.JSH"):
+    chain = ["ARTSCAN.JSH", "COMPILER.JSH"]
+    if source_path("COMPIL2.JSH").is_file():
+        chain.append("COMPIL2.JSH")
+    for name in chain:
         m._cmp_reset()
         hw.load_image(mint(name))
         if hw.error:
             raise RuntimeError(f"{name}: {hw.error}")
         if name == "ARTSCAN.JSH" and m._cmp_status != jf.CMP_STATUS_NEXT:
             raise RuntimeError(f"ARTSCAN refused: {m._cmp_message()}")
-    if m._cmp_status != 0:
+        if m._cmp_status == jf.CMP_STATUS_NEXT:
+            continue
+        break
+    if m._cmp_status not in (0, jf.CMP_STATUS_MINT_ART):
         raise RuntimeError(f"?CE {m._cmp_message()}")
     blob = m._cmp_output()
+    if m._cmp_status == jf.CMP_STATUS_MINT_ART:
+        blob = m._append_artx(blob)
     ProgramImage(blob)  # the strict validator is the acceptance gate
     return blob
 

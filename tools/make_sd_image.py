@@ -8,6 +8,7 @@ lands on the card as 8.3 names.
 Usage:
   python3 tools/make_sd_image.py create card.img
   python3 tools/make_sd_image.py create card.img -soundoff
+  python3 tools/make_sd_image.py create card.img -nojsh
   python3 tools/make_sd_image.py list card.img
   python3 tools/make_sd_image.py check
   sudo python3 tools/make_sd_image.py burn /dev/sdX
@@ -16,6 +17,8 @@ Usage:
 Default mint writes sound() (nid 42) into each .JSH. Pass -soundoff to
 stub those calls so an old bitstream that lacks the native does not
 fault 5. Chrome Web Audio (<script data-host=chrome>) is never minted.
+Pass -nojsh to leave title .JSH off the card so FPGA COMPILE can be
+tested (compiler-chain .JSH still minted). PNG / ARTJS stay on the host.
 
 Board FAT is 8.3 only — `NAME.HTML` becomes `NAME.HTM` via card_name_83.
 """
@@ -66,8 +69,10 @@ FSINFO_SECTOR = 1
 # Card seeds: whatever sits in storage/ root. Stale sidecars on the HOST are
 # still skipped — the card's .JSH is MINTED here from the HTML at build time
 # (see compile_sidecars), never copied from storage/.
-_SKIP_SUFFIX = {".JSH", ".JSB", ".MD", ".MDC", ".TXT", ".JSON"}
-_KEEP_SUFFIX = {".HTML", ".HTM", ".JS", ".PNG", ".DAT", ".BIN"}
+# PNG / ARTJS stay on the host (STEM-N.png + make_artjs.py). The
+# machine reads .ARTX (8.3 → .ART). Do not copy those onto the card.
+_SKIP_SUFFIX = {".JSH", ".JSB", ".MD", ".MDC", ".TXT", ".JSON", ".PNG", ".ARTJS"}
+_KEEP_SUFFIX = {".HTML", ".HTM", ".JS", ".DAT", ".BIN", ".ARTX"}
 
 
 def compile_sidecars(
@@ -92,6 +97,7 @@ def compile_sidecars(
 
     out: list[tuple[str, bytes]] = []
     have = {n.upper() for n, _ in files}
+    by_upper = {n.upper(): d for n, d in files}
     for name, data in files:
         if not name.upper().endswith(".HTM"):
             continue
@@ -101,7 +107,18 @@ def compile_sidecars(
             continue
         try:
             html = data.decode("utf-8", "replace")
-            blob = encode_html_chunk(compile_html_text(html, sound=sound))
+            # Card 8.3 truncates .ARTX → .ART; host storage keeps .ARTX.
+            artx = by_upper.get((stem + ".ARTX").upper()) or by_upper.get(
+                (stem + ".ART").upper()
+            )
+            blob = encode_html_chunk(
+                compile_html_text(
+                    html,
+                    sound=sound,
+                    artx=artx,
+                    source_path=STORAGE_DIR / (stem + ".HTML"),
+                )
+            )
         except Exception as exc:  # compile error: report, keep going
             print(f"note: {name}: no .JSH sidecar ({type(exc).__name__}: {exc})")
             continue
@@ -202,17 +219,28 @@ def squash_long_html_lines(name: str, data: bytes) -> tuple[bytes, int]:
     readable lines as-is; anything over 200 chars becomes
     `<LINE n: EMBEDDED DATA ... OMITTED>` so LIST stays honest and fast.
     Non-HTML files are left alone (a .JS/.JSB card copy IS the program).
+
+    2026-08-31: the card copy is no longer display-only. Standalone COMPILE
+    reads it as the SOURCE OF TRUTH, so squashing a line of real code now
+    corrupts the program the machine is asked to compile — ASTEROID died on
+    `var UX = [0,0.098,...]` (462 chars) and MRDOFAST on a 629-char map row,
+    both reported as `?CE SYNTAX`. So squash by KIND, not by length alone:
+    embedded data (base64 / data:) still goes at 200 chars, because that is
+    the megabyte line that froze LIST; ordinary code survives to DATA_LIMIT,
+    far above any real source line (worst in storage/ is 5,934) and far below
+    the 584..804,106-char data lines.
     """
     up = name.upper()
     if not (up.endswith(".HTM") or up.endswith(".HTML")):
         return data, 0
     limit = 200
+    code_limit = 16384
     out: list[bytes] = []
     squashed = 0
     for i, ln in enumerate(data.split(b"\n"), start=1):
-        if len(ln) > limit:
-            tag = (b"EMBEDDED DATA" if (b"base64" in ln or b"data:" in ln)
-                   else b"LONG LINE")
+        is_data = b"base64" in ln or b"data:" in ln
+        if len(ln) > (limit if is_data else code_limit):
+            tag = b"EMBEDDED DATA" if is_data else b"LONG LINE"
             out.append(b"<LINE %d: %s %d CHARS OMITTED>" % (i, tag, len(ln)))
             squashed += 1
         else:
@@ -224,13 +252,20 @@ def squash_long_html_lines(name: str, data: bytes) -> tuple[bytes, int]:
 
 def sanitize_bas_files(
     files: list[tuple[str, bytes]],
+    squash: bool = True,
 ) -> tuple[list[tuple[str, bytes]], list[str]]:
-    """Apply strip_blank_bas_lines to every .bas; return (files, notes)."""
+    """Apply strip_blank_bas_lines to every .bas; return (files, notes).
+
+    squash=False keeps the full HTML. A card built for on-machine COMPILE is
+    compiler input, and the machine can only compile source it can see.
+    """
     out: list[tuple[str, bytes]] = []
     notes: list[str] = []
     for name, data in files:
         cleaned, n = strip_blank_bas_lines(name, data)
-        cleaned, m = squash_long_html_lines(name, cleaned)
+        m = 0
+        if squash:
+            cleaned, m = squash_long_html_lines(name, cleaned)
         out.append((name, cleaned))
         if n:
             notes.append(f"{name}: stripped {n} blank/whitespace-only line(s) for the board")
@@ -256,8 +291,13 @@ def check_program(name: str, data: bytes) -> tuple[list[str], list[str]]:
                 )
         return errors, warns
     # JS / HTML Canvas seeds — board LOAD path still growing; warn only on huge files.
-    # Single-file HTML with embedded PNG sprites is expected to exceed 512 KiB.
-    limit = 2 * 1024 * 1024 if upper.endswith((".HTM", ".HTML")) else 512 * 1024
+    # HTML source is now under SOURCE_MAX; .ART/.ARTX carry the ASET payload (MK ~2.8 MB).
+    if upper.endswith((".HTM", ".HTML")):
+        limit = 2 * 1024 * 1024
+    elif upper.endswith((".ART", ".ARTX")):
+        limit = 4 * 1024 * 1024
+    else:
+        limit = 512 * 1024
     if len(data) > limit:
         warns.append(f"{name}: {len(data)} bytes is large for early board storage")
     return errors, warns
@@ -412,6 +452,12 @@ def create_image(
     sound=True (default) mints sound() as nid 42. sound=False (-soundoff)
     stubs those calls for old bits that lack the native.
 
+    jsh=False also keeps the FULL html on the card (no squashing). Those two
+    go together: a --nojsh card exists to be compiled ON the machine, and the
+    machine can only compile source it can actually see. The default card
+    still squashes, because there LIST is the consumer and streaming a
+    690KB base64 line over SPI freezes the monitor for minutes.
+
     jsh=True (default) mints a .JSH sidecar per title, so RUN is instant.
     jsh=False (--nojsh) ships HTML only: the machine has to compile each
     title itself with COMPILE before RUN will find an image. That is the
@@ -446,10 +492,19 @@ def create_image(
             f"COMPILE builds them on the machine",
             file=sys.stderr,
         )
-    pairs, strip_notes = sanitize_bas_files(pairs)
+    pairs, strip_notes = sanitize_bas_files(pairs, squash=jsh)
     for n in strip_notes:
         print(f"note: {n}", file=sys.stderr)
     pairs.extend(sidecars)
+    # System programs (the compiler chain and the editor) ship as .JSH only.
+    # Their .HTML is authoring source, not a title, and listing it buries the
+    # games in DIR — which is a paged screen, not a scrollback.
+    _SYS = {"ARTSCAN", "ARTPNG", "COMPILER", "COMPIL2", "MINTASM", "EDITOR"}
+    pairs = [
+        (n, d) for n, d in pairs
+        if not (Path(n).stem.upper() in _SYS
+                and Path(n).suffix.upper() in (".HTM", ".HTML"))
+    ]
     # Refuse by default to build a card the board cannot read (--force overrides).
     errors, warns = check_storage(pairs)
     for w in warns:
@@ -667,11 +722,14 @@ def main(argv: list[str] | None = None) -> int:
         help="mint .JSH without sound() (nid 42); old bits that lack the native do not fault",
     )
     p_create.add_argument(
+        "-nojsh",
         "--nojsh",
+        "--no-jsh",
         action="store_true",
-        help="ship HTML only, no precompiled title sidecars — the machine "
-        "must COMPILE each title itself before RUN can find an image "
-        "(the compiler's own programs are still minted)",
+        help="ship HTML + .ARTX only, no precompiled title sidecars — the "
+        "machine must COMPILE each title itself before RUN can find an "
+        "image (the compiler's own programs are still minted). FPGA "
+        "compile test card.",
     )
 
     sub.add_parser("check", help="lint storage/ against the board's LOAD limits")
@@ -700,6 +758,13 @@ def main(argv: list[str] | None = None) -> int:
         "--soundoff",
         action="store_true",
         help="mint .JSH without sound() (nid 42); old bits that lack the native do not fault",
+    )
+    p_burn.add_argument(
+        "-nojsh",
+        "--nojsh",
+        "--no-jsh",
+        action="store_true",
+        help="rebuild without title .JSH (FPGA COMPILE test); ignored with --keep-image",
     )
 
     p_list = sub.add_parser("list", help="list root directory")
@@ -762,6 +827,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.image, _parse_size(args.size), None,
                 include_storage=True, force=args.force,
                 sound=not args.soundoff,
+                jsh=not args.nojsh,
             )
             print(f"built {args.image} from storage/")
         print(_lsblk(args.device))
