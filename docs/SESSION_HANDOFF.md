@@ -127,3 +127,23 @@ FPGA-SIM, skipping gen-match, cloning heaps, restoring a local
 without asking, `leave_hold` held in the enable=0 else, sticky
 `hs_m_vcsp` winning over `vcsp_n`, and `stack[i] <=` / `vobj_alloc[i] <=`
 anywhere in the parent FSM.
+
+### V1.5 board bring-up handoff (2026-09-01)
+
+EDIT/COMPILE/RUN is LIVE on glass (run-67 bit + the instrumented card).
+Cross-lane facts every session needs:
+
+- **storage/COMPILER.HTML + ARTSCAN.HTML now carry `MSG_OFF = 128`** (was
+  0 — the console prints from CSTG_HDR_MSG=128; every ?CE was mute since
+  birth). Keep 128 in any new chain program.
+- **COMPILER.HTML sanitizes the art flag** (`hasArt = (flag === 1)`) and
+  guards `artNspr()` ≤ 64 + all `_gw` writes (`dgFail` prints ASCII
+  numbers through ?CE). Reason: on the BOARD the arena flag byte (65) read
+  back garbage for a no-art title and the art-append path ran a copy off
+  the arena end — the long fault-5-at-ip-23 hunt. ROOT CAUSE STILL OPEN
+  (console SRAM write → VM read via the DDR3 bridge; sim-invisible).
+  Run 68's G-line ({fsite, fault_arg} per fault) is armed for it.
+- The CSTG arena is **380,928 words** (CSCR 73,728 + CIMG 307,200, one
+  flat byte space). PAL_OFF ≈ 137K is normal.
+- The editor is a GAME (running=1 while editing); F2 save prints SAVED.;
+  the delete verb is REMOVE. GUI forwards F-keys to titles; F12 = leave.

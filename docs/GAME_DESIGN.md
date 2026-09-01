@@ -171,8 +171,10 @@ RUN
   create, not a host recompile of `storage/` on `RUN`.
 - **V1.0:** host mint at card-create still works (`make_sd_image.py` writes
   `.JSH`). **V1.5:** the machine also compiles. `LOAD "NAME.HTML"` parks
-  source; bare `EDIT` chain-loads `EDITOR.JSH` (F2 saves, F5 quits, Esc is
-  BREAK); `COMPILE` chain-loads `COMPILER.JSH` and mints `NAME.JSH` on the
+  source; bare `EDIT` chain-loads `EDITOR.JSH` as a GAME (F2 saves and
+  prints SAVED., F3 quits without saving, Esc is BREAK — board-live since
+  run 66's full PS/2 keyCode map); `COMPILE` chain-loads `ARTSCAN.JSH`
+  then `COMPILER.JSH` (staging any `.ART` sidecar) and mints `NAME.JSH` on the
   card; `RUN` is the ordinary sidecar load. `EDIT n` stays the numbered-line
   replace. Popular JS V1 does not have (`shift`, `Math.sin`/`round`,
   `isFinite`, `e.code`, …) is still a language backlog, not a title gate.

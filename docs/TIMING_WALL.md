@@ -783,6 +783,28 @@ entry; H-line telemetry queued for run 60 makes it visible live).
 
 ---
 
+## RUNS 65-68 — the V1.5 editor/compile bring-up (2026-08-31 .. 09-01)
+
+| Run | WNS/WHS | Payload | Verdict |
+|---|---|---|---|
+| 65 | +0.197/+0.037 | editor-as-game, compile+ARTX ABI, src_len 2FF CDC, src_bank belt-clears, jn_bucket 1W | published; two-horse re-place recovered a −1.001 route collapse (65d) of the SAME verified netlist |
+| 66 | +0.383/+0.042 | full PS/2 keyCode map (F-keys/BS/Shift — kev path had letters/arrows only), sticky-cdone clear at p_clr, SAVED. reply (dead row 11) | best margin since run 60; board revealed the cdone RACE |
+| 67 | +0.133/+0.050 | cdone edge gate (accept only after seen-LOW since launch — the p_clr clear rides vm_clk and loses to the clk100 console every time) | board COMPILE finally ran the full chain; died at the art-flag content bug |
+| 68 | (see archive) | banner V1.5 R68, G-line fault telemetry ({fsite, fault_arg}), exec64 fault_site adoption | the V1.5 keeper |
+
+The failure that was NOT timing: the board compile fault-5 was a garbage
+art-flag byte (console SRAM write read back wrong by the VM through the
+DDR3 bridge — sim-invisible, SRAM_INTERNAL). Fixed by content sanitation
+in COMPILER.HTML; root cause open, G-line armed for it. Full forensics:
+memory/board-compile-bringup.md.
+
+The 65d lesson repeated run-46's: a −1.0 WNS with hundreds of tiny misses
+after a congestion-thrash route is a PLACEMENT verdict, not a netlist one —
+re-place the same post_opt.dcp (replace51.tcl, two directives) before
+touching RTL.
+
+---
+
 ## Related
 
 - [FPGA_FIT.md](FPGA_FIT.md) — caps, NEVER table, live scoreboard

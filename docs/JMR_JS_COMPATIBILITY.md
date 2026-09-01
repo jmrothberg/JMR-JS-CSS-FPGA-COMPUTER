@@ -26,7 +26,7 @@ FPGA-SIM: INVADERS, PACMAN, DONKEY, ASTEROID, MRDO. FPGA-SIM is **too
 slow to play** (PC simulating the chip). Board target **≥ 30
 pictures/second**: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
 Live heap/code caps: [FPGA_FIT.md](FPGA_FIT.md). **V1.0 BOARD:** compile when
-you make the card (`.JSH`). **V1.5** (planned) tries standalone compile plus
+you make the card (`.JSH`). **V1.5** (LIVE 2026-09-01) adds standalone compile plus
 type/paste/edit HTML **and** popular JS V1.0 does not have. Version 2.0 is
 ISA/ASET growth, **not** a named title.
 
@@ -111,7 +111,14 @@ Chrome-only title “done on the machine.”
 
 Do **not** title-gate (`if (stem == "…")`).
 
-### V1.5 — type, paste, compile, edit HTML at READY (no card required)
+### V1.5 — LIVE on the board (2026-09-01, run 67 + the instrumented card)
+
+Shipped shape: `LOAD` → `EDIT` (EDITOR.JSH runs as a GAME — visible
+framebuffer, F2 save prints SAVED., F3 quit; NOT the numbered inline
+editor) → `COMPILE` (chains ARTSCAN.JSH + COMPILER.JSH from the card,
+handles .ART sidecars) → `RUN`. Compile errors print a real message after
+?CE. The rest of this section is the original plan, kept for the parts not
+yet built (typed-at-READY authoring of NEW programs, numbered edits):
 
 **Built, 2026-08-31.** The machine compiles its own titles. `COMPILE` is a
 real verb; the compiler is `ARTSCAN.JSH` + `COMPILER.JSH`, **ordinary

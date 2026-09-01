@@ -371,15 +371,28 @@ Version 1.0 games: `INVADERS.HTML` `PACMAN.HTML` `DONKEY.HTML` (and the other pl
 
 Typed at the `>` prompt, same idea as BASIC `LOAD` / `RUN`:
 
-**V1.0 (now):** `DIR` `LOAD "NAME.HTML"` `LIST` `RUN` `CLS` `HELP` `MEM` `REMOVE`  
-`ESC` is machine BREAK (games must not steal it).
+**V1.5 (live on glass since run 67 + the 2026-09-01 card):** `DIR`
+`LOAD "NAME.HTML"` `LIST` `EDIT` `COMPILE` `SAVE` `RUN` `NEW` `CLS` `HELP`
+`MEM` `REMOVE "NAME.EXT"` — quotes optional on filenames; the delete verb
+is **REMOVE**, not DELETE. `ESC` is machine BREAK (games must not steal it).
 
-`LIST` is to **view / learn**. The chip has **no compiler**. `RUN` loads the
-card-minted `.JSH`. `EDIT` / `SAVE` / `NEW` / numbered replace / `INSERT` /
-`DELETE` can exist in the model, but they **cannot change what plays** until
-**V1.5 compile-on-RUN**. Author on the PC; remake `card.img`. Do not add
-`INSERT` / `DELETE` verbs — V1.5 insert is an unused number (`15`); delete
-is `10` + Enter. `EDIT n` is kept **then**, not as V1.0 authoring.
+**The self-hosted loop** — no PC anywhere in it:
+
+    LOAD "BOXES.HTML"   → source into the machine
+    EDIT                → full-screen editor (a GAME on the card:
+                          EDITOR.JSH). F2 = save ("SAVED."), F3 = quit
+                          without saving, arrows/Backspace edit.
+    COMPILE             → chain-runs ARTSCAN.JSH then COMPILER.JSH from
+                          the card; a title with a .ART sidecar gets its
+                          art appended. Success mints NAME.JSH beside the
+                          HTML → "COMPILED". Errors print a REAL message
+                          after ?CE (TOKN / SYNTAX / OOB with numbers —
+                          the message area is arena byte 128).
+    RUN                 → plays the freshly minted .JSH.
+
+`RUN` always prefers the card's `.JSH`, so a FAILED compile leaves the old
+version playable — REMOVE the stale `.JSH` if that would mislead. On-device
+SAVE writes the HTML back to the card under the loaded title's name.
 
 **V1.5 (planned)** tries to be **standalone**: type, paste, or edit numbered HTML at `>` **and** compile-on-RUN on the machine **and** popular JS V1 lacks (`Array.shift`, `Math.sin`/`round`, `isFinite`, …). V1.0 compiles when you make the card; PYTHON / FPGA-SIM / BOARD `RUN` that `card.img` —
 [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).

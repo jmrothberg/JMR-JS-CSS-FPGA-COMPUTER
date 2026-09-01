@@ -98,6 +98,7 @@ The bitstream emits four line types (`runtime/board_backend.py`):
 | `D<hh>` | `stor_state` | **storage stall telemetry** (during a qualifying stall) |
 | `E<hh>` | `stor_state` | **free-running state beat** — always on, incl. idle |
 | `V<st2><fault2><ip4>` | `{casestate, fault, ip}` | **VM heartbeat / fault** |
+| `G<12 hex>` | `{fault_site16, fault_arg32}` | **fault site + the value it refused (run 68+)** |
 
 ### The V-line — VM heartbeat
 
@@ -207,6 +208,43 @@ leaves a note — `VM st=… fault=… ip=…`, `FAULT kind=… pools…`,
 `TRAIL <8 hex ips>`, `KEY DOWN/UP … repeat=…` — so a session is
 reconstructable after the fact and a held-key storm can be lined up
 against a fault by timestamp.
+
+### The G-line — fault site + faulting value (run 68+)
+
+Added 2026-09-01 (`ef0ca22`), latched on the same `machine_fault` edge as
+F/T. Twelve hex chars: `{fault_site[15:0], fault_arg[31:0]}`. `fault_site`
+is the RTL source-line stamp of the assignment that faulted — and as of the
+same commit the VM finally adopts exec64's site (before this, every exec64
+fault reported a stale parent `fsite`, on every runtime). `fault_arg` is
+the value the faulting site refused: the out-of-range index for the
+stgWrite/srcWrite/artWrite2/srcSetLen bound traps (sites 4460/4497/4480/
+4523), or the unknown native id at site 4183. Parsed by `_parse_g_line`;
+appears in the flight log as `GSITE fsite=… arg=…` and fills the
+Inspector's `fsite` slot on BOARD.
+
+Reading `fault_arg`: a value of EXACTLY a region's size (e.g. 380,928 =
+CSTG arena end) means an incrementing writer ran off the end — the guard
+fires on the first illegal index of a runaway loop, not on a poisoned
+scalar. A small negative value points at sentinel arithmetic (an unset
+`-1` index); huge positives at a corrupted count.
+
+### Content-level diagnostics beat RTL telemetry for compile bugs
+
+The 2026-09-01 board-compile hunt (see memory: board-compile-bringup)
+closed with a lesson: for CHAIN-PROGRAM faults, instrument the HTML first.
+COMPILER.HTML's `dgFail()` prints ASCII numbers through the ?CE message
+path (`MSG_OFF = 128` — it was 0 since birth, which made every ?CE mute);
+one card re-mint per iteration, no synthesis. The RTL G-line is the
+backstop for faults the content cannot see coming.
+
+### The STOR-BEAT cons field decodes the console FSM
+
+`STOR-BEAT stor=0xSS cons=0xCC` (flight-log NOTE lines): `cons` is the
+console state, positional in `jmr_console_engine.sv`'s `cstate_t` enum —
+dump the enum and index by the hex value. This walked the whole COMPILE
+chain during the run-66/67 forensics (C_JSB_OPENW 0x69 → C_JSB_GBW 0x6B →
+C_CMP_WAIT 0x30 → C_IDLE 0x03). The `ps2_strobe` NOTE lines reconstruct
+the user's full keystroke history (set-2 make/break decode).
 
 ### The D-line — storage stall telemetry
 
