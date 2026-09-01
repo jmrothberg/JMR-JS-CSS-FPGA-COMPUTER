@@ -168,3 +168,8 @@ Content/toolchain (not run-gated, mostly peer lane):
 - Inline-art titles: migrate remaining data-URI titles to .ARTX; that (not
   removing the LIST squash) is what makes every title compile unhacked —
   ARTSCAN refuses inline art regardless of squash.
+- On-machine compiler fixes 2026-09-01 night (all in storage/COMPILER.HTML,
+  minted): typeof via interned name (not raw 40), window.* unknown APIs →
+  stub 33, CALL_VAL argc in arg0, MAKE_FN IIFE bit6. Found by diffing the
+  machine-minted .JSH against the host mint at raw-operand level; the
+  CALL_VAL bug reproduced in sim as fault 4 at Enter (keydown dispatcher).
