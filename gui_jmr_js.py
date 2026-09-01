@@ -58,8 +58,8 @@ _TK_TO_JS = {
     "Down": (40, "ArrowDown"),
     "BackSpace": (8, "Backspace"),
     "Tab": (9, "Tab"),
-    # Editor keys: F2 save, F3 quit — forwarded to a running title (run-66
-    # board parity: the PS/2 decoder now delivers all F-keys). F12 leaves a
+    # F-keys forwarded to a running title (run-66 board parity: the PS/2
+    # decoder now delivers all F-keys). HTML decides bindings. F12 leaves a
     # running program at the GUI. Esc is machine BREAK.
     "F1": (112, "F1"),
     "F2": (113, "F2"),
@@ -91,6 +91,34 @@ def apply_line_key(buf: str, col: int, keysym: str, char: str = "") -> tuple[str
     if char and char.isprintable():
         return buf[:col] + char + buf[col:], col + 1
     return buf, col
+
+
+# GUI → editor paste. KEYEVT is an 8-bit keyCode (FPGA-SIM FIFO is 8 deep,
+# one event per VM frame). F2=113 is also ASCII 'q', so the editor arms a
+# paste window on F6 and disarms on F7; bytes 32-126 are then SOURCE, not
+# function keys. No RTL: this is the existing key_event tether.
+_PASTE_BEGIN = 117  # F6
+_PASTE_END = 118    # F7
+_PASTE_MAX = 65536  # SOURCE_MAX
+
+
+def clip_to_editor_keys(clip: str) -> list[int]:
+    """Clipboard text → editor keyCodes. Newline=Enter; tab=two spaces; ASCII 32-126."""
+    keys: list[int] = []
+    text = clip.replace("\r\n", "\n").replace("\r", "\n")
+    for ch in text:
+        if ch == "\n":
+            keys.append(13)
+        elif ch == "\t":
+            keys.append(32)
+            keys.append(32)
+        else:
+            o = ord(ch)
+            if 32 <= o < 127:
+                keys.append(o)
+        if len(keys) >= _PASTE_MAX:
+            break
+    return keys
 
 
 def _js_key(event: tk.Event) -> tuple[int, str] | None:
@@ -194,6 +222,8 @@ class App:
         # NEW: ignore leftover F9/F10 from the launch key queue / auto-repeat.
         self._gui_t0 = time.monotonic()
         self._fkey_t = 0.0
+        # GUI Ctrl-V → editor: keyCodes drip-fed before each frame_tick.
+        self._paste_q: collections.deque[int] = collections.deque()
 
         self._build_ui()
         # MORE waiter: pump Tk + refresh glass (BASIC more_idle pattern)
@@ -273,7 +303,7 @@ class App:
 
         self.hint = tk.Label(
             self.root,
-            text="F9=runtime  F10=monitor  ESC=break  F12=leave  F2=save F3=quit (editor)  Ctrl-V paste  arrows+space=play  type+Enter",
+            text="F9=runtime  F10=monitor  ESC=break  F12=leave  Ctrl-V paste  arrows+space=play  type+Enter",
             fg="#888",
             bg="#1a1a1a",
             anchor="w",
@@ -527,6 +557,7 @@ class App:
         self._busy_prompt = None
         self._last_prompt = None
         self._ppm_bytes = None
+        self._paste_q.clear()
         self._set_status(self._status_text())
         self._paint_prompt()
         self.canvas_label.focus_set()
@@ -540,6 +571,7 @@ class App:
         self.backend.hard_break()
         self.line_buf = ""
         self.line_col = 0
+        self._paste_q.clear()
         self._paint_prompt()
         self.canvas_label.focus_set()
 
@@ -554,6 +586,7 @@ class App:
             hb()
         self.line_buf = ""
         self.line_col = 0
+        self._paste_q.clear()
         self._paint_prompt()
         self.canvas_label.focus_set()
 
@@ -566,13 +599,55 @@ class App:
             or self._key_fire
         )
 
+    def _editor_accepts_paste(self) -> bool:
+        """True while EDIT owns the glass (PYTHON _edit_active / FPGA-SIM _editor_live)."""
+        if getattr(self.backend, "_editor_live", False):
+            return True
+        m = getattr(self.backend, "machine", None)
+        return bool(m is not None and getattr(m, "_edit_active", False))
+
+    def _queue_editor_paste(self, clip: str) -> None:
+        keys = clip_to_editor_keys(clip)
+        if not keys:
+            return
+        if not self._paste_q:
+            self._paste_q.append(_PASTE_BEGIN)
+        elif self._paste_q[-1] == _PASTE_END:
+            self._paste_q.pop()
+        self._paste_q.extend(keys)
+        self._paste_q.append(_PASTE_END)
+
+    def _feed_editor_paste(self) -> None:
+        """Push queued paste keyCodes before this frame's rAF. PYTHON drains
+        the whole input queue per tick; FPGA-SIM KEYEVT FIFO is 8 and one
+        event per FRAME — so one code per GUI tick there."""
+        if not self._paste_q:
+            return
+        if not self._editor_accepts_paste():
+            self._paste_q.clear()
+            return
+        ke = getattr(self.backend, "key_event", None)
+        if ke is None:
+            self._paste_q.clear()
+            return
+        n = 64 if getattr(self.backend, "name", "") == "PYTHON" else 1
+        i = 0
+        while i < n and self._paste_q:
+            code = self._paste_q.popleft()
+            ch = chr(code) if 32 <= code < 127 else ""
+            ke(code, ch, True)
+            i += 1
+
     def on_paste(self, _event: tk.Event | None = None) -> str:
-        """Insert clipboard into the monitor line (BASIC gui_jmr.py method)."""
+        """Insert clipboard into the monitor line, or into EDIT via key_event."""
         try:
             clip = self.root.clipboard_get()
         except tk.TclError:
             return "break"
         if not clip:
+            return "break"
+        if self._editor_accepts_paste():
+            self._queue_editor_paste(clip)
             return "break"
         m = getattr(self.backend, "machine", self.machine)
         if m.running and (m._loop_chunk is not None or getattr(m, "html_host", None) is not None):
@@ -615,7 +690,7 @@ class App:
         if event.keysym in ("F9", "F10", "Escape"):
             return None
         # F12 leaves a running program (READY). Every other F-key is a
-        # TITLE key while running (editor: F2 save, F3 quit — board parity
+        # TITLE key while running (HTML decides bindings — board parity
         # with the run-66 PS/2 map). F9/F10 are GUI chrome.
         if event.keysym == "F12":
             if self._is_running():
@@ -922,6 +997,7 @@ class App:
             return
         try:
             # One tick only (SimBackend.frame_tick does TICK; poll is a no-op)
+            self._feed_editor_paste()
             self.backend.frame_tick()
             # NEW: blink cyan block on letterbox so you can see the insert point
             now = time.monotonic()

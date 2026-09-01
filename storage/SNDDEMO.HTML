@@ -55,22 +55,27 @@ var names = [
   "RETRIG CH0",
   "SILENCE"
 ];
-var recs = [
-  [523, 12, 24, 0, 0],
-  [659, 12, 24, 0, 1],
-  [784, 12, 24, 0, 2],
-  [0, 12, 20, 0, 3],
-  [880, 12, 16, -80, 0],
-  [220, 10, 16, 18, 0],
-  [392, 15, 24, 0, 0],
-  [392, 3, 24, 0, 1],
-  [900, 10, 4, 0, 0],
-  [280, 10, 48, 8, 1],
-  [80, 12, 12, 0, 3, 140, 8, 10, -10, 1],
-  [523, 10, 10, 0, 0, 659, 10, 10, 0, 1, 784, 12, 16, 0, 2],
-  [880, 12, 8, -80, 0],
-  0
-];
+/* One assignment per recipe — do not nest [[...],[...],...] here.
+   A 14-row nested literal leaves each inner array on the operand stack
+   while the next is built (peak 11+15=26). RTL VST_WIN is 16 and silently
+   clamps, so recs[cur] is no longer an array, playSfx never pokes sound(),
+   and the board is mute. PYTHON's stack is unbounded, so the demo still
+   beeps there. Games use named flat arrays (sfxFire = [freq, vol, ...]). */
+var recs = [];
+recs[0] = [523, 12, 24, 0, 0];
+recs[1] = [659, 12, 24, 0, 1];
+recs[2] = [784, 12, 24, 0, 2];
+recs[3] = [0, 12, 20, 0, 3];
+recs[4] = [880, 12, 16, -80, 0];
+recs[5] = [220, 10, 16, 18, 0];
+recs[6] = [392, 15, 24, 0, 0];
+recs[7] = [392, 3, 24, 0, 1];
+recs[8] = [900, 10, 4, 0, 0];
+recs[9] = [280, 10, 48, 8, 1];
+recs[10] = [80, 12, 12, 0, 3, 140, 8, 10, -10, 1];
+recs[11] = [523, 10, 10, 0, 0, 659, 10, 10, 0, 1, 784, 12, 16, 0, 2];
+recs[12] = [880, 12, 8, -80, 0];
+recs[13] = 0;
 
 function fireNow() {
   playSfx(recs[cur]);

@@ -21,8 +21,11 @@
   compiler, which leaves SOURCE untouched.
 
   Keys: arrows move, printable keys insert, Backspace deletes, Enter splits
-  a line, F2 saves, F3 quits without saving. Esc is machine BREAK — do not
-  bind it here.
+  a line, F2 saves (and leaves — the console owns SAVE; see doSave),
+  F3 pages up, F4 pages down, F5 quits without saving.
+  Esc is machine BREAK — do not bind it here. GUI Ctrl-V paste is F6
+  (arm) … ASCII bytes … F7 (disarm): keyCode 113 is both F2 and 'q', so
+  paste must not share the F-key path.
 
   AUTHORING RULES - compiled BY the machine's own walls:
     - no string methods: everything is byte offsets and char codes
@@ -67,6 +70,8 @@ var topLine = 0;
 var dirty = 0;
 var quit = 0;
 var saved = 0;
+var needDraw = 0;
+var pasteOn = 0;   // GUI Ctrl-V: F6…F7, so ASCII 113-122 is letters not F-keys
 
 // ---- shim ----------------------------------------------------------------
 function _sb(i) { return srcByte(i); }
@@ -161,7 +166,7 @@ function drawStatus() {
   ctx.fillText("LINE", 0, y);
   ctx.fillText(curLine + 1, 40, y);
   if (dirty) { ctx.fillText("*", 96, y); }
-  ctx.fillText("F2=SAVE  F3=QUIT", 160, y);
+  ctx.fillText("F2=SAVE  F3=PGUP  F4=PGDN  F5=QUIT", 160, y);
   ctx.fillStyle = "#FFFFFF";
 }
 
@@ -202,10 +207,34 @@ function moveDown() {
   if (curLine + 1 < nLines) { curLine = curLine + 1; clampCol(); }
 }
 
+// F3 / F4: move the cursor by one glass page. redraw() already slides
+// topLine to keep the cursor on screen, so do not poke topLine here.
+function pageUp() {
+  if (curLine >= ROWS) { curLine = curLine - ROWS; }
+  else { curLine = 0; }
+  clampCol();
+}
+
+function pageDown() {
+  if (curLine + ROWS < nLines) { curLine = curLine + ROWS; }
+  else if (nLines > 0) { curLine = nLines - 1; }
+  clampCol();
+}
+
+// Inserting one byte only shifts later line starts. A full reindex is for
+// Enter / join-backspace. GUI paste is many typeChars per frame.
+function bumpLines(from, by) {
+  var i = from;
+  while (i < nLines) {
+    _w32(LINE_OFF + i * 4, lineStart(i) + by);
+    i = i + 1;
+  }
+}
+
 function typeChar(b) {
   insertByte(lineStart(curLine) + curCol, b);
   curCol = curCol + 1;
-  reindex();
+  bumpLines(curLine + 1, 1);
 }
 
 function pressEnter() {
@@ -231,9 +260,10 @@ function pressBack() {
   }
 }
 
-// F2 hands the buffer back to the console, which owns storage. cdone status
-// 0x81 = "write SOURCE to the loaded name"; the program ends there, and the
-// next thing the user types is COMPILE.
+// F2 cannot "save and keep editing" from this file. The editor has no disk
+// native — the console owns FAT. cdone(0x81) is the ask to write SOURCE to
+// the loaded name, and the console treats every cdone as "this program is
+// finished" (halt, READY). Skipping cdone would stay here but not SAVE.
 function doSave() {
   saved = 1;
   cdone(129, 0, 0);
@@ -241,20 +271,31 @@ function doSave() {
 
 function onKey(e) {
   var k = e.keyCode;
-  if (k === 38) { moveUp(); }
+  // F6/F7 wrap a GUI paste. Inside it, 32-126 are SOURCE bytes (so 'q' is
+  // 113, not F2). FPGA-SIM KEYEVT is 8-bit keyCode only — no e.key.
+  if (k === 117) { pasteOn = 1; }
+  else if (k === 118) { pasteOn = 0; }
+  else if (pasteOn) {
+    if (k === 13) { pressEnter(); }
+    else if (k === 8) { pressBack(); }
+    else if (k >= 32 && k < 127) { typeChar(k); }
+  } else if (k === 38) { moveUp(); }
   else if (k === 40) { moveDown(); }
   else if (k === 37) { if (curCol > 0) { curCol = curCol - 1; } }
   else if (k === 39) { if (curCol < lineLen(curLine)) { curCol = curCol + 1; } }
   else if (k === 13) { pressEnter(); }
   else if (k === 8) { pressBack(); }
-  else if (k === 113) { doSave(); }        // F2
-  else if (k === 114) { quit = 1; cdone(0, 0, 0); }  // F3 — not Esc (BREAK)
+  else if (k === 113) { doSave(); }        // F2 — save and leave (cdone)
+  else if (k === 114) { pageUp(); }        // F3 — before typeChar (114 is 'r')
+  else if (k === 115) { pageDown(); }      // F4 — before typeChar (115 is 's')
+  else if (k === 116) { quit = 1; cdone(0, 0, 0); }  // F5 — not Esc (BREAK)
   else if (k >= 32 && k < 127) { typeChar(k); }
-  redraw();
+  needDraw = 1;
 }
 
 function tick() {
   if (quit || saved) { return; }
+  if (needDraw) { redraw(); needDraw = 0; }
   requestAnimationFrame(tick);
 }
 

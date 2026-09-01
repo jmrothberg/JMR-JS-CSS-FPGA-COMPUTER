@@ -371,3 +371,11 @@ def test_edit_cursor_insert_middle():
     assert buf == "</bodyx>" or buf[col - 1] == "x", (buf, col)
     assert "x" in buf
 
+
+def test_clip_to_editor_keys_ascii_newline_tab():
+    from gui_jmr_js import clip_to_editor_keys
+
+    assert clip_to_editor_keys("ab\n\tc") == [97, 98, 13, 32, 32, 99]
+    assert clip_to_editor_keys("qrst") == [113, 114, 115, 116]
+    assert 10 not in clip_to_editor_keys("line\n")
+

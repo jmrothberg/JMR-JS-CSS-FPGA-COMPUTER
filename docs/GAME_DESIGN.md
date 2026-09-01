@@ -19,8 +19,8 @@ Do not raise caps in RTL for one game.
 
 | Gen | Meaning | Titles |
 |---|---|---|
-| **1.0 (now)** | Frozen caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Compile when you **make the card** (minted `.JSH`; chip does not compile) | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls (see below). `MKPVP.HTML` is the V1 MK-shaped example. |
-| **1.5 (planned)** | Console **authoring** (type / paste / edit) **and try to be standalone** (compile-on-RUN) **and** popular JS V1 does not have (`shift`, `Math.sin`/`round`, `isFinite`, `e.code`, …). Same heap/ASET/Canvas. Not MK. | Same V1 titles. Language + LUT: [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). |
+| **1.0 (now)** | Frozen caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Host mint at card-create still works. | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls (see below). `MKPVP.HTML` is the V1 MK-shaped example. |
+| **1.5 (now)** | Console **authoring and compile on the machine:** `LOAD` → `EDIT` → `COMPILE` → `RUN`. Editor and compiler are ordinary card programs (`EDITOR.JSH`, `COMPILER.JSH`), not a new ISA. Same heap/ASET/Canvas. Popular JS V1 still lacks (`shift`, `Math.sin`/`round`, `isFinite`, `e.code`, …) — that language backlog is not MK. | Same V1 titles. How-to: [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). |
 | **2.0 (planned)** | Grow the ISA past V1 walls: more sprite descriptors, a larger simple ASET bank, `Object.keys` on the chip, `Math.round`, dotted `new`, `.call`/`.apply`. **No title is the V2 example** (`MK.HTML` is gone). Do **not** title-gate. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20). | Any `NAME.HTML` that needs those caps. Library MK-shaped play today: `MKBIG.HTML` / `MKBIGCPU.HTML` (V1, ≤16 sheets / 4 MB). |
 
 V1 / V1.5 / V2 surface backlog: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
@@ -162,17 +162,17 @@ RUN
 - **V1.0 disk is `card.img`:** PYTHON, FPGA-SIM, and BOARD all `LOAD` that
   HTML from the FAT and **`RUN` the minted `.JSH`**. Compile is at card
   create, not a host recompile of `storage/` on `RUN`.
-- **V1.0:** the chip does not compile — **compile when you make the
-  card** (`make_sd_image.py` mints `.JSH`).
+- **V1.0:** host mint at card-create still works (`make_sd_image.py` writes
+  `.JSH`). **V1.5:** the machine also compiles. `LOAD "NAME.HTML"` parks
+  source; bare `EDIT` chain-loads `EDITOR.JSH` (F2 saves, F5 quits, Esc is
+  BREAK); `COMPILE` chain-loads `COMPILER.JSH` and mints `NAME.JSH` on the
+  card; `RUN` is the ordinary sidecar load. `EDIT n` stays the numbered-line
+  replace. Popular JS V1 does not have (`shift`, `Math.sin`/`round`,
+  `isFinite`, `e.code`, …) is still a language backlog, not a title gate.
+  Spec:
+  [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 - Chrome may open the same file for authoring. PYTHON bytecode → FPGA-SIM
   RTL → BOARD is the machine. Dukpy / a host twin is not.
-- **V1.5 (planned):** type, paste, or edit numbered HTML at READY; **`EDIT n`
-  stays**. **Try to be standalone** (compile-on-RUN on the machine) **and**
-  popular JS V1 does not have (`shift`, `Math.sin`/`round`, `isFinite`,
-  `e.code`, …). Numbers go by 10 so `15` inserts between `10` and `20`;
-  `10` + Enter deletes that line, `10 body` also replaces it. Spec +
-  LUT/BRAM budget:
-  [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 
 After adding or changing a title:
 
@@ -400,12 +400,13 @@ Put `storage/NAME.HTML` in the storage folder (stem ≤ 8 letters so the board
 `python3 tools/make_sd_image.py create card.img` scans `storage/` and copies
 what is there. There is no title list to edit.
 
-`LOAD` uses the HTML name. The card holds `.HTML` / `.HTM`. **V1.0:**
-`make_sd_image.py create` **mints** `NAME.JSH` from that HTML. PYTHON,
-FPGA-SIM, and BOARD all `RUN` that sidecar from `card.img` (compile is at
-card-build, not on the chip, not a host recompile of `storage/`). Never copy
-a stale `.JSH` from `storage/`. **V1.5 tries standalone** compile-on-RUN on
-the machine. The card builder copies **root** `storage/*.HTML`. `storage/games_*`
+`LOAD` uses the HTML name. The card holds `.HTML` / `.HTM` plus minted
+`.JSH`. **V1.0:** `make_sd_image.py create` **mints** `NAME.JSH` from that
+HTML. **V1.5:** `COMPILE` on the machine mints the same sidecar from SOURCE
+(`LOAD` → `EDIT` → `COMPILE` → `RUN`). PYTHON, FPGA-SIM, and BOARD all
+`RUN` that `.JSH` from `card.img` (not a host recompile of `storage/` on
+`RUN`). Never copy a stale `.JSH` from `storage/`. The card builder copies
+**root** `storage/*.HTML`. `storage/games_*`
 is the upstream archive — not DIR, not the card. Same-stem `NAME.JS` /
 `NAME.JSB` are leftover demos, not product twins.
 

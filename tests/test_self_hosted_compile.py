@@ -878,6 +878,33 @@ def test_editor_save_and_quit_report_distinct_statuses():
     assert m._cmp_status == jsb_format.CMP_STATUS_DONE and m._cmp_len == 0
 
 
+def test_editor_paste_mode_types_q_without_saving():
+    """F6…F7: ASCII 113 is 'q', not F2. GUI paste uses this wrap because
+    KEYEVT is only an 8-bit keyCode and 113 is both F2 and 'q'."""
+    drv = (
+        "reindex(); var e = {};\n"
+        "e.keyCode = 117; onKey(e);\n"
+        "e.keyCode = 113; onKey(e);\n"
+        "e.keyCode = 118; onKey(e);\n"
+    )
+    m, got = _drive_editor(drv, _ED_SRC)
+    assert got.startswith("q"), got
+    assert m._cmp_status != jsb_format.CMP_STATUS_SAVE
+
+
+def test_editor_f2_still_saves_after_paste_window():
+    drv = (
+        "reindex(); var e = {};\n"
+        "e.keyCode = 117; onKey(e);\n"
+        "e.keyCode = 97; onKey(e);\n"
+        "e.keyCode = 118; onKey(e);\n"
+        "e.keyCode = 113; onKey(e);\n"
+    )
+    m, got = _drive_editor(drv, _ED_SRC)
+    assert got.startswith("a"), got
+    assert m._cmp_status == jsb_format.CMP_STATUS_SAVE
+
+
 def test_editor_round_trips_a_real_title_untouched():
     src = (_STORAGE / "BOXES.HTML").read_text()
     _, got = _drive_editor("reindex();", src)
