@@ -357,6 +357,13 @@ module jmr_console_engine (
     logic [3:0] rsel_q;
     logic [7:0] dir_n, dir_idx;
     logic [17:0] src_len /*verilator public_flat_rw*/;     // bytes in SOURCE BRAM (0..131072)
+    // cdone() race arm: exec64's cmp_done is sticky and its p_clr wipe rides
+    // the slow vm_clk header walk — the console reaches C_CMP_WAIT first and
+    // consumed the PREVIOUS program's status (board 2026-09-01: COMPILE
+    // answered OK instantly = the editor's stale F3 quit; second COMPILE
+    // worked because launch #1 had cleared the latch). Accept cmp_done only
+    // after it has been seen LOW since this launch.
+    logic cdone_seen_low;
     assign src_len_o = src_len;
     logic [17:0] src_i;
     logic [7:0]  rd_ch;
@@ -670,6 +677,7 @@ module jmr_console_engine (
             cmp_ph <= 5'd0; cmp_nw <= 1'b0; cmp_nm_len <= 8'd0; cmp_pend <= 1'b0; cmp_rd_addr <= '0;
             src_trunc <= 1'b0; cmp_use_srcname <= 1'b0;
             cmp_interactive <= 1'b0;
+            cdone_seen_low <= 1'b0;
             cmp_art_mode <= 1'b0; cmp_art_len <= '0;
             art_i <= '0; art_found <= 1'b0; art_hi <= 1'b0; art_word <= '0;
             art_nspr <= '0;
@@ -1625,7 +1633,8 @@ module jmr_console_engine (
                     // compiler needs no input; the editor does.
                     kbd_clear <= (cmp_wd == 34'd0);
                     if (cmp_ph == 5'd0) begin
-                        if (cmp_done_i) begin
+                        if (!cmp_done_i) cdone_seen_low <= 1'b1;
+                        if (cmp_done_i && cdone_seen_low) begin
                             cmp_img_len <= cmp_len_i;
                             cmp_ph <= 5'd1;
                             cmp_out_off <= 21'd0;
@@ -2466,6 +2475,7 @@ module jmr_console_engine (
                 // dir_n: 0=copy base, 1=write J, 2=write S, 3=write B, 4=done
                 // No '.' in name (LOAD "invaders") → append ".JSB" after full name
                 C_JSB_PREP: begin
+                    cdone_seen_low <= 1'b0;   // re-arm the cdone edge gate
                     if (jsb_name_src != 2'd0) begin
                         // A chain program, loaded by identity not by title.
                         if ({1'b0, name_i} >= cmp_name_len(cmp_progsel)) begin
