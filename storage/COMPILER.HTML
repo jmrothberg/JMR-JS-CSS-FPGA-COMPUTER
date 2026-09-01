@@ -882,6 +882,29 @@ function internStr(off, len) {
   return idx;
 }
 
+function internTypeof() {
+  if (TYPEOF_NI >= 0) { return TYPEOF_NI; }
+  // hash of "typeof" = 46737 under the rolling h*31+c %65536
+  var h = ((((116 * 31 + 121) % 65536) * 31 + 112) % 65536);
+  h = (((h * 31 + 101) % 65536) * 31 + 111) % 65536;
+  h = (h * 31 + 102) % 65536;
+  var i = 0;
+  while (i < nNames) {
+    if (nLen(i) === 6 && nHash(i) === h) { TYPEOF_NI = i; return i; }
+    i = i + 1;
+  }
+  i = nameNew(6, h);
+  _gw(NBLOB_OFF + blobLen, 116);
+  _gw(NBLOB_OFF + blobLen + 1, 121);
+  _gw(NBLOB_OFF + blobLen + 2, 112);
+  _gw(NBLOB_OFF + blobLen + 3, 101);
+  _gw(NBLOB_OFF + blobLen + 4, 111);
+  _gw(NBLOB_OFF + blobLen + 5, 102);
+  blobLen = blobLen + 6;
+  TYPEOF_NI = i;
+  return i;
+}
+
 function internThis() {
   var h = ((((95 * 31 + 95) % 65536) * 31 + 116) % 65536);
   h = (((h * 31 + 104) % 65536) * 31 + 105) % 65536;
@@ -1360,10 +1383,12 @@ function primary() {
     if (tSub(ti) === 12) {                       // typeof x
       ti = ti + 1;
       unary();
-      // typeof IS native id 40 (2026-09-01: TYPEOF_NI was forever -1 — the
-      // emitted nid was garbage and the first typeof poisoned the program;
-      // PACFAST's per-cell map check made that "compiles but does not run").
-      emit(O_CALLN, 40, 1);
+      // O_CALLN's operand is a NAME index; rewriteOps maps it to a native
+      // id via natIdOf. TYPEOF_NI was forever -1, natIdOf(-1) missed, and
+      // rewriteOps stubbed every typeof to 33 — PACFAST's per-cell map
+      // check made that "compiles but does not run" (2026-09-01). Intern
+      // the name "typeof": its hash row already maps to native 40.
+      emit(O_CALLN, internTypeof(), 1);
       return;
     }
     if (tSub(ti) === 14) {                       // this → __this
@@ -1404,6 +1429,18 @@ function primary() {
     if (isOp(ti + 1, 33) && (tKind(ti + 2) === K_ID) && isOp(ti + 3, 26)) {
       if (natLookup(dotHash(tOff(ti), tLen(ti), tOff(ti + 2), tLen(ti + 2)),
                     tLen(ti) + tLen(ti + 2) + 1) >= 0) {
+        ni = internDot(tOff(ti), tLen(ti), tOff(ti + 2), tLen(ti + 2));
+        ti = ti + 3;
+        emit(O_CALLN, ni, argList());
+        return;
+      }
+      // Unknown browser-only API on the window object (window.open):
+      // the host lowers these to the no-op stub 33 so titles never need
+      // hand-edits to compile. Emit O_CALLN with the dotted name;
+      // rewriteOps stubs any native it cannot resolve.
+      if (tLen(ti) === 6 && _sb(tOff(ti)) === 119 && _sb(tOff(ti) + 1) === 105
+          && _sb(tOff(ti) + 2) === 110 && _sb(tOff(ti) + 3) === 100
+          && _sb(tOff(ti) + 4) === 111 && _sb(tOff(ti) + 5) === 119) {
         ni = internDot(tOff(ti), tLen(ti), tOff(ti + 2), tLen(ti + 2));
         ti = ti + 3;
         emit(O_CALLN, ni, argList());
