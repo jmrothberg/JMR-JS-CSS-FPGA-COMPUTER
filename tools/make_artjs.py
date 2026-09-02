@@ -112,6 +112,9 @@ _MIN_PNG_IIFE = re.compile(
     r"\}\)\s*\(\)\s*;",
     re.S,
 )
+# new Image() instance setter (DOOM3DFI harness): wins over prototype, so
+# Chrome kept loading STEM-N.png (not in storage/) instead of __jmrSpr.
+_JMR_SPR_LOOKUP = re.compile(r"window\.JMR_SPR\[\s*\+\s*m\[\s*1\s*\]\s*\]")
 _ARTJS_IIFE = (
     "(function () {\n"
     '  if (typeof __jmrSpr === "undefined") { return; }\n'
@@ -157,13 +160,18 @@ def patch_html(stem: str) -> str:
             return f"{stem:8s} shim inserted before the title script"
 
     if _PNG_SET in html:
-        html = html.replace(_PNG_SET, _ART_SET, 1)
+        html = html.replace(_PNG_SET, _ART_SET)
         notes.append("interceptor → __jmrSpr")
     elif "__jmrSpr[+m" not in html:
         # lambda so (\d+) in the IIFE is not a re.sub backref
         html, nsub = _MIN_PNG_IIFE.subn(lambda _m: _ARTJS_IIFE, html, count=1)
         if nsub:
             notes.append("interceptor → __jmrSpr")
+    # Instance src on new Image() (not HTMLImageElement.prototype) still
+    # pointed at the PNG list. Rewrite every jmr:spr lookup to ARTJS.
+    html, nlook = _JMR_SPR_LOOKUP.subn("(__jmrSpr[+m[1]]||v)", html)
+    if nlook:
+        notes.append("Image() → __jmrSpr")
 
     if _ART_SET in html and 'typeof __jmrSpr === "undefined"' not in html:
         if _IIFE_OPEN in html:

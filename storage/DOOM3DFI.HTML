@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>DOOM 3D</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden}
+#wrap{position:fixed;inset:0;display:grid;place-items:center;background:#000}
+canvas{display:block;image-rendering:pixelated;touch-action:none}
+</style>
+<script data-host="chrome" src="DOOM3DFI.ARTJS"></script>
+<script data-host="chrome">
+window.JMR_SPR = ["DOOM3DFI-0.png", "DOOM3DFI-1.png", "DOOM3DFI-2.png", "DOOM3DFI-3.png", "DOOM3DFI-4.png", "DOOM3DFI-5.png", "DOOM3DFI-6.png", "DOOM3DFI-7.png", "DOOM3DFI-8.png", "DOOM3DFI-9.png", "DOOM3DFI-10.png", "DOOM3DFI-11.png", "DOOM3DFI-12.png"];
+(function () {
+  if (typeof __jmrSpr === "undefined") { return; }
+  var d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+  Object.defineProperty(HTMLImageElement.prototype, "src", {
+    get: function () { return d.get.call(this); },
+    set: function (v) {
+      var m = /^jmr:spr:(\d+)$/.exec(String(v));
+      d.set.call(this, m ? (__jmrSpr[+m[1]] || v) : v);
+    }
+  });
+})();
+</script>
+</head><body>
+<div id="wrap"><canvas id="c" width="640" height="480"></canvas></div>
+<script>
+var cvs = document.getElementById("c");
+var ctx = cvs.getContext("2d");
+ctx.imageSmoothingEnabled = false;
+var W = 640, H = 480;
+var PI = Math.PI, TAU = PI * 2, INV2PI = 1 / TAU;
+var LN = 128, LS = [], LC = [];
+var IMG = [];
+var T_WALL = 0, T_FLOOR = 1, T_CEIL = 2, M_IDLE = 3, M_ATK = 4;
+var B_IDLE = 5, B_ATK = 6, W_IDLE = 7, W_FIRE = 8, P_HP = 9, P_AM = 10;
+var C_INTRO = 11, C_BOSS = 12;
+var MW = 24, MH = 24;
+var MAP = [
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,1],
+[1,0,1,1,0,1,1,1,0,1,0,1,0,1,1,0,1,1,1,0,1,1,0,1],
+[1,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0,1],
+[1,0,1,0,1,1,0,1,1,1,1,1,0,1,1,1,0,1,0,1,1,1,0,1],
+[1,0,0,0,1,0,0,0,0,1,0,0,0,0,0,1,0,1,0,0,0,1,0,1],
+[1,0,1,0,1,0,1,1,0,1,0,1,1,1,0,1,0,1,1,1,0,1,0,1],
+[1,0,1,0,0,0,1,0,0,1,0,1,0,0,0,1,0,0,0,1,0,0,0,1],
+[1,0,1,1,1,1,1,0,1,1,0,1,0,1,1,1,1,1,0,1,1,1,0,1],
+[1,0,1,0,0,0,1,0,0,0,0,1,0,0,0,0,0,1,0,0,0,1,0,1],
+[1,0,1,0,1,0,1,1,1,1,1,1,0,1,1,1,0,1,1,1,0,1,0,1],
+[1,0,0,0,1,0,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0,1,0,1],
+[1,0,1,1,1,1,1,0,1,1,0,1,0,1,1,1,1,1,0,1,1,1,0,1],
+[1,0,1,0,0,0,1,0,1,0,0,1,0,0,0,0,0,1,0,0,0,1,0,1],
+[1,0,1,0,1,0,1,0,1,0,1,1,1,1,0,1,0,1,0,1,1,1,0,1],
+[1,0,0,0,1,0,0,0,1,0,0,0,0,1,0,1,0,1,0,0,0,1,0,1],
+[1,0,1,1,1,1,1,1,1,0,1,1,0,1,0,1,1,1,1,1,0,1,0,1],
+[1,0,1,0,0,0,0,0,1,0,1,0,0,1,0,0,0,0,0,1,0,0,0,1],
+[1,0,1,0,1,1,1,0,1,0,1,0,1,1,1,1,0,1,1,1,0,1,1,1],
+[1,0,0,0,1,0,1,0,0,0,1,0,0,0,0,1,0,0,0,1,0,0,0,1],
+[1,0,1,1,1,0,1,0,1,1,1,1,1,0,1,1,0,1,0,1,1,1,0,1],
+[1,0,1,0,0,0,1,0,0,0,0,0,1,0,1,0,0,1,0,0,0,1,0,1],
+[1,0,1,0,1,1,1,1,1,1,1,0,1,0,1,0,1,1,1,1,0,1,0,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+];
+var state = {phase:"intro", phaseT:0, score:0, over:false, bossShown:false,
+  player:{x:1.5, y:1.5, z:1.5, yaw:0, pitch:0, hp:100, ammo:50},
+  monsters:[], pickups:[], muzzle:0, hurt:0, shake:0};
+window.state = state;
+var keys = {up:false, dn:false, lk:false, rk:false, tl:false, tr:false,
+  fire:false, pu:false, pd:false};
+var rayOut = {dist:0, side:0, wx:0, mx:0, my:0, ddx:0, ddy:0, stepX:0, stepY:0, sdx:0, sdy:0};
+var bb = {e:null, isMon:0, tx:0, ty:0, tX:0, tY:0, scrX:0, floorY:0, sh:0, sw:0, top:0, left:0, img:null};
+var zA = [], zB = [], zC = [], zD = [], zE = [];
+var frames = 0, canShootAt = 0;
+var sfxShoot = [220, 12, 8, -80, 0];
+var sfxHit = [140, 10, 6, -40, 1];
+var sfxHurt = [90, 12, 16, -6, 0];
+var sfxPick = [600, 10, 8, 40, 0];
+var sfxBoom = [70, 12, 20, 0, 3, 90, 8, 12, -8, 1];
+
+function playSfx(r) {
+  var i;
+  if (!r) return;
+  if (typeof _chromePlay === "function") { _chromePlay(r); return; }
+  i = 0;
+  while (i + 4 < r.length) {
+    sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
+    i = i + 5;
+  }
+}
+function mySin(x) {
+  var t, r, x2, i;
+  x = x % TAU;
+  if (x > PI) x = x - TAU;
+  if (x < -PI) x = x + TAU;
+  t = x; r = x; x2 = x * x;
+  for (i = 1; i <= 7; i++) { t = t * -x2 / ((2 * i) * (2 * i + 1)); r = r + t; }
+  return r;
+}
+function myCos(x) {
+  var t, r, x2, i;
+  x = x % TAU;
+  if (x > PI) x = x - TAU;
+  if (x < -PI) x = x + TAU;
+  t = 1; r = 1; x2 = x * x;
+  for (i = 1; i <= 7; i++) { t = t * -x2 / ((2 * i - 1) * (2 * i)); r = r + t; }
+  return r;
+}
+function fillLut() {
+  var i, aa;
+  for (i = 0; i < LN; i++) {
+    aa = i / LN * TAU;
+    LS[i] = mySin(aa);
+    LC[i] = myCos(aa);
+  }
+}
+function fi(a) {
+  var k;
+  k = (a * INV2PI * LN) | 0;
+  k = k % LN;
+  if (k < 0) k = k + LN;
+  return k;
+}
+function loadSpr() {
+  var i, im;
+  for (i = 0; i < 13; i++) {
+    im = new Image();
+    im.src = "jmr:spr:" + i;
+    IMG[i] = im;
+  }
+}
+function cellAt(x, y) {
+  var mx, my;
+  mx = x | 0; my = y | 0;
+  if (mx < 0 || my < 0 || mx >= MW || my >= MH) return 1;
+  return MAP[my][mx];
+}
+function zget(x) {
+  if (x < 128) return zA[x];
+  if (x < 256) return zB[x - 128];
+  if (x < 384) return zC[x - 256];
+  if (x < 512) return zD[x - 384];
+  return zE[x - 512];
+}
+function zset(x, v) {
+  if (x < 128) zA[x] = v;
+  else if (x < 256) zB[x - 128] = v;
+  else if (x < 384) zC[x - 256] = v;
+  else if (x < 512) zD[x - 384] = v;
+  else zE[x - 512] = v;
+}
+function kd(e) {
+  var k, c;
+  k = e.key; c = e.keyCode;
+  if (k === "w" || k === "W" || c === 87) keys.up = true;
+  if (k === "s" || k === "S" || c === 83) keys.dn = true;
+  if (k === "a" || k === "A" || c === 65) keys.lk = true;
+  if (k === "d" || k === "D" || c === 68) keys.rk = true;
+  if (c === 38 || k === "ArrowUp") keys.up = true;
+  if (c === 40 || k === "ArrowDown") keys.dn = true;
+  if (c === 37 || k === "ArrowLeft") keys.tl = true;
+  if (c === 39 || k === "ArrowRight") keys.tr = true;
+  if (k === "q" || k === "Q" || c === 81) keys.pu = true;
+  if (k === "e" || k === "E" || c === 69) keys.pd = true;
+  if (c === 32 || k === " ") { keys.fire = true; fire(); skip(); }
+  if (k === "r" || k === "R" || c === 82) reset();
+}
+function ku(e) {
+  var k, c;
+  k = e.key; c = e.keyCode;
+  if (k === "w" || k === "W" || c === 87) keys.up = false;
+  if (k === "s" || k === "S" || c === 83) keys.dn = false;
+  if (k === "a" || k === "A" || c === 65) keys.lk = false;
+  if (k === "d" || k === "D" || c === 68) keys.rk = false;
+  if (c === 38 || k === "ArrowUp") keys.up = false;
+  if (c === 40 || k === "ArrowDown") keys.dn = false;
+  if (c === 37 || k === "ArrowLeft") keys.tl = false;
+  if (c === 39 || k === "ArrowRight") keys.tr = false;
+  if (k === "q" || k === "Q" || c === 81) keys.pu = false;
+  if (k === "e" || k === "E" || c === 69) keys.pd = false;
+  if (c === 32 || k === " ") keys.fire = false;
+}
+function clearKeys() {
+  keys.up = false; keys.dn = false; keys.lk = false; keys.rk = false;
+  keys.tl = false; keys.tr = false; keys.fire = false;
+  keys.pu = false; keys.pd = false;
+}
+function mkMon(x, y, boss) {
+  return {x:x, y:y, hp:boss ? 60 : 12, boss:boss, alive:true, atk:0, cool:0, anim:0};
+}
+function spawnMonsters() {
+  state.monsters = [];
+  state.monsters.push(mkMon(6.5, 3.5, false));
+  state.monsters.push(mkMon(12.5, 2.5, false));
+  state.monsters.push(mkMon(20.5, 4.5, false));
+  state.monsters.push(mkMon(4.5, 9.5, false));
+  state.monsters.push(mkMon(15.5, 9.5, false));
+  state.monsters.push(mkMon(21.5, 11.5, false));
+  state.monsters.push(mkMon(8.5, 13.5, false));
+  state.monsters.push(mkMon(18.5, 15.5, false));
+  state.monsters.push(mkMon(3.5, 17.5, false));
+  state.monsters.push(mkMon(14.5, 17.5, false));
+  state.monsters.push(mkMon(21.5, 19.5, false));
+  state.monsters.push(mkMon(10.5, 21.5, false));
+  state.monsters.push(mkMon(5.5, 21.5, false));
+  state.monsters.push(mkMon(21.5, 21.5, true));
+}
+function spawnPickups() {
+  state.pickups = [];
+  state.pickups.push({x:3.5, y:3.5, type:"hp", got:false});
+  state.pickups.push({x:11.5, y:7.5, type:"hp", got:false});
+  state.pickups.push({x:19.5, y:13.5, type:"hp", got:false});
+  state.pickups.push({x:7.5, y:19.5, type:"hp", got:false});
+  state.pickups.push({x:16.5, y:21.5, type:"hp", got:false});
+  state.pickups.push({x:9.5, y:2.5, type:"am", got:false});
+  state.pickups.push({x:17.5, y:7.5, type:"am", got:false});
+  state.pickups.push({x:5.5, y:15.5, type:"am", got:false});
+  state.pickups.push({x:13.5, y:19.5, type:"am", got:false});
+  state.pickups.push({x:21.5, y:15.5, type:"am", got:false});
+}
+function reset() {
+  var p;
+  state.phase = "intro"; state.phaseT = 0; state.score = 0;
+  state.over = false; state.bossShown = false;
+  state.muzzle = 0; state.hurt = 0; state.shake = 0;
+  canShootAt = 0;
+  p = state.player;
+  p.x = 1.5; p.y = 1.5; p.z = 1.5; p.yaw = 0; p.pitch = 0; p.hp = 100; p.ammo = 50;
+  spawnMonsters();
+  spawnPickups();
+}
+function skip() {
+  if (state.phase === "intro" || state.phase === "boss") state.phase = "play";
+}
+window.game = {reset:reset, skip:skip};
+function ddaHit(px, py, rdx, rdy, out) {
+  var side, hit, g;
+  side = 0; hit = 0; g = 0;
+  while (hit === 0 && g < 160) {
+    g = g + 1;
+    if (out.sdx < out.sdy) {
+      out.sdx = out.sdx + out.ddx; out.mx = out.mx + out.stepX; side = 0;
+    } else {
+      out.sdy = out.sdy + out.ddy; out.my = out.my + out.stepY; side = 1;
+    }
+    if (out.mx < 0 || out.my < 0 || out.mx >= MW || out.my >= MH) hit = 2;
+    else if (MAP[out.my][out.mx] > 0) hit = 1;
+  }
+  finishRay(px, py, rdx, rdy, side, out);
+}
+function finishRay(px, py, rdx, rdy, side, out) {
+  var dist, wx;
+  dist = side === 0 ? (out.sdx - out.ddx) : (out.sdy - out.ddy);
+  if (dist < 0.0001) dist = 0.0001;
+  wx = side === 0 ? py + dist * rdy : px + dist * rdx;
+  wx = wx - Math.floor(wx);
+  out.dist = dist; out.side = side; out.wx = wx;
+}
+function castRay(px, py, rdx, rdy, out) {
+  var mx, my, ddx, ddy;
+  mx = px | 0; my = py | 0;
+  ddx = rdx !== 0 ? Math.abs(1 / rdx) : 1e30;
+  ddy = rdy !== 0 ? Math.abs(1 / rdy) : 1e30;
+  out.mx = mx; out.my = my; out.ddx = ddx; out.ddy = ddy;
+  if (rdx < 0) { out.stepX = -1; out.sdx = (px - mx) * ddx; }
+  else { out.stepX = 1; out.sdx = (mx + 1 - px) * ddx; }
+  if (rdy < 0) { out.stepY = -1; out.sdy = (py - my) * ddy; }
+  else { out.stepY = 1; out.sdy = (my + 1 - py) * ddy; }
+  ddaHit(px, py, rdx, rdy, out);
+}
+function shotHits(m, p, dx, dy) {
+  var tx, ty, fwd, perp, rad, len;
+  tx = m.x - p.x; ty = m.y - p.y;
+  fwd = tx * dx + ty * dy;
+  if (fwd < 0.2) return -1;
+  perp = dx * ty - dy * tx;
+  rad = m.boss ? 0.7 : 0.45;
+  if (Math.abs(perp) > rad) return -1;
+  if (fwd > 9) return -1;
+  len = Math.sqrt(tx * tx + ty * ty);
+  castRay(p.x, p.y, tx / len, ty / len, rayOut);
+  if (fwd > rayOut.dist + 0.1) return -1;
+  return fwd;
+}
+function applyHit(best) {
+  var mo;
+  if (best < 0) return;
+  mo = state.monsters[best];
+  mo.hp = mo.hp - 12;
+  mo.atk = 9;
+  playSfx(sfxHit);
+  if (mo.hp <= 0) {
+    mo.alive = false;
+    state.score = state.score + (mo.boss ? 500 : 100);
+    playSfx(sfxBoom);
+  }
+}
+function fire() {
+  var p, di, dx, dy, best, bestD, i, m, fwd;
+  if (state.phase !== "play" || state.over) return;
+  if (frames < canShootAt) return;
+  p = state.player;
+  if (p.ammo <= 0) return;
+  p.ammo = p.ammo - 1;
+  state.muzzle = 7;
+  canShootAt = frames + 19;
+  playSfx(sfxShoot);
+  di = fi(p.yaw); dx = LC[di]; dy = LS[di];
+  best = -1; bestD = 1e9;
+  for (i = 0; i < state.monsters.length; i++) {
+    m = state.monsters[i];
+    if (!m.alive) continue;
+    fwd = shotHits(m, p, dx, dy);
+    if (fwd >= 0 && fwd < bestD) { bestD = fwd; best = i; }
+  }
+  applyHit(best);
+}
+function tryMove(e, mvx, mvy) {
+  var r, nx, ny;
+  r = 0.25;
+  nx = e.x + mvx;
+  if (cellAt(nx + (mvx > 0 ? r : -r), e.y) === 0) e.x = nx;
+  ny = e.y + mvy;
+  if (cellAt(e.x, ny + (mvy > 0 ? r : -r)) === 0) e.y = ny;
+}
+function joyBits() {
+  var b;
+  b = 0;
+  if (typeof joy === "function") b = joy();
+  return b;
+}
+function tickPhase() {
+  if (state.phase === "intro" || state.phase === "boss") {
+    state.phaseT = state.phaseT + 1;
+    if (state.phaseT > 240) state.phase = "play";
+  }
+}
+function movePlayer() {
+  var p, di, dx, dy, rx, ry, mx2, my2, ml, lim, b;
+  b = joyBits();
+  if (b & 16) fire();
+  p = state.player;
+  if (keys.tl || (b & 4)) p.yaw = p.yaw - 0.0367;
+  if (keys.tr || (b & 8)) p.yaw = p.yaw + 0.0367;
+  if (keys.pu) p.pitch = p.pitch + 0.02;
+  if (keys.pd) p.pitch = p.pitch - 0.02;
+  lim = PI / 2 - 0.05;
+  if (p.pitch > lim) p.pitch = lim;
+  if (p.pitch < -lim) p.pitch = -lim;
+  di = fi(p.yaw); dx = LC[di]; dy = LS[di];
+  rx = -dy; ry = dx;
+  mx2 = 0; my2 = 0;
+  if (keys.up || (b & 1)) { mx2 = mx2 + dx; my2 = my2 + dy; }
+  if (keys.dn || (b & 2)) { mx2 = mx2 - dx; my2 = my2 - dy; }
+  if (keys.rk) { mx2 = mx2 + rx; my2 = my2 + ry; }
+  if (keys.lk) { mx2 = mx2 - rx; my2 = my2 - ry; }
+  if (mx2 !== 0 || my2 !== 0) {
+    ml = Math.sqrt(mx2 * mx2 + my2 * my2);
+    tryMove(p, mx2 / ml * 0.07, my2 / ml * 0.07);
+  }
+  p.z = p.y;
+}
+function tickFx() {
+  if (state.muzzle > 0) state.muzzle = state.muzzle - 1;
+  if (state.hurt > 0) state.hurt = state.hurt - 1;
+  if (state.shake > 0) state.shake = state.shake - 1;
+}
+function tickPickups() {
+  var p, j, pk, pdx, pdy;
+  p = state.player;
+  for (j = 0; j < state.pickups.length; j++) {
+    pk = state.pickups[j];
+    if (pk.got) continue;
+    pdx = pk.x - p.x; pdy = pk.y - p.y;
+    if (pdx * pdx + pdy * pdy < 0.36) {
+      pk.got = true;
+      playSfx(sfxPick);
+      if (pk.type === "hp") { p.hp = p.hp + 25; if (p.hp > 100) p.hp = 100; }
+      else p.ammo = p.ammo + 15;
+    }
+  }
+}
+function tickOneMon(m, p) {
+  var tdx, tdy, dd, dmg, mv;
+  tdx = p.x - m.x; tdy = p.y - m.y;
+  dd = Math.sqrt(tdx * tdx + tdy * tdy);
+  m.anim = m.anim + 1;
+  if (m.atk > 0) m.atk = m.atk - 1;
+  if (m.cool > 0) m.cool = m.cool - 1;
+  if (dd < 1.1) {
+    if (m.cool <= 0) {
+      m.cool = 60; m.atk = 18;
+      dmg = m.boss ? 18 : 8;
+      p.hp = p.hp - dmg;
+      state.hurt = 15; state.shake = 12;
+      playSfx(sfxHurt);
+      if (p.hp <= 0) { p.hp = 0; state.over = true; state.phase = "dead"; }
+    }
+  } else if (dd < 8) {
+    mv = m.boss ? 0.027 : 0.037;
+    tryMove(m, tdx / dd * mv, tdy / dd * mv);
+  }
+}
+function tickMonsters() {
+  var p, i, m, alive, bossLeft;
+  p = state.player;
+  alive = 0; bossLeft = null;
+  for (i = 0; i < state.monsters.length; i++) {
+    m = state.monsters[i];
+    if (!m.alive) continue;
+    alive = alive + 1;
+    if (m.boss) bossLeft = m;
+    tickOneMon(m, p);
+  }
+  if (alive === 1 && bossLeft && !state.bossShown) {
+    state.bossShown = true; state.phase = "boss"; state.phaseT = 0;
+  }
+  if (alive === 0 && !state.over) { state.over = true; state.phase = "win"; }
+}
+function update() {
+  if (state.over) return;
+  tickPhase();
+  movePlayer();
+  tickFx();
+  if (state.phase !== "play") return;
+  tickPickups();
+  tickMonsters();
+}
+function fillBg(pitchOff) {
+  var hor;
+  hor = (H / 2 + pitchOff) | 0;
+  if (hor < 0) hor = 0;
+  if (hor > H) hor = H;
+  ctx.fillStyle = "#343435";
+  ctx.fillRect(0, 0, W, hor);
+  ctx.fillStyle = "#383738";
+  ctx.fillRect(0, hor, W, H - hor);
+}
+function drawWalls(p, dx, dy, planeX, planeY, pitchOff) {
+  var x, camx, rdx, rdy, dist, lh, ds, de, sx, shx;
+  shx = state.shake > 0 ? ((Math.random() - 0.5) * 4) | 0 : 0;
+  for (x = 0; x < W; x++) {
+    camx = 2 * x / W - 1;
+    rdx = dx + planeX * camx;
+    rdy = dy + planeY * camx;
+    castRay(p.x, p.y, rdx, rdy, rayOut);
+    dist = rayOut.dist;
+    zset(x, dist);
+    lh = H / dist;
+    ds = H / 2 - lh / 2 + pitchOff;
+    de = H / 2 + lh / 2 + pitchOff;
+    sx = (rayOut.wx * 64) | 0;
+    if (sx < 0) sx = 0;
+    if (sx > 63) sx = 63;
+    ctx.drawImage(IMG[T_WALL], sx, 0, 1, 64, x + shx, ds, 1, de - ds);
+  }
+}
+function projectBill(o, dx, dy, px, py, po) {
+  var e, det, inv, scale;
+  e = o.m; if (!e) e = o.p;
+  bb.e = e;
+  bb.isMon = o.m ? 1 : 0;
+  bb.tx = e.x - state.player.x;
+  bb.ty = e.y - state.player.y;
+  det = px * dy - dx * py;
+  if (det === 0) { bb.tY = 0; return; }
+  inv = 1 / det;
+  bb.tX = inv * (dy * bb.tx - dx * bb.ty);
+  bb.tY = inv * (-py * bb.tx + px * bb.ty);
+  if (bb.tY < 0.15) return;
+  bb.scrX = (W / 2) * (1 + bb.tX / bb.tY);
+  bb.floorY = H / 2 + (H * 0.5) / bb.tY + po;
+  scale = 0.45;
+  if (bb.isMon) scale = e.boss ? 1.7 : 1.0;
+  bb.sh = (H / bb.tY) * scale;
+  bb.sw = bb.sh;
+  bb.top = bb.floorY - bb.sh;
+  bb.left = bb.scrX - bb.sw / 2;
+}
+function pickBillImg() {
+  var e, atk;
+  e = bb.e;
+  if (bb.isMon) {
+    atk = e.atk > 0 ? 1 : 0;
+    if (e.boss) bb.img = atk ? IMG[B_ATK] : IMG[B_IDLE];
+    else bb.img = atk ? IMG[M_ATK] : IMG[M_IDLE];
+  } else {
+    bb.img = e.type === "hp" ? IMG[P_HP] : IMG[P_AM];
+  }
+}
+function blitBill() {
+  var x, x0, x1, col, sxx;
+  if (bb.tY < 0.15) return;
+  x0 = Math.floor(bb.left); if (x0 < 0) x0 = 0;
+  x1 = Math.floor(bb.left + bb.sw) + 1; if (x1 > W) x1 = W;
+  for (x = x0; x < x1; x++) {
+    if (bb.tY >= zget(x)) continue;
+    col = (x - bb.left) / bb.sw;
+    sxx = (col * 64) | 0;
+    if (sxx < 0) sxx = 0;
+    if (sxx > 63) sxx = 63;
+    ctx.drawImage(bb.img, sxx, 0, 1, 64, x, bb.top, 1, bb.sh);
+  }
+}
+function collectOrder(order) {
+  var i, m, j, pk, tx, ty;
+  for (i = 0; i < state.monsters.length; i++) {
+    m = state.monsters[i];
+    if (!m.alive) continue;
+    tx = m.x - state.player.x; ty = m.y - state.player.y;
+    order.push({m:m, p:null, d:tx * tx + ty * ty});
+  }
+  for (j = 0; j < state.pickups.length; j++) {
+    pk = state.pickups[j];
+    if (pk.got) continue;
+    tx = pk.x - state.player.x; ty = pk.y - state.player.y;
+    order.push({m:null, p:pk, d:tx * tx + ty * ty});
+  }
+  order.sort(function (a, b) { return b.d - a.d; });
+}
+function drawSprites(dx, dy, planeX, planeY, pitchOff) {
+  var order, k;
+  order = [];
+  collectOrder(order);
+  for (k = 0; k < order.length; k++) {
+    projectBill(order[k], dx, dy, planeX, planeY, pitchOff);
+    pickBillImg();
+    blitBill();
+  }
+}
+function drawGun() {
+  var wimg, ww, wh;
+  wimg = state.muzzle > 0 ? IMG[W_FIRE] : IMG[W_IDLE];
+  ww = 220; wh = 220;
+  ctx.drawImage(wimg, W / 2 - ww / 2, H - wh + 10, ww, wh);
+  ctx.strokeStyle = "#00ff00";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(W / 2 - 8, H / 2); ctx.lineTo(W / 2 - 2, H / 2);
+  ctx.moveTo(W / 2 + 2, H / 2); ctx.lineTo(W / 2 + 8, H / 2);
+  ctx.moveTo(W / 2, H / 2 - 8); ctx.lineTo(W / 2, H / 2 - 2);
+  ctx.moveTo(W / 2, H / 2 + 2); ctx.lineTo(W / 2, H / 2 + 8);
+  ctx.stroke();
+}
+function drawHUD() {
+  var left, i;
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, H - 40, W, 40);
+  ctx.fillStyle = "#ee3333";
+  ctx.font = "16px monospace";
+  ctx.fillText("HP " + state.player.hp, 16, H - 14);
+  ctx.fillStyle = "#44ee44";
+  ctx.fillText("AMMO " + state.player.ammo, 160, H - 14);
+  ctx.fillStyle = "#eeee44";
+  ctx.fillText("SCORE " + state.score, 340, H - 14);
+  left = 0;
+  for (i = 0; i < state.monsters.length; i++) if (state.monsters[i].alive) left = left + 1;
+  ctx.fillStyle = "#ee99ee";
+  ctx.fillText("FOES " + left, 500, H - 14);
+}
+function drawMinimap() {
+  var s, mx, my, y, x, i, m, p;
+  s = 4; mx = W - MW * s - 8; my = 8;
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(mx - 2, my - 2, MW * s + 4, MH * s + 4);
+  for (y = 0; y < MH; y++) {
+    for (x = 0; x < MW; x++) {
+      if (MAP[y][x] > 0) {
+        ctx.fillStyle = "#555566";
+        ctx.fillRect(mx + x * s, my + y * s, s, s);
+      }
+    }
+  }
+  for (i = 0; i < state.monsters.length; i++) {
+    m = state.monsters[i];
+    if (!m.alive) continue;
+    ctx.fillStyle = m.boss ? "#ff00ff" : "#ff4444";
+    ctx.fillRect(mx + m.x * s - 1, my + m.y * s - 1, 2, 2);
+  }
+  p = state.player;
+  ctx.fillStyle = "#00ff00";
+  ctx.fillRect(mx + p.x * s - 1, my + p.y * s - 1, 3, 3);
+}
+function drawCut(img, title, sub) {
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, W, H);
+  ctx.drawImage(img, 0, 0, W, H);
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, H / 2 - 40, W, 90);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "16px monospace";
+  ctx.fillText(title, 180, H / 2);
+  ctx.fillStyle = "#cccccc";
+  ctx.fillText(sub, 180, H / 2 + 28);
+}
+function drawEnd(t1, t2) {
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "16px monospace";
+  ctx.fillText(t1, 200, H / 2 - 10);
+  ctx.fillStyle = "#cccccc";
+  ctx.fillText(t2, 80, H / 2 + 30);
+}
+function drawOverlay() {
+  if (state.hurt > 0) {
+    ctx.fillStyle = "#c80000";
+    ctx.fillRect(0, 0, W, 8);
+    ctx.fillRect(0, H - 48, W, 8);
+  }
+  if (state.phase === "intro") drawCut(IMG[C_INTRO], "THE HELLGATE OPENS", "SPACE TO ENTER");
+  else if (state.phase === "boss") drawCut(IMG[C_BOSS], "THE BOSS AWAKENS", "SPACE TO FIGHT");
+  else if (state.phase === "win") drawEnd("LEVEL CLEARED", "SCORE " + state.score + "  R RESTART");
+  else if (state.phase === "dead") drawEnd("YOU DIED", "SCORE " + state.score + "  R RESTART");
+}
+function render() {
+  var p, di, dx, dy, fov, planeX, planeY, pitchOff;
+  p = state.player;
+  di = fi(p.yaw); dx = LC[di]; dy = LS[di];
+  fov = 0.66; planeX = -dy * fov; planeY = dx * fov;
+  pitchOff = p.pitch * H * 0.6;
+  fillBg(pitchOff);
+  drawWalls(p, dx, dy, planeX, planeY, pitchOff);
+  drawSprites(dx, dy, planeX, planeY, pitchOff);
+  drawGun();
+  drawHUD();
+  drawMinimap();
+  drawOverlay();
+}
+function frame() {
+  frames = frames + 1;
+  if (!state.over) update();
+  render();
+  requestAnimationFrame(frame);
+}
+
+addEventListener("keydown", kd, false);
+addEventListener("keyup", ku, false);
+addEventListener("blur", clearKeys, false);
+fillLut();
+loadSpr();
+reset();
+requestAnimationFrame(frame);
+</script>
+<script data-host="chrome">
+(function () {
+  var cvs = document.getElementById("c");
+  cvs.addEventListener("click", function () {
+    if (document.pointerLockElement !== cvs) cvs.requestPointerLock();
+    if (window.game) { window.game.skip(); }
+  }, false);
+  addEventListener("mousemove", function (e) {
+    var p, lim;
+    if (document.pointerLockElement !== cvs) return;
+    if (!window.state) return;
+    p = window.state.player;
+    p.yaw -= e.movementX * 0.0025;
+    p.pitch -= e.movementY * 0.0025;
+    lim = Math.PI / 2 - 0.05;
+    if (p.pitch > lim) p.pitch = lim;
+    if (p.pitch < -lim) p.pitch = -lim;
+  }, false);
+  var ctx = null, noise = null;
+  function ac() {
+    var AC, i, d;
+    if (ctx) return ctx;
+    AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    ctx = new AC();
+    noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    d = noise.getChannelData(0);
+    for (i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    return ctx;
+  }
+  window._chromePlay = function (r) {
+    var a, i, freq, vol, frames, slide, ch, dur, t0, osc, g;
+    a = ac();
+    if (!a || !r || !r.length) return;
+    if (a.state === "suspended") a.resume();
+    t0 = a.currentTime;
+    for (i = 0; i + 4 < r.length; i = i + 5) {
+      freq = r[i]; vol = r[i + 1]; frames = r[i + 2]; slide = r[i + 3]; ch = r[i + 4];
+      if (vol <= 0 || frames <= 0) continue;
+      dur = frames / 60;
+      if (dur < 0.02) dur = 0.02;
+      g = a.createGain();
+      g.gain.setValueAtTime((vol / 15) * 0.1, t0);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+      g.connect(a.destination);
+      if (ch === 3) {
+        osc = a.createBufferSource();
+        osc.buffer = noise;
+        osc.loop = true;
+      } else {
+        osc = a.createOscillator();
+        osc.type = "square";
+        osc.frequency.setValueAtTime(Math.max(20, freq), t0);
+        if (slide) osc.frequency.linearRampToValueAtTime(Math.max(20, freq + slide * frames), t0 + dur);
+      }
+      osc.connect(g);
+      osc.start(t0);
+      osc.stop(t0 + dur);
+    }
+  };
+})();
+</script>
+</body></html>
