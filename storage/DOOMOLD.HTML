@@ -1,13 +1,13 @@
 <!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<title>DOOM 3D</title>
+<title>DOOM OLD</title>
 <style>
 html,body{margin:0;height:100%;background:#000;overflow:hidden}
 #wrap{position:fixed;inset:0;display:grid;place-items:center;background:#000}
 canvas{display:block;image-rendering:pixelated;touch-action:none}
 </style>
-<script data-host="chrome" src="DOOM3DFI.ARTJS"></script>
+<script data-host="chrome" src="DOOMOLD.ARTJS"></script>
 <script data-host="chrome">
 window.JMR_SPR = ["DOOM3DFI-0.png", "DOOM3DFI-1.png", "DOOM3DFI-2.png", "DOOM3DFI-3.png", "DOOM3DFI-4.png", "DOOM3DFI-5.png", "DOOM3DFI-6.png", "DOOM3DFI-7.png", "DOOM3DFI-8.png", "DOOM3DFI-9.png", "DOOM3DFI-10.png", "DOOM3DFI-11.png", "DOOM3DFI-12.png"];
 (function () {
@@ -69,7 +69,7 @@ window.state = state;
 var keys = {up:false, dn:false, lk:false, rk:false, tl:false, tr:false,
   fire:false, pu:false, pd:false};
 var rayOut = {dist:0, side:0, wx:0, mx:0, my:0, ddx:0, ddy:0, stepX:0, stepY:0, sdx:0, sdy:0};
-var bb = {e:null, isMon:0, tx:0, ty:0, tX:0, tY:0, scrX:0, floorY:0, sh:0, sw:0, top:0, left:0, img:null, iw:64, ih:64};
+var bb = {e:null, isMon:0, tx:0, ty:0, tX:0, tY:0, scrX:0, floorY:0, sh:0, sw:0, top:0, left:0, img:null};
 var bag = {m:null, p:null};
 var zA = [], zB = [], zC = [], zD = [], zE = [];
 var frames = 0, canShootAt = 0;
@@ -506,45 +506,22 @@ function pickBillImg() {
   e = bb.e;
   if (bb.isMon) {
     atk = e.atk > 0 ? 1 : 0;
-    bb.iw = 64; bb.ih = 64;
     if (e.boss) bb.img = atk ? IMG[B_ATK] : IMG[B_IDLE];
     else bb.img = atk ? IMG[M_ATK] : IMG[M_IDLE];
   } else {
-    bb.iw = 32; bb.ih = 32;
     bb.img = e.type === "hp" ? IMG[P_HP] : IMG[P_AM];
   }
 }
 function blitBill() {
-  var cx, dx, dy, dw, dh, sx, sy, sw, sh;
-  /* RUN 69 item 5 workaround: crop dest∩glass and source together so
-     FPGA clip_u never sees dx<0. DOOMOLD.HTML keeps the raw 5-arg blit. */
-  if (bb.tY < 0.35) return;
-  dx = bb.left | 0;
-  dy = bb.top | 0;
-  dw = bb.sw | 0;
-  dh = bb.sh | 0;
-  if (dw < 8 || dh < 8) return;
-  sx = 0; sy = 0; sw = bb.iw; sh = bb.ih;
-  if (dx < 0) {
-    sx = ((-dx) * sw / dw) | 0;
-    sw = ((dw + dx) * sw / dw) | 0;
-    dw = dw + dx;
-    dx = 0;
-  }
-  if (dy < 0) {
-    sy = ((-dy) * sh / dh) | 0;
-    sh = ((dh + dy) * sh / dh) | 0;
-    dh = dh + dy;
-    dy = 0;
-  }
-  if (dx + dw > W) { sw = ((W - dx) * sw / dw) | 0; dw = W - dx; }
-  if (dy + dh > H) { sh = ((H - dy) * sh / dh) | 0; dh = H - dy; }
-  if (dw < 8 || dh < 8 || sw < 1 || sh < 1) return;
+  var cx;
+  /* Witness for RUN 69 item 5: 5-arg dest may be negative. PYTHON/Chrome
+     clip; FPGA clip_u smears the sheet at x=0. Do not crop here. */
+  if (bb.tY < 0.15) return;
   cx = bb.scrX | 0;
   if (cx < 0) cx = 0;
   if (cx >= W) cx = W - 1;
   if (bb.tY >= zget(cx)) return;
-  ctx.drawImage(bb.img, sx, sy, sw, sh, dx, dy, dw, dh);
+  ctx.drawImage(bb.img, bb.left, bb.top, bb.sw, bb.sh);
 }
 function drawSprites(dx, dy, planeX, planeY, pitchOff) {
   var i, m, pk;

@@ -9,7 +9,8 @@ Words: [README.md — Words used](../../README.md#words-used-in-this-project).
 This is **copy 1** of Version 1.0 walls / Version 1.5 console + popular JS /
 Version 2.0 machine work (copy 2:
 [docs/JMR_JS_COMPATIBILITY.md](../../docs/JMR_JS_COMPATIBILITY.md)
-§ Version 1.0, 1.5, and 2.0). Authoring how-to:
+§ Version 1.0, 1.5, and 2.0). How to write a title (FAST draw, `jmr:spr`
+literals, dest on-glass) is **one** page, not a two-copy pair:
 [docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md).
 
 **V1.0** = PYTHON + FPGA-SIM + BOARD all play from `card.img`. Host mint at

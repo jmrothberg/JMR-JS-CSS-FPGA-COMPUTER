@@ -87,6 +87,10 @@ img.src = "jmr:spr:0";          // MYGAME-0.png → first sheet in MYGAME.ARTX
 ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
 ```
 
+**`src` must be a quoted literal** (`"jmr:spr:0"` … `"jmr:spr:12"`). The chip only intern-binds those strings. `"jmr:spr:" + i` paints in PYTHON/Chrome and **misses every blit on FPGA-SIM/BOARD** (`dihit=0`). Same pattern as `storage/BOMBFAST.HTML`.
+
+**Dest must land on the glass.** FPGA `drawImage` clamps a negative `dx`/`dy` to 0 and does **not** crop source (PYTHON/Chrome do). Crop dest∩640×480 **and** the source rect together (9-arg), or skip the blit. Do not pass `dx < 0`. After run-69 RTL this clamp goes away; cropping stays valid.
+
 That line is what **all five** targets run. Only Chrome rewrites the handle.
 
 ### `JMR_SPR` is the PNG list (append-only)
@@ -497,6 +501,18 @@ actually been measured to matter, **roughly in order of impact:**
    “the frame I’m drawing into is invisible until I say so.” If a
    game-logic step needs an atomic-looking screen, draw fast (rule 5
    already helps) rather than assuming isolation.
+8. **Never 1-pixel `drawImage` columns or hundreds of tiny `fillRect`s
+   per frame.** 640 wall strips or a 24×24 minimap of 4×4 rects is
+   native-call bound (INVADERS 1×1 class). Step walls ≥8 px; one
+   billboard blit per actor; run-length or skip HUD maps. Board budget
+   is ~417k clocks at 30 fps (VM ÷8).
+9. **Do not `fillRect` the whole 640×480 black, then blit a splash.**
+   Scanout reads the draw bank — that wipe **is** the black screen until
+   the blit finishes. Draw the sheet first (or a cheap colored rect that
+   is not a full-glass clear).
+10. **`Image.src` literals; dest on-glass.** See [Game code — handles
+    only](#game-code--handles-only). Concat `"jmr:spr:" + i` and
+    negative dest are PYTHON/Chrome-only; FPGA ghosts or misses.
 
 > **Silicon cost model (run 51 engine + run 52 present-delete) — the
 > numbered historic text below this box is the OLD chip.** The raster
@@ -1019,6 +1035,9 @@ not readable on the V1.0 chip`), scoped to variables provably assigned
 - Sprites drawn with `drawImage` / `fillRect` / `putImageData`, not per-pixel JS loops? *(FAST rule 5 — hardware ~1 px/clk)*
 - One enormous multi-thousand-pixel-wide sheet? *(FAST rule 6 — split; let the atlas packer work)*
 - Assuming a hidden back buffer / `present` isolation? *(FAST rule 7 — present is gone; budget tearing)*
+- 640 one-pixel `drawImage` columns, or a minimap of one `fillRect` per cell? *(FAST rule 8 — native-call hang on the board)*
+- Full-screen black `fillRect` then a 640×480 splash blit? *(FAST rule 9 — HDMI shows the wipe)*
+- `img.src = "jmr:spr:" + i`, or `drawImage` with `dx < 0` / `dy < 0`? *(FAST rule 10 — FPGA miss / dest clamp smear; PYTHON+Chrome OK)*
 - A 0.3s boom / hit-flash / particle burst on kill? *(vanish + `playSfx`; the fx loop crawls on the board)*
 - Any `if (img.width)` / `.complete` / `onload` guard around a draw? *(never — undefined on the chip, renders wrong with no error)*
 - Any `"" + number`, or a `*_STR` variable holding a score/timer/coordinate? *(intern table is 1024, never released)*

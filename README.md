@@ -55,7 +55,7 @@ Host is dead on this unit — type and play from the GUI **PROG tether**.
 | Words / abbreviations used everywhere | [Words used](#words-used-in-this-project) (this page) |
 | What the machine *is* (spec) | [CONSTITUTION.md](CONSTITUTION.md) |
 | Blocks, posters, asset-bank port | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| How to write a game | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) (art, input, FAST; **do not delete** `EDITOR` / `ARTSCAN` / `COMPILER`) |
+| How to write a game | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) (art, input, FAST **8–10**: `jmr:spr` literals, dest on-glass, no 1px columns; **do not delete** `EDITOR` / `ARTSCAN` / `COMPILER`) |
 | What JS/Canvas is Complete vs later | [docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md) |
 | Learn the 34 instructions | [docs/JS_COMMANDS.md](docs/JS_COMMANDS.md) |
 | Board, Vivado, flash, HDMI | [docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md) |
@@ -171,6 +171,10 @@ Six full restatements of the same law caused drift. **One** copy can be
 missed. So each critical “do not” lives in **exactly two** places: an
 always-on Cursor rule (agents) and one teaching/human page. Other documents
 **point** at those two; they do not retell the whole essay.
+That pair is for laws that **break the chip or the synth** (illegal RAM,
+dual heap, skip-a-rung). **Do not** two-copy how to write a title. FAST
+draw/`jmr:spr`/dest-crop lives in [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md)
+once; `/640png` first-build is Agent_learning prompts.
 
 | Critical “do not” | Copy 1 (agents) | Copy 2 (humans / teach) |
 |---|---|---|

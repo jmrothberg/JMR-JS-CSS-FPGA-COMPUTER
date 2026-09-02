@@ -161,7 +161,16 @@ RTL candidates, in priority order:
    time window.
 4. Minor: ?CE VM-stopped exit can stream a stale message area; audit
    cmp_msglen handling on the no-cdone path.
-5. **SAVE-as drops the .ART sidecar** (user 2026-09-01: "we don't want to
+5. **`drawImage` dest `clip_u` drops source (2026-09-02).** PYTHON/Chrome
+   keep a negative dest origin and skip OOB pixels (source follows the
+   full rect). exec64 `clip_u` forces dest x/y to 0 and still DDA from
+   source 0 — a billboard with `dx<0` smears the left of the sheet onto
+   `x=0` (PYTHON/Chrome clean; FPGA-SIM/BOARD only). `clip_u` was the
+   fillRect no-wrap fix (`jmr_js_vm.sv` “no wrap — sparse BOARD bug”);
+   blit needs the **visible intersection**: crop `blit_sx/sy/sw/sh` by
+   the discarded dest, then clamp. Raster `inb` already skips +overflow.
+   Do not rewrite a title to dodge this (standing list).
+6. **SAVE-as drops the .ART sidecar** (user 2026-09-01: "we don't want to
    go back to the host"). DESIGN CHOSEN: the HTML declares its art bank —
    `<script data-art="INVF.ART">` beside the sprite shim. ARTSCAN reads it,
    writes the name to the arena NAME_BUF area, cdone(0x86 = "stage this
