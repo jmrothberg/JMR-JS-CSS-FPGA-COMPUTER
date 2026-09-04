@@ -182,6 +182,17 @@ RTL candidates, in priority order:
    declaration so host and machine mints agree. Copy-on-save rejected:
    duplicates 100KB+ per fork, single-channel storage makes it awkward.
 
+6. **0xFC big-file put** (user 2026-09-04 — collected, NOT started): F8's
+   live put goes SOURCE window (64 KB) -> typed SAVE, so .ART banks over
+   64 KB (MKBA/MKCA 2.8 MB, DNKF 1.66 MB) are skipped "?TR (SOURCE 64K)";
+   small ones (INVF 3.5 KB, MRDOF 9 KB, BOMBFAST 58 KB) fit. Design: a
+   second put mode that streams into the CART staging bank (~2.9 MB) and
+   saves from there through the mint-mode C_SV pump (cmp_save_mode=1 +
+   the cmp_art_mode append loop already stream CART bytes) — 0 new console
+   states; uart_link tag + length prefix like 0xFC; board_backend routes
+   files > SOURCE_MAX to it. Until then big art reaches the µSD only via
+   the mint + re-imaging the card.
+
 Content/toolchain (not run-gated, mostly peer lane):
 - window.open-class browser APIs now stub to 33 in the on-machine compiler
   (574bbb4) — extend natInit as real needs appear.
