@@ -38,6 +38,10 @@ module jmr_js_vm #(
     input  logic        stop,
     input  logic        frame_tick,
     input  logic [5:0]  joy_in,
+    // analog-joy: raw stick axes/buttons the digital joy_in doesn't carry.
+    input  logic [7:0]  analog_x,
+    input  logic [7:0]  analog_y,
+    input  logic [4:0]  joy_btn,
     // NEW: raw host keyboard events (GUI/board PS/2) — the HTML decides
     // bindings; no hardcoded key maps here (replaces the synthetic-Enter hack)
     input  logic        key_evt_stb,
@@ -95,8 +99,8 @@ module jmr_js_vm #(
     // rast_busy has risen and fallen. Engine: jmr_raster_engine.sv.
     output logic        rast_go,
     output logic [1:0]  rast_mode,
-    output logic [9:0]  rast_dx,
-    output logic [9:0]  rast_dy,
+    output logic signed [11:0] rast_dx,
+    output logic signed [11:0] rast_dy,
     output logic [9:0]  rast_w,
     output logic [9:0]  rast_h,
     output logic [7:0]  rast_color,
@@ -109,6 +113,10 @@ module jmr_js_vm #(
     output logic [21:0] rast_sbase,
     output logic [15:0] rast_stride,
     output logic        rast_aset,
+    // neg-xform: mirror dest column/row order (negative dWidth/dHeight or
+    // ctx_sx/sy < 0); source DDA order is unchanged, see jmr_js_vm_exec64.sv
+    output logic        rast_flip_x,
+    output logic        rast_flip_y,
     input  logic        rast_done   // op completed (level; cleared at next go)
 );
     // 2026-08-21 fit: measured code high-water (ops_base+n_ops) across the
@@ -1056,7 +1064,7 @@ module jmr_js_vm #(
     logic [79:0] dbg_pdo [0:15] /*verilator public_flat_rd*/;
     logic [4:0]  dbg_pdo_n /*verilator public_flat_rw*/; // rw: probe re-arms it
     // NEW: rect bring-up latch — {color, rx, ry, rw, rh} of first 16 rects
-    logic [47:0] dbg_rect [0:63] /*verilator public_flat_rd*/;
+    logic [51:0] dbg_rect [0:63] /*verilator public_flat_rd*/;
     logic [6:0]  dbg_rect_n /*verilator public_flat_rw*/;
     logic [9:0]  dbg_last_y;
     logic [7:0]  dbg_last_c;
@@ -1185,9 +1193,18 @@ module jmr_js_vm #(
     // changes on LOAD / EDIT, never mid-compile), so the extra beat of
     // latency is invisible to the compiler reading it.
     logic [17:0] src_len_q1, src_len_q2;
+    // Run 70: the analog-stick natives (51/52/53) read u_i2c_joy's
+    // core-clock registers straight into exec64's vst_wdata funnel —
+    // 10 of the 16 misses (route 8-9 ns of a 10 ns clk->vm_clk budget).
+    // Same class as run 65a's src_len; same cure: two beats on vm_clk.
+    logic [7:0] analog_x_q1, analog_x_q2, analog_y_q1, analog_y_q2;
+    logic [4:0] joy_btn_q1, joy_btn_q2;
     always_ff @(posedge clk) begin
         src_len_q1 <= src_len_i;
         src_len_q2 <= src_len_q1;
+        analog_x_q1 <= analog_x; analog_x_q2 <= analog_x_q1;
+        analog_y_q1 <= analog_y; analog_y_q2 <= analog_y_q1;
+        joy_btn_q1  <= joy_btn;  joy_btn_q2  <= joy_btn_q1;
     end
     logic        csr_pend;  // S_CSRAM request issued, waiting on sram_ack
     // S_CSRAM mode map (3 bits — was 2, widened for mode 4):
@@ -1289,6 +1306,7 @@ module jmr_js_vm #(
     logic [2:0]  spr_hdr;
     logic [17:0] spr_wp, spr_left;
     logic [7:0]  blit_si;
+    logic        flip_x, flip_y; // neg-xform: mirror dest column/row order
     logic [15:0] blit_sx, blit_sy, blit_sw, blit_sh;
     logic        aset_mode;   // NEW: header flags bit1 — sprites in asset SRAM
     logic        sprd_mode;   // NEW: trailer carries SPRD descriptors (no pixels)
@@ -1826,7 +1844,9 @@ module jmr_js_vm #(
 
     logic [15:0] c_i;
     // NEW: 10-bit coords for 640×480 (was 8-bit mini after scale4)
-    logic [9:0]  rx, ry, rw, rh, x, y;
+    logic [9:0]  rw, rh, x, y;
+    // signed dest origin for blit (Canvas off-glass DDA); fillRect stays >=0
+    logic signed [11:0] rx, ry;
     logic [7:0]  color;
     // Scaled-blit source coords: per-pixel divides replaced by an exact
     // DDA (floor((x*sw)/rw) == x*(sw/rw) + floor(x*(sw%rw)/rw), carried
@@ -3559,6 +3579,7 @@ module jmr_js_vm #(
     logic [11:0] e64_bind_vsp_next_q;
     logic [15:0] e64_blit_sh_q;
     logic [7:0] e64_blit_si_q;
+    logic e64_flip_x_q, e64_flip_y_q;
     logic [15:0] e64_blit_sw_q;
     logic [15:0] e64_blit_sx_q;
     logic [15:0] e64_blit_sy_q;
@@ -3687,8 +3708,8 @@ module jmr_js_vm #(
     logic [9:0] e64_rh_q;
     logic e64_running_q;
     logic [9:0] e64_rw_q;
-    logic [9:0] e64_rx_q;
-    logic [9:0] e64_ry_q;
+    logic signed [11:0] e64_rx_q;
+    logic signed [11:0] e64_ry_q;
     logic signed [31:0] e64_saved_sx_q;
     logic signed [31:0] e64_saved_sy_q;
     logic signed [31:0] e64_saved_tx_q;
@@ -4201,6 +4222,7 @@ module jmr_js_vm #(
         .p_jn_i(jn_i),
         .p_jn_res(jn_res),
         .joy_in(joy_in),
+        .analog_x(analog_x_q2), .analog_y(analog_y_q2), .joy_btn(joy_btn_q2),
         .p_js_sp(js_sp),
         .p_json_pph(json_pph),
         .p_json_rp(json_rp),
@@ -4418,6 +4440,8 @@ module jmr_js_vm #(
         .bind_vsp_next_q(e64_bind_vsp_next_q),
         .blit_sh_q(e64_blit_sh_q),
         .blit_si_q(e64_blit_si_q),
+        .flip_x_q(e64_flip_x_q),
+        .flip_y_q(e64_flip_y_q),
         .blit_sw_q(e64_blit_sw_q),
         .blit_sx_q(e64_blit_sx_q),
         .blit_sy_q(e64_blit_sy_q),
@@ -9115,6 +9139,8 @@ module jmr_js_vm #(
                             x <= e64_x_q;
                             y <= e64_y_q;
                             blit_si <= e64_blit_si_q;
+                            flip_x <= e64_flip_x_q;
+                            flip_y <= e64_flip_y_q;
                             blit_sx <= e64_blit_sx_q;
                             blit_sy <= e64_blit_sy_q;
                             blit_sw <= e64_blit_sw_q;
@@ -9189,6 +9215,8 @@ module jmr_js_vm #(
                         rast_sbase <= spr_off[blit_si[3:0]];
                         rast_stride <= spr_ww[blit_si[3:0]];
                         rast_aset <= aset_mode;
+                        rast_flip_x <= flip_x;
+                        rast_flip_y <= flip_y;
                         rast_wait <= 1'b1;
                     end else if (rast_done) begin
                         rast_wait <= 1'b0;
@@ -10738,6 +10766,12 @@ module jmr_js_vm #(
                         rast_w <= imgd_w;
                         rast_h <= imgd_h;
                         rast_sbase <= 22'(imgd_i);
+                        // putImageData source walks linearly forward; never
+                        // inherit a stale flip from a prior drawImage's
+                        // neg-xform mirror (S_BLIT), or the restore would
+                        // scramble columns/rows.
+                        rast_flip_x <= 1'b0;
+                        rast_flip_y <= 1'b0;
                         rast_wait <= 1'b1;
                     end else if (rast_done) begin
                         rast_wait <= 1'b0;

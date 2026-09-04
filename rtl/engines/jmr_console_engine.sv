@@ -80,6 +80,7 @@ module jmr_console_engine (
     output logic [7:0]  stor_putc_data,
     output logic        stor_dir,
     output logic        stor_dir_next,
+    output logic        stor_dir_all, // 1 = DIR * (show .JSH/.ART)
     output logic        stor_delete,
     input  logic        stor_busy,
     input  logic        stor_done,
@@ -99,6 +100,9 @@ module jmr_console_engine (
     input  logic [7:0]  jsb_tether_data = 8'd0,
     input  logic        jsb_tether_eof = 1'b0,
     output logic        jsb_tether_rdy,
+    // gui-put: 0xFC SOURCE stream (same wires as 0xFD, tagged src). Tied 0
+    // unless uart_link saw 0xFC. FPGA-SIM drives this from SRCSTREAM.
+    input  logic        jsb_tether_src = 1'b0,
     // NEW: FPGA-SIM RAM LOAD — host already poked SOURCE/src_len, so LOAD skips
     // the FAT open and announces with sim_src_lines. Tied 0 on the board.
     input  logic        sim_src_bypass = 1'b0,
@@ -259,6 +263,7 @@ module jmr_console_engine (
         C_JSB_SRAMW, // NEW: wait asset-SRAM write ack (ASET payload word)
         C_JSB_PEEK, C_JSB_PEEKW, // NEW: code-BRAM full — fail loud if more bytes
         C_JSB_TETHER, C_JSB_FEED, C_JSB_TEOF, // NEW: PROG/host .JSH stream (no FAT)
+        C_SRC_TETHER, C_SRC_WR, // gui-put: 0xFC → SOURCE, host then types SAVE
         // Item G: print the compiler's ASCII diagnostic after ?CE, so a
         // failed compile says "L12 EXPECTED )" instead of a bare code.
         C_CMP_MSG_RD, C_CMP_MSG_PUT,
@@ -414,7 +419,7 @@ module jmr_console_engine (
     logic [1:0]  pal_ph;
     logic [22:0] aset_rel;      // byte offset inside the ASET section
     assign aset_rel = jsb_boff - jsb_aset_off;
-    assign jsb_tether_rdy = (state == C_JSB_TETHER);
+    assign jsb_tether_rdy = (state == C_JSB_TETHER) || (state == C_SRC_TETHER);
     logic        ld_err;        // NEW: LOAD ?LS/?IO sticky until CLOSEW
     logic [15:0] ld_nlines;     // NEW: newline count for LOADED NAME (N LINES)
     logic        ld_need_eol;   // last HTML byte was not NL
@@ -471,9 +476,10 @@ module jmr_console_engine (
     // walked right by the number of presses). Drain on the game->console
     // transition (enable rising edge).
     logic enable_q;
+    logic        kbd_avail_q; // registered !kbd_empty for C_IDLE (run 70)
     logic [16:0] drain_ctr; // hold kbd_clear ~1.3ms: a PS/2 scancode
     // mid-flight at ESC lands AFTER a 1-cycle clear (board: one key leaked)
-    logic p_help_q, p_dir_q, p_cls_q, p_list_q, p_edit_q, p_mem_q,
+    logic p_help_q, p_dir_q, p_dir_star_q, p_cls_q, p_list_q, p_edit_q, p_mem_q,
           p_new_q, p_run_q, p_load_q, p_save_q, p_remove_q, p_compile_q,
           p_edit_bare_q, p_empty_q,
           p_len4_q;
@@ -487,6 +493,10 @@ module jmr_console_engine (
         p_len4_q  <= (line_len == 4);
         p_help_q <= (line_len == 4 && up(line[0])=="H" && up(line[1])=="E" && up(line[2])=="L" && up(line[3])=="P");
         p_dir_q  <= (line_len == 3 && up(line[0])=="D" && up(line[1])=="I" && up(line[2])=="R");
+        // DIR * (or DIR*) — sidecar catalog; bare DIR stays titles.
+        p_dir_star_q <= (up(line[0])=="D" && up(line[1])=="I" && up(line[2])=="R"
+                      && ((line_len == 4 && line[3]=="*")
+                       || (line_len == 5 && is_sp(line[3]) && line[4]=="*")));
         p_cls_q  <= (line_len == 3 && up(line[0])=="C" && up(line[1])=="L" && up(line[2])=="S");
         p_list_q <= (line_len >= 4 && up(line[0])=="L" && up(line[1])=="I" && up(line[2])=="S" && up(line[3])=="T" && (line_len == 4 || is_sp(line[4])));
         p_edit_q <= (line_len >= 5 && up(line[0])=="E" && up(line[1])=="D" && up(line[2])=="I" && up(line[3])=="T" && is_sp(line[4]));
@@ -524,16 +534,12 @@ module jmr_console_engine (
             9: banner_char = "T"; 10: banner_char = "I"; 11: banner_char = "V";
             12: banner_char = "E"; 13: banner_char = "-"; 14: banner_char = "C";
             15: banner_char = "P"; 16: banner_char = "U"; 17: banner_char = " ";
-            18: banner_char = "V"; 19: banner_char = "1"; 20: banner_char = ".";
-            21: banner_char = "5"; // V1.5: on-machine EDIT + COMPILE live
+            18: banner_char = "V"; 19: banner_char = "2"; 20: banner_char = ".";
+            21: banner_char = "0"; // V2.0 R70 — bump IN THE SAME change as the payload
             // run number - bump by hand each build (user: know which bit
             // is on the board from the glass)
             22: banner_char = " "; 23: banner_char = "R";
-            // 2026-08-31: was stuck at 61 through runs 62 AND 63 — three
-            // bitstreams all announcing R61 on the glass is exactly what
-            // this string exists to prevent. Bump it IN THE SAME COMMIT as
-            // the payload, not as an afterthought at launch time.
-            24: banner_char = "6"; 25: banner_char = "8";
+            24: banner_char = "7"; 25: banner_char = "0";
             default: banner_char = 8'h00;
         endcase
     endfunction
@@ -655,6 +661,7 @@ module jmr_console_engine (
             reply_idx <= 0;
             kbd_pop <= 0;
             kbd_clear <= 0;
+            kbd_avail_q <= 1'b0;
             cls <= 0;
             put_en <= 0;
             put_char <= 0;
@@ -687,6 +694,7 @@ module jmr_console_engine (
             name_len_r <= 0; name_i <= 0; name_start <= 0;
             dir_n <= 0; dir_idx <= 0;
             cmd_is_load <= 0; cmd_is_save <= 0; cmd_is_remove <= 0;
+            stor_dir_all <= 1'b0;
             src_name_len <= 0; src_is_rectdemo <= 0; src_is_html <= 0; src_is_js <= 0;
             jsb_waddr <= 0; jsb_bi <= 0; jsb_word <= 0; jsb_name_len <= 0;
             jsb_want_jsh <= 1'b0; jsb_want_art <= 1'b0;
@@ -716,6 +724,12 @@ module jmr_console_engine (
             if (enable && !enable_q) drain_ctr <= 17'h1FFFF;
             else if (drain_ctr != 17'd0) drain_ctr <= drain_ctr - 17'd1;
             kbd_clear <= (enable && !enable_q) || (drain_ctr != 17'd0);
+            // Run 70: the C_IDLE keyboard qualifier sat one level deeper
+            // once the 0xFC tether branch took priority — 5 misses from
+            // u_kbd/rd_ptr to state_reg. Register it (the p_*_q recipe);
+            // only a clear can empty the FIFO without a console pop, so
+            // !kbd_clear keeps the one-beat lag from ever popping empty.
+            kbd_avail_q <= !kbd_empty && !kbd_clear;
             cls <= 0;
             put_en <= 0;
             print_nl <= 0;
@@ -810,7 +824,16 @@ module jmr_console_engine (
                     end
                 end
                 C_IDLE: begin
-                    if (enable && !kbd_empty && !video_busy) begin
+                    // gui-put: host 0xFC (or FPGA-SIM SRCSTREAM) fills SOURCE
+                    // then types SAVE "NAME" — same FAT write as a local SAVE.
+                    if (jsb_tether_src) begin
+                        src_len <= 0;
+                        src_trunc <= 1'b0;
+                        src_i <= 0;
+                        src_bank <= 1'b0;
+                        teth_wd <= 30'd0;
+                        state <= C_SRC_TETHER;
+                    end else if (enable && kbd_avail_q && !kbd_clear && !video_busy) begin
                         ch <= kbd_data;
                         kbd_pop <= 1'b1;
                         state <= C_ECHO;
@@ -861,7 +884,11 @@ module jmr_console_engine (
                         state <= C_PROMPT;
                     end else if (p_help_q) begin
                         reply_sel <= 4'd0; reply_idx <= 0; state <= C_REPLY;
+                    end else if (p_dir_star_q) begin
+                        stor_dir_all <= 1'b1;
+                        state <= C_DIR0;
                     end else if (p_dir_q) begin
+                        stor_dir_all <= 1'b0;
                         state <= C_DIR0;
                     end else if (p_cls_q) begin
                         // NEW: CLS like BASIC
@@ -2595,6 +2622,34 @@ module jmr_console_engine (
                         jsb_din <= stor_get_data;
                         state <= C_JSB_FEED;
                     end
+                end
+                // gui-put: 0xFC payload → SOURCE SRAM (byte-transparent, same
+                // write as HTML LOAD's C_LD_GB_WR). Host then types SAVE.
+                C_SRC_TETHER: begin
+                    if (jsb_tether_eof) begin
+                        teth_wd <= 30'd0;
+                        state <= C_IDLE;
+                    end else if (jsb_tether_stb) begin
+                        teth_wd <= 30'd0;
+                        if (src_len >= SOURCE_MAX) begin
+                            src_trunc <= 1'b1;
+                            // drain leftover bytes so the UART does not stall
+                        end else begin
+                            src_req <= 1'b1; src_we <= 1'b1;
+                            src_addr <= src_len[16:0];
+                            src_wdata <= jsb_tether_data;
+                            state <= C_SRC_WR;
+                        end
+                    end else if ((!kbd_empty && kbd_data == 8'h1B)
+                                 || (&teth_wd)) begin
+                        if (!kbd_empty && kbd_data == 8'h1B) kbd_pop <= 1'b1;
+                        teth_wd <= 30'd0;
+                        state <= C_IDLE;
+                    end else teth_wd <= teth_wd + 30'd1;
+                end
+                C_SRC_WR: if (src_gnt) begin
+                    src_len <= src_len + 1'b1;
+                    state <= C_SRC_TETHER;
                 end
                 // NEW: HTML RUN — PROG/host byte stream (same splitter as FAT GBW)
                 C_JSB_TETHER: begin
