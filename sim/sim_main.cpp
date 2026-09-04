@@ -1229,6 +1229,44 @@ static int hex_nibble(char c) {
     return -1;
 }
 
+// gui-put BOARD path in FPGA-SIM: same console SOURCE pump as uart 0xFC.
+static int src_tether_pump(const std::vector<uint8_t>& blob) {
+    top->jsb_tether_src = 1;
+    top->jsb_tether_stb = 0;
+    top->jsb_tether_eof = 0;
+    int wait = 0;
+    while (!top->jsb_tether_rdy && wait < 200000) { ticks(1); wait++; }
+    if (!top->jsb_tether_rdy) {
+        top->jsb_tether_src = 0;
+        return -1;
+    }
+    for (uint8_t b : blob) {
+        wait = 0;
+        while (!top->jsb_tether_rdy && wait < 20000) { ticks(1); wait++; }
+        if (!top->jsb_tether_rdy) {
+            top->jsb_tether_src = 0;
+            top->jsb_tether_stb = 0;
+            return -2;
+        }
+        top->jsb_tether_data = b;
+        top->jsb_tether_stb = 1;
+        tick();
+        top->jsb_tether_stb = 0;
+    }
+    wait = 0;
+    while (!top->jsb_tether_rdy && wait < 20000) { ticks(1); wait++; }
+    // Drop src with eof so C_IDLE does not re-arm an empty stream.
+    // Hold eof until TETHER samples it (uart_link jsh_eof_hold).
+    top->jsb_tether_src = 0;
+    top->jsb_tether_eof = 1;
+    wait = 0;
+    while (!top->jsb_tether_rdy && wait < 20000) { ticks(1); wait++; }
+    ticks(8);
+    top->jsb_tether_eof = 0;
+    ticks(16);
+    return 0;
+}
+
 static uint64_t fnv_byte(uint64_t hash, uint8_t value) {
     return (hash ^ value) * UINT64_C(0x100000001B3);
 }
@@ -1356,6 +1394,10 @@ int main(int argc, char** argv) {
     top->kbd_push = 0;
     top->kbd_data = 0;
     top->joy_in = 0;
+    // analog-joy: rest position (matches jmr_i2c_joy.sv power-on default).
+    top->analog_x = 128;
+    top->analog_y = 128;
+    top->joy_btn = 0;
     top->dump_addr = 0;
     top->scan_addr = 0;
     top->fb_raddr = 0;
@@ -1366,6 +1408,7 @@ int main(int argc, char** argv) {
     top->jsb_tether_stb = 0;
     top->jsb_tether_data = 0;
     top->jsb_tether_eof = 0;
+    top->jsb_tether_src = 0;
     top->sim_src_bypass = 0;
     top->sim_src_lines = 0;
     ticks(8);
@@ -1501,6 +1544,34 @@ int main(int argc, char** argv) {
             std::cout << "OK bytes=" << html.size() << " lines=" << nlines << std::endl;
             continue;
         }
+        // gui-put: stream bytes into SOURCE (console 0xFC path), host SAVE next.
+        if (line.rfind("SRCSTREAM ", 0) == 0) {
+            const std::string hex = line.substr(10);
+            if (hex.size() & 1u) {
+                std::cout << "ERR hex" << std::endl;
+                continue;
+            }
+            std::vector<uint8_t> blob;
+            blob.reserve(hex.size() / 2);
+            bool good = true;
+            for (size_t i = 0; i < hex.size(); i += 2) {
+                int hi = hex_nibble(hex[i]);
+                int lo = hex_nibble(hex[i + 1]);
+                if (hi < 0 || lo < 0) { good = false; break; }
+                blob.push_back((uint8_t)((hi << 4) | lo));
+            }
+            if (!good) {
+                std::cout << "ERR hex" << std::endl;
+                continue;
+            }
+            int rc = src_tether_pump(blob);
+            if (rc != 0) {
+                std::cout << "ERR pump=" << rc << std::endl;
+                continue;
+            }
+            std::cout << "OK bytes=" << blob.size() << std::endl;
+            continue;
+        }
         if (line.rfind("KEY ", 0) == 0) {
             unsigned v = std::stoul(line.substr(4), nullptr, 16);
             push_key(uint8_t(v));
@@ -1559,6 +1630,21 @@ int main(int argc, char** argv) {
         if (line.rfind("KEYBITS ", 0) == 0) {
             unsigned v = std::stoul(line.substr(8), nullptr, 0);
             top->joy_in = v & 0x3f;
+            ticks(2);
+            std::cout << "OK" << std::endl;
+            continue;
+        }
+        // analog-joy: debug feed for the Pmod stick's raw axes/buttons
+        // (board wires jmr_i2c_joy directly; FPGA-SIM/PYTHON has no I2C
+        // model, so tests/GUI set it here). Digital JOY/KEYBITS above are
+        // unchanged — this is extra axes a title can poll, not a mouse.
+        if (line.rfind("ANALOG ", 0) == 0) {
+            std::istringstream iss(line.substr(7));
+            unsigned x = 128, y = 128, b = 0;
+            iss >> x >> y >> b;
+            top->analog_x = x & 0xff;
+            top->analog_y = y & 0xff;
+            top->joy_btn = b & 0x1f;
             ticks(2);
             std::cout << "OK" << std::endl;
             continue;

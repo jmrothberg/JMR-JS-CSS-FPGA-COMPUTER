@@ -22,11 +22,11 @@ still loads `.JSH` from the card. Compiler/editor are ordinary card programs
 delete** `storage/EDITOR.HTML`, `ARTSCAN.HTML`, `COMPILER.HTML` (`DIR`
 hides them). Typed-at-READY
 numbered authoring of *new* programs is still leftover. Popular JS V1.0 does
-not have (`shift`, `Math.sin`/`round`, …) is still the language backlog
+not have (`shift`, `Math.sin`, …) is still the language backlog
 (stdlib + globals; not Canvas gradients / mouse).
 **V2.0** = grow the ISA past V1 walls (sprite descriptors, ASET size,
-`Object.keys`, `Math.round`, dotted `new`, `.call`/`.apply`). **No title
-is the V2 example.** Do **not** title-gate (`if (stem == "…")`).
+`Object.keys`, dotted `new`, `.call`/`.apply`). **`Math.round` is live**
+(nid 54). **No title is the V2 example.** Do **not** title-gate (`if (stem == "…")`).
 
 ## V1.0 — write titles inside these walls
 
@@ -34,14 +34,15 @@ is the V2 example.** Do **not** title-gate (`if (stem == "…")`).
 |---|---|
 | **`MAX_SPR` = 16** ASET descriptors | ≤16 **PNG sheets** (`jmr:spr:N`). Pack frames into **atlases**; crop with **9-arg `drawImage`**. Do not ship one URI per frame (MKPVP: 274 → refuse). Keep sheets **modest** (not one multi-thousand-pixel-wide image — extra address math + SRAM traffic). |
 | **`Object.keys` / `for…in`** | Compiler lowers `for (k in obj)` → `Object.keys`. RTL lacks that native (`fault=5` / `fsite=4183`). Use literal key lists or indexed loops. |
-| **`setTransform(-1, …)` mirror** | PYTHON `_xf` does `max(1, w*sx)` — negative scale → 1px. Prefer **left + right** sheets. |
-| **Math** | Only `floor` / `abs` / `min` / `max` / `random` / `sqrt` (+ `Math.PI`). No `round` native in V1. |
+| **`setTransform(-1, …)` mirror** | **V2 live:** negative `dWidth`/`scale` mirrors the blit (RTL `flip_x`/`flip_y`). Left+right sheets still OK. |
+| **Math** | `floor` / `round` / `abs` / `min` / `max` / `random` / `sqrt` (+ `Math.PI`). No `sin`/`cos`/`ceil` native. |
 | **Heap caps (live silicon)** | `MAX_OBJ=960`, arrays `1536×32 + 12×128`, `ENV_DEPTH=384`, `ARR_CAP=128`. Loud overflow. Do not assume old 1024/512. Reuse one mutable `{x,y}` across frames — a fresh literal every tick burns the pool. Do **not** hoist per-frame grids to startup. A map bigger than 128 cells is **row arrays** (20×18 → 18 arrays of 20), not one 360-slot array — do **not** shrink the playfield to dodge the cap. [FPGA_FIT.md](../../docs/FPGA_FIT.md). |
-| **16 locals per function** (`ENV_SLOTS`) | Params + every `var`/`let`/`const` in that function. The 17th is a **card-mint `CompileError`**: `LOAD` still shows the HTML, `RUN` is `?NH` / FPGA-SIM bounces to READY. Split a helper. Do **not** cut game systems to “fit 16.” |
-| **No typed arrays / V1.5 stdlib** | No `Int32Array` / `Uint8Array` / `Array.shift` / `charCodeAt` / `performance.now`. Ordinary arrays, copy-down or an index instead of `shift`, packed digits instead of `charCodeAt`, frame counter instead of `performance.now`. Card mint skip → same `?NH` as a 17th local. |
+| **16 locals per function** (`ENV_SLOTS`) | Params + every `var`/`let`/`const` in that function **including names a tiny inlined helper adds** (`blit(im,x,y,w,h)` counts 5 extra in the caller). The 17th is a **card-mint `CompileError`**: `LOAD` still shows the HTML, `RUN` is `?NH`. Split a helper. **This is not `MAX_SPR=16`.** Do **not** cut game systems to “fit 16.” |
+| **No typed arrays / V1.5 stdlib** | No `Int32Array` / `Uint8Array` / `Array.shift` / `charCodeAt` / `performance.now` / `Object.create`. Ordinary arrays, `{}` or flags not `Object.create(null)`, frame counter not `performance.now`. Those last two **mint**, then PYTHON faults `CALL_METHOD … kind 4` (interned `"Object"` / `"performance"`). Chrome still runs. |
+| **`jmr:spr` literals; dest on-glass** | `img.src = "jmr:spr:0"` quoted per sheet — not `"jmr:spr:"+n`. Concat is PYTHON/Chrome-only; FPGA-SIM `dihit=0` with HUD still painting. `drawImage` dest `x,y >= 0`. Detail: [GAME_DESIGN.md](../../docs/GAME_DESIGN.md). |
 | **No mouse port** | Machine play is keys + `joy()`. Chrome may also bind `clientX`. Do **not** make mouse the only way to place/aim — then PYTHON/FPGA-SIM/BOARD cannot play the same game. |
 | **No per-tick maze flood** | Do **not** recursive BFS / `_copyMapOpen` / `Array(n).fill().map(()=>Array(m))` every actor every cell. HDMI freezes, **no ERROR**. One-step chase; door **`2` walks up**. Event-driven in-place flood on place/sell/reset is the eyes-home class — keep the maze. Split the BFS queue at `ARR_CAP=128` (e.g. 3×128 for 360 cells). Do **not** grow `ENV_DEPTH`/`CSTK`. [no-maze-flood-on-tick.mdc](no-maze-flood-on-tick.mdc). |
-| **`fillText` 8×8 only** | One bitmap font (READY glyphs). `ctx.font` parses `NNpx` only — no TTF / `"Press Start 2P"`. Scale `k = max(1, round(N * sx / 8))` (cap 15). Glass-space: **8px or 16px**. World→glass shrink (DNKFAST `sx≈0.42`): **32px only on Score/Lives** (16px stays 8 glass px and vanishes). Do **not** enlarge title/pause/select. ASCII 32–126. Do not add small fonts to RTL. [GAME_DESIGN.md](../../docs/GAME_DESIGN.md). |
+| **`fillText` 8×8 only** | One bitmap font (READY glyphs). `ctx.font` parses `NNpx` only — no TTF / `"Press Start 2P"`. Scale `k = max(1, round(N * sx / 8))` (cap 15). Each glyph is **8k px** wide. Glass-space: **8px or 16px**. World→glass shrink (DNKFAST `sx≈0.42`): **32px only on Score/Lives** (16px stays 8 glass px and vanishes). Do **not** enlarge title/pause/select. **ASCII 32–126 only** — `♦`/`♥`/`\u25C6` become `b` (UTF-8 `E2` → `byte&127`) and inflate `textAlign` center/right so labels overlap. `textAlign=left` + `x + n*(8*k)`; lives via `*` or `fillRect`, not unicode. Two calls for label and number. Do not add small fonts to RTL. [GAME_DESIGN.md](../../docs/GAME_DESIGN.md). |
 | **Glass / Esc** | 640×480 Canvas fill; Esc = machine BREAK. Present is **gone** (run 52) — scanout reads the draw bank; budget tearing, draw fast. |
 | **Disk / compile (V1.0)** | PYTHON / FPGA-SIM / BOARD `LOAD`/`RUN` `card.img`. Host mint at card-create (`NAME.JSH`). **`LOAD` works + `RUN` is `?NH` / bounce to monitor** means mint skipped that title — `python3 tools/compile_js.py --html storage/NAME.HTML` prints the wall, then remake `card.img`. **V1.5:** `COMPILE` on the machine mints the same sidecar. |
 
@@ -65,7 +66,7 @@ on the card. Typed-at-READY numbered authoring of *new* programs is leftover.
 | Delete | leftover: `10` + Enter (number only) — **gone**, not blank |
 | Insert between | leftover: step by 10 so `15 xyz` lands between `10` and `20` |
 | Edit | **V1.5 live:** bare `EDIT` launches `EDITOR.JSH`. Do **not** add `INSERT` / `DELETE` verbs — insert is an unused number (`15`); delete is `10` + Enter. V1.0 `LIST` / `DIR` / `LOAD` still view / learn |
-| **Language** | Popular JS V1 walls/faults (still backlog): `Array.shift`/`every`/`includes`, `Math.round`/`sin`/`ceil`, `String.split`/`charAt`/`toUpperCase`, `isFinite`/`isNaN`/`parseInt`, `performance.now`, `cancelAnimationFrame`, `e.code`. Full table: [JMR_JS_COMPATIBILITY.md § V1.5](../../docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). **Never:** Canvas gradients / `globalCompositeOperation` / mouse |
+| **Language** | Popular JS V1 walls/faults (still backlog): `Array.shift`/`every`/`includes`, `Math.sin`/`ceil`, `String.split`/`charAt`/`toUpperCase`, `isFinite`/`isNaN`/`parseInt`, `performance.now`, `cancelAnimationFrame`, `e.code`. `Math.round` is live (nid 54). Full table: [JMR_JS_COMPATIBILITY.md § V1.5](../../docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). **Never:** Canvas gradients / `globalCompositeOperation` / mouse |
 
 **Fit:** SOURCE stays in external SRAM. Do not grow SOURCE into BRAM. Language natives’ LUT cost is **TBD**. Full table: [JMR_JS_COMPATIBILITY.md § V1.5](../../docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
 
@@ -81,7 +82,7 @@ the lost fighter HTML) still informs the caps:
 | Asset bank | **V2.0 = 8 MB** (or more) simple SRAM port. ASIC: **single chip**, no fancy multi-bank access. V1 stays 4 MB. |
 | Compiler | Accept dotted `new Foo.Bar(…)` (runtime construct-on-a-value) |
 | Native | **`Object.keys`** (or real `for…in`) on exec64 |
-| Native | **`Math.round`** |
+| Native | **`Math.round`** — **landed** nid 54 (PYTHON + exec64) |
 
 ```text
 // BAD V1 — one data:image per frame past MAX_SPR=16

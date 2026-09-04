@@ -44,13 +44,21 @@ module jmr_raster_engine #(
     // VM handshake (go is a VM-beat-wide pulse; edge-detected here)
     input  logic        go,
     input  logic [1:0]  mode,      // 0 FILL, 1 BLIT, 2 IMGD
-    input  logic [9:0]  dx, dy, w, h,
+    // signed dest origin: Canvas drawImage keeps DDA in source while dest
+    // hangs off-glass (clip_u to 0 smeared sheet-left onto x=0 — RUN 69 #5).
+    input  logic signed [11:0] dx, dy,
+    input  logic [9:0]  w, h,
     input  logic [7:0]  color,
     input  logic [15:0] sx, sy,          // blit_sx / blit_sy
     input  logic [15:0] qx, rxr, qy, ryr, // DDA quotient/remainder pairs
     input  logic [21:0] sbase,     // spr_off[si] (blit) / imgd_i (imgd)
     input  logic [15:0] stride,    // spr_ww[si]
     input  logic        aset,
+    // neg-xform: negative dWidth/dHeight (or ctx_sx/sy<0) mirrors the dest
+    // rect; the source DDA (so/row_so/ax/ay below) walks forward exactly as
+    // before — only which dest column/row each step paints is reversed.
+    input  logic        flip_x,
+    input  logic        flip_y,
     output logic        busy,
     // framebuffer write port (100 MHz side of jmr_mini_fb)
     output logic        fb_we,
@@ -72,10 +80,12 @@ module jmr_raster_engine #(
 
     // latched op
     logic [1:0]  m_q;
-    logic [9:0]  dx_q, dy_q, w_q, h_q;
+    logic signed [11:0] dx_q, dy_q;
+    logic [9:0]  w_q, h_q;
     logic [7:0]  color_q;
     logic [15:0] qx_q, rxr_q, qy_q, ryr_q, stride_q;
     logic        aset_q;
+    logic        flip_x_q, flip_y_q;
     // walk state
     logic [9:0]  x, y;
     logic [15:0] ax, ay;          // DDA remainder accumulators
@@ -123,11 +133,21 @@ module jmr_raster_engine #(
         end
     end
 
-    logic [9:0] pxx, pxy;
-    assign pxx = dx_q + x;
-    assign pxy = dy_q + y;
+    // effective dest x/y for this walk step: mirrored under flip_x/flip_y so
+    // the source DDA order above is untouched (neg-xform).
+    logic [9:0] xe, ye;
+    assign xe = flip_x_q ? (w_q - 10'd1 - x) : x;
+    assign ye = flip_y_q ? (h_q - 10'd1 - y) : y;
+    logic signed [12:0] pxx, pxy;
+    assign pxx = dx_q + $signed({2'b0, xe});
+    assign pxy = dy_q + $signed({2'b0, ye});
     logic inb;
-    assign inb = (pxx < 10'(MW)) && (pxy < 10'(MH));
+    assign inb = (pxx >= 0) && (pxx < $signed(13'(MW)))
+              && (pxy >= 0) && (pxy < $signed(13'(MH)));
+    // Write addr from visible dest (not incremental from a possibly
+    // off-glass start — negative dx used to wrap unsigned fb_addr).
+    logic [18:0] pix_addr;
+    assign pix_addr = 19'(pxy[9:0]) * 19'(MW) + 19'(pxx[9:0]);
 
     // advance to the next dest pixel; returns via updated x/y/so/row_so/
     // ax/ay/imgd_i registers. Shared by all three modes.
@@ -193,6 +213,8 @@ module jmr_raster_engine #(
                     qx_q <= qx; rxr_q <= rxr; qy_q <= qy; ryr_q <= ryr;
                     stride_q <= stride;
                     aset_q <= aset;
+                    flip_x_q <= flip_x;
+                    flip_y_q <= flip_y;
                     x <= 10'd0; y <= 10'd0;
                     ax <= 16'd0; ay <= 16'd0;
                     // row-0 source base: two 16-bit DSP products, once per op
@@ -218,7 +240,7 @@ module jmr_raster_engine #(
                         // 1 px/clk, unconditional colour
                         if (inb) begin
                             fb_we <= 1'b1;
-                            fb_waddr <= fb_addr;
+                            fb_waddr <= pix_addr;
                             fb_wdata <= color_q;
                         end
                         if (last_px) busy <= 1'b0;
@@ -231,7 +253,7 @@ module jmr_raster_engine #(
                             pix = px_hi ? cw_word[15:8] : cw_word[7:0];
                             if (pix != 8'd0 && inb) begin
                                 fb_we <= 1'b1;
-                                fb_waddr <= fb_addr;
+                                fb_waddr <= pix_addr;
                                 fb_wdata <= pix;
                             end
                             if (last_px) busy <= 1'b0;
@@ -250,7 +272,7 @@ module jmr_raster_engine #(
                             pix = px_hi ? sram_rdata[15:8] : sram_rdata[7:0];
                             if (pix != 8'd0 && inb) begin
                                 fb_we <= 1'b1;
-                                fb_waddr <= fb_addr;
+                                fb_waddr <= pix_addr;
                                 fb_wdata <= pix;
                             end
                             if (last_px) busy <= 1'b0;
@@ -273,7 +295,7 @@ module jmr_raster_engine #(
                             fetch_wait <= 1'b0;
                             if (inb) begin
                                 fb_we <= 1'b1;
-                                fb_waddr <= fb_addr;
+                                fb_waddr <= pix_addr;
                                 fb_wdata <= sram_rdata[7:0];
                             end
                             if (last_px) busy <= 1'b0;

@@ -107,6 +107,14 @@ NATIVE_IDS = {
     # program: it could read the buffer but never change it.
     "srcWrite": 49,
     "srcSetLen": 50,
+    # analog-joy: raw Pmod stick axes (0..255, rest ~128) + 5 discrete
+    # buttons (bit0=A bit1=B bit2=C bit3=D bit4=click). Digital joy_in
+    # (ids 4-9 above / joy()/getJoy() host natives) is unchanged.
+    "joyX": 51,
+    "joyY": 52,
+    "joyButtons": 53,
+    # natives V2: ES Math.round (ties toward +inf). Same shape as Math.floor.
+    "Math.round": 54,
 }
 
 # NEW: aliases share an id (decode prefers the canonical NATIVE_IDS key)

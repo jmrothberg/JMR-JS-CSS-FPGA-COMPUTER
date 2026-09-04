@@ -16,6 +16,7 @@ from functional_model.jsb_format import (
     encode_chunk,
 )
 from functional_model.machine import Machine
+from functional_model.storage_engine import resolve_storage_html
 from hardware_model import js_vm as value64
 from hardware_model.js_vm import JsHwVm
 
@@ -1535,6 +1536,23 @@ swapBuffers();
     assert vm.canvas.front[1 * vm.canvas.width + 1] == 5
 
 
+def test_math_round_ties_toward_plus_inf():
+    """natives V2: Math.round is CALL_NATIVE nid 54 (not a V1 wall)."""
+    m = Machine()
+    chunk = compile_source(
+        "var a = Math.round(1.4); var b = Math.round(1.5);"
+        "var c = Math.round(-1.5); var d = Math.round(-0.5);"
+    )
+    m.vm.natives = m._natives()
+    m.vm.run(chunk)
+    assert m.vm.error is None, m.vm.error
+    assert m.vm.globals["a"] == 1
+    assert m.vm.globals["b"] == 2
+    assert m.vm.globals["c"] == -1
+    assert m.vm.globals["d"] == 0
+    assert NATIVE_IDS["Math.round"] == 54
+
+
 def test_hw_value64_frame_order_input_then_raf_then_timer():
     image = ProgramImage.from_chunk(
         compile_source(
@@ -2271,12 +2289,14 @@ def test_html_program_image_is_value64_and_machine_uses_hw_vm():
     machine.frame_tick()
     assert machine._hw_vm.globals.get("hits") == 1
 
-    invaders = Path(__file__).resolve().parents[1] / "storage" / "INVADERS.HTML"
-    if invaders.is_file():
+    invaders = resolve_storage_html("INVADERS")
+    if invaders is not None:
         title = invaders.read_text(encoding="utf-8")
         title_image = ProgramImage(encode_html_chunk(compile_html_text(title)))
         assert title_image.flags & FLAG_VALUE64
-        assert title_image.flags & 2  # FLAG_ASET
+        # Original INVADERS inlined PNG ASET. FAST INVF uses jmr:spr + .ART sidecar.
+        if invaders.stem.upper() == "INVADERS":
+            assert title_image.flags & 2  # FLAG_ASET
 
 
 def test_hw_value64_grouped_switch_cases_or_bools():
@@ -2543,11 +2563,11 @@ def test_invaders_hm_held_left_changes_framebuffer():
         value_payload,
     )
 
-    invaders = Path(__file__).resolve().parents[1] / "storage" / "INVADERS.HTML"
-    if not invaders.is_file():
-        pytest.skip("INVADERS.HTML missing")
+    invaders = resolve_storage_html("INVADERS")
+    if invaders is None:
+        pytest.skip("no INVADERS-family HTML in storage/")
     machine = Machine()
-    machine.source_name = "INVADERS.HTML"
+    machine.source_name = invaders.name
     out = machine._run_html_bytecode(invaders.read_text(encoding="utf-8"))
     hw = machine._hw_vm
     assert hw is not None
@@ -2597,11 +2617,11 @@ def test_donkey_hm_enter_keeps_raf_armed():
     """DONKEY: Enter must leave rAF live (title → next screen)."""
     from pathlib import Path
 
-    donkey = Path(__file__).resolve().parents[1] / "storage" / "DONKEY.HTML"
-    if not donkey.is_file():
-        pytest.skip("DONKEY.HTML missing")
+    donkey = resolve_storage_html("DONKEY")
+    if donkey is None:
+        pytest.skip("no DONKEY-family HTML in storage/")
     machine = Machine()
-    machine.source_name = "DONKEY.HTML"
+    machine.source_name = donkey.name
     out = machine._run_html_bytecode(donkey.read_text(encoding="utf-8"))
     hw = machine._hw_vm
     assert hw is not None
@@ -2631,11 +2651,11 @@ def test_pacman_hm_raf_stays_armed():
     """PACMAN: RUN must leave rAF live (title auto-advances via nested rAF)."""
     from pathlib import Path
 
-    pacman = Path(__file__).resolve().parents[1] / "storage" / "PACMAN.HTML"
-    if not pacman.is_file():
-        pytest.skip("PACMAN.HTML missing")
+    pacman = resolve_storage_html("PACMAN")
+    if pacman is None:
+        pytest.skip("no PACMAN-family HTML in storage/")
     machine = Machine()
-    machine.source_name = "PACMAN.HTML"
+    machine.source_name = pacman.name
     out = machine._run_html_bytecode(pacman.read_text(encoding="utf-8"))
     hw = machine._hw_vm
     assert hw is not None, out
@@ -4021,11 +4041,11 @@ def test_mrdo_hm_enter_paints_without_hang():
     import time
     from pathlib import Path
 
-    mrdo = Path(__file__).resolve().parents[1] / "storage" / "MRDO.HTML"
-    if not mrdo.is_file():
-        pytest.skip("MRDO.HTML missing")
+    mrdo = resolve_storage_html("MRDO")
+    if mrdo is None:
+        pytest.skip("no MRDO-family HTML in storage/")
     machine = Machine()
-    machine.source_name = "MRDO.HTML"
+    machine.source_name = mrdo.name
     t0 = time.perf_counter()
     out = machine._run_html_bytecode(mrdo.read_text(encoding="utf-8"))
     hw = machine._hw_vm

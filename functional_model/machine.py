@@ -21,7 +21,7 @@ from .sram_engine import SramEngine
 from .storage_engine import StorageEngine
 from .trace import TraceLog
 
-BANNER = "JMR JS-NATIVE-CPU V1.0"
+BANNER = "JMR JS-NATIVE-CPU V2.0 R70"
 READY = "READY"
 # Pattern cite: BASIC LIST_PAGE_LINES / -- MORE --
 LIST_PAGE_LINES = 14
@@ -131,6 +131,10 @@ class Machine:
     def set_joy(self, bits: int) -> None:
         self.input.set_joy(bits)
 
+    def set_analog(self, x: int, y: int, buttons: int) -> None:
+        """analog-joy: GUI/tether/FPGA-SIM debug feed for raw stick axes."""
+        self.input.set_analog(x, y, buttons)
+
     def set_key_bits(self, bits: int) -> None:
         # KEYBITS→JS only while a game is running. Typing Space in
         # LOAD "NAME.HTML" used to queue keydown 32 into the first rAF.
@@ -218,7 +222,7 @@ class Machine:
                     self.trace.dump_ring("ERROR")
         # NEW: log glass after DIR/LOAD/LIST/SAVE (not just the typed line)
         u = line.strip().upper()
-        if u == "DIR" or u.startswith("LOAD") or u.startswith("SAVE") or u == "LIST" or u.startswith("LIST"):
+        if u == "DIR" or u.startswith("DIR") or u.startswith("LOAD") or u.startswith("SAVE") or u == "LIST" or u.startswith("LIST"):
             glass = " | ".join(x for x in out if x and x != READY)[:400]
             self.trace.edge("GLASS", glass)
             if out and str(out[0]).startswith("LOADED"):
@@ -253,18 +257,22 @@ class Machine:
         if upper == "HELP":
             return [
                 "DIR LOAD SAVE NEW LIST EDIT INSERT DELETE RUN MEM HELP CLS",
+                "DIR titles;  DIR *  also .JSH/.ART  REMOVE name",
                 "LOAD name   quotes optional;  e.g. LOAD INVADERS.HTML",
                 'e.g. LOAD INVADERS.JS   or   LOAD "PACMAN.HTML"',
                 "LIST / LIST -  pages with -- MORE -- (Space/Enter=next Esc=abort)",
                 "LIST 10-20  range;  EDIT n  then type new line + Enter",
                 "CLS  clears the glass;  Games: arrows + Space, ESC quit",
             ]
-        if upper == "DIR":
-            names = self.storage.catalog()
+        if upper == "DIR" or upper.startswith("DIR"):
+            rest = upper[3:].strip()
+            if rest and rest != "*":
+                return ["?SN ERROR"]
+            # DIR * : include sidecars. Bare DIR: titles only (LOAD n index).
+            names = self.storage.catalog(all_files=(rest == "*"))
             if not names:
                 return ["(empty)"]
-            # PYTHON glass spec: names only (no DIR indices). Hide .JSB/.JSH
-            # via catalog(). FPGA-SIM DIR must look the same.
+            # PYTHON glass spec: names only (no DIR indices). FPGA-SIM same.
             return list(names)
         if upper.startswith("LOAD"):
             return self._cmd_load(text)
@@ -964,6 +972,9 @@ class Machine:
             "setFillStyle": self._nat_fill_style,
             "joy": self._nat_joy,
             "getJoy": self._nat_joy,
+            "joyX": self._nat_joy_x,
+            "joyY": self._nat_joy_y,
+            "joyButtons": self._nat_joy_buttons,
             "keyLeft": self._nat_key_left,
             "keyRight": self._nat_key_right,
             "keyFire": self._nat_key_fire,
@@ -973,6 +984,7 @@ class Machine:
             "startLoop": self._nat_start_loop,
             # NEW (compiler v2): Math natives for HTML titles (PYTHON first)
             "Math.floor": self._nat_math_floor,
+            "Math.round": self._nat_math_round,
             "Math.abs": self._nat_math_abs,
             "Math.min": self._nat_math_min,
             "Math.max": self._nat_math_max,
@@ -1157,11 +1169,35 @@ class Machine:
             sw, sh = iw, ih
         if dw is None:
             dw, dh = sw, sh
-        dx, dy, dw, dh = self._xf(dx, dy, dw, dh)
+        # neg-xform: negative dWidth/dHeight (explicit arg or ctx_sx/sy<0)
+        # mirrors the sprite in place — computed here (not via self._xf,
+        # which clamps width/height to >=1 for fillRect) so the sign
+        # survives. Matches jmr_js_vm_exec64.sv's dws/dhs<0 branch: shift
+        # the dest origin to the rect's own left/top edge, keep the width
+        # positive, and let blit_indexed's flip_x/flip_y mirror the dest
+        # column/row order (source walk stays forward, same as RTL).
+        css = float(getattr(self, "_ctx_sx", 1) or 1)
+        csy = float(getattr(self, "_ctx_sy", 1) or 1)
+        ctx = float(getattr(self, "_ctx_tx", 0) or 0)
+        cty = float(getattr(self, "_ctx_ty", 0) or 0)
+        fdx = float(dx or 0) * css + ctx
+        fdy = float(dy or 0) * csy + cty
+        fdw = float(dw or 0) * css
+        fdh = float(dh or 0) * csy
+        flip_x = fdw < 0
+        flip_y = fdh < 0
+        if flip_x:
+            fdx += fdw
+            fdw = -fdw
+        if flip_y:
+            fdy += fdh
+            fdh = -fdh
+        idx, idy = int(fdx), int(fdy)
+        idw, idh = max(1, int(fdw)), max(1, int(fdh))
         try:
             self.canvas.blit_indexed(
                 pix, iw, ih, int(sx), int(sy), int(sw), int(sh),
-                dx, dy, dw, dh,
+                idx, idy, idw, idh, flip_x=flip_x, flip_y=flip_y,
             )
         except Exception:
             pass
@@ -1366,6 +1402,18 @@ class Machine:
     def _nat_joy(self):
         return self.input.play_bits()
 
+    def _nat_joy_x(self):
+        """analog-joy: raw stick X, 0..255 (rest ~128). Not a mouse."""
+        return int(getattr(self.input, "analog_x", 128))
+
+    def _nat_joy_y(self):
+        """analog-joy: raw stick Y, 0..255 (rest ~128, 0=top)."""
+        return int(getattr(self.input, "analog_y", 128))
+
+    def _nat_joy_buttons(self):
+        """analog-joy: bit0=A bit1=B bit2=C bit3=D bit4=click."""
+        return int(getattr(self.input, "joy_buttons", 0))
+
     def _nat_key_left(self):
         from .input_engine import KEY_LEFT
 
@@ -1400,6 +1448,12 @@ class Machine:
         import math
 
         return int(math.floor(float(x)))
+
+    def _nat_math_round(self, x):
+        # natives V2: ES Math.round = nearest, ties toward +inf = floor(x+0.5)
+        import math
+
+        return int(math.floor(float(x) + 0.5))
 
     def _nat_math_abs(self, x):
         return abs(x)

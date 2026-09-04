@@ -102,6 +102,8 @@ module jmr_js_vm_exec64 (
     output logic [11:0] bind_vsp_next_q,
     output logic [15:0] blit_sh_q,
     output logic [7:0] blit_si_q,
+    output logic flip_x_q, // neg-xform: mirror dest x (negative dWidth/scale)
+    output logic flip_y_q, // neg-xform: mirror dest y (negative dHeight/scale)
     output logic [15:0] blit_sw_q,
     output logic [15:0] blit_sx_q,
     output logic [15:0] blit_sy_q,
@@ -256,8 +258,8 @@ module jmr_js_vm_exec64 (
     output logic [9:0] rh_q,
     output logic running_q,
     output logic [9:0] rw_q,
-    output logic [9:0] rx_q,
-    output logic [9:0] ry_q,
+    output logic signed [11:0] rx_q,
+    output logic signed [11:0] ry_q,
     output logic signed [31:0] saved_sx_q,
     output logic signed [31:0] saved_sy_q,
     output logic signed [31:0] saved_tx_q,
@@ -529,6 +531,9 @@ module jmr_js_vm_exec64 (
     input  logic [15:0] p_jn_i,
     input  logic [10:0] p_jn_res,
     input  logic [5:0] joy_in,
+    input  logic [7:0] analog_x,
+    input  logic [7:0] analog_y,
+    input  logic [4:0] joy_btn,
     input  logic [5:0] p_js_sp,
     input  logic [2:0] p_json_pph,
     input  logic [13:0] p_json_rp,
@@ -618,8 +623,8 @@ module jmr_js_vm_exec64 (
     input  logic [9:0] p_rh,
     input  logic p_running,
     input  logic [9:0] p_rw,
-    input  logic [9:0] p_rx,
-    input  logic [9:0] p_ry,
+    input  logic signed [11:0] p_rx,
+    input  logic signed [11:0] p_ry,
     input  logic signed [31:0] p_saved_sx,
     input  logic signed [31:0] p_saved_sy,
     input  logic signed [31:0] p_saved_tx,
@@ -1022,6 +1027,8 @@ module jmr_js_vm_exec64 (
     logic [11:0] bind_vsp_next_n;
     logic [15:0] blit_sh_n;
     logic [7:0] blit_si_n;
+    logic flip_x_n;
+    logic flip_y_n;
     logic [15:0] blit_sw_n;
     logic [15:0] blit_sx_n;
     logic [15:0] blit_sy_n;
@@ -1140,8 +1147,8 @@ module jmr_js_vm_exec64 (
     logic [9:0] rh_n;
     logic running_n;
     logic [9:0] rw_n;
-    logic [9:0] rx_n;
-    logic [9:0] ry_n;
+    logic signed [11:0] rx_n;
+    logic signed [11:0] ry_n;
     logic signed [31:0] saved_sx_n;
     logic signed [31:0] saved_sy_n;
     logic signed [31:0] saved_tx_n;
@@ -1414,6 +1421,10 @@ module jmr_js_vm_exec64 (
     assign blit_sh_q = blit_sh;
     logic [7:0] blit_si;
     assign blit_si_q = blit_si;
+    logic flip_x;
+    assign flip_x_q = flip_x;
+    logic flip_y;
+    assign flip_y_q = flip_y;
     logic [15:0] blit_sw;
     assign blit_sw_q = blit_sw;
     logic [15:0] blit_sx;
@@ -1674,9 +1685,9 @@ module jmr_js_vm_exec64 (
     assign running_q = running;
     logic [9:0] rw;
     assign rw_q = rw;
-    logic [9:0] rx;
+    logic signed [11:0] rx;
     assign rx_q = rx;
-    logic [9:0] ry;
+    logic signed [11:0] ry;
     assign ry_q = ry;
     logic signed [31:0] saved_sx;
     assign saved_sx_q = saved_sx;
@@ -2098,6 +2109,8 @@ module jmr_js_vm_exec64 (
                 cm_mip <= cm_mip_n;
                 blit_sh <= blit_sh_n;
                 blit_si <= blit_si_n;
+                flip_x <= flip_x_n;
+                flip_y <= flip_y_n;
                 blit_sw <= blit_sw_n;
                 blit_sx <= blit_sx_n;
                 blit_sy <= blit_sy_n;
@@ -3041,6 +3054,28 @@ module jmr_js_vm_exec64 (
         else if (v > room) clip_sz = 10'(room);
         else clip_sz = 10'(v);
     endfunction
+    // Canvas drawImage: keep signed dest origin (raster inb skips OOB).
+    // clip_u(dx)=0 without shrinking source smears the sheet onto x=0.
+    function automatic logic signed [11:0] sat12(input logic signed [31:0] v);
+        if (v < -32'sd2048) sat12 = -12'sd2048;
+        else if (v > 32'sd2047) sat12 = 12'sd2047;
+        else sat12 = 12'(v);
+    endfunction
+    function automatic logic [9:0] blit_walk(
+        input logic signed [31:0] d0,
+        input logic signed [31:0] ds,
+        input int unsigned lim
+    );
+        logic signed [31:0] d1;
+        d1 = d0 + ds;
+        if (ds <= 0) blit_walk = 10'd0;
+        else if (d0 >= $signed(lim)) blit_walk = 10'd0;
+        else if (d1 <= 0) blit_walk = 10'd0;
+        else begin
+            if (d1 > $signed(lim)) d1 = $signed(lim);
+            blit_walk = 10'(d1 - d0);
+        end
+    endfunction
     function automatic logic signed [31:0] v64_to_fx(input logic [63:0] v);
         logic [10:0] exponent;
         logic [52:0] mant;
@@ -3194,6 +3229,8 @@ module jmr_js_vm_exec64 (
         bind_vsp_next_n = bind_vsp_next;
         blit_sh_n = blit_sh;
         blit_si_n = blit_si;
+        flip_x_n = flip_x;
+        flip_y_n = flip_y;
         blit_sw_n = blit_sw;
         blit_sx_n = blit_sx;
         blit_sy_n = blit_sy;
@@ -4309,6 +4346,22 @@ module jmr_js_vm_exec64 (
                                             code_raddr_n = 15'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
+                                        8'd51, 8'd52: begin // joyX/joyY (analog-joy)
+                                            vst_wr(base, v64_int32_number(
+                                                {24'd0, (nid == 8'd51) ? analog_x : analog_y}));
+                                            vsp_n = base + 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end
+                                        8'd53: begin // joyButtons (analog-joy):
+                                            // bit0=A bit1=B bit2=C bit3=D bit4=click
+                                            vst_wr(base, v64_int32_number({27'd0, joy_btn}));
+                                            vsp_n = base + 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end
                                         8'd7: begin // startLoop
                                             looping_n = 1'b1;
                                             vst_wr(base, result);
@@ -4321,6 +4374,16 @@ module jmr_js_vm_exec64 (
                                             result = (argc == 0)
                                                 ? V64_CANON_NAN
                                                 : v64_floor_number(`VST_AT(base));
+                                            vst_wr(base, result);
+                                            vsp_n = base + 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end
+                                        8'd54: begin // Math.round (natives V2)
+                                            result = (argc == 0)
+                                                ? V64_CANON_NAN
+                                                : v64_round_number(`VST_AT(base));
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
@@ -6819,6 +6882,7 @@ module jmr_js_vm_exec64 (
                                                       12'hFFC &&
                                                   {1'b0, si} < {4'd0, n_spr});
                                         if (spr_ok) begin
+                                            logic signed [31:0] dxs, dys, dws, dhs;
                                             dbg_di_hit_n = dbg_di_hit + 16'd1;
                                             blit_si_n = si;
                                             if (argc >= 12'd9) begin
@@ -6834,66 +6898,68 @@ module jmr_js_vm_exec64 (
                                                 blit_sh_n = clip_src(
                                                     $signed(v64_to_int32(
                                                         `VST_AT(base + 5))));
-                                                rx_n = clip_u(32'(
-                                                    ($signed(v64_to_int32(
+                                                dxs = 32'(($signed(v64_to_int32(
                                                         `VST_AT(base + 6)))
-                                                     * ctx_sx) >>> 16) + ctx_tx, MW);
-                                                ry_n = clip_u(32'(
-                                                    ($signed(v64_to_int32(
+                                                     * ctx_sx) >>> 16) + ctx_tx;
+                                                dys = 32'(($signed(v64_to_int32(
                                                         `VST_AT(base + 7)))
-                                                     * ctx_sy) >>> 16) + ctx_ty, MH);
-                                                rw_n = clip_sz(32'(
-                                                    ($signed(v64_to_int32(
+                                                     * ctx_sy) >>> 16) + ctx_ty;
+                                                dws = 32'(($signed(v64_to_int32(
                                                         `VST_AT(base + 8)))
-                                                     * ctx_sx) >>> 16), 10'd0, MW);
-                                                rh_n = clip_sz(32'(
-                                                    ($signed(v64_to_int32(
+                                                     * ctx_sx) >>> 16);
+                                                dhs = 32'(($signed(v64_to_int32(
                                                         `VST_AT(base + 9)))
-                                                     * ctx_sy) >>> 16), 10'd0, MH);
+                                                     * ctx_sy) >>> 16);
                                             end else begin
                                                 blit_sx_n = 16'd0; blit_sy_n = 16'd0;
                                                 blit_sw_n = spr_ww[si[3:0]];
                                                 blit_sh_n = spr_hh[si[3:0]];
-                                                rx_n = clip_u(32'(
-                                                    ($signed(v64_to_int32(
+                                                dxs = 32'(($signed(v64_to_int32(
                                                         `VST_AT(base + 2)))
-                                                     * ctx_sx) >>> 16) + ctx_tx, MW);
-                                                ry_n = clip_u(32'(
-                                                    ($signed(v64_to_int32(
+                                                     * ctx_sx) >>> 16) + ctx_tx;
+                                                dys = 32'(($signed(v64_to_int32(
                                                         `VST_AT(base + 3)))
-                                                     * ctx_sy) >>> 16) + ctx_ty, MH);
+                                                     * ctx_sy) >>> 16) + ctx_ty;
                                                 if (argc >= 12'd5) begin
-                                                    rw_n = clip_sz(32'(
-                                                        ($signed(v64_to_int32(
+                                                    dws = 32'(($signed(v64_to_int32(
                                                             `VST_AT(base + 4)))
-                                                         * ctx_sx) >>> 16),
-                                                        10'd0, MW);
-                                                    rh_n = clip_sz(32'(
-                                                        ($signed(v64_to_int32(
+                                                         * ctx_sx) >>> 16);
+                                                    dhs = 32'(($signed(v64_to_int32(
                                                             `VST_AT(base + 5)))
-                                                         * ctx_sy) >>> 16),
-                                                        10'd0, MH);
+                                                         * ctx_sy) >>> 16);
                                                 end else begin
-                                                    // Natural-size drawImage
-                                                    // must still honor the
-                                                    // setTransform scale —
-                                                    // this branch took the
-                                                    // sprite w/h raw while
-                                                    // the explicit-dw/dh one
-                                                    // multiplied by ctx_sx
-                                                    // (2x transform drew 1x).
-                                                    rw_n = clip_sz(32'(
-                                                        ($signed({16'd0,
+                                                    dws = 32'(($signed({16'd0,
                                                             spr_ww[si[3:0]]})
-                                                         * ctx_sx) >>> 16),
-                                                        10'd0, MW);
-                                                    rh_n = clip_sz(32'(
-                                                        ($signed({16'd0,
+                                                         * ctx_sx) >>> 16);
+                                                    dhs = 32'(($signed({16'd0,
                                                             spr_hh[si[3:0]]})
-                                                         * ctx_sy) >>> 16),
-                                                        10'd0, MH);
+                                                         * ctx_sy) >>> 16);
                                                 end
                                             end
+                                            // neg-xform: negative dWidth/dHeight
+                                            // (explicit arg or ctx_sx/sy < 0)
+                                            // means Canvas mirrors the source
+                                            // into the same dest rect. Shift
+                                            // the dest origin to the rect's
+                                            // left/top edge, walk the source
+                                            // forward as usual, and let the
+                                            // raster engine paint dest columns
+                                            // right-to-left (flip_x/flip_y) —
+                                            // no reverse DDA needed.
+                                            if (dws < 32'sd0) begin
+                                                dxs = dxs + dws;
+                                                dws = -dws;
+                                                flip_x_n = 1'b1;
+                                            end else flip_x_n = 1'b0;
+                                            if (dhs < 32'sd0) begin
+                                                dys = dys + dhs;
+                                                dhs = -dhs;
+                                                flip_y_n = 1'b1;
+                                            end else flip_y_n = 1'b0;
+                                            rx_n = sat12(dxs);
+                                            ry_n = sat12(dys);
+                                            rw_n = blit_walk(dxs, dws, MW);
+                                            rh_n = blit_walk(dys, dhs, MH);
                                             x_n = 10'd0; y_n = 10'd0;
                                             vst_wr(base, V64_UNDEFINED);
                                             vsp_n = base + 12'd1;

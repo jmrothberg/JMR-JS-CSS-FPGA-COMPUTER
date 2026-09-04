@@ -266,6 +266,18 @@ Bare names the compiler already knows. Source of the ids: `functional_model/jsb_
 | `artWrite2` | 48 |
 | `srcWrite` | 49 |
 | `srcSetLen` | 50 |
+| `joyX` | 51 |
+| `joyY` | 52 |
+| `joyButtons` | 53 |
+| `Math.round` | 54 |
+
+**Ids 51–53 (`analog-joy`, V2.0).** Raw Pmod stick axes/buttons the digital
+`joy()`/`keyLeft()` bits above don't carry. `joyX()`/`joyY()` return 0..255
+(rest ~128; `joyY()` 0 = top). `joyButtons()` returns 5 bits: `1`=A `2`=B
+`4`=C `8`=D `16`=stick-click. Board wires `rtl/phys/jmr_i2c_joy.sv` directly;
+FPGA-SIM/PYTHON have no I2C model, so tests/GUI feed them via a debug RPC
+(`ANALOG x y btn`, same shape as `JOY`/`KEYBITS`). See
+[GAME_DESIGN.md](GAME_DESIGN.md) Input section.
 
 `Math.PI` is **not** a call. It is `LOAD_CONST` of 3.14159…
 
@@ -364,7 +376,7 @@ These are not missing by accident. They are not in the instruction set:
 |---|---|
 | `eval` / `Function("code")` | Would be a second compiler inside the game |
 | `async` / `await` / `fetch` / Promises | Network browser |
-| `Math.round` `Math.sin` `Math.cos` | Version 2.0 (not version 1.0) |
+| `Math.sin` `Math.cos` | Version 2.0 (not version 1.0) |
 | CSS layout, WebGL, Workers, Node `require` | Different product |
 
 Version 1.0 games: `INVADERS.HTML` `PACMAN.HTML` `DONKEY.HTML` (and the other playable titles). How to author inside these walls: [GAME_DESIGN.md](GAME_DESIGN.md).
@@ -378,7 +390,9 @@ Typed at the `>` prompt, same idea as BASIC `LOAD` / `RUN`:
 **V1.5 (live on glass since run 67 + the 2026-09-01 card):** `DIR`
 `LOAD "NAME.HTML"` `LIST` `EDIT` `COMPILE` `SAVE` `RUN` `NEW` `CLS` `HELP`
 `MEM` `REMOVE "NAME.EXT"` — quotes optional on filenames; the delete verb
-is **REMOVE**, not DELETE. `ESC` is machine BREAK (games must not steal it).
+is **REMOVE**, not DELETE. `DIR` is titles; `DIR *` also shows `.JSH` / `.ART`.
+`ESC` is machine BREAK (games must not steal it). F8 in the host GUI puts
+a file on the card (host `storage/` or `card.img`).
 
 **The self-hosted loop** — no PC anywhere in it:
 

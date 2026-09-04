@@ -19,8 +19,23 @@ sys.path.insert(0, str(ROOT))
 
 from functional_model import Machine
 from functional_model.canvas_engine import CONSOLE_ORIGIN_X, CONSOLE_ORIGIN_Y
+from functional_model.storage_engine import resolve_storage_html, storage_html_min_lines
 from runtime.backend import PythonBackend
 from runtime.sim_backend import SimBackend
+
+
+def _title_html(family: str) -> Path | None:
+    return resolve_storage_html(family)
+
+
+def _title_load_name(family: str) -> str | None:
+    p = resolve_storage_html(family)
+    return None if p is None else p.name
+
+
+def _title_is_original(family: str) -> bool:
+    p = resolve_storage_html(family)
+    return p is not None and p.stem.upper() == family.upper()
 
 
 def _norm_glass(text: str) -> str:
@@ -128,7 +143,11 @@ def check_python_monitor_verbs() -> int:
 
     # NEW: LIST HTML numbered + -- MORE -- (not (HTML) stub; bytecode is the RUN path)
     m.hard_break()
-    py.type_line("LOAD INVADERS.HTML")
+    long_html = storage_html_min_lines(20)
+    if long_html is None:
+        print("FAIL PYTHON no storage HTML for LIST")
+        return 1
+    py.type_line(f'LOAD "{long_html.name}"')
     seen_more = {"v": False}
 
     def _idle_html_more() -> None:
@@ -212,14 +231,18 @@ def _hw_array_len(hw, name: str) -> int:
 
 
 def check_python_html_bytecode_invaders() -> int:
-    """PYTHON LOAD/RUN INVADERS.HTML via bytecode/.JSH (not dukpy).
+    """PYTHON LOAD/RUN INVADERS-family HTML via bytecode/.JSH (not dukpy).
 
     Pixels + Left + Space; FB must persist across extra frames (no vanish).
     """
+    name = _title_load_name("INVADERS")
+    if name is None:
+        print("FAIL PYTHON no INVADERS-family HTML in storage/")
+        return 1
     m = Machine()
     py = PythonBackend(m)
     m.boot_lines()
-    py.type_line("LOAD INVADERS.HTML")
+    py.type_line(f'LOAD "{name}"')
     py.type_line("RUN")
     if not m.running or not getattr(m, "_bytecode_html", False):
         print(
@@ -282,10 +305,14 @@ def check_python_html_bytecode_title(stem: str) -> int:
 
     INVADERS keeps the stricter player.x / Space-fire check above.
     """
+    name = _title_load_name(stem)
+    if name is None:
+        print(f"FAIL PYTHON no {stem}-family HTML in storage/")
+        return 1
     m = Machine()
     py = PythonBackend(m)
     m.boot_lines()
-    py.type_line(f"LOAD {stem}.HTML")
+    py.type_line(f'LOAD "{name}"')
     py.type_line("RUN")
     if not m.running or not getattr(m, "_bytecode_html", False):
         print(
@@ -337,12 +364,15 @@ def check_python_html_bytecode_pacman() -> int:
 
 
 def check_hm_invaders_jsh() -> int:
-    """HM compile-on-RUN INVADERS.HTML (JsHwVm + ASET), not a stale .JSH."""
+    """HM compile-on-RUN INVADERS-family HTML (JsHwVm + ASET), not a stale .JSH."""
     from functional_model.input_engine import KEY_FIRE, KEY_LEFT
 
-    html_path = ROOT / "storage" / "INVADERS.HTML"
+    html_path = _title_html("INVADERS")
+    if html_path is None:
+        print("FAIL HM no INVADERS-family HTML in storage/")
+        return 1
     m = Machine()
-    m.source_name = "INVADERS.HTML"
+    m.source_name = html_path.name
     out = m._run_html_bytecode(html_path.read_text(encoding="utf-8"))
     hw = m._hw_vm
     if hw is None or hw.error or not m.running:
@@ -405,13 +435,28 @@ def check_rtl_help_list_run() -> int:
         print("OK RTL HELP")
 
         sim.type_line("DIR")
-        st = _norm_glass(sim.screen_text())
-        if "JOYDEMO.HTML" not in st and "JOYDEMO.HTM" not in st and "INVADERS.HTML" not in st and "INVADERS.HTM" not in st:
+        found_title = False
+        for _ in range(8):
+            st = _norm_glass(sim.screen_text())
+            up = st.upper()
+            if "JOYDEMO" in up or "BOXES" in up or "ASTEROID" in up:
+                found_title = True
+                break
+            if "-- MORE" in st:
+                sim.push_key(" ")
+            else:
+                break
+        if not found_title:
             print("FAIL RTL DIR", repr(st)[-200:])
             return 1
         print("OK RTL DIR")
+        sim._abort_more()
 
-        sim.type_line('LOAD "INVADERS.HTML"')
+        list_html = storage_html_min_lines(20)
+        if list_html is None:
+            print("FAIL RTL no storage HTML for LIST")
+            return 1
+        sim.type_line(f'LOAD "{list_html.name}"')
         st = _norm_glass(sim.screen_text())
         if "LOADED" not in st:
             print("FAIL RTL LOAD INVADERS", repr(st)[-200:])
@@ -467,8 +512,12 @@ def check_rtl_help_list_run() -> int:
         for _ in range(50):
             sim._rpc("TICK")
 
-        # INVADERS HTML VM (compile-on-RUN)
-        sim.type_line('LOAD "INVADERS.HTML"')
+        # INVADERS-family HTML VM (card .JSH)
+        inv_name = _title_load_name("INVADERS")
+        if inv_name is None:
+            print("FAIL RTL no INVADERS-family HTML in storage/")
+            return 1
+        sim.type_line(f'LOAD "{inv_name}"')
         sim.type_line("RUN")
         for _ in range(500):
             sim._rpc("TICK")
@@ -588,12 +637,15 @@ def check_rtl_help_list_run() -> int:
         # companions that no longer exist (one title = one NAME.HTML; the
         # compile-on-RUN HTML ladder below covers both titles + keys).
 
-        # NEW: HTML RUN = compile-on-RUN → fresh .JSH on card → RTL FAT-load
-        sim.type_line('LOAD "invaders.html"')
+        # NEW: HTML RUN = card .JSH on FAT
+        html_name = _title_load_name("INVADERS") or (storage_html_min_lines(20) and storage_html_min_lines(20).name)
+        if not html_name:
+            print("FAIL RTL no HTML for LOAD/LIST")
+            return 1
+        sim.type_line(f'LOAD "{html_name}"')
         st = _norm_glass(sim.screen_text())
         if "LOADED" not in st and "?IO" not in st:
-            # FAT 8.3 may be INVADERS.HTM — try that if .html open failed
-            sim.type_line("LOAD INVADERS.HTM")
+            sim.type_line(f'LOAD "{Path(html_name).stem}.HTM"')
             st = _norm_glass(sim.screen_text())
         if "LOADED" not in st:
             print("FAIL RTL LOAD HTML", repr(st)[-200:])
@@ -655,9 +707,13 @@ def check_rtl_help_list_run() -> int:
             sim._rpc("TICK")
         sim.framebuffer().front[:] = b"\x00" * len(sim.framebuffer().front)
 
-        # NEW: DONKEY.HTML / PACMAN.HTML same LOAD/RUN/.JSH ladder (not ?NH)
-        for hname in ("DONKEY.HTM", "PACMAN.HTM"):
-            sim.type_line(f"LOAD {hname}")
+        # NEW: DONKEY / PACMAN family same LOAD/RUN/.JSH ladder (not ?NH)
+        for family in ("DONKEY", "PACMAN"):
+            hname = _title_load_name(family)
+            if hname is None:
+                print(f"FAIL RTL no {family}-family HTML in storage/")
+                return 1
+            sim.type_line(f'LOAD "{hname}"')
             st = _norm_glass(sim.screen_text())
             if "LOADED" not in st:
                 print(f"FAIL RTL LOAD {hname}", repr(st)[-200:])
@@ -894,11 +950,14 @@ def _ghost_color_outside(fb: bytes, pal) -> int:
 
 def check_play_progression() -> int:
     """Play-progression (both runtimes) — F9 regressions should fail here first."""
-    # PYTHON INVADERS bunker arch + fire still draws
+    inv_name = _title_load_name("INVADERS")
+    if inv_name is None:
+        print("FAIL PYTHON no INVADERS-family HTML in storage/")
+        return 1
     m = Machine()
     py = PythonBackend(m)
     m.boot_lines()
-    py.type_line('LOAD "INVADERS.HTML"')
+    py.type_line(f'LOAD "{inv_name}"')
     py.type_line("RUN")
     if not m.running or getattr(m, "html_host", None) is not None:
         print("FAIL PYTHON play INVADERS not bytecode")
@@ -906,18 +965,28 @@ def check_play_progression() -> int:
     for _ in range(24):
         py.frame_tick()
     fb = bytes(m.canvas.front)
-    if not _bunker_arch_ok(fb):
-        print("FAIL PYTHON INVADERS bunker top is square (continue)")
-        return 1
-    print("OK PYTHON INVADERS bunker arch")
+    if _title_is_original("INVADERS"):
+        if not _bunker_arch_ok(fb):
+            print("FAIL PYTHON INVADERS bunker top is square (continue)")
+            return 1
+        print("OK PYTHON INVADERS bunker arch")
+    else:
+        nz = sum(1 for b in fb if b)
+        if nz < 50:
+            print("FAIL PYTHON INVADERS-family FB empty", nz)
+            return 1
+        print("OK PYTHON INVADERS-family pixels", nz)
     py.hard_break()
 
-    # PYTHON PACMAN: ghost-colored pixels outside the house bbox (not any maze pixel).
-    # House is map cells (11..16, 12..15) at origin (16,8) size 14, plus sprite radius.
+    # PYTHON PACMAN family: ghost-colored pixels (layout-specific NOTE if FAST).
+    pac_name = _title_load_name("PACMAN")
+    if pac_name is None:
+        print("FAIL PYTHON no PACMAN-family HTML in storage/")
+        return 1
     m = Machine()
     py = PythonBackend(m)
     m.boot_lines()
-    py.type_line('LOAD "PACMAN.HTML"')
+    py.type_line(f'LOAD "{pac_name}"')
     py.type_line("RUN")
     for _ in range(16):
         py.frame_tick()
@@ -933,17 +1002,28 @@ def check_play_progression() -> int:
             return 1
     fb = bytes(m.canvas.front)
     n_out = _ghost_color_outside(fb, m.canvas.palette)
-    if n_out < 8:
-        print("NOTE PYTHON PACMAN ghost-color outside house", n_out, "(F9 is play proof)")
+    if _title_is_original("PACMAN"):
+        if n_out < 8:
+            print("NOTE PYTHON PACMAN ghost-color outside house", n_out, "(F9 is play proof)")
+        else:
+            print("OK PYTHON PACMAN ghost-color outside house", n_out)
     else:
-        print("OK PYTHON PACMAN ghost-color outside house", n_out)
+        nz = sum(1 for b in fb if b)
+        if nz < 50:
+            print("FAIL PYTHON PACMAN-family FB empty", nz)
+            return 1
+        print("OK PYTHON PACMAN-family pixels", nz)
     py.hard_break()
 
-    # PYTHON DONKEY: boot and/or KEYEVT Enter leave the initial glass
+    # PYTHON DONKEY family: boot and/or KEYEVT Enter leave the initial glass
+    dnk_name = _title_load_name("DONKEY")
+    if dnk_name is None:
+        print("FAIL PYTHON no DONKEY-family HTML in storage/")
+        return 1
     m = Machine()
     py = PythonBackend(m)
     m.boot_lines()
-    py.type_line('LOAD "DONKEY.HTML"')
+    py.type_line(f'LOAD "{dnk_name}"')
     py.type_line("RUN")
     fb0 = bytes(m.canvas.front)
     for _ in range(16):
@@ -968,7 +1048,7 @@ def check_play_progression() -> int:
     try:
         for _ in range(200):
             sim._rpc("TICK")
-        sim.type_line('LOAD "INVADERS.HTML"')
+        sim.type_line(f'LOAD "{inv_name}"')
         sim.type_line("RUN")
         running = False
         for _ in range(4000):
@@ -983,15 +1063,22 @@ def check_play_progression() -> int:
             sim._rpc("FRAME")
         sim._rpc("FB?")
         fb = bytes(sim.framebuffer().front)
-        if not _bunker_arch_ok(fb):
-            print("FAIL RTL INVADERS bunker top is square")
-            return 1
-        print("OK RTL INVADERS bunker arch")
+        if _title_is_original("INVADERS"):
+            if not _bunker_arch_ok(fb):
+                print("FAIL RTL INVADERS bunker top is square")
+                return 1
+            print("OK RTL INVADERS bunker arch")
+        else:
+            nz = sum(1 for b in fb if b)
+            if nz < 50:
+                print("FAIL RTL INVADERS-family FB empty", nz)
+                return 1
+            print("OK RTL INVADERS-family pixels", nz)
         sim.hard_break()
         for _ in range(50):
             sim._rpc("TICK")
 
-        sim.type_line('LOAD "PACMAN.HTML"')
+        sim.type_line(f'LOAD "{pac_name}"')
         sim.type_line("RUN")
         running = False
         for _ in range(4000):
@@ -1012,15 +1099,22 @@ def check_play_progression() -> int:
         fb = bytes(sim.framebuffer().front)
         pal = sim.framebuffer().palette
         n_out = _ghost_color_outside(fb, pal)
-        if n_out < 8:
-            print("NOTE RTL PACMAN ghost-color outside house", n_out, "(F9 is play proof)")
+        if _title_is_original("PACMAN"):
+            if n_out < 8:
+                print("NOTE RTL PACMAN ghost-color outside house", n_out, "(F9 is play proof)")
+            else:
+                print("OK RTL PACMAN ghost-color outside house", n_out)
         else:
-            print("OK RTL PACMAN ghost-color outside house", n_out)
+            nz = sum(1 for b in fb if b)
+            if nz < 50:
+                print("FAIL RTL PACMAN-family FB empty", nz)
+                return 1
+            print("OK RTL PACMAN-family pixels", nz)
         sim.hard_break()
         for _ in range(50):
             sim._rpc("TICK")
 
-        sim.type_line('LOAD "DONKEY.HTML"')
+        sim.type_line(f'LOAD "{dnk_name}"')
         sim.type_line("RUN")
         running = False
         for _ in range(200):

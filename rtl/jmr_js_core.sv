@@ -25,6 +25,13 @@ module jmr_js_core #(
     input  logic [7:0]  kbd_data,
     input  logic [5:0]  joy_in,
     output logic [5:0]  joy_out,
+    // analog-joy: raw Pmod stick axes + 5 discrete buttons (A,B,C,D,click).
+    // Board top wires these from jmr_i2c_joy; FPGA-SIM/PYTHON drive them
+    // over a debug RPC. digital joy_in/joy_out above are unchanged — this
+    // is extra axes a title can poll, not a mouse (analog-joy).
+    input  logic [7:0]  analog_x,
+    input  logic [7:0]  analog_y,
+    input  logic [4:0]  joy_btn,
     output logic [6:0]  stor_dbg_state_o,
     output logic [6:0]  cons_dbg_state_o,
     output logic        game_view_o,
@@ -81,6 +88,7 @@ module jmr_js_core #(
     input  logic        jsb_tether_stb = 1'b0,
     input  logic [7:0]  jsb_tether_data = 8'd0,
     input  logic        jsb_tether_eof = 1'b0,
+    input  logic        jsb_tether_src = 1'b0,
     output logic        jsb_tether_rdy,
     // NEW: FPGA-SIM RAM LOAD — SOURCE poked by the host, LOAD skips FAT open
     input  logic        sim_src_bypass = 1'b0,
@@ -138,7 +146,7 @@ module jmr_js_core #(
 
     // Console ↔ storage
     logic        stor_open, stor_close, stor_readline, stor_putc;
-    logic        stor_dir, stor_dir_next, stor_delete;
+    logic        stor_dir, stor_dir_next, stor_dir_all, stor_delete;
     logic [7:0]  stor_mode, stor_chan, stor_name_len, stor_putc_data;
     logic [15:0] stor_name_addr;
     logic        stor_busy, stor_done, stor_err, stor_eof;
@@ -302,13 +310,15 @@ module jmr_js_core #(
         .stor_get_byte(stor_get_byte), .stor_get_data(stor_get_data),
         .stor_nl_scan(stor_nl_scan), .stor_nl_count(stor_nl_count),
         .stor_putc(stor_putc), .stor_putc_data(stor_putc_data),
-        .stor_dir(stor_dir), .stor_dir_next(stor_dir_next), .stor_delete(stor_delete),
+        .stor_dir(stor_dir), .stor_dir_next(stor_dir_next),
+        .stor_dir_all(stor_dir_all), .stor_delete(stor_delete),
         .stor_busy(stor_busy), .stor_done(stor_done),
         .stor_err(stor_err), .stor_eof(stor_eof), .stor_line_len(stor_line_len),
         .mem_en(c_mem_en), .mem_we(c_mem_we), .mem_addr(c_mem_addr),
         .mem_wdata(c_mem_wdata), .mem_rdata(c_mem_rdata), .mem_gnt(c_mem_gnt),
         .jsb_tether_stb(jsb_tether_stb), .jsb_tether_data(jsb_tether_data),
-        .jsb_tether_eof(jsb_tether_eof), .jsb_tether_rdy(jsb_tether_rdy),
+        .jsb_tether_eof(jsb_tether_eof), .jsb_tether_src(jsb_tether_src),
+        .jsb_tether_rdy(jsb_tether_rdy),
         .sim_src_bypass(sim_src_bypass), .sim_src_lines(sim_src_lines)
     );
 
@@ -324,6 +334,7 @@ module jmr_js_core #(
         .start_nl_scan(stor_nl_scan), .nl_count(stor_nl_count),
         .start_putc(stor_putc), .putc_data(stor_putc_data),
         .start_dir(stor_dir), .start_dir_next(stor_dir_next),
+        .dir_show_all(stor_dir_all),
         .start_delete(stor_delete),
         .card_present(sd_card_present),
         .dbg_state(stor_dbg_state),
@@ -350,11 +361,13 @@ module jmr_js_core #(
     // port at core rate and reads sprites/ImageData as arbiter owner 6.
     logic        rast_go, rast_busy, rast_aset;
     logic [1:0]  rast_mode;
-    logic [9:0]  rast_dx, rast_dy, rast_w, rast_h;
+    logic [9:0]  rast_w, rast_h;
+    logic signed [11:0] rast_dx, rast_dy;
     logic [7:0]  rast_color;
     logic [15:0] rast_sx, rast_sy, rast_qx, rast_rxr, rast_qy, rast_ryr;
     logic [21:0] rast_sbase;
     logic [15:0] rast_stride;
+    logic        rast_flip_x, rast_flip_y; // neg-xform: mirror dest col/row
     logic        rast_fb_we;
     logic [18:0] rast_fb_waddr;
     logic [7:0]  rast_fb_wdata;
@@ -385,6 +398,7 @@ module jmr_js_core #(
         .sx(rast_sx), .sy(rast_sy),
         .qx(rast_qx), .rxr(rast_rxr), .qy(rast_qy), .ryr(rast_ryr),
         .sbase(rast_sbase), .stride(rast_stride), .aset(rast_aset),
+        .flip_x(rast_flip_x), .flip_y(rast_flip_y),
         .busy(rast_busy),
         .fb_we(rast_fb_we), .fb_waddr(rast_fb_waddr), .fb_wdata(rast_fb_wdata),
         .sram_req(rast_sram_req), .sram_addr(rast_sram_addr),
@@ -561,6 +575,7 @@ module jmr_js_core #(
         .stop(vm_stop_lat),
         .frame_tick(vm_ftick_lat),
         .joy_in(joy_in),
+        .analog_x(analog_x), .analog_y(analog_y), .joy_btn(joy_btn),
         .key_evt_stb(vm_kev_lat),
         .key_evt_code(vm_kev_code_lat),
         .key_evt_down(vm_kev_down_lat),
@@ -590,6 +605,7 @@ module jmr_js_core #(
         .rast_qy(rast_qy), .rast_ryr(rast_ryr),
         .rast_sbase(rast_sbase), .rast_stride(rast_stride),
         .rast_aset(rast_aset),
+        .rast_flip_x(rast_flip_x), .rast_flip_y(rast_flip_y),
         .rast_done(rast_done)
     );
 

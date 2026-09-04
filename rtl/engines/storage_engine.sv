@@ -46,6 +46,7 @@ module storage_engine #(
     // NEW: console DIR catalog + REMOVE (DIR uses BRAM sbuf sequential dent walk)
     input  logic        start_dir,
     input  logic        start_dir_next,
+    input  logic        dir_show_all = 1'b0, // DIR *: do not hide .JSH/.ART
     input  logic        start_delete,
 
     output logic [7:0]  line_len,         // bytes left in STORAGE_BUFFER
@@ -280,6 +281,7 @@ module storage_engine #(
     logic        rl_field;
     logic        cl_data_done; // NEW: CLOSE data-sector flush latch
     logic        cat_on /*verilator public_flat_rd*/;
+    logic        cat_all; // latched at start_dir: 1 = DIR *
 `ifdef VERILATOR
     integer dirtrace_fd = 0;
     state_t dirtrace_last;
@@ -319,6 +321,20 @@ module storage_engine #(
     logic name_hit_q;
     always_ff @(posedge clk) name_hit_q <= name_hit;
     wire [7:0] ds_attr = dent[11];
+    // DIR always hides machine programs (PYTHON _SYSTEM_STEMS). DIR * still
+    // skips these; it only adds .JSH/.ART for titles.
+    wire dent_sys = (dent[0]=="E" && dent[1]=="D" && dent[2]=="I" && dent[3]=="T"
+                  && dent[4]=="O" && dent[5]=="R" && dent[6]==8'h20 && dent[7]==8'h20)
+                 || (dent[0]=="C" && dent[1]=="O" && dent[2]=="M" && dent[3]=="P"
+                  && dent[4]=="I" && dent[5]=="L" && dent[6]=="E" && dent[7]=="R")
+                 || (dent[0]=="A" && dent[1]=="R" && dent[2]=="T" && dent[3]=="S"
+                  && dent[4]=="C" && dent[5]=="A" && dent[6]=="N" && dent[7]==8'h20)
+                 || (dent[0]=="A" && dent[1]=="R" && dent[2]=="T" && dent[3]=="P"
+                  && dent[4]=="N" && dent[5]=="G" && dent[6]==8'h20 && dent[7]==8'h20)
+                 || (dent[0]=="C" && dent[1]=="O" && dent[2]=="M" && dent[3]=="P"
+                  && dent[4]=="I" && dent[5]=="L" && dent[6]=="2" && dent[7]==8'h20)
+                 || (dent[0]=="M" && dent[1]=="I" && dent[2]=="N" && dent[3]=="T"
+                  && dent[4]=="A" && dent[5]=="S" && dent[6]=="M" && dent[7]==8'h20);
 
     // FAT entry byte offset inside its sector
     wire [9:0] fg_off = {fg_clus[6:0], 2'b00};
@@ -486,7 +502,7 @@ module storage_engine #(
             eof_r <= 1'b0; err_r <= 1'b0; done_r <= 1'b0;
             nl_acc <= 16'd0;
             bare_name <= 1'b0; alt_try <= 3'd0;
-            cat_on <= 1'b0; dir_yield <= 1'b0;
+            cat_on <= 1'b0; cat_all <= 1'b0; dir_yield <= 1'b0;
             line_n <= 9'h0; line_pos <= 9'h0; fld_off <= 9'h0; fld_len <= 9'h0;
             cpy_i <= 9'h0;
             maddr <= 16'h0; mdata <= 8'h0; mbyte <= 8'h0;
@@ -568,6 +584,7 @@ module storage_engine #(
                     end else if (start_dir) begin
                         err_r <= 1'b0; eof_r <= 1'b0; fld_len <= 9'h0;
                         cat_on <= 1'b1;
+                        cat_all <= dir_show_all;
                         // 2026-08-25: no forced remount. DIR was the ONLY
                         // command that re-initialized a live card (its board
                         // wedge slice); hot-swap is handled by card_present
@@ -1508,11 +1525,15 @@ module storage_engine #(
                         state  <= S_FIN;
                     end else if (dent[0] == 8'hE5 || dent[11] == 8'h0F || dent[11][3]) begin
                         state <= S_DIR_ADV; // skip
+                    end else if (dent_sys) begin
+                        state <= S_DIR_ADV; // EDITOR/COMPILER/ARTSCAN — not titles
                     end else if (
+                        !cat_all && (
                         (dent[8] == "J" && dent[9] == "S" && dent[10] == "H") ||
-                        (dent[8] == "J" && dent[9] == "S" && dent[10] == "B")
-                    ) begin
-                        state <= S_DIR_ADV; // hide .JSH/.JSB sidecars
+                        (dent[8] == "J" && dent[9] == "S" && dent[10] == "B") ||
+                        (dent[8] == "A" && dent[9] == "R" && dent[10] == "T")
+                    )) begin
+                        state <= S_DIR_ADV; // hide .JSH/.JSB/.ART unless DIR *
                     end else begin
                         dent_i <= 5'd0;
                         line_n <= 9'h0;

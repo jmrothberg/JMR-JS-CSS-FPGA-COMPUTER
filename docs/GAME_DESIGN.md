@@ -116,7 +116,31 @@ Mint strips every `data-host="chrome"` block. Do **not** leave two src
 rewrites (`JMR_SPR` loading PNG files **and** `__jmrSpr`); after
 `--patch-html`, ARTJS is what Chrome paints.
 
-### Chrome vs the machine
+### Chrome-OK is not machine-OK
+
+Chrome (and Agent_learning’s Chromium probes) will run **browser** JS
+that the chip never will. A green screenshot is authoring, not
+`LOAD`/`RUN`. PYTHON Value64, FPGA-SIM, and BOARD share one bytecode
+image — that is the product.
+
+| Chrome / harness green | Chip (PYTHON then FPGA-SIM / BOARD) |
+|---|---|
+| `Object.create(null)` | `CALL_METHOD create` on interned `"Object"` (`Value64` kind 4) |
+| `performance.now()` | same class, interned `"performance"` |
+| `e.preventDefault()` / `{passive:false}` | interned `CALL_METHOD` / extra options object |
+| `img.src = "jmr:spr:" + n` | every `drawImage` miss (`dihit=0`); HUD `fillRect` still paints |
+| `arr.splice(i,n)` used as a value | PYTHON returns the deleted slice; FPGA writes `undefined`. `back=segs.splice(…); back[0]=…` makes a ghost chain — wave 2 never starts |
+| fat `draw()` + tiny `blit(im,x,y,w,h)` | compiler **inlines** blit params into the caller → 17th local, mint skip, RUN `?NH` |
+| eight PNG files on disk | **not** the local wall — `MAX_SPR=16` sheets ≠ `ENV_SLOTS=16` locals |
+
+**Do:** `var keys = {l:0,r:0,u:0,d:0,f:0};`, integer `frames` + a fixed
+`DT` (no `performance.now`), one quoted `"jmr:spr:0"` … `"jmr:spr:7"`
+per sheet, dest `x,y >= 0`, split draw helpers so each function stays
+≤16 locals **after** inlining. HUD: ASCII `fillText`, `textAlign=left`,
+`x + n*(8*k)` (16px face → 16 px/glyph); lives via `fillRect` or `*`
+(never `♦`/`♥`).
+
+### Chrome vs the machine (pixels)
 
 Open `storage/MYGAME.HTML` in Chrome on the PC to see the game while you
 author. That is not LOAD/RUN and not the card. Chrome cannot read `.ARTX`,
@@ -181,10 +205,20 @@ RUN
   run 66's full PS/2 keyCode map); `COMPILE` chain-loads `ARTSCAN.JSH`
   then `COMPILER.JSH` (staging any `.ART` sidecar) and mints `NAME.JSH` on the
   card; `RUN` is the ordinary sidecar load. `EDIT n` stays the numbered-line
-  replace. Popular JS V1 does not have (`shift`, `Math.sin`/`round`,
+  replace. Popular JS V1 does not have (`shift`, `Math.sin`,
   `isFinite`, `e.code`, …) is still a language backlog, not a title gate.
-  Spec:
+  **`Math.round` is live** (nid 54). Spec:
   [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
+- **GUI send-to-card (F8):** listed on the glass hint with F9/F10/F12.
+  Pick **host file** (`storage/` or anywhere) or **card.img** (where `.JSH`
+  lives — `storage/` does not keep it). HTML also takes `.ART` / `.ARTX` and
+  `.JSH`. PYTHON/FPGA-SIM write host `card.img` (HTML mints `.JSH`). BOARD
+  streams each file into SOURCE and types `SAVE "NAME"`. SOURCE is 64K;
+  bigger files (`?TR`) stay on host `card.img` only. SAVE of HTML deletes
+  a stale `.JSH` then F8 writes `.JSH` last when it fits.
+- **`DIR`** titles only (`.HTM` / `.JS`) so `LOAD n` stays a title index.
+  **`DIR *`** also lists `.JSH` and `.ART` (8.3 of `.ARTX`). `EDITOR` /
+  `COMPILER` / `ARTSCAN` stay hidden. `REMOVE "NAME.JSH"` deletes a sidecar.
 - Chrome may open the same file for authoring. PYTHON bytecode → FPGA-SIM
   RTL → BOARD is the machine. Dukpy / a host twin is not.
 
@@ -274,6 +308,13 @@ if you changed a title.
   is really a disguised call-counter that decouples from real elapsed
   time if the true poll rate ever changes). The gate must only
   rate-limit, never edge-gate, or hold-to-repeat breaks.
+- **Analog stick (V2.0, `analog-joy`).** `joyX()` / `joyY()` return the
+  Pmod stick's raw axis 0..255 (rest ~128; `joyY()` 0 = top). `joyButtons()`
+  returns 5 discrete bits: `1`=A `2`=B `4`=C `8`=D `16`=stick-click. These
+  are *extra* axes for analog aiming/menus — not a replacement for `joy()`
+  / keys, and not a mouse: a title using only `joyX()`/`joyY()` to place or
+  aim still needs a keys/digital-`joy()` fallback so PYTHON/FPGA-SIM/BOARD
+  keyboard-only play still works.
 
 ---
 
@@ -284,7 +325,7 @@ Stay on the **Complete** rows in the compatibility checklist. In particular:
 | Use | Do not use |
 |---|---|
 | `var` / `let` / `const`, `if`, `for` / `while`, functions, objects, arrays | `eval`, `async`/`await`, `fetch`, modules as a real loader |
-| `Math.floor` `abs` `min` `max` `random` `sqrt` `Math.PI` | `Math.sin` `cos` `atan2` (not V1 natives — use a lookup table) |
+| `Math.floor` `round` `abs` `min` `max` `random` `sqrt` `Math.PI` | `Math.sin` `cos` `atan2` (not V1 natives — use a lookup table) |
 | `requestAnimationFrame`, `setTimeout`, `playSfx(packed)` | HTML `Audio` / `.play()` (stub). **How:** [Sound](#sound) below. Catalog: `SNDDEMO.HTML`. |
 | `getContext("2d")`, `fillRect`, `clearRect`, `fillStyle` | `getContext("webgl")`, gradients, filters |
 | `beginPath` `moveTo` `lineTo` `arc` `stroke` `fill` `closePath` | `scale()` as a separate call; prefer `setTransform` if you must |
@@ -458,7 +499,7 @@ Two author recipes that page does not spell out:
 | Extra | How to write the HTML |
 |---|---|
 | **Nested literal tables** | Hundreds of tiny `MAKE_ARRAY`s for frame rects work only while under the array caps. Prefer compact atlases + small meta, or parallel number arrays, if you approach the cap. |
-| **`fillText` glass-space sizes** | Family/weight are ignored. Glyph scale is `k = max(1, min(15, round(N * sx / 8)))` where `sx` is the current `setTransform` x-scale (default 1). Each character is **8k × 8k glass pixels**. There is no 6px/10px/12px face — 10px at `sx=1` still paints the same 8×8 as 8px. **Glass-space HUD (PACMAN / INVADERS):** `8px` (native) or `16px` (2×). **World canvas then `setTransform` onto 640×480 (DONKEY / DNKFAST, `sx ≈ 640/1510 ≈ 0.42`):** `16px` still rounds to **k=1** (8 glass px — easy to miss on FPGA-SIM). Use **`32px` minimum** (k=2) for HUD, **`48px`** (k=3) for titles; drop the baseline so `8*k` glass pixels of height stay on screen; ASCII only (codes 32–126 — em-dash paints `?`). Do not add a second font to RTL. |
+| **`fillText` glass-space sizes** | Family/weight are ignored. Glyph scale is `k = max(1, min(15, round(N * sx / 8)))` where `sx` is the current `setTransform` x-scale (default 1). Each character is **8k × 8k glass pixels**. There is no 6px/10px/12px face — 10px at `sx=1` still paints the same 8×8 as 8px. **Glass-space HUD (PACMAN / INVADERS):** `8px` (native) or `16px` (2×). **World canvas then `setTransform` onto 640×480 (DONKEY / DNKFAST, `sx ≈ 640/1510 ≈ 0.42`):** `16px` still rounds to **k=1** (8 glass px — easy to miss on FPGA-SIM). Use **`32px` minimum** (k=2) for HUD, **`48px`** (k=3) for titles; drop the baseline so `8*k` glass pixels of height stay on screen. **ASCII 32–126 only.** UTF-8 extras (`♦` `\u25C6` = bytes `E2 97 86`) paint as `byte&127` (`♦` → **`b`**) and `textAlign` center/right uses **byte** length, so WAVE/LIVES overlap. Place HUD `textAlign=left` at `x + n*(8*k)` (16px face → 16 px/glyph). Lives: ASCII `*` or `fillRect` diamonds / extra ship blit — never `♥`/`♦`/emoji. Label and number are two calls (`fillText("SCORE",x,y)` then `fillText(score,x+6*8*k,y)`). Do not add a second font to RTL. |
 
 **V1 MK-shaped titles in `storage/`:** `MKBIG.HTML` / `MKBIGCPU.HTML` —
 atlases, L/R sheets, V1 Math, ≤16 SPR / 4 MB.
@@ -475,10 +516,10 @@ actually been measured to matter, **roughly in order of impact:**
    the board** (PACMAN / `PACORIG`). One-step “move toward target” on
    the existing map is fine; full recompute is not. Detail below and
    [no-maze-flood-on-tick.mdc](../.cursor/rules/no-maze-flood-on-tick.mdc).
-2. **Never mirror sprites with `setTransform(-1, …)`.** Negative scale
-   collapses to **1 pixel** here (`max(1, w*sx)`). Draw two pre-made
-   sheets (left-facing and right-facing) and pick between them — which
-   is what the MK-style titles already do.
+2. **Mirroring (`setTransform(-1)` / negative `dWidth`) is live.** RTL
+   `flip_x`/`flip_y` mirrors the dest walk. Left+right sheets still work
+   and save a transform. Off-glass dest still needs dest∩screen crop
+   (clip_u).
 3. **Avoid `for…in` / `Object.keys`.** Not on this VM (FPGA-SIM
    `fault=5` / `fsite=4183`). Index arrays or use a fixed key list.
 4. **Reuse objects across frames instead of allocating new ones.** The
@@ -511,8 +552,10 @@ actually been measured to matter, **roughly in order of impact:**
    the blit finishes. Draw the sheet first (or a cheap colored rect that
    is not a full-glass clear).
 10. **`Image.src` literals; dest on-glass.** See [Game code — handles
-    only](#game-code--handles-only). Concat `"jmr:spr:" + i` and
-    negative dest are PYTHON/Chrome-only; FPGA ghosts or misses.
+    only](#game-code--handles-only) and [Chrome-OK is not
+    machine-OK](#chrome-ok-is-not-machine-ok). Concat `"jmr:spr:" + i`,
+    `Object.create`, `performance.now`, and negative dest are
+    PYTHON/Chrome-only; FPGA ghosts, misses, or PYTHON kind-4 faults.
 
 > **Silicon cost model (run 51 engine + run 52 present-delete) — the
 > numbered historic text below this box is the OLD chip.** The raster
@@ -1037,7 +1080,11 @@ not readable on the V1.0 chip`), scoped to variables provably assigned
 - Assuming a hidden back buffer / `present` isolation? *(FAST rule 7 — present is gone; budget tearing)*
 - 640 one-pixel `drawImage` columns, or a minimap of one `fillRect` per cell? *(FAST rule 8 — native-call hang on the board)*
 - Full-screen black `fillRect` then a 640×480 splash blit? *(FAST rule 9 — HDMI shows the wipe)*
-- `img.src = "jmr:spr:" + i`, or `drawImage` with `dx < 0` / `dy < 0`? *(FAST rule 10 — FPGA miss / dest clamp smear; PYTHON+Chrome OK)*
+- `img.src = "jmr:spr:" + i`, or `drawImage` with `dx < 0` / `dy < 0`? *(FAST rule 10 — FPGA `dihit=0` / dest smear; PYTHON+Chrome still paint)*
+- `fillText` with `♦` / `♥` / `\u25C6` / em-dash, or `textAlign` center/right for a HUD row? *(8×8 ASCII; UTF-8 `E2` paints `b`; place `left` at `x+n*(8*k)`)*
+- `back = arr.splice(i,n)` then `back[0]` / `push({segs:back})`? *(FPGA splice return is undefined; PYTHON returns the slice — copy-down the tail)*
+- `Object.create` / `performance.now` / `e.preventDefault`? *(interned-name `CALL_METHOD` kind 4 — Chrome OK, PYTHON Value64 faults. Use `{}`, a frame counter, no preventDefault)*
+- One `draw()` with a tiny `blit(im,x,y,w,h)` plus many loop temps? *(inliner copies blit params into the caller — 17th local, mint `?NH`. Split draw helpers. **16 locals ≠ 16 PNG sheets**)*
 - A 0.3s boom / hit-flash / particle burst on kill? *(vanish + `playSfx`; the fx loop crawls on the board)*
 - Any `if (img.width)` / `.complete` / `onload` guard around a draw? *(never — undefined on the chip, renders wrong with no error)*
 - Any `"" + number`, or a `*_STR` variable holding a score/timer/coordinate? *(intern table is 1024, never released)*
@@ -1067,9 +1114,10 @@ the machine-side fixes for a title shaped like INVADERS.
 
 1. Self-contained `storage/NAME.HTML`, 640×480 canvas, keys in the file.
 2. Stays inside **V1.0 authoring walls** (sprites ≤16, no `for-in` /
-   `Object.keys`, no negative scale mirror, V1 Math, **≤16 locals/function**,
-   no typed arrays / `shift` / `charCodeAt` / `performance.now`, keys+joy
-   play the same game as Chrome mouse).
+   `Object.keys` / `Object.create`, no negative scale mirror, V1 Math, **≤16 locals/function**,
+   no typed arrays / `shift` / `charCodeAt` / `performance.now`, quoted
+   `jmr:spr:N` (not concat), dest `x,y>=0`, keys+joy
+   play the same game as Chrome mouse). **Chrome playable is not the chip.**
 3. Chrome opens it (authoring look only).
 4. `python3 tools/compile_js.py --html storage/NAME.HTML` succeeds (in memory).
    Card image **mints** a `.JSH` (V1.0 compile-at-card-create).

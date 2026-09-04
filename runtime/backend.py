@@ -485,6 +485,18 @@ class RuntimeBackend(ABC):
         """
         return ""
 
+    def put_files_on_card(self, paths: list) -> str:
+        """gui-put: write host files onto card.img (HTML mints .JSH)."""
+        from pathlib import Path as _P
+        from tools.make_sd_image import put_host_files_on_card
+
+        names = put_host_files_on_card([_P(p) for p in paths])
+        return ", ".join(names)
+
+    def put_card_names(self, names: list) -> str:
+        """F8: files already on card.img (BOARD SAVE; PYTHON/SIM DIR)."""
+        return ", ".join(names)
+
 
 class PythonBackend(RuntimeBackend):
     name = "PYTHON"

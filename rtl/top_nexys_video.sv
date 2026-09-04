@@ -159,12 +159,18 @@ module top_nexys_video (
     );
     // NEW: I2C stick @ 0x5A — NACK leaves bits 0 so GUI KEYBITS still work
     logic ack_ok, joy_left, joy_up, joy_down, joy_right, fire_ac, fire_bd;
+    // analog-joy: raw stick axes + 5 discrete buttons the digital bits
+    // above don't carry. Wired straight to jmr_js_core (no tether OR —
+    // GUI/FPGA-SIM debug feeds these over a separate RPC, not this cable).
+    logic [7:0] i2c_analog_x, i2c_analog_y;
+    logic [4:0] i2c_joy_btn;
     jmr_i2c_joy u_i2c_joy (
         .clk(core_clk), .rst_n(rst_n),
         .scl(joy_scl), .sda(joy_sda),
         .ack_ok(ack_ok),
         .left(joy_left), .up(joy_up), .down(joy_down), .right(joy_right),
-        .fire_ac(fire_ac), .fire_bd(fire_bd)
+        .fire_ac(fire_ac), .fire_bd(fire_bd),
+        .analog_x(i2c_analog_x), .analog_y(i2c_analog_y), .buttons(i2c_joy_btn)
     );
     // Board 2026-08-26: this stick's electrical DOWN is physical forward
     // (ASTEROID hand-compensated; every other title read Y reversed).
@@ -213,6 +219,7 @@ module top_nexys_video (
     logic        uart_jsb_stb;
     logic [7:0]  uart_jsb_data;
     logic        uart_jsb_eof;
+    logic        uart_jsb_src;
     logic        uart_jsb_rdy;
     jmr_uart_link #(.CLK_HZ(100_000_000), .USE_DPTI(1)) u_link (
         .clk(core_clk), .rst_n(rst_n),
@@ -233,7 +240,8 @@ module top_nexys_video (
         .vm_hdbg(vm_hdbg), .vm_fdbg(vm_fdbg), .vm_fdbg_v(vm_fdbg_v),
         .vm_ftrace(vm_ftrace), .vm_gdbg(vm_gdbg),
         .jsb_tether_stb(uart_jsb_stb), .jsb_tether_data(uart_jsb_data),
-        .jsb_tether_eof(uart_jsb_eof), .jsb_tether_rdy(uart_jsb_rdy)
+        .jsb_tether_eof(uart_jsb_eof), .jsb_tether_src(uart_jsb_src),
+        .jsb_tether_rdy(uart_jsb_rdy)
     );
     // Merge J15 + Pmod JA + UART (all slow; J15 wins, then Pmod, then tether)
     wire        core_kbd_push = kbd_push | pmod_kbd_push | uart_kbd_push;
@@ -257,6 +265,7 @@ module top_nexys_video (
         .kbd_push(core_kbd_push), .kbd_data(core_kbd_data),
         // NEW: tether KEYBITS OR I2C stick (same 6-bit field as PYTHON)
         .joy_in(uart_joy_bits | i2c_joy_bits), .joy_out(joy_out),
+        .analog_x(i2c_analog_x), .analog_y(i2c_analog_y), .joy_btn(i2c_joy_btn),
         .dump_addr(uart_dump_addr), .dump_data(dump_data),
         .cursor(cursor), .ready_lit(ready_lit),
         .snd_tgl(snd_tgl), .snd_ch(snd_ch), .snd_freq(snd_freq),
@@ -268,7 +277,8 @@ module top_nexys_video (
         .pal_raddr(pal_index), .pal_rdata(pal_rgb),
         .sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso), .sd_cs_n(sd_cs_n),
         .jsb_tether_stb(uart_jsb_stb), .jsb_tether_data(uart_jsb_data),
-        .jsb_tether_eof(uart_jsb_eof), .jsb_tether_rdy(uart_jsb_rdy),
+        .jsb_tether_eof(uart_jsb_eof), .jsb_tether_src(uart_jsb_src),
+        .jsb_tether_rdy(uart_jsb_rdy),
         .sram_ext_req(sram_req), .sram_ext_we(sram_we),
         .sram_ext_addr(sram_addr), .sram_ext_wdata(sram_wdata),
         .sram_ext_rdata(sram_rdata), .sram_ext_ack(sram_ack)

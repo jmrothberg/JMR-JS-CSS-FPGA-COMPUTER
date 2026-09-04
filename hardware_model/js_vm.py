@@ -1998,6 +1998,25 @@ class JsHwVm:
                 except RuntimeError as exc:
                     self._value64_fault(f"native ID {native_id} at IP {ip}: {exc}")
                     return None
+            elif native_id in (51, 52, 53):
+                # analog-joy: same rest defaults as InputEngine / RTL
+                if native_id == 51:
+                    return value_pack_number(
+                        int(getattr(self.input, "analog_x", 128))
+                    )
+                if native_id == 52:
+                    return value_pack_number(
+                        int(getattr(self.input, "analog_y", 128))
+                    )
+                return value_pack_number(
+                    int(getattr(self.input, "joy_buttons", 0))
+                )
+            elif native_id == 54:
+                # natives V2: ES Math.round = nearest, ties toward +inf
+                value = number(0)
+                if math.isfinite(value):
+                    value = math.floor(value + 0.5)
+                return value_pack_number(value)
             else:
                 self._value64_fault(
                     f"unsupported native ID {native_id} at IP {ip}"

@@ -208,6 +208,42 @@ package jmr_value_pkg;
         end
     endfunction
 
+    // Math.round: nearest integer, ties toward +inf (ES: floor(x+0.5)).
+    // Same ToInt32-magnitude wall as v64_floor_number. Detect the 0.5 bit
+    // with the same variable-shift mask floor already uses — no extra RAM.
+    function automatic logic [63:0] v64_round_number(input logic [63:0] value);
+        logic [10:0] exponent;
+        logic [51:0] half_bit, below;
+        logic ge_half, gt_half;
+        logic [31:0] trunc;
+        begin
+            exponent = value[62:52];
+            ge_half = 1'b0;
+            gt_half = 1'b0;
+            if (exponent == 11'd1022) begin
+                ge_half = 1'b1;
+                gt_half = (value[51:0] != 0);
+            end else if (exponent > 11'd1022 && exponent < 11'd1075) begin
+                half_bit = 52'd1 << (11'd1074 - exponent);
+                below = half_bit - 52'd1;
+                ge_half = |(value[51:0] & half_bit);
+                gt_half = ge_half && |(value[51:0] & below);
+            end
+            if (!v64_is_number(value))
+                v64_round_number = 64'd0;
+            else if (exponent == 11'h7ff)
+                v64_round_number = (value[51:0] != 0) ? V64_CANON_NAN : value;
+            else begin
+                trunc = v64_to_uint32(value);
+                if (!value[63] && ge_half)
+                    trunc = trunc + 32'd1;
+                else if (value[63] && gt_half)
+                    trunc = trunc - 32'd1;
+                v64_round_number = v64_int32_number(trunc);
+            end
+        end
+    endfunction
+
     function automatic logic [63:0] v64_u32_fraction(input logic [31:0] raw);
         logic [52:0] mant;
         integer top;

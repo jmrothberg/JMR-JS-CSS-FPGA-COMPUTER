@@ -239,10 +239,14 @@ class App:
         self.root.bind_all("<<Paste>>", self.on_paste)
         self.root.bind_all("<Control-v>", self.on_paste)
         self.root.bind_all("<Control-V>", self.on_paste)
+        # F8=put / F9=runtime / F10=monitor are GUI chrome at READY
+        # (KeyRelease, so X11 auto-repeat cannot fire them). While a
+        # title runs, F8 stays a TITLE key (on_key_press F1–F11 group).
         # NEW: mouse stick OFF — click only focuses glass (no JOY overwrite of KEYBITS)
         self.canvas_label.bind("<Button-1>", lambda e: self.canvas_label.focus_set())
         # KeyRelease: X11 auto-repeat is extra KeyPress only. A held F9 used
         # to PYTHON→FPGA-SIM→BOARD in one tap. bind_all covers the arch window.
+        self.root.bind_all("<KeyRelease-F8>", self.on_put_file)
         self.root.bind_all("<KeyRelease-F9>", self.cycle_runtime)
         self.root.bind_all("<KeyRelease-F10>", self._toggle_arch_monitor)
         self.root.bind_all("<Escape>", lambda e: self.break_program())
@@ -303,7 +307,7 @@ class App:
 
         self.hint = tk.Label(
             self.root,
-            text="F9=runtime  F10=monitor  ESC=break  F12=leave  Ctrl-V paste  arrows+space=play  type+Enter",
+            text="F8=put  F9=runtime  F10=monitor  ESC=break  F12=leave  Ctrl-V paste  arrows+space=play  type+Enter",
             fg="#888",
             bg="#1a1a1a",
             anchor="w",
@@ -669,6 +673,114 @@ class App:
         self.canvas_label.focus_set()
         return "break"
 
+    def _ask_put_source(self) -> str | None:
+        """F8: host file vs card.img. Returns 'host', 'card', or None."""
+        win = tk.Toplevel(self.root)
+        win.title("Send to card")
+        win.transient(self.root)
+        win.resizable(False, False)
+        result: dict = {"v": None}
+
+        def pick(v: str | None) -> None:
+            result["v"] = v
+            win.destroy()
+
+        tk.Label(win, text="Where is the file?", padx=12, pady=8).pack()
+        tk.Button(win, text="Host file (storage/ …)", command=lambda: pick("host")).pack(
+            fill=tk.X, padx=12, pady=2
+        )
+        tk.Button(win, text="card.img  (HTML / ART / JSH)", command=lambda: pick("card")).pack(
+            fill=tk.X, padx=12, pady=2
+        )
+        tk.Button(win, text="Cancel", command=lambda: pick(None)).pack(
+            fill=tk.X, padx=12, pady=(2, 8)
+        )
+        win.grab_set()
+        self.root.wait_window(win)
+        return result["v"]
+
+    def _ask_card_names(self) -> list:
+        """Pick HTML/ART/JSH already on card.img (storage/ has no .JSH)."""
+        from tools.make_sd_image import card_html_sidecars, list_card_put_files
+
+        rows = list_card_put_files()
+        if not rows:
+            from tkinter import messagebox
+            messagebox.showerror("Send to card", "card.img has no HTML/ART/JSH", parent=self.root)
+            return []
+        win = tk.Toplevel(self.root)
+        win.title("card.img")
+        win.transient(self.root)
+        chosen: list = []
+        tk.Label(
+            win,
+            text="Shift/Ctrl click. HTML also takes .ART + .JSH.",
+            padx=8, pady=4,
+        ).pack()
+        lb = tk.Listbox(win, selectmode=tk.EXTENDED, width=36, height=min(18, len(rows)))
+        for name, size in rows:
+            lb.insert(tk.END, f"{name:12s}  {size}")
+        lb.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+
+        def ok() -> None:
+            avail = {n for n, _ in rows}
+            seen: set[str] = set()
+            for i in lb.curselection():
+                name = rows[int(i)][0]
+                if name not in seen:
+                    chosen.append(name)
+                    seen.add(name)
+                for side in card_html_sidecars(name, avail):
+                    if side not in seen:
+                        chosen.append(side)
+                        seen.add(side)
+            win.destroy()
+
+        tk.Button(win, text="Send", command=ok).pack(pady=(0, 8))
+        win.grab_set()
+        self.root.wait_window(win)
+        return chosen
+
+    def on_put_file(self, _event: tk.Event | None = None) -> str:
+        """F8: pick storage/ or card.img files → host card.img (+ BOARD SAVE)."""
+        from tkinter import filedialog, messagebox
+
+        if self._is_running():
+            return "break"
+        src = self._ask_put_source()
+        if not src:
+            return "break"
+        try:
+            if src == "card":
+                names_in = self._ask_card_names()
+                if not names_in:
+                    return "break"
+                putc = getattr(self.backend, "put_card_names", None)
+                names = putc(names_in) if callable(putc) else ""
+            else:
+                paths = filedialog.askopenfilenames(
+                    parent=self.root,
+                    title="Send host file to card",
+                    initialdir=str(ROOT / "storage"),
+                    filetypes=[
+                        ("HTML / JSH / ART", "*.HTML *.HTM *.JS *.JSH *.ARTX *.ART"),
+                        ("All files", "*"),
+                    ],
+                )
+                if not paths:
+                    return "break"
+                put = getattr(self.backend, "put_files_on_card", None)
+                names = put(list(paths)) if callable(put) else ""
+            self._set_status(f"PUT {names}")
+            self.backend.type_line("DIR *")
+            self._after_command()
+        except Exception as e:
+            try:
+                messagebox.showerror("Send to card", str(e), parent=self.root)
+            except tk.TclError:
+                self._set_status(f"PUT ERR {e}")
+        return "break"
+
     def on_key_press(self, event: tk.Event) -> str | None:
         # NEW: real-time capture, before any early return, so nothing is
         # missed. This desktop runs detectable X11 autorepeat (see
@@ -683,12 +795,17 @@ class App:
         self._log_key_event(event, down=True, repeat=is_repeat)
         self._set_key_status(self._key_status_text())
         # Keyboard-block heat: same semantic as the board's K-line (any
-        # scancode on the connector, even a bare Shift). F9/F10 are GUI
-        # chrome, not machine input; Escape IS (break_program pushes it).
-        if event.keysym not in ("F9", "F10"):
+        # scancode on the connector, even a bare Shift). F8/F9/F10 are GUI
+        # chrome at READY, not machine input; Escape IS (break_program).
+        # F8 while a title runs is a TITLE key (F1–F11 group below).
+        if event.keysym not in ("F9", "F10") and not (
+            event.keysym == "F8" and not self._is_running()
+        ):
             self._kbd_last_t = time.monotonic()
         if event.keysym in ("F9", "F10", "Escape"):
             return None
+        if event.keysym == "F8" and not self._is_running():
+            return "break"  # put on KeyRelease-F8, like F9
         # F12 leaves a running program (READY). Every other F-key is a
         # TITLE key while running (HTML decides bindings — board parity
         # with the run-66 PS/2 map). F9/F10 are GUI chrome.
@@ -837,12 +954,14 @@ class App:
         self._keys_down.discard(event.keysym)
         self._log_key_event(event, down=False, repeat=False)
         self._set_key_status(self._key_status_text())
-        if event.keysym not in ("F9", "F10"):
+        if event.keysym not in ("F8", "F9", "F10"):
             self._kbd_last_t = time.monotonic()
         if event.keysym in ("F9", "F10", "Escape"):
             return None
         if event.keysym == "F12":
             return "break"
+        if event.keysym == "F8" and not self._is_running():
+            return "break"  # KeyRelease-F8 → on_put_file
         if event.keysym in ("F1", "F3", "F4", "F5", "F6", "F7", "F8", "F11"):
             if self._is_running():
                 jk = _js_key(event)

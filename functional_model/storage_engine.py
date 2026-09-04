@@ -21,6 +21,37 @@ _HIDE_SUFFIX = {".JSH", ".JSB", ".ART", ".ARTX"}
 # day recompile its own compiler — but they are system software, not games,
 # and listing them buries the titles. Hidden by stem, so both halves go.
 _SYSTEM_STEMS = {"ARTSCAN", "ARTPNG", "COMPILER", "COMPIL2", "MINTASM", "EDITOR"}
+# FAST rewrites renamed the three product titles. Tests/battery must not
+# hard-require INVADERS.HTML / PACMAN.HTML / DONKEY.HTML on disk.
+_TITLE_STEM_ALIASES = {
+    "INVADERS": ("INVADERS", "INVF", "INVFAST"),
+    "PACMAN": ("PACMAN", "PACFAST"),
+    "DONKEY": ("DONKEY", "DNKF", "DNKFAST"),
+    "MRDO": ("MRDO", "MRDOF"),
+}
+
+
+def resolve_storage_html(stem: str) -> Optional[Path]:
+    """First storage/*.HTML in this title family, or None."""
+    want = _TITLE_STEM_ALIASES.get(stem.upper(), (stem.upper(),))
+    for s in want:
+        p = DEFAULT_STORAGE / f"{s}.HTML"
+        if p.is_file():
+            return p
+    return None
+
+
+def storage_html_min_lines(min_lines: int) -> Optional[Path]:
+    """A playable storage HTML with more than min_lines (LIST MORE fixture)."""
+    for p in sorted(DEFAULT_STORAGE.glob("*.HTML")):
+        if p.stem.upper() in _SYSTEM_STEMS:
+            continue
+        n = 0
+        with p.open(encoding="utf-8", errors="replace") as fh:
+            for n, _ln in enumerate(fh, 1):
+                if n > min_lines:
+                    return p
+    return None
 
 
 class StorageEngine:
@@ -35,15 +66,20 @@ class StorageEngine:
             self.card_img = Path(env) if env else DEFAULT_CARD
             self.root.mkdir(parents=True, exist_ok=True)
 
-    def catalog(self) -> List[str]:
+    def catalog(self, *, all_files: bool = False) -> List[str]:
+        """Title catalog. all_files=True is DIR * (sidecars too).
+
+        Bare DIR hides .JSH/.JSB/.ART so LOAD n stays a title index.
+        EDITOR/COMPILER/ARTSCAN stay hidden either way.
+        """
         names: list[str] = []
         if self.card_img is not None:
             if not self.card_img.is_file():
                 return []
             for n in self._mount().catalog():
-                if Path(n).suffix.upper() in _HIDE_SUFFIX:
-                    continue
                 if Path(n).stem.upper() in _SYSTEM_STEMS:
+                    continue
+                if not all_files and Path(n).suffix.upper() in _HIDE_SUFFIX:
                     continue
                 names.append(n)
             return names
@@ -52,8 +88,12 @@ class StorageEngine:
                 continue
             if p.stem.upper() in _SYSTEM_STEMS:
                 continue
-            # Monitor DIR shows game/program files only.
-            if p.suffix.upper() in (".JS", ".HTML", ".HTM", ".PNG", ".DAT"):
+            suf = p.suffix.upper()
+            if all_files:
+                if suf in (".JS", ".HTML", ".HTM", ".PNG", ".DAT", ".JSH",
+                           ".JSB", ".ART", ".ARTX"):
+                    names.append(p.name)
+            elif suf in (".JS", ".HTML", ".HTM", ".PNG", ".DAT"):
                 names.append(p.name)
         return names
 

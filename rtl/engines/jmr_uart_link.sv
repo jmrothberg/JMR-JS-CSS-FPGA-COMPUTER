@@ -167,9 +167,11 @@ module jmr_uart_link #(
     input  logic [47:0] vm_gdbg = 48'd0,
     input  logic [127:0] vm_ftrace = 128'd0,
     // NEW: HTML RUN .JSH stream (0xFD + u32 LE length + payload)
+    //       SOURCE put (0xFC + u32 LE length + payload) — then host SAVE
     output logic       jsb_tether_stb,
     output logic [7:0] jsb_tether_data,
     output logic       jsb_tether_eof,
+    output logic       jsb_tether_src, // 1 while an 0xFC SOURCE stream is live
     input  logic       jsb_tether_rdy = 1'b0
 );
     logic       rx_ready;
@@ -185,6 +187,7 @@ module jmr_uart_link #(
     jsh_t jsh_st;
     logic [31:0] jsh_left;
     logic        jsh_eof_pend;
+    logic        jsh_src; // 1 = 0xFC SOURCE fill (not 0xFD ProgramImage)
     // Board freeze root cause (2026-08-25): eof was a 1-cycle pulse
     // raised the same cycle the LAST data byte strobes - the console is
     // then in C_JSB_FEED processing that byte and returns to
@@ -197,6 +200,7 @@ module jmr_uart_link #(
     assign jsb_tether_stb = rx_ready && (jsh_st == JSH_DATA) && jsb_tether_rdy;
     assign jsb_tether_data = rx_data;
     assign jsb_tether_eof = jsh_eof_hold;
+    assign jsb_tether_src = jsh_src;
 
     generate
         if (USE_DPTI) begin : g_dpti
@@ -223,7 +227,7 @@ module jmr_uart_link #(
         end
     endgenerate
 
-    // RX → keyboard FIFO, KEYBITS 0xFE, or JSHLOAD 0xFD (HTML RUN blob).
+    // RX → keyboard FIFO, KEYBITS 0xFE, JSHLOAD 0xFD, SOURCE put 0xFC.
     logic joy_cmd;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -235,6 +239,7 @@ module jmr_uart_link #(
             jsh_left <= 32'd0;
             jsh_eof_pend <= 1'b0;
             jsh_eof_hold <= 1'b0;
+            jsh_src <= 1'b0;
         end else begin
             kbd_push <= 1'b0;
             jsh_eof_pend <= 1'b0;
@@ -254,6 +259,7 @@ module jmr_uart_link #(
                     jsh_left[31:24] <= rx_data;
                     if ({rx_data, jsh_left[23:0]} == 32'd0) begin
                         jsh_eof_pend <= 1'b1;
+                        jsh_src <= 1'b0;
                         jsh_st <= JSH_IDLE;
                     end else
                         jsh_st <= JSH_DATA;
@@ -261,15 +267,22 @@ module jmr_uart_link #(
                     if (jsh_left <= 32'd1) begin
                         jsh_left <= 32'd0;
                         jsh_eof_pend <= 1'b1;
+                        jsh_src <= 1'b0;
                         jsh_st <= JSH_IDLE;
                     end else
                         jsh_left <= jsh_left - 32'd1;
                 end else if (joy_cmd) begin
                     joy_bits <= rx_data[5:0];
                     joy_cmd <= 1'b0;
+                end else if (rx_data == 8'hFC) begin
+                    // gui-put: SOURCE fill, then host types SAVE
+                    jsh_st <= JSH_L0;
+                    jsh_left <= 32'd0;
+                    jsh_src <= 1'b1;
                 end else if (rx_data == 8'hFD) begin
                     jsh_st <= JSH_L0;
                     jsh_left <= 32'd0;
+                    jsh_src <= 1'b0;
                 end else if (rx_data == 8'hFE) begin
                     joy_cmd <= 1'b1;
                 end else begin

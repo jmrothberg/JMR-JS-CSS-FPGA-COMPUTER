@@ -220,7 +220,9 @@ Same USB cable as JTAG (J12 PROG). The bitstream streams:
 - Keys: `K` line on each USB Host `ps2_strobe` (flight-log proof)
 
 Every host byte lands in the keyboard FIFO. **F9 → BOARD** mirrors HDMI and
-sends play KEYBITS (`0xFE` + 6-bit field) because J15 cannot.
+sends play KEYBITS (`0xFE` + 6-bit field) because J15 cannot. **F8**
+sends SOURCE as `0xFC` + u32 LE length + payload, then types `SAVE "NAME"`.
+HTML RUN streams `.JSH` as `0xFD` + u32 LE length + payload.
 
 Nexys Video's FT2232 **channel A** is the FT245 FIFO (DPTI), not a UART — RTL
 `jmr_ft245_async` speaks that FIFO; Linux exposes it as the `/dev/ttyUSB*`

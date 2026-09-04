@@ -66,7 +66,18 @@ def test_dir_names_only_hides_jsb():
     assert names, names
     assert not any(n.upper().endswith(".JSB") or n.upper().endswith(".JSH") for n in names)
     assert not any(n[:1].isdigit() and (len(n) > 1 and n[1] in " \t") for n in names)
-    assert any("INVADERS" in n.upper() for n in names)
+    assert any("JOYDEMO" in n.upper() for n in names)
+
+
+def test_dir_star_shows_jsh_and_art():
+    m = Machine()
+    titles = m.execute_line("DIR")
+    assert titles and not any(
+        n.upper().endswith((".JSH", ".JSB", ".ART", ".ARTX")) for n in titles
+    ), titles[:8]
+    alln = m.execute_line("DIR *")
+    assert any(n.upper().endswith(".JSH") for n in alln), alln[:20]
+    assert not any(n.upper().split(".")[0] == "EDITOR" for n in alln)
 
 
 def test_joy_bits():
@@ -297,10 +308,10 @@ def test_python_sim_dir_load_list_shape():
     m = Machine()
     names = m.execute_line("DIR")
     assert not any(n.upper().endswith((".JSB", ".JSH")) for n in names)
-    assert any("INVADERS" in n.upper() for n in names)
-    loaded = m.execute_line('LOAD "INVADERS.HTML"')
+    assert any("JOYDEMO" in n.upper() for n in names)
+    loaded = m.execute_line('LOAD "JOYDEMO.HTML"')
     assert loaded and loaded[0].startswith("LOADED") and "LINES" in loaded[0]
-    assert "INVADERS" in loaded[0].upper()
+    assert "JOYDEMO" in loaded[0].upper()
 
     os_mod = __import__("os")
     from pathlib import Path
@@ -318,12 +329,22 @@ def test_python_sim_dir_load_list_shape():
         st = sim.screen_text().replace("\\n", "\n")
         for ln in st.splitlines():
             t = ln.strip().upper()
+            if t.startswith("-- MORE") or t in ("READY", ">", "> "):
+                continue
             assert not t.endswith(".JSB"), ln
             assert not t.endswith(".JSH"), ln
-        assert "INVADERS" in st.upper(), st[-400:]
-        sim.type_line('LOAD "INVADERS.HTML"')
+            assert not t.endswith(".ART"), ln
+        # Catalog pages; Esc MORE so the next LINE is not a page key.
+        sim._abort_more()
+        sim.type_line("DIR *")
         st = sim.screen_text().replace("\\n", "\n")
-        assert "LOADED" in st and "LINES" in st and "INVADERS" in st.upper(), st[-300:]
+        blob = st.upper()
+        assert ".ART" in blob or ".JSH" in blob, st[-400:]
+        assert "EDITOR" not in blob, st[-400:]
+        sim._abort_more()
+        sim.type_line('LOAD "JOYDEMO.HTML"')
+        st = sim.screen_text().replace("\\n", "\n")
+        assert "LOADED" in st and "LINES" in st and "JOYDEMO" in st.upper(), st[-300:]
         sim.type_line("LIST")
         st = sim.screen_text().replace("\\n", "\n")
         assert "-- MORE" in st, st[-400:]
@@ -378,4 +399,50 @@ def test_clip_to_editor_keys_ascii_newline_tab():
     assert clip_to_editor_keys("ab\n\tc") == [97, 98, 13, 32, 32, 99]
     assert clip_to_editor_keys("qrst") == [113, 114, 115, 116]
     assert 10 not in clip_to_editor_keys("line\n")
+
+
+def test_put_host_files_on_card_writes_js():
+    """gui-put: host file lands on card.img under 8.3 (PYTHON/FPGA-SIM DIR)."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from tools.make_sd_image import put_host_files_on_card
+
+    root = Path(__file__).resolve().parents[1]
+    src_card = root / "card.img"
+    if not src_card.is_file():
+        return
+    tmp = Path(tempfile.mkdtemp(prefix="jmr_put_"))
+    try:
+        js = tmp / "putprobe.js"
+        js.write_text("var x = 1;\n", encoding="utf-8")
+        card = tmp / "card.img"
+        shutil.copyfile(src_card, card)
+        names = put_host_files_on_card([js], img_path=card, mint_jsh=False)
+        assert any(n.upper().startswith("PUTPROBE") for n in names), names
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_rtl_src_tether_then_save():
+    """BOARD F8 path: fill SOURCE from the host, then SAVE writes FAT."""
+    from tests.test_rtl_snippets import _sim
+
+    body = b"var putsrc = 1;\n"
+    sim = _sim()
+    try:
+        resp = sim._rpc("SRCSTREAM " + body.hex())
+        if not str(resp).startswith("OK"):
+            raise AssertionError(f"SRCSTREAM {resp!r} — rebuild sim_server_synth")
+        sim.type_line('SAVE "PUTSRC.JS"')
+        sim.type_line('LOAD "PUTSRC.JS"')
+        glass = sim.screen_text().upper()
+        assert "?FN" not in glass, glass[-400:]
+        assert "PUTSRC" in glass, glass[-400:]
+        sim.type_line("LIST")
+        listed = sim.screen_text()
+        assert "putsrc" in listed.lower(), listed[-400:]
+    finally:
+        sim.shutdown()
 

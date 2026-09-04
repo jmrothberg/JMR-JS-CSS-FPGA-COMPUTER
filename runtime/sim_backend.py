@@ -599,7 +599,7 @@ class SimBackend(RuntimeBackend):
                 self._pump_compile()
         # LIST/DIR may park on -- MORE --; LINE now waits, but keep pumping
         # until MORE or prompt so we never paint '>' over a mid-page.
-        if upper == "LIST" or upper.startswith("LIST ") or upper == "DIR":
+        if upper == "LIST" or upper.startswith("LIST ") or upper == "DIR" or upper.startswith("DIR"):
             self._listing = True
             self._more_page = 0
             self._pump_until_more_or_ready()
@@ -710,7 +710,7 @@ class SimBackend(RuntimeBackend):
         except Exception:
             pass
         self._sync_glass()
-        if upper == "DIR" or upper.startswith("LOAD") or upper.startswith("SAVE") or upper == "LIST" or upper.startswith("LIST"):
+        if upper.startswith("DIR") or upper.startswith("LOAD") or upper.startswith("SAVE") or upper == "LIST" or upper.startswith("LIST"):
             self._note_glass(upper.split()[0])
         if upper.startswith("EDIT"):
             self._note_edit_prefill()
@@ -1202,6 +1202,23 @@ class SimBackend(RuntimeBackend):
 
     def trace_path(self) -> Optional[Path]:
         return self._log.path
+
+    def put_files_on_card(self, paths: list) -> str:
+        """gui-put: patch host card.img then SDRELOAD so FPGA-SIM DIR sees it."""
+        names = super().put_files_on_card(paths)
+        try:
+            self._rpc("SDRELOAD")
+        except Exception:
+            pass
+        return names
+
+    def put_card_names(self, names: list) -> str:
+        names = super().put_card_names(names)
+        try:
+            self._rpc("SDRELOAD")
+        except Exception:
+            pass
+        return names
 
     def shutdown(self) -> None:
         if self._proc is None:

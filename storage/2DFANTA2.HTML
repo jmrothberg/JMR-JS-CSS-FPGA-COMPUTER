@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fantasy Chess</title>
+<style>
+html,body{margin:0;height:100%;background:#12121c;overflow:hidden}
+canvas{display:block;margin:0 auto;image-rendering:pixelated;image-rendering:crisp-edges}
+</style>
+<script data-host="chrome" src="2DFANTA2.ARTJS"></script>
+<script data-host="chrome">
+// Chrome-only. Maps the machine's sprite handles to ARTJS (__jmrSpr).
+// JMR_SPR is also the art manifest make_artx.py reads — do not wrap
+// new Image() onto STEM-N.png (those files are not in storage/).
+window.JMR_SPR = ["2DFANTAS-0.png", "2DFANTAS-1.png", "2DFANTAS-2.png", "2DFANTAS-3.png", "2DFANTAS-4.png", "2DFANTAS-5.png", "2DFANTAS-6.png", "2DFANTAS-7.png", "2DFANTAS-8.png", "2DFANTAS-9.png", "2DFANTAS-10.png", "2DFANTAS-11.png"];
+(function () {
+  if (typeof __jmrSpr === "undefined") { return; }
+  var d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+  Object.defineProperty(HTMLImageElement.prototype, "src", {
+    get: function () { return d.get.call(this); },
+    set: function (v) {
+      var m = /^jmr:spr:(\d+)$/.exec(String(v));
+      d.set.call(this, m ? (__jmrSpr[+m[1]] || v) : v);
+    }
+  });
+})();
+</script>
+</head><body>
+<canvas id="c" width="640" height="480"></canvas>
+<script>
+// JMR atlas helper — 9-arg crop; src literals only (no concat).
+window.JMR_CELL = [[48,48], [64,64], [48,48], [64,64], [48,48], [64,64], [48,48], [64,64], [48,48], [64,64], [48,48], [64,64]];
+// One IMG + reused _im: 12 named Image() vars blow the 16-local ENV_SLOTS wall.
+var SHEETS=[], _im;
+_im=new Image(); _im.src="jmr:spr:0"; SHEETS[0]=_im;
+_im=new Image(); _im.src="jmr:spr:1"; SHEETS[1]=_im;
+_im=new Image(); _im.src="jmr:spr:2"; SHEETS[2]=_im;
+_im=new Image(); _im.src="jmr:spr:3"; SHEETS[3]=_im;
+_im=new Image(); _im.src="jmr:spr:4"; SHEETS[4]=_im;
+_im=new Image(); _im.src="jmr:spr:5"; SHEETS[5]=_im;
+_im=new Image(); _im.src="jmr:spr:6"; SHEETS[6]=_im;
+_im=new Image(); _im.src="jmr:spr:7"; SHEETS[7]=_im;
+_im=new Image(); _im.src="jmr:spr:8"; SHEETS[8]=_im;
+_im=new Image(); _im.src="jmr:spr:9"; SHEETS[9]=_im;
+_im=new Image(); _im.src="jmr:spr:10"; SHEETS[10]=_im;
+_im=new Image(); _im.src="jmr:spr:11"; SHEETS[11]=_im;
+// Board + piece tables packed so the game IIFE stays under 16 locals.
+var C={idle:[0,0,2,4,6,8,10],act:[0,1,3,5,7,9,11],ox:96,oy:16,tile:56,pc:48,
+  kn:[[1,2],[2,1],[2,-1],[1,-2],[-1,-2],[-2,-1],[-2,1],[-1,2]],
+  kd:[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]],
+  bd:[[1,1],[1,-1],[-1,1],[-1,-1]],
+  rd:[[1,0],[-1,0],[0,1],[0,-1]],
+  qd:[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]],
+  val:[0,1,3,3,5,9,1000],mate:100000,dw:18,dl:10,ds:8};
+function blitSpr(c, img, fi, cw, ch, dx, dy) { c.drawImage(img, fi * cw, 0, cw, ch, dx, dy, cw, ch); }
+</script>
+<script>
+(function(){
+"use strict";
+var cvs=document.getElementById("c");
+var ctx=cvs.getContext("2d");
+ctx.imageSmoothingEnabled=false;
+// Strips: each of 6 pieces has idle 2DFANTAS-(2i) [light,dark] 48px and
+// action 2DFANTAS-(2i+1) [Lwalk,Llift,Lslam,Dwalk,Dlift,Dslam] 64px
+// (512px originals kept as 2DFANTAS-N-512.png). Tables live in C (outer).
+// i: pawn=0 knight=1 bishop=2 rook=3 queen=4 king=5.
+var tick=0;
+var state={board:[],turn:1,selected:null,legal:[],animating:false,cpuThinking:false,over:false,winner:0,searchDepth:1,anim:null,cr:6,cc:4,kl:0,kr:0,ku:0,kd:0,kf:0,moveAt:0,fireAt:0,stickSeen:0};
+window.state=state;
+function rr(x){return Math.floor(x+0.5);}
+function col(v){return v===0?0:(v>0?1:-1);}
+function inb(r,c){return r>=0&&r<8&&c>=0&&c<8;}
+function newBoard(){
+  var b=[],r,c;
+  for(r=0;r<8;r++){b[r]=[];for(c=0;c<8;c++)b[r][c]=0;}
+  // FIDE back rank: rook, knight, bishop, queen, king, bishop, knight, rook.
+  var back=[4,2,3,5,6,3,2,4];
+  for(c=0;c<8;c++){b[0][c]=-back[c];b[1][c]=-1;b[6][c]=1;b[7][c]=back[c];}
+  return b;
+}
+function cloneB(b){var n=[],r,c;n.length=8;for(r=0;r<8;r++){n[r]=[];for(c=0;c<8;c++)n[r][c]=b[r][c];}return n;}
+function slide(b,r,c,dirs,att,t1,t2){
+  var i,d,sx,sy,v;
+  for(i=0;i<dirs.length;i++){d=dirs[i];sx=r+d[0];sy=c+d[1];
+    while(inb(sx,sy)){v=b[sx][sy];
+      if(v!==0){if(col(v)===att){var t=v>0?v:-v;if(t===t1||t===t2)return true;}break;}
+      sx+=d[0];sy+=d[1];}}
+  return false;
+}
+function attacked(b,r,c,att){
+  var i,d,nx,ny,v,t;
+  var pr=att===1?r+1:r-1;
+  var dcs=[-1,1];
+  for(i=0;i<2;i++){nx=pr;ny=c+dcs[i];if(inb(nx,ny)){v=b[nx][ny];if(v!==0&&col(v)===att&&Math.abs(v)===1)return true;}}
+  for(i=0;i<8;i++){d=C.kn[i];nx=r+d[0];ny=c+d[1];if(inb(nx,ny)){v=b[nx][ny];if(v!==0&&col(v)===att&&Math.abs(v)===2)return true;}}
+  for(i=0;i<8;i++){d=C.kd[i];nx=r+d[0];ny=c+d[1];if(inb(nx,ny)){v=b[nx][ny];if(v!==0&&col(v)===att&&Math.abs(v)===6)return true;}}
+  if(slide(b,r,c,C.rd,att,4,5))return true;
+  if(slide(b,r,c,C.bd,att,3,5))return true;
+  return false;
+}
+function findKing(b,cu){var r,c;for(r=0;r<8;r++)for(c=0;c<8;c++)if(b[r][c]===cu*6)return[r,c];return null;}
+function inCheck(b,cu){var k=findKing(b,cu);if(!k)return false;return attacked(b,k[0],k[1],-cu);}
+function pawnMoves(b,r,c,v,out){
+  var dir=v>0?-1:1,start=v>0?6:1,nr=r+dir,nr2=r+2*dir;
+  if(inb(nr,c)&&b[nr][c]===0){out.push([nr,c]);if(r===start&&b[nr2][c]===0)out.push([nr2,c]);}
+  var dc=[-1,1],i,nc,e;
+  for(i=0;i<2;i++){nc=c+dc[i];if(inb(nr,nc)){e=b[nr][nc];if(e!==0&&col(e)!==col(v))out.push([nr,nc]);}}
+}
+function stepMoves(b,r,c,v,dirs,out){
+  var i,d,nx,ny,e;
+  for(i=0;i<dirs.length;i++){d=dirs[i];nx=r+d[0];ny=c+d[1];
+    if(inb(nx,ny)){e=b[nx][ny];if(e===0||col(e)!==col(v))out.push([nx,ny]);}}
+}
+function slideMoves(b,r,c,v,dirs,out){
+  var i,d,nx,ny,e;
+  for(i=0;i<dirs.length;i++){d=dirs[i];nx=r+d[0];ny=c+d[1];
+    while(inb(nx,ny)){e=b[nx][ny];
+      if(e===0){out.push([nx,ny]);}
+      else{if(col(e)!==col(v))out.push([nx,ny]);break;}
+      nx+=d[0];ny+=d[1];}}
+}
+function genPseudo(b,r,c){
+  var v=b[r][c],t=Math.abs(v),out=[];
+  if(t===0)return out;
+  if(t===1)pawnMoves(b,r,c,v,out);
+  else if(t===2)stepMoves(b,r,c,v,C.kn,out);
+  else if(t===3)slideMoves(b,r,c,v,C.bd,out);
+  else if(t===4)slideMoves(b,r,c,v,C.rd,out);
+  else if(t===5)slideMoves(b,r,c,v,C.qd,out);
+  else if(t===6){stepMoves(b,r,c,v,C.kd,out);castleMoves(b,r,c,v,out);}
+  return out;
+}
+// Castling from board geometry: king on e, rook in the corner, empty path, not in/through check.
+function castleMoves(b,r,c,v,out){
+  var cu=col(v),home=cu===1?7:0,att=-cu;
+  if(r!==home||c!==4)return;
+  if(inCheck(b,cu))return;
+  if(b[home][7]===cu*4&&b[home][5]===0&&b[home][6]===0){
+    if(!attacked(b,home,5,att)&&!attacked(b,home,6,att))out.push([home,6]);
+  }
+  if(b[home][0]===cu*4&&b[home][1]===0&&b[home][2]===0&&b[home][3]===0){
+    if(!attacked(b,home,3,att)&&!attacked(b,home,2,att))out.push([home,2]);
+  }
+}
+function genLegal(b,r,c){
+  var v=b[r][c],cu=col(v),ps=genPseudo(b,r,c),res=[],i,m,cp;
+  for(i=0;i<ps.length;i++){
+    m=ps[i];cp=cloneB(b);apply(cp,r,c,m[0],m[1]);
+    if(!inCheck(cp,cu))res.push(m);
+  }
+  return res;
+}
+function genAll(b,cu){
+  var res=[],r,c,mv,i;
+  for(r=0;r<8;r++)for(c=0;c<8;c++)if(col(b[r][c])===cu){mv=genLegal(b,r,c);for(i=0;i<mv.length;i++)res.push([r,c,mv[i][0],mv[i][1]]);}
+  return res;
+}
+function evaluate(b){
+  var s=0,r,c,v;
+  for(r=0;r<8;r++)for(c=0;c<8;c++){v=b[r][c];if(v!==0)s+=v>0?C.val[v]:-C.val[-v];}
+  return s;
+}
+function apply(b,fr,fc,tr,tc){
+  var v=b[fr][fc];b[tr][tc]=v;b[fr][fc]=0;
+  if(Math.abs(v)===1&&(tr===0||tr===7))b[tr][tc]=v>0?5:-5;
+  // King moved two files: drag the rook with it (castling).
+  if(Math.abs(v)===6&&Math.abs(tc-fc)===2){
+    if(tc===6){b[tr][5]=b[tr][7];b[tr][7]=0;}
+    else if(tc===2){b[tr][3]=b[tr][0];b[tr][0]=0;}
+  }
+}
+function negamax(b,depth,alpha,beta,cu){
+  if(depth<=0)return cu*evaluate(b);
+  var mv=genAll(b,cu),i,m,best=-C.mate*2,s,cp;
+  if(mv.length===0)return inCheck(b,cu)?-C.mate+depth:0;
+  for(i=0;i<mv.length;i++){m=mv[i];cp=cloneB(b);apply(cp,m[0],m[1],m[2],m[3]);
+    s=-negamax(cp,depth-1,-beta,-alpha,-cu);
+    if(s>best)best=s;if(s>alpha)alpha=s;if(alpha>=beta)break;}
+  return best;
+}
+function pickCpu(){
+  var b=state.board,mv=genAll(b,-1),i,m,best=-C.mate*2,bm=null,s,cp;
+  // Always keep a legal move so a mate-score tie cannot skip the CPU turn.
+  if(mv.length===0)return null;
+  bm=mv[0];
+  for(i=0;i<mv.length;i++){m=mv[i];cp=cloneB(b);apply(cp,m[0],m[1],m[2],m[3]);
+    s=-negamax(cp,state.searchDepth-1,-C.mate*2,C.mate*2,1);
+    if(s>best){best=s;bm=m;}}
+  return bm;
+}
+function startAnim(fr,fc,tr,tc){
+  var vic=state.board[tr][tc];
+  state.animating=true;
+  state.selected=null;state.legal=[];
+  state.anim={fr:fr,fc:fc,tr:tr,tc:tc,vic:vic,t:0,phase:0};
+}
+function updateAnim(){
+  var a=state.anim;if(!a)return;
+  a.t++;
+  if(a.phase===0){if(a.t>=C.dw){a.t=0;a.phase=a.vic!==0?1:2;}}
+  else if(a.phase===1){if(a.t>=C.dl){a.t=0;a.phase=2;}}
+  else if(a.phase===2){if(a.t>=C.ds){finishAnim();}}
+}
+function armHumanCheck(){
+  // In check: pre-select the king (or any piece that can reply) so legal
+  // squares are already on screen — clicks must not look dead.
+  state.cpuThinking=false;
+  state.selected=null;state.legal=[];
+  if(state.turn!==1||state.over)return;
+  if(!inCheck(state.board,1))return;
+  var k=findKing(state.board,1);
+  var km=k?genLegal(state.board,k[0],k[1]):[];
+  if(k&&km.length){state.selected=k;state.legal=km;state.cr=k[0];state.cc=k[1];return;}
+  var all=genAll(state.board,1);
+  if(all.length){
+    state.selected=[all[0][0],all[0][1]];
+    state.legal=genLegal(state.board,all[0][0],all[0][1]);
+    state.cr=all[0][0];state.cc=all[0][1];
+  }
+}
+function finishAnim(){
+  var a=state.anim;
+  apply(state.board,a.fr,a.fc,a.tr,a.tc);
+  state.anim=null;state.animating=false;
+  state.turn*=-1;
+  var mv=genAll(state.board,state.turn);
+  if(mv.length===0){
+    state.over=true;
+    state.winner=inCheck(state.board,state.turn)?-state.turn:0;
+    return;
+  }
+  if(state.turn===-1)cpuTurn();
+  else armHumanCheck();
+}
+function cpuTurn(){
+  state.cpuThinking=true;
+  var g=state.gen;
+  setTimeout(function(){
+    if(state.gen!==g)return;
+    var m=pickCpu();state.cpuThinking=false;
+    if(m)startAnim(m[0],m[1],m[2],m[3]);
+    else{
+      state.over=true;
+      state.winner=inCheck(state.board,state.turn)?-state.turn:0;
+    }
+  },50);
+}
+function cellAt(x,y){
+  var c=Math.floor((x-C.ox)/C.tile),r=Math.floor((y-C.oy)/C.tile);
+  if(!inb(r,c))return null;return[r,c];
+}
+function tapCell(r,c){
+  var v,i,m;
+  if(state.animating||state.over)return;
+  if(state.turn!==1)return;
+  state.cpuThinking=false;
+  v=state.board[r][c];
+  if(state.selected){
+    for(i=0;i<state.legal.length;i++){m=state.legal[i];
+      if(m[0]===r&&m[1]===c){startAnim(state.selected[0],state.selected[1],r,c);return;}}
+    if(v!==0&&col(v)===1){state.selected=[r,c];state.legal=genLegal(state.board,r,c);return;}
+    // Stay selected while in check so the legal dots do not vanish on a miss.
+    if(inCheck(state.board,1))return;
+    state.selected=null;state.legal=[];return;
+  }
+  if(v!==0&&col(v)===1){state.selected=[r,c];state.legal=genLegal(state.board,r,c);}
+}
+function onClick(e){
+  var rect,sx,sy,p;
+  rect=cvs.getBoundingClientRect();
+  sx=cvs.width/rect.width;sy=cvs.height/rect.height;
+  p=cellAt((e.clientX-rect.left)*sx,(e.clientY-rect.top)*sy);
+  if(!p)return;
+  state.cr=p[0];state.cc=p[1];
+  tapCell(p[0],p[1]);
+}
+cvs.addEventListener("click",onClick);
+function setPly(d){state.searchDepth=Math.max(1,Math.min(5,state.searchDepth+d));}
+function moveCursor(dr,dc){
+  var r,c;
+  r=state.cr+dr;c=state.cc+dc;
+  if(inb(r,c)){state.cr=r;state.cc=c;}
+}
+function setPad(e,val){
+  var k,c;
+  k=e.key;c=e.keyCode;
+  if(c===37||k==="ArrowLeft")state.kl=val;
+  else if(c===39||k==="ArrowRight")state.kr=val;
+  else if(c===38||k==="ArrowUp")state.ku=val;
+  else if(c===40||k==="ArrowDown")state.kd=val;
+  else if(c===32||k===" "||k==="Spacebar"||c===13||k==="Enter")state.kf=val;
+  if(val){
+    if(k==="]"||k==="=")setPly(1);
+    else if(k==="["||k==="-")setPly(-1);
+    else if(k==="r"||k==="R"||c===82)reset();
+  }
+}
+window.addEventListener("keydown",function(e){setPad(e,1);});
+window.addEventListener("keyup",function(e){setPad(e,0);});
+function pollPad(){
+  var j,dr,dc;
+  j=0;
+  try{j=joy()|0;}catch(e){j=0;}
+  if(j)state.stickSeen=1;
+  if(!j&&state.stickSeen){
+    state.kl=0;state.kr=0;state.ku=0;state.kd=0;state.kf=0;
+    state.stickSeen=0;
+  }
+  dr=0;dc=0;
+  if(tick>=state.moveAt){
+    if(state.ku||(j&1))dr=-1;
+    else if(state.kd||(j&2))dr=1;
+    if(state.kl||(j&4))dc=-1;
+    else if(state.kr||(j&8))dc=1;
+    if(dr||dc){moveCursor(dr,dc);state.moveAt=tick+8;}
+  }
+  if((state.kf||(j&16)||(j&32))&&tick>=state.fireAt){
+    tapCell(state.cr,state.cc);
+    state.fireAt=tick+9;
+  }
+}
+function bl(img,fi,cw,ch,dx,dy,dw,dh){
+  if(dx<0){var cut=-dx;dw-=cut;dx=0;}
+  if(dy<0){var c2=-dy;dh-=c2;dy=0;}
+  ctx.drawImage(img,fi*cw,0,cw,ch,dx,dy,dw,dh);
+}
+function pieceImg(v,phase){
+  var t=Math.abs(v),sheet,fi,cw;
+  if(phase===0){sheet=SHEETS[C.idle[t]];fi=v>0?0:1;cw=48;}
+  else{sheet=SHEETS[C.act[t]];fi=(v>0?0:3)+phase-1;cw=64;}
+  return[sheet,fi,cw];
+}
+function drawPiece(v,dx,dy,phase){
+  var p=pieceImg(v,phase);
+  bl(p[0],p[1],p[2],p[2],dx,dy,C.pc,C.pc);
+}
+function draw(){
+  ctx.fillStyle="#1a1a28";ctx.fillRect(0,0,640,480);
+  var r,c,x,y,light;
+  for(r=0;r<8;r++)for(c=0;c<8;c++){
+    x=C.ox+c*C.tile;y=C.oy+r*C.tile;
+    ctx.fillStyle=((r+c)%2===0)?"#3a4a66":"#20263a";
+    ctx.fillRect(x,y,C.tile,C.tile);
+  }
+  if(state.selected){x=C.ox+state.selected[1]*C.tile;y=C.oy+state.selected[0]*C.tile;ctx.fillStyle="#c9a23a";ctx.fillRect(x,y,C.tile,C.tile);}
+  x=C.ox+state.cc*C.tile;y=C.oy+state.cr*C.tile;
+  ctx.fillStyle="#6ad0e8";
+  ctx.fillRect(x,y,C.tile,3);ctx.fillRect(x,y+C.tile-3,C.tile,3);
+  ctx.fillRect(x,y,3,C.tile);ctx.fillRect(x+C.tile-3,y,3,C.tile);
+  if(!state.over&&!state.animating&&inCheck(state.board,state.turn)){
+    var kk=findKing(state.board,state.turn);
+    if(kk){x=C.ox+kk[1]*C.tile;y=C.oy+kk[0]*C.tile;ctx.fillStyle="#a33a3a";ctx.fillRect(x,y,C.tile,C.tile);}
+  }
+  var i,m;
+  for(i=0;i<state.legal.length;i++){m=state.legal[i];x=C.ox+m[1]*C.tile+C.tile/2-6;y=C.oy+m[0]*C.tile+C.tile/2-6;ctx.fillStyle="#5ad07a";ctx.fillRect(x,y,12,12);}
+  var a=state.anim;
+  for(r=0;r<8;r++)for(c=0;c<8;c++){
+    var v=state.board[r][c];if(v===0)continue;
+    if(a&&r===a.fr&&c===a.fc)continue;
+    if(a&&r===a.tr&&c===a.tc&&a.vic!==0&&a.phase<2)continue;
+    drawPiece(v,C.ox+c*C.tile+4,C.oy+r*C.tile+4,0);
+  }
+  if(a)drawAnim(a);
+  drawHUD();
+}
+function drawAnim(a){
+  var v=state.board[a.fr][a.fc];if(v===0)v=a.vic,v=state.board[a.fr][a.fc];
+  var mover=state.board[a.fr][a.fc];
+  var fx=C.ox+a.fc*C.tile+4,fy=C.oy+a.fr*C.tile+4;
+  var tx=C.ox+a.tc*C.tile+4,ty=C.oy+a.tr*C.tile+4;
+  var ph=0,t=a.t;
+  if(a.phase===0){var p=Math.min(1,t/C.dw);drawPiece(v,rr(fx+(tx-fx)*p),rr(fy+(ty-fy)*p),1);}
+  else{
+    if(a.vic!==0){var vy=0;
+      if(a.phase===1)vy=-rr(16*t/C.dl);
+      else if(a.phase===2)vy=-rr(16*(1-t/C.ds));
+      drawPiece(a.vic,tx,ty+vy,0);}
+    if(a.phase===1)drawPiece(mover,tx,ty,2);
+    else if(a.phase===2)drawPiece(mover,tx,ty,3);
+    else drawPiece(mover,tx,ty,0);
+  }
+}
+function drawHUD(){
+  ctx.fillStyle="#e7ecff";ctx.font="14px monospace";
+  ctx.fillText("FANTASY CHESS",12,20);
+  ctx.fillText("Ply: "+state.searchDepth+"  [ ]",12,40);
+  ctx.fillText("R: restart",12,58);
+  ctx.fillText("ARROWS move  ENTER pick",12,76);
+  var msg="";
+  if(state.over){
+    if(state.winner===0)msg="STALEMATE - DRAW";
+    else if(state.winner===1)msg="CHECKMATE - YOU WIN";
+    else msg="CHECKMATE - CPU WINS";
+  }else if(state.cpuThinking)msg="CPU thinking...";
+  else if(state.animating)msg="moving...";
+  else{
+    msg=state.turn===1?"Your move":"CPU";
+    if(inCheck(state.board,state.turn))msg="CHECK - "+msg;
+  }
+  ctx.fillText(msg,12,470);
+}
+function reset(){
+  state.gen=(state.gen||0)+1;
+  state.board=newBoard();state.turn=1;state.selected=null;state.legal=[];
+  state.animating=false;state.cpuThinking=false;state.over=false;state.winner=0;state.anim=null;
+  state.cr=6;state.cc=4;state.kl=0;state.kr=0;state.ku=0;state.kd=0;state.kf=0;state.moveAt=0;state.fireAt=0;state.stickSeen=0;
+}
+window.game={reset:reset};
+function loop(){
+  tick++;
+  pollPad();
+  if(state.animating)updateAnim();
+  draw();
+  requestAnimationFrame(loop);
+}
+reset();
+requestAnimationFrame(loop);
+})();
+</script>
+</body></html>

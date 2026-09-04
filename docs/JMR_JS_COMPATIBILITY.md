@@ -266,6 +266,9 @@ lowered over a new `Object.keys` native **id 41** — implemented in the
 FM and HM; **RTL arm intentionally absent**). All eight existing titles
 still compile byte-identically; bytecode suite 198/198.
 
+**Landed 2026-09-03:** `Math.round` `CALL_NATIVE` nid 54 on PYTHON + exec64
+(ties toward +inf). `Object.keys` RTL arm still absent (`fsite=4183`).
+
 **Still V2 work (no current title exercises it):** dotted `new`, and
 `Function.prototype.call`/`apply`.
 
@@ -301,8 +304,8 @@ a disabled wall. Locked by
 
 | Change | Exact need (historical census) |
 |---|---|
-| **`MAX_SPR` / `PROGRAM_MAX_SPRITES`** | Set both to **≥ 518** (RTL descriptor RAMs + encode refuse). 16 → 518 is the gap. |
-| **Asset SRAM / ASET payload** | Current embeds need **~4.63 MB** indexed pixels (+ 768 B palette) — over today’s **4 MB** V1 bank. **V2.0 rebuilds the asset bank to 8 MB** (or larger if a later title needs it). Same **simple SRAM port** style (`addr`/`wdata`/`rdata`/`we`/`req`/`ack`); widen the address enough for 8 MB+. **ASIC constraint:** still **one chip**, no multi-die / fancy banked access — pick a single parallel async SRAM (or on-die SRAM of that class) that fits the package. FPGA board may keep DDR3 behind the same port (first 8 MB used). Do not silently drop sheets. |
+| **`MAX_SPR` / `PROGRAM_MAX_SPRITES`** | **Stay 16.** Agent_learning `/640png` packs related poses onto STEM-N.png atlases + 9-arg crop. Do not grow the descriptor RAM (congestion). |
+| **Asset SRAM / ASET payload** | Shipped titles fit under `FB_SRAM_BASE` (~2.96 MB art). Growing to 8 MB **requires moving** FB/WORK/SPR/SRC/IMGD (jsb_format forbids raising the wall without that). **Not done** — silent overlap corrupts art every present. |
 | Heap | Re-check when a title actually needs V2; overflow must stay **loud**. No title-only heap. |
 
 #### Compiler (blocks `RUN` before any VM)
@@ -316,7 +319,7 @@ a disabled wall. Locked by
 | API / behavior | Evidence (historical census) | V2 action |
 |---|---|---|
 | **`for…in`** (→ needs working **`Object.keys`** on RTL, or a real `for…in` op) | **5** `for…in` loops (controllers, moves map, shim) | Implement **`Object.keys`** `CALL_NATIVE` on PYTHON + exec64 (and keep compiler lowering), **or** a dedicated `for…in` path — FPGA-SIM must not hit `fsite=4183` |
-| **`Math.round`** | **2** call sites (+ HTML shim today) | Add **`Math.round`** as a real `CALL_NATIVE` (same shape as `Math.floor`); remove the shim once present |
+| **`Math.round`** | **2** call sites (+ HTML shim today) | **Done** — `CALL_NATIVE` nid 54, PYTHON + exec64 (`v64_round_number`). Ties toward +inf. |
 | **`Math.floor` / `abs` / `min` / `max` / `random`** | Used | Already V1 — keep |
 | **`typeof`** | Used | Already V1 — keep |
 | **`setInterval` / `addEventListener` / `Image` / `drawImage` / `fillRect` / `fillText` / `createElement` / `querySelector` / `getElementById`** | Used | Already on Completeness tables |
@@ -545,7 +548,7 @@ a missing general native**, not an FPGA-SIM / game hardwire. Real
 
 | API | Pri | Why (wider HTML5) | Status |
 |---|---|---|---|
-| `Math.round` | P2 | Wider HTML5 / historical fighter census | V2.0 |
+| `Math.round` | P2 | Wider HTML5 / historical fighter census | **live** nid 54 |
 | `Math.hypot` | P2 | Distance / collision | optional / later |
 | `Math.sin` / `Math.cos` | P2 | Motion / FX; ASTEROID uses LUTs instead | optional / later |
 | `Math.ceil` / `Math.atan2` | P2 | Smaller game use | optional / later |

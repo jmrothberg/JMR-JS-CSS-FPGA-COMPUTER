@@ -77,6 +77,13 @@ class InputEngine:
         self._keys: Deque[str] = deque(maxlen=fifo_depth)
         self.joy: int = 0  # mouse / Pmod stick
         self.key_bits: int = 0  # arrow / space held state (tether debug)
+        # analog-joy: raw Pmod stick axes (rtl/phys/jmr_i2c_joy.sv analog_x/
+        # analog_y, 0..255 rest ~128) + 5 discrete buttons (bit0=A bit1=B
+        # bit2=C bit3=D bit4=click). Separate from the digital joy bitfield
+        # above — extra axes a title can poll, not a mouse.
+        self.analog_x: int = 128
+        self.analog_y: int = 128
+        self.joy_buttons: int = 0
         self.escape_pending: bool = False
         # NEW: key-state engine
         self._down: Dict[int, bool] = {}  # keyCode → pressed
@@ -99,6 +106,12 @@ class InputEngine:
 
     def set_joy(self, bits: int) -> None:
         self.joy = int(bits) & 0x3F
+
+    def set_analog(self, x: int, y: int, buttons: int) -> None:
+        """GUI/tether/FPGA-SIM debug feed for the Pmod stick's raw axes."""
+        self.analog_x = int(x) & 0xFF
+        self.analog_y = int(y) & 0xFF
+        self.joy_buttons = int(buttons) & 0x1F
 
     def set_key_bits(self, bits: int) -> None:
         """Tether/GUI KEYBITS — OR into key-state as debug mirror of arrows+space."""

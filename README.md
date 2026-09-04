@@ -71,7 +71,7 @@ Host is dead on this unit — type and play from the GUI **PROG tether**.
 
 ```
 $ python3 run_jmr_js.py
-JMR JS-NATIVE-CPU V1.0
+JMR JS-NATIVE-CPU V2.0 R70
 READY
 > console.log("HELLO")
 HELLO

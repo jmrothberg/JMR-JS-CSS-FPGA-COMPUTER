@@ -16,7 +16,10 @@ module jmr_i2c_joy #(
     output logic down,
     output logic right,
     output logic fire_ac,  // A, C, or stick-click
-    output logic fire_bd   // B or D
+    output logic fire_bd,  // B or D
+    output logic [7:0] analog_x,  // raw pot 0..255 (rest ~cx)
+    output logic [7:0] analog_y,
+    output logic [4:0] buttons    // {click, D, C, B, A}
 );
     localparam logic [6:0] DEV = 7'h5A;
     localparam logic [7:0] REG_X = 8'h10;
@@ -100,6 +103,9 @@ module jmr_i2c_joy #(
             right <= 1'b0;
             fire_ac <= 1'b0;
             fire_bd <= 1'b0;
+            analog_x <= 8'd128;
+            analog_y <= 8'd128;
+            buttons <= 5'd0;
             vx <= 8'd128;
             vy <= 8'd128;
             vok <= 8'd8;
@@ -245,6 +251,11 @@ module jmr_i2c_joy #(
                                 fire_bd <= (bd_now && bd_p) || (fire_bd && bd_p);
                                 ac_p <= ac_now;
                                 bd_p <= bd_now;
+                                analog_x <= vx;
+                                analog_y <= vy;
+                                buttons <= {btn_held(vok), btn_held(vd),
+                                            btn_held(vc), btn_held(vb),
+                                            btn_held(va)};
                             end
                         end else if (fail_n != 3'd7) begin
                             // transient NACK/garbage batch: HOLD last state
@@ -264,6 +275,9 @@ module jmr_i2c_joy #(
                             right <= 1'b0;
                             fire_ac <= 1'b0;
                             fire_bd <= 1'b0;
+                            analog_x <= 8'd128;
+                            analog_y <= 8'd128;
+                            buttons <= 5'd0;
                         end
                         batch_ok <= 1'b1;
                         st <= ST_GO;

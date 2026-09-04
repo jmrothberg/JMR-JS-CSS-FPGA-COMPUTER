@@ -396,11 +396,18 @@ class CanvasEngine:
         dy: int,
         dw: int,
         dh: int,
+        flip_x: bool = False,
+        flip_y: bool = False,
     ) -> None:
         """Nearest-neighbor blit; skip index 0 (transparent).
 
         NEW: ctx.imageSmoothingEnabled = false is this path. Indexed 8-bpp
         glass has no bilinear filter — true/false both nearest-neighbor.
+
+        neg-xform: flip_x/flip_y mirror the DEST column/row order only —
+        the source walk (src_x/src_y below) stays forward, matching
+        jmr_raster_engine.sv's flip_x/flip_y (same rect, source unchanged,
+        dest columns/rows visited in reverse order).
         """
         if sw <= 0 or sh <= 0 or dw <= 0 or dh <= 0 or iw <= 0 or ih <= 0:
             return
@@ -408,20 +415,24 @@ class CanvasEngine:
         back = self.back
         w = self.width
         h = self.height
-        for yy in range(int(dh)):
-            fy = int(dy) + yy
+        dwi = int(dw)
+        dhi = int(dh)
+        for yy in range(dhi):
+            ye = (dhi - 1 - yy) if flip_y else yy
+            fy = int(dy) + ye
             if fy < 0 or fy >= h:
                 continue
-            src_y = int(sy) + yy * int(sh) // int(dh)
+            src_y = int(sy) + yy * int(sh) // dhi
             if src_y < 0 or src_y >= ih:
                 continue
             row = fy * w
             src_row = src_y * iw
-            for xx in range(int(dw)):
-                fx = int(dx) + xx
+            for xx in range(dwi):
+                xe = (dwi - 1 - xx) if flip_x else xx
+                fx = int(dx) + xe
                 if fx < 0 or fx >= w:
                     continue
-                src_x = int(sx) + xx * int(sw) // int(dw)
+                src_x = int(sx) + xx * int(sw) // dwi
                 if src_x < 0 or src_x >= iw:
                     continue
                 c = pix[src_row + src_x]

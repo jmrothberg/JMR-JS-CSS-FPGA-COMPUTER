@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from functional_model.storage_engine import resolve_storage_html, storage_html_min_lines
+
 ROOT = Path(__file__).resolve().parents[1]
 
 # div7 (run 52). Budget ceilings for
@@ -951,6 +953,7 @@ def test_rtl_dir_hides_jsb_shows_html():
         sim._rpc("SDRELOAD")
         sim.type_line("DIR")
         pages = []
+        found = False
         for _ in range(8):
             st = sim.screen_text().replace("\\n", "\n")
             pages.append(st)
@@ -958,23 +961,30 @@ def test_rtl_dir_hides_jsb_shows_html():
                 t = ln.strip().upper()
                 assert not t.endswith(".JSB"), ln
                 assert not t.endswith(".JSH"), ln
-            if "INVADERS" in st.upper():
+            blob = st.upper()
+            if "JOYDEMO" in blob or "BOXES" in blob or "ASTEROID" in blob:
+                found = True
                 break
             if "-- MORE" in st:
                 sim.push_key(" ")
             else:
                 break
         blob = "\n".join(pages)
-        assert "INVADERS" in blob.upper(), blob[-400:]
+        assert found or any(
+            x in blob.upper() for x in ("JOYDEMO", "BOXES", "ASTEROID")
+        ), blob[-400:]
     finally:
         sim.shutdown()
 
 
 def test_rtl_list_pages_more():
     """LIST of a multi-page HTML must park on MORE, not prompt at ~230."""
+    html = storage_html_min_lines(230)
+    if html is None:
+        pytest.skip("no storage HTML with >230 lines")
     sim = _sim()
     try:
-        sim.type_line('LOAD "INVADERS.HTML"')
+        sim.type_line(f'LOAD "{html.name}"')
         sim.type_line("LIST")
         st = sim.screen_text().replace("\\n", "\n")
         assert "-- MORE" in st, st[-400:]
@@ -985,13 +995,17 @@ def test_rtl_list_pages_more():
 
 def test_rtl_load_html_line_count():
     """LOADED NAME (N LINES) must count past the 8K SOURCE prefix."""
+    html = storage_html_min_lines(230)
+    if html is None:
+        pytest.skip("no storage HTML with >230 lines")
+    stem = html.stem.upper()
     sim = _sim()
     try:
-        sim.type_line('LOAD "INVADERS.HTML"')
+        sim.type_line(f'LOAD "{html.name}"')
         st = sim.screen_text().replace("\\n", "\n")
         assert "LOADED" in st, st[-300:]
         assert "LINES" in st, st[-300:]
-        assert "INVADERS" in st.upper(), st[-300:]
+        assert stem[:8] in st.upper(), st[-300:]
         n = 0
         for tok in st.replace("(", " ").replace(")", " ").split():
             if tok.isdigit() and int(tok) > n:
@@ -1538,9 +1552,12 @@ requestAnimationFrame(tick);
 
 def test_rtl_list_space_pages_past_230():
     """LIST MORE Space must pump clocks so later HTML lines appear."""
+    html = storage_html_min_lines(230)
+    if html is None:
+        pytest.skip("no storage HTML with >230 lines")
     sim = _sim()
     try:
-        sim.type_line('LOAD "INVADERS.HTML"')
+        sim.type_line(f'LOAD "{html.name}"')
         sim.type_line("LIST")
         st = sim.screen_text().replace("\\n", "\n")
         assert "-- MORE" in st, st[-400:]
@@ -3626,6 +3643,145 @@ requestAnimationFrame(tick);
         sim.shutdown()
 
 
+def test_rtl_drawimage_neg_dest_crops_source():
+    """Negative dest x must keep source DDA (clip_u-to-0 smeared sheet-left)."""
+    # 8×2: left 4 px = 2, right 4 px = 5 (row1: 3 / 6)
+    pix = bytes([2] * 4 + [5] * 4 + [3] * 4 + [6] * 4)
+    src = """
+var img = new Image();
+img.src = "jmr:spr:0";
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.drawImage(img, -4, 0);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("NEGDI.JS", src, [(8, 2, pix)])
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "NEGDI.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        # dest [-4,4)×[0,2) ∩ glass → x=0..3 is sheet columns 4..7
+        assert _fb_pix(raw, 0, 0) == 5, _fb_pix(raw, 0, 0)
+        assert _fb_pix(raw, 3, 0) == 5, _fb_pix(raw, 3, 0)
+        assert _fb_pix(raw, 0, 1) == 6, _fb_pix(raw, 0, 1)
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_analog_joy_natives_read_stick():
+    """analog-joy: joyX()/joyY()/joyButtons() read the Pmod stick's raw
+    axes/buttons (RUN 61 plan item 2) — digital joy()/keyLeft() etc. are
+    unchanged. Board wires rtl/phys/jmr_i2c_joy directly; FPGA-SIM has no
+    I2C model, so the ANALOG debug RPC (sim_main.cpp) feeds it here, same
+    shape as the existing JOY/KEYBITS RPCs."""
+    src = """
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.fillStyle = joyX();
+  c.fillRect(0, 0, 2, 2);
+  c.fillStyle = joyY();
+  c.fillRect(4, 0, 2, 2);
+  c.fillStyle = joyButtons();
+  c.fillRect(8, 0, 2, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("ANLGJOY.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "ANLGJOY.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        # power-on rest default: analog_x=analog_y=128, buttons=0
+        assert _fb_pix(raw, 0, 0) == 128, _fb_pix(raw, 0, 0)
+        assert _fb_pix(raw, 4, 0) == 128, _fb_pix(raw, 4, 0)
+        assert _fb_pix(raw, 8, 0) == 0, _fb_pix(raw, 8, 0)
+        # deflect the stick + press A(bit0)+C(bit2)+click(bit4) = 0x15
+        sim._rpc("ANALOG 200 60 21")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 0, 0) == 200, _fb_pix(raw, 0, 0)
+        assert _fb_pix(raw, 4, 0) == 60, _fb_pix(raw, 4, 0)
+        assert _fb_pix(raw, 8, 0) == 21, _fb_pix(raw, 8, 0)
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_math_round_ties_toward_plus_inf():
+    """natives V2: Math.round is a real CALL_NATIVE (nid 54), same shape as
+    Math.floor. ES ties toward +inf: 1.5→2, -1.5→-1, -0.5→0."""
+    src = """
+var c = document.getElementById('c').getContext('2d');
+var ok;
+function tick() {
+  ok = (Math.round(1.4) == 1) && (Math.round(1.5) == 2)
+    && (Math.round(-1.5) == -1) && (Math.round(-0.5) == 0);
+  c.fillStyle = ok ? 5 : 1;
+  c.fillRect(0, 0, 8, 8);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js("MROUND.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "MROUND.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        assert _fb_pix(raw, 0, 0) == 5, _fb_pix(raw, 0, 0)
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_drawimage_negative_dwidth_mirrors():
+    """neg-xform: negative dWidth mirrors the sprite in place (RUN 61 plan
+    item 3). Canvas dest rect = [dx+dw, dx) when dw<0, so dx=4, dw=-4 puts
+    the (mirrored) rect on [0,4)x[0,2) — columns visited right-to-left,
+    source walk still left-to-right (jmr_raster_engine.sv flip_x)."""
+    # 4x2 sheet: col0=2, col1=3, col2=4, col3=5 (row1 same, +4 each)
+    pix = bytes([2, 3, 4, 5, 6, 7, 8, 9])
+    src = """
+var img = new Image();
+img.src = "jmr:spr:0";
+var c = document.getElementById('c').getContext('2d');
+function tick() {
+  c.drawImage(img, 0, 0, 4, 2, 4, 0, -4, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_spr("NEGDW.JS", src, [(4, 2, pix)])
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "NEGDW.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        raw = _fb_raw(sim)
+        # mirrored: glass x=0 shows source col 3 (value 5), x=3 shows col 0 (2)
+        assert _fb_pix(raw, 0, 0) == 5, _fb_pix(raw, 0, 0)
+        assert _fb_pix(raw, 1, 0) == 4, _fb_pix(raw, 1, 0)
+        assert _fb_pix(raw, 2, 0) == 3, _fb_pix(raw, 2, 0)
+        assert _fb_pix(raw, 3, 0) == 2, _fb_pix(raw, 3, 0)
+        assert _fb_pix(raw, 0, 1) == 9, _fb_pix(raw, 0, 1)
+    finally:
+        sim.shutdown()
+
+
 def _vmstat(sim) -> str:
     return sim._rpc("VMSTAT?") or ""
 
@@ -5370,13 +5526,13 @@ def test_invaders_fpga_sim_held_left_changes_frame_within_budget():
     """INVADERS on real RTL: start, held left changes FB, frame clocks stay in budget."""
     from tools.compile_js import compile_html_text, encode_html_chunk
 
-    html = ROOT / "storage" / "INVADERS.HTML"
-    if not html.is_file():
-        pytest.skip("INVADERS.HTML missing")
+    html = resolve_storage_html("INVADERS")
+    if html is None:
+        pytest.skip("no INVADERS-family HTML in storage/")
     image_data = encode_html_chunk(compile_html_text(html.read_text(encoding="utf-8")))
     sim = _sim()
     try:
-        sim._loaded_name = "INVADERS.HTML"
+        sim._loaded_name = html.name
         sim._loaded_html_text = html.read_text(encoding="utf-8")
         sim._program_image = image_data
         assert sim._stream_program_image().startswith("OK")
@@ -5412,13 +5568,13 @@ def test_pacman_fpga_sim_enter_paints_maze():
     """PACMAN on real RTL: Enter leaves splash and paints a changing maze."""
     from tools.compile_js import compile_html_text, encode_html_chunk
 
-    html = ROOT / "storage" / "PACMAN.HTML"
-    if not html.is_file():
-        pytest.skip("PACMAN.HTML missing")
+    html = resolve_storage_html("PACMAN")
+    if html is None:
+        pytest.skip("no PACMAN-family HTML in storage/")
     image_data = encode_html_chunk(compile_html_text(html.read_text(encoding="utf-8")))
     sim = _sim()
     try:
-        sim._loaded_name = "PACMAN.HTML"
+        sim._loaded_name = html.name
         sim._loaded_html_text = html.read_text(encoding="utf-8")
         sim._program_image = image_data
         assert sim._stream_program_image().startswith("OK")
@@ -5462,13 +5618,13 @@ def test_donkey_fpga_sim_enter_keeps_raf():
     """DONKEY on real RTL: title paints, Enter keeps rAF, pixels keep changing."""
     from tools.compile_js import compile_html_text, encode_html_chunk
 
-    html = ROOT / "storage" / "DONKEY.HTML"
-    if not html.is_file():
-        pytest.skip("DONKEY.HTML missing")
+    html = resolve_storage_html("DONKEY")
+    if html is None:
+        pytest.skip("no DONKEY-family HTML in storage/")
     image_data = encode_html_chunk(compile_html_text(html.read_text(encoding="utf-8")))
     sim = _sim()
     try:
-        sim._loaded_name = "DONKEY.HTML"
+        sim._loaded_name = html.name
         sim._loaded_html_text = html.read_text(encoding="utf-8")
         sim._program_image = image_data
         assert sim._stream_program_image().startswith("OK")
@@ -5583,13 +5739,13 @@ def test_mrdo_fpga_sim_enter_fclk_not_pathological():
     """MRDO on real RTL: Enter starts, fault=0, fclk << 8.8M."""
     from tools.compile_js import compile_html_text, encode_html_chunk
 
-    html = ROOT / "storage" / "MRDO.HTML"
-    if not html.is_file():
-        pytest.skip("MRDO.HTML missing")
+    html = resolve_storage_html("MRDO")
+    if html is None:
+        pytest.skip("no MRDO-family HTML in storage/")
     image_data = encode_html_chunk(compile_html_text(html.read_text(encoding="utf-8")))
     sim = _sim()
     try:
-        sim._loaded_name = "MRDO.HTML"
+        sim._loaded_name = html.name
         sim._loaded_html_text = html.read_text(encoding="utf-8")
         sim._program_image = image_data
         assert sim._stream_program_image().startswith("OK")

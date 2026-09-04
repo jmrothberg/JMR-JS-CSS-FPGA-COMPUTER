@@ -18,7 +18,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from tests.test_rtl_snippets import _fb_pix, _fb_raw, _patch_js_spr, _sim
+from tests.test_rtl_snippets import _fb_pix, _fb_raw, _patch_js_spr, _sim, _vmstat_int
 
 
 def test_rtl_wide_sheet_blits_exact():
@@ -46,6 +46,17 @@ requestAnimationFrame(tick);
         sim._rpc("SDRELOAD")
         sim.type_line('LOAD "WSPR.JS"')
         sim.type_line("RUN")
+        # LINE returns after ~2M clocks while C_JSB is still FAT-loading
+        # this 28KB SPR1 pack (same early-exit as EDIT/COMPILE: ready=0
+        # and not game_mode). Tiny STRIDE.JSB finishes in that window;
+        # a 1400-wide sheet does not. Pump until nops, then FRAME.
+        nops = 0
+        for _ in range(40):
+            nops = _vmstat_int(sim._rpc("VMSTAT?"), "nops")
+            if nops > 0:
+                break
+            sim._rpc("TICKN 20000")
+        assert nops > 0, "WSPR.JSB never entered the VM (FAT JSB load)"
         sim._rpc("FRAME")
         raw = _fb_raw(sim)
         assert _fb_pix(raw, 12, 12) == 3, "left-edge crop broken (stride wrap)"

@@ -584,6 +584,95 @@ class BoardBackend(RuntimeBackend):
     def trace_path(self) -> Optional[Path]:
         return self._log.path
 
+    def _wait_glass(self, pred, timeout: float) -> bool:
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout:
+            self.poll()
+            if pred():
+                return True
+            time.sleep(0.05)
+        return False
+
+    def _src_tether_save(self, name: str, data: bytes) -> None:
+        """0xFC → SOURCE, then typed SAVE — the µSD write the console already has."""
+        if self._ser is None:
+            raise RuntimeError("BOARD tether required to SAVE onto the µSD")
+        self._ser.write(bytes([0xFC]) + struct.pack("<I", len(data)))
+        mv = memoryview(data)
+        for i in range(0, len(data), 16384):
+            self._ser.write(mv[i : i + 16384])
+        self._ser.flush()
+        self._log.note(f"PROG SOURCE stream {name} {len(data)} bytes")
+        self.type_line(f'SAVE "{name}"')
+        if not self._wait_glass(
+            lambda: any("SAVED" in r.upper() for r in self._rows), 90.0
+        ):
+            raise RuntimeError(
+                f"SAVE {name} did not print SAVED — need a bit with 0xFC SOURCE put"
+            )
+
+    @staticmethod
+    def _save_order(name: str) -> int:
+        # HTML first (deletes stale .JSH), then ART, JSH last so RUN can find it.
+        u = name.upper()
+        if u.endswith(".HTM") or u.endswith(".HTML"):
+            return 0
+        if u.endswith(".ART") or u.endswith(".ARTX"):
+            return 1
+        if u.endswith(".JSH"):
+            return 2
+        return 3
+
+    def _save_jobs_to_msd(self, jobs: list) -> str:
+        from functional_model.jsb_format import SOURCE_MAX
+
+        jobs = sorted(jobs, key=lambda x: (self._save_order(x[0]), x[0]))
+        saved: list[str] = []
+        skipped: list[str] = []
+        for name, data in jobs:
+            if len(data) > SOURCE_MAX:
+                skipped.append(f"{name}?TR")
+                continue
+            self._src_tether_save(name, data)
+            saved.append(name)
+        bits = []
+        if saved:
+            bits.append(", ".join(saved))
+        if skipped:
+            bits.append("skip " + ", ".join(skipped) + " (SOURCE 64K)")
+        return "; ".join(bits) if bits else "nothing"
+
+    def put_files_on_card(self, paths: list) -> str:
+        """F8: host card.img (mint) + live µSD via SOURCE+SAVE of what landed."""
+        import os
+
+        from tools.make_sd_image import open_volume, put_host_files_on_card
+
+        names = put_host_files_on_card([Path(p) for p in paths])
+        card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
+        vol = open_volume(card)
+        jobs = []
+        for name in names:
+            try:
+                jobs.append((name, vol.read_file(name)))
+            except FileNotFoundError:
+                continue
+        live = self._save_jobs_to_msd(jobs)
+        return f"{live} (host {', '.join(names)})"
+
+    def put_card_names(self, names: list) -> str:
+        """F8 from card.img: stream existing FAT files onto the board µSD."""
+        import os
+
+        from tools.make_sd_image import open_volume
+
+        card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
+        vol = open_volume(card)
+        jobs = []
+        for name in names:
+            jobs.append((name, vol.read_file(name)))
+        return self._save_jobs_to_msd(jobs)
+
     def shutdown(self) -> None:
         if self._ser is not None:
             try:

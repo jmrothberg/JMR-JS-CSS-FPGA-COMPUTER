@@ -437,6 +437,78 @@ def patch_card_file(img_path: Path, name: str, data: bytes) -> None:
     img_path.write_bytes(bytes(card.image))
 
 
+def put_host_files_on_card(
+    paths: list[Path],
+    img_path: Path | None = None,
+    *,
+    mint_jsh: bool = True,
+) -> list[str]:
+    """GUI put: copy host files onto card.img (and mint HTML→.JSH).
+
+    PYTHON / FPGA-SIM play this image. BOARD F8 also SAVE-s each
+    file that fits SOURCE (64K) onto the live µSD. Returns the 8.3 names written.
+    """
+    card = Path(img_path) if img_path is not None else (ROOT / "card.img")
+    if not card.is_file():
+        raise FileNotFoundError(f"no card.img at {card}")
+    pairs: list[tuple[str, bytes]] = []
+    for p in paths:
+        src = Path(p)
+        if not src.is_file():
+            raise FileNotFoundError(str(src))
+        data = src.read_bytes()
+        name = card_name_83(src.name)
+        pairs.append((name, data))
+        # ARTX sidecar next to an HTML title (8.3 → .ART on the card)
+        if src.suffix.upper() in (".HTML", ".HTM"):
+            for art_ext in (".ARTX", ".ART"):
+                art = src.with_suffix(art_ext)
+                if art.is_file():
+                    pairs.append((card_name_83(art.name), art.read_bytes()))
+                    break
+    if mint_jsh:
+        pairs.extend(compile_sidecars(pairs))
+    written: list[str] = []
+    for name, data in pairs:
+        patch_card_file(card, name, data)
+        written.append(name)
+    return written
+
+
+_PUT_EXTS = {".HTM", ".HTML", ".JS", ".JSH", ".JSB", ".ART", ".ARTX"}
+
+
+def list_card_put_files(img_path: Path | None = None) -> list[tuple[str, int]]:
+    """card.img files F8 can send (HTML, JSH, ART)."""
+    card = Path(img_path) if img_path is not None else (ROOT / "card.img")
+    if not card.is_file():
+        return []
+    out: list[tuple[str, int]] = []
+    for name, size in open_volume(card).list_root_info():
+        if Path(name).suffix.upper() in _PUT_EXTS:
+            out.append((name, size))
+    return sorted(out, key=lambda x: x[0].upper())
+
+
+def card_html_sidecars(name: str, available: set[str]) -> list[str]:
+    """If name is HTML, also STEM.ART and STEM.JSH when those exist on the card."""
+    u = name.upper()
+    if not (u.endswith(".HTM") or u.endswith(".HTML")):
+        return []
+    stem = Path(u).stem[:8]
+    have = {a.upper(): a for a in available}
+    extra: list[str] = []
+    for side in (stem + ".ART", stem + ".JSH"):
+        if side in have:
+            extra.append(have[side])
+    return extra
+
+
+def read_card_file(name: str, img_path: Path | None = None) -> bytes:
+    card = Path(img_path) if img_path is not None else (ROOT / "card.img")
+    return open_volume(card).read_file(name)
+
+
 def create_image(
     path: Path,
     size_bytes: int = DEFAULT_SIZE,
