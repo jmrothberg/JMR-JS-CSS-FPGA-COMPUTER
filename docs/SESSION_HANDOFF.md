@@ -193,6 +193,13 @@ RTL candidates, in priority order:
    files > SOURCE_MAX to it. Until then big art reaches the µSD only via
    the mint + re-imaging the card.
 
+7. **storage_engine S_SD_WAIT has no watchdog** (board 2026-09-05): a SAVE
+   of a 5.5 KB .JSH sat in state 0x09 (waiting on sd_ack) for ~85 s, then
+   completed; a following DIR wedged the same way until power-cycle. The
+   engine must time out a stuck SD transaction (deselect, re-init at
+   INIT_DIV, report ?IO) instead of waiting forever. Card health/seating is
+   the likely trigger, the wedge is ours. Collected, NOT started.
+
 Content/toolchain (not run-gated, mostly peer lane):
 - window.open-class browser APIs now stub to 33 in the on-machine compiler
   (574bbb4) — extend natInit as real needs appear.

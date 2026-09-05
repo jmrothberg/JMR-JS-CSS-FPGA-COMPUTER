@@ -653,17 +653,24 @@ class BoardBackend(RuntimeBackend):
         self._ser.flush()
         self._log.note(f"PROG SOURCE stream {name} {len(data)} bytes")
         before = self._glass_error_row()
+        # 2026-09-05: count SAVED rows BEFORE typing — the previous file's
+        # SAVED. was still on the mirror, so the second put's wait passed
+        # instantly and DIR * was typed while the .JSH was mid-write (the
+        # SD then sat in S_SD_WAIT for ~85 s). Wait for a NEW SAVED and for
+        # the prompt to come back before returning.
+        saved_before = sum(1 for r in self._rows if "SAVED" in r.upper())
         self.type_line(f'SAVE "{name}"')
         ok = self._wait_glass(
-            lambda: any("SAVED" in r.upper() for r in self._rows),
-            30.0,
+            lambda: sum(1 for r in self._rows if "SAVED" in r.upper()) > saved_before
+            and self._prompt_row() >= 0,
+            120.0,
             fail_pred=lambda: self._glass_error_row() not in (None, before),
         )
         if not ok:
             err = self._glass_error_row()
             raise RuntimeError(
                 f"SAVE {name}: board answered {err}" if err and err != before
-                else f"SAVE {name} did not print SAVED within 30 s — need a bit with 0xFC SOURCE put"
+                else f"SAVE {name} did not print SAVED within 120 s (SD write stalled?) — power-cycle the board before more writes"
             )
 
     @staticmethod
