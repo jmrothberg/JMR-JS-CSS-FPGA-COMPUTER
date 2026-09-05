@@ -56,6 +56,19 @@ module jmr_fb_scanout #(
     // 10 ns cycle behind the beam - noise against the 32 us line time.
     logic [9:0] y_core_q;
     always_ff @(posedge clk) y_core_q <= y_core;
+    // run 71: the remaining cone (compare + increment + x320 DSP + 21-bit
+    // base add, 10-11 levels) set run 71's WNS (-0.448) and thinned runs
+    // 50/52/70b. Split it: stage 1 = the wanted line, stage 2 = its SRAM
+    // base. want_qq rides beside line_base_q so the two are always from
+    // the same beam sample. Prefetch now lags the beam 3 cycles (30 ns)
+    // against a 32 us line - still noise.
+    logic [9:0]  want_q, want_qq;
+    logic [20:0] line_base_q;
+    always_ff @(posedge clk) begin
+        want_q      <= (y_core_q >= 10'd479) ? 10'd0 : (y_core_q + 10'd1);
+        want_qq     <= want_q;
+        line_base_q <= FB_SRAM_BASE + 21'(want_q) * 21'd320;
+    end
 
     logic [9:0]  fetched_line;   // last line fully fetched
     logic [9:0]  tgt;            // line being fetched
@@ -96,15 +109,14 @@ module jmr_fb_scanout #(
             tgt <= 10'd0;
             wx <= 10'd0;
         end else if (!busy) begin
-            // want the line AFTER the beam (wraps 479 -> 0)
-            logic [9:0] want;
-            want = (y_core_q >= 10'd479) ? 10'd0 : (y_core_q + 10'd1);
-            if (want != fetched_line) begin
+            // want the line AFTER the beam (wraps 479 -> 0); both values
+            // come pre-computed from the two-stage pipe above
+            if (want_qq != fetched_line) begin
                 busy <= 1'b1;
-                tgt <= want;
+                tgt <= want_qq;
                 wx <= 10'd0;
                 sram_req <= 1'b1;
-                sram_addr <= FB_SRAM_BASE + 21'(want) * 21'd320;
+                sram_addr <= line_base_q;
             end
         end else if (sram_ack) begin
             // byte writes handled by the single-port stanza above

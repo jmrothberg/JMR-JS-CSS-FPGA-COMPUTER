@@ -1164,6 +1164,16 @@ module jmr_js_vm #(
                                           1000000, 10000000, 100000000, 1000000000};
     logic [15:0] id_hex_09f, id_hex_f5f5, id_hex_ffe6, id_hex_f00, id_hex_aaa;
     logic [15:0] spr_nid [0:15] /*verilator public_flat_rd*/; // intern idx of "jmr:spr:0"..15
+    // run 71: start/stop arrive as 100 MHz latches (core) cleared on the
+    // beat. Sampling them straight into the priority chain made every
+    // register's CE a 10 ns cross-domain cone (run 71 WNS leader #2:
+    // vm_stop_lat -> spr_nid CE, -0.256). One vm beat of latency on BOTH
+    // keeps their relative order exactly as before.
+    logic start_q, stop_q;
+    always_ff @(posedge clk) begin
+        start_q <= start;
+        stop_q  <= stop;
+    end
     // NEW: FSTY fillStyle LUT — compiler-resolved name→palette index so RTL
     // paints the exact indices the FM does (0xFF = not a color, use fallback)
     (* ram_style = "block" *) logic [7:0] fill_lut [0:1023];
@@ -6899,7 +6909,7 @@ module jmr_js_vm #(
                     end
                 end
             end
-            if (stop) begin
+            if (stop_q) begin
                 running <= 1'b0;
                 looping <= 1'b0;
                 sram_req <= 1'b0; sram_we <= 1'b0; blit_wait <= 1'b0; // NEW: drop mid-blit SRAM req
@@ -7002,7 +7012,7 @@ module jmr_js_vm #(
             // is ~80 states × blocking temps; that was the 70 GB flatten after
             // unused-FF. Plain case sequences; SRAM still rdata<=mem[raddr].
             end else case (casestate)
-                S_IDLE: if (start) begin
+                S_IDLE: if (start_q) begin
                     running <= 1'b1;
                     looping <= 1'b0;
                     sp <= '0;

@@ -146,7 +146,33 @@ Cross-lane facts every session needs:
 - The editor is a GAME (running=1 while editing); F2 save prints SAVED.;
   the delete verb is REMOVE. GUI forwards F-keys to titles; F12 = leave.
 
-### RUN 71 — IMPLEMENTED 2026-09-05 (tree ready; synthesis waits for the user)
+### RUN 71 — IMPLEMENTED 2026-09-05; first build missed timing, 71b relaunched
+
+**Run 71 build ledger (tree 89aee30, Congestion_SpreadLogic_low, incremental,
+launched 13:38, routed 14:55, bit refused):** WNS **-0.448** / WHS +0.004,
+99 violated endpoints in three cones, none of them run-71 logic:
+1. `u_fbscan y_core_q -> sram_addr` (-0.448, 7 of the top 7): compare +
+   increment + x320 DSP + 21-bit base add in one 10 ns cycle — the same
+   cone run 52's plan named (P1a) and runs 50/52/70b thinned on.
+   FIXED for 71b: two register stages (want_q, then want_qq + line_base_q
+   from the same sample); prefetch lags the beam 30 ns of a 32 us line.
+2. `vm_stop_lat -> u_vm/* CE` (-0.256, ~40 endpoints): the 100 MHz stop
+   latch sat at the top of the VM's priority chain, so every register's
+   clock-enable was a 10 ns cross-domain cone. FIXED for 71b: `start_q`/
+   `stop_q` registered on vm_clk inside the VM (both, so their order is
+   unchanged; BREAK lands one 70 ns beat later).
+3. `u_sram_br/rdata -> u_vm/vst_wdata[49:48]` (-0.242): the CSR read byte
+   entering the value-stack funnel across clk100 -> vm_clk. LEFT ALONE
+   (semantics of the ack/hold crossing; run 70b met it at +0.037). If it
+   is the sole leader of 71b, the fix is a one-clk100-later ack to the VM
+   (`vm_ack_hold_q`) plus a 2-cycle multicycle on the hold data — do it
+   with a written argument, not a guess.
+Utilization vs 70b: LUT 89,863 (+482), slices 26,646 (-337), BRAM 353.5
+(same), LUT-as-memory 2,998; congestion East level 5 at 116% in
+CLBLL X54Y44-X85Y75 (placer), no router windows above level 5; vm_clk
+met by +4.777. Synth 8-6849 count 42 (70b: 36). Run 71 archived at
+build/runs/run71_bigput_crc_sdwd_status_WNS-0.448 (all DCPs + reports);
+refused bit kept under build/bits/auto/*WNSFAIL-0.448*.
 
 Scope chosen by the user: transfer checking, no lock-ups, STATUS, cheap
 language gaps, load-speed instrument; congestion-neutral, no clock change,
