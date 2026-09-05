@@ -427,7 +427,10 @@ class BoardBackend(RuntimeBackend):
         for r in range(_MIRROR_ROWS - 1, -1, -1):
             if self._rows[r].startswith(">"):
                 return r
-        return _MIRROR_ROWS - 1
+        # 2026-09-04: no prompt row = the board is mid-listing (-- MORE --)
+        # or mid-command; painting "> " on the last row hid the final DIR
+        # entry ("files scrolled off"). No prompt row → no overlay.
+        return -1
 
     def _paint_fb_scaled(self) -> None:
         """Mini 160×120 → full 640×480 (same ×4 as HDMI game scanout)."""
@@ -533,6 +536,19 @@ class BoardBackend(RuntimeBackend):
             from tools.compile_js import compile_html_text, encode_html_chunk
 
             html = html_path.read_text(encoding="utf-8")
+            # 2026-09-04: a jmr:spr title whose .ARTX/.ART sidecar is gone
+            # compiled fine with the art silently dropped; the board then
+            # faulted inside the running game and the GUI sat in "running"
+            # with a dead console. Refuse loudly instead.
+            if "jmr:spr" in html:
+                sib = [html_path.with_suffix(".ARTX"), html_path.with_suffix(".ART")]
+                if not any(q.is_file() for q in sib):
+                    self._log.fault(
+                        "COMPILE",
+                        f"{html_path.stem}: jmr:spr sprites but no {html_path.stem}.ARTX/.ART — RUN refused",
+                    )
+                    self._rows[-1] = f"?NO ART {html_path.stem}.ARTX"
+                    return b""
             blob = encode_html_chunk(
                 compile_html_text(html, source_path=html_path)
             )
