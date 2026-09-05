@@ -146,6 +146,40 @@ Cross-lane facts every session needs:
 - The editor is a GAME (running=1 while editing); F2 save prints SAVED.;
   the delete verb is REMOVE. GUI forwards F-keys to titles; F12 = leave.
 
+### RUN 71 — IMPLEMENTED 2026-09-05 (tree ready; synthesis waits for the user)
+
+Scope chosen by the user: transfer checking, no lock-ups, STATUS, cheap
+language gaps, load-speed instrument; congestion-neutral, no clock change,
+capacity growth dropped (the "15 dead BRAM tiles" premise was wrong: the
+tag twins and json_mem are live in v64; only tenv_parent is dead).
+
+- **0 editor retirement**: the 23 `C_EDIT_*` inline numbered-line states are
+  gone (console 128/128 -> 105/128 before this run's +4). `EDIT n` and typed
+  numbered lines answer ?SN; EDITOR.JSH is the editor.
+- **A CRC-32 on 0xFC/0xFD**: frame = tag, u32 len, payload, crc32 LE.
+  uart_link JSH_C0..C3 verify; mismatch -> `?CK` (reply row 16; reply_sel
+  now 5 bits) and the stream is discarded (SOURCE emptied / program not
+  started). board_backend appends zlib.crc32 and resends x3 on ?CK. Sim:
+  `TETHER_CRCERR 1` injects the flag. Board-side 0xFD path is board-only
+  (sim JSHLOAD bypasses the tether).
+- **B SD watchdog**: S_SD_WAIT times out (~1.3 s), aborts the SPI master
+  (new `abort` input), poisons the mount, answers ?IO. Sim: `SD_HANG 1`.
+- **G STATUS**: `NAME <t> LEN <n> [TRUNC] HTML|JS|-- FAULT <site> <arg>`
+  (2 console states reusing the LOADED/LIST printers; vm_gdbg -> console).
+- **F language-lite**: natives 55 isFinite, 56 isNaN, 57 Math.ceil; alias
+  performance.now = Date.now; host compiler desugars a.includes(v) to
+  !(a.indexOf(v) < 0). PEER LANE TODO: the on-machine COMPILER.HTML has the
+  natInit rows (done here) but still needs the `.includes(` desugar in its
+  method-call path (emit indexOf + LOADC 0 + LT + NOT) to match the host.
+  e.code and Array.shift/unshift were left out (event construction / RTL
+  array ops — run 72 candidates).
+- **C instrument**: E line is now `Exxyyzzzz` (zzzz = storage op duration
+  x256 clk); flight log prints `op_ms=`. Burst loads NOT built — measure
+  first per the approved plan.
+- **H**: [Errno 5] on a tether write reopens the USB port once and retries.
+- Banner `V2.0 R71`. Gates: CRC put, SD hang, STATUS, natives checksum
+  (all pass); full battery on the final binary pending at write time.
+
 ### RUN 69 BUG LIST (2026-09-01 — collected, NOT started; user gate)
 
 RTL candidates, in priority order:
