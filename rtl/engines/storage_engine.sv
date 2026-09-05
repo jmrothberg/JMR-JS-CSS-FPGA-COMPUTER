@@ -93,6 +93,8 @@ module storage_engine #(
     logic [31:0] sd_lba_r;
     logic [7:0]  sd_status;
     logic        sd_ack;
+    logic        sd_abort;          // run 71: one-beat abort to the SPI master
+    logic [26:0] sd_wd;             // run 71: S_SD_WAIT watchdog
     logic [8:0]  sd_buf_addr;
     logic [7:0]  sd_buf_wdata;
     logic        sd_buf_we;
@@ -138,6 +140,7 @@ module storage_engine #(
         .lba      (sd_lba_r),
         .status   (sd_status),
         .ack_done (sd_ack),
+        .abort    (sd_abort),
         .spi_sck  (spi_sck),
         .spi_mosi (spi_mosi),
         .spi_miso (spi_miso),
@@ -153,7 +156,7 @@ module storage_engine #(
         S_IDLE, S_FIN, S_ERR, S_SINK_END,
         S_MW, S_MR, S_MRC,                       // one-byte RAM write / read
         S_BR, S_BRC,                             // NEW: one-byte sbuf BRAM read
-        S_SD_WAIT, S_SD_CLR,                     // SPI command completion
+        S_SD_WAIT, S_SD_CLR, S_SD_ABORT,         // SPI command completion (+ run-71 watchdog)
         S_MNT0, S_MNT1, S_MNT2, S_MNT2A, S_MNT2B, S_MNT2C, // mount (+ BRAM gather)
         S_MNT3, S_MNT3G, S_MNT3C,
         S_NM_RD, S_NM_CAP,                       // fetch + encode 8.3 name
@@ -484,6 +487,7 @@ module storage_engine #(
             lbw_we <= 1'b0; lb_arm <= 1'b0; dirfmt_l <= 1'b0;
             rsp <= 3'd0;
             sd_cmd_r <= 8'h0;
+            sd_wd <= 27'd0; sd_abort <= 1'b0;
             sd_lba_r <= 32'h0;
             mounted <= 1'b0;
             part_lba <= 32'h0; fat_start <= 32'h0; data_start <= 32'h0;
@@ -649,8 +653,24 @@ module storage_engine #(
 
                 // ---------------- SPI command completion ------------------
                 S_SD_WAIT: if (sd_ack) begin
+                    sd_wd    <= 27'd0;
                     sd_cmd_r <= 8'h0;
                     state    <= S_SD_CLR;
+                end else if (&sd_wd) begin
+                    // Run 71 watchdog (~1.3 s at 100 MHz): the card never
+                    // answered. Board 2026-09-05: a SAVE sat here 85 s and
+                    // a DIR wedged until power-cycle. Abort the SPI master,
+                    // poison the mount, fail the op loud (?IO) — never wait
+                    // forever again.
+                    sd_wd    <= 27'd0;
+                    sd_abort <= 1'b1;
+                    sd_cmd_r <= 8'h0;
+                    state    <= S_SD_ABORT;
+                end else sd_wd <= sd_wd + 27'd1;
+                S_SD_ABORT: begin
+                    sd_abort <= 1'b0;
+                    mounted  <= 1'b0;
+                    state    <= S_ERR;
                 end
                 S_SD_CLR: begin
                     if (sd_status[2]) begin

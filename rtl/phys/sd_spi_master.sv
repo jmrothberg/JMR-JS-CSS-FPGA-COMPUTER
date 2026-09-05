@@ -25,6 +25,7 @@ module sd_spi_master #(
     input  logic [31:0] lba,
     output logic [7:0]  status,    // bit0 present bit1 busy bit2 err bit3 init
     output logic        ack_done,
+    input  logic        abort = 1'b0,   // run 71: storage watchdog — drop CS, go idle
     // SPI pins
     output logic        spi_sck,
     output logic        spi_mosi,
@@ -155,6 +156,18 @@ module sd_spi_master #(
             buf_we <= 1'b0;
             cmd_d <= cmd;
 
+            if (abort) begin
+                // Run 71: a card that never answers (S_SD_WAIT wedge) is
+                // released here — CS high, idle, no ack. The storage engine
+                // poisons the mount so the next op re-inits at INIT_DIV.
+                state <= ST_IDLE;
+                busy_r <= 1'b0;
+                spi_cs_n <= 1'b1;
+                spi_active <= 1'b0;
+                sck_hi <= 1'b0;
+                spi_mosi <= 1'b1;
+                err_r <= 1'b1;
+            end else
             unique case (state)
                 ST_IDLE: begin
                     busy_r <= 1'b0;
