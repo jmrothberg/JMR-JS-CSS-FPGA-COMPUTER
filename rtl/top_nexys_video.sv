@@ -219,6 +219,7 @@ module top_nexys_video (
     logic        uart_jsb_stb;
     logic [7:0]  uart_jsb_data;
     logic        uart_jsb_eof;
+    logic uart_jsb_crc_err;
     logic        uart_jsb_src;
     logic        uart_jsb_rdy;
     jmr_uart_link #(.CLK_HZ(100_000_000), .USE_DPTI(1)) u_link (
@@ -241,6 +242,7 @@ module top_nexys_video (
         .vm_ftrace(vm_ftrace), .vm_gdbg(vm_gdbg),
         .jsb_tether_stb(uart_jsb_stb), .jsb_tether_data(uart_jsb_data),
         .jsb_tether_eof(uart_jsb_eof), .jsb_tether_src(uart_jsb_src),
+        .jsb_tether_crc_err(uart_jsb_crc_err),
         .jsb_tether_rdy(uart_jsb_rdy)
     );
     // Merge J15 + Pmod JA + UART (all slow; J15 wins, then Pmod, then tether)
@@ -278,6 +280,7 @@ module top_nexys_video (
         .sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso), .sd_cs_n(sd_cs_n),
         .jsb_tether_stb(uart_jsb_stb), .jsb_tether_data(uart_jsb_data),
         .jsb_tether_eof(uart_jsb_eof), .jsb_tether_src(uart_jsb_src),
+        .jsb_tether_crc_err(uart_jsb_crc_err),
         .jsb_tether_rdy(uart_jsb_rdy),
         .sram_ext_req(sram_req), .sram_ext_we(sram_we),
         .sram_ext_addr(sram_addr), .sram_ext_wdata(sram_wdata),

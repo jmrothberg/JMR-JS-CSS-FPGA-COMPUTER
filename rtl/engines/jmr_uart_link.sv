@@ -172,6 +172,8 @@ module jmr_uart_link #(
     output logic [7:0] jsb_tether_data,
     output logic       jsb_tether_eof,
     output logic       jsb_tether_src, // 1 while an 0xFC SOURCE stream is live
+    output logic       jsb_tether_crc_err, // run 71: held with eof when the
+                                           // trailer CRC-32 mismatched
     input  logic       jsb_tether_rdy = 1'b0
 );
     logic       rx_ready;
@@ -181,8 +183,9 @@ module jmr_uart_link #(
     logic [7:0] wr_data;
     logic       rx_pop;
     // NEW: 0xFD + u32 LE length + payload → console C_JSB_TETHER (not kbd)
-    typedef enum logic [2:0] {
-        JSH_IDLE, JSH_L0, JSH_L1, JSH_L2, JSH_L3, JSH_DATA
+    typedef enum logic [3:0] {
+        JSH_IDLE, JSH_L0, JSH_L1, JSH_L2, JSH_L3, JSH_DATA,
+        JSH_C0, JSH_C1, JSH_C2, JSH_C3   // run 71: CRC-32 trailer
     } jsh_t;
     jsh_t jsh_st;
     logic [31:0] jsh_left;
@@ -196,6 +199,25 @@ module jmr_uart_link #(
     // until the console (jsb_tether_rdy) samples it.
     logic        jsh_eof_hold;
     wire jsh_hold = (jsh_st == JSH_DATA) && !jsb_tether_rdy;
+
+    // Run 71: CRC-32 (IEEE, reflected, init FFFFFFFF, final ~) over the
+    // 0xFC/0xFD payload, byte-serial so it costs one 32-bit register and a
+    // few XOR levels. The host appends crc32(payload) little-endian after
+    // the payload; a mismatch raises jsb_tether_crc_err alongside eof and
+    // the console discards the stream (?CK) — a dropped USB byte can never
+    // become a silently corrupted SOURCE or program image again.
+    logic [31:0] crc_acc, crc_rx;
+    logic        crc_err_r;
+    function automatic logic [31:0] crc32_byte(input logic [31:0] c, input logic [7:0] b);
+        logic [31:0] x;
+        begin
+            x = c ^ {24'd0, b};
+            for (int i = 0; i < 8; i++)
+                x = x[0] ? ((x >> 1) ^ 32'hEDB88320) : (x >> 1);
+            crc32_byte = x;
+        end
+    endfunction
+    assign jsb_tether_crc_err = crc_err_r;
     assign rx_pop = rx_ready && !jsh_hold;
     assign jsb_tether_stb = rx_ready && (jsh_st == JSH_DATA) && jsb_tether_rdy;
     assign jsb_tether_data = rx_data;
@@ -240,6 +262,7 @@ module jmr_uart_link #(
             jsh_eof_pend <= 1'b0;
             jsh_eof_hold <= 1'b0;
             jsh_src <= 1'b0;
+            crc_acc <= 32'hFFFFFFFF; crc_rx <= 32'd0; crc_err_r <= 1'b0;
         end else begin
             kbd_push <= 1'b0;
             jsh_eof_pend <= 1'b0;
@@ -257,6 +280,8 @@ module jmr_uart_link #(
                     jsh_st <= JSH_L3;
                 end else if (jsh_st == JSH_L3) begin
                     jsh_left[31:24] <= rx_data;
+                    crc_acc <= 32'hFFFFFFFF;
+                    crc_err_r <= 1'b0;
                     if ({rx_data, jsh_left[23:0]} == 32'd0) begin
                         jsh_eof_pend <= 1'b1;
                         jsh_src <= 1'b0;
@@ -264,13 +289,23 @@ module jmr_uart_link #(
                     end else
                         jsh_st <= JSH_DATA;
                 end else if (jsh_st == JSH_DATA) begin
+                    crc_acc <= crc32_byte(crc_acc, rx_data);
                     if (jsh_left <= 32'd1) begin
                         jsh_left <= 32'd0;
-                        jsh_eof_pend <= 1'b1;
-                        jsh_src <= 1'b0;
-                        jsh_st <= JSH_IDLE;
+                        jsh_st <= JSH_C0;     // trailer next; eof after it
                     end else
                         jsh_left <= jsh_left - 32'd1;
+                end else if (jsh_st == JSH_C0) begin
+                    crc_rx[7:0] <= rx_data;   jsh_st <= JSH_C1;
+                end else if (jsh_st == JSH_C1) begin
+                    crc_rx[15:8] <= rx_data;  jsh_st <= JSH_C2;
+                end else if (jsh_st == JSH_C2) begin
+                    crc_rx[23:16] <= rx_data; jsh_st <= JSH_C3;
+                end else if (jsh_st == JSH_C3) begin
+                    crc_err_r <= ({rx_data, crc_rx[23:0]} != ~crc_acc);
+                    jsh_eof_pend <= 1'b1;
+                    jsh_src <= 1'b0;
+                    jsh_st <= JSH_IDLE;
                 end else if (joy_cmd) begin
                     joy_bits <= rx_data[5:0];
                     joy_cmd <= 1'b0;

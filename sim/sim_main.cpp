@@ -256,8 +256,9 @@ struct SdCard {
         }
     }
 
+    bool hang = false;   // run 71 gate: SD_HANG 1 -> the card never answers
     void step(bool cs_n, bool sck, bool mosi, uint8_t *miso_out) {
-        if (!present) { *miso_out = 1; return; }
+        if (!present || hang) { *miso_out = 1; return; }
         if (cs_n) {
             if (!prev_cs_n) { rx_mode = 0; cmd_len = 0; clear_tx(); }
             if (sck && !prev_sck && wake_clocks < 1000) wake_clocks++;
@@ -1234,6 +1235,8 @@ static int src_tether_pump(const std::vector<uint8_t>& blob) {
     top->jsb_tether_src = 1;
     top->jsb_tether_stb = 0;
     top->jsb_tether_eof = 0;
+    // (jsb_tether_crc_err is left as the TETHER_CRCERR rpc set it — the
+    //  gate arms it before the stream, like uart_link would at the trailer)
     int wait = 0;
     while (!top->jsb_tether_rdy && wait < 200000) { ticks(1); wait++; }
     if (!top->jsb_tether_rdy) {
@@ -1408,6 +1411,7 @@ int main(int argc, char** argv) {
     top->jsb_tether_stb = 0;
     top->jsb_tether_data = 0;
     top->jsb_tether_eof = 0;
+    top->jsb_tether_crc_err = 0;
     top->jsb_tether_src = 0;
     top->sim_src_bypass = 0;
     top->sim_src_lines = 0;
@@ -1491,6 +1495,20 @@ int main(int argc, char** argv) {
             continue;
         }
         // NEW: RAM-load compiled .JSH (code BRAM + ASET SRAM). No FAT SPI.
+        // run 71: gate hook — pretend the UART trailer CRC mismatched.
+        // The flag rides with the next stream's eof exactly like uart_link's.
+        // run 71 gate: SD_HANG <0|1> — the SD model stops answering so the
+        // storage watchdog (S_SD_WAIT) must fire and report ?IO.
+        if (line.rfind("SD_HANG ", 0) == 0) {
+            sd.hang = (line[8] == '1');
+            std::cout << "OK" << std::endl;
+            continue;
+        }
+        if (line.rfind("TETHER_CRCERR ", 0) == 0) {
+            top->jsb_tether_crc_err = (line[14] == '1') ? 1 : 0;
+            std::cout << "OK" << std::endl;
+            continue;
+        }
         if (line.rfind("JSHLOAD ", 0) == 0) {
             std::vector<uint8_t> blob;
             if (read_whole_file(line.substr(8), blob) != 0 || jsh_load_mem(blob) != 0) {

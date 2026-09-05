@@ -103,6 +103,7 @@ module jmr_console_engine (
     // gui-put: 0xFC SOURCE stream (same wires as 0xFD, tagged src). Tied 0
     // unless uart_link saw 0xFC. FPGA-SIM drives this from SRCSTREAM.
     input  logic        jsb_tether_src = 1'b0,
+    input  logic        jsb_tether_crc_err = 1'b0, // run 71: with eof — discard the stream, ?CK
     // NEW: FPGA-SIM RAM LOAD — host already poked SOURCE/src_len, so LOAD skips
     // the FAT open and announces with sim_src_lines. Tied 0 on the board.
     input  logic        sim_src_bypass = 1'b0,
@@ -284,7 +285,7 @@ module jmr_console_engine (
     logic [6:0] line_len;
     logic [6:0] msg_idx;
     logic [7:0] ch;
-    logic [3:0] reply_sel;
+    logic [4:0] reply_sel;   // run 71: 5 bits — rows 16+ (?CK, STATUS)
     logic [6:0] reply_idx;
     logic [6:0] name_i, name_start, name_len_r;
     // V1.5 standalone compile
@@ -356,7 +357,7 @@ module jmr_console_engine (
     // Registered lookup + a one-beat settle whenever sel/idx moved.
     logic [7:0] reply_ch_q;
     logic [6:0] ridx_q;
-    logic [3:0] rsel_q;
+    logic [4:0] rsel_q;
     logic [7:0] dir_n, dir_idx;
     logic [17:0] src_len /*verilator public_flat_rw*/;     // bytes in SOURCE BRAM (0..131072)
     // cdone() race arm: exec64's cmp_done is sticky and its p_clr wipe rides
@@ -545,8 +546,8 @@ module jmr_console_engine (
     endfunction
 
     // 0=HELP 1=MEM 2=OK 3=?SN ERROR 4=?IO 5=LOADED 6=?FN FILE NOT FOUND 7=?NB 8=-- MORE --
-    // 9=?NH (HTML not runnable yet) 10=?LS 11=SAVED.
-    function automatic logic [7:0] reply_char(input logic [3:0] sel, input logic [6:0] i);
+    // 9=?NH (HTML not runnable yet) 10=?LS 11=SAVED. 16=?CK
+    function automatic logic [7:0] reply_char(input logic [4:0] sel, input logic [6:0] i);
         case (sel)
             4'd0: case (i)
                 // DIR LOAD SAVE NEW LIST EDIT RUN (same verbs as PYTHON HELP)
@@ -624,6 +625,10 @@ module jmr_console_engine (
             endcase
             4'd15: case (i)   // ?TR — SOURCE was truncated at SOURCE_MAX
                 0: reply_char="?";1: reply_char="T";2: reply_char="R";
+                default: reply_char=8'h00;
+            endcase
+            5'd16: case (i)   // ?CK — transfer CRC mismatch (run 71)
+                0: reply_char="?";1: reply_char="C";2: reply_char="K";
                 default: reply_char=8'h00;
             endcase
             default: case (i)
@@ -2388,7 +2393,15 @@ module jmr_console_engine (
                 C_SRC_TETHER: begin
                     if (jsb_tether_eof) begin
                         teth_wd <= 30'd0;
-                        state <= C_IDLE;
+                        if (jsb_tether_crc_err) begin
+                            // run 71: trailer CRC mismatch — the bytes in
+                            // SOURCE are not the host's file. Drop them
+                            // and say so; the host retries.
+                            src_len <= 0; src_trunc <= 1'b0;
+                            reply_sel <= 5'd16; reply_idx <= 0;
+                            state <= C_REPLY;
+                        end else
+                            state <= C_IDLE;
                     end else if (jsb_tether_stb) begin
                         teth_wd <= 30'd0;
                         if (src_len >= SOURCE_MAX) begin
@@ -2438,6 +2451,11 @@ module jmr_console_engine (
                         code_waddr <= jsb_waddr;
                         code_wdata <= jsb_word;
                     end
+                    // run 71: a corrupted program stream never runs — ?CK.
+                    if (jsb_tether_mode && jsb_tether_crc_err) begin
+                        ld_err <= 1'b1; reply_sel <= 5'd16; reply_idx <= 0;
+                        state <= C_JSB_CLOSE;
+                    end else
                     // NEW fail loud: header promised an ASET section but the
                     // stream ended early → ?NH, never silent blank sprites
                     if (jsb_has_aset && (!aset_seen || aset_pay < aset_len)) begin

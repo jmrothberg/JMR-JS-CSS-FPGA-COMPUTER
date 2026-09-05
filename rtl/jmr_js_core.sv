@@ -89,6 +89,7 @@ module jmr_js_core #(
     input  logic [7:0]  jsb_tether_data = 8'd0,
     input  logic        jsb_tether_eof = 1'b0,
     input  logic        jsb_tether_src = 1'b0,
+    input  logic        jsb_tether_crc_err = 1'b0, // run 71: trailer CRC mismatch (with eof)
     output logic        jsb_tether_rdy,
     // NEW: FPGA-SIM RAM LOAD — SOURCE poked by the host, LOAD skips FAT open
     input  logic        sim_src_bypass = 1'b0,
@@ -318,6 +319,7 @@ module jmr_js_core #(
         .mem_wdata(c_mem_wdata), .mem_rdata(c_mem_rdata), .mem_gnt(c_mem_gnt),
         .jsb_tether_stb(jsb_tether_stb), .jsb_tether_data(jsb_tether_data),
         .jsb_tether_eof(jsb_tether_eof), .jsb_tether_src(jsb_tether_src),
+        .jsb_tether_crc_err(jsb_tether_crc_err),
         .jsb_tether_rdy(jsb_tether_rdy),
         .sim_src_bypass(sim_src_bypass), .sim_src_lines(sim_src_lines)
     );

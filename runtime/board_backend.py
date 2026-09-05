@@ -31,6 +31,7 @@ from __future__ import annotations
 import os
 import re
 import struct
+import zlib
 import time
 from pathlib import Path
 from typing import Optional
@@ -508,6 +509,7 @@ class BoardBackend(RuntimeBackend):
                     mv = memoryview(blob)
                     for i in range(0, len(blob), 16384):
                         self._ser.write(mv[i : i + 16384])
+                    self._ser.write(struct.pack("<I", zlib.crc32(blob) & 0xFFFFFFFF))
                     self._ser.flush()
                     self._log.note(f"PROG ProgramImage stream {len(blob)} bytes")
                     return
@@ -650,6 +652,9 @@ class BoardBackend(RuntimeBackend):
         mv = memoryview(data)
         for i in range(0, len(data), 16384):
             self._ser.write(mv[i : i + 16384])
+        # run 71: CRC-32 trailer; a bit without the check ignores it only
+        # if it never reads past the length — R71+ bits verify and answer ?CK
+        self._ser.write(struct.pack("<I", zlib.crc32(data) & 0xFFFFFFFF))
         self._ser.flush()
         self._log.note(f"PROG SOURCE stream {name} {len(data)} bytes")
         before = self._glass_error_row()
@@ -660,12 +665,25 @@ class BoardBackend(RuntimeBackend):
         # the prompt to come back before returning.
         saved_before = sum(1 for r in self._rows if "SAVED" in r.upper())
         self.type_line(f'SAVE "{name}"')
-        ok = self._wait_glass(
-            lambda: sum(1 for r in self._rows if "SAVED" in r.upper()) > saved_before
-            and self._prompt_row() >= 0,
-            120.0,
-            fail_pred=lambda: self._glass_error_row() not in (None, before),
-        )
+        ok = False
+        for attempt in range(3):
+            ok = self._wait_glass(
+                lambda: sum(1 for r in self._rows if "SAVED" in r.upper()) > saved_before
+                and self._prompt_row() >= 0,
+                120.0,
+                fail_pred=lambda: self._glass_error_row() not in (None, before),
+            )
+            if ok or (self._glass_error_row() or "").startswith("?CK") is False:
+                break
+            # ?CK: the trailer CRC failed on the board — resend (run 71)
+            self._log.note(f"?CK on {name}, resend {attempt + 1}/3")
+            before = self._glass_error_row()
+            self._ser.write(bytes([0xFC]) + struct.pack("<I", len(data)))
+            for i in range(0, len(data), 16384):
+                self._ser.write(mv[i : i + 16384])
+            self._ser.write(struct.pack("<I", zlib.crc32(data) & 0xFFFFFFFF))
+            self._ser.flush()
+            self.type_line(f'SAVE "{name}"')
         if not ok:
             err = self._glass_error_row()
             raise RuntimeError(
