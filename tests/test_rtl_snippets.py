@@ -6080,3 +6080,49 @@ requestAnimationFrame(tick);
         assert "vdraw=10,10,255,1,2" in st, st
     finally:
         sim.shutdown()
+
+
+def test_rtl_run71c_csram_read_write_two_beat():
+    """run 71c: S_CSRAM captures the SRAM byte into a vm_clk register at the
+    ack and finishes the op one beat later (the clk100 -> vm_clk crossing
+    into the vst_wdata funnel led every run-71b placement). srcByte/srcLen
+    scan SOURCE for a marker, probe past the end (-1), and stgWrite/stgRead
+    round-trip the compile arena. Six flags -> rect width 63."""
+    src = """
+// marker ZQX lives in this comment
+var s = 0;
+var n = srcLen();
+if (n > 0) { s = s + 1; }
+var found = 0;
+var i = 0;
+while (i + 2 < n) {
+  if (srcByte(i) == 90 && srcByte(i + 1) == 81 && srcByte(i + 2) == 88) { found = 1; }
+  i = i + 1;
+}
+if (found == 1) { s = s + 2; }
+if (srcByte(n) == -1) { s = s + 4; }
+stgWrite(4096, 77);
+stgWrite(4097, 0);
+if (stgRead(4096) == 77) { s = s + 8; }
+if (stgRead(4097) == 0) { s = s + 16; }
+stgWrite(4098, 200);
+if (stgRead(4096) == 77 && stgRead(4098) == 200) { s = s + 32; }
+function tick() {
+  fillRect(10, 10, s, 1, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("R71CSR.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "R71CSR.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "vdraw=10,10,63,1,2" in st, st
+    finally:
+        sim.shutdown()

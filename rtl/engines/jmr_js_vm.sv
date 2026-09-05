@@ -1217,6 +1217,13 @@ module jmr_js_vm #(
         joy_btn_q1  <= joy_btn;  joy_btn_q2  <= joy_btn_q1;
     end
     logic        csr_pend;  // S_CSRAM request issued, waiting on sram_ack
+    // run 71c: the read byte lands in a vm_clk register at the ack and is
+    // consumed the NEXT beat. Feeding sram_rdata (a clk100 register in the
+    // bridge) straight into v64_int32_number -> the vst_wdata funnel gave
+    // that crossing a 10 ns budget through ~100 levels: WNS leader of every
+    // run-71b placement (+0.009 / -0.077 / -0.163). One beat per CSR op.
+    logic        csr_done;  // byte captured, finish next beat
+    logic [7:0]  csr_rd_q;
     // S_CSRAM mode map (3 bits — was 2, widened for mode 4):
     //   0 srcByte  1 stgRead  2 stgWrite  3 artWrite2  4 srcWrite
     // WRITE modes are named explicitly rather than tested as (mode >= 2), so
@@ -14183,8 +14190,22 @@ module jmr_js_vm #(
                     if (state != S_CSRAM) begin
                         hs_st(S_CSRAM);
                         csr_pend <= 1'b0;
+                        csr_done <= 1'b0;
                     end else if (casestate_q != S_CSRAM) begin
                         hs_st(S_CSRAM);
+                    end else if (csr_done) begin
+                        // beat 2: the captured byte -> value stack (writes
+                        // answer undefined; reads the low byte — every arena
+                        // region is one byte per word, except CART which is
+                        // written packed and never read back here).
+                        csr_done <= 1'b0;
+                        vst_wr(vnat_base, csr_is_write
+                            ? V64_UNDEFINED
+                            : v64_int32_number({24'd0, csr_rd_q}));
+                        hs_vsp(vnat_base + 12'd1);
+                        hs_ip(ip + 16'd1);
+                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_st(S_FETCH_WAIT);
                     end else if (!csr_pend) begin
                         if (e64_csr_oob_q) begin
                             // Out of range is -1, not a fault: the tokenizer
@@ -14202,19 +14223,13 @@ module jmr_js_vm #(
                             csr_pend   <= 1'b1;
                         end
                     end else if (sram_ack) begin
+                        // beat 1: capture only (the crossing is now one
+                        // register deep); the stack write happens above.
                         sram_req <= 1'b0;
                         sram_we  <= 1'b0;
                         csr_pend <= 1'b0;
-                        // Writes answer undefined; reads answer the low byte
-                        // (every arena region is one byte per word, except
-                        // CART which is written packed and never read back).
-                        vst_wr(vnat_base, csr_is_write
-                            ? V64_UNDEFINED
-                            : v64_int32_number({24'd0, sram_rdata[7:0]}));
-                        hs_vsp(vnat_base + 12'd1);
-                        hs_ip(ip + 16'd1);
-                        hs_code(15'(ops_base + ip + 16'd1));
-                        hs_st(S_FETCH_WAIT);
+                        csr_rd_q <= sram_rdata[7:0];
+                        csr_done <= 1'b1;
                     end
                 end
                 S_V64_MINMAX: begin

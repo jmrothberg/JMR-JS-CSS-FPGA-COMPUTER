@@ -372,6 +372,7 @@ module jmr_console_engine (
     // whenever the index moved, so each loop iteration self-paces to two
     // beats. line[] is frozen post-Enter, so the pipe is always coherent.
     logic [7:0] ch_ni_q;
+    logic       ni_end_q, ni_end1_q;
     logic [6:0] ni_q;
     // Same recipe for the reply-message ROM (run-38 head, 13 levels:
     // reply_char's sel*idx case fed state/reply CEs combinationally).
@@ -540,6 +541,12 @@ module jmr_console_engine (
     always_ff @(posedge clk) begin
         ch_ni_q <= line[name_i];
         ni_q    <= name_i;
+        // run 71c: the LIST-range parser's end tests, registered from the
+        // same name_i sample as ni_q (the ni_q != name_i stall keeps them
+        // consistent; line_len is static while these states run). The
+        // unregistered compares were run 71b's leader (-0.134, 13 levels).
+        ni_end_q  <= (name_i >= line_len);
+        ni_end1_q <= (name_i + 1'b1 >= line_len);
         reply_ch_q <= reply_char(reply_sel, reply_idx);
         ridx_q     <= reply_idx;
         rsel_q     <= reply_sel;
@@ -1929,13 +1936,13 @@ module jmr_console_engine (
                 C_LIST_PARSE: begin
                     if (ni_q != name_i) begin
                         // char pipe settling
-                    end else if (name_i >= line_len) begin
+                    end else if (ni_end_q) begin
                         state <= C_LIST_INIT;
                     end else if (is_sp(ch_ni_q)) begin
                         name_i <= name_i + 1'b1;
                     end else if (ch_ni_q == "-") begin
                         // LIST -  or LIST -m
-                        if (name_i + 1'b1 >= line_len) begin
+                        if (ni_end1_q) begin
                             list_page <= 1'b1;
                             state <= C_LIST_INIT;
                         end else begin
@@ -1956,7 +1963,7 @@ module jmr_console_engine (
                 C_LIST_PAR_LO: begin
                     if (ni_q != name_i) begin
                         // char pipe settling
-                    end else if (name_i >= line_len) begin
+                    end else if (ni_end_q) begin
                         // NEW: list_hi must use peel_mag — same-cycle list_lo is still old
                         list_lo <= (peel_mag == 0) ? 16'd10 : peel_mag;
                         list_hi <= (peel_mag == 0) ? 16'd10 : peel_mag;
@@ -1978,7 +1985,7 @@ module jmr_console_engine (
                 C_LIST_PAR_HI: begin
                     if (ni_q != name_i) begin
                         // char pipe settling
-                    end else if (name_i >= line_len) begin
+                    end else if (ni_end_q) begin
                         list_hi <= (peel_mag == 0) ? 16'hFFFF : peel_mag;
                         state <= C_LIST_INIT;
                     end else if (ch_ni_q >= "0" && ch_ni_q <= "9") begin

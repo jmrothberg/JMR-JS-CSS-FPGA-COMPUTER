@@ -174,6 +174,24 @@ met by +4.777. Synth 8-6849 count 42 (70b: 36). Run 71 archived at
 build/runs/run71_bigput_crc_sdwd_status_WNS-0.448 (all DCPs + reports);
 refused bit kept under build/bits/auto/*WNSFAIL-0.448*.
 
+**Run 71b (tree dafe76e, cones 1+2 retired, launched 15:05, routed in 9
+min):** WNS **-0.134** / WHS +0.022, only 4 violated endpoints — leader
+`u_cons name_i -> state[1]` (13 levels, 71% route), then the CSR crossing
+(-0.077). Two re-place horses from its post_opt.dcp (scratchpad horse.tcl,
+archived with the run): **AltSpreadLogic_high MET +0.009 / +0.050** (thin;
+worst = the CSR crossing) — published as
+`build/bits/run71b_horse_AltSpreadLogic_high_cones_bigput_WNS+0.009_thin.bit`
+(flash-for-testing per the run-51 rule; artifacts in build/runs/run71b_horse_*);
+ExtraTimingOpt -0.163. The run-71 -0.448 bit is also kept for testing.
+
+**Run 71c (durable margin):** S_CSRAM now captures the bridge byte into
+`csr_rd_q` at the ack and finishes one beat later (the crossing is one
+register deep; +1 vm beat per CSR op — invisible on a compile), and the
+LIST-range parser's `name_i >= line_len` tests are registered
+(`ni_end_q`/`ni_end1_q`, consistent with the existing ni_q stall). New
+RTL gate test_rtl_run71c_csram_read_write_two_beat (srcByte/srcLen/
+stgRead/stgWrite — the compile ABI had NO RTL gate before).
+
 Scope chosen by the user: transfer checking, no lock-ups, STATUS, cheap
 language gaps, load-speed instrument; congestion-neutral, no clock change,
 capacity growth dropped (the "15 dead BRAM tiles" premise was wrong: the
