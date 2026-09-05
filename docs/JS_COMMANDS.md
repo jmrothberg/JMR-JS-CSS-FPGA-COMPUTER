@@ -391,6 +391,12 @@ Typed at the `>` prompt, same idea as BASIC `LOAD` / `RUN`:
 `LOAD "NAME.HTML"` `LIST` `EDIT` `COMPILE` `SAVE` `RUN` `NEW` `CLS` `HELP`
 `MEM` `REMOVE "NAME.EXT"` — quotes optional on filenames; the delete verb
 is **REMOVE**, not DELETE. `DIR` is titles; `DIR *` also shows `.JSH` / `.ART`.
+**Run 71:** `STATUS` prints the loaded title, its byte length, TRUNC if the
+file exceeded the 64 KB window, HTML/JS, and the last fault's site + value.
+`EDIT n` and typed numbered lines are gone — the editor is EDITOR.JSH via
+bare `EDIT`. A tether transfer whose CRC-32 fails prints `?CK` and is
+discarded (the host resends). A silent SD card now answers `?IO` instead of
+wedging the console until power-cycle.
 `ESC` is machine BREAK (games must not steal it). F8 in the host GUI puts
 a file on the card (host `storage/` or `card.img`).
 
