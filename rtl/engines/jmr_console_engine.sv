@@ -250,13 +250,10 @@ module jmr_console_engine (
         C_LIST_CNWR, C_LIST_CNWR_W, C_LIST_COPEN, C_LIST_COPENW,
         C_LIST_CARD_GB, C_LIST_CARD_GBW, C_LIST_CARD_FIRST, C_LIST_PUT_CARD,
         C_LIST_CCLOSE, C_LIST_CCLOSEW,
-        // NEW: CLS + EDIT n
-        C_CLS, C_EDIT_PARSE, C_EDIT_FIND, C_EDIT_RD, C_EDIT_CH,
-        C_EDIT_SHOW, C_EDIT_PEEL, C_EDIT_EMIT, C_EDIT_SP, C_EDIT_BODY,
-        C_EDIT_BODY_RD, C_EDIT_BODY_CH, C_EDIT_BODY_PUT, C_EDIT_ARM,
-        C_EDIT_REPL, C_EDIT_GROW, C_EDIT_GROW_RD, C_EDIT_GROW_WR,
-        C_EDIT_SHRINK, C_EDIT_SHRINK_RD, C_EDIT_SHRINK_WR,
-        C_EDIT_WR_NEW, C_EDIT_WR_WAIT, C_EDIT_WR_NL,
+        // CLS. (Run 71: the 23 inline numbered-line EDIT states were retired —
+        // EDITOR.JSH is the one editor; `EDIT n` and numbered lines say ?SN.
+        // That freed the console's FSM encodings for CRC/STATUS/burst.)
+        C_CLS,
         // NEW: load companion .JSB from FAT into VM code BRAM
         C_JSB_PREP, C_JSB_NWR_W, C_JSB_OPEN, C_JSB_OPENW,
         C_JSB_GB, C_JSB_GBW, C_JSB_CLOSE, C_JSB_CLOSEW,
@@ -450,10 +447,6 @@ module jmr_console_engine (
     logic [7:0]  digs [0:4];
     logic [2:0]  dig_n, dig_i;
     // NEW: EDIT n
-    logic        edit_pending;
-    logic [15:0] edit_disp;
-    logic [17:0] edit_start, edit_end;  // byte offsets of target line
-    logic [17:0] edit_copy_i, edit_new_len;
     logic [4:0]  peel_tmp;  // NEW: /10 peel scratch (no nested logic decls)
 
     // Case-insensitive compare helpers (FIFO no longer folds a-z)
@@ -479,7 +472,7 @@ module jmr_console_engine (
     logic        kbd_avail_q; // registered !kbd_empty for C_IDLE (run 70)
     logic [16:0] drain_ctr; // hold kbd_clear ~1.3ms: a PS/2 scancode
     // mid-flight at ESC lands AFTER a 1-cycle clear (board: one key leaked)
-    logic p_help_q, p_dir_q, p_dir_star_q, p_cls_q, p_list_q, p_edit_q, p_mem_q,
+    logic p_help_q, p_dir_q, p_dir_star_q, p_cls_q, p_list_q, p_mem_q,
           p_new_q, p_run_q, p_load_q, p_save_q, p_remove_q, p_compile_q,
           p_edit_bare_q, p_empty_q,
           p_len4_q;
@@ -499,7 +492,6 @@ module jmr_console_engine (
                        || (line_len == 5 && is_sp(line[3]) && line[4]=="*")));
         p_cls_q  <= (line_len == 3 && up(line[0])=="C" && up(line[1])=="L" && up(line[2])=="S");
         p_list_q <= (line_len >= 4 && up(line[0])=="L" && up(line[1])=="I" && up(line[2])=="S" && up(line[3])=="T" && (line_len == 4 || is_sp(line[4])));
-        p_edit_q <= (line_len >= 5 && up(line[0])=="E" && up(line[1])=="D" && up(line[2])=="I" && up(line[3])=="T" && is_sp(line[4]));
         p_mem_q  <= (line_len == 3 && up(line[0])=="M" && up(line[1])=="E" && up(line[2])=="M");
         p_new_q  <= (line_len == 3 && up(line[0])=="N" && up(line[1])=="E" && up(line[2])=="W");
         p_run_q  <= (line_len >= 3 && up(line[0])=="R" && up(line[1])=="U" && up(line[2])=="N" && (line_len == 3 || is_sp(line[3])));
@@ -716,8 +708,6 @@ module jmr_console_engine (
             list_disp <= 16'd10; list_on_page <= 0; list_skip <= 0;
             list_col <= 0; list_wrap_more <= 0; list_eat_nl <= 0;
             list_from_card <= 0; list_bol <= 0;
-            edit_pending <= 0; edit_disp <= 0;
-            edit_start <= 0; edit_end <= 0;
         end else begin
             enable_q <= enable;
             kbd_pop <= 0;
@@ -870,13 +860,7 @@ module jmr_console_engine (
                     reply_sel <= 4'd3; // ?
                     cmd_is_load <= 0; cmd_is_save <= 0; cmd_is_remove <= 0;
                     // NEW: EDIT waiting — next typed line replaces that source line
-                    if (edit_pending) begin
-                        edit_pending <= 0;
-                        src_i <= 0;
-                        edit_copy_i <= 0;
-                        edit_new_len <= {9'h0, line_len};
-                        state <= C_EDIT_REPL;
-                    end else if (p_empty_q) begin
+                    if (p_empty_q) begin
                         // run-55 -0.466 leader: raw line_len==0 at the ladder
                         // root put line_len into every arm's CE. Registered
                         // predicate, same 2-cycle-stable contract as p_*_q.
@@ -910,11 +894,6 @@ module jmr_console_engine (
                             name_i <= 5;
                             state <= C_LIST_PARSE;
                         end
-                    end else if (p_edit_q) begin
-                        // NEW: EDIT n
-                        name_i <= 5;
-                        peel_mag <= 0;
-                        state <= C_EDIT_PARSE;
                     end else if (p_mem_q) begin
                         reply_sel <= 4'd1; reply_idx <= 0; state <= C_REPLY;
                     end else if (p_new_q) begin
@@ -2277,225 +2256,6 @@ module jmr_console_engine (
                     list_from_card <= 1'b0;
                     msg_idx <= 0;
                     state <= C_PROMPT;
-                end
-
-                // ---- EDIT n ---------------------------------------------
-                C_EDIT_PARSE: begin
-                    if (ni_q != name_i) begin
-                        // char pipe settling
-                    end else if (name_i >= line_len) begin
-                        if (peel_mag == 0) begin
-                            reply_sel <= 4'd3; reply_idx <= 0; state <= C_REPLY;
-                        end else begin
-                            edit_disp <= peel_mag;
-                            src_i <= 0;
-                            list_disp <= 16'd10;
-                            edit_start <= 0;
-                            state <= C_EDIT_FIND;
-                        end
-                    end else if (is_sp(ch_ni_q)) begin
-                        name_i <= name_i + 1'b1;
-                    end else if (ch_ni_q >= "0" && ch_ni_q <= "9") begin
-                        peel_mag <= peel_mag * 16'd10 + {12'h0, ch_ni_q - "0"};
-                        name_i <= name_i + 1'b1;
-                    end else if (peel_mag == 0) begin
-                        reply_sel <= 4'd3; reply_idx <= 0; state <= C_REPLY;
-                    end else begin
-                        edit_disp <= peel_mag;
-                        src_i <= 0;
-                        list_disp <= 16'd10;
-                        edit_start <= 0;
-                        state <= C_EDIT_FIND;
-                    end
-                end
-                C_EDIT_FIND: begin
-                    if (list_disp == edit_disp) begin
-                        edit_start <= src_i;
-                        state <= C_EDIT_SHOW;
-                    end else if (src_i >= src_len) begin
-                        reply_sel <= 4'd3; reply_idx <= 0; state <= C_REPLY;
-                    end else begin
-                        src_req <= 1'b1; src_we <= 1'b0;
-                        src_addr <= src_i[16:0];
-                        state <= C_EDIT_RD;
-                    end
-                end
-                C_EDIT_RD: if (src_gnt) begin
-                    rd_ch <= src_rdata;
-                    state <= C_EDIT_CH;
-                end
-                C_EDIT_CH: begin
-                    // NEW: advance to next byte (src_i+1) — old path re-read
-                    // SOURCE+src_i and left edit_start one past the line start
-                    if (rd_ch == 8'h0A || rd_ch == 8'h0D) begin
-                        src_i <= src_i + 1'b1;
-                        list_disp <= list_disp + 16'd10;
-                        state <= C_EDIT_FIND;
-                    end else if (src_i + 1'b1 >= src_len) begin
-                        src_i <= src_i + 1'b1;
-                        list_disp <= list_disp + 16'd10;
-                        state <= C_EDIT_FIND;
-                    end else begin
-                        src_i <= src_i + 1'b1;
-                        src_req <= 1'b1; src_we <= 1'b0;
-                        src_addr <= src_i[16:0] + 17'd1;
-                        state <= C_EDIT_RD;
-                    end
-                end
-                C_EDIT_SHOW: begin
-                    peel_mag <= edit_disp;
-                    dig_n <= 0;
-                    state <= C_EDIT_PEEL;
-                end
-                C_EDIT_PEEL: begin
-                    if (peel_mag == 0 && dig_n != 0) begin
-                        dig_i <= dig_n;
-                        state <= C_EDIT_EMIT;
-                    end else if (peel_mag == 0) begin
-                        digs[0] <= "0"; dig_n <= 1; dig_i <= 1;
-                        state <= C_EDIT_EMIT;
-                    end else begin
-                        digs[dig_n] <= 8'("0") + 8'(peel_mag % 16'd10);
-                        peel_mag <= peel_mag / 16'd10;
-                        dig_n <= dig_n + 3'd1;
-                    end
-                end
-                C_EDIT_EMIT: begin
-                    if (dig_i == 0) state <= C_EDIT_SP;
-                    else if (!video_busy) begin
-                        dig_i <= dig_i - 3'd1;
-                        put_en <= 1'b1;
-                        put_char <= digs[dig_i - 3'd1];
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_EDIT_EMIT;
-                    end
-                end
-                C_EDIT_SP: if (!video_busy) begin
-                    put_en <= 1'b1;
-                    put_char <= " ";
-                    src_i <= edit_start;
-                    state <= C_WAIT_VIDEO;
-                    ret_state <= C_EDIT_BODY;
-                end
-                C_EDIT_BODY: begin
-                    src_req <= 1'b1; src_we <= 1'b0;
-                    src_addr <= src_i[16:0];
-                    state <= C_EDIT_BODY_RD;
-                end
-                C_EDIT_BODY_RD: if (src_gnt) begin
-                    rd_ch <= src_rdata;
-                    state <= C_EDIT_BODY_CH;
-                end
-                C_EDIT_BODY_CH: begin
-                    if (rd_ch == 8'h0A || rd_ch == 8'h0D || src_i >= src_len) begin
-                        edit_end <= src_i;  // points at NL or past end
-                        if (!video_busy) begin
-                            print_nl <= 1'b1;
-                            state <= C_WAIT_VIDEO;
-                            ret_state <= C_EDIT_ARM;
-                        end
-                    end else if (rd_ch >= 8'h20 && rd_ch < 8'h7F) begin
-                        state <= C_EDIT_BODY_PUT;
-                    end else begin
-                        src_i <= src_i + 1'b1;
-                        state <= C_EDIT_BODY;
-                    end
-                end
-                C_EDIT_BODY_PUT: if (!video_busy) begin
-                    put_en <= 1'b1;
-                    put_char <= rd_ch;
-                    src_i <= src_i + 1'b1;
-                    state <= C_WAIT_VIDEO;
-                    ret_state <= C_EDIT_BODY;
-                end
-                C_EDIT_ARM: begin
-                    // Prefill done on glass; next Enter line replaces this source line
-                    edit_pending <= 1'b1;
-                    msg_idx <= 6;  // skip READY — just "> "
-                    state <= C_PROMPT;
-                end
-                // Replace: shift tail by delta first, then write new text + NL
-                C_EDIT_REPL: begin
-                    if (18'({8'h0, line_len}) + 18'd1 > (edit_end - edit_start + 18'd1)) begin
-                        peel_mag <= 16'(18'({8'h0, line_len}) + 18'd1 - (edit_end - edit_start + 18'd1));
-                        edit_copy_i <= src_len;
-                        state <= C_EDIT_GROW;
-                    end else if (18'({8'h0, line_len}) + 18'd1 < (edit_end - edit_start + 18'd1)) begin
-                        peel_mag <= 16'((edit_end - edit_start + 18'd1) - (18'({8'h0, line_len}) + 18'd1));
-                        edit_copy_i <= edit_end + 18'd1;
-                        state <= C_EDIT_SHRINK;
-                    end else begin
-                        name_i <= 0;
-                        src_i <= edit_start;
-                        state <= C_EDIT_WR_NEW;
-                    end
-                end
-                C_EDIT_GROW: begin
-                    if (edit_copy_i == (edit_end + 18'd1) || src_len == edit_end + 18'd1) begin
-                        src_len <= src_len + {2'b0, peel_mag};
-                        name_i <= 0;
-                        src_i <= edit_start;
-                        state <= C_EDIT_WR_NEW;
-                    end else begin
-                        src_req <= 1'b1; src_we <= 1'b0;
-                        src_addr <= 17'(edit_copy_i - 18'd1);
-                        state <= C_EDIT_GROW_RD;
-                    end
-                end
-                C_EDIT_GROW_RD: if (src_gnt) begin
-                    rd_ch <= src_rdata;
-                    src_req <= 1'b1; src_we <= 1'b1;
-                    src_addr <= 17'((edit_copy_i - 18'd1) + {2'b0, peel_mag});
-                    src_wdata <= src_rdata;
-                    state <= C_EDIT_GROW_WR;
-                end
-                C_EDIT_GROW_WR: if (src_gnt) begin
-                    edit_copy_i <= edit_copy_i - 18'd1;
-                    state <= C_EDIT_GROW;
-                end
-                C_EDIT_SHRINK: begin
-                    if (edit_copy_i >= src_len) begin
-                        src_len <= src_len - {2'b0, peel_mag};
-                        name_i <= 0;
-                        src_i <= edit_start;
-                        state <= C_EDIT_WR_NEW;
-                    end else begin
-                        src_req <= 1'b1; src_we <= 1'b0;
-                        src_addr <= edit_copy_i[16:0];
-                        state <= C_EDIT_SHRINK_RD;
-                    end
-                end
-                C_EDIT_SHRINK_RD: if (src_gnt) begin
-                    rd_ch <= src_rdata;
-                    src_req <= 1'b1; src_we <= 1'b1;
-                    src_addr <= 17'(edit_copy_i - {2'b0, peel_mag});
-                    src_wdata <= src_rdata;
-                    state <= C_EDIT_SHRINK_WR;
-                end
-                C_EDIT_SHRINK_WR: if (src_gnt) begin
-                    edit_copy_i <= edit_copy_i + 18'd1;
-                    state <= C_EDIT_SHRINK;
-                end
-                C_EDIT_WR_NEW: begin
-                    if (name_i >= line_len) begin
-                        src_req <= 1'b1; src_we <= 1'b1;
-                        src_addr <= src_i[16:0];
-                        src_wdata <= 8'h0A;
-                        state <= C_EDIT_WR_NL;
-                    end else begin
-                        src_req <= 1'b1; src_we <= 1'b1;
-                        src_addr <= src_i[16:0];
-                        src_wdata <= line[name_i];
-                        state <= C_EDIT_WR_WAIT;
-                    end
-                end
-                C_EDIT_WR_WAIT: if (src_gnt) begin
-                    name_i <= name_i + 1'b1;
-                    src_i <= src_i + 1'b1;
-                    state <= C_EDIT_WR_NEW;
-                end
-                C_EDIT_WR_NL: if (src_gnt) begin
-                    reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
                 end
 
                 // ---- RUN → FAT-load companion .JSB into code BRAM ----------
