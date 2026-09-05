@@ -584,13 +584,46 @@ class BoardBackend(RuntimeBackend):
     def trace_path(self) -> Optional[Path]:
         return self._log.path
 
-    def _wait_glass(self, pred, timeout: float) -> bool:
+    def _wait_glass(self, pred, timeout: float, fail_pred=None) -> bool:
+        """Poll the tether until pred() or timeout. 2026-09-04: pumps the
+        GUI (run_wait_idle, the FPGA-SIM pattern) so a long wait never
+        freezes Tk, and returns early when fail_pred() sees an error reply
+        (?IO / ?TR / ?NB ...) — before, a SAVE that answered ?IO froze the
+        window for the full 90 s while the board sat happily at READY."""
         t0 = time.monotonic()
         while time.monotonic() - t0 < timeout:
             self.poll()
             if pred():
                 return True
+            if fail_pred is not None and fail_pred():
+                return False
+            pump = getattr(self, "run_wait_idle", None)
+            if pump is not None:
+                try:
+                    pump()
+                except Exception:
+                    pass
             time.sleep(0.05)
+        return False
+
+    def _glass_error_row(self):
+        """The most recent console error reply on the mirror, or None."""
+        for r in reversed(self._rows):
+            t = r.strip()
+            if t.startswith("?"):
+                return t
+        return None
+
+    @property
+    def more_waiting(self) -> bool:
+        """True while the board's DIR/LIST is parked on -- MORE -- (last
+        non-empty mirror row). Lets the GUI page with Space instead of
+        typing a LINE into the pager, and keeps the prompt overlay off the
+        listing (2026-09-04: DIR rows looked 'scrolled off')."""
+        for r in reversed(self._rows):
+            t = r.strip()
+            if t:
+                return t.startswith("-- MORE")
         return False
 
     def _src_tether_save(self, name: str, data: bytes) -> None:
@@ -603,12 +636,18 @@ class BoardBackend(RuntimeBackend):
             self._ser.write(mv[i : i + 16384])
         self._ser.flush()
         self._log.note(f"PROG SOURCE stream {name} {len(data)} bytes")
+        before = self._glass_error_row()
         self.type_line(f'SAVE "{name}"')
-        if not self._wait_glass(
-            lambda: any("SAVED" in r.upper() for r in self._rows), 90.0
-        ):
+        ok = self._wait_glass(
+            lambda: any("SAVED" in r.upper() for r in self._rows),
+            30.0,
+            fail_pred=lambda: self._glass_error_row() not in (None, before),
+        )
+        if not ok:
+            err = self._glass_error_row()
             raise RuntimeError(
-                f"SAVE {name} did not print SAVED — need a bit with 0xFC SOURCE put"
+                f"SAVE {name}: board answered {err}" if err and err != before
+                else f"SAVE {name} did not print SAVED within 30 s — need a bit with 0xFC SOURCE put"
             )
 
     @staticmethod

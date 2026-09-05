@@ -229,7 +229,8 @@ class App:
         # MORE waiter: pump Tk + refresh glass (BASIC more_idle pattern)
         self.machine.more_idle = self._more_idle
         for b in self.backends:
-            if getattr(b, "name", "") == "FPGA-SIM":
+            # 2026-09-04: BOARD too — its SAVE/PUT waits used to block Tk
+            if getattr(b, "name", "") in ("FPGA-SIM", "BOARD"):
                 b.run_wait_idle = self._more_idle
 
         # bind_all so arrows work even if focus is weird (no Text widget to steal them)
