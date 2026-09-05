@@ -188,6 +188,7 @@ module top_nexys_video (
     logic [47:0]  vm_gdbg;
     logic        vm_vdbg_fault;
     logic [6:0] stor_dbg_state;
+    logic [15:0] stor_dbg_op_clk;
     logic [6:0] cons_dbg_state;
     logic [5:0] joy_out;
     logic [18:0] fb_raddr;
@@ -236,6 +237,7 @@ module top_nexys_video (
         .ps2_strobe(ps2_strobe),
         .ps2_code(ps2_scancode),
         .stor_state(stor_dbg_state),
+        .stor_op_clk(stor_dbg_op_clk),
         .cons_state(cons_dbg_state),
         .vm_vdbg(vm_vdbg), .vm_vdbg_fault(vm_vdbg_fault),
         .vm_hdbg(vm_hdbg), .vm_fdbg(vm_fdbg), .vm_fdbg_v(vm_fdbg_v),
@@ -255,6 +257,7 @@ module top_nexys_video (
         .standalone_mode(1'b1),
         .sd_card_present(~sd_cd),
         .stor_dbg_state_o(stor_dbg_state),
+        .stor_dbg_op_clk_o(stor_dbg_op_clk),
         .cons_dbg_state_o(cons_dbg_state),
         .game_view_o(game_view),
         .vdbg_o(vm_vdbg), .vdbg_fault_o(vm_vdbg_fault),

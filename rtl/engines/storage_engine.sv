@@ -55,6 +55,7 @@ module storage_engine #(
     output logic        done,             // one-cycle command completion
     output logic        busy,
     output logic [6:0]  dbg_state, // board telemetry: which state a stall parks in
+    output logic [15:0] dbg_op_clk, // run 71: clocks (x256, saturating) the current/last op took
 
     // -- print_engine character sink (FILE_PRINT_VALUE) --------------------
     // Same hand-shake shape as video_engine: hold wr_en until sink_busy rises.
@@ -294,6 +295,20 @@ module storage_engine #(
     logic [15:0] nl_acc;
 
     assign busy      = (state != S_IDLE);
+    // run 71 instrument: how long each storage op takes, in 256-clock units,
+    // saturating. Rides the E-line so the flight log can split LOAD/COMPILE
+    // time into SD-sector time vs per-byte handshakes before anyone builds
+    // a burst path. Reset when a new op is accepted (S_IDLE with a start).
+    logic [23:0] op_clk_r;
+    assign dbg_op_clk = op_clk_r[23:8];
+    always_ff @(posedge clk) begin
+        if (!rst_n) op_clk_r <= 24'd0;
+        else if (state == S_IDLE) begin
+            if (start_open || start_close || start_readline || start_readfield || start_get_byte
+                || start_nl_scan || start_putc || start_dir || start_dir_next || start_delete)
+                op_clk_r <= 24'd0;
+        end else if (!(&op_clk_r)) op_clk_r <= op_clk_r + 24'd1;
+    end
     assign dbg_state = state;
     assign done      = done_r;
     assign eof       = eof_r;

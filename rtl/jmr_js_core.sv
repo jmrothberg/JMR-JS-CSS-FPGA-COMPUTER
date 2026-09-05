@@ -33,6 +33,7 @@ module jmr_js_core #(
     input  logic [7:0]  analog_y,
     input  logic [4:0]  joy_btn,
     output logic [6:0]  stor_dbg_state_o,
+    output logic [15:0] stor_dbg_op_clk_o,   // run 71
     output logic [6:0]  cons_dbg_state_o,
     output logic        game_view_o,
     output logic [31:0] vdbg_o,
@@ -128,6 +129,7 @@ module jmr_js_core #(
     // payload during RUN load; the VM blitter reads sprite pixels while running.
     // The two masters never overlap (load completes before vm_start).
     logic [6:0]  stor_dbg_state;
+    logic [15:0] stor_dbg_op_clk;
     logic [17:0] vm_src_setlen;
     logic        vm_src_setlen_stb;
     logic        cons_sram_req, cons_sram_we, vm_sram_req, vm_sram_we;
@@ -340,7 +342,7 @@ module jmr_js_core #(
         .dir_show_all(stor_dir_all),
         .start_delete(stor_delete),
         .card_present(sd_card_present),
-        .dbg_state(stor_dbg_state),
+        .dbg_state(stor_dbg_state), .dbg_op_clk(stor_dbg_op_clk),
         .line_len(stor_line_len), .eof(stor_eof), .err(stor_err),
         .done(stor_done), .busy(stor_busy),
         .sink_wr_en(1'b0), .sink_wr_char(8'h0), .sink_busy(),
@@ -417,6 +419,7 @@ module jmr_js_core #(
     // canvas is single-surface now: back/front dumps are the same data
     assign dump_back_rdata = dump_fb_rdata;
     assign stor_dbg_state_o = stor_dbg_state;
+    assign stor_dbg_op_clk_o = stor_dbg_op_clk;
     assign game_view_o = game_view;
     logic game_mode_q2;
     always_ff @(posedge clk) game_mode_q2 <= game_mode;

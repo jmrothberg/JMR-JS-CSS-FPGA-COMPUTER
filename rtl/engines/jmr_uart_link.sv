@@ -155,6 +155,7 @@ module jmr_uart_link #(
     // storage state telemetry: "Dxx" line when it CHANGES while busy
     // (a stalled DIR parks in one state - one line names it)
     input  logic [6:0] stor_state = 7'd0,
+    input  logic [15:0] stor_op_clk = 16'd0,   // run 71: E line carries it
     input  logic [6:0] cons_state = 7'd0,
     // BOARD VM heartbeat: packed {0,st[6:0],fault[7:0],ip[15:0]}, already
     // registered in the VM domain - sampled here as a plain register.
@@ -335,7 +336,7 @@ module jmr_uart_link #(
     typedef enum logic [4:0] {
         HB_IDLE, HB_HDR, HB_ROW, HB_ROW2, HB_COLON, HB_BYTE, HB_NL, HB_K, HB_KH, HB_KL, HB_KNL,
         HB_V, HB_VN, HB_VNL, HB_E2, HB_E3,
-        HB_H, HB_HN, HB_F, HB_FN, HB_T, HB_TN, HB_G, HB_GN
+        HB_H, HB_HN, HB_F, HB_FN, HB_T, HB_TN, HB_G, HB_GN, HB_E4
     } hb_t;
     hb_t hb_state;
     // run-60 observability serializers
@@ -345,6 +346,8 @@ module jmr_uart_link #(
     logic [2:0]  h_nib;
     logic [3:0]  f_nib;
     logic [4:0]  t_nib;
+    logic [15:0] e_op_q;
+    logic [1:0]  e_nib;
     logic        g_pending;
     logic [47:0] g_latch;
     logic [3:0]  g_nib;
@@ -401,7 +404,7 @@ module jmr_uart_link #(
             fdbg_v_q <= 1'b0;
             vfault_q <= 1'b0; dump_active_q <= 1'b0;
             d_code_q <= 8'd0; d_dwell <= 26'd0;
-            e_pending <= 1'b0; e_chg <= 1'b0; e_code_q <= 8'd0; e_cons_q <= 8'd0; e_beat <= 27'd0; v_beat_q <= 1'b0;
+            e_pending <= 1'b0; e_chg <= 1'b0; e_code_q <= 8'd0; e_cons_q <= 8'd0; e_op_q <= 16'd0; e_beat <= 27'd0; v_beat_q <= 1'b0;
             dump_byte_q <= 8'h20;
         end else begin
             wr_en <= 1'b0;
@@ -467,6 +470,7 @@ module jmr_uart_link #(
                     e_pending <= 1'b1;
                     e_code_q  <= {1'b0, stor_state};
                     e_cons_q  <= {1'b0, cons_state};
+                    e_op_q    <= stor_op_clk;
                     e_chg     <= 1'b0;
                 end
             // Sample VRAM/FB one cycle ahead of HB_BYTE consume
@@ -549,7 +553,15 @@ module jmr_uart_link #(
                 HB_E3: if (!tx_busy) begin
                     wr_en <= 1'b1;
                     wr_data <= hex_digit(e_cons_q[3:0]);
-                    hb_state <= HB_KNL;
+                    e_nib <= 2'd3;
+                    hb_state <= HB_E4;
+                end
+                // run 71: Exxyyzzzz — zzzz = storage op duration (x256 clk)
+                HB_E4: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= hex_digit(e_op_q[{e_nib, 2'b00} +: 4]);
+                    if (e_nib == 2'd0) hb_state <= HB_KNL;
+                    else e_nib <= e_nib - 2'd1;
                 end
                 HB_V: if (!tx_busy) begin
                     wr_en <= 1'b1;

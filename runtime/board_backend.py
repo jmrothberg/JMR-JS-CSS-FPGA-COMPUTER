@@ -327,14 +327,20 @@ class BoardBackend(RuntimeBackend):
                 # storage stalled >0.67s in one state - names the wedge
                 self._log.note(f"STOR-STALL state=0x{line[1:]}")
                 continue
-            if line and line[0] == "E" and len(line) in (3, 5):
+            if line and line[0] == "E" and len(line) in (3, 5, 9):
                 # free-running storage(+console)-state beat (change-only log).
-                # len 3 = run-48 bits (stor only); len 5 = run-49+ (stor+cons)
-                if line[1:] != getattr(self, "_stor_beat", None):
-                    self._stor_beat = line[1:]
+                # len 3 = run-48 bits (stor only); len 5 = run-49+ (stor+cons);
+                # len 9 = run-71+ (+ op duration, x256 clocks, saturating)
+                if line[1:5] != getattr(self, "_stor_beat", None):
+                    self._stor_beat = line[1:5]
                     tag = f"stor=0x{line[1:3]}"
-                    if len(line) == 5:
+                    if len(line) >= 5:
                         tag += f" cons=0x{line[3:5]}"
+                    if len(line) == 9:
+                        try:
+                            tag += f" op_ms={int(line[5:9], 16) * 256 / 100000.0:.2f}"
+                        except ValueError:
+                            pass
                     self._log.note(f"STOR-BEAT {tag}")
                 continue
             if line == "K" or (len(line) == 3 and line[0] == "K"):
@@ -517,6 +523,12 @@ class BoardBackend(RuntimeBackend):
             self._ser.flush()
         except Exception as e:
             self._log.fault("SERIAL", str(e))
+            if "Errno 5" in str(e) and self._reopen_serial():
+                try:
+                    self._ser.write((text + "\n").encode("ascii", errors="replace"))
+                    self._ser.flush()
+                except Exception as e2:
+                    self._log.fault("SERIAL", f"retry failed: {e2}")
 
     def _html_loaded_stem(self) -> str:
         name = (self._loaded_name or "").upper()
@@ -601,6 +613,29 @@ class BoardBackend(RuntimeBackend):
 
     def trace_path(self) -> Optional[Path]:
         return self._log.path
+
+    def _reopen_serial(self) -> bool:
+        """run 71 (item H): [Errno 5] Input/output error = the USB-serial
+        device went away mid-write (marginal cable/port). Close, re-find the
+        port, reopen once; the caller retries its write."""
+        try:
+            if self._ser is not None:
+                self._ser.close()
+        except Exception:
+            pass
+        self._ser = None
+        port = _find_serial_port()
+        if not port:
+            self._log.fault("SERIAL", "port gone after I/O error — check the USB cable/port")
+            return False
+        try:
+            import serial
+            self._ser = serial.Serial(port, 115200, timeout=0.05)
+            self._log.note(f"reopened {port} after I/O error (USB cable/port hiccup)")
+            return True
+        except Exception as e:
+            self._log.fault("SERIAL", f"reopen failed: {e} — check the USB cable/port")
+            return False
 
     def _wait_glass(self, pred, timeout: float, fail_pred=None) -> bool:
         """Poll the tether until pred() or timeout. 2026-09-04: pumps the
