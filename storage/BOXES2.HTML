@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Sixteen boxes — JMR</title></head>
+<body style="margin:0;background:#000">
+<!-- LOAD "BOXES2.HTML" then RUN. 4x4 fillRect grid; hex literals only (FSTY). -->
+<canvas id="gameCanvas" width="640" height="480"></canvas>
+<script>
+var canvas = document.querySelector("canvas");
+var c = canvas.getContext("2d");
+c.imageSmoothingEnabled = false;
+
+var W = 640;
+var H = 480;
+var n = 0;
+var _boxesOnce = 0;
+
+console.log("BOXES2");
+
+function loop() {
+  n = n + 1;
+
+  if (!_boxesOnce) {
+    c.fillStyle = "#000000";
+    c.fillRect(0, 0, W, H);
+    // PAL8 frozen 0..7 then harvested extras. Chip does not parse colour
+    // strings: each #rrggbb must be a source literal for the FSTY table.
+    c.fillStyle = "#FF0000";
+    c.fillRect(24, 56, 136, 80);
+    c.fillStyle = "#00FF00";
+    c.fillRect(176, 56, 136, 80);
+    c.fillStyle = "#0000FF";
+    c.fillRect(328, 56, 136, 80);
+    c.fillStyle = "#FFFF00";
+    c.fillRect(480, 56, 136, 80);
+    c.fillStyle = "#00FFFF";
+    c.fillRect(24, 152, 136, 80);
+    c.fillStyle = "#FF00FF";
+    c.fillRect(176, 152, 136, 80);
+    c.fillStyle = "#FF8000";
+    c.fillRect(328, 152, 136, 80);
+    c.fillStyle = "#80FF00";
+    c.fillRect(480, 152, 136, 80);
+    c.fillStyle = "#0080FF";
+    c.fillRect(24, 248, 136, 80);
+    c.fillStyle = "#FF0080";
+    c.fillRect(176, 248, 136, 80);
+    c.fillStyle = "#8000FF";
+    c.fillRect(328, 248, 136, 80);
+    c.fillStyle = "#00FF80";
+    c.fillRect(480, 248, 136, 80);
+    c.fillStyle = "#C04000";
+    c.fillRect(24, 344, 136, 80);
+    c.fillStyle = "#4080FF";
+    c.fillRect(176, 344, 136, 80);
+    c.fillStyle = "#FF80C0";
+    c.fillRect(328, 344, 136, 80);
+    c.fillStyle = "#80C040";
+    c.fillRect(480, 344, 136, 80);
+    _boxesOnce = 1;
+  } else {
+    c.fillStyle = "#000000";
+    c.fillRect(0, 0, W, 40);
+    c.fillRect(0, 448, W, 32);
+  }
+
+  c.fillStyle = "#FFFFFF";
+  c.fillText("BOXES2 OK", 8, 16);
+  c.fillText("16 FILLRECT COLORS", 8, 32);
+  c.fillText("FRAME", 8, 464);
+  c.fillText(n, 64, 464);
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
