@@ -146,7 +146,26 @@ Cross-lane facts every session needs:
 - The editor is a GAME (running=1 while editing); F2 save prints SAVED.;
   the delete verb is REMOVE. GUI forwards F-keys to titles; F12 = leave.
 
-### RUN 71 — IMPLEMENTED 2026-09-05; first build missed timing, 71b relaunched
+### RUN 71 — DONE 2026-09-05: run 71c MET WNS +0.311 / WHS +0.025 (daily-driver bit)
+
+**Run 71c (tree 6058dd0, launched 17:16, routed in 19.5 min, published):**
+WNS **+0.311** / WHS +0.025, **0 violated endpoints**; worst path now
+`u_cons src_i -> state` at +0.311, then MIG reset syncs at +0.315 — the
+three retired cones are gone from the top 100. vm_clk +4.268. LUT 90,413
+(67.2%), slices 27,093 (80.5%), BRAM 353.5/365 (unchanged), congestion
+East level 5 at 111% (placer), no router windows. Synth 8-6849 count 42.
+Bit: `build/bits/run71c_csr_parser_cones_bigput_WNS+0.311.bit`; artifacts
+in `build/runs/run71c_csr_parser_cones_bigput_WNS+0.311`. Batteries: 189
+passed on this tree. Compare 70b: +0.037 thin, LUT 89,381.
+
+Board acceptance (user): F8 put of a big .ARTX (DNKF 1.66 MB ≈ 2.5 min on
+the wire + card write, then SAVED; DIR * shows it); a put over a flaky
+cable answers ?CK and the retry lands; pull the SD mid-DIR → ?IO, reinsert,
+DIR works without power-cycle; STATUS after LOAD; EDIT 10 → ?SN; ESC still
+breaks a running game (now one 70 ns beat later); COMPILE of an art title
+on the machine draws its sprites (the CART low-byte fix — first time this
+path can work); games unchanged.
+
 
 **Run 71 build ledger (tree 89aee30, Congestion_SpreadLogic_low, incremental,
 launched 13:38, routed 14:55, bit refused):** WNS **-0.448** / WHS +0.004,

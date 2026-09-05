@@ -149,6 +149,15 @@ DSPs are six separate budgets.
 
 ## 2. Design for speed (timing)
 
+**Cross-domain paths into the VM get 10 ns, not 70 (run 71, three
+misses).** A `clk100` register (bridge `rdata`, the core's start/stop
+latches, `y_core_q` in fbscan) that feeds a `vm_clk` register through
+ANY logic — a value-stack funnel, the FSM priority chain, a DSP multiply —
+is analysed at one clk100 period. Land such a signal in a plain register
+first (`csr_rd_q`, `start_q`/`stop_q`, `line_base_q`) and consume it the
+next beat; the beat is invisible, the cone is gone for good (71: -0.448 →
+71c: +0.311 with no other change).
+
 ### 2.1 The one pattern that will destroy your timing
 
 A loop where each iteration's **test depends on a value the previous
