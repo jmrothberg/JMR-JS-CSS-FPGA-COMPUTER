@@ -104,6 +104,7 @@ module jmr_console_engine (
     // unless uart_link saw 0xFC. FPGA-SIM drives this from SRCSTREAM.
     input  logic        jsb_tether_src = 1'b0,
     input  logic        jsb_tether_crc_err = 1'b0, // run 71: with eof — discard the stream, ?CK
+    input  logic [47:0] vm_gdbg_i = 48'd0,          // run 71 STATUS: {fault_site16, fault_arg32}
     // NEW: FPGA-SIM RAM LOAD — host already poked SOURCE/src_len, so LOAD skips
     // the FAT open and announces with sim_src_lines. Tied 0 on the board.
     input  logic        sim_src_bypass = 1'b0,
@@ -262,6 +263,7 @@ module jmr_console_engine (
         C_JSB_PEEK, C_JSB_PEEKW, // NEW: code-BRAM full — fail loud if more bytes
         C_JSB_TETHER, C_JSB_FEED, C_JSB_TEOF, // NEW: PROG/host .JSH stream (no FAT)
         C_SRC_TETHER, C_SRC_WR, // gui-put: 0xFC → SOURCE, host then types SAVE
+        C_STATUS, C_STATUS_CH,  // run 71: STATUS — what the machine holds
         // Item G: print the compiler's ASCII diagnostic after ?CE, so a
         // failed compile says "L12 EXPECTED )" instead of a bare code.
         C_CMP_MSG_RD, C_CMP_MSG_PUT,
@@ -471,8 +473,12 @@ module jmr_console_engine (
     // transition (enable rising edge).
     logic enable_q;
     logic        kbd_avail_q; // registered !kbd_empty for C_IDLE (run 70)
+    logic        st_mode;      // run 71: STATUS owns the name/peel printers
+    logic [3:0]  st_ph;        // STATUS phase
+    logic [5:0]  st_i;         // STATUS label char index
     logic [16:0] drain_ctr; // hold kbd_clear ~1.3ms: a PS/2 scancode
     // mid-flight at ESC lands AFTER a 1-cycle clear (board: one key leaked)
+    logic p_status_q;   // run 71: "STATUS"
     logic p_help_q, p_dir_q, p_dir_star_q, p_cls_q, p_list_q, p_mem_q,
           p_new_q, p_run_q, p_load_q, p_save_q, p_remove_q, p_compile_q,
           p_edit_bare_q, p_empty_q,
@@ -485,6 +491,7 @@ module jmr_console_engine (
         // by any C_PF2 (same contract as every p_*_q), so hoist the mux.
         line_tail_q <= (line_len != 0) ? line[line_len - 1'b1] : 8'd0;
         p_len4_q  <= (line_len == 4);
+        p_status_q <= (line_len == 6 && up(line[0])=="S" && up(line[1])=="T" && up(line[2])=="A" && up(line[3])=="T" && up(line[4])=="U" && up(line[5])=="S");
         p_help_q <= (line_len == 4 && up(line[0])=="H" && up(line[1])=="E" && up(line[2])=="L" && up(line[3])=="P");
         p_dir_q  <= (line_len == 3 && up(line[0])=="D" && up(line[1])=="I" && up(line[2])=="R");
         // DIR * (or DIR*) — sidecar catalog; bare DIR stays titles.
@@ -547,6 +554,21 @@ module jmr_console_engine (
 
     // 0=HELP 1=MEM 2=OK 3=?SN ERROR 4=?IO 5=LOADED 6=?FN FILE NOT FOUND 7=?NB 8=-- MORE --
     // 9=?NH (HTML not runnable yet) 10=?LS 11=SAVED. 16=?CK
+    // run 71 STATUS labels, 8-char slots, NUL-terminated
+    function automatic logic [7:0] status_char(input logic [5:0] i);
+        case (i)
+            6'd0: status_char="N"; 6'd1: status_char="A"; 6'd2: status_char="M"; 6'd3: status_char="E"; 6'd4: status_char=" ";
+            6'd8: status_char=" "; 6'd9: status_char="L"; 6'd10: status_char="E"; 6'd11: status_char="N"; 6'd12: status_char=" ";
+            6'd16: status_char=" "; 6'd17: status_char="T"; 6'd18: status_char="R"; 6'd19: status_char="U"; 6'd20: status_char="N"; 6'd21: status_char="C";
+            6'd24: status_char=" ";
+            6'd32: status_char=" "; 6'd33: status_char="H"; 6'd34: status_char="T"; 6'd35: status_char="M"; 6'd36: status_char="L";
+            6'd40: status_char=" "; 6'd41: status_char="J"; 6'd42: status_char="S";
+            6'd48: status_char=" "; 6'd49: status_char="-"; 6'd50: status_char="-";
+            6'd56: status_char=" "; 6'd57: status_char="F"; 6'd58: status_char="A"; 6'd59: status_char="U"; 6'd60: status_char="L"; 6'd61: status_char="T"; 6'd62: status_char=" ";
+            default: status_char=8'h00;
+        endcase
+    endfunction
+
     function automatic logic [7:0] reply_char(input logic [4:0] sel, input logic [6:0] i);
         case (sel)
             4'd0: case (i)
@@ -659,6 +681,7 @@ module jmr_console_engine (
             kbd_pop <= 0;
             kbd_clear <= 0;
             kbd_avail_q <= 1'b0;
+            st_mode <= 1'b0; st_ph <= 4'd0; st_i <= 6'd0;
             cls <= 0;
             put_en <= 0;
             put_char <= 0;
@@ -871,6 +894,9 @@ module jmr_console_engine (
                         // predicate, same 2-cycle-stable contract as p_*_q.
                         msg_idx <= 0;
                         state <= C_PROMPT;
+                    end else if (p_status_q) begin
+                        st_mode <= 1'b1; st_ph <= 4'd0; st_i <= 6'd0;
+                        state <= C_STATUS;
                     end else if (p_help_q) begin
                         reply_sel <= 4'd0; reply_idx <= 0; state <= C_REPLY;
                     end else if (p_dir_star_q) begin
@@ -1509,7 +1535,7 @@ module jmr_console_engine (
                 end
                 C_LD_ANN_NAME: begin
                     if (name_i >= {2'b0, src_name_len}) begin
-                        state <= C_LD_ANN_PAR;
+                        state <= st_mode ? C_STATUS : C_LD_ANN_PAR;
                     end else if (!video_busy) begin
                         put_en <= 1'b1;
                         put_char <= src_name[name_i[3:0]];
@@ -1987,7 +2013,8 @@ module jmr_console_engine (
                         if (ld_ann) begin
                             msg_idx <= 0;
                             state <= C_LD_ANN_TAIL;
-                        end else state <= C_LIST_SP;
+                        end else if (st_mode) state <= C_STATUS;
+                        else state <= C_LIST_SP;
                     end else if (!video_busy) begin
                         dig_i <= dig_i - 3'd1;
                         put_en <= 1'b1;
@@ -2390,6 +2417,47 @@ module jmr_console_engine (
                 end
                 // gui-put: 0xFC payload → SOURCE SRAM (byte-transparent, same
                 // write as HTML LOAD's C_LD_GB_WR). Host then types SAVE.
+                // ---- run 71: STATUS ---------------------------------------
+                // NAME <src_name> LEN <src_len>[ TRUNC] <HTML|JS|--> FAULT <site> <arg>
+                // Reuses the LOADED name printer (C_LD_ANN_NAME) and the LIST
+                // digit printer (C_LIST_PEEL/EMIT_DIG) through st_mode.
+                C_STATUS: begin
+                    case (st_ph)
+                        4'd0: begin st_i <= 6'd0; st_ph <= 4'd1; state <= C_STATUS_CH; end   // "NAME "
+                        4'd1: begin name_i <= 0; st_ph <= 4'd2; state <= C_LD_ANN_NAME; end
+                        4'd2: begin st_i <= 6'd8; st_ph <= 4'd3; state <= C_STATUS_CH; end   // " LEN "
+                        4'd3: begin
+                            peel_mag <= src_len[15:0]; dig_n <= 0; st_ph <= 4'd4;
+                            state <= C_LIST_PEEL;
+                        end
+                        4'd4: begin st_i <= src_trunc ? 6'd16 : 6'd24; st_ph <= 4'd5; state <= C_STATUS_CH; end // " TRUNC" / " "
+                        4'd5: begin st_i <= src_is_html ? 6'd32 : (src_is_js ? 6'd40 : 6'd48); st_ph <= 4'd6; state <= C_STATUS_CH; end
+                        4'd6: begin st_i <= 6'd56; st_ph <= 4'd7; state <= C_STATUS_CH; end  // " FAULT "
+                        4'd7: begin
+                            peel_mag <= vm_gdbg_i[47:32]; dig_n <= 0; st_ph <= 4'd8;
+                            state <= C_LIST_PEEL;
+                        end
+                        4'd8: begin st_i <= 6'd24; st_ph <= 4'd9; state <= C_STATUS_CH; end  // " "
+                        4'd9: begin
+                            peel_mag <= vm_gdbg_i[15:0]; dig_n <= 0; st_ph <= 4'd10;
+                            state <= C_LIST_PEEL;
+                        end
+                        default: begin
+                            st_mode <= 1'b0; print_nl <= 1'b1;
+                            state <= C_WAIT_VIDEO; ret_state <= C_PROMPT;
+                        end
+                    endcase
+                end
+                C_STATUS_CH: if (!video_busy) begin
+                    // 8-char label slots: 0 "NAME ", 8 " LEN ", 16 " TRUNC", 24 " ",
+                    // 32 " HTML", 40 " JS", 48 " --", 56 " FAULT "
+                    if (status_char(st_i) == 8'h00) state <= C_STATUS;
+                    else begin
+                        put_en <= 1'b1; put_char <= status_char(st_i);
+                        st_i <= st_i + 6'd1;
+                        state <= C_WAIT_VIDEO; ret_state <= C_STATUS_CH;
+                    end
+                end
                 C_SRC_TETHER: begin
                     if (jsb_tether_eof) begin
                         teth_wd <= 30'd0;

@@ -320,6 +320,7 @@ module jmr_js_core #(
         .jsb_tether_stb(jsb_tether_stb), .jsb_tether_data(jsb_tether_data),
         .jsb_tether_eof(jsb_tether_eof), .jsb_tether_src(jsb_tether_src),
         .jsb_tether_crc_err(jsb_tether_crc_err),
+        .vm_gdbg_i(vm_gdbg),
         .jsb_tether_rdy(jsb_tether_rdy),
         .sim_src_bypass(sim_src_bypass), .sim_src_lines(sim_src_lines)
     );
