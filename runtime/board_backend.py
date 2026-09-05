@@ -738,6 +738,48 @@ class BoardBackend(RuntimeBackend):
             return 2
         return 3
 
+    _BIG_MAX = 1480704 * 2   # CART staging bank, bytes (2 B/word)
+
+    def _big_tether_save(self, name: str, data: bytes) -> None:
+        """run 71: 0xFB -> CART staging (up to ~2.9 MB), then typed SAVE
+        pumps it to the card through the mint's art-append path."""
+        if self._ser is None:
+            raise RuntimeError("BOARD tether required to SAVE onto the µSD")
+        if len(data) > self._BIG_MAX:
+            raise RuntimeError(f"{name}: {len(data)} bytes exceeds the CART staging bank ({self._BIG_MAX})")
+        before = self._glass_error_row()
+        saved_before = sum(1 for r in self._rows if "SAVED" in r.upper())
+        mv = memoryview(data)
+        for attempt in range(3):
+            self._ser.write(bytes([0xFB]) + struct.pack("<I", len(data)))
+            for i in range(0, len(data), 16384):
+                self._ser.write(mv[i : i + 16384])
+            self._ser.write(struct.pack("<I", zlib.crc32(data) & 0xFFFFFFFF))
+            self._ser.flush()
+            self._log.note(f"PROG CART stream {name} {len(data)} bytes")
+            # flush() returned only once the OS buffer drained, and the typed
+            # SAVE rides the same UART behind the trailer, so the console
+            # sees it after eof. A 2.8 MB bank takes ~4 min at 115200 baud
+            # and the card write about as long again — the wait below covers
+            # both, pumping Tk the whole time.
+            self.type_line(f'SAVE "{name}"')
+            ok = self._wait_glass(
+                lambda: sum(1 for r in self._rows if "SAVED" in r.upper()) > saved_before
+                and self._prompt_row() >= 0,
+                max(300.0, len(data) / 4000.0),
+                fail_pred=lambda: self._glass_error_row() not in (None, before),
+            )
+            if ok:
+                return
+            err = self._glass_error_row()
+            if err and err.startswith("?CK"):
+                self._log.note(f"?CK on {name}, resend {attempt + 1}/3")
+                before = err
+                continue
+            raise RuntimeError(f"SAVE {name}: board answered {err}" if err and err != before
+                               else f"SAVE {name} did not print SAVED (big put) — power-cycle before more writes")
+        raise RuntimeError(f"SAVE {name}: CRC failed 3 times — check the USB cable")
+
     def _save_jobs_to_msd(self, jobs: list) -> str:
         from functional_model.jsb_format import SOURCE_MAX
 
@@ -746,7 +788,9 @@ class BoardBackend(RuntimeBackend):
         skipped: list[str] = []
         for name, data in jobs:
             if len(data) > SOURCE_MAX:
-                skipped.append(f"{name}?TR")
+                # run 71: big files ride the CART staging bank (0xFB)
+                self._big_tether_save(name, data)
+                saved.append(name)
                 continue
             self._src_tether_save(name, data)
             saved.append(name)

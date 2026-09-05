@@ -173,6 +173,7 @@ module jmr_uart_link #(
     output logic [7:0] jsb_tether_data,
     output logic       jsb_tether_eof,
     output logic       jsb_tether_src, // 1 while an 0xFC SOURCE stream is live
+    output logic       jsb_tether_big, // run 71: 1 while an 0xFB CART (big file) stream is live
     output logic       jsb_tether_crc_err, // run 71: held with eof when the
                                            // trailer CRC-32 mismatched
     input  logic       jsb_tether_rdy = 1'b0
@@ -191,7 +192,8 @@ module jmr_uart_link #(
     jsh_t jsh_st;
     logic [31:0] jsh_left;
     logic        jsh_eof_pend;
-    logic        jsh_src; // 1 = 0xFC SOURCE fill (not 0xFD ProgramImage)
+    logic        jsh_src;
+    logic jsh_big; // 1 = 0xFC SOURCE fill (not 0xFD ProgramImage)
     // Board freeze root cause (2026-08-25): eof was a 1-cycle pulse
     // raised the same cycle the LAST data byte strobes - the console is
     // then in C_JSB_FEED processing that byte and returns to
@@ -224,6 +226,7 @@ module jmr_uart_link #(
     assign jsb_tether_data = rx_data;
     assign jsb_tether_eof = jsh_eof_hold;
     assign jsb_tether_src = jsh_src;
+    assign jsb_tether_big = jsh_big;
 
     generate
         if (USE_DPTI) begin : g_dpti
@@ -262,7 +265,7 @@ module jmr_uart_link #(
             jsh_left <= 32'd0;
             jsh_eof_pend <= 1'b0;
             jsh_eof_hold <= 1'b0;
-            jsh_src <= 1'b0;
+            jsh_src <= 1'b0; jsh_big <= 1'b0;
             crc_acc <= 32'hFFFFFFFF; crc_rx <= 32'd0; crc_err_r <= 1'b0;
         end else begin
             kbd_push <= 1'b0;
@@ -285,7 +288,7 @@ module jmr_uart_link #(
                     crc_err_r <= 1'b0;
                     if ({rx_data, jsh_left[23:0]} == 32'd0) begin
                         jsh_eof_pend <= 1'b1;
-                        jsh_src <= 1'b0;
+                        jsh_src <= 1'b0; jsh_big <= 1'b0;
                         jsh_st <= JSH_IDLE;
                     end else
                         jsh_st <= JSH_DATA;
@@ -305,11 +308,18 @@ module jmr_uart_link #(
                 end else if (jsh_st == JSH_C3) begin
                     crc_err_r <= ({rx_data, crc_rx[23:0]} != ~crc_acc);
                     jsh_eof_pend <= 1'b1;
-                    jsh_src <= 1'b0;
+                    jsh_src <= 1'b0; jsh_big <= 1'b0;
                     jsh_st <= JSH_IDLE;
                 end else if (joy_cmd) begin
                     joy_bits <= rx_data[5:0];
                     joy_cmd <= 1'b0;
+                end else if (rx_data == 8'hFB) begin
+                    // run 71 big put: .ART/.ARTX (up to ~2.9 MB) -> CART
+                    // staging bank, then host types SAVE. Same length+CRC
+                    // framing as 0xFC.
+                    jsh_st <= JSH_L0;
+                    jsh_left <= 32'd0;
+                    jsh_big <= 1'b1;
                 end else if (rx_data == 8'hFC) begin
                     // gui-put: SOURCE fill, then host types SAVE
                     jsh_st <= JSH_L0;
@@ -318,7 +328,7 @@ module jmr_uart_link #(
                 end else if (rx_data == 8'hFD) begin
                     jsh_st <= JSH_L0;
                     jsh_left <= 32'd0;
-                    jsh_src <= 1'b0;
+                    jsh_src <= 1'b0; jsh_big <= 1'b0;
                 end else if (rx_data == 8'hFE) begin
                     joy_cmd <= 1'b1;
                 end else begin

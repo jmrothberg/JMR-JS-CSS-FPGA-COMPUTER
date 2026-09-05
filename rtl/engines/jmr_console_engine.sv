@@ -103,6 +103,7 @@ module jmr_console_engine (
     // gui-put: 0xFC SOURCE stream (same wires as 0xFD, tagged src). Tied 0
     // unless uart_link saw 0xFC. FPGA-SIM drives this from SRCSTREAM.
     input  logic        jsb_tether_src = 1'b0,
+    input  logic        jsb_tether_big = 1'b0,   // run 71: 0xFB CART big put
     input  logic        jsb_tether_crc_err = 1'b0, // run 71: with eof — discard the stream, ?CK
     input  logic [47:0] vm_gdbg_i = 48'd0,          // run 71 STATUS: {fault_site16, fault_arg32}
     // NEW: FPGA-SIM RAM LOAD — host already poked SOURCE/src_len, so LOAD skips
@@ -129,6 +130,9 @@ module jmr_console_engine (
     // (2,961,408 B). Staging ground for an ARTX payload during an
     // on-machine art compile. Mirrors jmr_js_vm_pkg.CART_SRAM_BASE.
     localparam logic [20:0] CART_SRAM_BASE = 21'd0;
+    // run 71 big put ceiling: CART bank = jmr_js_vm_pkg.CART_WORDS (1,480,704)
+    // x 2 B/word. Mirrored like CART_SRAM_BASE (the console does not import the pkg).
+    localparam logic [21:0] BIG_MAX_BYTES = 22'd2961408;
     localparam logic [20:0] CSCR_SRAM_BASE = 21'd1650688;
     localparam int unsigned CSCR_WORDS     = 73728;
     localparam logic [20:0] CIMG_SRAM_BASE = 21'd1789952;
@@ -263,6 +267,7 @@ module jmr_console_engine (
         C_JSB_PEEK, C_JSB_PEEKW, // NEW: code-BRAM full — fail loud if more bytes
         C_JSB_TETHER, C_JSB_FEED, C_JSB_TEOF, // NEW: PROG/host .JSH stream (no FAT)
         C_SRC_TETHER, C_SRC_WR, // gui-put: 0xFC → SOURCE, host then types SAVE
+        C_BIG_TETHER, C_BIG_WR, // run 71 big put: 0xFB → CART (2 B/word), SAVE pumps it
         C_STATUS, C_STATUS_CH,  // run 71: STATUS — what the machine holds
         // Item G: print the compiler's ASCII diagnostic after ?CE, so a
         // failed compile says "L12 EXPECTED )" instead of a bare code.
@@ -328,6 +333,20 @@ module jmr_console_engine (
     logic        art_found;      // sidecar opened successfully
     logic        art_hi;         // CART pack phase during the pre-load
     logic [15:0] art_word;       // half-assembled CART word
+    // run 71: 16-bit CART writes. The bank-1 client zero-extended every
+    // write ({8'd0, src_wdata}) so the art stager's low bytes never
+    // reached SRAM; src_w16 carries the held low byte alongside.
+    logic [7:0]  src_wlo;
+    logic        src_w16;
+    // run 71 big put (0xFB): .ART/.ARTX streamed into the CART staging
+    // bank, packed 2 B/word from word 0; SAVE pumps it through the
+    // mint's art-append path (cmp_save_mode + cmp_art_mode, img_len 0).
+    logic [21:0] big_len;        // bytes received (max 2*CART_WORDS)
+    logic [7:0]  big_lo;         // held low byte of the pair
+    logic        big_hi;         // 1 = a low byte is held
+    logic        big_eof;        // flushing the odd tail byte at eof
+    logic        big_staged;     // CART holds a put; next SAVE writes it
+    logic        big_trunc;      // stream exceeded the bank -> SAVE says ?TR
     logic [15:0] art_nspr;       // sprite count, snooped from the header
     // Byte offset of payload_len inside .ARTX: 8 + n_sprites*8.
     wire  [21:0] art_plen_off = 22'd8 + (22'(art_nspr) << 3);
@@ -419,7 +438,8 @@ module jmr_console_engine (
     logic [1:0]  pal_ph;
     logic [22:0] aset_rel;      // byte offset inside the ASET section
     assign aset_rel = jsb_boff - jsb_aset_off;
-    assign jsb_tether_rdy = (state == C_JSB_TETHER) || (state == C_SRC_TETHER);
+    assign jsb_tether_rdy = (state == C_JSB_TETHER) || (state == C_SRC_TETHER)
+                         || (state == C_BIG_TETHER);
     logic        ld_err;        // NEW: LOAD ?LS/?IO sticky until CLOSEW
     logic [15:0] ld_nlines;     // NEW: newline count for LOADED NAME (N LINES)
     logic        ld_need_eol;   // last HTML byte was not NL
@@ -708,6 +728,9 @@ module jmr_console_engine (
             cmp_art_mode <= 1'b0; cmp_art_len <= '0;
             art_i <= '0; art_found <= 1'b0; art_hi <= 1'b0; art_word <= '0;
             art_nspr <= '0;
+            src_wlo <= '0; src_w16 <= 1'b0;
+            big_len <= '0; big_lo <= '0; big_hi <= 1'b0; big_eof <= 1'b0;
+            big_staged <= 1'b0; big_trunc <= 1'b0;
             cmp_art_i <= '0; cmp_art_hi <= 1'b0;
             cmp_out_off <= '0; cmp_img_len <= '0; cmp_i <= '0; cmp_wd <= '0;
             src_bank <= 1'b0;
@@ -806,6 +829,7 @@ module jmr_console_engine (
                     cmp_art_mode <= 1'b0;
                     jsb_want_art <= 1'b0;
                     cmp_interactive <= 1'b0;
+                    big_staged <= 1'b0; src_w16 <= 1'b0;   // run 71 belt
                     // THE "RUN opened the editor" bug: jsb_name_src=1 leaked
                     // from a chain-load, so RUN's reload built the CHAIN
                     // program's name (EDITOR.JSH) instead of the title's.
@@ -851,6 +875,13 @@ module jmr_console_engine (
                         src_bank <= 1'b0;
                         teth_wd <= 30'd0;
                         state <= C_SRC_TETHER;
+                    end else if (jsb_tether_big) begin
+                        // run 71: 0xFB big put -> CART staging bank
+                        big_len <= '0; big_hi <= 1'b0; big_eof <= 1'b0;
+                        big_staged <= 1'b0; big_trunc <= 1'b0;
+                        src_bank <= 1'b1;
+                        teth_wd <= 30'd0;
+                        state <= C_BIG_TETHER;
                     end else if (enable && kbd_avail_q && !kbd_clear && !video_busy) begin
                         ch <= kbd_data;
                         kbd_pop <= 1'b1;
@@ -1467,6 +1498,8 @@ module jmr_console_engine (
                                 cmp_rd_addr <= CART_SRAM_BASE
                                     + 21'((art_i - 22'(CSTG_ART_HDRB)) >> 1);
                                 src_wdata <= stor_get_data; // high half
+                                src_wlo <= art_word[7:0];   // low half (was dropped)
+                                src_w16 <= 1'b1;
                                 art_hi <= 1'b0;
                                 state <= C_ART_WR;
                             end
@@ -1474,6 +1507,7 @@ module jmr_console_engine (
                     end
                 end
                 C_ART_WR: if (src_gnt) begin
+                    src_w16 <= 1'b0;
                     art_i <= art_i + 22'd1;
                     state <= C_ART_GB;
                 end
@@ -1587,10 +1621,25 @@ module jmr_console_engine (
                 end
 
                 // ---- SAVE -----------------------------------------------
-                C_SV_OPEN: if (!stor_busy) begin
+                C_SV_OPEN: if (big_staged && big_trunc) begin
+                    // run 71: the put overflowed the CART bank — refuse
+                    // rather than write a truncated art file.
+                    big_staged <= 1'b0;
+                    reply_sel <= 5'd15; reply_idx <= 0;   // ?TR
+                    state <= C_REPLY;
+                end else if (!stor_busy) begin
                     stor_mode <= "O";
                     stor_open <= 1'b1;
                     src_i <= 0;
+                    if (big_staged) begin
+                        // run 71: pump the staged CART bytes through the
+                        // mint's art-append loop (no image bytes first).
+                        cmp_save_mode <= 1'b1; cmp_art_mode <= 1'b1;
+                        cmp_img_len <= '0; cmp_i <= '0;
+                        cmp_art_i <= '0; cmp_art_hi <= 1'b0;
+                        cmp_art_len <= big_len;
+                        src_bank <= 1'b1;
+                    end
                     state <= C_SV_OPENW;
                 end
                 C_SV_OPENW: if (stor_done) begin
@@ -1646,8 +1695,9 @@ module jmr_console_engine (
                 C_SV_CLOSEW: if (stor_done) begin
                     // A mint says COMPILED; SAVE (typed or editor F2) says
                     // SAVED. — matching the functional model's reply.
-                    reply_sel <= cmp_save_mode ? 4'd13 : 4'd11;
+                    reply_sel <= (cmp_save_mode && !big_staged) ? 5'd13 : 5'd11;
                     cmp_save_mode <= 1'b0;
+                    big_staged <= 1'b0;
                     reply_idx <= 0; state <= C_REPLY;
                 end
 
@@ -2492,6 +2542,66 @@ module jmr_console_engine (
                     src_len <= src_len + 1'b1;
                     state <= C_SRC_TETHER;
                 end
+                // run 71 big put: same stream contract as C_SRC_TETHER
+                // (stb/eof/crc_err/ESC/10.7 s silence), bytes packed two
+                // per CART word. The odd tail byte is flushed at eof.
+                C_BIG_TETHER: begin
+                    if (jsb_tether_eof) begin
+                        teth_wd <= 30'd0;
+                        if (jsb_tether_crc_err) begin
+                            big_len <= '0; big_staged <= 1'b0; big_hi <= 1'b0;
+                            src_bank <= 1'b0;
+                            reply_sel <= 5'd16; reply_idx <= 0;   // ?CK
+                            state <= C_REPLY;
+                        end else begin
+                            big_staged <= 1'b1;
+                            if (big_hi) begin
+                                src_req <= 1'b1; src_we <= 1'b1;
+                                src_bank <= 1'b1;
+                                cmp_rd_addr <= CART_SRAM_BASE + 21'(big_len[21:1]);
+                                src_wdata <= 8'd0; src_wlo <= big_lo; src_w16 <= 1'b1;
+                                big_hi <= 1'b0; big_eof <= 1'b1;
+                                state <= C_BIG_WR;
+                            end else begin
+                                src_bank <= 1'b0;
+                                state <= C_IDLE;
+                            end
+                        end
+                    end else if (jsb_tether_stb) begin
+                        teth_wd <= 30'd0;
+                        if (big_len >= BIG_MAX_BYTES) begin
+                            big_trunc <= 1'b1;      // drain, never wedge
+                        end else if (!big_hi) begin
+                            big_lo <= jsb_tether_data;
+                            big_hi <= 1'b1;
+                            big_len <= big_len + 22'd1;
+                        end else begin
+                            src_req <= 1'b1; src_we <= 1'b1;
+                            src_bank <= 1'b1;
+                            cmp_rd_addr <= CART_SRAM_BASE + 21'(big_len[21:1]);
+                            src_wdata <= jsb_tether_data;   // high half
+                            src_wlo <= big_lo; src_w16 <= 1'b1;
+                            big_hi <= 1'b0;
+                            big_len <= big_len + 22'd1;
+                            state <= C_BIG_WR;
+                        end
+                    end else if ((!kbd_empty && kbd_data == 8'h1B)
+                                 || (&teth_wd)) begin
+                        if (!kbd_empty && kbd_data == 8'h1B) kbd_pop <= 1'b1;
+                        teth_wd <= 30'd0;
+                        big_staged <= 1'b0; big_hi <= 1'b0;
+                        src_bank <= 1'b0;
+                        state <= C_IDLE;
+                    end else teth_wd <= teth_wd + 30'd1;
+                end
+                C_BIG_WR: if (src_gnt) begin
+                    src_w16 <= 1'b0;
+                    if (big_eof) begin
+                        big_eof <= 1'b0;
+                        src_bank <= 1'b0;
+                        state <= C_IDLE;
+                    end else state <= C_BIG_TETHER;
+                end
                 // NEW: HTML RUN — PROG/host byte stream (same splitter as FAT GBW)
                 C_JSB_TETHER: begin
                     if (jsb_tether_eof)
@@ -2740,7 +2850,7 @@ module jmr_console_engine (
                 // shared with LOAD / SAVE / the EDIT memmove.
                 sram_addr  <= src_bank ? cmp_rd_addr
                                        : (SRC_SRAM_BASE + 21'(src_addr));
-                sram_wdata <= {8'd0, src_wdata};
+                sram_wdata <= src_w16 ? {src_wdata, src_wlo} : {8'd0, src_wdata};
                 srcb_we_l  <= src_we;
                 srcb_wd_l  <= src_wdata;
             end else if (srcb_pend && sram_ack) begin

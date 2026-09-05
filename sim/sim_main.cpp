@@ -1231,8 +1231,10 @@ static int hex_nibble(char c) {
 }
 
 // gui-put BOARD path in FPGA-SIM: same console SOURCE pump as uart 0xFC.
-static int src_tether_pump(const std::vector<uint8_t>& blob) {
-    top->jsb_tether_src = 1;
+static int src_tether_pump(const std::vector<uint8_t>& blob, bool big = false) {
+    // run 71: big=true streams as an 0xFB CART put (jsb_tether_big)
+    top->jsb_tether_src = big ? 0 : 1;
+    top->jsb_tether_big = big ? 1 : 0;
     top->jsb_tether_stb = 0;
     top->jsb_tether_eof = 0;
     // (jsb_tether_crc_err is left as the TETHER_CRCERR rpc set it — the
@@ -1261,6 +1263,7 @@ static int src_tether_pump(const std::vector<uint8_t>& blob) {
     // Drop src with eof so C_IDLE does not re-arm an empty stream.
     // Hold eof until TETHER samples it (uart_link jsh_eof_hold).
     top->jsb_tether_src = 0;
+    top->jsb_tether_big = 0;
     top->jsb_tether_eof = 1;
     wait = 0;
     while (!top->jsb_tether_rdy && wait < 20000) { ticks(1); wait++; }
@@ -1412,6 +1415,7 @@ int main(int argc, char** argv) {
     top->jsb_tether_data = 0;
     top->jsb_tether_eof = 0;
     top->jsb_tether_crc_err = 0;
+    top->jsb_tether_big = 0;
     top->jsb_tether_src = 0;
     top->sim_src_bypass = 0;
     top->sim_src_lines = 0;
@@ -1563,6 +1567,14 @@ int main(int argc, char** argv) {
             continue;
         }
         // gui-put: stream bytes into SOURCE (console 0xFC path), host SAVE next.
+        // run 71: BIGFILE <path> — stream a whole host file as an 0xFB CART put
+        if (line.rfind("BIGFILE ", 0) == 0) {
+            std::vector<uint8_t> blob;
+            if (read_whole_file(line.substr(8), blob) != 0) { std::cout << "ERR read" << std::endl; continue; }
+            int rc = src_tether_pump(blob, true);
+            std::cout << (rc == 0 ? "OK bytes=" : "ERR pump=") << (rc == 0 ? (long)blob.size() : (long)rc) << std::endl;
+            continue;
+        }
         if (line.rfind("SRCSTREAM ", 0) == 0) {
             const std::string hex = line.substr(10);
             if (hex.size() & 1u) {
@@ -1704,7 +1716,7 @@ int main(int argc, char** argv) {
         if (line == "STATUS?") {
             std::cout << "STATUS running=" << unsigned(top->game_mode)
                       << " ready=" << unsigned(top->ready_lit)
-                      << " joy=" << unsigned(top->joy_out) << std::endl;
+                      << " joy=" << unsigned(top->joy_out) << " cstate=" << (int)top->cons_dbg_state_o << " sstate=" << (int)top->stor_dbg_state_o << std::endl;
             continue;
         }
         if (line == "RUNCLK" || line == "TICK") {

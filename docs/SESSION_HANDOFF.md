@@ -216,23 +216,36 @@ RTL candidates, in priority order:
    declaration so host and machine mints agree. Copy-on-save rejected:
    duplicates 100KB+ per fork, single-channel storage makes it awkward.
 
-6. **0xFC big-file put** (user 2026-09-04 — collected, NOT started): F8's
-   live put goes SOURCE window (64 KB) -> typed SAVE, so .ART banks over
-   64 KB (MKBA/MKCA 2.8 MB, DNKF 1.66 MB) are skipped "?TR (SOURCE 64K)";
-   small ones (INVF 3.5 KB, MRDOF 9 KB, BOMBFAST 58 KB) fit. Design: a
-   second put mode that streams into the CART staging bank (~2.9 MB) and
-   saves from there through the mint-mode C_SV pump (cmp_save_mode=1 +
-   the cmp_art_mode append loop already stream CART bytes) — 0 new console
-   states; uart_link tag + length prefix like 0xFC; board_backend routes
-   files > SOURCE_MAX to it. Until then big art reaches the µSD only via
-   the mint + re-imaging the card.
+6. **Big-file put — DONE in run 71 as tag 0xFB** (user 2026-09-04/05: ".artx
+   files ALSO, and they are big"). F8's 0xFC put fills the 64 KB SOURCE
+   window, so .ART banks over 64 KB (MKBA/MKCA 2.8 MB, DNKF 1.66 MB) were
+   skipped "?TR (SOURCE 64K)". Now `runtime/board_backend.py` routes any
+   file > SOURCE_MAX through 0xFB: same framing as 0xFC (tag, u32 LE
+   length, payload, CRC-32 trailer), `jmr_uart_link` raises
+   `jsb_tether_big`, the console stages the bytes into the CART bank
+   packed 2 B/word (`C_BIG_TETHER`/`C_BIG_WR`, +2 encodings → 111/128),
+   and the typed `SAVE "NAME.ART"` pumps CART to the card through the
+   mint's art-append loop (cmp_save_mode + cmp_art_mode with img_len 0,
+   reply SAVED). Bad CRC → `?CK`, nothing staged, host resends ×3;
+   over 2,961,408 B → SAVE says `?TR`. Sim rpc `BIGFILE <path>`; gates in
+   tests/test_console_log.py (roundtrip byte-exact, ?CK-then-recover).
+   **Bug found on the way:** the console's bank-1 SRAM client wrote every
+   word as `{8'd0, byte}`, so the on-machine art stager (C_ART_GBW) held
+   each low byte in `art_word` and never wrote it — an art title compiled
+   ON THE MACHINE got a payload with every even byte zeroed (never seen on
+   glass because no art title had been board-compiled yet; INV2 said NO
+   ART first). Fixed with `src_w16`/`src_wlo` (16-bit write when set);
+   the big-put roundtrip gate exercises the same write and append paths.
 
 7. **storage_engine S_SD_WAIT has no watchdog** (board 2026-09-05): a SAVE
    of a 5.5 KB .JSH sat in state 0x09 (waiting on sd_ack) for ~85 s, then
    completed; a following DIR wedged the same way until power-cycle. The
    engine must time out a stuck SD transaction (deselect, re-init at
    INIT_DIV, report ?IO) instead of waiting forever. Card health/seating is
-   the likely trigger, the wedge is ours. Collected, NOT started.
+   the likely trigger, the wedge is ours. DONE in run 71 (item B): 27-bit
+   watchdog in S_SD_WAIT (~1.3 s) → S_SD_ABORT deselects, the SPI master
+   idles, the console gets ?IO; sim rpc `SD_HANG`, gate
+   test_rtl_sd_hang_reports_io_and_recovers.
 
 Content/toolchain (not run-gated, mostly peer lane):
 - window.open-class browser APIs now stub to 33 in the on-machine compiler

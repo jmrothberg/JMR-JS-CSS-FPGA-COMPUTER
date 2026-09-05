@@ -446,3 +446,150 @@ def test_rtl_src_tether_then_save():
     finally:
         sim.shutdown()
 
+
+
+# ---------------------------------------------------------------------------
+# run 71: transfer integrity + big put (0xFB -> CART staging bank)
+# ---------------------------------------------------------------------------
+
+def _big_blob(n: int, seed: int = 71) -> bytes:
+    """Deterministic pseudo-random bytes incl. 0x00/0xFF/0x0D/0x0A runs, so a
+    dropped low byte, a swapped half-word or a text-mode CR/LF mangling all
+    show up as a mismatch."""
+    import random
+
+    rnd = random.Random(seed)
+    out = bytearray(rnd.getrandbits(8) for _ in range(n))
+    out[:8] = b"\x00\xff\x00\xff\x0d\x0a\x1a\x00"
+    return bytes(out)
+
+
+def _glass(sim) -> str:
+    """The live text screen, upper-cased. The backend's screen_text() mirror
+    only refreshes on typed lines, so anything driven by raw rpcs (BIGFILE,
+    SRCSTREAM, TICKN) must read the video RAM directly."""
+    raw = sim._rpc("SCREEN?")
+    if raw.startswith("SCREEN "):
+        raw = raw[7:]
+    return raw.replace("\\n", "\n").upper()
+
+
+def _wait_screen(sim, needle: str, slices: int = 60) -> str:
+    """Pump the sim 2M clocks at a time until `needle` shows on the glass
+    (LINE returns after ~2M clocks once the console has left the prompt, so
+    a multi-hundred-KB card write outlives one type_line; SAVE costs about
+    1,000 clk/byte through the per-byte storage handshake)."""
+    for _ in range(slices):
+        glass = _glass(sim)
+        if needle in glass:
+            return glass
+        sim._rpc("TICKN 2000")
+    return _glass(sim)
+
+
+def _card_file(name: str) -> bytes:
+    import os
+    from pathlib import Path
+
+    from tools.make_sd_image import open_volume
+
+    return open_volume(Path(os.environ["JMR_CARD_IMG"])).read_file(name)
+
+
+def test_rtl_big_put_then_save_roundtrip(tmp_path):
+    """0xFB big put: an odd-length blob larger than SOURCE (64K) streams into
+    CART packed 2 B/word, SAVE pumps it to the card byte-exact (this is the
+    same C_SV_RD/RDW append loop an on-machine art COMPILE uses, so it also
+    pins the 16-bit CART write that used to drop every low byte)."""
+    from tests.test_rtl_snippets import _sim
+
+    blob = _big_blob(70_001)
+    src = tmp_path / "bigput.bin"
+    src.write_bytes(blob)
+    sim = _sim()
+    try:
+        resp = sim._rpc("BIGFILE " + str(src))
+        if not str(resp).startswith("OK"):
+            raise AssertionError(f"BIGFILE {resp!r} — rebuild sim_server_synth")
+        sim.type_line('SAVE "BIGPUT.ART"')
+        glass = _wait_screen(sim, "SAVED", slices=120)
+        assert "SAVED" in glass and "?" not in glass[-200:], glass[-400:]
+        sim.type_line("STATUS")          # a prompt round trip flushes the image
+        back = _card_file("BIGPUT.ART")
+        assert len(back) == len(blob), (len(back), len(blob))
+        assert back == blob, next(
+            (i, back[i], blob[i]) for i in range(len(blob)) if back[i] != blob[i]
+        )
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_big_put_crc_bad_says_ck_then_recovers(tmp_path):
+    """A big put whose trailer CRC mismatches answers ?CK and stages nothing;
+    the very next clean put + SAVE lands byte-exact (the host's retry path)."""
+    from tests.test_rtl_snippets import _sim
+
+    blob = _big_blob(70_000, seed=72)
+    src = tmp_path / "bigput2.bin"
+    src.write_bytes(blob)
+    sim = _sim()
+    try:
+        sim._rpc("TETHER_CRCERR 1")
+        resp = sim._rpc("BIGFILE " + str(src))
+        assert str(resp).startswith("OK"), resp
+        sim._rpc("TICKN 200")
+        glass = _glass(sim)
+        assert "?CK" in glass, glass[-400:]
+        sim._rpc("TETHER_CRCERR 0")
+        resp = sim._rpc("BIGFILE " + str(src))
+        assert str(resp).startswith("OK"), resp
+        sim.type_line('SAVE "BIGPUT2.ART"')
+        glass = _wait_screen(sim, "SAVED")
+        assert "SAVED" in glass, glass[-400:]
+        sim.type_line("STATUS")
+        assert _card_file("BIGPUT2.ART") == blob
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_src_put_crc_bad_refused():
+    """0xFC put with a bad trailer: ?CK, SOURCE emptied (LIST shows no
+    lines), so the bytes can never be SAVEd or RUN."""
+    from tests.test_rtl_snippets import _sim
+
+    body = b"<html><body><script>console.log('hi');</script></body></html>\n"
+    sim = _sim()
+    try:
+        sim._rpc("TETHER_CRCERR 1")
+        resp = sim._rpc("SRCSTREAM " + body.hex())
+        assert str(resp).startswith("OK"), resp
+        sim._rpc("TICKN 200")
+        glass = _glass(sim)
+        assert "?CK" in glass, glass[-400:]
+        sim._rpc("TETHER_CRCERR 0")
+        sim.type_line("LIST")
+        listed = _glass(sim).lower()
+        assert "console.log" not in listed, listed[-400:]
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_sd_hang_reports_io_and_recovers():
+    """Storage watchdog: with the SD model mute, DIR answers ?IO (never a
+    wedge); once the card answers again the next DIR lists files."""
+    from tests.test_rtl_snippets import _sim
+
+    sim = _sim()
+    try:
+        sim.type_line("DIR")
+        assert "?" not in _glass(sim)[-200:], _glass(sim)[-400:]
+        sim._rpc("SD_HANG 1")
+        sim.type_line("DIR")
+        glass = _wait_screen(sim, "?IO", slices=20)
+        assert "?IO" in glass, glass[-400:]
+        sim._rpc("SD_HANG 0")
+        sim.type_line("DIR")
+        glass = _glass(sim)
+        assert "?IO" not in glass[-300:] and ".HTM" in glass, glass[-400:]
+    finally:
+        sim.shutdown()

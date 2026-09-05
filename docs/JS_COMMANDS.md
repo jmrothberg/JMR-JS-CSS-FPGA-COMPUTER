@@ -398,7 +398,10 @@ bare `EDIT`. A tether transfer whose CRC-32 fails prints `?CK` and is
 discarded (the host resends). A silent SD card now answers `?IO` instead of
 wedging the console until power-cycle.
 `ESC` is machine BREAK (games must not steal it). F8 in the host GUI puts
-a file on the card (host `storage/` or `card.img`).
+a file on the card (host `storage/` or `card.img`); files over 64 KB
+(.ART/.ARTX banks up to 2.9 MB) stream into the machine's CART bank and
+land with the same typed `SAVE` — about 4 minutes per 2.8 MB at 115200
+baud, plus the card write.
 
 **The self-hosted loop** — no PC anywhere in it:
 
