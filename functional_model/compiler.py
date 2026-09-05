@@ -199,10 +199,10 @@ def _isolate_iife_modules(
 # HERE, loudly, instead of faulting on hardware. V1.5 lifts popular
 # language on this list; V2 is MK (dotted new / .call / Object.keys RTL).
 V1_WALL_NAMES = frozenset([
-    "sin", "cos", "atan2", "pow", "ceil", "hypot",
+    "sin", "cos", "atan2", "pow", "hypot",   # run 71: ceil is native 57
     "charAt", "charCodeAt", "split", "match", "exec", "substring",
     "toUpperCase", "toLowerCase", "toFixed", "toString", "String",
-    "concat", "reverse", "shift", "includes", "startsWith", "endsWith",
+    "concat", "reverse", "shift", "startsWith", "endsWith",   # run 71: includes desugars to indexOf
     "padStart", "padEnd", "repeat",
     "findIndex", "some", "every", "values", "entries",
 ])
@@ -1614,6 +1614,17 @@ class Compiler:
             return
         self._call()
 
+    def _emit_method(self, meth: str, argc: int) -> None:
+        """CALL_METHOD, with the run-71 desugars that keep silicon unchanged:
+        a.includes(v)  ->  !(a.indexOf(v) < 0)   (the chip has indexOf)."""
+        if meth == "includes" and argc == 1:
+            self._emit(Op.CALL_METHOD, self._name("indexOf"), 1)
+            self._emit(Op.LOAD_CONST, self._const(0))
+            self._emit(Op.LT)
+            self._emit(Op.NOT)
+            return
+        self._emit(Op.CALL_METHOD, self._name(meth), argc)
+
     def _v1_wall(self, meth: str, line: int) -> None:
         # V1 authoring wall: a method CALL through one of these names would
         # reach a silicon arm the V1.0 chip does not have. A user-defined
@@ -1641,7 +1652,7 @@ class Compiler:
                     argc = self._arg_list()
                     self._expect(")")
                     self._v1_wall(meth, line2)
-                    self._emit(Op.CALL_METHOD, self._name(meth), argc)
+                    self._emit_method(meth, argc)
                 else:
                     self._emit(Op.GET_PROP, self._name(meth))
                 jmp_end = self._emit(Op.JUMP, 0)
@@ -1658,7 +1669,7 @@ class Compiler:
                     argc = self._arg_list()
                     self._expect(")")
                     self._v1_wall(meth, line2)
-                    self._emit(Op.CALL_METHOD, self._name(meth), argc)
+                    self._emit_method(meth, argc)
                     continue
                 if self._match("="):
                     self._ternary()  # NEW: `,` is not part of the RHS
@@ -1917,7 +1928,7 @@ class Compiler:
                     argc = self._arg_list()
                     self._expect(")")
                     self._v1_wall(meth, line)
-                    self._emit(Op.CALL_METHOD, self._name(meth), argc)
+                    self._emit_method(meth, argc)
                     return
                 # bare ID.prop — load var then GET_PROP (e.g. player.x)
                 self._emit(Op.LOAD_VAR, self._name(text))

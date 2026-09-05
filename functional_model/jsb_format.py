@@ -115,10 +115,15 @@ NATIVE_IDS = {
     "joyButtons": 53,
     # natives V2: ES Math.round (ties toward +inf). Same shape as Math.floor.
     "Math.round": 54,
+    # run 71 language-lite: the cheap V1.5 gaps that forced hand-edits
+    "isFinite": 55,
+    "isNaN": 56,
+    "Math.ceil": 57,
 }
 
 # NEW: aliases share an id (decode prefers the canonical NATIVE_IDS key)
 NATIVE_ALIASES = {
+    "performance.now": "Date.now",   # run 71: frame clock alias
     "console.warn": 0,
     "addEventListener": 19,
     "removeEventListener": 36,

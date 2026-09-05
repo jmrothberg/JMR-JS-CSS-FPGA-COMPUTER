@@ -6046,3 +6046,37 @@ requestAnimationFrame(tick);
     finally:
         sim.shutdown()
 
+def test_rtl_run71_language_lite_natives():
+    """run 71: isFinite/isNaN (55/56), Math.ceil (57), includes (desugar).
+    One checksum drawn as a rect width (vdraw is the proven RTL observation)."""
+    src = """
+var s = 0;
+var nanv = Math.sqrt(-1);
+if (isFinite(42)) { s = s + 1; }
+if (!isFinite(nanv)) { s = s + 2; }
+if (isNaN(nanv)) { s = s + 4; }
+if (!isNaN(5)) { s = s + 8; }
+if (Math.ceil(2.5) == 3) { s = s + 16; }
+if (Math.ceil(-2.5) == -2) { s = s + 32; }
+var a = [3, 4];
+if (a.includes(4)) { s = s + 64; }
+if (!a.includes(5)) { s = s + 128; }
+function tick() {
+  fillRect(10, 10, s, 1, 2);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    sim = _sim()
+    try:
+        _patch_js_v64("R71NAT.JS", src)
+        sim._rpc("SDRELOAD")
+        sim.type_line('LOAD "R71NAT.JS"')
+        sim.type_line("RUN")
+        sim._rpc("FRAME")
+        st = sim._rpc("VMSTAT?")
+        assert "fault=0" in st, st
+        assert "vdraw=10,10,255,1,2" in st, st
+    finally:
+        sim.shutdown()

@@ -986,6 +986,9 @@ class Machine:
             "Math.floor": self._nat_math_floor,
             "Math.round": self._nat_math_round,
             "Math.abs": self._nat_math_abs,
+            "Math.ceil": self._nat_math_ceil,
+            "isFinite": self._nat_isfinite,
+            "isNaN": self._nat_isnan,
             "Math.min": self._nat_math_min,
             "Math.max": self._nat_math_max,
             "Math.random": self._nat_math_random,
@@ -1457,6 +1460,18 @@ class Machine:
 
     def _nat_math_abs(self, x):
         return abs(x)
+
+    def _nat_math_ceil(self, x):
+        import math
+        return float(math.ceil(x)) if isinstance(x, (int, float)) else float("nan")
+
+    def _nat_isfinite(self, x):
+        import math
+        return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+    def _nat_isnan(self, x):
+        import math
+        return not isinstance(x, (int, float)) or isinstance(x, bool) or math.isnan(x)
 
     def _nat_math_min(self, a, b):
         return a if a < b else b

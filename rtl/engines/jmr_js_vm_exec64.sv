@@ -4380,6 +4380,40 @@ module jmr_js_vm_exec64 (
                                             code_raddr_n = 15'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
+                                        8'd55: begin // isFinite (run 71)
+                                            result = {16'h7ff9, 4'd3, 12'd0, 31'd0,
+                                                      (argc != 0) && v64_is_number(`VST_AT(base)) &&
+                                                      (`VST_AT(base)[62:52] != 11'h7ff)};
+                                            vst_wr(base, result);
+                                            vsp_n = base + 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end
+                                        8'd56: begin // isNaN (run 71): non-numbers are NaN too
+                                            result = {16'h7ff9, 4'd3, 12'd0, 31'd0,
+                                                      (argc == 0) || !v64_is_number(`VST_AT(base)) ||
+                                                      (`VST_AT(base)[62:52] == 11'h7ff &&
+                                                       `VST_AT(base)[51:0] != 52'd0)};
+                                            vst_wr(base, result);
+                                            vsp_n = base + 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end
+                                        8'd57: begin // Math.ceil (run 71) = -floor(-x)
+                                            begin
+                                                logic [63:0] neg_floor;
+                                                neg_floor = v64_floor_number({~`VST_AT(base)[63], `VST_AT(base)[62:0]});
+                                                result = (argc == 0) ? V64_CANON_NAN
+                                                       : {~neg_floor[63], neg_floor[62:0]};
+                                            end
+                                            vst_wr(base, result);
+                                            vsp_n = base + 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end
                                         8'd54: begin // Math.round (natives V2)
                                             result = (argc == 0)
                                                 ? V64_CANON_NAN
