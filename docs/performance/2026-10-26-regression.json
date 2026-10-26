@@ -1,0 +1,14 @@
+{
+  "passed": 549,
+  "skipped": 12,
+  "xfailed": 2,
+  "xpassed": 1,
+  "total": 564,
+  "failures": 0,
+  "rtl_binary": "sim/sim_build_release3/jmr_js_sim_server",
+  "core_log": "build/speedup/release3_core_tests.log",
+  "tail_log": "build/speedup/release3_tail_tests.log",
+  "core_seconds": 2933.69,
+  "tail_seconds": 297.78,
+  "latest_game_preservation_frames": 3240
+}

@@ -34,8 +34,10 @@ zeros, "Never never", `NAME.DAT`, the jammed "microcode ROM FIFOs", the
 "SRA M" panel title, the GPIO joystick, and the five-verb console are all
 fixed in this render. One typo survives:
 
-- COMPILE-ON-RUN flow: "Canvas → **framebueffer** → HDMI" — should read
-  **framebuffer**.
+- "framebueffer" should read **framebuffer**.
+- The historical dual-BRAM framebuffer and compile-on-RUN labels are stale:
+  the standard uses one persistent 640×480 BRAM canvas, a DDR front image,
+  and card-minted `.JSH` loaded by RUN. [Current standard](STANDARD_RELEASE.md).
 
 See also the shared colour note under the ASIC board poster: "8-bpp indexed,
 256-entry RGB888 palette" is the accurate phrasing on this poster, and it is
@@ -223,7 +225,7 @@ Pmod joystick ─► GPIO reader ───┘
                               ↓
               Paint / Video (palette + HDMI 640×480)
                               ↓
-          Framebuffers (V1: dual 640×480 BRAM)
+          Persistent 640×480 BRAM canvas → present FIFO → DDR front image
 
 Blitter ◄──► external SRAM asset bank (4 MB, simple SRAM port;
              FPGA board = DDR3 behind a bridge; ASIC = IS61WV204816)
@@ -302,8 +304,8 @@ startup.
 ## BRAM / LUT policy
 
 Prefer BRAM for palette, microcode, FIFOs, font, line buffers, bounded stacks,
-**and the V1 working set.** Dual **640×480** FB lives in `jmr_mini_fb.sv`
-BRAM. Also on-chip: code BRAM, JS heap. Game art lives in the **external
+**and the V1 working set.** One persistent **640×480** draw canvas lives
+in `jmr_mini_fb.sv` BRAM; `jmr_fb_present` copies it into the DDR front image. Also on-chip: code BRAM, JS heap. Game art lives in the **external
 SRAM asset bank** (see below), never in code BRAM. µSD / project `card.img`
 holds `NAME.HTML`. PYTHON, FPGA-SIM, and BOARD all play that image.
 **V1.0:** also a minted `NAME.JSH` from **card create** (`RUN` loads it).
@@ -340,21 +342,23 @@ req            request strobe (hold until ack)
 ack            completion strobe (1+ cycles later; bridge may stall)
 ```
 
-**4 MB map (V1):**
+**4 MB map (run72b):** addresses below are **16-bit word addresses**
+on the 2M-word SRAM port, not byte offsets.
 
-```
-0x000000 – 0x0002FF   title palette (256 × RGB888 = 768 bytes)
-0x000300 – top        sprite pixel banks (8-bpp indexed, 2-byte aligned)
-top of bank           reserved (suggested cold-buffer migration — see below)
-```
+| Word range | Use |
+|---|---|
+| 0–1,480,703 | ASET palette and full-quality sprite banks |
+| 1,480,704–1,634,303 | DDR front image: two indexed pixels per word |
+| 1,634,304–1,691,647 | Work/source staging, packed bytes |
+| 1,691,648–1,724,415 | Sprite scratch |
+| 1,724,416–1,789,951 | Source storage, one byte per word |
+| 1,789,952–2,097,151 | ImageData snapshots, one indexed pixel per word |
 
-**Landed use of “top of bank” (fit, 2026-08-21):** `imgd_pix`
-(getImageData / putImageData pixels) now lives at
-`IMGD_SRAM_BASE=1789952..2M` behind the same `jmr_sram_port`. Still
-**future plan:** `source_mem`, blit scratch, `json_mem` if BRAM stays
-tight. Do **not** move the whole JS heap off-chip. Schedule around the
-blitter (one outstanding `req`/`ack`). Live on-chip sizes:
-[FPGA_FIT.md](FPGA_FIT.md).
+The palette occupies the first 768 ASET bytes. Snapshot packing is unchanged
+by the speedup; only registered-read/request handoff is faster. One SRAM
+port/arbiter serves the clients; the board maps it to MIG DDR3. Heap
+capacities and generation checks remain on chip and unchanged.
+[Current implementation evidence](GAME_SPEEDUP_RESULTS.md).
 
 **V2.0 asset bank (planned — not implemented):** rebuild to **8 MB** (or
 larger if a title needs it). Keep the **same simple port** (`we`/`req`/`ack`,
@@ -391,13 +395,15 @@ As modules land, keep a table here: diagram block → `functional_model/…` →
 | INPUT / keyboard | FIFO + `ps2_decode` path | `jmr_keyboard_fifo` + `ps2_rx`/`ps2_decode` (board: J15 dead → PROG tether) |
 | INPUT / play keys | GUI KEYBITS | `jmr_uart_link` `0xFE` → `joy_in` (SIM + board tether) |
 | INPUT / joystick | `functional_model/input_engine.py` | FPGA-SIM: `jmr_js_core.joy_in` (GUI KEYBITS). Board: `rtl/phys/jmr_i2c_joy.sv` via `top_nexys_video`. **Not** `jmr_input_engine.sv` (stub) and **not** `tools/pmod_input_test/` (LED bit) |
-| Canvas / FB | `functional_model/canvas_engine.py` | `jmr_mini_fb.sv` native **640×480** dual-buffer BRAM (SIM; next bit) |
+| Canvas / FB | `functional_model/canvas_engine.py` | `jmr_mini_fb.sv` persistent **640×480** BRAM canvas + `jmr_fb_present` DDR front copy |
 | One-glass letterbox | `CanvasEngine.paint_console_letterbox` | `jmr_text_hdmi_scanout.sv` + dual-clock `jmr_video_vram` |
 | Bytecode VM | `functional_model/bytecode.py` + `jsb_format.py` | `rtl/engines/jmr_js_vm.sv` (writable ProgramImage BRAM) |
 | Storage | `functional_model/storage_engine.py` | `storage_engine.sv` + SD SPI + console load |
 
-**Honest path:** product titles are `*.HTML`. **`RUN` always compiles** the
-loaded HTML into one in-memory ProgramImage for the **JMR bytecode VM**.
+**Honest path:** product titles are `*.HTML`. Card creation mints `.JSH`
+ProgramImages from HTML/ARTX. **`RUN` loads that card image** into the native
+JMR bytecode VM; on-machine `COMPILE` can update the sidecar. It never runs a
+host JavaScript engine.
 See [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and
 `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`.
 

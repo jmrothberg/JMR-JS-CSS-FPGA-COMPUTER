@@ -761,17 +761,21 @@ def test_run_reports_a_malformed_image_instead_of_crashing(tmp_path):
 
 
 def test_code_words_check_measures_the_executable_not_the_trailer():
-    """PACFAST is the case that proved this wrong. Its executable is 17,604
-    words (2,876 spare) but its whole pre-ASET stream is 20,631 — and the FM
-    used to refuse on the second number, so PYTHON alone could not run a
-    title that plays on the board. jmr_js_vm.sv:6942 faults only on
-    ops_base + n_ops, so that is what the model may refuse on."""
+    """Pin executable-vs-trailer accounting independently of game code size.
+
+    The old PACFAST overflowed by 151 trailer words; the optimized game
+    now fits. A synthetic zero-padded trailer retains the original gate.
+    """
     import struct
 
-    m = Machine()
-    if not m.storage.card_img or not m.storage.card_img.is_file():
-        pytest.skip("no card.img")
-    blob = m.storage.load_bytes("PACFAST.JSH")
+    blob = bytearray(ProgramImage.from_chunk(
+        compile_source("var x=1;"), v2=True, value64=True,
+        sprites=[(1, 1, bytes([1]))], aset=True,
+    ).data)
+    aset_off = struct.unpack_from("<I", blob, 12)[0]
+    padded_off = (jsb_format.PROGRAM_CODE_WORDS + 151) * 4
+    blob[aset_off:aset_off] = bytes(padded_off - aset_off)
+    struct.pack_into("<I", blob, 12, padded_off)
     n_ops, n_consts = struct.unpack_from("<HH", blob, 4)
     flags = struct.unpack_from("<H", blob, 10)[0]
     ops_base = (4 if flags & 2 else 3) + n_consts * (2 if flags & 8 else 1)

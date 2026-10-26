@@ -4,7 +4,7 @@
 module jmr_js_core #(
     parameter int unsigned SD_INIT_DIV = 127,
     parameter int unsigned SD_RUN_DIV  = 3,
-    // NEW: FPGA-SIM FRAME_DIV=1 (one tick per ~2 clk when idle). Board keeps 65535.
+    // Short default for simulator/debug; the board explicitly selects 60 Hz.
     parameter int unsigned FRAME_DIV   = 65535,
     // NEW: 1 = behavioral 4 MB SRAM (FPGA-SIM). 0 = ports for board MIG / ASIC.
     // Not `ifdef SYNTHESIS` — same RTL, board instantiates #(.SRAM_INTERNAL(0)).
@@ -118,7 +118,8 @@ module jmr_js_core #(
     logic [18:0] fb_waddr, demo_fb_waddr, vm_fb_waddr;
     logic [7:0]  fb_wdata, demo_fb_wdata, vm_fb_wdata;
     logic frame_tick;
-    logic [15:0] frame_div /*verilator public_flat_rw*/;
+    localparam int FRAME_COUNT_W = (FRAME_DIV < 1) ? 1 : $clog2(FRAME_DIV + 1);
+    logic [FRAME_COUNT_W-1:0] frame_div /*verilator public_flat_rw*/;
     // NEW: console loads .JSB into VM code BRAM
     logic        code_we /*verilator public_flat_rd*/;
     logic [14:0]  code_waddr /*verilator public_flat_rd*/;
@@ -468,10 +469,10 @@ module jmr_js_core #(
             frame_tick <= 1'b0;
         end else begin
             frame_tick <= 1'b0;
-            if (frame_div == FRAME_DIV[15:0]) begin
+            if (frame_div == FRAME_COUNT_W'(FRAME_DIV)) begin
                 frame_div <= '0;
                 frame_tick <= 1'b1;
-            end else frame_div <= frame_div + 16'd1;
+            end else frame_div <= frame_div + 1'b1;
         end
     end
 

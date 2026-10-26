@@ -10,6 +10,8 @@ if {[llength $argv] >= 3 && [lindex $argv 2] eq "fresh"} {
   set FRESH 1
 }
 file mkdir $OUT
+set JMR_RESUME_PLACED_REQUEST [expr {[info exists ::env(JMR_RESUME_PLACED)] && $::env(JMR_RESUME_PLACED) eq "1"}]
+source [file join $ROOT tools board_flow build_gates.tcl]
 # Stem for build/bits/auto names. Prefer JMR_RUN_LABEL; else the newest
 # run*_console.log in $OUT (strip _console.log). need_timing=1 skips a
 # log that has not printed TIMING WNS= — that is the incoming tee, so a
@@ -196,12 +198,15 @@ if {$REUSE} {
 
 set_param general.maxThreads $SYNTH_THREADS
 
+if {!$JMR_RESUME_PLACED_REQUEST} {
 set_property target_language Verilog [current_project]
 jmr_add_sources $ROOT
 
 set_property top top_nexys_video [current_fileset]
 set_property verilog_define {SYNTHESIS=1} [current_fileset]
-set_property STEPS.WRITE_BITSTREAM.ARGS.BIN_FILE true [get_runs impl_1]
+if {!$JMR_RESUME_PLACED_REQUEST} {
+  set_property STEPS.WRITE_BITSTREAM.ARGS.BIN_FILE true [get_runs impl_1]
+}
 # Default Vivado strategy — Explore took 30m and still missed WNS; fix RTL instead
 # AUTO_INCREMENTAL_CHECKPOINT is BANNED (2026-08-21): the 04:11 place-fail
 # netlist was an incremental stitch against the pre-exec32-delete reference
@@ -214,12 +219,16 @@ catch {set_property AUTO_INCREMENTAL_CHECKPOINT 0 [get_runs synth_1]}
 # every FF with a decode cone; measured ~9-11 LUT/FF). AreaOptimized_high
 # targets exactly this. First tried on run 4 of the LUT campaign.
 catch {set_property STEPS.SYNTH_DESIGN.ARGS.DIRECTIVE AreaOptimized_high [get_runs synth_1]}
-catch {set_property STEPS.OPT_DESIGN.ARGS.DIRECTIVE ExploreArea [get_runs impl_1]}
+if {!$JMR_RESUME_PLACED_REQUEST} {
+  catch {set_property STEPS.OPT_DESIGN.ARGS.DIRECTIVE ExploreArea [get_runs impl_1]}
+}
 # 2026-08-23: the UTLZ-1 DRC compares LOGICAL LUT count against sites
 # BEFORE LUT6_2 pairing is attempted; control-heavy netlists pack 10-25%.
 # Demote to warning and let the placer try (user-approved experiment).
 set_param drc.disableLUTOverUtilError 1
-catch {set_property AUTO_INCREMENTAL_CHECKPOINT 0 [get_runs impl_1]}
+if {!$JMR_RESUME_PLACED_REQUEST} {
+  catch {set_property AUTO_INCREMENTAL_CHECKPOINT 0 [get_runs impl_1]}
+}
 # UG904: write a DCP after each *impl* step (opt/place/route). synth_design
 # is one step — first DCP is at synth_1 100%. Cannot resume mid-mapping.
 catch {set_param project.writeIntermediateCheckpoints 1}
@@ -235,10 +244,12 @@ proc jmr_ckpt_hook {run step dcp} {
   catch {set_property STEPS.${step}.TCL.POST $hook [get_runs $run]}
 }
 jmr_ckpt_hook synth_1 SYNTH_DESIGN $OUT/post_synth.dcp
-jmr_ckpt_hook impl_1 OPT_DESIGN $OUT/post_opt.dcp
-jmr_ckpt_hook impl_1 PLACE_DESIGN $OUT/post_place.dcp
-jmr_ckpt_hook impl_1 PHYS_OPT_DESIGN $OUT/post_phys_opt.dcp
-jmr_ckpt_hook impl_1 ROUTE_DESIGN $OUT/post_route.dcp
+if {!$JMR_RESUME_PLACED_REQUEST} {
+  jmr_ckpt_hook impl_1 OPT_DESIGN $OUT/post_opt.dcp
+  jmr_ckpt_hook impl_1 PLACE_DESIGN $OUT/post_place.dcp
+  jmr_ckpt_hook impl_1 PHYS_OPT_DESIGN $OUT/post_phys_opt.dcp
+  jmr_ckpt_hook impl_1 ROUTE_DESIGN $OUT/post_route.dcp
+}
 
 # NEW: Nexys Video DDR3 MIG (native UI) — pinout from Digilent mig_a.prj
 # Skip create/generate when the IP already exists in a reused project.
@@ -258,6 +269,7 @@ if {[llength [get_ips -quiet mig_7series_0]] == 0} {
 }
 
 update_compile_order -fileset sources_1
+}
 
 # Synth 8-6014 etc. stop printing after 100 (Common 17-14). The log then
 # looks hung while Vivado is still in opt. BASIC finishes that phase in
@@ -291,11 +303,15 @@ proc jmr_rss_gb {} {
   return [format "%.2f" [expr {$m / 1024.0 / 1024.0}]]
 }
 
-proc jmr_wait_run {run} {
+proc jmr_wait_run {run {through_step ""}} {
+  set began [clock seconds]
   while {1} {
     set st [get_property STATUS [get_runs $run]]
     set pr [get_property PROGRESS [get_runs $run]]
     puts "HEARTBEAT [clock format [clock seconds] -format {%H:%M:%S}] $run STATUS=$st PROGRESS=$pr RSS=[jmr_rss_gb]GB"
+    # A deliberately stopped placement run reports the NEXT step as not
+    # started, not "complete". wait_on_run returns immediately in that state.
+    if {$through_step eq "place_design" && [jmr_placed_run_ready $st $pr]} { break }
     if {$pr eq "100%" ||
         [string match -nocase "*fail*" $st] ||
         [string match -nocase "*error*" $st] ||
@@ -303,7 +319,14 @@ proc jmr_wait_run {run} {
       wait_on_run $run
       break
     }
-    wait_on_run $run -timeout 30
+    if {$run eq "impl_1" && [info exists ::env(JMR_IMPL_TIMEOUT_MIN)] &&
+        [clock seconds] - $began > 60 * $::env(JMR_IMPL_TIMEOUT_MIN)} {
+      # Completed-stage DCP hooks remain intact; never reset the run here.
+      catch {stop_runs $run}
+      set ::JMR_IMPL_TIMED_OUT 1
+      error "$run exceeded JMR_IMPL_TIMEOUT_MIN=$::env(JMR_IMPL_TIMEOUT_MIN); stopped with completed checkpoints preserved"
+    }
+    wait_on_run $run -timeout 1
   }
 }
 
@@ -329,6 +352,25 @@ proc jmr_rtl_newer_than {dcp} {
   return [expr {[string trim $out] ne ""}]
 }
 
+# Check contents as well as timestamps: a source edited DURING synthesis is
+# older than the resulting DCP, but was never ingested into that DCP.
+proc jmr_source_fingerprint {} {
+  global ROOT JMR_DEFINES
+  set paths [exec find $ROOT/rtl $ROOT/constraints $ROOT/third_party/digilent_rgb2dvi/src \
+    $ROOT/tools/board_flow/mig_a.prj \
+    ( -name {*.sv} -o -name {*.vhd} -o -name {*.xdc} -o -name mig_a.prj ) -type f]
+  set files [lsort [split [string trim $paths] "\n"]]
+  return "[exec sha256sum {*}$files]\ndefines=$JMR_DEFINES"
+}
+set source_fingerprint [jmr_source_fingerprint]
+set source_stamp $OUT/synth_source.sha256
+set source_stamp_matches 0
+if {[file exists $source_stamp]} {
+  set stamp_fd [open $source_stamp r]
+  set source_stamp_matches [expr {[read $stamp_fd] eq $source_fingerprint}]
+  close $stamp_fd
+}
+
 set force_synth 0
 if {[info exists ::env(JMR_VIVADO_FORCE_SYNTH)] && $::env(JMR_VIVADO_FORCE_SYNTH) ne ""} {
   set force_synth 1
@@ -339,7 +381,7 @@ set synth_st ""
 catch {set synth_pr [get_property PROGRESS [get_runs synth_1]]}
 catch {set synth_st [get_property STATUS [get_runs synth_1]]}
 set skip_synth [expr {
-  !$FRESH && !$force_synth && $dcp ne "" && $synth_pr eq "100%" &&
+  !$FRESH && !$force_synth && $source_stamp_matches && $dcp ne "" && $synth_pr eq "100%" &&
   ![string match -nocase "*fail*" $synth_st] && ![jmr_rtl_newer_than $dcp]
 }]
 if {$skip_synth} {
@@ -356,6 +398,9 @@ catch {reset_run synth_1}
     puts "INFO: verilog_define $JMR_DEFINES"
     set_property verilog_define $JMR_DEFINES [current_fileset]
   }
+  set stamp_fd [open $source_stamp w]
+  puts -nonewline $stamp_fd $source_fingerprint
+  close $stamp_fd
   launch_runs synth_1 -jobs $SYNTH_JOBS
   jmr_wait_run synth_1
 }
@@ -371,16 +416,42 @@ if {[get_property PROGRESS [get_runs synth_1]] != "100%" ||
 
 open_run synth_1
 report_utilization -file $OUT/utilization_synth.rpt
-if {![file exists $OUT/post_synth.dcp]} {
-  catch {write_checkpoint -force $OUT/post_synth.dcp}
+report_utilization -hierarchical -hierarchical_depth 3 -file $OUT/utilization_synth_hier.rpt
+write_checkpoint -force $OUT/post_synth.dcp
+if {[jmr_source_fingerprint] ne $source_fingerprint} {
+  error "Sources changed during synthesis; checkpoint preserved, rerun before implementation"
 }
+jmr_resource_gate synth [report_utilization -return_string]
+jmr_stop_after synth
 
-catch {reset_run impl_1}
+set resume_placed 0
+if {[info exists ::env(JMR_RESUME_PLACED)] && $::env(JMR_RESUME_PLACED) eq "1"} {
+  set placed_dcp [get_property DIRECTORY [get_runs impl_1]]/top_nexys_video_placed.dcp
+  set placed_run_status [get_property STATUS [get_runs impl_1]]
+  set placed_synth_dcp [jmr_synth_dcp]
+  if {![file exists $placed_dcp] || $placed_synth_dcp eq "" ||
+      [file mtime $placed_dcp] < [file mtime $placed_synth_dcp] ||
+      [get_property NEEDS_REFRESH [get_runs impl_1]] ||
+      ![jmr_placed_run_ready $placed_run_status [get_property PROGRESS [get_runs impl_1]]]} {
+    error "Cannot resume placement: status=$placed_run_status dcp=$placed_dcp synth=$placed_synth_dcp (current sources and completed placement required)"
+  }
+  if {$JMR_STRATEGY ne "" && [get_property STRATEGY [get_runs impl_1]] ne $JMR_STRATEGY} {
+    error "Cannot resume placement with a different strategy"
+  }
+  if {[info exists ::env(JMR_VIVADO_OPT_DIRECTIVE)] &&
+      [get_property STEPS.OPT_DESIGN.ARGS.DIRECTIVE [get_runs impl_1]] ne $::env(JMR_VIVADO_OPT_DIRECTIVE)} {
+    error "Cannot resume placement with a different optimization directive"
+  }
+  set resume_placed 1
+  puts "INFO: resuming completed placement $placed_dcp"
+} else {
+  catch {reset_run impl_1}
+}
 
 # Place/route: restore 8 threads. Mapping OOM was synth_design, not impl.
 set_param general.maxThreads $IMPL_THREADS
 puts "INFO: impl maxThreads=$IMPL_THREADS jobs=$IMPL_JOBS"
-if {$JMR_STRATEGY ne ""} {
+if {!$resume_placed && $JMR_STRATEGY ne ""} {
   puts "INFO: impl strategy $JMR_STRATEGY"
   set_property strategy $JMR_STRATEGY [get_runs impl_1]
   # setting a strategy RESETS the run's step options — re-apply BIN_FILE
@@ -394,10 +465,36 @@ if {$JMR_STRATEGY ne ""} {
   jmr_ckpt_hook impl_1 PHYS_OPT_DESIGN $OUT/post_phys_opt.dcp
   jmr_ckpt_hook impl_1 ROUTE_DESIGN $OUT/post_route.dcp
 }
+if {!$resume_placed && [info exists ::env(JMR_VIVADO_OPT_DIRECTIVE)] &&
+    $::env(JMR_VIVADO_OPT_DIRECTIVE) ne ""} {
+  puts "INFO: opt_design directive $::env(JMR_VIVADO_OPT_DIRECTIVE)"
+  set_property STEPS.OPT_DESIGN.ARGS.DIRECTIVE $::env(JMR_VIVADO_OPT_DIRECTIVE) [get_runs impl_1]
+}
+# Place first: an overpacked candidate must never enter a long router run.
+if {!$resume_placed} {
+  launch_runs impl_1 -to_step place_design -jobs $IMPL_JOBS
+  jmr_wait_run impl_1 place_design
+}
+# open_run targets the next (unlaunched) step after a partial run. Load
+# the completed native placed DCP explicitly for the budget/timing gate.
+catch {close_design}
+set placed_dcp [get_property DIRECTORY [get_runs impl_1]]/top_nexys_video_placed.dcp
+open_checkpoint $placed_dcp
+report_utilization -file $OUT/utilization_place.rpt
+report_design_analysis -congestion -file $OUT/congestion_place.rpt
+report_timing_summary -file $OUT/timing_place.rpt
+jmr_resource_gate place [report_utilization -return_string]
+write_checkpoint -force $OUT/post_place.dcp
+jmr_stop_after place
+close_design
 launch_runs impl_1 -to_step write_bitstream -jobs $IMPL_JOBS
 # catch: a failed route ERRORs out of wait_on_runs and would kill the
 # script before the checkpoint-recovery branch below ever ran (run 45).
 catch { jmr_wait_run impl_1 }
+if {[info exists ::JMR_IMPL_TIMED_OUT]} {
+  puts "ERROR: timed implementation stopped; not entering automatic reroute recovery"
+  exit 2
+}
 set st [get_property STATUS [get_runs impl_1]]
 set RECOVERED 0
 if {[get_property PROGRESS [get_runs impl_1]] != "100%" ||
@@ -428,6 +525,7 @@ if {[get_property PROGRESS [get_runs impl_1]] != "100%" ||
 
 if {!$RECOVERED} { open_run impl_1 }
 report_utilization -file $OUT/utilization_impl.rpt
+jmr_resource_gate impl [report_utilization -return_string]
 # run-51 observability (2026-08-27): record congestion + timing
 # DISTRIBUTIONS every run. Every failed-run postmortem so far starved on
 # -max_paths 1 headlines (the project had exactly ONE saved intra-VM
@@ -468,6 +566,9 @@ if {$whs eq "" || $whs < 0} {
 
 if {$RECOVERED} {
   write_bitstream -force [get_property DIRECTORY [get_runs impl_1]]/top_nexys_video.bit
+}
+if {[jmr_source_fingerprint] ne $source_fingerprint} {
+  error "Sources changed during implementation; refusing to publish stale .bit"
 }
 file copy -force \
   [get_property DIRECTORY [get_runs impl_1]]/top_nexys_video.bit \

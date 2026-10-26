@@ -18,21 +18,35 @@ _VMDIV = 7
 
 
 _SCRATCH_CARD = None
+_SCRATCH_CARD_DIR = None
+_SCRATCH_CARD_TEST = None
 
 
 def _scratch_card():
-    """Once per session: copy card.img to a scratch and point JMR_CARD_IMG
+    """Once per test: copy card.img to a scratch and point JMR_CARD_IMG
     at it. Tests write probe files (_patch_js/_patch_html) onto the card;
     the user's card.img must never accumulate that junk (their DIR filled
     with probe files). Both the patch helpers and _sim() route through
     here — a test may patch BEFORE its _sim() call, and re-copying then
     would silently discard the patch (PALK.JS ?FN, nops=0)."""
-    global _SCRATCH_CARD
+    global _SCRATCH_CARD, _SCRATCH_CARD_DIR, _SCRATCH_CARD_TEST
+    current_test = os.environ.get("PYTEST_CURRENT_TEST")
+    # A fixture may patch in setup and launch in call: retain that same card.
+    test_id = current_test.rsplit(" (", 1)[0] if current_test else None
+    if test_id and test_id != _SCRATCH_CARD_TEST:
+        if _SCRATCH_CARD_DIR is not None:
+            _SCRATCH_CARD_DIR.cleanup()
+        _SCRATCH_CARD = None
+        _SCRATCH_CARD_DIR = None
+        _SCRATCH_CARD_TEST = test_id
     if _SCRATCH_CARD is None:
         import shutil
         import tempfile
 
-        scratch = Path(tempfile.gettempdir()) / "jmr_test_card.img"
+        # Independent pytest invocations must not overwrite each other's FAT
+        # image while an RTL process is reading it or a probe is being added.
+        _SCRATCH_CARD_DIR = tempfile.TemporaryDirectory(prefix="jmr_test_card_")
+        scratch = Path(_SCRATCH_CARD_DIR.name) / "card.img"
         # JMR_CARD_SRC: pin the suite to a frozen card copy (the repo card
         # is re-minted by the content lane mid-session; measurement doctrine
         # says validate against a frozen snapshot when content moves).
@@ -41,6 +55,8 @@ def _scratch_card():
             shutil.copyfile(real, scratch)
             os.environ["JMR_CARD_IMG"] = str(scratch)
             _SCRATCH_CARD = scratch
+    if _SCRATCH_CARD is not None:
+        os.environ["JMR_CARD_IMG"] = str(_SCRATCH_CARD)
     return _SCRATCH_CARD
 
 
@@ -317,6 +333,43 @@ def test_program_image_value64_heap_gc_reclaims_churn_matches_python_hm():
         assert got["vars"] == f"{expected['vars']:x}", (raw, expected)
         assert got["heap"] == f"{expected['heap']:x}", (raw, expected)
         assert got["error"] == str(expected["error_code"]), (raw, expected)
+    finally:
+        sim.shutdown()
+
+
+def test_rtl_array_reference_metadata_survives_copy_fill_and_long_arrays():
+    """References reachable only through arrays survive allocation and frame GC."""
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+
+    source = """
+function capture(n) { return ()=>n; }
+var roots = [{n:2}, [3], capture(4)];
+var copied = [roots].slice();
+var filled = [0,0]; filled.fill(roots);
+var longRefs = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]; longRefs[32] = roots;
+roots = null;
+function tick() {
+  var i=0, waste;
+  while(i<1800) { waste=[i]; i=i+1; }
+  var a=copied[0], b=filled[1], c=longRefs[32];
+  var n=a[0].n+a[1][0]+a[2]()+b[0].n+b[1][0]+b[2]()+c[0].n+c[1][0]+c[2]();
+  fillRect(10,10,n,1,2);
+  swapBuffers(); requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    image = ProgramImage.from_chunk(compile_source(source), v2=True, value64=True)
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith("OK")
+        for _ in range(3):
+            sim._rpc("FRAME")
+            status = sim._rpc("VMSTAT?")
+            assert "fault=0" in status, status
+            assert "vdraw=10,10,27,1,2" in status, status
+        assert _vmstat_int(status, "gc") >= 3, status
     finally:
         sim.shutdown()
 

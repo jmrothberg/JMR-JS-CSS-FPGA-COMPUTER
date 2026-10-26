@@ -1,0 +1,66 @@
+{
+  "standard": "run72b_game_speedup_WNS+0.238",
+  "tag": "standard-2026-10-26-run72b",
+  "date": "2026-10-26",
+  "part": "xc7a200tsbg484-1",
+  "board_status": "User reports working board/tether setup and selected this build as the standard; numeric board FPS unmeasured.",
+  "setup_slack_ns": 0.238,
+  "hold_slack_ns": 0.05,
+  "resources": {
+    "luts": 92273,
+    "slices": 28583,
+    "bram_tiles": 353.5,
+    "dsps": 128
+  },
+  "routing_seconds": 2148,
+  "artifacts": {
+    "run72b_game_speedup_WNS+0.238.bit": {
+      "sha256": "fea0a4e54850e145302b6b37910f493ebc79ce848a009dc50565212ba52b950c",
+      "bytes": 9730859,
+      "url": "https://github.com/jmrothberg/JMR-JS-CSS-FPGA-COMPUTER/releases/download/standard-2026-10-26-run72b/run72b_game_speedup_WNS+0.238.bit"
+    },
+    "run72b_game_speedup_WNS+0.238.bin": {
+      "sha256": "f2094c8261fa64dda56fcb5b5791bff6c35b52dfc05919b15b74de5e72c8af4f",
+      "bytes": 9730652,
+      "url": "https://github.com/jmrothberg/JMR-JS-CSS-FPGA-COMPUTER/releases/download/standard-2026-10-26-run72b/run72b_game_speedup_WNS+0.238.bin"
+    },
+    "run72b_card.img": {
+      "sha256": "c7eaf812e79357e070db9e6a690bc82e681fe4920bff3b081af6c8fe2fe4680c",
+      "bytes": 33554432,
+      "url": "https://github.com/jmrothberg/JMR-JS-CSS-FPGA-COMPUTER/releases/download/standard-2026-10-26-run72b/run72b_card.img"
+    },
+    "run72b_post_route.dcp": {
+      "sha256": "4f5f50bb6d2dd9e9e8eb4f7aea85029947f02783a75cdfead6e6eacf9af35bac",
+      "bytes": 57307112,
+      "url": "https://github.com/jmrothberg/JMR-JS-CSS-FPGA-COMPUTER/releases/download/standard-2026-10-26-run72b/run72b_post_route.dcp"
+    },
+    "run72b_sources.tar.gz": {
+      "sha256": "991e66c053408bcb129dd28ea055dbe923fee16f5d6a482c5b0cdfb52fd577ba",
+      "bytes": 1409887,
+      "url": "https://github.com/jmrothberg/JMR-JS-CSS-FPGA-COMPUTER/releases/download/standard-2026-10-26-run72b/run72b_sources.tar.gz"
+    },
+    "run72b_reports.zip": {
+      "sha256": "db6d77530ac2173f4d8ac5816a65646d2605fc432ac01dfd9de8a63c9e33a239",
+      "bytes": 195613,
+      "url": "https://github.com/jmrothberg/JMR-JS-CSS-FPGA-COMPUTER/releases/download/standard-2026-10-26-run72b/run72b_reports.zip"
+    }
+  },
+  "persistent_flash_input": "run72b_game_speedup_WNS+0.238.bit",
+  "bin_role": "secondary archive; use the .bit container with openFPGALoader -f",
+  "previous_archive": [
+    {
+      "filename": "previous_20261026_1538_UNQUALIFIED.bit",
+      "sha256": "30d4c83d79a52f2a2314d69f043c6f0bf7203e679875ffea8c162302505ca56a",
+      "original_path": "build/bits/auto/20261026_160712_UNKNOWN_PREV.bit",
+      "qualification": "unknown source revision/timing; archived history, not current standard"
+    },
+    {
+      "filename": "previous_20261026_1538_UNQUALIFIED.bin",
+      "sha256": "eedb5dc50d29fc795aebd7b4fa82518519d8cea25c5c9637cfb50052532ebf73",
+      "original_path": "build/bits/auto/20261026_160712_UNKNOWN_PREV.bin",
+      "qualification": "unknown source revision/timing; archived history, not current standard"
+    }
+  ],
+  "build_evidence": "docs/performance/2026-10-26-fpga-release.json",
+  "source_note": "Validated frozen snapshot; later working-tree changes are not part of this standard."
+}

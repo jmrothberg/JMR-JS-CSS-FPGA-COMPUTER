@@ -1,0 +1,1878 @@
+{
+  "baseline_revision": "38b6da1",
+  "measurement": "actual native RTL; SRAM_INTERNAL=1, no real MIG latency; 100 MHz fabric / VM divisor 7",
+  "games": {
+    "PACFAST": {
+      "before": {
+        "image": "build/speedup/PACFAST_baseline.JSH",
+        "sim_binary": "/home/jm-rothberg/JMR-JS-CSS-FPGA-COMPUTER/build/speedup/baseline/jmr_js_sim_server",
+        "memory_model": "SRAM_INTERNAL=1; no real MIG latency",
+        "core_hz": 100000000,
+        "vm_divisor": 7,
+        "frames": [
+          {
+            "fclk": 4749423,
+            "gc": 48,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 8,
+            "swaps": 8,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4749353,
+            "gc": 49,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 9,
+            "swaps": 9,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4751131,
+            "gc": 50,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 10,
+            "swaps": 10,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4750333,
+            "gc": 51,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 11,
+            "swaps": 11,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4757053,
+            "gc": 52,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 12,
+            "swaps": 12,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737313,
+            "gc": 53,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 13,
+            "swaps": 13,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737383,
+            "gc": 54,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 14,
+            "swaps": 14,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737313,
+            "gc": 55,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 15,
+            "swaps": 15,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737383,
+            "gc": 56,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 16,
+            "swaps": 16,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737313,
+            "gc": 57,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 17,
+            "swaps": 17,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737509,
+            "gc": 58,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 18,
+            "swaps": 18,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4749871,
+            "gc": 59,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 19,
+            "swaps": 19,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4736781,
+            "gc": 60,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 20,
+            "swaps": 20,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4736711,
+            "gc": 61,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 21,
+            "swaps": 21,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4769471,
+            "gc": 62,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 22,
+            "swaps": 22,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4749731,
+            "gc": 63,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 23,
+            "swaps": 23,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4749801,
+            "gc": 64,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 24,
+            "swaps": 24,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4749731,
+            "gc": 65,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 25,
+            "swaps": 25,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4751425,
+            "gc": 66,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 26,
+            "swaps": 26,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4754561,
+            "gc": 67,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 27,
+            "swaps": 27,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4750697,
+            "gc": 68,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 28,
+            "swaps": 28,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4750627,
+            "gc": 69,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 29,
+            "swaps": 29,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4750697,
+            "gc": 70,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 30,
+            "swaps": 30,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4750627,
+            "gc": 71,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 31,
+            "swaps": 31,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4757347,
+            "gc": 72,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 32,
+            "swaps": 32,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 14358932,
+            "gc": 73,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 33,
+            "swaps": 33,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4738720,
+            "gc": 74,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 34,
+            "swaps": 34,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737922,
+            "gc": 75,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 35,
+            "swaps": 35,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737992,
+            "gc": 76,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 36,
+            "swaps": 36,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737922,
+            "gc": 77,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 37,
+            "swaps": 37,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4736970,
+            "gc": 78,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 38,
+            "swaps": 38,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4736900,
+            "gc": 79,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 39,
+            "swaps": 39,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4736970,
+            "gc": 80,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 40,
+            "swaps": 40,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4736900,
+            "gc": 81,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 41,
+            "swaps": 41,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4771459,
+            "gc": 82,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 42,
+            "swaps": 42,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4750991,
+            "gc": 83,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 43,
+            "swaps": 43,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4751061,
+            "gc": 84,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 44,
+            "swaps": 44,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4750991,
+            "gc": 85,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 45,
+            "swaps": 45,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4751061,
+            "gc": 86,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 46,
+            "swaps": 46,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 14078953,
+            "gc": 87,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 47,
+            "swaps": 47,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4751075,
+            "gc": 88,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 48,
+            "swaps": 48,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4751005,
+            "gc": 89,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 49,
+            "swaps": 49,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4750907,
+            "gc": 90,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 50,
+            "swaps": 50,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4750109,
+            "gc": 91,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 51,
+            "swaps": 51,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4760763,
+            "gc": 92,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 52,
+            "swaps": 52,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737089,
+            "gc": 93,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 53,
+            "swaps": 53,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737159,
+            "gc": 94,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 54,
+            "swaps": 54,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737089,
+            "gc": 95,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 55,
+            "swaps": 55,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737159,
+            "gc": 96,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 56,
+            "swaps": 56,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737089,
+            "gc": 97,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 57,
+            "swaps": 57,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4738783,
+            "gc": 98,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 58,
+            "swaps": 58,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4737985,
+            "gc": 99,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 59,
+            "swaps": 59,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4738055,
+            "gc": 100,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 60,
+            "swaps": 60,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 13719706,
+            "gc": 101,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 61,
+            "swaps": 61,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4770745,
+            "gc": 102,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 62,
+            "swaps": 62,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4751005,
+            "gc": 103,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 63,
+            "swaps": 63,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4751075,
+            "gc": 104,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 64,
+            "swaps": 64,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4751005,
+            "gc": 105,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 65,
+            "swaps": 65,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4751299,
+            "gc": 106,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 66,
+            "swaps": 66,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 4750501,
+            "gc": 107,
+            "obj": 674,
+            "arr": 1420,
+            "rafcall": 67,
+            "swaps": 67,
+            "fault": 0,
+            "fcap": 0
+          }
+        ],
+        "median_core_cycles": 4749990.0,
+        "p95_core_cycles": 4771459,
+        "max_core_cycles": 14358932,
+        "estimated_fps_from_median": 21.052675900370318
+      },
+      "after": {
+        "image": "build/speedup/PACFAST.JSH",
+        "sim_binary": "/home/jm-rothberg/JMR-JS-CSS-FPGA-COMPUTER/sim/sim_build_skip/jmr_js_sim_server",
+        "memory_model": "SRAM_INTERNAL=1; no real MIG latency",
+        "core_hz": 100000000,
+        "vm_divisor": 7,
+        "frames": [
+          {
+            "fclk": 1264634,
+            "gc": 48,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 8,
+            "swaps": 8,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1264480,
+            "gc": 49,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 9,
+            "swaps": 9,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1266342,
+            "gc": 50,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 10,
+            "swaps": 10,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1265544,
+            "gc": 51,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 11,
+            "swaps": 11,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1270892,
+            "gc": 52,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 12,
+            "swaps": 12,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1251152,
+            "gc": 53,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 13,
+            "swaps": 13,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1251222,
+            "gc": 54,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 14,
+            "swaps": 14,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1251068,
+            "gc": 55,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 15,
+            "swaps": 15,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1251222,
+            "gc": 56,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 16,
+            "swaps": 16,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1251068,
+            "gc": 57,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 17,
+            "swaps": 17,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1251264,
+            "gc": 58,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 18,
+            "swaps": 18,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1267238,
+            "gc": 59,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 19,
+            "swaps": 19,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1252776,
+            "gc": 60,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 20,
+            "swaps": 20,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1252706,
+            "gc": 61,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 21,
+            "swaps": 21,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1286922,
+            "gc": 62,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 22,
+            "swaps": 22,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1267098,
+            "gc": 63,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 23,
+            "swaps": 23,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1267252,
+            "gc": 64,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 24,
+            "swaps": 24,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1267182,
+            "gc": 65,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 25,
+            "swaps": 25,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1268876,
+            "gc": 66,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 26,
+            "swaps": 26,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1272012,
+            "gc": 67,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 27,
+            "swaps": 27,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1268148,
+            "gc": 68,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 28,
+            "swaps": 28,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1267994,
+            "gc": 69,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 29,
+            "swaps": 29,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1268148,
+            "gc": 70,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 30,
+            "swaps": 30,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1267994,
+            "gc": 71,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 31,
+            "swaps": 31,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1273342,
+            "gc": 72,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 32,
+            "swaps": 32,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 7734090,
+            "gc": 73,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 33,
+            "swaps": 33,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1252797,
+            "gc": 74,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 34,
+            "swaps": 34,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1251999,
+            "gc": 75,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 35,
+            "swaps": 35,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1252153,
+            "gc": 76,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 36,
+            "swaps": 36,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1251999,
+            "gc": 77,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 37,
+            "swaps": 37,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1251131,
+            "gc": 78,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 38,
+            "swaps": 38,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1251061,
+            "gc": 79,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 39,
+            "swaps": 39,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1251131,
+            "gc": 80,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 40,
+            "swaps": 40,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1251061,
+            "gc": 81,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 41,
+            "swaps": 41,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1286992,
+            "gc": 82,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 42,
+            "swaps": 42,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1266440,
+            "gc": 83,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 43,
+            "swaps": 43,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1266594,
+            "gc": 84,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 44,
+            "swaps": 44,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1266440,
+            "gc": 85,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 45,
+            "swaps": 45,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1266510,
+            "gc": 86,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 46,
+            "swaps": 46,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 7557550,
+            "gc": 87,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 47,
+            "swaps": 47,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1264410,
+            "gc": 88,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 48,
+            "swaps": 48,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1264340,
+            "gc": 89,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 49,
+            "swaps": 49,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1264326,
+            "gc": 90,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 50,
+            "swaps": 50,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1263444,
+            "gc": 91,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 51,
+            "swaps": 51,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1272810,
+            "gc": 92,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 52,
+            "swaps": 52,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1249136,
+            "gc": 93,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 53,
+            "swaps": 53,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1249206,
+            "gc": 94,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 54,
+            "swaps": 54,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1249136,
+            "gc": 95,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 55,
+            "swaps": 55,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1249206,
+            "gc": 96,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 56,
+            "swaps": 56,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1249052,
+            "gc": 97,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 57,
+            "swaps": 57,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1250830,
+            "gc": 98,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 58,
+            "swaps": 58,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1249948,
+            "gc": 99,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 59,
+            "swaps": 59,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1250018,
+            "gc": 100,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 60,
+            "swaps": 60,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 7307237,
+            "gc": 101,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 61,
+            "swaps": 61,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1284080,
+            "gc": 102,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 62,
+            "swaps": 62,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1264340,
+            "gc": 103,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 63,
+            "swaps": 63,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1264494,
+            "gc": 104,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 64,
+            "swaps": 64,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1264340,
+            "gc": 105,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 65,
+            "swaps": 65,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1264718,
+            "gc": 106,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 66,
+            "swaps": 66,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1263920,
+            "gc": 107,
+            "obj": 673,
+            "arr": 1052,
+            "rafcall": 67,
+            "swaps": 67,
+            "fault": 0,
+            "fcap": 0
+          }
+        ],
+        "median_core_cycles": 1264375.0,
+        "p95_core_cycles": 1286992,
+        "max_core_cycles": 7734090,
+        "estimated_fps_from_median": 79.09045971329708
+      },
+      "median_speedup": 3.75678892733564,
+      "p95_speedup": 3.707450395962057
+    },
+    "DNKF": {
+      "before": {
+        "image": "build/speedup/DNKF_baseline.JSH",
+        "sim_binary": "/home/jm-rothberg/JMR-JS-CSS-FPGA-COMPUTER/build/speedup/baseline/jmr_js_sim_server",
+        "memory_model": "SRAM_INTERNAL=1; no real MIG latency",
+        "core_hz": 100000000,
+        "vm_divisor": 7,
+        "frames": [
+          {
+            "fclk": 3491502,
+            "gc": 902,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 895,
+            "swaps": 898,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3454276,
+            "gc": 903,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 896,
+            "swaps": 899,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3453114,
+            "gc": 904,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 897,
+            "swaps": 900,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3456124,
+            "gc": 905,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 898,
+            "swaps": 901,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3456124,
+            "gc": 906,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 899,
+            "swaps": 902,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3452652,
+            "gc": 907,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 900,
+            "swaps": 903,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3457608,
+            "gc": 908,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 901,
+            "swaps": 904,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3452652,
+            "gc": 909,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 902,
+            "swaps": 905,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3451455,
+            "gc": 910,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 903,
+            "swaps": 906,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3454465,
+            "gc": 911,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 904,
+            "swaps": 907,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3454465,
+            "gc": 912,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 905,
+            "swaps": 908,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3454465,
+            "gc": 913,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 906,
+            "swaps": 909,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3469025,
+            "gc": 914,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 907,
+            "swaps": 910,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3466246,
+            "gc": 915,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 908,
+            "swaps": 911,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3462774,
+            "gc": 916,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 909,
+            "swaps": 912,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3462774,
+            "gc": 917,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 910,
+            "swaps": 913,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3457398,
+            "gc": 918,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 911,
+            "swaps": 914,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3453926,
+            "gc": 919,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 912,
+            "swaps": 915,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3458882,
+            "gc": 920,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 913,
+            "swaps": 916,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3453926,
+            "gc": 921,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 914,
+            "swaps": 917,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3449572,
+            "gc": 922,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 915,
+            "swaps": 918,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3486056,
+            "gc": 923,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 916,
+            "swaps": 919,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3486056,
+            "gc": 924,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 917,
+            "swaps": 920,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3482584,
+            "gc": 925,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 918,
+            "swaps": 921,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3487918,
+            "gc": 926,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 919,
+            "swaps": 922,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3482122,
+            "gc": 927,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 920,
+            "swaps": 923,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3479252,
+            "gc": 928,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 921,
+            "swaps": 924,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3485272,
+            "gc": 929,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 922,
+            "swaps": 925,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3485272,
+            "gc": 930,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 923,
+            "swaps": 926,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 3481800,
+            "gc": 931,
+            "obj": 91,
+            "arr": 28,
+            "rafcall": 924,
+            "swaps": 927,
+            "fault": 0,
+            "fcap": 0
+          }
+        ],
+        "median_core_cycles": 3458245.0,
+        "p95_core_cycles": 3486056,
+        "max_core_cycles": 3491502,
+        "estimated_fps_from_median": 28.9164012382003
+      },
+      "after": {
+        "image": "build/speedup/DNKF_scalar.JSH",
+        "sim_binary": "/home/jm-rothberg/JMR-JS-CSS-FPGA-COMPUTER/sim/sim_build_release3/jmr_js_sim_server",
+        "memory_model": "SRAM_INTERNAL=1; no real MIG latency",
+        "cycle_domain": "100 MHz fabric",
+        "core_hz": 100000000,
+        "vm_divisor": 7,
+        "frames": [
+          {
+            "fclk": 1108758,
+            "gc": 902,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 895,
+            "swaps": 898,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1085084,
+            "gc": 903,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 896,
+            "swaps": 899,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1085203,
+            "gc": 904,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 897,
+            "swaps": 900,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1086141,
+            "gc": 905,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 898,
+            "swaps": 901,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1086141,
+            "gc": 906,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 899,
+            "swaps": 902,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1085049,
+            "gc": 907,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 900,
+            "swaps": 903,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1090005,
+            "gc": 908,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 901,
+            "swaps": 904,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1085049,
+            "gc": 909,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 902,
+            "swaps": 905,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1086337,
+            "gc": 910,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 903,
+            "swaps": 906,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1087275,
+            "gc": 911,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 904,
+            "swaps": 907,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1087275,
+            "gc": 912,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 905,
+            "swaps": 908,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1089697,
+            "gc": 913,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 906,
+            "swaps": 909,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1101324,
+            "gc": 914,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 907,
+            "swaps": 910,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1096473,
+            "gc": 915,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 908,
+            "swaps": 911,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1095381,
+            "gc": 916,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 909,
+            "swaps": 912,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1095381,
+            "gc": 917,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 910,
+            "swaps": 913,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1095381,
+            "gc": 918,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 911,
+            "swaps": 914,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1094471,
+            "gc": 919,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 912,
+            "swaps": 915,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1099427,
+            "gc": 920,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 913,
+            "swaps": 916,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1094471,
+            "gc": 921,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 914,
+            "swaps": 917,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1093015,
+            "gc": 922,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 915,
+            "swaps": 918,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1103060,
+            "gc": 923,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 916,
+            "swaps": 919,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1103060,
+            "gc": 924,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 917,
+            "swaps": 920,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1103179,
+            "gc": 925,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 918,
+            "swaps": 921,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1108821,
+            "gc": 926,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 919,
+            "swaps": 922,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1103025,
+            "gc": 927,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 920,
+            "swaps": 923,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1105447,
+            "gc": 928,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 921,
+            "swaps": 924,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1099686,
+            "gc": 929,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 922,
+            "swaps": 925,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1099686,
+            "gc": 930,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 923,
+            "swaps": 926,
+            "fault": 0,
+            "fcap": 0
+          },
+          {
+            "fclk": 1098594,
+            "gc": 931,
+            "obj": 91,
+            "arr": 153,
+            "rafcall": 924,
+            "swaps": 927,
+            "fault": 0,
+            "fcap": 0
+          }
+        ],
+        "state_histogram": "SH 7:1350944 14:1866690 16:840 46:1680 47:7770 48:330330 60:14092890 62:2590 64:223720 65:607320 66:307440 67:88200 68:275310 69:260190 70:403200 71:650160 72:47040 73:6090 74:161280 76:6659310 78:7140 79:27090 86:115500 87:1400868 88:3512194 89:261380 102:154490 103:21420 106:8400 110:420 | EXEC 7:4938220 14:14994 46:420 47:840 60:7249466 61:556850 64:2100 78:210 87:1311240 102:13930 103:3570 106:1050 | HP 0:1451618 1:175602 2:268884 21:835100 26:1677718 27:309260 29:194880 | EK 0:2962 2:300 3:300 4:300 5:300 6:300 7:300 8:360 9:360 14:1800 15:4768 16:3248 17:3070 22:13860 24:4046 25:10860 26:4542 27:8189 28:12120 29:817 30:4715 31:840 32:480 33:480 34:480 35:480 36:1800 39:90 40:292 41:319 42:840 57:180 61:1050 68:20625 69:1815 70:8310 71:18009 72:2070 78:900 79:120 89:90 91:90 104:150 105:60 109:390 110:390 130:180 132:150 148:2790 149:450 150:2260 152:330 153:120 154:660 156:1200 157:300 158:900 159:600 160:900 164:660 228:2280 236:150 237:720 241:600 242:600 243:600 244:600 245:840 249:90 | EIP 151:340 152:340 153:340 154:340 155:340 158:340 160:340 162:340 165:340 168:340 171:340 172:340 173:340 175:340 176:340 177:340 184:340 185:340 187:340 204:340 212:340 213:340 220:340 221:340 223:340 224:340 227:137 228:137 229:137 231:2908 232:2908 235:2568 236:2568 240:2568 241:2568 243:2568 244:2568 251:1412 252:1412 255:1404 261:1404 262:1404 267:2568 270:2568 271:2568 296:60 299:60 301:60 303:60 305:60 5058:150 5059:150 5060:150 5061:150 5063:150 5065:150 5067:150 5069:150 5071:150 5073:150 5075:150 5076:150 5077:150 5079:150 5080:150 5081:150 5083:150 5084:150 5090:150 5091:150 5094:150 5095:150 5097:150 5104:150 5111:150 5118:150 5122:150 5133:120 5137:120 5140:120 5141:120 5144:150 5146:150 5147:150 5150:150 5151:150 5153:2400 5154:2400 5158:2250 5159:2250 5161:2250 5162:2250 5164:2250 5169:1740 5171:1740 5172:1740 5175:1740 5177:1740 5178:1740 5180:1740 5182:1740 5188:1311 5189:1311 5194:360 5195:360 5202:340 5203:340 5208:340 5211:340 5212:340 5213:340 5214:340 5220:510 5224:510 5225:510 5227:510 5228:510 5236:360 5237:360 5243:60 5244:60 5252:60 5253:60 5255:60 5262:60 5266:2250 5269:2250 5270:2250 5278:120 5279:120 5280:120 5281:120 5282:120 5283:120 5285:120 5287:120 5289:120 5291:120 5292:120 5293:120 5294:120 5300:120 5301:120 5302:120 5308:120 5309:120 5310:120 5316:120 5317:120 5318:120 5322:120 5323:120 5325:120 5326:120 5328:120 5329:120 5331:120 5332:120 5334:120 5335:120 5337:120 5339:120 5340:120 5342:120 5343:120 5345:120 5347:120 5348:120 5351:120 5352:120 5353:120 5354:120 5356:120 5357:120 5361:120 5362:120 5363:120 5364:120 5366:120 5367:120 5437:30 5446:30 5450:30 5454:30 5458:30 5503:30 5504:120 5512:90 5514:90 5515:90 5521:90 5525:90 5529:90 5533:90 5537:90 5541:90 5585:90 5588:90 5589:90 5631:30",
+        "median_core_cycles": 1095381.0,
+        "p95_core_cycles": 1105447,
+        "max_core_cycles": 1108821,
+        "estimated_fps_from_median": 91.29243614778785
+      },
+      "median_speedup": 3.157116108459066,
+      "p95_speedup": 3.1535261301536845
+    }
+  },
+  "sha256": {
+    "card.img": "c7eaf812e79357e070db9e6a690bc82e681fe4920bff3b081af6c8fe2fe4680c",
+    "storage/PACFAST.HTML": "a2094cc38def809dc2c70a727e152e6b800cd3fc57a54afe7a694d2422b0a6a6",
+    "storage/DNKF.HTML": "da4c2175ffbcc07b6b316799db00adf3332ab377eb9d63de412125f5b5b75e81",
+    "storage/DNKFAST.HTML": "965e83a09fb4f9d787e8cd76f7519ab0ea52e61f527ca71a2bab110677f5881f",
+    "build/speedup/PACFAST.JSH": "4d23d6e21103b3044d6780434010b7c2ba853690b75a5af3b4220ca2754e035f",
+    "build/speedup/DNKF.JSH": "377bcb8c0fc4b0c6f1586259917e72046d01c94f80584c9525910b3be7e544b5",
+    "build/speedup/DNKFAST.JSH": "7ebca360e436004e3fe9830a62ca416f97e29fc54533dd6e3374a55f6ac79614"
+  },
+  "selected_multiplier": "fixed 32/16/4-bit zero skips; no variable mantissa/product shifters"
+}

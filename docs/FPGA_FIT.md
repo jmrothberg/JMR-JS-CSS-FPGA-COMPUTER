@@ -6,70 +6,37 @@ Words: [README.md — Words used](../README.md#words-used-in-this-project).
 
 ## SCOREBOARD — update this table every run (one screen)
 
-**Last bitstream on disk: run 61 — routed 2026-08-30 14:03, TIMING CLEAN**
-(`build/bits/run61_findcache_bucket_WNS+0.120.bit`). Live board bit.
-**WNS +0.120 / WHS +0.050.** Payload: FIND 1024-entry hash→id bucket +
-concat-handoff cache arming (the 4-way FF cache had been blind to concat
-since birth). PACMAN 11.58M → 10.90M VM beats/frame (×1.54 vs run 57).
-div7 = 14.3 MHz. Reports:
-`build/runs/run61_findcache_bucket_dedup_WNS+0.120/`.
-**Fit is solved. Timing is solved.** The JS core runs on a divided clock
-so 100 MHz fabric/DDR3 still close. Hedge:
-[If timing fails](#if-timing-fails-wns--0--slow-the-js-core-not-ddr3).
+**Current standard: run72b_game_speedup_WNS+0.238 — 2026-10-26.**
+[Release files, persistent flash, and archive](STANDARD_RELEASE.md).
+One native Value64 JS CPU; 100 MHz fabric / VM divisor 7 (14.286 MHz).
+Full game assets and heap capacities are retained. Board callbacks are paced
+at approximately 60 Hz; this does not claim a measured board frame rate.
 
-Source: `build/runs/run61_findcache_bucket_dedup_WNS+0.120/utilization_impl.rpt`
-(Design State: Routed, 2026-08-30 14:03). Chip: XC7A200T, 134,600 LUTs /
-269,200 FFs / 365 BRAM tiles / 740 DSP48E1.
+Source: the accepted routed report archived under
+`build/runs/run72b_game_speedup_WNS+0.238/` and
+[release evidence](performance/2026-10-26-fpga-release.json).
 
-| Resource | Used | Budget | % | State |
-|---|---:|---:|---:|---|
-| **Slice LUTs (total)** | **100,429** | 134,600 | **74.6%** | **fits — 34,171 free** |
-| LUT as Logic | 97,428 | 134,600 | 72.4% | fits |
-| LUT as Memory (LUTRAM) | 3,001 | 46,200 | 6.5% | fits — 43k free |
-| — Distributed RAM | 2,984 | — | — | RAMD64E 1,988 + RAMD32 1,500 + RAMS32 472 |
-| — Shift register | 17 | — | — | SRL16E |
-| Slice Registers (FF) | 55,200 | 269,200 | 20.5% | fits — see FIND-bucket note |
-| **Slice (packing)** | **31,633** | 33,650 | **94.0%** | **tightest resource on the chip** |
-| — SLICEL / SLICEM | 20,636 / 10,997 | — | — | — |
-| F7 Muxes | 8,271 | 67,300 | 12.3% | fits |
-| F8 Muxes | 2,868 | 33,650 | 8.5% | fits |
-| Unique control sets | 2,778 | 33,650 | 8.3% | fits |
-| **Block RAM tiles** | **352.5** | 365 | **96.6%** | fits — 12.5 tiles free |
-| RAMB36 | 329 | 365 | 90.1% | — |
-| RAMB18 | 47 | 730 | 6.4% | ×0.5 = 23.5 tiles |
-| DSP48E1 | 128 | 740 | 17.3% | fits |
-| Bonded IOB | 93 | 285 | 32.6% | fits |
-| BUFGCTRL | 5 | 32 | 15.6% | fits |
-| MMCME2 | 3 | 10 | 30.0% | fits |
-| PLLE2 | 1 | 10 | 10.0% | MIG |
-| CARRY4 (primitives) | 4,632 | — | — | timing cone — no longer binding |
-| **`place_design` / `route_design`** | — | — | — | **completed, 0 overlaps** |
-| **WNS (100 MHz, 10 ns)** | **+0.120 ns** | ≥ 0 | — | **MET — published by the gate** |
-| **WHS (hold)** | **+0.050 ns** | ≥ 0 | — | **MET** |
+| Resource / check | Used | Part limit or campaign gate | Result |
+|---|---:|---:|---|
+| Slice LUTs | 92,273 | 134,600 (campaign 95,000) | 68.55%, fits |
+| Occupied slices | 28,583 | 33,650 (campaign 28,602) | 84.94%, fits |
+| BRAM tiles | 353.5 | 365 (campaign 355.5) | 96.85%, unchanged from run71c |
+| DSP48E1 | 128 | 740 | 17.30%, fits |
+| Setup slack | +0.238 ns | ≥ 0 | zero failing endpoints |
+| Hold slack | +0.050 ns | ≥ 0 | zero failing endpoints |
+| Bitstream DRC | 0 errors | 0 | passed |
+| Routing wall time | 35m48s | 45-minute implementation wait | completed |
 
-**FIND-bucket note (why FFs jumped vs run 60):** `jn_bucket` is 1024×24
-with `ram_style = "block"` but inferred as flip-flops — BRAM tiles are
-**identical** to run 60 (352.5), LUTRAM identical (3,001), FFs
-30,468 → **55,200** (+24,732 ≈ 1024×24). Control-sets report names
-`jn_bucket[N][23]_i_1` per row. Write is still an FSM poke
-(`jn_cache_remember` → `jn_bucket[jn_h] <=` from the parent case).
-`ram_style` does not save that. The extra ~13.8k LUTs are the decode /
-1024:1 read mux, not new JS state.
+Raw synthesis used 96,904 LUTs (ceiling 105,000). Synthesis took 39m29s,
+placement 5m55s, and physical optimization 1m53s. Budget checks run before
+routing and publication; a source fingerprint protects checkpoint reuse.
+The qualified strategy is `Congestion_SpreadLogic_medium` with
+`ExploreArea`, two synthesis threads and eight implementation threads.
 
-**Primitive detail** (run 61; regenerate from `utilization_impl.rpt`
-section 8 — do not hand-maintain):
-
-| LUT | | Flop & Latch | | Memory / other | |
-|---|---:|---|---:|---|---:|
-| LUT6 | 48,487 | FDRE | 53,306 | RAMD64E | 1,988 |
-| LUT5 | 20,411 | FDSE | 836 | RAMD32 | 1,500 |
-| LUT4 | 15,785 | FDCE | 949 | RAMS32 | 472 |
-| LUT3 | 13,812 | FDPE | 107 | SRL16E | 17 |
-| LUT2 | 12,938 | LDCE | 2 | RAMB36 / RAMB18 | 329 / 47 |
-| LUT1 | 2,149 | | | MUXF7 / MUXF8 | 8,271 / 2,868 |
-| INV | 3 | | | CARRY4 | 4,632 |
-
-BRAM tiles = 329 × RAMB36 + 47 × RAMB18 × ½ = **352.5 / 365**.
+Earlier run61 utilization and primitive counts are historical, not today's
+scoreboard; recover them from Git history. Timing for future source changes
+must be measured again. Do not extrapolate from this release or relax clock
+constraints to publish a failing build.
 
 ### Why placement, not size, decides whether this design routes
 
@@ -86,7 +53,8 @@ otherwise.** How to write: [RTL_DESIGN_PRINCIPLES.md](RTL_DESIGN_PRINCIPLES.md).
 | First under budget (run 27–28) | 131,314 | BRAM first, then place |
 | First timing-clean (run 46) | 110,532 | Placement strategy, not fewer LUTs |
 | Leanest published (run 60) | 86,628 | |
-| **Live (run 61)** | **100,429** | SCOREBOARD above |
+| Historical run61 | 100,429 | Earlier fit milestone |
+| **Standard run72b** | **92,273** | Current scoreboard above |
 
 Git has every intermediate run. Closed/dead levers stay below.
 
@@ -146,6 +114,11 @@ from the BASIC board era — **not** what this tree wires. Vivado does
 fails** below. Do not slow MIG to “fix” **WNS** (Worst Negative Slack).
 
 ---
+
+**Current-clock note:** run72b already uses a 14.286 MHz VM and 100 MHz
+fabric/DDR. The contingency below predates that split. Fabric-to-VM paths
+can still have a 10 ns requirement; inspect the actual path before changing
+clock architecture. Never weaken timing constraints to publish a bit.
 
 ## If timing fails (WNS < 0) — slow the JS core, not DDR3
 

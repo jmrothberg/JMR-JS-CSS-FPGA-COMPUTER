@@ -1694,6 +1694,29 @@ module jmr_js_vm #(
     logic [2:0]  vobj_trdata, varr_trdata, hp_tag_ff;
     logic [2:0]  hp_tag;
     logic [63:0] varr_wdata, varr_rdata;
+    // Conservative sticky reference metadata. Every element write funnels
+    // through varr_we/hp_aid below, including fill/copy/promotion/JSON paths.
+    // A reference write sets this bit; only invalidation/recycle clears it.
+    // The collector still marks/sweeps the ARRAY and checks generations; it
+    // can skip only an element walk that cannot contain a heap reference.
+    (* ram_style = "distributed" *) logic varr_may_ref [0:MAX_ARR-1];
+    logic varr_may_ref_rdata;
+    wire varr_ref_write = varr_we && varr_wdata[63:48] == jmr_value_pkg::V64_TAG_PREFIX &&
+        (varr_wdata[47:44] == 4'd5 || varr_wdata[47:44] == 4'd6 ||
+         varr_wdata[47:44] == 4'd7 || varr_wdata[47:44] == 4'd8 ||
+         varr_wdata[47:44] == 4'd9);
+    wire varr_ref_clear = vav_we && !vav_wd;
+    wire varr_ref_we = varr_ref_clear || varr_ref_write;
+    wire [10:0] varr_ref_wa = varr_ref_clear ? vav_wa : hp_aid[10:0];
+    always_ff @(posedge clk) begin
+        if (varr_ref_we) varr_may_ref[varr_ref_wa] <= !varr_ref_clear;
+        varr_may_ref_rdata <= varr_may_ref[vgc_cur[10:0]];
+    end
+`ifndef SYNTHESIS
+    always_ff @(posedge clk) if (rst_n && varr_ref_clear && varr_ref_write &&
+        vav_wa != hp_aid[10:0])
+        $error("array reference metadata has conflicting writers");
+`endif
 
     // Two-tier array address (not MAX_ARR×128 concat). long/lidx are SRAM:
     // raddr this clock, varr_long_rdata / varr_lidx_rdata next (never peek).
@@ -12136,6 +12159,13 @@ module jmr_js_vm #(
                     else if (!jn_slot_arm) begin
                         jn_slot_arm <= 1'b1;
                         vgc_arr_ph <= 1'b1;
+                    end else if (!varr_may_ref_rdata) begin
+                        // Two arm beats above include the registered metadata
+                        // read. No slot can have held a reference in this
+                        // lifetime: there is nothing to enqueue from elements.
+                        jn_slot_arm <= 1'b0;
+                        vgc_rd_arm <= 1'b0;
+                        hs_st(S_V64_GC_POP);
                     end else if (vgc_slot_i < varr_len_rdata) begin
                         if (vgc_arr_ph)
                             vgc_arr_ph <= 1'b0;

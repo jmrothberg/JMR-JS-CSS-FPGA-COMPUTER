@@ -19,8 +19,19 @@ into this tree. This product is **NLISC-JS** + **HDMI 640×480** on Nexys
 Video.
 
 **STOP:** Do **not** `make … bit` / flash until FPGA-SIM is perfect for the
-feature under test (`check_runtime_parity.py` BATTERY PASS + relevant benches).
+feature under test (matching Python/native RTL regressions + relevant benches;
+[standard evidence](STANDARD_RELEASE.md#validation)).
 Flashing half-broken bits wastes hours.
+
+## Current standard — 2026-10-26
+
+Use [run72b and its matching card image](STANDARD_RELEASE.md). It preserves
+the native JS CPU and full game features, improves Pac-Man/Donkey native RTL
+cycles by 3.76× / 3.16×, and closes setup/hold at +0.238 / +0.050 ns.
+Routing took 35m48s. The user reports a working board/tether setup; measured
+board FPS is still pending. Historical dated run notes below are not the
+current release. Use the fixed release file for flashing while a working
+tree contains newer, unqualified features.
 
 **Second port (later):** Puzhi **PA-StarLite** (XC7A200T, 1 GB DDR3) — same engines,
 different XDC/PHY only after Nexys Video glass works. Do **not** run two board
@@ -137,12 +148,12 @@ Traces first: [../.cursor/rules/use-existing-traces.mdc](../.cursor/rules/use-ex
 | FPGA part | **XC7A200T-1SBG484C** |
 | External RAM | 512 MiB DDR3 → bridged as the **4 MB SRAM asset bank** (2M × 16 IS61WV204816 contract; simple SRAM port; ASIC uses the real chip). See `docs/ARCHITECTURE.md` |
 | Video | **HDMI Source** (J8) — native **640×480 @ ~60 Hz**, ~25.175 MHz pixel clock |
-| Framebuffer | 8 bpp indexed, **256-entry RGB888 palette**. FPGA-SIM / next bit: dual **640×480** BRAM. Last flash (03:36): 160×120 scaled |
+| Framebuffer | Native **640×480**, 8 bpp / 256-entry RGB888 palette. One persistent BRAM canvas; present copies to the DDR front image. The GUI board mirror is a separate 160×120 debug view. |
 | Keyboard | USB HOST (J15) → PIC24 → PS/2. **Classic boot-protocol keyboard PASS 2026-08-15.** Some modern HID keyboards light LD14 but never clock PS/2. Pmod JA is the fallback. |
 | Play controls | PS/2 arrows/Space/Enter → KEYEVT (`keyCode` 37–40 / 32 / 13). GUI arrows+Space → KEYBITS (BOARD: PROG `0xFE`+bits). Pmod stick on **JB**. |
 | Mouse | **Not V1 standalone USB** |
 | Host link | PROG FT245 (ch A / `.0`) — flash + tether glass + play keys |
-| Storage | µSD SPI + FAT32: `NAME.HTML` (LOAD). Compile-on-RUN stays in memory. |
+| Storage | µSD SPI + FAT32: `LOAD` reads HTML; `RUN` loads the card-minted `.JSH` including full ASET art. |
 | openFPGALoader `-b` id | **nexysVideo** |
 | Bitstream output path | `build/nexys_video/jmr_nexys_video.bit` |
 | Second port | **PA-StarLite** later — HDMI + 40-pin joystick; keyboard needs Pmod (no HID jack) |
@@ -172,7 +183,7 @@ Do **not** raise HDMI resolution or switch this T200 to VGA for torn glyphs
 (that was VRAM CDC; dual-clock scan port).
 
 ```bash
-source scripts/vivado_env.sh
+export VIVADO="$(command -v vivado)"
 make -C sim sim_server_synth          # FPGA-SIM; -B to force (not clean)
 make -C tools/board_flow bit          # publish only if WNS ≥ 0
 make -C tools/board_flow flash        # SRAM first
@@ -183,7 +194,8 @@ make -C tools/board_flow flash        # SRAM first
 the Vivado project, generates DDR3 MIG, and fully synthesizes `jmr_js_vm`
 (often **1–3 hours** on a small design; this full VM’s measured phases are
 in [OLD_RUNS.md](OLD_RUNS.md) — 16:17 already **>8 h** then OOM). Later `bit`
-**reuses** `build/nexys_video/vivado` (skip MIG generate, incremental DCP).
+**reuses** `build/nexys_video/vivado` (skip MIG generation; reuse an unchanged, source-verified synthesis DCP).
+Changed RTL gets full synthesis with automatic incremental checkpoints off.
 Use `make -C tools/board_flow bit-fresh` when the source *list*, MIG
 (Memory Interface Generator), or XDC (pin/clock constraints) changed —
 **including the 2026-08-21 next build** (exec32 deleted + incremental
@@ -211,6 +223,16 @@ The FPGA then boots our design from flash and DONE lights.
 To end up *live immediately* and *persistent*, flash in this order:
 `flash-qspi` first, then `flash` (SRAM) last.
 
+For the standard release, the exact persistent command is:
+
+```bash
+sudo openFPGALoader -b nexysVideo -f build/bits/run72b_game_speedup_WNS+0.238.bit
+sudo openFPGALoader -b nexysVideo build/bits/run72b_game_speedup_WNS+0.238.bit
+```
+
+Use `.bit` for this flash path; keep `.bin` as a secondary archive. See
+[standard files and checksums](STANDARD_RELEASE.md#files-and-persistent-flash).
+
 ### PROG-cable tether — Runtime:BOARD mirror (T100 method)
 
 Same USB cable as JTAG (J12 PROG). The bitstream streams:
@@ -229,6 +251,12 @@ Nexys Video's FT2232 **channel A** is the FT245 FIFO (DPTI), not a UART — RTL
 whose USB location ends in `.0`. Channel B (`.1`) is **JTAG** — never the
 tether. `JMR_JS_SERIAL` overrides autodetect.
 Gates: `make -C sim tb_uart_link tb_ft245`.
+
+**Permission denied opening `/dev/ttyUSB0`:** this is host device access,
+not evidence of a bad bitstream. Run
+`sudo setfacl -m u:"$USER":rw /dev/ttyUSB0`, restart the GUI, and select BOARD.
+For permanent access, `sudo usermod -aG dialout "$USER"`, then log out/in.
+Use the current channel-A node (`*-if00-port0`); leave channel B for JTAG.
 
 ### Live board telemetry
 
@@ -297,29 +325,30 @@ not zero.
   (not Invaders hex lie).
 - Esc exits game_mode
 
-Last SRAM image: **2026-08-13 03:36**, WNS **+0.139 ns** (HDMI VRAM CDC +
+Historical SRAM image: **2026-08-13 03:36**, WNS **+0.139 ns** (HDMI VRAM CDC +
 tether KEYBITS). See [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
 Rule: `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`.
 
-### FPGA-SIM battery (before every flash)
+### Simulation gates for a new source build
 
 ```bash
-make -C sim sim_server_synth          # or -B to force Verilator (not clean)
-make -C sim tb_ps2_typing
-python3 tools/make_sd_image.py create sim/card.img
-# V1.0: mints NAME.JSH; PYTHON / FPGA-SIM / BOARD all RUN this image
-.venv/bin/python tools/check_runtime_parity.py   # must print BATTERY PASS
+make -C sim sim_server_synth          # same RTL; do not clean
+.venv/bin/python -m pytest -q
+make -C sim tb_uart_link tb_ft245
 ```
 
-Do **not** flash the board until that battery is green **and** you are
+The standard release has frozen regression evidence in
+[STANDARD_RELEASE.md](STANDARD_RELEASE.md#validation). The legacy
+`check_runtime_parity.py` alias assumption is recorded there; do not
+misreport its result as BATTERY PASS.
+
+Do **not** flash a new source build until its matching regressions pass **and** you are
 intentionally proving silicon for a feature that already matches on FPGA-SIM.
-Also check Vivado timing (WNS ≥ 0). A prior VM build mapped code RAM to
-distributed LUT RAM and produced ~−90 ns WNS / dead tether — that is not a
-“board mystery,” it is a bad bit. If WNS is negative on the **JS core /
-fabric** (not inside MIG), do **not** slow DDR3 and do **not** fake a
-20 ns `clk100` — split clocks: 50 MHz `core_clk` = `ui_clk`/2, keep MIG
-at 100 MHz, CDC `jmr_sram_port`. Recipe:
-[FPGA_FIT.md — If timing fails](FPGA_FIT.md#if-timing-fails-wns--0--slow-the-js-core-not-ddr3).
+Also check setup **and** hold timing and the area gates. The current VM
+already runs at 100 MHz ÷ 7; fabric and DDR stay at 100 MHz. A fabric-to-VM
+path can still require 10 ns, so changing the VM divider does not remove
+that constraint. Repair the measured cone or qualify its CDC/pipeline;
+never relax constraints just to publish a bit. [Timing wall](TIMING_WALL.md).
 
 ### T100 vs T200 keyboard (same method, different board)
 
@@ -357,7 +386,7 @@ This is **not** FPGA-SIM and **not** BASIC on T200. It is a tiny RX-only design:
 One line (after the JS Vivado run is **idle**):
 
 ```bash
-source scripts/vivado_env.sh && make -C tools/hid_led_blink bit flash
+export VIVADO="$(command -v vivado)" && make -C tools/hid_led_blink bit flash
 ```
 
 Keyboard in **J15** before power; DONE lit. Then:
@@ -387,7 +416,7 @@ different top (`top_pmod_input_test`). Wall:
 JA + JB stay as before. J15 USB: **classic keyboard PASS 2026-08-15 (user).** The earlier “no scancodes / LD14 only” keyboard was HID that the PIC24 does not translate to PS/2. Use a wired boot-protocol / “classic” USB keyboard on **J15** (no hub). Gaming/NKRO/wireless often enumerates (LD14) and never clocks W17. JA Pmod + JB stick still work on this same LED bit.
 
 ```bash
-source scripts/vivado_env.sh && make -C tools/pmod_input_test bit flash
+export VIVADO="$(command -v vivado)" && make -C tools/pmod_input_test bit flash
 ```
 
 | Device | Plug | Pins |

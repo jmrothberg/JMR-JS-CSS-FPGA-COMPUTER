@@ -1,0 +1,25 @@
+{
+  "PACFAST": {
+    "jsh_bytes": 45960,
+    "jsh_sha256": "4d23d6e21103b3044d6780434010b7c2ba853690b75a5af3b4220ca2754e035f",
+    "raw_html_sha256": "a2094cc38def809dc2c70a727e152e6b800cd3fc57a54afe7a694d2422b0a6a6",
+    "card_html_sha256": "a2094cc38def809dc2c70a727e152e6b800cd3fc57a54afe7a694d2422b0a6a6",
+    "card_source_notes": []
+  },
+  "DNKF": {
+    "jsh_bytes": 1697896,
+    "jsh_sha256": "377bcb8c0fc4b0c6f1586259917e72046d01c94f80584c9525910b3be7e544b5",
+    "raw_html_sha256": "da4c2175ffbcc07b6b316799db00adf3332ab377eb9d63de412125f5b5b75e81",
+    "card_html_sha256": "da4c2175ffbcc07b6b316799db00adf3332ab377eb9d63de412125f5b5b75e81",
+    "card_source_notes": []
+  },
+  "DNKFAST": {
+    "jsh_bytes": 2374122,
+    "jsh_sha256": "7ebca360e436004e3fe9830a62ca416f97e29fc54533dd6e3374a55f6ac79614",
+    "raw_html_sha256": "965e83a09fb4f9d787e8cd76f7519ab0ea52e61f527ca71a2bab110677f5881f",
+    "card_html_sha256": "dccdcd67ae332fe0914632316e5026398e81bafc574405de29b16b27d0db0a26",
+    "card_source_notes": [
+      "DNKFAST.HTM: squashed 12 over-long line(s) for LIST (card copy only)"
+    ]
+  }
+}

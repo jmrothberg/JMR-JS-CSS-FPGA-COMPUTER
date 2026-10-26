@@ -16,6 +16,36 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tests.test_rtl_snippets import _fb_nz, _patch_js_v64, _sim, _vmstat_int
+import pytest
+
+
+@pytest.mark.parametrize('left,right', [
+    ('3', '5'), ('65535', '65535'), ('16777215', '16777215'),
+    ('-7', '0.125'), ('1.25', '4'), ('0.1', '0.2'),
+    ('1.0000000000000002', '1.0000000000000002'),
+    ('0.0000000000000002220446049250313', '4503599627370496'),
+    ('-0.0', '2'), ('1/0', '0'), ('1/0', '-2'),
+])
+def test_rtl_mul_significant_bits_exact_checkpoint(left, right):
+    # Operands are variables, so the native Number engine executes the MUL.
+    # Full raw-Value hashes catch rounding, signed zero, and early writeback.
+    from tests.test_rtl_snippets import (
+        test_program_image_value64_number_checkpoint_matches_python_hm,
+    )
+    test_program_image_value64_number_checkpoint_matches_python_hm(
+        f'var a={left}; var b={right}; var result=a*b;'
+    )
+
+
+@pytest.mark.parametrize('trailing', [0, 3, 4, 15, 16, 31, 32, 52])
+def test_rtl_mul_fixed_skip_boundaries(trailing):
+    from tests.test_rtl_snippets import (
+        test_program_image_value64_number_checkpoint_matches_python_hm,
+    )
+    right = repr(1.0 + 2.0 ** (trailing - 52))
+    test_program_image_value64_number_checkpoint_matches_python_hm(
+        f'var a=-1.0000000000000002;var b={right};var x=a*b;var y=b*a;'
+    )
 
 
 def _run_v64(name: str, src: str, frames: int = 3):

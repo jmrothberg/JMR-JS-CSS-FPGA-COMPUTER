@@ -1329,12 +1329,18 @@ module jmr_js_vm_exec64 (
     assign lsv_op_q = lsv_op;
     assign lsv_ev_q = lsv_ev;
     assign lsv_fn_q = lsv_fn;
-    // 53-beat shift-add FP multiply engines (one per requester class):
-    // OP_MUL (fpm_*) and the frame-clock Date.now product (nwm_*).
+    // Exact shift/add Number multiply. Fixed 32/16/4-bit zero skips preserve
+    // acc + mcand*mplier while consuming sparse mantissas in fewer beats.
+    // Fixed wiring avoids variable 106-bit and 53-bit barrel shifters. The
+    // complete 106-bit product and existing rounding remain unchanged.
+    // Date.now (nwm_*) retains its independent, background 53-beat engine.
     logic         fpm_busy, fpm_req, fpm_req_n;
     logic [5:0]   fpm_cnt;
     logic [105:0] fpm_acc, fpm_mcand;
     logic [52:0]  fpm_mplier;
+    wire [1:0] fpm_zstep = (fpm_mplier[31:0] == 32'd0) ? 2'd3 :
+                           (fpm_mplier[15:0] == 16'd0) ? 2'd2 :
+                           (fpm_mplier[3:0] == 4'd0) ? 2'd1 : 2'd0;
     logic         fpm_sign, fpm_sign_n;
     logic [10:0]  fpm_ea, fpm_eb, fpm_ea_n, fpm_eb_n;
     logic         fpm_start_n;
@@ -2059,11 +2065,36 @@ module jmr_js_vm_exec64 (
                     fpm_ea <= fpm_ea_n;
                     fpm_eb <= fpm_eb_n;
                 end else if (fpm_busy) begin
+                    // Preserve acc + mcand*mplier with fixed zero skips.
+                    // Four fixed wiring choices avoid wide variable shifts.
                     if (fpm_mplier[0]) fpm_acc <= fpm_acc + fpm_mcand;
-                    fpm_mcand <= fpm_mcand << 1;
-                    fpm_mplier <= fpm_mplier >> 1;
-                    fpm_cnt <= fpm_cnt + 6'd1;
-                    if (fpm_cnt == 6'd52) fpm_busy <= 1'b0;
+                    if (fpm_mplier[52:1] == 52'd0) begin
+                        fpm_busy <= 1'b0;
+                        fpm_cnt <= fpm_cnt + 6'd1;
+                    end else begin
+                        case (fpm_zstep)
+                            2'd3: begin
+                                fpm_mcand <= fpm_mcand << 32;
+                                fpm_mplier <= fpm_mplier >> 32;
+                                fpm_cnt <= fpm_cnt + 6'd32;
+                            end
+                            2'd2: begin
+                                fpm_mcand <= fpm_mcand << 16;
+                                fpm_mplier <= fpm_mplier >> 16;
+                                fpm_cnt <= fpm_cnt + 6'd16;
+                            end
+                            2'd1: begin
+                                fpm_mcand <= fpm_mcand << 4;
+                                fpm_mplier <= fpm_mplier >> 4;
+                                fpm_cnt <= fpm_cnt + 6'd4;
+                            end
+                            default: begin
+                                fpm_mcand <= fpm_mcand << 1;
+                                fpm_mplier <= fpm_mplier >> 1;
+                                fpm_cnt <= fpm_cnt + 6'd1;
+                            end
+                        endcase
+                    end
                 end
                 fpm_req <= fpm_req_n;
                 if (nwm_busy) begin
@@ -3640,8 +3671,7 @@ module jmr_js_vm_exec64 (
                         state_n = S_V64_EXEC;
                         vst_we_n = 1'b0;
                     end else if (fpm_req) begin
-                        // OP_MUL in the 53-beat engine: hold; complete on
-                        // the beat busy drops (acc is final that beat).
+                        // Wait until the complete exact product is accumulated.
                         opnd_n = 1'b1;
                         opnd2_n = 1'b1;
                         opnd3_n = 1'b1;

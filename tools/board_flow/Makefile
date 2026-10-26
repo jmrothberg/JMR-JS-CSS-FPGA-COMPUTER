@@ -7,7 +7,8 @@
 #   make -C tools/board_flow flash-qspi   # SPI flash — untethered after power-cycle
 #
 # First T200 bit is slow (1–3 h): MIG generate + full synth of jmr_js_vm + impl.
-# Later bits open build/nexys_video/vivado, skip MIG create, incremental synth.
+# Later bits reuse MIG and a source-verified, unchanged synthesis checkpoint.
+# Changed RTL gets full synthesis; automatic incremental checkpoints stay off.
 # Do not `make clean` unless you want another first-build.
 # Parallelism: synth_design mapping OOM'd at 7 workers (16:17). UG901 has
 # one thread knob for all of synth — cap synth at 2. Place/route stays 8.
@@ -19,6 +20,17 @@ JMR_VIVADO_IMPL_THREADS ?= 8
 JMR_VIVADO_JOBS ?= 1
 JMR_VIVADO_THREADS ?= $(JMR_VIVADO_SYNTH_THREADS)
 export JMR_VIVADO_SYNTH_THREADS JMR_VIVADO_IMPL_THREADS JMR_VIVADO_JOBS JMR_VIVADO_THREADS
+# Qualified A200T game-speedup flow. Reject overpacked candidates before
+# routing, and keep a bounded implementation wait and strict timing gate.
+JMR_VIVADO_STRATEGY ?= Congestion_SpreadLogic_medium
+JMR_VIVADO_OPT_DIRECTIVE ?= ExploreArea
+JMR_MAX_SYNTH_LUTS ?= 105000
+JMR_MAX_LUTS ?= 95000
+JMR_MAX_BRAM ?= 355.5
+JMR_MAX_SLICES ?= 28602
+JMR_IMPL_TIMEOUT_MIN ?= 45
+export JMR_VIVADO_STRATEGY JMR_VIVADO_OPT_DIRECTIVE JMR_MAX_SYNTH_LUTS
+export JMR_MAX_LUTS JMR_MAX_BRAM JMR_MAX_SLICES JMR_IMPL_TIMEOUT_MIN
 #
 # LLM NOTE: Cursor sandbox breaks Vivado license — run on host shell.
 # openFPGALoader board id: nexysVideo
@@ -53,7 +65,7 @@ ifndef VIVADO
 $(BIT):
 	@echo "Set VIVADO=…  (source $(ROOT)/scripts/vivado_env.sh first)"; exit 1
 else
-$(BIT): $(RTL_SRCS) $(DVI_SRCS) $(ROOT)/constraints/nexys_video.xdc $(ROOT)/tools/board_flow/vivado_build.tcl $(ROOT)/tools/board_flow/mig_a.prj | $(OUT)
+$(BIT): $(RTL_SRCS) $(DVI_SRCS) $(ROOT)/constraints/nexys_video.xdc $(ROOT)/tools/board_flow/vivado_build.tcl $(ROOT)/tools/board_flow/build_gates.tcl $(ROOT)/tools/board_flow/mig_a.prj | $(OUT)
 	$(VIVADO) -mode batch -source $(ROOT)/tools/board_flow/vivado_build.tcl \
 		-tclargs $(ROOT) $(OUT) $(if $(filter 1,$(FRESH)),fresh)
 endif

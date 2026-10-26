@@ -1,0 +1,31 @@
+{
+  "baseline": "38b6da1",
+  "titles": {
+    "PACFAST": {
+      "frames": 900,
+      "pixel_state_parity": true,
+      "framebuffer_sequence_sha256": "768a5bc68c8e689eae2be7dd0e4bbb4b3d64cc4c7cc90cb8633d0c7d2e01e654",
+      "all_initial_levels_equal": true,
+      "source_sha256": "a2094cc38def809dc2c70a727e152e6b800cd3fc57a54afe7a694d2422b0a6a6",
+      "baseline_source_sha256": "9a46b73153dacd254547485a8ecbc433365b09f34b1eda0c77e8c10699d5d625"
+    },
+    "DNKF": {
+      "frames": 900,
+      "pixel_state_parity": true,
+      "scenario": "input_replay",
+      "framebuffer_sequence_sha256": "559f0468b63315f7b6298a49b4eed6a23d5253cc1b842c8a0c484e4c5a6f11e0",
+      "all_initial_levels_equal": true,
+      "source_sha256": "da4c2175ffbcc07b6b316799db00adf3332ab377eb9d63de412125f5b5b75e81",
+      "baseline_source_sha256": "fdf9cc1a5255c6f311c16eff38401699a1ae621148d36250314b6431113f5223"
+    },
+    "DNKFAST": {
+      "frames": 900,
+      "pixel_state_parity": true,
+      "scenario": "input_replay",
+      "framebuffer_sequence_sha256": "b0f587df0e2efe1b4c73938b9007ac10b083a4a8b1dbc9c2ceb3f0034c783b9d",
+      "all_initial_levels_equal": true,
+      "source_sha256": "965e83a09fb4f9d787e8cd76f7519ab0ea52e61f527ca71a2bab110677f5881f",
+      "baseline_source_sha256": "68691b2f88a67b50a7ccd8a80e8ef239e9af1949d9322d4c4391d86b07ea7622"
+    }
+  }
+}

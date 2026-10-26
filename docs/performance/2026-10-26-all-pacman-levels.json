@@ -1,0 +1,14 @@
+{
+  "baseline": "38b6da1",
+  "titles": {
+    "PACFAST": {
+      "frames": 540,
+      "pixel_state_parity": true,
+      "scenario": "all_12_levels_final_screen_restart",
+      "framebuffer_sequence_sha256": "5d4408fb43e7c4003409bf271d1a7a2e5582d1587258c4fc739a9573469c6f19",
+      "all_initial_levels_equal": true,
+      "source_sha256": "76bf30d9286962eb233d00315ae87dc672571ee40fe65a15cc4112398cb5b6f4",
+      "baseline_source_sha256": "0cbf1c9644ce676ea41494f061a536da1fa299bf46c78b7e3d0dc26741e6f93b"
+    }
+  }
+}

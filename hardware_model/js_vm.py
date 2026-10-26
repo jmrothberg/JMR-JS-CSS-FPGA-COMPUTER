@@ -2017,6 +2017,24 @@ class JsHwVm:
                 if math.isfinite(value):
                     value = math.floor(value + 0.5)
                 return value_pack_number(value)
+            elif native_id in (55, 56):
+                # Run-71 RTL treats non-Number inputs as nonfinite/NaN.
+                is_number = bool(args) and value_is_number(args[0])
+                result = (
+                    is_number and math.isfinite(number(0))
+                    if native_id == 55
+                    else not is_number or math.isnan(number(0))
+                )
+                return value_pack_tagged(VALUE_KIND_BOOL, payload=int(result))
+            elif native_id == 57:
+                if not args:
+                    return value_pack_number(float('nan'))
+                value = number(0)
+                if math.isfinite(value) and value != 0:
+                    value = math.ceil(value)
+                    if value == 0:
+                        value = -0.0
+                return value_pack_number(value)
             else:
                 self._value64_fault(
                     f"unsupported native ID {native_id} at IP {ip}"

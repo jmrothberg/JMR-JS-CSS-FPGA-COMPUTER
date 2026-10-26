@@ -254,7 +254,9 @@ module top_nexys_video (
     wire [7:0]  core_kbd_data = kbd_push ? kbd_ascii :
                                 pmod_kbd_push ? pmod_ascii : uart_kbd_data;
 
-    jmr_js_core #(.SRAM_INTERNAL(0)) u_core (
+    // At higher throughput a 16-bit debug tick would run games above their
+    // intended rAF cadence. Keep their frame-based motion/timers at 60 Hz.
+    jmr_js_core #(.SRAM_INTERNAL(0), .FRAME_DIV(1666665)) u_core (
         .clk(core_clk), .pixel_clk(pixel_clk), .rst_n(rst_n),
         .standalone_mode(1'b1),
         .sd_card_present(~sd_cd),

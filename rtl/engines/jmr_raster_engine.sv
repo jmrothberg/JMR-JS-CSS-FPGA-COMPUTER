@@ -291,15 +291,35 @@ module jmr_raster_engine #(
                                 else adv();
                             end
                         end else if (sram_ack) begin
-                            sram_req <= 1'b0;
-                            fetch_wait <= 1'b0;
                             if (inb) begin
                                 fb_we <= 1'b1;
                                 fb_waddr <= pix_addr;
                                 fb_wdata <= sram_rdata[7:0];
                             end
-                            if (last_px) busy <= 1'b0;
-                            else adv();
+                            if (last_px) begin
+                                busy <= 1'b0;
+                                sram_req <= 1'b0;
+                                fetch_wait <= 1'b0;
+                            end else begin
+                                adv();
+                                // Hand off the next linear read at this ack.
+                                // The arbiter releases ownership at every ack,
+                                // so scanout can still preempt between words.
+                                // Keep the existing one-word-per-pixel layout.
+                                if (x == w_q - 10'd1 && !nxt_ok) begin
+                                    // adv held this pixel: re-read it until the
+                                    // row precompute is ready (idempotent).
+                                    sram_req <= 1'b1;
+                                    fetch_wait <= 1'b1;
+                                end else if (imgd_i + 19'd1 < 19'(FB_PIXELS)) begin
+                                    sram_addr <= sram_addr + 21'd1;
+                                    sram_req <= 1'b1;
+                                    fetch_wait <= 1'b1;
+                                end else begin
+                                    sram_req <= 1'b0;
+                                    fetch_wait <= 1'b0;
+                                end
+                            end
                         end
                     end
                 endcase

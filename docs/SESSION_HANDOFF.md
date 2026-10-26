@@ -20,13 +20,37 @@ hygiene (copy 2 of hygiene: [FPGA_FIT.md](FPGA_FIT.md) NEVER +
 
 ## CURRENT STATE
 
+## Current standard — 2026-10-26
+
+**run72b_game_speedup_WNS+0.238** is the user-selected standard. Native JS
+execution and full game features are retained. The accepted build has
+92,273 LUTs / 28,583 slices / 353.5 BRAM, setup +0.238 ns, hold +0.050 ns;
+routing took 35m48s. The user reports a working board/tether setup. Numeric
+board FPS is not measured; 3.76× Pac-Man / 3.16× Donkey are native RTL gains.
+
+Use [STANDARD_RELEASE.md](STANDARD_RELEASE.md) for the immutable files,
+matching card image, checksums, persistent `-f .bit` command, and old binary
+archive. New working-tree features do not supersede this release until
+separately qualified. In particular, use a named accepted bit rather than
+letting a flash target rebuild from changed sources.
+
+The selected regression recorded 549 passed, 12 skipped, 2 existing xfails,
+and 1 existing non-strict xpass (564 cases); game preservation replayed
+3,240 frames. The old `check_runtime_parity.py` alias assumption is a known
+harness issue, not a BATTERY PASS. [Detailed evidence](GAME_SPEEDUP_RESULTS.md).
+
+**Tether fix:** permission denied on channel A was resolved with a temporary
+`setfacl` grant and GUI restart. Permanent `dialout` membership needs a new
+login. [Bring-up instructions](FPGA_BRINGUP.md).
+
+
 Live numbers: [FPGA_FIT.md](FPGA_FIT.md) SCOREBOARD. Clock hedge:
 [FPGA_FIT.md — If timing fails](FPGA_FIT.md#if-timing-fails-wns--0--slow-the-js-core-not-ddr3).
 Board fps plan: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
 exec32: [REMOVING_EXEC32.md](REMOVING_EXEC32.md).
 
-Caps: [FPGA_FIT.md](FPGA_FIT.md) paper budget. Three tests are **xfail**
-(#70/#71/#72) — not “the games are broken”:
+Caps: [FPGA_FIT.md](FPGA_FIT.md) paper budget. Expected-failure counts are release-specific; see the current regression
+record above and historical explanations in
 [potential bugs.md](potential%20bugs.md).
 
 ---

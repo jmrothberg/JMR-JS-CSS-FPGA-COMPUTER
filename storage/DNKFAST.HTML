@@ -82,12 +82,18 @@ class Platform {
     }
     /* FAST: only tiles that overlap a mover dirty box (not the whole girder). */
     drawDirty(ctx, x, y, w, h) {
-        var i, tx
-        i = 0
-        while (i < this.w) {
-            tx = this.x + i * 15
-            if (x < tx + 20 && x + w > tx && y < this.y + 24 && y + h > this.y) {
-                ctx.drawImage(img, 152, 154, 9, 8, tx, this.y, 20, 24)
+        var i, tx, end, px = this.x, py = this.y, cols = this.w, right = x + w
+        // This vertical predicate is identical for every tile in the platform.
+        if (!(y < py + 24 && y + h > py)) return
+        // Strict overlap: tx+20>x and tx<x+w. Keep the final exact test.
+        i = Math.floor((x - px - 20) / 15) + 1
+        if (i < 0) i = 0
+        end = Math.floor((right - px) / 15) + 1
+        if (end > cols) end = cols
+        while (i < end) {
+            tx = px + i * 15
+            if (x < tx + 20 && right > tx) {
+                ctx.drawImage(img, 152, 154, 9, 8, tx, py, 20, 24)
             }
             i = i + 1
         }
@@ -210,7 +216,7 @@ class Barrel {
             this.drawFalling(this.rollingDown[this.loopIndex])
         }
     }
-    
+
     gravity() {
         this.y += this.force
     }
@@ -223,7 +229,7 @@ class Barrel {
         else if (this.right) {
             this.x += 1
         }
-    
+
         if (this.x < 1245 && this.y <= 106) {
             this.right = true
             this.left = false
@@ -233,7 +239,7 @@ class Barrel {
             this.right = false
             this.left = false
         }
-    
+
         if (this.y === 186 || this.y === 401 || this.y === 603) {
             this.left = true
         } 
@@ -241,17 +247,17 @@ class Barrel {
         else if (this.x === 230 && this.y < 608) {
             this.left = false
         }
-    
+
         if (this.y === 287 || this.y === 507) {
             this.right = true
         }
-    
+
         if (this.x === 225 && this.y === 608) {
             this.left = true
             this.right = false
         }
     }    
-    
+
     get barrelLeft() {
         return this.x
     }
@@ -273,14 +279,24 @@ class Barrel {
     }
 
     collision(i) {
-        /* FAST: _dkP* arrays; score/death once after the platform walk. Same boxes. */
-        var py = _dkPY[i]
-        if (this.y + this.height > py && this.y + this.height - this.force < py + 24 &&
-            this.x + this.width - 7 > _dkPX[i] && this.x < _dkPX[i] + (_dkPW[i] * 20) - 40) {
-          this.y = py - this.height
+        // Negative i batches the same ordered platform checks in one activation.
+        // A nonnegative i retains the original single-platform method behavior.
+        var end=i+1,py,y=this.y,h=this.height,force=this.force
+        var x=this.x,right=this.x+this.width-7,list=null,pi,band
+        if(i<0){
+            i=0;end=_dkPN;band=Math.floor(x/32)+1
+            if(this.width<=64&&band>=0&&band<_dkCollisionBands.length){list=_dkCollisionBands[band];end=list.length}
         }
+        while(i<end){
+            pi=list?list[i]:i;py=_dkPY[pi]
+            if(y+h>py&&y+h-force<py+24&&right>_dkPX[pi]&&x<_dkPE[pi]-40){
+                y=py-h
+            }
+            i=i+1
+        }
+        this.y=y
     }
-    
+
     update(ctx, platforms, player, elapsed) {
 
         this.move()
@@ -297,11 +313,7 @@ class Barrel {
         _ppT = player.y
         _ppB = player.y + player.height
         _ppM = (player.x + player.width) / 2
-        var i = 0
-        while (i < _dkPN) {
-            this.collision(i)
-            i = i + 1
-        }
+        this.collision(-1)
         var bM = (this.x + this.width) / 2
         if (!this.hasScored && player.isJumping && ((_ppM >= bM - 2 && _ppM <= bM + 2) && (_ppB < this.y && _ppB > this.y - 20))) {
             this.scored = true
@@ -435,7 +447,7 @@ const keys = {
     w: {
         pressed: false,
     },
-    
+
     a: {
         pressed: false,
     },
@@ -539,7 +551,7 @@ class Mario {
         _mdHas = 1
         this.sprites.drawSprite(spriteX, spriteY, 15, 18, this.x, this.y, this.width, this.height)
     }
-    
+
     drawMario(ctx, elapsed) {
         // Jumping
         if (this.isJumping) {
@@ -597,35 +609,44 @@ class Mario {
         this.y += (this.speed + this.force) / 9
         this.speed += 0.2
     }
-    
+
     get marioBottom() {
         return this.y + this.height
     }
 
     collision(i) {
-        var marioBottom = this.y + this.height
-        var py = _dkPY[i]
-        // Check if the bottom of Mario overlaps with the platform
-        if (!this.isClimbingDown && !(this.jumpHeight >= 750) &&
-            (marioBottom > py && marioBottom - this.speed < py + 24 &&
-            this.x + this.width - 7 > _dkPX[i] && this.x < _dkPX[i] + (_dkPW[i] * 20) -50)) {
-            // Collision detected
-            this.isJumping = false
-            this.y = py - this.height
-            this.force = 5
-            this.speed = 0
+        var end=i+1,py,bottom,x=this.x,y=this.y,speed=this.speed
+        var height=this.height,width=this.width,blocked=this.isClimbingDown||this.jumpHeight>=750,hit=false
+        var list=null,pi,band
+        if(i<0){
+            if(blocked){if(_dkPN>0&&y<=86&&x<500)this.x=500;return}
+            i=0;end=_dkPN;band=Math.floor(x/32)+1
+            if(width<=64&&band>=0&&band<_dkCollisionBands.length&&(x>=500||Math.min(y+height,y+height-speed)>=_dkWallTop)){
+                list=_dkCollisionBands[band];end=list.length
+            }
         }
-
-        // Invisible wall
-        else if (this.y <= 86 && this.x < 500) {
-            this.x = 500
+        while(i<end){
+            bottom=y+height;pi=list?list[i]:i;py=_dkPY[pi]
+            if(!blocked&&bottom>py&&bottom-speed<py+24&&x+width-7>_dkPX[pi]&&x<_dkPE[pi]-50){
+                y=py-height;speed=0;hit=true
+            }else if(y<=86&&x<500){
+                x=500
+            }
+            i=i+1
+        }
+        this.x=x
+        if(hit){
+            this.isJumping=false
+            this.y=y
+            this.force=5
+            this.speed=0
         }
     }
 
     get marioMiddle() {
         return this.x + this.width / 2
     }
-    
+
     ladderDetection(ladder) {
         let ladderEnd = ladder.x + 38
         let touchingLadder = false
@@ -724,11 +745,7 @@ class Mario {
 
         this.move()
 
-        var i = 0
-        while (i < _dkPN) {
-            this.collision(i)
-            i = i + 1
-        }
+        this.collision(-1)
 
         for (let i = 0; i < ladders.length; i++) {
             this.ladderDetection(ladders[i])
@@ -737,6 +754,55 @@ class Mario {
 }
 return Mario;
 })();
+
+
+// Conservative horizontal candidates, in original platform order. Include
+// every possible 64-unit actor in the band; the exact collision tests remain.
+function _dkBuildCollisionBands(height){
+    var band,i,lo,hi,list,old;
+    _dkCollisionBands=[];
+    for(band=-1;band<48;band++){
+        lo=band*32;hi=lo+96;list=[];
+        for(i=0;i<_dkPN;i++){
+            if(lo<_dkPE[i]&&hi>_dkPX[i]) list.push(i);
+        }
+        _dkCollisionBands.push(list);
+    }
+    // Any vertically connected platform above this bound can eventually
+    // snap Mario into the invisible-wall zone. Use a full scan there.
+    _dkWallTop=86+height;old=-1;
+    while(old!==_dkWallTop){
+        old=_dkWallTop;
+        for(i=0;i<_dkPN;i++){
+            if(_dkPY[i]>_dkWallTop&&_dkPY[i]<_dkWallTop+24) _dkWallTop=_dkPY[i];
+        }
+    }
+    _dkWallTop=_dkWallTop+24;
+}
+
+// Fixed geometry, conservative vertical bands. Each covers any dirty box
+// starting in that 32-unit band with h<=168. Other boxes take the full list.
+function _dkBuildDirtyBands(platforms,ladders){
+    var band,i,lo,hi,list,L,size,span;
+    _dkDirtyAll=[];
+    for(i=0;i<platforms.length+ladders.length;i++) _dkDirtyAll.push(i);
+    _dkDirtyBands=[];
+    // Short mover boxes use tighter lists; every list remains conservative.
+    for(size=0;size<3;size++){
+        span=size===0?80:(size===1?128:168);
+        for(band=-1;band<23;band++){
+            lo=band*32;hi=lo+32+span;list=[];
+            for(i=0;i<_dkPN;i++){
+                if(lo<_dkPY[i]+24&&hi>_dkPY[i]) list.push(i);
+            }
+            for(i=0;i<ladders.length;i++){
+                L=ladders[i];
+                if(lo<L.y+38&&hi>L.y-L.h*15) list.push(_dkPN+i);
+            }
+            _dkDirtyBands.push(list);
+        }
+    }
+}
 
 /* ---- main.js ---- */
 
@@ -754,6 +820,8 @@ var _dkMvL = 0, _dkMvR = 0
 /* FAST: platform x/y/w as number arrays (ARR_CAP=128). Collision reads these,
    not platforms[i].x 53 times per actor (S_HEAP_CMP). Same hit boxes. */
 var _dkPX=[], _dkPY=[], _dkPW=[], _dkPN=0
+var _dkPE=[], _dkDirtyBands=[], _dkDirtyAll=[]
+var _dkCollisionBands=[], _dkWallTop=0
 var _ppL=0, _ppR=0, _ppT=0, _ppB=0, _ppM=0
 ctx.imageSmoothingEnabled = false
 // NEW: keep DKJS world coords; scale onto 640x480 glass each frame
@@ -761,6 +829,8 @@ const WORLD_W = 1510
 const WORLD_H = 685
 const GLASS_W = 640
 const GLASS_H = 480
+const WORLD_SX = GLASS_W / WORLD_W
+const WORLD_SY = GLASS_H / WORLD_H
 
 let gameState = "title"
 let character = "Mario"
@@ -771,7 +841,7 @@ spriteSheet.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEUAAABICAYAAAC
 let paused = false
 
 class Game {
-    
+
     constructor(width, height) {
         this.width = width
         this.height = height
@@ -902,8 +972,11 @@ class Game {
             _dkPX[_pi] = this.platforms[_pi].x
             _dkPY[_pi] = this.platforms[_pi].y
             _dkPW[_pi] = this.platforms[_pi].w
+            _dkPE[_pi] = _dkPX[_pi] + _dkPW[_pi] * 20
             _pi = _pi + 1
         }
+        _dkBuildDirtyBands(this.platforms,this.ladders)
+        _dkBuildCollisionBands(this.mario.height)
     }
 
     draw(ctx) {
@@ -963,7 +1036,7 @@ class Game {
         ctx.textAlign = "left"
         ctx.fillText("Score", 8, 22)
         ctx.fillText(this.score, 104, 22)
-        ctx.setTransform(GLASS_W / WORLD_W, 0, 0, GLASS_H / WORLD_H, 0, 0)
+        ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 0)
     }
 
     resetGame() {
@@ -1004,7 +1077,7 @@ class Game {
         ctx.textAlign = "left"
         ctx.fillText("Lives", 408, 22)
         ctx.fillText(this.lives, 512, 22)
-        ctx.setTransform(GLASS_W / WORLD_W, 0, 0, GLASS_H / WORLD_H, 0, 0)
+        ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 0)
     }
 
     gameOver() {
@@ -1097,7 +1170,7 @@ class Game {
             
             gameState = "game"
 
-            ctx.setTransform(GLASS_W / WORLD_W, 0, 0, GLASS_H / WORLD_H, 0, 0)
+            ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 0)
             ctx.clearRect(0, 0, WORLD_W, WORLD_H)
             _dkWipe = 1
             _dkBgOn = 0
@@ -1135,17 +1208,17 @@ window.addEventListener('keydown', function (e) {
             togglePause()
     }
 })
-    
+
 function togglePause() {
     if (!paused) {
         paused = true
     } 
-    
+
     else if (paused) {
         paused = false
     }
 }
-    
+
 const game = new Game(WORLD_W, WORLD_H)
 
 let previous
@@ -1169,30 +1242,46 @@ function _dkEraseMovers() {
     if (d._drawX !== undefined) ctx.fillRect(d._drawX - 12, d._drawY - 12, 164, 168)
 }
 function _dkDirty1(x, y, w, h) {
-    /* FAST: redraw only platform/ladder tiles that overlap a mover's last box.
-       Full putImageData(640×480) was ~0.92M VM clocks; full platform draw was ~1.55M. */
-    var i, px, py, pw, L
-    i = 0
-    while (i < _dkPN) {
-        px = _dkPX[i]
-        py = _dkPY[i]
-        pw = _dkPW[i] * 20
-        if (x < px + pw && x + w > px && y < py + 24 && y + h > py) {
-            game.platforms[i].drawDirty(ctx, x, y, w, h)
-        }
-        i = i + 1
+    var i,pi,px,py,list,L,band,right=x+w,bottom=y+h
+    band=Math.floor(y/32)+1
+    list=_dkDirtyAll
+    if(h<=168&&h>=0&&band>=0&&band<24){
+        if(h>128) band=band+48;else if(h>80) band=band+24
+        list=_dkDirtyBands[band]
     }
-    i = 0
-    while (i < game.ladders.length) {
-        L = game.ladders[i]
-        if (x < L.x + 38 && x + w > L.x && y < L.y + 38 && y + h > L.y - L.h * 15) {
-            L.drawLadder(ctx)
+    i=0
+    while(i<list.length){
+        pi=list[i]
+        if(pi<_dkPN){
+            px=_dkPX[pi];py=_dkPY[pi]
+            if(x<_dkPE[pi]&&right>px&&y<py+24&&bottom>py){
+                game.platforms[pi].drawDirty(ctx,x,y,w,h)
+            }
+        }else{
+            L=game.ladders[pi-_dkPN]
+            if(x<L.x+38&&right>L.x&&y<L.y+38&&bottom>L.y-L.h*15){
+                L.drawLadder(ctx)
+            }
         }
-        i = i + 1
+        i=i+1
+    }
+}
+// Overlapping old/new boxes restore their union once. Teleports retain
+// two separate restores; no background between disjoint boxes is erased.
+function _dkRestorePair(x0,y0,x1,y1,w,h){
+    var left,top,right,bottom;
+    if(x0<x1+w&&x1<x0+w&&y0<y1+h&&y1<y0+h){
+        left=Math.min(x0,x1);top=Math.min(y0,y1);
+        right=Math.max(x0,x1)+w;bottom=Math.max(y0,y1)+h;
+        ctx.fillRect(left,top,right-left,bottom-top);
+        _dkDirty1(left,top,right-left,bottom-top);
+    }else{
+        ctx.fillRect(x0,y0,w,h);_dkDirty1(x0,y0,w,h);
+        ctx.fillRect(x1,y1,w,h);_dkDirty1(x1,y1,w,h);
     }
 }
 function _dkBlitBg() {
-    ctx.setTransform(GLASS_W / WORLD_W, 0, 0, GLASS_H / WORLD_H, 0, 0)
+    ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 0)
     if (!_dkBgOn) {
         ctx.clearRect(0, 0, WORLD_W, WORLD_H)
         game.draw(ctx)
@@ -1206,20 +1295,20 @@ function _dkBlitBg() {
         ctx.fillStyle = '#000000'
         var m = game.mario
         if (_mdHas) {
-            ctx.fillRect(_mdx - 24, _mdy - 24, m.width + 48, m.height + 48)
-            _dkDirty1(_mdx - 24, _mdy - 24, m.width + 48, m.height + 48)
+            _dkRestorePair(_mdx-24,_mdy-24,m.x-24,m.y-24,m.width+48,m.height+48)
+        }else{
+            ctx.fillRect(m.x-24,m.y-24,m.width+48,m.height+48)
+            _dkDirty1(m.x-24,m.y-24,m.width+48,m.height+48)
         }
-        ctx.fillRect(m.x - 24, m.y - 24, m.width + 48, m.height + 48)
-        _dkDirty1(m.x - 24, m.y - 24, m.width + 48, m.height + 48)
         var i = 0
         while (i < game.barrels.length) {
             var b = game.barrels[i]
             if (b._drawX !== undefined) {
-                ctx.fillRect(b._drawX - 16, b._drawY - 16, b.width + 40, b.height + 40)
-                _dkDirty1(b._drawX - 16, b._drawY - 16, b.width + 40, b.height + 40)
+                _dkRestorePair(b._drawX-16,b._drawY-16,b.x-16,b.y-16,b.width+40,b.height+40)
+            }else{
+                ctx.fillRect(b.x-16,b.y-16,b.width+40,b.height+40)
+                _dkDirty1(b.x-16,b.y-16,b.width+40,b.height+40)
             }
-            ctx.fillRect(b.x - 16, b.y - 16, b.width + 40, b.height + 40)
-            _dkDirty1(b.x - 16, b.y - 16, b.width + 40, b.height + 40)
             i = i + 1
         }
         /* Kong poses differ (chest-beat vs throw). Transparent pixels in
@@ -1232,9 +1321,9 @@ function _dkBlitBg() {
         }
     }
 }
-    
+
 function update(timestamp) {
-    ctx.setTransform(GLASS_W / WORLD_W, 0, 0, GLASS_H / WORLD_H, 0, 0)
+    ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 0)
     if (gameState == "game") {
         _dkBlitBg()
 

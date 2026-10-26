@@ -40,13 +40,27 @@ keyboard jack **J15**, Pmod joystick. **PA-StarLite** is a later port.
 Development order: **PYTHON bytecode → real FPGA-SIM (perfect) → board → ASIC**.
 Do **not** flash the board until the FPGA-SIM battery is green.
 
-**Status (2026-09-01):** five titles play on FPGA-SIM; DIR works on the
-board. Live numbers: [docs/FPGA_FIT.md](docs/FPGA_FIT.md). Board fps plan:
-[docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md). J15 USB
-Host is dead on this unit — type and play from the GUI **PROG tether**.
-**V1.0:** compile when you make the card (`.JSH`). **V1.5 compile is live:**
-`LOAD` → `EDIT` → **`COMPILE`** → `RUN`. Popular JS V1 lacks is leftover.
-**V2.0** grows the ISA/ASET (no named title).
+**Current standard (2026-10-26): run72b native-JavaScript speedup.**
+[Download the validated bitstream and matching card image](https://github.com/jmrothberg/JMR-JS-CSS-FPGA-COMPUTER/releases/tag/standard-2026-10-26-run72b).
+Pac-Man and both Donkey Kong art variants retain their rules, graphics,
+audio, and resolution. Faster exact Number multiplication, numeric-array GC,
+framebuffer transfers, and ordinary JavaScript redraw/collision work recover
+**3.76× Pac-Man / 3.16× Donkey Kong** median native RTL performance.
+These are simulated fabric-cycle gains; board FPS has not been measured.
+The user reports a working board/tether setup.
+
+The A200T build uses **92,273 LUTs, 28,583 slices, and 353.5 BRAM tiles**,
+with **+0.238 ns setup / +0.050 ns hold** slack. Routing took **35m48s**.
+The native CPU, one heap, heap capacities, and full game assets are retained.
+See [the standard release](docs/STANDARD_RELEASE.md) for files, checksums,
+persistent flash, and the previous binary archive; [results](docs/GAME_SPEEDUP_RESULTS.md)
+for 549 passing regression tests and pixel/state preservation evidence.
+Use the matching card image as well as the bitstream.
+
+J15 USB Host is unreliable on this unit; use the GUI **PROG tether** or
+Pmod keyboard fallback. `RUN` loads the card's minted `.JSH`.
+On-machine editing/compilation uses the card tools; it does not make
+`RUN` a host JavaScript engine.
 
 **Where to go next**
 
@@ -82,12 +96,12 @@ READY
 ### Top commands (use these a lot)
 
 ```bash
-openFPGALoader -b nexysVideo build/nexys_video/jmr_nexys_video.bit
+openFPGALoader -b nexysVideo build/bits/run72b_game_speedup_WNS+0.238.bit
 # MOST COMMON — SRAM-load the .bit onto the Nexys Video (PROG USB J12).
 #    HDMI live in seconds; gone when you unplug. Named keepers in build/bits/:
 #      openFPGALoader -b nexysVideo build/bits/<run>.bit
 #    QSPI (survives power-cycle; JP4 = QSPI):
-#      openFPGALoader -b nexysVideo -f build/nexys_video/jmr_nexys_video.bin
+#      openFPGALoader -b nexysVideo -f build/bits/run72b_game_speedup_WNS+0.238.bit
 
 python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 # 1. host env (once)
@@ -112,8 +126,10 @@ make -C sim sim_server_synth
 #    Do not `make -C sim clean`. Then restart the GUI and F9 FPGA-SIM.
 #    Never fake with host twin. Opt-in debug only: JMR_SIM_HOST=1
 
-.venv/bin/python tools/check_runtime_parity.py
-# 5. PYTHON ↔ FPGA-SIM RTL glass smoke (bytecode path; no dukpy cheat)
+.venv/bin/python -m pytest -q
+make -C sim tb_uart_link tb_ft245
+# 5. Matching PYTHON/native RTL regressions and tether benches.
+#    Legacy check_runtime_parity.py assumes removed title aliases; see STANDARD_RELEASE.md.
 
 python3 tools/make_artx.py MYGAME      # PNGs → ARTX + ARTJS; wires Chrome __jmrSpr hook
 python3 tools/make_artx.py /path/to/game.html  # copy HTML+ARTX+ARTJS into storage/; PNGs stay put
@@ -138,11 +154,11 @@ sudo python3 tools/make_sd_image.py burn /dev/sdX
 sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
 # 6c. burn only — write the existing card.img as-is (skip rebuild)
 
-source scripts/vivado_env.sh && make -C tools/board_flow bit
+make -C tools/board_flow bit VIVADO="$(command -v vivado)"
 # 7. NEXT bitstream — ordinary `bit`. bit-fresh only when the source file
 #    *list*, MIG, or XDC changes — never to recover a mid-run crash.
 #    Hygiene: docs/SESSION_HANDOFF.md § Synthesis. Pins/flash:
-#    docs/FPGA_BRINGUP.md. Writes .bit (JTAG) and .bin (QSPI).
+#    docs/FPGA_BRINGUP.md. Writes .bit (JTAG/QSPI) and a secondary raw .bin archive.
 
 make -C tools/board_flow flash
 # 8. SRAM-load the existing .bit (PROG USB J12). If Make starts Vivado,
@@ -154,14 +170,18 @@ make -C tools/board_flow flash
 Day-one: **1 → 2 → 3 → 4 → 5**. FPGA-SIM is **real RTL** after step 4 — do not
 treat `host_sim_server.py` as FPGA-SIM unless you set `JMR_SIM_HOST=1` on purpose.
 Do not jump to Vivado before PYTHON + FPGA-SIM agree on user-visible behaviour.
-Gate: `python3 tools/check_runtime_parity.py` must print **BATTERY PASS**.
+Gate: pass the matching Python/native RTL regressions and relevant hardware
+benches, then verify both setup and hold timing and the area budget. See
+[standard-release validation](docs/STANDARD_RELEASE.md#validation).
 Step **6b** is a new card (make + burn); **6c** burns an image you already
-made. Step **7** is Vivado (hours, **your** terminal). Step **8** puts the
-`.bit` / `.bin` on the board. Flash only after WNS ≥ 0 — never a substitute
-for fixing FPGA-SIM. If that bit **misses** 100 MHz on the JS
-core, the hedge is a 50 MHz `core_clk` with DDR3 still on MIG `ui_clk`
-(100 MHz) — not a slower DRAM. Future plan:
-[docs/FPGA_FIT.md — If timing fails](docs/FPGA_FIT.md#if-timing-fails-wns--0--slow-the-js-core-not-ddr3).
+made. Step **7** is a new Vivado build; the standard release routed in 35m48s
+after 39m29s synthesis. Set `VIVADO` to an installed, licensed launcher. Step **8** puts the
+accepted `.bit` on the board. Flash a new source build only after both setup
+and hold timing and the area gate pass; FPGA-SIM correctness comes first.
+The current VM already runs at 100 MHz ÷ 7. Fabric-to-VM paths can still
+have a 10 ns requirement: slowing the VM alone does not repair that cone.
+Inspect and pipeline the measured path; retain the qualified DDR/fabric
+clocks. See [TIMING_WALL.md](docs/TIMING_WALL.md).
 
 ---
 
@@ -211,8 +231,8 @@ mention.
 | **SystemVerilog** / **`.sv`** | — | Language of the RTL |
 | **FPGA-SIM** | FPGA simulation | The **same** RTL, simulated with **Verilator** (not Vivado, not a Python fake) |
 | **Verilator** | — | Open-source tool: SystemVerilog → C++ → a host executable |
-| **Vivado** | AMD/Xilinx FPGA tool | Turns RTL into a **bitstream** (`.bit` / `.bin`). Linux only. **You** run it, not the agent |
-| **bitstream** / **`.bit`** / **`.bin`** | — | File that configures the FPGA. `.bit` for JTAG; `.bin` for flash |
+| **Vivado** | AMD/Xilinx FPGA tool | Turns RTL into a **bitstream** (`.bit` / `.bin`). Linux build tool; Verilator does not produce bitstreams |
+| **bitstream** / **`.bit`** / **`.bin`** | — | File that configures the FPGA. Use `.bit` for JTAG and this project’s QSPI flash path; `.bin` is a secondary archive |
 | **synthesis** / **synth** | — | RTL → netlist for this FPGA family. First long Vivado step (`synth_1`) |
 | **place / route** / **impl** | implementation | Fit the netlist onto the real chip |
 | **DCP** | Design CheckPoint | Vivado save file. None exists until `synth_1` hits **100%** |

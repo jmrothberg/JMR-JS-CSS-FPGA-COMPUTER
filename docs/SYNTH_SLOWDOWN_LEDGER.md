@@ -2,6 +2,15 @@
 
 Words: [README.md — Words used](../README.md#words-used-in-this-project).
 
+## Current result — 2026-10-26
+
+The standard is now [run72b](STANDARD_RELEASE.md): 3.76× Pac-Man and 3.16×
+Donkey median native RTL cycle gains with unchanged CPU/heap/game features.
+The DDR-latency sensitivity model gives 3.05× / 2.93×; board FPS remains
+unmeasured. Routing completed in 35m48s with positive setup and hold slack.
+[Measured results](GAME_SPEEDUP_RESULTS.md) supersede the old performance
+numbers and unimplemented speed proposals below. Dated history is retained.
+
 ## Teach-me: FPGA-SIM is slow; the board should not be slower
 
 Two different computers:

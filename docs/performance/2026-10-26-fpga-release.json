@@ -1,0 +1,61 @@
+{
+  "created_utc": "2026-10-26T21:46:00.184204+00:00",
+  "baseline_revision": "38b6da1",
+  "part": "xc7a200tsbg484-1",
+  "tool": "Vivado 2026.1 build6511674",
+  "status": "accepted; not programmed",
+  "setup_slack_ns": 0.238,
+  "hold_slack_ns": 0.05,
+  "setup_failing_endpoints": 0,
+  "hold_failing_endpoints": 0,
+  "write_bitstream_drc_errors": 0,
+  "resources": {
+    "luts": 92273,
+    "slices": 28583,
+    "bram_tiles": 353.5,
+    "dsps": 128
+  },
+  "build_config": {
+    "strategy": "Congestion_SpreadLogic_medium",
+    "opt_directive": "ExploreArea",
+    "route_directive": "AlternateCLBRouting",
+    "fabric_hz": 100000000,
+    "vm_clock_divisor": 7,
+    "frame_period_fabric_clocks": 1666666,
+    "synth_threads": 2,
+    "impl_threads": 8
+  },
+  "elapsed_seconds": {
+    "synthesis": 2369,
+    "placement": 355,
+    "physical_optimization": 113,
+    "routing": 2148,
+    "write_bitstream": 55
+  },
+  "source_stamp_sha256": "4f9fc7ddc083400240e22b065f24f518184e78b08fe8b9b1e64ed3fc422cb474",
+  "artifact_sha256": {
+    "build/nexys_video/jmr_nexys_video.bit": "fea0a4e54850e145302b6b37910f493ebc79ce848a009dc50565212ba52b950c",
+    "build/nexys_video/jmr_nexys_video.bin": "f2094c8261fa64dda56fcb5b5791bff6c35b52dfc05919b15b74de5e72c8af4f",
+    "card.img": "c7eaf812e79357e070db9e6a690bc82e681fe4920bff3b081af6c8fe2fe4680c"
+  },
+  "native_rtl_median_speedup": {
+    "PACFAST": 3.75678892733564,
+    "DNKF": 3.157116108459066
+  },
+  "verification": {
+    "passed": 549,
+    "skipped": 12,
+    "xfailed": 2,
+    "xpassed": 1,
+    "total": 564,
+    "failures": 0,
+    "rtl_binary": "sim/sim_build_release3/jmr_js_sim_server",
+    "core_log": "build/speedup/release3_core_tests.log",
+    "tail_log": "build/speedup/release3_tail_tests.log",
+    "core_seconds": 2933.69,
+    "tail_seconds": 297.78,
+    "latest_game_preservation_frames": 3240
+  },
+  "board_fps_measured": false,
+  "archive": "build/runs/run72b_game_speedup_WNS+0.238"
+}
