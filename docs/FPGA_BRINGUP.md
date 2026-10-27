@@ -151,7 +151,7 @@ Traces first: [../.cursor/rules/use-existing-traces.mdc](../.cursor/rules/use-ex
 | Framebuffer | Native **640×480**, 8 bpp / 256-entry RGB888 palette. One persistent BRAM canvas; present copies to the DDR front image. The GUI board mirror is a separate 160×120 debug view. |
 | Keyboard | USB HOST (J15) → PIC24 → PS/2. **Classic boot-protocol keyboard PASS 2026-08-15.** Some modern HID keyboards light LD14 but never clock PS/2. Pmod JA is the fallback. |
 | Play controls | PS/2 arrows/Space/Enter → KEYEVT (`keyCode` 37–40 / 32 / 13). GUI arrows+Space → KEYBITS (BOARD: PROG `0xFE`+bits). Pmod stick on **JB**. |
-| Mouse | **Not V1 standalone USB** |
+| Mouse | **Combined J15 keyboard/mouse not working.** The `USB_MOUSE=1` experiment disables the J15 keyboard. Read the [failed-approach record](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md). |
 | Host link | PROG FT245 (ch A / `.0`) — flash + tether glass + play keys |
 | Storage | µSD SPI + FAT32: `LOAD` reads HTML; `RUN` loads the card-minted `.JSH` including full ASET art. |
 | openFPGALoader `-b` id | **nexysVideo** |
@@ -475,7 +475,7 @@ joystick. UART/JTAG are for programming and optional debug only.
 |---|---|---|
 | Typing / EDIT / ESC | J15 classic USB, or Pmod PS/2 on **JA** | J15/`JA` `ps2_rx` → keyboard FIFO (GUI tether still ORed) |
 | Play (move/fire) | Mini I2C stick on **JB** | I2C `0x5A` OR GUI KEYBITS → `joy_in` |
-| Mouse | — | Out of V1 |
+| Mouse | Combined USB keyboard/mouse on J15 is not implemented | Mouse-only `USB_MOUSE=1` disables J15 keyboard; see [failed approach](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md). |
 
 Many physical sources merge into **one INPUT FIFO** → INPUT engine → monitor /
 JS events (pattern cite: BASIC sibling UART/`KEY` + PS/2 FIFO merge in

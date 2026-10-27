@@ -20,6 +20,11 @@ hygiene (copy 2 of hygiene: [FPGA_FIT.md](FPGA_FIT.md) NEVER +
 
 ## CURRENT STATE
 
+**2026-10-26 USB keyboard/mouse failure:** the `USB_MOUSE=1` experiment
+disabled the owner's working J15 keyboard and did not satisfy combined
+keyboard/mouse support. See the [failed-approach record](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md)
+before any further mouse build. It does not supersede the standard below.
+
 ## Current standard — 2026-10-26
 
 **run72b_game_speedup_WNS+0.238** is the user-selected standard. Native JS

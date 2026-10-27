@@ -57,8 +57,12 @@ persistent flash, and the previous binary archive; [results](docs/GAME_SPEEDUP_R
 for 549 passing regression tests and pixel/state preservation evidence.
 Use the matching card image as well as the bitstream.
 
-J15 USB Host is unreliable on this unit; use the GUI **PROG tether** or
-Pmod keyboard fallback. `RUN` loads the card's minted `.JSH`.
+The owner confirms the normal **J15 USB keyboard works in prior builds**.
+The 2026-10-26 mouse-only experiment disabled that keyboard path and does
+**not** support a keyboard with a built-in mouse. Read the
+[failed-approach record](docs/NEXYS_USB_KEYBOARD_MOUSE_FAILED.md) before
+attempting USB mouse work again. The accepted standard release remains
+unchanged. `RUN` loads the card's minted `.JSH`.
 On-machine editing/compilation uses the card tools; it does not make
 `RUN` a host JavaScript engine.
 
