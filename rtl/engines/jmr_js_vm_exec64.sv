@@ -208,13 +208,17 @@ module jmr_js_vm_exec64 (
     // V1.5 standalone compile: the scalars S_CSRAM needs. mode selects
     // 0 srcByte, 1 stgRead, 2 stgWrite, 3 artWrite2.
     output logic [2:0]  csr_mode_q,
-    output logic [20:0] csr_addr_q,
+    output logic [21:0] csr_addr_q,
     output logic [15:0] csr_wdata_q,
     // srcSetLen (nid 50): SOURCE length published to the console so an
     // edit made by a PROGRAM is visible to LIST / SAVE / COMPILE.
     output logic [17:0] src_setlen_q,
     output logic        src_setlen_stb_q,
     output logic        csr_oob_q,
+    input logic [111:0] id_sys_window,
+    output logic sysw_toggle_q,
+    output logic [2:0] sysw_field_q,
+    output logic [7:0] sysw_value_q,
     output logic [11:0] minmax_base_q,
     output logic minmax_is_min_q,
     output logic [7:0] minmax_k_q,
@@ -929,6 +933,7 @@ module jmr_js_vm_exec64 (
     endfunction
 
 
+
     // Combo D-pins are local. Parent sees *_q only (never-fake-fpga-sim).
     // SRAM we/waddr/wdata are local; parent sees *_q (opcode comb assigns no ports).
     // Dedicated raddr comb writes these locals; always_ff *_q to parent.
@@ -1120,7 +1125,7 @@ module jmr_js_vm_exec64 (
     logic [20:0] cmp_len_n;
     logic [6:0]  cmp_msglen_n;
     logic [2:0]  csr_mode_n;
-    logic [20:0] csr_addr_n;
+    logic [21:0] csr_addr_n;
     logic [15:0] csr_wdata_n;
     logic [17:0] src_setlen_n;
     logic src_setlen_stb_n;
@@ -1344,6 +1349,129 @@ module jmr_js_vm_exec64 (
     logic         fpm_sign, fpm_sign_n;
     logic [10:0]  fpm_ea, fpm_eb, fpm_ea_n, fpm_eb_n;
     logic         fpm_start_n;
+    logic fadd_req, fadd_req_n, fadd_start_n, fadd_busy;
+    logic [63:0] fadd_a_n, fadd_b_n, fadd_a, fadd_b, fadd_result;
+    logic [2:0] fadd_phase;
+    logic [55:0] fadd_xa, fadd_xb, fadd_sig;
+    logic [11:0] fadd_er;
+    logic fadd_same_sign, fadd_sign, fadd_special;
+    logic [63:0] fadd_special_value;
+    // Native arguments are pipeline operands, not a second VM stack. The
+    // original stack remains authoritative for calls, returns and GC.
+    logic [63:0] call_arg_q [0:9];
+    always_ff @(posedge clk) begin
+        if (enable && !leave_hold && opnd_q && !opnd2_q &&
+            (opw_q[7:0] == OP_CALL || opw_q[7:0] == OP_CALL_METH)) begin
+            for (int k = 0; k < 10; k++) begin : capture_call_arg
+                logic signed [12:0] rel;
+                rel = $signed({5'd0, opw_q[31:24]}) - 13'(k)
+                    - ((opw_q[7:0] == OP_CALL) ? 13'd1 : 13'd0);
+                call_arg_q[k] <= (rel >= 0 && rel < 16)
+                    ? vst_s[rel[3:0]] : vst_s[0];
+            end
+        end
+    end
+
+    always_ff @(posedge clk) begin
+        if (!rst_n || p_clr) fadd_req <= 1'b0;
+        else if (enable && !leave_hold) fadd_req <= fadd_req_n;
+    end
+
+    // Registered IEEE addition/subtraction. Sorting/alignment, significand
+    // arithmetic, cancellation normalization and rounding occupy separate
+    // cycles rather than one path from the stack mux back to its write port.
+    always_ff @(posedge clk) begin
+        if (!rst_n || p_clr) begin
+            fadd_busy <= 1'b0;
+            fadd_phase <= 3'd0;
+        end else if (enable && !leave_hold && fadd_start_n) begin
+            fadd_a <= fadd_a_n;
+            fadd_b <= fadd_b_n;
+            fadd_busy <= 1'b1;
+            fadd_phase <= 3'd0;
+        end else if (fadd_busy) begin
+            case (fadd_phase)
+                3'd0: begin : add_align
+                    logic [11:0] ea, eb, er, diff;
+                    logic [55:0] xa, xb;
+                    logic swap_ab;
+                    ea = fadd_a[62:52] == 0 ? 12'd1 : {1'b0, fadd_a[62:52]};
+                    eb = fadd_b[62:52] == 0 ? 12'd1 : {1'b0, fadd_b[62:52]};
+                    xa = {fadd_a[62:52] != 0, fadd_a[51:0], 3'd0};
+                    xb = {fadd_b[62:52] != 0, fadd_b[51:0], 3'd0};
+                    swap_ab = ea < eb || (ea == eb && xa < xb);
+                    er = swap_ab ? eb : ea;
+                    diff = swap_ab ? eb - ea : ea - eb;
+                    fadd_xa <= swap_ab ? xb : xa;
+                    fadd_xb <= v64_shr_sticky(swap_ab ? xa : xb, int'(diff));
+                    fadd_er <= er;
+                    fadd_sign <= swap_ab ? fadd_b[63] : fadd_a[63];
+                    fadd_same_sign <= fadd_a[63] == fadd_b[63];
+                    fadd_special <= 1'b1;
+                    if ((fadd_a[62:52] == 11'h7ff && fadd_a[51:0] != 0) ||
+                        (fadd_b[62:52] == 11'h7ff && fadd_b[51:0] != 0) ||
+                        (fadd_a[62:52] == 11'h7ff && fadd_b[62:52] == 11'h7ff &&
+                         fadd_a[63] != fadd_b[63]))
+                        fadd_special_value <= V64_CANON_NAN;
+                    else if (fadd_a[62:52] == 11'h7ff)
+                        fadd_special_value <= {fadd_a[63], 11'h7ff, 52'd0};
+                    else if (fadd_b[62:52] == 11'h7ff)
+                        fadd_special_value <= {fadd_b[63], 11'h7ff, 52'd0};
+                    else if (fadd_a[62:0] == 0 && fadd_b[62:0] == 0)
+                        fadd_special_value <= {fadd_a[63] & fadd_b[63], 63'd0};
+                    else if (fadd_a[62:0] == 0) fadd_special_value <= fadd_b;
+                    else if (fadd_b[62:0] == 0) fadd_special_value <= fadd_a;
+                    else fadd_special <= 1'b0;
+                    fadd_phase <= 3'd1;
+                end
+                3'd1: begin : add_significands
+                    logic [56:0] sum;
+                    if (fadd_same_sign) begin
+                        sum = {1'b0, fadd_xa} + {1'b0, fadd_xb};
+                        if (sum[56]) begin
+                            fadd_sig <= {sum[56:2], sum[1] | sum[0]};
+                            fadd_er <= fadd_er + 12'd1;
+                        end else fadd_sig <= sum[55:0];
+                    end else begin
+                        fadd_sig <= fadd_xa - fadd_xb;
+                        if (fadd_xa == fadd_xb) fadd_sign <= 1'b0;
+                    end
+                    fadd_phase <= 3'd2;
+                end
+                3'd2: begin : add_normalize
+                    logic [5:0] lz, shn;
+                    lz = 6'd0;
+                    for (int k = 0; k <= 55; k++)
+                        if (fadd_sig[k]) lz = 6'(55 - k);
+                    shn = (fadd_er - 12'd1 < {6'd0, lz})
+                        ? 6'(fadd_er - 12'd1) : lz;
+                    if (!fadd_same_sign && fadd_sig != 0) begin
+                        fadd_sig <= fadd_sig << shn;
+                        fadd_er <= fadd_er - {6'd0, shn};
+                    end
+                    fadd_phase <= 3'd3;
+                end
+                default: begin : add_round
+                    logic [53:0] rounded;
+                    logic [52:0] mant;
+                    logic [11:0] er;
+                    rounded = {1'b0, fadd_sig[55:3]} +
+                        54'(fadd_sig[2] && (fadd_sig[1] || fadd_sig[0] || fadd_sig[3]));
+                    er = fadd_er;
+                    if (rounded[53]) begin
+                        mant = rounded[53:1];
+                        er = er + 12'd1;
+                    end else mant = rounded[52:0];
+                    if (fadd_special) fadd_result <= fadd_special_value;
+                    else if (er >= 12'd2047) fadd_result <= {fadd_sign, 11'h7ff, 52'd0};
+                    else if (mant == 0) fadd_result <= {fadd_sign, 63'd0};
+                    else fadd_result <= {fadd_sign,
+                        (er == 12'd1 && !mant[52]) ? 11'd0 : er[10:0], mant[51:0]};
+                    fadd_busy <= 1'b0;
+                end
+            endcase
+        end
+    end
     logic [52:0]  fpm_ma_n, fpm_mb_n;
     logic         nwm_busy;
     logic [5:0]   nwm_cnt;
@@ -1630,13 +1758,31 @@ module jmr_js_vm_exec64 (
     assign cmp_len_q    = cmp_len;
     assign cmp_msglen_q = cmp_msglen;
     logic [2:0]  csr_mode;
-    logic [20:0] csr_addr;
+    logic [21:0] csr_addr;
     logic [15:0] csr_wdata;
     logic        csr_oob;
     assign csr_mode_q  = csr_mode;
     assign csr_addr_q  = csr_addr;
     assign csr_wdata_q = csr_wdata;
     logic [17:0] src_setlen; logic src_setlen_stb;
+    logic sysw_we;
+    logic [2:0] sysw_field;
+    logic [7:0] sysw_value;
+    function automatic logic [2:0] system_field(input logic [15:0] key);
+        begin
+            system_field=7;
+            for(integer f=0;f<7;f=f+1)
+                if(key==id_sys_window[f*16+:16])system_field=3'(f);
+        end
+    endfunction
+    // Scalars only. Toggle transfers an accepted context-property write to
+    // the fast system/display domain without holding a multi-cycle pulse.
+    always_ff @(posedge clk)begin
+        if(!rst_n || p_clr)begin sysw_toggle_q<=0;sysw_field_q<=0;sysw_value_q<=0;end
+        else if(enable && sysw_we)begin
+            sysw_toggle_q<=!sysw_toggle_q;sysw_field_q<=sysw_field;sysw_value_q<=sysw_value;
+        end
+    end
     assign src_setlen_q = src_setlen;
     assign src_setlen_stb_q = src_setlen_stb;
     assign csr_oob_q   = csr_oob;
@@ -1930,6 +2076,24 @@ module jmr_js_vm_exec64 (
     assign y_q = y;
 
 
+    // One writer for the method cache. Duplicate reset writers previously
+    // made synthesis tie its valid bits to zero while simulation used it.
+    always_ff @(posedge clk) begin
+        if (!rst_n || p_clr) begin
+            cmc_valid <= 8'd0;
+            cmc_wp <= 3'd0;
+        end else if (p_we && (p_sel == 6'd31 || p_sel == 6'd37 ||
+                             p_sel == 6'd38 || p_sel == 6'd39)) begin
+            cmc_valid <= 8'd0;
+        end else if (cm_res_we && cm_scan) begin
+            cmc_cls[cmc_wp] <= cm_cls;
+            cmc_key[cmc_wp] <= cm_key;
+            cmc_mip[cmc_wp] <= cm_res_mip;
+            cmc_valid[cmc_wp] <= 1'b1;
+            cmc_wp <= cmc_wp + 3'd1;
+        end
+    end
+
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             opnd_q <= 1'b0;
@@ -1947,7 +2111,6 @@ module jmr_js_vm_exec64 (
         end else if (p_clr) begin
             clr_busy <= 1'b1;
             clr_i <= 12'd0;
-            cmc_valid <= 8'd0;
         end else if (clr_busy) begin
             // Parent HEAP_CLR owns the JS banks. This walk is only the
             // handshake delay (p_clr_busy) plus leftover class-table FFs.
@@ -1956,18 +2119,6 @@ module jmr_js_vm_exec64 (
                 clr_busy <= 1'b0;
             else
                 clr_i <= clr_i + 12'd1;
-        end else if (p_we) begin
-            unique case (p_sel)
-                6'd31, 6'd37, 6'd38, 6'd39: cmc_valid <= 8'd0; // tables changed
-                default: ;
-            endcase
-        end
-        if (cm_res_we && cm_scan) begin
-            cmc_cls[cmc_wp] <= cm_cls;
-            cmc_key[cmc_wp] <= cm_key;
-            cmc_mip[cmc_wp] <= cm_res_mip;
-            cmc_valid[cmc_wp] <= 1'b1;
-            cmc_wp <= cmc_wp + 3'd1;
         end
         if (enable && !leave_hold) begin
             opnd_q <= opnd_n;
@@ -2016,8 +2167,6 @@ module jmr_js_vm_exec64 (
             cm_scan <= 1'b0;
             cm_armed <= 1'b0;
             cm_done <= 1'b0;
-            cmc_valid <= 8'd0;
-            cmc_wp <= 3'd0;
             cm_c <= 4'd0;
             cm_m <= 4'd0;
             cm_mip <= 16'hFFFF;
@@ -2799,7 +2948,10 @@ module jmr_js_vm_exec64 (
         logic [55:0] xa, xb, sig;
         logic [56:0] sum;
         logic [53:0] rounded;
-        integer er, diff;
+        // Effective exponents are 1..2046, with at most two carry-out
+        // increments before overflow. A 12-bit unsigned path covers all
+        // cases; 32-bit integer arithmetic needlessly lengthened this cone.
+        logic [11:0] er, diff;
         logic [10:0] ef;
         begin
             sa = aa[63]; sb = bb[63];
@@ -2853,16 +3005,16 @@ module jmr_js_vm_exec64 (
                     // log-depth normalize: LZC + one barrel shift, clamped
                     // at the subnormal boundary (er floor 1) — replaces the
                     // 55-step loop-carried shift (the -250ns class).
-                    integer lz, shn;
+                    logic [5:0] lz, shn;
                     sig = xa - xb;
                     if (sig == 0)
                         sr = 1'b0;
                     lz = 0;
                     for (int k = 0; k <= 55; k++)
-                        if (sig[k]) lz = 55 - k;
+                        if (sig[k]) lz = 6'(55 - k);
                     if (sig != 0) begin
-                        shn = (er - 1 < lz) ? (er - 1) : lz;
-                        if (shn < 0) shn = 0;
+                        shn = (er - 12'd1 < {6'd0, lz})
+                            ? 6'(er - 12'd1) : lz;
                         sig = sig << shn;
                         er = er - shn;
                     end
@@ -2905,40 +3057,47 @@ module jmr_js_vm_exec64 (
         logic [52:0] q;
         logic [53:0] rounded;
         logic guard, sticky;
-        integer p, er, shift;
+        // Product top is -1..105; the biased exponent is -1126..3073
+        // and an underflow shift is at most 1074. Keep arithmetic at
+        // those widths instead of cascading 32-bit exponent adders.
+        logic signed [7:0] p;
+        logic signed [12:0] er, shift;
         begin
             // highest set bit: priority scan (log-depth encoder form)
-            p = -1;
+            p = -8'sd1;
             for (int k = 0; k < 106; k++)
                 if (product[k])
-                    p = k;
-            er = ((ea == 0) ? 1 : ea)
-               + ((eb == 0) ? 1 : eb) - 1023 + p - 104;
-            shift = p - 52;
+                    p = 8'(k);
+            er = ((ea == 0) ? 13'sd1 : $signed({2'b0, ea}))
+               + ((eb == 0) ? 13'sd1 : $signed({2'b0, eb}))
+               - 13'sd1127 + 13'(p);
+            shift = 13'(p) - 13'sd52;
             ef = 11'(er);
-            if (er <= 0) begin
-                shift = shift + 1 - er;
+            if (er <= 13'sd0) begin
+                shift = shift + 13'sd1 - er;
                 ef = 11'd0;
             end
-            q = (shift >= 106) ? 53'd0 : 53'(product >> shift);
+            q = (shift >= 13'sd106) ? 53'd0 : 53'(product >> shift);
             guard = 1'b0;
             sticky = 1'b0;
-            if (shift > 0 && shift <= 106) begin
+            if (shift > 13'sd0 && shift <= 13'sd106) begin
                 logic [105:0] below_mask;
-                guard = product[shift - 1];
+                logic [6:0] below_count;
+                below_count = 7'(shift - 13'sd1);
+                guard = product[below_count];
                 // masked OR-reduce (tree form): sticky = any bit below guard
-                below_mask = (106'd1 << (shift - 1)) - 106'd1;
+                below_mask = ~({106{1'b1}} << below_count);
                 sticky = |(product & below_mask);
-            end else if (shift > 106)
+            end else if (shift > 13'sd106)
                 sticky = |product;
             rounded = {1'b0, q} + (guard && (sticky || q[0]));
             if (ef != 0 && rounded[53]) begin
                 q = rounded[53:1];
-                er = er + 1;
+                er = er + 13'sd1;
                 ef = 11'(er);
             end else
                 q = rounded[52:0];
-            if (er >= 2047)
+            if (er >= 13'sd2047)
                 v64_mul_pack = {sign, 11'h7ff, 52'd0};
             else if (ef == 0 && q[52])
                 v64_mul_pack = {sign, 11'd1, q[51:0]};
@@ -3245,7 +3404,19 @@ module jmr_js_vm_exec64 (
             name_hash_raddr = `VST_AT(vsp - 12'd1)[9:0];
     end
 
+    `ifndef SYNTHESIS
+    logic call_arg_use_check;
+    logic alu_window_check;
+    `endif
     always_comb begin
+        // SRAM address preparation above still sees the live FETCH word.
+        // Execution itself uses the word captured on that fetch edge.
+        logic [31:0] opw;
+        opw = opw_q;
+        `ifndef SYNTHESIS
+        call_arg_use_check = 1'b0;
+        alu_window_check = 1'b0;
+        `endif
         aset_win_retried_n = aset_win_retried;
         cm_win_n = cm_win;
         bind_argc_n = bind_argc;
@@ -3299,6 +3470,10 @@ module jmr_js_vm_exec64 (
         stroke_style_i_n = stroke_style_i;
         cm_scan_n = 1'b0;
         fpm_start_n = 1'b0;
+        fadd_start_n = 1'b0;
+        fadd_req_n = fadd_req;
+        fadd_a_n = 64'd0;
+        fadd_b_n = 64'd0;
         fpm_req_n = fpm_req;
         fpm_sign_n = fpm_sign;
         fpm_ea_n = fpm_ea;
@@ -3383,6 +3558,7 @@ module jmr_js_vm_exec64 (
         csr_wdata_n = csr_wdata;
         src_setlen_n = src_setlen;
         src_setlen_stb_n = 1'b0; // one-shot
+        sysw_we=0;sysw_field=0;sysw_value=0;
         csr_oob_n = csr_oob;
         minmax_base_n = minmax_base;
         minmax_is_min_n = minmax_is_min;
@@ -3670,6 +3846,18 @@ module jmr_js_vm_exec64 (
                         opnd3_n = 1'b1;
                         state_n = S_V64_EXEC;
                         vst_we_n = 1'b0;
+                    end else if (fadd_req) begin
+                        opnd_n = 1'b1;
+                        opnd2_n = 1'b1;
+                        opnd3_n = 1'b1;
+                        if (!fadd_busy) begin
+                            fadd_req_n = 1'b0;
+                            vst_wr(vsp - 12'd2, fadd_result);
+                            vsp_n = vsp - 12'd1;
+                            ip_n = ip + 16'd1;
+                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                            state_n = S_FETCH_WAIT;
+                        end else state_n = S_V64_EXEC;
                     end else if (fpm_req) begin
                         // Wait until the complete exact product is accumulated.
                         opnd_n = 1'b1;
@@ -4287,6 +4475,9 @@ module jmr_js_vm_exec64 (
                                 logic bad_fn, found_slot;
                                 logic [6:0] free_slot;
                                 logic signed [31:0] ms, frames, wanted;
+                                `ifndef SYNTHESIS
+                                call_arg_use_check = 1'b1;
+                                `endif
                                 nid = opw[15:8];
                                 argc = opw[31:24];
                                 // CALL_VAL already uses vsp_hs. Native rAF /
@@ -4325,7 +4516,7 @@ module jmr_js_vm_exec64 (
                                         end
                                         8'd1: begin // clear(back buffer, color)
                                             vdraw_color_n = (argc != 0)
-                                                ? v64_to_uint32(`VST_AT(base))[7:0]
+                                                ? v64_to_uint32(call_arg_q[0])[7:0]
                                                 : 8'd0;
                                             vdraw_i_n = 19'd0;
                                             vnat_base_n = base;
@@ -4339,12 +4530,12 @@ module jmr_js_vm_exec64 (
                                                 running_n = 1'b0;
                                                 state_n = S_DONE;
                                             end else begin
-                                                vdraw_x_n = v64_to_uint32(`VST_AT(base))[9:0];
-                                                vdraw_y_n = v64_to_uint32(`VST_AT(base + 1))[9:0];
-                                                vdraw_w_n = v64_to_uint32(`VST_AT(base + 2))[9:0];
-                                                vdraw_h_n = v64_to_uint32(`VST_AT(base + 3))[9:0];
+                                                vdraw_x_n = v64_to_uint32(call_arg_q[0])[9:0];
+                                                vdraw_y_n = v64_to_uint32(call_arg_q[1])[9:0];
+                                                vdraw_w_n = v64_to_uint32(call_arg_q[2])[9:0];
+                                                vdraw_h_n = v64_to_uint32(call_arg_q[3])[9:0];
                                                 vdraw_color_n = (argc > 4)
-                                                    ? v64_to_uint32(`VST_AT(base + 4))[7:0]
+                                                    ? v64_to_uint32(call_arg_q[4])[7:0]
                                                     : 8'hff;
                                                 vdraw_i_n = 19'd0;
                                                 vnat_base_n = base;
@@ -4403,7 +4594,7 @@ module jmr_js_vm_exec64 (
                                         8'd10: begin // Math.floor
                                             result = (argc == 0)
                                                 ? V64_CANON_NAN
-                                                : v64_floor_number(`VST_AT(base));
+                                                : v64_floor_number(call_arg_q[0]);
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
@@ -4412,8 +4603,8 @@ module jmr_js_vm_exec64 (
                                         end
                                         8'd55: begin // isFinite (run 71)
                                             result = {16'h7ff9, 4'd3, 12'd0, 31'd0,
-                                                      (argc != 0) && v64_is_number(`VST_AT(base)) &&
-                                                      (`VST_AT(base)[62:52] != 11'h7ff)};
+                                                      (argc != 0) && v64_is_number(call_arg_q[0]) &&
+                                                      (call_arg_q[0][62:52] != 11'h7ff)};
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
@@ -4422,9 +4613,9 @@ module jmr_js_vm_exec64 (
                                         end
                                         8'd56: begin // isNaN (run 71): non-numbers are NaN too
                                             result = {16'h7ff9, 4'd3, 12'd0, 31'd0,
-                                                      (argc == 0) || !v64_is_number(`VST_AT(base)) ||
-                                                      (`VST_AT(base)[62:52] == 11'h7ff &&
-                                                       `VST_AT(base)[51:0] != 52'd0)};
+                                                      (argc == 0) || !v64_is_number(call_arg_q[0]) ||
+                                                      (call_arg_q[0][62:52] == 11'h7ff &&
+                                                       call_arg_q[0][51:0] != 52'd0)};
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
@@ -4434,7 +4625,7 @@ module jmr_js_vm_exec64 (
                                         8'd57: begin // Math.ceil (run 71) = -floor(-x)
                                             begin
                                                 logic [63:0] neg_floor;
-                                                neg_floor = v64_floor_number({~`VST_AT(base)[63], `VST_AT(base)[62:0]});
+                                                neg_floor = v64_floor_number({~call_arg_q[0][63], call_arg_q[0][62:0]});
                                                 result = (argc == 0) ? V64_CANON_NAN
                                                        : {~neg_floor[63], neg_floor[62:0]};
                                             end
@@ -4447,7 +4638,7 @@ module jmr_js_vm_exec64 (
                                         8'd54: begin // Math.round (natives V2)
                                             result = (argc == 0)
                                                 ? V64_CANON_NAN
-                                                : v64_round_number(`VST_AT(base));
+                                                : v64_round_number(call_arg_q[0]);
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
@@ -4456,11 +4647,11 @@ module jmr_js_vm_exec64 (
                                         end
                                         8'd11: begin // Math.abs
                                             if (argc == 0) result = V64_CANON_NAN;
-                                            else if (`VST_AT(base)[62:52] == 11'h7ff &&
-                                                     `VST_AT(base)[51:0] != 0)
+                                            else if (call_arg_q[0][62:52] == 11'h7ff &&
+                                                     call_arg_q[0][51:0] != 0)
                                                 result = V64_CANON_NAN;
                                             else
-                                                result = {1'b0, `VST_AT(base)[62:0]};
+                                                result = {1'b0, call_arg_q[0][62:0]};
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
@@ -4496,7 +4687,7 @@ module jmr_js_vm_exec64 (
                                                 logic [63:0] arg;
                                                 logic signed [31:0] v;
                                                 arg = (argc != 0)
-                                                    ? `VST_AT(base) : V64_CANON_NAN;
+                                                    ? call_arg_q[0] : V64_CANON_NAN;
                                                 if (!v64_is_number(arg) ||
                                                     (arg[62:52] == 11'h7ff &&
                                                      arg[51:0] != 0)) begin
@@ -4529,12 +4720,12 @@ module jmr_js_vm_exec64 (
                                         end
                                         8'd27: begin // requestAnimationFrame
                                             bad_fn = argc == 0 ||
-                                                `VST_AT(base)[63:48] != 16'h7ff9 ||
-                                                `VST_AT(base)[47:44] != 4'd7 ||
-                                                `VST_AT(base)[31:0] >= MAX_OBJ ||
+                                                call_arg_q[0][63:48] != 16'h7ff9 ||
+                                                call_arg_q[0][47:44] != 4'd7 ||
+                                                call_arg_q[0][31:0] >= MAX_OBJ ||
                                                 !vfn_valid_rdata ||
                                                 vfn_gen_rdata !=
-                                                    `VST_AT(base)[43:32];
+                                                    call_arg_q[0][43:32];
                                             // Exec vfn_valid/gen can lag parent
                                             // GC (dual copy). A tagged Fn handle
                                             // is enough to re-arm rAF (PACMAN
@@ -4557,7 +4748,7 @@ module jmr_js_vm_exec64 (
                                             end else begin
                                                 vraf_we = 1'b1;
                                                 vraf_waddr = vraf_n[2:0];
-                                                vraf_wdata = `VST_AT(base);
+                                                vraf_wdata = call_arg_q[0];
                                                 vraf_n_n = vraf_n + 4'd1;
                                                 vst_wr(base, result);
                                                 vsp_n = base + 12'd1;
@@ -4575,13 +4766,13 @@ module jmr_js_vm_exec64 (
                                             // the parent S_V64_DISPATCH type
                                             // walk + custom listener scan.
                                             if (argc != 12'd0 &&
-                                                `VST_AT(base)[63:48] ==
+                                                call_arg_q[0][63:48] ==
                                                     16'h7ff9 &&
-                                                `VST_AT(base)[47:44] ==
+                                                call_arg_q[0][47:44] ==
                                                     4'd5 &&
-                                                `VST_AT(base)[31:0] <
+                                                call_arg_q[0][31:0] <
                                                     MAX_OBJ) begin
-                                                hp_wval_n = `VST_AT(base);
+                                                hp_wval_n = call_arg_q[0];
                                                 vst_wr(base,
                                                     {16'h7ff9, 4'd3, 27'd0,
                                                      1'b1, 16'd0});
@@ -4604,14 +4795,14 @@ module jmr_js_vm_exec64 (
                                         end
                                         8'd28, 8'd29: begin // timeout / interval
                                             bad_fn = argc == 0 ||
-                                                `VST_AT(base)[63:48] != 16'h7ff9 ||
-                                                `VST_AT(base)[47:44] != 4'd7 ||
-                                                `VST_AT(base)[31:0] >= MAX_OBJ ||
+                                                call_arg_q[0][63:48] != 16'h7ff9 ||
+                                                call_arg_q[0][47:44] != 4'd7 ||
+                                                call_arg_q[0][31:0] >= MAX_OBJ ||
                                                 !vfn_valid_rdata ||
                                                 vfn_gen_rdata !=
-                                                    `VST_AT(base)[43:32];
+                                                    call_arg_q[0][43:32];
                                             if (argc > 1)
-                                                ms = $signed(v64_to_uint32(`VST_AT(base + 1)));
+                                                ms = $signed(v64_to_uint32(call_arg_q[1]));
                                             if (ms > 0)
                                                 frames = (ms * 32'sd3 + 32'sd25) /
                                                          32'sd50;
@@ -4677,7 +4868,7 @@ module jmr_js_vm_exec64 (
                                                 vtimer_id_wdata = $signed(vtimer_seq);
                                                 vtimer_period_wdata =
                                                     (nid == 8'd29) ? 64'(frames) : -64'sd1;
-                                                vtimer_fn_wdata = `VST_AT(base);
+                                                vtimer_fn_wdata = call_arg_q[0];
                                                 vtimer_n_n = vtimer_n + 7'd1;
                                                 vtimer_seq_n = vtimer_seq + 32'd1;
                                                 vst_wr(base, v64_int32_number(vtimer_seq));
@@ -4691,7 +4882,7 @@ module jmr_js_vm_exec64 (
                                         8'd30, 8'd31: begin // clear timer
                                             if (argc != 0)
                                                 wanted = $signed(
-                                                    v64_to_uint32(`VST_AT(base))
+                                                    v64_to_uint32(call_arg_q[0])
                                                 );
                                             if (tmr_i_q < 7'd64) begin
                                                 // #66b: same 2-beat rdata lag
@@ -4735,8 +4926,8 @@ module jmr_js_vm_exec64 (
                                         end
                                         8'd19, 8'd20: begin // addEventListener
                                             logic [63:0] ev, fn;
-                                            ev = (argc != 0) ? `VST_AT(base) : V64_UNDEFINED;
-                                            fn = (argc > 1) ? `VST_AT(base + 1) : V64_UNDEFINED;
+                                            ev = (argc != 0) ? call_arg_q[0] : V64_UNDEFINED;
+                                            fn = (argc > 1) ? call_arg_q[1] : V64_UNDEFINED;
                                             if (fn[63:48] != 16'h7ff9 ||
                                                 fn[47:44] != 4'd7) begin
                                                 machine_fault_n = 1'b1;
@@ -4768,18 +4959,18 @@ module jmr_js_vm_exec64 (
                                             // (getLeaderboard || []). Interned /
                                             // dynstr → nested Value64 arrays.
                                             if (argc == 0 ||
-                                                `VST_AT(base)[63:48] == V64_TAG_PREFIX &&
-                                                (`VST_AT(base)[47:44] == V64_KIND_UNDEFINED ||
-                                                 `VST_AT(base)[47:44] == V64_KIND_NULL)) begin
+                                                call_arg_q[0][63:48] == V64_TAG_PREFIX &&
+                                                (call_arg_q[0][47:44] == V64_KIND_UNDEFINED ||
+                                                 call_arg_q[0][47:44] == V64_KIND_NULL)) begin
                                                 vst_wr(base, V64_NULL);
                                                 vsp_n = base + 12'd1;
                                                 ip_n = ip + 16'd1;
                                                 code_raddr_n =
                                                     15'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
-                                            end else if (`VST_AT(base)[63:48] == V64_TAG_PREFIX &&
-                                                       `VST_AT(base)[47:44] == V64_KIND_STRING &&
-                                                       `VST_AT(base)[15:0] < names_n) begin
+                                            end else if (call_arg_q[0][63:48] == V64_TAG_PREFIX &&
+                                                       call_arg_q[0][47:44] == V64_KIND_STRING &&
+                                                       call_arg_q[0][15:0] < names_n) begin
                                                 json_src_n = 14'd0;
                                                 json_srclen_n =
                                                     name_blen_rdata[13:0];
@@ -4803,15 +4994,15 @@ module jmr_js_vm_exec64 (
                                                     namcpy_armed_n = 1'b0;
                                                     state_n = S_NAMCPY;
                                                 end
-                                            end else if (`VST_AT(base)[63:48] == V64_TAG_PREFIX &&
-                                                       `VST_AT(base)[47:44] == V64_KIND_OBJECT &&
-                                                       `VST_AT(base)[31:0] < MAX_OBJ &&
+                                            end else if (call_arg_q[0][63:48] == V64_TAG_PREFIX &&
+                                                       call_arg_q[0][47:44] == V64_KIND_OBJECT &&
+                                                       call_arg_q[0][31:0] < MAX_OBJ &&
                                                        vobj_alloc_rdata == 2'd1 &&
                                                        vobj_builtin_rdata == 4'd7) begin
                                                 vnat_base_n = base;
                                                 hp_cmd_n = HP_OGETI;
                                                 hp_v64_n = 1'b1;
-                                                hp_oid_n = `VST_AT(base)[12:0];
+                                                hp_oid_n = call_arg_q[0][12:0];
                                                 hp_slot_n = 5'd0;
                                                 hp_qn_n = 3'd2;
                                                 hp_qi_n = 3'd0;
@@ -4836,7 +5027,7 @@ module jmr_js_vm_exec64 (
                                             js_we = 1'b1;
                                             js_waddr = 5'd0;
                                             vjs_val_wdata = (argc != 0)
-                                                ? `VST_AT(base) : V64_UNDEFINED;
+                                                ? call_arg_q[0] : V64_UNDEFINED;
                                             js_i_wdata = 8'd0;
                                             js_ph_wdata = 3'd0;
                                             vnat_base_n = base;
@@ -4870,9 +5061,9 @@ module jmr_js_vm_exec64 (
                                                 logic [31:0] aln;
                                                 aln = 32'd0;
                                                 if (argc != 0 &&
-                                                    v64_is_number(`VST_AT(base)))
+                                                    v64_is_number(call_arg_q[0]))
                                                     aln = v64_to_uint32(
-                                                        `VST_AT(base));
+                                                        call_arg_q[0]);
                                                 if (aln > ARR_CAP) begin
                                                     machine_fault_n = 1'b1;
                                                     fault_code_n = 8'd3;
@@ -4912,8 +5103,8 @@ module jmr_js_vm_exec64 (
                                             // removeEventListener: parent compacts its single table
                                             // sequentially (#77's dual-copy sync is GONE — one table).
                                             logic [63:0] ev, fn;
-                                            ev = (argc != 0) ? `VST_AT(base) : V64_UNDEFINED;
-                                            fn = (argc > 1) ? `VST_AT(base + 1) : V64_UNDEFINED;
+                                            ev = (argc != 0) ? call_arg_q[0] : V64_UNDEFINED;
+                                            fn = (argc > 1) ? call_arg_q[1] : V64_UNDEFINED;
                                             lsv_scan_n = 1'b1;
                                             lsv_op_n = 2'd2;
                                             lsv_ev_n = ev;
@@ -4929,7 +5120,7 @@ module jmr_js_vm_exec64 (
                                                 logic [15:0] tn;
                                                 logic [63:0] arg;
                                                 arg = (argc != 0)
-                                                    ? `VST_AT(base) : V64_UNDEFINED;
+                                                    ? call_arg_q[0] : V64_UNDEFINED;
                                                 tn = id_str_object;
                                                 if (v64_is_number(arg))
                                                     tn = (id_str_number != 16'hFFFF)
@@ -4974,15 +5165,15 @@ module jmr_js_vm_exec64 (
                                             // noise, never a fault.
                                             snd_stb_c = 1'b1;
                                             snd_ch_c = 2'(v64_to_int32(
-                                                `VST_AT(base + 1)));
+                                                call_arg_q[1]));
                                             snd_freq_c = 16'(v64_to_int32(
-                                                `VST_AT(base + 2)));
+                                                call_arg_q[2]));
                                             snd_vol_c = 4'(v64_to_int32(
-                                                `VST_AT(base + 3)));
+                                                call_arg_q[3]));
                                             snd_frames_c = 8'(v64_to_int32(
-                                                `VST_AT(base + 4)));
+                                                call_arg_q[4]));
                                             snd_slide_c = 8'(v64_to_int32(
-                                                `VST_AT(base + 5)));
+                                                call_arg_q[5]));
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
@@ -5010,7 +5201,7 @@ module jmr_js_vm_exec64 (
                                             begin
                                                 logic signed [31:0] si;
                                                 si = (argc != 0)
-                                                    ? v64_to_int32(`VST_AT(base))
+                                                    ? v64_to_int32(call_arg_q[0])
                                                     : -32'sd1;
                                                 csr_mode_n = 3'd0;
                                                 csr_oob_n = (si < 0) ||
@@ -5025,7 +5216,7 @@ module jmr_js_vm_exec64 (
                                             begin
                                                 logic signed [31:0] si;
                                                 si = (argc != 0)
-                                                    ? v64_to_int32(`VST_AT(base))
+                                                    ? v64_to_int32(call_arg_q[0])
                                                     : -32'sd1;
                                                 csr_mode_n = 3'd1;
                                                 csr_oob_n = (si < 0) ||
@@ -5039,7 +5230,7 @@ module jmr_js_vm_exec64 (
                                             begin
                                                 logic signed [31:0] si;
                                                 si = (argc != 0)
-                                                    ? v64_to_int32(`VST_AT(base))
+                                                    ? v64_to_int32(call_arg_q[0])
                                                     : -32'sd1;
                                                 if (si < 0 || si >= 32'(CSTG_WORDS)) begin
                                                     machine_fault_n = 1'b1;
@@ -5054,7 +5245,7 @@ module jmr_js_vm_exec64 (
                                                     csr_addr_n = cstg_word(si[20:0]);
                                                     csr_wdata_n = {8'd0,
                                                         v64_to_uint32(
-                                                            `VST_AT(base + 1))[7:0]};
+                                                            call_arg_q[1])[7:0]};
                                                     vnat_base_n = base;
                                                     state_n = S_CSRAM;
                                                 end
@@ -5063,12 +5254,12 @@ module jmr_js_vm_exec64 (
                                         8'd47: begin // cdone(status, len, msglen)
                                             cmp_done_n = 1'b1;
                                             cmp_status_n = v64_to_uint32(
-                                                `VST_AT(base))[7:0];
+                                                call_arg_q[0])[7:0];
                                             cmp_len_n = (argc > 1)
-                                                ? v64_to_uint32(`VST_AT(base + 1))[20:0]
+                                                ? v64_to_uint32(call_arg_q[1])[20:0]
                                                 : 21'd0;
                                             cmp_msglen_n = (argc > 2)
-                                                ? v64_to_uint32(`VST_AT(base + 2))[6:0]
+                                                ? v64_to_uint32(call_arg_q[2])[6:0]
                                                 : 7'd0;
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
@@ -5080,7 +5271,7 @@ module jmr_js_vm_exec64 (
                                             begin
                                                 logic signed [31:0] sw;
                                                 sw = (argc != 0)
-                                                    ? v64_to_int32(`VST_AT(base))
+                                                    ? v64_to_int32(call_arg_q[0])
                                                     : -32'sd1;
                                                 // This bound IS the framebuffer
                                                 // wall, enforced in silicon.
@@ -5094,12 +5285,12 @@ module jmr_js_vm_exec64 (
                                                 end else begin
                                                     csr_mode_n = 3'd3;
                                                     csr_oob_n = 1'b0;
-                                                    csr_addr_n = 21'(sw[20:0]);
+                                                    csr_addr_n = 22'(sw[21:0]);
                                                     csr_wdata_n = {
                                                         v64_to_uint32(
-                                                            `VST_AT(base + 2))[7:0],
+                                                            call_arg_q[2])[7:0],
                                                         v64_to_uint32(
-                                                            `VST_AT(base + 1))[7:0]};
+                                                            call_arg_q[1])[7:0]};
                                                     vnat_base_n = base;
                                                     state_n = S_CSRAM;
                                                 end
@@ -5109,7 +5300,7 @@ module jmr_js_vm_exec64 (
                                             begin
                                                 logic signed [31:0] si;
                                                 si = (argc != 0)
-                                                    ? v64_to_int32(`VST_AT(base))
+                                                    ? v64_to_int32(call_arg_q[0])
                                                     : -32'sd1;
                                                 // WRITE: out of range FAULTS.
                                                 // Reads answer -1 (the tokenizer
@@ -5131,7 +5322,7 @@ module jmr_js_vm_exec64 (
                                                         SRC_SRAM_BASE + si[20:0];
                                                     csr_wdata_n = {8'd0,
                                                         v64_to_uint32(
-                                                            `VST_AT(base + 1))[7:0]};
+                                                            call_arg_q[1])[7:0]};
                                                     vnat_base_n = base;
                                                     state_n = S_CSRAM;
                                                 end
@@ -5145,7 +5336,7 @@ module jmr_js_vm_exec64 (
                                             begin
                                                 logic signed [31:0] sn;
                                                 sn = (argc != 0)
-                                                    ? v64_to_int32(`VST_AT(base))
+                                                    ? v64_to_int32(call_arg_q[0])
                                                     : -32'sd1;
                                                 if (sn < 0 ||
                                                     sn > 32'(SOURCE_MAX)) begin
@@ -6055,6 +6246,25 @@ module jmr_js_vm_exec64 (
                                         code_raddr_n =
                                             15'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
+                                    end else if (vobj_alloc_rdata==2'd1 &&
+                                                 vobj_gen_rdata==handle[43:32] &&
+                                                 vobj_builtin_rdata==4'd5 && system_field(opw[23:8])!=7)begin
+                                        vst_wr(vsp-12'd2,`VST_AT(vsp-12'd1));vsp_n=vsp-12'd1;
+                                        ip_n=ip+16'd1;code_raddr_n=15'(ops_base+ip+16'd1);
+                                        if(system_field(opw[23:8])>=5)begin
+                                            // Parent reads the one authoritative name RAM using
+                                            // its registered port. No string/heap copy in exec.
+                                            hp_key_n=`VST_AT(vsp-12'd1)[15:0];
+                                            hp_slot_n={2'd0,system_field(opw[23:8])};
+                                            state_n=S_UI_PROP;
+                                        end else begin
+                                            sysw_we=1;sysw_field=3'(system_field(opw[23:8]));
+                                            sysw_value=(`VST_AT(vsp-12'd1)[63:48]==16'h7ff9 &&
+                                                        `VST_AT(vsp-12'd1)[47:44]==4'd3)?
+                                                        {7'd0,`VST_AT(vsp-12'd1)[0]}:
+                                                        v64_to_uint32(`VST_AT(vsp-12'd1))[7:0];
+                                            state_n=S_FETCH_WAIT;
+                                        end
                                     end else begin
                                         if (opw[23:8] == id_fillstyle ||
                                             opw[23:8] == id_strokestyle) begin
@@ -6247,6 +6457,9 @@ module jmr_js_vm_exec64 (
                                 logic [4:0] same_n;
                                 logic dup;
                                 logic [63:0] ev, fn;
+                                `ifndef SYNTHESIS
+                                call_arg_use_check = 1'b1;
+                                `endif
                                 argc = {4'd0, opw[31:24]};
                                 // raddr comb already uses vsp_hs (cm_base).
                                 // Body must match or forEach/fillText/getContext
@@ -6254,7 +6467,7 @@ module jmr_js_vm_exec64 (
                                 base = (vsp_hs > argc)
                                     ? (vsp_hs - argc - 12'd1) : 12'd0;
                                 receiver = (vsp_hs > argc)
-                                    ? `VST_AT(base)
+                                    ? call_arg_q[0]
                                     : V64_UNDEFINED;
                                 mip = 16'hFFFF;
                                 // Object or ELEMENT (PYTHON canvas/DOM). Exec
@@ -6292,12 +6505,12 @@ module jmr_js_vm_exec64 (
                                     begin
                                         logic [63:0] tgt, sv0;
                                         logic tgt_ok, src0_ok;
-                                        tgt = `VST_AT(base + 12'd1);
+                                        tgt = call_arg_q[1];
                                         tgt_ok = (tgt[63:48] == V64_TAG_PREFIX &&
                                                   (tgt[47:44] == V64_KIND_OBJECT ||
                                                    tgt[47:44] == V64_KIND_ELEMENT) &&
                                                   tgt[31:0] < MAX_OBJ);
-                                        sv0 = `VST_AT(base + 12'd2);
+                                        sv0 = call_arg_q[2];
                                         src0_ok = (argc >= 12'd2 &&
                                                    sv0[63:48] == V64_TAG_PREFIX &&
                                                    (sv0[47:44] == V64_KIND_OBJECT ||
@@ -6455,7 +6668,7 @@ module jmr_js_vm_exec64 (
                                         vfe_sort_s_wdata = vfe_sort;
                                         vfe_sp_n = vfe_sp + 4'd1;
                                         vfe_arr_n = receiver;
-                                        vfe_fn_n = `VST_AT(base + 12'd1);
+                                        vfe_fn_n = call_arg_q[1];
                                         vfe_i_n = 8'd0;
                                         vfe_len_n = varr_len_rdata;
                                         vfe_ret_n = ip + 16'd1;
@@ -6513,10 +6726,10 @@ module jmr_js_vm_exec64 (
                                         sfree = valloc_i;
                                         valloc_retried_n = 1'b0;
                                         s0 = (argc >= 12'd1)
-                                            ? v64_to_int32(`VST_AT(base + 1))
+                                            ? v64_to_int32(call_arg_q[1])
                                             : 32'sd0;
                                         s1 = (argc >= 12'd2)
-                                            ? v64_to_int32(`VST_AT(base + 2))
+                                            ? v64_to_int32(call_arg_q[2])
                                             : 32'($signed({24'd0,
                                                 varr_len_rdata}));
                                         if (s0 < 0)
@@ -6699,7 +6912,7 @@ module jmr_js_vm_exec64 (
                                         vfe_sp_n = vfe_sp + 4'd1;
                                         vfe_arr_n = receiver;
                                         vfe_fn_n = (argc != 0)
-                                            ? `VST_AT(base + 12'd1)
+                                            ? call_arg_q[1]
                                             : V64_UNDEFINED;
                                         vfe_i_n = 8'd0;
                                         vfe_len_n = varr_len_rdata;
@@ -6746,7 +6959,7 @@ module jmr_js_vm_exec64 (
                                                 (id_reduce != 16'hFFFF &&
                                                  opw[23:8] == id_reduce
                                                  && argc >= 12'd2)
-                                                ? `VST_AT(base + 12'd2)
+                                                ? call_arg_q[2]
                                                 : V64_UNDEFINED;
                                             // #39: drop the init arg — the
                                             // iteration pushes assume vsp is
@@ -6784,16 +6997,16 @@ module jmr_js_vm_exec64 (
                                     // (identity sx=1, tx=0 is a no-op; save/translate
                                     // then fillRect must not skip tx).
                                     vdraw_x_n = clip_u(32'(
-                                        ($signed(v64_to_int32(`VST_AT(base + 1)))
+                                        ($signed(v64_to_int32(call_arg_q[1]))
                                          * ctx_sx) >>> 16) + ctx_tx, MW);
                                     vdraw_y_n = clip_u(32'(
-                                        ($signed(v64_to_int32(`VST_AT(base + 2)))
+                                        ($signed(v64_to_int32(call_arg_q[2]))
                                          * ctx_sy) >>> 16) + ctx_ty, MH);
                                     vdraw_w_n = clip_sz(32'(
-                                        ($signed(v64_to_int32(`VST_AT(base + 3)))
+                                        ($signed(v64_to_int32(call_arg_q[3]))
                                          * ctx_sx) >>> 16), 10'd0, MW);
                                     vdraw_h_n = clip_sz(32'(
-                                        ($signed(v64_to_int32(`VST_AT(base + 4)))
+                                        ($signed(v64_to_int32(call_arg_q[4]))
                                          * ctx_sy) >>> 16), 10'd0, MH);
                                     vdraw_color_n = (opw[23:8] == id_clearrect)
                                         ? 8'd0 : paint_color;
@@ -6815,10 +7028,10 @@ module jmr_js_vm_exec64 (
                                     begin
                                         logic signed [31:0] gx, gy, gw, gh;
                                         logic [9:0] x0, y0, ww, hh;
-                                        gx = v64_to_int32(`VST_AT(base + 12'd1));
-                                        gy = v64_to_int32(`VST_AT(base + 12'd2));
-                                        gw = v64_to_int32(`VST_AT(base + 12'd3));
-                                        gh = v64_to_int32(`VST_AT(base + 12'd4));
+                                        gx = v64_to_int32(call_arg_q[1]);
+                                        gy = v64_to_int32(call_arg_q[2]);
+                                        gw = v64_to_int32(call_arg_q[3]);
+                                        gh = v64_to_int32(call_arg_q[4]);
                                         x0 = clip_u(gx, MW);
                                         y0 = clip_u(gy, MH);
                                         ww = clip_sz(gw, x0, MW);
@@ -6841,18 +7054,18 @@ module jmr_js_vm_exec64 (
                                            opw[23:8] == id_putimgdata) begin
                                     begin
                                         logic [63:0] src;
-                                        src = `VST_AT(base + 12'd1);
+                                        src = call_arg_q[1];
                                         if (src[63:48] == V64_TAG_PREFIX &&
                                             src[47:44] == V64_KIND_OBJECT &&
                                             src[31:0] < MAX_OBJ &&
                                             vobj_cls_rdata == CLS_IMGD) begin
                                             imgd_x0_n = (argc >= 12'd2)
                                                 ? clip_u(v64_to_int32(
-                                                    `VST_AT(base + 12'd2)), MW)
+                                                    call_arg_q[2]), MW)
                                                 : 10'd0;
                                             imgd_y0_n = (argc >= 12'd3)
                                                 ? clip_u(v64_to_int32(
-                                                    `VST_AT(base + 12'd3)), MH)
+                                                    call_arg_q[3]), MH)
                                                 : 10'd0;
                                             vnat_base_n = base;
                                             ip_n = ip + 16'd1;
@@ -6903,8 +7116,8 @@ module jmr_js_vm_exec64 (
                                            opw[23:8] == id_translate) begin
                                     // PYTHON ctx.translate — Player.drawImage(-w/2,-h/2)
                                     // lands on position after this.
-                                    ctx_tx_n = ctx_tx + v64_to_int32(`VST_AT(base + 1));
-                                    ctx_ty_n = ctx_ty + v64_to_int32(`VST_AT(base + 2));
+                                    ctx_tx_n = ctx_tx + v64_to_int32(call_arg_q[1]);
+                                    ctx_ty_n = ctx_ty + v64_to_int32(call_arg_q[2]);
                                     vst_wr(base, V64_UNDEFINED);
                                     vsp_n = base + 12'd1;
                                     ip_n = ip + 16'd1;
@@ -6916,12 +7129,12 @@ module jmr_js_vm_exec64 (
                                     // PYTHON setTransform(a,b,c,d,e,f) — axis scale.
                                     begin
                                         logic signed [31:0] sx, sy;
-                                        sx = v64_to_fx(`VST_AT(base + 1));
-                                        sy = v64_to_fx(`VST_AT(base + 4));
+                                        sx = v64_to_fx(call_arg_q[1]);
+                                        sy = v64_to_fx(call_arg_q[4]);
                                         ctx_sx_n = (sx == 32'sd0) ? FX_ONE : sx;
                                         ctx_sy_n = (sy == 32'sd0) ? FX_ONE : sy;
-                                        ctx_tx_n = v64_to_int32(`VST_AT(base + 5));
-                                        ctx_ty_n = v64_to_int32(`VST_AT(base + 6));
+                                        ctx_tx_n = v64_to_int32(call_arg_q[5]);
+                                        ctx_ty_n = v64_to_int32(call_arg_q[6]);
                                         vst_wr(base, V64_UNDEFINED);
                                         vsp_n = base + 12'd1;
                                         ip_n = ip + 16'd1;
@@ -6937,7 +7150,7 @@ module jmr_js_vm_exec64 (
                                         logic [63:0] img;
                                         logic [7:0] si;
                                         logic spr_ok;
-                                        img = `VST_AT(base + 1);
+                                        img = call_arg_q[1];
                                         si = 8'(vobj_cls_rdata[3:0]);
                                         spr_ok = (img[63:48] == V64_TAG_PREFIX &&
                                                   img[47:44] == V64_KIND_OBJECT &&
@@ -6952,44 +7165,44 @@ module jmr_js_vm_exec64 (
                                             if (argc >= 12'd9) begin
                                                 blit_sx_n = clip_src(
                                                     $signed(v64_to_int32(
-                                                        `VST_AT(base + 2))));
+                                                        call_arg_q[2])));
                                                 blit_sy_n = clip_src(
                                                     $signed(v64_to_int32(
-                                                        `VST_AT(base + 3))));
+                                                        call_arg_q[3])));
                                                 blit_sw_n = clip_src(
                                                     $signed(v64_to_int32(
-                                                        `VST_AT(base + 4))));
+                                                        call_arg_q[4])));
                                                 blit_sh_n = clip_src(
                                                     $signed(v64_to_int32(
-                                                        `VST_AT(base + 5))));
+                                                        call_arg_q[5])));
                                                 dxs = 32'(($signed(v64_to_int32(
-                                                        `VST_AT(base + 6)))
+                                                        call_arg_q[6]))
                                                      * ctx_sx) >>> 16) + ctx_tx;
                                                 dys = 32'(($signed(v64_to_int32(
-                                                        `VST_AT(base + 7)))
+                                                        call_arg_q[7]))
                                                      * ctx_sy) >>> 16) + ctx_ty;
                                                 dws = 32'(($signed(v64_to_int32(
-                                                        `VST_AT(base + 8)))
+                                                        call_arg_q[8]))
                                                      * ctx_sx) >>> 16);
                                                 dhs = 32'(($signed(v64_to_int32(
-                                                        `VST_AT(base + 9)))
+                                                        call_arg_q[9]))
                                                      * ctx_sy) >>> 16);
                                             end else begin
                                                 blit_sx_n = 16'd0; blit_sy_n = 16'd0;
                                                 blit_sw_n = spr_ww[si[3:0]];
                                                 blit_sh_n = spr_hh[si[3:0]];
                                                 dxs = 32'(($signed(v64_to_int32(
-                                                        `VST_AT(base + 2)))
+                                                        call_arg_q[2]))
                                                      * ctx_sx) >>> 16) + ctx_tx;
                                                 dys = 32'(($signed(v64_to_int32(
-                                                        `VST_AT(base + 3)))
+                                                        call_arg_q[3]))
                                                      * ctx_sy) >>> 16) + ctx_ty;
                                                 if (argc >= 12'd5) begin
                                                     dws = 32'(($signed(v64_to_int32(
-                                                            `VST_AT(base + 4)))
+                                                            call_arg_q[4]))
                                                          * ctx_sx) >>> 16);
                                                     dhs = 32'(($signed(v64_to_int32(
-                                                            `VST_AT(base + 5)))
+                                                            call_arg_q[5]))
                                                          * ctx_sy) >>> 16);
                                                 end else begin
                                                     dws = 32'(($signed({16'd0,
@@ -7046,14 +7259,14 @@ module jmr_js_vm_exec64 (
                                     // or ToString(number). txt_vt=5 used to
                                     // bump dbg_str_ovf and sticky-fault SCORE.
                                     color_n = fill_style_i;
-                                    if (`VST_AT(base + 1)[63:48] == V64_TAG_PREFIX &&
-                                        `VST_AT(base + 1)[47:44] == 4'd4)
+                                    if (call_arg_q[1][63:48] == V64_TAG_PREFIX &&
+                                        call_arg_q[1][47:44] == 4'd4)
                                         begin
-                                            txt_val_n = {16'd0, `VST_AT(base + 1)[15:0]};
+                                            txt_val_n = {16'd0, call_arg_q[1][15:0]};
                                             txt_vt_n = 3'd3;
                                         end
-                                    else if (v64_is_number(`VST_AT(base + 1))) begin
-                                        txt_val_n = v64_to_int32(`VST_AT(base + 1));
+                                    else if (v64_is_number(call_arg_q[1])) begin
+                                        txt_val_n = v64_to_int32(call_arg_q[1]);
                                         txt_vt_n = 3'd0;
                                     end
                                     else begin
@@ -7065,10 +7278,10 @@ module jmr_js_vm_exec64 (
                                     // scale + translate as fillRect/drawImage
                                     // (`Press Enter` at world y=500 on glass).
                                     txt_px_n = 16'(
-                                        ($signed(v64_to_int32(`VST_AT(base + 2)))
+                                        ($signed(v64_to_int32(call_arg_q[2]))
                                          * ctx_sx >>> 16) + ctx_tx);
                                     txt_py_n = 16'(
-                                        ($signed(v64_to_int32(`VST_AT(base + 3)))
+                                        ($signed(v64_to_int32(call_arg_q[3]))
                                          * ctx_sy >>> 16) + ctx_ty);
                                     vst_wr(base, V64_UNDEFINED);
                                     vsp_n = base + 12'd1;
@@ -7085,7 +7298,7 @@ module jmr_js_vm_exec64 (
                                         logic dyn;
                                         tl = 16'd0;
                                         dyn = 1'b0;
-                                        txt = (argc != 0) ? `VST_AT(base + 12'd1)
+                                        txt = (argc != 0) ? call_arg_q[1]
                                             : V64_UNDEFINED;
                                         if (txt[63:48] == V64_TAG_PREFIX &&
                                             txt[47:44] == 4'd4 &&
@@ -7160,7 +7373,7 @@ module jmr_js_vm_exec64 (
                                         logic [63:0] fv;
                                         al = varr_len_rdata;
                                         fv = (argc != 0)
-                                            ? `VST_AT(base + 12'd1)
+                                            ? call_arg_q[1]
                                             : V64_UNDEFINED;
                                         vst_wr(base, receiver);
                                         vsp_n = base + 12'd1;
@@ -7212,7 +7425,7 @@ module jmr_js_vm_exec64 (
                                                 hp_aid_n = receiver[11:0];
                                                 hp_aslot_n = 7'd0;
                                                 hp_wval_n = (argc != 0)
-                                                    ? `VST_AT(base + 12'd1)
+                                                    ? call_arg_q[1]
                                                     : V64_UNDEFINED;
                                                 hp_ret_n = S_FETCH_WAIT;
                                                 state_n = S_HEAP_AWR;
@@ -7224,7 +7437,7 @@ module jmr_js_vm_exec64 (
                                                 hp_aslot_n = al[6:0] - 7'd1;
                                                 hp_alen_n = al;
                                                 hp_rval_n = (argc != 0)
-                                                    ? `VST_AT(base + 12'd1)
+                                                    ? call_arg_q[1]
                                                     : V64_UNDEFINED;
                                                 hp_phase_n = 3'd0;
                                                 hp_ret_n = S_FETCH_WAIT;
@@ -7246,10 +7459,10 @@ module jmr_js_vm_exec64 (
                                     logic [7:0] st, cnt, al;
                                     al = varr_len_rdata;
                                     st = (argc >= 12'd1)
-                                        ? v64_to_uint32(`VST_AT(base + 1))[7:0]
+                                        ? v64_to_uint32(call_arg_q[1])[7:0]
                                         : 8'd0;
                                     cnt = (argc >= 12'd2)
-                                        ? v64_to_uint32(`VST_AT(base + 2))[7:0]
+                                        ? v64_to_uint32(call_arg_q[2])[7:0]
                                         : 8'd1;
                                     if (st < al && cnt != 8'd0) begin
                                         varr_len_we = 1'b1; varr_len_waddr = receiver[11:0]; varr_len_wdata =
@@ -7308,7 +7521,7 @@ module jmr_js_vm_exec64 (
                                             hp_aslot_n = 7'd0;
                                             hp_alen_n = al;
                                             hp_wval_n = (argc != 0)
-                                                ? `VST_AT(base + 12'd1)
+                                                ? call_arg_q[1]
                                                 : V64_UNDEFINED;
                                             hp_ret_n = S_V64_IDXSCAN;
                                             state_n = S_HEAP_WAIT;
@@ -7331,15 +7544,15 @@ module jmr_js_vm_exec64 (
                                         logic intern_hay;
                                         needle_b = 8'h00;
                                         if (argc != 0 &&
-                                            v64_is_number(`VST_AT(base + 12'd1)))
+                                            v64_is_number(call_arg_q[1]))
                                             needle_b = 8'h30 +
-                                                v64_to_uint32(`VST_AT(base + 12'd1))[7:0];
+                                                v64_to_uint32(call_arg_q[1])[7:0];
                                         else if (argc != 0 &&
-                                                 `VST_AT(base + 12'd1)[63:48] ==
+                                                 call_arg_q[1][63:48] ==
                                                      V64_TAG_PREFIX &&
-                                                 `VST_AT(base + 12'd1)[47:44] ==
+                                                 call_arg_q[1][47:44] ==
                                                      4'd4 &&
-                                                 `VST_AT(base + 12'd1)[31:0] <
+                                                 call_arg_q[1][31:0] <
                                                      32'd1024)
                                             needle_b =
                                                 name_hash_rdata[7:0];
@@ -7401,8 +7614,8 @@ module jmr_js_vm_exec64 (
                                     begin
                                         logic [63:0] pat, replv;
                                         logic intern_hay;
-                                        pat = `VST_AT(base + 12'd1);
-                                        replv = `VST_AT(base + 12'd2);
+                                        pat = call_arg_q[1];
+                                        replv = call_arg_q[2];
                                         intern_hay = (receiver[47:44] == 4'd4);
                                         if (!hash2_q) begin
                                             // Beat 1: rdata is pat. Arm replv for next clock.
@@ -7545,19 +7758,19 @@ module jmr_js_vm_exec64 (
                                         pc_waddr = pc_n[3:0];
                                         pc_op_wdata = 2'd3;
                                         pc_a1_wdata =
-                                            v64_to_fx(`VST_AT(base + 12'd1));
+                                            v64_to_fx(call_arg_q[1]);
                                         pc_a2_wdata =
-                                            v64_to_fx(`VST_AT(base + 12'd2));
+                                            v64_to_fx(call_arg_q[2]);
                                         pc_a3_wdata =
-                                            v64_to_fx(`VST_AT(base + 12'd3));
+                                            v64_to_fx(call_arg_q[3]);
                                         pc_a4_wdata = (argc > 12'd3)
-                                            ? v64_to_fx(`VST_AT(base + 12'd4))
+                                            ? v64_to_fx(call_arg_q[4])
                                             : 32'sd0;
                                         pc_a5_wdata = (argc > 12'd4)
-                                            ? v64_to_fx(`VST_AT(base + 12'd5))
+                                            ? v64_to_fx(call_arg_q[5])
                                             : 32'sd0;
                                         pc_ccw_wdata = (argc > 12'd5)
-                                            && v64_truthy(`VST_AT(base + 12'd6));
+                                            && v64_truthy(call_arg_q[6]);
                                         pc_n_n = pc_n + 5'd1;
                                     end else
                                         dbg_path_ovf_n = dbg_path_ovf + 16'd1;
@@ -7577,9 +7790,9 @@ module jmr_js_vm_exec64 (
                                             (opw[23:8] == id_moveto)
                                             ? 2'd0 : 2'd1;
                                         pc_a1_wdata =
-                                            v64_to_fx(`VST_AT(base + 12'd1));
+                                            v64_to_fx(call_arg_q[1]);
                                         pc_a2_wdata =
-                                            v64_to_fx(`VST_AT(base + 12'd2));
+                                            v64_to_fx(call_arg_q[2]);
                                         pc_n_n = pc_n + 5'd1;
                                     end else
                                         dbg_path_ovf_n = dbg_path_ovf + 16'd1;
@@ -7601,13 +7814,13 @@ module jmr_js_vm_exec64 (
                                         pc_waddr = pc_n[3:0];
                                         pc_op_wdata = 2'd2;
                                         pc_a1_wdata =
-                                            v64_to_fx(`VST_AT(base + 12'd1));
+                                            v64_to_fx(call_arg_q[1]);
                                         pc_a2_wdata =
-                                            v64_to_fx(`VST_AT(base + 12'd2));
+                                            v64_to_fx(call_arg_q[2]);
                                         pc_a3_wdata =
-                                            v64_to_fx(`VST_AT(base + 12'd3));
+                                            v64_to_fx(call_arg_q[3]);
                                         pc_a4_wdata =
-                                            v64_to_fx(`VST_AT(base + 12'd4));
+                                            v64_to_fx(call_arg_q[4]);
                                         pc_n_n = pc_n + 5'd1;
                                     end else
                                         dbg_path_ovf_n = dbg_path_ovf + 16'd1;
@@ -7630,9 +7843,9 @@ module jmr_js_vm_exec64 (
                                     path_active_n = 1'b1;
                                     state_n = S_PWALK;
                                 end else if (opw[23:8] == id_ael) begin
-                                    ev = (argc != 0) ? `VST_AT(base + 1)
+                                    ev = (argc != 0) ? call_arg_q[1]
                                         : V64_UNDEFINED;
-                                    fn = (argc > 1) ? `VST_AT(base + 2)
+                                    fn = (argc > 1) ? call_arg_q[2]
                                         : V64_UNDEFINED;
                                     if (fn[63:48] != 16'h7ff9 ||
                                         fn[47:44] != 4'd7) begin
@@ -7689,7 +7902,7 @@ module jmr_js_vm_exec64 (
                                     valloc_bind_n = 1'b1;
                                     valloc_bind_src_n = receiver[12:0];
                                     valloc_bind_this_n = (argc != 0)
-                                        ? `VST_AT(base + 12'd1)
+                                        ? call_arg_q[1]
                                         : V64_UNDEFINED;
                                     vnat_base_n = base;
                                     valloc_kind_n = 2'd2;
@@ -7765,33 +7978,36 @@ module jmr_js_vm_exec64 (
                                 end
                             end
                             OP_ADD, OP_SUB, OP_MUL: begin
+                                `ifndef SYNTHESIS
+                                alu_window_check = (vsp >= 12'd2);
+                                `endif
                                 if (vsp < 12'd2) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6381;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (opw[7:0] == OP_ADD &&
-                                    ((`VST_AT(vsp - 12'd2)[63:48] == V64_TAG_PREFIX &&
-                                      `VST_AT(vsp - 12'd2)[47:44] == 4'd4) ||
-                                     (`VST_AT(vsp - 12'd1)[63:48] == V64_TAG_PREFIX &&
-                                      `VST_AT(vsp - 12'd1)[47:44] == 4'd4))) begin
+                                    ((vst_s[1][63:48] == V64_TAG_PREFIX &&
+                                      vst_s[1][47:44] == 4'd4) ||
+                                     (vst_s[0][63:48] == V64_TAG_PREFIX &&
+                                      vst_s[0][47:44] == 4'd4))) begin
                                     // PYTHON: string + ToString(other). Reuse
                                     // tagged S_CONCAT intern find-or-alloc.
-                                    cc_av_n = (`VST_AT(vsp - 12'd2)[63:48] ==
+                                    cc_av_n = (vst_s[1][63:48] ==
                                               V64_TAG_PREFIX &&
-                                              `VST_AT(vsp - 12'd2)[47:44] == 4'd4)
-                                        ? $signed({16'd0, `VST_AT(vsp - 12'd2)[15:0]})
-                                        : $signed(v64_to_uint32(`VST_AT(vsp - 12'd2)));
-                                    cc_at_n = (`VST_AT(vsp - 12'd2)[63:48] ==
+                                              vst_s[1][47:44] == 4'd4)
+                                        ? $signed({16'd0, vst_s[1][15:0]})
+                                        : $signed(v64_to_uint32(vst_s[1]));
+                                    cc_at_n = (vst_s[1][63:48] ==
                                               V64_TAG_PREFIX &&
-                                              `VST_AT(vsp - 12'd2)[47:44] == 4'd4)
+                                              vst_s[1][47:44] == 4'd4)
                                         ? 3'd3 : 3'd0;
-                                    cc_bv_n = (`VST_AT(vsp - 12'd1)[63:48] ==
+                                    cc_bv_n = (vst_s[0][63:48] ==
                                               V64_TAG_PREFIX &&
-                                              `VST_AT(vsp - 12'd1)[47:44] == 4'd4)
-                                        ? $signed({16'd0, `VST_AT(vsp - 12'd1)[15:0]})
-                                        : $signed(v64_to_uint32(`VST_AT(vsp - 12'd1)));
-                                    cc_bt_n = (`VST_AT(vsp - 12'd1)[63:48] ==
+                                              vst_s[0][47:44] == 4'd4)
+                                        ? $signed({16'd0, vst_s[0][15:0]})
+                                        : $signed(v64_to_uint32(vst_s[0]));
+                                    cc_bt_n = (vst_s[0][63:48] ==
                                               V64_TAG_PREFIX &&
-                                              `VST_AT(vsp - 12'd1)[47:44] == 4'd4)
+                                              vst_s[0][47:44] == 4'd4)
                                         ? 3'd3 : 3'd0;
                                     cc_second_n = 1'b0; cc_st_n = 2'd0;
                                     cc_h_n = 16'd0; cc_len_n = 8'd0; cc_d_n = 4'd0;
@@ -7807,23 +8023,18 @@ module jmr_js_vm_exec64 (
                                     // PYTHON ToNumber: non-Number → +0
                                     // (`timestamp - previous` on first rAF).
                                     logic [63:0] aa, bb, arithmetic_result;
-                                    aa = v64_is_number(`VST_AT(vsp - 12'd2))
-                                        ? `VST_AT(vsp - 12'd2) : 64'd0;
-                                    bb = v64_is_number(`VST_AT(vsp - 12'd1))
-                                        ? `VST_AT(vsp - 12'd1) : 64'd0;
+                                    aa = v64_is_number(vst_s[1])
+                                        ? vst_s[1] : 64'd0;
+                                    bb = v64_is_number(vst_s[0])
+                                        ? vst_s[0] : 64'd0;
                                     if (opw[7:0] == OP_ADD ||
                                         opw[7:0] == OP_SUB) begin
-                                        if (opw[7:0] == OP_ADD)
-                                            v64_add_task(aa, bb, arithmetic_result);
-                                        else
-                                            v64_add_task(aa,
-                                                         {~bb[63], bb[62:0]},
-                                                         arithmetic_result);
-                                        vst_wr(vsp - 12'd2, arithmetic_result);
-                                        vsp_n = vsp - 12'd1;
-                                        ip_n = ip + 16'd1;
-                                        code_raddr_n = 15'(ops_base + ip + 16'd1);
-                                        state_n = S_FETCH_WAIT;
+                                        fadd_a_n = aa;
+                                        fadd_b_n = opw[7:0] == OP_SUB
+                                            ? {~bb[63], bb[62:0]} : bb;
+                                        fadd_start_n = 1'b1;
+                                        fadd_req_n = 1'b1;
+                                        state_n = S_V64_EXEC;
                                     end else begin
                                         // OP_MUL: specials resolve comb and
                                         // complete now; the general product
@@ -7871,6 +8082,9 @@ module jmr_js_vm_exec64 (
                                 end
                             end
                             OP_DIV: begin
+                                `ifndef SYNTHESIS
+                                alu_window_check = (vsp >= 12'd2);
+                                `endif
                                 if (vsp < 12'd2) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6443;
                                     running_n = 1'b0; state_n = S_DONE;
@@ -7880,10 +8094,10 @@ module jmr_js_vm_exec64 (
                                     logic [52:0] ma, mb, na, nb;
                                     logic [5:0] sha, shb;
                                     logic immediate;
-                                    aa = v64_is_number(`VST_AT(vsp - 12'd2))
-                                        ? `VST_AT(vsp - 12'd2) : 64'd0;
-                                    bb = v64_is_number(`VST_AT(vsp - 12'd1))
-                                        ? `VST_AT(vsp - 12'd1) : 64'd0;
+                                    aa = v64_is_number(vst_s[1])
+                                        ? vst_s[1] : 64'd0;
+                                    bb = v64_is_number(vst_s[0])
+                                        ? vst_s[0] : 64'd0;
                                     immediate = 1'b1;
                                     immediate_result = V64_CANON_NAN;
                                     if ((aa[62:52] == 11'h7ff && aa[51:0] != 0) ||
@@ -7955,6 +8169,9 @@ module jmr_js_vm_exec64 (
                                 end
                             end
                             OP_MOD: begin
+                                `ifndef SYNTHESIS
+                                alu_window_check = (vsp >= 12'd2);
+                                `endif
                                 if (vsp < 12'd2) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6527;
                                     running_n = 1'b0; state_n = S_DONE;
@@ -7967,10 +8184,10 @@ module jmr_js_vm_exec64 (
                                     integer distance;
                                     // PYTHON ToNumber: non-Number → +0
                                     // (`this.times % 2` when GET_PROP misses).
-                                    aa = v64_is_number(`VST_AT(vsp - 12'd2))
-                                        ? `VST_AT(vsp - 12'd2) : 64'd0;
-                                    bb = v64_is_number(`VST_AT(vsp - 12'd1))
-                                        ? `VST_AT(vsp - 12'd1) : 64'd0;
+                                    aa = v64_is_number(vst_s[1])
+                                        ? vst_s[1] : 64'd0;
+                                    bb = v64_is_number(vst_s[0])
+                                        ? vst_s[0] : 64'd0;
                                     immediate = 1'b1;
                                     immediate_result = V64_CANON_NAN;
                                     if ((aa[62:52] == 11'h7ff && aa[51:0] != 0) ||
@@ -8022,14 +8239,17 @@ module jmr_js_vm_exec64 (
                                 end
                             end
                             OP_BIT_OR, OP_BIT_AND: begin
+                                `ifndef SYNTHESIS
+                                alu_window_check = (vsp >= 12'd2);
+                                `endif
                                 if (vsp < 12'd2) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6594;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     logic [31:0] left_int, right_int, bit_result;
                                     // ToInt32: BOOL true|false, not a Number-only fault
-                                    left_int = v64_to_int32(`VST_AT(vsp - 12'd2));
-                                    right_int = v64_to_int32(`VST_AT(vsp - 12'd1));
+                                    left_int = v64_to_int32(vst_s[1]);
+                                    right_int = v64_to_int32(vst_s[0]);
                                     bit_result = (opw[7:0] == OP_BIT_OR)
                                                ? left_int | right_int
                                                : left_int & right_int;
@@ -8041,6 +8261,9 @@ module jmr_js_vm_exec64 (
                                 end
                             end
                             OP_LT, OP_GT, OP_EQ: begin
+                                `ifndef SYNTHESIS
+                                alu_window_check = (vsp >= 12'd2);
+                                `endif
                                 if (vsp < 12'd2) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6613;
                                     running_n = 1'b0; state_n = S_DONE;
@@ -8050,11 +8273,11 @@ module jmr_js_vm_exec64 (
                                     // (`this.jumpHeight >= 750` before first jump).
                                     // EQ keeps identity (PYTHON does not ToNumber).
                                     aa = (opw[7:0] != OP_EQ &&
-                                          !v64_is_number(`VST_AT(vsp - 12'd2)))
-                                        ? 64'd0 : `VST_AT(vsp - 12'd2);
+                                          !v64_is_number(vst_s[1]))
+                                        ? 64'd0 : vst_s[1];
                                     bb = (opw[7:0] != OP_EQ &&
-                                          !v64_is_number(`VST_AT(vsp - 12'd1)))
-                                        ? 64'd0 : `VST_AT(vsp - 12'd1);
+                                          !v64_is_number(vst_s[0]))
+                                        ? 64'd0 : vst_s[0];
                                     vst_wr(vsp - 12'd2, {16'h7ff9, 4'd3, 12'd0, 31'd0,
                                          (opw[7:0] == OP_EQ)
                                          ? v64_equal(aa, bb)
@@ -8120,23 +8343,26 @@ module jmr_js_vm_exec64 (
                                 end
                             end
                             OP_NEG, OP_NOT: begin
+                                `ifndef SYNTHESIS
+                                alu_window_check = (vsp >= 12'd1);
+                                `endif
                                 if (vsp == 0) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6692;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (opw[7:0] == OP_NEG &&
-                                             !v64_is_number(`VST_AT(vsp - 12'd1))) begin
+                                             !v64_is_number(vst_s[0])) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd5; fault_site_n = 16'd6696;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     if (opw[7:0] == OP_NEG)
-                                        vst_wr(vsp - 12'd1, (`VST_AT(vsp - 12'd1)[62:52] == 11'h7ff &&
-                                             `VST_AT(vsp - 12'd1)[51:0] != 0)
+                                        vst_wr(vsp - 12'd1, (vst_s[0][62:52] == 11'h7ff &&
+                                             vst_s[0][51:0] != 0)
                                             ? V64_CANON_NAN
-                                            : {~`VST_AT(vsp - 12'd1)[63],
-                                               `VST_AT(vsp - 12'd1)[62:0]});
+                                            : {~vst_s[0][63],
+                                               vst_s[0][62:0]});
                                     else
                                         vst_wr(vsp - 12'd1, {16'h7ff9, 4'd3, 12'd0, 31'd0,
-                                             !v64_truthy(`VST_AT(vsp - 12'd1))});
+                                             !v64_truthy(vst_s[0])});
                                     ip_n = ip + 16'd1;
                                     code_raddr_n = 15'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
@@ -8254,4 +8480,31 @@ module jmr_js_vm_exec64 (
     end
     `undef VST_AT
     `undef VST_REL
+    // The native argument path has two VM periods from capture to its
+    // earliest consumer. Keep that timing contract checked in simulation.
+    `ifndef SYNTHESIS
+    integer arg_check_age;
+    logic [15:0] arg_check_ip;
+    logic arg_check_valid;
+    always_ff @(posedge clk) begin
+        if (!rst_n || p_clr) begin
+            arg_check_valid <= 1'b0;
+            arg_check_age <= 0;
+        end else begin
+            if (enable && !leave_hold && opnd_q && !opnd2_q &&
+                (opw_q[7:0] == OP_CALL || opw_q[7:0] == OP_CALL_METH)) begin
+                arg_check_valid <= 1'b1;
+                arg_check_age <= 0;
+                arg_check_ip <= ip;
+            end else if (arg_check_age < 100) arg_check_age <= arg_check_age + 1;
+            if (alu_window_check && vsp_hs != vsp)
+                $fatal(1, "arithmetic window pointer differs from authoritative stack head");
+            if (call_arg_use_check) begin
+                if (!(arg_check_valid && arg_check_ip == ip && arg_check_age >= 1))
+                    $fatal(1, "native argument consumer precedes two-cycle pipeline availability");
+            end
+        end
+    end
+
+    `endif
 endmodule

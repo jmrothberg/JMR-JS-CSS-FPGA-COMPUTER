@@ -1,0 +1,108 @@
+{
+  "date": "2026-11-02",
+  "repository_policy": "Use this existing repository on main; no new branches, repositories or worktrees.",
+  "moves": [
+    {
+      "old_path": "build/run72b_reference/run72b_game_speedup_WNS+0.238.bit",
+      "current_path": "releases/archive/run72b-2026-10-26/run72b_game_speedup_WNS+0.238.bit",
+      "sha256": "fea0a4e54850e145302b6b37910f493ebc79ce848a009dc50565212ba52b950c",
+      "old_path_kept_as_compatibility_link": true
+    },
+    {
+      "old_path": "build/run72b_reference/run72b_card.img",
+      "current_path": "releases/archive/run72b-2026-10-26/run72b_card.img",
+      "sha256": "c7eaf812e79357e070db9e6a690bc82e681fe4920bff3b081af6c8fe2fe4680c",
+      "old_path_kept_as_compatibility_link": true
+    },
+    {
+      "old_path": "build/run72b_reference/run72b_reports.zip",
+      "current_path": "releases/archive/run72b-2026-10-26/run72b_reports.zip",
+      "sha256": "db6d77530ac2173f4d8ac5816a65646d2605fc432ac01dfd9de8a63c9e33a239",
+      "old_path_kept_as_compatibility_link": true
+    },
+    {
+      "old_path": "build/run73/release/run73o_native_js_speed_WNS+0.000.bit",
+      "current_path": "releases/current/run73o_native_js_speed_WNS+0.000.bit",
+      "sha256": "cd53d807d1e4346f6ed59dae1a2a48dcc0df80ad64f5e18d02466648a60adecb",
+      "old_path_kept_as_compatibility_link": true
+    },
+    {
+      "old_path": "build/run73/release/run73o_sources_and_evidence.zip",
+      "current_path": "releases/current/run73o_sources_and_evidence.zip",
+      "sha256": "7939eee990c7bed3d0b878311826ef52bb783fa993523e2d5d782291e8e3e832",
+      "old_path_kept_as_compatibility_link": true
+    },
+    {
+      "old_path": "build/run73/release/run73o_qualification_reports.zip",
+      "current_path": "releases/current/run73o_qualification_reports.zip",
+      "sha256": "4c2b16d3f4cb0f67e7f7dbaf6e81e6bc7bae555e7e7526da682a3b79ef00b4cb",
+      "old_path_kept_as_compatibility_link": true
+    },
+    {
+      "old_path": "build/run73/release/release_manifest.json",
+      "current_path": "releases/current/evidence/build_manifest.json",
+      "sha256": "947b353a122459f8e6b38ee95398ca460deaa1449725135f0e0020e6abe25d70",
+      "old_path_kept_as_compatibility_link": true
+    },
+    {
+      "old_path": "build/run73/release/portable_DNKFAST.zip",
+      "current_path": "releases/extras/portable_DNKFAST.zip",
+      "sha256": "e70ae4d9660e6e10ef04bf6e5308836529d82f39d279c391a0008142f95a7e7b",
+      "old_path_kept_as_compatibility_link": true
+    },
+    {
+      "old_path": "build/bits/run71b_horse_AltSpreadLogic_high_cones_bigput_WNS+0.009_thin.bin",
+      "current_path": "releases/archive/run71b-earlier/run71b_horse_AltSpreadLogic_high_cones_bigput_WNS+0.009_thin.bin",
+      "sha256": "ed121d749a855c75e873df6640b1dacf38015f7c34dafc58e0a6285e26914e8f",
+      "old_path_kept_as_compatibility_link": true
+    },
+    {
+      "old_path": "build/bits/run71b_horse_AltSpreadLogic_high_cones_bigput_WNS+0.009_thin.bit",
+      "current_path": "releases/archive/run71b-earlier/run71b_horse_AltSpreadLogic_high_cones_bigput_WNS+0.009_thin.bit",
+      "sha256": "7d58c9a6eaa5955277213ba4cf673b389a109b840324c7c8bb198843885b9587",
+      "old_path_kept_as_compatibility_link": true
+    },
+    {
+      "old_path": "build/bits/run71c_csr_parser_cones_bigput_WNS+0.311.bin",
+      "current_path": "releases/archive/run71c-earlier/run71c_csr_parser_cones_bigput_WNS+0.311.bin",
+      "sha256": "024111372d2a68a0dfa8ce25e280aab585945baf7f58f4c576cca750df2c1397",
+      "old_path_kept_as_compatibility_link": true
+    },
+    {
+      "old_path": "build/bits/run71c_csr_parser_cones_bigput_WNS+0.311.bit",
+      "current_path": "releases/archive/run71c-earlier/run71c_csr_parser_cones_bigput_WNS+0.311.bit",
+      "sha256": "c01a098b9f423a896ebecc9d4d7a61ef7f098e06b5fa025353b4cb2e6370bb3d",
+      "old_path_kept_as_compatibility_link": true
+    },
+    {
+      "old_path": "build/run73",
+      "current_path": "build/archive/run73-development-2026-11-02",
+      "old_path_kept_as_compatibility_link": true,
+      "note": "Directory renamed, contents/checkpoints preserved; compatibility link keeps old tool paths valid."
+    },
+    {
+      "old_path": "build/run72b_reference",
+      "current_path": "build/archive/run72b-reference",
+      "old_path_kept_as_compatibility_link": true,
+      "note": "Directory renamed, contents/checkpoints preserved; compatibility link keeps old tool paths valid."
+    },
+    {
+      "old_path": "build/runs",
+      "current_path": "build/archive/older-implementation-runs",
+      "old_path_kept_as_compatibility_link": true,
+      "note": "Directory renamed, contents/checkpoints preserved; compatibility link keeps old tool paths valid."
+    },
+    {
+      "old_path": "build/ddr_latency",
+      "current_path": "build/archive/ddr-benchmark-overlays",
+      "old_path_kept_as_compatibility_link": true,
+      "note": "Directory renamed, contents/checkpoints preserved; compatibility link keeps old tool paths valid."
+    },
+    {
+      "old_path": "build/bits/auto",
+      "current_path": "build/archive/auto-bitstream-history",
+      "old_path_kept_as_compatibility_link": true,
+      "note": "Directory renamed, contents/checkpoints preserved; compatibility link keeps old tool paths valid."
+    }
+  ]
+}

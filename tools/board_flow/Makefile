@@ -39,6 +39,9 @@ ROOT := $(abspath ../..)
 RTL  := $(ROOT)/rtl
 OUT  := $(ROOT)/build/nexys_video
 BIT  := $(OUT)/jmr_nexys_video.bit
+# Programming selects the preserved release, independently of build targets.
+# Override FLASH_BIT explicitly when testing a different, qualified artifact.
+FLASH_BIT ?= $(ROOT)/releases/current/fpga.bit
 VENV := $(ROOT)/.venv
 
 RTL_SRCS := $(shell find $(RTL) -name '*.sv' -o -name '*.vhd' 2>/dev/null)
@@ -71,18 +74,20 @@ $(BIT): $(RTL_SRCS) $(DVI_SRCS) $(ROOT)/constraints/nexys_video.xdc $(ROOT)/tool
 endif
 
 # Volatile config — lost when you unplug USB power
-flash: $(BIT)
+flash:
+	@test -f "$(FLASH_BIT)" || { echo "Missing release: $(FLASH_BIT). See releases/current/README.md."; exit 1; }
 	@if command -v openFPGALoader >/dev/null 2>&1; then \
-	  openFPGALoader -b nexysVideo $(BIT); \
+	  openFPGALoader -b nexysVideo "$(FLASH_BIT)"; \
 	else \
 	  echo "Install openFPGALoader"; exit 1; \
 	fi
 
-# Quad-SPI flash — board boots HDMI alone after PROG/power (set JP1 to QSPI)
+# Quad-SPI flash — board boots HDMI alone after PROG/power (set JP4 to QSPI)
 # Erase+program is slow (minutes). This is the untethered path.
-flash-qspi: $(BIT)
+flash-qspi:
+	@test -f "$(FLASH_BIT)" || { echo "Missing release: $(FLASH_BIT). See releases/current/README.md."; exit 1; }
 	@if command -v openFPGALoader >/dev/null 2>&1; then \
-	  openFPGALoader -b nexysVideo -f $(BIT); \
+	  openFPGALoader -b nexysVideo -f "$(FLASH_BIT)"; \
 	else \
 	  echo "Install openFPGALoader"; exit 1; \
 	fi

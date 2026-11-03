@@ -117,14 +117,12 @@ set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets u_tmds/u_rgb2dvi/ClockGenInte
 ## in the HDMI bank's region. Pin the MMCM beside its loads.
 set_property LOC MMCME2_ADV_X1Y2 [get_cells {u_tmds/u_rgb2dvi/ClockGenInternal.ClockGenX/GenMMCM.DVI_ClkGenerator}]
 
-# div7 VM clock (run 52): run 51's WINNING placement measured vm_clk at
-# +8.673 ns of the 80 ns budget (wall 71.3 ns) — div7's 70 ns needs
-# ~1.3 ns of route recovery under real pressure, a fair bet with the
-# div8 fallback. The divide-by must match jmr_js_core VM_CLK_DIV and
-# tests/test_rtl_snippets._VMDIV or the constraint lies to the tools. Run-30 post-route: all 6,000 worst
-# failing paths interior to u_vm; nothing outside fails. Edges are a
-# subset of ui_clk edges, so boundary paths stay ordinary 10 ns paths.
-create_generated_clock -name vm_clk -divide_by 7 \
+# VM_CLK_DIV=3: BUFGCE passes one complete 100 MHz pulse per three cycles.
+# Its waveform is {0,5} ns with a 30 ns period, rather than 50% duty cycle.
+# Edges {1,2,7} refer to the source clock's rising/falling/rising edges.
+# Rising edges remain a subset of ui_clk edges; crossings retain their
+# ordinary 10 ns requirement. Keep this aligned with jmr_js_core.sv.
+create_generated_clock -name vm_clk -edges {1 2 7} \
     -source [get_pins u_core/g_vmclk_div.u_vm_bufgce/I] \
     [get_pins u_core/g_vmclk_div.u_vm_bufgce/O]
 

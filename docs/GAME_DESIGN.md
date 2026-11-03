@@ -216,20 +216,21 @@ RUN
   streams each file into SOURCE and types `SAVE "NAME"`. SOURCE is 64K;
   bigger files (`?TR`) stay on host `card.img` only. SAVE of HTML deletes
   a stale `.JSH` then F8 writes `.JSH` last when it fits.
-- **`DIR`** titles only (`.HTM` / `.JS`) so `LOAD n` stays a title index.
-  **`DIR *`** also lists `.JSH` and `.ART` (8.3 of `.ARTX`). `EDITOR` /
+- **`DIR`** titles only (`.HTM` / `.JS` / `.MD`) so `LOAD n` stays a title index.
+  **`DIR *`** also lists `.JSH` and `.ART` (8.3 of `.ARTX`). `READ` / `EDITOR` /
   `COMPILER` / `ARTSCAN` stay hidden. `REMOVE "NAME.JSH"` deletes a sidecar.
 - Chrome may open the same file for authoring. PYTHON bytecode → FPGA-SIM
   RTL → BOARD is the machine. Dukpy / a host twin is not.
 
 ### Machine programs in `storage/` — do not delete
 
-These three HTML files are **the machine**, not titles. `DIR` hides them
+These HTML files are **the machine**, not titles. `DIR` hides them
 so they do not bury the games. Removing them from `storage/` (or dropping
-them from `card.img`) breaks `EDIT` / `COMPILE`.
+them from `card.img`) breaks `READ` / `EDIT` / `COMPILE`.
 
 | File | READY verb | What it is |
 |---|---|---|
+| `storage/READ.HTML` | `READ` | Full-screen markdown reader (`READ.JSH`). Shows whatever `LOAD` parked, or `READ "NAME.MD"`. |
 | `storage/EDITOR.HTML` | `EDIT` | Full-screen editor (`EDITOR.JSH`). Edits whatever `LOAD` parked. |
 | `storage/ARTSCAN.HTML` | `COMPILE` (first) | Compiler pass A: span map + art check (`ARTSCAN.JSH`). |
 | `storage/COMPILER.HTML` | `COMPILE` (then) | Compiler pass B: tokenize / parse / emit (`COMPILER.JSH`). |
@@ -1111,6 +1112,22 @@ the machine-side fixes for a title shaped like INVADERS.
 ---
 
 ## Checklist before calling a new **V1.0** title done
+
+Before changing a port to fit, run `python3 tools/check_port.py GAME.HTML`.
+It distinguishes the 65,536-byte source/editor window from compiled program
+memory (81,920 bytes including trailers), counts image sheets, and reports
+compile/layout failures. Live heap peaks and runtime APIs still need native
+RTL testing. The image-sheet limit remains 16; animation frames can share a
+sheet through atlas crops.
+
+For HTML containing embedded pictures, `python3 tools/prepare_port.py GAME.HTML
+--out NEW_DIRECTORY` extracts the pictures into the existing art bank and
+retains editable PNG sheets plus browser-preview support. It preserves the
+original files and refuses to write a result unless the complete compiled
+program and native artwork are byte-for-byte identical. Move the prepared
+HTML and ARTX together when making a card. This can bring the HTML below the
+source window without shortening the program or discarding pictures; it
+does not enlarge code, art or heap capacity, or qualify on-machine compilation.
 
 1. Self-contained `storage/NAME.HTML`, 640×480 canvas, keys in the file.
 2. Stays inside **V1.0 authoring walls** (sprites ≤16, no `for-in` /

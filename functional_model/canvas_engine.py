@@ -13,6 +13,11 @@ from .font8 import CHAR_H, CHAR_W, glyph
 WIDTH = 640
 HEIGHT = 480
 FB_BYTES = WIDTH * HEIGHT  # 307_200
+
+def game_viewport_y(y):
+    """Center-sample the full logical game into screen rows 24..479."""
+    return max(0,min(HEIGHT-1,((2*(int(y)-24)+1)*HEIGHT)//(2*(HEIGHT-24))))
+
 # Dense 8×8 monitor grid (games overlay / host twin).
 COLS = WIDTH // CHAR_W  # 80
 ROWS = HEIGHT // CHAR_H  # 60
@@ -291,9 +296,10 @@ class CanvasEngine:
         prompt_color: int = 5,
         cursor_on: bool = False,
         cursor_col: Optional[int] = None,
+        background: int = 0,
     ) -> None:
         """Paint last CONSOLE_VISIBLE_LINES as 64×16 HDMI letterbox (shared glass)."""
-        self.clear_front(0)
+        self.clear_front(background)
         # Wrap at 64; keep last CONSOLE_ROWS-1 content rows + prompt
         wrapped: list[str] = []
         for line in lines:
@@ -330,13 +336,22 @@ class CanvasEngine:
         pal = self.palette
         fi = 0
         oi = 0
-        for _ in range(FB_BYTES):
-            r, g, b = pal[self.front[fi]]
-            out[oi] = r
-            out[oi + 1] = g
-            out[oi + 2] = b
-            fi += 1
-            oi += 3
+        viewport=bool(getattr(self,'display_game_viewport',False))
+        for y in range(HEIGHT):
+            if viewport and y<24:
+                oi+=WIDTH*3
+                continue
+            fi=(game_viewport_y(y) if viewport else y)*WIDTH
+            for x in range(WIDTH):
+                r,g,b=pal[self.front[fi+x]]
+                out[oi]=r;out[oi+1]=g;out[oi+2]=b;oi+=3
+        for x, y, width, height, rgba in getattr(self, "display_overlays", ()):
+            for row in range(height):
+                for col in range(width):
+                    i = (row * width + col) * 4
+                    if rgba[i+3] and 0 <= x+col < WIDTH and 0 <= y+row < HEIGHT:
+                        target = ((y+row)*WIDTH+x+col)*3
+                        out[target:target+3] = rgba[i:i+3]
         return bytes(out)
 
     def fill_text(

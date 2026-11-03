@@ -13,6 +13,7 @@ F10 toggles the Architecture Monitor (JS schematic). Arrows + Space = play.
 from __future__ import annotations
 
 import argparse
+import os
 import collections
 import sys
 import time
@@ -137,6 +138,7 @@ def _js_key(event: tk.Event) -> tuple[int, str] | None:
 
 
 def _try_sim_backend():
+    if os.environ.get("JMR_PYTHON_ONLY")=="1":return None
     try:
         from runtime.sim_backend import SimBackend
 
@@ -146,6 +148,7 @@ def _try_sim_backend():
 
 
 def _try_board_backend():
+    if os.environ.get("JMR_PYTHON_ONLY")=="1":return None
     try:
         from runtime.board_backend import BoardBackend
 
@@ -155,6 +158,7 @@ def _try_board_backend():
 
 
 def _try_asic_backend():
+    if os.environ.get("JMR_PYTHON_ONLY")=="1":return None
     try:
         from runtime.asic_sim_backend import AsicSimBackend
 
@@ -196,6 +200,8 @@ class App:
         self._key_up = False
         self._key_down = False
         self._key_fire = False
+        self._mouse_buttons = 0
+        self._mouse_samples = collections.deque()
         # NEW: real-time key display + capture (2026-08-29 — diagnosing
         # whether X11 auto-repeat masquerades as distinct keydowns; the
         # keysym-already-down check works because this desktop runs
@@ -230,7 +236,7 @@ class App:
         self.machine.more_idle = self._more_idle
         for b in self.backends:
             # 2026-09-04: BOARD too — its SAVE/PUT waits used to block Tk
-            if getattr(b, "name", "") in ("FPGA-SIM", "BOARD"):
+            if getattr(b, "name", "") in ("PYTHON", "FPGA-SIM", "BOARD"):
                 b.run_wait_idle = self._more_idle
 
         # bind_all so arrows work even if focus is weird (no Text widget to steal them)
@@ -243,8 +249,13 @@ class App:
         # F8=put / F9=runtime / F10=monitor are GUI chrome at READY
         # (KeyRelease, so X11 auto-repeat cannot fire them). While a
         # title runs, F8 stays a TITLE key (on_key_press F1–F11 group).
-        # NEW: mouse stick OFF — click only focuses glass (no JOY overwrite of KEYBITS)
-        self.canvas_label.bind("<Button-1>", lambda e: self.canvas_label.focus_set())
+        self.canvas_label.bind("<Motion>", self._mouse_motion)
+        for button in (1, 2, 3):
+            self.canvas_label.bind(f"<ButtonPress-{button}>",
+                                   lambda e, b=button: self._mouse_button(e, b, True))
+            self.canvas_label.bind(f"<ButtonRelease-{button}>",
+                                   lambda e, b=button: self._mouse_button(e, b, False))
+        self.canvas_label.bind("<FocusOut>", self._mouse_focus_out, add="+")
         # KeyRelease: X11 auto-repeat is extra KeyPress only. A held F9 used
         # to PYTHON→FPGA-SIM→BOARD in one tap. bind_all covers the arch window.
         self.root.bind_all("<KeyRelease-F8>", self.on_put_file)
@@ -609,6 +620,8 @@ class App:
         if getattr(self.backend, "_editor_live", False):
             return True
         m = getattr(self.backend, "machine", None)
+        if self.backend.name=='PYTHON' and m is not None:
+            return bool(m.running and m.system_window[0] in (1,5))
         return bool(m is not None and getattr(m, "_edit_active", False))
 
     def _queue_editor_paste(self, clip: str) -> None:
@@ -650,6 +663,10 @@ class App:
         except tk.TclError:
             return "break"
         if not clip:
+            return "break"
+        system_menu=getattr(self.backend,'system_menu',None)
+        if system_menu is not None and system_menu.classic.dialog=='save_as':
+            for char in clip.strip()[:12]:self.backend.key_event(0,char,True)
             return "break"
         if self._editor_accepts_paste():
             self._queue_editor_paste(clip)
@@ -764,7 +781,7 @@ class App:
                     title="Send host file to card",
                     initialdir=str(ROOT / "storage"),
                     filetypes=[
-                        ("HTML / JSH / ART", "*.HTML *.HTM *.JS *.JSH *.ARTX *.ART"),
+                        ("Programs and documents", "*.HTML *.HTM *.JS *.JSH *.ARTX *.ART *.MD *.md *.TXT *.txt *.ICN"),
                         ("All files", "*"),
                     ],
                 )
@@ -783,6 +800,13 @@ class App:
         return "break"
 
     def on_key_press(self, event: tk.Event) -> str | None:
+        if getattr(self.backend, "system_keyboard", False) and not self._is_running():
+            code = {"Return":13,"KP_Enter":13,"BackSpace":8,"Delete":127}.get(event.keysym)
+            if code is None and event.char and 32<=ord(event.char[0])<127:
+                code=ord(event.char[0])
+            if code is not None:
+                self.backend.console_key(code)
+                return "break"
         # NEW: real-time capture, before any early return, so nothing is
         # missed. This desktop runs detectable X11 autorepeat (see
         # on_key_release below) — a held key resends KeyPress with no
@@ -825,6 +849,10 @@ class App:
         if (state & 0x4) or (state & 0x40):  # Control or Mod4/Super
             if event.keysym.lower() == "v":
                 return self.on_paste(event)
+            if self.backend.name=='PYTHON' and self._editor_accepts_paste():
+                command={'a':142,'c':139,'x':138,'z':137}.get(event.keysym.lower())
+                if command:
+                    self.backend.key_event(command,'',True);self.backend.key_event(command,'',False)
             return "break"
         # NEW: game running → forward the RAW key (JS keyCode/key) to the
         # runtime key-state engine. The HTML decides bindings (Enter starts
@@ -840,7 +868,6 @@ class App:
             if playing:
                 self._key_left = True
                 self._emit_keys()
-                self._feed_more(" ")
             else:
                 self.line_buf, self.line_col = apply_line_key(
                     self.line_buf, self.line_col, "Left"
@@ -851,7 +878,6 @@ class App:
             if playing:
                 self._key_right = True
                 self._emit_keys()
-                self._feed_more(" ")
             else:
                 self.line_buf, self.line_col = apply_line_key(
                     self.line_buf, self.line_col, "Right"
@@ -874,7 +900,12 @@ class App:
             if playing:
                 self._key_fire = True
                 self._emit_keys()
-            self._feed_more(" ")
+            # A space typed into the command, or an arrow while a program
+            # runs, must not sit in the MORE queue. Only a key pressed
+            # while -- MORE -- is up turns the page. Repeats of the key
+            # that submitted DIR are not that key.
+            if getattr(self.backend, "more_waiting", False) and not is_repeat:
+                self._feed_more(" ")
             m = getattr(self.backend, "machine", None)
             if m is not None and m.running:
                 return "break"
@@ -890,9 +921,11 @@ class App:
 
         if event.keysym in ("Return", "KP_Enter"):
             if getattr(self.backend, "more_waiting", False):
-                self._feed_more("\r")
+                # Holding Enter repeats. That repeat is the key that
+                # submitted DIR, not a request for the next page.
+                if not is_repeat:
+                    self._feed_more("\r")
                 return "break"
-            self._feed_more("\r")
             line = self.line_buf
             up = line.strip().upper()
             busy = (
@@ -1086,6 +1119,7 @@ class App:
             else:
                 return
         rgb = fb.front_rgb_preview()
+        self.canvas_label.configure(cursor="none" if getattr(fb, "display_overlays", ()) else "")
         # In-memory PPM — avoid ~900KB disk write every frame (FPGA-SIM lag)
         header = f"P6\n{WIDTH} {HEIGHT}\n255\n".encode("ascii")
         data = header + rgb
@@ -1096,6 +1130,36 @@ class App:
             self.photo.configure(data=data, format="PPM")
         except tk.TclError:
             pass
+
+    def _queue_mouse(self, x, y, *, edge=False):
+        sample = (max(0, min(639, int(x))), max(0, min(479, int(y))), self._mouse_buttons, edge)
+        if (not edge and self._mouse_samples and
+                not self._mouse_samples[-1][3] and self._mouse_samples[-1][2] == sample[2]):
+            self._mouse_samples[-1] = sample
+        else:
+            self._mouse_samples.append(sample)
+
+    def _mouse_motion(self, event):
+        self._queue_mouse(event.x, event.y)
+
+    def _mouse_button(self, event, button, pressed):
+        self.canvas_label.focus_set()
+        mask = {1: 1, 2: 4, 3: 2}[button]
+        self._mouse_buttons = ((self._mouse_buttons | mask) if pressed
+                               else (self._mouse_buttons & ~mask))
+        self._queue_mouse(event.x, event.y, edge=True)
+
+    def _mouse_focus_out(self, event):
+        if self._mouse_buttons:
+            self._mouse_buttons = 0
+            x, y = self._mouse_samples[-1][:2] if self._mouse_samples else (320, 240)
+            self._queue_mouse(x, y, edge=True)
+
+    def _feed_mouse(self):
+        for _ in range(min(16, len(self._mouse_samples))):
+            if not self.backend.set_mouse(*self._mouse_samples[0][:3]):
+                break
+            self._mouse_samples.popleft()
 
     def _on_close(self) -> None:
         # NEW: cancel the after-loop before destroy so Tk does not fire
@@ -1118,7 +1182,13 @@ class App:
         try:
             # One tick only (SimBackend.frame_tick does TICK; poll is a no-op)
             self._feed_editor_paste()
+            self._feed_mouse()
             self.backend.frame_tick()
+            keyboard_open = bool(getattr(self.backend, "system_keyboard", False))
+            if getattr(self, "_keyboard_was_open", False) and not keyboard_open and not self._is_running():
+                self.line_buf=getattr(self.backend,"console_line","")
+                self.line_col=len(self.line_buf)
+            self._keyboard_was_open=keyboard_open
             # NEW: blink cyan block on letterbox so you can see the insert point
             now = time.monotonic()
             blink_flip = False

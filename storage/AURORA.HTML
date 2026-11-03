@@ -13,6 +13,11 @@ canvas { display: block; background: #050014; }
 <script>
 var canvas = document.querySelector("canvas");
 var ctx = canvas.getContext("2d");
+// Shared application menu and About metadata; no private chrome.
+ctx.systemWindow=8;
+ctx.systemViewport=1;
+ctx.systemAbout="Aurora|Fly through a colorful space shooter.";
+
 var PAL = [
   "#050014",
   "#ffffff",

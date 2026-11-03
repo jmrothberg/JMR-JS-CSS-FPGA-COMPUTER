@@ -433,6 +433,10 @@ class RuntimeBackend(ABC):
     def set_key_bits(self, bits: int) -> None:
         pass
 
+    def set_mouse(self, x: int, y: int, buttons: int) -> bool:
+        """Accepted sample, or False to retry. Old board firmware has no pointer RPC."""
+        return True
+
     def push_key(self, ch: str) -> None:
         pass
 
@@ -504,8 +508,35 @@ class PythonBackend(RuntimeBackend):
     def __init__(self, machine) -> None:
         self.machine = machine
         self._nat_hist: dict[str, int] = {}
+        from functional_model.desktop import Desktop
+        self.desktop = Desktop(machine.storage)
+        self.desktop.tick()
+        self._desktop_return = False
+        from functional_model.system_menu import SystemMenu
+        self.system_menu=SystemMenu()
+        self.machine.system_progress=self._system_progress
+        self._screen_line=""
+        self._mouse_pending=None
+        self._save_resume=None
+        self._after_save=None
+        self._pending_change=None
+        self._name_action=None
+        self._last_notice=0
+        self._compile_close_pending=False
+
+    def _system_progress(self):
+        self.machine.paint_monitor()
+        self.framebuffer()
+        pump=getattr(self,'run_wait_idle',None)
+        if pump:pump()
 
     def type_line(self, text: str) -> None:
+        if text.strip().upper() == "DESKTOP":
+            self.desktop.visible = True
+            self.desktop.refresh()
+            return
+        self.desktop.visible = False
+        self._desktop_return = False
         self.machine.type_line(text)
 
     def screen_text(self) -> str:
@@ -518,14 +549,254 @@ class PythonBackend(RuntimeBackend):
         self.machine.set_key_bits(bits)
 
     def key_event(self, key_code: int, key: str, pressed: bool) -> None:
-        # NEW: raw keyboard → FM key-state engine (HTML decides bindings)
+        if self.machine.system_compiling:return
+        if self.system_menu.about:
+            if pressed and key_code in (13,27):self.system_menu.about=False
+            return
+        if self.system_menu.classic.dialog=='save_as':
+            if pressed:
+                self._classic_actions(self.system_menu.classic.text_key(key_code,key))
+                if not self.system_menu.classic.dialog and not self._save_resume:self._cancel_dialog()
+            return
+        ui=self.system_menu.classic
+        if ui.dialog:
+            if pressed:
+                if key_code==27:ui.dialog=None;self._cancel_dialog()
+                elif ui.dialog=='open':
+                    if key_code in (38,40) and ui.files:
+                        ui.selected=max(0,min(len(ui.files)-1,ui.selected+(-1 if key_code==38 else 1)))
+                        ui.file_top=max(0,min(ui.file_top,ui.selected))
+                        if ui.selected>=ui.file_top+7:ui.file_top=ui.selected-6
+                    elif key_code==13 and ui.selected>=0:self._classic_actions([('open_file',ui.files[ui.selected])])
+                elif key_code==13:
+                    if ui.dialog=='changes':self._classic_actions([('changes','save')])
+                    elif ui.dialog=='replace':self._classic_actions([('replace',)])
+                    else:ui.dialog=None
+            return
+        if ui.menu:
+            if pressed and key_code==27:ui.menu=0
+            return
+        if key_code==113 and self.machine.running and self.machine.system_window[0] in (1,5):
+            if pressed:self._save_document()
+            return
         self.machine.input.key_event(key_code, key, pressed)
+
+    @property
+    def system_keyboard(self):
+        return self.system_menu.keyboard
+
+    @property
+    def console_line(self):
+        return self._screen_line
+
+    def console_key(self, char):
+        if char==13:
+            text=self._screen_line;self._screen_line=""
+            self.machine.type_line(text)
+        elif char in (8,127):self._screen_line=self._screen_line[:-1]
+        elif 32<=char<127 and len(self._screen_line)<127:self._screen_line+=chr(char)
+        self.machine.paint_monitor("> "+self._screen_line)
+
+    def set_mouse(self, x: int, y: int, buttons: int) -> bool:
+        self.desktop.x,self.desktop.y=x,y
+        self.framebuffer()
+        old_dialog=self.system_menu.classic.dialog
+        consumed,actions=self.system_menu.pointer(x,y,buttons)
+        if old_dialog and not self.system_menu.classic.dialog and not actions:self._cancel_dialog()
+        if self.system_menu.open and self.desktop.menu:
+            self.desktop.menu=0;self.desktop.dirty=True
+        self._classic_actions(actions)
+        if consumed:return True
+        if self.desktop.visible:
+            action=self.desktop.pointer(x,y,buttons)
+            if action:self._desktop_action(*action)
+            return True
+        if self.machine.system_window[0]==8 and self.machine.system_viewport:
+            from functional_model.canvas_engine import game_viewport_y
+            y=game_viewport_y(y)
+        if self.machine.running and not self.machine.input.set_mouse(x,y,buttons):
+            self._mouse_pending=(x,y,buttons)
+        return True
+
+    def _send_system_key(self,code):
+        self.machine.input.key_event(code,"",True)
+        self.machine.input.key_event(code,"",False)
+
+    def _cancel_dialog(self):
+        if hasattr(self,'_name_keyboard_was'):
+            self.system_menu.keyboard=self._name_keyboard_was;del self._name_keyboard_was
+        self._pending_change=None;self._after_save=None
+
+    def _classic_actions(self,actions):
+        if self.machine.system_compiling:
+            if any(action[0]=='quit' or action==('menu','close') for action in actions):self._compile_close_pending=True
+            return
+        for action in actions:
+            name=action[0]
+            if name in ('quit','close'):
+                self._request_change(('close',))
+            elif name=='menu':
+                command=action[1]
+                if command.startswith('tool:'):self._request_change(('tool',command[5:]))
+                elif command=='close':self._request_change(('close',))
+                elif command=='new':self._request_change(('new',self.system_menu.window[0]))
+                elif command=='open':
+                    role=self.system_menu.window[0]
+                    suffixes=('.MD','.TXT') if role==2 else ('.MD','.TXT','.HTM','.HTML','.JS')
+                    files=[n for n,size in self.machine.storage.list_all() if Path(n).suffix.upper() in suffixes]
+                    self.system_menu.classic.show_files(files)
+                elif command=='save':self._save_document()
+                elif command=='save_as':self._save_document(force_name=True)
+                elif command=='restart_app':
+                    image=self.machine._hw_vm.program_image
+                    self._classic_actions(self.system_menu.release_keys())
+                    self.machine.hard_break(quiet=True)
+                    self.machine._start_html_image(image)
+                    self._desktop_return=True
+                elif command.startswith('app:'):self._send_system_key(int(command[4:]))
+                else:
+                    keys={'undo':137,'cut':138,'copy':139,'paste':140,'clear':141,'select_all':142,'page_up':130,'page_down':131}
+                    if command in keys:self._send_system_key(keys[command])
+            elif name=='open_file':
+                role=self.system_menu.window[0]
+                self.system_menu.classic.dialog=None
+                self._request_change(('open',action[1],role))
+            elif name=='save_name':self._confirm_save_name(action[1])
+            elif name=='changes':
+                pending=self._pending_change;self._pending_change=None;self.system_menu.classic.dialog=None
+                if action[1]=='save':self._save_document(after=pending,resume=False)
+                elif pending:self._perform_change(pending)
+            elif name=='replace':
+                target=self._replace_name;self.system_menu.classic.dialog=None
+                self._start_save(target)
+            elif name=='keyboard' and action[1] and self.desktop.visible:
+                self.desktop.visible=False;self.machine.paint_monitor("> "+self._screen_line)
+            elif name=='key':
+                _,code,text,pressed=action
+                if text==27 and pressed:
+                    if self.system_menu.classic.dialog:self.system_menu.classic.dialog=None
+                    else:self.hard_break()
+                elif self.machine.running:
+                    names={8:'Backspace',9:'Tab',13:'Enter',27:'Escape',37:'ArrowLeft',38:'ArrowUp',39:'ArrowRight',40:'ArrowDown'}
+                    self.machine.input.key_event(code,chr(text) if 32<=text<127 else names.get(code,''),pressed)
+                elif pressed and text:self.console_key(text)
+
+    def _request_change(self,operation):
+        if self.machine.running and self.system_menu.window[0] in (1,5) and self.system_menu.window[3]&1:
+            self._pending_change=operation;self.system_menu.classic.dialog='changes'
+        else:self._perform_change(operation)
+
+    def _perform_change(self,operation):
+        kind=operation[0]
+        self.system_menu.classic.dialog=None;self.system_menu.classic.menu=0
+        if kind=='close':
+            self.machine.system_compiling=False
+            self._classic_actions(self.system_menu.release_keys())
+            self.system_menu.keyboard=False;self.system_menu.open=False
+            self.hard_break(quiet=True);return
+        self.machine.hard_break(quiet=True);self.desktop.visible=False
+        if kind=='new':self._new_document(operation[1]);return
+        if kind=='open':
+            _,name,role=operation
+            self.machine.unnamed_document=False
+            self.machine.type_line('LOAD "'+name+'"')
+            if role in (1,5):
+                self.machine._editor_resume=(0,0,0,0,role)
+                self.machine.type_line('EDIT')
+            elif role==2:self.machine.type_line('READ')
+            else:
+                image=getattr(self,'_system_tool_image',None)
+                if image is not None:self.machine._start_html_image(image,share_machine=True)
+            self._desktop_return=True;return
+        if kind=='tool':
+            tool=operation[1]
+            if tool=='Terminal':self.machine.paint_monitor('> ');self._desktop_return=False
+            elif tool=='Note':self._new_document(5)
+            elif tool=='Editor':
+                if self.machine.source_name and self.machine.source_lines:
+                    self.machine.type_line('EDIT');self._desktop_return=True
+                else:self._new_document(1)
+            elif tool in ('Reader','Help'):
+                name=self.machine.source_name if tool=='Reader' and Path(self.machine.source_name).suffix.upper() in ('.MD','.TXT') else 'HELP.MD'
+                self.machine.type_line('LOAD "'+name+'"');self.machine.type_line('READ');self._desktop_return=True
+            elif tool=='Utility':self._desktop_action('RUN','UTILITY.HTM')
+            elif tool=='Compile':
+                self._compile_close_pending=False
+                self.machine.type_line('COMPILE');self._desktop_return=False
+                if self._compile_close_pending:self._perform_change(('close',))
+            elif tool=='Restart':self.hard_break()
+
+    def _new_document(self,role):
+        role=5 if role==5 else 1
+        self.machine.source_name='UNTITLED.TXT' if role==5 else 'UNTITLED.HTM'
+        self.machine.source_lines=[''];self.machine.unnamed_document=True
+        self.machine._editor_resume=(0,0,0,0,role)
+        self.machine.type_line('EDIT');self.desktop.visible=False;self._desktop_return=True
+
+    def _resume_record(self):
+        m=self.machine
+        magic=[int(m._nat_stg_read(32+i)) for i in range(4)]
+        if magic!=[82,69,83,1]:return (0,0,0,0,1)
+        values=[]
+        for at in (36,40,44,48):values.append(sum(int(m._nat_stg_read(at+i))<<(i*8) for i in range(4)))
+        return (*values,int(m._nat_stg_read(52)))
+
+    def _save_document(self,force_name=False,after=None,resume=True):
+        if self.system_menu.window[0] not in (1,5):return
+        self._after_save=after;self._save_should_resume=resume
+        if force_name or getattr(self.machine,'unnamed_document',False):
+            self._name_keyboard_was=self.system_menu.keyboard
+            self.system_menu.classic.show_name(self.machine.source_name or 'UNTITLED.TXT')
+            self.system_menu.keyboard=True
+        else:self._start_save(self.machine.source_name)
+
+    def _confirm_save_name(self,name):
+        from hardware_model.fat32 import Fat32Volume
+        name=name.strip().upper();stem,dot,ext=name.partition('.')
+        if ext=='HTML':ext='HTM';name=stem+'.HTM'
+        if not stem or len(stem)>8 or len(ext)>3 or Fat32Volume.decode_83(Fat32Volume.encode_83(name))!=name:
+            self.system_menu.classic.message='Use 1-8 letters, then .TXT / .HTM / .MD';return
+        existing={n.upper() for n,size in self.machine.storage.list_all()}
+        if name in existing and name!=self.machine.source_name.upper():
+            self._replace_name=name;self.system_menu.classic.dialog='replace';return
+        self._start_save(name)
+
+    def _start_save(self,name):
+        self.system_menu.classic.dialog=None
+        if hasattr(self,'_name_keyboard_was'):
+            self.system_menu.keyboard=self._name_keyboard_was;del self._name_keyboard_was
+        self.machine.source_name=name;self.machine.unnamed_document=False
+        self._save_resume=True
+        self._send_system_key(113)
+
+    def _desktop_action(self, action, name):
+        if action == "TERMINAL":
+            self.machine.paint_monitor("> ")
+            return
+        commands = ([f'REMOVE "{name}"'] if action == "REMOVE" else
+                    [f'LOAD "{name}"', action])
+        for command in commands:
+            before = len(self.machine.console_log)
+            self.machine.type_line(command)
+            if any(str(line).lstrip().startswith("?")
+                   for line in self.machine.console_log[before:]):
+                self._desktop_return = False
+                return
+        self._desktop_return = True
+        if action in ("REMOVE", "COMPILE") and not self.machine.running:
+            self.desktop.visible = True
+            self.desktop.refresh()
 
     def push_key(self, ch: str) -> None:
         self.machine.push_key(ch)
 
     def hard_break(self, quiet: bool = False) -> None:
         self.machine.hard_break(quiet=quiet)
+        self.system_menu.classic.menu=0;self.system_menu.classic.dialog=None
+        self.system_menu.classic.drag=False;self.system_menu.classic.capture=False
+        self.desktop.visible = True
+        self.desktop.refresh()
+        self._desktop_return = False
 
     @property
     def more_waiting(self) -> bool:
@@ -533,12 +804,71 @@ class PythonBackend(RuntimeBackend):
         return bool(getattr(self.machine, "_list_more_waiting", False))
 
     def framebuffer(self):
+        from functional_model.desktop import pointer_overlays
+        params=list(getattr(self.machine,'system_window',(0,0,0,0)))
+        if self.desktop.visible:params=[0,0,0,0]
+        elif getattr(self.machine,'system_compiling',False):params=[3,0,0,(getattr(self.machine,'system_stage',0)&7)<<4]
+        elif not self.machine.running:params=[7,0,0,0]
+        elif params[0]>8:params[0]=6
+        self.system_menu.window=tuple(params)
+        defaults={0:('Finder','Manage programs and documents.'),
+                  1:('Editor','Edit source code and text files.'),
+                  2:('Reader','Read Markdown and text documents.'),
+                  3:('Compiler','Compile HTML and JavaScript programs.'),
+                  4:('Utility','Inspect files and disk space.'),
+                  5:('Note','Write and save short text documents.'),
+                  6:('System Tool','A shared-window system application.'),
+                  7:('Terminal','Enter commands for the computer.')}
+        about=getattr(self.machine,'system_about',None) if self.machine.running and params[0]!=3 and not self.desktop.visible else None
+        self.system_menu.application_title,self.system_menu.application_description=about or defaults.get(params[0],('Program','An HTML and JavaScript program.'))
+        self.machine.canvas.display_game_viewport=bool(params[0]==8 and getattr(self.machine,'system_viewport',False))
+        self.desktop.canvas.display_game_viewport=False
+        self.system_menu.classic.configure(params[0],getattr(self.machine,'system_menus','') if self.machine.running and not self.desktop.visible else '')
+        self.system_menu.document_name=self.machine.source_name
+        self.system_menu.classic.document=self.machine.source_name
+        self.system_menu.classic.can_undo=bool(params[3]&2)
+        self.system_menu.classic.can_paste=bool(params[3]&4)
+        self.system_menu.classic.has_selection=bool(params[3]&8)
+        if self.machine.running and params[0] and self.machine._hw_vm is not None:
+            self._system_tool_image=self.machine._hw_vm.program_image
+        overlays = self.system_menu.overlays() + pointer_overlays(self.desktop.x, self.desktop.y)
+        if self.desktop.visible:
+            self.desktop.tick()
+            self.desktop.canvas.display_overlays = overlays
+            return self.desktop.canvas
+        self.machine.canvas.display_overlays = overlays
         return self.machine.canvas
 
     def frame_tick(self) -> None:
         self.machine.frame_tick()
+        if self._save_resume and not self.machine.running:
+            self._save_resume=None
+            if any(str(x).startswith('SAVED') for x in self.machine.console_log[-3:]):
+                record=self._resume_record()
+                after=self._after_save;self._after_save=None
+                if after:self._perform_change(after)
+                elif self._save_should_resume:
+                    self.machine._editor_resume=record
+                    self.machine._editor_keep_source=True
+                    self.machine.type_line('EDIT');self._desktop_return=True
+        flags=getattr(self.machine,'system_window',[0,0,0,0])[3]
+        notice=(flags>>4)&3
+        if notice and notice!=self._last_notice and self.machine.running:
+            self.system_menu.classic.dialog='message'
+            self.system_menu.classic.message='Selection exceeds 4K clipboard.' if notice==1 else 'Document is full.'
+        self._last_notice=notice
+        if self._mouse_pending and self.machine.input.set_mouse(*self._mouse_pending):self._mouse_pending=None
+        if self.system_menu.keyboard and not self.machine.running and not self.desktop.visible:
+            self.machine.paint_monitor("> "+self._screen_line)
+        if self._desktop_return and not self.running:
+            self.desktop.visible = True
+            self.desktop.refresh()
+            self._desktop_return = False
+        self.desktop.tick()
 
     def paint_prompt(self, prompt: str, cursor_on: bool = False, cursor_col=None) -> None:
+        if self.desktop.visible or self.system_menu.keyboard:
+            return
         self.machine.paint_monitor(prompt, cursor_on=cursor_on, cursor_col=cursor_col)
 
     @property
@@ -546,7 +876,7 @@ class PythonBackend(RuntimeBackend):
         """Game or last RUN frame owns the glass — GUI must not letterbox over it."""
         m = self.machine
         return bool(
-            m.running
+            m.running or m.system_compiling
             or getattr(m, "_keep_fb", False)
             or m._loop_chunk is not None
             or getattr(m, "html_host", None) is not None

@@ -11,16 +11,17 @@
 // this channel TOP priority, so a line lands in ~2k core cycles against a
 // 32 us line period.
 module jmr_fb_scanout #(
-    parameter logic [20:0] FB_SRAM_BASE = 21'd1480704
+    parameter logic [21:0] FB_SRAM_BASE = 22'd3577856
 ) (
     // core-clock side (sram master)
     input  logic        clk,
     input  logic        rst_n,
     output logic        sram_req,
-    output logic [20:0] sram_addr,
+    output logic [21:0] sram_addr,
     input  logic [15:0] sram_rdata,
     input  logic        sram_ack,
     // pixel-clock side
+    input logic game_viewport=1'b0,
     input  logic        pixel_clk,
     input  logic [9:0]  fb_x,
     input  logic [9:0]  fb_y,
@@ -63,11 +64,11 @@ module jmr_fb_scanout #(
     // the same beam sample. Prefetch now lags the beam 3 cycles (30 ns)
     // against a 32 us line - still noise.
     logic [9:0]  want_q, want_qq;
-    logic [20:0] line_base_q;
+    logic [21:0] line_base_q;
     always_ff @(posedge clk) begin
         want_q      <= (y_core_q >= 10'd479) ? 10'd0 : (y_core_q + 10'd1);
         want_qq     <= want_q;
-        line_base_q <= FB_SRAM_BASE + 21'(want_q) * 21'd320;
+        line_base_q <= FB_SRAM_BASE + 22'(game_viewport ? ((want_q<24)?0:((2*(integer'(want_q)-24)+1)*480)/912) : integer'(want_q)) * 22'd320;
     end
 
     logic [9:0]  fetched_line;   // last line fully fetched

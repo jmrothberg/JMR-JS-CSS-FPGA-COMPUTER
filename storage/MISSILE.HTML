@@ -11,6 +11,11 @@
 "use strict";
 var cvs=document.getElementById("c");
 var ctx=cvs.getContext("2d");
+// Shared application menu and About metadata; no private chrome.
+ctx.systemWindow=8;
+ctx.systemViewport=1;
+ctx.systemAbout="Missile Command|Protect cities from incoming missiles.";
+
 var W=640,H=480;
 /* Chrome SFX: playSfx(packed). Packed = freq,vol,frames,slide,ch repeating.
    ch 0-2 square, 3 noise. Missing r is silent. Chrome: _chromePlay. Card: sound() nid 42.
@@ -71,7 +76,7 @@ state.sfxOver=[300,12,40,-6,0,80,10,24,0,3];
 // 2026-08-28: one object instead of 6 top-level names — this IIFE's
 // whole body is one function scope, subject to the 16-local RTL wall
 // (MISSILE.HTML hit it: held.right was the 17th name).
-var held={left:0,right:0,up:0,down:0,fire:0,r:0,stickSeen:0};
+var held={left:0,right:0,up:0,down:0,fire:0,r:0,stickSeen:0,mouseFire:0};
 // V1: no Array.shift (wall). Copy down + shrink. V1.5 list: Array.shift.
 function trailDrop(a){
   var i=0;
@@ -251,7 +256,7 @@ function update(dt){
   state.crosshair.x=Math.max(8,Math.min(W-8,state.crosshair.x));
   state.crosshair.y=Math.max(8,Math.min(H-50,state.crosshair.y));
   if(state.canShootAt>0) state.canShootAt=state.canShootAt-1;
-  if(held.fire||(j&16)||(j&32)) fire((j&16)||(j&32));
+  if(held.fire||held.mouseFire||(j&16)||(j&32)) fire((j&16)||(j&32));
   if(!state.waveActive){
     state.waveBreakTimer-=dt;
     if(state.waveBreakTimer<=0) startWave(state.wave);
@@ -506,6 +511,16 @@ function up(e){
 }
 addEventListener("keydown",down);
 addEventListener("keyup",up);
+// Mouse aims directly; hold the primary button to fire. Click restarts.
+addEventListener("mousemove",function(e){
+  state.crosshair.x=Math.max(8,Math.min(W-8,e.clientX));
+  state.crosshair.y=Math.max(8,Math.min(H-50,e.clientY));
+});
+addEventListener("mousedown",function(e){
+  if(e.button===0){if(state.over)reset();else{held.mouseFire=1;fire(0);}}
+});
+addEventListener("mouseup",function(e){if(e.button===0)held.mouseFire=0;});
+
 reset();
 requestAnimationFrame(frame);
 })();

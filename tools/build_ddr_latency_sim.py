@@ -18,6 +18,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--ref', help='Use RTL from this local Git revision')
     parser.add_argument('--build', required=True, help='Unique directory name under sim/')
+    parser.add_argument('--frame-period', type=int,
+                        help='Override automatic tick period in fabric clocks; use 2147483648 for a bounded manual-pulse replay')
     args = parser.parse_args()
     if Path(args.build).name != args.build or args.build in ('.', '..'):
         parser.error('--build must be a directory name without path components')
@@ -46,8 +48,13 @@ def main():
             target.write_bytes(source(path))
         else:
             target.symlink_to(path)
-    subprocess.run(['make', '-C', str(ROOT / 'sim'), 'sim_server_synth',
-                    f'RTL={overlay}', f'BUILD={args.build}'], check=True)
+    command = ['make', '-C', str(ROOT / 'sim'), 'sim_server_synth',
+               f'RTL={overlay}', f'BUILD={args.build}']
+    if args.frame_period is not None:
+        if not 1 <= args.frame_period <= 2147483648:
+            parser.error('--frame-period must be 1..2147483648')
+        command.append(f'JMR_SIM_PARAMS=FRAME_DIV={args.frame_period-1}')
+    subprocess.run(command, check=True)
 
 
 if __name__ == '__main__':

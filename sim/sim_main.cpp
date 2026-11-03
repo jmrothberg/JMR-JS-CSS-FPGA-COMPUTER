@@ -466,7 +466,7 @@ static const char* vm_sname(unsigned s) {
         // print `sname=?` and cost debugging time.
         "S_V64_SLICE","S_V64_SORT","S_FB_SYNC","S_V64_DISPATCH",
         // V1.5 standalone compile: one state for the whole memory ABI.
-        "S_CSRAM"
+        "S_CSRAM","S_V64_MOUSE_PROP","S_UI_PROP"
     };
     if (s < (unsigned)(sizeof(N) / sizeof(N[0]))) return N[s];
     return "?";
@@ -1199,7 +1199,8 @@ static void ticks(int n) {
 }
 
 // strobe one key event into the RTL FIFO (see KEYEVT handler)
-static void key_strobe(unsigned code, unsigned down) {
+static void key_strobe(unsigned code, unsigned down, unsigned text = 0) {
+    top->key_evt_char = text & 255;
     top->key_evt_code = code & 0xFF;
     top->key_evt_down = down ? 1 : 0;
     top->key_evt_stb = 1;
@@ -1209,6 +1210,13 @@ static void key_strobe(unsigned code, unsigned down) {
     // second strobe within 8 clks would overwrite it. 9 clks guarantees a
     // beat between strobes (board PS/2 cannot burst this fast anyway).
     ticks(9);
+}
+
+static void hide_desktop() {
+    top->desktop_control_on=0; top->desktop_control_stb=1; ticks(1);
+    top->desktop_control_stb=0;
+    for (unsigned i=0;i<1000 && top->desktop_busy_o;i++) ticks(20000);
+    ticks(140000); // console enable drains old keyboard input before a command
 }
 
 static int read_whole_file(const std::string& path, std::vector<uint8_t>& out) {
@@ -1385,7 +1393,16 @@ static std::string fb_export_b64() {
     // black). FBBANK? already reads mem0/mem1 this way.
     auto* r = top->rootp;
     unsigned front = 1u; // single-bank canvas
-    for (int i = 0; i < W * H; i++)
+    if(top->system_viewport_o && (top->system_window_o & 255u)==8u && !top->desktop_visible_o) {
+        // Address mapping comes from the DUT and is the same function used
+        // by the hardware line prefetcher, not a host UI reconstruction.
+        const unsigned saved_y=top->fb_y;
+        for(unsigned y=24;y<480;y++) {
+            top->fb_y=y;top->eval();const unsigned source_y=top->game_source_y_o;
+            for(unsigned x=0;x<640;x++)full[y*640+x]=fb_bank_pix(r,front,source_y*640+x);
+        }
+        top->fb_y=saved_y;top->eval();
+    } else for (int i = 0; i < W * H; i++)
         full[(size_t)i] = fb_bank_pix(r, front, (unsigned)i);
     return b64_encode(full.data(), full.size());
 }
@@ -1400,6 +1417,10 @@ int main(int argc, char** argv) {
     top->kbd_push = 0;
     top->kbd_data = 0;
     top->joy_in = 0;
+    top->key_evt_char = 0;
+    top->mouse_stb = 0;
+    top->desktop_control_stb = 0; top->desktop_control_on = 1;
+    top->mouse_x = 320; top->mouse_y = 240; top->mouse_buttons = 0;
     // analog-joy: rest position (matches jmr_i2c_joy.sv power-on default).
     top->analog_x = 128;
     top->analog_y = 128;
@@ -1514,6 +1535,7 @@ int main(int argc, char** argv) {
             continue;
         }
         if (line.rfind("JSHLOAD ", 0) == 0) {
+            hide_desktop();
             std::vector<uint8_t> blob;
             if (read_whole_file(line.substr(8), blob) != 0 || jsh_load_mem(blob) != 0) {
                 std::cout << "ERR" << std::endl;
@@ -1540,7 +1562,7 @@ int main(int argc, char** argv) {
             const size_t SRC_MAX = 131072;
             size_t n = html.size() < SRC_MAX ? html.size() : SRC_MAX;
             for (size_t i = 0; i < n; i++)
-                rp->jmr_js_core__DOT__g_sram__DOT__u_sram__DOT__mem[1724416u + i] = (uint16_t)(unsigned char)html[i]; // source lives in external SRAM (SRC_SRAM_BASE)
+                rp->jmr_js_core__DOT__g_sram__DOT__u_sram__DOT__mem[3821568u + i] = (uint16_t)(unsigned char)html[i]; // source lives in external SRAM (SRC_SRAM_BASE)
             rp->jmr_js_core__DOT__u_cons__DOT__src_len = (uint32_t)n;
             std::string base = path;
             auto slash = base.find_last_of("/\\");
@@ -1610,6 +1632,7 @@ int main(int argc, char** argv) {
             continue;
         }
         if (line.rfind("LINE ", 0) == 0) {
+            hide_desktop();
             std::string text = line.substr(5);
             for (char c : text) push_key(uint8_t(c));
             push_key(0x0D);
@@ -1679,6 +1702,104 @@ int main(int argc, char** argv) {
             std::cout << "OK" << std::endl;
             continue;
         }
+        if(line=="WINDOW?") {
+            const uint32_t w=top->system_window_o;
+            std::cout<<"WINDOW role="<<(w&255)<<" scroll="<<((w>>8)&255)<<" scrollx="<<((w>>16)&255)<<" flags="<<(w>>24)<<std::endl;continue;
+        }
+        if (line.rfind("UISURFACE",0)==0) {
+            long long seen=-1;std::sscanf(line.c_str()+9,"%lld",&seen);
+            const unsigned generation=top->system_generation_o;
+            if(seen==generation) {
+                std::cout<<"UI SAME "<<generation<<" "<<unsigned(top->system_menu_o)<<" "<<unsigned(top->system_keyboard_o)<<std::endl;continue;
+            }
+            const unsigned old_x=top->fb_x,old_y=top->fb_y,old_clock=top->pixel_clk;
+            auto fragment=[&](unsigned x,unsigned y,unsigned w,unsigned h) {
+                std::vector<uint8_t> rgba(w*h*4,0);
+                auto cycle=[&](unsigned sx,unsigned sy) {
+                    top->pixel_clk=0;top->fb_x=sx;top->fb_y=sy;top->eval();top->pixel_clk=1;top->eval();
+                };
+                auto save=[&](unsigned i) {
+                    const unsigned rgb=top->system_overlay_opaque_o?top->system_overlay_rgb_o:0;
+                    rgba[i*4]=rgb>>16;rgba[i*4+1]=rgb>>8;rgba[i*4+2]=rgb;
+                    rgba[i*4+3]=top->system_overlay_opaque_o?255:0;
+                };
+                // One registered label read, then one registered font read.
+                for(unsigned i=0;i<w*h;i++) {
+                    cycle(x+i%w,y+i/w);
+                    if(i)save(i-1);
+                }
+                cycle(x+w-1,y+h-1);save(w*h-1);
+                return b64_encode(rgba.data(),rgba.size());
+            };
+            const std::string pixels=fragment(0,0,640,480);
+            top->fb_x=old_x;top->fb_y=old_y;top->pixel_clk=old_clock;top->eval();
+            std::cout<<"UI "<<generation<<" "<<unsigned(top->system_menu_o)<<" "<<unsigned(top->system_keyboard_o)
+                     <<" 1 0 0 640 480 "<<pixels<<std::endl;continue;
+        }
+        if (line == "OVERLAY?") {
+            const unsigned old_x=top->fb_x,old_y=top->fb_y;
+            const int mx=top->pointer_x_o,my=top->pointer_y_o;
+            auto fragment=[&](int x,int y,unsigned w,unsigned h) {
+                std::vector<uint8_t> rgba(w*h*4,0);
+                for(unsigned row=0;row<h;row++)for(unsigned col=0;col<w;col++) {
+                    const int sx=x+int(col),sy=y+int(row);
+                    if(sx<0 || sx>=640 || sy<0 || sy>=480)continue;
+                    top->fb_x=sx;top->fb_y=sy;top->eval();
+                    const unsigned i=(row*w+col)*4,rgb=top->overlay_rgb_o;
+                    rgba[i]=rgb>>16;rgba[i+1]=rgb>>8;rgba[i+2]=rgb;
+                    rgba[i+3]=top->overlay_opaque_o?255:0;
+                }
+                return b64_encode(rgba.data(),rgba.size());
+            };
+            const std::string exit=fragment(620,0,20,22);
+            const std::string arrow=fragment(mx-1,my-1,16,16);
+            top->fb_x=old_x;top->fb_y=old_y;top->eval();
+            std::cout<<"OVERLAY "<<mx-1<<" "<<my-1<<" "<<exit<<" "<<arrow<<std::endl;
+            continue;
+        }
+        if (line == "DESKTOP?") {
+            std::cout << "DESKTOP active=" << unsigned(top->desktop_visible_o)
+                      << " busy=" << unsigned(top->desktop_busy_o)
+                      << " count=" << unsigned(top->desktop_count_o)
+                      << " selected=" << unsigned(top->desktop_selected_o)
+                      << " page=" << unsigned(top->desktop_page_o)
+                      << " menu=" << unsigned(top->desktop_menu_o)
+                      << " action=" << unsigned(top->rootp->jmr_js_core__DOT__u_desktop__DOT__action)
+                      << " state=" << unsigned(top->rootp->jmr_js_core__DOT__u_desktop__DOT__state)
+                      << " disk=" << unsigned(top->rootp->jmr_js_core__DOT__u_desktop_disk__DOT__state)
+                      << " error=" << unsigned(top->rootp->jmr_js_core__DOT__disk_error)
+                      << std::endl;
+            continue;
+        }
+        if (line.rfind("DESKTOP ", 0) == 0) {
+            top->desktop_control_on = line.substr(8) != "0";
+            top->desktop_control_stb = 1; ticks(1);
+            top->desktop_control_stb = 0; ticks(8);
+            std::cout << "OK" << std::endl;
+            continue;
+        }
+        if (line == "MOUSE?") {
+            std::cout << "MOUSE 1" << std::endl;
+            continue;
+        }
+        if (line.rfind("MOUSE ", 0) == 0) {
+            int x, y, buttons;
+            if (std::sscanf(line.c_str() + 6, "%d %d %d", &x, &y, &buttons) != 3) {
+                std::cout << "ERR" << std::endl;
+                continue;
+            }
+            if (!top->mouse_ready) {
+                std::cout << "BUSY" << std::endl;
+                continue;
+            }
+            top->mouse_x = std::max(0, std::min(639, x));
+            top->mouse_y = std::max(0, std::min(479, y));
+            top->mouse_buttons = buttons & 7;
+            top->mouse_stb = 1; ticks(1);
+            top->mouse_stb = 0; ticks(8);
+            std::cout << "OK" << std::endl;
+            continue;
+        }
         // NEW: KEYEVT <keyCode> <down> — raw keyboard event for games
         // (GUI forwards real keys; the HTML decides bindings)
         // Sim frames take seconds of wall time, so a human tap's down+up
@@ -1690,12 +1811,12 @@ int main(int argc, char** argv) {
         // dispatches at frame N+1's event phase. Real hardware runs
         // frames in real time and never batches a whole tap.
         if (line.rfind("KEYEVT ", 0) == 0) {
-            unsigned code = 0, down = 0;
-            std::sscanf(line.c_str() + 7, "%u %u", &code, &down);
+            unsigned code = 0, down = 0, text = 0;
+            std::sscanf(line.c_str() + 7, "%u %u %u", &code, &down, &text);
             code &= 0xFF;
             if (down) {
                 key_last_down_frame[code] = key_frame_counter;
-                key_strobe(code, 1);
+                key_strobe(code, 1, text);
             } else if (key_last_down_frame[code] == key_frame_counter) {
                 // A frame that dispatches a key event does NOT run the
                 // rAF callback (the listener returns to n_ops, ending the
@@ -1715,6 +1836,8 @@ int main(int argc, char** argv) {
         }
         if (line == "STATUS?") {
             std::cout << "STATUS running=" << unsigned(top->game_mode)
+                      << " vm_busy=" << unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__running)
+                      << " text_app=" << unsigned(top->rootp->jmr_js_core__DOT__u_cons__DOT__cmp_interactive)
                       << " ready=" << unsigned(top->ready_lit)
                       << " joy=" << unsigned(top->joy_out) << " cstate=" << (int)top->cons_dbg_state_o << " sstate=" << (int)top->stor_dbg_state_o << std::endl;
             continue;
@@ -1753,7 +1876,11 @@ int main(int argc, char** argv) {
                       << " eof=" << unsigned(r->jmr_js_core__DOT__u_stor__DOT__eof_r)
                       << " err=" << unsigned(r->jmr_js_core__DOT__u_stor__DOT__err_r)
                       << " cat=" << unsigned(r->jmr_js_core__DOT__u_stor__DOT__cat_on)
-                      << " cur=" << unsigned(r->jmr_js_core__DOT__u_vid__DOT__cur) << " vst=" << unsigned(r->jmr_js_core__DOT__u_vid__DOT__state) << " pc=" << unsigned(r->jmr_js_core__DOT__u_vid__DOT__put_cnt) << " nc=" << unsigned(r->jmr_js_core__DOT__u_vid__DOT__nl_cnt)
+                      << " src_len=" << unsigned(r->jmr_js_core__DOT__u_cons__DOT__src_len)
+                      << " srcname=";
+            for(unsigned i=0;i<r->jmr_js_core__DOT__u_cons__DOT__src_name_len && i<16;i++)
+                std::cout<<char(r->jmr_js_core__DOT__u_cons__DOT__src_name[i]);
+            std::cout << " cur=" << unsigned(r->jmr_js_core__DOT__u_vid__DOT__cur) << " vst=" << unsigned(r->jmr_js_core__DOT__u_vid__DOT__state) << " pc=" << unsigned(r->jmr_js_core__DOT__u_vid__DOT__put_cnt) << " nc=" << unsigned(r->jmr_js_core__DOT__u_vid__DOT__nl_cnt)
                       << std::endl;
             continue;
         }
@@ -3275,7 +3402,7 @@ int main(int argc, char** argv) {
             if (n > (1u << 20)) n = 1u << 20;
             std::vector<uint8_t> b;
             b.reserve(n);
-            for (unsigned i = 0; i < n && (a + i) < 2097152u; i++)
+            for (unsigned i = 0; i < n && (a + i) < 4194304u; i++)
                 b.push_back((uint8_t)(
                     top->rootp->jmr_js_core__DOT__g_sram__DOT__u_sram__DOT__mem[a + i]
                     & 0xFFu));
@@ -3289,7 +3416,7 @@ int main(int argc, char** argv) {
             std::sscanf(line.c_str() + 9, "%u %u", &a, &n);
             std::ostringstream oss;
             oss << "SRAM";
-            for (unsigned i = 0; i < n && (a + i) < 2097152u; i++)
+            for (unsigned i = 0; i < n && (a + i) < 4194304u; i++)
                 oss << " " << std::hex
                     << unsigned(top->rootp->jmr_js_core__DOT__g_sram__DOT__u_sram__DOT__mem[a + i]);
             std::cout << oss.str() << std::endl;
@@ -3316,7 +3443,8 @@ int main(int argc, char** argv) {
             // game_mode OR a chained program (EDIT: cmp_arm holds game_mode
             // off). Without this, FB? is always SAME during EDIT and the
             // GUI letterboxes READY over the editor.
-            if (top->game_mode || !top->ready_lit) {
+            if (top->game_mode || top->desktop_visible_o ||
+                (top->rootp->jmr_js_core__DOT__u_cons__DOT__cmp_interactive && top->rootp->jmr_js_core__DOT__u_vm__DOT__running)) {
                 std::cout << "FB 640 480 " << fb_export_b64() << std::endl;
             } else {
                 std::cout << "FB SAME" << std::endl;

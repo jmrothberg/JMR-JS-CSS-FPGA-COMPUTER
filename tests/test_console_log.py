@@ -100,6 +100,108 @@ def test_edit_roundtrip():
     assert m._edit_waiting is None
 
 
+def test_dir_pages_like_rtl():
+    """DIR stops every 14 names. Space continues. Esc keeps that page."""
+    m = Machine()
+    m.storage.catalog = lambda all_files=False: [f"FILE{i:02d}.HTM" for i in range(15)]  # type: ignore[method-assign]
+    hits = {"n": 0}
+
+    def idle():
+        if m.console_log and m.console_log[-1] == "-- MORE --":
+            hits["n"] += 1
+            if hits["n"] == 1:
+                assert "FILE00.HTM" in m.console_log
+                assert "FILE14.HTM" not in m.console_log
+                m.push_key(" ")
+
+    m.more_idle = idle
+    out = m.execute_line("DIR")
+    m.more_idle = None
+    assert hits["n"] == 1
+    assert out[0] == "FILE00.HTM" and out[-1] == "FILE14.HTM"
+    assert "-- MORE --" not in m.console_log
+
+    m2 = Machine()
+    m2.storage.catalog = lambda all_files=False: [f"FILE{i:02d}.HTM" for i in range(20)]  # type: ignore[method-assign]
+
+    def abort():
+        if m2.console_log and m2.console_log[-1] == "-- MORE --":
+            m2.push_key("\x1b")
+
+    m2.more_idle = abort
+    m2.type_line("DIR")
+    m2.more_idle = None
+    blob = "\n".join(m2.console_log)
+    assert "FILE00.HTM" in blob and "FILE13.HTM" in blob
+    assert "FILE14.HTM" not in blob
+    # One READY replaces -- MORE --. A second ^BREAK scrolls FILE00 off.
+    assert blob.count("^BREAK") == 0
+    assert blob.count("READY") == 1
+    assert m2.console_log[-15] == "FILE00.HTM"
+    assert blob.count("FILE00.HTM") == 1
+
+    m2b = Machine()
+    m2b.storage.catalog = lambda all_files=False: [f"FILE{i:02d}.HTM" for i in range(20)]  # type: ignore[method-assign]
+
+    def abort_gui():
+        if m2b.console_log and m2b.console_log[-1] == "-- MORE --":
+            m2b.push_key("\x1b")
+            m2b.hard_break()
+
+    m2b.more_idle = abort_gui
+    m2b.type_line("DIR")
+    m2b.more_idle = None
+    blob_b = "\n".join(m2b.console_log)
+    assert blob_b.count("^BREAK") == 0
+    assert blob_b.count("READY") == 1
+    assert m2b.console_log[-15] == "FILE00.HTM"
+
+    m3 = Machine()
+    m3.storage.catalog = lambda all_files=False: [f"FILE{i:02d}.HTM" for i in range(14)]  # type: ignore[method-assign]
+    m3.execute_line("DIR")
+    assert "-- MORE --" not in m3.console_log
+
+    # The GUI queues the Enter that submitted DIR before the first page.
+    # That CR must not skip -- MORE --.
+    m4 = Machine()
+    m4.storage.catalog = lambda all_files=False: [f"FILE{i:02d}.HTM" for i in range(20)]  # type: ignore[method-assign]
+    parked = {"n": 0}
+
+    def see_more():
+        if m4.console_log and m4.console_log[-1] == "-- MORE --":
+            parked["n"] += 1
+            assert "FILE14.HTM" not in m4.console_log
+            m4.push_key("\x1b")
+
+    m4.more_idle = see_more
+    m4.push_key("\r")
+    m4.type_line("DIR")
+    m4.more_idle = None
+    assert parked["n"] == 1
+    assert "FILE14.HTM" not in "\n".join(m4.console_log)
+
+    # Arrows in a program push spaces into the same queue. Those must
+    # not turn the first DIR page.
+    m5 = Machine()
+    m5.storage.catalog = lambda all_files=False: [f"FILE{i:02d}.HTM" for i in range(20)]  # type: ignore[method-assign]
+    held = {"n": 0}
+
+    def see_more_5():
+        if m5.console_log and m5.console_log[-1] == "-- MORE --":
+            held["n"] += 1
+            assert "FILE14.HTM" not in m5.console_log
+            m5.push_key("\x1b")
+
+    m5.more_idle = see_more_5
+    m5.push_key(" ")
+    m5.push_key(" ")
+    m5.push_key("\r")
+    m5.type_line("DIR")
+    m5.more_idle = None
+    assert held["n"] == 1
+    assert "FILE14.HTM" not in "\n".join(m5.console_log)
+
+
 def test_list_paged_auto_more():
     """Without GUI more_idle, MORE auto-continues after poll budget."""
     m = Machine()

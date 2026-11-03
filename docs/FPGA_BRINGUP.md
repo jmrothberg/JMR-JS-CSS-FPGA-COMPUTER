@@ -23,15 +23,10 @@ feature under test (matching Python/native RTL regressions + relevant benches;
 [standard evidence](STANDARD_RELEASE.md#validation)).
 Flashing half-broken bits wastes hours.
 
-## Current standard — 2026-10-26
+## Current standard — run73o, 2026-11-02
 
-Use [run72b and its matching card image](STANDARD_RELEASE.md). It preserves
-the native JS CPU and full game features, improves Pac-Man/Donkey native RTL
-cycles by 3.76× / 3.16×, and closes setup/hold at +0.238 / +0.050 ns.
-Routing took 35m48s. The user reports a working board/tether setup; measured
-board FPS is still pending. Historical dated run notes below are not the
-current release. Use the fixed release file for flashing while a working
-tree contains newer, unqualified features.
+Use [releases/current/fpga.bit](../releases/current/fpga.bit). The owner flashed it to QSPI and reports that it runs fine. The native JavaScript VM is 33.333 MHz, with 100 MHz fabric/DDR and unchanged games/card. Final setup/hold are 0.000 / +0.040 ns; all specified timing and routing/DRC-error gates pass. Numeric board FPS remains unmeasured. [Loading instructions](STANDARD_RELEASE.md); [run72b rollback](../releases/archive/run72b-2026-10-26/README.md).
+Historical dated notes below do not select the current release. `flash` / `flash-qspi` load `releases/current/fpga.bit` without starting a new build.
 
 **Second port (later):** Puzhi **PA-StarLite** (XC7A200T, 1 GB DDR3) — same engines,
 different XDC/PHY only after Nexys Video glass works. Do **not** run two board
@@ -226,8 +221,8 @@ To end up *live immediately* and *persistent*, flash in this order:
 For the standard release, the exact persistent command is:
 
 ```bash
-sudo openFPGALoader -b nexysVideo -f build/bits/run72b_game_speedup_WNS+0.238.bit
-sudo openFPGALoader -b nexysVideo build/bits/run72b_game_speedup_WNS+0.238.bit
+sudo openFPGALoader -b nexysVideo -f releases/current/fpga.bit
+sudo openFPGALoader -b nexysVideo releases/current/fpga.bit
 ```
 
 Use `.bit` for this flash path; keep `.bin` as a secondary archive. See
@@ -345,7 +340,7 @@ misreport its result as BATTERY PASS.
 Do **not** flash a new source build until its matching regressions pass **and** you are
 intentionally proving silicon for a feature that already matches on FPGA-SIM.
 Also check setup **and** hold timing and the area gates. The current VM
-already runs at 100 MHz ÷ 7; fabric and DDR stay at 100 MHz. A fabric-to-VM
+already runs at 100 MHz ÷ 3; fabric and DDR stay at 100 MHz. A fabric-to-VM
 path can still require 10 ns, so changing the VM divider does not remove
 that constraint. Repair the measured cone or qualify its CDC/pipeline;
 never relax constraints just to publish a bit. [Timing wall](TIMING_WALL.md).

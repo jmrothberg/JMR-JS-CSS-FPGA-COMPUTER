@@ -497,6 +497,7 @@ class JsHwVm:
         if not isinstance(image, ProgramImage):
             raise TypeError("load_image requires a validated ProgramImage")
         self.program_image = image
+        self.input.reset_mouse()
         data = image.data
         code_bytes = data[: image.code_end]
         pad = (-len(code_bytes)) % 4
@@ -581,6 +582,10 @@ class JsHwVm:
         self._value_last_ip = 0
         self._value_last_op = None
         self._value_objects = [None] * MAX_OBJECTS
+        self._m.system_window = [0,0,0,0]
+        self._m.system_menus = ''
+        self._m.system_about = None
+        self._m.system_viewport = False
         self._value_object_generations = [1] * MAX_OBJECTS
         self._value_object_classes = [None] * MAX_OBJECTS
         self._value_object_builtins = [None] * MAX_OBJECTS
@@ -3499,6 +3504,38 @@ class JsHwVm:
                 obj = self._value64_resolve_object(handle, op_ip, op)
                 if obj is None:
                     return
+                if (self._value_object_builtins[value_payload(handle)] == BUILTIN_CONTEXT
+                        and property_name == 'systemAbout'):
+                    spec=self._value64_string_text(value,op_ip,op)
+                    if spec is None:return
+                    from functional_model.classic_ui import parse_about
+                    try:self._m.system_about=parse_about(spec)
+                    except ValueError as exc:
+                        self._value64_fault(str(exc));return
+                    if not self._value64_push(value):return
+                    continue
+                if (self._value_object_builtins[value_payload(handle)] == BUILTIN_CONTEXT
+                        and property_name == 'systemViewport'):
+                    self._m.system_viewport=bool(value_to_int32(value))
+                    if not self._value64_push(value):return
+                    continue
+                if (self._value_object_builtins[value_payload(handle)] == BUILTIN_CONTEXT
+                        and property_name == 'systemMenus'):
+                    spec = self._value64_string_text(value, op_ip, op)
+                    if spec is None:return
+                    from functional_model.classic_ui import parse_menus
+                    try:parse_menus(spec)
+                    except ValueError as exc:
+                        self._value64_fault(str(exc));return
+                    self._m.system_menus = spec
+                    if not self._value64_push(value):return
+                    continue
+                if (self._value_object_builtins[value_payload(handle)] == BUILTIN_CONTEXT
+                        and property_name in ('systemWindow','windowScroll','windowScrollX','windowDirty')):
+                    field=('systemWindow','windowScroll','windowScrollX','windowDirty').index(property_name)
+                    self._m.system_window[field]=value_to_int32(value)&255
+                    if not self._value64_push(value):return
+                    continue
                 if arg0 not in obj and len(obj) >= OBJECT_SLOTS:
                     self._value64_fault(
                         f"object slots {len(obj) + 1} > {OBJECT_SLOTS} at IP {op_ip}"
@@ -4104,6 +4141,10 @@ class JsHwVm:
             return None
         names = self.program_image.names if self.program_image else ()
         undefined = value_pack_tagged(VALUE_KIND_UNDEFINED)
+        if 'charCode' in names:
+            obj[names.index('charCode')] = value_pack_number(
+                ord(key) if event_type=="keydown" and len(key)==1 and 32<=ord(key)<127 else 0)
+
 
         def optional_string(text: str) -> int:
             interned = self._value64_interned_string(text, self._value_last_ip)
@@ -4141,6 +4182,45 @@ class JsHwVm:
             if self._value64_invoke_function(onload, []) is None and self.error:
                 return
 
+    def _value64_dispatch_mouse(self) -> None:
+        """Dispatch actual pointer events through the ordinary JS heap.
+
+        No listener means no allocation, and no attempt to intern a name
+        that the program never used. Retained event objects keep their own
+        coordinates; one mutable global event would break JavaScript.
+        """
+        names = self.program_image.names if self.program_image else ()
+        for mouse in self.input.drain_mouse_events():
+            listeners = [fn for ev, fn in list(self._value_listeners)
+                         if self._value64_string_text(
+                             ev, self._value_last_ip, Op.CALL_NATIVE) == mouse.type]
+            if not listeners:
+                continue
+            handle = self._value64_alloc_object(self._value_last_ip)
+            if handle is None:
+                return
+            obj = self._value64_resolve_object(handle, self._value_last_ip, Op.MAKE_OBJ)
+            if obj is None:
+                return
+            for name, value in mouse.fields().items():
+                if name not in names:
+                    continue
+                if isinstance(value, str):
+                    word = self._value64_interned_string(value, self._value_last_ip)
+                    if word is None:
+                        return
+                else:
+                    word = value_pack_number(value)
+                obj[names.index(name)] = word
+            self._value_dispatch_roots = [handle, *listeners]
+            for index in range(len(listeners)):
+                self._value64_invoke_function(
+                    self._value_dispatch_roots[index + 1],
+                    [self._value_dispatch_roots[0]])
+                if self.error:
+                    return
+            self._value_dispatch_roots = []
+
     def _value64_frame_tick(self) -> None:
         """One deterministic input → rAF snapshot → due-timer frame."""
         self._value64_flush_image_loads()
@@ -4169,6 +4249,10 @@ class JsHwVm:
                 if self.error:
                     return
             self._value_dispatch_roots = []
+
+        self._value64_dispatch_mouse()
+        if self.error:
+            return
 
         if self._value_start_loop:
             self._execute_value64_words(top_level=True)

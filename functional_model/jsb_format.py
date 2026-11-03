@@ -147,19 +147,12 @@ ASET_MAGIC = b"ASET"
 SOURCE_MAP_MAGIC = b"SMAP"
 SOURCE_MAP_VERSION = 1
 ASET_PAL_BYTES = 768  # 256 × RGB888 at asset-SRAM offset 0
-SRAM_BYTES = 4 * 1024 * 1024  # 2M × 16 IS61WV204816 contract (see docs/ARCHITECTURE.md)
-# V2.0 MK.HTML would need JMR_SRAM_BYTES=8M / JMR_MAX_SPR=518. NOTE (2026-08-31):
-# nothing in tools/ actually sets those today — MK mints under the default 4MB
-# config with the wall below ACTIVE (MKBIGCPU is 2,801,304 ASET bytes, 5.4%
-# under it). Do not read this comment as "the wall is off for MK".
-# Lowest runtime-reserved SRAM address on the standard (4MB) board config —
-# framebuffer/work/spr/src/imgd all live contiguously from here to the top
-# of the bank. word 1,480,704 * 2 bytes/word, must track FB_SRAM_BASE in
-# rtl/engines/jmr_fb_present.sv (and jmr_fb_scanout.sv's copy of the same
-# param). Only meaningful for the default 4MB SRAM_BYTES; a JMR_SRAM_BYTES
-# override implies a different board/region layout this constant doesn't
-# know about, so the mint-time check below is skipped in that case.
-_FB_SRAM_BASE_BYTES = 1_480_704 * 2
+# Shared 8 MiB address window on both models and RTL. The Nexys bridge
+# uses a small part of its DDR3; the future custom card uses HyperRAM.
+# Art occupies the space below the relocated front framebuffer. Heap,
+# code BRAM and sprite descriptor count are separate limits.
+SRAM_BYTES = 8 * 1024 * 1024
+_FB_SRAM_BASE_BYTES = 3_577_856 * 2
 
 # --- V1.5 standalone-compile arena (word addresses; mirror of the RTL
 # localparams in rtl/engines/jmr_js_vm.sv). Only live while a compiler
@@ -175,11 +168,11 @@ _FB_SRAM_BASE_BYTES = 1_480_704 * 2
 #   [0, CSCR_WORDS)                      -> CSCR_SRAM_BASE + i
 #   [CSCR_WORDS, CSCR_WORDS+CIMG_WORDS)  -> CIMG_SRAM_BASE + i - CSCR_WORDS
 CART_SRAM_BASE = 0
-CART_WORDS = 1_480_704  # == FB_SRAM_BASE; artWrite2 faults at or past this
+CART_WORDS = 3_577_856  # == FB_SRAM_BASE; artWrite2 faults at or past this
 CART_MAX_BYTES = _FB_SRAM_BASE_BYTES
-CSCR_SRAM_BASE = 1_650_688
+CSCR_SRAM_BASE = 3_747_840
 CSCR_WORDS = 73_728
-CIMG_SRAM_BASE = 1_789_952
+CIMG_SRAM_BASE = 3_887_104
 CIMG_WORDS = 307_200
 CSTG_WORDS = CSCR_WORDS + CIMG_WORDS  # flat arena the compiler addresses
 CSTG_MSG_OFF = 0  # 64-byte ASCII diagnostic for a failed compile
@@ -289,7 +282,7 @@ COMPILE_CHAIN = (
     "MINTASM.JSH",  # 4 — assemble the image and cdone()
 )
 COMPILE_ENTRY = 0
-SRC_SRAM_BASE = 1_724_416
+SRC_SRAM_BASE = 3_821_568
 SOURCE_MAX = 65_536
 
 
@@ -871,7 +864,7 @@ def build_aset_payload(palette, sprites):
             out += b"\x00" * (need - len(pix))
     if len(out) > SRAM_BYTES:
         raise ValueError(
-            f"ASET payload {len(out)} bytes exceeds the 4 MB asset SRAM bank"
+            f"ASET payload {len(out)} bytes exceeds the 8 MiB asset SRAM bank"
         )
     # 2026-08-28: the 4MB check above is necessary but not sufficient — the
     # asset SRAM bank is SHARED with fixed runtime regions (framebuffer,

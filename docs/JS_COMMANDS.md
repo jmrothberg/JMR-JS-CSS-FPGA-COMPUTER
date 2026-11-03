@@ -407,8 +407,18 @@ baud, plus the card write.
 
     LOAD "BOXES.HTML"   → source into the machine
     EDIT                → full-screen editor (a GAME on the card:
-                          EDITOR.JSH). F2 = save ("SAVED."), F3 = quit
-                          without saving, arrows/Backspace edit.
+                          EDITOR.JSH). F2 = save and leave ("SAVED."),
+                          F3 / F4 = page, F5 = quit without saving,
+                          arrows / Backspace edit. Letters are key codes,
+                          so they insert as capitals. Esc is BREAK.
+    READ "NAME.MD"      → full-screen reader (READ.JSH) for a markdown
+                          file on the card. Bare READ shows the file LOAD
+                          parked. Up/Down a line, Left/Right or F3/F4 a
+                          page, Esc is BREAK. It does not edit. run73o
+                          answers ?SN; LIST pages the loaded file there.
+    NOTE                → LOAD "NOTE.HTML" then RUN. Lowercase typing.
+                          F2 saves DRAFT.HTML on the Python simulator only.
+                          On the board, save with LOAD, EDIT, F2.
     COMPILE             → chain-runs ARTSCAN.JSH then COMPILER.JSH from
                           the card; a title with a .ART sidecar gets its
                           art appended. Success mints NAME.JSH beside the
@@ -417,9 +427,15 @@ baud, plus the card write.
                           the message area is arena byte 128).
     RUN                 → plays the freshly minted .JSH.
 
-**Do not delete** `storage/EDITOR.HTML`, `storage/ARTSCAN.HTML`, or
-`storage/COMPILER.HTML`. They are the machine programs behind `EDIT` /
-`COMPILE`, not titles. `DIR` hides those stems on purpose. Authoring note:
+**Do not delete** `storage/READ.HTML`, `storage/EDITOR.HTML`,
+`storage/ARTSCAN.HTML`, or `storage/COMPILER.HTML`. They are the machine
+programs behind `READ` / `EDIT` / `COMPILE`, not titles. `DIR` hides those
+stems on purpose. `DIR` shows `.MD` files; `DIR *` also shows `.JSH` and
+`.ART`. Esc on `-- MORE --` keeps the first name in Python (READY replaces
+that row). run73o scrolls the top name off. The next bitstream is READ,
+that Esc overwrite, and a program asking the console to load a named file
+back into the same program. The file-ask is not in the source yet.
+Authoring note:
 [GAME_DESIGN.md](GAME_DESIGN.md#machine-programs-in-storage--do-not-delete).
 
 `RUN` always prefers the card's `.JSH`, so a FAILED compile leaves the old

@@ -1,10 +1,11 @@
 """External SRAM asset bank — Python reference model.
 
-Contract (see docs/ARCHITECTURE.md and CONSTITUTION.md MEMORY): one 4 MByte
-SRAM, 2M x 16 (ISSI IS61WV204816), behind a simple synchronous port
-(addr[20:0], wdata[15:0], rdata[15:0], we, req, ack). Same port, three
+Contract (see docs/ARCHITECTURE.md and CONSTITUTION.md MEMORY): one 8 MiB
+address window, 4M x 16, behind a simple synchronous port
+(addr[21:0], wdata[15:0], rdata[15:0], we, req, ack). Same port, three
 implementations: behavioral model in FPGA-SIM, DDR3-behind-a-bridge on the
-Nexys Video board, the real chip on the ASIC / final PCB.
+Nexys Video board, or a suitably sized external-memory controller on a
+custom board. This window is larger than one 4 MiB IS61WV204816.
 
 On RUN the loader streams the .JSH ASET payload here:
   0x000000 - 0x0002FF  title palette (256 x RGB888)
@@ -17,7 +18,7 @@ into code BRAM or the heap ("handles, not megabyte art").
 
 from __future__ import annotations
 
-SRAM_BYTES = 4 * 1024 * 1024  # 2M x 16
+SRAM_BYTES = 8 * 1024 * 1024  # 4M x 16
 
 
 class SramEngine:
@@ -33,7 +34,7 @@ class SramEngine:
         """Stream an ASET payload into the bank (RUN overwrites in place)."""
         if base < 0 or base + len(payload) > SRAM_BYTES:
             raise ValueError(
-                f"ASET payload {len(payload)} bytes exceeds 4 MB asset SRAM"
+                f"ASET payload {len(payload)} bytes exceeds 8 MiB asset SRAM"
             )
         self.mem[base : base + len(payload)] = payload
         self.loaded_bytes = len(payload)

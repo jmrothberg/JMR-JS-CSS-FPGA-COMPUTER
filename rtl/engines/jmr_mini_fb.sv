@@ -18,6 +18,8 @@ module jmr_mini_fb (
     input  logic        we,
     input  logic [18:0] waddr,
     input  logic [7:0]  wdata,
+    input  logic        dirty_clear,
+    output logic [1199:0] dirty_blocks,
     // present-copy read port (core clk, sequential)
     input  logic [18:0] copy_raddr,
     output logic [7:0]  copy_rdata,
@@ -66,6 +68,41 @@ module jmr_mini_fb (
     assign dump_rdata = (d0_sel == 2'd0) ? d0_c0 :
                         (d0_sel == 2'd1) ? d0_c1 :
                         (d0_sel == 2'd2) ? d0_c2 : d0_c3;
+
+    // Read-first Port A already returns the old byte of a draw write.
+    // Pipeline the selected old byte, comparison and 256-byte block mark,
+    // updating only when contents changed. No additional framebuffer port or
+    // image copy is introduced. The first present always transfers all.
+    logic dirty_we_q;
+    logic [18:0] dirty_addr_q;
+    logic [7:0] dirty_data_q;
+    logic [7:0] dirty_old_q, dirty_new_q;
+    logic dirty_compare_q;
+    logic [10:0] dirty_compare_block_q;
+    logic dirty_changed_q;
+    logic [10:0] dirty_block_q;
+    always_ff @(posedge wr_clk) begin
+        if (!rst_n) begin
+            dirty_blocks <= '1;
+            dirty_we_q <= 1'b0;
+            dirty_changed_q <= 1'b0;
+            dirty_compare_q <= 1'b0;
+        end else begin
+            dirty_we_q <= we;
+            dirty_addr_q <= waddr;
+            dirty_data_q <= wdata;
+            // Keep bank selection, byte comparison and block decoding in
+            // separate stages, each with an ordinary 100 MHz requirement.
+            dirty_old_q <= dump_rdata;
+            dirty_new_q <= dirty_data_q;
+            dirty_compare_q <= dirty_we_q && dirty_addr_q < 19'd307200;
+            dirty_compare_block_q <= dirty_addr_q[18:8];
+            dirty_changed_q <= dirty_compare_q && dirty_old_q != dirty_new_q;
+            dirty_block_q <= dirty_compare_block_q;
+            if (dirty_clear) dirty_blocks <= '0;
+            if (dirty_changed_q) dirty_blocks[dirty_block_q] <= 1'b1;
+        end
+    end
 
     // ---------------- Port B: present-copy read (core clk) ----------------
     logic [7:0] c_c0, c_c1, c_c2, c_c3;

@@ -36,8 +36,8 @@
 module jmr_raster_engine #(
     parameter int MW = 640,
     parameter int MH = 480,
-    parameter logic [20:0] SPR_SRAM_BASE  = 21'd1691648,
-    parameter logic [20:0] IMGD_SRAM_BASE = 21'd1789952
+    parameter logic [21:0] SPR_SRAM_BASE  = 22'd3788800,
+    parameter logic [21:0] IMGD_SRAM_BASE = 22'd3887104
 ) (
     input  logic        clk,
     input  logic        rst_n,
@@ -51,7 +51,7 @@ module jmr_raster_engine #(
     input  logic [7:0]  color,
     input  logic [15:0] sx, sy,          // blit_sx / blit_sy
     input  logic [15:0] qx, rxr, qy, ryr, // DDA quotient/remainder pairs
-    input  logic [21:0] sbase,     // spr_off[si] (blit) / imgd_i (imgd)
+    input  logic [22:0] sbase,     // spr_off[si] (blit) / imgd_i (imgd)
     input  logic [15:0] stride,    // spr_ww[si]
     input  logic        aset,
     // neg-xform: negative dWidth/dHeight (or ctx_sx/sy<0) mirrors the dest
@@ -66,7 +66,7 @@ module jmr_raster_engine #(
     output logic [7:0]  fb_wdata,
     // asset SRAM read client (hold-req-until-ack, arbiter owner 6)
     output logic        sram_req,
-    output logic [20:0] sram_addr,
+    output logic [21:0] sram_addr,
     input  logic [15:0] sram_rdata,
     input  logic        sram_ack
 );
@@ -89,8 +89,8 @@ module jmr_raster_engine #(
     // walk state
     logic [9:0]  x, y;
     logic [15:0] ax, ay;          // DDA remainder accumulators
-    logic [21:0] so, row_so;      // blit source offsets (byte index)
-    logic [21:0] row_step;        // stride*qy, latched at go
+    logic [22:0] so, row_so;      // blit source offsets (byte index)
+    logic [22:0] row_step;        // stride*qy, latched at go
     logic [18:0] imgd_i;          // linear imgd source index
     logic        fetch_wait;
     // dest address, incremental (peer review pre-run-51): fb_row is the
@@ -109,23 +109,23 @@ module jmr_raster_engine #(
     // the precompute settles simply holds one beat — the pixel beat
     // re-runs idempotently (same fetch, same write). Only 1-px-wide
     // rows ever hit the hold (covered by the 1-px-wide exact gate).
-    logic [21:0] nxt_row_so;
+    logic [22:0] nxt_row_so;
     logic [15:0] nxt_ay;
     logic        nxt_ok;
     // one-word source cache (blit): tag is the WORD address
     logic        cw_valid;
-    logic [20:0] cw_tag;
+    logic [21:0] cw_tag;
     logic [15:0] cw_word;
 
     // per-pixel source word address + byte lane
-    logic [20:0] px_word;
+    logic [21:0] px_word;
     logic        px_hi;
     always_comb begin
         if (m_q == M_IMGD) begin
-            px_word = IMGD_SRAM_BASE + 21'(imgd_i);
-            px_hi   = 1'b0;
+            px_word = IMGD_SRAM_BASE + 21'(imgd_i >> 1);
+            px_hi   = imgd_i[0];
         end else if (aset_q) begin
-            px_word = 21'(so[21:1]);
+            px_word = 23'(so[22:1]);
             px_hi   = so[0];
         end else begin
             px_word = SPR_SRAM_BASE + 21'(so[17:0]);
@@ -177,14 +177,30 @@ module jmr_raster_engine #(
             x <= x + 10'd1;
             fb_addr <= fb_addr + 19'd1;
             if (16'(ax + rxr_q) >= {6'd0, w_q}) begin
-                so <= so + 22'(qx_q) + 22'd1;
+                so <= so + 23'(qx_q) + 22'd1;
                 ax <= 16'(ax + rxr_q) - {6'd0, w_q};
             end else begin
-                so <= so + 22'(qx_q);
+                so <= so + 23'(qx_q);
                 ax <= ax + rxr_q;
             end
         end
         if (!held) imgd_i <= imgd_i + 19'd1;
+    endtask
+
+    // Fill and ImageData walk consecutive destination/source pixels;
+    // they do not consume the scaled-sprite DDA or its next-row result.
+    // Keep their handshake/cache controls out of the DDA register enables.
+    task automatic adv_linear();
+        if (x == w_q - 10'd1) begin
+            x <= 10'd0;
+            y <= y + 10'd1;
+            fb_row <= fb_row + 19'(MW);
+            fb_addr <= fb_row + 19'(MW);
+        end else begin
+            x <= x + 10'd1;
+            fb_addr <= fb_addr + 19'd1;
+        end
+        imgd_i <= imgd_i + 19'd1;
     endtask
 
     always_ff @(posedge clk) begin
@@ -198,7 +214,7 @@ module jmr_raster_engine #(
             fb_we <= 1'b0;
             // continuous next-row precompute (valid 1 clk after row regs settle)
             if (16'(ay + ryr_q) >= {6'd0, h_q}) begin
-                nxt_row_so <= row_so + row_step + 22'(stride_q);
+                nxt_row_so <= row_so + row_step + 23'(stride_q);
                 nxt_ay     <= 16'(ay + ryr_q) - {6'd0, h_q};
             end else begin
                 nxt_row_so <= row_so + row_step;
@@ -220,9 +236,9 @@ module jmr_raster_engine #(
                     // row-0 source base: two 16-bit DSP products, once per op
                     fb_row  <= 19'(dy) * 19'(MW) + 19'(dx);
                     fb_addr <= 19'(dy) * 19'(MW) + 19'(dx);
-                    so     <= sbase + 22'(sy) * 22'(stride) + 22'(sx);
-                    row_so <= sbase + 22'(sy) * 22'(stride) + 22'(sx);
-                    row_step <= 22'(qy) * 22'(stride);
+                    so     <= sbase + 23'(sy) * 23'(stride) + 23'(sx);
+                    row_so <= sbase + 23'(sy) * 23'(stride) + 23'(sx);
+                    row_step <= 23'(qy) * 23'(stride);
                     imgd_i <= 19'(sbase[18:0]);
                     fetch_wait <= 1'b0;
                     nxt_ok <= 1'b0;     // precompute settles next clk
@@ -244,7 +260,7 @@ module jmr_raster_engine #(
                             fb_wdata <= color_q;
                         end
                         if (last_px) busy <= 1'b0;
-                        else adv();
+                        else adv_linear();
                     end
                     M_BLIT: begin
                         if (cw_valid && cw_tag == px_word) begin
@@ -280,7 +296,27 @@ module jmr_raster_engine #(
                         end
                     end
                     default: begin // M_IMGD
-                        if (!fetch_wait) begin
+                        if (!fetch_wait && cw_valid && cw_tag == px_word &&
+                            imgd_i < 19'(FB_PIXELS)) begin
+                            if (inb) begin
+                                fb_we <= 1'b1;
+                                fb_waddr <= pix_addr;
+                                fb_wdata <= px_hi ? cw_word[15:8] : cw_word[7:0];
+                            end
+                            if (last_px) begin
+                                busy <= 1'b0;
+                                sram_req <= 1'b0;
+                            end else begin
+                                adv_linear();
+                                // The high byte finishes this word. Start
+                                // the next read while that pixel is written.
+                                if (imgd_i[0] && imgd_i + 19'd1 < 19'(FB_PIXELS)) begin
+                                    sram_addr <= px_word + 21'd1;
+                                    sram_req <= 1'b1;
+                                    fetch_wait <= 1'b1;
+                                end
+                            end
+                        end else if (!fetch_wait) begin
                             if (imgd_i < 19'(FB_PIXELS)) begin
                                 sram_req <= 1'b1;
                                 sram_addr <= px_word;
@@ -288,30 +324,27 @@ module jmr_raster_engine #(
                             end else begin
                                 // source ran off the snapshot: no write
                                 if (last_px) busy <= 1'b0;
-                                else adv();
+                                else adv_linear();
                             end
                         end else if (sram_ack) begin
+                            cw_valid <= 1'b1;
+                            cw_tag <= sram_addr;
+                            cw_word <= sram_rdata;
                             if (inb) begin
                                 fb_we <= 1'b1;
                                 fb_waddr <= pix_addr;
-                                fb_wdata <= sram_rdata[7:0];
+                                fb_wdata <= px_hi ? sram_rdata[15:8] : sram_rdata[7:0];
                             end
                             if (last_px) begin
                                 busy <= 1'b0;
                                 sram_req <= 1'b0;
                                 fetch_wait <= 1'b0;
                             end else begin
-                                adv();
-                                // Hand off the next linear read at this ack.
-                                // The arbiter releases ownership at every ack,
-                                // so scanout can still preempt between words.
-                                // Keep the existing one-word-per-pixel layout.
-                                if (x == w_q - 10'd1 && !nxt_ok) begin
-                                    // adv held this pixel: re-read it until the
-                                    // row precompute is ready (idempotent).
-                                    sram_req <= 1'b1;
-                                    fetch_wait <= 1'b1;
-                                end else if (imgd_i + 19'd1 < 19'(FB_PIXELS)) begin
+                                adv_linear();
+                                // A low byte is followed by its cached high
+                                // byte; a high byte hands off the next word.
+                                // Arbitration can preempt at every ack.
+                                if (imgd_i[0] && imgd_i + 19'd1 < 19'(FB_PIXELS)) begin
                                     sram_addr <= sram_addr + 21'd1;
                                     sram_req <= 1'b1;
                                     fetch_wait <= 1'b1;

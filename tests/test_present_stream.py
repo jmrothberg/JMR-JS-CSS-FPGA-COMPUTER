@@ -69,3 +69,46 @@ def test_imagedata_stream_through_real_ddr3_bridge():
     result = subprocess.run([str(out/'bench')], check=True, capture_output=True, text=True)
     assert 'PASS ImageData real DDR3 bridge:' in result.stdout
     print(result.stdout)
+
+
+def test_changed_canvas_blocks_preserve_front_exactly():
+    if not shutil.which('verilator'):
+        pytest.skip('Verilator missing')
+    out = ROOT / 'sim/sim_build_synth/present_dirty'
+    out.mkdir(parents=True, exist_ok=True)
+    command = [
+        'verilator', '-cc', '-exe', '-build', '-j', '2',
+        '-Mdir', str(out/'obj'), '-o', str(out/'bench'),
+        '--top-module', 'tb_present_stream', '-GDIRTY_COPY=1',
+        '-Wno-WIDTHEXPAND', '-Wno-WIDTHTRUNC',
+        str(ROOT/'sim/tb_present_stream.sv'),
+        str(ROOT/'rtl/engines/jmr_fb_present.sv'),
+        str(ROOT/'rtl/engines/jmr_mini_fb.sv'),
+        str(ROOT/'sim/tb_present_dirty.cpp'),
+    ]
+    subprocess.run(command, check=True, capture_output=True, text=True)
+    result = subprocess.run([str(out/'bench')], check=True, capture_output=True, text=True)
+    assert 'PASS dirty present:' in result.stdout
+    print(result.stdout)
+
+
+def test_changed_canvas_blocks_through_real_ddr_bridge():
+    if not shutil.which('verilator'):
+        pytest.skip('Verilator missing')
+    out = ROOT / 'sim/sim_build_synth/present_dirty_bridge'
+    out.mkdir(parents=True, exist_ok=True)
+    command = [
+        'verilator', '-cc', '-exe', '-build', '-j', '2',
+        '-Mdir', str(out/'obj'), '-o', str(out/'bench'),
+        '--top-module', 'tb_present_bridge', '-GDIRTY_COPY=1',
+        '-Wno-WIDTHEXPAND', '-Wno-WIDTHTRUNC',
+        str(ROOT/'sim/tb_present_bridge.sv'),
+        str(ROOT/'rtl/engines/jmr_fb_present.sv'),
+        str(ROOT/'rtl/engines/jmr_mini_fb.sv'),
+        str(ROOT/'rtl/engines/jmr_ddr3_sram_bridge.sv'),
+        str(ROOT/'sim/tb_present_dirty_bridge.cpp'),
+    ]
+    subprocess.run(command, check=True, capture_output=True, text=True)
+    result = subprocess.run([str(out/'bench')], check=True, capture_output=True, text=True)
+    assert 'PASS dirty present real DDR:' in result.stdout
+    print(result.stdout)

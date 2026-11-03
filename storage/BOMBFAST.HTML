@@ -38,6 +38,11 @@ window.JMR_SPR = ["BOMBERMA-0.png", "BOMBERMA-1.png", "BOMBERMA-2.png", "BOMBERM
    Pools: reuse dead bomb/explosion/enemy slots. Same 14 sheets as BOMBERMA. */
 var cvs=document.getElementById("c");
 var ctx=cvs.getContext("2d");
+// Shared application menu and About metadata; no private chrome.
+ctx.systemWindow=8;
+ctx.systemViewport=1;
+ctx.systemAbout="Bomberman|Place bombs and escape the maze.";
+
 ctx.imageSmoothingEnabled=false;
 if(!window.JMR_SPR){window.JMR_SPR=["BOMBERMA-0.png","BOMBERMA-1.png","BOMBERMA-2.png","BOMBERMA-3.png","BOMBERMA-4.png","BOMBERMA-5.png","BOMBERMA-6.png","BOMBERMA-7.png","BOMBERMA-8.png","BOMBERMA-9.png","BOMBERMA-10.png","BOMBERMA-11.png","BOMBERMA-12.png","BOMBERMA-13.png"];}
 var COLS=20,ROWS=15,TILE=32;

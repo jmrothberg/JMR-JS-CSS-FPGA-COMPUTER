@@ -9,12 +9,12 @@ package jmr_js_vm_pkg;
     //   CSCR  compiler scratch (the hole above WORK, plus SPR), 1 B/word
     //   CIMG  assembled image (the IMGD snapshot region), 1 B/word
     // stgRead/stgWrite see CSCR and CIMG as ONE flat byte arena.
-    localparam logic [20:0] SRC_SRAM_BASE  = 21'd1724416; // = console SOURCE
-    localparam logic [20:0] CART_SRAM_BASE = 21'd0;
-    localparam int unsigned CART_WORDS     = 1480704;     // = FB_SRAM_BASE
-    localparam logic [20:0] CSCR_SRAM_BASE = 21'd1650688;
+    localparam logic [21:0] SRC_SRAM_BASE  = 22'd3821568; // = console SOURCE
+    localparam logic [21:0] CART_SRAM_BASE = 21'd0;
+    localparam int unsigned CART_WORDS     = 3577856;     // = FB_SRAM_BASE
+    localparam logic [21:0] CSCR_SRAM_BASE = 22'd3747840;
     localparam int unsigned CSCR_WORDS     = 73728;
-    localparam logic [20:0] CIMG_SRAM_BASE = 21'd1789952;
+    localparam logic [21:0] CIMG_SRAM_BASE = 22'd3887104;
     localparam int unsigned CIMG_WORDS     = 307200;
     localparam int unsigned CSTG_WORDS     = CSCR_WORDS + CIMG_WORDS;
     // SOURCE window, 1 B/word. srcWrite (nid 49) bounds against this; it is
@@ -27,7 +27,7 @@ package jmr_js_vm_pkg;
     localparam int unsigned CSTG_HDR_NAMEN = 16;
 
     // Flat arena byte index -> absolute SRAM word.
-    function automatic logic [20:0] cstg_word(input logic [20:0] i);
+    function automatic logic [21:0] cstg_word(input logic [20:0] i);
         cstg_word = (i < 21'(CSCR_WORDS))
             ? (CSCR_SRAM_BASE + i)
             : (CIMG_SRAM_BASE + (i - 21'(CSCR_WORDS)));
@@ -223,5 +223,7 @@ package jmr_js_vm_pkg;
         // single encoding — the scarce resource here is st_t entries
         // (112 of 128 before this), not LUTs.
         , S_CSRAM
+        , S_V64_MOUSE_PROP
+        , S_UI_PROP
     } st_t;
 endpackage

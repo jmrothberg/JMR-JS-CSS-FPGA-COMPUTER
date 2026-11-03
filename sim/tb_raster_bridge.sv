@@ -5,7 +5,7 @@ module tb_raster_bridge(
  input logic [21:0] source,
  output logic busy,fb_we,req_o,ack_o,
  output logic [18:0] fb_addr,output logic [7:0] fb_data,
- output logic [20:0] addr_o,
+ output logic [21:0] addr_o,
  output logic [28:0] app_addr,output logic [2:0] app_cmd,
  output logic app_en,app_wdf_end,app_wdf_wren,
  output logic [127:0] app_wdf_data,output logic [15:0] app_wdf_mask,

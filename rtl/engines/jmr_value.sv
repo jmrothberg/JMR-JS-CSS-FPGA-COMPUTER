@@ -81,7 +81,9 @@ package jmr_value_pkg;
             end else if (shift > 0) begin
                 // masked tree-reduce (structurally log-depth, like mul_pack)
                 logic [55:0] below_mask;
-                below_mask = (56'd1 << shift) - 56'd1;
+                // A shifted all-ones mask has the same low bits without
+                // putting a 56-bit subtractor before the sticky reduction.
+                below_mask = ~(56'hffffffffffffff << shift[5:0]);
                 sticky = |(value & below_mask);
                 shifted = value >> shift;
                 shifted[0] = shifted[0] | sticky;

@@ -9,7 +9,7 @@ module jmr_ddr3_sram_bridge (
     // jmr_sram_port slave
     input  logic         req,
     input  logic         we,
-    input  logic [20:0]  addr,
+    input  logic [21:0]  addr,
     input  logic [15:0]  wdata,
     output logic [15:0]  rdata,
     output logic         ack,
@@ -53,7 +53,7 @@ module jmr_ddr3_sram_bridge (
     // 40 bursts/line = well inside the line budget. Writes to the cached
     // burst invalidate it.
     logic         cache_valid;
-    logic [17:0]  cache_base;   // addr[20:3]
+    logic [18:0]  cache_base;   // addr[21:3]
     logic [127:0] cache_data;
     // Run 53 (JMR_NOBURST reverts): single-entry BL8 WRITE-COMBINE
     // buffer, the write-side twin of the read cache above. The present
@@ -65,7 +65,7 @@ module jmr_ddr3_sram_bridge (
     // buffered block. Demand-flush is complete — every reader goes
     // through this port, so no timeout is needed and none is a wait.
     logic         wc_valid;
-    logic [17:0]  wc_base;      // addr[20:3]
+    logic [18:0]  wc_base;      // addr[21:3]
     logic [127:0] wc_data;
     logic [15:0]  wc_ben;       // bytes WRITTEN (flush mask = ~wc_ben)
 
@@ -76,7 +76,7 @@ module jmr_ddr3_sram_bridge (
     // because reads and writes shared the same scrambled transform) - the
     // burst cache below requires block == burst, so use the natural
     // mapping. DDR content is volatile; nothing persists across the change.
-    wire [28:0] ui_addr  = {8'd0, addr[20:3], 3'b000};
+    wire [28:0] ui_addr  = {7'd0, addr[21:3], 3'b000};
     wire [6:0]  bit_off  = {slot, 4'b0000};
     wire [4:0]  byte_lo  = {slot, 1'b0};
 
@@ -129,20 +129,20 @@ module jmr_ddr3_sram_bridge (
                     wdf_sent <= 1'b0;
                     if (req && !ack) begin
 `ifndef JMR_NOBURST
-                        if (we && (!wc_valid || addr[20:3] == wc_base)) begin
+                        if (we && (!wc_valid || addr[21:3] == wc_base)) begin
                             // write-combine: merge and ack same-cycle
                             wc_valid <= 1'b1;
-                            wc_base  <= addr[20:3];
+                            wc_base  <= addr[21:3];
                             wc_data[{addr[2:0], 4'b0000} +: 16] <= wdata;
                             wc_ben[{addr[2:0], 1'b0} +: 2] <= 2'b11;
                             if (!wc_valid) wc_ben <= 16'd0 | (16'b11 << {addr[2:0], 1'b0});
-                            if (addr[20:3] == cache_base) cache_valid <= 1'b0;
+                            if (addr[21:3] == cache_base) cache_valid <= 1'b0;
                             ack <= 1'b1;
                         end else if (we) begin
                             // different block: flush the buffer first;
                             // the held req is served on return to IDLE
                             state <= S_WFLUSH;
-                        end else if (wc_valid && addr[20:3] == wc_base) begin
+                        end else if (wc_valid && addr[21:3] == wc_base) begin
                             // read touching the buffered block: flush first
                             state <= S_WFLUSH;
                         end else
@@ -150,7 +150,7 @@ module jmr_ddr3_sram_bridge (
 `ifdef JMR_NOCACHE
                         if (1'b0) begin // read cache disabled (PACMAN-freeze A/B build)
 `else
-                        if (!we && cache_valid && addr[20:3] == cache_base) begin
+                        if (!we && cache_valid && addr[21:3] == cache_base) begin
 `endif
                             rdata <= cache_data[{addr[2:0], 4'b0000} +: 16];
                             ack   <= 1'b1;
@@ -168,7 +168,7 @@ module jmr_ddr3_sram_bridge (
                     // one masked BL8 burst carrying the whole combined block
                     // (UG586 hold-until-accept discipline, data first)
                     logic fcmd_ok, fwdf_ok;
-                    app_addr <= {8'd0, wc_base, 3'b000};
+                    app_addr <= {7'd0, wc_base, 3'b000};
                     app_cmd  <= CMD_WRITE;
                     app_wdf_data <= wc_data;
                     app_wdf_mask <= ~wc_ben;
@@ -223,7 +223,7 @@ module jmr_ddr3_sram_bridge (
                             app_en       <= 1'b0;
                             app_wdf_wren <= 1'b0;
                             app_wdf_end  <= 1'b0;
-                            if (addr[20:3] == cache_base) cache_valid <= 1'b0;
+                            if (addr[21:3] == cache_base) cache_valid <= 1'b0;
                             ack   <= 1'b1;
                             state <= S_IDLE;
                         end
@@ -233,7 +233,7 @@ module jmr_ddr3_sram_bridge (
                     if (app_rd_data_valid) begin
                         rdata <= app_rd_data[bit_off +: 16];
                         cache_data  <= app_rd_data;
-                        cache_base  <= addr[20:3];
+                        cache_base  <= addr[21:3];
                         cache_valid <= 1'b1;
                         ack   <= 1'b1;
                         state <= S_IDLE;

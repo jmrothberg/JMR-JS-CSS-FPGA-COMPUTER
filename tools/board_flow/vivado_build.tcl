@@ -113,6 +113,10 @@ puts "INFO: synth threads=$SYNTH_THREADS impl threads=$IMPL_THREADS synth_jobs=$
 # Font ROM next to scanout AND next to the VM ($readmemh is relative to .sv)
 file copy -force $ROOT/vectors/font_rom.hex $ROOT/rtl/video/font_rom.hex
 file copy -force $ROOT/vectors/font_rom.hex $ROOT/rtl/engines/font_rom.hex
+foreach desktop_mem {desktop_font.hex desktop_advance.hex desktop_labels.hex} {
+    file copy -force $ROOT/vectors/$desktop_mem $ROOT/rtl/engines/$desktop_mem
+    file copy -force $ROOT/vectors/$desktop_mem $ROOT/rtl/video/$desktop_mem
+}
 # NEW: INVADERS bytecode for jmr_js_vm $readmemh
 file copy -force $ROOT/vectors/invaders_jsb.hex $ROOT/rtl/engines/invaders_jsb.hex
 
@@ -129,6 +133,14 @@ proc jmr_ensure_file {path} {
   }
 }
 
+proc jmr_native_operand_gate {} {
+  set regs [get_cells -quiet -hierarchical -filter {NAME =~ *call_arg_q_reg* && IS_SEQUENTIAL}]
+  if {[llength $regs] == 0 || [llength [get_clocks -quiet vm_clk]] != 1} {
+    error "Native operand timing requires mapped argument registers and one VM clock"
+  }
+  puts "NATIVE_OPERAND_GATE registers=[llength $regs] vm_clock=1"
+}
+
 proc jmr_add_sources {ROOT} {
   set DVI $ROOT/third_party/digilent_rgb2dvi/src
   foreach f [list \
@@ -142,7 +154,26 @@ proc jmr_add_sources {ROOT} {
       $ROOT/rtl/video/jmr_rgb2dvi_wrap.vhd \
       $ROOT/rtl/video/jmr_text_hdmi_scanout.sv \
       $ROOT/rtl/video/font_rom.hex \
+      $ROOT/vectors/desktop_font.hex \
+      $ROOT/vectors/desktop_advance.hex \
+      $ROOT/vectors/desktop_labels.hex \
       $ROOT/rtl/engines/jmr_keyboard_fifo.sv \
+      $ROOT/rtl/video/jmr_mouse_overlay.sv \
+      $ROOT/rtl/engines/jmr_system_menu_pkg.sv \
+      $ROOT/rtl/engines/jmr_system_menu.sv \
+      $ROOT/rtl/engines/jmr_classic_ui_pkg.sv \
+      $ROOT/rtl/engines/jmr_classic_ui.sv \
+      $ROOT/rtl/engines/jmr_system_actions.sv \
+      $ROOT/rtl/engines/jmr_system_documents.sv \
+      $ROOT/rtl/video/jmr_classic_overlay.sv \
+      $ROOT/rtl/video/jmr_system_overlay.sv \
+      $ROOT/rtl/phys/jmr_ps2_mouse_host.sv \
+      $ROOT/rtl/phys/jmr_pointer_accumulator.sv \
+      $ROOT/rtl/engines/jmr_desktop_layout_pkg.sv \
+      $ROOT/rtl/engines/jmr_icon_stream.sv \
+      $ROOT/rtl/engines/jmr_desktop_disk.sv \
+      $ROOT/rtl/engines/jmr_desktop.sv \
+      $ROOT/rtl/engines/jmr_mouse_events.sv \
       $ROOT/rtl/engines/jmr_video_vram.sv \
       $ROOT/rtl/engines/jmr_console_engine.sv \
       $ROOT/rtl/engines/jmr_mini_fb.sv \
@@ -180,6 +211,15 @@ proc jmr_add_sources {ROOT} {
       $ROOT/constraints/nexys_video.xdc]] == 0} {
     add_files -fileset constrs_1 $ROOT/constraints/nexys_video.xdc
   }
+  # Native operands are held across the existing third call-warmup beat.
+  # This constraint needs mapped registers and the generated VM clock.
+  set native_xdc $ROOT/constraints/native_argument_pipeline.xdc
+  if {![file exists $native_xdc]} { error "Missing native operand timing constraint: $native_xdc" }
+  if {[llength [get_files -quiet -of_objects [get_filesets constrs_1] $native_xdc]] == 0} {
+    add_files -fileset constrs_1 $native_xdc
+  }
+  set_property USED_IN_SYNTHESIS false [get_files $native_xdc]
+  set_property PROCESSING_ORDER LATE [get_files $native_xdc]
 }
 
 if {$REUSE} {
@@ -415,6 +455,7 @@ if {[get_property PROGRESS [get_runs synth_1]] != "100%" ||
 }
 
 open_run synth_1
+jmr_native_operand_gate
 report_utilization -file $OUT/utilization_synth.rpt
 report_utilization -hierarchical -hierarchical_depth 3 -file $OUT/utilization_synth_hier.rpt
 write_checkpoint -force $OUT/post_synth.dcp
@@ -540,6 +581,7 @@ catch {report_timing -max_paths 100 -unique_pins -file $OUT/timing_dist.rpt}
 set wns [lindex [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -setup]] 0]
 set whs [lindex [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -hold]] 0]
 puts "TIMING WNS=$wns WHS=$whs"
+jmr_native_operand_gate
 if {$wns eq "" || $wns < 0} {
   puts "ERROR: timing not met (WNS=$wns) — refusing to publish .bit"
   # never-smash: the refused bit is still preserved, labeled with run stem

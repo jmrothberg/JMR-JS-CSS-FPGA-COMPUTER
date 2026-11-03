@@ -11,7 +11,7 @@ static void fail(const char* what, unsigned i) {
     std::fprintf(stderr, "FAIL %s at word %u\n", what, i); std::exit(1);
 }
 static unsigned run(bool stalled, bool clear, unsigned copies) {
-    constexpr unsigned words=153600, base=1480704;
+    constexpr unsigned words=153600, base=3577856;
     top.swap=!clear; top.clear_go=clear; tick();
     top.swap=0; top.clear_go=0;
     bool prior_ack=false;

@@ -61,6 +61,9 @@ class Machine:
         self.more_idle: Optional[Callable[[], None]] = None
         self._more_key: Optional[str] = None
         self._list_more_waiting: bool = False  # NEW: GUI more_waiting / ESC abort
+        # DIR pages onto the glass itself. type_line must not append that
+        # catalog again, or the last page scrolls off.
+        self._paged_on_glass: bool = False
         self.prompt_buf: str = ""  # live "> …" shown on glass
         self.break_requested: bool = False
         self.html_host: Optional[HtmlJsHost] = None
@@ -82,6 +85,15 @@ class Machine:
         # NEW: HTML RUN executes the serialized ProgramImage on the hardware
         # model. The functional Chunk is kept only for Architecture Monitor.
         self._hw_vm = None
+        self.system_window = [0,0,0,0]
+        self.system_menus = ''
+        self.system_about = None
+        self.system_viewport = False
+        self.system_compiling = False
+        self.system_stage = 0
+        self.system_progress = None
+        self._editor_resume = None
+        self.unnamed_document = False
 
     # --- boot / glass -------------------------------------------------
 
@@ -121,7 +133,7 @@ class Machine:
         pr = self.prompt_buf if self.prompt_buf else "> "
         self.canvas.paint_console_letterbox(
             self.console_log[-MONITOR_VISIBLE_ROWS:],
-            prompt=pr,
+            prompt=pr,color=0,prompt_color=0,background=1,
             cursor_on=cursor_on,
             cursor_col=cursor_col,
         )
@@ -170,13 +182,16 @@ class Machine:
             self.html_host = None
         # NEW: LIST MORE — GUI break_program push_key(ESC) then hard_break.
         # Do not clear the abort the waiter still has to observe.
+        # Do not print here. The waiter drops -- MORE -- and type_line
+        # prints one READY. A ^BREAK from both places scrolls the page
+        # and the first name leaves the glass. FPGA C_PROMPT is one READY.
         if more_abort:
             self.break_requested = True
             if self._more_key is None:
                 self._more_key = "\x1b"
-        else:
-            self.input.clear_escape()
-            self.break_requested = False
+            return
+        self.input.clear_escape()
+        self.break_requested = False
         # F3 leave: same STOP, no ^BREAK on glass. Esc still prints it.
         if not quiet:
             self._print("^BREAK")
@@ -214,12 +229,17 @@ class Machine:
         self.trace.edge("LINE", repr(line)[:120])
         self.console_log.append(f"> {line}")
         out = self.execute_line(line)
-        for row in out:
-            if row != READY:
-                self.console_log.append(row)
-                if row.startswith("ERROR") or row.startswith("?SN") or row.startswith("?FN"):
-                    self.trace.edge("ERROR", row[:160])
-                    self.trace.dump_ring("ERROR")
+        # DIR already printed each page and waited. Appending the returned
+        # names here would dump the rest of the catalog over the page.
+        paged = self._paged_on_glass
+        self._paged_on_glass = False
+        if not paged:
+            for row in out:
+                if row != READY:
+                    self.console_log.append(row)
+                    if row.startswith("ERROR") or row.startswith("?SN") or row.startswith("?FN"):
+                        self.trace.edge("ERROR", row[:160])
+                        self.trace.dump_ring("ERROR")
         # NEW: log glass after DIR/LOAD/LIST/SAVE (not just the typed line)
         u = line.strip().upper()
         if u == "DIR" or u.startswith("DIR") or u.startswith("LOAD") or u.startswith("SAVE") or u == "LIST" or u.startswith("LIST"):
@@ -236,6 +256,9 @@ class Machine:
             self.trace.edge("RUN", f"src={self.source_name!r}")
 
     def execute_line(self, line: str) -> List[str]:
+        # A previous DIR may have left this set. Only a DIR that actually
+        # paged turns it back on, after the return value is ready.
+        self._paged_on_glass = False
         text = line.strip()
         if self._edit_waiting is not None:
             return self._finish_edit(text)
@@ -255,15 +278,9 @@ class Machine:
                 pass
 
         if upper == "HELP":
-            return [
-                "DIR LOAD SAVE NEW LIST EDIT INSERT DELETE RUN MEM HELP CLS",
-                "DIR titles;  DIR *  also .JSH/.ART  REMOVE name",
-                "LOAD name   quotes optional;  e.g. LOAD INVADERS.HTML",
-                'e.g. LOAD INVADERS.JS   or   LOAD "PACMAN.HTML"',
-                "LIST / LIST -  pages with -- MORE -- (Space/Enter=next Esc=abort)",
-                "LIST 10-20  range;  EDIT n  then type new line + Enter",
-                "CLS  clears the glass;  Games: arrows + Space, ESC quit",
-            ]
+            # Same one line as RTL reply_char sel 0. Do not add a paragraph
+            # here. The long instructions are HELP.MD on the card.
+            return ["DIR LOAD SAVE NEW LIST EDIT READ RUN"]
         if upper == "DIR" or upper.startswith("DIR"):
             rest = upper[3:].strip()
             if rest and rest != "*":
@@ -273,7 +290,12 @@ class Machine:
             if not names:
                 return ["(empty)"]
             # PYTHON glass spec: names only (no DIR indices). FPGA-SIM same.
-            return list(names)
+            # Page like RTL C_DIRNW: 14 names, then -- MORE --. The next
+            # name is already known, so a catalog of exactly 14 does not
+            # print a phantom MORE. Space/Enter continues; Esc aborts.
+            shown = self._list_paged(list(names), hold_last=True)
+            self._paged_on_glass = True
+            return shown
         if upper.startswith("LOAD"):
             return self._cmd_load(text)
         if upper == "SAVE" or upper.startswith("SAVE "):
@@ -297,6 +319,10 @@ class Machine:
             # ordinary way would put its own text in SOURCE and it would
             # edit itself. "EDIT n" below stays the numbered-line editor.
             return self._cmd_edit_program()
+        if upper == "READ" or upper.startswith("READ "):
+            # READ "NAME.MD" loads that file, then chain-loads the reader
+            # against SOURCE. Bare READ shows whatever LOAD already parked.
+            return self._cmd_read(text)
         if upper.startswith("EDIT"):
             return self._cmd_edit(text)
         if upper.startswith("INSERT"):
@@ -451,31 +477,45 @@ class Machine:
         # Paged listing onto glass with -- MORE --
         return self._list_paged(lines)
 
-    def _list_paged(self, lines: List[str]) -> List[str]:
+    def _list_paged(self, lines: List[str], hold_last: bool = False) -> List[str]:
         """Print pages of LIST_PAGE_LINES glass ROWS; wait for key between pages.
 
         NEW: pre-wrap each line at the glass width (64 cols) and page by
         wrapped ROWS. A 15K-char data:image line used to wrap to ~245 rows at
         paint time, flooding the whole page past -- MORE -- (INVADERS "LIST
         truncates"; PACMAN pages scrolled their tops off the glass).
+
+        hold_last: DIR. Pause only when another row is still waiting, same
+        as RTL C_DIRNW. A catalog of exactly one page does not print MORE.
         """
         from .canvas_engine import CONSOLE_COLS
 
         shown: List[str] = []
         on_page = 0
-        for line in lines:
+        ate_nl = False
+        nlines = len(lines)
+        for li, line in enumerate(lines):
             text = line.replace("\t", " ")
             segs = [text[i : i + CONSOLE_COLS] for i in range(0, len(text), CONSOLE_COLS)] or [""]
-            for seg in segs:
+            nsegs = len(segs)
+            for si, seg in enumerate(segs):
                 self._print(seg)
                 on_page += 1
                 self.paint_monitor("")  # NEW: no `>` over LIST / MORE
-                if on_page >= LIST_PAGE_LINES:
+                more_follows = (si + 1 < nsegs) or (li + 1 < nlines)
+                if on_page >= LIST_PAGE_LINES and (more_follows or not hold_last):
                     self._print("-- MORE --")
                     self.paint_monitor("")
-                    if not self._await_list_more():
-                        self._print("^BREAK")
+                    # The Enter that submitted DIR/LIST is already queued.
+                    # Eat it once, or the first -- MORE -- never waits.
+                    if not self._await_list_more(eat_nl=not ate_nl):
+                        # Esc replaces -- MORE -- with the one READY that
+                        # type_line prints. Leaving MORE and adding ^BREAK
+                        # scrolls the first name off the 16-row glass.
+                        if self.console_log and self.console_log[-1] == "-- MORE --":
+                            self.console_log.pop()
                         return shown
+                    ate_nl = True
                     # remove MORE line from log for cleaner next page
                     if self.console_log and self.console_log[-1] == "-- MORE --":
                         self.console_log.pop()
@@ -483,12 +523,21 @@ class Machine:
             shown.append(line)
         return shown
 
-    def _await_list_more(self) -> bool:
+    def _await_list_more(self, eat_nl: bool = False) -> bool:
         """True = next page; False = abort (Esc). Pattern cite BASIC MORE."""
         self._more_key = None
         self._list_more_waiting = True
         polls = 0
         try:
+            if eat_nl:
+                # Keys already queued are not a page-turn. The Enter that
+                # submitted DIR is one of them. So are spaces the GUI pushed
+                # while a program was reading arrows. RTL's line editor
+                # consumed that CR before DIR started, so the first
+                # -- MORE -- waits. A stale space must not count as continue.
+                self._more_key = None
+                while self.input.pop_key() is not None:
+                    pass
             while True:
                 if self.break_requested or self.input.escape_pending:
                     self.break_requested = False
@@ -638,7 +687,8 @@ class Machine:
         body = "\n".join(self.source_lines)
         if body and not body.endswith("\n"):
             body += "\n"
-        self._stage_source(body)
+        if not getattr(self,'_editor_keep_source',False):self._stage_source(body)
+        self._editor_keep_source=False
         try:
             blob = self.storage.load_bytes("EDITOR.JSH")
         except FileNotFoundError:
@@ -649,9 +699,47 @@ class Machine:
         # notices below — a compiler program, by contrast, runs to completion
         # inside the chain driver and never needs a frame.
         self._edit_active = True
+        if self._editor_resume is not None:
+            row,col,top,left,role=self._editor_resume
+            self._editor_resume=None
+            for i,b in enumerate((82,69,83,1)):self._nat_stg_write(32+i,b)
+            for at,value in ((36,row),(40,col),(44,top),(48,left)):
+                for shift in range(4):self._nat_stg_write(at+shift,(int(value)>>(shift*8))&255)
+            self._nat_stg_write(52,role)
         # share_machine: COMPILE already does hw._m = self so srcByte sees
         # the staged title. EDIT must too — a fresh JsHwVm has srcLen=0 and
         # paints a blank page over whatever LOAD parked.
+        return self._start_html_image(
+            jsb_format.ProgramImage(blob), share_machine=True
+        )
+
+    def _cmd_read(self, text: str) -> List[str]:
+        """READ [name] — show a card file in the full-screen reader.
+
+        The reader is READ.JSH, chain-loaded the way EDIT launches the
+        editor, so SOURCE stays the document and not the reader's source.
+        """
+        rest = self._parse_filename(text[4:])
+        if rest:
+            loaded = self._cmd_load(f"LOAD {rest}")
+            if loaded and (
+                loaded[0].startswith("ERROR")
+                or loaded[0].startswith("?FN")
+                or loaded[0].startswith("?NH")
+            ):
+                return loaded
+        if not self.source_name or not self.source_lines:
+            return ["?NB"]
+        body = "\n".join(self.source_lines)
+        if body and not body.endswith("\n"):
+            body += "\n"
+        self._stage_source(body)
+        try:
+            blob = self.storage.load_bytes("READ.JSH")
+        except FileNotFoundError:
+            return ["?NH", "READ.JSH"]
+        self._cmp_reset()
+        self._edit_active = True
         return self._start_html_image(
             jsb_format.ProgramImage(blob), share_machine=True
         )
@@ -688,10 +776,19 @@ class Machine:
         The console owns storage, so a program asks for file work by status
         rather than reaching for it itself. Mirrors the RTL dispatch.
         """
+        if status==0x86:
+            name=[]
+            for i in range(16):
+                b=int(self._nat_stg_read(i))
+                if b in (0,32):break
+                name.append(chr(b))
+            if not name:return ['?FN']
+            self.source_name=''.join(name)
+            status=jsb_format.CMP_STATUS_SAVE
         if status == jsb_format.CMP_STATUS_SAVE:
             text = self._src_bytes[: self._src_len].decode("utf-8", "replace")
             self.storage.save_text(self.source_name, text)
-            self.source_lines = text.splitlines()
+            self.source_lines = text.splitlines() or ['']
             return ["SAVED " + self.source_name]
         if status == jsb_format.CMP_STATUS_DONE and self._cmp_len == 0:
             # Quit without saving. Minting here would truncate-open the
@@ -731,22 +828,28 @@ class Machine:
         hw.step_budget = 4_000_000_000
         sel = jsb_format.COMPILE_ENTRY
         first = entry
-        for _ in range(len(jsb_format.COMPILE_CHAIN) * 4):  # cheap runaway bound
-            name = first or jsb_format.COMPILE_CHAIN[sel]
-            first = None
-            blob = self.storage.load_bytes(name)
-            self._cmp_reset()
-            hw.load_image(jsb_format.ProgramImage(blob))
-            if hw.error:
-                raise RuntimeError(hw.error)
-            if not self._cmp_done:
-                raise RuntimeError(f"{name} ended without cdone()")
-            if self._cmp_status != jsb_format.CMP_STATUS_NEXT:
-                return self._cmp_status, self._cmp_message()
-            sel = int(self.sram.mem[jsb_format.cstg_word(jsb_format.CSTG_HDR_PROGSEL) * 2])
-            if sel >= len(jsb_format.COMPILE_CHAIN):
-                raise RuntimeError(f"PROGSEL {sel} out of range")
-        raise RuntimeError("compile chain did not terminate")
+        self.system_compiling=True
+        try:
+            for _ in range(len(jsb_format.COMPILE_CHAIN) * 4):  # cheap runaway bound
+                name = first or jsb_format.COMPILE_CHAIN[sel]
+                first = None
+                self.system_stage=jsb_format.COMPILE_CHAIN.index(name)
+                if self.system_progress:self.system_progress()
+                blob = self.storage.load_bytes(name)
+                self._cmp_reset()
+                hw.load_image(jsb_format.ProgramImage(blob))
+                if hw.error:
+                    raise RuntimeError(hw.error)
+                if not self._cmp_done:
+                    raise RuntimeError(f"{name} ended without cdone()")
+                if self._cmp_status != jsb_format.CMP_STATUS_NEXT:
+                    return self._cmp_status, self._cmp_message()
+                sel = int(self.sram.mem[jsb_format.cstg_word(jsb_format.CSTG_HDR_PROGSEL) * 2])
+                if sel >= len(jsb_format.COMPILE_CHAIN):
+                    raise RuntimeError(f"PROGSEL {sel} out of range")
+            raise RuntimeError("compile chain did not terminate")
+        finally:
+            self.system_compiling=False
 
     def _cmd_remove(self, text: str) -> List[str]:
         """REMOVE "NAME" — delete a file from the card. Matches RTL C_RM."""
@@ -884,6 +987,7 @@ class Machine:
         from hardware_model.js_vm import JsHwVm
 
         observed = image.decode()
+        self._cmp_reset()
         # Prompt/LIST Space must not arrive as the first game keydown.
         self.input.discard_queued_keys()
         self.html_host = None
@@ -904,7 +1008,7 @@ class Machine:
         self.canvas.clear_front(0)
         self.canvas.clear(0)
         hw = JsHwVm()
-        if share_machine:
+        if share_machine or 'systemWindow' in image.names:
             # One Machine: SOURCE + compile arena stay where LOAD staged them.
             # RUN of a title keeps a private _m (games do not read srcByte).
             hw._m = self
@@ -914,6 +1018,15 @@ class Machine:
         hw._m.input = self.input
         hw._m._sprites = list(self._sprites)
         hw.load_image(image)
+        self.system_window=hw._m.system_window
+        self.system_menus=hw._m.system_menus
+        self.system_about=hw._m.system_about
+        self.system_viewport=hw._m.system_viewport
+        if self.system_window[0]==5 and not share_machine:
+            self.source_name='UNTITLED.TXT';self.source_lines=[''];self.unnamed_document=True
+            self._editor_resume=(0,0,0,0,5)
+            return self._cmd_edit_program()
+        if self.system_window[0]:self._edit_active=True
         self._hw_vm = hw
         self.vm = hw._m.vm
         self.running = bool(hw.running) and not hw.error
@@ -1856,14 +1969,24 @@ class Machine:
         # The editor signals completion through cdone(); act on it and hand
         # the glass back, rather than leaving a finished program running.
         if getattr(self, "_edit_active", False) and self._cmp_done:
+            # F2/F5 already wrote the console log. The editor's last frame
+            # stays on the glass until _keep_fb drops, so the user never
+            # sees SAVED or OK and has to Esc. Paint READY over that frame.
             self._edit_active = False
+            self._cmp_done = False
             self.running = False
             self._bytecode_html = False
+            self._keep_fb = False
+            hw = getattr(self, "_hw_vm", None)
+            if hw is not None:
+                hw.running = False
+            self._hw_vm = None
             for line in self._finish_program_op(
                 self._cmp_status, self._cmp_message()
             ):
                 self._print(line)
             self._print(READY)
+            self.paint_monitor("> ")
             return
         # NEW: bytecode HTML path — fire key listeners + drain rAF
         if getattr(self, "_bytecode_html", False) and self.running:
@@ -1899,6 +2022,36 @@ class Machine:
             self._loop_chunk = None
             self.paint_monitor("> ")
 
+    def _draft_save_from_program(self, hw) -> None:
+        """Park a title's arena text as DRAFT.HTML after cdone(0x81)."""
+        hm = getattr(hw, "_m", None)
+        if hm is None or hm is self or not getattr(hm, "_cmp_done", False):
+            return
+        if (int(hm._cmp_status) & 0xFF) != jsb_format.CMP_STATUS_SAVE:
+            return
+        n = max(0, min(int(hm._cmp_len), 4000))
+        raw = bytearray()
+        for i in range(n):
+            word = jsb_format.cstg_word(i)
+            if word < 0:
+                break
+            raw.append(hm.sram.mem[word * 2] & 0xFF)
+        hm._cmp_done = False
+        text = bytes(raw).decode("utf-8", "replace")
+        if text and not text.endswith("\n"):
+            text += "\n"
+        self.storage.save_text("DRAFT.HTML", text)
+        self._stage_source(text)
+        self.source_name = "DRAFT.HTML"
+        self.source_lines = text.splitlines()
+        self.running = False
+        self._bytecode_html = False
+        self._keep_fb = False
+        self._hw_vm = None
+        self._print("SAVED DRAFT.HTML")
+        self._print(READY)
+        self.paint_monitor("> ")
+
     def _bytecode_html_frame(self) -> None:
         """NEW: one frame for HTML-as-bytecode — keys then rAF queue."""
         hw = getattr(self, "_hw_vm", None)
@@ -1913,6 +2066,11 @@ class Machine:
                 hw.canvas.present()
                 hw.canvas.dirty = False
                 self._keep_fb = True
+            # NOTE.HTML F2: cdone(0x81) from a running title (not EDIT, which
+            # shares this Machine and is handled above). Arena bytes 0..len
+            # become DRAFT.HTML and the loaded source, so COMPILE can mint it.
+            # The board still saves through EDIT; this is the simulator path.
+            self._draft_save_from_program(hw)
             return
         chunk = getattr(self, "_html_chunk", None)
         if chunk is None:

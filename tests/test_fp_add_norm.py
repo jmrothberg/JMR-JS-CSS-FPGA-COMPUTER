@@ -7,12 +7,39 @@ pass silently. Must be green before AND after the rewrite.
 """
 
 import sys
+import math
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tests.test_rtl_snippets import _fb_nz, _patch_js_v64, _sim, _vmstat_int
+
+
+@pytest.mark.parametrize('left,right', [
+    (1.0, 2.0**-53), (1.0, math.nextafter(2.0**-53, math.inf)),
+    (1.0, -math.nextafter(1.0, 0.0)),
+    (math.nextafter(1.0, math.inf), -1.0),
+    (2.0**-1022, -(2.0**-1022 - 5e-324)),
+    (5e-324, 5e-324), (5e-324, -5e-324),
+    (2.0**-1022, -5e-324), (2.0**-1022, 5e-324),
+    (1.7976931348623157e308, 1.7976931348623157e308),
+    (1.7976931348623157e308, -1.7976931348623157e308),
+    (-0.0, -0.0), (-0.0, 0.0),
+    (9007199254740992.0, 1.0), (9007199254740992.0, 3.0),
+    (-123456.75, 0.125), (0.1, 0.2),
+])
+def test_registered_add_sub_exact_number_checkpoints(left, right):
+    from tests.test_rtl_snippets import (
+        test_program_image_value64_number_checkpoint_matches_python_hm,
+    )
+    # Stored operands prevent compile-time folding. Both results feed
+    # immediate arithmetic consumers before their raw IEEE checkpoints.
+    test_program_image_value64_number_checkpoint_matches_python_hm(
+        f'var a={left!r};var b={right!r};var sum=a+b;var diff=a-b;'
+        'var again=sum-b;var reverse=diff+b;'
+    )
 
 
 def _run_v64(name: str, src: str, frames: int = 3):
@@ -104,3 +131,28 @@ function tick() {
 requestAnimationFrame(tick);
 """
     _run_v64("FPN4.JS", src)
+
+
+@pytest.mark.parametrize('seed', [730, 731, 732, 733])
+def test_registered_add_sub_mixed_exponents(seed):
+    import random
+    import struct
+    from tests.test_rtl_snippets import (
+        test_program_image_value64_number_checkpoint_matches_python_hm,
+    )
+    rng = random.Random(seed)
+    source = []
+    for index in range(4):
+        values = []
+        for _ in range(2):
+            bits = rng.getrandbits(64)
+            # Finite binary64 inputs spanning signs, exponents and mantissas.
+            if (bits >> 52) & 0x7ff == 0x7ff:
+                bits ^= 1 << 52
+            values.append(struct.unpack('>d', bits.to_bytes(8, 'big'))[0])
+        a, b = values
+        source.append(
+            f'var a{index}={a!r};var b{index}={b!r};'
+            f'var s{index}=a{index}+b{index};var d{index}=a{index}-b{index};'
+        )
+    test_program_image_value64_number_checkpoint_matches_python_hm(''.join(source))

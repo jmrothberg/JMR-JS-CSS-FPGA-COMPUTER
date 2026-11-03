@@ -27,6 +27,11 @@ window.JMR_SPR = ["DOOM3DFI-0.png", "DOOM3DFI-1.png", "DOOM3DFI-2.png", "DOOM3DF
 <script>
 var cvs = document.getElementById("c");
 var ctx = cvs.getContext("2d");
+// Shared application menu and About metadata; no private chrome.
+ctx.systemWindow=8;
+ctx.systemViewport=1;
+ctx.systemAbout="Doom 3D|Explore corridors in a first-person view.";
+
 ctx.imageSmoothingEnabled = false;
 var W = 640, H = 480;
 var PI = Math.PI, TAU = PI * 2, INV2PI = 1 / TAU;
@@ -683,6 +688,22 @@ function frame() {
 addEventListener("keydown", kd, false);
 addEventListener("keyup", ku, false);
 addEventListener("blur", clearKeys, false);
+// Mouse turns/looks; primary shoots, right walks forward, middle walks back.
+addEventListener("mousemove",function(e){
+  state.player.yaw=state.player.yaw+e.movementX*0.003;
+  state.player.pitch=Math.max(-0.6,Math.min(0.6,state.player.pitch-e.movementY*0.003));
+});
+addEventListener("mousedown",function(e){
+  if(e.button===0){if(state.over)reset();skip();keys.fire=true;fire();}
+  if(e.button===2)keys.up=true;
+  if(e.button===1)keys.dn=true;
+});
+addEventListener("mouseup",function(e){
+  if(e.button===0)keys.fire=false;
+  if(e.button===2)keys.up=false;
+  if(e.button===1)keys.dn=false;
+});
+
 fillLut();
 loadSpr();
 reset();

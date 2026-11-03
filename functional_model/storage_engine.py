@@ -15,12 +15,12 @@ from typing import List, Optional
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STORAGE = ROOT / "storage"
 DEFAULT_CARD = ROOT / "card.img"
-_HIDE_SUFFIX = {".JSH", ".JSB", ".ART", ".ARTX"}
+_HIDE_SUFFIX = {".JSH", ".JSB", ".ART", ".ARTX", ".ARTJS", ".ARJ", ".ICON", ".ICN"}
 # DIR is the catalog of TITLES. The self-hosted compiler's programs live on
 # the card as ordinary .HTML/.JSH pairs — that is what lets the machine one
 # day recompile its own compiler — but they are system software, not games,
 # and listing them buries the titles. Hidden by stem, so both halves go.
-_SYSTEM_STEMS = {"ARTSCAN", "ARTPNG", "COMPILER", "COMPIL2", "MINTASM", "EDITOR"}
+_SYSTEM_STEMS = {"ARTSCAN", "ARTPNG", "COMPILER", "COMPIL2", "MINTASM", "EDITOR", "READ"}
 # FAST rewrites renamed the three product titles. Tests/battery must not
 # hard-require INVADERS.HTML / PACMAN.HTML / DONKEY.HTML on disk.
 _TITLE_STEM_ALIASES = {
@@ -91,9 +91,9 @@ class StorageEngine:
             suf = p.suffix.upper()
             if all_files:
                 if suf in (".JS", ".HTML", ".HTM", ".PNG", ".DAT", ".JSH",
-                           ".JSB", ".ART", ".ARTX"):
+                           ".JSB", ".ART", ".ARTX", ".ARTJS", ".ARJ", ".MD", ".ICN", ".ICON"):
                     names.append(p.name)
-            elif suf in (".JS", ".HTML", ".HTM", ".PNG", ".DAT"):
+            elif suf in (".JS", ".HTML", ".HTM", ".PNG", ".DAT", ".MD"):
                 names.append(p.name)
         return names
 
@@ -113,6 +113,12 @@ class StorageEngine:
     def load_text(self, name: str) -> str:
         data = self.load_bytes(name)
         return data.decode("utf-8")
+
+    def program_icon(self, name: str):
+        """Optional disk sidecar, with the desktop's generic fallback."""
+        from functional_model.desktop_icons import read_program_icon
+
+        return read_program_icon(self.load_bytes, name)
 
     def load_bytes(self, name: str) -> bytes:
         if self.card_img is not None:

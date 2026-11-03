@@ -59,10 +59,18 @@ class SimBackend(RuntimeBackend):
         self._screen = ""
         self._started = False
         self._running = False  # NEW: RTL game_mode — skip prompt overlay
+        self._desktop_visible = False
+        self._desktop_busy = False
+        self._system_keyboard = False
+        self._ui_generation = -1
+        self._ui_overlays = []
+        self._native_action = 0
+        self._native_phase = 0
         self._more = False     # NEW: parked on -- MORE --
         self._listing = False  # LIST/DIR until READY — no '>' between pages
         self._paging = False   # push_key already pumping — do not nest Enter
-        self._editor_live = False  # bare EDIT: VM runs with game_mode=0
+        self._editor_live = False  # interactive editor/reader uses the VM
+        self._text_palette_synced = False
         self._typed_log: list[str] = []  # typed monitor rows; never drop them
         self._edit_prefill: Optional[str] = None
         self._loaded_name: str = ""
@@ -80,6 +88,7 @@ class SimBackend(RuntimeBackend):
             extra = f"# rtl_mtime={_SYNTH.stat().st_mtime:.0f}\n"
         self._log = FlightLog(self.name, extra_header=extra)
         self._kev_n = 0
+        self._mouse_protocol = None
         self._kev_codes: list = []
         self._play_t = 0.0
         self._play_frames = 0
@@ -389,11 +398,14 @@ class SimBackend(RuntimeBackend):
         cursor_col: Optional[int] = None,
     ) -> None:
         """RTL text path — HDMI letterbox (same geometry as PYTHON / BOARD)."""
+        if self._system_keyboard:
+            self._canvas.paint_console_letterbox(self._screen.splitlines(), prompt="",color=0,prompt_color=0,background=1)
+            return
         # Parked on -- MORE -- (or paging to the next MORE): never overlay '>'
         if self._more or self._screen_has_more():
             self._more = True
             lines = self._screen.splitlines()
-            self._canvas.paint_console_letterbox(lines, prompt="")
+            self._canvas.paint_console_letterbox(lines, prompt="",color=0,prompt_color=0,background=1)
             return
         pr = prompt if prompt is not None else "> "
         # PYTHON console_log is append-only in typed order. RTL SCREEN is
@@ -407,7 +419,7 @@ class SimBackend(RuntimeBackend):
             lines.pop()
         self._canvas.paint_console_letterbox(
             lines,
-            prompt=pr,
+            prompt=pr,color=0,prompt_color=0,background=1,
             cursor_on=cursor_on,
             cursor_col=cursor_col,
         )
@@ -426,6 +438,11 @@ class SimBackend(RuntimeBackend):
             if "ready=1" in st or last in ("READY",) or last.startswith("READY"):
                 self._listing = False
         self._running = "running=1" in st or self._editor_live
+        if self._use_rtl:
+            self._desktop_status()
+            if self._desktop_visible:
+                self._sync_palette()
+                return
         # game_mode OR the canvas editor (cmp_arm holds game_mode off).
         if self._running and resp.startswith("FB ") and len(resp.split(None, 3)) == 4:
             self._run_snap_done = False
@@ -478,6 +495,8 @@ class SimBackend(RuntimeBackend):
             if getattr(self, "_break_run_wait", False):
                 break
             st = self._rpc("STATUS?")
+            self._desktop_status()
+            self._paint_screen_local("")
             if "ready=1" in st:
                 break
             self._rpc("TICKN 20000")
@@ -491,11 +510,20 @@ class SimBackend(RuntimeBackend):
                         self._typed_log.append(last)
 
     def type_line(self, text: str) -> None:
+        if self._use_rtl:
+            if text.strip().upper() == "DESKTOP":
+                self._rpc("DESKTOP 1")
+                self._desktop_visible = True
+                return
+            self._rpc("DESKTOP 0")
+            self._desktop_visible = False
         self._log.type_line(text)
         # NEW: leave MORE before a new command (else first char advances the page)
         self._abort_more()
         stripped = text.strip()
         upper = stripped.upper()
+        if upper in ("EDIT","READ") or upper.startswith("LOAD"):
+            self._text_palette_synced = False
         # Mirror the monitor editor in the backend so RUN compiles the actual
         # loaded/editor source, including HTML larger than RTL SOURCE BRAM.
         if self._edit_waiting_line is not None:
@@ -950,17 +978,25 @@ class SimBackend(RuntimeBackend):
     def set_key_bits(self, bits: int) -> None:
         self._rpc(f"KEYBITS {bits}")
 
+    def set_mouse(self, x: int, y: int, buttons: int) -> bool:
+        if self._mouse_protocol is None:
+            self._mouse_protocol = self._use_rtl and self._rpc("MOUSE?") == "MOUSE 1"
+        if not self._mouse_protocol:
+            raise RuntimeError("This simulator has no mouse support; rebuild sim_server_synth.")
+        return self._rpc(f"MOUSE {int(x)} {int(y)} {int(buttons) & 7}") == "OK"
+
     def key_event(self, key_code: int, key: str, pressed: bool) -> None:
         # NEW: raw keyboard → RTL KEYEVT for every code. HTML decides bindings.
         # KEYBITS still tethers arrows/space; RTL skips synthetic keydown when
         # a KEYEVT is already queued (no double-fire).
-        self._rpc(f"KEYEVT {int(key_code) & 0xFF} {1 if pressed else 0}")
+        text = ord(key) if pressed and len(key) == 1 else 0
+        self._rpc(f"KEYEVT {int(key_code) & 0xFF} {1 if pressed else 0} {text & 255}")
 
     def paint_prompt(self, prompt: str, cursor_on: bool = False, cursor_col=None) -> None:
         if not self._started:
             self._start()
         # NEW: game owns the glass (BASIC method) — never overlay `>` on FB
-        if self._running or self._more or self._listing:
+        if self._running or self._more or self._listing or self._desktop_visible or self._system_keyboard:
             return
         if self._use_rtl:
             self._paint_screen_local(prompt, cursor_on=cursor_on, cursor_col=cursor_col)
@@ -1000,6 +1036,37 @@ class SimBackend(RuntimeBackend):
     def frame_tick(self) -> None:
         if not self._started:
             return
+        if self._use_rtl:
+            self._desktop_status()
+            live_status=self._rpc("STATUS?")
+            if "text_app=0" in live_status:
+                self._text_palette_synced=False
+            if "text_app=1" in live_status and "ready=0" in live_status:
+                if "vm_busy=1" in live_status and not self._text_palette_synced:
+                    self._sync_palette()
+                    self._text_palette_synced=True
+                self._editor_live=True
+                self._running=True
+            if self._desktop_visible or self._desktop_busy:
+                self._rpc("TICKN 100")
+                self._desktop_status()
+                self._rpc("FB?")
+                status = self._rpc("STATUS?")
+                was_running = self._running
+                self._running = "running=1" in status
+                if (self._native_action in (2,4,6) and self._native_phase==22
+                        and "vm_busy=1" in status):
+                    if not self._text_palette_synced:
+                        self._sync_palette()
+                        self._text_palette_synced=True
+                    self._editor_live = True
+                    self._running = True
+                if self._desktop_visible or self._running != was_running:
+                    self._sync_palette()
+                if not self._desktop_visible and not self._running:
+                    self._rpc("SCREEN?")
+                    self._paint_screen_local("")
+                return
         if self._editor_live:
             st = self._rpc("STATUS?")
             if "ready=1" in st:
@@ -1018,7 +1085,7 @@ class SimBackend(RuntimeBackend):
             resp = self._rpc("FRAME")
             if resp == "FB SAME":
                 self._arch_phase = "load"
-                self._rpc("TICKN 5000")
+                self._rpc("TICKN 100")
                 self._rpc("FB?")
             else:
                 self._arch_phase = "run"
@@ -1130,7 +1197,50 @@ class SimBackend(RuntimeBackend):
                 if last in ("READY",) or last.startswith("READY"):
                     self._paint_screen_local("> ")
         else:
-            self._rpc("TICK")
+            if self._system_keyboard:
+                self._rpc("TICKN 10")
+                self._sync_glass()
+            else:
+                self._rpc("TICK")
+
+    @property
+    def system_keyboard(self):
+        return self._system_keyboard
+
+    @property
+    def console_line(self):
+        for line in reversed(self._screen.splitlines()):
+            if line.lstrip().startswith("> "):
+                return line.lstrip()[2:].rstrip()
+        return ""
+
+    def console_key(self, char):
+        self._rpc(f"KEY {int(char)&255:02x}")
+
+    def _desktop_status(self):
+        state = parse_status_kv(self._rpc("DESKTOP?"))
+        self._desktop_visible = bool(state.get("active", 0))
+        self._desktop_busy = bool(state.get("busy", 0))
+        self._native_action = int(state.get("action",0))
+        self._native_phase = int(state.get("state",0))
+        ui = self._rpc(f"UISURFACE {self._ui_generation}").split()
+        if len(ui) >= 5 and ui[0] == "UI":
+            if ui[1] == "SAME":
+                self._system_keyboard = ui[4] == "1"
+            else:
+                self._ui_generation = int(ui[1])
+                self._system_keyboard = ui[3] == "1"
+                self._ui_overlays = []
+                for index in range(int(ui[4])):
+                    p = 5+index*5
+                    self._ui_overlays.append((*map(int,ui[p:p+4]),base64.b64decode(ui[p+4])))
+        overlay = self._rpc("OVERLAY?").split()
+        if len(overlay) == 5 and overlay[0] == "OVERLAY":
+            # These RGBA pixels come from the actual RTL overlay circuit.
+            self._canvas.display_overlays = self._ui_overlays + [
+                (620, 0, 20, 22, base64.b64decode(overlay[3])),
+                (int(overlay[1]), int(overlay[2]), 16, 16, base64.b64decode(overlay[4])),
+            ]
 
     # How many distinct consecutive IPs to capture per frame. IPTRACE records
     # a prefix of the frame — real work, not the park it ends on.

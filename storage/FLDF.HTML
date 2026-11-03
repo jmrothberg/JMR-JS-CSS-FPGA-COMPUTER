@@ -45,6 +45,11 @@ window.JMR_SPR = ["FLDF-0.png"];
    Esc is machine BREAK — do not steal it. */
 var cvs = document.getElementById("c");
 var ctx = cvs.getContext("2d");
+// Shared application menu and About metadata; no private chrome.
+ctx.systemWindow=8;
+ctx.systemViewport=1;
+ctx.systemAbout="Field Run TD|Build defenses against waves of enemies.";
+
 ctx.imageSmoothingEnabled = false;
 
 /* Chrome SFX: playSfx(packed). Packed = freq,vol,frames,slide,ch repeating.
@@ -1292,16 +1297,10 @@ addEventListener("keyup", function (e) {
   if (k === "Enter" || c === 13) fire2Held = 0;
 });
 
-function toLocalX(ev) {
-  var box;
-  box = cvs.getBoundingClientRect();
-  return (ev.clientX - box.left) * (640 / box.width);
-}
-function toLocalY(ev) {
-  var box;
-  box = cvs.getBoundingClientRect();
-  return (ev.clientY - box.top) * (480 / box.height);
-}
+// Canvas-local coordinates work on the native display and in a browser.
+// Native pointer events already use the canvas's 640x480 pixel space.
+function toLocalX(ev) { return ev.offsetX; }
+function toLocalY(ev) { return ev.offsetY; }
 
 cvs.addEventListener("mousemove", function (ev) {
   var p0, p1;

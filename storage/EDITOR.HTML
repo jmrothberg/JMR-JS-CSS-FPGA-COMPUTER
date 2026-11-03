@@ -22,7 +22,7 @@
   compiler, which leaves SOURCE untouched.
 
   Keys: arrows move, printable keys insert, Backspace deletes, Enter splits
-  a line, F2 saves (and leaves — the console owns SAVE; see doSave),
+  a line, F2 asks the system to save (File > Save also resumes editing),
   F3 pages up, F4 pages down, F5 quits without saving.
   Esc is machine BREAK — do not bind it here. GUI Ctrl-V paste is F6
   (arm) … ASCII bytes … F7 (disarm): keyCode 113 is both F2 and 'q', so
@@ -55,8 +55,8 @@ var ctx = document.querySelector("canvas").getContext("2d");
 
 var CW = 8;          // character cell
 var CH = 16;
-var COLS = 78;
-var ROWS = 27;
+var COLS = 70;
+var ROWS = 20;
 
 // ---- arena ---------------------------------------------------------------
 // A line index is built once and rebuilt after every structural edit; it is
@@ -68,10 +68,21 @@ var nLines = 0;
 var curLine = 0;
 var curCol = 0;
 var topLine = 0;
+var leftCol=0;
+var keepView=0;
+var longest=0;
+var editorRole=1;
+if(_gr(32)===82 && _gr(33)===69 && _gr(34)===83 && _gr(35)===1)editorRole=_gr(52);
+ctx.systemWindow=editorRole;
 var dirty = 0;
 var quit = 0;
 var saved = 0;
 var needDraw = 0;
+// Reuse the existing compile scratch arena: 4K clipboard, 4K single-edit undo.
+// Never keep a second document or allocate a font/screen image.
+var ED={a:-1,b:-1,drag:0,undo:0,at:0,removed:0,inserted:0,oldDirty:0,notice:0,ctrl:0};
+var CLIP=24584;
+var UNDO=32768;
 var pasteOn = 0;   // GUI Ctrl-V: F6…F7, so ASCII 113-122 is letters not F-keys
 
 // ---- shim ----------------------------------------------------------------
@@ -97,11 +108,13 @@ function reindex() {
   var n = srcLen();
   var p = 0;
   var k = 1;
+  var start=0;longest=0;
   _w32(LINE_OFF, 0);
   while (p < n && k < LINE_MAX) {
-    if (_sb(p) === 10) { _w32(LINE_OFF + k * 4, p + 1); k = k + 1; }
+    if (_sb(p) === 10) { if(p-start>longest)longest=p-start;start=p+1;_w32(LINE_OFF + k * 4, p + 1); k = k + 1; }
     p = p + 1;
   }
+  if(n-start>longest)longest=n-start;
   nLines = k;
 }
 
@@ -135,62 +148,102 @@ function shiftDown(at, by) {
   srcSetLen(n - by);
 }
 
-function insertByte(at, b) {
-  shiftUp(at, 1);
-  _sw(at, b);
-  dirty = 1;
+function hasSelection(){return ED.a>=0&&ED.b>=0&&ED.a!==ED.b;}
+function caretOffset(){return lineStart(curLine)+curCol;}
+function setCaret(at){
+  var r=0;
+  while(r+1<nLines && lineStart(r+1)<=at)r=r+1;
+  curLine=r;curCol=Math.min(lineLen(r),Math.max(0,at-lineStart(r)));
 }
-
-function deleteByte(at) {
-  shiftDown(at, 1);
-  dirty = 1;
+function clipLen(){
+  if(_gr(24576)!==67 || _gr(24577)!==76 || _gr(24578)!==80)return 0;
+  var n=_r32(24580);return n<=4096?n:0;
 }
+// mode 0: single byte; 1: clipboard; 2: undo data (without recording undo).
+function replaceRange(at,removeN,addN,mode,byte){
+  var n=srcLen(),i,delta=addN-removeN;
+  if(n+delta>65536){ED.notice=2;needDraw=1;return 0;}
+  if(mode!==2){
+    ED.undo=removeN<=4096?1:0;ED.at=at;ED.removed=removeN;ED.inserted=addN;ED.oldDirty=dirty;
+    if(ED.undo){i=0;while(i<removeN){_gw(UNDO+i,_sb(at+i));i=i+1;}}
+  }
+  if(delta>0){
+    i=n;while(i>at+removeN){i=i-1;_sw(i+delta,_sb(i));}
+    srcSetLen(n+delta);
+  }else if(delta<0){
+    i=at+removeN;while(i<n){_sw(i+delta,_sb(i));i=i+1;}
+    srcSetLen(n+delta);
+  }
+  i=0;while(i<addN){_sw(at+i,mode===0?byte:_gr((mode===1?CLIP:UNDO)+i));i=i+1;}
+  dirty=1;ED.notice=0;ED.a=-1;ED.b=-1;reindex();setCaret(at+addN);
+  keepView=0;needDraw=1;return 1;
+}
+function editCommand(k){
+  var a,b,n;
+  if(k<137||k>142)return 0;
+  ED.notice=0;
+  if(k===137){
+    if(ED.undo){a=ED.oldDirty;replaceRange(ED.at,ED.inserted,ED.removed,2,0);dirty=a;ED.undo=0;}
+  }else if(k===142){ED.a=0;ED.b=srcLen();setCaret(ED.b);}
+  else{
+    a=hasSelection()?Math.min(ED.a,ED.b):caretOffset();
+    b=hasSelection()?Math.max(ED.a,ED.b):a;n=b-a;
+    if(k===138||k===139){
+      if(n>4096){ED.notice=1;needDraw=1;return 1;}
+      if(n){
+        _gw(24576,67);_gw(24577,76);_gw(24578,80);_w32(24580,n);
+        b=0;while(b<n){_gw(CLIP+b,_sb(a+b));b=b+1;}
+        if(k===138)replaceRange(a,n,0,0,0);
+      }
+    }else if(k===140){b=clipLen();if(b)replaceRange(a,n,b,1,0);}
+    else if(k===141&&n)replaceRange(a,n,0,0,0);
+  }
+  needDraw=1;return 1;
+}
+function insertByte(at,b){replaceRange(at,0,1,0,b);}
+function deleteByte(at){replaceRange(at,1,0,0,0);}
 
 // ---- drawing -------------------------------------------------------------
-function drawLine(row, li) {
-  var s = lineStart(li);
-  var n = lineLen(li);
-  var c = 0;
-  var b = 0;
-  var y = row * CH + CH;
-  if (n > COLS) { n = COLS; }
-  while (c < n) {
-    b = _sb(s + c);
-    if (b >= 32 && b < 127) { ctx.fillText(G[b - 32], c * CW, y); }
-    c = c + 1;
+function drawLine(row,li){
+  var s=lineStart(li),n=lineLen(li),c=leftCol,b,y=92+row*CH+12,selected;
+  if(n>leftCol+COLS)n=leftCol+COLS;
+  while(c<n){
+    b=_sb(s+c);selected=hasSelection()&&s+c>=Math.min(ED.a,ED.b)&&s+c<Math.max(ED.a,ED.b);
+    if(selected){ctx.fillStyle="#1771FF";ctx.fillRect(28+(c-leftCol)*CW,94+row*CH,CW,CH);}
+    ctx.fillStyle=selected?"#FFFFFF":"#000000";
+    if(b>=32 && b<127)ctx.fillText(G[b-32],28+(c-leftCol)*CW,y);
+    c=c+1;
   }
 }
-
-function drawStatus() {
-  var y = ROWS * CH + CH;
-  ctx.fillStyle = "#FF0000";
-  ctx.fillText("LINE", 0, y);
-  ctx.fillText(curLine + 1, 40, y);
-  if (dirty) { ctx.fillText("*", 96, y); }
-  ctx.fillText("F2=SAVE  F3=PGUP  F4=PGDN  F5=QUIT", 160, y);
-  ctx.fillStyle = "#FFFFFF";
-}
-
-function redraw() {
-  var r = 0;
-  var li = 0;
-  if (curLine < topLine) { topLine = curLine; }
-  if (curLine >= topLine + ROWS) { topLine = curLine - ROWS + 1; }
-  ctx.fillStyle = "#000000";
-  ctx.fillRect(0, 0, 640, 480);
-  // cursor block first, so the character sits on top of it
-  ctx.fillStyle = "#0000FF";
-  ctx.fillRect(curCol * CW, (curLine - topLine) * CH + 3, CW, CH - 2);
-  ctx.fillStyle = "#FFFFFF";
-  while (r < ROWS) {
-    li = topLine + r;
-    if (li < nLines) { drawLine(r, li); }
-    r = r + 1;
+function redraw(){
+  var r=0,li;
+  if(!keepView){
+    if(curLine<topLine)topLine=curLine;
+    if(curLine>=topLine+ROWS)topLine=curLine-ROWS+1;
+    if(curCol<leftCol)leftCol=curCol;
+    if(curCol>=leftCol+COLS)leftCol=curCol-COLS+1;
   }
-  drawStatus();
-  // Present is gone: scanout / PYTHON present() read the draw bank. A
-  // swapBuffers here left the picture on FRONT and an empty BACK; the next
-  // frame present() copied that empty BACK over the glass (blank EDIT).
+  ctx.windowScroll=Math.floor(topLine*255/Math.max(1,nLines-ROWS));
+  ctx.windowScrollX=Math.floor(leftCol*255/Math.max(1,longest-COLS+1));
+  ctx.windowDirty=dirty+ED.undo*2+(clipLen()>0?4:0)+(hasSelection()?8:0)+ED.notice*16;
+  ctx.fillStyle="#FFFFFF";ctx.fillRect(24,88,576,344);
+  ctx.fillStyle="#000000";
+  while(r<ROWS){li=topLine+r;if(li<nLines)drawLine(r,li);r=r+1;}
+  ctx.fillStyle="#000000";
+  if(!hasSelection() && curLine>=topLine && curLine<topLine+ROWS && curCol>=leftCol && curCol<leftCol+COLS)
+    ctx.fillRect(28+(curCol-leftCol)*CW,94+(curLine-topLine)*CH,1,14);
+}
+// The shared window sends reserved system-widget keys. They move only the
+// viewport; ordinary arrows still move the insertion point.
+function windowKey(k){
+  if(k<128 || k>133)return 0;
+  if(k===128)topLine=Math.max(0,topLine-1);
+  if(k===129)topLine=Math.min(Math.max(0,nLines-ROWS),topLine+1);
+  if(k===130)topLine=Math.max(0,topLine-ROWS);
+  if(k===131)topLine=Math.min(Math.max(0,nLines-ROWS),topLine+ROWS);
+  if(k===132)leftCol=Math.max(0,leftCol-1);
+  if(k===133)leftCol=Math.min(Math.max(0,longest-COLS+1),leftCol+1);
+  keepView=1;needDraw=1;return 1;
 }
 
 // ---- keys ----------------------------------------------------------------
@@ -232,46 +285,46 @@ function bumpLines(from, by) {
   }
 }
 
-function typeChar(b) {
-  insertByte(lineStart(curLine) + curCol, b);
-  curCol = curCol + 1;
-  bumpLines(curLine + 1, 1);
+function typeChar(b){
+  var a=hasSelection()?Math.min(ED.a,ED.b):caretOffset();
+  var n=hasSelection()?Math.abs(ED.b-ED.a):0;
+  replaceRange(a,n,1,0,b);
+}
+function pressEnter(){typeChar(10);}
+function pressBack(){
+  if(hasSelection()){editCommand(141);return;}
+  var at=caretOffset();if(at>0)deleteByte(at-1);
 }
 
-function pressEnter() {
-  insertByte(lineStart(curLine) + curCol, 10);
-  curLine = curLine + 1;
-  curCol = 0;
-  reindex();
-}
-
-function pressBack() {
-  var at = 0;
-  if (curCol > 0) {
-    at = lineStart(curLine) + curCol - 1;
-    deleteByte(at);
-    curCol = curCol - 1;
-    reindex();
-  } else if (curLine > 0) {
-    at = lineStart(curLine) - 1;      // the newline joining us to the line above
-    curCol = lineLen(curLine - 1);
-    deleteByte(at);
-    curLine = curLine - 1;
-    reindex();
-  }
-}
-
-// F2 cannot "save and keep editing" from this file. The editor has no disk
-// native — the console owns FAT. cdone(0x81) is the ask to write SOURCE to
-// the loaded name, and the console treats every cdone as "this program is
-// finished" (halt, READY). Skipping cdone would stay here but not SAVE.
+// The system owns disk writes. Save the caret/viewport in 21 scratch bytes;
+// File > Save writes SOURCE and resumes this editor against the same document.
 function doSave() {
+  _gw(32,82);_gw(33,69);_gw(34,83);_gw(35,1);
+  _w32(36,curLine);_w32(40,curCol);_w32(44,topLine);_w32(48,leftCol);_gw(52,editorRole);
   saved = 1;
   cdone(129, 0, 0);
 }
 
 function onKey(e) {
   var k = e.keyCode;
+  if(k===17 || k===91){ED.ctrl=1;return;}
+  if(ED.ctrl){
+    if(k===65)editCommand(142);
+    if(k===67)editCommand(139);
+    if(k===88)editCommand(138);
+    if(k===86)editCommand(140);
+    if(k===90)editCommand(137);
+    return;
+  }
+  if(editCommand(k) || windowKey(k))return;
+  if(k>=37&&k<=40){ED.a=-1;ED.b=-1;}
+  keepView=0;
+  // Native printable text is distinct from browser keyCode (q is not F2).
+  // This also lets the mouse keyboard type case and punctuation faithfully.
+  if (e.charCode >= 32 && e.charCode < 127) {
+    typeChar(e.charCode); needDraw = 1; return;
+  }
+
   // F6/F7 wrap a GUI paste. Inside it, 32-126 are SOURCE bytes (so 'q' is
   // 113, not F2). FPGA-SIM KEYEVT is 8-bit keyCode only — no e.key.
   if (k === 117) { pasteOn = 1; }
@@ -301,7 +354,28 @@ function tick() {
 }
 
 reindex();
+if(_gr(32)===82 && _gr(33)===69 && _gr(34)===83 && _gr(35)===1){
+  curLine=Math.min(nLines-1,_r32(36));curCol=Math.min(lineLen(curLine),_r32(40));topLine=_r32(44);leftCol=_r32(48);_gw(32,0);
+}
 addEventListener("keydown", onKey);
+addEventListener("keyup",function(e){if(e.keyCode===17||e.keyCode===91)ED.ctrl=0;});
+function mouseCaret(e){
+  var line=Math.min(nLines-1,Math.max(0,topLine+Math.floor((e.clientY-92)/CH)));
+  curLine=line;curCol=Math.min(lineLen(line),leftCol+Math.max(0,Math.floor((e.clientX-28)/CW)));
+  keepView=0;needDraw=1;
+}
+addEventListener("mousedown",function(e){
+  if(e.button===0 && e.clientY>=92 && e.clientY<432 && e.clientX>=28 && e.clientX<588){
+    mouseCaret(e);ED.a=caretOffset();ED.b=ED.a;ED.drag=1;
+  }
+});
+addEventListener("mousemove",function(e){
+  if(ED.drag){mouseCaret(e);ED.b=caretOffset();}
+});
+addEventListener("mouseup",function(e){
+  if(ED.drag){mouseCaret(e);ED.b=caretOffset();ED.drag=0;}
+});
+
 redraw();
 requestAnimationFrame(tick);
 </script>

@@ -32,7 +32,8 @@ var G = [
 var ctx = document.querySelector("canvas").getContext("2d");
 ctx.imageSmoothingEnabled = false;
 
-var ROWS = 22;
+ctx.systemWindow=4;
+var ROWS = 18;
 var top = 0;
 var nFiles = 0;
 var nJsh = 0;
@@ -106,46 +107,30 @@ function drawName(p, x, y) {
   }
 }
 
-function draw() {
-  var i, p, y, sz;
-  ctx.fillStyle = "#000000";
-  ctx.fillRect(0, 0, 640, 480);
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "16px monospace";
-  ctx.textBaseline = "top";
-  ctx.fillText("CARD CATALOG", 8, 6);
-  if (!haveCat) {
-    ctx.fillStyle = "#ff6666";
-    ctx.fillText("No catalog (LOAD UTILITY.HTML then RUN on PYTHON).", 8, 40);
-    ctx.fillStyle = "#ffffee";
-    ctx.fillText("DIR hides .JSH. Esc = BREAK", 8, 72);
-    return;
+function draw(){
+  var i=0,p,y,sz;
+  ctx.windowScroll=Math.floor(top*255/Math.max(1,nFiles-ROWS));
+  ctx.windowScrollX=0;ctx.windowDirty=0;
+  ctx.fillStyle="#FFFFFF";ctx.fillRect(24,88,576,344);
+  ctx.font="8px monospace";ctx.textBaseline="alphabetic";ctx.fillStyle="#000000";
+  if(!haveCat){ctx.fillText("No card catalog is available.",28,108);return;}
+  ctx.fillText("NAME             BYTES",28,104);
+  ctx.fillText("FILES",360,104);ctx.fillText(nFiles,408,104);
+  ctx.fillText("JSH",464,104);ctx.fillText(nJsh,496,104);
+  while(i<ROWS){
+    p=recOff(top+i);if(p<0 || _gr(p)<=0)break;y=124+i*16;
+    if(isJshAt(p))ctx.fillStyle="#0055EE";else ctx.fillStyle="#000000";
+    drawName(p,28,y);sz=recSize(p);ctx.fillText(sz,228,y);i=i+1;
   }
-  ctx.fillText("FILES", 200, 6);
-  ctx.fillText(nFiles, 256, 6);
-  ctx.fillText("JSH", 360, 6);
-  ctx.fillText(nJsh, 400, 6);
-  ctx.fillStyle = "#888888";
-  ctx.fillText("NAME             BYTES", 8, 28);
-  i = 0;
-  while (i < ROWS) {
-    p = recOff(top + i);
-    if (p < 0 || _gr(p) <= 0) break;
-    y = 48 + i * 16;
-    if (isJshAt(p)) ctx.fillStyle = "#ffff66";
-    else ctx.fillStyle = "#ffffff";
-    drawName(p, 8, y);
-    sz = recSize(p);
-    ctx.fillText(sz, 200, y);
-    i = i + 1;
-  }
-  ctx.fillStyle = "#888888";
-  ctx.fillText("Up/Down scroll   Esc BREAK", 8, 460);
 }
 
 function onKey(e) {
   var c;
   c = e.keyCode;
+  if(c===116){cdone(0,0,0);return;}
+  if(c===128)c=38;if(c===129)c=40;
+  if(c===130){top=Math.max(0,top-ROWS);needDraw=1;return;}
+  if(c===131){top=Math.min(Math.max(0,nFiles-ROWS),top+ROWS);needDraw=1;return;}
   if (c === 38 || c === 87) {
     if (top > 0) top = top - 1;
     needDraw = 1;

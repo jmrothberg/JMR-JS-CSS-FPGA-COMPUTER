@@ -20,14 +20,90 @@ hygiene (copy 2 of hygiene: [FPGA_FIT.md](FPGA_FIT.md) NEVER +
 
 ## CURRENT STATE
 
+**2026-11-02 run73o completed at 03:02 EST:** the requested new `.bit` is
+`releases/current/fpga.bit` (run73o). It passes fresh
+full-route timing, pulse-width, resource and DRC-error gates. The owner flashed run73o to QSPI and reports it running fine. It is now the
+selected release; Oct26 run72b is retained in `releases/archive/` for rollback.
+Work stays in this existing repository on `main`; no new branches, repositories
+or worktrees. Root RTL matches immutable `build/run73/source_o/`.
+The late native-argument XDC guard was moved to supported Tcl (same actual
+timing intent); the release was independently requalified with the clean
+constraint. Final setup 0.000 ns (rounded, no extra margin), hold +0.040 ns,
+87,876 LUTs / 28,045 slices / 353.5 BRAM / 128 DSP. All 123,616 routable nets
+are routed; zero setup/hold/pulse failures and DRC errors. DRC warnings and
+unchanged timing-coverage warnings remain documented in the full reports.
+All 86 framebuffer RAMB36 Port A modes are READ_FIRST.
+
+Compared with identical Oct26 JSH bytes, bounded manual-frame native RTL
+DDR-model replays give 2.0050× median PACFAST / 2.3067× DNKF / 2.3557×
+DNKFAST, exact final RGB pixels, callback/swap/fault fields and Donkey
+final timestamps. This uses the real DDR bridge with modeled 25-cycle reads
+without HDMI contention, not measured board FPS. HDMI remains 60 Hz;
+Pac-Man p95 gain is 1.7386×. See `build/run73/ddr_comparison_o.json` and
+[the complete result](GAME_SPEEDUP_RESULTS.md#current-run73o--2026-11-02).
+The original uncontrolled startup-tick mismatch and controlled correction
+remain honestly retained in `ddr_comparison.json`.
+
+O passed 578 full-suite tests and the separately added timer conversion /
+arity test (579 distinct passes). Its five dedicated transfer benches pass
+including exact DDR front-image readback and stalls. The unused P variant
+also passed a full 579-test suite and all three DDR replays. P's converted
+native timer operand adds no measured gain over O, and O qualified first.
+P completed synthesis (26 MB DCP) and its resource gates before only its
+obsolete implementation/controller was stopped; see
+`hardware_p/stopped_after_synth.json`. **No Vivado build remains running.**
+
+The selected hardware uses VM divide-by-three with its actual 5 ns high
+pulse, pipelined exact addition, bounded multiply packing, fixed existing
+TOS/NOS arithmetic inputs, a single-writer method cache, native argument
+registers, packed ImageData, four-frame optional GC (pressure GC immediate),
+linear fill/ImageData stepping and staged changed-block display transfers.
+No game source, code/art capacity or live heap limit was reduced.
+
+Native operand timing proof: capture at warmup beat 2; beat 3 prepares the
+body; first body result capture is the next edge (two VM periods). Only
+mapped call_arg_q FFs to VM-clocked endpoints receive setup 2 / hold 1.
+Simulation checks operand age and instruction identity. No general opcode,
+stack, state or fast-domain multicycle exception was added.
+
+O's initial full route missed setup by 0.272 ns and exposed two cascade
+ADDR15 DRC errors from identical placer-generated address-LUT replicas.
+Finalization checks the exact LUT5 INIT and every input net before restoring
+those two shared address connections. Physical optimization and final
+`route_design -preserve` then pass full qualification. No DRC is waived.
+The checked recipes are `tools/board_flow/run73o_finalize.tcl`,
+`run73o_repair_cascade.tcl`, and `qualify_routed_bit.tcl`. Original and
+intermediate DCPs remain under `build/run73/`; release sources and evidence
+are bundled beside the bit.
+
+Preserved failed prototypes: G was below the 2× target; J routed with VM
+-4.465 ns (dynamic stack selection / remainder packing) and fast -2.337 ns
+(dirty lookup feedback); K completed stitched synthesis before its obsolete
+controller was stopped; M routed -1.352 ns and its post-route optimization
+still missed -1.328 ns; N routed -1.157 ns and optimized/rerouted -0.736 ns.
+These remain unqualified even if an implementation directory contains a bit.
+No live synthesis was killed and no completed checkpoint was deleted.
+
+Portability: `tools/check_port.py` exposes source/code/API limits;
+`tools/prepare_port.py` extracts embedded PNGs to a new directory only after
+byte-identical full program/art verification. `portable_DNKFAST.zip` keeps
+all six sheets while reducing HTML from 1,388,598 to 43,847 bytes. It fits the
+source window, not a complete on-machine language qualification. Remaining
+limits include 64 KB source, 80 KB compiled code/trailers, 16 sheets,
+2,961,408 art bytes, 16 locals/function, 960 live objects / 32 properties,
+arrays up to 128 elements and unsupported browser/JS APIs.
+
+The user explicitly rejected optional security/review choices. Do not ask
+that question again; the requested speed work is complete.
+
 **2026-10-26 USB keyboard/mouse failure:** the `USB_MOUSE=1` experiment
 disabled the owner's working J15 keyboard and did not satisfy combined
 keyboard/mouse support. See the [failed-approach record](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md)
 before any further mouse build. It does not supersede the standard below.
 
-## Current standard — 2026-10-26
+## Previous standard — run72b, 2026-10-26
 
-**run72b_game_speedup_WNS+0.238** is the user-selected standard. Native JS
+**run72b_game_speedup_WNS+0.238** was the previous user-selected standard; run73o is now selected. Native JS
 execution and full game features are retained. The accepted build has
 92,273 LUTs / 28,583 slices / 353.5 BRAM, setup +0.238 ns, hold +0.050 ns;
 routing took 35m48s. The user reports a working board/tether setup. Numeric

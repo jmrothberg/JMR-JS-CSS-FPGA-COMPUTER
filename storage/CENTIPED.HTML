@@ -67,6 +67,11 @@ window.JMR_SPR = ["CENTIPED-0.png", "CENTIPED-1.png", "CENTIPED-2.png", "CENTIPE
 "use strict";
 var cvs=document.getElementById("c");
 var ctx=cvs.getContext("2d");
+// Shared application menu and About metadata; no private chrome.
+ctx.systemWindow=8;
+ctx.systemViewport=1;
+ctx.systemAbout="Centipede|Defend the garden from crawling enemies.";
+
 ctx.imageSmoothingEnabled=false;
 var W=640,H=480;
 function rnd(x){return Math.floor(x+0.5);}
@@ -106,6 +111,19 @@ function setKey(e,val){
 window.addEventListener("keydown",function(e){setKey(e,true);});
 window.addEventListener("keyup",function(e){setKey(e,false);});
 window.addEventListener("blur",function(){clearKeys();});
+// Original mouse-style blaster control, retaining mushroom collision bounds.
+addEventListener("mousemove",function(e){
+  var x=clamp(e.clientX-16,6,W-26),y=clamp(e.clientY-16,BAND_TOP,H-28),i=0,m;
+  while(i<state.mushrooms.length){
+    m=state.mushrooms[i];
+    if(x+24>m.x&&x<m.x+SEG&&y+24>m.y&&y<m.y+SEG)return;
+    i=i+1;
+  }
+  if(state.player){state.player.x=x;state.player.y=y;}
+});
+addEventListener("mousedown",function(e){if(e.button===0){if(state.over)window.game.reset();keys.f=1;}});
+addEventListener("mouseup",function(e){if(e.button===0)keys.f=0;});
+
 
 // ---- state ----
 var state={score:0,lives:3,wave:1,over:false,player:null,bullets:[],chains:[],mushrooms:[],spider:null,flash:0,best:0,particles:[],shake:0,pops:[],scorePop:0};

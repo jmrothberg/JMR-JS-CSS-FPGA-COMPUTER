@@ -5,10 +5,79 @@ the execution engine. The fabric stays at 100 MHz and the VM divisor stays
 at seven. Heap capacities, language features, game rules, art, audio,
 resolution, and the persistent BRAM canvas are retained.
 
-## Standard release
+## Current run73o — 2026-11-02
+
+The selected file is `releases/current/fpga.bit` (run73o); its original
+`build/run73/release/` path remains a compatibility link.
+It is compared with the accepted **October 26 run72b**, not the older baseline
+used in the historical sections below. The owner subsequently flashed run73o to QSPI and reported it running fine.
+Run73o is now selected in `releases/current/`; run72b is preserved for rollback.
+
+Run73o keeps the fabric at 100 MHz and runs the native VM at 33.333 MHz
+(divide by three, actual 5 ns high pulse), versus run72b's 14.286 MHz.
+Registered exact addition, fixed cached stack operands, bounded multiply
+packing, a single-writer method cache, packed ImageData and changed-block
+presentation improve execution without changing the reference game sources
+or serialized JSH bytes. Optional frame GC runs every four frames;
+allocation-pressure collection stays immediate. Program and live-heap limits
+are unchanged.
+
+Using the real RTL DDR bridge with modeled 25-cycle MIG reads, identical
+Oct26 program bytes and bounded manual FRAME pulses, median fabric-clock
+processing gains are **2.0050× PACFAST**, **2.3067× DNKF**, and **2.3557×
+DNKFAST**. Their final RGB pixels, callback/swap/fault fields and Donkey
+final timestamps match. This model has no HDMI scanout contention. These
+are processing-capacity measurements, **not measured board FPS**; HDMI stays
+60 Hz, and Pac-Man p95 gain is 1.7386×, so doubling is not universal.
+`build/run73/ddr_comparison_o.json` and the raw replay files retain the data.
+
+The final fully routed release passes all specified timing constraints:
+setup **0.000 ns** (rounded; no extra setup margin), hold **+0.040 ns**,
+zero failing setup/hold/pulse-width endpoints, all 123,616 routable nets
+routed, and zero DRC **errors**. Utilization is 87,876 LUTs / 28,045 slices /
+353.5 BRAM / 128 DSP. All 86 framebuffer RAMB36 Port A modes are checked as
+READ_FIRST, which the changed-pixel comparison requires. Existing timing
+coverage warnings (16 no-clock checks, 2 unconstrained internal endpoints,
+20 input and 29 output ports without I/O delays) match run72b; DRC warnings
+remain in the full report. The owner reports it running fine after QSPI flashing; numeric board FPS
+and a separate cold-boot test have not been reported.
+
+The RTL passes the full 578-test O suite plus the added timer conversion /
+arity test on O (579 distinct passes; 12 skips, 2 existing xfails, one
+existing non-strict xpass). All five dedicated display-transfer benches
+pass, including complete DDR front-image readback under independent stalls.
+More than one million original/new multiply-pack bit comparisons pass.
+
+Finalization uses the saved O route and supported physical optimization.
+The placer cloned an address LUT independently for two halves of cascaded
+framebuffer RAMs. Before reconnecting the two upper ADDR15 pins to their
+shared net, the recipe checks identical LUT5 INIT and all five input nets.
+The final route preserves completed connections; full DRC then passes.
+No DRC severity is lowered and no new timing exception is added. The native
+argument setup-2/hold-1 path is confined to its checked warmup pipeline.
+
+Reproduce from a completed O routed checkpoint with
+`tools/board_flow/run73o_finalize.tcl` (arguments: repository root, input DCP,
+fresh output directory), then `tools/board_flow/qualify_routed_bit.tcl`
+(arguments: repository root, finalized DCP, fresh release directory, bit
+stem). Qualification checks the actual 30 ns / 5 ns VM waveform, 100 MHz
+fabric, native operands, READ_FIRST RAMs, resources, complete routing,
+setup/hold/pulse timing and zero DRC errors before writing the named bit.
+All completed failed/prototype checkpoints are preserved. No Vivado build
+is left running; P synthesis completed and was saved before stopping its
+obsolete implementation after O qualified.
+
+For easier ports, `tools/check_port.py` reports source versus compiled-code
+limits and known API gaps. `tools/prepare_port.py` extracts inline PNG art
+to a new directory only if the complete encoded program/art stays identical.
+The prepared `build/run73/portable_DNKFAST.zip` keeps all six sheets and
+reduces HTML from 1,388,598 to 43,847 bytes. It fits the 64 KB source window;
+this alone does not qualify the on-machine compiler's language support.
+
+## Previous standard release — run72b, 2026-10-26
 
 Promoted on 2026-10-26 at the user’s request after a reported working
-board/tether setup. [Standard release and persistent flash](STANDARD_RELEASE.md).
+board/tether setup. [Current release](STANDARD_RELEASE.md); [run72b rollback](../releases/archive/run72b-2026-10-26/README.md).
 The original build-time manifest’s “not programmed” status records its
 creation time; promotion is recorded in `releases/standard.json`. Numeric
 board FPS has not been measured.

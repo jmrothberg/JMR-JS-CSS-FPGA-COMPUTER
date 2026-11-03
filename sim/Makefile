@@ -13,6 +13,7 @@ BUILD := sim_build_synth
 #   make -C sim sim_server_synth THREADS=12 -B
 THREADS ?=
 VTHREADS := $(if $(THREADS),--threads $(THREADS),)
+JMR_SIM_PARAMS ?=
 FONT := $(ROOT)/vectors/font_rom.hex
 
 .PHONY: sim_server_synth font tb_uart_link tb_ft245 tb_ps2_rx tb_ps2_typing clean
@@ -94,6 +95,20 @@ sim_server_synth: $(BUILD)/jmr_js_sim_server
 	@echo "    already current if Make skipped Verilator. Force: make -C sim sim_server_synth -B"
 
 CORE_SRCS := \
+    $(RTL)/engines/jmr_system_menu_pkg.sv \
+    $(RTL)/engines/jmr_system_menu.sv \
+    $(RTL)/engines/jmr_classic_ui_pkg.sv \
+    $(RTL)/engines/jmr_classic_ui.sv \
+    $(RTL)/engines/jmr_system_actions.sv \
+    $(RTL)/engines/jmr_system_documents.sv \
+    $(RTL)/video/jmr_classic_overlay.sv \
+    $(RTL)/video/jmr_system_overlay.sv \
+    $(RTL)/video/jmr_mouse_overlay.sv \
+    $(RTL)/engines/jmr_desktop_layout_pkg.sv \
+    $(RTL)/engines/jmr_icon_stream.sv \
+    $(RTL)/engines/jmr_desktop_disk.sv \
+    $(RTL)/engines/jmr_desktop.sv \
+    $(RTL)/engines/jmr_mouse_events.sv \
 	$(RTL)/engines/jmr_keyboard_fifo.sv \
 	$(RTL)/engines/jmr_video_vram.sv \
 	$(RTL)/engines/jmr_console_engine.sv \
@@ -128,6 +143,8 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 	cp -f $(FONT) $(BUILD)/font_rom.hex
 	cp -f $(FONT) $(BUILD)/obj_dir/font_rom.hex
 	cp -f $(FONT) font_rom.hex
+	cp -f $(ROOT)/vectors/desktop_*.hex .
+	cp -f $(ROOT)/vectors/desktop_*.hex $(BUILD)/
 	# SD_RUN_DIV stays at the module default (clk/8). Overriding it to speed up
 	# DONKEY's fat .JSH load broke LOAD entirely: at clk/4 (DIV=1) and clk/2
 	# (DIV=0) the C++ card model in sim_main.cpp misses MOSI setup and every
@@ -138,6 +155,7 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 	# longer than a debugging cycle should ever be.
 	verilator -cc -exe -build -j 0 \
 		$(if $(JMR_SIM_DEFINES),$(patsubst %,+define+%,$(JMR_SIM_DEFINES))) \
+		$(patsubst %,-G%,$(JMR_SIM_PARAMS)) \
 		-Mdir $(BUILD)/obj_dir \
 		-o $(abspath $(BUILD)/jmr_js_sim_server) \
 		--top-module jmr_js_core \

@@ -10,6 +10,18 @@ module jmr_text_hdmi_scanout #(
     output logic [9:0]  vram_addr,
     input  logic [9:0]  cursor_cell,
     input  logic        game_mode,
+    input logic [9:0] mouse_x = 10'd320,
+    input logic [8:0] mouse_y = 9'd240,
+    input logic mouse_toggle = 1'b0,
+    input logic mouse_show_exit = 1'b0,
+    input logic system_menu=1'b0,system_keyboard=1'b0,system_about=1'b0,system_shift=1'b0,system_caps=1'b0,system_ctrl=1'b0,system_alt=1'b0,
+    input logic [6:0] system_pressed=7'd127,
+    input logic system_hold=1'b0,
+    input logic [31:0] system_window=32'd0,
+    input logic system_game_viewport=1'b0,system_ui_opaque=1'b0,
+    input logic [23:0] system_ui_rgb=24'd0,
+    input logic [69:0] system_held=70'd0,
+
     output logic [18:0] fb_raddr,
     // NEW 2026-08-23: raw beam position for the DDR3 line prefetcher
     // (avoids a divide-by-640 on the linear address).
@@ -72,6 +84,43 @@ module jmr_text_hdmi_scanout #(
     logic [7:0] bits;
     logic on_pix;
 
+    // Bundled-data CDC: source coordinates are held between mouse reports;
+    // capture after the toggle has crossed two pixel-clock synchronizers.
+    (* ASYNC_REG="TRUE" *) logic [2:0] mouse_sync;
+    (* ASYNC_REG="TRUE" *) logic [1:0] exit_sync;
+    logic [9:0] mouse_px;
+    logic [8:0] mouse_py;
+    logic overlay_opaque;
+    logic [23:0] overlay_rgb;
+    always_ff @(posedge pixel_clk) begin
+        if(!rst_n)begin mouse_sync<=0;exit_sync<=0;mouse_px<=320;mouse_py<=240;end
+        else begin
+            mouse_sync<={mouse_sync[1:0],mouse_toggle};
+            exit_sync<={exit_sync[0],mouse_show_exit};
+            if(mouse_sync[2]!=mouse_sync[1])begin mouse_px<=mouse_x;mouse_py<=mouse_y;end
+        end
+    end
+    jmr_mouse_overlay u_pointer_overlay (
+        .x(hx_q),.y(hy_q),.mouse_x(mouse_px),.mouse_y(mouse_py),
+        .show_pointer(1'b1),.opaque(overlay_opaque),.rgb(overlay_rgb)
+    );
+    (* ASYNC_REG="TRUE" *) logic [6:0] system_sync1,system_sync2;
+    (* ASYNC_REG="TRUE" *) logic [6:0] pressed_sync1,pressed_sync2;
+    (* ASYNC_REG="TRUE" *) logic [70:0] held_sync1,held_sync2;
+    logic system_opaque;
+    logic [23:0] system_rgb;
+    always_ff @(posedge pixel_clk)begin
+        if(!rst_n)begin system_sync1<=0;system_sync2<=0;pressed_sync1<=127;pressed_sync2<=127;held_sync1<=0;held_sync2<=0;end
+        else begin
+            system_sync1<={system_about,system_menu,system_keyboard,system_shift,system_caps,system_ctrl,system_alt};
+            system_sync2<=system_sync1;pressed_sync1<=system_pressed;pressed_sync2<=pressed_sync1;
+            held_sync1<={system_hold,system_held};held_sync2<=held_sync1;
+        end
+    end
+    // UI pixels are rendered by the core's two-stage pixel-clock circuit.
+    // The same circuit supplies UISURFACE in Verilator; no second renderer.
+    assign system_opaque=system_ui_opaque;
+    assign system_rgb=system_ui_rgb;
     wire visible = (hcnt < H_VISIBLE) && (vcnt < V_VISIBLE);
     wire signed [10:0] tx = $signed({1'b0, hcnt}) - ORIGIN_X;
     wire signed [10:0] ty = $signed({1'b0, vcnt}) - ORIGIN_Y;
@@ -137,7 +186,15 @@ module jmr_text_hdmi_scanout #(
             vid_pVSync <= (vcnt >= V_VISIBLE + V_FP) && (vcnt < V_VISIBLE + V_FP + V_SYNC);
             vid_pVDE   <= visible_q;
 
-            if (game_q && visible_q && (hx_q < 10'd640) && (hy_q < 10'd480)) begin
+            if (visible_q && overlay_opaque) begin
+                vid_pData <= overlay_rgb;
+            end else if(visible_q && system_opaque)begin
+                vid_pData<=system_rgb;
+            end else if(system_game_viewport && visible_q && hy_q>=22 && hy_q<24)begin
+                vid_pData<=0;
+            end else if(system_window[7:0]!=0 && !game_q && visible_q)begin
+                vid_pData=(in_text_q && on_pix)?24'h000000:24'hffffff;
+            end else if (game_q && visible_q && (hx_q < 10'd640) && (hy_q < 10'd480)) begin
                 vid_pData <= pal_rgb;
             end else if (in_text_q) begin
                 if (frame_div[5] && (cell_q == cursor_cell))

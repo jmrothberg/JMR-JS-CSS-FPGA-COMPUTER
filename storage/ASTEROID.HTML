@@ -8,6 +8,11 @@
 <script>
 var canvas = document.querySelector("canvas");
 var c = canvas.getContext("2d");
+// Shared application menu and About metadata; no private chrome.
+c.systemWindow=8;
+c.systemViewport=1;
+c.systemAbout="Asteroids|Pilot a ship through an asteroid field.";
+
 var W = 640;
 var H = 480;
 
@@ -481,6 +486,19 @@ addEventListener("keydown", function (e) {
 addEventListener("keyup", function (e) {
   keyOn(e, 0);
 });
+// Mouse turns the ship; primary fires/starts, right thrusts, middle warps.
+addEventListener("mousemove",function(e){ship.h=wrapN(ship.h+e.movementX*0.5,256);});
+addEventListener("mousedown",function(e){
+  if(e.button===0){if(mode===ATTRACT||mode===OVER)startGame();fireHeld=1;}
+  if(e.button===2)thrustHeld=1;
+  if(e.button===1)hyperHeld=1;
+});
+addEventListener("mouseup",function(e){
+  if(e.button===0)fireHeld=0;
+  if(e.button===2)thrustHeld=0;
+  if(e.button===1)hyperHeld=0;
+});
+
 
 function strokeClosed(pts, ox, oy, scale, h) {
   var n = pts.length;

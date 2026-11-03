@@ -1,0 +1,10 @@
+<!doctype html>
+<html><head><title>Note</title></head><body>
+<!-- System role 5 opens a new untitled note in the shared source editor.
+     The system owns File/Edit menus, saving, file dialogs and window close.
+     PYTHON prototype; RTL port follows approval of this interface. -->
+<canvas id="c" width="640" height="480"></canvas><script>
+var ctx=document.getElementById("c").getContext("2d");
+ctx.systemWindow=5;
+function tick(){requestAnimationFrame(tick);}requestAnimationFrame(tick);
+</script></body></html>

@@ -47,6 +47,9 @@ module storage_engine #(
     input  logic        start_dir,
     input  logic        start_dir_next,
     input  logic        dir_show_all = 1'b0, // DIR *: do not hide .JSH/.ART
+    input  logic        dir_show_system = 1'b0,
+    input  logic        dir_raw_names = 1'b0,
+    output logic [31:0] file_size_o,
     input  logic        start_delete,
 
     output logic [7:0]  line_len,         // bytes left in STORAGE_BUFFER
@@ -208,6 +211,7 @@ module storage_engine #(
     logic        in_ext;
 
     logic [31:0] f_first, f_size, f_pos;
+    assign file_size_o = f_size;
     logic [31:0] cur_clus, data_lba, buf_lba;
     logic [31:0] lba_off;  // NEW: pipeline (clus-2)<<spc then +data_start (WNS)
     logic [7:0]  sect_in_clus;
@@ -286,6 +290,8 @@ module storage_engine #(
     logic        cl_data_done; // NEW: CLOSE data-sector flush latch
     logic        cat_on /*verilator public_flat_rd*/;
     logic        cat_all; // latched at start_dir: 1 = DIR *
+    logic cat_system;
+    logic cat_raw;
 `ifdef VERILATOR
     integer dirtrace_fd = 0;
     state_t dirtrace_last;
@@ -352,7 +358,9 @@ module storage_engine #(
                  || (dent[0]=="C" && dent[1]=="O" && dent[2]=="M" && dent[3]=="P"
                   && dent[4]=="I" && dent[5]=="L" && dent[6]=="2" && dent[7]==8'h20)
                  || (dent[0]=="M" && dent[1]=="I" && dent[2]=="N" && dent[3]=="T"
-                  && dent[4]=="A" && dent[5]=="S" && dent[6]=="M" && dent[7]==8'h20);
+                  && dent[4]=="A" && dent[5]=="S" && dent[6]=="M" && dent[7]==8'h20)
+                 || (dent[0]=="R" && dent[1]=="E" && dent[2]=="A" && dent[3]=="D"
+                  && dent[4]==8'h20 && dent[5]==8'h20 && dent[6]==8'h20 && dent[7]==8'h20);
 
     // FAT entry byte offset inside its sector
     wire [9:0] fg_off = {fg_clus[6:0], 2'b00};
@@ -521,7 +529,7 @@ module storage_engine #(
             eof_r <= 1'b0; err_r <= 1'b0; done_r <= 1'b0;
             nl_acc <= 16'd0;
             bare_name <= 1'b0; alt_try <= 3'd0;
-            cat_on <= 1'b0; cat_all <= 1'b0; dir_yield <= 1'b0;
+            cat_on <= 1'b0; cat_all <= 1'b0; cat_system <= 1'b0; cat_raw <= 1'b0; dir_yield <= 1'b0;
             line_n <= 9'h0; line_pos <= 9'h0; fld_off <= 9'h0; fld_len <= 9'h0;
             cpy_i <= 9'h0;
             maddr <= 16'h0; mdata <= 8'h0; mbyte <= 8'h0;
@@ -604,6 +612,8 @@ module storage_engine #(
                         err_r <= 1'b0; eof_r <= 1'b0; fld_len <= 9'h0;
                         cat_on <= 1'b1;
                         cat_all <= dir_show_all;
+                        cat_system <= dir_show_system;
+                        cat_raw <= dir_raw_names;
                         // 2026-08-25: no forced remount. DIR was the ONLY
                         // command that re-initialized a live card (its board
                         // wedge slice); hot-swap is handled by card_present
@@ -1560,15 +1570,16 @@ module storage_engine #(
                         state  <= S_FIN;
                     end else if (dent[0] == 8'hE5 || dent[11] == 8'h0F || dent[11][3]) begin
                         state <= S_DIR_ADV; // skip
-                    end else if (dent_sys) begin
+                    end else if (dent_sys && !cat_system) begin
                         state <= S_DIR_ADV; // EDITOR/COMPILER/ARTSCAN — not titles
                     end else if (
                         !cat_all && (
                         (dent[8] == "J" && dent[9] == "S" && dent[10] == "H") ||
                         (dent[8] == "J" && dent[9] == "S" && dent[10] == "B") ||
-                        (dent[8] == "A" && dent[9] == "R" && dent[10] == "T")
+                        (dent[8] == "A" && dent[9] == "R" && (dent[10] == "T" || dent[10] == "J")) ||
+                        (dent[8] == "I" && dent[9] == "C" && dent[10] == "N")
                     )) begin
-                        state <= S_DIR_ADV; // hide .JSH/.JSB/.ART unless DIR *
+                        state <= S_DIR_ADV; // hide .JSH/.JSB/.ART/.ARJ/.ICN unless DIR *
                     end else begin
                         dent_i <= 5'd0;
                         line_n <= 9'h0;
@@ -1599,7 +1610,7 @@ module storage_engine #(
                             fld_off   <= 9'h0;
                             // NEW: include this cycle's optional ext byte in length
                             // .HTM on FAT → glass .HTML (PYTHON names)
-                            if (dent[8] == "H" && dent[9] == "T" && dent[10] == "M") begin
+                            if (!cat_raw && dent[8] == "H" && dent[9] == "T" && dent[10] == "M") begin
                                 // one strobe per beat: the "L" append takes
                                 // its own beat via dirfmt_l (write collision
                                 // with the ext byte above otherwise)

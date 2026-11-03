@@ -18,9 +18,14 @@ Default mint writes sound() (nid 42) into each .JSH. Pass -soundoff to
 stub those calls so an old bitstream that lacks the native does not
 fault 5. Chrome Web Audio (<script data-host=chrome>) is never minted.
 Pass -nojsh to leave title .JSH off the card so FPGA COMPILE can be
-tested (compiler-chain .JSH still minted). PNG / ARTJS stay on the host.
+tested (compiler-chain .JSH still minted). PNG stays on the host; source ARTJS is kept as ARJ on disk.
 
 Board FAT is 8.3 only — `NAME.HTML` becomes `NAME.HTM` via card_name_83.
+A title with no desktop icon is offered a picker (`tools/pick_icon.py`):
+a sprite from its `.ARTX`, or a built-in icon when the title has no
+picture. The choice is saved as `NAME.ICON` and lands on the card as
+`NAME.ICN`. A markdown file with no icon yet is in that picker. If none is chosen,
+it gets the text document icon.
 """
 
 from __future__ import annotations
@@ -69,10 +74,10 @@ FSINFO_SECTOR = 1
 # Card seeds: whatever sits in storage/ root. Stale sidecars on the HOST are
 # still skipped — the card's .JSH is MINTED here from the HTML at build time
 # (see compile_sidecars), never copied from storage/.
-# PNG / ARTJS stay on the host (STEM-N.png + make_artjs.py). The
-# machine reads .ARTX (8.3 → .ART). Do not copy those onto the card.
-_SKIP_SUFFIX = {".JSH", ".JSB", ".MD", ".MDC", ".TXT", ".JSON", ".PNG", ".ARTJS"}
-_KEEP_SUFFIX = {".HTML", ".HTM", ".JS", ".DAT", ".BIN", ".ARTX"}
+# PNG stays on the host. ARTX -> ART is runtime artwork; ARTJS -> ARJ
+# preserves source artwork separately for View > Hidden files.
+_SKIP_SUFFIX = {".JSH", ".JSB", ".MDC", ".JSON", ".PNG"}
+_KEEP_SUFFIX = {".HTML", ".HTM", ".JS", ".DAT", ".BIN", ".ARTX", ".ARTTX", ".ARTJS", ".TXT", ".MD"}
 
 
 def compile_sidecars(
@@ -151,6 +156,7 @@ def collect_storage_files(
         if not path.is_file() or path.name.startswith("."):
             continue
         suf = path.suffix.upper()
+        if path.name.upper()=="README.MD":continue # folder guide; HELP.MD is the on-card manual
         if suf in _SKIP_SUFFIX or suf not in _KEEP_SUFFIX:
             continue
         host = path.name
@@ -164,6 +170,18 @@ def collect_storage_files(
             print(f"note: {host} -> {card} on card (8.3)", file=sys.stderr)
         pairs[card] = path.read_bytes()
         hosts[card] = host
+    # Optional artwork is prepared separately from program/sprite files.
+    # Match host stems before 8.3 truncation, just like the programs above.
+    from tools.desktop_icons import collect_program_icons
+
+    programs = [host for host in hosts.values()
+                if Path(host).suffix.upper() in (".HTML", ".HTM", ".JS", ".MD")]
+    # A chosen markdown icon is kept. One that was never chosen gets the
+    # text document, so HELP.MD is not left on the generic window.
+    pairs.update(collect_program_icons(storage_dir, programs))
+    from tools.pick_icon import markdown_icon_files
+    for name, data in markdown_icon_files(programs):
+        pairs.setdefault(name, data)
     return [(name, data) for name, data in sorted(pairs.items())]
 
 
@@ -177,6 +195,8 @@ def card_name_83(host_name: str) -> str:
     stem, _, ext = host_name.rpartition(".")
     if not stem:  # no extension
         stem, ext = host_name, ""
+    if ext.upper()=="ARTJS":ext="ARJ"
+    elif ext.upper()=="ARTTX":ext="ART"
     return (stem[:8] + ("." + ext[:3] if ext else "")).upper()
 
 
@@ -466,6 +486,10 @@ def put_host_files_on_card(
                 if art.is_file():
                     pairs.append((card_name_83(art.name), art.read_bytes()))
                     break
+            art_source=src.with_suffix('.ARTJS')
+            if art_source.is_file():pairs.append((card_name_83(art_source.name),art_source.read_bytes()))
+            from tools.desktop_icons import collect_program_icons
+            pairs.extend(collect_program_icons(src.parent,[src.name]))
     if mint_jsh:
         pairs.extend(compile_sidecars(pairs))
     written: list[str] = []
@@ -475,7 +499,7 @@ def put_host_files_on_card(
     return written
 
 
-_PUT_EXTS = {".HTM", ".HTML", ".JS", ".JSH", ".JSB", ".ART", ".ARTX"}
+_PUT_EXTS = {".HTM", ".HTML", ".JS", ".JSH", ".JSB", ".ART", ".ARTX", ".MD", ".TXT", ".ICN", ".ARJ"}
 
 
 def list_card_put_files(img_path: Path | None = None) -> list[tuple[str, int]]:
@@ -498,7 +522,7 @@ def card_html_sidecars(name: str, available: set[str]) -> list[str]:
     stem = Path(u).stem[:8]
     have = {a.upper(): a for a in available}
     extra: list[str] = []
-    for side in (stem + ".ART", stem + ".JSH"):
+    for side in (stem + ".ART", stem + ".JSH", stem + ".ICN", stem + ".ARJ"):
         if side in have:
             extra.append(have[side])
     return extra
@@ -541,6 +565,10 @@ def create_image(
     image = format_fat32(size_bytes)
     pairs: list[tuple[str, bytes]] = []
     if include_storage:
+        # Ask only for titles that do not already have artwork. Headless
+        # runs leave a note; the machine draws the generic window for those.
+        from tools.pick_icon import ensure_choice
+        ensure_choice(STORAGE_DIR)
         pairs.extend(collect_storage_files())
     if files:
         # Explicit --files override same-named storage entries.

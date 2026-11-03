@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html><head><title>TANK</title></head>
+<body><canvas id="c" width="640" height="480"></canvas>
+<script>
+/* Single-player wireframe tank. Same fight as 3D_Network_Tank:
+   arrows drive, Q/Z raise the barrel, Space fires. 1 cannon,
+   2 minigun, 3 rocket (the same three guns as the pygame game;
+   driving over a gun cube selects it too). A hit throws a short
+   splatter. A kill shatters the hull, then the tank is gone.
+   Three red tanks turn toward you and shoot. Esc is the machine
+   BREAK, so it is not bound here. R starts the arena again. */
+var c = document.querySelector("canvas").getContext("2d");
+// Shared application menu and About metadata; no private chrome.
+c.systemWindow=8;
+c.systemViewport=1;
+c.systemAbout="Tank|Drive and fire in a tank battle arena.";
+
+var CX = [0,0.098,0.1951,0.2903,0.3827,0.4714,0.5556,0.6344,0.7071,0.773,0.8315,0.8819,0.9239,0.9569,0.9808,0.9952,1,0.9952,0.9808,0.9569,0.9239,0.8819,0.8315,0.773,0.7071,0.6344,0.5556,0.4714,0.3827,0.2903,0.1951,0.098,0,-0.098,-0.1951,-0.2903,-0.3827,-0.4714,-0.5556,-0.6344,-0.7071,-0.773,-0.8315,-0.8819,-0.9239,-0.9569,-0.9808,-0.9952,-1,-0.9952,-0.9808,-0.9569,-0.9239,-0.8819,-0.8315,-0.773,-0.7071,-0.6344,-0.5556,-0.4714,-0.3827,-0.2903,-0.1951,-0.098];
+var CZ = [1,0.9952,0.9808,0.9569,0.9239,0.8819,0.8315,0.773,0.7071,0.6344,0.5556,0.4714,0.3827,0.2903,0.1951,0.098,0,-0.098,-0.1951,-0.2903,-0.3827,-0.4714,-0.5556,-0.6344,-0.7071,-0.773,-0.8315,-0.8819,-0.9239,-0.9569,-0.9808,-0.9952,-1,-0.9952,-0.9808,-0.9569,-0.9239,-0.8819,-0.8315,-0.773,-0.7071,-0.6344,-0.5556,-0.4714,-0.3827,-0.2903,-0.1951,-0.098,0,0.098,0.1951,0.2903,0.3827,0.4714,0.5556,0.6344,0.7071,0.773,0.8315,0.8819,0.9239,0.9569,0.9808,0.9952];
+/* Unit box, 12 edges, each edge is x,y,z,x,y,z in -1..1. */
+var BOX = [-1,-1,-1,1,-1,-1, 1,-1,-1,1,1,-1, 1,1,-1,-1,1,-1, -1,1,-1,-1,-1,-1, -1,-1,1,1,-1,1, 1,-1,1,1,1,1, 1,1,1,-1,1,1, -1,1,1,-1,-1,1, -1,-1,-1,-1,-1,1, 1,-1,-1,1,-1,1, 1,1,-1,1,1,1, -1,1,-1,-1,1,1];
+var DG = ["0","1","2","3","4","5","6","7","8","9"];
+var frames = 0;
+var kUp = 0, kDn = 0, kLf = 0, kRt = 0, kQ = 0, kZ = 0, kFire = 0, kR = 0;
+var k1 = 0, k2 = 0, k3 = 0;
+var px = 200, pz = 200, hd = 0, barrel = 0, php = 100, pNext = 0, pscore = 0, pspeed = 2.2;
+/* 0 cannon, 1 minigun, 2 rocket. Same roles as the pygame tank. */
+var pgun = 0;
+var GSPD = [4.5, 7.2, 3.2], GLIFE = [80, 24, 120], GDMG = [20, 8, 60], GCOOL = [16, 5, 42];
+var ex = [40, 360, 360], ez = [40, 40, 360], eh = [0, 32, 48], ehp = [60, 60, 60], eNext = [0, 0, 0];
+var ox = [100, 170, 260, 320, 80, 220];
+var oz = [140, 300, 90, 250, 320, 200];
+var os = [11, 13, 10, 12, 10, 12];
+/* 0 health, 1 speed, 2 minigun, 3 rocket, 4 cannon. */
+var ux = [70, 300, 130, 250, 340];
+var uz = [250, 300, 80, 170, 90];
+var uk = [0, 1, 2, 3, 4], uon = [1, 1, 1, 1, 1];
+var NB = 10;
+var bx = [0,0,0,0,0,0,0,0,0,0], by = [0,0,0,0,0,0,0,0,0,0], bz = [0,0,0,0,0,0,0,0,0,0];
+var bdx = [0,0,0,0,0,0,0,0,0,0], bdy = [0,0,0,0,0,0,0,0,0,0], bdz = [0,0,0,0,0,0,0,0,0,0];
+var bwho = [0,0,0,0,0,0,0,0,0,0], bon = [0,0,0,0,0,0,0,0,0,0];
+var bkind = [0,0,0,0,0,0,0,0,0,0], bdmg = [0,0,0,0,0,0,0,0,0,0], blife = [0,0,0,0,0,0,0,0,0,0];
+var xx = [0,0,0,0,0,0], xz = [0,0,0,0,0,0], xk = [0,0,0,0,0,0];
+var xl = [0,0,0,0,0,0], xm = [0,0,0,0,0,0], xon = [0,0,0,0,0,0];
+var camx = 0, camy = 18, camz = 0, fdx = 0, fdz = 1, rdx = 1, rdz = 0;
+var SX = 0, SY = 0, SOK = 0, AX = 0, AY = 0, AZ = 0, AOK = 0;
+var WX = 0, WY = 0, WZ = 0;
+var over = 0, won = 0;
+var BSX = 4, BSY = 2, BSZ = 6, STCOL = "#66AAFF", STID = 1;
+var PEN = 0, CID = -1, TURCOL = "#DDDDDD", TURID = 5;
+
+function wrapH(h) {
+  if (h < 0) return 63;
+  if (h > 63) return 0;
+  return h;
+}
+
+function near2(x, z, tx, tz, r) {
+  var dx, dz;
+  dx = x - tx;
+  dz = z - tz;
+  return dx * dx + dz * dz < r * r;
+}
+
+/* 1 if a tank-sized body cannot stand here. skip is the enemy index, or -1. */
+function blocked(x, z, skip) {
+  var i;
+  if (x < 16 || z < 16 || x > 384 || z > 384) return 1;
+  i = 0;
+  while (i < 6) {
+    if (near2(x, z, ox[i], oz[i], os[i] + 8)) return 1;
+    i = i + 1;
+  }
+  /* skip < 0 is the player. An enemy must not drive through the player. */
+  if (skip >= 0 && near2(x, z, px, pz, 16)) return 1;
+  i = 0;
+  while (i < 3) {
+    if (i !== skip && ehp[i] > 0 && near2(x, z, ex[i], ez[i], 16)) return 1;
+    i = i + 1;
+  }
+  return 0;
+}
+
+function tryMove(x, z, h, spd, skip) {
+  var nx, nz;
+  nx = x + CX[h] * spd;
+  nz = z + CZ[h] * spd;
+  if (blocked(nx, nz, skip)) return 0;
+  if (skip < 0) { px = nx; pz = nz; }
+  else { ex[skip] = nx; ez[skip] = nz; }
+  return 1;
+}
+
+function spawnShot(x, z, h, br, who) {
+  var i, sp, kind;
+  i = 0;
+  kind = 0;
+  if (who === 1) kind = pgun;
+  while (i < NB) {
+    if (bon[i] === 0) {
+      sp = GSPD[kind];
+      bx[i] = x + CX[h] * 12;
+      by[i] = 6 + br * 0.6;
+      bz[i] = z + CZ[h] * 12;
+      bdx[i] = CX[h] * sp;
+      bdz[i] = CZ[h] * sp;
+      bdy[i] = br * 0.35;
+      bwho[i] = who;
+      bkind[i] = kind;
+      bdmg[i] = GDMG[kind];
+      blife[i] = GLIFE[kind];
+      bon[i] = 1;
+      if (kind === 1) sound(0, 1400, 5, 2, -20);
+      else if (kind === 2) sound(0, 220, 10, 8, -6);
+      else sound(0, 880, 8, 4, -30);
+      return;
+    }
+    i = i + 1;
+  }
+}
+
+/* kind 1 is a hit splatter. kind 2 is the death shatter. */
+function burst(x, z, kind) {
+  var i;
+  i = 0;
+  while (i < 6) {
+    if (xon[i] === 0) {
+      xx[i] = x;
+      xz[i] = z;
+      xk[i] = kind;
+      xm[i] = 8;
+      if (kind === 2) xm[i] = 24;
+      xl[i] = xm[i];
+      xon[i] = 1;
+      return;
+    }
+    i = i + 1;
+  }
+}
+
+function stepPlayer(j) {
+  var fwd, back, left, right;
+  if (over) {
+    if (kR) resetArena();
+    return;
+  }
+  fwd = kUp || (j & 1);
+  back = kDn || (j & 2);
+  left = kLf || (j & 4);
+  right = kRt || (j & 8);
+  /* Left is the pygame rotate(+angle): nose goes toward -X. */
+  if (left && (frames % 4) === 0) hd = wrapH(hd - 1);
+  if (right && (frames % 4) === 0) hd = wrapH(hd + 1);
+  if (kQ && barrel < 4 && (frames % 6) === 0) barrel = barrel + 1;
+  if (kZ && barrel > -2 && (frames % 6) === 0) barrel = barrel - 1;
+  if (k1) pgun = 0;
+  if (k2) pgun = 1;
+  if (k3) pgun = 2;
+  if (fwd) tryMove(px, pz, hd, pspeed, -1);
+  if (back) tryMove(px, pz, wrapH(hd + 32), pspeed * 0.7, -1);
+  if ((kFire || (j & 16)) && frames >= pNext) {
+    pNext = frames + GCOOL[pgun];
+    spawnShot(px, pz, hd, barrel, 1);
+  }
+}
+
+function stepOneEnemy(i) {
+  var dx, dz, dist2, dot, L, R, ld, rd;
+  if (ehp[i] <= 0) return;
+  dx = px - ex[i];
+  dz = pz - ez[i];
+  dist2 = dx * dx + dz * dz;
+  dot = CX[eh[i]] * dx + CZ[eh[i]] * dz;
+  L = wrapH(eh[i] + 1);
+  R = wrapH(eh[i] - 1);
+  ld = CX[L] * dx + CZ[L] * dz;
+  rd = CX[R] * dx + CZ[R] * dz;
+  if ((frames % 5) === 0) {
+    if (ld > dot && ld >= rd) eh[i] = L;
+    else if (rd > dot) eh[i] = R;
+  }
+  /* Fire when the nose is close to the player, or at random when roughly aimed. */
+  if (frames >= eNext[i]) {
+    if (dot > 0 && (dot * dot > dist2 * 0.85 || dist2 < 900)) {
+      eNext[i] = frames + 28;
+      spawnShot(ex[i], ez[i], eh[i], 0, 0);
+    }
+  }
+  if ((frames % 2) === 0) tryMove(ex[i], ez[i], eh[i], 1.1, i);
+}
+
+function stepEnemies() {
+  var i;
+  if (over) return;
+  i = 0;
+  while (i < 3) {
+    stepOneEnemy(i);
+    i = i + 1;
+  }
+}
+
+function hitTank(x, z, y, who, dmg) {
+  var i;
+  if (y < 0 || y > 14) return 0;
+  if (who === 0 && php > 0 && near2(x, z, px, pz, 12)) {
+    php = php - dmg;
+    if (php <= 0) {
+      php = 0;
+      over = 1;
+      won = 0;
+      burst(px, pz, 2);
+    } else burst(px, pz, 1);
+    sound(0, 160, 8, 4, -40);
+    return 1;
+  }
+  if (who === 1) {
+    i = 0;
+    while (i < 3) {
+      if (ehp[i] > 0 && near2(x, z, ex[i], ez[i], 12)) {
+        ehp[i] = ehp[i] - dmg;
+        pscore = pscore + dmg;
+        if (ehp[i] <= 0) {
+          ehp[i] = 0;
+          burst(ex[i], ez[i], 2);
+        } else burst(ex[i], ez[i], 1);
+        sound(0, 160, 8, 4, -40);
+        return 1;
+      }
+      i = i + 1;
+    }
+  }
+  return 0;
+}
+
+function hitObstacle(x, z) {
+  var i;
+  i = 0;
+  while (i < 6) {
+    if (near2(x, z, ox[i], oz[i], os[i])) return 1;
+    i = i + 1;
+  }
+  return 0;
+}
+
+function stepBullets() {
+  var i, x, z, y;
+  i = 0;
+  while (i < NB) {
+    if (bon[i]) {
+      x = bx[i] + bdx[i];
+      y = by[i] + bdy[i];
+      z = bz[i] + bdz[i];
+      bx[i] = x; by[i] = y; bz[i] = z;
+      blife[i] = blife[i] - 1;
+      if (blife[i] <= 0 || x < 0 || z < 0 || x > 400 || z > 400 || y < 0 || y > 40) bon[i] = 0;
+      else if (hitObstacle(x, z) || hitTank(x, z, y, bwho[i], bdmg[i])) bon[i] = 0;
+    }
+    i = i + 1;
+  }
+}
+
+function stepPickups() {
+  var i, left;
+  if (over) return;
+  left = 0;
+  i = 0;
+  while (i < 3) {
+    if (ehp[i] > 0) left = left + 1;
+    i = i + 1;
+  }
+  i = 0;
+  while (i < 5) {
+    if (uon[i] && near2(px, pz, ux[i], uz[i], 12)) {
+      uon[i] = 0;
+      if (uk[i] === 0) {
+        php = php + 40;
+        if (php > 100) php = 100;
+      } else if (uk[i] === 1) {
+        pspeed = pspeed + 0.4;
+        if (pspeed > 4) pspeed = 4;
+      } else if (uk[i] === 2) pgun = 1;
+      else if (uk[i] === 3) pgun = 2;
+      else pgun = 0;
+    }
+    i = i + 1;
+  }
+  if (left === 0) { over = 1; won = 1; }
+}
+
+function stepBursts() {
+  var i;
+  i = 0;
+  while (i < 6) {
+    if (xon[i]) {
+      xl[i] = xl[i] - 1;
+      if (xl[i] <= 0) xon[i] = 0;
+    }
+    i = i + 1;
+  }
+}
+
+function resetArena() {
+  var i;
+  px = 200; pz = 200; hd = 0; barrel = 0; php = 100; pspeed = 2.2; pscore = 0; pNext = 0;
+  pgun = 0;
+  ex[0] = 40; ez[0] = 40; eh[0] = 8;
+  ex[1] = 360; ez[1] = 40; eh[1] = 24;
+  ex[2] = 360; ez[2] = 360; eh[2] = 40;
+  i = 0;
+  while (i < 3) { ehp[i] = 60; eNext[i] = 20; i = i + 1; }
+  i = 0;
+  while (i < 5) { uon[i] = 1; i = i + 1; }
+  i = 0;
+  while (i < NB) { bon[i] = 0; i = i + 1; }
+  i = 0;
+  while (i < 6) { xon[i] = 0; i = i + 1; }
+  over = 0; won = 0;
+}
+
+function project(x, y, z) {
+  var dx, dy, dz, sx, sy, dep;
+  dx = x - camx;
+  dy = y - camy;
+  dz = z - camz;
+  sx = dx * rdx + dz * rdz;
+  sy = dy;
+  dep = dx * fdx + dz * fdz;
+  SOK = 0;
+  if (dep > 2) {
+    SX = 320 + sx * 340 / dep;
+    SY = 240 - sy * 340 / dep;
+    if (SX > -80 && SX < 720 && SY > -80 && SY < 560) SOK = 1;
+  }
+}
+
+/* One stroke per color. A fresh beginPath per edge was most of the frame. */
+function ink() {
+  if (PEN === 0) return;
+  c.stroke();
+  PEN = 0;
+  CID = -1;
+}
+
+function seg(x0, y0, z0, x1, y1, z1) {
+  project(x0, y0, z0);
+  AX = SX; AY = SY; AOK = SOK;
+  project(x1, y1, z1);
+  if (AOK === 0 || SOK === 0) return;
+  if (PEN === 0 || CID !== STID) {
+    if (PEN === 1) c.stroke();
+    c.beginPath();
+    c.strokeStyle = STCOL;
+    CID = STID;
+    PEN = 1;
+  }
+  c.moveTo(AX, AY);
+  c.lineTo(SX, SY);
+}
+
+function place(x, z, h, lx, ly, lz) {
+  var fx, fz, rx, rz;
+  fx = CX[h];
+  fz = CZ[h];
+  rx = fz;
+  rz = -fx;
+  WX = x + rx * lx + fx * lz;
+  WY = ly;
+  WZ = z + rz * lx + fz * lz;
+}
+
+function drawBox(x, z, h, yb) {
+  var i, a, b, p, d, e, f;
+  a = x - camx;
+  b = z - camz;
+  if (a * fdx + b * fdz < -16) return;
+  i = 0;
+  while (i < 72) {
+    a = BOX[i] * BSX;
+    b = BOX[i + 1] * BSY + yb;
+    p = BOX[i + 2] * BSZ;
+    d = BOX[i + 3] * BSX;
+    e = BOX[i + 4] * BSY + yb;
+    f = BOX[i + 5] * BSZ;
+    place(x, z, h, a, b, p);
+    AX = WX; AY = WY; AZ = WZ;
+    place(x, z, h, d, e, f);
+    seg(AX, AY, AZ, WX, WY, WZ);
+    i = i + 6;
+  }
+}
+
+function drawTank(x, z, h, br, col) {
+  var bx0, bz0;
+  STCOL = col;
+  BSX = 5; BSY = 2.2; BSZ = 7;
+  drawBox(x, z, h, 3);
+  STCOL = TURCOL;
+  STID = TURID;
+  BSX = 3.2; BSY = 1.4; BSZ = 3.2;
+  drawBox(x, z, h, 6.2);
+  place(x, z, h, 0, 6.5, 2);
+  bx0 = WX; bz0 = WZ;
+  place(x, z, h, 0, 6.5 + br * 0.8, 16);
+  seg(bx0, 6.5, bz0, WX, WY, WZ);
+}
+
+function drawGround() {
+  var g;
+  STCOL = "#1E7A32";
+  STID = 1;
+  g = 0;
+  while (g <= 400) {
+    seg(g, 0, 0, g, 0, 400);
+    seg(0, 0, g, 400, 0, g);
+    g = g + 80;
+  }
+}
+
+function drawObstacles() {
+  var i;
+  STCOL = "#3DDC5A";
+  STID = 2;
+  i = 0;
+  while (i < 6) {
+    BSX = os[i]; BSY = os[i]; BSZ = os[i];
+    drawBox(ox[i], oz[i], 0, os[i]);
+    i = i + 1;
+  }
+}
+
+function drawShots() {
+  var i;
+  i = 0;
+  while (i < NB) {
+    if (bon[i]) {
+      STCOL = "#FFFFFF";
+      STID = 8;
+      if (bkind[i] === 1) { STCOL = "#AA66FF"; STID = 9; }
+      if (bkind[i] === 2) { STCOL = "#FF66CC"; STID = 10; }
+      seg(bx[i], by[i], bz[i], bx[i] - bdx[i], by[i] - bdy[i], bz[i] - bdz[i]);
+    }
+    i = i + 1;
+  }
+}
+
+function drawPickups() {
+  var i;
+  i = 0;
+  while (i < 5) {
+    if (uon[i]) {
+      STCOL = "#FFAA33";
+      STID = 11;
+      if (uk[i] === 1) { STCOL = "#33EEFF"; STID = 13; }
+      if (uk[i] === 2) { STCOL = "#AA66FF"; STID = 9; }
+      if (uk[i] === 3) { STCOL = "#FF66CC"; STID = 10; }
+      if (uk[i] === 4) { STCOL = "#DDDDDD"; STID = 5; }
+      BSX = 4; BSY = 4; BSZ = 4;
+      drawBox(ux[i], uz[i], 0, 4);
+    }
+    i = i + 1;
+  }
+}
+
+function drawBursts() {
+  var i, h, len, x0, z0, x1, z1;
+  i = 0;
+  while (i < 6) {
+    if (xon[i]) {
+      h = 0;
+      if (xk[i] === 2) {
+        /* Hull plates fly out from where the tank was. */
+        len = 8 + (xm[i] - xl[i]) * 1.4;
+        STCOL = "#FF3311";
+        STID = 12;
+        while (h < 64) {
+          x0 = xx[i] + CX[h] * len;
+          z0 = xz[i] + CZ[h] * len;
+          x1 = x0 + CX[wrapH(h + 16)] * 5;
+          z1 = z0 + CZ[wrapH(h + 16)] * 5;
+          seg(x0, 2, z0, x1, 4, z1);
+          seg(x0, 1, z0, x0, 8, z0);
+          h = h + 8;
+        }
+      } else {
+        /* Short spray on a hit that did not kill. */
+        len = 5 + (xm[i] - xl[i]) * 1.6;
+        STCOL = "#FFAA33";
+        STID = 11;
+        while (h < 64) {
+          x0 = xx[i] + CX[h] * len;
+          z0 = xz[i] + CZ[h] * len;
+          seg(xx[i], 5, xz[i], x0, 7, z0);
+          h = h + 8;
+        }
+      }
+    }
+    i = i + 1;
+  }
+}
+
+function shatterOn() {
+  var i;
+  i = 0;
+  while (i < 6) {
+    if (xon[i] && xk[i] === 2) return 1;
+    i = i + 1;
+  }
+  return 0;
+}
+
+function setCam() {
+  fdx = CX[hd];
+  fdz = CZ[hd];
+  rdx = fdz;
+  rdz = -fdx;
+  camx = px - fdx * 70;
+  camz = pz - fdz * 70;
+  camy = 22;
+}
+
+function drawNum(n, x, y) {
+  var d;
+  if (n < 0) n = 0;
+  if (n > 999) n = 999;
+  d = Math.floor(n / 100);
+  c.fillText(DG[d], x, y);
+  n = n - d * 100;
+  d = Math.floor(n / 10);
+  c.fillText(DG[d], x + 8, y);
+  d = n - d * 10;
+  c.fillText(DG[d], x + 16, y);
+}
+
+function drawHud() {
+  var i, alive, mx, my;
+  /* Corner square is the whole 0..400 arena. 0.22 fits a 3px blip inside. */
+  c.fillStyle = "#111111";
+  c.fillRect(8, 8, 100, 100);
+  c.strokeStyle = "#888888";
+  c.strokeRect(8, 8, 100, 100);
+  i = 0;
+  while (i < 3) {
+    if (ehp[i] > 0) {
+      c.fillStyle = "#FF4444";
+      mx = 12 + ex[i] * 0.22;
+      my = 12 + ez[i] * 0.22;
+      c.fillRect(mx, my, 3, 3);
+    }
+    i = i + 1;
+  }
+  i = 0;
+  while (i < 6) {
+    c.fillStyle = "#3DDC5A";
+    mx = 12 + ox[i] * 0.22;
+    my = 12 + oz[i] * 0.22;
+    c.fillRect(mx, my, 3, 3);
+    i = i + 1;
+  }
+  c.fillStyle = "#66AAFF";
+  mx = 12 + px * 0.22;
+  my = 12 + pz * 0.22;
+  c.fillRect(mx, my, 4, 4);
+  c.font = "8px monospace";
+  c.fillStyle = "#FFE566";
+  c.fillText("HP", 168, 16);
+  drawNum(php, 192, 16);
+  c.fillText("SC", 232, 16);
+  drawNum(pscore, 256, 16);
+  if (pgun === 1) { c.fillStyle = "#AA66FF"; c.fillText("MINIGUN", 304, 16); }
+  else if (pgun === 2) { c.fillStyle = "#FF66CC"; c.fillText("ROCKET", 304, 16); }
+  else { c.fillStyle = "#FFFFFF"; c.fillText("CANNON", 304, 16); }
+  c.fillStyle = "#FFE566";
+  c.fillText("BR", 376, 16);
+  if (barrel < 0) c.fillText("-", 400, 16);
+  drawNum(barrel < 0 ? -barrel : barrel, 408, 16);
+  alive = 0;
+  i = 0;
+  while (i < 3) { if (ehp[i] > 0) alive = alive + 1; i = i + 1; }
+  c.fillText("FOES", 448, 16);
+  drawNum(alive, 488, 16);
+  c.fillText("ARROWS DRIVE  Q Z BARREL  1 2 3 GUN  SPACE FIRE", 8, 472);
+  if (over && shatterOn() === 0) {
+    c.font = "16px monospace";
+    c.fillStyle = "#FFFFFF";
+    if (won) c.fillText("YOU WIN", 248, 240);
+    else c.fillText("YOU LOST", 240, 240);
+    c.font = "8px monospace";
+    c.fillText("R STARTS AGAIN", 248, 264);
+  }
+}
+
+function paint() {
+  var i;
+  c.fillStyle = "#000000";
+  c.fillRect(0, 0, 640, 480);
+  c.lineWidth = 1;
+  PEN = 0;
+  CID = -1;
+  setCam();
+  drawGround();
+  drawObstacles();
+  drawPickups();
+  if (php > 0) {
+    STID = 3;
+    TURCOL = "#DDDDDD";
+    TURID = 5;
+    if (pgun === 1) { TURCOL = "#AA66FF"; TURID = 6; }
+    if (pgun === 2) { TURCOL = "#FF66CC"; TURID = 7; }
+    drawTank(px, pz, hd, barrel, "#66AAFF");
+  }
+  i = 0;
+  while (i < 3) {
+    if (ehp[i] > 0) {
+      STID = 4;
+      TURCOL = "#DDDDDD";
+      TURID = 5;
+      drawTank(ex[i], ez[i], eh[i], 0, "#FF4444");
+    }
+    i = i + 1;
+  }
+  drawShots();
+  drawBursts();
+  ink();
+  drawHud();
+}
+
+function loop() {
+  var j;
+  j = 0;
+  try { j = joy() | 0; } catch (e) { j = 0; }
+  stepPlayer(j);
+  stepEnemies();
+  stepBullets();
+  stepPickups();
+  stepBursts();
+  paint();
+  frames = frames + 1;
+  requestAnimationFrame(loop);
+}
+
+document.addEventListener("keydown", function (e) {
+  var k;
+  k = e.keyCode | 0;
+  if (k === 38 || k === 87) kUp = 1;
+  if (k === 40 || k === 83) kDn = 1;
+  if (k === 37 || k === 65) kLf = 1;
+  if (k === 39 || k === 68) kRt = 1;
+  if (k === 81) kQ = 1;
+  if (k === 90) kZ = 1;
+  if (k === 32) kFire = 1;
+  if (k === 82) kR = 1;
+  if (k === 49) k1 = 1;
+  if (k === 50) k2 = 1;
+  if (k === 51) k3 = 1;
+});
+document.addEventListener("keyup", function (e) {
+  var k;
+  k = e.keyCode | 0;
+  if (k === 38 || k === 87) kUp = 0;
+  if (k === 40 || k === 83) kDn = 0;
+  if (k === 37 || k === 65) kLf = 0;
+  if (k === 39 || k === 68) kRt = 0;
+  if (k === 81) kQ = 0;
+  if (k === 90) kZ = 0;
+  if (k === 32) kFire = 0;
+  if (k === 82) kR = 0;
+  if (k === 49) k1 = 0;
+  if (k === 50) k2 = 0;
+  if (k === 51) k3 = 0;
+});
+requestAnimationFrame(loop);
+</script>
+</body></html>

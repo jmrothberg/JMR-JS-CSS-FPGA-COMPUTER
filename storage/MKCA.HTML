@@ -37,6 +37,11 @@ var MK_IMG = {
 
 var canvas = document.querySelector("canvas");
 var c = canvas.getContext("2d");
+// Shared application menu and About metadata; no private chrome.
+c.systemWindow=8;
+c.systemViewport=1;
+c.systemAbout="MK Big CPU|Fight a computer-controlled opponent.";
+
 c.imageSmoothingEnabled = false;
 var W = 640;
 var H = 480;

@@ -47,6 +47,16 @@ module jmr_js_vm #(
     input  logic        key_evt_stb,
     input  logic [7:0]  key_evt_code,
     input  logic        key_evt_down,
+    input logic [7:0] key_evt_char = 8'd0,
+    output logic key_evt_ready,
+    output logic sysw_toggle_o,
+    output logic [2:0] sysw_field_o,
+    output logic [7:0] sysw_value_o,
+    output logic ui_text_toggle_o,ui_text_menu_o,ui_text_first_o,ui_text_last_o,
+    output logic [7:0] ui_text_byte_o,
+    input  logic        mouse_evt_valid = 1'b0,
+    input  logic [47:0] mouse_evt_data = 48'd0,
+    output logic        mouse_evt_pop,
     // NEW: console loads NAME.JSB into code BRAM before start
     input  logic        code_we,
     input  logic [14:0] code_waddr,
@@ -86,7 +96,7 @@ module jmr_js_vm #(
     // NEW: external asset SRAM read port (jmr_sram_port master, read-only) —
     // ASET sprite banks live there; blitter fetches pixels 2-per-16-bit word
     output logic        sram_req,
-    output logic [20:0] sram_addr,
+    output logic [21:0] sram_addr,
     // 2026-08-21 fit: write channel added so the ImageData snapshot lives at
     // the top of the external asset bank instead of an 80-tile on-chip BRAM.
     // Console owns the bus outside RUN; the core mux keeps console priority.
@@ -110,7 +120,7 @@ module jmr_js_vm #(
     output logic [15:0] rast_rxr,
     output logic [15:0] rast_qy,
     output logic [15:0] rast_ryr,
-    output logic [21:0] rast_sbase,
+    output logic [22:0] rast_sbase,
     output logic [15:0] rast_stride,
     output logic        rast_aset,
     // neg-xform: mirror dest column/row order (negative dWidth/dHeight or
@@ -377,6 +387,7 @@ module jmr_js_vm #(
     // only: forced GCs still fire on pressure. Set at the four forced
     // entries, consumed+cleared at the S_FB_SYNC frame-end decision.
     logic gc_ran_this_frame;
+    logic [1:0] gc_frame_age;
     (* ram_style = "distributed" *) logic venv_mark [0:ENV_PHYS-1];
     logic [9:0] vgc_env_i;
     logic [2:0] vgc_root_phase;
@@ -404,6 +415,20 @@ module jmr_js_vm #(
     logic        valloc_metrics;
     logic [15:0] vmetrics_w;
     logic [63:0] vkev_event;
+    logic vmouse_active;
+    logic [47:0] vmouse_packet;
+    logic [3:0] vmouse_prop, vmouse_slot;
+    logic [15:0] vmouse_type_id;
+    logic [15:0] id_mousemove, id_mousedown, id_mouseup;
+    logic [15:0] id_clientX, id_clientY, id_offsetX, id_offsetY;
+    logic [15:0] id_mouse_x, id_mouse_y, id_buttons, id_button, id_movementX, id_movementY;
+    logic [15:0] mouse_input_type;
+    always_comb case (mouse_evt_data[47:46])
+        0: mouse_input_type = id_mousemove;
+        1: mouse_input_type = id_mousedown;
+        2: mouse_input_type = id_mouseup;
+        default: mouse_input_type = id_click;
+    endcase
     logic        vkey_custom;    // dispatchEvent scan: resume program, no kev pop
     logic [63:0] vkey_want_ev;   // dispatchEvent: event type string handle
     logic [15:0] vkey_ret_ip;    // dispatchEvent: program resume ip
@@ -932,7 +957,8 @@ module jmr_js_vm #(
     // one pixel per 16-bit word (low byte). Top 600KB of the 4MB bank is
     // reserved for it - ASET art must stay below IMGD_SRAM_BASE (tools cap
     // ASET far under this; loud check lives in compile).
-    localparam logic [20:0] IMGD_SRAM_BASE = 21'd1789952; // 2*1024*1024-307200
+    localparam logic [21:0] IMGD_SRAM_BASE = 22'd3887104; // 2*1024*1024-307200
+    logic [7:0] imgd_low;
     logic        imgd_pend; // one outstanding IMGD sram transfer (GET wr / PUT rd)
     logic [18:0] imgd_i /*verilator public_flat_rd*/, imgd_n /*verilator public_flat_rd*/;
     logic [9:0]  imgd_x0, imgd_y0, imgd_w /*verilator public_flat_rd*/, imgd_h /*verilator public_flat_rd*/, imgd_x, imgd_y;
@@ -978,6 +1004,8 @@ module jmr_js_vm #(
     logic [15:0] id_fillrect, id_length, id_push, id_pop, id_splice, id_foreach;
     logic [15:0] id_map, id_unshift; // Array.map / Array.unshift
     logic [15:0] id_getctx, id_click, id_ael, id_key, id_keycode;
+    logic [15:0] id_charcode;
+    logic [7:0] kev_chars [0:31];
     logic [15:0] id_rel, id_disp; // removeEventListener / dispatchEvent
     logic [15:0] id_document, id_window; // seed vars so `if (document.dispatchEvent)` is truthy
     logic [15:0] id_arrow_l, id_arrow_r, id_space, id_a, id_d, id_keydown, id_keyup;
@@ -1001,6 +1029,11 @@ module jmr_js_vm #(
     // values, plus measureText (games right-align HUD text with its width)
     logic [15:0] id_font, id_textalign, id_center, id_right, id_measuretext;
     logic [15:0] id_textbaseline, id_top, id_middle, id_bottom; // #37
+    logic [111:0] id_sys_window;
+    logic [2:0] ui_prop_phase;
+    logic [9:0] ui_prop_name;
+    logic [15:0] ui_prop_ptr,ui_prop_len,ui_prop_i;
+    logic ui_prop_menu;
     logic [1:0] e64_ctx_baseline_q;
     logic [15:0] id_imgsmooth; // ctx.imageSmoothingEnabled (hash 54440)
     logic        ctx_smooth;   // 1 default; indexed blit is always nearest
@@ -1312,11 +1345,11 @@ module jmr_js_vm #(
     localparam logic signed [31:0] FX_ONE = 32'sh0001_0000; // Q16.16 1.0
     // spr_mem moved to external SRAM 2026-08-22 (words SPR_SRAM_BASE..+32767,
     // one byte per word) - was 6k LUTRAM against the failing 46.2k cap.
-    localparam logic [20:0] SPR_SRAM_BASE = 21'd1691648;
+    localparam logic [21:0] SPR_SRAM_BASE = 22'd3788800;
     logic        sprb_pend; // one in-flight sprite-byte write
     // NEW: ASET sprites live in the 4 MB asset SRAM — offsets are 22-bit byte
     // addresses in the payload; DONKEY sheets are 1470×750 so w/h are u16.
-    logic [21:0] spr_off [0:MAX_SPR-1];
+    logic [22:0] spr_off [0:MAX_SPR-1];
     logic [15:0] spr_ww [0:MAX_SPR-1];
     logic [15:0] spr_hh [0:MAX_SPR-1];
     logic [4:0]  n_spr /*verilator public_flat_rd*/, spr_i; // NEW: 5-bit for 16 sprites
@@ -1346,8 +1379,9 @@ module jmr_js_vm #(
     logic [2:0]  enter_n;
     logic [3:0]  enter_delay;
     // NEW: raw key-event FIFO (host → keydown/keyup dispatch, one per frame)
-    logic [8:0]  kev_q [0:7]; // {down, keyCode}
-    logic        kev_src_joy [0:7]; // 1 = synthetic joystick edge, 0 = GUI KEYEVT
+    assign key_evt_ready=(kev_wp+5'd1)!=kev_rp;
+    logic [8:0]  kev_q [0:31]; // {down, keyCode}
+    logic        kev_src_joy [0:31]; // 1 = synthetic joystick edge, 0 = GUI KEYEVT
     // run-59 dual-path dedup (JOYDEMO forensics: the pad's buttons arrive
     // BOTH as an I2C joy bit AND as a real PS/2 key event via the pmod
     // path — every press delivered keydown(32) twice; typematic repeat
@@ -1360,7 +1394,7 @@ module jmr_js_vm #(
     // batch; the one-directional guard only caught real-first ordering).
     logic [7:0]  syn_dedup_code;
     logic [3:0]  syn_dedup_ctr;
-    logic [2:0]  kev_wp /*verilator public_flat_rd*/, kev_rp /*verilator public_flat_rd*/;
+    logic [4:0]  kev_wp /*verilator public_flat_rd*/, kev_rp /*verilator public_flat_rd*/;
     logic [15:0] kev_fn; // handler for S_KEYEV (event alloc + env must be 2-cycle)
     logic [15:0] id_keys_name, id_pressed, id_kspace; // keys.a.pressed table
     logic [8:0]  var_keys;
@@ -1490,6 +1524,8 @@ module jmr_js_vm #(
         // single encoding — the scarce resource here is st_t entries
         // (112 of 128 before this), not LUTs.
         , S_CSRAM
+        , S_V64_MOUSE_PROP
+        , S_UI_PROP
     } st_t;
     // V1 fit: one-hot the 68-state parent register — 349 state==X decodes
     // become single-FF tests; FF headroom is 8x.
@@ -2852,6 +2888,24 @@ module jmr_js_vm #(
     task automatic hs_ip(input logic [15:0] v); ip_ff <= v; hs_m_ip <= 1'b1; endtask
     task automatic hs_code(input logic [14:0] v); code_raddr_ff <= v; hs_m_code <= 1'b1; endtask
     task automatic hs_st(input st_t s); state <= s; hs_m_state <= 1'b1; endtask
+    task automatic frame_gc_schedule;
+        // Collection on allocation pressure remains immediate. Amortize
+        // the optional frame-safe-point pass across four frames instead
+        // of marking the entire persistent heap after every picture.
+        gc_ran_this_frame <= 1'b0;
+        if (gc_ran_this_frame || gc_frame_age != 2'd3) begin
+            gc_frame_age <= gc_ran_this_frame ? 2'd0 : gc_frame_age + 2'd1;
+            hs_st(S_WAIT_FRAME);
+        end else begin
+            gc_frame_age <= 2'd0;
+            hs_vgc_clear_i(14'd0);
+            hs_vgc_qr(14'd0);
+            hs_vgc_qw(14'd0);
+            hs_vgc_halt_after(1'b1);
+            hs_vgc_wait_after(1'b1);
+            hs_st(S_V64_GC_CLEAR);
+        end
+    endtask
     task automatic hs_vsp(input logic [11:0] v); vsp_ff <= v; hs_m_vsp <= 1'b1; endtask
     task automatic hs_hp_cmd(input logic [3:0] v); hp_cmd_ff <= v; hs_m_hp_cmd <= 1'b1; endtask
     task automatic hs_hp_v64(input logic v); hp_v64_ff <= v; hs_m_hp_v64 <= 1'b1; endtask
@@ -3709,7 +3763,7 @@ module jmr_js_vm #(
     logic e64_machine_fault_q;
     logic [63:0] e64_minmax_acc_q;
     logic [2:0]  e64_csr_mode_q;
-    logic [20:0] e64_csr_addr_q;
+    logic [21:0] e64_csr_addr_q;
     logic [15:0] e64_csr_wdata_q;
     logic        e64_csr_oob_q;
     logic [11:0] e64_minmax_base_q;
@@ -4237,6 +4291,8 @@ module jmr_js_vm #(
         .id_stroke(id_stroke),
         .id_strokestyle(id_strokestyle),
         .id_textalign(id_textalign),
+        .id_sys_window(id_sys_window),.sysw_toggle_q(sysw_toggle_o),
+        .sysw_field_q(sysw_field_o),.sysw_value_q(sysw_value_o),
         .id_textbaseline(id_textbaseline),
         .id_top(id_top),
         .id_middle(id_middle),
@@ -4815,7 +4871,7 @@ module jmr_js_vm #(
             (state == S_HEAP_AWR) || (state == S_HEAP_FILL) || (state == S_V64_ALLOC) ||
             (state == S_WAIT_FRAME) || (state == S_V64_WAIT_FRAME) ||
             (state == S_V64_FRAME_RAF) || (state == S_V64_FRAME_TIMER) ||
-            (state == S_V64_FRAME_KEY) || (state == S_V64_BIND) ||
+            (state == S_V64_FRAME_KEY) || (state == S_V64_MOUSE_PROP) || (state == S_V64_BIND) ||
             (state == S_V64_RECT) || (state == S_V64_RECT_LD) || (state == S_V64_CLEAR) ||
             (state == S_V64_CTOR_PAD) || (state == S_V64_CTOR_ENV) ||
             (state == S_V64_CTOR_VARS) ||
@@ -5243,7 +5299,7 @@ module jmr_js_vm #(
     // STRIDX must keep exec's byte address while casestate_q leaves EXEC
     // (second wait beat). Switching to parent name_rdaddr mid-op would
     // clobber name_rdata before char_id is captured (splash sprites gone).
-    assign name_mem_raddr = ((casestate_q == S_V64_EXEC) ||
+    assign name_mem_raddr = (state==S_UI_PROP) ? ui_prop_ptr[14:0] : ((casestate_q == S_V64_EXEC) ||
                              (casestate_q == S_V64_STRIDX))
         ? e64_name_rdaddr_q[14:0] : name_rdaddr[14:0];
     assign json_rdaddr =
@@ -5404,9 +5460,9 @@ module jmr_js_vm #(
             sin_q_rdata <= sin_q[sin_raddr];
             txt_buf_rdata <= txt_buf[txt_i[5:0]];
             pow31_rdata <= pow31_tbl[e32_name_len_tos[7:0]];
-            name_blen_rdata <= name_blen[e64_name_blen_raddr];
+            name_blen_rdata <= name_blen[(state==S_UI_PROP)?ui_prop_name:e64_name_blen_raddr];
             // name_hash_tbl: own Port A/B processes (not this mux).
-            name_off_rdata <= name_off[hs64 ? e64_name_off_raddr : e32_intern_tos];
+            name_off_rdata <= name_off[(state==S_UI_PROP)?ui_prop_name:hs64 ? e64_name_off_raddr : e32_intern_tos];
             if (vconsts_pa_we) vconsts[vconsts_pa_waddr] <= vconsts_pa_wdata;
         vconsts_rdata <= vconsts[e64_vconsts_raddr];
             // vvars: own Port A process (not this mux).
@@ -6179,6 +6235,7 @@ module jmr_js_vm #(
             hs_valloc_retried(1'b0);
             hs_vgc_halt_after(1'b0);
             gc_ran_this_frame <= 1'b0;
+            gc_frame_age <= 2'd0;
             vgc_env_i <= '0; vgc_root_phase <= '0;
             cls_scan <= 1'b0; cls_armed <= 1'b0; cls_done <= 1'b0;
             cls_hit <= 1'b0;
@@ -6208,6 +6265,8 @@ module jmr_js_vm #(
             hs_valloc_metrics(1'b0);
             vmetrics_w <= 16'd0;
             vkev_event <= V64_UNDEFINED; vlistener_n_ff <= 5'd0;
+            vmouse_active <= 0; vmouse_packet <= 0; vmouse_prop <= 0;
+            vmouse_slot <= 0; vmouse_type_id <= 16'hffff; mouse_evt_pop <= 0;
             vkey_custom <= 1'b0; vkey_want_ev <= 64'd0;
             vkey_li <= 5'd0;
             v64_frame_armed <= 1'b0;
@@ -6283,6 +6342,8 @@ module jmr_js_vm #(
             gc_obj_high <= '0; gc_arr_high <= '0; dbg_gc_n <= '0;
             dbg_stack_ovf <= '0; dbg_call_ovf <= '0;
             machine_fault <= 1'b0; fault_code <= 8'd0; fault_site <= 16'd6115;
+            ui_text_toggle_o<=0;ui_text_menu_o<=0;ui_text_first_o<=0;ui_text_last_o<=0;ui_text_byte_o<=0;
+            ui_prop_phase<=0;ui_prop_name<=0;ui_prop_ptr<=0;ui_prop_len<=0;ui_prop_i<=0;ui_prop_menu<=0;
             prev_joy <= 6'd0; joy_down_edge <= 6'd0; joy_up_edge <= 6'd0;
             sram_req <= 1'b0; sram_addr <= '0; blit_wait <= 1'b0;
             sram_we <= 1'b0; sram_wdata <= '0;
@@ -6585,8 +6646,9 @@ module jmr_js_vm #(
             // flag at the instruction boundary: exec has already re-evaluated
             // by then.
             if (state == S_FETCH_WAIT) vprom_done <= 1'b0;
+            mouse_evt_pop <= 1'b0;
             // NEW: capture raw host key events (any state; drained per frame)
-            if (key_evt_stb && (kev_wp + 3'd1) != kev_rp) begin
+            if (key_evt_stb && (kev_wp + 5'd1) != kev_rp) begin
                 if (syn_dedup_ctr != 4'd0 &&
                     key_evt_code == syn_dedup_code) begin
                     // symmetric swallow: this press already arrived as a
@@ -6594,12 +6656,13 @@ module jmr_js_vm #(
                     // arrival order) — drop the real twin, both edges.
                 end else begin
                     kev_q[kev_wp] <= {key_evt_down, key_evt_code};
+                    kev_chars[kev_wp] <= key_evt_char;
                     kev_src_joy[kev_wp] <= 1'b0;
                     if (key_evt_down) begin
                         kev_dedup_code <= key_evt_code;
                         kev_dedup_ctr <= 4'd8;
                     end
-                    kev_wp <= kev_wp + 3'd1;
+                    kev_wp <= kev_wp + 5'd1;
                 end
                 // 2026-08-21 (DONKEY Mario->Luigi, second occurrence): the
                 // dispatch-time supersede only fires when the real event is
@@ -7136,6 +7199,7 @@ module jmr_js_vm #(
                         vtimer_n <= 7'd0;
                         vframe_no <= 32'd0;
                         gc_ran_this_frame <= 1'b0; // C4
+                        gc_frame_age <= 2'd0;
                         // Last intern coords survive RUN otherwise PACMAN
                         // SNAP shows the previous title's vdraw (INVADERS 14×5).
                         hs_vdraw_x('0); hs_vdraw_y('0);
@@ -7147,6 +7211,7 @@ module jmr_js_vm #(
                         hs_vnat_dom(3'd0);
                         vnat_style <= V64_UNDEFINED;
                         vkev_event <= V64_UNDEFINED;
+                        vmouse_active <= 1'b0;
                         hs_vlistener_n(5'd0);
                         vkey_li <= 5'd0;
                         v64_frame_armed <= 1'b0;
@@ -7231,6 +7296,7 @@ module jmr_js_vm #(
                     id_assign <= 16'hFFFF; id_bind <= 16'hFFFF;
                     id_proto <= 16'hFFFF; id_filltext <= 16'hFFFF; id_arc <= 16'hFFFF;
                     id_font <= 16'hFFFF; id_textalign <= 16'hFFFF;
+                    id_sys_window<='1;
                     id_textbaseline <= 16'hFFFF; id_top <= 16'hFFFF;
                     id_middle <= 16'hFFFF; id_bottom <= 16'hFFFF;
                     id_imgsmooth <= 16'hFFFF;
@@ -7240,6 +7306,21 @@ module jmr_js_vm #(
                     id_kbevent <= 16'hFFFF; id_domevent <= 16'hFFFF;
                     id_customev <= 16'hFFFF; id_mouseev <= 16'hFFFF;
                     id_type <= 16'hFFFF;
+                    id_charcode <= 16'hFFFF;
+                    id_mousemove <= 16'hFFFF;
+                    id_mousedown <= 16'hFFFF;
+                    id_mouseup <= 16'hFFFF;
+                    id_click <= 16'hFFFF;
+                    id_clientX <= 16'hFFFF;
+                    id_clientY <= 16'hFFFF;
+                    id_offsetX <= 16'hFFFF;
+                    id_offsetY <= 16'hFFFF;
+                    id_mouse_x <= 16'hFFFF;
+                    id_mouse_y <= 16'hFFFF;
+                    id_buttons <= 16'hFFFF;
+                    id_button <= 16'hFFFF;
+                    id_movementX <= 16'hFFFF;
+                    id_movementY <= 16'hFFFF;
                     id_now <= 16'hFFFF; id_gettime <= 16'hFFFF;
                     id_beginpath <= 16'hFFFF; id_fill <= 16'hFFFF; id_stroke <= 16'hFFFF;
                     id_moveto <= 16'hFFFF; id_lineto <= 16'hFFFF; id_closepath <= 16'hFFFF;
@@ -7510,6 +7591,13 @@ module jmr_js_vm #(
                                 // NEW: text metrics/state names (jsb_format._name_hash)
                                 if ({tb, trail_acc[7:0]} == 16'd3151)  id_font <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd38360) id_textalign <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd39679) id_sys_window[0+:16] <= name_idx; // systemWindow
+                                if ({tb, trail_acc[7:0]} == 16'd64221) id_sys_window[16+:16] <= name_idx; // windowScroll
+                                if ({tb, trail_acc[7:0]} == 16'd24859) id_sys_window[32+:16] <= name_idx; // windowScrollX
+                                if ({tb, trail_acc[7:0]} == 16'd52674) id_sys_window[48+:16] <= name_idx; // windowDirty
+                                if ({tb, trail_acc[7:0]} == 16'd12277) id_sys_window[64+:16] <= name_idx; // systemViewport
+                                if ({tb, trail_acc[7:0]} == 16'd14853) id_sys_window[80+:16] <= name_idx; // systemMenus
+                                if ({tb, trail_acc[7:0]} == 16'd50846) id_sys_window[96+:16] <= name_idx; // systemAbout
                                 if ({tb, trail_acc[7:0]} == 16'd4754) id_textbaseline <= name_idx; // #37
                                 if ({tb, trail_acc[7:0]} == 16'd49493) id_top <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd55701) id_middle <= name_idx;
@@ -7526,6 +7614,21 @@ module jmr_js_vm #(
                                 if ({tb, trail_acc[7:0]} == 16'd7561)  id_customev <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd16661) id_mouseev <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd36666) id_type <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd6755) id_charcode <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd40438) id_mousemove <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd34503) id_mousedown <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd46592) id_mouseup <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd50568) id_click <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd34285) id_clientX <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd34286) id_clientY <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd11813) id_offsetX <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd11814) id_offsetY <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd120) id_mouse_x <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd121) id_mouse_y <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd49025) id_buttons <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd10034) id_button <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd5513) id_movementX <= name_idx;
+                                if ({tb, trail_acc[7:0]} == 16'd5514) id_movementY <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd54382) id_beginpath <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd62851) id_fill <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd30264) id_stroke <= name_idx;
@@ -7770,7 +7873,7 @@ module jmr_js_vm #(
                                     3'd3: begin spr_hh[spr_i[3:0]] <= {tb, trail_acc[7:0]}; spr_hdr <= 3'd4; end
                                     3'd4: begin spr_off[spr_i[3:0]][7:0]   <= tb; spr_hdr <= 3'd5; end
                                     3'd5: begin spr_off[spr_i[3:0]][15:8]  <= tb; spr_hdr <= 3'd6; end
-                                    3'd6: begin spr_off[spr_i[3:0]][21:16] <= tb[5:0]; spr_hdr <= 3'd7; end
+                                    3'd6: begin spr_off[spr_i[3:0]][22:16] <= tb[6:0]; spr_hdr <= 3'd7; end
                                     default: begin
                                         spr_hdr <= 3'd0;
                                         if (spr_i + 5'd1 >= n_spr)
@@ -8265,21 +8368,7 @@ module jmr_js_vm #(
                         fbs_armed <= 1'b0;
                         clr_idx <= '0;
                         fb_dump_sel <= 1'b0;
-                        gc_ran_this_frame <= 1'b0; // C4: consume the flag
-                        if (gc_ran_this_frame) begin
-                            // C4: a forced GC already collected this
-                            // frame -- the scheduled pass would re-walk
-                            // the same heap for nothing. Cursor rewinds
-                            // happened at that GC's own exit.
-                            hs_st(S_WAIT_FRAME);
-                        end else begin
-                            hs_vgc_clear_i(14'd0);
-                            hs_vgc_qr(14'd0);
-                            hs_vgc_qw(14'd0);
-                            hs_vgc_halt_after(1'b1);
-                            hs_vgc_wait_after(1'b1);
-                            hs_st(S_V64_GC_CLEAR);
-                        end
+                        frame_gc_schedule();
                     end
                 end
                 S_RECT: begin
@@ -9302,7 +9391,7 @@ module jmr_js_vm #(
                             spr_hdr <= 3'd3;
                         end else begin
                             spr_hh[spr_i[3:0]] <= {trail_tb, trail_acc[7:0]};
-                            spr_off[spr_i[3:0]] <= 22'(spr_wp);
+                            spr_off[spr_i[3:0]] <= 23'(spr_wp);
                             // 18-bit stream count bounds SPR-path sprites at
                             // 256K pixels; larger art rides ASET (unchanged).
                             spr_left <= 18'({trail_tb, trail_acc[7:0]}) * 18'(spr_ww[spr_i[3:0]]);
@@ -9585,8 +9674,9 @@ module jmr_js_vm #(
                                 else       joy_down_edge[ki] <= 1'b0;
                             end else begin
                                 kev_q[kev_wp] <= {!is_up, kcode};
+                                kev_chars[kev_wp] <= 0;
                                 kev_src_joy[kev_wp] <= 1'b1;
-                                kev_wp <= kev_wp + 3'd1;
+                                kev_wp <= kev_wp + 5'd1;
                                 if (is_up) joy_up_edge[ki]   <= 1'b0;
                                 else begin
                                     joy_down_edge[ki] <= 1'b0;
@@ -9632,6 +9722,24 @@ module jmr_js_vm #(
                             hs_valloc_i(vobj_next);
                             hs_valloc_retried(1'b0);
                             hs_st(S_V64_ALLOC);
+                        end else if (mouse_evt_pop) begin
+                            // Let the producer retire the previous event, including /1 VM clocks.
+                        end else if (mouse_evt_valid) begin
+                            v64_frame_armed <= 1'b1;
+                            if (mouse_input_type == 16'hffff) mouse_evt_pop <= 1'b1;
+                            else begin
+                                vmouse_active <= 1'b1;
+                                vmouse_packet <= mouse_evt_data;
+                                vmouse_type_id <= mouse_input_type;
+                                jn_slot_arm <= 1'b0;
+                                bind_rd_arm <= 1'b0;
+                                vfe_rd_arm <= 1'b0;
+                                hs_vnat_dom(3'd5);
+                                hs_valloc_kind(2'd0);
+                                hs_valloc_i(vobj_next);
+                                hs_valloc_retried(1'b0);
+                                hs_st(S_V64_ALLOC);
+                            end
                         end else begin
                         // Stay armed until FRAME_RAF: a 1-cycle frame_tick
                         // (sim_frame_pulse / vsync) used to clear armed the
@@ -9763,12 +9871,12 @@ module jmr_js_vm #(
                     end else if (kev_rp != kev_wp &&
                                 (kev_q[kev_rp][8] ? kd_n : ku_n) == 3'd0) begin
                         // no handler registered for this direction — drop event
-                        kev_rp <= kev_rp + 3'd1;
+                        kev_rp <= kev_rp + 5'd1;
                     end else if (kev_rp != kev_wp) begin
                         // NEW: real host key event (KEYEVT) — replaces the
                         // synthetic-Enter title hack; e.keyCode is the truth,
                         // e.key interned only for codes we know (else undefined)
-                        kev_rp <= kev_rp + 3'd1;
+                        kev_rp <= kev_rp + 5'd1;
                         ; // p3b: dead tagged write removed (obj_n)
                         ; // p3b: dead tagged write removed (obj_cls)
                         hs_hp_cmd(HP_OSETI);
@@ -10685,14 +10793,16 @@ module jmr_js_vm #(
                         // after fb_dump_addr - same arm as before the SRAM move
                         imgd_armed <= 1'b1;
                     end else if (!imgd_pend) begin
-                        // issue: one 16-bit word per pixel (low byte), write
-                        // held until ack like S_BLIT. OOB pixels write nothing
-                        // but still take the ack beat so the walk stays uniform.
+                        // Two snapshot pixels per 16-bit word. The even
+                        // write also clears the unused high byte of an odd
+                        // tail; the odd write completes that same word.
                         sram_req   <= 1'b1;
                         sram_we    <= (imgd_i < 19'(FB_PIXELS));
                         sram_addr  <= IMGD_SRAM_BASE
-                                    + ((imgd_i < 19'(FB_PIXELS)) ? 21'(imgd_i) : 21'd0);
-                        sram_wdata <= {8'd0, fb_dump_back};
+                                    + ((imgd_i < 19'(FB_PIXELS)) ? 21'(imgd_i >> 1) : 21'd0);
+                        if (!imgd_i[0]) imgd_low <= fb_dump_back;
+                        sram_wdata <= imgd_i[0] ? {fb_dump_back, imgd_low}
+                                               : {8'd0, fb_dump_back};
                         imgd_pend  <= 1'b1;
                     end else if (sram_ack) begin
                         sram_req <= 1'b0;
@@ -11779,6 +11889,15 @@ module jmr_js_vm #(
                                     hs_m_hp_qt <= 1'b1;
                                     hs_hp_ret(S_FETCH_WAIT);
                                     hs_st(S_HEAP_WR);
+                                end else if (vnat_dom == 3'd5 && vmouse_active) begin
+                                    vkev_event <= handle;
+                                    hs_vnat_dom(3'd0);
+                                    vkey_li <= 5'd0;
+                                    vkey_ln <= vlistener_n;
+                                    vmouse_prop <= 0;
+                                    vmouse_slot <= 0;
+                                    hs_hp_oid(valloc_i[12:0]);
+                                    hs_st(S_V64_MOUSE_PROP);
                                 end else if (vnat_dom == 3'd5) begin
                                     key_intern = (kev_q[kev_rp][7:0] == 8'd13)
                                         ? id_enter
@@ -11825,7 +11944,7 @@ module jmr_js_vm #(
                                     hs_hp_v64(1'b1);
                                     hs_hp_oid(valloc_i[12:0]);
                                     hs_hp_slot(5'd0);
-                                    hs_hp_qn(3'd3);
+                                    hs_hp_qn(id_charcode!=16'hffff ? 3'd4 : 3'd3);
                                     hs_hp_qi(3'd0);
                                     hp_qk_ff[0] <= id_type;
                                     hs_m_hp_qk <= 1'b1;
@@ -11855,6 +11974,9 @@ module jmr_js_vm #(
                                     hs_m_hp_qv <= 1'b1;
                                     hp_qt_ff[2] <= 3'd0;
                                     hs_m_hp_qt <= 1'b1;
+                                    hp_qk_ff[3] <= id_charcode; hs_m_hp_qk <= 1'b1;
+                                    hp_qv_ff[3] <= v64_int32_number({24'd0,kev_chars[kev_rp]}); hs_m_hp_qv <= 1'b1;
+                                    hp_qt_ff[3] <= 3'd0; hs_m_hp_qt <= 1'b1;
                                     hs_hp_ret(S_V64_FRAME_KEY);
                                     hs_st(S_HEAP_WR);
                                 end else if (vnat_dom == 3'd6) begin
@@ -14753,6 +14875,67 @@ module jmr_js_vm #(
                         default: hs_st(S_FETCH_WAIT);
                     endcase
                 end
+                S_UI_PROP: begin
+                    if(state!=S_UI_PROP && v64_on && e64_leave_hold)begin
+                        hs_st(S_UI_PROP);hs_ip(e64_ip_q);hs_vsp(e64_vsp_q);
+                        ui_prop_name<=e64_hp_key_q[9:0];ui_prop_menu<=e64_hp_slot_q==5;
+                        ui_prop_phase<=1;ui_prop_i<=0;
+                    end else case(ui_prop_phase)
+                        1:ui_prop_phase<=2;
+                        2:begin
+                            ui_prop_ptr<=name_off_rdata;ui_prop_len<=name_blen_rdata;ui_prop_phase<=3;
+                            if(name_blen_rdata>512)begin machine_fault<=1;fault_code<=5;hs_st(S_DONE);end
+                        end
+                        3:ui_prop_phase<=4;
+                        4:begin
+                            ui_text_menu_o<=ui_prop_menu;ui_text_first_o<=ui_prop_i==0;
+                            ui_text_last_o<=ui_prop_i+1>=ui_prop_len;
+                            ui_text_byte_o<=ui_prop_len==0?8'd0:name_rdata;
+                            ui_text_toggle_o<=!ui_text_toggle_o;
+                            if(ui_prop_i+1>=ui_prop_len)begin hs_code(15'(ops_base+ip));hs_st(S_FETCH_WAIT);end
+                            else begin ui_prop_i<=ui_prop_i+1'b1;ui_prop_ptr<=ui_prop_ptr+1'b1;ui_prop_phase<=3;end
+                        end
+                        default:ui_prop_phase<=1;
+                    endcase
+                end
+                S_V64_MOUSE_PROP: begin
+                    logic [15:0] prop_id;
+                    logic [63:0] prop_value;
+                    prop_id = 16'hffff;
+                    prop_value = V64_UNDEFINED;
+                    case (vmouse_prop)
+                        0: begin prop_id = id_type; prop_value = v64_handle(4'd4,12'd0,{16'd0,vmouse_type_id}); end
+                        1: begin prop_id = id_clientX; prop_value = v64_int32_number({22'd0,vmouse_packet[45:36]}); end
+                        2: begin prop_id = id_clientY; prop_value = v64_int32_number({23'd0,vmouse_packet[35:27]}); end
+                        3: begin prop_id = id_offsetX; prop_value = v64_int32_number({22'd0,vmouse_packet[45:36]}); end
+                        4: begin prop_id = id_offsetY; prop_value = v64_int32_number({23'd0,vmouse_packet[35:27]}); end
+                        5: begin prop_id = id_mouse_x; prop_value = v64_int32_number({22'd0,vmouse_packet[45:36]}); end
+                        6: begin prop_id = id_mouse_y; prop_value = v64_int32_number({23'd0,vmouse_packet[35:27]}); end
+                        7: begin prop_id = id_buttons; prop_value = v64_int32_number({29'd0,vmouse_packet[26:24]}); end
+                        8: begin prop_id = id_button; prop_value = v64_int32_number({30'd0,vmouse_packet[23:22]}); end
+                        9: begin prop_id = id_movementX; prop_value = v64_int32_number({{21{vmouse_packet[21]}},vmouse_packet[21:11]}); end
+                        10: begin prop_id = id_movementY; prop_value = v64_int32_number({{21{vmouse_packet[10]}},vmouse_packet[10:0]}); end
+                        default: ;
+                    endcase
+                    if (vmouse_prop >= 11) begin
+                        bind_k <= 0; bind_rd_arm <= 0; vk_found <= 0; vk_pick <= 0;
+                        hs_st(S_V64_FRAME_KEY);
+                    end else begin
+                        vmouse_prop <= vmouse_prop + 1'b1;
+                        if (prop_id != 16'hffff) begin
+                            hs_hp_cmd(HP_OSETI);
+                            hs_hp_v64(1'b1);
+                            hs_hp_slot({1'b0,vmouse_slot});
+                            hs_hp_qn(3'd1); hs_hp_qi(3'd0);
+                            hp_qk_ff[0] <= prop_id; hs_m_hp_qk <= 1'b1;
+                            hp_qv_ff[0] <= prop_value; hs_m_hp_qv <= 1'b1;
+                            hp_qt_ff[0] <= 3'd0; hs_m_hp_qt <= 1'b1;
+                            vmouse_slot <= vmouse_slot + 1'b1;
+                            hs_hp_ret(S_V64_MOUSE_PROP);
+                            hs_st(S_HEAP_WR);
+                        end
+                    end
+                end
                 S_V64_DISPATCH: begin
                     // dispatchEvent(ev): find ev.type in the object's slots
                     // (2 beats/slot, default vobj_raddr = {hp_oid, hp_slot}),
@@ -14802,7 +14985,8 @@ module jmr_js_vm #(
                 end
                 S_V64_FRAME_KEY: begin
                     logic [63:0] want;
-                    want = vkey_custom ? vkey_want_ev : v64_handle(
+                    want = vkey_custom ? vkey_want_ev : vmouse_active ?
+                        v64_handle(4'd4, 12'd0, {16'd0, vmouse_type_id}) : v64_handle(
                         4'd4, 12'd0,
                         {16'd0, kev_q[kev_rp][8] ? id_keydown : id_keyup}
                     );
@@ -14875,7 +15059,10 @@ module jmr_js_vm #(
                         hs_code(15'(ops_base + vkey_ret_ip));
                         hs_st(S_FETCH_WAIT);
                     end else begin
-                        kev_rp <= kev_rp + 3'd1;
+                        if (vmouse_active) begin
+                            mouse_evt_pop <= 1'b1;
+                            vmouse_active <= 1'b0;
+                        end else kev_rp <= kev_rp + 5'd1;
                         vkey_li <= 5'd0;
                         bind_rd_arm <= 1'b0;
                         hs_st(S_WAIT_FRAME);
@@ -15041,12 +15228,7 @@ module jmr_js_vm #(
                             fb_dump_addr <= '0;
                             hs_st(S_FB_SYNC);
                         end else begin
-                            hs_vgc_clear_i(14'd0);
-                            hs_vgc_qr(14'd0);
-                            hs_vgc_qw(14'd0);
-                            hs_vgc_halt_after(1'b1);
-                            hs_vgc_wait_after(1'b1);
-                            hs_st(S_V64_GC_CLEAR);
+                            frame_gc_schedule();
                         end
                     end
                 end

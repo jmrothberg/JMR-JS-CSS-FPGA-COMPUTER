@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>READ — markdown reader</title></head>
+<body style="margin:0;background:#000">
+<!--
+  READ.HTML — DO NOT DELETE. The machine's text reader (not a game).
+  Bare READ chain-loads READ.JSH and leaves SOURCE holding the file
+  LOAD parked. READ "NAME.MD" loads that file first.
+
+  Formats a small markdown subset by walking bytes. No string
+  methods. # and ## are 16px. ### is a small heading. "- " and
+  "* " are indented lists. ">" is a quote. A line of dashes is a
+  rule. Up/Down one line. Left/Right or F3/F4 one page.
+  Esc is machine BREAK. Do not bind it.
+-->
+<canvas id="gameCanvas" width="640" height="480"></canvas>
+<script>
+// BEGIN CHICAGO FONT
+var ADV=[8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,4,6,7,10,7,11,10,3,5,5,7,7,4,7,4,7,8,8,8,8,8,8,8,8,8,8,4,4,6,8,6,8,11,8,8,8,8,7,7,8,8,6,7,9,7,12,9,8,8,8,8,7,6,8,8,12,8,8,8,5,7,5,8,8,6,8,8,7,8,8,6,8,8,4,6,8,4,12,8,8,8,8,6,7,6,8,8,12,8,8,8,5,5,5,8,8];
+var fontImage=new Image();
+fontImage.src="data:image/png;base64,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";
+// END CHICAGO FONT
+var ctx = document.querySelector("canvas").getContext("2d");
+ctx.imageSmoothingEnabled = false;
+var COLS = 78;
+var ROWS = 56;
+var LINE_OFF = 4096;
+var LINE_MAX = 4000;
+var nLines = 0;
+var topLine = 0;
+var needDraw = 1;
+ctx.systemWindow=2;
+var quit=0;
+
+function gw(o, b) { stgWrite(o, b); }
+function gr(o) { return stgRead(o); }
+
+function w32(o, v) {
+  gw(o, v % 256);
+  gw(o + 1, Math.floor(v / 256) % 256);
+  gw(o + 2, Math.floor(v / 65536) % 256);
+  gw(o + 3, Math.floor(v / 16777216) % 256);
+}
+
+function r32(o) {
+  return gr(o) + gr(o + 1) * 256 + gr(o + 2) * 65536 + gr(o + 3) * 16777216;
+}
+
+function lineStart(i) { return r32(LINE_OFF + i * 4); }
+
+function reindex() {
+  var n=srcLen(),p=0,k=1,x=0,b,a;
+  w32(LINE_OFF,0);
+  while(p<n && k<LINE_MAX){
+    b=srcByte(p);a=(b>=32 && b<127)?ADV[b]:0;
+    if(b===10){w32(LINE_OFF+k*4,p+1);k=k+1;x=0;p=p+1;}
+    else if(x+a>520 && x>0){w32(LINE_OFF+k*4,p);k=k+1;x=0;}
+    else{x=x+a;p=p+1;}
+  }
+  nLines=k;
+}
+
+function lineLen(i) {
+  var s = lineStart(i);
+  var e = (i + 1 < nLines) ? lineStart(i + 1) : srcLen();
+  if(e>s && srcByte(e-1)===10){e=e-1;}
+  if (e > s && srcByte(e - 1) === 13) { e = e - 1; }
+  if (e < s) { return 0; }
+  return e - s;
+}
+
+function hashes(li) {
+  var s, n, h;
+  s = lineStart(li);
+  n = lineLen(li);
+  h = 0;
+  while (h < n && h < 6 && srcByte(s + h) === 35) { h = h + 1; }
+  return h;
+}
+
+function kindOf(li) {
+  var s, n, b, c;
+  n = lineLen(li);
+  if (n < 1) { return 0; }
+  s = lineStart(li);
+  b = srcByte(s);
+  if (b === 35) {
+    c = hashes(li);
+    if (c >= 3) { return 3; }
+    if (c === 2) { return 2; }
+    return 1;
+  }
+  if (b === 45) {
+    c = 0;
+    while (c < n && srcByte(s + c) === 45) { c = c + 1; }
+    if (c === n && n >= 3) { return 7; }
+    if (n > 1 && srcByte(s + 1) === 32) { return 4; }
+  }
+  if (b === 42 && n > 1 && srcByte(s + 1) === 32) { return 4; }
+  if (b === 62 && n > 1 && srcByte(s + 1) === 32) { return 5; }
+  return 6;
+}
+
+function skipOf(li, kind) {
+  var s, n, h;
+  if (kind === 4 || kind === 5) { return 2; }
+  if (kind < 1 || kind > 3) { return 0; }
+  h = hashes(li);
+  s = lineStart(li);
+  n = lineLen(li);
+  if (h < n && srcByte(s + h) === 32) { return h + 1; }
+  return h;
+}
+
+function lineH(li) {
+  var k=kindOf(li);
+  if(k===1 || k===2)return 20;
+  if(k===0)return 8;
+  if(k===7)return 12;
+  return 16;
+}
+
+function glyph(b,x,y,blue){
+  if(b>=32 && b<127){
+    ctx.drawImage(fontImage,(b%32)*16,Math.floor(b/32)*16+blue*64,16,16,x,y,16,16);
+  }
+}
+function drawChars(li,y,skip,blue,x0){
+  var s=lineStart(li),n=lineLen(li),c=skip,b,x=x0;
+  if(y+15>431)return;
+  while(c<n && x<586){b=srcByte(s+c);glyph(b,x,y,blue);if(b>=32 && b<127)x=x+ADV[b];c=c+1;}
+}
+function drawLine(li,y){
+  var kind=kindOf(li);
+  if(kind===0)return;
+  if(kind===7){ctx.fillStyle="#0055EE";ctx.fillRect(28,y+6,550,1);return;}
+  if(kind===4){glyph(45,30,y,0);drawChars(li,y,2,0,48);return;}
+  if(kind===5){ctx.fillStyle="#999999";ctx.fillRect(29,y,2,14);drawChars(li,y,2,0,42);return;}
+  drawChars(li,y,skipOf(li,kind),(kind===1 || kind===2 || kind===3)?1:0,28);
+}
+
+function pageUp() {
+  var y, li;
+  if (topLine <= 0) { topLine = 0; return; }
+  y = 0;
+  li = topLine;
+  while (li > 0 && y < 320) {
+    li = li - 1;
+    y = y + lineH(li);
+  }
+  if (y > 320) { li = li + 1; }
+  topLine = li;
+}
+
+function pageDown() {
+  var y, li;
+  y = 0;
+  li = topLine;
+  while (li < nLines && y < 320) {
+    y = y + lineH(li);
+    li = li + 1;
+  }
+  if (li < nLines) { topLine = li; }
+}
+
+function draw(){
+  var y=96,li=topLine;
+  ctx.windowScroll=Math.floor(topLine*255/Math.max(1,nLines-20));
+  ctx.windowScrollX=0;ctx.windowDirty=0;
+  ctx.fillStyle="#FFFFFF";ctx.fillRect(24,88,576,344);
+  while(li<nLines && y<416){drawLine(li,y);y=y+lineH(li);li=li+1;}
+}
+
+function onKey(e) {
+  var k;
+  k = e.keyCode;
+  if(k===116){quit=1;cdone(0,0,0);return;}
+  if(k===128){if(topLine>0)topLine=topLine-1;needDraw=1;return;}
+  if(k===129){if(topLine+1<nLines)topLine=topLine+1;needDraw=1;return;}
+  if(k===130){pageUp();needDraw=1;return;}
+  if(k===131){pageDown();needDraw=1;return;}
+  if (k === 38) { if (topLine > 0) { topLine = topLine - 1; } }
+  else if (k === 40) { if (topLine + 1 < nLines) { topLine = topLine + 1; } }
+  else if (k === 37 || k === 114 || k === 33) { pageUp(); }
+  else if (k === 39 || k === 115 || k === 34) { pageDown(); }
+  needDraw = 1;
+}
+
+function tick() {
+  if(quit)return;
+  if (needDraw) { draw(); needDraw = 0; }
+  requestAnimationFrame(tick);
+}
+
+reindex();
+addEventListener("keydown", onKey);
+// Window controls are system-owned; the body retains page-click reading.
+addEventListener("mousedown",function(e){
+  if(e.button===0 && e.clientX>=24 && e.clientX<600 && e.clientY>=88 && e.clientY<432){
+    if(e.clientY<260)pageUp();else pageDown();needDraw=1;
+  }
+});
+
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

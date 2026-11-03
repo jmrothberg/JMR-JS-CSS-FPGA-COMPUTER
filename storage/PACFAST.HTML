@@ -220,7 +220,12 @@ function Game(id,params){
     var $canvas = document.getElementById(id);
     $canvas.width = _.width;
     $canvas.height = _.height;
-    var _context = $canvas.getContext('2d');	//画布上下文环境
+    var _context = $canvas.getContext('2d');
+// Shared application menu and About metadata; no private chrome.
+_context.systemWindow=8;
+_context.systemViewport=1;
+_context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
+	//画布上下文环境
     var _stages = [];							//布景对象队列
     var _events = {};							//事件集合
     var _index=0,								//当前布景索引

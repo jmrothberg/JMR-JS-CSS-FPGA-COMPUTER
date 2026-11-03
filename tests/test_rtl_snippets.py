@@ -1577,6 +1577,40 @@ requestAnimationFrame(tick);
         sim.shutdown()
 
 
+def test_rtl_timer_delay_conversion_and_missing_argument():
+    """Delay preparation preserves arity, ToUint32 and signed frame scaling."""
+    import re
+    from functional_model.compiler import compile_source
+    from functional_model.jsb_format import ProgramImage
+
+    source = (
+        'function callback() {}'
+        'setTimeout(callback,1000); setTimeout(callback);'
+        'setTimeout(callback,-15); setTimeout(callback,16.99);'
+        'setTimeout(callback,50); setTimeout(callback,4294967297);'
+        'setTimeout(callback,2147483647); setTimeout(callback,200000);'
+    )
+    image = ProgramImage.from_chunk(compile_source(source), v2=True, value64=True)
+    sim = _sim()
+    try:
+        sim._program_image = image.data
+        assert sim._stream_program_image().startswith('OK')
+        for _ in range(1000):
+            sim._rpc('TICKN 50')
+            status = sim._rpc('VMSTAT?')
+            if 'sname=S_WAIT_FRAME' in status:
+                break
+        assert 'sname=S_WAIT_FRAME' in status, status
+        raw = sim._rpc('TMR?')
+        due = [int(n) for n in re.findall(r'\[\d+\]v=1 due=(-?\d+)', raw)]
+        assert len(due) == 8, raw
+        # All registrations occur in one frame; subtract its common epoch.
+        epoch = due[0] - 60
+        assert [n - epoch for n in due] == [60, 1, 1, 1, 3, 1, 1, 12000], raw
+    finally:
+        sim.shutdown()
+
+
 def test_rtl_settimeout_delay_keeps_drawing():
     """setTimeout(fn, 1000) must not fire on the next few frames."""
     src = """

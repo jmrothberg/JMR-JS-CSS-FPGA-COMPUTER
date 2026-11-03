@@ -696,7 +696,7 @@ Silicon holes and HELP-text mismatch:
 | `SAVE` | P1 | in | in | **V1.0:** does not change `RUN` (still `.JSH`). Authoring save is V1.5. |
 | `NEW` | P1 | in | in | Clears source; RTL also `halt_pulse`. Same: not authoring until V1.5. |
 | `CLS` | P1 | in | in | RTL HELP does not print this verb |
-| `HELP` | P1 | in | in | PYTHON lists INSERT/DELETE; RTL prints `DIR LOAD SAVE NEW LIST EDIT RUN` |
+| `HELP` | P1 | in | in | PYTHON lists INSERT/DELETE; RTL prints `DIR LOAD SAVE NEW LIST EDIT READ RUN` |
 | `MEM` | P1 | in | in | RTL prints `FB 640X480` |
 | `ESC` | P0 | in | in | Machine BREAK; games must not steal Esc |
 | `10 text` (numbered replace) | P1 | in | **NOT** | PYTHON READY only. Leftover typed-READY authoring, not the shipped `EDIT`/`COMPILE` loop. |

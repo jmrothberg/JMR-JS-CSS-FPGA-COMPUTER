@@ -27,6 +27,17 @@ module jmr_console_engine (
     output logic        print_nl,
     // Status
     output logic        ready_lit,
+    output logic        command_failed_o,
+    output logic        interactive_o,
+    output logic [2:0] system_role_o,system_stage_o,
+    output logic [127:0] ui_source_name_o,
+    output logic [4:0] ui_source_len_o,
+    output logic ui_unnamed_o,
+    input logic ui_doc_start=1'b0,ui_doc_new=1'b0,
+    input logic [2:0] ui_doc_role=3'd1,
+    input logic ui_set_name=1'b0,
+    input logic [95:0] ui_name=96'd0,
+    input logic [3:0] ui_name_len=4'd0,
     // V1.5 standalone compile: the VM's srcLen() reads this. A wire, not a
     // state — poking the value through memory would cost two encodings.
     output logic [17:0] src_len_o,
@@ -56,7 +67,7 @@ module jmr_console_engine (
     // NEW: ASET section → external asset SRAM (jmr_sram_port write master)
     output logic        sram_req,
     output logic        sram_we,
-    output logic [20:0] sram_addr,
+    output logic [21:0] sram_addr,
     output logic [15:0] sram_wdata,
     input  logic [15:0] sram_rdata,
     input  logic        sram_ack,
@@ -124,18 +135,18 @@ module jmr_console_engine (
     // old on-chip array was 8.2k LUTRAM against a failing 46.2k cap. The
     // internal 1-beat req/gnt protocol is kept; consumers already wait on
     // src_gnt, so the extra ack latency is absorbed by the protocol.
-    localparam logic [20:0] SRC_SRAM_BASE = 21'd1724416; // below IMGD region
+    localparam logic [21:0] SRC_SRAM_BASE = 22'd3821568; // below IMGD region
     // V1.5 standalone-compile arena (mirror of jmr_js_vm_pkg / jsb_format).
     // CART: the art arena, words 0..1,480,703, packed 2 bytes per word
     // (2,961,408 B). Staging ground for an ARTX payload during an
     // on-machine art compile. Mirrors jmr_js_vm_pkg.CART_SRAM_BASE.
-    localparam logic [20:0] CART_SRAM_BASE = 21'd0;
+    localparam logic [21:0] CART_SRAM_BASE = 21'd0;
     // run 71 big put ceiling: CART bank = jmr_js_vm_pkg.CART_WORDS (1,480,704)
     // x 2 B/word. Mirrored like CART_SRAM_BASE (the console does not import the pkg).
-    localparam logic [21:0] BIG_MAX_BYTES = 22'd2961408;
-    localparam logic [20:0] CSCR_SRAM_BASE = 21'd1650688;
+    localparam logic [22:0] BIG_MAX_BYTES = 23'd7155712;
+    localparam logic [21:0] CSCR_SRAM_BASE = 22'd3747840;
     localparam int unsigned CSCR_WORDS     = 73728;
-    localparam logic [20:0] CIMG_SRAM_BASE = 21'd1789952;
+    localparam logic [21:0] CIMG_SRAM_BASE = 22'd3887104;
     localparam logic [20:0] CSTG_HDR_OUT   = 21'd76;  // u32: image offset
     // Item C: 16-byte filename the PROGRAM asks the console to operate on
     // (SAVE / DELETE / LOAD / mint-as). NUL or space terminates.
@@ -151,7 +162,7 @@ module jmr_console_engine (
     localparam int          CSTG_ART_HDRB  = 4096;     // header bytes copied
     localparam logic [20:0] CSTG_HDR_PSEL  = 21'd64;  // u8: next program
 
-    function automatic logic [20:0] cstg_word(input logic [20:0] i);
+    function automatic logic [21:0] cstg_word(input logic [20:0] i);
         cstg_word = (i < 21'(CSCR_WORDS))
             ? (CSCR_SRAM_BASE + i)
             : (CIMG_SRAM_BASE + (i - 21'(CSCR_WORDS)));
@@ -164,7 +175,7 @@ module jmr_console_engine (
     // side (jsb_format.COMPILE_CHAIN) indexes the same numbers, and a
     // renumber would silently chain-load the wrong program.
     //   0 ARTSCAN  1 ARTPNG  2 COMPILER  3 COMPIL2
-    //   4 MINTASM  5 EDIT    6/7 spare (blank -> caller must not chain)
+    //   4 MINTASM  5 EDIT    6 READ    7 spare (blank -> caller must not chain)
     // Rows 1/3/4/5 exist so those programs ship as CARD FILES with no RTL
     // change; that is the difference between "copy a file" and "re-synthesise".
     function automatic logic [7:0] cmp_name_char(input logic [2:0] sel,
@@ -202,7 +213,11 @@ module jmr_console_engine (
                 7'd4: c = "O"; 7'd5: c = "R"; 7'd6: c = "."; 7'd7: c = "J";
                 7'd8: c = "S"; default: c = "H";
               endcase
-        default: c = 8'h20;                 // 6/7 spare: blank name
+        3'd6: case (i)                      // "READ.JSH"
+                7'd0: c = "R"; 7'd1: c = "E"; 7'd2: c = "A"; 7'd3: c = "D";
+                7'd4: c = "."; 7'd5: c = "J"; 7'd6: c = "S"; default: c = "H";
+              endcase
+        default: c = 8'h20;                 // 7 spare: blank name
         endcase
         cmp_name_char = c;
     endfunction
@@ -216,6 +231,7 @@ module jmr_console_engine (
             3'd3: cmp_name_len = 8'd11; // COMPIL2.JSH
             3'd4: cmp_name_len = 8'd11; // MINTASM.JSH
             3'd5: cmp_name_len = 8'd10; // EDITOR.JSH
+            3'd6: cmp_name_len = 8'd8;  // READ.JSH
             default: cmp_name_len = 8'd0; // spare rows: no name
         endcase
     endfunction
@@ -277,7 +293,7 @@ module jmr_console_engine (
         // chain-load. Missing sidecar is NOT an error here: the flag goes
         // to 0 and a no-art title compiles exactly as it always did.
         C_ART_OPEN, C_ART_OPENW, C_ART_GB, C_ART_GBW, C_ART_WR,
-        C_ART_CLOSE, C_ART_CLOSEW, C_ART_FLAG
+        C_ART_CLOSE, C_ART_CLOSEW, C_ART_FLAG, C_UI_INIT
     } cstate_t;
 `ifdef VERILATOR
     integer ctrace_fd = 0;
@@ -319,6 +335,24 @@ module jmr_console_engine (
     // old cmp_arm EDIT, the editor ran INVISIBLY behind the text screen
     // until the watchdog reported ?IO.
     logic        cmp_interactive;
+    assign interactive_o=cmp_interactive;
+    assign system_role_o=cmp_arm_r?3'd3:cmp_interactive?(cmp_progsel==5?3'd1:3'd2):3'd0;
+    assign system_stage_o=cmp_progsel;
+    assign ui_source_len_o=src_name_len;
+    for(genvar ui_n=0;ui_n<16;ui_n=ui_n+1)begin:g_ui_name
+        assign ui_source_name_o[ui_n*8+:8]=src_name[ui_n];
+    end
+    logic [4:0] ui_init_i;
+    logic ui_init_pending;
+    logic [2:0] ui_init_role;
+    function automatic logic [7:0] ui_untitled(input integer i,input logic note);
+        case(i)
+            0:ui_untitled="U";1:ui_untitled="N";2:ui_untitled="T";3:ui_untitled="I";
+            4:ui_untitled="T";5:ui_untitled="L";6:ui_untitled="E";7:ui_untitled="D";8:ui_untitled=".";
+            9:ui_untitled=note?"T":"H";10:ui_untitled=note?"X":"T";11:ui_untitled=note?"T":"M";
+            default:ui_untitled=0;
+        endcase
+    endfunction
     // ARTX (art titles compiled on the machine). The payload is staged in
     // the CART arena at COMPILE time and appended to NAME.JSH after the
     // compiler's image. It CANNOT be streamed file-to-file: storage_engine
@@ -326,10 +360,10 @@ module jmr_console_engine (
     // .JSH is open for write would destroy the output file's state.
     // CART holds 2,961,408 B vs the largest payload 2,801,304 B.
     logic        cmp_art_mode;   // this mint appends an ARTX payload
-    logic [21:0] cmp_art_len;    // payload bytes to append
-    logic [21:0] cmp_art_i;      // bytes appended so far
+    logic [22:0] cmp_art_len;    // payload bytes to append
+    logic [22:0] cmp_art_i;      // bytes appended so far
     logic        cmp_art_hi;     // CART is packed 2 B/word: which half
-    logic [21:0] art_i;          // pre-load byte counter
+    logic [22:0] art_i;          // pre-load byte counter
     logic        art_found;      // sidecar opened successfully
     logic        art_hi;         // CART pack phase during the pre-load
     logic [15:0] art_word;       // half-assembled CART word
@@ -341,7 +375,7 @@ module jmr_console_engine (
     // run 71 big put (0xFB): .ART/.ARTX streamed into the CART staging
     // bank, packed 2 B/word from word 0; SAVE pumps it through the
     // mint's art-append path (cmp_save_mode + cmp_art_mode, img_len 0).
-    logic [21:0] big_len;        // bytes received (max 2*CART_WORDS)
+    logic [22:0] big_len;        // bytes received (max 2*CART_WORDS)
     logic [7:0]  big_lo;         // held low byte of the pair
     logic        big_hi;         // 1 = a low byte is held
     logic        big_eof;        // flushing the odd tail byte at eof
@@ -349,10 +383,10 @@ module jmr_console_engine (
     logic        big_trunc;      // stream exceeded the bank -> SAVE says ?TR
     logic [15:0] art_nspr;       // sprite count, snooped from the header
     // Byte offset of payload_len inside .ARTX: 8 + n_sprites*8.
-    wire  [21:0] art_plen_off = 22'd8 + (22'(art_nspr) << 3);
+    wire  [22:0] art_plen_off = 22'd8 + (22'(art_nspr) << 3);
     logic [7:0]  cmp_nm_len;
     logic        cmp_pend;
-    logic [20:0] cmp_rd_addr;
+    logic [21:0] cmp_rd_addr;
     logic [20:0] cmp_out_off;
     logic [20:0] cmp_img_len;
     logic [20:0] cmp_i;
@@ -502,7 +536,7 @@ module jmr_console_engine (
     logic p_status_q;   // run 71: "STATUS"
     logic p_help_q, p_dir_q, p_dir_star_q, p_cls_q, p_list_q, p_mem_q,
           p_new_q, p_run_q, p_load_q, p_save_q, p_remove_q, p_compile_q,
-          p_edit_bare_q, p_empty_q,
+          p_edit_bare_q, p_read_bare_q, p_empty_q,
           p_len4_q;
     logic [7:0] line_tail_q;
     always_ff @(posedge clk) begin
@@ -537,6 +571,10 @@ module jmr_console_engine (
         // is the existing line editor and is untouched by this.
         p_edit_bare_q <= (line_len == 4 && up(line[0])=="E" && up(line[1])=="D"
                           && up(line[2])=="I" && up(line[3])=="T");
+        // Bare READ chain-loads READ.JSH, same as EDIT, so SOURCE stays the
+        // document. READ NAME is the Python form; this predicate is bare only.
+        p_read_bare_q <= (line_len == 4 && up(line[0])=="R" && up(line[1])=="E"
+                          && up(line[2])=="A" && up(line[3])=="D");
     end
     always_ff @(posedge clk) begin
         ch_ni_q <= line[name_i];
@@ -562,11 +600,11 @@ module jmr_console_engine (
             12: banner_char = "E"; 13: banner_char = "-"; 14: banner_char = "C";
             15: banner_char = "P"; 16: banner_char = "U"; 17: banner_char = " ";
             18: banner_char = "V"; 19: banner_char = "2"; 20: banner_char = ".";
-            21: banner_char = "0"; // V2.0 R70 — bump IN THE SAME change as the payload
+            21: banner_char = "0"; // V2.0 R72 — bump IN THE SAME change as the payload
             // run number - bump by hand each build (user: know which bit
             // is on the board from the glass)
             22: banner_char = " "; 23: banner_char = "R";
-            24: banner_char = "7"; 25: banner_char = "1";
+            24: banner_char = "7"; 25: banner_char = "2";
             default: banner_char = 8'h00;
         endcase
     endfunction
@@ -599,7 +637,7 @@ module jmr_console_engine (
     function automatic logic [7:0] reply_char(input logic [4:0] sel, input logic [6:0] i);
         case (sel)
             4'd0: case (i)
-                // DIR LOAD SAVE NEW LIST EDIT RUN (same verbs as PYTHON HELP)
+                // DIR LOAD SAVE NEW LIST EDIT READ RUN
                 0: reply_char="D";1: reply_char="I";2: reply_char="R";3: reply_char=" ";
                 4: reply_char="L";5: reply_char="O";6: reply_char="A";7: reply_char="D";
                 8: reply_char=" ";9: reply_char="S";10: reply_char="A";11: reply_char="V";
@@ -607,7 +645,9 @@ module jmr_console_engine (
                 16: reply_char="W";17: reply_char=" ";18: reply_char="L";19: reply_char="I";
                 20: reply_char="S";21: reply_char="T";22: reply_char=" ";23: reply_char="E";
                 24: reply_char="D";25: reply_char="I";26: reply_char="T";27: reply_char=" ";
-                28: reply_char="R";29: reply_char="U";30: reply_char="N"; default: reply_char=8'h00;
+                28: reply_char="R";29: reply_char="E";30: reply_char="A";31: reply_char="D";
+                32: reply_char=" ";33: reply_char="R";34: reply_char="U";35: reply_char="N";
+                default: reply_char=8'h00;
             endcase
             4'd1: case (i)
                 0: reply_char="F";1: reply_char="B";2: reply_char=" ";3: reply_char="6";
@@ -700,6 +740,7 @@ module jmr_console_engine (
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             state <= C_BOOT_CLS;
+            command_failed_o <= 1'b0;
             ret_state <= C_IDLE;
             line_len <= 0;
             msg_idx <= 0;
@@ -731,6 +772,7 @@ module jmr_console_engine (
             cmp_ph <= 5'd0; cmp_nw <= 1'b0; cmp_nm_len <= 8'd0; cmp_pend <= 1'b0; cmp_rd_addr <= '0;
             src_trunc <= 1'b0; cmp_use_srcname <= 1'b0;
             cmp_interactive <= 1'b0;
+            ui_unnamed_o<=0;ui_init_i<=0;ui_init_pending<=0;ui_init_role<=1;
             cdone_seen_low <= 1'b0;
             cmp_art_mode <= 1'b0; cmp_art_len <= '0;
             art_i <= '0; art_found <= 1'b0; art_hi <= 1'b0; art_word <= '0;
@@ -923,6 +965,7 @@ module jmr_console_engine (
                     if (!video_busy) state <= ret_state;
                 end
                 C_EXEC: begin
+                    command_failed_o <= 1'b0;
                     reply_sel <= 4'd3; // ?
                     cmd_is_load <= 0; cmd_is_save <= 0; cmd_is_remove <= 0;
                     // NEW: EDIT waiting — next typed line replaces that source line
@@ -1055,7 +1098,7 @@ module jmr_console_engine (
                         // C_CMP_WAIT, so game_mode never rises: the text
                         // screen stays up and the editor cannot appear to
                         // hang behind the framebuffer.
-                        if (src_len == 18'd0) begin
+                        if (src_len == 18'd0 && src_name_len==0) begin
                             reply_sel <= 4'd7; reply_idx <= 0; // ?NB
                             state <= C_REPLY;
                         end else begin
@@ -1075,11 +1118,34 @@ module jmr_console_engine (
                             cmp_pend <= 1'b0;
                             state <= C_JSB_PREP;
                         end
+                    end else if (p_read_bare_q) begin
+                        // Same launch as EDIT. Slot 6 is READ.JSH. SOURCE
+                        // stays the file LOAD parked (an .MD document).
+                        if (src_len == 18'd0 && src_name_len==0) begin
+                            reply_sel <= 4'd7; reply_idx <= 0; // ?NB
+                            state <= C_REPLY;
+                        end else begin
+                            cmp_arm_r <= 1'b0;
+                            cmp_interactive <= 1'b1;
+                            jsb_name_src <= 2'd1; cmp_progsel <= 3'd6; // READ
+                            cmp_save_mode <= 1'b0;
+                            jsb_want_jsh <= 1'b1; jsb_tether_mode <= 1'b0;
+                            name_i <= 0; dir_n <= 0; jsb_waddr <= 0;
+                            jsb_bi <= 0; jsb_word <= 0; ld_err <= 0;
+                            jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
+                            aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
+                            sram_last <= 0; cmp_wd <= '0; cmp_ph <= 5'd0;
+                            cmp_nw <= 1'b0; cmp_nm_len <= 8'd0;
+                            cmp_pend <= 1'b0;
+                            state <= C_JSB_PREP;
+                        end
                     end else begin
                         reply_idx <= 0; state <= C_REPLY;
                     end
                 end
                 C_REPLY: begin
+                    if (ridx_q == reply_idx && rsel_q == reply_sel && reply_ch_q == "?")
+                        command_failed_o <= 1'b1;
                     if (ridx_q != reply_idx || rsel_q != reply_sel) begin
                         // reply ROM pipe settling
                     end else if (reply_ch_q == 8'h00) begin
@@ -1247,6 +1313,7 @@ module jmr_console_engine (
                         stor_name_len <= {1'b0, name_len_r};
                         // Remember upcased name for RUN gate / LIST header
                         if (cmd_is_load) begin
+                            ui_unnamed_o<=0;
                             src_name_len <= (name_len_r > 5'd16) ? 5'd16 : name_len_r[4:0];
                             // RECTDEMO.JS or RECTDEMO → silicon demo allowed
                             src_is_rectdemo <=
@@ -1482,7 +1549,7 @@ module jmr_console_engine (
                         if (art_i == art_plen_off + 22'd1)
                             cmp_art_len[15:8]  <= stor_get_data;
                         if (art_i == art_plen_off + 22'd2)
-                            cmp_art_len[21:16] <= stor_get_data[5:0];
+                            cmp_art_len[22:16] <= stor_get_data[6:0];
                         if (art_i < 22'(CSTG_ART_HDRB)) begin
                             // header -> arena, 1 B/word like every other
                             // arena region
@@ -1503,7 +1570,7 @@ module jmr_console_engine (
                                 src_req <= 1'b1; src_we <= 1'b1;
                                 src_bank <= 1'b1;
                                 cmp_rd_addr <= CART_SRAM_BASE
-                                    + 21'((art_i - 22'(CSTG_ART_HDRB)) >> 1);
+                                    + 22'((art_i - 22'(CSTG_ART_HDRB)) >> 1);
                                 src_wdata <= stor_get_data; // high half
                                 src_wlo <= art_word[7:0];   // low half (was dropped)
                                 src_w16 <= 1'b1;
@@ -1662,7 +1729,7 @@ module jmr_console_engine (
                                 src_req <= 1'b1; src_we <= 1'b0;
                                 src_bank <= 1'b1;
                                 cmp_rd_addr <= CART_SRAM_BASE
-                                             + 21'(cmp_art_i[21:1]);
+                                             + 22'(cmp_art_i[22:1]);
                                 cmp_art_hi  <= cmp_art_i[0];
                                 state <= C_SV_RDW;
                             end else state <= C_SV_CLOSE;
@@ -1706,6 +1773,25 @@ module jmr_console_engine (
                     cmp_save_mode <= 1'b0;
                     big_staged <= 1'b0;
                     reply_idx <= 0; state <= C_REPLY;
+                end
+
+                C_UI_INIT: begin
+                    if(!ui_init_pending)begin
+                        src_req<=1;src_we<=1;src_bank<=1;cmp_rd_addr<=cstg_word(21'd32+21'(ui_init_i));
+                        case(ui_init_i)0:src_wdata<=82;1:src_wdata<=69;2:src_wdata<=83;3:src_wdata<=1;
+                            20:src_wdata<={5'd0,ui_init_role};default:src_wdata<=0;endcase
+                        ui_init_pending<=1;
+                    end else if(src_gnt)begin
+                        ui_init_pending<=0;
+                        if(ui_init_i==20)begin
+                            src_bank<=0;cmp_arm_r<=0;cmp_interactive<=1;jsb_name_src<=1;cmp_progsel<=5;
+                            cmp_save_mode<=0;jsb_want_jsh<=1;jsb_tether_mode<=0;
+                            name_i<=0;dir_n<=0;jsb_waddr<=0;jsb_bi<=0;jsb_word<=0;ld_err<=0;
+                            jsb_boff<=0;jsb_aset_off<=0;jsb_has_aset<=0;aset_seen<=0;aset_len<=0;aset_pay<=0;
+                            sram_last<=0;cmp_wd<=0;cmp_ph<=0;cmp_nw<=0;cmp_nm_len<=0;cmp_pend<=0;
+                            state<=C_JSB_PREP;
+                        end else ui_init_i<=ui_init_i+1'b1;
+                    end
                 end
 
                 // ---- REMOVE ---------------------------------------------
@@ -2565,7 +2651,7 @@ module jmr_console_engine (
                             if (big_hi) begin
                                 src_req <= 1'b1; src_we <= 1'b1;
                                 src_bank <= 1'b1;
-                                cmp_rd_addr <= CART_SRAM_BASE + 21'(big_len[21:1]);
+                                cmp_rd_addr <= CART_SRAM_BASE + 22'(big_len[22:1]);
                                 src_wdata <= 8'd0; src_wlo <= big_lo; src_w16 <= 1'b1;
                                 big_hi <= 1'b0; big_eof <= 1'b1;
                                 state <= C_BIG_WR;
@@ -2585,7 +2671,7 @@ module jmr_console_engine (
                         end else begin
                             src_req <= 1'b1; src_we <= 1'b1;
                             src_bank <= 1'b1;
-                            cmp_rd_addr <= CART_SRAM_BASE + 21'(big_len[21:1]);
+                            cmp_rd_addr <= CART_SRAM_BASE + 22'(big_len[22:1]);
                             src_wdata <= jsb_tether_data;   // high half
                             src_wlo <= big_lo; src_w16 <= 1'b1;
                             big_hi <= 1'b0;
@@ -2648,7 +2734,7 @@ module jmr_console_engine (
                         state <= C_JSB_CLOSE;
                     end else if (aset_seen && aset_pay[0]) begin
                         sram_req <= 1'b1; sram_we <= 1'b1;
-                        sram_addr <= aset_pay[21:1];
+                        sram_addr <= aset_pay[22:1];
                         sram_wdata <= {8'h00, sram_lo};
                         sram_last <= 1'b1;
                         state <= C_JSB_SRAMW;
@@ -2695,7 +2781,7 @@ module jmr_console_engine (
                                 sram_lo <= jsb_din;
                             else begin
                                 sram_req <= 1'b1; sram_we <= 1'b1;
-                                sram_addr <= aset_pay[21:1];
+                                sram_addr <= aset_pay[22:1];
                                 sram_wdata <= {jsb_din, sram_lo};
                                 state <= C_JSB_SRAMW;
                             end
@@ -2840,6 +2926,22 @@ module jmr_console_engine (
                     cons_prog_wd <= 32'd0;
                     reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY;
                 end
+            end
+
+            // Native menu requests arrive only after the previous command
+            // is idle. SOURCE and its filename stay owned by this console.
+            if(ui_doc_start && (state==C_IDLE || state==C_PROMPT))begin
+                ui_init_i<=0;ui_init_pending<=0;ui_init_role<=ui_doc_role;state<=C_UI_INIT;
+                if(ui_doc_new)begin
+                    src_len<=0;src_name_len<=12;ui_unnamed_o<=1;src_is_html<=ui_doc_role!=5;src_is_js<=0;
+                    for(integer nn=0;nn<16;nn=nn+1)src_name[nn]<=ui_untitled(nn,ui_doc_role==5);
+                end
+            end
+            if(ui_set_name)begin
+                src_name_len<={1'b0,ui_name_len};ui_unnamed_o<=0;
+                for(integer nn=0;nn<16;nn=nn+1)src_name[nn]<=nn<12 && nn<ui_name_len?ui_name[nn*8+:8]:8'd0;
+                src_is_html<=ui_name_len>=4 && ui_name[(ui_name_len-4)*8+:32]==32'h4d54482e;
+                src_is_js<=ui_name_len>=3 && ui_name[(ui_name_len-3)*8+:24]==24'h534a2e;
             end
 
             // ---- SOURCE -> external SRAM bridge (appended; every beat) ----

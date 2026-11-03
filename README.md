@@ -1,5 +1,102 @@
 # JMR JS Computer
 
+## Mac-style Python menus — November 2, 2026
+
+Your normal **[gui_jmr_js.py](gui_jmr_js.py)** and **`card.img`** now have the
+shared Mac-style menu system. Start normally:
+
+```sh
+.venv/bin/python gui_jmr_js.py
+```
+
+Python opens Finder. Fantasy Chess (`2DFANTA2`) has Game → New Game and Level →
+Ply 1..5. Donkey Kong (`DNKF`) has Mario/Luigi New Game and Pause/Resume. All 19 games and demos now
+use **File → Quit** and the ship menu for **About** and **Keyboard**. Each About
+dialog says **JMR Enterprises**, names the game and gives a one-line description.
+Simpler games get **Game → Restart**. `MENUEX` is the small
+working example for converting more programs.
+
+Editor/Note use File → Save and Save As and stay open after saving. Reader →
+File → Open browses Markdown/text files. All tools share window/menu styling
+and working close controls. Finder Special launches the system tools.
+The shared API and agent porting instructions are in
+**[SYSTEM_APPLICATIONS.md](docs/SYSTEM_APPLICATIONS.md)**, also `MENUS.MD` on disk.
+
+The previous disk is backed up under `build/system_tools/` with a publication
+record and rollback instructions. Other disk files/icons were preserved.
+The released `.bit` is unchanged; this menu update is qualified in **Python**,
+with its RTL/board port pending. The optional isolated preview launcher is
+[run_python_system_preview.sh](run_python_system_preview.sh).
+
+## Desktop simulator update — November 2, 2026
+
+Start [gui_jmr_js.py](gui_jmr_js.py) with `.venv/bin/python gui_jmr_js.py`.
+The desktop opens in PYTHON; F9 selects the real FPGA-SIM (RTL).
+The Enterprise ship at the upper left opens **About** and
+**Keyboard**, including while a program runs. Menus have opaque backgrounds.
+Use the keyboard's **Hold keys** box to hold direction and fire together;
+click a held key again, hide the keyboard, or Quit to release it.
+
+**File** has Open, Compile, Read, Delete and Close window. **Edit** has
+Edit source; **Special** has Terminal, Help and Restart. Select `HELP.MD`
+or another `.MD`/`.TXT` document and choose **File → Read**. Document
+extensions are shown. Every Markdown file opens in the same Mac-style
+window with the original Chicago font, a close box, scroll arrows and page
+clicks. Games use **File → Quit**; programs have no red X.
+
+**View → Hidden files** toggles artwork, icons and compiled/system files.
+It opens a list so long names are readable; hiding them restores your prior view.
+The window shows `.ARTJS`, `.ARTX`, and `.ICON` labels. F8 can copy documents,
+source artwork and optional program icons too. Missing icons use the generic
+application icon. `HELP.MD` is the on-card manual; folder `README.md` files
+stay on the host.
+
+These desktop changes are in the simulator/source. The selected run73o
+bitstream below remains the last board-tested release; it does not contain
+the new desktop or mouse interface.
+
+## Current version: run73o — November 2, 2026
+
+**This is the newest selected FPGA build. The owner flashed it to QSPI and reports that it runs fine on the board.** The file to load is always **[releases/current/fpga.bit](releases/current/fpga.bit)**; the versioned original and checksums are kept beside it.
+
+From this repository's root, try it until power-off:
+
+```bash
+openFPGALoader -b nexysVideo releases/current/fpga.bit
+```
+
+To keep it after power-off, flash it and then load the application immediately:
+
+```bash
+openFPGALoader -b nexysVideo -f releases/current/fpga.bit
+openFPGALoader -b nexysVideo releases/current/fpga.bit
+```
+
+Set **JP4 to QSPI** for boot from flash. If you already flashed run73o and it works, **the folder cleanup does not require reflashing**.
+
+**Keep loading your existing `.HTML` files from your existing card:**
+
+```text
+LOAD "PACFAST.HTML"
+RUN
+```
+
+The `.bit` configures the FPGA; `.HTML` is what you load as a program. No ZIP or new game package is required.
+
+What changed: the **general FPGA JavaScript engine** now runs at 33.333 MHz instead of 14.286 MHz, with pipelined exact arithmetic, corrected method caching and more efficient graphics/memory transfers. The benchmark game programs and artwork were unchanged. Against the previous October 26 build, simulated median processing gains are **2.005× Pac-Man / 2.307–2.356× Donkey Kong**; gains vary by program/frame. HDMI stays 60 Hz; numeric board FPS has not been measured. **579 distinct tests pass**, and final routing/setup/hold/pulse/DRC-error checks pass (setup 0.000 ns rounded, hold +0.040 ns). [Details and validation](docs/GAME_SPEEDUP_RESULTS.md#current-run73o--2026-11-02).
+
+- [Current files and complete loading instructions](releases/current/README.md).
+- [Previous board-proven run72b: revert instructions](releases/archive/run72b-2026-10-26/README.md).
+- [Older versions and what they are](releases/archive/README.md).
+- [Optional source/artwork packaging example](releases/extras/README.md): separate pictures make the HTML smaller; not needed for this speedup.
+- [Project folder guide](docs/README.md). Busy project folders have their own brief `README.md`; generated/vendor internals keep their original layouts.
+
+**Previous board-proven standard (2026-10-26): run72b.** First rollback if run73o misbehaves. [Download that release](https://github.com/jmrothberg/JMR-JS-CSS-FPGA-COMPUTER/releases/tag/standard-2026-10-26-run72b). Its gains, against the build before it, were **3.76× Pac-Man / 3.16× Donkey Kong** median native RTL (simulated fabric cycles; board FPS was not measured). That A200T build used **92,273 LUTs, 28,583 slices, and 353.5 BRAM**, with **+0.238 ns setup / +0.050 ns hold**. Routing took **35m48s**. **549** regression tests passed. Use the matching card image with that bitstream. Local files and the longer notes: [releases/archive/run72b-2026-10-26/](releases/archive/run72b-2026-10-26/README.md).
+
+**One Git repository, work on `main`.** Do not create branches, extra repositories or worktrees to save versions. Keep the current release in `releases/current/`, older versions in `releases/archive/`, and failed builds/checkpoints in `build/archive/`. [Release layout](releases/README.md).
+
+## About the computer
+
 An original **standalone** computer that starts on an **FPGA** (Field-Programmable
 Gate Array — a chip you reconfigure from a bitstream file) and is aimed at an
 **ASIC** (Application-Specific Integrated Circuit — a custom chip later). It is
@@ -20,7 +117,8 @@ from that same FAT image (board = `card.img` burned to µSD). `storage/` is
 the **seed** only — rebuild with `make_sd_image.py create card.img`. That
 step **compiles** each HTML into a minted **`.JSH`** (ProgramImage:
 bytecode + **ASET** art). `LOAD` still shows HTML; `RUN` feeds the **JMR
-VM** from that `.JSH` (the chip does not compile). Full-quality graphics
+VM** from that `.JSH`. Host tools or the on-machine compiler can produce the
+compiled file. Full-quality graphics
 stream into the **external 4 MB SRAM asset bank** (Static Random-Access
 Memory; ISSI IS61WV204816 contract). On the FPGA board, **DDR3** (board
 DRAM) sits *behind* that same simple SRAM port. There is no `NAME.DAT`
@@ -40,31 +138,7 @@ keyboard jack **J15**, Pmod joystick. **PA-StarLite** is a later port.
 Development order: **PYTHON bytecode → real FPGA-SIM (perfect) → board → ASIC**.
 Do **not** flash the board until the FPGA-SIM battery is green.
 
-**Current standard (2026-10-26): run72b native-JavaScript speedup.**
-[Download the validated bitstream and matching card image](https://github.com/jmrothberg/JMR-JS-CSS-FPGA-COMPUTER/releases/tag/standard-2026-10-26-run72b).
-Pac-Man and both Donkey Kong art variants retain their rules, graphics,
-audio, and resolution. Faster exact Number multiplication, numeric-array GC,
-framebuffer transfers, and ordinary JavaScript redraw/collision work recover
-**3.76× Pac-Man / 3.16× Donkey Kong** median native RTL performance.
-These are simulated fabric-cycle gains; board FPS has not been measured.
-The user reports a working board/tether setup.
-
-The A200T build uses **92,273 LUTs, 28,583 slices, and 353.5 BRAM tiles**,
-with **+0.238 ns setup / +0.050 ns hold** slack. Routing took **35m48s**.
-The native CPU, one heap, heap capacities, and full game assets are retained.
-See [the standard release](docs/STANDARD_RELEASE.md) for files, checksums,
-persistent flash, and the previous binary archive; [results](docs/GAME_SPEEDUP_RESULTS.md)
-for 549 passing regression tests and pixel/state preservation evidence.
-Use the matching card image as well as the bitstream.
-
-The owner confirms the normal **J15 USB keyboard works in prior builds**.
-The 2026-10-26 mouse-only experiment disabled that keyboard path and does
-**not** support a keyboard with a built-in mouse. Read the
-[failed-approach record](docs/NEXYS_USB_KEYBOARD_MOUSE_FAILED.md) before
-attempting USB mouse work again. The accepted standard release remains
-unchanged. `RUN` loads the card's minted `.JSH`.
-On-machine editing/compilation uses the card tools; it does not make
-`RUN` a host JavaScript engine.
+The owner confirms the normal **J15 USB keyboard works**. The old mouse-only experiment disabled that path and does not support a USB keyboard with a built-in mouse. It is archived as a [failed approach](docs/NEXYS_USB_KEYBOARD_MOUSE_FAILED.md), not part of the current release. On-machine editing and compilation use the card's tools; `RUN` executes native JMR bytecode. On the machine, `LOAD "HELP.MD"` then `READ` pages the manual. `LOAD "NAME.MD"` then `READ` opens another Markdown file. The flashed run73o bitstream does not have the READ verb yet; until the next bitstream, `LIST` pages the loaded file.
 
 **Where to go next**
 
@@ -100,12 +174,11 @@ READY
 ### Top commands (use these a lot)
 
 ```bash
-openFPGALoader -b nexysVideo build/bits/run72b_game_speedup_WNS+0.238.bit
+openFPGALoader -b nexysVideo releases/current/fpga.bit
 # MOST COMMON — SRAM-load the .bit onto the Nexys Video (PROG USB J12).
-#    HDMI live in seconds; gone when you unplug. Named keepers in build/bits/:
-#      openFPGALoader -b nexysVideo build/bits/<run>.bit
+#    HDMI live in seconds; gone when you unplug. Older versions are in releases/archive/.
 #    QSPI (survives power-cycle; JP4 = QSPI):
-#      openFPGALoader -b nexysVideo -f build/bits/run72b_game_speedup_WNS+0.238.bit
+#      openFPGALoader -b nexysVideo -f releases/current/fpga.bit
 
 python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 # 1. host env (once)
@@ -118,7 +191,8 @@ python3 gui_jmr_js.py
 #    F10 monitor + Inspector + board telemetry: docs/ARCH_MONITOR.md
 #    Window size is locked at startup (status text must not grow the alleys).
 #    Prefers .venv. V1.0 HTML RUN = minted .JSH from card.img (not dukpy).
-#    F9 BOARD: PC keyboard = tether (J15 dead). F10 hides the monitor (faster).
+#    F9 BOARD selects the physical board; J15 keyboard support is retained.
+#    PC-keyboard tether is also available. F10 hides the monitor (faster).
 
 make -C sim sim_server_synth
 # 4. FAST FPGA-SIM rebuild from repo root (same rtl/*.sv as the chip).
@@ -134,6 +208,12 @@ make -C sim sim_server_synth
 make -C sim tb_uart_link tb_ft245
 # 5. Matching PYTHON/native RTL regressions and tether benches.
 #    Legacy check_runtime_parity.py assumes removed title aliases; see STANDARD_RELEASE.md.
+
+python3 tools/check_port.py /path/to/GAME.HTML
+# Check compiled sizes and known static compatibility gaps before editing a port.
+python3 tools/prepare_port.py /path/to/GAME.HTML --out /path/to/new-port-directory
+# Embedded pictures → HTML + ARTX + ARTJS + original PNG sheets in a new directory.
+# Refuses changes to compiled game/art bytes. Originals are preserved.
 
 python3 tools/make_artx.py MYGAME      # PNGs → ARTX + ARTJS; wires Chrome __jmrSpr hook
 python3 tools/make_artx.py /path/to/game.html  # copy HTML+ARTX+ARTJS into storage/; PNGs stay put
@@ -165,8 +245,8 @@ make -C tools/board_flow bit VIVADO="$(command -v vivado)"
 #    docs/FPGA_BRINGUP.md. Writes .bit (JTAG/QSPI) and a secondary raw .bin archive.
 
 make -C tools/board_flow flash
-# 8. SRAM-load the existing .bit (PROG USB J12). If Make starts Vivado,
-#    stop it and load the file you already built. QSPI:
+# 8. SRAM-load releases/current/fpga.bit (PROG USB J12). This does not rebuild.
+#    QSPI (then use flash again for the application to run immediately):
 #    make -C tools/board_flow flash-qspi
 #    Detail: docs/FPGA_BRINGUP.md.
 ```
@@ -178,9 +258,9 @@ Gate: pass the matching Python/native RTL regressions and relevant hardware
 benches, then verify both setup and hold timing and the area budget. See
 [standard-release validation](docs/STANDARD_RELEASE.md#validation).
 Step **6b** is a new card (make + burn); **6c** burns an image you already
-made. Step **7** is a new Vivado build; the standard release routed in 35m48s
-after 39m29s synthesis. Set `VIVADO` to an installed, licensed launcher. Step **8** puts the
-accepted `.bit` on the board. Flash a new source build only after both setup
+made. Step **7** explicitly starts a new Vivado build. Set `VIVADO` to an installed,
+licensed launcher. Step **8** loads the selected preserved release without
+starting Vivado; see `releases/current/README.md`. Flash a new source build only after both setup
 and hold timing and the area gate pass; FPGA-SIM correctness comes first.
 The current VM already runs at 100 MHz ÷ 7. Fabric-to-VM paths can still
 have a 10 ns requirement: slowing the VM alone does not repair that cone.
@@ -384,7 +464,10 @@ FPGA-SIM, and BOARD `LOAD`/`RUN` the same `card.img` (minted `.JSH` on
 - Constitution first.
 - PYTHON functional model → hardware model on **the bytes RTL gets** → FPGA-SIM → board `.bit`.
 - FPGA-SIM RTL **is** the T200 chip (`.cursor/rules/never-fake-fpga-sim.mdc`).
-- Uniform glass across F9 runtimes.
+- Uniform glass across F9 runtimes. Console text is the RTL reply line.
+  Python does not add a longer paragraph. `HELP` is one line. The long
+  instructions are `HELP.MD` on the card. A JS result that only Python
+  gets is still a bug in RTL.
 - Read `traces/` before repro spam.
 - Surgical edits; do not delete files; one README.
 

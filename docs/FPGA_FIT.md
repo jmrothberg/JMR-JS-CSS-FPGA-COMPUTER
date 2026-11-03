@@ -6,37 +6,23 @@ Words: [README.md — Words used](../README.md#words-used-in-this-project).
 
 ## SCOREBOARD — update this table every run (one screen)
 
-**Current standard: run72b_game_speedup_WNS+0.238 — 2026-10-26.**
-[Release files, persistent flash, and archive](STANDARD_RELEASE.md).
-One native Value64 JS CPU; 100 MHz fabric / VM divisor 7 (14.286 MHz).
-Full game assets and heap capacities are retained. Board callbacks are paced
-at approximately 60 Hz; this does not claim a measured board frame rate.
+**Current standard: run73o_native_js_speed_WNS+0.000 — 2026-11-02.**
+[Current files and loading](STANDARD_RELEASE.md); [previous run72b rollback](../releases/archive/run72b-2026-10-26/README.md).
+The owner flashed run73o to QSPI and reports it running fine. Numeric board FPS is unmeasured.
+One native Value64 JavaScript CPU; 100 MHz fabric / VM divide-by-three (33.333 MHz), with an actual 5 ns high pulse. Full game assets and heap capacities remain.
 
-Source: the accepted routed report archived under
-`build/runs/run72b_game_speedup_WNS+0.238/` and
-[release evidence](performance/2026-10-26-fpga-release.json).
+Final fully routed qualification:
 
-| Resource / check | Used | Part limit or campaign gate | Result |
-|---|---:|---:|---|
-| Slice LUTs | 92,273 | 134,600 (campaign 95,000) | 68.55%, fits |
-| Occupied slices | 28,583 | 33,650 (campaign 28,602) | 84.94%, fits |
-| BRAM tiles | 353.5 | 365 (campaign 355.5) | 96.85%, unchanged from run71c |
-| DSP48E1 | 128 | 740 | 17.30%, fits |
-| Setup slack | +0.238 ns | ≥ 0 | zero failing endpoints |
-| Hold slack | +0.050 ns | ≥ 0 | zero failing endpoints |
-| Bitstream DRC | 0 errors | 0 | passed |
-| Routing wall time | 35m48s | 45-minute implementation wait | completed |
+- 87,876 LUTs; physical limit 134,600, campaign gate 95,000.
+- 28,045 occupied slices; physical limit 33,650, campaign gate 28,602.
+- 353.5 BRAM tiles; physical limit 365, campaign gate 355.5.
+- 128 DSP48E1; physical limit 740.
+- Setup 0.000 ns rounded (no extra setup margin), hold +0.040 ns; zero failing setup/hold/pulse endpoints.
+- All 123,616 routable nets routed; zero routing errors and zero bitstream DRC errors. Full warnings remain in the reports.
 
-Raw synthesis used 96,904 LUTs (ceiling 105,000). Synthesis took 39m29s,
-placement 5m55s, and physical optimization 1m53s. Budget checks run before
-routing and publication; a source fingerprint protects checkpoint reuse.
-The qualified strategy is `Congestion_SpreadLogic_medium` with
-`ExploreArea`, two synthesis threads and eight implementation threads.
+Source: [qualification report ZIP](../releases/current/run73o_qualification_reports.zip) and [immutable build-time manifest](../releases/current/evidence/build_manifest.json). The owner board report and current selection are in [standard.json](../releases/standard.json). O raw synthesis used 93,858 LUTs. The flow uses `Congestion_SpreadLogic_medium` / `ExploreArea`, two synthesis threads, eight implementation threads, followed by checked physical finalization and cascade-address repair. No DRC or timing constraint was weakened.
 
-Earlier run61 utilization and primitive counts are historical, not today's
-scoreboard; recover them from Git history. Timing for future source changes
-must be measured again. Do not extrapolate from this release or relax clock
-constraints to publish a failing build.
+Older run72b statistics are preserved in its archive, not the current scoreboard. Future source changes must be qualified again; do not extrapolate timing from this release.
 
 ### Why placement, not size, decides whether this design routes
 
@@ -54,7 +40,7 @@ otherwise.** How to write: [RTL_DESIGN_PRINCIPLES.md](RTL_DESIGN_PRINCIPLES.md).
 | First timing-clean (run 46) | 110,532 | Placement strategy, not fewer LUTs |
 | Leanest published (run 60) | 86,628 | |
 | Historical run61 | 100,429 | Earlier fit milestone |
-| **Standard run72b** | **92,273** | Current scoreboard above |
+| Previous standard run72b | 92,273 | Archived; current run73o scoreboard is above |
 
 Git has every intermediate run. Closed/dead levers stay below.
 
@@ -115,7 +101,7 @@ fails** below. Do not slow MIG to “fix” **WNS** (Worst Negative Slack).
 
 ---
 
-**Current-clock note:** run72b already uses a 14.286 MHz VM and 100 MHz
+**Current-clock note:** run73o uses a 33.333 MHz VM and 100 MHz
 fabric/DDR. The contingency below predates that split. Fabric-to-VM paths
 can still have a 10 ns requirement; inspect the actual path before changing
 clock architecture. Never weaken timing constraints to publish a bit.

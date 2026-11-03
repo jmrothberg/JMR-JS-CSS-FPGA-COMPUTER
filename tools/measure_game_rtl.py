@@ -23,18 +23,23 @@ def main():
     parser.add_argument('image', type=Path)
     parser.add_argument('--family', choices=('pacman', 'donkey'), required=True)
     parser.add_argument('--sim-bin', type=Path)
+    parser.add_argument('--vm-divisor', type=int, default=7,
+                        help='Actual compiled VM divisor (release run72b: 7); metadata only')
     parser.add_argument('--memory-model', default='SRAM_INTERNAL=1; no real MIG latency',
                         help='Describe the memory model compiled into this binary')
     parser.add_argument('--frames', type=int, default=12)
     parser.add_argument('--warmup', type=int, help='Override startup frames for sustained-play measurements')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--screenshot', type=Path, help='Export the final native RTL framebuffer')
+    parser.add_argument('--inspect-global', action='append', default=[],
+                        help='Record a named Value64 global at the final frame without advancing the clock')
     args = parser.parse_args()
     if args.sim_bin:
         backend._SYNTH = args.sim_bin.resolve()
     sim = backend.SimBackend()
     assert sim.available and sim._use_rtl
     rows = []
+    final_globals = {}
     try:
         assert sim._rpc('JSHLOAD ' + str(args.image.resolve())).startswith('OK')
         warmup = args.warmup if args.warmup is not None else (5 if args.family == 'pacman' else 10)
@@ -56,6 +61,12 @@ def main():
                 rows.append({k: status.get(k) for k in
                              ('fclk', 'gc', 'obj', 'arr', 'rafcall', 'swaps', 'fault', 'fcap')})
         hist = sim._rpc('STATEHIST?')
+        if args.inspect_global:
+            from functional_model.jsb_format import ProgramImage
+            variables = ProgramImage(args.image.read_bytes()).var_names
+            for name in args.inspect_global:
+                final_globals[name] = (sim._rpc(f'VVARPEEK {variables.index(name)}')
+                                       if name in variables else 'not a global')
         if args.screenshot:
             from PIL import Image
             raw = sim._rpc('FB?')
@@ -75,8 +86,9 @@ def main():
         # Keep the existing *_core_cycles keys for campaign readers; fclk
         # counts the 100 MHz fabric, including the divided native VM.
         'cycle_domain': '100 MHz fabric',
-        'core_hz': 100_000_000, 'vm_divisor': 7,
+        'core_hz': 100_000_000, 'vm_divisor': args.vm_divisor,
         'frames': rows, 'state_histogram': hist,
+        'final_globals': final_globals,
         'median_core_cycles': statistics.median(cycles),
         'p95_core_cycles': sorted(cycles)[max(0, int(len(cycles)*0.95)-1)],
         'max_core_cycles': max(cycles),

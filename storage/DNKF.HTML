@@ -828,6 +828,12 @@ function _dkBuildDirtyBands(platforms,ladders){
 
 const canvas = document.getElementById("myCanvas")
 const ctx = canvas.getContext("2d")
+
+// Shared application menu and About metadata; no private chrome.
+ctx.systemAbout="Donkey Kong|Climb girders and dodge rolling barrels.";
+// Shared menu bar; the game keeps its existing renderer and assets.
+ctx.systemWindow = 8
+ctx.systemMenus = "Game|New Game - Mario=160|New Game - Luigi=161|Pause / Resume=162"
 /* FAST: one sprites helper for Mario / DK / every barrel (not new per draw). */
 var _dkSpr = new sprites(ctx)
 /* Mario already has 24 own fields. OBJ_SLOTS=32. Putting frame numbers
@@ -850,7 +856,7 @@ const WORLD_H = 685
 const GLASS_W = 640
 const GLASS_H = 480
 const WORLD_SX = GLASS_W / WORLD_W
-const WORLD_SY = GLASS_H / WORLD_H
+const WORLD_SY = (GLASS_H - 24) / WORLD_H
 
 let gameState = "title"
 let character = "Mario"
@@ -1054,9 +1060,9 @@ class Game {
         ctx.fillStyle = 'white'
         ctx.font = "16px sans-serif"
         ctx.textAlign = "left"
-        ctx.fillText("Score", 8, 22)
-        ctx.fillText(this.score, 104, 22)
-        ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 0)
+        ctx.fillText("Score", 8, 44)
+        ctx.fillText(this.score, 104, 44)
+        ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
     }
 
     resetGame() {
@@ -1095,9 +1101,9 @@ class Game {
         ctx.fillStyle = 'white'
         ctx.font = "16px sans-serif"
         ctx.textAlign = "left"
-        ctx.fillText("Lives", 408, 22)
-        ctx.fillText(this.lives, 512, 22)
-        ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 0)
+        ctx.fillText("Lives", 408, 44)
+        ctx.fillText(this.lives, 512, 44)
+        ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
     }
 
     gameOver() {
@@ -1190,14 +1196,14 @@ class Game {
             
             gameState = "game"
 
-            ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 0)
+            ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
             ctx.clearRect(0, 0, WORLD_W, WORLD_H)
             _dkWipe = 1
             _dkBgOn = 0
             _dkBg = null
 
-            // Call the update function to start the game loop
-            update()
+            // One continuous rAF loop owns the screen, including restarts.
+            previous = undefined
         }
     }
 
@@ -1223,6 +1229,21 @@ class Game {
 }
 
 window.addEventListener('keydown', function (e) {
+    if (e.keyCode === 160 || e.keyCode === 161) {
+        document.removeEventListener("keydown", game.startSelect)
+        document.removeEventListener("keydown", game.choose)
+        document.removeEventListener("keydown", game._startGameBound)
+        character = e.keyCode === 160 ? "Mario" : "Luigi"
+        game.lives = 3
+        game.score = 0
+        game.livesHudDirty = true
+        game.resetGame()
+        paused = false
+        gameState = "character"
+        game.startGame({keyCode:13})
+        return
+    }
+    if (e.keyCode === 162) { togglePause(); return }
     switch (e.key) {
         case "p":
             togglePause()
@@ -1236,6 +1257,7 @@ function togglePause() {
 
     else if (paused) {
         paused = false
+        _dkBgOn = 0
     }
 }
 
@@ -1301,7 +1323,7 @@ function _dkRestorePair(x0,y0,x1,y1,w,h){
     }
 }
 function _dkBlitBg() {
-    ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 0)
+    ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
     if (!_dkBgOn) {
         ctx.clearRect(0, 0, WORLD_W, WORLD_H)
         game.draw(ctx)
@@ -1343,7 +1365,7 @@ function _dkBlitBg() {
 }
 
 function update(timestamp) {
-    ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 0)
+    ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
     if (gameState == "game") {
         _dkBlitBg()
 
@@ -1353,9 +1375,6 @@ function update(timestamp) {
         game.getPoints()
         game.loseLife()
         game.gameOver()
-        requestAnimationFrame(update)
-        
-        
         if (!paused) {
             game.updateMario(elapsed)
             game.updateBarrels(elapsed)
@@ -1370,12 +1389,10 @@ function update(timestamp) {
         game.playerLives()
     }
 
-    else {
-        ctx.clearRect(0, 0, WORLD_W, WORLD_H)
-        if (gameState == "title") {
+    else if (gameState == "title") {
         game.showTitleScreen()
-        }
     }
+    requestAnimationFrame(update)
 }
 
 requestAnimationFrame(update)

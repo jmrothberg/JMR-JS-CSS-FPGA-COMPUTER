@@ -984,8 +984,34 @@ def test_edit_verb_f2_save_updates_list(tmp_path):
     m.frame_tick()
     m.frame_tick()  # console acts on cdone the tick after the key
     assert not m.running
+    assert not m._keep_fb
+    assert any(row.startswith("SAVED ") for row in m.console_log)
+    assert m.console_log[-1] == "READY"
     assert m.source_lines[0].startswith("X"), m.source_lines[0][:40]
     assert m.source_lines[0] != before[0]
+
+
+def test_edit_verb_f5_quits_to_ready(tmp_path):
+    """F5 leaves without saving, and the glass returns to READY."""
+    from tools.selfhost import mint, source_path
+
+    if not source_path("EDITOR.JSH").is_file():
+        pytest.skip("editor not authored yet")
+    (tmp_path / "EDITOR.JSH").write_bytes(mint("EDITOR.JSH").data)
+    (tmp_path / "BOXES.HTML").write_text((_STORAGE / "BOXES.HTML").read_text())
+    m = Machine(storage_root=tmp_path)
+    m.execute_line("LOAD BOXES.HTML")
+    before = list(m.source_lines)
+    m.execute_line("EDIT")
+    m.input.key_event(88, "X", True)
+    m.frame_tick()
+    m.input.key_event(116, "F5", True)
+    m.frame_tick()
+    m.frame_tick()
+    assert not m.running
+    assert not m._keep_fb
+    assert m.console_log[-2:] == ["OK", "READY"]
+    assert m.source_lines == before
 
 
 def test_edit_verb_still_leaves_edit_n_as_the_line_editor(tmp_path):

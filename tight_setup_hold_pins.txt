@@ -1,10 +1,15 @@
-+====================+===================+====================================+
-| Launch Setup Clock | Launch Hold Clock | Pin                                |
-+====================+===================+====================================+
-| clk_pll_i          | vm_clk            | u_core/u_vm/sram_wdata_reg[4]/D    |
-| clk_pll_i          | vm_clk            | u_core/u_vm/hs_m_state_reg/D       |
-| clk_pll_i          | vm_clk            | u_core/u_vm/state_reg[4]/D         |
-| clk_pll_i          | vm_clk            | u_core/u_vm/syn_dedup_ctr_reg[2]/D |
-| clk_pll_i          | vm_clk            | u_core/u_vm/syn_dedup_ctr_reg[1]/D |
-| clk_pll_i          | vm_clk            | u_core/u_vm/syn_dedup_ctr_reg[3]/D |
-+--------------------+-------------------+------------------------------------+
++====================+===================+=======================================================================================================================================================================================================================================+
+| Launch Setup Clock | Launch Hold Clock | Pin                                                                                                                                                                                                                                   |
++====================+===================+=======================================================================================================================================================================================================================================+
+| clk_pll_i          | clk_pll_i         | u_core/u_fb/dirty_blocks_reg[1013]/D                                                                                                                                                                                                  |
+| vm_clk             | vm_clk            | u_core/u_vm/u_exec64/now_v64_q_reg[56]/D                                                                                                                                                                                              |
+| clk_pll_i          | clk_pll_i         | u_core/u_fb/dirty_blocks_reg[779]/D                                                                                                                                                                                                   |
+| oserdes_clk_2      | oserdes_clk_2     | u_mig/u_mig_7series_0_mig/u_memc_ui_top_std/mem_intfc0/ddr_phy_top0/u_ddr_mc_phy_wrapper/u_ddr_mc_phy/ddr_phy_4lanes_0.u_ddr_phy_4lanes/ddr_byte_lane_C.ddr_byte_lane_C/ddr_byte_group_io/output_[9].oserdes_dq_.ddr.oserdes_dq_i/RST |
+| vm_clk             | vm_clk            | u_core/u_vm/u_exec64/now_v64_q_reg[57]/D                                                                                                                                                                                              |
+| clk_pll_i          | clk_pll_i         | u_core/u_fb/dirty_blocks_reg[211]/D                                                                                                                                                                                                   |
+| clk_pll_i          | clk_pll_i         | u_core/u_fb/dirty_blocks_reg[843]/D                                                                                                                                                                                                   |
+| oserdes_clk_2      | oserdes_clk_2     | u_mig/u_mig_7series_0_mig/u_memc_ui_top_std/mem_intfc0/ddr_phy_top0/u_ddr_mc_phy_wrapper/u_ddr_mc_phy/ddr_phy_4lanes_0.u_ddr_phy_4lanes/ddr_byte_lane_C.ddr_byte_lane_C/ddr_byte_group_io/output_[7].oserdes_dq_.ddr.oserdes_dq_i/RST |
+| oserdes_clk_2      | oserdes_clk_2     | u_mig/u_mig_7series_0_mig/u_memc_ui_top_std/mem_intfc0/ddr_phy_top0/u_ddr_mc_phy_wrapper/u_ddr_mc_phy/ddr_phy_4lanes_0.u_ddr_phy_4lanes/ddr_byte_lane_C.ddr_byte_lane_C/ddr_byte_group_io/output_[8].oserdes_dq_.ddr.oserdes_dq_i/RST |
+| clk_pll_i          | clk_pll_i         | u_core/u_fb/dirty_blocks_reg[74]/D                                                                                                                                                                                                    |
+| clk_pll_i          | clk_pll_i         | u_core/u_fb/dirty_blocks_reg[619]/D                                                                                                                                                                                                   |
++--------------------+-------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+

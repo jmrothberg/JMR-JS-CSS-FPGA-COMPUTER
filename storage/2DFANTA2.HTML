@@ -45,13 +45,14 @@ _im=new Image(); _im.src="jmr:spr:9"; SHEETS[9]=_im;
 _im=new Image(); _im.src="jmr:spr:10"; SHEETS[10]=_im;
 _im=new Image(); _im.src="jmr:spr:11"; SHEETS[11]=_im;
 // Board + piece tables packed so the game IIFE stays under 16 locals.
-var C={idle:[0,0,2,4,6,8,10],act:[0,1,3,5,7,9,11],ox:96,oy:16,tile:56,pc:48,
+var C={idle:[0,0,2,4,6,8,10],act:[0,1,3,5,7,9,11],ox:200,oy:28,tile:54,pc:48,
   kn:[[1,2],[2,1],[2,-1],[1,-2],[-1,-2],[-2,-1],[-2,1],[-1,2]],
   kd:[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]],
   bd:[[1,1],[1,-1],[-1,1],[-1,-1]],
   rd:[[1,0],[-1,0],[0,1],[0,-1]],
   qd:[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]],
-  val:[0,1,3,3,5,9,1000],mate:100000,dw:18,dl:10,ds:8};
+  val:[0,1,3,3,5,9,1000],mate:100000,dw:18,dl:10,ds:8,
+  youGot:[0,0,0,0,0,0],cpuGot:[0,0,0,0,0,0],capOrder:[5,4,3,2,1]};
 function blitSpr(c, img, fi, cw, ch, dx, dy) { c.drawImage(img, fi * cw, 0, cw, ch, dx, dy, cw, ch); }
 </script>
 <script>
@@ -59,7 +60,13 @@ function blitSpr(c, img, fi, cw, ch, dx, dy) { c.drawImage(img, fi * cw, 0, cw, 
 "use strict";
 var cvs=document.getElementById("c");
 var ctx=cvs.getContext("2d");
+// Shared application menu and About metadata; no private chrome.
+ctx.systemAbout="Fantasy Chess|Animated chess against the computer.";
+
 ctx.imageSmoothingEnabled=false;
+// Shared system chrome: no menu renderer or font atlas in this program.
+ctx.systemWindow=8;
+ctx.systemMenus="Game|New Game=160;Level|Ply 1 - Fast=161|Ply 2=162|Ply 3=163|Ply 4=164|Ply 5 - Deep=165";
 // Strips: each of 6 pieces has idle 2DFANTAS-(2i) [light,dark] 48px and
 // action 2DFANTAS-(2i+1) [Lwalk,Llift,Lslam,Dwalk,Dlift,Dslam] 64px
 // (512px originals kept as 2DFANTAS-N-512.png). Tables live in C (outer).
@@ -156,9 +163,35 @@ function genAll(b,cu){
   return res;
 }
 function evaluate(b){
-  var s=0,r,c,v;
-  for(r=0;r<8;r++)for(c=0;c<8;c++){v=b[r][c];if(v!==0)s+=v>0?C.val[v]:-C.val[-v];}
+  var s,r,c,v,t,bonus;
+  s=0;
+  for(r=0;r<8;r++)for(c=0;c<8;c++){
+    v=b[r][c];if(v===0)continue;
+    t=v>0?v:-v;
+    s+=v>0?C.val[t]:-C.val[t];
+    // Fractions of a pawn: center, pawn push, minor off the back rank.
+    // Material still decides a capture.
+    bonus=0;
+    if(c>1&&c<6&&r>1&&r<6)bonus=0.06;
+    if(t===1)bonus=bonus+(v>0?(6-r):(r-1))*0.05;
+    if((t===2||t===3)&&(v>0?r<7:r>0))bonus=bonus+0.04;
+    s+=v>0?bonus:-bonus;
+  }
   return s;
+}
+function capScore(b,m){
+  var v=b[m[2]][m[3]];
+  if(v===0)return 0;
+  return Math.abs(v)*8-Math.abs(b[m[0]][m[1]]);
+}
+function pullBest(b,mv,from){
+  var i,best,sc,tmp,s;
+  best=from;sc=capScore(b,mv[from]);
+  for(i=from+1;i<mv.length;i++){
+    s=capScore(b,mv[i]);
+    if(s>sc){sc=s;best=i;}
+  }
+  if(best!==from){tmp=mv[from];mv[from]=mv[best];mv[best]=tmp;}
 }
 function apply(b,fr,fc,tr,tc){
   var v=b[fr][fc];b[tr][tc]=v;b[fr][fc]=0;
@@ -170,22 +203,64 @@ function apply(b,fr,fc,tr,tc){
   }
 }
 function negamax(b,depth,alpha,beta,cu){
-  if(depth<=0)return cu*evaluate(b);
-  var mv=genAll(b,cu),i,m,best=-C.mate*2,s,cp;
+  if(depth<=0)return qsearch(b,alpha,beta,cu,2);
+  var mv=genAll(b,cu),i,m,best,s,cp;
   if(mv.length===0)return inCheck(b,cu)?-C.mate+depth:0;
-  for(i=0;i<mv.length;i++){m=mv[i];cp=cloneB(b);apply(cp,m[0],m[1],m[2],m[3]);
+  best=-C.mate*2;
+  for(i=0;i<mv.length;i++){
+    pullBest(b,mv,i);
+    m=mv[i];cp=cloneB(b);apply(cp,m[0],m[1],m[2],m[3]);
     s=-negamax(cp,depth-1,-beta,-alpha,-cu);
     if(s>best)best=s;if(s>alpha)alpha=s;if(alpha>=beta)break;}
   return best;
 }
+// Captures keep going after the ply limit, so a higher ply does not
+// grab a protected piece and miss the recapture.
+function genCaps(b,cu){
+  var res,r,c,mv,i,t,cp;
+  res=[];
+  for(r=0;r<8;r++)for(c=0;c<8;c++)if(col(b[r][c])===cu){
+    mv=genPseudo(b,r,c);
+    for(i=0;i<mv.length;i++){
+      t=b[mv[i][0]][mv[i][1]];
+      if(t===0)continue;
+      cp=cloneB(b);apply(cp,r,c,mv[i][0],mv[i][1]);
+      if(!inCheck(cp,cu))res.push([r,c,mv[i][0],mv[i][1]]);
+    }
+  }
+  return res;
+}
+function qsearch(b,alpha,beta,cu,lim){
+  var stand,mv,i,m,s,cp,v,chk;
+  chk=inCheck(b,cu)?1:0;
+  stand=cu*evaluate(b);
+  if(lim<=0)return chk?stand-0.4:stand;
+  if(!chk&&stand>=beta)return stand;
+  if(!chk&&stand>alpha)alpha=stand;
+  mv=chk?genAll(b,cu):genCaps(b,cu);
+  if(mv.length===0)return chk?-C.mate:alpha;
+  for(i=0;i<mv.length;i++){
+    pullBest(b,mv,i);
+    m=mv[i];v=b[m[2]][m[3]];
+    if(!chk&&v===0)break;
+    cp=cloneB(b);apply(cp,m[0],m[1],m[2],m[3]);
+    s=-qsearch(cp,-beta,-alpha,-cu,lim-1);
+    if(s>alpha)alpha=s;
+    if(alpha>=beta)return alpha;
+  }
+  return alpha;
+}
 function pickCpu(){
-  var b=state.board,mv=genAll(b,-1),i,m,best=-C.mate*2,bm=null,s,cp;
+  var b=state.board,mv=genAll(b,-1),i,m,best,bm,s,cp;
   // Always keep a legal move so a mate-score tie cannot skip the CPU turn.
   if(mv.length===0)return null;
-  bm=mv[0];
-  for(i=0;i<mv.length;i++){m=mv[i];cp=cloneB(b);apply(cp,m[0],m[1],m[2],m[3]);
+  best=-C.mate*2;bm=mv[0];
+  for(i=0;i<mv.length;i++){
+    pullBest(b,mv,i);
+    m=mv[i];cp=cloneB(b);apply(cp,m[0],m[1],m[2],m[3]);
     s=-negamax(cp,state.searchDepth-1,-C.mate*2,C.mate*2,1);
-    if(s>best){best=s;bm=m;}}
+    if(s>best){best=s;bm=m;}
+  }
   return bm;
 }
 function startAnim(fr,fc,tr,tc){
@@ -218,8 +293,16 @@ function armHumanCheck(){
     state.cr=all[0][0];state.cc=all[0][1];
   }
 }
+function noteCap(v){
+  var t;
+  t=v>0?v:-v;
+  if(t<1||t>5)return;
+  if(v>0)C.cpuGot[t]=C.cpuGot[t]+1;
+  else C.youGot[t]=C.youGot[t]+1;
+}
 function finishAnim(){
   var a=state.anim;
+  if(a.vic!==0)noteCap(a.vic);
   apply(state.board,a.fr,a.fc,a.tr,a.tc);
   state.anim=null;state.animating=false;
   state.turn*=-1;
@@ -290,8 +373,11 @@ function setPad(e,val){
   else if(c===40||k==="ArrowDown")state.kd=val;
   else if(c===32||k===" "||k==="Spacebar"||c===13||k==="Enter")state.kf=val;
   if(val){
-    if(k==="]"||k==="=")setPly(1);
-    else if(k==="["||k==="-")setPly(-1);
+    if(c===160){reset();return;}
+    if(c>=161&&c<=165){state.searchDepth=c-160;return;}
+    // ] and + raise the ply. [ and - lower it. 1 is the fast look, 5 looks deepest.
+    if(k==="]"||k==="="||k==="+"||c===93||c===61||c===43)setPly(1);
+    else if(k==="["||k==="-"||c===91||c===45)setPly(-1);
     else if(k==="r"||k==="R"||c===82)reset();
   }
 }
@@ -380,26 +466,57 @@ function drawAnim(a){
     else drawPiece(mover,tx,ty,0);
   }
 }
-function drawHUD(){
-  ctx.fillStyle="#e7ecff";ctx.font="14px monospace";
-  ctx.fillText("FANTASY CHESS",12,20);
-  ctx.fillText("Ply: "+state.searchDepth+"  [ ]",12,40);
-  ctx.fillText("R: restart",12,58);
-  ctx.fillText("ARROWS move  ENTER pick",12,76);
-  var msg="";
-  if(state.over){
-    if(state.winner===0)msg="STALEMATE - DRAW";
-    else if(state.winner===1)msg="CHECKMATE - YOU WIN";
-    else msg="CHECKMATE - CPU WINS";
-  }else if(state.cpuThinking)msg="CPU thinking...";
-  else if(state.animating)msg="moving...";
-  else{
-    msg=state.turn===1?"Your move":"CPU";
-    if(inCheck(state.board,state.turn))msg="CHECK - "+msg;
+function drawMini(v,dx,dy){
+  var p=pieceImg(v,0);
+  bl(p[0],p[1],p[2],p[2],dx,dy,26,26);
+}
+function drawCaps(arr,side,x,y){
+  var t,n,i,k;
+  n=0;
+  for(k=0;k<5;k++){
+    t=C.capOrder[k];
+    for(i=0;i<arr[t];i++){
+      drawMini(side*t,x+(n%5)*32,y+Math.floor(n/5)*28);
+      n++;
+    }
   }
-  ctx.fillText(msg,12,470);
+  if(n===0)return y;
+  return y+(Math.floor((n-1)/5)+1)*28;
+}
+function drawHUD(){
+  var y,msg;
+  ctx.fillStyle="#e7ecff";ctx.font="8px monospace";
+  ctx.fillText("FANTASY CHESS",8,38);
+  ctx.fillText("PLY "+state.searchDepth+" OF 5",8,54);
+  ctx.fillText("LEVEL MENU / [ ]",8,70);
+  ctx.fillText("GAME MENU / R",8,86);
+  ctx.fillText("CLICK A PIECE",8,102);
+  ctx.fillText("THEN ITS TARGET",8,118);
+  ctx.fillText("YOU TOOK",8,142);
+  y=drawCaps(C.youGot,-1,8,146);
+  ctx.fillStyle="#e7ecff";
+  ctx.fillText("CPU TOOK",8,y+16);
+  y=drawCaps(C.cpuGot,1,8,y+20);
+  msg="";
+  if(state.over){
+    if(state.winner===0)msg="STALEMATE DRAW";
+    else if(state.winner===1)msg="YOU WIN";
+    else msg="CPU WINS";
+  }else if(state.cpuThinking)msg="CPU THINKING";
+  else if(state.animating)msg="MOVING";
+  else{
+    msg=state.turn===1?"YOUR MOVE":"CPU";
+    if(inCheck(state.board,state.turn))msg="CHECK "+msg;
+  }
+  ctx.fillStyle="#e7ecff";
+  ctx.fillText(msg,8,y+18);
+}
+function clearCaps(){
+  var i;
+  for(i=1;i<=5;i++){C.youGot[i]=0;C.cpuGot[i]=0;}
 }
 function reset(){
+  clearCaps();
   state.gen=(state.gen||0)+1;
   state.board=newBoard();state.turn=1;state.selected=null;state.legal=[];
   state.animating=false;state.cpuThinking=false;state.over=false;state.winner=0;state.anim=null;

@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 static Vtb_present_bridge top;
-static std::vector<uint16_t> mem(2097152,0xdead);
+static std::vector<uint16_t> mem(4194304,0xdead);
 static uint16_t pending_data[8],pending_mask;
 static bool pending=false,reading=false;
 static unsigned read_addr=0,delay=0,accepted=0;
@@ -25,7 +25,7 @@ static void tick(){
  top.eval();
  if(top.req_o&&top.ack_o&&top.we_o){
   unsigned i=accepted%153600;
-  if(top.addr_o!=1480704+i)fail("SRAM write order");
+  if(top.addr_o!=3577856+i)fail("SRAM write order");
   unsigned want=zeros?0:unsigned(pixel(2*i))|(unsigned(pixel(2*i+1))<<8);
   if(top.data_o!=want)fail("SRAM byte pairing");
   accepted++;
@@ -68,7 +68,7 @@ static void present(bool clear){
  top.flush=0;tick();tick();
  for(unsigned i=0;i<153600;i++){
   want=clear?0:unsigned(pixel(2*i))|(unsigned(pixel(2*i+1))<<8);
-  if(mem[1480704+i]!=want)fail("MIG memory image mismatch");
+  if(mem[3577856+i]!=want)fail("MIG memory image mismatch");
  }
  std::printf("present through real bridge: %u clocks\n",cycles);
 }

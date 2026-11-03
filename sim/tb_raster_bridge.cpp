@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 static Vtb_raster_bridge top;
-static std::vector<uint16_t> mem(2097152,0xdead);
+static std::vector<uint16_t> mem(4194304,0xdead);
 static std::vector<uint8_t> pixels(307200);
 static bool reading=false;
 static unsigned read_addr=0,delay=0;
@@ -51,7 +51,7 @@ static void draw(int dx,int dy,unsigned w,unsigned h,unsigned source,bool fx=fal
 }
 int main(int argc,char**argv){
  Verilated::commandArgs(argc,argv);
- for(unsigned i=0;i<307200;i++)mem[1789952+i]=0x9e00|pixel(i);
+ for(unsigned i=0;i<307200;i+=2)mem[3887104+i/2]=unsigned(pixel(i))|(unsigned(pixel(i+1))<<8);
  top.rst_n=0;top.go=0;tick();tick();top.rst_n=1;tick();
  draw(0,0,640,480,0);
  draw(7,11,1,17,37);

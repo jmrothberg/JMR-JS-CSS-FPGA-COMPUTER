@@ -11,6 +11,7 @@ as debug only; HTML keydown/keyup handlers decide bindings (no hardcoded WASD).
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import dataclass
 from typing import Deque, Dict, List, Optional, Tuple
 
 # Digital joystick / gamepad bitfield (matches RTL joy_regs).
@@ -72,6 +73,33 @@ _PLAY_BIT_TO_KEY: List[Tuple[int, int, str]] = [
 ]
 
 
+@dataclass(frozen=True)
+class MouseEvent:
+    """An immutable canvas-space event, shared by all native programs.
+
+    DOM buttons: left=1, right=2, middle=4. DOM button: left=0,
+    right=2, middle=1. Pointer input is independent of the joystick.
+    """
+
+    type: str
+    x: int
+    y: int
+    buttons: int
+    button: int = 0
+    movement_x: int = 0
+    movement_y: int = 0
+
+    def fields(self) -> dict:
+        return {
+            "type": self.type,
+            "clientX": self.x, "clientY": self.y,
+            "offsetX": self.x, "offsetY": self.y,
+            "x": self.x, "y": self.y,
+            "buttons": self.buttons, "button": self.button,
+            "movementX": self.movement_x, "movementY": self.movement_y,
+        }
+
+
 class InputEngine:
     def __init__(self, fifo_depth: int = 64) -> None:
         self._keys: Deque[str] = deque(maxlen=fifo_depth)
@@ -87,10 +115,49 @@ class InputEngine:
         self.escape_pending: bool = False
         # NEW: key-state engine
         self._down: Dict[int, bool] = {}  # keyCode → pressed
-        self._events: Deque[Tuple[str, int, str]] = deque(maxlen=64)  # (type, keyCode, key)
+        self._events: Deque[Tuple[str, int, str]] = deque(maxlen=160)  # aggregate of 32-entry raw + 128-entry virtual input queues
         self._ps2_ext = False
         self._ps2_break = False
         self._prev_play = 0  # last play_bits for tether edge OR
+        self.mouse_x = 320
+        self.mouse_y = 240
+        self.mouse_buttons = 0
+        self._mouse_events: Deque[MouseEvent] = deque()
+
+    def set_mouse(self, x: int, y: int, buttons: int) -> bool:
+        """Deliver pointer motion and button edges without inventing keys.
+
+        The bounded RTL queue reserves six slots before accepting a sample.
+        False means retry after a frame; no button edge is dropped. Samples carry
+        absolute coordinates so GUI, PS/2 and custom HID adapters agree.
+        """
+        if len(self._mouse_events) > 58:
+            return False
+        x, y = max(0, min(639, int(x))), max(0, min(479, int(y)))
+        buttons = int(buttons) & 7
+        old_buttons = self.mouse_buttons
+        dx, dy = x - self.mouse_x, y - self.mouse_y
+        if dx or dy:
+            event = MouseEvent("mousemove", x, y, old_buttons, 0, dx, dy)
+            self._mouse_events.append(event)
+        for mask, button in ((1, 0), (2, 2), (4, 1)):
+            if (buttons ^ old_buttons) & mask:
+                down = bool(buttons & mask)
+                self._mouse_events.append(MouseEvent(
+                    "mousedown" if down else "mouseup", x, y, buttons, button))
+                if not down and button == 0:
+                    self._mouse_events.append(MouseEvent("click", x, y, buttons))
+        self.mouse_x, self.mouse_y, self.mouse_buttons = x, y, buttons
+        return True
+
+    def reset_mouse(self) -> None:
+        self._mouse_events.clear()
+        self.mouse_x, self.mouse_y, self.mouse_buttons = 320, 240, 0
+
+    def drain_mouse_events(self) -> List[MouseEvent]:
+        events = list(self._mouse_events)
+        self._mouse_events.clear()
+        return events
 
     def push_key(self, ch: str) -> None:
         if ch == "\x1b":

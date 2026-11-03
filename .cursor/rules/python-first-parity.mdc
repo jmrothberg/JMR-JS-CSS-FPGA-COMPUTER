@@ -29,8 +29,12 @@ Skip a rung and the machine is fake. Status:
 **Titles** `INVADERS.HTML` / `PACMAN.HTML` / `DONKEY.HTML` must LOAD + RUN and
 **look the same** on PYTHON then FPGA-SIM (full game, full ASET). HTML binds
 keys; RTL delivers raw keycodes. `?NH` is never done. No RTL-only console
-verbs. Board-only smoke = parity bug. PYTHON-only → fix RTL, do not weaken
-PYTHON. Tests = real titles, not random programs. Do not invent LUT counts
+verbs. Board-only smoke = parity bug. A JS result that is PYTHON-only → fix
+RTL, do not weaken PYTHON. Console text is the other way: Python prints the
+RTL reply line and nothing more (`HELP` is one line). A longer Python-only
+sentence is a bug — delete it from Python. Long instructions live in
+`HELP.MD` on the card, not in the console and not in block RAM. Tests = real
+titles, not random programs. Do not invent LUT counts
 ([docs/FPGA_FIT.md](../../docs/FPGA_FIT.md)).
 
 **Standalone intent:** HDMI + keyboard + Pmod stick; UART/JTAG are debug.

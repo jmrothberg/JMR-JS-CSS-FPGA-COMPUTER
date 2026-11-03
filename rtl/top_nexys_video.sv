@@ -1,7 +1,9 @@
 // Nexys Video board top — PHY shell around jmr_js_core (BASIC top_nexys_a7 method).
 // Standalone: HDMI text console + USB-HID PS/2 (J15) + Pmod PS/2 (JA) +
 // I2C joystick 0x5A (JB) + µSD. Same JA/JB wiring as tools/pmod_input_test.
-module top_nexys_video (
+// USB_MOUSE=1: mouse-first desktop with the shared on-screen keyboard.
+// USB_MOUSE=0 preserves keyboard-only J15. PIC24 does not forward both.
+module top_nexys_video #(parameter bit USB_MOUSE=1) (
     input  wire       clk100,
     input  wire       cpu_resetn,
     // NEW: BTNC (B22) = user reset, same as the BASIC A7 board habit
@@ -22,9 +24,9 @@ module top_nexys_video (
     inout  wire       hdmi_tx_cec,
     inout  wire       hdmi_tx_rscl,
     inout  wire       hdmi_tx_rsda,
-    // NEW: input-only like BASIC T100 — PIC24 is the PS/2 device; do not drive
-    input  wire       ps2_clk,
-    input  wire       ps2_data,
+    // PIC24 PS/2 lines: mouse host drives low or releases; never drives high
+    inout  wire       ps2_clk,
+    inout  wire       ps2_data,
     // NEW: Pmod PS/2 on JA (pin1=Data pin3=Clock) — RX-only, same as J15
     input  wire       pmod_ps2_clk,
     input  wire       pmod_ps2_data,
@@ -120,6 +122,40 @@ module top_nexys_video (
     end
 `endif
 
+    logic desktop_keyboard_mode;
+    logic [24:0] mouse_packet;
+    logic mouse_clock_low,mouse_data_low,mouse_core_ready,mouse_sample_valid;
+    logic [9:0] mouse_x;
+    logic [8:0] mouse_y;
+    logic [2:0] mouse_buttons;
+    logic [9:0] pointer_x;
+    logic [8:0] pointer_y;
+    logic pointer_toggle;
+    logic system_menu,system_keyboard,system_about,system_shift,system_caps,system_ctrl,system_alt;
+    logic [6:0] system_pressed;
+    logic system_hold;
+    logic [31:0] system_window;
+    logic system_game_viewport,system_ui_opaque;
+    logic [23:0] system_ui_rgb;
+    logic [69:0] system_held;
+
+    generate if(USB_MOUSE)begin:g_usb_mouse
+        assign ps2_clk=mouse_clock_low?1'b0:1'bz;
+        assign ps2_data=mouse_data_low?1'b0:1'bz;
+        jmr_ps2_mouse_host #(.CLK_HZ(100000000)) u_mouse_host (
+            .clk(core_clk),.reset(!rst_n || desktop_keyboard_mode),.clock_in(ps2_clk),.data_in(ps2_data),
+            .clock_low(mouse_clock_low),.data_low(mouse_data_low),.packet(mouse_packet),.ready(),.errors()
+        );
+        jmr_pointer_accumulator u_pointer (
+            .clk(core_clk),.rst_n(rst_n && !desktop_keyboard_mode),.packet(mouse_packet),
+            .sample_valid(mouse_sample_valid),.sample_ready(mouse_core_ready),
+            .sample_x(mouse_x),.sample_y(mouse_y),.sample_buttons(mouse_buttons),.dropped_reports()
+        );
+    end else begin:g_usb_keyboard
+        assign ps2_clk=1'bz;assign ps2_data=1'bz;
+        assign mouse_clock_low=0;assign mouse_data_low=0;assign mouse_packet=0;
+        assign mouse_sample_valid=0;assign mouse_x=320;assign mouse_y=240;assign mouse_buttons=0;
+    end endgenerate
     logic       kbd_push;
     logic [7:0] kbd_ascii;
     logic [7:0] ps2_scancode;
@@ -127,14 +163,14 @@ module top_nexys_video (
     logic       ps2_parity_err;
     // NEW: no jmr_ps2_host — host TX of 0xFF/0xF4 killed PIC24 scanning
     ps2_rx u_ps2_rx (
-        .clk(core_clk), .rst_n(rst_n),
+        .clk(core_clk), .rst_n(rst_n && (!USB_MOUSE || desktop_keyboard_mode)),
         .ps2_clk(ps2_clk), .ps2_data(ps2_data),
         .scancode(ps2_scancode), .strobe(ps2_strobe), .parity_err(ps2_parity_err)
     );
     logic [7:0] kev_code, pmod_kev_code;
     logic       kev_down, kev_stb, pmod_kev_down, pmod_kev_stb;
     ps2_decode u_ps2_dec (
-        .clk(core_clk), .rst_n(rst_n),
+        .clk(core_clk), .rst_n(rst_n && (!USB_MOUSE || desktop_keyboard_mode)),
         .scancode(ps2_scancode), .strobe(ps2_strobe),
         .ascii(kbd_ascii), .ascii_strobe(kbd_push),
         .kev_code(kev_code), .kev_down(kev_down), .kev_stb(kev_stb)
@@ -202,7 +238,7 @@ module top_nexys_video (
     logic sd_sck, sd_mosi, sd_miso, sd_cs_n;
     // NEW: asset SRAM port (core master → MIG bridge)
     logic        sram_req, sram_we, sram_ack;
-    logic [20:0] sram_addr;
+    logic [21:0] sram_addr;
     logic [15:0] sram_wdata, sram_rdata;
     logic [28:0]  app_addr;
     logic [2:0]   app_cmd;
@@ -264,6 +300,16 @@ module top_nexys_video (
         .stor_dbg_op_clk_o(stor_dbg_op_clk),
         .cons_dbg_state_o(cons_dbg_state),
         .game_view_o(game_view),
+        .mouse_stb(mouse_sample_valid),.mouse_ready(mouse_core_ready),
+        .mouse_x(mouse_x),.mouse_y(mouse_y),.mouse_buttons(mouse_buttons),
+        .desktop_keyboard_mode_o(desktop_keyboard_mode),
+        .pointer_x_o(pointer_x),.pointer_y_o(pointer_y),.pointer_toggle_o(pointer_toggle),
+        .system_window_o(system_window),.system_viewport_o(system_game_viewport),.game_source_y_o(),
+        .system_overlay_opaque_o(system_ui_opaque),.system_overlay_rgb_o(system_ui_rgb),.system_menu_o(system_menu),.system_keyboard_o(system_keyboard),.system_about_o(system_about),.system_shift_o(system_shift),.system_caps_o(system_caps),
+        .system_ctrl_o(system_ctrl),.system_alt_o(system_alt),.system_pressed_o(system_pressed),.system_hold_o(system_hold),.system_held_o(system_held),
+        .key_evt_char(kev_stb?(kbd_push && kbd_ascii>=32 && kbd_ascii<127?kbd_ascii:8'd0):
+                               (pmod_kbd_push && pmod_ascii>=32 && pmod_ascii<127?pmod_ascii:8'd0)),
+
         .vdbg_o(vm_vdbg), .vdbg_fault_o(vm_vdbg_fault),
         .vm_hdbg(vm_hdbg), .vm_fdbg(vm_fdbg), .vm_fdbg_v(vm_fdbg_v),
         .vm_ftrace(vm_ftrace), .vm_gdbg(vm_gdbg),
@@ -374,6 +420,11 @@ module top_nexys_video (
         .pixel_clk(pixel_clk), .rst_n(rst_n),
         .vram_rdata(scan_data), .vram_addr(scan_addr),
         .cursor_cell(cursor),
+        .mouse_x(pointer_x),.mouse_y(pointer_y),.mouse_toggle(pointer_toggle),.mouse_show_exit(1'b0),
+        .system_window(system_window),.system_game_viewport(system_game_viewport),.system_ui_opaque(system_ui_opaque),.system_ui_rgb(system_ui_rgb),
+        .system_menu(system_menu),.system_keyboard(system_keyboard),.system_about(system_about),.system_shift(system_shift),.system_caps(system_caps),
+        .system_ctrl(system_ctrl),.system_alt(system_alt),.system_pressed(system_pressed),.system_hold(system_hold),.system_held(system_held),
+
         .game_mode(game_view),
         .fb_raddr(fb_raddr), .fb_x(fb_x), .fb_y(fb_y), .fb_rdata(fb_rdata),
         .pal_index(pal_index), .pal_rgb(pal_rgb),

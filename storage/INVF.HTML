@@ -52,6 +52,11 @@ const scoreEl = document.querySelector("#scoreEl");
 const levelEl = document.querySelector("#levelEl");
 const canvas = document.querySelector("canvas");
 const c = canvas.getContext("2d");
+// Shared application menu and About metadata; no private chrome.
+c.systemWindow=8;
+c.systemViewport=1;
+c.systemAbout="Space Invaders|Defend Earth against waves of invaders.";
+
 c.imageSmoothingEnabled = false;
 
 /* Chrome SFX: playSfx(packed). Packed = freq,vol,frames,slide,ch repeating.
@@ -1589,6 +1594,17 @@ document.getElementById("clearLB")?.addEventListener("click", () => {
   localStorage.removeItem(LB_KEY);
   renderLeaderboard();
 });
+
+// Mouse steers the cannon; primary click starts or fires.
+addEventListener("mousemove", (e) => {
+  if(game.active && !game.over && !playerDying){
+    player.position.x=Math.max(0,Math.min(GAME_WIDTH-player.width,e.clientX-player.width/2));
+  }
+});
+addEventListener("mousedown", (e) => {
+  if(e.button===0){if(!game.active || game.over)startGame();else if(!playerDying)playerShoot();}
+});
+addEventListener("mouseup", (e) => {if(e.button===0)keys.space.pressed=false;});
 
 addEventListener("keydown", (e) => {
   const key = e.key;
