@@ -144,9 +144,9 @@ Traces first: [../.cursor/rules/use-existing-traces.mdc](../.cursor/rules/use-ex
 | External RAM | 512 MiB DDR3 → bridged as the **4 MB SRAM asset bank** (2M × 16 IS61WV204816 contract; simple SRAM port; ASIC uses the real chip). See `docs/ARCHITECTURE.md` |
 | Video | **HDMI Source** (J8) — native **640×480 @ ~60 Hz**, ~25.175 MHz pixel clock |
 | Framebuffer | Native **640×480**, 8 bpp / 256-entry RGB888 palette. One persistent BRAM canvas; present copies to the DDR front image. The GUI board mirror is a separate 160×120 debug view. |
-| Keyboard | USB HOST (J15) → PIC24 → PS/2. **Classic boot-protocol keyboard PASS 2026-08-15.** Some modern HID keyboards light LD14 but never clock PS/2. Pmod JA is the fallback. |
+| Keyboard | USB HOST (J15) → PIC24 → PS/2. **Classic boot-protocol keyboard PASS 2026-08-15.** A wireless keyboard on the same probe did not clock PS/2 (2026-11-02). Some modern HID keyboards light LD14 but never clock PS/2. Pmod JA is the fallback. |
 | Play controls | PS/2 arrows/Space/Enter → KEYEVT (`keyCode` 37–40 / 32 / 13). GUI arrows+Space → KEYBITS (BOARD: PROG `0xFE`+bits). Pmod stick on **JB**. |
-| Mouse | **Combined J15 keyboard/mouse not working.** The `USB_MOUSE=1` experiment disables the J15 keyboard. Read the [failed-approach record](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md). |
+| Mouse | **Wireless mouse PASS 2026-11-02** on `tools/mouse_probe` (cursor, both buttons, wheel). **Combined J15 keyboard/mouse not working.** The `USB_MOUSE=1` experiment disables the J15 keyboard. Read the [failed-approach record](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md). |
 | Host link | PROG FT245 (ch A / `.0`) — flash + tether glass + play keys |
 | Storage | µSD SPI + FAT32: `LOAD` reads HTML; `RUN` loads the card-minted `.JSH` including full ASET art. |
 | openFPGALoader `-b` id | **nexysVideo** |
@@ -424,8 +424,7 @@ Mouse in **J15** before power. HDMI on **J8**. The glass is 640×480:
 | Middle lamp turns yellow | middle button, if the mouse has one |
 | White marker moves in the center track | scroll wheel. Three white pips above the track mean the mouse answered wheel ID `03`. One red pip means this port is a 3-byte mouse and the wheel byte is not there |
 | Bottom center box, and the line above it | each new letter or digit. The line holds the last 32 |
-| **GO TO KEY** button, upper left | click it with the mouse. The FPGA releases the clock and listens for a keyboard |
-| **HIT F10 TO MOUSE**, upper right | the way back. It turns yellow 3 seconds after GO TO KEY. Press F10 on the keyboard |
+| *(2026-11-03)* no GO TO KEY button, no F10 | removed. The keyboard is a second, separate port (see "Keyboard on a Pmod, mouse on J15" below). Nothing switches |
 
 **Mouse-only PASS 2026-11-02 (owner).** Cursor, left button, right button, and the scroll wheel all worked on J15 with this probe. That is one mouse. It does not make a keyboard-and-mouse combo work. The combo result is still the failed record in [NEXYS_USB_KEYBOARD_MOUSE_FAILED.md](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md).
 
@@ -440,11 +439,46 @@ J15 is one PIC24 USB host. It forwards **one** device onto the same two open-dra
 | `E0 F0` then a byte | extended break |
 | `FA`, `AA`, `AB`, `83` | ack, self-test OK, keyboard ID. A mouse sends `FA`, `AA`, `00` instead (wheel mice then answer `03`) |
 
-Click **GO TO KEY** while the mouse is plugged in. The note stays gray for 3 seconds, then turns yellow. Typed letters show on the line above the bottom box and in the box. Moving the mouse does not leave keyboard mode: a mouse packet is three or four bytes back to back, and a move of 9 counts is byte `09`, the same byte as F10. The probe keeps a byte that has bit 3 set for 3 ms. If the next byte arrives in that window, the group is a mouse packet and is dropped. A real key is one byte and then a gap, so it is shown. Press **F10** (one byte `09`, then a gap) to take the clock back and reset the mouse port. This is one mode at a time. It does not make a combo device send both. Handoff for the operating system: [keyboard_mouse_switch.md](keyboard_mouse_switch.md).
+#### Keyboard on a Pmod, mouse on J15 (PASS 2026-11-03, owner) — no switching
 
-Pulling the clock low inhibits the PIC24 keyboard path. The probe only does that for a mouse reset. If the ID byte is `AB`, it enables the keyboard with `F4` and paints Set-2 letters in the bottom box instead of moving the cursor. While a mouse is streaming, a byte is painted only when it is not a mouse packet (status bit 3 clear, or the data byte right after `E0`/`F0`). Ordinary mouse motion does not fill that box. A dark box with a working mouse means no letter scancode came through.
+**Both work at the same time.** Wireless mouse on **J15** (cursor, both buttons, wheel) and a wired PS/2 keyboard on a **Pmod PS/2 module**; typed letters land in the bottom box and on the 32-character line. This is the answer to "J15 forwards only one USB device": do not make J15 do both. Put the keyboard on a Pmod. A USB splitter or hub, passive or powered, does not help, because the PIC24 has no hub driver.
 
-`build/mouse_probe/mouse_probe.bit` is the file to program. LEDs: LD0 heartbeat, LD1 left, LD2 right, LD3 middle, LD4 wheel notch, LD5 stream ready, LD6 clock, LD7 data. The letter box was added after the 2026-11-02 mouse PASS, so the bit already on the board does not have it until this project is built again.
+Saved passing bitstream (the next `make bit` overwrites `mouse_probe.bit`, so a named copy is kept; `build/` is git-ignored):
+`build/mouse_probe/mouse_probe_J15mouse_PMODkbd_PASS_2026-11-03.bit` (and `.bin`).
+Program it with `openFPGALoader -b nexysVideo <that .bit>`.
+
+Wiring that worked:
+
+| Item | Setting |
+|---|---|
+| Module | 4-pin PS/2 Pmod adapter, one keyboard |
+| Power jumper | **`VB` to `VCC`** (3.3 V from the board). The keyboard lit and typed on 3.3 V. `VE` to `VCC` leaves the keyboard unpowered unless 5 V is fed to `VE`. The earlier "needs 5 V" idea was wrong |
+| Socket | **JB** top row, where it finally powered up and typed |
+| Pmod holes (top row, looking into the socket) | hole 6 = 3.3 V (far left), hole 5 = GND, holes 4,3,2,1 = signals 4,3,2,1 (hole 1 at the right). Holes 1 to 6 are all on the **top** row; the bottom row is 7 to 12 |
+
+The probe listens on **JA, JB and JC**, signals 1 to 4 of each, in six data/clock pairings per Pmod (1+3, 3+1, 3+4, 4+3, 1+2, 2+1), so the wiring did not have to be guessed. Pins: JA1..4 = `AB22 AB21 AB20 AB18`; JB1..4 = `V9 V8 V7 W7`; JC1..4 = `Y6 AA6 AA8 AB8` (Digilent Nexys Video master XDC). The probe does not record which Pmod or pair the keyboard answered on.
+
+**Open question for integration: JB is where the owner's I2C joystick lives (`JB1`=SCL `V9`, `JB2`=SDA `V8`).** The JS bit uses **JA** for the PS/2 keyboard (`AB22` data, `AB20` clock), not JB. The keyboard has only been proven on **JB**. JA and JC have not been proven with a working receiver: before the fix below, nothing could type on any port. To prove JA with no new build, leave this same bit loaded, move the keyboard to **JA** (data on `JA1`, clock on `JA3`) with `VB` to `VCC`, and type. If letters appear, JA is good and the JS bit needs no pin change.
+
+##### What was actually wrong (it was not JB)
+
+1. **My probe bug (the real reason nothing typed):** `ps2_rx.sv` outputs `parity_err = ^{parity, data}`, which is **1 on a valid odd-parity byte** (the name is backwards). The probe accepted a byte only when `parity_err` was 0, so it threw away every good key on every port. The JS top (`top_nexys_video.sv`) ignores `parity_err`, so it is not affected. Anything new that reads `parity_err` must use it as "parity OK = 1".
+2. **Power, separate from reception:** with the jumper on `VE` the keyboard stayed dark. On `VB` it powers from the Pmod's 3.3 V. The blue lights flashing on JB was the keyboard's power-on test, which only proves power, not receive.
+3. **Caps Lock does not light** on this RX-only path. A PS/2 keyboard lights its Caps Lock LED only when the host sends `ED` plus a mask. The probe, like the JS bit, only listens, so a lit Caps Lock is not a test. A letter on the glass is.
+4. The first mouse jump and dead wheel on the earlier switching build was a different bug: a wheel notch is byte `FF`, which has the same bit 3 as a mouse status byte, so it was read as a new position. Fixed by framing a packet on the gap between bytes.
+
+The GO TO KEY / F10 mode-switch version of this probe is in git at `97f30e9`. It is a fallback for one-port setups only. For this owner it is not needed.
+
+LEDs: LD0 heartbeat, LD1 left, LD2 right, LD3 middle, LD4 wheel notch, LD5 stream ready, LD6 clock, LD7 data.
+
+**Wireless mouse works. A wireless keyboard produced one letter and then nothing** (owner, same probe, 2026-11-02). The PIC24 only translates a boot mouse (fixed 3-byte report, or the common 4-byte wheel report) and a boot keyboard (fixed 8-byte report: modifiers plus six key slots). USB HID says a keyboard powers up in report protocol, and the host must send `SET_PROTOCOL` (boot) before those 8-byte reports are required. This PIC24 firmware does not give the FPGA a way to send that request. A wireless mouse dongle still presents the boot mouse, so the cursor works. A wireless keyboard dongle often stays in its NKRO or vendor report, which the PIC24 does not turn into Set-2. One letter means one report did look like a boot key. Digilent's own reply on a Logitech K400r was that the dongle is not this protocol ([forum 5060](https://forum.digilent.com/topic/5060-trying-to-interface-wireless-keyboard-nexys4/)). Nexys 4's manual states the limit in one sentence: only Boot HID keyboards and mice.
+
+Tricks that are worth a try, in order:
+
+1. Put the keyboard in BIOS / 6KRO mode before it is plugged into J15, then unplug and replug the dongle so the PIC24 enumerates that mode. The chord is in that keyboard's manual (one example is Left Fn+Shift+Esc). The FPGA cannot send this command.
+2. Power-cycle with HDMI unplugged, dongle already in J15, then program the FPGA. The PIC24 enumerates when it enters application mode after DONE. No hub.
+3. Do not pull `ps2_clk` low while listening for a keyboard. That is what silences this PIC24.
+4. Wired keyboard on a Pmod (above) is the working path. Wireless keyboards through J15 stay unsolved.
 
 ### Pmod input LED test (PS/2 keyboard + I2C joystick + J15 USB)
 

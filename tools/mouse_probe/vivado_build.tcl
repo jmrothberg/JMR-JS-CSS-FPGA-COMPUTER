@@ -24,6 +24,7 @@ add_files [list \
   $DVI/rgb2dvi.vhd \
   $ROOT/rtl/video/jmr_rgb2dvi_wrap.vhd \
   $ROOT/rtl/video/jmr_mouse_overlay.sv \
+  $ROOT/rtl/phys/ps2_rx.sv \
   $ROOT/tools/mouse_probe/mouse_probe_host.sv \
   $ROOT/tools/mouse_probe/top_mouse_probe.sv \
 ]

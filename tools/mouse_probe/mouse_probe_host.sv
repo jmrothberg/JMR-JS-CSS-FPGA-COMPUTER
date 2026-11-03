@@ -31,9 +31,11 @@ module mouse_probe_host #(
     localparam int SETUP_CYCLES = (CLK_HZ / 100000) + 1;
     localparam int TIMEOUT_CYCLES = CLK_HZ * 2;
     localparam int FRAME_TIMEOUT_CYCLES = CLK_HZ / 500;
-    // Bytes inside one mouse packet are ~1 ms apart. A key is one byte,
-    // then a gap. 3 ms separates those two shapes.
-    localparam int KEY_GAP_CYCLES = CLK_HZ / 300;
+    // Bytes inside one mouse packet are about 1 ms apart. After the
+    // sample-rate magic the next packet is at least 12 ms away. 4 ms
+    // is the gap that means "the packet ended". A 4th byte inside the
+    // gap is the wheel, including FF (one notch down), which has the
+    // same bit 3 as a status byte and must not start a new packet.
 
     typedef enum logic [3:0] {
         POWER, INHIBIT, REQUEST, SEND, ACK_BIT, REPLY, BAT, IDENT, READ_ID, STREAM, KEYSTREAM, LISTEN
@@ -62,11 +64,9 @@ module mouse_probe_host #(
     logic parity, rx_valid, rx_bad;
     logic [1:0] packet_index;
     logic [2:0] script_i;
-    logic plain_mode, tried_magic, keyboard_mode, key_prefix;
-    logic hold_valid;
-    logic [7:0] hold_byte;
-    logic [16:0] hold_timer;
-    logic [1:0] swallow_n;
+    logic plain_mode, tried_magic, keyboard_mode;
+    logic [16:0] gap;
+    localparam int BURST_GAP = CLK_HZ / 250;
 
     wire receiving = state == REPLY || state == BAT || state == IDENT
         || state == READ_ID || state == STREAM || state == KEYSTREAM
@@ -145,13 +145,9 @@ module mouse_probe_host #(
             plain_mode <= 0;
             tried_magic <= 0;
             keyboard_mode <= 0;
-            key_prefix <= 0;
             scan_stb <= 0;
             scan_byte <= 0;
-            hold_valid <= 0;
-            hold_byte <= 0;
-            hold_timer <= 0;
-            swallow_n <= 0;
+            gap <= 0;
         end else begin
             timer <= timer + 1;
             sample <= 0;
@@ -163,37 +159,16 @@ module mouse_probe_host #(
                 data_low <= 0;
                 ready <= 1;
                 keyboard_mode <= 1;
-                key_prefix <= 0;
                 packet_index <= 0;
+                gap <= 0;
                 if (state != LISTEN) begin
                     state <= LISTEN;
                     timer <= 0;
-                    hold_valid <= 0;
-                    swallow_n <= 0;
-                end else if (rx_valid && swallow_n != 0) begin
-                    // Rest of a mouse packet (Y, and Z when the wheel is on).
-                    swallow_n <= swallow_n - 1'b1;
-                end else if (rx_valid && hold_valid) begin
-                    // The held byte was a mouse status: the next byte
-                    // arrived with no gap. Drop it and the bytes after it.
-                    // A move of 9 counts is byte 09, which is also F10.
-                    hold_valid <= 0;
-                    swallow_n <= wheel_ok ? 2'd2 : 2'd1;
-                end else if (rx_valid && rx_data[3]) begin
-                    // Might be a mouse status or a key whose code has bit 3
-                    // set (F10 is 09, A is 1C). Wait one gap to tell.
-                    hold_valid <= 1;
-                    hold_byte <= rx_data;
-                    hold_timer <= 0;
                 end else if (rx_valid) begin
+                    // Every byte. A mouse filter here ate real keys, and
+                    // a key filter in the mouse parser ate the wheel.
                     scan_byte <= rx_data;
                     scan_stb <= 1;
-                end else if (hold_valid && hold_timer >= KEY_GAP_CYCLES[16:0]) begin
-                    hold_valid <= 0;
-                    scan_byte <= hold_byte;
-                    scan_stb <= 1;
-                end else if (hold_valid) begin
-                    hold_timer <= hold_timer + 1'b1;
                 end
             end else if (state == LISTEN) begin
                 clock_low <= 1;
@@ -203,8 +178,7 @@ module mouse_probe_host #(
                 command <= 8'hFF;
                 tx_index <= 0;
                 timer <= 0;
-                hold_valid <= 0;
-                swallow_n <= 0;
+                gap <= 0;
                 state <= INHIBIT;
             // KEYSTREAM and LISTEN stay in receive. Pulling the clock low
             // inhibits the PIC24 keyboard path.
@@ -216,7 +190,7 @@ module mouse_probe_host #(
                 data_low <= 0;
                 ready <= 0;
                 keyboard_mode <= 0;
-                key_prefix <= 0;
+                gap <= 0;
                 state <= POWER;
                 timer <= 0;
                 command <= 8'hFF;
@@ -299,26 +273,25 @@ module mouse_probe_host #(
                 IDENT: if (rx_valid) begin
                     timer <= 0;
                     if (rx_data == 0) begin
+                        // Always send the wheel magic. Skipping it after one
+                        // glitch left the mouse in 4-byte mode while this
+                        // host read 3, which jumps the cursor and drops Z.
                         keyboard_mode <= 0;
-                        if (plain_mode) begin
-                            script_i <= 7;
-                            command <= 8'hF4;
-                            wheel_ok <= 0;
-                        end else begin
-                            script_i <= 0;
-                            command <= script_byte(0);
-                            tried_magic <= 1;
-                        end
+                        script_i <= 0;
+                        command <= script_byte(0);
+                        tried_magic <= 1;
                         clock_low <= 1;
                         state <= INHIBIT;
                     end else if (rx_data == 8'hAB) begin
-                        // Keyboard ID, not a mouse. Enable the stream and
-                        // do not parse the following bytes as movement.
+                        // Keyboard. Do not pull the clock and do not send
+                        // F4. Holding the clock low is what silences the
+                        // PIC24 keyboard path.
                         keyboard_mode <= 1;
-                        script_i <= 7;
-                        command <= 8'hF4;
-                        clock_low <= 1;
-                        state <= INHIBIT;
+                        ready <= 1;
+                        clock_low <= 0;
+                        data_low <= 0;
+                        state <= KEYSTREAM;
+                        timer <= 0;
                     end else begin
                         state <= POWER;
                         command <= 8'hFF;
@@ -334,19 +307,13 @@ module mouse_probe_host #(
                     state <= INHIBIT;
                 end
                 STREAM: begin
+                    // Never time out while idle at packet_index == 0, and use
+                    // READ_ID (wheel_ok) directly for 3- vs 4-byte packets.
                     if (packet_index == 0 || rx_valid) timer <= 0;
                     if (rx_valid) case (packet_index)
-                        2'd0: if (key_prefix || !rx_data[3]) begin
-                            // Not a mouse status byte, or the data byte that
-                            // follows E0/F0. A Set-2 letter whose own bit 3
-                            // is set would otherwise be eaten as movement.
-                            scan_byte <= rx_data;
-                            scan_stb <= 1;
-                            key_prefix <= (rx_data == 8'hE0) || (rx_data == 8'hF0);
-                        end else begin
+                        2'd0: if (rx_data[3]) begin
                             flags <= rx_data;
                             packet_index <= 1;
-                            key_prefix <= 0;
                         end
                         2'd1: begin
                             xbyte <= rx_data;

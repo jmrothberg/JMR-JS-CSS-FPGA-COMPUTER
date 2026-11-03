@@ -38,6 +38,36 @@ set_property -dict { PACKAGE_PIN N13 IOSTANDARD LVCMOS33 PULLUP true } [get_port
 set_property PULLTYPE PULLUP [get_ports { ps2_clk }]
 set_property PULLTYPE PULLUP [get_ports { ps2_data }]
 
+# Pmod JA top row — all 4 signal pins (JA1=AB22, JA2=AB21, JA3=AB20, JA4=AB18) with pull-ups
+set_property -dict { PACKAGE_PIN AB22 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_ja1 }]
+set_property -dict { PACKAGE_PIN AB21 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_ja2 }]
+set_property -dict { PACKAGE_PIN AB20 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_ja3 }]
+set_property -dict { PACKAGE_PIN AB18 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_ja4 }]
+set_property PULLTYPE PULLUP [get_ports { pmod_ja1 }]
+set_property PULLTYPE PULLUP [get_ports { pmod_ja2 }]
+set_property PULLTYPE PULLUP [get_ports { pmod_ja3 }]
+set_property PULLTYPE PULLUP [get_ports { pmod_ja4 }]
+
+# Pmod JC top row — all 4 signal pins (JC1=Y6, JC2=AA6, JC3=AA8, JC4=AB8) with pull-ups
+set_property -dict { PACKAGE_PIN Y6  IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_jc1 }]
+set_property -dict { PACKAGE_PIN AA6 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_jc2 }]
+set_property -dict { PACKAGE_PIN AA8 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_jc3 }]
+set_property -dict { PACKAGE_PIN AB8 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_jc4 }]
+set_property PULLTYPE PULLUP [get_ports { pmod_jc1 }]
+set_property PULLTYPE PULLUP [get_ports { pmod_jc2 }]
+set_property PULLTYPE PULLUP [get_ports { pmod_jc3 }]
+set_property PULLTYPE PULLUP [get_ports { pmod_jc4 }]
+
+# Pmod JB top row — all 4 signal pins (JB1=V9, JB2=V8, JB3=V7, JB4=W7) with pull-ups
+set_property -dict { PACKAGE_PIN V9 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_jb1 }]
+set_property -dict { PACKAGE_PIN V8 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_jb2 }]
+set_property -dict { PACKAGE_PIN V7 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_jb3 }]
+set_property -dict { PACKAGE_PIN W7 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_jb4 }]
+set_property PULLTYPE PULLUP [get_ports { pmod_jb1 }]
+set_property PULLTYPE PULLUP [get_ports { pmod_jb2 }]
+set_property PULLTYPE PULLUP [get_ports { pmod_jb3 }]
+set_property PULLTYPE PULLUP [get_ports { pmod_jb4 }]
+
 # Same HDMI bank placement the JS bit uses. This design is small, but the
 # rgb2dvi MMCM still has to sit next to the TMDS pins.
 set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets u_tmds/u_rgb2dvi/ClockGenInternal.ClockGenX/PixelClkInX5]

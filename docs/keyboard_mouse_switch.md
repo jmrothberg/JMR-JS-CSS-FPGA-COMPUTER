@@ -9,13 +9,48 @@ returns to mouse mode. One mode at a time. J15 still forwards one USB
 device. This does not make a keyboard-with-trackball send both. That
 limit is [NEXYS_USB_KEYBOARD_MOUSE_FAILED.md](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md).
 
-## What was proved (2026-11-02)
+## UPDATE 2026-11-03: the switch is not needed for the owner's setup
+
+Read this first. The owner got **wireless mouse on J15 and a wired PS/2
+keyboard on a Pmod, both at the same time, no switching** (probe bit saved
+as `/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/mouse_probe/mouse_probe_J15mouse_PMODkbd_PASS_2026-11-03.bit`;
+details and wiring in
+[FPGA_BRINGUP.md](FPGA_BRINGUP.md), "Keyboard on a Pmod, mouse on J15").
+The JS board top already has both paths live at once with `USB_MOUSE=1`:
+`u_mouse_host` on J15 and `u_pmod_ps2_rx` / `u_pmod_ps2_dec` on **JA**
+(`AB22` data, `AB20` clock, never reset by `desktop_keyboard_mode`). So
+for integration the first job is to **check the JS bit with the keyboard
+on JA**, not to build the menu switch below.
+
+What the next agent needs to know:
+
+*   The keyboard has only been proven on **JB**, which is where the owner's
+    I2C joystick normally sits (`JB1` SCL `V9`, `JB2` SDA `V8`). JA is the
+    JS bit's keyboard port and is **unproven with a working receiver**.
+    Proof needs no build: load the saved probe bit, put the keyboard on JA
+    (data `JA1`, clock `JA3`, jumper `VB` to `VCC`), type.
+*   Do **not** move the keyboard to JB in the JS bit. It collides with the
+    joystick.
+*   The probe's "nothing typed" was a probe bug, not the port:
+    `ps2_rx.parity_err` is **1 on valid parity**. The probe rejected
+    `parity_err==1`. The JS top ignores it. Use it as "parity OK = 1".
+*   Pmod PS/2 power: jumper `VB` to `VCC` (3.3 V). `VE` needs a 5 V wire.
+*   The production `jmr_ps2_mouse_host` is 3-byte only. The probe host
+    (`mouse_probe_host.sv`) adds the IntelliMouse wheel and frames packets
+    on the gap between bytes. A wheel notch down is byte `FF`; it must not
+    be read as a new packet status. Port that if the JS bit needs the wheel.
+*   The menu + F10 text below is the single-port fallback and is **not
+    implemented** in `jmr_desktop.sv`. Do it only if a user has just J15.
+
+## What was proved (2026-11-02, the switching probe, git `97f30e9`)
 
 Bitstream programmed that night:
 `/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/mouse_probe/mouse_probe.bit`
 
-Mouse-only on J15 worked first (cursor, left button, right button, wheel).
-The mode switch was added after that and programmed the same night.
+Mouse-only on J15 worked first (cursor, left button, right button, wheel),
+including a wireless mouse. A wireless keyboard on the same probe produced
+no Set-2 bytes. The mode switch was added after the wired-mouse pass and
+programmed the same night.
 
 Probe sources, full paths:
 
@@ -40,7 +75,10 @@ Open-drain. Drive low or Z, never high.
 `mouse_probe_host.listen_keys`.
 
 *   Mouse mode (`key_mode == 0`). The host sends `FF`, the IntelliMouse
-    sample-rate magic, then `F4`, and parses 3-byte or 4-byte packets.
+    sample-rate magic, then `F4`. A packet is framed by silence. Three
+    bytes and a 4 ms gap is a move. A fourth byte inside that gap is
+    the wheel, including `FF` (one notch down). That byte has status
+    bit 3 set, so it must not start a new packet.
 *   Click the on-screen box **GO TO KEY** (x 36–160, y 88–128) with the
     left button. `key_mode` becomes 1. `f10_wait` loads `75_000_000`
     cycles at the 25 MHz pixel clock (3 seconds).
@@ -51,14 +89,12 @@ Open-drain. Drive low or Z, never high.
 *   F10 is Set-2 make `8'h09`, and only when `key_brk` and `key_ext` are
     clear. Break is `F0 09` and must not count. F10 is ignored while
     `f10_wait != 0`.
-*   A mouse packet is not a key. Bytes inside one packet arrive about
-    1 ms apart. A key is one byte, then a gap. In `LISTEN`, a byte whose
-    bit 3 is set is held for `KEY_GAP_CYCLES` (3 ms). If another byte
-    arrives first, the held byte was a mouse status (a move of 9 counts
-    is byte `09`, which is also F10) and the whole packet is dropped.
-    If the gap expires, the byte is a key and is emitted on `scan_stb`.
-    The typed line in `top_mouse_probe.sv` (`typed`, `ntyped`) shows the
-    last 32 of those keys. Mouse motion must not clear `key_mode`.
+*   `LISTEN` emits every byte. A mouse move sends bare bytes (`1A` is
+    both `Z` and +26 pixels; `3A` is both `M` and +58 pixels). A real
+    key sends its make and then `F0` plus that same byte on release.
+    `top_mouse_probe.sv` remembers the last make (`last_make`) and only
+    commits a letter or F10 when the matching `F0 <code>` arrives.
+    Mouse motion no longer types `M` or `Z` and does not clear `key_mode`.
 *   Clearing `listen_keys` leaves `LISTEN`, pulls the clock low, and
     starts the mouse reset at `INHIBIT` with command `FF`.
 
@@ -121,10 +157,9 @@ toggle `keyboard_open`.
     `rtl/phys/ps2_decode.sv` maps Set-2 `8'h09` to key code 121. On that
     event, `keyboard_mode <= 0`. Do not treat every `09` as F10. A mouse
     that is still streaming sends that byte as a movement of 9 counts,
-    inside a packet whose bytes are about 1 ms apart. The probe holds a
-    bit-3 byte for 3 ms and drops the group when another byte arrives
-    (`mouse_probe_host.sv`, `KEY_GAP_CYCLES`). Copy that before the
-    desktop honors F10, or moving the mouse leaves keyboard mode.
+    inside a packet whose bytes are about 1 ms apart. Honor F10 only
+    when `09` is a lone byte: a gap before it and a gap after it. Do
+    not drop other bytes to make that decision.
 3.  Arm F10 three seconds after entering keyboard mode
     (`75_000_000` cycles if the desktop clock is 25 MHz; scale if
     `jmr_desktop` runs on `core_clk`). A mouse still streaming after the
@@ -137,6 +172,42 @@ toggle `keyboard_open`.
     this switch. Only the board Set-2 path (`u_ps2_dec`) returns to the
     mouse.
 
+## Wireless mouse, not a wireless keyboard
+
+Owner, 2026-11-02, same probe: a wireless mouse moved, clicked, and
+scrolled. A wireless keyboard typed nothing.
+
+The PIC24 translates two USB shapes and nothing else. A boot mouse is the
+fixed 3-byte HID report, or the common 4-byte report that adds a wheel.
+A boot keyboard is the fixed 8-byte report: modifier bits plus six key
+slots. Wireless mouse dongles still present the boot mouse, so the probe
+sees normal PS/2 packets. Wireless keyboard dongles usually present a
+vendor report instead (NKRO bitmap, extra HID pages, or a private
+2.4 GHz payload). The PIC24 can enumerate that dongle and still clock
+nothing on `W17`/`N13`. No FPGA decode runs, because no Set-2 byte
+arrives. LD14 blinking with an empty letter line is USB at the PIC24
+and silence on PS/2. A wired boot keyboard is the keyboard that types.
+The descriptors for this dongle were not captured. One letter did
+come through (owner, same night). That fits a dongle which emits a
+single boot-shaped report and then stays in report protocol. USB HID
+powers a keyboard up in report protocol and requires the host to send
+`SET_PROTOCOL` for the 8-byte boot report. The PIC24 does not let the
+FPGA send that. Nexys 4's manual says only Boot HID devices are
+supported. Digilent's reply on a Logitech K400r wireless keyboard was
+that the dongle is not this protocol
+([forum 5060](https://forum.digilent.com/topic/5060-trying-to-interface-wireless-keyboard-nexys4/)).
+
+Tricks, in order: put the keyboard in its BIOS / 6KRO mode (the chord
+is in its own manual; Left Fn+Shift+Esc is one example) and replug the
+dongle so enumeration sees that mode. Power-cycle with HDMI unplugged
+and the dongle already in J15, then program the FPGA. No hub. Keyboard
+listen passes every byte and does not pull the clock. A mouse packet is
+framed by silence: three bytes and a gap is a move, a fourth byte inside
+the gap is the wheel. `FF` is one notch down and must not be read as a
+new position. F10 counts only when `09` is alone. The parity bug above
+only existed in the Pmod build, so it does not explain the wireless
+keyboard. That stays unsolved.
+
 ## What not to do
 
 *   Do not time-slice the two protocols. The PIC24 forwards one USB
@@ -148,5 +219,5 @@ toggle `keyboard_open`.
 *   Do not title-gate (`if (stem == …)`). This is a machine mode.
 *   Do not add `tools/mouse_probe/` to the JS file list. `find rtl` in
     the board flow must not start compiling the probe.
-*   JA Pmod PS/2 (`u_pmod_ps2_rx`) is a second keyboard and stays
-    listen-only. This switch is J15.
+*   JA Pmod PS/2 (`u_pmod_ps2_rx`) is the keyboard that works alongside
+    the J15 mouse and stays listen-only. This switch is J15.

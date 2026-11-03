@@ -14,6 +14,22 @@ module top_mouse_probe (
     inout  wire hdmi_tx_rsda,
     inout  wire ps2_clk,
     inout  wire ps2_data,
+    // Pmod JA top row all 4 signal pins (JA1=AB22, JA2=AB21, JA3=AB20, JA4=AB18)
+    // so both 6-pin (JA1+JA3) and 4-pin adjacent to GND/VCC (JA3+JA4) work automatically.
+    input  wire pmod_ja1,
+    input  wire pmod_ja2,
+    input  wire pmod_ja3,
+    input  wire pmod_ja4,
+    // Pmod JC top row all 4 signal pins (JC1=Y6, JC2=AA6, JC3=AA8, JC4=AB8) — 0-ohm like JB
+    input  wire pmod_jc1,
+    input  wire pmod_jc2,
+    input  wire pmod_jc3,
+    input  wire pmod_jc4,
+    // Pmod JB top row all 4 signal pins (JB1=V9, JB2=V8, JB3=V7, JB4=W7)
+    input  wire pmod_jb1,
+    input  wire pmod_jb2,
+    input  wire pmod_jb3,
+    input  wire pmod_jb4,
     output logic [7:0] led
 );
     assign hdmi_tx_cec = 1'bz;
@@ -61,17 +77,79 @@ module top_mouse_probe (
     logic signed [7:0] dz;
     logic [2:0] buttons;
     logic key_mode;
+    // J15 stays in mouse mode permanently (no switching).
+    assign key_mode = 1'b0;
     assign ps2_clk = clock_low ? 1'b0 : 1'bz;
     assign ps2_data = data_low ? 1'b0 : 1'bz;
     mouse_probe_host #(.CLK_HZ(25000000)) u_mouse (
         .clk(pixel_clk), .reset(!rst_n),
-        .listen_keys(key_mode),
+        .listen_keys(1'b0),
         .clock_in(ps2_clk), .data_in(ps2_data),
         .clock_low(clock_low), .data_low(data_low),
         .sample(sample), .dx(dx), .dy(dy), .dz(dz), .buttons(buttons),
         .ready(ready), .wheel_ok(wheel_ok),
-        .scan_stb(scan_stb), .scan_byte(scan_byte)
+        .scan_stb(), .scan_byte()
     );
+    // Simultaneous PS/2 keyboard receivers on Pmod JA:
+    // 1) 6-pin PmodPS2 standard: JA1=data, JA3=clk (and reversed JA3=data, JA1=clk)
+    // 2) 4-pin header on pins 3..6 (next to GND/VCC): JA3+JA4 in either order
+    // 3) Jumper wires on JA1+JA2 in either order
+    wire [7:0] sc_13, sc_31, sc_34, sc_43, sc_12, sc_21;
+    wire       st_13, st_31, st_34, st_43, st_12, st_21;
+    wire       pe_13, pe_31, pe_34, pe_43, pe_12, pe_21;
+    ps2_rx u_ja_13 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_ja3), .ps2_data(pmod_ja1), .scancode(sc_13), .strobe(st_13), .parity_err(pe_13));
+    ps2_rx u_ja_31 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_ja1), .ps2_data(pmod_ja3), .scancode(sc_31), .strobe(st_31), .parity_err(pe_31));
+    ps2_rx u_ja_34 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_ja4), .ps2_data(pmod_ja3), .scancode(sc_34), .strobe(st_34), .parity_err(pe_34));
+    ps2_rx u_ja_43 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_ja3), .ps2_data(pmod_ja4), .scancode(sc_43), .strobe(st_43), .parity_err(pe_43));
+    ps2_rx u_ja_12 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_ja2), .ps2_data(pmod_ja1), .scancode(sc_12), .strobe(st_12), .parity_err(pe_12));
+    ps2_rx u_ja_21 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_ja1), .ps2_data(pmod_ja2), .scancode(sc_21), .strobe(st_21), .parity_err(pe_21));
+    // In ps2_rx.sv, parity_err = ^{shift[10], shift[9:2]} which is 1 on
+    // VALID odd parity! Checking !pe threw away every valid byte.
+    // Match top_nexys_video.sv: gate on strobe (or pe==1 for valid odd parity).
+    wire v_13 = st_13 && pe_13;
+    wire v_31 = st_31 && pe_31;
+    wire v_34 = st_34 && pe_34;
+    wire v_43 = st_43 && pe_43;
+    wire v_12 = st_12 && pe_12;
+    wire v_21 = st_21 && pe_21;
+    // Same all-pair receiver set on Pmod JC (0-ohm shunts like JB)
+    wire [7:0] c_13, c_31, c_34, c_43, c_12, c_21;
+    wire       cs_13, cs_31, cs_34, cs_43, cs_12, cs_21;
+    wire       ce_13, ce_31, ce_34, ce_43, ce_12, ce_21;
+    ps2_rx u_jc_13 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_jc3), .ps2_data(pmod_jc1), .scancode(c_13), .strobe(cs_13), .parity_err(ce_13));
+    ps2_rx u_jc_31 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_jc1), .ps2_data(pmod_jc3), .scancode(c_31), .strobe(cs_31), .parity_err(ce_31));
+    ps2_rx u_jc_34 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_jc4), .ps2_data(pmod_jc3), .scancode(c_34), .strobe(cs_34), .parity_err(ce_34));
+    ps2_rx u_jc_43 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_jc3), .ps2_data(pmod_jc4), .scancode(c_43), .strobe(cs_43), .parity_err(ce_43));
+    ps2_rx u_jc_12 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_jc2), .ps2_data(pmod_jc1), .scancode(c_12), .strobe(cs_12), .parity_err(ce_12));
+    ps2_rx u_jc_21 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_jc1), .ps2_data(pmod_jc2), .scancode(c_21), .strobe(cs_21), .parity_err(ce_21));
+    wire vc_13 = cs_13 && ce_13;
+    wire vc_31 = cs_31 && ce_31;
+    wire vc_34 = cs_34 && ce_34;
+    wire vc_43 = cs_43 && ce_43;
+    wire vc_12 = cs_12 && ce_12;
+    wire vc_21 = cs_21 && ce_21;
+    // Same all-pair receiver set on Pmod JB (JB1=V9, JB2=V8, JB3=V7, JB4=W7)
+    wire [7:0] b_13, b_31, b_34, b_43, b_12, b_21;
+    wire       bs_13, bs_31, bs_34, bs_43, bs_12, bs_21;
+    wire       be_13, be_31, be_34, be_43, be_12, be_21;
+    ps2_rx u_jb_13 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_jb3), .ps2_data(pmod_jb1), .scancode(b_13), .strobe(bs_13), .parity_err(be_13));
+    ps2_rx u_jb_31 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_jb1), .ps2_data(pmod_jb3), .scancode(b_31), .strobe(bs_31), .parity_err(be_31));
+    ps2_rx u_jb_34 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_jb4), .ps2_data(pmod_jb3), .scancode(b_34), .strobe(bs_34), .parity_err(be_34));
+    ps2_rx u_jb_43 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_jb3), .ps2_data(pmod_jb4), .scancode(b_43), .strobe(bs_43), .parity_err(be_43));
+    ps2_rx u_jb_12 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_jb2), .ps2_data(pmod_jb1), .scancode(b_12), .strobe(bs_12), .parity_err(be_12));
+    ps2_rx u_jb_21 (.clk(pixel_clk), .rst_n(rst_n), .ps2_clk(pmod_jb1), .ps2_data(pmod_jb2), .scancode(b_21), .strobe(bs_21), .parity_err(be_21));
+    wire vb_13 = bs_13 && be_13;
+    wire vb_31 = bs_31 && be_31;
+    wire vb_34 = bs_34 && be_34;
+    wire vb_43 = bs_43 && be_43;
+    wire vb_12 = bs_12 && be_12;
+    wire vb_21 = bs_21 && be_21;
+    assign scan_stb = v_13 | v_31 | v_34 | v_43 | v_12 | v_21
+                    | vc_13 | vc_31 | vc_34 | vc_43 | vc_12 | vc_21
+                    | vb_13 | vb_31 | vb_34 | vb_43 | vb_12 | vb_21;
+    assign scan_byte = v_13 ? sc_13 : v_31 ? sc_31 : v_34 ? sc_34 : v_43 ? sc_43 : v_12 ? sc_12 : v_21 ? sc_21
+                     : vc_13 ? c_13 : vc_31 ? c_31 : vc_34 ? c_34 : vc_43 ? c_43 : vc_12 ? c_12 : vc_21 ? c_21
+                     : vb_13 ? b_13 : vb_31 ? b_31 : vb_34 ? b_34 : vb_43 ? b_43 : vb_12 ? b_12 : b_21;
 
     logic [9:0] px;
     logic [8:0] py;
@@ -85,13 +163,17 @@ module top_mouse_probe (
     logic signed [12:0] wheel_next;
     logic scan_stb;
     logic [7:0] scan_byte;
-    logic [7:0] letter;
+    logic [7:0] letter, last_make;
     logic key_brk, key_ext;
     logic [19:0] letter_flash;
     logic btn_prev;
     // F10 is ignored for 3 seconds so a mouse byte cannot bounce the mode
     // while the plug is being swapped.
     logic [26:0] f10_wait;
+    // F10 counts only when byte 09 is alone. A mouse packet is a burst,
+    // so a move of 9 counts must not leave keyboard mode.
+    logic [16:0] since_byte;
+    logic arm_f10;
     // Last 32 typed characters. First character sits at bits [255:248].
     logic [255:0] typed;
     logic [5:0] ntyped;
@@ -121,12 +203,14 @@ module top_mouse_probe (
             wheel_id <= 0;
             wheel_flash <= 0;
             letter <= 0;
+            last_make <= 0;
             key_brk <= 0;
             key_ext <= 0;
             letter_flash <= 0;
-            key_mode <= 0;
             btn_prev <= 0;
             f10_wait <= 0;
+            since_byte <= 0;
+            arm_f10 <= 0;
             typed <= 0;
             ntyped <= 0;
         end else begin
@@ -144,34 +228,17 @@ module top_mouse_probe (
                 if (scan_byte == 8'hE0) key_ext <= 1;
                 else if (scan_byte == 8'hF0) key_brk <= 1;
                 else begin
-                    // Make and break both count: a press whose make byte
-                    // looked like a mouse packet still shows on release.
-                    if (!key_ext && set2_char(scan_byte) != 0) begin
+                    // JA is a dedicated PS/2 keyboard — show every make immediately.
+                    if (!key_ext && !key_brk && set2_char(scan_byte) != 0) begin
                         letter <= set2_char(scan_byte);
                         letter_flash <= 20'd250000;
-                        // Releases repeat the same code. Keep the line to makes.
-                        if (key_mode && !key_brk) begin
-                            if (ntyped == 32) typed <= {typed[247:0], set2_char(scan_byte)};
-                            else typed[255 - {ntyped[4:0], 3'b000} -: 8] <= set2_char(scan_byte);
-                            if (ntyped != 32) ntyped <= ntyped + 1'b1;
-                        end
+                        if (ntyped == 32) typed <= {typed[247:0], set2_char(scan_byte)};
+                        else typed[255 - {ntyped[4:0], 3'b000} -: 8] <= set2_char(scan_byte);
+                        if (ntyped != 32) ntyped <= ntyped + 1'b1;
                     end
                     key_brk <= 0;
                     key_ext <= 0;
-                    // Set-2 F10 make is 09. Break is F0 09 and must not count.
-                    if (key_mode && f10_wait == 0 && !key_brk && !key_ext
-                        && scan_byte == 8'h09)
-                        key_mode <= 0;
                 end
-            end
-            btn_prev <= btn[0];
-            if (key_mode) begin
-                if (f10_wait != 0) f10_wait <= f10_wait - 1'b1;
-            end else if (btn[0] && !btn_prev && over_go) begin
-                key_mode <= 1;
-                f10_wait <= 27'd75000000;
-                typed <= 0;
-                ntyped <= 0;
             end
         end
     end
@@ -348,25 +415,13 @@ module top_mouse_probe (
             pix = 24'hffffff;
         if (wheel_id && box(hcnt, vcnt, 282, 294, 48, 60))
             pix = 24'hffffff;
-        // Letter box. Dark until a Set-2 letter or digit comes through.
+        // Letter box. Dark until a Set-2 letter or digit comes through on JA.
         if (box(hcnt, vcnt, 268, 372, 400, 470))
             pix = letter != 0 ? 24'h182040 : 24'h181818;
         if (letter != 0 && hcnt >= 288 && hcnt < 328 && vcnt >= 408 && vcnt < 464
             && gcol < 5 && grow < 7 && glyph5(letter, grow)[gbit])
             pix = letter_flash != 0 ? 24'hffffff : 24'hc0d0ff;
-        // Mode switch. Click GO TO KEY with the mouse. F10 returns.
-        // The note turns yellow once F10 is armed.
-        if (box(hcnt, vcnt, 36, 160, 88, 128)) begin
-            if (key_mode) pix = 24'h806000;
-            else if (over_go) pix = 24'h3060a0;
-            else pix = 24'h203040;
-        end
-        if (stamp(hcnt, vcnt, 10'd44, 10'd100, 5'd9, TXT_GO))
-            pix = 24'hffffff;
-        if (stamp(hcnt, vcnt, 10'd348, 10'd100, 5'd16, TXT_F10))
-            pix = (key_mode && f10_wait == 0) ? 24'hffe080 : 24'hc0c0c0;
-        // Typed line. Mouse packets are not letters, so this stays put
-        // while the mouse moves.
+        // Typed line from JA PS/2 keyboard (no mode switching).
         if (ntyped != 0 && stamp(hcnt, vcnt, 10'd36, 10'd362,
                 ntyped > 16 ? 5'd16 : ntyped[4:0], typed[255:128]))
             pix = 24'hffffff;
