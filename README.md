@@ -1,5 +1,30 @@
 # JMR JS Computer
 
+## Next build: mouse + keyboard + joystick, no switching (read this first)
+
+**Decided 2026-11-03.** All three input devices at once, each on its own port:
+
+| Device | Port | Notes |
+|---|---|---|
+| **Mouse** (wired or wireless) | **J15** USB | Mouse only. The PIC24 behind J15 passes one device as PS/2. |
+| **Keyboard** (wired PS/2) | **Pmod JA**, top row, via a Pmod PS/2 module | Jumper `VB` to `VCC`. Proven on the probe bit; works on JA. |
+| **Joystick** (optional) | **Pmod JB** | Unchanged. The machine also works with no stick. |
+
+The JS top (`rtl/top_nexys_video.sv`) already has this layout, so the next
+build needs no pin change. **One bug to avoid:** `ps2_rx.parity_err` is `1`
+when a byte is *valid*. Treating `1` as an error throws away every key. That
+single inverted test is why the keyboard looked dead for hours. Do not gate
+keys on it.
+
+**Hand this to the agent building the full `.bit`:
+[docs/PMOD_KEYBOARD_J15_MOUSE.md](docs/PMOD_KEYBOARD_J15_MOUSE.md)** (wiring, the
+warning, acceptance test, code paths). Not solved yet: a wireless keyboard
+through J15, and one USB device that is both keyboard and mouse.
+
+**Page map:** next-build wiring (here) → Mac-style menus → desktop simulator →
+current board release (run73o) → [About the computer](#about-the-computer) →
+[commands](#top-commands-use-these-a-lot) → [Words used](#words-used-in-this-project).
+
 ## Mac-style Python menus — November 2, 2026
 
 Your normal **[gui_jmr_js.py](gui_jmr_js.py)** and **`card.img`** now have the
@@ -138,7 +163,7 @@ keyboard jack **J15**, Pmod joystick. **PA-StarLite** is a later port.
 Development order: **PYTHON bytecode → real FPGA-SIM (perfect) → board → ASIC**.
 Do **not** flash the board until the FPGA-SIM battery is green.
 
-The owner confirms the normal **J15 USB keyboard works**. The old mouse-only experiment disabled that path and does not support a USB keyboard with a built-in mouse. It is archived as a [failed approach](docs/NEXYS_USB_KEYBOARD_MOUSE_FAILED.md), not part of the current release. On-machine editing and compilation use the card's tools; `RUN` executes native JMR bytecode. On the machine, `LOAD "HELP.MD"` then `READ` pages the manual. `LOAD "NAME.MD"` then `READ` opens another Markdown file. The flashed run73o bitstream does not have the READ verb yet; until the next bitstream, `LIST` pages the loaded file.
+**Input today (run73o, board-tested): the J15 USB keyboard.** The next build moves the keyboard to Pmod JA and gives J15 to the mouse; see [the top of this page](#next-build-mouse--keyboard--joystick-no-switching-read-this-first). A single USB device that is both keyboard and mouse does not work with this board's PIC24; the old experiment is archived as a [failed approach](docs/NEXYS_USB_KEYBOARD_MOUSE_FAILED.md), not part of the release. On-machine editing and compilation use the card's tools; `RUN` executes native JMR bytecode. On the machine, `LOAD "HELP.MD"` then `READ` pages the manual. `LOAD "NAME.MD"` then `READ` opens another Markdown file. The flashed run73o bitstream does not have the READ verb yet; until the next bitstream, `LIST` pages the loaded file.
 
 **Where to go next**
 
