@@ -84,6 +84,7 @@ module jmr_js_core #(
     output logic [69:0] system_held_o,
     output logic [31:0] system_generation_o,
     output logic [31:0] system_window_o,
+    output logic [15:0] system_status_o,
     output logic system_viewport_o,
     output logic [8:0] game_source_y_o,
     output logic system_overlay_opaque_o,
@@ -224,6 +225,10 @@ module jmr_js_core #(
             map_game_y=9'(v>479?479:v);
         end
     endfunction
+    always_comb begin
+        system_status_o=0;system_status_o[2:0]=docs_dialog;system_status_o[3]=docs_catalog_active;
+        system_status_o[4]=actions_busy;system_status_o[5]=classic_error;system_status_o[9:6]=classic_menu;
+    end
     assign game_source_y_o=map_game_y(fb_y);
     assign ui_consume=ship_consume || classic_consume || docs_consume;
     assign ui_quit=ship_quit || actions_quit;

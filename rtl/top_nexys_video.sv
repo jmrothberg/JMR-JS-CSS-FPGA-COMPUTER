@@ -304,7 +304,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=1) (
         .mouse_x(mouse_x),.mouse_y(mouse_y),.mouse_buttons(mouse_buttons),
         .desktop_keyboard_mode_o(desktop_keyboard_mode),
         .pointer_x_o(pointer_x),.pointer_y_o(pointer_y),.pointer_toggle_o(pointer_toggle),
-        .system_window_o(system_window),.system_viewport_o(system_game_viewport),.game_source_y_o(),
+        .system_status_o(),.system_window_o(system_window),.system_viewport_o(system_game_viewport),.game_source_y_o(),
         .system_overlay_opaque_o(system_ui_opaque),.system_overlay_rgb_o(system_ui_rgb),.system_menu_o(system_menu),.system_keyboard_o(system_keyboard),.system_about_o(system_about),.system_shift_o(system_shift),.system_caps_o(system_caps),
         .system_ctrl_o(system_ctrl),.system_alt_o(system_alt),.system_pressed_o(system_pressed),.system_hold_o(system_hold),.system_held_o(system_held),
         .key_evt_char(kev_stb?(kbd_push && kbd_ascii>=32 && kbd_ascii<127?kbd_ascii:8'd0):

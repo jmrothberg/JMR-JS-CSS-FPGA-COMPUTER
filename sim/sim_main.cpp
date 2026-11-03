@@ -1702,6 +1702,10 @@ int main(int argc, char** argv) {
             std::cout << "OK" << std::endl;
             continue;
         }
+        if(line=="UISTATE?") {
+            const unsigned s=top->system_status_o;
+            std::cout<<"UISTATE dialog="<<(s&7)<<" catalog="<<((s>>3)&1)<<" action="<<((s>>4)&1)<<" error="<<((s>>5)&1)<<" menu="<<((s>>6)&15)<<std::endl;continue;
+        }
         if(line=="WINDOW?") {
             const uint32_t w=top->system_window_o;
             std::cout<<"WINDOW role="<<(w&255)<<" scroll="<<((w>>8)&255)<<" scrollx="<<((w>>16)&255)<<" flags="<<(w>>24)<<std::endl;continue;
