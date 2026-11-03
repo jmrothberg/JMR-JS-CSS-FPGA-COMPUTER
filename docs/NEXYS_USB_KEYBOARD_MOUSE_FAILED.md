@@ -30,7 +30,10 @@ implement the combined-device requirement either.
 
 The experiment passed routing and timing (+0.038 ns setup, +0.022 ns hold)
 and mouse RTL tests. **Those checks did not establish combined USB-device
-support.** Physical USB mouse operation was not confirmed. The owner also
+support.** Update 2026-11-02: a mouse alone on J15 does work.
+`tools/mouse_probe` showed the cursor, both buttons, and the wheel, and the
+owner confirmed it. That result is mouse-only. It does not change the
+combined keyboard/mouse failure recorded here. The owner also
 reported that the GUI could not see the board while the display was running;
 that connection issue was not diagnosed and must not be attributed to the
 keyboard decoder without evidence.

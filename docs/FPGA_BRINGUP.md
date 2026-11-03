@@ -399,6 +399,53 @@ If LD0 lives but LD6/LD5 stay off, or LD7/LD4 never move: **J15 / PIC24 / keyboa
 
 Known Digilent constraints (not a secret silicon workaround): FPGA must be programmed first (PIC24 stays in config mode until DONE); FPGA pull-ups required; **no hubs**; one wired keyboard; do **not** drive `ps2_clk` low (that inhibits the device — `jmr_ps2_host` TX was removed for this).
 
+### HDMI mouse probe (cursor, two buttons, wheel)
+
+**Not FPGA-SIM** and **not** the JS `.bit`. Own Vivado project under
+`build/mouse_probe/` so it cannot clobber `build/nexys_video`. The
+node-locked license is uncounted, so this build may run beside the JS
+build. Do not add `tools/mouse_probe/` to `CORE_SRCS` or the JS
+board-flow file list.
+
+Run:
+
+```bash
+source scripts/vivado_env.sh
+make -C tools/mouse_probe bit flash
+```
+
+Mouse in **J15** before power. HDMI on **J8**. The glass is 640×480:
+
+| On screen | What it proves |
+|---|---|
+| Arrow follows the mouse | movement |
+| Left lamp and the left box turn green | left button, and the cursor is over that box |
+| Right lamp and the right box turn red | right button |
+| Middle lamp turns yellow | middle button, if the mouse has one |
+| White marker moves in the center track | scroll wheel. Three white pips above the track mean the mouse answered wheel ID `03`. One red pip means this port is a 3-byte mouse and the wheel byte is not there |
+| Bottom center box, and the line above it | each new letter or digit. The line holds the last 32 |
+| **GO TO KEY** button, upper left | click it with the mouse. The FPGA releases the clock and listens for a keyboard |
+| **HIT F10 TO MOUSE**, upper right | the way back. It turns yellow 3 seconds after GO TO KEY. Press F10 on the keyboard |
+
+**Mouse-only PASS 2026-11-02 (owner).** Cursor, left button, right button, and the scroll wheel all worked on J15 with this probe. That is one mouse. It does not make a keyboard-and-mouse combo work. The combo result is still the failed record in [NEXYS_USB_KEYBOARD_MOUSE_FAILED.md](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md).
+
+J15 is one PIC24 USB host. It forwards **one** device onto the same two open-drain wires the mouse uses: clock `W17`, data `N13`, idle high, FPGA pull-ups. A keyboard on that port does not send USB HID. It sends PS/2 Set 2, device to host:
+
+| On the wire | Meaning |
+|---|---|
+| Falling clock, 11 bits | start `0`, 8 data bits LSB first, odd parity, stop `1` |
+| One byte, for example `1C` | key **make** (A is `1C`, B is `32`, … Z is `1A`; digits `45` `16` `1E` `26` `25` `2E` `36` `3D` `3E` `46` for 0–9) |
+| `F0` then that byte | key **break** (release) |
+| `E0` then a byte | extended key (arrows are `E0 6B/75/74/72`) |
+| `E0 F0` then a byte | extended break |
+| `FA`, `AA`, `AB`, `83` | ack, self-test OK, keyboard ID. A mouse sends `FA`, `AA`, `00` instead (wheel mice then answer `03`) |
+
+Click **GO TO KEY** while the mouse is plugged in. The note stays gray for 3 seconds, then turns yellow. Typed letters show on the line above the bottom box and in the box. Moving the mouse does not leave keyboard mode: a mouse packet is three or four bytes back to back, and a move of 9 counts is byte `09`, the same byte as F10. The probe keeps a byte that has bit 3 set for 3 ms. If the next byte arrives in that window, the group is a mouse packet and is dropped. A real key is one byte and then a gap, so it is shown. Press **F10** (one byte `09`, then a gap) to take the clock back and reset the mouse port. This is one mode at a time. It does not make a combo device send both. Handoff for the operating system: [keyboard_mouse_switch.md](keyboard_mouse_switch.md).
+
+Pulling the clock low inhibits the PIC24 keyboard path. The probe only does that for a mouse reset. If the ID byte is `AB`, it enables the keyboard with `F4` and paints Set-2 letters in the bottom box instead of moving the cursor. While a mouse is streaming, a byte is painted only when it is not a mouse packet (status bit 3 clear, or the data byte right after `E0`/`F0`). Ordinary mouse motion does not fill that box. A dark box with a working mouse means no letter scancode came through.
+
+`build/mouse_probe/mouse_probe.bit` is the file to program. LEDs: LD0 heartbeat, LD1 left, LD2 right, LD3 middle, LD4 wheel notch, LD5 stream ready, LD6 clock, LD7 data. The letter box was added after the 2026-11-02 mouse PASS, so the bit already on the board does not have it until this project is built again.
+
 ### Pmod input LED test (PS/2 keyboard + I2C joystick + J15 USB)
 
 **Not FPGA-SIM.** No VM, no HDMI, no F9. Own Vivado project under
