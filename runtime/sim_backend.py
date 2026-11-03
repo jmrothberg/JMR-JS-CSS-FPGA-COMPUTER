@@ -509,8 +509,17 @@ class SimBackend(RuntimeBackend):
                     else:
                         self._typed_log.append(last)
 
+    def _sync_native_source(self):
+        reply=self._rpc("SOURCE?")
+        if not reply.startswith("SOURCE name="):return
+        name=reply.split("name=",1)[1].split(" bytes=",1)[0]
+        if name!=self._loaded_name:
+            self._loaded_name=name;self._html_chunk=None;self._html_lines=[]
+            self._loaded_html_text="";self._program_image=b"";self._image_meta={};self._aset_bytes=0
+
     def type_line(self, text: str) -> None:
         if self._use_rtl:
+            self._sync_native_source()
             if text.strip().upper() == "DESKTOP":
                 self._rpc("DESKTOP 1")
                 self._desktop_visible = True
@@ -1037,6 +1046,10 @@ class SimBackend(RuntimeBackend):
         if not self._started:
             return
         if self._use_rtl:
+            ui_state=parse_status_kv(self._rpc("UISTATE?"))
+            if ui_state.get("catalog",0) or ui_state.get("action",0):
+                self._rpc("TICKN 100")
+                self._sync_native_source()
             self._desktop_status()
             live_status=self._rpc("STATUS?")
             if "text_app=0" in live_status:

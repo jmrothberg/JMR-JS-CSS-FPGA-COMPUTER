@@ -1,5 +1,10 @@
 # JMR JS Computer
 
+**Latest Mac-GUI board trial:** [M trial bit](build/run74m_local_parser/board_trial/run74m_mac_gui_TRIAL_33MHz_WNS-0.169.bit),
+November 3. Loaded into SRAM for owner testing; working QSPI flash is unchanged.
+Setup timing is **-0.169 ns**, so this is a trial, not the qualified standard.
+[Trial details and return to flash](build/run74m_local_parser/board_trial/README.md).
+
 ## Next build: mouse + keyboard + joystick, no switching (read this first)
 
 **Decided 2026-11-03.** All three input devices at once, each on its own port:
@@ -25,7 +30,7 @@ through J15, and one USB device that is both keyboard and mouse.
 current board release (run73o) → [About the computer](#about-the-computer) →
 [commands](#top-commands-use-these-a-lot) → [Words used](#words-used-in-this-project).
 
-## Mac-style Python menus — November 2, 2026
+## Mac-style menus — Python and RTL, November 2, 2026
 
 Your normal **[gui_jmr_js.py](gui_jmr_js.py)** and **`card.img`** now have the
 shared Mac-style menu system. Start normally:
@@ -49,8 +54,15 @@ The shared API and agent porting instructions are in
 
 The previous disk is backed up under `build/system_tools/` with a publication
 record and rollback instructions. Other disk files/icons were preserved.
-The released `.bit` is unchanged; this menu update is qualified in **Python**,
-with its RTL/board port pending. The optional isolated preview launcher is
+The shared menus are now qualified in **Python and the real RTL simulator**.
+F9 uses the updated RTL by default. All 19 real game images, file dialogs,
+Editor/Note saving, Reader, Utility and the self-hosted compiler have passed
+native RTL checks. [Test evidence](build/rtl_system_parity/README.md).
+The board-tested `.bit` remains run73o. The earlier GUI hardware builds failed
+physical timing and were not flashed. The current
+[run74m build](build/run74m_local_parser/README.md) targets the measured GUI routing
+paths with local registers, a compact command RAM and small LUT ROMs. It is not yet a
+qualified release. Earlier trials and their reports are preserved. The optional isolated preview launcher is
 [run_python_system_preview.sh](run_python_system_preview.sh).
 
 ## Desktop simulator update — November 2, 2026

@@ -16,7 +16,7 @@ function frame(){requestAnimationFrame(frame);}requestAnimationFrame(frame);'''
 
 def test_context_properties_and_shared_window_pixels(tmp_path,monkeypatch):
     import runtime.sim_backend as module
-    exe=ROOT/'sim/sim_build_system/jmr_js_sim_server'
+    exe=module._SYNTH
     if not exe.is_file():pytest.skip('system-window RTL not built')
     monkeypatch.setattr(module,'_SYNTH',exe)
     image=ProgramImage.from_chunk(compile_source(SOURCE),v2=True,value64=True)
@@ -28,15 +28,18 @@ def test_context_properties_and_shared_window_pixels(tmp_path,monkeypatch):
     sim=module.SimBackend()
     try:
         assert sim._rpc('JSHLOAD '+str(path)).startswith('OK')
+        for _ in range(400):
+            if sim._rpc('WINDOW?')=='WINDOW role=4 scroll=123 scrollx=45 flags=1' and 'action=0' in sim._rpc('UISTATE?'):break
+            sim._rpc('TICKN 100')
         sim._rpc('FRAME')
         assert sim._rpc('WINDOW?')=='WINDOW role=4 scroll=123 scrollx=45 flags=1'
         sim._desktop_status()
         expected=ui.overlays();actual=sim._ui_overlays
         assert len(actual)==len(expected)==1
         assert actual[0][:4]==expected[0][:4]
-        if actual[0][4]!=expected[0][4]:
-            delta=[i for i,(a,b) in enumerate(zip(actual[0][4],expected[0][4])) if a!=b]
-            raise AssertionError((len(delta),[(i//4%640,i//4//640,i%4,actual[0][4][i],expected[0][4][i]) for i in delta[:20]]))
+        a,e=actual[0][4],expected[0][4]
+        delta=[i//4 for i in range(0,len(e),4) if a[i+3]!=e[i+3] or e[i+3] and a[i:i+3]!=e[i:i+3]]
+        assert not delta,(len(delta),[(i%640,i//640) for i in delta[:20]])
         # Scroll controls produce ordinary keys; frame/background clicks do
         # not leak into the program. Body clicks remain normal mouse input.
         for x,y in ((608,94),(5,150),(100,150)):

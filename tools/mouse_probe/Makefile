@@ -9,14 +9,21 @@
 #   make -C tools/mouse_probe bit flash
 #
 # Bitstream: build/mouse_probe/mouse_probe.bit
+# Test bitstream (does not replace the one above):
+#   make -C tools/mouse_probe bit-ja-mouse
+#   build/mouse_probe/mouse_probe_J15kbd_JAmouse.bit
+#   wired USB keyboard on J15, PS/2 mouse on JA.
 
 ROOT := $(abspath ../..)
 OUT  := $(ROOT)/build/mouse_probe
 BIT  := $(OUT)/mouse_probe.bit
+BIT_JA := $(OUT)/mouse_probe_J15kbd_JAmouse.bit
 
-.PHONY: bit flash clean
+.PHONY: bit bit-ja-mouse flash clean
 
 bit: $(BIT)
+
+bit-ja-mouse: $(BIT_JA)
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -29,6 +36,11 @@ $(BIT): top_mouse_probe.sv mouse_probe_host.sv mouse_probe.xdc vivado_build.tcl 
 		$(ROOT)/rtl/video/jmr_mouse_overlay.sv $(ROOT)/rtl/video/jmr_rgb2dvi_wrap.vhd | $(OUT)
 	$(VIVADO) -mode batch -source $(CURDIR)/vivado_build.tcl \
 		-tclargs $(ROOT) $(OUT)
+
+$(BIT_JA): top_mouse_probe.sv mouse_probe_host.sv mouse_probe.xdc vivado_build.tcl \
+		$(ROOT)/rtl/video/jmr_mouse_overlay.sv $(ROOT)/rtl/video/jmr_rgb2dvi_wrap.vhd | $(OUT)
+	$(VIVADO) -mode batch -source $(CURDIR)/vivado_build.tcl \
+		-tclargs $(ROOT) $(OUT) ja_mouse
 endif
 
 flash: $(BIT)

@@ -63,12 +63,15 @@ module jmr_fb_scanout #(
     // base. want_qq rides beside line_base_q so the two are always from
     // the same beam sample. Prefetch now lags the beam 3 cycles (30 ns)
     // against a 32 us line - still noise.
-    logic [9:0]  want_q, want_qq;
+    logic [9:0]  want_q, want_qq, want_qqq;
+    logic [9:0] source_y_q;
     logic [21:0] line_base_q;
     always_ff @(posedge clk) begin
         want_q      <= (y_core_q >= 10'd479) ? 10'd0 : (y_core_q + 10'd1);
         want_qq     <= want_q;
-        line_base_q <= FB_SRAM_BASE + 22'(game_viewport ? ((want_q<24)?0:((2*(integer'(want_q)-24)+1)*480)/912) : integer'(want_q)) * 22'd320;
+        source_y_q <= game_viewport?{1'b0,jmr_classic_ui_pkg::classic_game_y(want_q)}:want_q;
+        want_qqq<=want_qq;
+        line_base_q <= FB_SRAM_BASE + 22'(source_y_q) * 22'd320;
     end
 
     logic [9:0]  fetched_line;   // last line fully fetched
@@ -112,9 +115,9 @@ module jmr_fb_scanout #(
         end else if (!busy) begin
             // want the line AFTER the beam (wraps 479 -> 0); both values
             // come pre-computed from the two-stage pipe above
-            if (want_qq != fetched_line) begin
+            if (want_qqq != fetched_line) begin
                 busy <= 1'b1;
-                tgt <= want_qq;
+                tgt <= want_qqq;
                 wx <= 10'd0;
                 sram_req <= 1'b1;
                 sram_addr <= line_base_q;

@@ -42,12 +42,13 @@ def _same_pixels(sim,model):
 
 def test_native_desktop_pixels_controls_and_launch(tmp_path,monkeypatch):
     import runtime.sim_backend as module
-    exe=ROOT/'sim/sim_build_desktop/jmr_js_sim_server'
+    exe=module._SYNTH
     if not exe.is_file():pytest.skip('desktop RTL not built')
     monkeypatch.setattr(module,'_SYNTH',exe)
     monkeypatch.delenv('JMR_SIM_HOST',raising=False)
     html=b'''<canvas id="c" width="640" height="480"></canvas><script>
 var c=document.getElementById("c").getContext("2d");
+c.systemWindow=8;c.systemViewport=1;c.systemAbout="Menu test|A test application.";
 c.fillStyle="#ffffff";c.fillRect(10,10,20,20);
 function frame(){requestAnimationFrame(frame);}requestAnimationFrame(frame);
 </script>'''
@@ -100,12 +101,12 @@ function frame(){requestAnimationFrame(frame);}requestAnimationFrame(frame);
             if 'running=1' in status:break
         assert 'running=1' in status,(status,_state(sim),sim._rpc('SCREEN?'))
         sim._rpc('FRAME');sim._rpc('FB?')
-        assert sim._canvas.front[11*640+11]!=0
-        # The old corner is ordinary program space. Quit is in the ship menu.
+        assert sim._canvas.front[35*640+11]!=0
+        # The old corner is ordinary program space. Quit is in File.
         assert sim.set_mouse(630,10,1);assert sim.set_mouse(630,10,0)
         sim._rpc('FRAME');assert 'running=1' in sim._rpc('STATUS?')
-        assert sim.set_mouse(10,10,1);assert sim.set_mouse(10,10,0)
-        assert sim.set_mouse(10,55,1);assert sim.set_mouse(10,55,0)
+        assert sim.set_mouse(40,10,1);assert sim.set_mouse(40,10,0)
+        assert sim.set_mouse(45,32,1);assert sim.set_mouse(45,32,0)
         st=_settle(sim)
         for _ in range(100):
             if st['active']:break

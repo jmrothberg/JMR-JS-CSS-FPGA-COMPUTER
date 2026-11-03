@@ -134,7 +134,10 @@ module top_nexys_video #(parameter bit USB_MOUSE=1) (
     logic system_menu,system_keyboard,system_about,system_shift,system_caps,system_ctrl,system_alt;
     logic [6:0] system_pressed;
     logic system_hold;
-    logic [31:0] system_window;
+    logic [31:0] system_window,system_window_pixels;
+    logic system_viewport_pixels;
+    jmr_ui_snapshot #(.WIDTH(33)) u_scan_ui_state(.clk(core_clk),.rst_n(rst_n),.pixel_clk(pixel_clk),
+        .source({system_window,system_game_viewport}),.pixels({system_window_pixels,system_viewport_pixels}));
     logic system_game_viewport,system_ui_opaque;
     logic [23:0] system_ui_rgb;
     logic [69:0] system_held;
@@ -421,7 +424,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=1) (
         .vram_rdata(scan_data), .vram_addr(scan_addr),
         .cursor_cell(cursor),
         .mouse_x(pointer_x),.mouse_y(pointer_y),.mouse_toggle(pointer_toggle),.mouse_show_exit(1'b0),
-        .system_window(system_window),.system_game_viewport(system_game_viewport),.system_ui_opaque(system_ui_opaque),.system_ui_rgb(system_ui_rgb),
+        .system_window(system_window_pixels),.system_game_viewport(system_viewport_pixels),.system_ui_opaque(system_ui_opaque),.system_ui_rgb(system_ui_rgb),
         .system_menu(system_menu),.system_keyboard(system_keyboard),.system_about(system_about),.system_shift(system_shift),.system_caps(system_caps),
         .system_ctrl(system_ctrl),.system_alt(system_alt),.system_pressed(system_pressed),.system_hold(system_hold),.system_held(system_held),
 

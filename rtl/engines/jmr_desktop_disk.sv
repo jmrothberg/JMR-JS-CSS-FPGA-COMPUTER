@@ -8,6 +8,7 @@ module jmr_desktop_disk (
     output logic [8:0] count,
     input logic [11:0] catalog_addr,
     output logic [7:0] catalog_data,
+    output logic [31:0] catalog_size,
     output logic icon_valid,
     input logic icon_ready,
     output logic [4:0] icon_x, icon_y,
@@ -17,7 +18,7 @@ module jmr_desktop_disk (
     output logic [7:0] stor_name_len,
     input logic stor_busy, stor_done, stor_err, stor_eof,
     input logic [7:0] stor_line_len, stor_byte,
-    input logic [31:0] stor_file_size,
+    input logic [31:0] stor_file_size,stor_dir_size,
     output logic mem_en, mem_we,
     output logic [15:0] mem_addr,
     output logic [7:0] mem_wdata,
@@ -48,6 +49,12 @@ module jmr_desktop_disk (
         if (cat_we) catalog[cat_waddr] <= cat_wdata;
         cat_rdata <= catalog[cat_raddr];
     end
+    (* ram_style="distributed" *) logic [31:0] sizes [0:255];
+    logic size_we;logic [7:0] size_waddr;logic [31:0] size_wdata;
+    always_ff @(posedge clk)begin
+        if(size_we)sizes[size_waddr]<=size_wdata;
+        catalog_size<=sizes[catalog_addr[11:4]];
+    end
     assign catalog_data = cat_rdata;
     assign busy = state != IDLE;
     logic stream_start, stream_error, stream_valid, stream_ready, stream_done, stream_fallback;
@@ -64,12 +71,12 @@ module jmr_desktop_disk (
             state <= IDLE; done <= 0; count <= 0; disk_error <= 0;
             stor_open<=0;stor_close<=0;stor_dir<=0;stor_next<=0;stor_get<=0;stor_name_len<=0;
             mem_en<=0;mem_we<=0;mem_addr<=0;mem_wdata<=0;
-            cat_we<=0;cat_waddr<=0;cat_wdata<=0;char_i<=0;line_n<=0;tail<=0;keep_entry<=0;doc_entry<=0;suffix_kind<=0;
+            size_we<=0;size_waddr<=0;size_wdata<=0;cat_we<=0;cat_waddr<=0;cat_wdata<=0;char_i<=0;line_n<=0;tail<=0;keep_entry<=0;doc_entry<=0;suffix_kind<=0;
             icon_index_q<=0;name_i<=0;suffix_i<=0;suffix<=0;name_char<=0;opened<=0;
             stream_start<=0;stream_error<=0;stream_valid<=0;stream_data<=0;stream_size<=0;
         end else begin
             done<=0;stor_open<=0;stor_close<=0;stor_dir<=0;stor_next<=0;stor_get<=0;
-            mem_en<=0;mem_we<=0;cat_we<=0;stream_start<=0;stream_error<=0;
+            mem_en<=0;mem_we<=0;cat_we<=0;size_we<=0;stream_start<=0;stream_error<=0;
             case (state)
                 IDLE: begin
                     if (catalog_go) begin count<=0;disk_error<=0;state<=DIR_START;end
@@ -113,7 +120,7 @@ module jmr_desktop_disk (
                 PAD: begin
                     cat_we<=1;cat_waddr<={count[7:0],char_i[3:0]};cat_wdata<=(char_i==15)?{4'd0,suffix_kind,doc_entry}:8'd0;
                     if (char_i==15) begin
-                        if (keep_entry) count<=count+1'b1;
+                        if (keep_entry)begin count<=count+1'b1;size_we<=1;size_waddr<=count[7:0];size_wdata<=stor_dir_size;end
                         state<=NEXT;
                     end else char_i<=char_i+1'b1;
                 end

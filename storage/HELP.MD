@@ -184,12 +184,14 @@ Enter starts a new line. Backspace deletes.
 Tab inserts two spaces. F1 lists the keys.
 F3 and F4 move a page.
 
-On the Python simulator, F2 saves DRAFT.HTML and
-returns to READY. Type COMPILE, then RUN.
+In Python and FPGA-SIM, choose File, then Save.
+A new note asks for a short disk filename.
+Save and Save As keep the note open. F2 also
+saves. Close asks about unsaved changes.
 
-On the board, that F2 does not write the card.
-To keep the text, use LOAD, SAVE under the new
-name, EDIT, and F2.
+These menus need the new mouse/desktop bit on
+the board; the preserved run73o uses its older
+keyboard interface.
 
 ## Send a file from the PC
 

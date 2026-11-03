@@ -1242,12 +1242,14 @@ module jmr_js_vm #(
     // Same class as run 65a's src_len; same cure: two beats on vm_clk.
     logic [7:0] analog_x_q1, analog_x_q2, analog_y_q1, analog_y_q2;
     logic [4:0] joy_btn_q1, joy_btn_q2;
+    logic [5:0] joy_level_q1, joy_level_q2;
     always_ff @(posedge clk) begin
         src_len_q1 <= src_len_i;
         src_len_q2 <= src_len_q1;
         analog_x_q1 <= analog_x; analog_x_q2 <= analog_x_q1;
         analog_y_q1 <= analog_y; analog_y_q2 <= analog_y_q1;
         joy_btn_q1  <= joy_btn;  joy_btn_q2  <= joy_btn_q1;
+        joy_level_q1 <= joy_in; joy_level_q2 <= joy_level_q1;
     end
     logic        csr_pend;  // S_CSRAM request issued, waiting on sram_ack
     // run 71c: the read byte lands in a vm_clk register at the ack and is
@@ -4317,7 +4319,7 @@ module jmr_js_vm #(
         .p_jn_h(jn_h),
         .p_jn_i(jn_i),
         .p_jn_res(jn_res),
-        .joy_in(joy_in),
+        .joy_in(joy_level_q2),
         .analog_x(analog_x_q2), .analog_y(analog_y_q2), .joy_btn(joy_btn_q2),
         .p_js_sp(js_sp),
         .p_json_pph(json_pph),
@@ -6682,7 +6684,7 @@ module jmr_js_vm #(
                       key_evt_code == syn_dedup_code)) begin
                     joy_down_edge <= 6'd0;
                     joy_up_edge <= 6'd0;
-                    prev_joy <= joy_in;
+                    prev_joy <= joy_level_q2;
                 end
             end
             // EXEC scalar we is not an else-if vs unique case: leave_hold
@@ -7268,7 +7270,7 @@ module jmr_js_vm #(
                     id_sort <= 16'hFFFF; // #41
                     click_fired <= 1'b0;
                     pre_click_raf <= 1'b0;
-                    prev_joy <= joy_in; joy_down_edge <= 0; joy_up_edge <= 0;
+                    prev_joy <= joy_level_q2; joy_down_edge <= 0; joy_up_edge <= 0;
                     fill_style_i <= 8'd0; stroke_style_i <= 8'd0; lfsr <= 32'hACE1; this_obj <= 16'hFFFF;
                     var_this <= 9'd0; this_ok <= 1'b0; id_this_name <= 16'hFFFF;
                     var_keys <= 9'd0; keys_ok <= 1'b0;
@@ -9596,9 +9598,9 @@ module jmr_js_vm #(
                         // press) was silently erased. A lost keyup left the
                         // game's held-flag stuck: the jam, and held-fire
                         // burst shots.
-                        joy_down_edge <= joy_down_edge | (joy_in & ~prev_joy);
-                        joy_up_edge   <= joy_up_edge   | (prev_joy & ~joy_in);
-                        prev_joy <= joy_in;
+                        joy_down_edge <= joy_down_edge | (joy_level_q2 & ~prev_joy);
+                        joy_up_edge   <= joy_up_edge   | (prev_joy & ~joy_level_q2);
+                        prev_joy <= joy_level_q2;
                         if (kev_dedup_ctr != 4'd0)
                             kev_dedup_ctr <= kev_dedup_ctr - 4'd1;
                         if (syn_dedup_ctr != 4'd0)
@@ -9647,9 +9649,9 @@ module jmr_js_vm #(
                             logic       is_up;
                             logic [7:0] kcode;
                             up_first = joy_up_edge &
-                                       (~joy_down_edge | joy_in);
+                                       (~joy_down_edge | joy_level_q2);
                             dn_ok    = joy_down_edge &
-                                       (~joy_up_edge | ~joy_in);
+                                       (~joy_up_edge | ~joy_level_q2);
                             is_up = (up_first != 6'd0);
                             ki = is_up ?
                                 (up_first[0] ? 3'd0 : up_first[1] ? 3'd1 :
@@ -9773,9 +9775,9 @@ module jmr_js_vm #(
                 end else if (frame_tick || v64_frame_armed) begin
                     // flatten: one to_delay slot/clock (not 64 SRAM ports).
                     if (frame_tick && !v64_frame_armed) begin
-                    joy_down_edge <= joy_in & ~prev_joy;
-                    joy_up_edge <= prev_joy & ~joy_in;
-                    prev_joy <= joy_in;
+                    joy_down_edge <= joy_level_q2 & ~prev_joy;
+                    joy_up_edge <= prev_joy & ~joy_level_q2;
+                    prev_joy <= joy_level_q2;
                     // NEW: the one implicit present per frame (see present_pend).
                     // An explicit swapBuffers in the pass already flipped —
                     // do not flip a second time (front would show the stale bank).
@@ -9823,9 +9825,9 @@ module jmr_js_vm #(
                     hs_st(S_GC_CLEAR);
                     // KEYBITS level → keys.a/d/space.pressed (HTML table the animate() reads)
                     if (keys_ok) begin
-                        poke_pressed(id_a, joy_in[2]);
-                        poke_pressed(id_d, joy_in[3]);
-                        poke_pressed(id_kspace, joy_in[4]);
+                        poke_pressed(id_a, joy_level_q2[2]);
+                        poke_pressed(id_d, joy_level_q2[3]);
+                        poke_pressed(id_kspace, joy_level_q2[4]);
                     end
                     if (enter_n != 0 && enter_delay != 0)
                         enter_delay <= enter_delay - 4'd1;
@@ -14901,22 +14903,24 @@ module jmr_js_vm #(
                 S_V64_MOUSE_PROP: begin
                     logic [15:0] prop_id;
                     logic [63:0] prop_value;
+                    logic [31:0] prop_integer;
                     prop_id = 16'hffff;
-                    prop_value = V64_UNDEFINED;
+                    prop_value = V64_UNDEFINED;prop_integer=0;
                     case (vmouse_prop)
                         0: begin prop_id = id_type; prop_value = v64_handle(4'd4,12'd0,{16'd0,vmouse_type_id}); end
-                        1: begin prop_id = id_clientX; prop_value = v64_int32_number({22'd0,vmouse_packet[45:36]}); end
-                        2: begin prop_id = id_clientY; prop_value = v64_int32_number({23'd0,vmouse_packet[35:27]}); end
-                        3: begin prop_id = id_offsetX; prop_value = v64_int32_number({22'd0,vmouse_packet[45:36]}); end
-                        4: begin prop_id = id_offsetY; prop_value = v64_int32_number({23'd0,vmouse_packet[35:27]}); end
-                        5: begin prop_id = id_mouse_x; prop_value = v64_int32_number({22'd0,vmouse_packet[45:36]}); end
-                        6: begin prop_id = id_mouse_y; prop_value = v64_int32_number({23'd0,vmouse_packet[35:27]}); end
-                        7: begin prop_id = id_buttons; prop_value = v64_int32_number({29'd0,vmouse_packet[26:24]}); end
-                        8: begin prop_id = id_button; prop_value = v64_int32_number({30'd0,vmouse_packet[23:22]}); end
-                        9: begin prop_id = id_movementX; prop_value = v64_int32_number({{21{vmouse_packet[21]}},vmouse_packet[21:11]}); end
-                        10: begin prop_id = id_movementY; prop_value = v64_int32_number({{21{vmouse_packet[10]}},vmouse_packet[10:0]}); end
+                        1: begin prop_id = id_clientX; prop_integer = {22'd0,vmouse_packet[45:36]}; end
+                        2: begin prop_id = id_clientY; prop_integer = {23'd0,vmouse_packet[35:27]}; end
+                        3: begin prop_id = id_offsetX; prop_integer = {22'd0,vmouse_packet[45:36]}; end
+                        4: begin prop_id = id_offsetY; prop_integer = {23'd0,vmouse_packet[35:27]}; end
+                        5: begin prop_id = id_mouse_x; prop_integer = {22'd0,vmouse_packet[45:36]}; end
+                        6: begin prop_id = id_mouse_y; prop_integer = {23'd0,vmouse_packet[35:27]}; end
+                        7: begin prop_id = id_buttons; prop_integer = {29'd0,vmouse_packet[26:24]}; end
+                        8: begin prop_id = id_button; prop_integer = {30'd0,vmouse_packet[23:22]}; end
+                        9: begin prop_id = id_movementX; prop_integer = {{21{vmouse_packet[21]}},vmouse_packet[21:11]}; end
+                        10: begin prop_id = id_movementY; prop_integer = {{21{vmouse_packet[10]}},vmouse_packet[10:0]}; end
                         default: ;
                     endcase
+                    if(vmouse_prop!=0)prop_value=v64_int32_number(prop_integer);
                     if (vmouse_prop >= 11) begin
                         bind_k <= 0; bind_rd_arm <= 0; vk_found <= 0; vk_pick <= 0;
                         hs_st(S_V64_FRAME_KEY);

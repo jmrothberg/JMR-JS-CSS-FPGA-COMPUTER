@@ -1,5 +1,20 @@
 // Generated from functional_model/system_menu.py.
 package jmr_system_menu_pkg;
+function automatic logic [3:0] system_key_column(input logic [9:0] x);begin if(x<10'd320)begin if(x<10'd144)begin if(x<10'd56)begin system_key_column=4'd0; end else begin if(x<10'd100)begin system_key_column=4'd1; end else begin system_key_column=4'd2; end end end else begin if(x<10'd232)begin if(x<10'd188)begin system_key_column=4'd3; end else begin system_key_column=4'd4; end end else begin if(x<10'd276)begin system_key_column=4'd5; end else begin system_key_column=4'd6; end end end end else begin if(x<10'd452)begin if(x<10'd364)begin system_key_column=4'd7; end else begin if(x<10'd408)begin system_key_column=4'd8; end else begin system_key_column=4'd9; end end end else begin if(x<10'd540)begin if(x<10'd496)begin system_key_column=4'd10; end else begin system_key_column=4'd11; end end else begin if(x<10'd584)begin system_key_column=4'd12; end else begin system_key_column=4'd13; end end end end end endfunction
+function automatic logic [7:0] system_key_hit(input logic [9:0] x,input logic [8:0] y);
+ logic valid_row;logic [6:0] base;
+ begin
+  valid_row=0;base=0;
+  if(y<9'd380)begin
+   if(y<9'd347)begin base=0;valid_row=y>=9'd314 && y<9'd343;end
+   else begin base=14;valid_row=y<9'd376;end
+  end else if(y<9'd446)begin
+   if(y<9'd413)begin base=28;valid_row=y<9'd409;end
+   else begin base=42;valid_row=y<9'd442;end
+  end else begin base=56;valid_row=y<9'd475;end
+  system_key_hit={(x>=10'd12 && x<10'd628 && valid_row),7'(base+7'(system_key_column(x)))};
+ end
+endfunction
 function automatic logic [7:0] key_code(input integer i,input logic shifted);begin case(i)
 0:key_code=8'd27;
 1:key_code=8'd49;
@@ -251,6 +266,104 @@ function automatic logic [11:0] ui_glyph(input integer i,pos,input logic shifted
 103:begin if(pos>=0 && pos<8)ui_glyph={1'b1,7'd68,4'(pos-0)};if(pos>=8 && pos<16)ui_glyph={1'b1,7'd101,4'(pos-8)};if(pos>=16 && pos<23)ui_glyph={1'b1,7'd99,4'(pos-16)};if(pos>=23 && pos<31)ui_glyph={1'b1,7'd111,4'(pos-23)};if(pos>=31 && pos<39)ui_glyph={1'b1,7'd100,4'(pos-31)};if(pos>=39 && pos<43)ui_glyph={1'b1,7'd105,4'(pos-39)};if(pos>=43 && pos<51)ui_glyph={1'b1,7'd110,4'(pos-43)};if(pos>=51 && pos<59)ui_glyph={1'b1,7'd103,4'(pos-51)};if(pos>=59 && pos<63)ui_glyph={1'b1,7'd32,4'(pos-59)};if(pos>=63 && pos<71)ui_glyph={1'b1,7'd97,4'(pos-63)};if(pos>=71 && pos<77)ui_glyph={1'b1,7'd114,4'(pos-71)};if(pos>=77 && pos<83)ui_glyph={1'b1,7'd116,4'(pos-77)};if(pos>=83 && pos<95)ui_glyph={1'b1,7'd119,4'(pos-83)};if(pos>=95 && pos<103)ui_glyph={1'b1,7'd111,4'(pos-95)};if(pos>=103 && pos<109)ui_glyph={1'b1,7'd114,4'(pos-103)};if(pos>=109 && pos<117)ui_glyph={1'b1,7'd107,4'(pos-109)}; end
 104:begin if(pos>=0 && pos<7)ui_glyph={1'b1,7'd76,4'(pos-0)};if(pos>=7 && pos<11)ui_glyph={1'b1,7'd105,4'(pos-7)};if(pos>=11 && pos<19)ui_glyph={1'b1,7'd110,4'(pos-11)};if(pos>=19 && pos<27)ui_glyph={1'b1,7'd107,4'(pos-19)};if(pos>=27 && pos<31)ui_glyph={1'b1,7'd105,4'(pos-27)};if(pos>=31 && pos<39)ui_glyph={1'b1,7'd110,4'(pos-31)};if(pos>=39 && pos<47)ui_glyph={1'b1,7'd103,4'(pos-39)}; end
 default:;endcase end endfunction
+function automatic logic [11:0] keyboard_glyph(input logic [6:0] i,input logic signed [6:0] pos,input logic shifted);begin keyboard_glyph=0;case(i)
+0:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd69,4'(pos-0)};if(pos>=7 && pos<14)keyboard_glyph={1'b1,7'd115,4'(pos-7)};if(pos>=14 && pos<21)keyboard_glyph={1'b1,7'd99,4'(pos-14)}; end
+1:begin if(shifted)begin if(pos>=0 && pos<6)keyboard_glyph={1'b1,7'd33,4'(pos-0)}; end else begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd49,4'(pos-0)}; end end
+2:begin if(shifted)begin if(pos>=0 && pos<11)keyboard_glyph={1'b1,7'd64,4'(pos-0)}; end else begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd50,4'(pos-0)}; end end
+3:begin if(shifted)begin if(pos>=0 && pos<10)keyboard_glyph={1'b1,7'd35,4'(pos-0)}; end else begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd51,4'(pos-0)}; end end
+4:begin if(shifted)begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd36,4'(pos-0)}; end else begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd52,4'(pos-0)}; end end
+5:begin if(shifted)begin if(pos>=0 && pos<11)keyboard_glyph={1'b1,7'd37,4'(pos-0)}; end else begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd53,4'(pos-0)}; end end
+6:begin if(shifted)begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd94,4'(pos-0)}; end else begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd54,4'(pos-0)}; end end
+7:begin if(shifted)begin if(pos>=0 && pos<10)keyboard_glyph={1'b1,7'd38,4'(pos-0)}; end else begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd55,4'(pos-0)}; end end
+8:begin if(shifted)begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd42,4'(pos-0)}; end else begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd56,4'(pos-0)}; end end
+9:begin if(shifted)begin if(pos>=0 && pos<5)keyboard_glyph={1'b1,7'd40,4'(pos-0)}; end else begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd57,4'(pos-0)}; end end
+10:begin if(shifted)begin if(pos>=0 && pos<5)keyboard_glyph={1'b1,7'd41,4'(pos-0)}; end else begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd48,4'(pos-0)}; end end
+11:begin if(shifted)begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd95,4'(pos-0)}; end else begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd45,4'(pos-0)}; end end
+12:begin if(shifted)begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd43,4'(pos-0)}; end else begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd61,4'(pos-0)}; end end
+13:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd66,4'(pos-0)};if(pos>=8 && pos<16)keyboard_glyph={1'b1,7'd97,4'(pos-8)};if(pos>=16 && pos<23)keyboard_glyph={1'b1,7'd99,4'(pos-16)};if(pos>=23 && pos<31)keyboard_glyph={1'b1,7'd107,4'(pos-23)}; end
+14:begin if(pos>=0 && pos<6)keyboard_glyph={1'b1,7'd84,4'(pos-0)};if(pos>=6 && pos<14)keyboard_glyph={1'b1,7'd97,4'(pos-6)};if(pos>=14 && pos<22)keyboard_glyph={1'b1,7'd98,4'(pos-14)}; end
+15:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd81,4'(pos-0)}; end
+16:begin if(pos>=0 && pos<12)keyboard_glyph={1'b1,7'd87,4'(pos-0)}; end
+17:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd69,4'(pos-0)}; end
+18:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd82,4'(pos-0)}; end
+19:begin if(pos>=0 && pos<6)keyboard_glyph={1'b1,7'd84,4'(pos-0)}; end
+20:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd89,4'(pos-0)}; end
+21:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd85,4'(pos-0)}; end
+22:begin if(pos>=0 && pos<6)keyboard_glyph={1'b1,7'd73,4'(pos-0)}; end
+23:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd79,4'(pos-0)}; end
+24:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd80,4'(pos-0)}; end
+25:begin if(shifted)begin if(pos>=0 && pos<5)keyboard_glyph={1'b1,7'd123,4'(pos-0)}; end else begin if(pos>=0 && pos<5)keyboard_glyph={1'b1,7'd91,4'(pos-0)}; end end
+26:begin if(shifted)begin if(pos>=0 && pos<5)keyboard_glyph={1'b1,7'd125,4'(pos-0)}; end else begin if(pos>=0 && pos<5)keyboard_glyph={1'b1,7'd93,4'(pos-0)}; end end
+27:begin if(shifted)begin if(pos>=0 && pos<5)keyboard_glyph={1'b1,7'd124,4'(pos-0)}; end else begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd92,4'(pos-0)}; end end
+28:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd67,4'(pos-0)};if(pos>=8 && pos<16)keyboard_glyph={1'b1,7'd97,4'(pos-8)};if(pos>=16 && pos<24)keyboard_glyph={1'b1,7'd112,4'(pos-16)};if(pos>=24 && pos<31)keyboard_glyph={1'b1,7'd115,4'(pos-24)}; end
+29:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd65,4'(pos-0)}; end
+30:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd83,4'(pos-0)}; end
+31:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd68,4'(pos-0)}; end
+32:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd70,4'(pos-0)}; end
+33:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd71,4'(pos-0)}; end
+34:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd72,4'(pos-0)}; end
+35:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd74,4'(pos-0)}; end
+36:begin if(pos>=0 && pos<9)keyboard_glyph={1'b1,7'd75,4'(pos-0)}; end
+37:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd76,4'(pos-0)}; end
+38:begin if(shifted)begin if(pos>=0 && pos<4)keyboard_glyph={1'b1,7'd58,4'(pos-0)}; end else begin if(pos>=0 && pos<4)keyboard_glyph={1'b1,7'd59,4'(pos-0)}; end end
+39:begin if(shifted)begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd34,4'(pos-0)}; end else begin if(pos>=0 && pos<3)keyboard_glyph={1'b1,7'd39,4'(pos-0)}; end end
+40:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd69,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd110,4'(pos-7)};if(pos>=15 && pos<21)keyboard_glyph={1'b1,7'd116,4'(pos-15)};if(pos>=21 && pos<29)keyboard_glyph={1'b1,7'd101,4'(pos-21)};if(pos>=29 && pos<35)keyboard_glyph={1'b1,7'd114,4'(pos-29)}; end
+41:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd68,4'(pos-0)};if(pos>=8 && pos<16)keyboard_glyph={1'b1,7'd101,4'(pos-8)};if(pos>=16 && pos<20)keyboard_glyph={1'b1,7'd108,4'(pos-16)}; end
+42:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd83,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd104,4'(pos-7)};if(pos>=15 && pos<19)keyboard_glyph={1'b1,7'd105,4'(pos-15)};if(pos>=19 && pos<25)keyboard_glyph={1'b1,7'd102,4'(pos-19)};if(pos>=25 && pos<31)keyboard_glyph={1'b1,7'd116,4'(pos-25)}; end
+43:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd90,4'(pos-0)}; end
+44:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd88,4'(pos-0)}; end
+45:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd67,4'(pos-0)}; end
+46:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd86,4'(pos-0)}; end
+47:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd66,4'(pos-0)}; end
+48:begin if(pos>=0 && pos<9)keyboard_glyph={1'b1,7'd78,4'(pos-0)}; end
+49:begin if(pos>=0 && pos<12)keyboard_glyph={1'b1,7'd77,4'(pos-0)}; end
+50:begin if(shifted)begin if(pos>=0 && pos<6)keyboard_glyph={1'b1,7'd60,4'(pos-0)}; end else begin if(pos>=0 && pos<4)keyboard_glyph={1'b1,7'd44,4'(pos-0)}; end end
+51:begin if(shifted)begin if(pos>=0 && pos<6)keyboard_glyph={1'b1,7'd62,4'(pos-0)}; end else begin if(pos>=0 && pos<4)keyboard_glyph={1'b1,7'd46,4'(pos-0)}; end end
+52:begin if(shifted)begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd63,4'(pos-0)}; end else begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd47,4'(pos-0)}; end end
+53:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd85,4'(pos-0)};if(pos>=8 && pos<16)keyboard_glyph={1'b1,7'd112,4'(pos-8)}; end
+54:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd67,4'(pos-0)};if(pos>=8 && pos<14)keyboard_glyph={1'b1,7'd116,4'(pos-8)};if(pos>=14 && pos<20)keyboard_glyph={1'b1,7'd114,4'(pos-14)};if(pos>=20 && pos<24)keyboard_glyph={1'b1,7'd108,4'(pos-20)}; end
+55:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd65,4'(pos-0)};if(pos>=8 && pos<12)keyboard_glyph={1'b1,7'd108,4'(pos-8)};if(pos>=12 && pos<18)keyboard_glyph={1'b1,7'd116,4'(pos-12)}; end
+56:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd83,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd112,4'(pos-7)};if(pos>=15 && pos<23)keyboard_glyph={1'b1,7'd97,4'(pos-15)};if(pos>=23 && pos<30)keyboard_glyph={1'b1,7'd99,4'(pos-23)};if(pos>=30 && pos<38)keyboard_glyph={1'b1,7'd101,4'(pos-30)}; end
+57:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd76,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd101,4'(pos-7)};if(pos>=15 && pos<21)keyboard_glyph={1'b1,7'd102,4'(pos-15)};if(pos>=21 && pos<27)keyboard_glyph={1'b1,7'd116,4'(pos-21)}; end
+58:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd68,4'(pos-0)};if(pos>=8 && pos<16)keyboard_glyph={1'b1,7'd111,4'(pos-8)};if(pos>=16 && pos<28)keyboard_glyph={1'b1,7'd119,4'(pos-16)};if(pos>=28 && pos<36)keyboard_glyph={1'b1,7'd110,4'(pos-28)}; end
+59:begin if(pos>=0 && pos<8)keyboard_glyph={1'b1,7'd82,4'(pos-0)};if(pos>=8 && pos<12)keyboard_glyph={1'b1,7'd105,4'(pos-8)};if(pos>=12 && pos<20)keyboard_glyph={1'b1,7'd103,4'(pos-12)};if(pos>=20 && pos<28)keyboard_glyph={1'b1,7'd104,4'(pos-20)};if(pos>=28 && pos<34)keyboard_glyph={1'b1,7'd116,4'(pos-28)}; end
+60:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd49,4'(pos-7)}; end
+61:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd50,4'(pos-7)}; end
+62:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd51,4'(pos-7)}; end
+63:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd52,4'(pos-7)}; end
+64:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd53,4'(pos-7)}; end
+65:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd54,4'(pos-7)}; end
+66:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd55,4'(pos-7)}; end
+67:begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd56,4'(pos-7)}; end
+68:begin if(shifted)begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd49,4'(pos-7)};if(pos>=15 && pos<23)keyboard_glyph={1'b1,7'd49,4'(pos-15)}; end else begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd57,4'(pos-7)}; end end
+69:begin if(shifted)begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd49,4'(pos-7)};if(pos>=15 && pos<23)keyboard_glyph={1'b1,7'd50,4'(pos-15)}; end else begin if(pos>=0 && pos<7)keyboard_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<15)keyboard_glyph={1'b1,7'd49,4'(pos-7)};if(pos>=15 && pos<23)keyboard_glyph={1'b1,7'd48,4'(pos-15)}; end end
+default:;endcase end endfunction
+function automatic logic [11:0] window_glyph(input logic [7:0] i,input logic signed [11:0] pos);begin window_glyph=0;case(i)
+81:begin if(pos>=0 && pos<7)window_glyph={1'b1,7'd69,4'(pos-0)};if(pos>=7 && pos<15)window_glyph={1'b1,7'd100,4'(pos-7)};if(pos>=15 && pos<19)window_glyph={1'b1,7'd105,4'(pos-15)};if(pos>=19 && pos<25)window_glyph={1'b1,7'd116,4'(pos-19)};if(pos>=25 && pos<33)window_glyph={1'b1,7'd111,4'(pos-25)};if(pos>=33 && pos<39)window_glyph={1'b1,7'd114,4'(pos-33)}; end
+82:begin if(pos>=0 && pos<8)window_glyph={1'b1,7'd82,4'(pos-0)};if(pos>=8 && pos<16)window_glyph={1'b1,7'd101,4'(pos-8)};if(pos>=16 && pos<24)window_glyph={1'b1,7'd97,4'(pos-16)};if(pos>=24 && pos<32)window_glyph={1'b1,7'd100,4'(pos-24)};if(pos>=32 && pos<40)window_glyph={1'b1,7'd101,4'(pos-32)};if(pos>=40 && pos<46)window_glyph={1'b1,7'd114,4'(pos-40)}; end
+83:begin if(pos>=0 && pos<8)window_glyph={1'b1,7'd67,4'(pos-0)};if(pos>=8 && pos<16)window_glyph={1'b1,7'd111,4'(pos-8)};if(pos>=16 && pos<28)window_glyph={1'b1,7'd109,4'(pos-16)};if(pos>=28 && pos<36)window_glyph={1'b1,7'd112,4'(pos-28)};if(pos>=36 && pos<40)window_glyph={1'b1,7'd105,4'(pos-36)};if(pos>=40 && pos<44)window_glyph={1'b1,7'd108,4'(pos-40)};if(pos>=44 && pos<52)window_glyph={1'b1,7'd101,4'(pos-44)};if(pos>=52 && pos<58)window_glyph={1'b1,7'd114,4'(pos-52)}; end
+84:begin if(pos>=0 && pos<8)window_glyph={1'b1,7'd85,4'(pos-0)};if(pos>=8 && pos<14)window_glyph={1'b1,7'd116,4'(pos-8)};if(pos>=14 && pos<18)window_glyph={1'b1,7'd105,4'(pos-14)};if(pos>=18 && pos<22)window_glyph={1'b1,7'd108,4'(pos-18)};if(pos>=22 && pos<26)window_glyph={1'b1,7'd105,4'(pos-22)};if(pos>=26 && pos<32)window_glyph={1'b1,7'd116,4'(pos-26)};if(pos>=32 && pos<40)window_glyph={1'b1,7'd121,4'(pos-32)}; end
+85:begin if(pos>=0 && pos<9)window_glyph={1'b1,7'd78,4'(pos-0)};if(pos>=9 && pos<17)window_glyph={1'b1,7'd111,4'(pos-9)};if(pos>=17 && pos<23)window_glyph={1'b1,7'd116,4'(pos-17)};if(pos>=23 && pos<31)window_glyph={1'b1,7'd101,4'(pos-23)}; end
+86:begin if(pos>=0 && pos<7)window_glyph={1'b1,7'd83,4'(pos-0)};if(pos>=7 && pos<15)window_glyph={1'b1,7'd121,4'(pos-7)};if(pos>=15 && pos<22)window_glyph={1'b1,7'd115,4'(pos-15)};if(pos>=22 && pos<28)window_glyph={1'b1,7'd116,4'(pos-22)};if(pos>=28 && pos<36)window_glyph={1'b1,7'd101,4'(pos-28)};if(pos>=36 && pos<48)window_glyph={1'b1,7'd109,4'(pos-36)};if(pos>=48 && pos<52)window_glyph={1'b1,7'd32,4'(pos-48)};if(pos>=52 && pos<58)window_glyph={1'b1,7'd84,4'(pos-52)};if(pos>=58 && pos<66)window_glyph={1'b1,7'd111,4'(pos-58)};if(pos>=66 && pos<74)window_glyph={1'b1,7'd111,4'(pos-66)};if(pos>=74 && pos<78)window_glyph={1'b1,7'd108,4'(pos-74)}; end
+87:begin if(pos>=0 && pos<6)window_glyph={1'b1,7'd84,4'(pos-0)};if(pos>=6 && pos<14)window_glyph={1'b1,7'd101,4'(pos-6)};if(pos>=14 && pos<20)window_glyph={1'b1,7'd114,4'(pos-14)};if(pos>=20 && pos<32)window_glyph={1'b1,7'd109,4'(pos-20)};if(pos>=32 && pos<36)window_glyph={1'b1,7'd105,4'(pos-32)};if(pos>=36 && pos<44)window_glyph={1'b1,7'd110,4'(pos-36)};if(pos>=44 && pos<52)window_glyph={1'b1,7'd97,4'(pos-44)};if(pos>=52 && pos<56)window_glyph={1'b1,7'd108,4'(pos-52)}; end
+88:begin if(pos>=0 && pos<7)window_glyph={1'b1,7'd83,4'(pos-0)};if(pos>=7 && pos<15)window_glyph={1'b1,7'd97,4'(pos-7)};if(pos>=15 && pos<23)window_glyph={1'b1,7'd118,4'(pos-15)};if(pos>=23 && pos<31)window_glyph={1'b1,7'd101,4'(pos-23)}; end
+89:begin if(pos>=0 && pos<8)window_glyph={1'b1,7'd67,4'(pos-0)};if(pos>=8 && pos<12)window_glyph={1'b1,7'd108,4'(pos-8)};if(pos>=12 && pos<16)window_glyph={1'b1,7'd105,4'(pos-12)};if(pos>=16 && pos<23)window_glyph={1'b1,7'd99,4'(pos-16)};if(pos>=23 && pos<31)window_glyph={1'b1,7'd107,4'(pos-23)};if(pos>=31 && pos<35)window_glyph={1'b1,7'd32,4'(pos-31)};if(pos>=35 && pos<41)window_glyph={1'b1,7'd116,4'(pos-35)};if(pos>=41 && pos<49)window_glyph={1'b1,7'd111,4'(pos-41)};if(pos>=49 && pos<53)window_glyph={1'b1,7'd32,4'(pos-49)};if(pos>=53 && pos<61)window_glyph={1'b1,7'd112,4'(pos-53)};if(pos>=61 && pos<65)window_glyph={1'b1,7'd108,4'(pos-61)};if(pos>=65 && pos<73)window_glyph={1'b1,7'd97,4'(pos-65)};if(pos>=73 && pos<80)window_glyph={1'b1,7'd99,4'(pos-73)};if(pos>=80 && pos<88)window_glyph={1'b1,7'd101,4'(pos-80)};if(pos>=88 && pos<92)window_glyph={1'b1,7'd32,4'(pos-88)};if(pos>=92 && pos<99)window_glyph={1'b1,7'd99,4'(pos-92)};if(pos>=99 && pos<107)window_glyph={1'b1,7'd117,4'(pos-99)};if(pos>=107 && pos<113)window_glyph={1'b1,7'd114,4'(pos-107)};if(pos>=113 && pos<120)window_glyph={1'b1,7'd115,4'(pos-113)};if(pos>=120 && pos<128)window_glyph={1'b1,7'd111,4'(pos-120)};if(pos>=128 && pos<134)window_glyph={1'b1,7'd114,4'(pos-128)}; end
+90:begin if(pos>=0 && pos<12)window_glyph={1'b1,7'd77,4'(pos-0)};if(pos>=12 && pos<20)window_glyph={1'b1,7'd111,4'(pos-12)};if(pos>=20 && pos<28)window_glyph={1'b1,7'd100,4'(pos-20)};if(pos>=28 && pos<32)window_glyph={1'b1,7'd105,4'(pos-28)};if(pos>=32 && pos<38)window_glyph={1'b1,7'd102,4'(pos-32)};if(pos>=38 && pos<42)window_glyph={1'b1,7'd105,4'(pos-38)};if(pos>=42 && pos<50)window_glyph={1'b1,7'd101,4'(pos-42)};if(pos>=50 && pos<58)window_glyph={1'b1,7'd100,4'(pos-50)}; end
+91:begin if(pos>=0 && pos<8)window_glyph={1'b1,7'd67,4'(pos-0)};if(pos>=8 && pos<12)window_glyph={1'b1,7'd108,4'(pos-8)};if(pos>=12 && pos<16)window_glyph={1'b1,7'd105,4'(pos-12)};if(pos>=16 && pos<23)window_glyph={1'b1,7'd99,4'(pos-16)};if(pos>=23 && pos<31)window_glyph={1'b1,7'd107,4'(pos-23)};if(pos>=31 && pos<35)window_glyph={1'b1,7'd32,4'(pos-31)};if(pos>=35 && pos<43)window_glyph={1'b1,7'd112,4'(pos-35)};if(pos>=43 && pos<51)window_glyph={1'b1,7'd97,4'(pos-43)};if(pos>=51 && pos<59)window_glyph={1'b1,7'd103,4'(pos-51)};if(pos>=59 && pos<67)window_glyph={1'b1,7'd101,4'(pos-59)};if(pos>=67 && pos<71)window_glyph={1'b1,7'd32,4'(pos-67)};if(pos>=71 && pos<79)window_glyph={1'b1,7'd111,4'(pos-71)};if(pos>=79 && pos<85)window_glyph={1'b1,7'd114,4'(pos-79)};if(pos>=85 && pos<89)window_glyph={1'b1,7'd32,4'(pos-85)};if(pos>=89 && pos<97)window_glyph={1'b1,7'd97,4'(pos-89)};if(pos>=97 && pos<103)window_glyph={1'b1,7'd114,4'(pos-97)};if(pos>=103 && pos<109)window_glyph={1'b1,7'd114,4'(pos-103)};if(pos>=109 && pos<117)window_glyph={1'b1,7'd111,4'(pos-109)};if(pos>=117 && pos<129)window_glyph={1'b1,7'd119,4'(pos-117)};if(pos>=129 && pos<136)window_glyph={1'b1,7'd115,4'(pos-129)};if(pos>=136 && pos<140)window_glyph={1'b1,7'd32,4'(pos-136)};if(pos>=140 && pos<146)window_glyph={1'b1,7'd116,4'(pos-140)};if(pos>=146 && pos<154)window_glyph={1'b1,7'd111,4'(pos-146)};if(pos>=154 && pos<158)window_glyph={1'b1,7'd32,4'(pos-154)};if(pos>=158 && pos<165)window_glyph={1'b1,7'd115,4'(pos-158)};if(pos>=165 && pos<172)window_glyph={1'b1,7'd99,4'(pos-165)};if(pos>=172 && pos<178)window_glyph={1'b1,7'd114,4'(pos-172)};if(pos>=178 && pos<186)window_glyph={1'b1,7'd111,4'(pos-178)};if(pos>=186 && pos<190)window_glyph={1'b1,7'd108,4'(pos-186)};if(pos>=190 && pos<194)window_glyph={1'b1,7'd108,4'(pos-190)}; end
+92:begin if(pos>=0 && pos<8)window_glyph={1'b1,7'd82,4'(pos-0)};if(pos>=8 && pos<16)window_glyph={1'b1,7'd101,4'(pos-8)};if(pos>=16 && pos<24)window_glyph={1'b1,7'd97,4'(pos-16)};if(pos>=24 && pos<32)window_glyph={1'b1,7'd100,4'(pos-24)};if(pos>=32 && pos<36)window_glyph={1'b1,7'd105,4'(pos-32)};if(pos>=36 && pos<44)window_glyph={1'b1,7'd110,4'(pos-36)};if(pos>=44 && pos<52)window_glyph={1'b1,7'd103,4'(pos-44)};if(pos>=52 && pos<56)window_glyph={1'b1,7'd32,4'(pos-52)};if(pos>=56 && pos<63)window_glyph={1'b1,7'd115,4'(pos-56)};if(pos>=63 && pos<71)window_glyph={1'b1,7'd111,4'(pos-63)};if(pos>=71 && pos<79)window_glyph={1'b1,7'd117,4'(pos-71)};if(pos>=79 && pos<85)window_glyph={1'b1,7'd114,4'(pos-79)};if(pos>=85 && pos<92)window_glyph={1'b1,7'd99,4'(pos-85)};if(pos>=92 && pos<100)window_glyph={1'b1,7'd101,4'(pos-92)};if(pos>=100 && pos<104)window_glyph={1'b1,7'd32,4'(pos-100)};if(pos>=104 && pos<111)window_glyph={1'b1,7'd47,4'(pos-104)};if(pos>=111 && pos<115)window_glyph={1'b1,7'd32,4'(pos-111)};if(pos>=115 && pos<123)window_glyph={1'b1,7'd97,4'(pos-115)};if(pos>=123 && pos<129)window_glyph={1'b1,7'd114,4'(pos-123)};if(pos>=129 && pos<135)window_glyph={1'b1,7'd116,4'(pos-129)};if(pos>=135 && pos<147)window_glyph={1'b1,7'd119,4'(pos-135)};if(pos>=147 && pos<155)window_glyph={1'b1,7'd111,4'(pos-147)};if(pos>=155 && pos<161)window_glyph={1'b1,7'd114,4'(pos-155)};if(pos>=161 && pos<169)window_glyph={1'b1,7'd107,4'(pos-161)}; end
+93:begin if(pos>=0 && pos<8)window_glyph={1'b1,7'd67,4'(pos-0)};if(pos>=8 && pos<16)window_glyph={1'b1,7'd111,4'(pos-8)};if(pos>=16 && pos<28)window_glyph={1'b1,7'd109,4'(pos-16)};if(pos>=28 && pos<36)window_glyph={1'b1,7'd112,4'(pos-28)};if(pos>=36 && pos<40)window_glyph={1'b1,7'd105,4'(pos-36)};if(pos>=40 && pos<44)window_glyph={1'b1,7'd108,4'(pos-40)};if(pos>=44 && pos<48)window_glyph={1'b1,7'd105,4'(pos-44)};if(pos>=48 && pos<56)window_glyph={1'b1,7'd110,4'(pos-48)};if(pos>=56 && pos<64)window_glyph={1'b1,7'd103,4'(pos-56)}; end
+94:begin if(pos>=0 && pos<12)window_glyph={1'b1,7'd87,4'(pos-0)};if(pos>=12 && pos<18)window_glyph={1'b1,7'd114,4'(pos-12)};if(pos>=18 && pos<22)window_glyph={1'b1,7'd105,4'(pos-18)};if(pos>=22 && pos<28)window_glyph={1'b1,7'd116,4'(pos-22)};if(pos>=28 && pos<32)window_glyph={1'b1,7'd105,4'(pos-28)};if(pos>=32 && pos<40)window_glyph={1'b1,7'd110,4'(pos-32)};if(pos>=40 && pos<48)window_glyph={1'b1,7'd103,4'(pos-40)};if(pos>=48 && pos<52)window_glyph={1'b1,7'd32,4'(pos-48)};if(pos>=52 && pos<60)window_glyph={1'b1,7'd112,4'(pos-52)};if(pos>=60 && pos<66)window_glyph={1'b1,7'd114,4'(pos-60)};if(pos>=66 && pos<74)window_glyph={1'b1,7'd111,4'(pos-66)};if(pos>=74 && pos<82)window_glyph={1'b1,7'd103,4'(pos-74)};if(pos>=82 && pos<88)window_glyph={1'b1,7'd114,4'(pos-82)};if(pos>=88 && pos<96)window_glyph={1'b1,7'd97,4'(pos-88)};if(pos>=96 && pos<108)window_glyph={1'b1,7'd109,4'(pos-96)}; end
+95:begin if(pos>=0 && pos<7)window_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<11)window_glyph={1'b1,7'd105,4'(pos-7)};if(pos>=11 && pos<15)window_glyph={1'b1,7'd108,4'(pos-11)};if(pos>=15 && pos<23)window_glyph={1'b1,7'd101,4'(pos-15)};if(pos>=23 && pos<30)window_glyph={1'b1,7'd115,4'(pos-23)};if(pos>=30 && pos<34)window_glyph={1'b1,7'd32,4'(pos-30)};if(pos>=34 && pos<42)window_glyph={1'b1,7'd111,4'(pos-34)};if(pos>=42 && pos<50)window_glyph={1'b1,7'd110,4'(pos-42)};if(pos>=50 && pos<54)window_glyph={1'b1,7'd32,4'(pos-50)};if(pos>=54 && pos<62)window_glyph={1'b1,7'd100,4'(pos-54)};if(pos>=62 && pos<66)window_glyph={1'b1,7'd105,4'(pos-62)};if(pos>=66 && pos<73)window_glyph={1'b1,7'd115,4'(pos-66)};if(pos>=73 && pos<81)window_glyph={1'b1,7'd107,4'(pos-73)}; end
+96:begin if(pos>=0 && pos<7)window_glyph={1'b1,7'd83,4'(pos-0)};if(pos>=7 && pos<15)window_glyph={1'b1,7'd121,4'(pos-7)};if(pos>=15 && pos<22)window_glyph={1'b1,7'd115,4'(pos-15)};if(pos>=22 && pos<28)window_glyph={1'b1,7'd116,4'(pos-22)};if(pos>=28 && pos<36)window_glyph={1'b1,7'd101,4'(pos-28)};if(pos>=36 && pos<48)window_glyph={1'b1,7'd109,4'(pos-36)};if(pos>=48 && pos<52)window_glyph={1'b1,7'd32,4'(pos-48)};if(pos>=52 && pos<60)window_glyph={1'b1,7'd97,4'(pos-52)};if(pos>=60 && pos<68)window_glyph={1'b1,7'd112,4'(pos-60)};if(pos>=68 && pos<76)window_glyph={1'b1,7'd112,4'(pos-68)};if(pos>=76 && pos<80)window_glyph={1'b1,7'd108,4'(pos-76)};if(pos>=80 && pos<84)window_glyph={1'b1,7'd105,4'(pos-80)};if(pos>=84 && pos<91)window_glyph={1'b1,7'd99,4'(pos-84)};if(pos>=91 && pos<99)window_glyph={1'b1,7'd97,4'(pos-91)};if(pos>=99 && pos<105)window_glyph={1'b1,7'd116,4'(pos-99)};if(pos>=105 && pos<109)window_glyph={1'b1,7'd105,4'(pos-105)};if(pos>=109 && pos<117)window_glyph={1'b1,7'd111,4'(pos-109)};if(pos>=117 && pos<125)window_glyph={1'b1,7'd110,4'(pos-117)}; end
+97:begin if(pos>=0 && pos<6)window_glyph={1'b1,7'd84,4'(pos-0)};if(pos>=6 && pos<14)window_glyph={1'b1,7'd121,4'(pos-6)};if(pos>=14 && pos<22)window_glyph={1'b1,7'd112,4'(pos-14)};if(pos>=22 && pos<30)window_glyph={1'b1,7'd101,4'(pos-22)};if(pos>=30 && pos<34)window_glyph={1'b1,7'd32,4'(pos-30)};if(pos>=34 && pos<42)window_glyph={1'b1,7'd97,4'(pos-34)};if(pos>=42 && pos<46)window_glyph={1'b1,7'd32,4'(pos-42)};if(pos>=46 && pos<53)window_glyph={1'b1,7'd99,4'(pos-46)};if(pos>=53 && pos<61)window_glyph={1'b1,7'd111,4'(pos-53)};if(pos>=61 && pos<73)window_glyph={1'b1,7'd109,4'(pos-61)};if(pos>=73 && pos<85)window_glyph={1'b1,7'd109,4'(pos-73)};if(pos>=85 && pos<93)window_glyph={1'b1,7'd97,4'(pos-85)};if(pos>=93 && pos<101)window_glyph={1'b1,7'd110,4'(pos-93)};if(pos>=101 && pos<109)window_glyph={1'b1,7'd100,4'(pos-101)}; end
+98:begin if(pos>=0 && pos<8)window_glyph={1'b1,7'd94,4'(pos-0)}; end
+99:begin if(pos>=0 && pos<8)window_glyph={1'b1,7'd118,4'(pos-0)}; end
+100:begin if(pos>=0 && pos<6)window_glyph={1'b1,7'd60,4'(pos-0)}; end
+101:begin if(pos>=0 && pos<6)window_glyph={1'b1,7'd62,4'(pos-0)}; end
+102:begin if(pos>=0 && pos<8)window_glyph={1'b1,7'd67,4'(pos-0)};if(pos>=8 && pos<12)window_glyph={1'b1,7'd108,4'(pos-8)};if(pos>=12 && pos<20)window_glyph={1'b1,7'd111,4'(pos-12)};if(pos>=20 && pos<27)window_glyph={1'b1,7'd115,4'(pos-20)};if(pos>=27 && pos<35)window_glyph={1'b1,7'd101,4'(pos-27)};if(pos>=35 && pos<39)window_glyph={1'b1,7'd32,4'(pos-35)};if(pos>=39 && pos<51)window_glyph={1'b1,7'd119,4'(pos-39)};if(pos>=51 && pos<55)window_glyph={1'b1,7'd105,4'(pos-51)};if(pos>=55 && pos<63)window_glyph={1'b1,7'd110,4'(pos-55)};if(pos>=63 && pos<71)window_glyph={1'b1,7'd100,4'(pos-63)};if(pos>=71 && pos<79)window_glyph={1'b1,7'd111,4'(pos-71)};if(pos>=79 && pos<91)window_glyph={1'b1,7'd119,4'(pos-79)};if(pos>=91 && pos<95)window_glyph={1'b1,7'd32,4'(pos-91)};if(pos>=95 && pos<101)window_glyph={1'b1,7'd116,4'(pos-95)};if(pos>=101 && pos<109)window_glyph={1'b1,7'd111,4'(pos-101)};if(pos>=109 && pos<113)window_glyph={1'b1,7'd32,4'(pos-109)};if(pos>=113 && pos<119)window_glyph={1'b1,7'd114,4'(pos-113)};if(pos>=119 && pos<127)window_glyph={1'b1,7'd101,4'(pos-119)};if(pos>=127 && pos<133)window_glyph={1'b1,7'd116,4'(pos-127)};if(pos>=133 && pos<141)window_glyph={1'b1,7'd117,4'(pos-133)};if(pos>=141 && pos<147)window_glyph={1'b1,7'd114,4'(pos-141)};if(pos>=147 && pos<155)window_glyph={1'b1,7'd110,4'(pos-147)}; end
+103:begin if(pos>=0 && pos<8)window_glyph={1'b1,7'd68,4'(pos-0)};if(pos>=8 && pos<16)window_glyph={1'b1,7'd101,4'(pos-8)};if(pos>=16 && pos<23)window_glyph={1'b1,7'd99,4'(pos-16)};if(pos>=23 && pos<31)window_glyph={1'b1,7'd111,4'(pos-23)};if(pos>=31 && pos<39)window_glyph={1'b1,7'd100,4'(pos-31)};if(pos>=39 && pos<43)window_glyph={1'b1,7'd105,4'(pos-39)};if(pos>=43 && pos<51)window_glyph={1'b1,7'd110,4'(pos-43)};if(pos>=51 && pos<59)window_glyph={1'b1,7'd103,4'(pos-51)};if(pos>=59 && pos<63)window_glyph={1'b1,7'd32,4'(pos-59)};if(pos>=63 && pos<71)window_glyph={1'b1,7'd97,4'(pos-63)};if(pos>=71 && pos<77)window_glyph={1'b1,7'd114,4'(pos-71)};if(pos>=77 && pos<83)window_glyph={1'b1,7'd116,4'(pos-77)};if(pos>=83 && pos<95)window_glyph={1'b1,7'd119,4'(pos-83)};if(pos>=95 && pos<103)window_glyph={1'b1,7'd111,4'(pos-95)};if(pos>=103 && pos<109)window_glyph={1'b1,7'd114,4'(pos-103)};if(pos>=109 && pos<117)window_glyph={1'b1,7'd107,4'(pos-109)}; end
+104:begin if(pos>=0 && pos<7)window_glyph={1'b1,7'd76,4'(pos-0)};if(pos>=7 && pos<11)window_glyph={1'b1,7'd105,4'(pos-7)};if(pos>=11 && pos<19)window_glyph={1'b1,7'd110,4'(pos-11)};if(pos>=19 && pos<27)window_glyph={1'b1,7'd107,4'(pos-19)};if(pos>=27 && pos<31)window_glyph={1'b1,7'd105,4'(pos-27)};if(pos>=31 && pos<39)window_glyph={1'b1,7'd110,4'(pos-31)};if(pos>=39 && pos<47)window_glyph={1'b1,7'd103,4'(pos-39)}; end
+default:;endcase end endfunction
 function automatic logic [27:0] enterprise_row(input integer row);begin case(row)
 0:enterprise_row=28'hfffc0c0;
 1:enterprise_row=28'hfffdffe;
@@ -261,4 +374,76 @@ function automatic logic [27:0] enterprise_row(input integer row);begin case(row
 6:enterprise_row=28'h00ffc00;
 7:enterprise_row=28'h001f800;
 default:enterprise_row=0;endcase end endfunction
+function automatic logic [6:0] key_bitmap_id(input logic [6:0] i,input logic shifted);begin case(i)
+0:key_bitmap_id=shifted?7'd0:7'd0;
+1:key_bitmap_id=shifted?7'd2:7'd1;
+2:key_bitmap_id=shifted?7'd4:7'd3;
+3:key_bitmap_id=shifted?7'd6:7'd5;
+4:key_bitmap_id=shifted?7'd8:7'd7;
+5:key_bitmap_id=shifted?7'd10:7'd9;
+6:key_bitmap_id=shifted?7'd12:7'd11;
+7:key_bitmap_id=shifted?7'd14:7'd13;
+8:key_bitmap_id=shifted?7'd16:7'd15;
+9:key_bitmap_id=shifted?7'd18:7'd17;
+10:key_bitmap_id=shifted?7'd20:7'd19;
+11:key_bitmap_id=shifted?7'd22:7'd21;
+12:key_bitmap_id=shifted?7'd24:7'd23;
+13:key_bitmap_id=shifted?7'd25:7'd25;
+14:key_bitmap_id=shifted?7'd26:7'd26;
+15:key_bitmap_id=shifted?7'd27:7'd27;
+16:key_bitmap_id=shifted?7'd28:7'd28;
+17:key_bitmap_id=shifted?7'd29:7'd29;
+18:key_bitmap_id=shifted?7'd30:7'd30;
+19:key_bitmap_id=shifted?7'd31:7'd31;
+20:key_bitmap_id=shifted?7'd32:7'd32;
+21:key_bitmap_id=shifted?7'd33:7'd33;
+22:key_bitmap_id=shifted?7'd34:7'd34;
+23:key_bitmap_id=shifted?7'd35:7'd35;
+24:key_bitmap_id=shifted?7'd36:7'd36;
+25:key_bitmap_id=shifted?7'd38:7'd37;
+26:key_bitmap_id=shifted?7'd40:7'd39;
+27:key_bitmap_id=shifted?7'd42:7'd41;
+28:key_bitmap_id=shifted?7'd43:7'd43;
+29:key_bitmap_id=shifted?7'd44:7'd44;
+30:key_bitmap_id=shifted?7'd45:7'd45;
+31:key_bitmap_id=shifted?7'd46:7'd46;
+32:key_bitmap_id=shifted?7'd47:7'd47;
+33:key_bitmap_id=shifted?7'd48:7'd48;
+34:key_bitmap_id=shifted?7'd49:7'd49;
+35:key_bitmap_id=shifted?7'd50:7'd50;
+36:key_bitmap_id=shifted?7'd51:7'd51;
+37:key_bitmap_id=shifted?7'd52:7'd52;
+38:key_bitmap_id=shifted?7'd54:7'd53;
+39:key_bitmap_id=shifted?7'd56:7'd55;
+40:key_bitmap_id=shifted?7'd57:7'd57;
+41:key_bitmap_id=shifted?7'd58:7'd58;
+42:key_bitmap_id=shifted?7'd59:7'd59;
+43:key_bitmap_id=shifted?7'd60:7'd60;
+44:key_bitmap_id=shifted?7'd61:7'd61;
+45:key_bitmap_id=shifted?7'd62:7'd62;
+46:key_bitmap_id=shifted?7'd63:7'd63;
+47:key_bitmap_id=shifted?7'd64:7'd64;
+48:key_bitmap_id=shifted?7'd65:7'd65;
+49:key_bitmap_id=shifted?7'd66:7'd66;
+50:key_bitmap_id=shifted?7'd68:7'd67;
+51:key_bitmap_id=shifted?7'd70:7'd69;
+52:key_bitmap_id=shifted?7'd72:7'd71;
+53:key_bitmap_id=shifted?7'd73:7'd73;
+54:key_bitmap_id=shifted?7'd74:7'd74;
+55:key_bitmap_id=shifted?7'd75:7'd75;
+56:key_bitmap_id=shifted?7'd76:7'd76;
+57:key_bitmap_id=shifted?7'd77:7'd77;
+58:key_bitmap_id=shifted?7'd78:7'd78;
+59:key_bitmap_id=shifted?7'd79:7'd79;
+60:key_bitmap_id=shifted?7'd80:7'd80;
+61:key_bitmap_id=shifted?7'd81:7'd81;
+62:key_bitmap_id=shifted?7'd82:7'd82;
+63:key_bitmap_id=shifted?7'd83:7'd83;
+64:key_bitmap_id=shifted?7'd84:7'd84;
+65:key_bitmap_id=shifted?7'd85:7'd85;
+66:key_bitmap_id=shifted?7'd86:7'd86;
+67:key_bitmap_id=shifted?7'd87:7'd87;
+68:key_bitmap_id=shifted?7'd89:7'd88;
+69:key_bitmap_id=shifted?7'd91:7'd90;
+default:key_bitmap_id=0;endcase end endfunction
 endpackage

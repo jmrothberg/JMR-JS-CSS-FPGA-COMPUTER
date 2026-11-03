@@ -135,6 +135,38 @@ module jmr_js_core #(
     input  logic [15:0] sram_ext_rdata = 16'd0,
     input  logic        sram_ext_ack = 1'b0
 );
+    // Register the absolute report before menu hit testing and guest delivery.
+    // One report per clock is retained; the USB/PS2 devices and wiring stay in
+    // the board top. This separates FIFO read/clamp from the 100MHz UI logic.
+    logic input_mouse_stb;
+    logic [9:0] input_mouse_x;
+    logic [8:0] input_mouse_y;
+    logic [8:0] input_game_mouse_y;
+    logic [2:0] input_mouse_buttons;
+    logic [3:0] input_mouse_row;
+    logic [7:0] input_key_hit;
+    logic report_mouse_stb;
+    logic [9:0] report_mouse_x;
+    logic [8:0] report_mouse_y;
+    logic [2:0] report_mouse_buttons;
+    always_ff @(posedge clk)begin
+        if(!rst_n)begin
+            report_mouse_stb<=0;report_mouse_x<=320;report_mouse_y<=240;report_mouse_buttons<=0;
+            input_mouse_stb<=0;input_mouse_x<=320;input_mouse_y<=240;input_game_mouse_y<=240;input_mouse_buttons<=0;input_mouse_row<=15;input_key_hit<=0;
+        end
+        else begin
+            report_mouse_stb<=mouse_stb;
+            if(mouse_stb)begin report_mouse_x<=mouse_x;report_mouse_y<=mouse_y;report_mouse_buttons<=mouse_buttons;end
+            input_mouse_stb<=report_mouse_stb;
+            if(report_mouse_stb)begin
+                input_mouse_x<=report_mouse_x;input_mouse_y<=report_mouse_y;input_mouse_buttons<=report_mouse_buttons;
+                input_game_mouse_y<=jmr_classic_ui_pkg::classic_game_y({1'b0,report_mouse_y});
+                input_mouse_row<=jmr_classic_ui_pkg::classic_click_row(report_mouse_y);
+                input_key_hit<=jmr_system_menu_pkg::system_key_hit(report_mouse_x,report_mouse_y);
+            end
+        end
+    end
+
     logic kbd_empty, kbd_full, kbd_pop, kbd_clear;
     logic [7:0] kbd_q;
     logic video_busy;
@@ -147,9 +179,9 @@ module jmr_js_core #(
     logic vm_busy, vm_done;
     always_ff @(posedge clk) begin
         if(!rst_n) begin pointer_x_o<=320;pointer_y_o<=240;pointer_toggle_o<=0;end
-        else if(mouse_stb && mouse_ready) begin
-            pointer_x_o<=mouse_x>639?10'd639:mouse_x;
-            pointer_y_o<=mouse_y>479?9'd479:mouse_y;
+        else if(input_mouse_stb && mouse_ready) begin
+            pointer_x_o<=input_mouse_x>639?10'd639:input_mouse_x;
+            pointer_y_o<=input_mouse_y>479?9'd479:input_mouse_y;
             pointer_toggle_o<=~pointer_toggle_o;
         end
     end
@@ -182,7 +214,8 @@ module jmr_js_core #(
     logic [11:0] docs_catalog_addr;
     logic docs_label_valid,docs_label_ready;
     logic [5:0] docs_label_row;
-    logic [1727:0] docs_label_data;
+    logic [26:0] docs_label_data;
+    logic [5:0] docs_label_col;logic docs_label_commit;logic signed [11:0] classic_label_pos;logic [11:0] classic_label_glyph;
     wire owned_keys=docs_keys || classic_menu!=0 || system_about_o || system_menu_o;
     wire dialog_key_stb=ui_key_stb || key_evt_stb || kbd_push;
     wire [7:0] dialog_key_code=ui_key_stb?ui_key_code:key_evt_stb?key_evt_code:kbd_data;
@@ -200,7 +233,18 @@ module jmr_js_core #(
     logic [127:0] con_source_name;
     logic [4:0] con_source_name_len;
     logic con_unnamed,note_entry_seen;
+    logic catalog_entry_seen,catalog_skip_start,actions_catalog_prepared,actions_restart;
+    wire new_catalog_entry=system_window_o[7:0]==4 && !actions_busy && !catalog_entry_seen;
+    always_ff @(posedge clk)begin
+      if(!rst_n)begin catalog_entry_seen<=0;catalog_skip_start<=0;end
+      else if(app_clear)begin catalog_entry_seen<=catalog_skip_start || actions_catalog_prepared;catalog_skip_start<=0;end
+      else begin if(new_catalog_entry)catalog_entry_seen<=1;if(actions_catalog_prepared)catalog_skip_start<=1;end
+    end
     wire new_note_entry=system_window_o[7:0]==5 && !con_interactive && !actions_busy && !note_entry_seen;
+    logic actions_catalog_go,actions_catalog_active,actions_stage_valid,actions_stage_ready;
+    logic [11:0] actions_catalog_addr;logic [12:0] actions_stage_addr;logic [7:0] actions_stage_data;logic [31:0] desk_catalog_size;
+    logic classic_error_seen;wire classic_error_pulse=classic_error && !classic_error_seen;
+    always_ff @(posedge clk)if(!rst_n || app_clear)classic_error_seen<=0;else if(classic_error)classic_error_seen<=1;
     logic classic_consume,classic_key_stb,classic_action_stb,classic_error,classic_about_valid,classic_title_valid;
     logic [7:0] classic_key_code;
     logic [3:0] classic_action,classic_menu,classic_popup_count,classic_popup_row;
@@ -208,7 +252,8 @@ module jmr_js_core #(
     logic [7:0] classic_popup_static;
     logic [5:0] classic_popup_dynamic,classic_label_raddr;
     logic classic_popup_enabled;
-    logic [1727:0] classic_label_rdata;
+    logic [63:0] classic_static_rows;logic [47:0] classic_dynamic_rows;logic [7:0] classic_enabled_rows;
+
     logic [31:0] ship_generation,classic_generation,app_window;
     logic [31:0] last_ship_generation,last_classic_generation,last_system_window;
     logic vm_sysw_toggle,sysw_seen,vm_text_toggle,text_seen,vm_text_menu,vm_text_first,vm_text_last;
@@ -216,14 +261,10 @@ module jmr_js_core #(
     logic [7:0] vm_sysw_value,vm_text_byte;
     logic [1:0] restart_phase;
     logic classic_vm_start,classic_restart_halt;
-    wire app_clear=vm_start || sim_vm_start || classic_vm_start;
-    wire [8:0] pointer_source_y=(system_viewport_o && system_window_o[7:0]==8)?map_game_y({1'b0,mouse_y}):mouse_y;
+    wire app_clear=vm_start || sim_vm_start || classic_vm_start || actions_restart;
+    wire [8:0] pointer_source_y=(system_viewport_o && system_window_o[7:0]==8)?input_game_mouse_y:input_mouse_y;
     function automatic logic [8:0] map_game_y(input logic [9:0] py);
-        integer v;
-        begin
-            v=(py<24)?0:((2*(integer'(py)-24)+1)*480)/912;
-            map_game_y=9'(v>479?479:v);
-        end
+        map_game_y=jmr_classic_ui_pkg::classic_game_y(py);
     endfunction
     always_comb begin
         system_status_o=0;system_status_o[2:0]=docs_dialog;system_status_o[3]=docs_catalog_active;
@@ -232,6 +273,24 @@ module jmr_js_core #(
     assign game_source_y_o=map_game_y(fb_y);
     assign ui_consume=ship_consume || classic_consume || docs_consume;
     assign ui_quit=ship_quit || actions_quit;
+    // Capture the native text event as a bundle before descriptor parsing.
+    // The VM holds each event for at least three core clocks.
+    logic classic_text_stb,classic_text_menu,classic_text_first,classic_text_last;
+    logic [7:0] classic_text_byte;
+    logic [31:0] classic_window_q;
+    always_ff @(posedge clk)begin
+        if(!rst_n || app_clear)begin
+            classic_text_stb<=0;classic_text_menu<=0;classic_text_first<=0;classic_text_last<=0;classic_text_byte<=0;
+        end else begin
+            classic_text_stb<=text_seen!=vm_text_toggle;
+            if(text_seen!=vm_text_toggle)begin
+                classic_text_menu<=vm_text_menu;classic_text_first<=vm_text_first;
+                classic_text_last<=vm_text_last;classic_text_byte<=vm_text_byte;
+            end
+        end
+        if(!rst_n)classic_window_q<=0;
+        else classic_window_q<=system_window_o;
+    end
     always_ff @(posedge clk)begin
         if(!rst_n || app_clear)begin app_window<=0;system_viewport_o<=0;sysw_seen<=0;text_seen<=vm_text_toggle;end
         else begin
@@ -272,32 +331,36 @@ module jmr_js_core #(
         else if(new_note_entry)note_entry_seen<=1;
     end
     jmr_system_actions u_system_actions (
-        .clk(clk),.rst_n(rst_n),.action_stb((docs_command_stb && docs_command!=5) || new_note_entry),.action(new_note_entry?4'd11:docs_command),
+        .clk(clk),.rst_n(rst_n),.action_stb((docs_command_stb && docs_command!=5) || new_note_entry || new_catalog_entry),.action(new_note_entry?4'd11:new_catalog_entry?4'd4:docs_command),
         .role(system_window_o[7:0]),.chosen_name(docs_chosen_name),.chosen_len(docs_chosen_len),.after_valid(docs_after_valid),.after_action(docs_after_action),.after_name(docs_after_name),.after_len(docs_after_len),
-        .source_name(con_source_name),.source_len(con_source_name_len),
+        .source_name(con_source_name),.source_len(con_source_name_len),.source_unnamed(con_unnamed),
+        .catalog_go(actions_catalog_go),.catalog_active(actions_catalog_active),.catalog_addr(actions_catalog_addr),
+        .catalog_done(disk_done),.catalog_error(disk_error),.catalog_count(desk_count),.catalog_data(desk_catalog_data),.catalog_size(desk_catalog_size),
+        .stage_valid(actions_stage_valid),.stage_addr(actions_stage_addr),.stage_data(actions_stage_data),.stage_ready(actions_stage_ready),
         .console_ready(ready_lit),.console_failed(con_command_failed),.console_clear(kbd_clear),.keyboard_empty(kbd_empty),.keyboard_full(kbd_full),
         .vm_busy(vm_busy),.storage_busy(stor_busy),.disk_busy(disk_busy),.desktop_busy(desk_busy),.busy(actions_busy),.quit_pulse(actions_quit),.halt_pulse(actions_halt),
         .desktop_stb(actions_desk_stb),.desktop_on(actions_desk_on),.key_push(actions_key_push),.key_data(actions_key_data),
         .inject_stb(actions_inject),.inject_code(actions_inject_code),.doc_start(actions_doc_start),.doc_new(actions_doc_new),.doc_role(actions_doc_role),
-        .set_name(actions_set_name),.target_name(actions_target_name),.target_len(actions_target_len),.error_pulse(actions_error)
+        .set_name(actions_set_name),.target_name(actions_target_name),.target_len(actions_target_len),.catalog_prepared(actions_catalog_prepared),.restart_pulse(actions_restart),.error_pulse(actions_error)
     );
     assign mouse_ready = 1'b1;
     always_ff @(posedge clk)begin
         if(!rst_n || !vm_busy)begin mouse_pending<=0;pending_mouse_x<=320;pending_mouse_y<=240;pending_mouse_buttons<=0;end
         else begin
             if(mouse_pending && mouse_queue_ready)mouse_pending<=0;
-            if(mouse_stb && !ui_consume && (mouse_pending || !mouse_queue_ready))begin
-                mouse_pending<=1;pending_mouse_x<=mouse_x;pending_mouse_y<=pointer_source_y;pending_mouse_buttons<=mouse_buttons;
+            if(input_mouse_stb && !ui_consume && (mouse_pending || !mouse_queue_ready))begin
+                mouse_pending<=1;pending_mouse_x<=input_mouse_x;pending_mouse_y<=pointer_source_y;pending_mouse_buttons<=input_mouse_buttons;
             end
         end
     end
     jmr_system_menu u_system_menu (
-        .clk(clk),.rst_n(rst_n),.sample_valid(mouse_stb && !classic_consume && !docs_consume),.x(mouse_x),.y(mouse_y),.buttons(mouse_buttons),
+        .clk(clk),.rst_n(rst_n),.sample_valid(input_mouse_stb && !classic_consume && !docs_consume),.x(input_mouse_x),.y(input_mouse_y),.buttons(input_mouse_buttons),
+        .key_hit(input_key_hit),
         .emit_enable(owned_keys ? 1'b1 : vm_busy ? (vm_key_evt_ready && !vm_kev_lat) : (!desk_busy && !disk_busy && !kbd_clear && ready_lit && !stor_busy)),
         .force_keyboard_stb(docs_keyboard_stb),.force_keyboard_on(docs_keyboard_on),
         .dismiss_about(system_about_o && dialog_key_stb && dialog_key_down && (dialog_key_code==13 || dialog_key_code==27)),
         .dismiss_menu(system_menu_o && dialog_key_stb && dialog_key_down && dialog_key_code==27),
-        .inject_stb(classic_key_stb || actions_inject),.inject_code(actions_inject?actions_inject_code:classic_key_code),.leave_app(ui_quit || classic_restart_halt || actions_halt),.guest_drag_o(ship_guest),
+        .inject_stb(classic_key_stb || actions_inject),.inject_code(actions_inject?actions_inject_code:classic_key_code),.leave_app(ui_quit || classic_restart_halt || actions_halt || classic_error_pulse),.guest_drag_o(ship_guest),
         .consume_pointer(ship_consume),.menu_open(system_menu_o),.keyboard_open(system_keyboard_o),.about_open(system_about_o),
         .shift_on(system_shift_o),.caps_on(system_caps_o),.ctrl_on(system_ctrl_o),.alt_on(system_alt_o),
         .pressed_index(system_pressed_o),.hold_keys(system_hold_o),.held_keys(system_held_o),.generation(ship_generation),.quit_pulse(ship_quit),.terminal_pulse(ui_terminal),
@@ -308,8 +371,8 @@ module jmr_js_core #(
     logic [23:0] ship_rgb,ship_rgb_q,classic_rgb;
     jmr_system_documents u_documents (
         .clk(clk),.rst_n(rst_n),.app_clear(app_clear),.window_state(system_window_o),.source_name(con_source_name),.source_len(con_source_name_len),
-        .unnamed(con_unnamed),.kernel_busy(actions_busy),.error_pulse(actions_error),.request_stb(classic_action_stb),.request_action(classic_action),.shortcut_save(save_shortcut),
-        .sample_valid(mouse_stb),.x(mouse_x),.y(mouse_y),.buttons(mouse_buttons),.keyboard_open(system_keyboard_o),
+        .unnamed(con_unnamed),.kernel_busy(actions_busy),.error_pulse(actions_error || classic_error_pulse),.descriptor_error(classic_error_pulse),.request_stb(classic_action_stb),.request_action(classic_action),.shortcut_save(save_shortcut),
+        .sample_valid(input_mouse_stb),.x(input_mouse_x),.y(input_mouse_y),.buttons(input_mouse_buttons),.keyboard_open(system_keyboard_o),
         .key_stb(dialog_key_stb),.key_down(dialog_key_down),.key_code(dialog_key_code),.key_char(dialog_key_char),
         .consume_pointer(docs_consume),.consume_keys(docs_keys),.keyboard_set_stb(docs_keyboard_stb),.keyboard_set_on(docs_keyboard_on),
         .command_stb(docs_command_stb),.command(docs_command),.chosen_name(docs_chosen_name),.chosen_len(docs_chosen_len),
@@ -317,32 +380,60 @@ module jmr_js_core #(
         .dialog(docs_dialog),.file_count(docs_file_count),.selected(docs_selected),.file_top(docs_file_top),.name_len(docs_name_len),.name_selected(docs_name_selected),.message_id(docs_message),
         .generation(docs_generation),.catalog_go(docs_catalog_go),.catalog_active(docs_catalog_active),.catalog_all(docs_catalog_all),.catalog_addr(docs_catalog_addr),
         .catalog_busy(disk_busy),.catalog_done(disk_done),.storage_busy(stor_busy),.desktop_busy(desk_busy),.catalog_count(desk_count),.catalog_data(desk_catalog_data),
-        .label_valid(docs_label_valid),.label_row(docs_label_row),.label_data(docs_label_data),.label_ready(docs_label_ready)
+        .label_valid(docs_label_valid),.label_row(docs_label_row),.label_data(docs_label_data),.label_col(docs_label_col),.label_commit(docs_label_commit),.label_ready(docs_label_ready)
     );
     jmr_classic_ui u_classic (
-        .clk(clk),.rst_n(rst_n),.pixel_clk(pixel_clk),.app_clear(app_clear),.window_state(system_window_o),.source_name(con_source_name),.source_name_len(con_source_name_len),
-        .external_label_valid(docs_label_valid),.external_label_row(docs_label_row),.external_label_data(docs_label_data),.external_label_ready(docs_label_ready),
-        .text_stb(text_seen!=vm_text_toggle && !app_clear),.text_menu(vm_text_menu),.text_first(vm_text_first),.text_last(vm_text_last),.text_byte(vm_text_byte),
-        .sample_valid(mouse_stb),.system_active(system_menu_o || system_about_o || docs_dialog!=0),.keyboard_open(system_keyboard_o),.guest_drag(ship_guest),.cancel_menu(classic_menu!=0 && dialog_key_stb && dialog_key_down && dialog_key_code==27),
-        .x(mouse_x),.y(mouse_y),.buttons(mouse_buttons),.consume_pointer(classic_consume),
+        .clk(clk),.rst_n(rst_n),.pixel_clk(pixel_clk),.app_clear(app_clear),.window_state(classic_window_q),.source_name(con_source_name),.source_name_len(con_source_name_len),
+        .external_label_valid(docs_label_valid),.external_label_row(docs_label_row),.external_label_data(docs_label_data),.external_label_col(docs_label_col),.external_label_commit(docs_label_commit),.external_label_ready(docs_label_ready),
+        .text_stb(classic_text_stb && !app_clear),.text_menu(classic_text_menu),.text_first(classic_text_first),.text_last(classic_text_last),.text_byte(classic_text_byte),
+        .sample_valid(input_mouse_stb),.system_active(system_menu_o || system_about_o || docs_dialog!=0),.keyboard_open(system_keyboard_o),.guest_drag(ship_guest),.cancel_menu(classic_menu!=0 && dialog_key_stb && dialog_key_down && dialog_key_code==27),
+        .x(input_mouse_x),.y(input_mouse_y),.buttons(input_mouse_buttons),.click_row(input_mouse_row),.consume_pointer(classic_consume),
         .key_stb(classic_key_stb),.key_code(classic_key_code),.action_stb(classic_action_stb),.action(classic_action),
         .generation(classic_generation),.descriptor_error(classic_error),.active_menu(classic_menu),
         .popup_left(classic_popup_left),.popup_count(classic_popup_count),.popup_row(classic_popup_row),
         .popup_static(classic_popup_static),.popup_dynamic(classic_popup_dynamic),.popup_enabled(classic_popup_enabled),
-        .label_raddr(classic_label_raddr),.label_rdata(classic_label_rdata),.about_valid(classic_about_valid),.title_valid(classic_title_valid),.title_width(classic_title_width)
+        .popup_static_rows(classic_static_rows),.popup_dynamic_rows(classic_dynamic_rows),.popup_enabled_rows(classic_enabled_rows),
+        .label_raddr(classic_label_raddr),.label_pos(classic_label_pos),.beam_y(fb_y),.label_glyph(classic_label_glyph),.about_valid(classic_about_valid),.title_valid(classic_title_valid),.title_width(classic_title_width)
     );
+    typedef struct packed {
+        logic [31:0] window_state;
+        logic [3:0] menu,count;
+        logic [9:0] left_edge,title_width;
+        logic [63:0] static_rows;logic [47:0] dynamic_rows;logic [7:0] enabled_rows;
+        logic about_open,about_valid,title_valid;
+        logic [2:0] dialog;
+        logic [8:0] files,selected;
+        logic [7:0] file_top,message_id;
+        logic [3:0] name_len;logic name_selected;
+        logic ship_menu,keyboard,shift_on,caps_on,ctrl_on,alt_on,hold_keys;
+        logic [6:0] pressed;logic [69:0] held;
+    } ui_snapshot_t;
+    ui_snapshot_t ui_source,ui_pixels;
+    always_comb begin
+        ui_source.window_state=system_window_o;ui_source.menu=classic_menu;ui_source.count=classic_popup_count;
+        ui_source.left_edge=classic_popup_left;ui_source.title_width=classic_title_width;
+        ui_source.static_rows=classic_static_rows;ui_source.dynamic_rows=classic_dynamic_rows;ui_source.enabled_rows=classic_enabled_rows;
+        ui_source.about_open=system_about_o;ui_source.about_valid=classic_about_valid && vm_busy && system_window_o[7:0]!=0 && system_window_o[7:0]!=3;
+        ui_source.title_valid=classic_title_valid;ui_source.dialog=docs_dialog;ui_source.files=docs_file_count;ui_source.selected=docs_selected;
+        ui_source.file_top=docs_file_top;ui_source.message_id=docs_message;ui_source.name_len=docs_name_len;ui_source.name_selected=docs_name_selected;
+        ui_source.ship_menu=system_menu_o;ui_source.keyboard=system_keyboard_o;ui_source.shift_on=system_shift_o;ui_source.caps_on=system_caps_o;
+        ui_source.ctrl_on=system_ctrl_o;ui_source.alt_on=system_alt_o;ui_source.hold_keys=system_hold_o;ui_source.pressed=system_pressed_o;ui_source.held=system_held_o;
+    end
+    jmr_ui_snapshot #(.WIDTH($bits(ui_snapshot_t))) u_ui_snapshot(.clk(clk),.rst_n(rst_n),.pixel_clk(pixel_clk),.source(ui_source),.pixels(ui_pixels));
     jmr_classic_overlay u_classic_overlay (
-        .pixel_clk(pixel_clk),.x(fb_x),.y(fb_y),.window_state(system_window_o),
-        .active_menu(classic_menu),.popup_count(classic_popup_count),.popup_left(classic_popup_left),.popup_row(classic_popup_row),
-        .popup_static(classic_popup_static),.popup_dynamic(classic_popup_dynamic),.popup_enabled(classic_popup_enabled),
-        .about_open(system_about_o),.about_valid(classic_about_valid),.title_valid(classic_title_valid),.title_width(classic_title_width),.dialog(docs_dialog),.file_count(docs_file_count),.selected(docs_selected),
-        .file_top(docs_file_top),.message_id(docs_message),.name_len(docs_name_len),.name_selected(docs_name_selected),.label_raddr(classic_label_raddr),.label_rdata(classic_label_rdata),
+        .rst_n(rst_n),
+        .pixel_clk(pixel_clk),.x(fb_x),.y(fb_y),.window_state(ui_pixels.window_state),
+        .active_menu(ui_pixels.menu),.popup_count(ui_pixels.count),.popup_left(ui_pixels.left_edge),.popup_row(classic_popup_row),
+        .popup_static_rows(ui_pixels.static_rows),.popup_dynamic_rows(ui_pixels.dynamic_rows),.popup_enabled_rows(ui_pixels.enabled_rows),
+        .about_open(ui_pixels.about_open),.about_valid(ui_pixels.about_valid),.title_valid(ui_pixels.title_valid),.title_width(ui_pixels.title_width),
+        .dialog(ui_pixels.dialog),.file_count(ui_pixels.files),.selected(ui_pixels.selected),.file_top(ui_pixels.file_top),.message_id(ui_pixels.message_id),
+        .name_len(ui_pixels.name_len),.name_selected(ui_pixels.name_selected),.label_raddr(classic_label_raddr),.label_pos(classic_label_pos),.label_glyph(classic_label_glyph),
         .opaque(classic_op),.modal_opaque(classic_modal),.rgb(classic_rgb)
     );
     jmr_system_overlay u_system_overlay (
         .pixel_clk(pixel_clk),.x(fb_x),.y(fb_y),
-        .menu_open(system_menu_o),.keyboard_open(system_keyboard_o),.about_open(1'b0),.shift_on(system_shift_o),.caps_on(system_caps_o),
-        .ctrl_on(system_ctrl_o),.alt_on(system_alt_o),.pressed_index(system_pressed_o),.hold_keys(system_hold_o),.held_keys(system_held_o),
+        .menu_open(ui_pixels.ship_menu),.keyboard_open(ui_pixels.keyboard),.about_open(1'b0),.shift_on(ui_pixels.shift_on),.caps_on(ui_pixels.caps_on),
+        .ctrl_on(ui_pixels.ctrl_on),.alt_on(ui_pixels.alt_on),.pressed_index(ui_pixels.pressed),.hold_keys(ui_pixels.hold_keys),.held_keys(ui_pixels.held),
         .opaque(ship_op),.rgb(ship_rgb)
     );
     always_ff @(posedge pixel_clk)begin ship_op_q<=ship_op;ship_rgb_q<=ship_rgb;end
@@ -350,9 +441,9 @@ module jmr_js_core #(
     assign system_overlay_rgb_o=classic_modal?classic_rgb:ship_op_q?ship_rgb_q:classic_rgb;
     jmr_mouse_events u_mouse_events (
         .clk(clk), .rst_n(rst_n && vm_busy),
-        .sample_valid(vm_busy && (mouse_pending || (mouse_stb && !ui_consume))), .sample_ready(mouse_queue_ready),
-        .sample_x(mouse_pending?pending_mouse_x:mouse_x),.sample_y(mouse_pending?pending_mouse_y:pointer_source_y),
-        .sample_buttons(mouse_pending?pending_mouse_buttons:mouse_buttons),
+        .sample_valid(vm_busy && (mouse_pending || (input_mouse_stb && !ui_consume))), .sample_ready(mouse_queue_ready),
+        .sample_x(mouse_pending?pending_mouse_x:input_mouse_x),.sample_y(mouse_pending?pending_mouse_y:pointer_source_y),
+        .sample_buttons(mouse_pending?pending_mouse_buttons:input_mouse_buttons),
         .event_valid(mouse_event_valid), .event_data(mouse_event_data),
         .event_pop(mouse_event_pop)
     );
@@ -417,7 +508,7 @@ module jmr_js_core #(
     logic [15:0] desk_sram_data;
     logic desk_stor_open,desk_stor_close,desk_stor_dir,desk_stor_next,desk_stor_get;
     logic [7:0] desk_stor_name_len;
-    logic [31:0] stor_file_size;
+    logic [31:0] stor_file_size,stor_dir_size;
     logic desk_mem_en,desk_mem_we;
     logic [15:0] desk_mem_addr;
     logic [7:0] desk_mem_wdata;
@@ -445,7 +536,7 @@ module jmr_js_core #(
     assign stor_nl_scan=!disk_busy&&con_stor_nl_scan;
     assign stor_putc=!disk_busy&&con_stor_putc;
     assign stor_delete=!disk_busy&&con_stor_delete;
-    assign stor_dir_all=disk_busy?(docs_catalog_active?docs_catalog_all:desk_hidden):con_stor_dir_all;
+    assign stor_dir_all=disk_busy?(actions_catalog_active || (docs_catalog_active?docs_catalog_all:desk_hidden)):con_stor_dir_all;
     assign stor_mode=disk_busy?8'h49:con_stor_mode;
     assign stor_chan=disk_busy?8'd1:con_stor_chan;
     assign stor_name_addr=disk_busy?16'hb850:con_stor_name_addr;
@@ -598,6 +689,7 @@ module jmr_js_core #(
         .ready_lit(ready_lit), .command_failed_o(con_command_failed), .interactive_o(con_interactive),.system_role_o(con_system_role),.system_stage_o(con_system_stage),
         .ui_source_name_o(con_source_name),.ui_source_len_o(con_source_name_len),.ui_unnamed_o(con_unnamed),
         .ui_doc_start(actions_doc_start),.ui_doc_new(actions_doc_new),.ui_doc_role(actions_doc_role),
+        .ui_stage_valid(actions_stage_valid),.ui_stage_addr(actions_stage_addr),.ui_stage_data(actions_stage_data),.ui_stage_ready(actions_stage_ready),
         .ui_set_name(actions_set_name),.ui_name(actions_target_name),.ui_name_len(actions_target_len),
         .src_len_o(cons_src_len),
         .src_setlen_i(vm_src_setlen),
@@ -651,7 +743,7 @@ module jmr_js_core #(
         .start_nl_scan(stor_nl_scan), .nl_count(stor_nl_count),
         .start_putc(stor_putc), .putc_data(stor_putc_data),
         .start_dir(stor_dir), .start_dir_next(stor_dir_next),
-        .dir_show_all(stor_dir_all), .dir_show_system(disk_busy), .dir_raw_names(disk_busy), .file_size_o(stor_file_size),
+        .dir_show_all(stor_dir_all), .dir_show_system(disk_busy), .dir_raw_names(disk_busy), .file_size_o(stor_file_size),.dir_size_o(stor_dir_size),
         .start_delete(stor_delete),
         .card_present(sd_card_present),
         .dbg_state(stor_dbg_state), .dbg_op_clk(stor_dbg_op_clk),
@@ -828,6 +920,15 @@ module jmr_js_core #(
 `endif
     end endgenerate
 
+    // Assert immediately, then release on VM edges. The divided clock is
+    // stopped during board reset, so retain reset for two actual VM edges.
+    // This also keeps the board-wide fast reset out of the VM's data funnels.
+    (* ASYNC_REG="TRUE" *) logic [1:0] vm_reset_release;
+    always_ff @(posedge vm_clk or negedge rst_n)begin
+        if(!rst_n)vm_reset_release<=0;
+        else vm_reset_release<={vm_reset_release[0],1'b1};
+    end
+
     // 100 MHz strobes last one clk cycle; the VM samples only on vm_ce
     // beats. Latch each until the beat that consumes it. Set wins over
     // clear: a strobe landing ON a beat is held for the next one (the
@@ -848,9 +949,9 @@ module jmr_js_core #(
             vm_ftick_lat <= 1'b0; vm_kev_lat  <= 1'b0;
             vm_kev_code_lat <= 8'd0; vm_kev_char_lat<=0; vm_kev_down_lat <= 1'b0;
         end else begin
-            if ((vm_start | sim_vm_start | classic_vm_start) && !ui_quit_pending && !ui_quit) vm_start_lat <= 1'b1;
+            if ((vm_start | sim_vm_start | classic_vm_start | actions_restart) && !ui_quit_pending && !ui_quit) vm_start_lat <= 1'b1;
             else if (vm_ce)               vm_start_lat <= 1'b0;
-            if ((keyboard_feed_push && keyboard_feed_data == 8'h1B) || ui_quit || halt_pulse || classic_restart_halt || actions_halt)
+            if ((keyboard_feed_push && keyboard_feed_data == 8'h1B) || ui_quit || halt_pulse || classic_restart_halt || actions_halt || classic_error_pulse)
                                           vm_stop_lat <= 1'b1;
             else if (vm_ce)               vm_stop_lat <= 1'b0;
             if (frame_tick | sim_frame_pulse) vm_ftick_lat <= 1'b1;
@@ -893,7 +994,7 @@ module jmr_js_core #(
     logic [6:0]  vm_cmp_msglen;
 
     jmr_js_vm #(.CODE_HEX("invaders_jsb.hex")) u_vm (
-        .clk(vm_clk), .clk_code_w(clk), .rst_n(rst_n),
+        .clk(vm_clk), .clk_code_w(clk), .rst_n(vm_reset_release[1]),
         .start(vm_start_lat),
         // V1.5 standalone compile: source length in, exit report out.
         .src_len_i(cons_src_len),
@@ -1090,7 +1191,7 @@ module jmr_js_core #(
 
     always_ff @(posedge clk) begin
         if (!rst_n) game_mode <= 1'b0;
-        else if ((keyboard_feed_push && keyboard_feed_data == 8'h1B) || ui_quit || halt_pulse || classic_restart_halt || actions_halt) game_mode <= 1'b0;
+        else if ((keyboard_feed_push && keyboard_feed_data == 8'h1B) || ui_quit || halt_pulse || classic_restart_halt || actions_halt || classic_error_pulse) game_mode <= 1'b0;
         // Enter on RUN/vm_start only. demo_busy/vm_busy must not retrigger
         // after ESC — console enable is !game_mode, so LIST after RUN died.
         // cmp_arm: a compile runs the VM without becoming a GAME. The text
@@ -1109,7 +1210,7 @@ module jmr_js_core #(
         .console_ready(ready_lit),.console_failed(con_command_failed),.console_clear(kbd_clear),
         .keyboard_empty(kbd_empty),.keyboard_full(kbd_full),.vm_busy(vm_busy),.game_mode(game_mode),
         .storage_busy(stor_busy),.present_busy(fb_present_busy),.card_present(sd_card_present),
-        .mouse_stb(mouse_stb && !ui_consume),.mouse_x(mouse_x),.mouse_y(mouse_y),.mouse_buttons(mouse_buttons),
+        .mouse_stb(input_mouse_stb && !ui_consume),.mouse_x(input_mouse_x),.mouse_y(input_mouse_y),.mouse_buttons(input_mouse_buttons),
         .system_menu_active(system_menu_o || system_about_o),
         .visible(desk_visible),.busy(desk_busy),.console_hold(desk_hold),
         .keyboard_mode(desktop_keyboard_mode_o),.show_hidden(desk_hidden),
@@ -1125,14 +1226,14 @@ module jmr_js_core #(
         .sram_ack(sram_ack && sram_owner_q==3'd7),.sram_rdata(sram_rdata)
     );
     jmr_desktop_disk u_desktop_disk (
-        .clk(clk),.rst_n(rst_n),.catalog_go(desk_catalog_go || docs_catalog_go),.icon_go(desk_icon_go),.show_hidden(docs_catalog_active?docs_catalog_all:desk_hidden),.icon_index(desk_icon_index),
+        .clk(clk),.rst_n(rst_n),.catalog_go(desk_catalog_go || docs_catalog_go || actions_catalog_go),.icon_go(desk_icon_go),.show_hidden(actions_catalog_active || (docs_catalog_active?docs_catalog_all:desk_hidden)),.icon_index(desk_icon_index),
         .busy(disk_busy),.done(disk_done),.disk_error(disk_error),.count(desk_count),
-        .catalog_addr(docs_catalog_active?docs_catalog_addr:desk_catalog_addr),.catalog_data(desk_catalog_data),
+        .catalog_addr(actions_catalog_active?actions_catalog_addr:docs_catalog_active?docs_catalog_addr:desk_catalog_addr),.catalog_data(desk_catalog_data),.catalog_size(desk_catalog_size),
         .icon_valid(desk_icon_valid),.icon_ready(desk_icon_ready),.icon_x(desk_icon_x),.icon_y(desk_icon_y),
         .icon_colour(desk_icon_colour),.icon_opaque(desk_icon_opaque),
         .stor_open(desk_stor_open),.stor_close(desk_stor_close),.stor_dir(desk_stor_dir),.stor_next(desk_stor_next),.stor_get(desk_stor_get),
         .stor_name_len(desk_stor_name_len),.stor_busy(stor_busy),.stor_done(stor_done),.stor_err(stor_err),.stor_eof(stor_eof),
-        .stor_line_len(stor_line_len),.stor_byte(stor_get_data),.stor_file_size(stor_file_size),
+        .stor_line_len(stor_line_len),.stor_byte(stor_get_data),.stor_file_size(stor_file_size),.stor_dir_size(stor_dir_size),
         .mem_en(desk_mem_en),.mem_we(desk_mem_we),.mem_addr(desk_mem_addr),.mem_wdata(desk_mem_wdata),
         .mem_rdata(c_mem_rdata),.mem_gnt(c_mem_gnt && disk_busy)
     );

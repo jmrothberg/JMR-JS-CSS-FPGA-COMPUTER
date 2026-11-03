@@ -193,7 +193,7 @@ module jmr_text_hdmi_scanout #(
             end else if(system_game_viewport && visible_q && hy_q>=22 && hy_q<24)begin
                 vid_pData<=0;
             end else if(system_window[7:0]!=0 && !game_q && visible_q)begin
-                vid_pData=(in_text_q && on_pix)?24'h000000:24'hffffff;
+                vid_pData <= (in_text_q && on_pix)?24'h000000:24'hffffff;
             end else if (game_q && visible_q && (hx_q < 10'd640) && (hy_q < 10'd480)) begin
                 vid_pData <= pal_rgb;
             end else if (in_text_q) begin

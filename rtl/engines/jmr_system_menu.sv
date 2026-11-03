@@ -11,6 +11,7 @@ module jmr_system_menu (
  input logic [9:0] x,
  input logic [8:0] y,
  input logic [2:0] buttons,
+ input logic [7:0] key_hit,
  output logic consume_pointer,
  output logic menu_open,keyboard_open,about_open,shift_on,caps_on,ctrl_on,alt_on,
  output logic [6:0] pressed_index,
@@ -24,6 +25,25 @@ module jmr_system_menu (
  output logic [7:0] ascii_data
 );
  import jmr_system_menu_pkg::*;
+ // Compact, read-only key tables stay in ordinary LUTs near their consumers.
+ // A RAMB18 address mux must not include the entire mouse/control decision.
+ (* rom_style="distributed" *) logic [7:0] code_plain [0:127],code_shift [0:127];
+ (* rom_style="distributed" *) logic [7:0] text_plain [0:127],text_shift [0:127],text_caps [0:127],text_both [0:127];
+ initial for(integer i=0;i<128;i=i+1)begin
+  code_plain[i]=key_code(i,1'b0);code_shift[i]=key_code(i,1'b1);
+  text_plain[i]=key_text(i,1'b0,1'b0);text_shift[i]=key_text(i,1'b1,1'b0);
+  text_caps[i]=key_text(i,1'b0,1'b1);text_both[i]=key_text(i,1'b1,1'b1);
+ end
+ function automatic logic [7:0] local_key_code(input logic [6:0] index,input logic shifted);
+  local_key_code=shifted?code_shift[index]:code_plain[index];
+ endfunction
+ function automatic logic [7:0] local_key_text(input logic [6:0] index,input logic shifted,caps);
+  case({caps,shifted})
+   0:local_key_text=text_plain[index];1:local_key_text=text_shift[index];
+   2:local_key_text=text_caps[index];default:local_key_text=text_both[index];
+  endcase
+ endfunction
+
  logic inject_release;
  logic [7:0] inject_release_code;
  assign guest_drag_o=guest_drag;
@@ -71,7 +91,7 @@ module jmr_system_menu (
    if(release_walk!=127 && release_mods==0 && !put && count<126)begin
     if(release_walk<70)begin
      if(held_keys[release_walk])begin
-      put<=1;put_data<={8'd0,(release_walk==68?held_f9:release_walk==69?held_f10:key_code(release_walk,1'b0)),1'b0};
+      put<=1;put_data<={8'd0,(release_walk==68?held_f9:release_walk==69?held_f10:local_key_code(release_walk,1'b0)),1'b0};
       held_keys[release_walk]<=0;generation<=generation+1'b1;
      end
      release_walk<=release_walk+1'b1;
@@ -105,11 +125,11 @@ module jmr_system_menu (
      else if(keyboard_open && y>=296)begin
       if(x>=600 && y<313)begin keyboard_open<=0;release_mods<=1;release_walk<=0;hold_keys<=0;end
       else if(x>=420 && x<585 && y<313)begin hold_keys<=!hold_keys;if(hold_keys)release_walk<=0;end
-      else if(x>=12 && x<628 && y>=314 && y<479 && ((y-314)%33)<29 && count<126 && release_walk==127 && release_mods==0)begin
+      else if(key_hit[7] && count<126 && release_walk==127 && release_mods==0)begin
        integer index;
        logic [7:0] code,text;
-       index=((y-314)/33)*14+(x-12)/44;
-       code=key_code(index,shift_on);text=key_text(index,shift_on,caps_on);
+       index=integer'(key_hit[6:0]);
+       code=local_key_code(7'(index),shift_on);text=local_key_text(7'(index),shift_on,caps_on);
        if(index==42 || index==54 || index==55)begin
         put<=1;put_data<={8'd0,code,index==42?!shift_on:index==54?!ctrl_on:!alt_on};
         if(index==42)shift_on<=!shift_on;

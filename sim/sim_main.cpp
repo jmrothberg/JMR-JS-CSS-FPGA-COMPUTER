@@ -1702,6 +1702,12 @@ int main(int argc, char** argv) {
             std::cout << "OK" << std::endl;
             continue;
         }
+        if(line=="SOURCE?") {
+            auto* r=top->rootp;
+            std::cout<<"SOURCE name=";
+            for(unsigned i=0;i<r->jmr_js_core__DOT__u_cons__DOT__src_name_len && i<16;i++)std::cout<<char(r->jmr_js_core__DOT__u_cons__DOT__src_name[i]);
+            std::cout<<" bytes="<<unsigned(r->jmr_js_core__DOT__u_cons__DOT__src_len)<<std::endl;continue;
+        }
         if(line=="UISTATE?") {
             const unsigned s=top->system_status_o;
             std::cout<<"UISTATE dialog="<<(s&7)<<" catalog="<<((s>>3)&1)<<" action="<<((s>>4)&1)<<" error="<<((s>>5)&1)<<" menu="<<((s>>6)&15)<<std::endl;continue;

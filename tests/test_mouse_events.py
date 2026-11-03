@@ -68,7 +68,7 @@ def test_serialized_model_events_and_retained_object():
 
 def test_actual_rtl_event_properties_and_retention(tmp_path, monkeypatch):
     import runtime.sim_backend as module
-    exe = ROOT / 'sim/sim_build_desktop/jmr_js_sim_server'
+    exe = module._SYNTH
     if not exe.is_file():
         pytest.skip('desktop RTL simulator has not been built')
     monkeypatch.setattr(module, '_SYNTH', exe)

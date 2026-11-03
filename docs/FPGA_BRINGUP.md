@@ -570,3 +570,62 @@ JS events (pattern cite: BASIC sibling UART/`KEY` + PS/2 FIFO merge in
 - [FPGA_FIT.md](FPGA_FIT.md)
 - [SESSION_HANDOFF.md](SESSION_HANDOFF.md)
 - Isolated J5 line-out beep (not JS `board_flow`): [../tools/audio_beep_test/README.md](../tools/audio_beep_test/README.md)
+
+
+## GUI congestion policy — November 3, 2026
+
+The owner requests **no further game speed benchmarks** for this work. Keep the
+VM at33.333MHz (30ns period,5ns high) and fabric100MHz. Use static timing/resource
+checks and necessary functional GUI checks. Do not reduce game capacity or speed
+to fit the GUI, and do not change the proven J15mouse/JAkeyboard/JBstick wiring.
+
+The actual working reference is run73o's qualified checkpoint in
+`build/archive/run73-development-2026-11-02/release/qualified_post_route.dcp`.
+Its SHA256 is `1b473a2a203de4b86e34a5eb133cbd1b7661cf808059e4ab027de4766bfd0eaa`,
+matching the release manifest. Preserve compatible hard-macro locations from
+this reference rather than letting a small GUI revision reshuffle the computer.
+Validate names, primitive types, relevant settings and legal sites first.
+**Do not copy general SLICE placements or locations for changed blocks.**
+
+The A200T has 134,600 LUTs, 269,200 FFs, 11,550 SLICEM sites and 365 BRAM36 equivalents. The I
+placement used 355.5 BRAM and 10,237 SLICEM sites. Spare LUT/FF totals do not imply
+spare local routing or memory-capable slices. Seven-series packing also requires
+compatible clock/enable/reset signals within a slice; control sets increased
+from 1,929 in the working reference to 2,333 in I.
+
+Choose GUI resources deliberately: large state memories belong in BRAM when
+possible; small local tables/queues can use LUTRAM/SRL; short-lived local control
+can use FFs. Do not replace a large RAM with a scattered LUTRAM crossbar merely
+to save one block. The GUI's four inferred DSPs implement small constant address/
+scrollbar arithmetic; local carry/LUT logic is a tested alternative, leaving CPU
+math DSPs alone. An isolated attribute-only test removed all four. Its font-ROM
+BRAM trade saved only 101 LUTs in the two isolated modules, so do not assume that
+extra BRAM is worthwhile without full-context evidence.
+
+Resource evidence and validated location helpers are in
+`build/run74i_bram_labels/a200_resource_review/`. The controlled placement-only
+check is `build/run74j_stable_computer/`; it uses the existing compiled I netlist,
+376 matching RAM and 116 matching DSP locations, without resynthesizing CPU logic.
+J's placement-only check produced a new 103% eastward congestion hotspot and
+was stopped before routing. Matching individual macro settings did not prove
+that fixing their entire group would help: associated logic and DSP cascades
+also affect placement. Do not carry those blanket anchors into the next build.
+
+The measured I route failed at -0.629 ns setup. Its worst GUI paths are page
+caption formatting, the asynchronous mouse-queue read into VM dispatch, and
+menu-byte decoding into command-table enables. The next revision, run74k,
+snapshots caption digits with the existing frame state, registers the FIFO head
+with empty/last-word bypass, and locally predecodes metadata bytes. Menu
+throughput stays one byte per fabric clock. CPU/game code and clocks remain
+unchanged; no game-speed benchmarks are required. Focused old/new RTL checks
+passed for queue corner cases, parser output, and Finder pixel writes.
+
+These checks are not a timing-qualified release. All normal routed setup/hold/
+pulse/clock/route/DRC/READ_FIRST gates remain required before programming.
+
+Primary AMD guidance:
+- [UG949: Reusing Placement Results](https://docs.amd.com/r/en-US/ug949-vivado-design-methodology/Reusing-Placement-Results)
+- [UG474: CLB Resources](https://docs.amd.com/r/en-US/ug474_7Series_CLB/7-Series-FPGA-CLB-Resources)
+- [UG474: Distributed RAM Applications](https://docs.amd.com/r/en-US/ug474_7Series_CLB/Distributed-RAM-Applications)
+- [UG949: Reducing Control Sets](https://docs.amd.com/r/en-US/ug949-vivado-design-methodology/Reducing-Control-Sets)
+- [UG901: USE_DSP](https://docs.amd.com/r/en-US/ug901-vivado-synthesis/USE_DSP)

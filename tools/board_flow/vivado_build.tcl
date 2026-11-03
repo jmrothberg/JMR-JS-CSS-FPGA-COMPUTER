@@ -113,7 +113,7 @@ puts "INFO: synth threads=$SYNTH_THREADS impl threads=$IMPL_THREADS synth_jobs=$
 # Font ROM next to scanout AND next to the VM ($readmemh is relative to .sv)
 file copy -force $ROOT/vectors/font_rom.hex $ROOT/rtl/video/font_rom.hex
 file copy -force $ROOT/vectors/font_rom.hex $ROOT/rtl/engines/font_rom.hex
-foreach desktop_mem {desktop_font.hex desktop_advance.hex desktop_labels.hex} {
+foreach desktop_mem {desktop_font.hex desktop_advance.hex desktop_labels.hex system_keys.hex system_labels.hex system_about.hex classic_records.hex classic_static.hex} {
     file copy -force $ROOT/vectors/$desktop_mem $ROOT/rtl/engines/$desktop_mem
     file copy -force $ROOT/vectors/$desktop_mem $ROOT/rtl/video/$desktop_mem
 }
@@ -157,12 +157,20 @@ proc jmr_add_sources {ROOT} {
       $ROOT/vectors/desktop_font.hex \
       $ROOT/vectors/desktop_advance.hex \
       $ROOT/vectors/desktop_labels.hex \
+      $ROOT/vectors/system_keys.hex \
+      $ROOT/vectors/system_labels.hex \
+      $ROOT/vectors/system_about.hex \
+      $ROOT/vectors/classic_records.hex \
+      $ROOT/vectors/classic_static.hex \
       $ROOT/rtl/engines/jmr_keyboard_fifo.sv \
       $ROOT/rtl/video/jmr_mouse_overlay.sv \
       $ROOT/rtl/engines/jmr_system_menu_pkg.sv \
       $ROOT/rtl/engines/jmr_system_menu.sv \
       $ROOT/rtl/engines/jmr_classic_ui_pkg.sv \
       $ROOT/rtl/engines/jmr_classic_ui.sv \
+      $ROOT/rtl/engines/jmr_classic_labels.sv \
+      $ROOT/rtl/engines/jmr_classic_static_labels.sv \
+      $ROOT/rtl/engines/jmr_ui_snapshot.sv \
       $ROOT/rtl/engines/jmr_system_actions.sv \
       $ROOT/rtl/engines/jmr_system_documents.sv \
       $ROOT/rtl/video/jmr_classic_overlay.sv \
@@ -205,8 +213,9 @@ proc jmr_add_sources {ROOT} {
     jmr_ensure_file $f
   }
   # NEW: jmr_ps2_host removed from build — BASIC T100 is RX-only (file kept)
-  # LED tests (tools/pmod_input_test, hid_led_blink) are a different
-  # project — do not add those paths to this JS board file list.
+  # LED tests (tools/pmod_input_test, hid_led_blink) and the HDMI mouse
+  # probe (tools/mouse_probe) are different projects — do not add those
+  # paths to this JS board file list.
   if {[llength [get_files -quiet -of_objects [get_filesets constrs_1] \
       $ROOT/constraints/nexys_video.xdc]] == 0} {
     add_files -fileset constrs_1 $ROOT/constraints/nexys_video.xdc
@@ -396,9 +405,9 @@ proc jmr_rtl_newer_than {dcp} {
 # older than the resulting DCP, but was never ingested into that DCP.
 proc jmr_source_fingerprint {} {
   global ROOT JMR_DEFINES
-  set paths [exec find $ROOT/rtl $ROOT/constraints $ROOT/third_party/digilent_rgb2dvi/src \
+  set paths [exec find $ROOT/rtl $ROOT/vectors $ROOT/constraints $ROOT/third_party/digilent_rgb2dvi/src \
     $ROOT/tools/board_flow/mig_a.prj \
-    ( -name {*.sv} -o -name {*.vhd} -o -name {*.xdc} -o -name mig_a.prj ) -type f]
+    ( -name {*.sv} -o -name {*.hex} -o -name {*.vhd} -o -name {*.xdc} -o -name mig_a.prj ) -type f]
   set files [lsort [split [string trim $paths] "\n"]]
   return "[exec sha256sum {*}$files]\ndefines=$JMR_DEFINES"
 }
@@ -581,6 +590,11 @@ catch {report_timing -max_paths 100 -unique_pins -file $OUT/timing_dist.rpt}
 set wns [lindex [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -setup]] 0]
 set whs [lindex [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -hold]] 0]
 puts "TIMING WNS=$wns WHS=$whs"
+report_timing_summary -report_unconstrained -file $OUT/timing_final.rpt
+report_drc -file $OUT/drc_final.rpt
+report_cdc -details -file $OUT/cdc_final.rpt
+set drc_errors [get_drc_violations -quiet -filter {SEVERITY == Error}]
+if {[llength $drc_errors]} { error "Final DRC has errors: $drc_errors" }
 jmr_native_operand_gate
 if {$wns eq "" || $wns < 0} {
   puts "ERROR: timing not met (WNS=$wns) — refusing to publish .bit"

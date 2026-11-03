@@ -26,9 +26,11 @@ module jmr_mouse_events (
     logic enqueue;
     logic [47:0] enqueue_data;
     logic pop_q;
+    // Registered first word: queue RAM selection no longer reaches VM dispatch.
+    logic [47:0] head_q;
     wire dequeue = event_pop && !pop_q && event_valid;
     assign event_valid = count != 0;
-    assign event_data = fifo[rp];
+    assign event_data = head_q;
     assign sample_ready = phase == 0 && count <= 58;
     always_comb begin
         enqueue = 0;
@@ -61,11 +63,16 @@ module jmr_mouse_events (
         if (enqueue) fifo[wp] <= enqueue_data;
     always_ff @(posedge clk) begin
         if (!rst_n) begin
+            head_q <= 0;
             wp <= 0; rp <= 0; count <= 0; phase <= 0; pop_q <= 0;
             old_x <= 320; old_y <= 240; old_buttons <= 0;
             x <= 320; y <= 240; buttons <= 0; changed <= 0; dx <= 0; dy <= 0;
         end else begin
             pop_q <= event_pop;
+            if (dequeue) head_q <= fifo[6'(rp + 6'd1)];
+            // Bypass the RAM when filling an empty queue or replacing its last word.
+            if (enqueue && (count == 0 || (dequeue && count == 1)))
+                head_q <= enqueue_data;
             case ({enqueue,dequeue})
                 2'b10: count <= count + 1'b1;
                 2'b01: count <= count - 1'b1;

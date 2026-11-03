@@ -44,6 +44,7 @@ BIT  := $(OUT)/jmr_nexys_video.bit
 FLASH_BIT ?= $(ROOT)/releases/current/fpga.bit
 VENV := $(ROOT)/.venv
 
+UI_ROM_SRCS := $(wildcard $(ROOT)/vectors/*.hex)
 RTL_SRCS := $(shell find $(RTL) -name '*.sv' -o -name '*.vhd' 2>/dev/null)
 DVI_SRCS := $(shell find $(ROOT)/third_party/digilent_rgb2dvi/src -name '*.vhd' 2>/dev/null)
 
@@ -68,7 +69,7 @@ ifndef VIVADO
 $(BIT):
 	@echo "Set VIVADO=…  (source $(ROOT)/scripts/vivado_env.sh first)"; exit 1
 else
-$(BIT): $(RTL_SRCS) $(DVI_SRCS) $(ROOT)/constraints/nexys_video.xdc $(ROOT)/tools/board_flow/vivado_build.tcl $(ROOT)/tools/board_flow/build_gates.tcl $(ROOT)/tools/board_flow/mig_a.prj | $(OUT)
+$(BIT): $(RTL_SRCS) $(UI_ROM_SRCS) $(DVI_SRCS) $(ROOT)/constraints/nexys_video.xdc $(ROOT)/tools/board_flow/vivado_build.tcl $(ROOT)/tools/board_flow/build_gates.tcl $(ROOT)/tools/board_flow/mig_a.prj | $(OUT)
 	$(VIVADO) -mode batch -source $(ROOT)/tools/board_flow/vivado_build.tcl \
 		-tclargs $(ROOT) $(OUT) $(if $(filter 1,$(FRESH)),fresh)
 endif

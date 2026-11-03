@@ -3,6 +3,13 @@
 
 set ROOT [lindex $argv 0]
 set OUT  [lindex $argv 1]
+# Optional third arg "ja_mouse": wired USB keyboard on J15, PS/2 mouse on JA.
+# Default writes the proven J15-mouse / Pmod-keyboard bit and does not
+# overwrite a ja_mouse bitstream.
+set MODE ""
+if {[llength $argv] >= 3} {
+  set MODE [lindex $argv 2]
+}
 file mkdir $OUT
 
 if {[llength [get_parts -quiet xc7a200tsbg484-1]] == 0} {
@@ -31,7 +38,13 @@ add_files [list \
 add_files -fileset constrs_1 $ROOT/tools/mouse_probe/mouse_probe.xdc
 
 set_property top top_mouse_probe [current_fileset]
-set_property verilog_define {SYNTHESIS=1} [current_fileset]
+set DEFINES {SYNTHESIS=1}
+set BITNAME mouse_probe
+if {$MODE eq "ja_mouse"} {
+  lappend DEFINES PROBE_JA_MOUSE=1
+  set BITNAME mouse_probe_J15kbd_JAmouse
+}
+set_property verilog_define $DEFINES [current_fileset]
 set_property STEPS.WRITE_BITSTREAM.ARGS.BIN_FILE true [get_runs impl_1]
 set_property STEPS.SYNTH_DESIGN.ARGS.FLATTEN_HIERARCHY none [get_runs synth_1]
 
@@ -59,12 +72,12 @@ if {[get_property PROGRESS [get_runs impl_1]] != "100%" ||
 
 file copy -force \
   [get_property DIRECTORY [get_runs impl_1]]/top_mouse_probe.bit \
-  $OUT/mouse_probe.bit
+  $OUT/$BITNAME.bit
 if {[file exists [get_property DIRECTORY [get_runs impl_1]]/top_mouse_probe.bin]} {
   file copy -force \
     [get_property DIRECTORY [get_runs impl_1]]/top_mouse_probe.bin \
-    $OUT/mouse_probe.bin
+    $OUT/$BITNAME.bin
 }
 
-puts "OK wrote $OUT/mouse_probe.bit"
+puts "OK wrote $OUT/$BITNAME.bit"
 exit 0

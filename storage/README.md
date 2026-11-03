@@ -9,7 +9,7 @@ file tells you which host files become which card files, and which ones
 must stay in this folder.
 
 The shared Mac-style menus are installed in the main `gui_jmr_js.py` and
-`card.img` for **Python testing**. Launch the GUI normally. All 19 games/demos
+`card.img` for **Python and real RTL testing**. Launch the GUI normally. All 19 games/demos
 now use File → Quit, application-specific About text headed JMR Enterprises,
 and the shared mouse keyboard. Simpler programs have Game → Restart. The system
 viewport keeps their entire existing picture and maps mouse coordinates back
@@ -18,8 +18,9 @@ into the game. No additional sprite images were added. `2DFANTA2.HTML`
 `MENUEX.HTML` is the small working conversion example. The common API and agent
 porting instructions are in [SYSTEM_APPLICATIONS.md](../docs/SYSTEM_APPLICATIONS.md),
 also `MENUS.MD` on the updated disk. The previous disk and rollback instructions
-are under `build/system_tools/`. The released bitstream is unchanged; get Python
-right before porting this menu interface to RTL. `../run_python_system_preview.sh`
+are under `build/system_tools/`. The normal GUI starts in Python; F9 selects the updated native RTL.
+The board-tested bitstream is preserved while the new run74 hardware build
+is qualified. See `../build/rtl_system_parity/README.md` for checks. `../run_python_system_preview.sh`
 still provides an optional separate disk for isolated Python tests.
 
 Words: [README.md — Words used](../README.md#words-used-in-this-project).

@@ -1473,7 +1473,7 @@ module jmr_js_vm_exec64 (
         end
     end
     logic [52:0]  fpm_ma_n, fpm_mb_n;
-    logic         nwm_busy;
+    logic         nwm_busy, nwm_pack;
     logic [5:0]   nwm_cnt;
     logic [105:0] nwm_acc, nwm_mcand;
     logic [52:0]  nwm_mplier;
@@ -1517,6 +1517,13 @@ module jmr_js_vm_exec64 (
     logic [1:0] tmr_arm_q, tmr_arm_n; // #66b: 2-beat settle per slot
     logic tmr_found_q, tmr_found_n;
     logic [6:0] tmr_slot_q, tmr_slot_n;
+    // The existing timer-slot walk gives the millisecond conversion many
+    // beats to settle. Register it there, before the due-frame addition.
+    logic signed [31:0] timer_ms_q, timer_ms_n, timer_frames_q, timer_frames_n;
+    always_ff @(posedge clk)begin
+        if(!rst_n)begin timer_ms_q<=0;timer_frames_q<=32'sd1;end
+        else if(enable && !leave_hold)begin timer_ms_q<=timer_ms_n;timer_frames_q<=timer_frames_n;end
+    end
     logic [11:0] clr_i;
     logic clr_busy;
     localparam int CLR_LIM = MAX_ARR;
@@ -2172,7 +2179,7 @@ module jmr_js_vm_exec64 (
             cm_mip <= 16'hFFFF;
             cm_key <= 16'd0;
             lsv_scan <= 1'b0; lsv_op <= 2'd0;
-            fpm_busy <= 1'b0; fpm_req <= 1'b0; nwm_busy <= 1'b0;
+            fpm_busy <= 1'b0; fpm_req <= 1'b0; nwm_busy <= 1'b0; nwm_pack <= 1'b0;
             now_v64_q <= 64'd0; nwm_vf_q <= 32'hFFFFFFFF;
             lsv_ev <= 64'd0; lsv_fn <= 64'd0; lsv_push <= 64'd0; lsv_base <= 12'd0;
             cm_cls <= 16'd0;
@@ -2247,14 +2254,18 @@ module jmr_js_vm_exec64 (
                 end
                 fpm_req <= fpm_req_n;
                 if (nwm_busy) begin
-                    if (nwm_mplier[0]) nwm_acc <= nwm_acc + nwm_mcand;
-                    nwm_mcand <= nwm_mcand << 1;
-                    nwm_mplier <= nwm_mplier >> 1;
-                    nwm_cnt <= nwm_cnt + 6'd1;
-                    if (nwm_cnt == 6'd52) begin
+                    if (nwm_pack) begin
+                        // The final 106-bit addition is already in nwm_acc.
+                        // Round/pack on the next beat; consumers still hold busy.
+                        now_v64_q <= v64_mul_pack(nwm_sign, nwm_ea, nwm_eb, nwm_acc);
                         nwm_busy <= 1'b0;
-                        now_v64_q <= v64_mul_pack(nwm_sign, nwm_ea, nwm_eb,
-                            nwm_mplier[0] ? (nwm_acc + nwm_mcand) : nwm_acc);
+                        nwm_pack <= 1'b0;
+                    end else begin
+                        if (nwm_mplier[0]) nwm_acc <= nwm_acc + nwm_mcand;
+                        nwm_mcand <= nwm_mcand << 1;
+                        nwm_mplier <= nwm_mplier >> 1;
+                        nwm_cnt <= nwm_cnt + 6'd1;
+                        if (nwm_cnt == 6'd52) nwm_pack <= 1'b1;
                     end
                 end else if (vframe_no != nwm_vf_q) begin
                     // frame clock product: v64_int32_number(vframe_no) x 16.666...
@@ -2266,6 +2277,7 @@ module jmr_js_vm_exec64 (
                     end else begin
                         nwm_busy <= 1'b1;
                         nwm_cnt <= 6'd0;
+                        nwm_pack <= 1'b0;
                         nwm_acc <= 106'd0;
                         nwm_mcand <= 106'({(nva[62:52] != 0), nva[51:0]});
                         nwm_mplier <= {1'b1, 52'h0aaaaaaaaaab};
@@ -3041,7 +3053,7 @@ module jmr_js_vm_exec64 (
     // Frame clock (performance.now / Date.now / getTime): all three
     // opcode branches compute the SAME product, so one shared instance
     // serves them — this removes two full 53x53 comb multipliers.
-    // now_v64 comes from the nwm engine (now_v64_q), recomputed over 53
+    // now_v64 comes from the nwm engine (now_v64_q), recomputed over 54
     // beats whenever vframe_no changes; consumers hold on nwm_busy.
 
     // Comb pack/normalize/round on a REGISTERED 106-bit product — the
@@ -3749,6 +3761,8 @@ module jmr_js_vm_exec64 (
         tmr_i_n = 7'd0;
         tmr_found_n = 1'b0;
         tmr_slot_n = 7'd0;
+        timer_frames_n = timer_frames_q;
+        timer_ms_n = timer_ms_q;
         name_blen_we = 1'b0;
         name_blen_waddr = 10'd0;
         name_blen_wdata = 16'd0;
@@ -4803,8 +4817,8 @@ module jmr_js_vm_exec64 (
                                                     call_arg_q[0][43:32];
                                             if (argc > 1)
                                                 ms = $signed(v64_to_uint32(call_arg_q[1]));
-                                            if (ms > 0)
-                                                frames = (ms * 32'sd3 + 32'sd25) /
+                                            if (timer_ms_q > 0)
+                                                frames = (timer_ms_q * 32'sd3 + 32'sd25) /
                                                          32'sd50;
                                             if (frames < 1)
                                                 frames = 1;
@@ -4821,6 +4835,8 @@ module jmr_js_vm_exec64 (
                                                 running_n = 1'b0;
                                                 state_n = S_DONE;
                                             end else if (tmr_i_q < 7'd64) begin
+                                                timer_ms_n = ms;
+                                                timer_frames_n = frames;
                                                 // #66b: the registered raddr
                                                 // export + registered rdata
                                                 // lag the cursor by TWO
@@ -4864,10 +4880,10 @@ module jmr_js_vm_exec64 (
                                                 vtimer_waddr = tmr_slot_q[5:0];
                                                 vtimer_valid_wdata = 1'b1;
                                                 vtimer_due_wdata =
-                                                    $signed(vframe_no) + frames;
+                                                    $signed(vframe_no) + timer_frames_q;
                                                 vtimer_id_wdata = $signed(vtimer_seq);
                                                 vtimer_period_wdata =
-                                                    (nid == 8'd29) ? 64'(frames) : -64'sd1;
+                                                    (nid == 8'd29) ? 64'(timer_frames_q) : -64'sd1;
                                                 vtimer_fn_wdata = call_arg_q[0];
                                                 vtimer_n_n = vtimer_n + 7'd1;
                                                 vtimer_seq_n = vtimer_seq + 32'd1;
@@ -6254,9 +6270,10 @@ module jmr_js_vm_exec64 (
                                         if(system_field(opw[23:8])>=5)begin
                                             // Parent reads the one authoritative name RAM using
                                             // its registered port. No string/heap copy in exec.
-                                            hp_key_n=`VST_AT(vsp-12'd1)[15:0];
-                                            hp_slot_n={2'd0,system_field(opw[23:8])};
-                                            state_n=S_UI_PROP;
+                                            if(`VST_AT(vsp-12'd1)[63:48]==16'h7ff9 && `VST_AT(vsp-12'd1)[47:44]==4'd4)begin
+                                                hp_key_n=`VST_AT(vsp-12'd1)[15:0];
+                                                hp_slot_n={2'd0,system_field(opw[23:8])};state_n=S_UI_PROP;
+                                            end else begin machine_fault_n=1;fault_code_n=4;fault_site_n=16'd6700;running_n=0;state_n=S_DONE;end
                                         end else begin
                                             sysw_we=1;sysw_field=3'(system_field(opw[23:8]));
                                             sysw_value=(`VST_AT(vsp-12'd1)[63:48]==16'h7ff9 &&

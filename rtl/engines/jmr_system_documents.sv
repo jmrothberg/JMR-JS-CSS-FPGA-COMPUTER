@@ -5,7 +5,7 @@ module jmr_system_documents (
  input logic [31:0] window_state,
  input logic [127:0] source_name,
  input logic [4:0] source_len,
- input logic unnamed,kernel_busy,error_pulse,
+ input logic unnamed,kernel_busy,error_pulse,descriptor_error,
  input logic request_stb,
  input logic [3:0] request_action,
  input logic shortcut_save,
@@ -39,7 +39,9 @@ module jmr_system_documents (
  input logic [7:0] catalog_data,
  output logic label_valid,
  output logic [5:0] label_row,
- output logic [1727:0] label_data,
+ output logic [26:0] label_data,
+ output logic [5:0] label_col,
+ output logic label_commit,
  input logic label_ready
 );
  import jmr_classic_ui_pkg::*;
@@ -65,13 +67,17 @@ module jmr_system_documents (
   file_rdata<=filenames[file_raddr];
  end
  logic [3:0] op_phase;
+ // Filename normalization runs a byte per clock. Trimming, case conversion,
+ // suffix handling and validation must not form one long 100MHz logic path.
+ logic [3:0] norm_index,norm_first,norm_last,norm_dot;
+ logic norm_found,norm_valid;
+ logic [39:0] norm_tail;
  logic [8:0] verify_index;
  logic [2:0] build_phase,build_row;
  logic build_list;
  logic [95:0] build_name;
  logic [3:0] build_len,build_char;
  logic [9:0] build_x;
- logic [1727:0] build_buffer;
  wire editable=window_state[7:0]==1 || window_state[7:0]==5;
  wire dirty=editable && window_state[24];
  assign consume_keys=dialog!=0;
@@ -81,29 +87,11 @@ module jmr_system_documents (
  function automatic logic [7:0] upper(input logic [7:0] c);
   upper=(c>=97 && c<=122)?c-32:c;
  endfunction
- function automatic logic [3:0] normalized_len(input logic [95:0] name,input logic [3:0] n);
-  normalized_len=(n>=5 && {upper(name[(n-4)*8+:8]),upper(name[(n-3)*8+:8]),upper(name[(n-2)*8+:8]),upper(name[(n-1)*8+:8])}==32'h48544d4c && name[(n-5)*8+:8]==46)?n-1'b1:n;
- endfunction
- function automatic logic [95:0] normalized_name(input logic [95:0] name,input logic [3:0] n);
-  logic [95:0] result;
-  begin
-   result=0;
-   for(integer i=0;i<12;i=i+1)if(i<normalized_len(name,n))result[i*8+:8]=upper(name[i*8+:8]);
-   normalized_name=result;
-  end
- endfunction
- function automatic logic valid_name(input logic [95:0] name,input logic [3:0] n);
-  integer dotpos;
-  logic valid;
-  begin
-   dotpos=-1;valid=n!=0;
-   for(integer i=0;i<12;i=i+1)if(i<n)begin
-    if(name[i*8+:8]==46)begin if(dotpos!=-1)valid=0;dotpos=i;end
-    else if(!(name[i*8+:8]>=65 && name[i*8+:8]<=90) && !(name[i*8+:8]>=48 && name[i*8+:8]<=57) && name[i*8+:8]!=95 && name[i*8+:8]!=45)valid=0;
-   end
-   if(dotpos==0 || (dotpos<0 && n>8) || dotpos>8 || (dotpos>=0 && integer'(n)-dotpos-1>3))valid=0;
-   valid_name=valid;
-  end
+ function automatic logic name_char(input logic [7:0] ch);
+  case(ch)
+   36,37,39,45,95,64,126,96,33,40,41,123,125,94,35,38:name_char=1;
+   default:name_char=(ch>=65 && ch<=90) || (ch>=48 && ch<=57);
+  endcase
  endfunction
  task automatic restore_keyboard;
   begin
@@ -136,9 +124,10 @@ module jmr_system_documents (
  endtask
  task automatic save_name_request;
   begin
-   candidate_name<=normalized_name(edit_name,name_len);candidate_len<=normalized_len(edit_name,name_len);
-   if(!valid_name(normalized_name(edit_name,name_len),normalized_len(edit_name,name_len)))begin message_id<=163;generation<=generation+1'b1;end
-   else begin verify_index<=0;op_phase<=4;end
+   if(op_phase==0)begin
+    candidate_name<=0;candidate_len<=0;norm_index<=0;norm_first<=0;norm_last<=0;
+    norm_found<=0;norm_valid<=0;norm_tail<=0;norm_dot<=15;op_phase<=7;
+   end
   end
  endtask
  task automatic send_save_name;
@@ -163,15 +152,16 @@ module jmr_system_documents (
    old_buttons<=0;old_notice<=0;name_dirty<=0;list_dirty<=0;name_len<=0;name_selected<=0;message_id<=0;
    catalog_go<=0;catalog_active<=0;cat_phase<=0;cat_index<=0;cat_char<=0;cat_name_len<=0;cat_name<=0;cat_tail<=0;cat_all<=0;
    filtered_count<=0;raw_count<=0;file_count<=0;file_top<=0;selected<=511;file_we<=0;file_waddr<=0;file_wdata<=0;file_raddr<=0;
-   op_phase<=0;verify_index<=0;build_phase<=0;build_row<=0;build_list<=0;build_name<=0;build_len<=0;build_char<=0;build_x<=0;build_buffer<=0;
-   label_valid<=0;label_row<=0;label_data<=0;
+   norm_index<=0;norm_first<=0;norm_last<=0;norm_dot<=15;norm_found<=0;norm_valid<=0;norm_tail<=0;
+   op_phase<=0;verify_index<=0;build_phase<=0;build_row<=0;build_list<=0;build_name<=0;build_len<=0;build_char<=0;build_x<=0;
+   label_valid<=0;label_row<=0;label_data<=0;label_col<=0;label_commit<=0;
   end else begin
    command_stb<=0;keyboard_set_stb<=0;catalog_go<=0;file_we<=0;
    if(label_valid && label_ready)begin label_valid<=0;generation<=generation+1'b1;end
    if(app_clear)begin dialog<=0;after_valid<=0;old_buttons<=0;op_phase<=0;generation<=generation+1'b1;end
-   if(request_stb && !kernel_busy)request(request_action);
+   if(request_stb && (!kernel_busy || (window_state[7:0]==3 && request_action==0)))request(request_action);
    if(shortcut_save && dialog==0 && !kernel_busy)request(3);
-   if(error_pulse)begin dialog<=D_MESSAGE;message_id<=164;generation<=generation+1'b1;end
+   if(error_pulse)begin op_phase<=0;dialog<=D_MESSAGE;message_id<=descriptor_error?166:164;generation<=generation+1'b1;end
    old_notice<=window_state[29:28];
    if(editable && window_state[29:28]!=0 && old_notice!=window_state[29:28])begin
     dialog<=D_MESSAGE;message_id<=window_state[29:28]==1?161:162;generation<=generation+1'b1;
@@ -207,7 +197,7 @@ module jmr_system_documents (
    if(!label_valid && (op_phase==0 || build_phase!=0))case(build_phase)
     0:begin
      if(name_dirty && (dialog==D_NAME || dialog==D_REPLACE))begin
-      name_dirty<=0;build_list<=0;build_name<=edit_name;build_len<=name_len;build_char<=0;build_x<=0;build_buffer<=0;build_phase<=3;
+      name_dirty<=0;build_list<=0;build_name<=edit_name;build_len<=name_len;build_char<=0;build_x<=0;build_phase<=3;
      end else if(list_dirty && dialog==D_OPEN && cat_phase==0)begin
       list_dirty<=0;build_list<=1;build_row<=0;file_raddr<=file_top;build_phase<=1;
      end
@@ -215,25 +205,27 @@ module jmr_system_documents (
     1:build_phase<=2;
     2:begin
      build_name<=file_rdata[95:0];build_len<=({1'b0,file_top}+{6'd0,build_row})<file_count?file_rdata[99:96]:4'd0;
-     build_char<=0;build_x<=0;build_buffer<=0;build_phase<=3;
+     build_char<=0;build_x<=0;build_phase<=3;
     end
     3:begin
      logic [7:0] ch;
-     if(build_char>=build_len)begin
-      label_valid<=1;label_row<=build_list?6'd6+{3'd0,build_row}:6'd4;label_data<=build_buffer;build_phase<=4;
-     end else begin
-      ch=build_name[build_char*8+:8];build_buffer[build_char*27+:27]<={10'(build_x+classic_advance(ch)),build_x,ch[6:0]};
-      build_x<=build_x+classic_advance(ch);build_char<=build_char+1'b1;
+     if(!label_valid)begin
+      label_valid<=1;label_row<=build_list?6'd6+{3'd0,build_row}:6'd4;label_col<={2'd0,build_char};
+      if(build_char>=build_len)begin label_commit<=1;label_data<={23'd0,build_len};build_phase<=4;end
+      else begin
+       ch=build_name[build_char*8+:8];label_commit<=0;label_data<={10'(build_x+classic_advance(ch)),build_x,ch[6:0]};
+       build_x<=build_x+classic_advance(ch);build_char<=build_char+1'b1;
+      end
      end
     end
-    4:begin
+    4:if(!label_valid)begin
      if(build_list && build_row<6)begin build_row<=build_row+1'b1;file_raddr<=file_top+{5'd0,build_row}+1'b1;build_phase<=1;end
      else build_phase<=0;
     end
     default:build_phase<=0;
    endcase
    // Open a selected real file, or check the Save As target for overwrite.
-   case(op_phase)
+   if(!app_clear && !error_pulse)case(op_phase)
     0:;
     1:if(build_phase==0 && !label_valid)begin file_raddr<=selected[7:0];op_phase<=2;end
     2:op_phase<=3;
@@ -250,6 +242,49 @@ module jmr_system_documents (
     6:begin
      if(file_rdata[95:0]==candidate_name && file_rdata[99:96]==candidate_len)begin dialog<=D_REPLACE;op_phase<=0;generation<=generation+1'b1;end
      else begin verify_index<=verify_index+1'b1;op_phase<=4;end
+    end
+    7:begin
+     // Find the first and last non-space bytes in the original input.
+     if(norm_index<name_len && edit_name[norm_index*8+:8]!=8'd32)begin
+      if(!norm_found)begin norm_first<=norm_index;norm_found<=1;end
+      norm_last<=norm_index+1'b1;
+     end
+     if(norm_index==11)begin norm_index<=0;op_phase<=8;end
+     else norm_index<=norm_index+1'b1;
+    end
+    8:begin candidate_len<=norm_found?norm_last-norm_first:4'd0;norm_index<=0;op_phase<=9;end
+    9:begin
+     logic [7:0] ch;
+     ch=upper(edit_name[4'(norm_first+norm_index)*8+:8]);
+     if(norm_index<candidate_len)begin
+      candidate_name[norm_index*8+:8]<=ch;norm_tail<={norm_tail[31:0],ch};
+      if(norm_index+1'b1>=candidate_len)op_phase<=10;
+      else norm_index<=norm_index+1'b1;
+     end else op_phase<=10;
+    end
+    10:begin
+     // FAT short names use .HTM; the rolling tail avoids a variable wide mux.
+     if(candidate_len>=5 && norm_tail==40'h2e48544d4c)begin
+      candidate_name[4'(candidate_len-4'd1)*8+:8]<=0;candidate_len<=candidate_len-1'b1;
+     end
+     norm_index<=0;norm_dot<=15;norm_valid<=candidate_len!=0;op_phase<=11;
+    end
+    11:begin
+     logic [7:0] ch;
+     ch=candidate_name[norm_index*8+:8];
+     if(norm_index<candidate_len)begin
+      if(ch==8'd46)begin if(norm_dot!=15)norm_valid<=0;norm_dot<=norm_index;end
+      else if(!name_char(ch))norm_valid<=0;
+     end
+     if(norm_index==11)op_phase<=12;else norm_index<=norm_index+1'b1;
+    end
+    12:begin
+     if(!norm_valid || candidate_len==0 || norm_dot==0 ||
+        (norm_dot==15 && candidate_len>8) ||
+        (norm_dot!=15 && (norm_dot>8 || {1'b0,candidate_len}=={1'b0,norm_dot}+5'd1 ||
+         ({1'b0,candidate_len}-{1'b0,norm_dot}-5'd1)>5'd3)))begin
+      message_id<=163;generation<=generation+1'b1;op_phase<=0;
+     end else begin verify_index<=0;op_phase<=4;end
     end
     default:op_phase<=0;
    endcase
@@ -270,7 +305,7 @@ module jmr_system_documents (
       end
       D_NAME:begin
        if(x>=376 && x<486 && y>=234 && y<260)save_name_request();
-       else if(x>=250 && x<360 && y>=234 && y<260)begin dialog<=0;after_valid<=0;restore_keyboard();end
+       else if(x>=250 && x<360 && y>=234 && y<260)begin dialog<=0;after_valid<=0;op_phase<=0;restore_keyboard();end
        else if(x>=152 && x<487 && y>=158 && y<183)name_selected<=1;
       end
       D_CHANGES:begin
@@ -280,7 +315,7 @@ module jmr_system_documents (
       end
       D_REPLACE:begin
        if(x>=376 && x<486 && y>=234 && y<260)send_save_name();
-       else if(x>=250 && x<360 && y>=234 && y<260)begin dialog<=0;after_valid<=0;restore_keyboard();end
+       else if(x>=250 && x<360 && y>=234 && y<260)begin dialog<=0;after_valid<=0;op_phase<=0;restore_keyboard();end
       end
       D_MESSAGE:if(x>=270 && x<370 && y>=234 && y<260)dialog<=0;
       default:;

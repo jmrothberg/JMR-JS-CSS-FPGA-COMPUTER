@@ -388,7 +388,7 @@ class Machine:
             self.source_name = self.storage.resolve_name(rest)
         except FileNotFoundError:
             return ["?FN FILE NOT FOUND"]
-        self.source_lines = raw.splitlines()
+        self.source_lines = raw.splitlines() or ['']
         # A new LOAD retires the previously compiled image. Only the frame path
         # reads these, and it is gated on `running`, so nothing needs them
         # between LOAD and RUN — but the Architecture Monitor was showing the
@@ -396,7 +396,7 @@ class Machine:
         self._html_chunk = None
         self._hw_vm = None
         self._arch_phase = "loaded"
-        return [f"LOADED {self.source_name} ({len(self.source_lines)} LINES)"]
+        return [f"LOADED {self.source_name} ({len(raw.splitlines())} LINES)"]
 
     def _cmd_save(self, text: str) -> List[str]:
         rest = self._parse_filename(text[4:])

@@ -30,3 +30,19 @@ sim/sim_build_*/
 # Vivado writes these when it cannot open its normal journal — pure noise
 vivado_*.backup.jou
 vivado_*.backup.log
+
+# Vivado stages these from the canonical vectors/ ROMs beside the RTL sources.
+/rtl/engines/desktop_*.hex
+/rtl/video/desktop_*.hex
+
+# Generated UI ROM staging copies; authoritative images live in vectors/.
+/rtl/engines/system_*.hex
+/rtl/video/system_*.hex
+/rtl/engines/classic_records.hex
+/rtl/video/classic_records.hex
+
+# Canonical UI ROMs are in vectors/; these are staged runtime copies.
+/rtl/engines/classic_static.hex
+/rtl/video/classic_static.hex
+/sim/classic_*.hex
+/sim/system_*.hex

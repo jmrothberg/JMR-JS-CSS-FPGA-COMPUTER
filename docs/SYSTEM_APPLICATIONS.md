@@ -1,6 +1,6 @@
 # Shared Mac-style application interface
 
-Status: **installed in the main Python GUI and `card.img`**, November 2, 2026.
+Status: **installed in the main Python GUI, native RTL simulator and `card.img`**, November 2, 2026.
 Launch normally from the project folder:
 
 ```sh
@@ -10,8 +10,11 @@ Launch normally from the project folder:
 The default GUI starts in Python and uses `card.img`; saves go to that disk.
 A copy of the disk from before this update and the publication record are under
 `build/system_tools/` (see its README). The released FPGA bitstream is unchanged.
-The new menu interface is Python-first: F9/RTL and board support have not been
-qualified for these new application menus. Approve Python behavior first.
+The interface has passed Python and native RTL/F9 checks. The RTL implements
+menus, shared windows, file dialogs, document saves, Utility catalog staging
+and compiler lifecycle in the same synthesizable hardware used for the board.
+The new run74 bitstream must pass routing/timing gates and then a board test.
+The board-tested release remains `releases/current/fpga.bit`.
 
 `./run_python_system_preview.sh` remains an optional isolated Python-only preview
 using `build/system_tools/python_card.img`, with its own saves and F9 disabled.

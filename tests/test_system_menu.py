@@ -48,7 +48,8 @@ def test_python_backend_types_at_ready_with_mouse_only():
     assert 'DIR LOAD' in backend.screen_text()
 
 
-SOURCE='''var entered=0;var lastCode=0;var clicks=0;
+SOURCE='''var c=document.querySelector("canvas").getContext("2d");c.systemWindow=8;c.systemAbout="Keyboard test|Test native keyboard input.";
+var entered=0;var lastCode=0;var clicks=0;
 addEventListener("keydown",function(e){if(e.charCode>=32)entered=entered*131+e.charCode;else lastCode=e.keyCode;});
 addEventListener("mousedown",function(e){clicks=clicks+1;});
 function tick(){requestAnimationFrame(tick);}requestAnimationFrame(tick);'''
@@ -56,13 +57,14 @@ function tick(){requestAnimationFrame(tick);}requestAnimationFrame(tick);'''
 
 def test_real_rtl_keyboard_pixels_text_and_game_quit(tmp_path,monkeypatch):
     import runtime.sim_backend as module
-    exe=ROOT/'sim/sim_build_desktop/jmr_js_sim_server'
+    exe=module._SYNTH
     if not exe.is_file():pytest.skip('desktop RTL not built')
     monkeypatch.setattr(module,'_SYNTH',exe)
     monkeypatch.delenv('JMR_SIM_HOST',raising=False)
     image=ProgramImage.from_chunk(compile_source(SOURCE),v2=True,value64=True)
     path=tmp_path/'key.jsh';path.write_bytes(bytes(image))
     sim=module.SimBackend();ui=SystemMenu();model=JsHwVm();model.load_image(ProgramImage(bytes(image)))
+    ui.window=tuple(model._m.system_window);ui.application_title='Keyboard test';ui.application_description='Test native keyboard input.'
     def click(x,y):
         sim.set_mouse(x,y,1);sim.set_mouse(x,y,0)
         for event in _click(ui,x,y):
@@ -77,9 +79,9 @@ def test_real_rtl_keyboard_pixels_text_and_game_quit(tmp_path,monkeypatch):
         assert len(actual)==len(expected)
         for a,b in zip(actual,expected):
             assert a[:4]==b[:4]
-            if a[4]!=b[4]:
-                delta=[i for i,(x,y) in enumerate(zip(a[4],b[4])) if x!=y]
-                raise AssertionError((len(delta),delta[:25]))
+            left,right=a[4],b[4]
+            delta=[i//4 for i in range(0,len(right),4) if left[i+3]!=right[i+3] or right[i+3] and left[i:i+3]!=right[i:i+3]]
+            assert not delta,(len(delta),delta[:25])
     try:
         assert sim._rpc('JSHLOAD '+str(path)).startswith('OK')
         sim._rpc('FRAME');same_overlay()
@@ -88,7 +90,7 @@ def test_real_rtl_keyboard_pixels_text_and_game_quit(tmp_path,monkeypatch):
         assert ui.about
         click(320,280);same_overlay()
         assert not ui.about
-        click(10,10);click(10,80);same_overlay()
+        click(10,10);click(10,56);same_overlay()
         for index in (15,42,52,29,61):click(*_xy(index));same_overlay()
         assert model.error is None,model.error
         assert model.globals['entered']==(113*131+63)*131+65
@@ -106,9 +108,9 @@ def test_real_rtl_keyboard_pixels_text_and_game_quit(tmp_path,monkeypatch):
         click(615,302);same_overlay()
         assert not ui.latched and not ui.hold_keys
         assert model.globals['clicks']==0,'UI clicks leaked into the program'
-        click(10,10);same_overlay()
-        # Quit works while the keyboard is displayed and ends the actual VM.
-        sim.set_mouse(10,55,1);sim.set_mouse(10,55,0)
+        # File > Quit ends the actual VM; the ship contains About/Keyboard.
+        click(36,8);same_overlay()
+        sim.set_mouse(42,32,1);sim.set_mouse(42,32,0)
         for _ in range(120):
             sim._rpc('TICKN 100')
             status=sim._rpc('STATUS?')

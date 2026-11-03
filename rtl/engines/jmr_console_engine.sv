@@ -35,6 +35,10 @@ module jmr_console_engine (
     output logic ui_unnamed_o,
     input logic ui_doc_start=1'b0,ui_doc_new=1'b0,
     input logic [2:0] ui_doc_role=3'd1,
+    input logic ui_stage_valid=1'b0,
+    input logic [12:0] ui_stage_addr=13'd0,
+    input logic [7:0] ui_stage_data=8'd0,
+    output logic ui_stage_ready,
     input logic ui_set_name=1'b0,
     input logic [95:0] ui_name=96'd0,
     input logic [3:0] ui_name_len=4'd0,
@@ -293,7 +297,7 @@ module jmr_console_engine (
         // chain-load. Missing sidecar is NOT an error here: the flag goes
         // to 0 and a no-art title compiles exactly as it always did.
         C_ART_OPEN, C_ART_OPENW, C_ART_GB, C_ART_GBW, C_ART_WR,
-        C_ART_CLOSE, C_ART_CLOSEW, C_ART_FLAG, C_UI_INIT
+        C_ART_CLOSE, C_ART_CLOSEW, C_ART_FLAG, C_UI_INIT, C_UI_STAGE
     } cstate_t;
 `ifdef VERILATOR
     integer ctrace_fd = 0;
@@ -772,7 +776,7 @@ module jmr_console_engine (
             cmp_ph <= 5'd0; cmp_nw <= 1'b0; cmp_nm_len <= 8'd0; cmp_pend <= 1'b0; cmp_rd_addr <= '0;
             src_trunc <= 1'b0; cmp_use_srcname <= 1'b0;
             cmp_interactive <= 1'b0;
-            ui_unnamed_o<=0;ui_init_i<=0;ui_init_pending<=0;ui_init_role<=1;
+            ui_stage_ready<=0;ui_unnamed_o<=0;ui_init_i<=0;ui_init_pending<=0;ui_init_role<=1;
             cdone_seen_low <= 1'b0;
             cmp_art_mode <= 1'b0; cmp_art_len <= '0;
             art_i <= '0; art_found <= 1'b0; art_hi <= 1'b0; art_word <= '0;
@@ -832,6 +836,7 @@ module jmr_console_engine (
             stor_nl_scan <= 0;
             mem_en <= 0; mem_we <= 0;
             src_req <= 0; src_we <= 0;
+            ui_stage_ready<=0;
             pal_we <= 0; // NEW: 1-cycle palette write strobes (sram_req holds to ack)
 
             // srcSetLen (VM nid 50): a PROGRAM edited SOURCE. Placed BEFORE
@@ -1775,6 +1780,7 @@ module jmr_console_engine (
                     reply_idx <= 0; state <= C_REPLY;
                 end
 
+                C_UI_STAGE:if(src_gnt)begin ui_stage_ready<=1;src_bank<=0;state<=C_IDLE;end
                 C_UI_INIT: begin
                     if(!ui_init_pending)begin
                         src_req<=1;src_we<=1;src_bank<=1;cmp_rd_addr<=cstg_word(21'd32+21'(ui_init_i));
@@ -2930,6 +2936,9 @@ module jmr_console_engine (
 
             // Native menu requests arrive only after the previous command
             // is idle. SOURCE and its filename stay owned by this console.
+            if(ui_stage_valid && !ui_stage_ready && (state==C_IDLE || state==C_PROMPT))begin
+                src_req<=1;src_we<=1;src_w16<=0;src_bank<=1;cmp_rd_addr<=cstg_word({8'd0,ui_stage_addr});src_wdata<=ui_stage_data;state<=C_UI_STAGE;
+            end
             if(ui_doc_start && (state==C_IDLE || state==C_PROMPT))begin
                 ui_init_i<=0;ui_init_pending<=0;ui_init_role<=ui_doc_role;state<=C_UI_INIT;
                 if(ui_doc_new)begin

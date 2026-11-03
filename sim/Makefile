@@ -15,6 +15,7 @@ THREADS ?=
 VTHREADS := $(if $(THREADS),--threads $(THREADS),)
 JMR_SIM_PARAMS ?=
 FONT := $(ROOT)/vectors/font_rom.hex
+UI_ROMS := $(wildcard $(ROOT)/vectors/desktop_*.hex $(ROOT)/vectors/system_*.hex $(ROOT)/vectors/classic_*.hex)
 
 .PHONY: sim_server_synth font tb_uart_link tb_ft245 tb_ps2_rx tb_ps2_typing clean
 # Keep the sim server as default — extra TBs are gates, not the build
@@ -99,6 +100,9 @@ CORE_SRCS := \
     $(RTL)/engines/jmr_system_menu.sv \
     $(RTL)/engines/jmr_classic_ui_pkg.sv \
     $(RTL)/engines/jmr_classic_ui.sv \
+    $(RTL)/engines/jmr_classic_labels.sv \
+    $(RTL)/engines/jmr_classic_static_labels.sv \
+    $(RTL)/engines/jmr_ui_snapshot.sv \
     $(RTL)/engines/jmr_system_actions.sv \
     $(RTL)/engines/jmr_system_documents.sv \
     $(RTL)/video/jmr_classic_overlay.sv \
@@ -144,7 +148,11 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 	cp -f $(FONT) $(BUILD)/obj_dir/font_rom.hex
 	cp -f $(FONT) font_rom.hex
 	cp -f $(ROOT)/vectors/desktop_*.hex .
+	cp -f $(ROOT)/vectors/system_*.hex .
+	cp -f $(ROOT)/vectors/classic_*.hex .
 	cp -f $(ROOT)/vectors/desktop_*.hex $(BUILD)/
+	cp -f $(ROOT)/vectors/system_*.hex $(BUILD)/
+	cp -f $(ROOT)/vectors/classic_*.hex $(BUILD)/
 	# SD_RUN_DIV stays at the module default (clk/8). Overriding it to speed up
 	# DONKEY's fat .JSH load broke LOAD entirely: at clk/4 (DIV=1) and clk/2
 	# (DIV=0) the C++ card model in sim_main.cpp misses MOSI setup and every
@@ -167,3 +175,13 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 
 clean:
 	rm -rf $(BUILD)
+
+# Save As normalization is byte-sequenced to meet the real 100MHz clock.
+.PHONY: tb_system_documents
+tb_system_documents:
+	mkdir -p $(BUILD)/obj_doc_names
+	verilator --binary --timing -j 2 -Wno-TIMESCALEMOD -Wno-WIDTHEXPAND --top-module tb_system_documents \
+		--Mdir $(BUILD)/obj_doc_names \
+		$(RTL)/engines/jmr_classic_ui_pkg.sv $(RTL)/engines/jmr_system_documents.sv \
+		tb_system_documents.sv
+	$(BUILD)/obj_doc_names/Vtb_system_documents

@@ -24,7 +24,10 @@ module mouse_probe_host #(
     // A byte that is not a mouse packet, or the whole stream when the
     // device answered keyboard ID AB. Set-2 make codes land here.
     output logic scan_stb,
-    output logic [7:0] scan_byte
+    output logic [7:0] scan_byte,
+    // Every accepted byte on this bus, before packet parsing.
+    output logic raw_stb,
+    output logic [7:0] raw_byte
 );
     localparam int POWER_CYCLES = CLK_HZ;
     localparam int INHIBIT_CYCLES = (CLK_HZ / 10000) + 1;
@@ -67,6 +70,10 @@ module mouse_probe_host #(
     logic plain_mode, tried_magic, keyboard_mode;
     logic [16:0] gap;
     localparam int BURST_GAP = CLK_HZ / 250;
+
+    // One-cycle pulse. rx_data still holds the byte on that cycle.
+    assign raw_stb = rx_valid;
+    assign raw_byte = rx_data;
 
     wire receiving = state == REPLY || state == BAT || state == IDENT
         || state == READ_ID || state == STREAM || state == KEYSTREAM

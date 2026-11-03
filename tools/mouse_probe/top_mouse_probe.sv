@@ -1,7 +1,16 @@
 // Tiny HDMI mouse probe. Not the JS computer and not FPGA-SIM.
 // Cursor, a left box, a right box, and a scroll track. Own Vivado project
 // under build/mouse_probe so it cannot clobber build/nexys_video.
-module top_mouse_probe (
+// PS2_MOUSE_ON_JA=0 is the proven bit: mouse on J15, keyboard on the Pmods.
+// PS2_MOUSE_ON_JA=1 is the test bit: wired USB keyboard on J15, PS/2 mouse on JA.
+module top_mouse_probe #(
+    parameter bit PS2_MOUSE_ON_JA =
+`ifdef PROBE_JA_MOUSE
+        1'b1
+`else
+        1'b0
+`endif
+) (
     input  wire clk100,
     input  wire cpu_resetn,
     input  wire btnc,
@@ -14,11 +23,12 @@ module top_mouse_probe (
     inout  wire hdmi_tx_rsda,
     inout  wire ps2_clk,
     inout  wire ps2_data,
-    // Pmod JA top row all 4 signal pins (JA1=AB22, JA2=AB21, JA3=AB20, JA4=AB18)
-    // so both 6-pin (JA1+JA3) and 4-pin adjacent to GND/VCC (JA3+JA4) work automatically.
-    input  wire pmod_ja1,
+    // Pmod JA top row all 4 signal pins (JA1=AB22, JA2=AB21, JA3=AB20, JA4=AB18).
+    // JA1 and JA3 are inout so the swapped test can host a PS/2 mouse
+    // (data JA1, clock JA3). The proven build never drives them.
+    inout  wire pmod_ja1,
     input  wire pmod_ja2,
-    input  wire pmod_ja3,
+    inout  wire pmod_ja3,
     input  wire pmod_ja4,
     // Pmod JC top row all 4 signal pins (JC1=Y6, JC2=AA6, JC3=AA8, JC4=AB8) — 0-ohm like JB
     input  wire pmod_jc1,
@@ -72,24 +82,57 @@ module top_mouse_probe (
     end
     wire rst_n = rst_sync[1];
 
-    logic clock_low, data_low, sample, ready, wheel_ok;
+    logic j15_clk_low, j15_dat_low, ja_clk_low, ja_dat_low;
+    logic j15_sample, ja_sample, j15_ready, ja_ready, j15_wheel, ja_wheel;
+    logic signed [11:0] j15_dx, j15_dy, ja_dx, ja_dy;
+    logic signed [7:0] j15_dz, ja_dz;
+    logic [2:0] j15_btn, ja_btn;
+    logic j15_scan_stb, j15_raw_stb;
+    logic [7:0] j15_scan_byte, j15_raw_byte;
+    logic sample, ready, wheel_ok;
     logic signed [11:0] dx, dy;
     logic signed [7:0] dz;
     logic [2:0] buttons;
     logic key_mode;
-    // J15 stays in mouse mode permanently (no switching).
     assign key_mode = 1'b0;
-    assign ps2_clk = clock_low ? 1'b0 : 1'bz;
-    assign ps2_data = data_low ? 1'b0 : 1'bz;
-    mouse_probe_host #(.CLK_HZ(25000000)) u_mouse (
+    // J15. Proven build: mouse host drives the bus. Swapped test: listen
+    // only, so a wired USB keyboard's Set-2 bytes get through. Pulling
+    // this clock low inhibits the PIC24 keyboard path.
+    assign ps2_clk = j15_clk_low ? 1'b0 : 1'bz;
+    assign ps2_data = j15_dat_low ? 1'b0 : 1'bz;
+    // JA mouse host. Driven only in the swapped test. Data = JA1, clock = JA3,
+    // the same pairing the keyboard used on this Pmod.
+    assign pmod_ja3 = (PS2_MOUSE_ON_JA && ja_clk_low) ? 1'b0 : 1'bz;
+    assign pmod_ja1 = (PS2_MOUSE_ON_JA && ja_dat_low) ? 1'b0 : 1'bz;
+    mouse_probe_host #(.CLK_HZ(25000000)) u_j15 (
         .clk(pixel_clk), .reset(!rst_n),
-        .listen_keys(1'b0),
+        .listen_keys(PS2_MOUSE_ON_JA),
         .clock_in(ps2_clk), .data_in(ps2_data),
-        .clock_low(clock_low), .data_low(data_low),
-        .sample(sample), .dx(dx), .dy(dy), .dz(dz), .buttons(buttons),
-        .ready(ready), .wheel_ok(wheel_ok),
-        .scan_stb(), .scan_byte()
+        .clock_low(j15_clk_low), .data_low(j15_dat_low),
+        .sample(j15_sample), .dx(j15_dx), .dy(j15_dy), .dz(j15_dz),
+        .buttons(j15_btn), .ready(j15_ready), .wheel_ok(j15_wheel),
+        .scan_stb(j15_scan_stb), .scan_byte(j15_scan_byte),
+        .raw_stb(j15_raw_stb), .raw_byte(j15_raw_byte)
     );
+    // Held in reset in the proven build so it cannot pull JA clock low
+    // and silence a keyboard plugged in there.
+    mouse_probe_host #(.CLK_HZ(25000000)) u_ja (
+        .clk(pixel_clk), .reset(!rst_n || !PS2_MOUSE_ON_JA),
+        .listen_keys(1'b0),
+        .clock_in(pmod_ja3), .data_in(pmod_ja1),
+        .clock_low(ja_clk_low), .data_low(ja_dat_low),
+        .sample(ja_sample), .dx(ja_dx), .dy(ja_dy), .dz(ja_dz),
+        .buttons(ja_btn), .ready(ja_ready), .wheel_ok(ja_wheel),
+        .scan_stb(), .scan_byte(),
+        .raw_stb(), .raw_byte()
+    );
+    assign sample   = PS2_MOUSE_ON_JA ? ja_sample : j15_sample;
+    assign dx       = PS2_MOUSE_ON_JA ? ja_dx     : j15_dx;
+    assign dy       = PS2_MOUSE_ON_JA ? ja_dy     : j15_dy;
+    assign dz       = PS2_MOUSE_ON_JA ? ja_dz     : j15_dz;
+    assign buttons  = PS2_MOUSE_ON_JA ? ja_btn    : j15_btn;
+    assign ready    = PS2_MOUSE_ON_JA ? ja_ready  : j15_ready;
+    assign wheel_ok = PS2_MOUSE_ON_JA ? ja_wheel  : j15_wheel;
     // Simultaneous PS/2 keyboard receivers on Pmod JA:
     // 1) 6-pin PmodPS2 standard: JA1=data, JA3=clk (and reversed JA3=data, JA1=clk)
     // 2) 4-pin header on pins 3..6 (next to GND/VCC): JA3+JA4 in either order
@@ -144,12 +187,39 @@ module top_mouse_probe (
     wire vb_43 = bs_43 && be_43;
     wire vb_12 = bs_12 && be_12;
     wire vb_21 = bs_21 && be_21;
-    assign scan_stb = v_13 | v_31 | v_34 | v_43 | v_12 | v_21
+    // Swapped test: JA is the mouse, so its bytes must not be typed as letters.
+    wire pmod_scan_stb = (PS2_MOUSE_ON_JA ? 1'b0 : (v_13 | v_31 | v_34 | v_43 | v_12 | v_21))
                     | vc_13 | vc_31 | vc_34 | vc_43 | vc_12 | vc_21
                     | vb_13 | vb_31 | vb_34 | vb_43 | vb_12 | vb_21;
-    assign scan_byte = v_13 ? sc_13 : v_31 ? sc_31 : v_34 ? sc_34 : v_43 ? sc_43 : v_12 ? sc_12 : v_21 ? sc_21
+    wire [7:0] pmod_scan_byte = v_13 ? sc_13 : v_31 ? sc_31 : v_34 ? sc_34 : v_43 ? sc_43 : v_12 ? sc_12 : v_21 ? sc_21
                      : vc_13 ? c_13 : vc_31 ? c_31 : vc_34 ? c_34 : vc_43 ? c_43 : vc_12 ? c_12 : vc_21 ? c_21
                      : vb_13 ? b_13 : vb_31 ? b_31 : vb_34 ? b_34 : vb_43 ? b_43 : vb_12 ? b_12 : b_21;
+    assign scan_stb  = PS2_MOUSE_ON_JA ? j15_scan_stb  : pmod_scan_stb;
+    assign scan_byte = PS2_MOUSE_ON_JA ? j15_scan_byte : pmod_scan_byte;
+    // Every valid byte on any JA pin pair, including host commands the
+    // device clocks back. This is the raw window, separate from the cursor.
+    wire ja_hit = v_13 | v_31 | v_34 | v_43 | v_12 | v_21;
+    wire [7:0] ja_hit_byte = v_13 ? sc_13 : v_31 ? sc_31 : v_34 ? sc_34
+                           : v_43 ? sc_43 : v_12 ? sc_12 : sc_21;
+    logic [127:0] ja_raw, usb_raw;
+    logic [15:0] ja_raw_n, usb_raw_n;
+    always_ff @(posedge pixel_clk) begin
+        if (!rst_n) begin
+            ja_raw <= '0;
+            ja_raw_n <= '0;
+            usb_raw <= '0;
+            usb_raw_n <= '0;
+        end else begin
+            if (ja_hit) begin
+                ja_raw <= {ja_raw[119:0], ja_hit_byte};
+                if (ja_raw_n != 16'hFFFF) ja_raw_n <= ja_raw_n + 1'b1;
+            end
+            if (j15_raw_stb) begin
+                usb_raw <= {usb_raw[119:0], j15_raw_byte};
+                if (usb_raw_n != 16'hFFFF) usb_raw_n <= usb_raw_n + 1'b1;
+            end
+        end
+    end
 
     logic [9:0] px;
     logic [8:0] py;
@@ -334,6 +404,19 @@ module top_mouse_probe (
         else glyph5 = bits[(3'd6 - row) * 5 +: 5];
     endfunction
 
+    function automatic logic [7:0] hexch(input logic [3:0] nib);
+        if (nib < 4'd10) hexch = 8'h30 + {4'b0, nib};
+        else hexch = 8'h41 + {4'b0, nib} - 8'd10;
+    endfunction
+
+    // 16 hex digits, first nibble at bit 127, matching stamp().
+    function automatic logic [127:0] hexline(input logic [63:0] bytes);
+        integer i;
+        hexline = '0;
+        for (i = 0; i < 16; i = i + 1)
+            hexline[127 - i*8 -: 8] = hexch(bytes[63 - i*4 -: 4]);
+    endfunction
+
     // Scale-2 text. str is packed with the first character at bit 127.
     localparam logic [127:0] TXT_GO = {"GO TO KEY", 56'h0};
     localparam logic [127:0] TXT_F10 = "HIT F10 TO MOUSE";
@@ -384,6 +467,34 @@ module top_mouse_probe (
         mark = 240 - wheel;
         if (hcnt < 2 || hcnt >= 638 || vcnt < 2 || vcnt >= 478)
             pix = 24'h404040;
+        // On-glass label so this bit is not confused with the JA-mouse test.
+        if (PS2_MOUSE_ON_JA && stamp(hcnt, vcnt, 10'd440, 10'd8, 5'd8, {"JA MOUSE", 64'h0}))
+            pix = 24'hffffff;
+        if (!PS2_MOUSE_ON_JA && stamp(hcnt, vcnt, 10'd428, 10'd8, 5'd9, {"USB MOUSE", 56'h0}))
+            pix = 24'hffffff;
+        // Left window: raw bytes on JA (the PS/2 keyboard in this bit).
+        // Right window: raw bytes from the USB mouse host on J15.
+        // Cursor, buttons, wheel, and the typed line are the decoded output.
+        if (box(hcnt, vcnt, 8, 212, 76, 136))
+            pix = 24'h101018;
+        if (stamp(hcnt, vcnt, 10'd14, 10'd80, 5'd11,
+                {"JA RAW ", hexch(ja_raw_n[15:12]), hexch(ja_raw_n[11:8]),
+                 hexch(ja_raw_n[7:4]), hexch(ja_raw_n[3:0]), 40'h0}))
+            pix = 24'hffffff;
+        if (ja_raw_n != 0 && stamp(hcnt, vcnt, 10'd14, 10'd96, 5'd16, hexline(ja_raw[127:64])))
+            pix = 24'h80ff80;
+        if (ja_raw_n != 0 && stamp(hcnt, vcnt, 10'd14, 10'd112, 5'd16, hexline(ja_raw[63:0])))
+            pix = 24'hc0ffc0;
+        if (box(hcnt, vcnt, 420, 632, 76, 136))
+            pix = 24'h101018;
+        if (stamp(hcnt, vcnt, 10'd426, 10'd80, 5'd12,
+                {"USB RAW ", hexch(usb_raw_n[15:12]), hexch(usb_raw_n[11:8]),
+                 hexch(usb_raw_n[7:4]), hexch(usb_raw_n[3:0]), 32'h0}))
+            pix = 24'hffffff;
+        if (usb_raw_n != 0 && stamp(hcnt, vcnt, 10'd426, 10'd96, 5'd16, hexline(usb_raw[127:64])))
+            pix = 24'h80ff80;
+        if (usb_raw_n != 0 && stamp(hcnt, vcnt, 10'd426, 10'd112, 5'd16, hexline(usb_raw[63:0])))
+            pix = 24'hc0ffc0;
         // Left and right click targets.
         if (box(hcnt, vcnt, 48, 280, 160, 360)) begin
             if (btn[0] && box(px, {1'b0, py}, 48, 280, 160, 360)) pix = 24'h20e060;
@@ -459,7 +570,10 @@ module top_mouse_probe (
     end
     // LD0 heartbeat, LD1 left, LD2 right, LD3 middle, LD4 wheel notch,
     // LD5 stream ready, LD6 clock, LD7 data.
-    assign led = {ps2_data, ps2_clk, ready, wheel_flash != 0, btn[2], btn[1], btn[0], hb[24]};
+    // LD6/LD7 follow whichever bus the mouse host is driving.
+    wire led_clk = PS2_MOUSE_ON_JA ? pmod_ja3 : ps2_clk;
+    wire led_dat = PS2_MOUSE_ON_JA ? pmod_ja1 : ps2_data;
+    assign led = {led_dat, led_clk, ready, wheel_flash != 0, btn[2], btn[1], btn[0], hb[24]};
 
     jmr_rgb2dvi_wrap u_tmds (
         .TMDS_Clk_p(hdmi_tx_clk_p),

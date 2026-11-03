@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Gauntlet — JMR</title></head>
+<body style="margin:0;background:#000">
+<!-- Library title: LOAD "GAUNTLIN.HTML" then RUN.
+     Conversion of the Atari Lynx cartridge Gauntlet: The Third Encounter.
+
+     ALL art is taken from the real cartridge:
+       GAUNTLIN-0.png  terrain tiles, monsters, items, player and the six
+                       class portraits cut from Handy-emulated Lynx frames
+       GAUNTLIN-1.png  the cartridge's own opening animation, captured at
+                       60 fps and reduced back to the native 102x160 screen
+     Nothing here is drawn from the browser recreations.
+
+     Text uses a hand-built 5x5 pixel font matched to the cartridge's HUD
+     (the Lynx font is 5x5 cells, 1px gap, 2px line gap), because the glass
+     font is 8x8 and would not match. -->
+<canvas id="c" width="640" height="480"></canvas>
+<script data-host="chrome" src="GAUNTLIN.ARTJS"></script>
+<script data-host="chrome">
+// Chrome-only. Maps the machine's sprite handles to the real PNGs.
+// This list is ALSO the art manifest make_artx.py reads — one source of
+// truth, so the browser and the .ARTX can never disagree about order.
+window.JMR_SPR = ["GAUNTLIN-0.png", "GAUNTLIN-1.png", "GAUNTLIN-2.png", "GAUNTLIN-3.png"];
+(function () {
+  if (typeof __jmrSpr === "undefined") { return; }
+  var d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+  Object.defineProperty(HTMLImageElement.prototype, "src", {
+    get: function () { return d.get.call(this); },
+    set: function (v) {
+      var m = /^jmr:spr:(\d+)$/.exec(v);
+      d.set.call(this, m ? (__jmrSpr[+m[1]] || v) : v);
+    }
+  });
+})();
+</script>
+<script>
+var cv = document.getElementById("c");
+var ctx = cv.getContext("2d");
+ctx.imageSmoothingEnabled = false;
+ctx.systemWindow = 8;
+ctx.systemViewport = 1;
+ctx.systemAbout = "Gauntlet|The Third Encounter, from the Atari Lynx cartridge.";
+ctx.systemMenus = "Game|New Game=160|Pause / Resume=161";
+
+/* Sheet handles are QUOTED literals: the chip only intern-binds jmr:spr:N. */
+var sheet = new Image();
+sheet.src = "jmr:spr:0";       /* terrain, sprites, portraits */
+var openSheet = new Image();
+openSheet.src = "jmr:spr:1";   /* the cartridge's opening animation */
+var selSheet = new Image();
+selSheet.src = "jmr:spr:2";    /* the cartridge's class-select screens */
+var floorSheet = new Image();
+floorSheet.src = "jmr:spr:3";  /* whole-world floor, mirror-tiled real art */
+
+/* ---------------------------------------------------------------- geometry
+   The Lynx screen is 160x102 shown portrait as 102x160. The cartridge's HUD
+   occupies portrait rows 103..159, so the world view is 102x102. */
+var PL = 167;            /* left edge of the 306-wide portrait area */
+var K = 3;               /* glass pixels per Lynx pixel */
+var VIEW_X = PL;
+var VIEW_W = 306;
+var VIEW_Y = 0;
+/* the cartridge's playfield ends at native row 104: rows 104..159 are the HUD
+   strip (border, icon well, stat panel), so the world is 104 rows tall */
+var VIEW_H = 312;
+var HUD_Y = 312;         /* native row 104 x 3 */
+
+/* ------------------------------------------------------------- atlas rects */
+var R_FLOOR = [0, 0, 16, 16];
+var R_WALL = [16, 0, 16, 16];
+var R_DARK = [32, 0, 16, 16];
+/* Real cartridge floor: 48x48 slab lifted straight out of a captured frame.
+   The cartridge does NOT repeat a small tile — measured over identical 40x40
+   patches it is 32.6% black / 16.8% dark grey / 32.5% light grey / 18.1% white,
+   whereas the old 16x16 tile had only 5.9% white. That missing highlight mass
+   is why the port read as flat coarse grey. Blitting this at 48 px steps keeps
+   the real pebblework density and only repeats every 3 cells. */
+var R_FLOOR48 = [256, 0, 48, 48];
+var R_WALL16 = [256, 52, 16, 16];
+var R_SCORP0 = [52, 0, 14, 11];
+var R_SCORP1 = [68, 0, 14, 10];
+var R_SCORP2 = [84, 0, 12, 10];
+var R_GHOST = [98, 0, 14, 11];
+var R_SHOT = [114, 0, 5, 8];
+var R_PLAYER = [121, 0, 14, 13];
+var R_CHEST = [137, 0, 16, 11];
+var R_KEY = [155, 0, 5, 8];
+var R_APPLE = [162, 0, 7, 8];
+/* the skull-topped key the cartridge shows in the HUD icon well, lifted
+   straight out of a captured frame (10x36) so it matches exactly */
+var R_SKEY = [176, 0, 10, 36];
+
+/* ------------------------------------------------- cartridge class roster
+   Names and stats transcribed from the cartridge's own class-select screen:
+   WIZARD 28/3/8, ANDROID 24/7/9, PUNKROCKER 20/5/6, PIRATE 28/5/5,
+   GUNFIGHTER 32/4/7, VALKYRIE 40/3/5. */
+var CLS_NAME = ["WIZARD", "ANDROID", "PUNK", "PIRATE", "GUNNER", "VALKYRIE"];
+var CLS_SPD = [28, 24, 20, 28, 32, 40];
+var CLS_STR = [3, 7, 5, 5, 4, 3];
+var CLS_MIS = [8, 9, 6, 5, 7, 5];
+var CLS_PORT = [0, 102, 204, 306, 408, 510];
+
+/* --------------------------------------------- opening animation (real art)
+   GAUNTLIN-1.png is a grid of the cartridge's own native 102x160 frames,
+   captured from the real attract loop (not redrawn). The loop runs 38.42 s:
+   the cartridge holds some frames for a single tick and others for seconds,
+   so every frame carries its own hold time in OPEN_TICKS. Those holds were
+   measured off the running cartridge at 60 fps and are unchanged in total, so
+   the port advances at the cartridge's own pace rather than a guessed rate.
+   The list is capped at ARR_CAP=128, so visually near-identical frames were
+   merged and their hold times summed — total duration stays exact. */
+var OPEN_COLS = 8;
+var OPEN_W = 102;
+var OPEN_H = 160;
+var OPEN_N = 118;
+/* frames held per OPEN frame, in 60 Hz ticks (sum = 2305 = 38.42 s) */
+var OPEN_TICKS = [
+  54,6,6,7,5,12,108,6,6,6,6,31,2,2,2,2,2,2,2,3,3,2,2,2,4,3,3,3,4,4,4,5,4,5,7,
+  7,10,12,14,26,1,180,139,131,216,216,193,149,119,2,5,6,6,6,6,6,6,6,6,6,6,6,6,
+  6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
+  18,6,6,30,6,6,6,6,6,6,6,54,6,6,6,6,13,73
+];
+
+function openRect(i) {
+  var c = i % OPEN_COLS;
+  var r = Math.floor(i / OPEN_COLS);
+  return [c * OPEN_W, r * OPEN_H, OPEN_W, OPEN_H];
+}
+
+/* -------------------------------------------------------------- 5x5 font
+   Matched to the cartridge HUD: 5x5 cells, 1px gap, 2px line gap.
+   Each glyph is 5 rows of 5 bits, MSB = leftmost pixel. */
+var FONT = {
+  "A": [14, 17, 31, 17, 17], "B": [30, 17, 30, 17, 30], "C": [14, 17, 16, 17, 14],
+  "D": [30, 17, 17, 17, 30], "E": [31, 16, 30, 16, 31], "F": [31, 16, 30, 16, 16],
+  "G": [14, 16, 23, 17, 15], "H": [17, 17, 31, 17, 17], "I": [31, 4, 4, 4, 31],
+  "J": [7, 2, 2, 18, 12], "K": [17, 18, 28, 18, 17], "L": [16, 16, 16, 16, 31],
+  "M": [17, 27, 21, 17, 17], "N": [17, 25, 21, 19, 17], "O": [14, 17, 17, 17, 14],
+  "P": [30, 17, 30, 16, 16], "Q": [14, 17, 21, 18, 13], "R": [30, 17, 30, 18, 17],
+  "S": [15, 16, 14, 1, 30], "T": [31, 4, 4, 4, 4], "U": [17, 17, 17, 17, 14],
+  "V": [17, 17, 17, 10, 4], "W": [17, 17, 21, 27, 17], "X": [17, 10, 4, 10, 17],
+  "Y": [17, 10, 4, 4, 4], "Z": [31, 2, 4, 8, 31],
+  "0": [14, 19, 21, 25, 14], "1": [4, 12, 4, 4, 14], "2": [14, 17, 6, 8, 31],
+  "3": [31, 2, 14, 2, 31], "4": [18, 18, 31, 2, 2], "5": [31, 16, 30, 1, 30],
+  "6": [14, 16, 30, 17, 14], "7": [31, 1, 2, 4, 8], "8": [14, 17, 14, 17, 14],
+  "9": [14, 17, 15, 1, 14],
+  " ": [0, 0, 0, 0, 0], "-": [0, 0, 31, 0, 0], ".": [0, 0, 0, 0, 4],
+  ":": [0, 4, 0, 4, 0], "!": [4, 4, 4, 0, 4], "/": [1, 2, 4, 8, 16]
+};
+
+/* Bit masks for the 5 columns. The chip has no shift operator, so the
+   masks are a plain table: MSB is the leftmost pixel. */
+var BIT = [16, 8, 4, 2, 1];
+
+/* ------------------------------------------------- cartridge HUD font
+   The sidebar font is NOT the 5x5 title font above: the cartridge draws 4 px
+   wide glyphs (5 for M/T) on a 5 px pitch, 5 rows tall. These bitmaps were
+   extracted from a real captured frame, not redrawn, so the HUD letters match
+   the cartridge stroke for stroke. Each entry is [width, row0..row4] with the
+   MSB being the leftmost pixel of that row. */
+var HFONT = {
+  "L": [4, 8, 8, 8, 8, 15],      "I": [3, 7, 2, 2, 2, 7],
+  "F": [4, 15, 8, 14, 8, 8],     "E": [4, 15, 8, 14, 8, 15],
+  "S": [4, 7, 8, 6, 1, 14],      "P": [4, 14, 9, 14, 8, 8],
+  "D": [4, 14, 9, 9, 9, 14],     "T": [5, 31, 4, 4, 4, 4],
+  "R": [4, 14, 9, 14, 9, 9],     "N": [4, 9, 13, 11, 9, 9],
+  "G": [4, 7, 8, 11, 9, 7],      "M": [5, 17, 27, 21, 17, 17],
+  "H": [4, 9, 9, 15, 9, 9],      "V": [4, 9, 9, 9, 6, 6],
+  "C": [4, 6, 9, 8, 9, 6],       "O": [4, 6, 9, 9, 9, 6],
+  "0": [4, 6, 9, 9, 9, 6],       "1": [3, 2, 6, 2, 2, 7],
+  "2": [4, 14, 1, 6, 8, 15],     "3": [4, 14, 1, 6, 1, 14],
+  "8": [4, 6, 9, 6, 9, 6],       "9": [4, 6, 9, 7, 1, 6],
+  " ": [3, 0, 0, 0, 0, 0]
+};
+/* column masks for a glyph of width w: bit (w-1-c) is column c */
+var HBIT = [[1], [2, 1], [4, 2, 1], [8, 4, 2, 1], [16, 8, 4, 2, 1]];
+
+/* width of `s` in HUD-font pixels, measured from the cartridge's own ink:
+   19988 spans x=75..97 = 23 px, and its glyph widths are 3+4+4+4+4 = 19, so
+   the advance is one gap column BETWEEN glyphs and none after the last.
+   Hence sum(w) + (n-1), not n*(w+1). */
+function hwidth(s) {
+  var i, g, w = 0;
+  for (i = 0; i < s.length; i++) {
+    g = HFONT[s.slice(i, i + 1)];
+    if (!g) { g = HFONT[" "]; }
+    w = w + g[0];
+  }
+  if (s.length > 0) { w = w + s.length - 1; }
+  return w;
+}
+
+/* Draw `s` with the cartridge HUD font. gx/gy are native Lynx pixels inside
+   the portrait area; k is the glass scale, so one glyph pixel is k x k glass
+   pixels. PL is added here because every HUD coordinate is measured in the
+   cartridge's own 102-wide frame, not in 640-wide glass space. */
+function htext(s, gx, gy, k, col) {
+  var i, j, y, x, g, w, b, m, cx;
+  ctx.fillStyle = col;
+  cx = gx;
+  for (i = 0; i < s.length; i++) {
+    g = HFONT[s.slice(i, i + 1)];
+    if (!g) { g = HFONT[" "]; }
+    w = g[0];
+    for (y = 0; y < 5; y++) {
+      b = g[y + 1];
+      for (x = 0; x < w; x++) {
+        m = HBIT[w - 1][x];
+        if (b >= m && Math.floor((b % (m * 2)) / m) === 1) {
+          ctx.fillRect(PL + (cx + x) * k, (gy + y) * k, k, k);
+        }
+      }
+    }
+    cx = cx + w + 1;
+  }
+}
+
+/* Draw a string in the cartridge font. k = pixel scale on the glass. */
+function ptext(s, gx, gy, k, col) {
+  var i, j, b, bits, x, y;
+  ctx.fillStyle = col;
+  for (i = 0; i < s.length; i++) {
+    bits = FONT[s.slice(i, i + 1)];
+    if (!bits) {
+      bits = FONT["?"];
+      if (!bits) {
+        bits = FONT[" "];
+      }
+    }
+    for (y = 0; y < 5; y++) {
+      b = bits[y];
+      for (x = 0; x < 5; x++) {
+        if (b >= BIT[x] && Math.floor((b % (BIT[x] * 2)) / BIT[x]) === 1) {
+          ctx.fillRect(gx + (i * 6 + x) * k, gy + y * k, k, k);
+        }
+      }
+    }
+  }
+}
+
+function twidth(s, k) {
+  return s.length * 6 * k - k;
+}
+
+/* ------------------------------------------------------------- game state */
+var G = {
+  mode: 0,        /* 0 opening, 1 title, 2 select, 3 play, 4 dead */
+  cls: 0,
+  x: 0, y: 0,
+  dir: 0,
+  life: 20000,
+  score: 0,
+  level: 1,
+  keys: 0,
+  shots: 0,
+  gold: 0,
+  canShoot: 0,
+  hurt: 0,
+  tick: 0,
+  intro: 0,
+  hold: 0,        /* ticks left on the current opening frame */
+  skip: 0
+};
+
+var mon = [];
+var shot = [];
+var items = [];
+
+/* --------------------------------------------------------------- input */
+var kL = 0, kR = 0, kU = 0, kD = 0, kF = 0;
+var jL = 0, jR = 0, jU = 0, jD = 0, jA = 0, jB = 0;
+
+/* ---------------------------------------------------------------- sound */
+function playSfx(r) {
+  var i;
+  if (!r) {
+    return;
+  }
+  if (typeof _chromePlay === "function") {
+    _chromePlay(r);
+    return;
+  }
+  if (typeof sound !== "function") {
+    return;
+  }
+  i = 0;
+  while (i + 4 < r.length) {
+    sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
+    i = i + 5;
+  }
+}
+
+var SFX_HIT = [150, 11, 7, -5, 0];
+var SFX_FIRE = [520, 7, 5, 10, 1];
+var SFX_HURT = [220, 12, 12, -8, 0];
+var SFX_ITEM = [660, 9, 7, 6, 0];
+var SFX_START = [440, 9, 8, 5, 0, 660, 9, 10, 4, 0];
+
+/* ------------------------------------------------------------------- map
+   Room layout in the cartridge's own pattern: 16px cells, cobble corridors
+   between stone blocks. The TILES drawn for these cells are the cartridge's
+   real wall and floor art cut from Lynx frames; the arrangement is authored
+   because the Lynx playfield floor and wall share the same two dither greys
+   and cannot be separated reliably from a framebuffer grab. */
+var MAP_ROWS = [
+  "###############",
+  "#.............#",
+  "#.###.###.###.#",
+  "#.#.......#...#",
+  "#.#.##.##.#.#.#",
+  "#...#...#...#.#",
+  "#.###.#.###.#.#",
+  "#.....#.....#.#",
+  "#.###.#.#####.#",
+  "#.#...#.....#.#",
+  "#.#.###.###.#.#",
+  "#.......#.....#",
+  "###############"
+];
+var MW = 15;
+var MH = 13;
+var CELL = 16;
+
+function cell(x, y) {
+  var ch;
+  if (x < 0 || y < 0 || x >= MW || y >= MH) {
+    return 0;
+  }
+  ch = MAP_ROWS[y].slice(x, x + 1);
+  return (ch === "." || ch === "K") ? 1 : 0;
+}
+
+function solidAt(lx, ly) {
+  return cell(Math.floor(lx / CELL), Math.floor(ly / CELL)) === 0;
+}
+
+/* ----------------------------------------------------------------- camera */
+var camX = 0, camY = 0;
+
+function clampCam() {
+  var ww = MW * CELL - 102;
+  var wh = MH * CELL - 102;
+  if (camX < 0) { camX = 0; }
+  if (camY < 0) { camY = 0; }
+  if (camX > ww) { camX = ww; }
+  if (camY > wh) { camY = wh; }
+}
+
+function tileX(wx) {
+  return VIEW_X + Math.floor((wx - camX) * K);
+}
+
+function tileY(wy) {
+  return Math.floor((wy - camY) * K);
+}
+
+function spr3(r, wx, wy) {
+  var x = tileX(wx);
+  var y = tileY(wy);
+  var w = r[2] * K;
+  var h = r[3] * K;
+  if (x + w <= VIEW_X || x >= VIEW_X + VIEW_W || y + h <= 0 || y >= VIEW_H) {
+    return;
+  }
+  ctx.drawImage(sheet, r[0], r[1], r[2], r[3], x, y, w, h);
+}
+
+function drawWorld() {
+  var i, j, sx, sy;
+
+  /* Floor first, as ONE blit of the pre-built world floor. GAUNTLIN-3.png is
+     MW*CELL by MH*CELL (240x208) of real cartridge pebblework, mirror-tiled so
+     neighbouring slabs share their edge pixels. Blitting the whole thing avoids
+     the repeat seams a small tile produced, and costs a single drawImage
+     instead of one per cell. */
+  sx = VIEW_X - Math.floor(camX * K);
+  sy = -Math.floor(camY * K);
+  ctx.drawImage(floorSheet, 0, 0, MW * CELL, MH * CELL,
+                sx, sy, MW * CELL * K, MH * CELL * K);
+
+  /* Walls on top. The cartridge's wall is a white block with black seams, so
+     one 16x16 block per solid cell is already correct. */
+  for (j = -1; j < MH + 1; j++) {
+    for (i = -1; i < MW + 1; i++) {
+      if (cell(i, j) !== 0) {
+        continue;
+      }
+      sx = VIEW_X + Math.floor((i * CELL - camX) * K);
+      sy = Math.floor((j * CELL - camY) * K);
+      if (sx + CELL * K <= VIEW_X || sy + CELL * K <= 0 ||
+          sx >= VIEW_X + VIEW_W || sy >= VIEW_H) {
+        continue;
+      }
+      ctx.drawImage(sheet, R_WALL16[0], R_WALL16[1], R_WALL16[2], R_WALL16[3],
+                    sx, sy, CELL * K, CELL * K);
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ setup */
+function reset() {
+  var i, j, c, n;
+  mon = [];
+  shot = [];
+  items = [];
+  G.x = CELL * 1 + 4;
+  G.y = CELL * 1 + 4;
+  G.life = 20000;
+  G.score = 0;
+  G.keys = 0;
+  G.shots = CLS_MIS[G.cls];
+  G.canShoot = 0;
+  G.hurt = 0;
+  G.tick = 0;
+  n = 0;
+  for (j = 1; j < MH - 1; j++) {
+    for (i = 1; i < MW - 1; i++) {
+      if (cell(i, j) !== 1) {
+        continue;
+      }
+      c = (i * 7 + j * 13) % 9;
+      if (c === 0 && mon.length < 12 && n > 4) {
+        mon.push({ x: i * CELL + 2, y: j * CELL + 3, t: 0, hp: 2,
+                   kind: (i + j) % 3 });
+      }
+      n = n + 1;
+    }
+  }
+  if (mon.length < 3) {
+    mon.push({ x: CELL * 5, y: CELL * 1 + 3, t: 0, hp: 2, kind: 0 });
+    mon.push({ x: CELL * 9, y: CELL * 3 + 3, t: 0, hp: 2, kind: 1 });
+  }
+  items.push({ x: CELL * 5 + 4, y: CELL * 1 + 4, t: 0 });
+  items.push({ x: CELL * 13 + 4, y: CELL * 11 + 4, t: 1 });
+  items.push({ x: CELL * 3 + 4, y: CELL * 11 + 4, t: 2 });
+  items.push({ x: CELL * 7 + 4, y: CELL * 7 + 4, t: 0 });
+  camX = G.x - 48;
+  camY = G.y - 48;
+  clampCam();
+}
+
+/* ---------------------------------------------------------------- update */
+function stepPlayer() {
+  var sp = CLS_SPD[G.cls] / 8;
+  var nx = G.x;
+  var ny = G.y;
+  var mv = 0;
+  if (kL || jL) { nx = nx - sp; G.dir = 3; mv = 1; }
+  if (kR || jR) { nx = nx + sp; G.dir = 1; mv = 1; }
+  if (kU || jU) { ny = ny - sp; G.dir = 0; mv = 1; }
+  if (kD || jD) { ny = ny + sp; G.dir = 2; mv = 1; }
+  if (solidAt(nx + 2, G.y + 5) || solidAt(nx + 8, G.y + 5)) { nx = G.x; }
+  if (solidAt(G.x + 3, ny + 2) || solidAt(G.x + 3, ny + 8)) { ny = G.y; }
+  G.x = nx;
+  G.y = ny;
+  if (mv) {
+    camX = camX + (G.x - 48 - camX) / 4;
+    camY = camY + (G.y - 48 - camY) / 4;
+    clampCam();
+  }
+}
+
+function fireShot() {
+  var vx = 0, vy = 0;
+  if (G.tick < G.canShoot || G.shots <= 0) {
+    return;
+  }
+  /* frame-counter cooldown: a tap is ~150ms, so it cannot double-fire */
+  G.canShoot = G.tick + 9;
+  G.shots = G.shots - 1;
+  if (G.dir === 0) { vy = -3; }
+  else if (G.dir === 1) { vx = 3; }
+  else if (G.dir === 2) { vy = 3; }
+  else { vx = -3; }
+  shot.push({ x: G.x + 4, y: G.y + 4, vx: vx, vy: vy, t: 0 });
+  playSfx(SFX_FIRE);
+}
+
+function stepMonsters() {
+  var i, m, dx, dy, d, sp;
+  for (i = 0; i < mon.length; i++) {
+    m = mon[i];
+    m.t = m.t + 1;
+    dx = G.x - m.x;
+    dy = G.y - m.y;
+    d = Math.abs(dx) + Math.abs(dy);
+    if (d < 90 && d > 2) {
+      sp = 0.7;
+      if (Math.abs(dx) > Math.abs(dy)) {
+        if (!solidAt(m.x + (dx > 0 ? sp : -sp) + 4, m.y + 4)) {
+          m.x = m.x + (dx > 0 ? sp : -sp);
+        } else if (!solidAt(m.x + 4, m.y + (dy > 0 ? sp : -sp) + 4)) {
+          m.y = m.y + (dy > 0 ? sp : -sp);
+        }
+      } else if (!solidAt(m.x + 4, m.y + (dy > 0 ? sp : -sp) + 4)) {
+        m.y = m.y + (dy > 0 ? sp : -sp);
+      } else if (!solidAt(m.x + (dx > 0 ? sp : -sp) + 4, m.y + 4)) {
+        m.x = m.x + (dx > 0 ? sp : -sp);
+      }
+    }
+    if (Math.abs(m.x - G.x) < 8 && Math.abs(m.y - G.y) < 8 && G.hurt === 0) {
+      G.life = G.life - 40;
+      G.hurt = 30;
+      playSfx(SFX_HURT);
+    }
+  }
+}
+
+function sweepShots(list) {
+  var i, w = 0;
+  for (i = 0; i < list.length; i++) {
+    if (list[i].t < 999) { list[w] = list[i]; w = w + 1; }
+  }
+  list.length = w;
+}
+
+function sweepMonsters(list) {
+  var i, w = 0;
+  for (i = 0; i < list.length; i++) {
+    if (list[i].hp > 0) { list[w] = list[i]; w = w + 1; }
+  }
+  list.length = w;
+}
+
+function sweepItems(list) {
+  var i, w = 0;
+  for (i = 0; i < list.length; i++) {
+    if (list[i].t !== 9) { list[w] = list[i]; w = w + 1; }
+  }
+  list.length = w;
+}
+
+function stepShots() {
+  var i, j, s, m;
+  for (i = 0; i < shot.length; i++) {
+    s = shot[i];
+    s.t = s.t + 1;
+    if (solidAt(s.x, s.y)) { s.t = 999; }
+    s.x = s.x + s.vx;
+    s.y = s.y + s.vy;
+    for (j = 0; j < mon.length; j++) {
+      m = mon[j];
+      if (Math.abs(m.x - s.x) < 9 && Math.abs(m.y - s.y) < 9) {
+        m.hp = m.hp - 1;
+        s.t = 999;
+        playSfx(SFX_HIT);
+        if (m.hp <= 0) {
+          m.hp = 0;
+          G.score = G.score + 100;
+        }
+        break;
+      }
+    }
+    if (s.t > 120) { s.t = 999; }
+  }
+  /* mark dead, then sweep once: no splice right after a kill call */
+  sweepShots(shot);
+  sweepMonsters(mon);
+}
+
+function stepItems() {
+  var i, it;
+  for (i = 0; i < items.length; i++) {
+    it = items[i];
+    if (Math.abs(it.x - G.x) < 9 && Math.abs(it.y - G.y) < 9) {
+      if (it.t === 0) { G.life = G.life + 100; G.score = G.score + 20; }
+      else if (it.t === 1) { G.gold = G.gold + 25; G.score = G.score + 50; }
+      else { G.keys = G.keys + 1; G.score = G.score + 75; }
+      it.t = 9;
+      playSfx(SFX_ITEM);
+    }
+  }
+  sweepItems(items);
+}
+
+function update() {
+  G.tick = G.tick + 1;
+  if (G.mode === 0) {
+    /* opening: hold each cartridge frame for its own measured time. The
+       cartridge loop is 38.42 s and is NOT a fixed rate — the starfield runs
+       at 60 fps while the credits/logo sit still for seconds — so a single
+       OPEN_RATE would drift out of sync. G.hold counts down the current
+       frame's remaining ticks instead. */
+    if (G.skip === 0) {
+      G.hold = G.hold - 1;
+      if (G.hold <= 0) {
+        G.intro = G.intro + 1;
+        if (G.intro >= OPEN_N) {
+          G.mode = 1;
+          G.tick = 0;
+        } else {
+          G.hold = OPEN_TICKS[G.intro];
+        }
+      }
+    }
+    return;
+  }
+  if (G.mode !== 3) {
+    return;
+  }
+  if (G.hurt > 0) { G.hurt = G.hurt - 1; }
+  if ((G.tick & 31) === 0) { G.life = G.life - 1; }
+  if (G.life <= 0) {
+    G.life = 0;
+    G.mode = 4;
+    return;
+  }
+  stepPlayer();
+  if (kF || jA) { fireShot(); }
+  stepMonsters();
+  stepShots();
+  stepItems();
+}
+
+/* --------------------------------------------------------- HUD, as the Lynx
+   Measured from a real cartridge frame (102x160 portrait). The strip below the
+   playfield is: a 1 px light border, a black icon well x=1..41, a 2 px divider
+   at x=42..43, then the white stat panel x=44..98 with a 1 px light border on
+   its right. The panel prints BLACK text in the cartridge's own 4 px font:
+       LIFE     19988      (label x=45, value right-aligned to x=97)
+       SPEED       28
+       STRENGTH     3
+       MISSILES     8
+       LEVEL        1
+       SCORE        0
+   Line origins measured at y = 107, 116, 123, 130, 139, 150. */
+var HUD_TOP = 104;       /* first HUD row (native Lynx y) */
+var HUD_WELL_X0 = 1;
+var HUD_WELL_X1 = 42;
+var HUD_PANEL_X0 = 44;
+var HUD_PANEL_X1 = 99;
+var HUD_LABEL_X = 45;
+var HUD_VALUE_X = 97;
+var HUD_LINE_Y = [107, 116, 123, 130, 139, 150];
+
+function drawHud() {
+  var i, k = K, gx;
+  gx = PL;
+
+  /* Exact structure measured from a real cartridge frame (native 102 px wide):
+       y=104  light-grey rule across the full width
+       y=105..157
+              x=0    light-grey left edge
+              x=1..40   black icon well
+              x=41   light-grey
+              x=42   dark-grey
+              x=43   black
+              x=44..98  white stat panel
+              x=99   black
+              x=100  light-grey
+              x=101  dark-grey
+       y=158  light-grey rule across the full width
+       y=159  light-grey only under x=41..43, dark grey elsewhere
+     The dark grey is index 1 (82,85,82); the light grey is (173,170,173). */
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(gx, 104 * k, 102 * k, 56 * k);
+
+  /* left/right vertical edges of the whole strip */
+  ctx.fillStyle = "#ad9ead";
+  ctx.fillRect(gx, 105 * k, k, 53 * k);            /* x=0   */
+  ctx.fillRect(gx + 41 * k, 105 * k, k, 53 * k);    /* x=41  */
+  ctx.fillRect(gx + 100 * k, 105 * k, k, 53 * k);   /* x=100 */
+  ctx.fillStyle = "#555655";
+  ctx.fillRect(gx + 42 * k, 105 * k, k, 53 * k);    /* x=42  */
+  ctx.fillRect(gx + 101 * k, 105 * k, k, 53 * k);   /* x=101 */
+
+  /* white stat panel x=44..98 with a black edge at 99. Measured: the panel's
+     first white row is y=106 (y=105 is still black), and it runs to y=157. */
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(gx + 44 * k, 106 * k, 55 * k, 52 * k);
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(gx + 99 * k, 105 * k, k, 53 * k);    /* x=99  */
+  ctx.fillRect(gx + 43 * k, 105 * k, k, 53 * k);    /* x=43  */
+
+  /* top and bottom rules */
+  ctx.fillStyle = "#ad9ead";
+  ctx.fillRect(gx, 104 * k, 101 * k, k);
+  ctx.fillRect(gx, 158 * k, 101 * k, k);
+  ctx.fillRect(gx + 41 * k, 159 * k, 3 * k, k);
+  ctx.fillStyle = "#555655";
+  ctx.fillRect(gx + 101 * k, 104 * k, k, k);
+  ctx.fillRect(gx + 101 * k, 158 * k, k, k);
+  ctx.fillRect(gx, 159 * k, 41 * k, k);
+  ctx.fillRect(gx + 44 * k, 159 * k, 58 * k, k);
+
+  /* Item icon in the well. The cartridge keeps this key icon on screen in
+     every frame (verified: 133 ink pixels in the well at all times), so it is
+     part of the HUD chrome rather than a "only when carrying a key" indicator.
+     Blit the captured skull-topped key at its exact native offset. */
+  ctx.drawImage(sheet, R_SKEY[0], R_SKEY[1], R_SKEY[2], R_SKEY[3],
+                gx + 17 * k, 113 * k, R_SKEY[2] * k, R_SKEY[3] * k);
+
+  /* the six lines, label left at x=45, value right-aligned */
+  hudLine("LIFE", "" + G.life, 0, k);
+  hudLine("SPEED", "" + CLS_SPD[G.cls], 1, k);
+  hudLine("STRENGTH", "" + CLS_STR[G.cls], 2, k);
+  hudLine("MISSILES", "" + G.shots, 3, k);
+  hudLine("LEVEL", "" + G.level, 4, k);
+  hudLine("SCORE", "" + G.score, 5, k);
+}
+
+/* one HUD row in native Lynx pixels: label at HUD_LABEL_X, value right-aligned.
+   Measured from a real frame: every value's last ink column is x=97, except
+   LEVEL whose digit ends at x=87 (the cartridge does not right-align that one
+   to the same column). hwidth sums glyph advance (w+1), which is one more than
+   the ink width, hence the +2 when aligning on the final ink column. */
+function hudLine(label, val, row, k) {
+  var y = HUD_LINE_Y[row];
+  var rx = row === 4 ? 87 : HUD_VALUE_X;
+  htext(label, HUD_LABEL_X, y, k, "#000000");
+  htext(val, rx - hwidth(val) + 1, y, k, "#000000");
+}
+
+/* ---------------------------------------------------------------- screens */
+function drawOpening() {
+  var i = G.intro;
+  if (i >= OPEN_N) {
+    i = OPEN_N - 1;
+  }
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, 640, 480);
+  /* the real cartridge frame, scaled 3x, centred */
+  ctx.drawImage(openSheet, openRect(i)[0], openRect(i)[1], OPEN_W, OPEN_H,
+                PL, 0, OPEN_W * K, 159 * K);
+  /* Only show the skip hint for the first few seconds: the cartridge paints no
+     prompt, and leaving it up for all 38 s covers the credit text. */
+  if (G.intro < 4 && G.skip === 0) {
+    ptext("PRESS ENTER TO SKIP", PL + 6, 400, 2, "#ffffff");
+  }
+}
+
+function drawTitle() {
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, 640, 480);
+  /* The cartridge's own title screen: the arch with the GAUNTLET logo and the
+     copyright block already burned into the frame (opening frame 43). Drawing
+     the real frame keeps the logo typeface and legal text identical instead of
+     approximating them with the 5x5 font. */
+  ctx.drawImage(openSheet, openRect(43)[0], openRect(43)[1],
+                OPEN_W, OPEN_H, PL, 0, OPEN_W * K, 159 * K);
+  /* the cartridge shows no prompt of its own; blink one below the arch so the
+     player knows to press A (Enter) without covering the logo */
+  if (Math.floor(G.tick / 32) % 2 === 0) {
+    var p = "PRESS ENTER";
+    ptext(p, PL + (VIEW_W - twidth(p, 2)) / 2, 424, 2, "#ffffff");
+  }
+  var h = "ARROWS MOVE   Z FIRE";
+  ptext(h, PL + (VIEW_W - twidth(h, 2)) / 2, 448, 2, "#ad9ead");
+}
+
+function drawSelect() {
+  var i;
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, 640, 480);
+  /* The cartridge's own class-select screen: the hero portrait, the class
+     name and the three stats (all in the Lynx's green 5x5 font) are already
+     part of the frame. GAUNTLIN-2.png holds one 102x160 frame per class, in
+     the cartridge's own order, so drawing frame G.cls is exact rather than
+     a redrawn approximation. */
+  ctx.drawImage(selSheet, 0, G.cls * 160, 102, 160,
+                PL, 0, OPEN_W * K, 159 * K);
+  /* the cartridge blinks the chosen hero in place; mirror that by outlining
+     the frame edge so the pick is still obvious at a glance */
+  ctx.strokeStyle = "#00ff00";
+  ctx.strokeRect(PL + 1, 1, OPEN_W * K - 2, 159 * K - 2);
+  ptext("LEFT RIGHT PICK   ENTER GO", PL + 4, 452, 2, "#00ff00");
+}
+
+function drawPlay() {
+  var i, it;
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, 640, 480);
+  drawWorld();
+  for (i = 0; i < items.length; i++) {
+    it = items[i];
+    if (it.t === 0) { spr3(R_APPLE, it.x, it.y); }
+    else if (it.t === 1) { spr3(R_CHEST, it.x, it.y); }
+    else { spr3(R_KEY, it.x, it.y); }
+  }
+  for (i = 0; i < mon.length; i++) {
+    if (mon[i].kind === 0) { spr3(R_SCORP0, mon[i].x - 4, mon[i].y - 3); }
+    else if (mon[i].kind === 1) { spr3(R_SCORP1, mon[i].x - 4, mon[i].y - 3); }
+    else { spr3(R_SCORP2, mon[i].x - 3, mon[i].y - 3); }
+  }
+  for (i = 0; i < shot.length; i++) {
+    spr3(R_SHOT, shot[i].x, shot[i].y);
+  }
+  if (G.hurt === 0 || (G.tick & 2) === 0) {
+    spr3(R_PLAYER, G.x - 5, G.y - 5);
+  }
+  drawHud();
+
+  if (G.mode === 4) {
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(PL, 120, VIEW_W, 90);
+    var t = "GAME OVER";
+    ptext(t, PL + (VIEW_W - twidth(t, 4)) / 2, 140, 4, "#ffffff");
+    var p = "PRESS ENTER";
+    ptext(p, PL + (VIEW_W - twidth(p, 2)) / 2, 180, 2, "#ffce00");
+  }
+}
+
+function paint() {
+  if (G.mode === 0) { drawOpening(); }
+  else if (G.mode === 1) { drawTitle(); }
+  else if (G.mode === 2) { drawSelect(); }
+  else { drawPlay(); }
+}
+
+function onFrame() {
+  update();
+  paint();
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(onFrame);
+  }
+}
+
+/* ------------------------------------------------------------------- keys */
+function advance() {
+  if (G.mode === 0) {
+    G.mode = 1;
+    G.tick = 0;
+  } else if (G.mode === 1) {
+    G.mode = 2;
+    G.tick = 0;
+  } else if (G.mode === 2) {
+    G.mode = 3;
+    reset();
+  } else if (G.mode === 4) {
+    G.mode = 2;
+    G.tick = 0;
+  }
+}
+
+document.addEventListener("keydown", function (e) {
+  var k = e.keyCode;
+  if (k === 37) { kL = 1; }
+  if (k === 39) { kR = 1; }
+  if (k === 38) { kU = 1; }
+  if (k === 40) { kD = 1; }
+  if (k === 90 || k === 32) { kF = 1; }
+  if (k === 13) {
+    advance();
+    playSfx(SFX_START);
+  }
+  if (G.mode === 2) {
+    if (k === 37) { G.cls = (G.cls + 5) % 6; }
+    if (k === 39) { G.cls = (G.cls + 1) % 6; }
+  }
+  if (G.mode === 0 && k !== 13) {
+    G.skip = 1;
+  }
+});
+
+document.addEventListener("keyup", function (e) {
+  var k = e.keyCode;
+  if (k === 37) { kL = 0; }
+  if (k === 39) { kR = 0; }
+  if (k === 38) { kU = 0; }
+  if (k === 40) { kD = 0; }
+  if (k === 90 || k === 32) { kF = 0; }
+});
+
+/* System menu hooks (Game > New Game / Pause land here). */
+ctx.systemAction = function (id) {
+  if (id === 160) {
+    G.mode = 2;
+    G.tick = 0;
+  }
+};
+
+/* first opening frame starts with its own measured hold */
+G.hold = OPEN_TICKS[0];
+
+onFrame();
+</script>
+</body>
+</html>

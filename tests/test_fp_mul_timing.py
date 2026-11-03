@@ -157,3 +157,22 @@ function tick() {
 requestAnimationFrame(tick);
 """
     _run_v64("FPM6.JS", src, frames=7)
+
+
+def test_rtl_frameclock_apis_share_completed_result():
+    """All three APIs must consume the registered product after busy clears."""
+    src = """
+var calls = 0, bad = 0;
+function tick() {
+  var a = Date.now();
+  var b = performance.now();
+  var c = (new Date()).getTime();
+  if (a !== b || b !== c) bad = bad + 1;
+  calls = calls + 1;
+  fillRect(160, 10, 30, 30, calls > 4 && bad === 0 && a > 0 ? 7 : 0);
+  swapBuffers();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+    _run_v64("FPM7.JS", src, frames=7)

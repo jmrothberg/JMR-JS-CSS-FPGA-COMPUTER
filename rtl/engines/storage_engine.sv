@@ -50,6 +50,7 @@ module storage_engine #(
     input  logic        dir_show_system = 1'b0,
     input  logic        dir_raw_names = 1'b0,
     output logic [31:0] file_size_o,
+    output logic [31:0] dir_size_o,
     input  logic        start_delete,
 
     output logic [7:0]  line_len,         // bytes left in STORAGE_BUFFER
@@ -212,6 +213,7 @@ module storage_engine #(
 
     logic [31:0] f_first, f_size, f_pos;
     assign file_size_o = f_size;
+    assign dir_size_o={dent[31],dent[30],dent[29],dent[28]};
     logic [31:0] cur_clus, data_lba, buf_lba;
     logic [31:0] lba_off;  // NEW: pipeline (clus-2)<<spc then +data_start (WNS)
     logic [7:0]  sect_in_clus;
