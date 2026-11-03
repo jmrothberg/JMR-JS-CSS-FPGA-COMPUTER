@@ -11,6 +11,9 @@ limit is [NEXYS_USB_KEYBOARD_MOUSE_FAILED.md](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md
 
 ## UPDATE 2026-11-03: the switch is not needed for the owner's setup
 
+**Read [PMOD_KEYBOARD_J15_MOUSE.md](PMOD_KEYBOARD_J15_MOUSE.md) instead.**
+That is the one handoff page. It also holds the `parity_err` warning. The
+keyboard typed on **JA**, so JA is confirmed. The text below is history.
 Read this first. The owner got **wireless mouse on J15 and a wired PS/2
 keyboard on a Pmod, both at the same time, no switching** (probe bit saved
 as `/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/mouse_probe/mouse_probe_J15mouse_PMODkbd_PASS_2026-11-03.bit`;
@@ -24,11 +27,10 @@ on JA**, not to build the menu switch below.
 
 What the next agent needs to know:
 
-*   The keyboard has only been proven on **JB**, which is where the owner's
-    I2C joystick normally sits (`JB1` SCL `V9`, `JB2` SDA `V8`). JA is the
-    JS bit's keyboard port and is **unproven with a working receiver**.
-    Proof needs no build: load the saved probe bit, put the keyboard on JA
-    (data `JA1`, clock `JA3`, jumper `VB` to `VCC`), type.
+*   The keyboard first typed on **JB**, where the owner's I2C joystick
+    normally sits (`JB1` SCL `V9`, `JB2` SDA `V8`), and was then **confirmed
+    on JA** (data `JA1`, clock `JA3`, jumper `VB` to `VCC`) with the same
+    probe bit. JA is the JS bit's keyboard port.
 *   Do **not** move the keyboard to JB in the JS bit. It collides with the
     joystick.
 *   The probe's "nothing typed" was a probe bug, not the port:

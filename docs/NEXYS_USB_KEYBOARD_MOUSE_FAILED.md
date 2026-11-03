@@ -3,6 +3,14 @@
 Recorded 2026-10-26. **The combined keyboard/mouse requirement is not working
 on Nexys Video. Do not repeat the mouse-only build as a solution.**
 
+> **Update 2026-11-03:** the owner accepted two ports instead of one
+> combined device: **mouse on J15, keyboard on Pmod JA, stick on JB**, all
+> working together on the probe. See
+> [PMOD_KEYBOARD_J15_MOUSE.md](PMOD_KEYBOARD_J15_MOUSE.md). The statement
+> below that a Pmod keyboard does not meet the requirement was the 2026-10-26
+> requirement. A single USB keyboard-plus-mouse device on J15 is still
+> not working.
+
 ## Required behavior
 
 Plug a USB keyboard with a built-in mouse or trackball into the usual USB

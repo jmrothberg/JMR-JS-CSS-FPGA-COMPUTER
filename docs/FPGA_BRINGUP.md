@@ -146,7 +146,7 @@ Traces first: [../.cursor/rules/use-existing-traces.mdc](../.cursor/rules/use-ex
 | Framebuffer | Native **640×480**, 8 bpp / 256-entry RGB888 palette. One persistent BRAM canvas; present copies to the DDR front image. The GUI board mirror is a separate 160×120 debug view. |
 | Keyboard | USB HOST (J15) → PIC24 → PS/2. **Classic boot-protocol keyboard PASS 2026-08-15.** A wireless keyboard on the same probe did not clock PS/2 (2026-11-02). Some modern HID keyboards light LD14 but never clock PS/2. Pmod JA is the fallback. |
 | Play controls | PS/2 arrows/Space/Enter → KEYEVT (`keyCode` 37–40 / 32 / 13). GUI arrows+Space → KEYBITS (BOARD: PROG `0xFE`+bits). Pmod stick on **JB**. |
-| Mouse | **Wireless mouse PASS 2026-11-02** on `tools/mouse_probe` (cursor, both buttons, wheel). **Combined J15 keyboard/mouse not working.** The `USB_MOUSE=1` experiment disables the J15 keyboard. Read the [failed-approach record](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md). |
+| Mouse | **Wireless mouse on J15 PASS 2026-11-02**, and **Pmod PS/2 keyboard on JA at the same time PASS 2026-11-03** (`tools/mouse_probe`). Stick stays on JB. One USB device that is both keyboard and mouse on J15 still does not work ([failed-approach record](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md)). Read [PMOD_KEYBOARD_J15_MOUSE.md](PMOD_KEYBOARD_J15_MOUSE.md) before touching PS/2 code. |
 | Host link | PROG FT245 (ch A / `.0`) — flash + tether glass + play keys |
 | Storage | µSD SPI + FAT32: `LOAD` reads HTML; `RUN` loads the card-minted `.JSH` including full ASET art. |
 | openFPGALoader `-b` id | **nexysVideo** |
@@ -458,7 +458,9 @@ Wiring that worked:
 
 The probe listens on **JA, JB and JC**, signals 1 to 4 of each, in six data/clock pairings per Pmod (1+3, 3+1, 3+4, 4+3, 1+2, 2+1), so the wiring did not have to be guessed. Pins: JA1..4 = `AB22 AB21 AB20 AB18`; JB1..4 = `V9 V8 V7 W7`; JC1..4 = `Y6 AA6 AA8 AB8` (Digilent Nexys Video master XDC). The probe does not record which Pmod or pair the keyboard answered on.
 
-**Open question for integration: JB is where the owner's I2C joystick lives (`JB1`=SCL `V9`, `JB2`=SDA `V8`).** The JS bit uses **JA** for the PS/2 keyboard (`AB22` data, `AB20` clock), not JB. The keyboard has only been proven on **JB**. JA and JC have not been proven with a working receiver: before the fix below, nothing could type on any port. To prove JA with no new build, leave this same bit loaded, move the keyboard to **JA** (data on `JA1`, clock on `JA3`) with `VB` to `VCC`, and type. If letters appear, JA is good and the JS bit needs no pin change.
+**Integration: JB is where the owner's I2C joystick lives (`JB1`=SCL `V9`, `JB2`=SDA `V8`).** The JS bit uses **JA** for the PS/2 keyboard (`AB22` data, `AB20` clock), not JB. The keyboard first typed on **JB** (where it was wired when the parity bug was fixed), then **was confirmed on JA** with the same probe bit. JC was not tested. The JS bit needs no pin change.
+
+**PASS on JA (owner, 2026-11-03).** The keyboard typed on **JA** with this same bit, so the JS bit takes the keyboard on JA, the mouse on J15, and the stick stays on JB. One-page handoff with the parity warning: [PMOD_KEYBOARD_J15_MOUSE.md](PMOD_KEYBOARD_J15_MOUSE.md).
 
 **NOTE (owner, 2026-11-03): JB must go back to the joystick.** The OS reads the I2C stick on JB (`JB1` SCL, `JB2` SDA). Move the keyboard to **JA** (the JS bit's keyboard port, data `JA1` `AB22`, clock `JA3` `AB20`) or **JC**. The JS bit only listens for **data on hole 1, clock on hole 3** of JA; the probe accepts six pairings, so a keyboard that types on the probe but not in the JS bit is wired on a different pair. The joystick is optional: with no stick on JB the I2C read NACKs and its bits are 0, and the Pmod keyboard's key down/up events (`pmod_kev_*` into `key_evt_*` in `top_nexys_video.sv`) still drive arrow-key games. The mouse is the desktop pointer only. It does not feed `joy()`.
 
@@ -553,7 +555,7 @@ joystick. UART/JTAG are for programming and optional debug only.
 |---|---|---|
 | Typing / EDIT / ESC | J15 classic USB, or Pmod PS/2 on **JA** | J15/`JA` `ps2_rx` → keyboard FIFO (GUI tether still ORed) |
 | Play (move/fire) | Mini I2C stick on **JB** | I2C `0x5A` OR GUI KEYBITS → `joy_in` |
-| Mouse | Combined USB keyboard/mouse on J15 is not implemented | Mouse-only `USB_MOUSE=1` disables J15 keyboard; see [failed approach](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md). |
+| Mouse | **J15** (wired or wireless) | `USB_MOUSE=1` runs the mouse host on J15 and holds the J15 keyboard decoder in reset. **Keyboard then goes on JA**, stick stays on JB. See [PMOD_KEYBOARD_J15_MOUSE.md](PMOD_KEYBOARD_J15_MOUSE.md). A single USB keyboard-plus-mouse device on J15 is still not implemented ([failed approach](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md)). |
 
 Many physical sources merge into **one INPUT FIFO** → INPUT engine → monitor /
 JS events (pattern cite: BASIC sibling UART/`KEY` + PS/2 FIFO merge in
