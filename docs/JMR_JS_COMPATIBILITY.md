@@ -1,6 +1,6 @@
 # JMR JS compatibility matrix (target titles)
 
-Words: [README.md — Words used](../README.md#words-used-in-this-project).
+Words: [README.md — Words used](../docs/WORDS.md#words-used-in-this-project).
 
 **Learn first:** [JS_COMMANDS.md](JS_COMMANDS.md) — JavaScript you can write,
 and the instructions it becomes (34 **opcodes** + native ids). This file is
@@ -29,7 +29,7 @@ needs — **JMR bytecode VM** on PYTHON → FPGA-SIM → BOARD → ASIC.
 **Machine state (2026-09-01):** ONE opcode decoder — `jmr_js_vm_exec64.sv`
 (**Value64**). Five titles are **correct** on FPGA-SIM: INVADERS, PACMAN,
 DONKEY, ASTEROID, MRDO. FPGA-SIM is a slideshow (PC simulating the chip);
-board target **≥ 30 pictures/second**: [SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md).
+board target **≥ 30 pictures/second**. Live VM clock is 33.333 MHz.
 Live heap/code caps: [FPGA_FIT.md](FPGA_FIT.md). **V1.0:** compile when you
 make the card (`.JSH`). **V1.5 compile is live:** `LOAD` → `EDIT` →
 **`COMPILE`** → `RUN`. `RUN` still loads `.JSH`. Typed-at-READY numbered
@@ -71,8 +71,8 @@ mouse), are leftover.
 **Asset bank (external SRAM — no `NAME.DAT`):** great graphics stay at full
 quality. You draw **PNG sheets**; `make_artx.py` writes `NAME.ARTX`. `RUN`
 loads that art as the **ASET** (asset) section of the minted ProgramImage;
-the loader streams it into the **external 4 MB SRAM asset bank**
-(IS61WV204816 contract — [ARCHITECTURE.md](ARCHITECTURE.md)).
+the loader streams it into the **external 8 MiB SRAM aperture**
+([lastrun_ARCHITECTURE.md](lastrun_ARCHITECTURE.md)). Art must end before the front image at byte 7,155,712. **`MAX_SPR` stays 16.**
 **This path is in** (five titles play with ASET art on FPGA-SIM). Do not
 pack Donkey sheets into code BRAM or downscale them to fit. Authoring:
 [GAME_DESIGN.md](GAME_DESIGN.md) (Art).
@@ -111,9 +111,9 @@ Chrome-only title “done on the machine.”
 
 | | **1.0 (now)** | **1.5 (COMPILE live; leftover below)** | **2.0 (planned)** |
 |---|---|---|---|
-| **Meaning** | Caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Host mint at card-create (`.JSH`). Console is **view-only** (`LIST` / `DIR` / `LOAD`) unless you `COMPILE`. | **Live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. `RUN` still loads `.JSH`. Compiler/editor are card programs, not a new ISA. **Leftover:** typed-at-READY numbered authoring of *new* programs, and popular JS V1 does not have. Same heap/ASET/Canvas caps. | Grow the ISA past V1 walls (sprite count, ASET size, `Object.keys` on RTL, `Math.round`, dotted `new`, `.call`/`.apply`). **No title is the V2 example.** |
+| **Meaning** | Caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img`. Host mint at card-create (`.JSH`). `COMPILE` is how the machine mints; `RUN` loads `.JSH`. | **Live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. Compiler and editor are card programs. **Leftover:** typed-at-READY numbered authoring of *new* programs, and popular JS this machine does not have. | More than 16 sprite sheets, `Object.keys` on the chip, dotted `new`, `.call` / `.apply`. **`Math.round` is already nid 54.** The aperture is already 8 MiB. **No title is the V2 example.** |
 | **Acceptance** | `INVADERS` / `PACMAN` / `DONKEY` | Non-art titles compile on the machine (`COMPILE` then `RUN`). Art titles refuse until `ARTPNG.JSH`. Typed-READY `SAVE` optional leftover. | Any `NAME.HTML` that needs those caps. `MKBIG.HTML` / `MKBIGCPU.HTML` stay V1 |
-| **Sprites / ASET** | **`MAX_SPR` = 16**, 4 MB bank | **Unchanged** (do not grow heap/ASET for this) | **`MAX_SPR` ≥ 518**, **8 MB** bank |
+| **Sprites / ASET** | **`MAX_SPR` = 16**. Art lives in the 8 MiB aperture and must stop before byte 7,155,712 | **Unchanged.** Do not grow `MAX_SPR` or the heap for the editor | **`MAX_SPR` ≥ 518**. The aperture is not the remaining work |
 | **Authoring** | PC + remake `card.img`. `LIST` to learn. Do **not** treat `EDIT` as V1.0 play | **Live:** `EDIT` launches `EDITOR.JSH`; `COMPILE` mints `.JSH`. **Leftover:** numbered lines at `>` for *new* programs; language stdlib/globals (table below). Canvas caps stay | Same glass/`LOAD`/`RUN`; drop V1 HTML shims once V2 rows land |
 
 Do **not** title-gate (`if (stem == "…")`).
@@ -280,8 +280,7 @@ still compile byte-identically; bytecode suite 198/198.
 | Unique ASET sheets (`data:image` after dedup) | **518** |
 | Path keys before dedup | 631 |
 | Indexed pixel bytes (Σ w×h, 8 bpp) | **4 857 900 (~4.63 MB)** |
-| Today’s asset SRAM contract (V1) | **4 MB** (`SRAM_BYTES`, IS61WV204816-class) |
-| V2.0 asset SRAM target | **8 MB** (or more); MK needs ~4.63 MB so 8 MB has headroom |
+| Today’s asset aperture | **8 MiB**. Art ends at byte 7,155,712, where the front image starts. `MAX_SPR` is still **16** |
 | Glass | 640×480 Canvas |
 | Compile today | **Fails** — `EXPECTED '('` at HTML **line 738** (`new mk.arenas.Arena({…})`). The earlier stops (unary `+` line 15, `for…in` line 20) are fixed. |
 
@@ -305,7 +304,7 @@ a disabled wall. Locked by
 | Change | Exact need (historical census) |
 |---|---|
 | **`MAX_SPR` / `PROGRAM_MAX_SPRITES`** | **Stay 16.** Agent_learning `/640png` packs related poses onto STEM-N.png atlases + 9-arg crop. Do not grow the descriptor RAM (congestion). |
-| **Asset SRAM / ASET payload** | Shipped titles fit under `FB_SRAM_BASE` (~2.96 MB art). Growing to 8 MB **requires moving** FB/WORK/SPR/SRC/IMGD (jsb_format forbids raising the wall without that). **Not done** — silent overlap corrupts art every present. |
+| **Asset SRAM / ASET payload** | The aperture is 8 MiB. The map is [lastrun_ARCHITECTURE.md](lastrun_ARCHITECTURE.md). Do not raise `MAX_SPR` for one title. |
 | Heap | Re-check when a title actually needs V2; overflow must stay **loud**. No title-only heap. |
 
 #### Compiler (blocks `RUN` before any VM)
@@ -410,7 +409,7 @@ is unfinished.
 
 **Silicon vs this table (updated 2026-08-20):** Complete means **PYTHON /
 JsHwVm**. A Complete row can still be broken or absent in FPGA-SIM RTL —
-that is tracked in [potential bugs.md](potential%20bugs.md), which is the
+that is tracked in [potential bugs.md](../to_delete/notes/potential%20bugs.md), which is the
 authority for silicon.
 
 *Implemented 2026-08-20 (midday pass):* `Array.reduce` (**39**),
@@ -681,7 +680,7 @@ FPGA-SIM debug RPCs (`VMSTAT?`, …) are host helpers, not console verbs.
 
 PYTHON/RTL = the verb exists. That is **not** “known working” on a title.
 Silicon holes and HELP-text mismatch:
-[potential bugs.md — Monitor](potential%20bugs.md#monitor-ready).
+[the monitor notes](../to_delete/notes/potential%20bugs.md#monitor-ready).
 
 | Command | Pri | PYTHON | RTL | Notes |
 |---|---|---|---|---|
@@ -712,7 +711,7 @@ verbs do not change `RUN`. Full glass, compile path, and LUT/BRAM budget:
 | Item | Pri | Status | Don’t |
 |---|---|---|---|
 | Minted `.JSH` ProgramImage from `card.img` | P0 | **V1.0:** PYTHON / FPGA-SIM / BOARD `RUN` this file (compile at card create). **V1.5:** `COMPILE` on the machine mints the same sidecar | Host-compile `storage/` on `RUN` as a second path |
-| ASET → external 4 MB SRAM | P0 | Complete | Downscale for code BRAM; `NAME.DAT` |
+| ASET → external 8 MiB SRAM | P0 | Complete. Art stops before the front image | Downscale for code BRAM; `NAME.DAT`; raising `MAX_SPR` for one title |
 | Dual FB 640×480 | P0 | Complete | 160×120 leftover |
 
 #### Input
@@ -766,7 +765,7 @@ serialized ProgramImage bytes.
   value64=False)` raises in Python; the RTL faults **code 9** at
   `S_GOT_HDR2` and never enters an opcode state. The tagged Q16 encoding
   and its decoder are retired — see
-  [REMOVING_EXEC32.md](REMOVING_EXEC32.md).
+  [RTL_REORG.md](RTL_REORG.md).
 
 **Machine fault codes** (`VMSTAT fault=`): 1 eval-stack, 2 call-stack /
 frame, 3 capacity (heap, timers, arrays), 4 environment handle, 5
@@ -782,7 +781,7 @@ the **number** is the ABI.
 There is **no “known working” column**. An opcode can decode on both rungs
 and still fail in a title because the hole is a native, a method, a heap
 path, or an unverified loop. Notes cite a
-[potential bugs.md](potential%20bugs.md) ID only when that file names this
+[potential bugs.md](../to_delete/notes/potential%20bugs.md) ID only when that file names this
 opcode. Per-API silicon status is under Frozen ISA and the
 [compatibility command map](potential%20bugs.md#compatibility-command-map-inspection-only--superseded).
 
@@ -893,7 +892,7 @@ values are one 64-bit word.
   cheat). One physical SRAM; FPGA-SIM is the `.bin` path. The parent/exec
   dual copies are still real (exec64 owns registers the parent mirrors via
   `hs_*` pokes + one-shot masks) — that skew is the source of most
-  historical bugs; see [potential bugs.md](potential%20bugs.md).
+  historical bugs; see [potential bugs.md](../to_delete/notes/potential%20bugs.md).
 - `+`, `-`, `*`, `/`, `%`, comparisons, NaN, infinities, signed zero, and
   conversion use binary64 behavior in both models. `%` uses truncation toward
   zero. Bitwise operations use ECMAScript `ToInt32`: NaN, infinities, and

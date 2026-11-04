@@ -72,6 +72,10 @@ set_property PULLTYPE PULLUP [get_ports { ps2_data }]
 set_property -dict { PACKAGE_PIN AB22 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_ps2_data }]
 set_property -dict { PACKAGE_PIN AB20 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_ps2_clk }]
 
+## Pmod JC backup PS/2 mouse: JC1=data, JC3=clock, open drain.
+set_property -dict { PACKAGE_PIN Y6 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_jc_ps2_data }]
+set_property -dict { PACKAGE_PIN AA8 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { pmod_jc_ps2_clk }]
+
 ## Pmod JB — Mini I2C joystick 0x5A (SCL=JB1 SDA=JB2). Same as pmod_input_test.
 set_property -dict { PACKAGE_PIN V9 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { joy_scl }]
 set_property -dict { PACKAGE_PIN V8 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { joy_sda }]

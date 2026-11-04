@@ -1,19 +1,18 @@
-# Native JavaScript game speed recovery
+# Native JavaScript game speed
 
-Baseline: Git `38b6da1`, 2026-10-26. The native Value64 JavaScript CPU remains
-the execution engine. The fabric stays at 100 MHz and the VM divisor stays
-at seven. Heap capacities, language features, game rules, art, audio,
-resolution, and the persistent BRAM canvas are retained.
+Two measured gains. Neither is a board FPS number. HDMI stays 60 Hz. Which bit to load: [FPGA_FIT.md](FPGA_FIT.md).
 
-## Current run73o — 2026-11-02
+**First, fewer steps per picture** (October 2026, VM still divide-by-seven). Same 100 MHz fabric clock, internal SRAM, no DDR delay. Median fabric clocks fell 3.76× on Pac-Man and 3.16× on Donkey Kong. The tables below are that campaign.
 
-The selected file is `releases/current/fpga.bit` (run73o); its original
-`build/run73/release/` path remains a compatibility link.
-It is compared with the accepted **October 26 run72b**, not the older baseline
-used in the historical sections below. The owner subsequently flashed run73o to QSPI and reported it running fine.
-Run73o is now selected in `releases/current/`; run72b is preserved for rollback.
+**Second, about 2×, from the VM clock** (run73o, 2026-11-02). Fabric stays 100 MHz. The VM goes from divide-by-seven (14.286 MHz) to divide-by-three (33.333 MHz), which is 2.33× as many VM steps per second. On the real RTL DDR bridge with a 25-cycle MIG model, the same program bytes, median processing gain versus the October bit was **2.005× Pac-Man**, **2.307× Donkey Kong**, and **2.356× the faster Donkey build**. Pac-Man's p95 was 1.74×, so the worst frames did not double. Pixels matched. This is not a measured board frame rate.
 
-Run73o keeps the fabric at 100 MHz and runs the native VM at 33.333 MHz
+Run75 kept 33.333 MHz and did not rerun those game benchmarks. Run76 has no qualified bit and no new speed number. Do not add a third gain until a report exists.
+
+The rest of this page is the evidence for those two gains.
+
+## Evidence for the second gain
+
+That run73o bit keeps the fabric at 100 MHz and runs the VM at 33.333 MHz
 (divide by three, actual 5 ns high pulse), versus run72b's 14.286 MHz.
 Registered exact addition, fixed cached stack operands, bounded multiply
 packing, a single-writer method cache, packed ImageData and changed-block
@@ -74,10 +73,10 @@ The prepared `build/run73/portable_DNKFAST.zip` keeps all six sheets and
 reduces HTML from 1,388,598 to 43,847 bytes. It fits the 64 KB source window;
 this alone does not qualify the on-machine compiler's language support.
 
-## Previous standard release — run72b, 2026-10-26
+## October bit the 2× was measured against — run72b, 2026-10-26
 
 Promoted on 2026-10-26 at the user’s request after a reported working
-board/tether setup. [Current release](STANDARD_RELEASE.md); [run72b rollback](../releases/archive/run72b-2026-10-26/README.md).
+board/tether setup. That bit is the October measurement, not the rollback. [FPGA_FIT.md](FPGA_FIT.md).
 The original build-time manifest’s “not programmed” status records its
 creation time; promotion is recorded in `releases/standard.json`. Numeric
 board FPS has not been measured.

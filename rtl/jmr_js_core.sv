@@ -194,7 +194,7 @@ module jmr_js_core #(
     jmr_mouse_overlay u_mouse_overlay (
         .x(fb_x),.y(fb_y),.mouse_x(pointer_x_o),.mouse_y(pointer_y_o),
         .watch(ui_pixels.window_state[7:0]==3),
-        .ibeam(ui_pixels.dialog==2 && $signed({2'b0,pointer_x_o})>=12'sd154+$signed(ui_pixels.sys_config[47:32]) && $signed({2'b0,pointer_x_o})<12'sd364+$signed(ui_pixels.sys_config[47:32]) && $signed({3'b0,pointer_y_o})>=12'sd150+$signed(ui_pixels.sys_config[63:48]) && $signed({3'b0,pointer_y_o})<12'sd172+$signed(ui_pixels.sys_config[63:48])),
+        .ibeam(ui_pixels.dialog==2 && $signed({2'b0,pointer_x_o})>=12'sd154+$signed(pixel_sys_config[47:32]) && $signed({2'b0,pointer_x_o})<12'sd364+$signed(pixel_sys_config[47:32]) && $signed({3'b0,pointer_y_o})>=12'sd150+$signed(pixel_sys_config[63:48]) && $signed({3'b0,pointer_y_o})<12'sd172+$signed(pixel_sys_config[63:48])),
         .show_pointer(ui_pixels.window_state[7:0]!=10),.opaque(overlay_opaque_o),.rgb(overlay_rgb_o)
     );
     logic mouse_queue_ready, mouse_event_valid, mouse_event_pop;
@@ -258,12 +258,22 @@ module jmr_js_core #(
     logic [3:0] classic_action,classic_menu,classic_popup_count,classic_popup_row;
     logic [9:0] classic_popup_left,classic_title_width;
     logic [7:0] classic_popup_static;
-    logic [5:0] classic_popup_dynamic,classic_label_raddr;
-    logic classic_popup_enabled;
+    logic [6:0] classic_popup_dynamic,classic_label_raddr;
+    logic classic_popup_enabled,window_bars,classic_custom_title;
     import jmr_classic_ui_pkg::SYS_CONFIG_DEFAULT;
     logic sys_we;logic [13:0] sys_addr;logic [15:0] sys_data;
+    logic sys_ready,pixel_sys_we;logic [13:0] pixel_sys_addr;logic [15:0] pixel_sys_data;
+    jmr_resource_bridge u_resource_bridge(.clk(clk),.pixel_clk(pixel_clk),.rst_n(rst_n),
+        .write_valid(sys_we),.write_addr(sys_addr),.write_data(sys_data),.ready(sys_ready),
+        .pixel_valid(pixel_sys_we),.pixel_addr(pixel_sys_addr),.pixel_data(pixel_sys_data));
+    // Fixed boot resources do not belong in the continuously copied UI state.
+    always_ff @(posedge pixel_clk)begin
+        if(!rst_n)pixel_sys_config<=SYS_CONFIG_DEFAULT;
+        else if(pixel_sys_we && pixel_sys_addr>=4672 && pixel_sys_addr<4729)
+            pixel_sys_config[(pixel_sys_addr-4672)*16+:16]<=pixel_sys_data;
+    end
     logic [1:0] sys_status /*verilator public_flat_rd*/;
-    logic [911:0] sys_config;
+    logic [911:0] sys_config,pixel_sys_config;
     always_ff @(posedge clk)begin
         if(!rst_n)sys_config<=SYS_CONFIG_DEFAULT;
         else if(sys_we && sys_addr>=4672 && sys_addr<4729)sys_config[(sys_addr-4672)*16+:16]<=sys_data;
@@ -286,13 +296,13 @@ module jmr_js_core #(
     logic docs_caret_on,docs_flash,ship_about_hot;
     logic [9:0] docs_caret_px;
     logic [1:0] docs_hot;
-    logic [95:0] classic_static_rows;logic [71:0] classic_dynamic_rows;logic [11:0] classic_enabled_rows,classic_checked_rows;
+    logic [111:0] classic_static_rows;logic [97:0] classic_dynamic_rows;logic [13:0] classic_enabled_rows,classic_checked_rows;
     logic [9:0] classic_active_left,classic_active_right;logic [3:0] classic_hover_row;
 
     logic [31:0] ship_generation,classic_generation,app_window;
     logic [31:0] menu_enable,menu_check;
-    logic [31:0] last_ship_generation,last_classic_generation,last_system_window;
-    logic vm_sysw_toggle,sysw_seen,vm_text_toggle,text_seen,vm_text_menu,vm_text_first,vm_text_last;
+    logic [31:0] last_ship_generation,last_classic_generation,last_system_window;logic last_window_bars;
+    logic vm_sysw_toggle,sysw_seen,vm_text_toggle,text_seen,vm_text_menu,vm_text_title,vm_text_first,vm_text_last;
     logic [3:0] vm_sysw_field;
     logic [31:0] vm_sysw_value,vm_text_byte;
     logic [1:0] restart_phase;
@@ -311,16 +321,16 @@ module jmr_js_core #(
     assign ui_quit=ship_quit || actions_quit;
     // Capture the native text event as a bundle before descriptor parsing.
     // The VM holds each event for at least three core clocks.
-    logic classic_text_stb,classic_text_menu,classic_text_first,classic_text_last;
+    logic classic_text_stb,classic_text_menu,classic_text_title,classic_text_first,classic_text_last;
     logic [7:0] classic_text_byte;
     logic [31:0] classic_window_q;
     always_ff @(posedge clk)begin
         if(!rst_n || app_clear)begin
-            classic_text_stb<=0;classic_text_menu<=0;classic_text_first<=0;classic_text_last<=0;classic_text_byte<=0;
+            classic_text_stb<=0;classic_text_menu<=0;classic_text_title<=0;classic_text_first<=0;classic_text_last<=0;classic_text_byte<=0;
         end else begin
             classic_text_stb<=text_seen!=vm_text_toggle;
             if(text_seen!=vm_text_toggle)begin
-                classic_text_menu<=vm_text_menu;classic_text_first<=vm_text_first;
+                classic_text_menu<=vm_text_menu;classic_text_title<=vm_text_title;classic_text_first<=vm_text_first;
                 classic_text_last<=vm_text_last;classic_text_byte<=vm_text_byte;
             end
         end
@@ -328,13 +338,14 @@ module jmr_js_core #(
         else classic_window_q<=system_window_o;
     end
     always_ff @(posedge clk)begin
-        if(!rst_n || app_clear)begin app_window<=0;menu_enable<=32'hffffffff;menu_check<=0;system_viewport_o<=0;sysw_seen<=0;text_seen<=vm_text_toggle;end
+        if(!rst_n || app_clear)begin app_window<=0;menu_enable<=32'hffffffff;menu_check<=0;window_bars<=1;system_viewport_o<=0;sysw_seen<=0;text_seen<=vm_text_toggle;end
         else begin
             if(!vm_busy)begin app_window<=0;system_viewport_o<=0;end
             if(sysw_seen!=vm_sysw_toggle)begin
                 sysw_seen<=vm_sysw_toggle;
                 if(vm_sysw_field<4)app_window[vm_sysw_field*8+:8]<=vm_sysw_value[7:0];
                 else if(vm_sysw_field==4)system_viewport_o<=vm_sysw_value!=0;
+                else if(vm_sysw_field==9)window_bars<=vm_sysw_value!=0;
                 else if(vm_sysw_field==7)menu_enable<=vm_sysw_value;else if(vm_sysw_field==8)menu_check<=vm_sysw_value;
             end
             if(text_seen!=vm_text_toggle)text_seen<=vm_text_toggle;
@@ -349,9 +360,9 @@ module jmr_js_core #(
         else if(app_window[7:0]==0 && con_interactive)system_window_o[7:0]={5'd0,con_system_role};
     end
     always_ff @(posedge clk)begin
-        if(!rst_n)begin last_boot_glass<=1;last_boot_stage<=0;system_generation_o<=0;last_ship_generation<=0;last_classic_generation<=0;last_system_window<=0;last_docs_generation<=0;end
-        else if(last_boot_glass!=boot_glass || last_boot_stage!=boot_stage || (input_mouse_stb && (classic_menu!=0 || system_menu_o)) || last_ship_generation!=ship_generation || last_classic_generation!=classic_generation || last_system_window!=system_window_o || last_docs_generation!=docs_generation)begin
-            system_generation_o<=system_generation_o+1'b1;last_ship_generation<=ship_generation;
+        if(!rst_n)begin last_window_bars<=1;last_boot_glass<=1;last_boot_stage<=0;system_generation_o<=0;last_ship_generation<=0;last_classic_generation<=0;last_system_window<=0;last_docs_generation<=0;end
+        else if(last_window_bars!=window_bars || last_boot_glass!=boot_glass || last_boot_stage!=boot_stage || (input_mouse_stb && (classic_menu!=0 || system_menu_o)) || last_ship_generation!=ship_generation || last_classic_generation!=classic_generation || last_system_window!=system_window_o || last_docs_generation!=docs_generation)begin
+            last_window_bars<=window_bars;system_generation_o<=system_generation_o+1'b1;last_ship_generation<=ship_generation;
             last_boot_glass<=boot_glass;last_boot_stage<=boot_stage;last_classic_generation<=classic_generation;last_system_window<=system_window_o;last_docs_generation<=docs_generation;
         end
     end
@@ -427,7 +438,7 @@ module jmr_js_core #(
         .sys_we(sys_we),.sys_addr(sys_addr),.sys_data(sys_data),
         .clk(clk),.rst_n(rst_n),.pixel_clk(pixel_clk),.app_clear(app_clear),.window_state(classic_window_q),.source_name(con_source_name),.source_name_len(con_source_name_len),
         .external_label_valid(docs_label_valid),.external_label_row(docs_label_row),.external_label_data(docs_label_data),.external_label_col(docs_label_col),.external_label_commit(docs_label_commit),.external_label_ready(docs_label_ready),
-        .text_stb(classic_text_stb && !app_clear),.text_menu(classic_text_menu),.text_first(classic_text_first),.text_last(classic_text_last),.text_byte(classic_text_byte),
+        .text_stb(classic_text_stb && !app_clear),.text_menu(classic_text_menu),.text_title(classic_text_title),.text_first(classic_text_first),.text_last(classic_text_last),.text_byte(classic_text_byte),
         .sample_valid(input_mouse_stb),.system_active(system_menu_o || system_about_o || docs_dialog!=0),.keyboard_open(system_keyboard_o),.guest_drag(ship_guest),.cancel_menu(classic_menu!=0 && dialog_key_stb && dialog_key_down && dialog_key_code==27),
         .x(input_mouse_x),.y(input_mouse_y),.buttons(input_mouse_buttons),.click_row(input_mouse_row),.consume_pointer(classic_consume),
         .key_stb(classic_key_stb),.key_code(classic_key_code),.action_stb(classic_action_stb),.action(classic_action),
@@ -437,16 +448,15 @@ module jmr_js_core #(
         .menu_enable(menu_enable),.menu_check(menu_check),
         .active_left(classic_active_left),.active_right(classic_active_right),.hover_row(classic_hover_row),.popup_checked_rows(classic_checked_rows),
         .popup_static_rows(classic_static_rows),.popup_dynamic_rows(classic_dynamic_rows),.popup_enabled_rows(classic_enabled_rows),
-        .label_raddr(classic_label_raddr),.label_pos(classic_label_pos),.beam_y(fb_y),.label_glyph(classic_label_glyph),.about_valid(classic_about_valid),.title_valid(classic_title_valid),.title_width(classic_title_width)
+        .label_raddr(classic_label_raddr),.label_pos(classic_label_pos),.beam_y(fb_y),.label_glyph(classic_label_glyph),.about_valid(classic_about_valid),.title_valid(classic_title_valid),.title_width(classic_title_width),.custom_title(classic_custom_title),.window_bars(window_bars)
     );
     typedef struct packed {
         logic [31:0] window_state;
-        logic [911:0] sys_config;
         logic [3:0] menu,count;
         logic [9:0] left_edge,title_width;
-        logic [95:0] static_rows;logic [71:0] dynamic_rows;logic [11:0] enabled_rows,checked_rows;
+        logic [111:0] static_rows;logic [97:0] dynamic_rows;logic [13:0] enabled_rows,checked_rows;
         logic [9:0] active_left,active_right;logic [3:0] hover_row;
-        logic about_open,about_valid,title_valid;
+        logic about_open,about_valid,title_valid,custom_title,window_bars;
         logic [2:0] dialog;
         logic [8:0] files,selected;
         logic [7:0] file_top,message_id;
@@ -458,13 +468,13 @@ module jmr_js_core #(
     } ui_snapshot_t;
     ui_snapshot_t ui_source,ui_pixels;
     always_comb begin
-        ui_source.sys_config=sys_config;ui_source.window_state=system_window_o;
+        ui_source.window_state=system_window_o;
         if(boot_glass)begin ui_source.window_state=32'd10;ui_source.window_state[24]=boot_stage;end ui_source.menu=classic_menu;ui_source.count=classic_popup_count;
         ui_source.left_edge=classic_popup_left;ui_source.title_width=classic_title_width;
         ui_source.static_rows=classic_static_rows;ui_source.dynamic_rows=classic_dynamic_rows;ui_source.enabled_rows=classic_enabled_rows;
         ui_source.active_left=classic_active_left;ui_source.active_right=classic_active_right;ui_source.hover_row=classic_hover_row;ui_source.checked_rows=classic_checked_rows;
         ui_source.about_open=system_about_o;ui_source.about_valid=classic_about_valid && vm_busy && system_window_o[7:0]!=0 && system_window_o[7:0]!=3;
-        ui_source.title_valid=classic_title_valid;ui_source.dialog=docs_dialog;ui_source.files=docs_file_count;ui_source.selected=docs_selected;
+        ui_source.custom_title=classic_custom_title;ui_source.window_bars=window_bars;ui_source.title_valid=classic_title_valid;ui_source.dialog=docs_dialog;ui_source.files=docs_file_count;ui_source.selected=docs_selected;
         ui_source.caret_on=docs_caret_on;ui_source.caret_px=docs_caret_px;ui_source.flash_default=docs_flash;ui_source.hot_button=docs_hot;ui_source.about_hot=ship_about_hot;
         ui_source.file_top=docs_file_top;ui_source.message_id=docs_message;ui_source.name_len=docs_name_len;ui_source.name_selected=docs_name_selected;
         ui_source.ship_hover=(input_mouse_x<190 && input_mouse_y>=26 && input_mouse_y<(app_window[7:0]==9?131:68))?3'(1+(input_mouse_y-26)/21):3'd0;
@@ -473,20 +483,20 @@ module jmr_js_core #(
     end
     jmr_ui_snapshot #(.WIDTH($bits(ui_snapshot_t))) u_ui_snapshot(.clk(clk),.rst_n(rst_n),.pixel_clk(pixel_clk),.source(ui_source),.pixels(ui_pixels));
     jmr_classic_overlay u_classic_overlay (
-        .clk(clk),.sys_we(sys_we),.sys_addr(sys_addr),.sys_data(sys_data),.sys_config(ui_pixels.sys_config),
+        .clk(pixel_clk),.sys_we(pixel_sys_we),.sys_addr(pixel_sys_addr),.sys_data(pixel_sys_data),.sys_config(pixel_sys_config),
         .rst_n(rst_n),
         .pixel_clk(pixel_clk),.x(fb_x),.y(fb_y),.window_state(ui_pixels.window_state),
         .active_menu(ui_pixels.menu),.popup_count(ui_pixels.count),.popup_left(ui_pixels.left_edge),.popup_row(classic_popup_row),
         .active_left(ui_pixels.active_left),.active_right(ui_pixels.active_right),.hover_row(ui_pixels.hover_row),.popup_checked_rows(ui_pixels.checked_rows),
         .popup_static_rows(ui_pixels.static_rows),.popup_dynamic_rows(ui_pixels.dynamic_rows),.popup_enabled_rows(ui_pixels.enabled_rows),
-        .about_open(ui_pixels.about_open),.about_valid(ui_pixels.about_valid),.title_valid(ui_pixels.title_valid),.title_width(ui_pixels.title_width),
+        .about_open(ui_pixels.about_open),.about_valid(ui_pixels.about_valid),.title_valid(ui_pixels.title_valid),.title_width(ui_pixels.title_width),.custom_title(ui_pixels.custom_title),.window_bars(ui_pixels.window_bars),
         .dialog(ui_pixels.dialog),.file_count(ui_pixels.files),.selected(ui_pixels.selected),.file_top(ui_pixels.file_top),.message_id(ui_pixels.message_id),
         .caret_on(ui_pixels.caret_on),.caret_px(ui_pixels.caret_px),.flash_default(ui_pixels.flash_default),.hot_button(ui_pixels.hot_button),.about_hot(ui_pixels.about_hot),
         .name_len(ui_pixels.name_len),.name_selected(ui_pixels.name_selected),.label_raddr(classic_label_raddr),.label_pos(classic_label_pos),.label_glyph(classic_label_glyph),
         .opaque(classic_op),.modal_opaque(classic_modal),.rgb(classic_rgb)
     );
     jmr_system_overlay u_system_overlay (
-        .clk(clk),.sys_we(sys_we),.sys_addr(sys_addr),.sys_data(sys_data),
+        .clk(pixel_clk),.sys_we(pixel_sys_we),.sys_addr(pixel_sys_addr),.sys_data(pixel_sys_data),
         .pixel_clk(pixel_clk),.x(fb_x),.y(fb_y),
         .finder_mode(ui_pixels.window_state[7:0]==9),.hover_row(ui_pixels.ship_hover),.menu_open(ui_pixels.ship_menu),.keyboard_open(ui_pixels.keyboard),.about_open(1'b0),.shift_on(ui_pixels.shift_on),.caps_on(ui_pixels.caps_on),
         .ctrl_on(ui_pixels.ctrl_on),.alt_on(ui_pixels.alt_on),.pressed_index(ui_pixels.pressed),.hold_keys(ui_pixels.hold_keys),.held_keys(ui_pixels.held),
@@ -757,7 +767,7 @@ module jmr_js_core #(
     logic        cmp_arm;
 
     jmr_console_engine u_cons (
-        .sys_we(sys_we),.sys_addr(sys_addr),.sys_data(sys_data),.sys_status(sys_status),
+        .sys_ready(sys_ready),.sys_we(sys_we),.sys_addr(sys_addr),.sys_data(sys_data),.sys_status(sys_status),
         .clk(clk), .rst_n(rst_n),
         .enable(standalone_mode && !game_mode && !desk_visible && !desk_hold && !disk_busy && !fs_busy),
         .kbd_empty(kbd_empty), .kbd_data(kbd_q),
@@ -867,7 +877,7 @@ module jmr_js_core #(
     // rast_done: busy can rise AND fall between two VM beats (a 1x1
     // fill is ~2 clk) — a level the VM samples at beat rate, set on the
     // falling edge of busy, cleared at the next op's go edge (the
-    // latch-until-beat pattern from TIMING_WALL Class A).
+    // latch-until-beat pattern; the old timing note is to_delete/notes/TIMING_WALL.md).
     logic rast_go_q, rast_busy_q, rast_done;
     always_ff @(posedge clk) begin
         if (!rst_n) begin
@@ -1092,7 +1102,7 @@ module jmr_js_core #(
         .key_evt_code(vm_kev_code_lat),
         .key_evt_down(vm_kev_down_lat),.key_evt_char(vm_kev_char_lat),.key_evt_ready(vm_key_evt_ready),
         .sysw_toggle_o(vm_sysw_toggle),.sysw_field_o(vm_sysw_field),.sysw_value_o(vm_sysw_value),
-        .fs_request(vm_fs_req),.fs_command(vm_fs_cmd),.fs_arguments(vm_fs_args),.fs_reply(fs_reply),.fs_result(fs_result),.ui_text_toggle_o(vm_text_toggle),.ui_text_menu_o(vm_text_menu),.ui_text_first_o(vm_text_first),.ui_text_last_o(vm_text_last),.ui_text_byte_o(vm_text_byte),
+        .fs_request(vm_fs_req),.fs_command(vm_fs_cmd),.fs_arguments(vm_fs_args),.fs_reply(fs_reply),.fs_result(fs_result),.ui_text_toggle_o(vm_text_toggle),.ui_text_menu_o(vm_text_menu),.ui_text_title_o(vm_text_title),.ui_text_first_o(vm_text_first),.ui_text_last_o(vm_text_last),.ui_text_byte_o(vm_text_byte),
         .mouse_evt_valid(mouse_event_valid), .mouse_evt_data(mouse_event_data),
         .mouse_evt_pop(mouse_event_pop),
         .code_we(code_we), .code_waddr(code_waddr), .code_wdata(code_wdata),

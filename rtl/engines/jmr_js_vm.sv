@@ -58,7 +58,7 @@ module jmr_js_vm #(
     output logic [127:0] fs_arguments,
     input logic fs_reply=1'b0,
     input logic [31:0] fs_result=32'hffffffff,
-    output logic ui_text_toggle_o,ui_text_menu_o,ui_text_first_o,ui_text_last_o,
+    output logic ui_text_toggle_o,ui_text_menu_o,ui_text_title_o,ui_text_first_o,ui_text_last_o,
     output logic [7:0] ui_text_byte_o,
     input  logic        mouse_evt_valid = 1'b0,
     input  logic [47:0] mouse_evt_data = 48'd0,
@@ -1035,7 +1035,7 @@ module jmr_js_vm #(
     // values, plus measureText (games right-align HUD text with its width)
     logic [15:0] id_font, id_textalign, id_center, id_right, id_measuretext;
     logic [15:0] id_textbaseline, id_top, id_middle, id_bottom; // #37
-    logic [143:0] id_sys_window;
+    logic [175:0] id_sys_window;
     logic [63:0] fs_arg_value;
     logic [2:0] fs_phase;
     logic [31:0] fs_result_q;
@@ -1046,7 +1046,7 @@ module jmr_js_vm #(
     logic [2:0] ui_prop_phase;
     logic [9:0] ui_prop_name;
     logic [15:0] ui_prop_ptr,ui_prop_len,ui_prop_i;
-    logic ui_prop_menu;
+    logic ui_prop_menu,ui_prop_title;
     logic [1:0] e64_ctx_baseline_q;
     logic [15:0] id_imgsmooth; // ctx.imageSmoothingEnabled (hash 54440)
     logic        ctx_smooth;   // 1 default; indexed blit is always nearest
@@ -4957,7 +4957,7 @@ module jmr_js_vm #(
     // the prime suspect for the 14h opt_design stall (log frozen, CPU
     // pinned, near-zero I/O — the AMD-documented pattern). Fencing them
     // costs ~nothing in area; if ExploreArea still stalls, the trigger is
-    // elsewhere (see OVERNIGHT_STATUS.md 2026-08-24).
+    // elsewhere.
     (* dont_touch = "true" *)
     assign ip = hs64 ? (hs_m_ip ? ip_ff : e64_ip_q) :
                 hs32 ? (hs_m_ip ? ip_ff : e32_ip_q) : ip_ff;
@@ -6181,6 +6181,7 @@ module jmr_js_vm #(
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             hs_st(S_IDLE);
+            first_frame_o <= 0;
             running <= 1'b0;
             looping <= 1'b0;
             fb_we <= 1'b0; fb_swap <= 1'b0;
@@ -6358,9 +6359,9 @@ module jmr_js_vm #(
             gc_obj_high <= '0; gc_arr_high <= '0; dbg_gc_n <= '0;
             dbg_stack_ovf <= '0; dbg_call_ovf <= '0;
             machine_fault <= 1'b0; fault_code <= 8'd0; fault_site <= 16'd6115;
-            ui_text_toggle_o<=0;ui_text_menu_o<=0;ui_text_first_o<=0;ui_text_last_o<=0;ui_text_byte_o<=0;
+            ui_text_toggle_o<=0;ui_text_menu_o<=0;ui_text_title_o<=0;ui_text_first_o<=0;ui_text_last_o<=0;ui_text_byte_o<=0;
             fs_request<=0;fs_command<=0;fs_arguments<=0;fs_phase<=0;fs_result_q<=0;
-            ui_prop_phase<=0;ui_prop_name<=0;ui_prop_ptr<=0;ui_prop_len<=0;ui_prop_i<=0;ui_prop_menu<=0;
+            ui_prop_phase<=0;ui_prop_name<=0;ui_prop_ptr<=0;ui_prop_len<=0;ui_prop_i<=0;ui_prop_menu<=0;ui_prop_title<=0;
             prev_joy <= 6'd0; joy_down_edge <= 6'd0; joy_up_edge <= 6'd0;
             sram_req <= 1'b0; sram_addr <= '0; blit_wait <= 1'b0;
             sram_we <= 1'b0; sram_wdata <= '0;
@@ -7618,6 +7619,8 @@ module jmr_js_vm #(
                                 if ({tb, trail_acc[7:0]} == 16'd50846) id_sys_window[96+:16] <= name_idx; // systemAbout
                                 if ({tb, trail_acc[7:0]} == 16'd5498) id_sys_window[128+:16] <= name_idx; // systemMenuCheck
                                 if ({tb, trail_acc[7:0]} == 16'd849) id_sys_window[112+:16] <= name_idx; // systemMenuEnable
+                                if ({tb, trail_acc[7:0]} == 16'd57040) id_sys_window[144+:16] <= name_idx; // windowBars
+                                if ({tb, trail_acc[7:0]} == 16'd50537) id_sys_window[160+:16] <= name_idx; // systemTitle
                                 if ({tb, trail_acc[7:0]} == 16'd4754) id_textbaseline <= name_idx; // #37
                                 if ({tb, trail_acc[7:0]} == 16'd49493) id_top <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd55701) id_middle <= name_idx;
@@ -14915,17 +14918,17 @@ module jmr_js_vm #(
                 S_UI_PROP: begin
                     if(state!=S_UI_PROP && v64_on && e64_leave_hold)begin
                         hs_st(S_UI_PROP);hs_ip(e64_ip_q);hs_vsp(e64_vsp_q);
-                        ui_prop_name<=e64_hp_key_q[9:0];ui_prop_menu<=e64_hp_slot_q==5;
+                        ui_prop_name<=e64_hp_key_q[9:0];ui_prop_menu<=e64_hp_slot_q==5;ui_prop_title<=e64_hp_slot_q==10;
                         ui_prop_phase<=1;ui_prop_i<=0;
                     end else case(ui_prop_phase)
                         1:ui_prop_phase<=2;
                         2:begin
                             ui_prop_ptr<=name_off_rdata;ui_prop_len<=name_blen_rdata;ui_prop_phase<=3;
-                            if(name_blen_rdata>512)begin machine_fault<=1;fault_code<=5;hs_st(S_DONE);end
+                            if(name_blen_rdata>(ui_prop_title?24:ui_prop_menu?800:512))begin machine_fault<=1;fault_code<=5;hs_st(S_DONE);end
                         end
                         3:ui_prop_phase<=4;
                         4:begin
-                            ui_text_menu_o<=ui_prop_menu;ui_text_first_o<=ui_prop_i==0;
+                            ui_text_menu_o<=ui_prop_menu;ui_text_title_o<=ui_prop_title;ui_text_first_o<=ui_prop_i==0;
                             ui_text_last_o<=ui_prop_i+1>=ui_prop_len;
                             ui_text_byte_o<=ui_prop_len==0?8'd0:name_rdata;
                             ui_text_toggle_o<=!ui_text_toggle_o;
@@ -15160,7 +15163,7 @@ module jmr_js_vm #(
                             // oid 0 makes cb_ip 0, and the host FRAME
                             // exit tests cbip != 0. Use a plain marker.
                             dbg_cb_ip <= 16'h1;
-                            dbg_raf_call <= dbg_raf_call + 16'd1;first_frame_o<=1;
+                            dbg_raf_call <= dbg_raf_call + 16'd1;
                             hs_vcall_value(1'b1);
                             hs_vcall_argc(12'd1);
                             vcallback_raf <= 1'b1;
@@ -15241,6 +15244,7 @@ module jmr_js_vm #(
                         // PYTHON present(): scanout the back — but only if
                         // this frame drew. See fb_dirty.
                         dbg_frame_end <= dbg_frame_end + 16'd1;
+                        if(dbg_raf_call!=0)first_frame_o<=1;
                         // Swap ONLY if this frame drew. The unconditional
                         // swap alternated the two banks on every FRAME, so
                         // an event-driven screen that draws ONCE (DONKEY

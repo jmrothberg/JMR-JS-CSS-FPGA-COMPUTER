@@ -33,10 +33,11 @@ def text_width(text):
     return sum(FONT.get(char, FONT['?'])['advance'] for char in text)
 
 
-def _chicago(canvas, x, y, text, colour, scale=1):
+def _chicago(canvas, x, y, text, colour, scale=1, font=None):
     """Chicago 12 into the indexed glass. Same font as the 1984 welcome."""
+    font = FONT if font is None else font
     for char in text:
-        g = FONT.get(char, FONT['?'])
+        g = font.get(char, font['?'])
         for row, bits in enumerate(g['rows']):
             for column, bit in enumerate(bits):
                 if bit == '1':
@@ -98,18 +99,18 @@ def _enterprise_box(scale):
     return width, height
 
 
-def _enterprise(canvas, x, y, scale):
+def _enterprise(canvas, x, y, scale, resources=None):
     """The silhouette, then NCC-1701, then JMR Enterprises. Both lines are Chicago."""
     box_w, _box_h = _enterprise_box(scale)
     ship_w = len(_ENTERPRISE[0]) * scale
     _bitmap(canvas, x + (box_w - ship_w) // 2, y, _ENTERPRISE, scale)
     y_text = y + len(_ENTERPRISE) * scale + 8 * scale
-    _chicago(canvas, x + (box_w - text_width(_REGISTRY) * scale) // 2, y_text, _REGISTRY, 0, scale)
+    _chicago(canvas, x + (box_w - text_width(_REGISTRY) * scale) // 2, y_text, resources.label(170) if resources else _REGISTRY, 0, scale, resources.font if resources else None)
     _chicago(canvas, x + (box_w - text_width(_SHIP_NAME) * scale) // 2,
-             y_text + 19 * scale, _SHIP_NAME, 0, scale)
+             y_text + 19 * scale, resources.label(160) if resources else _SHIP_NAME, 0, scale, resources.font if resources else None)
 
 
-def paint_javatosh_boot(canvas, stage):
+def paint_javatosh_boot(canvas, stage, resources=None):
     """Startup glass. stage 0 is the ship. stage 1 is the welcome box.
 
     The checker uses the desktop's two colours (0x5B and 0x7B). With the
@@ -132,7 +133,7 @@ def paint_javatosh_boot(canvas, stage):
     if stage == 0:
         scale = 2
         box_w, box_h = _enterprise_box(scale)
-        _enterprise(canvas, (width - box_w) // 2, (height - box_h) // 2, scale)
+        _enterprise(canvas, (width - box_w) // 2, (height - box_h) // 2, scale, resources)
     else:
         # Same proportions as the 1984 box, shadow stepped in from the
         # top-left the way a Macintosh window shadow is.
@@ -144,8 +145,8 @@ def paint_javatosh_boot(canvas, stage):
         message = 'Welcome to Javatosh.'
         tw = text_width(message)
         icon_h = _enterprise_box(1)[1]
-        _enterprise(canvas, bx + 16, by + (bh - icon_h) // 2, 1)
-        _chicago(canvas, bx + (bw - tw) // 2, by + (bh - 15) // 2, message, 0)
+        _enterprise(canvas, bx + 16, by + (bh - icon_h) // 2, 1, resources)
+        _chicago(canvas, bx + (bw - tw) // 2, by + (bh - 15) // 2, resources.label(171) if resources else message, 0, font=resources.font if resources else None)
     canvas.front[:] = canvas.back
     canvas.dirty = False
 

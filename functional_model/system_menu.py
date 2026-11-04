@@ -174,7 +174,7 @@ class SystemMenu:
         return ('About','Keyboard')
 
     def overlays(self):
-        signature=(self.open,self.apple_row,self.keyboard,self.about,self.about_hot,self.shift,self.caps,self.ctrl,self.alt,self.pressed,self.hold_keys,tuple(sorted(self.latched)),self.window,self.document_name,len(getattr(self,'source_lines',())),self.application_title,self.application_description,self.classic.signature)
+        signature=(self.open,self.apple_row,self.keyboard,self.about,self.about_hot,self.shift,self.caps,self.ctrl,self.alt,self.pressed,self.hold_keys,tuple(sorted(self.latched)),self.window,self.document_name,getattr(self,'document_title',''),len(getattr(self,'source_lines',())),self.application_title,self.application_description,self.classic.signature)
         if getattr(self,'_overlay_signature',None)==signature:return self._overlay_cache
         apple_n=len(self._apple_labels())
         width,height=190,(26+apple_n*21+8 if self.open and self.window[0]==9 else 72 if self.open else 22)
@@ -256,7 +256,7 @@ class SystemMenu:
             elif self.window[0]==8:
                 full=bytearray(640*480*4)
             else:
-                full=window_pixels(self.window,self._text,self.document_name,getattr(self,'source_lines',()),getattr(self,'resources',None))
+                full=window_pixels(self.window,self._text,self.document_name,getattr(self,'source_lines',()),getattr(self,'resources',None),getattr(self,'document_title',''),getattr(self,'scroll_bars',True))
             if self.window[0]==8:
                 full[:640*22*4]=bytes((255,255,255,255))*640*22
                 full[640*21*4:640*22*4]=bytes((0,0,0,255))*640

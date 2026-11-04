@@ -215,7 +215,7 @@ module jmr_js_vm_exec64 (
     output logic [17:0] src_setlen_q,
     output logic        src_setlen_stb_q,
     output logic        csr_oob_q,
-    input logic [143:0] id_sys_window,
+    input logic [175:0] id_sys_window,
     input logic [1:0] fs_arg_index,
     output logic [63:0] fs_arg_value,
     output logic sysw_toggle_q,
@@ -1781,7 +1781,7 @@ module jmr_js_vm_exec64 (
     function automatic logic [3:0] system_field(input logic [15:0] key);
         begin
             system_field=15;
-            for(integer f=0;f<9;f=f+1)
+            for(integer f=0;f<11;f=f+1)
                 if(key==id_sys_window[f*16+:16])system_field=4'(f);
         end
     endfunction
@@ -6274,7 +6274,7 @@ module jmr_js_vm_exec64 (
                                                  vobj_builtin_rdata==4'd5 && system_field(opw[23:8])!=15)begin
                                         vst_wr(vsp-12'd2,`VST_AT(vsp-12'd1));vsp_n=vsp-12'd1;
                                         ip_n=ip+16'd1;code_raddr_n=15'(ops_base+ip+16'd1);
-                                        if(system_field(opw[23:8])==5 || system_field(opw[23:8])==6)begin
+                                        if(system_field(opw[23:8])==5 || system_field(opw[23:8])==6 || system_field(opw[23:8])==10)begin
                                             // Parent reads the one authoritative name RAM using
                                             // its registered port. No string/heap copy in exec.
                                             if(`VST_AT(vsp-12'd1)[63:48]==16'h7ff9 && `VST_AT(vsp-12'd1)[47:44]==4'd4)begin

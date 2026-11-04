@@ -16,7 +16,7 @@ def toolbar_label(role,flags):
     if role==3:return {1:103,2:93,3:104,4:94}.get((flags>>4)&7,92)
     return {4:95,6:96,7:97}.get(role,96)
 
-def window_pixels(state,paint_text,title="",lines=(),resources=None):
+def window_pixels(state,paint_text,title="",lines=(),resources=None,document_title="",scroll=True):
     def label(i):return resources.label(i) if resources else WINDOW_LABELS.get(i,'System Tool')
     role,sy,sx,flags=state
     rgba=bytearray(bytes((85,221,255,255))*640*480)
@@ -38,21 +38,35 @@ def window_pixels(state,paint_text,title="",lines=(),resources=None):
             for row,line in enumerate(shown[:20]):
                 paint_text(rgba,640,32,96+row*16,(line or '')[:72],black)
     else:rect(24,88,576,344,(0,0,0,0))
-    rect(600,88,1,344,black);rect(601,108,17,306,grey)
-    rect(601,107,17,1,black);rect(601,414,17,1,black)
-    thumb=109+(sy*280//256);rect(601,thumb,17,18,black);rect(602,thumb+1,15,16,white)
+    rect(600,88,1,344,black)
+    # A program sets windowBars=0 when the window does not scroll.
+    # The strip stays white. There is no thumb and no arrow.
+    if scroll:
+        rect(601,108,17,306,grey)
+        rect(601,107,17,1,black);rect(601,414,17,1,black)
+        thumb=109+(sy*280//256);rect(601,thumb,17,18,black);rect(602,thumb+1,15,16,white)
+    else:
+        rect(601,88,17,344,white)
     rect(10,433,608,1,black)
     paint_text(rgba,640,34,3,label(80+role),(0,0,0))
-    caption=title if title and role in (1,2,5) else label(80+role)
-    caption=caption[:24]
+    # A program that names its document (MacPaint's "untitled") uses that
+    # word in the title stripes. The generic tool caption stays off.
+    if document_title:
+        caption=document_title[:24]
+    elif title and role in (1,2,5):
+        caption=title[:24]
+    else:
+        caption=label(80+role)[:24]
     cx=max(240,(640-sum(FONT.get(c,FONT['?'])['advance'] for c in caption))//2)
     paint_text(rgba,640,cx,38,caption,(0,0,0))
-    paint_text(rgba,640,24,66,label(toolbar_label(role,flags)),(0,0,0))
-    paint_text(rgba,640,604,90,'^',(0,0,0));paint_text(rgba,640,604,415,'v',(0,0,0))
+    if not document_title:
+        paint_text(rgba,640,24,66,label(toolbar_label(role,flags)),(0,0,0))
+    if scroll:
+        paint_text(rgba,640,604,90,'^',(0,0,0));paint_text(rgba,640,604,415,'v',(0,0,0))
     if role in (1,5):
         if flags&1:paint_text(rgba,640,480,66,'Modified',(0,0,0))
         rect(28,434,554,19,grey);rect(27,434,1,19,black);rect(582,434,1,19,black)
         tx=29+(sx*520//256);rect(tx,434,32,19,black);rect(tx+1,435,30,17,white)
         paint_text(rgba,640,13,435,'<',(0,0,0));paint_text(rgba,640,586,435,'>',(0,0,0))
-    else:paint_text(rgba,640,24,435,'Close window to return',(0,0,0))
+    elif not document_title:paint_text(rgba,640,24,435,'Close window to return',(0,0,0))
     return rgba

@@ -177,6 +177,7 @@ proc jmr_add_sources {ROOT} {
       $ROOT/rtl/video/jmr_system_overlay.sv \
       $ROOT/rtl/phys/jmr_ps2_mouse_host.sv \
       $ROOT/rtl/phys/jmr_pointer_accumulator.sv \
+      $ROOT/rtl/phys/jmr_mouse_packet_merge.sv \
       $ROOT/rtl/engines/jmr_desktop_layout_pkg.sv \
       $ROOT/rtl/engines/jmr_icon_stream.sv \
       $ROOT/rtl/engines/jmr_desktop_disk.sv \

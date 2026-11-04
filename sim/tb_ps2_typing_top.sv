@@ -64,6 +64,7 @@ module tb_ps2_typing_top (
         .dump_addr(dump_addr), .dump_data(dump_data)
     );
     jmr_console_engine u_cons (
+        .sys_ready(1'b1),
         .clk(clk), .rst_n(rst_n),
         .enable(1'b1),
         .kbd_empty(kbd_empty), .kbd_data(kbd_q),

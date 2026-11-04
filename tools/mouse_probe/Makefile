@@ -8,11 +8,12 @@
 #   source scripts/vivado_env.sh
 #   make -C tools/mouse_probe bit flash
 #
-# Bitstream: build/mouse_probe/mouse_probe.bit
-# Test bitstream (does not replace the one above):
+# make bit writes build/mouse_probe/mouse_probe.bit (a fresh build, not a keeper).
+# The two kept probes are:
+#   mouse_probe_J15mouse_PMODkbd_PASS_2026-11-03.bit  mouse on USB, keyboard on JA
+#   mouse_probe_J15kbd_JAmouse.bit                    keyboard on USB, mouse on JA
 #   make -C tools/mouse_probe bit-ja-mouse
-#   build/mouse_probe/mouse_probe_J15kbd_JAmouse.bit
-#   wired USB keyboard on J15, PS/2 mouse on JA.
+# JA data is pin 1, clock is pin 3, for a mouse or a keyboard.
 
 ROOT := $(abspath ../..)
 OUT  := $(ROOT)/build/mouse_probe
@@ -38,6 +39,7 @@ $(BIT): top_mouse_probe.sv mouse_probe_host.sv mouse_probe.xdc vivado_build.tcl 
 		-tclargs $(ROOT) $(OUT)
 
 $(BIT_JA): top_mouse_probe.sv mouse_probe_host.sv mouse_probe.xdc vivado_build.tcl \
+		$(ROOT)/rtl/phys/jmr_ps2_mouse_host.sv $(ROOT)/rtl/phys/ps2_rx.sv \
 		$(ROOT)/rtl/video/jmr_mouse_overlay.sv $(ROOT)/rtl/video/jmr_rgb2dvi_wrap.vhd | $(OUT)
 	$(VIVADO) -mode batch -source $(CURDIR)/vivado_build.tcl \
 		-tclargs $(ROOT) $(OUT) ja_mouse

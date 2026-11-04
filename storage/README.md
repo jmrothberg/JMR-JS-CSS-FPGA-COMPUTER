@@ -1,5 +1,11 @@
 # storage/
 
+**November 4 Finder correction:** [disk-only Finder initialization and return fix](../releases/updates/run75-finder-return-2026-11-04/README.md).
+Use the corrected Finder with run75; reboot to replace its resident cache.
+
+Newest timing-qualified candidate: [run75 program Finder + SYSTEM.SYS](../build/run75_program_system/release/README.md).
+Built November 4; corrected Finder drawing confirmed on the board. The owner confirmed mouse and keyboard work with the correct JA pins 1 and 3.
+
 `SYSTEM.SYS` contains shared native fonts, menu/dialog captions and dialog
 layout resources. Generate it from `resources/system/system.json`; do not edit
 the binary. [How to edit and publish it](../docs/SYSTEM_RESOURCES.md). Reopen
@@ -13,22 +19,16 @@ That file tells you how to play, edit, compile, and read documents. This
 file tells you which host files become which card files, and which ones
 must stay in this folder.
 
-The shared Mac-style menus are installed in the main `gui_jmr_js.py` and
-`card.img` for **Python and real RTL testing**. Launch the GUI normally. All 19 games/demos
-now use File → Quit, application-specific About text headed JMR Enterprises,
-and the shared mouse keyboard. Simpler programs have Game → Restart. The system
-viewport keeps their entire existing picture and maps mouse coordinates back
-into the game. No additional sprite images were added. `2DFANTA2.HTML`
-(Fantasy Chess) and `DNKF.HTML` (Donkey Kong) use the shared application menus;
-`MENUEX.HTML` is the small working conversion example. The common API and agent
-porting instructions are in [SYSTEM_APPLICATIONS.md](../docs/SYSTEM_APPLICATIONS.md),
-also `MENUS.MD` on the updated disk. The previous disk and rollback instructions
-are under `build/system_tools/`. The normal GUI starts in Python; F9 selects the updated native RTL.
-The board-tested bitstream is preserved while the new run74 hardware build
-is qualified. See `../build/rtl_system_parity/README.md` for checks. `../run_python_system_preview.sh`
-still provides an optional separate disk for isolated Python tests.
+The GUI starts in Python and opens the Finder program. F9 selects FPGA-SIM.
+Games use File → Quit. `MENUEX.HTML` is the small game example and
+`GUIDEX.HTML` is the window example. The shared API is
+[SYSTEM_APPLICATIONS.md](../docs/SYSTEM_APPLICATIONS.md), also `MENUS.MD`
+on the card. The flashed board bit is still run73o
+([releases/current](../releases/current/README.md)); it does not contain
+this Finder. The older desktop snapshot is
+[to_delete/builtin-finder-2026-11-03](../to_delete/builtin-finder-2026-11-03/README.md).
 
-Words: [README.md — Words used](../README.md#words-used-in-this-project).
+Words: [README.md — Words used](../docs/WORDS.md#words-used-in-this-project).
 
 ## What the card builder copies
 

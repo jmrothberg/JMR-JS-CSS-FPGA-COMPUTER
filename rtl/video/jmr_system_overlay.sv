@@ -1,5 +1,6 @@
 // Opaque ship menu and mouse keyboard. Shared label bitmaps keep the display
 // small: one registered ROM read, with identical key legends sharing a row.
+// About is drawn by jmr_classic_overlay; the old bitmap bank is intentionally absent.
 module jmr_system_overlay (
  input logic pixel_clk,clk,sys_we,
  input logic [13:0] sys_addr,
@@ -16,13 +17,13 @@ module jmr_system_overlay (
 );
  import jmr_system_menu_pkg::*;
  (* ram_style="block" *) logic [39:0] key_rows [0:2047];
- (* ram_style="block" *) logic [63:0] label_rows [0:127];
- (* ram_style="block" *) logic [255:0] about_rows [0:127];
+ (* ram_style="distributed" *) logic [63:0] label_rows [0:127];
  initial begin
-  $readmemh("system_keys.hex",key_rows);$readmemh("system_labels.hex",label_rows);$readmemh("system_about.hex",about_rows);
+  $readmemh("system_keys.hex",key_rows);$readmemh("system_labels.hex",label_rows);
  end
  // 40-bit keyboard rows are packed into a byte stream. A shift register
  // assembles one row; only a complete row writes the display RAM.
+ logic [47:0] resource_label_shift;
  logic [47:0] resource_key_shift;
  logic [2:0] resource_key_phase;
  logic [10:0] resource_key_index;
@@ -39,9 +40,12 @@ module jmr_system_overlay (
     default:resource_key_phase<=0;
    endcase
   end
-  if(sys_addr>=9856 && sys_addr<10112)label_rows[6'((sys_addr-9856)>>2)][sys_addr[1:0]*16+:16]<=sys_data;
-  if(sys_addr>=10112 && sys_addr<10304)label_rows[7'd64+7'((sys_addr-10112)>>2)][sys_addr[1:0]*16+:16]<=sys_data;
-  if(sys_addr>=10112 && sys_addr<12160)about_rows[7'((sys_addr-10112)>>4)][sys_addr[3:0]*16+:16]<=sys_data;
+  // Both caption ranges are contiguous; one write port preserves BRAM inference.
+  if(sys_addr>=9856 && sys_addr<10304)begin
+   if(sys_addr[1:0]==3)label_rows[7'((sys_addr-9856)>>2)]<={sys_data,resource_label_shift};
+   else resource_label_shift[sys_addr[1:0]*16+:16]<=sys_data;
+  end
+
  end
  logic op,ink,q_op,q_ink;
  logic [27:0] ship_bits;
@@ -51,7 +55,7 @@ module jmr_system_overlay (
  logic [3:0] row;
  logic [7:0] q_col;
  logic signed [10:0] column;
- logic [39:0] key_data;logic [63:0] label_data;logic [255:0] about_data;
+ logic [39:0] key_data;logic [63:0] label_data;
  wire [9:0] key_x=x-10'd12,key_y=y-10'd314;
  wire [3:0] key_col=4'(key_x/10'd44);
  wire [2:0] key_row=3'(key_y/10'd33);
@@ -89,27 +93,17 @@ module jmr_system_overlay (
     end
    end
   end
-  if(about_open && x>=133 && x<508 && y>=154 && y<307)begin
-   lx=x-133;ly=y-154;op=1;bg=24'hffffff;fg=0;paint_kind=0;row=0;
-   if(lx<2 || lx>=373 || ly<2 || ly>=151)bg=0;
-   else if(lx>=140 && lx<236 && ly>=115 && ly<142)bg=(lx==140 || lx==235 || ly==115 || ly==141)?24'h000000:24'hdbdbdb;
-   if(ly>=12 && ly<28)begin paint_kind=3;about_id=0;column=11'(lx-20);row=4'(ly-12);end
-   else if(ly>=44 && ly<60)begin paint_kind=3;about_id=1;column=11'(lx-20);row=4'(ly-44);end
-   else if(ly>=65 && ly<81)begin paint_kind=3;about_id=2;column=11'(lx-20);row=4'(ly-65);end
-   else if(ly>=86 && ly<102)begin paint_kind=3;about_id=3;column=11'(lx-20);row=4'(ly-86);end
-   else if(ly>=121 && ly<137)begin paint_kind=3;about_id=4;column=11'(lx-175);row=4'(ly-121);end
-  end
   ink=column>=0 && ((paint_kind==1 && column<40) || (paint_kind==2 && column<64) || (paint_kind==3 && column<256));
  end
  always_ff @(posedge pixel_clk)begin
-  key_data<=key_rows[{bitmap_id,row}];label_data<=label_rows[{label_id,row}];about_data<=about_rows[{about_id,row}];
+  key_data<=key_rows[{bitmap_id,row}];label_data<=label_rows[{label_id,row}];
   q_op<=op;q_bg<=bg;q_fg<=fg;q_ink<=ink;q_col<=column[7:0];q_kind<=paint_kind;
  end
  assign opaque=q_op;
  logic pixel_ink;
  always_comb begin
   pixel_ink=0;
-  case(q_kind)1:pixel_ink=key_data[39-q_col[5:0]];2:pixel_ink=label_data[63-q_col[5:0]];3:pixel_ink=about_data[255-q_col];default:;endcase
+  case(q_kind)1:pixel_ink=key_data[39-q_col[5:0]];2:pixel_ink=label_data[63-q_col[5:0]];default:;endcase
  end
  assign rgb=(q_ink && pixel_ink)?q_fg:q_bg;
 endmodule

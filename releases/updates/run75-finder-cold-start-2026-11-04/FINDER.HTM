@@ -1,0 +1,1544 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Finder</title></head>
+<body><canvas id="c" width="640" height="480"></canvas><script>
+// Finder program. This is the disk program, the way the 1984 Finder was
+// a program and the menu bar stayed in ROM. It is not the built-in
+// desktop (functional_model/desktop.py). Folders, positions, Trash, and
+// comments live in DESKTOP.FDR. The card stays a flat FAT root.
+//
+// Arena (bytes). Nothing here is a JS object, so a frame allocates nothing.
+// 16384 init, 16385 dirty, 16386 nFiles, 16387 nTrash, 16388 nFolders,
+// 16389 nWin, 16390 hidden, 16391 shift, 16392 drag, 16393 dragSlot,
+// 16394 front, 16395 buttons, 16396 mx, 16398 my, 16400 pressX, 16402 pressY,
+// 16404 lastSlot, 16405 lastFrame, 16407 frame, 16409 renaming, 16410 renameN,
+// 16411 rename[12], 16423 renameSlot, 16424 undo, 16425 undoSlot,
+// 16426 undoFolder, 16427 undoX, 16429 undoY, 16431 undoN, 16432 undoName[12],
+// 16445 deskDirty, 16446 selN, 16447 infoSlot, 16448 prefixN, 16449 prefix[4],
+// 16454 prefixFrame, 16456 orderN, 16458 startupN, 16459 startup[12].
+// 16600 zoom, 16620 dialog, 16621 clipN, 16622 clip[12], 16640 hitWin, 16642 hitSlot.
+// 16472 dragX, 16474 dragY: where the icon was when the drag started.
+// Slots at 8192 (32 bytes). Windows at 16896 (16 bytes, 8 of them).
+// Order at 20480. Comments at 24576 (24 bytes). Desktop image at 32768.
+// Names at 30000 and 30100. DESKTOP.FDR name at 30200. Icon name at 30300.
+// Copy chunk at 45056. 16471 is the Chicago ink (0 black, 1 blue).
+// Icon cache: flag at 48000, file scratch at 50000.
+// Runs at 52000, 1568 bytes per slot. A row is a count, then
+// that many (x, width, color) groups. Eight runs chopped the
+// right side of a detailed picture. 1568 holds a whole icon.
+// Slot 209 and after stay the generic window: the arena ends.
+// The picture is the 1984 Finder (System 1.0): striped title, Disk at the
+// upper right, Trash at the lower right, Chicago names. Icons stay the
+// color pictures already on the disk. Infinite Mac runs that Finder in
+// an emulator; this program draws the same screen.
+var ctx=document.getElementById("c").getContext("2d");
+ctx.imageSmoothingEnabled=false;
+var ADV=[8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,4,6,7,10,7,11,10,3,5,5,7,7,4,7,4,7,8,8,8,8,8,8,8,8,8,8,4,4,6,8,6,8,11,8,8,8,8,7,7,8,8,6,7,9,7,12,9,8,8,8,8,7,6,8,8,12,8,8,8,5,7,5,8,8,6,8,8,7,8,8,6,8,8,4,6,8,4,12,8,8,8,8,6,7,6,8,8,12,8,8,8,5,5,5,8,8];
+var fontImage=new Image();
+fontImage.src="data:image/png;base64,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";
+ctx.systemWindow=9;
+ctx.systemAbout="Finder|Manage programs and documents.";
+ctx.systemMenus="File|New Folder=160|Open=161|Close=162|Close All=163|Get Info=164|Duplicate=165|Put Back=166|Print=167|Page Setup=168|Eject=169;Edit|Undo=170|Cut=171|Copy=172|Paste=173|Clear=174|Select All=175|Show Clipboard=176;View|by Icon=177|by Small Icon=178|by Name=179|by Size=180|by Kind=181|by Date=182|Hidden files=183;Special|Clean Up=184|Empty Trash=185|Set Startup=186|Restart=187|Erase Disk=188|Terminal=189|Compile=190";
+ctx.font="8px";
+ctx.fillStyle="#000000";
+
+function wid(c){
+ if(c<32||c>126)return 0;
+ return ADV[c];
+}
+function ch(c,x,y){
+ var col,row;
+ if(c<32||c>126)return;
+ col=c-Math.floor(c/32)*32;
+ row=Math.floor(c/32)*16;
+ if(stgRead(16471))row=row+64;
+ ctx.drawImage(fontImage,col*16,row,16,16,x,y,16,16);
+}
+function r16(a){return stgRead(a)+stgRead(a+1)*256;}
+function w16(a,v){
+ var n;
+ n=Math.floor(v);
+ if(n<0)n=0;
+ stgWrite(a,n-Math.floor(n/256)*256);
+ stgWrite(a+1,Math.floor(n/256)-Math.floor(Math.floor(n/256)/256)*256);
+}
+function r32(a){return stgRead(a)+stgRead(a+1)*256+stgRead(a+2)*65536+stgRead(a+3)*16777216;}
+function rect(x,y,w,h){
+ if(w<0){x=x+w;w=0-w;}
+ if(h<0){y=y+h;h=0-h;}
+ ctx.fillRect(x,y,w,1);
+ ctx.fillRect(x,y+h,w,1);
+ ctx.fillRect(x,y,1,h);
+ ctx.fillRect(x+w,y,1,h);
+}
+function num(n,x,y){
+ var d,i,v;
+ if(n<0)n=0;
+ v=Math.floor(n);d=1;
+ while(v>=d*10&&d<100000)d=d*10;
+ i=0;
+ while(d>=1&&i<6){
+  ch(48+Math.floor(v/d),x+i*8,y);
+  v=v-Math.floor(v/d)*d;
+  d=Math.floor(d/10);
+  i=i+1;
+ }
+}
+function nameAt(slot,x,y){
+ var a,n,i,c;
+ a=8192+slot*32;n=stgRead(a);if(n>12)n=12;
+ for(i=0;i<n;i++){c=stgRead(a+1+i);ch(c,x,y);x=x+wid(c);}
+}
+function bufAt(off,n,x,y){
+ var i,c;
+ for(i=0;i<n&&i<12;i++){c=stgRead(off+i);ch(c,x,y);x=x+wid(c);}
+}
+function labelLen(slot){
+ var a,n,i;
+ a=8192+slot*32;n=stgRead(a);
+ if(n>8){
+  for(i=0;i<8;i++)if(stgRead(a+1+i)==46)return i;
+  return 8;
+ }
+ return n;
+}
+function labelWidth(slot){
+ var i,n,w;
+ n=labelLen(slot);w=0;
+ for(i=0;i<n;i++)w=w+wid(stgRead(8192+slot*32+1+i));
+ return w;
+}
+function labelAt(slot,x,y){
+ var i,n,c;
+ n=labelLen(slot);
+ for(i=0;i<n;i++){c=stgRead(8192+slot*32+1+i);ch(c,x,y);x=x+wid(c);}
+}
+function txt(id,x,y){
+ if(id==1){ch(105,x,y);x=x+wid(105);ch(116,x,y);x=x+wid(116);ch(101,x,y);x=x+wid(101);ch(109,x,y);x=x+wid(109);ch(115,x,y);}
+ else if(id==2){ch(80,x,y);x=x+wid(80);ch(97,x,y);x=x+wid(97);ch(103,x,y);x=x+wid(103);ch(101,x,y);}
+ else if(id==3){ch(83,x,y);x=x+wid(83);ch(116,x,y);x=x+wid(116);ch(111,x,y);x=x+wid(111);ch(114,x,y);x=x+wid(114);ch(97,x,y);x=x+wid(97);ch(103,x,y);x=x+wid(103);ch(101,x,y);}
+ else if(id==4){ch(84,x,y);x=x+wid(84);ch(114,x,y);x=x+wid(114);ch(97,x,y);x=x+wid(97);ch(115,x,y);x=x+wid(115);ch(104,x,y);}
+ else if(id==5){ch(68,x,y);x=x+wid(68);ch(105,x,y);x=x+wid(105);ch(115,x,y);x=x+wid(115);ch(107,x,y);}
+ else if(id==6){ch(73,x,y);x=x+wid(73);ch(110,x,y);x=x+wid(110);ch(102,x,y);x=x+wid(102);ch(111,x,y);}
+ else if(id==7){ch(67,x,y);x=x+wid(67);ch(108,x,y);x=x+wid(108);ch(105,x,y);x=x+wid(105);ch(112,x,y);x=x+wid(112);ch(98,x,y);x=x+wid(98);ch(111,x,y);x=x+wid(111);ch(97,x,y);x=x+wid(97);ch(114,x,y);x=x+wid(114);ch(100,x,y);}
+ else if(id==8){ch(75,x,y);x=x+wid(75);ch(105,x,y);x=x+wid(105);ch(110,x,y);x=x+wid(110);ch(100,x,y);}
+ else if(id==9){ch(83,x,y);x=x+wid(83);ch(105,x,y);x=x+wid(105);ch(122,x,y);x=x+wid(122);ch(101,x,y);}
+ else if(id==10){ch(87,x,y);x=x+wid(87);ch(104,x,y);x=x+wid(104);ch(101,x,y);x=x+wid(101);ch(114,x,y);x=x+wid(114);ch(101,x,y);}
+ else if(id==11){ch(68,x,y);x=x+wid(68);ch(97,x,y);x=x+wid(97);ch(116,x,y);x=x+wid(116);ch(101,x,y);}
+ else if(id==12){ch(76,x,y);x=x+wid(76);ch(111,x,y);x=x+wid(111);ch(99,x,y);x=x+wid(99);ch(107,x,y);x=x+wid(107);ch(101,x,y);x=x+wid(101);ch(100,x,y);}
+ else if(id==13){ch(67,x,y);x=x+wid(67);ch(111,x,y);x=x+wid(111);ch(109,x,y);x=x+wid(109);ch(109,x,y);x=x+wid(109);ch(101,x,y);x=x+wid(101);ch(110,x,y);x=x+wid(110);ch(116,x,y);}
+ else if(id==14){ch(65,x,y);x=x+wid(65);ch(112,x,y);x=x+wid(112);ch(112,x,y);x=x+wid(112);ch(108,x,y);x=x+wid(108);ch(105,x,y);x=x+wid(105);ch(99,x,y);x=x+wid(99);ch(97,x,y);x=x+wid(97);ch(116,x,y);x=x+wid(116);ch(105,x,y);x=x+wid(105);ch(111,x,y);x=x+wid(111);ch(110,x,y);}
+ else if(id==15){ch(83,x,y);x=x+wid(83);ch(111,x,y);x=x+wid(111);ch(117,x,y);x=x+wid(117);ch(114,x,y);x=x+wid(114);ch(99,x,y);x=x+wid(99);ch(101,x,y);}
+ else if(id==16){ch(68,x,y);x=x+wid(68);ch(111,x,y);x=x+wid(111);ch(99,x,y);x=x+wid(99);ch(117,x,y);x=x+wid(117);ch(109,x,y);x=x+wid(109);ch(101,x,y);x=x+wid(101);ch(110,x,y);x=x+wid(110);ch(116,x,y);}
+ else if(id==17){ch(70,x,y);x=x+wid(70);ch(111,x,y);x=x+wid(111);ch(108,x,y);x=x+wid(108);ch(100,x,y);x=x+wid(100);ch(101,x,y);x=x+wid(101);ch(114,x,y);}
+ else if(id==18){ch(70,x,y);x=x+wid(70);ch(105,x,y);x=x+wid(105);ch(108,x,y);x=x+wid(108);ch(101,x,y);}
+ else if(id==19){ch(68,x,y);x=x+wid(68);ch(101,x,y);x=x+wid(101);ch(115,x,y);x=x+wid(115);ch(107,x,y);x=x+wid(107);ch(116,x,y);x=x+wid(116);ch(111,x,y);x=x+wid(111);ch(112,x,y);}
+ else if(id==20){ch(69,x,y);x=x+wid(69);ch(109,x,y);x=x+wid(109);ch(112,x,y);x=x+wid(112);ch(116,x,y);x=x+wid(116);ch(121,x,y);x=x+wid(121);ch(32,x,y);x=x+wid(32);ch(116,x,y);x=x+wid(116);ch(104,x,y);x=x+wid(104);ch(101,x,y);x=x+wid(101);ch(32,x,y);x=x+wid(32);ch(84,x,y);x=x+wid(84);ch(114,x,y);x=x+wid(114);ch(97,x,y);x=x+wid(97);ch(115,x,y);x=x+wid(115);ch(104,x,y);x=x+wid(104);ch(63,x,y);}
+ else if(id==21){ch(89,x,y);x=x+wid(89);ch(101,x,y);x=x+wid(101);ch(115,x,y);}
+ else if(id==22){ch(78,x,y);x=x+wid(78);ch(111,x,y);}
+ else if(id==23){ch(105,x,y);x=x+wid(105);ch(110,x,y);x=x+wid(110);ch(32,x,y);x=x+wid(32);ch(100,x,y);x=x+wid(100);ch(105,x,y);x=x+wid(105);ch(115,x,y);x=x+wid(115);ch(107,x,y);}
+ else if(id==24){ch(97,x,y);x=x+wid(97);ch(118,x,y);x=x+wid(118);ch(97,x,y);x=x+wid(97);ch(105,x,y);x=x+wid(105);ch(108,x,y);x=x+wid(108);ch(97,x,y);x=x+wid(97);ch(98,x,y);x=x+wid(98);ch(108,x,y);x=x+wid(108);ch(101,x,y);}
+}
+function copyName(slot,dest){
+ var a,n,i;
+ a=8192+slot*32;n=stgRead(a);
+ for(i=0;i<n;i++)stgWrite(dest+i,stgRead(a+1+i));
+ stgWrite(dest+n,0);
+}
+function isFinder(a){
+ if(stgRead(a)<6)return 0;
+ if(stgRead(a+1)!=70||stgRead(a+2)!=73||stgRead(a+3)!=78)return 0;
+ if(stgRead(a+4)!=68||stgRead(a+5)!=69||stgRead(a+6)!=82)return 0;
+ return 1;
+}
+function kindOf(a){
+ var n;
+ n=stgRead(a);
+ if(n>=4&&stgRead(a+n-3)==46&&stgRead(a+n-2)==74&&stgRead(a+n-1)==83&&stgRead(a+n)==72)return 4;
+ if(n>=4&&stgRead(a+n-3)==46&&stgRead(a+n-2)==83&&stgRead(a+n-1)==89&&stgRead(a+n)==83)return 4;
+ if(n>=4&&stgRead(a+n-3)==46&&stgRead(a+n-2)==73&&stgRead(a+n-1)==67&&stgRead(a+n)==78)return 4;
+ if(n>=4&&stgRead(a+n-3)==46&&stgRead(a+n-2)==65&&stgRead(a+n-1)==82&&stgRead(a+n)==84)return 4;
+ if(n>=4&&stgRead(a+n-3)==46&&stgRead(a+n-2)==70&&stgRead(a+n-1)==68&&stgRead(a+n)==82)return 5;
+ if(n>=4&&stgRead(a+n-3)==46&&stgRead(a+n-2)==72&&stgRead(a+n-1)==84&&stgRead(a+n)==77){
+  if(isFinder(a))return 5;
+  return 1;
+ }
+ if(n>=4&&stgRead(a+n-3)==46&&stgRead(a+n-2)==84&&stgRead(a+n-1)==88&&stgRead(a+n)==84)return 2;
+ if(n>=3&&stgRead(a+n-2)==46&&stgRead(a+n-1)==77&&stgRead(a+n)==68)return 2;
+ return 3;
+}
+function flagsFor(a,attr){
+ var k,f;
+ k=stgRead(a+13);f=0;
+ if(k==4)f=16;
+ if(k==5)f=32;
+ if(attr&1)f=f|8;
+ return f;
+}
+function parseList(){
+ var p,i,n,a,k,c;
+ p=256;c=0;
+ while(c<250){
+  n=stgRead(p);
+  if(n==0)break;
+  a=8192+c*32;
+  stgWrite(a,n);
+  for(i=0;i<n;i++)stgWrite(a+1+i,stgRead(p+1+i));
+  if(n<12)stgWrite(a+1+n,0);
+  p=p+1+n;
+  stgWrite(a+16,stgRead(p));stgWrite(a+17,stgRead(p+1));
+  stgWrite(a+18,stgRead(p+2));stgWrite(a+19,stgRead(p+3));
+  stgWrite(a+20,stgRead(p+4));stgWrite(a+21,stgRead(p+5));
+  k=stgRead(p+6);p=p+7;
+  stgWrite(a+13,kindOf(a));
+  stgWrite(a+14,0);
+  stgWrite(a+15,flagsFor(a,k));
+  c=c+1;
+ }
+ stgWrite(16386,c);
+}
+function stemEq(a,b){
+ var i,ca,cb;
+ for(i=0;i<8;i++){
+  ca=stgRead(a+1+i);cb=stgRead(b+1+i);
+  if(ca==46||ca==0)ca=0;
+  if(cb==46||cb==0)cb=0;
+  if(ca!=cb)return 0;
+  if(ca==0)return 1;
+ }
+ return 1;
+}
+function markKinds(){
+ var i,j,n,a,b;
+ n=stgRead(16386);
+ for(i=0;i<n;i++){
+  a=8192+i*32;
+  if(stgRead(a+13)!=1)continue;
+  for(j=0;j<n;j++){
+   b=8192+j*32;
+   if(stgRead(b+13)==4&&stemEq(a,b))stgWrite(a+13,0);
+  }
+ }
+}
+function findName(off,nlen){
+ var i,a,n,j,ok;
+ n=stgRead(16386);
+ for(i=0;i<n;i++){
+  a=8192+i*32;
+  if(stgRead(a)!=nlen)continue;
+  ok=1;
+  for(j=0;j<nlen;j++)if(stgRead(a+1+j)!=stgRead(off+j))ok=0;
+  if(ok)return i;
+ }
+ return -1;
+}
+function allocSlot(){
+ var i,n,a;
+ n=stgRead(16386);
+ for(i=0;i<n;i++){
+  a=8192+i*32;
+  if(stgRead(a)==0)return i;
+ }
+ if(n>=250)return -1;
+ stgWrite(16386,n+1);
+ return n;
+}
+function recount(){
+ var i,n,t,f,a;
+ n=stgRead(16386);t=0;f=0;
+ for(i=0;i<n;i++){
+  a=8192+i*32;
+  if(stgRead(a)==0)continue;
+  if(stgRead(a+15)&2)t=t+1;
+  if(stgRead(a+13)==6)f=f+1;
+ }
+ stgWrite(16387,t);stgWrite(16388,f);
+}
+function placeGrid(){
+ var i,n,c,a,col;
+ n=stgRead(16386);c=0;
+ for(i=0;i<n;i++){
+  a=8192+i*32;
+  if(stgRead(a)==0)continue;
+  if(stgRead(a+15)&4)continue;
+  if(stgRead(a+15)&32)continue;
+  if(stgRead(a+15)&16)continue;
+  if(stgRead(a+14)!=0)continue;
+  col=c-Math.floor(c/5)*5;
+  w16(a+22,8+col*72);
+  w16(a+24,28+Math.floor(c/5)*52);
+  stgWrite(a+15,stgRead(a+15)|4);
+  c=c+1;
+ }
+ if(c)stgWrite(16445,1);
+}
+function initNames(){
+ stgWrite(30200,68);stgWrite(30201,69);stgWrite(30202,83);stgWrite(30203,75);
+ stgWrite(30204,84);stgWrite(30205,79);stgWrite(30206,80);stgWrite(30207,46);
+ stgWrite(30208,70);stgWrite(30209,68);stgWrite(30210,82);stgWrite(30211,0);
+}
+function allocFolder(off,nl){
+ var s,a,i;
+ s=allocSlot();if(s<0)return -1;
+ a=8192+s*32;stgWrite(a,nl);
+ for(i=0;i<nl;i++)stgWrite(a+1+i,stgRead(off+i));
+ stgWrite(a+13,6);
+ return s;
+}
+function applyRec(s,p,nl){
+ var a,b,cl,i,fl;
+ a=8192+s*32;b=p+1+nl;
+ stgWrite(a+14,stgRead(b));
+ stgWrite(a+22,stgRead(b+1));stgWrite(a+23,stgRead(b+2));
+ stgWrite(a+24,stgRead(b+3));stgWrite(a+25,stgRead(b+4));
+ fl=stgRead(b+5);if(fl&1)fl=fl-1;
+ stgWrite(a+15,fl);
+ if(stgRead(b+6)==6)stgWrite(a+13,6);
+ cl=stgRead(b+7);if(cl>22)cl=22;
+ stgWrite(24576+s*24,cl);
+ for(i=0;i<cl;i++)stgWrite(24576+s*24+1+i,stgRead(b+8+i));
+}
+function applyDesk(){
+ var i,n,p,c,s,nl,cl;
+ n=stgRead(32772);stgWrite(16458,n);
+ for(i=0;i<12;i++)stgWrite(16459+i,stgRead(32773+i));
+ // Do not bring saved windows back. A Trash window saved in front
+ // covered the disk. File positions still come from the records below.
+ for(i=0;i<128;i++)stgWrite(16896+i,0);
+ c=stgRead(32914)+stgRead(32915)*256;p=32916;
+ for(i=0;i<c;i++){
+  nl=stgRead(p);if(nl==0||nl>12)break;
+  s=findName(p+1,nl);
+  if(s<0&&stgRead(p+1+nl+6)==6)s=allocFolder(p+1,nl);
+  if(s>=0)applyRec(s,p,nl);
+  cl=stgRead(p+1+nl+7);
+  p=p+1+nl+8+cl;
+ }
+}
+function loadDesk(){
+ var n;
+ n=fsRead(30200,0,32768,12000);
+ if(n<4)return;
+ if(stgRead(32768)!=70||stgRead(32769)!=68||stgRead(32770)!=82||stgRead(32771)!=49)return;
+ applyDesk();
+}
+function keepSlot(i){
+ var a,k,fl;
+ a=8192+i*32;
+ if(stgRead(a)==0)return 0;
+ k=stgRead(a+13);fl=stgRead(a+15);
+ if(k==5)return 0;
+ if(k==6||(fl&2)||(fl&4))return 1;
+ if(stgRead(24576+i*24)>0)return 1;
+ return 0;
+}
+function writeRec(i,p){
+ var a,n,j,cl;
+ a=8192+i*32;n=stgRead(a);
+ stgWrite(p,n);p=p+1;
+ for(j=0;j<n;j++){stgWrite(p,stgRead(a+1+j));p=p+1;}
+ stgWrite(p,stgRead(a+14));p=p+1;
+ stgWrite(p,stgRead(a+22));p=p+1;
+ stgWrite(p,stgRead(a+23));p=p+1;
+ stgWrite(p,stgRead(a+24));p=p+1;
+ stgWrite(p,stgRead(a+25));p=p+1;
+ stgWrite(p,stgRead(a+15));p=p+1;
+ stgWrite(p,stgRead(a+13));p=p+1;
+ cl=stgRead(24576+i*24);if(cl>22)cl=22;
+ stgWrite(p,cl);p=p+1;
+ for(j=0;j<cl;j++){stgWrite(p,stgRead(24576+i*24+1+j));p=p+1;}
+ return p;
+}
+function saveDesk(){
+ var i,n,p,c;
+ if(stgRead(16445)==0)return;
+ stgWrite(32768,70);stgWrite(32769,68);stgWrite(32770,82);stgWrite(32771,49);
+ n=stgRead(16458);stgWrite(32772,n);
+ for(i=0;i<12;i++)stgWrite(32773+i,i<n?stgRead(16459+i):0);
+ stgWrite(32785,0);
+ for(i=0;i<128;i++)stgWrite(32786+i,stgRead(16896+i));
+ c=0;p=32916;n=stgRead(16386);
+ for(i=0;i<n;i++){
+  if(keepSlot(i)==0)continue;
+  if(p>44000)break;
+  p=writeRec(i,p);c=c+1;
+ }
+ stgWrite(32914,c-Math.floor(c/256)*256);
+ stgWrite(32915,Math.floor(c/256));
+ fsWrite(30200,32768,p-32768,0);
+ stgWrite(16445,0);
+}
+function countWin(){
+ var i,n;
+ n=0;
+ for(i=0;i<8;i++)if(stgRead(16896+i*16))n=n+1;
+ stgWrite(16389,n);
+}
+function pickFront(){
+ var i,a;
+ stgWrite(16394,255);
+ for(i=0;i<8;i++){
+  a=16896+i*16;
+  if(stgRead(a)==1&&stgRead(a+1)==0&&stgRead(a+2)==0){stgWrite(16394,i);return;}
+ }
+ for(i=0;i<8;i++)if(stgRead(16896+i*16)){stgWrite(16394,i);return;}
+}
+function menuMask(){
+ var m,w,v,bit;
+ m=4294967295-128-256-512-268435456;
+ if(stgRead(16387)==0)m=m-33554432-64;
+ ctx.systemMenuEnable=m;
+ w=stgRead(16394);v=0;
+ if(w!=255&&stgRead(16896+w*16))v=stgRead(16896+w*16+3);
+ bit=131072;
+ while(v>0){bit=bit*2;v=v-1;}
+ if(stgRead(16390))bit=bit+8388608;
+ ctx.systemMenuCheck=bit;
+}
+function zoom(x0,y0,x1,y1,w,h){
+ stgWrite(16600,4);
+ w16(16601,x0);w16(16603,y0);w16(16605,x1);w16(16607,y1);
+ w16(16609,w);w16(16611,h);
+ stgWrite(16385,1);
+}
+function focusWin(w){
+ stgWrite(16394,w);
+ menuMask();
+ stgWrite(16385,1);
+}
+function openWin(kind,folder,x,y,w,h,view){
+ var i,a,free;
+ free=8;
+ for(i=0;i<8;i++){
+  a=16896+i*16;
+  if(stgRead(a)&&stgRead(a+1)==kind&&stgRead(a+2)==folder){
+   focusWin(i);return;
+  }
+  if(stgRead(a)==0&&free==8)free=i;
+ }
+ if(free==8)return;
+ a=16896+free*16;
+ stgWrite(a,1);stgWrite(a+1,kind);stgWrite(a+2,folder);stgWrite(a+3,view);stgWrite(a+4,0);
+ w16(a+5,x);w16(a+7,y);w16(a+9,w);w16(a+11,h);
+ focusWin(free);countWin();
+ stgWrite(16445,1);
+}
+function haveDisk(){
+ var i,a;
+ for(i=0;i<8;i++){
+  a=16896+i*16;
+  if(stgRead(a)==1&&stgRead(a+1)==0&&stgRead(a+2)==0)return 1;
+ }
+ return 0;
+}
+function closeWin(w){
+ var a,i;
+ a=16896+w*16;
+ stgWrite(a,0);stgWrite(16394,255);
+ for(i=7;i>=0;i=i-1)if(stgRead(16896+i*16)){stgWrite(16394,i);break;}
+ countWin();stgWrite(16445,1);stgWrite(16385,1);
+}
+function closeAll(){
+ var i;
+ for(i=0;i<8;i++)stgWrite(16896+i*16,0);
+ stgWrite(16394,255);countWin();stgWrite(16445,1);stgWrite(16385,1);
+}
+function scrollWin(w,dir){
+ var a,s,v,n,p;
+ a=16896+w*16;v=stgRead(a+3);s=stgRead(a+4)+dir;
+ if(s<0)s=0;
+ buildOrder(w);n=stgRead(16456);
+ if(v<2){
+  p=1;if(n>5)p=Math.floor((n-1)/5)+1;
+  p=p-3;if(p<0)p=0;
+  if(s>p)s=p;
+ }else if(s>n)s=n;
+ stgWrite(a+4,s);stgWrite(16385,1);
+}
+function shown(slot,w){
+ var a,fl,wk,wf;
+ a=8192+slot*32;
+ if(stgRead(a)==0)return 0;
+ fl=stgRead(a+15);
+ if(fl&32)return 0;
+ if((fl&16)&&stgRead(16390)==0)return 0;
+ // Same list as the built-in desktop: programs and documents.
+ // Art sidecars stay out until Hidden files is checked.
+ if(stgRead(16390)==0&&stgRead(a+13)==3)return 0;
+ wk=stgRead(16896+w*16+1);
+ if(wk==1)return (fl&2)?1:0;
+ if(fl&2)return 0;
+ if(wk!=0)return 0;
+ wf=stgRead(16896+w*16+2);
+ if(stgRead(a+14)!=wf)return 0;
+ return 1;
+}
+function after(a,b,view){
+ var i,ca,cb,sa,sb;
+ if(view==3){
+  sa=r32(8192+a*32+16);sb=r32(8192+b*32+16);
+  if(sa!=sb)return sa>sb?1:0;
+ }
+ if(view==4){
+  sa=stgRead(8192+a*32+13);sb=stgRead(8192+b*32+13);
+  if(sa!=sb)return sa>sb?1:0;
+ }
+ if(view==5){
+  sa=r16(8192+a*32+20);sb=r16(8192+b*32+20);
+  if(sa!=sb)return sa>sb?1:0;
+ }
+ for(i=0;i<12;i++){
+  ca=stgRead(8192+a*32+1+i);cb=stgRead(8192+b*32+1+i);
+  if(ca>=97&&ca<=122)ca=ca-32;
+  if(cb>=97&&cb<=122)cb=cb-32;
+  if(ca!=cb)return ca>cb?1:0;
+ }
+ return 0;
+}
+function buildOrder(w){
+ var n,i,j,s,t,v;
+ n=0;v=stgRead(16896+w*16+3);
+ for(i=0;i<stgRead(16386);i++){
+  if(shown(i,w)){stgWrite(20480+n,i);n=n+1;}
+ }
+ for(i=1;i<n;i++){
+  s=stgRead(20480+i);j=i;
+  while(j>0){
+   t=stgRead(20480+j-1);
+   if(after(t,s,v)==0)break;
+   stgWrite(20480+j,t);j=j-1;
+  }
+  stgWrite(20480+j,s);
+ }
+ stgWrite(16456,n);
+}
+function iconX(w,s,i,view){
+ var page,slot,col;
+ if(view>=2)return r16(16896+w*16+5)+16;
+ page=stgRead(16896+w*16+4);
+ slot=i-page*5;
+ col=slot-Math.floor(slot/5)*5;
+ return r16(16896+w*16+5)+38+col*102;
+}
+function iconY(w,s,i,view){
+ var page,slot,wy;
+ wy=r16(16896+w*16+7);
+ if(view>=2)return wy+52+(i-stgRead(16896+w*16+4))*16;
+ page=stgRead(16896+w*16+4);
+ slot=i-page*5;
+ return wy+58+Math.floor(slot/5)*86;
+}
+function hitOne(w,x,y){
+ var a,wx,wy,ww,wh;
+ a=16896+w*16;
+ if(stgRead(a)==0)return 0;
+ wx=r16(a+5);wy=r16(a+7);ww=r16(a+9);wh=r16(a+11);
+ if(x<wx||y<wy||x>=wx+ww||y>=wy+wh)return 0;
+ stgWrite(16640,w);
+ if(x<wx+18&&y<wy+18)return 2;
+ if(x>=wx+ww-16&&y>=wy+wh-16)return 3;
+ if(x>=wx+ww-16&&y>=wy+48&&y<wy+64)return 4;
+ if(x>=wx+ww-16&&y>=wy+wh-32&&y<wy+wh-16)return 5;
+ if(x>=wx+ww-16&&y>=wy+64&&y<wy+wh-32){
+  if(y>=r16(16680)&&y<r16(16680)+r16(16682))return 7;
+  if(y<r16(16680))return 8;
+  return 9;
+ }
+ if(y<wy+22)return 1;
+ return 6;
+}
+function hitWin(x,y){
+ var i,h,f;
+ f=stgRead(16394);
+ h=hitOne(f,x,y);if(h)return h;
+ for(i=7;i>=0;i=i-1){
+  if(i==f)continue;
+  h=hitOne(i,x,y);if(h)return h;
+ }
+ return 0;
+}
+function hitIcon(w,x,y){
+ var i,n,s,ix,iy,view;
+ buildOrder(w);n=stgRead(16456);view=stgRead(16896+w*16+3);
+ for(i=0;i<n;i++){
+  s=stgRead(20480+i);
+  ix=iconX(w,s,i,view);iy=iconY(w,s,i,view);
+  if(x>=ix-4&&x<ix+72&&y>=iy&&y<iy+52){stgWrite(16642,s);w16(16472,ix);w16(16474,iy);return 1;}
+ }
+ return 0;
+}
+function hitDesk(x,y){
+ var i,n,a,ix,iy;
+ n=stgRead(16386);
+ for(i=0;i<n;i++){
+  a=8192+i*32;
+  if(stgRead(a)==0||stgRead(a+14)!=255)continue;
+  if(stgRead(a+15)&2)continue;
+  if(stgRead(a+15)&32)continue;
+  if((stgRead(a+15)&16)&&stgRead(16390)==0)continue;
+  ix=r16(a+22);iy=r16(a+24);
+  if(x>=ix&&x<ix+64&&y>=iy&&y<iy+46){stgWrite(16642,i);w16(16472,ix);w16(16474,iy);return 1;}
+ }
+ return 0;
+}
+function clearSel(){
+ var i,n,fl;
+ n=stgRead(16386);
+ for(i=0;i<n;i++){
+  fl=stgRead(8192+i*32+15);
+  if(fl&1)stgWrite(8192+i*32+15,fl-1);
+ }
+ stgWrite(16446,0);
+}
+function selectOnly(slot){
+ clearSel();
+ if(slot<0)return;
+ stgWrite(8192+slot*32+15,stgRead(8192+slot*32+15)|1);
+ stgWrite(16446,1);stgWrite(16385,1);
+}
+function toggleSel(slot){
+ var fl;
+ fl=stgRead(8192+slot*32+15);
+ if(fl&1){stgWrite(8192+slot*32+15,fl-1);stgWrite(16446,stgRead(16446)-1);}
+ else{stgWrite(8192+slot*32+15,fl|1);stgWrite(16446,stgRead(16446)+1);}
+ stgWrite(16385,1);
+}
+function firstSel(){
+ var i,n;
+ n=stgRead(16386);
+ for(i=0;i<n;i++)if(stgRead(8192+i*32+15)&1)return i;
+ return -1;
+}
+function selectAll(){
+ var w,n,i,s,c;
+ w=stgRead(16394);if(w==255)return;
+ buildOrder(w);n=stgRead(16456);clearSel();c=0;
+ for(i=0;i<n;i++){
+  s=stgRead(20480+i);
+  stgWrite(8192+s*32+15,stgRead(8192+s*32+15)|1);c=c+1;
+ }
+ stgWrite(16446,c);stgWrite(16385,1);
+}
+function remember(slot,kind){
+ var a,i,n;
+ a=8192+slot*32;
+ stgWrite(16424,kind);stgWrite(16425,slot);stgWrite(16426,stgRead(a+14));
+ w16(16427,r16(a+22));w16(16429,r16(a+24));
+ n=stgRead(a);stgWrite(16431,n);
+ for(i=0;i<12;i++)stgWrite(16432+i,i<n?stgRead(a+1+i):0);
+}
+function undoDo(){
+ var k,s,a,i,n,fl;
+ k=stgRead(16424);if(k==0)return;
+ s=stgRead(16425);a=8192+s*32;
+ if(k==4){stgWrite(a,0);stgWrite(16424,0);recount();stgWrite(16385,1);stgWrite(16445,1);return;}
+ if(k==3){
+  copyName(s,30000);n=stgRead(16431);
+  for(i=0;i<n;i++)stgWrite(30100+i,stgRead(16432+i));
+  stgWrite(30100+n,0);
+  if(stgRead(a+13)!=6)fsRename(30000,30100);
+  stgWrite(a,n);
+  for(i=0;i<n;i++)stgWrite(a+1+i,stgRead(30100+i));
+ }
+ stgWrite(a+14,stgRead(16426));
+ w16(a+22,r16(16427));w16(a+24,r16(16429));
+ if(k==1){fl=stgRead(a+15);if(fl&2)stgWrite(a+15,fl-2);}
+ stgWrite(16424,0);recount();stgWrite(16385,1);stgWrite(16445,1);
+}
+function trashSlot(s){
+ var a,fl;
+ a=8192+s*32;fl=stgRead(a+15);
+ if(fl&8)return;
+ if(stgRead(a+13)==5)return;
+ remember(s,1);
+ stgWrite(a+27,stgRead(a+14));
+ stgWrite(a+15,fl|2);
+ recount();stgWrite(16385,1);stgWrite(16445,1);
+}
+function putBack(s){
+ var a,fl;
+ a=8192+s*32;fl=stgRead(a+15);
+ if((fl&2)==0)return;
+ remember(s,2);
+ stgWrite(a+14,stgRead(a+27));
+ stgWrite(a+15,fl-2);
+ recount();stgWrite(16385,1);stgWrite(16445,1);
+}
+function doPutBack(){
+ var i,n;
+ n=stgRead(16386);
+ for(i=0;i<n;i++)if((stgRead(8192+i*32+15)&1)&&(stgRead(8192+i*32+15)&2))putBack(i);
+}
+function emptyYes(){
+ var i,n,a;
+ n=stgRead(16386);
+ for(i=0;i<n;i++){
+  a=8192+i*32;
+  if((stgRead(a+15)&2)==0)continue;
+  if(stgRead(a+15)&8)continue;
+  if(stgRead(a+13)!=6&&stgRead(a)>0){copyName(i,30000);fsRemove(30000);}
+  stgWrite(a,0);
+ }
+ recount();stgWrite(16620,0);stgWrite(16445,1);stgWrite(16385,1);saveDesk();
+}
+function currentParent(){
+ var w,a;
+ w=stgRead(16394);if(w==255)return 0;
+ a=16896+w*16;
+ if(stgRead(a)==0||stgRead(a+1)!=0)return 0;
+ return stgRead(a+2);
+}
+function writeNewName(a,s){
+ stgWrite(a+1,78);stgWrite(a+2,69);stgWrite(a+3,87);
+ if(s<10){stgWrite(a+4,48+s);stgWrite(a,4);stgWrite(a+5,0);}
+ else{
+  stgWrite(a+4,48+Math.floor(s/10));
+  stgWrite(a+5,48+(s-Math.floor(s/10)*10));
+  stgWrite(a,5);stgWrite(a+6,0);
+ }
+}
+function newFolder(){
+ var s,a;
+ s=allocSlot();if(s<0)return;
+ a=8192+s*32;writeNewName(a,s);
+ stgWrite(a+13,6);stgWrite(a+14,currentParent());stgWrite(a+15,4);
+ w16(a+22,8+(s-Math.floor(s/5)*5)*72);w16(a+24,8+Math.floor(s/5)*40);
+ stgWrite(16424,4);stgWrite(16425,s);
+ recount();selectOnly(s);stgWrite(16445,1);stgWrite(16385,1);
+}
+function moveTo(slot,folder,x,y){
+ var a,fl;
+ a=8192+slot*32;
+ remember(slot,2);
+ fl=stgRead(a+15);
+ if(fl&2){stgWrite(a+15,fl-2);fl=fl-2;}
+ stgWrite(a+14,folder);
+ w16(a+22,x);w16(a+24,y);
+ stgWrite(a+15,fl|4);
+ recount();stgWrite(16445,1);stgWrite(16385,1);
+}
+function dropIcon(slot,x,y){
+ var part,over,a,wx,wy;
+ if(x>=548&&x<630&&y>=380&&y<460){trashSlot(slot);return;}
+ if(x>=548&&x<630&&y>=36&&y<110){moveTo(slot,0,16,16);return;}
+ part=hitWin(x,y);
+ if(part==6&&hitIcon(stgRead(16640),x,y)){
+  over=stgRead(16642);
+  if(over!=slot&&stgRead(8192+over*32+13)==6){moveTo(slot,over+1,12,12);return;}
+ }
+ if(part==0){moveTo(slot,255,x,y);return;}
+ a=16896+stgRead(16394)*16;
+ wx=r16(a+5);wy=r16(a+7);
+ moveTo(slot,stgRead(a+2),x-wx,y-wy-36);
+}
+function openSlot(slot){
+ var k;
+ k=stgRead(8192+slot*32+13);
+ if(k==6){openWin(0,slot+1,24,40,548,354,0);return;}
+ saveDesk();copyName(slot,30000);
+ if(k==2)sysRun(30000,2);
+ else if(k==1)sysRun(30000,1);
+ else if(k==0)sysRun(30000,0);
+ else sysRun(30000,2);
+}
+function clickIcon(slot){
+ var f,last;
+ f=r16(16407);last=r16(16405);
+ if(stgRead(16404)==slot&&f-last<18){stgWrite(16404,255);openSlot(slot);return;}
+ stgWrite(16404,slot);w16(16405,f);
+ if(stgRead(16643))beginRename(slot);
+}
+function beginRename(slot){
+ var a,n,i;
+ if(stgRead(8192+slot*32+15)&8)return;
+ if(stgRead(8192+slot*32+13)==5)return;
+ a=8192+slot*32;n=stgRead(a);
+ stgWrite(16423,slot);stgWrite(16409,1);stgWrite(16410,n);
+ for(i=0;i<12;i++)stgWrite(16411+i,i<n?stgRead(a+1+i):0);
+ stgWrite(16385,1);
+}
+function commitRename(){
+ var s,a,n,i,k;
+ s=stgRead(16423);a=8192+s*32;n=stgRead(16410);k=stgRead(a+13);
+ if(n==0){stgWrite(16409,0);stgWrite(16385,1);return;}
+ remember(s,3);
+ if(k!=6){
+  copyName(s,30000);
+  for(i=0;i<n;i++)stgWrite(30100+i,stgRead(16411+i));
+  stgWrite(30100+n,0);
+  if(fsRename(30000,30100)<0){stgWrite(16409,0);stgWrite(16385,1);return;}
+ }
+ stgWrite(a,n);
+ for(i=0;i<n;i++)stgWrite(a+1+i,stgRead(16411+i));
+ stgWrite(a+1+n,0);
+ stgWrite(16409,0);stgWrite(16445,1);stgWrite(16385,1);
+}
+function renameKey(c){
+ var n;
+ n=stgRead(16410);
+ if(c==13){commitRename();return;}
+ if(c==8){if(n>0)stgWrite(16410,n-1);stgWrite(16385,1);return;}
+ if(n>=12)return;
+ if(c>=97&&c<=122)c=c-32;
+ if((c>=65&&c<=90)||(c>=48&&c<=57)||c==46){stgWrite(16411+n,c);stgWrite(16410,n+1);stgWrite(16385,1);}
+}
+function makeCopyName(slot){
+ var a,n,i,dot;
+ a=8192+slot*32;n=stgRead(a);dot=n;
+ for(i=0;i<n;i++)if(stgRead(a+1+i)==46)dot=i;
+ stgWrite(30100,67);stgWrite(30101,79);stgWrite(30102,80);stgWrite(30103,89);
+ for(i=dot;i<n;i++)stgWrite(30100+4+(i-dot),stgRead(a+1+i));
+ stgWrite(30100+4+(n-dot),0);
+}
+function addCopy(src){
+ var s,a,n,i;
+ s=allocSlot();if(s<0)return;
+ a=8192+s*32;n=0;
+ while(stgRead(30100+n)>0&&n<12)n=n+1;
+ stgWrite(a,n);
+ for(i=0;i<n;i++)stgWrite(a+1+i,stgRead(30100+i));
+ stgWrite(a+13,stgRead(8192+src*32+13));
+ stgWrite(a+14,stgRead(8192+src*32+14));
+ stgWrite(a+15,4);
+ stgWrite(a+16,stgRead(8192+src*32+16));stgWrite(a+17,stgRead(8192+src*32+17));
+ stgWrite(a+18,stgRead(8192+src*32+18));stgWrite(a+19,stgRead(8192+src*32+19));
+ w16(a+22,24);w16(a+24,24);
+ selectOnly(s);stgWrite(16445,1);
+}
+function dupFile(slot){
+ var off,got,total;
+ saveDesk();makeCopyName(slot);copyName(slot,30000);
+ off=0;total=r32(8192+slot*32+16);
+ fsWrite(30100,45056,0,0);
+ while(off<total){
+  got=fsRead(30000,off,45056,4096);
+  if(got<=0)break;
+  fsWrite(30100,45056,got,1);
+  off=off+got;
+ }
+ addCopy(slot);stgWrite(16385,1);
+}
+function doDup(){
+ var s,k;
+ s=firstSel();if(s<0)return;
+ k=stgRead(8192+s*32+13);
+ if(k==6)newFolder();
+ else if(k!=5&&k!=4)dupFile(s);
+}
+function doCopy(){
+ var s,n,i;
+ s=firstSel();if(s<0)return;
+ n=stgRead(8192+s*32);stgWrite(16621,n);
+ for(i=0;i<12;i++)stgWrite(16622+i,i<n?stgRead(8192+s*32+1+i):0);
+}
+function doPaste(){
+ var s,n,i;
+ s=firstSel();if(s<0)return;
+ n=stgRead(16621);if(n==0)return;
+ beginRename(s);stgWrite(16410,n);
+ for(i=0;i<n;i++)stgWrite(16411+i,stgRead(16622+i));
+ commitRename();
+}
+function doClear(){
+ var s;
+ if(stgRead(16409)){stgWrite(16410,0);stgWrite(16385,1);return;}
+ s=firstSel();if(s>=0)trashSlot(s);
+}
+function doInfo(){
+ var s;
+ s=firstSel();if(s<0)return;
+ stgWrite(16447,s);openWin(2,s,120,70,320,230,0);
+}
+function doStartup(){
+ var s,n,i;
+ s=firstSel();if(s<0)return;
+ n=stgRead(8192+s*32);stgWrite(16458,n);
+ for(i=0;i<12;i++)stgWrite(16459+i,i<n?stgRead(8192+s*32+1+i):0);
+ stgWrite(16459+n,0);stgWrite(16445,1);stgWrite(16385,1);
+}
+function doRestart(){
+ saveDesk();
+ if(stgRead(16458)>0)sysRun(16459,0);
+ else sysRun(30200,8);
+}
+function putCompile(){
+ stgWrite(30000,67);stgWrite(30001,79);stgWrite(30002,77);stgWrite(30003,80);
+ stgWrite(30004,73);stgWrite(30005,76);stgWrite(30006,69);stgWrite(30007,46);
+ stgWrite(30008,72);stgWrite(30009,84);stgWrite(30010,77);stgWrite(30011,0);
+}
+function doCompile(){
+ var s,k;
+ s=firstSel();saveDesk();
+ if(s<0){putCompile();sysRun(30000,3);return;}
+ k=stgRead(8192+s*32+13);
+ if(k==0||k==1){copyName(s,30000);sysRun(30000,3);}
+}
+function setView(v){
+ var w;
+ w=stgRead(16394);if(w==255)return;
+ stgWrite(16896+w*16+3,v);menuMask();stgWrite(16445,1);stgWrite(16385,1);
+}
+function toggleHidden(){
+ if(stgRead(16390))stgWrite(16390,0);else stgWrite(16390,1);
+ menuMask();stgWrite(16385,1);
+}
+function cleanUp(){
+ var w,n,i,s,col,a;
+ w=stgRead(16394);
+ if(w==255){cleanDesk();return;}
+ buildOrder(w);n=stgRead(16456);
+ for(i=0;i<n;i++){
+  s=stgRead(20480+i);a=8192+s*32;
+  col=i-Math.floor(i/5)*5;
+  w16(a+22,8+col*72);w16(a+24,8+Math.floor(i/5)*56);
+  stgWrite(a+15,stgRead(a+15)|4);
+ }
+ stgWrite(16445,1);stgWrite(16385,1);
+}
+function cleanDesk(){
+ var i,n,c,a,col;
+ n=stgRead(16386);c=0;
+ for(i=0;i<n;i++){
+  a=8192+i*32;
+  if(stgRead(a)==0||stgRead(a+14)!=255)continue;
+  if(stgRead(a+15)&2)continue;
+  col=c-Math.floor(c/4)*4;
+  w16(a+22,16+col*80);w16(a+24,120+Math.floor(c/4)*64);
+  c=c+1;
+ }
+ stgWrite(16445,1);stgWrite(16385,1);
+}
+function arrowSel(dir){
+ var w,n,i,cur,nxt,step,view;
+ w=stgRead(16394);if(w==255)return;
+ buildOrder(w);n=stgRead(16456);if(n==0)return;
+ view=stgRead(16896+w*16+3);step=view>=2?1:5;
+ cur=firstSel();nxt=0;
+ if(cur<0){selectOnly(stgRead(20480));return;}
+ for(i=0;i<n;i++)if(stgRead(20480+i)==cur)nxt=i;
+ if(dir==0&&nxt>0)nxt=nxt-1;
+ if(dir==2)nxt=nxt+1;
+ if(dir==1&&nxt>=step)nxt=nxt-step;
+ if(dir==3)nxt=nxt+step;
+ if(nxt<0)nxt=0;if(nxt>=n)nxt=n-1;
+ selectOnly(stgRead(20480+nxt));
+}
+function prefixMatch(a){
+ var n,i;
+ n=stgRead(16448);
+ for(i=0;i<n;i++)if(stgRead(a+1+i)!=stgRead(16449+i))return 0;
+ return 1;
+}
+function typeSel(c){
+ var n,w,k,i,s;
+ n=stgRead(16448);
+ if(n<4){stgWrite(16449+n,c);stgWrite(16448,n+1);}
+ w16(16454,r16(16407));
+ w=stgRead(16394);if(w==255)return;
+ buildOrder(w);k=stgRead(16456);
+ for(i=0;i<k;i++){
+  s=stgRead(20480+i);
+  if(prefixMatch(8192+s*32)){selectOnly(s);return;}
+ }
+}
+function infoKey(c){
+ var s,n,a;
+ if(stgRead(16394)==255)return;
+ if(stgRead(16896+stgRead(16394)*16+1)!=2)return;
+ s=stgRead(16896+stgRead(16394)*16+2);
+ a=24576+s*24;n=stgRead(a);
+ if(c==8){if(n>0)stgWrite(a,n-1);stgWrite(16445,1);stgWrite(16385,1);return;}
+ if(n>=22)return;
+ if(c>=97&&c<=122)c=c-32;
+ if((c>=65&&c<=90)||(c>=48&&c<=57)||c==32||c==46){
+  stgWrite(a+1+n,c);stgWrite(a,n+1);stgWrite(16445,1);stgWrite(16385,1);
+ }
+}
+function onKey(e){
+ var c,w;
+ c=e.keyCode;
+ if(c==16){stgWrite(16391,1);return;}
+ if(stgRead(16409)){renameKey(c);return;}
+ w=stgRead(16394);
+ if(w!=255&&stgRead(16896+w*16+1)==2){infoKey(c);return;}
+ if(stgRead(16620))return;
+ if(c==160)newFolder();
+ else if(c==161){if(firstSel()>=0)openSlot(firstSel());}
+ else if(c==162){if(w!=255)closeWin(w);}
+ else if(c==163)closeAll();
+ else if(c==164)doInfo();
+ else if(c==165)doDup();
+ else if(c==166)doPutBack();
+ else if(c==170)undoDo();
+ else if(c==171)doCopy();
+ else if(c==172)doCopy();
+ else if(c==173)doPaste();
+ else if(c==174)doClear();
+ else if(c==175)selectAll();
+ else if(c==176)openWin(3,0,100,80,260,80,0);
+ else if(c==177)setView(0);
+ else if(c==178)setView(1);
+ else if(c==179)setView(2);
+ else if(c==180)setView(3);
+ else if(c==181)setView(4);
+ else if(c==182)setView(5);
+ else if(c==183)toggleHidden();
+ else if(c==184)cleanUp();
+ else if(c==185){if(stgRead(16387)){stgWrite(16620,1);stgWrite(16385,1);}}
+ else if(c==186)doStartup();
+ else if(c==187)doRestart();
+ else if(c==189){saveDesk();sysRun(30200,4);}
+ else if(c==190)doCompile();
+ else if(c==13){if(firstSel()>=0)beginRename(firstSel());}
+ else if(c==37)arrowSel(0);
+ else if(c==38)arrowSel(1);
+ else if(c==39)arrowSel(2);
+ else if(c==40)arrowSel(3);
+ else if(c>=65&&c<=90)typeSel(c);
+ else if(c>=48&&c<=57)typeSel(c);
+}
+function onKeyUp(e){if(e.keyCode==16)stgWrite(16391,0);}
+function pageScroll(y){
+ var a,wy,wh,track,max,row,n;
+ a=16896+stgRead(16640)*16;
+ wy=r16(a+7);wh=r16(a+11);
+ track=wh-96;if(track<16)return;
+ buildOrder(stgRead(16640));n=stgRead(16456);
+ if(n<1)n=1;
+ max=Math.floor((n-1)/5)+1-3;if(max<0)max=0;
+ row=Math.floor((y-(wy+64))*max/track);
+ if(row<0)row=0;if(row>max)row=max;
+ stgWrite(a+4,row);stgWrite(16385,1);
+}
+function infoClick(w,y){
+ var a,s,fl,top;
+ a=16896+w*16;s=stgRead(a+2);top=r16(a+7);
+ if(y>top+150&&y<top+176){
+  fl=stgRead(8192+s*32+15);
+  if(fl&8)stgWrite(8192+s*32+15,fl-8);else stgWrite(8192+s*32+15,fl|8);
+  stgWrite(16445,1);stgWrite(16385,1);
+ }
+}
+function dialogClick(x,y){
+ if(x>=200&&x<280&&y>=230&&y<260)emptyYes();
+ else if(x>=300&&x<380&&y>=230&&y<260){stgWrite(16620,0);stgWrite(16385,1);}
+}
+function onDown(e){
+ var x,y,part,slot;
+ x=e.clientX;y=e.clientY;
+ w16(16396,x);w16(16398,y);w16(16400,x);w16(16402,y);stgWrite(16395,1);
+ if(stgRead(16620)){dialogClick(x,y);return;}
+ part=hitWin(x,y);
+ if(part){
+  focusWin(stgRead(16640));
+  if(part==2){closeWin(stgRead(16640));return;}
+  if(part==3){stgWrite(16392,3);stgWrite(16393,stgRead(16640));return;}
+  if(part==4){scrollWin(stgRead(16640),-1);return;}
+  if(part==5){scrollWin(stgRead(16640),1);return;}
+  if(part==8){scrollWin(stgRead(16640),-3);return;}
+  if(part==9){scrollWin(stgRead(16640),3);return;}
+  if(part==7){stgWrite(16392,6);stgWrite(16393,stgRead(16640));pageScroll(y);return;}
+  if(part==1){stgWrite(16392,2);stgWrite(16393,stgRead(16640));return;}
+  if(stgRead(16896+stgRead(16640)*16+1)==2){infoClick(stgRead(16640),y);return;}
+  if(hitIcon(stgRead(16640),x,y)){
+   slot=stgRead(16642);
+   stgWrite(16643,stgRead(8192+slot*32+15)&1);
+   if(stgRead(16391))toggleSel(slot);
+   else if((stgRead(8192+slot*32+15)&1)==0)selectOnly(slot);
+   stgWrite(16392,1);stgWrite(16393,slot);stgWrite(16385,1);return;
+  }
+  if(stgRead(16391)==0)clearSel();
+  stgWrite(16392,4);stgWrite(16393,stgRead(16640));stgWrite(16385,1);return;
+ }
+ if(hitDesk(x,y)){
+  slot=stgRead(16642);
+  if(stgRead(16391))toggleSel(slot);else selectOnly(slot);
+  stgWrite(16643,1);stgWrite(16392,1);stgWrite(16393,slot);return;
+ }
+ if(x>=548&&x<630&&y>=36&&y<110){openWin(0,0,8,34,548,354,0);return;}
+ if(x>=548&&x<630&&y>=380&&y<460){openWin(1,0,8,34,548,354,0);return;}
+ clearSel();stgWrite(16385,1);
+}
+function moveWin(dx,dy){
+ var a,x,y;
+ a=16896+stgRead(16393)*16;
+ x=r16(a+5)+dx;y=r16(a+7)+dy;
+ if(x<0)x=0;if(y<22)y=22;if(x>460)x=460;if(y>360)y=360;
+ w16(a+5,x);w16(a+7,y);stgWrite(16445,1);
+}
+function sizeWin(dx,dy){
+ var a,w,h;
+ a=16896+stgRead(16393)*16;
+ w=r16(a+9)+dx;h=r16(a+11)+dy;
+ if(w<180)w=180;if(h<120)h=120;if(w>600)w=600;if(h>420)h=420;
+ w16(a+9,w);w16(a+11,h);stgWrite(16445,1);
+}
+function onMove(e){
+ var x,y,ox,oy;
+ x=e.clientX;y=e.clientY;
+ ox=r16(16396);oy=r16(16398);
+ if(stgRead(16395)==0){w16(16396,x);w16(16398,y);return;}
+ if(x==ox&&y==oy)return;
+ if(stgRead(16392)==2)moveWin(x-ox,y-oy);
+ else if(stgRead(16392)==3)sizeWin(x-ox,y-oy);
+ else if(stgRead(16392)==6)pageScroll(y);
+ w16(16396,x);w16(16398,y);
+ if(stgRead(16392)>0)stgWrite(16385,1);
+}
+function bandSelect(){
+ var w,x0,y0,x1,y1,i,n,s,ix,iy,t;
+ w=stgRead(16393);
+ x0=r16(16400);y0=r16(16402);x1=r16(16396);y1=r16(16398);
+ if(x1<x0){t=x0;x0=x1;x1=t;}
+ if(y1<y0){t=y0;y0=y1;y1=t;}
+ clearSel();buildOrder(w);n=stgRead(16456);
+ for(i=0;i<n;i++){
+  s=stgRead(20480+i);
+  ix=iconX(w,s,i,stgRead(16896+w*16+3));
+  iy=iconY(w,s,i,stgRead(16896+w*16+3));
+  if(ix<x1&&ix+32>x0&&iy<y1&&iy+32>y0){
+   stgWrite(8192+s*32+15,stgRead(8192+s*32+15)|1);
+   stgWrite(16446,stgRead(16446)+1);
+  }
+ }
+ stgWrite(16385,1);
+}
+function onUp(e){
+ var x,y,slot,dx,dy,mode;
+ x=e.clientX;y=e.clientY;slot=stgRead(16393);mode=stgRead(16392);
+ // Let go before opening. sysRun stops this program immediately,
+ // so a clear after clickIcon never ran and the icon stayed on
+ // the pointer when the Finder came back.
+ stgWrite(16392,0);stgWrite(16395,0);
+ if(mode==1){
+  dx=x-r16(16400);if(dx<0)dx=0-dx;
+  dy=y-r16(16402);if(dy<0)dy=0-dy;
+  if(dx<4&&dy<4)clickIcon(slot);else dropIcon(slot,x,y);
+ }else if(mode==4)bandSelect();
+ if(stgRead(16445))saveDesk();
+ stgWrite(16385,1);
+}
+function maskBit(bit){
+ var m;
+ m=128;
+ while(bit>0){m=Math.floor(m/2);bit=bit-1;}
+ return m;
+}
+function pixOn(i){
+ var b;
+ b=Math.floor(i/8);
+ return (stgRead(50008+b)&maskBit(i-b*8))?1:0;
+}
+function iconName(slot){
+ var a,n,i,c,k;
+ a=8192+slot*32;n=stgRead(a);k=0;
+ for(i=0;i<n&&i<8;i++){
+  c=stgRead(a+1+i);
+  if(c==46)break;
+  stgWrite(30300+k,c);k=k+1;
+ }
+ stgWrite(30300+k,46);stgWrite(30301+k,73);stgWrite(30302+k,67);stgWrite(30303+k,78);stgWrite(30304+k,0);
+}
+function rleRow(y,dest,limit){
+ var x,i,n,p,col,w;
+ n=0;p=dest+1;x=0;
+ while(x<32){
+  i=y*32+x;
+  if(pixOn(i)==0){x=x+1;continue;}
+  col=stgRead(50136+i);w=1;
+  while(x+w<32&&pixOn(y*32+x+w)&&stgRead(50136+y*32+x+w)==col)w=w+1;
+  if(p+3>limit){stgWrite(dest,n);return p;}
+  stgWrite(p,x);stgWrite(p+1,w);stgWrite(p+2,col);p=p+3;n=n+1;
+  x=x+w;
+ }
+ stgWrite(dest,n);
+ return p;
+}
+function cacheIcon(slot){
+ var n,y,base,p;
+ if(stgRead(48000+slot))return;
+ if(stgRead(8192+slot*32+13)==6){stgWrite(48000+slot,1);return;}
+ iconName(slot);
+ n=fsRead(30300,0,50000,1160);
+ if(n<1160||stgRead(50000)!=74||stgRead(50001)!=73||stgRead(50002)!=67||stgRead(50003)!=49){
+  stgWrite(48000+slot,1);return;
+ }
+ base=52000+slot*1568;
+ if(base>=379000){stgWrite(48000+slot,1);return;}
+ p=base;
+ for(y=0;y<32;y++){
+  if(p+1>=base+1568){stgWrite(p,0);p=p+1;}
+  else p=rleRow(y,p,base+1568);
+ }
+ stgWrite(48000+slot,2);
+}
+function genericIcon(x,y){
+ ctx.fillRect(x+3,y+3,26,26,255);
+ ctx.fillRect(x+3,y+3,26,1,0);
+ ctx.fillRect(x+3,y+28,26,1,0);
+ ctx.fillRect(x+3,y+3,1,26,0);
+ ctx.fillRect(x+28,y+3,1,26,0);
+ ctx.fillRect(x+4,y+4,24,5,23);
+ ctx.fillRect(x+3,y+9,26,1,0);
+ ctx.fillRect(x+7,y+14,18,10,252);
+ ctx.fillRect(x+7,y+14,18,1,0);
+ ctx.fillRect(x+7,y+23,18,1,0);
+ ctx.fillRect(x+7,y+14,1,10,0);
+ ctx.fillRect(x+24,y+14,1,10,0);
+}
+function folderIcon(x,y){
+ ctx.fillRect(x+2,y+8,28,18,252);
+ ctx.fillRect(x+2,y+5,12,6,252);
+ ctx.fillRect(x+2,y+5,28,1,0);
+ ctx.fillRect(x+2,y+5,1,21,0);
+ ctx.fillRect(x+29,y+8,1,18,0);
+ ctx.fillRect(x+2,y+25,28,1,0);
+}
+function drawRle(slot,x,y){
+ var row,base,n,i,p;
+ base=52000+slot*800;
+ for(row=0;row<32;row++){
+  p=base+row*25;n=stgRead(p);
+  for(i=0;i<n;i++)ctx.fillRect(x+stgRead(p+1+i*3),y+row,stgRead(p+2+i*3),1,stgRead(p+3+i*3));
+ }
+}
+function drawIcon(slot,x,y){
+ if(stgRead(8192+slot*32+13)==6){folderIcon(x,y);return;}
+ cacheIcon(slot);
+ if(stgRead(48000+slot)==2)drawRle(slot,x,y);
+ else genericIcon(x,y);
+}
+function kindWord(k,x,y){
+ if(k==0)txt(14,x,y);
+ else if(k==1)txt(15,x,y);
+ else if(k==2)txt(16,x,y);
+ else if(k==6)txt(17,x,y);
+ else txt(18,x,y);
+}
+function dateAt(slot,x,y){
+ var d;
+ d=r16(8192+slot*32+20);
+ num(Math.floor(d/512)+1980,x,y);
+ ch(45,x+40,y);
+ num(Math.floor(d/32)-Math.floor(d/512)*16,x+48,y);
+ ch(45,x+72,y);
+ num(d-Math.floor(d/32)*32,x+80,y);
+}
+function renameBox(x,y){
+ var n,i,w,f;
+ n=stgRead(16410);w=0;
+ for(i=0;i<n&&i<12;i++)w=w+wid(stgRead(16411+i));
+ ctx.fillRect(x-2,y,w+8,16,255);
+ ctx.fillRect(x-2,y,w+8,1,0);
+ ctx.fillRect(x-2,y+15,w+8,1,0);
+ ctx.fillRect(x-2,y,1,16,0);
+ ctx.fillRect(x+w+5,y,1,16,0);
+ bufAt(16411,n,x,y);
+ f=r16(16407);
+ if(Math.floor(f/16)-Math.floor(f/32)*2==0)ctx.fillRect(x+w+1,y+2,1,12,0);
+}
+function drawOneItem(s,x,y,view){
+ var a,sel,k,lw;
+ a=8192+s*32;sel=stgRead(a+15)&1;k=stgRead(a+13);
+ if(view>=2){
+  if(stgRead(16409)&&stgRead(16423)==s){renameBox(x,y);return;}
+  if(sel){ctx.fillRect(x,y,220,16,0);stgWrite(16471,1);}
+  nameAt(s,x,y);
+  stgWrite(16471,0);
+  num(r32(a+16),x+200,y);
+  kindWord(k,x+280,y);
+  return;
+ }
+ drawIcon(s,x,y);
+ lw=labelWidth(s);
+ if(stgRead(16409)&&stgRead(16423)==s){renameBox(x+16-Math.floor(lw/2),y+34);return;}
+ if(sel){ctx.fillRect(x+16-Math.floor(lw/2)-2,y+34,lw+4,16,0);stgWrite(16471,1);}
+ labelAt(s,x+16-Math.floor(lw/2),y+34);
+ stgWrite(16471,0);
+}
+function downMark(x,y){
+ // Open chevron, the same stroke as the ^ < > glyphs. Not a filled triangle.
+ ctx.fillRect(x+4,y+5,1,1,0);
+ ctx.fillRect(x+5,y+6,1,1,0);
+ ctx.fillRect(x+6,y+7,1,1,0);
+ ctx.fillRect(x+7,y+8,1,1,0);
+ ctx.fillRect(x+8,y+7,1,1,0);
+ ctx.fillRect(x+9,y+6,1,1,0);
+ ctx.fillRect(x+10,y+5,1,1,0);
+}
+function fits(w,x,y){
+ var wx,wy,ww,wh;
+ wx=r16(16896+w*16+5);wy=r16(16896+w*16+7);
+ ww=r16(16896+w*16+9);wh=r16(16896+w*16+11);
+  if(x<wx+4||y<wy+48)return 0;
+  if(x+48>wx+ww-16)return 0;
+ if(y+52>wy+wh-16)return 0;
+ return 1;
+}
+function drawHeader(w){
+ var x,y,a,k,d,n;
+ a=16896+w*16;
+ x=r16(a+5);y=r16(a+7);
+ k=Math.floor(r32(240)/1024);
+ num(k,x+12,y+28);
+ d=1;n=0;if(k<1)n=1;
+ while(k>=d&&n<6){d=d*10;n=n+1;}
+ ch(75,x+12+n*8,y+28);
+ txt(23,x+24+n*8,y+28);
+ if(r16(a+9)<160+n*8)return;
+ k=Math.floor(r32(244)/1024);
+ num(k,x+r16(a+9)-230,y+28);
+ d=1;n=0;if(k<1)n=1;
+ while(k>=d&&n<6){d=d*10;n=n+1;}
+ ch(75,x+r16(a+9)-230+n*8,y+28);
+ txt(24,x+r16(a+9)-218+n*8,y+28);
+}
+function drawTitle(w){
+ var a,k,f,x,y;
+ a=16896+w*16;k=stgRead(a+1);f=stgRead(a+2);
+ x=r16(a+5)+Math.floor(r16(a+9)/2)-36;y=r16(a+7)+4;
+ if(k==1)txt(4,x,y);
+ else if(k==2)txt(6,x,y);
+ else if(k==3)txt(7,x-20,y);
+ else if(f==0)txt(3,x,y);
+ else nameAt(f-1,x,y);
+}
+function drawFrame(w){
+ var a,x,y,ww,wh,i,mid;
+ a=16896+w*16;
+ x=r16(a+5);y=r16(a+7);ww=r16(a+9);wh=r16(a+11);
+ mid=Math.floor(ww/2);
+ ctx.fillRect(x,y,ww,wh,0);
+ ctx.fillRect(x+1,y+1,ww-2,wh-2,255);
+ ctx.fillRect(x+2,y+2,ww-4,22,119);
+ ctx.fillRect(x+6,y+5,14,14,0);
+ ctx.fillRect(x+7,y+6,12,12,255);
+ ctx.fillRect(x+mid-70,y+3,140,19,255);
+ for(i=5;i<22;i=i+3){
+  ctx.fillRect(x+24,y+i,mid-94,1,0);
+  ctx.fillRect(x+mid+70,y+i,mid-94,1,0);
+ }
+ if(wh>80){
+  ctx.fillRect(x+2,y+24,ww-4,1,0);
+  ctx.fillRect(x+2,y+46,ww-18,1,0);
+  ctx.fillRect(x+ww-16,y+48,16,wh-64,219);
+  ctx.fillRect(x+ww-16,y+48,16,16,255);
+  ctx.fillRect(x+ww-16,y+48,16,1,0);
+  ctx.fillRect(x+ww-16,y+63,16,1,0);
+  ch(94,x+ww-12,y+48);
+  ctx.fillRect(x+ww-16,y+wh-32,16,16,255);
+  ctx.fillRect(x+ww-16,y+wh-32,16,1,0);
+  downMark(x+ww-16,y+wh-32);
+  drawThumb(w);
+  ctx.fillRect(x,y+wh-16,ww-16,16,219);
+  ctx.fillRect(x,y+wh-16,16,16,255);
+  ctx.fillRect(x+ww-32,y+wh-16,16,16,255);
+  ch(60,x+4,y+wh-16);
+  ch(62,x+ww-28,y+wh-16);
+  ctx.fillRect(x+ww-16,y+wh-16,16,16,255);
+  ctx.fillRect(x+ww-16,y+wh-16,16,1,0);
+  ctx.fillRect(x+ww-16,y+wh-16,1,16,0);
+  ctx.fillRect(x+ww-11,y+wh-11,5,5,0);
+  ctx.fillRect(x+ww-8,y+wh-8,5,5,255);
+  ctx.fillRect(x+ww-8,y+wh-8,5,1,0);
+  ctx.fillRect(x+ww-8,y+wh-8,1,5,0);
+ }
+ drawTitle(w);
+}
+function drawThumb(w){
+ var a,x,y,wh,rows,max,track,th,pos;
+ a=16896+w*16;
+ x=r16(a+5)+r16(a+9);y=r16(a+7);wh=r16(a+11);
+ buildOrder(w);rows=stgRead(16456);
+ if(rows<1)rows=1;
+ rows=Math.floor((rows-1)/5)+1;
+ max=rows-3;if(max<0)max=0;
+ track=wh-96;if(track<16)track=16;
+ th=track;if(rows>3)th=Math.floor(track*3/rows);
+ if(th<16)th=16;if(th>track)th=track;
+ pos=0;if(max>0)pos=Math.floor((track-th)*stgRead(a+4)/max);
+ ctx.fillRect(x-15,y+64+pos,14,th,255);
+ ctx.fillRect(x-15,y+64+pos,14,1,0);
+ ctx.fillRect(x-15,y+63+pos+th,14,1,0);
+ w16(16680,y+64+pos);w16(16682,th);
+}
+function drawItems(w){
+ var i,n,s,view,x,y,top,bot,page,slot;
+ buildOrder(w);n=stgRead(16456);view=stgRead(16896+w*16+3);
+ page=stgRead(16896+w*16+4);
+ top=r16(16896+w*16+7)+48;bot=r16(16896+w*16+7)+r16(16896+w*16+11)-16;
+ for(i=0;i<n;i++){
+  if(view<2){slot=i-page*5;if(slot<0||slot>=15)continue;}
+  s=stgRead(20480+i);
+  if(stgRead(16392)==1&&s==stgRead(16393))continue;
+  x=iconX(w,s,i,view);y=iconY(w,s,i,view);
+  if(y<top||y>bot)continue;
+  if(fits(w,x,y)==0)continue;
+  if(view>=2&&fits(w,x+170,y)==0)continue;
+  drawOneItem(s,x,y,view);
+ }
+}
+function drawInfo(w){
+ var a,s,x,y,k,fl,n,i,c;
+ a=16896+w*16;s=stgRead(a+2);x=r16(a+5)+16;y=r16(a+7)+52;
+ k=stgRead(8192+s*32+13);fl=stgRead(8192+s*32+15);
+ drawIcon(s,x,y);nameAt(s,x+40,y+8);
+ txt(8,x,y+48);kindWord(k,x+80,y+48);
+ txt(9,x,y+66);num(r32(8192+s*32+16),x+80,y+66);
+ txt(10,x,y+84);
+ if(fl&2)txt(4,x+80,y+84);
+ else if(stgRead(8192+s*32+14)==255)txt(19,x+80,y+84);
+ else txt(5,x+80,y+84);
+ txt(11,x,y+102);dateAt(s,x+80,y+102);
+ txt(12,x,y+124);
+ ctx.fillRect(x+80,y+124,12,12,0);
+ ctx.fillRect(x+81,y+125,10,10,255);
+ if(fl&8)ctx.fillRect(x+83,y+127,6,6,0);
+ txt(13,x,y+148);
+ n=stgRead(24576+s*24);
+ for(i=0;i<n;i++){c=stgRead(24576+s*24+1+i);ch(c,x,y+166);x=x+wid(c);}
+}
+function drawClip(w){
+ var x,y;
+ x=r16(16896+w*16+5)+12;y=r16(16896+w*16+7)+40;
+ txt(7,x,y);
+ bufAt(16622,stgRead(16621),x,y+20);
+}
+function drawOne(w){
+ var k;
+ if(stgRead(16896+w*16)==0)return;
+ drawFrame(w);k=stgRead(16896+w*16+1);
+ if(k==2)drawInfo(w);
+ else if(k==3)drawClip(w);
+ else{drawHeader(w);drawItems(w);}
+}
+function drawWindows(){
+ var i,f;
+ f=stgRead(16394);
+ for(i=0;i<8;i++)if(i!=f)drawOne(i);
+ if(f!=255)drawOne(f);
+}
+function drawDeskIcons(){
+ var i,n,a;
+ n=stgRead(16386);
+ for(i=0;i<n;i++){
+  a=8192+i*32;
+  if(stgRead(a)==0||stgRead(a+14)!=255)continue;
+  if(stgRead(a+15)&2)continue;
+  if(stgRead(a+15)&32)continue;
+  if((stgRead(a+15)&16)&&stgRead(16390)==0)continue;
+  if(stgRead(16392)==1&&i==stgRead(16393))continue;
+  drawOneItem(i,r16(a+22),r16(a+24),0);
+ }
+}
+function drawDesk(){
+ var x,y,disk,trash,body,ink,screen;
+ x=r16(16396);y=r16(16398);disk=0;trash=0;
+ // A drag over the Disk or the Trash lights that picture up. Same
+ // rectangles dropIcon uses, so the glow is the place the drop lands.
+ if(stgRead(16392)==1){
+  if(x>=548&&x<630&&y>=36&&y<110)disk=1;
+  if(x>=548&&x<630&&y>=380&&y<460)trash=1;
+ }
+ body=0;ink=255;screen=55;
+ if(disk){body=255;ink=0;screen=252;ctx.fillRect(568,84,56,16,0);stgWrite(16471,1);}
+ ctx.fillRect(579,44,34,39,body);
+ ctx.fillRect(581,46,30,35,ink);
+ ctx.fillRect(585,50,22,15,body);
+ ctx.fillRect(587,52,18,11,screen);
+ ctx.fillRect(587,72,16,2,body);
+ txt(5,583,86);stgWrite(16471,0);
+ body=0;ink=255;
+ if(trash){body=255;ink=252;ctx.fillRect(564,447,64,16,0);stgWrite(16471,1);}
+ ctx.fillRect(582,413,29,34,body);
+ ctx.fillRect(584,415,25,30,ink);
+ ctx.fillRect(580,410,33,3,body);
+ ctx.fillRect(591,407,11,3,body);
+ ctx.fillRect(588,419,1,23,body);
+ ctx.fillRect(594,419,1,23,body);
+ ctx.fillRect(600,419,1,23,body);
+ ctx.fillRect(606,419,1,23,body);
+ txt(4,579,449);stgWrite(16471,0);
+ drawDeskIcons();
+}
+function drawDrag(){
+ var x0,y0,x1,y1,s,x,y;
+ // The icon itself follows the pointer. It is left out of its old
+ // place by drawDeskIcons and drawItems, and mouse-up clears drag
+ // before the next paint, so nothing stays behind the arrow.
+ if(stgRead(16392)==1){
+  s=stgRead(16393);
+  x=r16(16472)+r16(16396)-r16(16400);
+  y=r16(16474)+r16(16398)-r16(16402);
+  drawOneItem(s,x,y,0);
+  return;
+ }
+ if(stgRead(16392)==4){
+  x0=r16(16400);y0=r16(16402);x1=r16(16396);y1=r16(16398);
+  rect(x0,y0,x1-x0,y1-y0);
+ }
+}
+function drawDialog(){
+ if(stgRead(16620)==0)return;
+ ctx.fillRect(160,150,320,140,255);
+ ctx.fillRect(160,150,320,140,0);
+ ctx.fillRect(161,151,318,138,255);
+ txt(20,180,180);
+ ctx.fillRect(200,230,80,28,0);
+ ctx.fillRect(202,232,76,24,219);
+ ctx.fillRect(300,230,80,28,0);
+ ctx.fillRect(302,232,76,24,219);
+ txt(21,224,236);txt(22,328,236);
+}
+function drawZoom(){
+ var z,t,x,y,w,h;
+ z=stgRead(16600);if(z==0)return;
+ t=4-z;
+ x=r16(16601)+(r16(16605)-r16(16601))*t/4;
+ y=r16(16603)+(r16(16607)-r16(16603))*t/4;
+ w=r16(16609)*t/4;h=r16(16611)*t/4;
+ rect(x,y,w,h);
+ stgWrite(16600,z-1);
+ // The last outline has to be painted away. Leaving dirty clear
+ // kept that rectangle on the glass.
+ stgWrite(16385,1);
+}
+function paint(){
+ var y;
+ stgWrite(16385,0);
+ ctx.fillRect(0,22,640,458,123);
+ for(y=22;y<480;y=y+2)ctx.fillRect(0,y,640,1,91);
+ drawDesk();drawWindows();drawDrag();drawDialog();drawZoom();
+ menuMask();
+}
+function start(){
+ var i;
+ // Cold DDR memory is undefined, and the compiler/tools share this arena.
+ // Initialize every metadata owner before reading flags or window geometry.
+ // Resident returns keep init=1 and bypass start(), preserving their state.
+ for(i=8192;i<17024;i++)stgWrite(i,0);
+ for(i=0;i<256;i++){
+  stgWrite(24576+i*24,0); // empty comment; payload ignored until a length is set
+  stgWrite(48000+i,0);   // icon cache invalid; pixels are loaded on demand
+ }
+ ctx.font="8px";ctx.fillStyle="#000000";
+ initNames();fsList();parseList();markKinds();loadDesk();placeGrid();recount();
+ if(haveDisk()==0)openWin(0,0,8,34,548,354,0);
+ pickFront();menuMask();
+ stgWrite(16384,1);stgWrite(16385,1);
+}
+function frame(){
+ var f;
+ f=r16(16407)+1;w16(16407,f);
+ if(stgRead(16448)>0&&f-r16(16454)>40)stgWrite(16448,0);
+ if(stgRead(16409)&&f-Math.floor(f/16)*16==0)stgWrite(16385,1);
+ if(stgRead(16384)==0)start();
+ else if(stgRead(16385))paint();
+ requestAnimationFrame(frame);
+}
+addEventListener("keydown",onKey);
+addEventListener("keyup",onKeyUp);
+addEventListener("mousedown",onDown);
+addEventListener("mousemove",onMove);
+addEventListener("mouseup",onUp);
+requestAnimationFrame(frame);
+</script></body></html>

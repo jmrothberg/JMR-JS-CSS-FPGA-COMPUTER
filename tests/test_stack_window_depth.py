@@ -4,8 +4,8 @@ Scaffolding for any future vst_win shrink (16 -> 8): VST_REL clamps
 out-of-window reads to slot 0 SILENTLY, so a bad window change corrupts
 values without faulting. These tests build operand stacks 9-16 deep and
 paint only when every value survives; they must stay green before AND
-after any window work. See OVERNIGHT_STATUS.md (2026-08-23) for why the
-shrink was rejected without this file.
+after any window work. A shrink that skips this file corrupts values
+without a fault.
 """
 
 import sys

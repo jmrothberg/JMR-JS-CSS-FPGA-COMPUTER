@@ -624,6 +624,21 @@ class PythonBackend(RuntimeBackend):
         m._edit_active=True
         m._cmp_done=False
         m._arch_phase='run'
+        # The other program may have left a canvas scale. The Finder
+        # draws in glass pixels, 1:1.
+        m._ctx_tx=0;m._ctx_ty=0;m._ctx_sx=1;m._ctx_sy=1;m._ctx_baseline=0
+        # MacPaint's color plane starts at arena byte 73728, which is
+        # also where a full disk's icon runs live. Those bytes come back
+        # as long horizontal streaks. Drop the cache flags (they sit in
+        # the parked half) so the next paint reads the .ICN files again.
+        # The click that opened the other program never got to finish:
+        # sysRun stops the Finder mid mouse-up. Drop that gesture.
+        for i in range(256):
+            m._nat_stg_write(48000+i,0)
+        m._nat_stg_write(16392,0)
+        m._nat_stg_write(16395,0)
+        m.canvas.clear(0)
+        m.canvas.clear_front(0)
         m._nat_stg_write(16385,1)
         self.desktop.visible=False
         return True
@@ -1108,6 +1123,9 @@ class PythonBackend(RuntimeBackend):
         self.system_menu.classic.menu_enable=getattr(self.machine,'system_menu_enable',0xFFFFFFFF)
         self.system_menu.classic.menu_check=getattr(self.machine,'system_menu_check',0)
         self.system_menu.document_name=self.machine.source_name
+        self.system_menu.document_title=getattr(self.machine,'system_title','') or ''
+        self.system_menu.scroll_bars=getattr(self.machine,'system_bars',True)
+        self.system_menu.classic.bars=self.system_menu.scroll_bars
         self.system_menu.source_lines=list(self.machine.source_lines or [])
         self.system_menu.classic.document=self.machine.source_name
         self.system_menu.classic.can_undo=bool(params[3]&2)

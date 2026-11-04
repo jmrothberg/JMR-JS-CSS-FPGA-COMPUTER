@@ -19,6 +19,9 @@ build/
 sim/sim_build*/
 sim/sim_build_*/
 
+# Local archive. Kept on this machine. Do not publish.
+/to_delete/
+
 # Editor
 .vscode/
 *.swp

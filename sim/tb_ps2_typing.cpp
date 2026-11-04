@@ -123,6 +123,14 @@ int main(int argc, char** argv) {
     top->rst_n = 1;
     for (int i = 0; i < 200000; i++) tick();
 
+    // Simulate an interrupted startup frame, then idle before typing.
+    top->ps2_data = 0;
+    for (int i = 0; i < 80; ++i) tick();
+    top->ps2_clk = 0;
+    for (int i = 0; i < 80; ++i) tick();
+    top->ps2_clk = 1; top->ps2_data = 1;
+    for (int i = 0; i < 200000; ++i) tick();
+
     // Type help + Enter (case-insensitive verb)
     type_key(0x33); // h
     type_key(0x24); // e

@@ -3,9 +3,9 @@
 Implementation note (November 3): the changes below are now in RTL and the
 normal FPGA-SIM executable has been rebuilt. Centered captions and variable
 selection bars pass the exact-pixel desktop test, including hidden suffixes.
-Compile lifecycle verification also passed (two combined tests, plus active
-compile deferred Close). Results are recorded in
-`build/run74n_python_parity/parity_test.log`; the next bit build is run74n_python_parity; no new bit is ready yet.
+Compile lifecycle verification also passed. The log from that check is
+`to_delete/run74n_python_parity/parity_test.log`. The simulator you run
+now is `sim/sim_build_synth`.
 
 The new Compile launcher uses the native role-3 About panel. Its custom
 `systemAbout` assignment failed on both the board-trial M simulator and the
@@ -219,9 +219,9 @@ The former deliberate faults at native IDs 58–63 have been replaced by the
 file-service handshake. The default RTL boots FINDER.JSH, returns there after
 apps exit, and supports role 9's four menus, enable/check masks and highlights.
 The built-in desktop remains available through PROGRAM_FINDER=0; a pre-change
-source ZIP and simulator are saved in archive/builtin-finder-2026-11-03.
+source ZIP and simulator are saved in to_delete/builtin-finder-2026-11-03.
 
-See [PROGRAM_FINDER_RTL.md](PROGRAM_FINDER_RTL.md) for the complete handoff.
+See [lastrun_ARCHITECTURE.md](lastrun_ARCHITECTURE.md).
 The owner will do functional testing/comparison. No .bit build was started;
 resource use and post-route timing have not been measured for this architecture.
 Earlier pixel tests in this document describe the built-in desktop, not the

@@ -97,15 +97,18 @@ follows bare DIR, not DIR *.
 
 ## MacPaint
 
-Double-click MacPaint. The mouse draws in the
-page. Arrow keys or the stick move a pen. Space
-or the fire button draws with the current tool.
+Double-click MacPaint. The window says
+untitled. The mouse draws in the page. Arrow
+keys or the stick move a pen. Space or the fire
+button draws with the current tool.
 
-File Save is grey. That command is for text.
-Use Disk, then Save. The picture is STEM.PNT.
-Disk, then Open, loads one back. New clears the
-page and does not ask. Quit does not ask either.
-Save before you leave.
+The menus are File, Edit, Goodies, Font,
+FontSize, and Style. File, then Save, writes
+STEM.PNT. File, then Open, loads one back.
+New clears the page and does not ask. Quit does
+not ask either. Save before you leave. The window
+has no scroll bar. The hand moves the page. A row
+of colors sits beside the line widths.
 
 ## Play a program
 

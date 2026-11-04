@@ -1,552 +1,63 @@
 # JMR JS Computer
 
-**Latest Mac-GUI board trial:** [M trial bit](build/run74m_local_parser/board_trial/run74m_mac_gui_TRIAL_33MHz_WNS-0.169.bit),
-November 3. Loaded into SRAM; Jonathan reports it worked. Working QSPI flash is unchanged.
-Setup timing is **-0.169 ns**, so this is a trial, not the qualified standard.
-[Trial details and return to flash](build/run74m_local_parser/board_trial/README.md).
+Standalone machine. `LOAD` an HTML file, `RUN` the minted `.JSH` on `card.img`. Python, FPGA-SIM, and the board share that image. `storage/` is only the seed.
 
-**Current RTL work: disk-program Finder.** FPGA-SIM now boots `FINDER.JSH`
-and supplies generic file, launch and menu hooks. It stays within **8 MB**,
-keeping the Finder executable and desktop state in RAM for return from apps.
-Boot/menu/Terminal-return checks pass in the simulator. Reopen `gui_jmr_js.py` and
-select FPGA-SIM with F9 for owner testing. No new `.bit` build has been started.
-[What changed, how to test, and rollback](docs/PROGRAM_FINDER_RTL.md).
-**Disk-updatable UI resources:** edit `resources/system/system.json` and pack
-`SYSTEM.SYS` to change supported fonts, captions and dialogs without a new `.bit`.
-[Editing/publishing instructions for you or an agent](docs/SYSTEM_RESOURCES.md).
-The built-in Finder source and previous simulator are saved in
-[archive/builtin-finder-2026-11-03](archive/builtin-finder-2026-11-03/README.md).
+Keyboard on USB **J15**. PS/2 mouse on **JA** (pin 1 data, pin 3 clock). Second mouse on **JC**. Joystick on **JB**. [Wiring](docs/USB_KEYBOARD_PMOD_MICE.md). [Picture of the machine](docs/lastrun_ARCHITECTURE.md). Which bitstream: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
 
-## Next build: mouse + keyboard + joystick, no switching (read this first)
+## Commands
 
-**Decided 2026-11-03.** All three input devices at once, each on its own port:
-
-| Device | Port | Notes |
-|---|---|---|
-| **Mouse** (wired or wireless) | **J15** USB | Mouse only. The PIC24 behind J15 passes one device as PS/2. |
-| **Keyboard** (wired PS/2) | **Pmod JA**, top row, via a Pmod PS/2 module | Jumper `VB` to `VCC`. Proven on the probe bit; works on JA. |
-| **Joystick** (optional) | **Pmod JB** | Unchanged. The machine also works with no stick. |
-
-The JS top (`rtl/top_nexys_video.sv`) already has this layout, so the next
-build needs no pin change. **One bug to avoid:** `ps2_rx.parity_err` is `1`
-when a byte is *valid*. Treating `1` as an error throws away every key. That
-single inverted test is why the keyboard looked dead for hours. Do not gate
-keys on it.
-
-**Hand this to the agent building the full `.bit`:
-[docs/PMOD_KEYBOARD_J15_MOUSE.md](docs/PMOD_KEYBOARD_J15_MOUSE.md)** (wiring, the
-warning, acceptance test, code paths). Not solved yet: a wireless keyboard
-through J15, and one USB device that is both keyboard and mouse.
-
-**Page map:** next-build wiring (here) → Mac-style menus → desktop simulator →
-current board release (run73o) → [About the computer](#about-the-computer) →
-[commands](#top-commands-use-these-a-lot) → [Words used](#words-used-in-this-project).
-
-## Mac-style menus — Python and RTL, November 2, 2026
-
-Your normal **[gui_jmr_js.py](gui_jmr_js.py)** and **`card.img`** now have the
-shared Mac-style menu system. Start normally:
+### Start
 
 ```sh
 .venv/bin/python gui_jmr_js.py
 ```
 
-Python opens Finder. Fantasy Chess (`2DFANTA2`) has Game → New Game and Level →
-Ply 1..5. Donkey Kong (`DNKF`) has Mario/Luigi New Game and Pause/Resume. All 19 games and demos now
-use **File → Quit** and the ship menu for **About** and **Keyboard**. Each About
-dialog says **JMR Enterprises**, names the game and gives a one-line description.
-Simpler games get **Game → Restart**. `MENUEX` is the small
-working example for converting more programs.
+One 640×480 window. F9 cycles Python, FPGA-SIM, and the board. F10 opens the Architecture Monitor.
 
-Editor/Note use File → Save and Save As and stay open after saving. Reader →
-File → Open browses Markdown/text files. All tools share window/menu styling
-and working close controls. Finder Special launches the system tools.
-The shared API and agent porting instructions are in
-**[SYSTEM_APPLICATIONS.md](docs/SYSTEM_APPLICATIONS.md)**, also `MENUS.MD` on disk.
+### Build the disk image
 
-The previous disk is backed up under `build/system_tools/` with a publication
-record and rollback instructions. Other disk files/icons were preserved.
-The shared menus are now qualified in **Python and the real RTL simulator**.
-F9 uses the updated RTL by default. All 19 real game images, file dialogs,
-Editor/Note saving, Reader, Utility and the self-hosted compiler have passed
-native RTL checks. [Test evidence](build/rtl_system_parity/README.md).
-The board-tested `.bit` remains run73o. The earlier GUI hardware builds failed
-physical timing and were not flashed. The current
-[run74m build](build/run74m_local_parser/README.md) targets the measured GUI routing
-paths with local registers, a compact command RAM and small LUT ROMs. It is not yet a
-qualified release. Earlier trials and their reports are preserved. The optional isolated preview launcher is
-[run_python_system_preview.sh](run_python_system_preview.sh).
+Rebuilds `card.img` from `storage/` and compiles each HTML into a `.JSH`. Do this after you edit a title, then reopen the GUI.
 
-## Desktop simulator update — November 2, 2026
-
-Start [gui_jmr_js.py](gui_jmr_js.py) with `.venv/bin/python gui_jmr_js.py`.
-The desktop opens in PYTHON; F9 selects the real FPGA-SIM (RTL).
-The Enterprise ship at the upper left opens **About** and
-**Keyboard**, including while a program runs. Menus have opaque backgrounds.
-Use the keyboard's **Hold keys** box to hold direction and fire together;
-click a held key again, hide the keyboard, or Quit to release it.
-
-**File** has Open, Compile, Read, Delete and Close window. **Edit** has
-Edit source; **Special** has Terminal, Help and Restart. Select `HELP.MD`
-or another `.MD`/`.TXT` document and choose **File → Read**. Document
-extensions are shown. Every Markdown file opens in the same Mac-style
-window with the original Chicago font, a close box, scroll arrows and page
-clicks. Games use **File → Quit**; programs have no red X.
-
-**View → Hidden files** toggles artwork, icons and compiled/system files.
-It opens a list so long names are readable; hiding them restores your prior view.
-The window shows `.ARTJS`, `.ARTX`, and `.ICON` labels. F8 can copy documents,
-source artwork and optional program icons too. Missing icons use the generic
-application icon. `HELP.MD` is the on-card manual; folder `README.md` files
-stay on the host.
-
-These desktop changes are in the simulator/source. The selected run73o
-bitstream below remains the last board-tested release; it does not contain
-the new desktop or mouse interface.
-
-## Current version: run73o — November 2, 2026
-
-**This is the newest selected FPGA build. The owner flashed it to QSPI and reports that it runs fine on the board.** The file to load is always **[releases/current/fpga.bit](releases/current/fpga.bit)**; the versioned original and checksums are kept beside it.
-
-From this repository's root, try it until power-off:
-
-```bash
-openFPGALoader -b nexysVideo releases/current/fpga.bit
-```
-
-To keep it after power-off, flash it and then load the application immediately:
-
-```bash
-openFPGALoader -b nexysVideo -f releases/current/fpga.bit
-openFPGALoader -b nexysVideo releases/current/fpga.bit
-```
-
-Set **JP4 to QSPI** for boot from flash. If you already flashed run73o and it works, **the folder cleanup does not require reflashing**.
-
-**Keep loading your existing `.HTML` files from your existing card:**
-
-```text
-LOAD "PACFAST.HTML"
-RUN
-```
-
-The `.bit` configures the FPGA; `.HTML` is what you load as a program. No ZIP or new game package is required.
-
-What changed: the **general FPGA JavaScript engine** now runs at 33.333 MHz instead of 14.286 MHz, with pipelined exact arithmetic, corrected method caching and more efficient graphics/memory transfers. The benchmark game programs and artwork were unchanged. Against the previous October 26 build, simulated median processing gains are **2.005× Pac-Man / 2.307–2.356× Donkey Kong**; gains vary by program/frame. HDMI stays 60 Hz; numeric board FPS has not been measured. **579 distinct tests pass**, and final routing/setup/hold/pulse/DRC-error checks pass (setup 0.000 ns rounded, hold +0.040 ns). [Details and validation](docs/GAME_SPEEDUP_RESULTS.md#current-run73o--2026-11-02).
-
-- [Current files and complete loading instructions](releases/current/README.md).
-- [Previous board-proven run72b: revert instructions](releases/archive/run72b-2026-10-26/README.md).
-- [Older versions and what they are](releases/archive/README.md).
-- [Optional source/artwork packaging example](releases/extras/README.md): separate pictures make the HTML smaller; not needed for this speedup.
-- [Project folder guide](docs/README.md). Busy project folders have their own brief `README.md`; generated/vendor internals keep their original layouts.
-
-**Previous board-proven standard (2026-10-26): run72b.** First rollback if run73o misbehaves. [Download that release](https://github.com/jmrothberg/JMR-JS-CSS-FPGA-COMPUTER/releases/tag/standard-2026-10-26-run72b). Its gains, against the build before it, were **3.76× Pac-Man / 3.16× Donkey Kong** median native RTL (simulated fabric cycles; board FPS was not measured). That A200T build used **92,273 LUTs, 28,583 slices, and 353.5 BRAM**, with **+0.238 ns setup / +0.050 ns hold**. Routing took **35m48s**. **549** regression tests passed. Use the matching card image with that bitstream. Local files and the longer notes: [releases/archive/run72b-2026-10-26/](releases/archive/run72b-2026-10-26/README.md).
-
-**One Git repository, work on `main`.** Do not create branches, extra repositories or worktrees to save versions. Keep the current release in `releases/current/`, older versions in `releases/archive/`, and failed builds/checkpoints in `build/archive/`. [Release layout](releases/README.md).
-
-## About the computer
-
-An original **standalone** computer that starts on an **FPGA** (Field-Programmable
-Gate Array — a chip you reconfigure from a bitstream file) and is aimed at an
-**ASIC** (Application-Specific Integrated Circuit — a custom chip later). It is
-an **NLISC** machine (Native Language Instruction Set Computing — the language
-you type *is* the chip’s instruction surface). Here that language is
-**JavaScript** in HTML5 Canvas games. There is no hidden Z80/RISC-V, no
-browser-on-FPGA, and **no dukpy/Duktape/V8 as the machine**.
-
-What you type:
-
-```text
-LOAD "NAME.HTML"
-RUN
-```
-
-**V1.0 disk is `card.img`.** PYTHON, FPGA-SIM, and BOARD all `LOAD`/`RUN`
-from that same FAT image (board = `card.img` burned to µSD). `storage/` is
-the **seed** only — rebuild with `make_sd_image.py create card.img`. That
-step **compiles** each HTML into a minted **`.JSH`** (ProgramImage:
-bytecode + **ASET** art). `LOAD` still shows HTML; `RUN` feeds the **JMR
-VM** from that `.JSH`. Host tools or the on-machine compiler can produce the
-compiled file. Full-quality graphics
-stream into the **external 4 MB SRAM asset bank** (Static Random-Access
-Memory; ISSI IS61WV204816 contract). On the FPGA board, **DDR3** (board
-DRAM) sits *behind* that same simple SRAM port. There is no `NAME.DAT`
-file. Chrome may open the same `.HTML` for authoring; **PYTHON / FPGA-SIM /
-BOARD** must run the JMR VM. Version 1.0 does **not** ship a general CSS
-browser — games draw on **Canvas**. **BRAM** (Block RAM, on-chip) is working
-RAM; **µSD** (microSD card) is disk; external SRAM is the art bank.
-
-**Sibling already works:** `JMR-BASIC-FPGA-COMPUTER` on Nexys **A7-100T**
-(**T100**) is a working NLISC-BASIC FPGA (VGA + USB keyboard + console). This
-repo is the same *kind* of machine for **NLISC-JS + HDMI** on Nexys **Video**
-(**T200** / XC7A200T). Steal the *method*, not the BASIC instruction set or
-A7 pinout.
-
-**Primary board:** Digilent **Nexys Video** (XC7A200T) — HDMI 640×480, USB
-keyboard jack **J15**, Pmod joystick. **PA-StarLite** is a later port.
-Development order: **PYTHON bytecode → real FPGA-SIM (perfect) → board → ASIC**.
-Do **not** flash the board until the FPGA-SIM battery is green.
-
-**Input today (run73o, board-tested): the J15 USB keyboard.** The next build moves the keyboard to Pmod JA and gives J15 to the mouse; see [the top of this page](#next-build-mouse--keyboard--joystick-no-switching-read-this-first). A single USB device that is both keyboard and mouse does not work with this board's PIC24; the old experiment is archived as a [failed approach](docs/NEXYS_USB_KEYBOARD_MOUSE_FAILED.md), not part of the release. On-machine editing and compilation use the card's tools; `RUN` executes native JMR bytecode. On the machine, `LOAD "HELP.MD"` then `READ` pages the manual. `LOAD "NAME.MD"` then `READ` opens another Markdown file. The flashed run73o bitstream does not have the READ verb yet; until the next bitstream, `LIST` pages the loaded file.
-
-**Where to go next**
-
-| I want… | Open |
-|---|---|
-| Words / abbreviations used everywhere | [Words used](#words-used-in-this-project) (this page) |
-| What the machine *is* (spec) | [CONSTITUTION.md](CONSTITUTION.md) |
-| Blocks, posters, asset-bank port | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| How to write a game | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) (art, input, FAST **8–10**: `jmr:spr` literals, dest on-glass, no 1px columns; **do not delete** `EDITOR` / `ARTSCAN` / `COMPILER`) |
-| What JS/Canvas is Complete vs later | [docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md) |
-| Learn the 34 instructions | [docs/JS_COMMANDS.md](docs/JS_COMMANDS.md) |
-| Board, Vivado, flash, HDMI | [docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md) |
-| F10 Architecture Monitor (line decode) | [docs/ARCH_MONITOR.md](docs/ARCH_MONITOR.md) |
-| Navigate parent + exec64 RTL | [docs/RTL_REORG.md](docs/RTL_REORG.md) |
-| **Writing RTL well — area, speed, templates (read BEFORE new RTL)** | [docs/RTL_DESIGN_PRINCIPLES.md](docs/RTL_DESIGN_PRINCIPLES.md) |
-| Clock / timing (slow the JS core, not DDR3) | [docs/FPGA_FIT.md](docs/FPGA_FIT.md) numbers + hedge; [RTL_DESIGN_PRINCIPLES.md](docs/RTL_DESIGN_PRINCIPLES.md) how to write. Phrase: [TIMING_WALL.md](docs/TIMING_WALL.md) |
-| GUI / tooling bugs (host-side only — not the .bit) | [docs/GUI_TOOLING_BUGS.md](docs/GUI_TOOLING_BUGS.md) |
-| Fit numbers, next `.bit`, RAM law | [docs/FPGA_FIT.md](docs/FPGA_FIT.md) |
-| This week’s status + failed-fix table | [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) |
-| If a game looks slow *on the real board* / 30 fps plan | [docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md) |
-| Debug doctrine (recurring bug classes) | [docs/potential bugs.md](docs/potential%20bugs.md) |
-
-```
-$ python3 run_jmr_js.py
-JMR JS-NATIVE-CPU V2.0 R70
-READY
-> console.log("HELLO")
-HELLO
-READY
->
-```
-
-### Top commands (use these a lot)
-
-```bash
-openFPGALoader -b nexysVideo releases/current/fpga.bit
-# MOST COMMON — SRAM-load the .bit onto the Nexys Video (PROG USB J12).
-#    HDMI live in seconds; gone when you unplug. Older versions are in releases/archive/.
-#    QSPI (survives power-cycle; JP4 = QSPI):
-#      openFPGALoader -b nexysVideo -f releases/current/fpga.bit
-
-python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
-# 1. host env (once)
-
-python3 run_jmr_js.py
-# 2. terminal glass — PYTHON functional model
-
-python3 gui_jmr_js.py
-# 3. GUI — one 640×480 glass (text+games); F9 runtimes; F10 Architecture Monitor
-#    F10 monitor + Inspector + board telemetry: docs/ARCH_MONITOR.md
-#    Window size is locked at startup (status text must not grow the alleys).
-#    Prefers .venv. V1.0 HTML RUN = minted .JSH from card.img (not dukpy).
-#    F9 BOARD selects the physical board; J15 keyboard support is retained.
-#    PC-keyboard tether is also available. F10 hides the monitor (faster).
-
-make -C sim sim_server_synth
-# 4. FAST FPGA-SIM rebuild from repo root (same rtl/*.sv as the chip).
-#    Incremental: only runs Verilator if rtl/ or sim/sim_main.cpp is newer
-#    than sim/sim_build_synth/jmr_js_sim_server. If Make prints OK and skips
-#    Verilator, the binary is already current.
-#    Force without wiping obj_dir:
-#      make -C sim sim_server_synth -B
-#    Do not `make -C sim clean`. Then restart the GUI and F9 FPGA-SIM.
-#    Never fake with host twin. Opt-in debug only: JMR_SIM_HOST=1
-
-.venv/bin/python -m pytest -q
-make -C sim tb_uart_link tb_ft245
-# 5. Matching PYTHON/native RTL regressions and tether benches.
-#    Legacy check_runtime_parity.py assumes removed title aliases; see STANDARD_RELEASE.md.
-
-python3 tools/check_port.py /path/to/GAME.HTML
-# Check compiled sizes and known static compatibility gaps before editing a port.
-python3 tools/prepare_port.py /path/to/GAME.HTML --out /path/to/new-port-directory
-# Embedded pictures → HTML + ARTX + ARTJS + original PNG sheets in a new directory.
-# Refuses changes to compiled game/art bytes. Originals are preserved.
-
-python3 tools/make_artx.py MYGAME      # PNGs → ARTX + ARTJS; wires Chrome __jmrSpr hook
-python3 tools/make_artx.py /path/to/game.html  # copy HTML+ARTX+ARTJS into storage/; PNGs stay put
+```sh
 python3 tools/make_sd_image.py create card.img
-python3 tools/make_sd_image.py create card.img -nojsh
-# 6a. new art title, then card. You write HTML + MYGAME-0.png, MYGAME-1.png, …
-#     and `img.src = "jmr:spr:N"` plus window.JMR_SPR listing those PNGs.
-#     Do not write .ARTX / .ARTJS by hand (those two tools do). After a PNG
-#     edit, re-run make_artx + card create (make_artx also writes ARTJS and
-#     wires the Chrome __jmrSpr hook).
-#     Card gets HTML + .ARTX (as .ART) + minted .JSH. PNG / ARTJS stay
-#     on the host. Default COMPILES each HTML into NAME.JSH here.
-#     PYTHON, FPGA-SIM, and BOARD LOAD/RUN this image. Edit storage/ →
-#     rebuild before F9. -nojsh leaves title .JSH off so COMPILE can be
-#     tested. Authoring: docs/GAME_DESIGN.md (Art).
-
-sudo python3 tools/make_sd_image.py burn /dev/sdX
-# 6b. make AND burn — rebuild card.img from storage/, then raw-write µSD
-#     lsblk first; whole disk (sdb / mmcblk0), not a partition (sdb1)
-#     Same -soundoff / -nojsh as create. --keep-image ignores them.
-
-sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
-# 6c. burn only — write the existing card.img as-is (skip rebuild)
-
-make -C tools/board_flow bit VIVADO="$(command -v vivado)"
-# 7. NEXT bitstream — ordinary `bit`. bit-fresh only when the source file
-#    *list*, MIG, or XDC changes — never to recover a mid-run crash.
-#    Hygiene: docs/SESSION_HANDOFF.md § Synthesis. Pins/flash:
-#    docs/FPGA_BRINGUP.md. Writes .bit (JTAG/QSPI) and a secondary raw .bin archive.
-
-make -C tools/board_flow flash
-# 8. SRAM-load releases/current/fpga.bit (PROG USB J12). This does not rebuild.
-#    QSPI (then use flash again for the application to run immediately):
-#    make -C tools/board_flow flash-qspi
-#    Detail: docs/FPGA_BRINGUP.md.
 ```
 
-Day-one: **1 → 2 → 3 → 4 → 5**. FPGA-SIM is **real RTL** after step 4 — do not
-treat `host_sim_server.py` as FPGA-SIM unless you set `JMR_SIM_HOST=1` on purpose.
-Do not jump to Vivado before PYTHON + FPGA-SIM agree on user-visible behaviour.
-Gate: pass the matching Python/native RTL regressions and relevant hardware
-benches, then verify both setup and hold timing and the area budget. See
-[standard-release validation](docs/STANDARD_RELEASE.md#validation).
-Step **6b** is a new card (make + burn); **6c** burns an image you already
-made. Step **7** explicitly starts a new Vivado build. Set `VIVADO` to an installed,
-licensed launcher. Step **8** loads the selected preserved release without
-starting Vivado; see `releases/current/README.md`. Flash a new source build only after both setup
-and hold timing and the area gate pass; FPGA-SIM correctness comes first.
-The current VM already runs at 100 MHz ÷ 7. Fabric-to-VM paths can still
-have a 10 ns requirement: slowing the VM alone does not repair that cone.
-Inspect and pipeline the measured path; retain the qualified DDR/fabric
-clocks. See [TIMING_WALL.md](docs/TIMING_WALL.md).
+### Write a microSD card
 
----
+`lsblk` first. Use the whole disk (`sdb`, `mmcblk0`), not a partition (`sdb1`). This rebuilds `card.img`, then writes it. `sudo` is required because it writes the raw device.
 
-## Two copies of every critical “do not”
+```sh
+lsblk
+sudo python3 tools/make_sd_image.py burn /dev/sdX
+```
 
-Six full restatements of the same law caused drift. **One** copy can be
-missed. So each critical “do not” lives in **exactly two** places: an
-always-on Cursor rule (agents) and one teaching/human page. Other documents
-**point** at those two; they do not retell the whole essay.
-That pair is for laws that **break the chip or the synth** (illegal RAM,
-dual heap, skip-a-rung). **Do not** two-copy how to write a title. FAST
-draw/`jmr:spr`/dest-crop lives in [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md)
-once; `/640png` first-build is Agent_learning prompts.
+If `card.img` is already built and you only want to copy it:
 
-| Critical “do not” | Copy 1 (agents) | Copy 2 (humans / teach) |
-|---|---|---|
-| FPGA-SIM **is** the chip. Legal on-chip RAM (**Port A**). Never `mem[i] <=` in the big VM state machine | `.cursor/rules/never-fake-fpga-sim.mdc` | [docs/FPGA_FIT.md](docs/FPGA_FIT.md) **NEVER** table |
-| One JavaScript heap; keep **generation** checks | `.cursor/rules/one-heap-keep-gen.mdc` | [docs/potential bugs.md](docs/potential%20bugs.md) Recurring class 1 |
-| No dukpy / V8 / browser / soft CPU as the machine; V1.0 `RUN` is minted `.JSH` from `card.img` | `.cursor/rules/no-dukpy-cheat-native-cpu.mdc` | [CONSTITUTION.md](CONSTITUTION.md) Vendored-titles mandate |
-| PYTHON → FPGA-SIM → your F9 → board. Agent does not run Vivado | `.cursor/rules/python-first-parity.mdc` | [Method](#method-steal-from-the-basic-sibling--not-the-product) (this page) |
-| Do not hardwire `INVADERS` / `PACMAN` / `DONKEY` into the chip | `.cursor/rules/no-game-hardwire.mdc` | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) |
-| Version 1.0 authoring walls; V1.5 COMPILE live + leftover typed-READY / popular JS; V2.0 is ISA/ASET growth (no title name) | `.cursor/rules/html-game-v1.mdc` | [docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md) § Version 1.0, 1.5, and 2.0 |
-| Read `traces/` before re-running the GUI | `.cursor/rules/use-existing-traces.mdc` | [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) |
-| Synth hygiene: 2 workers; when **not** to `bit-fresh`; incremental stitch | [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) § Synthesis | [docs/FPGA_FIT.md](docs/FPGA_FIT.md) NEVER + [docs/OLD_RUNS.md](docs/OLD_RUNS.md) taxonomy |
-| Poll-fire cooldown (hold-to-repeat, not edge-gate) | `.cursor/rules/poll-fire-needs-cooldown.mdc` | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) Input / FAST |
-| No splice after kill-calls | `.cursor/rules/no-splice-after-kill-calls.mdc` | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) FAST |
-| No maze flood on a tick | `.cursor/rules/no-maze-flood-on-tick.mdc` | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) FAST |
+```sh
+sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
+```
 
-**Lesson pages that are not a third copy of those laws:**
-[docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) failed-fix table,
-[docs/RTL_REORG.md](docs/RTL_REORG.md) JUDGMENT,
-[docs/VIVADO_FLATTEN_HUNT.md](docs/VIVADO_FLATTEN_HUNT.md) glass-suspect table.
+### Load the latest bitstream
 
----
+Temporary load. HDMI comes up in a few seconds and is gone when you unplug the board. PROG USB is J12. `sudo` is required when the USB device is not writable by your user.
 
-## Words used in this project
+```sh
+sudo openFPGALoader -b nexysVideo build/run75_program_system/release/run75_program_finder_SYS_33MHz.bit
+```
 
-Spell these out once here. Other pages expand the first use, then use the
-short form. If a page is opened alone, it should still expand the first
-mention.
+That file is the newest qualified bitstream, and it is the rollback. It still has the older jacks (mouse on J15, keyboard on JA). The run76 folder is the build in progress and does not have its own `.bit` yet. [Which bit](docs/FPGA_FIT.md). To keep the bitstream after power-off, set JP4 to QSPI and add `-f`:
 
-| Short | Spelled out | Meaning here |
-|---|---|---|
-| **FPGA** | Field-Programmable Gate Array | Reconfigurable chip on the Nexys Video board |
-| **ASIC** | Application-Specific Integrated Circuit | Custom silicon later; same architecture, not a second product |
-| **RTL** | Register-Transfer Level | Hardware as registers, wires, clocks. Our files: `rtl/*.sv` |
-| **SystemVerilog** / **`.sv`** | — | Language of the RTL |
-| **FPGA-SIM** | FPGA simulation | The **same** RTL, simulated with **Verilator** (not Vivado, not a Python fake) |
-| **Verilator** | — | Open-source tool: SystemVerilog → C++ → a host executable |
-| **Vivado** | AMD/Xilinx FPGA tool | Turns RTL into a **bitstream** (`.bit` / `.bin`). Linux build tool; Verilator does not produce bitstreams |
-| **bitstream** / **`.bit`** / **`.bin`** | — | File that configures the FPGA. Use `.bit` for JTAG and this project’s QSPI flash path; `.bin` is a secondary archive |
-| **synthesis** / **synth** | — | RTL → netlist for this FPGA family. First long Vivado step (`synth_1`) |
-| **place / route** / **impl** | implementation | Fit the netlist onto the real chip |
-| **DCP** | Design CheckPoint | Vivado save file. None exists until `synth_1` hits **100%** |
-| **WNS** | Worst Negative Slack | Timing: ≥ 0 means the clock was met. Negative WNS is a bad bit |
-| **MIG** | Memory Interface Generator | Vivado IP that talks to the board’s DDR3 DRAM |
-| **DDR3** | Double Data Rate DRAM, generation 3 | Big off-chip memory on Nexys Video. We hide it behind a **simple SRAM port** |
-| **SRAM** | Static Random-Access Memory | Simple memory. **On-chip** (BRAM) vs **external 4 MB asset bank** |
-| **BRAM** | Block RAM | On-chip memory tiles (this chip has **365**). Hot path only: screens, code, live JavaScript heap |
-| **LUT** | Look-Up Table | The FPGA’s basic logic cell (this chip has ~134,600) |
-| **LUTRAM** | LUT used as RAM | Fine for tiny tables. Fatal if a big array is forced here because BRAM ran out |
-| **Port A** | — | Legal BRAM shape: tiny write process, address in, data **next** clock. Copy `jmr_mini_fb.sv` |
-| **FSM** | Finite State Machine | Clocked `case (state)` that steps the VM |
-| **VM** | Virtual machine | Here: the **JavaScript bytecode** engine (`jmr_js_vm.sv`), not a browser |
-| **ISA** | Instruction Set Architecture | The 34 numbered opcodes the chip fetches |
-| **NLISC** | Native Language Instruction Set Computing | The human language *is* the ISA (JS here; BASIC on the sibling) |
-| **bytecode** | — | Compact numbered instructions the compiler emits on `RUN` |
-| **opcode** | — | One instruction number (1–34) |
-| **native** | — | A built-in the compiler already knows (`Math.floor` → opcode 13 + an **id**) |
-| **playSfx** | — | Title helper: packed `[freq, vol, frames, slide, ch, …]`. Chrome: `_chromePlay`. Card: `sound()` nid 42. Catalog: `SNDDEMO.HTML` |
-| **sound()** | nid 42 | `sound(ch, freqHz, vol0_15, frames, slide)`. 4-voice PSG (ch 0–2 square, 3 noise). Do **not** write `function sound()`. Mint default-on; `-soundoff` stubs |
-| **ProgramImage** | — | Compiled program in memory after `RUN` (code + ASET art). Not a file you type |
-| **ASET** | asset section | Palette + sprite pixels inside the ProgramImage; streamed to the 4 MB SRAM bank |
-| **ARTX** | art sidecar | Quantized ASET payload beside `NAME.HTML` (`NAME.ARTX`; card 8.3 = `NAME.ART`). Built from `NAME-N.png` by `make_artx.py`. Title source uses `jmr:spr:N`, never inline base64. |
-| **ARTJS** | Chrome art | Same quantized sheets as `.ARTX`, as a `.js` file Chrome can load. Built by `make_artjs.py`. **Not** on the card. Open `storage/NAME.HTML` in Chrome to see it. |
-| **JSB** | — | On-the-wire encoding of a ProgramImage (`JSB1` magic) |
-| **JSH** | — | **V1.0:** ProgramImage minted when you **make the card**. PYTHON, FPGA-SIM, and BOARD all `RUN` this file from `card.img`. Not copied from `storage/`. **V1.5:** `COMPILE` on the machine mints the same sidecar; `RUN` is unchanged |
-| **ARTSCAN / COMPILER / EDITOR** | machine programs | HTML in `storage/` plus minted `.JSH` on the card. **Not games.** `EDIT` / `COMPILE` chain-load them. `DIR` hides the stems. **Do not delete.** [GAME_DESIGN.md](docs/GAME_DESIGN.md#machine-programs-in-storage--do-not-delete) |
-| **HTML** | HyperText Markup Language | Disk format of a title: `NAME.HTML` |
-| **JS** | JavaScript | The language / ISA. `NAME.JS` demos are **not** product twins of `NAME.HTML` |
-| **CSS** | Cascading Style Sheets | Page layout. Version 1.0 has almost none — paint on Canvas |
-| **Canvas** | HTML5 bitmap drawing | `fillRect` / `drawImage` / … — hardware paint, not CSS |
-| **FB** | framebuffer | The 640×480 picture in memory. **Dual FB** = two banks (draw one, show the other) |
-| **HDMI** | High-Definition Multimedia Interface | Video out on the Nexys Video (jack J8) |
-| **PHY** | physical layer | Pins, HDMI, USB, SD — the board shell around the core |
-| **glass** | — | What you see: READY prompt, the game, errors. Must match PYTHON / FPGA-SIM / BOARD |
-| **F9** | — | GUI key: pick PYTHON, FPGA-SIM, or BOARD as the live runtime |
-| **HOST twin** | — | Python pretending to be FPGA-SIM. Opt-in `JMR_SIM_HOST=1` only — never the default |
-| **PYTHON** | — | The fast functional model (`functional_model/`). Same *results* as the chip, not the same wall-clock |
-| **HM** | Hardware Model | Python that mirrors clocks / memories (`hardware_model/`) |
-| **dukpy** | — | A host JavaScript engine. **Forbidden** as the product CPU |
-| **exec64** | — | The only opcode decoder (Value64 numbers). File: `jmr_js_vm_exec64.sv` |
-| **exec32** | — | Retired tagged-integer decoder. **Deleted.** Do not resurrect |
-| **Value64** | — | How JS values are packed (NaN-box). Every ProgramImage must set this flag |
-| **heap** | — | Object / array / environment tables the garbage collector walks |
-| **GC** | Garbage Collection | Recycle dead JS objects. **Generation** on a handle must match or the object was recycled |
-| **rAF** | `requestAnimationFrame` | Game loop callback once per displayed frame |
-| **HUD** | heads-up display | Score / lives text the title draws on Canvas |
-| **IIFE** | Immediately Invoked Function Expression | `(function(){…})()` — compiler/VM must not lose the call frame |
-| **FAT / FAT32** | File Allocation Table | Filesystem on the µSD card |
-| **OOM** | Out Of Memory | Host process killed (Vivado RSS tens of GB), not a JS heap overflow |
-| **RSS** | Resident Set Size | How much RAM Vivado is actually using. Watch this, not the log spinner |
-| **UG901** | Vivado Synthesis User Guide | AMD’s RAM / case / blocking-assignment rules we must match |
-| **XDC** | constraints file | Pin and clock constraints (`constraints/nexys_video.xdc`) |
-| **CDC** | Clock Domain Crossing | Moving a signal between two clocks (needs a proper synchronizer) |
-| **Pmod** | Peripheral module | Digilent add-on jacks (joystick on **JB**, optional PS/2 keyboard on **JA**) |
-| **T200** | — | Lab name for this Nexys Video (Artix-7 200T) |
-| **T100** | — | Lab name for the BASIC sibling’s Nexys A7-100T |
-| **V1.0 / V1.5 / V2.0** | product generations | **V1.0** = titles that play; **one disk** = `card.img`; compile = **when you make the card** (`.JSH`). **V1.5 compile is live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. Typed-READY + popular JS V1 lacks is leftover. **V2.0** = bigger ISA/ASET (`MAX_SPR`, 8 MB bank, `Object.keys`, `Math.round`, dotted `new`) — **not** a named title |
-| **`?NH`** | no HTML / no minted `.JSH` | Loud miss: missing title path, **or** card-create compile failed so `LOAD` shows HTML and `RUN` refuses. Never “done” |
-| **clock** | chip heartbeat | The FPGA steps once per clock. This board’s JS core is ≈ **100 million** clocks per second (100 MHz) |
-| **frame** | one picture | One full 640×480 image. Games aim for **60 pictures per second** (about 16.7 milliseconds each) |
-| **clocks per frame** | heartbeats to finish one picture | How many clock steps the JavaScript engine needs to draw the next picture. **You do not type this.** **FPGA-SIM is a slideshow** (~800k heartbeats per second of *your* time). The **board** is ~100 million/s (~125× faster), not slower. **30 pictures/s on the board** allows **3.33 million** heartbeats per picture. INVADERS was measured at **10.6 million** (~9 pictures/s on silicon until we cut work). Plan: [docs/SYNTH_SLOWDOWN_LEDGER.md](docs/SYNTH_SLOWDOWN_LEDGER.md) |
-| **suite** | automated test set | `pytest` / battery scripts. Not the GUI |
-| **xfail** | expected fail | A test we leave red on purpose (a known mismatch). **Not** “the game is broken in F9” |
-| **harness** | unattended script | Runs a title without you at the keyboard (headless). Can die on attract-mode after minutes even when *you* can play fine |
-| **attract** | demo loop | Title screen / AI demo while nobody is playing (PACMAN ghosts wandering) |
+```sh
+sudo openFPGALoader -b nexysVideo -f build/run75_program_system/release/run75_program_finder_SYS_33MHz.bit
+```
 
-Live **capacity** numbers (objects, environments, code words, sprites) change
-when we fit the chip. **One** source of truth:
-[docs/FPGA_FIT.md](docs/FPGA_FIT.md) paper budget. Do not copy stale 1024/512
-caps from older paragraphs.
+## Where to read next
 
-**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID / AURORA / MRDO / MKPVP / MKBIG / MKBIGCPU / MKCPU / JOYDEMO / SNDDEMO / PACORIG / PACFAST / DNKFAST) then `RUN`. FAST copies keep the original look; measured clocks are in [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) (PACFAST **2.8×** PACMAN, DNKFAST **1.65×** DONKEY on FPGA-SIM play `fclk`).
-**V1.0** library titles must stay inside the authoring walls in
-[docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md)
-(how-to: [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md)). **V1.0 `LIST` is
-view / learn.** **V1.5 compile is live:** `LOAD` → `EDIT` → **`COMPILE`**
-→ `RUN`. Typed-at-READY numbered authoring of *new* programs, and popular
-JS V1 does not have (`Array.shift`, `Math.sin`/`round`, `isFinite`, …),
-are leftover —
-[docs/JMR_JS_COMPATIBILITY.md § V1.5](docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
-**V2.0** is ISA/ASET growth, not a named title
-([docs/JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](docs/JMR_JS_COMPATIBILITY.md#version-10-15-and-20)).
-Titles are HTML. **V1.0:** compile when you **make the card** (`.JSH`);
-PYTHON, FPGA-SIM, and BOARD all `RUN` that image from `card.img`.
-Same-stem `.JS` demos are not the product.
-Ctrl-V pastes into the prompt.
-
-**[CONSTITUTION.md](CONSTITUTION.md) is the specification.** If the code and
-the Constitution disagree, the code is wrong.
-
-**Linux day-one** (GUI, Verilator, Vivado, flash): [docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md).
-(The old `docs/LINUX_WORKSTATION.md` was folded into that file.)
-
----
-
-## NLISC (Native Language Instruction Set Computing)
-
-**RISC** (Reduced) and **CISC** (Complex) argue about the *shape* of the
-opcode. **NLISC** is a different axis: **the language the human types is the
-instruction surface of the chip.** There is no second machine underneath (no
-Z80 + BASIC ROM, no RISC-V + V8). Bytecode is what fetch actually eats;
-engines do the work. The BASIC sibling is **NLISC-BASIC**. This repo is
-**NLISC-JS**. Same method; different ISA. Full ladder:
-[CONSTITUTION.md](CONSTITUTION.md#nlisc-method-js-basic-or-a-later-native-gpu).
-
-**JS, not HTML, is the ISA.** HTML is the *disk format and editor surface*:
-one title = `NAME.HTML`, line numbers from that file, Canvas in a minimal
-container. V1 is not a CSS browser. The user types `LOAD "PACMAN.HTML"`;
-the processor is still NLISC-JS. Do not call it an “HTML CPU.”
-“HTML5 Canvas computer” is fine on the box.
-
-**Why it exists (TRS-80 tax).** Level II BASIC still needed an interpreter
-*and* a copy of a processor. Collapse those into one and the hidden CPU
-goes away. That is the product: READY → LOAD → RUN, like the TRS-80, with
-Canvas engines instead of a borrowed Z80.
-
-**ASIC advantage — for this class of machine, not versus Chrome.** One
-machine, not two: die goes to heap SRAM, dual FB, blitter, and the 4 MB
-asset port, not a general CPU plus a runtime in DRAM. `fillRect` /
-`drawImage` / rAF / `GET_PROP` are datapaths (extra clocks at core ≈100 MHz
-MIG `ui_clk` still hit a 60 Hz frame). Caps are frozen and compile as SRAM;
-overflow is loud. No OS, no JIT warmup, scanout from the on-chip front FB.
-It will **not** beat a 1 GHz ARM + a browser on raw JS or run the whole web.
-It competes with “Z80 + interpreter” and “soft CPU + QuickJS.”
-
-**Naming trap:** 1990s “native” meant compiled machine code, not
-interpreted. Here **native** means the language lives in the silicon
-(bytecode is the ISA) — no interpreter sitting on a borrowed CPU.
-
----
-
-## Method (steal from the BASIC sibling — not the product)
-
-This is **copy 2** of the PYTHON → FPGA-SIM → board law (copy 1 is
-`.cursor/rules/python-first-parity.mdc`). Same NLISC ladder if you later
-build a **language-native GPU** or **update BASIC** (steal method, not
-tokens/pins). Python is the fast ruler (same **results**, not the same
-wall-clock as the chip). Register-transfer level hardware must execute the
-same serialized program. Lockstep before titles. **V1.0:** PYTHON,
-FPGA-SIM, and BOARD `LOAD`/`RUN` the same `card.img` (minted `.JSH` on
-`RUN`). User F9 before `.bit`. Spec write-up:
-[CONSTITUTION.md](CONSTITUTION.md#nlisc-method-js-basic-or-a-later-native-gpu).
-
-- Constitution first.
-- PYTHON functional model → hardware model on **the bytes RTL gets** → FPGA-SIM → board `.bit`.
-- FPGA-SIM RTL **is** the T200 chip (`.cursor/rules/never-fake-fpga-sim.mdc`).
-- Uniform glass across F9 runtimes. Console text is the RTL reply line.
-  Python does not add a longer paragraph. `HELP` is one line. The long
-  instructions are `HELP.MD` on the card. A JS result that only Python
-  gets is still a bug in RTL.
-- Read `traces/` before repro spam.
-- Surgical edits; do not delete files; one README.
-
-This repo is **not** a merge of `JMR-BASIC-FPGA-COMPUTER`. Do not copy BASIC
-tokens, microcode, or Nexys A7-100T pinouts here. Board freeze:
-[docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md).
-
----
-
-## Layout
-
-| Path | Role |
+| | |
 |---|---|
-| `functional_model/` | Python behavioural truth |
-| `hardware_model/` | Explicit clocks / FSMs / memories |
-| `runtime/` | PYTHON / FPGA-SIM / BOARD / ASIC-SIM backends |
-| `rtl/` | SystemVerilog engines (+ `rtl/video/` HDMI scanout). Navigation: [docs/RTL_REORG.md](docs/RTL_REORG.md) |
-| `third_party/digilent_rgb2dvi/` | Digilent HDMI TMDS IP (do not rewrite) |
-| `sim/` | Verilator + cocotb |
-| `constraints/` | Nexys Video XDC (StarLite later; not A7-100T) |
-| `storage/` | Seed only: `NAME.HTML` titles. Rebuild `card.img` after edits |
-| `card.img` | **V1.0 disk** for PYTHON / FPGA-SIM / BOARD. FAT HTML + minted `.JSH` |
-| `docs/` | Architecture, bring-up, fit, handoff |
-| `tools/` | compile, SD image, battery, `golden_frames.py`. `pmod_input_test/` + `hid_led_blink/` = **LED-only** board proofs — not FPGA-SIM ([RTL_REORG.md](docs/RTL_REORG.md#board-led-input-tests--never-fpga-sim)) |
-| `traces/` | Flight logs — read first when debugging. `traces/goldens/` = frame diffs |
-| `.cursor/rules/` | Product rules for *this* machine (copy 1 of the do-nots) |
-
----
-
-## License / sibling
-
-Educational FPGA computer project. Sibling method reference (read-only):
-`JMR-BASIC-FPGA-COMPUTER` — steal the method, not the BASIC ISA.
+| Dictionary, do-not list, folders | [docs/WORDS.md](docs/WORDS.md) |
+| How to write a game | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) |
+| What JavaScript the chip has | [docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md) |
+| Shared menus and windows | [docs/SYSTEM_APPLICATIONS.md](docs/SYSTEM_APPLICATIONS.md) |
+| Board, Vivado, HDMI | [docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md) |
+| Specification | [CONSTITUTION.md](CONSTITUTION.md) |

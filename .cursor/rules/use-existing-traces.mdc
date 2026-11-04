@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Use existing traces first
 
-Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+Words: [README.md — Words used](../../docs/WORDS.md#words-used-in-this-project).
 This is **copy 1** of “read traces first” (copy 2:
 [docs/SESSION_HANDOFF.md](../../docs/SESSION_HANDOFF.md) § FPGA-SIM glass).
 

@@ -1,23 +1,11 @@
 # Shared Mac-style application interface
 
-Status: **installed in the main Python GUI, native RTL simulator and `card.img`**, November 2, 2026.
-Launch normally from the project folder:
+The normal GUI is Python, then F9 for FPGA-SIM. Both use `card.img`.
+Which bitstream is loaded: [FPGA_FIT.md](FPGA_FIT.md). The image still in QSPI (run73o) does not have this interface. The run75 rollback bit does. Run76 is the source being built.
 
 ```sh
 .venv/bin/python gui_jmr_js.py
 ```
-
-The default GUI starts in Python and uses `card.img`; saves go to that disk.
-A copy of the disk from before this update and the publication record are under
-`build/system_tools/` (see its README). The released FPGA bitstream is unchanged.
-The interface has passed Python and native RTL/F9 checks. The RTL implements
-menus, shared windows, file dialogs, document saves, Utility catalog staging
-and compiler lifecycle in the same synthesizable hardware used for the board.
-The new run74 bitstream must pass routing/timing gates and then a board test.
-The board-tested release remains `releases/current/fpga.bit`.
-
-`./run_python_system_preview.sh` remains an optional isolated Python-only preview
-using `build/system_tools/python_card.img`, with its own saves and F9 disabled.
 
 ## System feature, declared by HTML
 
@@ -107,6 +95,10 @@ must provide its own metadata. There is no game-name lookup in the runtime.
 from 0 to 255, not a request to scroll. The system sends keys 128/129 for one line
 up/down, 130/131 for page up/down and 132/133 for left/right. The app changes its
 viewport and republishes the positions. Games do not need these properties.
+`ctx.systemTitle="untitled"` supplies a 0–24 character printable ASCII document
+caption and suppresses generic window hints. An empty title restores the default.
+`ctx.windowBars=0` hides that scroll bar. The default is a bar. MacPaint sets
+0 because the hand moves the page and the window itself does not scroll.
 
 ## Menu description
 
@@ -115,6 +107,10 @@ These context properties are write-only declarations.
 Set `ctx.systemMenus` once at startup, using a literal string. Semicolons separate
 menus, `|` separates the heading/items, and `=` assigns an item a command number.
 Use at most **3 extra menus, 8 items per menu, 512 printable ASCII bytes total**.
+A document program that must own File and Edit starts the descriptor with
+`File|`. That form allows six menus and 14 items, up to 800 bytes, and
+commands 160–239. `Quit` and `Close` leave the program. A lone `-` is a
+separator.
 Menu headings are 1–12 characters; item labels are 1–24 characters. Commands
 **160–191** must be unique in the descriptor. Do not use `File`, `Edit`, `View`,
 or `Special` as custom headings. The system rejects invalid descriptors visibly.
@@ -216,19 +212,24 @@ HTML, so future converted programs are included without editing a title list.
 ## MacPaint
 
 `storage/MACPAINT.HTML` is a windowed drawing program, role 6. It draws
-only in the white hole. File → Save stays grey: that command writes
-SOURCE for the editor and the compiler. Disk → Save, Save As, and Open
-write a `STEM.PNT` picture with `fsWrite` and `fsRead`, which the chip
-already has. No new instruction was added.
+only in the white hole. Its menu descriptor starts with `File|`, so the
+program owns the menu bar: File, Edit, Goodies, Font, FontSize, Style.
+The title stripes say `untitled`. File → Save writes a `STEM.PNT`
+picture with `fsWrite` and `fsRead`, which the chip already has. No new
+instruction was added. The tool pictures are the 1984 MacPaint font,
+and the 38 patterns are the System pattern list from that disk.
 
 The page is 576 by 320. The page, one undo copy, and a full-page
 clipboard have to fit in the 73,728-byte compile arena. A taller classic
 page does not fit beside those copies. Bits are arena bytes (`stgRead` /
-`stgWrite`) because a program cannot index ImageData pixels. The text
-tool is a 5 by 7 face in the file. `fillText` cannot be read back, and
-the machine has one bitmap font, so there is no Font menu. The stick
-uses `keyUp` / `keyDown` / `keyLeft` / `keyRight` / `keyFire`. `joy()` is
-not a chip instruction.
+`stgWrite`) because a program cannot index ImageData pixels. Each ink
+pixel also has a color nibble in the image half of that arena, which
+this program does not use for pictures. The 16 colors are the exact
+entries on the glass: black, white, red, green, blue, yellow, cyan,
+magenta, and eight greys. The text tool is one 5 by 7 face. Font names
+move the check. The stick uses `keyUp` / `keyDown` / `keyLeft` /
+`keyRight` / `keyFire`. `joy()` is not a chip instruction. The window
+sets `windowBars=0`.
 
 ## Standalone desktop, from the 128K Finder
 
@@ -251,13 +252,10 @@ screen. They are not put in that hole. `storage/READ.HTML` is the
 document reader: `#` and `##` are twice body size and the marks are not
 drawn. `- ` and `* ` become an indented square.
 
-Later, for the next RTL desktop, not this Python pass:
-
-- The same list order, drag, Trash window, and Empty Trash in
-  `rtl/engines/jmr_desktop.sv`. Until that lands, list view no longer
-  matches the RTL pixel test.
-- Get Info, Duplicate, New Folder, Clean Up, and Rename.
-- Shut Down. This machine has one disk, so Eject stays off.
+Those desktop behaviors belong to the Finder program below, not to a
+later edit of `jmr_desktop.sv`. The built-in desktop remains only the
+`JMR_FINDER=builtin` / `PROGRAM_FINDER=0` rollback. This machine has
+one disk, so Eject stays off.
 
 ## Finder program
 
@@ -300,10 +298,7 @@ are the rectangles the program draws. No new icon art is added.
 
 The default RTL now uses the Finder program and generic file/launch hooks.
 The built-in desktop is preserved as a build option and source snapshot.
-See [PROGRAM_FINDER_RTL.md](PROGRAM_FINDER_RTL.md) for the native ABI, role-9
-menu contract, simulator instructions and rollback. Syntax/elaboration and a
-simulator build are checks of the implementation, not owner UI/board acceptance.
-No new bitstream was started.
+See [lastrun_ARCHITECTURE.md](lastrun_ARCHITECTURE.md).
 
 The RTL implementation keeps the 8 MiB memory map. It caches the Finder image
 and parks its arena state while another application uses the single VM. Returning
@@ -314,3 +309,27 @@ The implemented SYSTEM.SYS loader is documented in
 instructions. It supplies shared visual resources; application behavior and
 custom menu commands remain JavaScript. Boot, desktop, menu and Terminal-return smoke checks
 have passed; application-wide owner testing and board timing remain outstanding.
+
+## Shared scratch RAM is not initialized program state
+
+The real board's external RAM is undefined at cold power-on and can contain
+previous applications' data. A new system program must initialize every flag,
+length and structure it reads before writing. Do not rely on Python/Verilator
+zero-filled memory. Clear metadata and invalidate caches; image buffers can be
+loaded on demand. A resident application's valid restore path must preserve
+its saved state rather than performing a cold clear.
+
+The November 4 Finder correction initializes file/window/control metadata,
+comment lengths and icon-cache flags in `start()`. The loader clears the init
+flag on cold launch; a resident return keeps it set. Regression tests seed
+external RAM with 0xA5 and verify window geometry and keyboard selection.
+
+## Run76 FPGA interface status
+
+The six-menu `File|` contract, separator/checkmark rendering, `systemTitle` and
+`windowBars` are now implemented in RTL and tested with the exact MacPaint
+program. Use run76 after its release qualification; older run75 does not
+support those extensions. `tests/test_owned_menus_rtl.py` exercises the native
+parser and pointer dispatch, including Save, the last menu and Quit lifecycle.
+The program still implements its own document actions; declaring Save does
+not invent file serialization for an arbitrary drawing application.

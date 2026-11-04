@@ -1,5 +1,7 @@
 # SYSTEM.SYS: disk-updatable shared appearance
 
+[Memory map](lastrun_ARCHITECTURE.md). Which bit: [FPGA_FIT.md](FPGA_FIT.md).
+
 ## Use it
 
 `SYSTEM.SYS` is a resource bundle, not an executable or another programming
@@ -27,8 +29,9 @@ To prepare a file without touching an image:
 ```
 
 Normal disk-image creation includes `.SYS`; the GUI's card-file transfer list
-also includes it. This work has not written a physical card or built a `.bit`.
-After a future board release containing this loader, copy SYSTEM.SYS to that
+also includes it. The run75 hardware build includes this loader; its build/qualification status is
+recorded in `build/run75_program_system/README.md`. No physical card has been
+written by this update. With a board release containing the loader, copy SYSTEM.SYS to that
 board's disk and power-cycle it to load the update.
 
 ## What can change
@@ -41,7 +44,7 @@ board's disk and power-cycle it to load the update.
   You can change glyph shapes/family within those cells, not font size or spacing.
 - Fixed menu headings: label IDs 110 File, 111 Edit, 112 View, 113 Special,
   114 Game. Displayed headings can change; their semantic identity stays fixed.
-- Native menu and dialog captions: IDs 120–169, plus window captions 81–104.
+- Native menu and dialog captions: IDs 120–171, plus window captions 81–104.
   Examples: 123 Save, 125 Quit, 142 Cancel, 143 Open, 144 Replace, 145 OK,
   146 Save-changes prompt, 147 Save-name prompt, 149 Replace prompt, 165 Discard.
   The JSON contains the full list. Single-glyph navigation marks and the clipped
@@ -115,9 +118,12 @@ with built-in resources. `resources/system/defaults.json` is also a source for a
 known-default bundle. Build it with the same packer and `--image card.img`.
 
 UI font, fixed-caption and keyboard bitmap memories now have boot write ports;
-scalar writes and clocked display reads avoid per-pixel filesystem work. Actual
-FPGA utilization and timing require a later synthesis/place-and-route run. None
-has been run for this change, and game clock settings were not changed.
+scalar writes and clocked display reads avoid per-pixel filesystem work.
+Display-memory writes cross through an acknowledged transfer into the pixel
+clock; the loader waits for each committed word before resuming Finder. Menu
+action lookup uses staged reads, adding only a few cycles to a click. Actual
+FPGA utilization and timing come from synthesis/place-and-route reports. The run75 build measures these; see its build record. Game clock settings
+were not changed.
 
 ## Binary format 1 (for maintainers)
 
@@ -138,7 +144,9 @@ Payload byte offsets:
   bytes through 9471 are zero.
 - 9472: 2048 packed five-byte keyboard bitmap rows, using existing key IDs.
 - 19712: 64 u64 ship/keyboard caption bitmap rows.
-- 20224: 128 32-byte legacy About bitmap rows (current About uses native captions).
+- 20224: 48 u64 rows for the Finder ship-menu Note, Help and Utility captions
+  (16 rows each). The rest of this old About region is reserved and emitted as zero; current About
+  text uses native captions. The total payload size stays unchanged.
 
 Do not hand-edit the binary. The compiler performs text-fit and geometry checks
 that raw byte editing would bypass. The RTL bounds physical writes and validates
@@ -158,8 +166,18 @@ inside a moved dialog. Six focused Python resource/menu tests passed. Python
 also loaded the published SYSTEM.SYS from the disk. See
 [verification files](../build/system_resources/README.md).
 
-This does not claim all recent Python UI behaviors match RTL. The older direct-
-JSH keyboard pixel test still fails its initial comparison and assumes the old
-built-in desktop on Quit. Caret/I-beam and mouse-release parity remain tracked
-in PROGRAM_FINDER_RTL.md. No board timing/resource or hardware acceptance run
-was performed.
+The run75 parity work adds both Python startup pictures, filename insertion
+caret and I-beam, mouse-up menu actions, held-button feedback and Finder ship
+accessories. Startup and Save As normal/held pixels match Python exactly in the
+standalone RTL renderer check. See `build/run75_program_system/tests/` for the
+remaining integration results and the run75 build record for hardware status.
+
+Startup typography also reads SYSTEM.SYS in Python and RTL. Caption IDs 160
+(JMR Enterprises), 170 (NCC-1701), and 171 (Welcome to Javatosh.) are resource
+text; their original positions and scale are fixed. Preserve those caption
+widths when editing startup text. The Enterprise silhouette and checker layout
+are compact fixed drawing primitives, not a bitmap framebuffer in BRAM.
+
+The old ship-menu About bitmap RAM has been removed; native About uses the
+shared caption/font renderer. Fixed dialog configuration loads once through the
+pixel resource bridge instead of being copied with each live UI snapshot.

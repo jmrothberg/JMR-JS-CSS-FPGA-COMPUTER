@@ -21,7 +21,10 @@
 // Order at 20480. Comments at 24576 (24 bytes). Desktop image at 32768.
 // Names at 30000 and 30100. DESKTOP.FDR name at 30200. Icon name at 30300.
 // Copy chunk at 45056. 16471 is the Chicago ink (0 black, 1 blue).
-// Icon cache: flag at 48000, file scratch at 50000, runs at 52000.
+// Icon cache: flag at 48000, file scratch at 50000.
+// Runs at 52000, 2336 bytes per slot (32 rows, 24 runs).
+// Eight runs chopped the right side of a detailed picture.
+// 24 runs is the widest icon row. Slot 140 would pass the arena.
 // The picture is the 1984 Finder (System 1.0): striped title, Disk at the
 // upper right, Trash at the lower right, Chicago names. Icons stay the
 // color pictures already on the disk. Infinite Mac runs that Finder in
@@ -728,6 +731,7 @@ function dropIcon(slot,x,y){
 }
 function openSlot(slot){
  var k;
+ stgWrite(16409,0); // Never park the filename editor across an app launch.
  k=stgRead(8192+slot*32+13);
  if(k==6){openWin(0,slot+1,24,40,548,354,0);return;}
  saveDesk();copyName(slot,30000);
@@ -744,12 +748,11 @@ function clickIcon(slot){
  if(stgRead(16643))beginRename(slot);
 }
 function beginRename(slot){
- var a,n,i;
  if(stgRead(8192+slot*32+15)&8)return;
  if(stgRead(8192+slot*32+13)==5)return;
- a=8192+slot*32;n=stgRead(a);
- stgWrite(16423,slot);stgWrite(16409,1);stgWrite(16410,n);
- for(i=0;i<12;i++)stgWrite(16411+i,i<n?stgRead(a+1+i):0);
+ stgWrite(16423,slot);stgWrite(16409,1);
+ stgWrite(16410,stgRead(8192+slot*32));
+ copyName(slot,16411);
  stgWrite(16385,1);
 }
 function commitRename(){
@@ -952,10 +955,12 @@ function infoKey(c){
 function onKey(e){
  var c,w;
  c=e.keyCode;
+ // Menu commands end filename editing; they are not characters to rename with.
+ if(c>=160){stgWrite(16409,0);stgWrite(16385,1);}
  if(c==16){stgWrite(16391,1);return;}
  if(stgRead(16409)){renameKey(c);return;}
  w=stgRead(16394);
- if(w!=255&&stgRead(16896+w*16+1)==2){infoKey(c);return;}
+ if(c<160&&w!=255&&stgRead(16896+w*16+1)==2){infoKey(c);return;}
  if(stgRead(16620))return;
  if(c==160)newFolder();
  else if(c==161){if(firstSel()>=0)openSlot(firstSel());}
@@ -1020,6 +1025,7 @@ function dialogClick(x,y){
 }
 function onDown(e){
  var x,y,part,slot;
+ stgWrite(16409,0); // A new pointer gesture ends the previous name edit.
  x=e.clientX;y=e.clientY;
  w16(16396,x);w16(16398,y);w16(16400,x);w16(16402,y);stgWrite(16395,1);
  if(stgRead(16620)){dialogClick(x,y);return;}
@@ -1100,13 +1106,15 @@ function bandSelect(){
 }
 function onUp(e){
  var x,y,slot,dx,dy;
- x=e.clientX;y=e.clientY;slot=stgRead(16393);
- if(stgRead(16392)==1){
+ x=e.clientX;y=e.clientY;slot=stgRead(16393);dx=stgRead(16392);
+ // Let go before opening. sysRun stops this program at once, so
+ // the old clear after clickIcon never ran and the icon stayed glued.
+ stgWrite(16392,0);stgWrite(16395,0);
+ if(dx==1){
   dx=x-r16(16400);if(dx<0)dx=0-dx;
   dy=y-r16(16402);if(dy<0)dy=0-dy;
   if(dx<4&&dy<4)clickIcon(slot);else dropIcon(slot,x,y);
- }else if(stgRead(16392)==4)bandSelect();
- stgWrite(16392,0);stgWrite(16395,0);
+ }else if(dx==4)bandSelect();
  if(stgRead(16445))saveDesk();
  stgWrite(16385,1);
 }
@@ -1139,7 +1147,7 @@ function rleRow(y,dest){
   if(pixOn(i)==0){x=x+1;continue;}
   col=stgRead(50136+i);w=1;
   while(x+w<32&&pixOn(y*32+x+w)&&stgRead(50136+y*32+x+w)==col)w=w+1;
-  if(n<8){stgWrite(p,x);stgWrite(p+1,w);stgWrite(p+2,col);p=p+3;n=n+1;}
+  if(n<24){stgWrite(p,x);stgWrite(p+1,w);stgWrite(p+2,col);p=p+3;n=n+1;}
   x=x+w;
  }
  stgWrite(dest,n);
@@ -1153,8 +1161,8 @@ function cacheIcon(slot){
  if(n<1160||stgRead(50000)!=74||stgRead(50001)!=73||stgRead(50002)!=67||stgRead(50003)!=49){
   stgWrite(48000+slot,1);return;
  }
- base=52000+slot*800;
- for(y=0;y<32;y++)rleRow(y,base+y*25);
+ base=52000+slot*2336;
+ for(y=0;y<32;y++)rleRow(y,base+y*73);
  stgWrite(48000+slot,2);
 }
 function genericIcon(x,y){
@@ -1181,9 +1189,9 @@ function folderIcon(x,y){
 }
 function drawRle(slot,x,y){
  var row,base,n,i,p;
- base=52000+slot*800;
+ base=52000+slot*2336;
  for(row=0;row<32;row++){
-  p=base+row*25;n=stgRead(p);
+  p=base+row*73;n=stgRead(p);
   for(i=0;i<n;i++)ctx.fillRect(x+stgRead(p+1+i*3),y+row,stgRead(p+2+i*3),1,stgRead(p+3+i*3));
  }
 }
@@ -1497,11 +1505,20 @@ function paint(){
  menuMask();
 }
 function start(){
+ var i;
+ // Cold DDR memory is undefined, and the compiler/tools share this arena.
+ // Initialize every metadata owner before reading flags or window geometry.
+ // Resident returns keep init=1 and bypass start(), preserving their state.
+ for(i=8192;i<17024;i++)stgWrite(i,0);
+ for(i=0;i<256;i++){
+  stgWrite(24576+i*24,0); // empty comment; payload ignored until a length is set
+  stgWrite(48000+i,0);   // icon cache invalid; pixels are loaded on demand
+ }
+ stgWrite(16404,255); // No previous click on a cold desktop.
  ctx.font="8px";ctx.fillStyle="#000000";
  initNames();fsList();parseList();markKinds();loadDesk();placeGrid();recount();
  if(haveDisk()==0)openWin(0,0,8,34,548,354,0);
  pickFront();menuMask();
- stgWrite(16600,0);
  stgWrite(16384,1);stgWrite(16385,1);
 }
 function frame(){

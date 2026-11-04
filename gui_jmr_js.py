@@ -812,7 +812,7 @@ class App:
         if stage == 0:
             self._boot_palette = list(canvas.palette)
             canvas.palette = [rgb332(i) for i in range(256)]
-        paint_javatosh_boot(canvas, stage)
+        paint_javatosh_boot(canvas, stage, getattr(getattr(self.backend, "system_menu", None), "resources", None))
         self.backend._boot_glass = True
         self._boot_stage = stage
 

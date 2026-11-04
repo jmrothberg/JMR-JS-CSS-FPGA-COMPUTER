@@ -5,7 +5,7 @@ alwaysApply: true
 
 # HTML games — V1.0 now, V1.5 COMPILE live, V2.0 ISA later
 
-Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+Words: [README.md — Words used](../../docs/WORDS.md#words-used-in-this-project).
 This is **copy 1** of Version 1.0 walls / Version 1.5 console + popular JS /
 Version 2.0 machine work (copy 2:
 [docs/JMR_JS_COMPATIBILITY.md](../../docs/JMR_JS_COMPATIBILITY.md)

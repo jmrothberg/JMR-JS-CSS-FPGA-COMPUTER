@@ -5,7 +5,7 @@ alwaysApply: true
 
 # No splice after kill-calls (#invfast-fault3)
 
-Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+Words: [README.md — Words used](../../docs/WORDS.md#words-used-in-this-project).
 Copy 1 (copy 2: [docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md) FAST rule 6).
 
 > ✅ **RESOLVED 2026-08-30 — the residual saucer freeze was a DIFFERENT

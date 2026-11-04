@@ -13,7 +13,10 @@ BUILD := sim_build_synth
 #   make -C sim sim_server_synth THREADS=12 -B
 THREADS ?=
 VTHREADS := $(if $(THREADS),--threads $(THREADS),)
-JMR_SIM_PARAMS ?=
+# Only the cosmetic splash delay is scaled to the software simulator's clock
+# throughput. VM, SPI, memory handshakes and rendering still execute real RTL.
+# Use JMR_SIM_PARAMS=BOOT_CLOCK_HZ=100000000 for board-duration timer tests.
+JMR_SIM_PARAMS ?= BOOT_CLOCK_HZ=1000000
 FONT := $(ROOT)/vectors/font_rom.hex
 UI_ROMS := $(wildcard $(ROOT)/vectors/desktop_*.hex $(ROOT)/vectors/system_*.hex $(ROOT)/vectors/classic_*.hex)
 
@@ -54,6 +57,15 @@ $(BUILD)/tb_ft245: tb_ft245.cpp $(RTL)/engines/jmr_ft245_async.sv
 # PS/2 receiver — debounce must still assemble Set-2 bytes
 tb_ps2_rx: $(BUILD)/tb_ps2_rx
 	$(BUILD)/tb_ps2_rx
+
+.PHONY: tb_mouse_packet_merge
+tb_mouse_packet_merge: $(BUILD)/obj_mouse_merge/Vtb_mouse_packet_merge
+	$(BUILD)/obj_mouse_merge/Vtb_mouse_packet_merge
+
+$(BUILD)/obj_mouse_merge/Vtb_mouse_packet_merge: tb_mouse_packet_merge.sv $(RTL)/phys/jmr_mouse_packet_merge.sv $(RTL)/phys/jmr_pointer_accumulator.sv
+	verilator --binary --timing -j 4 --top-module tb_mouse_packet_merge \
+		--Mdir $(BUILD)/obj_mouse_merge -Wno-WIDTHEXPAND \
+		$(RTL)/phys/jmr_mouse_packet_merge.sv $(RTL)/phys/jmr_pointer_accumulator.sv tb_mouse_packet_merge.sv
 
 $(BUILD)/tb_ps2_rx: tb_ps2_rx.cpp $(RTL)/phys/ps2_rx.sv
 	mkdir -p $(BUILD)

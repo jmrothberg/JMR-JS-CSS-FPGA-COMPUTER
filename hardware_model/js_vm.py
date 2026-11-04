@@ -586,6 +586,7 @@ class JsHwVm:
         self._m.system_menus = ''
         self._m.system_about = None
         self._m.system_viewport = False
+        self._m.system_bars = True
         self._value_object_generations = [1] * MAX_OBJECTS
         self._value_object_classes = [None] * MAX_OBJECTS
         self._value_object_builtins = [None] * MAX_OBJECTS
@@ -3552,8 +3553,24 @@ class JsHwVm:
                     if not self._value64_push(value):return
                     continue
                 if (self._value_object_builtins[value_payload(handle)] == BUILTIN_CONTEXT
+                        and property_name == 'systemTitle'):
+                    title = self._value64_string_text(value, op_ip, op)
+                    if title is None:return
+                    if len(title) > 24 or any(ord(c) < 32 or ord(c) > 126 for c in title):
+                        self._value64_fault('systemTitle needs 0-24 printable ASCII characters')
+                        return
+                    self._m.system_title = title
+                    if not self._value64_push(value):return
+                    continue
+                if (self._value_object_builtins[value_payload(handle)] == BUILTIN_CONTEXT
                         and property_name == 'systemViewport'):
                     self._m.system_viewport=bool(value_to_int32(value))
+                    if not self._value64_push(value):return
+                    continue
+                if (self._value_object_builtins[value_payload(handle)] == BUILTIN_CONTEXT
+                        and property_name == 'windowBars'):
+                    # 0 hides the window scroll bar. Other windows keep it.
+                    self._m.system_bars=bool(value_to_int32(value))
                     if not self._value64_push(value):return
                     continue
                 if (self._value_object_builtins[value_payload(handle)] == BUILTIN_CONTEXT
@@ -3570,10 +3587,12 @@ class JsHwVm:
                         and property_name == 'systemMenus'):
                     spec = self._value64_string_text(value, op_ip, op)
                     if spec is None:return
-                    from functional_model.classic_ui import parse_finder_menus, parse_menus
+                    from functional_model.classic_ui import parse_finder_menus, parse_menus, parse_owned_menus
                     try:
                         if self._m.system_window[0] == 9:
                             parse_finder_menus(spec)
+                        elif spec.startswith('File|'):
+                            parse_owned_menus(spec)
                         else:
                             parse_menus(spec)
                     except ValueError as exc:

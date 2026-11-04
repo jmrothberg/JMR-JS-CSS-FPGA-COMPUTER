@@ -1049,7 +1049,7 @@ class SimBackend(RuntimeBackend):
         if self._use_rtl:
             ui_state=parse_status_kv(self._rpc("UISTATE?"))
             if ui_state.get("catalog",0) or ui_state.get("action",0):
-                self._rpc("TICKN 100")
+                self._rpc("TICKN 500")
                 self._sync_native_source()
             self._desktop_status()
             live_status=self._rpc("STATUS?")
@@ -1067,7 +1067,7 @@ class SimBackend(RuntimeBackend):
                 self._editor_live=True
                 self._running=True
             if self._desktop_visible or self._desktop_busy:
-                self._rpc("TICKN 100")
+                self._rpc("TICKN 500")
                 self._desktop_status()
                 self._rpc("FB?")
                 status = self._rpc("STATUS?")
@@ -1095,19 +1095,16 @@ class SimBackend(RuntimeBackend):
                     self._typed_log.append("READY")
                 self._sync_glass("> ")
                 return
-            # rAF paint (FRAME). TICKN if the VM is still loading EDITOR.JSH
-            # (FRAME dead-exits in S_IDLE and would never advance FAT).
-            # 2026-09-01: 20M-clock chunks froze Tk for ~10 s per rpc — the
-            # whole EDIT chain-load read as a GUI hang and Esc never landed.
-            # 5M-clock chunks keep the window live between rpcs; the load
-            # takes the same sim time either way.
-            resp = self._rpc("FRAME")
-            if resp == "FB SAME":
+            # File loading and a first Finder paint can take many simulated
+            # clocks. Bound each GUI call; never wait for an entire long paint
+            # on Tk's event thread. Game FRAME behavior below is unchanged.
+            if "vm_busy=0" in st:
                 self._arch_phase = "load"
-                self._rpc("TICKN 100")
+                self._rpc("TICKN 500")
                 self._rpc("FB?")
             else:
                 self._arch_phase = "run"
+                self._rpc("FRAME 500000")
             return
         # NEW: while running, one VM frame (tick-to-swap) not TICK=1000
         if self._running:

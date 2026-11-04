@@ -52,17 +52,30 @@ module ps2_rx (
     logic [3:0] bit_cnt;
     logic [10:0] shift;
     logic collecting;
+    // Abandon a truncated byte after 1 ms without a clock edge at 100 MHz.
+    // Otherwise a power-up/glitch start bit shifts subsequent key bytes.
+    // Slower probe clocks simply extend this recovery interval.
+    localparam int FRAME_IDLE_MAX = 100000;
+    logic [$clog2(FRAME_IDLE_MAX)-1:0] frame_idle;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             bit_cnt <= '0;
             shift <= '0;
             collecting <= 1'b0;
+            frame_idle <= '0;
             strobe <= 1'b0;
             scancode <= 8'h00;
             parity_err <= 1'b0;
         end else begin
             strobe <= 1'b0;
+            if (!collecting || fall) frame_idle <= '0;
+            else if (frame_idle == $bits(frame_idle)'(FRAME_IDLE_MAX-1)) begin
+                collecting <= 1'b0;
+                bit_cnt <= '0;
+                shift <= '0;
+                frame_idle <= '0;
+            end else frame_idle <= frame_idle + 1'b1;
             if (fall) begin
                 if (!collecting) begin
                     if (dat_f == 1'b0) begin // start bit

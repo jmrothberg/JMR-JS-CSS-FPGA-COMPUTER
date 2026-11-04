@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Poll-fire needs a cooldown (run-60 board fault)
 
-Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+Words: [README.md — Words used](../../docs/WORDS.md#words-used-in-this-project).
 Copy 1 (copy 2: [docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md) Input section).
 
 Board testing on run 60 found that a physical tap of the fire button fired

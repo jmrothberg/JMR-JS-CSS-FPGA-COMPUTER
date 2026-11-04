@@ -7,6 +7,7 @@
 static Vps2_rx* top = nullptr;
 static int got = 0;
 static uint8_t last = 0;
+static int phase_cycles = 80;
 
 static void tick() {
     top->clk = 0; top->eval();
@@ -16,7 +17,7 @@ static void tick() {
 
 static void bit_cell(int data, int glitch) {
     top->ps2_data = data;
-    for (int i = 0; i < 80; i++) tick();
+    for (int i = 0; i < phase_cycles; i++) tick();
     top->ps2_clk = 0;
     if (glitch) {
         for (int i = 0; i < 2; i++) tick();
@@ -24,9 +25,9 @@ static void bit_cell(int data, int glitch) {
         for (int i = 0; i < 2; i++) tick();
         top->ps2_clk = 0;
     }
-    for (int i = 0; i < 80; i++) tick();
+    for (int i = 0; i < phase_cycles; i++) tick();
     top->ps2_clk = 1;
-    for (int i = 0; i < 80; i++) tick();
+    for (int i = 0; i < phase_cycles; i++) tick();
 }
 
 static void send_byte(uint8_t b, int glitch) {
@@ -51,7 +52,7 @@ int main(int argc, char** argv) {
     top->ps2_data = 1;
     for (int i = 0; i < 16; i++) tick();
     top->rst_n = 1;
-    for (int i = 0; i < 80; i++) tick();
+    for (int i = 0; i < phase_cycles; i++) tick();
 
     got = 0; last = 0;
     send_byte(0x1C, 1);
@@ -60,6 +61,42 @@ int main(int argc, char** argv) {
         return 1;
     }
     printf("PASS ps2_rx (debounced)\n");
+    // A partial power-up/noise frame must not consume the next key after idle.
+    for (int bits = 1; bits <= 10; ++bits) {
+        top->rst_n = 0;
+        for (int i = 0; i < 16; ++i) tick();
+        top->rst_n = 1;
+        for (int i = 0; i < 80; ++i) tick();
+        bit_cell(0, 0);
+        for (int i = 1; i < bits; ++i) bit_cell(i & 1, 0);
+        top->ps2_clk = 1; top->ps2_data = 1;
+        for (int i = 0; i < 200000; ++i) tick(); // 2 ms at board clock
+        got = 0; last = 0;
+        send_byte(0x1C, 0);
+        if (got != 1 || last != 0x1C) {
+            printf("FAIL interrupted frame bits=%d: next A got=%d last=0x%02x\n", bits, got, last);
+            return 1;
+        }
+    }
+    printf("PASS recovery after all 10 partial-frame positions\n");
+    for (int b = 0; b < 256; ++b) {
+        got = 0; last = 0;
+        send_byte(uint8_t(b), 0);
+        if (got != 1 || last != b || top->parity_err != 1) {
+            printf("FAIL byte=%02x got=%d last=%02x parity=%d\n", b, got, last, top->parity_err);
+            return 1;
+        }
+    }
+    printf("PASS all 256 bytes and legacy odd-parity status\n");
+    phase_cycles = 4000; // 120 us/bit: conservative slow keyboard waveform
+    got = 0; last = 0;
+    send_byte(0xF0, 0);
+    send_byte(0x1C, 0);
+    if (got != 2 || last != 0x1C) {
+        printf("FAIL slow back-to-back break sequence\n");
+        return 1;
+    }
+    printf("PASS slow keyboard waveform without false timeout\n");
     delete top;
     return 0;
 }

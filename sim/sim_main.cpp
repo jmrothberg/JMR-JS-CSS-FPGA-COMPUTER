@@ -1756,6 +1756,7 @@ int main(int argc, char** argv) {
         if (line == "OVERLAY?") {
             const unsigned old_x=top->fb_x,old_y=top->fb_y;
             const int mx=top->pointer_x_o,my=top->pointer_y_o;
+            const int hot=(top->rootp->jmr_js_core__DOT____Vcellinp__u_mouse_overlay__ibeam && (top->system_window_o&255)!=3)?7:1;
             auto fragment=[&](int x,int y,unsigned w,unsigned h) {
                 std::vector<uint8_t> rgba(w*h*4,0);
                 for(unsigned row=0;row<h;row++)for(unsigned col=0;col<w;col++) {
@@ -1769,9 +1770,9 @@ int main(int argc, char** argv) {
                 return b64_encode(rgba.data(),rgba.size());
             };
             const std::string exit=fragment(620,0,20,22);
-            const std::string arrow=fragment(mx-1,my-1,16,16);
+            const std::string arrow=fragment(mx-hot,my-hot,16,16);
             top->fb_x=old_x;top->fb_y=old_y;top->eval();
-            std::cout<<"OVERLAY "<<mx-1<<" "<<my-1<<" "<<exit<<" "<<arrow<<std::endl;
+            std::cout<<"OVERLAY "<<mx-hot<<" "<<my-hot<<" "<<exit<<" "<<arrow<<std::endl;
             continue;
         }
         if (line == "DESKTOP?") {
@@ -3426,6 +3427,17 @@ int main(int argc, char** argv) {
                       << b64_encode(b.data(), b.size()) << std::endl;
             continue;
         }
+        // Test-only external RAM initialization: expose power-on assumptions.
+        if (line.rfind("SRAMFILL ", 0) == 0) {
+            unsigned a=0,n=0,v=0;
+            if (std::sscanf(line.c_str()+9,"%u %u %u",&a,&n,&v)!=3 ||
+                a>=4194304u || n>4194304u-a || v>65535u) {
+                std::cout<<"ERR args"<<std::endl;continue;
+            }
+            for(unsigned i=0;i<n;i++)
+                top->rootp->jmr_js_core__DOT__g_sram__DOT__u_sram__DOT__mem[a+i]=uint16_t(v);
+            std::cout<<"OK"<<std::endl;continue;
+        }
         // NEW: SRAMPEEK <word_addr> <n> — dump asset-SRAM words (bring-up only)
         if (line.rfind("SRAMPEEK ", 0) == 0) {
             unsigned a = 0, n = 8;
@@ -3452,12 +3464,18 @@ int main(int argc, char** argv) {
             }
             for(unsigned i=0;i<256;i++)put(8192+i*4,r->jmr_js_core__DOT__u_classic_overlay__DOT__u_static_labels__DOT__layouts[i] |
                 (uint32_t(r->jmr_js_core__DOT__u_classic_overlay__DOT__widths[i])<<18),4);
-            for(unsigned i=0;i<80;i++)b[9216+i]=r->jmr_js_core__DOT__u_classic__DOT__sys_headings[i];
+            for(unsigned i=0;i<80;i++)b[9216+i]=(r->jmr_js_core__DOT__u_classic__DOT__sys_headings[i/2]>>((i%2)*8))&255;
             for(unsigned i=0;i<28;i++)put(9344+i*4,r->jmr_js_core__DOT__sys_config[i],4);
             put(9456,r->jmr_js_core__DOT__sys_config[28]&65535,2);
             for(unsigned i=0;i<64;i++)put(19712+i*8,r->jmr_js_core__DOT__u_system_overlay__DOT__label_rows[i],8);
-            for(unsigned i=0;i<128;i++)for(unsigned j=0;j<8;j++)put(20224+i*32+j*4,r->jmr_js_core__DOT__u_system_overlay__DOT__about_rows[i][j],4);
+            for(unsigned i=0;i<48;i++)put(20224+i*8,r->jmr_js_core__DOT__u_system_overlay__DOT__label_rows[64+i],8);
             std::cout << "SYSBYTES " << b64_encode(b.data(),b.size()) << std::endl;
+            continue;
+        }
+        if (line == "SYSPIX?") {
+            std::vector<uint8_t> b(114,0);
+            for(unsigned i=0;i<114;i++)b[i]=uint8_t(top->rootp->jmr_js_core__DOT__pixel_sys_config[i/4]>>((i%4)*8));
+            std::cout << "SYSPIX " << b64_encode(b.data(),b.size()) << std::endl;
             continue;
         }
         if (line == "SYS?") {
@@ -3496,7 +3514,7 @@ int main(int argc, char** argv) {
         // 2M was too small once string-row sprites actually painted: INVADERS
         // drawBitmap is per-pixel str[i]+fillRect, so FRAME capped mid-rAF
         // (~1 swap per 5 GUI frames) and the wave crawled. Cap is not SPI.
-        if (line == "FRAME") {
+        if (line == "FRAME" || line.rfind("FRAME ", 0) == 0) {
             // flush taps deferred by the KEYEVT handler: these ups enter
             // the FIFO now and dispatch at THIS frame's event phase,
             // after the rAF callback has seen the key held once.
@@ -3506,7 +3524,7 @@ int main(int argc, char** argv) {
                     key_pending_up[kc] = 0;
                     key_strobe((unsigned)kc, 0);
                 }
-            key_frame_counter++;
+            if (line == "FRAME") key_frame_counter++;
             // Debug ergonomics: a frame that never presents used to burn
             // 64M clocks (~30 s of wall time) with the server inside this
             // RPC, so the GUI ignored ESC and had to be restarted. The
@@ -3524,7 +3542,10 @@ int main(int argc, char** argv) {
             // the documented cap and is not exceeded.
             // div8: the VM pays 8x clocks per frame; the cap is a HOST
             // responsiveness bound and scales with it.
-            const int CAP = 512000000;
+            // GUI system applications use a bounded slice so Tk can service input
+            // during a long first paint. Plain FRAME retains the existing game cap.
+            const int CAP = line == "FRAME" ? 512000000 :
+                int(std::max(1000ul, std::min(512000000ul, std::stoul(line.substr(6)))));
             int used = 0;
             int got = 0;
             int pulsed = 0;
@@ -3694,6 +3715,7 @@ int main(int argc, char** argv) {
                 ip_trace.clear();
                 ip_trace_cap = 0;
             }
+            if (line != "FRAME" && got) key_frame_counter++;
             if (!got && !dead) fcap_n++;
             // 2026-09-01: same reason as the TICKN flush — the editor's F2
             // save and the compile mint land during FRAME pumping; RUN and

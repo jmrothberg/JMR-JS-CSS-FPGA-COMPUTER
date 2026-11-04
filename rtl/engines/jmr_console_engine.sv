@@ -35,6 +35,7 @@ module jmr_console_engine (
     output logic ui_unnamed_o,
     input logic ui_doc_start=1'b0,ui_doc_new=1'b0,
     input logic shell_tool_start=1'b0,shell_tool_finder=1'b0,
+    input logic sys_ready,
     output logic sys_we,
     output logic [13:0] sys_addr,
     output logic [15:0] sys_data,
@@ -306,7 +307,7 @@ module jmr_console_engine (
         // chain-load. Missing sidecar is NOT an error here: the flag goes
         // to 0 and a no-art title compiles exactly as it always did.
         C_ART_OPEN, C_ART_OPENW, C_ART_GB, C_ART_GBW, C_ART_WR,
-        C_ART_CLOSE, C_ART_CLOSEW, C_ART_FLAG, C_UI_INIT, C_UI_STAGE, C_CACHE_WRITE, C_CACHE_READ, C_CACHE_GAP, C_RESIDENT, C_SYS
+        C_ART_CLOSE, C_ART_CLOSEW, C_ART_FLAG, C_UI_INIT, C_UI_STAGE, C_CACHE_WRITE, C_CACHE_READ, C_CACHE_GAP, C_RESIDENT, C_SYS, C_NPUT
     } cstate_t;
 `ifdef VERILATOR
     integer ctrace_fd = 0;
@@ -355,6 +356,7 @@ module jmr_console_engine (
     logic [4:0] reply_sel;   // run 71: 5 bits — rows 16+ (?CK, STATUS)
     logic [6:0] reply_idx;
     logic [6:0] name_i, name_start, name_len_r;
+    logic [7:0] name_char_q;
     // V1.5 standalone compile
     // 0 = NAME.JSH derived from src_name; 1 = chain-program ROM row
     // selected by cmp_progsel; 2 = filename from the arena header
@@ -830,7 +832,7 @@ module jmr_console_engine (
             cmp_art_i <= '0; cmp_art_hi <= 1'b0;
             cmp_out_off <= '0; cmp_img_len <= '0; cmp_i <= '0; cmp_wd <= '0;
             src_bank <= 1'b0;
-            name_len_r <= 0; name_i <= 0; name_start <= 0;
+            name_len_r <= 0; name_i <= 0; name_start <= 0; name_char_q<=0;
             dir_n <= 0; dir_idx <= 0;
             cmd_is_load <= 0; cmd_is_save <= 0; cmd_is_remove <= 0;
             stor_dir_all <= 1'b0;
@@ -1401,19 +1403,23 @@ module jmr_console_engine (
                         else if (cmd_is_save) state <= C_SV_OPEN;
                         else state <= C_RM;
                     end else begin
+                        name_char_q<=line[name_start+name_i];
+                        state<=C_NPUT;
+                    end
+                end
+                C_NPUT:begin
                         mem_en <= 1'b1; mem_we <= 1'b1;
                         mem_addr <= NAME_BUF + {9'h0, name_i};
                         // FAT 8.3 is uppercase — match BASIC storage_engine
-                        mem_wdata <= up(line[name_start + name_i]);
+                        mem_wdata <= up(name_char_q);
                         if (name_i < 16)
-                            src_name[name_i[3:0]] <= up(line[name_start + name_i]);
-                        name_tail[0] <= up(line[name_start + name_i]);
+                            src_name[name_i[3:0]] <= up(name_char_q);
+                        name_tail[0] <= up(name_char_q);
                         name_tail[1] <= name_tail[0];
                         name_tail[2] <= name_tail[1];
                         name_tail[3] <= name_tail[2];
                         name_tail[4] <= name_tail[3];
                         state <= C_NWR_W;
-                    end
                 end
                 C_NWR_W: if (mem_gnt) begin
                     name_i <= name_i + 1'b1;
@@ -2828,11 +2834,12 @@ module jmr_console_engine (
                         if(!sys_good || stor_err)begin sys_status<=3;name_i<=0;state<=C_JSB_PREP;end
                         else begin sys_i<=0;sys_phase<=10;end
                     end
-                    10:begin sram_req<=1;sram_we<=0;sram_addr<=SYS_STAGE_BASE+22'(sys_i);sys_phase<=11;end
+                    10:if(sys_ready)begin sram_req<=1;sram_we<=0;sram_addr<=SYS_STAGE_BASE+22'(sys_i);sys_phase<=11;end
                     11:if(sram_ack)begin
                         sram_req<=0;sys_we<=1;sys_addr<=sys_i[13:0];sys_data<=sram_rdata;sys_phase<=12;
                     end
-                    12:begin
+                    12:if(!sys_ready)sys_phase<=13;
+                    13:if(sys_ready)begin
                         if(sys_i==SYS_BYTES/2-1)begin sys_status<=1;name_i<=0;state<=C_JSB_PREP;end
                         else begin sys_i<=sys_i+1'b1;sys_phase<=10;end
                     end
@@ -2857,8 +2864,12 @@ module jmr_console_engine (
                         sram_req<=1;sram_we<=1;
                         sram_addr<=resident_restore?(CSCR_SRAM_BASE+22'(resident_i)):(jmr_js_vm_pkg::FINDER_STATE_BASE+22'(resident_i>>1));
                         // Force a content redraw on return, preserving windows,
-                        // icon cache and directory state instead of re-reading SD.
-                        sram_wdata<=resident_init?16'd0:resident_restore?{8'd0,(resident_i==16385?8'd1:resident_i[0]?resident_word[15:8]:resident_word[7:0])}:resident_word;
+                        // directory state. Icon pixels extend beyond the parked half;
+                        // invalidate flags so MacPaint scratch cannot become icon runs.
+                        // Also discard the launch gesture, as the Python backend does.
+                        sram_wdata<=resident_init?16'd0:resident_restore?{8'd0,
+                            ((resident_i>=48000 && resident_i<48256) || resident_i==16392 || resident_i==16395)?8'd0:
+                            resident_i==16385?8'd1:resident_i[0]?resident_word[15:8]:resident_word[7:0]}:resident_word;
                         resident_phase<=4;
                     end
                     4:if(sram_ack)begin sram_req<=0;sram_we<=0;resident_phase<=5;end

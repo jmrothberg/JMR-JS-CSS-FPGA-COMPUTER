@@ -70,12 +70,10 @@ than skip them. The byte producer stops its current transfer once
 
 ## Status and checks
 
-The reader is connected to the native desktop in `jmr_js_core`. PYTHON and
-real FPGA-SIM browse the same FAT files, with icon/list views, paging,
-window movement, menus and ordinary console commands for program launch.
-The cache uses external memory while applications are stopped; the desktop
-reuses the existing framebuffer. The selected run73o `.bit` remains
-unchanged and does not contain the new desktop.
+This page is the icon reader. The default shell is the Finder program,
+which draws its own icons. The built-in desktop (`PROGRAM_FINDER=0`)
+still uses this reader. Which bit is on the board: [FPGA_FIT.md](FPGA_FIT.md).
+The QSPI image (run73o) has neither desktop.
 
 `tests/test_desktop_system.py` compares complete desktop pixels and controls
 against actual RTL, including Markdown/text filenames and the File, Edit,

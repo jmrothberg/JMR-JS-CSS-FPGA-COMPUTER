@@ -215,14 +215,46 @@ def test_open_asks_the_launcher_and_keeps_the_file(tmp_path, monkeypatch):
     machine.frame_tick()
     machine.input.set_mouse(62, 108, 0)
     machine.frame_tick()
+    assert machine._finder_request is None  # first click is never a double-click
+    for _ in range(25):machine.frame_tick()
     machine.input.set_mouse(62, 108, 1)
     machine.frame_tick()
     machine.input.set_mouse(62, 108, 0)
     machine.frame_tick()
+    assert int(machine._nat_stg_read(16409)) == 1
+    machine.input.set_mouse(62, 108, 1)
+    machine.frame_tick()
+    machine.input.set_mouse(62, 108, 0)
+    machine.frame_tick()
+    assert int(machine._nat_stg_read(16409)) == 0
     assert machine._finder_request is not None
     assert machine._finder_request[0] == "GAME.HTM"
+    # Opening stops the program inside mouse-up. The gesture must already be over.
+    assert int(machine._nat_stg_read(16392)) == 0
+    assert int(machine._nat_stg_read(16395)) == 0
     assert (tmp_path / "GAME.HTM").read_text() == "game-body"
     assert (tmp_path / "GAME.JSH").read_bytes() == b"OLDJSH"
+
+
+def test_return_drops_icon_cache_a_paint_program_overwrote(tmp_path, monkeypatch):
+    """MacPaint's color plane starts at arena byte 73728, over the icon runs."""
+    monkeypatch.setenv("JMR_FINDER", "program")
+    backend = PythonBackend(Machine(storage_root=tmp_path))
+    try:
+        _frames(backend, 6)
+        machine = backend.machine
+        hw = machine._hw_vm
+        assert hw is not None and hw._value_raf
+        machine._nat_stg_write(48000, 2)
+        machine._finder_raf = list(hw._value_raf)
+        backend._park_finder()
+        machine._nat_stg_write(73728, 99)
+        machine._ctx_sy = 0.05
+        assert backend._resume_finder()
+        assert _byte(machine, 48000) == 0
+        assert machine._ctx_sx == 1 and machine._ctx_sy == 1
+    finally:
+        backend.shutdown()
 
 
 def test_program_switch_boots_the_finder_and_builtin_does_not(tmp_path, monkeypatch):
@@ -240,3 +272,47 @@ def test_program_switch_boots_the_finder_and_builtin_does_not(tmp_path, monkeypa
         assert program.machine.running and program.machine.system_window[0] == 9
     finally:
         program.shutdown()
+
+
+def test_cold_finder_initializes_dirty_external_ram(tmp_path, monkeypatch):
+    """DDR power-on contents and previous tools must not become UI state."""
+    backend = _boot(tmp_path, monkeypatch)
+    try:
+        machine = backend.machine
+        for addr in range(73728):
+            machine._nat_stg_write(addr, 0xA5)
+        # The hardware loader guarantees this flag, not a zeroed arena.
+        machine._nat_stg_write(16384, 0)
+        _settle(backend)
+        assert [_byte(machine, a) for a in (16390, 16391, 16392, 16409, 16620)] == [0]*5
+        win = bytes(_byte(machine, 16896+i) for i in range(16))
+        import struct
+        assert win[:5] == bytes([1, 0, 0, 0, 0])
+        assert struct.unpack('<HHHH', win[5:13]) == (8, 34, 548, 354)
+        _key(backend, 39)
+        assert _byte(machine, 16446) > 0
+    finally:
+        backend.shutdown()
+
+
+def test_menu_commands_exit_rename_and_open_does_not_park_editor(tmp_path, monkeypatch):
+    backend = _boot(tmp_path, monkeypatch)
+    try:
+        _settle(backend)
+        m = backend.machine
+        _key(backend, 39)
+        _key(backend, 13)
+        assert _byte(m, 16409) == 1
+        _key(backend, 179)  # View by name must not become filename input.
+        assert _byte(m, 16409) == 0
+        assert _byte(m, 16896+3) == 2
+        _key(backend, 13)
+        assert _byte(m, 16409) == 1
+        # Use the machine directly: inspect the actual launch boundary before
+        # the Python supervisor consumes its request and switches applications.
+        m.input.key_event(161, '', True)
+        m.frame_tick()
+        assert m._finder_request is not None
+        assert _byte(m, 16409) == 0
+    finally:
+        backend.shutdown()

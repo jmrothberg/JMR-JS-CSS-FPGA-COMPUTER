@@ -81,7 +81,7 @@ def pack(source):
     if pen+x<w and font[c]['bits'][y]&(1<<(15-x)):bits|=1<<(w-1-pen-x)
    pen+=font[c]['advance']
   return bits
- for off,strings,w,depth in [(KEYS,texts,40,2048),(SHIP,['Keyboard','X','Hold keys','About'],64,64),(ABOUT,['Note','Help','Utility','Memory: 8 MiB','OK'],256,128)]:
+ for off,strings,w,depth in [(KEYS,texts,40,2048),(SHIP,['Keyboard','X','Hold keys','About'],64,64)]:
   for i,s in enumerate(strings):
    for y in range(16):
     at=off+(i*16+y)*(w//8);data[at:at+w//8]=bitmap(s,y,w).to_bytes(w//8,'little')

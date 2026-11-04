@@ -1,6 +1,6 @@
 # Architecture Monitor — watching the machine while it runs
 
-Words: [README.md — Words used](../README.md#words-used-in-this-project).
+Words: [README.md — Words used](../docs/WORDS.md#words-used-in-this-project).
 
 **F10** in the GUI opens the Architecture Monitor (`gui_arch_monitor.py`); it
 reads `backend.arch_snapshot()` every frame. The Inspector windows (REGS /
@@ -371,5 +371,5 @@ Two lessons worth carrying, because both cost real time here:
 ## Related
 
 - [FPGA_BRINGUP.md](FPGA_BRINGUP.md) — the tether cable, ports, and board tiers
-- [ARCHITECTURE.md](ARCHITECTURE.md) — what the monitor is looking at
-- [TIMING_WALL.md](TIMING_WALL.md) — run ledger; run 46 is the clean-timing bit
+- [ARCHITECTURE.md](lastrun_ARCHITECTURE.md) — what the monitor is looking at
+- [FPGA_FIT.md](FPGA_FIT.md) — fit numbers and the clock

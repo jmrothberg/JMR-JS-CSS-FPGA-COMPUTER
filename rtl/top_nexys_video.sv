@@ -1,9 +1,9 @@
 // Nexys Video board top — PHY shell around jmr_js_core (BASIC top_nexys_a7 method).
 // Standalone: HDMI text console + USB-HID PS/2 (J15) + Pmod PS/2 (JA) +
-// I2C joystick 0x5A (JB) + µSD. Same JA/JB wiring as tools/pmod_input_test.
-// USB_MOUSE=1: mouse-first desktop with the shared on-screen keyboard.
-// USB_MOUSE=0 preserves keyboard-only J15. PIC24 does not forward both.
-module top_nexys_video #(parameter bit USB_MOUSE=1) (
+// I2C joystick 0x5A (JB) + µSD.
+// Default: J15 USB keyboard, JA PS/2 mouse, JC backup PS/2 mouse.
+// USB_MOUSE=1 retains the earlier J15 mouse + JA keyboard arrangement.
+module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_MOUSE) (
     input  wire       clk100,
     input  wire       cpu_resetn,
     // NEW: BTNC (B22) = user reset, same as the BASIC A7 board habit
@@ -27,9 +27,11 @@ module top_nexys_video #(parameter bit USB_MOUSE=1) (
     // PIC24 PS/2 lines: mouse host drives low or releases; never drives high
     inout  wire       ps2_clk,
     inout  wire       ps2_data,
-    // NEW: Pmod PS/2 on JA (pin1=Data pin3=Clock) — RX-only, same as J15
-    input  wire       pmod_ps2_clk,
-    input  wire       pmod_ps2_data,
+    // Pmod PS/2: pin1=Data, pin3=Clock. Drive low or release only.
+    inout  wire       pmod_ps2_clk,
+    inout  wire       pmod_ps2_data,
+    inout  wire       pmod_jc_ps2_clk,
+    inout  wire       pmod_jc_ps2_data,
     // NEW: Mini I2C joystick @ 0x5A on JB (SCL=JB1 SDA=JB2)
     inout  wire       joy_scl,
     inout  wire       joy_sda,
@@ -142,23 +144,43 @@ module top_nexys_video #(parameter bit USB_MOUSE=1) (
     logic [23:0] system_ui_rgb;
     logic [69:0] system_held;
 
-    generate if(USB_MOUSE)begin:g_usb_mouse
-        assign ps2_clk=mouse_clock_low?1'b0:1'bz;
-        assign ps2_data=mouse_data_low?1'b0:1'bz;
+    logic [24:0] primary_mouse_packet,backup_mouse_packet;
+    logic backup_clock_low,backup_data_low;
+    wire mouse_reset=!rst_n || (USB_MOUSE && desktop_keyboard_mode);
+    // The USB keyboard is listen-only. Only physical mouse ports get host TX.
+    assign ps2_clk=(USB_MOUSE && mouse_clock_low)?1'b0:1'bz;
+    assign ps2_data=(USB_MOUSE && mouse_data_low)?1'b0:1'bz;
+    assign pmod_ps2_clk=(!USB_MOUSE && mouse_clock_low)?1'b0:1'bz;
+    assign pmod_ps2_data=(!USB_MOUSE && mouse_data_low)?1'b0:1'bz;
+    jmr_ps2_mouse_host #(.CLK_HZ(100000000)) u_mouse_host (
+        .clk(core_clk),.reset(mouse_reset),
+        .clock_in(USB_MOUSE?ps2_clk:pmod_ps2_clk),
+        .data_in(USB_MOUSE?ps2_data:pmod_ps2_data),
+        .clock_low(mouse_clock_low),.data_low(mouse_data_low),
+        .packet(primary_mouse_packet),.ready(),.errors()
+    );
+    assign pmod_jc_ps2_clk=backup_clock_low?1'b0:1'bz;
+    assign pmod_jc_ps2_data=backup_data_low?1'b0:1'bz;
+    generate if(JC_MOUSE)begin:g_jc_mouse
         jmr_ps2_mouse_host #(.CLK_HZ(100000000)) u_mouse_host (
-            .clk(core_clk),.reset(!rst_n || desktop_keyboard_mode),.clock_in(ps2_clk),.data_in(ps2_data),
-            .clock_low(mouse_clock_low),.data_low(mouse_data_low),.packet(mouse_packet),.ready(),.errors()
+            .clk(core_clk),.reset(mouse_reset),
+            .clock_in(pmod_jc_ps2_clk),.data_in(pmod_jc_ps2_data),
+            .clock_low(backup_clock_low),.data_low(backup_data_low),
+            .packet(backup_mouse_packet),.ready(),.errors()
         );
-        jmr_pointer_accumulator u_pointer (
-            .clk(core_clk),.rst_n(rst_n && !desktop_keyboard_mode),.packet(mouse_packet),
-            .sample_valid(mouse_sample_valid),.sample_ready(mouse_core_ready),
-            .sample_x(mouse_x),.sample_y(mouse_y),.sample_buttons(mouse_buttons),.dropped_reports()
+        jmr_mouse_packet_merge u_merge (
+            .clk(core_clk),.rst_n(!mouse_reset),
+            .packet_a(primary_mouse_packet),.packet_b(backup_mouse_packet),.packet(mouse_packet)
         );
-    end else begin:g_usb_keyboard
-        assign ps2_clk=1'bz;assign ps2_data=1'bz;
-        assign mouse_clock_low=0;assign mouse_data_low=0;assign mouse_packet=0;
-        assign mouse_sample_valid=0;assign mouse_x=320;assign mouse_y=240;assign mouse_buttons=0;
+    end else begin:g_no_jc_mouse
+        assign backup_clock_low=0;assign backup_data_low=0;assign backup_mouse_packet=0;
+        assign mouse_packet=primary_mouse_packet;
     end endgenerate
+    jmr_pointer_accumulator u_pointer (
+        .clk(core_clk),.rst_n(!mouse_reset),.packet(mouse_packet),
+        .sample_valid(mouse_sample_valid),.sample_ready(mouse_core_ready),
+        .sample_x(mouse_x),.sample_y(mouse_y),.sample_buttons(mouse_buttons),.dropped_reports()
+    );
     logic       kbd_push;
     logic [7:0] kbd_ascii;
     logic [7:0] ps2_scancode;
@@ -178,20 +200,20 @@ module top_nexys_video #(parameter bit USB_MOUSE=1) (
         .ascii(kbd_ascii), .ascii_strobe(kbd_push),
         .kev_code(kev_code), .kev_down(kev_down), .kev_stb(kev_stb)
     );
-    // NEW: second PS/2 RX on JA — do not attach jmr_ps2_host (J15 clk-low trap)
+    // Legacy JA keyboard receiver stays reset when JA hosts a mouse.
     logic       pmod_kbd_push;
     logic [7:0] pmod_ascii;
     logic [7:0] pmod_scancode;
     logic       pmod_ps2_strobe;
     logic       pmod_ps2_parity_err;
     ps2_rx u_pmod_ps2_rx (
-        .clk(core_clk), .rst_n(rst_n),
+        .clk(core_clk), .rst_n(rst_n && USB_MOUSE),
         .ps2_clk(pmod_ps2_clk), .ps2_data(pmod_ps2_data),
         .scancode(pmod_scancode), .strobe(pmod_ps2_strobe),
         .parity_err(pmod_ps2_parity_err)
     );
     ps2_decode u_pmod_ps2_dec (
-        .clk(core_clk), .rst_n(rst_n),
+        .clk(core_clk), .rst_n(rst_n && USB_MOUSE),
         .scancode(pmod_scancode), .strobe(pmod_ps2_strobe),
         .ascii(pmod_ascii), .ascii_strobe(pmod_kbd_push),
         .kev_code(pmod_kev_code), .kev_down(pmod_kev_down), .kev_stb(pmod_kev_stb)

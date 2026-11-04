@@ -1,6 +1,11 @@
+> Current jacks: [USB keyboard on J15, PS/2 mice on JA and JC](USB_KEYBOARD_PMOD_MICE.md). Dated sections below record the bits they were written for. They do not change the current jacks.
+
 # FPGA bring-up — Digilent Nexys Video (primary)
 
-Words: [README.md — Words used](../README.md#words-used-in-this-project).
+Kept qualified bitstream: [run75 source and .bit](../build/run75_program_system/release/README.md).
+The latest build is [run76](../build/run76_usb_keyboard_pmod_mice/README.md). Older build trees are in `to_delete/`.
+
+Words: [README.md — Words used](../docs/WORDS.md#words-used-in-this-project).
 
 **Primary board:** Digilent **Nexys Video** — Xilinx/AMD Artix-7
 **XC7A200T-1SBG484C** (“**T200**” in lab shorthand — the 200T chip).
@@ -20,12 +25,12 @@ Video.
 
 **STOP:** Do **not** `make … bit` / flash until FPGA-SIM is perfect for the
 feature under test (matching Python/native RTL regressions + relevant benches;
-[standard evidence](STANDARD_RELEASE.md#validation)).
+[the clock-switch record](STANDARD_RELEASE.md)).
 Flashing half-broken bits wastes hours.
 
-## Current standard — run73o, 2026-11-02
+## Current standard
 
-Use [releases/current/fpga.bit](../releases/current/fpga.bit). The owner flashed it to QSPI and reports that it runs fine. The native JavaScript VM is 33.333 MHz, with 100 MHz fabric/DDR and unchanged games/card. Final setup/hold are 0.000 / +0.040 ns; all specified timing and routing/DRC-error gates pass. Numeric board FPS remains unmeasured. [Loading instructions](STANDARD_RELEASE.md); [run72b rollback](../releases/archive/run72b-2026-10-26/README.md).
+Which bit is the rollback, which folder is in progress, and which image is still in QSPI: [FPGA_FIT.md](FPGA_FIT.md). The VM on the qualified bits is 33.333 MHz. Fabric and DDR stay at 100 MHz.
 Historical dated notes below do not select the current release. `flash` / `flash-qspi` load `releases/current/fpga.bit` without starting a new build.
 
 **Second port (later):** Puzhi **PA-StarLite** (XC7A200T, 1 GB DDR3) — same engines,
@@ -51,7 +56,7 @@ Constraints: `constraints/nexys_video.xdc`.
 
 **RTL** = **Register-Transfer Level** — hardware as registers, wires, and
 clocked logic. In this repo: SystemVerilog under `rtl/` (`*.sv`).
-Full dictionary: [README.md — Words used](../README.md#words-used-in-this-project).
+Full dictionary: [README.md — Words used](../docs/WORDS.md#words-used-in-this-project).
 
 | Term | Meaning |
 |---|---|
@@ -141,12 +146,12 @@ Traces first: [../.cursor/rules/use-existing-traces.mdc](../.cursor/rules/use-ex
 |---|---|
 | Digilent product | **Nexys Video** (primary) |
 | FPGA part | **XC7A200T-1SBG484C** |
-| External RAM | 512 MiB DDR3 → bridged as the **4 MB SRAM asset bank** (2M × 16 IS61WV204816 contract; simple SRAM port; ASIC uses the real chip). See `docs/ARCHITECTURE.md` |
+| External RAM | 512 MiB DDR3 behind an **8 MiB** port (`addr[21:0]`). The byte map is [lastrun_ARCHITECTURE.md](lastrun_ARCHITECTURE.md). |
 | Video | **HDMI Source** (J8) — native **640×480 @ ~60 Hz**, ~25.175 MHz pixel clock |
-| Framebuffer | Native **640×480**, 8 bpp / 256-entry RGB888 palette. One persistent BRAM canvas; present copies to the DDR front image. The GUI board mirror is a separate 160×120 debug view. |
-| Keyboard | USB HOST (J15) → PIC24 → PS/2. **Classic boot-protocol keyboard PASS 2026-08-15.** A wireless keyboard on the same probe did not clock PS/2 (2026-11-02). Some modern HID keyboards light LD14 but never clock PS/2. Pmod JA is the fallback. |
-| Play controls | PS/2 arrows/Space/Enter → KEYEVT (`keyCode` 37–40 / 32 / 13). GUI arrows+Space → KEYBITS (BOARD: PROG `0xFE`+bits). Pmod stick on **JB**. |
-| Mouse | **Wireless mouse on J15 PASS 2026-11-02**, and **Pmod PS/2 keyboard on JA at the same time PASS 2026-11-03** (`tools/mouse_probe`). Stick stays on JB. One USB device that is both keyboard and mouse on J15 still does not work ([failed-approach record](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md)). Read [PMOD_KEYBOARD_J15_MOUSE.md](PMOD_KEYBOARD_J15_MOUSE.md) before touching PS/2 code. |
+| Framebuffer | Native **640×480**, 8 bpp / 256-entry RGB888 palette. One persistent BRAM canvas; present copies to the DDR front image. The GUI mirror comes back over the PROG cable and cannot keep up with 60 Hz. HDMI is the picture. |
+| Keyboard | **J15** USB host. Plugs, pins, and what J15 cannot do: [USB_KEYBOARD_PMOD_MICE.md](USB_KEYBOARD_PMOD_MICE.md). |
+| Play controls | Keyboard arrows/Space/Enter → KEYEVT (`keyCode` 37–40 / 32 / 13). GUI arrows+Space → KEYBITS (BOARD: PROG `0xFE`+bits). Pmod stick on **JB**. |
+| Mouse | **JA** PS/2, second mouse on **JC**, stick on **JB**. [USB_KEYBOARD_PMOD_MICE.md](USB_KEYBOARD_PMOD_MICE.md). |
 | Host link | PROG FT245 (ch A / `.0`) — flash + tether glass + play keys |
 | Storage | µSD SPI + FAT32: `LOAD` reads HTML; `RUN` loads the card-minted `.JSH` including full ASET art. |
 | openFPGALoader `-b` id | **nexysVideo** |
@@ -173,7 +178,7 @@ HDMI Source (J8)  — pins in constraints/nexys_video.xdc (Digilent master XDC)
 
 **First silicon (console):** `rtl/top_nexys_video.sv` is a PHY shell around
 `jmr_js_core` — READY text on HDMI + µSD SPI. Same core as Verilator FPGA-SIM.
-J15 works with a **classic USB keyboard**. Type from J15 or Pmod JA; play from **F9 BOARD** GUI tether or the JB stick.
+Type from the **J15** USB keyboard. The pointer is the **JA** PS/2 mouse (JC is the second mouse). Play from the **JB** stick or the F9 BOARD tether.
 Do **not** raise HDMI resolution or switch this T200 to VGA for torn glyphs
 (that was VRAM CDC; dual-clock scan port).
 
@@ -187,8 +192,7 @@ make -C tools/board_flow flash        # SRAM first
 
 **First T200 `.bin` vs later:** the first `make -C tools/board_flow bit` creates
 the Vivado project, generates DDR3 MIG, and fully synthesizes `jmr_js_vm`
-(often **1–3 hours** on a small design; this full VM’s measured phases are
-in [OLD_RUNS.md](OLD_RUNS.md) — 16:17 already **>8 h** then OOM). Later `bit`
+(often **1–3 hours** on a small design; a past full-VM run passed 8 hours and then ran out of memory). Later `bit`
 **reuses** `build/nexys_video/vivado` (skip MIG generation; reuse an unchanged, source-verified synthesis DCP).
 Changed RTL gets full synthesis with automatic incremental checkpoints off.
 Use `make -C tools/board_flow bit-fresh` when the source *list*, MIG
@@ -198,8 +202,7 @@ stitch). Do **not** `bit-fresh` to “recover” a crash *during* mapping:
 there is no **DCP** (Design CheckPoint) until `synth_1` is 100%, and you
 throw away MIG/project state. Do not `make -C tools/board_flow clean`
 between RTL tweaks. Synth **2 threads**. Full hygiene:
-[SESSION_HANDOFF.md](SESSION_HANDOFF.md) § Synthesis. Diary:
-[OLD_RUNS.md](OLD_RUNS.md).
+[SESSION_HANDOFF.md](SESSION_HANDOFF.md) § Synthesis.
 
 Volatile SRAM-only load (lost on unplug): `make -C tools/board_flow flash`.
 
@@ -226,7 +229,7 @@ sudo openFPGALoader -b nexysVideo releases/current/fpga.bit
 ```
 
 Use `.bit` for this flash path; keep `.bin` as a secondary archive. See
-[standard files and checksums](STANDARD_RELEASE.md#files-and-persistent-flash).
+[the clock-switch record](STANDARD_RELEASE.md).
 
 ### PROG-cable tether — Runtime:BOARD mirror (T100 method)
 
@@ -333,7 +336,7 @@ make -C sim tb_uart_link tb_ft245
 ```
 
 The standard release has frozen regression evidence in
-[STANDARD_RELEASE.md](STANDARD_RELEASE.md#validation). The legacy
+[STANDARD_RELEASE.md](STANDARD_RELEASE.md). The legacy
 `check_runtime_parity.py` alias assumption is recorded there; do not
 misreport its result as BATTERY PASS.
 
@@ -343,7 +346,7 @@ Also check setup **and** hold timing and the area gates. The current VM
 already runs at 100 MHz ÷ 3; fabric and DDR stay at 100 MHz. A fabric-to-VM
 path can still require 10 ns, so changing the VM divider does not remove
 that constraint. Repair the measured cone or qualify its CDC/pipeline;
-never relax constraints just to publish a bit. [Timing wall](TIMING_WALL.md).
+never relax constraints just to publish a bit. Numbers: [FPGA_FIT.md](FPGA_FIT.md).
 
 ### T100 vs T200 keyboard (same method, different board)
 
@@ -355,8 +358,10 @@ never relax constraints just to publish a bit. [Timing wall](TIMING_WALL.md).
 | FPGA pins | F4 / B2 | **W17 / N13** (`constraints/nexys_video.xdc`) |
 | Video | VGA | HDMI |
 
-If Verilator `tb_ps2_typing` PASS and **LD7 never blinks**, this unit’s **J15 /
-PIC24 is dead** (proven 2026-08-13). Use the GUI tether. Do not rewrite
+If Verilator `tb_ps2_typing` PASS and **LD7 never blinks**, check the
+keyboard before calling the jack dead. J15 works with a wired boot-protocol
+keyboard. HDMI back-feed and a wireless dongle both look like a dead PIC24.
+[USB_KEYBOARD_PMOD_MICE.md](USB_KEYBOARD_PMOD_MICE.md). Do not rewrite
 console RTL or move JP4.
 
 ### Keyboard checklist (if LD7 never blinks)
@@ -376,7 +381,7 @@ RTL path is proven by `tb_ps2_typing`. Then check hardware only:
 
 ### Foolproof HID LED blinker (if JS `.bit` never blinks LD7)
 
-This is **not** FPGA-SIM and **not** BASIC on T200. It is a tiny RX-only design: J15 PIC24 → PS/2 `W17`/`N13` → LEDs. No HDMI, no VM, no tether. Own Vivado project under `build/hid_led_blink/` so it cannot clobber the JS bit build or `sim/sim_build_synth`. Do not add `tools/hid_led_blink/` to `CORE_SRCS`.
+This is **not** FPGA-SIM and **not** BASIC on T200. It is a tiny RX-only design: J15 PIC24 → PS/2 `W17`/`N13` → LEDs. No HDMI, no VM, no tether. Own Vivado project under `to_delete/hid_led_blink/` so it cannot clobber the JS bit build or `sim/sim_build_synth`. Do not add `tools/hid_led_blink/` to `CORE_SRCS`.
 
 One line (after the JS Vivado run is **idle**):
 
@@ -424,88 +429,33 @@ Mouse in **J15** before power. HDMI on **J8**. The glass is 640×480:
 | Middle lamp turns yellow | middle button, if the mouse has one |
 | White marker moves in the center track | scroll wheel. Three white pips above the track mean the mouse answered wheel ID `03`. One red pip means this port is a 3-byte mouse and the wheel byte is not there |
 | Bottom center box, and the line above it | each new letter or digit. The line holds the last 32 |
-| *(2026-11-03)* no GO TO KEY button, no F10 | removed. The keyboard is a second, separate port (see "Keyboard on a Pmod, mouse on J15" below). Nothing switches |
+| *(2026-11-03)* no GO TO KEY button, no F10 | removed. Keyboard and mouse are separate plugs. Nothing switches |
 
-**Mouse-only PASS 2026-11-02 (owner).** Cursor, left button, right button, and the scroll wheel all worked on J15 with this probe. That is one mouse. It does not make a keyboard-and-mouse combo work. The combo result is still the failed record in [NEXYS_USB_KEYBOARD_MOUSE_FAILED.md](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md).
+**Mouse-only PASS 2026-11-02 (owner).** Cursor, left button, right button, and the scroll wheel all worked on J15 with this probe. That is one mouse. It does not make a keyboard-and-mouse combo work. Limits: [USB_KEYBOARD_PMOD_MICE.md](USB_KEYBOARD_PMOD_MICE.md).
 
-J15 is one PIC24 USB host. It forwards **one** device onto the same two open-drain wires the mouse uses: clock `W17`, data `N13`, idle high, FPGA pull-ups. A keyboard on that port does not send USB HID. It sends PS/2 Set 2, device to host:
-
-| On the wire | Meaning |
-|---|---|
-| Falling clock, 11 bits | start `0`, 8 data bits LSB first, odd parity, stop `1` |
-| One byte, for example `1C` | key **make** (A is `1C`, B is `32`, … Z is `1A`; digits `45` `16` `1E` `26` `25` `2E` `36` `3D` `3E` `46` for 0–9) |
-| `F0` then that byte | key **break** (release) |
-| `E0` then a byte | extended key (arrows are `E0 6B/75/74/72`) |
-| `E0 F0` then a byte | extended break |
-| `FA`, `AA`, `AB`, `83` | ack, self-test OK, keyboard ID. A mouse sends `FA`, `AA`, `00` instead (wheel mice then answer `03`) |
-
-#### Keyboard on a Pmod, mouse on J15 (PASS 2026-11-03, owner) — no switching
-
-**Both work at the same time.** Wireless mouse on **J15** (cursor, both buttons, wheel) and a wired PS/2 keyboard on a **Pmod PS/2 module**; typed letters land in the bottom box and on the 32-character line. This is the answer to "J15 forwards only one USB device": do not make J15 do both. Put the keyboard on a Pmod. A USB splitter or hub, passive or powered, does not help, because the PIC24 has no hub driver.
-
-Saved passing bitstream (the next `make bit` overwrites `mouse_probe.bit`, so a named copy is kept; `build/` is git-ignored):
-`build/mouse_probe/mouse_probe_J15mouse_PMODkbd_PASS_2026-11-03.bit` (and `.bin`).
-Program it with `openFPGALoader -b nexysVideo <that .bit>`.
-
-Wiring that worked:
-
-| Item | Setting |
-|---|---|
-| Module | 4-pin PS/2 Pmod adapter, one keyboard |
-| Power jumper | **`VB` to `VCC`** (3.3 V from the board). The keyboard lit and typed on 3.3 V. `VE` to `VCC` leaves the keyboard unpowered unless 5 V is fed to `VE`. The earlier "needs 5 V" idea was wrong |
-| Socket | **JB** top row, where it finally powered up and typed |
-| Pmod holes (top row, looking into the socket) | hole 6 = 3.3 V (far left), hole 5 = GND, holes 4,3,2,1 = signals 4,3,2,1 (hole 1 at the right). Holes 1 to 6 are all on the **top** row; the bottom row is 7 to 12 |
-
-The probe listens on **JA, JB and JC**, signals 1 to 4 of each, in six data/clock pairings per Pmod (1+3, 3+1, 3+4, 4+3, 1+2, 2+1), so the wiring did not have to be guessed. Pins: JA1..4 = `AB22 AB21 AB20 AB18`; JB1..4 = `V9 V8 V7 W7`; JC1..4 = `Y6 AA6 AA8 AB8` (Digilent Nexys Video master XDC). The probe does not record which Pmod or pair the keyboard answered on.
-
-**Integration: JB is where the owner's I2C joystick lives (`JB1`=SCL `V9`, `JB2`=SDA `V8`).** The JS bit uses **JA** for the PS/2 keyboard (`AB22` data, `AB20` clock), not JB. The keyboard first typed on **JB** (where it was wired when the parity bug was fixed), then **was confirmed on JA** with the same probe bit. JC was not tested. The JS bit needs no pin change.
-
-**PASS on JA (owner, 2026-11-03).** The keyboard typed on **JA** with this same bit, so the JS bit takes the keyboard on JA, the mouse on J15, and the stick stays on JB. One-page handoff with the parity warning: [PMOD_KEYBOARD_J15_MOUSE.md](PMOD_KEYBOARD_J15_MOUSE.md).
-
-**NOTE (owner, 2026-11-03): JB must go back to the joystick.** The OS reads the I2C stick on JB (`JB1` SCL, `JB2` SDA). Move the keyboard to **JA** (the JS bit's keyboard port, data `JA1` `AB22`, clock `JA3` `AB20`) or **JC**. The JS bit only listens for **data on hole 1, clock on hole 3** of JA; the probe accepts six pairings, so a keyboard that types on the probe but not in the JS bit is wired on a different pair. The joystick is optional: with no stick on JB the I2C read NACKs and its bits are 0, and the Pmod keyboard's key down/up events (`pmod_kev_*` into `key_evt_*` in `top_nexys_video.sv`) still drive arrow-key games. The mouse is the desktop pointer only. It does not feed `joy()`.
-
-##### What was actually wrong (it was not JB)
-
-1. **My probe bug (the real reason nothing typed):** `ps2_rx.sv` outputs `parity_err = ^{parity, data}`, which is **1 on a valid odd-parity byte** (the name is backwards). The probe accepted a byte only when `parity_err` was 0, so it threw away every good key on every port. The JS top (`top_nexys_video.sv`) ignores `parity_err`, so it is not affected. Anything new that reads `parity_err` must use it as "parity OK = 1".
-2. **Power, separate from reception:** with the jumper on `VE` the keyboard stayed dark. On `VB` it powers from the Pmod's 3.3 V. The blue lights flashing on JB was the keyboard's power-on test, which only proves power, not receive.
-3. **Caps Lock does not light** on this RX-only path. A PS/2 keyboard lights its Caps Lock LED only when the host sends `ED` plus a mask. The probe, like the JS bit, only listens, so a lit Caps Lock is not a test. A letter on the glass is.
-4. The first mouse jump and dead wheel on the earlier switching build was a different bug: a wheel notch is byte `FF`, which has the same bit 3 as a mouse status byte, so it was read as a new position. Fixed by framing a packet on the gap between bytes.
-
-The GO TO KEY / F10 mode-switch version of this probe is in git at `97f30e9`. It is a fallback for one-port setups only. For this owner it is not needed.
-
-LEDs: LD0 heartbeat, LD1 left, LD2 right, LD3 middle, LD4 wheel notch, LD5 stream ready, LD6 clock, LD7 data.
-
-**Wireless mouse works. A wireless keyboard produced one letter and then nothing** (owner, same probe, 2026-11-02). The PIC24 only translates a boot mouse (fixed 3-byte report, or the common 4-byte wheel report) and a boot keyboard (fixed 8-byte report: modifiers plus six key slots). USB HID says a keyboard powers up in report protocol, and the host must send `SET_PROTOCOL` (boot) before those 8-byte reports are required. This PIC24 firmware does not give the FPGA a way to send that request. A wireless mouse dongle still presents the boot mouse, so the cursor works. A wireless keyboard dongle often stays in its NKRO or vendor report, which the PIC24 does not turn into Set-2. One letter means one report did look like a boot key. Digilent's own reply on a Logitech K400r was that the dongle is not this protocol ([forum 5060](https://forum.digilent.com/topic/5060-trying-to-interface-wireless-keyboard-nexys4/)). Nexys 4's manual states the limit in one sentence: only Boot HID keyboards and mice.
-
-Tricks that are worth a try, in order:
-
-1. Put the keyboard in BIOS / 6KRO mode before it is plugged into J15, then unplug and replug the dongle so the PIC24 enumerates that mode. The chord is in that keyboard's manual (one example is Left Fn+Shift+Esc). The FPGA cannot send this command.
-2. Power-cycle with HDMI unplugged, dongle already in J15, then program the FPGA. The PIC24 enumerates when it enters application mode after DONE. No hub.
-3. Do not pull `ps2_clk` low while listening for a keyboard. That is what silences this PIC24.
-4. Wired keyboard on a Pmod (above) is the working path. Wireless keyboards through J15 stay unsolved.
+Plugs, pins, parity, and what J15 cannot do are [USB_KEYBOARD_PMOD_MICE.md](USB_KEYBOARD_PMOD_MICE.md). This probe's LEDs: LD0 heartbeat, LD1 left, LD2 right, LD3 middle, LD4 wheel notch, LD5 stream ready, LD6 clock, LD7 data. The November 3 keeper that typed a keyboard on JA was the opposite of the current plugs. Blue lights on a Pmod only prove power.
 
 ### Pmod input LED test (PS/2 keyboard + I2C joystick + J15 USB)
 
 **Not FPGA-SIM.** No VM, no HDMI, no F9. Own Vivado project under
-`build/pmod_input_test/` so it cannot clobber `build/nexys_video` or
+`to_delete/pmod_input_test/` so it cannot clobber `build/nexys_video` or
 `sim/sim_build_synth`. Do not add `tools/pmod_input_test/*.sv` to
-`sim/Makefile` `CORE_SRCS`. Same JA/JB **plugs** as the JS board top;
-different top (`top_pmod_input_test`). Wall:
-[RTL_REORG.md](RTL_REORG.md#board-led-input-tests--never-fpga-sim).
+`sim/Makefile` `CORE_SRCS`. Different top (`top_pmod_input_test`). The machine's plugs are [USB_KEYBOARD_PMOD_MICE.md](USB_KEYBOARD_PMOD_MICE.md). Wall:
+[RTL_REORG.md](RTL_REORG.md#probe-bits).
 
-JA + JB stay as before. J15 USB: **classic keyboard PASS 2026-08-15 (user).** The earlier “no scancodes / LD14 only” keyboard was HID that the PIC24 does not translate to PS/2. Use a wired boot-protocol / “classic” USB keyboard on **J15** (no hub). Gaming/NKRO/wireless often enumerates (LD14) and never clocks W17. JA Pmod + JB stick still work on this same LED bit.
+J15 USB: **classic keyboard PASS 2026-08-15 (user).** LD14 with no clock is a keyboard the PIC24 does not translate. Use a wired boot-protocol keyboard on J15. This LED bit still accepts a Pmod keyboard on JA and the stick on JB. The machine's mouse is also on JA. [USB_KEYBOARD_PMOD_MICE.md](USB_KEYBOARD_PMOD_MICE.md).
 
 ```bash
 export VIVADO="$(command -v vivado)" && make -C tools/pmod_input_test bit flash
 ```
 
-| Device | Plug | Pins |
-|---|---|---|
-| USB keyboard | **J15 USB Host** | PIC24 → PS/2 `W17`/`N13` (pull-ups) |
-| Pmod PS/2 | **JA top row** | Data=JA1 (AB22), Clock=JA3 (AB20), GND=JA5, VCC=JA6 3.3 V |
-| Mini I2C gamepad @ 0x5A | **JB** PH2.0→Dupont | SCL=JB1 (V9), SDA=JB2 (V8), G=JB5, V=JB6 3.3 V |
+| Device | Plug |
+|---|---|
+| USB keyboard | **J15** |
+| Pmod PS/2, to see LD7 | **JA** top row. Pins are on the wiring page. This LED bit treats JA as a keyboard. The machine treats JA as the mouse. |
+| Mini I2C gamepad at `0x5A` | **JB** |
 
-Match **labels** on the stick (G V SDA SCL), not wire colors. Do **not** use JXADC (VADJ ~2.5 V). JA VCC is 3.3 V — if the PS/2 keyboard stays dark, Pmod JP1 → external 5 V (VE) from board 5 V0; FPGA CLK/DATA stay 3.3 V. If the stick’s red LED never lights, power V from 5 V0 but keep SDA/SCL at 3.3 V. Never put 5 V on FPGA pins.
+Match the stick labels (G, V, SDA, SCL), not the wire colors. If the stick's red LED never lights, power V from 5 V0 and keep SDA and SCL at 3.3 V. Pins and the VB jumper: [USB_KEYBOARD_PMOD_MICE.md](USB_KEYBOARD_PMOD_MICE.md).
 
 LED row, **LD0 on the left** (both live at once):
 
@@ -528,14 +478,9 @@ USB vs LD14: BUSY flash + **no LD4** = PIC24 got HID but is not clocking PS/2 to
 
 **JS board top:** J15 + JA + JB are in [`rtl/top_nexys_video.sv`](../rtl/top_nexys_video.sv) and [`tools/board_flow/vivado_build.tcl`](../tools/board_flow/vivado_build.tcl). The next `make -C tools/board_flow bit` writes `build/nexys_video/jmr_nexys_video.bit` and `.bin` with all three ORed with the PROG GUI tether (cable optional). FPGA-SIM / PYTHON unchanged — F9 still uses the PC keyboard.
 
-### Pmod input on the JS console (JA keyboard + JB stick)
+### Plugs on the current bit
 
-Same plugs as the LED test. No FPGA-SIM edits. J15 `ps2_rx` stays; `jmr_ps2_host` stays off. Frozen JS LEDs unchanged (LD7 is still J15 only).
-
-| Role | Plug |
-|---|---|
-| Type at READY | **J15** classic USB keyboard, or Pmod PS/2 on **JA** (also GUI tether) |
-| Play | Mini I2C stick on **JB** (also GUI arrows) |
+J15 is the USB keyboard. JA and JC are PS/2 mice. JB is the stick. Pins and the limits are [USB_KEYBOARD_PMOD_MICE.md](USB_KEYBOARD_PMOD_MICE.md). The LED meanings above belong to those probes, not to the machine.
 
 `joy_in = uart_joy_bits | {FIRE2, FIRE1, RIGHT, LEFT, DOWN, UP}` from I2C. NACK → stick bits 0.
 
@@ -549,13 +494,13 @@ No HDMI Sink, DisplayPort, higher modes, or audio-over-HDMI for V1.
 The machine must run **without a PC**: HDMI monitor + USB keyboard + Pmod
 joystick. UART/JTAG are for programming and optional debug only.
 
-**This T200 unit:** J15 works with a **classic** USB keyboard. Some modern HID keyboards never become PS/2 (LD14 only). Type on J15 or **Pmod PS/2 (JA)**. Play on the **JB** stick or GUI arrows.
+**This T200 unit:** keyboard on J15, mouse on JA, second mouse on JC, stick on JB. Some HID keyboards never become PS/2 (LD14 only). [USB_KEYBOARD_PMOD_MICE.md](USB_KEYBOARD_PMOD_MICE.md).
 
 | Role | Plug | Path |
 |---|---|---|
-| Typing / EDIT / ESC | J15 classic USB, or Pmod PS/2 on **JA** | J15/`JA` `ps2_rx` → keyboard FIFO (GUI tether still ORed) |
+| Typing / EDIT / ESC | **J15** USB keyboard | J15 `ps2_rx` → keyboard FIFO (GUI tether still ORed) |
 | Play (move/fire) | Mini I2C stick on **JB** | I2C `0x5A` OR GUI KEYBITS → `joy_in` |
-| Mouse | **J15** (wired or wireless) | `USB_MOUSE=1` runs the mouse host on J15 and holds the J15 keyboard decoder in reset. **Keyboard then goes on JA**, stick stays on JB. See [PMOD_KEYBOARD_J15_MOUSE.md](PMOD_KEYBOARD_J15_MOUSE.md). A single USB keyboard-plus-mouse device on J15 is still not implemented ([failed approach](NEXYS_USB_KEYBOARD_MOUSE_FAILED.md)). |
+| Mouse | **JA** PS/2, **JC** second mouse | Both hosts share one pointer. The mouse does not feed `joy()`. |
 
 Many physical sources merge into **one INPUT FIFO** → INPUT engine → monitor /
 JS events (pattern cite: BASIC sibling UART/`KEY` + PS/2 FIFO merge in
@@ -566,7 +511,7 @@ JS events (pattern cite: BASIC sibling UART/`KEY` + PS/2 FIFO merge in
 ## Related
 
 - [ARCH_MONITOR.md](ARCH_MONITOR.md) — V-line / D-line decode tables, and what BOARD cannot report
-- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [ARCHITECTURE.md](lastrun_ARCHITECTURE.md)
 - [FPGA_FIT.md](FPGA_FIT.md)
 - [SESSION_HANDOFF.md](SESSION_HANDOFF.md)
 - Isolated J5 line-out beep (not JS `board_flow`): [../tools/audio_beep_test/README.md](../tools/audio_beep_test/README.md)
@@ -575,12 +520,12 @@ JS events (pattern cite: BASIC sibling UART/`KEY` + PS/2 FIFO merge in
 ## GUI congestion policy — November 3, 2026
 
 The owner requests **no further game speed benchmarks** for this work. Keep the
-VM at33.333MHz (30ns period,5ns high) and fabric100MHz. Use static timing/resource
+VM at 33.333 MHz and fabric at 100 MHz. Use static timing/resource
 checks and necessary functional GUI checks. Do not reduce game capacity or speed
-to fit the GUI, and do not change the proven J15mouse/JAkeyboard/JBstick wiring.
+to fit the GUI. Current jacks are J15 USB keyboard, JA PS/2 mouse, JC second
+mouse, JB joystick.
 
-The actual working reference is run73o's qualified checkpoint in
-`build/archive/run73-development-2026-11-02/release/qualified_post_route.dcp`.
+The checkpoint below is the QSPI image (run73o), not the rollback. The rollback bit is run75. [FPGA_FIT.md](FPGA_FIT.md). Path: `to_delete/archive/run73-development-2026-11-02/release/qualified_post_route.dcp`.
 Its SHA256 is `1b473a2a203de4b86e34a5eb133cbd1b7661cf808059e4ab027de4766bfd0eaa`,
 matching the release manifest. Preserve compatible hard-macro locations from
 this reference rather than letting a small GUI revision reshuffle the computer.
@@ -603,8 +548,8 @@ BRAM trade saved only 101 LUTs in the two isolated modules, so do not assume tha
 extra BRAM is worthwhile without full-context evidence.
 
 Resource evidence and validated location helpers are in
-`build/run74i_bram_labels/a200_resource_review/`. The controlled placement-only
-check is `build/run74j_stable_computer/`; it uses the existing compiled I netlist,
+`to_delete/run74i_bram_labels/a200_resource_review/`. The controlled placement-only
+check is `to_delete/run74j_stable_computer/`; it uses the existing compiled I netlist,
 376 matching RAM and 116 matching DSP locations, without resynthesizing CPU logic.
 J's placement-only check produced a new 103% eastward congestion hotspot and
 was stopped before routing. Matching individual macro settings did not prove

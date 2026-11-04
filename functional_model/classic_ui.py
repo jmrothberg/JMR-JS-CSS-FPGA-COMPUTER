@@ -38,6 +38,37 @@ def parse_menus(spec):
     if width>610:raise ValueError('systemMenus: menu headings exceed the screen width')
     return result
 
+def parse_owned_menus(spec):
+    """A document program owns its whole menu bar, including File and Edit.
+
+    The descriptor starts with File|. Up to six menus, 14 items each.
+    A lone "-" is a separator. Quit and Close leave the program.
+    Commands are 160-239. Checks still use the first 32 of those.
+    """
+    if not isinstance(spec,str) or len(spec)>800 or any(ord(c)<32 or ord(c)>126 for c in spec):
+        raise ValueError('systemMenus needs at most 800 printable ASCII bytes')
+    result=[];seen=set()
+    menus=spec.split(';')
+    if not 1<=len(menus)<=6:raise ValueError('systemMenus: at most six menus')
+    for menu in menus:
+        parts=menu.split('|');label=parts[0]
+        if label in [title for title,_rows in result] or not 1<=len(label)<=12 or len(parts)<2 or len(parts)>15:
+            raise ValueError('systemMenus: use a menu title and 1-14 items')
+        rows=[]
+        for item in parts[1:]:
+            if item=='-':
+                rows.append(('-','',False));continue
+            title,sep,code=item.rpartition('=')
+            if not sep or not code.isdigit() or not 160<=int(code)<=239 or not 1<=len(title)<=24 or int(code) in seen:
+                raise ValueError('systemMenus: unique commands 160-239, labels 1-24 bytes')
+            seen.add(int(code))
+            action='close' if title in ('Quit','Close') else 'app:'+code
+            rows.append((title,action,True))
+        result.append((label,rows))
+    width=sum(sum(FONT.get(c,FONT['?'])['advance'] for c in label)+20 for label,_rows in result)
+    if width>580:raise ValueError('systemMenus: menu headings exceed the screen width')
+    return result
+
 def parse_finder_menus(spec):
     """Finder program menus. File, Edit, View, and Special, up to 12 items.
 
@@ -73,24 +104,30 @@ class ClassicUI:
         self.hot=-1;self.armed=-1
         self.document='';self.can_undo=False;self.can_paste=False
         self.has_selection=False
-        self.spec='';self.custom=[];self.finder=[]
+        self.spec='';self.custom=[];self.finder=[];self.owned=False
         self.menu_enable=0xFFFFFFFF;self.menu_check=0
+        self.bars=True
     def configure(self,role,spec):
         if role!=self.role:
             self.buttons=0;self.capture=False;self.drag=False;self.menu=0;self.menu_item=-1;self.dialog=None
             self.hot=-1;self.armed=-1
         self.role=role
         if spec!=self.spec:
+            self.owned=False
             if role==9:
                 self.finder=parse_finder_menus(spec) if spec else []
                 self.custom=[]
+            elif isinstance(spec,str) and spec.startswith('File|'):
+                self.custom=parse_owned_menus(spec);self.finder=[];self.owned=True
             else:
                 self.custom=parse_menus(spec);self.finder=[]
             self.spec=spec;self.menu=0;self.menu_item=-1
     def bar(self):
         extra=[m[0] for m in self.custom]
         if self.role==8 and 'Game' not in extra:extra.insert(0,'Game')
-        if self.role==9:
+        if self.owned:
+            labels=extra
+        elif self.role==9:
             labels=['File','Edit','View','Special']
         else:
             labels=['File']+([] if self.role==8 else ['Edit','View'])+extra+['Special']
@@ -115,6 +152,11 @@ class ClassicUI:
     def rows(self,menu):
         if self.role==9 and self.finder and 1<=menu<=4:
             return self._finder_rows(menu-1)
+        if self.owned:
+            label=self.bar()[menu-1][2]
+            for title,rows in self.custom:
+                if label==title:return rows
+            return []
         editable=self.role in (1,5)
         # Compile can save the opened program, or save it under a new name.
         can_save=editable or self.role==3
@@ -280,7 +322,7 @@ class ClassicUI:
         if down:
             self.capture=True
             if 16<=x<30 and 40<=y<54:events=[('menu','close')]
-            elif 600<=x<620 and 88<=y<432:
+            elif self.bars and 600<=x<620 and 88<=y<432:
                 code=128 if y<108 else 129 if y>=414 else 130 if y<260 else 131
                 events=[('key',code,0,True),('key',code,0,False)]
             elif role in (1,5) and 434<=y<453:
@@ -307,16 +349,29 @@ class ClassicUI:
         white=(255,255,255);black=(0,0,0);grey=(219,219,219)
         rect(30,0,610,21,white)
         for i,(x,end,label) in enumerate(self.bar(),1):
+            own=self.owned or label not in ('File','Edit','View','Special','Game')
             if self.menu==i:
-                rect(x,0,end-x,21,(0,0,0));text(x+4,3,label,(255,255,255),literal=label not in ('File','Edit','View','Special','Game'))
-            else:text(x+4,3,label,literal=label not in ('File','Edit','View','Special','Game'))
+                rect(x,0,end-x,21,(0,0,0));text(x+4,3,label,(255,255,255),literal=own)
+            else:text(x+4,3,label,literal=own)
         if self.menu:
             mx=min(426,self.bar()[self.menu-1][0]);rows=self.rows(self.menu);h=len(rows)*21+8
             rect(mx+2,24,212,h,black);rect(mx,22,212,h,black);rect(mx+1,23,210,h-2,white)
             for i,(label,action,enabled) in enumerate(rows):
                 hot=i==self.menu_item and enabled
+                ink=white if hot else black if enabled else (145,145,145)
                 if hot:rect(mx+2,26+i*21,208,20,black)
-                text(mx+10,27+i*21,label,white if hot else black if enabled else (145,145,145),literal=self.role==9 or str(action).startswith("app:"))
+                if label=='-':
+                    rect(mx+8,26+i*21+10,190,1,ink);continue
+                checked=False
+                if isinstance(action,str) and action.startswith('app:'):
+                    bit=int(action[4:])-160
+                    if 0<=bit<31 and (self.menu_check>>bit)&1:checked=True
+                if checked:
+                    # A small check, the mark MacPaint puts on the current choice.
+                    cx,cy=mx+8,30+i*21
+                    rect(cx,cy+3,1,2,ink);rect(cx+1,cy+4,1,2,ink);rect(cx+2,cy+5,1,2,ink)
+                    rect(cx+3,cy+4,1,2,ink);rect(cx+4,cy+3,1,2,ink);rect(cx+5,cy+2,1,2,ink);rect(cx+6,cy+1,1,2,ink)
+                text(mx+(20 if checked else 10),27+i*21,label,ink,literal=self.owned or self.role==9 or str(action).startswith("app:"))
         if not self.dialog:return
         if self.resources:dx,dy=self.resources.offset(self.dialog)
         if self.dialog=='open':

@@ -1,6 +1,6 @@
 # RTL design principles — write it right the first time
 
-Words: [README.md — Words used](../README.md#words-used-in-this-project).
+Words: [README.md — Words used](../docs/WORDS.md#words-used-in-this-project).
 
 **What this is.** Every other RTL doc in this repo is *reactive* — a NEVER
 table, a bug ledger, a fit campaign diary. Each entry exists because
@@ -16,7 +16,7 @@ measurement-and-repair.
 
 **Scope.** Chip-agnostic where possible. T200/Vivado-specific numbers and
 caps live in [FPGA_FIT.md](FPGA_FIT.md); incident history lives in
-[potential bugs.md](potential%20bugs.md); the always-on agent laws live in
+[potential bugs.md](../to_delete/notes/potential%20bugs.md); the always-on agent laws live in
 `.cursor/rules/`. This page does not restate those — it generalizes them.
 
 ---
@@ -527,9 +527,8 @@ Check the timestamp inside the report. Re-generate before deciding.
 ## Related
 
 - [FPGA_FIT.md](FPGA_FIT.md) — this chip's numbers, caps, NEVER table, live scoreboard
-- [TIMING_WALL.md](TIMING_WALL.md) — what “missed 100 MHz” meant (one page)
-- [potential bugs.md](potential%20bugs.md) — incident history and the recurring bug-class taxonomy
-- [ARCHITECTURE.md](ARCHITECTURE.md) — what each block is and where it lives
+- [potential bugs.md](../to_delete/notes/potential%20bugs.md) — incident history and the recurring bug-class taxonomy
+- [ARCHITECTURE.md](lastrun_ARCHITECTURE.md) — what each block is and where it lives
 - [CONSTITUTION.md](../CONSTITUTION.md) — what the machine is; wins on conflict
 - Always-on agent laws (copy 1): `never-fake-fpga-sim.mdc`, `one-heap-keep-gen.mdc`,
   `python-first-parity.mdc`, `no-dukpy-cheat-native-cpu.mdc`

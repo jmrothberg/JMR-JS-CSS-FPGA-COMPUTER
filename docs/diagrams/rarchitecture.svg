@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="790" viewBox="0 0 1200 790">
+<defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="#3a5967"/></marker></defs><rect width="1200" height="100%" fill="#f5f4ef"/>
+<text x="40" y="45" font-family="sans-serif" font-size="27" font-weight="bold">Latest .bit • software on disk, shared machinery in the FPGA</text>
+<text x="40" y="76" font-family="sans-serif" font-size="16" fill="#43525a">8 MiB external-memory aperture • one JavaScript VM • 33.333 MHz VM clock • November 4, 2026</text>
+<rect x="40" y="110" width="340" height="210" rx="6" fill="white" stroke="#879ba4"/>
+<text x="58" y="139" font-family="sans-serif" font-size="19" font-weight="bold" fill="#144b60">Disk / card.img</text>
+<text x="58" y="166" font-family="sans-serif" font-size="16" fill="#22343d">FINDER.HTM → FINDER.JSH</text>
+<text x="58" y="191" font-family="sans-serif" font-size="16" fill="#22343d">Desktop behavior, icons, windows</text>
+<text x="58" y="216" font-family="sans-serif" font-size="16" fill="#22343d">SYSTEM.SYS: shared appearance</text>
+<text x="58" y="241" font-family="sans-serif" font-size="16" fill="#22343d">Tools + games: HTML / JSH</text>
+<text x="58" y="266" font-family="sans-serif" font-size="16" fill="#22343d">Documents, icons, and artwork</text>
+<rect x="430" y="110" width="730" height="210" rx="6" fill="white" stroke="#879ba4"/>
+<text x="448" y="139" font-family="sans-serif" font-size="19" font-weight="bold" fill="#144b60">FPGA hardware configured by the .bit</text>
+<text x="448" y="166" font-family="sans-serif" font-size="16" fill="#22343d">FAT + program/resource loader → one native JavaScript VM</text>
+<text x="448" y="191" font-family="sans-serif" font-size="16" fill="#22343d">Shared toolbox: menus, dialogs, text, input and file services</text>
+<text x="448" y="216" font-family="sans-serif" font-size="16" fill="#22343d">Raster engine + BRAM canvas → DDR front image → HDMI</text>
+<text x="448" y="241" font-family="sans-serif" font-size="16" fill="#22343d">J15 USB keyboard • JA PS/2 mouse • JC second mouse • JB joystick</text>
+<text x="448" y="266" font-family="sans-serif" font-size="16" fill="#22343d">UI font/caption RAMs loaded at boot; defaults remain available</text>
+<rect x="40" y="375" width="520" height="170" rx="6" fill="white" stroke="#879ba4"/>
+<text x="58" y="404" font-family="sans-serif" font-size="19" font-weight="bold" fill="#144b60">External RAM: the 8 MiB address space</text>
+<text x="58" y="431" font-family="sans-serif" font-size="16" fill="#22343d">Artwork: 6,893,568 bytes below system cache</text>
+<text x="58" y="456" font-family="sans-serif" font-size="16" fill="#22343d">System reservation: 256 KiB (expanded below)</text>
+<text x="58" y="481" font-family="sans-serif" font-size="16" fill="#22343d">DDR front image: 300 KiB</text>
+<text x="58" y="506" font-family="sans-serif" font-size="16" fill="#22343d">Upper memory: work, scratch, SOURCE, image staging</text>
+<rect x="610" y="375" width="550" height="170" rx="6" fill="white" stroke="#879ba4"/>
+<text x="628" y="404" font-family="sans-serif" font-size="19" font-weight="bold" fill="#144b60">Inside the FPGA: separate from the 8 MiB</text>
+<text x="628" y="431" font-family="sans-serif" font-size="16" fill="#22343d">VM execution state, code and working memories</text>
+<text x="628" y="456" font-family="sans-serif" font-size="16" fill="#22343d">Persistent 640 × 480 indexed BRAM canvas</text>
+<text x="628" y="481" font-family="sans-serif" font-size="16" fill="#22343d">Shared font, caption, keyboard and UI memories</text>
+<text x="628" y="506" font-family="sans-serif" font-size="16" fill="#22343d">359.5 / 365 BRAM tiles used across the whole chip</text>
+<rect x="40" y="590" width="340" height="145" rx="6" fill="white" stroke="#879ba4"/>
+<text x="58" y="619" font-family="sans-serif" font-size="19" font-weight="bold" fill="#144b60">160 KiB • Finder cache</text>
+<text x="58" y="646" font-family="sans-serif" font-size="16" fill="#22343d">Packed FINDER.JSH; 148,000 B used</text>
+<text x="58" y="671" font-family="sans-serif" font-size="16" fill="#22343d">Loaded once, replayed on return</text>
+<text x="58" y="696" font-family="sans-serif" font-size="16" fill="#22343d">Avoids rereading Finder from disk</text>
+<rect x="430" y="590" width="340" height="145" rx="6" fill="white" stroke="#879ba4"/>
+<text x="448" y="619" font-family="sans-serif" font-size="19" font-weight="bold" fill="#144b60">72 KiB • parked Finder state</text>
+<text x="448" y="646" font-family="sans-serif" font-size="16" fill="#22343d">Windows, sorting, file/icon cache</text>
+<text x="448" y="671" font-family="sans-serif" font-size="16" fill="#22343d">Arena saved while another app runs</text>
+<text x="448" y="696" font-family="sans-serif" font-size="16" fill="#22343d">Globals rebuilt in the same VM</text>
+<rect x="820" y="590" width="340" height="145" rx="6" fill="white" stroke="#879ba4"/>
+<text x="838" y="619" font-family="sans-serif" font-size="19" font-weight="bold" fill="#144b60">24 KiB • SYS staging</text>
+<text x="838" y="646" font-family="sans-serif" font-size="16" fill="#22343d">Validate 24,320-byte payload</text>
+<text x="838" y="671" font-family="sans-serif" font-size="16" fill="#22343d">Then copy to live UI memories</text>
+<text x="838" y="696" font-family="sans-serif" font-size="16" fill="#22343d">No disk access per game frame</text>
+<path d="M380 205 L430 205" fill="none" stroke="#3a5967" stroke-width="2" marker-end="url(#a)"/>
+<path d="M560 445 L610 445" fill="none" stroke="#3a5967" stroke-width="2" marker-end="url(#a)"/>
+<path d="M300 545 L210 590" fill="none" stroke="#3a5967" stroke-width="2" marker-end="url(#a)"/>
+<path d="M330 545 L600 590" fill="none" stroke="#3a5967" stroke-width="2" marker-end="url(#a)"/>
+<path d="M360 545 L990 590" fill="none" stroke="#3a5967" stroke-width="2" marker-end="url(#a)"/>
+</svg>

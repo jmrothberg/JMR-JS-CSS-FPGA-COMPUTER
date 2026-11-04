@@ -1,12 +1,12 @@
 # FPGA versions
 
-- **Load now:** [current/README.md](current/README.md), run73o, November 2, 2026. The owner flashed QSPI and reports that it runs fine.
-- **First rollback:** [archive/run72b-2026-10-26/README.md](archive/run72b-2026-10-26/README.md), the previous board-proven standard.
-- **Earlier keepers:** [archive/README.md](archive/README.md). Each version has its own explanation and checksums.
-- **Optional porting example:** [extras/README.md](extras/README.md). No ZIP is required to use the faster FPGA.
+The bits we are keeping live with their builds, not in a pile of older runs.
 
-`current/fpga.bit` always points to the selected version. [standard.json](standard.json) records that selection and its exact files. Keep the versioned filename beside the alias.
-Your existing card and `LOAD "NAME.HTML"` / `RUN` workflow remain the same.
+- **Rollback bit:** [build/run75_program_system](../build/run75_program_system/release/README.md).
+- **Build in progress:** [build/run76_usb_keyboard_pmod_mice](../build/run76_usb_keyboard_pmod_mice/README.md). No qualified `.bit` yet.
+- **Still in QSPI:** [current/](current/README.md) is run73o until the board is flashed again.
+- Older bits and the optional Donkey zip are in `to_delete/releases_archive/` and `to_delete/releases_extras/`.
 
-Use this existing repository on `main`. Save older versions in these folders; do not create branches, extra repositories or worktrees to save a release. Raw failed experiments belong in [build/archive/](../build/archive/README.md), not in `current/`.
-[ORGANIZATION.json](ORGANIZATION.json) records file moves and unchanged hashes. Old file paths have compatibility links.
+`current/fpga.bit` is the run73o file that was flashed. [standard.json](standard.json) records that selection.
+
+Use this existing repository on `main`. Do not create branches, extra repositories, or worktrees to save a release. Old experiments are in `to_delete/`.

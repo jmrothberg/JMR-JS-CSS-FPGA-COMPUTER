@@ -1,6 +1,6 @@
 # Game design (HTML titles for this machine)
 
-Words: [README.md — Words used](../README.md#words-used-in-this-project).
+Words: [README.md — Words used](../docs/WORDS.md#words-used-in-this-project).
 
 How to write a playable `.HTML` game for this **NLISC-JS** machine
 (Native Language Instruction Set Computing — JavaScript is the
@@ -21,8 +21,8 @@ RTL for one game.
 | Gen | Meaning | Titles |
 |---|---|---|
 | **1.0 (now)** | Frozen caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Host mint at card-create still works. | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls ([JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#v10-hard-walls-do-not-fix-in-rtl-for-one-title)). `MKPVP.HTML` is the V1 MK-shaped example. |
-| **1.5 (now)** | Console **authoring and compile on the machine:** `LOAD` → `EDIT` → `COMPILE` → `RUN`. Editor and compiler are ordinary card programs (`EDITOR.JSH`, `COMPILER.JSH`), not a new ISA. Same heap/ASET/Canvas. Popular JS V1 still lacks (`shift`, `Math.sin`/`round`, `isFinite`, `e.code`, …) — that language backlog is not MK. | Same V1 titles. How-to: [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). |
-| **2.0 (planned)** | Grow the ISA past V1 walls: more sprite descriptors, a larger simple ASET bank, `Object.keys` on the chip, `Math.round`, dotted `new`, `.call`/`.apply`. **No title is the V2 example** (`MK.HTML` is gone). Do **not** title-gate. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20). | Any `NAME.HTML` that needs those caps. Library MK-shaped play today: `MKBIG.HTML` / `MKBIGCPU.HTML` (V1, ≤16 sheets / 4 MB). |
+| **1.5 (now)** | Console **authoring and compile on the machine:** `LOAD` → `EDIT` → `COMPILE` → `RUN`. Editor and compiler are ordinary card programs (`EDITOR.JSH`, `COMPILER.JSH`), not a new ISA. Same heap and Canvas caps. Popular JS still lacks `shift`, `Math.sin`, `isFinite`, `e.code`. **`Math.round` is live.** | Same V1 titles. How-to: [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). |
+| **2.0 (planned)** | Grow the ISA past V1 walls: more than 16 sprite sheets, `Object.keys` on the chip, dotted `new`, `.call`/`.apply`. **`Math.round` is already nid 54.** The aperture is already 8 MiB. **No title is the V2 example.** Do **not** title-gate. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20). | Any `NAME.HTML` that needs those caps. Library MK-shaped play today: `MKBIG.HTML` / `MKBIGCPU.HTML` (V1, ≤16 sheets). |
 
 V1 / V1.5 / V2 surface backlog: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
 Agent rule: `.cursor/rules/html-game-v1.mdc`.
@@ -238,7 +238,7 @@ them from `card.img`) breaks `READ` / `EDIT` / `COMPILE`.
 `storage/GUIDEX.HTML` is a visible example, not one of those hidden engines. It is the small windowed tool to copy: alphabetical names, drag onto Trash, Desk → Empty Trash, and a heading drawn without its `#`. The real Finder behavior is the Python desktop (`functional_model/desktop.py`). The real document formatter is `READ.HTML`. Detail for the shared menus is [SYSTEM_APPLICATIONS.md](SYSTEM_APPLICATIONS.md).
 
 Keep the matching minted `.JSH` on the card (card-create mints them). `READ` and `GUIDEX` changes are ordinary card programs: they show up after `make_sd_image.py create`, because `RUN` loads the minted `.JSH`. Detail:
-[JS_COMMANDS.md](JS_COMMANDS.md) READY console, [ARCHITECTURE.md](ARCHITECTURE.md)
+[JS_COMMANDS.md](JS_COMMANDS.md) READY console, [ARCHITECTURE.md](lastrun_ARCHITECTURE.md)
 standalone compile.
 
 After adding or changing a title:
@@ -628,13 +628,12 @@ actually been measured to matter, **roughly in order of impact:**
 Correctness gets you a title that runs. This section gets you one that
 plays. Every number here is **measured** — from the PACMAN and INVADERS
 frame profiles in
-[SYNTH_SLOWDOWN_LEDGER.md](SYNTH_SLOWDOWN_LEDGER.md#measured-clock-sinks--pacman-play-frame-2026-08-20-statehist), not estimated.
+`to_delete/notes/SYNTH_SLOWDOWN_LEDGER.md`, not estimated.
 
 ### The budget — this is the number that matters
 
-The board's JS core runs on a divided clock (today ÷7 ≈ 14.3 MHz; see
-[FPGA_FIT.md](FPGA_FIT.md) and [TIMING_WALL.md](TIMING_WALL.md)).
-So one frame at 30 fps is:
+The live VM clock is **33.333 MHz** (see [FPGA_FIT.md](FPGA_FIT.md)).
+The table below was measured on the older divided clock, about 12.5 MHz:
 
 | | |
 |---|---|
@@ -986,7 +985,7 @@ FAST rewrite correctly removed `setTimeout` (rule elsewhere: it is a
 per-call allocation) but made the splice synchronous instead, so a kill
 now runs several function calls deep, mid-iteration, over the very
 arrays it's mutating. Whatever pool that pressures (under RTL
-investigation — see [potential bugs.md](potential%20bugs.md); the leading theory is
+investigation — see [potential bugs.md](../to_delete/notes/potential%20bugs.md); the leading theory is
 the per-call environment pool, exhausted faster than sweep reclaims it)
 is a real, load-bearing limit, and the old code never exercised it by
 accident.

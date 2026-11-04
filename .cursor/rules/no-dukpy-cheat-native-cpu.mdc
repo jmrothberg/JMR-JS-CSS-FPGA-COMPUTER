@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Native HTML/JS computer
 
-Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+Words: [README.md — Words used](../../docs/WORDS.md#words-used-in-this-project).
 This is **copy 1** of “no dukpy / vendored HTML titles” (copy 2:
 [CONSTITUTION.md](../../CONSTITUTION.md) Vendored-titles mandate).
 

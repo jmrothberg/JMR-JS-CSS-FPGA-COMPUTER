@@ -72,6 +72,8 @@ module jmr_system_documents (
  logic blink_half;
  logic [1:0] armed_button,hit_button;
  logic caret_scan;
+ logic [1:0] scan_phase;
+ logic [7:0] scan_glyph,scan_advance;
  logic [3:0] scan_i;
  logic [9:0] scan_px,scan_target;
  always_comb begin
@@ -83,6 +85,13 @@ module jmr_system_documents (
  logic [3:0] candidate_len,pending_len,pending_action;
  logic keyboard_saved,keyboard_forced;
  logic [2:0] old_buttons;
+ // Register geometry before dispatching a mouse action. Button comparisons
+ // must not share a cycle with filename writes or Save/Replace state changes.
+ logic mouse_event,mouse_down,mouse_up,mouse_held;
+ logic [2:0] mouse_dialog;
+ logic [1:0] mouse_hit;
+ logic signed [11:0] mouse_x,mouse_y;
+
  logic [1:0] old_notice;
  logic name_dirty,list_dirty;
  logic [3:0] cat_phase;
@@ -177,7 +186,8 @@ module jmr_system_documents (
  endtask
  always_ff @(posedge clk)begin
   if(!rst_n)begin
-   caret<=0;caret_px<=0;caret_on<=0;blink_frame<=0;blink_half<=0;flash_frames<=0;armed_button<=3;hot_button<=3;caret_scan<=0;scan_i<=0;scan_px<=0;scan_target<=0;
+   mouse_event<=0;mouse_down<=0;mouse_up<=0;mouse_held<=0;mouse_dialog<=0;mouse_hit<=3;mouse_x<=0;mouse_y<=0;
+   caret<=0;caret_px<=0;caret_on<=0;blink_frame<=0;blink_half<=0;flash_frames<=0;armed_button<=3;hot_button<=3;caret_scan<=0;scan_phase<=0;scan_glyph<=0;scan_advance<=0;scan_i<=0;scan_px<=0;scan_target<=0;
    dialog<=0;generation<=0;command_stb<=0;command<=0;chosen_name<=0;chosen_len<=0;
    after_valid<=0;after_action<=0;after_name<=0;after_len<=0;
    edit_name<=0;candidate_name<=0;candidate_len<=0;pending_name<=0;pending_len<=0;pending_action<=0;
@@ -189,6 +199,12 @@ module jmr_system_documents (
    op_phase<=0;verify_index<=0;build_phase<=0;build_row<=0;build_list<=0;build_name<=0;build_len<=0;build_char<=0;build_x<=0;
    label_valid<=0;label_row<=0;label_data<=0;label_col<=0;label_commit<=0;
   end else begin
+   mouse_event<=sample_valid && !app_clear;
+   if(sample_valid)begin
+    mouse_x<=dialog_x;mouse_y<=dialog_y;mouse_hit<=hit_button;mouse_dialog<=dialog;
+    mouse_down<=!old_buttons[0] && buttons[0];mouse_up<=old_buttons[0] && !buttons[0];mouse_held<=buttons[0];
+    old_buttons<=buttons;
+   end
    if(frame_tick)begin
     if(flash_frames!=0)begin flash_frames<=flash_frames-1'b1;generation<=generation+1'b1;end
     if(dialog==D_NAME)begin
@@ -196,11 +212,17 @@ module jmr_system_documents (
      else blink_frame<=blink_frame+1'b1;
     end
    end
-   if(caret_scan)begin
-    if(scan_i>=name_len || scan_target<scan_px+10'(classic_advance(edit_name[scan_i*8+:8])>>1))begin
-     caret<=scan_i;caret_scan<=0;name_dirty<=1;caret_on<=1;blink_frame<=0;blink_half<=0;
-    end else begin scan_px<=scan_px+10'(classic_advance(edit_name[scan_i*8+:8]));scan_i<=scan_i+1'b1;end
-   end
+   if(caret_scan)case(scan_phase)
+    0:begin scan_glyph<=scan_i<name_len?edit_name[scan_i*8+:8]:8'd0;scan_phase<=1;end
+    1:begin scan_advance<=8'(classic_advance(scan_glyph));scan_phase<=2;end
+    2:begin
+     if(scan_i>=name_len || scan_target<scan_px+10'(scan_advance>>1))begin
+      caret<=scan_i;caret_scan<=0;name_dirty<=1;caret_on<=1;blink_frame<=0;blink_half<=0;
+     end else begin scan_px<=scan_px+10'(scan_advance);scan_i<=scan_i+1'b1;end
+     scan_phase<=0;
+    end
+    default:scan_phase<=0;
+   endcase
    command_stb<=0;keyboard_set_stb<=0;catalog_go<=0;file_we<=0;
    if(label_valid && label_ready)begin label_valid<=0;generation<=generation+1'b1;end
    if(app_clear)begin dialog<=0;after_valid<=0;old_buttons<=0;op_phase<=0;generation<=generation+1'b1;end
@@ -343,34 +365,33 @@ module jmr_system_documents (
     end
     default:op_phase<=0;
    endcase
-   if(sample_valid)begin
-    old_buttons<=buttons;
+   if(mouse_event && !app_clear && mouse_dialog==dialog)begin
     if(dialog!=0)begin
-     hot_button<=(buttons[0] && hit_button==armed_button)?hit_button:2'd3;
+     hot_button<=(mouse_held && mouse_hit==armed_button)?mouse_hit:2'd3;
      generation<=generation+1'b1;
-     if(!old_buttons[0] && buttons[0])begin
-      armed_button<=hit_button;hot_button<=hit_button;
-      if(dialog_x<(dialog==D_OPEN?110:132) || dialog_x>=(dialog==D_OPEN?530:508) || dialog_y<(dialog==D_OPEN?76:112) || dialog_y>=276)flash_frames<=8;
+     if(mouse_down)begin
+      armed_button<=mouse_hit;hot_button<=mouse_hit;
+      if(mouse_x<(dialog==D_OPEN?110:132) || mouse_x>=(dialog==D_OPEN?530:508) || mouse_y<(dialog==D_OPEN?76:112) || mouse_y>=276)flash_frames<=8;
       if(dialog==D_OPEN)begin
-       if(dialog_x>=134 && dialog_x<484 && dialog_y>=112 && dialog_y<224)begin
-        if({1'b0,file_top}+9'((dialog_y-112)/16)<file_count)selected<={1'b0,file_top}+9'((dialog_y-112)/16);
-       end else if(dialog_x>=486 && dialog_x<508 && dialog_y>=112 && dialog_y<224)begin
-        if(dialog_y<168 && file_top!=0)file_top<=file_top-1'b1;
-        else if(dialog_y>=168 && file_count>7 && {1'b0,file_top}<file_count-7)file_top<=file_top+1'b1;
+       if(mouse_x>=134 && mouse_x<484 && mouse_y>=112 && mouse_y<224)begin
+        if({1'b0,file_top}+9'((mouse_y-112)/16)<file_count)selected<={1'b0,file_top}+9'((mouse_y-112)/16);
+       end else if(mouse_x>=486 && mouse_x<508 && mouse_y>=112 && mouse_y<224)begin
+        if(mouse_y<168 && file_top!=0)file_top<=file_top-1'b1;
+        else if(mouse_y>=168 && file_count>7 && {1'b0,file_top}<file_count-7)file_top<=file_top+1'b1;
         list_dirty<=1;
        end
       end
-      if(dialog==D_NAME && dialog_x>=154 && dialog_x<364 && dialog_y>=150 && dialog_y<172)begin
-       caret_scan<=1;scan_i<=0;scan_px<=0;scan_target<=dialog_x<158?10'd0:10'(dialog_x-158);name_selected<=0;
+      if(dialog==D_NAME && mouse_x>=154 && mouse_x<364 && mouse_y>=150 && mouse_y<172)begin
+       caret_scan<=1;scan_phase<=0;scan_i<=0;scan_px<=0;scan_target<=mouse_x<158?10'd0:10'(mouse_x-158);name_selected<=0;
       end
      end
-     if(old_buttons[0] && !buttons[0])begin
+     if(mouse_up)begin
       armed_button<=3;hot_button<=3;
-      if(hit_button!=3 && hit_button==armed_button)case(dialog)
-       D_OPEN:if(hit_button==0 && selected<file_count)op_phase<=1;else if(hit_button==1)dialog<=0;
-       D_NAME:if(hit_button==0)save_name_request();else begin dialog<=0;after_valid<=0;op_phase<=0;restore_keyboard();end
-       D_CHANGES:if(hit_button==0)dirty_choice(1);else if(hit_button==1)dirty_choice(0);else begin dialog<=0;after_valid<=0;end
-       D_REPLACE:if(hit_button==0)send_save_name();else begin dialog<=0;after_valid<=0;op_phase<=0;restore_keyboard();end
+      if(mouse_hit!=3 && mouse_hit==armed_button)case(dialog)
+       D_OPEN:if(mouse_hit==0 && selected<file_count)op_phase<=1;else if(mouse_hit==1)dialog<=0;
+       D_NAME:if(mouse_hit==0)save_name_request();else begin dialog<=0;after_valid<=0;op_phase<=0;restore_keyboard();end
+       D_CHANGES:if(mouse_hit==0)dirty_choice(1);else if(mouse_hit==1)dirty_choice(0);else begin dialog<=0;after_valid<=0;end
+       D_REPLACE:if(mouse_hit==0)send_save_name();else begin dialog<=0;after_valid<=0;op_phase<=0;restore_keyboard();end
        D_MESSAGE:dialog<=0;
        default:;
       endcase

@@ -6,14 +6,14 @@ This document is the architectural specification for the JMR JS Computer
 (**NLISC-JS**: Native Language Instruction Set Computing with JavaScript —
 the language you type *is* the chip’s instruction surface; an **FPGA**
 Field-Programmable Gate Array game computer). Words:
-[README.md — Words used](README.md#words-used-in-this-project).
+[Words](docs/WORDS.md#words-used-in-this-project).
 Family name:
-[README.md](README.md#nlisc-native-language-instruction-set-computing).
+[NLISC](docs/WORDS.md#nlisc-native-language-instruction-set-computing).
 
 This file is **copy 2** of “no dukpy / vendored HTML
 titles” (copy 1 is `.cursor/rules/no-dukpy-cheat-native-cpu.mdc`). Other
 critical “do not”s live in two places only — see
-[README.md — Two copies](README.md#two-copies-of-every-critical-do-not).
+[Two copies](docs/WORDS.md#two-copies-of-every-critical-do-not).
 
 If there is ever a conflict between this document and the implementation,
 THIS DOCUMENT IS CORRECT.
@@ -84,7 +84,7 @@ the same glass on PYTHON → FPGA-SIM → BOARD** (then ASIC).
   writes `NAME.ARTX`. On every `RUN` the minted `.JSH` carries that art
   (per-title 256-entry palette + full-resolution sprite banks) as the
   **ASET section** of that ProgramImage;
-  the loader streams the section into the **external 4 MB SRAM asset bank**
+  the loader streams the section into the **external 8 MiB SRAM asset bank**
   (see MEMORY). There is **no `NAME.DAT` file**. Do not pack Donkey art into
   code BRAM or downscale sheets to “fit.”
 - **No host-twin FPGA-SIM** (FPGA simulation — Verilator of the same RTL).
@@ -98,8 +98,8 @@ the same glass on PYTHON → FPGA-SIM → BOARD** (then ASIC).
   (keycodes); each game's own `keydown`/`keyup` handlers define its bindings.
   No hardcoded key→action maps in RTL.
 - Every game feature must work from card + local input alone (untethered).
-  Tether = debug mirror only. When the J15 keyboard hardware is fixed, play
-  must work standalone with **zero code changes**.
+  Tether = debug mirror only. Play uses the J15 USB keyboard, the JA PS/2
+  mouse, and the optional JB joystick. A PC is not required.
 - Same-name `NAME.JS` / `NAME.JSB` are **not** product twins of the HTML
   titles.   Card seeds are `.HTML` (plus optional library HTML like
   `JOYDEMO.HTML`). **V1.0:** PYTHON / FPGA-SIM / BOARD play `card.img`; the
@@ -142,7 +142,7 @@ event-loop are first-class machine engines, not library code on a hidden CPU.
     Memory: address in this clock, data **next** clock). Same `rtl/*.sv`
     as the `.bin`. One 1-D JavaScript heap. Extra clocks are silicon, not
     a reason to peek. `sim_server_synth` PASS is Verilator, not a
-    bitstream. Loud overflow; do not hide it in the 4 MB asset bank.
+    bitstream. Loud overflow; do not hide it in the 8 MiB asset bank.
     **Copy 1** of the RAM law: `.cursor/rules/never-fake-fpga-sim.mdc`.
     **Copy 2:** [docs/FPGA_FIT.md](docs/FPGA_FIT.md) NEVER table. One heap
     + generation: `one-heap-keep-gen.mdc`. Live caps:
@@ -155,7 +155,7 @@ event-loop are first-class machine engines, not library code on a hidden CPU.
 **PYTHON** = the fast functional model (same *results* as the chip, not the
 same wall-clock). **FPGA-SIM** = Verilator of the same RTL as the bitstream.
 Do not skip rungs. Spec ladder (copy 2 of the method):
-[README.md Method](README.md#method-steal-from-the-basic-sibling--not-the-product).
+[Method](docs/WORDS.md#method-steal-from-the-basic-sibling--not-the-product).
 Copy 1: `.cursor/rules/python-first-parity.mdc`.
 
 Architecture
@@ -202,7 +202,7 @@ This is how to build or **update** an NLISC machine (the native language
 *is* the ISA: JavaScript here; BASIC on the sibling; a native GPU would
 use a graphics language). Steal this ladder. Do **not** steal the other
 product’s tokens, pins, or microcode. Family name / TRS-80 / ASIC write-up:
-[README.md](README.md#nlisc-native-language-instruction-set-computing).
+[NLISC](docs/WORDS.md#nlisc-native-language-instruction-set-computing).
 
 **Speed:** Python must stay **fast**. It matches **what** the chip would do
 (same program bytes, same numbers, same errors), not **how long** the chip
@@ -260,6 +260,10 @@ interpreter.
 
 **Primary board:** Digilent **Nexys Video** — Artix-7 **XC7A200T-1SBG484C**.
 
+**Clocks:** the JavaScript VM runs at **33.333 MHz** (the 100 MHz fabric
+clock divided by three). Fabric and DDR user logic stay at **100 MHz**.
+Those are not the same clock. Do not slow DDR3 to make the VM meet timing.
+
 **Second port (later):** Puzhi **PA-StarLite** (XC7A200T) — same engines,
 different pins/XDC only after Nexys Video works. Do not dual-bring-up day one.
 
@@ -270,18 +274,18 @@ numbers from the BASIC machine.
 **Display (frozen):** HDMI Source, native **640×480 @ ~60 Hz**, 8 bpp indexed,
 256-entry RGB888 palette, double-buffered. **V1:** dual FB in BRAM
 (`jmr_mini_fb.sv`). On-chip working set = FB + code + heap; game art lives in
-the **external SRAM asset bank** (FPGA: board DDR3 hidden behind an SRAM-port
-bridge; ASIC / final PCB: one IS61WV204816 chip). See MEMORY.
+the **external SRAM asset bank** (8 MiB; FPGA DDR3 behind that port). See MEMORY.
 
-**Standalone input (frozen):**
+**Standalone input:**
 
-- USB HOST keyboard (typing / EDIT / hardware ESC)
-- Pmod **digital joystick / gamepad** for play
-- USB mouse **not** required for V1 (USB HOST is one device; no Digilent hub)
+- **J15** USB host: keyboard. The PIC24 passes one device, listen-only.
+  A wireless keyboard on J15, and one USB device that is both keyboard and
+  mouse, do not work.
+- **JA** PS/2 mouse. Data is pin 1, clock is pin 3. **JC** is a second mouse.
+- **JB** Pmod joystick. The machine also runs with no stick.
 
-**This T200 unit:** J15 USB Host is hardware-dead. Type and play from the GUI
-PROG tether until RMA. The freeze above is still the product jack. Live status:
-`docs/SESSION_HANDOFF.md`.
+`USB_MOUSE=1` is the older bitstream (mouse on J15, keyboard on JA). It is
+not this contract. Wiring: [docs/USB_KEYBOARD_PMOD_MICE.md](docs/USB_KEYBOARD_PMOD_MICE.md).
 
 **Primary development host:** Ubuntu / Debian Linux (day-one path:
 [docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md) — GUI, Verilator, Vivado, flash).
@@ -307,17 +311,18 @@ openFPGALoader
 
 # USER EXPERIENCE (V1 intent)
 
-Boot into a monitor READY prompt (NLISC-JS glass), not a desktop or browser.
+Power-on runs the **Finder** program from the card (`FINDER.JSH`). Shared
+menu words, dialogs, and captions come from `SYSTEM.SYS` on that card.
+Finder is JavaScript on the same VM as a game. It is not a second desktop
+built into the FPGA, and it is not a browser.
 
-```
-JMR JS READY
->
-```
-
-Monitor commands (DIR / LOAD / RUN / LIST / EDIT / SAVE / …) load and edit
-ordinary `.HTML` titles (the disk format). ESC hard-breaks a running game
-back to READY without depending on the program. Same-stem `.JS` files are
+ESC is machine BREAK. It leaves the running program. The monitor underneath
+Finder is still the READY prompt (`DIR` / `LOAD` / `RUN` / `LIST` / `EDIT` /
+`COMPILE` / `SAVE`). A title must not steal ESC. Same-stem `.JS` files are
 leftover demos, not product twins.
+
+Games are full screen. Windowed tools draw in the document hole. File says
+Quit and returns to Finder.
 
 V1 goal shape: a useful subset of JavaScript + Canvas for classic 2D arcade
 games — not arbitrary modern websites.
@@ -336,7 +341,7 @@ Architectural surface includes (names evolve; engines stay separate):
 - Canvas 2D ops (fillRect, drawImage, …) → hardware Canvas / blitter
 - Minimal HTML container for games (`canvas` + `script`) — not a layout browser
 - Event loop / timers / `requestAnimationFrame` (hardware-visible)
-- Keyboard + joystick/gamepad input events
+- Keyboard, PS/2 mouse, and joystick input events
 
 **CSS (V1):** do **not** implement a general CSS engine. Games draw on Canvas.
 A tiny CSS subset is allowed later only if a target game proves it necessary.
@@ -414,23 +419,27 @@ Bytecode is the native instruction representation. Microcode is architectural
 
 # MEMORY
 
-Documented map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (external SRAM
-port + 4 MB layout). **Do not impose a fake 64 KB BASIC house.** **BRAM**
-(Block RAM, on-chip) is working RAM; **µSD** (microSD) is disk; the
-**external SRAM asset bank** holds game art.
+Documented map: [docs/lastrun_ARCHITECTURE.md](docs/lastrun_ARCHITECTURE.md)
+(who owns each byte of the 8 MiB aperture) and
+[docs/lastrun_ARCHITECTURE.md](docs/lastrun_ARCHITECTURE.md). **Do not impose a fake 64 KB
+BASIC house.** **BRAM** (Block RAM, on-chip) is working RAM; **µSD**
+(microSD) is disk; the **external SRAM asset bank** holds game art and the
+resident Finder cache.
 
-**External SRAM asset bank (architecture, 2026-08-13):** one **4 MByte SRAM,
-2M × 16 (ISSI IS61WV204816)** behind a simple synchronous port
-(`addr[20:0]`, `wdata[15:0]`, `rdata[15:0]`, `we`, `req`, `ack`) at core
-clock. The JS CPU / blitter never see controller detail. Same port, three
-implementations:
+**External SRAM asset bank:** one **8 MiB** port, 4M × 16, behind a simple
+synchronous port (`addr[21:0]`, 16-bit data, `we`, `req`, `ack`). The
+2026-08-13 contract was 4 MB, `addr[20:0]`, one IS61WV204816. The FPGA and
+the simulator use the 8 MiB aperture. The JS CPU never sees DDR controller
+detail. Same port, three implementations:
 
-- **FPGA-SIM:** behavioral 4 MB model behind the identical port (the
+- **FPGA-SIM:** behavioral 8 MiB model behind the identical port (the
   VM/blitter RTL above it is the real product RTL — never a host twin).
 - **FPGA board:** Nexys Video **DDR3** hidden behind a MIG-based bridge
-  presenting the same SRAM port (first 4 MB used).
-- **ASIC / final PCB:** the real IS61WV204816 chip; trivial timing wrapper;
-  zero RTL changes above the port.
+  presenting the same SRAM port (first 8 MiB used).
+- **ASIC / final PCB:** still one external SRAM chip and no RTL change
+  above the port. The pad ring is
+  [FUTURE_ASIC_EXTERNAL_RAM.plan.md](FUTURE_ASIC_EXTERNAL_RAM.plan.md),
+  not a second board to start now.
 
 On every `RUN` the compiler emits the title's full-quality art (per-title
 256-entry RGB888 palette + 8-bpp indexed sprite banks) as the **ASET
@@ -465,7 +474,8 @@ Measured requirement of the current FPGA architecture: **~1.6 MB BRAM +
 
 - **On-die (hot set only):** what every opcode touches — vstack (16 KB),
   vvars (4 KB), env/metadata tables (gen/valid/mark, ~10 KB), small caches.
-- **External 4 MB SRAM (2M × 16) holds everything else** — framebuffers,
+- **External SRAM holds everything else** — the FPGA aperture is 8 MiB.
+  Framebuffers,
   code, vobj/varr slots, names, sprites. The saving grace: a sky130 core
   clocks ~25-50 MHz (20-40 ns cycles), so the ~10 ns SRAM is
   **one-cycle-class** — external stops being slow at this node.
@@ -500,8 +510,9 @@ Paths for the primary board are owned by `docs/FPGA_BRINGUP.md`.
 
 Contract:
 
-- Keyboard → PHY → INPUT FIFO → Console / JS events
-- Joystick/gamepad → GPIO reader → same INPUT FIFO
+- J15 keyboard → PHY → INPUT FIFO → Console / JS events
+- JA / JC PS/2 mouse → the pointer. It does not feed `joy()`
+- JB joystick → GPIO reader → same INPUT FIFO
 - Many sources may merge; one INPUT engine
 - Storage Engine owns the physical device (ordinary files: `.JS`, `.HTML`, …)
 - HDMI scanout reads the front framebuffer independently of JS timing where
@@ -544,7 +555,7 @@ The Python Hardware Model and FPGA must produce identical results.
 
 One module per subsystem (logical engines). A logical block may be implemented
 as its own `.sv` file or folded into an existing engine when that keeps the
-interface clear — document the fold in `docs/ARCHITECTURE.md`.
+interface clear — document the fold in `docs/lastrun_ARCHITECTURE.md`.
 
 Do not create giant monolithic modules. Keep optional accelerators separable
 so fit pressure can drop a module without breaking the architecture.
@@ -555,9 +566,9 @@ so fit pressure can drop a module without breaking the architecture.
 
 Target: **XC7A200T** on Nexys Video (larger than XC7A100T).
 
-Architecture must comfortably fit. Soft utilization caps will be recorded in
-`docs/SESSION_HANDOFF.md` / fit reports after the first real Vivado build —
-do not invent LUT counts.
+Architecture must comfortably fit. Live caps are
+[docs/FPGA_FIT.md](docs/FPGA_FIT.md). Do not invent LUT counts.
+`docs/SESSION_HANDOFF.md` is only the placeholder for the current session.
 
 Share hardware. Reuse ALU, parsers, memory ports, and blitter datapaths.
 Multi-cycle ops are acceptable.
@@ -591,11 +602,10 @@ Cursor rule: `.cursor/rules/use-existing-traces.mdc`.
 7. Python Hardware Model parity
 8. SystemVerilog engines + FPGA-SIM (HDMI + INPUT after glass exists)
 9. Nexys Video constraints + Vivado `.bit` / `.bin`
-10. Board smoke standalone (HDMI + keyboard + joystick)
+10. Board smoke standalone (HDMI + J15 keyboard + JA mouse + JB joystick)
 
 Do not start Vivado before PYTHON + FPGA-SIM exist for user-visible behavior.
-Phase notes: HDMI test pattern and INPUT PHY are board Phase 1 after FM glass
-grows — see `docs/SESSION_HANDOFF.md`.
+Board pins, flash, and HDMI are [docs/FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md).
 
 ---
 
@@ -646,7 +656,8 @@ Every subsystem should be independently testable.
 
 Same glass on PYTHON, FPGA-SIM, and board.
 
-Standalone: HDMI out, USB keyboard, Pmod joystick, no PC required to play.
+Standalone: HDMI out, J15 USB keyboard, JA PS/2 mouse, optional JB joystick.
+No PC required to play.
 
 `INVADERS.HTML`, `PACMAN.HTML`, and `DONKEY.HTML` LOAD + RUN and are playable
 on all three runtimes (see Vendored-titles mandate). No `?NH` anywhere.

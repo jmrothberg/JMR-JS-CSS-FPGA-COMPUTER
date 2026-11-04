@@ -1,10 +1,10 @@
 # JavaScript you can write — and the instructions it becomes
 
-Words: [README.md — Words used](../README.md#words-used-in-this-project).
+Words: [README.md — Words used](../docs/WORDS.md#words-used-in-this-project).
 
 This is the page to **learn the machine**.  
 Title status and version-2.0 holes live in [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md).  
-Block diagram: [ARCHITECTURE.md](ARCHITECTURE.md).
+Block diagram: [lastrun_ARCHITECTURE.md](lastrun_ARCHITECTURE.md).
 
 On the BASIC sibling, every keyword **is** one instruction (`PRINT` = `0x81`).  
 Here JavaScript **source** is compiled into a smaller numbered
@@ -284,7 +284,7 @@ FPGA-SIM/PYTHON have no I2C model, so tests/GUI feed them via a debug RPC
 **Id 41 note:** `Object.keys` (and therefore `for (k in obj)`) runs on the Python functional model. The chip does not have that native yet — it faults instead of guessing. Version 1.0 titles use a literal key list or an index loop. See [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
 
 **Ids 43–50 note — the V1.5 compile ABI.** These are not for games. Memory
-map: [ARCHITECTURE.md](ARCHITECTURE.md) (standalone compile). This page lists
+map: [lastrun_ARCHITECTURE.md](lastrun_ARCHITECTURE.md). This page lists
 the native ids. They are the window through which the **self-hosted compiler**
 (an ordinary program on the card) reaches the outside world:
 `LOAD "X.HTML"` → `COMPILE` → `RUN`.
@@ -468,4 +468,4 @@ That is the whole calling convention.
 | This file | Learn: what you type, what instruction it becomes |
 | [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md) | Title checklist, version 1.0 vs 2.0, silicon holes |
 | [GAME_DESIGN.md](GAME_DESIGN.md) | How to write an HTML title that fits version 1.0 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Blocks and memories |
+| [lastrun_ARCHITECTURE.md](lastrun_ARCHITECTURE.md) | Who owns each byte |

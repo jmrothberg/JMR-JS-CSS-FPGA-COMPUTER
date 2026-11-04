@@ -89,12 +89,14 @@ class Machine:
         self.system_window = [0,0,0,0]
         self.system_menus = ''
         self.system_about = None
+        self.system_title = ''
         # Finder program menu masks. Bit 0 is command 160. All enabled
         # until the program says otherwise. Not part of the 4-byte window.
         self.system_menu_enable = 0xFFFFFFFF
         self.system_menu_check = 0
         self._finder_request = None
         self.system_viewport = False
+        self.system_bars = True
         self.system_compiling = False
         self.system_stage = 0
         self.system_progress = None
@@ -998,6 +1000,12 @@ class Machine:
         observed = image.decode()
         self._cmp_reset()
         self._ctx_baseline = 0
+        # A previous title's setTransform must not squash this one.
+        # MacPaint does not set a scale; Donkey does, on its own first frame.
+        self._ctx_tx = 0
+        self._ctx_ty = 0
+        self._ctx_sx = 1
+        self._ctx_sy = 1
         # Prompt/LIST Space must not arrive as the first game keydown.
         self.input.discard_queued_keys()
         self.html_host = None
@@ -1032,6 +1040,7 @@ class Machine:
         self.system_menus=hw._m.system_menus
         self.system_about=hw._m.system_about
         self.system_viewport=hw._m.system_viewport
+        self.system_bars=hw._m.system_bars
         # Finder (role 9) paints with the desktop's RGB332 indexes, so a
         # color icon and the gray-blue desktop match the built-in picture.
         if self.system_window[0]==9:

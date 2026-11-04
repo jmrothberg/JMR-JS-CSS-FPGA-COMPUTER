@@ -63,6 +63,9 @@ def test_real_rtl_keyboard_pixels_text_and_game_quit(tmp_path,monkeypatch):
     monkeypatch.delenv('JMR_SIM_HOST',raising=False)
     image=ProgramImage.from_chunk(compile_source(SOURCE),v2=True,value64=True)
     path=tmp_path/'key.jsh';path.write_bytes(bytes(image))
+    import shutil
+    disk=tmp_path/'card.img';shutil.copyfile(ROOT/'card.img',disk)
+    monkeypatch.setenv('JMR_CARD_IMG',str(disk))
     sim=module.SimBackend();ui=SystemMenu();model=JsHwVm();model.load_image(ProgramImage(bytes(image)))
     ui.window=tuple(model._m.system_window);ui.application_title='Keyboard test';ui.application_description='Test native keyboard input.'
     def click(x,y):
@@ -83,6 +86,15 @@ def test_real_rtl_keyboard_pixels_text_and_game_quit(tmp_path,monkeypatch):
             delta=[i//4 for i in range(0,len(right),4) if left[i+3]!=right[i+3] or right[i+3] and left[i:i+3]!=right[i:i+3]]
             assert not delta,(len(delta),delta[:25])
     try:
+        # Direct JSH injection must not overlap the real boot loader's SRAM writes.
+        from runtime.backend import parse_status_kv
+        sim._rpc('KEYEVT 32 1 32');sim._rpc('KEYEVT 32 0 0')
+        for _ in range(180):
+            sim._rpc('TICKN 1000')
+            boot=parse_status_kv(sim._rpc('VMSTAT?'))
+            if 'role=9 ' in sim._rpc('WINDOW?') and boot.get('raf',0)>0:break
+        else:raise AssertionError('Finder boot did not finish before direct injection')
+        sim._rpc('FRAME')
         assert sim._rpc('JSHLOAD '+str(path)).startswith('OK')
         sim._rpc('FRAME');same_overlay()
         click(10,10);same_overlay()
@@ -111,10 +123,13 @@ def test_real_rtl_keyboard_pixels_text_and_game_quit(tmp_path,monkeypatch):
         # File > Quit ends the actual VM; the ship contains About/Keyboard.
         click(36,8);same_overlay()
         sim.set_mouse(42,32,1);sim.set_mouse(42,32,0)
-        for _ in range(120):
-            sim._rpc('TICKN 100')
-            status=sim._rpc('STATUS?')
-            desktop=sim._rpc('DESKTOP?')
-            if 'running=0' in status and 'active=1' in desktop:break
-        assert 'running=0' in status and 'active=1' in desktop,(status,desktop)
+        # Program Finder owns the desktop now: it must load and paint a frame.
+        from runtime.backend import parse_status_kv
+        for _ in range(160):
+            sim._rpc('TICKN 1000')
+            status=sim._rpc('STATUS?');window=sim._rpc('WINDOW?')
+            vm=parse_status_kv(sim._rpc('VMSTAT?'))
+            if 'role=9 ' in window and vm.get('raf',0)>0:break
+        assert 'role=9 ' in window and vm.get('raf',0)>0,(status,window,vm)
+        assert vm.get('fault',0)==0
     finally:sim.shutdown()

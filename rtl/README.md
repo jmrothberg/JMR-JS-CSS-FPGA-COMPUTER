@@ -1,7 +1,8 @@
 # Synthesizable computer hardware
 
 `jmr_js_core.sv` joins the JS machine, console, disk, graphics and shared desktop.
-`top_nexys_video.sv` connects it to Nexys Video DDR3, HDMI, SD, USB/PS2 and audio.
+`top_nexys_video.sv` connects it to Nexys Video DDR3, HDMI, SD, and audio.
+Default jacks: USB keyboard on J15, PS/2 mouse on JA, second PS/2 mouse on JC, joystick on JB.
 `engines/` contains the machine engines; `video/` the display; `phys/` the physical links.
 
 The classic UI uses `jmr_classic_ui`, `jmr_system_menu`, `jmr_system_documents`,

@@ -5,9 +5,9 @@ alwaysApply: true
 
 # PYTHON → FPGA-SIM → board
 
-Words: [README.md — Words used](../../README.md#words-used-in-this-project).
+Words: [README.md — Words used](../../docs/WORDS.md#words-used-in-this-project).
 This is **copy 1** of the development ladder (copy 2:
-[README.md Method](../../README.md#method-steal-from-the-basic-sibling--not-the-product)).
+[README.md Method](../../docs/WORDS.md#method-steal-from-the-basic-sibling--not-the-product)).
 
 User-visible **glass** (READY, LOAD/RUN, JS/Canvas, errors) lands in order.
 Skip a rung and the machine is fake. Status:
