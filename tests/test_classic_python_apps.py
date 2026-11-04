@@ -143,7 +143,7 @@ def test_porting_example_uses_same_system_actions(app):
     b=app;run(b,'MENUEX.HTM');menu(b,'Example','Add One')
     assert b.machine._hw_vm.globals['count']==1
     menu(b,'Example','Reset');assert b.machine._hw_vm.globals['count']==0
-    menu(b,'File','Close');assert b.desktop.visible
+    menu(b,'File','Quit');assert b.desktop.visible
     for spec in ('Game|Bad=159','Game|A=160|B=160','File|Copy=160','x'*513):
         with pytest.raises(ValueError):parse_menus(spec)
 
@@ -168,21 +168,25 @@ def test_compiler_uses_common_window_without_changing_compiler(app):
     image=ProgramImage(b.machine.storage.load_bytes('CMTEST.JSH'))
     assert image.n_ops>0 and 'COMPILED CMTEST.JSH' in b.screen_text()
     b.framebuffer();assert b.system_menu.window[0]==7
-    menu(b,'File','Close');assert b.desktop.visible
+    menu(b,'File','Quit');assert b.desktop.visible
 
 def test_mouse_only_filename_and_replace_confirmation(app):
-    from functional_model.system_menu import KEYS
     b=app;run(b,'NOTE.HTM');text(b,'mouse save')
-    menu(b,'File','Save');assert b.system_keyboard
-    for char in 'mouse.txt':
-        i=next(i for i,row in enumerate(KEYS) if row[2]==ord(char))
-        click(b,22+(i%14)*44,324+(i//14)*33)
-    assert b.system_menu.classic.name=='mouse.txt'
-    click(b,22+(40%14)*44,324+(40//14)*33) # Mouse keyboard Enter.
+    menu(b,'File','Save');assert b.system_menu.classic.dialog=='save_as'
+    assert not b.system_keyboard
+    # A new note has no real name. The field is empty, not a blue UNTITLED.
+    assert b.system_menu.classic.name=='' and not b.system_menu.classic.name_selected
+    text(b,'mouse.txt');assert b.system_menu.classic.name=='mouse.txt'
+    assert b.system_menu.classic.caret==len('mouse.txt')
+    key(b,13,'Enter') # The real keyboard. The on-screen keyboard stays closed.
     frames(b,4)
     assert b.machine.storage.load_bytes('MOUSE.TXT')==b'mouse save'
     assert b.machine.running and not b.system_keyboard
-    menu(b,'File','Save As...');text(b,'OTHER.MD');key(b,13,'Enter');frames(b)
+    menu(b,'File','Save As...')
+    # The real name is kept, one character at a time. Typing does not wipe it.
+    assert b.system_menu.classic.name=='MOUSE.TXT' and not b.system_menu.classic.name_selected
+    for _ in range(9):key(b,8,'Backspace')
+    text(b,'OTHER.MD');key(b,13,'Enter');frames(b)
     assert b.system_menu.classic.dialog=='replace'
     assert b.machine.storage.load_bytes('OTHER.MD')==b'# Other\nDifferent document.\n'
     click(b,300,245) # Cancel overwrite; leave file and working document alone.

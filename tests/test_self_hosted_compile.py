@@ -187,8 +187,7 @@ def test_art_write2_packs_two_bytes_per_word():
 
 
 def test_art_write2_enforces_the_framebuffer_wall():
-    """This bound IS the FB wall in silicon — stronger than the mint check,
-    which jsb_format skips whenever JMR_SRAM_BYTES is set."""
+    """Art must stop before the resident-system reservation below video."""
     m = Machine()
     m._nat_art_write2(jsb_format.CART_WORDS - 1, 1, 2)  # last legal word
     with pytest.raises(RuntimeError, match="framebuffer wall"):
@@ -196,8 +195,11 @@ def test_art_write2_enforces_the_framebuffer_wall():
 
 
 def test_art_wall_matches_the_mint_time_constant():
-    assert jsb_format.CART_MAX_BYTES == jsb_format._FB_SRAM_BASE_BYTES
+    assert jsb_format.CART_MAX_BYTES == jsb_format.SYSTEM_CACHE_BASE * 2
     assert jsb_format.CART_WORDS * 2 == jsb_format.CART_MAX_BYTES
+    assert jsb_format._FB_SRAM_BASE_BYTES - jsb_format.CART_MAX_BYTES == 256 * 1024
+    assert jsb_format.FINDER_STATE_BASE * 2 == jsb_format.CART_MAX_BYTES + jsb_format.FINDER_CACHE_BYTES
+    assert jsb_format.FINDER_STATE_BASE * 2 + jsb_format.CSCR_WORDS <= jsb_format._FB_SRAM_BASE_BYTES
 
 
 def test_every_shipped_title_fits_under_the_art_wall():

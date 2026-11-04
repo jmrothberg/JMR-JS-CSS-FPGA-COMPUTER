@@ -230,12 +230,14 @@ them from `card.img`) breaks `READ` / `EDIT` / `COMPILE`.
 
 | File | READY verb | What it is |
 |---|---|---|
-| `storage/READ.HTML` | `READ` | Full-screen markdown reader (`READ.JSH`). Shows whatever `LOAD` parked, or `READ "NAME.MD"`. |
+| `storage/READ.HTML` | `READ` | Markdown reader (`READ.JSH`). `#` / `##` headings are twice body size and the marks are not drawn. `- ` / `* ` become an indented square. `>` is a quote. A line of dashes is a rule. |
 | `storage/EDITOR.HTML` | `EDIT` | Full-screen editor (`EDITOR.JSH`). Edits whatever `LOAD` parked. |
 | `storage/ARTSCAN.HTML` | `COMPILE` (first) | Compiler pass A: span map + art check (`ARTSCAN.JSH`). |
 | `storage/COMPILER.HTML` | `COMPILE` (then) | Compiler pass B: tokenize / parse / emit (`COMPILER.JSH`). |
 
-Keep the matching minted `.JSH` on the card (card-create mints them). Detail:
+`storage/GUIDEX.HTML` is a visible example, not one of those hidden engines. It is the small windowed tool to copy: alphabetical names, drag onto Trash, Desk → Empty Trash, and a heading drawn without its `#`. The real Finder behavior is the Python desktop (`functional_model/desktop.py`). The real document formatter is `READ.HTML`. Detail for the shared menus is [SYSTEM_APPLICATIONS.md](SYSTEM_APPLICATIONS.md).
+
+Keep the matching minted `.JSH` on the card (card-create mints them). `READ` and `GUIDEX` changes are ordinary card programs: they show up after `make_sd_image.py create`, because `RUN` loads the minted `.JSH`. Detail:
 [JS_COMMANDS.md](JS_COMMANDS.md) READY console, [ARCHITECTURE.md](ARCHITECTURE.md)
 standalone compile.
 

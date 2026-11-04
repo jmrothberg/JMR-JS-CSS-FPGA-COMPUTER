@@ -72,7 +72,16 @@ def test_titles_without_pictures_have_a_builtin_selection():
     stock = stock_images()
     assert [name for name, _image in stock] == [
         "Text", "Computer", "Folder", "Disk", "Trash", "Printer", "Case", "Generic",
-        "Asteroids", "Pac-Man", "Missiles", "Tank", "Ship", "Ball", "Star"]
+        "Asteroids", "Pac-Man", "Missiles", "Tank", "Ship", "Ball", "Star",
+        "Smile", "Picture", "Badge", "Ask", "Cards", "Mac", "Letter", "Diamond",
+        "Floppy", "Basket", "Press", "Bomb", "Cabinet", "Pencil", "Balloon",
+        "Papers", "Flag", "Suitcase", "Tab", "Watch", "Command", "Dog", "Speaker",
+        "Hands", "Eject",
+        "Rocks", "Saucer", "Thrust", "Chomp", "Ghost", "Pellet",
+        "Cities", "Battery", "Skyline", "Turret", "Duel", "Splatter",
+        "Curtain", "Catch", "Gems", "Red blue", "Overlap", "Pair",
+        "Grid", "Mosaic", "Swatch", "Sword", "Arch", "Potion",
+        "Amp", "Notes", "Wave", "Stick", "Pad", "Tilt"]
     assert len({image.tobytes() for _name, image in stock}) == len(stock)
 
 

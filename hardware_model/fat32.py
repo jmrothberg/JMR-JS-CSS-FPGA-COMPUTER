@@ -401,6 +401,21 @@ class Fat32Volume:
             out.append((self.decode_83(ent[0:11]), self._entry_size(ent)))
         return out
 
+    def list_root_finder(self) -> list[tuple[str, int, int, int]]:
+        """Root files as (name, size, DOS date, attribute). Finder fsList."""
+        out: list[tuple[str, int, int, int]] = []
+        for _c, _s, _o, ent in self._dir_entries():
+            if ent[0] == 0x00:
+                break
+            if ent[0] == 0xE5:
+                continue
+            attr = ent[11]
+            if attr == ATTR_LFN or attr & ATTR_VOLUME or attr & ATTR_DIR:
+                continue
+            date = ent[24] | (ent[25] << 8)
+            out.append((self.decode_83(ent[0:11]), self._entry_size(ent), date, attr))
+        return out
+
     def _entry_cluster(self, ent: bytes) -> int:
         return (
             ent[26]

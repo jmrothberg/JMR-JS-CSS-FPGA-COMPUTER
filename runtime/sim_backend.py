@@ -71,6 +71,7 @@ class SimBackend(RuntimeBackend):
         self._paging = False   # push_key already pumping — do not nest Enter
         self._editor_live = False  # interactive editor/reader uses the VM
         self._text_palette_synced = False
+        self._palette_role = None
         self._typed_log: list[str] = []  # typed monitor rows; never drop them
         self._edit_prefill: Optional[str] = None
         self._loaded_name: str = ""
@@ -1052,6 +1053,11 @@ class SimBackend(RuntimeBackend):
                 self._sync_native_source()
             self._desktop_status()
             live_status=self._rpc("STATUS?")
+            role=parse_status_kv(self._rpc("WINDOW?")).get("role",0)
+            if role!=self._palette_role:
+                # Finder selects RGB332 after VM startup. The earlier ASET
+                # palette must not remain cached on the host canvas.
+                self._sync_palette();self._palette_role=role
             if "text_app=0" in live_status:
                 self._text_palette_synced=False
             if "text_app=1" in live_status and "ready=0" in live_status:

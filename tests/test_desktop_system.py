@@ -70,6 +70,13 @@ function frame(){requestAnimationFrame(frame);}requestAnimationFrame(frame);
         _click(sim,model,150,8);_settle(sim)
         _click(sim,model,150,98);_settle(sim);_same_pixels(sim,model)
         assert model.hidden and model.list_view and _state(sim)['count']==42
+        # Expanded .ARTJS/.ARTX/.ICON captions use their displayed widths,
+        # including when the selected bar is drawn before the captions.
+        _click(sim,model,150,8);_settle(sim)
+        _click(sim,model,150,33);_settle(sim);_same_pixels(sim,model)
+        for slot in range(5):
+            _click(sim,model,model.wx+54+slot*102,model.wy+65)
+            _settle(sim);_same_pixels(sim,model)
         _click(sim,model,150,8);_settle(sim);_same_pixels(sim,model)
         _click(sim,model,150,98);_settle(sim);_same_pixels(sim,model)
         assert not model.hidden and not model.list_view and _state(sim)['count']==20
@@ -113,3 +120,67 @@ function frame(){requestAnimationFrame(frame);}requestAnimationFrame(frame);
             sim._rpc('TICKN 100');st=_state(sim)
         assert st['active'],(st,sim._rpc('STATUS?'))
     finally:sim.shutdown()
+
+
+def test_compile_program_open_and_compile(tmp_path,monkeypatch):
+    """Finder launches the tool; its native Open filters and compiles real HTML."""
+    from functional_model.machine import Machine
+    from runtime.backend import PythonBackend
+    from tools.make_sd_image import open_volume
+    import runtime.sim_backend as module
+    if not module._SYNTH.is_file():pytest.skip('desktop RTL not built')
+    monkeypatch.delenv('JMR_SIM_HOST',raising=False)
+    from functional_model.jsb_format import COMPILE_CHAIN
+    released=open_volume(ROOT/'card.img')
+    source=b'<canvas width="640" height="480"></canvas>\n<script>\nvar c=document.querySelector("canvas").getContext("2d");c.fillRect(1,2,3,4);\n</script>\n'
+    available={n for n,size in released.list_root_info()}
+    files=[(n,released.read_file(n)) for n in ('COMPILE.HTM','COMPILE.JSH',*COMPILE_CHAIN) if n in available]
+    files += [('CTEST.HTM',source),('HELP.MD',b'# Help'),('PLAIN.TXT',b'Notes'),('SCRIPT.JS',b'var x=1;')]
+    base_path=create_image(tmp_path/'base.img',include_storage=False,files=files,size_bytes=4*1024*1024)
+    volume=open_volume(base_path);volume.delete_file('CTEST.JSH')
+    base=bytes(volume.card.image)
+    for tag in ('PY','RTL'):(tmp_path/(tag+'.img')).write_bytes(base)
+    monkeypatch.setenv('JMR_CARD_IMG',str(tmp_path/'PY.img'));py=PythonBackend(Machine())
+    monkeypatch.setenv('JMR_CARD_IMG',str(tmp_path/'RTL.img'));sim=module.SimBackend()
+    def settle(predicate,limit=400):
+        for _ in range(limit):
+            st=sim._rpc('STATUS?');ui=sim._rpc('UISTATE?');w=sim._rpc('WINDOW?')
+            if predicate(st,ui,w):return
+            sim._rpc('TICKN 100')
+        raise AssertionError((st,ui,w,sim._rpc('SCREEN?')))
+    def click(x,y):
+        for b in (1,0):py.set_mouse(x,y,b);sim.set_mouse(x,y,b)
+        for _ in range(2):py.frame_tick();sim._rpc('FRAME')
+    def same_overlay():
+        py.framebuffer();sim._rpc('TICKN 10');sim._desktop_status()
+        a=sim._ui_overlays[0][4];e=py.system_menu.overlays()[0][4]
+        assert not any(a[i+3]!=e[i+3] or (e[i+3] and a[i:i+3]!=e[i:i+3]) for i in range(0,len(e),4))
+    try:
+        _settle(sim)
+        # No selection: Special -> Compile opens the desktop program.
+        click(210,8);click(210,95)
+        settle(lambda st,ui,w:'role=3' in w and 'vm_busy=1' in st and 'action=0' in ui)
+        same_overlay()
+        click(40,8);same_overlay()  # Open enabled; New/Save still grey.
+        click(45,53)
+        settle(lambda st,ui,w:'dialog=1' in ui and 'catalog=0' in ui)
+        same_overlay()
+        assert py.system_menu.classic.files==['CTEST.HTM']
+        click(430,254)
+        settle(lambda st,ui,w:'ready=1' in st and 'vm_busy=0' in st and 'action=0' in ui,4000)
+        assert '?NB' not in sim._rpc('SCREEN?')
+        assert 'error=0' in sim._rpc('UISTATE?') and 'dialog=0' in sim._rpc('UISTATE?')
+        assert open_volume(tmp_path/'RTL.img').read_file('CTEST.JSH')==open_volume(tmp_path/'PY.img').read_file('CTEST.JSH')
+        assert 'role=7' in sim._rpc('WINDOW?')
+        assert not _state(sim)['active']
+        same_overlay()
+        # Close then select the Compile icon: File -> Compile must RUN it.
+        click(22,46);_settle(sim)
+        click(55,100);_settle(sim)
+        click(45,8);click(45,53)
+        settle(lambda st,ui,w:'role=3' in w and 'vm_busy=1' in st)
+        same_overlay()
+        # An idle Compile launcher closes immediately; only active compilation waits.
+        click(22,46);_settle(sim)
+        assert _state(sim)['active'] and py.desktop.visible
+    finally:sim.shutdown();py.shutdown()

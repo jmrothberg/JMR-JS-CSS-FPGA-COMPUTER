@@ -101,7 +101,7 @@ def bitmap_row(text,y,width):
     return bits
 for name,texts,width,depth in [
     ('system_keys',key_labels,40,2048),
-    ('system_labels',['Keyboard','X','Hold keys','About'],64,64),
+    ('system_labels',['Keyboard','X','Hold keys','About','Note','Help','Utility'],64,128),
     ('system_about',['About Enterprise','HTML / JavaScript computer','Native mouse and keyboard','Memory: 8 MiB','OK'],256,128)]:
     words=[bitmap_row(t,y,width) for t in texts for y in range(16)]
     words += [0]*(depth-len(words))

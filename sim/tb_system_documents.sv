@@ -8,6 +8,7 @@ module tb_system_documents;
  logic error_pulse=0,descriptor_error=0;
  logic [7:0] key_code=0,key_char=0;
  logic [9:0] x=0;logic [8:0] y=0;logic [2:0] buttons=0;
+ logic [911:0] sys_config=jmr_classic_ui_pkg::SYS_CONFIG_DEFAULT;
  logic command_stb,catalog_go,catalog_done=0;
  logic [3:0] command,chosen_len,name_len;
  logic [95:0] chosen_name;
@@ -15,7 +16,8 @@ module tb_system_documents;
  logic [7:0] message_id;
  integer commands=0,cases_checked=0;
  jmr_system_documents dut(
-  .clk(clk),.rst_n(rst_n),.app_clear(app_clear),.window_state(32'd5),
+  .frame_tick(1'b0),.caret_on(),.caret_px(),.hot_button(),.flash_default(),
+  .clk(clk),.rst_n(rst_n),.app_clear(app_clear),.sys_config(sys_config),.window_state(32'd5),
   .source_name(128'd0),.source_len(5'd0),.unnamed(1'b1),.kernel_busy(1'b0),
   .error_pulse(error_pulse),.descriptor_error(descriptor_error),.request_stb(request_stb),.request_action(4'd4),.shortcut_save(1'b0),
   .sample_valid(sample_valid),.x(x),.y(y),.buttons(buttons),.keyboard_open(1'b0),
@@ -71,12 +73,25 @@ module tb_system_documents;
   check_name(".HTML","",0);check_name("NAME.","",0);
   check_name("A.LONG","",0);check_name("ABCDEFGHI","",0);
   check_name("ABC.DEF.GHI","",0);check_name("BAD NAME","",0);check_name("BAD/NAME","",0);
+  // Editing is at the insertion point, not always at the end.
+  open_name("ABC.TXT");pulse_key(37,0);pulse_key(37,0);pulse_key(37,0);pulse_key(37,0);
+  pulse_key(0,"X");pulse_key(8,0);pulse_key(0,"Y");pulse_key(46,0);pulse_key(13,0);
+  repeat(150)@(negedge clk);
+  if(chosen_name[55:0]!="TXTYCBA" || chosen_len!=7)$fatal(1,"caret insertion/deletion mismatch %h",chosen_name);
   // A click on Cancel must abort an in-flight normalization, not save later.
   open_name("CANCEL.TXT");pulse_key(13,0);
-  @(negedge clk);x=300;y=245;buttons=1;sample_valid=1;
+  @(negedge clk);x=300;y=226;buttons=1;sample_valid=1;
   @(negedge clk);buttons=0;@(negedge clk);sample_valid=0;
   repeat(150)@(negedge clk);
   if(dialog!=0 || commands!=0)$fatal(1,"Cancel published a pending save");
+  // Resource-driven dialog offsets must move the hit regions, not just paint.
+  open_name("MOVED.TXT");sys_config[47:32]=16'd20;sys_config[63:48]=16'd8;
+  sys_config[24*16+:16]=16'd300;sys_config[26*16+:16]=16'd100;
+  @(negedge clk);x=400;y=234;buttons=1;sample_valid=1;
+  @(negedge clk);buttons=0;@(negedge clk);sample_valid=0;
+  repeat(10)@(negedge clk);
+  if(dialog!=0 || commands!=0)$fatal(1,"moved Cancel did not follow the resource coordinates");
+  sys_config=jmr_classic_ui_pkg::SYS_CONFIG_DEFAULT;
   open_name("ESCAPE.TXT");pulse_key(13,0);pulse_key(27,0);repeat(150)@(negedge clk);
   if(dialog!=0 || commands!=0)$fatal(1,"Escape published a pending save");
   open_name("CLEAR.TXT");pulse_key(13,0);

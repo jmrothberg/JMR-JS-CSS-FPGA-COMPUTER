@@ -5,6 +5,7 @@ Pattern cite: JMR-BASIC-FPGA-COMPUTER/runtime/backend.py
 
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -514,6 +515,13 @@ class PythonBackend(RuntimeBackend):
         self._desktop_return = False
         from functional_model.system_menu import SystemMenu
         self.system_menu=SystemMenu()
+        from functional_model.system_resources import SystemResources
+        try:
+            resources=SystemResources(machine.storage.load_bytes('SYSTEM.SYS'))
+        except (FileNotFoundError,ValueError,OSError):
+            resources=SystemResources()
+        self.system_menu.resources=resources
+        self.system_menu.classic.resources=resources
         self.machine.system_progress=self._system_progress
         self._screen_line=""
         self._mouse_pending=None
@@ -523,6 +531,187 @@ class PythonBackend(RuntimeBackend):
         self._name_action=None
         self._last_notice=0
         self._compile_close_pending=False
+        self._finder_image=None
+        self._finder_resident=None
+        self._finder_home=self._finder_program()
+        if self._finder_home:self.desktop.visible=False
+
+    def _finder_program(self):
+        """True when the shell is the Finder program, not the built-in desktop.
+
+        auto (the default) turns on once FINDER.JSH is on the disk.
+        JMR_FINDER=program forces it. JMR_FINDER=builtin keeps desktop.py.
+        """
+        mode=os.environ.get('JMR_FINDER','auto')
+        if mode=='builtin':return False
+        if mode=='program':return True
+        try:
+            self.machine.storage.load_bytes('FINDER.JSH')
+            return True
+        except FileNotFoundError:
+            return False
+
+    def _finder_blob(self):
+        if self._finder_image is not None:return self._finder_image
+        # storage/FINDER.HTML is the program being edited. The card's
+        # FINDER.JSH is the older copy and was covering that picture.
+        src=Path(__file__).resolve().parents[1]/'storage'/'FINDER.HTML'
+        if src.is_file():
+            from tools.compile_js import compile_html_text, encode_html_chunk
+            blob=encode_html_chunk(compile_html_text(src.read_text(),source_path=src))
+        else:
+            blob=self.machine.storage.load_bytes('FINDER.JSH')
+        self._finder_image=blob
+        return blob
+
+    def _park_finder(self):
+        """Keep the running Finder in host RAM. The next program uses the one heap."""
+        m=self.machine
+        hw=m._hw_vm
+        if hw is None:return
+        from functional_model.jsb_format import CSCR_SRAM_BASE, CSCR_WORDS
+        sram=m.sram
+        n=sram.loaded_bytes
+        base=CSCR_SRAM_BASE*2
+        self._finder_resident={
+            'hw':hw,
+            'raf':list(getattr(m,'_finder_raf',[]) or []),
+            'window':tuple(m.system_window),
+            'menus':m.system_menus,
+            'about':m.system_about,
+            'viewport':m.system_viewport,
+            'palette':list(m.canvas.palette),
+            'sprites':list(m._sprites),
+            'spr':list(getattr(m,'_spr_descs',[]) or []),
+            'chunk':m._html_chunk,
+            'aset':bytes(sram.mem[:n]),
+            'stg':bytes(sram.mem[base:base+CSCR_WORDS*2]),
+        }
+
+    def _resume_finder(self):
+        """Put the parked Finder back. It does not read the disk or run start() again."""
+        r=self._finder_resident
+        if not r or not r['raf']:
+            self._finder_resident=None
+            return False
+        from functional_model.jsb_format import CSCR_SRAM_BASE
+        m=self.machine
+        hw=r['hw']
+        m.sram.mem[:len(r['aset'])]=r['aset']
+        m.sram.loaded_bytes=len(r['aset'])
+        base=CSCR_SRAM_BASE*2
+        m.sram.mem[base:base+len(r['stg'])]=r['stg']
+        m.canvas.palette=list(r['palette'])
+        m._sprites=list(r['sprites'])
+        m._spr_descs=list(r['spr'])
+        m.system_window=list(r['window'])
+        m.system_menus=r['menus']
+        m.system_about=r['about']
+        m.system_viewport=r['viewport']
+        m._html_chunk=r['chunk']
+        m._hw_vm=hw
+        m.vm=hw._m.vm
+        hw.canvas=m.canvas
+        hw.input=m.input
+        hw._m.canvas=m.canvas
+        hw._m.input=m.input
+        hw._m._sprites=list(m._sprites)
+        hw._value_raf=list(r['raf'])
+        hw.running=bool(r['raf'])
+        hw.error=None
+        m.running=hw.running
+        m._bytecode_html=True
+        m._edit_active=True
+        m._cmp_done=False
+        m._arch_phase='run'
+        m._nat_stg_write(16385,1)
+        self.desktop.visible=False
+        return True
+
+    def _finder_glass_blank(self):
+        """True when the desktop stripe was never painted (index 0)."""
+        c=self.machine.canvas
+        front=getattr(c,'front',None)
+        if not front:return True
+        return front[40*c.width+40]==0
+
+    def _pump_finder(self):
+        """Run the Finder's start frame and its paint before the GUI draws.
+
+        start() does not paint. The next frame does. Without this pump the
+        glass stays black, with only the menu bar, until something else
+        sets the dirty byte.
+        """
+        for _ in range(4):
+            if not self.machine.running:return
+            self.machine.frame_tick()
+            if not self._finder_glass_blank():return
+            self.machine._nat_stg_write(16385,1)
+
+    def _start_finder_program(self):
+        """Run FINDER.JSH. The built-in desktop stays in memory and hidden."""
+        from functional_model.jsb_format import ProgramImage
+        self._finder_home=False
+        self.desktop.visible=False
+        if self._resume_finder():
+            self._pump_finder()
+            return
+        try:
+            blob=self._finder_blob()
+        except Exception:
+            self.desktop.visible=True
+            self.desktop.refresh()
+            return
+        self.machine.hard_break(quiet=True)
+        self.desktop.visible=False
+        self.machine._start_html_image(ProgramImage(blob),share_machine=True)
+        # The editor uses this same SRAM. Its old "already started" flag
+        # made the new Finder skip start() and leave the cleared glass black.
+        self.machine._nat_stg_write(16384,0)
+        self.machine._nat_stg_write(16600,0)
+        self._pump_finder()
+
+    def _finder_launch(self,name,how):
+        """What the Finder program asked to run. Quit comes back here."""
+        how=int(how)
+        self.desktop.visible=False
+        self._finder_home=True
+        # Restart builds a fresh Finder. Leaving for a program keeps this one.
+        if how==8 or not name:self._finder_resident=None
+        elif getattr(self.machine,'system_window',[0])[0]==9:self._park_finder()
+        # The Finder VM just stopped. Land on the monitor before LOAD/RUN
+        # so the next program is not started inside the Finder's heap.
+        self.machine.hard_break(quiet=True)
+        self.desktop.visible=False
+        if how==8 or not name:
+            return
+        if how==4:
+            self._finder_home=False
+            self.machine.paint_monitor('> ')
+            return
+        if how==5:
+            self._perform_change(('tool','Note'));return
+        if how==6:
+            self._perform_change(('tool','Help'));return
+        if how==7:
+            self._perform_change(('tool','Utility'));return
+        self.machine.unnamed_document=False
+        self.machine.type_line('LOAD "'+name+'"')
+        suf=Path(name).suffix.upper()
+        if how==1:
+            self.machine.type_line('EDIT')
+        elif how==2 or (how==0 and suf not in ('.HTM','.HTML','.JS')):
+            self.machine.type_line('READ')
+        elif how==3:
+            try:
+                blob=self.machine.storage.load_bytes('COMPILE.JSH')
+            except FileNotFoundError:
+                self.machine.console_log.append('?NH')
+                return
+            from functional_model.jsb_format import ProgramImage
+            self.machine._start_html_image(ProgramImage(blob),share_machine=True)
+        else:
+            self.machine.type_line('RUN')
 
     def _system_progress(self):
         self.machine.paint_monitor()
@@ -642,8 +831,14 @@ class PythonBackend(RuntimeBackend):
                 elif command=='new':self._request_change(('new',self.system_menu.window[0]))
                 elif command=='open':
                     role=self.system_menu.window[0]
-                    suffixes=('.MD','.TXT') if role==2 else ('.MD','.TXT','.HTM','.HTML','.JS')
-                    files=[n for n,size in self.machine.storage.list_all() if Path(n).suffix.upper() in suffixes]
+                    # Reader opens documents. Compile opens HTML programs.
+                    # Editor and Note open either.
+                    if role==2:suffixes=('.MD','.TXT')
+                    elif role==3:suffixes=('.HTM','.HTML')
+                    else:suffixes=('.MD','.TXT','.HTM','.HTML','.JS')
+                    files=[n for n,size in self.machine.storage.list_all()
+                           if Path(n).suffix.upper() in suffixes
+                           and not (role==3 and Path(n).stem.upper()=='COMPILE')]
                     self.system_menu.classic.show_files(files)
                 elif command=='save':self._save_document()
                 elif command=='save_as':self._save_document(force_name=True)
@@ -668,7 +863,10 @@ class PythonBackend(RuntimeBackend):
                 elif pending:self._perform_change(pending)
             elif name=='replace':
                 target=self._replace_name;self.system_menu.classic.dialog=None
-                self._start_save(target)
+                if getattr(self,'_compile_save_as',False):
+                    self._compile_save_as=False
+                    self._compile_to(target,copy=True)
+                else:self._start_save(target)
             elif name=='keyboard' and action[1] and self.desktop.visible:
                 self.desktop.visible=False;self.machine.paint_monitor("> "+self._screen_line)
             elif name=='key':
@@ -704,6 +902,19 @@ class PythonBackend(RuntimeBackend):
                 self.machine._editor_resume=(0,0,0,0,role)
                 self.machine.type_line('EDIT')
             elif role==2:self.machine.type_line('READ')
+            elif role==3:
+                # Open parks the HTML. Save compiles that name. Save As
+                # writes a new program and leaves this one on the disk.
+                try:
+                    blob=self.machine.storage.load_bytes('COMPILE.JSH')
+                except FileNotFoundError:
+                    self.machine.console_log.append('?NH')
+                    self._desktop_return=True
+                    return
+                from functional_model.jsb_format import ProgramImage
+                self.machine._start_html_image(ProgramImage(blob), share_machine=True)
+                self._desktop_return=True
+                return
             else:
                 image=getattr(self,'_system_tool_image',None)
                 if image is not None:self.machine._start_html_image(image,share_machine=True)
@@ -742,12 +953,13 @@ class PythonBackend(RuntimeBackend):
         return (*values,int(m._nat_stg_read(52)))
 
     def _save_document(self,force_name=False,after=None,resume=True):
+        if self.system_menu.window[0]==3:
+            self._compile_save(force_name)
+            return
         if self.system_menu.window[0] not in (1,5):return
         self._after_save=after;self._save_should_resume=resume
         if force_name or getattr(self.machine,'unnamed_document',False):
-            self._name_keyboard_was=self.system_menu.keyboard
             self.system_menu.classic.show_name(self.machine.source_name or 'UNTITLED.TXT')
-            self.system_menu.keyboard=True
         else:self._start_save(self.machine.source_name)
 
     def _confirm_save_name(self,name):
@@ -757,6 +969,15 @@ class PythonBackend(RuntimeBackend):
         if not stem or len(stem)>8 or len(ext)>3 or Fat32Volume.decode_83(Fat32Volume.encode_83(name))!=name:
             self.system_menu.classic.message='Use 1-8 letters, then .TXT / .HTM / .MD';return
         existing={n.upper() for n,size in self.machine.storage.list_all()}
+        if getattr(self,'_compile_save_as',False):
+            if ext not in ('HTM',''):
+                self.system_menu.classic.message='Use 1-8 letters, then .HTM';return
+            if not ext:name=stem+'.HTM'
+            if name in existing and name!=self._compile_source_name():
+                self._replace_name=name;self.system_menu.classic.dialog='replace';return
+            self._compile_save_as=False
+            self._compile_to(name,copy=name!=self._compile_source_name())
+            return
         if name in existing and name!=self.machine.source_name.upper():
             self._replace_name=name;self.system_menu.classic.dialog='replace';return
         self._start_save(name)
@@ -769,7 +990,57 @@ class PythonBackend(RuntimeBackend):
         self._save_resume=True
         self._send_system_key(113)
 
+    def _compile_source_name(self):
+        """The opened program as an 8.3 .HTM name. Empty when nothing is parked."""
+        name=(self.machine.source_name or '').strip().upper()
+        stem,dot,ext=name.partition('.')
+        if ext=='HTML':ext='HTM'
+        if not stem:return ''
+        return stem[:8]+'.'+(ext or 'HTM')
+
+    def _compile_save(self,force_name):
+        """Save compiles the opened HTML. Save As writes a new program first."""
+        name=self._compile_source_name()
+        if (not name or name.startswith('COMPILE.') or not name.endswith('.HTM')
+                or not self.machine.source_lines):
+            self.system_menu.classic.message='Open an HTML program first.'
+            self.system_menu.classic.dialog='message'
+            return
+        if force_name:
+            self._compile_save_as=True
+            self.system_menu.classic.show_name(name)
+            return
+        self._compile_to(name,copy=False)
+
+    def _compile_to(self,name,copy):
+        """Mint name.JSH. copy writes the HTML under the new name and leaves the original."""
+        self.system_menu.classic.dialog=None
+        if hasattr(self,'_name_keyboard_was'):
+            self.system_menu.keyboard=self._name_keyboard_was;del self._name_keyboard_was
+        if copy and name!=self._compile_source_name():
+            body='\n'.join(self.machine.source_lines)
+            if body and not body.endswith('\n'):body+='\n'
+            # save_text drops a stale JSH of the new name. The original file is not touched.
+            self.machine.storage.save_text(name,body)
+            self.machine.source_name=name
+        self.machine.hard_break(quiet=True)
+        self.desktop.visible=False
+        self.machine.type_line('COMPILE')
+        if any(str(line).startswith('COMPILED') for line in self.machine.console_log[-4:]):
+            self.desktop.visible=True
+            self.desktop.refresh()
+
     def _desktop_action(self, action, name):
+        if action == "EMPTY":
+            # Empty Trash deletes the files the desktop is holding.
+            for held in list(self.desktop.trash):
+                self.machine.type_line('REMOVE "'+held+'"')
+            self.desktop.trash=[]
+            self.desktop.trash_open=False
+            self.desktop.visible=True
+            self.desktop.refresh()
+            self._desktop_return=True
+            return
         if action == "TERMINAL":
             self.machine.paint_monitor("> ")
             return
@@ -794,9 +1065,14 @@ class PythonBackend(RuntimeBackend):
         self.machine.hard_break(quiet=quiet)
         self.system_menu.classic.menu=0;self.system_menu.classic.dialog=None
         self.system_menu.classic.drag=False;self.system_menu.classic.capture=False
-        self.desktop.visible = True
-        self.desktop.refresh()
         self._desktop_return = False
+        if self._finder_program():
+            # The Finder program comes back. The built-in desktop stays hidden.
+            self.desktop.visible=False
+            self._finder_home=True
+        else:
+            self.desktop.visible = True
+            self.desktop.refresh()
 
     @property
     def more_waiting(self) -> bool:
@@ -805,11 +1081,15 @@ class PythonBackend(RuntimeBackend):
 
     def framebuffer(self):
         from functional_model.desktop import pointer_overlays
+        # The startup pictures own the glass. No menu bar over them.
+        if getattr(self, '_boot_glass', False):
+            self.machine.canvas.display_overlays = ()
+            return self.machine.canvas
         params=list(getattr(self.machine,'system_window',(0,0,0,0)))
         if self.desktop.visible:params=[0,0,0,0]
         elif getattr(self.machine,'system_compiling',False):params=[3,0,0,(getattr(self.machine,'system_stage',0)&7)<<4]
         elif not self.machine.running:params=[7,0,0,0]
-        elif params[0]>8:params[0]=6
+        elif params[0]>9:params[0]=6
         self.system_menu.window=tuple(params)
         defaults={0:('Finder','Manage programs and documents.'),
                   1:('Editor','Edit source code and text files.'),
@@ -818,20 +1098,29 @@ class PythonBackend(RuntimeBackend):
                   4:('Utility','Inspect files and disk space.'),
                   5:('Note','Write and save short text documents.'),
                   6:('System Tool','A shared-window system application.'),
-                  7:('Terminal','Enter commands for the computer.')}
+                  7:('Terminal','Enter commands for the computer.'),
+                  9:('Finder','Manage programs and documents.')}
         about=getattr(self.machine,'system_about',None) if self.machine.running and params[0]!=3 and not self.desktop.visible else None
         self.system_menu.application_title,self.system_menu.application_description=about or defaults.get(params[0],('Program','An HTML and JavaScript program.'))
         self.machine.canvas.display_game_viewport=bool(params[0]==8 and getattr(self.machine,'system_viewport',False))
         self.desktop.canvas.display_game_viewport=False
         self.system_menu.classic.configure(params[0],getattr(self.machine,'system_menus','') if self.machine.running and not self.desktop.visible else '')
+        self.system_menu.classic.menu_enable=getattr(self.machine,'system_menu_enable',0xFFFFFFFF)
+        self.system_menu.classic.menu_check=getattr(self.machine,'system_menu_check',0)
         self.system_menu.document_name=self.machine.source_name
+        self.system_menu.source_lines=list(self.machine.source_lines or [])
         self.system_menu.classic.document=self.machine.source_name
         self.system_menu.classic.can_undo=bool(params[3]&2)
         self.system_menu.classic.can_paste=bool(params[3]&4)
         self.system_menu.classic.has_selection=bool(params[3]&8)
         if self.machine.running and params[0] and self.machine._hw_vm is not None:
             self._system_tool_image=self.machine._hw_vm.program_image
-        overlays = self.system_menu.overlays() + pointer_overlays(self.desktop.x, self.desktop.y)
+        ui=self.system_menu.classic
+        ibeam=ui.dialog=='save_as' and 154<=self.desktop.x<364 and 150<=self.desktop.y<172
+        overlays = self.system_menu.overlays() + pointer_overlays(
+            self.desktop.x, self.desktop.y,
+            watch=bool(getattr(self.machine,'system_compiling',False)),
+            ibeam=ibeam)
         if self.desktop.visible:
             self.desktop.tick()
             self.desktop.canvas.display_overlays = overlays
@@ -840,6 +1129,7 @@ class PythonBackend(RuntimeBackend):
         return self.machine.canvas
 
     def frame_tick(self) -> None:
+        self.system_menu.classic.tick()
         self.machine.frame_tick()
         if self._save_resume and not self.machine.running:
             self._save_resume=None
@@ -860,10 +1150,27 @@ class PythonBackend(RuntimeBackend):
         if self._mouse_pending and self.machine.input.set_mouse(*self._mouse_pending):self._mouse_pending=None
         if self.system_menu.keyboard and not self.machine.running and not self.desktop.visible:
             self.machine.paint_monitor("> "+self._screen_line)
+        if getattr(self.machine,'_app_stopped',False):
+            self.machine._app_stopped=False
+            # File → Quit and the editor's cdone both stop the program.
+            # Come back to the Finder instead of leaving the black glass.
+            # A save that is about to reopen the editor already set running.
+            if self._finder_program() and not self.machine.running and not self.desktop.visible:
+                self._finder_home=True
         if self._desktop_return and not self.running:
-            self.desktop.visible = True
-            self.desktop.refresh()
             self._desktop_return = False
+            if self._finder_program():
+                self.desktop.visible=False
+                self._finder_home=True
+            else:
+                self.desktop.visible = True
+                self.desktop.refresh()
+        req=getattr(self.machine,'_finder_request',None)
+        if req:
+            self.machine._finder_request=None
+            self._finder_launch(*req)
+        if self._finder_home and not self.machine.running and not self.desktop.visible:
+            self._start_finder_program()
         self.desktop.tick()
 
     def paint_prompt(self, prompt: str, cursor_on: bool = False, cursor_col=None) -> None:

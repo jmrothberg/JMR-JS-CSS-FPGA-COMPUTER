@@ -12,7 +12,7 @@ end endfunction
 function automatic logic [3:0] desktop_icon_column(input logic [9:0] p);begin
 if(p<10'd408)begin if(p<10'd204)begin if(p<10'd102)begin desktop_icon_column=4'd0; end else begin desktop_icon_column=4'd1; end end else begin if(p<10'd306)begin desktop_icon_column=4'd2; end else begin desktop_icon_column=4'd3; end end end else begin if(p<10'd612)begin if(p<10'd510)begin desktop_icon_column=4'd4; end else begin desktop_icon_column=4'd5; end end else begin if(p<10'd714)begin desktop_icon_column=4'd6; end else begin desktop_icon_column=4'd7; end end end
 end endfunction
-function automatic logic [7:0] desktop_base(input logic [9:0] x,input logic [8:0] y,input logic [9:0] wx,input logic [8:0] wy,selected,input logic [8:0] page_base, input logic window_on,list_view,input logic [2:0] menu,input logic [1:0] dialog);
+function automatic logic [7:0] desktop_base(input logic [9:0] x,input logic [8:0] y,input logic [9:0] wx,input logic [8:0] wy,selected,input logic [8:0] page_base, input logic window_on,list_view,input logic [2:0] menu,input logic [1:0] dialog,input logic signed [10:0] selection_left,selection_right);
 logic signed [10:0] rx,ry;logic [3:0] slot;logic [9:0] mx;logic [8:0] mh;logic [7:0] c;begin
 rx=$signed({1'b0,x})-$signed({1'b0,wx});ry=$signed({2'b0,y})-$signed({2'b0,wy});c=((x^y)&1)!=0?8'h5b:8'h7b;
 if (x<640 && y<22) c=8'd255;
@@ -55,7 +55,7 @@ if(ry>=5 && ry<22 && desktop_stripe(5'(ry-5)) && ((rx>=24 && rx<204)||(rx>=344 &
 if(selected>=page_base && selected<page_base+9'd15)begin
 slot=4'(selected-page_base);
 if(list_view)begin if(rx>=24 && rx<514 && ry>=49+slot*19 && ry<67+slot*19)c=8'h17;end
-else if(rx>=10+desktop_column(slot)*102 && rx<98+desktop_column(slot)*102 && ry>=97+desktop_row(slot)*86 && ry<115+desktop_row(slot)*86)c=8'h17;
+else if(rx>=selection_left && rx<selection_right && ry>=97+desktop_row(slot)*86 && ry<115+desktop_row(slot)*86)c=8'h17;
 end end
 mx=(menu==1)?30:(menu==2)?84:(menu==3)?136:190;
 mh=((menu==1)?5:(menu==2)?1:(menu==3)?4:8)*21+8;
@@ -130,8 +130,8 @@ function automatic logic [9:0] caption_x(input logic [5:0] cap,input logic [9:0]
 2:caption_x=140;
 3:caption_x=194;
 4:caption_x=548;
-5:caption_x=572;
-6:caption_x=575;
+5:caption_x=583;
+6:caption_x=579;
 7:caption_x=wx+235;
 8:caption_x=wx+10;
 9:caption_x=wx+365;

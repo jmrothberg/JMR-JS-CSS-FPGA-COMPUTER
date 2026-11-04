@@ -1,8 +1,10 @@
 // Native shared menus: descriptor parsing, compact proportional text and input.
 // No JS heap or framebuffer is duplicated. Text RAM has scalar write/read ports.
 module jmr_classic_ui (
- input logic clk,rst_n,pixel_clk,app_clear,
- input logic [31:0] window_state,
+ input logic clk,rst_n,pixel_clk,app_clear,sys_we,
+ input logic [13:0] sys_addr,
+ input logic [15:0] sys_data,
+ input logic [31:0] window_state,menu_enable,menu_check,
  input logic [127:0] source_name,
  input logic [4:0] source_name_len,
  input logic external_label_valid,
@@ -32,9 +34,11 @@ module jmr_classic_ui (
  output logic [7:0] popup_static,
  output logic [5:0] popup_dynamic,
  output logic popup_enabled,
- output logic [63:0] popup_static_rows,
- output logic [47:0] popup_dynamic_rows,
- output logic [7:0] popup_enabled_rows,
+ output logic [95:0] popup_static_rows,
+ output logic [71:0] popup_dynamic_rows,
+ output logic [11:0] popup_enabled_rows,popup_checked_rows,
+ output logic [9:0] active_left,active_right,
+ output logic [3:0] hover_row,
  input logic [5:0] label_raddr,
  input logic signed [11:0] label_pos,
  input logic [9:0] beam_y,
@@ -44,6 +48,11 @@ module jmr_classic_ui (
  output logic [9:0] title_width
 );
  import jmr_classic_ui_pkg::*;
+ (* ram_style="distributed" *) logic [7:0] sys_headings [0:79];
+ initial for(integer i=0;i<80;i=i+1)sys_headings[i]=classic_char(110+i/16,i%16);
+ always_ff @(posedge clk)if(sys_we && sys_addr>=4608 && sys_addr<4648)begin
+  sys_headings[(sys_addr-4608)*2]<=sys_data[7:0];sys_headings[(sys_addr-4608)*2+1]<=sys_data[15:8];
+ end
  logic record_we,length_we;
  logic [5:0] record_row,record_col,length_row;
  logic [26:0] record_data;
@@ -72,7 +81,7 @@ module jmr_classic_ui (
  end
 
  jmr_classic_labels u_labels(.clk(clk),.rst_n(rst_n),.clear(app_clear),.pixel_clk(pixel_clk),
-  .record_we(record_we),.record_row(record_row),.record_col(record_col),.record_data(record_data),
+  .finder_mode(finder),.record_we(record_we),.record_row(record_row),.record_col(record_col),.record_data(record_data),
   .length_we(length_we),.length_row(length_row),.length_data(length_data),
   .read_row(label_raddr),.read_pos(label_pos),.beam_y(beam_y),.read_glyph(label_glyph));
  logic [127:0] filename_seen;
@@ -81,16 +90,41 @@ module jmr_classic_ui (
  logic [9:0] title_x;
  logic [6:0] text_chars,bar_chars;
  logic [9:0] text_x,bar_x;
- logic [1:0] parse_mode,parse_head,custom_count;
+ logic [1:0] parse_mode,parse_head;logic [2:0] custom_count;
+ wire finder=window_state[7:0]==9;
+ logic [5:0] parse_linear;logic [19:0] menu_bases;
  logic [3:0] parse_row;
  logic [7:0] parse_code;
  logic parse_digit;logic [31:0] used_commands;
  logic [287:0] headings;
  logic [11:0] heading_lengths;
- logic [11:0] row_counts;
+ logic [15:0] row_counts;
  // One local 32-byte command RAM, rather than 24 distributed FF write enables.
  (* ram_style="distributed" *) logic [7:0] commands [0:31];
  initial for(integer i=0;i<32;i=i+1)commands[i]=0;
+ // Serialize menu-mask expansion through one command read port. This avoids
+ // twelve parallel RAM reads and keeps the extra work off the VM/game path.
+ logic [2:0] cached_kind;logic [31:0] cached_enable,cached_check;
+ logic [3:0] mask_i;logic mask_busy;
+ logic [11:0] mask_enabled,mask_checked,mask_work_enabled,mask_work_checked;
+ wire [7:0] mask_command=commands[5'(menu_bases[cached_kind*5+:5]+mask_i)];
+ always_ff @(posedge clk)begin
+  if(!rst_n || app_clear)begin
+   cached_kind<=7;cached_enable<=0;cached_check<=0;mask_i<=0;mask_busy<=0;
+   mask_enabled<=0;mask_checked<=0;mask_work_enabled<=0;mask_work_checked<=0;
+  end else if(finder)begin
+   if(cached_kind!=menu_kind || cached_enable!=menu_enable || cached_check!=menu_check || (textq_stb && textq_last))begin
+    cached_kind<=menu_kind;cached_enable<=menu_enable;cached_check<=menu_check;
+    mask_i<=0;mask_busy<=1;mask_work_enabled<=0;mask_work_checked<=0;
+   end else if(mask_busy)begin
+    if(mask_i==12)begin mask_enabled<=mask_work_enabled;mask_checked<=mask_work_checked;mask_busy<=0;end
+    else begin
+     mask_work_enabled[mask_i]<=cached_enable[5'(mask_command-160)];
+     mask_work_checked[mask_i]<=cached_check[5'(mask_command-160)];mask_i<=mask_i+1'b1;
+    end
+   end
+  end
+ end
  logic about_description;
  logic [7:0] old_role;
  logic bar_pending;
@@ -114,7 +148,10 @@ module jmr_classic_ui (
    if(h<custom_count && heading_lengths[h*4+:4]==4 && headings[h*96+:32]==32'h656d6147)has_game=1;
   menu_kind=active_menu==0?0:bar_kinds[(active_menu-1)*4+:3];
   popup_left=active_menu==0?0:bar_lefts[(active_menu-1)*10+:10];
+  active_left=popup_left;
+  active_right=active_menu==0?0:bar_rights[(active_menu-1)*10+:10];
   if(popup_left>426)popup_left=426;
+
   popup_static=0;popup_dynamic=63;popup_enabled=1;selected_code=0;popup_count=0;click_enabled=1;
   case(menu_kind)
    0:begin
@@ -123,7 +160,7 @@ module jmr_classic_ui (
     else case(popup_row)
      0:begin popup_static=120;selected_code=1;popup_enabled=editable;end
      1:begin popup_static=121;selected_code=2;popup_enabled=editable || window_state[7:0]==2;end
-     2:begin popup_static=122;selected_code=0;end
+     2:begin popup_static=125;selected_code=0;end
      3:begin popup_static=123;selected_code=3;popup_enabled=editable;end
      default:begin popup_static=124;selected_code=4;popup_enabled=editable;end
     endcase
@@ -149,7 +186,7 @@ module jmr_classic_ui (
   case(menu_kind)
    0:begin
     selected_code=window_state[7:0]==8?0:click_row==0?1:click_row==1?2:click_row==2?0:click_row==3?3:4;
-    click_enabled=window_state[7:0]==8 || click_row==2 || (click_row==1?(editable || window_state[7:0]==2):editable);
+    click_enabled=window_state[7:0]==8 || click_row==2 || (click_row==1?(editable || window_state[7:0]==2 || window_state[7:0]==3):editable);
    end
    1:begin
     click_enabled=editable;
@@ -161,14 +198,21 @@ module jmr_classic_ui (
    3:click_enabled=window_state[7:0]!=3;
    default:click_enabled=1;
   endcase
+  if(finder)begin
+   popup_count=row_counts[menu_kind*4+:4];
+   popup_static=0;popup_dynamic=6'd16+{1'b0,menu_bases[menu_kind*5+:5]}+{2'd0,popup_row};
+   selected_code=commands[5'(menu_bases[menu_kind*5+:5]+click_row)];
+   click_enabled=selected_code>=160 && selected_code<=191 && menu_enable[selected_code-160];
+  end
+  hover_row=(x>=popup_left && x<popup_left+212 && click_row<popup_count)?click_row:4'd15;
  end
  always_comb begin
-  popup_static_rows=0;popup_dynamic_rows='1;popup_enabled_rows='1;
-  for(integer r=0;r<8;r=r+1)begin
+  popup_static_rows=0;popup_dynamic_rows='1;popup_enabled_rows='1;popup_checked_rows=0;
+  for(integer r=0;r<12;r=r+1)begin
    case(menu_kind)
     0:begin
-     popup_static_rows[r*8+:8]=window_state[7:0]==8?8'd125:8'(r==0?120:r==1?121:r==2?122:r==3?123:124);
-     popup_enabled_rows[r]=window_state[7:0]==8 || r==2 || (r==1?(editable || window_state[7:0]==2):editable);
+     popup_static_rows[r*8+:8]=window_state[7:0]==8?8'd125:8'(r==0?120:r==1?121:r==2?125:r==3?123:124);
+     popup_enabled_rows[r]=window_state[7:0]==8 || r==2 || (r==1?(editable || window_state[7:0]==2 || window_state[7:0]==3):editable);
     end
     1:begin
      popup_static_rows[r*8+:8]=8'(126+r);popup_enabled_rows[r]=editable;
@@ -181,15 +225,21 @@ module jmr_classic_ui (
     4:popup_static_rows[r*8+:8]=134;
     default:popup_dynamic_rows[r*6+:6]=6'(32+(menu_kind-5)*8+r);
    endcase
+   if(finder)begin
+    popup_static_rows[r*8+:8]=0;
+    popup_dynamic_rows[r*6+:6]=6'(16+menu_bases[menu_kind*5+:5]+r);
+    popup_enabled_rows[r]=mask_enabled[r];
+    popup_checked_rows[r]=mask_checked[r];
+   end
   end
  end
  assign consume_pointer=window_state[7:0]!=0 && !system_active && !guest_drag &&
   !(x<30 && y<22) && !(keyboard_open && y>=296) &&
-  (capture || active_menu!=0 || y<22 || (window_state[7:0]!=8 && !(x>=24 && x<600 && y>=88 && y<432)));
+  (capture || active_menu!=0 || y<22 || (window_state[7:0]!=8 && !finder && !(x>=24 && x<600 && y>=88 && y<432)));
  always_ff @(posedge clk)begin
   if(!rst_n)begin
    record_we<=0;record_row<=0;record_col<=0;record_data<=0;length_we<=0;length_row<=0;length_data<=0;metadata_active<=0;text_chars<=0;text_x<=0;
-   parse_digit<=0;used_commands<=0;parse_mode<=0;parse_head<=0;parse_row<=0;parse_code<=0;custom_count<=0;headings<=0;heading_lengths<=0;row_counts<=0;
+   parse_linear<=0;menu_bases<=0;parse_digit<=0;used_commands<=0;parse_mode<=0;parse_head<=0;parse_row<=0;parse_code<=0;custom_count<=0;headings<=0;heading_lengths<=0;row_counts<=0;
    about_description<=0;about_valid<=0;old_role<=0;bar_pending<=1;bar_phase<=0;bar_slot<=0;bar_kind<=0;bar_count<=0;bar_char<=0;bar_c<=0;bar_x<=34;bar_chars<=0;
    bar_lefts<=0;bar_rights<=0;bar_kinds<=0;old_buttons<=0;capture<=0;active_menu<=0;
    filename_seen<=0;filename_n_seen<=0;title_pending<=0;title_phase<=0;title_x<=0;title_char_i<=0;title_valid<=0;generation<=0;descriptor_error<=0;key_stb<=0;key_code<=0;action_stb<=0;action<=0;title_width<=0;
@@ -212,14 +262,14 @@ module jmr_classic_ui (
     logic [6:0] chars;
     logic [9:0] px;
     logic [1:0] mode,head;
-    logic [3:0] item;
+    logic [3:0] item;logic [5:0] linear;
     logic [7:0] number;
     logic digit,invalid,description;
     logic [31:0] used;
     logic command_write;logic [4:0] command_address;logic [7:0] command_data;
     command_write=0;command_address=0;command_data=0;
     chars=text_chars;px=text_x;
-    mode=parse_mode;head=parse_head;item=parse_row;number=parse_code;
+    mode=parse_mode;head=parse_head;item=parse_row;number=parse_code;linear=parse_linear;
     digit=parse_digit;used=used_commands;invalid=textq_first?0:descriptor_error;description=about_description;
     if(textq_first)begin metadata_active<=1;bar_phase<=0;bar_pending<=1;title_phase<=0;title_pending<=1;end
     if(textq_last)metadata_active<=0;
@@ -233,22 +283,27 @@ module jmr_classic_ui (
       if(!digit || number<160 || number>191)invalid=1;
       else if(used[number-160])invalid=1;
       else used[number-160]=1;
-      if(head<3 && item<8)begin command_write=1;command_address={head,item[2:0]};command_data=number;row_counts[head*4+:4]<=item+1'b1;end
+      if((finder && linear<32 && item<12) || (!finder && head<3 && item<8))begin command_write=1;command_address=finder?linear[4:0]:{head,item[2:0]};command_data=number;row_counts[head*4+:4]<=item+1'b1;end
       chars=0;px=0;number=0;digit=0;
-      if(textq_byte==";")begin if(head==2)invalid=1;else head=head+1'b1;item=0;mode=0;end
-      else begin if(item==7)invalid=1;else item=item+1'b1;mode=1;end
+      if(textq_byte==";")begin if(head==(finder?3:2))invalid=1;else begin head=head+1'b1;if(finder)menu_bases[head*5+:5]<=5'(linear+1'b1);end item=0;mode=0;end
+      else begin if(item==(finder?11:7))invalid=1;else item=item+1'b1;mode=1;end
+      if(finder)linear=linear+1'b1;
      end else invalid=1;
     end else if((textq_menu && textq_byte=="|" && mode==0) || (textq_menu && textq_byte=="=" && mode==1) || (!textq_menu && textq_byte=="|"))begin
      if(chars==0)invalid=1;
      if(textq_menu && mode==0)begin
-      if((chars==4 && (headings[head*96+:32]==32'h656c6946 || headings[head*96+:32]==32'h74696445 || headings[head*96+:32]==32'h77656956)) ||
-         (chars==7 && headings[head*96+:56]==56'h6c616963657053))invalid=1;
-      for(integer h=0;h<3;h=h+1)if(h<head && heading_lengths[h*4+:4]==chars && headings[h*96+:96]==headings[head*96+:96])invalid=1;
-      if(head<3)begin heading_lengths[head*4+:4]<=chars[3:0];custom_count<=head+1'b1;end
+      if(!finder)begin
+       if((chars==4 && (headings[head*96+:32]==32'h656c6946 || headings[head*96+:32]==32'h74696445 || headings[head*96+:32]==32'h77656956)) ||
+          (chars==7 && headings[head*96+:56]==56'h6c616963657053))invalid=1;
+       for(integer h=0;h<3;h=h+1)if(h<head && heading_lengths[h*4+:4]==chars && headings[h*96+:96]==headings[head*96+:96])invalid=1;
+       if(head<3)heading_lengths[head*4+:4]<=chars[3:0];
+      end
+      if(finder && chars!=(head==3?7:4))invalid=1;
+      custom_count<={1'b0,head}+1'b1;
       mode=1;
      end else begin
       if(!textq_menu && description)invalid=1;
-      if(head<3 && item<8)begin length_we<=1;length_row<=textq_menu?6'(32+head*8+item):6'd2;length_data<=chars;end
+      if(!textq_menu || (finder?linear<32 && item<12:head<3 && item<8))begin length_we<=1;length_row<=textq_menu?(finder?6'(16+linear):6'(32+head*8+item)):6'd2;length_data<=chars;end
       if(textq_menu)begin mode=2;digit=0;end else description=1;
      end
      chars=0;px=0;
@@ -257,9 +312,10 @@ module jmr_classic_ui (
         (textq_menu && ((mode==0 && chars>=12) || (mode==1 && chars>=24))) || (!textq_menu && !description && chars>=32))invalid=1;
      else begin
       if(!textq_menu || mode==1)begin
-       record_we<=1;record_row<=textq_menu?6'(32+head*8+item):description?6'd3:6'd2;record_col<=chars[5:0];
+       record_we<=1;record_row<=textq_menu?(finder?6'(16+linear):6'(32+head*8+item)):description?6'd3:6'd2;record_col<=chars[5:0];
        record_data<={10'(px+textq_advance),px,textq_byte[6:0]};
       end
+      if(textq_menu && mode==0 && finder && textq_byte!=classic_char(110+head,chars))invalid=1;
       if(textq_menu && mode==0 && head<3)headings[head*96+chars*8+:8]<=textq_byte;
       chars=chars+1'b1;px=px+textq_advance;
      end
@@ -267,12 +323,13 @@ module jmr_classic_ui (
     if(textq_last)begin
      if(textq_menu)begin
       if(!(textq_first && textq_byte==0))begin
-       if(mode!=2 || !digit || number<160 || number>191 || head>=3 || item>=8)invalid=1;
+       if(mode!=2 || !digit || number<160 || number>191 || (finder?(linear>=32 || item>=12):(head>=3 || item>=8)))invalid=1;
        else begin
         if(used[number-160])invalid=1;
-        command_write=1;command_address={head,item[2:0]};command_data=number;row_counts[head*4+:4]<=item+1'b1;
+        command_write=1;command_address=finder?linear[4:0]:{head,item[2:0]};command_data=number;row_counts[head*4+:4]<=item+1'b1;
        end
       end
+      if(finder && head!=3)invalid=1;
       bar_pending<=1;
      end else begin
       if(!description || chars==0)invalid=1;
@@ -282,7 +339,7 @@ module jmr_classic_ui (
     end
     if(command_write)commands[command_address]<=command_data;
     descriptor_error<=invalid;parse_digit<=digit;used_commands<=used;about_description<=description;
-    text_chars<=chars;text_x<=px;parse_mode<=mode;parse_head<=head;parse_row<=item;parse_code<=number;
+    parse_linear<=linear;text_chars<=chars;text_x<=px;parse_mode<=mode;parse_head<=head;parse_row<=item;parse_code<=number;
    end
    // Packet state resets with input capture, one clock BEFORE its first byte
    // is parsed. Thus first-byte selection does not precede every parser lookup.
@@ -290,7 +347,7 @@ module jmr_classic_ui (
    // invalid preceding packet must still produce its complete error pulse.
    if(!app_clear && text_stb && text_first)begin
     metadata_active<=1;text_chars<=0;text_x<=0;parse_mode<=0;parse_head<=0;
-    parse_row<=0;parse_code<=0;parse_digit<=0;used_commands<=0;about_description<=0;
+    parse_linear<=0;menu_bases<=0;parse_row<=0;parse_code<=0;parse_digit<=0;used_commands<=0;about_description<=0;
    end
    // A single scalar RAM write publishes a finished proportional text row.
    // Build the menu bar after metadata/role changes, never every game frame.
@@ -298,7 +355,8 @@ module jmr_classic_ui (
     0:if(bar_pending)begin bar_pending<=0;bar_chars<=0;bar_x<=34;bar_slot<=0;bar_char<=0;bar_phase<=1;end
     1:begin
      logic [3:0] kind;
-     if(window_state[7:0]==8)begin
+     if(finder)kind={1'b0,bar_slot};
+     else if(window_state[7:0]==8)begin
       if(bar_slot==0)kind=0;
       else if(!has_game && bar_slot==1)kind=4;
       else if(bar_slot-1-(!has_game)<custom_count)kind=5+bar_slot-1-(!has_game);
@@ -311,7 +369,7 @@ module jmr_classic_ui (
      bar_kind<=kind[2:0];bar_kinds[bar_slot*4+:4]<=kind;bar_lefts[bar_slot*10+:10]<=bar_x-4;bar_char<=0;bar_phase<=2;
     end
     2:begin
-     bar_c<=bar_kind>=5 ? (bar_char<heading_lengths[(bar_kind-5)*4+:4]?headings[(bar_kind-5)*96+bar_char*8+:8]:8'd0):classic_char(bar_kind==3?113:bar_kind==4?114:110+bar_kind,bar_char);
+     bar_c<=bar_kind>=5 ? (bar_char<heading_lengths[(bar_kind-5)*4+:4]?headings[(bar_kind-5)*96+bar_char*8+:8]:8'd0):sys_headings[{bar_kind,4'b0}+7'(bar_char)];
      bar_phase<=3;
     end
     3:begin
@@ -351,17 +409,23 @@ module jmr_classic_ui (
    if(sample_valid)begin
     old_buttons<=buttons;
     if(!buttons[0])capture<=0;
-    if(!old_buttons[0] && buttons[0])begin
+    if(active_menu!=0)begin
+     generation<=generation+1'b1;
+     if(buttons[0] && y<22)begin
+      for(integer i=0;i<7;i=i+1)if(i<bar_count && x>=bar_lefts[i*10+:10] && x<bar_rights[i*10+:10])active_menu<=4'(i+1);
+     end
+     if(old_buttons[0] && !buttons[0])begin
+      if(x>=popup_left && x<popup_left+212 && y>=26 && click_row<popup_count && click_enabled)begin
+       active_menu<=0;
+       if(selected_code>=128)begin key_stb<=1;key_code<=selected_code;end
+       else begin action_stb<=1;action<=selected_code[3:0];end
+      end else if(!(y<22 && x>=active_left && x<active_right))active_menu<=0;
+     end
+    end else if(!old_buttons[0] && buttons[0])begin
      if(x<30 && y<22)begin active_menu<=0;generation<=generation+1'b1;end
      else if(consume_pointer)begin
       capture<=1;generation<=generation+1'b1;
-      if(active_menu!=0)begin
-       active_menu<=0;
-       if(x>=popup_left && x<popup_left+212 && y>=26 && click_row<popup_count && click_enabled)begin
-        if(selected_code>=128)begin key_stb<=1;key_code<=selected_code;end
-        else begin action_stb<=1;action<=selected_code[3:0];end
-       end
-      end else if(y<22)begin
+      if(y<22)begin
        for(integer i=0;i<7;i=i+1)if(i<bar_count && x>=bar_lefts[i*10+:10] && x<bar_rights[i*10+:10])active_menu<=4'(i+1);
       end else if(x>=16 && x<30 && y>=40 && y<54)begin action_stb<=1;action<=0;end
       else if(x>=600 && x<620 && y>=88 && y<432)begin

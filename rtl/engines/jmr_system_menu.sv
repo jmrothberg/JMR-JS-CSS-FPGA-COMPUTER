@@ -2,7 +2,9 @@
 // Generated key events pass through the same FIFO and VM as physical keys.
 module jmr_system_menu (
  input logic clk,rst_n,
- input logic sample_valid,
+ input logic sample_valid,finder_mode,
+ output logic about_hot,tool_stb,
+ output logic [3:0] tool_action,
  input logic inject_stb,leave_app,
  input logic force_keyboard_stb,force_keyboard_on,dismiss_about,dismiss_menu,
  input logic [7:0] inject_code,
@@ -65,11 +67,13 @@ module jmr_system_menu (
  always_ff @(posedge clk)if(put)keys[wp]<=put_data;
  always_ff @(posedge clk)begin
   if(!rst_n)begin
+   about_hot<=0;tool_stb<=0;tool_action<=0;
    inject_release<=0;inject_release_code<=0;old_buttons<=0;guest_drag<=0;held<=0;held_code<=0;
    menu_open<=0;keyboard_open<=0;about_open<=0;shift_on<=0;caps_on<=0;ctrl_on<=0;alt_on<=0;pressed_index<=127;generation<=0;hold_keys<=0;held_keys<=0;release_walk<=127;held_f9<=120;held_f10<=121;
    quit_pulse<=0;terminal_pulse<=0;key_stb<=0;key_down<=0;key_code_o<=0;key_char_o<=0;
    ascii_stb<=0;ascii_data<=0;wp<=0;rp<=0;count<=0;put<=0;put_data<=0;cooldown<=0;release_mods<=0;
   end else begin
+   tool_stb<=0;
    put<=0;key_stb<=0;ascii_stb<=0;quit_pulse<=0;terminal_pulse<=0;
    case({put,pop})2'b10:count<=count+1'b1;2'b01:count<=count-1'b1;default:;endcase
    if(put)wp<=wp+1'b1;
@@ -111,17 +115,23 @@ module jmr_system_menu (
      guest_drag<=0;
      if(held)begin put<=1;put_data<={8'd0,held_code,1'b0};held<=0;pressed_index<=127;generation<=generation+1'b1;end
     end
+    if(about_open)begin
+     about_hot<=buttons[0] && x>=273 && x<369 && y>=269 && y<296;
+     generation<=generation+1'b1;
+     if(old_buttons[0] && !buttons[0] && x>=273 && x<369 && y>=269 && y<296)begin about_open<=0;about_hot<=0;end
+    end
+    if(consume_pointer && old_buttons[0] && !buttons[0] && menu_open)begin
+     if(x<190 && y>=26 && y<(finder_mode?131:68))begin
+      menu_open<=0;generation<=generation+1'b1;
+      if(y<47)about_open<=1;
+      else if(y<68)begin keyboard_open<=!keyboard_open;if(!keyboard_open)terminal_pulse<=1;else begin release_mods<=1;release_walk<=0;hold_keys<=0;end end
+      else begin tool_stb<=1;tool_action<=y<89?4'd11:y<110?4'd12:4'd10;end
+     end else if(!(x<30 && y<22))begin menu_open<=0;generation<=generation+1'b1;end
+    end
     if(consume_pointer && !old_buttons[0] && buttons[0])begin
      generation<=generation+1'b1;
-     if(about_open)begin
-      if(x>=273 && x<369 && y>=269 && y<296)about_open<=0;
-     end else if(menu_open)begin
-      menu_open<=0;
-      if(x<190 && y>=26 && y<68)begin
-       if(y<47)about_open<=1;
-       else begin keyboard_open<=!keyboard_open;if(!keyboard_open)terminal_pulse<=1;else begin release_mods<=1;release_walk<=0;hold_keys<=0;end end
-      end
-     end else if(x<30 && y<22)menu_open<=1;
+     if(about_open)begin end
+     else if(x<30 && y<22)menu_open<=!menu_open;
      else if(keyboard_open && y>=296)begin
       if(x>=600 && y<313)begin keyboard_open<=0;release_mods<=1;release_walk<=0;hold_keys<=0;end
       else if(x>=420 && x<585 && y<313)begin hold_keys<=!hold_keys;if(hold_keys)release_walk<=0;end

@@ -2,15 +2,15 @@
 module jmr_mouse_overlay (
  input logic [9:0] x,y,mouse_x,
  input logic [8:0] mouse_y,
- input logic show_pointer,
+ input logic show_pointer,ibeam,watch,
  output logic opaque,
  output logic [23:0] rgb
 );
  logic signed [11:0] cx,cy;
  logic [15:0] mask,bits;
  always_comb begin
-  cx=$signed({2'b0,x})-$signed({2'b0,mouse_x})+12'd1;
-  cy=$signed({2'b0,y})-$signed({3'b0,mouse_y})+12'd1;
+  cx=$signed({2'b0,x})-$signed({2'b0,mouse_x})+(ibeam && !watch?12'd7:12'd1);
+  cy=$signed({2'b0,y})-$signed({3'b0,mouse_y})+(ibeam && !watch?12'd7:12'd1);
   opaque=0;rgb=0;mask=0;bits=0;
   case(cy)
    0:begin mask=16'hc000;bits=16'h0000;end
@@ -30,6 +30,44 @@ module jmr_mouse_overlay (
    14:begin mask=16'h0780;bits=16'h0300;end
    15:begin mask=16'h0380;bits=16'h0000;end
    default:;
+  endcase
+  if(ibeam)case(cy)
+   0:begin mask=16'h3ef8;bits=16'h1c70;end
+   1:begin mask=16'h3ef8;bits=16'h1c70;end
+   2:begin mask=16'h1ef0;bits=16'h0440;end
+   3:begin mask=16'h0fe0;bits=16'h0440;end
+   4:begin mask=16'h07c0;bits=16'h0380;end
+   5:begin mask=16'h07c0;bits=16'h0380;end
+   6:begin mask=16'h07c0;bits=16'h0380;end
+   7:begin mask=16'h07c0;bits=16'h0380;end
+   8:begin mask=16'h07c0;bits=16'h0380;end
+   9:begin mask=16'h07c0;bits=16'h0380;end
+   10:begin mask=16'h0fe0;bits=16'h0440;end
+   11:begin mask=16'h1ef0;bits=16'h0440;end
+   12:begin mask=16'h3ef8;bits=16'h1c70;end
+   13:begin mask=16'h3ef8;bits=16'h1c70;end
+   14:begin mask=16'h1c70;bits=16'h0000;end
+   15:begin mask=16'h0000;bits=16'h0000;end
+   default:begin mask=0;bits=0;end
+  endcase
+  if(watch)case(cy)
+   0:begin mask=16'h0000;bits=16'h0000;end
+   1:begin mask=16'h07e0;bits=16'h07e0;end
+   2:begin mask=16'h0ff0;bits=16'h0c30;end
+   3:begin mask=16'h1ff8;bits=16'h1008;end
+   4:begin mask=16'h3ffc;bits=16'h2184;end
+   5:begin mask=16'h3ffc;bits=16'h2184;end
+   6:begin mask=16'h7ffe;bits=16'h4182;end
+   7:begin mask=16'h7ffe;bits=16'h40c2;end
+   8:begin mask=16'h7ffe;bits=16'h43c2;end
+   9:begin mask=16'h7ffe;bits=16'h4008;end
+   10:begin mask=16'h3ffc;bits=16'h2010;end
+   11:begin mask=16'h3ffc;bits=16'h2020;end
+   12:begin mask=16'h1ff8;bits=16'h1040;end
+   13:begin mask=16'h0ff0;bits=16'h0d80;end
+   14:begin mask=16'h07e0;bits=16'h0780;end
+   15:begin mask=16'h0000;bits=16'h0000;end
+   default:begin mask=0;bits=0;end
   endcase
   if(show_pointer && cx>=0 && cx<16 && cy>=0 && cy<16 && mask[15-cx])begin
    opaque=1;rgb=bits[15-cx]?24'h000000:24'hffffff;

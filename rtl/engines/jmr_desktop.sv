@@ -54,7 +54,7 @@
     typedef enum logic [4:0] {BOOT,CATALOG,CATALOG_WAIT,IDLE,BASE,ICON,
         ICON_STREAM,ICON_READ,ICON_READ_WAIT,CAPTION,CHAR_REQ,CHAR_WAIT,
         FONT_WAIT,GLYPH,PRESENT,PRESENT_WAIT,CMD_BUILD,CMD_NAME_WAIT,
-        CMD_SEND_WAIT,CMD_SEND,CMD_FINISH,CMD_NEXT,WAIT_APP,META_REQ,META_WAIT,FLUSH1,FLUSH2} state_t;
+        CMD_SEND_WAIT,CMD_SEND,CMD_FINISH,CMD_NEXT,WAIT_APP,META_REQ,META_WAIT,FLUSH1,FLUSH2,MEASURE_SELECTED,WIDTH_ADD} state_t;
     state_t state;
     logic enabled, window_on, list_view, dirty, refresh_pending;
     logic [9:0] wx, draw_wx;
@@ -86,6 +86,12 @@
     logic [5:0] cap;
     logic [4:0] char_i;
     logic [9:0] text_x,text_y;
+    // Reuse the serial caption reader and advance ROM, never a catalog mux
+    // in the pixel path. Only the selected bar's bounds survive base drawing.
+    logic measuring,measure_selected;
+    logic [7:0] label_width;
+    logic [9:0] label_center;
+    logic signed [10:0] selection_left,selection_right;
     logic [6:0] char_code;
     logic [3:0] glyph_x,glyph_y;
     logic [7:0] text_colour;
@@ -106,12 +112,14 @@
         label_data <= labels[label_addr];
     end
     logic [3:0] pending_action,action;
-    logic [1:0] pending_system_file,system_file;
+    logic [2:0] pending_system_file,system_file;
+    logic compile_name_match;
     logic [7:0] command_name_byte;
-    function automatic logic [7:0] system_name(input logic [1:0] file_id,input logic [4:0] i);
+    function automatic logic [7:0] system_name(input logic [2:0] file_id,input logic [4:0] i);
         case(file_id)
             1:case(i)0:system_name="H";1:system_name="E";2:system_name="L";3:system_name="P";4:system_name=".";5:system_name="M";6:system_name="D";default:system_name=0;endcase
             2:case(i)0:system_name="U";1:system_name="T";2:system_name="I";3:system_name="L";4:system_name="I";5:system_name="T";6:system_name="Y";7:system_name=".";8:system_name="H";9:system_name="T";10:system_name="M";default:system_name=0;endcase
+            4:case(i)0:system_name="C";1:system_name="O";2:system_name="M";3:system_name="P";4:system_name="I";5:system_name="L";6:system_name="E";7:system_name=".";8:system_name="H";9:system_name="T";10:system_name="M";default:system_name=0;endcase
             default:case(i)0:system_name="N";1:system_name="O";2:system_name="T";3:system_name="E";4:system_name=".";5:system_name="H";6:system_name="T";7:system_name="M";default:system_name=0;endcase
         endcase
     endfunction
@@ -140,7 +148,7 @@
     assign visible=enabled && !vm_busy && !game_mode;
     assign busy=(state!=IDLE && state!=WAIT_APP) ||
                 (visible && (dirty || refresh_pending)) || pending_action!=A_NONE;
-    assign console_hold=(state<=PRESENT_WAIT && state!=IDLE) || state==META_REQ || state==META_WAIT;
+    assign console_hold=(state<=PRESENT_WAIT && state!=IDLE) || state==META_REQ || state==META_WAIT || state==MEASURE_SELECTED || state==WIDTH_ADD;
     assign selected_o=selected;
     assign page_o=page;
     assign menu_o=menu;
@@ -247,6 +255,7 @@
             draw_count_hundreds<=32;draw_count_tens<=32;draw_count_ones<=48;draw_page_tens<=32;draw_page_ones<=49;
             draw_wx<=8;draw_wy<=34;draw_page<=0;draw_page_base<=0;draw_selected<=511;draw_menu<=0;draw_dialog<=0;draw_window<=1;draw_list<=0;
             px<=0;py<=0;linear<=0;icon_slot<=0;icon_pixel<=0;icon_origin_x<=0;icon_origin_y<=0;cap<=0;char_i<=0;text_x<=0;text_y<=0;
+            measuring<=0;measure_selected<=0;label_width<=0;label_center<=0;selection_left<=0;selection_right<=0;compile_name_match<=1;
             doc_label<=0;label_suffix<=0;dot_i<=31;char_code<=32;glyph_x<=0;glyph_y<=0;text_colour<=0;
             catalog_go<=0;icon_go<=0;pixel_we<=0;fb_swap<=0;pixel_x<=0;pixel_y<=0;pixel_data<=0;
             sram_req<=0;sram_we<=0;sram_addr<=0;sram_data<=0;key_push<=0;key_data<=0;
@@ -272,7 +281,7 @@
                     else if(pending_action!=A_NONE && console_ready && !disk_busy && !storage_busy)begin
                         action<=pending_action;system_file<=pending_system_file;pending_system_file<=0;pending_action<=A_NONE;enabled<=0;menu<=0;dialog<=0;
                         keyboard_mode<=0;
-                        cmd_i<=0;name_i<=0;cmd_second<=0;name_tail<=0;prefix_len<=pending_action==A_REMOVE?8:6;
+                        cmd_i<=0;name_i<=0;cmd_second<=0;name_tail<=0;compile_name_match<=1;prefix_len<=pending_action==A_REMOVE?8:6;
                         cmd_len<=0;state<=CMD_BUILD;
                     end else if(visible && dirty && !present_busy && !disk_busy)begin
                         draw_count_hundreds<=catalog_count_q<100?8'd32:8'(48+count_hundreds);
@@ -282,12 +291,21 @@
                         draw_page_ones<=8'(48+page_ones);
                         dirty<=0;draw_wx<=wx;draw_wy<=wy;draw_page<=page;draw_page_base<={4'd0,page}*9'd15;draw_selected<=selected;
                         draw_menu<=menu;draw_dialog<=dialog;draw_window<=window_on;draw_list<=list_view;draw_hidden<=show_hidden;
-                        px<=0;py<=0;linear<=0;state<=BASE;
+                        px<=0;py<=0;linear<=0;state<=MEASURE_SELECTED;
                     end
+                end
+                MEASURE_SELECTED: begin
+                    if(draw_window && !draw_list && draw_selected>=draw_page_base &&
+                       draw_selected<draw_page_base+9'd15 && draw_selected<catalog_count_q)begin
+                        cap<=6'(draw_selected-draw_page_base)+6'd14;
+                        label_center<=10'd54+10'(desktop_column(4'(draw_selected-draw_page_base))*10'd102);
+                        label_width<=0;measuring<=1;measure_selected<=1;
+                        char_i<=0;dot_i<=31;state<=META_REQ;
+                    end else state<=BASE;
                 end
                 BASE: begin
                     pixel_we<=1;pixel_x<=px;pixel_y<=py;
-                    pixel_data<=desktop_base(px,py,draw_wx,draw_wy,draw_selected,draw_page_base,draw_window,draw_list,draw_menu,draw_dialog);
+                    pixel_data<=desktop_base(px,py,draw_wx,draw_wy,draw_selected,draw_page_base,draw_window,draw_list,draw_menu,draw_dialog,selection_left,selection_right);
                     linear<=linear+1'b1;
                     if(px==639)begin px<=0;py<=py+1'b1;end else px<=px+1'b1;
                     if(linear==307199)begin icon_slot<=0;state<=ICON;end
@@ -328,6 +346,8 @@
                         text_x<=10'(caption_x(cap,draw_wx,draw_wy,draw_menu,draw_dialog,draw_page_base,catalog_count_q,draw_window,draw_list,disk_error,draw_hidden));
                         text_y<=10'(caption_y(cap,draw_wx,draw_wy,draw_menu,draw_dialog,draw_page_base,catalog_count_q,draw_window,draw_list,disk_error,draw_hidden));
                         text_colour<=(cap>=14 && cap<29 && draw_selected==caption_file_index)?8'd255:8'd0;
+                        measuring<=cap>=14 && cap<29 && !draw_list;measure_selected<=0;label_width<=0;
+                        label_center<=draw_wx+10'd54+10'(desktop_column(4'(cap-14))*10'd102);
                         char_i<=0;dot_i<=31;state<=(cap>=14 && cap<29)?META_REQ:CHAR_REQ;
                     end
                 end
@@ -359,10 +379,22 @@
                     end
                     if(cap==9 && char_i==5)ch=draw_page_tens;
                     if(cap==9 && char_i==6)ch=draw_page_ones;
-                    if(ch==0 || char_i==31 || (cap>=14 && cap<29 && (doc_label ? char_i==15 : (ch=="." || char_i==8))))begin cap<=cap+1'b1;state<=CAPTION;end
+                    if(ch==0 || char_i==31 || (cap>=14 && cap<29 && (doc_label ? char_i==15 : (ch=="." || char_i==8))))begin
+                        if(measuring)begin
+                            measuring<=0;char_i<=0;dot_i<=31;
+                            if(measure_selected)begin
+                                selection_left<=$signed({1'b0,label_center})-$signed({4'd0,label_width[7:1]})-11'sd3;
+                                selection_right<=$signed({1'b0,label_center})-$signed({4'd0,label_width[7:1]})+$signed({3'd0,label_width})+11'sd3;
+                                measure_selected<=0;state<=BASE;
+                            end else begin text_x<=label_center-{3'd0,label_width[7:1]};state<=CHAR_REQ;end
+                        end else begin cap<=cap+1'b1;state<=CAPTION;end
+                    end
                     else begin char_code<=ch<128?ch[6:0]:7'd63;glyph_x<=0;glyph_y<=0;state<=FONT_WAIT;end
                 end
-                FONT_WAIT: state<=GLYPH;
+                FONT_WAIT: state<=measuring?WIDTH_ADD:GLYPH;
+                WIDTH_ADD: begin
+                    label_width<=label_width+advance_data;char_i<=char_i+1'b1;state<=CHAR_REQ;
+                end
                 GLYPH: begin
                     if(font_data[15-glyph_x] && text_x+glyph_x<640 && text_y+glyph_y<480 &&
                        !covered(text_x+glyph_x,text_y+glyph_y,cap<29?0:cap<39?1:2))begin
@@ -392,8 +424,10 @@
                 CMD_NAME_WAIT: begin
                     if(command_name_byte!=0 && name_i<12)begin
                         cmd_we<=1;cmd_wa<={1'b0,cmd_i};cmd_wd<=command_name_byte;cmd_i<=cmd_i+1'b1;
+                        if(command_name_byte!=system_name(3'd4,name_i))compile_name_match<=0;
                         name_i<=name_i+1'b1;name_tail<={name_tail[23:0],command_name_byte};state<=CMD_BUILD;
                     end else begin
+                        if(action==A_COMPILE && compile_name_match && name_i==11)action<=A_OPEN;
                         cmd_we<=1;cmd_wa<={1'b0,cmd_i};cmd_wd<=34;cmd_i<=cmd_i+1'b1;state<=CMD_NEXT;
                     end
                 end
@@ -429,6 +463,9 @@
                 enabled<=control_on;dirty<=1;
                 keyboard_mode<=0;
                 if(control_on)begin refresh_pending<=1;if(state==WAIT_APP)state<=IDLE;end
+                // A native tool action now owns the app lifecycle. Do not
+                // let the old Finder launch return over its completion screen.
+                else if(state==WAIT_APP)begin state<=IDLE;app_seen<=0;end
             end
             if(mouse_pipe_valid)begin
                 buttons_q<=event_buttons;
@@ -490,7 +527,10 @@
                                             else begin pending_action<=A_OPEN;pending_system_file<=3;end
                                         end
                                         2:begin pending_action<=A_READ;if(selected>=catalog_count_q)pending_system_file<=1;end
-                                        3:if(selected<catalog_count_q)pending_action<=A_COMPILE;
+                                        3:begin
+                                            if(selected<catalog_count_q)pending_action<=A_COMPILE;
+                                            else begin pending_action<=A_OPEN;pending_system_file<=4;end
+                                        end
                                         4:begin pending_action<=A_OPEN;pending_system_file<=2;end
                                         5:begin pending_action<=A_OPEN;pending_system_file<=3;end
                                         6:begin pending_action<=A_READ;pending_system_file<=1;end

@@ -20,7 +20,9 @@ _HIDE_SUFFIX = {".JSH", ".JSB", ".ART", ".ARTX", ".ARTJS", ".ARJ", ".ICON", ".IC
 # the card as ordinary .HTML/.JSH pairs — that is what lets the machine one
 # day recompile its own compiler — but they are system software, not games,
 # and listing them buries the titles. Hidden by stem, so both halves go.
-_SYSTEM_STEMS = {"ARTSCAN", "ARTPNG", "COMPILER", "COMPIL2", "MINTASM", "EDITOR", "READ"}
+# FINDER is the Finder program, hidden the way the compiler engines are.
+# The built-in desktop in desktop.py is a different program and stays.
+_SYSTEM_STEMS = {"ARTSCAN", "ARTPNG", "COMPILER", "COMPIL2", "MINTASM", "EDITOR", "READ", "FINDER"}
 # FAST rewrites renamed the three product titles. Tests/battery must not
 # hard-require INVADERS.HTML / PACMAN.HTML / DONKEY.HTML on disk.
 _TITLE_STEM_ALIASES = {
@@ -79,6 +81,8 @@ class StorageEngine:
             for n in self._mount().catalog():
                 if Path(n).stem.upper() in _SYSTEM_STEMS:
                     continue
+                if Path(n).suffix.upper() == ".FDR":
+                    continue
                 if not all_files and Path(n).suffix.upper() in _HIDE_SUFFIX:
                     continue
                 names.append(n)
@@ -88,6 +92,8 @@ class StorageEngine:
                 continue
             if p.stem.upper() in _SYSTEM_STEMS:
                 continue
+            if p.suffix.upper() == ".FDR":
+                continue
             suf = p.suffix.upper()
             if all_files:
                 if suf in (".JS", ".HTML", ".HTM", ".PNG", ".DAT", ".JSH",
@@ -96,6 +102,28 @@ class StorageEngine:
             elif suf in (".JS", ".HTML", ".HTM", ".PNG", ".DAT", ".MD"):
                 names.append(p.name)
         return names
+
+    def list_finder_info(self) -> list[tuple[str, int, int, int]]:
+        """Every root file as (name, size, DOS date, FAT attr).
+
+        The Finder program reads this through fsList. Folders on the
+        desktop are not FAT directories; they live in DESKTOP.FDR.
+        """
+        import time
+        if self.card_img is not None:
+            if not self.card_img.is_file():
+                return []
+            return self._mount().list_root_finder()
+        out: list[tuple[str, int, int, int]] = []
+        for p in sorted(self.root.iterdir()):
+            if not p.is_file() or p.name.startswith("."):
+                continue
+            t = time.localtime(p.stat().st_mtime)
+            date = 0
+            if t.tm_year >= 1980:
+                date = ((t.tm_year - 1980) << 9) | (t.tm_mon << 5) | t.tm_mday
+            out.append((p.name, p.stat().st_size, date, 0))
+        return out
 
     def list_all(self) -> list[tuple[str, int]]:
         """Every card file with size. Includes .JSH/.JSB/.ART DIR hides."""

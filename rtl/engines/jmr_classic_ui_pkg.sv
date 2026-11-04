@@ -1277,6 +1277,58 @@ default:;endcase
 5:classic_char=8'd110;
 6:classic_char=8'd103;
 default:;endcase
+169:case(i)
+0:classic_char=8'd83;
+1:classic_char=8'd116;
+2:classic_char=8'd97;
+3:classic_char=8'd114;
+4:classic_char=8'd116;
+5:classic_char=8'd105;
+6:classic_char=8'd110;
+7:classic_char=8'd103;
+8:classic_char=8'd32;
+9:classic_char=8'd70;
+10:classic_char=8'd105;
+11:classic_char=8'd110;
+12:classic_char=8'd100;
+13:classic_char=8'd101;
+14:classic_char=8'd114;
+15:classic_char=8'd46;
+16:classic_char=8'd46;
+17:classic_char=8'd46;
+default:;endcase
+170:case(i)
+0:classic_char=8'd78;
+1:classic_char=8'd67;
+2:classic_char=8'd67;
+3:classic_char=8'd45;
+4:classic_char=8'd49;
+5:classic_char=8'd55;
+6:classic_char=8'd48;
+7:classic_char=8'd49;
+default:;endcase
+171:case(i)
+0:classic_char=8'd87;
+1:classic_char=8'd101;
+2:classic_char=8'd108;
+3:classic_char=8'd99;
+4:classic_char=8'd111;
+5:classic_char=8'd109;
+6:classic_char=8'd101;
+7:classic_char=8'd32;
+8:classic_char=8'd116;
+9:classic_char=8'd111;
+10:classic_char=8'd32;
+11:classic_char=8'd74;
+12:classic_char=8'd97;
+13:classic_char=8'd118;
+14:classic_char=8'd97;
+15:classic_char=8'd116;
+16:classic_char=8'd111;
+17:classic_char=8'd115;
+18:classic_char=8'd104;
+19:classic_char=8'd46;
+default:;endcase
 default:;endcase end endfunction
 function automatic logic [9:0] classic_width(input integer id);begin case(id)
 110:classic_width=10'd23;
@@ -1357,6 +1409,9 @@ function automatic logic [9:0] classic_width(input integer id);begin case(id)
 102:classic_width=10'd155;
 103:classic_width=10'd117;
 104:classic_width=10'd47;
+169:classic_width=10'd110;
+170:classic_width=10'd64;
+171:classic_width=10'd145;
 default:classic_width=0;endcase end endfunction
 function automatic logic [11:0] classic_glyph(input integer id,pos);begin classic_glyph=0;case(id)
 110:begin if(pos>=0 && pos<7)classic_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<11)classic_glyph={1'b1,7'd105,4'(pos-7)};if(pos>=11 && pos<15)classic_glyph={1'b1,7'd108,4'(pos-11)};if(pos>=15 && pos<23)classic_glyph={1'b1,7'd101,4'(pos-15)}; end
@@ -1437,6 +1492,9 @@ function automatic logic [11:0] classic_glyph(input integer id,pos);begin classi
 102:begin if(pos>=0 && pos<8)classic_glyph={1'b1,7'd67,4'(pos-0)};if(pos>=8 && pos<12)classic_glyph={1'b1,7'd108,4'(pos-8)};if(pos>=12 && pos<20)classic_glyph={1'b1,7'd111,4'(pos-12)};if(pos>=20 && pos<27)classic_glyph={1'b1,7'd115,4'(pos-20)};if(pos>=27 && pos<35)classic_glyph={1'b1,7'd101,4'(pos-27)};if(pos>=35 && pos<39)classic_glyph={1'b1,7'd32,4'(pos-35)};if(pos>=39 && pos<51)classic_glyph={1'b1,7'd119,4'(pos-39)};if(pos>=51 && pos<55)classic_glyph={1'b1,7'd105,4'(pos-51)};if(pos>=55 && pos<63)classic_glyph={1'b1,7'd110,4'(pos-55)};if(pos>=63 && pos<71)classic_glyph={1'b1,7'd100,4'(pos-63)};if(pos>=71 && pos<79)classic_glyph={1'b1,7'd111,4'(pos-71)};if(pos>=79 && pos<91)classic_glyph={1'b1,7'd119,4'(pos-79)};if(pos>=91 && pos<95)classic_glyph={1'b1,7'd32,4'(pos-91)};if(pos>=95 && pos<101)classic_glyph={1'b1,7'd116,4'(pos-95)};if(pos>=101 && pos<109)classic_glyph={1'b1,7'd111,4'(pos-101)};if(pos>=109 && pos<113)classic_glyph={1'b1,7'd32,4'(pos-109)};if(pos>=113 && pos<119)classic_glyph={1'b1,7'd114,4'(pos-113)};if(pos>=119 && pos<127)classic_glyph={1'b1,7'd101,4'(pos-119)};if(pos>=127 && pos<133)classic_glyph={1'b1,7'd116,4'(pos-127)};if(pos>=133 && pos<141)classic_glyph={1'b1,7'd117,4'(pos-133)};if(pos>=141 && pos<147)classic_glyph={1'b1,7'd114,4'(pos-141)};if(pos>=147 && pos<155)classic_glyph={1'b1,7'd110,4'(pos-147)}; end
 103:begin if(pos>=0 && pos<8)classic_glyph={1'b1,7'd68,4'(pos-0)};if(pos>=8 && pos<16)classic_glyph={1'b1,7'd101,4'(pos-8)};if(pos>=16 && pos<23)classic_glyph={1'b1,7'd99,4'(pos-16)};if(pos>=23 && pos<31)classic_glyph={1'b1,7'd111,4'(pos-23)};if(pos>=31 && pos<39)classic_glyph={1'b1,7'd100,4'(pos-31)};if(pos>=39 && pos<43)classic_glyph={1'b1,7'd105,4'(pos-39)};if(pos>=43 && pos<51)classic_glyph={1'b1,7'd110,4'(pos-43)};if(pos>=51 && pos<59)classic_glyph={1'b1,7'd103,4'(pos-51)};if(pos>=59 && pos<63)classic_glyph={1'b1,7'd32,4'(pos-59)};if(pos>=63 && pos<71)classic_glyph={1'b1,7'd97,4'(pos-63)};if(pos>=71 && pos<77)classic_glyph={1'b1,7'd114,4'(pos-71)};if(pos>=77 && pos<83)classic_glyph={1'b1,7'd116,4'(pos-77)};if(pos>=83 && pos<95)classic_glyph={1'b1,7'd119,4'(pos-83)};if(pos>=95 && pos<103)classic_glyph={1'b1,7'd111,4'(pos-95)};if(pos>=103 && pos<109)classic_glyph={1'b1,7'd114,4'(pos-103)};if(pos>=109 && pos<117)classic_glyph={1'b1,7'd107,4'(pos-109)}; end
 104:begin if(pos>=0 && pos<7)classic_glyph={1'b1,7'd76,4'(pos-0)};if(pos>=7 && pos<11)classic_glyph={1'b1,7'd105,4'(pos-7)};if(pos>=11 && pos<19)classic_glyph={1'b1,7'd110,4'(pos-11)};if(pos>=19 && pos<27)classic_glyph={1'b1,7'd107,4'(pos-19)};if(pos>=27 && pos<31)classic_glyph={1'b1,7'd105,4'(pos-27)};if(pos>=31 && pos<39)classic_glyph={1'b1,7'd110,4'(pos-31)};if(pos>=39 && pos<47)classic_glyph={1'b1,7'd103,4'(pos-39)}; end
+169:begin if(pos>=0 && pos<7)classic_glyph={1'b1,7'd83,4'(pos-0)};if(pos>=7 && pos<13)classic_glyph={1'b1,7'd116,4'(pos-7)};if(pos>=13 && pos<21)classic_glyph={1'b1,7'd97,4'(pos-13)};if(pos>=21 && pos<27)classic_glyph={1'b1,7'd114,4'(pos-21)};if(pos>=27 && pos<33)classic_glyph={1'b1,7'd116,4'(pos-27)};if(pos>=33 && pos<37)classic_glyph={1'b1,7'd105,4'(pos-33)};if(pos>=37 && pos<45)classic_glyph={1'b1,7'd110,4'(pos-37)};if(pos>=45 && pos<53)classic_glyph={1'b1,7'd103,4'(pos-45)};if(pos>=53 && pos<57)classic_glyph={1'b1,7'd32,4'(pos-53)};if(pos>=57 && pos<64)classic_glyph={1'b1,7'd70,4'(pos-57)};if(pos>=64 && pos<68)classic_glyph={1'b1,7'd105,4'(pos-64)};if(pos>=68 && pos<76)classic_glyph={1'b1,7'd110,4'(pos-68)};if(pos>=76 && pos<84)classic_glyph={1'b1,7'd100,4'(pos-76)};if(pos>=84 && pos<92)classic_glyph={1'b1,7'd101,4'(pos-84)};if(pos>=92 && pos<98)classic_glyph={1'b1,7'd114,4'(pos-92)};if(pos>=98 && pos<102)classic_glyph={1'b1,7'd46,4'(pos-98)};if(pos>=102 && pos<106)classic_glyph={1'b1,7'd46,4'(pos-102)};if(pos>=106 && pos<110)classic_glyph={1'b1,7'd46,4'(pos-106)}; end
+170:begin if(pos>=0 && pos<9)classic_glyph={1'b1,7'd78,4'(pos-0)};if(pos>=9 && pos<17)classic_glyph={1'b1,7'd67,4'(pos-9)};if(pos>=17 && pos<25)classic_glyph={1'b1,7'd67,4'(pos-17)};if(pos>=25 && pos<32)classic_glyph={1'b1,7'd45,4'(pos-25)};if(pos>=32 && pos<40)classic_glyph={1'b1,7'd49,4'(pos-32)};if(pos>=40 && pos<48)classic_glyph={1'b1,7'd55,4'(pos-40)};if(pos>=48 && pos<56)classic_glyph={1'b1,7'd48,4'(pos-48)};if(pos>=56 && pos<64)classic_glyph={1'b1,7'd49,4'(pos-56)}; end
+171:begin if(pos>=0 && pos<12)classic_glyph={1'b1,7'd87,4'(pos-0)};if(pos>=12 && pos<20)classic_glyph={1'b1,7'd101,4'(pos-12)};if(pos>=20 && pos<24)classic_glyph={1'b1,7'd108,4'(pos-20)};if(pos>=24 && pos<31)classic_glyph={1'b1,7'd99,4'(pos-24)};if(pos>=31 && pos<39)classic_glyph={1'b1,7'd111,4'(pos-31)};if(pos>=39 && pos<51)classic_glyph={1'b1,7'd109,4'(pos-39)};if(pos>=51 && pos<59)classic_glyph={1'b1,7'd101,4'(pos-51)};if(pos>=59 && pos<63)classic_glyph={1'b1,7'd32,4'(pos-59)};if(pos>=63 && pos<69)classic_glyph={1'b1,7'd116,4'(pos-63)};if(pos>=69 && pos<77)classic_glyph={1'b1,7'd111,4'(pos-69)};if(pos>=77 && pos<81)classic_glyph={1'b1,7'd32,4'(pos-77)};if(pos>=81 && pos<88)classic_glyph={1'b1,7'd74,4'(pos-81)};if(pos>=88 && pos<96)classic_glyph={1'b1,7'd97,4'(pos-88)};if(pos>=96 && pos<104)classic_glyph={1'b1,7'd118,4'(pos-96)};if(pos>=104 && pos<112)classic_glyph={1'b1,7'd97,4'(pos-104)};if(pos>=112 && pos<118)classic_glyph={1'b1,7'd116,4'(pos-112)};if(pos>=118 && pos<126)classic_glyph={1'b1,7'd111,4'(pos-118)};if(pos>=126 && pos<133)classic_glyph={1'b1,7'd115,4'(pos-126)};if(pos>=133 && pos<141)classic_glyph={1'b1,7'd104,4'(pos-133)};if(pos>=141 && pos<145)classic_glyph={1'b1,7'd46,4'(pos-141)}; end
 default:;endcase end endfunction
 function automatic logic [8:0] classic_game_y(input logic [9:0] y);
 logic [8:0] d;logic [4:0] skip;begin d=9'(y-10'd24);skip=0;
@@ -1575,62 +1633,82 @@ function automatic logic [11:0] classic_screen_glyph(input integer id,pos);begin
 101:begin if(pos>=0 && pos<6)classic_screen_glyph={1'b1,7'd62,4'(pos-0)}; end
 103:begin if(pos>=0 && pos<8)classic_screen_glyph={1'b1,7'd68,4'(pos-0)};if(pos>=8 && pos<16)classic_screen_glyph={1'b1,7'd101,4'(pos-8)};if(pos>=16 && pos<23)classic_screen_glyph={1'b1,7'd99,4'(pos-16)};if(pos>=23 && pos<31)classic_screen_glyph={1'b1,7'd111,4'(pos-23)};if(pos>=31 && pos<39)classic_screen_glyph={1'b1,7'd100,4'(pos-31)};if(pos>=39 && pos<43)classic_screen_glyph={1'b1,7'd105,4'(pos-39)};if(pos>=43 && pos<51)classic_screen_glyph={1'b1,7'd110,4'(pos-43)};if(pos>=51 && pos<59)classic_screen_glyph={1'b1,7'd103,4'(pos-51)};if(pos>=59 && pos<63)classic_screen_glyph={1'b1,7'd32,4'(pos-59)};if(pos>=63 && pos<71)classic_screen_glyph={1'b1,7'd97,4'(pos-63)};if(pos>=71 && pos<77)classic_screen_glyph={1'b1,7'd114,4'(pos-71)};if(pos>=77 && pos<83)classic_screen_glyph={1'b1,7'd116,4'(pos-77)};if(pos>=83 && pos<95)classic_screen_glyph={1'b1,7'd119,4'(pos-83)};if(pos>=95 && pos<103)classic_screen_glyph={1'b1,7'd111,4'(pos-95)};if(pos>=103 && pos<109)classic_screen_glyph={1'b1,7'd114,4'(pos-103)};if(pos>=109 && pos<117)classic_screen_glyph={1'b1,7'd107,4'(pos-109)}; end
 104:begin if(pos>=0 && pos<7)classic_screen_glyph={1'b1,7'd76,4'(pos-0)};if(pos>=7 && pos<11)classic_screen_glyph={1'b1,7'd105,4'(pos-7)};if(pos>=11 && pos<19)classic_screen_glyph={1'b1,7'd110,4'(pos-11)};if(pos>=19 && pos<27)classic_screen_glyph={1'b1,7'd107,4'(pos-19)};if(pos>=27 && pos<31)classic_screen_glyph={1'b1,7'd105,4'(pos-27)};if(pos>=31 && pos<39)classic_screen_glyph={1'b1,7'd110,4'(pos-31)};if(pos>=39 && pos<47)classic_screen_glyph={1'b1,7'd103,4'(pos-39)}; end
+169:begin if(pos>=0 && pos<7)classic_screen_glyph={1'b1,7'd83,4'(pos-0)};if(pos>=7 && pos<13)classic_screen_glyph={1'b1,7'd116,4'(pos-7)};if(pos>=13 && pos<21)classic_screen_glyph={1'b1,7'd97,4'(pos-13)};if(pos>=21 && pos<27)classic_screen_glyph={1'b1,7'd114,4'(pos-21)};if(pos>=27 && pos<33)classic_screen_glyph={1'b1,7'd116,4'(pos-27)};if(pos>=33 && pos<37)classic_screen_glyph={1'b1,7'd105,4'(pos-33)};if(pos>=37 && pos<45)classic_screen_glyph={1'b1,7'd110,4'(pos-37)};if(pos>=45 && pos<53)classic_screen_glyph={1'b1,7'd103,4'(pos-45)};if(pos>=53 && pos<57)classic_screen_glyph={1'b1,7'd32,4'(pos-53)};if(pos>=57 && pos<64)classic_screen_glyph={1'b1,7'd70,4'(pos-57)};if(pos>=64 && pos<68)classic_screen_glyph={1'b1,7'd105,4'(pos-64)};if(pos>=68 && pos<76)classic_screen_glyph={1'b1,7'd110,4'(pos-68)};if(pos>=76 && pos<84)classic_screen_glyph={1'b1,7'd100,4'(pos-76)};if(pos>=84 && pos<92)classic_screen_glyph={1'b1,7'd101,4'(pos-84)};if(pos>=92 && pos<98)classic_screen_glyph={1'b1,7'd114,4'(pos-92)};if(pos>=98 && pos<102)classic_screen_glyph={1'b1,7'd46,4'(pos-98)};if(pos>=102 && pos<106)classic_screen_glyph={1'b1,7'd46,4'(pos-102)};if(pos>=106 && pos<110)classic_screen_glyph={1'b1,7'd46,4'(pos-106)}; end
+170:begin if(pos>=0 && pos<9)classic_screen_glyph={1'b1,7'd78,4'(pos-0)};if(pos>=9 && pos<17)classic_screen_glyph={1'b1,7'd67,4'(pos-9)};if(pos>=17 && pos<25)classic_screen_glyph={1'b1,7'd67,4'(pos-17)};if(pos>=25 && pos<32)classic_screen_glyph={1'b1,7'd45,4'(pos-25)};if(pos>=32 && pos<40)classic_screen_glyph={1'b1,7'd49,4'(pos-32)};if(pos>=40 && pos<48)classic_screen_glyph={1'b1,7'd55,4'(pos-40)};if(pos>=48 && pos<56)classic_screen_glyph={1'b1,7'd48,4'(pos-48)};if(pos>=56 && pos<64)classic_screen_glyph={1'b1,7'd49,4'(pos-56)}; end
+171:begin if(pos>=0 && pos<12)classic_screen_glyph={1'b1,7'd87,4'(pos-0)};if(pos>=12 && pos<20)classic_screen_glyph={1'b1,7'd101,4'(pos-12)};if(pos>=20 && pos<24)classic_screen_glyph={1'b1,7'd108,4'(pos-20)};if(pos>=24 && pos<31)classic_screen_glyph={1'b1,7'd99,4'(pos-24)};if(pos>=31 && pos<39)classic_screen_glyph={1'b1,7'd111,4'(pos-31)};if(pos>=39 && pos<51)classic_screen_glyph={1'b1,7'd109,4'(pos-39)};if(pos>=51 && pos<59)classic_screen_glyph={1'b1,7'd101,4'(pos-51)};if(pos>=59 && pos<63)classic_screen_glyph={1'b1,7'd32,4'(pos-59)};if(pos>=63 && pos<69)classic_screen_glyph={1'b1,7'd116,4'(pos-63)};if(pos>=69 && pos<77)classic_screen_glyph={1'b1,7'd111,4'(pos-69)};if(pos>=77 && pos<81)classic_screen_glyph={1'b1,7'd32,4'(pos-77)};if(pos>=81 && pos<88)classic_screen_glyph={1'b1,7'd74,4'(pos-81)};if(pos>=88 && pos<96)classic_screen_glyph={1'b1,7'd97,4'(pos-88)};if(pos>=96 && pos<104)classic_screen_glyph={1'b1,7'd118,4'(pos-96)};if(pos>=104 && pos<112)classic_screen_glyph={1'b1,7'd97,4'(pos-104)};if(pos>=112 && pos<118)classic_screen_glyph={1'b1,7'd116,4'(pos-112)};if(pos>=118 && pos<126)classic_screen_glyph={1'b1,7'd111,4'(pos-118)};if(pos>=126 && pos<133)classic_screen_glyph={1'b1,7'd115,4'(pos-126)};if(pos>=133 && pos<141)classic_screen_glyph={1'b1,7'd104,4'(pos-133)};if(pos>=141 && pos<145)classic_screen_glyph={1'b1,7'd46,4'(pos-141)}; end
 default:;endcase end endfunction
-function automatic logic [16:0] classic_static_layout(input logic [7:0] id);begin case(id)
-8'd110:classic_static_layout={7'd4,10'd0};
-8'd111:classic_static_layout={7'd4,10'd4};
-8'd112:classic_static_layout={7'd4,10'd8};
-8'd113:classic_static_layout={7'd7,10'd12};
-8'd114:classic_static_layout={7'd4,10'd19};
-8'd142:classic_static_layout={7'd6,10'd23};
-8'd143:classic_static_layout={7'd4,10'd29};
-8'd144:classic_static_layout={7'd7,10'd33};
-8'd145:classic_static_layout={7'd2,10'd40};
-8'd146:classic_static_layout={7'd28,10'd42};
-8'd147:classic_static_layout={7'd17,10'd70};
-8'd148:classic_static_layout={7'd26,10'd87};
-8'd149:classic_static_layout={7'd26,10'd113};
-8'd150:classic_static_layout={7'd26,10'd139};
-8'd151:classic_static_layout={7'd6,10'd165};
-8'd152:classic_static_layout={7'd30,10'd171};
-8'd153:classic_static_layout={7'd32,10'd201};
-8'd154:classic_static_layout={7'd33,10'd233};
-8'd155:classic_static_layout={7'd37,10'd266};
-8'd156:classic_static_layout={7'd29,10'd303};
-8'd157:classic_static_layout={7'd36,10'd332};
-8'd158:classic_static_layout={7'd35,10'd368};
-8'd159:classic_static_layout={7'd32,10'd403};
-8'd161:classic_static_layout={7'd31,10'd435};
-8'd162:classic_static_layout={7'd17,10'd466};
-8'd163:classic_static_layout={7'd39,10'd483};
-8'd164:classic_static_layout={7'd22,10'd522};
-8'd165:classic_static_layout={7'd7,10'd544};
-8'd166:classic_static_layout={7'd35,10'd551};
-8'd167:classic_static_layout={7'd7,10'd586};
-8'd168:classic_static_layout={7'd31,10'd593};
-8'd81:classic_static_layout={7'd6,10'd624};
-8'd82:classic_static_layout={7'd6,10'd630};
-8'd83:classic_static_layout={7'd8,10'd636};
-8'd84:classic_static_layout={7'd7,10'd644};
-8'd85:classic_static_layout={7'd4,10'd651};
-8'd86:classic_static_layout={7'd11,10'd655};
-8'd87:classic_static_layout={7'd8,10'd666};
-8'd88:classic_static_layout={7'd4,10'd674};
-8'd89:classic_static_layout={7'd21,10'd678};
-8'd90:classic_static_layout={7'd8,10'd699};
-8'd91:classic_static_layout={7'd30,10'd707};
-8'd92:classic_static_layout={7'd24,10'd737};
-8'd93:classic_static_layout={7'd9,10'd761};
-8'd94:classic_static_layout={7'd15,10'd770};
-8'd95:classic_static_layout={7'd13,10'd785};
-8'd96:classic_static_layout={7'd18,10'd798};
-8'd97:classic_static_layout={7'd14,10'd816};
-8'd98:classic_static_layout={7'd1,10'd830};
-8'd99:classic_static_layout={7'd1,10'd831};
-8'd100:classic_static_layout={7'd1,10'd832};
-8'd101:classic_static_layout={7'd1,10'd833};
-8'd103:classic_static_layout={7'd16,10'd834};
-8'd104:classic_static_layout={7'd7,10'd850};
+function automatic logic [17:0] classic_static_layout(input logic [7:0] id);begin case(id)
+8'd120:classic_static_layout={7'd3,11'd0};
+8'd121:classic_static_layout={7'd7,11'd3};
+8'd122:classic_static_layout={7'd5,11'd10};
+8'd123:classic_static_layout={7'd4,11'd15};
+8'd124:classic_static_layout={7'd10,11'd19};
+8'd125:classic_static_layout={7'd4,11'd29};
+8'd126:classic_static_layout={7'd4,11'd33};
+8'd127:classic_static_layout={7'd3,11'd37};
+8'd128:classic_static_layout={7'd4,11'd40};
+8'd129:classic_static_layout={7'd5,11'd44};
+8'd130:classic_static_layout={7'd5,11'd49};
+8'd131:classic_static_layout={7'd10,11'd54};
+8'd132:classic_static_layout={7'd7,11'd64};
+8'd133:classic_static_layout={7'd9,11'd71};
+8'd134:classic_static_layout={7'd7,11'd80};
+8'd135:classic_static_layout={7'd8,11'd87};
+8'd136:classic_static_layout={7'd6,11'd95};
+8'd137:classic_static_layout={7'd6,11'd101};
+8'd138:classic_static_layout={7'd7,11'd107};
+8'd139:classic_static_layout={7'd7,11'd114};
+8'd140:classic_static_layout={7'd4,11'd121};
+8'd141:classic_static_layout={7'd4,11'd125};
+8'd142:classic_static_layout={7'd6,11'd129};
+8'd143:classic_static_layout={7'd4,11'd135};
+8'd144:classic_static_layout={7'd7,11'd139};
+8'd145:classic_static_layout={7'd2,11'd146};
+8'd146:classic_static_layout={7'd28,11'd148};
+8'd147:classic_static_layout={7'd17,11'd176};
+8'd148:classic_static_layout={7'd26,11'd193};
+8'd149:classic_static_layout={7'd26,11'd219};
+8'd150:classic_static_layout={7'd26,11'd245};
+8'd151:classic_static_layout={7'd6,11'd271};
+8'd152:classic_static_layout={7'd30,11'd277};
+8'd153:classic_static_layout={7'd32,11'd307};
+8'd154:classic_static_layout={7'd33,11'd339};
+8'd155:classic_static_layout={7'd37,11'd372};
+8'd156:classic_static_layout={7'd29,11'd409};
+8'd157:classic_static_layout={7'd36,11'd438};
+8'd158:classic_static_layout={7'd35,11'd474};
+8'd159:classic_static_layout={7'd32,11'd509};
+8'd160:classic_static_layout={7'd15,11'd541};
+8'd161:classic_static_layout={7'd31,11'd556};
+8'd162:classic_static_layout={7'd17,11'd587};
+8'd163:classic_static_layout={7'd39,11'd604};
+8'd164:classic_static_layout={7'd22,11'd643};
+8'd165:classic_static_layout={7'd7,11'd665};
+8'd166:classic_static_layout={7'd35,11'd672};
+8'd167:classic_static_layout={7'd7,11'd707};
+8'd168:classic_static_layout={7'd31,11'd714};
+8'd81:classic_static_layout={7'd6,11'd745};
+8'd82:classic_static_layout={7'd6,11'd751};
+8'd83:classic_static_layout={7'd8,11'd757};
+8'd84:classic_static_layout={7'd7,11'd765};
+8'd85:classic_static_layout={7'd4,11'd772};
+8'd86:classic_static_layout={7'd11,11'd776};
+8'd87:classic_static_layout={7'd8,11'd787};
+8'd88:classic_static_layout={7'd4,11'd795};
+8'd89:classic_static_layout={7'd21,11'd799};
+8'd91:classic_static_layout={7'd30,11'd820};
+8'd92:classic_static_layout={7'd24,11'd850};
+8'd93:classic_static_layout={7'd9,11'd874};
+8'd94:classic_static_layout={7'd15,11'd883};
+8'd95:classic_static_layout={7'd13,11'd898};
+8'd96:classic_static_layout={7'd18,11'd911};
+8'd97:classic_static_layout={7'd14,11'd929};
+8'd102:classic_static_layout={7'd22,11'd943};
+8'd103:classic_static_layout={7'd16,11'd965};
+8'd104:classic_static_layout={7'd7,11'd981};
+8'd169:classic_static_layout={7'd18,11'd988};
+8'd170:classic_static_layout={7'd8,11'd1006};
+8'd171:classic_static_layout={7'd20,11'd1014};
 default:classic_static_layout=0;endcase end endfunction
 function automatic logic [11:0] classic_direct_glyph(input logic [7:0] id,input logic signed [11:0] pos);begin classic_direct_glyph=0;case(id)
 8'd90:begin if(pos>=12'sd0 && pos<12'sd12)classic_direct_glyph={1'b1,7'd77,4'(pos-12'sd0)};if(pos>=12'sd12 && pos<12'sd20)classic_direct_glyph={1'b1,7'd111,4'(pos-12'sd12)};if(pos>=12'sd20 && pos<12'sd28)classic_direct_glyph={1'b1,7'd100,4'(pos-12'sd20)};if(pos>=12'sd28 && pos<12'sd32)classic_direct_glyph={1'b1,7'd105,4'(pos-12'sd28)};if(pos>=12'sd32 && pos<12'sd38)classic_direct_glyph={1'b1,7'd102,4'(pos-12'sd32)};if(pos>=12'sd38 && pos<12'sd42)classic_direct_glyph={1'b1,7'd105,4'(pos-12'sd38)};if(pos>=12'sd42 && pos<12'sd50)classic_direct_glyph={1'b1,7'd101,4'(pos-12'sd42)};if(pos>=12'sd50 && pos<12'sd58)classic_direct_glyph={1'b1,7'd100,4'(pos-12'sd50)}; end
@@ -1640,7 +1718,7 @@ function automatic logic [11:0] classic_direct_glyph(input logic [7:0] id,input 
 8'd101:begin if(pos>=12'sd0 && pos<12'sd6)classic_direct_glyph={1'b1,7'd62,4'(pos-12'sd0)}; end
 default:;endcase end endfunction
 function automatic logic [3:0] classic_click_row(input logic [8:0] y);begin
-if(y<9'd26 || y>=9'd194)classic_click_row=4'd15;
+if(y<9'd26 || y>=9'd278)classic_click_row=4'd15;
 else if(y<9'd47)classic_click_row=4'd0;
 else if(y<9'd68)classic_click_row=4'd1;
 else if(y<9'd89)classic_click_row=4'd2;
@@ -1648,5 +1726,39 @@ else if(y<9'd110)classic_click_row=4'd3;
 else if(y<9'd131)classic_click_row=4'd4;
 else if(y<9'd152)classic_click_row=4'd5;
 else if(y<9'd173)classic_click_row=4'd6;
-else classic_click_row=4'd7;end endfunction
+else if(y<9'd194)classic_click_row=4'd7;
+else if(y<9'd215)classic_click_row=4'd8;
+else if(y<9'd236)classic_click_row=4'd9;
+else if(y<9'd257)classic_click_row=4'd10;
+else classic_click_row=4'd11;end endfunction
+localparam logic [911:0] SYS_CONFIG_DEFAULT=912'h000000000000000000000000006400ea010e000000000000006e00ea00fa006e00ea0178006400ea0184006400ea010a006400ea0090000000000000006000d600fc005400d60098000000000000007000f40104007000f40182000100010000000000000000000000000000000000000000;
+function automatic logic [103:0] javatosh_ship(input logic [4:0] row);begin case(row)
+0:javatosh_ship=104'b00000000000000000000000111111111111111111111111111100000000000000000000000000011100000000000000000000000;
+1:javatosh_ship=104'b11111111111111111111111111111111111111111111111111111000000000000000000000001111110000000000000000000000;
+2:javatosh_ship=104'b11111111111111111111111111111111111111111111111111110000000000000000000000111111111100000000000000000000;
+3:javatosh_ship=104'b01111111111111111111111111111111111111111111111111110000000000000000000011111111111111100000000000000000;
+4:javatosh_ship=104'b01111111111111111111111111111111111111111111111111100000000110000000011111111111111111111111000000000000;
+5:javatosh_ship=104'b00111111111111111111111111111111111111111111111111100011111111111111111111111111111111111111111111100000;
+6:javatosh_ship=104'b00001000000000000111111111111111111111111111111111000011111111111111111111111111111111111111111111111111;
+7:javatosh_ship=104'b00000000000000000000000011111111111100000000000000000001111111111111111111111111111111111111111111111111;
+8:javatosh_ship=104'b00000000000000000000000000111111111110000000000000000001111111111111111111111111111111111100000000000000;
+9:javatosh_ship=104'b00000000000000000000000000001111111111000000000000000011111111111111111111111111111111100000000000000000;
+10:javatosh_ship=104'b00000000000000000000000000000011111111110000000000001111111111111110000000011111111110000000000000000000;
+11:javatosh_ship=104'b00000000000000000000000000000000111111111000000000011111111111111100000000000011110000000000000000000000;
+12:javatosh_ship=104'b00000000000000000000000000000000001111111100000000111111111111110000000000000000000000000000000000000000;
+13:javatosh_ship=104'b00000000000000000000000000000000000011111111000001111111111111100000000000000000000000000000000000000000;
+14:javatosh_ship=104'b00000000000000000000000000000000000001111111100011111111111111100000000000000000000000000000000000000000;
+15:javatosh_ship=104'b00000000000000000000000000000000000000011111111111111111111111100000000000000000000000000000000000000000;
+16:javatosh_ship=104'b00000000000000000000000000000000001111111111111111111111111111100000000000000000000000000000000000000000;
+17:javatosh_ship=104'b00000000000000000000000000000111111111111111111111111111111111111000000000000000000000000000000000000000;
+18:javatosh_ship=104'b00000000000000000000000000000111111111111111111111111111111111111100000000000000000000000000000000000000;
+19:javatosh_ship=104'b00000000000000000000000000001111111111111111111111111111111111111100000000000000000000000000000000000000;
+20:javatosh_ship=104'b00000000000000000000000000011111111111111111111111111111111111111100000000000000000000000000000000000000;
+21:javatosh_ship=104'b00000000000000000000000000011111111111111111111111111111111111111100000000000000000000000000000000000000;
+22:javatosh_ship=104'b00000000000000000000000000000000011111111111111111111111111111111100000000000000000000000000000000000000;
+23:javatosh_ship=104'b00000000000000000000000000000000000001111111111111111111111111111100000000000000000000000000000000000000;
+24:javatosh_ship=104'b00000000000000000000000000000000000000111111111111111111111111111000000000000000000000000000000000000000;
+25:javatosh_ship=104'b00000000000000000000000000000000000000011111111111111111111111000000000000000000000000000000000000000000;
+26:javatosh_ship=104'b00000000000000000000000000000000000000000000001111111111111000000000000000000000000000000000000000000000;
+default:javatosh_ship=0;endcase end endfunction
 endpackage

@@ -93,7 +93,7 @@ module jmr_system_actions (
      if(action_stb)begin
       operation<=action;old_role<=role;ready_age<=0;return_desktop<=0;app_seen<=0;defer_close<=0;
       need_after<=after_valid;return_action<=after_action;return_name<=after_name;return_len<=after_len;
-      if((action==0 || action==13) && role==3)begin defer_close<=1;state<=IDLE;end
+      if((action==0 || action==13) && role==3 && !idle_console)begin defer_close<=1;state<=IDLE;end
       else if(action==0 || action==13)begin quit_pulse<=1;state<=IDLE;end
       else if(action==3)state<=SAVE_KEY;
       else if(action==15)begin target_name<=chosen_name;target_len<=chosen_len;state<=SAVE_NAME;end
@@ -141,7 +141,7 @@ module jmr_system_actions (
         if((operation==14 && (old_role==1 || old_role==5)) || operation==7)begin
          doc_start<=1;doc_new<=0;doc_role<=operation==7?3'd1:old_role==5?3'd5:3'd1;state<=DOC_WAIT;
         end else if(operation==10)state<=CAT_START;
-        else begin command_mode<=2;char_i<=0;state<=SEND_WAIT;end
+        else begin command_mode<=(operation==14 && old_role==3)?3'd4:3'd2;char_i<=0;state<=SEND_WAIT;end
        end else if(command_mode==4)begin
         if(defer_close)quit_pulse<=1;
         state<=IDLE;

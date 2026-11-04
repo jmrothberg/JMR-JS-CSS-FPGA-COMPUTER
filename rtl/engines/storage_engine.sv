@@ -52,6 +52,10 @@ module storage_engine #(
     output logic [31:0] file_size_o,
     output logic [31:0] dir_size_o,
     input  logic        start_delete,
+    input logic start_rename=1'b0, // rename the currently open input file to name_addr
+    output logic not_found_o,
+    output logic [15:0] dir_date_o,
+    output logic [7:0] dir_attr_o,
 
     output logic [7:0]  line_len,         // bytes left in STORAGE_BUFFER
     output logic        eof,              // last read hit end of file
@@ -186,7 +190,8 @@ module storage_engine #(
         S_DEL0, S_DEL1, S_DEL2, S_DEL_RD, S_DEL_PK, S_DEL_WR, S_DEL_FC,
         S_DIR0, S_DIR_N, S_DIR_LD, S_DIR_LDC, S_DIR_EV, S_DIR_FMT, S_DIR_ADV,
         // NEW: OPEN dir scan follows the FAT chain (root >1 cluster)
-        S_DS_CHAIN
+        S_DS_CHAIN, S_APPEND_LOC, S_APPEND_NEXT, S_APPEND_SECTOR, S_APPEND_READY,
+        S_RENAME_READ, S_RENAME_PATCH, S_RENAME_WRITE
     } state_t;
 
     state_t state;
@@ -212,8 +217,11 @@ module storage_engine #(
     logic        in_ext;
 
     logic [31:0] f_first, f_size, f_pos;
+    logic [31:0] append_remaining;
     assign file_size_o = f_size;
     assign dir_size_o={dent[31],dent[30],dent[29],dent[28]};
+    assign dir_date_o={dent[25],dent[24]};
+    assign dir_attr_o=dent[11];
     logic [31:0] cur_clus, data_lba, buf_lba;
     logic [31:0] lba_off;  // NEW: pipeline (clus-2)<<spc then +data_start (WNS)
     logic [7:0]  sect_in_clus;
@@ -362,7 +370,8 @@ module storage_engine #(
                  || (dent[0]=="M" && dent[1]=="I" && dent[2]=="N" && dent[3]=="T"
                   && dent[4]=="A" && dent[5]=="S" && dent[6]=="M" && dent[7]==8'h20)
                  || (dent[0]=="R" && dent[1]=="E" && dent[2]=="A" && dent[3]=="D"
-                  && dent[4]==8'h20 && dent[5]==8'h20 && dent[6]==8'h20 && dent[7]==8'h20);
+                  && dent[4]==8'h20 && dent[5]==8'h20 && dent[6]==8'h20 && dent[7]==8'h20) || (dent[0]=="F" && dent[1]=="I" && dent[2]=="N" && dent[3]=="D"
+                  && dent[4]=="E" && dent[5]=="R" && dent[6]==8'h20 && dent[7]==8'h20);
 
     // FAT entry byte offset inside its sector
     wire [9:0] fg_off = {fg_clus[6:0], 2'b00};
@@ -464,6 +473,9 @@ module storage_engine #(
                 fs_buf_wdata = ent_byte(ent_i, f_first, f_size);
             end
             // NEW: REMOVE — poke dirent[0]=0xE5
+            S_RENAME_PATCH: begin
+                fs_buf_we=1;fs_buf_addr=dir_off[8:0]+{3'd0,ent_i};fs_buf_wdata=name83[ent_i];
+            end
             S_DEL_PK: begin
                 fs_buf_we = 1'b1; fs_buf_addr = dir_off[8:0]; fs_buf_wdata = 8'hE5;
             end
@@ -517,7 +529,7 @@ module storage_engine #(
             mounted <= 1'b0;
             part_lba <= 32'h0; fat_start <= 32'h0; data_start <= 32'h0;
             spf <= 32'h0; spc <= 8'h0; spc_shift <= 3'd0; nfats <= 8'h0; root_clus <= 32'h2;
-            mode_r <= 8'h0; chan_r <= 8'h0;
+            mode_r <= 8'h0; chan_r <= 8'h0;not_found_o<=0;append_remaining<=0;
             for (int k = 0; k < 11; k++) name83[k] <= 8'h20;
             nm_addr <= 16'h0; nm_len <= 8'h0; nm_i <= 8'h0;
             stem_i <= 8'h0; ext_i <= 8'h0; in_ext <= 1'b0;
@@ -559,6 +571,7 @@ module storage_engine #(
             unique case (state)
                 // ---------------- command dispatch ------------------------
                 S_IDLE: begin
+                    if(start_open || start_dir || start_dir_next || start_delete || start_rename)not_found_o<=0;
                     sink_busy_r <= 1'b0;
                     rsp <= 3'd0; // clean slate per op: no cross-op stack drift
 
@@ -632,6 +645,14 @@ module storage_engine #(
                             eof_r <= 1'b1;
                             state <= S_FIN;
                         end else state <= S_DIR_N;
+                    end else if (start_rename) begin
+                        if(mode_r!=8'h49)state<=S_ERR;
+                        else begin
+                            nm_addr<=name_addr;nm_len<=name_len;nm_i<=0;stem_i<=0;ext_i<=0;in_ext<=0;
+                            err_r<=0;eof_r<=0;bare_name<=0;
+                            for(int k=0;k<11;k++)name83[k]<=8'h20;
+                            push_call(S_NM_RD,S_RENAME_READ);
+                        end
                     end else if (start_delete) begin
                         nm_addr <= name_addr; nm_len <= name_len;
                         nm_i <= 8'h0; stem_i <= 8'h0; ext_i <= 8'h0; in_ext <= 1'b0;
@@ -1357,7 +1378,7 @@ module storage_engine #(
                                 endcase
                                 alt_try <= alt_try + 3'd1;
                                 push_call(S_DS_START, S_OP2);
-                            end else state <= S_ERR;
+                            end else begin not_found_o<=1;state<=S_ERR;end
                         end else begin
                             f_first      <= ent_clus;
                             f_size       <= ent_size;
@@ -1370,6 +1391,11 @@ module storage_engine #(
                             err_r        <= 1'b0;
                             state        <= S_PUB;
                         end
+                    end else if(mode_r==8'h41 && found_r)begin // A: append without a file copy
+                        mode_r<=8'h4f;f_first<=ent_clus;f_size<=ent_size;f_pos<=ent_size;
+                        cur_clus<=ent_clus;append_remaining<=ent_size;pub_i<=0;err_r<=0;
+                        if(ent_size==0)begin cur_clus<=0;wr_idx<=0;state<=S_PUB;end
+                        else state<=S_APPEND_LOC;
                     end else begin              // 'O' — create / overwrite
                         // NEW: bare SAVE "FOO" → resolve FOO.JS before create
                         if (bare_name && name83[8] == 8'h20 && alt_try == 3'd0) begin
@@ -1390,6 +1416,7 @@ module storage_engine #(
                     end
                 end
                 S_OP3: begin
+                    mode_r<=8'h4f;
                     f_first      <= 32'h0;
                     f_size       <= 32'h0;
                     f_pos        <= 32'h0;
@@ -1401,6 +1428,32 @@ module storage_engine #(
                     err_r        <= 1'b0;
                     state        <= S_PUB;
                 end
+
+                // Walk only the FAT chain, then read the partial final sector.
+                // One channel and the existing sector buffer suffice for append.
+                S_APPEND_LOC:begin
+                    if(append_remaining >= (32'd512<<spc_shift))begin
+                        append_remaining<=append_remaining-(32'd512<<spc_shift);
+                        fg_clus<=cur_clus;push_call(S_FG0,S_APPEND_NEXT);
+                    end else begin
+                        sect_in_clus<=8'(append_remaining>>9);wr_idx<={1'b0,append_remaining[8:0]};
+                        lba_off<=((cur_clus-32'd2)<<spc_shift)+(append_remaining>>9);state<=S_APPEND_SECTOR;
+                    end
+                end
+                S_APPEND_NEXT:begin
+                    if(fat_val>=32'h0ffffff8 && append_remaining==0)begin
+                        al_prev<=cur_clus;push_call(S_AL0,S_APPEND_READY);
+                    end else if(fat_val<2 || fat_val>=32'h0ffffff8)state<=S_ERR;
+                    else begin cur_clus<=fat_val;state<=S_APPEND_LOC;end
+                end
+                S_APPEND_READY:begin cur_clus<=al_clus;state<=S_APPEND_LOC;end
+                S_APPEND_SECTOR:begin
+                    data_lba<=data_start+lba_off;buf_lba<=data_start+lba_off;
+                    if(wr_idx!=0)sd_go(8'd2,data_start+lba_off,S_PUB);else state<=S_PUB;
+                end
+                S_RENAME_READ:begin ent_i<=0;sd_go(8'd2,dir_lba,S_RENAME_PATCH);end
+                S_RENAME_PATCH:if(ent_i==10)state<=S_RENAME_WRITE;else ent_i<=ent_i+1'b1;
+                S_RENAME_WRITE:begin buf_lba<=32'hffffffff;sd_go(8'd3,dir_lba,S_FIN);end
 
                 // ---------------- append one byte (PRINT#) ----------------
                 S_AP0: begin
@@ -1520,7 +1573,7 @@ module storage_engine #(
                             endcase
                             alt_try <= alt_try + 3'd1;
                             push_call(S_DS_START, S_DEL2);
-                        end else state <= S_ERR;
+                        end else begin not_found_o<=1;state<=S_ERR;end
                     end else sd_go(8'd2, dir_lba, S_DEL_RD);
                 end
                 S_DEL_RD: state <= S_DEL_PK;
@@ -1570,7 +1623,7 @@ module storage_engine #(
                         eof_r  <= 1'b1;
                         cat_on <= 1'b0;
                         state  <= S_FIN;
-                    end else if (dent[0] == 8'hE5 || dent[11] == 8'h0F || dent[11][3]) begin
+                    end else if (dent[0] == 8'hE5 || dent[11] == 8'h0F || dent[11][3] || (cat_raw && dent[11][4])) begin
                         state <= S_DIR_ADV; // skip
                     end else if (dent_sys && !cat_system) begin
                         state <= S_DIR_ADV; // EDITOR/COMPILER/ARTSCAN — not titles

@@ -1,10 +1,14 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>Shared menu example</title></head>
 <body><canvas id="c" width="640" height="480"></canvas><script>
-// A small working porting example. The system draws and handles the chrome.
+// Copy this for a game. A game is systemWindow 8 and fills the screen.
+// The system draws the menu bar, the keyboard, and every dialog.
+// Open the keyboard from the apple menu. A program does not open it.
+// File Save is the system box. Do not draw Save, Cancel, or a name field.
+// A command is a keyCode from systemMenus, handled below.
 var ctx=document.getElementById("c").getContext("2d");
 ctx.systemAbout="Menu Example|A small example of shared system menus.";
-ctx.systemWindow=6; // Tool window. Use 8 for a game with only a top menu bar.
+ctx.systemWindow=6; // A window. Games use 8 and stay full screen. See GUIDEX.HTML.
 ctx.systemMenus="Example|Add One=160|Reset=161";
 var count=0;
 var redraw=1;
@@ -17,7 +21,7 @@ function frame(){
     ctx.fillStyle="#FFFFFF";ctx.fillRect(24,88,576,344);
     ctx.fillStyle="#000000";ctx.font="16px monospace";
     ctx.fillText("Shared menu example",40,120);
-    ctx.fillText("Choose Example > Add One or Reset.",40,152);
+    ctx.fillText("Menus and dialogs are drawn by the system.",40,152);
     ctx.fillText("Count:",40,200);ctx.fillText(count,152,200);
     redraw=0;
   }

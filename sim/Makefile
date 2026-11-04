@@ -72,7 +72,7 @@ tb_ps2_typing: $(BUILD)/tb_ps2_typing
 $(BUILD)/tb_ps2_typing: tb_ps2_typing.cpp tb_ps2_typing_top.sv \
 		$(RTL)/phys/ps2_rx.sv $(RTL)/phys/ps2_decode.sv \
 		$(RTL)/engines/jmr_keyboard_fifo.sv $(RTL)/engines/jmr_video_vram.sv \
-		$(RTL)/engines/jmr_console_engine.sv
+		$(RTL)/engines/jmr_js_vm_pkg.sv $(RTL)/engines/jmr_console_engine.sv
 	mkdir -p $(BUILD)
 	verilator -cc -exe -build -j 0 \
 		-Mdir $(BUILD)/obj_ps2_typing \
@@ -83,7 +83,7 @@ $(BUILD)/tb_ps2_typing: tb_ps2_typing.cpp tb_ps2_typing_top.sv \
 		tb_ps2_typing_top.sv \
 		$(RTL)/phys/ps2_rx.sv $(RTL)/phys/ps2_decode.sv \
 		$(RTL)/engines/jmr_keyboard_fifo.sv $(RTL)/engines/jmr_video_vram.sv \
-		$(RTL)/engines/jmr_console_engine.sv \
+		$(RTL)/engines/jmr_js_vm_pkg.sv $(RTL)/engines/jmr_console_engine.sv \
 		tb_ps2_typing.cpp
 
 font: $(FONT)
@@ -111,18 +111,18 @@ CORE_SRCS := \
     $(RTL)/engines/jmr_desktop_layout_pkg.sv \
     $(RTL)/engines/jmr_icon_stream.sv \
     $(RTL)/engines/jmr_desktop_disk.sv \
-    $(RTL)/engines/jmr_desktop.sv \
+    $(RTL)/engines/jmr_finder_shell.sv $(RTL)/engines/jmr_desktop.sv \
     $(RTL)/engines/jmr_mouse_events.sv \
 	$(RTL)/engines/jmr_keyboard_fifo.sv \
 	$(RTL)/engines/jmr_video_vram.sv \
-	$(RTL)/engines/jmr_console_engine.sv \
+	$(RTL)/engines/jmr_js_vm_pkg.sv $(RTL)/engines/jmr_console_engine.sv \
 	$(RTL)/engines/jmr_mini_fb.sv \
 	$(RTL)/engines/jmr_fb_present.sv \
 	$(RTL)/engines/jmr_raster_engine.sv \
 	$(RTL)/engines/jmr_fb_scanout.sv \
 	$(RTL)/engines/jmr_rectdemo_engine.sv \
 	$(RTL)/engines/jmr_value.sv \
-	$(RTL)/engines/jmr_js_vm_pkg.sv \
+	$(RTL)/engines/jmr_finder_fs.sv \
 	$(RTL)/engines/jmr_js_vm_exec64.sv \
 	$(RTL)/engines/jmr_js_vm.sv \
 	$(RTL)/engines/jmr_sram_model.sv \

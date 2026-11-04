@@ -15,6 +15,12 @@ module jmr_js_core #(
     // outside the VM fails, and jmr_fb_scanout needs the full 100 MHz (one
     // SRAM fetch per 100 ns sustains 640x480). 1 = passthrough (battery
     // speed); board default 8.
+`ifdef JMR_BUILTIN_FINDER
+    parameter bit PROGRAM_FINDER = 0,
+`else
+    parameter bit PROGRAM_FINDER = 1,
+`endif
+    parameter int unsigned BOOT_CLOCK_HZ = 100000000,
     parameter int unsigned VM_CLK_DIV = 3
 ) (
     input  logic        clk,
@@ -187,7 +193,9 @@ module jmr_js_core #(
     end
     jmr_mouse_overlay u_mouse_overlay (
         .x(fb_x),.y(fb_y),.mouse_x(pointer_x_o),.mouse_y(pointer_y_o),
-        .show_pointer(1'b1),.opaque(overlay_opaque_o),.rgb(overlay_rgb_o)
+        .watch(ui_pixels.window_state[7:0]==3),
+        .ibeam(ui_pixels.dialog==2 && $signed({2'b0,pointer_x_o})>=12'sd154+$signed(ui_pixels.sys_config[47:32]) && $signed({2'b0,pointer_x_o})<12'sd364+$signed(ui_pixels.sys_config[47:32]) && $signed({3'b0,pointer_y_o})>=12'sd150+$signed(ui_pixels.sys_config[63:48]) && $signed({3'b0,pointer_y_o})<12'sd172+$signed(ui_pixels.sys_config[63:48])),
+        .show_pointer(ui_pixels.window_state[7:0]!=10),.opaque(overlay_opaque_o),.rgb(overlay_rgb_o)
     );
     logic mouse_queue_ready, mouse_event_valid, mouse_event_pop;
     logic vm_key_evt_ready;
@@ -252,13 +260,41 @@ module jmr_js_core #(
     logic [7:0] classic_popup_static;
     logic [5:0] classic_popup_dynamic,classic_label_raddr;
     logic classic_popup_enabled;
-    logic [63:0] classic_static_rows;logic [47:0] classic_dynamic_rows;logic [7:0] classic_enabled_rows;
+    import jmr_classic_ui_pkg::SYS_CONFIG_DEFAULT;
+    logic sys_we;logic [13:0] sys_addr;logic [15:0] sys_data;
+    logic [1:0] sys_status /*verilator public_flat_rd*/;
+    logic [911:0] sys_config;
+    always_ff @(posedge clk)begin
+        if(!rst_n)sys_config<=SYS_CONFIG_DEFAULT;
+        else if(sys_we && sys_addr>=4672 && sys_addr<4729)sys_config[(sys_addr-4672)*16+:16]<=sys_data;
+    end
+    logic ship_tool_stb;logic [3:0] ship_tool_action;
+    logic [28:0] boot_ticks;
+    logic boot_intro,boot_stage,boot_glass,last_boot_glass,last_boot_stage,vm_first_frame;
+    (* ASYNC_REG="TRUE" *) logic [1:0] vm_first_sync;
+    always_ff @(posedge clk)begin
+        if(!rst_n)begin boot_ticks<=0;boot_intro<=PROGRAM_FINDER;boot_stage<=0;vm_first_sync<=0;end
+        else begin
+            if(app_clear)vm_first_sync<=0;else vm_first_sync<={vm_first_sync[0],vm_first_frame};
+            if(boot_intro)begin
+                if(boot_ticks>=29'(BOOT_CLOCK_HZ/10*34) || kbd_push || (input_mouse_stb && input_mouse_buttons!=0) || sim_vm_start || desktop_control_stb)begin boot_intro<=0;boot_stage<=1;end
+                else begin boot_ticks<=boot_ticks+1'b1;if(boot_ticks>=29'(BOOT_CLOCK_HZ/10*14))boot_stage<=1;end
+            end
+        end
+    end
+    assign boot_glass=PROGRAM_FINDER && (boot_intro || (app_window[7:0]==9 && !vm_first_sync[1]) || shell_loading);
+    logic docs_caret_on,docs_flash,ship_about_hot;
+    logic [9:0] docs_caret_px;
+    logic [1:0] docs_hot;
+    logic [95:0] classic_static_rows;logic [71:0] classic_dynamic_rows;logic [11:0] classic_enabled_rows,classic_checked_rows;
+    logic [9:0] classic_active_left,classic_active_right;logic [3:0] classic_hover_row;
 
     logic [31:0] ship_generation,classic_generation,app_window;
+    logic [31:0] menu_enable,menu_check;
     logic [31:0] last_ship_generation,last_classic_generation,last_system_window;
     logic vm_sysw_toggle,sysw_seen,vm_text_toggle,text_seen,vm_text_menu,vm_text_first,vm_text_last;
-    logic [2:0] vm_sysw_field;
-    logic [7:0] vm_sysw_value,vm_text_byte;
+    logic [3:0] vm_sysw_field;
+    logic [31:0] vm_sysw_value,vm_text_byte;
     logic [1:0] restart_phase;
     logic classic_vm_start,classic_restart_halt;
     wire app_clear=vm_start || sim_vm_start || classic_vm_start || actions_restart;
@@ -292,29 +328,31 @@ module jmr_js_core #(
         else classic_window_q<=system_window_o;
     end
     always_ff @(posedge clk)begin
-        if(!rst_n || app_clear)begin app_window<=0;system_viewport_o<=0;sysw_seen<=0;text_seen<=vm_text_toggle;end
+        if(!rst_n || app_clear)begin app_window<=0;menu_enable<=32'hffffffff;menu_check<=0;system_viewport_o<=0;sysw_seen<=0;text_seen<=vm_text_toggle;end
         else begin
             if(!vm_busy)begin app_window<=0;system_viewport_o<=0;end
             if(sysw_seen!=vm_sysw_toggle)begin
                 sysw_seen<=vm_sysw_toggle;
-                if(vm_sysw_field<4)app_window[vm_sysw_field*8+:8]<=vm_sysw_value;
+                if(vm_sysw_field<4)app_window[vm_sysw_field*8+:8]<=vm_sysw_value[7:0];
                 else if(vm_sysw_field==4)system_viewport_o<=vm_sysw_value!=0;
+                else if(vm_sysw_field==7)menu_enable<=vm_sysw_value;else if(vm_sysw_field==8)menu_check<=vm_sysw_value;
             end
             if(text_seen!=vm_text_toggle)text_seen<=vm_text_toggle;
         end
     end
     always_comb begin
         system_window_o=app_window;
-        if(desk_visible)system_window_o[7:0]=0;
+        if(PROGRAM_FINDER && shell_loading && !vm_busy)system_window_o[7:0]=10;
+        else if(desk_visible)system_window_o[7:0]=0;
         else if(con_system_role==3)begin system_window_o[7:0]=3;system_window_o[31:24]={1'b0,con_system_stage,4'd0};end
         else if(!vm_busy)system_window_o[7:0]=7;
         else if(app_window[7:0]==0 && con_interactive)system_window_o[7:0]={5'd0,con_system_role};
     end
     always_ff @(posedge clk)begin
-        if(!rst_n)begin system_generation_o<=0;last_ship_generation<=0;last_classic_generation<=0;last_system_window<=0;last_docs_generation<=0;end
-        else if(last_ship_generation!=ship_generation || last_classic_generation!=classic_generation || last_system_window!=system_window_o || last_docs_generation!=docs_generation)begin
+        if(!rst_n)begin last_boot_glass<=1;last_boot_stage<=0;system_generation_o<=0;last_ship_generation<=0;last_classic_generation<=0;last_system_window<=0;last_docs_generation<=0;end
+        else if(last_boot_glass!=boot_glass || last_boot_stage!=boot_stage || (input_mouse_stb && (classic_menu!=0 || system_menu_o)) || last_ship_generation!=ship_generation || last_classic_generation!=classic_generation || last_system_window!=system_window_o || last_docs_generation!=docs_generation)begin
             system_generation_o<=system_generation_o+1'b1;last_ship_generation<=ship_generation;
-            last_classic_generation<=classic_generation;last_system_window<=system_window_o;last_docs_generation<=docs_generation;
+            last_boot_glass<=boot_glass;last_boot_stage<=boot_stage;last_classic_generation<=classic_generation;last_system_window<=system_window_o;last_docs_generation<=docs_generation;
         end
     end
     always_ff @(posedge clk)begin
@@ -330,15 +368,16 @@ module jmr_js_core #(
         if(!rst_n || app_clear)note_entry_seen<=0;
         else if(new_note_entry)note_entry_seen<=1;
     end
+    wire finder_tool_launch=PROGRAM_FINDER && fs_launch && fs_launch_how>=5 && fs_launch_how<=7;
     jmr_system_actions u_system_actions (
-        .clk(clk),.rst_n(rst_n),.action_stb((docs_command_stb && docs_command!=5) || new_note_entry || new_catalog_entry),.action(new_note_entry?4'd11:new_catalog_entry?4'd4:docs_command),
-        .role(system_window_o[7:0]),.chosen_name(docs_chosen_name),.chosen_len(docs_chosen_len),.after_valid(docs_after_valid),.after_action(docs_after_action),.after_name(docs_after_name),.after_len(docs_after_len),
+        .clk(clk),.rst_n(rst_n),.action_stb(ship_tool_stb || finder_tool_launch || (docs_command_stb && docs_command!=5) || new_note_entry || new_catalog_entry),.action(ship_tool_stb?ship_tool_action:finder_tool_launch?(fs_launch_how==5?4'd11:fs_launch_how==6?4'd12:4'd10):new_note_entry?4'd11:new_catalog_entry?4'd4:docs_command),
+        .role(system_window_o[7:0]),.chosen_name(docs_chosen_name),.chosen_len(docs_chosen_len),.after_valid(docs_after_valid && !finder_tool_launch),.after_action(docs_after_action),.after_name(docs_after_name),.after_len(docs_after_len),
         .source_name(con_source_name),.source_len(con_source_name_len),.source_unnamed(con_unnamed),
         .catalog_go(actions_catalog_go),.catalog_active(actions_catalog_active),.catalog_addr(actions_catalog_addr),
         .catalog_done(disk_done),.catalog_error(disk_error),.catalog_count(desk_count),.catalog_data(desk_catalog_data),.catalog_size(desk_catalog_size),
         .stage_valid(actions_stage_valid),.stage_addr(actions_stage_addr),.stage_data(actions_stage_data),.stage_ready(actions_stage_ready),
         .console_ready(ready_lit),.console_failed(con_command_failed),.console_clear(kbd_clear),.keyboard_empty(kbd_empty),.keyboard_full(kbd_full),
-        .vm_busy(vm_busy),.storage_busy(stor_busy),.disk_busy(disk_busy),.desktop_busy(desk_busy),.busy(actions_busy),.quit_pulse(actions_quit),.halt_pulse(actions_halt),
+        .vm_busy(vm_busy),.storage_busy(stor_busy || fs_busy),.disk_busy(disk_busy),.desktop_busy(desk_busy),.busy(actions_busy),.quit_pulse(actions_quit),.halt_pulse(actions_halt),
         .desktop_stb(actions_desk_stb),.desktop_on(actions_desk_on),.key_push(actions_key_push),.key_data(actions_key_data),
         .inject_stb(actions_inject),.inject_code(actions_inject_code),.doc_start(actions_doc_start),.doc_new(actions_doc_new),.doc_role(actions_doc_role),
         .set_name(actions_set_name),.target_name(actions_target_name),.target_len(actions_target_len),.catalog_prepared(actions_catalog_prepared),.restart_pulse(actions_restart),.error_pulse(actions_error)
@@ -361,6 +400,7 @@ module jmr_js_core #(
         .dismiss_about(system_about_o && dialog_key_stb && dialog_key_down && (dialog_key_code==13 || dialog_key_code==27)),
         .dismiss_menu(system_menu_o && dialog_key_stb && dialog_key_down && dialog_key_code==27),
         .inject_stb(classic_key_stb || actions_inject),.inject_code(actions_inject?actions_inject_code:classic_key_code),.leave_app(ui_quit || classic_restart_halt || actions_halt || classic_error_pulse),.guest_drag_o(ship_guest),
+        .about_hot(ship_about_hot),.finder_mode(app_window[7:0]==9),.tool_stb(ship_tool_stb),.tool_action(ship_tool_action),
         .consume_pointer(ship_consume),.menu_open(system_menu_o),.keyboard_open(system_keyboard_o),.about_open(system_about_o),
         .shift_on(system_shift_o),.caps_on(system_caps_o),.ctrl_on(system_ctrl_o),.alt_on(system_alt_o),
         .pressed_index(system_pressed_o),.hold_keys(system_hold_o),.held_keys(system_held_o),.generation(ship_generation),.quit_pulse(ship_quit),.terminal_pulse(ui_terminal),
@@ -370,6 +410,7 @@ module jmr_js_core #(
     logic ship_op,ship_op_q,classic_op,classic_modal;
     logic [23:0] ship_rgb,ship_rgb_q,classic_rgb;
     jmr_system_documents u_documents (
+        .sys_config(sys_config),.frame_tick(frame_tick),.caret_on(docs_caret_on),.caret_px(docs_caret_px),.hot_button(docs_hot),.flash_default(docs_flash),
         .clk(clk),.rst_n(rst_n),.app_clear(app_clear),.window_state(system_window_o),.source_name(con_source_name),.source_len(con_source_name_len),
         .unnamed(con_unnamed),.kernel_busy(actions_busy),.error_pulse(actions_error || classic_error_pulse),.descriptor_error(classic_error_pulse),.request_stb(classic_action_stb),.request_action(classic_action),.shortcut_save(save_shortcut),
         .sample_valid(input_mouse_stb),.x(input_mouse_x),.y(input_mouse_y),.buttons(input_mouse_buttons),.keyboard_open(system_keyboard_o),
@@ -379,10 +420,11 @@ module jmr_js_core #(
         .after_valid(docs_after_valid),.after_action(docs_after_action),.after_name(docs_after_name),.after_len(docs_after_len),
         .dialog(docs_dialog),.file_count(docs_file_count),.selected(docs_selected),.file_top(docs_file_top),.name_len(docs_name_len),.name_selected(docs_name_selected),.message_id(docs_message),
         .generation(docs_generation),.catalog_go(docs_catalog_go),.catalog_active(docs_catalog_active),.catalog_all(docs_catalog_all),.catalog_addr(docs_catalog_addr),
-        .catalog_busy(disk_busy),.catalog_done(disk_done),.storage_busy(stor_busy),.desktop_busy(desk_busy),.catalog_count(desk_count),.catalog_data(desk_catalog_data),
+        .catalog_busy(disk_busy || fs_busy),.catalog_done(disk_done),.storage_busy(stor_busy || fs_busy),.desktop_busy(desk_busy),.catalog_count(desk_count),.catalog_data(desk_catalog_data),
         .label_valid(docs_label_valid),.label_row(docs_label_row),.label_data(docs_label_data),.label_col(docs_label_col),.label_commit(docs_label_commit),.label_ready(docs_label_ready)
     );
     jmr_classic_ui u_classic (
+        .sys_we(sys_we),.sys_addr(sys_addr),.sys_data(sys_data),
         .clk(clk),.rst_n(rst_n),.pixel_clk(pixel_clk),.app_clear(app_clear),.window_state(classic_window_q),.source_name(con_source_name),.source_name_len(con_source_name_len),
         .external_label_valid(docs_label_valid),.external_label_row(docs_label_row),.external_label_data(docs_label_data),.external_label_col(docs_label_col),.external_label_commit(docs_label_commit),.external_label_ready(docs_label_ready),
         .text_stb(classic_text_stb && !app_clear),.text_menu(classic_text_menu),.text_first(classic_text_first),.text_last(classic_text_last),.text_byte(classic_text_byte),
@@ -392,53 +434,67 @@ module jmr_js_core #(
         .generation(classic_generation),.descriptor_error(classic_error),.active_menu(classic_menu),
         .popup_left(classic_popup_left),.popup_count(classic_popup_count),.popup_row(classic_popup_row),
         .popup_static(classic_popup_static),.popup_dynamic(classic_popup_dynamic),.popup_enabled(classic_popup_enabled),
+        .menu_enable(menu_enable),.menu_check(menu_check),
+        .active_left(classic_active_left),.active_right(classic_active_right),.hover_row(classic_hover_row),.popup_checked_rows(classic_checked_rows),
         .popup_static_rows(classic_static_rows),.popup_dynamic_rows(classic_dynamic_rows),.popup_enabled_rows(classic_enabled_rows),
         .label_raddr(classic_label_raddr),.label_pos(classic_label_pos),.beam_y(fb_y),.label_glyph(classic_label_glyph),.about_valid(classic_about_valid),.title_valid(classic_title_valid),.title_width(classic_title_width)
     );
     typedef struct packed {
         logic [31:0] window_state;
+        logic [911:0] sys_config;
         logic [3:0] menu,count;
         logic [9:0] left_edge,title_width;
-        logic [63:0] static_rows;logic [47:0] dynamic_rows;logic [7:0] enabled_rows;
+        logic [95:0] static_rows;logic [71:0] dynamic_rows;logic [11:0] enabled_rows,checked_rows;
+        logic [9:0] active_left,active_right;logic [3:0] hover_row;
         logic about_open,about_valid,title_valid;
         logic [2:0] dialog;
         logic [8:0] files,selected;
         logic [7:0] file_top,message_id;
         logic [3:0] name_len;logic name_selected;
+        logic caret_on,flash_default,about_hot;logic [9:0] caret_px;logic [1:0] hot_button;
+        logic [2:0] ship_hover;
         logic ship_menu,keyboard,shift_on,caps_on,ctrl_on,alt_on,hold_keys;
         logic [6:0] pressed;logic [69:0] held;
     } ui_snapshot_t;
     ui_snapshot_t ui_source,ui_pixels;
     always_comb begin
-        ui_source.window_state=system_window_o;ui_source.menu=classic_menu;ui_source.count=classic_popup_count;
+        ui_source.sys_config=sys_config;ui_source.window_state=system_window_o;
+        if(boot_glass)begin ui_source.window_state=32'd10;ui_source.window_state[24]=boot_stage;end ui_source.menu=classic_menu;ui_source.count=classic_popup_count;
         ui_source.left_edge=classic_popup_left;ui_source.title_width=classic_title_width;
         ui_source.static_rows=classic_static_rows;ui_source.dynamic_rows=classic_dynamic_rows;ui_source.enabled_rows=classic_enabled_rows;
+        ui_source.active_left=classic_active_left;ui_source.active_right=classic_active_right;ui_source.hover_row=classic_hover_row;ui_source.checked_rows=classic_checked_rows;
         ui_source.about_open=system_about_o;ui_source.about_valid=classic_about_valid && vm_busy && system_window_o[7:0]!=0 && system_window_o[7:0]!=3;
         ui_source.title_valid=classic_title_valid;ui_source.dialog=docs_dialog;ui_source.files=docs_file_count;ui_source.selected=docs_selected;
+        ui_source.caret_on=docs_caret_on;ui_source.caret_px=docs_caret_px;ui_source.flash_default=docs_flash;ui_source.hot_button=docs_hot;ui_source.about_hot=ship_about_hot;
         ui_source.file_top=docs_file_top;ui_source.message_id=docs_message;ui_source.name_len=docs_name_len;ui_source.name_selected=docs_name_selected;
+        ui_source.ship_hover=(input_mouse_x<190 && input_mouse_y>=26 && input_mouse_y<(app_window[7:0]==9?131:68))?3'(1+(input_mouse_y-26)/21):3'd0;
         ui_source.ship_menu=system_menu_o;ui_source.keyboard=system_keyboard_o;ui_source.shift_on=system_shift_o;ui_source.caps_on=system_caps_o;
         ui_source.ctrl_on=system_ctrl_o;ui_source.alt_on=system_alt_o;ui_source.hold_keys=system_hold_o;ui_source.pressed=system_pressed_o;ui_source.held=system_held_o;
     end
     jmr_ui_snapshot #(.WIDTH($bits(ui_snapshot_t))) u_ui_snapshot(.clk(clk),.rst_n(rst_n),.pixel_clk(pixel_clk),.source(ui_source),.pixels(ui_pixels));
     jmr_classic_overlay u_classic_overlay (
+        .clk(clk),.sys_we(sys_we),.sys_addr(sys_addr),.sys_data(sys_data),.sys_config(ui_pixels.sys_config),
         .rst_n(rst_n),
         .pixel_clk(pixel_clk),.x(fb_x),.y(fb_y),.window_state(ui_pixels.window_state),
         .active_menu(ui_pixels.menu),.popup_count(ui_pixels.count),.popup_left(ui_pixels.left_edge),.popup_row(classic_popup_row),
+        .active_left(ui_pixels.active_left),.active_right(ui_pixels.active_right),.hover_row(ui_pixels.hover_row),.popup_checked_rows(ui_pixels.checked_rows),
         .popup_static_rows(ui_pixels.static_rows),.popup_dynamic_rows(ui_pixels.dynamic_rows),.popup_enabled_rows(ui_pixels.enabled_rows),
         .about_open(ui_pixels.about_open),.about_valid(ui_pixels.about_valid),.title_valid(ui_pixels.title_valid),.title_width(ui_pixels.title_width),
         .dialog(ui_pixels.dialog),.file_count(ui_pixels.files),.selected(ui_pixels.selected),.file_top(ui_pixels.file_top),.message_id(ui_pixels.message_id),
+        .caret_on(ui_pixels.caret_on),.caret_px(ui_pixels.caret_px),.flash_default(ui_pixels.flash_default),.hot_button(ui_pixels.hot_button),.about_hot(ui_pixels.about_hot),
         .name_len(ui_pixels.name_len),.name_selected(ui_pixels.name_selected),.label_raddr(classic_label_raddr),.label_pos(classic_label_pos),.label_glyph(classic_label_glyph),
         .opaque(classic_op),.modal_opaque(classic_modal),.rgb(classic_rgb)
     );
     jmr_system_overlay u_system_overlay (
+        .clk(clk),.sys_we(sys_we),.sys_addr(sys_addr),.sys_data(sys_data),
         .pixel_clk(pixel_clk),.x(fb_x),.y(fb_y),
-        .menu_open(ui_pixels.ship_menu),.keyboard_open(ui_pixels.keyboard),.about_open(1'b0),.shift_on(ui_pixels.shift_on),.caps_on(ui_pixels.caps_on),
+        .finder_mode(ui_pixels.window_state[7:0]==9),.hover_row(ui_pixels.ship_hover),.menu_open(ui_pixels.ship_menu),.keyboard_open(ui_pixels.keyboard),.about_open(1'b0),.shift_on(ui_pixels.shift_on),.caps_on(ui_pixels.caps_on),
         .ctrl_on(ui_pixels.ctrl_on),.alt_on(ui_pixels.alt_on),.pressed_index(ui_pixels.pressed),.hold_keys(ui_pixels.hold_keys),.held_keys(ui_pixels.held),
         .opaque(ship_op),.rgb(ship_rgb)
     );
     always_ff @(posedge pixel_clk)begin ship_op_q<=ship_op;ship_rgb_q<=ship_rgb;end
     assign system_overlay_opaque_o=classic_modal || ship_op_q || classic_op;
-    assign system_overlay_rgb_o=classic_modal?classic_rgb:ship_op_q?ship_rgb_q:classic_rgb;
+    assign system_overlay_rgb_o=ui_pixels.window_state[7:0]==10?classic_rgb:classic_modal?classic_rgb:ship_op_q?ship_rgb_q:classic_rgb;
     jmr_mouse_events u_mouse_events (
         .clk(clk), .rst_n(rst_n && vm_busy),
         .sample_valid(vm_busy && (mouse_pending || (input_mouse_stb && !ui_consume))), .sample_ready(mouse_queue_ready),
@@ -481,6 +537,27 @@ module jmr_js_core #(
     logic [18:0] vm_dump_addr;
     logic        vm_dump_sel;
     logic [7:0]  dump_back_rdata;
+
+    // Held request/reply bundles: only flags cross synchronizers. Arguments
+    // remain stable from VM request until acknowledgement is withdrawn.
+    logic vm_fs_req,fs_reply,fs_busy,fs_launch;
+    logic [2:0] vm_fs_cmd;
+    logic [127:0] vm_fs_args;
+    logic [31:0] fs_result;
+    (* ASYNC_REG="TRUE" *) logic [1:0] fs_req_sync;
+    always_ff @(posedge clk)begin if(!rst_n)fs_req_sync<=0;else fs_req_sync<={fs_req_sync[0],vm_fs_req};end
+    logic [95:0] fs_launch_name;logic [3:0] fs_launch_len,fs_launch_how;
+    logic fs_open,fs_close,fs_dir,fs_next,fs_get,fs_put,fs_delete,fs_rename;
+    logic [7:0] fs_mode,fs_name_len,fs_put_data;logic [15:0] fs_name_addr;
+    logic fs_mem_en,fs_mem_we;logic [15:0] fs_mem_addr;logic [7:0] fs_mem_data;
+    logic fs_sram_req,fs_sram_we;logic [21:0] fs_sram_addr;logic [15:0] fs_sram_data;
+    logic stor_missing;logic [15:0] stor_date;logic [7:0] stor_attr;
+    logic shell_tool_start,shell_tool_finder,shell_loading;
+    logic gui_sram_req,gui_sram_we;logic [21:0] gui_sram_addr;logic [15:0] gui_sram_data;
+    assign gui_sram_req=fs_busy?fs_sram_req:desk_sram_req;
+    assign gui_sram_we=fs_busy?fs_sram_we:desk_sram_we;
+    assign gui_sram_addr=fs_busy?fs_sram_addr:desk_sram_addr;
+    assign gui_sram_data=fs_busy?fs_sram_data:desk_sram_data;
 
     // Console ↔ storage
     logic        stor_open, stor_close, stor_readline, stor_putc;
@@ -527,25 +604,25 @@ module jmr_js_core #(
     assign desktop_visible_o=desk_visible;
     assign desktop_busy_o=desk_busy;
     assign desktop_count_o=desk_count;
-    assign stor_open=disk_busy?desk_stor_open:con_stor_open;
-    assign stor_close=disk_busy?desk_stor_close:con_stor_close;
-    assign stor_dir=disk_busy?desk_stor_dir:con_stor_dir;
-    assign stor_dir_next=disk_busy?desk_stor_next:con_stor_dir_next;
-    assign stor_get_byte=disk_busy?desk_stor_get:con_stor_get_byte;
-    assign stor_readline=!disk_busy&&con_stor_readline;
-    assign stor_nl_scan=!disk_busy&&con_stor_nl_scan;
-    assign stor_putc=!disk_busy&&con_stor_putc;
-    assign stor_delete=!disk_busy&&con_stor_delete;
-    assign stor_dir_all=disk_busy?(actions_catalog_active || (docs_catalog_active?docs_catalog_all:desk_hidden)):con_stor_dir_all;
-    assign stor_mode=disk_busy?8'h49:con_stor_mode;
-    assign stor_chan=disk_busy?8'd1:con_stor_chan;
-    assign stor_name_addr=disk_busy?16'hb850:con_stor_name_addr;
-    assign stor_name_len=disk_busy?desk_stor_name_len:con_stor_name_len;
-    assign stor_putc_data=con_stor_putc_data;
-    assign c_mem_en=disk_busy?desk_mem_en:con_mem_en;
-    assign c_mem_we=disk_busy?desk_mem_we:con_mem_we;
-    assign c_mem_addr=disk_busy?desk_mem_addr:con_mem_addr;
-    assign c_mem_wdata=disk_busy?desk_mem_wdata:con_mem_wdata;
+    assign stor_open=fs_busy?fs_open:disk_busy?desk_stor_open:con_stor_open;
+    assign stor_close=fs_busy?fs_close:disk_busy?desk_stor_close:con_stor_close;
+    assign stor_dir=fs_busy?fs_dir:disk_busy?desk_stor_dir:con_stor_dir;
+    assign stor_dir_next=fs_busy?fs_next:disk_busy?desk_stor_next:con_stor_dir_next;
+    assign stor_get_byte=fs_busy?fs_get:disk_busy?desk_stor_get:con_stor_get_byte;
+    assign stor_readline=!fs_busy&&!disk_busy&&con_stor_readline;
+    assign stor_nl_scan=!fs_busy&&!disk_busy&&con_stor_nl_scan;
+    assign stor_putc=fs_busy?fs_put:!disk_busy&&con_stor_putc;
+    assign stor_delete=fs_busy?fs_delete:!disk_busy&&con_stor_delete;
+    assign stor_dir_all=fs_busy?1'b1:disk_busy?(actions_catalog_active || (docs_catalog_active?docs_catalog_all:desk_hidden)):con_stor_dir_all;
+    assign stor_mode=fs_busy?fs_mode:disk_busy?8'h49:con_stor_mode;
+    assign stor_chan=fs_busy?8'd1:disk_busy?8'd1:con_stor_chan;
+    assign stor_name_addr=fs_busy?fs_name_addr:disk_busy?16'hb850:con_stor_name_addr;
+    assign stor_name_len=fs_busy?fs_name_len:disk_busy?desk_stor_name_len:con_stor_name_len;
+    assign stor_putc_data=fs_busy?fs_put_data:con_stor_putc_data;
+    assign c_mem_en=fs_busy?fs_mem_en:disk_busy?desk_mem_en:con_mem_en;
+    assign c_mem_we=fs_busy?fs_mem_we:disk_busy?desk_mem_we:con_mem_we;
+    assign c_mem_addr=fs_busy?fs_mem_addr:disk_busy?desk_mem_addr:con_mem_addr;
+    assign c_mem_wdata=fs_busy?fs_mem_data:disk_busy?desk_mem_wdata:con_mem_wdata;
     // Mem masters
     logic        c_mem_en, c_mem_we, c_mem_gnt;
     logic [15:0] c_mem_addr;
@@ -680,15 +757,18 @@ module jmr_js_core #(
     logic        cmp_arm;
 
     jmr_console_engine u_cons (
+        .sys_we(sys_we),.sys_addr(sys_addr),.sys_data(sys_data),.sys_status(sys_status),
         .clk(clk), .rst_n(rst_n),
-        .enable(standalone_mode && !game_mode && !desk_visible && !desk_hold && !disk_busy),
+        .enable(standalone_mode && !game_mode && !desk_visible && !desk_hold && !disk_busy && !fs_busy),
         .kbd_empty(kbd_empty), .kbd_data(kbd_q),
         .kbd_pop(kbd_pop), .kbd_clear(kbd_clear),
         .video_busy(video_busy),
         .cls(cls), .put_en(put_en), .put_char(put_char), .print_nl(print_nl),
         .ready_lit(ready_lit), .command_failed_o(con_command_failed), .interactive_o(con_interactive),.system_role_o(con_system_role),.system_stage_o(con_system_stage),
         .ui_source_name_o(con_source_name),.ui_source_len_o(con_source_name_len),.ui_unnamed_o(con_unnamed),
-        .ui_doc_start(actions_doc_start),.ui_doc_new(actions_doc_new),.ui_doc_role(actions_doc_role),
+        .park_finder(PROGRAM_FINDER && (ship_tool_stb || (fs_launch && fs_launch_how!=8)) && app_window[7:0]==9),
+        .forget_finder(PROGRAM_FINDER && fs_launch && fs_launch_how==8),
+        .shell_tool_start(shell_tool_start),.shell_tool_finder(shell_tool_finder),.ui_doc_start(actions_doc_start),.ui_doc_new(actions_doc_new),.ui_doc_role(actions_doc_role),
         .ui_stage_valid(actions_stage_valid),.ui_stage_addr(actions_stage_addr),.ui_stage_data(actions_stage_data),.ui_stage_ready(actions_stage_ready),
         .ui_set_name(actions_set_name),.ui_name(actions_target_name),.ui_name_len(actions_target_len),
         .src_len_o(cons_src_len),
@@ -743,7 +823,7 @@ module jmr_js_core #(
         .start_nl_scan(stor_nl_scan), .nl_count(stor_nl_count),
         .start_putc(stor_putc), .putc_data(stor_putc_data),
         .start_dir(stor_dir), .start_dir_next(stor_dir_next),
-        .dir_show_all(stor_dir_all), .dir_show_system(disk_busy), .dir_raw_names(disk_busy), .file_size_o(stor_file_size),.dir_size_o(stor_dir_size),
+        .start_rename(fs_busy && fs_rename),.not_found_o(stor_missing),.dir_date_o(stor_date),.dir_attr_o(stor_attr),.dir_show_all(stor_dir_all), .dir_show_system(fs_busy || disk_busy), .dir_raw_names(fs_busy || disk_busy), .file_size_o(stor_file_size),.dir_size_o(stor_dir_size),
         .start_delete(stor_delete),
         .card_present(sd_card_present),
         .dbg_state(stor_dbg_state), .dbg_op_clk(stor_dbg_op_clk),
@@ -1005,14 +1085,14 @@ module jmr_js_core #(
         .cmp_len_o(vm_cmp_len),
         .cmp_msglen_o(vm_cmp_msglen),
         .stop(vm_stop_lat),
-        .frame_tick(vm_ftick_lat),
+        .first_frame_o(vm_first_frame),.frame_tick(vm_ftick_lat),
         .joy_in(joy_in),
         .analog_x(analog_x), .analog_y(analog_y), .joy_btn(joy_btn),
         .key_evt_stb(vm_kev_lat),
         .key_evt_code(vm_kev_code_lat),
         .key_evt_down(vm_kev_down_lat),.key_evt_char(vm_kev_char_lat),.key_evt_ready(vm_key_evt_ready),
         .sysw_toggle_o(vm_sysw_toggle),.sysw_field_o(vm_sysw_field),.sysw_value_o(vm_sysw_value),
-        .ui_text_toggle_o(vm_text_toggle),.ui_text_menu_o(vm_text_menu),.ui_text_first_o(vm_text_first),.ui_text_last_o(vm_text_last),.ui_text_byte_o(vm_text_byte),
+        .fs_request(vm_fs_req),.fs_command(vm_fs_cmd),.fs_arguments(vm_fs_args),.fs_reply(fs_reply),.fs_result(fs_result),.ui_text_toggle_o(vm_text_toggle),.ui_text_menu_o(vm_text_menu),.ui_text_first_o(vm_text_first),.ui_text_last_o(vm_text_last),.ui_text_byte_o(vm_text_byte),
         .mouse_evt_valid(mouse_event_valid), .mouse_evt_data(mouse_event_data),
         .mouse_evt_pop(mouse_event_pop),
         .code_we(code_we), .code_waddr(code_waddr), .code_wdata(code_wdata),
@@ -1101,7 +1181,7 @@ module jmr_js_core #(
             else if (work_req)      sram_owner = 3'd3;
             else if (fbp_sram_req)  sram_owner = 3'd4;
             else if (rast_sram_req) sram_owner = 3'd6;
-            else if (desk_sram_req) sram_owner = 3'd7;
+            else if (gui_sram_req) sram_owner = 3'd7;
             else if (vm_sram_req && !vm_ack_hold) sram_owner = 3'd5;
         end
     end
@@ -1114,24 +1194,24 @@ module jmr_js_core #(
                         (sram_owner == 3'd3) ? work_req :
                         (sram_owner == 3'd4) ? fbp_sram_req :
                         (sram_owner == 3'd6) ? rast_sram_req :
-                        (sram_owner == 3'd7) ? desk_sram_req :
+                        (sram_owner == 3'd7) ? gui_sram_req :
                         (sram_owner == 3'd5) ? vm_sram_req : 1'b0;
     assign sram_we    = (sram_owner == 3'd2) ? cons_sram_we :
                         (sram_owner == 3'd3) ? work_we_l :
                         (sram_owner == 3'd4) ? fbp_sram_we :
-                        (sram_owner == 3'd7) ? desk_sram_we :
+                        (sram_owner == 3'd7) ? gui_sram_we :
                         (sram_owner == 3'd5) ? vm_sram_we : 1'b0; // 6: read-only
     assign sram_addr  = (sram_owner == 3'd1) ? scan_sram_addr :
                         (sram_owner == 3'd2) ? cons_sram_addr :
                         (sram_owner == 3'd3) ? (WORK_SRAM_BASE + 21'(work_addr_l)) :
                         (sram_owner == 3'd4) ? fbp_sram_addr :
                         (sram_owner == 3'd6) ? rast_sram_addr :
-                        (sram_owner == 3'd7) ? desk_sram_addr :
+                        (sram_owner == 3'd7) ? gui_sram_addr :
                                                vm_sram_addr;
     assign sram_wdata = (sram_owner == 3'd2) ? cons_sram_wdata :
                         (sram_owner == 3'd3) ? {8'd0, work_wdata_l} :
                         (sram_owner == 3'd4) ? fbp_sram_wdata :
-                        (sram_owner == 3'd7) ? desk_sram_data : vm_sram_wdata;
+                        (sram_owner == 3'd7) ? gui_sram_data : vm_sram_wdata;
     assign work_ack   = sram_ack && (sram_owner_q == 3'd3);
 
     // NEW: behavioral 4 MB SRAM (FPGA-SIM, SRAM_INTERNAL=1). Board uses
@@ -1161,7 +1241,7 @@ module jmr_js_core #(
     logic [23:0] title_pal_rdata, desktop_pal_rdata;
     logic [1:0] desk_visible_pix;
     always_ff @(posedge pixel_clk) begin
-        desk_visible_pix <= {desk_visible_pix[0],desk_visible};
+        desk_visible_pix <= {desk_visible_pix[0],desk_visible || system_window_o[7:0]==9};
         desktop_pal_rdata <= {{pal_raddr[7:5],pal_raddr[7:5],pal_raddr[7:6]},
                              {pal_raddr[4:2],pal_raddr[4:2],pal_raddr[4:3]},
                              {pal_raddr[1:0],pal_raddr[1:0],pal_raddr[1:0],pal_raddr[1:0]}};
@@ -1189,9 +1269,11 @@ module jmr_js_core #(
     always_ff @(posedge clk) vm_fb_swap_q <= vm_fb_swap;
     assign fb_swap  = desk_fb_swap || (vm_busy ? (vm_fb_swap && !vm_fb_swap_q) : demo_fb_swap);
 
+    logic shell_vm_seen;
+    always_ff @(posedge clk)if(!rst_n)shell_vm_seen<=0;else shell_vm_seen<=vm_busy;
     always_ff @(posedge clk) begin
         if (!rst_n) game_mode <= 1'b0;
-        else if ((keyboard_feed_push && keyboard_feed_data == 8'h1B) || ui_quit || halt_pulse || classic_restart_halt || actions_halt || classic_error_pulse) game_mode <= 1'b0;
+        else if ((PROGRAM_FINDER && shell_vm_seen && !vm_busy) || (keyboard_feed_push && keyboard_feed_data == 8'h1B) || ui_quit || halt_pulse || classic_restart_halt || actions_halt || classic_error_pulse) game_mode <= 1'b0;
         // Enter on RUN/vm_start only. demo_busy/vm_busy must not retrigger
         // after ESC — console enable is !game_mode, so LIST after RUN died.
         // cmp_arm: a compile runs the VM without becoming a GAME. The text
@@ -1202,6 +1284,8 @@ module jmr_js_core #(
             game_mode <= 1'b1;
     end
 
+    generate if(!PROGRAM_FINDER)begin : built_in_finder
+    assign shell_tool_start=0;assign shell_tool_finder=0;assign shell_loading=0;
     jmr_desktop u_desktop (
         .clk(clk),.rst_n(rst_n),
         .system_hold(actions_busy),.control_stb(desktop_control_stb || actions_desk_stb || ui_quit || (ui_terminal && desk_visible) ||
@@ -1225,8 +1309,32 @@ module jmr_js_core #(
         .sram_req(desk_sram_req),.sram_we(desk_sram_we),.sram_addr(desk_sram_addr),.sram_data(desk_sram_data),
         .sram_ack(sram_ack && sram_owner_q==3'd7),.sram_rdata(sram_rdata)
     );
+    end else begin : disk_program_finder
+        assign desk_visible=0;assign desk_hold=0;assign desk_hidden=0;
+        assign desktop_keyboard_mode_o=0;assign desktop_selected_o=511;assign desktop_page_o=0;assign desktop_menu_o=0;
+        assign desk_catalog_go=0;assign desk_icon_go=0;assign desk_icon_index=0;assign desk_catalog_addr=0;assign desk_icon_ready=0;
+        assign desk_fb_we=0;assign desk_fb_swap=0;assign desk_fb_addr=0;assign desk_fb_data=0;
+        assign desk_sram_req=0;assign desk_sram_we=0;assign desk_sram_addr=0;assign desk_sram_data=0;
+        jmr_finder_shell u_shell(.clk(clk),.rst_n(rst_n),.enabled(standalone_mode),
+          .ready(ready_lit),.failed(con_command_failed),.keyboard_empty(kbd_empty),.keyboard_full(kbd_full),.console_clear(kbd_clear),
+          .vm_busy(vm_busy),.storage_busy(stor_busy),.disk_busy(disk_busy),.actions_busy(actions_busy),.fs_busy(fs_busy),
+          .home_stb(desktop_control_stb || actions_desk_stb),.home_on(desktop_control_stb?desktop_control_on:actions_desk_on),
+          .quit(ui_quit || (keyboard_feed_push && keyboard_feed_data==27)),
+          .launch(fs_launch),.launch_name(fs_launch_name),.launch_len(fs_launch_len),.launch_how(fs_launch_how),
+          .key_push(desk_key_push),.key_data(desk_key_data),.tool_start(shell_tool_start),.tool_finder(shell_tool_finder),.loading(shell_loading),.busy(desk_busy));
+    end endgenerate
+    jmr_finder_fs u_finder_fs(.clk(clk),.rst_n(rst_n),.req(fs_req_sync[1] && !disk_busy),.command(vm_fs_cmd),
+      .arg0(vm_fs_args[31:0]),.arg1(vm_fs_args[63:32]),.arg2(vm_fs_args[95:64]),.arg3(vm_fs_args[127:96]),
+      .busy(fs_busy),.reply(fs_reply),.result(fs_result),.launch(fs_launch),.launch_name(fs_launch_name),.launch_len(fs_launch_len),.launch_how(fs_launch_how),
+      .stor_open(fs_open),.stor_close(fs_close),.stor_dir(fs_dir),.stor_next(fs_next),.stor_get(fs_get),.stor_put(fs_put),.stor_delete(fs_delete),.stor_rename(fs_rename),
+      .stor_mode(fs_mode),.stor_name_len(fs_name_len),.stor_name_addr(fs_name_addr),.stor_put_data(fs_put_data),
+      .stor_busy(stor_busy),.stor_done(stor_done),.stor_err(stor_err),.stor_missing(stor_missing),.stor_eof(stor_eof),
+      .stor_line_len(stor_line_len),.stor_byte(stor_get_data),.stor_file_size(stor_file_size),.stor_dir_size(stor_dir_size),.stor_date(stor_date),.stor_attr(stor_attr),
+      .mem_en(fs_mem_en),.mem_we(fs_mem_we),.mem_addr(fs_mem_addr),.mem_wdata(fs_mem_data),.mem_rdata(c_mem_rdata),.mem_gnt(c_mem_gnt && fs_busy),
+      .sram_req(fs_sram_req),.sram_we(fs_sram_we),.sram_addr(fs_sram_addr),.sram_wdata(fs_sram_data),
+      .sram_ack(sram_ack && sram_owner_q==3'd7 && fs_busy),.sram_rdata(sram_rdata));
     jmr_desktop_disk u_desktop_disk (
-        .clk(clk),.rst_n(rst_n),.catalog_go(desk_catalog_go || docs_catalog_go || actions_catalog_go),.icon_go(desk_icon_go),.show_hidden(actions_catalog_active || (docs_catalog_active?docs_catalog_all:desk_hidden)),.icon_index(desk_icon_index),
+        .clk(clk),.rst_n(rst_n),.catalog_go((desk_catalog_go || docs_catalog_go || actions_catalog_go) && !fs_busy),.icon_go(desk_icon_go),.show_hidden(actions_catalog_active || (docs_catalog_active?docs_catalog_all:desk_hidden)),.icon_index(desk_icon_index),
         .busy(disk_busy),.done(disk_done),.disk_error(disk_error),.count(desk_count),
         .catalog_addr(actions_catalog_active?actions_catalog_addr:docs_catalog_active?docs_catalog_addr:desk_catalog_addr),.catalog_data(desk_catalog_data),.catalog_size(desk_catalog_size),
         .icon_valid(desk_icon_valid),.icon_ready(desk_icon_ready),.icon_x(desk_icon_x),.icon_y(desk_icon_y),

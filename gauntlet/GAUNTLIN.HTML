@@ -61,10 +61,12 @@ var K = 3;               /* glass pixels per Lynx pixel */
 var VIEW_X = PL;
 var VIEW_W = 306;
 var VIEW_Y = 0;
-/* the cartridge's playfield ends at native row 104: rows 104..159 are the HUD
-   strip (border, icon well, stat panel), so the world is 104 rows tall */
-var VIEW_H = 312;
-var HUD_Y = 312;         /* native row 104 x 3 */
+/* Measured from a real frame: world rows are 0..102, row 103 is a solid dark
+   grey rule and row 104 a solid light grey rule opening the HUD strip. So the
+   playfield is 102 x 103 native pixels (a hair taller than wide, as the Lynx
+   portrait screen is), not 102 x 104. */
+var VIEW_H = 309;        /* 103 native rows x 3 */
+var HUD_Y = 309;         /* native row 103 x 3 */
 
 /* ------------------------------------------------------------- atlas rects */
 var R_FLOOR = [0, 0, 16, 16];
@@ -335,12 +337,19 @@ function solidAt(lx, ly) {
   return cell(Math.floor(lx / CELL), Math.floor(ly / CELL)) === 0;
 }
 
-/* ----------------------------------------------------------------- camera */
+/* ----------------------------------------------------------------- camera
+   The cartridge keeps the player near the middle of the 102x103 playfield, so
+   the camera targets player - (playfield centre). Measured from a real frame
+   the wizard's centre sits at native x=45, y=55, i.e. roughly the middle.
+   Centring on 48 (as before) put the player 6 px right of centre, which is one
+   of the reasons the port looked "shifted". */
 var camX = 0, camY = 0;
+var CAM_OFF_X = 51;      /* 102 / 2 */
+var CAM_OFF_Y = 51;      /* 103 / 2, rounded */
 
 function clampCam() {
   var ww = MW * CELL - 102;
-  var wh = MH * CELL - 102;
+  var wh = MH * CELL - 103;
   if (camX < 0) { camX = 0; }
   if (camY < 0) { camY = 0; }
   if (camX > ww) { camX = ww; }
@@ -355,6 +364,46 @@ function tileY(wy) {
   return Math.floor((wy - camY) * K);
 }
 
+/* Clamp a destination rect to the portrait playfield. Returns [x0,y0,x1,y1]
+   in glass px, or null when nothing is visible. Split out of blitClip because
+   the RTL allows only 16 locals per function (ENV_SLOTS) and the blit itself
+   needs 10 params plus its own working values. */
+function clipRect(dx0, dy0, dw, dh) {
+  var x0 = dx0;
+  var y0 = dy0;
+  var x1 = dx0 + dw;
+  var y1 = dy0 + dh;
+  if (x0 < VIEW_X) { x0 = VIEW_X; }
+  if (y0 < 0) { y0 = 0; }
+  if (x1 > VIEW_X + VIEW_W) { x1 = VIEW_X + VIEW_W; }
+  if (y1 > VIEW_H) { y1 = VIEW_H; }
+  if (x0 >= x1 || y0 >= y1) {
+    return null;
+  }
+  return [x0, y0, x1, y1];
+}
+
+/* Draw a region of `img` into a clipped destination rectangle.
+   The machine's canvas has NO usable clip (bytecode.py treats clip/rotate/scale
+   as no-ops and never handles rect), so the world floor used to be blitted
+   whole at 720x624 and spilled out of the 306-wide portrait column. Clipping is
+   therefore arithmetically: shift the SOURCE rect and the destination rect by
+   the same amount so only the visible part is drawn. */
+function blitClip(img, sx0, sy0, sw, sh, dx0, dy0, dw, dh) {
+  var c = clipRect(dx0, dy0, dw, dh);
+  if (c === null) {
+    return;
+  }
+  var kx = sw / dw;              /* source px per glass px */
+  var ky = sh / dh;
+  var ox = c[0] - dx0;           /* glass px cropped off the left/top */
+  var oy = c[1] - dy0;
+  ctx.drawImage(img,
+                sx0 + ox * kx, sy0 + oy * ky,
+                (c[2] - c[0]) * kx, (c[3] - c[1]) * ky,
+                c[0], c[1], c[2] - c[0], c[3] - c[1]);
+}
+
 function spr3(r, wx, wy) {
   var x = tileX(wx);
   var y = tileY(wy);
@@ -363,7 +412,7 @@ function spr3(r, wx, wy) {
   if (x + w <= VIEW_X || x >= VIEW_X + VIEW_W || y + h <= 0 || y >= VIEW_H) {
     return;
   }
-  ctx.drawImage(sheet, r[0], r[1], r[2], r[3], x, y, w, h);
+  blitClip(sheet, r[0], r[1], r[2], r[3], x, y, w, h);
 }
 
 function drawWorld() {
@@ -371,13 +420,13 @@ function drawWorld() {
 
   /* Floor first, as ONE blit of the pre-built world floor. GAUNTLIN-3.png is
      MW*CELL by MH*CELL (240x208) of real cartridge pebblework, mirror-tiled so
-     neighbouring slabs share their edge pixels. Blitting the whole thing avoids
-     the repeat seams a small tile produced, and costs a single drawImage
-     instead of one per cell. */
+     neighbouring slabs share their edge pixels. blitClip trims it to the
+     portrait playfield arithmetically, because the machine's ctx.clip() is a
+     no-op (see blitClip). */
   sx = VIEW_X - Math.floor(camX * K);
   sy = -Math.floor(camY * K);
-  ctx.drawImage(floorSheet, 0, 0, MW * CELL, MH * CELL,
-                sx, sy, MW * CELL * K, MH * CELL * K);
+  blitClip(floorSheet, 0, 0, MW * CELL, MH * CELL,
+           sx, sy, MW * CELL * K, MH * CELL * K);
 
   /* Walls on top. The cartridge's wall is a white block with black seams, so
      one 16x16 block per solid cell is already correct. */
@@ -388,12 +437,8 @@ function drawWorld() {
       }
       sx = VIEW_X + Math.floor((i * CELL - camX) * K);
       sy = Math.floor((j * CELL - camY) * K);
-      if (sx + CELL * K <= VIEW_X || sy + CELL * K <= 0 ||
-          sx >= VIEW_X + VIEW_W || sy >= VIEW_H) {
-        continue;
-      }
-      ctx.drawImage(sheet, R_WALL16[0], R_WALL16[1], R_WALL16[2], R_WALL16[3],
-                    sx, sy, CELL * K, CELL * K);
+      blitClip(sheet, R_WALL16[0], R_WALL16[1], R_WALL16[2], R_WALL16[3],
+               sx, sy, CELL * K, CELL * K);
     }
   }
 }
@@ -435,8 +480,8 @@ function reset() {
   items.push({ x: CELL * 13 + 4, y: CELL * 11 + 4, t: 1 });
   items.push({ x: CELL * 3 + 4, y: CELL * 11 + 4, t: 2 });
   items.push({ x: CELL * 7 + 4, y: CELL * 7 + 4, t: 0 });
-  camX = G.x - 48;
-  camY = G.y - 48;
+  camX = G.x - CAM_OFF_X;
+  camY = G.y - CAM_OFF_Y;
   clampCam();
 }
 
@@ -455,8 +500,8 @@ function stepPlayer() {
   G.x = nx;
   G.y = ny;
   if (mv) {
-    camX = camX + (G.x - 48 - camX) / 4;
-    camY = camY + (G.y - 48 - camY) / 4;
+    camX = camX + (G.x - CAM_OFF_X - camX) / 4;
+    camY = camY + (G.y - CAM_OFF_Y - camY) / 4;
     clampCam();
   }
 }
@@ -653,6 +698,11 @@ function drawHud() {
        y=158  light-grey rule across the full width
        y=159  light-grey only under x=41..43, dark grey elsewhere
      The dark grey is index 1 (82,85,82); the light grey is (173,170,173). */
+  /* row 103 is a solid dark-grey rule closing the playfield, then row 104 is
+     the light-grey rule that opens the HUD strip. Both are part of the frame,
+     not the world, so the world clip stops at row 103. */
+  ctx.fillStyle = "#555655";
+  ctx.fillRect(gx, 103 * k, 102 * k, k);
   ctx.fillStyle = "#000000";
   ctx.fillRect(gx, 104 * k, 102 * k, 56 * k);
 
@@ -771,6 +821,12 @@ function drawPlay() {
   var i, it;
   ctx.fillStyle = "#000000";
   ctx.fillRect(0, 0, 640, 480);
+
+  /* Everything the world draws is confined to the 102x103 portrait playfield.
+     This is done inside blitClip / spr3 by trimming the source and destination
+     rects arithmetically — NOT with ctx.clip(), because the machine's canvas
+     treats clip (and rect) as no-ops, so a clip-based fix would silently do
+     nothing on the actual hardware and the world would spill again. */
   drawWorld();
   for (i = 0; i < items.length; i++) {
     it = items[i];

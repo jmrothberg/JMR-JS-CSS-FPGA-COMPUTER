@@ -962,6 +962,7 @@ class VM:
                                 obj.get("fillStyle"),
                                 obj.get("textAlign") or "left",
                                 obj.get("font"),  # NEW: px size → glyph scale
+                                obj.get("textBaseline"),
                             )
                         self.stack.append(None)
                         continue

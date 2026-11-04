@@ -1,0 +1,199 @@
+{
+  "format": 1,
+  "font": "../../assets/desktop/chicago-12.json",
+  "glyph_overrides": {},
+  "labels": {
+    "81": "Editor",
+    "82": "Reader",
+    "83": "Compiler",
+    "84": "Utility",
+    "85": "Note",
+    "86": "System Tool",
+    "87": "Terminal",
+    "88": "Save",
+    "89": "Click to place cursor",
+    "90": "Modified",
+    "91": "Click page or arrows to scroll",
+    "92": "Reading source / artwork",
+    "93": "Compiling",
+    "94": "Writing program",
+    "95": "Files on disk",
+    "96": "System application",
+    "97": "Type a command",
+    "98": "^",
+    "99": "v",
+    "100": "<",
+    "101": ">",
+    "102": "Close window to return",
+    "103": "Decoding artwork",
+    "104": "Linking",
+    "110": "File",
+    "111": "Edit",
+    "112": "View",
+    "113": "Special",
+    "114": "Game",
+    "120": "New",
+    "121": "Open...",
+    "122": "Quit",
+    "123": "Save",
+    "124": "Save As...",
+    "125": "Quit",
+    "126": "Undo",
+    "127": "Cut",
+    "128": "Copy",
+    "129": "Paste",
+    "130": "Clear",
+    "131": "Select All",
+    "132": "Page Up",
+    "133": "Page Down",
+    "134": "Restart",
+    "135": "Terminal",
+    "136": "Editor",
+    "137": "Reader",
+    "138": "Compile",
+    "139": "Utility",
+    "140": "Note",
+    "141": "Help",
+    "142": "Cancel",
+    "143": "Open",
+    "144": "Replace",
+    "145": "OK",
+    "146": "Save changes before closing?",
+    "147": "Save document as:",
+    "148": "Use a short disk filename.",
+    "149": "Replace the existing file?",
+    "150": "No matching files on disk.",
+    "151": "Finder",
+    "152": "Manage programs and documents.",
+    "153": "Edit source code and text files.",
+    "154": "Read Markdown and text documents.",
+    "155": "Compile HTML and JavaScript programs.",
+    "156": "Inspect files and disk space.",
+    "157": "Write and save short text documents.",
+    "158": "A shared-window system application.",
+    "159": "Enter commands for the computer.",
+    "160": "JMR Enterprises",
+    "161": "Selection exceeds 4K clipboard.",
+    "162": "Document is full.",
+    "163": "Use 1-8 letters, then .TXT / .HTM / .MD",
+    "164": "Disk operation failed.",
+    "165": "Discard",
+    "166": "Invalid program menu or About text.",
+    "167": "Program",
+    "168": "An HTML and JavaScript program.",
+    "169": "Starting Finder...",
+    "170": "NCC-1701",
+    "171": "Welcome to Javatosh."
+  },
+  "dialog_offsets": {
+    "open": [
+      0,
+      0
+    ],
+    "save_as": [
+      0,
+      0
+    ],
+    "changes": [
+      0,
+      0
+    ],
+    "replace": [
+      0,
+      0
+    ],
+    "message": [
+      0,
+      0
+    ]
+  },
+  "rounded_buttons": true,
+  "default_button_outline": true,
+  "dialog_buttons": {
+    "open": [
+      [
+        386,
+        244,
+        112
+      ],
+      [
+        260,
+        244,
+        112
+      ],
+      [
+        0,
+        0,
+        0
+      ]
+    ],
+    "save_as": [
+      [
+        152,
+        214,
+        84
+      ],
+      [
+        252,
+        214,
+        96
+      ],
+      [
+        0,
+        0,
+        0
+      ]
+    ],
+    "changes": [
+      [
+        144,
+        234,
+        100
+      ],
+      [
+        266,
+        234,
+        100
+      ],
+      [
+        388,
+        234,
+        100
+      ]
+    ],
+    "replace": [
+      [
+        376,
+        234,
+        110
+      ],
+      [
+        250,
+        234,
+        110
+      ],
+      [
+        0,
+        0,
+        0
+      ]
+    ],
+    "message": [
+      [
+        270,
+        234,
+        100
+      ],
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0
+      ]
+    ]
+  }
+}

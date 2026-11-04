@@ -215,10 +215,12 @@ module jmr_js_vm_exec64 (
     output logic [17:0] src_setlen_q,
     output logic        src_setlen_stb_q,
     output logic        csr_oob_q,
-    input logic [111:0] id_sys_window,
+    input logic [143:0] id_sys_window,
+    input logic [1:0] fs_arg_index,
+    output logic [63:0] fs_arg_value,
     output logic sysw_toggle_q,
-    output logic [2:0] sysw_field_q,
-    output logic [7:0] sysw_value_q,
+    output logic [3:0] sysw_field_q,
+    output logic [31:0] sysw_value_q,
     output logic [11:0] minmax_base_q,
     output logic minmax_is_min_q,
     output logic [7:0] minmax_k_q,
@@ -1359,6 +1361,7 @@ module jmr_js_vm_exec64 (
     // Native arguments are pipeline operands, not a second VM stack. The
     // original stack remains authoritative for calls, returns and GC.
     logic [63:0] call_arg_q [0:9];
+    assign fs_arg_value=call_arg_q[fs_arg_index];
     always_ff @(posedge clk) begin
         if (enable && !leave_hold && opnd_q && !opnd2_q &&
             (opw_q[7:0] == OP_CALL || opw_q[7:0] == OP_CALL_METH)) begin
@@ -1773,13 +1776,13 @@ module jmr_js_vm_exec64 (
     assign csr_wdata_q = csr_wdata;
     logic [17:0] src_setlen; logic src_setlen_stb;
     logic sysw_we;
-    logic [2:0] sysw_field;
-    logic [7:0] sysw_value;
-    function automatic logic [2:0] system_field(input logic [15:0] key);
+    logic [3:0] sysw_field;
+    logic [31:0] sysw_value;
+    function automatic logic [3:0] system_field(input logic [15:0] key);
         begin
-            system_field=7;
-            for(integer f=0;f<7;f=f+1)
-                if(key==id_sys_window[f*16+:16])system_field=3'(f);
+            system_field=15;
+            for(integer f=0;f<9;f=f+1)
+                if(key==id_sys_window[f*16+:16])system_field=4'(f);
         end
     endfunction
     // Scalars only. Toggle transfers an accepted context-property write to
@@ -5374,6 +5377,10 @@ module jmr_js_vm_exec64 (
                                                 end
                                             end
                                         end
+                                        // One cold, serialized service state; no file logic in the opcode datapath.
+                                        8'd58,8'd59,8'd60,8'd61,8'd62,8'd63: begin
+                                            hp_slot_n=5'(nid-8'd57);vnat_base_n=base;state_n=S_FS;
+                                        end
                                         default: begin
                                             machine_fault_n = 1'b1;
                                             fault_code_n = 8'd5;
@@ -6264,22 +6271,22 @@ module jmr_js_vm_exec64 (
                                         state_n = S_FETCH_WAIT;
                                     end else if (vobj_alloc_rdata==2'd1 &&
                                                  vobj_gen_rdata==handle[43:32] &&
-                                                 vobj_builtin_rdata==4'd5 && system_field(opw[23:8])!=7)begin
+                                                 vobj_builtin_rdata==4'd5 && system_field(opw[23:8])!=15)begin
                                         vst_wr(vsp-12'd2,`VST_AT(vsp-12'd1));vsp_n=vsp-12'd1;
                                         ip_n=ip+16'd1;code_raddr_n=15'(ops_base+ip+16'd1);
-                                        if(system_field(opw[23:8])>=5)begin
+                                        if(system_field(opw[23:8])==5 || system_field(opw[23:8])==6)begin
                                             // Parent reads the one authoritative name RAM using
                                             // its registered port. No string/heap copy in exec.
                                             if(`VST_AT(vsp-12'd1)[63:48]==16'h7ff9 && `VST_AT(vsp-12'd1)[47:44]==4'd4)begin
                                                 hp_key_n=`VST_AT(vsp-12'd1)[15:0];
-                                                hp_slot_n={2'd0,system_field(opw[23:8])};state_n=S_UI_PROP;
+                                                hp_slot_n={1'b0,system_field(opw[23:8])};state_n=S_UI_PROP;
                                             end else begin machine_fault_n=1;fault_code_n=4;fault_site_n=16'd6700;running_n=0;state_n=S_DONE;end
                                         end else begin
-                                            sysw_we=1;sysw_field=3'(system_field(opw[23:8]));
+                                            sysw_we=1;sysw_field=system_field(opw[23:8]);
                                             sysw_value=(`VST_AT(vsp-12'd1)[63:48]==16'h7ff9 &&
                                                         `VST_AT(vsp-12'd1)[47:44]==4'd3)?
                                                         {7'd0,`VST_AT(vsp-12'd1)[0]}:
-                                                        v64_to_uint32(`VST_AT(vsp-12'd1))[7:0];
+                                                        v64_to_uint32(`VST_AT(vsp-12'd1));
                                             state_n=S_FETCH_WAIT;
                                         end
                                     end else begin
@@ -7009,7 +7016,10 @@ module jmr_js_vm_exec64 (
                                     // RECT_LD reads x/y/w/h from SRAM.
                                     cm_win_n = 1'b0;
                                     if (opw[23:8] != id_clearrect)
-                                        paint_color = fill_style_i;
+                                        // Same optional indexed-colour argument as Python;
+                                        // arg 0 is the context object, 1..4 are geometry.
+                                        paint_color = argc>=12'd5
+                                            ? v64_to_uint32(call_arg_q[5])[7:0] : fill_style_i;
                                     // PYTHON _xf: always apply axis scale + translate
                                     // (identity sx=1, tx=0 is a no-op; save/translate
                                     // then fillRect must not skip tx).

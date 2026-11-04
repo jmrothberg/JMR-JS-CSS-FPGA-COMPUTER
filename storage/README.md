@@ -1,5 +1,10 @@
 # storage/
 
+`SYSTEM.SYS` contains shared native fonts, menu/dialog captions and dialog
+layout resources. Generate it from `resources/system/system.json`; do not edit
+the binary. [How to edit and publish it](../docs/SYSTEM_RESOURCES.md). Reopen
+the simulator after publishing. No `.bit` build is needed for resource edits.
+
 This folder is the seed for the µSD card. It is a folder guide for the PC.
 It is not the manual, and it is not copied onto the card.
 
@@ -89,10 +94,10 @@ with no icon yet gets the text document. A chosen `NAME.ICON` is kept.
 
 `python3 tools/pick_icon.py` asks when a title has no icon. A title with
 an `.ARTX` offers pieces of that sheet. A title with no picture offers
-the built-in set: text, computer, folder, disk, trash, printer, case,
-the generic window, and the colored pictures (asteroids, Pac-Man,
-missiles, tank, ship, ball, star). The choice is saved as `NAME.ICON`. Nothing in the
-picker looks at the file name.
+the built-in set: line art, the color Macintosh sheet, and colored
+scenes. The choice is saved as `NAME.ICON`. Nothing in the picker looks
+at the file name. `python3 tools/make_sd_image.py create card.img -reicon`
+asks again for every program. Keep leaves the current file.
 
 ## Programs that must stay here
 

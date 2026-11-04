@@ -1,0 +1,242 @@
+"""Finder program: a card program, not the built-in desktop.
+
+The built-in desktop (functional_model/desktop.py) stays. These tests
+run storage/FINDER.HTML on the Python machine. Idle frames must stay
+near the first measured 88 steps. A dirty frame was 5858
+before the System 1.0 picture, and 14231 with Chicago and the desktop.
+"""
+from pathlib import Path
+
+from functional_model.classic_ui import ClassicUI, parse_finder_menus
+from functional_model.jsb_format import PROGRAM_CODE_WORDS, ProgramImage
+from functional_model.machine import Machine
+from functional_model.storage_engine import StorageEngine
+from runtime.backend import PythonBackend
+from tools.compile_js import compile_html_text, encode_html_chunk
+
+ROOT = Path(__file__).resolve().parents[1]
+FINDER = ROOT / "storage" / "FINDER.HTML"
+# 2026-11-03: idle 88. Paint 5858, then 14231 with the System 1.0 picture.
+IDLE_BUDGET = 120
+PAINT_BUDGET = 20000
+
+
+def _image():
+    blob = encode_html_chunk(compile_html_text(FINDER.read_text(), source_path=FINDER))
+    image = ProgramImage(blob)
+    assert image.code_end <= PROGRAM_CODE_WORDS * 4
+    return image
+
+
+def _disk(tmp_path):
+    (tmp_path / "GAME.HTM").write_text("game-body")
+    (tmp_path / "GAME.JSH").write_bytes(b"OLDJSH")
+    (tmp_path / "NOTE.TXT").write_text("hello note")
+    (tmp_path / "FINDER.HTM").write_text("hidden")
+    (tmp_path / "DESKTOP.FDR").write_bytes(b"nope")
+
+
+def _boot(tmp_path, monkeypatch):
+    monkeypatch.setenv("JMR_FINDER", "builtin")
+    _disk(tmp_path)
+    backend = PythonBackend(Machine(storage_root=tmp_path))
+    backend.desktop.visible = False
+    backend.machine._start_html_image(_image(), share_machine=True)
+    return backend
+
+
+def _frames(backend, n):
+    for _ in range(n):
+        backend.frame_tick()
+    hw = backend.machine._hw_vm
+    assert hw is not None and not hw.error
+
+
+def _byte(machine, addr):
+    return int(machine._nat_stg_read(addr))
+
+
+def _settle(backend):
+    for _ in range(12):
+        backend.frame_tick()
+        if _byte(backend.machine, 16384) == 1 and _byte(backend.machine, 16385) == 0 and _byte(backend.machine, 16600) == 0:
+            break
+    hw = backend.machine._hw_vm
+    assert hw is not None and not hw.error
+    assert _byte(backend.machine, 16384) == 1
+    # The frame that cleared dirty was the paint. The next one is idle.
+    backend.frame_tick()
+    assert not hw.error
+
+
+def _heap(hw):
+    return sum(1 for obj in hw._value_objects if obj is not None)
+
+
+def _key(backend, code):
+    backend.key_event(code, "", True)
+    backend.key_event(code, "", False)
+    _frames(backend, 2)
+
+
+def test_disk_natives_reject_a_bad_name_and_round_trip(tmp_path):
+    machine = Machine(storage_root=tmp_path)
+    (tmp_path / "NOTE.TXT").write_text("hello")
+    machine._nat_stg_write(100, ord("?"))
+    machine._nat_stg_write(101, 0)
+    assert machine._nat_fs_remove(100) == -1
+    assert machine._nat_fs_read(100, 0, 200, 4) == -1
+    for i, ch in enumerate(b"NOTE.TXT"):
+        machine._nat_stg_write(120 + i, ch)
+    machine._nat_stg_write(128, 0)
+    assert machine._nat_fs_read(120, 0, 200, 5) == 5
+    assert bytes(int(machine._nat_stg_read(200 + i)) for i in range(5)) == b"hello"
+    for i, ch in enumerate(b"COPY.TXT"):
+        machine._nat_stg_write(140 + i, ch)
+    machine._nat_stg_write(148, 0)
+    machine._nat_stg_write(300, ord("!"))
+    assert machine._nat_fs_write(140, 300, 1, 0) == 1
+    machine._nat_stg_write(300, ord("?"))
+    assert machine._nat_fs_write(140, 300, 1, 1) == 1
+    assert (tmp_path / "COPY.TXT").read_bytes() == b"!?"
+    for i, ch in enumerate(b"NEW.TXT"):
+        machine._nat_stg_write(160 + i, ch)
+    machine._nat_stg_write(167, 0)
+    assert machine._nat_fs_rename(140, 160) == 0
+    assert (tmp_path / "NEW.TXT").read_bytes() == b"!?"
+    assert not (tmp_path / "COPY.TXT").exists()
+    count = machine._nat_fs_list()
+    assert count >= 2
+    machine._nat_sys_run(160, 2)
+    assert machine._finder_request == ("NEW.TXT", 2)
+    assert machine.running is False
+
+
+def test_role_9_menus_leave_other_roles_alone():
+    spec = FINDER.read_text().split('ctx.systemMenus="', 1)[1].split('"', 1)[0]
+    menus = parse_finder_menus(spec)
+    assert [row[1] for row in menus[0][:3]] == [160, 161, 162]
+    assert len(menus) == 4 and all(1 <= len(menu) <= 12 for menu in menus)
+    ui = ClassicUI()
+    ui.configure(9, spec)
+    ui.menu_enable = 0xEDFFFC3F
+    ui.menu_check = 0x20000
+    rows = ui.rows(1)
+    assert rows[0][0] == "New Folder" and rows[0][2] is True
+    assert any(label == "Print" and not enabled for label, _action, enabled in rows)
+    assert ui.bar()[0][2:] == ("File",) or [item[2] for item in ui.bar()] == ["File", "Edit", "View", "Special"]
+    other = ClassicUI()
+    other.configure(1, "")
+    assert [item[0] for item in other.rows(1)] == ["New", "Open...", "Quit", "Save", "Save As..."]
+
+
+def test_finder_hides_itself_and_the_desktop_file(tmp_path):
+    _disk(tmp_path)
+    names = StorageEngine(tmp_path).catalog(all_files=True)
+    assert "FINDER.HTM" not in names
+    assert "DESKTOP.FDR" not in names
+    assert "GAME.HTM" in names
+
+
+def test_finder_window_folder_trash_and_idle_budget(tmp_path, monkeypatch):
+    backend = _boot(tmp_path, monkeypatch)
+    try:
+        _settle(backend)
+        machine = backend.machine
+        assert machine.system_window[0] == 9
+        assert _byte(machine, 16386) >= 3
+        assert _byte(machine, 16389) >= 1
+        kinds = {}
+        for slot in range(_byte(machine, 16386)):
+            base = 8192 + slot * 32
+            n = _byte(machine, base)
+            kinds[bytes(_byte(machine, base + 1 + i) for i in range(n))] = _byte(machine, base + 13)
+        assert kinds[b"GAME.HTM"] == 0
+        assert kinds[b"GAME.JSH"] == 4
+        assert kinds[b"NOTE.TXT"] == 2
+        backend.framebuffer()
+        assert backend.system_menu.classic.role == 9
+        assert [item[2] for item in backend.system_menu.classic.bar()] == ["File", "Edit", "View", "Special"]
+        assert (machine.system_menu_enable & (1 << 7)) == 0  # Print stays grey
+        hw = machine._hw_vm
+        assert hw.last_steps <= IDLE_BUDGET
+        heap = _heap(hw)
+        for _ in range(1000):
+            backend.frame_tick()
+            assert not hw.error
+            assert hw.last_steps <= IDLE_BUDGET
+        assert _heap(hw) == heap
+        _key(backend, 160)
+        assert _byte(machine, 16388) == 1
+        _key(backend, 170)
+        assert _byte(machine, 16388) == 0
+        backend.key_event(179, "", True)
+        backend.key_event(179, "", False)
+        backend.frame_tick()
+        assert IDLE_BUDGET < hw.last_steps <= PAINT_BUDGET
+        assert (machine.system_menu_check & (1 << 19)) != 0
+        # Drag the first icon onto the Trash picture.
+        backend.set_mouse(62, 108, 1)
+        _frames(backend, 1)
+        backend.set_mouse(580, 420, 1)
+        _frames(backend, 1)
+        backend.set_mouse(580, 420, 0)
+        _frames(backend, 2)
+        assert _byte(machine, 16387) == 1
+        assert (tmp_path / "GAME.HTM").read_text() == "game-body"
+        _key(backend, 185)
+        assert _byte(machine, 16620) == 1
+        backend.set_mouse(330, 245, 1)
+        _frames(backend, 1)
+        backend.set_mouse(330, 245, 0)
+        _frames(backend, 2)
+        assert _byte(machine, 16387) == 1  # No leaves the file on the disk
+        _key(backend, 185)
+        backend.set_mouse(220, 245, 1)
+        _frames(backend, 1)
+        backend.set_mouse(220, 245, 0)
+        _frames(backend, 2)
+        assert _byte(machine, 16387) == 0
+        assert not (tmp_path / "GAME.HTM").exists()
+        assert (tmp_path / "GAME.JSH").read_bytes() == b"OLDJSH"
+        assert (tmp_path / "DESKTOP.FDR").is_file()
+    finally:
+        backend.shutdown()
+
+
+def test_open_asks_the_launcher_and_keeps_the_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("JMR_FINDER", "builtin")
+    _disk(tmp_path)
+    machine = Machine(storage_root=tmp_path)
+    machine._start_html_image(_image(), share_machine=True)
+    for _ in range(8):
+        machine.frame_tick()
+    machine.input.set_mouse(62, 108, 1)
+    machine.frame_tick()
+    machine.input.set_mouse(62, 108, 0)
+    machine.frame_tick()
+    machine.input.set_mouse(62, 108, 1)
+    machine.frame_tick()
+    machine.input.set_mouse(62, 108, 0)
+    machine.frame_tick()
+    assert machine._finder_request is not None
+    assert machine._finder_request[0] == "GAME.HTM"
+    assert (tmp_path / "GAME.HTM").read_text() == "game-body"
+    assert (tmp_path / "GAME.JSH").read_bytes() == b"OLDJSH"
+
+
+def test_program_switch_boots_the_finder_and_builtin_does_not(tmp_path, monkeypatch):
+    monkeypatch.setenv("JMR_FINDER", "builtin")
+    builtin = PythonBackend(Machine(storage_root=tmp_path))
+    try:
+        assert builtin.desktop.visible and not builtin._finder_home
+    finally:
+        builtin.shutdown()
+    monkeypatch.setenv("JMR_FINDER", "program")
+    program = PythonBackend(Machine(storage_root=tmp_path))
+    try:
+        assert not program.desktop.visible and program._finder_home
+        _frames(program, 3)
+        assert program.machine.running and program.machine.system_window[0] == 9
+    finally:
+        program.shutdown()

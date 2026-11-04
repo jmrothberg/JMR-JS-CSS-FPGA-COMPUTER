@@ -1,9 +1,21 @@
 # JMR JS Computer
 
 **Latest Mac-GUI board trial:** [M trial bit](build/run74m_local_parser/board_trial/run74m_mac_gui_TRIAL_33MHz_WNS-0.169.bit),
-November 3. Loaded into SRAM for owner testing; working QSPI flash is unchanged.
+November 3. Loaded into SRAM; Jonathan reports it worked. Working QSPI flash is unchanged.
 Setup timing is **-0.169 ns**, so this is a trial, not the qualified standard.
 [Trial details and return to flash](build/run74m_local_parser/board_trial/README.md).
+
+**Current RTL work: disk-program Finder.** FPGA-SIM now boots `FINDER.JSH`
+and supplies generic file, launch and menu hooks. It stays within **8 MB**,
+keeping the Finder executable and desktop state in RAM for return from apps.
+Boot/menu/Terminal-return checks pass in the simulator. Reopen `gui_jmr_js.py` and
+select FPGA-SIM with F9 for owner testing. No new `.bit` build has been started.
+[What changed, how to test, and rollback](docs/PROGRAM_FINDER_RTL.md).
+**Disk-updatable UI resources:** edit `resources/system/system.json` and pack
+`SYSTEM.SYS` to change supported fonts, captions and dialogs without a new `.bit`.
+[Editing/publishing instructions for you or an agent](docs/SYSTEM_RESOURCES.md).
+The built-in Finder source and previous simulator are saved in
+[archive/builtin-finder-2026-11-03](archive/builtin-finder-2026-11-03/README.md).
 
 ## Next build: mouse + keyboard + joystick, no switching (read this first)
 

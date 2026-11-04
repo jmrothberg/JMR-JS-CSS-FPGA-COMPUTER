@@ -362,11 +362,14 @@ class CanvasEngine:
         color: int | None = None,
         align: str = "left",
         scale: int = 1,
+        baseline: int = 0,
     ) -> None:
         """8x8 glyphs into the BACK buffer (HTML fillText).
 
         NEW: integer scale from ctx.font px size (measureText matches:
-        width = len × 8 × scale)."""
+        width = len × 8 × scale). y is a baseline, same as the chip:
+        1 = top (no shift), 2 = middle (y - 4*scale), anything else
+        including the default is bottom/alphabetic (y - 8*scale)."""
         c = self.fill_style if color is None else (color & 0xFF)
         s = str(text)
         self.dirty = True
@@ -377,7 +380,15 @@ class CanvasEngine:
             px -= (len(s) * cw) // 2
         elif align == "right":
             px -= len(s) * cw
-        py -= 8 * k
+        # Same shift the RTL fillText uses. Unknown baselines never
+        # reach here; the machine keeps the previous register.
+        if baseline == 1:
+            shift = 0
+        elif baseline == 2:
+            shift = 4 * k
+        else:
+            shift = 8 * k
+        py -= shift
         back = self.back
         w = self.width
         for i, ch in enumerate(s):

@@ -16,7 +16,8 @@ def toolbar_label(role,flags):
     if role==3:return {1:103,2:93,3:104,4:94}.get((flags>>4)&7,92)
     return {4:95,6:96,7:97}.get(role,96)
 
-def window_pixels(state,paint_text,title=""):
+def window_pixels(state,paint_text,title="",lines=(),resources=None):
+    def label(i):return resources.label(i) if resources else WINDOW_LABELS.get(i,'System Tool')
     role,sy,sx,flags=state
     rgba=bytearray(bytes((85,221,255,255))*640*480)
     def rect(x,y,w,h,c):
@@ -27,17 +28,26 @@ def window_pixels(state,paint_text,title=""):
     rect(8,34,612,420,black);rect(9,35,610,418,white)
     for y in range(40,56,3):rect(32,y,206,1,black);rect(402,y,211,1,black)
     rect(10,60,608,1,black);rect(16,40,14,14,black);rect(17,41,12,12,white)
-    rect(24,88,576,344,(0,0,0,0))
+    # Role 3 shows the program that was opened. A clear hole was a black box
+    # because the compiler canvas behind it is empty.
+    if role==3:
+        rect(24,88,576,344,white)
+        shown=list(lines or [])
+        if not shown:paint_text(rgba,640,32,96,'Open an HTML program.',black)
+        else:
+            for row,line in enumerate(shown[:20]):
+                paint_text(rgba,640,32,96+row*16,(line or '')[:72],black)
+    else:rect(24,88,576,344,(0,0,0,0))
     rect(600,88,1,344,black);rect(601,108,17,306,grey)
     rect(601,107,17,1,black);rect(601,414,17,1,black)
     thumb=109+(sy*280//256);rect(601,thumb,17,18,black);rect(602,thumb+1,15,16,white)
     rect(10,433,608,1,black)
-    paint_text(rgba,640,34,3,WINDOW_LABELS.get(80+role,'System Tool'),(0,0,0))
-    caption=title if title and role in (1,2,5) else WINDOW_LABELS.get(80+role,'System Tool')
+    paint_text(rgba,640,34,3,label(80+role),(0,0,0))
+    caption=title if title and role in (1,2,5) else label(80+role)
     caption=caption[:24]
     cx=max(240,(640-sum(FONT.get(c,FONT['?'])['advance'] for c in caption))//2)
     paint_text(rgba,640,cx,38,caption,(0,0,0))
-    paint_text(rgba,640,24,66,WINDOW_LABELS[toolbar_label(role,flags)],(0,0,0))
+    paint_text(rgba,640,24,66,label(toolbar_label(role,flags)),(0,0,0))
     paint_text(rgba,640,604,90,'^',(0,0,0));paint_text(rgba,640,604,415,'v',(0,0,0))
     if role in (1,5):
         if flags&1:paint_text(rgba,640,480,66,'Modified',(0,0,0))

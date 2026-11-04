@@ -1,17 +1,32 @@
-// Beam-ordered, read-only system captions. A single half-BRAM ROM supplies
+// Beam-ordered system captions with a validated boot-resource write port.
+// A single block RAM supplies
 // current/next character records; no parallel character or pixel comparisons.
 module jmr_classic_static_labels (
- input logic pixel_clk,rst_n,
+ input logic pixel_clk,rst_n,clk,sys_we,
+ input logic [13:0] sys_addr,
+ input logic [15:0] sys_data,
  input logic [7:0] label_id,
  input logic signed [11:0] read_pos,
  input logic [9:0] beam_y,
  output logic [11:0] read_glyph
 );
  import jmr_classic_ui_pkg::*;
- (* rom_style="block" *) logic [10:0] records [0:1023];
+ (* ram_style="block" *) logic [10:0] records [0:2047];
+ (* ram_style="distributed" *) logic [17:0] layouts [0:255];
+ initial begin
+  for(integer i=0;i<256;i=i+1)begin
+   layouts[i]=classic_static_layout(8'(i));end
+ end
+ always_ff @(posedge clk)begin
+  if(sys_we && sys_addr>=2048 && sys_addr<4096)records[sys_addr-2048]<=sys_data[10:0];
+  if(sys_we && sys_addr>=4096 && sys_addr<4608)begin
+   if(!sys_addr[0])layouts[8'((sys_addr-4096)>>1)][15:0]<=sys_data;
+   else layouts[8'((sys_addr-4096)>>1)][17:16]<=sys_data[1:0];
+  end
+ end
  initial $readmemh("classic_static.hex",records);
  logic [7:0] previous_id;
- logic [9:0] previous_y,row_base,memory_addr;
+ logic [9:0] previous_y;logic [10:0] row_base,memory_addr;
  logic signed [11:0] previous_pos,pos_q;
  logic [6:0] current_index,current_count,fetch_index;
  logic [10:0] current_record,next_record,memory_data;
@@ -19,7 +34,7 @@ module jmr_classic_static_labels (
  wire [9:0] current_end=current_start+{6'd0,current_record[10:7]};
  logic current_valid,next_valid;
  logic [1:0] fetch_phase;
- wire [16:0] layout=classic_static_layout(label_id);
+ wire [17:0] layout=layouts[label_id];
  wire new_line=label_id!=previous_id || beam_y!=previous_y || read_pos<previous_pos;
  wire fetched_next=fetch_phase==2 && fetch_index!=0;
  wire available_next=next_valid || fetched_next;
@@ -33,8 +48,8 @@ module jmr_classic_static_labels (
   end else begin
    previous_id<=label_id;previous_y<=beam_y;previous_pos<=read_pos;pos_q<=read_pos;
    if(new_line)begin
-    row_base<=layout[9:0];memory_addr<=layout[9:0];fetch_index<=0;fetch_phase<=1;
-    current_index<=0;current_count<=layout[16:10];current_valid<=0;next_valid<=0;current_start<=0;
+    row_base<=layout[10:0];memory_addr<=layout[10:0];fetch_index<=0;fetch_phase<=1;
+    current_index<=0;current_count<=layout[17:11];current_valid<=0;next_valid<=0;current_start<=0;
    end else begin
     if(fetch_phase==1)fetch_phase<=2;
     else if(fetch_phase==2)begin
@@ -46,7 +61,7 @@ module jmr_classic_static_labels (
     end
     if(current_valid && read_pos>=0 && read_pos>=12'({2'd0,current_end}) && available_next && current_index+1'b1<current_count)begin
      current_start<=current_end;current_record<=available_record;current_index<=current_index+1'b1;next_valid<=0;
-     if(current_index+7'd2<current_count)begin memory_addr<=row_base+10'(current_index)+10'd2;fetch_index<=current_index+7'd2;fetch_phase<=1;end
+     if(current_index+7'd2<current_count)begin memory_addr<=row_base+11'(current_index)+11'd2;fetch_index<=current_index+7'd2;fetch_phase<=1;end
      else fetch_phase<=0;
     end
    end

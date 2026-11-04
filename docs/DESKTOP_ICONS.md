@@ -27,11 +27,12 @@ the card builder writes the text document icon. A saved choice is kept.
 no artwork yet and a display is attached, it first runs
 `tools/pick_icon.py`: sprites cut from that title's `.ARTX` (nearest
 neighbor, centered in 32×32). A title with no picture is offered a
-built-in set (text, computer, folder, disk, trash, printer, case, and
-the generic application window), then colored pictures: asteroids,
-Pac-Man, missiles, tank, ship, ball, and star. Those pictures are choices. A
-file name does not select one. The choice is written as `NAME.ICON`.
-That file is left as-is afterwards.
+built-in set: the line-art pictures, the same Macintosh sheet in color
+(smile, floppy, bomb, watch, and the rest), and colored scenes. Those
+pictures are choices. A file name does not select one. The choice is
+written as `NAME.ICON`. That file is left as-is afterwards.
+`create -reicon` asks again for every program. Keep leaves the current
+file unchanged.
 Artwork is fitted inside 32×32, centered, converted to
 RGB332 and given a one-bit transparency mask (alpha ≥128 is opaque).
 Artwork with an existing 32×32 ICO frame uses that frame. Preparing icons

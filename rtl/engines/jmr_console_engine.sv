@@ -34,6 +34,12 @@ module jmr_console_engine (
     output logic [4:0] ui_source_len_o,
     output logic ui_unnamed_o,
     input logic ui_doc_start=1'b0,ui_doc_new=1'b0,
+    input logic shell_tool_start=1'b0,shell_tool_finder=1'b0,
+    output logic sys_we,
+    output logic [13:0] sys_addr,
+    output logic [15:0] sys_data,
+    output logic [1:0] sys_status,
+    input logic park_finder=1'b0,forget_finder=1'b0,
     input logic [2:0] ui_doc_role=3'd1,
     input logic ui_stage_valid=1'b0,
     input logic [12:0] ui_stage_addr=13'd0,
@@ -147,7 +153,7 @@ module jmr_console_engine (
     localparam logic [21:0] CART_SRAM_BASE = 21'd0;
     // run 71 big put ceiling: CART bank = jmr_js_vm_pkg.CART_WORDS (1,480,704)
     // x 2 B/word. Mirrored like CART_SRAM_BASE (the console does not import the pkg).
-    localparam logic [22:0] BIG_MAX_BYTES = 23'd7155712;
+    localparam logic [22:0] BIG_MAX_BYTES = 23'(2*jmr_js_vm_pkg::CART_WORDS);
     localparam logic [21:0] CSCR_SRAM_BASE = 22'd3747840;
     localparam int unsigned CSCR_WORDS     = 73728;
     localparam logic [21:0] CIMG_SRAM_BASE = 22'd3887104;
@@ -182,7 +188,7 @@ module jmr_console_engine (
     //   4 MINTASM  5 EDIT    6 READ    7 spare (blank -> caller must not chain)
     // Rows 1/3/4/5 exist so those programs ship as CARD FILES with no RTL
     // change; that is the difference between "copy a file" and "re-synthesise".
-    function automatic logic [7:0] cmp_name_char(input logic [2:0] sel,
+    function automatic logic [7:0] cmp_name_char(input logic [3:0] sel,
                                                  input logic [6:0] i);
         logic [7:0] c;
         c = 8'h20;
@@ -222,12 +228,14 @@ module jmr_console_engine (
                 7'd4: c = "."; 7'd5: c = "J"; 7'd6: c = "S"; default: c = "H";
               endcase
         default: c = 8'h20;                 // 7 spare: blank name
+        4'd7:case(i)0:c="C";1:c="O";2:c="M";3:c="P";4:c="I";5:c="L";6:c="E";7:c=".";8:c="J";9:c="S";default:c="H";endcase
+        4'd8:case(i)0:c="F";1:c="I";2:c="N";3:c="D";4:c="E";5:c="R";6:c=".";7:c="J";8:c="S";default:c="H";endcase
         endcase
         cmp_name_char = c;
     endfunction
     // Length of each chain-ROM row. MUST track cmp_name_char above — a
     // mismatch truncates or over-reads the filename passed to storage.
-    function automatic logic [7:0] cmp_name_len(input logic [2:0] sel);
+    function automatic logic [7:0] cmp_name_len(input logic [3:0] sel);
         case (sel)
             3'd0: cmp_name_len = 8'd11; // ARTSCAN.JSH
             3'd1: cmp_name_len = 8'd10; // ARTPNG.JSH
@@ -236,6 +244,7 @@ module jmr_console_engine (
             3'd4: cmp_name_len = 8'd11; // MINTASM.JSH
             3'd5: cmp_name_len = 8'd10; // EDITOR.JSH
             3'd6: cmp_name_len = 8'd8;  // READ.JSH
+            4'd7:cmp_name_len=11;4'd8:cmp_name_len=10;
             default: cmp_name_len = 8'd0; // spare rows: no name
         endcase
     endfunction
@@ -297,7 +306,7 @@ module jmr_console_engine (
         // chain-load. Missing sidecar is NOT an error here: the flag goes
         // to 0 and a no-art title compiles exactly as it always did.
         C_ART_OPEN, C_ART_OPENW, C_ART_GB, C_ART_GBW, C_ART_WR,
-        C_ART_CLOSE, C_ART_CLOSEW, C_ART_FLAG, C_UI_INIT, C_UI_STAGE
+        C_ART_CLOSE, C_ART_CLOSEW, C_ART_FLAG, C_UI_INIT, C_UI_STAGE, C_CACHE_WRITE, C_CACHE_READ, C_CACHE_GAP, C_RESIDENT, C_SYS
     } cstate_t;
 `ifdef VERILATOR
     integer ctrace_fd = 0;
@@ -308,6 +317,37 @@ module jmr_console_engine (
     cstate_t state /*verilator public_flat_rd*/, ret_state;
     assign dbg_state = 7'(state);
 
+    logic finder_cache_valid /*verilator public_flat_rd*/;
+    logic finder_state_valid /*verilator public_flat_rd*/;
+    // SYSTEM.SYS is validated in the existing 24 KiB SRAM reservation before
+    // any live UI RAM is written. One sequential port, no second resource bank.
+    localparam logic [21:0] SYS_STAGE_BASE=22'd3565568;
+    localparam int SYS_BYTES=24320;
+    logic sys_attempted,sys_good;
+    logic [3:0] sys_phase;
+    logic [14:0] sys_i;
+    logic [31:0] sys_crc,sys_expected;
+    logic [7:0] sys_low;
+    function automatic logic [31:0] sys_crc_byte(input logic [31:0] crc,input logic [7:0] b);
+     logic [31:0] c;begin c=crc^{24'd0,b};
+      for(integer k=0;k<8;k=k+1)c=c[0]?(c>>1)^32'hedb88320:c>>1;
+      sys_crc_byte=c;
+     end
+    endfunction
+    function automatic logic [7:0] sys_header(input logic [3:0] i);
+     // JMRS, version u16=1, header u16=16, payload u32=24320.
+     case(i)0:sys_header="J";1:sys_header="M";2:sys_header="R";3:sys_header="S";
+      4:sys_header=1;6:sys_header=16;8:sys_header=0;9:sys_header=95;default:sys_header=0;endcase
+    endfunction
+    logic park_pending,resident_restore,resident_init;
+    logic [2:0] resident_phase;
+    logic [16:0] resident_i;
+    logic [15:0] resident_word;
+    logic finder_cache_fill,finder_cache_replay,cache_tail;
+    logic [17:0] finder_cache_length /*verilator public_flat_rd*/;
+    logic [7:0] cache_low;
+    logic [15:0] cache_word;
+    logic [31:0] finder_cache_hits /*verilator public_flat_rd*/;
     logic [7:0] line [0:127];
     logic [6:0] line_len;
     logic [6:0] msg_idx;
@@ -320,7 +360,7 @@ module jmr_console_engine (
     // selected by cmp_progsel; 2 = filename from the arena header
     // (CSTG_HDR_NAME) for the cdone SAVE/DELETE/LOAD/mint-as ops.
     logic [1:0]  jsb_name_src;
-    logic [2:0]  cmp_progsel;   // PROGSEL -> cmp_name_char row (a contract)
+    logic [3:0]  cmp_progsel;   // PROGSEL -> cmp_name_char row (a contract)
     logic        cmp_save_mode;  // C_SV_* pumps the arena instead of SOURCE
     logic        cmp_arm_r;      // held across the whole chain (no game_mode)
     logic [4:0]  cmp_ph;   // 0-5 header, 6 decide, 7-22 filename, 23 dispatch
@@ -340,7 +380,7 @@ module jmr_console_engine (
     // until the watchdog reported ?IO.
     logic        cmp_interactive;
     assign interactive_o=cmp_interactive;
-    assign system_role_o=cmp_arm_r?3'd3:cmp_interactive?(cmp_progsel==5?3'd1:3'd2):3'd0;
+    assign system_role_o=cmp_arm_r?3'd3:cmp_interactive?(cmp_progsel==8?3'd0:cmp_progsel==5?3'd1:cmp_progsel==7?3'd3:3'd2):3'd0;
     assign system_stage_o=cmp_progsel;
     assign ui_source_len_o=src_name_len;
     for(genvar ui_n=0;ui_n<16;ui_n=ui_n+1)begin:g_ui_name
@@ -733,7 +773,7 @@ module jmr_console_engine (
         endcase
     endfunction
 
-    assign ready_lit = (state == C_IDLE || state == C_PROMPT);
+    assign ready_lit = (state == C_IDLE || state == C_PROMPT) && !park_pending;
     assign stor_chan = 8'd1;
     assign stor_name_addr = NAME_BUF;
 
@@ -775,6 +815,9 @@ module jmr_console_engine (
             cmp_save_mode <= 1'b0; cmp_arm_r <= 1'b0;
             cmp_ph <= 5'd0; cmp_nw <= 1'b0; cmp_nm_len <= 8'd0; cmp_pend <= 1'b0; cmp_rd_addr <= '0;
             src_trunc <= 1'b0; cmp_use_srcname <= 1'b0;
+            sys_we<=0;sys_addr<=0;sys_data<=0;sys_status<=0;sys_attempted<=0;sys_good<=0;sys_phase<=0;sys_i<=0;sys_crc<=0;sys_expected<=0;sys_low<=0;
+            finder_state_valid<=0;park_pending<=0;resident_restore<=0;resident_init<=0;resident_phase<=0;resident_i<=0;resident_word<=0;
+            finder_cache_valid<=0;finder_cache_fill<=0;finder_cache_replay<=0;finder_cache_length<=0;cache_tail<=0;cache_low<=0;cache_word<=0;finder_cache_hits<=0;
             cmp_interactive <= 1'b0;
             ui_stage_ready<=0;ui_unnamed_o<=0;ui_init_i<=0;ui_init_pending<=0;ui_init_role<=1;
             cdone_seen_low <= 1'b0;
@@ -844,6 +887,7 @@ module jmr_console_engine (
             // (LOAD/EDIT writing src_len) must win, since the console owns
             // the buffer whenever it is not parked waiting on the VM.
             if (src_setlen_stb_i) src_len <= src_setlen_i;
+            sys_we<=0;
             unique case (state)
                 C_BOOT_CLS: begin
                     cls <= 1'b1;
@@ -1541,6 +1585,9 @@ module jmr_console_engine (
                 end
                 C_ART_GBW: if (stor_done) begin
                     if (stor_err || stor_eof) state <= C_ART_CLOSE;
+                    else if(art_i>=23'(CSTG_ART_HDRB)+23'(2*jmr_js_vm_pkg::CART_WORDS))begin
+                        art_found<=0;ld_err<=1;reply_sel<=4'd9;reply_idx<=0;state<=C_ART_CLOSE;
+                    end
                     else begin
                         rd_ch <= stor_get_data;
                         // Snoop n_sprites (u16 @6) and payload_len (u32 @
@@ -1594,7 +1641,7 @@ module jmr_console_engine (
                     stor_close <= 1'b1;
                     state <= C_ART_CLOSEW;
                 end
-                C_ART_CLOSEW: if (stor_done) state <= C_ART_FLAG;
+                C_ART_CLOSEW: if (stor_done) state <= ld_err?C_REPLY:C_ART_FLAG;
                 C_ART_FLAG: begin
                     // Publish "this title has art" for the compiler, then
                     // chain-load ARTSCAN exactly as before.
@@ -2519,6 +2566,9 @@ module jmr_console_engine (
                         state <= C_JSB_PREP;
                 end
                 C_JSB_OPEN: if (!stor_busy) begin
+                    finder_cache_replay<=0;cache_tail<=0;
+                    finder_cache_fill<=jsb_name_src==1 && cmp_progsel==8;
+                    if(jsb_name_src==1 && cmp_progsel==8)finder_cache_valid<=0;
                     stor_mode <= "I";
                     stor_open <= 1'b1;
                     jsb_waddr <= 0;
@@ -2550,7 +2600,13 @@ module jmr_console_engine (
                         end
                     end else state <= C_JSB_GB;
                 end
-                C_JSB_GB: if (!stor_busy) begin
+                C_JSB_GB: if(finder_cache_replay)begin
+                    if(jsb_boff>=finder_cache_length)state<=C_JSB_TEOF;
+                    else if(jsb_boff[0])begin jsb_din<=cache_word[15:8];state<=C_JSB_FEED;end
+                    else begin
+                        sram_req<=1;sram_we<=0;sram_addr<=jmr_js_vm_pkg::SYSTEM_CACHE_BASE+22'(jsb_boff>>1);state<=C_CACHE_READ;
+                    end
+                end else if (!stor_busy) begin
                     stor_get_byte <= 1'b1;
                     state <= C_JSB_GBW;
                 end
@@ -2562,6 +2618,14 @@ module jmr_console_engine (
                     end else begin
                         jsb_din <= stor_get_data;
                         state <= C_JSB_FEED;
+                        if(finder_cache_fill)begin
+                            if(jsb_boff>=jmr_js_vm_pkg::FINDER_CACHE_BYTES)finder_cache_fill<=0;
+                            else if(!jsb_boff[0])cache_low<=stor_get_data;
+                            else begin
+                                sram_req<=1;sram_we<=1;sram_addr<=jmr_js_vm_pkg::SYSTEM_CACHE_BASE+22'(jsb_boff>>1);
+                                sram_wdata<={stor_get_data,cache_low};state<=C_CACHE_WRITE;
+                            end
+                        end
                     end
                 end
                 // gui-put: 0xFC payload → SOURCE SRAM (byte-transparent, same
@@ -2722,7 +2786,102 @@ module jmr_console_engine (
                         state <= C_REPLY;
                     end else teth_wd <= teth_wd + 30'd1;
                 end
-                C_JSB_TEOF: begin
+                C_SYS:case(sys_phase)
+                    0:begin
+                        mem_en<=1;mem_we<=1;mem_addr<=NAME_BUF+16'(sys_i);
+                        case(sys_i)0:mem_wdata<="S";1:mem_wdata<="Y";2:mem_wdata<="S";3:mem_wdata<="T";4:mem_wdata<="E";5:mem_wdata<="M";6:mem_wdata<=".";7:mem_wdata<="S";8:mem_wdata<="Y";default:mem_wdata<="S";endcase
+                        sys_phase<=1;
+                    end
+                    1:if(mem_gnt)begin
+                        if(sys_i==9)begin stor_name_len<=10;sys_phase<=2;end
+                        else begin sys_i<=sys_i+1'b1;sys_phase<=0;end
+                    end
+                    2:if(!stor_busy)begin stor_mode<="I";stor_open<=1;sys_phase<=3;end
+                    3:if(stor_done)begin
+                        if(stor_err)begin sys_status<=2;name_i<=0;state<=C_JSB_PREP;end
+                        else begin sys_i<=0;sys_good<=1;sys_crc<=32'hffffffff;sys_expected<=0;sys_phase<=4;end
+                    end
+                    4:if(!stor_busy)begin stor_get_byte<=1;sys_phase<=5;end
+                    5:if(stor_done)begin
+                        if(stor_err || stor_eof)begin
+                            sys_good<=!stor_err && sys_good && sys_i==SYS_BYTES+16 && (~sys_crc)==sys_expected;
+                            sys_phase<=8;
+                        end else if(sys_i>=SYS_BYTES+16)begin sys_good<=0;sys_phase<=8;end
+                        else begin
+                            sys_i<=sys_i+1'b1;sys_phase<=4;
+                            if(sys_i<12)begin if(stor_get_data!=sys_header(sys_i[3:0]))begin sys_good<=0;sys_phase<=8;end end
+                            else if(sys_i<16)sys_expected[sys_i[1:0]*8+:8]<=stor_get_data;
+                            else begin
+                                sys_crc<=sys_crc_byte(sys_crc,stor_get_data);
+                                if(!sys_i[0])sys_low<=stor_get_data;
+                                else begin
+                                    sram_req<=1;sram_we<=1;sram_addr<=SYS_STAGE_BASE+22'((sys_i-16)>>1);
+                                    sram_wdata<={stor_get_data,sys_low};sys_phase<=6;
+                                end
+                            end
+                        end
+                    end
+                    6:if(sram_ack)begin sram_req<=0;sram_we<=0;sys_phase<=7;end
+                    7:sys_phase<=4;
+                    8:if(!stor_busy)begin stor_close<=1;sys_phase<=9;end
+                    9:if(stor_done)begin
+                        if(!sys_good || stor_err)begin sys_status<=3;name_i<=0;state<=C_JSB_PREP;end
+                        else begin sys_i<=0;sys_phase<=10;end
+                    end
+                    10:begin sram_req<=1;sram_we<=0;sram_addr<=SYS_STAGE_BASE+22'(sys_i);sys_phase<=11;end
+                    11:if(sram_ack)begin
+                        sram_req<=0;sys_we<=1;sys_addr<=sys_i[13:0];sys_data<=sram_rdata;sys_phase<=12;
+                    end
+                    12:begin
+                        if(sys_i==SYS_BYTES/2-1)begin sys_status<=1;name_i<=0;state<=C_JSB_PREP;end
+                        else begin sys_i<=sys_i+1'b1;sys_phase<=10;end
+                    end
+                    default:begin sys_status<=3;name_i<=0;state<=C_JSB_PREP;end
+                endcase
+                C_RESIDENT:case(resident_phase)
+                    0:begin
+                        sram_req<=1;sram_we<=0;
+                        sram_addr<=resident_restore?(jmr_js_vm_pkg::FINDER_STATE_BASE+22'(resident_i>>1)):(CSCR_SRAM_BASE+22'(resident_i));
+                        resident_phase<=1;
+                    end
+                    1:if(sram_ack)begin
+                        sram_req<=0;
+                        if(resident_restore)resident_word<=sram_rdata;
+                        else if(resident_i[0])resident_word[15:8]<=sram_rdata[7:0];
+                        else resident_word[7:0]<=sram_rdata[7:0];
+                        resident_phase<=2;
+                    end
+                    2:if(!resident_restore && !resident_i[0])begin resident_i<=resident_i+1'b1;resident_phase<=0;end
+                      else resident_phase<=3;
+                    3:begin
+                        sram_req<=1;sram_we<=1;
+                        sram_addr<=resident_restore?(CSCR_SRAM_BASE+22'(resident_i)):(jmr_js_vm_pkg::FINDER_STATE_BASE+22'(resident_i>>1));
+                        // Force a content redraw on return, preserving windows,
+                        // icon cache and directory state instead of re-reading SD.
+                        sram_wdata<=resident_init?16'd0:resident_restore?{8'd0,(resident_i==16385?8'd1:resident_i[0]?resident_word[15:8]:resident_word[7:0])}:resident_word;
+                        resident_phase<=4;
+                    end
+                    4:if(sram_ack)begin sram_req<=0;sram_we<=0;resident_phase<=5;end
+                    5:begin
+                        resident_i<=resident_i+1'b1;
+                        if(resident_init || resident_i==CSCR_WORDS-1)begin
+                            if(resident_restore)begin vm_start<=1;cmp_ph<=0;cmp_wd<=0;state<=C_CMP_WAIT;end
+                            else begin finder_state_valid<=1;park_pending<=0;state<=C_PROMPT;end
+                        end else resident_phase<=(resident_restore && !resident_i[0])?3:0;
+                    end
+                    default:resident_phase<=0;
+                endcase
+                C_CACHE_WRITE:if(sram_ack)begin
+                    sram_req<=0;sram_we<=0;state<=C_CACHE_GAP;
+                end
+                C_CACHE_READ:if(sram_ack)begin
+                    sram_req<=0;cache_word<=sram_rdata;jsb_din<=sram_rdata[7:0];state<=C_CACHE_GAP;
+                end
+                C_CACHE_GAP:state<=cache_tail?C_JSB_TEOF:C_JSB_FEED;
+                C_JSB_TEOF: if(finder_cache_fill && jsb_boff[0] && !cache_tail)begin
+                    sram_req<=1;sram_we<=1;sram_addr<=jmr_js_vm_pkg::SYSTEM_CACHE_BASE+22'(jsb_boff>>1);
+                    sram_wdata<={8'd0,cache_low};cache_tail<=1;state<=C_CACHE_WRITE;
+                end else begin
                     if (jsb_bi != 2'd0) begin
                         code_we <= 1'b1;
                         code_waddr <= jsb_waddr;
@@ -2748,7 +2907,9 @@ module jmr_console_engine (
                         state <= C_JSB_CLOSE;
                 end
                 C_JSB_FEED: begin
-                    if (jsb_has_aset && jsb_aset_off != 23'd0
+                    if(aset_seen && aset_len>2*jmr_js_vm_pkg::CART_WORDS)begin
+                        ld_err<=1;reply_sel<=4'd9;reply_idx<=0;state<=C_JSB_CLOSE;
+                    end else if (jsb_has_aset && jsb_aset_off != 23'd0
                                  && jsb_boff >= 23'd16 && jsb_boff >= jsb_aset_off) begin
                         // ---- ASET section: "ASET" + u32 len, then payload → SRAM
                         jsb_boff <= jsb_boff + 23'd1;
@@ -2825,7 +2986,13 @@ module jmr_console_engine (
                     state <= sram_last ? C_JSB_CLOSE
                            : (jsb_tether_mode ? C_JSB_TETHER : C_JSB_GB);
                 end
-                C_JSB_CLOSE: if (jsb_tether_mode) begin
+                C_JSB_CLOSE: if(finder_cache_replay)begin
+                    finder_cache_replay<=0;
+                    if(ld_err)begin finder_cache_valid<=0;state<=C_REPLY;end
+                    else if(finder_state_valid)begin
+                        resident_restore<=1;resident_init<=0;resident_phase<=0;resident_i<=0;state<=C_RESIDENT;
+                    end else begin resident_restore<=1;resident_init<=1;resident_phase<=3;resident_i<=16384;state<=C_RESIDENT;end
+                end else if (jsb_tether_mode) begin
                     // no FAT handle — PROG stream already ended
                     if (ld_err)
                         state <= C_REPLY;
@@ -2835,13 +3002,18 @@ module jmr_console_engine (
                     end
                 end else if (!stor_busy) begin stor_close <= 1'b1; state <= C_JSB_CLOSEW; end
                 C_JSB_CLOSEW: if (stor_done) begin
-                    if (ld_err)
+                    if(finder_cache_fill && !ld_err && !stor_err && jsb_boff!=0 && jsb_boff<=jmr_js_vm_pkg::FINDER_CACHE_BYTES)begin
+                        finder_cache_valid<=1;finder_cache_length<=jsb_boff[17:0];
+                    end
+                    finder_cache_fill<=0;
+                    if (ld_err || stor_err)
                         state <= C_REPLY;
                     else if (jsb_name_src != 2'd0) begin
-                        // Compiler program aboard: run it, then poll cdone.
-                        vm_start <= 1'b1;
+                        // Finder initializes its scratch marker before entering the VM.
+                        vm_start <= cmp_progsel!=8;
                         cmp_ph <= 5'd0; cmp_nw <= 1'b0; cmp_nm_len <= 8'd0; cmp_pend <= 1'b0; cmp_wd <= '0;
-                        state <= C_CMP_WAIT;
+                        if(cmp_progsel==8)begin resident_restore<=1;resident_init<=1;resident_phase<=3;resident_i<=16384;state<=C_RESIDENT;end
+                        else state <= C_CMP_WAIT;
                     end else begin
                         vm_start <= 1'b1;
                         reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
@@ -2938,6 +3110,28 @@ module jmr_console_engine (
             // is idle. SOURCE and its filename stay owned by this console.
             if(ui_stage_valid && !ui_stage_ready && (state==C_IDLE || state==C_PROMPT))begin
                 src_req<=1;src_we<=1;src_w16<=0;src_bank<=1;cmp_rd_addr<=cstg_word({8'd0,ui_stage_addr});src_wdata<=ui_stage_data;state<=C_UI_STAGE;
+            end
+            if(park_finder && finder_cache_valid)park_pending<=1;
+            if(forget_finder)begin finder_state_valid<=0;park_pending<=0;end
+            if(park_pending && !vm_busy_i && (state==C_IDLE || state==C_PROMPT))begin
+                resident_restore<=0;resident_init<=0;resident_phase<=0;resident_i<=0;state<=C_RESIDENT;
+            end
+            if(shell_tool_start && (state==C_IDLE || state==C_PROMPT))begin
+                // Start a system executable without replacing the user's SOURCE.
+                src_bank<=0;cmp_arm_r<=0;cmp_interactive<=1;
+                jsb_name_src<=1;cmp_progsel<=shell_tool_finder?4'd8:4'd7;
+                cmp_save_mode<=0;jsb_want_jsh<=1;jsb_tether_mode<=0;
+                name_i<=0;dir_n<=0;jsb_waddr<=0;jsb_bi<=0;jsb_word<=0;ld_err<=0;
+                jsb_boff<=0;jsb_aset_off<=0;jsb_has_aset<=0;aset_seen<=0;aset_len<=0;aset_pay<=0;
+                sram_last<=0;cmp_wd<=0;cmp_ph<=0;cmp_nw<=0;cmp_nm_len<=0;cmp_pend<=0;
+                cache_tail<=0;finder_cache_fill<=0;finder_cache_replay<=0;
+                pal_idx<=0;pal_ph<=0;
+                if(shell_tool_finder && !sys_attempted)begin
+                    sys_attempted<=1;sys_i<=0;sys_phase<=0;state<=C_SYS;
+                end else if(shell_tool_finder && finder_cache_valid)begin
+                    finder_cache_replay<=1;finder_cache_hits<=finder_cache_hits+1'b1;
+                    cdone_seen_low<=0;state<=C_JSB_GB;
+                end else state<=C_JSB_PREP;
             end
             if(ui_doc_start && (state==C_IDLE || state==C_PROMPT))begin
                 ui_init_i<=0;ui_init_pending<=0;ui_init_role<=ui_doc_role;state<=C_UI_INIT;

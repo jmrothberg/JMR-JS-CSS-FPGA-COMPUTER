@@ -13,6 +13,7 @@ from typing import Callable, List, Optional
 from . import jsb_format
 from .bytecode import VM
 from .canvas_engine import CONSOLE_VISIBLE_LINES, FB_BYTES, HEIGHT, WIDTH, CanvasEngine
+from .desktop import rgb332
 from .compiler import CompileError, compile_source
 from .html_loader import extract_html_program
 from .input_engine import InputEngine
@@ -88,6 +89,11 @@ class Machine:
         self.system_window = [0,0,0,0]
         self.system_menus = ''
         self.system_about = None
+        # Finder program menu masks. Bit 0 is command 160. All enabled
+        # until the program says otherwise. Not part of the 4-byte window.
+        self.system_menu_enable = 0xFFFFFFFF
+        self.system_menu_check = 0
+        self._finder_request = None
         self.system_viewport = False
         self.system_compiling = False
         self.system_stage = 0
@@ -170,6 +176,8 @@ class Machine:
         self._loop_chunk = None
         self._keep_fb = False
         self._edit_active = False
+        self._cmp_reset()
+        self._ctx_baseline = 0
         # NEW: clear bytecode-HTML frame state
         self._bytecode_html = False
         self._html_chunk = None
@@ -755,7 +763,8 @@ class Machine:
         for b in (0x55, 0x54, 0x4C, 0x01):
             self._nat_stg_write(off, b)
             off += 1
-        for name, size in self.storage.list_all():
+        # Same A–Z order as the Finder list view.
+        for name, size in sorted(self.storage.list_all(), key=lambda item: item[0].upper()):
             raw = name.encode("ascii", "replace")[:15]
             self._nat_stg_write(off, len(raw))
             off += 1
@@ -988,6 +997,7 @@ class Machine:
 
         observed = image.decode()
         self._cmp_reset()
+        self._ctx_baseline = 0
         # Prompt/LIST Space must not arrive as the first game keydown.
         self.input.discard_queued_keys()
         self.html_host = None
@@ -1022,6 +1032,10 @@ class Machine:
         self.system_menus=hw._m.system_menus
         self.system_about=hw._m.system_about
         self.system_viewport=hw._m.system_viewport
+        # Finder (role 9) paints with the desktop's RGB332 indexes, so a
+        # color icon and the gray-blue desktop match the built-in picture.
+        if self.system_window[0]==9:
+            self.canvas.palette=[rgb332(i) for i in range(256)]
         if self.system_window[0]==5 and not share_machine:
             self.source_name='UNTITLED.TXT';self.source_lines=[''];self.unnamed_document=True
             self._editor_resume=(0,0,0,0,5)
@@ -1333,12 +1347,30 @@ class Machine:
         sx = float(getattr(self, "_ctx_sx", 1) or 1)
         return max(1, int(round(px * sx / 8.0)))
 
-    def _nat_fill_text(self, t, x, y, style=None, align="left", font=None):
+    def _note_baseline(self, name) -> None:
+        """ctx.textBaseline. top/middle/bottom update the register.
+
+        Anything else ('center', 'alphabetic', a typo) is ignored and the
+        previous baseline stays. PACFAST writes 'center' after 'top' and
+        relies on that. 0 and 3 both draw as bottom (y - 8*scale).
+        """
+        n = str(name or "").strip().lower()
+        if n == "top":
+            self._ctx_baseline = 1
+        elif n == "middle":
+            self._ctx_baseline = 2
+        elif n == "bottom":
+            self._ctx_baseline = 3
+
+    def _nat_fill_text(self, t, x, y, style=None, align="left", font=None, baseline=None):
         if style is not None:
             self._nat_fill_style_css(style)
+        if baseline is not None:
+            self._note_baseline(baseline)
         ix, iy = self._xf(x, y)
         self.canvas.fill_text(
-            t, ix, iy, align=str(align or "left"), scale=self._font_scale(font)
+            t, ix, iy, align=str(align or "left"), scale=self._font_scale(font),
+            baseline=int(getattr(self, "_ctx_baseline", 0) or 0),
         )
         return None
 
@@ -1664,6 +1696,122 @@ class Machine:
         self.sram.mem[word * 2] = int(b) & 0xFF
         return None
 
+    def _arena_name(self, off: int, maxlen: int = 16) -> str:
+        """NUL-terminated arena bytes. The Finder program keeps names there."""
+        chars = []
+        for i in range(maxlen):
+            b = int(self._nat_stg_read(int(off) + i))
+            if b <= 0:
+                break
+            chars.append(chr(b & 127))
+        return "".join(chars).strip()
+
+    def _fat_name(self, name: str):
+        from hardware_model.fat32 import Fat32Volume
+        name = name.strip().upper()
+        if not name:
+            return None
+        if Fat32Volume.decode_83(Fat32Volume.encode_83(name)) != name:
+            return None
+        return name
+
+    def _nat_fs_list(self) -> float:
+        """Stage every root file at arena 256. Return the count.
+
+        Header at 240: u32 used, u32 available (0 if this disk has no
+        size), u16 count. Each record is nlen, name, u32 size, u16 DOS
+        date, u8 attr, and nlen 0 ends the list.
+        """
+        rows = self.storage.list_finder_info()
+        used = 0
+        off = 256
+        count = 0
+        for name, size, date, attr in rows:
+            raw = name.encode("ascii", "replace")[:12]
+            if off + 1 + len(raw) + 7 >= jsb_format.CSTG_WORDS:
+                break
+            self._nat_stg_write(off, len(raw))
+            off += 1
+            for ch in raw:
+                self._nat_stg_write(off, ch)
+                off += 1
+            sz = int(size) & 0xFFFFFFFF
+            for shift in (0, 8, 16, 24):
+                self._nat_stg_write(off, (sz >> shift) & 255)
+                off += 1
+            d = int(date) & 0xFFFF
+            self._nat_stg_write(off, d & 255)
+            self._nat_stg_write(off + 1, (d >> 8) & 255)
+            self._nat_stg_write(off + 2, int(attr) & 255)
+            off += 3
+            used += sz
+            count += 1
+        self._nat_stg_write(off, 0)
+        for i, shift in enumerate((0, 8, 16, 24)):
+            self._nat_stg_write(240 + i, (used >> shift) & 255)
+        for i in range(4):
+            self._nat_stg_write(244 + i, 0)
+        self._nat_stg_write(248, count & 255)
+        self._nat_stg_write(249, (count >> 8) & 255)
+        return float(count)
+
+    def _nat_fs_read(self, name_off, file_off, dst_off, n) -> float:
+        name = self._fat_name(self._arena_name(name_off))
+        if not name:
+            return -1.0
+        try:
+            data = self.storage.load_bytes(name)
+        except FileNotFoundError:
+            return -1.0
+        start = max(0, int(file_off))
+        count = max(0, int(n))
+        chunk = data[start:start + count]
+        for i, b in enumerate(chunk):
+            self._nat_stg_write(int(dst_off) + i, b)
+        return float(len(chunk))
+
+    def _nat_fs_write(self, name_off, src_off, n, mode) -> float:
+        name = self._fat_name(self._arena_name(name_off))
+        if not name:
+            return -1.0
+        count = max(0, int(n))
+        blob = bytes(int(self._nat_stg_read(int(src_off) + i)) & 255 for i in range(count))
+        if int(mode) == 1:
+            try:
+                blob = self.storage.load_bytes(name) + blob
+            except FileNotFoundError:
+                pass
+        self.storage.save_bytes(name, blob)
+        return float(count)
+
+    def _nat_fs_remove(self, name_off) -> float:
+        name = self._fat_name(self._arena_name(name_off))
+        if not name:
+            return -1.0
+        self.storage.delete(name)
+        return 0.0
+
+    def _nat_fs_rename(self, old_off, new_off) -> float:
+        old = self._fat_name(self._arena_name(old_off))
+        new = self._fat_name(self._arena_name(new_off))
+        if not old or not new:
+            return -1.0
+        if old == new:
+            return 0.0
+        try:
+            data = self.storage.load_bytes(old)
+        except FileNotFoundError:
+            return -1.0
+        self.storage.save_bytes(new, data)
+        self.storage.delete(old)
+        return 0.0
+
+    def _nat_sys_run(self, name_off, how) -> float:
+        """Leave the Finder program and run a file. The backend relaunches it."""
+        self._finder_request = (self._arena_name(name_off), int(how))
+        self.running = False
+        return 0.0
+
     def _nat_art_write2(self, word_idx, lo, hi):
         w = int(word_idx)
         if w < 0 or w >= jsb_format.CART_WORDS:
@@ -1957,6 +2105,11 @@ class Machine:
         return None
 
     def frame_tick(self) -> None:
+        # The GUI pumps a frame between compiler stages. cdone belongs to
+        # that chain until COMPILE returns. Handling it here prints a
+        # false ?CE and drops the handoff the next stage still needs.
+        if getattr(self, "system_compiling", False):
+            return
         if self.poll_escape():
             return
         if self.html_host is not None and self.html_host.alive:
@@ -1974,6 +2127,9 @@ class Machine:
             # sees SAVED or OK and has to Esc. Paint READY over that frame.
             self._edit_active = False
             self._cmp_done = False
+            # The shell brings the Finder back. Leaving this flag clear
+            # painted READY over a black glass and stayed there.
+            self._app_stopped = True
             self.running = False
             self._bytecode_html = False
             self._keep_fb = False

@@ -119,6 +119,16 @@ NATIVE_IDS = {
     "isFinite": 55,
     "isNaN": 56,
     "Math.ceil": 57,
+    # Finder program disk ABI. Names are NUL-terminated bytes in the
+    # compile arena (stgRead/stgWrite). RTL fault sites 5801..5806 are
+    # the same calls until jmr_finder_fs.sv is wired. Python is the
+    # behavior: functional_model/machine.py _nat_fs_*.
+    "fsList": 58,
+    "fsRead": 59,
+    "fsWrite": 60,
+    "fsRemove": 61,
+    "fsRename": 62,
+    "sysRun": 63,
 }
 
 # NEW: aliases share an id (decode prefers the canonical NATIVE_IDS key)
@@ -168,8 +178,11 @@ _FB_SRAM_BASE_BYTES = 3_577_856 * 2
 #   [0, CSCR_WORDS)                      -> CSCR_SRAM_BASE + i
 #   [CSCR_WORDS, CSCR_WORDS+CIMG_WORDS)  -> CIMG_SRAM_BASE + i - CSCR_WORDS
 CART_SRAM_BASE = 0
-CART_WORDS = 3_577_856  # == FB_SRAM_BASE; artWrite2 faults at or past this
-CART_MAX_BYTES = _FB_SRAM_BASE_BYTES
+SYSTEM_CACHE_BASE = 3_446_784  # 256 KiB reserved below the unchanged framebuffer
+FINDER_CACHE_BYTES = 163_840
+FINDER_STATE_BASE = SYSTEM_CACHE_BASE + 81_920
+CART_WORDS = SYSTEM_CACHE_BASE
+CART_MAX_BYTES = CART_WORDS * 2
 CSCR_SRAM_BASE = 3_747_840
 CSCR_WORDS = 73_728
 CIMG_SRAM_BASE = 3_887_104
@@ -878,12 +891,12 @@ def build_aset_payload(palette, sprites):
     # art happened to land past this line (MKPVP/MKCPU/MKBIG/MKBIGCPU all
     # shipped this way; each was fixed by shrinking the art, not raising
     # this number). This check must never be silently bypassed again.
-    if asset_sram_bytes() == SRAM_BYTES and len(out) > _FB_SRAM_BASE_BYTES:
+    if asset_sram_bytes() == SRAM_BYTES and len(out) > CART_MAX_BYTES:
         raise ValueError(
             f"ASET payload {len(out)} bytes reaches into runtime-reserved "
-            f"SRAM (framebuffer/work/spr/src/imgd start at byte "
-            f"{_FB_SRAM_BASE_BYTES}) — art would be corrupted by every "
-            f"frame's display copy. Shrink the art (dedupe/repack sprite "
+            f"SRAM (system cache and runtime regions start at byte "
+            f"{CART_MAX_BYTES}) — art would overwrite resident system "
+            f"data. Shrink the art (dedupe/repack sprite "
             f"sheets); do not raise this boundary without moving the "
             f"colliding RTL region."
         )

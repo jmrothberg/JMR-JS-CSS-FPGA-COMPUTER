@@ -2040,6 +2040,41 @@ class JsHwVm:
                     if value == 0:
                         value = -0.0
                 return value_pack_number(value)
+            elif 58 <= native_id <= 63:
+                # Finder program disk ABI. Same arena and -1 sentinel as
+                # the compile natives. sysRun stops this program; the
+                # backend relaunches FINDER when the next one quits.
+                def _arg(k: int) -> float:
+                    if k >= len(args):
+                        return 0.0
+                    a = args[k]
+                    return value_unpack_number(a) if value_is_number(a) else 0.0
+
+                try:
+                    if native_id == 58:
+                        return value_pack_number(self._m._nat_fs_list())
+                    if native_id == 59:
+                        return value_pack_number(self._m._nat_fs_read(
+                            _arg(0), _arg(1), _arg(2), _arg(3)))
+                    if native_id == 60:
+                        return value_pack_number(self._m._nat_fs_write(
+                            _arg(0), _arg(1), _arg(2), _arg(3)))
+                    if native_id == 61:
+                        return value_pack_number(self._m._nat_fs_remove(_arg(0)))
+                    if native_id == 62:
+                        return value_pack_number(self._m._nat_fs_rename(_arg(0), _arg(1)))
+                    self._m._nat_sys_run(_arg(0), _arg(1))
+                    # Remember the queued frame so the Finder can resume
+                    # from RAM. Then drop it, or this program turns back on
+                    # and the launch fights a live rAF.
+                    self._m._finder_raf = list(self._value_raf)
+                    self._value_raf = []
+                    self._value_timers = []
+                    self.running = False
+                    return value_pack_number(0)
+                except RuntimeError as exc:
+                    self._value64_fault(f"native ID {native_id} at IP {ip}: {exc}")
+                    return None
             else:
                 self._value64_fault(
                     f"unsupported native ID {native_id} at IP {ip}"
@@ -2381,6 +2416,7 @@ class JsHwVm:
                     self._value64_named_prop(receiver, "fillStyle"),
                     self._value64_named_prop(receiver, "textAlign") or "left",
                     self._value64_named_prop(receiver, "font"),
+                    self._value64_named_prop(receiver, "textBaseline"),
                 )
                 return undefined
             if method == "measureText":
@@ -2924,6 +2960,7 @@ class JsHwVm:
                 self._value64_fault(f"instruction limit {max_steps} exceeded")
                 return
             steps += 1
+            self.last_steps = steps
             op_ip = ip
             # Architecture Monitor execution ring. The GUI can only look
             # between frames, and between frames the VM is always parked at
@@ -3520,16 +3557,35 @@ class JsHwVm:
                     if not self._value64_push(value):return
                     continue
                 if (self._value_object_builtins[value_payload(handle)] == BUILTIN_CONTEXT
+                        and property_name in ('systemMenuEnable', 'systemMenuCheck')):
+                    mask = value_to_int32(value) & 0xFFFFFFFF
+                    if property_name == 'systemMenuEnable':
+                        self._m.system_menu_enable = mask
+                    else:
+                        self._m.system_menu_check = mask
+                    if not self._value64_push(value):
+                        return
+                    continue
+                if (self._value_object_builtins[value_payload(handle)] == BUILTIN_CONTEXT
                         and property_name == 'systemMenus'):
                     spec = self._value64_string_text(value, op_ip, op)
                     if spec is None:return
-                    from functional_model.classic_ui import parse_menus
-                    try:parse_menus(spec)
+                    from functional_model.classic_ui import parse_finder_menus, parse_menus
+                    try:
+                        if self._m.system_window[0] == 9:
+                            parse_finder_menus(spec)
+                        else:
+                            parse_menus(spec)
                     except ValueError as exc:
                         self._value64_fault(str(exc));return
                     self._m.system_menus = spec
                     if not self._value64_push(value):return
                     continue
+                if (self._value_object_builtins[value_payload(handle)] == BUILTIN_CONTEXT
+                        and property_name == 'textBaseline'):
+                    # Update the baseline register on the write. A later
+                    # invalid value such as 'center' must not clear 'top'.
+                    self._m._note_baseline(self._value64_js_tostring(value))
                 if (self._value_object_builtins[value_payload(handle)] == BUILTIN_CONTEXT
                         and property_name in ('systemWindow','windowScroll','windowScrollX','windowDirty')):
                     field=('systemWindow','windowScroll','windowScrollX','windowDirty').index(property_name)

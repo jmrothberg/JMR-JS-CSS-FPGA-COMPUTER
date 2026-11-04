@@ -1,0 +1,90 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>GUI example</title></head>
+<body><canvas id="c" width="640" height="480"></canvas><script>
+// Copy this for a program that has a window.
+// Games do not use this. A game is systemWindow 8 and fills the screen.
+//
+// A windowed program draws only in the white content hole:
+// x 24..600, y 88..432. The system draws the menu bar, title,
+// and scroll bars around that hole. Do not paint the desktop,
+// the menu bar, or a black box in the middle.
+// If a picture does not fit in the hole, do not draw it.
+// The system draws Save, Cancel, and the name field. Do not draw them.
+// The keyboard opens only from the apple menu.
+// Redraw only when something changed. Do not bind Esc.
+// Desk → Empty Trash clears the names in this example. It does
+// not call REMOVE. The Finder does that.
+var ctx=document.getElementById("c").getContext("2d");
+ctx.systemAbout="GUI Example|Alphabetical list, trash, and a heading.";
+ctx.systemWindow=6;
+ctx.systemMenus="Desk|Empty Trash=160";
+var names=["Note","Boxes","Help","Read me"];
+var trash=[];
+var order=[];
+var drag=-1;
+var px=0;
+var py=0;
+var held=0;
+var redraw=1;
+function sortNames(){
+  var i,j,t;
+  order=[];
+  for(i=0;i<names.length;i++) order[i]=i;
+  for(i=0;i<order.length;i++){
+    for(j=i+1;j<order.length;j++){
+      if(names[order[j]]<names[order[i]]){
+        t=order[i]; order[i]=order[j]; order[j]=t;
+      }
+    }
+  }
+}
+function draw(){
+  var i,y,name;
+  ctx.fillStyle="#FFFFFF"; ctx.fillRect(24,88,576,344);
+  ctx.fillStyle="#000000"; ctx.font="16px monospace";
+  ctx.fillText("Window example",40,112);
+  ctx.fillText("Draw only in this white area.",48,136);
+  ctx.fillText("Games stay full screen.",48,156);
+  y=188;
+  for(i=0;i<order.length;i++){
+    name=names[order[i]];
+    ctx.fillText(name,48,y);
+    y=y+24;
+  }
+  ctx.fillStyle="#000000"; ctx.fillRect(500,340,80,48);
+  ctx.fillStyle="#FFFFFF"; ctx.fillText("Trash",512,368);
+  ctx.fillStyle="#000000"; ctx.fillText(trash.length,500,320);
+  if(drag>=0) ctx.fillText(names[drag],px,py);
+}
+function pointer(e,mode){
+  var i,n,w,top;
+  px=e.clientX; py=e.clientY;
+  if(mode===2){ if(held) redraw=1; return; }
+  if(mode===1){
+    held=1; drag=-1; top=172;
+    for(i=0;i<order.length;i++){
+      if(px>=40 && px<220 && py>=top && py<top+24) drag=order[i];
+      top=top+24;
+    }
+    redraw=1; return;
+  }
+  held=0;
+  if(drag>=0 && px>=500 && py>=340 && px<580 && py<388){
+    trash[trash.length]=names[drag];
+    n=[]; w=0;
+    for(i=0;i<names.length;i++) if(i!==drag){ n[w]=names[i]; w=w+1; }
+    names=n;
+  }
+  drag=-1; sortNames(); redraw=1;
+}
+addEventListener("keydown",function(e){ if(e.keyCode===160){ trash=[]; redraw=1; } });
+addEventListener("mousedown",function(e){ pointer(e,1); });
+addEventListener("mousemove",function(e){ pointer(e,2); });
+addEventListener("mouseup",function(e){ pointer(e,0); });
+sortNames();
+function frame(){
+  if(redraw){ draw(); redraw=0; }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body></html>

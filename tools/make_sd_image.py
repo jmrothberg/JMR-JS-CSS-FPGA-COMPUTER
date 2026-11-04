@@ -7,6 +7,7 @@ lands on the card as 8.3 names.
 
 Usage:
   python3 tools/make_sd_image.py create card.img
+  python3 tools/make_sd_image.py create card.img -reicon
   python3 tools/make_sd_image.py create card.img -soundoff
   python3 tools/make_sd_image.py create card.img -nojsh
   python3 tools/make_sd_image.py list card.img
@@ -25,7 +26,8 @@ A title with no desktop icon is offered a picker (`tools/pick_icon.py`):
 a sprite from its `.ARTX`, or a built-in icon when the title has no
 picture. The choice is saved as `NAME.ICON` and lands on the card as
 `NAME.ICN`. A markdown file with no icon yet is in that picker. If none is chosen,
-it gets the text document icon.
+it gets the text document icon. `-reicon` asks again for every program.
+Keep leaves the current file unchanged.
 """
 
 from __future__ import annotations
@@ -77,7 +79,7 @@ FSINFO_SECTOR = 1
 # PNG stays on the host. ARTX -> ART is runtime artwork; ARTJS -> ARJ
 # preserves source artwork separately for View > Hidden files.
 _SKIP_SUFFIX = {".JSH", ".JSB", ".MDC", ".JSON", ".PNG"}
-_KEEP_SUFFIX = {".HTML", ".HTM", ".JS", ".DAT", ".BIN", ".ARTX", ".ARTTX", ".ARTJS", ".TXT", ".MD"}
+_KEEP_SUFFIX = {".SYS", ".HTML", ".HTM", ".JS", ".DAT", ".BIN", ".ARTX", ".ARTTX", ".ARTJS", ".TXT", ".MD"}
 
 
 def compile_sidecars(
@@ -499,7 +501,7 @@ def put_host_files_on_card(
     return written
 
 
-_PUT_EXTS = {".HTM", ".HTML", ".JS", ".JSH", ".JSB", ".ART", ".ARTX", ".MD", ".TXT", ".ICN", ".ARJ"}
+_PUT_EXTS = {".SYS", ".HTM", ".HTML", ".JS", ".JSH", ".JSB", ".ART", ".ARTX", ".MD", ".TXT", ".ICN", ".ARJ"}
 
 
 def list_card_put_files(img_path: Path | None = None) -> list[tuple[str, int]]:
@@ -542,6 +544,7 @@ def create_image(
     force: bool = False,
     sound: bool = True,
     jsh: bool = True,
+    reicon: bool = False,
 ) -> Path:
     """Format a FAT32 image, optionally seed from storage/, then add `files`.
 
@@ -565,10 +568,11 @@ def create_image(
     image = format_fat32(size_bytes)
     pairs: list[tuple[str, bytes]] = []
     if include_storage:
-        # Ask only for titles that do not already have artwork. Headless
-        # runs leave a note; the machine draws the generic window for those.
+        # Ask only for titles that do not already have artwork, unless
+        # -reicon. Headless runs leave a note; the machine draws the
+        # generic window for those. -reicon without a display stops here.
         from tools.pick_icon import ensure_choice
-        ensure_choice(STORAGE_DIR)
+        ensure_choice(STORAGE_DIR, redo=reicon)
         pairs.extend(collect_storage_files())
     if files:
         # Explicit --files override same-named storage entries.
@@ -599,7 +603,7 @@ def create_image(
     # System programs (the compiler chain and the editor) ship as .JSH only.
     # Their .HTML is authoring source, not a title, and listing it buries the
     # games in DIR — which is a paged screen, not a scrollback.
-    _SYS = {"ARTSCAN", "ARTPNG", "COMPILER", "COMPIL2", "MINTASM", "EDITOR"}
+    _SYS = {"ARTSCAN", "ARTPNG", "COMPILER", "COMPIL2", "MINTASM", "EDITOR", "FINDER"}
     pairs = [
         (n, d) for n, d in pairs
         if not (Path(n).stem.upper() in _SYS
@@ -831,6 +835,12 @@ def main(argv: list[str] | None = None) -> int:
         "image (the compiler's own programs are still minted). FPGA "
         "compile test card.",
     )
+    p_create.add_argument(
+        "-reicon",
+        "--reicon",
+        action="store_true",
+        help="ask again for every program icon; Keep leaves the current file",
+    )
 
     sub.add_parser("check", help="lint storage/ against the board's LOAD limits")
 
@@ -889,6 +899,7 @@ def main(argv: list[str] | None = None) -> int:
             force=args.force,
             sound=not args.soundoff,
             jsh=not args.nojsh,
+            reicon=args.reicon,
         )
         # Report what landed on the card.
         vol = open_volume(args.image)

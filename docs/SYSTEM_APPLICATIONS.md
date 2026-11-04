@@ -26,8 +26,10 @@ scroll controls and dialogs. HTML declares a role and optional application menus
 it handles application commands through the existing keydown event path. Do not
 copy a menu renderer, click rectangles, ship image, or font atlas into each app.
 
-`storage/MENUEX.HTML` is the complete small example. Both converted real games
-use exactly the same interface:
+`storage/MENUEX.HTML` is the complete small example for a menu command.
+`storage/GUIDEX.HTML` is the example for a standalone desktop habit:
+names in alphabetical order, drag one onto Trash, and Desk → Empty Trash.
+Both converted real games use exactly the same interface:
 
 ```js
 var ctx=document.getElementById("c").getContext("2d");
@@ -39,11 +41,23 @@ addEventListener("keydown",function(e){
 });
 ```
 
+The same declarations are how a game uses the system box. File → Save draws
+one Macintosh dialog: the words "Save document as:", the name field,
+then Save and Cancel. There is no Eject, Drive, or radio row. The program
+does not paint that box. Python draws it, and the chip draws the same box.
+A one-pixel caret blinks in the name field. Clicking between letters, or
+the left and right keys, moves it. Backspace deletes the letter before it.
+The button Return presses has a second outline. The buttons are round.
+Over the name field the pointer is an I-beam. A click outside the box
+flashes that outlined button and does not close the box.
+`storage/MENUEX.HTML` is the copy for a game. `storage/GUIDEX.HTML` is the
+copy for a program that has a window.
+
 `resetGame` and `togglePause` are the application's own functions. Menu commands
 have no text/character payload and do not simulate mouse clicks into game buttons.
 The system consumes menu pointer events so a menu selection cannot also move a
 chess piece or act as a click in the program underneath. Ship → About and Keyboard remain available. **Quit is in File for every
-game**, and is absent from the ship menu. Games without their own Game menu
+game and every windowed program**, and is absent from the ship menu. Games without their own Game menu
 receive a shared Game → Restart action that reloads the same executable.
 
 ## Roles and drawing areas
@@ -52,9 +66,9 @@ receive a shared Game → Restart action that reloads the same executable.
 - `2`: SOURCE Reader. File → Open chooses another `.MD` or `.TXT` on disk.
 - `3`: Compiler. The system selects this during the actual compile chain; do not
   insert chrome into the nearly full compiler program.
-- `4`: Utility. Shared window and catalog contents; File → Close works.
+- `4`: Utility. Shared window and catalog contents; File → Quit works.
 - `5`: Note. A tiny entry point opens an untitled `.TXT` in the shared Editor.
-- `6`: Other utility/application. Shared window, File → Close, application menus.
+- `6`: Other utility/application. Shared window, File → Quit, application menus.
 - `7`: Terminal. Selected by the system for the command console.
 - `8`: Game. Shared top menu bar; no surrounding document frame.
 - `0`: Legacy program without the shared application menu bar.
@@ -127,7 +141,7 @@ Editor/Note use `ctx.windowDirty` bits: 0 modified, 1 undo available, 2 clipboar
 available, 3 selection exists. Bits 4–5 report notices: 1 clipboard overflow,
 2 document full. Commands are 137 Undo, 138 Cut, 139 Copy, 140 Paste, 141 Clear,
 142 Select All. Selection and edits belong to the app; menus/dialogs belong to
-the system. File → New/Open/Close offers Save/Discard/Cancel when modified.
+the system. File → New/Open/Quit offers Save/Discard/Cancel when modified.
 
 File → Save sends F2 (keyCode 113, empty character). The Editor writes this
 21-byte resume header using `stgWrite`, then calls `cdone(129,0,0)`:
@@ -138,7 +152,12 @@ File → Save sends F2 (keyCode 113, empty character). The Editor writes this
 
 The system saves SOURCE to the chosen filename and restarts the same editor on
 that document, restoring the caret/viewport. New/Save As uses the shared filename
-dialog and mouse keyboard. Existing files require an explicit Replace choice.
+dialog. A new document starts with an empty name, not `UNTITLED.TXT`. A real
+name stays in the field. The caret blinks at the insertion point, and
+Backspace deletes the character before it. The on-screen
+keyboard stays closed until the apple menu opens it.
+Existing files require an explicit Replace choice. Radio buttons are not part
+of that box. A program adds them only when the choice is real for that program.
 Saving HTML invalidates its old `.JSH`, as the existing storage system requires;
 Compile builds its new executable. Ordinary text uses `.TXT` or `.MD`.
 
@@ -193,3 +212,105 @@ All 19 games/demos in `storage/` declare the shared menu role and About metadata
 The other 17 use the automatic viewport and receive Game → Restart. No runtime
 behavior is selected by game filename. The publisher discovers declarations in
 HTML, so future converted programs are included without editing a title list.
+
+## MacPaint
+
+`storage/MACPAINT.HTML` is a windowed drawing program, role 6. It draws
+only in the white hole. File → Save stays grey: that command writes
+SOURCE for the editor and the compiler. Disk → Save, Save As, and Open
+write a `STEM.PNT` picture with `fsWrite` and `fsRead`, which the chip
+already has. No new instruction was added.
+
+The page is 576 by 320. The page, one undo copy, and a full-page
+clipboard have to fit in the 73,728-byte compile arena. A taller classic
+page does not fit beside those copies. Bits are arena bytes (`stgRead` /
+`stgWrite`) because a program cannot index ImageData pixels. The text
+tool is a 5 by 7 face in the file. `fillText` cannot be read back, and
+the machine has one bitmap font, so there is no Font menu. The stick
+uses `keyUp` / `keyDown` / `keyLeft` / `keyRight` / `keyFire`. `joy()` is
+not a chip instruction.
+
+## Standalone desktop, from the 128K Finder
+
+The original Macintosh Finder is one disk, a Trash can, and four menus.
+These are the pieces worth having on this computer, and small enough to
+show in an HTML example.
+
+Python desktop, now:
+
+- View → List sorts names A to Z. View → Icons keeps disk order.
+- Drag a file onto Trash. It leaves the window and stays on the disk.
+- Click Trash to see the held files. Drag one onto Disk to put it back.
+- Special → Empty Trash appears once Trash holds a file, asks, then `REMOVE`s them.
+- File → Delete... still deletes the selected file immediately.
+
+`storage/GUIDEX.HTML` is the copyable window. A windowed program draws
+only in the white hole, x 24 to 600 and y 88 to 432, and leaves out
+anything that does not fit. Games stay `systemWindow` 8 and fill the
+screen. They are not put in that hole. `storage/READ.HTML` is the
+document reader: `#` and `##` are twice body size and the marks are not
+drawn. `- ` and `* ` become an indented square.
+
+Later, for the next RTL desktop, not this Python pass:
+
+- The same list order, drag, Trash window, and Empty Trash in
+  `rtl/engines/jmr_desktop.sv`. Until that lands, list view no longer
+  matches the RTL pixel test.
+- Get Info, Duplicate, New Folder, Clean Up, and Rename.
+- Shut Down. This machine has one disk, so Eject stays off.
+
+## Finder program
+
+The section above is the built-in desktop (`functional_model/desktop.py`
+and `rtl/engines/jmr_desktop.sv`). The Finder program is a different
+thing: `storage/FINDER.HTML`, an ordinary card program, the way the
+1984 Finder was a program and the menu bar stayed in ROM.
+
+The Python shell uses it when `JMR_FINDER=program` (the GUI default)
+or when `FINDER.JSH` is on the disk. `JMR_FINDER=builtin` keeps the
+built-in desktop. Quitting a program, or Esc, runs the Finder again.
+Nothing in the built-in desktop is deleted.
+
+A menu title inverts while that menu is open. Dragging across the bar
+switches menus. A row inverts under the pointer, and the command runs
+when the button is released on it. A dialog button does the same: it
+inverts while held, and it runs only if the pointer is still on it.
+
+The Finder draws its own overlapping windows. Once it has loaded, that
+running program stays in memory. Opening something else uses the one
+heap, and coming back continues the same Finder. Restart loads it again.
+The toolbox still draws
+the menu bar, the Apple menu, and the Open / Save As dialogs. Folders,
+icon positions, Trash, comments, and window places live in
+`DESKTOP.FDR` on the flat card. There are no FAT subdirectories.
+
+File has New Folder, Open, Close, Close All, Get Info, Duplicate, and
+Put Back. Print, Page Setup, and Eject stay grey. Edit has Undo, Cut,
+Copy, Paste, Clear, Select All, and Show Clipboard. View has by Icon,
+by Small Icon, by Name, by Size, by Kind, by Date, and Hidden files.
+Special has Clean Up, Empty Trash, Set Startup, Restart, Terminal, and
+Compile. Erase Disk stays grey. An HTML file with a minted JSH is an
+application. HTML with no JSH is source. `.MD` and `.TXT` are documents.
+
+DIR hides `FINDER` the same way it hides EDITOR and COMPILER.
+`DESKTOP.FDR` is hidden with the other non-title suffixes. The icons
+are the rectangles the program draws. No new icon art is added.
+
+## RTL program Finder handoff (November 3)
+
+The default RTL now uses the Finder program and generic file/launch hooks.
+The built-in desktop is preserved as a build option and source snapshot.
+See [PROGRAM_FINDER_RTL.md](PROGRAM_FINDER_RTL.md) for the native ABI, role-9
+menu contract, simulator instructions and rollback. Syntax/elaboration and a
+simulator build are checks of the implementation, not owner UI/board acceptance.
+No new bitstream was started.
+
+The RTL implementation keeps the 8 MiB memory map. It caches the Finder image
+and parks its arena state while another application uses the single VM. Returning
+reconstructs JavaScript globals, restores the arena and redraws; it does not keep
+a second live JS heap. This is specific to the Finder’s documented arena layout.
+The implemented SYSTEM.SYS loader is documented in
+[SYSTEM_RESOURCES.md](SYSTEM_RESOURCES.md), including source format and agent
+instructions. It supplies shared visual resources; application behavior and
+custom menu commands remain JavaScript. Boot, desktop, menu and Terminal-return smoke checks
+have passed; application-wide owner testing and board timing remain outstanding.

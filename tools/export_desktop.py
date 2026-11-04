@@ -5,7 +5,7 @@ import re
 import sys
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from functional_model.desktop import RECTS, MENUS, MENU_X
+from functional_model.desktop import RECTS, MENUS, MENU_X, centered_x
 
 MESSAGES=['File','Edit','View','Special','','Disk','Trash','Storage','000 items','Page 00','^','v','<','>',
           'Delete file?','About JMR','Permanently delete file?','Native HTML Computer','This cannot be undone.',
@@ -35,7 +35,7 @@ def bins(name,width,span,count):
 lines+=bins('desktop_list_row',9,19,16)
 lines+=bins('desktop_icon_row',9,86,4)
 lines+=bins('desktop_icon_column',10,102,8)
-lines+=['function automatic logic [7:0] desktop_base(input logic [9:0] x,input logic [8:0] y,input logic [9:0] wx,input logic [8:0] wy,selected,input logic [8:0] page_base, input logic window_on,list_view,input logic [2:0] menu,input logic [1:0] dialog);',
+lines+=['function automatic logic [7:0] desktop_base(input logic [9:0] x,input logic [8:0] y,input logic [9:0] wx,input logic [8:0] wy,selected,input logic [8:0] page_base, input logic window_on,list_view,input logic [2:0] menu,input logic [1:0] dialog,input logic signed [10:0] selection_left,selection_right);',
         'logic signed [10:0] rx,ry;logic [3:0] slot;logic [9:0] mx;logic [8:0] mh;logic [7:0] c;begin',
         "rx=$signed({1'b0,x})-$signed({1'b0,wx});ry=$signed({2'b0,y})-$signed({2'b0,wy});c=((x^y)&1)!=0?8'h5b:8'h7b;"]
 for x,y,w,h,c,condition,absolute in RECTS:
@@ -47,7 +47,7 @@ if(ry>=5 && ry<22 && desktop_stripe(5'(ry-5)) && ((rx>=24 && rx<204)||(rx>=344 &
 if(selected>=page_base && selected<page_base+9'd15)begin
 slot=4'(selected-page_base);
 if(list_view)begin if(rx>=24 && rx<514 && ry>=49+slot*19 && ry<67+slot*19)c=8'h17;end
-else if(rx>=10+desktop_column(slot)*102 && rx<98+desktop_column(slot)*102 && ry>=97+desktop_row(slot)*86 && ry<115+desktop_row(slot)*86)c=8'h17;
+else if(rx>=selection_left && rx<selection_right && ry>=97+desktop_row(slot)*86 && ry<115+desktop_row(slot)*86)c=8'h17;
 end end
 mx=(menu==1)?30:(menu==2)?84:(menu==3)?136:190;
 mh=((menu==1)?5:(menu==2)?1:(menu==3)?4:8)*21+8;
@@ -94,7 +94,7 @@ lines+=['function automatic logic caption_visible('+args+');begin',
         "else if(cap<29)caption_visible=window_on && (page_base+{5'd0,4'(cap-6'd14)})<count;",
         'else if(cap<39)caption_visible=menu!=0 && cap-29<menu_count(menu);',
         'else caption_visible=(cap<43)?dialog!=0:dialog==1;end endfunction']
-xs={0:'34',1:'88',2:'140',3:'194',4:'548',5:'572',6:'575',7:'wx+235',8:'wx+10',9:'wx+365',10:'wx+532',11:'wx+532',12:'wx+5',13:'wx+515',39:'230',40:'158',41:'158',42:'186',43:'360'}
+xs={0:'34',1:'88',2:'140',3:'194',4:'548',5:str(centered_x(596,'Disk')),6:str(centered_x(596,'Trash')),7:'wx+235',8:'wx+10',9:'wx+365',10:'wx+532',11:'wx+532',12:'wx+5',13:'wx+515',39:'230',40:'158',41:'158',42:'186',43:'360'}
 ys={0:'3',1:'3',2:'3',3:'3',4:'3',5:'86',6:'449',7:'wy+4',8:'wy+28',9:'wy+28',10:'wy+48',11:'wy+318',12:'wy+337',13:'wy+337',39:'165',40:'198',41:'221',42:'267',43:'267'}
 for axis,values in [('x',xs),('y',ys)]:
  lines+=['function automatic logic ['+('9' if axis=='x' else '8')+':0] caption_'+axis+'('+args+');begin caption_'+axis+'=0;case(cap)']

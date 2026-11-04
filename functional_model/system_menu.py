@@ -43,7 +43,7 @@ def key_value(index,shift=False,caps=False):
 
 class SystemMenu:
     def __init__(self):
-        self.open=False;self.keyboard=False;self.about=False;self.shift=False;self.caps=False
+        self.open=False;self.apple_row=-1;self.keyboard=False;self.about=False;self.about_hot=False;self.shift=False;self.caps=False
         self.ctrl=False;self.alt=False;self.pressed=127;self.buttons=0
         self.held=None;self.guest_drag=False;self.x=320;self.y=240
         self.hold_keys=False;self.latched={}
@@ -51,6 +51,7 @@ class SystemMenu:
         from .classic_ui import ClassicUI
         self.classic=ClassicUI()
         self.document_name=""
+        self.source_lines=()
         self.application_title='Finder'
         self.application_description='Manage programs and documents.'
 
@@ -81,26 +82,40 @@ class SystemMenu:
         down=bool(buttons&1 and not self.buttons&1)
         up=bool(self.buttons&1 and not buttons&1)
         self.x,self.y=x,y
+        # About is the top row, Keyboard the bottom. Same invert as the other menus.
+        labels=self._apple_labels()
+        if self.open and 0<=x<190 and 26<=y<26+len(labels)*21:
+            self.apple_row=(y-26)//21
+        else:self.apple_row=-1
         actions=[]
         role=self.window[0]
-        chrome=role not in (0,8) and not (24<=x<600 and 88<=y<432)
+        chrome=role not in (0,8,9) and not (24<=x<600 and 88<=y<432)
         consumed=(chrome or self.about or self.open or (x<30 and y<22) or (self.keyboard and y>=296) or self.held is not None)
         if self.guest_drag:consumed=False
         if down and not consumed:self.guest_drag=True
         if up:self.guest_drag=False
         if self.held is not None and up:
             code,text=self.held;actions.append(('key',code,0,False));self.held=None;self.pressed=127
-        if consumed and down:
-            if self.about:
-                if 273<=x<369 and 269<=y<296:self.about=False
-            elif self.open:
+        if self.about:
+            inside=273<=x<369 and 269<=y<296
+            self.about_hot=bool(inside and buttons&1)
+            if up and inside:
+                self.about=False;self.about_hot=False
+        if consumed and up and self.open:
+            labels=self._apple_labels()
+            row=(y-26)//21
+            if x<190 and 0<=row<len(labels):
                 self.open=False
-                if x<190 and 26<=y<68:
-                    if y<47:self.about=True
-                    else:
-                        self.keyboard=not self.keyboard
-                        actions.append(('keyboard',self.keyboard))
-            elif x<30 and y<22:self.open=True
+                name=labels[row]
+                if name=='About':self.about=True
+                elif name=='Keyboard':
+                    self.keyboard=not self.keyboard
+                    actions.append(('keyboard',self.keyboard))
+                else:actions.append(('menu','tool:'+name))
+            elif not (x<30 and y<22):self.open=False
+        if consumed and down:
+            if self.open and x<30 and y<22:self.open=False
+            elif not self.open and x<30 and y<22:self.open=True
             elif self.keyboard and y>=296:
                 if x>=600 and y<313:self.keyboard=False;actions.append(('keyboard',False))
                 elif 420<=x<585 and y<313:
@@ -142,7 +157,8 @@ class SystemMenu:
 
     def _text(self,rgba,width,x,y,text,colour):
         for char in text:
-            g=FONT.get(char,FONT['?'])
+            font=getattr(getattr(self,'resources',None),'font',FONT)
+            g=font.get(char,font['?'])
             for row,bits in enumerate(g['rows']):
                 for col,bit in enumerate(bits):
                     if bit=='1':
@@ -151,17 +167,24 @@ class SystemMenu:
                             i=(py*width+px)*4;rgba[i:i+4]=bytes((*colour,255))
             x+=g['advance']
 
+    def _apple_labels(self):
+        # Role 9 is the Finder program. Desk accessories hang off the
+        # apple menu, the way they did on the original Macintosh.
+        if self.window[0]==9:return ('About','Keyboard','Note','Help','Utility')
+        return ('About','Keyboard')
+
     def overlays(self):
-        signature=(self.open,self.keyboard,self.about,self.shift,self.caps,self.ctrl,self.alt,self.pressed,self.hold_keys,tuple(sorted(self.latched)),self.window,self.document_name,self.application_title,self.application_description,self.classic.signature)
+        signature=(self.open,self.apple_row,self.keyboard,self.about,self.about_hot,self.shift,self.caps,self.ctrl,self.alt,self.pressed,self.hold_keys,tuple(sorted(self.latched)),self.window,self.document_name,len(getattr(self,'source_lines',())),self.application_title,self.application_description,self.classic.signature)
         if getattr(self,'_overlay_signature',None)==signature:return self._overlay_cache
-        width,height=190,72 if self.open else 22
+        apple_n=len(self._apple_labels())
+        width,height=190,(26+apple_n*21+8 if self.open and self.window[0]==9 else 72 if self.open else 22)
         rgba=bytearray(width*height*4)
         for y in range(height):
             for x in range(width):
                 if x<30 and y<22:
                     c=(0,0,0) if y==21 else (255,255,255)
                 elif self.open and y>=22:
-                    c=(0,0,0) if x in (0,189) or y in (22,71) else (255,255,255)
+                    c=(0,0,0) if x in (0,189) or y in (22,height-1) else (255,255,255)
                 else:continue
                 rgba[(y*width+x)*4:(y*width+x+1)*4]=bytes((*c,255))
         for sy,bits in enumerate(SHIP['rows']):
@@ -169,8 +192,23 @@ class SystemMenu:
                 if bits&(1<<(SHIP['width']-1-sx)):
                     i=((SHIP['y']+sy)*width+SHIP['x']+sx)*4;rgba[i:i+4]=bytes((0,0,0,255))
         if self.open:
-            self._text(rgba,width,8,26,'About',(0,0,0))
-            self._text(rgba,width,8,47,'Keyboard',(0,0,0))
+            labels=self._apple_labels()
+            if self.window[0]==9:
+                if 0<=self.apple_row<len(labels):
+                    y0=24+self.apple_row*21
+                    for py in range(y0,y0+20):
+                        rgba[(py*width+1)*4:((py*width)+189)*4]=bytes((0,0,0,255))*188
+                for i,label in enumerate(labels):
+                    self._text(rgba,width,8,26+i*21,label,(255,255,255) if self.apple_row==i else (0,0,0))
+            else:
+                if self.apple_row==0:
+                    for py in range(24,46):
+                        rgba[(py*width+1)*4:((py*width)+189)*4]=bytes((0,0,0,255))*188
+                elif self.apple_row==1:
+                    for py in range(47,70):
+                        rgba[(py*width+1)*4:((py*width)+189)*4]=bytes((0,0,0,255))*188
+                self._text(rgba,width,8,26,'About',(255,255,255) if self.apple_row==0 else (0,0,0))
+                self._text(rgba,width,8,47,'Keyboard',(255,255,255) if self.apple_row==1 else (0,0,0))
         out=[(0,0,width,height,bytes(rgba))]
         if self.keyboard:
             rgba=bytearray(bytes((219,219,219,255))*640*184)
@@ -198,16 +236,27 @@ class SystemMenu:
                     colour=None
                     if x<2 or x>=373 or y<2 or y>=151:colour=(0,0,0)
                     elif 140<=x<236 and 115<=y<142:
-                        colour=(0,0,0) if x in (140,235) or y in (115,141) else (219,219,219)
+                        edge=x in (140,235) or y in (115,141)
+                        colour=(0,0,0) if edge or self.about_hot else (219,219,219)
                     if colour is not None:
                         i=(y*375+x)*4;rgba[i:i+4]=bytes((*colour,255))
             for x,y,text in [(20,12,'JMR Enterprises'),(20,44,self.application_title),
                              (20,70,self.application_description),(175,121,'OK')]:
-                self._text(rgba,375,x,y,text,(0,0,0))
+                ink=(255,255,255) if self.about_hot and text=='OK' else (0,0,0)
+                if getattr(self,'resources',None) and y in (12,121):text=self.resources.label(160 if y==12 else 145)
+                self._text(rgba,375,x,y,text,ink)
             out.append((133,154,375,153,bytes(rgba)))
         if self.window[0]:
             from .system_window import window_pixels
-            full=bytearray(640*480*4) if self.window[0]==8 else window_pixels(self.window,self._text,self.document_name)
+            # Role 9 draws its own windows. The toolbox keeps the menu bar.
+            if self.window[0]==9:
+                full=bytearray(640*480*4)
+                full[:640*22*4]=bytes((255,255,255,255))*640*22
+                full[640*21*4:640*22*4]=bytes((0,0,0,255))*640
+            elif self.window[0]==8:
+                full=bytearray(640*480*4)
+            else:
+                full=window_pixels(self.window,self._text,self.document_name,getattr(self,'source_lines',()),getattr(self,'resources',None))
             if self.window[0]==8:
                 full[:640*22*4]=bytes((255,255,255,255))*640*22
                 full[640*21*4:640*22*4]=bytes((0,0,0,255))*640

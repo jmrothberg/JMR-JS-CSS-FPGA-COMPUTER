@@ -21,6 +21,9 @@ import tkinter as tk
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+# The GUI shell is the Finder program. Tests leave this unset and keep
+# the built-in desktop unless FINDER.JSH is already on their disk.
+os.environ.setdefault("JMR_FINDER", "program")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -263,7 +266,11 @@ class App:
         self.root.bind_all("<KeyRelease-F10>", self._toggle_arch_monitor)
         self.root.bind_all("<Escape>", lambda e: self.break_program())
 
-        self.machine.paint_monitor("> ")
+        # Two startup pictures, then the Finder. A key or a click skips them.
+        self._boot_done = False
+        self._boot_stage = 0
+        self._boot_t0 = time.monotonic()
+        self._paint_boot(0)
         self._refresh_fb()
         self.canvas_label.focus_set()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -799,7 +806,38 @@ class App:
                 self._set_status(f"PUT ERR {e}")
         return "break"
 
+    def _paint_boot(self, stage: int) -> None:
+        from functional_model.desktop import paint_javatosh_boot, rgb332
+        canvas = self.machine.canvas
+        if stage == 0:
+            self._boot_palette = list(canvas.palette)
+            canvas.palette = [rgb332(i) for i in range(256)]
+        paint_javatosh_boot(canvas, stage)
+        self.backend._boot_glass = True
+        self._boot_stage = stage
+
+    def _boot_showing(self) -> bool:
+        if self._boot_done:
+            return False
+        now = time.monotonic()
+        if self._boot_stage == 0 and now >= self._boot_t0 + 1.4:
+            self._paint_boot(1)
+        return now < self._boot_t0 + 3.4
+
+    def _skip_boot(self) -> None:
+        if self._boot_done:
+            return
+        self._boot_done = True
+        self.backend._boot_glass = False
+        self._mouse_samples.clear()
+        self._mouse_buttons = 0
+        if not self.backend._finder_program() and getattr(self, '_boot_palette', None):
+            self.machine.canvas.palette = self._boot_palette
+
     def on_key_press(self, event: tk.Event) -> str | None:
+        if self._boot_showing():
+            self._skip_boot()
+            return "break"
         if getattr(self.backend, "system_keyboard", False) and not self._is_running():
             code = {"Return":13,"KP_Enter":13,"BackSpace":8,"Delete":127}.get(event.keysym)
             if code is None and event.char and 32<=ord(event.char[0])<127:
@@ -1143,6 +1181,8 @@ class App:
         self._queue_mouse(event.x, event.y)
 
     def _mouse_button(self, event, button, pressed):
+        if pressed and self._boot_showing():
+            self._skip_boot()
         self.canvas_label.focus_set()
         mask = {1: 1, 2: 4, 3: 2}[button]
         self._mouse_buttons = ((self._mouse_buttons | mask) if pressed
@@ -1180,6 +1220,13 @@ class App:
         if not self._alive:
             return
         try:
+            if self._boot_showing():
+                self._refresh_fb()
+                self._set_status(self._status_text())
+                self._set_key_status(self._key_status_text())
+                self._after_id = self.root.after(FRAME_MS, self._frame)
+                return
+            self._skip_boot()
             # One tick only (SimBackend.frame_tick does TICK; poll is a no-op)
             self._feed_editor_paste()
             self._feed_mouse()

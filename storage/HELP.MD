@@ -44,6 +44,31 @@ upper or lower part of the page for one page.
 The small square at the left of the title closes
 the window.
 
+View, then List, puts the names in alphabetical
+order. View, then Icons, puts them back in the
+order the disk listed them.
+
+Drag a file onto Trash. It is not deleted yet.
+Click Trash to see those files. Drag one onto
+Disk to put it back. When Trash holds a file,
+choose Special, then Empty Trash.
+
+The Finder program is the desktop when this
+shell is set that way. It is a program on the
+card, like the original Finder. Trash opens its
+own window. Each folder opens its own window.
+Folders, positions, and comments are kept in
+DESKTOP.FDR. The card stays one flat list.
+
+Double-click a program to run it. Double-click
+a document to read it. Quitting, or Esc, comes
+back to the Finder. File, then New Folder, makes
+a folder. File, then Get Info, shows the size,
+the date, Locked, and a comment. Special, then
+Empty Trash, asks first and then deletes what
+is in the Trash. Print, Page Setup, Eject, and
+Erase Disk stay grey.
+
 View, then Hidden files, shows the picture files
 and icons that ordinary DIR hides. Choose it
 again to hide them.
@@ -61,13 +86,26 @@ board scrolls that top name off and leaves
 matches the simulator.
 
 DIR hides compiled JSH files, picture files, and
-the machine programs READ, EDITOR, ARTSCAN, and
-COMPILER. Those files stay on the card. READ,
-EDIT, and COMPILE need them. Do not REMOVE them.
+the machine programs READ, EDITOR, ARTSCAN,
+COMPILER, and FINDER. Those files stay on the
+card. READ, EDIT, and COMPILE need them.
+Do not REMOVE them.
 
 DIR * also lists the JSH and picture files. The
 machine programs stay hidden. A numbered LOAD
 follows bare DIR, not DIR *.
+
+## MacPaint
+
+Double-click MacPaint. The mouse draws in the
+page. Arrow keys or the stick move a pen. Space
+or the fire button draws with the current tool.
+
+File Save is grey. That command is for text.
+Use Disk, then Save. The picture is STEM.PNT.
+Disk, then Open, loads one back. New clears the
+page and does not ask. Quit does not ask either.
+Save before you leave.
 
 ## Play a program
 
@@ -140,6 +178,13 @@ program.
 COMPILE builds a new NAME.JSH from the HTML that
 LOAD parked. Do not type a filename. LOAD already
 chose the name.
+
+The Compile window can do the same job. File →
+Open parks a program and does not compile it yet.
+Save compiles that program. Save As writes a new
+HTML program under the name you type, then
+compiles the new name. The program you opened
+stays on the disk.
 
 Success prints COMPILED. The program is still
 stopped. Type RUN to play the new file.

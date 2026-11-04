@@ -1712,6 +1712,13 @@ int main(int argc, char** argv) {
             const unsigned s=top->system_status_o;
             std::cout<<"UISTATE dialog="<<(s&7)<<" catalog="<<((s>>3)&1)<<" action="<<((s>>4)&1)<<" error="<<((s>>5)&1)<<" menu="<<((s>>6)&15)<<std::endl;continue;
         }
+        if(line=="FINDER?") {
+            auto* r=top->rootp;
+            std::cout<<"FINDER cached="<<unsigned(r->jmr_js_core__DOT__u_cons__DOT__finder_cache_valid)
+                     <<" bytes="<<unsigned(r->jmr_js_core__DOT__u_cons__DOT__finder_cache_length)
+                     <<" state_saved="<<unsigned(r->jmr_js_core__DOT__u_cons__DOT__finder_state_valid)
+                     <<" hits="<<unsigned(r->jmr_js_core__DOT__u_cons__DOT__finder_cache_hits)<<std::endl;continue;
+        }
         if(line=="WINDOW?") {
             const uint32_t w=top->system_window_o;
             std::cout<<"WINDOW role="<<(w&255)<<" scroll="<<((w>>8)&255)<<" scrollx="<<((w>>16)&255)<<" flags="<<(w>>24)<<std::endl;continue;
@@ -1774,8 +1781,7 @@ int main(int argc, char** argv) {
                       << " selected=" << unsigned(top->desktop_selected_o)
                       << " page=" << unsigned(top->desktop_page_o)
                       << " menu=" << unsigned(top->desktop_menu_o)
-                      << " action=" << unsigned(top->rootp->jmr_js_core__DOT__u_desktop__DOT__action)
-                      << " state=" << unsigned(top->rootp->jmr_js_core__DOT__u_desktop__DOT__state)
+                      << " desktop_busy=" << unsigned(top->desktop_busy_o)
                       << " disk=" << unsigned(top->rootp->jmr_js_core__DOT__u_desktop_disk__DOT__state)
                       << " error=" << unsigned(top->rootp->jmr_js_core__DOT__disk_error)
                       << std::endl;
@@ -3434,6 +3440,30 @@ int main(int argc, char** argv) {
         }
         // NEW: title palette dump (ASET 256×RGB888 loaded by the console on RUN)
         // — GUI mirror colors FB indices exactly like the HDMI field would.
+        // Test-only readback of the live resource consumers, not the staging copy.
+        if (line == "SYSBYTES?") {
+            std::vector<uint8_t> b(24320,0);
+            auto put=[&](unsigned at,uint64_t v,unsigned n){for(unsigned i=0;i<n;i++)b[at+i]=uint8_t(v>>(8*i));};
+            auto *r=top->rootp;
+            for(unsigned i=0;i<2048;i++) {
+                put(i*2,r->jmr_js_core__DOT__u_classic_overlay__DOT__font[i],2);
+                put(4096+i*2,r->jmr_js_core__DOT__u_classic_overlay__DOT__u_static_labels__DOT__records[i],2);
+                put(9472+i*5,r->jmr_js_core__DOT__u_system_overlay__DOT__key_rows[i],5);
+            }
+            for(unsigned i=0;i<256;i++)put(8192+i*4,r->jmr_js_core__DOT__u_classic_overlay__DOT__u_static_labels__DOT__layouts[i] |
+                (uint32_t(r->jmr_js_core__DOT__u_classic_overlay__DOT__widths[i])<<18),4);
+            for(unsigned i=0;i<80;i++)b[9216+i]=r->jmr_js_core__DOT__u_classic__DOT__sys_headings[i];
+            for(unsigned i=0;i<28;i++)put(9344+i*4,r->jmr_js_core__DOT__sys_config[i],4);
+            put(9456,r->jmr_js_core__DOT__sys_config[28]&65535,2);
+            for(unsigned i=0;i<64;i++)put(19712+i*8,r->jmr_js_core__DOT__u_system_overlay__DOT__label_rows[i],8);
+            for(unsigned i=0;i<128;i++)for(unsigned j=0;j<8;j++)put(20224+i*32+j*4,r->jmr_js_core__DOT__u_system_overlay__DOT__about_rows[i][j],4);
+            std::cout << "SYSBYTES " << b64_encode(b.data(),b.size()) << std::endl;
+            continue;
+        }
+        if (line == "SYS?") {
+            std::cout << "SYS status=" << unsigned(top->rootp->jmr_js_core__DOT__sys_status) << std::endl;
+            continue;
+        }
         if (line == "PAL?") {
             uint8_t pal[768];
             for (int i = 0; i < 256; i++) {

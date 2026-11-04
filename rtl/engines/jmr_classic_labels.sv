@@ -2,6 +2,7 @@
 // the current and next character need pixel-clock registers, not 64 RAM ports.
 (* use_dsp="no" *) module jmr_classic_labels(
  input logic clk,rst_n,clear,pixel_clk,
+ input logic finder_mode,
  input logic record_we,
  input logic [5:0] record_row,record_col,
  input logic [26:0] record_data,
@@ -15,12 +16,17 @@
 );
  import jmr_classic_ui_pkg::*;
  function automatic logic [6:0] capacity(input logic [5:0] r);
-  if(r>=32 && r<56)capacity=24;
+  if(finder_mode && r>=16 && r<48)capacity=24;
+  else if(r>=32 && r<56)capacity=24;
   else if(r>=6 && r<=12)capacity=12;
   else case(r)0,3:capacity=64;1:capacity=16;2:capacity=32;4:capacity=12;default:capacity=0;endcase
  endfunction
- function automatic logic [9:0] base(input logic [5:0] r);
-  if(classic_fixed_length(r)!=0)base=classic_fixed_base(r);
+ function automatic logic [9:0] base(input logic [5:0] r,input logic finder);
+  if(finder)begin
+   if(r>=16 && r<48)base=10'd256+10'(r-6'd16)*10'd24;
+   else if(r>=6 && r<=12)base=10'd172+10'(r-6'd6)*10'd12;
+   else case(r)0:base=0;2:base=64;3:base=96;4:base=160;default:base=0;endcase
+  end
   else if(r>=32 && r<56)base=10'd272+10'(r-6'd32)*10'd24;
   else if(r>=6 && r<=12)base=10'd188+10'(r-6'd6)*10'd12;
   else case(r)0:base=0;1:base=64;2:base=80;3:base=112;4:base=176;default:base=0;endcase
@@ -29,10 +35,12 @@
  (* ram_style="distributed" *) logic [6:0] lengths [0:63];
  initial $readmemh("classic_records.hex",records);
  logic [63:0] valid_rows;
+ (* ASYNC_REG="TRUE" *) logic [1:0] finder_pixel;
+ always_ff @(posedge pixel_clk)if(!rst_n)finder_pixel<=0;else finder_pixel<={finder_pixel[0],finder_mode};
  logic [9:0] memory_addr;
  logic [26:0] memory_data;
  logic [6:0] length_rdata;
- wire [9:0] write_addr=base(record_row)+{4'd0,record_col};
+ wire [9:0] write_addr=base(record_row,finder_mode)+{4'd0,record_col};
  always_ff @(posedge clk)if(record_we && {1'b0,record_col}<capacity(record_row))records[write_addr]<=record_data;
  always_ff @(posedge pixel_clk)memory_data<=records[memory_addr];
  always_ff @(posedge clk)if(length_we)lengths[length_row]<=length_data;
@@ -40,7 +48,7 @@
   if(!rst_n || clear)valid_rows<=0;
   else if(length_we)valid_rows[length_row]<=1;
  end
- always_ff @(posedge pixel_clk)length_rdata<=classic_fixed_length(read_row)!=0?classic_fixed_length(read_row):valid_rows[read_row]?lengths[read_row]:7'd0;
+ always_ff @(posedge pixel_clk)length_rdata<=valid_rows[read_row]?lengths[read_row]:7'd0;
  logic [5:0] previous_row;
  logic [9:0] previous_y,row_base;
  logic signed [11:0] previous_pos,pos_q;
@@ -60,7 +68,7 @@
   end else begin
    previous_pos<=read_pos;previous_row<=read_row;previous_y<=beam_y;pos_q<=read_pos;
    if(new_line)begin
-    row_base<=base(read_row);memory_addr<=base(read_row);fetch_index<=0;fetch_phase<=1;
+    row_base<=base(read_row,finder_pixel[1]);memory_addr<=base(read_row,finder_pixel[1]);fetch_index<=0;fetch_phase<=1;
     current_index<=0;current_count<=0;current_valid<=0;next_valid<=0;
    end else begin
     if(fetch_phase==1)fetch_phase<=2;

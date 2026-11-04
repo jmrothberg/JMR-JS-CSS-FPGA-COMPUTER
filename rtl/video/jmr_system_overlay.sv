@@ -1,9 +1,13 @@
 // Opaque ship menu and mouse keyboard. Shared label bitmaps keep the display
 // small: one registered ROM read, with identical key legends sharing a row.
 module jmr_system_overlay (
- input logic pixel_clk,
+ input logic pixel_clk,clk,sys_we,
+ input logic [13:0] sys_addr,
+ input logic [15:0] sys_data,
  input logic [9:0] x,y,
  input logic menu_open,keyboard_open,about_open,shift_on,caps_on,ctrl_on,alt_on,
+ input logic [2:0] hover_row,
+ input logic finder_mode,
  input logic [6:0] pressed_index,
  input logic hold_keys,
  input logic [69:0] held_keys,
@@ -11,16 +15,38 @@ module jmr_system_overlay (
  output logic [23:0] rgb
 );
  import jmr_system_menu_pkg::*;
- (* rom_style="distributed" *) logic [39:0] key_rows [0:2047];
- (* rom_style="distributed" *) logic [63:0] label_rows [0:63];
- (* rom_style="distributed" *) logic [255:0] about_rows [0:127];
+ (* ram_style="block" *) logic [39:0] key_rows [0:2047];
+ (* ram_style="block" *) logic [63:0] label_rows [0:127];
+ (* ram_style="block" *) logic [255:0] about_rows [0:127];
  initial begin
   $readmemh("system_keys.hex",key_rows);$readmemh("system_labels.hex",label_rows);$readmemh("system_about.hex",about_rows);
+ end
+ // 40-bit keyboard rows are packed into a byte stream. A shift register
+ // assembles one row; only a complete row writes the display RAM.
+ logic [47:0] resource_key_shift;
+ logic [2:0] resource_key_phase;
+ logic [10:0] resource_key_index;
+ initial begin resource_key_shift=0;resource_key_phase=0;resource_key_index=0;end
+ always_ff @(posedge clk)if(sys_we)begin
+  if(sys_addr>=4736 && sys_addr<9856)begin
+   if(sys_addr==4736)begin resource_key_index<=0;resource_key_shift[15:0]<=sys_data;resource_key_phase<=1;end
+   else case(resource_key_phase)
+    0:begin resource_key_shift[15:0]<=sys_data;resource_key_phase<=1;end
+    1:begin resource_key_shift[31:16]<=sys_data;resource_key_phase<=2;end
+    2:begin key_rows[resource_key_index]<={sys_data[7:0],resource_key_shift[31:0]};resource_key_shift[7:0]<=sys_data[15:8];resource_key_phase<=3;resource_key_index<=resource_key_index+1'b1;end
+    3:begin resource_key_shift[23:8]<=sys_data;resource_key_phase<=4;end
+    4:begin key_rows[resource_key_index]<={sys_data,resource_key_shift[23:0]};resource_key_phase<=0;resource_key_index<=resource_key_index+1'b1;end
+    default:resource_key_phase<=0;
+   endcase
+  end
+  if(sys_addr>=9856 && sys_addr<10112)label_rows[6'((sys_addr-9856)>>2)][sys_addr[1:0]*16+:16]<=sys_data;
+  if(sys_addr>=10112 && sys_addr<10304)label_rows[7'd64+7'((sys_addr-10112)>>2)][sys_addr[1:0]*16+:16]<=sys_data;
+  if(sys_addr>=10112 && sys_addr<12160)about_rows[7'((sys_addr-10112)>>4)][sys_addr[3:0]*16+:16]<=sys_data;
  end
  logic op,ink,q_op,q_ink;
  logic [27:0] ship_bits;
  logic [23:0] bg,fg,q_bg,q_fg;
- logic [1:0] paint_kind,q_kind,label_id;
+ logic [1:0] paint_kind,q_kind;logic [2:0] label_id;
  logic [2:0] about_id;
  logic [3:0] row;
  logic [7:0] q_col;
@@ -40,10 +66,12 @@ module jmr_system_overlay (
   if(x<30 && y<22)begin
    op=1;bg=(y==21)?24'h000000:24'hffffff;
    if(x>=1 && x<29 && y>=7 && y<15 && ship_bits[28-x])bg=24'h000000;
-  end else if(menu_open && x<190 && y>=22 && y<72)begin
-   op=1;bg=(x==0 || x==189 || y==22 || y==71)?24'h000000:24'hffffff;
-   if(y>=26 && y<42)begin paint_kind=2;label_id=3;column=11'(x)-11'd8;row=4'(y-26);end
-   else if(y>=47 && y<63)begin paint_kind=2;label_id=0;column=11'(x)-11'd8;row=4'(y-47);end
+  end else if(menu_open && x<190 && y>=22 && y<(finder_mode?139:72))begin
+   op=1;bg=(x==0 || x==189 || y==22 || y==(finder_mode?138:71))?24'h000000:24'hffffff;
+   if(x>0 && x<189 && hover_row!=0 && (finder_mode ? (y>=24+(hover_row-1)*21 && y<44+(hover_row-1)*21) : (hover_row==1 ? (y>=24 && y<46) : (y>=47 && y<70))))begin bg=0;fg=24'hffffff;end
+   for(integer r=0;r<5;r=r+1)if((finder_mode || r<2) && y>=26+r*21 && y<42+r*21)begin
+    paint_kind=2;label_id=r==0?3'd3:r==1?3'd0:3'(r+2);column=11'(x)-11'd8;row=4'(y-26-r*21);
+   end
   end
   if(keyboard_open && y>=296 && y<480)begin
    op=1;bg=24'hdbdbdb;fg=0;paint_kind=0;row=0;

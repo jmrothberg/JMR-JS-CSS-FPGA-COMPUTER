@@ -8,9 +8,10 @@
   LOAD parked. READ "NAME.MD" loads that file first.
 
   Formats a small markdown subset by walking bytes. No string
-  methods. # and ## are 16px. ### is a small heading. "- " and
-  "* " are indented lists. ">" is a quote. A line of dashes is a
-  rule. Up/Down one line. Left/Right or F3/F4 one page.
+  methods. # and ## are drawn at twice the body size, without the
+  marks. ### stays a small heading. "- " and "* " become an
+  indented square, not the source hyphen. ">" is a quote. A line
+  of dashes is a rule. Up/Down one line. Left/Right or F3/F4 one page.
   Esc is machine BREAK. Do not bind it.
 -->
 <canvas id="gameCanvas" width="640" height="480"></canvas>
@@ -114,29 +115,35 @@ function skipOf(li, kind) {
 
 function lineH(li) {
   var k=kindOf(li);
-  if(k===1 || k===2)return 20;
+  if(k===1 || k===2)return 36;
   if(k===0)return 8;
   if(k===7)return 12;
   return 16;
 }
 
-function glyph(b,x,y,blue){
+function glyph(b,x,y,blue,big){
+  var s;
   if(b>=32 && b<127){
-    ctx.drawImage(fontImage,(b%32)*16,Math.floor(b/32)*16+blue*64,16,16,x,y,16,16);
+    s=big?32:16;
+    ctx.drawImage(fontImage,(b%32)*16,Math.floor(b/32)*16+blue*64,16,16,x,y,s,s);
   }
 }
-function drawChars(li,y,skip,blue,x0){
-  var s=lineStart(li),n=lineLen(li),c=skip,b,x=x0;
-  if(y+15>431)return;
-  while(c<n && x<586){b=srcByte(s+c);glyph(b,x,y,blue);if(b>=32 && b<127)x=x+ADV[b];c=c+1;}
+function drawChars(li,y,skip,blue,x0,big){
+  var s=lineStart(li),n=lineLen(li),c=skip,b,x=x0,step;
+  if(y+(big?32:16)>431)return;
+  while(c<n && x<560){
+    b=srcByte(s+c);glyph(b,x,y,blue,big);
+    if(b>=32 && b<127){step=ADV[b];if(big)step=step+step;x=x+step;}
+    c=c+1;
+  }
 }
 function drawLine(li,y){
   var kind=kindOf(li);
   if(kind===0)return;
   if(kind===7){ctx.fillStyle="#0055EE";ctx.fillRect(28,y+6,550,1);return;}
-  if(kind===4){glyph(45,30,y,0);drawChars(li,y,2,0,48);return;}
-  if(kind===5){ctx.fillStyle="#999999";ctx.fillRect(29,y,2,14);drawChars(li,y,2,0,42);return;}
-  drawChars(li,y,skipOf(li,kind),(kind===1 || kind===2 || kind===3)?1:0,28);
+  if(kind===4){ctx.fillStyle="#000000";ctx.fillRect(32,y+6,6,6);drawChars(li,y,2,0,48,0);return;}
+  if(kind===5){ctx.fillStyle="#999999";ctx.fillRect(29,y,2,14);drawChars(li,y,2,0,42,0);return;}
+  drawChars(li,y,skipOf(li,kind),(kind===1 || kind===2 || kind===3)?1:0,28,(kind===1 || kind===2)?1:0);
 }
 
 function pageUp() {

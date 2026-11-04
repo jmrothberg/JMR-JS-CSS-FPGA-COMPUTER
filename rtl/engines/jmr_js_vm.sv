@@ -25,6 +25,7 @@ module jmr_js_vm #(
     input  logic        clk_code_w,
     input  logic        rst_n,
     input  logic        start,
+    output logic first_frame_o,
     // V1.5 standalone compile: the console publishes how much source it
     // parked, and reads back the compiler's exit report.
     input  logic [17:0] src_len_i,
@@ -50,8 +51,13 @@ module jmr_js_vm #(
     input logic [7:0] key_evt_char = 8'd0,
     output logic key_evt_ready,
     output logic sysw_toggle_o,
-    output logic [2:0] sysw_field_o,
-    output logic [7:0] sysw_value_o,
+    output logic [3:0] sysw_field_o,
+    output logic [31:0] sysw_value_o,
+    output logic fs_request,
+    output logic [2:0] fs_command,
+    output logic [127:0] fs_arguments,
+    input logic fs_reply=1'b0,
+    input logic [31:0] fs_result=32'hffffffff,
     output logic ui_text_toggle_o,ui_text_menu_o,ui_text_first_o,ui_text_last_o,
     output logic [7:0] ui_text_byte_o,
     input  logic        mouse_evt_valid = 1'b0,
@@ -1029,7 +1035,14 @@ module jmr_js_vm #(
     // values, plus measureText (games right-align HUD text with its width)
     logic [15:0] id_font, id_textalign, id_center, id_right, id_measuretext;
     logic [15:0] id_textbaseline, id_top, id_middle, id_bottom; // #37
-    logic [111:0] id_sys_window;
+    logic [143:0] id_sys_window;
+    logic [63:0] fs_arg_value;
+    logic [2:0] fs_phase;
+    logic [31:0] fs_result_q;
+    (* ASYNC_REG="TRUE" *) logic [1:0] fs_reply_sync;
+    always_ff @(posedge clk)begin
+        if(!rst_n)fs_reply_sync<=0;else fs_reply_sync<={fs_reply_sync[0],fs_reply};
+    end
     logic [2:0] ui_prop_phase;
     logic [9:0] ui_prop_name;
     logic [15:0] ui_prop_ptr,ui_prop_len,ui_prop_i;
@@ -1528,6 +1541,7 @@ module jmr_js_vm #(
         , S_CSRAM
         , S_V64_MOUSE_PROP
         , S_UI_PROP
+        , S_FS
     } st_t;
     // V1 fit: one-hot the 68-state parent register — 349 state==X decodes
     // become single-FF tests; FF headroom is 8x.
@@ -4293,7 +4307,7 @@ module jmr_js_vm #(
         .id_stroke(id_stroke),
         .id_strokestyle(id_strokestyle),
         .id_textalign(id_textalign),
-        .id_sys_window(id_sys_window),.sysw_toggle_q(sysw_toggle_o),
+        .fs_arg_index(fs_phase[1:0]),.fs_arg_value(fs_arg_value),.id_sys_window(id_sys_window),.sysw_toggle_q(sysw_toggle_o),
         .sysw_field_q(sysw_field_o),.sysw_value_q(sysw_value_o),
         .id_textbaseline(id_textbaseline),
         .id_top(id_top),
@@ -4896,7 +4910,7 @@ module jmr_js_vm #(
             // Exec-entered compile-ABI memory op. Omitting this is bug
             // class #51 verbatim: it would read the PARENT ip/vsp and
             // re-dispatch the native forever.
-            (state == S_CSRAM) ||
+            (state == S_CSRAM) || (state == S_FS) ||
             // potential-bugs #68: exec-entered result-array scan. Without
             // this, hp_ret (and friends) read the PARENT ffs mid-scan —
             // stale S_V64_FOREACH from the previous filter/map walk — so a
@@ -6345,6 +6359,7 @@ module jmr_js_vm #(
             dbg_stack_ovf <= '0; dbg_call_ovf <= '0;
             machine_fault <= 1'b0; fault_code <= 8'd0; fault_site <= 16'd6115;
             ui_text_toggle_o<=0;ui_text_menu_o<=0;ui_text_first_o<=0;ui_text_last_o<=0;ui_text_byte_o<=0;
+            fs_request<=0;fs_command<=0;fs_arguments<=0;fs_phase<=0;fs_result_q<=0;
             ui_prop_phase<=0;ui_prop_name<=0;ui_prop_ptr<=0;ui_prop_len<=0;ui_prop_i<=0;ui_prop_menu<=0;
             prev_joy <= 6'd0; joy_down_edge <= 6'd0; joy_up_edge <= 6'd0;
             sram_req <= 1'b0; sram_addr <= '0; blit_wait <= 1'b0;
@@ -7005,6 +7020,7 @@ module jmr_js_vm #(
                 end
             end
             if (stop_q) begin
+                fs_request<=0;
                 running <= 1'b0;
                 looping <= 1'b0;
                 sram_req <= 1'b0; sram_we <= 1'b0; blit_wait <= 1'b0; // NEW: drop mid-blit SRAM req
@@ -7343,7 +7359,7 @@ module jmr_js_vm #(
             dbg_last_y <= 10'd0; dbg_last_c <= 8'd0;
             dbg_key_scan <= 16'd0; dbg_key_call <= 16'd0;
             dbg_key_alloc <= 16'd0; dbg_key_cmp <= 16'd0; dbg_txt_n <= 16'd0;
-            dbg_txt_miss <= 16'd0; dbg_raf_call <= 16'd0; dbg_frame_end <= 16'd0;
+            dbg_txt_miss <= 16'd0; dbg_raf_call <= 16'd0;first_frame_o<=0; dbg_frame_end <= 16'd0;
             dbg_bad_state <= 8'd0;
             dbg_key_want <= 64'd0; dbg_key_lastev <= 64'd0;
                     dbg_line_px <= 32'd0; dbg_circ_px <= 32'd0; dbg_rect_px <= 32'd0;
@@ -7600,6 +7616,8 @@ module jmr_js_vm #(
                                 if ({tb, trail_acc[7:0]} == 16'd12277) id_sys_window[64+:16] <= name_idx; // systemViewport
                                 if ({tb, trail_acc[7:0]} == 16'd14853) id_sys_window[80+:16] <= name_idx; // systemMenus
                                 if ({tb, trail_acc[7:0]} == 16'd50846) id_sys_window[96+:16] <= name_idx; // systemAbout
+                                if ({tb, trail_acc[7:0]} == 16'd5498) id_sys_window[128+:16] <= name_idx; // systemMenuCheck
+                                if ({tb, trail_acc[7:0]} == 16'd849) id_sys_window[112+:16] <= name_idx; // systemMenuEnable
                                 if ({tb, trail_acc[7:0]} == 16'd4754) id_textbaseline <= name_idx; // #37
                                 if ({tb, trail_acc[7:0]} == 16'd49493) id_top <= name_idx;
                                 if ({tb, trail_acc[7:0]} == 16'd55701) id_middle <= name_idx;
@@ -14332,6 +14350,23 @@ module jmr_js_vm #(
                             bind_k <= bind_k + 8'd1;
                     end
                 end
+                S_FS: begin
+                    if(state!=S_FS)begin hs_st(S_FS);fs_phase<=0;fs_request<=0;fs_command<=e64_hp_slot_q[2:0];end
+                    else if(casestate_q!=S_FS)hs_st(S_FS);
+                    else if(fs_phase<4)begin
+                        // One shared integer conversion per clock, outside EXEC.
+                        fs_arguments[fs_phase[1:0]*32+:32]<=v64_to_int32(fs_arg_value);
+                        fs_phase<=fs_phase+1'b1;
+                    end else if(fs_phase==4)begin fs_request<=1;fs_phase<=5;end
+                    else if(fs_phase==5 && fs_reply_sync[1])begin
+                        fs_result_q<=fs_result;fs_request<=0;fs_phase<=6;
+                    end else if(fs_phase==6 && !fs_reply_sync[1])begin
+                        vst_wr(vnat_base,v64_int32_number(fs_result_q));
+                        hs_vsp(vnat_base+12'd1);hs_ip(ip+16'd1);hs_code(15'(ops_base+ip+16'd1));
+                        if(fs_command==6 && !fs_result_q[31])begin running<=0;hs_st(S_DONE);end
+                        else hs_st(S_FETCH_WAIT);
+                    end
+                end
                 S_CSRAM: begin
                     // The compile ABI's one memory state. Modes: 0 srcByte,
                     // 1 stgRead, 2 stgWrite, 3 artWrite2 (packed pair).
@@ -15125,7 +15160,7 @@ module jmr_js_vm #(
                             // oid 0 makes cb_ip 0, and the host FRAME
                             // exit tests cbip != 0. Use a plain marker.
                             dbg_cb_ip <= 16'h1;
-                            dbg_raf_call <= dbg_raf_call + 16'd1;
+                            dbg_raf_call <= dbg_raf_call + 16'd1;first_frame_o<=1;
                             hs_vcall_value(1'b1);
                             hs_vcall_argc(12'd1);
                             vcallback_raf <= 1'b1;

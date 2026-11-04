@@ -1,7 +1,8 @@
 // Shared native document dialogs. Reuses the existing FAT catalog client and
 // compile/source save path; only UI filenames and proportional labels live here.
 module jmr_system_documents (
- input logic clk,rst_n,app_clear,
+ input logic clk,rst_n,app_clear,frame_tick,
+ input logic [911:0] sys_config=jmr_classic_ui_pkg::SYS_CONFIG_DEFAULT,
  input logic [31:0] window_state,
  input logic [127:0] source_name,
  input logic [4:0] source_len,
@@ -29,7 +30,10 @@ module jmr_system_documents (
  output logic [8:0] file_count,selected,
  output logic [7:0] file_top,
  output logic [3:0] name_len,
- output logic name_selected,
+ output logic name_selected,caret_on,
+ output logic [9:0] caret_px,
+ output logic [1:0] hot_button,
+ output logic flash_default,
  output logic [7:0] message_id,
  output logic [31:0] generation,
  output logic catalog_go,catalog_active,catalog_all,
@@ -46,6 +50,35 @@ module jmr_system_documents (
 );
  import jmr_classic_ui_pkg::*;
  localparam logic [2:0] D_OPEN=1,D_NAME=2,D_CHANGES=3,D_REPLACE=4,D_MESSAGE=5;
+ logic signed [11:0] dx,dy;
+ always_comb begin
+  dx=0;dy=0;
+  if(dialog>=1 && dialog<=5)begin dx=12'(sys_config[(dialog-1)*32+:16]);dy=12'(sys_config[(dialog-1)*32+16+:16]);end
+ end
+ wire signed [11:0] dialog_x=12'({2'b0,x})-dx,dialog_y=12'({3'b0,y})-dy;
+ logic [2:0] button_hit;
+ always_comb begin
+  button_hit=0;
+  for(integer b=0;b<3;b=b+1)begin
+   if(dialog>=1 && dialog<=5)
+    button_hit[b]=sys_config[(14+(integer'(dialog)-1)*9+b*3)*16+:16]!=0 &&
+      dialog_x>=12'(sys_config[(12+(integer'(dialog)-1)*9+b*3)*16+:16]) &&
+      dialog_x<12'(sys_config[(12+(integer'(dialog)-1)*9+b*3)*16+:16]+sys_config[(14+(integer'(dialog)-1)*9+b*3)*16+:16]) &&
+      dialog_y>=12'(sys_config[(13+(integer'(dialog)-1)*9+b*3)*16+:16]) &&
+      dialog_y<12'(sys_config[(13+(integer'(dialog)-1)*9+b*3)*16+:16]+16'd26);
+  end
+ end
+ logic [3:0] caret,blink_frame,flash_frames;
+ logic blink_half;
+ logic [1:0] armed_button,hit_button;
+ logic caret_scan;
+ logic [3:0] scan_i;
+ logic [9:0] scan_px,scan_target;
+ always_comb begin
+  hit_button=3;
+  for(integer b=0;b<3;b=b+1)if(button_hit[b])hit_button=2'(b);
+ end
+ assign flash_default=flash_frames!=0;
  logic [95:0] edit_name,candidate_name,pending_name;
  logic [3:0] candidate_len,pending_len,pending_action;
  logic keyboard_saved,keyboard_forced;
@@ -57,7 +90,7 @@ module jmr_system_documents (
  logic [3:0] cat_char,cat_name_len;
  logic [95:0] cat_name;
  logic [31:0] cat_tail;
- logic cat_all;
+ logic cat_all,cat_compile_match;
  logic file_we;
  logic [7:0] file_waddr,file_raddr;
  logic [99:0] file_wdata,file_rdata;
@@ -100,10 +133,9 @@ module jmr_system_documents (
  endtask
  task automatic show_name;
   begin
-   dialog<=D_NAME;edit_name<=source_name[95:0];name_len<=source_len>12?4'd12:source_len[3:0];
-   name_selected<=1;name_dirty<=1;message_id<=148;
-   if(!keyboard_forced)keyboard_saved<=keyboard_open;
-   keyboard_forced<=1;keyboard_set_stb<=1;keyboard_set_on<=1;
+   dialog<=D_NAME;edit_name<=unnamed?96'd0:source_name[95:0];name_len<=unnamed?4'd0:source_len>12?4'd12:source_len[3:0];
+   name_selected<=0;name_dirty<=1;message_id<=148;caret<=unnamed?4'd0:source_len>12?4'd12:source_len[3:0];caret_on<=1;blink_frame<=0;blink_half<=0;armed_button<=3;hot_button<=3;
+   // The on-screen keyboard opens only from the apple menu.
    cat_phase<=1;cat_all<=1;file_count<=0;
    generation<=generation+1'b1;
   end
@@ -145,17 +177,30 @@ module jmr_system_documents (
  endtask
  always_ff @(posedge clk)begin
   if(!rst_n)begin
+   caret<=0;caret_px<=0;caret_on<=0;blink_frame<=0;blink_half<=0;flash_frames<=0;armed_button<=3;hot_button<=3;caret_scan<=0;scan_i<=0;scan_px<=0;scan_target<=0;
    dialog<=0;generation<=0;command_stb<=0;command<=0;chosen_name<=0;chosen_len<=0;
    after_valid<=0;after_action<=0;after_name<=0;after_len<=0;
    edit_name<=0;candidate_name<=0;candidate_len<=0;pending_name<=0;pending_len<=0;pending_action<=0;
    keyboard_saved<=0;keyboard_forced<=0;keyboard_set_stb<=0;keyboard_set_on<=0;
    old_buttons<=0;old_notice<=0;name_dirty<=0;list_dirty<=0;name_len<=0;name_selected<=0;message_id<=0;
-   catalog_go<=0;catalog_active<=0;cat_phase<=0;cat_index<=0;cat_char<=0;cat_name_len<=0;cat_name<=0;cat_tail<=0;cat_all<=0;
+   catalog_go<=0;catalog_active<=0;cat_phase<=0;cat_index<=0;cat_char<=0;cat_name_len<=0;cat_name<=0;cat_tail<=0;cat_compile_match<=1;cat_all<=0;
    filtered_count<=0;raw_count<=0;file_count<=0;file_top<=0;selected<=511;file_we<=0;file_waddr<=0;file_wdata<=0;file_raddr<=0;
    norm_index<=0;norm_first<=0;norm_last<=0;norm_dot<=15;norm_found<=0;norm_valid<=0;norm_tail<=0;
    op_phase<=0;verify_index<=0;build_phase<=0;build_row<=0;build_list<=0;build_name<=0;build_len<=0;build_char<=0;build_x<=0;
    label_valid<=0;label_row<=0;label_data<=0;label_col<=0;label_commit<=0;
   end else begin
+   if(frame_tick)begin
+    if(flash_frames!=0)begin flash_frames<=flash_frames-1'b1;generation<=generation+1'b1;end
+    if(dialog==D_NAME)begin
+     if(blink_frame==14)begin blink_frame<=0;blink_half<=!blink_half;if(blink_half)begin caret_on<=!caret_on;generation<=generation+1'b1;end end
+     else blink_frame<=blink_frame+1'b1;
+    end
+   end
+   if(caret_scan)begin
+    if(scan_i>=name_len || scan_target<scan_px+10'(classic_advance(edit_name[scan_i*8+:8])>>1))begin
+     caret<=scan_i;caret_scan<=0;name_dirty<=1;caret_on<=1;blink_frame<=0;blink_half<=0;
+    end else begin scan_px<=scan_px+10'(classic_advance(edit_name[scan_i*8+:8]));scan_i<=scan_i+1'b1;end
+   end
    command_stb<=0;keyboard_set_stb<=0;catalog_go<=0;file_we<=0;
    if(label_valid && label_ready)begin label_valid<=0;generation<=generation+1'b1;end
    if(app_clear)begin dialog<=0;after_valid<=0;old_buttons<=0;op_phase<=0;generation<=generation+1'b1;end
@@ -170,7 +215,7 @@ module jmr_system_documents (
    case(cat_phase)
     0:;
     1:if(!catalog_busy && !storage_busy && !desktop_busy)begin catalog_go<=1;catalog_active<=1;cat_phase<=2;end
-    2:if(catalog_done)begin raw_count<=catalog_count;cat_index<=0;cat_char<=0;cat_name<=0;cat_name_len<=0;cat_tail<=0;filtered_count<=0;cat_phase<=3;end
+    2:if(catalog_done)begin raw_count<=catalog_count;cat_index<=0;cat_char<=0;cat_name<=0;cat_name_len<=0;cat_tail<=0;cat_compile_match<=1;filtered_count<=0;cat_phase<=3;end
     3:begin
      if(cat_index>=raw_count)begin
       file_count<=filtered_count;selected<=filtered_count==0?9'd511:9'd0;file_top<=0;list_dirty<=1;catalog_active<=0;cat_phase<=0;
@@ -181,14 +226,23 @@ module jmr_system_documents (
      logic [95:0] name;
      logic [3:0] n;
      logic [31:0] tail;
-     logic keep;
+     logic keep,compile_match;
+     // Compare one catalog byte per clock; no wide filename comparator.
+     logic [87:0] compile_name;
+     compile_name="MTH.ELIPMOC";
+     compile_match=cat_compile_match;
+     if(catalog_data!=0 && cat_char<12)
+      compile_match=cat_compile_match && cat_char<11 && catalog_data==compile_name[cat_char*8+:8];
+     cat_compile_match<=compile_match;
      name=cat_name;n=cat_name_len;tail=cat_tail;
      if(catalog_data!=0 && cat_char<12)begin name[cat_char*8+:8]=catalog_data;n=n+1'b1;tail={tail[23:0],catalog_data};end
      if(catalog_data==0 || cat_char==11)begin
-      keep=cat_all || tail[23:0]==24'h2e4d44 || tail==32'h2e545854 ||
-            (window_state[7:0]!=2 && (tail==32'h2e48544d || tail[23:0]==24'h2e4a53));
+      keep=cat_all || (window_state[7:0]==3 ?
+            (tail==32'h2e48544d && !(compile_match && n==11)) :
+            (tail[23:0]==24'h2e4d44 || tail==32'h2e545854 ||
+             (window_state[7:0]!=2 && (tail==32'h2e48544d || tail[23:0]==24'h2e4a53))));
       if(keep && filtered_count<256)begin file_we<=1;file_waddr<=filtered_count[7:0];file_wdata<={n,name};filtered_count<=filtered_count+1'b1;end
-      cat_index<=cat_index+1'b1;cat_char<=0;cat_name<=0;cat_name_len<=0;cat_tail<=0;cat_phase<=3;
+      cat_index<=cat_index+1'b1;cat_char<=0;cat_name<=0;cat_name_len<=0;cat_tail<=0;cat_compile_match<=1;cat_phase<=3;
      end else begin cat_name<=name;cat_name_len<=n;cat_tail<=tail;cat_char<=cat_char+1'b1;cat_phase<=4;end
     end
     default:cat_phase<=0;
@@ -210,6 +264,7 @@ module jmr_system_documents (
     3:begin
      logic [7:0] ch;
      if(!label_valid)begin
+      if(!build_list && build_char==caret)caret_px<=build_x;
       label_valid<=1;label_row<=build_list?6'd6+{3'd0,build_row}:6'd4;label_col<={2'd0,build_char};
       if(build_char>=build_len)begin label_commit<=1;label_data<={23'd0,build_len};build_phase<=4;end
       else begin
@@ -290,36 +345,36 @@ module jmr_system_documents (
    endcase
    if(sample_valid)begin
     old_buttons<=buttons;
-    if(!old_buttons[0] && buttons[0] && dialog!=0)begin
+    if(dialog!=0)begin
+     hot_button<=(buttons[0] && hit_button==armed_button)?hit_button:2'd3;
      generation<=generation+1'b1;
-     case(dialog)
-      D_OPEN:begin
-       if(x>=134 && x<484 && y>=112 && y<224)begin
-        if({1'b0,file_top}+9'((y-112)/16)<file_count)selected<={1'b0,file_top}+9'((y-112)/16);
-       end else if(x>=486 && x<508 && y>=112 && y<224)begin
-        if(y<168 && file_top!=0)file_top<=file_top-1'b1;
-        else if(y>=168 && file_count>7 && {1'b0,file_top}<file_count-7)file_top<=file_top+1'b1;
+     if(!old_buttons[0] && buttons[0])begin
+      armed_button<=hit_button;hot_button<=hit_button;
+      if(dialog_x<(dialog==D_OPEN?110:132) || dialog_x>=(dialog==D_OPEN?530:508) || dialog_y<(dialog==D_OPEN?76:112) || dialog_y>=276)flash_frames<=8;
+      if(dialog==D_OPEN)begin
+       if(dialog_x>=134 && dialog_x<484 && dialog_y>=112 && dialog_y<224)begin
+        if({1'b0,file_top}+9'((dialog_y-112)/16)<file_count)selected<={1'b0,file_top}+9'((dialog_y-112)/16);
+       end else if(dialog_x>=486 && dialog_x<508 && dialog_y>=112 && dialog_y<224)begin
+        if(dialog_y<168 && file_top!=0)file_top<=file_top-1'b1;
+        else if(dialog_y>=168 && file_count>7 && {1'b0,file_top}<file_count-7)file_top<=file_top+1'b1;
         list_dirty<=1;
-       end else if(x>=386 && x<498 && y>=244 && y<268 && selected<file_count)op_phase<=1;
-       else if(x>=260 && x<372 && y>=244 && y<268)dialog<=0;
+       end
       end
-      D_NAME:begin
-       if(x>=376 && x<486 && y>=234 && y<260)save_name_request();
-       else if(x>=250 && x<360 && y>=234 && y<260)begin dialog<=0;after_valid<=0;op_phase<=0;restore_keyboard();end
-       else if(x>=152 && x<487 && y>=158 && y<183)name_selected<=1;
+      if(dialog==D_NAME && dialog_x>=154 && dialog_x<364 && dialog_y>=150 && dialog_y<172)begin
+       caret_scan<=1;scan_i<=0;scan_px<=0;scan_target<=dialog_x<158?10'd0:10'(dialog_x-158);name_selected<=0;
       end
-      D_CHANGES:begin
-       if(x>=144 && x<244 && y>=234 && y<260)dirty_choice(1);
-       else if(x>=266 && x<366 && y>=234 && y<260)dirty_choice(0);
-       else if(x>=388 && x<488 && y>=234 && y<260)begin dialog<=0;after_valid<=0;end
-      end
-      D_REPLACE:begin
-       if(x>=376 && x<486 && y>=234 && y<260)send_save_name();
-       else if(x>=250 && x<360 && y>=234 && y<260)begin dialog<=0;after_valid<=0;op_phase<=0;restore_keyboard();end
-      end
-      D_MESSAGE:if(x>=270 && x<370 && y>=234 && y<260)dialog<=0;
-      default:;
-     endcase
+     end
+     if(old_buttons[0] && !buttons[0])begin
+      armed_button<=3;hot_button<=3;
+      if(hit_button!=3 && hit_button==armed_button)case(dialog)
+       D_OPEN:if(hit_button==0 && selected<file_count)op_phase<=1;else if(hit_button==1)dialog<=0;
+       D_NAME:if(hit_button==0)save_name_request();else begin dialog<=0;after_valid<=0;op_phase<=0;restore_keyboard();end
+       D_CHANGES:if(hit_button==0)dirty_choice(1);else if(hit_button==1)dirty_choice(0);else begin dialog<=0;after_valid<=0;end
+       D_REPLACE:if(hit_button==0)send_save_name();else begin dialog<=0;after_valid<=0;op_phase<=0;restore_keyboard();end
+       D_MESSAGE:dialog<=0;
+       default:;
+      endcase
+     end
     end
    end
    if(key_stb && key_down && dialog!=0)begin
@@ -327,14 +382,24 @@ module jmr_system_documents (
     if(key_code==27)begin dialog<=0;after_valid<=0;op_phase<=0;restore_keyboard();end
     else if(dialog==D_NAME && op_phase==0)begin
      if(key_code==13)save_name_request();
-     else if(key_code==8 || key_code==127 || (key_code==46 && key_char==0))begin
-      if(name_selected)begin name_len<=0;edit_name<=0;end
-      else if(name_len!=0)begin name_len<=name_len-1'b1;edit_name[(name_len-1)*8+:8]<=0;end
-      name_selected<=0;name_dirty<=1;
-     end else if(key_char>=32 && key_char<127)begin
-      if(name_selected)begin edit_name<={88'd0,key_char};name_len<=1;end
-      else if(name_len<12)begin edit_name[name_len*8+:8]<=key_char;name_len<=name_len+1'b1;end
-      name_selected<=0;name_dirty<=1;
+     else begin
+      if(key_code==37)begin if(caret!=0)caret<=caret-1'b1;end
+      else if(key_code==39)begin if(caret<name_len)caret<=caret+1'b1;end
+      else if(key_code==8 || key_code==127)begin
+       if(caret!=0)begin
+        for(integer i=0;i<12;i=i+1)if(i>=caret-1)edit_name[i*8+:8]<=i<11?edit_name[(i+1)*8+:8]:8'd0;
+        caret<=caret-1'b1;name_len<=name_len-1'b1;
+       end
+      end else if(key_code==46 && key_char==0)begin
+       if(caret<name_len)begin
+        for(integer i=0;i<12;i=i+1)if(i>=caret)edit_name[i*8+:8]<=i<11?edit_name[(i+1)*8+:8]:8'd0;
+        name_len<=name_len-1'b1;
+       end
+      end else if(key_char>=32 && key_char<127 && name_len<12)begin
+       for(integer i=11;i>0;i=i-1)if(i>caret)edit_name[i*8+:8]<=edit_name[(i-1)*8+:8];
+       edit_name[caret*8+:8]<=key_char;caret<=caret+1'b1;name_len<=name_len+1'b1;
+      end
+      name_selected<=0;name_dirty<=1;caret_on<=1;blink_frame<=0;blink_half<=0;
      end
     end else if(dialog==D_OPEN)begin
      if(key_code==13 && selected<file_count)op_phase<=1;

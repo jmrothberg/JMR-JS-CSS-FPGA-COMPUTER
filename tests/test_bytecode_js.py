@@ -3567,9 +3567,40 @@ swapBuffers();
 """
     )
     assert vm.error is None, vm.error
-    # fillText baseline is y; 8×8 glyph occupies y-8 .. y-1.
+    # Default baseline is the bottom. The 8×8 glyph occupies y-8 .. y-1.
     row = 16 * vm.canvas.width
     assert any(vm.canvas.front[row + x] != 0 for x in range(16, 24))
+
+
+def test_hw_value64_filltext_baseline_matches_chip():
+    """top sits on y, middle sits 4px up, and 'center' does not change it.
+
+    PACFAST writes textBaseline 'center' after 'top' or 'bottom'. The chip
+    ignores that string. Python used to treat every fillText as bottom, so
+    the score digits landed on the letters.
+    """
+    vm = _hw_v64(
+        """
+var c = document.querySelector("canvas").getContext("2d");
+c.fillStyle = "white";
+c.textBaseline = "top";
+c.fillText("A", 16, 40);
+c.textBaseline = "center";
+c.fillText("B", 40, 40);
+c.textBaseline = "middle";
+c.fillText("C", 64, 80);
+swapBuffers();
+"""
+    )
+    assert vm.error is None, vm.error
+    w = vm.canvas.width
+    # top: glyph covers y=40..47, not the old bottom band y=32..39.
+    assert any(vm.canvas.front[40 * w + x] != 0 for x in range(16, 24))
+    assert all(vm.canvas.front[32 * w + x] == 0 for x in range(16, 24))
+    # 'center' left the register at top, so B also starts at y=40.
+    assert any(vm.canvas.front[40 * w + x] != 0 for x in range(40, 48))
+    # middle: y - 4, so the glyph covers y=76..83.
+    assert any(vm.canvas.front[76 * w + x] != 0 for x in range(64, 72))
 
 
 def test_hw_value64_p1_measuretext_font_align():
