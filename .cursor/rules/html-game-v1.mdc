@@ -46,7 +46,7 @@ not have (`shift`, `Math.sin`, …) is still the language backlog
 | **Glass / Esc** | 640×480 Canvas fill; Esc = machine BREAK. Present is **gone** (run 52) — scanout reads the draw bank; budget tearing, draw fast. |
 | **Disk / compile (V1.0)** | PYTHON / FPGA-SIM / BOARD `LOAD`/`RUN` `card.img`. Host mint at card-create (`NAME.JSH`). **`LOAD` works + `RUN` is `?NH` / bounce to monitor** means mint skipped that title — `python3 tools/compile_js.py --html storage/NAME.HTML` prints the wall, then remake `card.img`. **V1.5:** `COMPILE` on the machine mints the same sidecar. |
 
-**V1 library example:** `storage/MKBIG.HTML` / `MKBIGCPU.HTML` (atlases, L/R sheets, V1 Math).
+**V1 library example:** `storage/MKBA.HTML` / `MKCA.HTML` (atlases, L/R sheets, V1 Math). Short names of MKBIG / MKBIGCPU.
 
 **V1 product acceptance:** `INVADERS` / `PACMAN` / `DONKEY`.
 

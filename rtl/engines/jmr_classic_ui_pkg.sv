@@ -1315,19 +1315,6 @@ default:;endcase
 4:classic_char=8'd111;
 5:classic_char=8'd109;
 6:classic_char=8'd101;
-7:classic_char=8'd32;
-8:classic_char=8'd116;
-9:classic_char=8'd111;
-10:classic_char=8'd32;
-11:classic_char=8'd74;
-12:classic_char=8'd97;
-13:classic_char=8'd118;
-14:classic_char=8'd97;
-15:classic_char=8'd116;
-16:classic_char=8'd111;
-17:classic_char=8'd115;
-18:classic_char=8'd104;
-19:classic_char=8'd46;
 default:;endcase
 default:;endcase end endfunction
 function automatic logic [9:0] classic_width(input integer id);begin case(id)
@@ -1411,7 +1398,7 @@ function automatic logic [9:0] classic_width(input integer id);begin case(id)
 104:classic_width=10'd47;
 169:classic_width=10'd110;
 170:classic_width=10'd64;
-171:classic_width=10'd145;
+171:classic_width=10'd59;
 default:classic_width=0;endcase end endfunction
 function automatic logic [11:0] classic_glyph(input integer id,pos);begin classic_glyph=0;case(id)
 110:begin if(pos>=0 && pos<7)classic_glyph={1'b1,7'd70,4'(pos-0)};if(pos>=7 && pos<11)classic_glyph={1'b1,7'd105,4'(pos-7)};if(pos>=11 && pos<15)classic_glyph={1'b1,7'd108,4'(pos-11)};if(pos>=15 && pos<23)classic_glyph={1'b1,7'd101,4'(pos-15)}; end
@@ -1494,7 +1481,7 @@ function automatic logic [11:0] classic_glyph(input integer id,pos);begin classi
 104:begin if(pos>=0 && pos<7)classic_glyph={1'b1,7'd76,4'(pos-0)};if(pos>=7 && pos<11)classic_glyph={1'b1,7'd105,4'(pos-7)};if(pos>=11 && pos<19)classic_glyph={1'b1,7'd110,4'(pos-11)};if(pos>=19 && pos<27)classic_glyph={1'b1,7'd107,4'(pos-19)};if(pos>=27 && pos<31)classic_glyph={1'b1,7'd105,4'(pos-27)};if(pos>=31 && pos<39)classic_glyph={1'b1,7'd110,4'(pos-31)};if(pos>=39 && pos<47)classic_glyph={1'b1,7'd103,4'(pos-39)}; end
 169:begin if(pos>=0 && pos<7)classic_glyph={1'b1,7'd83,4'(pos-0)};if(pos>=7 && pos<13)classic_glyph={1'b1,7'd116,4'(pos-7)};if(pos>=13 && pos<21)classic_glyph={1'b1,7'd97,4'(pos-13)};if(pos>=21 && pos<27)classic_glyph={1'b1,7'd114,4'(pos-21)};if(pos>=27 && pos<33)classic_glyph={1'b1,7'd116,4'(pos-27)};if(pos>=33 && pos<37)classic_glyph={1'b1,7'd105,4'(pos-33)};if(pos>=37 && pos<45)classic_glyph={1'b1,7'd110,4'(pos-37)};if(pos>=45 && pos<53)classic_glyph={1'b1,7'd103,4'(pos-45)};if(pos>=53 && pos<57)classic_glyph={1'b1,7'd32,4'(pos-53)};if(pos>=57 && pos<64)classic_glyph={1'b1,7'd70,4'(pos-57)};if(pos>=64 && pos<68)classic_glyph={1'b1,7'd105,4'(pos-64)};if(pos>=68 && pos<76)classic_glyph={1'b1,7'd110,4'(pos-68)};if(pos>=76 && pos<84)classic_glyph={1'b1,7'd100,4'(pos-76)};if(pos>=84 && pos<92)classic_glyph={1'b1,7'd101,4'(pos-84)};if(pos>=92 && pos<98)classic_glyph={1'b1,7'd114,4'(pos-92)};if(pos>=98 && pos<102)classic_glyph={1'b1,7'd46,4'(pos-98)};if(pos>=102 && pos<106)classic_glyph={1'b1,7'd46,4'(pos-102)};if(pos>=106 && pos<110)classic_glyph={1'b1,7'd46,4'(pos-106)}; end
 170:begin if(pos>=0 && pos<9)classic_glyph={1'b1,7'd78,4'(pos-0)};if(pos>=9 && pos<17)classic_glyph={1'b1,7'd67,4'(pos-9)};if(pos>=17 && pos<25)classic_glyph={1'b1,7'd67,4'(pos-17)};if(pos>=25 && pos<32)classic_glyph={1'b1,7'd45,4'(pos-25)};if(pos>=32 && pos<40)classic_glyph={1'b1,7'd49,4'(pos-32)};if(pos>=40 && pos<48)classic_glyph={1'b1,7'd55,4'(pos-40)};if(pos>=48 && pos<56)classic_glyph={1'b1,7'd48,4'(pos-48)};if(pos>=56 && pos<64)classic_glyph={1'b1,7'd49,4'(pos-56)}; end
-171:begin if(pos>=0 && pos<12)classic_glyph={1'b1,7'd87,4'(pos-0)};if(pos>=12 && pos<20)classic_glyph={1'b1,7'd101,4'(pos-12)};if(pos>=20 && pos<24)classic_glyph={1'b1,7'd108,4'(pos-20)};if(pos>=24 && pos<31)classic_glyph={1'b1,7'd99,4'(pos-24)};if(pos>=31 && pos<39)classic_glyph={1'b1,7'd111,4'(pos-31)};if(pos>=39 && pos<51)classic_glyph={1'b1,7'd109,4'(pos-39)};if(pos>=51 && pos<59)classic_glyph={1'b1,7'd101,4'(pos-51)};if(pos>=59 && pos<63)classic_glyph={1'b1,7'd32,4'(pos-59)};if(pos>=63 && pos<69)classic_glyph={1'b1,7'd116,4'(pos-63)};if(pos>=69 && pos<77)classic_glyph={1'b1,7'd111,4'(pos-69)};if(pos>=77 && pos<81)classic_glyph={1'b1,7'd32,4'(pos-77)};if(pos>=81 && pos<88)classic_glyph={1'b1,7'd74,4'(pos-81)};if(pos>=88 && pos<96)classic_glyph={1'b1,7'd97,4'(pos-88)};if(pos>=96 && pos<104)classic_glyph={1'b1,7'd118,4'(pos-96)};if(pos>=104 && pos<112)classic_glyph={1'b1,7'd97,4'(pos-104)};if(pos>=112 && pos<118)classic_glyph={1'b1,7'd116,4'(pos-112)};if(pos>=118 && pos<126)classic_glyph={1'b1,7'd111,4'(pos-118)};if(pos>=126 && pos<133)classic_glyph={1'b1,7'd115,4'(pos-126)};if(pos>=133 && pos<141)classic_glyph={1'b1,7'd104,4'(pos-133)};if(pos>=141 && pos<145)classic_glyph={1'b1,7'd46,4'(pos-141)}; end
+171:begin if(pos>=0 && pos<12)classic_glyph={1'b1,7'd87,4'(pos-0)};if(pos>=12 && pos<20)classic_glyph={1'b1,7'd101,4'(pos-12)};if(pos>=20 && pos<24)classic_glyph={1'b1,7'd108,4'(pos-20)};if(pos>=24 && pos<31)classic_glyph={1'b1,7'd99,4'(pos-24)};if(pos>=31 && pos<39)classic_glyph={1'b1,7'd111,4'(pos-31)};if(pos>=39 && pos<51)classic_glyph={1'b1,7'd109,4'(pos-39)};if(pos>=51 && pos<59)classic_glyph={1'b1,7'd101,4'(pos-51)}; end
 default:;endcase end endfunction
 function automatic logic [8:0] classic_game_y(input logic [9:0] y);
 logic [8:0] d;logic [4:0] skip;begin d=9'(y-10'd24);skip=0;
@@ -1635,7 +1622,7 @@ function automatic logic [11:0] classic_screen_glyph(input integer id,pos);begin
 104:begin if(pos>=0 && pos<7)classic_screen_glyph={1'b1,7'd76,4'(pos-0)};if(pos>=7 && pos<11)classic_screen_glyph={1'b1,7'd105,4'(pos-7)};if(pos>=11 && pos<19)classic_screen_glyph={1'b1,7'd110,4'(pos-11)};if(pos>=19 && pos<27)classic_screen_glyph={1'b1,7'd107,4'(pos-19)};if(pos>=27 && pos<31)classic_screen_glyph={1'b1,7'd105,4'(pos-27)};if(pos>=31 && pos<39)classic_screen_glyph={1'b1,7'd110,4'(pos-31)};if(pos>=39 && pos<47)classic_screen_glyph={1'b1,7'd103,4'(pos-39)}; end
 169:begin if(pos>=0 && pos<7)classic_screen_glyph={1'b1,7'd83,4'(pos-0)};if(pos>=7 && pos<13)classic_screen_glyph={1'b1,7'd116,4'(pos-7)};if(pos>=13 && pos<21)classic_screen_glyph={1'b1,7'd97,4'(pos-13)};if(pos>=21 && pos<27)classic_screen_glyph={1'b1,7'd114,4'(pos-21)};if(pos>=27 && pos<33)classic_screen_glyph={1'b1,7'd116,4'(pos-27)};if(pos>=33 && pos<37)classic_screen_glyph={1'b1,7'd105,4'(pos-33)};if(pos>=37 && pos<45)classic_screen_glyph={1'b1,7'd110,4'(pos-37)};if(pos>=45 && pos<53)classic_screen_glyph={1'b1,7'd103,4'(pos-45)};if(pos>=53 && pos<57)classic_screen_glyph={1'b1,7'd32,4'(pos-53)};if(pos>=57 && pos<64)classic_screen_glyph={1'b1,7'd70,4'(pos-57)};if(pos>=64 && pos<68)classic_screen_glyph={1'b1,7'd105,4'(pos-64)};if(pos>=68 && pos<76)classic_screen_glyph={1'b1,7'd110,4'(pos-68)};if(pos>=76 && pos<84)classic_screen_glyph={1'b1,7'd100,4'(pos-76)};if(pos>=84 && pos<92)classic_screen_glyph={1'b1,7'd101,4'(pos-84)};if(pos>=92 && pos<98)classic_screen_glyph={1'b1,7'd114,4'(pos-92)};if(pos>=98 && pos<102)classic_screen_glyph={1'b1,7'd46,4'(pos-98)};if(pos>=102 && pos<106)classic_screen_glyph={1'b1,7'd46,4'(pos-102)};if(pos>=106 && pos<110)classic_screen_glyph={1'b1,7'd46,4'(pos-106)}; end
 170:begin if(pos>=0 && pos<9)classic_screen_glyph={1'b1,7'd78,4'(pos-0)};if(pos>=9 && pos<17)classic_screen_glyph={1'b1,7'd67,4'(pos-9)};if(pos>=17 && pos<25)classic_screen_glyph={1'b1,7'd67,4'(pos-17)};if(pos>=25 && pos<32)classic_screen_glyph={1'b1,7'd45,4'(pos-25)};if(pos>=32 && pos<40)classic_screen_glyph={1'b1,7'd49,4'(pos-32)};if(pos>=40 && pos<48)classic_screen_glyph={1'b1,7'd55,4'(pos-40)};if(pos>=48 && pos<56)classic_screen_glyph={1'b1,7'd48,4'(pos-48)};if(pos>=56 && pos<64)classic_screen_glyph={1'b1,7'd49,4'(pos-56)}; end
-171:begin if(pos>=0 && pos<12)classic_screen_glyph={1'b1,7'd87,4'(pos-0)};if(pos>=12 && pos<20)classic_screen_glyph={1'b1,7'd101,4'(pos-12)};if(pos>=20 && pos<24)classic_screen_glyph={1'b1,7'd108,4'(pos-20)};if(pos>=24 && pos<31)classic_screen_glyph={1'b1,7'd99,4'(pos-24)};if(pos>=31 && pos<39)classic_screen_glyph={1'b1,7'd111,4'(pos-31)};if(pos>=39 && pos<51)classic_screen_glyph={1'b1,7'd109,4'(pos-39)};if(pos>=51 && pos<59)classic_screen_glyph={1'b1,7'd101,4'(pos-51)};if(pos>=59 && pos<63)classic_screen_glyph={1'b1,7'd32,4'(pos-59)};if(pos>=63 && pos<69)classic_screen_glyph={1'b1,7'd116,4'(pos-63)};if(pos>=69 && pos<77)classic_screen_glyph={1'b1,7'd111,4'(pos-69)};if(pos>=77 && pos<81)classic_screen_glyph={1'b1,7'd32,4'(pos-77)};if(pos>=81 && pos<88)classic_screen_glyph={1'b1,7'd74,4'(pos-81)};if(pos>=88 && pos<96)classic_screen_glyph={1'b1,7'd97,4'(pos-88)};if(pos>=96 && pos<104)classic_screen_glyph={1'b1,7'd118,4'(pos-96)};if(pos>=104 && pos<112)classic_screen_glyph={1'b1,7'd97,4'(pos-104)};if(pos>=112 && pos<118)classic_screen_glyph={1'b1,7'd116,4'(pos-112)};if(pos>=118 && pos<126)classic_screen_glyph={1'b1,7'd111,4'(pos-118)};if(pos>=126 && pos<133)classic_screen_glyph={1'b1,7'd115,4'(pos-126)};if(pos>=133 && pos<141)classic_screen_glyph={1'b1,7'd104,4'(pos-133)};if(pos>=141 && pos<145)classic_screen_glyph={1'b1,7'd46,4'(pos-141)}; end
+171:begin if(pos>=0 && pos<12)classic_screen_glyph={1'b1,7'd87,4'(pos-0)};if(pos>=12 && pos<20)classic_screen_glyph={1'b1,7'd101,4'(pos-12)};if(pos>=20 && pos<24)classic_screen_glyph={1'b1,7'd108,4'(pos-20)};if(pos>=24 && pos<31)classic_screen_glyph={1'b1,7'd99,4'(pos-24)};if(pos>=31 && pos<39)classic_screen_glyph={1'b1,7'd111,4'(pos-31)};if(pos>=39 && pos<51)classic_screen_glyph={1'b1,7'd109,4'(pos-39)};if(pos>=51 && pos<59)classic_screen_glyph={1'b1,7'd101,4'(pos-51)}; end
 default:;endcase end endfunction
 function automatic logic [17:0] classic_static_layout(input logic [7:0] id);begin case(id)
 8'd120:classic_static_layout={7'd3,11'd0};
@@ -1708,7 +1695,7 @@ function automatic logic [17:0] classic_static_layout(input logic [7:0] id);begi
 8'd104:classic_static_layout={7'd7,11'd981};
 8'd169:classic_static_layout={7'd18,11'd988};
 8'd170:classic_static_layout={7'd8,11'd1006};
-8'd171:classic_static_layout={7'd20,11'd1014};
+8'd171:classic_static_layout={7'd7,11'd1014};
 default:classic_static_layout=0;endcase end endfunction
 function automatic logic [11:0] classic_direct_glyph(input logic [7:0] id,input logic signed [11:0] pos);begin classic_direct_glyph=0;case(id)
 8'd90:begin if(pos>=12'sd0 && pos<12'sd12)classic_direct_glyph={1'b1,7'd77,4'(pos-12'sd0)};if(pos>=12'sd12 && pos<12'sd20)classic_direct_glyph={1'b1,7'd111,4'(pos-12'sd12)};if(pos>=12'sd20 && pos<12'sd28)classic_direct_glyph={1'b1,7'd100,4'(pos-12'sd20)};if(pos>=12'sd28 && pos<12'sd32)classic_direct_glyph={1'b1,7'd105,4'(pos-12'sd28)};if(pos>=12'sd32 && pos<12'sd38)classic_direct_glyph={1'b1,7'd102,4'(pos-12'sd32)};if(pos>=12'sd38 && pos<12'sd42)classic_direct_glyph={1'b1,7'd105,4'(pos-12'sd38)};if(pos>=12'sd42 && pos<12'sd50)classic_direct_glyph={1'b1,7'd101,4'(pos-12'sd42)};if(pos>=12'sd50 && pos<12'sd58)classic_direct_glyph={1'b1,7'd100,4'(pos-12'sd50)}; end

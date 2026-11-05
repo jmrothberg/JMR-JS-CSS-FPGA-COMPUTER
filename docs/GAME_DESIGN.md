@@ -22,7 +22,7 @@ RTL for one game.
 |---|---|---|
 | **1.0 (now)** | Frozen caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Host mint at card-create still works. | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls ([JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#v10-hard-walls-do-not-fix-in-rtl-for-one-title)). `MKPVP.HTML` is the V1 MK-shaped example. |
 | **1.5 (now)** | Console **authoring and compile on the machine:** `LOAD` → `EDIT` → `COMPILE` → `RUN`. Editor and compiler are ordinary card programs (`EDITOR.JSH`, `COMPILER.JSH`), not a new ISA. Same heap and Canvas caps. Popular JS still lacks `shift`, `Math.sin`, `isFinite`, `e.code`. **`Math.round` is live.** | Same V1 titles. How-to: [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). |
-| **2.0 (planned)** | Grow the ISA past V1 walls: more than 16 sprite sheets, `Object.keys` on the chip, dotted `new`, `.call`/`.apply`. **`Math.round` is already nid 54.** The aperture is already 8 MiB. **No title is the V2 example.** Do **not** title-gate. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20). | Any `NAME.HTML` that needs those caps. Library MK-shaped play today: `MKBIG.HTML` / `MKBIGCPU.HTML` (V1, ≤16 sheets). |
+| **2.0 (planned)** | Grow the ISA past V1 walls: more than 16 sprite sheets, `Object.keys` on the chip, dotted `new`, `.call`/`.apply`. **`Math.round` is already nid 54.** The aperture is already 8 MiB. **No title is the V2 example.** Do **not** title-gate. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20). | Any `NAME.HTML` that needs those caps. Library MK-shaped play today: `MKBA.HTML` / `MKCA.HTML` (V1, ≤16 sheets). |
 
 V1 / V1.5 / V2 surface backlog: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
 Agent rule: `.cursor/rules/html-game-v1.mdc`.
@@ -181,7 +181,7 @@ without a web server (`<script src>` works from a file).
 Existing inline-art titles were migrated with `tools/make_artx.py` to short
 names (`INVADERS`→`INVA`, `INVFAST`→`INVF`, `FLDFAST`→`FLDF`,
 `MRDOFAST`→`MRDOF`, `DNKFAST`→`DNKF`, `MKBIG`→`MKBA`, `MKBIGCPU`→`MKCA`).
-The originals stay in `storage/` untouched for reference.
+The long names are not in this folder. The short names are the files.
 
 ---
 
@@ -504,8 +504,34 @@ Two author recipes that page does not spell out:
 | **Nested literal tables** | Hundreds of tiny `MAKE_ARRAY`s for frame rects work only while under the array caps. Prefer compact atlases + small meta, or parallel number arrays, if you approach the cap. |
 | **`fillText` glass-space sizes** | Family/weight are ignored. Glyph scale is `k = max(1, min(15, round(N * sx / 8)))` where `sx` is the current `setTransform` x-scale (default 1). Each character is **8k × 8k glass pixels**. There is no 6px/10px/12px face — 10px at `sx=1` still paints the same 8×8 as 8px. **Glass-space HUD (PACMAN / INVADERS):** `8px` (native) or `16px` (2×). **World canvas then `setTransform` onto 640×480 (DONKEY / DNKFAST, `sx ≈ 640/1510 ≈ 0.42`):** `16px` still rounds to **k=1** (8 glass px — easy to miss on FPGA-SIM). Use **`32px` minimum** (k=2) for HUD, **`48px`** (k=3) for titles; drop the baseline so `8*k` glass pixels of height stay on screen. **ASCII 32–126 only.** UTF-8 extras (`♦` `\u25C6` = bytes `E2 97 86`) paint as `byte&127` (`♦` → **`b`**) and `textAlign` center/right uses **byte** length, so WAVE/LIVES overlap. Place HUD `textAlign=left` at `x + n*(8*k)` (16px face → 16 px/glyph). Lives: ASCII `*` or `fillRect` diamonds / extra ship blit — never `♥`/`♦`/emoji. Label and number are two calls (`fillText("SCORE",x,y)` then `fillText(score,x+6*8*k,y)`). Do not add a second font to RTL. |
 
-**V1 MK-shaped titles in `storage/`:** `MKBIG.HTML` / `MKBIGCPU.HTML` —
-atlases, L/R sheets, V1 Math, ≤16 SPR / 4 MB.
+**V1 MK-shaped titles in `storage/`:** `MKBA.HTML` / `MKCA.HTML` —
+atlases, L/R sheets, V1 Math, ≤16 sheets.
+
+## CopyBits — specified, not in the machine yet
+
+The 128K call for a still picture is QuickDraw CopyBits. The spec for the
+RTL agent is in [MAC_TOOLBOX_RTL_PLAN.md](MAC_TOOLBOX_RTL_PLAN.md). It is
+`toolbox(6, src, dst, 0)`. Python and the current simulator return -1.
+Keep using `fillRect` and `drawImage` until a runtime reports that
+operation in the version mask.
+
+When it exists, the game draws the still scene once, copies that glass
+rectangle into the arena, and later copies a mover's rectangle back
+before drawing the mover with `drawImage`. A cell that changes is drawn,
+then copied back into the arena. Sprites stay on their existing sheets.
+Solid color stays `fillRect`.
+
+```javascript
+function tbCopy(src, dst) { return toolbox(6, src, dst, 0); }
+// Flag bit 1 on a descriptor means the drawing framebuffer.
+// Both rectangles are glass pixels and the same size. Mode 0 is srcCopy.
+```
+
+Titles whose still scene is rebuilt every frame: `DNKF.HTML`,
+`FLDF.HTML`, `PACFAST.HTML`, `MRDOF.HTML`, `MKBA.HTML`, `MKCA.HTML`,
+`BOMBFAST.HTML`, `CENTIPED.HTML`. A black or fully redrawn frame
+(`INVF`, `ASTEROID`, `TANK`, `BOXES`, `AURORA`, `MISSILE`, `DOOM3DFI`,
+`2DFANTA2`) has nothing to put back.
 
 ---
 

@@ -496,6 +496,14 @@ class JsHwVm:
         """Write the validated code portion into code BRAM and execute it."""
         if not isinstance(image, ProgramImage):
             raise TypeError("load_image requires a validated ProgramImage")
+        if image.flags & 16:
+            from functional_model.toolbox_rom import default_code,fingerprint
+            resident=getattr(self._m,'_toolbox_code',None)
+            if resident is None:resident=default_code()
+            offset=(16 if image.flags & FLAG_ASET else 12)+image.n_consts*8
+            incoming=image.data[offset:offset+16384]
+            if fingerprint(incoming)!=fingerprint(resident):
+                raise ValueError('Toolbox instruction identity mismatch; relink application for this ROM')
         self.program_image = image
         self.input.reset_mouse()
         data = image.data
@@ -503,13 +511,16 @@ class JsHwVm:
         pad = (-len(code_bytes)) % 4
         raw = code_bytes + b"\x00" * pad
         nwords = len(raw) // 4
+        # Virtual view of the app bank plus fixed resident instruction window.
+        code_capacity=CODE_WORDS+(4096 if image.flags & 16 else 0)
+        self.code_mem=[0]*code_capacity
         # Words past code BRAM are dropped, exactly as the write port does it
         # (jmr_js_vm.sv:194-196 guards with `code_waddr_q2 < CODE_WORDS`).
         # Modelling the drop rather than raising is what lets PACFAST — whose
         # v2 trailer runs 151 words long — load here as it does on the board.
-        for i in range(min(nwords, CODE_WORDS)):
+        for i in range(min(nwords, code_capacity)):
             self.code_mem[i] = int.from_bytes(raw[i * 4 : i * 4 + 4], "little")
-        for i in range(nwords, CODE_WORDS):
+        for i in range(nwords, code_capacity):
             self.code_mem[i] = 0
         # Header words — same parse as jmr_js_vm.sv S_GOT_MAGIC / HDR1 / HDR2
         magic_w = self.code_mem[0]
@@ -527,7 +538,7 @@ class JsHwVm:
             raise ValueError(f"n_vars {self.n_vars} > MAX_VARS {MAX_VARS}")
         if self.n_consts > MAX_CONSTS:
             raise ValueError(f"n_consts {self.n_consts} > MAX_CONSTS {MAX_CONSTS}")
-        if self.ops_base + self.n_ops > CODE_WORDS:
+        if self.ops_base + self.n_ops > code_capacity:
             raise ValueError(
                 f"code {self.ops_base + self.n_ops} words > CODE_WORDS {CODE_WORDS}"
             )
@@ -2041,7 +2052,7 @@ class JsHwVm:
                     if value == 0:
                         value = -0.0
                 return value_pack_number(value)
-            elif 58 <= native_id <= 63:
+            elif 58 <= native_id <= 64:
                 # Finder program disk ABI. Same arena and -1 sentinel as
                 # the compile natives. sysRun stops this program; the
                 # backend relaunches FINDER when the next one quits.
@@ -2052,6 +2063,8 @@ class JsHwVm:
                     return value_unpack_number(a) if value_is_number(a) else 0.0
 
                 try:
+                    if native_id == 64:
+                        return value_pack_number(self._m._nat_toolbox(_arg(0), _arg(1), _arg(2), _arg(3)))
                     if native_id == 58:
                         return value_pack_number(self._m._nat_fs_list())
                     if native_id == 59:

@@ -1,10 +1,8 @@
 # storage/
 
-**November 4 Finder correction:** [disk-only Finder initialization and return fix](../releases/updates/run75-finder-return-2026-11-04/README.md).
-Use the corrected Finder with run75; reboot to replace its resident cache.
-
-Newest timing-qualified candidate: [run75 program Finder + SYSTEM.SYS](../build/run75_program_system/release/README.md).
-Built November 4; corrected Finder drawing confirmed on the board. The owner confirmed mouse and keyboard work with the correct JA pins 1 and 3.
+Finder files for an already-burned card: [releases/updates](../releases/updates/README.md).
+Which bitstream to load: [FPGA_FIT.md](../docs/FPGA_FIT.md).
+Jacks: [USB_KEYBOARD_PMOD_MICE.md](../docs/USB_KEYBOARD_PMOD_MICE.md).
 
 `SYSTEM.SYS` contains shared native fonts, menu/dialog captions and dialog
 layout resources. Generate it from `resources/system/system.json`; do not edit
@@ -42,7 +40,10 @@ and other subfolders stay off the card. `README.md` stays off the card.
 
 The builder mints a `.JSH` for each `.HTML`. PYTHON, FPGA-SIM, and the
 board `LOAD` / `RUN` that image. Do not keep `.JSH` files here; a host
-copy would be stale. PNG sheets stay on the host. `make_artx.py` turns
+copy would be stale. `FINDER.JSH` is the exception: it is the sidecar to
+copy onto a card that is already burned. `create` still mints from
+`FINDER.HTML` and does not copy this file. The same bytes are in
+`releases/updates/`. PNG sheets stay on the host. `make_artx.py` turns
 them into the two art files below.
 
 `--nojsh` leaves title `.JSH` files off so the machine can prove `COMPILE`.
@@ -120,3 +121,19 @@ the FPGA; the current file is `DOOM3DFI`.
 
 The READY verbs, in the long form:
 [JS_COMMANDS.md — READY console](../docs/JS_COMMANDS.md#ready-console-not-javascript).
+
+### Toolbox development sources
+
+Current `MACPAINT.HTML` uses native Toolbox bulk copy for Undo. Pair a newly
+minted copy with the current simulator or a future matching FPGA build;
+run75/run76 do not implement this native. The matching development disk and
+launch instructions are in `build/toolbox_development/README.md`.
+`UTILITY.HTML` now calls the shared fsList service itself; its old UTL catalog
+header supplied by dedicated hardware is retired. `COMPILER.HTML` recognizes
+the Toolbox native. See `docs/TOOLBOX_API.md` for application examples.
+
+Toolbox additions: `TOOLBOX.ROM` is the shared native-JavaScript instruction
+library; `TBDEMO.HTML` demonstrates its software File menus and dialogs.
+These require the matched run77 runtime/bit. See docs/RESIDENT_TOOLBOX.md before
+editing or compiling resident clients. Rebuild the ROM and all linked clients
+together when changing library code. SYSTEM.SYS remains appearance data.

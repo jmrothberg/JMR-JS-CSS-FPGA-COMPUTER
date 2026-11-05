@@ -44,8 +44,17 @@ vivado_*.backup.log
 /rtl/engines/classic_records.hex
 /rtl/video/classic_records.hex
 
-# Canonical UI ROMs are in vectors/; these are staged runtime copies.
+# Canonical ROMs are in vectors/. The build copies them beside the RTL and into sim/.
 /rtl/engines/classic_static.hex
 /rtl/video/classic_static.hex
+/rtl/engines/font_rom.hex
+/rtl/video/font_rom.hex
+/rtl/engines/invaders_jsb.hex
 /sim/classic_*.hex
 /sim/system_*.hex
+/sim/desktop_*.hex
+/sim/font_rom.hex
+/sim/invaders_jsb.hex
+# Generated resident Toolbox copies; canonical words remain in vectors/.
+/rtl/engines/toolbox_code*.hex
+/sim/toolbox_code*.hex

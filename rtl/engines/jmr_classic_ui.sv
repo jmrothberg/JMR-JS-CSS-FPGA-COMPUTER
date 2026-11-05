@@ -47,7 +47,10 @@
  output logic [11:0] label_glyph,
  output logic about_valid,
  output logic title_valid,
- output logic [9:0] title_width
+ output logic [9:0] title_width,
+ // Set with action on Open... / Save As... of an owned menu. The dialog
+ // then returns this command key after the shared box, instead of saving SOURCE.
+ output logic [7:0] relay_key
 );
  import jmr_classic_ui_pkg::*;
  (* ram_style="distributed" *) logic [15:0] sys_headings [0:39];
@@ -103,7 +106,8 @@
  logic [23:0] heading_lengths;
  logic [23:0] row_counts;
  // One local command RAM, scalar reads for both masks and dispatch.
- (* ram_style="distributed" *) logic [1:0] command_flags [0:83];
+ // [0] separator  [1] Quit/Close  [2] shared Open.../Save As...  [3] Save As...
+ (* ram_style="distributed" *) logic [3:0] command_flags [0:83];
  initial for(integer i=0;i<84;i=i+1)command_flags[i]=0;
  (* ram_style="distributed" *) logic [7:0] commands [0:83];
  initial for(integer i=0;i<84;i=i+1)commands[i]=0;
@@ -265,9 +269,9 @@
    owned<=0;custom_title<=0;item_word<=0;item_length<=0;parse_linear<=0;menu_bases<=0;parse_digit<=0;used_commands<=0;parse_mode<=0;parse_head<=0;parse_row<=0;parse_code<=0;custom_count<=0;headings<=0;current_heading<=0;heading_lengths<=0;row_counts<=0;
    about_description<=0;about_valid<=0;old_role<=0;bar_pending<=1;bar_phase<=0;bar_slot<=0;bar_kind<=0;bar_count<=0;bar_char<=0;bar_c<=0;bar_heading<=0;bar_heading_len<=0;bar_head_index<=0;bar_x<=34;bar_chars<=0;
    bar_lefts<=0;bar_rights<=0;bar_kinds<=0;old_buttons<=0;capture<=0;active_menu<=0;
-   filename_seen<=0;filename_n_seen<=0;title_pending<=0;title_phase<=0;title_x<=0;title_char_i<=0;title_valid<=0;generation<=0;descriptor_error<=0;key_stb<=0;key_code<=0;action_stb<=0;action<=0;title_width<=0;
+   filename_seen<=0;filename_n_seen<=0;title_pending<=0;title_phase<=0;title_x<=0;title_char_i<=0;title_valid<=0;generation<=0;descriptor_error<=0;key_stb<=0;key_code<=0;action_stb<=0;action<=0;relay_key<=0;title_width<=0;
   end else begin
-   record_we<=0;length_we<=0;key_stb<=0;action_stb<=0;
+   record_we<=0;length_we<=0;key_stb<=0;action_stb<=0;relay_key<=0;
    if(app_clear || old_role!=window_state[7:0])choice_phase<=0;
    else case(choice_phase)
     1:begin
@@ -295,6 +299,11 @@
     3:begin
      if(choice_row<choice_count && choice_enabled && (!choice_finder || (!command_flags[choice_address][0] && (choice_owned || (choice_code>=160 && choice_code<=191 && choice_mask[choice_code[4:0]])))))begin
       if(choice_owned && command_flags[choice_address][1])begin action_stb<=1;action<=0;end
+      else if(choice_owned && command_flags[choice_address][2])begin
+       // Open... and Save As... use the shared boxes. The program's command
+       // number is returned after the name, so the program writes the file.
+       action_stb<=1;action<=command_flags[choice_address][3]?4'd4:4'd2;relay_key<=choice_code;
+      end
       else if(choice_code>=128)begin key_stb<=1;key_code<=choice_code;end
       else begin action_stb<=1;action<=choice_code[3:0];end
      end
@@ -424,6 +433,9 @@
      commands[command_address]<=command_data;
      command_flags[command_address][0]<=sep;
      command_flags[command_address][1]<=own && ((item_len==5 && word_==40'h65736f6c43) || (item_len==4 && word_==40'h0074697551));
+     // "Open." is the first five letters of Open...; "Save " is Save As...
+     command_flags[command_address][2]<=own && ((item_len==7 && word_==40'h2e6e65704f) || (item_len==10 && word_==40'h2065766153));
+     command_flags[command_address][3]<=own && item_len==10 && word_==40'h2065766153;
      if(sep)begin length_we<=1;length_row<=7'(16+command_address);length_data<=0;end
     end
     descriptor_error<=invalid;parse_digit<=digit;used_commands<=used;about_description<=description;

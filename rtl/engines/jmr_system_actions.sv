@@ -14,6 +14,8 @@ module jmr_system_actions (
  input logic [127:0] source_name,
  input logic [4:0] source_len,
  input logic source_unnamed,
+ // Owned Open... / Save As... : write the name, then this key. Do not save SOURCE.
+ input logic [7:0] relay_key=8'd0,
  output logic catalog_go,catalog_active,
  output logic [11:0] catalog_addr,
  input logic catalog_done,catalog_error,
@@ -40,21 +42,19 @@ module jmr_system_actions (
  output logic catalog_prepared,restart_pulse,
  output logic error_pulse
 );
- typedef enum logic [4:0] {IDLE,STOP,DISPATCH,SEND_WAIT,SEND,FINISH,SAVE_NAME,SAVE_KEY,SAVE_WAIT,DOC_WAIT,CAT_START,CAT_WAIT,CAT_READ,CAT_SETTLE,CAT_CAPTURE,CAT_EMIT} state_t;
+ typedef enum logic [4:0] {IDLE,STOP,DISPATCH,SEND_WAIT,SEND,FINISH,SAVE_NAME,SAVE_KEY,SAVE_WAIT,DOC_WAIT,DROP} state_t;
  state_t state;
  logic [3:0] operation,return_action;
- logic [8:0] cat_count,cat_index;
- logic [3:0] cat_char,cat_len;
- logic [95:0] cat_name;
- logic [31:0] cat_size;
- logic [4:0] emit_i;
- logic [1:0] emit_kind;
- assign catalog_addr={cat_index[7:0],cat_char};
+ // Catalog preparation belongs to UTILITY.HTML through the shared fsList ABI.
+ assign catalog_go=0;assign catalog_active=0;assign catalog_addr=0;
+ assign catalog_prepared=0;assign restart_pulse=0;
  logic [95:0] return_name;logic [3:0] return_len;
  logic [7:0] old_role;
  logic [2:0] command_mode;
  logic [5:0] char_i;
  logic [7:0] ready_age;
+ logic [4:0] drop_i;
+ logic [7:0] held_relay;
  logic need_after,return_desktop,app_seen,defer_close;
  wire idle_console=console_ready && keyboard_empty && !storage_busy && !disk_busy && !desktop_busy && !console_clear;
  function automatic logic [7:0] word_char(input integer which,i);
@@ -76,12 +76,13 @@ module jmr_system_actions (
  assign busy=state!=IDLE;
  always_ff @(posedge clk)begin
   if(!rst_n)begin
-   catalog_prepared<=0;restart_pulse<=0;catalog_go<=0;catalog_active<=0;stage_valid<=0;stage_addr<=0;stage_data<=0;cat_count<=0;cat_index<=0;cat_char<=0;cat_len<=0;cat_name<=0;cat_size<=0;emit_i<=0;emit_kind<=0;return_name<=0;return_len<=0;state<=IDLE;operation<=0;return_action<=0;old_role<=0;command_mode<=0;char_i<=0;ready_age<=0;
+   return_name<=0;return_len<=0;state<=IDLE;operation<=0;return_action<=0;old_role<=0;command_mode<=0;char_i<=0;ready_age<=0;
+   drop_i<=0;held_relay<=0;stage_valid<=0;stage_addr<=0;stage_data<=0;
    need_after<=0;return_desktop<=0;app_seen<=0;defer_close<=0;quit_pulse<=0;halt_pulse<=0;
    desktop_stb<=0;desktop_on<=0;key_push<=0;key_data<=0;inject_stb<=0;inject_code<=0;
    doc_start<=0;doc_new<=0;doc_role<=1;set_name<=0;target_name<=0;target_len<=0;error_pulse<=0;
   end else begin
-   quit_pulse<=0;halt_pulse<=0;desktop_stb<=0;key_push<=0;inject_stb<=0;doc_start<=0;set_name<=0;error_pulse<=0;catalog_go<=0;catalog_prepared<=0;restart_pulse<=0;
+   quit_pulse<=0;halt_pulse<=0;desktop_stb<=0;key_push<=0;inject_stb<=0;doc_start<=0;set_name<=0;error_pulse<=0;
    if(busy && action_stb && action==0)defer_close<=1;
    case(state)
     IDLE:begin
@@ -90,7 +91,11 @@ module jmr_system_actions (
      if(return_desktop && app_seen && !vm_busy && idle_console)begin
       desktop_stb<=1;desktop_on<=1;return_desktop<=0;app_seen<=0;
      end
-     if(action_stb)begin
+     if(action_stb && relay_key!=0 && (action==14 || action==15))begin
+      // The shared box already collected the name. Leave it where a program
+      // can stgRead it (arena 96, 16 bytes), then deliver the menu key.
+      drop_i<=0;held_relay<=relay_key;stage_valid<=0;state<=DROP;
+     end else if(action_stb)begin
       operation<=action;old_role<=role;ready_age<=0;return_desktop<=0;app_seen<=0;defer_close<=0;
       need_after<=after_valid;return_action<=after_action;return_name<=after_name;return_len<=after_len;
       if((action==0 || action==13) && role==3 && !idle_console)begin defer_close<=1;state<=IDLE;end
@@ -115,7 +120,7 @@ module jmr_system_actions (
     DISPATCH:begin
      char_i<=0;ready_age<=0;
      if(operation==6)state<=IDLE;
-     else if(operation==4)state<=CAT_START;
+     else if(operation==4)state<=IDLE; // obsolete catalog-preparation command
      else if(operation==1 || operation==11 || (operation==7 && target_len==0))begin
       doc_start<=1;doc_new<=operation!=7 || source_len==0;
       doc_role<=(operation==11 || (operation==1 && old_role==5))?3'd5:3'd1;state<=DOC_WAIT;
@@ -140,7 +145,7 @@ module jmr_system_actions (
        else if(command_mode==0)begin
         if((operation==14 && (old_role==1 || old_role==5)) || operation==7)begin
          doc_start<=1;doc_new<=0;doc_role<=operation==7?3'd1:old_role==5?3'd5:3'd1;state<=DOC_WAIT;
-        end else if(operation==10)state<=CAT_START;
+        end else if(operation==10)begin command_mode<=3;char_i<=0;state<=SEND_WAIT;end
         else begin command_mode<=(operation==14 && old_role==3)?3'd4:3'd2;char_i<=0;state<=SEND_WAIT;end
        end else if(command_mode==4)begin
         if(defer_close)quit_pulse<=1;
@@ -148,40 +153,6 @@ module jmr_system_actions (
        end else state<=IDLE;
       end else ready_age<=ready_age+1'b1;
      end else ready_age<=0;
-    end
-    CAT_START:if(idle_console)begin catalog_active<=1;catalog_go<=1;state<=CAT_WAIT;end
-    CAT_WAIT:if(catalog_done)begin
-     if(catalog_error)begin catalog_active<=0;error_pulse<=1;state<=IDLE;end
-     else begin cat_count<=catalog_count;cat_index<=0;cat_char<=0;cat_len<=0;cat_name<=0;emit_kind<=0;emit_i<=0;stage_addr<=0;stage_valid<=0;state<=CAT_EMIT;end
-    end
-    CAT_READ:state<=CAT_SETTLE;
-    CAT_SETTLE:state<=CAT_CAPTURE;
-    CAT_CAPTURE:begin
-     cat_size<=catalog_size;
-     if(catalog_data==0 || cat_char==12)begin cat_len<=cat_char;emit_i<=0;emit_kind<=1;state<=CAT_EMIT;end
-     else begin cat_name[cat_char*8+:8]<=catalog_data;cat_char<=cat_char+1'b1;state<=CAT_READ;end
-    end
-    CAT_EMIT:begin
-     if(!stage_valid)begin
-      stage_valid<=1;
-      if(emit_kind==0)case(emit_i)0:stage_data<=85;1:stage_data<=84;2:stage_data<=76;default:stage_data<=1;endcase
-      else if(emit_kind==2)stage_data<=0;
-      else if(emit_i==0)stage_data<={4'd0,cat_len};
-      else if(emit_i<=cat_len)stage_data<=cat_name[(emit_i-1)*8+:8];
-      else stage_data<=cat_size[(emit_i-cat_len-1)*8+:8];
-     end else if(stage_ready)begin
-      stage_valid<=0;stage_addr<=stage_addr+1'b1;
-      if(emit_kind==2)begin catalog_active<=0;catalog_prepared<=1;
-       if(operation==4)begin restart_pulse<=1;state<=IDLE;end
-       else begin command_mode<=3;char_i<=0;state<=SEND_WAIT;end
-      end
-      else if((emit_kind==0 && emit_i==3) || (emit_kind==1 && emit_i=={1'b0,cat_len}+4))begin
-       emit_i<=0;cat_char<=0;cat_name<=0;
-       if(emit_kind==1)cat_index<=cat_index+1'b1;
-       if((emit_kind==0 && cat_count==0) || (emit_kind==1 && cat_index+1'b1>=cat_count))emit_kind<=2;
-       else state<=CAT_READ;
-      end else emit_i<=emit_i+1'b1;
-     end
     end
     DOC_WAIT:if(vm_busy)begin return_desktop<=1;app_seen<=1;state<=IDLE;end
     SAVE_NAME:begin set_name<=1;state<=SAVE_KEY;end
@@ -197,6 +168,16 @@ module jmr_system_actions (
        end else begin command_mode<=1;char_i<=0;state<=SEND_WAIT;if(console_failed)error_pulse<=1;end
       end else ready_age<=ready_age+1'b1;
      end else ready_age<=0;
+    end
+    DROP:begin
+     if(drop_i==16)begin
+      stage_valid<=0;inject_stb<=1;inject_code<=held_relay;state<=IDLE;
+     end else if(stage_ready)begin
+      stage_valid<=0;drop_i<=drop_i+1'b1;
+     end else begin
+      stage_valid<=1;stage_addr<=13'd96+{8'd0,drop_i};
+      stage_data<=drop_i<chosen_len?chosen_name[{drop_i,3'd0}+:8]:8'd0;
+     end
     end
     default:state<=IDLE;
    endcase

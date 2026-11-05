@@ -277,6 +277,10 @@ def compile_html_text(html: str, *, sound: bool = True, source_path=None, artx=N
     """
     from functional_model.compiler import CompileError, compile_source
 
+    marker="jmr-toolbox: resident-v1"
+    marker_at=html.find(marker)
+    if marker_at>=0 and len(html[:marker_at+len(marker)].encode("utf-8"))>1024:
+        raise CompileError("Put the resident Toolbox marker in the first 1024 bytes",html[:marker_at].count("\n")+1)
     spans = []
     bodies = []
     # data-host=chrome is a browser-only Web Audio player. Always skip it
@@ -323,7 +327,11 @@ def compile_html_text(html: str, *, sound: bool = True, source_path=None, artx=N
             _js_line_to_html(spans, js_line),
         )
     try:
-        chunk = compile_source(src)
+        if "jmr-toolbox: resident-v1" in html:
+            from tools.toolbox_linker import compile_linked
+            chunk = compile_linked(src)
+        else:
+            chunk = compile_source(src)
     except CompileError as e:
         e.line = _js_line_to_html(spans, e.line or 0)
         raise

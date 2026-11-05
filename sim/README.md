@@ -14,7 +14,7 @@ are hardware pixels, not Python drawings. It uses the normal `card.img` unless
 `sim_main.cpp` connects the RTL to the simulated card, memory and GUI transport.
 `tb_*` files check individual devices. `sim_build_*` folders are generated builds.
 
-## November 4: responsive Finder startup
+## Finder startup
 
 The GUI uses `FRAME 500000` for system applications so a long paint yields to
 mouse/keyboard processing. Plain `FRAME` keeps the existing game behavior.
@@ -35,3 +35,17 @@ or alter normal boot contents. The cold-Finder regression uses nonzero RAM.
 Dual physical mouse report regression: `make -C sim tb_mouse_packet_merge`
 from repository root. Covers simultaneous movement, combined buttons, queued
 reports and idle backup behavior; physical port wiring still requires a board.
+
+### Resident Toolbox (run77b)
+
+`sim_server_synth` includes the native-JavaScript Toolbox instruction bank.
+The `toolbox_code0.hex` and `toolbox_code1.hex` files copied from vectors/
+initialize 3072 physical instructions (three BRAM tiles). The remaining 1024
+virtual prefix words are fixed jump padding. `toolbox_code.hex` is the complete
+4096-word host/linker view.
+Boot loads a validated TOOLBOX.ROM before SYSTEM.SYS. `SYS?` reports both statuses
+(1 valid, 2 absent, 3 invalid); ROM absence leaves the factory bank intact.
+CODEPEEK and the prefetch assertion follow virtual-to-resident code mapping.
+Use the matched run77b disk for the TBDEMO software-menu example. The current
+call/linking guide is docs/RESIDENT_TOOLBOX.md. RTL tests are
+`tests/test_toolbox.py`, `tests/test_toolbox_resident.py` and `sim/tb_toolbox.sv`.

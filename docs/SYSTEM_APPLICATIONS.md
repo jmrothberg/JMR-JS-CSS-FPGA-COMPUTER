@@ -41,6 +41,28 @@ flashes that outlined button and does not close the box.
 `storage/MENUEX.HTML` is the copy for a game. `storage/GUIDEX.HTML` is the
 copy for a program that has a window.
 
+## The boxes the system draws
+
+Open, Save, Save As, the save-changes question, and Replace are one set of
+boxes. `storage/EDITOR.HTML` is the program that uses them. It sets
+`ctx.systemWindow` to 1 (Note uses 5), publishes `ctx.windowDirty`, and
+does not supply its own `File|` menu. File → Save As opens the box the
+editor shows: "Save document as:", the name field, Save, and Cancel.
+The program does not paint that box, those words, the field, or the buttons.
+
+File → Save delivers keyCode 113 with an empty character. The editor writes
+the resume header and calls `cdone(129,0,0)`. The system then stores SOURCE
+under the name from the box. The header bytes are in SOURCE document tools
+below.
+
+A menu string that starts with `File|` replaces that File menu. Items
+labeled `Open...` and `Save As...` still open these boxes. The chosen
+name is written at arena bytes 96–111 (the filename field, up to 12
+letters and a trailing 0), and then the item's command key is delivered.
+The program reads that name and loads or writes its own bytes. `Save`
+stays a command key: the program already has a name. Do not paint a
+second name field or file list in the window.
+
 `resetGame` and `togglePause` are the application's own functions. Menu commands
 have no text/character payload and do not simulate mouse clicks into game buttons.
 The system consumes menu pointer events so a menu selection cannot also move a
@@ -109,8 +131,9 @@ menus, `|` separates the heading/items, and `=` assigns an item a command number
 Use at most **3 extra menus, 8 items per menu, 512 printable ASCII bytes total**.
 A document program that must own File and Edit starts the descriptor with
 `File|`. That form allows six menus and 14 items, up to 800 bytes, and
-commands 160–239. `Quit` and `Close` leave the program. A lone `-` is a
-separator.
+commands 160–239. `Quit` and `Close` leave the program. `Open...` and
+`Save As...` open the shared boxes, then deliver that item's command
+key. The name is at arena bytes 96–111. A lone `-` is a separator.
 Menu headings are 1–12 characters; item labels are 1–24 characters. Commands
 **160–191** must be unique in the descriptor. Do not use `File`, `Edit`, `View`,
 or `Special` as custom headings. The system rejects invalid descriptors visibly.
@@ -175,8 +198,11 @@ Compile uses that same scratch arena, so clipboard/Undo do not survive compiling
 3. Declare `systemAbout` for the application and use `systemViewport=1` for
    an existing full-screen game. Declare a compact menu string when the app
    needs extra commands, and route those commands to existing functions.
-   Use `MENUEX.HTML`, `2DFANTA2.HTML` and `DNKF.HTML` as working examples. Draw
-   content only; the shared system supplies the chrome and file lifecycle.
+   Use `MENUEX.HTML` for a menu command and `EDITOR.HTML` for Open, Save,
+   and Save As. Draw the document only. The system draws the menu bar and
+   those boxes. On a `File|` menu, label the items `Open...` and
+   `Save As...` so the same boxes open. Read the chosen name at arena
+   bytes 96–111 when that command key arrives.
 4. Use the shared viewport to reserve the bar without changing game coordinates,
    or use explicit layout and update drawing and mouse coordinates together.
    Remove displaced toolbar buttons; put their real actions in menus.
@@ -214,8 +240,9 @@ HTML, so future converted programs are included without editing a title list.
 `storage/MACPAINT.HTML` is a windowed drawing program, role 6. It draws
 only in the white hole. Its menu descriptor starts with `File|`, so the
 program owns the menu bar: File, Edit, Goodies, Font, FontSize, Style.
-The title stripes say `untitled`. File → Save writes a `STEM.PNT`
-picture with `fsWrite` and `fsRead`, which the chip already has. No new
+The title stripes say `untitled`. File → Open... and File → Save As...
+open the shared boxes. MacPaint reads the name at arena bytes 96–111
+and loads or writes `STEM.PNT` with `fsRead` and `fsWrite`. No new
 instruction was added. The tool pictures are the 1984 MacPaint font,
 and the 38 patterns are the System pattern list from that disk.
 
@@ -331,5 +358,6 @@ The six-menu `File|` contract, separator/checkmark rendering, `systemTitle` and
 program. Use run76 after its release qualification; older run75 does not
 support those extensions. `tests/test_owned_menus_rtl.py` exercises the native
 parser and pointer dispatch, including Save, the last menu and Quit lifecycle.
-The program still implements its own document actions; declaring Save does
-not invent file serialization for an arbitrary drawing application.
+The program still implements its own document bytes. `Open...` and
+`Save As...` open the shared boxes and leave the name at arena bytes
+96–111. Declaring those labels does not invent file serialization.

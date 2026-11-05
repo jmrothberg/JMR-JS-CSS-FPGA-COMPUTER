@@ -22,7 +22,7 @@ once; `/640png` first-build is Agent_learning prompts.
 | Do not hardwire `INVADERS` / `PACMAN` / `DONKEY` into the chip | `.cursor/rules/no-game-hardwire.mdc` | [GAME_DESIGN.md](GAME_DESIGN.md) |
 | Version 1.0 authoring walls; V1.5 COMPILE live + leftover typed-READY / popular JS; V2.0 is ISA/ASET growth (no title name) | `.cursor/rules/html-game-v1.mdc` | [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md) § Version 1.0, 1.5, and 2.0 |
 | Read `traces/` before re-running the GUI | `.cursor/rules/use-existing-traces.mdc` | [SESSION_HANDOFF.md](SESSION_HANDOFF.md) |
-| Synth hygiene: 2 workers; when **not** to `bit-fresh`; incremental stitch | [SESSION_HANDOFF.md](SESSION_HANDOFF.md) § Synthesis | [FPGA_FIT.md](FPGA_FIT.md) NEVER table |
+| Synth hygiene: 2 workers; when **not** to `bit-fresh`; incremental stitch | [FPGA_BRINGUP.md](FPGA_BRINGUP.md) | [FPGA_FIT.md](FPGA_FIT.md) NEVER table |
 | Poll-fire cooldown (hold-to-repeat, not edge-gate) | `.cursor/rules/poll-fire-needs-cooldown.mdc` | [GAME_DESIGN.md](GAME_DESIGN.md) Input / FAST |
 | No splice after kill-calls | `.cursor/rules/no-splice-after-kill-calls.mdc` | [GAME_DESIGN.md](GAME_DESIGN.md) FAST |
 | No maze flood on a tick | `.cursor/rules/no-maze-flood-on-tick.mdc` | [GAME_DESIGN.md](GAME_DESIGN.md) FAST |
@@ -56,7 +56,7 @@ mention.
 | **WNS** | Worst Negative Slack | Timing: ≥ 0 means the clock was met. Negative WNS is a bad bit |
 | **MIG** | Memory Interface Generator | Vivado IP that talks to the board’s DDR3 DRAM |
 | **DDR3** | Double Data Rate DRAM, generation 3 | Big off-chip memory on Nexys Video. We hide it behind a **simple SRAM port** |
-| **SRAM** | Static Random-Access Memory | Simple memory. **On-chip** (BRAM) vs **external 4 MB asset bank** |
+| **SRAM** | Static Random-Access Memory | Simple memory. **On-chip** (BRAM) vs **external 8 MiB asset bank** |
 | **BRAM** | Block RAM | On-chip memory tiles (this chip has **365**). Hot path only: screens, code, live JavaScript heap |
 | **LUT** | Look-Up Table | The FPGA’s basic logic cell (this chip has ~134,600) |
 | **LUTRAM** | LUT used as RAM | Fine for tiny tables. Fatal if a big array is forced here because BRAM ran out |
@@ -71,7 +71,7 @@ mention.
 | **playSfx** | — | Title helper: packed `[freq, vol, frames, slide, ch, …]`. Chrome: `_chromePlay`. Card: `sound()` nid 42. Catalog: `SNDDEMO.HTML` |
 | **sound()** | nid 42 | `sound(ch, freqHz, vol0_15, frames, slide)`. 4-voice PSG (ch 0–2 square, 3 noise). Do **not** write `function sound()`. Mint default-on; `-soundoff` stubs |
 | **ProgramImage** | — | Compiled program in memory after `RUN` (code + ASET art). Not a file you type |
-| **ASET** | asset section | Palette + sprite pixels inside the ProgramImage; streamed to the 4 MB SRAM bank |
+| **ASET** | asset section | Palette + sprite pixels inside the ProgramImage; streamed to the 8 MiB SRAM bank. Art ends before the front image at byte 7,155,712 |
 | **ARTX** | art sidecar | Quantized ASET payload beside `NAME.HTML` (`NAME.ARTX`; card 8.3 = `NAME.ART`). Built from `NAME-N.png` by `make_artx.py`. Title source uses `jmr:spr:N`, never inline base64. |
 | **ARTJS** | Chrome art | Same quantized sheets as `.ARTX`, as a `.js` file Chrome can load. Built by `make_artjs.py`. **Not** on the card. Open `storage/NAME.HTML` in Chrome to see it. |
 | **JSB** | — | On-the-wire encoding of a ProgramImage (`JSB1` magic) |
@@ -107,7 +107,7 @@ mention.
 | **Pmod** | Peripheral module | Digilent add-on jacks. **JA** PS/2 mouse, **JC** second PS/2 mouse, **JB** joystick. USB keyboard is **J15**, not a Pmod. |
 | **T200** | — | Lab name for this Nexys Video (Artix-7 200T) |
 | **T100** | — | Lab name for the BASIC sibling’s Nexys A7-100T |
-| **V1.0 / V1.5 / V2.0** | product generations | **V1.0** = titles that play; **one disk** = `card.img`; compile = **when you make the card** (`.JSH`). **V1.5 compile is live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. Typed-READY + popular JS V1 lacks is leftover. **`Math.round` is live** (nid 54). **V2.0** = bigger ISA/ASET (`MAX_SPR`, 8 MB bank, `Object.keys`, dotted `new`) — **not** a named title |
+| **V1.0 / V1.5 / V2.0** | product generations | **V1.0** = titles that play; **one disk** = `card.img`; compile = **when you make the card** (`.JSH`). **V1.5 compile is live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. Typed-READY + popular JS V1 lacks is leftover. **`Math.round` is live** (nid 54). The external bank is already **8 MiB**. **V2.0** = bigger ISA (`MAX_SPR`, `Object.keys`, dotted `new`) — **not** a named title |
 | **`?NH`** | no HTML / no minted `.JSH` | Loud miss: missing title path, **or** card-create compile failed so `LOAD` shows HTML and `RUN` refuses. Never “done” |
 | **clock** | chip heartbeat | The JavaScript VM steps at **33.333 MHz**. Fabric and DDR user logic run at **100 MHz**. Do not treat those as the same clock. |
 | **frame** | one picture | One full 640×480 image. Games aim for **60 pictures per second** (about 16.7 milliseconds each) |
@@ -122,7 +122,7 @@ when we fit the chip. **One** source of truth:
 [FPGA_FIT.md](FPGA_FIT.md) paper budget. Do not copy stale 1024/512
 caps from older paragraphs.
 
-**LOAD / paste:** `LOAD "PACMAN.HTML"` (or INVADERS / DONKEY / ASTEROID / AURORA / MRDO / MKPVP / MKBIG / MKBIGCPU / MKCPU / JOYDEMO / SNDDEMO / PACORIG / PACFAST / DNKFAST) then `RUN`. FAST copies keep the original look; measured clocks are in [GAME_DESIGN.md](GAME_DESIGN.md) (PACFAST **2.8×** PACMAN, DNKFAST **1.65×** DONKEY on FPGA-SIM play `fclk`).
+**LOAD / paste:** `LOAD "PACFAST.HTML"` (or INVF / DNKF / ASTEROID / AURORA / MRDOF / MKBA / MKCA / JOYDEMO / SNDDEMO) then `RUN`. Those are the files in `storage/`. FAST copies keep the original look; measured clocks are in [GAME_DESIGN.md](GAME_DESIGN.md) (PACFAST **2.8×** PACMAN, DNKFAST **1.65×** DONKEY on FPGA-SIM play `fclk`).
 **V1.0** library titles must stay inside the authoring walls in
 [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md)
 (how-to: [GAME_DESIGN.md](GAME_DESIGN.md)). **V1.0 `LIST` is
@@ -168,7 +168,7 @@ goes away. That is the product: READY → LOAD → RUN, like the TRS-80, with
 Canvas engines instead of a borrowed Z80.
 
 **ASIC advantage — for this class of machine, not versus Chrome.** One
-machine, not two: die goes to heap SRAM, dual FB, blitter, and the 4 MB
+machine, not two: die goes to heap SRAM, dual FB, blitter, and the 8 MiB
 asset port, not a general CPU plus a runtime in DRAM. `fillRect` /
 `drawImage` / rAF / `GET_PROP` are datapaths (extra clocks at core ≈100 MHz
 MIG `ui_clk` still hit a 60 Hz frame). Caps are frozen and compile as SRAM;
@@ -221,11 +221,20 @@ tokens, microcode, or Nexys A7-100T pinouts here. Board freeze:
 | `third_party/digilent_rgb2dvi/` | Digilent HDMI TMDS IP (do not rewrite) |
 | `sim/` | Verilator + cocotb |
 | `constraints/` | Nexys Video XDC (StarLite later; not A7-100T) |
-| `storage/` | Seed only: `NAME.HTML` titles. Rebuild `card.img` after edits |
-| `card.img` | **V1.0 disk** for PYTHON / FPGA-SIM / BOARD. FAT HTML + minted `.JSH` |
-| `docs/` | Architecture, bring-up, fit, handoff |
+| `storage/` | Seed only: `NAME.HTML` titles. Rebuild `card.img` after edits. `FINDER.JSH` here is a published sidecar; `create` still mints from the HTML |
+| `card.img` | **V1.0 disk** for PYTHON / FPGA-SIM / BOARD. FAT HTML + minted `.JSH`. Not in git |
+| `vectors/` | The ROM images. Builds copy them next to the RTL and into `sim/` |
+| `assets/` | Desktop font and pointer art the exporters read |
+| `resources/system/` | `system.json`, packed into `SYSTEM.SYS` |
+| `gauntlet/` | Gauntlet conversion workspace. Not a card seed |
+| `releases/` | The QSPI image and Finder file updates. Which bit to load: [FPGA_FIT.md](FPGA_FIT.md) |
+| `docs/` | Architecture, bring-up, fit, handoff. `docs/performance/` is the October speed measurement |
 | `tools/` | compile, SD image, checks. LED and mouse probes are not FPGA-SIM ([RTL_REORG.md](RTL_REORG.md#probe-bits)) |
-| `traces/` | Flight logs — read first when debugging. `traces/goldens/` = frame diffs |
+| `scripts/` | Local Vivado helper. Commands are on the README |
+| `tests/` | `pytest` |
+| `traces/` | Flight logs on this machine. Read the newest one first. Not in git |
+| `to_delete/` | Local archive. Not in git |
+| `gui_jmr_js.py` | The launcher. F10 is `gui_arch_monitor.py` |
 | `.cursor/rules/` | Product rules for *this* machine (copy 1 of the do-nots) |
 
 ---

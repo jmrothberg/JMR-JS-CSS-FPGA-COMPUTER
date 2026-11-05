@@ -181,3 +181,11 @@ are compact fixed drawing primitives, not a bitmap framebuffer in BRAM.
 The old ship-menu About bitmap RAM has been removed; native About uses the
 shared caption/font renderer. Fixed dialog configuration loads once through the
 pixel resource bridge instead of being copied with each live UI snapshot.
+
+## Development: JavaScript access to the boot resource image
+
+The new Toolbox development runtime exposes the verified resident payload
+through `toolbox(5,offset,destination,length)`. It reads the existing boot
+snapshot, not a fresh disk file. See [Toolbox API](TOOLBOX_API.md) for bounds,
+missing-resource handling and the exact development/release distinction.
+This does not change the V1 resource format or its native font-metric limits.

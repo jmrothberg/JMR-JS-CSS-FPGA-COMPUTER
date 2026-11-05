@@ -2,7 +2,21 @@
 
 Standalone machine. `LOAD` an HTML file, `RUN` the minted `.JSH` on `card.img`. Python, FPGA-SIM, and the board share that image. `storage/` is only the seed.
 
-Keyboard on USB **J15**. PS/2 mouse on **JA** (pin 1 data, pin 3 clock). Second mouse on **JC**. Joystick on **JB**. [Wiring](docs/USB_KEYBOARD_PMOD_MICE.md). [Picture of the machine](docs/lastrun_ARCHITECTURE.md). Which bitstream: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+Keyboard on USB **J15**. PS/2 mouse on **JA** (pin 1 data, pin 3 clock). Second mouse on **JC**. Joystick on **JB**. [Wiring](docs/USB_KEYBOARD_PMOD_MICE.md). [Architecture, Toolbox calls and Macintosh differences](docs/lastrun_ARCHITECTURE.md). Which bitstream: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+
+## Toolbox development
+
+The new shared native-JavaScript Toolbox adds bulk graphics/memory operations
+and software menus/dialogs. [Calls and migration guide](docs/RESIDENT_TOOLBOX.md),
+[primitive reference](docs/TOOLBOX_API.md), and [build status](docs/TOOLBOX_IMPLEMENTATION_STATUS.md).
+Run77d is building with CopyBits included. Its hardware, Toolbox ROM and
+relinked applications are frozen together under `build/run77d_copybits_toolbox/`.
+The matched disk and simulator checks pass. Run77e builds a measured menu-parser
+timing repair in parallel; run77f adds a tested registered startup identity check.
+All use the same ROM/disk; none is qualified yet. Newly compiled
+Toolbox programs require a Toolbox-capable bit: do not pair them with run75/run76.
+Existing released bits and the main card image are preserved. Run77b/run77c are
+older development snapshots without CopyBits; they are not the target release.
 
 ## Commands
 
@@ -45,7 +59,7 @@ Temporary load. HDMI comes up in a few seconds and is gone when you unplug the b
 sudo openFPGALoader -b nexysVideo build/run75_program_system/release/run75_program_finder_SYS_33MHz.bit
 ```
 
-That file is the newest qualified bitstream, and it is the rollback. It still has the older jacks (mouse on J15, keyboard on JA). The run76 folder is the build in progress and does not have its own `.bit` yet. [Which bit](docs/FPGA_FIT.md). To keep the bitstream after power-off, set JP4 to QSPI and add `-f`:
+That file is the newest qualified bitstream, and it is the rollback. It still has the older jacks (mouse on J15, keyboard on JA). Run76 now has an [experimental test bit](build/run76_usb_keyboard_pmod_mice/test/README.md) with the new jacks and menus; setup timing misses by 0.355 ns. [Which bit](docs/FPGA_FIT.md). To keep the bitstream after power-off, set JP4 to QSPI and add `-f`:
 
 ```sh
 sudo openFPGALoader -b nexysVideo -f build/run75_program_system/release/run75_program_finder_SYS_33MHz.bit

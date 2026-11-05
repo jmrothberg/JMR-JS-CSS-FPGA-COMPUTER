@@ -85,13 +85,32 @@ static inline const auto& venv_word(R* r, unsigned a) {
 }
 template <typename R>
 static inline uint32_t code_word(R* r, unsigned a) {
+    if(r->jmr_js_core__DOT__u_vm__DOT__load_toolbox){
+        unsigned base=r->jmr_js_core__DOT__u_vm__DOT__load_ops_base;
+        if(a>=base && a<base+4096){ unsigned i=a-base;return i<2048?r->jmr_js_core__DOT__u_vm__DOT__toolbox_code0[i]:i<3072?r->jmr_js_core__DOT__u_vm__DOT__toolbox_code1[i-2048]:0x0010000bu; }
+        if(a>=base+4096)a-=4096;
+    }
     if (a < 16384u) return uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[a]);
-    return uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[(a - 16384u) & 4095u]);
+    if (a < 20480u) return uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[a - 16384u]);
+    return uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_mem_c2[(a - 20480u) & 1023u]);
 }
 template <typename R>
 static inline void code_poke(R* r, unsigned a, uint32_t w) {
+    if(a==0){r->jmr_js_core__DOT__u_vm__DOT__load_toolbox=0;r->jmr_js_core__DOT__u_vm__DOT__load_toolbox_hash=0;}
+    if(a==1)r->jmr_js_core__DOT__u_vm__DOT__load_ops_base=4+2*(w>>16);
+    if(a==2){r->jmr_js_core__DOT__u_vm__DOT__load_toolbox=(w>>20)&1;if(!(w&(1u<<17)))r->jmr_js_core__DOT__u_vm__DOT__load_ops_base--;}
+    if(r->jmr_js_core__DOT__u_vm__DOT__load_toolbox){
+        unsigned base=r->jmr_js_core__DOT__u_vm__DOT__load_ops_base;
+        if(a>=base && a<base+4096){
+            uint32_t h=r->jmr_js_core__DOT__u_vm__DOT__load_toolbox_hash;
+            r->jmr_js_core__DOT__u_vm__DOT__load_toolbox_hash=((h<<1)|(h>>31))^w;
+            return;
+        }
+        if(a>=base+4096)a-=4096;
+    }
     if (a < 16384u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[a] = w;
     else if (a < 20480u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[a - 16384u] = w;
+    else if (a < 21504u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c2[a - 20480u] = w;
 }
 
 static uint16_t peek_vobj_key(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
@@ -916,9 +935,7 @@ static void tick() {
             unsigned eip = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__ip);
             unsigned ob = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__ops_base);
             unsigned ca = (ob + eip) & 0x7fff;
-            uint32_t want = (ca < 16384)
-                ? top->rootp->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[ca]
-                : top->rootp->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[(ca - 16384) & 0xfff];
+            uint32_t want = code_word(top->rootp,ca);
             uint32_t got = top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opw_q;
             if (got != want) {
                 FILE* pf = fopen("/tmp/pf_check.log", "a");
@@ -1719,6 +1736,13 @@ int main(int argc, char** argv) {
                      <<" state_saved="<<unsigned(r->jmr_js_core__DOT__u_cons__DOT__finder_state_valid)
                      <<" hits="<<unsigned(r->jmr_js_core__DOT__u_cons__DOT__finder_cache_hits)<<std::endl;continue;
         }
+        if(line=="BOOT?") {
+            auto* r=top->rootp;
+            std::cout << "BOOT intro=" << unsigned(r->jmr_js_core__DOT__boot_intro)
+                      << " finished=" << unsigned(r->jmr_js_core__DOT__boot_finished)
+                      << " glass=" << unsigned(r->jmr_js_core__DOT__boot_glass) << std::endl;
+            continue;
+        }
         if(line=="WINDOW?") {
             const uint32_t w=top->system_window_o;
             std::cout<<"WINDOW role="<<(w&255)<<" scroll="<<((w>>8)&255)<<" scrollx="<<((w>>16)&255)<<" flags="<<(w>>24)<<std::endl;continue;
@@ -1923,8 +1947,7 @@ int main(int argc, char** argv) {
             auto* rr = top->rootp;
             std::cout << "CODEPEEK";
             for (unsigned i = a; i < a + 16; i++) {
-                unsigned w = (i < 16384) ? unsigned(rr->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[i])
-                                         : unsigned(rr->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[(i - 16384) & 4095]);
+                unsigned w = code_word(rr,i);
                 std::cout << " " << std::hex << w << std::dec;
             }
             std::cout << " opsbase=" << unsigned(rr->jmr_js_core__DOT__u_vm__DOT__ops_base) << "\n" << std::flush;
@@ -3479,7 +3502,7 @@ int main(int argc, char** argv) {
             continue;
         }
         if (line == "SYS?") {
-            std::cout << "SYS status=" << unsigned(top->rootp->jmr_js_core__DOT__sys_status) << std::endl;
+            std::cout << "SYS status=" << unsigned(top->rootp->jmr_js_core__DOT__sys_status) << " rom=" << unsigned(top->rootp->jmr_js_core__DOT__u_cons__DOT__rom_status) << std::endl;
             continue;
         }
         if (line == "PAL?") {

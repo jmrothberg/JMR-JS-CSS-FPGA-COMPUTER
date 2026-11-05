@@ -40,6 +40,9 @@ module jmr_console_engine (
     output logic [13:0] sys_addr,
     output logic [15:0] sys_data,
     output logic [1:0] sys_status,
+    output logic toolbox_code_we,
+    output logic [11:0] toolbox_code_addr,
+    output logic [31:0] toolbox_code_data,
     input logic park_finder=1'b0,forget_finder=1'b0,
     input logic [2:0] ui_doc_role=3'd1,
     input logic ui_stage_valid=1'b0,
@@ -325,6 +328,10 @@ module jmr_console_engine (
     localparam logic [21:0] SYS_STAGE_BASE=22'd3565568;
     localparam int SYS_BYTES=24320;
     logic sys_attempted,sys_good;
+    logic sys_rom;
+    logic [15:0] rom_low;
+    logic [1:0] rom_status /*verilator public_flat_rd*/;
+    wire [14:0] sys_length=sys_rom?15'd16384:15'(SYS_BYTES);
     logic [3:0] sys_phase;
     logic [14:0] sys_i;
     logic [31:0] sys_crc,sys_expected;
@@ -337,9 +344,13 @@ module jmr_console_engine (
     endfunction
     function automatic logic [7:0] sys_header(input logic [3:0] i);
      // JMRS, version u16=1, header u16=16, payload u32=24320.
-     case(i)0:sys_header="J";1:sys_header="M";2:sys_header="R";3:sys_header="S";
-      4:sys_header=1;6:sys_header=16;8:sys_header=0;9:sys_header=95;default:sys_header=0;endcase
+     case(i)0:sys_header="J";1:sys_header="M";2:sys_header="R";3:sys_header=sys_rom?"T":"S";
+      4:sys_header=1;6:sys_header=16;8:sys_header=0;9:sys_header=sys_rom?64:95;default:sys_header=0;endcase
     endfunction
+    task automatic finish_system_file(input logic [1:0] status);
+      if(sys_rom)begin rom_status<=status;sys_rom<=0;sys_i<=0;sys_phase<=0;end
+      else begin sys_status<=status;name_i<=0;state<=C_JSB_PREP;end
+    endtask
     logic park_pending,resident_restore,resident_init;
     logic [2:0] resident_phase;
     logic [16:0] resident_i;
@@ -817,7 +828,7 @@ module jmr_console_engine (
             cmp_save_mode <= 1'b0; cmp_arm_r <= 1'b0;
             cmp_ph <= 5'd0; cmp_nw <= 1'b0; cmp_nm_len <= 8'd0; cmp_pend <= 1'b0; cmp_rd_addr <= '0;
             src_trunc <= 1'b0; cmp_use_srcname <= 1'b0;
-            sys_we<=0;sys_addr<=0;sys_data<=0;sys_status<=0;sys_attempted<=0;sys_good<=0;sys_phase<=0;sys_i<=0;sys_crc<=0;sys_expected<=0;sys_low<=0;
+            sys_rom<=1;rom_status<=0;rom_low<=0;toolbox_code_we<=0;toolbox_code_addr<=0;toolbox_code_data<=0;sys_we<=0;sys_addr<=0;sys_data<=0;sys_status<=0;sys_attempted<=0;sys_good<=0;sys_phase<=0;sys_i<=0;sys_crc<=0;sys_expected<=0;sys_low<=0;
             finder_state_valid<=0;park_pending<=0;resident_restore<=0;resident_init<=0;resident_phase<=0;resident_i<=0;resident_word<=0;
             finder_cache_valid<=0;finder_cache_fill<=0;finder_cache_replay<=0;finder_cache_length<=0;cache_tail<=0;cache_low<=0;cache_word<=0;finder_cache_hits<=0;
             cmp_interactive <= 1'b0;
@@ -858,6 +869,7 @@ module jmr_console_engine (
             list_col <= 0; list_wrap_more <= 0; list_eat_nl <= 0;
             list_from_card <= 0; list_bol <= 0;
         end else begin
+            toolbox_code_we<=0;
             enable_q <= enable;
             kbd_pop <= 0;
             if (enable && !enable_q) drain_ctr <= 17'h1FFFF;
@@ -2795,30 +2807,33 @@ module jmr_console_engine (
                 C_SYS:case(sys_phase)
                     0:begin
                         mem_en<=1;mem_we<=1;mem_addr<=NAME_BUF+16'(sys_i);
-                        case(sys_i)0:mem_wdata<="S";1:mem_wdata<="Y";2:mem_wdata<="S";3:mem_wdata<="T";4:mem_wdata<="E";5:mem_wdata<="M";6:mem_wdata<=".";7:mem_wdata<="S";8:mem_wdata<="Y";default:mem_wdata<="S";endcase
+                        if(sys_rom)case(sys_i)0:mem_wdata<="T";1:mem_wdata<="O";2:mem_wdata<="O";3:mem_wdata<="L";4:mem_wdata<="B";5:mem_wdata<="O";6:mem_wdata<="X";7:mem_wdata<=".";8:mem_wdata<="R";9:mem_wdata<="O";default:mem_wdata<="M";endcase
+                        else case(sys_i)0:mem_wdata<="S";1:mem_wdata<="Y";2:mem_wdata<="S";3:mem_wdata<="T";4:mem_wdata<="E";5:mem_wdata<="M";6:mem_wdata<=".";7:mem_wdata<="S";8:mem_wdata<="Y";default:mem_wdata<="S";endcase
                         sys_phase<=1;
                     end
                     1:if(mem_gnt)begin
-                        if(sys_i==9)begin stor_name_len<=10;sys_phase<=2;end
+                        if(sys_i==(sys_rom?10:9))begin stor_name_len<=sys_rom?11:10;sys_phase<=2;end
                         else begin sys_i<=sys_i+1'b1;sys_phase<=0;end
                     end
                     2:if(!stor_busy)begin stor_mode<="I";stor_open<=1;sys_phase<=3;end
                     3:if(stor_done)begin
-                        if(stor_err)begin sys_status<=2;name_i<=0;state<=C_JSB_PREP;end
+                        if(stor_err)finish_system_file(2);
                         else begin sys_i<=0;sys_good<=1;sys_crc<=32'hffffffff;sys_expected<=0;sys_phase<=4;end
                     end
                     4:if(!stor_busy)begin stor_get_byte<=1;sys_phase<=5;end
                     5:if(stor_done)begin
                         if(stor_err || stor_eof)begin
-                            sys_good<=!stor_err && sys_good && sys_i==SYS_BYTES+16 && (~sys_crc)==sys_expected;
+                            sys_good<=!stor_err && sys_good && sys_i==sys_length+16 && (~sys_crc)==sys_expected;
                             sys_phase<=8;
-                        end else if(sys_i>=SYS_BYTES+16)begin sys_good<=0;sys_phase<=8;end
+                        end else if(sys_i>=sys_length+16)begin sys_good<=0;sys_phase<=8;end
                         else begin
                             sys_i<=sys_i+1'b1;sys_phase<=4;
                             if(sys_i<12)begin if(stor_get_data!=sys_header(sys_i[3:0]))begin sys_good<=0;sys_phase<=8;end end
                             else if(sys_i<16)sys_expected[sys_i[1:0]*8+:8]<=stor_get_data;
                             else begin
                                 sys_crc<=sys_crc_byte(sys_crc,stor_get_data);
+                                // Last 1K virtual instructions are immutable JUMP 4096 padding.
+                                if(sys_rom && sys_i>=12304 && stor_get_data!=(sys_i[1:0]==0?8'h0b:sys_i[1:0]==2?8'h10:8'h00))sys_good<=0;
                                 if(!sys_i[0])sys_low<=stor_get_data;
                                 else begin
                                     sram_req<=1;sram_we<=1;sram_addr<=SYS_STAGE_BASE+22'((sys_i-16)>>1);
@@ -2831,19 +2846,23 @@ module jmr_console_engine (
                     7:sys_phase<=4;
                     8:if(!stor_busy)begin stor_close<=1;sys_phase<=9;end
                     9:if(stor_done)begin
-                        if(!sys_good || stor_err)begin sys_status<=3;name_i<=0;state<=C_JSB_PREP;end
+                        if(!sys_good || stor_err)finish_system_file(3);
                         else begin sys_i<=0;sys_phase<=10;end
                     end
-                    10:if(sys_ready)begin sram_req<=1;sram_we<=0;sram_addr<=SYS_STAGE_BASE+22'(sys_i);sys_phase<=11;end
+                    10:if(sys_rom || sys_ready)begin sram_req<=1;sram_we<=0;sram_addr<=SYS_STAGE_BASE+22'(sys_i);sys_phase<=11;end
                     11:if(sram_ack)begin
-                        sram_req<=0;sys_we<=1;sys_addr<=sys_i[13:0];sys_data<=sram_rdata;sys_phase<=12;
+                        sram_req<=0;sys_phase<=12;
+                        if(sys_rom)begin
+                            if(!sys_i[0])rom_low<=sram_rdata;
+                            else begin toolbox_code_we<=1;toolbox_code_addr<=sys_i[12:1];toolbox_code_data<={sram_rdata,rom_low};end
+                        end else begin sys_we<=1;sys_addr<=sys_i[13:0];sys_data<=sram_rdata;end
                     end
-                    12:if(!sys_ready)sys_phase<=13;
-                    13:if(sys_ready)begin
-                        if(sys_i==SYS_BYTES/2-1)begin sys_status<=1;name_i<=0;state<=C_JSB_PREP;end
+                    12:if(sys_rom || !sys_ready)sys_phase<=13;
+                    13:if(sys_rom || sys_ready)begin
+                        if(sys_i==(sys_length>>1)-1)finish_system_file(1);
                         else begin sys_i<=sys_i+1'b1;sys_phase<=10;end
                     end
-                    default:begin sys_status<=3;name_i<=0;state<=C_JSB_PREP;end
+                    default:finish_system_file(3);
                 endcase
                 C_RESIDENT:case(resident_phase)
                     0:begin

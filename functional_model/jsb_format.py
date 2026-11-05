@@ -25,7 +25,7 @@ MAGIC = b"JSB1"
 PROGRAM_IMAGE_VERSION = 1
 
 # Frozen V1 capacities shared with rtl/engines/jmr_js_vm.sv.
-PROGRAM_CODE_WORDS = 20480  # 2026-08-21(3): RTL CODE_WORDS
+PROGRAM_CODE_WORDS = 21504  # 2026-08-21(3): RTL CODE_WORDS
 PROGRAM_MAX_CONSTS = 1024
 PROGRAM_MAX_VARS = 512
 PROGRAM_MAX_NAMES = 1024
@@ -129,6 +129,7 @@ NATIVE_IDS = {
     "fsRemove": 61,
     "fsRename": 62,
     "sysRun": 63,
+    "toolbox": 64,  # versioned bulk memory/bitmap services; native JS engine unchanged
 }
 
 # NEW: aliases share an id (decode prefers the canonical NATIVE_IDS key)
@@ -152,7 +153,9 @@ FLAG_SOURCE_MAP = 4
 # V2 transition flag: numeric constant slots are 64-bit IEEE-754 Values.
 # Legacy 32-bit images remain readable until the RTL migration is complete.
 FLAG_VALUE64 = 8
-KNOWN_FLAGS = FLAG_V2 | FLAG_ASET | FLAG_SOURCE_MAP | FLAG_VALUE64
+FLAG_TOOLBOX = 16
+TOOLBOX_WORDS = 4096
+KNOWN_FLAGS = FLAG_V2 | FLAG_ASET | FLAG_SOURCE_MAP | FLAG_VALUE64 | FLAG_TOOLBOX
 ASET_MAGIC = b"ASET"
 SOURCE_MAP_MAGIC = b"SMAP"
 SOURCE_MAP_VERSION = 1
@@ -188,7 +191,7 @@ CSCR_WORDS = 73_728
 CIMG_SRAM_BASE = 3_887_104
 CIMG_WORDS = 307_200
 CSTG_WORDS = CSCR_WORDS + CIMG_WORDS  # flat arena the compiler addresses
-CSTG_MSG_OFF = 0  # 64-byte ASCII diagnostic for a failed compile
+CSTG_MSG_OFF = 128  # matches RTL CSTG_HDR_MSG and compiler-chain diagnostics
 CSTG_MSG_MAX = 64
 # Handoff header — the only bytes of the arena the console understands. Every
 # other byte above CSTG_OUT_OFF + cmp_len is compiler-private.
@@ -754,7 +757,10 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
     # code 3 on `ops_base + n_ops > CODE_WORDS`, and nothing else. Enforce
     # exactly that, so the model rejects what the board rejects and no more.
     exec_words = (ops_off + 4 * n_ops) // 4
-    if exec_words > PROGRAM_CODE_WORDS:
+    resident_words = TOOLBOX_WORDS if flags & FLAG_TOOLBOX else 0
+    if resident_words and (not flags & FLAG_VALUE64 or n_ops < TOOLBOX_WORDS):
+        raise ValueError("Invalid resident Toolbox image")
+    if exec_words - resident_words > PROGRAM_CODE_WORDS:
         raise ValueError(
             f"executable {exec_words} words > CODE_WORDS {PROGRAM_CODE_WORDS}"
         )
@@ -770,7 +776,7 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
     # board. This used to be a hard refusal here, which meant PYTHON alone
     # could not run a title the silicon runs. Record it; do not refuse it.
     image_words = ((aset_off if flags & FLAG_ASET else size) + 3) // 4
-    code_bram_overflow = max(0, image_words - PROGRAM_CODE_WORDS)
+    code_bram_overflow = max(0, image_words - resident_words - PROGRAM_CODE_WORDS)
 
     if flags & FLAG_ASET:
         if off > aset_off:
@@ -1315,6 +1321,7 @@ def _encode_v2(
         | (FLAG_ASET if aset else 0)
         | (FLAG_SOURCE_MAP if source_map else 0)
         | (FLAG_VALUE64 if value64 else 0)
+        | (FLAG_TOOLBOX if getattr(chunk,"toolbox_resident",False) else 0)
     )
     hdr = MAGIC + struct.pack(
         "<HHHH", len(ops_out), len(consts), len(var_names), flags

@@ -137,10 +137,13 @@ function txt(id,x,y){
  else if(id==23){ch(105,x,y);x=x+wid(105);ch(110,x,y);x=x+wid(110);ch(32,x,y);x=x+wid(32);ch(100,x,y);x=x+wid(100);ch(105,x,y);x=x+wid(105);ch(115,x,y);x=x+wid(115);ch(107,x,y);}
  else if(id==24){ch(97,x,y);x=x+wid(97);ch(118,x,y);x=x+wid(118);ch(97,x,y);x=x+wid(97);ch(105,x,y);x=x+wid(105);ch(108,x,y);x=x+wid(108);ch(97,x,y);x=x+wid(97);ch(98,x,y);x=x+wid(98);ch(108,x,y);x=x+wid(108);ch(101,x,y);}
 }
+// Toolbox v1. One call copies or fills a whole arena range.
+function tbMove(src,dst,n){return toolbox(1,src,dst,n);}
+function tbFill(dst,value,n){return toolbox(2,dst,value,n);}
 function copyName(slot,dest){
- var a,n,i;
+ var a,n;
  a=8192+slot*32;n=stgRead(a);
- for(i=0;i<n;i++)stgWrite(dest+i,stgRead(a+1+i));
+ tbMove(a+1,dest,n);
  stgWrite(dest+n,0);
 }
 function isFinder(a){
@@ -174,14 +177,14 @@ function flagsFor(a,attr){
  return f;
 }
 function parseList(){
- var p,i,n,a,k,c;
+ var p,n,a,k,c;
  p=256;c=0;
  while(c<250){
   n=stgRead(p);
   if(n==0)break;
   a=8192+c*32;
   stgWrite(a,n);
-  for(i=0;i<n;i++)stgWrite(a+1+i,stgRead(p+1+i));
+  tbMove(p+1,a+1,n);
   if(n<12)stgWrite(a+1+n,0);
   p=p+1+n;
   stgWrite(a+16,stgRead(p));stgWrite(a+17,stgRead(p+1));
@@ -276,15 +279,15 @@ function initNames(){
  stgWrite(30208,70);stgWrite(30209,68);stgWrite(30210,82);stgWrite(30211,0);
 }
 function allocFolder(off,nl){
- var s,a,i;
+ var s,a;
  s=allocSlot();if(s<0)return -1;
  a=8192+s*32;stgWrite(a,nl);
- for(i=0;i<nl;i++)stgWrite(a+1+i,stgRead(off+i));
+ tbMove(off,a+1,nl);
  stgWrite(a+13,6);
  return s;
 }
 function applyRec(s,p,nl){
- var a,b,cl,i,fl;
+ var a,b,cl,fl;
  a=8192+s*32;b=p+1+nl;
  stgWrite(a+14,stgRead(b));
  stgWrite(a+22,stgRead(b+1));stgWrite(a+23,stgRead(b+2));
@@ -294,15 +297,15 @@ function applyRec(s,p,nl){
  if(stgRead(b+6)==6)stgWrite(a+13,6);
  cl=stgRead(b+7);if(cl>22)cl=22;
  stgWrite(24576+s*24,cl);
- for(i=0;i<cl;i++)stgWrite(24576+s*24+1+i,stgRead(b+8+i));
+ tbMove(b+8,24576+s*24+1,cl);
 }
 function applyDesk(){
  var i,n,p,c,s,nl,cl;
  n=stgRead(32772);stgWrite(16458,n);
- for(i=0;i<12;i++)stgWrite(16459+i,stgRead(32773+i));
+ tbMove(32773,16459,12);
  // Do not bring saved windows back. A Trash window saved in front
  // covered the disk. File positions still come from the records below.
- for(i=0;i<128;i++)stgWrite(16896+i,0);
+ tbFill(16896,0,128);
  c=stgRead(32914)+stgRead(32915)*256;p=32916;
  for(i=0;i<c;i++){
   nl=stgRead(p);if(nl==0||nl>12)break;
@@ -331,10 +334,10 @@ function keepSlot(i){
  return 0;
 }
 function writeRec(i,p){
- var a,n,j,cl;
+ var a,n,cl;
  a=8192+i*32;n=stgRead(a);
  stgWrite(p,n);p=p+1;
- for(j=0;j<n;j++){stgWrite(p,stgRead(a+1+j));p=p+1;}
+ tbMove(a+1,p,n);p=p+n;
  stgWrite(p,stgRead(a+14));p=p+1;
  stgWrite(p,stgRead(a+22));p=p+1;
  stgWrite(p,stgRead(a+23));p=p+1;
@@ -344,7 +347,7 @@ function writeRec(i,p){
  stgWrite(p,stgRead(a+13));p=p+1;
  cl=stgRead(24576+i*24);if(cl>22)cl=22;
  stgWrite(p,cl);p=p+1;
- for(j=0;j<cl;j++){stgWrite(p,stgRead(24576+i*24+1+j));p=p+1;}
+ tbMove(24576+i*24+1,p,cl);p=p+cl;
  return p;
 }
 function saveDesk(){
@@ -352,9 +355,10 @@ function saveDesk(){
  if(stgRead(16445)==0)return;
  stgWrite(32768,70);stgWrite(32769,68);stgWrite(32770,82);stgWrite(32771,49);
  n=stgRead(16458);stgWrite(32772,n);
- for(i=0;i<12;i++)stgWrite(32773+i,i<n?stgRead(16459+i):0);
+ tbMove(16459,32773,n<12?n:12);
+ if(n<12)tbFill(32773+n,0,12-n);
  stgWrite(32785,0);
- for(i=0;i<128;i++)stgWrite(32786+i,stgRead(16896+i));
+ tbMove(16896,32786,128);
  c=0;p=32916;n=stgRead(16386);
  for(i=0;i<n;i++){
   if(keepSlot(i)==0)continue;
@@ -618,25 +622,26 @@ function selectAll(){
  stgWrite(16446,c);stgWrite(16385,1);
 }
 function remember(slot,kind){
- var a,i,n;
+ var a,n;
  a=8192+slot*32;
  stgWrite(16424,kind);stgWrite(16425,slot);stgWrite(16426,stgRead(a+14));
  w16(16427,r16(a+22));w16(16429,r16(a+24));
  n=stgRead(a);stgWrite(16431,n);
- for(i=0;i<12;i++)stgWrite(16432+i,i<n?stgRead(a+1+i):0);
+ tbMove(a+1,16432,n<12?n:12);
+ if(n<12)tbFill(16432+n,0,12-n);
 }
 function undoDo(){
- var k,s,a,i,n,fl;
+ var k,s,a,n,fl;
  k=stgRead(16424);if(k==0)return;
  s=stgRead(16425);a=8192+s*32;
  if(k==4){stgWrite(a,0);stgWrite(16424,0);recount();stgWrite(16385,1);stgWrite(16445,1);return;}
  if(k==3){
   copyName(s,30000);n=stgRead(16431);
-  for(i=0;i<n;i++)stgWrite(30100+i,stgRead(16432+i));
+  tbMove(16432,30100,n);
   stgWrite(30100+n,0);
   if(stgRead(a+13)!=6)fsRename(30000,30100);
   stgWrite(a,n);
-  for(i=0;i<n;i++)stgWrite(a+1+i,stgRead(30100+i));
+  tbMove(30100,a+1,n);
  }
  stgWrite(a+14,stgRead(16426));
  w16(a+22,r16(16427));w16(a+24,r16(16429));
@@ -756,18 +761,18 @@ function beginRename(slot){
  stgWrite(16385,1);
 }
 function commitRename(){
- var s,a,n,i,k;
+ var s,a,n,k;
  s=stgRead(16423);a=8192+s*32;n=stgRead(16410);k=stgRead(a+13);
  if(n==0){stgWrite(16409,0);stgWrite(16385,1);return;}
  remember(s,3);
  if(k!=6){
   copyName(s,30000);
-  for(i=0;i<n;i++)stgWrite(30100+i,stgRead(16411+i));
+  tbMove(16411,30100,n);
   stgWrite(30100+n,0);
   if(fsRename(30000,30100)<0){stgWrite(16409,0);stgWrite(16385,1);return;}
  }
  stgWrite(a,n);
- for(i=0;i<n;i++)stgWrite(a+1+i,stgRead(16411+i));
+ tbMove(16411,a+1,n);
  stgWrite(a+1+n,0);
  stgWrite(16409,0);stgWrite(16445,1);stgWrite(16385,1);
 }
@@ -785,16 +790,16 @@ function makeCopyName(slot){
  a=8192+slot*32;n=stgRead(a);dot=n;
  for(i=0;i<n;i++)if(stgRead(a+1+i)==46)dot=i;
  stgWrite(30100,67);stgWrite(30101,79);stgWrite(30102,80);stgWrite(30103,89);
- for(i=dot;i<n;i++)stgWrite(30100+4+(i-dot),stgRead(a+1+i));
+ tbMove(a+1+dot,30100+4,n-dot);
  stgWrite(30100+4+(n-dot),0);
 }
 function addCopy(src){
- var s,a,n,i;
+ var s,a,n;
  s=allocSlot();if(s<0)return;
  a=8192+s*32;n=0;
  while(stgRead(30100+n)>0&&n<12)n=n+1;
  stgWrite(a,n);
- for(i=0;i<n;i++)stgWrite(a+1+i,stgRead(30100+i));
+ tbMove(30100,a+1,n);
  stgWrite(a+13,stgRead(8192+src*32+13));
  stgWrite(a+14,stgRead(8192+src*32+14));
  stgWrite(a+15,4);
@@ -824,17 +829,18 @@ function doDup(){
  else if(k!=5&&k!=4)dupFile(s);
 }
 function doCopy(){
- var s,n,i;
+ var s,n;
  s=firstSel();if(s<0)return;
  n=stgRead(8192+s*32);stgWrite(16621,n);
- for(i=0;i<12;i++)stgWrite(16622+i,i<n?stgRead(8192+s*32+1+i):0);
+ tbMove(8192+s*32+1,16622,n<12?n:12);
+ if(n<12)tbFill(16622+n,0,12-n);
 }
 function doPaste(){
- var s,n,i;
+ var s,n;
  s=firstSel();if(s<0)return;
  n=stgRead(16621);if(n==0)return;
  beginRename(s);stgWrite(16410,n);
- for(i=0;i<n;i++)stgWrite(16411+i,stgRead(16622+i));
+ tbMove(16622,16411,n);
  commitRename();
 }
 function doClear(){
@@ -848,10 +854,11 @@ function doInfo(){
  stgWrite(16447,s);openWin(2,s,120,70,320,230,0);
 }
 function doStartup(){
- var s,n,i;
+ var s,n;
  s=firstSel();if(s<0)return;
  n=stgRead(8192+s*32);stgWrite(16458,n);
- for(i=0;i<12;i++)stgWrite(16459+i,i<n?stgRead(8192+s*32+1+i):0);
+ tbMove(8192+s*32+1,16459,n<12?n:12);
+ if(n<12)tbFill(16459+n,0,12-n);
  stgWrite(16459+n,0);stgWrite(16445,1);stgWrite(16385,1);
 }
 function doRestart(){

@@ -135,6 +135,8 @@ CORE_SRCS := \
 	$(RTL)/engines/jmr_rectdemo_engine.sv \
 	$(RTL)/engines/jmr_value.sv \
 	$(RTL)/engines/jmr_finder_fs.sv \
+	$(RTL)/engines/jmr_toolbox.sv \
+	$(RTL)/engines/jmr_toolbox_rom_pkg.sv \
 	$(RTL)/engines/jmr_js_vm_exec64.sv \
 	$(RTL)/engines/jmr_js_vm.sv \
 	$(RTL)/engines/jmr_sram_model.sv \
@@ -161,6 +163,9 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 	cp -f $(FONT) font_rom.hex
 	cp -f $(ROOT)/vectors/desktop_*.hex .
 	cp -f $(ROOT)/vectors/system_*.hex .
+	cp -f $(ROOT)/vectors/toolbox_code.hex .
+	cp -f $(ROOT)/vectors/toolbox_code0.hex .
+	cp -f $(ROOT)/vectors/toolbox_code1.hex .
 	cp -f $(ROOT)/vectors/classic_*.hex .
 	cp -f $(ROOT)/vectors/desktop_*.hex $(BUILD)/
 	cp -f $(ROOT)/vectors/system_*.hex $(BUILD)/
@@ -197,3 +202,12 @@ tb_system_documents:
 		$(RTL)/engines/jmr_classic_ui_pkg.sv $(RTL)/engines/jmr_system_documents.sv \
 		tb_system_documents.sv
 	$(BUILD)/obj_doc_names/Vtb_system_documents
+
+# Bulk services: overlap, packing, clipping and delayed SRAM handshake.
+.PHONY: tb_toolbox
+tb_toolbox:
+	mkdir -p $(BUILD)/obj_toolbox
+	verilator --binary --timing -j 4 -Wno-fatal --top-module tb_toolbox \
+		--Mdir $(BUILD)/obj_toolbox \
+		$(RTL)/engines/jmr_js_vm_pkg.sv $(RTL)/engines/jmr_toolbox.sv $(RTL)/engines/jmr_mini_fb.sv tb_toolbox.sv
+	$(BUILD)/obj_toolbox/Vtb_toolbox

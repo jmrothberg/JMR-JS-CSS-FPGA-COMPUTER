@@ -1,0 +1,41 @@
+<!doctype html>
+<!-- jmr-toolbox: resident-v1 -->
+<!-- Shared native-JavaScript Toolbox example. Scratch: 20000..20063 and
+     21000..25095. These ranges belong exclusively to this application. -->
+<html><head><title>Toolbox Demo</title></head><body><canvas width="640" height="480"></canvas>
+<script>
+var c=document.querySelector("canvas").getContext("2d");
+var held=0,changed=1,dialogKind=0;
+c.systemAbout="Toolbox Demo|Shared menus and dialogs in native JavaScript";
+var choices=[[78,111,116,101],[80,105,99,116,117,114,101],[76,101,116,116,101,114],[76,105,115,116],[83,107,101,116,99,104],[77,101,109,111],[68,114,97,119,105,110,103]];
+var title=[84,111,111,108,98,111,120];
+var ready=tbUIInit(c,20000,21000,title);
+tbMenus([
+ [[70,105,108,101],[[[79,112,101,110],1,1,0],[[83,97,118,101,32,65,115],2,1,0],[[81,117,105,116],3,1,0]]],
+ [[72,101,108,112],[[[65,98,111,117,116],4,1,0]]]
+]);
+function pointer(x,y,b){tbUIPointer(x,y,b);changed=1;}
+addEventListener("mousedown",function(e){held=1;pointer(e.clientX,e.clientY,held);});
+addEventListener("mousemove",function(e){pointer(e.clientX,e.clientY,held);});
+addEventListener("mouseup",function(e){held=0;pointer(e.clientX,e.clientY,held);});
+addEventListener("keydown",function(e){tbUIKey(e.keyCode,e.charCode);changed=1;});
+function frame(){
+ var command=tbMenuCommand(),result=tbDialogResult();
+ if(command==1){dialogKind=1;tbDialogOpen(4,[79,112,101,110],choices,[]);}
+ if(command==2){dialogKind=2;tbDialogOpen(3,[83,97,118,101,32,65,115],[],[78,69,87,46,84,88,84]);}
+ if(command==3||command==255){stgWrite(20063,0);sysRun(20063,8);return;}
+ if(command==4)tbDialogOpen(1,[74,77,82,32,69,110,116,101,114,112,114,105,115,101,115],[],[]);
+ if(result==1 && dialogKind==2)title=tbDialogValue();
+ if(result==1 && dialogKind==1)title=choices[tbDialogSelection()];
+ if(result)dialogKind=0;
+ if(tbUIChanged()||changed){
+  c.fillStyle="#55CCFF";c.fillRect(0,0,640,480);
+  c.fillStyle="#FFF";c.fillRect(40,48,560,392);
+  tbText([83,104,97,114,101,100,32,109,101,110,117,115,32,97,110,100,32,100,105,97,108,111,103,115],70,100);
+  tbText([78,97,116,105,118,101,32,74,97,118,97,83,99,114,105,112,116],70,124);
+  tbText(title,70,154);tbUIDraw();changed=0;
+ }
+ requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body></html>

@@ -10,13 +10,14 @@ This is the only place that names the current build. Other pages point here.
 
 | | |
 |---|---|
-| **Working on** | `build/run76_usb_keyboard_pmod_mice/`. No qualified `.bit` yet. Jacks: J15 USB keyboard, JA and JC PS/2 mice, JB joystick. |
+| **Working on** | `build/run77d_copybits_toolbox/`: resident Toolbox, native CopyBits, MacPaint metadata capacity, boot-only Welcome. Frozen source and matched disk audit pass; functional RTL checks pass. Vivado synthesis/implementation running; no qualified run77d bit yet. J15 USB keyboard, JA/JC PS/2 mice, JB joystick. |
+| **Earlier experimental** | `build/run76_usb_keyboard_pmod_mice/test/`: WNS -0.355 ns, hold +0.017 ns, routing/DRC pass. Preserved for rollback; lacks the new Toolbox. |
 | **Rollback** | `build/run75_program_system/release/run75_program_finder_SYS_33MHz.bit`. Qualified 2026-11-04. Older jacks: mouse on J15, keyboard on JA. |
 | **Still in QSPI** | `releases/current/fpga.bit` is run73o until that chip is flashed again. [What that image was](STANDARD_RELEASE.md). |
 
 Fabric and DDR stay at **100 MHz**. The VM is divide-by-three, **33.333 MHz**. Do not put the VM back on divide-by-seven.
 
-Run75, the rollback bit, after place and route: 102,708 LUTs (limit 134,600), 29,855 slices (limit 33,650), 359.5 / 365 BRAM, setup 0.000 ns, hold +0.029 ns, no failing timing endpoints, no routing errors, no DRC errors. Reports: `build/run75_program_system/release/`. Board test of that bit is still open. Do not copy these numbers onto run76 until run76 has its own report.
+Run75, the rollback bit, after place and route: 102,708 LUTs (limit 134,600), 29,855 slices (limit 33,650), 359.5 / 365 BRAM, setup 0.000 ns, hold +0.029 ns, no failing timing endpoints, no routing errors, no DRC errors. Reports: `build/run75_program_system/release/`. Owner confirmed Finder and JA keyboard pins 1/3 work on that bit. Do not copy these numbers onto run76 until run76 has its own report.
 
 Run73o, the image in QSPI: 87,876 LUTs, 28,045 slices, 353.5 BRAM, 128 DSP, setup 0.000 ns, hold +0.040 ns. Its reports stay in `releases/current/`. That image is not the rollback.
 

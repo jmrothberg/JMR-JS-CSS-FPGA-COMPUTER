@@ -13,10 +13,8 @@
   Keys: Up/Down or W/S scroll. Esc is machine BREAK.
   No string methods. fillText numbers, not ""+n. 16 locals/function.
 
-  PYTHON RUN parks the catalog in the scratch arena (stgRead):
-      bytes 0-3  'U' 'T' 'L' 1
-      then records: u8 nlen, name bytes, u32 size LE
-      nlen=0 ends
+  The program calls fsList itself and keeps a sorted index in the arena.
+  No Utility-specific catalog preparation or restart is required in RTL.
 -->
 <canvas id="gameCanvas" width="640" height="480"></canvas>
 <script>
@@ -43,36 +41,40 @@ var needDraw = 1;
 
 function _gr(i) { return stgRead(i); }
 
-function magicOk() {
-  return _gr(0) === 85 && _gr(1) === 84 && _gr(2) === 76 && _gr(3) === 1;
-}
-
+// Shared filesystem ABI: records start at 256: length, name, size, date, attr.
+// The index is separate from the catalog. Both fit the existing scratch arena.
 function recOff(idx) {
-  var p, n, i;
-  p = 4;
-  i = 0;
-  while (i < idx) {
-    n = _gr(p);
-    if (n <= 0) return -1;
-    p = p + 1 + n + 4;
-    i = i + 1;
-  }
-  return p;
+  if(idx<0 || idx>=nFiles) return -1;
+  return stgRead(16000+idx*2)+stgRead(16001+idx*2)*256;
 }
-
-function countFiles() {
-  var p, n, nj;
-  p = 4;
-  nFiles = 0;
-  nj = 0;
-  while (nFiles < 400) {
-    n = _gr(p);
-    if (n <= 0) break;
-    if (isJshAt(p)) nj = nj + 1;
-    p = p + 1 + n + 4;
-    nFiles = nFiles + 1;
+function setOff(idx,p) {
+  stgWrite(16000+idx*2,p%256);stgWrite(16001+idx*2,Math.floor(p/256));
+}
+function before(a,b) {
+  var i=0,na=_gr(a),nb=_gr(b),ca,cb;
+  while(i<na && i<nb){
+    ca=_gr(a+1+i);cb=_gr(b+1+i);
+    if(ca!=cb)return ca<cb;
+    i=i+1;
   }
-  nJsh = nj;
+  return na<nb;
+}
+function countFiles() {
+  var p=256,n,i,j,q;
+  nFiles=0;nJsh=0;
+  while(nFiles<400){
+    n=_gr(p);if(n<=0)break;
+    setOff(nFiles,p);nFiles=nFiles+1;
+    if(isJshAt(p))nJsh=nJsh+1;
+    p=p+1+n+7;
+  }
+  // Stable insertion sort of offsets, not copies of file records.
+  i=1;
+  while(i<nFiles){
+    p=recOff(i);j=i;
+    while(j>0){q=recOff(j-1);if(!before(p,q))break;setOff(j,q);j=j-1;}
+    setOff(j,p);i=i+1;
+  }
 }
 
 function isJshAt(p) {
@@ -153,7 +155,7 @@ function loop() {
 addEventListener("keydown", onKey);
 haveCat = 0;
 try {
-  haveCat = magicOk() ? 1 : 0;
+  haveCat = fsList()>=0 ? 1 : 0;
   if (haveCat) countFiles();
 } catch (e) {
   haveCat = 0;

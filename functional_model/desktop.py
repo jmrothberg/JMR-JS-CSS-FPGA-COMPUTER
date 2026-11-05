@@ -142,7 +142,7 @@ def paint_javatosh_boot(canvas, stage, resources=None):
         canvas.fill_rect(bx + shadow, by + shadow, bw, bh, 0)
         canvas.fill_rect(bx, by, bw, bh, 0)
         canvas.fill_rect(bx + 1, by + 1, bw - 2, bh - 2, 255)
-        message = 'Welcome to Javatosh.'
+        message = 'Welcome'
         tw = text_width(message)
         icon_h = _enterprise_box(1)[1]
         _enterprise(canvas, bx + 16, by + (bh - icon_h) // 2, 1, resources)

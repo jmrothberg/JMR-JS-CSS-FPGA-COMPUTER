@@ -119,6 +119,9 @@ foreach desktop_mem {desktop_font.hex desktop_advance.hex desktop_labels.hex sys
 }
 # NEW: INVADERS bytecode for jmr_js_vm $readmemh
 file copy -force $ROOT/vectors/invaders_jsb.hex $ROOT/rtl/engines/invaders_jsb.hex
+file copy -force $ROOT/vectors/toolbox_code.hex $ROOT/rtl/engines/toolbox_code.hex
+file copy -force $ROOT/vectors/toolbox_code0.hex $ROOT/rtl/engines/toolbox_code0.hex
+file copy -force $ROOT/vectors/toolbox_code1.hex $ROOT/rtl/engines/toolbox_code1.hex
 
 set XPR $OUT/vivado/jmr_nexys_video.xpr
 set REUSE [expr {[file exists $XPR] && !$FRESH}]
@@ -190,10 +193,15 @@ proc jmr_add_sources {ROOT} {
       $ROOT/rtl/engines/jmr_rectdemo_engine.sv \
       $ROOT/rtl/engines/jmr_value.sv \
       $ROOT/rtl/engines/jmr_finder_fs.sv \
+      $ROOT/rtl/engines/jmr_toolbox.sv \
+      $ROOT/rtl/engines/jmr_toolbox_rom_pkg.sv \
       $ROOT/rtl/engines/jmr_js_vm_exec64.sv \
       $ROOT/rtl/engines/jmr_js_vm.sv \
       $ROOT/rtl/engines/font_rom.hex \
       $ROOT/rtl/engines/invaders_jsb.hex \
+      $ROOT/rtl/engines/toolbox_code.hex \
+      $ROOT/rtl/engines/toolbox_code0.hex \
+      $ROOT/rtl/engines/toolbox_code1.hex \
       $ROOT/rtl/engines/jmr_palette_bram.sv \
       $ROOT/rtl/engines/jmr_fb_present.sv \
       $ROOT/rtl/engines/jmr_fb_scanout.sv \

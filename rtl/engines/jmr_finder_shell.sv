@@ -37,11 +37,17 @@ module jmr_finder_shell(
    case(state)
     BOOT:if(enabled && idle_console && !vm_busy)begin tool_finder<=1;state<=START_TOOL;end
     IDLE:;
-    WAIT_STOP:if(!vm_busy && idle_console)begin
-     pending<=0;finder_running<=0;seen<=0;age<=0;i<=0;second<=0;
-     if(how==4)begin home<=0;state<=IDLE;end
-     else if(how==8 || n==0)begin tool_finder<=1;state<=START_TOOL;end
-     else begin home<=1;state<=SEND;end
+    WAIT_STOP:begin
+     // Console enable rises after VM halt; its delayed FIFO drain must finish
+     // before sending LOAD. Otherwise the first L can be cleared on arrival.
+     if(!vm_busy && idle_console)begin
+      if(age==100)begin
+       pending<=0;finder_running<=0;seen<=0;age<=0;i<=0;second<=0;
+       if(how==4)begin home<=0;state<=IDLE;end
+       else if(how==8 || n==0)begin tool_finder<=1;state<=START_TOOL;end
+       else begin home<=1;state<=SEND;end
+      end else age<=age+1'b1;
+     end else age<=0;
     end
     SEND:if(idle_console && !keyboard_full)begin
      key_push<=1;key_data<=command_char(i);age<=0;
@@ -85,7 +91,7 @@ module jmr_finder_shell(
    end
    if(quit)begin how<=8;n<=0;pending<=1;state<=WAIT_STOP;end
    if(launch)begin
-    name<=launch_name;n<=launch_len;how<=launch_how;pending<=1;state<=WAIT_STOP;
+    name<=launch_name;n<=launch_len;how<=launch_how;pending<=1;age<=0;state<=WAIT_STOP;
     // Mode 0 uses the on-disk extension, not an application-name list.
     if(launch_how==0 && !((launch_len>=4 && launch_name[(launch_len-4)*8+:32]==32'h4d54482e) ||
        (launch_len>=3 && launch_name[(launch_len-3)*8+:24]==24'h534a2e)))how<=2;

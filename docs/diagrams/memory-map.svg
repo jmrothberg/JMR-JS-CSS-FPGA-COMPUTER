@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="990" viewBox="0 0 1600 990" role="img" aria-labelledby="title desc">
+<title id="title">JMR 8 MiB physical memory map</title><desc id="desc">Physical byte offsets, exclusive ends; not drawn to scale. On-chip memory is separate from the external aperture. Toolbox addresses use a separate logical-byte arena.</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="#526775"/></marker></defs>
+<rect x="0" y="0" width="1600" height="990" rx="0" fill="#f4f7f8" stroke="none"/>
+<text x="48" y="56" font-family="DejaVu Sans,sans-serif" font-size="32" font-weight="bold" fill="#172e3a">Memory detail · the 8 MiB external aperture</text>
+<text x="48" y="91" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#526775">Physical byte offsets · end excluded · not to scale · development allocation, 4 November 2026</text>
+<rect x="48" y="120" width="1504" height="565" rx="10" fill="white" stroke="#ced9de"/>
+<text x="72" y="158" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="bold" fill="#086c68">PHYSICAL RANGE</text>
+<text x="470" y="158" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="bold" fill="#086c68">OWNER / PURPOSE</text>
+<text x="1200" y="158" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="bold" fill="#086c68">SIZE / STORAGE</text>
+<path d="M72 182 H1528" stroke="#ced9de"/>
+<text x="72" y="212" font-family="DejaVu Sans Mono,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">0 – 6,893,568</text>
+<text x="470" y="212" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#172e3a">Artwork / compile-time artwork staging</text>
+<text x="1200" y="212" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">6,893,568 bytes</text>
+<path d="M72 236 H1528" stroke="#ced9de"/>
+<text x="72" y="266" font-family="DejaVu Sans Mono,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">6,893,568 – 7,057,408</text>
+<text x="470" y="266" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#172e3a">Finder executable cache</text>
+<text x="1200" y="266" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">160 KiB packed</text>
+<path d="M72 290 H1528" stroke="#ced9de"/>
+<text x="72" y="320" font-family="DejaVu Sans Mono,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">7,057,408 – 7,131,136</text>
+<text x="470" y="320" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#172e3a">Parked Finder arena</text>
+<text x="1200" y="320" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">72 KiB packed</text>
+<path d="M72 344 H1528" stroke="#ced9de"/>
+<text x="72" y="374" font-family="DejaVu Sans Mono,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">7,131,136 – 7,155,712</text>
+<text x="470" y="374" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#172e3a">SYS payload; ROM temporarily stages here first</text>
+<text x="1200" y="374" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">24 KiB reserved</text>
+<path d="M72 398 H1528" stroke="#ced9de"/>
+<text x="72" y="428" font-family="DejaVu Sans Mono,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">7,155,712 – 7,462,912</text>
+<text x="470" y="428" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#172e3a">Display front image · 640 × 480 indexed pixels</text>
+<text x="1200" y="428" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">300 KiB</text>
+<path d="M72 452 H1528" stroke="#ced9de"/>
+<text x="72" y="482" font-family="DejaVu Sans Mono,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">7,462,912 – 7,495,680</text>
+<text x="470" y="482" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#172e3a">Work / storage area + reserved gap</text>
+<text x="1200" y="482" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">32 KiB</text>
+<path d="M72 506 H1528" stroke="#ced9de"/>
+<text x="72" y="536" font-family="DejaVu Sans Mono,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">7,495,680 – 7,643,136</text>
+<text x="470" y="536" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#172e3a">Active compiler / shared arena</text>
+<text x="1200" y="536" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">73,728 logical bytes</text>
+<path d="M72 560 H1528" stroke="#ced9de"/>
+<text x="72" y="590" font-family="DejaVu Sans Mono,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">7,643,136 – 7,774,208</text>
+<text x="470" y="590" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#172e3a">SOURCE</text>
+<text x="1200" y="590" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">65,536 logical bytes</text>
+<path d="M72 614 H1528" stroke="#ced9de"/>
+<text x="72" y="644" font-family="DejaVu Sans Mono,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">7,774,208 – 8,388,608</text>
+<text x="470" y="644" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#172e3a">Image / compile staging</text>
+<text x="1200" y="644" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">307,200 logical bytes</text>
+<text x="48" y="729" font-family="DejaVu Sans,sans-serif" font-size="23" font-weight="bold" fill="#086c68">Logical addresses are a different view</text>
+<text x="48" y="766" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Toolbox addresses 0–380,927 select arena bytes. The service maps across the physical gap; do not multiply them by two.</text>
+<text x="48" y="797" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">The last three physical regions store one logical byte per 16-bit word. The parked Finder copy is packed instead.</text>
+<text x="48" y="828" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">RTL aperture constants are 16-bit word addresses; multiply those constants by two to compare with this physical map.</text>
+<text x="48" y="884" font-family="DejaVu Sans,sans-serif" font-size="23" font-weight="bold" fill="#086c68">On-chip BRAM is separate from this map</text>
+<text x="48" y="919" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Application code, VM execution state, drawing canvas, fonts/captions and buffers consume scarce on-chip memory.</text>
+<text x="48" y="949" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">The resident Toolbox has a 16 KiB virtual instruction window: 12 KiB BRAM + 4 KiB fixed jump padding. No extra VM.</text>
+<text x="48" y="978" font-family="DejaVu Sans,sans-serif" font-size="16" font-weight="normal" fill="#526775">Sources: jmr_js_vm_pkg.sv, jmr_console_engine.sv, jmr_js_core.sv; docs/lastrun_ARCHITECTURE.md.</text>
+</svg>

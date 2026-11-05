@@ -16,7 +16,16 @@
 //   27136        undo, the same size. Undo swaps the two buffers.
 //   50176        clipboard, 23552 bytes. A full-page copy fits.
 //   73728        color of each page pixel, 4 bits, 92160 bytes.
-//   165888       undo of those colors. 258048 is the clipboard color.
+//   165888       undo of those colors. 258048 is the visit bits, 23040 bytes.
+//   281088       swap scratch, 92160 bytes. Undo exchanges two buffers
+//                through it. It does not overlap the page, undo, or clipboard.
+//                A drag also CopyBits one glass rectangle into this scratch
+//                (the offscreen port). Undo clears that grab first.
+//   373248       four 64-byte descriptors: 1-bit page, 4-bit color, screen, port.
+// The page is shown with toolbox 3 (packed blit, FatBits scale 8). A drag
+// copies one glass rectangle into the swap port with toolbox 6 and puts it
+// back on the next move. Color stays; the 1984 page was black ink on white,
+// and the grid snaps without painting dots.
 //   1900         file name. 1920 is the 8-byte header.
 // The color bytes sit in the image half of the arena. The 1-bit page,
 // its undo, and the clipboard already fill the first 73728 bytes.
@@ -35,13 +44,14 @@
 //
 // The menu bar is the 1984 MacPaint bar: File, Edit, Goodies, Font,
 // FontSize, Style. The program owns those menus (the descriptor
-// starts with File|). Quit and Close leave. Save writes STEM.PNT
-// with fsWrite: bytes P N T 2, then width and height as little-endian
-// u16, then the packed bits (1 = ink, high bit is the left pixel),
-// then the color nibbles. An older P N T 1 file loads as black ink.
-// Return stores Save As. Click a tool to cancel. New discards the
-// page. Quit does not ask. The title stripes say untitled, which is
-// the name in the 1984 string table.
+// starts with File|). Quit and Close leave. Open... and Save As...
+// are the shared boxes. The chosen name is left at arena bytes 96-111.
+// Save writes STEM.PNT with fsWrite: bytes P N T 2, then width and
+// height as little-endian u16, then the packed bits (1 = ink, high
+// bit is the left pixel), then the color nibbles. An older P N T 1
+// file loads as black ink. New discards the page. Quit does not ask.
+// The title stripes say untitled, which is the name in the 1984
+// string table.
 //
 // Bit tests divide by a mask byte. The chip has no shift instruction.
 // A shift native is not required for painting.
@@ -78,7 +88,7 @@ var tick=0,booted=0,bootRow=0,need=1,needPen=0,penOn=0,penShow=0;
 var tool=7,pat=0,penW=1,grid=0,fat=0,brush=0,mirror=0;
 var fontN=0,sizeN=1,alignN=0,stBold=0,stItal=0,stUnder=0,stOut=0,stShad=0,named=0;
 var ink=1,inkCol=1,holdCol=0,edCol=1,useInk=0,dotNow=0,sh=0,spaceDown=0,joyFire=0,erasing=0,brushing=0;
-var docX=0,docY=0,down=0,dirty=0,bad=0,undoOk=0,typed=0,mode=0;
+var docX=0,docY=0,down=0,dirty=0,bad=0,undoOk=0,typed=0,mode=0,docClean=1;
 var ax=0,ay=0,bx=0,by=0,lastX=0,lastY=0,lastSX=0,lastSY=0;
 var havePrev=0,pax=0,pay=0,pbx=0,pby=0;
 var selOn=0,selFloat=0,selDrag=0,moving=0,selX=0,selY=0,selW=0,selH=0,hasClip=0;
@@ -88,7 +98,8 @@ var sp=0,popX=0,popY=0,x0=0,y0=0,x1=0,y1=0;
 var rx=0,ry=0,rw=0,rh=0,fillX0=0,fillY0=0,fillX1=0,fillY1=0,lastPatTick=0;
 // Visit bits for the bucket, past the color undo. A fill that does not
 // change a pixel still has to mark it, or that pixel stays open forever.
-var VIS=258048,job=0,fillT=0;
+var VIS=258048,SWAP=281088,job=0,fillT=0;
+var tbBits=0,grabbed=0,grabGX=0,grabGY=0,grabW=0,grabH=0;
 var MASK=[128,64,32,16,8,4,2,1];
 var NAME=[80,73,67,84,85,82,69,0];
 var PW0=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
@@ -134,7 +145,16 @@ function viewH(){ var k; k=256; if(fat) k=32; return k; }
 function penSize(){ var k; k=1; if(penW==2) k=2; if(penW==3) k=4; if(penW==4) k=6; return k; }
 function r16(a){ return stgRead(a)+stgRead(a+1)*256; }
 function w16at(a,v){ var n; n=Math.floor(v); if(n<0) n=0; stgWrite(a,n-Math.floor(n/256)*256); stgWrite(a+1,Math.floor(n/256)); }
-function copyRange(src,dst,n){ var i,b; i=0; while(i<n){ b=stgRead(src+i); stgWrite(dst+i,b); i=i+1; } }
+// Toolbox v1. Addresses are arena bytes. One call moves or fills the
+// whole range; see docs/TOOLBOX_MIGRATION_GUIDE.md.
+function tbMove(src,dst,n){ return toolbox(1,src,dst,n); }
+function tbFill(dst,value,n){ return toolbox(2,dst,value,n); }
+function copyRange(src,dst,n){ var r; r=tbMove(src,dst,n); if(r<0) bad=1; return r; }
+function swapRange(a,b,n){
+ if(tbMove(a,SWAP,n)<0) bad=1;
+ if(tbMove(b,a,n)<0) bad=1;
+ if(tbMove(SWAP,b,n)<0) bad=1;
+}
 function bitAt(base,x,y){
  var a,m,i,b;
  if(x<0||y<0||x>=DOC_W||y>=DOC_H) return 0;
@@ -146,6 +166,7 @@ function pix(x,y){ var b; b=bitAt(BASE,x,y); return b; }
 function setBit(x,y,on){
  var a,m,b,i,bit;
  if(x<0||y<0||x>=DOC_W||y>=DOC_H) return;
+ docClean=0;
  i=x-Math.floor(x/8)*8; m=MASK[i];
  a=BASE+y*STRIDE+Math.floor(x/8); b=stgRead(a); bit=Math.floor(b/m)%2;
  if(on&&bit==0) stgWrite(a,b+m);
@@ -277,28 +298,153 @@ function prevDot(x,y){
  s=penSize(); ox=0;
  while(ox<s){ oy=0; while(oy<s){ on=patInk(x+ox,y+oy); paintDot(x+ox,y+oy,on); oy=oy+1; } ox=ox+1; }
 }
-function dot(x,y,commit){ if(commit) blot(x,y); else prevDot(x,y); }
+function dot(x,y,commit){
+ if(commit==1) blot(x,y); else if(commit==2) erasePen(x,y); else prevDot(x,y);
+}
+// A drag used to fillRect every pixel of the box. The outline is a few
+// rectangles. A solid fill is one rectangle. Mouse-up writes whole bytes.
+function paintRun(x,y,n,c){
+ var z,sx,sy,w;
+ if(n<1||y<docY||y>=docY+viewH()) return;
+ z=1; if(fat) z=8;
+ if(x<docX){ n=n-(docX-x); x=docX; }
+ if(x+n>docX+viewW()) n=docX+viewW()-x;
+ if(n<1) return;
+ sx=VX+(x-docX)*z; sy=VY+(y-docY)*z; w=n*z;
+ useColor(c); ctx.fillRect(sx,sy,w,z);
+}
+function paintCol(x,y,n,c){
+ var z,sx,sy,h;
+ if(n<1||x<docX||x>=docX+viewW()) return;
+ z=1; if(fat) z=8;
+ if(y<docY){ n=n-(docY-y); y=docY; }
+ if(y+n>docY+viewH()) n=docY+viewH()-y;
+ if(n<1) return;
+ sx=VX+(x-docX)*z; sy=VY+(y-docY)*z; h=n*z;
+ useColor(c); ctx.fillRect(sx,sy,z,h);
+}
+function paintBlock(xa,ya,xb,yb,c){
+ var z,w,h,sx,sy;
+ if(xb<xa||yb<ya) return;
+ z=1; if(fat) z=8;
+ if(xa<docX) xa=docX; if(ya<docY) ya=docY;
+ if(xb>=docX+viewW()) xb=docX+viewW()-1;
+ if(yb>=docY+viewH()) yb=docY+viewH()-1;
+ if(xa>xb||ya>yb) return;
+ w=xb-xa+1; h=yb-ya+1;
+ sx=VX+(xa-docX)*z; sy=VY+(ya-docY)*z;
+ useColor(c); ctx.fillRect(sx,sy,w*z,h*z);
+}
+function solidRow(y){
+ var r,i,c,k;
+ r=y-Math.floor(y/8)*8; if(r<0) r=0; c=patInkAt(pat,0,r); i=1;
+ while(i<8){ k=patInkAt(pat,i,r); if(k!=c) return -1; i=i+1; }
+ return c;
+}
+function solidPat(){
+ var r,c,k;
+ c=solidRow(0); if(c<0) return -1; r=1;
+ while(r<8){ k=solidRow(r); if(k!=c) return -1; r=r+1; }
+ return c;
+}
+function stampBits(xa,xb,y){
+ var x,row,i,a,b,m,on;
+ docClean=0; row=y-Math.floor(y/8)*8; if(row<0) row=0; x=xa;
+ while(x<=xb){
+  i=x-Math.floor(x/8)*8; a=BASE+y*STRIDE+Math.floor(x/8); b=stgRead(a);
+  while(i<8&&x<=xb){
+   m=MASK[i]; on=patBit(pat,i,row);
+   if(on){ if((Math.floor(b/m)%2)==0) b=b+m; }
+   else if((Math.floor(b/m)%2)==1) b=b-m;
+   i=i+1; x=x+1;
+  }
+  stgWrite(a,b);
+ }
+}
+function stampCols(xa,xb,y){
+ var x,c0,c1,a;
+ x=xa;
+ if(x!=Math.floor(x/2)*2){ setNib(COLB,CSTR,x,y,patInk(x,y)); x=x+1; }
+ while(x+1<=xb){
+  c0=patInk(x,y); c1=patInk(x+1,y);
+  a=COLB+y*CSTR+Math.floor(x/2); stgWrite(a,c0*16+c1); x=x+2;
+ }
+ if(x<=xb) setNib(COLB,CSTR,x,y,patInk(x,y));
+}
 function hline(xa,xb,y,commit){
- var x,t;
+ var x,t,c,n,g;
  if(y<0||y>=DOC_H) return;
  if(xa>xb){ t=xa; xa=xb; xb=t; }
  if(xa<0) xa=0; if(xb>=DOC_W) xb=DOC_W-1;
+ if(xa>xb) return;
+ if(dotNow||(commit==1&&mirror)){
+  x=xa;
+  while(x<=xb){
+   if(dotNow&&((x+y)%2)==1) x=x+1;
+   else {
+    if(commit==1) plot(x,y); else if(commit==2) paintDot(x,y,shown(x,y)); else paintDot(x,y,patInk(x,y));
+    x=x+1;
+   }
+  }
+  return;
+ }
+ if(commit==1){ stampBits(xa,xb,y); stampCols(xa,xb,y); }
+ if(commit==2){
+  if(docClean){ paintRun(xa,y,xb-xa+1,0); return; }
+  x=xa;
+  while(x<=xb){
+   c=shown(x,y); n=1; g=x+1;
+   while(g<=xb&&shown(g,y)==c){ n=n+1; g=g+1; }
+   paintRun(x,y,n,c); x=g;
+  }
+  return;
+ }
+ c=solidRow(y);
+ if(c>=0){ paintRun(xa,y,xb-xa+1,c); return; }
  x=xa;
  while(x<=xb){
-  if(dotNow&&((x+y)%2)==1) x=x+1;
-  else { if(commit) plot(x,y); else paintDot(x,y,patInk(x,y)); x=x+1; }
+  c=patInk(x,y); n=1; g=x+1;
+  while(g<=xb&&patInk(g,y)==c){ n=n+1; g=g+1; }
+  paintRun(x,y,n,c); x=g;
  }
 }
 function vline(x,ya,yb,commit){
- var y,t;
+ var y,t,c,n,g;
  if(x<0||x>=DOC_W) return;
  if(ya>yb){ t=ya; ya=yb; yb=t; }
  if(ya<0) ya=0; if(yb>=DOC_H) yb=DOC_H-1;
+ if(ya>yb) return;
+ if(dotNow||(commit==1&&mirror)){
+  y=ya;
+  while(y<=yb){
+   if(dotNow&&((x+y)%2)==1) y=y+1;
+   else {
+    if(commit==1) plot(x,y); else if(commit==2) paintDot(x,y,shown(x,y)); else paintDot(x,y,patInk(x,y));
+    y=y+1;
+   }
+  }
+  return;
+ }
+ if(commit==1){ y=ya; while(y<=yb){ stampBits(x,x,y); stampCols(x,x,y); y=y+1; } }
+ c=solidPat();
+ if(commit!=2&&c>=0){ paintCol(x,ya,yb-ya+1,c); return; }
+ if(commit==2&&docClean){ paintCol(x,ya,yb-ya+1,0); return; }
  y=ya;
  while(y<=yb){
-  if(dotNow&&((x+y)%2)==1) y=y+1;
-  else { if(commit) plot(x,y); else paintDot(x,y,patInk(x,y)); y=y+1; }
+  if(commit==2) c=shown(x,y); else c=patInk(x,y);
+  n=1; g=y+1;
+  while(g<=yb){
+   if(commit==2){ if(shown(x,g)!=c) break; }
+   else if(patInk(x,g)!=c) break;
+   n=n+1; g=g+1;
+  }
+  paintCol(x,y,n,c); y=g;
  }
+}
+function erasePen(x,y){
+ var ox,oy,s;
+ s=penSize(); ox=0;
+ while(ox<s){ oy=0; while(oy<s){ paintDot(x+ox,y+oy,shown(x+ox,y+oy)); oy=oy+1; } ox=ox+1; }
 }
 function line(x0a,y0a,x1a,y1a,commit){
  var dx,dy,sx,sy,err,e2,x,y,st;
@@ -306,7 +452,9 @@ function line(x0a,y0a,x1a,y1a,commit){
  if(x0a<x1a) sx=1; else sx=-1; if(y0a<y1a) sy=1; else sy=-1;
  err=dx-dy; x=x0a; y=y0a; st=0;
  while(st<2000){
-  if(!(dotNow&&(st%2)==1)){ if(commit) blot(x,y); else prevDot(x,y); }
+  if(!(dotNow&&(st%2)==1)){
+   if(commit==1) blot(x,y); else if(commit==2) erasePen(x,y); else prevDot(x,y);
+  }
   if(x==x1a&&y==y1a) return;
   e2=err+err;
   if(e2>-dy){ err=err-dy; x=x+sx; }
@@ -337,7 +485,41 @@ function constrainBox(){
  if(bx<ax) bx=ax-s; else bx=ax+s;
  if(by<ay) by=ay-s; else by=ay+s;
 }
-function fillBox(commit){ var y; y=y0; while(y<=y1){ hline(x0,x1,y,commit); y=y+1; } }
+function stampSolidBits(xa,xb,y,on){
+ var x,i,a,b,m,v;
+ docClean=0; v=0; if(on) v=255; x=xa;
+ while(x<=xb){
+  i=x-Math.floor(x/8)*8; a=BASE+y*STRIDE+Math.floor(x/8);
+  if(i==0&&x+7<=xb){ stgWrite(a,v); x=x+8; }
+  else {
+   b=stgRead(a);
+   while(i<8&&x<=xb){
+    m=MASK[i];
+    if(on){ if((Math.floor(b/m)%2)==0) b=b+m; }
+    else if((Math.floor(b/m)%2)==1) b=b-m;
+    i=i+1; x=x+1;
+   }
+   stgWrite(a,b);
+  }
+ }
+}
+function stampSolidCols(xa,xb,y,c){
+ var x,a,p;
+ x=xa; p=c*16+c;
+ if(x!=Math.floor(x/2)*2){ setNib(COLB,CSTR,x,y,c); x=x+1; }
+ while(x+1<=xb){ a=COLB+y*CSTR+Math.floor(x/2); stgWrite(a,p); x=x+2; }
+ if(x<=xb) setNib(COLB,CSTR,x,y,c);
+}
+function fillBox(commit){
+ var y,c;
+ c=-1; if(dotNow==0&&mirror==0) c=solidPat();
+ if(c>=0&&commit!=2){
+  if(commit==1){ y=y0; while(y<=y1){ stampSolidBits(x0,x1,y,c>0); stampSolidCols(x0,x1,y,c); y=y+1; } }
+  paintBlock(x0,y0,x1,y1,c); return;
+ }
+ if(c>=0){ showView(); return; }
+ y=y0; while(y<=y1){ hline(x0,x1,y,commit); y=y+1; }
+}
 function frameBox(commit){
  var i,s; s=penSize(); i=0;
  while(i<s){ hline(x0,x1,y0+i,commit); hline(x0,x1,y1-i,commit); vline(x0+i,y0,y1,commit); vline(x1-i,y0,y1,commit); i=i+1; }
@@ -378,20 +560,14 @@ function drawShape(commit){
  else if(tool==14) ovalScan(0,commit);
  else if(tool==15) ovalScan(1,commit);
 }
-function restoreBox(xa,ya,xb,yb){
- var x,y,t;
- if(xa>xb){ t=xa; xa=xb; xb=t; } if(ya>yb){ t=ya; ya=yb; yb=t; }
- if(xa<docX) xa=docX; if(ya<docY) ya=docY;
- if(xb>=docX+viewW()) xb=docX+viewW()-1; if(yb>=docY+viewH()) yb=docY+viewH()-1;
- y=ya; while(y<=yb){ x=xa; while(x<=xb){ paintDot(x,y,shown(x,y)); x=x+1; } y=y+1; }
-}
 function previewShape(x,y){
- if(havePrev) restoreBox(pax-4,pay-4,pbx+4,pby+4);
  bx=x; by=y;
  if(sh&&tool==8) constrainLine(); else if(sh) constrainBox();
+ if(havePrev) restorePrev();
+ takeGrab();
  drawShape(0); pax=ax; pay=ay; pbx=bx; pby=by; havePrev=1;
 }
-function commitShape(){ drawShape(1); havePrev=0; dirty=1; }
+function commitShape(){ drawShape(1); havePrev=0; grabbed=0; dirty=1; }
 function spray(x,y){
  var i,a,b,dx,dy; i=0;
  while(i<18){ a=x+Math.floor(Math.random()*16)-8; b=y+Math.floor(Math.random()*16)-8; dx=a-x; dy=b-y; if(dx*dx+dy*dy<50) plot(a,b); i=i+1; }
@@ -404,7 +580,7 @@ function markSeen(x,y){
  a=VIS+y*STRIDE+Math.floor(x/8); b=stgRead(a);
  if((Math.floor(b/m)%2)==0) stgWrite(a,b+m);
 }
-function clearSeen(){ var i; i=0; while(i<DOC_BYTES){ stgWrite(VIS+i,0); i=i+1; } }
+function clearSeen(){ if(tbFill(VIS,0,DOC_BYTES)<0) bad=1; }
 function openPix(x,y,target){
  if(x<0||y<0||x>=DOC_W||y>=DOC_H) return 0;
  if(bitAt(VIS,x,y)) return 0;
@@ -529,9 +705,9 @@ function dragMarquee(x,y){
   selX=x-dragOffX; selY=y-dragOffY;
   if(selX<0) selX=0; if(selY<0) selY=0;
   if(selX+selW>DOC_W) selX=DOC_W-selW; if(selY+selH>DOC_H) selY=DOC_H-selH;
-  need=1; return;
+  paintPage(); return;
  }
- bx=x; by=y; normBox(); selX=x0; selY=y0; selW=x1-x0+1; selH=y1-y0+1; selOn=1; need=1;
+ bx=x; by=y; normBox(); selX=x0; selY=y0; selW=x1-x0+1; selH=y1-y0+1; selOn=1; paintPage();
 }
 function finishMarquee(x,y){
  if(moving){ moving=0; need=1; return; }
@@ -560,18 +736,18 @@ function dragDoc(x,y){
  if(tool==6){ brushing=1; line(lastX,lastY,x,y,1); lastX=x; lastY=y; return; }
  if(tool==7){ useInk=1; dotNow=0; line(lastX,lastY,x,y,1); lastX=x; lastY=y; return; }
  if(tool==9){ erasing=1; line(lastX,lastY,x,y,1); lastX=x; lastY=y; return; }
- if(tool==8||tool>=10) previewShape(x,y);
+ if(tool==8||tool>=10){ if(havePrev&&x==pbx&&y==pby) return; previewShape(x,y); }
 }
 function toDocX(sx){ var z,d; z=1; if(fat) z=8; d=docX+Math.floor((sx-VX)/z); if(grid) d=Math.floor(d/8)*8; if(d<0) d=0; if(d>=DOC_W) d=DOC_W-1; return d; }
 function toDocY(sy){ var z,d; z=1; if(fat) z=8; d=docY+Math.floor((sy-VY)/z); if(grid) d=Math.floor(d/8)*8; if(d<0) d=0; if(d>=DOC_H) d=DOC_H-1; return d; }
 function hitTool(sx,sy){ var col,row; if(sx<24||sx>=80||sy<88||sy>=344) return -1; col=Math.floor((sx-24)/28); row=Math.floor((sy-88)/32); if(col<0||col>1||row<0||row>7) return -1; return row*2+col; }
-function hitWidth(sx,sy){ var i; if(sx<24||sx>=80||sy<344||sy>=432) return 0; i=Math.floor((sy-346)/16); if(i<0) i=0; if(i>4) i=4; penW=i; need=1; return 1; }
+function hitWidth(sx,sy){ var i; if(sx<24||sx>=80||sy<344||sy>=432) return 0; i=Math.floor((sy-346)/16); if(i<0) i=0; if(i>4) i=4; penW=i; drawWidths(); return 1; }
 function hitColor(sx,sy){
  var i;
  if(sx<84||sx>=156||sy<348||sy>=420) return 0;
  i=Math.floor((sx-84)/18)+Math.floor((sy-348)/18)*4;
  if(i<0||i>15) return 0;
- inkCol=i; need=1; return 1;
+ inkCol=i; drawColors(); return 1;
 }
 function hitPat(sx,sy){
  var col,row,idx;
@@ -583,7 +759,7 @@ function hitPat(sx,sy){
  if(row==2){ if(col>15) return 0; idx=38+col; }
  else { if(row<0||row>1||col>18) return 0; idx=row*19+col; if(idx>37) return 0; }
  if(idx==pat&&tick-lastPatTick<24) beginEdit();
- pat=idx; lastPatTick=tick; need=1; return 1;
+ pat=idx; lastPatTick=tick; drawPats(); return 1;
 }
 function wkNib(col,row){
  var b,h;
@@ -624,13 +800,13 @@ function handBy(sx,sy){
  var z,dx,dy; z=1; if(fat) z=8;
  dx=Math.floor((sx-lastSX)/z); dy=Math.floor((sy-lastSY)/z);
  if(dx==0&&dy==0) return;
- docX=docX-dx; docY=docY-dy; lastSX=sx; lastSY=sy; clampScroll(); need=1;
+ docX=docX-dx; docY=docY-dy; lastSX=sx; lastSY=sy; clampScroll(); paintPage();
 }
 function downAt(sx,sy){
  var t,x,y;
  sx=Math.floor(sx); sy=Math.floor(sy);
  t=hitTool(sx,sy);
- if(t>=0){ if(selFloat) dropFloat(); tool=t; mode=0; moving=0; selDrag=0; down=0; need=1; return; }
+ if(t>=0){ pickTool(t); return; }
  if(hitWidth(sx,sy)) return;
  if(hitColor(sx,sy)) return;
  if(hitPat(sx,sy)) return;
@@ -649,7 +825,7 @@ function endStroke(x,y){
  down=0; erasing=0; brushing=0;
  if(tool==0){ finishLasso(); need=1; return; }
  if(tool==1){ finishMarquee(x,y); need=1; return; }
- if(tool==8||tool==10||tool==11||tool==12||tool==13||tool==14||tool==15){ commitShape(); need=1; return; }
+ if(tool==8||tool==10||tool==11||tool==12||tool==13||tool==14||tool==15){ commitShape(); if(penShow) needPen=1; return; }
  need=1;
 }
 function upAt(sx,sy){
@@ -713,9 +889,11 @@ function doRotate(){
  copySel(); hasClip=1; selOn=1;
 }
 function doUndo(){
- var i,a,b; if(undoOk==0) return; i=0;
- while(i<DOC_BYTES){ a=stgRead(BASE+i); b=stgRead(BASE_U+i); stgWrite(BASE+i,b); stgWrite(BASE_U+i,a); i=i+1; }
- i=0; while(i<COLN){ a=stgRead(COLB+i); b=stgRead(COLU+i); stgWrite(COLB+i,b); stgWrite(COLU+i,a); i=i+1; }
+ if(undoOk==0) return;
+ grabbed=0;
+ swapRange(BASE,BASE_U,DOC_BYTES);
+ swapRange(COLB,COLU,COLN);
+ docClean=0;
  dirty=1;
 }
 function doCut(){
@@ -739,8 +917,11 @@ function doClear(){
 }
 function selectAll(){ selX=0; selY=0; selW=DOC_W; selH=DOC_H; selOn=1; selFloat=0; selDrag=0; if(copySel()) hasClip=1; }
 function clearPage(){
- var i; i=0; while(i<DOC_BYTES){ stgWrite(BASE+i,0); stgWrite(BASE_U+i,0); i=i+1; }
- i=0; while(i<COLN){ stgWrite(COLB+i,0); stgWrite(COLU+i,0); i=i+1; }
+ if(tbFill(BASE,0,DOC_BYTES)<0) bad=1;
+ if(tbFill(BASE_U,0,DOC_BYTES)<0) bad=1;
+ if(tbFill(COLB,0,COLN)<0) bad=1;
+ if(tbFill(COLU,0,COLN)<0) bad=1;
+ docClean=1;
 }
 function doNew(){
  clearPage(); docX=0; docY=0; selOn=0; selFloat=0; hasClip=0; undoOk=0; dirty=0; bad=0; mode=0; named=0;
@@ -749,9 +930,8 @@ function doNew(){
  clampScroll();
 }
 function readColors(ver){
- var i;
  if(ver==50){ if(fsRead(1900,8+DOC_BYTES,COLB,COLN)<COLN) ver=49; }
- if(ver!=50){ i=0; while(i<COLN){ stgWrite(COLB+i,0); i=i+1; } }
+ if(ver!=50){ if(tbFill(COLB,0,COLN)<0) bad=1; }
  copyRange(COLB,COLU,COLN);
 }
 function doRevert(){
@@ -760,7 +940,18 @@ function doRevert(){
  if(fsRead(1900,0,1920,8)<8){ bad=1; return; }
  if(fsRead(1900,8,BASE,DOC_BYTES)<DOC_BYTES){ bad=1; return; }
  readColors(stgRead(1923));
- copyRange(BASE,BASE_U,DOC_BYTES); dirty=0; bad=0; mode=0; undoOk=1;
+ copyRange(BASE,BASE_U,DOC_BYTES); dirty=0; bad=0; mode=0; undoOk=1; docClean=0;
+}
+function sharedStem(){
+ var i,b; nameLen=0; i=0;
+ while(i<8){
+  b=stgRead(96+i);
+  if(b<33||b==46) break;
+  NAME[i]=b; i=i+1; nameLen=nameLen+1;
+ }
+ while(i<8){ NAME[i]=0; i=i+1; }
+ if(nameLen<1){ bad=1; return 0; }
+ named=1; return 1;
 }
 function putName(at){
  var i; i=0; while(i<nameLen){ stgWrite(at+i,NAME[i]); i=i+1; }
@@ -782,8 +973,8 @@ function isPnt(p,n){
  if(stgRead(p+n-1)!=78) return 0; if(stgRead(p+n)!=84) return 0; return 1;
 }
 function saveSlot(slot,p,n){
- var i,a; if(n>12) n=12; a=3600+slot*13; stgWrite(a,n); i=0;
- while(i<n){ stgWrite(a+1+i,stgRead(p+1+i)); i=i+1; } nFiles=nFiles+1;
+ var a; if(n>12) n=12; a=3600+slot*13; stgWrite(a,n);
+ if(tbMove(p+1,a+1,n)<0) bad=1; nFiles=nFiles+1;
 }
 function listPictures(){
  var p,n;
@@ -802,9 +993,9 @@ function takeStem(slot){
  while(i<8){ NAME[i]=0; i=i+1; } i=0; while(i<n){ NAME[i]=stgRead(a+1+i); i=i+1; }
 }
 function loadSlot(slot){
- var n,w,h,i,a;
+ var n,w,h,a;
  a=3600+slot*13; n=stgRead(a); if(n<=0||n>12) return;
- i=0; while(i<n){ stgWrite(1900+i,stgRead(a+1+i)); i=i+1; } stgWrite(1900+n,0);
+ if(tbMove(a+1,1900,n)<0) bad=1; stgWrite(1900+n,0);
  if(fsRead(1900,0,1920,8)<8){ bad=1; return; }
  if(stgRead(1920)!=80||stgRead(1921)!=78||stgRead(1922)!=84){ bad=1; return; }
  if(stgRead(1923)!=49&&stgRead(1923)!=50){ bad=1; return; }
@@ -812,7 +1003,7 @@ function loadSlot(slot){
  if(fsRead(1900,8,BASE,DOC_BYTES)<DOC_BYTES){ bad=1; return; }
  readColors(stgRead(1923));
  copyRange(BASE,BASE_U,DOC_BYTES); takeStem(slot);
- dirty=0; bad=0; undoOk=1; selOn=0; selFloat=0; hasClip=0; mode=0; docX=0; docY=0;
+ dirty=0; bad=0; undoOk=1; selOn=0; selFloat=0; hasClip=0; mode=0; docX=0; docY=0; docClean=0;
 }
 function openClick(sx,sy){
  var row; sx=Math.floor(sx); sy=Math.floor(sy);
@@ -845,9 +1036,9 @@ function command(c){
  else if(c==186) stShad=1-stShad;
  else if(c>=187&&c<=189) alignN=c-187;
  else if(c==192) doNew();
- else if(c==193){ listPictures(); mode=1; }
+ else if(c==193){ if(sharedStem()){ doRevert(); selOn=0; selFloat=0; hasClip=0; docX=0; docY=0; } }
  else if(c==195) savePic();
- else if(c==196) mode=2;
+ else if(c==196){ if(sharedStem()) savePic(); }
  else if(c==197) doRevert();
  else if(c==198||c==199) mode=6;
  else if(c==201) doUndo();
@@ -911,7 +1102,7 @@ function scrollKey(c){
  if(c==128) docY=docY-8; else if(c==129) docY=docY+8;
  else if(c==130) docY=docY-viewH(); else if(c==131) docY=docY+viewH();
  else if(c==132) docX=docX-16; else if(c==133) docX=docX+16;
- clampScroll(); need=1;
+ clampScroll(); if(mode==0) paintPage(); else need=1;
 }
 function arrowKey(c){
  var s; s=1; if(sh) s=8;
@@ -921,7 +1112,7 @@ function arrowKey(c){
  if(penX<docX||penY<docY||penX>=docX+viewW()||penY>=docY+viewH()){
   if(penX<docX) docX=penX; if(penY<docY) docY=penY;
   if(penX>=docX+viewW()) docX=penX-viewW()+1; if(penY>=docY+viewH()) docY=penY-viewH()+1;
-  clampScroll(); need=1;
+  clampScroll(); paintPage();
  } else needPen=1;
  if(spaceDown) dragDoc(penX,penY);
 }
@@ -932,10 +1123,10 @@ function toolKey(c){
  else if(c==74) t=14; else if(c==75) t=15;
  else if(c==71){ grid=1-grid; checks(); need=1; return; }
  else if(c==70){ fat=1-fat; clampScroll(); checks(); need=1; return; }
- else if(c==219){ pat=pat-1; if(pat<0) pat=37; need=1; return; }
- else if(c==221){ pat=pat+1; if(pat>37) pat=0; need=1; return; }
+ else if(c==219){ pat=pat-1; if(pat<0) pat=37; drawPats(); return; }
+ else if(c==221){ pat=pat+1; if(pat>37) pat=0; drawPats(); return; }
  else if(c>=37&&c<=40){ arrowKey(c); return; }
- if(t>=0){ tool=t; mode=0; need=1; }
+ if(t>=0){ if(mode!=0){ tool=t; mode=0; need=1; return; } pickTool(t); }
 }
 function onKey(e){
  var c,ch; c=e.keyCode; ch=e.charCode; if(booted==0) return;
@@ -957,32 +1148,47 @@ function grow(id,row){
  if(id==12) return G12[row]; if(id==13) return G13[row]; if(id==14) return G14[row]; return G15[row];
 }
 function glyph(id,x,y,inv){
- var r,c,w,v,p;
+ var r,c,w,v,p,n,g;
  if(inv) ctx.fillStyle="#FFFFFF"; else ctx.fillStyle="#000000";
  w=GW[id]; r=0;
  while(r<16){
   v=grow(id,r); c=0;
   while(c<w){
    p=PW0[w-1-c];
-   if(p>0&&(Math.floor(v/p)%2)) ctx.fillRect(x+c,y+r,1,1);
-   c=c+1;
+   if(p>0&&(Math.floor(v/p)%2)){
+    n=1; g=c+1;
+    while(g<w){
+     p=PW0[w-1-g];
+     if(p<1||(Math.floor(v/p)%2)==0) break;
+     n=n+1; g=g+1;
+    }
+    ctx.fillRect(x+c,y+r,n,1); c=g;
+   } else c=c+1;
   }
   r=r+1;
  }
 }
+function paintToolSlot(i){
+ var x,y,gx,col;
+ col=i-Math.floor(i/2)*2; x=24+col*28; y=88+Math.floor(i/2)*32;
+ ctx.fillStyle="#FFFFFF"; ctx.fillRect(x+1,y,26,31);
+ ctx.fillStyle="#000000"; ctx.fillRect(x,y+31,28,1);
+ if(i==tool){ ctx.fillStyle="#000000"; ctx.fillRect(x+1,y+1,26,30); }
+ gx=x+Math.floor((28-GW[i])/2);
+ glyph(i,gx,y+8,i==tool);
+}
+function pickTool(t){
+ var old;
+ if(selFloat) dropFloat();
+ old=tool; tool=t; mode=0; moving=0; selDrag=0; down=0; havePrev=0;
+ if(old!=t){ paintToolSlot(old); paintToolSlot(t); }
+}
 function drawTools(){
- var i,x,y,gx;
+ var i;
  ctx.fillStyle="#FFFFFF"; ctx.fillRect(24,88,56,256);
  ctx.fillStyle="#000000";
  ctx.fillRect(24,88,56,1); ctx.fillRect(24,88,1,256); ctx.fillRect(79,88,1,256); ctx.fillRect(51,88,1,256);
- i=0; while(i<16){
-  x=24+(i-Math.floor(i/2)*2)*28; y=88+Math.floor(i/2)*32;
-  if(i==tool){ ctx.fillStyle="#000000"; ctx.fillRect(x+1,y+1,26,30); }
-  gx=x+Math.floor((28-GW[i])/2);
-  glyph(i,gx,y+8,i==tool);
-  ctx.fillStyle="#000000"; ctx.fillRect(24,y+31,56,1);
-  i=i+1;
- }
+ i=0; while(i<16){ paintToolSlot(i); i=i+1; }
 }
 function drawCheck(x,y){
  ctx.fillStyle="#000000";
@@ -1013,10 +1219,17 @@ function drawColors(){
  }
 }
 function drawPatCell(p,x,y,z){
- var row,col,n;
- n=z*8; row=0; while(row<8){ col=0; while(col<8){
-  useColor(patInkAt(p,col,row));
-  ctx.fillRect(x+col*z,y+row*z,z,z); col=col+1; } row=row+1; }
+ var row,col,n,g,c;
+ n=z*8; row=0;
+ while(row<8){
+  col=0;
+  while(col<8){
+   c=patInkAt(p,col,row); g=col+1;
+   while(g<8&&patInkAt(p,g,row)==c) g=g+1;
+   useColor(c); ctx.fillRect(x+col*z,y+row*z,(g-col)*z,z); col=g;
+  }
+  row=row+1;
+ }
  ctx.fillStyle="#000000";
  ctx.fillRect(x-1,y-1,n+2,1); ctx.fillRect(x-1,y+n,n+2,1);
  ctx.fillRect(x-1,y-1,1,n+2); ctx.fillRect(x+n,y-1,1,n+2);
@@ -1040,43 +1253,83 @@ function fatGrid(){
  while(i*8<VW){ ctx.fillRect(VX+i*8,VY,1,VH); i=i+1; }
  i=0; while(i*8<VH){ ctx.fillRect(VX,VY+i*8,VW,1); i=i+1; }
 }
-function gridDots(){
- var x,y,sx,sy;
- ctx.fillStyle="#808080";
- y=Math.floor(docY/8)*8;
- while(y<docY+viewH()){
-  x=Math.floor(docX/8)*8;
-  while(x<docX+viewW()){
-   sx=VX+x-docX; sy=VY+y-docY;
-   if(sx>=VX&&sy>=VY&&sx<VX+VW&&sy<VY+VH) ctx.fillRect(sx,sy,1,1);
-   x=x+8;
-  }
-  y=y+8;
- }
+function put32(a,v){
+ var n,i; n=Math.floor(v); i=0;
+ while(i<4){ stgWrite(a+i,n-Math.floor(n/256)*256); n=Math.floor(n/256); i=i+1; }
 }
-function drawDoc(){
- var y,x,b,i,z,dw,dh,run,base,c;
- z=1; if(fat) z=8; dw=viewW(); dh=viewH();
- ctx.fillStyle="#FFFFFF"; ctx.fillRect(VX,VY,VW,VH);
- y=0;
- while(y<dh){
-  x=0; base=BASE+(docY+y)*STRIDE;
-  while(x<dw){
-   i=(docX+x)-Math.floor((docX+x)/8)*8;
-   b=stgRead(base+Math.floor((docX+x)/8));
-   if(b==0) x=x+(8-i);
-   else while(i<8&&x<dw){
-    if((Math.floor(b/MASK[i])%2)){
-     c=shown(docX+x,docY+y); run=1; i=i+1; x=x+1;
-     while(i<8&&x<dw&&(Math.floor(b/MASK[i])%2)&&shown(docX+x,docY+y)==c){ run=run+1; i=i+1; x=x+1; }
-     useColor(c); ctx.fillRect(VX+(x-run)*z,VY+y*z,run*z,z);
-    } else { i=i+1; x=x+1; }
-   }
-  }
-  y=y+1;
- }
- if(fat) fatGrid(); else if(grid) gridDots();
+function writePal(d){
+ stgWrite(d+48,1); stgWrite(d+49,0); stgWrite(d+50,2); stgWrite(d+51,3);
+ stgWrite(d+52,4); stgWrite(d+53,5); stgWrite(d+54,6); stgWrite(d+55,7);
+ stgWrite(d+56,34); stgWrite(d+57,68); stgWrite(d+58,102); stgWrite(d+59,136);
+ stgWrite(d+60,170); stgWrite(d+61,204); stgWrite(d+62,238); stgWrite(d+63,221);
 }
+function blitPacked(d,bits,base,stride,sx,sy,sw,sh,dx,dy,sc,fg,bg,trans){
+ tbFill(d,0,64); stgWrite(d,1); stgWrite(d+1,bits); stgWrite(d+3,sc);
+ if(trans) stgWrite(d+2,1);
+ put32(d+4,base);
+ w16at(d+8,stride); w16at(d+10,DOC_W); w16at(d+12,DOC_H);
+ w16at(d+14,sx); w16at(d+16,sy); w16at(d+18,sw); w16at(d+20,sh);
+ w16at(d+22,dx); w16at(d+24,dy);
+ w16at(d+26,VX); w16at(d+28,VY); w16at(d+30,VW); w16at(d+32,VH);
+ stgWrite(d+34,fg); stgWrite(d+35,bg);
+ if(bits==4) writePal(d);
+ return toolbox(3,d,0,0);
+}
+function showView(){
+ var z,w,h,r;
+ if((tbBits&4)==0) return 0;
+ z=1; if(fat) z=8; w=viewW(); h=viewH();
+ r=blitPacked(373248,1,BASE,STRIDE,docX,docY,w,h,VX,VY,z,0,1,0);
+ if(r<0) return 0;
+ grabbed=0;
+ blitPacked(373312,4,COLB,CSTR,docX,docY,w,h,VX,VY,z,0,0,1);
+ if(fat) fatGrid(); return 1;
+}
+// CopyBits: glass rectangle ↔ SWAP. back=0 captures, back=1 restores.
+function portBits(gx,gy,w,h,back){
+ var d,s; d=373376; s=373440;
+ tbFill(d,0,64); tbFill(s,0,64);
+ stgWrite(d,1); stgWrite(d+1,8); stgWrite(d+2,2); stgWrite(d+3,1);
+ stgWrite(s,1); stgWrite(s+1,8); stgWrite(s+3,1);
+ put32(s+4,SWAP);
+ w16at(d+8,640); w16at(d+10,640); w16at(d+12,480);
+ w16at(s+8,w); w16at(s+10,w); w16at(s+12,h);
+ w16at(s+18,w); w16at(s+20,h); w16at(s+30,w); w16at(s+32,h);
+ if(back){
+  w16at(d+18,w); w16at(d+20,h); w16at(d+22,gx); w16at(d+24,gy);
+  w16at(d+26,VX); w16at(d+28,VY); w16at(d+30,VW); w16at(d+32,VH);
+  return toolbox(6,s,d,0);
+ }
+ w16at(d+14,gx); w16at(d+16,gy); w16at(d+18,w); w16at(d+20,h);
+ w16at(d+30,640); w16at(d+32,480);
+ return toolbox(6,d,s,0);
+}
+function takeGrab(){
+ var z,s,xa,xb,ya,yb;
+ grabbed=0; if((tbBits&32)==0) return;
+ z=1; if(fat) z=8; s=penSize();
+ xa=ax; xb=bx; if(xa>xb){ xa=bx; xb=ax; }
+ ya=ay; yb=by; if(ya>yb){ ya=by; yb=ay; }
+ xa=xa-s; ya=ya-s; xb=xb+s; yb=yb+s;
+ if(xa<docX) xa=docX; if(ya<docY) ya=docY;
+ if(xb>docX+viewW()-1) xb=docX+viewW()-1;
+ if(yb>docY+viewH()-1) yb=docY+viewH()-1;
+ if(xa<0) xa=0; if(ya<0) ya=0;
+ if(xa>xb||ya>yb) return;
+ grabGX=VX+(xa-docX)*z; grabGY=VY+(ya-docY)*z;
+ grabW=(xb-xa+1)*z; grabH=(yb-ya+1)*z;
+ if(grabW*grabH>92160) return;
+ if(portBits(grabGX,grabGY,grabW,grabH,0)>0) grabbed=1;
+}
+function restorePrev(){
+ if(grabbed){ portBits(grabGX,grabGY,grabW,grabH,1); grabbed=0; return; }
+ showView();
+}
+function paintPage(){
+ showView();
+ if(mode==0){ drawAnts(); drawFloat(); drawCaret(); if(penShow) refreshPen(); }
+}
+function drawDoc(){ showView(); }
 function antRun(x,y,n,horiz){
  var i,on; i=0;
  while(i<n){ on=((i+Math.floor(tick/8))%2)==0; if(horiz) paintDot(x+i,y,on); else paintDot(x,y+i,on); i=i+1; }
@@ -1144,17 +1397,17 @@ function paintAll(){
  ctx.fillStyle="#FFFFFF"; ctx.fillRect(24,88,576,344);
  drawTools(); drawWidths(); drawPats(); drawDoc();
  if(mode==0){ drawAnts(); drawFloat(); drawCaret(); }
- if(mode==1) drawOpen(); else if(mode==2) drawSaveAs(); else if(mode==3) drawEditor(); else if(mode>=4) drawNote();
+ if(mode==1) drawOpen(); else if(mode==3) drawEditor(); else if(mode>=4) drawNote();
  if(penShow&&mode==0) refreshPen();
  checks();
 }
 function bootStep(){
- var n,x,r; n=0;
- while(n<16&&bootRow<DOC_H){
-  x=0; r=bootRow; while(x<STRIDE){ stgWrite(BASE+r*STRIDE+x,0); stgWrite(BASE_U+r*STRIDE+x,0); x=x+1; }
-  bootRow=bootRow+1; n=n+1;
- }
- if(bootRow>=DOC_H){ booted=1; need=1; clampScroll(); }
+ tbBits=toolbox(0,0,0,0);
+ if(tbFill(BASE,0,DOC_BYTES)<0) bad=1;
+ if(tbFill(BASE_U,0,DOC_BYTES)<0) bad=1;
+ if(tbFill(COLB,0,COLN)<0) bad=1;
+ if(tbFill(COLU,0,COLN)<0) bad=1;
+ bootRow=DOC_H; booted=1; docClean=1; need=1; clampScroll();
 }
 function bootScreen(){
  ctx.fillStyle="#FFFFFF"; ctx.fillRect(24,88,576,344);
@@ -1173,7 +1426,7 @@ function pollJoy(){
   if(penX<docX||penY<docY||penX>=docX+viewW()||penY>=docY+viewH()){
    if(penX<docX) docX=penX; if(penY<docY) docY=penY;
    if(penX>=docX+viewW()) docX=penX-viewW()+1; if(penY>=docY+viewH()) docY=penY-viewH()+1;
-   clampScroll(); need=1;
+   clampScroll(); paintPage();
   } else if(joyFire==0&&spaceDown==0) needPen=1;
   if(joyFire||spaceDown) dragDoc(penX,penY);
  }
@@ -1188,8 +1441,13 @@ function frame(){
   if(job) fillWork();
   pollJoy();
   if(spaceDown&&down&&tool==5&&mode==0&&(tick%4)==0) spray(penX,penY);
-  if(tool==3&&mode==0&&(tick%24)==0) need=1;
-  if(selOn&&(tick%12)==0) need=1;
+  if(down==0&&mode==0&&(tbBits&4)!=0){
+   if(selOn&&(tick%12)==0){ showView(); drawAnts(); drawFloat(); if(tool==3) drawCaret(); if(penShow) refreshPen(); }
+   else if(tool==3&&(tick%24)==0){ showView(); drawCaret(); if(penShow) refreshPen(); }
+  } else {
+   if(tool==3&&mode==0&&(tick%24)==0) need=1;
+   if(selOn&&(tick%12)==0) need=1;
+  }
   if(need){ paintAll(); need=0; } else if(needPen){ refreshPen(); needPen=0; }
  }
  requestAnimationFrame(frame);

@@ -136,7 +136,17 @@ def test_reader_can_open_another_markdown_and_utility_closes(app):
     assert b'Different document' in b.machine._src_bytes
     click(b,22,46);assert b.desktop.visible
     run(b,'UTILITY.HTM');assert b.machine.system_window[0]==4
-    assert b.machine._nat_stg_read(0)==85 # Actual disk catalog, not blank private memory.
+    # Utility now obtains the standard fsList catalog itself; verify real files
+    # and sorted names instead of the removed UTL header supplied by the host.
+    assert observe(b,'haveCat')==1
+    count=int(observe(b,'nFiles'));assert count>=2
+    names=[]
+    for i in range(count):
+        p=int(b.machine._nat_stg_read(16000+i*2)+256*b.machine._nat_stg_read(16001+i*2))
+        n=int(b.machine._nat_stg_read(p))
+        names.append(''.join(chr(int(b.machine._nat_stg_read(p+1+j))) for j in range(n)))
+    assert names==sorted(names)
+    assert {'HELP.MD','OTHER.MD'}<=set(names)
     click(b,22,46);assert b.desktop.visible and not b.machine.running
 
 def test_porting_example_uses_same_system_actions(app):

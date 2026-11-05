@@ -5,7 +5,7 @@ module tb_owned_menus;
  logic [7:0] text_byte=0;logic [31:0] window_state=6;
  logic sample_valid=0;logic [9:0] x=0;logic [8:0] y=0;logic [2:0] buttons=0;
  logic [3:0] click_row=0,popup_row=0;
- logic error_,key_stb,action_stb;logic [7:0] key_code;logic [3:0] action;
+ logic error_,key_stb,action_stb;logic [7:0] key_code,relay_key;logic [3:0] action;
  logic custom_title,title_valid;logic [9:0] title_width;
  logic [3:0] active_menu,popup_count;logic [111:0] statics;logic [97:0] dynamics;
  logic [13:0] enabled,checked;logic [9:0] left_;integer keys=0,actions=0,last_key=0,last_action=0;
@@ -16,8 +16,9 @@ module tb_owned_menus;
  .sample_valid,.system_active(1'b0),.keyboard_open(1'b0),.guest_drag(1'b0),.cancel_menu(1'b0),.x,.y,.buttons,.click_row,
  .key_stb,.key_code,.action_stb,.action,.descriptor_error(error_),.active_menu,.popup_left(left_),.popup_count,.popup_row,
  .popup_static_rows(statics),.popup_dynamic_rows(dynamics),.popup_enabled_rows(enabled),.popup_checked_rows(checked),
- .label_raddr(7'd127),.label_pos(12'sd0),.beam_y(10'd0),.title_valid,.title_width);
- always @(posedge clk)begin if(key_stb)begin keys++;last_key=key_code;end if(action_stb)begin actions++;last_action=action;end end
+ .label_raddr(7'd127),.label_pos(12'sd0),.beam_y(10'd0),.title_valid,.title_width,.relay_key);
+ integer last_relay=0;
+ always @(posedge clk)begin if(key_stb)begin keys++;last_key=key_code;end if(action_stb)begin actions++;last_action=action;last_relay=relay_key;end end
  task automatic send_text(input string str,input integer kind);
   for(integer i=0;i<str.len();i++)begin
    @(negedge clk);text_stb=1;text_menu=kind==1;text_title=kind==2;text_first=i==0;text_last=i==str.len()-1;text_byte=str[i];
@@ -57,7 +58,9 @@ module tb_owned_menus;
   open_menu(1);choose(11);if(last_key!=210)$fatal(1,"last Edit row");
   open_menu(2);if(!checked[0])$fatal(1,"Grid checkmark");choose(0);if(last_key!=160)$fatal;
   open_menu(0);choose(3);if(last_key!=195)$fatal(1,"Save command");
-  open_menu(0);choose(8);if(actions!=1 || last_action!=0)$fatal(1,"Quit must use lifecycle");
+  open_menu(0);choose(4);if(last_action!=4 || last_relay!=196)$fatal(1,"Save As shared box action=%d key=%d",last_action,last_relay);
+  open_menu(0);choose(1);if(last_action!=2 || last_relay!=193)$fatal(1,"Open shared box");
+  open_menu(0);choose(8);if(actions!=3 || last_action!=0)$fatal(1,"Quit must use lifecycle");
   // Hidden scrollbar must not emit a key.
   begin integer old_keys;old_keys=keys;mouse(608,95,1);mouse(608,95,0);if(keys!=old_keys)$fatal(1,"hidden scrollbar emitted key");end
   $display("PASS exact MacPaint menus: six headings, separators, high commands, title, checks, Quit, hidden bars");$finish;

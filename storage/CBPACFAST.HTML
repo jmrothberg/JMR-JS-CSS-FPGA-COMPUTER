@@ -1,0 +1,1658 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Pac-Man — JMR</title></head>
+<body style="margin:0;background:#000">
+<!-- Self-contained: drag into Chrome or LOAD "PACMAN.HTML" then RUN. No other files. -->
+<!-- Upstream source tree kept in games_pacman/. Chrome: open this file. -->
+<!-- NEW: native 640x480 glass; maze tiles size 14 keep square cells -->
+<canvas id="canvas" width="640" height="480"></canvas>
+<script>
+/* Chrome SFX: playSfx(packed). Packed = freq,vol,frames,slide,ch repeating.
+   ch 0-2 square, 3 noise. Missing r is silent. Chrome: _chromePlay. Card: sound() nid 42. */
+function playSfx(r) {
+  var i;
+  if (!r) return;
+  if (typeof _chromePlay === "function") {
+    _chromePlay(r);
+    return;
+  }
+  i = 0;
+  while (i + 4 < r.length) {
+    sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
+    i = i + 5;
+  }
+}
+var sfxWaka0 = [196, 10, 6, 0, 0];
+var sfxWaka1 = [246, 10, 6, 0, 0];
+var sfxWakaI = 0;
+var sfxEat = [392, 10, 6, 0, 0, 523, 10, 6, 0, 0, 659, 12, 10, 0, 0];
+var sfxDie = [440, 12, 30, -12, 0];
+var sfxPower = [180, 8, 120, 5, 1];
+var _pacCacheW=640, _pacCacheH=480, cbOn=0;
+/* CopyBits. The maze is saved once. Each mover's old box is put back. */
+var PIX=0,SCREEN=308000,SAVED=308064;
+function tbU16(p,n){n=Math.floor(n)%65536;if(n<0)n=n+65536;stgWrite(p,n%256);stgWrite(p+1,Math.floor(n/256));}
+function tbSurface(d,base,width,height,stride,bits){toolbox(2,d,0,64);stgWrite(d,1);stgWrite(d+1,bits);stgWrite(d+3,1);tbU16(d+4,base);tbU16(d+6,Math.floor(base/65536));tbU16(d+8,stride);tbU16(d+10,width);tbU16(d+12,height);tbU16(d+18,width);tbU16(d+20,height);tbU16(d+30,640);tbU16(d+32,480);}
+function tbRect(d,x,y,width,height){tbU16(d+14,x);tbU16(d+16,y);tbU16(d+18,width);tbU16(d+20,height);}
+function tbPlace(d,x,y,scale){tbU16(d+22,x);tbU16(d+24,y);stgWrite(d+3,scale);}
+function tbCopy(src,dst){return toolbox(6,src,dst,0);}
+function prepareMaps(){tbSurface(SCREEN,0,640,480,640,8);stgWrite(SCREEN+2,2);tbSurface(SAVED,PIX,640,480,640,8);}
+function savePlayfield(){tbRect(SCREEN,0,0,640,480);tbPlace(SAVED,0,0,1);tbRect(SAVED,0,0,640,480);return tbCopy(SCREEN,SAVED);}
+function restoreRect(x,y,w,h){x=Math.floor(x);y=Math.floor(y);w=Math.floor(w);h=Math.floor(h);if(x<0){w=w+x;x=0;}if(y<0){h=h+y;y=0;}if(x+w>640)w=640-x;if(y+h>480)h=480-y;if(w<1||h<1)return 0;tbRect(SAVED,x,y,w,h);tbPlace(SCREEN,x,y,1);tbRect(SCREEN,x,y,w,h);return tbCopy(SAVED,SCREEN);}
+function noteChange(x,y,w,h){x=Math.floor(x);y=Math.floor(y);w=Math.floor(w);h=Math.floor(h);if(x<0){w=w+x;x=0;}if(y<0){h=h+y;y=0;}if(x+w>640)w=640-x;if(y+h>480)h=480-y;if(w<1||h<1)return 0;tbRect(SCREEN,x,y,w,h);tbPlace(SAVED,x,y,1);tbRect(SAVED,x,y,w,h);return tbCopy(SCREEN,SAVED);}
+/* PACMAN2: JSON-free map ops (V1 silicon diet — JSON engine removal).
+   Values in map cells are single digits 0-6, so these loops are exact
+   equivalents of the JSON round-trips they replace. */
+// Level seeds are digit rows; live maze/beans remain independent numeric arrays.
+// Decode only on create/reset. This keeps every cell and frees seed-row arrays.
+function _copyMap(src){var out=[];for(var j=0;j<src.length;j++){var row=src[j],r=[],v;for(var i=0;i<row.length;i++){v=row[i];r.push(typeof row==='string'?(v==='0'?0:v==='1'?1:2):v);}out.push(r);}return out;}
+// Consumed cells are recorded once, in bounded x/y chunks (128 slots each).
+function _pacSpent(beans,x,y){
+    var xs=beans.eraseX[beans.eraseX.length-1],ys=beans.eraseY[beans.eraseY.length-1];
+    if(xs.length===128){xs=[];ys=[];beans.eraseX.push(xs);beans.eraseY.push(ys);}
+    xs.push(x);ys.push(y);
+}
+function _mapHasZero(src){for(var j=0;j<src.length;j++){var row=src[j];for(var i=0;i<row.length;i++){if(row[i]===0)return true;}}return false;}
+function _isPower(list,x,y){
+    var n=0;
+    while(n<list.length){
+        if(list[n][0]===x&&list[n][1]===y) return 1;
+        n=n+1;
+    }
+    return 0;
+}
+var _c2p={x:0,y:0};
+// BOARD #84: chase/flee are one-step only (same shape as MRDO creepToward).
+// Door/house 2 is walkable. On a 2, prefer smaller y then column 13 (the
+// door) — greedy-toward-player goes down and they never leave.
+// No maze clone, no finder, no Array.fill/map. Iterative flood on every
+// ghost every cell still froze HDMI (~15 dots). Eyes home is _ghostHome
+// once per tile. Original flood is PACORIG.HTML.
+var _gs={x:0,y:0,ok:0,change:0};
+var _g1=0;
+function _ghostOpen(data,x,y){
+    var yl,v;
+    yl=data.length;
+    if(y<0||y>=yl||x<0||x>=data[0].length) return 0;
+    v=data[y][x];
+    return (v<1||v==2)?1:0;
+}
+// mode 0 = chase / eyes home, 1 = flee, 2 = chase + leave-house.
+// while + d=d+1 (not for/d++). ≤16 env slots — extra names become GLOBAL
+// and a for(d++) that does not increment never leaves rAF (#84).
+function _ghostStep(data,sx,sy,ex,ey,mode){
+    var d,nx,ny,dist,bestD,yl;
+    _gs.ok=0; _gs.change=0;
+    yl=data.length;
+    if(data[sy]&&data[sy][sx]==2&&mode==2){
+        bestD=9999;
+        d=0;
+        while(d<4){
+            nx=sx+(d==0?1:d==2?-1:0);
+            ny=sy+(d==1?1:d==3?-1:0);
+            if(ny<0||ny>=yl||nx<0||nx>=data[0].length){
+                nx=(nx+data[0].length)%data[0].length; ny=(ny+yl)%yl;
+            }
+            if(_ghostOpen(data,nx,ny)){
+                dist = ny*100+(nx>13?nx-13:13-nx);
+                if(dist<bestD){
+                    bestD=dist; _gs.x=nx; _gs.y=ny; _gs.ok=1;
+                    _gs.change=(nx-sx>1||sx-nx>1||ny-sy>1||sy-ny>1)?1:0;
+                }
+            }
+            d=d+1;
+        }
+        return _gs;
+    }
+    if(mode==1) bestD=-1; else bestD=9999;
+    d=0;
+    while(d<4){
+        nx=sx+(d==0?1:d==2?-1:0);
+        ny=sy+(d==1?1:d==3?-1:0);
+        if(ny<0||ny>=yl||nx<0||nx>=data[0].length){
+            nx=(nx+data[0].length)%data[0].length; ny=(ny+yl)%yl;
+        }
+        if(_ghostOpen(data,nx,ny)){
+            dist=(nx>ex?nx-ex:ex-nx)+(ny>ey?ny-ey:ey-ny);
+            if(mode==1){
+                if(dist>bestD){
+                    bestD=dist; _gs.x=nx; _gs.y=ny; _gs.ok=1;
+                    _gs.change=(nx-sx>1||sx-nx>1||ny-sy>1||sy-ny>1)?1:0;
+                }
+            }else if(dist<bestD){
+                bestD=dist; _gs.x=nx; _gs.y=ny; _gs.ok=1;
+                _gs.change=(nx-sx>1||sx-nx>1||ny-sy>1||sy-ny>1)?1:0;
+            }
+        }
+        d=d+1;
+    }
+    if(!_gs.ok){
+        d=0;
+        while(d<4){
+            nx=sx+(d==0?1:d==2?-1:0);
+            ny=sy+(d==1?1:d==3?-1:0);
+            if(ny<0||ny>=yl||nx<0||nx>=data[0].length){
+                nx=(nx+data[0].length)%data[0].length; ny=(ny+yl)%yl;
+            }
+            if(_ghostOpen(data,nx,ny)){
+                _gs.x=nx; _gs.y=ny; _gs.ok=1;
+                _gs.change=(nx-sx>1||sx-nx>1||ny-sy>1||sy-ny>1)?1:0;
+                d=4;
+            }else d=d+1;
+        }
+    }
+    return _gs;
+}
+// Eyes home only. Shortest path on the EXISTING map (door/house 2 is open).
+// Do NOT restore Map.finder / _copyMapOpen — that clones 31 row-arrays plus
+// start/end/options (~36 objects) before the walk, then more per push.
+// PACMAN already holds ~676 of MAX_OBJ=960; one finder call can fault 3.
+// Chase may call this ONCE per frame (_g1), not every ghost every cell.
+// Do NOT restore finder / every-tick flood (#84). Marks visited as orig+10
+// then restores. Queue is numbers in one reused array (cap 128), not a grid.
+var _eyeQ=[];
+function _ghostHome(data,sx,sy,ex,ey){
+    // Same BFS/neighbour order and visited restoration. Scalar locals avoid
+    // repeated scratch-object property scans (16 names including parameters).
+    var qh,qt,x,y,d,nx,ny,v,xl,yl,pitch;
+    _gs.ok=0; _gs.change=0;
+    yl=data.length;
+    xl=data[0].length;
+    pitch=1;while(pitch<xl)pitch=pitch*2;
+    if(!_ghostOpen(data,sx,sy)) return _gs;
+    if(!_ghostOpen(data,ex,ey)) return _gs;
+    qh=0; qt=0;
+    _eyeQ[0]=ey*pitch+ex;
+    qt=1;
+    data[ey][ex]=data[ey][ex]+10;
+    while(qh<qt){
+        v=_eyeQ[qh%128];
+        qh=qh+1;
+        x=v&(pitch-1);
+        y=Math.floor(v/pitch);
+        d=0;
+        while(d<4){
+            nx=x+(d==0?1:d==2?-1:0);
+            ny=y+(d==1?1:d==3?-1:0);
+            if(ny<0||ny>=yl||nx<0||nx>=xl){
+                nx=(nx+xl)%xl;
+                ny=(ny+yl)%yl;
+            }
+            if(nx==sx&&ny==sy){
+                _gs.x=x; _gs.y=y; _gs.ok=1;
+                _gs.change=(_gs.x-sx>1||sx-_gs.x>1||_gs.y-sy>1||sy-_gs.y>1)?1:0;
+                d=4;
+                qh=qt;
+            }else if(_ghostOpen(data,nx,ny)){
+                data[ny][nx]=data[ny][nx]+10;
+                if(qt-qh>=128){
+                    d=4; qh=qt;
+                }else{
+                    _eyeQ[qt%128]=ny*pitch+nx;
+                    qt=qt+1;
+                }
+            }
+            if(d<4) d=d+1;
+        }
+    }
+    y=0;
+    while(y<yl){
+        x=0;
+        while(x<xl){
+            v=data[y][x];
+            if(v>=10) data[y][x]=v%10;
+            x=x+1;
+        }
+        y=y+1;
+    }
+    return _gs;
+}
+'use strict';
+/*!
+ * Pacman - HTML5 Game
+ * https://passer-by.com/pacman/
+ *
+ * Copyright (c) 2016-present, HaoLe Zheng
+ * Released under the MIT License.
+ * https://github.com/mumuy/pacman/blob/master/LICENSE
+*/
+
+/*
+* 小型游戏引擎
+*/
+
+function Game(id,params){
+    var _ = this;
+    var settings = {
+        width:640,						// NEW: JMR glass
+        height:480
+    };
+    Object.assign(_,settings,params);
+    var $canvas = document.getElementById(id);
+    $canvas.width = _.width;
+    $canvas.height = _.height;
+    var _context = $canvas.getContext('2d');
+// Shared application menu and About metadata; no private chrome.
+_context.systemWindow=8;
+_context.systemViewport=1;
+_context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
+	//画布上下文环境
+    var _stages = [];							//布景对象队列
+    var _events = {};							//事件集合
+    var _index=0,								//当前布景索引
+        _hander,  								//帧动画控制
+        _joyFireWas=0;							// NEW: stick FIRE edge (title / pause / restart)
+    //活动对象构造
+    var Item = function(params){
+        this._params = params||{};
+        this._id = 0;               //标志符
+        this._stage = null;         //与所属布景绑定
+        this._settings = {
+            x:0,					//位置坐标:横坐标
+            y:0,					//位置坐标:纵坐标
+            width:20,				//宽
+            height:20,				//高
+            type:0,					//对象类型,0表示普通对象(不与地图绑定),1表示玩家控制对象,2表示程序控制对象
+            color:'#F00',			//标识颜色
+            status:1,				//对象状态,0表示未激活/结束,1表示正常,2表示暂停,3表示临时,4表示异常
+            orientation:0,			//当前定位方向,0表示右,1表示下,2表示左,3表示上
+            speed:0,				//移动速度
+            //地图相关
+            location:null,			//定位地图,Map对象
+            coord:null,				//如果对象与地图绑定,需设置地图坐标;若不绑定,则设置位置坐标
+            path:[],				//NPC自动行走的路径
+            vector:null,			//目标坐标
+            //布局相关
+            frames:1,				//速度等级,内部计算器times多少帧变化一次
+            times:0,				//刷新画布计数(用于循环动画状态判断)
+            timeout:0,				//倒计时(用于过程动画状态判断)
+            control:{},				//控制缓存,到达定位点时处理
+            update:function(){}, 	//更新参数信息
+            draw:function(){}		//绘制
+        };
+        Object.assign(this,this._settings,this._params);
+    };
+    Item.prototype.bind = function(eventType,callback){
+        if(!_events[eventType]){
+            _events[eventType] = {};
+            $canvas.addEventListener(eventType,function(e){
+                var position = _.getPosition(e);
+                _stages[_index].items.forEach(function(item){
+                    if(item.x<=position.x&&position.x<=item.x+item.width&&item.y<=position.y&&position.y<=item.y+item.height){
+                        var key = 's'+_index+'i'+item._id;
+                        if(_events[eventType][key]){
+                            _events[eventType][key](e);
+                        }
+                    }
+                });
+                e.preventDefault();
+            });
+        }
+        _events[eventType]['s'+this._stage.index+'i'+this._id] = callback.bind(this);  //绑定作用域
+    };
+    //地图对象构造器
+    var Map = function(params){
+        this._params = params||{};
+        this._id = 0;               //标志符
+        this._stage = null;         //与所属布景绑定
+        this._settings = {
+            x:0,					//地图起点坐标
+            y:0,
+            size:14,				// NEW: 28*14=392 fits 640 with HUD
+            data:[],				//地图数据
+            x_length:0,				//二维数组x轴长度
+            y_length:0,				//二维数组y轴长度
+            frames:1,				//速度等级,内部计算器times多少帧变化一次
+            times:0,				//刷新画布计数(用于循环动画状态判断)
+            cache:false,    		//是否静态（如静态则设置缓存）
+            update:function(){},	//更新地图数据
+            draw:function(){},		//绘制地图
+        };
+        Object.assign(this,this._settings,this._params);
+    };
+    //获取地图上某点的值
+    Map.prototype.get = function(x,y){
+        if(this.data[y]&&typeof this.data[y][x]!='undefined'){
+            return this.data[y][x];
+        }
+        return -1;
+    };
+    //设置地图上某点的值 — FAST: beans eat inlines data[y][x]=1 (CODE_WORDS).
+    //地图坐标转画布坐标
+    Map.prototype.coord2position = function(cx,cy){
+        _c2p.x=this.x+cx*this.size+this.size/2;
+        _c2p.y=this.y+cy*this.size+this.size/2;
+        return _c2p;
+    };
+    //画布坐标转地图坐标
+    Map.prototype.position2coord = function(x,y){
+        var fx = Math.abs(x-this.x)%this.size-this.size/2;
+        var fy = Math.abs(y-this.y)%this.size-this.size/2;
+        return {
+            x:Math.floor((x-this.x)/this.size),
+            y:Math.floor((y-this.y)/this.size),
+            offset:Math.sqrt(fx*fx+fy*fy)
+        };
+    };
+    //寻址算法 — empty. Ghosts call _ghostStep directly. Original BFS is PACORIG.HTML.
+    // A/B: return [] here → board did not freeze. Do not put a maze walk back.
+    // FAST: omit Map.finder stub (dead; CODE_WORDS).
+    //布景对象构造器
+    var Stage = function(params){
+        this._params = params||{};
+        this._settings = {
+            index:0,                        //布景索引
+            status:0,						//布景状态,0表示未激活/结束,1表示正常,2表示暂停,3表示临时状态
+            maps:[],						//地图队列
+            audio:[],						//音频资源
+            images:[],						//图片资源
+            items:[],						//对象队列
+            timeout:0,						//倒计时(用于过程动画状态判断)
+            update:function(){}				//嗅探,处理布局下不同对象的相对关系
+        };
+        Object.assign(this,this._settings,this._params);
+    };
+    //添加对象
+    Stage.prototype.createItem = function(options){
+        var item = new Item(options);
+        //动态属性
+        if(item.location){
+            Object.assign(item,item.location.coord2position(item.coord.x,item.coord.y));
+        }
+        //关系绑定
+        item._stage = this;
+        item._id = this.items.length;
+        this.items.push(item);
+        return item;
+    };
+    //重置物体位置
+    Stage.prototype.resetItems = function(){
+        this.status = 1;
+        this.items.forEach(function(item,index){
+            Object.assign(item,item._settings,item._params);
+            if(item.location){
+                Object.assign(item,item.location.coord2position(item.coord.x,item.coord.y));
+            }
+        });
+    };
+    //获取对象列表
+    Stage.prototype.getItemsByType = function(type){
+        return this.items.filter(function(item){
+	    return item.type == type;
+        });
+    };
+    //添加地图
+    Stage.prototype.createMap = function(options){
+        var map = new Map(options);
+        //动态属性
+        map.data = _copyMap(map._params.data);
+        map.y_length = map.data.length;
+        map.x_length = map.data[0].length;
+        map.imageData = null;
+        //关系绑定
+        map._stage = this;
+        map._id = this.maps.length;
+        this.maps.push(map);
+        return map;
+    };
+    //重置地图
+    Stage.prototype.resetMaps = function(){
+        this.status = 1;
+        this.maps.forEach(function(map){
+            Object.assign(map,map._settings,map._params);
+            map.data = _copyMap(map._params.data);
+            map.y_length = map.data.length;
+            map.x_length = map.data[0].length;
+            map.imageData = null;
+        });
+    };
+    //重置
+    Stage.prototype.reset = function(){
+        Object.assign(this,this._settings,this._params);
+        this.resetItems();
+        this.resetMaps();
+    };
+    //绑定事件
+    Stage.prototype.bind = function(eventType,callback){
+        if(!_events[eventType]){
+            _events[eventType] = {};
+            window.addEventListener(eventType,function(e){
+                var key = 's' + _index;
+                if(_events[eventType][key]){
+                    _events[eventType][key](e);
+                }
+                e.preventDefault();
+            });
+        }
+        _events[eventType]['s'+this.index] = callback.bind(this);	//绑定事件作用域
+    };
+    //动画开始
+    this.start = function() {
+        var f = 0;		//帧数计算
+        var fn = function(){
+            /* FAST: rAF is the frame clock on this machine. new Date() every
+               tick was wasted JS and capped Chrome; FPGA is not 144 Hz. */
+            var stage = _stages[_index];
+            var mi, ii, map, item;
+            // NEW: Pmod stick FIRE1/FIRE2 → Enter (title start, pause, game-over)
+            var sj = 0;
+            try { sj = joy() | 0; } catch (je) { sj = 0; }
+            var fireOn = (sj & 16) || (sj & 32);
+            if (fireOn && !_joyFireWas) {
+                var kd = _events['keydown'];
+                var cb = kd && kd['s' + _index];
+                if (cb) cb({keyCode: 13, key: 'Enter'});
+            }
+            _joyFireWas = fireOn ? 1 : 0;
+            /* FAST: skip full wipe when maze ImageData will restore the
+               playfield — same as PACMAN. Maze is cached once; beans redraw
+               every frame so pellets stay PACMAN (arcs + pulse). */
+            if(!stage.maps.length || !stage.maps[0].imageData){
+            _context.clearRect(0,0,_.width,_.height);		//清除画布
+            _context.fillStyle = '#000000';
+            _context.fillRect(0,0,_.width,_.height);
+            }
+            f++;
+            if(stage.timeout){
+                stage.timeout--;
+            }
+            if(stage.update()!=false){		            //update返回false,则不绘制
+                for(mi=0;mi<stage.maps.length;mi++){
+                    map=stage.maps[mi];
+                    if(!(f%map.frames)){
+                        map.times = f/map.frames;		//计数器
+                    }
+                    if(map.cache){
+                        if(map.imageData){
+                            if(!cbOn){
+                                prepareMaps();
+                                if(savePlayfield()>=0) cbOn=1;
+                            }
+                        }else{
+                            map.draw(_context);
+                        }
+                    }else{
+                    	map.update();
+                        map.draw(_context);
+                    }
+                }
+                /* FAST: snapshot maze AFTER beans stamp regulars (not 300 fillRect every frame). */
+                if(stage.maps.length&&stage.maps[0].cache&&!stage.maps[0].imageData){
+                    map=stage.maps[0];
+                    // Wall strokes extend one pixel past the tile bounds.
+                    _pacCacheW=Math.min(_.width,map.x+map.x_length*map.size+2);
+                    _pacCacheH=Math.min(_.height,map.y+map.y_length*map.size+2);
+                    prepareMaps();
+                    if(savePlayfield()>=0) cbOn=1;
+                    stage.maps[0].imageData = 1;
+                }
+                for(ii=0;ii<stage.items.length;ii++){
+                    item=stage.items[ii];
+                    if(!(f%item.frames)){
+                        item.times = f/item.frames;		   //计数器
+                    }
+                    if(stage.status==1&&item.status!=2){  	//对象及布景状态都不处于暂停状态
+                        if(item.location){
+                            item.coord = item.location.position2coord(item.x,item.y);
+                        }
+                        if(item.timeout){
+                            item.timeout--;
+                        }
+                        item.update();
+                    }
+                    if(cbOn && item._cb) restoreRect(item._cx,item._cy,item._cw,item._ch);
+                    item.draw(_context);
+                    if(cbOn && item.width){item._cx=Math.floor(item.x-4);item._cy=Math.floor(item.y-4);item._cw=item.width+8;item._ch=item.height+8;item._cb=1;}
+                }
+            }
+            _hander = requestAnimationFrame(fn);
+        };
+        _hander = requestAnimationFrame(fn);
+    };
+    //动画结束
+    this.stop = function(){
+        _hander&&cancelAnimationFrame(_hander);
+    };
+    //事件坐标
+    this.getPosition = function(e){
+        var box = $canvas.getBoundingClientRect();
+        return {
+            x:e.clientX-box.left*(_.width/box.width),
+            y:e.clientY-box.top*(_.height/box.height)
+        };
+    }
+    //创建布景
+    this.createStage = function(options){
+        var stage = new Stage(options);
+        stage.index = _stages.length;
+        _stages.push(stage);
+        return stage;
+    };
+    //指定布景
+    this.setStage = function(index){
+        _stages[_index].status = 0;
+        _index = index;
+        _stages[_index].status = 1;
+        _stages[_index].reset(); //重置
+        return _stages[_index];
+    };
+    //下个布景
+    this.nextStage = function(){
+        if(_index<_stages.length-1){
+            return this.setStage(++_index);
+        }else{
+            throw new Error('unfound new stage.');
+        }
+    };
+    //获取布景列表
+    this.getStages = function(){
+        return _stages;
+    };
+    //初始化游戏引擎
+    this.init = function(){
+        _index = 0;
+        this.start();
+    };
+}
+
+</script>
+<script>
+/*!
+ * Pacman - HTML5 Game
+ * https://passer-by.com/pacman/
+ *
+ * Copyright (c) 2016-present, HaoLe Zheng
+ * Released under the MIT License.
+ * https://github.com/mumuy/pacman/blob/master/LICENSE
+*/
+
+//主程序,业务逻辑
+(function(){
+	var _COIGIG = [		//关卡
+		{				//第1关
+			'map':[		//地图数据
+				'1111111111111111111111111111',
+				'1000000000000110000000000001',
+				'1011110111110110111110111101',
+				'1011110111110110111110111101',
+				'1011110111110110111110111101',
+				'1000000000000000000000000001',
+				'1011110110111111110110111101',
+				'1011110110111111110110111101',
+				'1000000110000110000110000001',
+				'1111110111110110111110111111',
+				'1111110111110110111110111111',
+				'1111110110000000000110111111',
+				'1111110110111221110110111111',
+				'1111110110122222210110111111',
+				'0000000000122222210000000000',
+				'1111110110122222210110111111',
+				'1111110110111111110110111111',
+				'1111110110000000000110111111',
+				'1111110110111111110110111111',
+				'1111110110111111110110111111',
+				'1000000000000110000000000001',
+				'1011110111110110111110111101',
+				'1011110111110110111110111101',
+				'1000110000000000000000110001',
+				'1110110110111111110110110111',
+				'1110110110111111110110110111',
+				'1000000110000110000110000001',
+				'1011111111110110111111111101',
+				'1011111111110110111111111101',
+				'1000000000000000000000000001',
+				'1111111111111111111111111111'
+			],
+			'wall_color':'#09f',
+			'goods':[[1,3],[26,3],[1,23],[26,23]]
+		},
+		{				//第2关
+			'map':[		//地图数据
+				'1111111111111111111111111111',
+				'1000000110000000000110000001',
+				'1011110110111111110110111101',
+				'1011110110111111110110111101',
+				'1000000000000000000000000001',
+				'1110110111110110111110110111',
+				'1110110111110110111110110111',
+				'1110110111110110111110110111',
+				'0000110000000110000000110000',
+				'1110111110111111110111110111',
+				'1110111110111111110111110111',
+				'1110000000000000000000000111',
+				'1110111110111221110111110111',
+				'1110111110122222210111110111',
+				'1110110000122222210000110111',
+				'1110110110122222210110110111',
+				'1110110110111111110110110111',
+				'0000000110000000000110000000',
+				'1110111111110110111111110111',
+				'1110111111110110111111110111',
+				'1110000000000110000000000111',
+				'1110111110111111110111110111',
+				'1110111110111111110111110111',
+				'1000000000000000000000000001',
+				'1011110111110110111110111101',
+				'1011110111110110111110111101',
+				'1011110110000110000110111101',
+				'1011110110111111110110111101',
+				'1011110110111111110110111101',
+				'1000000000000000000000000001',
+				'1111111111111111111111111111'
+			],
+			'wall_color':'#FF5983',
+			'goods':[[1,2],[26,2],[1,27],[26,27]]
+		},
+		{				//第3关
+			'map':[		//地图数据
+				'1111111111111111111111111111',
+				'1000000000110000110000000001',
+				'1011111110110110110111111101',
+				'1011111110110110110111111101',
+				'1011000000000110000000001101',
+				'1011011011110110111101101101',
+				'1000011011110110111101100001',
+				'1111011011110110111101101111',
+				'1111011000000000000001101111',
+				'0000011110111111110111100000',
+				'1011011110111111110111101101',
+				'1011000000000000000000001101',
+				'1011110110111221110110111101',
+				'1011110110122222210110111101',
+				'1000000110122222210110000001',
+				'1011011110122222210111101101',
+				'1011011110111111110111101101',
+				'1011000000000000000000001101',
+				'1011110111110110111110111101',
+				'1011110111110110111110111101',
+				'1000000110000110000110000001',
+				'1110110110111111110110110111',
+				'1110110110111111110110110111',
+				'1000110000000000000000110001',
+				'1011110111110110111110111101',
+				'1011110111110110111110111101',
+				'1000000110000110000110000001',
+				'1011110110111111110110111101',
+				'1011110110111111110110111101',
+				'1000000110000000000110000001',
+				'1111111111111111111111111111'
+			],
+			'wall_color':'#E08031',
+			'goods':[[1,2],[26,2],[1,23],[26,23]]
+		},
+		{				//第4关
+			'map':[		//地图数据
+				'1111111111111111111111111111',
+				'1000000110000000000110000001',
+				'1011110110111111110110111101',
+				'1011110110111111110110111101',
+				'1000110000000110000000110001',
+				'1110110110110110110110110111',
+				'1110110110110110110110110111',
+				'0000000110110110110110000000',
+				'1110110110110000110110110111',
+				'1110110110111111110110110111',
+				'1000110110111111110110110001',
+				'1011110000000000000000111101',
+				'1011110110111221110110111101',
+				'1000000110122222210110000001',
+				'1110111110122222210111110111',
+				'1110111110122222210111110111',
+				'1000000110111111110110000001',
+				'1011110110000000000110111101',
+				'1011110110111111110110111101',
+				'1000110110111111110110110001',
+				'1110110110000110000110110111',
+				'1110110110110110110110110111',
+				'1110110110110110110110110111',
+				'0000000000110000110000000000',
+				'1110110111110110111110110111',
+				'1110110111110110111110110111',
+				'1000110000000110000000110001',
+				'1011110110111111110110111101',
+				'1011110110111111110110111101',
+				'1000000110000000000110000001',
+				'1111111111111111111111111111'
+			],
+			'wall_color':'#37C6C0',
+			'goods':[[1,3],[26,3],[1,28],[26,28]]
+		},
+		{				//第5关
+			'map':[		//地图数据
+				'1111111111111111111111111111',
+				'1000000000000110000000000001',
+				'1011110111110110111110111101',
+				'1011110111110110111110111101',
+				'1000000000110110110000000001',
+				'1110111110110000110111110111',
+				'1110111110110110110111110111',
+				'1000000110110110110110000001',
+				'1011110110000110000110111101',
+				'1011110110111111110110111101',
+				'1000110110111111110110110001',
+				'1110110000000000000000110111',
+				'1110110110111221110110110111',
+				'1110110110122222210110110111',
+				'0000000110122222210110000000',
+				'1110111110122222210111110111',
+				'1110111110111111110111110111',
+				'1000000000000000000000000001',
+				'1011110110111111110110111101',
+				'1011110110111111110110111101',
+				'1011000110000110000110001101',
+				'1011011111110110111111101101',
+				'1011011111110110111111101101',
+				'1000000000000000000000000001',
+				'1111111011011111101101111111',
+				'1111111011011111101101111111',
+				'1000000011000110001100000001',
+				'1011111111110110111111111101',
+				'1011111111110110111111111101',
+				'1000000000000110000000000001',
+				'1111111111111111111111111111'
+			],
+			'wall_color':'#5ED5D1',
+			'goods':[[1,3],[26,3],[1,27],[26,27]]
+		},
+		{				//第6关
+			'map':[		//地图数据
+				'1111111111111111111111111111',
+				'1000000000000110000000000001',
+				'1011110111110110111110111101',
+				'1011110111110110111110111101',
+				'1000110000110110110000110001',
+				'1110110110110000110110110111',
+				'1110110110110110110110110111',
+				'1110110110110110110110110111',
+				'1110000110000110000110000111',
+				'1110111110111111110111110111',
+				'1110111110111111110111110111',
+				'1110000000000000000000000111',
+				'1110110110111221110110110111',
+				'1110110110122222210110110111',
+				'0000110110122222210110110000',
+				'1111110110122222210110111111',
+				'1111110110111111110110111111',
+				'0000110110000000000110110000',
+				'1110110111110110111110110111',
+				'1110110111110110111110110111',
+				'1110000110000110000110000111',
+				'1110110110111111110110110111',
+				'1110110110111111110110110111',
+				'1000110000000000000000110001',
+				'1011110111110110111110111101',
+				'1011110111110110111110111101',
+				'1000000110000110000110000001',
+				'1011110110111111110110111101',
+				'1011110110111111110110111101',
+				'1000000000000000000000000001',
+				'1111111111111111111111111111'
+			],
+			'wall_color':'#7E884F',
+			'goods':[[1,3],[26,3],[1,28],[26,28]]
+		},
+		{				//第7关
+			'map':[		//地图数据
+				'1111111111111111111111111111',
+				'1000000000000000000000000001',
+				'1011110111110110111110111101',
+				'1011110111110110111110111101',
+				'1000000000110110110000000001',
+				'1110111110110110110111110111',
+				'1110111110110110110111110111',
+				'0000000110110110110110000000',
+				'1110110110000000000110110111',
+				'1110110110111111110110110111',
+				'1110110110111111110110110111',
+				'1000110000000000000000110001',
+				'1011111110111221110111111101',
+				'1011111110122222210111111101',
+				'1000000000122222210000000001',
+				'1011011110122222210111101101',
+				'1011011110111111110111101101',
+				'1011000110000000000110001101',
+				'1011110110110110110110111101',
+				'1011110110110110110110111101',
+				'1011000000110110110000001101',
+				'1011011111110110111111101101',
+				'1011011111110110111111101101',
+				'1000000000000000000000000001',
+				'1011011110111111110111101101',
+				'1011011110111111110111101101',
+				'1011000110000110000110001101',
+				'1011110110110110110110111101',
+				'1011110110110110110110111101',
+				'1000000000110000110000000001',
+				'1111111111111111111111111111'
+			],
+			'wall_color':'#C9C',
+			'goods':[[1,3],[26,3],[1,24],[26,24]]
+		},
+		{				//第8关
+			'map':[		//地图数据
+				'1111111111111111111111111111',
+				'1000000000000000000000000001',
+				'1011110110111111110110111101',
+				'1011110110111111110110111101',
+				'1011000110000110000110001101',
+				'1011011110110110110111101101',
+				'1011011110110110110111101101',
+				'0000000110110110110110000000',
+				'1011110110110000110110111101',
+				'1011110110111111110110111101',
+				'1000110110111111110110110001',
+				'1110110000000000000000110111',
+				'1110110110111221110110110111',
+				'1110110110122222210110110111',
+				'1110000110122222210110000111',
+				'1110111110122222210111110111',
+				'1110111110111111110111110111',
+				'1110000000000000000000000111',
+				'1110111111110110111111110111',
+				'1110111111110110111111110111',
+				'0000110000000110000000110000',
+				'1110110110111111110110110111',
+				'1110110110111111110110110111',
+				'1000000110000000000110000001',
+				'1011110111110110111110111101',
+				'1011110111110110111110111101',
+				'1011000000000110000000001101',
+				'1011011111011111101111101101',
+				'1011011111011111101111101101',
+				'1000000000000000000000000001',
+				'1111111111111111111111111111'
+			],
+			'wall_color':'#EB3F2F',
+			'goods':[[1,4],[26,4],[1,25],[26,25]]
+		},
+		{				//第9关
+			'map':[		//地图数据
+				'1111111111111111111111111111',
+				'1000000000000110000000000001',
+				'1011110111110110111110111101',
+				'1011110111110110111110111101',
+				'1011000000110110110000001101',
+				'1011011110110000110111101101',
+				'1011011110110110110111101101',
+				'1000000110110110110110000001',
+				'1011110110000110000110111101',
+				'1011110110111111110110111101',
+				'1000110110111111110110110001',
+				'1110110000000000000000110111',
+				'1110110110111221110110110111',
+				'1110000110122222210110000111',
+				'1110110110122222210110110111',
+				'1110110110122222210110110111',
+				'1110110110111111110110110111',
+				'1000110110000000000110110001',
+				'1011110111110110111110111101',
+				'1011110111110110111110111101',
+				'1000000000000110000000000001',
+				'1110111110111111110111110111',
+				'1110111110111111110111110111',
+				'0000000110000000000110000000',
+				'1110110110111111110110110111',
+				'1110110110111111110110110111',
+				'1000110000110000110000110001',
+				'1011111110110110110111111101',
+				'1011111110110110110111111101',
+				'1000000000000110000000000001',
+				'1111111111111111111111111111'
+			],
+			'wall_color':'#2E68AA',
+			'goods':[[1,6],[26,6],[1,27],[26,27]]
+		},
+		{				//第10关
+			'map':[		//地图数据
+				'1111111111111111111111111111',
+				'1000000110000000000110000001',
+				'1011110110111111110110111101',
+				'1011110110111111110110111101',
+				'1011110110110000110110111101',
+				'1000000110110110110110000001',
+				'1011011110110110110111101101',
+				'1011011110110110110111101101',
+				'1011000000000110000000001101',
+				'1011110110111111110110111101',
+				'1011110110111111110110111101',
+				'1000000110000000000110000001',
+				'1110111110111221110111110111',
+				'1110111110122222210111110111',
+				'1110000110122222210110000111',
+				'1110110110122222210110110111',
+				'1110110110111111110110110111',
+				'1110110000000000000000110111',
+				'1110111110111111110111110111',
+				'1110111110111111110111110111',
+				'1110000000000110000000000111',
+				'1110111110110110110111110111',
+				'1110111110110110110111110111',
+				'0000000110110000110110000000',
+				'1110110110110110110110110111',
+				'1110110110110110110110110111',
+				'1000110110000110000110110001',
+				'1011110110111111110110111101',
+				'1011110110111111110110111101',
+				'1000000000000000000000000001',
+				'1111111111111111111111111111'
+			],
+			'wall_color':'#C1194E',
+			'goods':[[1,4],[26,4],[1,28],[26,28]]
+		},
+		{				//第11关
+			'map':[		//地图数据
+				'1111111111111111111111111111',
+				'1000000000000000000000000001',
+				'1011111111110110111111111101',
+				'1011111111110110111111111101',
+				'1000000110000110000110000001',
+				'1011110110111111110110111101',
+				'1011110110111111110110111101',
+				'1011000000000000000000001101',
+				'1011011110111111110111101101',
+				'1011011110111111110111101101',
+				'1000000110111111110110000001',
+				'1011110110000000000110111101',
+				'1011110110111221110110111101',
+				'1000110000122222210000110001',
+				'1110110110122222210110110111',
+				'1110110110122222210110110111',
+				'1110110110111111110110110111',
+				'1110000110000000000110000111',
+				'1110111110111111110111110111',
+				'1110111110111111110111110111',
+				'1110000000000110000000000111',
+				'1110111111110110111111110111',
+				'1110111111110110111111110111',
+				'0000000110000000000110000000',
+				'1110110110111111110110110111',
+				'1110110110111111110110110111',
+				'1000110000000110000000110001',
+				'1011111110110110110111111101',
+				'1011111110110110110111111101',
+				'1000000000110000110000000001',
+				'1111111111111111111111111111'
+			],
+			'wall_color':'#56A36C',
+			'goods':[[1,3],[26,3],[1,28],[26,28]]
+		},
+		{				//第12关
+			'map':[		//地图数据
+				'1111111111111111111111111111',
+				'1000000000000110000000000001',
+				'1011011111110110111111101101',
+				'1011011111110110111111101101',
+				'1011000000110110110000001101',
+				'1011110110110000110110111101',
+				'1011110110110110110110111101',
+				'1000000110110110110110000001',
+				'1110111110000110000111110111',
+				'1110111110111111110111110111',
+				'1110000110111111110110000111',
+				'1110110110000000000110110111',
+				'1110110110111221110110110111',
+				'1110110110122222210110110111',
+				'0000110000122222210000110000',
+				'1111111110122222210111111111',
+				'1111111110111111110111111111',
+				'0000110000000000000000110000',
+				'1110110110111111110110110111',
+				'1110110110111111110110110111',
+				'1110000110000110000110000111',
+				'1110111110110110110111110111',
+				'1110111110110110110111110111',
+				'1110000000110000110000000111',
+				'1110110111110110111110110111',
+				'1110110111110110111110110111',
+				'1000110000000110000000110001',
+				'1011110110111111110110111101',
+				'1011110110111111110110111101',
+				'1000000110000000000110000001',
+				'1111111111111111111111111111'
+			],
+			'wall_color':'#9966CC',
+			'goods':[[1,4],[26,4],[1,27],[26,27]]
+		}
+	];
+	_COLOR = ['#F00','#F93','#0CF','#F9C'],	//NPC颜色
+	_COS = [1,0,-1,0],
+	_SIN = [0,1,0,-1],
+	_LIFE = 5,				//玩家生命值
+	_SCORE = 0;				//玩家得分
+
+	var game = new Game('canvas');
+	//启动页
+	(function(){
+		var stage = game.createStage();
+		//logo
+		stage.createItem({
+			x:game.width/2,
+			y:game.height*.35,
+			width:100,
+			height:100,
+			frames:3,
+			draw:function(context){
+				var t = Math.abs(5-this.times%10);
+				context.fillStyle = '#FFE600';
+				context.beginPath();
+				context.arc(this.x,this.y,this.width/2,t*.04*Math.PI,(2-t*.04)*Math.PI,false);
+				context.lineTo(this.x,this.y);
+				context.closePath();
+				context.fill();
+				context.fillStyle = '#000';
+				context.beginPath();
+				context.arc(this.x+5,this.y-27,7,0,2*Math.PI,false);
+				context.closePath();
+				context.fill();
+			}
+		});
+		// 游戏名
+		stage.createItem({
+			x:game.width/2,
+			y:game.height*.5,
+			draw:function(context){
+				context.font = 'bold 42px PressStart2P';
+				context.textAlign = 'center';
+				context.textBaseline = 'middle';
+				context.fillStyle = '#FFF';
+				context.fillText('Pac-Man',this.x,this.y);
+			}
+		});
+		// 提示
+		stage.createItem({
+			x:game.width/2,
+			y:game.height*.64,
+			frames:28,
+			draw:function(context){
+				if(this.times%2){
+					context.font = 'bold 14px PressStart2P';
+					context.textAlign = 'center';
+					context.textBaseline = 'middle';
+					context.fillStyle = '#AAA';
+					context.fillText('Press Enter to start',this.x,this.y);
+				}
+			}
+		});
+		//版权信息
+		stage.createItem({
+			x:game.width-10,
+			y:game.height-5,
+			draw:function(context){
+				var text = '© passer-by.com';
+				context.font = '12px/20px PressStart2P';
+				context.textAlign = 'left';
+				context.textBaseline = 'top';
+				context.fillStyle = '#AAA';
+				this.width = context.measureText(text).width;
+				this.x = game.width-this.width-10;
+				this.y = game.height-20-5;
+				context.fillText(text,this.x,this.y);
+			}
+		}).bind('click',function(){
+			window.open('https://passer-by.com');
+		});
+		//事件绑定
+		stage.bind('keydown',function(e){
+			switch(e.keyCode){
+				case 13:
+				case 32:
+				game.nextStage();
+				break;
+			}
+		});
+	})();
+	//游戏主程序
+	(function(){
+		_COIGIG.forEach(function(config,index){
+			var stage,map,beans,items,player;
+			stage = game.createStage({
+				update:function(){
+					var stage = this;
+					// NEW: stick bits OR into pac-man intent (0 right, 1 down, 2 left, 3 up)
+					var pj = 0;
+					_g1=0;
+					try { pj = joy() | 0; } catch (je) { pj = 0; }
+					if (pj & 8) player.control.orientation = 0;
+					else if (pj & 2) player.control.orientation = 1;
+					else if (pj & 4) player.control.orientation = 2;
+					else if (pj & 1) player.control.orientation = 3;
+					if(stage.status==1){								//场景正常运行
+						var hi, item;
+						for(hi=0;hi<items.length;hi++){
+							item=items[hi];
+							if(map&&!map.get(item.coord.x,item.coord.y)&&!map.get(player.coord.x,player.coord.y)){
+								var dx = item.x-player.x;
+								var dy = item.y-player.y;
+								if(dx*dx+dy*dy<368&&item.status!=4){		// NEW: hit radius *(14/20)^2
+									if(item.status==3){
+										item.status = 4;
+										_SCORE += 10;
+										playSfx(sfxEat);
+									}else{
+										stage.status = 3;
+										stage.timeout = 30;
+										playSfx(sfxDie);
+									}
+								}
+							}
+						}
+						if(!_mapHasZero(beans.data)){	//当没有物品的时候，进入下一关
+							game.nextStage();
+						}
+					}else if(stage.status==3){		//场景临时状态
+						if(!stage.timeout){
+							_LIFE--;
+							if(_LIFE){
+								stage.resetItems();
+							}else{
+								var stages = game.getStages();
+								game.setStage(stages.length-1);
+								return false;
+							}
+						}
+					}
+				}
+			});
+			//绘制地图
+			map = stage.createMap({
+				x:16,
+				y:8,
+				data:config['map'],
+				cache:true,
+				draw:function(context){
+					/* Same walls as PACMAN. Cached once into maze ImageData. */
+					context.lineWidth = 2;
+					for(var j=0; j<this.y_length; j++){
+						for(var i=0; i<this.x_length; i++){
+							var value = this.get(i,j);
+							if(value){
+								var code = [0,0,0,0];
+								if(this.get(i+1,j)&&!(this.get(i+1,j-1)&&this.get(i+1,j+1)&&this.get(i,j-1)&&this.get(i,j+1))){
+									code[0]=1;
+								}
+								if(this.get(i,j+1)&&!(this.get(i-1,j+1)&&this.get(i+1,j+1)&&this.get(i-1,j)&&this.get(i+1,j))){
+									code[1]=1;
+								}
+								if(this.get(i-1,j)&&!(this.get(i-1,j-1)&&this.get(i-1,j+1)&&this.get(i,j-1)&&this.get(i,j+1))){
+									code[2]=1;
+								}
+								if(this.get(i,j-1)&&!(this.get(i-1,j-1)&&this.get(i+1,j-1)&&this.get(i-1,j)&&this.get(i+1,j))){
+									code[3]=1;
+								}
+								if(code.indexOf(1)>-1){
+									context.strokeStyle=value==2?"#FFF":config['wall_color'];
+									var pos = this.coord2position(i,j);
+									switch(code.join('')){
+										case '1100':
+											context.beginPath();
+											context.arc(pos.x+this.size/2,pos.y+this.size/2,this.size/2,Math.PI,1.5*Math.PI,false);
+											context.stroke();
+											context.closePath();
+											break;
+										case '0110':
+											context.beginPath();
+											context.arc(pos.x-this.size/2,pos.y+this.size/2,this.size/2,1.5*Math.PI,2*Math.PI,false);
+											context.stroke();
+											context.closePath();
+											break;
+										case '0011':
+											context.beginPath();
+											context.arc(pos.x-this.size/2,pos.y-this.size/2,this.size/2,0,.5*Math.PI,false);
+											context.stroke();
+											context.closePath();
+											break;
+										case '1001':
+											context.beginPath();
+											context.arc(pos.x+this.size/2,pos.y-this.size/2,this.size/2,.5*Math.PI,1*Math.PI,false);
+											context.stroke();
+											context.closePath();
+											break;
+										default:
+											var dist = this.size/2;
+											code.forEach(function(v,index){
+												if(v){
+													context.beginPath();
+													context.moveTo(pos.x,pos.y);
+													context.lineTo(pos.x-_COS[index]*dist,pos.y-_SIN[index]*dist);
+													context.stroke();
+													context.closePath();
+												}
+											});
+									}
+								}
+							}
+						}
+					}
+				}
+			});
+			//物品地图
+			beans = stage.createMap({
+				x:16,
+				y:8,
+				data:config['map'],
+				frames:8,
+				draw:function(context){
+                    /* Initial regular pellets bake into the maze. Replays restore
+                       only the consumed cells and animate the existing power list. */
+                    var j,i,v,baked,xs,ys;
+                    baked=stage.maps[0].imageData;
+                    if(!baked){
+                        this.eraseX=[[]];this.eraseY=[[]];
+                        for(j=0;j<this.y_length;j++){
+                            for(i=0;i<this.x_length;i++){
+                                v=this.data[j][i];
+                                if(v===3){
+                                    _pacSpent(this,i,j);
+                                    this.coord2position(i,j);
+                                    context.fillStyle="#000000";
+                                    context.fillRect(_c2p.x-2,_c2p.y-2,4,4);
+                                }else if(!v&&!_isPower(config['goods'],i,j)){
+                                    this.coord2position(i,j);
+                                    context.fillStyle="#F5F5DC";
+                                    context.fillRect(_c2p.x-2,_c2p.y-2,4,4);
+                                }
+                            }
+                        }
+                    }else{
+                        for(j=0;j<this.eraseX.length;j++){
+                            xs=this.eraseX[j];ys=this.eraseY[j];
+                            for(i=0;i<xs.length;i++){
+                                this.coord2position(xs[i],ys[i]);
+                                context.fillStyle="#000000";
+                                context.fillRect(_c2p.x-2,_c2p.y-2,4,4);
+                                if(cbOn) noteChange(_c2p.x-2,_c2p.y-2,4,4);
+                            }
+                        }
+                        for(i=0;i<config['goods'].length;i++){
+                            xs=config['goods'][i];
+                            if(!this.data[xs[1]][xs[0]]){
+                                this.coord2position(xs[0],xs[1]);
+                                if(cbOn) restoreRect(_c2p.x-8,_c2p.y-8,16,16);
+                                context.fillStyle="#F5F5DC";
+                                context.beginPath();
+                                context.arc(_c2p.x,_c2p.y,3+this.times%2,0,2*Math.PI,true);
+                                context.fill();
+                                context.closePath();
+                            }
+                        }
+                    }
+				}
+			});
+			//关卡得分
+			stage.createItem({
+				x:420,
+				y:80,
+				draw:function(context){
+					context.font = 'bold 24px PressStart2P';
+					context.textAlign = 'left';
+					context.textBaseline = 'bottom';
+					context.fillStyle = '#C33';
+					context.fillText('SCORE',this.x,this.y);
+					context.font = '24px PressStart2P';
+					context.textAlign = 'left';
+					context.textBaseline = 'top';
+					context.fillStyle = '#FFF';
+					context.fillText(_SCORE,this.x+12,this.y+10);
+					context.font = 'bold 24px PressStart2P';
+					context.textAlign = 'left';
+					context.textBaseline = 'bottom';
+					context.fillStyle = '#C33';
+					context.fillText('LEVEL',this.x,this.y+72);
+					context.font = '24px PressStart2P';
+					context.textAlign = 'left';
+					context.textBaseline = 'top';
+					context.fillStyle = '#FFF';
+					context.fillText(index+1,this.x+12,this.y+82);
+				}
+			});
+			//状态文字
+			stage.createItem({
+				x:420,
+				y:285,
+				frames:25,
+				draw:function(context){
+					if(stage.status==2&&this.times%2){
+						context.font = '24px PressStart2P';
+						context.textAlign = 'left';
+						context.textBaseline = 'center';
+						context.fillStyle = '#FFF';
+						context.fillText('PAUSE',this.x,this.y);
+					}
+				}
+			});
+			//生命值
+			stage.createItem({
+				x:430,
+				y:400,
+				width:30,
+				height:30,
+				draw:function(context){
+					var max = Math.min(_LIFE-1,5);
+					for(var i=0;i<max;i++){
+						var x=this.x+40*i,y=this.y;
+						context.fillStyle = '#FFE600';
+						context.beginPath();
+						context.arc(x,y,this.width/2,.15*Math.PI,-.15*Math.PI,false);
+						context.lineTo(x,y);
+						context.closePath();
+						context.fill();
+					}
+					context.font = '18px PressStart2P';
+					context.textAlign = 'left';
+					context.textBaseline = 'center';
+					context.fillStyle = '#FFF';
+					context.fillText('X',this.x-15,this.y+30);
+					context.font = '24px PressStart2P';
+					context.fillText((_LIFE-1),this.x+10,this.y+26);
+				}
+			});
+			//NPC
+			for(var i=0;i<4;i++){
+				stage.createItem({
+					// NEW: 21 = 30*(14/20) to match size:14 tiles
+					width:21,
+					height:21,
+					orientation:3,
+					color:_COLOR[i],
+					location:map,
+					coord:{x:12+i,y:14},
+					vector:{x:12+i,y:14},
+					type:2,
+					frames:10,
+					speed:1,
+					timeout:Math.floor(Math.random()*120),
+					update:function(){
+						if(this.status==3&&!this.timeout){
+							this.status = 1;
+						}
+						if(!this.coord.offset){			//到达坐标中心时计算
+							if(this.status==1){
+								if(!this.timeout){		//定时器
+									if(!_g1){
+										_ghostHome(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y);
+										_g1=1;
+										if(!_gs.ok) _ghostStep(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y,2);
+									}else{
+										_ghostStep(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y,2);
+									}
+									if(_gs.ok){ this.vector.x=_gs.x; this.vector.y=_gs.y; this.vector.change=_gs.change; }
+								}
+							}else if(this.status==3){
+								_ghostStep(map.data,this.coord.x,this.coord.y,player.coord.x,player.coord.y,1);
+								if(_gs.ok){ this.vector.x=_gs.x; this.vector.y=_gs.y; this.vector.change=_gs.change; }
+							}else if(this.status==4){
+								if(this.coord.x==this._params.coord.x&&this.coord.y==this._params.coord.y){
+									this.status = 1;
+								}else{
+									// Eyes: in-place BFS to spawn. Not finder (heap). Not every-tick chase.
+									_ghostHome(map.data,this.coord.x,this.coord.y,this._params.coord.x,this._params.coord.y);
+									if(!_gs.ok) _ghostStep(map.data,this.coord.x,this.coord.y,this._params.coord.x,this._params.coord.y,0);
+									if(_gs.ok){ this.vector.x=_gs.x; this.vector.y=_gs.y; this.vector.change=_gs.change; }
+								}
+							}
+							//是否转变方向
+							if(this.vector.change){
+								this.coord.x = this.vector.x;
+								this.coord.y = this.vector.y;
+								var pos = map.coord2position(this.coord.x,this.coord.y);
+								this.x = pos.x;
+								this.y = pos.y;
+							}
+							//方向判定
+							if(this.vector.x>this.coord.x){
+								this.orientation = 0;
+							}else if(this.vector.x<this.coord.x){
+								this.orientation = 2;
+							}else if(this.vector.y>this.coord.y){
+								this.orientation = 1;
+							}else if(this.vector.y<this.coord.y){
+								this.orientation = 3;
+							}
+						}
+						this.x += this.speed*_COS[this.orientation];
+						this.y += this.speed*_SIN[this.orientation];
+					},
+					draw:function(context){
+						var isSick = false;
+						if(this.status==3){
+							isSick = this.timeout>80||this.times%2?true:false;
+						}
+						if(this.status!=4){
+							context.fillStyle = isSick?'#BABABA':this.color;
+							context.beginPath();
+							context.arc(this.x,this.y,this.width*.5,0,Math.PI,true);
+							switch(this.times%2){
+								case 0:
+								context.lineTo(this.x-this.width*.5,this.y+this.height*.4);
+								context.quadraticCurveTo(this.x-this.width*.4,this.y+this.height*.5,this.x-this.width*.2,this.y+this.height*.3);
+								context.quadraticCurveTo(this.x,this.y+this.height*.5,this.x+this.width*.2,this.y+this.height*.3);
+								context.quadraticCurveTo(this.x+this.width*.4,this.y+this.height*.5,this.x+this.width*.5,this.y+this.height*.4);
+								break;
+								case 1:
+								context.lineTo(this.x-this.width*.5,this.y+this.height*.3);
+								context.quadraticCurveTo(this.x-this.width*.25,this.y+this.height*.5,this.x,this.y+this.height*.3);
+								context.quadraticCurveTo(this.x+this.width*.25,this.y+this.height*.5,this.x+this.width*.5,this.y+this.height*.3);
+								break;
+							}
+							context.fill();
+							context.closePath();
+						}
+						context.fillStyle = '#FFF';
+						if(isSick){
+							context.beginPath();
+							context.arc(this.x-this.width*.15,this.y-this.height*.21,this.width*.08,0,2*Math.PI,false);
+							context.arc(this.x+this.width*.15,this.y-this.height*.21,this.width*.08,0,2*Math.PI,false);
+							context.fill();
+							context.closePath();
+						}else{
+							context.beginPath();
+							context.arc(this.x-this.width*.15,this.y-this.height*.21,this.width*.12,0,2*Math.PI,false);
+							context.arc(this.x+this.width*.15,this.y-this.height*.21,this.width*.12,0,2*Math.PI,false);
+							context.fill();
+							context.closePath();
+							context.fillStyle = '#000';
+							context.beginPath();
+							context.arc(this.x-this.width*(.15-.04*_COS[this.orientation]),this.y-this.height*(.21-.04*_SIN[this.orientation]),this.width*.07,0,2*Math.PI,false);
+							context.arc(this.x+this.width*(.15+.04*_COS[this.orientation]),this.y-this.height*(.21-.04*_SIN[this.orientation]),this.width*.07,0,2*Math.PI,false);
+							context.fill();
+							context.closePath();
+						}
+					}
+				});
+			}
+			items = stage.getItemsByType(2);
+			//主角
+			player = stage.createItem({
+				// NEW: integer cell center (13.5 + size 14 never hit offset==0)
+				width:21,
+				height:21,
+				type:1,
+				location:map,
+				coord:{x:13,y:23},
+				orientation:2,
+				speed:2,
+				frames:10,
+				update:function(){
+					var coord = this.coord;
+					if(!coord.offset){
+						if(this.control.orientation>=0){
+							if(!map.get(coord.x+_COS[this.control.orientation],coord.y+_SIN[this.control.orientation])){
+								this.orientation = this.control.orientation;
+							}
+						}
+						this.control.orientation = -1;
+						var value = map.get(coord.x+_COS[this.orientation],coord.y+_SIN[this.orientation]);
+						if(value==0){
+							this.x += this.speed*_COS[this.orientation];
+							this.y += this.speed*_SIN[this.orientation];
+						}else if(value<0){
+							this.x -= map.size*(map.x_length-1)*_COS[this.orientation];
+							this.y -= map.size*(map.y_length-1)*_SIN[this.orientation];
+						}
+					}else{
+						if(!beans.get(this.coord.x,this.coord.y)){	//吃豆
+							_SCORE++;
+							beans.data[this.coord.y][this.coord.x]=3;
+                            _pacSpent(beans,this.coord.x,this.coord.y);
+							if (sfxWakaI) playSfx(sfxWaka1); else playSfx(sfxWaka0);
+							sfxWakaI = 1 - sfxWakaI;
+							if(_isPower(config['goods'], this.coord.x, this.coord.y)){	//吃到能量豆
+								playSfx(sfxPower);
+								var fi, gh;
+								for(fi=0;fi<items.length;fi++){
+									gh=items[fi];
+									if(gh.status==1||gh.status==3){	//如果NPC为正常状态，则置为临时状态
+										gh.timeout = 450;
+										gh.status = 3;
+									}
+								}
+							}
+						}
+						this.x += this.speed*_COS[this.orientation];
+						this.y += this.speed*_SIN[this.orientation];
+					}
+				},
+				draw:function(context){
+					context.fillStyle = '#FFE600';
+					context.beginPath();
+					if(stage.status!=3){	//玩家正常状态
+						if(this.times%2){
+							context.arc(this.x,this.y,this.width/2,(.5*this.orientation+.20)*Math.PI,(.5*this.orientation-.20)*Math.PI,false);
+						}else{
+							context.arc(this.x,this.y,this.width/2,(.5*this.orientation+.01)*Math.PI,(.5*this.orientation-.01)*Math.PI,false);
+						}
+					}else{	//玩家被吃
+						if(stage.timeout) {
+							context.arc(this.x,this.y,this.width/2,(.5*this.orientation+1-.02*stage.timeout)*Math.PI,(.5*this.orientation-1+.02*stage.timeout)*Math.PI,false);
+						}
+					}
+					context.lineTo(this.x,this.y);
+					context.closePath();
+					context.fill();
+				}
+			});
+			/* FAST: own control object (do not share Item _settings.control). */
+			player.control = {orientation:-1};
+			//事件绑定
+			stage.bind('keydown',function(e){
+				switch(e.keyCode){
+					case 13: //回车
+					case 32: //空格
+					this.status = this.status==2?1:2;
+					break;
+					case 39: //右
+					player.control.orientation = 0;
+					break;
+					case 40: //下
+					player.control.orientation = 1;
+					break;
+					case 37: //左
+					player.control.orientation = 2;
+					break;
+					case 38: //上
+					player.control.orientation = 3;
+					break;
+				}
+			});
+		});
+	})();
+	//结束画面
+	(function(){
+		var stage = game.createStage();
+		//游戏结束
+		stage.createItem({
+			x:game.width/2,
+			y:game.height*.35,
+			draw:function(context){
+				context.fillStyle = '#FFF';
+				context.font = 'bold 48px PressStart2P';
+				context.textAlign = 'center';
+				context.textBaseline = 'middle';
+				context.fillText(_LIFE?'YOU WIN!':'GAME OVER',this.x,this.y);
+			}
+		});
+		//记分
+		stage.createItem({
+			x:game.width/2,
+			y:game.height*.5,
+			draw:function(context){
+				context.fillStyle = '#FFF';
+				context.font = '20px PressStart2P';
+				context.textAlign = 'center';
+				context.textBaseline = 'middle';
+				context.fillText('FINAL SCORE:',this.x,this.y-12);
+				context.fillText(_SCORE+50*Math.max(_LIFE-1,0),this.x,this.y+12);
+			}
+		});
+		//事件绑定
+		stage.bind('keydown',function(e){
+			switch(e.keyCode){
+				case 13: //回车
+				case 32: //空格
+				_SCORE = 0;
+				_LIFE = 5;
+				game.setStage(1);
+				break;
+			}
+		});
+	})();
+
+	game.init();
+	requestAnimationFrame(function () {
+		requestAnimationFrame(function () {
+			try { game.nextStage(); } catch (e) {}
+		});
+	});
+})();
+
+</script>
+<script data-host="chrome">
+(function(){
+var ctx=null,noise=null;
+function ac(){
+  var AC,i,d;
+  if(ctx) return ctx;
+  AC=window.AudioContext||window.webkitAudioContext;
+  if(!AC) return null;
+  ctx=new AC();
+  noise=ctx.createBuffer(1,ctx.sampleRate,ctx.sampleRate);
+  d=noise.getChannelData(0);
+  for(i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+  return ctx;
+}
+window._chromePlay=function(r){
+  var a,i,freq,vol,frames,slide,ch,dur,t0,osc,g,endF;
+  a=ac();
+  if(!a||!r||!r.length) return;
+  if(a.state==="suspended") a.resume();
+  t0=a.currentTime;
+  for(i=0;i+4<r.length;i=i+5){
+    freq=r[i]; vol=r[i+1]; frames=r[i+2]; slide=r[i+3]; ch=r[i+4];
+    if(vol<=0||frames<=0) continue;
+    dur=frames/60;
+    if(dur<0.02) dur=0.02;
+    g=a.createGain();
+    g.gain.setValueAtTime((vol/15)*0.1,t0);
+    g.gain.exponentialRampToValueAtTime(0.001,t0+dur);
+    g.connect(a.destination);
+    if(ch===3){
+      osc=a.createBufferSource();
+      osc.buffer=noise;
+      osc.loop=true;
+    }else{
+      osc=a.createOscillator();
+      osc.type="square";
+      osc.frequency.setValueAtTime(Math.max(20,freq),t0);
+      endF=freq+slide*frames;
+      if(endF<20) endF=20;
+      osc.frequency.linearRampToValueAtTime(endF,t0+dur);
+    }
+    osc.connect(g);
+    osc.start(t0);
+    osc.stop(t0+dur);
+  }
+};
+})();
+</script>
+</body>
+</html>

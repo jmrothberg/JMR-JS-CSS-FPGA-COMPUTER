@@ -55,7 +55,7 @@ RUN
 | Joystick (library) | `JOYDEMO.HTML` | minted `.JSH` from `card.img` (stick + arrows; no ASET) |
 | Sound (library) | `SNDDEMO.HTML` | minted `.JSH` from `card.img` (playSfx catalog; Chrome audio, card `sound()` nid 42; no ASET) |
 | Mr. Do! (library) | `MRDO.HTML` | minted `.JSH` from `card.img` (portrait 384×480 in 640×480 letterbox; no ASET) |
-| Mortal Kombat (library) | `MKBIG.HTML` / `MKBIGCPU.HTML` | **V1.0** — atlases inside 4 MB / 16 SPR. No `MK.HTML` in `storage/` |
+| Mortal Kombat (library) | `MKBA.HTML` / `MKCA.HTML` | **V1.0** — atlases, ≤16 sheets. Short names of MKBIG / MKBIGCPU. No `MK.HTML` in `storage/` |
 | MK PVP (library) | `MKPVP.HTML` | **V1.0** MK-shaped — ≤16 atlases, L/R sheets, no `Object.keys` / negative mirror |
 
 **V1.0 disk is `card.img` (hard):** PYTHON, FPGA-SIM, and BOARD all
@@ -112,7 +112,7 @@ Chrome-only title “done on the machine.”
 | | **1.0 (now)** | **1.5 (COMPILE live; leftover below)** | **2.0 (planned)** |
 |---|---|---|---|
 | **Meaning** | Caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img`. Host mint at card-create (`.JSH`). `COMPILE` is how the machine mints; `RUN` loads `.JSH`. | **Live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. Compiler and editor are card programs. **Leftover:** typed-at-READY numbered authoring of *new* programs, and popular JS this machine does not have. | More than 16 sprite sheets, `Object.keys` on the chip, dotted `new`, `.call` / `.apply`. **`Math.round` is already nid 54.** The aperture is already 8 MiB. **No title is the V2 example.** |
-| **Acceptance** | `INVADERS` / `PACMAN` / `DONKEY` | Non-art titles compile on the machine (`COMPILE` then `RUN`). Art titles refuse until `ARTPNG.JSH`. Typed-READY `SAVE` optional leftover. | Any `NAME.HTML` that needs those caps. `MKBIG.HTML` / `MKBIGCPU.HTML` stay V1 |
+| **Acceptance** | `INVF` / `PACFAST` / `DNKF` (INVADERS / PACMAN / DONKEY) | Non-art titles compile on the machine (`COMPILE` then `RUN`). Art titles refuse until `ARTPNG.JSH`. Typed-READY `SAVE` optional leftover. | Any `NAME.HTML` that needs those caps. `MKBA.HTML` / `MKCA.HTML` stay V1 |
 | **Sprites / ASET** | **`MAX_SPR` = 16**. Art lives in the 8 MiB aperture and must stop before byte 7,155,712 | **Unchanged.** Do not grow `MAX_SPR` or the heap for the editor | **`MAX_SPR` ≥ 518**. The aperture is not the remaining work |
 | **Authoring** | PC + remake `card.img`. `LIST` to learn. Do **not** treat `EDIT` as V1.0 play | **Live:** `EDIT` launches `EDITOR.JSH`; `COMPILE` mints `.JSH`. **Leftover:** numbered lines at `>` for *new* programs; language stdlib/globals (table below). Canvas caps stay | Same glass/`LOAD`/`RUN`; drop V1 HTML shims once V2 rows land |
 
@@ -272,6 +272,34 @@ still compile byte-identically; bytecode suite 198/198.
 **Still V2 work (no current title exercises it):** dotted `new`, and
 `Function.prototype.call`/`apply`.
 
+#### Code bank and the name list (planned loader change)
+
+`LOAD` writes the whole program image into the code block RAM: the
+instructions, then the UTF-8 name list (`NAMB`) that follows them. That bank
+is **21504 words** (86016 bytes). Run77c already added the last spare
+1024-word tile, raising it from 20480, because a MacPaint image whose
+instructions fit still faulted at startup when the names were cut off (21144
+words needed, 20480 stored). Words past 21504 are dropped. The trailer walker
+then reads those bytes back out of the code bank (`code_rdata` in `S_TRAIL`)
+and copies them into `name_mem`.
+
+The current MacPaint's instructions fit. Its hardware pattern-fill helper
+does not: the helper's names push the image past byte 86016, so the tail of
+the name list would be dropped and `RUN` would fault. `name_mem` is a
+separate 16384-byte block and has room. The names fail only because they
+have to sit in the code bank long enough to be copied out.
+
+A later build must not add another code tile. During `LOAD`, store only the
+executable words (header, constants, opcodes) in the code bank. Parse the
+trailer from the load stream and write the name bytes straight into
+`name_mem`, which already receives them one byte at a time.
+
+**Play speed stays the same.** A frame fetches opcodes from the code bank and
+name bytes from `name_mem` on the next clock, the same ports as today. A
+frame never reads the name list out of the code bank. A longer `LOAD` is
+acceptable. Do not add a name-table wait on opcode fetch, on a property read
+during a frame, or on the blit and CopyBits walkers.
+
 #### Inventory (historical — lost `MK.HTML`, 2026-08-20)
 
 | Metric | Value |
@@ -288,7 +316,7 @@ still compile byte-identically; bytecode suite 198/198.
 
 **Read this row against shipped files (measured 2026-08-31).** The census
 above is the **lost** fighter HTML. What ships and plays today are
-`MKBIG.HTML` / `MKBIGCPU.HTML` (`tools/mkbig.py`), **inside** the V1 bank:
+`MKBA.HTML` / `MKCA.HTML` (short names of MKBIG / MKBIGCPU; the packer is `to_delete/tools/mkbig.py`), **inside** the V1 bank:
 
 | shipped title | unique sheets | ASET bytes | vs 2,961,408 B wall |
 |---|---:|---:|---|
@@ -964,12 +992,12 @@ and [Frozen machine contract](#frozen-machine-contract).
 
 | File | Role |
 |---|---|
-| `storage/INVADERS.HTML` / `PACMAN.HTML` / `DONKEY.HTML` | **Product titles** (LOAD these; ISA freeze) |
+| `storage/INVF.HTML` / `PACFAST.HTML` / `DNKF.HTML` | **Product titles** (LOAD these; ISA freeze). Short names of INVADERS / PACMAN / DONKEY |
 | `storage/ASTEROID.HTML` | Library title (vector Asteroids). Authoring: [GAME_DESIGN.md](GAME_DESIGN.md) |
 | `storage/AURORA.HTML` | Library title (fillRect gem hopper) |
-| `storage/MRDO.HTML` | Library title (Mr. Do! arcade). Portrait 384×480 letterbox; [GAME_DESIGN.md](GAME_DESIGN.md) |
-| `storage/MKBIG.HTML` | **V1.0** library (MK frames packed to 4 MB / 3 atlases) |
-| `storage/MKBIGCPU.HTML` | **V1.0** library (MKBIG art + CPU Kano). Ice ball + flame; 4th tiny shots atlas; still ≤16 SPR / 4 MB |
+| `storage/MRDOF.HTML` | Library title (Mr. Do! arcade). Portrait 384×480 letterbox; [GAME_DESIGN.md](GAME_DESIGN.md) |
+| `storage/MKBA.HTML` | **V1.0** library (MK frames, 3 atlases, ≤16 sheets) |
+| `storage/MKCA.HTML` | **V1.0** library (MKBA art + CPU Kano). Ice ball + flame; 4th sheet; still ≤16 sheets |
 | In-memory ProgramImage | **V1.0:** minted `.JSH` from `card.img` (code + ASET). Not a `storage/` name |
 | `storage/JOYDEMO.HTML` | Library smoke (joystick / arrows on Canvas) |
 | `storage/SNDDEMO.HTML` | Library smoke (playSfx recipes; Chrome Web Audio, card `sound()` nid 42) |

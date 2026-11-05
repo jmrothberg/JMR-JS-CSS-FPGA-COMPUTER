@@ -5378,7 +5378,7 @@ module jmr_js_vm_exec64 (
                                             end
                                         end
                                         // One cold, serialized service state; no file logic in the opcode datapath.
-                                        8'd58,8'd59,8'd60,8'd61,8'd62,8'd63: begin
+                                        8'd58,8'd59,8'd60,8'd61,8'd62,8'd63,8'd64: begin
                                             hp_slot_n=5'(nid-8'd57);vnat_base_n=base;state_n=S_FS;
                                         end
                                         default: begin

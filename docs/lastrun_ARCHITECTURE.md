@@ -1,8 +1,150 @@
-# Memory map
+# Computer architecture and memory map
 
-Who owns the disk, the FPGA, and each byte of the 8 MiB aperture. Which bitstream is the rollback, and which folder is in progress: [FPGA_FIT.md](FPGA_FIT.md). Finder is a JavaScript program on the same VM as a game.
+Read from top to bottom: **programs → shared Toolbox → system services → FPGA
+mechanisms**. Finder is a JavaScript program on the same CPU as a game. Each
+block expands one level to show responsibilities and calls. Arrows describe
+responsibilities; programs can also call native services directly.
 
-![Memory map](diagrams/rarchitecture.svg)
+![JMR architecture: Finder and applications, grouped Toolbox calls, system services and resources, and FPGA execution and I/O](diagrams/rarchitecture.svg)
+
+This is the **November 4 development source**, including the resident Toolbox
+implemented in Python and RTL simulation. Run75/run76 bits do not contain native
+Toolbox 64. **Run77d includes the new raw bitmap transport in this build**;
+frozen run77b/run77c inputs do not contain it. Hardware qualification is tracked in
+[TOOLBOX_IMPLEMENTATION_STATUS.md](TOOLBOX_IMPLEMENTATION_STATUS.md).
+Released bits and build ownership are tracked in [FPGA_FIT.md](FPGA_FIT.md).
+
+## How we organize the machine
+
+- **Finder — desktop policy.** `storage/FINDER.HTML` owns icons, selection,
+  overlapping windows, scrolling, sorting, virtual folders, file commands and
+  Trash. Its File/Edit/View/Special declarations use the existing native menu
+  UI. Folder membership, positions and comments persist in `DESKTOP.FDR`;
+  the underlying FAT root remains flat. Print, Page Setup, Eject and Erase Disk
+  remain disabled; familiar labels do not imply complete Macintosh features.
+- **Applications and system tools — program behavior.** Editor, Note, Reader,
+  Compiler, Utility, MacPaint and games run on the same native JavaScript VM.
+  They own document/game algorithms and application commands. Utility builds
+  and sorts its file catalog. TBDEMO demonstrates resident software UI; its
+  Open/Save As dialogs demonstrate interaction, while actual file reads and
+  writes remain the application's responsibility.
+- **Toolbox — reusable executable routines.** `TOOLBOX.ROM` shares code for
+  menus, a window frame, modal dialogs, Chicago text and memory/surface helpers.
+  The diagram lists every public `tb*` function from `toolbox.js` and `ui.js`,
+  grouped by purpose. These execute on the existing JavaScript CPU.
+  `toolbox(op,a,b,c)` crosses native ID 64 into the hardware primitive engine.
+  See [UI contracts](RESIDENT_TOOLBOX.md#shared-ui-calls) and
+  [primitive/descriptor contracts](TOOLBOX_API.md) for arguments and limits.
+- **System services — lifecycle, files, events and existing shared UI.**
+  Boot validation, LOAD/RUN, compilation chains, Finder launch/return, FAT
+  access, input/event delivery and emergency recovery belong here. `fsList`,
+  `fsRead`, `fsWrite`, `fsRemove`, `fsRename` and `sysRun` are existing native
+  APIs, separate from Toolbox operation numbers. Native menu/document/dialog/
+  overlay controllers still serve Finder and unconverted applications.
+  Choosing software UI transfers that application's ordinary UI ownership;
+  it does not remove all native UI controllers from the machine.
+- **SYSTEM.SYS — shared appearance data.** Glyphs, captions/indexes, fixed
+  menu headings, native dialog settings and keyboard/ship/accessory captions
+  are checked at boot. Native consumers use local loaded memories;
+  `tbResources` reads the retained payload and software text uses its glyphs.
+  Software dialog layout and matching hit testing live in `ui.js`; native
+  dialog configuration does not control that software geometry.
+- **FPGA mechanisms — execute and move data.** One JavaScript CPU, bounded
+  copy/fill/packed-pixel services, rasterizer, drawing canvas, dirty-block
+  presentation, scanout, memory bridge, storage, input and audio implement the
+  machine. The VM remains at 33.333 MHz and services at 100 MHz. Python is the
+  functional model; FPGA-SIM runs product RTL. Board qualification is separate.
+
+## What differs from Macintosh, and why
+
+Our reference is the **original 1984 Macintosh organization**, rather than
+modern macOS: Finder and applications above shared UI/graphics routines and
+lower-level system services. Apple's
+[Inside Macintosh, Volume I (1984)](https://bitsavers.org/pdf/apple/mac/Inside_Macintosh_Vol_1_1984.pdf)
+describes Toolbox/OS routines and ROM trap dispatch. The
+[original QuickDraw source preserved by the Computer History Museum](https://computerhistory.org/blog/macpaint-and-quickdraw-source-code/)
+shows shared graphics implemented in 68000 assembly. We borrow the separation
+of responsibilities, with these deliberate adaptations:
+
+- **JavaScript is our processor's language.** Macintosh applications and
+  Toolbox routines ran on a Motorola 68000. Our compiled JavaScript runs on
+  the native JavaScript engine, including shared routines. This keeps the
+  educational machine consistent from application to library without adding
+  a browser or Macintosh binary emulation.
+- **Our resident “ROM” is boot-loaded code.** Macintosh used ROM routines and
+  trap dispatch. We load validated `TOOLBOX.ROM` instructions into a dedicated
+  bank, call JavaScript helpers normally and use versioned native operations
+  for bulk work. Shared UI code can change without rebuilding a Toolbox-capable
+  bit. Clients must be relinked with the matching ROM, then the machine
+  restarted. Mutable globals, constants and heap objects remain per application.
+- **Resources have a deliberately bounded format.** The Macintosh Resource
+  Manager organized typed resources. `SYSTEM.SYS` supplies a fixed, versioned
+  appearance payload, rather than a general Resource Manager or executable
+  system file. Python and RTL can check it before committing it. It supports
+  the documented appearance edits; arbitrary controls, new actions and font
+  metrics are not data-only changes. Software dialog behavior belongs in
+  Toolbox code.
+- **Bulk graphics run in reusable hardware.** Original QuickDraw was software
+  on the 68000. We keep UI policy in JavaScript while native operations copy/
+  fill bytes, expand packed pixels, clip/scale blits and fill patterns. This
+  reduces repeated VM calls for our indexed-color display and packed document
+  buffers. Native operation 6 now provides raw 8-bit rectangle transport
+  between the drawing canvas and arena, with clipping and overlap handling.
+  `tbCopyBits` is its software entry point. Packed expansion remains on
+  operation 3. This subset is smaller than QuickDraw: general regions, full
+  window/control managers and arbitrary resource-defined dialogs are not
+  implied by the Macintosh-like section names.
+- **Finder state is explicitly parked.** We keep one active application and
+  one VM. Native return replays cached Finder code, reconstructs globals/
+  functions, restores the arena and repaints. The software demo's
+  `sysRun(pointer,8)` exit explicitly reloads Finder instead. Neither keeps
+  a second running Finder heap. This reuses one execution engine and avoids
+  disk rereads on the cached return path. A single-application workflow is
+  a similarity to the early Macintosh; the cache/arena method is our choice.
+- **Migration is incremental.** Software menus/dialogs are implemented, but
+  native UI and hardware recovery remain. We can convert and verify programs
+  individually while preserving working applications and emergency exit.
+  This means two implementations currently coexist: converted programs run
+  ordinary menu/dialog behavior as JavaScript; other programs still ask the
+  existing hardware UI controllers. We should finish migration and verify
+  programs before removing redundant circuits. Retaining emergency recovery
+  is intentional. Removing circuits requires Vivado and a new bit. No RTL
+  circuit changes happen through a ROM update, and net FPGA savings still
+  require whole-chip measurement.
+
+## The update boundary: software versus FPGA circuits
+
+**This change adds hardware access once, so more graphics behavior can be
+software later.** Native operation 6 copies bounded raw 8-bit rectangles between
+arena memory and the existing drawing canvas. It reuses the canvas's synchronous,
+write-priority read port; presentation keeps its separate port. It adds no
+second canvas, no second VM and no additional external-memory allocation.
+The [exact descriptor and overlap rules](TOOLBOX_API.md#general-bitmap-transport-and-software-copybits)
+are part of the interface.
+
+After a bit containing this interface is built and qualified, Toolbox software
+can capture pixels, operate on arena bytes and restore rectangles. Changes to
+selection, scrolling, compositing or image algorithms can then use a new
+`TOOLBOX.ROM` and matching relinked applications, followed by restart. Existing
+packed-pixel expansion/scaling also remains available through operation 3.
+This is a path for implementing more behavior in software, not a guarantee of
+hardware acceleration for every future QuickDraw feature.
+
+New hardware formats or ports, faster native raster modes, different memory
+permissions and a larger resident instruction bank still require RTL changes,
+Vivado and a new `.bit`. Free BRAM is only one resource constraint; it does not
+create circuits or memory permissions. Editing RTL changes source; simulation
+checks that source; Vivado builds the circuits used on the physical board.
+
+Frozen run77b/run77c sources and previously ordered/released files are preserved.
+Their running builds do not acquire this service from current source changes.
+All current run77d/e/f candidates include this interface now, with the same
+matched Toolbox ROM, relinked applications and audited disk. Their isolated
+simulators pass the CopyBits and software-only ROM-update checks. Final routing,
+timing and hardware acceptance remain open until qualification finishes; the
+release will identify the selected hardware build and its matching disk.
+
+## Board connections
 
 Current board jacks, matching `rtl/top_nexys_video.sv` (`USB_MOUSE=0`):
 USB keyboard on **J15**, PS/2 mouse on **JA**, second PS/2 mouse on **JC**,
@@ -29,13 +171,17 @@ through `ctx.systemMenus` and `ctx.systemAbout`; system services handle shared
 interaction and rendering. Editor, Reader, Compiler, Note and Utility combine
 program behavior with those common services.
 
-Cold boot loads and validates SYS, commits shared resources, and loads Finder.
+In the resident-Toolbox development build, cold boot validates and commits
+TOOLBOX.ROM first, then SYSTEM.SYS, then loads Finder. The earlier SYS-capable
+release boots SYS and Finder without a resident Toolbox bank.
 The Enterprise startup display remains until Finder paints its first frame. Opening an application
 parks Finder's arena. File → Quit restores Finder from RAM. Invalid/missing SYS
 on cold start retains compiled-in resources. Restart after publishing new SYS
 or Finder code; this release has no live resource reload command.
 
 ## What is in memory
+
+![Detailed physical memory map, separate from the software architecture](diagrams/memory-map.svg)
 
 The board uses a DDR-backed **8 MiB address aperture**. This is separate from
 the FPGA's scarce on-chip BRAM. More external RAM does not automatically provide
@@ -173,3 +319,28 @@ Format/validation: `tools/build_system_resources.py`. Resource source:
 `resources/system/system.json`. Exact built hardware and reports are frozen
 under the build folder named in [FPGA_FIT.md](FPGA_FIT.md). Diagrams describe ownership and flow, not physical
 FPGA placement or a proportional drawing of memory sizes.
+
+## Proposed next architecture
+
+[Macintosh-style Toolbox and graphics RTL review](MAC_TOOLBOX_RTL_PLAN.md)
+studies bulk drawing/copy services, software system tools and richer SYS
+resources. It is a proposal, not a description of features in the current bit.
+
+
+## Run77 development: resident executable Toolbox
+
+The diagram above now includes the shared native-JavaScript instruction bank.
+See [RESIDENT_TOOLBOX.md](RESIDENT_TOOLBOX.md) for the ROM format, linking,
+software menu/dialog calls and update procedure. This bank is separate from
+SYSTEM.SYS data. Its library implements policy in JavaScript; native service 64
+implements bounded bulk memory and pixel operations. Unconverted applications
+continue using the native UI controllers. This is an incremental migration,
+not removal of every UI circuit.
+
+The 16 KiB virtual bank uses 12 KiB of BRAM plus fixed jump padding. All
+application code remains in BRAM. Application code capacity, 8 MiB
+external memory and clocks are preserved. ROM boot loading temporarily reuses
+SYS staging before SYS loads. Constants/globals/heap remain per application.
+Whole-chip resource and timing claims require the run77 implementation reports;
+see [build status](TOOLBOX_IMPLEMENTATION_STATUS.md). The earlier utilization
+numbers in this document describe their named older releases.

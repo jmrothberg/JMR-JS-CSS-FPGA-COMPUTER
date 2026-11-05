@@ -7,11 +7,11 @@ shipped in a fresh clone. Set `VIVADO` to your installed, licensed launcher:
 make -C tools/board_flow bit VIVADO="$(command -v vivado)"
 ```
 
-Use the [standard release](../docs/STANDARD_RELEASE.md) to program the
-accepted bitstream without rebuilding.
+Which bitstream to load is [docs/FPGA_FIT.md](../docs/FPGA_FIT.md).
+[docs/STANDARD_RELEASE.md](../docs/STANDARD_RELEASE.md) records the VM clock switch. It is not the next file to flash.
 
 **Commands and `bit-fresh` hygiene:**
 [docs/FPGA_BRINGUP.md](../docs/FPGA_BRINGUP.md) and
-[docs/SESSION_HANDOFF.md](../docs/SESSION_HANDOFF.md) § Synthesis.
+[docs/FPGA_FIT.md](../docs/FPGA_FIT.md).
 
 FPGA-SIM first: `make -C sim sim_server_synth` from repo root.

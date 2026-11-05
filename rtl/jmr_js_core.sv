@@ -211,6 +211,7 @@ module jmr_js_core #(
     logic [7:0] ui_key_code,ui_key_char,ui_ascii_data;
     logic ship_consume,ship_quit,ship_guest;
     logic docs_consume,docs_keys,docs_keyboard_stb,docs_keyboard_on,docs_command_stb,docs_after_valid;
+    logic [7:0] classic_relay,docs_relay;
     logic [3:0] docs_command,docs_chosen_len,docs_after_action,docs_after_len,docs_name_len;
     logic [95:0] docs_chosen_name,docs_after_name;
     logic [2:0] docs_dialog;
@@ -241,13 +242,7 @@ module jmr_js_core #(
     logic [127:0] con_source_name;
     logic [4:0] con_source_name_len;
     logic con_unnamed,note_entry_seen;
-    logic catalog_entry_seen,catalog_skip_start,actions_catalog_prepared,actions_restart;
-    wire new_catalog_entry=system_window_o[7:0]==4 && !actions_busy && !catalog_entry_seen;
-    always_ff @(posedge clk)begin
-      if(!rst_n)begin catalog_entry_seen<=0;catalog_skip_start<=0;end
-      else if(app_clear)begin catalog_entry_seen<=catalog_skip_start || actions_catalog_prepared;catalog_skip_start<=0;end
-      else begin if(new_catalog_entry)catalog_entry_seen<=1;if(actions_catalog_prepared)catalog_skip_start<=1;end
-    end
+    logic actions_catalog_prepared,actions_restart;
     wire new_note_entry=system_window_o[7:0]==5 && !con_interactive && !actions_busy && !note_entry_seen;
     logic actions_catalog_go,actions_catalog_active,actions_stage_valid,actions_stage_ready;
     logic [11:0] actions_catalog_addr;logic [12:0] actions_stage_addr;logic [7:0] actions_stage_data;logic [31:0] desk_catalog_size;
@@ -262,6 +257,7 @@ module jmr_js_core #(
     logic classic_popup_enabled,window_bars,classic_custom_title;
     import jmr_classic_ui_pkg::SYS_CONFIG_DEFAULT;
     logic sys_we;logic [13:0] sys_addr;logic [15:0] sys_data;
+    logic toolbox_code_we;logic [11:0] toolbox_code_addr;logic [31:0] toolbox_code_data;
     logic sys_ready,pixel_sys_we;logic [13:0] pixel_sys_addr;logic [15:0] pixel_sys_data;
     jmr_resource_bridge u_resource_bridge(.clk(clk),.pixel_clk(pixel_clk),.rst_n(rst_n),
         .write_valid(sys_we),.write_addr(sys_addr),.write_data(sys_data),.ready(sys_ready),
@@ -280,11 +276,12 @@ module jmr_js_core #(
     end
     logic ship_tool_stb;logic [3:0] ship_tool_action;
     logic [28:0] boot_ticks;
-    logic boot_intro,boot_stage,boot_glass,last_boot_glass,last_boot_stage,vm_first_frame;
+    logic boot_finished,boot_intro,boot_stage,boot_glass,last_boot_glass,last_boot_stage,vm_first_frame;
     (* ASYNC_REG="TRUE" *) logic [1:0] vm_first_sync;
     always_ff @(posedge clk)begin
-        if(!rst_n)begin boot_ticks<=0;boot_intro<=PROGRAM_FINDER;boot_stage<=0;vm_first_sync<=0;end
+        if(!rst_n)begin boot_ticks<=0;boot_finished<=0;boot_intro<=PROGRAM_FINDER;boot_stage<=0;vm_first_sync<=0;end
         else begin
+            if(!boot_intro && app_window[7:0]==9 && vm_first_sync[1])boot_finished<=1;
             if(app_clear)vm_first_sync<=0;else vm_first_sync<={vm_first_sync[0],vm_first_frame};
             if(boot_intro)begin
                 if(boot_ticks>=29'(BOOT_CLOCK_HZ/10*34) || kbd_push || (input_mouse_stb && input_mouse_buttons!=0) || sim_vm_start || desktop_control_stb)begin boot_intro<=0;boot_stage<=1;end
@@ -292,7 +289,7 @@ module jmr_js_core #(
             end
         end
     end
-    assign boot_glass=PROGRAM_FINDER && (boot_intro || (app_window[7:0]==9 && !vm_first_sync[1]) || shell_loading);
+    assign boot_glass=PROGRAM_FINDER && !boot_finished && (boot_intro || (app_window[7:0]==9 && !vm_first_sync[1]) || shell_loading);
     logic docs_caret_on,docs_flash,ship_about_hot;
     logic [9:0] docs_caret_px;
     logic [1:0] docs_hot;
@@ -353,7 +350,7 @@ module jmr_js_core #(
     end
     always_comb begin
         system_window_o=app_window;
-        if(PROGRAM_FINDER && shell_loading && !vm_busy)system_window_o[7:0]=10;
+        if(PROGRAM_FINDER && !boot_finished && shell_loading && !vm_busy)system_window_o[7:0]=10;
         else if(desk_visible)system_window_o[7:0]=0;
         else if(con_system_role==3)begin system_window_o[7:0]=3;system_window_o[31:24]={1'b0,con_system_stage,4'd0};end
         else if(!vm_busy)system_window_o[7:0]=7;
@@ -381,7 +378,7 @@ module jmr_js_core #(
     end
     wire finder_tool_launch=PROGRAM_FINDER && fs_launch && fs_launch_how>=5 && fs_launch_how<=7;
     jmr_system_actions u_system_actions (
-        .clk(clk),.rst_n(rst_n),.action_stb(ship_tool_stb || finder_tool_launch || (docs_command_stb && docs_command!=5) || new_note_entry || new_catalog_entry),.action(ship_tool_stb?ship_tool_action:finder_tool_launch?(fs_launch_how==5?4'd11:fs_launch_how==6?4'd12:4'd10):new_note_entry?4'd11:new_catalog_entry?4'd4:docs_command),
+        .clk(clk),.rst_n(rst_n),.action_stb(ship_tool_stb || finder_tool_launch || (docs_command_stb && docs_command!=5) || new_note_entry),.action(ship_tool_stb?ship_tool_action:finder_tool_launch?(fs_launch_how==5?4'd11:fs_launch_how==6?4'd12:4'd10):new_note_entry?4'd11:docs_command),
         .role(system_window_o[7:0]),.chosen_name(docs_chosen_name),.chosen_len(docs_chosen_len),.after_valid(docs_after_valid && !finder_tool_launch),.after_action(docs_after_action),.after_name(docs_after_name),.after_len(docs_after_len),
         .source_name(con_source_name),.source_len(con_source_name_len),.source_unnamed(con_unnamed),
         .catalog_go(actions_catalog_go),.catalog_active(actions_catalog_active),.catalog_addr(actions_catalog_addr),
@@ -391,7 +388,7 @@ module jmr_js_core #(
         .vm_busy(vm_busy),.storage_busy(stor_busy || fs_busy),.disk_busy(disk_busy),.desktop_busy(desk_busy),.busy(actions_busy),.quit_pulse(actions_quit),.halt_pulse(actions_halt),
         .desktop_stb(actions_desk_stb),.desktop_on(actions_desk_on),.key_push(actions_key_push),.key_data(actions_key_data),
         .inject_stb(actions_inject),.inject_code(actions_inject_code),.doc_start(actions_doc_start),.doc_new(actions_doc_new),.doc_role(actions_doc_role),
-        .set_name(actions_set_name),.target_name(actions_target_name),.target_len(actions_target_len),.catalog_prepared(actions_catalog_prepared),.restart_pulse(actions_restart),.error_pulse(actions_error)
+        .set_name(actions_set_name),.target_name(actions_target_name),.target_len(actions_target_len),.catalog_prepared(actions_catalog_prepared),.restart_pulse(actions_restart),.error_pulse(actions_error),.relay_key(docs_relay)
     );
     assign mouse_ready = 1'b1;
     always_ff @(posedge clk)begin
@@ -432,7 +429,7 @@ module jmr_js_core #(
         .dialog(docs_dialog),.file_count(docs_file_count),.selected(docs_selected),.file_top(docs_file_top),.name_len(docs_name_len),.name_selected(docs_name_selected),.message_id(docs_message),
         .generation(docs_generation),.catalog_go(docs_catalog_go),.catalog_active(docs_catalog_active),.catalog_all(docs_catalog_all),.catalog_addr(docs_catalog_addr),
         .catalog_busy(disk_busy || fs_busy),.catalog_done(disk_done),.storage_busy(stor_busy || fs_busy),.desktop_busy(desk_busy),.catalog_count(desk_count),.catalog_data(desk_catalog_data),
-        .label_valid(docs_label_valid),.label_row(docs_label_row),.label_data(docs_label_data),.label_col(docs_label_col),.label_commit(docs_label_commit),.label_ready(docs_label_ready)
+        .label_valid(docs_label_valid),.label_row(docs_label_row),.label_data(docs_label_data),.label_col(docs_label_col),.label_commit(docs_label_commit),.label_ready(docs_label_ready),.relay_key(classic_relay),.relay_code(docs_relay)
     );
     jmr_classic_ui u_classic (
         .sys_we(sys_we),.sys_addr(sys_addr),.sys_data(sys_data),
@@ -448,7 +445,7 @@ module jmr_js_core #(
         .menu_enable(menu_enable),.menu_check(menu_check),
         .active_left(classic_active_left),.active_right(classic_active_right),.hover_row(classic_hover_row),.popup_checked_rows(classic_checked_rows),
         .popup_static_rows(classic_static_rows),.popup_dynamic_rows(classic_dynamic_rows),.popup_enabled_rows(classic_enabled_rows),
-        .label_raddr(classic_label_raddr),.label_pos(classic_label_pos),.beam_y(fb_y),.label_glyph(classic_label_glyph),.about_valid(classic_about_valid),.title_valid(classic_title_valid),.title_width(classic_title_width),.custom_title(classic_custom_title),.window_bars(window_bars)
+        .label_raddr(classic_label_raddr),.label_pos(classic_label_pos),.beam_y(fb_y),.label_glyph(classic_label_glyph),.about_valid(classic_about_valid),.title_valid(classic_title_valid),.title_width(classic_title_width),.custom_title(classic_custom_title),.window_bars(window_bars),.relay_key(classic_relay)
     );
     typedef struct packed {
         logic [31:0] window_state;
@@ -551,6 +548,22 @@ module jmr_js_core #(
     // Held request/reply bundles: only flags cross synchronizers. Arguments
     // remain stable from VM request until acknowledgement is withdrawn.
     logic vm_fs_req,fs_reply,fs_busy,fs_launch;
+    logic file_fs_busy,file_fs_reply,tb_busy,tb_reply;
+    logic [31:0] file_fs_result,tb_result;
+    logic tb_sram_req,tb_sram_we;logic [21:0] tb_sram_addr;logic [15:0] tb_sram_data;
+    logic tb_fb_we;logic [18:0] tb_fb_addr;logic [7:0] tb_fb_data;
+    logic tb_fb_req,tb_fb_ack;logic [18:0] tb_fb_raddr;
+    // Port A is synchronous and write-priority. Acknowledge only a granted
+    // read; its data is valid on the following service clock. Port B remains
+    // dedicated to presentation, so scanout/present are not borrowed.
+    always_ff @(posedge clk)begin
+        if(!rst_n)tb_fb_ack<=0;
+        else tb_fb_ack<=tb_fb_req && !fb_we;
+    end
+    assign fs_busy=file_fs_busy||tb_busy;
+    assign fs_reply=file_fs_reply||tb_reply;
+    assign fs_result=vm_fs_cmd==7?tb_result:file_fs_result;
+
     logic [2:0] vm_fs_cmd;
     logic [127:0] vm_fs_args;
     logic [31:0] fs_result;
@@ -564,10 +577,10 @@ module jmr_js_core #(
     logic stor_missing;logic [15:0] stor_date;logic [7:0] stor_attr;
     logic shell_tool_start,shell_tool_finder,shell_loading;
     logic gui_sram_req,gui_sram_we;logic [21:0] gui_sram_addr;logic [15:0] gui_sram_data;
-    assign gui_sram_req=fs_busy?fs_sram_req:desk_sram_req;
-    assign gui_sram_we=fs_busy?fs_sram_we:desk_sram_we;
-    assign gui_sram_addr=fs_busy?fs_sram_addr:desk_sram_addr;
-    assign gui_sram_data=fs_busy?fs_sram_data:desk_sram_data;
+    assign gui_sram_req=tb_busy?tb_sram_req:file_fs_busy?fs_sram_req:desk_sram_req;
+    assign gui_sram_we=tb_busy?tb_sram_we:file_fs_busy?fs_sram_we:desk_sram_we;
+    assign gui_sram_addr=tb_busy?tb_sram_addr:file_fs_busy?fs_sram_addr:desk_sram_addr;
+    assign gui_sram_data=tb_busy?tb_sram_data:file_fs_busy?fs_sram_data:desk_sram_data;
 
     // Console ↔ storage
     logic        stor_open, stor_close, stor_readline, stor_putc;
@@ -580,7 +593,8 @@ module jmr_js_core #(
     // Native desktop shares FAT, WORK RAM, canvas and console with programs.
     logic desk_visible, desk_busy, desk_hold, desk_key_push;
     logic [7:0] desk_key_data;
-    logic disk_busy, disk_done, disk_error, desk_catalog_go, desk_icon_go;
+    logic disk_busy, disk_done, desk_catalog_go, desk_icon_go;
+    logic disk_error /* verilator public_flat_rd */;
     logic [8:0] desk_count;
     logic [7:0] desk_icon_index, desk_catalog_data;
     logic [11:0] desk_catalog_addr;
@@ -795,6 +809,7 @@ module jmr_js_core #(
         .vm_start(vm_start),
         .halt_pulse(halt_pulse),
         .code_we(code_we), .code_waddr(code_waddr), .code_wdata(code_wdata),
+        .toolbox_code_we(toolbox_code_we),.toolbox_code_addr(toolbox_code_addr),.toolbox_code_data(toolbox_code_data),
         .sram_req(cons_sram_req), .sram_we(cons_sram_we),
         .sram_addr(cons_sram_addr), .sram_wdata(cons_sram_wdata),
         .sram_ack(sram_ack && (sram_owner_q == 3'd2)),
@@ -910,7 +925,7 @@ module jmr_js_core #(
         .we(fb_we), .waddr(fb_waddr), .wdata(fb_wdata),
         .copy_raddr(fbp_copy_raddr), .copy_rdata(fbp_copy_rdata),
         .dirty_blocks(fb_dirty_blocks), .dirty_clear(fb_dirty_clear),
-        .dump_raddr(vm_dump_sel ? vm_dump_addr : dump_fb_raddr),
+        .dump_raddr(tb_fb_req ? tb_fb_raddr : vm_dump_sel ? vm_dump_addr : dump_fb_raddr),
         .dump_rdata(dump_fb_rdata)
     );
     // canvas is single-surface now: back/front dumps are the same data
@@ -1106,6 +1121,7 @@ module jmr_js_core #(
         .mouse_evt_valid(mouse_event_valid), .mouse_evt_data(mouse_event_data),
         .mouse_evt_pop(mouse_event_pop),
         .code_we(code_we), .code_waddr(code_waddr), .code_wdata(code_wdata),
+        .toolbox_code_we(toolbox_code_we),.toolbox_code_addr(toolbox_code_addr),.toolbox_code_data(toolbox_code_data),
         .busy(vm_busy), .done(vm_done),
         .vdbg_o(vdbg_o), .vdbg_fault_o(vdbg_fault_o),
         .vm_hdbg(vm_hdbg), .vm_fdbg(vm_fdbg), .vm_fdbg_v(vm_fdbg_v),
@@ -1270,9 +1286,9 @@ module jmr_js_core #(
     // Select on busy OR the write itself: the engine's LAST pixel write
     // asserts one clk after busy falls (registered fb_we), and a 1x1 op
     // IS its last pixel — keying on busy alone dropped it.
-    assign fb_we    = desk_fb_we ? desk_fb_we : (rast_busy || rast_fb_we) ? rast_fb_we    : vm_busy ? vm_fb_we    : demo_fb_we;
-    assign fb_waddr = desk_fb_we ? desk_fb_addr : (rast_busy || rast_fb_we) ? rast_fb_waddr : vm_busy ? vm_fb_waddr : demo_fb_waddr;
-    assign fb_wdata = desk_fb_we ? desk_fb_data : (rast_busy || rast_fb_we) ? rast_fb_wdata : vm_busy ? vm_fb_wdata : demo_fb_wdata;
+    assign fb_we    = tb_fb_we ? tb_fb_we : desk_fb_we ? desk_fb_we : (rast_busy || rast_fb_we) ? rast_fb_we    : vm_busy ? vm_fb_we    : demo_fb_we;
+    assign fb_waddr = tb_fb_we ? tb_fb_addr : desk_fb_we ? desk_fb_addr : (rast_busy || rast_fb_we) ? rast_fb_waddr : vm_busy ? vm_fb_waddr : demo_fb_waddr;
+    assign fb_wdata = tb_fb_we ? tb_fb_data : desk_fb_we ? desk_fb_data : (rast_busy || rast_fb_we) ? rast_fb_wdata : vm_busy ? vm_fb_wdata : demo_fb_wdata;
     // vm_fb_swap is a vm_clk-wide pulse (= VM_CLK_DIV clk cycles); the
     // present engine consumes edges at 100 MHz, so pass only the rise.
     logic vm_fb_swap_q;
@@ -1333,16 +1349,24 @@ module jmr_js_core #(
           .launch(fs_launch),.launch_name(fs_launch_name),.launch_len(fs_launch_len),.launch_how(fs_launch_how),
           .key_push(desk_key_push),.key_data(desk_key_data),.tool_start(shell_tool_start),.tool_finder(shell_tool_finder),.loading(shell_loading),.busy(desk_busy));
     end endgenerate
-    jmr_finder_fs u_finder_fs(.clk(clk),.rst_n(rst_n),.req(fs_req_sync[1] && !disk_busy),.command(vm_fs_cmd),
+    jmr_toolbox u_toolbox(.clk(clk),.rst_n(rst_n),.sys_valid(sys_status==1),
+      .req(fs_req_sync[1] && vm_fs_cmd==7 && !disk_busy),
+      .op(vm_fs_args[31:0]),.a(vm_fs_args[63:32]),.b(vm_fs_args[95:64]),.c(vm_fs_args[127:96]),
+      .busy(tb_busy),.reply(tb_reply),.result(tb_result),
+      .sram_req(tb_sram_req),.sram_we(tb_sram_we),.sram_addr(tb_sram_addr),.sram_wdata(tb_sram_data),
+      .sram_ack(sram_ack && sram_owner_q==3'd7 && tb_busy),.sram_rdata(sram_rdata),
+      .fb_we(tb_fb_we),.fb_addr(tb_fb_addr),.fb_data(tb_fb_data),
+      .fb_req(tb_fb_req),.fb_raddr(tb_fb_raddr),.fb_ack(tb_fb_ack),.fb_rdata(dump_fb_rdata));
+    jmr_finder_fs u_finder_fs(.clk(clk),.rst_n(rst_n),.req(fs_req_sync[1] && vm_fs_cmd!=7 && !disk_busy),.command(vm_fs_cmd),
       .arg0(vm_fs_args[31:0]),.arg1(vm_fs_args[63:32]),.arg2(vm_fs_args[95:64]),.arg3(vm_fs_args[127:96]),
-      .busy(fs_busy),.reply(fs_reply),.result(fs_result),.launch(fs_launch),.launch_name(fs_launch_name),.launch_len(fs_launch_len),.launch_how(fs_launch_how),
+      .busy(file_fs_busy),.reply(file_fs_reply),.result(file_fs_result),.launch(fs_launch),.launch_name(fs_launch_name),.launch_len(fs_launch_len),.launch_how(fs_launch_how),
       .stor_open(fs_open),.stor_close(fs_close),.stor_dir(fs_dir),.stor_next(fs_next),.stor_get(fs_get),.stor_put(fs_put),.stor_delete(fs_delete),.stor_rename(fs_rename),
       .stor_mode(fs_mode),.stor_name_len(fs_name_len),.stor_name_addr(fs_name_addr),.stor_put_data(fs_put_data),
       .stor_busy(stor_busy),.stor_done(stor_done),.stor_err(stor_err),.stor_missing(stor_missing),.stor_eof(stor_eof),
       .stor_line_len(stor_line_len),.stor_byte(stor_get_data),.stor_file_size(stor_file_size),.stor_dir_size(stor_dir_size),.stor_date(stor_date),.stor_attr(stor_attr),
       .mem_en(fs_mem_en),.mem_we(fs_mem_we),.mem_addr(fs_mem_addr),.mem_wdata(fs_mem_data),.mem_rdata(c_mem_rdata),.mem_gnt(c_mem_gnt && fs_busy),
       .sram_req(fs_sram_req),.sram_we(fs_sram_we),.sram_addr(fs_sram_addr),.sram_wdata(fs_sram_data),
-      .sram_ack(sram_ack && sram_owner_q==3'd7 && fs_busy),.sram_rdata(sram_rdata));
+      .sram_ack(sram_ack && sram_owner_q==3'd7 && file_fs_busy),.sram_rdata(sram_rdata));
     jmr_desktop_disk u_desktop_disk (
         .clk(clk),.rst_n(rst_n),.catalog_go((desk_catalog_go || docs_catalog_go || actions_catalog_go) && !fs_busy),.icon_go(desk_icon_go),.show_hidden(actions_catalog_active || (docs_catalog_active?docs_catalog_all:desk_hidden)),.icon_index(desk_icon_index),
         .busy(disk_busy),.done(disk_done),.disk_error(disk_error),.count(desk_count),

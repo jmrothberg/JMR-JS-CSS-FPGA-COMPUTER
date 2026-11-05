@@ -1,0 +1,45 @@
+<!doctype html>
+<!-- jmr-toolbox: resident-v1 -->
+<!-- Caller-owned arena: descriptors 100..227, bitmap 2000..6095,
+     UI descriptor 20000..20063 and font 21000..25095. -->
+<html><head><title>Bitmap Copy Demo</title></head><body><canvas width="640" height="480"></canvas><script>
+var c=document.querySelector("canvas").getContext("2d");
+c.systemAbout="Bitmap Copy Demo|Shared software using bounded bitmap transport";
+var held=0,changed=1,copyOK=0,captured=0,restored=0;
+var ready=tbUIInit(c,20000,21000,[66,105,116,109,97,112,32,67,111,112,121]);
+tbMenus([[[70,105,108,101],[[[82,101,112,101,97,116],1,1,0],[[81,117,105,116],2,1,0]]]]);
+function pointer(x,y,b){if(tbUIPointer(x,y,b))changed=1;}
+addEventListener("mousedown",function(e){held=1;pointer(e.clientX,e.clientY,held);});
+addEventListener("mousemove",function(e){pointer(e.clientX,e.clientY,held);});
+addEventListener("mouseup",function(e){held=0;pointer(e.clientX,e.clientY,held);});
+addEventListener("keydown",function(e){if(tbUIKey(e.keyCode,e.charCode))changed=1;});
+function paint(){
+ c.fillStyle="#FFF";c.fillRect(0,0,640,480);
+ tbText([83,111,117,114,99,101],80,122);
+ tbText([67,111,112,121,32,43,32,101,100,105,116],280,122);
+ c.fillStyle="#F00";c.fillRect(80,150,32,64);
+ c.fillStyle="#0F0";c.fillRect(112,150,32,64);
+ tbScreen(100);tbRect(100,80,150,64,64);
+ tbSurface(164,2000,64,64,64,8);
+ captured=tbCopyBits(100,164);
+ copyOK=captured==4096 && stgRead(2000)==2 && stgRead(2063)==3;
+ if(copyOK){
+  stgWrite(2000,7);
+  tbScreen(100);tbRect(100,0,0,64,64);tbPlace(100,280,150,1);
+  restored=tbCopyBits(164,100);copyOK=restored==4096;
+ }
+ if(copyOK)tbText([80,65,83,83],80,250);
+ else tbText([67,79,80,89,32,85,78,65,86,65,73,76,65,66,76,69],80,250);
+ tbText([83,99,114,101,101,110,32,62,32,82,65,77,32,62,32,115,99,114,101,101,110],80,280);
+ tbText([77,97,103,101,110,116,97,32,112,105,120,101,108,32,105,115,32,97,32,115,111,102,116,119,97,114,101,32,101,100,105,116],80,308);
+ tbUIDraw();changed=0;
+}
+function frame(){
+ var command=tbMenuCommand();
+ if(command==2||command==255){stgWrite(20063,0);sysRun(20063,8);return;}
+ if(command==1)changed=1;
+ if(tbUIChanged()||changed)paint();
+ requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body></html>

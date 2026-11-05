@@ -10,9 +10,9 @@ DIALOG_IDS={'open':0,'save_as':1,'changes':2,'replace':3,'message':4}
 class SystemResources:
     def __init__(self,blob=None):
         self.labels=dict(DEFAULT_LABELS);self.font=FONT;self.offsets={k:(0,0) for k in DIALOG_IDS}
-        self.buttons=DEFAULTS['dialog_buttons'];self.rounded=True;self.outline=True;self.status='builtin'
+        self.buttons=DEFAULTS['dialog_buttons'];self.rounded=True;self.outline=True;self.status='builtin';self.data=None
         if blob is None:return
-        data=unpack(blob)
+        data=unpack(blob);self.data=bytes(data)
         labels={}
         for ident in range(256):
             desc=struct.unpack_from('<I',data,INDEX+4*ident)[0];base=desc&2047;n=(desc>>11)&127

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>CopyBits framework</title></head>
+<body style="margin:0;background:#000">
+<!--
+  Framework for a still picture plus movers. Not a card program.
+  Do not copy this file into storage/. Do not mint it. Paste the functions
+  into the program's own script. Delete any function it does not call.
+
+  Call toolbox(6) only when (toolbox(0,0,0,0) & 32) != 0.
+  A -1 result means stop. Do not replace the call with a byte loop.
+  A script may declare 16 locals. If PIX, SCREEN, and SAVED do not fit,
+  write 0, 308000, and 308064 in the functions and drop those three names.
+
+  Other toolbox calls: resources/toolbox/toolbox.js. This file is only CopyBits.
+-->
+<canvas id="c" width="640" height="480"></canvas>
+<script>
+/*
+  Arena, logical bytes. Do not overlap these. Move all three together if they collide.
+    0 .. 307199       saved picture, 640*480, one palette index per byte
+    308000 .. 308063  screen descriptor
+    308064 .. 308127  saved-picture descriptor
+  Bytes 96..111 are the system Save As name. MacPaint and Finder own the arena.
+
+  Glass is 640x480. Rectangles are glass pixels. CopyBits ignores setTransform.
+  World to glass: ix = floor(worldX * scaleX); iy = floor(worldY * scaleY + originY).
+  srcCopy writes every index, including 0, so a black background restores.
+  The call does not present. requestAnimationFrame does.
+  Keep fillRect for a solid color. CopyBits only puts saved pixels back.
+
+  Frame order. Getting this wrong wipes the sprite or bakes it into the background.
+    1. Draw the still picture. No movers yet.
+    2. prepareMaps() once, then savePlayfield() once.
+    3. Later frames: cbBack(mover), draw the mover, cbKeep(mover, x, y, w, h).
+    4. A dead mover: cbWipe(mover) once.
+    5. The still picture changed: draw that change, then noteChange of that box only.
+       noteChange copies whatever is on the glass. Do not include the mover.
+*/
+
+var PIX = 0, SCREEN = 308000, SAVED = 308064;
+var ctx = document.getElementById("c").getContext("2d");
+
+/* --- descriptor helpers. Delete a helper only when nothing calls it. --- */
+
+/* Little-endian 16-bit field. Signed coordinates pass through two's complement. */
+function tbU16(p, n) {
+  n = Math.floor(n) % 65536;
+  if (n < 0) n = n + 65536;
+  stgWrite(p, n % 256);
+  stgWrite(p + 1, Math.floor(n / 256));
+}
+/* 64-byte record. bits is 8 for CopyBits. Scale stays 1. Clip is the glass. */
+function tbSurface(d, base, width, height, stride, bits) {
+  toolbox(2, d, 0, 64);
+  stgWrite(d, 1);
+  stgWrite(d + 1, bits);
+  stgWrite(d + 3, 1);
+  tbU16(d + 4, base);
+  tbU16(d + 6, Math.floor(base / 65536));
+  tbU16(d + 8, stride);
+  tbU16(d + 10, width);
+  tbU16(d + 12, height);
+  tbU16(d + 18, width);
+  tbU16(d + 20, height);
+  tbU16(d + 30, 640);
+  tbU16(d + 32, 480);
+}
+/* Source rectangle, bytes 14-21. It must lie inside that side's bitmap. */
+function tbRect(d, x, y, width, height) {
+  tbU16(d + 14, x);
+  tbU16(d + 16, y);
+  tbU16(d + 18, width);
+  tbU16(d + 20, height);
+}
+/* Destination origin, bytes 22-25. Scale must stay 1 for CopyBits. */
+function tbPlace(d, x, y, scale) {
+  tbU16(d + 22, x);
+  tbU16(d + 24, y);
+  stgWrite(d + 3, scale);
+}
+/* toolbox(6, src, dst, 0). Both rectangles must be the same size. */
+function tbCopy(src, dst) { return toolbox(6, src, dst, 0); }
+
+/* --- picture. Keep these. --- */
+
+/* Screen flag is byte 2, value 2, written after tbSurface. 0 means arena. */
+function prepareMaps() {
+  tbSurface(SCREEN, 0, 640, 480, 640, 8);
+  stgWrite(SCREEN + 2, 2);
+  tbSurface(SAVED, PIX, 640, 480, 640, 8);
+}
+/* Once, after the still picture is drawn and before any mover. */
+function savePlayfield() {
+  tbRect(SCREEN, 0, 0, 640, 480);
+  tbPlace(SAVED, 0, 0, 1);
+  tbRect(SAVED, 0, 0, 640, 480);
+  return tbCopy(SCREEN, SAVED);
+}
+/* Source must fit or the call returns -1. Clip, then keep both sides equal. */
+function aim(from, to, x, y, w, h) {
+  x = Math.floor(x); y = Math.floor(y); w = Math.floor(w); h = Math.floor(h);
+  if (x < 0) { w = w + x; x = 0; }
+  if (y < 0) { h = h + y; y = 0; }
+  if (x + w > 640) w = 640 - x;
+  if (y + h > 480) h = 480 - y;
+  if (w < 1 || h < 1) return 0;
+  tbRect(from, x, y, w, h);
+  tbPlace(to, x, y, 1);
+  tbRect(to, x, y, w, h);
+  return 1;
+}
+/* Put one saved box back on the glass. Call this before drawing the mover. */
+function restoreRect(x, y, w, h) {
+  if (!aim(SAVED, SCREEN, x, y, w, h)) return 0;
+  return tbCopy(SAVED, SCREEN);
+}
+/* The still picture changed. Draw the change first, then copy that box into the save. */
+function noteChange(x, y, w, h) {
+  if (!aim(SCREEN, SAVED, x, y, w, h)) return 0;
+  return tbCopy(SCREEN, SAVED);
+}
+
+/* --- one box stored on the mover. Delete this block if you track boxes yourself. --- */
+
+/* Restore the previous box. No _cb yet means this mover has not been drawn. */
+function cbBack(o) {
+  if (o._cb) return restoreRect(o._cb[0], o._cb[1], o._cb[2], o._cb[3]);
+  return 0;
+}
+/* Remember the box just drawn. Reuse one array. Pad it if the sprite overhangs. */
+function cbKeep(o, x, y, w, h) {
+  if (!o._cb) o._cb = [0, 0, 0, 0];
+  o._cb[0] = x; o._cb[1] = y; o._cb[2] = w; o._cb[3] = h;
+}
+/* Last restore for a mover that is gone. Clearing _cb stops a second restore. */
+function cbWipe(o) {
+  var n = cbBack(o);
+  o._cb = 0;
+  return n;
+}
+
+/* --- demo. Delete drawStill, frame, and the two objects. Keep the functions above. --- */
+
+var mover = {x: 40, y: 80};
+var ready = 0, dug = 0;
+
+function drawStill() {
+  ctx.fillStyle = "#226622";
+  ctx.fillRect(0, 0, 640, 480);
+  ctx.fillStyle = "#cccc00";
+  ctx.fillRect(100, 200, 440, 24);
+}
+
+function frame() {
+  if ((toolbox(0, 0, 0, 0) & 32) == 0) return;
+  if (ready == 0) {
+    drawStill();
+    prepareMaps();
+    if (savePlayfield() < 0) return;
+    ready = 1;
+  } else {
+    if (cbBack(mover) < 0) return;
+  }
+  ctx.fillStyle = "#ff0000";
+  ctx.fillRect(mover.x, mover.y, 32, 32);
+  cbKeep(mover, mover.x, mover.y, 32, 32);
+  /* Background edit. Delete this block when the still picture never changes. */
+  if (dug == 0 && mover.x > 200) {
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(180, 200, 24, 24);
+    if (noteChange(180, 200, 24, 24) < 0) return;
+    dug = 1;
+  }
+  mover.x = mover.x + 2;
+  if (mover.x > 600) {
+    cbWipe(mover);
+    mover.x = 40;
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

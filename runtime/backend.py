@@ -518,8 +518,16 @@ class PythonBackend(RuntimeBackend):
         from functional_model.system_resources import SystemResources
         try:
             resources=SystemResources(machine.storage.load_bytes('SYSTEM.SYS'))
+            toolbox_sys_data=resources.data
         except (FileNotFoundError,ValueError,OSError):
             resources=SystemResources()
+            toolbox_sys_data=None
+        machine._toolbox_sys_data=toolbox_sys_data
+        from functional_model.toolbox_rom import unpack_rom,default_code
+        try:
+            machine._toolbox_code=unpack_rom(machine.storage.load_bytes("TOOLBOX.ROM"))
+        except (FileNotFoundError,ValueError,OSError):
+            machine._toolbox_code=default_code()
         self.system_menu.resources=resources
         self.system_menu.classic.resources=resources
         self.machine.system_progress=self._system_progress
@@ -829,7 +837,7 @@ class PythonBackend(RuntimeBackend):
     def _cancel_dialog(self):
         if hasattr(self,'_name_keyboard_was'):
             self.system_menu.keyboard=self._name_keyboard_was;del self._name_keyboard_was
-        self._pending_change=None;self._after_save=None
+        self._pending_change=None;self._after_save=None;self._owned_key=0
 
     def _classic_actions(self,actions):
         if self.machine.system_compiling:
@@ -857,6 +865,14 @@ class PythonBackend(RuntimeBackend):
                     self.system_menu.classic.show_files(files)
                 elif command=='save':self._save_document()
                 elif command=='save_as':self._save_document(force_name=True)
+                elif command.startswith('open:'):
+                    # A program-owned Open... uses the shared list. The
+                    # program loads the bytes; this does not LOAD SOURCE.
+                    self._owned_key=int(command[5:])
+                    self.system_menu.classic.show_files([n for n,size in self.machine.storage.list_all()])
+                elif command.startswith('save_as:'):
+                    self._owned_key=int(command[8:])
+                    self.system_menu.classic.show_name(getattr(self,'_owned_name',''))
                 elif command=='restart_app':
                     image=self.machine._hw_vm.program_image
                     self._classic_actions(self.system_menu.release_keys())
@@ -868,9 +884,13 @@ class PythonBackend(RuntimeBackend):
                     keys={'undo':137,'cut':138,'copy':139,'paste':140,'clear':141,'select_all':142,'page_up':130,'page_down':131}
                     if command in keys:self._send_system_key(keys[command])
             elif name=='open_file':
-                role=self.system_menu.window[0]
-                self.system_menu.classic.dialog=None
-                self._request_change(('open',action[1],role))
+                if getattr(self,'_owned_key',0):
+                    self.system_menu.classic.dialog=None
+                    self._give_owned_name(action[1])
+                else:
+                    role=self.system_menu.window[0]
+                    self.system_menu.classic.dialog=None
+                    self._request_change(('open',action[1],role))
             elif name=='save_name':self._confirm_save_name(action[1])
             elif name=='changes':
                 pending=self._pending_change;self._pending_change=None;self.system_menu.classic.dialog=None
@@ -878,6 +898,8 @@ class PythonBackend(RuntimeBackend):
                 elif pending:self._perform_change(pending)
             elif name=='replace':
                 target=self._replace_name;self.system_menu.classic.dialog=None
+                if getattr(self,'_owned_replace',False):
+                    self._owned_replace=False;self._give_owned_name(target);continue
                 if getattr(self,'_compile_save_as',False):
                     self._compile_save_as=False
                     self._compile_to(target,copy=True)
@@ -977,7 +999,38 @@ class PythonBackend(RuntimeBackend):
             self.system_menu.classic.show_name(self.machine.source_name or 'UNTITLED.TXT')
         else:self._start_save(self.machine.source_name)
 
+    def _give_owned_name(self,name):
+        """Leave the chosen 8.3 name at arena bytes 96-111, then the menu key.
+
+        That slot is the filename field the console already uses. The
+        program reads it and writes or loads its own bytes. SOURCE is
+        not saved and the editor is not restarted.
+        """
+        raw=str(name or '').encode('ascii','replace')[:12]
+        for i in range(16):
+            self.machine._nat_stg_write(96+i, raw[i] if i<len(raw) else 0)
+        key=self._owned_key;self._owned_key=0;self._owned_name=str(name or '')
+        self.system_menu.classic.dialog=None
+        self._send_system_key(key)
+
+    def _confirm_owned_name(self,name):
+        from hardware_model.fat32 import Fat32Volume
+        name=name.strip().upper();stem,dot,ext=name.partition('.')
+        if not stem or len(stem)>8 or len(ext)>3 or (dot and not ext):
+            self.system_menu.classic.message='Use 1-8 letters, then a short suffix.';return
+        check=name if dot else stem
+        if Fat32Volume.decode_83(Fat32Volume.encode_83(check if not dot else name))!=(check if not dot else name):
+            self.system_menu.classic.message='Use 1-8 letters, then a short suffix.';return
+        existing={n.upper() for n,size in self.machine.storage.list_all()}
+        if name in existing:
+            self._replace_name=name;self._owned_replace=True
+            self.system_menu.classic.dialog='replace';return
+        self._owned_replace=False
+        self._give_owned_name(name)
+
     def _confirm_save_name(self,name):
+        if getattr(self,'_owned_key',0):
+            self._confirm_owned_name(name);return
         from hardware_model.fat32 import Fat32Volume
         name=name.strip().upper();stem,dot,ext=name.partition('.')
         if ext=='HTML':ext='HTM';name=stem+'.HTM'

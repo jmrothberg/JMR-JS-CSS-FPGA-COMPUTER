@@ -62,7 +62,12 @@ def parse_owned_menus(spec):
             if not sep or not code.isdigit() or not 160<=int(code)<=239 or not 1<=len(title)<=24 or int(code) in seen:
                 raise ValueError('systemMenus: unique commands 160-239, labels 1-24 bytes')
             seen.add(int(code))
-            action='close' if title in ('Quit','Close') else 'app:'+code
+            # Open... and Save As... are the shared boxes. Save stays a
+            # command: the program already has a name and writes the file.
+            if title in ('Quit','Close'):action='close'
+            elif title=='Open...':action='open:'+code
+            elif title=='Save As...':action='save_as:'+code
+            else:action='app:'+code
             rows.append((title,action,True))
         result.append((label,rows))
     width=sum(sum(FONT.get(c,FONT['?'])['advance'] for c in label)+20 for label,_rows in result)

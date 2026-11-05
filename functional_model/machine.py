@@ -754,33 +754,6 @@ class Machine:
             jsb_format.ProgramImage(blob), share_machine=True
         )
 
-    def _stage_card_catalog(self) -> None:
-        """Park every FAT file (name + size) in the compile arena.
-
-        Layout: bytes 0-3 = 'U' 'T' 'L' 1, then records
-        (u8 nlen, name bytes, u32 size LE), then nlen=0. DIR still hides
-        .JSH; this dump is what UTILITY.HTML reads via stgRead.
-        """
-        off = 0
-        for b in (0x55, 0x54, 0x4C, 0x01):
-            self._nat_stg_write(off, b)
-            off += 1
-        # Same A–Z order as the Finder list view.
-        for name, size in sorted(self.storage.list_all(), key=lambda item: item[0].upper()):
-            raw = name.encode("ascii", "replace")[:15]
-            self._nat_stg_write(off, len(raw))
-            off += 1
-            for ch in raw:
-                self._nat_stg_write(off, ch)
-                off += 1
-            sz = int(size) & 0xFFFFFFFF
-            self._nat_stg_write(off, sz & 255)
-            self._nat_stg_write(off + 1, (sz >> 8) & 255)
-            self._nat_stg_write(off + 2, (sz >> 16) & 255)
-            self._nat_stg_write(off + 3, (sz >> 24) & 255)
-            off += 4
-        self._nat_stg_write(off, 0)
-
     def _finish_program_op(self, status: int, message: str) -> List[str]:
         """Act on what a chained program reported through cdone().
 
@@ -950,11 +923,6 @@ class Machine:
             "COMPILE",
             f"card {stem}.JSH → ProgramImage ({len(blob)} bytes)",
         )
-        if stem == "UTILITY":
-            # HTML catalog viewer: park every FAT name+size so stgRead works.
-            # Not a READY verb. LOAD "UTILITY.HTML" then RUN.
-            self._stage_card_catalog()
-            return self._start_html_image(image, share_machine=True)
         return self._start_html_image(image)
 
     def _run_html_bytecode(self, html: str) -> List[str]:
@@ -1030,6 +998,10 @@ class Machine:
             # One Machine: SOURCE + compile arena stay where LOAD staged them.
             # RUN of a title keeps a private _m (games do not read srcByte).
             hw._m = self
+        if hasattr(self, "_toolbox_sys_data"):
+            hw._m._toolbox_sys_data = self._toolbox_sys_data
+        if hasattr(self, "_toolbox_code"):
+            hw._m._toolbox_code = self._toolbox_code
         hw.canvas = self.canvas
         hw.input = self.input
         hw._m.canvas = self.canvas
@@ -1169,6 +1141,7 @@ class Machine:
             "srcLen": self._nat_src_len,
             "srcByte": self._nat_src_byte,
             "stgRead": self._nat_stg_read,
+            "toolbox": self._nat_toolbox,
             "stgWrite": self._nat_stg_write,
             "cdone": self._nat_cdone,
             "artWrite2": self._nat_art_write2,
@@ -1704,6 +1677,10 @@ class Machine:
             )
         self.sram.mem[word * 2] = int(b) & 0xFF
         return None
+
+    def _nat_toolbox(self, op=0, a=0, b=0, c=0):
+        from .toolbox import execute
+        return float(execute(self, int(op), int(a), int(b), int(c)))
 
     def _arena_name(self, off: int, maxlen: int = 16) -> str:
         """NUL-terminated arena bytes. The Finder program keeps names there."""

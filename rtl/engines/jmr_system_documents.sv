@@ -46,7 +46,12 @@ module jmr_system_documents (
  output logic [26:0] label_data,
  output logic [5:0] label_col,
  output logic label_commit,
- input logic label_ready
+ input logic label_ready,
+ // Nonzero when an owned menu asked for the shared Open or Save As box.
+ // The same value is returned with the finished command so the program,
+ // not the SOURCE saver, receives its own command key.
+ input logic [7:0] relay_key=8'd0,
+ output logic [7:0] relay_code
 );
  import jmr_classic_ui_pkg::*;
  localparam logic [2:0] D_OPEN=1,D_NAME=2,D_CHANGES=3,D_REPLACE=4,D_MESSAGE=5;
@@ -149,16 +154,22 @@ module jmr_system_documents (
    generation<=generation+1'b1;
   end
  endtask
+ logic [7:0] held_key;
  task automatic pass_command(input logic [3:0] value);
-  begin command_stb<=1;command<=value;dialog<=0;generation<=generation+1'b1;end
+  begin command_stb<=1;command<=value;relay_code<=held_key;held_key<=0;dialog<=0;generation<=generation+1'b1;end
  endtask
  task automatic request(input logic [3:0] value);
   begin
-   after_valid<=0;
+   after_valid<=0;held_key<=relay_key;
    if(value==2)begin
-    dialog<=D_OPEN;cat_phase<=1;cat_all<=0;file_count<=0;selected<=511;file_top<=0;generation<=generation+1'b1;
+    // An owned Open... lists every file. The program decides what it can read.
+    dialog<=D_OPEN;cat_phase<=1;cat_all<=relay_key!=0;file_count<=0;selected<=511;file_top<=0;generation<=generation+1'b1;
    end else if(value==3)begin if(unnamed)show_name();else pass_command(3);end
-   else if(value==4)show_name();
+   else if(value==4)begin
+    show_name();
+    // The loaded title's name is not this picture's name. Start empty.
+    if(relay_key!=0)begin edit_name<=0;name_len<=0;caret<=0;end
+   end
    else if(dirty && value!=5)begin pending_action<=value;dialog<=D_CHANGES;generation<=generation+1'b1;end
    else pass_command(value);
   end
@@ -188,7 +199,7 @@ module jmr_system_documents (
   if(!rst_n)begin
    mouse_event<=0;mouse_down<=0;mouse_up<=0;mouse_held<=0;mouse_dialog<=0;mouse_hit<=3;mouse_x<=0;mouse_y<=0;
    caret<=0;caret_px<=0;caret_on<=0;blink_frame<=0;blink_half<=0;flash_frames<=0;armed_button<=3;hot_button<=3;caret_scan<=0;scan_phase<=0;scan_glyph<=0;scan_advance<=0;scan_i<=0;scan_px<=0;scan_target<=0;
-   dialog<=0;generation<=0;command_stb<=0;command<=0;chosen_name<=0;chosen_len<=0;
+   dialog<=0;generation<=0;command_stb<=0;command<=0;relay_code<=0;held_key<=0;chosen_name<=0;chosen_len<=0;
    after_valid<=0;after_action<=0;after_name<=0;after_len<=0;
    edit_name<=0;candidate_name<=0;candidate_len<=0;pending_name<=0;pending_len<=0;pending_action<=0;
    keyboard_saved<=0;keyboard_forced<=0;keyboard_set_stb<=0;keyboard_set_on<=0;
@@ -223,9 +234,9 @@ module jmr_system_documents (
     end
     default:scan_phase<=0;
    endcase
-   command_stb<=0;keyboard_set_stb<=0;catalog_go<=0;file_we<=0;
+   command_stb<=0;relay_code<=0;keyboard_set_stb<=0;catalog_go<=0;file_we<=0;
    if(label_valid && label_ready)begin label_valid<=0;generation<=generation+1'b1;end
-   if(app_clear)begin dialog<=0;after_valid<=0;old_buttons<=0;op_phase<=0;generation<=generation+1'b1;end
+   if(app_clear)begin dialog<=0;after_valid<=0;held_key<=0;old_buttons<=0;op_phase<=0;generation<=generation+1'b1;end
    if(request_stb && (!kernel_busy || (window_state[7:0]==3 && request_action==0)))request(request_action);
    if(shortcut_save && dialog==0 && !kernel_busy)request(3);
    if(error_pulse)begin op_phase<=0;dialog<=D_MESSAGE;message_id<=descriptor_error?166:164;generation<=generation+1'b1;end
