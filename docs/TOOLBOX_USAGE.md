@@ -124,3 +124,18 @@ functions rather than assuming arbitrary prototype-method dispatch. Reserve
 shared session scratch380320..380927 and document continuation fields if using
 the high-level UI; neither graphics example writes there. SYSTEM.SYS resource
 reads require the cold-boot snapshot and return−1 when unavailable.
+
+## Drawing ports and shared client modules
+
+Raw `tbPlace` and CopyBits descriptors retain explicit coordinates. Use
+`tbPlaceScreen` for a screen draw in the active local Port; `tbText` already does.
+Use screen-space clips with `tbPortPush`, check success, and pair each successful
+push with one pop. Do not call the low-level scissor reset inside nested scopes.
+The session restores scopes before drawing global menus/chrome.
+
+The shared optional modules are real inline HTML. Check them with
+`python3 tools/sync_toolbox_clients.py` before minting. UISESS demonstrates nested
+clipping and overlap-copy scrolling without a backing framebuffer. Read the
+complete contracts in [TOOLBOX_API.md](TOOLBOX_API.md#shared-windows-ports-controls-and-damage-in-this-candidate).
+This candidate requires native capability mask 0xF80; pair it with its matching
+RTL/bit. Relink ROM/LNK and all clients together, then cold-restart.

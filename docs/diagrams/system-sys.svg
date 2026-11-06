@@ -15,10 +15,10 @@
 <text x="448" y="216" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Writes version, length and CRC-32</text>
 <text x="448" y="241" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Replace SYSTEM.SYS on the disk</text>
 <rect x="820" y="110" width="340" height="160" rx="6" fill="white" stroke="#879ba4"/>
-<text x="838" y="139" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">3  Cold boot / reopen</text>
+<text x="838" y="139" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">3  Cold machine restart</text>
 <text x="838" y="166" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Read through the FAT filesystem</text>
 <text x="838" y="191" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Validate before applying payload</text>
-<text x="838" y="216" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Missing/bad file → cold defaults</text>
+<text x="838" y="216" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Missing/bad data: safe error</text>
 <text x="838" y="241" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Python reads the same disk file</text>
 <rect x="40" y="330" width="730" height="210" rx="6" fill="white" stroke="#879ba4"/>
 <text x="58" y="359" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">What the 24,336-byte file contains</text>
@@ -26,24 +26,24 @@
 <text x="58" y="411" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Font rows 4,096 B • caption text 4,096 B • indexes 1,024 B</text>
 <text x="58" y="436" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Headings + padding 128 B • dialog config + padding 128 B</text>
 <text x="58" y="461" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Keyboard legends 10,240 B • ship captions 512 B</text>
-<text x="58" y="486" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Accessory captions 384 B • reserved 3,712 B</text>
+<text x="58" y="486" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Accessory labels 384 B • TBF1 block 3,168 B • unused 544 B</text>
 <rect x="820" y="330" width="340" height="210" rx="6" fill="white" stroke="#879ba4"/>
 <text x="838" y="359" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">4  Live consumers</text>
 <text x="838" y="386" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Acknowledged core → pixel writes</text>
-<text x="838" y="411" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Font / caption / legend memories</text>
-<text x="838" y="436" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Dialog drawing + matching hit areas</text>
-<text x="838" y="461" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Startup text uses loaded captions</text>
-<text x="838" y="486" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Native UI + tbResources / tbText</text>
+<text x="838" y="411" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Legacy font, captions and keys</text>
+<text x="838" y="436" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Software UI: normalized glyphs</text>
+<text x="838" y="461" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Per-app 32-byte glyph scratch</text>
+<text x="838" y="486" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Boot/recovery UI remains independent</text>
 <rect x="40" y="600" width="550" height="140" rx="6" fill="white" stroke="#879ba4"/>
-<text x="58" y="629" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">Example • a more Macintosh-like Save dialog</text>
-<text x="58" y="656" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Prompt: “Save current document as:”</text>
-<text x="58" y="681" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Keep Chicago, round buttons and default outline</text>
-<text x="58" y="706" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Place Cancel left, outlined Save right; actions unchanged</text>
+<text x="58" y="629" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">Compatibility and memory ownership</text>
+<text x="58" y="656" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Native readers stop before byte 20,608</text>
+<text x="58" y="681" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Legacy bytes 0..20,607 are unchanged</text>
+<text x="58" y="706" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">No added payload, shared RAM or per-app font copy</text>
 <rect x="640" y="600" width="520" height="140" rx="6" fill="white" stroke="#879ba4"/>
-<text x="658" y="629" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">Limits of format 1</text>
-<text x="658" y="656" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">New UI behavior belongs in TOOLBOX.ROM</text>
-<text x="658" y="681" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">SYS stores data, not executable code</text>
-<text x="658" y="706" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Software UI uses SYS glyphs; its layout is code</text>
+<text x="658" y="629" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">Typed software font block: TBF1 schema 1</text>
+<text x="658" y="656" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Normalized glyphs/widths: 20,608..23,775</text>
+<text x="658" y="681" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Unused tail: 23,776..24,319 (544 bytes)</text>
+<text x="658" y="706" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">VM checks first 8 header bytes; host checks all 16</text>
 <path d="M380 185 L430 185" fill="none" stroke="#3a5967" stroke-width="2" marker-end="url(#a)"/>
 <path d="M770 185 L820 185" fill="none" stroke="#3a5967" stroke-width="2" marker-end="url(#a)"/>
 <path d="M990 270 L990 330" fill="none" stroke="#3a5967" stroke-width="2" marker-end="url(#a)"/>

@@ -84,6 +84,7 @@ module jmr_js_vm #(
     output logic [127:0] vm_ftrace,
     output logic [47:0]  vm_gdbg,   // {fault_site, fault_arg} — latch on vm_fdbg_v edge
     // sound(ch,freq,vol,frames,slide) poke -> PSG PHY (top-level leaf)
+    input  logic        snd_ack, // destination captured the held sound packet
     output logic        snd_tgl,
     output logic [1:0]  snd_ch,
     output logic [15:0] snd_freq,
@@ -92,6 +93,7 @@ module jmr_js_vm #(
     output logic [7:0]  snd_slide,
     output logic        fb_we,
     output logic [18:0] fb_waddr,
+    output logic [9:0]  fb_x, fb_y,
     output logic [7:0]  fb_wdata,
     output logic        fb_swap,
     // NEW: getImageData reads the back bank (FM _nat_get_image_data twin).
@@ -418,8 +420,9 @@ module jmr_js_vm #(
     logic [63:0] vthis /*verilator public_flat_rd*/;
     logic [63:0] venv_ff /*verilator public_flat_rd*/;
     logic [63:0] venv /*verilator public_flat_rd*/;
-    (* ram_style = "block" *) logic [15:0] vframe_return_ip [0:CSTK-1] /*verilator public_flat_rd*/;
-    (* ram_style = "block" *) logic [11:0] vframe_base_sp [0:CSTK-1] /*verilator public_flat_rd*/;
+    // These fields share every write/read address and enable, including GC
+    // and FOREACH. Pack one28-bit word without changing the read latency.
+    (* ram_style = "block" *) logic [27:0] vframe_control [0:CSTK-1] /*verilator public_flat_rd*/;
     (* ram_style = "block" *) logic [63:0] vframe_this [0:CSTK-1] /*verilator public_flat_rd*/;
     (* ram_style = "block" *) logic [63:0] vframe_env [0:CSTK-1] /*verilator public_flat_rd*/;
     (* ram_style = "block" *) logic [63:0] vframe_fn [0:CSTK-1] /*verilator public_flat_rd*/;
@@ -1656,8 +1659,8 @@ module jmr_js_vm #(
         vfr_do = vfr_we || e64_vframe_we;
         vfr_a  = vfr_we ? vfr_wa : e64_vframe_waddr;
         if (vfr_do) begin
-            vframe_return_ip[vfr_a] <= vfr_we ? vfr_rip  : e64_vframe_rip_wdata;
-            vframe_base_sp[vfr_a]   <= vfr_we ? vfr_bsp  : e64_vframe_bsp_wdata;
+            vframe_control[vfr_a] <= vfr_we ? {vfr_rip, vfr_bsp}
+                                           : {e64_vframe_rip_wdata, e64_vframe_bsp_wdata};
             vframe_this[vfr_a]      <= vfr_we ? vfr_this : e64_vframe_this_wdata;
             vframe_env[vfr_a]       <= vfr_we ? vfr_env  : e64_vframe_env_wdata;
             vframe_fn[vfr_a]        <= vfr_we ? vfr_fn   : e64_vframe_fn_wdata;
@@ -2192,28 +2195,47 @@ module jmr_js_vm #(
         output logic valid,
         output logic signed [32:0] index
     );
-        logic [52:0] mant;
         logic [32:0] magnitude;
-        integer unbiased;
+        logic [5:0] shift;
         begin
             valid = value[62:52] != 11'h7ff;
             index = 33'sd0;
-            if (valid && value[62:0] != 0 && value[62:52] != 0) begin
-                mant = {1'b1, value[51:0]};
-                unbiased = value[62:52] - 1023;
-                if (unbiased >= 0) begin
-                    if (unbiased > 31)
-                        magnitude = 33'h1ffffffff;
-                    else if (unbiased >= 52)
-                        magnitude = 33'(mant << (unbiased - 52));
-                    else
-                        magnitude = 33'(mant >> (52 - unbiased));
-                    index = value[63] ? -$signed(magnitude)
-                                      : $signed(magnitude);
+            magnitude = 33'd0;
+            shift = 6'd0;
+            // Nonnegative integer magnitudes only need exponents 0..31.
+            // Biased comparisons avoid a 32-bit signed exponent subtract;
+            // the surviving right-shift range is exactly 21..52.
+            if (valid && value[62:52] >= 11'd1023) begin
+                if (value[62:52] > 11'd1054)
+                    magnitude = 33'h1ffffffff;
+                else begin
+                    shift = 6'(11'd1075 - value[62:52]);
+                    magnitude = 33'({1'b1, value[51:0]} >> shift);
                 end
+                // Preserve the existing signed33 overflow sentinel exactly.
+                index = value[63] ? -$signed(magnitude)
+                                  : $signed(magnitude);
             end
         end
     endtask
+
+    // Native64 readU32 distinguishes a successful unsigned word from the
+    // signed -1 error using the already-latched, fully validated request.
+    // All other services retain the existing signed result ABI.
+    function automatic logic [63:0] v64_fs_number(
+        input logic [2:0] command,
+        input logic [127:0] arguments,
+        input logic [31:0] result
+    );
+        if (command == 3'd7 && arguments[31:0] == 32'd8 &&
+            arguments[63:32] <= jmr_js_vm_pkg::CSTG_WORDS - 4 &&
+            arguments[95:64] == 32'd0 && arguments[127:96] == 32'd0 &&
+            result[31])
+            // 2^31..2^32-1 all have exponent31 and are exactly representable.
+            v64_fs_number = {1'b0, 11'd1054, result[30:0], 21'd0};
+        else
+            v64_fs_number = v64_int32_number(result);
+    endfunction
 
     // v64_to_uint32 / v64_int32_number / v64_u32_fraction: jmr_value_pkg
 
@@ -2229,36 +2251,57 @@ module jmr_js_vm #(
         logic [52:0] mant;
         logic [53:0] rounded;
         logic guard, sticky;
-        integer top, unbiased, shift;
+        // Signed exponent is 13 bits. Subtracting at most one and the
+        // possible rounding carry require 14 bits: [-4097,4096].
+        logic signed [13:0] unbiased;
+        logic [6:0] shift_minus_one;
+        logic [106:0] shifted;
+        logic tiny;
         begin
-            top = quot[54] ? 54 : 53;
-            unbiased = exponent + top - 54;
-            shift = top - 52;
-            if (unbiased < -1022)
-                shift = shift + (-1022 - unbiased);
-            mant = (shift >= 107) ? 53'd0 : 53'(quot >> shift);
-            guard = 1'b0;
+            unbiased = $signed({exponent[12],exponent})
+                       - (quot[54] ? 14'sd0 : 14'sd1);
+            // For subnormals the original shift simplifies exactly to
+            // -1020-exponent, independently of quot[54]. Beyond 107 all
+            // quotient bits are sticky; guard and mantissa are zero.
+            tiny = (unbiased < -14'sd1022) && (exponent < -13'sd1127);
+            if (unbiased < -14'sd1022 && !tiny)
+                shift_minus_one = 7'(-14'sd1021-$signed({exponent[12],exponent}));
+            else
+                shift_minus_one = quot[54] ? 7'd1 : 7'd0;
+            shifted = quot;
             sticky = |div_rem;
-            if (shift > 0 && shift <= 107) begin
-                guard = quot[shift - 1];
-                for (int k = 0; k < 107; k++)
-                    if (k < shift - 1)
-                        sticky = sticky | quot[k];
-            end else if (shift > 107) begin
-                sticky = sticky | (|quot);
+            // Shift one less than the mantissa shift, retaining guard in
+            // bit zero. Each barrel stage folds exactly its discarded bits
+            // into sticky, replacing 107 wide integer range comparisons.
+            for (int stage = 0; stage < 7; stage++) begin
+                if (shift_minus_one[stage]) begin
+                    case (stage)
+                        0: sticky = sticky | (|shifted[0:0]);
+                        1: sticky = sticky | (|shifted[1:0]);
+                        2: sticky = sticky | (|shifted[3:0]);
+                        3: sticky = sticky | (|shifted[7:0]);
+                        4: sticky = sticky | (|shifted[15:0]);
+                        5: sticky = sticky | (|shifted[31:0]);
+                        6: sticky = sticky | (|shifted[63:0]);
+                    endcase
+                    shifted = shifted >> (1 << stage);
+                end
             end
+            mant = tiny ? 53'd0 : shifted[53:1];
+            guard = !tiny && shifted[0];
+            if (tiny) sticky = sticky | (|quot);
             rounded = {1'b0, mant}
                     + (guard && (sticky || mant[0]));
-            if (unbiased >= -1022) begin
+            if (unbiased >= -14'sd1022) begin
                 if (rounded[53]) begin
                     mant = rounded[53:1];
-                    unbiased = unbiased + 1;
+                    unbiased = unbiased + 14'sd1;
                 end else
                     mant = rounded[52:0];
-                if (unbiased > 1023)
+                if (unbiased > 14'sd1023)
                     result = {sign, 11'h7ff, 52'd0};
                 else
-                    result = {sign, 11'(unbiased + 1023), mant[51:0]};
+                    result = {sign, 11'(unbiased + 14'sd1023), mant[51:0]};
             end else if (rounded[52]) begin
                 result = {sign, 11'd1, 52'd0};
             end else if (rounded == 0) begin
@@ -4912,7 +4955,7 @@ module jmr_js_vm #(
         .vvar_valid_waddr_q(e64_vvar_valid_waddr),
         .vvar_valid_wdata_q(e64_vvar_valid_wdata),
         .vvars_we_q(e64_vvars_we),
-        .snd_tgl(snd_tgl), .snd_ch(snd_ch), .snd_freq(snd_freq),
+        .snd_ack(snd_ack), .snd_tgl(snd_tgl), .snd_ch(snd_ch), .snd_freq(snd_freq),
         .snd_vol(snd_vol), .snd_frames(snd_frames), .snd_slide(snd_slide),
         .vvars_waddr_q(e64_vvars_waddr),
         .vvars_wdata_q(e64_vvars_wdata),
@@ -5869,12 +5912,7 @@ module jmr_js_vm #(
                  valloc_kind == 2'd2 && valloc_bind &&
                  valloc_bind_src != 13'h1FFF) ?
                     valloc_bind_src : e64_vfn_raddr];
-            vframe_rip_rdata <= vframe_return_ip[
-                (casestate_q == S_V64_FOREACH || state == S_V64_FOREACH) &&
-                (e64_vcsp_q != 8'd0) ? (e64_vcsp_q - 8'd1) :
-                (casestate_q == S_V64_GC_ROOT || state == S_V64_GC_ROOT) ?
-                    vgc_root_i[8:2] : e64_vframe_raddr];
-            vframe_bsp_rdata <= vframe_base_sp[
+            {vframe_rip_rdata, vframe_bsp_rdata} <= vframe_control[
                 (casestate_q == S_V64_FOREACH || state == S_V64_FOREACH) &&
                 (e64_vcsp_q != 8'd0) ? (e64_vcsp_q - 8'd1) :
                 (casestate_q == S_V64_GC_ROOT || state == S_V64_GC_ROOT) ?
@@ -6249,7 +6287,7 @@ module jmr_js_vm #(
             did_swap <= 1'b0; present_pend <= 1'b0; fb_dirty <= 1'b0;
             fbs_armed <= 1'b0;
             env_len_arm <= 1'b0;
-            fb_waddr <= '0; fb_wdata <= '0;
+            fb_waddr <= '0; fb_wdata <= '0; fb_x <= '0; fb_y <= '0;
             fb_dump_addr <= '0; fb_dump_sel <= 1'b0;
             sp <= '0; hs_ip('0);
             hs_vsp('0); hs_vcsp('0); vconst_lo <= '0;
@@ -8514,6 +8552,7 @@ module jmr_js_vm #(
                             && (!path_stroke || d2 >= r2in)) begin
                             fb_we <= 1'b1;
                             fb_waddr <= 19'(y) * 19'(MW) + 19'(x);
+                            fb_x <= x; fb_y <= y;
                             fb_wdata <= color;
                             dbg_circ_px <= dbg_circ_px + 32'd1; // flood hunt
                         end
@@ -8543,6 +8582,7 @@ module jmr_js_vm #(
                             bl_y >= 16'sd0 && bl_y < 16'(MH)) begin
                             fb_we <= 1'b1;
                             fb_waddr <= 19'(bl_y) * 19'(MW) + 19'(bl_x);
+                            fb_x <= bl_x[9:0]; fb_y <= bl_y[9:0];
                             fb_wdata <= color;
                             dbg_line_px <= dbg_line_px + 32'd1; // flood hunt
                         end
@@ -10599,6 +10639,7 @@ module jmr_js_vm #(
                             yy >= 32'sd0 && yy < $signed(32'(MH))) begin
                             fb_we <= 1'b1;
                             fb_waddr <= 19'(yy) * 19'(MW) + 19'(xx);
+                            fb_x <= 10'(xx); fb_y <= 10'(yy);
                             fb_wdata <= color;
                         end
                         // clear pixels cost no time: skip the whole k*k block
@@ -14425,7 +14466,7 @@ module jmr_js_vm #(
                     else if(fs_phase==5 && fs_reply_sync[1])begin
                         fs_result_q<=fs_result;fs_request<=0;fs_phase<=6;
                     end else if(fs_phase==6 && !fs_reply_sync[1])begin
-                        vst_wr(vnat_base,v64_int32_number(fs_result_q));
+                        vst_wr(vnat_base,v64_fs_number(fs_command, fs_arguments, fs_result_q));
                         hs_vsp(vnat_base+12'd1);hs_ip(ip+16'd1);hs_code(15'(ops_base+ip+16'd1));
                         if(fs_command==6 && !fs_result_q[31])begin running<=0;hs_st(S_DONE);end
                         else hs_st(S_FETCH_WAIT);

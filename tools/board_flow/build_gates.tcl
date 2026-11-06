@@ -58,3 +58,43 @@ proc jmr_placed_run_ready {status progress} {
     {Not started phys_opt_design} {Not started route_design}
   }}]
 }
+
+# A passing WNS does not cover paths excluded by missing clocks. These are
+# internal checks; ordinary asynchronous external I/O is assessed separately.
+proc jmr_internal_timing_gate {report latch_cells} {
+  if {[llength $latch_cells] != 0} {
+    error "Unexpected inferred latches: $latch_cells"
+  }
+  foreach check {no_clock unconstrained_internal_endpoints} {
+    set pattern [format {checking %s \(([0-9]+)\)} $check]
+    set matches [regexp -all -inline $pattern $report]
+    if {[llength $matches] == 0} {
+      error "Missing internal timing coverage check: $check"
+    }
+    foreach {heading count} $matches {
+      if {$count != 0} {error "Internal timing coverage failed: $check=$count"}
+    }
+  }
+}
+
+# ACK protocol holds audio data; actual routed paths must still have a bounded
+# settling time. Empty/false-pathed collections are a failure, not a waiver.
+proc jmr_audio_payload_gate {out} {
+  set src [get_cells -hierarchical -regexp {.*u_exec64/snd_(ch|freq|vol|frames|slide)_reg(\[[0-9]+\])?}]
+  set dst [get_cells -hierarchical -regexp {.*u_psg/v(freq|vol|frames|slide|phase)_reg.*}]
+  set pins [get_pins -of_objects $dst -filter {REF_PIN_NAME == D || REF_PIN_NAME == CE || REF_PIN_NAME == R || REF_PIN_NAME == S}]
+  if {[llength $src] != 38 || [llength $pins] == 0} {
+    error "Audio held-payload endpoints missing or changed: source=[llength $src], destination=[llength $pins]"
+  }
+  foreach reg $src {
+    set paths [get_timing_paths -delay_type max -from $reg -to $pins -max_paths 1]
+    if {[llength $paths] == 0} {error "Audio payload has no timed capture path: $reg"}
+    set requirement [get_property REQUIREMENT $paths]
+    set slack [get_property SLACK $paths]
+    if {![string is double -strict $requirement] || $requirement > 83.334 ||
+        ![string is double -strict $slack] || $slack < 0} {
+      error "Audio payload settling bound failed: $reg requirement=$requirement slack=$slack"
+    }
+  }
+  report_timing -delay_type max -from $src -to $pins -max_paths 100 -file $out/audio_payload_paths.rpt
+}

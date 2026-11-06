@@ -12,6 +12,9 @@ ROOT=Path(__file__).resolve().parents[1]
 def run(source):
     raw='\n'.join((ROOT/'resources/toolbox'/n).read_text() for n in ('toolbox.js','ui.js','session.js','documents.js'))
     lib,mapping=compact_state(raw)
+    lib+='var ED={after:0,confirm:0,resume:0};var dirty=0,editorRole=1;\n'
+    lib+=(ROOT/'resources/toolbox/editor_client.js').read_text()
+    lib+=(ROOT/'resources/toolbox/filename_client.js').read_text()
     p=ProgramImage.from_chunk(compile_source(lib+apply_names(source,mapping)),v2=True,value64=True)
     vm=JsHwVm();vm._m._toolbox_sys_data=bytes(unpack(pack(ROOT/'resources/system/system.json')))
     vm.load_image(p)
@@ -37,14 +40,14 @@ def test_packed_callbacks_modal_pause_and_resume_keep_reference_semantics():
 
 def test_dirty_prompt_cancel_discard_and_save_commit_marker():
     _,get=run('''var ctx=document.querySelector("canvas").getContext("2d");
-    tbSessionProperty(ctx,0,5);_tbSDirty=1;
-    _tbSessionBefore(1);var prompt=_tbDialog;tbSessionDialogResult(3);var cancelled=_tbSSwitching;
-    _tbSessionBefore(1);tbSessionDialogResult(2);var discarded=_tbSSwitching;
+    editorRole=5;tbSessionProperty(ctx,0,5);dirty=1;
+    tbSessionCommand(1001,0);var prompt=_tbDialog;tbSessionDialogResult(3);var cancelled=_tbSSwitching;
+    tbSessionCommand(1001,0);tbSessionDialogResult(2);var discarded=_tbSSwitching;
     var role=stgRead(52);var marker=stgRead(65);
     _tbSSwitching=0;stgWrite(208,84);stgWrite(209,66);stgWrite(210,1);stgWrite(211,3);stgWrite(65,0);
-    tbSessionProperty(ctx,0,5);var stale=_tbSResume;
+    editorResume();var stale=ED.resume;
     stgWrite(208,84);stgWrite(209,66);stgWrite(210,1);stgWrite(211,2);stgWrite(65,1);
-    tbSessionProperty(ctx,0,5);var committed=_tbSResume;var consumed=stgRead(65);''')
+    editorResume();var committed=ED.resume;var consumed=stgRead(65);''')
     for name,value in dict(prompt=5,cancelled=0,discarded=1,role=5,marker=0,stale=0,committed=2,consumed=0).items():
         assert get(name)==value,name
 

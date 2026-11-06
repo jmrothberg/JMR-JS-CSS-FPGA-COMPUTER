@@ -63,6 +63,7 @@ module jmr_raster_engine #(
     // framebuffer write port (100 MHz side of jmr_mini_fb)
     output logic        fb_we,
     output logic [18:0] fb_waddr,
+    output logic [9:0]  fb_x, fb_y,
     output logic [7:0]  fb_wdata,
     // asset SRAM read client (hold-req-until-ack, arbiter owner 6)
     output logic        sram_req,
@@ -206,6 +207,7 @@ module jmr_raster_engine #(
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             busy <= 1'b0;
+            fb_x <= '0; fb_y <= '0;
             fb_we <= 1'b0;
             sram_req <= 1'b0;
             fetch_wait <= 1'b0;
@@ -257,6 +259,7 @@ module jmr_raster_engine #(
                         if (inb) begin
                             fb_we <= 1'b1;
                             fb_waddr <= pix_addr;
+                            fb_x <= pxx[9:0]; fb_y <= pxy[9:0];
                             fb_wdata <= color_q;
                         end
                         if (last_px) busy <= 1'b0;
@@ -270,6 +273,7 @@ module jmr_raster_engine #(
                             if (pix != 8'd0 && inb) begin
                                 fb_we <= 1'b1;
                                 fb_waddr <= pix_addr;
+                            fb_x <= pxx[9:0]; fb_y <= pxy[9:0];
                                 fb_wdata <= pix;
                             end
                             if (last_px) busy <= 1'b0;
@@ -289,6 +293,7 @@ module jmr_raster_engine #(
                             if (pix != 8'd0 && inb) begin
                                 fb_we <= 1'b1;
                                 fb_waddr <= pix_addr;
+                            fb_x <= pxx[9:0]; fb_y <= pxy[9:0];
                                 fb_wdata <= pix;
                             end
                             if (last_px) busy <= 1'b0;
@@ -301,6 +306,7 @@ module jmr_raster_engine #(
                             if (inb) begin
                                 fb_we <= 1'b1;
                                 fb_waddr <= pix_addr;
+                            fb_x <= pxx[9:0]; fb_y <= pxy[9:0];
                                 fb_wdata <= px_hi ? cw_word[15:8] : cw_word[7:0];
                             end
                             if (last_px) begin
@@ -333,6 +339,7 @@ module jmr_raster_engine #(
                             if (inb) begin
                                 fb_we <= 1'b1;
                                 fb_waddr <= pix_addr;
+                            fb_x <= pxx[9:0]; fb_y <= pxy[9:0];
                                 fb_wdata <= px_hi ? sram_rdata[15:8] : sram_rdata[7:0];
                             end
                             if (last_px) begin

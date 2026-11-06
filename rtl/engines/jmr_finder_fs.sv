@@ -60,6 +60,15 @@ module jmr_finder_fs (
   case(c)36,37,39,45,95,64,126,96,33,40,41,123,125,94,35,38:legal=1;
    default:legal=(c>=65&&c<=90)||(c>=48&&c<=57);endcase
  endfunction
+ // The public arguments remain 32 bits. Reject every high bit before using
+ // bounded arena arithmetic, so invalid/negative values cannot wrap into SRAM.
+ // CSTG_WORDS=380928 fits 19 bits; this removes a 32-bit subtract/compare
+ // chain from DISPATCH without adding a service cycle.
+ function automatic logic arena_span_valid(input logic [31:0] base, length);
+  arena_span_valid = !(|base[31:19]) && !(|length[31:19]) &&
+                     base[18:0] < 19'(CSTG_WORDS) &&
+                     length[18:0] <= (19'(CSTG_WORDS) - base[18:0]);
+ endfunction
  task automatic arena_write(input logic [20:0] address,input logic [7:0] value,input st_t ret);
   sram_req<=1;sram_we<=1;sram_addr<=cstg_word(address);sram_wdata<={8'd0,value};
   after_arena<=ret;state<=ARENA_WAIT;
@@ -100,7 +109,7 @@ module jmr_finder_fs (
      end else if(command==1)begin
       count<=0;used<=0;catalog_seen<=0;catalog_more<=0;catalog_bounded<=arg0!=0;
       if(arg0==0)begin ptr<=256;catalog_end<=CSTG_WORDS;state<=DIR;end
-      else if(arg0>=CSTG_WORDS || arg1<37 || arg1>CSTG_WORDS-arg0)fail();
+      else if(arg1<37 || !arena_span_valid(arg0,arg1))fail();
       else begin ptr<=21'(arg0+16);catalog_end<=arg0+arg1;state<=DIR;end
      end
      else if(arg0>=CSTG_WORDS)fail();else state<=NAME_READ;
@@ -144,8 +153,8 @@ module jmr_finder_fs (
        end
        document_set_name<=1;state<=DOC_COMMIT;
       end
-      2:if(a1[31] || a3[31] || a2>=CSTG_WORDS || a3>CSTG_WORDS-a2)fail();else state<=OPEN;
-      3:if(a2[31] || a1>=CSTG_WORDS || a2>CSTG_WORDS-a1)fail();else begin stor_mode<=a3==1?65:79;state<=OPEN;end
+      2:if(a1[31] || !arena_span_valid(a2,a3))fail();else state<=OPEN;
+      3:if(!arena_span_valid(a1,a2))fail();else begin stor_mode<=a3==1?65:79;state<=OPEN;end
       4:state<=REMOVE;
       5:if(names_equal && name_len0==name_len1)state<=DONE;else state<=OPEN;
       6:if(a1>8)fail();else begin launch_name<=name0;launch_len<=name_len0;launch_how<=a1[3:0];launch<=1;state<=DONE;end

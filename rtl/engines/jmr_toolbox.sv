@@ -3,6 +3,9 @@
 // Logical arena addresses preserve the existing byte-per-word ABI.
 module jmr_toolbox (
  input logic clk,rst_n,req,sys_valid,
+ input logic clip_reset,
+ output logic clip_enabled,
+ output logic [9:0] clip_x0,clip_y0,clip_x1,clip_y1,fb_x,fb_y,
  input logic [31:0] op,a,b,c,
  output logic busy,reply,
  output logic [31:0] result,
@@ -17,7 +20,7 @@ module jmr_toolbox (
  import jmr_js_vm_pkg::*;
  typedef enum logic [5:0] {IDLE,DISPATCH,READ_BLOCK,READ_SAVE,WRITE_BLOCK,
  FILL,CHUNK,DESC,DESC_SAVE,VALIDATE,CHECK_GEOMETRY,GEOMETRY,PIXEL,PIXEL_SAVE,COORD,DRAW,
- NEXT_PIXEL,STORE_PIXEL,RESOURCE_READ,RESOURCE_WRITE,COPY_VALIDATE,COPY_CHECK,COPY_SETUP,COPY_COORD,COPY_READ,COPY_FB_WAIT,COPY_SAVE,COPY_WRITE,COPY_NEXT,WAIT_MEM,GAP,DONE,COPY_MASK,COPY_MASK_SAVE,COPY_SOURCE,COPY_DEST,COPY_DEST_FB_WAIT,COPY_BLEND} state_t;
+ NEXT_PIXEL,STORE_PIXEL,RESOURCE_READ,RESOURCE_WRITE,COPY_VALIDATE,COPY_CHECK,COPY_SETUP,COPY_COORD,COPY_READ,COPY_FB_WAIT,COPY_SAVE,COPY_WRITE,COPY_NEXT,WAIT_MEM,GAP,DONE,COPY_MASK,COPY_MASK_SAVE,COPY_SOURCE,COPY_DEST,COPY_DEST_FB_WAIT,COPY_BLEND,TYPED_READ,TYPED_SAVE,TYPED_WRITE} state_t;
  state_t state,after_mem;
  logic [31:0] cmd,src,dst,left,total,desc_ptr;
  logic backwards;
@@ -53,6 +56,9 @@ module jmr_toolbox (
  logic cached_valid,read_high;
  logic [31:0] cached_addr;
  logic [7:0] cached_byte;
+ // The packed-pixel, op7 mask and op5 resource caches are mutually exclusive
+ // commands, so share the existing tag/valid/low byte. Only SYS needs high byte.
+ logic [7:0] resource_high_byte;
  logic signed [31:0] draw_x,draw_y;
  wire [1:0] zoom_shift=scale==8?2'd3:scale==4?2'd2:scale==2?2'd1:2'd0;
  wire signed [31:0] px=32'($signed(dx))+($signed({16'd0,x})<<<zoom_shift)+$signed({28'd0,zx});
@@ -64,6 +70,27 @@ module jmr_toolbox (
  task automatic mem(input logic wr,input logic [31:0] p,input logic [7:0] v,input state_t ret);
   read_high<=0;sram_req<=1;sram_we<=wr;sram_addr<=cstg_word(p[20:0]);sram_wdata<={8'd0,v};after_mem<=ret;state<=WAIT_MEM;
  endtask
+ function automatic logic [9:0] clip_bound(input logic signed [17:0] v,input logic [9:0] limit);
+  if(v<0)return 0;
+  if(v>$signed({8'd0,limit}))return limit;
+  return v[9:0];
+ endfunction
+ // Independent configuration register: application boundary reset dominates.
+ always_ff @(posedge clk)begin
+  if(!rst_n || clip_reset)begin
+   clip_enabled<=0;clip_x0<=0;clip_y0<=0;clip_x1<=640;clip_y1<=480;
+  end else if(state==DISPATCH && req && cmd==12)begin
+   if(total==1 && src==0 && dst==0)begin
+    clip_enabled<=0;clip_x0<=0;clip_y0<=0;clip_x1<=640;clip_y1<=480;
+   end else if(total==0)begin
+    clip_enabled<=1;
+    clip_x0<=clip_bound($signed({{2{src[15]}},src[15:0]}),640);
+    clip_y0<=clip_bound($signed({{2{src[31]}},src[31:16]}),480);
+    clip_x1<=clip_bound($signed({{2{src[15]}},src[15:0]})+$signed({2'b0,dst[15:0]}),640);
+    clip_y1<=clip_bound($signed({{2{src[31]}},src[31:16]})+$signed({2'b0,dst[31:16]}),480);
+   end
+  end
+ end
  logic busy_q;
  assign busy=busy_q;
  assign reply=state==DONE;
@@ -76,11 +103,11 @@ module jmr_toolbox (
    IDLE:busy_q<=req;
    GAP:busy_q<=after_mem!=IDLE;
    DONE:busy_q<=req;
-   default:busy_q<=(state<=COPY_BLEND);
+   default:busy_q<=(state<=TYPED_WRITE);
   endcase
  end
  always_ff @(posedge clk)begin
-  if(!rst_n)begin state<=IDLE;sram_req<=0;sram_we<=0;fb_we<=0;fb_req<=0;result<=0;end
+  if(!rst_n)begin state<=IDLE;sram_req<=0;sram_we<=0;fb_we<=0;fb_req<=0;result<=0;cached_valid<=0;end
   else begin
    fb_we<=0;
    // Finish an accepted bus transfer before aborting a stopped application.
@@ -91,7 +118,7 @@ module jmr_toolbox (
      cached_valid<=0;
      result<=32'hffffffff;
      case(cmd)
-      0:begin result<=32'h0001007f;state<=DONE;end // v1 + operations 1 through 7
+      0:begin result<=32'h00010fff;state<=DONE;end // v1 descriptors + operations 1 through 12
       1:if(range_ok(src,left)&&range_ok(dst,left))begin
        backwards<=dst>src && dst-src<left;
        if(left==0)begin result<=0;state<=DONE;end else state<=CHUNK;
@@ -104,8 +131,31 @@ module jmr_toolbox (
       5:if(sys_valid && src<=24320 && left<=24320-src && range_ok(dst,left))begin
        if(left==0)begin result<=0;state<=DONE;end else state<=RESOURCE_READ;
       end else state<=DONE;
+      12:begin
+       if(total==0 || (total==1 && src==0 && dst==0))result<=1;
+       state<=DONE;
+      end
+      // Typed staging services: validate the entire span before any transfer.
+      8:if(dst==0 && total==0 && range_ok(src,4))begin
+       index<=0;result<=0;state<=TYPED_READ;
+      end else state<=DONE;
+      9,10,11:if((cmd==10 || total==0) && range_ok(src,cmd==10?8:cmd==11?2:4))begin
+       index<=0;count<=cmd==10?5'd8:cmd==11?5'd2:5'd4;state<=TYPED_WRITE;
+      end else state<=DONE;
       default:state<=DONE;
      endcase
+    end
+    TYPED_READ:mem(0,src+32'(index),0,TYPED_SAVE);
+    TYPED_SAVE:begin
+     result<={byte_q,result[31:8]};
+     if(index==3)state<=DONE;
+     else begin index<=index+1'b1;state<=TYPED_READ;end
+    end
+    TYPED_WRITE:begin
+     mem(1,src+32'(index),dst[7:0],TYPED_WRITE);
+     dst<=index==3?total:{8'd0,dst[31:8]};
+     if(index+1==count)begin result<=32'(count);after_mem<=DONE;end
+     else index<=index+1'b1;
     end
     CHUNK:begin count<=left>16?5'd16:5'(left);index<=0;state<=READ_BLOCK;end
     READ_BLOCK:mem(0,src+(backwards?left-32'(count):total-left)+32'(index),0,READ_SAVE);
@@ -191,7 +241,7 @@ module jmr_toolbox (
      state<=COORD;
      if(draw_x>=0&&draw_x<640&&draw_y>=0&&draw_y<480&&draw_x>=32'($signed(cx))&&draw_y>=32'($signed(cy))&&
        draw_x<32'($signed(cx))+$signed({16'd0,cw})&&draw_y<32'($signed(cy))+$signed({16'd0,ch}))begin
-      fb_we<=1;fb_addr<=19'(draw_y*640+draw_x);fb_data<=pixel_q;
+      fb_we<=1;fb_x<=10'(draw_x);fb_y<=10'(draw_y);fb_addr<=19'(draw_y*640+draw_x);fb_data<=pixel_q;
      end
      if(zx+1==scale)begin zx<=0;if(zy+1==scale)state<=NEXT_PIXEL;else zy<=zy+1'b1;end
      else zx<=zx+1'b1;
@@ -277,8 +327,14 @@ module jmr_toolbox (
     COPY_SAVE:begin pixel_q<=byte_q;state<=copy_mode==0?COPY_WRITE:COPY_DEST;end
     // Mask bytes use request-relative coordinates; destination clipping has
     // already happened. Aliasing the writable destination is rejected above.
-    COPY_MASK:mem(0,32'(mask_addr),0,COPY_MASK_SAVE);
-    COPY_MASK_SAVE:state<=byte_q[7-x[2:0]]?COPY_SOURCE:COPY_NEXT;
+    COPY_MASK:begin
+     if(cached_valid && cached_addr==32'(mask_addr))begin byte_q<=cached_byte;state<=COPY_MASK_SAVE;end
+     else mem(0,32'(mask_addr),0,COPY_MASK_SAVE);
+    end
+    COPY_MASK_SAVE:begin
+     cached_valid<=1;cached_addr<=32'(mask_addr);cached_byte<=byte_q;
+     state<=byte_q[7-x[2:0]]?COPY_SOURCE:COPY_NEXT;
+    end
     COPY_SOURCE:begin
      if(copy_mode==5)state<=COPY_DEST;
      else if(copy_pattern)begin
@@ -305,7 +361,7 @@ module jmr_toolbox (
      state<=COPY_WRITE;
     end
     COPY_WRITE:begin
-     if(copy_screen)begin fb_we<=1;fb_addr<=19'(copy_dst_addr);fb_data<=pixel_q;state<=COPY_NEXT;end
+     if(copy_screen)begin fb_we<=1;fb_x<=10'(copy_x);fb_y<=10'(copy_y);fb_addr<=19'(copy_dst_addr);fb_data<=pixel_q;state<=COPY_NEXT;end
      else mem(1,copy_dst_addr,pixel_q,COPY_NEXT);
     end
     COPY_NEXT:begin
@@ -321,14 +377,28 @@ module jmr_toolbox (
     end
     RESOURCE_READ:begin
      // Verified boot image: packed words, read-only, outside the app arena.
-     sram_req<=1;sram_we<=0;sram_addr<=22'd3565568+22'((src+total-left)>>1);
-     sram_wdata<=0;read_high<=1'(src+total-left);after_mem<=RESOURCE_WRITE;state<=WAIT_MEM;
+     logic [21:0] resource_address;
+     resource_address=22'd3565568+22'((src+total-left)>>1);
+     if(cached_valid && cached_addr==32'(resource_address))begin
+      byte_q<=1'(src+total-left)?resource_high_byte:cached_byte;
+      state<=RESOURCE_WRITE;
+     end else begin
+      sram_req<=1;sram_we<=0;sram_addr<=resource_address;
+      sram_wdata<=0;read_high<=1'(src+total-left);after_mem<=RESOURCE_WRITE;state<=WAIT_MEM;
+     end
     end
     RESOURCE_WRITE:begin
      mem(1,dst+total-left,byte_q,RESOURCE_READ);left<=left-1'b1;
      if(left==1)begin result<=total;after_mem<=DONE;end
     end
-    WAIT_MEM:if(sram_ack)begin byte_q<=read_high?sram_rdata[15:8]:sram_rdata[7:0];sram_req<=0;sram_we<=0;state<=GAP;end
+    WAIT_MEM:if(sram_ack)begin
+     byte_q<=read_high?sram_rdata[15:8]:sram_rdata[7:0];
+     if(cmd==5 && !sram_we && after_mem==RESOURCE_WRITE)begin
+      cached_valid<=1;cached_addr<=32'(sram_addr);
+      cached_byte<=sram_rdata[7:0];resource_high_byte<=sram_rdata[15:8];
+     end
+     sram_req<=0;sram_we<=0;state<=GAP;
+    end
     GAP:state<=after_mem;
     DONE:if(!req)state<=IDLE;
     default:state<=IDLE;

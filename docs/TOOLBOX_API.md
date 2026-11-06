@@ -1,10 +1,10 @@
-# Native JavaScript Toolbox — interface v1 (qualified run78 hardware)
+# Native JavaScript Toolbox — interface v1 (run81 simulation candidate)
 
 The native JavaScript engine remains the CPU. `toolbox(op,a,b,c)` calls a small
 100 MHz RTL peripheral through the existing cold service handshake. Python
 models the same contract. This interface is new: run75/run76 releases do not
 contain it. Development applications using it must be paired with the new
-simulator and its matching bitstream. The clean build includes operations 1–7.
+simulator and its matching bitstream. This candidate includes operations 1–12. Its matching FPGA image is required; an older bit with operations 1–7 is insufficient.
 Qualification is tracked in [TOOLBOX_IMPLEMENTATION_STATUS.md](TOOLBOX_IMPLEMENTATION_STATUS.md).
 Shared software UI calls and resident linking are documented in
 [RESIDENT_TOOLBOX.md](RESIDENT_TOOLBOX.md).
@@ -12,7 +12,7 @@ Shared software UI calls and resident linking are documented in
 ## Memory operations
 
 ```javascript
-var version = toolbox(0,0,0,0); // 65663: version 1, capabilities mask 127
+var version = toolbox(0,0,0,0); // 69631 (0x00010fff): version 1, operation bits 1–12
 var copied = toolbox(1,source,destination,length); // memmove, overlap is safe
 var filled = toolbox(2,destination,byteValue,length);
 ```
@@ -41,10 +41,39 @@ is outside the arena. The application cannot write this shared resource area.
 No extra BRAM or DDR reservation is used. Python retains the same boot snapshot;
 changes to disk take effect at the next system start, just as on the board.
 
-The shared JavaScript Toolbox uses these exact glyphs and can read the
-label records and dialog settings without opening the disk for each operation.
-The existing resource format remains compatible. It does not yet permit
-changing the native proportional font advances or defining new native dialogs.
+The legacy font remains little-endian 16-bit rows for existing hardware/UI
+consumers. This candidate adds a **TBF1 schema 1 software font block** in the
+previously zero tail of the same validated 24320-byte SYS payload:
+
+- Bytes 0..20607: unchanged font, records, index, headings, configuration,
+  keyboard, ship and the three 128-byte accessory label bitmaps.
+- Bytes 20608..20623: header `<4sBBBBHHHH`: magic TBF1, schema 1, first code 32,
+  count 95, height 16, glyph offset 20736, stride 32, width offset 20624, reserved 0.
+- Bytes 20624..20718: 95 canonical proportional advances. Bytes 20719..20735
+  remain zero for alignment.
+- Bytes 20736..23775: 95 glyphs × 32 bytes, 16 rows each, **big-endian/MSB-first**
+  for the packed blitter. Bytes 23776..24319 remain zero.
+
+The resource builder derives both representations and advances from the same
+validated font source, including glyph overrides. Native consumers stop before
+byte 20608; the old broad About allocation 20224..24319 does not mean every byte
+was live. The current label writer/read consumer uses 20224..20607 for Note,
+Help and Utility; the removed 256×128 About bitmap bank has no live reader.
+
+`tbUIInit` copies/checks the first 8 fixed schema bytes. The host `unpack_ui_font`
+decoder checks all 16 header bytes, fixed offsets/stride and advance bounds.
+The JavaScript renderer uses fixed schema offsets; it does not interpret or
+validate arbitrary relocation fields. Unsupported/missing headers return 0,
+suppress `tbText` glyph draws and produce a native-font diagnostic on `tbUIDraw`.
+
+The generated compact advance string is decoded once to the same 95-entry array
+before public UI calls. The linker verifies it against the canonical font. This
+preserves `tbTextWidth` before initialization and avoids external width reads
+per character. It adds 95 one-time `strByte` calls and two typed metadata reads per
+UIInit; each glyph miss removes 32 JS `stgRead` and 32 `stgWrite` calls. These
+are dispatch counts, not a measured speed factor or an all-path latency claim.
+The font change uses the same arena bytes and SYS bank. Operations 8–12 below add typed transport and destination clipping; one session still owns input and frames. Install the matching SYSTEM.SYS with ROM/LNK and relinked clients,
+then cold-restart. The native outer SYS format/version/CRC is unchanged.
 
 ## Packed surfaces
 
@@ -93,14 +122,13 @@ examples and overlap, transparency, clipping, and error cases.
 The clean core uses an 8192-word resident prefix with 8191 mutable words and
 one fixed final jump. Replaced native menus/dialogs/document policy are removed;
 shared JavaScript owns them. Essential boot/Terminal/recovery UI remains.
-Run78 hardware passed strict FPGA implementation qualification. The delivered
-64 MiB disk has 44 programs and 42 resident clients, including eight CB variants.
-The library uses **8191 of 8191 mutable instructions**, leaving zero spare.
-The native ABI and qualified bit are unchanged: audited factory ROM `fd89c8…`
-stays in the bit, while disk ROM `f6f805…` replaces it at startup. Factory INIT
-and later disk-software evidence are distinct. Final software checks were
-bounded; physical user display/input acceptance remains pending. See
-[RESIDENT_TOOLBOX.md](RESIDENT_TOOLBOX.md).
+The run81 candidate has 44 programs/42 resident clients, including eight CB
+variants. Its library uses **8096 of 8191 mutable instructions**, leaving 95 spare.
+Native ABI version1 and the64-byte descriptor layout stay the same; capability bits extend through operation12. Candidate factory vectors, ROM identity
+package, disk ROM, LNK and relinked clients are generated as one matching set.
+There is no new FPGA build, routed INIT audit or physical acceptance for run81;
+earlier factory/build results remain historical evidence for those exact inputs.
+See [RESIDENT_TOOLBOX.md](RESIDENT_TOOLBOX.md) and the candidate software manifest.
 
 ## General bitmap transport and software CopyBits
 
@@ -208,3 +236,159 @@ The isolated TOOLBOX_USAGE.md guide and GRAPHICS.HTML / DAMAGE.HTML examples
 show correct physical coordinate conversion, descriptor sizing and previous-frame
 damage ownership. The corrected tbPaintRect sets both rectangle sizes and uses8191/8191 resident
 words. Keep its matched ROM/LNK/clients together.
+
+
+## Shared Windows, Ports, Controls and damage in this candidate
+
+Finder, Editor/Note, Reader, Utility and MacPaint use common software window
+geometry and drawing ports. Finder owns file records, desktop content and
+DESKTOP.FDR. The Toolbox owns hit geometry, drag/grow bounds and the shared
+control calculations. The bounded stacking module stores up to eight window IDs
+in back-to-front order; activating one removes its old position and appends it.
+Closing returns the next front ID. Finder paints and hit-tests in this order.
+Single-window applications use the same hit/move/grow implementation. Their
+initial geometry stays (8,34,612,420); Finder's disk starts (8,34,548,354).
+
+`tbWindowPart(x,y,wx,wy,w,h)` returns 0 outside, 1 title, 2 close, 3 grow,
+or 6 content. `tbWindowAdjust(rect,dx,dy,grow)` updates a caller-owned four-number
+rectangle and damages its old and new bounds. `tbWindowBounds()` exposes the
+current session rectangle for reading. `tbWindowFocus/Remove/At` are supplied
+by `window_client.js`; IDs are integer 0..7, with 255 meaning no window.
+`tbControlPart` classifies an axis-aligned scrollbar's arrow/thumb/page regions;
+`tbControlValue` clamps movement. Client chrome reports the existing reserved
+scroll keys 128..133. No second event listener or frame scheduler is installed.
+
+`tbPortPush(x,y,w,h,dx,dy)` takes an **absolute screen-space** half-open clip
+and adds a **local drawing origin** to the current origin. Nested clips
+intersect, including empty intersections. There are four fixed levels in a
+24-number stack; overflow returns -1 without saving a Canvas frame or changing
+clip/origin. Only pop after a successful push. `tbPortPop()` restores Canvas
+state, origin and clip; underflow returns -1 without mutation. `tbPortBounds()`
+returns the six-number `[left,top,right,bottom,originX,originY]` view for reading;
+clients must not mutate it. `tbUIInit` unwinds previous scopes and resets the
+hardware clip. The session balances content scopes before drawing global chrome.
+
+Canvas drawing and `tbSessionTransform` include the local origin. `tbText` and
+`tbPlaceScreen` do too. **Raw `tbPlace` remains descriptor coordinates**: it must
+also work for arena destinations. Raw CopyBits source coordinates, descriptors,
+readback and arena writes keep their explicit coordinate contract. The hardware
+scissor filters framebuffer destination writes only, across Canvas and Toolbox;
+it does not change source reads or operation return counts. `tbPortClip/Reset`
+are low-level scissor calls; use balanced push/pop for composable software ports.
+
+`tbDamage(x,y,w,h)` clips to the desktop and accumulates one bounded union.
+Empty, negative-size and entirely offscreen rectangles contribute nothing.
+`tbDamageClip()` pushes this union as a port; pop it after repaint, then call
+`tbDamageClear()`. This is a rectangular damage manager, not an arbitrary Region
+list. Finder uses it for activation, moves, resize, close and exposure. File or
+selection changes without a narrower known region safely repaint the desktop.
+
+`tbScrollRect(src,dst,x,y,w,h,dx,dy)` in `scroll_client.js` performs overlap-safe
+screen-to-screen CopyBits using two caller-owned 64-byte descriptors and the
+active local origin. It damages only exposed strips. Displacements larger than
+the rectangle damage the whole rectangle without copying. A rejected native
+copy returns -1; the app must fall back to full redraw. Editor and Reader use it with descriptors36928..37055; Finder uses17024..17151. Utility retains direct redraw for its small monospace list rather than adding copy read/write traffic. These ranges are
+disjoint from their document/index/clipboard/undo/catalog state. Utility bounds its catalog to bytes240..8431, preserving its existing400-file display limit. No screen-sized
+backing image is allocated. Document chrome is repainted separately, so a thumb
+change does not expand strip damage to the whole content rectangle.
+
+## Shared modules and document ownership
+
+`TOOLBOX.ROM` remains the common instruction bank. Optional common policy also
+lives in `resources/toolbox/{window,raster,scroll,draw,chrome,filename,editor}_client.js`.
+The shipping HTML files contain exact inline copies, so the standalone compiler
+and host compiler see the same code. `python3 tools/sync_toolbox_clients.py`
+checks equality; `--write` refreshes copies. These are ordinary application
+instructions with private state, not hidden host-only includes or extra hardware.
+
+The resident session exposes `tbSessionChrome(fn)`, `tbSessionNames(fn)` and
+`tbSessionDocument(fn)` to register existing client responsibilities. The shared
+chrome callback handles drawing (mode 0), pointer classification (mode 1) and
+viewport size changes (mode 2), using the common Window and Control primitives.
+Editor/Note retain SOURCE save/new/caret/continuation policy in `editor_client.js`;
+Note still launches that same Editor, rather than duplicating an editor.
+`tbDocumentContinue`, `tbDocumentSaveAs`, `tbDocumentHeader` and
+`tbDocumentSuspend` connect those callbacks to the existing session handoff.
+Save confirmation still has Save/Discard/Cancel; only a successful committed
+save resumes its requested action. SOURCE, clipboard, undo, file buffers and
+per-application heap/globals keep their existing owners and lifetimes.
+
+`UISESS.HTML` is the runnable example: shared menus and file callbacks, draggable
+and resizable window, nested clipped panel and **Demo → Scroll panel** using
+retained pixels plus exposed-strip repaint. Its descriptors 60256..60383 are
+separate from its file-transfer buffer. Use a private test disk for its deliberate
+SOURCE/file operations. It is part of the same matched shipping set.
+
+## Typed native transport and exact hardware boundary
+
+Operations 8–11 use little-endian bytes, validate the entire span before writes,
+and retain the existing staging-arena discontinuity and bounds:
+
+- `toolbox(8,address,0,0)` returns unsigned U32 (0..4294967295), or -1 invalid.
+- `toolbox(9,address,value,0)` writes low32 bits and returns 4.
+- `toolbox(10,address,first32,second32)` writes both words and returns 8.
+- `toolbox(11,address,value,0)` writes low16 bits and returns 2.
+
+`tbU16` and `tbU32` floor numeric inputs before packing, preserving negative
+fraction and two's-complement wrap behavior. `tbPair32`, `tbPack16` and the
+existing public `tbSessionU32` use the typed services. Capabilities are cached
+once per application. Unsupported typed reads return -1 before issuing the
+unsupported operation, so old-bit failure cannot masquerade as 0xffffffff.
+`tbUIInit` returns 0 and `tbUIDraw` shows “Toolbox needs matching FPGA” when the
+required native services are missing.
+
+Operation 12 takes packed signed16 x/y in a, packed unsigned16 width/height in b,
+and c=0 to set the destination scissor. c=1 resets to fullscreen and requires
+both a=b=0. It returns 1 or -1. Wide endpoint sums are screen-clamped; empty
+clips are valid. Program start/stop/Home reset the hardware boundary. Software
+ports supply nesting and restore it before chrome; the hardware owns only the
+bounded destination comparator. Existing operations 1–7 retain their counted
+request/transaction semantics. This is not an arbitrary graphics interpreter.
+
+This candidate adds required RTL transport (typed access and destination clip),
+so installing its disk on an older bit is unsupported. After this interface is
+included in a qualified bit, window/control policy, CopyBits composition, patterns,
+menus, document callbacks and shared software modules can change with a matched
+ROM/LNK/clients/resource disk update and cold restart. New bus access, pixel
+formats or hardware capacity still require RTL, Vivado and a new qualified bit.
+Free BRAM or free software words alone cannot create a missing hardware port.
+
+The document callback is `fn(action,value)`: action 0 returns the current SOURCE
+filename as an ASCII array; 1 requests Save with a continuation action; 2 commits
+the already selected name/save request; 3 creates a new document; 4 checks whether
+a requested new/open/quit action needs dirty confirmation; 5 handles a dialog
+result and returns 1 only if consumed. Continuation values are 0 stay, 1 new,
+2 open, 3 quit. The resident session handles ordinary file chooser results when
+action 5 returns 0. `editor_client.js` is the concrete implementation for both
+Editor and Note; applications with other document types retain their own bytes
+and save callback rather than impersonating SOURCE ownership.
+
+The filename callback is `fn(codes,suffix,kind)`: kind 0 normalizes/validates the
+mutable 8.3 ASCII name array and returns 1 on success; kind 1 returns whether a
+catalog name matches the suffix. The resident session writes an accepted name
+into its owned 96..111 handoff bytes. The shared filename module supplies this
+policy for Editor, MacPaint and UISESS. Reader and Utility do not own Save As.
+
+
+The shared `draw_client.js` bounds **emission**, not only destination writes.
+`tbDrawBounds` returns a temporary reused local-space rectangle intersected with
+the active Port; `tbDrawHit` rejects wholly hidden work, and `tbDrawFill` emits
+only the intersecting fill. Editor bounds rows and columns, Reader bounds rows
+and glyphs, Utility bounds rows/header, and Finder bounds desktop fills and
+skips nonintersecting windows/items. Partial glyphs keep their original source
+geometry and use the Port for their remaining edge clip. No per-frame allocation
+or hardware-loop shortening is implied by the scissor itself.
+
+Text copying uses actual row/column bands, excluding blank margins: Editor's
+(28,94,COLS*8,ROWS*16), and Reader's line-start band plus separately repainted
+bottom glyph tail. This prevents new text from being mistaken for retained blank
+padding. Utility's direct redraw avoids an unnecessary bitmap read+write pass.
+Request-work evidence includes retained-copy source reads and destination writes;
+it is separate from elapsed latency, FPGA timing and any all-path speed claim.
+
+Finder still scans/sorts the catalog once per drawn normal window; it reuses
+that order for its thumb and items during the same cooperative callback.
+Reader still walks preceding line heights and proportional source advances to
+locate an exposed strip. Bounded emission does not mean every CPU operation is
+bounded to the strip. The request-work report includes these remaining VM
+native staging/source accesses, separately from framebuffer walk area.

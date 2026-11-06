@@ -50,6 +50,7 @@ module jmr_js_core #(
     output logic [127:0] vm_ftrace,
     output logic [47:0]  vm_gdbg,
     // sound-native poke (core clock; PSG leaf + CDC live in the top)
+    input  logic        snd_ack, // destination captured the held sound packet
     output logic        snd_tgl,
     output logic [1:0]  snd_ch,
     output logic [15:0] snd_freq,
@@ -510,6 +511,10 @@ module jmr_js_core #(
     logic file_fs_busy,file_fs_reply,tb_busy,tb_reply;
     logic [31:0] file_fs_result,tb_result;
     logic tb_sram_req,tb_sram_we;logic [21:0] tb_sram_addr;logic [15:0] tb_sram_data;
+    logic fb_raw_we;
+    logic [9:0] vm_fb_x,vm_fb_y,rast_fb_x,rast_fb_y,tb_fb_x,tb_fb_y;
+    logic clip_enabled,clip_reset;
+    logic [9:0] clip_x0,clip_y0,clip_x1,clip_y1;
     logic tb_fb_we;logic [18:0] tb_fb_addr;logic [7:0] tb_fb_data;
     logic tb_fb_req,tb_fb_ack;logic [18:0] tb_fb_raddr;
     // Port A is synchronous and write-priority. Acknowledge only a granted
@@ -517,7 +522,7 @@ module jmr_js_core #(
     // dedicated to presentation, so scanout/present are not borrowed.
     always_ff @(posedge clk)begin
         if(!rst_n)tb_fb_ack<=0;
-        else tb_fb_ack<=tb_fb_req && !fb_we;
+        else tb_fb_ack<=tb_fb_req && !fb_raw_we;
     end
     assign fs_busy=file_fs_busy||tb_busy;
     assign fs_reply=file_fs_reply||tb_reply;
@@ -874,7 +879,7 @@ module jmr_js_core #(
         .sbase(rast_sbase), .stride(rast_stride), .aset(rast_aset),
         .flip_x(rast_flip_x), .flip_y(rast_flip_y),
         .busy(rast_busy),
-        .fb_we(rast_fb_we), .fb_waddr(rast_fb_waddr), .fb_wdata(rast_fb_wdata),
+        .fb_we(rast_fb_we), .fb_x(rast_fb_x), .fb_y(rast_fb_y), .fb_waddr(rast_fb_waddr), .fb_wdata(rast_fb_wdata),
         .sram_req(rast_sram_req), .sram_addr(rast_sram_addr),
         .sram_rdata(sram_rdata), .sram_ack(sram_ack && (sram_owner_q == 3'd6))
     );
@@ -1084,9 +1089,9 @@ module jmr_js_core #(
         .vdbg_o(vdbg_o), .vdbg_fault_o(vdbg_fault_o),
         .vm_hdbg(vm_hdbg), .vm_fdbg(vm_fdbg), .vm_fdbg_v(vm_fdbg_v),
         .vm_ftrace(vm_ftrace), .vm_gdbg(vm_gdbg),
-        .snd_tgl(snd_tgl), .snd_ch(snd_ch), .snd_freq(snd_freq),
+        .snd_ack(snd_ack), .snd_tgl(snd_tgl), .snd_ch(snd_ch), .snd_freq(snd_freq),
         .snd_vol(snd_vol), .snd_frames(snd_frames), .snd_slide(snd_slide),
-        .fb_we(vm_fb_we), .fb_waddr(vm_fb_waddr),
+        .fb_we(vm_fb_we), .fb_x(vm_fb_x), .fb_y(vm_fb_y), .fb_waddr(vm_fb_waddr),
         .fb_wdata(vm_fb_wdata), .fb_swap(vm_fb_swap),
         .fb_present_busy(fb_present_busy),
         .fb_dump_addr(vm_dump_addr), .fb_dump_sel(vm_dump_sel),
@@ -1244,7 +1249,36 @@ module jmr_js_core #(
     // Select on busy OR the write itself: the engine's LAST pixel write
     // asserts one clk after busy falls (registered fb_we), and a 1x1 op
     // IS its last pixel — keying on busy alone dropped it.
-    assign fb_we    = tb_fb_we ? tb_fb_we : desk_fb_we ? desk_fb_we : (rast_busy || rast_fb_we) ? rast_fb_we    : vm_busy ? vm_fb_we    : demo_fb_we;
+    assign fb_raw_we = tb_fb_we ? tb_fb_we : desk_fb_we ? desk_fb_we : (rast_busy || rast_fb_we) ? rast_fb_we    : vm_busy ? vm_fb_we    : demo_fb_we;
+    // Scissor affects application destinations only, after producer priority.
+    // Raw intent still owns Port A arbitration: clipped writes do not grant
+    // an earlier Toolbox read acknowledgement or change producer completion.
+    wire fb_app = tb_fb_we || (!desk_fb_we && ((rast_busy || rast_fb_we) || vm_busy));
+    wire [9:0] fb_write_x = tb_fb_we ? tb_fb_x : (rast_busy || rast_fb_we) ? rast_fb_x : vm_fb_x;
+    wire [9:0] fb_write_y = tb_fb_we ? tb_fb_y : (rast_busy || rast_fb_we) ? rast_fb_y : vm_fb_y;
+    // Abort closes the application drawing epoch immediately, before the
+    // slower VM stop handshake. Old Toolbox/raster writes may drain but must
+    // not become unrestricted when the scissor is reset. Recovery bypasses.
+    wire app_draw_abort = (keyboard_feed_push && keyboard_feed_data == 8'h1B) ||
+        ui_quit || halt_pulse || classic_restart_halt || classic_error_pulse;
+    wire app_draw_start = (vm_start || sim_vm_start || classic_vm_start) &&
+        !vm_busy && !ui_quit_pending && !ui_quit;
+    logic app_draw_allowed;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) app_draw_allowed <= 1'b0;
+        else if (app_draw_abort) app_draw_allowed <= 1'b0;
+        else if (app_draw_start) app_draw_allowed <= 1'b1;
+    end
+    assign fb_we = fb_raw_we && (!fb_app ||
+        (rst_n && app_draw_allowed && !app_draw_abort && (!clip_enabled ||
+        (fb_write_x >= clip_x0 && fb_write_x < clip_x1 && fb_write_y >= clip_y0 && fb_write_y < clip_y1))));
+    // Use original fast-clock lifecycle pulses, not delayed VM strobes.
+    // Keep reset asserted while stopped: a delayed old service request must
+    // not restore clipping after the one-cycle halt pulse. busy is the same
+    // registered VM running flag already used by this fast-domain mux.
+    assign clip_reset = !vm_busy || app_draw_start ||
+        (keyboard_feed_push && keyboard_feed_data == 8'h1B) || ui_quit ||
+        halt_pulse || classic_restart_halt || classic_error_pulse;
     assign fb_waddr = tb_fb_we ? tb_fb_addr : desk_fb_we ? desk_fb_addr : (rast_busy || rast_fb_we) ? rast_fb_waddr : vm_busy ? vm_fb_waddr : demo_fb_waddr;
     assign fb_wdata = tb_fb_we ? tb_fb_data : desk_fb_we ? desk_fb_data : (rast_busy || rast_fb_we) ? rast_fb_wdata : vm_busy ? vm_fb_wdata : demo_fb_wdata;
     // vm_fb_swap is a vm_clk-wide pulse (= VM_CLK_DIV clk cycles); the
@@ -1313,7 +1347,9 @@ module jmr_js_core #(
       .busy(tb_busy),.reply(tb_reply),.result(tb_result),
       .sram_req(tb_sram_req),.sram_we(tb_sram_we),.sram_addr(tb_sram_addr),.sram_wdata(tb_sram_data),
       .sram_ack(sram_ack && sram_owner_q==3'd7 && tb_busy),.sram_rdata(sram_rdata),
-      .fb_we(tb_fb_we),.fb_addr(tb_fb_addr),.fb_data(tb_fb_data),
+      .clip_reset(clip_reset),.clip_enabled(clip_enabled),
+      .clip_x0(clip_x0),.clip_y0(clip_y0),.clip_x1(clip_x1),.clip_y1(clip_y1),
+      .fb_x(tb_fb_x),.fb_y(tb_fb_y),.fb_we(tb_fb_we),.fb_addr(tb_fb_addr),.fb_data(tb_fb_data),
       .fb_req(tb_fb_req),.fb_raddr(tb_fb_raddr),.fb_ack(tb_fb_ack),.fb_rdata(dump_fb_rdata));
     logic document_set_name,document_new;
     logic [95:0] document_new_name;

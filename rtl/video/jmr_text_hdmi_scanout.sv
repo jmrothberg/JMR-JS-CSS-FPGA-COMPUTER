@@ -5,6 +5,7 @@ module jmr_text_hdmi_scanout #(
     parameter string FONT_HEX = "font_rom.hex"
 ) (
     input  logic        pixel_clk,
+    input  logic        mouse_clk,
     input  logic        rst_n,
     input  logic [7:0]  vram_rdata,
     output logic [9:0]  vram_addr,
@@ -84,21 +85,24 @@ module jmr_text_hdmi_scanout #(
     logic [7:0] bits;
     logic on_pix;
 
-    // Bundled-data CDC: source coordinates are held between mouse reports;
-    // capture after the toggle has crossed two pixel-clock synchronizers.
-    (* ASYNC_REG="TRUE" *) logic [2:0] mouse_sync;
+    // Keep each pointer payload stable until the pixel domain acknowledges it.
+    // The source coordinates retain the latest pending position while a prior
+    // snapshot is in flight; report toggles can no longer cancel in a burst.
+    localparam logic [18:0] POINTER_RESET = {10'd320,9'd240};
+    logic [18:0] pointer_pixels;
     (* ASYNC_REG="TRUE" *) logic [1:0] exit_sync;
-    logic [9:0] mouse_px;
-    logic [8:0] mouse_py;
+    wire [9:0] mouse_px;
+    wire [8:0] mouse_py;
     logic overlay_opaque;
     logic [23:0] overlay_rgb;
+    jmr_ui_snapshot #(.WIDTH(19)) u_pointer_snapshot (
+        .clk(mouse_clk),.rst_n(rst_n),.pixel_clk(pixel_clk),
+        .source({mouse_x,mouse_y} ^ POINTER_RESET),.pixels(pointer_pixels)
+    );
+    assign {mouse_px,mouse_py}=pointer_pixels ^ POINTER_RESET;
     always_ff @(posedge pixel_clk) begin
-        if(!rst_n)begin mouse_sync<=0;exit_sync<=0;mouse_px<=320;mouse_py<=240;end
-        else begin
-            mouse_sync<={mouse_sync[1:0],mouse_toggle};
-            exit_sync<={exit_sync[0],mouse_show_exit};
-            if(mouse_sync[2]!=mouse_sync[1])begin mouse_px<=mouse_x;mouse_py<=mouse_y;end
-        end
+        if(!rst_n)exit_sync<=0;
+        else exit_sync<={exit_sync[0],mouse_show_exit};
     end
     jmr_mouse_overlay u_pointer_overlay (
         .x(hx_q),.y(hy_q),.mouse_x(mouse_px),.mouse_y(mouse_py),

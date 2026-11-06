@@ -173,6 +173,7 @@ class Machine:
         self.input.push_key(ch)
 
     def hard_break(self, quiet: bool = False) -> None:
+        self.canvas.reset_scissor()
         more_abort = bool(self._list_more_waiting)
         self.running = False
         self._loop_chunk = None
@@ -984,6 +985,7 @@ class Machine:
         from .jsb_format import build_aset_payload
         from hardware_model.js_vm import JsHwVm
 
+        self.canvas.reset_scissor()
         observed = image.decode()
         self._cmp_reset()
         self._ctx_baseline = 0
@@ -1062,6 +1064,7 @@ class Machine:
         return self.storage.root / (stem.upper()[:8] + ".JSH")
 
     def _run_source(self, src: str) -> List[str]:
+        self.canvas.reset_scissor()
         before = len(self.lines_out)
         try:
             chunk = compile_source(src)
@@ -1888,6 +1891,7 @@ class Machine:
 
     def _nat_sys_run(self, name_off, how) -> float:
         """Leave the Finder program and run a file. The backend relaunches it."""
+        self.canvas.reset_scissor()
         self._finder_request = (self._arena_name(name_off), int(how))
         self.running = False
         return 0.0
@@ -2209,6 +2213,7 @@ class Machine:
             self._cmp_done = False
             # The shell brings the Finder back. Leaving this flag clear
             # painted READY over a black glass and stayed there.
+            self.canvas.reset_scissor()
             self._app_stopped = True
             self.running = False
             self._bytecode_html = False

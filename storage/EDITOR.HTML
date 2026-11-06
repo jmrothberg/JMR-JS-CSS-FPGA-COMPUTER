@@ -38,6 +38,39 @@
 -->
 <canvas id="gameCanvas" width="640" height="480"></canvas>
 <script>
+// BEGIN shared draw_client.js
+// Shared bounded draw emission. The result is temporary, reused storage.
+var tbClientClip=[0,0,640,480];
+function tbDrawBounds(x,y,w,h){
+ var p=tbPortBounds();
+ tbClientClip[0]=Math.max(x,p[0]-p[4]);tbClientClip[1]=Math.max(y,p[1]-p[5]);
+ tbClientClip[2]=Math.min(x+w,p[2]-p[4]);tbClientClip[3]=Math.min(y+h,p[3]-p[5]);
+ return tbClientClip;
+}
+function tbDrawHit(x,y,w,h){
+ var p=tbPortBounds();return p[2]>p[0]&&p[3]>p[1]&&x+w>p[0]-p[4]&&x<p[2]-p[4]&&y+h>p[1]-p[5]&&y<p[3]-p[5];
+}
+function tbDrawFill(ctx,x,y,w,h,c){
+ var p=tbDrawBounds(x,y,w,h);if(p[2]>p[0]&&p[3]>p[1])ctx.fillRect(p[0],p[1],p[2]-p[0],p[3]-p[1],c);
+}
+// END shared draw_client.js
+
+// BEGIN shared scroll_client.js
+// Shared bitmap scrolling. Two caller-owned descriptors; no saved screen image.
+// Coordinates are local to the active Port; exposed strips enter bounded damage.
+function tbScrollRect(src,dst,x,y,w,h,dx,dy){
+ var a=Math.abs(dx),b=Math.abs(dy),p=tbPortBounds(),n;
+ if(a>=w||b>=h){tbDamage(x+p[4],y+p[5],w,h);return 0;}
+ tbScreen(src);tbScreen(dst);
+ tbRect(src,x+p[4]+(dx<0?a:0),y+p[5]+(dy<0?b:0),w-a,h-b);
+ tbRect(dst,0,0,w-a,h-b);tbPlaceScreen(dst,x+(dx>0?a:0),y+(dy>0?b:0),1);
+ n=tbCopyBits(src,dst);if(n<0)return n;
+ if(a)tbDamage(x+p[4]+(dx<0?w-a:0),y+p[5],a,h);
+ if(b)tbDamage(x+p[4],y+p[5]+(dy<0?h-b:0),w,b);
+ return n;
+}
+// END shared scroll_client.js
+
 // ---- glass ---------------------------------------------------------------
 // There is no String.fromCharCode on this machine, and ctx.fillText needs a
 // string. So a character is drawn by indexing a table of one-character
@@ -82,7 +115,7 @@ var saved = 0;
 var needDraw = 0;
 // Reuse the existing compile scratch arena: 4K clipboard, 4K single-edit undo.
 // Never keep a second document or allocate a font/screen image.
-var ED={a:-1,b:-1,drag:0,undo:0,at:0,removed:0,inserted:0,oldDirty:0,notice:0,ctrl:0};
+var ED={a:-1,b:-1,drag:0,undo:0,at:0,removed:0,inserted:0,oldDirty:0,notice:0,ctrl:0,after:0,confirm:0,resume:0};
 var CLIP=24584;
 var UNDO=32768;
 var pasteOn = 0;   // GUI Ctrl-V: F6…F7, so ASCII 113-122 is letters not F-keys
@@ -93,15 +126,8 @@ function _sw(i, b) { srcWrite(i, b); }
 function _gr(i) { return stgRead(i); }
 function _gw(i, b) { stgWrite(i, b); }
 
-function _w32(o, v) {
-  _gw(o, v % 256);
-  _gw(o + 1, Math.floor(v / 256) % 256);
-  _gw(o + 2, Math.floor(v / 65536) % 256);
-  _gw(o + 3, Math.floor(v / 16777216) % 256);
-}
-function _r32(o) {
-  return _gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536 + _gr(o + 3) * 16777216;
-}
+function _w32(o,v){return tbU32(o,v);}
+function _r32(o){return tbSessionU32(o);}
 
 function lineStart(i) { return _r32(LINE_OFF + i * 4); }
 
@@ -207,7 +233,9 @@ function deleteByte(at){replaceRange(at,1,0,0,0);}
 
 // ---- drawing -------------------------------------------------------------
 function drawLine(row,li){
-  var s=lineStart(li),n=lineLen(li),c=leftCol,b,y=92+row*CH+12,selected;
+  var s=lineStart(li),n=lineLen(li),c=leftCol,b,y=92+row*CH+12,selected,p=tbDrawBounds(28,94+row*CH,COLS*CW,CH);
+  if(p[2]<=p[0]||p[3]<=p[1])return;
+  c=Math.max(c,leftCol+Math.floor((p[0]-28)/CW));n=Math.min(n,leftCol+Math.ceil((p[2]-28)/CW));
   if(n>leftCol+COLS)n=leftCol+COLS;
   while(c<n){
     b=_sb(s+c);selected=hasSelection()&&s+c>=Math.min(ED.a,ED.b)&&s+c<Math.max(ED.a,ED.b);
@@ -218,7 +246,7 @@ function drawLine(row,li){
   }
 }
 function redraw(){
-  var r=0,li;
+  var r=0,li,p,last;
   if(!keepView){
     if(curLine<topLine)topLine=curLine;
     if(curLine>=topLine+ROWS)topLine=curLine-ROWS+1;
@@ -228,16 +256,22 @@ function redraw(){
   tbSessionProperty(ctx,7,Math.floor(topLine*255/Math.max(1,nLines-ROWS)));
   tbSessionProperty(ctx,8,Math.floor(leftCol*255/Math.max(1,longest-COLS+1)));
   tbSessionProperty(ctx,9,dirty+ED.undo*2+(clipLen()>0?4:0)+(hasSelection()?8:0)+ED.notice*16);
-  ctx.fillStyle="#FFFFFF";ctx.fillRect(24,88,576,344);
+  p=tbDrawBounds(24,88,576,344);if(p[2]<=p[0]||p[3]<=p[1])return;
+  ctx.fillStyle="#FFFFFF";ctx.fillRect(p[0],p[1],p[2]-p[0],p[3]-p[1]);
+  r=Math.max(0,Math.floor((p[1]-94)/CH));last=Math.min(ROWS,Math.ceil((p[3]-94)/CH));
   ctx.fillStyle="#000000";
-  while(r<ROWS){li=topLine+r;if(li<nLines)drawLine(r,li);r=r+1;}
+  while(r<last){li=topLine+r;if(li<nLines)drawLine(r,li);r=r+1;}
   ctx.fillStyle="#000000";
   if(!hasSelection() && curLine>=topLine && curLine<topLine+ROWS && curCol>=leftCol && curCol<leftCol+COLS)
-    ctx.fillRect(28+(curCol-leftCol)*CW,94+(curLine-topLine)*CH,1,14);
+    {
+     p=tbDrawBounds(28+(curCol-leftCol)*CW,94+(curLine-topLine)*CH,1,14);
+     if(p[2]>p[0]&&p[3]>p[1])ctx.fillRect(p[0],p[1],p[2]-p[0],p[3]-p[1]);
+    }
 }
 // The shared window sends reserved system-widget keys. They move only the
 // viewport; ordinary arrows still move the insertion point.
 function windowKey(k){
+  var oldTop=topLine,oldLeft=leftCol,n;
   if(k<128 || k>133)return 0;
   if(k===128)topLine=Math.max(0,topLine-1);
   if(k===129)topLine=Math.min(Math.max(0,nLines-ROWS),topLine+1);
@@ -245,7 +279,12 @@ function windowKey(k){
   if(k===131)topLine=Math.min(Math.max(0,nLines-ROWS),topLine+ROWS);
   if(k===132)leftCol=Math.max(0,leftCol-1);
   if(k===133)leftCol=Math.min(Math.max(0,longest-COLS+1),leftCol+1);
-  keepView=1;needDraw=1;return 1;
+  keepView=1;needDraw=1;
+  if(oldTop!=topLine||oldLeft!=leftCol){
+   n=tbScrollRect(36928,36992,28,94,COLS*CW,ROWS*CH,(oldLeft-leftCol)*CW,(oldTop-topLine)*CH);
+   if(n>=0){tbDamageClip();redraw();tbPortPop();tbDamageClear();needDraw=0;}
+  }
+  return 1;
 }
 
 // ---- keys ----------------------------------------------------------------
@@ -350,11 +389,47 @@ function onKey(e) {
 }
 
 function tick() {
+  if(ED.resume){var action=ED.resume;ED.resume=0;tbDocumentContinue(action);return;}
   if (quit || saved) { return; }
   if (needDraw) { redraw(); needDraw = 0; }
   tbSessionFrame(tick);
 }
 
+// BEGIN shared editor_client.js
+// Shared document callbacks: Editor and Note use the same SOURCE owner.
+function editorDocument(action,value){
+ var a=[],i=0,n;
+ if(action==0){
+  if(sysDocument(0,380320,0)<0||stgRead(380337))return a;n=stgRead(380336);
+  while(i<n&&i<12){a.push(stgRead(380320+i));i=i+1;}return a;
+ }
+ if(action==1){
+  ED.after=value;a=editorDocument(0,0);if(a.length==0)tbDocumentSaveAs(value);else editorDocument(2,value);
+ }else if(action==2){
+  stgWrite(208,84);stgWrite(209,66);stgWrite(210,1);stgWrite(211,value);
+  stgWrite(65,0);stgWrite(64,5);tbDocumentSuspend(0);tbSessionSendKey(113);
+ }else if(action==3){
+  if(sysDocument(2,0,editorRole)<0){tbDialogOpen(1,tbSessionCodes("Disk operation failed"),[],[]);return 1;}
+  tbDocumentHeader(editorRole);stgWrite(64,5);tbDocumentSuspend(1);cdone(128,0,0);
+ }else if(action==4){
+  ED.after=value;
+  if(dirty){ED.confirm=1;tbDialogOpen(5,tbSessionCodes("Save changes?"),[],[]);}
+  else tbDocumentContinue(value);
+ }else if(action==5){
+  if(!ED.confirm)return 0;ED.confirm=0;
+  if(value==1)editorDocument(1,ED.after);else if(value==2)tbDocumentContinue(ED.after);
+ }
+ return 1;
+}
+tbSessionDocument(editorDocument);
+function editorResume(){
+ ED.resume=0;
+if(stgRead(208)==84&&stgRead(209)==66&&stgRead(210)==1){
+ if(stgRead(65)==1)ED.resume=stgRead(211);stgWrite(208,0);stgWrite(65,0);
+}
+}
+editorResume();
+// END shared editor_client.js
 reindex();
 if(_gr(32)===82 && _gr(33)===69 && _gr(34)===83 && _gr(35)===1){
   curLine=Math.min(nLines-1,_r32(36));curCol=Math.min(lineLen(curLine),_r32(40));topLine=_r32(44);leftCol=_r32(48);_gw(32,0);
@@ -383,6 +458,60 @@ tbSessionFrame(tick);
 
 tbSessionProgram('EDITOR.HTM');
 tbSessionInvalidate(function(){redraw();needDraw=0;});
+
+// BEGIN shared filename_client.js
+// Shared file-name policy, embedded into clients that own Save As.
+function tbClientFilename(a,ext,kind){
+ var i=0,c,stem=0,n=0,dot=0,j,legal,on;
+ if(kind){
+  if(ext=="")return 1;while(i<a.length){if(a[i]==46)dot=i+1;i=i+1;}
+  if(dot==0)return 0;i=dot;while(i<a.length){if(a[i]!=strByte(ext,i-dot))return 0;i=i+1;}return strByte(ext,i-dot)<0;
+ }
+ while(i<a.length){
+  c=a[i];if(c>=97&&c<=122)c=c-32;a[i]=c;
+  if(c==46){if(dot||stem==0)return 0;dot=1;}
+  else{
+   on=(c>=65&&c<=90)||(c>=48&&c<=57);j=0;
+   while(j<17&&!on){legal=strByte("$%'-_@~`!(){}^#&",j);if(c==legal)on=1;j=j+1;}
+   if(!on)return 0;if(dot)n=n+1;else stem=stem+1;
+  }i=i+1;
+ }
+ if(stem<1||stem>8||n>3||(dot&&n==0))return 0;
+ if(!dot){
+  a.push(46);i=0;
+  while(i<3){c=strByte(ext,i);if(c<0)break;a.push(c);i=i+1;}
+ }
+ if(a.length>12)return 0;return 1;
+}
+tbSessionNames(tbClientFilename);
+// END shared filename_client.js
+// BEGIN shared chrome_client.js
+// Shared document scroll controls, using the common Window and Control geometry.
+var tbClientScroll=0;
+function tbClientChrome(mode,x,y){
+ var a=tbWindowBounds(),code=0,scroll=tbClientScroll;
+ if(mode==2){tbClientResize(x,y);return 0;}
+ if(mode==1){
+
+  if(x>=a[0]+a[2]-19&&x<a[0]+a[2]-1&&y>=a[1]+54&&y<a[1]+a[3]-22){code=tbControlPart(y,a[1]+54,a[3]-76,20,a[1]+76+Math.floor(Math.max(0,a[3]-140)*scroll/255),Math.min(20,Math.max(0,a[3]-116)));code=code==4?128:code==5?129:code==8?130:131;}
+  if(y>=a[1]+a[3]-20&&y<a[1]+a[3]-1){if(x>=a[0]+2&&x<a[0]+20)code=132;else if(x>=a[0]+a[2]-38&&x<a[0]+a[2]-20)code=133;}
+ 
+ return code;
+ }
+ tbClientScroll=x;scroll=x;
+
+   tbBox(a[0]+a[2]-19,a[1]+54,18,a[3]-76,"#CCC");tbBox(a[0]+a[2]-19,a[1]+54,18,20,"#FFF");tbText([94],a[0]+a[2]-14,a[1]+56);
+   tbBox(a[0]+a[2]-19,a[1]+a[3]-40,18,18,"#FFF");tbText([118],a[0]+a[2]-14,a[1]+a[3]-40);
+   tbBox(a[0]+a[2]-17,a[1]+76+Math.floor(Math.max(0,a[3]-140)*scroll/255),14,Math.min(20,Math.max(0,a[3]-116)),"#FFF");
+   tbBox(a[0]+2,a[1]+a[3]-20,a[2]-22,19,"#CCC");tbBox(a[0]+2,a[1]+a[3]-20,18,19,"#FFF");tbText([60],a[0]+6,a[1]+a[3]-19);
+   tbBox(a[0]+a[2]-38,a[1]+a[3]-20,18,19,"#FFF");tbText([62],a[0]+a[2]-33,a[1]+a[3]-19);
+  
+ return 0;
+}
+tbSessionChrome(tbClientChrome);
+// END shared chrome_client.js
+function tbClientResize(w,h){ROWS=Math.max(1,Math.floor((h-24)/CH));COLS=Math.max(1,Math.floor((w-16)/CW));keepView=0;needDraw=1;}
+
 </script>
 </body>
 </html>

@@ -4,20 +4,33 @@ Standalone machine. `LOAD` an HTML file, `RUN` the minted `.JSH` on `card.img`. 
 
 Keyboard on USB **J15**. PS/2 mouse on **JA** (pin 1 data, pin 3 clock). Second mouse on **JC**. Joystick on **JB**. [Wiring](docs/USB_KEYBOARD_PMOD_MICE.md). [Architecture, Toolbox calls and Macintosh differences](docs/lastrun_ARCHITECTURE.md). [Architecture PNG](docs/diagrams/rarchitecture.png) · [Memory-map PNG](docs/diagrams/memory-map.png). Which bitstream: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
 
-## Active development candidate: run81 — RTL simulation passed
+## GitHub source snapshot
 
-[Run81 status and evidence](build/run81_mac_native/STATUS.md) records the single active
-implementation candidate, its [matched 44-program simulation disk](build/run81_mac_native/card.img),
-and the tested source. Focused fullcore RTL checks pass for boot/ROM identity,
-Finder menus and selection, Editor handoff/return, CopyBits/masks/patterns/text and
-division. Component checks cover the timer, framebuffer and memory services.
-The shared normalized-font resources leave 27 resident instruction words free.
+The root RTL, `storage/`, Toolbox and `card.img` are the matched
+`run81-current-source` set recorded in `CURRENT_SET.json`. Verify them with
+`python3 tools/verify_current_set.py`. No qualified run81 bitstream is included.
+The older `card_toolbox_examples_working.img` is historical and must not be
+mixed with the current source set.
 
-**No run81 FPGA build or bitstream yet.** Clock and physical resource gains remain
-unmeasured. No physical SD or flash update was made. Root storage and the existing
-working image below remain the preserved previous software set; do not mix their
-ROM/LNK/SYS with the run81 linked programs. The candidate contains the run80
-handoff/pointer fixes plus the reviewed VM, framebuffer and Toolbox changes.
+Publication checks: current-set verification passed; focused font, window-port,
+packed-session and Toolbox tests reported 38 passed and one failed. The failing
+native-service test could not start the existing RTL simulator because its ROM
+array bounds did not accommodate `toolbox_code0.hex`.
+The GUI configuration and evidence links below depend on local `build/run81_mac_native`
+artifacts, which are excluded from Git; this snapshot is not a standalone GUI bundle.
+
+## Active development candidate: run81 — implementation and focused RTL tests complete
+
+[Run81 status and evidence](build/run81_mac_native/STATUS.md) records the shared
+Window/Control/Port/Damage managers, bounded drawing, shared VM conversion and
+packed frame metadata, typed native staging, destination clipping and acknowledged
+audio transfer. The [44-program simulation disk](build/run81_mac_native/card.img)
+is matched; the resident library has 95 spare words. Actual full-core checks cover
+Finder windows/menus/scrolling, Editor handoff/return and focused graphics/native operations.
+
+**No run81 FPGA build or bitstream yet.** Area, timing and clock-rate gains remain
+unmeasured. Root technical storage and the existing working image below are preserved;
+do not mix their software with run81. No physical SD or flash update was made.
 
 ## Preserved run80/root snapshot before run81
 

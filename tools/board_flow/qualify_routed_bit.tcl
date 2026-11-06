@@ -34,6 +34,9 @@ report_exceptions -file $out/exceptions.rpt
 report_pulse_width -file $out/pulse_width.rpt
 set timing [report_timing_summary -report_unconstrained -return_string]
 set fd [open $out/timing.rpt w]; puts $fd $timing; close $fd
+set inferred_latches [get_cells -quiet -hierarchical -filter {REF_NAME =~ LDCE* || REF_NAME =~ LDPE* || REF_NAME =~ LDC* || REF_NAME =~ LDP*}]
+jmr_internal_timing_gate $timing $inferred_latches
+jmr_audio_payload_gate $out
 report_timing -max_paths 100 -unique_pins -file $out/paths.rpt
 report_timing -from $vm -to $vm -max_paths 100 -unique_pins -file $out/vm_paths.rpt
 report_timing -from $fast -to $vm -max_paths 30 -file $out/fast_vm_paths.rpt

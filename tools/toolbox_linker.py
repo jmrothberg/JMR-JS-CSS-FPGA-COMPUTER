@@ -5,7 +5,7 @@ application. A changed library requires relinking clients and rebuilding its
 ROM image, not rebuilding FPGA logic once the bank interface is installed.
 """
 from pathlib import Path
-import struct,zlib
+import struct,zlib,re
 from functional_model.compiler import Compiler,_tokenize,_isolate_iife_modules
 from functional_model.bytecode import Op
 from functional_model.jsb_format import ProgramImage,FLAG_ASET
@@ -46,6 +46,11 @@ def library_source():
     from tools.toolbox_state import compact_state
     raw='\n'.join((ROOT/'resources/toolbox'/n).read_text()
                   for n in ('toolbox.js','ui.js','session.js','documents.js'))
+    from tools.build_system_resources import ui_width_codes
+    expected=ui_width_codes(ROOT/'resources/system/system.json')
+    match=re.search(r'_tbWidths.push\(strByte\("([A-Z]+)",i\)-64\)',raw)
+    if match is None or match[1]!=expected:
+        raise ValueError('Toolbox generated advances differ from canonical SYSTEM font')
     return compact_state(raw)[0]
 
 def compiler_with_library():

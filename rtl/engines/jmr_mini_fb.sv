@@ -48,21 +48,32 @@ module jmr_mini_fb (
     // ---------------- Port A: draw writes + dump reads ----------------
     logic [18:0] a0;
     assign a0 = we ? waddr : dump_raddr;
+    // Every chunk starts on its own power-of-two boundary. Use the same
+    // bank-local address net for Port A reads and writes, so each bank has
+    // exactly one address per port. Invalid writes must not wrap into bank 3.
+    wire [17:0] a_c0 = a0[17:0];
+    wire [14:0] a_c1 = a0[14:0];
+    wire [12:0] a_c2 = a0[12:0];
+    wire [11:0] a_c3 = a0[11:0];
+    wire [17:0] b_c0 = copy_raddr[17:0];
+    wire [14:0] b_c1 = copy_raddr[14:0];
+    wire [12:0] b_c2 = copy_raddr[12:0];
+    wire [11:0] b_c3 = copy_raddr[11:0];
     logic [7:0] d0_c0, d0_c1, d0_c2, d0_c3;
     logic [1:0] d0_sel;
     always_ff @(posedge wr_clk) begin
-        if (we) begin
+        if (we && a0 < 19'd307200) begin
             unique case (chunk_of(a0))
-                2'd0: mem0_c0[a0[17:0]]              <= wdata;
-                2'd1: mem0_c1[a0 - 19'(C0)]          <= wdata;
-                2'd2: mem0_c2[a0 - 19'(C0 + C1)]     <= wdata;
-                2'd3: mem0_c3[a0 - 19'(C0 + C1 + C2)]<= wdata;
+                2'd0: mem0_c0[a_c0] <= wdata;
+                2'd1: mem0_c1[a_c1] <= wdata;
+                2'd2: mem0_c2[a_c2] <= wdata;
+                2'd3: mem0_c3[a_c3] <= wdata;
             endcase
         end
-        d0_c0 <= mem0_c0[a0[17:0]];
-        d0_c1 <= mem0_c1[(a0 - 19'(C0)) & 19'(C1-1)];
-        d0_c2 <= mem0_c2[(a0 - 19'(C0 + C1)) & 19'(C2-1)];
-        d0_c3 <= mem0_c3[(a0 - 19'(C0 + C1 + C2)) & 19'(C3-1)];
+        d0_c0 <= mem0_c0[a_c0];
+        d0_c1 <= mem0_c1[a_c1];
+        d0_c2 <= mem0_c2[a_c2];
+        d0_c3 <= mem0_c3[a_c3];
         d0_sel <= chunk_of(a0);
     end
     assign dump_rdata = (d0_sel == 2'd0) ? d0_c0 :
@@ -108,10 +119,10 @@ module jmr_mini_fb (
     logic [7:0] c_c0, c_c1, c_c2, c_c3;
     logic [1:0] c_sel;
     always_ff @(posedge wr_clk) begin
-        c_c0 <= mem0_c0[copy_raddr[17:0]];
-        c_c1 <= mem0_c1[(copy_raddr - 19'(C0)) & 19'(C1-1)];
-        c_c2 <= mem0_c2[(copy_raddr - 19'(C0 + C1)) & 19'(C2-1)];
-        c_c3 <= mem0_c3[(copy_raddr - 19'(C0 + C1 + C2)) & 19'(C3-1)];
+        c_c0 <= mem0_c0[b_c0];
+        c_c1 <= mem0_c1[b_c1];
+        c_c2 <= mem0_c2[b_c2];
+        c_c3 <= mem0_c3[b_c3];
         c_sel <= chunk_of(copy_raddr);
     end
     assign copy_rdata = (c_sel == 2'd0) ? c_c0 :

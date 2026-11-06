@@ -633,6 +633,11 @@ if {$whs eq "" || $whs < 0} {
   exit 1
 }
 
+set internal_timing_report [report_timing_summary -report_unconstrained -return_string]
+set inferred_latches [get_cells -quiet -hierarchical -filter {REF_NAME =~ LDCE* || REF_NAME =~ LDPE* || REF_NAME =~ LDC* || REF_NAME =~ LDP*}]
+jmr_internal_timing_gate $internal_timing_report $inferred_latches
+jmr_audio_payload_gate $OUT
+
 if {$RECOVERED} {
   write_bitstream -force [get_property DIRECTORY [get_runs impl_1]]/top_nexys_video.bit
 }

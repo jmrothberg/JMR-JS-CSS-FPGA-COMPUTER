@@ -18,10 +18,10 @@
 // phase[23] toggles at ~freq Hz); vol is amp = vol<<13, so the 4-voice sum
 // peaks at 491,520 — inside 24-bit signed with no clamp needed.
 //
-// Trigger CDC: exec64 latches (ch,freq,vol,frames,slide) on the core clock
-// and flips snd_tgl. Here a 2FF sync + edge detect samples the args one
-// mclk later — the args are stable for milliseconds around a poke (JS
-// cannot re-poke within 83 ns), so a plain level sync of the bus is safe.
+// Trigger CDC: source holds all38 payload bits until snd_ack returns.
+// Two synchronizer stages plus edge history delay capture; source may only
+// replace the packet after this domain acknowledges that exact toggle.
+// The board constrains held payload arrival within one MCLK period.
 (* keep_hierarchy = "yes" *)
 module jmr_psg (
     input  wire         mclk,
@@ -30,6 +30,7 @@ module jmr_psg (
     input  wire         mute,        // ready_lit: console prompt = silence
     // poke interface (core-clock registers, held stable; see CDC note)
     input  wire         snd_tgl,
+    output logic        snd_ack,
     input  wire  [1:0]  snd_ch,
     input  wire  [15:0] snd_freq,
     input  wire  [3:0]  snd_vol,
@@ -62,11 +63,15 @@ module jmr_psg (
     end
 
     // ---- poke CDC (toggle -> pulse) ---------------------------------
-    logic [2:0] tgl_sync;
-    always_ff @(posedge mclk)
+    (* ASYNC_REG = "TRUE" *) logic [2:0] tgl_sync;
+    always_ff @(posedge mclk or negedge rst_n)
         if (!rst_n) tgl_sync <= '0;
         else        tgl_sync <= {tgl_sync[1:0], snd_tgl};
     wire poke = tgl_sync[2] ^ tgl_sync[1];
+    // Capture is acknowledged even while muted or codec configuration waits.
+    always_ff @(posedge mclk or negedge rst_n)
+        if (!rst_n) snd_ack <= 1'b0;
+        else if (poke) snd_ack <= tgl_sync[1];
 
     // ---- voices ------------------------------------------------------
     logic [15:0] vfreq   [0:3];
@@ -103,15 +108,17 @@ module jmr_psg (
             end
             if (frame_tick)
                 for (int v = 0; v < 4; v++)
-                    if (vframes[v] != 8'd0) begin
+                    if (vframes[v] != 8'd0 && !(poke && snd_ch == 2'(v))) begin
                         vframes[v] <= vframes[v] - 8'd1;
                         vfreq[v]   <= 16'($signed(vfreq[v])
                                           + 16'($signed(vslide[v])));
                     end
             if (sample_tick)
                 for (int v = 0; v < 4; v++) begin
-                    vphase[v] <= vphase[v] + incr_of(vfreq[v]);
-                    ph23_q[v] <= vphase[v][23];
+                    if (!(poke && snd_ch == 2'(v))) begin
+                        vphase[v] <= vphase[v] + incr_of(vfreq[v]);
+                        ph23_q[v] <= vphase[v][23];
+                    end
                 end
             // noise: step the LFSR on voice 3's phase-MSB rise
             if (sample_tick && vphase[3][23] && !ph23_q[3])

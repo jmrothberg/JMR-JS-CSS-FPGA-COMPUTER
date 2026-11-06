@@ -3,46 +3,90 @@
 // Caller owns scratch: 64 descriptor bytes + 32 glyph bytes, disjoint from
 // application buffers and fsList's output. Redraw the app before tbUIDraw().
 var _tbC=0,_tbD=0,_tbFont=0,_tbReady=0,_tbMenus=[],_tbMenu=-1;
+var _tbErase=1;
 var _tbDown=0,_tbArmed=-1,_tbCommand=0,_tbChanged=1,_tbDialog=0;
 var _tbPrompt=[],_tbChoices=[],_tbValue=[],_tbSelection=0,_tbTop=0,_tbResult=0;
 var _tbWhite=1,_tbLight="#CCC",_tbSelect=6;
 var _tbGlyph=-1,_tbChromeWindow=1,_tbCaret=0,_tbNameSelect=0,_tbCaretOn=1;
+var _tbDragRect=[0,0,0,0],_tbDragX=0,_tbDragY=0;
 var _tbTitle=[],_tbX=40,_tbY=48,_tbW=560,_tbH=392;
-var _tbWidths=[4,6,7,10,7,11,10,3,5,5,7,7,4,7,4,7,8,8,8,8,8,8,8,8,8,8,4,4,6,8,6,8,11,8,8,8,8,7,7,8,8,6,7,9,7,12,9,8,8,8,8,7,6,8,8,12,8,8,8,5,7,5,8,8,6,8,8,7,8,8,6,8,8,4,6,8,4,12,8,8,8,8,6,7,6,8,8,12,8,8,8,5,5,5,8];
-function tbUIInit(ctx,descriptor,font,title){
- _tbC=ctx;_tbD=descriptor;_tbFont=font;_tbTitle=title;
+// Generated from canonical SYSTEM font advances; the linker verifies it.
+// Decode before any public UI call, preserving pre-init tbTextWidth behavior.
+var _tbWidths=[];
+function _tbInitWidths(){
+ var i=0;while(i<95){_tbWidths.push(strByte("DFGJGKJCEEGGDGDGHHHHHHHHHHDDFHFHKHHHHGGHHFGIGLIHHHHGFHHLHHHEGEHHFHHGHHFHHDFHDLHHHHFGFHHLHHHEEEH",i)-64);i=i+1;}
+}
+_tbInitWidths();
+function tbUIInit(ctx,d,p,title){
+ while(_tbPort>0)tbPortPop();tbPortReset();
+ _tbC=ctx;_tbD=d;_tbFont=p;_tbTitle=title;
  _tbWhite=_tbSRole==9?255:1;_tbLight=_tbSRole==9?218:"#CCC";_tbSelect=_tbSRole==9?31:6;
  _tbMenus=[];_tbMenu=-1;_tbDialog=0;_tbDown=0;_tbArmed=-1;_tbCommand=0;_tbResult=0;
  _tbC.systemWindow=0;
- _tbGlyph=-1;_tbReady=toolbox(5,0,font,32)==32;
- tbSurface(descriptor,font,16,16,2,1);stgWrite(descriptor+2,1);tbInk(descriptor,0,1);
+ _tbGlyph=-1;
+ // TBF1 schema1: printable ASCII32..126,16rows; glyph bytes already MSB-first.
+ _tbReady=(_tbCaps&3968)==3968&&tbResources(20608,p,8)==8&&tbSessionU32(p)==826688084&&tbSessionU32(p+4)==274669569;
+ if(!_tbReady){_tbChanged=1;return 0;}
+ tbSurface(d,p,16,16,2,1);stgWrite(d+2,1);tbInk(d,0,1);
  _tbChanged=1;return _tbReady?1:0;
 }
 function tbText(codes,x,y){
- var i=0,c,w,j,a,b;
+ var i=0,c,w;
  if(!_tbReady)return;
  while(i<codes.length){
   c=codes[i];if(c<32||c>126)c=63;
   if(_tbGlyph!=c){
-   if(tbResources(c*32,_tbFont,32)!=32)return;
-   j=0;while(j<32){a=stgRead(_tbFont+j);b=stgRead(_tbFont+j+1);stgWrite(_tbFont+j,b);stgWrite(_tbFont+j+1,a);j=j+2;}
+   if(tbResources(20736+(c-32)*32,_tbFont,32)!=32)return;
    _tbGlyph=c;
   }
-  w=_tbWidths[c-32];tbRect(_tbD,0,0,w,16);tbPlace(_tbD,x,y,1);tbBlit(_tbD);
+  w=_tbWidths[c-32];tbRect(_tbD,0,0,w,16);tbPlaceScreen(_tbD,x,y,1);tbBlit(_tbD);
   x=x+w;i=i+1;
  }
 }
 function tbTextWidth(codes){var i=0,w=0,c;while(i<codes.length){c=codes[i];if(c<32||c>126)c=63;w=w+_tbWidths[c-32];i=i+1;}return w;}
-function tbBox(x,y,w,h,fill){
- _tbC.fillStyle=fill;_tbC.fillRect(x,y,w,h);_tbC.fillStyle="#000";
+function tbBox(x,y,w,h,value){
+ _tbC.fillStyle=value;_tbC.fillRect(x,y,w,h);_tbC.fillStyle="#000";
  _tbC.fillRect(x,y,w,1);_tbC.fillRect(x,y+h-1,w,1);_tbC.fillRect(x,y,1,h);_tbC.fillRect(x+w-1,y,1,h);
 }
-function tbWindow(x,y,w,h,title){_tbX=x;_tbY=y;_tbW=w;_tbH=h;_tbTitle=title;_tbChanged=1;}
+// Window policy is software. Rectangles are caller-owned [x,y,width,height].
+var _tbDamage=[640,480,0,0],_tbPort=0,_tbPortRect=[0,0,640,480,0,0],_tbPortStack=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+function tbDamage(x,y,w,h){
+ var a=Math.max(0,x),b=Math.max(22,y);w=Math.min(640,x+w);h=Math.min(480,y+h);
+ if(w<=a||h<=b)return;
+ _tbDamage[0]=Math.min(_tbDamage[0],a);_tbDamage[1]=Math.min(_tbDamage[1],b);
+ _tbDamage[2]=Math.max(_tbDamage[2],w);_tbDamage[3]=Math.max(_tbDamage[3],h);
+}
+function tbDamageClear(){_tbDamage[0]=640;_tbDamage[1]=480;_tbDamage[2]=0;_tbDamage[3]=0;}
+function tbDamageClip(){return tbPortPush(_tbDamage[0],_tbDamage[1],Math.max(0,_tbDamage[2]-_tbDamage[0]),Math.max(0,_tbDamage[3]-_tbDamage[1]),0,0);}
+function tbWindowPart(x,y,a,b,w,h){
+ if(x<a||y<b||x>=a+w||y>=b+h)return 0;
+ if(x>=a+5&&x<a+20&&y>=b+5&&y<b+20)return 2;
+ if(x>=a+w-16&&y>=b+h-16)return 3;
+ return y<b+24?1:6;
+}
+function tbWindowAdjust(codes,x,y,kind){
+ _tbErase=1;
+ tbDamage(codes[0],codes[1],codes[2],codes[3]);
+ if(kind){codes[2]=Math.max(180,Math.min(612,codes[2]+x));codes[3]=Math.max(120,Math.min(420,codes[3]+y));}
+ else{codes[0]=Math.max(0,Math.min(460,codes[0]+x));codes[1]=Math.max(22,Math.min(360,codes[1]+y));}
+ tbDamage(codes[0],codes[1],codes[2],codes[3]);_tbChanged=1;
+}
+// Axis-independent scrollbar parts: arrows, thumb, page before/after.
+function tbControlPart(p,x,w,h,y,n){
+ if(p<x||p>=x+w)return 0;
+ if(p<x+h)return 4;if(p>=x+w-h)return 5;
+ return p<y?8:p<y+n?7:9;
+}
+function tbControlValue(value,n,w){return Math.max(0,Math.min(w,value+n));}
+function tbWindow(x,y,w,h,title){_tbX=x;_tbY=y;_tbW=w;_tbH=h;_tbTitle=title;_tbDragRect[0]=x;_tbDragRect[1]=y;_tbDragRect[2]=w;_tbDragRect[3]=h;_tbChanged=1;}
+function _tbMenuLeft(item){var i=0,x=34;while(i<item){x=x+tbTextWidth(_tbMenus[i][0])+20;i=i+1;}return Math.min(420,x);}
+function _tbButton(x,w,codes,on){if(on)tbBox(x-3,269,w+6,32,_tbWhite);tbBox(x,272,w,26,_tbWhite);tbText(codes,x+(w-tbTextWidth(codes))/2,277);}
 function tbMenus(menus){_tbMenus=menus;_tbMenu=-1;_tbArmed=-1;_tbChanged=1;}
 function tbMenuEnabled(menu,item,on){_tbMenus[menu][1][item][2]=on;_tbChanged=1;}
 function tbMenuChecked(menu,item,on){_tbMenus[menu][1][item][3]=on;_tbChanged=1;}
-function tbDialogOpen(kind,prompt,choices,value){
- _tbDialog=kind;_tbPrompt=prompt;_tbChoices=choices;_tbValue=value;
+function tbDialogOpen(kind,a,rows,value){
+ _tbErase=1;
+ _tbDialog=kind;_tbPrompt=a;_tbChoices=rows;_tbValue=value;
  _tbSelection=0;_tbTop=0;_tbResult=0;_tbMenu=-1;_tbArmed=-1;_tbCaret=value.length;_tbNameSelect=value.length>0;_tbChanged=1;
 }
 function tbDialogValue(){return _tbValue;}
@@ -51,7 +95,7 @@ function tbDialogResult(){var r=_tbResult;_tbResult=0;return r;}
 function tbMenuCommand(){var r=_tbCommand;_tbCommand=0;return r;}
 function tbUIChanged(){var r=_tbChanged;_tbChanged=0;return r;}
 function tbUIKey(code,ch){
- if(!_tbDialog)return 0;
+ if(!_tbDialog)return 0;_tbErase=1;
  if(code==27){_tbResult=_tbDialog==5?3:2;_tbDialog=0;}
  else if(code==13){_tbDialog=0;_tbResult=1;}
  else if(_tbDialog==3){
@@ -80,6 +124,7 @@ function tbUIPointer(x,y,buttons){
  var i=0,left=34,w,row,hit=-1,items;
  _tbDown=buttons==1;
  if(_tbDialog){
+  _tbErase=1;
   if(y>=272 && y<298){
    if(_tbDialog==5){if(x>=152&&x<244)hit=1;else if(x>=252&&x<344)hit=2;else if(x>=352&&x<444)hit=3;}
    else if(x>=340 && x<432)hit=1;else if(_tbDialog!=1 && x>=220 && x<320)hit=2;
@@ -99,28 +144,39 @@ function tbUIPointer(x,y,buttons){
   _tbChanged=1;return 1;
  }
  if(y<22 && x>=30){
+  _tbErase=1;
   while(i<_tbMenus.length){w=tbTextWidth(_tbMenus[i][0])+20;if(x>=left&&x<left+w)hit=i;left=left+w;i=i+1;}
   if(down || (_tbDown && _tbMenu>=0)){_tbMenu=hit;_tbArmed=-1;_tbChanged=1;}
   return 1;
  }
  if(_tbMenu>=0){
-  i=0;left=34;while(i<_tbMenu){left=left+tbTextWidth(_tbMenus[i][0])+20;i=i+1;}
-  if(left>420)left=420;
+  _tbErase=1;
+  left=_tbMenuLeft(_tbMenu);
   items=_tbMenus[_tbMenu][1];row=Math.floor((y-24)/21);
   if(x>=left&&x<left+212&&row>=0&&row<items.length&&items[row][0].length>0&&items[row][2])hit=row;
   _tbArmed=hit;
   if(up){if(hit>=0)_tbCommand=items[hit][1];_tbMenu=-1;_tbArmed=-1;}
   _tbChanged=1;return 1;
  }
- // Standard upper-left close box. Command 255 is reserved for window close.
- if(_tbChromeWindow && down && x>=_tbX+5 && x<_tbX+20 && y>=_tbY+5 && y<_tbY+20){_tbArmed=255;return 1;}
- if(up && _tbArmed==255){if(x>=_tbX+5&&x<_tbX+20&&y>=_tbY+5&&y<_tbY+20)_tbCommand=255;_tbArmed=-1;return 1;}
+ if(_tbChromeWindow){
+  hit=tbWindowPart(x,y,_tbX,_tbY,_tbW,_tbH);
+  if(down&&hit>0&&hit<4){_tbArmed=hit;_tbDragX=x;_tbDragY=y;_tbDragRect[0]=_tbX;_tbDragRect[1]=_tbY;_tbDragRect[2]=_tbW;_tbDragRect[3]=_tbH;return 1;}
+  if(_tbArmed>0&&_tbArmed<4){
+   if(_tbDown&&_tbArmed!=2){tbWindowAdjust(_tbDragRect,x-_tbDragX,y-_tbDragY,_tbArmed==3);_tbX=_tbDragRect[0];_tbY=_tbDragRect[1];_tbW=_tbDragRect[2];_tbH=_tbDragRect[3];if(_tbSChrome){var fn=_tbSChrome;fn(2,_tbW-36,_tbH-76);}_tbDragX=x;_tbDragY=y;}
+   if(up){if(_tbArmed==2&&hit==2)_tbCommand=255;_tbArmed=-1;}_tbChanged=1;return 1;
+  }
+ }
  return 0;
 }
 function tbUIDraw(){
+ tbPortReset();
  var i,left=34,w,items,row,caret,j;
+ if(!_tbReady){
+  _tbC.fillStyle=0;_tbC.fillRect(30,0,610,22);
+  _tbC.fillStyle=_tbWhite;_tbC.fillText((_tbCaps&3968)!=3968?"Toolbox needs matching FPGA":"SYSTEM.SYS UI font unavailable",34,16);return;
+ }
  // The ship/keyboard recovery area at x<30 stays owned by the system.
- _tbC.fillStyle=_tbWhite;_tbC.fillRect(30,0,610,24);_tbC.fillRect(30,21,610,1,0);
+ _tbC.fillStyle=_tbWhite;_tbC.fillRect(30,0,610,22);_tbC.fillRect(30,21,610,1,0);
  i=0;while(i<_tbMenus.length){w=tbTextWidth(_tbMenus[i][0])+20;
   if(i==_tbMenu){_tbC.fillRect(left,0,w,21,0);tbInk(_tbD,_tbWhite,1);}
   tbText(_tbMenus[i][0],left+8,3);tbInk(_tbD,0,1);left=left+w;i=i+1;}
@@ -129,8 +185,8 @@ function tbUIDraw(){
  _tbC.fillStyle="#000";_tbC.fillRect(_tbX,_tbY+24,1,_tbH-24);_tbC.fillRect(_tbX+_tbW-1,_tbY+24,1,_tbH-24);_tbC.fillRect(_tbX,_tbY+_tbH-1,_tbW,1);
  }
  if(_tbMenu>=0){
-  left=34;i=0;while(i<_tbMenu){left=left+tbTextWidth(_tbMenus[i][0])+20;i=i+1;}
-  if(left>420)left=420;items=_tbMenus[_tbMenu][1];tbBox(left,22,212,items.length*21+4,_tbWhite);
+  _tbErase=1;
+  left=_tbMenuLeft(_tbMenu);items=_tbMenus[_tbMenu][1];tbBox(left,22,212,items.length*21+4,_tbWhite);
   i=0;while(i<items.length){
    if(items[i][0].length==0){_tbC.fillStyle=_tbSRole==9?146:"#888";_tbC.fillRect(left+5,34+i*21,202,1);}
    else{
@@ -157,12 +213,30 @@ function tbUIDraw(){
   }
   if(_tbDialog==4 && _tbChoices.length>5){tbBox(468,160,16,20,_tbWhite);tbText([94],472,162);tbBox(468,240,16,20,_tbWhite);tbText([118],472,242);}
   if(_tbDialog==5){
-   tbBox(149,269,98,32,_tbWhite);tbBox(152,272,92,26,_tbWhite);tbText([83,97,118,101],178,277);
-   tbBox(252,272,92,26,_tbWhite);tbText([68,105,115,99,97,114,100],266,277);
-   tbBox(352,272,92,26,_tbWhite);tbText([67,97,110,99,101,108],366,277);
+   _tbButton(152,92,[83,97,118,101],1);_tbButton(252,92,[68,105,115,99,97,114,100],0);_tbButton(352,92,[67,97,110,99,101,108],0);
   }else{
-  tbBox(337,269,98,32,_tbWhite);tbBox(340,272,92,26,_tbWhite);tbText(_tbDialog==3?[83,97,118,101]:_tbDialog==4?[79,112,101,110]:_tbDialog==6?[82,101,112,108,97,99,101]:[79,75],_tbDialog==6?353:362,277);
-  if(_tbDialog!=1){tbBox(220,272,100,26,_tbWhite);tbText([67,97,110,99,101,108],244,277);}
+   _tbButton(340,92,_tbDialog==3?[83,97,118,101]:_tbDialog==4?[79,112,101,110]:_tbDialog==6?[82,101,112,108,97,99,101]:[79,75],1);
+   if(_tbDialog!=1)_tbButton(220,100,[67,97,110,99,101,108],0);
   }
  }
 }
+
+// Four nested drawing ports; no framebuffer backing store or per-frame allocation.
+function tbPortPush(x,y,w,h,a,b){
+ var i=0;if(_tbPort>=4||(_tbCaps&2048)==0)return -1;
+ while(i<6){_tbPortStack[_tbPort*6+i]=_tbPortRect[i];i=i+1;}
+ _tbPortRect[0]=Math.max(_tbPortRect[0],x);_tbPortRect[1]=Math.max(_tbPortRect[1],y);
+ _tbPortRect[2]=Math.min(_tbPortRect[2],x+w);_tbPortRect[3]=Math.min(_tbPortRect[3],y+h);
+ _tbPortRect[4]=_tbPortRect[4]+a;_tbPortRect[5]=_tbPortRect[5]+b;_tbPort=_tbPort+1;
+ _tbC.save();_tbC.setTransform(1,0,0,1,_tbPortRect[4],_tbPortRect[5]);
+ return tbPortClip(_tbPortRect[0],_tbPortRect[1],Math.max(0,_tbPortRect[2]-_tbPortRect[0]),Math.max(0,_tbPortRect[3]-_tbPortRect[1]));
+}
+function tbPortPop(){
+ var i=0;if(!_tbPort)return -1;_tbPort=_tbPort-1;
+ while(i<6){_tbPortRect[i]=_tbPortStack[_tbPort*6+i];i=i+1;}_tbC.restore();
+ return tbPortClip(_tbPortRect[0],_tbPortRect[1],Math.max(0,_tbPortRect[2]-_tbPortRect[0]),Math.max(0,_tbPortRect[3]-_tbPortRect[1]));
+}
+
+function tbWindowBounds(){return _tbDragRect;}
+
+function tbPortBounds(){return _tbPortRect;}

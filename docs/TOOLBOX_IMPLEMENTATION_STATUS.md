@@ -1,4 +1,91 @@
-# Toolbox software revision and hardware status
+# Run81: one active matched candidate
+
+The active test set is `build/run81_mac_native/source` and its one matching
+`build/run81_mac_native/card.img`. This implementation step does not authorize
+an FPGA build, physical disk write or promotion of root published files.
+The first-pass records below are preserved history, not current installation
+choices. Final focused full-core RTL acceptance passed against this frozen
+software set; see `completion_tests/actual/evidence.json`. Simulation does not
+establish board acceptance.
+
+- 44 programs, 42 resident clients, 161 disk files; every resident prefix matches.
+- ROM: `05af986e4a9159f2225b271ef6808b62b54fa71b8249ca1ab21f8a5aecac6d49`.
+- LNK: `a6eae35be6307cf59eb15536c9c790fce432477b20381133570235310a46e309`.
+- SYS: `3ee536994a7b45a128cd25555a802febaff2fef1d5e5b2d72d59934d1bf7a291`.
+- Disk: `c1b4061b785ad69d39b9579068cbc4cb5a320ae3a6b1d8e838b1dacda75a3c32`.
+- Resident instructions: 8096/8191, 95 spare. MacPaint code+metadata: 21472/21504,
+  with 511/512 variable bindings. The fixed final jump and all bank limits stay.
+
+The shared implementation now includes Window geometry/hit/drag/grow,
+Control calculations, four nested drawing Ports, bounded rectangular damage,
+ordered Finder activation/closing/exposure and retained-pixel scrolling, with actual bounded draw emission.
+Editor/Note own SOURCE save/new/dirty continuation through callbacks; Reader,
+Utility and Editor share actual client chrome; Editor/Reader/Finder use retained scrolling, while Utility preserves its direct monospace redraw policy. MacPaint
+uses scoped Canvas and native glyph placement. There is one input/frame owner.
+Optional modules are literal inline HTML, checked against one common source.
+`UISESS.HTML` demonstrates scoped clipping and exposed-strip scrolling.
+
+This software requires native64 ABI1 operations8–12 (typed mask0x780, clip0x800)
+in the same RTL/bit. It is incompatible with older operation1–7-only bits. Once
+these primitives are qualified, UI/CopyBits policy can change via a matched
+software update and cold restart. Hardware access/formats/capacity still need
+RTL, Vivado and a new qualified bit. No all-path speed/area/timing claim is made.
+
+39 focused tests passed in the serialized native-instruction model, including
+actual shipping HTML with real frame scheduling: nested clipping and origin,
+raw screen-to-arena placement, overflow restore, unsigned/bounds/capability
+checks, dirty save/cancel/resume, Finder overlap/move/grow/close in icon/list
+views, and exact per-step scroll versus full-redraw pixels for Editor/Reader/Utility at initial and moved origins. Two Finder cases were rerun after consolidating order preparation. SYS legacy bytes0..20607 remain exact.
+Evidence: `software_work/second_pass/pytest.log`, `software_work/mint_result.json`
+and `software_work/final_software_manifest.json` in this candidate. The final
+manifest records both software checks and the completed focused full-core RTL
+acceptance, separately from historical first-pass results and board qualification.
+
+Actual full-core RTL acceptance: **PASS**, evidence
+`build/run81_mac_native/completion_tests/actual/evidence.json`, SHA-256
+`72905bb19931e261cd6cd6c4df6347f6a3b68506ece86775704f4514b63fce37`.
+The exact disk and ROM/LNK/SYS identities above match the simulator inputs.
+Finder's moved/grown/restored/scrolled framebuffer matched forced full repaint;
+selection/close/reopen and Editor header handoff/return/menu checks passed.
+The same run passed typed/scissor/graphics/resource/VM/frame/DIV/audio checks.
+This remains simulation acceptance, with no FPGA build or physical media write.
+
+Architecture and all other diagrams are PNG for iPhone viewing; editable SVG
+sources and reproducible exports are retained.
+
+# First-pass font checkpoint (historical)
+
+The single candidate is `build/run81_mac_native/source` plus its matched
+`build/run81_mac_native/card.img`. No FPGA build, benchmark or media write is
+authorized by this implementation step. The earlier release records below are
+history, not a second active candidate.
+
+- 44 programs/42 resident clients; 161 files including preserved extras.
+- Library 8164/8191 mutable words, 27 spare; fixed final jump remains separate.
+- ROM SHA-256: `259b772cb4eca7b9d147f2b449c47a7bc041342bfae85ab9cb385aeb2377a9b7`.
+- LNK SHA-256: `5b59893687705d660c3cd4f3c7227adc6a89e3011b19494a6d8234ac5ffa9ea7`.
+- SYS SHA-256: `3ee536994a7b45a128cd25555a802febaff2fef1d5e5b2d72d59934d1bf7a291`.
+- Candidate disk SHA-256: `59204935e718df163e2eba6991235bc8308a5d997e5d0c18e22c288bfc3b952e`.
+
+Host compilation, all resident prefixes and capacity/disk overlay passed.
+Focused resource/UI tests passed 15 cases; all 95 printable glyph pixels and
+pre-init text widths match the previous library in the native-instruction model.
+Header failure returns 0, suppresses wrong glyphs and shows a native-font message.
+Actual full-core RTL integration passed: exact 8192 cold-ROM words, Finder
+menu/selection/window close/reopen, Finder→Editor→Finder handoff, exact focused
+copy/mask/pattern/text pixels and 7 runtime division checks with zero errors.
+Evidence: `build/run81_mac_native/integration_tests/actual/evidence.json`.
+No broad game or physical acceptance is inferred from these focused checks.
+
+For 95 glyph misses, JS staging reads fell 3040→8 and writes 4299→1259; the 8 reads
+are per-init header setup. Compact widths add 95 strByte calls once/library start.
+These are dispatch counts, not elapsed timing or an all-path speed guarantee.
+Read `software_work/{mint_result,font_checks,resource_boundary}.json` in the
+candidate for exact scope and inputs.
+
+## Previous published software/build history
+
+### Previous Toolbox software revision and hardware status
 
 5 November 2026. **44 programs, 42 resident clients; library 8191/8191 mutable
 instructions, zero spare.** This status describes the matched software revision.

@@ -7,19 +7,16 @@ The software revision contains **44 programs, including eight CB variants;
 native graphics operations (GRAPHICS), background restoration (DAMAGE), manual
 UI ownership (UIMAN), and cooperative session ownership (UISESS). Their ROM,
 LNK and resident clients form one matched set; delivery/readback status belongs
-to its release manifest. The library fills **8191 of 8191 mutable words**.
+to its release manifest. The library uses **8096 of 8191 mutable words, leaving 95 spare**.
 
-**Run80 is the only active RTL candidate**, combining the Editor handoff and
-pointer-report corrections. Its build/qualification is still running, so its
-active `.bit` is pending. The root `storage/` is the canonical software tree;
-`card_toolbox_examples_working.img` is the single active matching disk, with
-159 managed files plus two preserved files. Older builds and disks are rollback
-history, not alternative installation choices. RTL checks do not establish
-physical board acceptance.
+**Run81 is the one active implementation/RTL-simulation candidate**. Its
+software tree is `build/run81_mac_native/source/storage/`; its matching disk is
+`build/run81_mac_native/card.img`. No FPGA build or physical update is authorized
+for this step. Root published software and older builds remain preserved records,
+not competing test candidates. RTL checks do not establish board acceptance.
 User testing confirmed working menus and several games, and exposed graphics
 and intermittent pointer regressions. Targeted RTL checks cover the earlier
-nine software fixes. This revision also has actual RTL GRAPHICS checks and a
-complete cold-ROM readback; DAMAGE and UI examples have bounded model checks.
+nine software fixes. Earlier checkpoints have actual RTL GRAPHICS/cold-ROM evidence. Current shared-manager software passed focused native-instruction-model checks and the final combined RTL simulation against its exact frozen ROM and disk. FPGA routing/timing and physical acceptance remain separate.
 Exact identities and bounded evidence are in
 [TOOLBOX_IMPLEMENTATION_STATUS.md](TOOLBOX_IMPLEMENTATION_STATUS.md).
 There is one canonical architecture diagram; the separate
@@ -74,21 +71,22 @@ interface suited to this FPGA.
   is no 68000, browser or interpreter. The supported JavaScript subset and
   fixed code/heap/binding limits remain explicit.
 
-Moving UI policy out of RTL means future menu/dialog changes are JavaScript
-updates. It does **not** modify configured FPGA circuits. Editing RTL changes
-source files; Vivado must synthesize, place and route those changes into a new
-`.bit`. Run78 includes that hardware change. The selected build passes setup at
-0.000 ns and hold at +0.027 ns, using
-96,097 LUTs, 364.5 BRAM tiles and 28,545 slices. The selected routed checkpoint's
-factory Toolbox memory matches factory ROM `fd89c8…`. The corrected disk ROM
-`f6f805…` is intentionally different and is validated/loaded at boot. Its
-acceptance must use separate cold-load/readback/execution evidence, rather than
-rewriting the routed INIT audit. Physical acceptance of the new software/hardware combination remains separate;
-no whole-application speed factor is inferred.
+Moving UI policy out of RTL makes software algorithms updateable; it does not
+change configured FPGA circuits. Run81 combines bounded RTL changes and a matched
+software/resource revision for simulation. Applying changed circuits to the board
+would require a later authorized Vivado build and qualification. No routed area,
+strict timing or physical result is claimed for this unbuilt candidate. Earlier
+factory INIT audits stay tied to their original checkpoints and ROMs.
+
+The text revision preserves legacy SYS bytes 0..20607 and adds normalized glyphs
+and canonical advances in the existing payload tail. It removes the per-miss
+32-read/32-write byte swap without adding an application font allocation. Widths
+remain available before UI initialization. The per-app 32-byte glyph scratch,
+single session/input/frame ownership and public calls stay unchanged. This candidate also implements shared Window/Control geometry, four-level drawing Ports, rectangular Damage and exposed-strip scrolling. Optional policy modules are actual inline client software. It does not implement arbitrary Macintosh Regions or a binary-compatible resource ABI. Dispatch counts are not speed factors.
 
 ## Update boundary
 
-With this interface included in qualified run78, changing menu layout, filename behavior,
+Run81 adds typed-memory and destination-scissor mechanisms. Its software requires the matching new RTL; older run78 operations 1–7 alone are insufficient. Once this interface is included in a qualified bit, changing menu layout, filename behavior,
 CopyBits composition, masks, patterned brushes or shape algorithms can use
 ROM + LNK + relinked applications, then a cold machine restart.
 Finder/Game Restart reopens a program and does not reload the shared ROM. Changing a pixel format,
@@ -103,8 +101,8 @@ image. This reserves 32 KiB from artwork capacity; the art limit becomes
 6,860,800 bytes. SYS, framebuffer, saved Finder arena and SOURCE addresses stay
 fixed. All shipped assets have been checked against the revised boundary.
 The resident prefix is 8192 words, with 8191 mutable instructions and one fixed
-jump. The revised library uses **all 8191 mutable instructions: zero spare**.
-A software update must replace or compact existing routines before adding code.
+jump. The revised library uses **8096 mutable instructions, leaving 95 spare**.
+Larger additions may still need replacement or compaction of existing routines.
 The fixed final jump cannot be used for an extra instruction. Available BRAM
 elsewhere does not enlarge this configured bank; a larger bank requires a new bit.
 Application runtime code/metadata retains 21504 physical words.
@@ -127,12 +125,11 @@ halt/acknowledgment protocol. Removing five listeners and stopping future
 frames was insufficient in run78: the console could replace code while the old
 VM was still running. Run79 explicitly halts the old VM and waits for its busy
 acknowledgment to clear before loading the next program. Actual full-core RTL
-Finder → Editor → Finder checks passed for that change; run79's negative setup
+Finder → Editor → Finder checks passed again in run81; run79's negative setup
 slack still prevents a strict timing-qualified claim.
 
 The intermittent physical mouse jumps remain a separate regression. A dropped
-pointer-report mechanism was reproduced and a reliable snapshot correction is
-in run80's build. That is evidence for a possible mechanism, not proof of the
+pointer-report mechanism was reproduced; run81 retains the snapshot correction. That is evidence for a possible mechanism, not proof of the
 reported board cause or of an accepted hardware fix. No idle-only simulation
 can close that report.
 
@@ -151,3 +148,4 @@ Mouse data is pin 1 and clock is pin 3. Details are in
 Earlier architecture prose, including the original detailed SYS example and
 board notes, is preserved in [the historical capture](run77_ARCHITECTURE_HISTORY.md).
 Its development limits and native UI ownership do not describe run78.
+

@@ -799,8 +799,9 @@ module jmr_js_vm_exec64 (
     output logic [31:0] vvar_valid_wdata_q,
     output logic vvars_we_q,
     // sound(ch,freq,vol,frames,slide) nid 42 — registered poke to the PSG
-    // (plan fpga_line-out_psg). snd_tgl flips per call; args hold until the
-    // next call, so the PSG's 2FF toggle-sync samples a stable bus.
+    // snd_tgl flips only when the previous packet has been acknowledged;
+    // all payload fields stay stable through destination capture.
+    input  logic        snd_ack, // destination captured the held sound packet
     output logic        snd_tgl,
     output logic [1:0]  snd_ch,
     output logic [15:0] snd_freq,
@@ -878,9 +879,12 @@ module jmr_js_vm_exec64 (
                                 // — pflip=10 forensics: the skip right after
                                 // NEW_OBJ's return underflowed the stack 2
                                 // ops later).
-    // sound-native poke register: capture args + flip the toggle on the
-    // execute beat. rst clears the toggle so the PSG's edge-detect can
-    // never fire from a stale power-on level.
+    // Hold one coherent command until the audio clock acknowledges capture.
+    // Native42 waits only when the preceding command is still outstanding.
+    (* ASYNC_REG = "TRUE" *) logic [1:0] snd_ack_sync;
+    always_ff @(posedge clk)
+        if (!rst_n) snd_ack_sync <= 2'b00;
+        else snd_ack_sync <= {snd_ack_sync[0], snd_ack};
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             snd_tgl <= 1'b0; snd_ch <= '0; snd_freq <= '0;
@@ -3129,28 +3133,45 @@ module jmr_js_vm_exec64 (
         output logic valid,
         output logic signed [32:0] index
     );
-        logic [52:0] mant;
         logic [32:0] magnitude;
-        integer unbiased;
+        logic [5:0] shift;
         begin
             valid = value[62:52] != 11'h7ff;
             index = 33'sd0;
-            if (valid && value[62:0] != 0 && value[62:52] != 0) begin
-                mant = {1'b1, value[51:0]};
-                unbiased = value[62:52] - 1023;
-                if (unbiased >= 0) begin
-                    if (unbiased > 31)
-                        magnitude = 33'h1ffffffff;
-                    else if (unbiased >= 52)
-                        magnitude = 33'(mant << (unbiased - 52));
-                    else
-                        magnitude = 33'(mant >> (52 - unbiased));
-                    index = value[63] ? -$signed(magnitude)
-                                      : $signed(magnitude);
+            magnitude = 33'd0;
+            shift = 6'd0;
+            // Nonnegative integer magnitudes only need exponents 0..31.
+            // Biased comparisons avoid a 32-bit signed exponent subtract;
+            // the surviving right-shift range is exactly 21..52.
+            if (valid && value[62:52] >= 11'd1023) begin
+                if (value[62:52] > 11'd1054)
+                    magnitude = 33'h1ffffffff;
+                else begin
+                    shift = 6'(11'd1075 - value[62:52]);
+                    magnitude = 33'({1'b1, value[51:0]} >> shift);
                 end
+                // Preserve the existing signed33 overflow sentinel exactly.
+                index = value[63] ? -$signed(magnitude)
+                                  : $signed(magnitude);
             end
         end
     endtask
+    // One exact index converter serves mutually exclusive ARR_GET,
+    // ARR_SET and strByte operations; operands retain their original window
+    // and captured-call selection. No new register or execution beat.
+    logic [63:0] shared_index_value;
+    logic shared_index_valid;
+    logic signed [32:0] shared_index_result;
+    always_comb begin
+        case (opw_q[7:0])
+            OP_ARR_GET: shared_index_value = `VST_AT(vsp - 12'd1);
+            OP_ARR_SET: shared_index_value = `VST_AT(vsp - 12'd2);
+            default: shared_index_value = opw_q[31:24] >= 8'd2
+                                        ? call_arg_q[1] : 64'd0;
+        endcase
+        v64_array_index_task(shared_index_value, shared_index_valid,
+                             shared_index_result);
+    end
     task automatic v64_div_pack_task(
         input logic sign,
         input logic signed [12:0] exponent,
@@ -3161,36 +3182,57 @@ module jmr_js_vm_exec64 (
         logic [52:0] mant;
         logic [53:0] rounded;
         logic guard, sticky;
-        integer top, unbiased, shift;
+        // Signed exponent is 13 bits. Subtracting at most one and the
+        // possible rounding carry require 14 bits: [-4097,4096].
+        logic signed [13:0] unbiased;
+        logic [6:0] shift_minus_one;
+        logic [106:0] shifted;
+        logic tiny;
         begin
-            top = quot[54] ? 54 : 53;
-            unbiased = exponent + top - 54;
-            shift = top - 52;
-            if (unbiased < -1022)
-                shift = shift + (-1022 - unbiased);
-            mant = (shift >= 107) ? 53'd0 : 53'(quot >> shift);
-            guard = 1'b0;
+            unbiased = $signed({exponent[12],exponent})
+                       - (quot[54] ? 14'sd0 : 14'sd1);
+            // For subnormals the original shift simplifies exactly to
+            // -1020-exponent, independently of quot[54]. Beyond 107 all
+            // quotient bits are sticky; guard and mantissa are zero.
+            tiny = (unbiased < -14'sd1022) && (exponent < -13'sd1127);
+            if (unbiased < -14'sd1022 && !tiny)
+                shift_minus_one = 7'(-14'sd1021-$signed({exponent[12],exponent}));
+            else
+                shift_minus_one = quot[54] ? 7'd1 : 7'd0;
+            shifted = quot;
             sticky = |div_rem;
-            if (shift > 0 && shift <= 107) begin
-                guard = quot[shift - 1];
-                for (int k = 0; k < 107; k++)
-                    if (k < shift - 1)
-                        sticky = sticky | quot[k];
-            end else if (shift > 107) begin
-                sticky = sticky | (|quot);
+            // Shift one less than the mantissa shift, retaining guard in
+            // bit zero. Each barrel stage folds exactly its discarded bits
+            // into sticky, replacing 107 wide integer range comparisons.
+            for (int stage = 0; stage < 7; stage++) begin
+                if (shift_minus_one[stage]) begin
+                    case (stage)
+                        0: sticky = sticky | (|shifted[0:0]);
+                        1: sticky = sticky | (|shifted[1:0]);
+                        2: sticky = sticky | (|shifted[3:0]);
+                        3: sticky = sticky | (|shifted[7:0]);
+                        4: sticky = sticky | (|shifted[15:0]);
+                        5: sticky = sticky | (|shifted[31:0]);
+                        6: sticky = sticky | (|shifted[63:0]);
+                    endcase
+                    shifted = shifted >> (1 << stage);
+                end
             end
+            mant = tiny ? 53'd0 : shifted[53:1];
+            guard = !tiny && shifted[0];
+            if (tiny) sticky = sticky | (|quot);
             rounded = {1'b0, mant}
                     + (guard && (sticky || mant[0]));
-            if (unbiased >= -1022) begin
+            if (unbiased >= -14'sd1022) begin
                 if (rounded[53]) begin
                     mant = rounded[53:1];
-                    unbiased = unbiased + 1;
+                    unbiased = unbiased + 14'sd1;
                 end else
                     mant = rounded[52:0];
-                if (unbiased > 1023)
+                if (unbiased > 14'sd1023)
                     result = {sign, 11'h7ff, 52'd0};
                 else
-                    result = {sign, 11'(unbiased + 1023), mant[51:0]};
+                    result = {sign, 11'(unbiased + 14'sd1023), mant[51:0]};
             end else if (rounded[52]) begin
                 result = {sign, 11'd1, 52'd0};
             end else if (rounded == 0) begin
@@ -3432,6 +3474,7 @@ module jmr_js_vm_exec64 (
         call_arg_use_check = 1'b0;
         alu_window_check = 1'b0;
         `endif
+        tmr_arm_n = tmr_arm_q; // Unconditional next-state default: no latch.
         aset_win_retried_n = aset_win_retried;
         cm_win_n = cm_win;
         bind_argc_n = bind_argc;
@@ -3822,7 +3865,7 @@ module jmr_js_vm_exec64 (
                     opnd2_n = opnd2_q;
                     opnd3_n = opnd3_q;
                     tmr_i_n = tmr_i_q;
-        tmr_arm_n = tmr_arm_q;
+
                     tmr_found_n = tmr_found_q;
                     tmr_slot_n = tmr_slot_q;
                     if (!opnd_q && tmr_i_q == 7'd0) begin
@@ -5176,28 +5219,31 @@ module jmr_js_vm_exec64 (
                                         end
                                         8'd42: begin
                                             // sound(ch, freq, vol, frames, slide)
-                                            // Always succeed. snd_stb_c registers
-                                            // the args and flips snd_tgl for the
-                                            // PSG PHY (absent PHY = silent).
-                                            // Out-of-range values saturate at the
-                                            // field width — a wild slide is a weird
-                                            // noise, never a fault.
-                                            snd_stb_c = 1'b1;
-                                            snd_ch_c = 2'(v64_to_int32(
-                                                call_arg_q[1]));
-                                            snd_freq_c = 16'(v64_to_int32(
-                                                call_arg_q[2]));
-                                            snd_vol_c = 4'(v64_to_int32(
-                                                call_arg_q[3]));
-                                            snd_frames_c = 8'(v64_to_int32(
-                                                call_arg_q[4]));
-                                            snd_slide_c = 8'(v64_to_int32(
-                                                call_arg_q[5]));
-                                            vst_wr(base, result);
-                                            vsp_n = base + 12'd1;
-                                            ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
-                                            state_n = S_FETCH_WAIT;
+                                            // The ready path retires on its existing beat.
+                                            // A pending packet waits for PSG capture; muted
+                                            // and simulated peers still acknowledge.
+                                            // Values truncate to the existing field widths.
+                                            if (snd_ack_sync[1] == snd_tgl) begin
+                                                snd_stb_c = 1'b1;
+                                                snd_ch_c = 2'(v64_to_int32(
+                                                    call_arg_q[1]));
+                                                snd_freq_c = 16'(v64_to_int32(
+                                                    call_arg_q[2]));
+                                                snd_vol_c = 4'(v64_to_int32(
+                                                    call_arg_q[3]));
+                                                snd_frames_c = 8'(v64_to_int32(
+                                                    call_arg_q[4]));
+                                                snd_slide_c = 8'(v64_to_int32(
+                                                    call_arg_q[5]));
+                                                vst_wr(base, result);
+                                                vsp_n = base + 12'd1;
+                                                ip_n = ip + 16'd1;
+                                                code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                                state_n = S_FETCH_WAIT;
+                                            end else begin
+                                                // Captured call arguments and stack remain unchanged.
+                                                state_n = S_V64_EXEC;
+                                            end
                                         end
                                         // ---- V1.5 standalone compile ABI ----
                                         // The self-hosted compiler runs as an
@@ -5381,7 +5427,8 @@ module jmr_js_vm_exec64 (
                                             logic valid_index;
                                             logic signed [32:0] byte_index;
                                             hp_nat_n = 4'd0;
-                                            v64_array_index_task(argc >= 2 ? call_arg_q[1] : 64'd0, valid_index, byte_index);
+                                            valid_index = shared_index_valid;
+                                            byte_index = shared_index_result;
                                             valid_index = valid_index && byte_index >= 0 && byte_index < 33'd65536;
                                             if (argc < 1 || !valid_index ||
                                                 call_arg_q[0][63:48] != V64_TAG_PREFIX ||
@@ -5787,10 +5834,8 @@ module jmr_js_vm_exec64 (
                                     logic index_valid;
                                     logic signed [32:0] array_index;
                                     handle = `VST_AT(vsp - 12'd2);
-                                    v64_array_index_task(
-                                        `VST_AT(vsp - 12'd1),
-                                        index_valid, array_index
-                                    );
+                                    index_valid = shared_index_valid;
+                                    array_index = shared_index_result;
                                     if (handle[63:48] == 16'h7ff9 &&
                                         handle[47:44] == 4'd4 &&
                                         handle[31:0] < 32'd1024) begin
@@ -5923,10 +5968,8 @@ module jmr_js_vm_exec64 (
                                     logic index_valid;
                                     logic signed [32:0] array_index;
                                     handle = `VST_AT(vsp - 12'd3);
-                                    v64_array_index_task(
-                                        `VST_AT(vsp - 12'd2),
-                                        index_valid, array_index
-                                    );
+                                    index_valid = shared_index_valid;
+                                    array_index = shared_index_result;
                                     if (handle[63:48] == 16'h7ff9 &&
                                         (handle[47:44] == V64_KIND_OBJECT ||
                                          handle[47:44] == V64_KIND_ELEMENT) &&
@@ -8178,7 +8221,11 @@ module jmr_js_vm_exec64 (
                                             {aa[63] ^ bb[63], 63'd0};
                                     end else if (bb[51:0] == 52'd0 &&
                                                  aa[62:52] != 11'd0 &&
-                                                 bb[62:52] != 11'd0) begin
+                                                 bb[62:52] != 11'd0 &&
+                                                 ({1'b0,aa[62:52]} + 12'd1023 > {1'b0,bb[62:52]})) begin
+                                        // Keep ordinary power-of-two division immediate.
+                                        // Underflow needs exact subnormal rounding, so it
+                                        // uses the existing restoring divider below.
                                         // 1-cycle / 2^k (tagged OP_DIV /2 twin).
                                         // INVADERS bunker hitAt is cell/2 per
                                         // brick × invaders × bunkers; 107-cycle

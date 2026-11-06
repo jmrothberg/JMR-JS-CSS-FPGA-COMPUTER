@@ -1,7 +1,7 @@
 """Decoder for the same SYSTEM.SYS loaded by the FPGA. No executable code."""
 from pathlib import Path
 import json, struct
-from tools.build_system_resources import unpack, FONT as FONT_OFF, RECORDS, INDEX, CONFIG
+from tools.build_system_resources import unpack, FONT as FONT_OFF, RECORDS, INDEX, CONFIG, unpack_ui_font
 from .desktop import FONT
 DEFAULTS=json.loads((Path(__file__).resolve().parents[1]/'resources/system/defaults.json').read_text())
 DEFAULT_LABELS={int(k):v for k,v in DEFAULTS['labels'].items()}
@@ -10,9 +10,9 @@ DIALOG_IDS={'open':0,'save_as':1,'changes':2,'replace':3,'message':4}
 class SystemResources:
     def __init__(self,blob=None):
         self.labels=dict(DEFAULT_LABELS);self.font=FONT;self.offsets={k:(0,0) for k in DIALOG_IDS}
-        self.buttons=DEFAULTS['dialog_buttons'];self.rounded=True;self.outline=True;self.status='builtin';self.data=None
+        self.buttons=DEFAULTS['dialog_buttons'];self.rounded=True;self.outline=True;self.status='builtin';self.data=None;self.ui_font=None
         if blob is None:return
-        data=unpack(blob);self.data=bytes(data)
+        data=unpack(blob);self.data=bytes(data);self.ui_font=unpack_ui_font(data)
         labels={}
         for ident in range(256):
             desc=struct.unpack_from('<I',data,INDEX+4*ident)[0];base=desc&2047;n=(desc>>11)&127

@@ -191,7 +191,8 @@ module storage_engine #(
         S_DIR0, S_DIR_N, S_DIR_LD, S_DIR_LDC, S_DIR_EV, S_DIR_FMT, S_DIR_ADV,
         // NEW: OPEN dir scan follows the FAT chain (root >1 cluster)
         S_DS_CHAIN, S_APPEND_LOC, S_APPEND_NEXT, S_APPEND_SECTOR, S_APPEND_READY,
-        S_RENAME_READ, S_RENAME_PATCH, S_RENAME_WRITE
+        S_RENAME_READ, S_RENAME_PATCH, S_RENAME_WRITE,
+        S_DIR_CHAIN, S_DIR_CHAIN_LOADED
     } state_t;
 
     state_t state;
@@ -1588,6 +1589,7 @@ module storage_engine #(
 
                 // NEW: DIR catalog — sequential dent[] walk, one name per start_dir_next
                 S_DIR0: begin
+                    ds_guard  <= 16'd0;
                     ds_clus   <= root_clus;
                     ds_sect   <= 8'h0;
                     ds_off    <= 10'h0;
@@ -1686,15 +1688,11 @@ module storage_engine #(
                     end
                     if (ds_off + 10'd32 >= 10'd512) begin
                         if (ds_sect + 8'd1 >= spc) begin
-                            if (dir_yield) begin
-                                // NEW: last name in single-cluster root — copy, then eof on next
-                                cat_on <= 1'b0;
-                                state  <= S_CPY;
-                            end else begin
-                                eof_r  <= 1'b1;
-                                cat_on <= 1'b0;
-                                state  <= S_FIN;
-                            end
+                            // Keep the pending name in linebuf while fetching
+                            // the next root cluster. dent[] (size/date/attr)
+                            // also remains valid until this entry is returned.
+                            fg_clus <= ds_clus;
+                            push_call(S_FG0, S_DIR_CHAIN);
                         end else begin
                             ds_sect <= ds_sect + 8'd1;
                             ds_off  <= 10'h0;
@@ -1707,6 +1705,32 @@ module storage_engine #(
                         ds_off <= ds_off + 10'd32;
                         state  <= dir_yield ? S_CPY : S_DIR_N;
                     end
+                end
+
+                S_DIR_CHAIN: begin
+                    if (err_r || ds_guard == 16'hffff || fat_val < 32'd2 ||
+                        fat_val == FAT_BAD || fat_val == ds_clus ||
+                        (fat_val >= 32'h0FFFFFF0 && fat_val < 32'h0FFFFFF8)) begin
+                        cat_on <= 1'b0;
+                        state <= S_ERR;
+                    end else if (fat_val >= 32'h0FFFFFF8) begin
+                        cat_on <= 1'b0;
+                        if (dir_yield) state <= S_CPY;
+                        else begin eof_r <= 1'b1; state <= S_FIN; end
+                    end else begin
+                        ds_guard <= ds_guard + 16'd1;
+                        ds_clus <= fat_val;
+                        ds_sect <= 8'd0;
+                        ds_off <= 10'd0;
+                        ds_base <= data_start + ((fat_val - 32'd2) << spc_shift);
+                        ds_lba <= data_start + ((fat_val - 32'd2) << spc_shift);
+                        buf_lba <= data_start + ((fat_val - 32'd2) << spc_shift);
+                        sd_go(8'd2, data_start + ((fat_val - 32'd2) << spc_shift), S_DIR_CHAIN_LOADED);
+                    end
+                end
+                S_DIR_CHAIN_LOADED: begin
+                    if (err_r) begin cat_on <= 1'b0; state <= S_ERR; end
+                    else state <= dir_yield ? S_CPY : S_DIR_N;
                 end
 
                 // 2026-08-27: a garbage state used to fall back to S_IDLE

@@ -19,6 +19,50 @@ window.JMR_SPR = ["FINDER-0.png"];
 })();
 </script>
 <script>
+// BEGIN shared draw_client.js
+// Shared bounded draw emission. The result is temporary, reused storage.
+var tbClientClip=[0,0,640,480];
+function tbDrawBounds(x,y,w,h){
+ var p=tbPortBounds();
+ tbClientClip[0]=Math.max(x,p[0]-p[4]);tbClientClip[1]=Math.max(y,p[1]-p[5]);
+ tbClientClip[2]=Math.min(x+w,p[2]-p[4]);tbClientClip[3]=Math.min(y+h,p[3]-p[5]);
+ return tbClientClip;
+}
+function tbDrawHit(x,y,w,h){
+ var p=tbPortBounds();return p[2]>p[0]&&p[3]>p[1]&&x+w>p[0]-p[4]&&x<p[2]-p[4]&&y+h>p[1]-p[5]&&y<p[3]-p[5];
+}
+function tbDrawFill(ctx,x,y,w,h,c){
+ var p=tbDrawBounds(x,y,w,h);if(p[2]>p[0]&&p[3]>p[1])ctx.fillRect(p[0],p[1],p[2]-p[0],p[3]-p[1],c);
+}
+// END shared draw_client.js
+
+// BEGIN shared scroll_client.js
+// Shared bitmap scrolling. Two caller-owned descriptors; no saved screen image.
+// Coordinates are local to the active Port; exposed strips enter bounded damage.
+function tbScrollRect(src,dst,x,y,w,h,dx,dy){
+ var a=Math.abs(dx),b=Math.abs(dy),p=tbPortBounds(),n;
+ if(a>=w||b>=h){tbDamage(x+p[4],y+p[5],w,h);return 0;}
+ tbScreen(src);tbScreen(dst);
+ tbRect(src,x+p[4]+(dx<0?a:0),y+p[5]+(dy<0?b:0),w-a,h-b);
+ tbRect(dst,0,0,w-a,h-b);tbPlaceScreen(dst,x+(dx>0?a:0),y+(dy>0?b:0),1);
+ n=tbCopyBits(src,dst);if(n<0)return n;
+ if(a)tbDamage(x+p[4]+(dx<0?w-a:0),y+p[5],a,h);
+ if(b)tbDamage(x+p[4],y+p[5]+(dy<0?h-b:0),w,b);
+ return n;
+}
+// END shared scroll_client.js
+
+// BEGIN shared window_client.js
+// Shared bounded window stacking policy; IDs are0..7, back to front.
+var tbClientOrder=[];
+function tbWindowFocus(id){if(id<0||id>7||id!=Math.floor(id))return -1;tbWindowRemove(id);tbClientOrder.push(id);return id;}
+function tbWindowRemove(id){
+ var i=0,j=0;while(i<tbClientOrder.length){if(tbClientOrder[i]!=id){tbClientOrder[j]=tbClientOrder[i];j=j+1;}i=i+1;}
+ tbClientOrder.length=j;return j?tbClientOrder[j-1]:255;
+}
+function tbWindowAt(i){return i>=0&&i<tbClientOrder.length?tbClientOrder[i]:255;}
+// END shared window_client.js
+
 // Finder program. This is the disk program, the way the 1984 Finder was
 // a program and the menu bar stayed in ROM. It is not the built-in
 // desktop (functional_model/desktop.py). Folders, positions, Trash, and
@@ -79,7 +123,7 @@ function w16(a,v){
  stgWrite(a,n-Math.floor(n/256)*256);
  stgWrite(a+1,Math.floor(n/256)-Math.floor(Math.floor(n/256)/256)*256);
 }
-function r32(a){return stgRead(a)+stgRead(a+1)*256+stgRead(a+2)*65536+stgRead(a+3)*16777216;}
+function r32(a){return tbSessionU32(a);}
 function rect(x,y,w,h){
  if(w<0){x=x+w;w=0-w;}
  if(h<0){y=y+h;h=0-h;}
@@ -420,10 +464,24 @@ function zoom(x0,y0,x1,y1,w,h){
  w16(16609,w);w16(16611,h);
  stgWrite(16385,1);
 }
+// The shared Window/Control/Damage implementation owns geometry and stacking.
+// File records and the original DESKTOP.FDR layout remain Finder-owned.
+var WM={restored:0,r:[0,0,0,0],bounded:0,thumb:0,size:16,maximum:0,page:3};
+function wmRect(w){var a=16896+w*16;WM.r[0]=r16(a+5);WM.r[1]=r16(a+7);WM.r[2]=r16(a+9);WM.r[3]=r16(a+11);return WM.r;}
+function wmDamage(w){var a=wmRect(w);tbDamage(a[0],a[1],a[2],a[3]);WM.bounded=1;}
+function wmRanks(){var i=0,w;while(i<8){w=tbWindowAt(i);if(w!=255)stgWrite(16896+w*16+13,i);i=i+1;}}
+function wmRestore(){var i=0,j=0;while(i<8){while(j<8){if(stgRead(16896+j*16)&&stgRead(16896+j*16+13)==i)tbWindowFocus(j);j=j+1;}i=i+1;j=0;}}
+function wmThumb(w,prepared){
+ var a=16896+w*16,n,rows,track;if(!prepared)buildOrder(w);n=stgRead(16456);
+ WM.page=Math.max(1,Math.floor((r16(a+11)-(stgRead(a+3)<2?64:68))/(stgRead(a+3)<2?86:16)));
+ rows=stgRead(a+3)<2?Math.ceil(n/5):n;
+ WM.maximum=Math.max(0,rows-WM.page);track=Math.max(16,r16(a+11)-96);
+ WM.size=Math.max(16,Math.min(track,Math.floor(track*WM.page/Math.max(1,rows))));
+ WM.thumb=r16(a+7)+64+(WM.maximum?Math.floor((track-WM.size)*stgRead(a+4)/WM.maximum):0);
+}
 function focusWin(w){
- stgWrite(16394,w);
- menuMask();
- stgWrite(16385,1);
+ if(w<0||w>7||!stgRead(16896+w*16))return;
+ if(stgRead(16394)!=w)wmDamage(w);stgWrite(16394,tbWindowFocus(w));wmRanks();menuMask();stgWrite(16385,1);
 }
 function openWin(kind,folder,x,y,w,h,view){
  var i,a,free;
@@ -451,28 +509,19 @@ function haveDisk(){
  return 0;
 }
 function closeWin(w){
- var a,i;
- a=16896+w*16;
- stgWrite(a,0);stgWrite(16394,255);
- for(i=7;i>=0;i=i-1)if(stgRead(16896+i*16)){stgWrite(16394,i);break;}
+ if(w<0||w>7||!stgRead(16896+w*16))return;
+ wmDamage(w);stgWrite(16896+w*16,0);stgWrite(16394,tbWindowRemove(w));wmRanks();
  countWin();stgWrite(16445,1);stgWrite(16385,1);
 }
-function closeAll(){
- var i;
- for(i=0;i<8;i++)stgWrite(16896+i*16,0);
- stgWrite(16394,255);countWin();stgWrite(16445,1);stgWrite(16385,1);
-}
+function closeAll(){var i;for(i=0;i<8;i++)closeWin(i);}
 function scrollWin(w,dir){
- var a,s,v,n,p;
- a=16896+w*16;v=stgRead(a+3);s=stgRead(a+4)+dir;
- if(s<0)s=0;
- buildOrder(w);n=stgRead(16456);
- if(v<2){
-  p=1;if(n>5)p=Math.floor((n-1)/5)+1;
-  p=p-3;if(p<0)p=0;
-  if(s>p)s=p;
- }else if(s>n)s=n;
- stgWrite(a+4,s);stgWrite(16385,1);
+ var a=16896+w*16,old=stgRead(a+4),r,n,step,top,h;wmThumb(w);
+ stgWrite(a+4,tbControlValue(old,dir,WM.maximum));if(old==stgRead(a+4))return;
+ r=wmRect(w);step=stgRead(a+3)<2?86:16;top=stgRead(a+3)<2?58:52;h=Math.min(WM.page*step,r[3]-16-top);
+ tbPortPush(r[0]+2,r[1]+48,r[2]-18,r[3]-64,0,0);
+ n=tbScrollRect(17024,17088,r[0]+2,r[1]+top,r[2]-18,h,0,(old-stgRead(a+4))*step);tbPortPop();
+ if(n<0)wmDamage(w);else WM.bounded=1;
+ ctx.fillRect(r[0]+r[2]-15,r[1]+64,14,r[3]-96,219);drawThumb(w,1);stgWrite(16385,1);
 }
 function shown(slot,w){
  var a,fl,wk,wf;
@@ -548,37 +597,16 @@ function iconY(w,s,i,view){
  return wy+58+Math.floor(slot/5)*86;
 }
 function hitOne(w,x,y){
- var a,wx,wy,ww,wh;
- a=16896+w*16;
- if(stgRead(a)==0)return 0;
- wx=r16(a+5);wy=r16(a+7);ww=r16(a+9);wh=r16(a+11);
- if(x<wx||y<wy||x>=wx+ww||y>=wy+wh)return 0;
+ var a,r,part;if(w<0||w>7)return 0;a=16896+w*16;if(!stgRead(a))return 0;
+ r=wmRect(w);part=tbWindowPart(x,y,r[0],r[1],r[2],r[3]);if(!part)return 0;
  stgWrite(16640,w);
- if(x<wx+18&&y<wy+18)return 2;
- if(x>=wx+ww-16&&y>=wy+wh-16)return 3;
- if(x>=wx+ww-16&&y>=wy+48&&y<wy+64)return 4;
- if(x>=wx+ww-16&&y>=wy+wh-32&&y<wy+wh-16)return 5;
- if(x>=wx+ww-16&&y>=wy+64&&y<wy+wh-32){
-  if(y>=r16(16680)&&y<r16(16680)+r16(16682))return 7;
-  if(y<r16(16680))return 8;
-  return 9;
- }
- if(y<wy+22)return 1;
- return 6;
+ if(part==6&&x>=r[0]+r[2]-16&&r[3]>80){wmThumb(w);return tbControlPart(y,r[1]+48,r[3]-64,16,WM.thumb,WM.size)||6;}
+ return part;
 }
-function hitWin(x,y){
- var i,h,f;
- f=stgRead(16394);
- h=hitOne(f,x,y);if(h)return h;
- for(i=7;i>=0;i=i-1){
-  if(i==f)continue;
-  h=hitOne(i,x,y);if(h)return h;
- }
- return 0;
-}
+function hitWin(x,y){var i=7,w,h;while(i>=0){w=tbWindowAt(i);h=hitOne(w,x,y);if(h)return h;i=i-1;}return 0;}
 function hitIcon(w,x,y){
  var i,n,s,ix,iy,view;
- buildOrder(w);n=stgRead(16456);view=stgRead(16896+w*16+3);
+ if(!prepared)buildOrder(w);n=stgRead(16456);view=stgRead(16896+w*16+3);
  for(i=0;i<n;i++){
   s=stgRead(20480+i);
   ix=iconX(w,s,i,view);iy=iconY(w,s,i,view);
@@ -977,6 +1005,7 @@ function infoKey(c){
  }
 }
 function onKey(e){
+ WM.bounded=0;
  var c,w;
  c=e.keyCode;
  // Menu commands end filename editing; they are not characters to rename with.
@@ -1023,16 +1052,9 @@ function onKey(e){
 }
 function onKeyUp(e){if(e.keyCode==16)stgWrite(16391,0);}
 function pageScroll(y){
- var a,wy,wh,track,max,row,n;
- a=16896+stgRead(16640)*16;
- wy=r16(a+7);wh=r16(a+11);
- track=wh-96;if(track<16)return;
- buildOrder(stgRead(16640));n=stgRead(16456);
- if(n<1)n=1;
- max=Math.floor((n-1)/5)+1-3;if(max<0)max=0;
- row=Math.floor((y-(wy+64))*max/track);
- if(row<0)row=0;if(row>max)row=max;
- stgWrite(a+4,row);stgWrite(16385,1);
+ var w=stgRead(16640),a=16896+w*16,row,track;wmThumb(w);track=Math.max(1,r16(a+11)-96-WM.size);
+ row=Math.floor((y-r16(a+7)-64-WM.size/2)*WM.maximum/track);
+ stgWrite(a+4,tbControlValue(row,0,WM.maximum));wmDamage(w);stgWrite(16385,1);
 }
 function infoClick(w,y){
  var a,s,fl,top;
@@ -1048,6 +1070,7 @@ function dialogClick(x,y){
  else if(x>=300&&x<380&&y>=230&&y<260){stgWrite(16620,0);stgWrite(16385,1);}
 }
 function onDown(e){
+ WM.bounded=0;
  var x,y,part,slot;
  stgWrite(16409,0); // A new pointer gesture ends the previous name edit.
  x=e.clientX;y=e.clientY;
@@ -1064,6 +1087,7 @@ function onDown(e){
   if(part==9){scrollWin(stgRead(16640),3);return;}
   if(part==7){stgWrite(16392,6);stgWrite(16393,stgRead(16640));pageScroll(y);return;}
   if(part==1){stgWrite(16392,2);stgWrite(16393,stgRead(16640));return;}
+  WM.bounded=0;
   if(stgRead(16896+stgRead(16640)*16+1)==2){infoClick(stgRead(16640),y);return;}
   if(hitIcon(stgRead(16640),x,y)){
    slot=stgRead(16642);
@@ -1085,18 +1109,10 @@ function onDown(e){
  clearSel();stgWrite(16385,1);
 }
 function moveWin(dx,dy){
- var a,x,y;
- a=16896+stgRead(16393)*16;
- x=r16(a+5)+dx;y=r16(a+7)+dy;
- if(x<0)x=0;if(y<22)y=22;if(x>460)x=460;if(y>360)y=360;
- w16(a+5,x);w16(a+7,y);stgWrite(16445,1);
+ var w=stgRead(16393),a=16896+w*16,r=wmRect(w);tbWindowAdjust(r,dx,dy,0);w16(a+5,r[0]);w16(a+7,r[1]);WM.bounded=1;stgWrite(16445,1);
 }
 function sizeWin(dx,dy){
- var a,w,h;
- a=16896+stgRead(16393)*16;
- w=r16(a+9)+dx;h=r16(a+11)+dy;
- if(w<180)w=180;if(h<120)h=120;if(w>600)w=600;if(h>420)h=420;
- w16(a+9,w);w16(a+11,h);stgWrite(16445,1);
+ var w=stgRead(16393),a=16896+w*16,r=wmRect(w);tbWindowAdjust(r,dx,dy,1);w16(a+9,r[2]);w16(a+11,r[3]);WM.bounded=1;stgWrite(16445,1);
 }
 function onMove(e){
  var x,y,ox,oy;
@@ -1135,6 +1151,7 @@ function onUp(e){
  // the old clear after clickIcon never ran and the icon stayed glued.
  stgWrite(16392,0);stgWrite(16395,0);
  if(dx==1){
+  WM.bounded=0;
   dx=x-r16(16400);if(dx<0)dx=0-dx;
   dy=y-r16(16402);if(dy<0)dy=0-dy;
   if(dx<4&&dy<4)clickIcon(slot);else dropIcon(slot,x,y);
@@ -1289,7 +1306,7 @@ function fits(w,x,y){
  ww=r16(16896+w*16+9);wh=r16(16896+w*16+11);
   if(x<wx+4||y<wy+48)return 0;
   if(x+48>wx+ww-16)return 0;
- if(y+52>wy+wh-16)return 0;
+ if(y+(stgRead(16896+w*16+3)<2?52:16)>wy+wh-16)return 0;
  return 1;
 }
 function drawHeader(w){
@@ -1320,13 +1337,13 @@ function drawTitle(w){
  else if(f==0)txt(3,x,y);
  else nameAt(f-1,x,y);
 }
-function drawFrame(w){
+function drawFrame(w,prepared){
  var a,x,y,ww,wh,i,mid;
  a=16896+w*16;
  x=r16(a+5);y=r16(a+7);ww=r16(a+9);wh=r16(a+11);
  mid=Math.floor(ww/2);
- ctx.fillRect(x,y,ww,wh,0);
- ctx.fillRect(x+1,y+1,ww-2,wh-2,255);
+ tbDrawFill(ctx,x,y,ww,wh,0);
+ tbDrawFill(ctx,x+1,y+1,ww-2,wh-2,255);
  ctx.fillRect(x+2,y+2,ww-4,22,119);
  ctx.fillRect(x+6,y+5,14,14,0);
  ctx.fillRect(x+7,y+6,12,12,255);
@@ -1346,7 +1363,7 @@ function drawFrame(w){
   ctx.fillRect(x+ww-16,y+wh-32,16,16,255);
   ctx.fillRect(x+ww-16,y+wh-32,16,1,0);
   downMark(x+ww-16,y+wh-32);
-  drawThumb(w);
+  drawThumb(w,prepared);
   ctx.fillRect(x,y+wh-16,ww-16,16,219);
   ctx.fillRect(x,y+wh-16,16,16,255);
   ctx.fillRect(x+ww-32,y+wh-16,16,16,255);
@@ -1360,39 +1377,26 @@ function drawFrame(w){
   ctx.fillRect(x+ww-8,y+wh-8,5,1,0);
   ctx.fillRect(x+ww-8,y+wh-8,1,5,0);
  }
- drawTitle(w);
+ if(tbDrawHit(x,y,ww,24))drawTitle(w);
 }
-function drawThumb(w){
- var a,x,y,wh,rows,max,track,th,pos;
- a=16896+w*16;
- x=r16(a+5)+r16(a+9);y=r16(a+7);wh=r16(a+11);
- buildOrder(w);rows=stgRead(16456);
- if(rows<1)rows=1;
- rows=Math.floor((rows-1)/5)+1;
- max=rows-3;if(max<0)max=0;
- track=wh-96;if(track<16)track=16;
- th=track;if(rows>3)th=Math.floor(track*3/rows);
- if(th<16)th=16;if(th>track)th=track;
- pos=0;if(max>0)pos=Math.floor((track-th)*stgRead(a+4)/max);
- ctx.fillRect(x-15,y+64+pos,14,th,255);
- ctx.fillRect(x-15,y+64+pos,14,1,0);
- ctx.fillRect(x-15,y+63+pos+th,14,1,0);
- w16(16680,y+64+pos);w16(16682,th);
+function drawThumb(w,prepared){
+ var a=16896+w*16,x=r16(a+5)+r16(a+9);wmThumb(w,prepared);
+ ctx.fillRect(x-15,WM.thumb,14,WM.size,255);ctx.fillRect(x-15,WM.thumb,14,1,0);ctx.fillRect(x-15,WM.thumb+WM.size-1,14,1,0);
 }
-function drawItems(w){
+function drawItems(w,prepared){
  var i,n,s,view,x,y,top,bot,page,slot;
- buildOrder(w);n=stgRead(16456);view=stgRead(16896+w*16+3);
+ if(!prepared)buildOrder(w);n=stgRead(16456);view=stgRead(16896+w*16+3);
  page=stgRead(16896+w*16+4);
  top=r16(16896+w*16+7)+48;bot=r16(16896+w*16+7)+r16(16896+w*16+11)-16;
  for(i=0;i<n;i++){
-  if(view<2){slot=i-page*5;if(slot<0||slot>=15)continue;}
+  if(view<2){slot=i-page*5;if(slot<0||slot>=Math.max(1,Math.floor((r16(16896+w*16+11)-64)/86))*5)continue;}
   s=stgRead(20480+i);
   if(stgRead(16392)==1&&s==stgRead(16393))continue;
   x=iconX(w,s,i,view);y=iconY(w,s,i,view);
   if(y<top||y>bot)continue;
   if(fits(w,x,y)==0)continue;
   if(view>=2&&fits(w,x+170,y)==0)continue;
-  drawOneItem(s,x,y,view);
+  if(tbDrawHit(x-(view<2?64:0),y,view<2?160:400,64))drawOneItem(s,x,y,view);
  }
 }
 function drawInfo(w){
@@ -1422,19 +1426,12 @@ function drawClip(w){
  bufAt(16622,stgRead(16621),x,y+20);
 }
 function drawOne(w){
- var k;
- if(stgRead(16896+w*16)==0)return;
- drawFrame(w);k=stgRead(16896+w*16+1);
- if(k==2)drawInfo(w);
- else if(k==3)drawClip(w);
- else{drawHeader(w);drawItems(w);}
+ var k,r;if(!stgRead(16896+w*16))return;r=wmRect(w);if(!tbDrawHit(r[0],r[1],r[2],r[3]))return;k=stgRead(16896+w*16+1);if(k<2)buildOrder(w);
+ if(tbPortPush(r[0],r[1],r[2],r[3],0,0)<0)return;drawFrame(w,k<2);tbPortPop();
+ r=wmRect(w);if(tbPortPush(r[0]+2,r[1]+24,r[2]-18,r[3]-40,0,0)<0)return;k=stgRead(16896+w*16+1);
+ if(k==2)drawInfo(w);else if(k==3)drawClip(w);else{if(tbDrawHit(r[0],r[1]+24,r[2],24))drawHeader(w);drawItems(w,1);}tbPortPop();
 }
-function drawWindows(){
- var i,f;
- f=stgRead(16394);
- for(i=0;i<8;i++)if(i!=f)drawOne(i);
- if(f!=255)drawOne(f);
-}
+function drawWindows(){var i=0,w;while(i<8){w=tbWindowAt(i);if(w!=255)drawOne(w);i=i+1;}}
 function drawDeskIcons(){
  var i,n,a;
  n=stgRead(16386);
@@ -1445,7 +1442,7 @@ function drawDeskIcons(){
   if(stgRead(a+15)&32)continue;
   if((stgRead(a+15)&16)&&stgRead(16390)==0)continue;
   if(stgRead(16392)==1&&i==stgRead(16393))continue;
-  drawOneItem(i,r16(a+22),r16(a+24),0);
+  if(tbDrawHit(r16(a+22)-64,r16(a+24),160,64))drawOneItem(i,r16(a+22),r16(a+24),0);
  }
 }
 function drawDesk(){
@@ -1521,12 +1518,10 @@ function drawZoom(){
  stgWrite(16385,1);
 }
 function paint(){
- var y;
- stgWrite(16385,0);
- ctx.fillRect(0,22,640,458,123);
- for(y=22;y<480;y=y+2)ctx.fillRect(0,y,640,1,91);
- drawDesk();drawWindows();drawDrag();drawDialog();drawZoom();
- menuMask();
+ var y,p;stgWrite(16385,0);
+ if(!WM.bounded)tbDamage(0,22,640,458);tbDamageClip();p=tbDrawBounds(0,22,640,458);
+ if(p[2]>p[0]&&p[3]>p[1]){ctx.fillRect(p[0],p[1],p[2]-p[0],p[3]-p[1],123);y=p[1];if(y%2)y=y+1;for(;y<p[3];y=y+2)ctx.fillRect(p[0],y,p[2]-p[0],1,91);}
+ drawDesk();drawWindows();drawDrag();drawDialog();drawZoom();tbPortPop();tbDamageClear();WM.bounded=0;menuMask();
 }
 function start(){
  var i;
@@ -1543,13 +1538,14 @@ function start(){
  initNames();fsList();parseList();markKinds();loadDesk();placeGrid();recount();
  if(haveDisk()==0)openWin(0,0,8,34,548,354,0);
  pickFront();menuMask();
- stgWrite(16384,1);stgWrite(16385,1);
+ WM.restored=1;stgWrite(16384,1);stgWrite(16385,1);
 }
 function frame(){
  var f;
  f=r16(16407)+1;w16(16407,f);
  if(stgRead(16448)>0&&f-r16(16454)>40)stgWrite(16448,0);
  if(stgRead(16409)&&f-Math.floor(f/16)*16==0)stgWrite(16385,1);
+ if(!WM.restored&&stgRead(16384)){wmRestore();WM.restored=1;}
  if(stgRead(16384)==0)start();
  else if(stgRead(16385))paint();
  tbSessionFrame(frame);

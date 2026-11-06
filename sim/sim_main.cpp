@@ -548,6 +548,31 @@ static unsigned long long cm_cycles = 0, cm_lookups = 0, total_cycles = 0;
 static unsigned long long lsv_cycles = 0, lsv_reqs = 0, lsv_serv_cycles = 0, lsv_res_cycles = 0;
 static unsigned long realtick_period = 0;
 static unsigned long realtick_ctr = 0;
+// Board audio environment:12MHz MCLK against this100MHz simulation clock.
+// This models the actual PSG request synchronizer/capture acknowledgement,
+// not an immediate loopback. Full PSG phase/reset tests cover the RTL peer.
+// Reset release matches top_nexys_video's two audio-clock stages.
+static void audio_environment_step() {
+    static unsigned phase = 0, reset_pipe = 0, request_pipe = 0;
+    static bool acknowledgement = false;
+    if (!top->rst_n) {
+        reset_pipe = 0; request_pipe = 0; acknowledgement = false;
+    }
+    phase += 3;
+    if (phase >= 25) {
+        phase -= 25;
+        const bool audio_ready = (reset_pipe & 2u) != 0;
+        reset_pipe = top->rst_n ? ((reset_pipe << 1) | 1u) & 3u : 0u;
+        if (!audio_ready) { request_pipe = 0; acknowledgement = false; }
+        else {
+            if (((request_pipe >> 2) ^ (request_pipe >> 1)) & 1u)
+                acknowledgement = ((request_pipe >> 1) & 1u) != 0;
+            request_pipe = ((request_pipe << 1) | unsigned(top->snd_tgl)) & 7u;
+        }
+    }
+    top->snd_ack = acknowledgement;
+}
+
 static void tick() {
     // REALTICK: board-faithful async frame_tick — pulses on a free-running
     // divider REGARDLESS of VM state (the FRAME rpc's pulse is gated on
@@ -558,6 +583,7 @@ static void tick() {
             top->sim_frame_pulse = 1;
         }
     }
+    audio_environment_step();
     top->clk = 0; top->pixel_clk = 0; top->eval();
     uint8_t miso = 1;
     sd.step(top->sd_cs_n != 0, top->sd_sck != 0, top->sd_mosi != 0, &miso);
@@ -704,7 +730,7 @@ static void tick() {
             fw_vcsp_prev = vc;
         }
         for (int k = 0; k < 12; k++) {
-            uint16_t rip = uint16_t(rf->jmr_js_core__DOT__u_vm__DOT__vframe_return_ip[k]);
+            uint16_t rip = uint16_t(((rf->jmr_js_core__DOT__u_vm__DOT__vframe_control[k] >> 12) & 0xffffu));
             if (rip != fw_rip_prev[k]) {
                 char b[100];
                 std::snprintf(b, sizeof b, "[rip%d=%u ip=%u st=%u]",
@@ -2023,7 +2049,7 @@ int main(int argc, char** argv) {
                 for (unsigned i = 0; i < nfr; i++) {
                     if (i) std::cout << ",";
                     std::cout << unsigned(
-                        r->jmr_js_core__DOT__u_vm__DOT__vframe_return_ip[i]);
+                        ((r->jmr_js_core__DOT__u_vm__DOT__vframe_control[i] >> 12) & 0xffffu));
                 }
             }
             std::cout << " vdraw="
@@ -2539,11 +2565,11 @@ int main(int argc, char** argv) {
                 for (unsigned frame = 0; frame < value_csp; frame++) {
                     frames_hash = fnv_u32(
                         frames_hash,
-                        (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__vframe_return_ip[frame]
+                        (uint32_t)((r->jmr_js_core__DOT__u_vm__DOT__vframe_control[frame] >> 12) & 0xffffu)
                     );
                     frames_hash = fnv_u16(
                         frames_hash,
-                        (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__vframe_base_sp[frame]
+                        (uint16_t)(r->jmr_js_core__DOT__u_vm__DOT__vframe_control[frame] & 0xfffu)
                     );
                     frames_hash = fnv_u64(
                         frames_hash,
@@ -3107,7 +3133,7 @@ int main(int argc, char** argv) {
             auto* rf = top->rootp;
             fw_vcsp_prev = uint8_t(rf->jmr_js_core__DOT__u_vm__DOT__vcsp);
             for (int k = 0; k < 12; k++)
-                fw_rip_prev[k] = uint16_t(rf->jmr_js_core__DOT__u_vm__DOT__vframe_return_ip[k]);
+                fw_rip_prev[k] = uint16_t(((rf->jmr_js_core__DOT__u_vm__DOT__vframe_control[k] >> 12) & 0xffffu));
             std::cout << "OK" << std::endl;
             continue;
         }
@@ -3282,7 +3308,7 @@ int main(int argc, char** argv) {
             auto* rf = top->rootp;
             fw_vcsp_prev = uint8_t(rf->jmr_js_core__DOT__u_vm__DOT__vcsp);
             for (int k = 0; k < 12; k++)
-                fw_rip_prev[k] = uint16_t(rf->jmr_js_core__DOT__u_vm__DOT__vframe_return_ip[k]);
+                fw_rip_prev[k] = uint16_t(((rf->jmr_js_core__DOT__u_vm__DOT__vframe_control[k] >> 12) & 0xffffu));
             std::cout << "OK" << std::endl;
             continue;
         }

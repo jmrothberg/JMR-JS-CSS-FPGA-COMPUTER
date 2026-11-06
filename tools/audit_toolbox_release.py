@@ -70,7 +70,8 @@ def audit(source_root, disk):
     identity_text=(source_root/'rtl/engines/jmr_toolbox_rom_pkg.sv').read_text()
     require(int(re.search(r"DEFAULT_HASH=32'h([0-9a-fA-F]+)",identity_text)[1],16)==fingerprint(payload), 'factory identity differs from ROM')
     rtl=(source_root/'rtl/engines/jmr_toolbox.sv').read_text()
-    require("32'h0001007f" in rtl and 'COPY_FB_WAIT' in rtl, 'frozen hardware lacks bitmap capability/read service')
+    from functional_model.toolbox import VERSION
+    require(f"32'h{VERSION:08x}" in rtl and 'COPY_FB_WAIT' in rtl, 'frozen hardware lacks bitmap capability/read service')
     core=(source_root/'rtl/jmr_js_core.sv').read_text()
     require('.fb_req(tb_fb_req)' in core and '.fb_ack(tb_fb_ack)' in core, 'bitmap framebuffer read port is not wired')
     vm=(source_root/'rtl/engines/jmr_js_vm.sv').read_text()
@@ -132,7 +133,7 @@ def audit(source_root, disk):
         require(name in names,f'required program missing: {name}')
     return dict(passed=not errors, disk=str(disk.resolve()),disk_sha256=digest(disk.read_bytes()),
                 source_root=str(source_root.resolve()),rom_sha256=digest(rom),
-                rom_identity=f'{fingerprint(payload):08x}',capabilities=65663,
+                rom_identity=f'{fingerprint(payload):08x}',capabilities=VERSION,
                 system_sha256=digest(sysdata),programs=programs,errors=errors)
 
 

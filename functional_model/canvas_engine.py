@@ -1,7 +1,9 @@
-"""Canvas / framebuffer — 640×480×8 indexed, 256 RGB888 palette, double buffer.
+"""Canvas model — 640×480×8 indexed pixels and a256-entry RGB palette.
 
-LLM NOTE: Framebuffers are large — on FPGA they live in DDR3, not LUTs.
-Palette is BRAM-sized (256×24). FM keeps both buffers in Python bytearrays.
+The FPGA uses one persistent BRAM draw bank (jmr_mini_fb), presented to a
+DDR3 front image for scanout. This Python model keeps draw and presentation
+images as bytearray subclasses; its legacy swap method is a model API, not
+a claim that the FPGA alternates two draw banks.
 """
 
 from __future__ import annotations
@@ -180,18 +182,60 @@ def _default_palette() -> List[Tuple[int, int, int]]:
     return pal
 
 
+class _ScissoredBuffer(bytearray):
+    """Filter only destination writes to the current draw bank, never reads."""
+    def __init__(self, owner):
+        super().__init__(FB_BYTES)
+        self.owner = owner
+
+    def __setitem__(self, key, value):
+        owner = self.owner
+        clip = owner.scissor
+        if self is not owner.back or clip is None or clip == (0, 0, WIDTH, HEIGHT):
+            return super().__setitem__(key, value)
+        x0, y0, x1, y1 = clip
+        if isinstance(key, slice):
+            start, stop, step = key.indices(len(self))
+            data = bytes(value)
+            if len(data) != len(range(start, stop, step)):
+                raise ValueError('Framebuffer slice writes must preserve its size')
+            if step == 1:
+                for y in range(max(y0, start // WIDTH), min(y1, (stop + WIDTH - 1) // WIDTH)):
+                    lo, hi = max(start, y * WIDTH + x0), min(stop, y * WIDTH + x1)
+                    if lo < hi:
+                        super().__setitem__(slice(lo, hi), data[lo-start:hi-start])
+            else:
+                for address, byte in zip(range(start, stop, step), data):
+                    if x0 <= address % WIDTH < x1 and y0 <= address // WIDTH < y1:
+                        super().__setitem__(address, byte)
+        else:
+            address = key if key >= 0 else len(self) + key
+            if not 0 <= address < len(self):
+                raise IndexError('Framebuffer index out of range')
+            if x0 <= address % WIDTH < x1 and y0 <= address // WIDTH < y1:
+                super().__setitem__(address, value)
+
+
 class CanvasEngine:
     def __init__(self) -> None:
         self.width = WIDTH
         self.height = HEIGHT
         self.palette = _default_palette()
-        self.front = bytearray(FB_BYTES)
-        self.back = bytearray(FB_BYTES)
+        self.scissor = None
+        self.front = _ScissoredBuffer(self)
+        self.back = _ScissoredBuffer(self)
         self.fill_style: int = 1  # palette index
         # NEW: draw-activity flag — present only on frames the game actually
         # drew (setTimeout-paced loops draw every Nth tick; presenting
         # blindly would flash a stale snapshot).
         self.dirty: bool = False
+
+    def reset_scissor(self):
+        self.scissor = None
+
+    def set_scissor(self, x, y, width, height):
+        self.scissor = (max(0, min(WIDTH, x)), max(0, min(HEIGHT, y)),
+                        max(0, min(WIDTH, x + width)), max(0, min(HEIGHT, y + height)))
 
     def clear(self, color: int = 0) -> None:
         c = color & 0xFF

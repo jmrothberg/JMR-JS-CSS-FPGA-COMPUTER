@@ -3,6 +3,26 @@
 <html><head><title>Toolbox Graphics Operations</title></head><body><canvas width="640" height="480"></canvas><script>
 // All staging belongs to THIS example: descriptors 1000..1255,
 // pixels/masks/resources 2000..4095. No session/UI scratch is used.
+// BEGIN shared raster_client.js
+// Shared optional raster policy; native CopyBits/Raster remain resident.
+function tbMask(d,base,stride){
+ tbU32(d+48,base);tbU16(d+52,stride);
+ stgWrite(d+37,(stgRead(d+37)&2)+1);
+}
+function tbMaskOff(d){stgWrite(d+37,stgRead(d+37)&2);}
+function tbPattern8(d,rows,foreground,background){
+ var i=0;while(i<8){stgWrite(d+40+i,rows[i]);i=i+1;}
+ tbInk(d,foreground,background);stgWrite(d+37,(stgRead(d+37)&1)+2);
+}
+function tbPatternOff(d){stgWrite(d+37,stgRead(d+37)&1);}
+// Compose a screen pattern rectangle from the general transport; no separate
+// line, polygon, brush or window hardware is needed. Descriptors are caller-owned.
+function tbPaintRect(src,dst,x,y,width,height,rows,foreground,background){
+ tbScreen(src);tbRect(src,0,0,width,height);tbPattern8(src,rows,foreground,background);
+ tbScreen(dst);tbRect(dst,0,0,width,height);tbPlaceScreen(dst,x,y,1);return tbRaster(src,dst,0);
+}
+
+// END shared raster_client.js
 var c=document.querySelector('canvas').getContext('2d');
 var rows=[170,85,170,85,170,85,170,85],mode=0,i=0,checks=0;
 function expect(actual,wanted){if(actual!=wanted)checks=checks+1;}
@@ -17,7 +37,7 @@ function paintPattern(x,y,w,h){
 function first(){
  c.setTransform(1,0,0,1,0,0);c.fillStyle='#FFF';c.fillRect(0,0,640,480);
  c.fillStyle='#000';c.fillText('Toolbox: memory, packed pixels, raster modes, masks and patterns',8,20);
- expect(toolbox(0,0,0,0),65663);expect(tbFill(3000,42,16),16);
+ expect(toolbox(0,0,0,0)&4095,4095);expect(tbFill(3000,42,16),16);
  expect(tbMove(3000,3003,13),13);expect(stgRead(3015),42);
  expect(tbResources(0,3100,16),16); // Requires normal SYSTEM.SYS cold boot.
  // Invalid ranges reject BEFORE writes. Successful clipped copies return

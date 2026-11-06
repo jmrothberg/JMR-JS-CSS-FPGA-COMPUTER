@@ -1,20 +1,47 @@
 <!doctype html>
 <!-- jmr-toolbox: resident-v2 -->
 <html><head><title>Session document example</title></head><body><canvas width="640" height="480"></canvas><script>
+// BEGIN shared scroll_client.js
+// Shared bitmap scrolling. Two caller-owned descriptors; no saved screen image.
+// Coordinates are local to the active Port; exposed strips enter bounded damage.
+function tbScrollRect(src,dst,x,y,w,h,dx,dy){
+ var a=Math.abs(dx),b=Math.abs(dy),p=tbPortBounds(),n;
+ if(a>=w||b>=h){tbDamage(x+p[4],y+p[5],w,h);return 0;}
+ tbScreen(src);tbScreen(dst);
+ tbRect(src,x+p[4]+(dx<0?a:0),y+p[5]+(dy<0?b:0),w-a,h-b);
+ tbRect(dst,0,0,w-a,h-b);tbPlaceScreen(dst,x+(dx>0?a:0),y+(dy>0?b:0),1);
+ n=tbCopyBits(src,dst);if(n<0)return n;
+ if(a)tbDamage(x+p[4]+(dx<0?w-a:0),y+p[5],a,h);
+ if(b)tbDamage(x+p[4],y+p[5]+(dy<0?h-b:0),w,b);
+ return n;
+}
+// END shared scroll_client.js
+
+// BEGIN shared window_client.js
+// Shared bounded window stacking policy; IDs are0..7, back to front.
+var tbClientOrder=[];
+function tbWindowFocus(id){if(id<0||id>7||id!=Math.floor(id))return -1;tbWindowRemove(id);tbClientOrder.push(id);return id;}
+function tbWindowRemove(id){
+ var i=0,j=0;while(i<tbClientOrder.length){if(tbClientOrder[i]!=id){tbClientOrder[j]=tbClientOrder[i];j=j+1;}i=i+1;}
+ tbClientOrder.length=j;return j?tbClientOrder[j-1]:255;
+}
+function tbWindowAt(i){return i>=0&&i<tbClientOrder.length?tbClientOrder[i]:255;}
+// END shared window_client.js
+
 // Run on a private copy of the demo disk. SOURCE is shared machine memory;
 // this sample deliberately replaces it. It is NOT an Editor replacement.
 // 60000..60127 is our transfer buffer; session owns96..111 and380320..380927.
 var demoCtx=document.querySelector("canvas").getContext("2d");
-var status="Choose New sample first",marked=0,ready=0,dirty=1;
+var status="Choose New sample first",marked=0,ready=0,dirty=1,demoPanel=0;
 var downs=0,ups=0,moves=0,keys=0,keyups=0;
 tbSessionProperty(demoCtx,0,4); // Utility-style window, not reserved Editor role.
 tbSessionProperty(demoCtx,1,0); // Identity content coordinates.
 tbSessionProperty(demoCtx,2,"Session example|Private SOURCE and TXT files");
 tbSessionProperty(demoCtx,4,"Session example");
-tbSessionProperty(demoCtx,5,15); // Commands160..163 enabled;164 disabled.
+tbSessionProperty(demoCtx,5,79); // Commands160..163 enabled;164 disabled.
 tbSessionProperty(demoCtx,6,0);tbSessionProperty(demoCtx,7,0);tbSessionProperty(demoCtx,8,0);tbSessionProperty(demoCtx,9,0);
 tbSessionProgram("UISESS.HTM");tbSessionSuffix("TXT");
-tbSessionMenus(demoCtx,"File|New sample=160|Open...=161|Save As...=162|Quit=1006;Demo|Mark=163|Disabled=164");
+tbSessionMenus(demoCtx,"File|New sample=160|Open...=161|Save As...=162|Quit=1006;Demo|Mark=163|Disabled=164|Scroll panel=166");
 function newSample(){
  var s=tbSessionCodes("A private Toolbox document.\n"),i=0,b;
  if(sysDocument(2,0,5)<0){status="Cannot initialize SOURCE";return;}
@@ -43,6 +70,17 @@ function key(e){
  else if(e.keyCode==161)openChosen(); // Session forwards after Open accepts.
  else if(e.keyCode==162)saveChosen(); // Session forwards after name/replace accepts.
  else if(e.keyCode==163){marked=1-marked;tbSessionProperty(demoCtx,6,marked?8:0);dirty=1;}
+ else if(e.keyCode==166){
+  demoPanel=1-demoPanel;
+  if(tbScrollRect(60256,60320,340,256,180,96,0,-8)>=0){tbDamageClip();drawPanel();tbPortPop();tbDamageClear();}
+ }
+}
+// 60256..60383 are our two copy descriptors, disjoint from file transfers.
+function drawPanel(){
+ var p=tbPortBounds(),y=0;
+ if(tbPortPush(340+p[4],256+p[5],180,96,0,0)<0)return;
+ while(y<96){demoCtx.fillRect(340,256+y,300,8,(Math.floor(y/8)+demoPanel)%2?3:4);y=y+8;}
+ tbPortPop();
 }
 function draw(){
  tbSessionTransform(1,0,0,1,0,0);
@@ -50,7 +88,7 @@ function draw(){
  demoCtx.fillText(status,36,116);demoCtx.fillText("Events: down/up/move/key/key-up",36,150);
  demoCtx.fillText(downs,36,176);demoCtx.fillText(ups,100,176);demoCtx.fillText(moves,164,176);demoCtx.fillText(keys,228,176);demoCtx.fillText(keyups,292,176);
  demoCtx.fillText("SOURCE bytes",36,216);if(ready)demoCtx.fillText(srcLen(),200,216);
- dirty=0;
+ drawPanel();dirty=0;
 }
 tbSessionListen("keydown",key);
 tbSessionListen("keyup",function(e){keyups=keyups+1;dirty=1;});
@@ -60,4 +98,57 @@ tbSessionListen("mouseup",function(e){ups=ups+1;dirty=1;});
 tbSessionInvalidate(draw); // Restores content exposed by menus/dialogs.
 function frame(){if(dirty)draw();tbSessionFrame(frame);} // Session owns raw RAF.
 tbSessionFrame(frame);
+
+// BEGIN shared filename_client.js
+// Shared file-name policy, embedded into clients that own Save As.
+function tbClientFilename(a,ext,kind){
+ var i=0,c,stem=0,n=0,dot=0,j,legal,on;
+ if(kind){
+  if(ext=="")return 1;while(i<a.length){if(a[i]==46)dot=i+1;i=i+1;}
+  if(dot==0)return 0;i=dot;while(i<a.length){if(a[i]!=strByte(ext,i-dot))return 0;i=i+1;}return strByte(ext,i-dot)<0;
+ }
+ while(i<a.length){
+  c=a[i];if(c>=97&&c<=122)c=c-32;a[i]=c;
+  if(c==46){if(dot||stem==0)return 0;dot=1;}
+  else{
+   on=(c>=65&&c<=90)||(c>=48&&c<=57);j=0;
+   while(j<17&&!on){legal=strByte("$%'-_@~`!(){}^#&",j);if(c==legal)on=1;j=j+1;}
+   if(!on)return 0;if(dot)n=n+1;else stem=stem+1;
+  }i=i+1;
+ }
+ if(stem<1||stem>8||n>3||(dot&&n==0))return 0;
+ if(!dot){
+  a.push(46);i=0;
+  while(i<3){c=strByte(ext,i);if(c<0)break;a.push(c);i=i+1;}
+ }
+ if(a.length>12)return 0;return 1;
+}
+tbSessionNames(tbClientFilename);
+// END shared filename_client.js
+// BEGIN shared chrome_client.js
+// Shared document scroll controls, using the common Window and Control geometry.
+var tbClientScroll=0;
+function tbClientChrome(mode,x,y){
+ var a=tbWindowBounds(),code=0,scroll=tbClientScroll;
+ if(mode==2){tbClientResize(x,y);return 0;}
+ if(mode==1){
+
+  if(x>=a[0]+a[2]-19&&x<a[0]+a[2]-1&&y>=a[1]+54&&y<a[1]+a[3]-22){code=tbControlPart(y,a[1]+54,a[3]-76,20,a[1]+76+Math.floor(Math.max(0,a[3]-140)*scroll/255),Math.min(20,Math.max(0,a[3]-116)));code=code==4?128:code==5?129:code==8?130:131;}
+  if(y>=a[1]+a[3]-20&&y<a[1]+a[3]-1){if(x>=a[0]+2&&x<a[0]+20)code=132;else if(x>=a[0]+a[2]-38&&x<a[0]+a[2]-20)code=133;}
+ 
+ return code;
+ }
+ tbClientScroll=x;scroll=x;
+
+   tbBox(a[0]+a[2]-19,a[1]+54,18,a[3]-76,"#CCC");tbBox(a[0]+a[2]-19,a[1]+54,18,20,"#FFF");tbText([94],a[0]+a[2]-14,a[1]+56);
+   tbBox(a[0]+a[2]-19,a[1]+a[3]-40,18,18,"#FFF");tbText([118],a[0]+a[2]-14,a[1]+a[3]-40);
+   tbBox(a[0]+a[2]-17,a[1]+76+Math.floor(Math.max(0,a[3]-140)*scroll/255),14,Math.min(20,Math.max(0,a[3]-116)),"#FFF");
+   tbBox(a[0]+2,a[1]+a[3]-20,a[2]-22,19,"#CCC");tbBox(a[0]+2,a[1]+a[3]-20,18,19,"#FFF");tbText([60],a[0]+6,a[1]+a[3]-19);
+   tbBox(a[0]+a[2]-38,a[1]+a[3]-20,18,19,"#FFF");tbText([62],a[0]+a[2]-33,a[1]+a[3]-19);
+  
+ return 0;
+}
+tbSessionChrome(tbClientChrome);
+// END shared chrome_client.js
+function tbClientResize(w,h){dirty=1;}
 </script></body></html>

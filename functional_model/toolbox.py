@@ -5,7 +5,7 @@ The native JavaScript VM remains the CPU. This module models its bounded
 """
 from .jsb_format import CSTG_WORDS
 
-VERSION = 0x0001007F
+VERSION = 0x00010FFF
 DESCRIPTOR_BYTES = 64
 
 
@@ -21,6 +21,31 @@ def execute(machine, op, a, b, c):
 
     if op == 0:
         return VERSION
+    if op == 12:
+        a, b, c = a & 0xffffffff, b & 0xffffffff, c & 0xffffffff
+        if c == 1 and a == 0 and b == 0:
+            machine.canvas.reset_scissor()
+        elif c == 0:
+            x, y = a & 65535, a >> 16
+            machine.canvas.set_scissor(x-65536 if x & 32768 else x,
+                                       y-65536 if y & 32768 else y,
+                                       b & 65535, b >> 16)
+        else:
+            return -1
+        return 1
+    if op in (8, 9, 10, 11):
+        # Native integer operands carry their low32 bits, including negative
+        # values used to encode unsigned data. Addresses still require bounds.
+        b, c = b & 0xffffffff, c & 0xffffffff
+        n = 8 if op == 10 else 2 if op == 11 else 4
+        if not valid(a, n) or (op != 10 and c != 0) or (op == 8 and b != 0):
+            return -1
+        if op == 8:
+            return sum(read(a+i) << (8*i) for i in range(4))
+        value = b | ((c << 32) if op == 10 else 0)
+        for i in range(n):
+            write(a+i, (value >> (8*i)) & 255)
+        return n
     if op in (6, 7):
         if c != 0 or not valid(a, 64) or not valid(b, 64):
             return -1

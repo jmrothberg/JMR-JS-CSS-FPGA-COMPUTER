@@ -481,6 +481,7 @@ module jmr_console_engine (
     // after it has been seen LOW since this launch.
     logic cdone_seen_low;
     logic raw_cdone_armed;
+    logic handoff_stop_pending; // wait for VM stop before reading continuation or loading code
     wire raw_cdone_pending = raw_cdone_armed && cmp_done_i &&
         (cmp_status_i == 8'h80 || cmp_status_i == 8'h81);
     assign src_len_o = src_len;
@@ -839,6 +840,7 @@ module jmr_console_engine (
             ui_unnamed_o<=0;
             cdone_seen_low <= 1'b0;
             raw_cdone_armed <= 1'b0;
+            handoff_stop_pending <= 1'b0;
             cmp_art_mode <= 1'b0; cmp_art_len <= '0;
             art_i <= '0; art_found <= 1'b0; art_hi <= 1'b0; art_word <= '0;
             art_nspr <= '0;
@@ -909,6 +911,7 @@ module jmr_console_engine (
             // Ordinary RUN callers may request the same raw continuation as
             // interactive clients. Require a fresh low before accepting sticky
             // cdone, and reserve the console before the shell can return Home.
+            if (handoff_stop_pending && !vm_busy_i) handoff_stop_pending <= 0;
             if (state == C_CMP_WAIT) raw_cdone_armed <= 0;
             else if (vm_busy_i && !cmp_done_i) raw_cdone_armed <= 1;
             // A discarded Finder copy must drain its current SRAM beat but
@@ -1901,9 +1904,14 @@ module jmr_console_engine (
                     // outside this state, which is why it then worked. The
                     // compiler needs no input; the editor does.
                     kbd_clear <= (cmp_wd == 34'd0);
-                    if (cmp_ph == 5'd0) begin
+                    if (handoff_stop_pending && vm_busy_i) begin
+                        // halt_pulse crosses to the VM clock; do not race its busy acknowledgement.
+                    end else if (cmp_ph == 5'd0) begin
                         if (!cmp_done_i) cdone_seen_low <= 1'b1;
                         if (cmp_done_i && cdone_seen_low) begin
+                            if (cmp_status_i == 8'h80 || cmp_status_i == 8'h81) begin
+                                halt_pulse <= 1'b1; handoff_stop_pending <= 1'b1;
+                            end
                             cmp_img_len <= cmp_len_i;
                             cmp_ph <= 5'd1;
                             cmp_out_off <= 21'd0;
@@ -3185,6 +3193,7 @@ module jmr_console_engine (
             end
             if(raw_cdone_pending && (state==C_IDLE || state==C_PROMPT))begin
                 raw_cdone_armed<=0; cdone_seen_low<=1;
+                halt_pulse<=1'b1; handoff_stop_pending<=1'b1;
                 cmp_arm_r<=0; cmp_interactive<=1;
                 cmp_img_len<=cmp_len_i; cmp_out_off<=0;
                 cmp_ph<=1; cmp_wd<=1; cmp_pend<=0;

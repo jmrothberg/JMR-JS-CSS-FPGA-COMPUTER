@@ -504,6 +504,7 @@ class JsHwVm:
             incoming=image.data[offset:offset+32768]
             if fingerprint(incoming)!=fingerprint(resident):
                 raise ValueError('Toolbox instruction identity mismatch; relink application for this ROM')
+        self.canvas.reset_scissor()
         self.program_image = image
         self.input.reset_mouse()
         data = image.data

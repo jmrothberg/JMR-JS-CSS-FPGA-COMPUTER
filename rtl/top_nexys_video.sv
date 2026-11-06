@@ -75,7 +75,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     wire core_clk, pixel_clk, mmcm_locked, clkfb, clk200;
     wire mclk_raw, mclk;
     // sound-native poke bus, core -> PSG (see the audio block at the bottom)
-    logic snd_tgl;
+    logic snd_tgl, snd_ack;
     logic [1:0]  snd_ch;
     logic [15:0] snd_freq;
     logic [3:0]  snd_vol;
@@ -348,7 +348,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
         .analog_x(i2c_analog_x), .analog_y(i2c_analog_y), .joy_btn(i2c_joy_btn),
         .dump_addr(uart_dump_addr), .dump_data(dump_data),
         .cursor(cursor), .ready_lit(ready_lit),
-        .snd_tgl(snd_tgl), .snd_ch(snd_ch), .snd_freq(snd_freq),
+        .snd_ack(snd_ack), .snd_tgl(snd_tgl), .snd_ch(snd_ch), .snd_freq(snd_freq),
         .snd_vol(snd_vol), .snd_frames(snd_frames), .snd_slide(snd_slide),
         .scan_addr(scan_addr), .scan_data(scan_data),
         .game_mode(game_mode),
@@ -442,7 +442,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     logic [23:0] vid_pData;
     logic        vid_pVDE, vid_pHSync, vid_pVSync;
     jmr_text_hdmi_scanout #(.FONT_HEX("font_rom.hex")) u_scan (
-        .pixel_clk(pixel_clk), .rst_n(rst_n),
+        .pixel_clk(pixel_clk), .mouse_clk(core_clk), .rst_n(rst_n),
         .vram_rdata(scan_data), .vram_addr(scan_addr),
         .cursor_cell(cursor),
         .mouse_x(pointer_x),.mouse_y(pointer_y),.mouse_toggle(pointer_toggle),.mouse_show_exit(1'b0),
@@ -495,16 +495,19 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     // ================= audio: ADAU1761 line-out PSG =================
     // Leaf modules only — nothing here touches the VM/core datapaths.
     // MCLK = MMCM CLKOUT1 (12 MHz); codec init on core_clk (~100 MHz I2C
-    // master); PSG + I2S on mclk. CDC: snd_tgl toggle-sync inside the PSG;
+    // master); PSG + I2S on mclk. CDC: held request/ack inside VM and PSG;
     // cfg_done/ready_lit are quasi-static levels, 2FF each.
     BUFG u_mclk_bufg (.I(mclk_raw), .O(mclk));
     assign ac_mclk = mclk;
 
-    logic [1:0] mrst_sync;
-    logic       mrst_n;
-    always_ff @(posedge mclk) begin
-        mrst_sync <= {mrst_sync[0], (cpu_resetn & mmcm_locked)};
-        mrst_n    <= mrst_sync[1];
+    // Audio and VM reset together, including button/DDR resets. Assert
+    // asynchronously so an in-flight packet cannot survive a source reset;
+    // release only after two clean audio clock edges.
+    (* ASYNC_REG = "TRUE" *) logic [1:0] mrst_sync;
+    wire mrst_n = mrst_sync[1];
+    always_ff @(posedge mclk or negedge rst_n) begin
+        if (!rst_n) mrst_sync <= 2'b00;
+        else mrst_sync <= {mrst_sync[0], 1'b1};
     end
 
     logic cfg_scl_oe, cfg_sda_oe, cfg_done, cfg_nack;
@@ -537,7 +540,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     jmr_psg u_psg (
         .mclk(mclk), .rst_n(mrst_n),
         .enable(acfg_sync[1]), .mute(mute_sync[1]),
-        .snd_tgl(snd_tgl), .snd_ch(snd_ch), .snd_freq(snd_freq),
+        .snd_ack(snd_ack), .snd_tgl(snd_tgl), .snd_ch(snd_ch), .snd_freq(snd_freq),
         .snd_vol(snd_vol), .snd_frames(snd_frames), .snd_slide(snd_slide),
         .bclk(ac_bclk), .lrclk(ac_lrclk), .dac_sdata(ac_dac_sdata)
     );

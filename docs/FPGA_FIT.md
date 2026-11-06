@@ -8,16 +8,30 @@ Words: [README.md — Words used](../docs/WORDS.md#words-used-in-this-project).
 
 This is the only place that names the current build. Other pages point here.
 
+**Active development: [run81](../build/run81_mac_native/STATUS.md), implementation
+complete and focused RTL simulation PASS; no FPGA build or bitstream.** Shared
+Window/Control/Port/Damage software, bounded drawing, typed native staging/scissor,
+VM conversion/frame packing and audio acknowledgment are integrated with the run80
+handoff/pointer fixes. The candidate disk has 44 matched programs. Area, timing and
+clock-rate effects remain unmeasured; published historical bits are not run81 substitutes.
+
+The architecture review found two timer latches and uncovered internal timing
+paths in the older mapped design. Historical gate PASS below means those older
+script checks passed; it does not establish that every internal path was timed.
+Run81 corrects the timer default and strengthens the future publication gate to
+reject latches, missing clocks and unconstrained internal endpoints.
+
+
 | | |
 |---|---|
-| **Current qualified** | [run78 clean package](../build/run78_clean_architecture/final_corrected/README.md): setup 0.000 ns, hold +0.027 ns, 96097 LUTs, 28545 slices, 364.5 BRAM. Routing/DRC/pulse/pin/clock checks and independent selected routed memory audit pass. [Bit](../build/run78_clean_architecture/release/bitstream/run78_clean_qualified.bit), [disk](../build/run78_clean_architecture/final_corrected/card.img), [GUI](../build/run78_clean_architecture/final_corrected/test_gui.sh). RAM load completed; QSPI unchanged. Physical display/input acceptance pending. |
+| **Historical run78 gate PASS** | [run78 clean package](../build/run78_clean_architecture/final_corrected/README.md): setup 0.000 ns, hold +0.027 ns, 96097 LUTs, 28545 slices, 364.5 BRAM. Routing/DRC/pulse/pin/clock checks and independent selected routed memory audit pass. [Bit](../build/run78_clean_architecture/release/bitstream/run78_clean_qualified.bit), [disk](../build/run78_clean_architecture/final_corrected/card.img), [GUI](../build/run78_clean_architecture/final_corrected/test_gui.sh). RAM load completed; QSPI unchanged. Physical display/input acceptance pending. |
 | **Earlier experimental** | `build/run76_usb_keyboard_pmod_mice/test/`: WNS -0.355 ns, hold +0.017 ns, routing/DRC pass. Preserved for rollback; lacks the new Toolbox. |
 | **Rollback** | `build/run75_program_system/release/run75_program_finder_SYS_33MHz.bit`. Qualified 2026-11-04. Older jacks: mouse on J15, keyboard on JA. |
 | **QSPI state** | Agent did not write QSPI. User received the run78 `-f` command; current physical flash contents are unconfirmed. |
 
 The latest [software revision](../build/toolbox_usage_examples/revision/card_final.img) contains 44 programs (42 resident clients), including eight CB variants and four Toolbox examples. Disk ROM `f6f805c5…` and LNK `0804ff96…` include the corrected `tbPaintRect` helper and occupy all 8191 mutable words. All resident clients were relinked together; focused graphics RTL checks include the complete cold-loaded prefix readback. Damage/UI examples have model checks. The unchanged hardware factory ROM is `fd89c8be…`; the routed INIT audit applies to that factory image. Physical acceptance remains open.
 
-[Run79 Editor TEST](../build/run79_handoff_fix/test/README.txt) passes the TEST bound at setup -0.195 ns and hold +0.029 ns, with the other qualification gates and selected memory audit passing. It fixes the application handoff halt/ack defect but is **not strict timing-qualified** and does not include the mouse fix. Run80 (`build/run80_pointer_handoff`) is building with both that handoff fix and an acknowledged pointer coordinate crossing. Run78 remains the strict-qualified rollback. No new bit has been flashed by the agent.
+[Run79 Editor TEST](../build/run79_handoff_fix/test/README.txt) passes the TEST bound at setup -0.195 ns and hold +0.029 ns, with the other qualification gates and selected memory audit passing. It fixes the application handoff halt/ack defect but is **not strict timing-qualified** and does not include the mouse fix. Run80 (`build/run80_pointer_handoff`) finished at setup -0.170 ns / hold +0.050 ns with both that handoff fix and an acknowledged pointer coordinate crossing; it failed strict setup timing. Run78 remains the preserved historical release, subject to the timing-coverage limitation above. No new bit has been flashed by the agent.
 
 Fabric and DDR stay at **100 MHz**. The VM is divide-by-three, **33.333 MHz**. Do not put the VM back on divide-by-seven.
 

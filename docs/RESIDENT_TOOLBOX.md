@@ -1,22 +1,21 @@
 # Resident JavaScript Toolbox — clean architecture
 
-Run78 hardware has passed strict FPGA qualification. The corrected disk and
-matching main `storage/` files are delivered: 44 programs, 42 resident clients,
-including eight CB variants. Physical user testing remains pending. The final
-software received bounded compilation, capacity, identity and focused native
-instruction checks; broad full-core suites were intentionally not repeated.
-The `.bit` and native ABI are unchanged. **CopyBits algorithms, menus, dialogs
-and other routines using existing primitives can change with a matching disk,
-without another `.bit`.** The library uses **8191 of 8191 mutable words: zero
-spare**. Future additions may require software compaction; new memory ports,
-pixel formats or operations still require hardware changes.
+This is the **run81 implementation/simulation candidate**, not a published
+FPGA release. It contains 44 programs/42 resident clients, the existing public
+Toolbox API and native graphics services. No FPGA build, benchmark or physical
+media update is part of this change.
 
-The bit's factory ROM (`fd89c8…`) remains covered by its original routed INIT
-audit. Disk ROM (`f6f805…`) intentionally replaces that factory code at startup.
-Keep disk-software validation separate from the factory audit; do not rewrite the
-factory audit to claim it contains the updated ROM. If disk ROM is absent or
-invalid, the older factory bank remains and clients linked to the newer ROM
-must fail identity validation. Exact hashes are in the implementation status.
+The library uses **8096 of 8191 mutable instruction words, with 95 spare**; word
+8191 remains the fixed final jump. It now fetches normalized SYS glyph bytes
+without the old byte-swap loop. Widths remain available before tbUIInit and
+per-app mutable state/scratch ownership is unchanged. The new typed font block
+fits the existing SYS payload; all legacy bytes 0..20607 are preserved.
+
+The generated candidate ROM, LNK, factory vectors and identity package come
+from the same build. A matched disk supplies SYSTEM.SYS and all relinked clients.
+Root published files, older routed factory audits and physical acceptance are
+separate; these simulation changes do not overwrite those earlier results.
+Exact candidate identities and scoped tests are in its software_work manifest.
 
 The same native JavaScript processor runs applications and Toolbox functions.
 There is one active application. Only instructions are shared: constants,
@@ -38,10 +37,13 @@ This is a bounded native JavaScript system, without a browser or extra CPU.
 - `SYSTEM.SYS`: validated appearance data, including Chicago glyphs. It is
   data, not executable Toolbox code. The existing retained SYS region stays
   unchanged. ROM temporarily stages in otherwise unused SOURCE during boot.
-- Native **64**, `toolbox(op,a,b,c)`, reports capability word **0x0001007f**.
+- Native **64**, `toolbox(op,a,b,c)`, reports capability word **0x00010fff**.
   Operations: 0 capabilities; 1 memmove; 2 fill; 3 packed surface blit;
   4 packed pattern fill; 5 verified SYS read; 6 bounded raw rectangle copy;
-  7 raster copy with Boolean modes, optional mask and 8×8 pattern.
+  7 raster copy with Boolean modes, optional mask and 8×8 pattern;
+  8 readU32; 9 writeU32; 10 writePair32; 11 writeU16; 12 destination scissor.
+  The candidate requires typed mask 0x780 and clip bit 0x800; older bits fail
+  explicitly. No new native ID is introduced.
 - Native **65**, `sysDocument(op,ptr,role)`, transfers SOURCE name/metadata or
   initializes an empty document. It does not display dialogs or choose policy.
 - Native **66**, `strByte(s,index)`, reads a stored UTF-8 byte from an interned
@@ -133,7 +135,9 @@ lower-level API are printable ASCII byte arrays. Dialog kinds are 1 alert,
 
 Shared sessions reserve **380320–380927**: 512 catalog bytes, 64 descriptor
 bytes and 32 glyph bytes. Lower-level callers supply disjoint scratch. Glyphs
-are fetched one at a time from SYS; a private 4 KiB font copy is unnecessary.
+are fetched one at a time from the normalized TBF1 font in SYS; a private
+4 KiB font copy is unnecessary. See TOOLBOX_API.md for its exact layout and
+validation scope. UI initialization and drawing APIs retain their existing ownership.
 Private state is packed into ordinary per-app objects at build time. This is
 normal compiled JavaScript, with no new execution engine.
 
@@ -185,3 +189,5 @@ arena 373504–375114; glyph descriptor 375168–375231. Runtime modifications
 remain private to MacPaint. Missing/invalid resources produce a visible error.
 The released sources use external ART handles for Finder/Reader fonts so
 on-device compilation receives complete, unsquashed executable source.
+
+See [shared Window/Port/Control/Damage and client-module contracts](TOOLBOX_API.md#shared-windows-ports-controls-and-damage-in-this-candidate).

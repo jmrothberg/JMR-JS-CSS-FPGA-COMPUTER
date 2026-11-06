@@ -34,6 +34,39 @@ window.JMR_SPR = ["READ-0.png"];
 })();
 </script>
 <script>
+// BEGIN shared draw_client.js
+// Shared bounded draw emission. The result is temporary, reused storage.
+var tbClientClip=[0,0,640,480];
+function tbDrawBounds(x,y,w,h){
+ var p=tbPortBounds();
+ tbClientClip[0]=Math.max(x,p[0]-p[4]);tbClientClip[1]=Math.max(y,p[1]-p[5]);
+ tbClientClip[2]=Math.min(x+w,p[2]-p[4]);tbClientClip[3]=Math.min(y+h,p[3]-p[5]);
+ return tbClientClip;
+}
+function tbDrawHit(x,y,w,h){
+ var p=tbPortBounds();return p[2]>p[0]&&p[3]>p[1]&&x+w>p[0]-p[4]&&x<p[2]-p[4]&&y+h>p[1]-p[5]&&y<p[3]-p[5];
+}
+function tbDrawFill(ctx,x,y,w,h,c){
+ var p=tbDrawBounds(x,y,w,h);if(p[2]>p[0]&&p[3]>p[1])ctx.fillRect(p[0],p[1],p[2]-p[0],p[3]-p[1],c);
+}
+// END shared draw_client.js
+
+// BEGIN shared scroll_client.js
+// Shared bitmap scrolling. Two caller-owned descriptors; no saved screen image.
+// Coordinates are local to the active Port; exposed strips enter bounded damage.
+function tbScrollRect(src,dst,x,y,w,h,dx,dy){
+ var a=Math.abs(dx),b=Math.abs(dy),p=tbPortBounds(),n;
+ if(a>=w||b>=h){tbDamage(x+p[4],y+p[5],w,h);return 0;}
+ tbScreen(src);tbScreen(dst);
+ tbRect(src,x+p[4]+(dx<0?a:0),y+p[5]+(dy<0?b:0),w-a,h-b);
+ tbRect(dst,0,0,w-a,h-b);tbPlaceScreen(dst,x+(dx>0?a:0),y+(dy>0?b:0),1);
+ n=tbCopyBits(src,dst);if(n<0)return n;
+ if(a)tbDamage(x+p[4]+(dx<0?w-a:0),y+p[5],a,h);
+ if(b)tbDamage(x+p[4],y+p[5]+(dy<0?h-b:0),w,b);
+ return n;
+}
+// END shared scroll_client.js
+
 // BEGIN CHICAGO FONT
 var ADV=[8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,4,6,7,10,7,11,10,3,5,5,7,7,4,7,4,7,8,8,8,8,8,8,8,8,8,8,4,4,6,8,6,8,11,8,8,8,8,7,7,8,8,6,7,9,7,12,9,8,8,8,8,7,6,8,8,12,8,8,8,5,7,5,8,8,6,8,8,7,8,8,6,8,8,4,6,8,4,12,8,8,8,8,6,7,6,8,8,12,8,8,8,5,5,5,8,8];
 var fontImage=new Image();
@@ -49,21 +82,14 @@ var nLines = 0;
 var topLine = 0;
 var needDraw = 1;
 tbSessionProperty(ctx,0,2);
-var quit=0;
+var quit=0,readerHeight=320;
 
 function gw(o, b) { stgWrite(o, b); }
 function gr(o) { return stgRead(o); }
 
-function w32(o, v) {
-  gw(o, v % 256);
-  gw(o + 1, Math.floor(v / 256) % 256);
-  gw(o + 2, Math.floor(v / 65536) % 256);
-  gw(o + 3, Math.floor(v / 16777216) % 256);
-}
+function w32(o,v){return tbU32(o,v);}
 
-function r32(o) {
-  return gr(o) + gr(o + 1) * 256 + gr(o + 2) * 65536 + gr(o + 3) * 16777216;
-}
+function r32(o){return tbSessionU32(o);}
 
 function lineStart(i) { return r32(LINE_OFF + i * 4); }
 
@@ -147,10 +173,11 @@ function glyph(b,x,y,blue,big){
   }
 }
 function drawChars(li,y,skip,blue,x0,big){
+  var p=tbDrawBounds(0,y,640,big?32:16),left=p[0],right=p[2];
   var s=lineStart(li),n=lineLen(li),c=skip,b,x=x0,step;
-  if(y+(big?32:16)>431)return;
-  while(c<n && x<560){
-    b=srcByte(s+c);glyph(b,x,y,blue,big);
+  if(p[3]<=p[1]||right<=left)return;
+  while(c<n && x<560 && x<right){
+    b=srcByte(s+c);if(x+(big?32:16)>left)glyph(b,x,y,blue,big);
     if(b>=32 && b<127){step=ADV[b];if(big)step=step+step;x=x+step;}
     c=c+1;
   }
@@ -169,11 +196,11 @@ function pageUp() {
   if (topLine <= 0) { topLine = 0; return; }
   y = 0;
   li = topLine;
-  while (li > 0 && y < 320) {
+  while (li > 0 && y < readerHeight) {
     li = li - 1;
     y = y + lineH(li);
   }
-  if (y > 320) { li = li + 1; }
+  if (y > readerHeight) { li = li + 1; }
   topLine = li;
 }
 
@@ -181,7 +208,7 @@ function pageDown() {
   var y, li;
   y = 0;
   li = topLine;
-  while (li < nLines && y < 320) {
+  while (li < nLines && y < readerHeight) {
     y = y + lineH(li);
     li = li + 1;
   }
@@ -189,28 +216,41 @@ function pageDown() {
 }
 
 function draw(){
-  var y=96,li=topLine;
+  var y=96,li=topLine,p=tbDrawBounds(24,88,576,344),top=p[1],bottom=p[3];
   tbSessionProperty(ctx,7,Math.floor(topLine*255/Math.max(1,nLines-20)));
   tbSessionProperty(ctx,8,0);tbSessionProperty(ctx,9,0);
-  ctx.fillStyle="#FFFFFF";ctx.fillRect(24,88,576,344);
-  while(li<nLines && y<416){drawLine(li,y);y=y+lineH(li);li=li+1;}
+  if(p[2]<=p[0]||bottom<=top)return;
+  ctx.fillStyle="#FFFFFF";ctx.fillRect(p[0],p[1],p[2]-p[0],bottom-top);
+  while(li<nLines && y<Math.min(96+readerHeight,bottom)){if(y+lineH(li)>top)drawLine(li,y);y=y+lineH(li);li=li+1;}
 }
 
 function onKey(e) {
-  var k;
+  var k,old=topLine;
   k = e.keyCode;
   if(k===116){quit=1;cdone(0,0,0);return;}
-  if(k===128){if(topLine>0)topLine=topLine-1;needDraw=1;return;}
-  if(k===129){if(topLine+1<nLines)topLine=topLine+1;needDraw=1;return;}
-  if(k===130){pageUp();needDraw=1;return;}
-  if(k===131){pageDown();needDraw=1;return;}
+  if(k===128){if(topLine>0)topLine=topLine-1;needDraw=1;scrollReader(old);return;}
+  if(k===129){if(topLine+1<nLines)topLine=topLine+1;needDraw=1;scrollReader(old);return;}
+  if(k===130){pageUp();needDraw=1;scrollReader(old);return;}
+  if(k===131){pageDown();needDraw=1;scrollReader(old);return;}
   if (k === 38) { if (topLine > 0) { topLine = topLine - 1; } }
   else if (k === 40) { if (topLine + 1 < nLines) { topLine = topLine + 1; } }
   else if (k === 37 || k === 114 || k === 33) { pageUp(); }
   else if (k === 39 || k === 115 || k === 34) { pageDown(); }
-  needDraw = 1;
+  needDraw = 1;scrollReader(old);
 }
 
+function scrollReader(old){
+ var a=tbWindowBounds(),i=topLine,n=0,dy,p;
+ if(old==topLine)return;if(i>old)i=old;
+ while(i<Math.max(old,topLine)&&n<readerHeight){n=n+lineH(i);i=i+1;}
+ dy=old<topLine?-n:n;n=tbScrollRect(36928,36992,24,96,a[2]-36,readerHeight,0,dy);
+ if(n>=0){
+  // A final 32-pixel heading may extend16px beyond the line-start band.
+  if(dy>0&&dy<readerHeight){tbDamageClip();draw();tbPortPop();tbDamageClear();}
+  p=tbPortBounds();tbDamage(24+p[4],96+readerHeight+p[5],a[2]-36,16);
+  tbDamageClip();draw();tbPortPop();tbDamageClear();needDraw=0;
+ }
+}
 function tick() {
   if(quit)return;
   if (needDraw) { draw(); needDraw = 0; }
@@ -230,6 +270,33 @@ tbSessionFrame(tick);
 
 tbSessionProgram('READ.HTM');
 tbSessionInvalidate(function(){draw();needDraw=0;});
+// BEGIN shared chrome_client.js
+// Shared document scroll controls, using the common Window and Control geometry.
+var tbClientScroll=0;
+function tbClientChrome(mode,x,y){
+ var a=tbWindowBounds(),code=0,scroll=tbClientScroll;
+ if(mode==2){tbClientResize(x,y);return 0;}
+ if(mode==1){
+
+  if(x>=a[0]+a[2]-19&&x<a[0]+a[2]-1&&y>=a[1]+54&&y<a[1]+a[3]-22){code=tbControlPart(y,a[1]+54,a[3]-76,20,a[1]+76+Math.floor(Math.max(0,a[3]-140)*scroll/255),Math.min(20,Math.max(0,a[3]-116)));code=code==4?128:code==5?129:code==8?130:131;}
+  if(y>=a[1]+a[3]-20&&y<a[1]+a[3]-1){if(x>=a[0]+2&&x<a[0]+20)code=132;else if(x>=a[0]+a[2]-38&&x<a[0]+a[2]-20)code=133;}
+ 
+ return code;
+ }
+ tbClientScroll=x;scroll=x;
+
+   tbBox(a[0]+a[2]-19,a[1]+54,18,a[3]-76,"#CCC");tbBox(a[0]+a[2]-19,a[1]+54,18,20,"#FFF");tbText([94],a[0]+a[2]-14,a[1]+56);
+   tbBox(a[0]+a[2]-19,a[1]+a[3]-40,18,18,"#FFF");tbText([118],a[0]+a[2]-14,a[1]+a[3]-40);
+   tbBox(a[0]+a[2]-17,a[1]+76+Math.floor(Math.max(0,a[3]-140)*scroll/255),14,Math.min(20,Math.max(0,a[3]-116)),"#FFF");
+   tbBox(a[0]+2,a[1]+a[3]-20,a[2]-22,19,"#CCC");tbBox(a[0]+2,a[1]+a[3]-20,18,19,"#FFF");tbText([60],a[0]+6,a[1]+a[3]-19);
+   tbBox(a[0]+a[2]-38,a[1]+a[3]-20,18,19,"#FFF");tbText([62],a[0]+a[2]-33,a[1]+a[3]-19);
+  
+ return 0;
+}
+tbSessionChrome(tbClientChrome);
+// END shared chrome_client.js
+function tbClientResize(w,h){readerHeight=Math.max(16,h-24);needDraw=1;}
+
 </script>
 </body>
 </html>

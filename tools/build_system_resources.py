@@ -10,9 +10,13 @@ sys.path.insert(0,str(ROOT))
 # keyboard legends, ship labels, legacy About bitmap.
 FONT=0; RECORDS=4096; INDEX=8192; HEADINGS=9216; CONFIG=9344
 KEYS=9472; SHIP=19712; ABOUT=20224; SIZE=24320
+# Native label consumers end at byte20608 (word10304, exclusive).
+# Preserve that prefix; this typed software-only extension uses the old zero tail.
+UI_INFO=20608; UI_WIDTHS=20624; UI_GLYPHS=20736; UI_FIRST=32; UI_COUNT=95
+UI_HEADER=struct.Struct('<4sBBBBHHHH')
 HEADER=struct.Struct('<4sHHII')
 
-def pack(source):
+def font_source(source):
  source=Path(source); spec=json.loads(source.read_text())
  if spec.get('format')!=1:raise ValueError('Expected resource source format 1')
  font=json.loads((source.parent/spec['font']).resolve().read_text())['glyphs']
@@ -25,6 +29,26 @@ def pack(source):
   if g['advance']!=original[c]['advance']:raise ValueError(f'V1 requires the original advance for {c!r}')
   if len(g['rows'])>16 or not 0<=g['offset']<=15 or any(not isinstance(r,str) or set(r)-{'0','1'} or len(r)+g['offset']>16 for r in g['rows']):raise ValueError(f'Invalid glyph {c!r}')
   g['bits']=[int((('0'*g['offset'])+r).ljust(16,'0'),2) for r in g['rows']]+[0]*(16-len(g['rows']))
+ return font
+
+def ui_width_codes(source):
+ font=font_source(source)
+ return ''.join(chr(64+font[chr(c)]['advance']) for c in range(UI_FIRST,UI_FIRST+UI_COUNT))
+
+def unpack_ui_font(data):
+ if len(data)!=SIZE:raise ValueError('SYSTEM.SYS payload length mismatch')
+ if data[UI_INFO:UI_INFO+4]!=b'TBF1':return None
+ header=UI_HEADER.unpack_from(data,UI_INFO)
+ if header!=(b'TBF1',1,UI_FIRST,UI_COUNT,16,UI_GLYPHS,32,UI_WIDTHS,0):
+  raise ValueError('Invalid normalized UI font header')
+ widths=list(data[UI_WIDTHS:UI_WIDTHS+UI_COUNT])
+ if any(w<1 or w>16 for w in widths):raise ValueError('Invalid normalized UI advance')
+ return {chr(c):{'advance':widths[c-UI_FIRST],
+         'bits':list(struct.unpack_from('>16H',data,UI_GLYPHS+(c-UI_FIRST)*32))}
+         for c in range(UI_FIRST,UI_FIRST+UI_COUNT)}
+
+def pack(source):
+ source=Path(source);spec=json.loads(source.read_text());font=font_source(source)
  data=bytearray(SIZE)
  for c in range(128):
   rows=font.get(chr(c),{}).get('bits',[0]*16)
@@ -87,6 +111,11 @@ def pack(source):
     at=off+(i*16+y)*(w//8);data[at:at+w//8]=bitmap(s,y,w).to_bytes(w//8,'little')
  for i,s in enumerate(('Note','Help','Utility')):
   for y in range(16):data[ABOUT+(i*16+y)*8:ABOUT+(i*16+y+1)*8]=bitmap(s,y,64).to_bytes(8,'little')
+ # Legacy font/keyboard/ship/About label bytes above remain byte-identical.
+ UI_HEADER.pack_into(data,UI_INFO,b'TBF1',1,UI_FIRST,UI_COUNT,16,UI_GLYPHS,32,UI_WIDTHS,0)
+ for c in range(UI_FIRST,UI_FIRST+UI_COUNT):
+  glyph=font[chr(c)];data[UI_WIDTHS+c-UI_FIRST]=glyph['advance']
+  struct.pack_into('>16H',data,UI_GLYPHS+(c-UI_FIRST)*32,*glyph['bits'])
  return HEADER.pack(b'JMRS',1,16,SIZE,zlib.crc32(data))+data
 
 def unpack(blob):

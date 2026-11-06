@@ -89,14 +89,18 @@ set_property -dict { PACKAGE_PIN W6 IOSTANDARD LVCMOS33 } [get_ports { ac_dac_sd
 set_property -dict { PACKAGE_PIN W5 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { ac_scl }]
 set_property -dict { PACKAGE_PIN V5 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { ac_sda }]
 
-## Audio CDC: quasi-static levels + toggle-sync cross into the 12 MHz mclk
-## domain through 2FF chains; cut timing analysis on those crossings.
-set_false_path -to [get_pins -hierarchical -filter {NAME =~ *mrst_sync_reg[0]*/D}] -quiet
-set_false_path -to [get_pins -hierarchical -filter {NAME =~ *acfg_sync_reg[0]*/D}] -quiet
-set_false_path -to [get_pins -hierarchical -filter {NAME =~ *mute_sync_reg[0]*/D}] -quiet
-set_false_path -to [get_pins -hierarchical -filter {NAME =~ *u_psg/tgl_sync_reg[0]*/D}] -quiet
-set_false_path -from [get_clocks -of_objects [get_pins u_mmcm/CLKOUT1]] -to [get_clocks -of_objects [get_pins u_mmcm/CLKOUT0]] -quiet
-set_false_path -from [get_cells -hierarchical -filter {NAME =~ *u_exec64/snd_*_reg*}] -quiet
+## Audio CDC: synchronized request/acknowledgement, source-held payload.
+## Cut only first synchronizer stages. The payload is NOT false-pathed:
+## capture occurs >=2 MCLK periods after request launch; bound its complete
+## data/decode path to1 MCLK period (83.333ns), leaving one settling period.
+set_false_path -to [get_pins -hierarchical -regexp {.*acfg_sync_reg\[0\]/D}] -quiet
+set_false_path -to [get_pins -hierarchical -regexp {.*mute_sync_reg\[0\]/D}] -quiet
+set_false_path -to [get_pins -hierarchical -regexp {.*u_psg/tgl_sync_reg\[0\]/D}] -quiet
+set_false_path -to [get_pins -hierarchical -regexp {.*u_exec64/snd_ack_sync_reg\[0\]/D}] -quiet
+set audio_payload_regs [get_cells -hierarchical -regexp {.*u_exec64/snd_(ch|freq|vol|frames|slide)_reg(\[[0-9]+\])?}]
+set audio_capture_regs [get_cells -hierarchical -regexp {.*u_psg/v(freq|vol|frames|slide|phase)_reg.*}]
+set audio_capture_pins [get_pins -of_objects $audio_capture_regs -filter {REF_PIN_NAME == D || REF_PIN_NAME == CE || REF_PIN_NAME == R || REF_PIN_NAME == S}]
+set_max_delay -datapath_only 83.333 -from $audio_payload_regs -to $audio_capture_pins
 
 ## µSD slot
 ## µSD — SPI: SCK=cclk MOSI=cmd MISO=d[0] CS=d[3] (LiteX/Digilent)

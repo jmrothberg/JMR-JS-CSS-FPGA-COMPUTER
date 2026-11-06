@@ -17,9 +17,6 @@ function tbSessionProperty(ctx,field,value){
    tbWindow(8,34,612,420,_tbSAboutTitle);_tbChromeWindow=value!=8&&value!=9;
    if(value!=8){ctx.fillStyle="#55CCFF";ctx.fillRect(0,0,640,480);ctx.fillStyle="#FFF";ctx.fillRect(24,88,576,344);}
    _tbSConfigured=0;
-   if((value==1||value==5)&&stgRead(208)==84&&stgRead(209)==66&&stgRead(210)==1){
-    if(stgRead(65)==1)_tbSResume=stgRead(211);stgWrite(208,0);stgWrite(65,0);
-   }
    if(!_tbSInstalled){
     addEventListener("keydown",_tbSessionKey);addEventListener("keyup",_tbSessionKeyUp);
     addEventListener("mousedown",_tbSessionDown);addEventListener("mousemove",_tbSessionMove);addEventListener("mouseup",_tbSessionUp);
@@ -54,10 +51,10 @@ function tbSessionDefaults(){
 }
 function tbSessionCodes(text){var a=[],i=0,c;while(i<128){c=strByte(text,i);if(c<0)break;a.push(c);i=i+1;}return a;}
 function tbSessionEquals(a,text){var i=0;while(i<a.length){if(a[i]!=strByte(text,i))return 0;i=i+1;}return strByte(text,i)<0;}
-function tbSessionParse(spec){
+function tbSessionParse(value){
  var menus=[],title=[],rows=[],text=[],code=0,number=0,heading=1,i=0,c,kind,on;
  while(i<=800){
-  c=strByte(spec,i);i=i+1;
+  c=strByte(value,i);i=i+1;
   if(heading){
    if(c==124)heading=0;else if(c<0)break;else title.push(c);
   }else if(c==61){number=1;code=0;}
@@ -77,10 +74,10 @@ function tbSessionParse(spec){
  }
  return menus;
 }
-function tbSessionMenus(ctx,spec){
+function tbSessionMenus(ctx,value){
  var menus=[],i=0,j=0,base,result=[],part;
- if(strByte(spec,0)>=0)menus=tbSessionParse(spec);
- else{while(i<spec.length){part=tbSessionParse(spec[i]);j=0;while(j<part.length){menus.push(part[j]);j=j+1;}i=i+1;}}
+ if(strByte(value,0)>=0)menus=tbSessionParse(value);
+ else{while(i<value.length){part=tbSessionParse(value[i]);j=0;while(j<part.length){menus.push(part[j]);j=j+1;}i=i+1;}}
  i=0;
  _tbSOwned=menus.length>0&&tbSessionEquals(menus[0][0],"File");
  if(!_tbSOwned){
@@ -106,27 +103,25 @@ function tbSessionMasks(){
   j=j+1;
  }i=i+1;}_tbChanged=1;
 }
-function tbSessionListen(type,fn){
- var k=type=="keydown"?0:type=="keyup"?1:type=="mousedown"?2:type=="mousemove"?3:type=="mouseup"?4:-1;
- if(k<0){addEventListener(type,fn);return;}_tbSCallbacks[k].push(fn);
+function tbSessionListen(text,fn){
+ var k=text=="keydown"?0:text=="keyup"?1:text=="mousedown"?2:text=="mousemove"?3:text=="mouseup"?4:-1;
+ if(k<0){addEventListener(text,fn);return;}_tbSCallbacks[k].push(fn);
 }
-function _tbSessionSend(kind,e){var i=0,list=_tbSCallbacks[kind],fn;while(i<list.length){fn=list[i];fn(e);i=i+1;}}
+function _tbSessionSend(kind,e){var i=0,list=_tbSCallbacks[kind],fn;while(i<list.length){fn=list[i];_tbSessionDraw(fn,e);i=i+1;}}
 function tbSessionSendKey(code){_tbSessionSend(0,{keyCode:code,charCode:0});}
 function _tbSessionKey(e){
  if(e.keyCode==254){tbDialogOpen(1,_tbSAboutTitle,[_tbSAbout],[]);return;}
  if(tbUIKey(e.keyCode,e.charCode))return;
- if(_tbMenu>=0){if(e.keyCode==27){_tbMenu=-1;_tbArmed=-1;_tbChanged=1;}return;}
+ if(_tbMenu>=0){if(e.keyCode==27){_tbErase=1;_tbMenu=-1;_tbArmed=-1;_tbChanged=1;}return;}
  if((_tbSRole==1||_tbSRole==5)&&e.keyCode==113&&!e.charCode){tbSessionCommand(1004,0);return;}
  _tbSessionSend(0,e);
 }
 function _tbSessionKeyUp(e){if(e.keyCode!=254)_tbSessionSend(1,e);}
 function _tbSessionPointer(kind,e){
- var consumed,old=_tbSCapture,y=e.clientY,code=0;
+ var consumed,old=_tbSCapture,y=e.clientY,code=0,x=e.clientX;
  if(kind==2&&e.button==0)_tbSHeld=1;if(kind==4&&e.button==0)_tbSHeld=0;
- if(kind==2&&e.button==0&&(_tbSRole==1||_tbSRole==2||_tbSRole==4||_tbSRole==5)){
-  if(e.clientX>=601&&e.clientX<619&&y>=88&&y<432)code=y<108?128:y>=414?129:y<260?130:131;
-  if(y>=434&&y<453){if(e.clientX>=10&&e.clientX<28)code=132;else if(e.clientX>=582&&e.clientX<600)code=133;}
- }
+ if(kind==2&&e.button==0&&!_tbDialog&&_tbMenu<0&&_tbSChrome){var fn=_tbSChrome;code=fn(1,x,y);}
+
  consumed=code?1:old<0?0:tbUIPointer(e.clientX,y,_tbSHeld);
  if(code)tbSessionSendKey(code);
  if(kind==2)_tbSCapture=consumed?1:-1;
@@ -135,6 +130,7 @@ function _tbSessionPointer(kind,e){
  if(_tbSRole==8&&_tbSViewport){
   e={clientX:e.clientX,clientY:(y-24)*480/456,offsetX:e.offsetX,offsetY:(e.offsetY-24)*480/456,button:e.button,buttons:e.buttons,movementX:e.movementX,movementY:e.movementY*480/456};
  }
+ if(_tbChromeWindow){e.clientX=x-_tbX+8;e.clientY=y-_tbY+34;e.offsetX=e.clientX;e.offsetY=e.clientY;}
  _tbSessionSend(kind,e);
 }
 function _tbSessionDown(e){_tbSessionPointer(2,e);}
@@ -142,7 +138,7 @@ function _tbSessionMove(e){_tbSessionPointer(3,e);}
 function _tbSessionUp(e){_tbSessionPointer(4,e);}
 function tbSessionTransform(a,b,c,d,e,f){
  if(_tbSRole==8&&_tbSViewport)_tbC.setTransform(a,b*0.95,c,d*0.95,e,f*0.95+24);
- else _tbC.setTransform(a,b,c,d,e,f);
+ else _tbC.setTransform(a,b,c,d,e+_tbPortRect[4],f+_tbPortRect[5]);
 }
 function tbSessionFrame(fn){
  _tbSFrames.push(fn);if(!_tbSPending){_tbSPending=1;requestAnimationFrame(_tbSessionFrame);}
@@ -151,7 +147,6 @@ function _tbSessionFrame(t){
  var jobs=_tbSFrames,i=0,fn,command,result,kind=0,j,dirty;
  _tbSFrames=[];_tbSPending=0;_tbSClock=_tbSClock+1;
  if(!_tbSConfigured){tbMenus(tbSessionDefaults());tbSessionMasks();_tbSConfigured=1;}
- if(_tbSResume){j=_tbSResume;_tbSResume=0;_tbSessionAfter(j);}
  command=tbMenuCommand();result=tbDialogResult();
  if(command){
   j=0;while(j<_tbMenus.length){i=0;while(i<_tbMenus[j][1].length){if(_tbMenus[j][1][i][1]==command)kind=_tbMenus[j][1][i][4];i=i+1;}j=j+1;}
@@ -160,26 +155,27 @@ function _tbSessionFrame(t){
  if(result)tbSessionDialogResult(result);
  if(_tbSSwitching)return;
  if(_tbDialog==3&&_tbSClock%30==0){_tbCaretOn=1-_tbCaretOn;_tbChanged=1;}
- dirty=tbUIChanged();if(dirty&&_tbSInvalidator){
-  _tbC.save();_tbC.setTransform(1,0,0,1,0,0);
+ dirty=tbUIChanged();if(dirty&&_tbErase&&_tbSInvalidator){
   if(_tbChromeWindow){
-   _tbC.fillStyle="#55CCFF";_tbC.fillRect(0,22,640,66);_tbC.fillRect(0,88,24,344);
-   _tbC.fillRect(600,88,40,344);_tbC.fillRect(0,432,640,48);
+   if(_tbDamage[2]<=_tbDamage[0])tbDamage(0,22,640,458);
+   tbDamageClip();_tbC.fillStyle="#55CCFF";_tbC.fillRect(0,22,640,458);tbPortPop();
   }
-  fn=_tbSInvalidator;fn();_tbC.restore();
+  fn=_tbSInvalidator;_tbSessionDraw(fn,0);tbDamageClear();_tbErase=0;
  }
  if((_tbMenu>=0||_tbDialog)&&_tbSInvalidator){
   _tbSFrames=jobs;if(!_tbSPending){_tbSPending=1;requestAnimationFrame(_tbSessionFrame);}
- }else{i=0;while(i<jobs.length){fn=jobs[i];fn(t);i=i+1;}}
+ }else{i=0;while(i<jobs.length){fn=jobs[i];_tbSessionDraw(fn,t);i=i+1;}}
  dirty=tbUIChanged()||dirty;
  if(_tbSRole&&(dirty||(_tbSRole==8&&(_tbMenu>=0||_tbDialog)))){
-  _tbC.save();_tbC.setTransform(1,0,0,1,0,0);if(_tbSRole==1||_tbSRole==2||_tbSRole==4||_tbSRole==5){
-   tbBox(601,88,18,344,_tbLight);tbBox(601,88,18,20,"#FFF");tbText([94],606,90);
-   tbBox(601,414,18,18,"#FFF");tbText([118],606,414);
-   tbBox(603,110+Math.min(280,_tbSScrollY),14,20,"#FFF");
-   tbBox(10,434,590,19,_tbLight);tbBox(10,434,18,19,"#FFF");tbText([60],14,435);
-   tbBox(582,434,18,19,"#FFF");tbText([62],587,435);
-  }
+  _tbC.save();_tbC.setTransform(1,0,0,1,0,0);if(_tbSChrome){fn=_tbSChrome;fn(0,_tbSScrollY,_tbSScrollX);}
   tbUIDraw();_tbC.restore();
  }
 }
+
+function _tbSessionDraw(fn,e){
+ if(_tbChromeWindow){if(tbPortPush(_tbX+16,_tbY+54,_tbW-36,_tbH-76,_tbX-8,_tbY-34)<0)return -1;fn(e);tbPortPop();}
+ else fn(e);
+}
+
+var _tbSChrome=0;
+function tbSessionChrome(fn){_tbSChrome=fn;}
