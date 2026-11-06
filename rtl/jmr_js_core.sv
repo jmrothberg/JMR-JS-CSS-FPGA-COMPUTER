@@ -885,14 +885,17 @@ module jmr_js_core #(
     );
     jmr_mini_fb u_fb (
         .wr_clk(clk), .rst_n(rst_n),
-        .we(fb_we), .waddr(fb_waddr), .wdata(fb_wdata),
+        .we(fb_we), .address_we(fb_raw_we), .waddr(fb_waddr), .wdata(fb_wdata),
         .copy_raddr(fbp_copy_raddr), .copy_rdata(fbp_copy_rdata),
         .dirty_blocks(fb_dirty_blocks), .dirty_clear(fb_dirty_clear),
         .dump_raddr(tb_fb_req ? tb_fb_raddr : vm_dump_sel ? vm_dump_addr : dump_fb_raddr),
         .dump_rdata(dump_fb_rdata)
     );
     // canvas is single-surface now: back/front dumps are the same data
-    assign dump_back_rdata = dump_fb_rdata;
+    // VM getImageData has an existing full VM settle beat after each address
+    // change. Register only its byte at 100 MHz; Toolbox/tether retain the
+    // original one-clock Port-A interface and acknowledgement discipline.
+    always_ff @(posedge clk) dump_back_rdata <= dump_fb_rdata;
     assign stor_dbg_state_o = stor_dbg_state;
     assign stor_dbg_op_clk_o = stor_dbg_op_clk;
     assign game_view_o = game_view || desk_visible;
@@ -1096,7 +1099,7 @@ module jmr_js_core #(
         .fb_present_busy(fb_present_busy),
         .fb_dump_addr(vm_dump_addr), .fb_dump_sel(vm_dump_sel),
         .fb_dump_back(dump_back_rdata),
-        .fb_dump_front(dump_fb_rdata),
+        .fb_dump_front(dump_back_rdata),
         .sram_req(vm_sram_req), .sram_addr(vm_sram_addr),
         .sram_we(vm_sram_we), .sram_wdata(vm_sram_wdata),
         .sram_rdata(vm_ack_hold ? vm_rdata_hold : sram_rdata),

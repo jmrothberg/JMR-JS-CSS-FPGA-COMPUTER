@@ -1095,7 +1095,7 @@ class Machine:
             "console.log": self._nat_log,
             # NEW: runtime key enumeration (mk.js for-in desugar)
             "Object.keys": self._nat_object_keys,
-            "fillRect": self._nat_fill_rect,
+            "fillRect": self._nat_fill_rect_raw,
             "clearRect": self._nat_clear_rect,
             "clear": self._nat_clear,
             "swapBuffers": self._nat_swap,
@@ -1190,12 +1190,39 @@ class Machine:
         }
 
     def _nat_ctx_xform(self, x=0, y=0, sx=1, sy=1):
-        # NEW: setTransform scale (DONKEY world 1510×685 → 640×480 glass)
-        self._ctx_tx = float(x or 0)
-        self._ctx_ty = float(y or 0)
-        self._ctx_sx = float(sx if sx is not None else 1) or 1.0
-        self._ctx_sy = float(sy if sy is not None else 1) or 1.0
+        # Axis transforms use the processor's signed Q16 registers. Zero
+        # after conversion substitutes unity, including sub-Q16 values.
+        self._ctx_tx = self._canvas_i32(x)
+        self._ctx_ty = self._canvas_i32(y)
+        self._ctx_sx = (self._canvas_q16(1 if sx is None else sx) or 65536) / 65536
+        self._ctx_sy = (self._canvas_q16(1 if sy is None else sy) or 65536) / 65536
         return None
+
+    @staticmethod
+    def _canvas_signed(value, bits=32):
+        value = int(value) & ((1 << bits) - 1)
+        return value - (1 << bits) if value & (1 << (bits - 1)) else value
+
+    @classmethod
+    def _canvas_i32(cls, value):
+        import math
+        if type(value) not in (int, float):
+            return 0
+        try:
+            return cls._canvas_signed(int(value)) if math.isfinite(value) else 0
+        except (OverflowError, ValueError):
+            return 0
+
+    @classmethod
+    def _canvas_q16(cls, value):
+        import math
+        if type(value) not in (int, float):
+            return 0
+        try:
+            scaled = value * 65536
+            return cls._canvas_signed(int(scaled)) if math.isfinite(scaled) else 0
+        except (OverflowError, ValueError):
+            return 0
 
     _XF_OMIT = object()
 
@@ -1205,22 +1232,46 @@ class Machine:
         Point form is omit-w (`_xf(x, y)`). A rect native that passes JS
         undefined (None) still gets four values — ToNumber(undefined)=0.
         """
-        sx = float(getattr(self, "_ctx_sx", 1) or 1)
-        sy = float(getattr(self, "_ctx_sy", 1) or 1)
-        tx = float(getattr(self, "_ctx_tx", 0) or 0)
-        ty = float(getattr(self, "_ctx_ty", 0) or 0)
-        ix = int(float(x or 0) * sx + tx)
-        iy = int(float(y or 0) * sy + ty)
+        sx = self._canvas_q16(getattr(self, '_ctx_sx', 1)) or 65536
+        sy = self._canvas_q16(getattr(self, '_ctx_sy', 1)) or 65536
+        tx = self._canvas_i32(getattr(self, '_ctx_tx', 0))
+        ty = self._canvas_i32(getattr(self, '_ctx_ty', 0))
+        ix = (self._canvas_i32(x) * sx >> 16) + tx
+        iy = (self._canvas_i32(y) * sy >> 16) + ty
         if w is self._XF_OMIT:
             return ix, iy
-        ww = 0 if w is None else w
-        hh = 0 if h is None else h
+        ww = self._canvas_i32(w)
+        hh = self._canvas_i32(h)
         return (
             ix,
             iy,
-            max(1, int(float(ww or 0) * sx)),
-            max(1, int(float(hh or 0) * sy)),
+            max(1, ww * sx >> 16) if ww > 0 and sx > 0 else 0,
+            max(1, hh * sy >> 16) if hh > 0 and sy > 0 else 0,
         )
+
+    def _path_point(self, x, y):
+        """Paths retain Q16 coordinates; rectangle/text operands use ToInt32.
+
+        The existing path transform uses a Q32 product and truncates toward
+        zero, while its identity fast path arithmetic-shifts Q16 positions.
+        """
+        xq, yq = self._canvas_q16(x), self._canvas_q16(y)
+        sx = self._canvas_q16(getattr(self, '_ctx_sx', 1)) or 65536
+        sy = self._canvas_q16(getattr(self, '_ctx_sy', 1)) or 65536
+        tx = self._canvas_i32(getattr(self, '_ctx_tx', 0))
+        ty = self._canvas_i32(getattr(self, '_ctx_ty', 0))
+        if sx == sy == 65536:
+            return self._canvas_signed((xq >> 16) + tx), self._canvas_signed((yq >> 16) + ty)
+        def axis(v, scale, translation):
+            product = self._canvas_signed(v * scale + (translation << 32), 64)
+            truncated = -((-product) >> 32) if product < 0 else product >> 32
+            return self._canvas_signed(truncated)
+        return axis(xq, sx, tx), axis(yq, sy, ty)
+
+    def _native_axis32(self, value, scale, translation=0):
+        """Legacy text/image consumer: signed32 product, then arithmetic shift."""
+        product = self._canvas_signed(self._canvas_i32(value) * self._canvas_q16(scale))
+        return self._canvas_signed((product >> 16) + self._canvas_i32(translation))
 
     def _nat_fill_style_css(self, color):
         """Map CSS color to a 256-entry title-palette index.
@@ -1271,6 +1322,12 @@ class Machine:
             self.canvas.fill_rect(ix, iy, iw, ih)
         return None
 
+    def _nat_fill_rect_raw(self, x=0, y=0, w=0, h=0, color=1):
+        """Native2 is raw indexed geometry, independent of Canvas state."""
+        self.canvas.fill_rect(*(self._canvas_i32(v) for v in (x, y, w, h)),
+                              self._canvas_i32(color) & 255)
+        return None
+
     def _nat_draw_image(self, *args):
         """Blit sprite pixels from Image._pix / jmr:spr pack (no magenta stub)."""
         sx = sy = 0
@@ -1312,24 +1369,26 @@ class Machine:
         # the dest origin to the rect's own left/top edge, keep the width
         # positive, and let blit_indexed's flip_x/flip_y mirror the dest
         # column/row order (source walk stays forward, same as RTL).
-        css = float(getattr(self, "_ctx_sx", 1) or 1)
-        csy = float(getattr(self, "_ctx_sy", 1) or 1)
-        ctx = float(getattr(self, "_ctx_tx", 0) or 0)
-        cty = float(getattr(self, "_ctx_ty", 0) or 0)
-        fdx = float(dx or 0) * css + ctx
-        fdy = float(dy or 0) * csy + cty
-        fdw = float(dw or 0) * css
-        fdh = float(dh or 0) * csy
+        css = getattr(self, '_ctx_sx', 1) or 1
+        csy = getattr(self, '_ctx_sy', 1) or 1
+        ctx = getattr(self, '_ctx_tx', 0)
+        cty = getattr(self, '_ctx_ty', 0)
+        fdx = self._native_axis32(dx, css, ctx)
+        fdy = self._native_axis32(dy, csy, cty)
+        fdw = self._native_axis32(dw, css)
+        fdh = self._native_axis32(dh, csy)
         flip_x = fdw < 0
         flip_y = fdh < 0
         if flip_x:
-            fdx += fdw
+            fdx = self._canvas_signed(fdx + fdw)
             fdw = -fdw
         if flip_y:
-            fdy += fdh
+            fdy = self._canvas_signed(fdy + fdh)
             fdh = -fdh
-        idx, idy = int(fdx), int(fdy)
-        idw, idh = max(1, int(fdw)), max(1, int(fdh))
+        idx, idy = max(-2048, min(2047, fdx)), max(-2048, min(2047, fdy))
+        idw, idh = int(fdw), int(fdh)
+        if idw <= 0 or idh <= 0:
+            return None
         try:
             self.canvas.blit_indexed(
                 pix, iw, ih, int(sx), int(sy), int(sw), int(sh),
@@ -1339,19 +1398,43 @@ class Machine:
             pass
         return None
 
-    def _font_scale(self, font=None) -> int:
-        """ctx.font '20px Arial' → integer glyph scale (8×8 base), including
-        the current canvas x-scale (DONKEY world→glass setTransform)."""
-        px = 8.0
-        if font:
-            m = None
-            import re as _re
+    def _note_font_px(self, font) -> None:
+        """Match the bounded S_FONTPX byte parser, including its legacy limits.
 
-            m = _re.search(r"(\d+(?:\.\d+)?)\s*px", str(font))
-            if m:
-                px = float(m.group(1))
-        sx = float(getattr(self, "_ctx_sx", 1) or 1)
-        return max(1, int(round(px * sx / 8.0)))
+        A nonzero digit run followed by p/P commits the 8-bit accumulator;
+        spaces preserve it. Invalid assignments retain the previous size.
+        This parser is intentionally not a browser CSS font parser.
+        """
+        if not isinstance(font, str):
+            return
+        raw = font.encode('utf-8')
+        accumulator = 0
+        # The hardware font walker holds its remaining byte count in 8 bits.
+        for byte in raw[:max(1, len(raw) & 255)]:
+            if 48 <= byte <= 57:
+                if accumulator < 26:
+                    accumulator = (accumulator * 10 + byte - 48) & 255
+            elif byte in (80, 112) and accumulator:
+                self._ctx_font_px = accumulator
+                return
+            elif byte != 32:
+                accumulator = 0
+
+    def _font_scale(self, font=None) -> int:
+        """The chip's signed Q16 x-scale, half-up rounding and 1..15 glyph cap."""
+        if font is not None:
+            self._note_font_px(font)
+        px = int(getattr(self, '_ctx_font_px', 8))
+        sx = float(getattr(self, '_ctx_sx', 1) or 1)
+        import math
+        fixed = int(sx * 65536) & 0xffffffff if math.isfinite(sx) else 0
+        if fixed & 0x80000000:
+            fixed -= 0x100000000
+        # setTransform substitutes unity after conversion produces zero.
+        if fixed == 0:
+            fixed = 65536
+        rounded = (px * fixed + 262144) // 524288
+        return max(1, min(15, rounded))
 
     def _note_baseline(self, name) -> None:
         """ctx.textBaseline. top/middle/bottom update the register.
@@ -1373,22 +1456,33 @@ class Machine:
             self._nat_fill_style_css(style)
         if baseline is not None:
             self._note_baseline(baseline)
-        ix, iy = self._xf(x, y)
+        # Native text retains its signed32 transform expression and16-bit pen.
+        ix = self._canvas_signed(self._native_axis32(x, getattr(self, '_ctx_sx', 1),
+                                                    getattr(self, '_ctx_tx', 0)), 16)
+        iy = self._canvas_signed(self._native_axis32(y, getattr(self, '_ctx_sy', 1),
+                                                    getattr(self, '_ctx_ty', 0)), 16)
+        # Legacy Canvas text is a 64-byte glyph walk, not Unicode shaping.
+        # The hardware font ROM addresses each UTF-8 byte with its low 7 bits.
+        text = ''.join(chr(byte & 127) if 32 <= (byte & 127) < 127 else ' '
+                       for byte in str(t).encode('utf-8')[:64])
         self.canvas.fill_text(
-            t, ix, iy, align=str(align or "left"), scale=self._font_scale(font),
+            text, ix, iy, align=str(align or "left"), scale=self._font_scale(font),
             baseline=int(getattr(self, "_ctx_baseline", 0) or 0),
         )
         return None
 
     def _nat_measure_text(self, t, font=None):
-        # NEW: width matches fill_text glyph geometry (8 px × scale per char)
-        return {"width": len(str(t)) * 8 * self._font_scale(font)}
+        # Measurement uses the full encoded byte length, even though a draw
+        # emits at most 64 bytes. This matches the native text service contract.
+        return {"width": len(str(t).encode('utf-8')) * 8 * self._font_scale(font)}
 
     def _nat_stroke_rect(self, x, y, w, h, style=None):
         # NEW: 1px outline via four edges (device-space thickness)
         if style is not None:
             self._nat_fill_style_css(style)
         ix, iy, iw, ih = self._xf(x, y, w, h)
+        if iw <= 0 or ih <= 0:
+            return None
         c = self.canvas.fill_style
         self.canvas.fill_rect(ix, iy, iw, 1, c)
         self.canvas.fill_rect(ix, iy + ih - 1, iw, 1, c)
@@ -1471,7 +1565,7 @@ class Machine:
                 op = parts[0]
             if op == "A" and len(parts) >= 4:
                 cx, cy, r = float(parts[1]), float(parts[2]), float(parts[3])
-                ix, iy = self._xf(cx, cy)
+                ix, iy = self._path_point(cx, cy)
                 sx = float(getattr(self, "_ctx_sx", 1) or 1)
                 # NEW: real start/end angles (PACMAN mouth / ghost skirts)
                 a0 = float(parts[4]) if len(parts) > 4 else 0.0
@@ -1488,15 +1582,15 @@ class Machine:
                     )
                 self._path_x, self._path_y = ix, iy
             elif op == "L" and len(parts) >= 3:
-                x1, y1 = self._xf(float(parts[1]), float(parts[2]))
+                x1, y1 = self._path_point(float(parts[1]), float(parts[2]))
                 x0 = getattr(self, "_path_x", x1)
                 y0 = getattr(self, "_path_y", y1)
                 self._line(x0, y0, x1, y1, c)
                 self._path_x, self._path_y = x1, y1
             elif op == "Q" and len(parts) >= 5:
                 # NEW: quadratic curve — subdivide into 8 line segments
-                qcx, qcy = self._xf(float(parts[1]), float(parts[2]))
-                x1, y1 = self._xf(float(parts[3]), float(parts[4]))
+                qcx, qcy = self._path_point(float(parts[1]), float(parts[2]))
+                x1, y1 = self._path_point(float(parts[3]), float(parts[4]))
                 x0 = getattr(self, "_path_x", x1)
                 y0 = getattr(self, "_path_y", y1)
                 px, py = x0, y0
@@ -1509,7 +1603,7 @@ class Machine:
                     px, py = bx, by
                 self._path_x, self._path_y = x1, y1
             elif op == "M" and len(parts) >= 3:
-                self._path_x, self._path_y = self._xf(float(parts[1]), float(parts[2]))
+                self._path_x, self._path_y = self._path_point(float(parts[1]), float(parts[2]))
 
     def _line(self, x0, y0, x1, y1, c) -> None:
         self.canvas.dirty = True

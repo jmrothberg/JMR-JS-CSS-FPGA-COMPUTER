@@ -82,6 +82,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     logic [7:0]  snd_frames;
     logic [7:0]  snd_slide;
     wire rst_n;
+    wire reset_request_n;
     wire ui_clk, ui_clk_sync_rst, init_calib_complete;
     wire mig_sys_rst_n;
 
@@ -106,7 +107,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     // NEW: BTNC also resets (matches the T100/BASIC board habit)
     assign mig_sys_rst_n = cpu_resetn & mmcm_locked & ~btnc;
     assign core_clk = ui_clk;
-    assign rst_n = mig_sys_rst_n & init_calib_complete & ~ui_clk_sync_rst;
+    assign reset_request_n = mig_sys_rst_n & init_calib_complete & ~ui_clk_sync_rst;
 `else
     assign core_clk = clk100;
     assign mmcm_locked = 1'b1;
@@ -115,7 +116,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     assign ui_clk_sync_rst = 1'b0;
     assign init_calib_complete = 1'b1;
     assign mig_sys_rst_n = cpu_resetn & ~btnc;
-    assign rst_n = cpu_resetn & ~btnc;
+    assign reset_request_n = cpu_resetn & ~btnc;
     reg [1:0] pix_div;
     assign pixel_clk = pix_div[1];
     always @(posedge clk100 or negedge cpu_resetn) begin
@@ -123,6 +124,17 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
         else pix_div <= pix_div + 1'b1;
     end
 `endif
+
+    // Assert immediately on button/DDR/clock failure; release locally after
+    // two core edges. Keep MIG reset qualification off high-fanout leaf
+    // asynchronous-reset recovery paths. This changes reset release only.
+    (* ASYNC_REG = "TRUE" *) logic [1:0] core_reset_release;
+    always_ff @(posedge core_clk or negedge reset_request_n) begin
+        if (!reset_request_n) core_reset_release <= 2'b00;
+        else core_reset_release <= {core_reset_release[0], 1'b1};
+    end
+    assign rst_n = core_reset_release[1];
+
 
     logic desktop_keyboard_mode;
     logic [24:0] mouse_packet;

@@ -10,7 +10,7 @@ module tb_toolbox;
  logic [21:0] held_addr;logic held_we;logic [15:0] held_data;
  always #5 clk=~clk;
  // Exercise the REAL synchronous write-priority BRAM port used by the core.
- jmr_mini_fb canvas(.wr_clk(clk),.rst_n,.we(fwe),.waddr(fa),.wdata(fd),
+ jmr_mini_fb canvas(.wr_clk(clk),.rst_n,.we(fwe),.address_we(fwe),.waddr(fa),.wdata(fd),
  .dirty_clear(dirty_clear),.dirty_blocks(dirty),.copy_raddr(19'd0),.copy_rdata(),
  .dump_raddr(fra),.dump_rdata(frd));
  always_ff @(posedge clk)if(!rst_n)fack<=0;else fack<=freq && !fwe;

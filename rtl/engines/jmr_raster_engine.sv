@@ -93,6 +93,7 @@ module jmr_raster_engine #(
     logic [22:0] so, row_so;      // blit source offsets (byte index)
     logic [22:0] row_step;        // stride*qy, latched at go
     logic [18:0] imgd_i;          // linear imgd source index
+    logic imgd_in_range; // advanced with imgd_i; no compare on write enable
     logic        fetch_wait;
     // dest address, incremental (peer review pre-run-51): fb_row is the
     // current row's first pixel, fb_addr the current pixel. One constant
@@ -185,7 +186,10 @@ module jmr_raster_engine #(
                 ax <= ax + rxr_q;
             end
         end
-        if (!held) imgd_i <= imgd_i + 19'd1;
+        if (!held) begin
+            imgd_i <= imgd_i + 19'd1;
+            imgd_in_range <= (imgd_i < 19'(FB_PIXELS-1)) || (&imgd_i);
+        end
     endtask
 
     // Fill and ImageData walk consecutive destination/source pixels;
@@ -202,6 +206,7 @@ module jmr_raster_engine #(
             fb_addr <= fb_addr + 19'd1;
         end
         imgd_i <= imgd_i + 19'd1;
+        imgd_in_range <= (imgd_i < 19'(FB_PIXELS-1)) || (&imgd_i);
     endtask
 
     always_ff @(posedge clk) begin
@@ -242,6 +247,7 @@ module jmr_raster_engine #(
                     row_so <= sbase + 23'(sy) * 23'(stride) + 23'(sx);
                     row_step <= 23'(qy) * 23'(stride);
                     imgd_i <= 19'(sbase[18:0]);
+                    imgd_in_range <= sbase[18:0] < 19'(FB_PIXELS);
                     fetch_wait <= 1'b0;
                     nxt_ok <= 1'b0;     // precompute settles next clk
                     cw_valid <= 1'b0;   // never serve across ops (re-uploads)
@@ -302,7 +308,7 @@ module jmr_raster_engine #(
                     end
                     default: begin // M_IMGD
                         if (!fetch_wait && cw_valid && cw_tag == px_word &&
-                            imgd_i < 19'(FB_PIXELS)) begin
+                            imgd_in_range) begin
                             if (inb) begin
                                 fb_we <= 1'b1;
                                 fb_waddr <= pix_addr;
@@ -316,14 +322,14 @@ module jmr_raster_engine #(
                                 adv_linear();
                                 // The high byte finishes this word. Start
                                 // the next read while that pixel is written.
-                                if (imgd_i[0] && imgd_i + 19'd1 < 19'(FB_PIXELS)) begin
+                                if (imgd_i[0] && imgd_i < 19'(FB_PIXELS-1)) begin
                                     sram_addr <= px_word + 21'd1;
                                     sram_req <= 1'b1;
                                     fetch_wait <= 1'b1;
                                 end
                             end
                         end else if (!fetch_wait) begin
-                            if (imgd_i < 19'(FB_PIXELS)) begin
+                            if (imgd_in_range) begin
                                 sram_req <= 1'b1;
                                 sram_addr <= px_word;
                                 fetch_wait <= 1'b1;
@@ -351,7 +357,7 @@ module jmr_raster_engine #(
                                 // A low byte is followed by its cached high
                                 // byte; a high byte hands off the next word.
                                 // Arbitration can preempt at every ack.
-                                if (imgd_i[0] && imgd_i + 19'd1 < 19'(FB_PIXELS)) begin
+                                if (imgd_i[0] && imgd_i < 19'(FB_PIXELS-1)) begin
                                     sram_addr <= sram_addr + 21'd1;
                                     sram_req <= 1'b1;
                                     fetch_wait <= 1'b1;

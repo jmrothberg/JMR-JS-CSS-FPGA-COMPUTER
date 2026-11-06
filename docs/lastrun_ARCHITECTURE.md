@@ -9,11 +9,12 @@ UI ownership (UIMAN), and cooperative session ownership (UISESS). Their ROM,
 LNK and resident clients form one matched set; delivery/readback status belongs
 to its release manifest. The library uses **8096 of 8191 mutable words, leaving 95 spare**.
 
-**Run81 is the one active implementation/RTL-simulation candidate**. Its
-software tree is `build/run81_mac_native/source/storage/`; its matching disk is
-`build/run81_mac_native/card.img`. No FPGA build or physical update is authorized
-for this step. Root published software and older builds remain preserved records,
-not competing test candidates. RTL checks do not establish board acceptance.
+**Run81 is the one active implementation candidate.** The canonical published
+source is root `rtl/` and `storage/`, with root `card.img`; `CURRENT_SET.json`
+records it. Post-review corrections are isolated in `build/run81_mac_native/source`
+until fresh RTL/Python checks pass. The completed FPGA implementation failed
+setup timing by 1.652 ns. Another build is authorized after the corrections are
+verified; it has not started. Simulation does not establish board acceptance.
 User testing confirmed working menus and several games, and exposed graphics
 and intermittent pointer regressions. Targeted RTL checks cover the earlier
 nine software fixes. Earlier checkpoints have actual RTL GRAPHICS/cold-ROM evidence. Current shared-manager software passed focused native-instruction-model checks and the final combined RTL simulation against its exact frozen ROM and disk. FPGA routing/timing and physical acceptance remain separate.

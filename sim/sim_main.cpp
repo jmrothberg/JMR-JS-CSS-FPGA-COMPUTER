@@ -421,6 +421,20 @@ static uint64_t key_pending_up[256] = {0}; // 0=none, else flush at this frame c
 static unsigned last_fclk = 0;
 static unsigned last_fcap = 0;
 static unsigned fcap_n = 0;
+// A bounded FRAME RPC is a slice of one logical frame. Retain its pulse and
+// completion baseline across slices; reaching WAIT on resume must not launch
+// a second callback. Reset/start/stop invalidate any suspended host operation.
+struct FrameResume {
+    bool pending = false;
+    bool pulsed = false;
+    bool left_wait = false;
+    bool plain = false;
+    unsigned idle_run = 0;
+    unsigned swap0 = 0;
+    uint64_t epoch = 0;
+};
+static FrameResume frame_resume;
+static uint64_t frame_epoch = 0;
 // Latch rAF/fn SRAM view on first fault — later IDLE ticks overwrite rdata.
 static unsigned fault_snap_code = 0;
 static unsigned fault_snap_raddr = 0;
@@ -585,6 +599,11 @@ static void tick() {
     }
     audio_environment_step();
     top->clk = 0; top->pixel_clk = 0; top->eval();
+    if (!top->rst_n || top->rootp->jmr_js_core__DOT__vm_start_lat
+        || top->rootp->jmr_js_core__DOT__vm_stop_lat) {
+        frame_resume = FrameResume{};
+        ++frame_epoch;
+    }
     uint8_t miso = 1;
     sd.step(top->sd_cs_n != 0, top->sd_sck != 0, top->sd_mosi != 0, &miso);
     top->sd_miso = miso;
@@ -2744,7 +2763,13 @@ int main(int argc, char** argv) {
         // NEW: OBJPEEK <oid> — dump one heap object (cls, n, key/val/tag slots)
         if (line.rfind("OBJPEEK ", 0) == 0) {
             auto* r = top->rootp;
-            unsigned oid = std::stoul(line.substr(8)) & (VM_MAX_OBJ - 1);
+            // VM_MAX_OBJ is not necessarily a power of two: masking aliases IDs.
+            const auto requested_oid = std::stoul(line.substr(8));
+            if (requested_oid >= VM_MAX_OBJ) {
+                std::cout << "ERR OBJPEEK object id out of range" << std::endl;
+                continue;
+            }
+            const unsigned oid = static_cast<unsigned>(requested_oid);
             const bool value64 =
                 (unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u) != 0;
             unsigned ns = value64
@@ -3605,16 +3630,21 @@ int main(int argc, char** argv) {
         // drawBitmap is per-pixel str[i]+fillRect, so FRAME capped mid-rAF
         // (~1 swap per 5 GUI frames) and the wave crawled. Cap is not SPI.
         if (line == "FRAME" || line.rfind("FRAME ", 0) == 0) {
+            if (frame_resume.pending && frame_resume.epoch != frame_epoch)
+                frame_resume = FrameResume{};
+            const bool resuming = frame_resume.pending;
+            const bool plain_frame = resuming ? frame_resume.plain : line == "FRAME";
+            const uint64_t epoch0 = frame_epoch;
             // flush taps deferred by the KEYEVT handler: these ups enter
             // the FIFO now and dispatch at THIS frame's event phase,
             // after the rAF callback has seen the key held once.
             for (int kc = 0; kc < 256; kc++)
-                if (key_pending_up[kc] &&
+                if (!resuming && key_pending_up[kc] &&
                     key_pending_up[kc] <= key_frame_counter) {
                     key_pending_up[kc] = 0;
                     key_strobe((unsigned)kc, 0);
                 }
-            if (line == "FRAME") key_frame_counter++;
+            if (!resuming && plain_frame) key_frame_counter++;
             // Debug ergonomics: a frame that never presents used to burn
             // 64M clocks (~30 s of wall time) with the server inside this
             // RPC, so the GUI ignored ESC and had to be restarted. The
@@ -3638,9 +3668,9 @@ int main(int argc, char** argv) {
                 int(std::max(1000ul, std::min(512000000ul, std::stoul(line.substr(6)))));
             int used = 0;
             int got = 0;
-            int pulsed = 0;
-            int left_wait = 0;
-            int idle_run = 0;   // NEW: clocks parked in S_WAIT_FRAME after the pulse
+            int pulsed = resuming && frame_resume.pulsed;
+            int left_wait = resuming && frame_resume.left_wait;
+            int idle_run = resuming ? int(frame_resume.idle_run) : 0;
             int dead = 0;       // NEW: VM already halted — do not burn the cap
             auto* rframe = top->rootp;
             // A frame is finished when the VM PRESENTS. The older test
@@ -3651,7 +3681,7 @@ int main(int argc, char** argv) {
             // play. Every play frame therefore burned the whole 64M cap and
             // the GUI blocked on this RPC (INVADERS "locked the terminal",
             // PACMAN black, ASTEROID score-only). Watch the present counter.
-            unsigned swap0 =
+            unsigned swap0 = resuming ? frame_resume.swap0 :
                 unsigned(rframe->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n);
             unsigned long frame_ipn = 0;
             unsigned ip_prev_f = 0xffff;
@@ -3805,8 +3835,19 @@ int main(int argc, char** argv) {
                 ip_trace.clear();
                 ip_trace_cap = 0;
             }
-            if (line != "FRAME" && got) key_frame_counter++;
+            if (!plain_frame && got) key_frame_counter++;
             if (!got && !dead) fcap_n++;
+            if (!got && !dead && epoch0 == frame_epoch) {
+                frame_resume.pending = true;
+                frame_resume.pulsed = pulsed != 0;
+                frame_resume.left_wait = left_wait != 0;
+                frame_resume.plain = plain_frame;
+                frame_resume.idle_run = unsigned(idle_run);
+                frame_resume.swap0 = swap0;
+                frame_resume.epoch = epoch0;
+            } else {
+                frame_resume = FrameResume{};
+            }
             // 2026-09-01: same reason as the TICKN flush — the editor's F2
             // save and the compile mint land during FRAME pumping; RUN and
             // the GUI read card.img from disk. No-op unless the card is dirty.

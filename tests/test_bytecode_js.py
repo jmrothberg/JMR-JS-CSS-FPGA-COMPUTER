@@ -9,6 +9,7 @@ from functional_model.bytecode import Chunk, Op
 from functional_model.compiler import compile_source
 from functional_model.jsb_format import (
     FLAG_SOURCE_MAP,
+    FLAG_TOOLBOX,
     FLAG_VALUE64,
     MAGIC,
     NATIVE_IDS,
@@ -2674,6 +2675,11 @@ def test_pacman_hm_raf_stays_armed():
     beige = nearest_palette_index(hw.canvas.palette, (245, 245, 220), lo=1)
     w = hw.canvas.width
     cx, cy = 16 + 1 * 14 + 7, 8 + 3 * 14 + 7
+    if hw.program_image.flags & FLAG_TOOLBOX:
+        # The resident game session reserves24 rows through a software
+        # transform; it deliberately does not enable the old native viewport.
+        assert hw._m._ctx_sy == 62259 / 65536 and hw._m._ctx_ty == 24
+        cy = 24 + cy * 62259 // 65536
     blob = 0
     for yy in range(cy - 5, cy + 6):
         row = yy * w
@@ -2779,6 +2785,7 @@ def test_hw_value64_p0_getelementbyid_canvas():
     """document.getElementById must return a node that getContext can paint."""
     vm = _hw_v64(
         'var c = document.getElementById("c").getContext("2d");\n'
+        'c.fillStyle = "white";\n'
         "c.fillRect(4, 4, 2, 2);\n"
         "swapBuffers();\n"
     )
@@ -3668,6 +3675,7 @@ def test_hw_value64_p1_settransform():
     vm = _hw_v64(
         """
 var c = document.querySelector("canvas").getContext("2d");
+c.fillStyle = "white";
 c.setTransform(1, 0, 0, 1, 50, 0);
 c.fillRect(0, 2, 2, 2);
 swapBuffers();
@@ -3684,6 +3692,7 @@ def test_hw_value64_p1_save_restore():
     vm = _hw_v64(
         """
 var c = document.querySelector("canvas").getContext("2d");
+c.fillStyle = "white";
 c.setTransform(1, 0, 0, 1, 60, 0);
 c.save();
 c.setTransform(1, 0, 0, 1, 0, 0);
@@ -3703,6 +3712,7 @@ def test_hw_value64_p1_translate_rotate():
     vm = _hw_v64(
         """
 var c = document.querySelector("canvas").getContext("2d");
+c.fillStyle = "white";
 c.translate(20, 20);
 c.rotate(1.570796);
 c.fillRect(0, 0, 8, 2);
@@ -3726,6 +3736,7 @@ def test_hw_value64_p1_global_alpha():
     vm = _hw_v64(
         """
 var c = document.querySelector("canvas").getContext("2d");
+c.fillStyle = "white";
 c.fillRect(0, 5, 4, 4);
 c.globalAlpha = 0;
 c.fillRect(20, 5, 4, 4);
@@ -3743,6 +3754,7 @@ def test_hw_value64_p1_get_put_imagedata():
     vm = _hw_v64(
         """
 var c = document.querySelector("canvas").getContext("2d");
+c.fillStyle = "white";
 c.fillRect(1, 1, 2, 2);
 var d = c.getImageData(1, 1, 2, 2);
 c.putImageData(d, 12, 12);

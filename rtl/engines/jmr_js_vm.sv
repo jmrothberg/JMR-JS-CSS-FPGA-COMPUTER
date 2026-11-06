@@ -481,7 +481,7 @@ module jmr_js_vm #(
     logic [63:0] vmetrics;
     logic        valloc_metrics_ff;
     logic        valloc_metrics;
-    logic [15:0] vmetrics_w;
+    logic [31:0] vmetrics_w;
     logic [63:0] vkev_event;
     logic vmouse_active;
     logic [47:0] vmouse_packet;
@@ -596,6 +596,7 @@ module jmr_js_vm #(
     // S_V64_RECT_LD: one SRAM beat per fillRect arg (addr, then vst_rdata).
     logic        rect_ld_arm;
     logic [1:0]  rect_ld_k;
+    logic signed [47:0] rect_origin_x, rect_origin_y;
     logic [7:0] vdraw_color_ff;
     logic [7:0] vdraw_color;
     // NEW: tagged stack/vars for HTML heap (0=int 1=obj 2=arr 3=str 4=fn 5=undef 6=elem)
@@ -981,6 +982,9 @@ module jmr_js_vm #(
     logic [31:0] txt_val;               // the text argument itself
     logic [2:0]  txt_vt;
     logic signed [47:0] txt_kp;         // font_px x ctx_sx (scale product)
+    wire signed [47:0] text_scale_rounded = (txt_kp + 48'sd262144) >>> 19;
+    wire [3:0] text_font_scale = text_scale_rounded < 48'sd1 ? 4'd1 :
+        text_scale_rounded > 48'sd15 ? 4'd15 : text_scale_rounded[3:0];
     logic [15:0] txt_w;                 // text width in device pixels
     logic [1:0]  ctx_align;             // ctx.textAlign 0=left 1=center 2=right
     // ctx.textAlign is written by the exec that runs SET_PROP, and the
@@ -1911,6 +1915,8 @@ module jmr_js_vm #(
     logic        vgc_rd_arm, jn_rd_arm, vfe_rd_arm, vjs_rd_arm;
     // S_V64_STRIDX: name_rdata then char_id_rdata (two Port A lags).
     logic        stridx_rd_arm;
+    logic        stridx_alloc_pending;
+    logic [9:0]  stridx_alloc_id;
     // flatten: second beat after varr_rdata / vobj_rdata so name_hash raddr
     // can follow the intern id (stale 0 = wait, never peek).
     logic        jn_name_arm, vjs_name_arm, tfn_rd_arm;
@@ -2190,6 +2196,39 @@ module jmr_js_vm #(
     // was a 1024×16 mux (Synth 8-4556 on venv_val).
 
     // ARRAY_GET/SET use Number-to-integer truncation without modulo wrapping.
+    // len<=65535 and scale<=15: exact width fits23bits. Balanced
+    // shift/add avoids another multiplier beside the shared font product.
+    // Intersect original signed geometry before narrowing to raster ports.
+    function automatic logic [19:0] rect_clip_axis(
+        input logic signed [47:0] origin,
+        input logic signed [47:0] extent,
+        input logic [9:0] limit);
+        logic signed [48:0] finish, lo, hi, bound;
+        begin
+            bound = $signed({39'd0,limit});
+            finish = {origin[47],origin} + {extent[47],extent};
+            lo = origin < 0 ? 49'sd0 : {origin[47],origin};
+            hi = finish > bound ? bound : finish;
+            if (extent <= 0 || lo >= bound || hi <= lo)
+                rect_clip_axis = 20'd0;
+            else rect_clip_axis = {10'(lo),10'(hi-lo)};
+        end
+    endfunction
+
+    function automatic logic [31:0] text_pixel_width(
+        input logic [15:0] len, input logic [3:0] scale
+    );
+        logic [22:0] base, lo, hi;
+        begin
+            base = {4'd0, len, 3'd0};
+            lo = (scale[0] ? base : 23'd0) +
+                 (scale[1] ? base << 1 : 23'd0);
+            hi = (scale[2] ? base << 2 : 23'd0) +
+                 (scale[3] ? base << 3 : 23'd0);
+            text_pixel_width = {9'd0, lo + hi};
+        end
+    endfunction
+
     task automatic v64_array_index_task(
         input logic [63:0] value,
         output logic valid,
@@ -4002,7 +4041,7 @@ module jmr_js_vm #(
     logic e64_vgc_wait_after_q;
     logic e64_vjs_rd_arm_q;
     logic [4:0] e64_vlistener_n_q;
-    logic [15:0] e64_vmetrics_w_q;
+    logic [31:0] e64_vmetrics_w_q;
     logic [11:0] e64_vmod_count_q;
     logic [52:0] e64_vmod_den_q;
     logic signed [12:0] e64_vmod_exp_q;
@@ -4615,6 +4654,7 @@ module jmr_js_vm #(
         .p_vlistener_n(vlistener_n_ff),
         .vmetrics(vmetrics),
         .p_vmetrics_w(vmetrics_w),
+        .text_font_scale(text_font_scale),
         .p_vmod_count(vmod_count),
         .p_vmod_den(vmod_den),
         .p_vmod_exp(vmod_exp),
@@ -6293,6 +6333,7 @@ module jmr_js_vm #(
             hs_vsp('0); hs_vcsp('0); vconst_lo <= '0;
             rect_ld_arm <= 1'b0;
             rect_ld_k <= 2'd0;
+            rect_origin_x <= 48'sd0; rect_origin_y <= 48'sd0;
             vsp_d <= '0;
             vst_we <= 1'b0;
             imgd_pend <= 1'b0;
@@ -6378,7 +6419,8 @@ module jmr_js_vm #(
             hs_vnat_dom(3'd0); vnat_style <= V64_UNDEFINED;
             vmetrics <= V64_UNDEFINED;
             hs_valloc_metrics(1'b0);
-            vmetrics_w <= 16'd0;
+            vmetrics_w <= 32'd0;
+            txt_kp <= 48'sd524288;
             vkev_event <= V64_UNDEFINED; vlistener_n_ff <= 5'd0;
             vmouse_active <= 0; vmouse_packet <= 0; vmouse_prop <= 0;
             vmouse_slot <= 0; vmouse_type_id <= 16'hffff; mouse_evt_pop <= 0;
@@ -6438,6 +6480,7 @@ module jmr_js_vm #(
             jn_slot_arm <= 1'b0; hp_slot_arm <= 1'b0; hp_slot_pend <= 1'b0;
             vfe_rd_arm <= 1'b0; vjs_rd_arm <= 1'b0; valloc_rd_arm <= 1'b0;
             stridx_rd_arm <= 1'b0;
+            stridx_alloc_pending <= 1'b0; stridx_alloc_id <= 10'd0;
             hp_proto_arm <= 1'b0;
             json_ch0 <= 8'd0;
             vt_found <= 1'b0; vk_found <= 1'b0;
@@ -6484,6 +6527,9 @@ module jmr_js_vm #(
             cs_raddr_ff <= 7'd0; csp_e32_d <= 7'd0;
         end else begin
             fb_we <= 1'b0;
+            // Reuse the existing registered font product for rendering and
+            // measurement. Method operand warmup lets current context settle.
+            txt_kp <= 48'(ctx_font_px) * 48'(v64_on ? e64_ctx_sx_q : ctx_sx);
             fb_swap <= 1'b0;
             rast_go <= 1'b0;
             vst_we <= 1'b0;
@@ -7328,6 +7374,11 @@ module jmr_js_vm #(
                         hs_vnat_dom(3'd0);
                         vnat_style <= V64_UNDEFINED;
                         vkev_event <= V64_UNDEFINED;
+                        // Cached metrics belongs to this heap generation;
+                        // a new program can reuse its old object index.
+                        stridx_alloc_pending <= 1'b0;
+                        vmetrics <= V64_UNDEFINED;
+                        vmetrics_w <= 32'd0;
                         vmouse_active <= 1'b0;
                         hs_vlistener_n(5'd0);
                         vkey_li <= 5'd0;
@@ -9068,7 +9119,8 @@ module jmr_js_vm #(
                         jn_rd_arm <= 1'b0;
                         jn_cache_try <= 1'b0;
                         jn_cache_i <= 3'd0;
-                        if (names_n < 16'd1024) begin
+                        if (names_n < 16'd1024 &&
+                            ({1'b0,nb_wp}+{9'd0,jn_len}) <= 17'(NAME_CAP)) begin
                             name_hash_wr(names_n[9:0], jn_h);
                             begin nlt_we <= 1'b1; nlt_wa <= names_n[9:0]; nlt_wd <= jn_len; end
                             // Same we port as trail (poke 40 then 17 next
@@ -9085,13 +9137,8 @@ module jmr_js_vm #(
                             end else begin
                             stack_wr(jn_res, {16'd0, names_n}, 3'd3);
                             end
-                            // Ring-recycle the dynamic region.
-                            if (names_n + 16'd1 >= 16'd1024 &&
-                                names_static != 16'd0) begin
-                                names_n <= names_static;
-                                jn_bucket_gen <= jn_bucket_gen + 8'd1; // ring recycle: flush bucket
-                                nb_wp <= nb_static;
-                            end else
+                            // Intern handles have no reclaim generation. Keep
+                            // names and bytes live until the next program load.
                             names_n <= names_n + 16'd1;
                             // NEW: and its characters, staged in txt_buf by
                             // S_CONCAT — that is what makes fillText("SCORE "+n)
@@ -9115,17 +9162,12 @@ module jmr_js_vm #(
                                 hs_st(S_FETCH_WAIT);
                             end
                         end else begin
-                            // intern table full — honest miss
+                            // Allocation exhaustion must not replace a live
+                            // intern or pretend that an in-range string is absent.
                             dbg_join_miss <= dbg_join_miss + 16'd1;
-                            if (v64_concat || v64_join) begin
-                                vst_wr(jn_res, V64_UNDEFINED);
-                                v64_concat <= 1'b0;
-                            v64_join <= 1'b0;
-                            end else begin
-                            stack_wr(jn_res, 32'sd0, 3'd5);
-                            end
-                            hs_code(15'(ops_base + ip));
-                            hs_st(S_FETCH_WAIT);
+                            machine_fault <= 1'b1; fault_code <= 8'd3;
+                            fault_site <= 16'd9150;
+                            running <= 1'b0; hs_st(S_DONE);
                         end
                     end else begin
                         // FIND stream: arm stays high — jn_i+1's row was
@@ -10473,16 +10515,12 @@ module jmr_js_vm #(
                     // raster never cares where the text came from.
                     case (txt_ph)
                         4'd0: begin
-                            // FM _font_scale: max(1, round(px * ctx_sx / 8))
-                            txt_kp <= 48'(ctx_font_px) * 48'(ctx_sx);
+                            // Shared half-up font scale, clamped to 1..15.
                             txt_ph <= 4'd1;
                         end
                         4'd1: begin
-                            logic signed [47:0] kq;
                             logic [7:0] nl;
-                            kq = (txt_kp + 48'sd262144) >>> 19;
-                            txt_k <= (kq < 48'sd1) ? 4'd1
-                                   : (kq > 48'sd15) ? 4'd15 : 4'(kq);
+                            txt_k <= text_font_scale;
                             txt_i <= 7'd0; txt_bn <= 7'd0; txt_d <= 4'd0;
                             if (txt_vt == 3'd3 && names_ok && e32_name_has_tos) begin
                                 nl = e32_name_len_tos;
@@ -11248,6 +11286,8 @@ module jmr_js_vm #(
                         // is one-shot; rdata wait must not snap to e64).
                         hs_valloc_kind(e64_valloc_kind_q);
                         hs_valloc_i(e64_valloc_i_q);
+                        if (state == S_V64_EXEC && e64_valloc_metrics_q)
+                            vmetrics_w <= e64_vmetrics_w_q;
                         valloc_rd_arm <= 1'b0;
                         // GET_PROP / prior NEW_OBJ left cls_done+cls_ctor_q
                         // (Game ctor=1). Next nested `new Item` then
@@ -11892,9 +11932,11 @@ module jmr_js_vm #(
                                 end else if (valloc_metrics) begin
                                     vmetrics <= handle;
                                     vst_wr(vnat_base, handle);
+                                    hs_vsp(vnat_base + 12'd1);
                                     hs_valloc_metrics(1'b0);
-                                    hs_ip(ip + 16'd1);
-                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    // measureText advanced before requesting
+                                    // allocation; preserve the following .width.
+                                    hs_code(15'(ops_base + ip));
                                     hs_hp_cmd(HP_OSETI);
                                     hs_hp_v64(1'b1);
                                     hs_hp_oid(valloc_i[12:0]);
@@ -11903,7 +11945,7 @@ module jmr_js_vm #(
                                     hs_hp_qi(3'd0);
                                     hp_qk_ff[0] <= id_width;
                                     hs_m_hp_qk <= 1'b1;
-                                    hp_qv_ff[0] <= v64_int32_number({16'd0, vmetrics_w});
+                                    hp_qv_ff[0] <= v64_int32_number(vmetrics_w);
                                     hs_m_hp_qv <= 1'b1;
                                     hp_qt_ff[0] <= 3'd0;
                                     hs_m_hp_qt <= 1'b1;
@@ -12638,8 +12680,10 @@ module jmr_js_vm #(
                 S_V64_RECT_LD: begin
                     // Two clocks per arg (addr, then vst_rdata). Extra clocks
                     // OK. Do not write vst_win — that smash killed the bars.
-                    logic signed [31:0] raw_i;
-                    logic [9:0] clipped;
+                    logic signed [31:0] raw_i, factor, translation;
+                    logic signed [63:0] product;
+                    logic signed [47:0] scaled, extent;
+                    logic [19:0] clipped;
                     if (state != S_V64_RECT_LD) begin
                         hs_st(S_V64_RECT_LD);
                         rect_ld_arm <= 1'b0;
@@ -12649,19 +12693,24 @@ module jmr_js_vm #(
                         hs_st(S_V64_RECT_LD);
                     end else begin
                         raw_i = $signed(v64_to_int32(vst_rdata));
-                        if (rect_ld_k[0] == 1'b0)
-                            clipped = clip_u(32'((raw_i * e64_ctx_sx_q) >>> 16)
-                                             + e64_ctx_tx_q, MW);
-                        else
-                            clipped = clip_u(32'((raw_i * e64_ctx_sy_q) >>> 16)
-                                             + e64_ctx_ty_q, MH);
+                        // Select the axis before the shared multiplier.
+                        factor = rect_ld_k[0] ? e64_ctx_sy_q : e64_ctx_sx_q;
+                        translation = rect_ld_k[0] ? e64_ctx_ty_q : e64_ctx_tx_q;
+                        product = raw_i * factor;
+                        scaled = 48'(product >>> 16);
+                        extent = (raw_i <= 0 || factor <= 0) ? 48'sd0 :
+                                 (scaled < 1 ? 48'sd1 : scaled);
                         unique case (rect_ld_k)
-                            2'd0: hs_vdraw_x(clipped);
-                            2'd1: hs_vdraw_y(clipped);
-                            2'd2: hs_vdraw_w(clip_sz(32'((raw_i * e64_ctx_sx_q)
-                                             >>> 16), 10'd0, MW));
-                            default: hs_vdraw_h(clip_sz(32'((raw_i * e64_ctx_sy_q)
-                                             >>> 16), 10'd0, MH));
+                            2'd0: rect_origin_x <= scaled + 48'(translation);
+                            2'd1: rect_origin_y <= scaled + 48'(translation);
+                            2'd2: begin
+                                clipped = rect_clip_axis(rect_origin_x,extent,10'(MW));
+                                hs_vdraw_x(clipped[19:10]); hs_vdraw_w(clipped[9:0]);
+                            end
+                            default: begin
+                                clipped = rect_clip_axis(rect_origin_y,extent,10'(MH));
+                                hs_vdraw_y(clipped[19:10]); hs_vdraw_h(clipped[9:0]);
+                            end
                         endcase
                         rect_ld_arm <= 1'b0;
                         if (rect_ld_k == 2'd3) begin
@@ -12899,29 +12948,46 @@ module jmr_js_vm #(
                         hs_st(S_V64_STRIDX);
                     end else begin
                         stridx_rd_arm <= 1'b0;
-                        if (hp_nat == 4'd15) str_byte_q <= name_rdata;
+                        str_byte_q <= name_rdata;
                         hs_st(S_V64_STRIDX_WR);
                     end
                 end
                 S_V64_STRIDX_WR: begin
-                    // SRAM write alone leaves vst_win[0] as the original
-                    // intern (the whole row). Then `row[col]==="1"` compared
-                    // "0110" to "1" and drawBitmap painted 0 sprite pixels.
-                    // HEAP plants TOS the same way (hold_win skips the we path).
-                    // Plant TOS. Do not hold_win — that skipped the next
-                    // LOAD_CONST shift so `row[col]==="1"` compared the
-                    // char to itself / the row (0 sprite pixels).
-                    begin
+                    // Cached hits and numeric strByte retain their existing
+                    // retirement beat. A missing singleton is a valid string,
+                    // not undefined; allocate through the existing name ports.
+                    if (stridx_alloc_pending) begin
                         logic [63:0] ch;
-                        ch = (hp_nat == 4'd15) ? v64_int32_number({24'd0, str_byte_q}) : e32_char_ok_rdata
-                            ? v64_handle(4'd4, 12'd0,
-                                         {16'd0, e32_char_id_rdata})
-                            : V64_UNDEFINED;
-                        vst_wr(vsp - 12'd1, ch);
-                        vst_win[0] <= ch;
+                        ch = v64_handle(4'd4,12'd0,{22'd0,stridx_alloc_id});
+                        vst_wr(vsp-12'd1,ch); vst_win[0] <= ch;
+                        stridx_alloc_pending <= 1'b0;
+                        hs_code(15'(ops_base+ip)); hs_st(S_FETCH_WAIT);
+                    end else if (hp_nat == 4'd15 || e32_char_ok_rdata) begin
+                        logic [63:0] ch;
+                        ch = hp_nat == 4'd15 ? v64_int32_number({24'd0,str_byte_q}) :
+                            v64_handle(4'd4,12'd0,{16'd0,e32_char_id_rdata});
+                        vst_wr(vsp-12'd1,ch); vst_win[0] <= ch;
+                        hs_code(15'(ops_base+ip)); hs_st(S_FETCH_WAIT);
+                    end else if (names_n < 16'd1024 && nb_wp < 16'(NAME_CAP)) begin
+                        // Preflight both capacities before publishing any data.
+                        name_hash_wr(names_n[9:0],{8'd0,str_byte_q});
+                        nlt_we <= 1'b1; nlt_wa <= names_n[9:0]; nlt_wd <= 8'd1;
+                        nof_we <= 1'b1; nof_wa <= names_n[9:0]; nof_wd <= nb_wp;
+                        e64_poke(6'd17,{6'd0,names_n[9:0]},
+                                 {32'd0,nb_wp,16'd1});
+                        name_we <= 1'b1; name_waddr <= nb_wp[14:0];
+                        name_wdata <= str_byte_q;
+                        char_id[str_byte_q] <= names_n;
+                        char_ok[str_byte_q] <= 1'b1;
+                        stridx_alloc_id <= names_n[9:0];
+                        stridx_alloc_pending <= 1'b1;
+                        names_n <= names_n+16'd1; nb_wp <= nb_wp+16'd1;
+                        hs_st(S_V64_STRIDX_WR);
+                    end else begin
+                        machine_fault <= 1'b1; fault_code <= 8'd3;
+                        fault_site <= 16'd12960;
+                        running <= 1'b0; hs_st(S_DONE);
                     end
-                    hs_code(15'(ops_base + ip));
-                    hs_st(S_FETCH_WAIT);
                 end
                 S_V64_JSON: begin
                     // V1 JSON-engine removal (2026-08-23): the wall keeps
@@ -13816,7 +13882,12 @@ module jmr_js_vm #(
                     end
                 end
                 S_HEAP_WR: begin
-                    if (hp_env) begin
+                    // Direct exec HP_OSETI requests first arrive via casestate
+                    // while state is still EXEC. The RAM write enable uses
+                    // actual state, so pin WR before retiring this transaction.
+                    if (state != S_HEAP_WR && hp_cmd == HP_OSETI) begin
+                        hs_st(S_HEAP_WR);
+                    end else if (hp_env) begin
                         if (!hp_hit) begin
                             begin vel_we <= 1'b1; vel_wa <= hp_eid[8:0]; vel_wd <= venv_len_rdata + 5'd1; end
                             e64_poke(6'd10, {6'd0, hp_eid},
@@ -14806,7 +14877,7 @@ module jmr_js_vm #(
                             begin
                                 logic [15:0] tl;
                                 tl = 16'(v64_to_uint32(hp_qv[1]));
-                                vmetrics_w <= (tl << 3);
+                                vmetrics_w <= text_pixel_width(tl, text_font_scale);
                                 valloc_rd_arm <= 1'b0;
                                 if (vmetrics[63:48] == V64_TAG_PREFIX &&
                                     vmetrics[47:44] == V64_KIND_OBJECT &&
@@ -14821,7 +14892,7 @@ module jmr_js_vm #(
                                     hs_hp_qi(3'd0);
                                     hp_qk_ff[0] <= id_width;
                                     hs_m_hp_qk <= 1'b1;
-                                    hp_qv_ff[0] <= v64_int32_number({16'd0, tl << 3});
+                                    hp_qv_ff[0] <= v64_int32_number(text_pixel_width(tl, text_font_scale));
                                     hs_m_hp_qv <= 1'b1;
                                     hp_qt_ff[0] <= 3'd0;
                                     hs_m_hp_qt <= 1'b1;

@@ -151,7 +151,7 @@ CORE_SRCS := \
 JSB_HEX := $(ROOT)/vectors/invaders_jsb.hex
 # Product titles are .HTML (compile-on-RUN). Do not require storage/INVADERS.JS.
 
-$(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
+$(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) $(wildcard $(ROOT)/vectors/*.hex) Makefile $(ROOT)/tools/simulator_provenance.py | font
 	mkdir -p $(BUILD) $(BUILD)/obj_dir
 	# $readmemh path is relative to sim cwd / obj_dir — stage hex both places
 	cp -f $(JSB_HEX) $(BUILD)/invaders_jsb.hex
@@ -181,6 +181,7 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 	# host C++ build, not the RTL — synthesis is unaffected. The VM is large
 	# and the default build ran ~600k clocks/s, which made a title boot
 	# longer than a debugging cycle should ever be.
+	python3 $(ROOT)/tools/simulator_provenance.py begin $(BUILD)/jmr_js_sim_server
 	verilator -cc -exe -build -j 0 \
 		$(if $(JMR_SIM_DEFINES),$(patsubst %,+define+%,$(JMR_SIM_DEFINES))) \
 		$(patsubst %,-G%,$(JMR_SIM_PARAMS)) \
@@ -192,6 +193,7 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) | font
 		-CFLAGS "-std=c++17 -O3 -march=native -fno-semantic-interposition" \
 		$(CORE_SRCS) \
 		sim_main.cpp
+	python3 $(ROOT)/tools/simulator_provenance.py finish $(BUILD)/jmr_js_sim_server
 
 clean:
 	rm -rf $(BUILD)

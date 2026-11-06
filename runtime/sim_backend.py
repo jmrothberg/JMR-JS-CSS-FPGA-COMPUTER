@@ -144,6 +144,9 @@ class SimBackend(RuntimeBackend):
                     "FPGA-SIM RTL missing — run: make -C sim sim_server_synth "
                     "(refusing host twin; set JMR_SIM_HOST=1 only for dukpy twin)"
                 )
+            if _SYNTH.resolve() == (ROOT / 'sim/sim_build_synth/jmr_js_sim_server').resolve():
+                from tools.simulator_provenance import verify
+                verify(ROOT, _SYNTH)
             cmd = [str(_SYNTH)]
             self._log.note(f"spawn RTL {cmd[0]}")
         else:

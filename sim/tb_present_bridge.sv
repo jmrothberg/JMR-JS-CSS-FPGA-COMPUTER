@@ -13,7 +13,7 @@ module tb_present_bridge #(parameter bit DIRTY_COPY = 0)(
  logic [18:0] craddr;logic [7:0] crdata,unused;
  logic preq,pwe;logic [21:0] paddr;logic [15:0] pdata;
  logic [1199:0] dirty_blocks;logic dirty_clear;
- jmr_mini_fb fb(.wr_clk(clk),.rst_n(rst_n),.we(we),.waddr(waddr),.wdata(wdata),
+ jmr_mini_fb fb(.wr_clk(clk),.rst_n(rst_n),.we(we),.address_we(we),.waddr(waddr),.wdata(wdata),
   .dirty_blocks(dirty_blocks),.dirty_clear(dirty_clear),
   .copy_raddr(craddr),.copy_rdata(crdata),.dump_raddr(19'd0),.dump_rdata(unused));
  jmr_fb_present #(.DIRTY_COPY(DIRTY_COPY)) pres(.clk(clk),.rst_n(rst_n),.swap(swap),.clear_go(clear_go),.busy(busy),

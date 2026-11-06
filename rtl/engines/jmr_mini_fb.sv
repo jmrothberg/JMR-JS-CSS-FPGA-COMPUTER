@@ -16,6 +16,7 @@ module jmr_mini_fb (
     input  logic        wr_clk,
     input  logic        rst_n,
     input  logic        we,
+    input  logic        address_we, // raw writer owns address even if scissor suppresses write
     input  logic [18:0] waddr,
     input  logic [7:0]  wdata,
     input  logic        dirty_clear,
@@ -47,7 +48,7 @@ module jmr_mini_fb (
 
     // ---------------- Port A: draw writes + dump reads ----------------
     logic [18:0] a0;
-    assign a0 = we ? waddr : dump_raddr;
+    assign a0 = address_we ? waddr : dump_raddr;
     // Every chunk starts on its own power-of-two boundary. Use the same
     // bank-local address net for Port A reads and writes, so each bank has
     // exactly one address per port. Invalid writes must not wrap into bank 3.
@@ -62,7 +63,7 @@ module jmr_mini_fb (
     logic [7:0] d0_c0, d0_c1, d0_c2, d0_c3;
     logic [1:0] d0_sel;
     always_ff @(posedge wr_clk) begin
-        if (we && a0 < 19'd307200) begin
+        if (we && waddr < 19'd307200) begin
             unique case (chunk_of(a0))
                 2'd0: mem0_c0[a_c0] <= wdata;
                 2'd1: mem0_c1[a_c1] <= wdata;

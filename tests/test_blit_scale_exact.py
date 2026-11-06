@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from tests.test_rtl_snippets import _fb_pix, _fb_raw, _patch_js_spr, _sim, _vmstat_int
+from tests.test_rtl_snippets import _fb_pix, _fb_raw, _patch_js_spr, _scratch_card, _sim, _vmstat_int
 
 
 def _pattern(w: int, h: int) -> bytes:
@@ -26,14 +26,29 @@ def _pattern(w: int, h: int) -> bytes:
 def _run_blit(name: str, src: str, sprites: list):
     sim = _sim()
     try:
-        _patch_js_spr(name, src, sprites)
-        sim._rpc("SDRELOAD")
-        sim.type_line(f'LOAD "{name}"')
-        sim.type_line("RUN")
-        sim._rpc("FRAME")
-        st = sim._rpc("VMSTAT?")
-        assert _vmstat_int(st, "fault") == 0, st
-        return _fb_raw(sim)
+        # Use the shipping ASET/SPRD representation. Legacy SPR1 validation
+        # has separate valid/malformed format checks; it is not this DDA gate.
+        _patch_js_spr(name, src, sprites, aset=True)
+        # Unit-test the exact serialized sprite image. The disk Finder owns
+        # startup; console LOAD/RUN sent during its boot is not a loader.
+        from tools.make_sd_image import open_volume
+        from functional_model.jsb_format import ProgramImage
+        image = ProgramImage(open_volume(_scratch_card()).read_file(Path(name).stem[:8]+'.JSB'))
+        sim._program_image = bytes(image)
+        assert sim._stream_program_image().startswith('OK')
+        for _ in range(100):
+            sim._rpc('FRAME 2000000')
+            st=sim._rpc('VMSTAT?')
+            assert _vmstat_int(st,'fault')==0,st
+            if ('sname=S_WAIT_FRAME ' in st and _vmstat_int(st,'fcap')==0
+                    and _vmstat_int(st,'rafcall')>=1):
+                break
+        else:
+            raise AssertionError('fixture frame did not complete: '+st)
+        assert _vmstat_int(st,'nops')==image.n_ops,st
+        raw=_fb_raw(sim)
+        assert len(raw)==640*480,('missing real fixture framebuffer',st)
+        return raw
     finally:
         sim.shutdown()
 

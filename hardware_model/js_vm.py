@@ -505,6 +505,7 @@ class JsHwVm:
             if fingerprint(incoming)!=fingerprint(resident):
                 raise ValueError('Toolbox instruction identity mismatch; relink application for this ROM')
         self.canvas.reset_scissor()
+        self._m._ctx_font_px = 8
         self.program_image = image
         self.input.reset_mouse()
         data = image.data
@@ -1698,12 +1699,10 @@ class JsHwVm:
             elif native_id == 1:
                 self.canvas.clear(int(number(0)))
             elif native_id == 2:
-                self.canvas.fill_rect(
-                    int(number(0)),
-                    int(number(1)),
-                    int(number(2)),
-                    int(number(3)),
-                    int(number(4)) if len(args) > 4 else None,
+                self._m._nat_fill_rect_raw(
+                    *(self._value64_host_value(args[i]) if i < len(args) else 0
+                      for i in range(4)),
+                    self._value64_host_value(args[4]) if len(args) > 4 else 1,
                 )
             elif native_id == 3:
                 self.canvas.swap()
@@ -2435,7 +2434,7 @@ class JsHwVm:
                 return undefined
             if method == "fillText":
                 self._m._nat_fill_text(
-                    host_args[0] if host_args else "",
+                    self._value64_js_tostring(args[0]) if args else "",
                     host_args[1] if len(host_args) > 1 else 0,
                     host_args[2] if len(host_args) > 2 else 0,
                     self._value64_named_prop(receiver, "fillStyle"),
@@ -2446,7 +2445,7 @@ class JsHwVm:
                 return undefined
             if method == "measureText":
                 result = self._m._nat_measure_text(
-                    host_args[0] if host_args else "",
+                    self._value64_js_tostring(args[0]) if args else "",
                     self._value64_named_prop(receiver, "font"),
                 )
                 converted = self._value64_json_value(result, ip)
@@ -2462,8 +2461,10 @@ class JsHwVm:
                 )
                 return undefined
             if method == "translate" and len(host_args) >= 2:
-                aux["_tx"] = (aux.get("_tx") or 0) + (host_args[0] or 0)
-                aux["_ty"] = (aux.get("_ty") or 0) + (host_args[1] or 0)
+                aux["_tx"] = self._m._canvas_signed(
+                    self._m._canvas_i32(aux.get("_tx")) + value_to_int32(args[0]))
+                aux["_ty"] = self._m._canvas_signed(
+                    self._m._canvas_i32(aux.get("_ty")) + value_to_int32(args[1]))
                 return undefined
             if method == "setTransform" and len(host_args) >= 6:
                 aux["_sx"] = host_args[0] if host_args[0] else 1
@@ -3628,6 +3629,11 @@ class JsHwVm:
                     self._m.system_menus = spec
                     if not self._value64_push(value):return
                     continue
+                if (self._value_object_builtins[value_payload(handle)] == BUILTIN_CONTEXT
+                        and property_name == 'font' and value_kind(value) == VALUE_KIND_STRING):
+                    # The chip updates a shared font-size register on the write,
+                    # including when another font assignment precedes any draw.
+                    self._m._note_font_px(self._value64_js_tostring(value))
                 if (self._value_object_builtins[value_payload(handle)] == BUILTIN_CONTEXT
                         and property_name == 'textBaseline'):
                     # Update the baseline register on the write. A later

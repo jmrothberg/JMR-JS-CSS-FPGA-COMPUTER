@@ -673,15 +673,52 @@ Only `"2d"`. `"webgl"` is never.
 | `getImageData` / `putImageData` | P1 | PACMAN cache | Complete |
 | `canvas.width` / `height` | P0 | all | Complete |
 
-Fonts are **never** Chrome TTF. PYTHON and RTL `fillText` share one 8×8
-bitmap (READY scanout ROM, codes 32–126). `ctx.font = "NNpx …"` stores
-**N only** — family/weight are ignored. Glyph scale is
-`k = max(1, min(15, round(N * sx / 8)))` (`sx` = `setTransform` a).
+Fonts are **never** Chrome TTF. Native Canvas `fillText` uses one 8×8
+bitmap (READY scanout ROM, supported text is ASCII 32–126). This is separate
+from the shared Toolbox's SYSTEM.SYS glyph and advance resources.
+The corrected run81 candidate uses the same bounded text contract in Python
+and RTL. `ctx.font = "NNpx …"` stores **N only**; family/weight are ignored.
+The font register changes on assignment, resets to 8 on program load, and
+retains its previous value after an invalid assignment. The legacy parser
+walks its 8-bit byte count: digits accumulate in an 8-bit value while it is
+below 26, spaces preserve it, and p/P commits a nonzero value. Other bytes
+reset the accumulator. Decimal CSS sizes and overflowing digit runs therefore
+are not a supported browser font syntax; use ordinary integer `NNpx` sizes.
+Glyph scale uses the signed Q16 x-scale from `setTransform`, rounds half up,
+then clamps to 1..15. In exact integer terms, with S being that fixed-point
+scale, `k = max(1, min(15, (N*S + 262144) // 524288))`.
+An x-scale that converts to zero substitutes unity, matching the native
+axis-transform API; a negative product clamps the glyph scale to 1.
 Authoring sizes that actually change the picture: at `sx=1`, **8px** (k=1)
 and **16px** (k=2). After a DONKEY-style world shrink (`sx ≈ 0.42`), **16px
 is still k=1** (8 glass pixels) — bump **only Score/Lives** to **32px**, not
 every `fillText`. Do not add a second (small) font to the chip — write the
 HTML to the bitmap.
+`measureText` uses 8 times that scale times the full encoded UTF-8 byte count.
+`fillText` draws at most 64 encoded bytes, addressing each glyph with the
+byte's low 7 bits. This preserves the existing byte renderer; it is not Unicode
+decoding or shaping. Control codes below32 and code127 are blank glyphs,
+matching the exported font ROM. Use ASCII for portable labels. Integer numeric labels,
+including negative zero, use JavaScript text conversion rather than Python's
+`0.0` formatting. RTL fractional-number text conversion remains limited by
+its integer renderer and is not a complete JavaScript Number-to-string claim.
+These candidate corrections require a fresh RTL parity receipt before an
+FPGA build; this description alone does not qualify a bitstream.
+
+The corrected rectangle contract keeps the original signed geometry until
+it intersects the640×480 surface. Partly hidden rectangles do not shift inward,
+and fully hidden rectangles draw nothing. Coordinates and source extents use
+ToInt32; scoped `ctx.fillRect` and `ctx.clearRect` then use signed Q16 axis
+scales and integer translations. Positive source extents on positive axes keep
+at least one pixel after scaling. Zero/negative source extents and negative
+rectangle axes draw nothing; rectangle reflection is outside this bounded API.
+Wide intermediate products/endpoints prevent far coordinates wrapping into
+the visible image. The global native `fillRect` uses raw coordinates and
+defaults to palette index1, independent of context style or transforms.
+Path points retain fractional Q16 coordinates through their Q32 transform;
+they are not first converted to integer rectangle coordinates. Text and image
+consumers retain their separate legacy expression widths. These rules describe
+the bounded machine renderer, not the full browser Canvas API.
 Indexed FB may stub `globalAlpha`. Do not let JS resize HDMI; glass stays
 640×480.
 

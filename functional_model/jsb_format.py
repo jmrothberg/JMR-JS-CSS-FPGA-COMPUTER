@@ -611,18 +611,6 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
             off += 4
             n_spr = u16(off, "SPR1 count", code_limit)
             off += 2
-            # CONSTITUTION "loud overflow": the legacy SPR pack streams
-            # w*h through an 18-bit count - a sprite over 262144 pixels
-            # (or a 16-bit-overflowing dimension) must refuse at build
-            # time, never silently misdraw. Big art belongs in ASET.
-            for _si, (_w, _h, _pix) in enumerate(sprites or []):
-                if _w >= 65536 or _h >= 65536:
-                    raise ValueError(
-                        f"sprite {_si}: {_w}x{_h} exceeds 16-bit dimensions")
-                if _w * _h >= 262144:
-                    raise ValueError(
-                        f"sprite {_si}: {_w}x{_h} = {_w*_h} px exceeds the "
-                        f"SPR pack 262144-pixel stream bound (use ASET)")
             if n_spr > program_max_sprites():
                 raise ValueError(
                     f"sprite count {n_spr} > MAX_SPRITES {program_max_sprites()}"
@@ -634,6 +622,11 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
                 if not sw or not sh:
                     raise ValueError("SPR1 sprite dimensions must be non-zero")
                 npi = int(sw) * int(sh)
+                # The legacy loader's 18-bit pixel count cannot represent 2**18.
+                # Validate decoded dimensions here, not encoder-only locals.
+                if npi >= 262144:
+                    raise ValueError(
+                        f"SPR1 sprite {sw}x{sh} exceeds the 262144-pixel stream bound (use ASET)")
                 need(off, npi, "SPR1 pixels", code_limit)
                 off += npi
         elif off + 4 <= code_limit and data[off : off + 4] == b"SPRD":

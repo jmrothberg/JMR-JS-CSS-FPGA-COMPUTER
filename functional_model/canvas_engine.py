@@ -251,10 +251,12 @@ class CanvasEngine:
         if w <= 0 or h <= 0:
             return
         self.dirty = True
+        # Intersect the original rectangle. Clamping the origin first shifts
+        # a partially hidden rectangle and paints extra pixels at the edge.
         x0 = max(0, int(x))
         y0 = max(0, int(y))
-        x1 = min(self.width, x0 + int(w))
-        y1 = min(self.height, y0 + int(h))
+        x1 = min(self.width, int(x) + int(w))
+        y1 = min(self.height, int(y) + int(h))
         if x0 >= x1 or y0 >= y1:
             return
         # Row slices: FM of RTL S_V64_RECT (1 write/clock, not per-pixel Python).

@@ -8,12 +8,15 @@ Words: [README.md — Words used](../docs/WORDS.md#words-used-in-this-project).
 
 This is the only place that names the current build. Other pages point here.
 
-**Active development: [run81](../build/run81_mac_native/STATUS.md), implementation
-complete and focused RTL simulation PASS; no FPGA build or bitstream.** Shared
-Window/Control/Port/Damage software, bounded drawing, typed native staging/scissor,
-VM conversion/frame packing and audio acknowledgment are integrated with the run80
-handoff/pointer fixes. The candidate disk has 44 matched programs. Area, timing and
-clock-rate effects remain unmeasured; published historical bits are not run81 substitutes.
+**Active development: [run81](../build/run81_mac_native/STATUS.md).
+The completed implementation is unqualified: setup -1.652 ns, hold +0.025 ns,
+95,229 LUTs, 29,257 slices and 354.5 BRAM.** It fits the configured resource
+limits but fails timing. The generated bit is preserved as failed-build evidence,
+not an installation artifact. Targeted VM/text/RNG, graphics, floating-point,
+framebuffer and reset corrections are undergoing fresh RTL/Python verification
+before one hardware retry. Root `rtl/`, `storage/` and `card.img` remain the
+published review baseline until those corrections pass and are promoted together.
+No older bit is a substitute for this 44-program software set.
 
 The architecture review found two timer latches and uncovered internal timing
 paths in the older mapped design. Historical gate PASS below means those older

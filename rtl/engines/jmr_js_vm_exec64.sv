@@ -343,7 +343,7 @@ module jmr_js_vm_exec64 (
     output logic vgc_wait_after_q,
     output logic vjs_rd_arm_q,
     output logic [4:0] vlistener_n_q,
-    output logic [15:0] vmetrics_w_q,
+    output logic [31:0] vmetrics_w_q,
     output logic [11:0] vmod_count_q,
     output logic [52:0] vmod_den_q,
     output logic signed [12:0] vmod_exp_q,
@@ -717,7 +717,8 @@ module jmr_js_vm_exec64 (
     input  logic p_vjs_rd_arm,
     input  logic [4:0] p_vlistener_n,
     input  logic [63:0] vmetrics,
-    input  logic [15:0] p_vmetrics_w,
+    input  logic [31:0] p_vmetrics_w,
+    input  logic [3:0] text_font_scale,
     input  logic [11:0] p_vmod_count,
     input  logic [52:0] p_vmod_den,
     input  logic signed [12:0] p_vmod_exp,
@@ -1240,7 +1241,7 @@ module jmr_js_vm_exec64 (
     logic vgc_wait_after_n;
     logic vjs_rd_arm_n;
     logic [4:0] vlistener_n_n;
-    logic [15:0] vmetrics_w_n;
+    logic [31:0] vmetrics_w_n;
     logic [11:0] vmod_count_n;
     logic [52:0] vmod_den_n;
     logic signed [12:0] vmod_exp_n;
@@ -2036,7 +2037,7 @@ module jmr_js_vm_exec64 (
     logic [63:0] vjs_val [0:JSON_STK-1];
     logic [4:0] vlistener_n;
     assign vlistener_n_q = vlistener_n;
-    logic [15:0] vmetrics_w;
+    logic [31:0] vmetrics_w;
     assign vmetrics_w_q = vmetrics_w;
     logic [11:0] vmod_count;
     assign vmod_count_q = vmod_count;
@@ -2062,6 +2063,10 @@ module jmr_js_vm_exec64 (
     assign vraf_n_q = vraf_n;
     logic [31:0] vrng;
     assign vrng_q = vrng;
+    // One owner: every reset/program clear restarts the documented sequence.
+    always_ff @(posedge clk)
+        if (!rst_n || p_clr) vrng <= 32'h6d2b79f5;
+        else if (enable && !leave_hold) vrng <= vrng_n;
     logic [11:0] vsp;
     assign vsp_q = vsp;
     logic vst_hold_win;
@@ -2575,7 +2580,6 @@ module jmr_js_vm_exec64 (
                 vprom_done <= vprom_done_n;
                 vprom_ret <= vprom_ret_n;
                 vraf_n <= vraf_n_n;
-                vrng <= vrng_n;
                 if (hs_m_vsp) vsp <= p_vsp;
                 else vsp <= vsp_n;
                 vst_hold_win <= vst_hold_win_n;
@@ -3080,20 +3084,23 @@ module jmr_js_vm_exec64 (
         // and an underflow shift is at most 1074. Keep arithmetic at
         // those widths instead of cascading 32-bit exponent adders.
         logic signed [7:0] p;
-        logic signed [12:0] er, shift;
+        logic signed [12:0] er, shift, exponent_sum;
         begin
             // highest set bit: priority scan (log-depth encoder form)
             p = -8'sd1;
             for (int k = 0; k < 106; k++)
                 if (product[k])
                     p = 8'(k);
-            er = ((ea == 0) ? 13'sd1 : $signed({2'b0, ea}))
-               + ((eb == 0) ? 13'sd1 : $signed({2'b0, eb}))
-               - 13'sd1127 + 13'(p);
+            exponent_sum = ((ea == 0) ? 13'sd1 : $signed({2'b0, ea}))
+                         + ((eb == 0) ? 13'sd1 : $signed({2'b0, eb}));
+            er = exponent_sum - 13'sd1127 + 13'(p);
             shift = 13'(p) - 13'sd52;
             ef = 11'(er);
             if (er <= 13'sd0) begin
-                shift = shift + 13'sd1 - er;
+                // Cancel p algebraically: p-52+1-(exponent_sum-1127+p).
+                // This shift depends only on operand exponents, avoiding
+                // a second product-dependent carry chain.
+                shift = 13'sd1076 - exponent_sum;
                 ef = 11'd0;
             end
             q = (shift >= 13'sd106) ? 53'd0 : 53'(product >> shift);
@@ -3128,6 +3135,39 @@ module jmr_js_vm_exec64 (
     endfunction
     // v64_mul_task deleted 2026-08-24: the comb 53x53 multiply moved to
     // the fpm/nwm shift-add engines; packing lives in v64_mul_pack.
+    // len<=65535 and scale<=15: exact width fits23bits. Balanced
+    // shift/add avoids another multiplier beside the shared font product.
+    // Intersect original signed geometry before narrowing to raster ports.
+    function automatic logic [19:0] rect_clip_axis(
+        input logic signed [47:0] origin,
+        input logic signed [47:0] extent,
+        input logic [9:0] limit);
+        logic signed [48:0] finish, lo, hi, bound;
+        begin
+            bound = $signed({39'd0,limit});
+            finish = {origin[47],origin} + {extent[47],extent};
+            lo = origin < 0 ? 49'sd0 : {origin[47],origin};
+            hi = finish > bound ? bound : finish;
+            if (extent <= 0 || lo >= bound || hi <= lo)
+                rect_clip_axis = 20'd0;
+            else rect_clip_axis = {10'(lo),10'(hi-lo)};
+        end
+    endfunction
+
+    function automatic logic [31:0] text_pixel_width(
+        input logic [15:0] len, input logic [3:0] scale
+    );
+        logic [22:0] base, lo, hi;
+        begin
+            base = {4'd0, len, 3'd0};
+            lo = (scale[0] ? base : 23'd0) +
+                 (scale[1] ? base << 1 : 23'd0);
+            hi = (scale[2] ? base << 2 : 23'd0) +
+                 (scale[3] ? base << 3 : 23'd0);
+            text_pixel_width = {9'd0, lo + hi};
+        end
+    endfunction
+
     task automatic v64_array_index_task(
         input logic [63:0] value,
         output logic valid,
@@ -4590,10 +4630,13 @@ module jmr_js_vm_exec64 (
                                                 running_n = 1'b0;
                                                 state_n = S_DONE;
                                             end else begin
-                                                vdraw_x_n = v64_to_uint32(call_arg_q[0])[9:0];
-                                                vdraw_y_n = v64_to_uint32(call_arg_q[1])[9:0];
-                                                vdraw_w_n = v64_to_uint32(call_arg_q[2])[9:0];
-                                                vdraw_h_n = v64_to_uint32(call_arg_q[3])[9:0];
+                                                logic [19:0] cx, cy;
+                                                cx = rect_clip_axis(48'($signed(v64_to_int32(call_arg_q[0]))),
+                                                    48'($signed(v64_to_int32(call_arg_q[2]))),10'(MW));
+                                                cy = rect_clip_axis(48'($signed(v64_to_int32(call_arg_q[1]))),
+                                                    48'($signed(v64_to_int32(call_arg_q[3]))),10'(MH));
+                                                vdraw_x_n = cx[19:10]; vdraw_w_n = cx[9:0];
+                                                vdraw_y_n = cy[19:10]; vdraw_h_n = cy[9:0];
                                                 vdraw_color_n = (argc > 4)
                                                     ? v64_to_uint32(call_arg_q[4])[7:0]
                                                     : 8'hff;
@@ -7098,21 +7141,9 @@ module jmr_js_vm_exec64 (
                                         // arg 0 is the context object, 1..4 are geometry.
                                         paint_color = argc>=12'd5
                                             ? v64_to_uint32(call_arg_q[5])[7:0] : fill_style_i;
-                                    // PYTHON _xf: always apply axis scale + translate
-                                    // (identity sx=1, tx=0 is a no-op; save/translate
-                                    // then fillRect must not skip tx).
-                                    vdraw_x_n = clip_u(32'(
-                                        ($signed(v64_to_int32(call_arg_q[1]))
-                                         * ctx_sx) >>> 16) + ctx_tx, MW);
-                                    vdraw_y_n = clip_u(32'(
-                                        ($signed(v64_to_int32(call_arg_q[2]))
-                                         * ctx_sy) >>> 16) + ctx_ty, MH);
-                                    vdraw_w_n = clip_sz(32'(
-                                        ($signed(v64_to_int32(call_arg_q[3]))
-                                         * ctx_sx) >>> 16), 10'd0, MW);
-                                    vdraw_h_n = clip_sz(32'(
-                                        ($signed(v64_to_int32(call_arg_q[4]))
-                                         * ctx_sy) >>> 16), 10'd0, MH);
+                                    // Geometry is read and transformed once by
+                                    // parent RECT_LD; do not duplicate discarded
+                                    // multipliers here using the operand window.
                                     vdraw_color_n = (opw[23:8] == id_clearrect)
                                         ? 8'd0 : paint_color;
                                     vdraw_i_n = 19'd0;
@@ -7437,7 +7468,7 @@ module jmr_js_vm_exec64 (
                                             hp_ret_n = S_V64_OGETI_NAT;
                                             state_n = S_HEAP_WAIT;
                                         end else begin
-                                            vmetrics_w_n = (tl << 3);
+                                            vmetrics_w_n = text_pixel_width(tl, text_font_scale);
                                             if (vmetrics[63:48] == V64_TAG_PREFIX &&
                                                 vmetrics[47:44] == V64_KIND_OBJECT &&
                                                 vmetrics[31:0] < MAX_OBJ &&
@@ -7446,6 +7477,7 @@ module jmr_js_vm_exec64 (
                                                 vst_wr(base, vmetrics);
                                                 vsp_n = base + 12'd1;
                                                 hp_cmd_n = HP_OSETI;
+                                                hp_env_n = 1'b0;
                                                 hp_v64_n = 1'b1;
                                                 hp_oid_n = vmetrics[12:0];
                                                 hp_slot_n = 5'd0;
@@ -7455,7 +7487,7 @@ module jmr_js_vm_exec64 (
                                                 hp_q_waddr = 2'd0;
                                                 hp_qk_wdata = id_width;
                                                 hp_qv_wdata =
-                                                    v64_int32_number({16'd0, tl << 3});
+                                                    v64_int32_number(text_pixel_width(tl, text_font_scale));
                                                 hp_qt_wdata = 3'd0;
                                                 hp_ret_n = S_FETCH_WAIT;
                                                 state_n = S_HEAP_WR;

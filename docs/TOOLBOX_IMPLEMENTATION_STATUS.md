@@ -1,12 +1,13 @@
 # Run81: one active matched candidate
 
-The active test set is `build/run81_mac_native/source` and its one matching
-`build/run81_mac_native/card.img`. This implementation step does not authorize
-an FPGA build, physical disk write or promotion of root published files.
-The first-pass records below are preserved history, not current installation
-choices. Final focused full-core RTL acceptance passed against this frozen
-software set; see `completion_tests/actual/evidence.json`. Simulation does not
-establish board acceptance.
+The canonical published set is root `rtl/`, `storage/` and `card.img`, recorded
+in `CURRENT_SET.json`. Post-review corrections are being checked in the sole
+run81 candidate `build/run81_mac_native/source`; its matched disk bytes are
+unchanged. The completed FPGA implementation failed timing (-1.652 ns setup).
+A retry is authorized after fresh corrected RTL/Python acceptance, but has not
+started. Previous focused full-core acceptance applies to the earlier source
+hashes; it cannot certify these new corrections. No physical write or flashing
+is being performed. Historical records below are not installation choices.
 
 - 44 programs, 42 resident clients, 161 disk files; every resident prefix matches.
 - ROM: `05af986e4a9159f2225b271ef6808b62b54fa71b8249ca1ab21f8a5aecac6d49`.

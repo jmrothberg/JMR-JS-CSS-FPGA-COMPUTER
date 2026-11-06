@@ -46,7 +46,7 @@ module jmr_toolbox (
  logic [31:0] row_addr,pixel_addr,extent;
  logic [15:0] x,y,w,h,stride,sx,sy,sw,sh;
  logic signed [15:0] dx,dy,cx,cy;
- logic [15:0] cw,ch;
+ logic signed [17:0] draw_clip_x1,draw_clip_y1;
  logic [7:0] fmt,flags,scale,fg,bg;
  logic [3:0] zx,zy;
  logic [2:0] bitpos;
@@ -184,7 +184,11 @@ module jmr_toolbox (
     VALIDATE:begin
      base<={desc[7],desc[6],desc[5],desc[4]};stride<=d16(8);sw<=d16(10);sh<=d16(12);
      sx<=d16(14);sy<=d16(16);w<=d16(18);h<=d16(20);dx<=d16(22);dy<=d16(24);
-     cx<=d16(26);cy<=d16(28);cw<=d16(30);ch<=d16(32);
+     cx<=d16(26);cy<=d16(28);
+     // Signed16 origin + unsigned16 extent is exactly signed18. Snapshot
+     // once in the existing descriptor setup beat, not on every pixel CE.
+     draw_clip_x1<=$signed({{2{desc[27][7]}},d16(26)})+$signed({2'b0,d16(30)});
+     draw_clip_y1<=$signed({{2{desc[29][7]}},d16(28)})+$signed({2'b0,d16(32)});
      fmt<=desc[1];flags<=desc[2];scale<=desc[3];fg<=desc[34];bg<=desc[35];
      extent<=32'(d16(8))*32'(d16(12));
      arena_limit<=CSTG_WORDS-{desc[7],desc[6],desc[5],desc[4]};state<=CHECK_GEOMETRY;
@@ -240,7 +244,7 @@ module jmr_toolbox (
     DRAW:begin
      state<=COORD;
      if(draw_x>=0&&draw_x<640&&draw_y>=0&&draw_y<480&&draw_x>=32'($signed(cx))&&draw_y>=32'($signed(cy))&&
-       draw_x<32'($signed(cx))+$signed({16'd0,cw})&&draw_y<32'($signed(cy))+$signed({16'd0,ch}))begin
+       draw_x<$signed(draw_clip_x1)&&draw_y<$signed(draw_clip_y1))begin
       fb_we<=1;fb_x<=10'(draw_x);fb_y<=10'(draw_y);fb_addr<=19'(draw_y*640+draw_x);fb_data<=pixel_q;
      end
      if(zx+1==scale)begin zx<=0;if(zy+1==scale)state<=NEXT_PIXEL;else zy<=zy+1'b1;end
