@@ -16,8 +16,9 @@ Publication checks: current-set verification passed; focused font, window-port,
 packed-session and Toolbox tests reported 38 passed and one failed. The failing
 native-service test could not start the existing RTL simulator because its ROM
 array bounds did not accommodate `toolbox_code0.hex`.
-The GUI configuration and evidence links below depend on local `build/run81_mac_native`
-artifacts, which are excluded from Git; this snapshot is not a standalone GUI bundle.
+The Python GUI runs from the published root source and `card.img`, with no
+private build directory required. FPGA-SIM needs a native build on your machine:
+`make -C sim sim_server_synth`. See [GUI runtime](docs/GUI_RUNTIME.md).
 
 ## Current set
 

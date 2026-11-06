@@ -561,14 +561,8 @@ class PythonBackend(RuntimeBackend):
 
     def _finder_blob(self):
         if self._finder_image is not None:return self._finder_image
-        # storage/FINDER.HTML is the program being edited. The card's
-        # FINDER.JSH is the older copy and was covering that picture.
-        src=Path(__file__).resolve().parents[1]/'storage'/'FINDER.HTML'
-        if src.is_file():
-            from tools.compile_js import compile_html_text, encode_html_chunk
-            blob=encode_html_chunk(compile_html_text(src.read_text(),source_path=src))
-        else:
-            blob=self.machine.storage.load_bytes('FINDER.JSH')
+        # Execute the same serialized Finder and Toolbox as the RTL simulator.
+        blob=self.machine.storage.load_bytes('FINDER.JSH')
         self._finder_image=blob
         return blob
 

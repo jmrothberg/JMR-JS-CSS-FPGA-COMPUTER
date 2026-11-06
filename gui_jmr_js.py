@@ -34,11 +34,10 @@ if _venv_py.is_file() and Path(sys.executable).resolve() != _venv_py.resolve():
 
     os.execv(str(_venv_py), [str(_venv_py), *sys.argv])
 
-# One current GUI set: model, native RTL simulator and matching writable disk.
-if __name__ == "__main__" and (ROOT / "runtime/active_gui.json").is_file():
-    import runpy
-    runpy.run_path(str(ROOT / "tools/gui_runtime.py"))["launch"](ROOT)
-    raise SystemExit(0)
+# Use the published root source and disk; RTL is optional until F9 selects it.
+if __name__ == "__main__":
+    from tools.gui_runtime import configure
+    configure(ROOT)
 
 from functional_model import Machine  # noqa: E402
 from functional_model.canvas_engine import HEIGHT, WIDTH  # noqa: E402

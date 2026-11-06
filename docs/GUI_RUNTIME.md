@@ -1,22 +1,17 @@
 # One matched GUI runtime
 
-Start the normal GUI with `python3 gui_jmr_js.py`. Its active selection is recorded
-in `runtime/active_gui.json`; `tools/gui_runtime.py` checks the selected Python
-model, Toolbox resources and RTL simulator before starting. A mismatch is an
-error, not a silent fallback to older code.
+Start `python3 gui_jmr_js.py` from a checkout with dependencies installed.
+The GUI loads the root Python source and root `card.img`. No private build
+manifest or RTL executable is required to start the Python backend.
 
-PYTHON executes the same serialized `.JSH` programs and resident Toolbox used by
-FPGA-SIM. F9 switches backends. Both use the same selected writable disk.
-`JMR_CARD_IMG` can explicitly select another image, but its ROM, linker and system
-resources must match. Existing disks and user saves are never replaced by the
-GUI launcher. `storage/` is the disk-builder seed, not a second runtime library.
+Both Python and FPGA-SIM execute the serialized `FINDER.JSH` and other programs
+from that disk, with its resident Toolbox. Python does not recompile Finder at
+startup. The launcher checks disk resources against `CURRENT_SET.json` and
+checks resident program instructions against the disk ROM before opening the GUI.
+It preserves user documents and never rebuilds or copies a disk at startup.
 
-The Python model reproduces program-visible behavior; it is not cycle-accurate
-and its wall-clock speed or audio scheduling is not FPGA timing evidence. The
-RTL simulator exercises the hardware implementation. Board acceptance additionally
-requires the matching qualified bitstream and physical testing. An older bitstream
-does not acquire new native operations merely by receiving a new disk.
-
-Current GUI verification is recorded under
-`build/run81_mac_native/gui_parity/`: actual Tk startup, exact serialized native
-fixture results, framebuffer/scanout comparisons and matched-input hashes.
+FPGA-SIM requires a native simulator built on the current machine with
+`make -C sim sim_server_synth`. It uses the same root `card.img` through
+`JMR_CARD_IMG`. Missing RTL is an error when selecting FPGA-SIM; it is not a
+Python startup requirement. Python behavior is not FPGA timing evidence.
+No run81 FPGA bitstream is qualified yet.
