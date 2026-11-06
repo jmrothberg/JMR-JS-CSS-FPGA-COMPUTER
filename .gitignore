@@ -6,7 +6,8 @@ __pycache__/
 *.egg-info/
 
 # Local / generated
-card.img
+/card*.img
+!/card.img
 card.img~
 *.log
 vivado.jou

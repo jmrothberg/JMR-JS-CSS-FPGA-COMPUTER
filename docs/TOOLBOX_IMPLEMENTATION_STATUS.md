@@ -92,11 +92,9 @@ instructions, zero spare.** This status describes the matched software revision.
 Its chosen release manifest and card receipt establish publication and delivery;
 a prepared image or passing model check alone does not establish either.
 
-The one active set is **run80 RTL + root `storage/` +
-`card_toolbox_examples_working.img` + the run80 `.bit` once qualified**.
-The working disk has 161 files: 159 managed files and two preserved files.
-Run80's bitstream is pending; the older hardware evidence below is rollback
-history, not a second current release.
+This historical run80 software set is superseded by the root run81 source set
+and `card.img`. Its old disk is retained in local rollback storage and Git
+history. Run80 failed strict setup timing; it is not the current installation.
 
 ## Matching software identity
 
