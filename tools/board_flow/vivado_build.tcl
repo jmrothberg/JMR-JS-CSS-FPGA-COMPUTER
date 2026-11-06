@@ -122,6 +122,8 @@ file copy -force $ROOT/vectors/invaders_jsb.hex $ROOT/rtl/engines/invaders_jsb.h
 file copy -force $ROOT/vectors/toolbox_code.hex $ROOT/rtl/engines/toolbox_code.hex
 file copy -force $ROOT/vectors/toolbox_code0.hex $ROOT/rtl/engines/toolbox_code0.hex
 file copy -force $ROOT/vectors/toolbox_code1.hex $ROOT/rtl/engines/toolbox_code1.hex
+file copy -force $ROOT/vectors/toolbox_code2.hex $ROOT/rtl/engines/toolbox_code2.hex
+file copy -force $ROOT/vectors/toolbox_code3.hex $ROOT/rtl/engines/toolbox_code3.hex
 
 set XPR $OUT/vivado/jmr_nexys_video.xpr
 set REUSE [expr {[file exists $XPR] && !$FRESH}]
@@ -202,6 +204,8 @@ proc jmr_add_sources {ROOT} {
       $ROOT/rtl/engines/toolbox_code.hex \
       $ROOT/rtl/engines/toolbox_code0.hex \
       $ROOT/rtl/engines/toolbox_code1.hex \
+      $ROOT/rtl/engines/toolbox_code2.hex \
+      $ROOT/rtl/engines/toolbox_code3.hex \
       $ROOT/rtl/engines/jmr_palette_bram.sv \
       $ROOT/rtl/engines/jmr_fb_present.sv \
       $ROOT/rtl/engines/jmr_fb_scanout.sv \

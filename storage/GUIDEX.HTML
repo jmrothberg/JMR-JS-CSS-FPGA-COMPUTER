@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!doctype html>
 <html><head><meta charset="utf-8"><title>GUI example</title></head>
 <body><canvas id="c" width="640" height="480"></canvas><script>
@@ -15,9 +17,9 @@
 // Desk → Empty Trash clears the names in this example. It does
 // not call REMOVE. The Finder does that.
 var ctx=document.getElementById("c").getContext("2d");
-ctx.systemAbout="GUI Example|Alphabetical list, trash, and a heading.";
-ctx.systemWindow=6;
-ctx.systemMenus="Desk|Empty Trash=160";
+tbSessionProperty(ctx,2,"GUI Example|Alphabetical list, trash, and a heading.");
+tbSessionProperty(ctx,0,6);
+tbSessionMenus(ctx,"Desk|Empty Trash=160");
 var names=["Note","Boxes","Help","Read me"];
 var trash=[];
 var order=[];
@@ -77,14 +79,16 @@ function pointer(e,mode){
   }
   drag=-1; sortNames(); redraw=1;
 }
-addEventListener("keydown",function(e){ if(e.keyCode===160){ trash=[]; redraw=1; } });
-addEventListener("mousedown",function(e){ pointer(e,1); });
-addEventListener("mousemove",function(e){ pointer(e,2); });
-addEventListener("mouseup",function(e){ pointer(e,0); });
+tbSessionListen("keydown",function(e){ if(e.keyCode===160){ trash=[]; redraw=1; } });
+tbSessionListen("mousedown",function(e){ pointer(e,1); });
+tbSessionListen("mousemove",function(e){ pointer(e,2); });
+tbSessionListen("mouseup",function(e){ pointer(e,0); });
 sortNames();
 function frame(){
   if(redraw){ draw(); redraw=0; }
-  requestAnimationFrame(frame);
+  tbSessionFrame(frame);
 }
-requestAnimationFrame(frame);
+tbSessionFrame(frame);
+
+tbSessionProgram('GUIDEX.HTM');
 </script></body></html>

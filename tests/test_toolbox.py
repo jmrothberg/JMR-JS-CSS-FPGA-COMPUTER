@@ -15,7 +15,7 @@ def test_native_dispatch_keeps_javascript_running():
     def val(name):
         return values.value_unpack_number(vm._value_vars[names.index(name)])
     assert NATIVE_IDS["toolbox"] == 64
-    assert val("version") == 65599
+    assert val("version") == 65663
     assert val("count") == val("copied") == 8
     assert val("after") == 43
 
@@ -123,7 +123,7 @@ def test_real_rtl_native_service(tmp_path, monkeypatch):
             sim._rpc('FRAME')
         status = parse_status_kv(sim._rpc('VMSTAT?'))
         assert status.get('fault',0)==0, status
-        for name, expected in dict(version=65599,count=32,copied=29,after=43,rejected=-1,blitted=4,finished=123,resourceRead=4,captured=16,savedPixel=3,restored=16).items():
+        for name, expected in dict(version=65663,count=32,copied=29,after=43,rejected=-1,blitted=4,finished=123,resourceRead=4,captured=16,savedPixel=3,restored=16).items():
             response = sim._rpc('VVARPEEK '+str(image.var_names.index(name)))
             actual = values.value_unpack_number(int(response.rsplit('v=0x',1)[1],16))
             assert actual==expected, (name,response,expected)
@@ -205,4 +205,4 @@ def test_on_machine_compiler_recognizes_toolbox():
     vm=JsHwVm();vm.load_image(ProgramImage(machine._cmp_output()))
     assert vm.error is None,vm.error
     slot=vm.program_image.var_names.index('answer')
-    assert values.value_unpack_number(vm._value_vars[slot])==65599
+    assert values.value_unpack_number(vm._value_vars[slot])==65663

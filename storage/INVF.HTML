@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Space Invaders — JMR</title></head>
@@ -53,9 +55,9 @@ const levelEl = document.querySelector("#levelEl");
 const canvas = document.querySelector("canvas");
 const c = canvas.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-c.systemWindow=8;
-c.systemViewport=1;
-c.systemAbout="Space Invaders|Defend Earth against waves of invaders.";
+tbSessionProperty(c,0,8);
+tbSessionProperty(c,1,1);
+tbSessionProperty(c,2,"Space Invaders|Defend Earth against waves of invaders.");
 
 c.imageSmoothingEnabled = false;
 
@@ -557,11 +559,22 @@ class Bunker {
     /* FAST: bunkers do not move — do not markErase them (that forced a
        56×40 black + 118 fillRect rebuild every rAF). Redraw only when
        dirty or the formation is overlapping this band. */
+    // Map shared cell edges, not each cell height separately: the
+    // menu viewport must not leave rounding gaps between green bricks.
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.fillStyle = "black";
+    c.fillRect(this.ox, Math.floor(24 + this.oy * 0.95), this.ow,
+      Math.floor(24 + (this.oy + this.oh) * 0.95) - Math.floor(24 + this.oy * 0.95));
     c.fillStyle = "#2ecc40";
     for (let i = 0; i < this.cells.length; i++) {
       const cell = this.cells[i];
-      if (cell.alive) c.fillRect(cell.x, cell.y, this.cell, this.cell);
+      if (cell.alive) {
+        const top = Math.floor(24 + cell.y * 0.95);
+        c.fillRect(cell.x, top, this.cell,
+          Math.floor(24 + (cell.y + this.cell) * 0.95) - top);
+      }
     }
+    c.setTransform(1, 0, 0, 0.95, 0, 24);
   }
 
   // absorb a point hit; carve a small crater
@@ -1279,11 +1292,11 @@ function animate() {
   if (game.active !== _wasActive) { _needFull = 1; _wasActive = game.active; }
   if (!game.active) {
     drawIdleFrame();
-    requestAnimationFrame(animate);
+    tbSessionFrame(animate);
     return;
   }
 
-  requestAnimationFrame(animate);
+  tbSessionFrame(animate);
 
   flushErase();
 
@@ -1573,11 +1586,11 @@ function startGame() {
   levelHasSpawned = true;
 }
 
-document.getElementById("start").addEventListener("click", () => {
+document.getElementById("start").tbSessionListen("click", () => {
   startGame();
 });
 
-document.getElementById("saveScoreBtn").addEventListener("click", () => {
+document.getElementById("saveScoreBtn").tbSessionListen("click", () => {
   const name = document.getElementById("playerName").value || "Player";
   addScore(name, score);
   renderLeaderboard();
@@ -1586,27 +1599,27 @@ document.getElementById("saveScoreBtn").addEventListener("click", () => {
   document.getElementById("saveBackdrop").style.display = "none";
 });
 
-document.getElementById("playerName").addEventListener("keydown", (e) => {
+document.getElementById("playerName").tbSessionListen("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("saveScoreBtn").click();
 });
 
-document.getElementById("clearLB")?.addEventListener("click", () => {
+document.getElementById("clearLB")?.tbSessionListen("click", () => {
   localStorage.removeItem(LB_KEY);
   renderLeaderboard();
 });
 
 // Mouse steers the cannon; primary click starts or fires.
-addEventListener("mousemove", (e) => {
+tbSessionListen("mousemove", (e) => {
   if(game.active && !game.over && !playerDying){
     player.position.x=Math.max(0,Math.min(GAME_WIDTH-player.width,e.clientX-player.width/2));
   }
 });
-addEventListener("mousedown", (e) => {
+tbSessionListen("mousedown", (e) => {
   if(e.button===0){if(!game.active || game.over)startGame();else if(!playerDying)playerShoot();}
 });
-addEventListener("mouseup", (e) => {if(e.button===0)keys.space.pressed=false;});
+tbSessionListen("mouseup", (e) => {if(e.button===0)keys.space.pressed=false;});
 
-addEventListener("keydown", (e) => {
+tbSessionListen("keydown", (e) => {
   const key = e.key;
   const code = e.keyCode;
   if (!game.active && (key === " " || key === "Enter" || code === 32 || code === 13)) {
@@ -1624,7 +1637,7 @@ addEventListener("keydown", (e) => {
   }
 });
 
-addEventListener("keyup", (e) => {
+tbSessionListen("keyup", (e) => {
   if (!game.active) return;
   const key = e.key;
   const code = e.keyCode;
@@ -1637,9 +1650,12 @@ addEventListener("keyup", (e) => {
   }
 });
 
+
 </script>
 <script>
 /* Attract splash on LOAD+RUN / Chrome — PRESS SPACE to start (no auto-click). */
+
+tbSessionProgram('INVF.HTM');
 </script>
 <script data-host="chrome">
 (function(){

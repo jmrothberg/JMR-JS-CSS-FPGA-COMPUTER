@@ -87,8 +87,8 @@ template <typename R>
 static inline uint32_t code_word(R* r, unsigned a) {
     if(r->jmr_js_core__DOT__u_vm__DOT__load_toolbox){
         unsigned base=r->jmr_js_core__DOT__u_vm__DOT__load_ops_base;
-        if(a>=base && a<base+4096){ unsigned i=a-base;return i<2048?r->jmr_js_core__DOT__u_vm__DOT__toolbox_code0[i]:i<3072?r->jmr_js_core__DOT__u_vm__DOT__toolbox_code1[i-2048]:0x0010000bu; }
-        if(a>=base+4096)a-=4096;
+        if(a>=base && a<base+8192){ unsigned i=a-base;return i<4096?r->jmr_js_core__DOT__u_vm__DOT__toolbox_code0[i]:i<6144?r->jmr_js_core__DOT__u_vm__DOT__toolbox_code1[i-4096]:i<7168?r->jmr_js_core__DOT__u_vm__DOT__toolbox_code2[i-6144]:i<8191?r->jmr_js_core__DOT__u_vm__DOT__toolbox_code3[i-7168]:0x0020000bu; }
+        if(a>=base+8192)a-=8192;
     }
     if (a < 16384u) return uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[a]);
     if (a < 20480u) return uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[a - 16384u]);
@@ -101,12 +101,12 @@ static inline void code_poke(R* r, unsigned a, uint32_t w) {
     if(a==2){r->jmr_js_core__DOT__u_vm__DOT__load_toolbox=(w>>20)&1;if(!(w&(1u<<17)))r->jmr_js_core__DOT__u_vm__DOT__load_ops_base--;}
     if(r->jmr_js_core__DOT__u_vm__DOT__load_toolbox){
         unsigned base=r->jmr_js_core__DOT__u_vm__DOT__load_ops_base;
-        if(a>=base && a<base+4096){
+        if(a>=base && a<base+8192){
             uint32_t h=r->jmr_js_core__DOT__u_vm__DOT__load_toolbox_hash;
             r->jmr_js_core__DOT__u_vm__DOT__load_toolbox_hash=((h<<1)|(h>>31))^w;
             return;
         }
-        if(a>=base+4096)a-=4096;
+        if(a>=base+8192)a-=8192;
     }
     if (a < 16384u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[a] = w;
     else if (a < 20480u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[a - 16384u] = w;
@@ -1329,8 +1329,22 @@ static int jsh_load_mem(const std::vector<uint8_t>& b) {
         aset_off = (uint32_t)b[12] | ((uint32_t)b[13] << 8)
                  | ((uint32_t)b[14] << 16) | ((uint32_t)b[15] << 24);
     }
-    size_t code_len = has_aset && aset_off > 0 && aset_off <= b.size()
-                    ? (size_t)aset_off : b.size();
+    // Match jmr_js_vm_pkg::CART_WORDS. Validate before any code/SRAM writes;
+    // truncating an asset silently can corrupt system-owned cache memory.
+    constexpr uint32_t CART_MAX_BYTES = 3430400u * 2u;
+    if (has_aset) {
+        if (aset_off < 16 || (size_t)aset_off > b.size() || b.size() - aset_off < 8)
+            return -1;
+        if (b[aset_off] != 'A' || b[aset_off + 1] != 'S' ||
+            b[aset_off + 2] != 'E' || b[aset_off + 3] != 'T') return -1;
+        uint32_t plen = (uint32_t)b[aset_off + 4]
+                      | ((uint32_t)b[aset_off + 5] << 8)
+                      | ((uint32_t)b[aset_off + 6] << 16)
+                      | ((uint32_t)b[aset_off + 7] << 24);
+        if (plen < 768u || plen > CART_MAX_BYTES || plen != b.size() - aset_off - 8)
+            return -1;
+    }
+    size_t code_len = has_aset ? (size_t)aset_off : b.size();
     auto* rp = top->rootp;
     const size_t CODE_WORDS = 32768;
     for (size_t w = 0; w < CODE_WORDS; w++) {
@@ -1352,8 +1366,6 @@ static int jsh_load_mem(const std::vector<uint8_t>& b) {
                       | ((uint32_t)b[aset_off + 6] << 16)
                       | ((uint32_t)b[aset_off + 7] << 24);
         size_t poff = aset_off + 8;
-        if (plen > b.size() - poff) plen = (uint32_t)(b.size() - poff);
-        if (plen > 4u * 1024u * 1024u) plen = 4u * 1024u * 1024u;
         for (uint32_t i = 0; i + 1 < plen; i += 2) {
             uint16_t w = (uint16_t)b[poff + i]
                        | ((uint16_t)b[poff + i + 1] << 8);
@@ -1379,6 +1391,36 @@ static void push_key(uint8_t b) {
     tick();
     top->kbd_push = 0;
     tick();
+}
+
+// Direct test/GUI injection must acquire the same idle console ownership as
+// LOAD/RUN. ESC after code_poke raced the disk Finder supervisor: its pending
+// Home load replaced the live program underneath the VM's old header/PC.
+// Use public recovery controls; never patch RTL state or suppress normal boot.
+static bool prepare_direct_vm_load() {
+    hide_desktop();
+    push_key(0x1B);
+    unsigned quiet = 0;
+    // Cold ROM/resources plus a large Finder image can exceed 16M clocks.
+    // Bound the drain at approximately 96M clocks; never inject on timeout.
+    for (unsigned attempt = 0; attempt < 3000000; ++attempt) {
+        // Keep Terminal selected while an already-started disk load drains.
+        // The 32-clock cadence also cancels a delayed ESC/Home request before
+        // the shell's 100-clock idle debounce can start a new Finder load.
+        top->desktop_control_on = 0;
+        top->desktop_control_stb = 1;
+        tick();
+        top->desktop_control_stb = 0;
+        if (top->rootp->jmr_js_core__DOT__u_vm__DOT__running || top->game_mode)
+            push_key(0x1B);
+        ticks(31);
+        const bool idle = top->ready_lit && top->stor_dbg_state_o == 0 &&
+            !top->desktop_busy_o && !top->game_mode &&
+            !top->rootp->jmr_js_core__DOT__u_vm__DOT__running;
+        quiet = idle ? quiet + 1 : 0;
+        if (quiet >= 8) return true;
+    }
+    return false;
 }
 
 static std::string screen_text() {
@@ -1552,14 +1594,12 @@ int main(int argc, char** argv) {
             continue;
         }
         if (line.rfind("JSHLOAD ", 0) == 0) {
-            hide_desktop();
             std::vector<uint8_t> blob;
-            if (read_whole_file(line.substr(8), blob) != 0 || jsh_load_mem(blob) != 0) {
+            if (read_whole_file(line.substr(8), blob) != 0 ||
+                !prepare_direct_vm_load() || jsh_load_mem(blob) != 0) {
                 std::cout << "ERR" << std::endl;
                 continue;
             }
-            push_key(0x1B);
-            ticks(8);
             top->sim_vm_start = 1;
             tick();
             top->sim_vm_start = 0;
@@ -3487,9 +3527,10 @@ int main(int argc, char** argv) {
             }
             for(unsigned i=0;i<256;i++)put(8192+i*4,r->jmr_js_core__DOT__u_classic_overlay__DOT__u_static_labels__DOT__layouts[i] |
                 (uint32_t(r->jmr_js_core__DOT__u_classic_overlay__DOT__widths[i])<<18),4);
-            for(unsigned i=0;i<80;i++)b[9216+i]=(r->jmr_js_core__DOT__u_classic__DOT__sys_headings[i/2]>>((i%2)*8))&255;
-            for(unsigned i=0;i<28;i++)put(9344+i*4,r->jmr_js_core__DOT__sys_config[i],4);
-            put(9456,r->jmr_js_core__DOT__sys_config[28]&65535,2);
+            // Menu headings are software resources; read their validated SYS cache.
+            for(unsigned i=0;i<80;i++)b[9216+i]=uint8_t(r->jmr_js_core__DOT__g_sram__DOT__u_sram__DOT__mem[3565568+(9216+i)/2]>>(((9216+i)&1)*8));
+            for(unsigned i=0;i<28;i++)put(9344+i*4,r->jmr_js_core__DOT__pixel_sys_config[i],4);
+            put(9456,r->jmr_js_core__DOT__pixel_sys_config[28]&65535,2);
             for(unsigned i=0;i<64;i++)put(19712+i*8,r->jmr_js_core__DOT__u_system_overlay__DOT__label_rows[i],8);
             for(unsigned i=0;i<48;i++)put(20224+i*8,r->jmr_js_core__DOT__u_system_overlay__DOT__label_rows[64+i],8);
             std::cout << "SYSBYTES " << b64_encode(b.data(),b.size()) << std::endl;

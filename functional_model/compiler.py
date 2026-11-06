@@ -275,6 +275,12 @@ class Compiler:
         # end of compile() (see _global_sites).
         self._scope_sets: List[set] = []
         self._global_sites: List[Tuple[int, str, tuple]] = []
+        # Metadata only. Resident-v2 serialization may reuse lexical leaf
+        # slots without changing ordinary bytecode or captured outer names.
+        self._local_serial = 0
+        self._local_marks = []
+        self._compact_leaf_ips = set()
+        self._compact_leaf_ranges = []
 
     def compile(self) -> Chunk:
         # NEW: hoist function + class declarations first (JS-style)
@@ -436,7 +442,7 @@ class Compiler:
         jmp_over = self._emit(Op.JUMP, 0)
         entry = len(self.code)
         self._fn_compiling = fname
-        self._local_stack.append({})
+        self._enter_local_frame()
         self._scope_sets.append(set())
         # prologue: stack has arg0..argN-1 (last arg on top)
         # NEW: params declare into the per-call lexical env (LET_VAR).
@@ -466,7 +472,7 @@ class Compiler:
         self._expect("}")
         self._fn_depth -= 1
         if self._local_stack:
-            self._local_stack.pop()
+            self._leave_local_frame()
         if self._scope_sets:
             self._scope_sets.pop()
         if not ceq_lut:
@@ -635,6 +641,9 @@ class Compiler:
             return False
         if len(cur) + len(params) > 16:
             return False
+        # Copied callee slot hints are verified by raw names at runtime,
+        # not rebased into caller slots. Keep this entire caller unaliased.
+        self._local_serial += 1
         for p in params:
             self._note_local(p)
         delta = len(self.code) - entry
@@ -779,7 +788,7 @@ class Compiler:
             self._expect(")")
             jmp_over = self._emit(Op.JUMP, 0)
             entry = len(self.code)
-            self._local_stack.append({})
+            self._enter_local_frame()
             self._scope_sets.append(set())
             # NEW: method params declare into the per-call env (LET_VAR);
             # arg2=1 = call-frame local flag for RTL (always store there)
@@ -806,7 +815,7 @@ class Compiler:
             self._expect("}")
             self._fn_depth -= 1
             if self._local_stack:
-                self._local_stack.pop()
+                self._leave_local_frame()
             if self._scope_sets:
                 self._scope_sets.pop()
             self._emit(Op.LOAD_CONST, self._const(None))
@@ -921,6 +930,18 @@ class Compiler:
         self.code.append(args)
         self.op_lines.append(line)
         return len(self.code) - 1
+
+    def _enter_local_frame(self):
+        self._local_serial += 1
+        self._local_marks.append((self._local_serial,len(self.code)))
+        self._local_stack.append({})
+
+    def _leave_local_frame(self):
+        serial,start=self._local_marks.pop()
+        if serial==self._local_serial:
+            self._compact_leaf_ips.update(range(start,len(self.code)))
+            self._compact_leaf_ranges.append((start,len(self.code)))
+        self._local_stack.pop()
 
     def _note_local(self, name: str) -> None:
         if not name or not self._local_stack:
@@ -2139,7 +2160,7 @@ class Compiler:
         """
         jmp_over = self._emit(Op.JUMP, 0)
         entry = len(self.code)
-        self._local_stack.append({})
+        self._enter_local_frame()
         self._scope_sets.append(set())
         # NEW: params declare into the per-call env (LET_VAR); arg2=1 =
         # call-frame local flag for RTL (always store there)
@@ -2161,7 +2182,7 @@ class Compiler:
             self._emit(Op.RET_VAL)
         self._fn_depth -= 1
         if self._local_stack:
-            self._local_stack.pop()
+            self._leave_local_frame()
         if self._scope_sets:
             self._scope_sets.pop()
         self._patch(jmp_over, Op.JUMP, len(self.code))

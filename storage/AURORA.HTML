@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -14,9 +16,9 @@ canvas { display: block; background: #050014; }
 var canvas = document.querySelector("canvas");
 var ctx = canvas.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-ctx.systemWindow=8;
-ctx.systemViewport=1;
-ctx.systemAbout="Aurora|Fly through a colorful space shooter.";
+tbSessionProperty(ctx,0,8);
+tbSessionProperty(ctx,1,1);
+tbSessionProperty(ctx,2,"Aurora|Fly through a colorful space shooter.");
 
 var PAL = [
   "#050014",
@@ -81,13 +83,13 @@ function auroraErase() {
   }
 }
 
-addEventListener("keydown", function(e) {
+tbSessionListen("keydown", function(e) {
   if (e.key === "ArrowLeft") leftHeld = 1;
   if (e.key === "ArrowRight") rightHeld = 1;
   if (e.key === " ") fireHeld = 1;
   if (e.key === "Enter") fireHeld = 1;
 });
-addEventListener("keyup", function(e) {
+tbSessionListen("keyup", function(e) {
   if (e.key === "ArrowLeft") leftHeld = 0;
   if (e.key === "ArrowRight") rightHeld = 0;
   if (e.key === " ") fireHeld = 0;
@@ -204,9 +206,11 @@ function tick() {
     _gw[i] = g.w + 4;
     _gh[i] = g.h + 4;
   }
-  requestAnimationFrame(tick);
+  tbSessionFrame(tick);
 }
-requestAnimationFrame(tick);
+tbSessionFrame(tick);
+
+tbSessionProgram('AURORA.HTM');
 </script>
 </body>
 </html>

@@ -17,7 +17,7 @@ module jmr_toolbox (
  import jmr_js_vm_pkg::*;
  typedef enum logic [5:0] {IDLE,DISPATCH,READ_BLOCK,READ_SAVE,WRITE_BLOCK,
  FILL,CHUNK,DESC,DESC_SAVE,VALIDATE,CHECK_GEOMETRY,GEOMETRY,PIXEL,PIXEL_SAVE,COORD,DRAW,
- NEXT_PIXEL,STORE_PIXEL,RESOURCE_READ,RESOURCE_WRITE,COPY_VALIDATE,COPY_CHECK,COPY_SETUP,COPY_COORD,COPY_READ,COPY_FB_WAIT,COPY_SAVE,COPY_WRITE,COPY_NEXT,WAIT_MEM,GAP,DONE} state_t;
+ NEXT_PIXEL,STORE_PIXEL,RESOURCE_READ,RESOURCE_WRITE,COPY_VALIDATE,COPY_CHECK,COPY_SETUP,COPY_COORD,COPY_READ,COPY_FB_WAIT,COPY_SAVE,COPY_WRITE,COPY_NEXT,WAIT_MEM,GAP,DONE,COPY_MASK,COPY_MASK_SAVE,COPY_SOURCE,COPY_DEST,COPY_DEST_FB_WAIT,COPY_BLEND} state_t;
  state_t state,after_mem;
  logic [31:0] cmd,src,dst,left,total,desc_ptr;
  logic backwards;
@@ -29,6 +29,13 @@ module jmr_toolbox (
  logic signed [15:0] copy_dx,copy_dy,copy_cx,copy_cy;
  logic [15:0] copy_cw,copy_ch;
  logic copy_screen,copy_source_screen,copy_reverse,copy_ok;
+ logic copy_ext_ok;
+ logic [2:0] copy_mode;
+ logic copy_mask,copy_pattern;
+ logic [31:0] mask_base,mask_extent;
+ logic [15:0] mask_stride;
+ logic [$clog2(CSTG_WORDS)-1:0] mask_row,mask_addr;
+ logic signed [32:0] copy_src_product,copy_dst_product,copy_src_start,copy_dst_start;
  logic [31:0] copy_src_addr,copy_dst_addr;
  logic signed [31:0] copy_x,copy_y;
  logic [7:0] di;
@@ -57,8 +64,21 @@ module jmr_toolbox (
  task automatic mem(input logic wr,input logic [31:0] p,input logic [7:0] v,input state_t ret);
   read_high<=0;sram_req<=1;sram_we<=wr;sram_addr<=cstg_word(p[20:0]);sram_wdata<={8'd0,v};after_mem<=ret;state<=WAIT_MEM;
  endtask
- assign busy=state!=IDLE;
+ logic busy_q;
+ assign busy=busy_q;
  assign reply=state==DONE;
+ // Compute whether the existing FSM's NEXT state is non-IDLE. The FSM
+ // itself and every request/reply/memory beat remain unchanged.
+ always_ff @(posedge clk)begin
+  if(!rst_n)busy_q<=0;
+  else if(!req && !sram_req && !fb_req && state!=IDLE)busy_q<=0;
+  else case(state)
+   IDLE:busy_q<=req;
+   GAP:busy_q<=after_mem!=IDLE;
+   DONE:busy_q<=req;
+   default:busy_q<=(state<=COPY_BLEND);
+  endcase
+ end
  always_ff @(posedge clk)begin
   if(!rst_n)begin state<=IDLE;sram_req<=0;sram_we<=0;fb_we<=0;fb_req<=0;result<=0;end
   else begin
@@ -71,7 +91,7 @@ module jmr_toolbox (
      cached_valid<=0;
      result<=32'hffffffff;
      case(cmd)
-      0:begin result<=32'h0001003f;state<=DONE;end // v1 + operations 1 through 6
+      0:begin result<=32'h0001007f;state<=DONE;end // v1 + operations 1 through 7
       1:if(range_ok(src,left)&&range_ok(dst,left))begin
        backwards<=dst>src && dst-src<left;
        if(left==0)begin result<=0;state<=DONE;end else state<=CHUNK;
@@ -80,7 +100,7 @@ module jmr_toolbox (
        if(left==0)begin result<=0;state<=DONE;end else state<=FILL;
       end else state<=DONE;
       3,4:if(range_ok(desc_ptr,64))begin di<=0;state<=DESC;end else state<=DONE;
-      6:if(left==0 && range_ok(src,64) && range_ok(dst,64))begin di<=0;state<=DESC;end else state<=DONE;
+      6,7:if(left==0 && range_ok(src,64) && range_ok(dst,64))begin di<=0;state<=DESC;end else state<=DONE;
       5:if(sys_valid && src<=24320 && left<=24320-src && range_ok(dst,left))begin
        if(left==0)begin result<=0;state<=DONE;end else state<=RESOURCE_READ;
       end else state<=DONE;
@@ -108,7 +128,7 @@ module jmr_toolbox (
     end
     DESC:mem(0,(di<64?desc_ptr:dst)+32'(di[5:0]),0,DESC_SAVE);
     DESC_SAVE:begin desc[di[6:0]]<=byte_q;
-     if(cmd==6 ? di==127 : di==63)state<=cmd==6?COPY_VALIDATE:VALIDATE;
+     if((cmd==6||cmd==7) ? di==127 : di==63)state<=(cmd==6||cmd==7)?COPY_VALIDATE:VALIDATE;
      else begin di<=di+1'b1;state<=DESC;end
     end
     VALIDATE:begin
@@ -135,7 +155,13 @@ module jmr_toolbox (
      else begin x<=0;y<=0;row_addr<=base+32'(sy)*32'(stride);state<=PIXEL;end
     end
     PIXEL:begin
-     logic [31:0] address;
+     // GEOMETRY proves base + stride*sh <= CSTG_WORDS, sy+y < sh,
+     // and the packed byte offset < stride. Thus every PIXEL address is
+     // below CSTG_WORDS, including the last byte of the arena. Keep the
+     // addition at that proven width before cache comparison.
+     logic [$clog2(CSTG_WORDS)-1:0] address;
+     // Every predecessor completed a read or drained a write: WE is already zero.
+     sram_we<=0;
      bitpos<=3'(sx+x);
      address=row_addr+(fmt==1?((32'(sx)+32'(x))>>3):fmt==4?((32'(sx)+32'(x))>>1):32'(sx)+32'(x));
      pixel_addr<=address;
@@ -184,11 +210,24 @@ module jmr_toolbox (
      copy_w<=d16(82);copy_h<=d16(84);copy_dx<=d16(86);copy_dy<=d16(88);
      copy_cx<=d16(90);copy_cy<=d16(92);copy_cw<=d16(94);copy_ch<=d16(96);
      copy_source_screen<=desc[2]==2;copy_screen<=desc[66]==2;
+     copy_mode<=cmd==7?desc[36][2:0]:3'd0;
+     copy_mask<=cmd==7 && desc[37][0];copy_pattern<=cmd==7 && desc[37][1];
+     mask_base<={desc[51],desc[50],desc[49],desc[48]};mask_stride<=d16(52);
+     mask_extent<=32'(d16(52))*32'(d16(20));
      extent<=32'(d16(8))*32'(d16(12));
-     copy_extent<=32'(d16(72))*32'(d16(76));state<=COPY_CHECK;
+     copy_extent<=32'(d16(72))*32'(d16(76));
+     // Snapshot descriptors are complete. Stage overlap arithmetic through
+     // existing setup beats; no native reply or per-pixel cycle is added.
+     copy_src_product<=$signed({17'd0,d16(8)})*$signed({17'd0,d16(16)});
+     copy_dst_product<=$signed({17'd0,d16(72)})*$signed(d16(88));
+     state<=COPY_CHECK;
     end
     COPY_CHECK:begin
-     // Only raw 8-bit, unscaled srcCopy is part of this transport ABI.
+     // Raw 8-bit unscaled transfer; operation 7 shares the transport loop.
+     // Snapshot and validate optional mask before any framebuffer/arena write.
+     copy_ext_ok<=cmd==6 || (desc[36]<=5 && desc[37]<=3 &&
+      (!copy_mask || (32'(mask_stride)>=((32'(w)+7)>>3) && range_ok(mask_base,mask_extent) &&
+       (copy_screen || mask_base+mask_extent<=copy_base || copy_base+copy_extent<=mask_base))));
      // Reject incompatible alias layouts rather than corrupting unread rows.
      copy_ok<=desc[0]==1 && desc[64]==1 && desc[1]==8 && desc[65]==8 &&
       (desc[2]==0||desc[2]==2) && (desc[66]==0||desc[66]==2) && desc[3]==1 && desc[67]==1 &&
@@ -198,17 +237,23 @@ module jmr_toolbox (
       (copy_screen?(copy_base==0 && copy_stride==640 && copy_sw==640 && copy_sh==480):range_ok(copy_base,copy_extent)) &&
       (copy_screen!=copy_source_screen || copy_screen ||
        base+extent<=copy_base || copy_base+copy_extent<=base || stride==copy_stride);
-     copy_reverse<=copy_screen==copy_source_screen &&
-      $signed({1'b0,copy_base})+$signed({17'd0,copy_stride})*$signed(copy_dy)+$signed(copy_dx) >
-      $signed({1'b0,base})+$signed({17'd0,stride})*$signed({1'b0,sy})+$signed({1'b0,sx});
+     copy_dst_start<=$signed({1'b0,copy_base})+copy_dst_product+$signed(copy_dx);
+     copy_src_start<=$signed({1'b0,base})+copy_src_product+$signed({1'b0,sx});
      state<=COPY_SETUP;
     end
     COPY_SETUP:begin
-     if(!copy_ok)state<=DONE;
+     logic reverse_now;
+     reverse_now=copy_screen==copy_source_screen && copy_dst_start>copy_src_start;
+     copy_reverse<=reverse_now;
+     // Valid masks fit the arena. Walk rows instead of multiplying on the
+     // memory-request path; op6 never consumes this state.
+     mask_row<=reverse_now?$clog2(CSTG_WORDS)'(mask_base+mask_extent-32'(mask_stride)):$clog2(CSTG_WORDS)'(mask_base);
+     if(!copy_ok || !copy_ext_ok)state<=DONE;
      else if(w==0||h==0)begin result<=0;state<=DONE;end
-     else begin x<=copy_reverse?w-1'b1:16'd0;y<=copy_reverse?h-1'b1:16'd0;state<=COPY_COORD;end
+     else begin x<=reverse_now?w-1'b1:16'd0;y<=reverse_now?h-1'b1:16'd0;state<=COPY_COORD;end
     end
     COPY_COORD:begin
+     mask_addr<=mask_row+$clog2(CSTG_WORDS)'(x>>3);
      copy_x<=32'($signed(copy_dx))+$signed({16'd0,x});
      copy_y<=32'($signed(copy_dy))+$signed({16'd0,y});
      copy_src_addr<=base+(32'(sy)+32'(y))*32'(stride)+32'(sx)+32'(x);
@@ -223,12 +268,42 @@ module jmr_toolbox (
       copy_y>=32'($signed(copy_cy))+$signed({16'd0,copy_ch}))state<=COPY_NEXT;
      else begin
       copy_dst_addr<=copy_base+32'(copy_y)*32'(copy_stride)+32'(copy_x);
-      if(copy_source_screen)begin fb_req<=1;fb_raddr<=19'(copy_src_addr);state<=COPY_FB_WAIT;end
+      if(cmd==7)state<=copy_mask?COPY_MASK:COPY_SOURCE;
+      else if(copy_source_screen)begin fb_req<=1;fb_raddr<=19'(copy_src_addr);state<=COPY_FB_WAIT;end
       else mem(0,copy_src_addr,0,COPY_SAVE);
      end
     end
     COPY_FB_WAIT:if(fb_ack)begin fb_req<=0;byte_q<=fb_rdata;state<=COPY_SAVE;end
-    COPY_SAVE:begin pixel_q<=byte_q;state<=COPY_WRITE;end
+    COPY_SAVE:begin pixel_q<=byte_q;state<=copy_mode==0?COPY_WRITE:COPY_DEST;end
+    // Mask bytes use request-relative coordinates; destination clipping has
+    // already happened. Aliasing the writable destination is rejected above.
+    COPY_MASK:mem(0,32'(mask_addr),0,COPY_MASK_SAVE);
+    COPY_MASK_SAVE:state<=byte_q[7-x[2:0]]?COPY_SOURCE:COPY_NEXT;
+    COPY_SOURCE:begin
+     if(copy_mode==5)state<=COPY_DEST;
+     else if(copy_pattern)begin
+      pixel_q<=desc[{3'b101,copy_y[2:0]}][7-copy_x[2:0]]?desc[34]:desc[35];
+      state<=copy_mode==0?COPY_WRITE:COPY_DEST;
+     end else if(copy_source_screen)begin fb_req<=1;fb_raddr<=19'(copy_src_addr);state<=COPY_FB_WAIT;end
+     else mem(0,copy_src_addr,0,COPY_SAVE);
+    end
+    COPY_DEST:begin
+     if(copy_screen)begin fb_req<=1;fb_raddr<=19'(copy_dst_addr);state<=COPY_DEST_FB_WAIT;end
+     else mem(0,copy_dst_addr,0,COPY_BLEND);
+    end
+    COPY_DEST_FB_WAIT:if(fb_ack)begin fb_req<=0;byte_q<=fb_rdata;state<=COPY_BLEND;end
+    COPY_BLEND:begin
+     // These are palette-index byte operations, not RGB alpha composition.
+     case(copy_mode)
+      1:pixel_q<=byte_q|pixel_q;
+      2:pixel_q<=byte_q^pixel_q;
+      3:pixel_q<=byte_q&~pixel_q;
+      4:pixel_q<=byte_q&pixel_q;
+      5:pixel_q<=~byte_q;
+      default:pixel_q<=pixel_q;
+     endcase
+     state<=COPY_WRITE;
+    end
     COPY_WRITE:begin
      if(copy_screen)begin fb_we<=1;fb_addr<=19'(copy_dst_addr);fb_data<=pixel_q;state<=COPY_NEXT;end
      else mem(1,copy_dst_addr,pixel_q,COPY_NEXT);
@@ -236,11 +311,11 @@ module jmr_toolbox (
     COPY_NEXT:begin
      if(copy_reverse)begin
       if(x==0)begin x<=w-1'b1;if(y==0)begin result<=32'(w)*32'(h);state<=DONE;end
-       else begin y<=y-1'b1;state<=COPY_COORD;end end
+       else begin y<=y-1'b1;mask_row<=mask_row-$clog2(CSTG_WORDS)'(mask_stride);state<=COPY_COORD;end end
       else begin x<=x-1'b1;state<=COPY_COORD;end
      end else begin
       if(x+1==w)begin x<=0;if(y+1==h)begin result<=32'(w)*32'(h);state<=DONE;end
-       else begin y<=y+1'b1;state<=COPY_COORD;end end
+       else begin y<=y+1'b1;mask_row<=mask_row+$clog2(CSTG_WORDS)'(mask_stride);state<=COPY_COORD;end end
       else begin x<=x+1'b1;state<=COPY_COORD;end
      end
     end

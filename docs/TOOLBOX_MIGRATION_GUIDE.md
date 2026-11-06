@@ -12,9 +12,9 @@ Supply all four arguments. Native ID 64 is recognized by the host compiler,
 on-machine compiler, Python, and current RTL simulator. Old run75/run76 bits
 do not implement it. Use the matched development disk/runtime.
 
-- `toolbox(0,0,0,0)`: version and capabilities. Current value is 65599
-  (`0x0001003f`). High 16 bits are version 1; low bits 0–5 advertise operations
-  1–6 respectively. Do not probe this native on a bitstream predating it.
+- `toolbox(0,0,0,0)`: version and capabilities. Current value is 65663
+  (`0x0001007f`). High 16 bits are version 1; low bits 0–6 advertise operations
+  1–7 respectively. Do not probe this native on a bitstream predating it.
 - `toolbox(1,source,destination,count)`: copy bytes with memmove semantics,
   including overlap in either direction. Returns count or -1.
 - `toolbox(2,destination,value,count)`: fill bytes with the low eight bits of
@@ -53,7 +53,7 @@ The canonical source is `resources/toolbox/toolbox.js`:
   and pixel values for pattern filling.
 - `tbBlit(d)` / `tbPattern(d)` execute operations 3 and 4.
 
-For shared residency, mark HTML with `<!-- jmr-toolbox: resident-v1 -->` and use
+For shared residency, mark HTML with `<!-- jmr-toolbox: resident-v2 -->` and use
 the host linker. It supplies all library functions from the matching ROM. For
 unmarked standalone compilation, inline only required helpers. External
 `<script src>` is not supported. Use the documented `tbDialogOpen` API, not
@@ -83,7 +83,8 @@ back buffer; it does not swap. One-bit rows have their leftmost pixel in the
 high bit. Four-bit surfaces use high nibble first and descriptor bytes 48–63
 as the palette-index lookup. Eight-bit surfaces contain palette indices
 directly. The values are not CSS colors; never assume custom per-app palette
-indices from another program. The first eight palette entries stay fixed.
+indices from another program. Finder uses RGB332 indices (white255); ordinary application PAL white is1.
+Never transfer cached indices between palette owners.
 
 For a pattern, place eight row bytes at descriptor offsets 40–47, set ink and
 background, and call `tbPattern`. Pattern coordinates are anchored at the
@@ -116,8 +117,8 @@ Only destination drawing is clipped.
    does not reload it while programs are running.
 6. For software menus use the event-loop contract and scratch ownership in
    RESIDENT_TOOLBOX.md, with TBDEMO.HTML as the example. Preserve application
-   About text and dirty-document confirmation. Legacy native menus remain
-   supported; do not mix both menu owners in one window. No RTL edits are
+   About text and dirty-document confirmation. The clean core removed replaced native menus and dialogs; shared JavaScript
+   owns them. Essential boot/Terminal/recovery hardware remains. No RTL edits are
    required to convert an application.
 7. Compile with `tools.compile_js.compile_html_text` / `encode_html_chunk`,
    respecting the existing code/name/variable limits. Test representative
@@ -130,3 +131,15 @@ Only destination drawing is clipped.
 
 This API accelerates primitives; it does not expand the total arena, increase
 program limits, alter the VM clock, or automatically port an app's UI.
+
+## Runnable graphics examples
+
+See TOOLBOX_USAGE.md and GRAPHICS.HTML / DAMAGE.HTML in the reviewed examples
+package. They cover operations0–7, six raster modes, mask/pattern controls,
+physical viewport conversion and deletion-safe previous-frame damage.
+
+`tbRaster(src,dst,mode)`, `tbMask(d,base,stride)`, `tbMaskOff(d)`,
+`tbPattern8(d,rows,fg,bg)`, `tbPatternOff(d)` and `tbPaintRect` are shared
+software helpers for operation7; see TOOLBOX_API.md for exact fields.
+Operation6 copies 8-bit rectangles; operation7 adds byte Boolean modes and
+optional one-bit mask/pattern. Both require equal source/destination sizes.

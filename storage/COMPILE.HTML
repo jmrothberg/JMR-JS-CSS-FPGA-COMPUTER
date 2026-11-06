@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!doctype html>
 <html><head><title>Compile</title></head><body>
 <!-- Desktop program for Compile, same shape as NOTE.HTML.
@@ -11,7 +13,9 @@
      COMPILER.HTML stays the hidden engine. Do not delete either file. -->
 <canvas id="c" width="640" height="480"></canvas><script>
 var ctx=document.getElementById("c").getContext("2d");
-ctx.systemWindow=3;
+tbSessionProperty(ctx,0,3);
 // Role 3 uses the system Compiler title and About panel.
-function tick(){requestAnimationFrame(tick);}requestAnimationFrame(tick);
+function tick(){tbSessionFrame(tick);}tbSessionFrame(tick);
+
+tbSessionProgram('COMPILE.HTM');
 </script></body></html>

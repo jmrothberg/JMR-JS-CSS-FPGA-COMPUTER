@@ -1,7 +1,7 @@
 <!doctype html>
-<!-- jmr-toolbox: resident-v1 -->
+<!-- jmr-toolbox: resident-v2 -->
 <!-- Shared native-JavaScript Toolbox example. Scratch: 20000..20063 and
-     21000..25095. These ranges belong exclusively to this application. -->
+     21000..21031. These ranges belong exclusively to this application. -->
 <html><head><title>Toolbox Demo</title></head><body><canvas width="640" height="480"></canvas>
 <script>
 var c=document.querySelector("canvas").getContext("2d");
@@ -18,7 +18,7 @@ function pointer(x,y,b){tbUIPointer(x,y,b);changed=1;}
 addEventListener("mousedown",function(e){held=1;pointer(e.clientX,e.clientY,held);});
 addEventListener("mousemove",function(e){pointer(e.clientX,e.clientY,held);});
 addEventListener("mouseup",function(e){held=0;pointer(e.clientX,e.clientY,held);});
-addEventListener("keydown",function(e){tbUIKey(e.keyCode,e.charCode);changed=1;});
+addEventListener("keydown",function(e){if(e.keyCode==254)tbDialogOpen(1,[65,98,111,117,116],[[83,104,97,114,101,100,32,84,111,111,108,98,111,120]],[]);else tbUIKey(e.keyCode,e.charCode);changed=1;});
 function frame(){
  var command=tbMenuCommand(),result=tbDialogResult();
  if(command==1){dialogKind=1;tbDialogOpen(4,[79,112,101,110],choices,[]);}

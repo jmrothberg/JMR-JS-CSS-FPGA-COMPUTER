@@ -8,10 +8,7 @@ import re
 import struct
 import sys
 
-# Verification tooling may live outside the immutable hardware snapshot.
-# Import the compiler/model from the explicitly audited frozen source.
-ROOT = (Path(sys.argv[sys.argv.index('--source-root')+1]).resolve()
-        if '--source-root' in sys.argv else Path(__file__).resolve().parents[1])
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from functional_model.jsb_format import ProgramImage, FLAG_TOOLBOX, TOOLBOX_WORDS
 from functional_model.toolbox_rom import unpack_rom, fingerprint
@@ -49,7 +46,6 @@ def required_code_words(image):
         end=offsets[0]
     return (end+3)//4-(TOOLBOX_WORDS if image.flags&FLAG_TOOLBOX else 0)
 
-
 def audit(source_root, disk):
     source_root, disk = Path(source_root), Path(disk)
     vol = open_volume(disk)
@@ -68,17 +64,25 @@ def audit(source_root, disk):
     require(rom == (source_root/'storage/TOOLBOX.ROM').read_bytes(), 'disk ROM differs from frozen seed')
     factory = b''.join(struct.pack('<I', int(v,16)) for v in (source_root/'vectors/toolbox_code.hex').read_text().split())
     require(factory == payload, 'ROM differs from frozen full factory instructions')
-    for name, expected in [('toolbox_code0.hex',payload[:8192]), ('toolbox_code1.hex',payload[8192:12288])]:
+    for name, expected in [('toolbox_code0.hex',payload[:16384]), ('toolbox_code1.hex',payload[16384:24576]), ('toolbox_code2.hex',payload[24576:28672]), ('toolbox_code3.hex',payload[28672:32768])]:
         actual=b''.join(struct.pack('<I',int(v,16)) for v in (source_root/'vectors'/name).read_text().split())
         require(actual==expected, f'{name} differs from ROM physical bank')
     identity_text=(source_root/'rtl/engines/jmr_toolbox_rom_pkg.sv').read_text()
     require(int(re.search(r"DEFAULT_HASH=32'h([0-9a-fA-F]+)",identity_text)[1],16)==fingerprint(payload), 'factory identity differs from ROM')
     rtl=(source_root/'rtl/engines/jmr_toolbox.sv').read_text()
-    require("32'h0001003f" in rtl and 'COPY_FB_WAIT' in rtl, 'frozen hardware lacks bitmap capability/read service')
+    require("32'h0001007f" in rtl and 'COPY_FB_WAIT' in rtl, 'frozen hardware lacks bitmap capability/read service')
     core=(source_root/'rtl/jmr_js_core.sv').read_text()
     require('.fb_req(tb_fb_req)' in core and '.fb_ack(tb_fb_ack)' in core, 'bitmap framebuffer read port is not wired')
     vm=(source_root/'rtl/engines/jmr_js_vm.sv').read_text()
     require('21504' in vm or '21_504' in vm, 'expected 21504-word application capacity missing')
+    from tools.toolbox_manifest import build_manifest
+    for resource in ('TOOLBOX.LNK','PAINT.RSC'):
+        require(resource in names,f'required resource missing: {resource}')
+        if resource in names:
+            require(vol.read_file(names[resource])==(source_root/'storage'/resource).read_bytes(),
+                    f'disk {resource} differs from source')
+    if 'TOOLBOX.LNK' in names:
+        require(vol.read_file(names['TOOLBOX.LNK'])==build_manifest(),'link manifest differs from current ROM/library bindings')
     sysdata=vol.read_file(names['SYSTEM.SYS'])
     unpack_sys(sysdata)
     require(sysdata==(source_root/'storage/SYSTEM.SYS').read_bytes(), 'disk SYS differs from frozen seed')
@@ -106,7 +110,7 @@ def audit(source_root, disk):
         if source is not None or htmlname in names:
             html=source.read_bytes() if source is not None else vol.read_file(names[htmlname])
             source_hash=digest(html)
-            marked=b'jmr-toolbox: resident-v1' in html[:1024]
+            marked=b'jmr-toolbox: resident-v2' in html[:1024]
             require(marked==resident,f'{name}: source marker / resident image disagree')
             if htmlname in names and source is not None:
                 cardhtml=vol.read_file(names[htmlname])
@@ -128,7 +132,7 @@ def audit(source_root, disk):
         require(name in names,f'required program missing: {name}')
     return dict(passed=not errors, disk=str(disk.resolve()),disk_sha256=digest(disk.read_bytes()),
                 source_root=str(source_root.resolve()),rom_sha256=digest(rom),
-                rom_identity=f'{fingerprint(payload):08x}',capabilities=65599,
+                rom_identity=f'{fingerprint(payload):08x}',capabilities=65663,
                 system_sha256=digest(sysdata),programs=programs,errors=errors)
 
 

@@ -127,20 +127,84 @@ function _fail(code, a, b, c, d, e, f, g) {
   cdone(code, perr, n);
 }
 
-// Resident clients need host linking; do not silently mint missing helpers.
+// Only the v2 marker opts into the bounded on-device resident linker.
 function needsRomLink() {
- var sig = [106,109,114,45,116,111,111,108,98,111,120,58,32,114,101,115,105,100,101,110,116,45,118,49];
+ var sig = "jmr-toolbox: resident-v";
  var i=0,j=0,c,n=srcLen();
  if(n>1024)n=1024;
  while(i<n){
   c=srcByte(i);
-  if(c==sig[j]){j=j+1;if(j==24)return 1;}
-  else {if(c==sig[0])j=1;else j=0;}
+  if(c==strByte(sig,j)){j=j+1;if(j==23){c=srcByte(i+1);if(i+1<n&&c==50)return 2;if(i+1<n&&c==49)return 1;j=0;}}
+  else {if(c==106)j=1;else j=0;}
   i=i+1;
  }
  return 0;
 }
 
+// Resident v2 linker. Scratch is below ART_KEEP; SOURCE remains read-only.
+var LINK_OFF = 368640;
+var LINK_MODE = 0;
+var LINK_NAMES = 0;
+var LINK_FUNCS = 0;
+var LINK_VARS = 0;
+var LINK_MAP = 0;
+var LINK_BYTES = 0;
+function linkXor(a,b) { var x=a&b;if(x<0)x=x+4294967296;return a+b-2*x; }
+function linkCrc(o,n) {
+ var c=4294967295,i=0,j=0;
+ while(i<n){c=linkXor(c,_gr(o+i));j=0;
+  while(j<8){if(c%2)c=linkXor(Math.floor(c/2),3988292384);else c=Math.floor(c/2);j=j+1;}i=i+1;}
+ return 4294967295-c;
+}
+function linkName(rom) {
+ _w32(LINK_OFF+8176,1280266068);_w32(LINK_OFF+8180,777539394);
+ _w32(LINK_OFF+8184,rom?5066578:4935244);
+}
+function linkReadManifest() {
+ var n;
+ linkName(0);n=fsRead(LINK_OFF+8176,0,LINK_OFF,8176);
+ if(_r32(LINK_OFF)!=1280593226 || _r32(LINK_OFF+4)!=4194306)return 0;
+ if(_r32(LINK_OFF+8)!=n-64)return 0;
+ if(fsRead(LINK_OFF+8176,n,LINK_OFF+8175,1)!=0)return 0;
+ if(linkCrc(LINK_OFF+64,n-64)!=_r32(LINK_OFF+12))return 0;
+ if(_r32(LINK_OFF+32)!=536813568)return 0;
+ LINK_NAMES=_r16(LINK_OFF+24);LINK_VARS=_r16(LINK_OFF+28);LINK_FUNCS=_r16(LINK_OFF+30);LINK_BYTES=n;
+ if(LINK_NAMES>NAME_MAX || _r16(LINK_OFF+26)>1024 || LINK_VARS>LINK_NAMES || LINK_FUNCS>FN_MAX)return 0;
+ return 1;
+}
+function linkSeed() {
+ var p=LINK_OFF+64,i=0,n,h,j;
+ while(i<LINK_NAMES){
+  if(p+4>LINK_OFF+LINK_BYTES)return 0;
+  n=_r16(p);h=_r16(p+2);p=p+4;
+  if(n>255 || p+n>LINK_OFF+LINK_BYTES || blobLen+n>BLOB_MAX)return 0;
+  nameNew(n,h);j=0;while(j<n){_gw(NBLOB_OFF+blobLen+j,_gr(p+j));j=j+1;}
+  blobLen=blobLen+n;p=p+n;i=i+1;
+ }
+ nPool=_r16(LINK_OFF+26);n=nPool*8;
+ if(p+n>LINK_OFF+LINK_BYTES)return 0;
+ j=0;while(j<n){_gw(POOL_OFF+j,_gr(p+j));j=j+1;}p=p+n;
+ LINK_MAP=p;p=p+LINK_VARS*2;
+ if(p+LINK_FUNCS*6!=LINK_OFF+LINK_BYTES)return 0;
+ i=0;while(i<LINK_FUNCS){
+  n=_r16(p);h=_r16(p+2);j=_r16(p+4);
+  if(n>=LINK_NAMES || h>=8191 || j>16 || fnFind(n)>=0)return 0;
+  fnAdd(n,h,j);p=p+6;i=i+1;
+ }
+ return 1;
+}
+function linkReadRom() {
+ var n=0,i=0,h=0,w=0;
+ linkName(1);n=fsRead(LINK_OFF+8176,0,OPS_OFF,32784);
+ if(n!=32784 || fsRead(LINK_OFF+8176,32784,LINK_OFF+8175,1)!=0)return 0;
+ if(_r32(OPS_OFF)!=1414679882 || _r32(OPS_OFF+4)!=1048578 || _r32(OPS_OFF+8)!=32768)return 0;
+ if(_r32(OPS_OFF+12)!=_r32(LINK_OFF+16) || linkCrc(OPS_OFF+16,32768)!=_r32(LINK_OFF+16))return 0;
+ while(i<8192){w=_r32(OPS_OFF+16+i*4);if(i==8191 && w!=2097163)return 0;
+  h=(h*2)%4294967296+Math.floor(h/2147483648);h=linkXor(h,w);i=i+1;}
+ if(h!=_r32(LINK_OFF+20))return 0;
+ i=0;while(i<32768){_gw(OPS_OFF+i,_gr(OPS_OFF+16+i));i=i+1;}
+ nOps=8192;return 1;
+}
 // ---- the virtual source stream ------------------------------------------
 // Spans describe the residual JS as a sequence of source ranges plus
 // synthetic semicolons. vAt(vp) is the byte at virtual position vp. The
@@ -229,14 +293,10 @@ var tokN = 0;
 var tokOver = 0;
 
 function emitTok(kind, sub, off, len) {
-  if (tokN >= TOK_MAX) { tokOver = 1; return; }
+  if (tokN >= TOK_MAX || len>255) { tokOver = 1; return; }
   var b = TOK_OFF + tokN * TOK_STRIDE;
-  _gw(b, kind);
-  _gw(b + 1, sub);
-  _gw(b + 2, off % 256);
-  _gw(b + 3, Math.floor(off / 256) % 256);
-  _gw(b + 4, Math.floor(off / 65536) % 256);
-  _gw(b + 5, len > 255 ? 255 : len);
+  _w16(b,kind+sub*256);
+  _w32(b+2,off+len*16777216);
   tokN = tokN + 1;
 }
 
@@ -689,7 +749,7 @@ var CREC_MAX = 1024;
 var NAME_MAX = 1024;
 var BLOB_MAX = 16384;
 var GS_MAX = 2048;
-var FN_MAX = 128;
+var FN_MAX = 256;
 var ART_KEEP = 376832;  // copy of CSTG_ART_OFF; tokens would overwrite 8192
 
 var nOps = 0;
@@ -705,13 +765,14 @@ var perr = 0;
 function layout() {
   IMG_OFF = TOK_OFF;                      // the image later overwrites tokens
   OPS_OFF = TOK_OFF + tokN * TOK_STRIDE;
+  if(LINK_MODE && OPS_OFF<IMG_OFF+131072)OPS_OFF=IMG_OFF+131072;
   CREC_OFF = OPS_OFF + OPS_MAX * 4;
   NIDX_OFF = CREC_OFF + (CREC_MAX + 1) * 12;
   NBLOB_OFF = NIDX_OFF + NAME_MAX * 8;
   LOC_OFF = NBLOB_OFF + BLOB_MAX;
   FSET_OFF = LOC_OFF + 8192; // names any function declares
   NAT_OFF = FSET_OFF + 2048;
-  FN_OFF = NAT_OFF + 64 * 4;
+  FN_OFF = NAT_OFF + 128 * 4;
   CLS_OFF = FN_OFF + FN_MAX * 8;
   PAL_OFF = CLS_OFF + 2048;
   FSTY_OFF = PAL_OFF + 768;           // 4 bytes per row
@@ -764,12 +825,11 @@ function emit(op, a0, a1) {
 }
 
 function patchA0(i, a0) {
-  _gw(OPS_OFF + i * 4 + 1, a0 % 256);
-  _gw(OPS_OFF + i * 4 + 2, Math.floor(a0 / 256) % 256);
+  _w16(OPS_OFF+i*4+1,a0);
 }
 
 function opCode(i) { return _gr(OPS_OFF + i * 4); }
-function opA0(i) { return _gr(OPS_OFF + i * 4 + 1) + _gr(OPS_OFF + i * 4 + 2) * 256; }
+function opA0(i) { return _r16(OPS_OFF+i*4+1); }
 function opA1(i) { return _gr(OPS_OFF + i * 4 + 3); }
 function setA1(i, v) { _gw(OPS_OFF + i * 4 + 3, v); }
 
@@ -784,10 +844,7 @@ function nBlob(i) {
 function nameNew(len, h) {
   if (nNames >= NAME_MAX || blobLen + len > BLOB_MAX) { over = 1; return 0; }
   var o = NIDX_OFF + nNames * 8;
-  _gw(o, blobLen % 256);
-  _gw(o + 1, Math.floor(blobLen / 256) % 256);
-  _gw(o + 2, Math.floor(blobLen / 65536) % 256);
-  _gw(o + 3, len);
+  _w32(o,blobLen+len*16777216);
   _w16(o + 4, h);
   nNames = nNames + 1;
   return nNames - 1;
@@ -991,6 +1048,20 @@ function nt(h, l, id) {
 }
 
 function natInit() {
+  nt(47195,8,49); // srcWrite
+  nt(10583,9,50); // srcSetLen
+  nt(57092,4,51); // joyX
+  nt(57093,4,52); // joyY
+  nt(34061,10,53); // joyButtons
+  nt(6984,10,54); // Math.round
+  nt(779,6,58); // fsList
+  nt(21266,7,60); // fsWrite
+  nt(25521,8,61); // fsRemove
+  nt(41579,8,62); // fsRename
+  nt(62590,6,63); // sysRun
+  nt(44035,6,59); // fsRead: resident linker file reads
+  nt(4825,7,66); // strByte: interned string bytes
+  nt(55048,11,65); // sysDocument: raw SOURCE metadata ABI
   nt(36147,7,64); // toolbox: shared bulk-service ABI
   // run 71 language-lite (host NATIVE_IDS 55-57; performance.now = Date.now)
   nt(32377,8,55);   nt(7025,5,56);   nt(11,9,57);   nt(3096,15,35); 
@@ -1153,29 +1224,9 @@ function declAdd(ni) {
   if (nDecl < 128) { _w16(LOC_OFF + (declBase + nDecl) * 2, ni); nDecl = nDecl + 1; }
 }
 
-function declHas(ni) {
-  var i = 0;
-  while (i < nDecl) {
-    if (_r16(LOC_OFF + (declBase + i) * 2) === ni) { return 1; }
-    i = i + 1;
-  }
-  return 0;
-}
 
-// Every ENCLOSING function scope, not just the innermost one. Frames stack
-// upward from 512, so the whole live range is one scan. Getting this wrong
-// is subtle and fatal: a nested callback reading a variable owned by the
-// enclosing IIFE would be marked a1=1 and read vvars, where the value never
-// was — MISSILE's `state` came back undefined and .push landed on a number.
-function declHasAny(ni) {
-  var i = 512;
-  var top = declBase + nDecl;
-  while (i < top) {
-    if (_r16(LOC_OFF + i * 2) === ni) { return 1; }
-    i = i + 1;
-  }
-  return 0;
-}
+
+
 
 // ---- global sites --------------------------------------------------------
 // A reference that is neither a local nor a known function cannot be resolved
@@ -1184,10 +1235,7 @@ function declHasAny(ni) {
 function gsAdd(opIdx, ni, fnDepth) {
   if (nGs >= GS_MAX) { over = 1; return; }
   var o = GS_OFF + nGs * 8;
-  _gw(o, opIdx % 256);
-  _gw(o + 1, Math.floor(opIdx / 256) % 256);
-  _gw(o + 2, Math.floor(opIdx / 65536) % 256);
-  _gw(o + 3, fnDepth);
+  _w32(o,opIdx+fnDepth*16777216);
   _w16(o + 4, ni);
   nGs = nGs + 1;
 }
@@ -1519,9 +1567,7 @@ function primary() {
 
 // typeof is native id 40; its name has to exist in the table to be emitted.
 var TYPEOF_NI = -1;
-function internSrcLit(which) {
-  return TYPEOF_NI;
-}
+
 
 function postfix() {
   primary();
@@ -2050,6 +2096,7 @@ function prescanFns() {
   while (tKind(i) !== K_EOF) {
     if (isKw(i, 3) && tKind(i + 1) === K_ID) {
       ni = internSrc(tOff(i + 1), tLen(i + 1));
+      if(LINK_MODE && fnFind(ni)>=0 && fnFind(ni)<LINK_FUNCS){over=1;return;}
       if (fnFind(ni) < 0) { fnAdd(ni, 0, 0); }
     }
     i = i + 1;
@@ -2462,6 +2509,7 @@ function parse() {
   internThis();
   internArg();
   prescanFns();
+  if(over)return 11;
   compileAllClasses();
   compileAllFns();
   ti = unwrapIife();
@@ -2550,13 +2598,27 @@ function buildPool() {
 
 // var index = position among names that are not natives, in name order.
 function buildVars() {
-  var i = 0;
-  nVars = 0;
-  while (i < nNames) {
-    if (natIdOf(i) >= 0) { _w16(VMAP_OFF + i * 2, 65535); }
-    else { _w16(VMAP_OFF + i * 2, nVars); nVars = nVars + 1; }
-    i = i + 1;
+ var i=0,n=0,c=0;
+ nVars=0;
+ while(i<nNames){_w16(VMAP_OFF+i*2,65535);i=i+1;}
+ if(LINK_MODE){
+  while(nVars<LINK_VARS){
+   n=_r16(LINK_MAP+nVars*2);
+   if(n>=LINK_NAMES || _r16(VMAP_OFF+n*2)!=65535){over=1;return;}
+   _w16(VMAP_OFF+n*2,nVars);_w16(VMAP_OFF+NAME_MAX*2+nVars*2,n);nVars=nVars+1;
   }
+  i=8192;
+  while(i<nOps){c=opCode(i);
+   if(c==O_LOADV || c==O_STOREV || c==O_LETV){n=opA0(i);if(_r16(VMAP_OFF+n*2)==65535)_w16(VMAP_OFF+n*2,65534);}
+   i=i+1;
+  }
+ }
+ i=0;
+ while(i<nNames){
+  if(LINK_MODE ? _r16(VMAP_OFF+i*2)==65534 : natIdOf(i)<0){_w16(VMAP_OFF+i*2,nVars);_w16(VMAP_OFF+NAME_MAX*2+nVars*2,i);nVars=nVars+1;}
+  i=i+1;
+ }
+ if(nVars>512)over=1;
 }
 
 function varOf(ni) {
@@ -2587,7 +2649,7 @@ function rewriteOps() {
     k = k + 6 + b * 4;
     i = i + 1;
   }
-  i = 0;
+  i = LINK_MODE ? 8192 : 0;
   while (i < nOps) {
     c = opCode(i);
     a0 = opA0(i);
@@ -2603,6 +2665,7 @@ function rewriteOps() {
         patchA0(i, fnEntry(fi));
       } else {
         nid = natIdOf(a0);
+        if(LINK_MODE && nid<0)over=1;
         patchA0(i, nid < 0 ? 33 : nid);
       }
     }
@@ -2778,7 +2841,7 @@ function buildPalette() {
 // ---- image emit ----------------------------------------------------------
 var ip = 0;
 
-function ob(b) { _gw(IMG_OFF + ip, b % 256); ip = ip + 1; }
+function ob(b) { if(LINK_MODE && IMG_OFF+ip>=OPS_OFF){over=1;return;} _gw(IMG_OFF + ip, b % 256); ip = ip + 1; }
 function o16(v) { ob(v); ob(Math.floor(v / 256)); }
 function o32(v) {
   ob(v);
@@ -2796,7 +2859,7 @@ function emitImage() {
   o16(nOps);
   o16(nPool);
   o16(nVars);
-  o16(11);                                  // V2 | ASET | VALUE64
+  o16(LINK_MODE ? 27 : 11);                  // V2 | ASET | VALUE64 | optional RESIDENT
   o32(0);                                   // aset_off, backpatched below
   i = 0;
   while (i < nPool) {
@@ -2820,8 +2883,8 @@ function emitImage() {
   }
   o16(nVars);
   i = 0;
-  while (i < nNames) {
-    if (_r16(VMAP_OFF + i * 2) !== 65535) { o16(i); }
+  while (i < nVars) {
+    o16(_r16(VMAP_OFF + NAME_MAX * 2 + i * 2));
     i = i + 1;
   }
   o16(nCls);
@@ -2889,7 +2952,9 @@ function emitImage() {
 }
 
 // ---- entry ---------------------------------------------------------------
-if(needsRomLink()) {_fail(15,82,79,77,76,73,78,75);} else {
+LINK_MODE=needsRomLink();
+if(LINK_MODE)OPS_MAX=29696;
+if(LINK_MODE==1) {_fail(15,82,79,77,76,73,78,75);} else {
 hasArt = _gr(HDR_ART);
 HA_RAW = hasArt;
 // 2026-09-01 board: the flag byte read back as garbage for a title with NO
@@ -2920,22 +2985,25 @@ if (st === 0 && _gr(HDR_PHASE) === 1) {
   BRK_OFF = FSTY_OFF + 1024 * 4;
   POOL_OFF = BRK_OFF + 1024;
   VMAP_OFF = POOL_OFF + 1024 * 8;
-  LC_OFF = VMAP_OFF + NAME_MAX * 2;
+  LC_OFF = VMAP_OFF + NAME_MAX * 4;
   // Global-site table uses whatever is left before the ART copy.
   GS_OFF = LC_OFF + CREC_MAX * 4;
-  GS_MAX = Math.floor((ART_KEEP - GS_OFF) / 8);
+  GS_MAX = Math.floor(((LINK_MODE?LINK_OFF:ART_KEEP) - GS_OFF) / 8);
   if (GS_MAX < 1) { GS_MAX = 1; }
   natInit();
   TYPEOF_NI = -1;
-  st = parse();
+  if(LINK_MODE && (GS_OFF>=LINK_OFF || !linkReadManifest() || !linkSeed() || !linkReadRom()))st=15;
+  else st = parse();
   if (st === 0) {
     buildPool();
     buildVars();
+    if(nOps+nPool*2+4>(LINK_MODE?29696:21504))over=1;
     buildPalette();
     rewriteOps();
     var len = emitImage();
     _w32(HDR_OUT_OFF, IMG_OFF);
-    cdone(hasArt ? 133 : 0, len, 0);
+    if(st==15 || over)_fail(15,82,79,77,76,73,78,75);
+    else cdone(hasArt ? 133 : 0, len, 0);
   }
 }
 
@@ -2945,6 +3013,7 @@ else if (st === ST_ERR_REGEX) { _fail(st, 82, 69, 71, 69, 88, 0, 0); }   // REGE
 else if (st === 10) { _fail(st, 76, 79, 67, 65, 76, 83, 0); }            // LOCALS
 else if (st === 11) { _fail(st, 66, 73, 71, 0, 0, 0, 0); }               // BIG
 else if (st === 12) { _fail(st, 83, 89, 78, 84, 65, 88, 0); }            // SYNTAX
+else if (st === 15) { _fail(st,82,79,77,76,73,78,75); }
 else if (st !== 0) { _fail(st, 67, 72, 65, 82, 0, 0, 0); }               // CHAR
 }
 </script>

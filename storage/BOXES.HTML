@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Two boxes — JMR</title></head>
@@ -8,9 +10,9 @@
 var canvas = document.querySelector("canvas");
 var c = canvas.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-c.systemWindow=8;
-c.systemViewport=1;
-c.systemAbout="Two Boxes|A simple animated graphics demo.";
+tbSessionProperty(c,0,8);
+tbSessionProperty(c,1,1);
+tbSessionProperty(c,2,"Two Boxes|A simple animated graphics demo.");
 
 c.imageSmoothingEnabled = false;
 
@@ -44,9 +46,11 @@ function loop() {
   c.fillText("FRAME", 8, 464);
   c.fillText(n, 64, 464);
 
-  requestAnimationFrame(loop);
+  tbSessionFrame(loop);
 }
-requestAnimationFrame(loop);
+tbSessionFrame(loop);
+
+tbSessionProgram('BOXES.HTM');
 </script>
 </body>
 </html>

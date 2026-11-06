@@ -5377,8 +5377,42 @@ module jmr_js_vm_exec64 (
                                                 end
                                             end
                                         end
+                                        8'd66: begin // strByte(internedString, index=0)
+                                            logic valid_index;
+                                            logic signed [32:0] byte_index;
+                                            hp_nat_n = 4'd0;
+                                            v64_array_index_task(argc >= 2 ? call_arg_q[1] : 64'd0, valid_index, byte_index);
+                                            valid_index = valid_index && byte_index >= 0 && byte_index < 33'd65536;
+                                            if (argc < 1 || !valid_index ||
+                                                call_arg_q[0][63:48] != V64_TAG_PREFIX ||
+                                                call_arg_q[0][47:44] != V64_KIND_STRING ||
+                                                call_arg_q[0][31:0] >= 1024 ||
+                                                call_arg_q[0][31:0] >= names_n) begin
+                                                vst_wr(base, v64_int32_number(32'hffffffff));
+                                                vsp_n = base + 12'd1;
+                                                ip_n = ip + 16'd1;
+                                                code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                                state_n = S_FETCH_WAIT;
+                                            end else if (!hash2_q) begin
+                                                // Reuse the existing synchronous name metadata read.
+                                                hash2_n = 1'b1; opnd_n = 1'b1; opnd2_n = 1'b1;
+                                                state_n = S_V64_EXEC;
+                                            end else if (byte_index >= {17'd0, name_blen_rdata}) begin
+                                                vst_wr(base, v64_int32_number(32'hffffffff));
+                                                vsp_n = base + 12'd1;
+                                                ip_n = ip + 16'd1;
+                                                code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                                state_n = S_FETCH_WAIT;
+                                            end else begin
+                                                name_rdaddr_n = name_off_rdata + 16'(byte_index);
+                                                hp_nat_n = 4'd15; // STRIDX result is a numeric byte.
+                                                vsp_n = base + 12'd1;
+                                                ip_n = ip + 16'd1;
+                                                state_n = S_V64_STRIDX;
+                                            end
+                                        end
                                         // One cold, serialized service state; no file logic in the opcode datapath.
-                                        8'd58,8'd59,8'd60,8'd61,8'd62,8'd63,8'd64: begin
+                                        8'd58,8'd59,8'd60,8'd61,8'd62,8'd63,8'd64,8'd65: begin
                                             hp_slot_n=5'(nid-8'd57);vnat_base_n=base;state_n=S_FS;
                                         end
                                         default: begin
@@ -5744,6 +5778,7 @@ module jmr_js_vm_exec64 (
                                 end
                             end
                             OP_ARR_GET: begin
+                                hp_nat_n = 4'd0; // Ordinary indexing always returns an interned char.
                                 if (vsp < 12'd2) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd4522;
                                     running_n = 1'b0; state_n = S_DONE;

@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>MK BIG CPU — JMR</title></head>
@@ -38,9 +40,9 @@ var MK_IMG = {
 var canvas = document.querySelector("canvas");
 var c = canvas.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-c.systemWindow=8;
-c.systemViewport=1;
-c.systemAbout="MK Big CPU|Fight a computer-controlled opponent.";
+tbSessionProperty(c,0,8);
+tbSessionProperty(c,1,1);
+tbSessionProperty(c,2,"MK Big CPU|Fight a computer-controlled opponent.");
 
 c.imageSmoothingEnabled = false;
 var W = 640;
@@ -601,7 +603,7 @@ function draw() {
 function frame() {
   update();
   draw();
-  requestAnimationFrame(frame);
+  tbSessionFrame(frame);
 }
 
 function setKey(e, down) {
@@ -623,13 +625,15 @@ function setKey(e, down) {
   if (key === "p" || key === "P" || code === 80) k1.kick = down;
 }
 
-document.addEventListener("keydown", function (e) { setKey(e, 1); }, false);
-document.addEventListener("keyup", function (e) { setKey(e, 0); }, false);
+tbSessionListen("keydown", function (e) { setKey(e, 1); }, false);
+tbSessionListen("keyup", function (e) { setKey(e, 0); }, false);
 
 loadAll();
-requestAnimationFrame(frame);
+tbSessionFrame(frame);
 
 
+
+tbSessionProgram('MKCA.HTM');
 </script>
 <script data-host="chrome">
 (function(){

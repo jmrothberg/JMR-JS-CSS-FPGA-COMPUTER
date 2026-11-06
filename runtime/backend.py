@@ -648,6 +648,15 @@ class PythonBackend(RuntimeBackend):
         m.canvas.clear(0)
         m.canvas.clear_front(0)
         m._nat_stg_write(16385,1)
+        # Resident hardware resumes by executing the cached image with fresh
+        # globals and the restored arena. Do the same here: UI glyph/descriptor
+        # scratch lies outside the saved arena and may belong to the last app.
+        from functional_model.jsb_format import FLAG_TOOLBOX
+        image=getattr(hw,'program_image',None)
+        if image is not None and image.flags & FLAG_TOOLBOX:
+            m._start_html_image(image,share_machine=True)
+            self._finder_resident=None
+            if not m.running:return False
         self.desktop.visible=False
         return True
 
@@ -712,12 +721,8 @@ class PythonBackend(RuntimeBackend):
             self._finder_home=False
             self.machine.paint_monitor('> ')
             return
-        if how==5:
-            self._perform_change(('tool','Note'));return
-        if how==6:
-            self._perform_change(('tool','Help'));return
-        if how==7:
-            self._perform_change(('tool','Utility'));return
+        if how in (5,6,7):
+            how,name={5:(0,'NOTE.HTM'),6:(2,'HELP.MD'),7:(0,'UTILITY.HTM')}[how]
         self.machine.unnamed_document=False
         self.machine.type_line('LOAD "'+name+'"')
         suf=Path(name).suffix.upper()
@@ -760,8 +765,17 @@ class PythonBackend(RuntimeBackend):
     def set_key_bits(self, bits: int) -> None:
         self.machine.set_key_bits(bits)
 
+    def _software_ui_active(self):
+        from functional_model.jsb_format import FLAG_TOOLBOX
+        hw=getattr(self.machine,'_hw_vm',None)
+        image=getattr(hw,'program_image',None)
+        return bool(self.machine.running and image is not None and image.flags & FLAG_TOOLBOX)
+
     def key_event(self, key_code: int, key: str, pressed: bool) -> None:
         if self.machine.system_compiling:return
+        if self._software_ui_active():
+            self.machine.input.key_event(key_code,key,pressed)
+            return
         if self.system_menu.about:
             if pressed and key_code in (13,27):self.system_menu.about=False
             return
@@ -817,13 +831,16 @@ class PythonBackend(RuntimeBackend):
         if old_dialog and not self.system_menu.classic.dialog and not actions:self._cancel_dialog()
         if self.system_menu.open and self.desktop.menu:
             self.desktop.menu=0;self.desktop.dirty=True
+        if self._software_ui_active() and self.system_menu.about:
+            self.system_menu.about=False
+            self._send_system_key(254)
         self._classic_actions(actions)
         if consumed:return True
         if self.desktop.visible:
             action=self.desktop.pointer(x,y,buttons)
             if action:self._desktop_action(*action)
             return True
-        if self.machine.system_window[0]==8 and self.machine.system_viewport:
+        if not self._software_ui_active() and self.machine.system_window[0]==8 and self.machine.system_viewport:
             from functional_model.canvas_engine import game_viewport_y
             y=game_viewport_y(y)
         if self.machine.running and not self.machine.input.set_mouse(x,y,buttons):
@@ -1154,6 +1171,7 @@ class PythonBackend(RuntimeBackend):
             self.machine.canvas.display_overlays = ()
             return self.machine.canvas
         params=list(getattr(self.machine,'system_window',(0,0,0,0)))
+        if self._software_ui_active():params=[0,0,0,0]
         if self.desktop.visible:params=[0,0,0,0]
         elif getattr(self.machine,'system_compiling',False):params=[3,0,0,(getattr(self.machine,'system_stage',0)&7)<<4]
         elif not self.machine.running:params=[7,0,0,0]
@@ -1214,7 +1232,7 @@ class PythonBackend(RuntimeBackend):
                     self.machine.type_line('EDIT');self._desktop_return=True
         flags=getattr(self.machine,'system_window',[0,0,0,0])[3]
         notice=(flags>>4)&3
-        if notice and notice!=self._last_notice and self.machine.running:
+        if notice and notice!=self._last_notice and self.machine.running and not self._software_ui_active():
             self.system_menu.classic.dialog='message'
             self.system_menu.classic.message='Selection exceeds 4K clipboard.' if notice==1 else 'Document is full.'
         self._last_notice=notice

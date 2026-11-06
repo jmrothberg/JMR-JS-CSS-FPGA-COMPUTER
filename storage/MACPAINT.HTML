@@ -1,6 +1,10 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!doctype html>
 <html><head><meta charset="utf-8"><title>MacPaint</title></head>
 <body><canvas id="c" width="640" height="480"></canvas><script>
+// PAINT.RSC at373504..375114; glyphdescriptor375168..375231.
+// Mutablepatterns374795..375098, tones375099..375114. SharedUI starts380320.
 // MacPaint for this machine. A windowed program (systemWindow 6).
 // The system draws the menu bar and the window frame. This window
 // does not scroll: windowBars is 0, so there is no scroll bar.
@@ -19,13 +23,6 @@
 //   165888       undo of those colors. 258048 is the visit bits, 23040 bytes.
 //   281088       swap scratch, 92160 bytes. Undo exchanges two buffers
 //                through it. It does not overlap the page, undo, or clipboard.
-//                A drag also CopyBits one glass rectangle into this scratch
-//                (the offscreen port). Undo clears that grab first.
-//   373248       four 64-byte descriptors: 1-bit page, 4-bit color, screen, port.
-// The page is shown with toolbox 3 (packed blit, FatBits scale 8). A drag
-// copies one glass rectangle into the swap port with toolbox 6 and puts it
-// back on the next move. Color stays; the 1984 page was black ink on white,
-// and the grid snaps without painting dots.
 //   1900         file name. 1920 is the 8-byte header.
 // The color bytes sit in the image half of the arena. The 1-bit page,
 // its undo, and the clipboard already fill the first 73728 bytes.
@@ -72,73 +69,63 @@
 // The 16 colors are the ones this glass shows exactly: black, white,
 // red, green, blue, yellow, cyan, magenta, and eight greys.
 var ctx=document.getElementById("c").getContext("2d");
+var PC={glyph:-1,bits:0,ready:0,bootRow:0,named:0,typed:0,nFiles:0,nameLen:7,popX:0,popY:0,lastPatTick:0};
+
 ctx.imageSmoothingEnabled=false;
-ctx.systemWindow=6;
-ctx.systemAbout="MacPaint|Draw, type, fill, and save a picture.";
-ctx.systemTitle="untitled";
+tbSessionProperty(ctx,0,6);
+tbSessionProperty(ctx,2,"MacPaint|Draw, type, fill, and save a picture.");
+tbSessionProperty(ctx,4,"untitled");
 ctx.windowBars=0;
-ctx.systemMenus="File|New=192|Open...=193|Close=194|Save=195|Save As...=196|Revert=197|Print=198|Print Catalog=199|Quit=200;Edit|Undo=201|-|Cut=202|Copy=203|Paste=204|Clear=205|-|Invert=206|Trace Edges=207|Flip Horizontal=208|Flip Vertical=209|Rotate=210;Goodies|Grid=160|FatBits=161|Show Page=211|Edit Pattern=163|Brush Shape=212|Brush Mirrors=162|Introduction=213|Short Cuts=214;Font|Chicago=164|Geneva=165|New York=166|Monaco=167|Venice=168|London=169|Athens=170|Toronto=171|San Francisco=172;FontSize|9 point=173|12=174|14=175|18=176|24=177|36=178|48=179|72=180;Style|Plain=181|Bold=182|Italic=183|Underline=184|Outline=185|Shadow=186|-|Align Left=187|Align Middle=188|Align Right=189";
+tbSessionMenus(ctx,["File|New=192|Open...=193|Close=194|Save=195|Save As...=196|Revert=197|Print=198|Print Catalog=199|Quit=200", "Edit|Undo=201|-|Cut=202|Copy=203|Paste=204|Clear=205|-|Invert=206|Trace Edges=207|Flip Horizontal=208|Flip Vertical=209|Rotate=210", "Goodies|Grid=160|FatBits=161|Show Page=211|Edit Pattern=163|Brush Shape=212|Brush Mirrors=162|Introduction=213|Short Cuts=214", "Font|Chicago=164|Geneva=165|New York=166|Monaco=167|Venice=168|London=169|Athens=170|Toronto=171|San Francisco=172", "FontSize|9 point=173|12=174|14=175|18=176|24=177|36=178|48=179|72=180", "Style|Plain=181|Bold=182|Italic=183|Underline=184|Outline=185|Shadow=186|-|Align Left=187|Align Middle=188|Align Right=189"]);
 ctx.font="16px";
 ctx.fillStyle="#000000";
 var VX=80,VY=88,VW=520,VH=256;
-var DOC_W=576,DOC_H=320,STRIDE=72,DOC_BYTES=23040;
-var BASE=4096,BASE_U=27136,BASE_C=50176,CLIP_MAX=23552;
-var COLB=73728,COLU=165888,CSTR=288,COLN=92160;
-var tick=0,booted=0,bootRow=0,need=1,needPen=0,penOn=0,penShow=0;
+
+
+
+
+var tick=0,booted=0,need=1,needPen=0,penOn=0,penShow=0;
+
 var tool=7,pat=0,penW=1,grid=0,fat=0,brush=0,mirror=0;
-var fontN=0,sizeN=1,alignN=0,stBold=0,stItal=0,stUnder=0,stOut=0,stShad=0,named=0;
+
+var fontN=0,sizeN=1,alignN=0,stBold=0,stItal=0,stUnder=0,stOut=0,stShad=0;
+
 var ink=1,inkCol=1,holdCol=0,edCol=1,useInk=0,dotNow=0,sh=0,spaceDown=0,joyFire=0,erasing=0,brushing=0;
-var docX=0,docY=0,down=0,dirty=0,bad=0,undoOk=0,typed=0,mode=0,docClean=1;
+
+var docX=0,docY=0,down=0,dirty=0,bad=0,undoOk=0,mode=0,docClean=1;
+
 var ax=0,ay=0,bx=0,by=0,lastX=0,lastY=0,lastSX=0,lastSY=0;
+
 var havePrev=0,pax=0,pay=0,pbx=0,pby=0;
+
 var selOn=0,selFloat=0,selDrag=0,moving=0,selX=0,selY=0,selW=0,selH=0,hasClip=0;
-var dragOffX=0,dragOffY=0,nPts=0,nFiles=0,nameLen=7;
+
+var dragOffX=0,dragOffY=0,nPts=0;
+
 var penX=16,penY=16,oldPX=16,oldPY=16,tx=8,ty=8,textX0=8;
-var sp=0,popX=0,popY=0,x0=0,y0=0,x1=0,y1=0;
-var rx=0,ry=0,rw=0,rh=0,fillX0=0,fillY0=0,fillX1=0,fillY1=0,lastPatTick=0;
+
+var sp=0,x0=0,y0=0,x1=0,y1=0;
+
+var rx=0,ry=0,rw=0,rh=0,fillX0=0,fillY0=0,fillX1=0,fillY1=0;
+
 // Visit bits for the bucket, past the color undo. A fill that does not
 // change a pixel still has to mark it, or that pixel stays open forever.
-var VIS=258048,SWAP=281088,job=0,fillT=0;
-var tbBits=0,grabbed=0,grabGX=0,grabGY=0,grabW=0,grabH=0;
+var job=0,fillT=0;
+
 var MASK=[128,64,32,16,8,4,2,1];
+
 var NAME=[80,73,67,84,85,82,69,0];
+
 var PW0=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+
 var PW1=[0,0,0];
+
 var C8=[0,0,0,0,0,0,0,0,0];
-var FA=[0,4433514500,11083448320,11105828170,4819720132,27718197619,13510137421,4437573632,2290360450,8726317192,156718208,139432064,4232,1015808,396,1143087376,15623448110,4701950094,15603929375,32247317566,2359917634,33840628798,6728664622,33321787656,15621113390,15621129292,415248768,138416264,2290622594,32537600,8726284424,15603929092];
-var FB=[15627640334,15621670449,32801506878,15620129326,32801080894,33840644639,33840644624,15620359726,18842895921,15170932878,7585466956,18879369809,17734058527,19182306865,19115132465,15621211694,32801505808,15621215821,32801509969,16660235326,33424543876,18842437166,18842436932,18842572458,18834663985,18834657412,33321787935,15309480206,17456826433,15101659214,4648337408,31];
-var FC=[8726249472,14728751,17748772414,15221262,1123599919,15269390,6753755400,521714734,17740645937,4307685518,2153843276,17736295058,13023449230,27973169,23905841,15255086,32045584,16301089,23904784,15218750,8888000806,18400877,18400580,18405034,18157905,18398254,32575775,6581653638,4433514628,13023416460,9078784];
-var P0=[255,255,255,255,255,255,255,255,221,255,119,255,221,255,119,255,221,119,221,119,221,119,221,119,170,85,170,85,170,85,170,85];
-var P1=[85,255,85,255,85,255,85,255,170,170,170,170,170,170,170,170,238,221,187,119,238,221,187,119,136,136,136,136,136,136,136,136];
-var P2=[177,48,3,27,216,192,12,141,128,16,2,32,1,8,64,4,255,136,136,136,255,136,136,136,255,128,128,128,255,8,8,8];
-var P3=[128,0,0,0,0,0,0,0,128,64,32,0,2,4,8,0,130,68,57,68,130,1,1,1,248,116,34,71,143,23,34,113];
-var P4=[85,160,64,64,85,10,4,4,20,34,73,148,41,146,68,40,191,0,191,191,176,176,176,176,0,0,0,0,0,0,0,0];
-var P5=[128,0,8,0,128,0,8,0,136,0,34,0,136,0,34,0,136,34,136,34,136,34,136,34,170,0,170,0,170,0,170,0];
-var P6=[255,0,255,0,255,0,255,0,17,34,68,136,17,34,68,136,255,0,0,0,255,0,0,0,1,2,4,8,16,32,64,128];
-var P7=[170,0,128,0,136,0,128,0,255,128,128,128,128,128,128,128,8,28,34,193,128,1,2,4,136,20,34,65,136,0,170,0];
-var P8=[64,160,0,0,4,10,0,0,3,132,72,48,12,2,1,1,128,128,65,62,8,8,20,227,16,32,84,170,255,2,4,8];
-var P9=[119,137,143,143,119,152,248,248,0,8,20,42,85,42,20,8];
+
 var WK=[0,0,0,0,0,0,0,0];
+
 // Color-row patterns reuse the first 16 masks and keep their own color.
-var TONE=[2,3,4,5,6,7,2,4,3,5,6,7,11,13,9,14];
 var COLS=["#FFF","#000","#F00","#0F0","#00F","#FF0","#0FF","#F0F","#222","#444","#666","#888","#AAA","#CCC","#EEE","#DDD"];
-var GW=[16,16,16,20,16,12,11,10,16,16,16,16,16,16,16,16];
-var G0=[0,1016,7174,8193,16385,32769,32774,32824,29120,52736,43008,28672,4096,4096,8192,0];
-var G1=[0,62439,32769,32769,0,0,32769,32769,32769,0,0,32769,32769,59343,0,0];
-var G2=[384,6768,9800,9802,4685,4681,26633,38913,34818,16386,8194,8196,4100,2056,1032,1032];
-var G3=[1024,3584,3584,7936,5888,13184,9088,25024,16832,49376,65504,98416,98416,196664,458812,1016063];
-var G4=[1792,2176,2432,2752,3248,2204,4238,8519,16519,32783,32791,16423,8263,4231,2310,1540];
-var G5=[2048,512,2216,540,2082,127,65,79,73,79,73,79,79,65,65,127];
-var G6=[56,40,56,56,56,56,56,511,257,511,257,257,257,341,683,2046];
-var G7=[30,17,33,50,78,68,132,136,264,272,528,544,960,896,768,512];
-var G8=[0,0,0,49152,12288,3072,768,192,48,12,3,0,0,0,0,0];
-var G9=[0,254,258,519,1035,2070,4140,8280,16560,65376,33216,33152,65280,0,0,0];
-var G10=[0,0,65535,32769,32769,32769,32769,32769,32769,32769,32769,32769,65535,0,0,0];
-var G11=[0,0,65535,54613,43691,54613,43691,54613,43691,54613,43691,54613,65535,0,0,0];
-var G12=[0,0,16380,16386,32769,32769,32769,32769,32769,32769,32769,16386,16380,0,0,0];
-var G13=[0,0,16380,21846,43691,54613,43691,54613,43691,54613,43691,21846,16380,0,0,0];
-var G14=[0,0,4080,14364,24582,49155,32769,32769,32769,49155,24582,14364,4080,0,0,0];
-var G15=[0,0,4080,15036,21846,60075,54613,43691,54613,60075,30038,15036,4080,0,0,0];
 
 function viewW(){ var k; k=520; if(fat) k=65; return k; }
 function viewH(){ var k; k=256; if(fat) k=32; return k; }
@@ -147,34 +134,32 @@ function r16(a){ return stgRead(a)+stgRead(a+1)*256; }
 function w16at(a,v){ var n; n=Math.floor(v); if(n<0) n=0; stgWrite(a,n-Math.floor(n/256)*256); stgWrite(a+1,Math.floor(n/256)); }
 // Toolbox v1. Addresses are arena bytes. One call moves or fills the
 // whole range; see docs/TOOLBOX_MIGRATION_GUIDE.md.
-function tbMove(src,dst,n){ return toolbox(1,src,dst,n); }
-function tbFill(dst,value,n){ return toolbox(2,dst,value,n); }
 function copyRange(src,dst,n){ var r; r=tbMove(src,dst,n); if(r<0) bad=1; return r; }
 function swapRange(a,b,n){
- if(tbMove(a,SWAP,n)<0) bad=1;
+ if(tbMove(a,281088,n)<0) bad=1;
  if(tbMove(b,a,n)<0) bad=1;
- if(tbMove(SWAP,b,n)<0) bad=1;
+ if(tbMove(281088,b,n)<0) bad=1;
 }
 function bitAt(base,x,y){
  var a,m,i,b;
- if(x<0||y<0||x>=DOC_W||y>=DOC_H) return 0;
+ if(x<0||y<0||x>=576||y>=320) return 0;
  i=x-Math.floor(x/8)*8; m=MASK[i];
- a=base+y*STRIDE+Math.floor(x/8); b=stgRead(a);
+ a=base+y*72+Math.floor(x/8); b=stgRead(a);
  return Math.floor(b/m)%2;
 }
-function pix(x,y){ var b; b=bitAt(BASE,x,y); return b; }
+function pix(x,y){ var b; b=bitAt(4096,x,y); return b; }
 function setBit(x,y,on){
  var a,m,b,i,bit;
- if(x<0||y<0||x>=DOC_W||y>=DOC_H) return;
+ if(x<0||y<0||x>=576||y>=320) return;
  docClean=0;
  i=x-Math.floor(x/8)*8; m=MASK[i];
- a=BASE+y*STRIDE+Math.floor(x/8); b=stgRead(a); bit=Math.floor(b/m)%2;
+ a=4096+y*72+Math.floor(x/8); b=stgRead(a); bit=Math.floor(b/m)%2;
  if(on&&bit==0) stgWrite(a,b+m);
  if(on==0&&bit==1) stgWrite(a,b-m);
  if(holdCol==0){
-  if(on&&inkCol>0) setNib(COLB,CSTR,x,y,inkCol);
+  if(on&&inkCol>0) setNib(73728,288,x,y,inkCol);
   else {
-   setNib(COLB,CSTR,x,y,0);
+   setNib(73728,288,x,y,0);
    if(on){ b=stgRead(a); if((Math.floor(b/m)%2)==1) stgWrite(a,b-m); }
   }
  }
@@ -193,31 +178,19 @@ function setNib(base,stride,x,y,c){
  stgWrite(a,h*16+lo);
 }
 function shown(x,y){
- var c; if(x<0||y<0||x>=DOC_W||y>=DOC_H) return 0;
- c=nib(COLB,CSTR,x,y); if(c==0&&pix(x,y)) c=1; return c;
+ var c; if(x<0||y<0||x>=576||y>=320) return 0;
+ c=nib(73728,288,x,y); if(c==0&&pix(x,y)) c=1; return c;
 }
 function useColor(c){ var k; k=COLS[c]; ctx.fillStyle=k; }
-function patByte(p,row){
- var i; i=p*8+row; if(i<0) return 0;
- if(i<32) return P0[i]; if(i<64) return P1[i-32]; if(i<96) return P2[i-64];
- if(i<128) return P3[i-96]; if(i<160) return P4[i-128]; if(i<192) return P5[i-160];
- if(i<224) return P6[i-192]; if(i<256) return P7[i-224]; if(i<288) return P8[i-256];
- return P9[i-288];
-}
-function setPatByte(p,row,v){
- var i; i=p*8+row;
- if(i<32) P0[i]=v; else if(i<64) P1[i-32]=v; else if(i<96) P2[i-64]=v;
- else if(i<128) P3[i-96]=v; else if(i<160) P4[i-128]=v; else if(i<192) P5[i-160]=v;
- else if(i<224) P6[i-192]=v; else if(i<256) P7[i-224]=v; else if(i<288) P8[i-256]=v;
- else P9[i-288]=v;
-}
-function patBit(p,col,row){ var b,m; b=patByte(p,row); m=MASK[col]; return Math.floor(b/m)%2; }
+function patByte(p,row){var i; i=p*8+row;if(i<0)return 0;if(i>=304)return;return stgRead(374795+i);}
+function setPatByte(p,row,v){var i;i=p*8+row;if(i>=0&&i<304)stgWrite(374795+i,v);}
+function patBit(p,col,row){var b,m,i;i=p*8+row;b=i<0?0:i>=304?undefined:stgRead(374795+i);m=MASK[col];return Math.floor(b/m)%2;}
 function patAt(x,y){ var c,r; c=x-Math.floor(x/8)*8; r=y-Math.floor(y/8)*8; if(c<0) c=0; if(r<0) r=0; return patBit(pat,c,r); }
 function patInkAt(p,col,row){
  var k,n;
  n=p; if(n>=38) n=n-38;
  if(patBit(n,col,row)==0) return 0;
- if(p>=38) k=TONE[p-38]; else k=inkCol;
+ if(p>=38) k=stgRead(375099+p-38); else k=inkCol;
  if(k<1) k=1; return k;
 }
 function patInk(x,y){
@@ -227,23 +200,28 @@ function patInk(x,y){
 function gbit(ch,row,col){
  var i,v,p,sh;
  i=ch-32; if(i<0||i>94) return 0;
- if(i<32) v=FA[i]; else if(i<64) v=FB[i-32]; else v=FC[i-64];
+ if(PC.glyph!=i){
+  p=373536+i*5;
+  PC.bits=stgRead(p)+stgRead(p+1)*256+stgRead(p+2)*65536+stgRead(p+3)*16777216+stgRead(p+4)*4294967296;
+  PC.glyph=i;
+ }
+ v=PC.bits;
  sh=34-(row*5+col);
  if(sh>=32) p=PW1[sh-32]; else p=PW0[sh];
  if(p<1) return 0;
  return Math.floor(v/p)%2;
 }
-function copyDocToUndo(){ copyRange(BASE,BASE_U,DOC_BYTES); copyRange(COLB,COLU,COLN); undoOk=1; dirty=1; }
+function copyDocToUndo(){ copyRange(4096,27136,23040); copyRange(73728,165888,92160); undoOk=1; dirty=1; }
 function clampScroll(){
  var mw,mh;
- mw=DOC_W-viewW(); mh=DOC_H-viewH();
+ mw=576-viewW(); mh=320-viewH();
  if(mw<0) mw=0; if(mh<0) mh=0;
  if(docX<0) docX=0; if(docY<0) docY=0;
  if(docX>mw) docX=mw; if(docY>mh) docY=mh;
 }
 function paintDot(x,y,on){
  var z,sx,sy;
- if(x<0||y<0||x>=DOC_W||y>=DOC_H) return;
+ if(x<0||y<0||x>=576||y>=320) return;
  if(x<docX||y<docY||x>=docX+viewW()||y>=docY+viewH()) return;
  z=1; if(fat) z=8;
  sx=VX+(x-docX)*z; sy=VY+(y-docY)*z;
@@ -254,19 +232,19 @@ function paintDot(x,y,on){
 function inkAt(x,y,on){
  var c; c=0; if(on) c=inkCol;
  setBit(x,y,on); paintDot(x,y,c);
- if((mirror&1)!=0){ setBit(DOC_W-1-x,y,on); paintDot(DOC_W-1-x,y,c); }
- if((mirror&2)!=0){ setBit(x,DOC_H-1-y,on); paintDot(x,DOC_H-1-y,c); }
- if(mirror==3){ setBit(DOC_W-1-x,DOC_H-1-y,on); paintDot(DOC_W-1-x,DOC_H-1-y,c); }
+ if((mirror&1)!=0){ setBit(576-1-x,y,on); paintDot(576-1-x,y,c); }
+ if((mirror&2)!=0){ setBit(x,320-1-y,on); paintDot(x,320-1-y,c); }
+ if(mirror==3){ setBit(576-1-x,320-1-y,on); paintDot(576-1-x,320-1-y,c); }
 }
 function plotAt(x,y){
  var c; c=patInk(x,y);
- holdCol=1; setBit(x,y,c?1:0); holdCol=0; setNib(COLB,CSTR,x,y,c); paintDot(x,y,c);
+ holdCol=1; setBit(x,y,c?1:0); holdCol=0; setNib(73728,288,x,y,c); paintDot(x,y,c);
 }
 function plot(x,y){
  plotAt(x,y);
- if((mirror&1)!=0) plotAt(DOC_W-1-x,y);
- if((mirror&2)!=0) plotAt(x,DOC_H-1-y);
- if(mirror==3) plotAt(DOC_W-1-x,DOC_H-1-y);
+ if((mirror&1)!=0) plotAt(576-1-x,y);
+ if((mirror&2)!=0) plotAt(x,320-1-y);
+ if(mirror==3) plotAt(576-1-x,320-1-y);
 }
 function eraserAt(x,y){
  var i,j,s,h;
@@ -351,7 +329,7 @@ function stampBits(xa,xb,y){
  var x,row,i,a,b,m,on;
  docClean=0; row=y-Math.floor(y/8)*8; if(row<0) row=0; x=xa;
  while(x<=xb){
-  i=x-Math.floor(x/8)*8; a=BASE+y*STRIDE+Math.floor(x/8); b=stgRead(a);
+  i=x-Math.floor(x/8)*8; a=4096+y*72+Math.floor(x/8); b=stgRead(a);
   while(i<8&&x<=xb){
    m=MASK[i]; on=patBit(pat,i,row);
    if(on){ if((Math.floor(b/m)%2)==0) b=b+m; }
@@ -364,18 +342,43 @@ function stampBits(xa,xb,y){
 function stampCols(xa,xb,y){
  var x,c0,c1,a;
  x=xa;
- if(x!=Math.floor(x/2)*2){ setNib(COLB,CSTR,x,y,patInk(x,y)); x=x+1; }
+ if(x!=Math.floor(x/2)*2){ setNib(73728,288,x,y,patInk(x,y)); x=x+1; }
  while(x+1<=xb){
   c0=patInk(x,y); c1=patInk(x+1,y);
-  a=COLB+y*CSTR+Math.floor(x/2); stgWrite(a,c0*16+c1); x=x+2;
+  a=73728+y*288+Math.floor(x/2); stgWrite(a,c0*16+c1); x=x+2;
  }
- if(x<=xb) setNib(COLB,CSTR,x,y,patInk(x,y));
+ if(x<=xb) setNib(73728,288,x,y,patInk(x,y));
+}
+function liftBlock(xa,ya,xb,yb){
+ var y,x,b,i,z,run,c,base;
+ paintBlock(xa,ya,xb,yb,0);
+ z=1; if(fat) z=8;
+ if(xa<docX) xa=docX; if(ya<docY) ya=docY;
+ if(xb>=docX+viewW()) xb=docX+viewW()-1;
+ if(yb>=docY+viewH()) yb=docY+viewH()-1;
+ if(xa>xb||ya>yb) return;
+ y=ya;
+ while(y<=yb){
+  x=xa; base=4096+y*72;
+  while(x<=xb){
+   i=x-Math.floor(x/8)*8; b=stgRead(base+Math.floor(x/8));
+   if(b==0) x=x+(8-i);
+   else while(i<8&&x<=xb){
+    if((Math.floor(b/MASK[i])%2)){
+     c=shown(x,y); run=1; i=i+1; x=x+1;
+     while(i<8&&x<=xb&&(Math.floor(b/MASK[i])%2)&&shown(x,y)==c){ run=run+1; i=i+1; x=x+1; }
+     useColor(c); ctx.fillRect(VX+(x-run-docX)*z,VY+(y-docY)*z,run*z,z);
+    } else { i=i+1; x=x+1; }
+   }
+  }
+  y=y+1;
+ }
 }
 function hline(xa,xb,y,commit){
  var x,t,c,n,g;
- if(y<0||y>=DOC_H) return;
+ if(y<0||y>=320) return;
  if(xa>xb){ t=xa; xa=xb; xb=t; }
- if(xa<0) xa=0; if(xb>=DOC_W) xb=DOC_W-1;
+ if(xa<0) xa=0; if(xb>=576) xb=576-1;
  if(xa>xb) return;
  if(dotNow||(commit==1&&mirror)){
   x=xa;
@@ -410,9 +413,9 @@ function hline(xa,xb,y,commit){
 }
 function vline(x,ya,yb,commit){
  var y,t,c,n,g;
- if(x<0||x>=DOC_W) return;
+ if(x<0||x>=576) return;
  if(ya>yb){ t=ya; ya=yb; yb=t; }
- if(ya<0) ya=0; if(yb>=DOC_H) yb=DOC_H-1;
+ if(ya<0) ya=0; if(yb>=320) yb=320-1;
  if(ya>yb) return;
  if(dotNow||(commit==1&&mirror)){
   y=ya;
@@ -466,7 +469,7 @@ function normBox(){
  if(ax<bx){ x0=ax; x1=bx; } else { x0=bx; x1=ax; }
  if(ay<by){ y0=ay; y1=by; } else { y0=by; y1=ay; }
  if(x0<0) x0=0; if(y0<0) y0=0;
- if(x1>=DOC_W) x1=DOC_W-1; if(y1>=DOC_H) y1=DOC_H-1;
+ if(x1>=576) x1=576-1; if(y1>=320) y1=320-1;
 }
 function constrainLine(){
  var dx,dy,axd,ayd,s;
@@ -489,7 +492,7 @@ function stampSolidBits(xa,xb,y,on){
  var x,i,a,b,m,v;
  docClean=0; v=0; if(on) v=255; x=xa;
  while(x<=xb){
-  i=x-Math.floor(x/8)*8; a=BASE+y*STRIDE+Math.floor(x/8);
+  i=x-Math.floor(x/8)*8; a=4096+y*72+Math.floor(x/8);
   if(i==0&&x+7<=xb){ stgWrite(a,v); x=x+8; }
   else {
    b=stgRead(a);
@@ -506,9 +509,9 @@ function stampSolidBits(xa,xb,y,on){
 function stampSolidCols(xa,xb,y,c){
  var x,a,p;
  x=xa; p=c*16+c;
- if(x!=Math.floor(x/2)*2){ setNib(COLB,CSTR,x,y,c); x=x+1; }
- while(x+1<=xb){ a=COLB+y*CSTR+Math.floor(x/2); stgWrite(a,p); x=x+2; }
- if(x<=xb) setNib(COLB,CSTR,x,y,c);
+ if(x!=Math.floor(x/2)*2){ setNib(73728,288,x,y,c); x=x+1; }
+ while(x+1<=xb){ a=73728+y*288+Math.floor(x/2); stgWrite(a,p); x=x+2; }
+ if(x<=xb) setNib(73728,288,x,y,c);
 }
 function fillBox(commit){
  var y,c;
@@ -517,7 +520,10 @@ function fillBox(commit){
   if(commit==1){ y=y0; while(y<=y1){ stampSolidBits(x0,x1,y,c>0); stampSolidCols(x0,x1,y,c); y=y+1; } }
   paintBlock(x0,y0,x1,y1,c); return;
  }
- if(c>=0){ showView(); return; }
+ if(c>=0&&commit==2){
+  if(docClean) paintBlock(x0,y0,x1,y1,0); else liftBlock(x0,y0,x1,y1);
+  return;
+ }
  y=y0; while(y<=y1){ hline(x0,x1,y,commit); y=y+1; }
 }
 function frameBox(commit){
@@ -560,80 +566,86 @@ function drawShape(commit){
  else if(tool==14) ovalScan(0,commit);
  else if(tool==15) ovalScan(1,commit);
 }
+function restoreBox(xa,ya,xb,yb){
+ var x,y,t;
+ if(xa>xb){ t=xa; xa=xb; xb=t; } if(ya>yb){ t=ya; ya=yb; yb=t; }
+ if(xa<docX) xa=docX; if(ya<docY) ya=docY;
+ if(xb>=docX+viewW()) xb=docX+viewW()-1; if(yb>=docY+viewH()) yb=docY+viewH()-1;
+ y=ya; while(y<=yb){ x=xa; while(x<=xb){ paintDot(x,y,shown(x,y)); x=x+1; } y=y+1; }
+}
 function previewShape(x,y){
+ if(havePrev) drawShape(2);
  bx=x; by=y;
  if(sh&&tool==8) constrainLine(); else if(sh) constrainBox();
- if(havePrev) restorePrev();
- takeGrab();
  drawShape(0); pax=ax; pay=ay; pbx=bx; pby=by; havePrev=1;
 }
-function commitShape(){ drawShape(1); havePrev=0; grabbed=0; dirty=1; }
+function commitShape(){ drawShape(1); havePrev=0; dirty=1; }
 function spray(x,y){
  var i,a,b,dx,dy; i=0;
  while(i<18){ a=x+Math.floor(Math.random()*16)-8; b=y+Math.floor(Math.random()*16)-8; dx=a-x; dy=b-y; if(dx*dx+dy*dy<50) plot(a,b); i=i+1; }
 }
 function push(x,y){ var a; if(sp>=250) return; a=3072+sp*4; w16at(a,x); w16at(a+2,y); sp=sp+1; }
-function popPt(){ var a; if(sp<1) return; sp=sp-1; a=3072+sp*4; popX=r16(a); popY=r16(a+2); }
+function popPt(){ var a; if(sp<1) return; sp=sp-1; a=3072+sp*4; PC.popX=r16(a); PC.popY=r16(a+2); }
 function markSeen(x,y){
  var a,m,b,i;
  i=x-Math.floor(x/8)*8; m=MASK[i];
- a=VIS+y*STRIDE+Math.floor(x/8); b=stgRead(a);
+ a=258048+y*72+Math.floor(x/8); b=stgRead(a);
  if((Math.floor(b/m)%2)==0) stgWrite(a,b+m);
 }
-function clearSeen(){ if(tbFill(VIS,0,DOC_BYTES)<0) bad=1; }
+function clearSeen(){ if(tbFill(258048,0,23040)<0) bad=1; }
 function openPix(x,y,target){
- if(x<0||y<0||x>=DOC_W||y>=DOC_H) return 0;
- if(bitAt(VIS,x,y)) return 0;
+ if(x<0||y<0||x>=576||y>=320) return 0;
+ if(bitAt(258048,x,y)) return 0;
  if(pix(x,y)!=target) return 0;
  return 1;
 }
 function writeFill(x,y,target){
  var c;
  markSeen(x,y);
- c=patInk(x,y); holdCol=1; setBit(x,y,c?1:0); holdCol=0; setNib(COLB,CSTR,x,y,c);
+ c=patInk(x,y); holdCol=1; setBit(x,y,c?1:0); holdCol=0; setNib(73728,288,x,y,c);
 }
 function seedRow(y,xa,xb,target){
- var x,span; if(y<0||y>=DOC_H) return; x=xa; span=0;
+ var x,span; if(y<0||y>=320) return; x=xa; span=0;
  while(x<=xb){ if(openPix(x,y,target)){ if(span==0){ push(x,y); span=1; } } else span=0; x=x+1; }
 }
 function floodSpan(x,y,target){
  var left,right,k;
  if(openPix(x,y,target)==0) return;
  left=x; while(left>0&&openPix(left-1,y,target)) left=left-1;
- right=x; while(right<DOC_W-1&&openPix(right+1,y,target)) right=right+1;
+ right=x; while(right<576-1&&openPix(right+1,y,target)) right=right+1;
  k=left; while(k<=right){ writeFill(k,y,target); k=k+1; }
  seedRow(y-1,left,right,target); seedRow(y+1,left,right,target);
 }
 function fillWork(){
  var n;
  if(job!=2) return;
- n=0; while(sp>0&&n<12){ popPt(); floodSpan(popX,popY,fillT); n=n+1; }
+ n=0; while(sp>0&&n<12){ popPt(); floodSpan(PC.popX,PC.popY,fillT); n=n+1; }
  if(sp==0){ job=0; need=1; }
 }
 function bucket(x,y){
  var target;
- if(x<0||y<0||x>=DOC_W||y>=DOC_H) return;
+ if(x<0||y<0||x>=576||y>=320) return;
  target=pix(x,y); copyDocToUndo(); clearSeen();
  sp=0; push(x,y); fillT=target; job=2;
 }
 function clipBit(x,y,mask){
  var stride,a,b,m,off,h;
- stride=r16(BASE_C+4); h=r16(BASE_C+2); off=8; if(mask) off=8+stride*h;
- a=BASE_C+off+y*stride+Math.floor(x/8); b=stgRead(a); m=MASK[x-Math.floor(x/8)*8];
+ stride=r16(50176+4); h=r16(50176+2); off=8; if(mask) off=8+stride*h;
+ a=50176+off+y*stride+Math.floor(x/8); b=stgRead(a); m=MASK[x-Math.floor(x/8)*8];
  return Math.floor(b/m)%2;
 }
 function copySel(){
  var y,x,stride,b,bit,a;
  stride=Math.floor((selW+7)/8);
  if(selW<1||selH<1) return 0;
- if(8+stride*selH>CLIP_MAX) return 0;
- w16at(BASE_C,selW); w16at(BASE_C+2,selH); w16at(BASE_C+4,stride); stgWrite(BASE_C+6,0);
+ if(8+stride*selH>23552) return 0;
+ w16at(50176,selW); w16at(50176+2,selH); w16at(50176+4,stride); stgWrite(50176+6,0);
  y=0;
  while(y<selH){
   x=0; b=0; bit=128;
   while(x<selW){
    if(pix(selX+x,selY+y)) b=b+bit;
-   if(bit==1||x==selW-1){ a=BASE_C+8+y*stride+Math.floor(x/8); stgWrite(a,b); b=0; bit=128; }
+   if(bit==1||x==selW-1){ a=50176+8+y*stride+Math.floor(x/8); stgWrite(a,b); b=0; bit=128; }
    else bit=Math.floor(bit/2);
    x=x+1;
   }
@@ -643,12 +655,12 @@ function copySel(){
 }
 function wipe(xa,ya,w,h){ var x,y; y=0; while(y<h){ x=0; while(x<w){ setBit(xa+x,ya+y,0); x=x+1; } y=y+1; } }
 function clearSel(){
- var x,y,msk; msk=stgRead(BASE_C+6); y=0;
+ var x,y,msk; msk=stgRead(50176+6); y=0;
  while(y<selH){ x=0; while(x<selW){ if(msk==0||clipBit(x,y,1)) setBit(selX+x,selY+y,0); x=x+1; } y=y+1; }
 }
 function stampClip(dx,dy){
  var x,y,w,h,msk;
- w=r16(BASE_C); h=r16(BASE_C+2); msk=stgRead(BASE_C+6); y=0;
+ w=r16(50176); h=r16(50176+2); msk=stgRead(50176+6); y=0;
  while(y<h){ x=0; while(x<w){ if(msk==0||clipBit(x,y,1)) setBit(dx+x,dy+y,clipBit(x,y,0)); x=x+1; } y=y+1; }
 }
 function inSel(x,y){ if(selOn==0) return 0; if(x<selX||y<selY||x>=selX+selW||y>=selY+selH) return 0; return 1; }
@@ -656,7 +668,7 @@ function dropFloat(){ if(selFloat==0) return; copyDocToUndo(); stampClip(selX,se
 function pickup(){ if(hasClip==0){ if(copySel()==0) return; hasClip=1; } copyDocToUndo(); clearSel(); selFloat=1; dirty=1; }
 function addPt(x,y){ var a; if(nPts>=120) return; if(nPts>0&&x==lastX&&y==lastY) return; a=3072+nPts*4; w16at(a,x); w16at(a+2,y); nPts=nPts+1; lastX=x; lastY=y; }
 function boundsPts(){
- var i,x,y; i=0; x0=DOC_W; y0=DOC_H; x1=0; y1=0;
+ var i,x,y; i=0; x0=576; y0=320; x1=0; y1=0;
  while(i<nPts){ x=r16(3072+i*4); y=r16(3072+i*4+2); if(x<x0) x0=x; if(y<y0) y0=y; if(x>x1) x1=x; if(y>y1) y1=y; i=i+1; }
 }
 function inside(x,y){
@@ -673,14 +685,14 @@ function inside(x,y){
 }
 function writeMask(){
  var x,y,stride,b,bit,a;
- stride=r16(BASE_C+4);
- if(8+stride*selH*2>CLIP_MAX) return;
- stgWrite(BASE_C+6,1); y=0;
+ stride=r16(50176+4);
+ if(8+stride*selH*2>23552) return;
+ stgWrite(50176+6,1); y=0;
  while(y<selH){
   x=0; b=0; bit=128;
   while(x<selW){
    if(inside(selX+x,selY+y)) b=b+bit;
-   if(bit==1||x==selW-1){ a=BASE_C+8+stride*selH+y*stride+Math.floor(x/8); stgWrite(a,b); b=0; bit=128; }
+   if(bit==1||x==selW-1){ a=50176+8+stride*selH+y*stride+Math.floor(x/8); stgWrite(a,b); b=0; bit=128; }
    else bit=Math.floor(bit/2);
    x=x+1;
   }
@@ -704,10 +716,10 @@ function dragMarquee(x,y){
  if(moving){
   selX=x-dragOffX; selY=y-dragOffY;
   if(selX<0) selX=0; if(selY<0) selY=0;
-  if(selX+selW>DOC_W) selX=DOC_W-selW; if(selY+selH>DOC_H) selY=DOC_H-selH;
-  paintPage(); return;
+  if(selX+selW>576) selX=576-selW; if(selY+selH>320) selY=320-selH;
+  need=1; return;
  }
- bx=x; by=y; normBox(); selX=x0; selY=y0; selW=x1-x0+1; selH=y1-y0+1; selOn=1; paintPage();
+ bx=x; by=y; normBox(); selX=x0; selY=y0; selW=x1-x0+1; selH=y1-y0+1; selOn=1; need=1;
 }
 function finishMarquee(x,y){
  if(moving){ moving=0; need=1; return; }
@@ -721,7 +733,7 @@ function beginDoc(x,y){
  erasing=0; brushing=0; useInk=0; havePrev=0;
  if(tool==0){ nPts=0; addPt(x,y); paintDot(x,y,1); return; }
  if(tool==1){ beginMarquee(x,y); return; }
- if(tool==3){ tx=x; if(alignN==1) tx=x-24; if(alignN==2) tx=x-48; if(tx<0) tx=0; ty=y; textX0=tx; typed=0; need=1; return; }
+ if(tool==3){ tx=x; if(alignN==1) tx=x-24; if(alignN==2) tx=x-48; if(tx<0) tx=0; ty=y; textX0=tx; PC.typed=0; need=1; return; }
  if(tool==4){ bucket(x,y); down=0; return; }
  if(tool==5){ copyDocToUndo(); spray(x,y); lastX=x; lastY=y; return; }
  if(tool==6){ copyDocToUndo(); brushing=1; brushAt(x,y,1); lastX=x; lastY=y; return; }
@@ -738,8 +750,8 @@ function dragDoc(x,y){
  if(tool==9){ erasing=1; line(lastX,lastY,x,y,1); lastX=x; lastY=y; return; }
  if(tool==8||tool>=10){ if(havePrev&&x==pbx&&y==pby) return; previewShape(x,y); }
 }
-function toDocX(sx){ var z,d; z=1; if(fat) z=8; d=docX+Math.floor((sx-VX)/z); if(grid) d=Math.floor(d/8)*8; if(d<0) d=0; if(d>=DOC_W) d=DOC_W-1; return d; }
-function toDocY(sy){ var z,d; z=1; if(fat) z=8; d=docY+Math.floor((sy-VY)/z); if(grid) d=Math.floor(d/8)*8; if(d<0) d=0; if(d>=DOC_H) d=DOC_H-1; return d; }
+function toDocX(sx){ var z,d; z=1; if(fat) z=8; d=docX+Math.floor((sx-VX)/z); if(grid) d=Math.floor(d/8)*8; if(d<0) d=0; if(d>=576) d=576-1; return d; }
+function toDocY(sy){ var z,d; z=1; if(fat) z=8; d=docY+Math.floor((sy-VY)/z); if(grid) d=Math.floor(d/8)*8; if(d<0) d=0; if(d>=320) d=320-1; return d; }
 function hitTool(sx,sy){ var col,row; if(sx<24||sx>=80||sy<88||sy>=344) return -1; col=Math.floor((sx-24)/28); row=Math.floor((sy-88)/32); if(col<0||col>1||row<0||row>7) return -1; return row*2+col; }
 function hitWidth(sx,sy){ var i; if(sx<24||sx>=80||sy<344||sy>=432) return 0; i=Math.floor((sy-346)/16); if(i<0) i=0; if(i>4) i=4; penW=i; drawWidths(); return 1; }
 function hitColor(sx,sy){
@@ -752,14 +764,14 @@ function hitColor(sx,sy){
 function hitPat(sx,sy){
  var col,row,idx;
  if(sy<344||sy>=432||sx<80) return 0;
- if(sx>=164&&sx<212&&sy>=352&&sy<400){ if(tick-lastPatTick<24) beginEdit(); lastPatTick=tick; need=1; return 1; }
+ if(sx>=164&&sx<212&&sy>=352&&sy<400){ if(tick-PC.lastPatTick<24) beginEdit(); PC.lastPatTick=tick; need=1; return 1; }
  if(sx<236) return 0;
  col=Math.floor((sx-236)/18); row=Math.floor((sy-348)/22);
  if(col<0) return 0;
  if(row==2){ if(col>15) return 0; idx=38+col; }
  else { if(row<0||row>1||col>18) return 0; idx=row*19+col; if(idx>37) return 0; }
- if(idx==pat&&tick-lastPatTick<24) beginEdit();
- pat=idx; lastPatTick=tick; drawPats(); return 1;
+ if(idx==pat&&tick-PC.lastPatTick<24) beginEdit();
+ pat=idx; PC.lastPatTick=tick; drawPats(); return 1;
 }
 function wkNib(col,row){
  var b,h;
@@ -776,13 +788,13 @@ function wkPut(col,row){
 function beginEdit(){
  var i,p; p=pat; if(p>=38) p=p-38; i=0;
  while(i<8){ WK[i]=patByte(p,i); i=i+1; }
- if(pat>=38) edCol=TONE[pat-38]; else edCol=inkCol;
+ if(pat>=38) edCol=stgRead(375099+pat-38); else edCol=inkCol;
  if(edCol<1) edCol=1; mode=3; need=1;
 }
 function commitEdit(){
  var i,p; p=pat; if(p>=38) p=p-38; i=0;
  while(i<8){ setPatByte(p,i,WK[i]); i=i+1; }
- if(pat>=38) TONE[pat-38]=edCol;
+ if(pat>=38) stgWrite(375099+pat-38,edCol);
  mode=0; need=1;
 }
 function editorClick(sx,sy){
@@ -800,7 +812,7 @@ function handBy(sx,sy){
  var z,dx,dy; z=1; if(fat) z=8;
  dx=Math.floor((sx-lastSX)/z); dy=Math.floor((sy-lastSY)/z);
  if(dx==0&&dy==0) return;
- docX=docX-dx; docY=docY-dy; lastSX=sx; lastSY=sy; clampScroll(); paintPage();
+ docX=docX-dx; docY=docY-dy; lastSX=sx; lastSY=sy; clampScroll(); need=1;
 }
 function downAt(sx,sy){
  var t,x,y;
@@ -846,27 +858,27 @@ function pointer(x,y,kind){
 function regionOrPage(){
  if(selFloat){ stampClip(selX,selY); selFloat=0; }
  if(selOn&&selDrag==0&&selW>0&&selH>0){ rx=selX; ry=selY; rw=selW; rh=selH; }
- else { rx=0; ry=0; rw=DOC_W; rh=DOC_H; }
+ else { rx=0; ry=0; rw=576; rh=320; }
 }
 function doInvert(){
  var x,y; regionOrPage(); copyDocToUndo(); y=ry;
- while(y<ry+rh){ x=rx; while(x<rx+rw){ setBit(x,y,1-bitAt(BASE_U,x,y)); x=x+1; } y=y+1; }
+ while(y<ry+rh){ x=rx; while(x<rx+rw){ setBit(x,y,1-bitAt(27136,x,y)); x=x+1; } y=y+1; }
 }
 function flipH(){
  var row,col,a; regionOrPage(); copyDocToUndo(); row=0;
- while(row<rh){ col=0; while(col<rw){ a=bitAt(BASE_U,rx+col,ry+row); setBit(rx+rw-1-col,ry+row,a); col=col+1; } row=row+1; }
+ while(row<rh){ col=0; while(col<rw){ a=bitAt(27136,rx+col,ry+row); setBit(rx+rw-1-col,ry+row,a); col=col+1; } row=row+1; }
 }
 function flipV(){
  var row,col,a; regionOrPage(); copyDocToUndo(); row=0;
- while(row<rh){ col=0; while(col<rw){ a=bitAt(BASE_U,rx+col,ry+row); setBit(rx+col,ry+rh-1-row,a); col=col+1; } row=row+1; }
+ while(row<rh){ col=0; while(col<rw){ a=bitAt(27136,rx+col,ry+row); setBit(rx+col,ry+rh-1-row,a); col=col+1; } row=row+1; }
 }
 function inReg(x,y){ if(x<rx||y<ry||x>=rx+rw||y>=ry+rh) return 0; return 1; }
 function edgeAt(x,y){
- if(bitAt(BASE_U,x,y)==0) return 0;
- if(inReg(x-1,y)==0||bitAt(BASE_U,x-1,y)==0) return 1;
- if(inReg(x+1,y)==0||bitAt(BASE_U,x+1,y)==0) return 1;
- if(inReg(x,y-1)==0||bitAt(BASE_U,x,y-1)==0) return 1;
- if(inReg(x,y+1)==0||bitAt(BASE_U,x,y+1)==0) return 1;
+ if(bitAt(27136,x,y)==0) return 0;
+ if(inReg(x-1,y)==0||bitAt(27136,x-1,y)==0) return 1;
+ if(inReg(x+1,y)==0||bitAt(27136,x+1,y)==0) return 1;
+ if(inReg(x,y-1)==0||bitAt(27136,x,y-1)==0) return 1;
+ if(inReg(x,y+1)==0||bitAt(27136,x,y+1)==0) return 1;
  return 0;
 }
 function doTrace(){
@@ -874,7 +886,7 @@ function doTrace(){
  while(y<ry+rh){ x=rx; while(x<rx+rw){ setBit(x,y,edgeAt(x,y)); x=x+1; } y=y+1; }
 }
 function rotStamp(){
- var x,y,w,h,bit; w=r16(BASE_C); h=r16(BASE_C+2); y=0;
+ var x,y,w,h,bit; w=r16(50176); h=r16(50176+2); y=0;
  while(y<h){ x=0; while(x<w){ bit=clipBit(x,y,0); setBit(selX+y,selY+w-1-x,bit); x=x+1; } y=y+1; }
 }
 function doRotate(){
@@ -884,15 +896,14 @@ function doRotate(){
  if(copySel()==0) return;
  copyDocToUndo(); clearSel(); rotStamp();
  t=selW; selW=selH; selH=t;
- if(selX+selW>DOC_W) selW=DOC_W-selX; if(selY+selH>DOC_H) selH=DOC_H-selY;
+ if(selX+selW>576) selW=576-selX; if(selY+selH>320) selH=320-selY;
  if(selW<1) selW=1; if(selH<1) selH=1;
  copySel(); hasClip=1; selOn=1;
 }
 function doUndo(){
  if(undoOk==0) return;
- grabbed=0;
- swapRange(BASE,BASE_U,DOC_BYTES);
- swapRange(COLB,COLU,COLN);
+ swapRange(4096,27136,23040);
+ swapRange(73728,165888,92160);
  docClean=0;
  dirty=1;
 }
@@ -905,9 +916,9 @@ function doCopy(){ if(selOn==0||selDrag) return; if(selFloat){ hasClip=1; return
 function doPaste(){
  if(hasClip==0) return;
  if(selFloat) dropFloat();
- selW=r16(BASE_C); selH=r16(BASE_C+2); if(selW<1||selH<1) return;
+ selW=r16(50176); selH=r16(50176+2); if(selW<1||selH<1) return;
  selX=docX+2; selY=docY+2;
- if(selX+selW>DOC_W) selX=DOC_W-selW; if(selY+selH>DOC_H) selY=DOC_H-selH;
+ if(selX+selW>576) selX=576-selW; if(selY+selH>320) selY=320-selH;
  if(selX<0) selX=0; if(selY<0) selY=0;
  selOn=1; selFloat=1; selDrag=0;
 }
@@ -915,57 +926,57 @@ function doClear(){
  if(selOn==0||selDrag) return; copyDocToUndo();
  if(selFloat==0) clearSel(); selOn=0; selFloat=0;
 }
-function selectAll(){ selX=0; selY=0; selW=DOC_W; selH=DOC_H; selOn=1; selFloat=0; selDrag=0; if(copySel()) hasClip=1; }
+function selectAll(){ selX=0; selY=0; selW=576; selH=320; selOn=1; selFloat=0; selDrag=0; if(copySel()) hasClip=1; }
 function clearPage(){
- if(tbFill(BASE,0,DOC_BYTES)<0) bad=1;
- if(tbFill(BASE_U,0,DOC_BYTES)<0) bad=1;
- if(tbFill(COLB,0,COLN)<0) bad=1;
- if(tbFill(COLU,0,COLN)<0) bad=1;
+ if(tbFill(4096,0,23040)<0) bad=1;
+ if(tbFill(27136,0,23040)<0) bad=1;
+ if(tbFill(73728,0,92160)<0) bad=1;
+ if(tbFill(165888,0,92160)<0) bad=1;
  docClean=1;
 }
 function doNew(){
- clearPage(); docX=0; docY=0; selOn=0; selFloat=0; hasClip=0; undoOk=0; dirty=0; bad=0; mode=0; named=0;
- nameLen=7; NAME[0]=80; NAME[1]=73; NAME[2]=67; NAME[3]=84; NAME[4]=85; NAME[5]=82; NAME[6]=69; NAME[7]=0;
- ctx.systemTitle="untitled";
+ clearPage(); docX=0; docY=0; selOn=0; selFloat=0; hasClip=0; undoOk=0; dirty=0; bad=0; mode=0; PC.named=0;
+ PC.nameLen=7; NAME[0]=80; NAME[1]=73; NAME[2]=67; NAME[3]=84; NAME[4]=85; NAME[5]=82; NAME[6]=69; NAME[7]=0;
+ tbSessionProperty(ctx,4,"untitled");
  clampScroll();
 }
 function readColors(ver){
- if(ver==50){ if(fsRead(1900,8+DOC_BYTES,COLB,COLN)<COLN) ver=49; }
- if(ver!=50){ if(tbFill(COLB,0,COLN)<0) bad=1; }
- copyRange(COLB,COLU,COLN);
+ if(ver==50){ if(fsRead(1900,8+23040,73728,92160)<92160) ver=49; }
+ if(ver!=50){ if(tbFill(73728,0,92160)<0) bad=1; }
+ copyRange(73728,165888,92160);
 }
 function doRevert(){
- if(named==0){ doNew(); return; }
+ if(PC.named==0){ doNew(); return; }
  putName(1900);
  if(fsRead(1900,0,1920,8)<8){ bad=1; return; }
- if(fsRead(1900,8,BASE,DOC_BYTES)<DOC_BYTES){ bad=1; return; }
+ if(fsRead(1900,8,4096,23040)<23040){ bad=1; return; }
  readColors(stgRead(1923));
- copyRange(BASE,BASE_U,DOC_BYTES); dirty=0; bad=0; mode=0; undoOk=1; docClean=0;
+ copyRange(4096,27136,23040); dirty=0; bad=0; mode=0; undoOk=1; docClean=0;
 }
 function sharedStem(){
- var i,b; nameLen=0; i=0;
+ var i,b; PC.nameLen=0; i=0;
  while(i<8){
   b=stgRead(96+i);
   if(b<33||b==46) break;
-  NAME[i]=b; i=i+1; nameLen=nameLen+1;
+  NAME[i]=b; i=i+1; PC.nameLen=PC.nameLen+1;
  }
  while(i<8){ NAME[i]=0; i=i+1; }
- if(nameLen<1){ bad=1; return 0; }
- named=1; return 1;
+ if(PC.nameLen<1){ bad=1; return 0; }
+ PC.named=1; return 1;
 }
 function putName(at){
- var i; i=0; while(i<nameLen){ stgWrite(at+i,NAME[i]); i=i+1; }
+ var i; i=0; while(i<PC.nameLen){ stgWrite(at+i,NAME[i]); i=i+1; }
  stgWrite(at+i,46); stgWrite(at+i+1,80); stgWrite(at+i+2,78); stgWrite(at+i+3,84); stgWrite(at+i+4,0);
 }
 function savePic(){
- var n; if(nameLen<1){ bad=1; mode=2; return; }
+ var n; if(PC.nameLen<1){ bad=1; mode=2; return; }
  putName(1900);
  stgWrite(1920,80); stgWrite(1921,78); stgWrite(1922,84); stgWrite(1923,50);
  w16at(1924,576); w16at(1926,320);
  n=fsWrite(1900,1920,8,0); if(n<8){ bad=1; return; }
- n=fsWrite(1900,BASE,DOC_BYTES,1); if(n<DOC_BYTES){ bad=1; return; }
- n=fsWrite(1900,COLB,COLN,1); if(n<COLN){ bad=1; return; }
- dirty=0; bad=0; mode=0; named=1;
+ n=fsWrite(1900,4096,23040,1); if(n<23040){ bad=1; return; }
+ n=fsWrite(1900,73728,92160,1); if(n<92160){ bad=1; return; }
+ dirty=0; bad=0; mode=0; PC.named=1;
 }
 function isPnt(p,n){
  if(n<5) return 0;
@@ -974,22 +985,22 @@ function isPnt(p,n){
 }
 function saveSlot(slot,p,n){
  var a; if(n>12) n=12; a=3600+slot*13; stgWrite(a,n);
- if(tbMove(p+1,a+1,n)<0) bad=1; nFiles=nFiles+1;
+ if(tbMove(p+1,a+1,n)<0) bad=1; PC.nFiles=PC.nFiles+1;
 }
 function listPictures(){
  var p,n;
- copyRange(BASE,BASE_U,DOC_BYTES);
- nFiles=0; fsList(); p=256;
- while(nFiles<14&&p<3500){
+ copyRange(4096,27136,23040);
+ PC.nFiles=0; fsList(); p=256;
+ while(PC.nFiles<14&&p<3500){
   n=stgRead(p); if(n<=0) break;
-  if(isPnt(p,n)) saveSlot(nFiles,p,n);
+  if(isPnt(p,n)) saveSlot(PC.nFiles,p,n);
   p=p+1+n+7;
  }
- copyRange(BASE_U,BASE,DOC_BYTES);
+ copyRange(27136,4096,23040);
  undoOk=0;
 }
 function takeStem(slot){
- var n,i,a; a=3600+slot*13; n=stgRead(a); if(n>4) n=n-4; if(n>8) n=8; nameLen=n; i=0;
+ var n,i,a; a=3600+slot*13; n=stgRead(a); if(n>4) n=n-4; if(n>8) n=8; PC.nameLen=n; i=0;
  while(i<8){ NAME[i]=0; i=i+1; } i=0; while(i<n){ NAME[i]=stgRead(a+1+i); i=i+1; }
 }
 function loadSlot(slot){
@@ -1000,16 +1011,16 @@ function loadSlot(slot){
  if(stgRead(1920)!=80||stgRead(1921)!=78||stgRead(1922)!=84){ bad=1; return; }
  if(stgRead(1923)!=49&&stgRead(1923)!=50){ bad=1; return; }
  w=r16(1924); h=r16(1926); if(w!=576||h!=320){ bad=1; return; }
- if(fsRead(1900,8,BASE,DOC_BYTES)<DOC_BYTES){ bad=1; return; }
+ if(fsRead(1900,8,4096,23040)<23040){ bad=1; return; }
  readColors(stgRead(1923));
- copyRange(BASE,BASE_U,DOC_BYTES); takeStem(slot);
+ copyRange(4096,27136,23040); takeStem(slot);
  dirty=0; bad=0; undoOk=1; selOn=0; selFloat=0; hasClip=0; mode=0; docX=0; docY=0; docClean=0;
 }
 function openClick(sx,sy){
  var row; sx=Math.floor(sx); sy=Math.floor(sy);
  if(sx<VX||sy<VY+28){ mode=0; need=1; return; }
  row=Math.floor((sy-(VY+28))/14);
- if(row>=0&&row<nFiles){ loadSlot(row); need=1; } else { mode=0; need=1; }
+ if(row>=0&&row<PC.nFiles){ loadSlot(row); need=1; } else { mode=0; need=1; }
 }
 function checks(){
  var m; m=0;
@@ -1019,7 +1030,7 @@ function checks(){
  if(stBold) m=m+PW0[22]; if(stItal) m=m+PW0[23]; if(stUnder) m=m+PW0[24];
  if(stOut) m=m+PW0[25]; if(stShad) m=m+PW0[26];
  m=m+PW0[27+alignN];
- ctx.systemMenuCheck=m;
+ tbSessionProperty(ctx,6,m);
 }
 function command(c){
  if(c==160) grid=1-grid;
@@ -1084,35 +1095,35 @@ function stampChar(ch,x,y){
  if(stUnder){ c=0; while(c<6*k){ setBit(x+c,y+8*k,1); c=c+1; } }
  if(stOut){ c=0; while(c<5*k){ setBit(x+c,y,1); setBit(x+c,y+7*k,1); c=c+1; } }
 }
-function typeChar(ch){ var k; if(typed==0){ copyDocToUndo(); typed=1; } k=textK(); stampChar(ch,tx,ty); tx=tx+6*k; if(tx>DOC_W-6*k){ tx=textX0; ty=ty+9*k; } dirty=1; need=1; }
+function typeChar(ch){ var k; if(PC.typed==0){ copyDocToUndo(); PC.typed=1; } k=textK(); stampChar(ch,tx,ty); tx=tx+6*k; if(tx>576-6*k){ tx=textX0; ty=ty+9*k; } dirty=1; need=1; }
 function textNav(c){
  var k; k=textK();
- if(c==8){ if(typed==0){ copyDocToUndo(); typed=1; } if(tx>=textX0+6*k) tx=tx-6*k; wipe(tx,ty,6*k,8*k); dirty=1; need=1; return; }
+ if(c==8){ if(PC.typed==0){ copyDocToUndo(); PC.typed=1; } if(tx>=textX0+6*k) tx=tx-6*k; wipe(tx,ty,6*k,8*k); dirty=1; need=1; return; }
  if(c==13){ ty=ty+9*k; tx=textX0; need=1; return; }
  if(c==37) tx=tx-6*k; if(c==39) tx=tx+6*k; if(c==38) ty=ty-9*k; if(c==40) ty=ty+9*k;
  if(tx<0) tx=0; if(ty<0) ty=0; need=1;
 }
 function nameKey(c){
- if(c==13){ if(nameLen>0) savePic(); need=1; return; }
- if(c==8){ if(nameLen>0){ nameLen=nameLen-1; NAME[nameLen]=0; need=1; } return; }
- if(nameLen>=8) return;
- if((c>=65&&c<=90)||(c>=48&&c<=57)){ NAME[nameLen]=c; nameLen=nameLen+1; need=1; }
+ if(c==13){ if(PC.nameLen>0) savePic(); need=1; return; }
+ if(c==8){ if(PC.nameLen>0){ PC.nameLen=PC.nameLen-1; NAME[PC.nameLen]=0; need=1; } return; }
+ if(PC.nameLen>=8) return;
+ if((c>=65&&c<=90)||(c>=48&&c<=57)){ NAME[PC.nameLen]=c; PC.nameLen=PC.nameLen+1; need=1; }
 }
 function scrollKey(c){
  if(c==128) docY=docY-8; else if(c==129) docY=docY+8;
  else if(c==130) docY=docY-viewH(); else if(c==131) docY=docY+viewH();
  else if(c==132) docX=docX-16; else if(c==133) docX=docX+16;
- clampScroll(); if(mode==0) paintPage(); else need=1;
+ clampScroll(); need=1;
 }
 function arrowKey(c){
  var s; s=1; if(sh) s=8;
  if(c==37) penX=penX-s; if(c==39) penX=penX+s; if(c==38) penY=penY-s; if(c==40) penY=penY+s;
- if(penX<0) penX=0; if(penY<0) penY=0; if(penX>=DOC_W) penX=DOC_W-1; if(penY>=DOC_H) penY=DOC_H-1;
+ if(penX<0) penX=0; if(penY<0) penY=0; if(penX>=576) penX=576-1; if(penY>=320) penY=320-1;
  penShow=1;
  if(penX<docX||penY<docY||penX>=docX+viewW()||penY>=docY+viewH()){
   if(penX<docX) docX=penX; if(penY<docY) docY=penY;
   if(penX>=docX+viewW()) docX=penX-viewW()+1; if(penY>=docY+viewH()) docY=penY-viewH()+1;
-  clampScroll(); paintPage();
+  clampScroll(); need=1;
  } else needPen=1;
  if(spaceDown) dragDoc(penX,penY);
 }
@@ -1141,32 +1152,10 @@ function onKey(e){
  toolKey(c);
 }
 function onUp(e){ var c; c=e.keyCode; if(c==16) sh=0; if(c==32&&spaceDown){ spaceDown=0; if(down) endStroke(penX,penY); } }
-function grow(id,row){
- if(id==0) return G0[row]; if(id==1) return G1[row]; if(id==2) return G2[row]; if(id==3) return G3[row];
- if(id==4) return G4[row]; if(id==5) return G5[row]; if(id==6) return G6[row]; if(id==7) return G7[row];
- if(id==8) return G8[row]; if(id==9) return G9[row]; if(id==10) return G10[row]; if(id==11) return G11[row];
- if(id==12) return G12[row]; if(id==13) return G13[row]; if(id==14) return G14[row]; return G15[row];
-}
 function glyph(id,x,y,inv){
- var r,c,w,v,p,n,g;
- if(inv) ctx.fillStyle="#FFFFFF"; else ctx.fillStyle="#000000";
- w=GW[id]; r=0;
- while(r<16){
-  v=grow(id,r); c=0;
-  while(c<w){
-   p=PW0[w-1-c];
-   if(p>0&&(Math.floor(v/p)%2)){
-    n=1; g=c+1;
-    while(g<w){
-     p=PW0[w-1-g];
-     if(p<1||(Math.floor(v/p)%2)==0) break;
-     n=n+1; g=g+1;
-    }
-    ctx.fillRect(x+c,y+r,n,1); c=g;
-   } else c=c+1;
-  }
-  r=r+1;
- }
+ var d,w;d=375168;w=stgRead(374779+id);
+ tbSurface(d,374011+id*48,w,16,3,1);stgWrite(d+2,1);tbInk(d,inv?1:0,inv?0:1);tbPlace(d,x,y,1);
+ if(tbBlit(d)<0)bad=1;
 }
 function paintToolSlot(i){
  var x,y,gx,col;
@@ -1174,7 +1163,7 @@ function paintToolSlot(i){
  ctx.fillStyle="#FFFFFF"; ctx.fillRect(x+1,y,26,31);
  ctx.fillStyle="#000000"; ctx.fillRect(x,y+31,28,1);
  if(i==tool){ ctx.fillStyle="#000000"; ctx.fillRect(x+1,y+1,26,30); }
- gx=x+Math.floor((28-GW[i])/2);
+ gx=x+Math.floor((28-stgRead(374779+i))/2);
  glyph(i,gx,y+8,i==tool);
 }
 function pickTool(t){
@@ -1253,83 +1242,43 @@ function fatGrid(){
  while(i*8<VW){ ctx.fillRect(VX+i*8,VY,1,VH); i=i+1; }
  i=0; while(i*8<VH){ ctx.fillRect(VX,VY+i*8,VW,1); i=i+1; }
 }
-function put32(a,v){
- var n,i; n=Math.floor(v); i=0;
- while(i<4){ stgWrite(a+i,n-Math.floor(n/256)*256); n=Math.floor(n/256); i=i+1; }
-}
-function writePal(d){
- stgWrite(d+48,1); stgWrite(d+49,0); stgWrite(d+50,2); stgWrite(d+51,3);
- stgWrite(d+52,4); stgWrite(d+53,5); stgWrite(d+54,6); stgWrite(d+55,7);
- stgWrite(d+56,34); stgWrite(d+57,68); stgWrite(d+58,102); stgWrite(d+59,136);
- stgWrite(d+60,170); stgWrite(d+61,204); stgWrite(d+62,238); stgWrite(d+63,221);
-}
-function blitPacked(d,bits,base,stride,sx,sy,sw,sh,dx,dy,sc,fg,bg,trans){
- tbFill(d,0,64); stgWrite(d,1); stgWrite(d+1,bits); stgWrite(d+3,sc);
- if(trans) stgWrite(d+2,1);
- put32(d+4,base);
- w16at(d+8,stride); w16at(d+10,DOC_W); w16at(d+12,DOC_H);
- w16at(d+14,sx); w16at(d+16,sy); w16at(d+18,sw); w16at(d+20,sh);
- w16at(d+22,dx); w16at(d+24,dy);
- w16at(d+26,VX); w16at(d+28,VY); w16at(d+30,VW); w16at(d+32,VH);
- stgWrite(d+34,fg); stgWrite(d+35,bg);
- if(bits==4) writePal(d);
- return toolbox(3,d,0,0);
-}
-function showView(){
- var z,w,h,r;
- if((tbBits&4)==0) return 0;
- z=1; if(fat) z=8; w=viewW(); h=viewH();
- r=blitPacked(373248,1,BASE,STRIDE,docX,docY,w,h,VX,VY,z,0,1,0);
- if(r<0) return 0;
- grabbed=0;
- blitPacked(373312,4,COLB,CSTR,docX,docY,w,h,VX,VY,z,0,0,1);
- if(fat) fatGrid(); return 1;
-}
-// CopyBits: glass rectangle ↔ SWAP. back=0 captures, back=1 restores.
-function portBits(gx,gy,w,h,back){
- var d,s; d=373376; s=373440;
- tbFill(d,0,64); tbFill(s,0,64);
- stgWrite(d,1); stgWrite(d+1,8); stgWrite(d+2,2); stgWrite(d+3,1);
- stgWrite(s,1); stgWrite(s+1,8); stgWrite(s+3,1);
- put32(s+4,SWAP);
- w16at(d+8,640); w16at(d+10,640); w16at(d+12,480);
- w16at(s+8,w); w16at(s+10,w); w16at(s+12,h);
- w16at(s+18,w); w16at(s+20,h); w16at(s+30,w); w16at(s+32,h);
- if(back){
-  w16at(d+18,w); w16at(d+20,h); w16at(d+22,gx); w16at(d+24,gy);
-  w16at(d+26,VX); w16at(d+28,VY); w16at(d+30,VW); w16at(d+32,VH);
-  return toolbox(6,s,d,0);
+function gridDots(){
+ var x,y,sx,sy;
+ ctx.fillStyle="#808080";
+ y=Math.floor(docY/8)*8;
+ while(y<docY+viewH()){
+  x=Math.floor(docX/8)*8;
+  while(x<docX+viewW()){
+   sx=VX+x-docX; sy=VY+y-docY;
+   if(sx>=VX&&sy>=VY&&sx<VX+VW&&sy<VY+VH) ctx.fillRect(sx,sy,1,1);
+   x=x+8;
+  }
+  y=y+8;
  }
- w16at(d+14,gx); w16at(d+16,gy); w16at(d+18,w); w16at(d+20,h);
- w16at(d+30,640); w16at(d+32,480);
- return toolbox(6,d,s,0);
 }
-function takeGrab(){
- var z,s,xa,xb,ya,yb;
- grabbed=0; if((tbBits&32)==0) return;
- z=1; if(fat) z=8; s=penSize();
- xa=ax; xb=bx; if(xa>xb){ xa=bx; xb=ax; }
- ya=ay; yb=by; if(ya>yb){ ya=by; yb=ay; }
- xa=xa-s; ya=ya-s; xb=xb+s; yb=yb+s;
- if(xa<docX) xa=docX; if(ya<docY) ya=docY;
- if(xb>docX+viewW()-1) xb=docX+viewW()-1;
- if(yb>docY+viewH()-1) yb=docY+viewH()-1;
- if(xa<0) xa=0; if(ya<0) ya=0;
- if(xa>xb||ya>yb) return;
- grabGX=VX+(xa-docX)*z; grabGY=VY+(ya-docY)*z;
- grabW=(xb-xa+1)*z; grabH=(yb-ya+1)*z;
- if(grabW*grabH>92160) return;
- if(portBits(grabGX,grabGY,grabW,grabH,0)>0) grabbed=1;
+function drawDoc(){
+ var y,x,b,i,z,dw,dh,run,base,c;
+ z=1; if(fat) z=8; dw=viewW(); dh=viewH();
+ ctx.fillStyle="#FFFFFF"; ctx.fillRect(VX,VY,VW,VH);
+ y=0;
+ while(y<dh){
+  x=0; base=4096+(docY+y)*72;
+  while(x<dw){
+   i=(docX+x)-Math.floor((docX+x)/8)*8;
+   b=stgRead(base+Math.floor((docX+x)/8));
+   if(b==0) x=x+(8-i);
+   else while(i<8&&x<dw){
+    if((Math.floor(b/MASK[i])%2)){
+     c=shown(docX+x,docY+y); run=1; i=i+1; x=x+1;
+     while(i<8&&x<dw&&(Math.floor(b/MASK[i])%2)&&shown(docX+x,docY+y)==c){ run=run+1; i=i+1; x=x+1; }
+     useColor(c); ctx.fillRect(VX+(x-run)*z,VY+y*z,run*z,z);
+    } else { i=i+1; x=x+1; }
+   }
+  }
+  y=y+1;
+ }
+ if(fat) fatGrid(); else if(grid) gridDots();
 }
-function restorePrev(){
- if(grabbed){ portBits(grabGX,grabGY,grabW,grabH,1); grabbed=0; return; }
- showView();
-}
-function paintPage(){
- showView();
- if(mode==0){ drawAnts(); drawFloat(); drawCaret(); if(penShow) refreshPen(); }
-}
-function drawDoc(){ showView(); }
 function antRun(x,y,n,horiz){
  var i,on; i=0;
  while(i<n){ on=((i+Math.floor(tick/8))%2)==0; if(horiz) paintDot(x+i,y,on); else paintDot(x,y+i,on); i=i+1; }
@@ -1338,22 +1287,22 @@ function drawAnts(){ if(selOn==0) return; antRun(selX,selY,selW,1); antRun(selX,
 function drawFloat(){
  var x,y,w,h,msk;
  if(selFloat==0) return;
- w=r16(BASE_C); h=r16(BASE_C+2); msk=stgRead(BASE_C+6); y=0;
+ w=r16(50176); h=r16(50176+2); msk=stgRead(50176+6); y=0;
  while(y<h){ x=0; while(x<w){ if(msk==0||clipBit(x,y,1)) paintDot(selX+x,selY+y,clipBit(x,y,0)); x=x+1; } y=y+1; }
 }
 function drawOpen(){
  var i,a,n;
  ctx.fillStyle="#FFFFFF"; ctx.fillRect(VX,VY,VW,VH);
  ctx.fillStyle="#000000"; ctx.font="16px"; ctx.fillText("Pictures",VX+8,VY+24);
- if(nFiles==0){ ctx.fillText("No pictures",VX+8,VY+52); return; }
- i=0; while(i<nFiles){ a=3600+i*13; n=stgRead(a); uiStringAt(a+1,n,VX+8,VY+32+i*14); i=i+1; }
+ if(PC.nFiles==0){ ctx.fillText("No pictures",VX+8,VY+52); return; }
+ i=0; while(i<PC.nFiles){ a=3600+i*13; n=stgRead(a); uiStringAt(a+1,n,VX+8,VY+32+i*14); i=i+1; }
 }
 function uiStringAt(a,n,x,y){ var i; i=0; while(i<n&&i<12){ uiChar(stgRead(a+i),x+i*6,y); i=i+1; } }
 function drawSaveAs(){
  ctx.fillStyle="#FFFFFF"; ctx.fillRect(VX,VY,VW,80);
  ctx.fillStyle="#000000"; ctx.font="16px"; ctx.fillText("Type a name. Return saves.",VX+8,VY+24);
- uiString(NAME,nameLen,VX+8,VY+40);
- ctx.fillStyle="#000000"; ctx.fillRect(VX+8+nameLen*6,VY+40,1,8);
+ uiString(NAME,PC.nameLen,VX+8,VY+40);
+ ctx.fillStyle="#000000"; ctx.fillRect(VX+8+PC.nameLen*6,VY+40,1,8);
 }
 function drawEditor(){
  var row,col,k;
@@ -1402,12 +1351,9 @@ function paintAll(){
  checks();
 }
 function bootStep(){
- tbBits=toolbox(0,0,0,0);
- if(tbFill(BASE,0,DOC_BYTES)<0) bad=1;
- if(tbFill(BASE_U,0,DOC_BYTES)<0) bad=1;
- if(tbFill(COLB,0,COLN)<0) bad=1;
- if(tbFill(COLU,0,COLN)<0) bad=1;
- bootRow=DOC_H; booted=1; docClean=1; need=1; clampScroll();
+ // Preview restoration reads color nibbles even for blank page bits.
+ clearPage();
+ PC.bootRow=320; booted=1; docClean=1; need=1; clampScroll();
 }
 function bootScreen(){
  ctx.fillStyle="#FFFFFF"; ctx.fillRect(24,88,576,344);
@@ -1421,12 +1367,12 @@ function pollJoy(){
  if(keyUp()) ny=ny-1; if(keyDown()) ny=ny+1;
  if(keyLeft()) nx=nx-1; if(keyRight()) nx=nx+1;
  if(keyFire()) f=1;
- if(nx<0) nx=0; if(ny<0) ny=0; if(nx>=DOC_W) nx=DOC_W-1; if(ny>=DOC_H) ny=DOC_H-1;
+ if(nx<0) nx=0; if(ny<0) ny=0; if(nx>=576) nx=576-1; if(ny>=320) ny=320-1;
  if(nx!=penX||ny!=penY){ penX=nx; penY=ny; penShow=1;
   if(penX<docX||penY<docY||penX>=docX+viewW()||penY>=docY+viewH()){
    if(penX<docX) docX=penX; if(penY<docY) docY=penY;
    if(penX>=docX+viewW()) docX=penX-viewW()+1; if(penY>=docY+viewH()) docY=penY-viewH()+1;
-   clampScroll(); paintPage();
+   clampScroll(); need=1;
   } else if(joyFire==0&&spaceDown==0) needPen=1;
   if(joyFire||spaceDown) dragDoc(penX,penY);
  }
@@ -1434,31 +1380,45 @@ function pollJoy(){
  else if(f==0&&joyFire){ joyFire=0; if(down&&spaceDown==0) endStroke(penX,penY); }
  else if(f&&joyFire&&spaceDown==0&&tool==5&&(tick%4)==0) spray(penX,penY);
 }
+function paintResources(){
+ var i,sum,n;
+ stgWrite(1900,80);stgWrite(1901,65);stgWrite(1902,73);stgWrite(1903,78);stgWrite(1904,84);
+ stgWrite(1905,46);stgWrite(1906,82);stgWrite(1907,83);stgWrite(1908,67);stgWrite(1909,0);
+ n=fsRead(1900,0,373504,1611);if(n!=1611)return 0;
+ if(stgRead(373504)!=74||stgRead(373505)!=77||stgRead(373506)!=82||stgRead(373507)!=80)return 0;
+ if(stgRead(373508)!=1||stgRead(373509)!=32||r16(373510)!=95)return 0;
+ if(r16(373512)!=1579||r16(373514)!=0)return 0;
+ if(r16(373520)!=0||r16(373522)!=475||r16(373524)!=1243||r16(373526)!=1259||r16(373528)!=1563)return 0;
+ i=0;sum=0;while(i<1579){sum=sum+stgRead(373536+i);i=i+1;}
+ if(sum!=stgRead(373516)+stgRead(373517)*256+stgRead(373518)*65536+stgRead(373519)*16777216)return 0;
+ i=0;while(i<16){n=stgRead(374779+i);if(n<1||n>24||stgRead(375099+i)>15)return 0;i=i+1;}
+ return 1;
+}
 function frame(){
  tick=tick+1;
+ if(!PC.ready){ctx.fillStyle="#FFF";ctx.fillRect(24,88,576,344);ctx.fillStyle="#000";ctx.fillText("PAINT.RSC missing or invalid",80,120);tbSessionFrame(frame);return;}
  if(booted==0){ bootStep(); bootScreen(); }
  else {
   if(job) fillWork();
   pollJoy();
   if(spaceDown&&down&&tool==5&&mode==0&&(tick%4)==0) spray(penX,penY);
-  if(down==0&&mode==0&&(tbBits&4)!=0){
-   if(selOn&&(tick%12)==0){ showView(); drawAnts(); drawFloat(); if(tool==3) drawCaret(); if(penShow) refreshPen(); }
-   else if(tool==3&&(tick%24)==0){ showView(); drawCaret(); if(penShow) refreshPen(); }
-  } else {
-   if(tool==3&&mode==0&&(tick%24)==0) need=1;
-   if(selOn&&(tick%12)==0) need=1;
-  }
+  if(tool==3&&mode==0&&(tick%24)==0) need=1;
+  if(selOn&&(tick%12)==0) need=1;
   if(need){ paintAll(); need=0; } else if(needPen){ refreshPen(); needPen=0; }
  }
- requestAnimationFrame(frame);
+ tbSessionFrame(frame);
 }
 function initPow(){ var i; PW0[0]=1; i=1; while(i<32){ PW0[i]=PW0[i-1]*2; i=i+1; } PW1[0]=PW0[31]*2; PW1[1]=PW1[0]*2; PW1[2]=PW1[1]*2; }
 function initCirc(){ var i; i=0; while(i<9){ C8[i]=Math.round(Math.sqrt(64-i*i)); i=i+1; } }
-initPow(); initCirc(); checks();
-addEventListener("keydown",function(e){ onKey(e); });
-addEventListener("keyup",function(e){ onUp(e); });
-addEventListener("mousedown",function(e){ pointer(e.clientX,e.clientY,1); });
-addEventListener("mousemove",function(e){ pointer(e.clientX,e.clientY,2); });
-addEventListener("mouseup",function(e){ pointer(e.clientX,e.clientY,0); });
-requestAnimationFrame(frame);
+initPow(); initCirc(); checks(); PC.ready=paintResources();
+tbSessionListen("keydown",function(e){ onKey(e); });
+tbSessionListen("keyup",function(e){ onUp(e); });
+tbSessionListen("mousedown",function(e){ pointer(e.clientX,e.clientY,1); });
+tbSessionListen("mousemove",function(e){ pointer(e.clientX,e.clientY,2); });
+tbSessionListen("mouseup",function(e){ pointer(e.clientX,e.clientY,0); });
+tbSessionFrame(frame);
+
+tbSessionProgram('MACPAINT.HTM');
+tbSessionInvalidate(function(){need=1;if(PC.ready&&booted){paintAll();need=0;}});
+tbSessionSuffix("PNT");
 </script></body></html>

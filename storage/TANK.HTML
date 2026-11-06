@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html><head><title>TANK</title></head>
 <body><canvas id="c" width="640" height="480"></canvas>
@@ -11,9 +13,9 @@
    BREAK, so it is not bound here. R starts the arena again. */
 var c = document.querySelector("canvas").getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-c.systemWindow=8;
-c.systemViewport=1;
-c.systemAbout="Tank|Drive and fire in a tank battle arena.";
+tbSessionProperty(c,0,8);
+tbSessionProperty(c,1,1);
+tbSessionProperty(c,2,"Tank|Drive and fire in a tank battle arena.");
 
 var CX = [0,0.098,0.1951,0.2903,0.3827,0.4714,0.5556,0.6344,0.7071,0.773,0.8315,0.8819,0.9239,0.9569,0.9808,0.9952,1,0.9952,0.9808,0.9569,0.9239,0.8819,0.8315,0.773,0.7071,0.6344,0.5556,0.4714,0.3827,0.2903,0.1951,0.098,0,-0.098,-0.1951,-0.2903,-0.3827,-0.4714,-0.5556,-0.6344,-0.7071,-0.773,-0.8315,-0.8819,-0.9239,-0.9569,-0.9808,-0.9952,-1,-0.9952,-0.9808,-0.9569,-0.9239,-0.8819,-0.8315,-0.773,-0.7071,-0.6344,-0.5556,-0.4714,-0.3827,-0.2903,-0.1951,-0.098];
 var CZ = [1,0.9952,0.9808,0.9569,0.9239,0.8819,0.8315,0.773,0.7071,0.6344,0.5556,0.4714,0.3827,0.2903,0.1951,0.098,0,-0.098,-0.1951,-0.2903,-0.3827,-0.4714,-0.5556,-0.6344,-0.7071,-0.773,-0.8315,-0.8819,-0.9239,-0.9569,-0.9808,-0.9952,-1,-0.9952,-0.9808,-0.9569,-0.9239,-0.8819,-0.8315,-0.773,-0.7071,-0.6344,-0.5556,-0.4714,-0.3827,-0.2903,-0.1951,-0.098,0,0.098,0.1951,0.2903,0.3827,0.4714,0.5556,0.6344,0.7071,0.773,0.8315,0.8819,0.9239,0.9569,0.9808,0.9952];
@@ -635,10 +637,10 @@ function loop() {
   stepBursts();
   paint();
   frames = frames + 1;
-  requestAnimationFrame(loop);
+  tbSessionFrame(loop);
 }
 
-document.addEventListener("keydown", function (e) {
+tbSessionListen("keydown", function (e) {
   var k;
   k = e.keyCode | 0;
   if (k === 38 || k === 87) kUp = 1;
@@ -653,7 +655,7 @@ document.addEventListener("keydown", function (e) {
   if (k === 50) k2 = 1;
   if (k === 51) k3 = 1;
 });
-document.addEventListener("keyup", function (e) {
+tbSessionListen("keyup", function (e) {
   var k;
   k = e.keyCode | 0;
   if (k === 38 || k === 87) kUp = 0;
@@ -668,6 +670,8 @@ document.addEventListener("keyup", function (e) {
   if (k === 50) k2 = 0;
   if (k === 51) k3 = 0;
 });
-requestAnimationFrame(loop);
+tbSessionFrame(loop);
+
+tbSessionProgram('TANK.HTM');
 </script>
 </body></html>

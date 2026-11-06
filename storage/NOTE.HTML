@@ -1,10 +1,15 @@
 <!doctype html>
-<html><head><title>Note</title></head><body>
-<!-- System role 5 opens a new untitled note in the shared source editor.
-     The system owns File/Edit menus, saving, file dialogs and window close.
-     PYTHON prototype; RTL port follows approval of this interface. -->
-<canvas id="c" width="640" height="480"></canvas><script>
-var ctx=document.getElementById("c").getContext("2d");
-ctx.systemWindow=5;
-function tick(){requestAnimationFrame(tick);}requestAnimationFrame(tick);
+<!-- jmr-toolbox: resident-v2 -->
+<html><head><title>Note</title></head><body><canvas width="640" height="480"></canvas><script>
+// New Note is software policy: initialize SOURCE, then explicitly chain the
+// shared Editor. No role-triggered hardware action or duplicate editor.
+var c=document.querySelector("canvas").getContext("2d");
+var noteStatus=sysDocument(2,0,5);
+if(noteStatus==0){
+ stgWrite(65,0);stgWrite(208,0);tbFill(32,0,21);stgWrite(32,82);stgWrite(33,69);stgWrite(34,83);stgWrite(35,1);stgWrite(52,5);
+ stgWrite(64,5);cdone(128,0,0);
+}else{
+ c.fillStyle="#FFF";c.fillRect(0,0,640,480);c.fillStyle="#000";
+ c.fillText("Unable to create Note. Use recovery to return to Finder.",24,80);
+}
 </script></body></html>

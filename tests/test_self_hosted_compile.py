@@ -197,7 +197,7 @@ def test_art_write2_enforces_the_framebuffer_wall():
 def test_art_wall_matches_the_mint_time_constant():
     assert jsb_format.CART_MAX_BYTES == jsb_format.SYSTEM_CACHE_BASE * 2
     assert jsb_format.CART_WORDS * 2 == jsb_format.CART_MAX_BYTES
-    assert jsb_format._FB_SRAM_BASE_BYTES - jsb_format.CART_MAX_BYTES == 256 * 1024
+    assert jsb_format._FB_SRAM_BASE_BYTES - jsb_format.CART_MAX_BYTES == 288 * 1024
     assert jsb_format.FINDER_STATE_BASE * 2 == jsb_format.CART_MAX_BYTES + jsb_format.FINDER_CACHE_BYTES
     assert jsb_format.FINDER_STATE_BASE * 2 + jsb_format.CSCR_WORDS <= jsb_format._FB_SRAM_BASE_BYTES
 

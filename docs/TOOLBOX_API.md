@@ -1,20 +1,18 @@
-# Native JavaScript Toolbox — development interface v1
+# Native JavaScript Toolbox — interface v1 (qualified run78 hardware)
 
 The native JavaScript engine remains the CPU. `toolbox(op,a,b,c)` calls a small
 100 MHz RTL peripheral through the existing cold service handshake. Python
 models the same contract. This interface is new: run75/run76 releases do not
 contain it. Development applications using it must be paired with the new
-simulator and its matching bitstream. All current run77d/e/f candidates include
-the bitmap-copy interface; whole-board qualification is
-tracked in [TOOLBOX_IMPLEMENTATION_STATUS.md](TOOLBOX_IMPLEMENTATION_STATUS.md).
-The matched disk is `build/run77d_copybits_toolbox/disk/card_run77d.img`.
+simulator and its matching bitstream. The clean build includes operations 1–7.
+Qualification is tracked in [TOOLBOX_IMPLEMENTATION_STATUS.md](TOOLBOX_IMPLEMENTATION_STATUS.md).
 Shared software UI calls and resident linking are documented in
 [RESIDENT_TOOLBOX.md](RESIDENT_TOOLBOX.md).
 
 ## Memory operations
 
 ```javascript
-var version = toolbox(0,0,0,0); // 65599: version 1, capabilities mask 63
+var version = toolbox(0,0,0,0); // 65663: version 1, capabilities mask 127
 var copied = toolbox(1,source,destination,length); // memmove, overlap is safe
 var filled = toolbox(2,destination,byteValue,length);
 ```
@@ -92,18 +90,17 @@ examples and overlap, transparency, clipping, and error cases.
 
 ## Architecture status
 
-The primitive layer and resident native-JavaScript menu/dialog library are
-implemented and simulator-tested. The library uses three BRAM tiles plus fixed
-jump padding; application code stays in BRAM. Legacy native UI remains available
-for unconverted programs. This does not claim that all UI RTL has been removed,
-or that whole-system resource use has fallen. Run77d whole-board resource/timing qualification
-is still in progress.
-
-Operation 6 now implements the raw indexed rectangle transport below in the
-working source and simulators. Capability bit 5 advertises it. Frozen run77b/
-run77c builds predate this change; a new Vivado bit and board qualification are
-required before publishing clients to a physical board. Older native-64
-runtimes advertise mask 31 and reject operation 6.
+The clean core uses an 8192-word resident prefix with 8191 mutable words and
+one fixed final jump. Replaced native menus/dialogs/document policy are removed;
+shared JavaScript owns them. Essential boot/Terminal/recovery UI remains.
+Run78 hardware passed strict FPGA implementation qualification. The delivered
+64 MiB disk has 44 programs and 42 resident clients, including eight CB variants.
+The library uses **8191 of 8191 mutable instructions**, leaving zero spare.
+The native ABI and qualified bit are unchanged: audited factory ROM `fd89c8…`
+stays in the bit, while disk ROM `f6f805…` replaces it at startup. Factory INIT
+and later disk-software evidence are distinct. Final software checks were
+bounded; physical user display/input acceptance remains pending. See
+[RESIDENT_TOOLBOX.md](RESIDENT_TOOLBOX.md).
 
 ## General bitmap transport and software CopyBits
 
@@ -180,3 +177,34 @@ The new resident implementation and complete UI call list are documented in
 [RESIDENT_TOOLBOX.md](RESIDENT_TOOLBOX.md). See `storage/TBDEMO.HTML` for a complete
 marked client. These are JavaScript library functions, not additional native
 hardware IDs. Release/testing status remains in TOOLBOX_IMPLEMENTATION_STATUS.
+
+## General raster extension — operation 7
+
+`toolbox(7,sourceDescriptor,destinationDescriptor,0)` retains operation 6's
+geometry, validation, clipping, overlap and requested-pixel-count contract.
+Capability bit 6 advertises it. Additional fields are in the source descriptor:
+
+- Byte 36: mode 0 copy; 1 source OR destination; 2 XOR; 3 destination AND NOT
+  source; 4 AND; 5 destination palette byte XOR 255. Mode 5 is not RGB inversion.
+- Byte 37: bit 0 enables a one-bit mask; bit 1 enables an 8×8 pattern.
+  Other bits are invalid. The source geometry remains required in all modes.
+- Bytes 40–47: eight pattern rows, most-significant bit first. Byte 34 is
+  foreground and 35 background. Pattern phase follows destination x/y modulo 8.
+- Bytes 48–51: little-endian mask arena base; bytes 52–53: little-endian stride.
+  Mask coordinates are request-relative x/y. Stride must cover ceil(width/8),
+  and stride×height must fit the arena. Zero mask bits preserve the destination.
+  Masks overlapping an arena destination allocation are conservatively rejected.
+
+`tbRaster(src,dst,mode)` checks capability and writes the mode. `tbMask(src,base,stride)`
+and `tbMaskOff(src)` control masking. `tbPattern8(src,rows,foreground,background)`
+and `tbPatternOff(src)` control pattern source selection. `tbPaintRect` composes
+a patterned screen rectangle. Inspect `resources/toolbox/toolbox.js` for exact
+helper signatures. These helpers are updateable software; the validated bulk
+transport and Boolean mechanisms are the stable hardware boundary.
+
+## Practical graphics recipes
+
+The isolated TOOLBOX_USAGE.md guide and GRAPHICS.HTML / DAMAGE.HTML examples
+show correct physical coordinate conversion, descriptor sizing and previous-frame
+damage ownership. The corrected tbPaintRect sets both rectangle sizes and uses8191/8191 resident
+words. Keep its matched ROM/LNK/clients together.

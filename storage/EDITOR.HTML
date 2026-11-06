@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>EDITOR — JMR standalone source editor</title></head>
@@ -73,7 +75,7 @@ var keepView=0;
 var longest=0;
 var editorRole=1;
 if(_gr(32)===82 && _gr(33)===69 && _gr(34)===83 && _gr(35)===1)editorRole=_gr(52);
-ctx.systemWindow=editorRole;
+tbSessionProperty(ctx,0,editorRole);
 var dirty = 0;
 var quit = 0;
 var saved = 0;
@@ -223,9 +225,9 @@ function redraw(){
     if(curCol<leftCol)leftCol=curCol;
     if(curCol>=leftCol+COLS)leftCol=curCol-COLS+1;
   }
-  ctx.windowScroll=Math.floor(topLine*255/Math.max(1,nLines-ROWS));
-  ctx.windowScrollX=Math.floor(leftCol*255/Math.max(1,longest-COLS+1));
-  ctx.windowDirty=dirty+ED.undo*2+(clipLen()>0?4:0)+(hasSelection()?8:0)+ED.notice*16;
+  tbSessionProperty(ctx,7,Math.floor(topLine*255/Math.max(1,nLines-ROWS)));
+  tbSessionProperty(ctx,8,Math.floor(leftCol*255/Math.max(1,longest-COLS+1)));
+  tbSessionProperty(ctx,9,dirty+ED.undo*2+(clipLen()>0?4:0)+(hasSelection()?8:0)+ED.notice*16);
   ctx.fillStyle="#FFFFFF";ctx.fillRect(24,88,576,344);
   ctx.fillStyle="#000000";
   while(r<ROWS){li=topLine+r;if(li<nLines)drawLine(r,li);r=r+1;}
@@ -350,34 +352,37 @@ function onKey(e) {
 function tick() {
   if (quit || saved) { return; }
   if (needDraw) { redraw(); needDraw = 0; }
-  requestAnimationFrame(tick);
+  tbSessionFrame(tick);
 }
 
 reindex();
 if(_gr(32)===82 && _gr(33)===69 && _gr(34)===83 && _gr(35)===1){
   curLine=Math.min(nLines-1,_r32(36));curCol=Math.min(lineLen(curLine),_r32(40));topLine=_r32(44);leftCol=_r32(48);_gw(32,0);
 }
-addEventListener("keydown", onKey);
-addEventListener("keyup",function(e){if(e.keyCode===17||e.keyCode===91)ED.ctrl=0;});
+tbSessionListen("keydown", onKey);
+tbSessionListen("keyup",function(e){if(e.keyCode===17||e.keyCode===91)ED.ctrl=0;});
 function mouseCaret(e){
   var line=Math.min(nLines-1,Math.max(0,topLine+Math.floor((e.clientY-92)/CH)));
   curLine=line;curCol=Math.min(lineLen(line),leftCol+Math.max(0,Math.floor((e.clientX-28)/CW)));
   keepView=0;needDraw=1;
 }
-addEventListener("mousedown",function(e){
+tbSessionListen("mousedown",function(e){
   if(e.button===0 && e.clientY>=92 && e.clientY<432 && e.clientX>=28 && e.clientX<588){
     mouseCaret(e);ED.a=caretOffset();ED.b=ED.a;ED.drag=1;
   }
 });
-addEventListener("mousemove",function(e){
+tbSessionListen("mousemove",function(e){
   if(ED.drag){mouseCaret(e);ED.b=caretOffset();}
 });
-addEventListener("mouseup",function(e){
+tbSessionListen("mouseup",function(e){
   if(ED.drag){mouseCaret(e);ED.b=caretOffset();ED.drag=0;}
 });
 
 redraw();
-requestAnimationFrame(tick);
+tbSessionFrame(tick);
+
+tbSessionProgram('EDITOR.HTM');
+tbSessionInvalidate(function(){redraw();needDraw=0;});
 </script>
 </body>
 </html>

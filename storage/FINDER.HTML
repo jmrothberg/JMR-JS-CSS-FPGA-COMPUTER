@@ -1,6 +1,24 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!doctype html>
 <html><head><meta charset="utf-8"><title>Finder</title></head>
-<body><canvas id="c" width="640" height="480"></canvas><script>
+<body><canvas id="c" width="640" height="480"></canvas><script data-host="chrome">
+// Chrome-only. Maps the machine's sprite handles to the real PNGs.
+// This list is ALSO the art manifest make_artx.py reads — one source of
+// truth, so the browser and the .ARTX can never disagree about order.
+window.JMR_SPR = ["FINDER-0.png"];
+(function () {
+  var d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+  Object.defineProperty(HTMLImageElement.prototype, "src", {
+    get: function () { return d.get.call(this); },
+    set: function (v) {
+      var m = /^jmr:spr:(\d+)$/.exec(v);
+      d.set.call(this, m ? window.JMR_SPR[+m[1]] : v);
+    }
+  });
+})();
+</script>
+<script>
 // Finder program. This is the disk program, the way the 1984 Finder was
 // a program and the menu bar stayed in ROM. It is not the built-in
 // desktop (functional_model/desktop.py). Folders, positions, Trash, and
@@ -33,10 +51,10 @@ var ctx=document.getElementById("c").getContext("2d");
 ctx.imageSmoothingEnabled=false;
 var ADV=[8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,4,6,7,10,7,11,10,3,5,5,7,7,4,7,4,7,8,8,8,8,8,8,8,8,8,8,4,4,6,8,6,8,11,8,8,8,8,7,7,8,8,6,7,9,7,12,9,8,8,8,8,7,6,8,8,12,8,8,8,5,7,5,8,8,6,8,8,7,8,8,6,8,8,4,6,8,4,12,8,8,8,8,6,7,6,8,8,12,8,8,8,5,5,5,8,8];
 var fontImage=new Image();
-fontImage.src="data:image/png;base64,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";
-ctx.systemWindow=9;
-ctx.systemAbout="Finder|Manage programs and documents.";
-ctx.systemMenus="File|New Folder=160|Open=161|Close=162|Close All=163|Get Info=164|Duplicate=165|Put Back=166|Print=167|Page Setup=168|Eject=169;Edit|Undo=170|Cut=171|Copy=172|Paste=173|Clear=174|Select All=175|Show Clipboard=176;View|by Icon=177|by Small Icon=178|by Name=179|by Size=180|by Kind=181|by Date=182|Hidden files=183;Special|Clean Up=184|Empty Trash=185|Set Startup=186|Restart=187|Erase Disk=188|Terminal=189|Compile=190";
+fontImage.src="jmr:spr:0";
+tbSessionProperty(ctx,0,9);
+tbSessionProperty(ctx,2,"Finder|Manage programs and documents.");
+tbSessionMenus(ctx,["File|New Folder=160|Open=161|Close=162|Close All=163|Get Info=164|Duplicate=165|Put Back=166|Print=167|Page Setup=168|Eject=169", "Edit|Undo=170|Cut=171|Copy=172|Paste=173|Clear=174|Select All=175|Show Clipboard=176", "View|by Icon=177|by Small Icon=178|by Name=179|by Size=180|by Kind=181|by Date=182|Hidden files=183", "Special|Clean Up=184|Empty Trash=185|Set Startup=186|Restart=187|Erase Disk=188|Terminal=189|Compile=190|Editor=1010|Reader=1011|Utility=1013|Note=1014|Help=1015"]);
 ctx.font="8px";
 ctx.fillStyle="#000000";
 
@@ -49,8 +67,9 @@ function ch(c,x,y){
  if(c<32||c>126)return;
  col=c-Math.floor(c/32)*32;
  row=Math.floor(c/32)*16;
- if(stgRead(16471))row=row+64;
- ctx.drawImage(fontImage,col*16,row,16,16,x,y,16,16);
+ if(stgRead(16471)){
+  tbInk(_tbD,255,1);tbText([c],x,y);tbInk(_tbD,0,1);
+ }else ctx.drawImage(fontImage,col*16,row,16,16,x,y,16,16);
 }
 function r16(a){return stgRead(a)+stgRead(a+1)*256;}
 function w16(a,v){
@@ -138,8 +157,6 @@ function txt(id,x,y){
  else if(id==24){ch(97,x,y);x=x+wid(97);ch(118,x,y);x=x+wid(118);ch(97,x,y);x=x+wid(97);ch(105,x,y);x=x+wid(105);ch(108,x,y);x=x+wid(108);ch(97,x,y);x=x+wid(97);ch(98,x,y);x=x+wid(98);ch(108,x,y);x=x+wid(108);ch(101,x,y);}
 }
 // Toolbox v1. One call copies or fills a whole arena range.
-function tbMove(src,dst,n){return toolbox(1,src,dst,n);}
-function tbFill(dst,value,n){return toolbox(2,dst,value,n);}
 function copyName(slot,dest){
  var a,n;
  a=8192+slot*32;n=stgRead(a);
@@ -389,13 +406,13 @@ function menuMask(){
  var m,w,v,bit;
  m=4294967295-128-256-512-268435456;
  if(stgRead(16387)==0)m=m-33554432-64;
- ctx.systemMenuEnable=m;
+ tbSessionProperty(ctx,5,m);
  w=stgRead(16394);v=0;
  if(w!=255&&stgRead(16896+w*16))v=stgRead(16896+w*16+3);
  bit=131072;
  while(v>0){bit=bit*2;v=v-1;}
  if(stgRead(16390))bit=bit+8388608;
- ctx.systemMenuCheck=bit;
+ tbSessionProperty(ctx,6,bit);
 }
 function zoom(x0,y0,x1,y1,w,h){
  stgWrite(16600,4);
@@ -1535,12 +1552,15 @@ function frame(){
  if(stgRead(16409)&&f-Math.floor(f/16)*16==0)stgWrite(16385,1);
  if(stgRead(16384)==0)start();
  else if(stgRead(16385))paint();
- requestAnimationFrame(frame);
+ tbSessionFrame(frame);
 }
-addEventListener("keydown",onKey);
-addEventListener("keyup",onKeyUp);
-addEventListener("mousedown",onDown);
-addEventListener("mousemove",onMove);
-addEventListener("mouseup",onUp);
-requestAnimationFrame(frame);
+tbSessionListen("keydown",onKey);
+tbSessionListen("keyup",onKeyUp);
+tbSessionListen("mousedown",onDown);
+tbSessionListen("mousemove",onMove);
+tbSessionListen("mouseup",onUp);
+tbSessionFrame(frame);
+
+tbSessionProgram('FINDER.HTM');
+tbSessionInvalidate(function(){if(stgRead(16384))paint();});
 </script></body></html>

@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -39,9 +41,9 @@ window.JMR_SPR = ["BOMBERMA-0.png", "BOMBERMA-1.png", "BOMBERMA-2.png", "BOMBERM
 var cvs=document.getElementById("c");
 var ctx=cvs.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-ctx.systemWindow=8;
-ctx.systemViewport=1;
-ctx.systemAbout="Bomberman|Place bombs and escape the maze.";
+tbSessionProperty(ctx,0,8);
+tbSessionProperty(ctx,1,1);
+tbSessionProperty(ctx,2,"Bomberman|Place bombs and escape the maze.");
 
 ctx.imageSmoothingEnabled=false;
 if(!window.JMR_SPR){window.JMR_SPR=["BOMBERMA-0.png","BOMBERMA-1.png","BOMBERMA-2.png","BOMBERMA-3.png","BOMBERMA-4.png","BOMBERMA-5.png","BOMBERMA-6.png","BOMBERMA-7.png","BOMBERMA-8.png","BOMBERMA-9.png","BOMBERMA-10.png","BOMBERMA-11.png","BOMBERMA-12.png","BOMBERMA-13.png"];}
@@ -90,8 +92,8 @@ function onUp(e){
   if(k==="ArrowDown"||k==="s"||k==="S"||c===40||c===83)keys.down=0;
   if(k===" "||c===32)keys.fire=0;
 }
-addEventListener("keydown",onDown);
-addEventListener("keyup",onUp);
+tbSessionListen("keydown",onDown);
+tbSessionListen("keyup",onUp);
 function stick(){
   var j;
   try{j=joy()|0;}catch(e){j=0;}
@@ -569,11 +571,13 @@ function draw(){
 function loop(){
   update();
   draw();
-  requestAnimationFrame(loop);
+  tbSessionFrame(loop);
 }
 doReset();
-requestAnimationFrame(loop);
+tbSessionFrame(loop);
 })();
+
+tbSessionProgram('BOMBFAST.HTM');
 </script>
 </body>
 </html>

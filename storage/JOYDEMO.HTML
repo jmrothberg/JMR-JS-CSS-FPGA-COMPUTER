@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Joystick demo — JMR</title></head>
@@ -8,9 +10,9 @@
 var canvas = document.querySelector("canvas");
 var c = canvas.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-c.systemWindow=8;
-c.systemViewport=1;
-c.systemAbout="Joystick Demo|Test joystick movement and buttons.";
+tbSessionProperty(c,0,8);
+tbSessionProperty(c,1,1);
+tbSessionProperty(c,2,"Joystick Demo|Test joystick movement and buttons.");
 
 c.imageSmoothingEnabled = false;
 
@@ -32,7 +34,7 @@ console.log("JOY DEMO");
 
 // Stick on the chip is KEYEVT + joy_in, not e.key. PACMAN reads keyCode;
 // missing "ArrowLeft" intern still plays. 37/39/38/40/32/13 = arrows/Space/Enter.
-addEventListener("keydown", function (e) {
+tbSessionListen("keydown", function (e) {
   var k = e.key;
   var c = e.keyCode;
   if (k === "ArrowLeft" || k === "a" || k === "A" || c === 37 || c === 65) leftHeld = 1;
@@ -41,7 +43,7 @@ addEventListener("keydown", function (e) {
   if (k === "ArrowDown" || k === "s" || k === "S" || c === 40 || c === 83) downHeld = 1;
   if (k === " " || k === "Enter" || c === 32 || c === 13) fireHeld = 1;
 });
-addEventListener("keyup", function (e) {
+tbSessionListen("keyup", function (e) {
   var k = e.key;
   var c = e.keyCode;
   if (k === "ArrowLeft" || k === "a" || k === "A" || c === 37 || c === 65) leftHeld = 0;
@@ -110,9 +112,11 @@ function loop() {
   c.fillText(fire, 148, 464);
   c.fillText("JOY", 176, 464);
   c.fillText(j, 208, 464);
-  requestAnimationFrame(loop);
+  tbSessionFrame(loop);
 }
-requestAnimationFrame(loop);
+tbSessionFrame(loop);
+
+tbSessionProgram('JOYDEMO.HTM');
 </script>
 </body>
 </html>

@@ -1,0 +1,56 @@
+<!doctype html>
+<!-- jmr-toolbox: resident-v2 -->
+<html><head><title>Correct CopyBits Damage</title></head><body><canvas width="640" height="480"></canvas><script>
+// Exclusive descriptors1000..1127; cache32000..95999 (200x320).
+// Cache coordinates are PHYSICAL screen coordinates; canvas has0.95y+24.
+var c=document.querySelector('canvas').getContext('2d');
+var dirty=[],t=0,started=0,tileOn=1,errors=0;
+function copyRect(x,y,w,h,capture){
+ if(w<=0||h<=0)return;
+ tbScreen(1000);tbSurface(1064,32000,200,320,200,8);
+ if(capture){tbRect(1000,x,y,w,h);tbRect(1064,0,0,w,h);tbPlace(1064,x-20,y-24,1);}
+ else{tbRect(1064,x-20,y-24,w,h);tbRect(1000,0,0,w,h);tbPlace(1000,x,y,1);}
+ var n=capture?tbCopyBits(1000,1064):tbCopyBits(1064,1000);
+ if(n!=w*h)errors=errors+1;
+}
+function physical(x,y,w,h){
+ var l=Math.max(20,Math.floor(x)),top=Math.max(24,Math.floor(24+y*0.95)-1);
+ var r=Math.min(220,Math.ceil(x+w)),bot=Math.min(344,Math.ceil(24+(y+h)*0.95)+1);
+ return [l,top,Math.max(0,r-l),Math.max(0,bot-top)];
+}
+function markCircle(x,y,r){
+ var l=Math.max(20,Math.floor(x-r-2)),top=Math.max(24,Math.floor(24+y*0.95-r-2));
+ var right=Math.min(220,Math.ceil(x+r+2)),bot=Math.min(344,Math.ceil(24+y*0.95+r+2));
+ if(right>l&&bot>top)dirty.push([l,top,right-l,bot-top]);
+}
+function mark(x,y,w,h){var q=physical(x,y,w,h);if(q[2]>0&&q[3]>0)dirty.push(q);}
+function restorePrevious(){var k=0,q;while(k<dirty.length){q=dirty[k];copyRect(q[0],q[1],q[2],q[3],0);k=k+1;}dirty=[];}
+function staticTile(){
+ // Clear old opaque area BEFORE drawing a transparent shape. Must run only
+ // after all old actors are erased, so cache cannot acquire their pixels.
+ c.fillStyle='#000';c.fillRect(70,160,32,32);
+ if(tileOn){c.fillStyle='#00FF00';c.fillRect(78,168,16,16);}
+ var q=physical(70,160,32,32);copyRect(q[0],q[1],q[2],q[3],1);
+}
+function background(){c.fillStyle='#000';c.fillRect(20,0,200,337);staticTile();}
+function actor(x,y,r){
+ c.fillStyle='#FFF';if(r==0){c.setTransform(1,0,0,1,0,0);c.fillRect(Math.floor(x),Math.floor(24+y*0.95),1,1);c.setTransform(1,0,0,0.95,0,24);mark(x,y,1,1);}
+ else{c.beginPath();c.arc(x,y,r,0,6.283185307);c.fill();markCircle(x,y,r);}
+}
+function frame(){
+ c.setTransform(1,0,0,0.95,0,24);
+ if(!started){c.fillStyle='#333';c.fillRect(0,0,640,480);background();copyRect(20,24,200,320,1);started=1;}
+ // All restorations finish BEFORE any new actor is drawn. The queue records
+ // what was drawn, not surviving game objects, so deletion cannot lose damage.
+ restorePrevious();
+ if(t==4){tileOn=0;staticTile();}
+ if(t==8){tileOn=1;staticTile();}
+ // REFERENCE_REDRAW_POINT
+ if(t%12<5)actor(60+t*4,150,8); // disappears on frame5
+ if(t%12<9)actor(90-t*2,154,6); // overlaps first actor
+ if(t%12<7){c.fillStyle='#FFF';c.fillText('10',130,180);mark(128,164,28,20);}
+ actor(40+t%12,210,0); // one pixel is not a radius-one circle
+ stgWrite(4000,errors);t=(t+1)%12;requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body></html>

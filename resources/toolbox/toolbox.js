@@ -32,3 +32,25 @@ function tbCopyBits(src,dst){
 function tbScreen(d){
  tbSurface(d,0,640,480,640,8);stgWrite(d+2,2);
 }
+// Native ABI v1 raster extension (capability bit 6). Modes act on palette-index bytes, not RGB.
+// 0 copy, 1 OR, 2 XOR, 3 destination AND NOT source, 4 AND, 5 invert destination.
+function tbRaster(src,dst,mode){
+ if((toolbox(0,0,0,0)&64)==0)return -1;
+ stgWrite(src+36,mode);return toolbox(7,src,dst,0);
+}
+function tbMask(d,base,stride){
+ tbU16(d+48,base);tbU16(d+50,Math.floor(base/65536));tbU16(d+52,stride);
+ stgWrite(d+37,(stgRead(d+37)&2)+1);
+}
+function tbMaskOff(d){stgWrite(d+37,stgRead(d+37)&2);}
+function tbPattern8(d,rows,foreground,background){
+ var i=0;while(i<8){stgWrite(d+40+i,rows[i]);i=i+1;}
+ tbInk(d,foreground,background);stgWrite(d+37,(stgRead(d+37)&1)+2);
+}
+function tbPatternOff(d){stgWrite(d+37,stgRead(d+37)&1);}
+// Compose a screen pattern rectangle from the general transport; no separate
+// line, polygon, brush or window hardware is needed. Descriptors are caller-owned.
+function tbPaintRect(src,dst,x,y,width,height,rows,foreground,background){
+ tbScreen(src);tbRect(src,0,0,width,height);tbPattern8(src,rows,foreground,background);
+ tbScreen(dst);tbRect(dst,0,0,width,height);tbPlace(dst,x,y,1);return tbRaster(src,dst,0);
+}

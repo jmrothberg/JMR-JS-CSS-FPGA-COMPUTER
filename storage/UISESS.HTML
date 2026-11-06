@@ -1,0 +1,63 @@
+<!doctype html>
+<!-- jmr-toolbox: resident-v2 -->
+<html><head><title>Session document example</title></head><body><canvas width="640" height="480"></canvas><script>
+// Run on a private copy of the demo disk. SOURCE is shared machine memory;
+// this sample deliberately replaces it. It is NOT an Editor replacement.
+// 60000..60127 is our transfer buffer; session owns96..111 and380320..380927.
+var demoCtx=document.querySelector("canvas").getContext("2d");
+var status="Choose New sample first",marked=0,ready=0,dirty=1;
+var downs=0,ups=0,moves=0,keys=0,keyups=0;
+tbSessionProperty(demoCtx,0,4); // Utility-style window, not reserved Editor role.
+tbSessionProperty(demoCtx,1,0); // Identity content coordinates.
+tbSessionProperty(demoCtx,2,"Session example|Private SOURCE and TXT files");
+tbSessionProperty(demoCtx,4,"Session example");
+tbSessionProperty(demoCtx,5,15); // Commands160..163 enabled;164 disabled.
+tbSessionProperty(demoCtx,6,0);tbSessionProperty(demoCtx,7,0);tbSessionProperty(demoCtx,8,0);tbSessionProperty(demoCtx,9,0);
+tbSessionProgram("UISESS.HTM");tbSessionSuffix("TXT");
+tbSessionMenus(demoCtx,"File|New sample=160|Open...=161|Save As...=162|Quit=1006;Demo|Mark=163|Disabled=164");
+function newSample(){
+ var s=tbSessionCodes("A private Toolbox document.\n"),i=0,b;
+ if(sysDocument(2,0,5)<0){status="Cannot initialize SOURCE";return;}
+ while(i<s.length&&i<128){srcWrite(i,s[i]);i=i+1;}srcSetLen(i);
+ ready=1;status="Sample ready: Save As then Open";tbSessionProperty(demoCtx,9,1);dirty=1;
+}
+function openChosen(){
+ var n,i;n=fsRead(96,0,60000,128);
+ if(n<0){status="Read failed; SOURCE unchanged";dirty=1;return;}
+ if(n>=128){status="Sample accepts files under128 bytes";dirty=1;return;}
+ if(sysDocument(2,0,5)<0){status="Cannot initialize SOURCE";dirty=1;return;}
+ i=0;while(i<n){srcWrite(i,stgRead(60000+i));i=i+1;}srcSetLen(n);
+ ready=1;status="Opened TXT into private SOURCE";tbSessionProperty(demoCtx,9,0);dirty=1;
+}
+function saveChosen(){
+ var n=srcLen(),i=0,w;
+ if(!ready||n>=128){status="Choose New sample; size must be under128";dirty=1;return;}
+ while(i<n){stgWrite(60000+i,srcByte(i));i=i+1;}
+ w=fsWrite(96,60000,n,0);
+ status=w==n?"Saved exact SOURCE bytes":"Write failed or incomplete";
+ if(w==n)tbSessionProperty(demoCtx,9,0);dirty=1;
+}
+function key(e){
+ keys=keys+1;
+ if(e.keyCode==160)newSample();
+ else if(e.keyCode==161)openChosen(); // Session forwards after Open accepts.
+ else if(e.keyCode==162)saveChosen(); // Session forwards after name/replace accepts.
+ else if(e.keyCode==163){marked=1-marked;tbSessionProperty(demoCtx,6,marked?8:0);dirty=1;}
+}
+function draw(){
+ tbSessionTransform(1,0,0,1,0,0);
+ demoCtx.fillStyle="#FFF";demoCtx.fillRect(24,88,576,344);demoCtx.fillStyle="#000";demoCtx.font="16px";
+ demoCtx.fillText(status,36,116);demoCtx.fillText("Events: down/up/move/key/key-up",36,150);
+ demoCtx.fillText(downs,36,176);demoCtx.fillText(ups,100,176);demoCtx.fillText(moves,164,176);demoCtx.fillText(keys,228,176);demoCtx.fillText(keyups,292,176);
+ demoCtx.fillText("SOURCE bytes",36,216);if(ready)demoCtx.fillText(srcLen(),200,216);
+ dirty=0;
+}
+tbSessionListen("keydown",key);
+tbSessionListen("keyup",function(e){keyups=keyups+1;dirty=1;});
+tbSessionListen("mousedown",function(e){downs=downs+1;dirty=1;});
+tbSessionListen("mousemove",function(e){moves=moves+1;dirty=1;});
+tbSessionListen("mouseup",function(e){ups=ups+1;dirty=1;});
+tbSessionInvalidate(draw); // Restores content exposed by menus/dialogs.
+function frame(){if(dirty)draw();tbSessionFrame(frame);} // Session owns raw RAF.
+tbSessionFrame(frame);
+</script></body></html>

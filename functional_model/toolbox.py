@@ -2,98 +2,11 @@
 
 The native JavaScript VM remains the CPU. This module models its bounded
 100 MHz bulk-service peripheral, not a replacement interpreter.
-
-Operation 6 is CopyBits (`copy_bits` below). Operations 1–5 are unchanged.
 """
 from .jsb_format import CSTG_WORDS
 
-VERSION = 0x0001003F
+VERSION = 0x0001007F
 DESCRIPTOR_BYTES = 64
-
-
-def _u16(buf, i):
-    return int.from_bytes(buf[i:i + 2], "little")
-
-
-def _s16(buf, i):
-    return int.from_bytes(buf[i:i + 2], "little", signed=True)
-
-
-def copy_bits(machine, src_at, dst_at, mode):
-    """Copy one rectangle between the glass and an 8-bit arena picture.
-
-    `toolbox(6, srcDescriptor, dstDescriptor, 0)`. Flag byte 2 means that
-    side is the drawing framebuffer (640×480 palette indices). Flag byte 0
-    is an arena surface. Both rectangles are the same size. Mode 0 is
-    srcCopy. The source is snapshotted first, so overlap is safe. The
-    result is the pixel count, or -1.
-    """
-    if mode != 0:
-        return -1
-
-    def valid(p, n):
-        return 0 <= p <= CSTG_WORDS and 0 <= n <= CSTG_WORDS - p
-
-    def read(p):
-        return int(machine._nat_stg_read(p))
-
-    def write(p, v):
-        machine._nat_stg_write(p, v)
-
-    if not valid(src_at, 64) or not valid(dst_at, 64):
-        return -1
-
-    def surface(pointer):
-        raw = bytes(read(pointer + i) for i in range(64))
-        base = int.from_bytes(raw[4:8], "little")
-        stride, width, height = _u16(raw, 8), _u16(raw, 10), _u16(raw, 12)
-        screen = raw[2] == 2
-        if (raw[:2] != bytes([1, 8]) or raw[2] not in (0, 2) or raw[3] != 1
-                or not width or not height or stride < width
-                or (screen and (base, stride, width, height) != (0, 640, 640, 480))
-                or (not screen and not valid(base, stride * height))):
-            return None
-        return {
-            "base": base, "stride": stride, "width": width, "height": height,
-            "screen": screen, "sx": _u16(raw, 14), "sy": _u16(raw, 16),
-            "w": _u16(raw, 18), "h": _u16(raw, 20),
-            "dx": _s16(raw, 22), "dy": _s16(raw, 24),
-            "cx": _s16(raw, 26), "cy": _s16(raw, 28),
-            "cw": _u16(raw, 30), "ch": _u16(raw, 32),
-        }
-
-    src, dst = surface(src_at), surface(dst_at)
-    if src is None or dst is None:
-        return -1
-    w, h = src["w"], src["h"]
-    if (w != dst["w"] or h != dst["h"] or src["sx"] + w > src["width"]
-            or src["sy"] + h > src["height"]):
-        return -1
-    if (not src["screen"] and not dst["screen"]
-            and src["base"] < dst["base"] + dst["stride"] * dst["height"]
-            and dst["base"] < src["base"] + src["stride"] * src["height"]
-            and src["stride"] != dst["stride"]):
-        return -1
-
-    def pixel(side, x, y):
-        address = side["base"] + y * side["stride"] + x
-        if side["screen"]:
-            return machine.canvas.back[address]
-        return read(address)
-
-    data = [[pixel(src, src["sx"] + x, src["sy"] + y) for x in range(w)] for y in range(h)]
-    for y in range(h):
-        for x in range(w):
-            xx, yy = dst["dx"] + x, dst["dy"] + y
-            if (0 <= xx < dst["width"] and 0 <= yy < dst["height"]
-                    and dst["cx"] <= xx < dst["cx"] + dst["cw"]
-                    and dst["cy"] <= yy < dst["cy"] + dst["ch"]):
-                address = dst["base"] + yy * dst["stride"] + xx
-                if dst["screen"]:
-                    machine.canvas.back[address] = data[y][x]
-                else:
-                    write(address, data[y][x])
-    return w * h
 
 
 def execute(machine, op, a, b, c):
@@ -108,8 +21,100 @@ def execute(machine, op, a, b, c):
 
     if op == 0:
         return VERSION
-    if op == 6:
-        return copy_bits(machine, a, b, c)
+    if op in (6, 7):
+        if c != 0 or not valid(a, 64) or not valid(b, 64):
+            return -1
+        # Snapshot both descriptors before any writes (including self-overlap).
+        def surface(pointer):
+            d = bytes(read(pointer+i) for i in range(64))
+            def u(i): return int.from_bytes(d[i:i+2], 'little')
+            def s(i): return int.from_bytes(d[i:i+2], 'little', signed=True)
+            base = int.from_bytes(d[4:8], 'little')
+            stride, width, height = u(8), u(10), u(12)
+            screen = d[2] == 2
+            if (d[:2] != bytes([1, 8]) or d[2] not in (0, 2) or d[3] != 1
+                    or not width or not height or stride < width
+                    or (screen and (base, stride, width, height) != (0, 640, 640, 480))
+                    or (not screen and not valid(base, stride*height))):
+                return None
+            return dict(descriptor=d, base=base, stride=stride, width=width, height=height,
+                        screen=screen, sx=u(14), sy=u(16), w=u(18), h=u(20),
+                        dx=s(22), dy=s(24), cx=s(26), cy=s(28), cw=u(30), ch=u(32))
+        src, dst = surface(a), surface(b)
+        if src is None or dst is None:
+            return -1
+        w, h = src['w'], src['h']
+        if (w != dst['w'] or h != dst['h'] or src['sx']+w > src['width']
+                or src['sy']+h > src['height']):
+            return -1
+        if (not src['screen'] and not dst['screen']
+                and src['base'] < dst['base']+dst['stride']*dst['height']
+                and dst['base'] < src['base']+src['stride']*src['height']
+                and src['stride'] != dst['stride']):
+            return -1
+        # Independent reference: snapshot source, rather than model RTL order.
+        def pixel(s, x, y):
+            address = s['base']+y*s['stride']+x
+            return machine.canvas.back[address] if s['screen'] else read(address)
+        if op == 7:
+            d = src['descriptor']
+            mode, flags = d[36:38]
+            mask_base = int.from_bytes(d[48:52], 'little')
+            mask_stride = int.from_bytes(d[52:54], 'little')
+            mask_extent = mask_stride*h
+            if mode > 5 or flags > 3:
+                return -1
+            if flags & 1:
+                if (mask_stride < (w+7)//8 or not valid(mask_base, mask_extent)
+                        or (not dst['screen']
+                            and not (mask_base+mask_extent <= dst['base']
+                                     or dst['base']+dst['stride']*dst['height'] <= mask_base))):
+                    return -1
+            # Match the shared hardware traversal, including aliased surfaces.
+            # Descriptors are already latched; mask storage cannot alias dst.
+            reverse = (src['screen'] == dst['screen']
+                       and dst['base']+dst['dy']*dst['stride']+dst['dx']
+                       > src['base']+src['sy']*src['stride']+src['sx'])
+            rows = range(h-1, -1, -1) if reverse else range(h)
+            columns = range(w-1, -1, -1) if reverse else range(w)
+            for y in rows:
+                for x in columns:
+                    xx, yy = dst['dx']+x, dst['dy']+y
+                    if not (0 <= xx < dst['width'] and 0 <= yy < dst['height']
+                            and dst['cx'] <= xx < dst['cx']+dst['cw']
+                            and dst['cy'] <= yy < dst['cy']+dst['ch']):
+                        continue
+                    if flags & 1 and not read(mask_base+y*mask_stride+x//8) & (128 >> (x%8)):
+                        continue
+                    if mode == 5:
+                        value = pixel(dst, xx, yy) ^ 255
+                    else:
+                        value = (d[34] if d[40+yy%8] & (128 >> (xx%8)) else d[35]) if flags & 2 else pixel(src, src['sx']+x, src['sy']+y)
+                        if mode:
+                            previous = pixel(dst, xx, yy)
+                            value = (previous | value if mode == 1 else
+                                     previous ^ value if mode == 2 else
+                                     previous & (value ^ 255) if mode == 3 else
+                                     previous & value)
+                    address = dst['base']+yy*dst['stride']+xx
+                    if dst['screen']:
+                        machine.canvas.back[address] = value
+                    else:
+                        write(address, value)
+            return w*h
+        data = [[pixel(src, src['sx']+x, src['sy']+y) for x in range(w)] for y in range(h)]
+        for y in range(h):
+            for x in range(w):
+                xx, yy = dst['dx']+x, dst['dy']+y
+                if (0 <= xx < dst['width'] and 0 <= yy < dst['height']
+                        and dst['cx'] <= xx < dst['cx']+dst['cw']
+                        and dst['cy'] <= yy < dst['cy']+dst['ch']):
+                    address = dst['base']+yy*dst['stride']+xx
+                    if dst['screen']:
+                        machine.canvas.back[address] = data[y][x]
+                    else:
+                        write(address, data[y][x])
+        return w*h
     if op == 1:
         if not valid(a, c) or not valid(b, c):
             return -1

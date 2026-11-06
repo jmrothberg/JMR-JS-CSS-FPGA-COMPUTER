@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Donkey Kong — JMR</title></head>
@@ -513,7 +515,7 @@ class Mario {
         /* FAST: share sprites helper; frame numbers filled in setCharacter. */
         this.sprites = _dkSpr
 
-        document.addEventListener("keydown", (e) => {
+        tbSessionListen("keydown", (e) => {
             // NEW: Arrow* + keyCode so Pmod stick KEYEVT still moves (same as ASTEROID)
             var k = e.key;
             var cde = e.keyCode;
@@ -524,7 +526,7 @@ class Mario {
             else if (k === " " || cde === 32) this.keys.space.pressed = true;
         })
 
-        document.addEventListener("keyup", (e) => {
+        tbSessionListen("keyup", (e) => {
             var k = e.key;
             var cde = e.keyCode;
             if (k === "w" || k === "ArrowUp" || cde === 87 || cde === 38) this.keys.w.pressed = false;
@@ -830,10 +832,10 @@ const canvas = document.getElementById("myCanvas")
 const ctx = canvas.getContext("2d")
 
 // Shared application menu and About metadata; no private chrome.
-ctx.systemAbout="Donkey Kong|Climb girders and dodge rolling barrels.";
+tbSessionProperty(ctx,2,"Donkey Kong|Climb girders and dodge rolling barrels.");
 // Shared menu bar; the game keeps its existing renderer and assets.
-ctx.systemWindow = 8
-ctx.systemMenus = "Game|New Game - Mario=160|New Game - Luigi=161|Pause / Resume=162"
+tbSessionProperty(ctx,0,8)
+tbSessionMenus(ctx,"Game|New Game - Mario=160|New Game - Luigi=161|Pause / Resume=162")
 /* FAST: one sprites helper for Mario / DK / every barrel (not new per draw). */
 var _dkSpr = new sprites(ctx)
 /* Mario already has 24 own fields. OBJ_SLOTS=32. Putting frame numbers
@@ -1056,13 +1058,13 @@ class Game {
     drawPoints() {
         /* HUD in glass space: world setTransform shrinks 16px to k=1 (8 glass
            px) which vanishes on FPGA-SIM. Identity + 16px → k=2, actually visible. */
-        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        tbSessionTransform(1, 0, 0, 1, 0, 0)
         ctx.fillStyle = 'white'
         ctx.font = "16px sans-serif"
         ctx.textAlign = "left"
         ctx.fillText("Score", 8, 44)
         ctx.fillText(this.score, 104, 44)
-        ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
+        tbSessionTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
     }
 
     resetGame() {
@@ -1097,13 +1099,13 @@ class Game {
 
     playerLives() {
         /* Same glass-space HUD as drawPoints. x=408 is right of HELP (glass ~241–267). */
-        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        tbSessionTransform(1, 0, 0, 1, 0, 0)
         ctx.fillStyle = 'white'
         ctx.font = "16px sans-serif"
         ctx.textAlign = "left"
         ctx.fillText("Lives", 408, 44)
         ctx.fillText(this.lives, 512, 44)
-        ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
+        tbSessionTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
     }
 
     gameOver() {
@@ -1156,7 +1158,7 @@ class Game {
         ctx.fillText(this.hiScoreStr, this.width / 2, 600)
         
         // Add event listener for enter key press to start the game
-        document.addEventListener("keydown", this.startSelect)
+        tbSessionListen("keydown", this.startSelect)
     }
 
     startSelect = (event) => {
@@ -1182,9 +1184,9 @@ class Game {
         ctx.fillStyle = 'red'
         ctx.fillText("Mario", 632, 420)
         
-        document.addEventListener("keydown", this.choose)
+        tbSessionListen("keydown", this.choose)
 
-        document.addEventListener("keydown", this._startGameBound)
+        tbSessionListen("keydown", this._startGameBound)
     }
 
     startGame(event) {
@@ -1196,7 +1198,7 @@ class Game {
             
             gameState = "game"
 
-            ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
+            tbSessionTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
             ctx.clearRect(0, 0, WORLD_W, WORLD_H)
             _dkWipe = 1
             _dkBgOn = 0
@@ -1228,7 +1230,7 @@ class Game {
     }
 }
 
-window.addEventListener('keydown', function (e) {
+tbSessionListen('keydown', function (e) {
     if (e.keyCode === 160 || e.keyCode === 161) {
         document.removeEventListener("keydown", game.startSelect)
         document.removeEventListener("keydown", game.choose)
@@ -1323,7 +1325,7 @@ function _dkRestorePair(x0,y0,x1,y1,w,h){
     }
 }
 function _dkBlitBg() {
-    ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
+    tbSessionTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
     if (!_dkBgOn) {
         ctx.clearRect(0, 0, WORLD_W, WORLD_H)
         game.draw(ctx)
@@ -1365,7 +1367,7 @@ function _dkBlitBg() {
 }
 
 function update(timestamp) {
-    ctx.setTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
+    tbSessionTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
     if (gameState == "game") {
         _dkBlitBg()
 
@@ -1392,10 +1394,12 @@ function update(timestamp) {
     else if (gameState == "title") {
         game.showTitleScreen()
     }
-    requestAnimationFrame(update)
+    tbSessionFrame(update)
 }
 
-requestAnimationFrame(update)
+tbSessionFrame(update)
+
+tbSessionProgram('DNKF.HTM');
 </script>
 <script data-host="chrome">
 (function(){

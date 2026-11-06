@@ -770,10 +770,19 @@ class Machine:
             self.source_name=''.join(name)
             status=jsb_format.CMP_STATUS_SAVE
         if status == jsb_format.CMP_STATUS_SAVE:
+            selector=int(self._nat_stg_read(64))
+            if selector>8:return ['?CE']
             text = self._src_bytes[: self._src_len].decode("utf-8", "replace")
-            self.storage.save_text(self.source_name, text)
+            try:
+                self.storage.save_text(self.source_name, text)
+            except (OSError,ValueError):
+                return ['?IO']
             self.source_lines = text.splitlines() or ['']
-            return ["SAVED " + self.source_name]
+            self._nat_stg_write(65,1)
+            saved="SAVED " + self.source_name
+            return [saved]+self._continue_program(selector)
+        if status == jsb_format.CMP_STATUS_NEXT:
+            return self._continue_program(int(self._nat_stg_read(64)))
         if status == jsb_format.CMP_STATUS_DONE and self._cmp_len == 0:
             # Quit without saving. Minting here would truncate-open the
             # title's .JSH and write zero bytes, destroying a working image.
@@ -793,6 +802,16 @@ class Machine:
             self.storage.save_bytes(stem + ".JSH", image)
             return [f"COMPILED {stem}.JSH ({len(image)} BYTES)"]
         return ["?CE"] + ([message] if message else [])
+
+    def _continue_program(self, selector):
+        """Explicit console chain; arena/SOURCE belong to the running machine."""
+        names=(*jsb_format.COMPILE_CHAIN,'EDITOR.JSH','READ.JSH','COMPILE.JSH','FINDER.JSH')
+        if not 0<=selector<len(names):return ['?CE']
+        try:
+            image=jsb_format.ProgramImage(self.storage.load_bytes(names[selector]))
+        except (OSError,ValueError):
+            return ['?NH']
+        return self._start_html_image(image,share_machine=True)
 
     def _run_compile_chain(self, entry: str | None = None) -> tuple:
         """Drive the chained compiler programs; return (status, message).
@@ -1017,11 +1036,11 @@ class Machine:
         # color icon and the gray-blue desktop match the built-in picture.
         if self.system_window[0]==9:
             self.canvas.palette=[rgb332(i) for i in range(256)]
-        if self.system_window[0]==5 and not share_machine:
+        if self.system_window[0]==5 and not share_machine and not image.flags & jsb_format.FLAG_TOOLBOX:
             self.source_name='UNTITLED.TXT';self.source_lines=[''];self.unnamed_document=True
             self._editor_resume=(0,0,0,0,5)
             return self._cmd_edit_program()
-        if self.system_window[0]:self._edit_active=True
+        if self.system_window[0] or image.flags & jsb_format.FLAG_TOOLBOX:self._edit_active=True
         self._hw_vm = hw
         self.vm = hw._m.vm
         self.running = bool(hw.running) and not hw.error
@@ -1142,6 +1161,8 @@ class Machine:
             "srcByte": self._nat_src_byte,
             "stgRead": self._nat_stg_read,
             "toolbox": self._nat_toolbox,
+            "sysDocument": self._nat_sys_document,
+            "strByte": self._nat_str_byte,
             "stgWrite": self._nat_stg_write,
             "cdone": self._nat_cdone,
             "artWrite2": self._nat_art_write2,
@@ -1682,6 +1703,55 @@ class Machine:
         from .toolbox import execute
         return float(execute(self, int(op), int(a), int(b), int(c)))
 
+    def _nat_str_byte(self, text=None, index=0):
+        import math
+        if not isinstance(text, str) or isinstance(index, bool) or not isinstance(index, (int, float)) or not math.isfinite(index):
+            return -1.0
+        index = int(index)
+        data = text.encode('utf-8')
+        return float(data[index]) if 0 <= index < len(data) else -1.0
+
+    def _nat_sys_document(self, op=0, ptr=0, role=1):
+        """Raw SOURCE metadata only: no prompts, file writes, or launch policy."""
+        op, ptr, role = int(op), int(ptr), int(role)
+        if op == 0:
+            if ptr < 0 or ptr > jsb_format.CSTG_WORDS - 20:
+                return -1.0
+            name = self.source_name.encode('ascii', 'replace')[:16]
+            data = name.ljust(16, b'\0') + bytes((len(name), bool(self.unnamed_document),
+                int(self.system_window[0]) & 7, 0))
+            for i, value in enumerate(data):
+                self._nat_stg_write(ptr + i, value)
+            return 0.0
+        if op not in (1, 2) or role not in (1, 5):
+            return -1.0
+        if op == 1:
+            if ptr < 0 or ptr >= jsb_format.CSTG_WORDS:
+                return -1.0
+            raw = bytes(int(self._nat_stg_read(ptr + i)) for i in range(min(13, jsb_format.CSTG_WORDS - ptr)))
+            if b'\0' not in raw:
+                return -1.0
+            try:
+                name = raw.split(b'\0', 1)[0].decode('ascii').upper()
+            except UnicodeDecodeError:
+                return -1.0
+            legal = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$%'-_@~`!(){}^#&")
+            parts = name.split('.')
+            if len(parts) == 1:
+                parts.append('JS' if role == 5 else 'HTM')
+            if (len(parts) != 2 or not 1 <= len(parts[0]) <= 8 or
+                    not 1 <= len(parts[1]) <= 3 or any(ch not in legal for p in parts for ch in p)):
+                return -1.0
+            self.source_name = '.'.join(parts)
+            self.unnamed_document = False
+        else:
+            self._nat_src_setlen(0)
+            self.source_lines = ['']
+            self.source_name = 'UNTITLED.TXT' if role == 5 else 'UNTITLED.HTM'
+            self.unnamed_document = True
+        self._source_document_role = role
+        return 0.0
+
     def _arena_name(self, off: int, maxlen: int = 16) -> str:
         """NUL-terminated arena bytes. The Finder program keeps names there."""
         chars = []
@@ -1701,13 +1771,37 @@ class Machine:
             return None
         return name
 
-    def _nat_fs_list(self) -> float:
+    def _nat_fs_list(self, dst=0, capacity=0, start_record=0) -> float:
         """Stage every root file at arena 256. Return the count.
 
         Header at 240: u32 used, u32 available (0 if this disk has no
         size), u16 count. Each record is nlen, name, u32 size, u16 DOS
         date, u8 attr, and nlen 0 ends the list.
         """
+        dst, capacity, start_record = int(dst), int(capacity), int(start_record) & 0xFFFFFFFF
+        if dst:
+            if dst < 0 or capacity < 37 or dst > jsb_format.CSTG_WORDS or capacity > jsb_format.CSTG_WORDS-dst:
+                return -1.0
+            rows = self.storage.list_finder_info()[start_record:]
+            page = bytearray(16)
+            count, used, more = 0, 0, 0
+            for name, size, date, attr in rows:
+                if len(page) + 21 > capacity:
+                    more = 1
+                    break
+                raw = name.encode('ascii', 'replace')[:12]
+                page.extend(bytes((len(raw),)) + raw + (int(size) & 0xFFFFFFFF).to_bytes(4, 'little')
+                            + (int(date) & 0xFFFF).to_bytes(2, 'little') + bytes((int(attr) & 255,)))
+                used = (used + int(size)) & 0xFFFFFFFF
+                count += 1
+            page.append(0)
+            page[0:4] = used.to_bytes(4, 'little')
+            page[8:10] = (count & 0xFFFF).to_bytes(2, 'little')
+            page[10] = more
+            page[12:16] = ((start_record + count) & 0xFFFFFFFF).to_bytes(4, 'little')
+            for i, value in enumerate(page):
+                self._nat_stg_write(dst+i, value)
+            return float(count)
         rows = self.storage.list_finder_info()
         used = 0
         off = 256
@@ -2127,8 +2221,9 @@ class Machine:
                 self._cmp_status, self._cmp_message()
             ):
                 self._print(line)
-            self._print(READY)
-            self.paint_monitor("> ")
+            if not self.running:
+                self._print(READY)
+                self.paint_monitor("> ")
             return
         # NEW: bytecode HTML path — fire key listeners + drain rAF
         if getattr(self, "_bytecode_html", False) and self.running:

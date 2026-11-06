@@ -469,3 +469,12 @@ That is the whole calling convention.
 | [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md) | Title checklist, version 1.0 vs 2.0, silicon holes |
 | [GAME_DESIGN.md](GAME_DESIGN.md) | How to write an HTML title that fits version 1.0 |
 | [lastrun_ARCHITECTURE.md](lastrun_ARCHITECTURE.md) | Who owns each byte |
+
+## Current system-service catalog
+
+The complete canonical native IDs are `functional_model/jsb_format.py:NATIVE_IDS`.
+This older narrative list is not exhaustive. `toolbox` graphics/memory operations
+are specified in [TOOLBOX_API.md](TOOLBOX_API.md); `sysDocument`, `sysRun`, SOURCE
+and `fs*` services are covered by [RESIDENT_TOOLBOX.md](RESIDENT_TOOLBOX.md).
+Use TOOLBOX_USAGE.md to choose a public helper and its runnable example.
+Do not infer unsupported browser APIs or prototype dispatch from JavaScript spelling.

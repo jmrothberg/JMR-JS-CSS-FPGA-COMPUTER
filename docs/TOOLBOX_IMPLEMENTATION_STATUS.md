@@ -1,3 +1,173 @@
+# Toolbox software revision and hardware status
+
+5 November 2026. **44 programs, 42 resident clients; library 8191/8191 mutable
+instructions, zero spare.** This status describes the matched software revision.
+Its chosen release manifest and card receipt establish publication and delivery;
+a prepared image or passing model check alone does not establish either.
+
+The one active set is **run80 RTL + root `storage/` +
+`card_toolbox_examples_working.img` + the run80 `.bit` once qualified**.
+The working disk has 161 files: 159 managed files and two preserved files.
+Run80's bitstream is pending; the older hardware evidence below is rollback
+history, not a second current release.
+
+## Matching software identity
+
+Frozen promotion manifest: `build/toolbox_usage_examples/revision/promotion.json`.
+Final host audit: `build/toolbox_usage_examples/revision/final_audit.json`.
+
+- Disk SHA-256: `9c7e042b86f8bdc8d27e4fda669a6ba6f02d9c4a82a3c438704571c7ec6a4381`.
+- `TOOLBOX.ROM`: `f6f805c579a93a76d902cd027f420eb2e7e0b9969e2b44bf26771fca0b32e390`; fingerprint `e8e89e1b`.
+- `TOOLBOX.LNK`: `0804ff9633f6b0598a375300306fa3b2dc378ce5dc82e9c9f2b580bae6381e8c`.
+- GRAPHICS, DAMAGE, UIMAN and UISESS add four runnable examples to the preserved
+  original/CB application set. There are 44 programs, 42 resident clients and
+  eight CB variants. The final disk has 159 files; four unused internal authoring
+  HTMs are excluded while their executable programs remain. SD capacity stays
+  64 MiB; the machine aperture stays 8 MiB.
+- The `tbPaintRect` destination-size correction adds seven instructions to the
+  earlier 8184-word library. All 8191 mutable words are used; the fixed final
+  jump is separate. A further library addition needs replacement/compaction or
+  a hardware bank change. App-only code still has its own 21504-word capacity.
+- Relink every resident client with this exact ROM/LNK, publish source/JSH and
+  resources together, and cold-restart. Finder/Game Restart does not reload ROM.
+
+Host compilation, capacity and resident-prefix identity passed for all 44 programs.
+GRAPHICS passed actual full-core RTL helper-return and pixel checks, and all 8192
+cold-loaded Toolbox words matched. Its scaled circle center is 118 in RTL versus
+119 in the float model because 0.95 is 62259/65536 in 16.16 arithmetic. The 34 raw
+pixel differences are explicitly accounted by that one-row shift; other gallery
+cases match directly, and all 46,000 compared pixels match after that correction.
+This is documented numeric behavior, not a zero-tolerance model-parity claim.
+
+DAMAGE passed 13 scripted native-instruction-model reference frames covering
+movement, overlap, deletion, labels, transparent-background edits, scaled bounds
+and one-pixel marks. UIMAN/UISESS passed bounded model checks. They have not been
+relabeled as actual full-core RTL tests. The final disk omits four internal HTMs
+and expands DAMAGE's conservative bounds relative to the RTL gallery input disk;
+GRAPHICS, ROM and LNK remain identical to the RTL-tested bytes. No broad game
+retests or physical display/input acceptance are claimed for this new library.
+Earlier b022 nine-game RTL checks remain evidence for that earlier software.
+
+Evidence: `revision/rtl_gallery/evidence.json`, `revision/final_audit.json`,
+`damage_checks.json`, `ui_model_checks_fixed.json` and `helper_fix/result.json`
+under `build/toolbox_usage_examples/`. Publication/card readback is separate.
+
+## Hardware and factory-memory evidence
+
+Run78 remains the **strict timing-qualified baseline**: setup 0.000 ns, hold +0.027 ns,
+96,097 LUTs, 364.5 BRAM tiles and 28,545 slices. Its bit SHA-256 remains
+`24e0c0c25ba19030f492e5ea6a98f769519defc2c654c11fa3fa1af518b4b6d5`.
+
+Run79 includes the Editor halt/acknowledgment correction. Actual full-core RTL
+Finder → Editor → Finder checks pass, but the selected bit is **TEST**, with
+setup −0.195 ns and hold +0.029 ns. It is not strictly timing-qualified. Its selected
+checkpoint SHA-256 is
+`7a89f2abefa0c3ae5f118fc9a2894a7d58a39b569d814f0a2c997c4605bd6521`.
+Fresh actual INIT/INITP, physical tail and read/address-selector audit passed:
+`build/run79_handoff_fix/init_audit/selected_pass1/result.json`. It verifies
+factory ROM fd89c8…/identity d03c62a7, not the newer disk-loaded ROM, and does not
+claim whole-netlist formal equivalence.
+
+Run80 includes the pointer snapshot correction plus Editor handoff and is still
+building. The sporadic large mouse jumps remain an active regression. Reproducing
+a lost-report mechanism does not prove the physical root cause or acceptance.
+Do not mark the pointer fixed from idle simulation alone. No agent flashing is
+part of these software/documentation changes.
+
+## Earlier release evidence
+
+The following 40-program/b022 records are preserved history, not identities or
+acceptance claims for the new 44-program software or run79/run80 hardware.
+
+## Earlier 40-program run78 software release (historical)
+
+5 November 2026. **Hardware strictly qualified; corrected software delivered;
+physical user testing pending.** The main `storage/`, corrected disk and updated
+physical card have matching Toolbox and applications. [Architecture](lastrun_ARCHITECTURE.md).
+
+### Unchanged qualified hardware and factory evidence
+
+Bit: `build/run78_clean_architecture/qualification_refined/run78_clean_qualified.bit`.
+SHA-256: `24e0c0c25ba19030f492e5ea6a98f769519defc2c654c11fa3fa1af518b4b6d5`.
+Selected checkpoint `refinement/pass_1.dcp`:
+`688d044f989060fc8c866ecd2fc326ba2497dde2939c84580410c7a8ffbbb834`.
+
+Setup **0.000 ns**, hold **+0.027 ns**; complete route, clock/pulse, DRC, input
+pins, removed-controller and framebuffer-mode gates passed. Resources: 96,097
+LUTs, 364.5 BRAM tiles, 28,545 slices. Clocks stay 33.333/100 MHz; memory stays 8 MiB.
+
+The preserved `init_audit/routed_refined_pass1/result.json` audits actual
+INIT/INITP and selected mux/address truth tables against **factory ROM**
+`fd89c8bea5133c487d16606ded646083c0edf2afb15aca17a9b473cd6fe6ab1e`,
+fingerprint `d03c62a7`. It does not claim whole-netlist formal equivalence.
+This audit is intentionally unchanged and does not claim to contain the new disk ROM.
+
+### Delivered matching software
+
+Package: `build/run78_clean_architecture/final_corrected/README.md`.
+
+- Base disk `final_corrected/card.img`: `8d21dd6616b1ec57841a27d2826926c0ab3e7c377203593807365e01ae1eae0c`.
+- `TOOLBOX.ROM`: `b0222c546f2e0f337a4f6f8b69e77391cd9a8590052a239da0c69535e955046e`; instruction fingerprint **`3ee8511b`**.
+- `TOOLBOX.LNK`: `7fd4cb450ce12fa8a7b223665d95c7d2b3fcf238e0eef41c4d279b81ee38a072`.
+- **8184 of 8191 mutable instruction words, seven spare**; final word remains
+  the fixed jump. Future additions may need software compaction; a larger
+  configured bank requires a new bit.
+- **40 programs, 38 resident clients**, including all eight CB variants. Original
+  game counterparts remain on the disk while the user tests the CB versions.
+- Disk builder default: **64 MiB**, so the complete assets fit. This is SD
+  capacity, not an expansion of the machine's 8 MiB memory aperture.
+
+Boot validates JMRT v2 and loads the newer disk code into the existing bank.
+Its identity intentionally differs from the factory INIT. Missing/invalid ROM
+leaves the older factory bank; clients linked to the newer ROM must reject that
+identity. Factory-memory audits and later software validation are separate.
+
+The build owner applied 51 exact-hash changes to the main working source.
+The physical card received 80 file writes; all **153 files verified**, with
+user files and card geometry preserved, then the card was safely unmounted.
+`card_menu_working.img` contains that preserved working set. The base disk and
+working disk differ intentionally by user files. The original main `card.img`
+was preserved and is not the new matching disk.
+
+### Corrections and bounded verification
+
+Finder RGB332 white is index 255; title-palette white is index 1. Shared UI
+now uses the correct palette mode. Active menu titles and enabled hovered rows
+draw inverse text. Disabled labels are stippled and cannot highlight or activate;
+a disabled checked item retains a black marker. This is not identical Macintosh styling.
+Selected Finder names use white SYS glyphs on black. About key 254 is handled
+by application software. Focused checks retain reverse selection after About
+closes and after cached Finder return.
+
+Earlier Editor NEXT software removed five session listeners and scheduled no
+new frame before `cdone(128,…)`. This model-level result was insufficient in
+actual run78 RTL; the console halt/acknowledgment fix described above is required.
+The bounded native-instruction proof preserves SOURCE on Editor launch and
+clears it only for explicit New. The previous failing full-core check reached
+role 1 while Finder code was still running; it was a handoff failure, not proof
+of an Editor menu crash.
+
+Final checks cover compilation/capacity, all matching resident prefixes and
+exact file identities. The final 40-program software did **not** rerun broad
+full-core suites; physical display, input, all application paths and CB behavior
+remain for user testing. Earlier full-core/readback results describe earlier
+software identities and must not be relabeled as evidence for this final ROM.
+
+Evidence: `final_corrected/result.json`, `ui_asset_fix/result.json`,
+`ui_asset_fix/cb_visibility.json`, `chain_stop_fix/stop_result.json`, root-promotion
+and physical-card receipts. The GUI Finder-return adapter remains the previously
+checked implementation. Chess keeps its tested 5% vertical viewport compression.
+Cache remains 192 KiB with 32 KiB taken from artwork; SYS/frame/SOURCE stay fixed.
+No whole-system speedup or complete physical acceptance is claimed.
+
+
+## Historical implementation log
+
+The preserved notes below describe earlier builds and their then-current limits.
+Use the delivered status above for run78; these entries are not current release claims.
+
+---
+
 # Toolbox implementation status
 
 Active work, 2026-11-04. The complete Macintosh-style migration is **not
@@ -190,3 +360,29 @@ clocks are unchanged. See F/identity_evidence/.
 Run77f builds independently from frozen sources; D and E are preserved and
 continue. ROM/clients/disk are identical. Full-system F acceptance and routed
 qualification remain pending. No candidate is yet timing-qualified.
+
+## Run77g: measured CopyBits timing repair (2026-11-04)
+
+F routed at WNS -2.588 ns / WHS +0.050 ns, outside release and TEST limits.
+Its actual routed Toolbox INIT/INITP audit passed. Physical refinement is active.
+The worst F path is the CopyBits overlap-direction calculation. G stages its
+products, start sums and comparison across three existing setup states, with
+no added execution cycles or pixel-path changes. Original/candidate comparison
+passed 487177 cycles including 515 signed-edge cases. Isolated reverse-path
+delay fell from 9.023 to 3.290 ns, at +168 LUTs and unchanged DSP/BRAM.
+These are module estimates, not whole-board timing claims. G synthesis is
+active, isolated full-core simulator built, disk audit passed; application
+acceptance and board qualification remain pending. G source differs from F
+only in rtl/engines/jmr_toolbox.sv. Root RTL and working bits are preserved.
+
+## Run77h: cycle-equivalent memory-owner control (2026-11-05)
+
+H is frozen G plus an independent registered Toolbox busy flag. Its state
+machine, handshakes and execution cycles remain unchanged. Isolated comparison
+passed 489993 cycles,515 edge cases and reset/abort/drain/held-request cases.
+Full-core menu launch, MacPaint return, bare-name Note save and all 8192 CopyBits
+pixels pass. A changed valid ROM plus relinked clients boots on the same
+simulator binary. Exact32-program disk audit passes. See H/functional_acceptance.json.
+H synthesis/implementation and G routing remain active; hardware is unqualified.
+E physical refinement plateaued at -0.562/+0.050; repeated and pin-routing passes
+made no further progress. F remains -2.588; D timed out. All old bits preserved.

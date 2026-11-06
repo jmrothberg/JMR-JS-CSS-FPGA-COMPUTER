@@ -68,6 +68,10 @@
  logic textq_stb,textq_menu,textq_title,textq_first,textq_last;
  logic [7:0] textq_byte;
  logic textq_printable,textq_isdigit;
+ logic textq_zero,textq_pipe,textq_semi,textq_equal,textq_dash;
+ // Candidate: decode control characters before the parser fanout.
+ wire [6:0] label_owned_row=7'(16+parse_linear);
+ wire [6:0] label_legacy_row=7'(32+parse_head*8+parse_row);
  logic [3:0] textq_digit,textq_advance;
  // This 512-bit read-only table belongs in ordinary LUTs, not a RAMB18 column.
  (* rom_style="distributed" *) logic [3:0] advance_rom [0:127];
@@ -78,6 +82,8 @@
    textq_stb<=text_stb;
    if(text_stb)begin
     textq_menu<=text_menu;textq_title<=text_title;textq_first<=text_first;textq_last<=text_last;
+    textq_zero<=text_byte==0;textq_pipe<=text_byte=="|";
+    textq_semi<=text_byte==";";textq_equal<=text_byte=="=";textq_dash<=text_byte=="-";
     textq_byte<=text_byte;textq_printable<=text_byte>=32 && text_byte<=126;
     textq_isdigit<=text_byte>=48 && text_byte<=57;
     textq_digit<=4'(text_byte-8'd48);textq_advance<=text_byte[7]?4'd8:advance_rom[text_byte[6:0]];
@@ -326,18 +332,18 @@
    end
    if(textq_stb && !app_clear && textq_title)begin
     metadata_active<=!textq_last;
-    if(!textq_printable && !(textq_first && textq_last && textq_byte==0))descriptor_error<=1;
+    if(!textq_printable && !(textq_first && textq_last && textq_zero))descriptor_error<=1;
     else begin
-     if(textq_byte!=0)begin
+     if(!textq_zero)begin
       record_we<=1;record_row<=1;record_col<=text_chars[5:0];
       record_data<={10'(text_x+textq_advance),text_x,textq_byte[6:0]};
       text_chars<=text_chars+1'b1;text_x<=text_x+textq_advance;
      end
      if(textq_last)begin
-      custom_title<=textq_byte!=0;title_valid<=textq_byte!=0;
-      title_width<=textq_byte==0?0:text_x+textq_advance;
-      length_we<=1;length_row<=1;length_data<=textq_byte==0?0:text_chars+1'b1;
-      title_pending<=textq_byte==0;generation<=generation+1'b1;
+      custom_title<=!textq_zero;title_valid<=!textq_zero;
+      title_width<=textq_zero?0:text_x+textq_advance;
+      length_we<=1;length_row<=1;length_data<=textq_zero?0:text_chars+1'b1;
+      title_pending<=textq_zero;generation<=generation+1'b1;
      end
     end
    end
@@ -358,22 +364,22 @@
     if(textq_last)metadata_active<=0;
     if(textq_first && textq_menu)begin own=0;owned<=0;custom_count<=0;row_counts<=0;heading_lengths<=0;headings<=0;end
     if(textq_first && !textq_menu)about_valid<=0;
-    if(!(textq_first && textq_last && textq_byte==0 && textq_menu) && !textq_printable)invalid=1;
-    if(textq_menu && (mode==2 || (own && mode==1 && chars==1 && word_[7:0]=="-" && (textq_byte=="|" || textq_byte==";"))))begin
+    if(!(textq_first && textq_last && textq_zero && textq_menu) && !textq_printable)invalid=1;
+    if(textq_menu && (mode==2 || (own && mode==1 && chars==1 && word_[7:0]=="-" && (textq_pipe || textq_semi))))begin
      sep=mode==1;
      if(textq_isdigit)begin
       number=(number>25 || (number==25 && textq_digit>4'd5))?8'd255:8'(number*10+textq_digit);digit=1;
-     end else if(textq_byte=="|" || textq_byte==";")begin
+     end else if(textq_pipe || textq_semi)begin
       if(!sep && (!digit || number<160 || number>(own?239:191)))invalid=1;
       else if(!sep && used[number-160])invalid=1;
       else if(!sep)used[number-160]=1;
       if(((finder || own) && linear<(own?84:32) && item<(own?14:12)) || (!finder && !own && head<3 && item<8))begin command_write=1;command_address=(finder || own)?linear:7'(head*8+item);command_data=sep?0:number;row_counts[head*4+:4]<=item+1'b1;end
       chars=0;px=0;number=0;digit=0;
-      if(textq_byte==";")begin if(head==(own?5:finder?3:2))invalid=1;else begin head=head+1'b1;if(finder || own)menu_bases[head*7+:7]<=7'(linear+1'b1);end item=0;mode=0;end
+      if(textq_semi)begin if(head==(own?5:finder?3:2))invalid=1;else begin head=head+1'b1;if(finder || own)menu_bases[head*7+:7]<=7'(linear+1'b1);end item=0;mode=0;end
       else begin if(item==(own?13:finder?11:7))invalid=1;else item=item+1'b1;mode=1;end
       if(finder || own)linear=linear+1'b1;
      end else invalid=1;
-    end else if((textq_menu && textq_byte=="|" && mode==0) || (textq_menu && textq_byte=="=" && mode==1) || (!textq_menu && textq_byte=="|"))begin
+    end else if((textq_menu && textq_pipe && mode==0) || (textq_menu && textq_equal && mode==1) || (!textq_menu && textq_pipe))begin
      if(chars==0)invalid=1;
      if(textq_menu && mode==0)begin
       if(!finder)begin
@@ -388,11 +394,11 @@
       mode=1;
      end else begin
       if(!textq_menu && description)invalid=1;
-      if(!textq_menu || ((finder || own)?linear<(own?84:32) && item<(own?14:12):head<3 && item<8))begin length_we<=1;length_row<=textq_menu?((finder || own)?7'(16+linear):7'(32+head*8+item)):6'd2;length_data<=chars;end
+      if(!textq_menu || ((finder || own)?linear<(own?84:32) && item<(own?14:12):head<3 && item<8))begin length_we<=1;length_row<=textq_menu?((finder || owned)?label_owned_row:label_legacy_row):7'd2;length_data<=text_chars;end
       if(textq_menu)begin item_len=chars[4:0];mode=2;digit=0;end else description=1;
      end
      chars=0;px=0;
-    end else if(textq_byte!=0)begin
+    end else if(!textq_zero)begin
      if(chars>=64 || px+textq_advance>(textq_menu?640:335) ||
         (textq_menu && ((mode==0 && chars>=12) || (mode==1 && chars>=24))) || (!textq_menu && !description && chars>=32))invalid=1;
      else begin
@@ -413,8 +419,8 @@
     end
     if(textq_last)begin
      if(textq_menu)begin
-      if(!(textq_first && textq_byte==0))begin
-       sep=own && mode==1 && chars==1 && word_[7:0]=="-";
+      if(!(textq_first && textq_zero))begin
+       sep=own && mode==1 && chars==1 && (text_chars==0?textq_dash:item_word[7:0]=="-");
        if((!sep && (mode!=2 || !digit || number<160 || number>(own?239:191))) || ((finder || own)?(linear>=(own?84:32) || item>=(own?14:12)):(head>=3 || item>=8)))invalid=1;
        else begin
         if(!sep && used[number-160])invalid=1;
@@ -436,7 +442,7 @@
      // "Open." is the first five letters of Open...; "Save " is Save As...
      command_flags[command_address][2]<=own && ((item_len==7 && word_==40'h2e6e65704f) || (item_len==10 && word_==40'h2065766153));
      command_flags[command_address][3]<=own && item_len==10 && word_==40'h2065766153;
-     if(sep)begin length_we<=1;length_row<=7'(16+command_address);length_data<=0;end
+     if(sep)begin length_we<=1;length_row<=label_owned_row;length_data<=0;end
     end
     descriptor_error<=invalid;parse_digit<=digit;used_commands<=used;about_description<=description;
     item_word<=word_;item_length<=item_len;parse_linear<=linear;text_chars<=chars;text_x<=px;parse_mode<=mode;parse_head<=head;parse_row<=item;parse_code<=number;

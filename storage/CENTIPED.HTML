@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 
 
@@ -68,9 +70,9 @@ window.JMR_SPR = ["CENTIPED-0.png", "CENTIPED-1.png", "CENTIPED-2.png", "CENTIPE
 var cvs=document.getElementById("c");
 var ctx=cvs.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-ctx.systemWindow=8;
-ctx.systemViewport=1;
-ctx.systemAbout="Centipede|Defend the garden from crawling enemies.";
+tbSessionProperty(ctx,0,8);
+tbSessionProperty(ctx,1,1);
+tbSessionProperty(ctx,2,"Centipede|Defend the garden from crawling enemies.");
 
 ctx.imageSmoothingEnabled=false;
 var W=640,H=480;
@@ -108,11 +110,11 @@ function setKey(e,val){
   var a=KM[k]; if(a)keys[a]=val;
   if(k==="r"||k==="R"||code===82){ if(val) window.game.reset(); }
 }
-window.addEventListener("keydown",function(e){setKey(e,true);});
-window.addEventListener("keyup",function(e){setKey(e,false);});
-window.addEventListener("blur",function(){clearKeys();});
+tbSessionListen("keydown",function(e){setKey(e,true);});
+tbSessionListen("keyup",function(e){setKey(e,false);});
+tbSessionListen("blur",function(){clearKeys();});
 // Original mouse-style blaster control, retaining mushroom collision bounds.
-addEventListener("mousemove",function(e){
+tbSessionListen("mousemove",function(e){
   var x=clamp(e.clientX-16,6,W-26),y=clamp(e.clientY-16,BAND_TOP,H-28),i=0,m;
   while(i<state.mushrooms.length){
     m=state.mushrooms[i];
@@ -121,8 +123,8 @@ addEventListener("mousemove",function(e){
   }
   if(state.player){state.player.x=x;state.player.y=y;}
 });
-addEventListener("mousedown",function(e){if(e.button===0){if(state.over)window.game.reset();keys.f=1;}});
-addEventListener("mouseup",function(e){if(e.button===0)keys.f=0;});
+tbSessionListen("mousedown",function(e){if(e.button===0){if(state.over)window.game.reset();keys.f=1;}});
+tbSessionListen("mouseup",function(e){if(e.button===0)keys.f=0;});
 
 
 // ---- state ----
@@ -473,11 +475,13 @@ function draw(){
 var DT=0.0167;
 function frame(){
   update(DT); draw();
-  requestAnimationFrame(frame);
+  tbSessionFrame(frame);
 }
 window.game={reset:reset};
 reset();
-requestAnimationFrame(frame);
+tbSessionFrame(frame);
 })();
+
+tbSessionProgram('CENTIPED.HTM');
 </script>
 </body></html>

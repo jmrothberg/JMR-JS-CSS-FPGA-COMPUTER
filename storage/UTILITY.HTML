@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>UTILITY — card catalog</title></head>
@@ -31,7 +33,7 @@ var G = [
 var ctx = document.querySelector("canvas").getContext("2d");
 ctx.imageSmoothingEnabled = false;
 
-ctx.systemWindow=4;
+tbSessionProperty(ctx,0,4);
 var ROWS = 18;
 var top = 0;
 var nFiles = 0;
@@ -112,8 +114,8 @@ function drawName(p, x, y) {
 
 function draw(){
   var i=0,p,y,sz;
-  ctx.windowScroll=Math.floor(top*255/Math.max(1,nFiles-ROWS));
-  ctx.windowScrollX=0;ctx.windowDirty=0;
+  tbSessionProperty(ctx,7,Math.floor(top*255/Math.max(1,nFiles-ROWS)));
+  tbSessionProperty(ctx,8,0);tbSessionProperty(ctx,9,0);
   ctx.fillStyle="#FFFFFF";ctx.fillRect(24,88,576,344);
   ctx.font="8px monospace";ctx.textBaseline="alphabetic";ctx.fillStyle="#000000";
   if(!haveCat){ctx.fillText("No card catalog is available.",28,108);return;}
@@ -149,10 +151,10 @@ function loop() {
     draw();
     needDraw = 0;
   }
-  requestAnimationFrame(loop);
+  tbSessionFrame(loop);
 }
 
-addEventListener("keydown", onKey);
+tbSessionListen("keydown", onKey);
 haveCat = 0;
 try {
   haveCat = fsList()>=0 ? 1 : 0;
@@ -161,7 +163,10 @@ try {
   haveCat = 0;
 }
 needDraw = 1;
-requestAnimationFrame(loop);
+tbSessionFrame(loop);
+
+tbSessionProgram('UTILITY.HTM');
+tbSessionInvalidate(function(){draw();needDraw=0;});
 </script>
 </body>
 </html>

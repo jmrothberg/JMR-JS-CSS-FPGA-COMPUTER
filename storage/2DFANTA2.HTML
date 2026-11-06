@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <!DOCTYPE html>
 <html lang="en"><head>
@@ -54,6 +56,7 @@ var C={idle:[0,0,2,4,6,8,10],act:[0,1,3,5,7,9,11],ox:200,oy:28,tile:54,pc:48,
   val:[0,1,3,3,5,9,1000],mate:100000,dw:18,dl:10,ds:8,
   youGot:[0,0,0,0,0,0],cpuGot:[0,0,0,0,0,0],capOrder:[5,4,3,2,1]};
 function blitSpr(c, img, fi, cw, ch, dx, dy) { c.drawImage(img, fi * cw, 0, cw, ch, dx, dy, cw, ch); }
+
 </script>
 <script>
 (function(){
@@ -61,12 +64,13 @@ function blitSpr(c, img, fi, cw, ch, dx, dy) { c.drawImage(img, fi * cw, 0, cw, 
 var cvs=document.getElementById("c");
 var ctx=cvs.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-ctx.systemAbout="Fantasy Chess|Animated chess against the computer.";
+tbSessionProperty(ctx,2,"Fantasy Chess|Animated chess against the computer.");
 
 ctx.imageSmoothingEnabled=false;
 // Shared system chrome: no menu renderer or font atlas in this program.
-ctx.systemWindow=8;
-ctx.systemMenus="Game|New Game=160;Level|Ply 1 - Fast=161|Ply 2=162|Ply 3=163|Ply 4=164|Ply 5 - Deep=165";
+tbSessionProperty(ctx,0,8);
+tbSessionProperty(ctx,1,1);
+tbSessionMenus(ctx,"Game|New Game=160;Level|Ply 1 - Fast=161|Ply 2=162|Ply 3=163|Ply 4=164|Ply 5 - Deep=165");
 // Strips: each of 6 pieces has idle 2DFANTAS-(2i) [light,dark] 48px and
 // action 2DFANTAS-(2i+1) [Lwalk,Llift,Lslam,Dwalk,Dlift,Dslam] 64px
 // (512px originals kept as 2DFANTAS-N-512.png). Tables live in C (outer).
@@ -349,6 +353,7 @@ function tapCell(r,c){
   if(v!==0&&col(v)===1){state.selected=[r,c];state.legal=genLegal(state.board,r,c);}
 }
 function onClick(e){
+  if(e.button!==0)return;
   var rect,sx,sy,p;
   rect=cvs.getBoundingClientRect();
   sx=cvs.width/rect.width;sy=cvs.height/rect.height;
@@ -357,7 +362,7 @@ function onClick(e){
   state.cr=p[0];state.cc=p[1];
   tapCell(p[0],p[1]);
 }
-cvs.addEventListener("click",onClick);
+tbSessionListen("mouseup",onClick);
 function setPly(d){state.searchDepth=Math.max(1,Math.min(5,state.searchDepth+d));}
 function moveCursor(dr,dc){
   var r,c;
@@ -381,8 +386,8 @@ function setPad(e,val){
     else if(k==="r"||k==="R"||c===82)reset();
   }
 }
-window.addEventListener("keydown",function(e){setPad(e,1);});
-window.addEventListener("keyup",function(e){setPad(e,0);});
+tbSessionListen("keydown",function(e){setPad(e,1);});
+tbSessionListen("keyup",function(e){setPad(e,0);});
 function pollPad(){
   var j,dr,dc;
   j=0;
@@ -528,10 +533,12 @@ function loop(){
   pollPad();
   if(state.animating)updateAnim();
   draw();
-  requestAnimationFrame(loop);
+  tbSessionFrame(loop);
 }
 reset();
-requestAnimationFrame(loop);
+tbSessionFrame(loop);
 })();
+
+tbSessionProgram('2DFANTA2.HTM');
 </script>
 </body></html>

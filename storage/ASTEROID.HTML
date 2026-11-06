@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Asteroids — JMR</title></head>
@@ -9,9 +11,9 @@
 var canvas = document.querySelector("canvas");
 var c = canvas.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-c.systemWindow=8;
-c.systemViewport=1;
-c.systemAbout="Asteroids|Pilot a ship through an asteroid field.";
+tbSessionProperty(c,0,8);
+tbSessionProperty(c,1,1);
+tbSessionProperty(c,2,"Asteroids|Pilot a ship through an asteroid field.");
 
 var W = 640;
 var H = 480;
@@ -480,20 +482,20 @@ function keyOn(e, down) {
   if (k === "Enter" || cde === 13) { startHeld = down; hyperHeld = down; }
 }
 
-addEventListener("keydown", function (e) {
+tbSessionListen("keydown", function (e) {
   keyOn(e, 1);
 });
-addEventListener("keyup", function (e) {
+tbSessionListen("keyup", function (e) {
   keyOn(e, 0);
 });
 // Mouse turns the ship; primary fires/starts, right thrusts, middle warps.
-addEventListener("mousemove",function(e){ship.h=wrapN(ship.h+e.movementX*0.5,256);});
-addEventListener("mousedown",function(e){
+tbSessionListen("mousemove",function(e){ship.h=wrapN(ship.h+e.movementX*0.5,256);});
+tbSessionListen("mousedown",function(e){
   if(e.button===0){if(mode===ATTRACT||mode===OVER)startGame();fireHeld=1;}
   if(e.button===2)thrustHeld=1;
   if(e.button===1)hyperHeld=1;
 });
-addEventListener("mouseup",function(e){
+tbSessionListen("mouseup",function(e){
   if(e.button===0)fireHeld=0;
   if(e.button===2)thrustHeld=0;
   if(e.button===1)hyperHeld=0;
@@ -944,11 +946,13 @@ function paint() {
 function loop() {
   tickGame();
   paint();
-  requestAnimationFrame(loop);
+  tbSessionFrame(loop);
 }
 
 startWave();
-requestAnimationFrame(loop);
+tbSessionFrame(loop);
+
+tbSessionProgram('ASTEROID.HTM');
 </script>
 <script data-host="chrome">
 (function(){

@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!doctype html>
 <html><head><meta charset="utf-8"><title>Shared menu example</title></head>
 <body><canvas id="c" width="640" height="480"></canvas><script>
@@ -7,12 +9,12 @@
 // File Save is the system box. Do not draw Save, Cancel, or a name field.
 // A command is a keyCode from systemMenus, handled below.
 var ctx=document.getElementById("c").getContext("2d");
-ctx.systemAbout="Menu Example|A small example of shared system menus.";
-ctx.systemWindow=6; // A window. Games use 8 and stay full screen. See GUIDEX.HTML.
-ctx.systemMenus="Example|Add One=160|Reset=161";
+tbSessionProperty(ctx,2,"Menu Example|A small example of shared system menus.");
+tbSessionProperty(ctx,0,6); // A window. Games use 8 and stay full screen. See GUIDEX.HTML.
+tbSessionMenus(ctx,"Example|Add One=160|Reset=161");
 var count=0;
 var redraw=1;
-addEventListener("keydown",function(e){
+tbSessionListen("keydown",function(e){
   if(e.keyCode===160){count=count+1;redraw=1;}
   if(e.keyCode===161){count=0;redraw=1;}
 });
@@ -25,7 +27,9 @@ function frame(){
     ctx.fillText("Count:",40,200);ctx.fillText(count,152,200);
     redraw=0;
   }
-  requestAnimationFrame(frame);
+  tbSessionFrame(frame);
 }
-requestAnimationFrame(frame);
+tbSessionFrame(frame);
+
+tbSessionProgram('MENUEX.HTM');
 </script></body></html>

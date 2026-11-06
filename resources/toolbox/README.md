@@ -1,14 +1,14 @@
-# Shared Toolbox sources
+# Shared native-JavaScript Toolbox
 
-`toolbox.js` wraps hardware bulk memory and surface operations. `ui.js` implements
-shared menus, windows and dialogs in native JavaScript. Both execute on the
-existing VM. The resident linker builds their shared 16 KiB instruction bank.
+`toolbox.js` wraps the small RTL memory/graphics engines. `ui.js`, `session.js`
+and `documents.js` implement shared UI and document policy on the existing VM.
+The resident virtual prefix is8192 instructions (32KiB), with8191 mutable words
+and one fixed final jump. Mark clients `<!-- jmr-toolbox: resident-v2 -->`.
+Host and standalone compilers support the matching v2 ROM/LNK contract.
 
-Start with `docs/RESIDENT_TOOLBOX.md` for calls, memory ownership and rebuilding.
-`storage/TBDEMO.HTML` is the complete client example. Primitive details are in
-`docs/TOOLBOX_API.md`; application migration guidance is in
-`docs/TOOLBOX_MIGRATION_GUIDE.md`.
-
-Host compilation links HTML marked `<!-- jmr-toolbox: resident-v1 -->`.
-The standalone compiler supports native Toolbox calls, but not resident linking.
-Never publish a newly linked client without its matching `TOOLBOX.ROM`.
+The factory ROM is embedded in the qualified bit. The matching disk ROM replaces
+it at cold startup; a software library change requires matching ROM/LNK and
+relinked clients, not an automatic factory-bit rebuild. Never mix client/ROM IDs.
+The corrected helper revision occupies8191/8191 words, with no spare instructions.
+It must be installed with all matching relinked clients and its linker manifest.
+See TOOLBOX_USAGE.md, TOOLBOX_API.md and RESIDENT_TOOLBOX.md for ownership and API.

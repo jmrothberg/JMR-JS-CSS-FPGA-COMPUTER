@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -46,9 +48,9 @@ window.JMR_SPR = ["FLDF-0.png"];
 var cvs = document.getElementById("c");
 var ctx = cvs.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-ctx.systemWindow=8;
-ctx.systemViewport=1;
-ctx.systemAbout="Field Run TD|Build defenses against waves of enemies.";
+tbSessionProperty(ctx,0,8);
+tbSessionProperty(ctx,1,1);
+tbSessionProperty(ctx,2,"Field Run TD|Build defenses against waves of enemies.");
 
 ctx.imageSmoothingEnabled = false;
 
@@ -1250,7 +1252,7 @@ function reset() {
 }
 
 /* ---------- input (keys + joy on the chip; mouse is Chrome-only) ---------- */
-addEventListener("keydown", function (e) {
+tbSessionListen("keydown", function (e) {
   var k, c;
   k = e.key;
   c = e.keyCode;
@@ -1285,7 +1287,7 @@ addEventListener("keydown", function (e) {
   if (k === "ArrowUp" || k === "w" || k === "W" || c === 38 || c === 87) upHeld = 1;
   if (k === "ArrowDown" || c === 40) downHeld = 1;
 });
-addEventListener("keyup", function (e) {
+tbSessionListen("keyup", function (e) {
   var k, c;
   k = e.key;
   c = e.keyCode;
@@ -1302,18 +1304,18 @@ addEventListener("keyup", function (e) {
 function toLocalX(ev) { return ev.offsetX; }
 function toLocalY(ev) { return ev.offsetY; }
 
-cvs.addEventListener("mousemove", function (ev) {
+tbSessionListen("mousemove", function (ev) {
   var p0, p1;
   p0 = toLocalX(ev);
   p1 = toLocalY(ev);
   hoverC = Math.floor((p0 - FX) / CELL);
   hoverR = Math.floor((p1 - FY) / CELL);
 });
-cvs.addEventListener("mouseleave", function () {
+tbSessionListen("mouseleave", function () {
   hoverC = -1;
   hoverR = -1;
 });
-cvs.addEventListener("mousedown", function (ev) {
+tbSessionListen("mousedown", function (ev) {
   var p0, p1, i, y, c, r;
   p0 = toLocalX(ev);
   p1 = toLocalY(ev);
@@ -1331,7 +1333,7 @@ cvs.addEventListener("mousedown", function (ev) {
   if (ev.button === 2) sellAt(c, r);
   else placeTower(c, r, sel, 0);
 });
-cvs.addEventListener("contextmenu", function (ev) {
+tbSessionListen("contextmenu", function (ev) {
   ev.preventDefault();
 });
 
@@ -1355,9 +1357,11 @@ reset();
 function frame() {
   update();
   draw();
-  requestAnimationFrame(frame);
+  tbSessionFrame(frame);
 }
-requestAnimationFrame(frame);
+tbSessionFrame(frame);
+
+tbSessionProgram('FLDF.HTM');
 </script>
 <script data-host="chrome">
 (function(){

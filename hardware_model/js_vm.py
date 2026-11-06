@@ -501,7 +501,7 @@ class JsHwVm:
             resident=getattr(self._m,'_toolbox_code',None)
             if resident is None:resident=default_code()
             offset=(16 if image.flags & FLAG_ASET else 12)+image.n_consts*8
-            incoming=image.data[offset:offset+16384]
+            incoming=image.data[offset:offset+32768]
             if fingerprint(incoming)!=fingerprint(resident):
                 raise ValueError('Toolbox instruction identity mismatch; relink application for this ROM')
         self.program_image = image
@@ -512,7 +512,7 @@ class JsHwVm:
         raw = code_bytes + b"\x00" * pad
         nwords = len(raw) // 4
         # Virtual view of the app bank plus fixed resident instruction window.
-        code_capacity=CODE_WORDS+(4096 if image.flags & 16 else 0)
+        code_capacity=CODE_WORDS+(8192 if image.flags & 16 else 0)
         self.code_mem=[0]*code_capacity
         # Words past code BRAM are dropped, exactly as the write port does it
         # (jmr_js_vm.sv:194-196 guards with `code_waddr_q2 < CODE_WORDS`).
@@ -2052,7 +2052,15 @@ class JsHwVm:
                     if value == 0:
                         value = -0.0
                 return value_pack_number(value)
-            elif 58 <= native_id <= 64:
+            elif native_id == 66:
+                if not args or value_kind(args[0]) != VALUE_KIND_STRING:
+                    return value_pack_number(-1)
+                string_index=value_payload(args[0])
+                if string_index>=len(self._value_strings) or (len(args)>1 and not value_is_number(args[1])):
+                    return value_pack_number(-1)
+                index=value_unpack_number(args[1]) if len(args)>1 else 0
+                return value_pack_number(self._m._nat_str_byte(self._value_strings[string_index],index))
+            elif 58 <= native_id <= 65:
                 # Finder program disk ABI. Same arena and -1 sentinel as
                 # the compile natives. sysRun stops this program; the
                 # backend relaunches FINDER when the next one quits.
@@ -2063,10 +2071,12 @@ class JsHwVm:
                     return value_unpack_number(a) if value_is_number(a) else 0.0
 
                 try:
+                    if native_id == 65:
+                        return value_pack_number(self._m._nat_sys_document(_arg(0), _arg(1), _arg(2)))
                     if native_id == 64:
                         return value_pack_number(self._m._nat_toolbox(_arg(0), _arg(1), _arg(2), _arg(3)))
                     if native_id == 58:
-                        return value_pack_number(self._m._nat_fs_list())
+                        return value_pack_number(self._m._nat_fs_list(_arg(0), _arg(1), _arg(2)))
                     if native_id == 59:
                         return value_pack_number(self._m._nat_fs_read(
                             _arg(0), _arg(1), _arg(2), _arg(3)))
@@ -2522,6 +2532,10 @@ class JsHwVm:
                     fill = self._value64_named_prop(receiver, "fillStyle", 0)
                     if isinstance(fill, str):
                         self._m._nat_fill_style_css(fill)
+                    elif type(fill) in (int, float):
+                        # RTL ToUint32 truncates/wraps numbers; nonfinite is zero.
+                        # Tagged booleans are not numeric palette indices.
+                        self._m._nat_fill_style_css(fill if math.isfinite(fill) else 0)
                     result = fn(*host_args)
                 else:
                     result = fn(*host_args)

@@ -1,49 +1,49 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="790" viewBox="0 0 1200 790">
 <defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="#3a5967"/></marker></defs><rect width="1200" height="100%" fill="#f5f4ef"/>
-<text x="40" y="45" font-family="sans-serif" font-size="27" font-weight="bold">SYSTEM.SYS • change shared appearance without rebuilding hardware</text>
-<text x="40" y="76" font-family="sans-serif" font-size="16" fill="#43525a">Editable JSON → checked binary resources → boot-loaded UI memories → shared Python / RTL appearance</text>
+<text x="40" y="45" font-family="DejaVu Sans,sans-serif" font-size="27" font-weight="bold">SYSTEM.SYS • change shared appearance without rebuilding hardware</text>
+<text x="40" y="76" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#43525a">Editable JSON → checked binary resources → boot-loaded UI memories → shared Python / RTL appearance</text>
 <rect x="40" y="110" width="340" height="160" rx="6" fill="white" stroke="#879ba4"/>
-<text x="58" y="139" font-family="sans-serif" font-size="19" font-weight="bold" fill="#144b60">1  Edit source JSON</text>
-<text x="58" y="166" font-family="sans-serif" font-size="16" fill="#22343d">resources/system/system.json</text>
-<text x="58" y="191" font-family="sans-serif" font-size="16" fill="#22343d">Chicago glyph source + overrides</text>
-<text x="58" y="216" font-family="sans-serif" font-size="16" fill="#22343d">Captions, positions, button styling</text>
-<text x="58" y="241" font-family="sans-serif" font-size="16" fill="#22343d">Application actions stay JavaScript</text>
+<text x="58" y="139" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">1  Edit source JSON</text>
+<text x="58" y="166" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">resources/system/system.json</text>
+<text x="58" y="191" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Chicago glyph source + overrides</text>
+<text x="58" y="216" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Captions, positions, button styling</text>
+<text x="58" y="241" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Application actions stay JavaScript</text>
 <rect x="430" y="110" width="340" height="160" rx="6" fill="white" stroke="#879ba4"/>
-<text x="448" y="139" font-family="sans-serif" font-size="19" font-weight="bold" fill="#144b60">2  Pack and publish</text>
-<text x="448" y="166" font-family="sans-serif" font-size="16" fill="#22343d">build_system_resources.py</text>
-<text x="448" y="191" font-family="sans-serif" font-size="16" fill="#22343d">Checks text fit and button geometry</text>
-<text x="448" y="216" font-family="sans-serif" font-size="16" fill="#22343d">Writes version, length and CRC-32</text>
-<text x="448" y="241" font-family="sans-serif" font-size="16" fill="#22343d">Replace SYSTEM.SYS on the disk</text>
+<text x="448" y="139" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">2  Pack and publish</text>
+<text x="448" y="166" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">build_system_resources.py</text>
+<text x="448" y="191" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Checks text fit and button geometry</text>
+<text x="448" y="216" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Writes version, length and CRC-32</text>
+<text x="448" y="241" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Replace SYSTEM.SYS on the disk</text>
 <rect x="820" y="110" width="340" height="160" rx="6" fill="white" stroke="#879ba4"/>
-<text x="838" y="139" font-family="sans-serif" font-size="19" font-weight="bold" fill="#144b60">3  Cold boot / reopen</text>
-<text x="838" y="166" font-family="sans-serif" font-size="16" fill="#22343d">Read through the FAT filesystem</text>
-<text x="838" y="191" font-family="sans-serif" font-size="16" fill="#22343d">Validate before applying payload</text>
-<text x="838" y="216" font-family="sans-serif" font-size="16" fill="#22343d">Missing/bad file → cold defaults</text>
-<text x="838" y="241" font-family="sans-serif" font-size="16" fill="#22343d">Python reads the same disk file</text>
+<text x="838" y="139" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">3  Cold boot / reopen</text>
+<text x="838" y="166" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Read through the FAT filesystem</text>
+<text x="838" y="191" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Validate before applying payload</text>
+<text x="838" y="216" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Missing/bad file → cold defaults</text>
+<text x="838" y="241" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Python reads the same disk file</text>
 <rect x="40" y="330" width="730" height="210" rx="6" fill="white" stroke="#879ba4"/>
-<text x="58" y="359" font-family="sans-serif" font-size="19" font-weight="bold" fill="#144b60">What the 24,336-byte file contains</text>
-<text x="58" y="386" font-family="sans-serif" font-size="16" fill="#22343d">16-byte header + 24,320-byte fixed payload</text>
-<text x="58" y="411" font-family="sans-serif" font-size="16" fill="#22343d">Font rows 4,096 B • caption text 4,096 B • indexes 1,024 B</text>
-<text x="58" y="436" font-family="sans-serif" font-size="16" fill="#22343d">Headings + padding 128 B • dialog config + padding 128 B</text>
-<text x="58" y="461" font-family="sans-serif" font-size="16" fill="#22343d">Keyboard legends 10,240 B • ship captions 512 B</text>
-<text x="58" y="486" font-family="sans-serif" font-size="16" fill="#22343d">Accessory captions 384 B • reserved 3,712 B</text>
+<text x="58" y="359" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">What the 24,336-byte file contains</text>
+<text x="58" y="386" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">16-byte header + 24,320-byte fixed payload</text>
+<text x="58" y="411" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Font rows 4,096 B • caption text 4,096 B • indexes 1,024 B</text>
+<text x="58" y="436" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Headings + padding 128 B • dialog config + padding 128 B</text>
+<text x="58" y="461" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Keyboard legends 10,240 B • ship captions 512 B</text>
+<text x="58" y="486" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Accessory captions 384 B • reserved 3,712 B</text>
 <rect x="820" y="330" width="340" height="210" rx="6" fill="white" stroke="#879ba4"/>
-<text x="838" y="359" font-family="sans-serif" font-size="19" font-weight="bold" fill="#144b60">4  Live consumers</text>
-<text x="838" y="386" font-family="sans-serif" font-size="16" fill="#22343d">Acknowledged core → pixel writes</text>
-<text x="838" y="411" font-family="sans-serif" font-size="16" fill="#22343d">Font / caption / legend memories</text>
-<text x="838" y="436" font-family="sans-serif" font-size="16" fill="#22343d">Dialog drawing + matching hit areas</text>
-<text x="838" y="461" font-family="sans-serif" font-size="16" fill="#22343d">Startup text uses loaded captions</text>
-<text x="838" y="486" font-family="sans-serif" font-size="16" fill="#22343d">Native UI + tbResources / tbText</text>
+<text x="838" y="359" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">4  Live consumers</text>
+<text x="838" y="386" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Acknowledged core → pixel writes</text>
+<text x="838" y="411" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Font / caption / legend memories</text>
+<text x="838" y="436" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Dialog drawing + matching hit areas</text>
+<text x="838" y="461" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Startup text uses loaded captions</text>
+<text x="838" y="486" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Native UI + tbResources / tbText</text>
 <rect x="40" y="600" width="550" height="140" rx="6" fill="white" stroke="#879ba4"/>
-<text x="58" y="629" font-family="sans-serif" font-size="19" font-weight="bold" fill="#144b60">Example • a more Macintosh-like Save dialog</text>
-<text x="58" y="656" font-family="sans-serif" font-size="16" fill="#22343d">Prompt: “Save current document as:”</text>
-<text x="58" y="681" font-family="sans-serif" font-size="16" fill="#22343d">Keep Chicago, round buttons and default outline</text>
-<text x="58" y="706" font-family="sans-serif" font-size="16" fill="#22343d">Place Cancel left, outlined Save right; actions unchanged</text>
+<text x="58" y="629" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">Example • a more Macintosh-like Save dialog</text>
+<text x="58" y="656" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Prompt: “Save current document as:”</text>
+<text x="58" y="681" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Keep Chicago, round buttons and default outline</text>
+<text x="58" y="706" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Place Cancel left, outlined Save right; actions unchanged</text>
 <rect x="640" y="600" width="520" height="140" rx="6" fill="white" stroke="#879ba4"/>
-<text x="658" y="629" font-family="sans-serif" font-size="19" font-weight="bold" fill="#144b60">Limits of format 1</text>
-<text x="658" y="656" font-family="sans-serif" font-size="16" fill="#22343d">New UI behavior belongs in TOOLBOX.ROM</text>
-<text x="658" y="681" font-family="sans-serif" font-size="16" fill="#22343d">SYS stores data, not executable code</text>
-<text x="658" y="706" font-family="sans-serif" font-size="16" fill="#22343d">Software UI uses SYS glyphs; its layout is code</text>
+<text x="658" y="629" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#144b60">Limits of format 1</text>
+<text x="658" y="656" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">New UI behavior belongs in TOOLBOX.ROM</text>
+<text x="658" y="681" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">SYS stores data, not executable code</text>
+<text x="658" y="706" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#22343d">Software UI uses SYS glyphs; its layout is code</text>
 <path d="M380 185 L430 185" fill="none" stroke="#3a5967" stroke-width="2" marker-end="url(#a)"/>
 <path d="M770 185 L820 185" fill="none" stroke="#3a5967" stroke-width="2" marker-end="url(#a)"/>
 <path d="M990 270 L990 330" fill="none" stroke="#3a5967" stroke-width="2" marker-end="url(#a)"/>

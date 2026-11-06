@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Sound demo — JMR</title></head>
@@ -10,9 +12,9 @@
 var canvas = document.querySelector("canvas");
 var c = canvas.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-c.systemWindow=8;
-c.systemViewport=1;
-c.systemAbout="Sound Demo|Try the computer sound effects.";
+tbSessionProperty(c,0,8);
+tbSessionProperty(c,1,1);
+tbSessionProperty(c,2,"Sound Demo|Try the computer sound effects.");
 
 c.imageSmoothingEnabled = false;
 
@@ -87,14 +89,14 @@ function fireNow() {
   if (cur === 12) playSfx(recs[cur]);
 }
 
-addEventListener("keydown", function (e) {
+tbSessionListen("keydown", function (e) {
   var k = e.key;
   var code = e.keyCode;
   if (k === "ArrowLeft" || k === "a" || k === "A" || code === 37 || code === 65) leftHeld = 1;
   if (k === "ArrowRight" || k === "d" || k === "D" || code === 39 || code === 68) rightHeld = 1;
   if (k === " " || k === "Enter" || code === 32 || code === 13) fireHeld = 1;
 });
-addEventListener("keyup", function (e) {
+tbSessionListen("keyup", function (e) {
   var k = e.key;
   var code = e.keyCode;
   if (k === "ArrowLeft" || k === "a" || k === "A" || code === 37 || code === 65) leftHeld = 0;
@@ -199,9 +201,11 @@ function loop() {
   c.fillText(fire, 100, 464);
   c.fillText("WAIT", 128, 464);
   c.fillText(wait, 168, 464);
-  requestAnimationFrame(loop);
+  tbSessionFrame(loop);
 }
-requestAnimationFrame(loop);
+tbSessionFrame(loop);
+
+tbSessionProgram('SNDDEMO.HTM');
 </script>
 <script data-host="chrome">
 (function(){

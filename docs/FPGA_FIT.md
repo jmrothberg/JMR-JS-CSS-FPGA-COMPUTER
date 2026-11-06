@@ -10,10 +10,14 @@ This is the only place that names the current build. Other pages point here.
 
 | | |
 |---|---|
-| **Working on** | `build/run77d_copybits_toolbox/`: resident Toolbox, native CopyBits, MacPaint metadata capacity, boot-only Welcome. Frozen source and matched disk audit pass; functional RTL checks pass. Vivado synthesis/implementation running; no qualified run77d bit yet. J15 USB keyboard, JA/JC PS/2 mice, JB joystick. |
+| **Current qualified** | [run78 clean package](../build/run78_clean_architecture/final_corrected/README.md): setup 0.000 ns, hold +0.027 ns, 96097 LUTs, 28545 slices, 364.5 BRAM. Routing/DRC/pulse/pin/clock checks and independent selected routed memory audit pass. [Bit](../build/run78_clean_architecture/release/bitstream/run78_clean_qualified.bit), [disk](../build/run78_clean_architecture/final_corrected/card.img), [GUI](../build/run78_clean_architecture/final_corrected/test_gui.sh). RAM load completed; QSPI unchanged. Physical display/input acceptance pending. |
 | **Earlier experimental** | `build/run76_usb_keyboard_pmod_mice/test/`: WNS -0.355 ns, hold +0.017 ns, routing/DRC pass. Preserved for rollback; lacks the new Toolbox. |
 | **Rollback** | `build/run75_program_system/release/run75_program_finder_SYS_33MHz.bit`. Qualified 2026-11-04. Older jacks: mouse on J15, keyboard on JA. |
-| **Still in QSPI** | `releases/current/fpga.bit` is run73o until that chip is flashed again. [What that image was](STANDARD_RELEASE.md). |
+| **QSPI state** | Agent did not write QSPI. User received the run78 `-f` command; current physical flash contents are unconfirmed. |
+
+The latest [software revision](../build/toolbox_usage_examples/revision/card_final.img) contains 44 programs (42 resident clients), including eight CB variants and four Toolbox examples. Disk ROM `f6f805c5…` and LNK `0804ff96…` include the corrected `tbPaintRect` helper and occupy all 8191 mutable words. All resident clients were relinked together; focused graphics RTL checks include the complete cold-loaded prefix readback. Damage/UI examples have model checks. The unchanged hardware factory ROM is `fd89c8be…`; the routed INIT audit applies to that factory image. Physical acceptance remains open.
+
+[Run79 Editor TEST](../build/run79_handoff_fix/test/README.txt) passes the TEST bound at setup -0.195 ns and hold +0.029 ns, with the other qualification gates and selected memory audit passing. It fixes the application handoff halt/ack defect but is **not strict timing-qualified** and does not include the mouse fix. Run80 (`build/run80_pointer_handoff`) is building with both that handoff fix and an acknowledged pointer coordinate crossing. Run78 remains the strict-qualified rollback. No new bit has been flashed by the agent.
 
 Fabric and DDR stay at **100 MHz**. The VM is divide-by-three, **33.333 MHz**. Do not put the VM back on divide-by-seven.
 
@@ -292,3 +296,12 @@ strobe / `heap_clr`. Cold buffers (once moved) use `jmr_sram_port`
 | **Dead twin** | Tagged (pre-Value64) arrays. A constant fold did not remove them. Do not Port-A a dead copy |
 | **WNS** | Worst Negative Slack — timing. Publish a `.bit` only if WNS ≥ 0 |
 | **MIG** | Memory Interface Generator — DDR3 controller. `ui_clk` ≈ 100 MHz |
+
+### Run77f completed route (not a release)
+
+Actual routed resources: 105,980 LUTs, 31,581 slices, 365 BRAM, 143 DSP.
+Setup -2.588 ns / hold +0.050 ns fails strict release and small-miss TEST
+limits. Actual routed resident-ROM INIT/INITP audit passed. Physical refinement
+is ongoing; no bit was published or flashed. G addresses the measured worst
+CopyBits overlap path without adding execution cycles. Its own board results
+are still required; isolated timing improvements are not board qualification.

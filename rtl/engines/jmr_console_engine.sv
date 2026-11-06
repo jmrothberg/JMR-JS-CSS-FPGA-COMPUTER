@@ -33,7 +33,6 @@ module jmr_console_engine (
     output logic [127:0] ui_source_name_o,
     output logic [4:0] ui_source_len_o,
     output logic ui_unnamed_o,
-    input logic ui_doc_start=1'b0,ui_doc_new=1'b0,
     input logic shell_tool_start=1'b0,shell_tool_finder=1'b0,
     input logic sys_ready,
     output logic sys_we,
@@ -41,14 +40,11 @@ module jmr_console_engine (
     output logic [15:0] sys_data,
     output logic [1:0] sys_status,
     output logic toolbox_code_we,
-    output logic [11:0] toolbox_code_addr,
+    output logic [12:0] toolbox_code_addr,
     output logic [31:0] toolbox_code_data,
     input logic park_finder=1'b0,forget_finder=1'b0,
-    input logic [2:0] ui_doc_role=3'd1,
-    input logic ui_stage_valid=1'b0,
-    input logic [12:0] ui_stage_addr=13'd0,
-    input logic [7:0] ui_stage_data=8'd0,
-    output logic ui_stage_ready,
+    input logic document_new=1'b0,
+    input logic [2:0] document_new_role=3'd1,
     input logic ui_set_name=1'b0,
     input logic [95:0] ui_name=96'd0,
     input logic [3:0] ui_name_len=4'd0,
@@ -310,7 +306,10 @@ module jmr_console_engine (
         // chain-load. Missing sidecar is NOT an error here: the flag goes
         // to 0 and a no-art title compiles exactly as it always did.
         C_ART_OPEN, C_ART_OPENW, C_ART_GB, C_ART_GBW, C_ART_WR,
-        C_ART_CLOSE, C_ART_CLOSEW, C_ART_FLAG, C_UI_INIT, C_UI_STAGE, C_CACHE_WRITE, C_CACHE_READ, C_CACHE_GAP, C_RESIDENT, C_SYS, C_NPUT
+        C_ART_CLOSE, C_ART_CLOSEW, C_ART_FLAG,
+        // Reuse one retired UI state ID; other debug state numbers stay stable.
+        C_SAVE_COMMIT = C_ART_FLAG + 1,
+        C_CACHE_WRITE = C_ART_FLAG + 3, C_CACHE_READ, C_CACHE_GAP, C_RESIDENT, C_SYS, C_NPUT
     } cstate_t;
 `ifdef VERILATOR
     integer ctrace_fd = 0;
@@ -331,9 +330,12 @@ module jmr_console_engine (
     logic sys_rom;
     logic [15:0] rom_low;
     logic [1:0] rom_status /*verilator public_flat_rd*/;
-    wire [14:0] sys_length=sys_rom?15'd16384:15'(SYS_BYTES);
+    wire [15:0] sys_length=sys_rom?16'd32768:16'(SYS_BYTES);
+    // ROM loads only at cold boot, before SOURCE is live. Reuse SOURCE scratch
+    // because a 32KiB ROM would overrun the smaller persistent SYS reservation.
+    wire [21:0] resource_stage_base=sys_rom?SRC_SRAM_BASE:SYS_STAGE_BASE;
     logic [3:0] sys_phase;
-    logic [14:0] sys_i;
+    logic [15:0] sys_i;
     logic [31:0] sys_crc,sys_expected;
     logic [7:0] sys_low;
     function automatic logic [31:0] sys_crc_byte(input logic [31:0] crc,input logic [7:0] b);
@@ -345,13 +347,13 @@ module jmr_console_engine (
     function automatic logic [7:0] sys_header(input logic [3:0] i);
      // JMRS, version u16=1, header u16=16, payload u32=24320.
      case(i)0:sys_header="J";1:sys_header="M";2:sys_header="R";3:sys_header=sys_rom?"T":"S";
-      4:sys_header=1;6:sys_header=16;8:sys_header=0;9:sys_header=sys_rom?64:95;default:sys_header=0;endcase
+      4:sys_header=sys_rom?2:1;6:sys_header=16;8:sys_header=0;9:sys_header=sys_rom?128:95;default:sys_header=0;endcase
     endfunction
     task automatic finish_system_file(input logic [1:0] status);
       if(sys_rom)begin rom_status<=status;sys_rom<=0;sys_i<=0;sys_phase<=0;end
       else begin sys_status<=status;name_i<=0;state<=C_JSB_PREP;end
     endtask
-    logic park_pending,resident_restore,resident_init;
+    logic park_pending,resident_restore,resident_init,resident_cancelled;
     logic [2:0] resident_phase;
     logic [16:0] resident_i;
     logic [15:0] resident_word;
@@ -374,6 +376,7 @@ module jmr_console_engine (
     // (CSTG_HDR_NAME) for the cdone SAVE/DELETE/LOAD/mint-as ops.
     logic [1:0]  jsb_name_src;
     logic [3:0]  cmp_progsel;   // PROGSEL -> cmp_name_char row (a contract)
+    logic raw_save_resume, save_failed; // cdone129 continuation; sticky disk error
     logic        cmp_save_mode;  // C_SV_* pumps the arena instead of SOURCE
     logic        cmp_arm_r;      // held across the whole chain (no game_mode)
     logic [4:0]  cmp_ph;   // 0-5 header, 6 decide, 7-22 filename, 23 dispatch
@@ -399,9 +402,6 @@ module jmr_console_engine (
     for(genvar ui_n=0;ui_n<16;ui_n=ui_n+1)begin:g_ui_name
         assign ui_source_name_o[ui_n*8+:8]=src_name[ui_n];
     end
-    logic [4:0] ui_init_i;
-    logic ui_init_pending;
-    logic [2:0] ui_init_role;
     function automatic logic [7:0] ui_untitled(input integer i,input logic note);
         case(i)
             0:ui_untitled="U";1:ui_untitled="N";2:ui_untitled="T";3:ui_untitled="I";
@@ -480,6 +480,9 @@ module jmr_console_engine (
     // worked because launch #1 had cleared the latch). Accept cmp_done only
     // after it has been seen LOW since this launch.
     logic cdone_seen_low;
+    logic raw_cdone_armed;
+    wire raw_cdone_pending = raw_cdone_armed && cmp_done_i &&
+        (cmp_status_i == 8'h80 || cmp_status_i == 8'h81);
     assign src_len_o = src_len;
     logic [17:0] src_i;
     logic [7:0]  rd_ch;
@@ -786,7 +789,7 @@ module jmr_console_engine (
         endcase
     endfunction
 
-    assign ready_lit = (state == C_IDLE || state == C_PROMPT) && !park_pending;
+    assign ready_lit = (state == C_IDLE || state == C_PROMPT) && !park_pending && !raw_cdone_pending;
     assign stor_chan = 8'd1;
     assign stor_name_addr = NAME_BUF;
 
@@ -825,15 +828,17 @@ module jmr_console_engine (
             src_gnt <= 0; src_rdata <= 0; src_rdata_hi <= 0; srcb_pend <= 0; srcb_we_l <= 0; srcb_wd_l <= 0;
             src_len <= 0; src_i <= 0;
             jsb_name_src <= 2'd0; cmp_progsel <= 3'd0;
+            raw_save_resume <= 0; save_failed <= 0;
             cmp_save_mode <= 1'b0; cmp_arm_r <= 1'b0;
             cmp_ph <= 5'd0; cmp_nw <= 1'b0; cmp_nm_len <= 8'd0; cmp_pend <= 1'b0; cmp_rd_addr <= '0;
             src_trunc <= 1'b0; cmp_use_srcname <= 1'b0;
             sys_rom<=1;rom_status<=0;rom_low<=0;toolbox_code_we<=0;toolbox_code_addr<=0;toolbox_code_data<=0;sys_we<=0;sys_addr<=0;sys_data<=0;sys_status<=0;sys_attempted<=0;sys_good<=0;sys_phase<=0;sys_i<=0;sys_crc<=0;sys_expected<=0;sys_low<=0;
-            finder_state_valid<=0;park_pending<=0;resident_restore<=0;resident_init<=0;resident_phase<=0;resident_i<=0;resident_word<=0;
+            finder_state_valid<=0;park_pending<=0;resident_restore<=0;resident_init<=0;resident_cancelled<=0;resident_phase<=0;resident_i<=0;resident_word<=0;
             finder_cache_valid<=0;finder_cache_fill<=0;finder_cache_replay<=0;finder_cache_length<=0;cache_tail<=0;cache_low<=0;cache_word<=0;finder_cache_hits<=0;
             cmp_interactive <= 1'b0;
-            ui_stage_ready<=0;ui_unnamed_o<=0;ui_init_i<=0;ui_init_pending<=0;ui_init_role<=1;
+            ui_unnamed_o<=0;
             cdone_seen_low <= 1'b0;
+            raw_cdone_armed <= 1'b0;
             cmp_art_mode <= 1'b0; cmp_art_len <= '0;
             art_i <= '0; art_found <= 1'b0; art_hi <= 1'b0; art_word <= '0;
             art_nspr <= '0;
@@ -893,7 +898,6 @@ module jmr_console_engine (
             stor_nl_scan <= 0;
             mem_en <= 0; mem_we <= 0;
             src_req <= 0; src_we <= 0;
-            ui_stage_ready<=0;
             pal_we <= 0; // NEW: 1-cycle palette write strobes (sram_req holds to ack)
 
             // srcSetLen (VM nid 50): a PROGRAM edited SOURCE. Placed BEFORE
@@ -902,6 +906,15 @@ module jmr_console_engine (
             // the buffer whenever it is not parked waiting on the VM.
             if (src_setlen_stb_i) src_len <= src_setlen_i;
             sys_we<=0;
+            // Ordinary RUN callers may request the same raw continuation as
+            // interactive clients. Require a fresh low before accepting sticky
+            // cdone, and reserve the console before the shell can return Home.
+            if (state == C_CMP_WAIT) raw_cdone_armed <= 0;
+            else if (vm_busy_i && !cmp_done_i) raw_cdone_armed <= 1;
+            // A discarded Finder copy must drain its current SRAM beat but
+            // must neither publish a parked image nor start a restored VM.
+            if (state != C_RESIDENT) resident_cancelled <= 0;
+            else if (forget_finder) resident_cancelled <= 1;
             unique case (state)
                 C_BOOT_CLS: begin
                     cls <= 1'b1;
@@ -924,6 +937,7 @@ module jmr_console_engine (
                     end
                 end
                 C_PROMPT: begin
+                    raw_save_resume <= 0;
                     // Returning to the prompt is the ONE place every flow
                     // passes through, so the SOURCE/arena bridge selector and
                     // the mint-mode flag are cleared here rather than on each
@@ -1772,6 +1786,7 @@ module jmr_console_engine (
                     reply_sel <= 5'd15; reply_idx <= 0;   // ?TR
                     state <= C_REPLY;
                 end else if (!stor_busy) begin
+                    save_failed <= 0;
                     stor_mode <= "O";
                     stor_open <= 1'b1;
                     src_i <= 0;
@@ -1831,38 +1846,41 @@ module jmr_console_engine (
                     state <= C_SV_PUTW;
                 end
                 C_SV_PUTW: if (stor_done) begin
-                    if (stor_err) begin reply_sel <= 4'd4; reply_idx <= 0; state <= C_SV_CLOSE; end
+                    if (stor_err) begin save_failed <= 1; reply_sel <= 4'd4; reply_idx <= 0; state <= C_SV_CLOSE; end
                     else if (cmp_save_mode) begin cmp_i <= cmp_i + 21'd1; state <= C_SV_RD; end
                     else begin src_i <= src_i + 1'b1; state <= C_SV_RD; end
                 end
                 C_SV_CLOSE: if (!stor_busy) begin stor_close <= 1'b1; state <= C_SV_CLOSEW; end
                 C_SV_CLOSEW: if (stor_done) begin
-                    // A mint says COMPILED; SAVE (typed or editor F2) says
-                    // SAVED. — matching the functional model's reply.
-                    reply_sel <= (cmp_save_mode && !big_staged) ? 5'd13 : 5'd11;
                     cmp_save_mode <= 1'b0;
                     big_staged <= 1'b0;
-                    reply_idx <= 0; state <= C_REPLY;
+                    raw_save_resume <= 1'b0;
+                    reply_idx <= 0;
+                    if (save_failed || stor_err) begin
+                        reply_sel <= 4'd4; state <= C_REPLY;
+                    end else if (raw_save_resume) begin
+                        // Caller owns RES32..52 and pending208..239. Only
+                        // reload its explicit continuation; no UI policy here.
+                        cmp_interactive <= 1; jsb_name_src <= 1;
+                        name_i <= 0; dir_n <= 0; jsb_waddr <= 0;
+                        jsb_bi <= 0; jsb_word <= 0; ld_err <= 0;
+                        jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
+                        aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
+                        sram_last <= 0; cmp_wd <= 0; cmp_ph <= 0;
+                        cmp_nw <= 0; cmp_nm_len <= 0; cmp_pend <= 0;
+                        // Operation-specific completion marker; software clears
+                        // it before SAVE and consumes it before pending actions.
+                        src_req <= 1; src_we <= 1; src_bank <= 1;
+                        cmp_rd_addr <= cstg_word(21'd65); src_wdata <= 8'd1;
+                        state <= C_SAVE_COMMIT;
+                    end else begin
+                        reply_sel <= (cmp_save_mode && !big_staged) ? 5'd13 : 5'd11;
+                        state <= C_REPLY;
+                    end
                 end
 
-                C_UI_STAGE:if(src_gnt)begin ui_stage_ready<=1;src_bank<=0;state<=C_IDLE;end
-                C_UI_INIT: begin
-                    if(!ui_init_pending)begin
-                        src_req<=1;src_we<=1;src_bank<=1;cmp_rd_addr<=cstg_word(21'd32+21'(ui_init_i));
-                        case(ui_init_i)0:src_wdata<=82;1:src_wdata<=69;2:src_wdata<=83;3:src_wdata<=1;
-                            20:src_wdata<={5'd0,ui_init_role};default:src_wdata<=0;endcase
-                        ui_init_pending<=1;
-                    end else if(src_gnt)begin
-                        ui_init_pending<=0;
-                        if(ui_init_i==20)begin
-                            src_bank<=0;cmp_arm_r<=0;cmp_interactive<=1;jsb_name_src<=1;cmp_progsel<=5;
-                            cmp_save_mode<=0;jsb_want_jsh<=1;jsb_tether_mode<=0;
-                            name_i<=0;dir_n<=0;jsb_waddr<=0;jsb_bi<=0;jsb_word<=0;ld_err<=0;
-                            jsb_boff<=0;jsb_aset_off<=0;jsb_has_aset<=0;aset_seen<=0;aset_len<=0;aset_pay<=0;
-                            sram_last<=0;cmp_wd<=0;cmp_ph<=0;cmp_nw<=0;cmp_nm_len<=0;cmp_pend<=0;
-                            state<=C_JSB_PREP;
-                        end else ui_init_i<=ui_init_i+1'b1;
-                    end
+                C_SAVE_COMMIT: if (src_gnt) begin
+                    src_bank <= 0; state <= C_JSB_PREP;
                 end
 
                 // ---- REMOVE ---------------------------------------------
@@ -1917,9 +1935,9 @@ module jmr_console_engine (
                         end else if (src_gnt) begin
                             cmp_pend <= 1'b0;
                             if (cmp_ph == 5'd5) begin
-                                // PROGSEL indexes the 8-row chain ROM directly.
+                                // PROGSEL selects one of nine bounded chain rows.
                                 jsb_name_src <= 2'd1;
-                                cmp_progsel  <= src_rdata[2:0];
+                                cmp_progsel <= (src_rdata <= 8'd8) ? src_rdata[3:0] : 4'd15;
                                 cmp_ph <= 5'd6;
                             end else begin
                                 case (cmp_ph)
@@ -1986,8 +2004,12 @@ module jmr_console_engine (
                         end
                     end else begin
                         src_bank <= 1'b0;
-                        if (cmp_status_i == 8'h81) begin
-                            // SAVE: SOURCE -> the loaded title's file.
+                        if ((cmp_status_i == 8'h81 || cmp_status_i == 8'h80) && cmp_progsel > 8) begin
+                            cmp_arm_r <= 0; halt_pulse <= 1; raw_save_resume <= 0;
+                            reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY;
+                        end else if (cmp_status_i == 8'h81) begin
+                            // SAVE: SOURCE -> current file, then explicit caller.
+                            raw_save_resume <= 1;
                             cmp_arm_r <= 1'b0;
                             halt_pulse <= 1'b1;      // leave game view
                             cmp_interactive <= 1'b0;
@@ -2832,11 +2854,11 @@ module jmr_console_engine (
                             else if(sys_i<16)sys_expected[sys_i[1:0]*8+:8]<=stor_get_data;
                             else begin
                                 sys_crc<=sys_crc_byte(sys_crc,stor_get_data);
-                                // Last 1K virtual instructions are immutable JUMP 4096 padding.
-                                if(sys_rom && sys_i>=12304 && stor_get_data!=(sys_i[1:0]==0?8'h0b:sys_i[1:0]==2?8'h10:8'h00))sys_good<=0;
+                                // Final virtual instruction is immutable JUMP 8192 padding.
+                                if(sys_rom && sys_i>=32780 && stor_get_data!=(sys_i[1:0]==0?8'h0b:sys_i[1:0]==2?8'h20:8'h00))sys_good<=0;
                                 if(!sys_i[0])sys_low<=stor_get_data;
                                 else begin
-                                    sram_req<=1;sram_we<=1;sram_addr<=SYS_STAGE_BASE+22'((sys_i-16)>>1);
+                                    sram_req<=1;sram_we<=1;sram_addr<=resource_stage_base+22'((sys_i-16)>>1);
                                     sram_wdata<={stor_get_data,sys_low};sys_phase<=6;
                                 end
                             end
@@ -2849,12 +2871,12 @@ module jmr_console_engine (
                         if(!sys_good || stor_err)finish_system_file(3);
                         else begin sys_i<=0;sys_phase<=10;end
                     end
-                    10:if(sys_rom || sys_ready)begin sram_req<=1;sram_we<=0;sram_addr<=SYS_STAGE_BASE+22'(sys_i);sys_phase<=11;end
+                    10:if(sys_rom || sys_ready)begin sram_req<=1;sram_we<=0;sram_addr<=resource_stage_base+22'(sys_i);sys_phase<=11;end
                     11:if(sram_ack)begin
                         sram_req<=0;sys_phase<=12;
                         if(sys_rom)begin
                             if(!sys_i[0])rom_low<=sram_rdata;
-                            else begin toolbox_code_we<=1;toolbox_code_addr<=sys_i[12:1];toolbox_code_data<={sram_rdata,rom_low};end
+                            else begin toolbox_code_we<=1;toolbox_code_addr<=sys_i[13:1];toolbox_code_data<={sram_rdata,rom_low};end
                         end else begin sys_we<=1;sys_addr<=sys_i[13:0];sys_data<=sram_rdata;end
                     end
                     12:if(sys_rom || !sys_ready)sys_phase<=13;
@@ -2894,8 +2916,9 @@ module jmr_console_engine (
                     4:if(sram_ack)begin sram_req<=0;sram_we<=0;resident_phase<=5;end
                     5:begin
                         resident_i<=resident_i+1'b1;
-                        if(resident_init || resident_i==CSCR_WORDS-1)begin
-                            if(resident_restore)begin vm_start<=1;cmp_ph<=0;cmp_wd<=0;state<=C_CMP_WAIT;end
+                        if(resident_init || resident_cancelled || forget_finder || resident_i==CSCR_WORDS-1)begin
+                            if(resident_cancelled || forget_finder)begin finder_state_valid<=0;park_pending<=0;state<=C_PROMPT;end
+                            else if(resident_restore)begin vm_start<=1;cmp_ph<=0;cmp_wd<=0;state<=C_CMP_WAIT;end
                             else begin finder_state_valid<=1;park_pending<=0;state<=C_PROMPT;end
                         end else resident_phase<=(resident_restore && !resident_i[0])?3:0;
                     end
@@ -3138,9 +3161,6 @@ module jmr_console_engine (
 
             // Native menu requests arrive only after the previous command
             // is idle. SOURCE and its filename stay owned by this console.
-            if(ui_stage_valid && !ui_stage_ready && (state==C_IDLE || state==C_PROMPT))begin
-                src_req<=1;src_we<=1;src_w16<=0;src_bank<=1;cmp_rd_addr<=cstg_word({8'd0,ui_stage_addr});src_wdata<=ui_stage_data;state<=C_UI_STAGE;
-            end
             if(park_finder && finder_cache_valid)park_pending<=1;
             if(forget_finder)begin finder_state_valid<=0;park_pending<=0;end
             if(park_pending && !vm_busy_i && (state==C_IDLE || state==C_PROMPT))begin
@@ -3163,12 +3183,18 @@ module jmr_console_engine (
                     cdone_seen_low<=0;state<=C_JSB_GB;
                 end else state<=C_JSB_PREP;
             end
-            if(ui_doc_start && (state==C_IDLE || state==C_PROMPT))begin
-                ui_init_i<=0;ui_init_pending<=0;ui_init_role<=ui_doc_role;state<=C_UI_INIT;
-                if(ui_doc_new)begin
-                    src_len<=0;src_name_len<=12;ui_unnamed_o<=1;src_is_html<=ui_doc_role!=5;src_is_js<=0;
-                    for(integer nn=0;nn<16;nn=nn+1)src_name[nn]<=ui_untitled(nn,ui_doc_role==5);
-                end
+            if(raw_cdone_pending && (state==C_IDLE || state==C_PROMPT))begin
+                raw_cdone_armed<=0; cdone_seen_low<=1;
+                cmp_arm_r<=0; cmp_interactive<=1;
+                cmp_img_len<=cmp_len_i; cmp_out_off<=0;
+                cmp_ph<=1; cmp_wd<=1; cmp_pend<=0;
+                cmp_save_mode<=0; cmp_art_mode<=0; big_staged<=0;
+                state<=C_CMP_WAIT;
+            end
+            if(document_new)begin
+                src_len<=0;src_name_len<=12;ui_unnamed_o<=1;
+                src_is_html<=document_new_role!=5;src_is_js<=0;
+                for(integer nn=0;nn<16;nn=nn+1)src_name[nn]<=ui_untitled(nn,document_new_role==5);
             end
             if(ui_set_name)begin
                 src_name_len<={1'b0,ui_name_len};ui_unnamed_o<=0;

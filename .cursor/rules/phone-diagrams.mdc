@@ -1,0 +1,10 @@
+---
+description: Deliver diagrams as legible high-resolution PNGs for the user's iPhone.
+alwaysApply: true
+---
+
+# Diagrams for the user's iPhone
+
+- Export every user-facing diagram as PNG and display or link that PNG in chat and documentation.
+- Keep SVG or other editable sources when useful, with a reproducible PNG export. SVG alone is not a finished deliverable for this user.
+- Use enough resolution for zooming on an iPhone, legible labels, and a clear reading order. Inspect the exported PNG before delivery.

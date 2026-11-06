@@ -11,11 +11,11 @@ package jmr_js_vm_pkg;
     // stgRead/stgWrite see CSCR and CIMG as ONE flat byte arena.
     localparam logic [21:0] SRC_SRAM_BASE  = 22'd3821568; // = console SOURCE
     localparam logic [21:0] CART_SRAM_BASE = 21'd0;
-    // Top 256 KiB of the former art window is system-owned, below framebuffer.
-    localparam logic [21:0] SYSTEM_CACHE_BASE = 22'd3446784;
-    localparam int unsigned FINDER_CACHE_BYTES = 163840; // 160 KiB packed image
-    localparam logic [21:0] FINDER_STATE_BASE = SYSTEM_CACHE_BASE + 22'd81920;
-    localparam int unsigned CART_WORDS     = 3446784;
+    // Top 288 KiB of the former art window is system-owned, below framebuffer.
+    localparam logic [21:0] SYSTEM_CACHE_BASE = 22'd3430400;
+    localparam int unsigned FINDER_CACHE_BYTES = 196608; // 192 KiB packed image
+    localparam logic [21:0] FINDER_STATE_BASE = SYSTEM_CACHE_BASE + 22'd98304;
+    localparam int unsigned CART_WORDS     = 3430400;
     localparam logic [21:0] CSCR_SRAM_BASE = 22'd3747840;
     localparam int unsigned CSCR_WORDS     = 73728;
     localparam logic [21:0] CIMG_SRAM_BASE = 22'd3887104;

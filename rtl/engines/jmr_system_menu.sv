@@ -123,7 +123,10 @@ module jmr_system_menu (
     if(consume_pointer && old_buttons[0] && !buttons[0] && menu_open)begin
      if(x<190 && y>=26 && y<(finder_mode?131:68))begin
       menu_open<=0;generation<=generation+1'b1;
-      if(y<47)about_open<=1;
+      // About is software policy. Queue a normal key event for the resident UI.
+      if(y<47 && !put && count<124 && !inject_release)begin
+       put<=1;put_data<={8'd0,8'd254,1'b1};inject_release<=1;inject_release_code<=254;
+      end
       else if(y<68)begin keyboard_open<=!keyboard_open;if(!keyboard_open)terminal_pulse<=1;else begin release_mods<=1;release_walk<=0;hold_keys<=0;end end
       else begin tool_stb<=1;tool_action<=y<89?4'd11:y<110?4'd12:4'd10;end
      end else if(!(x<30 && y<22))begin menu_open<=0;generation<=generation+1'b1;end

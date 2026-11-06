@@ -1,7 +1,7 @@
 <!doctype html>
-<!-- jmr-toolbox: resident-v1 -->
+<!-- jmr-toolbox: resident-v2 -->
 <!-- Caller-owned arena: descriptors 100..227, bitmap 2000..6095,
-     UI descriptor 20000..20063 and font 21000..25095. -->
+     UI descriptor 20000..20063 and glyph 21000..21031. -->
 <html><head><title>Bitmap Copy Demo</title></head><body><canvas width="640" height="480"></canvas><script>
 var c=document.querySelector("canvas").getContext("2d");
 c.systemAbout="Bitmap Copy Demo|Shared software using bounded bitmap transport";
@@ -12,7 +12,7 @@ function pointer(x,y,b){if(tbUIPointer(x,y,b))changed=1;}
 addEventListener("mousedown",function(e){held=1;pointer(e.clientX,e.clientY,held);});
 addEventListener("mousemove",function(e){pointer(e.clientX,e.clientY,held);});
 addEventListener("mouseup",function(e){held=0;pointer(e.clientX,e.clientY,held);});
-addEventListener("keydown",function(e){if(tbUIKey(e.keyCode,e.charCode))changed=1;});
+addEventListener("keydown",function(e){if(e.keyCode==254){tbDialogOpen(1,[66,105,116,109,97,112,32,67,111,112,121],[[83,104,97,114,101,100,32,84,111,111,108,98,111,120]],[]);changed=1;}else if(tbUIKey(e.keyCode,e.charCode))changed=1;});
 function paint(){
  c.fillStyle="#FFF";c.fillRect(0,0,640,480);
  tbText([83,111,117,114,99,101],80,122);

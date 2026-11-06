@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Pac-Man — JMR</title></head>
@@ -222,9 +224,9 @@ function Game(id,params){
     $canvas.height = _.height;
     var _context = $canvas.getContext('2d');
 // Shared application menu and About metadata; no private chrome.
-_context.systemWindow=8;
-_context.systemViewport=1;
-_context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
+tbSessionProperty(_context,0,8);
+tbSessionProperty(_context,1,1);
+tbSessionProperty(_context,2,"Pac-Man|Clear the maze while avoiding ghosts.");
 	//画布上下文环境
     var _stages = [];							//布景对象队列
     var _events = {};							//事件集合
@@ -261,10 +263,10 @@ _context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
         };
         Object.assign(this,this._settings,this._params);
     };
-    Item.prototype.bind = function(eventType,callback){
+    _.pacItemBind = function(eventType,callback){
         if(!_events[eventType]){
             _events[eventType] = {};
-            $canvas.addEventListener(eventType,function(e){
+            tbSessionListen(eventType,function(e){
                 var position = _.getPosition(e);
                 _stages[_index].items.forEach(function(item){
                     if(item.x<=position.x&&position.x<=item.x+item.width&&item.y<=position.y&&position.y<=item.y+item.height){
@@ -300,7 +302,7 @@ _context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
         Object.assign(this,this._settings,this._params);
     };
     //获取地图上某点的值
-    Map.prototype.get = function(x,y){
+    _.pacMapGet = function(x,y){
         if(this.data[y]&&typeof this.data[y][x]!='undefined'){
             return this.data[y][x];
         }
@@ -308,13 +310,13 @@ _context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
     };
     //设置地图上某点的值 — FAST: beans eat inlines data[y][x]=1 (CODE_WORDS).
     //地图坐标转画布坐标
-    Map.prototype.coord2position = function(cx,cy){
+    _.pacMapCoord2position = function(cx,cy){
         _c2p.x=this.x+cx*this.size+this.size/2;
         _c2p.y=this.y+cy*this.size+this.size/2;
         return _c2p;
     };
     //画布坐标转地图坐标
-    Map.prototype.position2coord = function(x,y){
+    _.pacMapPosition2coord = function(x,y){
         var fx = Math.abs(x-this.x)%this.size-this.size/2;
         var fy = Math.abs(y-this.y)%this.size-this.size/2;
         return {
@@ -342,8 +344,8 @@ _context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
         Object.assign(this,this._settings,this._params);
     };
     //添加对象
-    Stage.prototype.createItem = function(options){
-        var item = new Item(options);
+    _.pacStageCreateItem = function(options){
+        var item = new Item(options);item.bind=_.pacItemBind;
         //动态属性
         if(item.location){
             Object.assign(item,item.location.coord2position(item.coord.x,item.coord.y));
@@ -355,7 +357,7 @@ _context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
         return item;
     };
     //重置物体位置
-    Stage.prototype.resetItems = function(){
+    _.pacStageResetItems = function(){
         this.status = 1;
         this.items.forEach(function(item,index){
             Object.assign(item,item._settings,item._params);
@@ -365,14 +367,14 @@ _context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
         });
     };
     //获取对象列表
-    Stage.prototype.getItemsByType = function(type){
+    _.pacStageGetItemsByType = function(type){
         return this.items.filter(function(item){
 	    return item.type == type;
         });
     };
     //添加地图
-    Stage.prototype.createMap = function(options){
-        var map = new Map(options);
+    _.pacStageCreateMap = function(options){
+        var map = new Map(options);map.get=_.pacMapGet;map.coord2position=_.pacMapCoord2position;map.position2coord=_.pacMapPosition2coord;
         //动态属性
         map.data = _copyMap(map._params.data);
         map.y_length = map.data.length;
@@ -385,7 +387,7 @@ _context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
         return map;
     };
     //重置地图
-    Stage.prototype.resetMaps = function(){
+    _.pacStageResetMaps = function(){
         this.status = 1;
         this.maps.forEach(function(map){
             Object.assign(map,map._settings,map._params);
@@ -396,16 +398,16 @@ _context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
         });
     };
     //重置
-    Stage.prototype.reset = function(){
+    _.pacStageReset = function(){
         Object.assign(this,this._settings,this._params);
         this.resetItems();
         this.resetMaps();
     };
     //绑定事件
-    Stage.prototype.bind = function(eventType,callback){
+    _.pacStageBind = function(eventType,callback){
         if(!_events[eventType]){
             _events[eventType] = {};
-            window.addEventListener(eventType,function(e){
+            tbSessionListen(eventType,function(e){
                 var key = 's' + _index;
                 if(_events[eventType][key]){
                     _events[eventType][key](e);
@@ -492,9 +494,9 @@ _context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
                     item.draw(_context);
                 }
             }
-            _hander = requestAnimationFrame(fn);
+            _hander = tbSessionFrame(fn);
         };
-        _hander = requestAnimationFrame(fn);
+        _hander = tbSessionFrame(fn);
     };
     //动画结束
     this.stop = function(){
@@ -510,7 +512,7 @@ _context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
     }
     //创建布景
     this.createStage = function(options){
-        var stage = new Stage(options);
+        var stage = new Stage(options);stage.createItem=_.pacStageCreateItem;stage.resetItems=_.pacStageResetItems;stage.getItemsByType=_.pacStageGetItemsByType;stage.createMap=_.pacStageCreateMap;stage.resetMaps=_.pacStageResetMaps;stage.reset=_.pacStageReset;stage.bind=_.pacStageBind;
         stage.index = _stages.length;
         _stages.push(stage);
         return stage;
@@ -541,6 +543,7 @@ _context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
         this.start();
     };
 }
+
 
 </script>
 <script>
@@ -1076,7 +1079,8 @@ _context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
 				context.fillText(text,this.x,this.y);
 			}
 		}).bind('click',function(){
-			window.open('https://passer-by.com');
+			// Native machine: keep the author action as a visible credit dialog.
+            tbDialogOpen(1,tbSessionCodes("Pac-Man credit"),[tbSessionCodes("Original game: https://passer-by.com")],[]);
 		});
 		//事件绑定
 		stage.bind('keydown',function(e){
@@ -1583,13 +1587,15 @@ _context.systemAbout="Pac-Man|Clear the maze while avoiding ghosts.";
 	})();
 
 	game.init();
-	requestAnimationFrame(function () {
-		requestAnimationFrame(function () {
+	tbSessionFrame(function () {
+		tbSessionFrame(function () {
 			try { game.nextStage(); } catch (e) {}
 		});
 	});
 })();
 
+
+tbSessionProgram('PACFAST.HTM');
 </script>
 <script data-host="chrome">
 (function(){

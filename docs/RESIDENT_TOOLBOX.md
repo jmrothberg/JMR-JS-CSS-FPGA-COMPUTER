@@ -1,155 +1,187 @@
-# Resident native-JavaScript Toolbox
+# Resident JavaScript Toolbox — clean architecture
 
-Development implementation, 2026-11-04. Board qualification is tracked in
-`TOOLBOX_IMPLEMENTATION_STATUS.md`; source availability is not a released bit.
+Run78 hardware has passed strict FPGA qualification. The corrected disk and
+matching main `storage/` files are delivered: 44 programs, 42 resident clients,
+including eight CB variants. Physical user testing remains pending. The final
+software received bounded compilation, capacity, identity and focused native
+instruction checks; broad full-core suites were intentionally not repeated.
+The `.bit` and native ABI are unchanged. **CopyBits algorithms, menus, dialogs
+and other routines using existing primitives can change with a matching disk,
+without another `.bit`.** The library uses **8191 of 8191 mutable words: zero
+spare**. Future additions may require software compaction; new memory ports,
+pixel formats or operations still require hardware changes.
 
-The existing native JavaScript VM executes both application and Toolbox code.
-There is no added CPU, browser or interpreter. The design follows the Macintosh
-separation of applications, shared Toolbox routines, editable resources and
-small hardware services; it is not Macintosh binary compatibility.
+The bit's factory ROM (`fd89c8…`) remains covered by its original routed INIT
+audit. Disk ROM (`f6f805…`) intentionally replaces that factory code at startup.
+Keep disk-software validation separate from the factory audit; do not rewrite the
+factory audit to claim it contains the updated ROM. If disk ROM is absent or
+invalid, the older factory bank remains and clients linked to the newer ROM
+must fail identity validation. Exact hashes are in the implementation status.
 
-## Files and memory
+The same native JavaScript processor runs applications and Toolbox functions.
+There is one active application. Only instructions are shared: constants,
+name bindings, mutable globals, objects and scratch bytes belong to each app.
+This is a bounded native JavaScript system, without a browser or extra CPU.
 
-- `TOOLBOX.ROM`: 16-byte JMRT header and 16 KiB of native JavaScript instructions.
-  The boot loader validates length, version and CRC before committing any words.
-  Missing or invalid files leave the FPGA's factory instruction bank intact.
-- `SYSTEM.SYS`: fonts, native UI labels, menu/dialog settings and startup artwork.
-  Its existing validated payload is retained in external RAM. `tbResources`
-  copies it without disk I/O. Shared software text uses its Chicago glyphs.
-- `resources/toolbox/toolbox.js`: wrappers for native bulk drawing/memory calls.
-- `resources/toolbox/ui.js`: cooperative menus, windows and modal dialogs.
-- `storage/TBDEMO.HTML`: complete event-loop example with File and Help menus,
-  list selection, name entry and About. Its Open/Save As dialogs demonstrate UI;
-  they do not read or write files. Applications perform those operations.
+## Exact boundary in this build
 
-The resident instruction window contains 4096 virtual 32-bit words. It stays loaded while
-programs change. The first 3072 words use three spare BRAM tiles; the remaining 1024 are
-fixed jump padding with no memory allocation. All 21504 application words
-remain in BRAM. Run77c adds one 1024-word tile to the previous 20480-word
-application bank so the current MacPaint name table fits. Linked files carry a
-4096-instruction prefix which is checked against the bank and omitted from the
-physical application RAM. Fetches are redirected into the shared bank. Library
-constants, names, globals and heap objects remain per application: residency
-shares instructions, not mutable application state or a running background VM.
-The 8 MiB external-memory allocation and operating clocks remain unchanged.
+- `TOOLBOX.ROM`: JMRT container version **2**, 16-byte header, 32,768-byte
+  instruction payload. Boot checks version, length, CRC and fixed final word
+  before commit. Invalid/missing ROM uses the built-in factory bank.
+- The virtual prefix is **8192 words**: **8191 mutable instructions** plus
+  word 8191, a fixed jump to application address 8192 (`0x0020000b`). The first
+  7168 words use BRAM; the remaining mutable tail uses distributed RAM.
+  The app's **21504 physical words** remain available for code and metadata.
+- `TOOLBOX.LNK`: generated JMTL version 2 linker information for the on-device
+  compiler. It binds library names, constants, globals, function entries and
+  the exact ROM identity. Update it together with ROM and relinked clients.
+- `SYSTEM.SYS`: validated appearance data, including Chicago glyphs. It is
+  data, not executable Toolbox code. The existing retained SYS region stays
+  unchanged. ROM temporarily stages in otherwise unused SOURCE during boot.
+- Native **64**, `toolbox(op,a,b,c)`, reports capability word **0x0001007f**.
+  Operations: 0 capabilities; 1 memmove; 2 fill; 3 packed surface blit;
+  4 packed pattern fill; 5 verified SYS read; 6 bounded raw rectangle copy;
+  7 raster copy with Boolean modes, optional mask and 8×8 pattern.
+- Native **65**, `sysDocument(op,ptr,role)`, transfers SOURCE name/metadata or
+  initializes an empty document. It does not display dialogs or choose policy.
+- Native **66**, `strByte(s,index)`, reads a stored UTF-8 byte from an interned
+  string. It returns −1 for unsupported values or bounds. This does not add
+  browser string methods or dynamic-string support.
+- `fsList(dst,capacity,startRecord)` provides bounded catalog pages. `dst=0`
+  preserves the earlier catalog contract. Software filters and displays rows.
 
-At boot the loader temporarily stages ROM in the existing SYS scratch area,
-commits it, then loads SYSTEM.SYS into that area. ROM does not take a second
-external-memory reservation. A rolling 32-bit instruction identity rejects
-mismatched clients (RTL fault 9); this is a compatibility check, not a security
-signature. A ROM update requires matching relinked clients and a reboot.
+`tbCopyBits(src,dst)` composes operation 6. It can copy between the arena and
+8-bit indexed canvas, with bounds, clipping and overlap handling. `tbRaster`
+uses operation 7 for copy, OR, XOR, destination AND NOT source, AND, or indexed
+byte inversion. Inversion means palette index XOR 255, not RGB inversion.
+`tbMask`/`tbMaskOff`, `tbPattern8`/`tbPatternOff` and `tbPaintRect` compose this
+mechanism. Masks are one bit per request pixel; patterns repeat in destination
+coordinates. Packed source expansion remains operation 3.
 
-## Build and edit
+These primitives support software selection outlines, masked sprites,
+patterned brushes, hatching and compositing. Shape/region algorithms can
+compose spans and masks in software. They do not imply full QuickDraw,
+alpha blending or arbitrary new pixel formats. See [TOOLBOX_API.md](TOOLBOX_API.md).
 
-1. Edit the two JavaScript library sources. Preserve public call contracts.
-2. Run `PYTHONPATH=. .venv/bin/python tools/toolbox_linker.py`. It generates
-   `storage/TOOLBOX.ROM`, factory `vectors/toolbox_code.hex`, and the RTL factory
-   identity package. The factory files are for future FPGA builds; updating a
-   compatible disk ROM on a Toolbox-capable bit does not require rebuilding it.
-3. Put `<!-- jmr-toolbox: resident-v1 -->` in the first 1024 bytes of each client HTML file. The host
-   `tools.compile_js.compile_html_text` linker adds the canonical library and
-   marks its JSH. Do not paste the library into a marked client too.
-4. Compile all marked clients, validate them, and publish their HTML/JSH pairs
-   together with the matching ROM. Do not rename only an old JSH or mix releases.
-5. Reboot and check boot, File menus, modal cancellation, keyboard, mouse and
-   return to Finder. Keep the previous disk and bit together for rollback.
+The Finder executable cache is **192 KiB**, with its saved 72 KiB arena and
+SYS/front/SOURCE addresses retained. It gains 32 KiB from the top of the art
+window; the total aperture remains 8 MiB. The art/large-transfer limit is now
+**6,860,800 bytes**, a 0.4754% reduction. The largest shipped ASET is 2,801,304
+bytes, leaving 4,059,496 bytes below that boundary. This avoids repeatedly
+loading the larger resident-linked Finder image from disk. Actual cache reuse
+and return acceptance are recorded with the build tests.
 
-The standalone COMPILER currently recognizes native `toolbox` calls but does
-**not** perform resident linking. Marked source returns `?CE ROMLINK` instead
-of minting a broken application. Use the host compiler for marked clients.
-For standalone source compilation, inline only the necessary library routines
-and omit the marker, subject to ordinary code capacity. This duplicates code.
-External `<script src>` is not a library loader.
+<a id="shared-ui-calls"></a>
 
-For a more Macintosh-like dialog, edit `tbUIDraw` and its hit-test coordinates
-in `ui.js` together—for example, add a double outline to the default OK button.
-Rebuild ROM and relink clients; no RTL change is needed. To edit glyph shapes,
-change the SYSTEM.SYS source and repack it. Version 1 software text advances
-remain the fixed Chicago advances in `_tbWidths`; changing those metrics also
-requires a matching Toolbox update.
+## Shared software UI
 
-## Shared UI calls
+`resources/toolbox/ui.js`, `session.js` and `documents.js` own window chrome,
+menus with inverse active-title/hovered-row feedback, checks/enabling, modal dialogs, filename editing/caret, paged Open,
+Save As/Replace, dirty-document decisions and tool launch policy. The replaced
+classic menu/dialog/document and system-action controllers are removed from
+the clean core. Boot artwork, Terminal and the ship/keyboard emergency path
+remain available independently of application JavaScript. Recovery About
+sends key 254 to the application's software UI; Escape still exits the app.
 
-Graphics helpers now also include `tbScreen(descriptor)` and
-`tbCopyBits(sourceDescriptor,destinationDescriptor)`. See the
-[raw bitmap transport contract](TOOLBOX_API.md#general-bitmap-transport-and-software-copybits).
-The helper is JavaScript and checks native capability bit 5; the bounded
-framebuffer/arena transfer is hardware. This new interface is not in the frozen
-run77b/run77c bits. All current run77d/e/f candidates include it and still
-require whole-board qualification. After that,
-software algorithms using its existing access can change via matching ROM and
-clients, without another bit. More code space alone cannot add hardware access.
+Migrated applications contain **explicit public calls** and marker
+`jmr-clean-ui: session-v3-explicit`. The host and on-device compilers consume
+these same calls; no desktop-only metadata translation is required:
 
-Labels are arrays of printable ASCII codes, e.g. `[70,105,108,101]` for File.
-There is no browser string-method dependency.
+```js
+// Also put <!-- jmr-toolbox: resident-v2 --> in the first 1024 HTML bytes.
+var ctx = document.querySelector("canvas").getContext("2d");
+tbSessionProperty(ctx,0,6);
+tbSessionProperty(ctx,2,"My Tool|One line about the tool");
+tbSessionMenus(ctx,["File|Quit=1006","Special|Finder=1016"]);
+tbSessionProgram("MYTOOL.HTM");
+tbSessionListen("keydown",onKey);
+tbSessionFrame(frame);
+```
 
-- `tbUIInit(ctx, descriptor, font, title)`: initialize one application's UI and
-  copy 4096 font bytes from SYS. Returns 1 if available, otherwise 0. Reserve
-  the 64 descriptor bytes and 4096 font bytes exclusively; avoid application
-  buffers and filesystem catalog output. It disables the native app frame.
-- `tbWindow(x,y,w,h,title)`: set window geometry/title.
-- `tbMenus(menus)`: install `[[heading, [[label,command,enabled,checked],…]],…]`.
-  Empty item labels are separators. Keep menus within the 640-pixel display.
-- `tbMenuEnabled(menu,item,on)` / `tbMenuChecked(menu,item,on)`: update items.
-- `tbUIPointer(x,y,buttons)`: handle absolute mouse position; buttons is 1 while
-  left is held, 0 otherwise. Track held state across move events. Returns 1
-  when consumed. Do not forward consumed events to document/game controls.
-- `tbUIKey(keyCode,charCode)`: consume modal editing/navigation. Returns 1 when
-  consumed. Enter accepts, Backspace edits; lists use keyboard arrows or mouse
-  scroll buttons. Code 27 cancels when explicitly delivered to this helper; the
-  machine reserves the physical Escape key for emergency application exit. Use
-  the Cancel button to dismiss a modal on the board.
-- `tbMenuCommand()`: take pending command, or 0. Window close produces 255.
-  Application handles saving/dirty confirmation and quitting.
-- `tbDialogOpen(kind,prompt,choices,value)`: show 1 alert, 2 confirmation,
-  3 name entry, or 4 selection list. Arrays belong to the application. Name
-  input is limited to 12 printable characters for the current disk interface.
-- `tbDialogResult()`: take 0 pending, 1 accepted, or 2 cancelled.
-- `tbDialogValue()` / `tbDialogSelection()`: read entered character array or
-  selected zero-based list index. Validate selection before accessing a file.
-- `tbUIChanged()`: take redraw flag. Redraw your content first, then call
-  `tbUIDraw()` so opaque menus/dialogs cover it. Present through the ordinary
-  animation frame; the library does not save/restore framebuffer memory.
-- `tbText(codes,x,y)` / `tbTextWidth(codes)`: draw/measure Chicago text.
-- `tbBox(x,y,w,h,fill)`: fill and outline a rectangle.
+Menu specifications may be one interned string or an array of per-menu
+strings. Keep **each string within 255 UTF-8 bytes** for the on-device compiler;
+large menu sets use an array, rather than dynamic string concatenation.
+The compiler rejects oversized tokens. Host palette generation includes shared
+library colors; existing ART palettes remain shared by both compilation paths.
+Finder's RGB332 scanout uses UI white 255/cyan 31; other shipped title palettes
+use white 1/cyan 6. Disabled labels are stippled, cannot highlight or activate,
+and retain a black check marker when checked. Terminal uses the native console
+and is separate from shared application menus. About key 254 opens the current
+application's dialog. Finder selected labels use white SYS glyphs on black and
+retain reverse selection after About dismissal and cached return in the focused
+native-instruction check.
 
-UI service is cooperative: keep each application frame bounded and call the
-handlers regularly. The existing hardware Enterprise recovery menu remains
-available. Legacy programs retain their existing native menus until converted.
+Use `tbSessionFrame` for the application's animation scheduling and
+`tbSessionListen` for its keyboard/mouse callbacks. UI controls consume input. `tbSessionInvalidate(fn)` supplies a content-only
+redraw callback: redraw the current scene without editing SOURCE, advancing
+animation or consuming input. Sessions with this callback pause application
+frames during menus/dialogs and invoke the redraw to restore covered content.
+Games without a separate redraw callback continue their ordinary frames with
+the software UI drawn above them, preserving the former overlay behavior. `tbSessionTransform` composes an explicit game
+transform with the software viewport. `tbSessionSuffix("PNT")` filters file
+choices and supplies a default extension for that application's own I/O.
 
-Application close/quit example: after handling dirty-document confirmation,
-write a zero byte into application-owned scratch and call `sysRun(pointer,8)`;
-then return without scheduling another animation frame. The demo uses
-`stgWrite(20063,0); sysRun(20063,8); return;`. This explicitly reloads Finder;
-it does not restore its parked VM state. The native File/Quit path remains
-available to legacy applications. `cdone()` is a compiler/system-tool chain
-report, not a general exit API: in an ordinary RUN application it can leave
-an idle VM instead of returning to Finder.
+`tbSessionCodes(text)` converts a bounded interned ASCII label to the byte
+array accepted by the lower-level drawing/dialog API.
 
-For the Enterprise About box set
-`ctx.systemAbout="Program title|One line about the program"`; the system supplies
-JMR Enterprises. A software Help/About item may instead open `tbDialogOpen(1,…)`.
-The demo includes both forms.
+The lower-level API remains available: `tbUIInit`, `tbWindow`, `tbMenus`,
+`tbMenuEnabled`, `tbMenuChecked`, `tbUIPointer`, `tbUIKey`, `tbMenuCommand`,
+`tbDialogOpen`, `tbDialogResult`, `tbDialogValue`, `tbDialogSelection`,
+`tbUIChanged`, `tbUIDraw`, `tbText`, `tbTextWidth`, `tbBox`. Labels in this
+lower-level API are printable ASCII byte arrays. Dialog kinds are 1 alert,
+2 confirmation, 3 filename, 4 list, 5 Save/Discard/Cancel, 6 Replace.
 
-Per-application cost matters: the current linked library adds 106 variable
-bindings and 98 constant-pool entries before application additions (the limits
-remain 512 variables and 1024 constants). Its 95-entry font-width array uses one
-of the VM's large-array slots. The instruction bank saves application instruction
-storage, not these bindings or heap allocations. Check the compiled limits when
-porting large games; use inline primitive helpers alone when full UI is unneeded.
+Shared sessions reserve **380320–380927**: 512 catalog bytes, 64 descriptor
+bytes and 32 glyph bytes. Lower-level callers supply disjoint scratch. Glyphs
+are fetched one at a time from SYS; a private 4 KiB font copy is unnecessary.
+Private state is packed into ordinary per-app objects at build time. This is
+normal compiled JavaScript, with no new execution engine.
 
+SOURCE saves use the console's existing file writer. Byte 64 selects the
+explicit continuation; the client clears byte 65 before requesting a save.
+Only successful close sets byte 65 to 1 before chaining. The resumed session
+consumes that marker and pending action 208–211. Failure shows `?IO` and does
+not continue or report SAVED. Writes are not atomic; an I/O failure can leave
+a partial file. Note defaults bare filenames to `.JS`; Editor to `.HTM`.
 
-For the current development package, `build/run77c_toolbox_fixes/test_gui.sh`
-opens the main GUI with the matched staged disk. F9 selects FPGA-SIM. TBDEMO's
-Open dialog is a UI example, not a disk file reader; the application must supply
-file choices and perform fsRead/fsWrite after acceptance.
+## Safe program switching
 
-Coordinates are display pixels. If a game scales or translates its canvas,
-save its context, set the identity transform before `tbUIDraw()`, then restore
-the context afterward. Mouse coordinates supplied to the UI must likewise be
-unscaled display coordinates. The TBDEMO client already uses identity coordinates.
+Editor NEXT removes the five session listeners and does not schedule another
+animation frame before `cdone(128,…)`. Listener removal alone does not halt a
+VM waiting for a frame. The run79 console additionally requests a stop and
+waits for the VM halt acknowledgement before replacing code. Its bounded full
+RTL simulator check passed Finder→Editor→Finder with matching program headers,
+VM reinitialization and preserved SOURCE. This is distinct from FPGA timing
+qualification and physical testing; consult implementation status for those.
+Explicit New intentionally clears SOURCE.
 
-The complete CopyBits development package is `build/run77d_copybits_toolbox/`.
-Its candidate `disk/card_run77d.img` is frozen and audited against all 32
-programs. Its launcher creates a writable working copy for interactive tests.
-Do not mix its ROM/clients with the older run77b/run77c packages.
+## Updating without Vivado
+
+1. Edit shared JavaScript while preserving the native ABI and capacity.
+2. Run `python3 -m tools.toolbox_linker`. This regenerates ROM, LNK, factory
+   instruction files and the factory identity package.
+3. Relink every resident client using the exact ROM/LNK; the HTML marker is
+   `jmr-toolbox: resident-v2`. Never paste the library into a marked client.
+4. Generate and audit the disk, publish it as one matched set, then restart.
+   Updating the disk ROM on a compatible bit does not synthesize new hardware.
+
+The on-device compiler performs resident linking using the matching LNK and
+ROM. Legacy resident-v1 clients are rejected. Retain the prior bit and disk
+as a pair. The instruction identity is a compatibility check, not a security
+signature. A larger bank, changed hardware access/format, ABI change or clock
+change requires RTL editing, Vivado and a newly qualified `.bit`.
+
+A shared-file update takes effect at **cold machine startup with the compatible
+FPGA configuration**. Finder Restart and Game Restart reopen a program; they
+do not reload the resident ROM. Keep the matching bit and disk together when
+starting or resetting the machine.
+
+## MacPaint resource ownership
+
+`PAINT.RSC` holds the original 31 tables: 95 glyphs, 16 icons and widths,
+mutable patterns and tones. The 1611-byte file has a 32-byte JMRP v1 header,
+fixed offsets and an **additive checksum**, not CRC. It loads into this app's
+arena 373504–375114; glyph descriptor 375168–375231. Runtime modifications
+remain private to MacPaint. Missing/invalid resources produce a visible error.
+The released sources use external ART handles for Finder/Reader fonts so
+on-device compilation receives complete, unsquashed executable source.

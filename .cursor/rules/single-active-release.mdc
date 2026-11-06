@@ -1,0 +1,14 @@
+---
+description: Keep one active RTL, storage tree, disk image and bitstream under test.
+alwaysApply: true
+---
+
+# One active release
+
+- The user wants one active RTL candidate, the root `storage/` tree, one matching working disk image and one active `.bit` at a time.
+- Coordinate one build owner across chats. Do not start competing hardware builds or present multiple candidates as current choices.
+- State the current RTL, disk and bitstream together. A bitstream that is still building is pending; do not silently substitute an older bit.
+- Keep ROM, LNK, resident clients and resources matched to the active software set. Test that set against the active RTL contract.
+- Disposable test fixtures are test-only evidence, never additional installation choices or canonical storage trees.
+- Preserve older builds and disks as clearly labeled rollback history. Do not delete them or present them as extra steps for the current release.
+- Publish one combined package and one concise installation guide after its checks pass. State remaining physical acceptance accurately.

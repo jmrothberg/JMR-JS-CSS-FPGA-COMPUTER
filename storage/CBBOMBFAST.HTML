@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -39,9 +41,9 @@ window.JMR_SPR = ["BOMBERMA-0.png", "BOMBERMA-1.png", "BOMBERMA-2.png", "BOMBERM
 var cvs=document.getElementById("c");
 var ctx=cvs.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-ctx.systemWindow=8;
-ctx.systemViewport=1;
-ctx.systemAbout="Bomberman|Place bombs and escape the maze.";
+tbSessionProperty(ctx,0,8);
+tbSessionProperty(ctx,1,1);
+tbSessionProperty(ctx,2,"Bomberman|Place bombs and escape the maze.");
 
 ctx.imageSmoothingEnabled=false;
 if(!window.JMR_SPR){window.JMR_SPR=["BOMBERMA-0.png","BOMBERMA-1.png","BOMBERMA-2.png","BOMBERMA-3.png","BOMBERMA-4.png","BOMBERMA-5.png","BOMBERMA-6.png","BOMBERMA-7.png","BOMBERMA-8.png","BOMBERMA-9.png","BOMBERMA-10.png","BOMBERMA-11.png","BOMBERMA-12.png","BOMBERMA-13.png"];}
@@ -90,8 +92,8 @@ function onUp(e){
   if(k==="ArrowDown"||k==="s"||k==="S"||c===40||c===83)keys.down=0;
   if(k===" "||c===32)keys.fire=0;
 }
-addEventListener("keydown",onDown);
-addEventListener("keyup",onUp);
+tbSessionListen("keydown",onDown);
+tbSessionListen("keyup",onUp);
 function stick(){
   var j;
   try{j=joy()|0;}catch(e){j=0;}
@@ -461,16 +463,16 @@ function drawTile(c,r){
 
 /* CopyBits. The maze is saved once. A changed tile is drawn, then saved back. */
 var PIX=0,SCREEN=308000,SAVED=308064,cbOn=0;
-function tbU16(p,n){n=Math.floor(n)%65536;if(n<0)n=n+65536;stgWrite(p,n%256);stgWrite(p+1,Math.floor(n/256));}
-function tbSurface(d,base,width,height,stride,bits){toolbox(2,d,0,64);stgWrite(d,1);stgWrite(d+1,bits);stgWrite(d+3,1);tbU16(d+4,base);tbU16(d+6,Math.floor(base/65536));tbU16(d+8,stride);tbU16(d+10,width);tbU16(d+12,height);tbU16(d+18,width);tbU16(d+20,height);tbU16(d+30,640);tbU16(d+32,480);}
-function tbRect(d,x,y,width,height){tbU16(d+14,x);tbU16(d+16,y);tbU16(d+18,width);tbU16(d+20,height);}
-function tbPlace(d,x,y,scale){tbU16(d+22,x);tbU16(d+24,y);stgWrite(d+3,scale);}
+
+
+
+
 function tbCopy(src,dst){return toolbox(6,src,dst,0);}
 function prepareMaps(){tbSurface(SCREEN,0,640,480,640,8);stgWrite(SCREEN+2,2);tbSurface(SAVED,PIX,640,480,640,8);}
 function savePlayfield(){tbRect(SCREEN,0,0,640,480);tbPlace(SAVED,0,0,1);tbRect(SAVED,0,0,640,480);return tbCopy(SCREEN,SAVED);}
-function restoreRect(x,y,w,h){x=Math.floor(x);y=Math.floor(y);w=Math.floor(w);h=Math.floor(h);if(x<0){w=w+x;x=0;}if(y<0){h=h+y;y=0;}if(x+w>640)w=640-x;if(y+h>480)h=480-y;if(w<1||h<1)return 0;tbRect(SAVED,x,y,w,h);tbPlace(SCREEN,x,y,1);tbRect(SCREEN,x,y,w,h);return tbCopy(SAVED,SCREEN);}
-function noteChange(x,y,w,h){x=Math.floor(x);y=Math.floor(y);w=Math.floor(w);h=Math.floor(h);if(x<0){w=w+x;x=0;}if(y<0){h=h+y;y=0;}if(x+w>640)w=640-x;if(y+h>480)h=480-y;if(w<1||h<1)return 0;tbRect(SCREEN,x,y,w,h);tbPlace(SAVED,x,y,1);tbRect(SAVED,x,y,w,h);return tbCopy(SCREEN,SAVED);}
-function cbRetile(tx,ty){var x,y;x=tx*TILE;y=ty*TILE;drawTile(tx,ty);if(cbOn)noteChange(x,y,TILE,TILE);}
+function restoreRect(x,y,w,h){var x1=Math.ceil(x+w),y1=Math.ceil(24+(y+h)*0.95);x=Math.floor(x);y=Math.floor(24+y*0.95);if(x<0)x=0;if(y<24)y=24;if(x1>640)x1=640;if(y1>480)y1=480;w=x1-x;h=y1-y;if(w<1||h<1)return 0;tbRect(SAVED,x,y,w,h);tbPlace(SCREEN,x,y,1);tbRect(SCREEN,x,y,w,h);return tbCopy(SAVED,SCREEN);}
+function noteChange(x,y,w,h){var x1=Math.ceil(x+w)+0,y1=Math.ceil(24+(y+h)*0.95)+0;x=Math.floor(x)-0;y=Math.floor(24+y*0.95)-0;if(x<0)x=0;if(y<24)y=24;if(x1>640)x1=640;if(y1>480)y1=480;w=x1-x;h=y1-y;if(w<1||h<1)return 0;tbRect(SCREEN,x,y,w,h);tbPlace(SAVED,x,y,1);tbRect(SAVED,x,y,w,h);return tbCopy(SCREEN,SAVED);}
+function cbRetile(tx,ty){var x,y;x=tx*TILE;y=ty*TILE;ctx.fillStyle="#000000";ctx.fillRect(x,y,TILE,TILE);drawTile(tx,ty);if(cbOn)noteChange(x,y,TILE,TILE);}
 function drawMazeFull(){
   var r,c;
   /* BLIT skip-0 cannot restore black holes in wall/floor sheets. */
@@ -591,11 +593,13 @@ function draw(){
 function loop(){
   update();
   draw();
-  requestAnimationFrame(loop);
+  tbSessionFrame(loop);
 }
 doReset();
-requestAnimationFrame(loop);
+tbSessionFrame(loop);
 })();
+
+tbSessionProgram('CBBOMBFA.HTM');
 </script>
 </body>
 </html>

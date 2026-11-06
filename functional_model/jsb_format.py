@@ -130,6 +130,8 @@ NATIVE_IDS = {
     "fsRename": 62,
     "sysRun": 63,
     "toolbox": 64,  # versioned bulk memory/bitmap services; native JS engine unchanged
+    "sysDocument": 65,  # raw SOURCE metadata/new-document service; UI stays software
+    "strByte": 66,  # byte access to interned strings; -1 for invalid operands
 }
 
 # NEW: aliases share an id (decode prefers the canonical NATIVE_IDS key)
@@ -154,7 +156,7 @@ FLAG_SOURCE_MAP = 4
 # Legacy 32-bit images remain readable until the RTL migration is complete.
 FLAG_VALUE64 = 8
 FLAG_TOOLBOX = 16
-TOOLBOX_WORDS = 4096
+TOOLBOX_WORDS = 8192
 KNOWN_FLAGS = FLAG_V2 | FLAG_ASET | FLAG_SOURCE_MAP | FLAG_VALUE64 | FLAG_TOOLBOX
 ASET_MAGIC = b"ASET"
 SOURCE_MAP_MAGIC = b"SMAP"
@@ -181,9 +183,9 @@ _FB_SRAM_BASE_BYTES = 3_577_856 * 2
 #   [0, CSCR_WORDS)                      -> CSCR_SRAM_BASE + i
 #   [CSCR_WORDS, CSCR_WORDS+CIMG_WORDS)  -> CIMG_SRAM_BASE + i - CSCR_WORDS
 CART_SRAM_BASE = 0
-SYSTEM_CACHE_BASE = 3_446_784  # 256 KiB reserved below the unchanged framebuffer
-FINDER_CACHE_BYTES = 163_840
-FINDER_STATE_BASE = SYSTEM_CACHE_BASE + 81_920
+SYSTEM_CACHE_BASE = 3_430_400  # 288 KiB reserved below the unchanged framebuffer
+FINDER_CACHE_BYTES = 196_608
+FINDER_STATE_BASE = SYSTEM_CACHE_BASE + 98_304
 CART_WORDS = SYSTEM_CACHE_BASE
 CART_MAX_BYTES = CART_WORDS * 2
 CSCR_SRAM_BASE = 3_747_840
@@ -787,9 +789,9 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
         if data[aset_off : aset_off + 4] != ASET_MAGIC:
             raise ValueError("bad ASET magic")
         payload_len = u32(aset_off + 4, "ASET payload length")
-        if payload_len > SRAM_BYTES:
+        if payload_len > CART_MAX_BYTES:
             raise ValueError(
-                f"ASET payload {payload_len} bytes exceeds asset SRAM {SRAM_BYTES}"
+                f"ASET payload {payload_len} bytes exceeds art window {CART_MAX_BYTES}"
             )
         if payload_len < ASET_PAL_BYTES:
             raise ValueError("ASET payload is missing the 256-entry palette")
@@ -1083,7 +1085,7 @@ def _encode_v1(chunk: Chunk) -> bytes:
             var_names.append(n)
 
     ops_out: List[int] = []
-    for op, *args in chunk.code:
+    for ip,(op, *args) in enumerate(chunk.code):
         opc = int(op) & 0xFF
         a0 = 0
         a1 = 0
@@ -1239,7 +1241,13 @@ def _encode_v2(
 
     var_names: List[str] = []
     var_index: dict[str, int] = {}
-    for n in names:
+    resident_globals=getattr(chunk,'resident_global_names',None)
+    local_aliases=getattr(chunk,'resident_local_aliases',{})
+    var_refs={local_aliases.get(ip,chunk.names[args[0]]) for ip,(op,*args) in enumerate(chunk.code)
+              if op in (Op.LOAD_VAR,Op.STORE_VAR,Op.LET_VAR)}
+    variable_order=names if resident_globals is None else list(resident_globals)+[
+        n for n in names if n in var_refs and n not in resident_globals]
+    for n in variable_order:
         if n in NATIVE_IDS or n in NATIVE_ALIASES:
             continue
         if n not in var_index:
@@ -1247,7 +1255,7 @@ def _encode_v2(
             var_names.append(n)
 
     ops_out: List[int] = []
-    for op, *args in chunk.code:
+    for ip,(op, *args) in enumerate(chunk.code):
         opc = int(op) & 0xFF
         a0 = 0
         a1 = 0
@@ -1255,7 +1263,7 @@ def _encode_v2(
             a0, a1 = orig_lc[args[0]]
             a0 &= 0xFFFF
         elif op in (Op.LOAD_VAR, Op.STORE_VAR, Op.LET_VAR):
-            name = chunk.names[args[0]]
+            name = local_aliases.get(ip,chunk.names[args[0]])
             if name not in var_index:
                 var_index[name] = len(var_names)
                 var_names.append(name)
@@ -1559,6 +1567,8 @@ def _decode_chunk_unchecked(data: bytes, meta: _ImageMeta) -> Chunk:
             if data[aset_off : aset_off + 4] != ASET_MAGIC:
                 raise ValueError("bad ASET magic (truncated asset section?)")
             pay_len = struct.unpack_from("<I", data, aset_off + 4)[0]
+            if pay_len < ASET_PAL_BYTES or pay_len > CART_MAX_BYTES:
+                raise ValueError("ASET payload exceeds the art window or lacks its palette")
             payload = data[aset_off + 8 : aset_off + 8 + pay_len]
             if len(payload) < pay_len:
                 raise ValueError("truncated ASET payload")

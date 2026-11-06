@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 
 
@@ -68,9 +70,9 @@ window.JMR_SPR = ["CENTIPED-0.png", "CENTIPED-1.png", "CENTIPED-2.png", "CENTIPE
 var cvs=document.getElementById("c");
 var ctx=cvs.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-ctx.systemWindow=8;
-ctx.systemViewport=1;
-ctx.systemAbout="Centipede|Defend the garden from crawling enemies.";
+tbSessionProperty(ctx,0,8);
+tbSessionProperty(ctx,1,1);
+tbSessionProperty(ctx,2,"Centipede|Defend the garden from crawling enemies.");
 
 ctx.imageSmoothingEnabled=false;
 var W=640,H=480;
@@ -91,6 +93,7 @@ _im=new Image(); _im.src="jmr:spr:7"; IMG.bullet=_im;
 function blit(im,x,y,w,h){
   if(x<0)x=0;
   if(y<0)y=0;
+  cbMark(x,y,w,h);
   ctx.drawImage(im,x,y,w,h);
 }
 
@@ -108,11 +111,11 @@ function setKey(e,val){
   var a=KM[k]; if(a)keys[a]=val;
   if(k==="r"||k==="R"||code===82){ if(val) window.game.reset(); }
 }
-window.addEventListener("keydown",function(e){setKey(e,true);});
-window.addEventListener("keyup",function(e){setKey(e,false);});
-window.addEventListener("blur",function(){clearKeys();});
+tbSessionListen("keydown",function(e){setKey(e,true);});
+tbSessionListen("keyup",function(e){setKey(e,false);});
+tbSessionListen("blur",function(){clearKeys();});
 // Original mouse-style blaster control, retaining mushroom collision bounds.
-addEventListener("mousemove",function(e){
+tbSessionListen("mousemove",function(e){
   var x=clamp(e.clientX-16,6,W-26),y=clamp(e.clientY-16,BAND_TOP,H-28),i=0,m;
   while(i<state.mushrooms.length){
     m=state.mushrooms[i];
@@ -121,8 +124,8 @@ addEventListener("mousemove",function(e){
   }
   if(state.player){state.player.x=x;state.player.y=y;}
 });
-addEventListener("mousedown",function(e){if(e.button===0){if(state.over)window.game.reset();keys.f=1;}});
-addEventListener("mouseup",function(e){if(e.button===0)keys.f=0;});
+tbSessionListen("mousedown",function(e){if(e.button===0){if(state.over)window.game.reset();keys.f=1;}});
+tbSessionListen("mouseup",function(e){if(e.button===0)keys.f=0;});
 
 
 // ---- state ----
@@ -288,7 +291,7 @@ function updateBullets(dt){
     for(var m=state.mushrooms.length-1;m>=0;m--){
       var mu=state.mushrooms[m];
       if(bu.x>mu.x&&bu.x<mu.x+SEG&&bu.y<mu.y+SEG&&bu.y+8>mu.y){
-        ctx.fillStyle="#0a0d16";ctx.fillRect(mu.x,mu.y,SEG,SEG);if(cbOn)noteChange(mu.x,mu.y,SEG,SEG);state.mushrooms.splice(m,1);state.score+=1;cbWipe(bu);bl.splice(b,1);done=true;break;
+        state.mushrooms.splice(m,1);state.score+=1;bl.splice(b,1);done=true;break;
       }
     }
     if(done)continue;
@@ -406,27 +409,25 @@ function drawChains(){
     for(i=0;i<segs.length;i++){
       s=segs[i];
       im = s.type==="head"?IMG.head:(s.type==="tail"?IMG.tail:IMG.body);
-      cbKeep(s,s.x,s.y,SEG,SEG);
       blit(im,s.x,s.y,SEG,SEG);
     }
   }
 }
 function drawShots(){
   var b, bu, p;
-  if(state.spider){cbKeep(state.spider,state.spider.x,state.spider.y,24,24);blit(IMG.spider,state.spider.x,state.spider.y,24,24);}
-  for(b=0;b<state.bullets.length;b++){bu=state.bullets[b];cbKeep(bu,bu.x-3,bu.y-8,8,12);blit(IMG.bullet,bu.x-3,bu.y-8,8,12);}
+  if(state.spider)blit(IMG.spider,state.spider.x,state.spider.y,24,24);
+  for(b=0;b<state.bullets.length;b++){bu=state.bullets[b];blit(IMG.bullet,bu.x-3,bu.y-8,8,12);}
   // player always drawn; blink via faint alpha so render-detection sees it
   p=state.player;
   ctx.globalAlpha=(p.inv>0 && Math.floor(p.inv*12)%2===0)?0.45:1;
-  cbKeep(p,p.x,p.y,32,32);
   blit(p.fire>0?IMG.fire:IMG.blaster,p.x,p.y,32,32);
   ctx.globalAlpha=1;
 }
 function drawFx(){
   var pi, q, oi, o;
-  for(pi=0;pi<state.particles.length;pi++){q=state.particles[pi];cbKeep(q,q.x,q.y,3,3);ctx.fillStyle=q.col;ctx.fillRect(q.x,q.y,3,3);}
+  for(pi=0;pi<state.particles.length;pi++){q=state.particles[pi];cbMark(q.x,q.y,3,3);ctx.fillStyle=q.col;ctx.fillRect(q.x,q.y,3,3);}
   ctx.font="bold 12px monospace";ctx.textAlign="center";
-  for(oi=0;oi<state.pops.length;oi++){o=state.pops[oi];ctx.globalAlpha=clamp(o.life/0.85,0,1);ctx.fillStyle=o.col;ctx.fillText(o.txt,o.x,o.y);}
+  for(oi=0;oi<state.pops.length;oi++){o=state.pops[oi];ctx.globalAlpha=clamp(o.life/0.85,0,1);ctx.fillStyle=o.col;cbMark(o.x-o.txt.length*8-4,o.y-20,o.txt.length*16+8,28);ctx.fillText(o.txt,o.x,o.y);}
   ctx.globalAlpha=1;
 }
 function drawHud(){
@@ -456,59 +457,71 @@ function drawHud(){
     ctx.fillStyle="#8ff";ctx.fillText("PRESS  R  TO RESTART",W/2,286);
   }
 }
-/* CopyBits. Mushrooms are saved once. Movers put their old box back. */
-var cbOn=0;
-function tbU16(p,n){n=Math.floor(n)%65536;if(n<0)n=n+65536;stgWrite(p,n%256);stgWrite(p+1,Math.floor(n/256));}
-function tbSurface(d,base,width,height,stride,bits){toolbox(2,d,0,64);stgWrite(d,1);stgWrite(d+1,bits);stgWrite(d+3,1);tbU16(d+4,base);tbU16(d+6,Math.floor(base/65536));tbU16(d+8,stride);tbU16(d+10,width);tbU16(d+12,height);tbU16(d+18,width);tbU16(d+20,height);tbU16(d+30,640);tbU16(d+32,480);}
-function tbRect(d,x,y,width,height){tbU16(d+14,x);tbU16(d+16,y);tbU16(d+18,width);tbU16(d+20,height);}
-function tbPlace(d,x,y,scale){tbU16(d+22,x);tbU16(d+24,y);stgWrite(d+3,scale);}
-function tbCopy(src,dst){return toolbox(6,src,dst,0);}
-function prepareMaps(){tbSurface(308000,0,640,480,640,8);stgWrite(308002,2);tbSurface(308064,0,640,480,640,8);}
-function savePlayfield(){tbRect(308000,0,0,640,480);tbPlace(308064,0,0,1);tbRect(308064,0,0,640,480);return tbCopy(308000,308064);}
-function restoreRect(x,y,w,h){x=Math.floor(x);y=Math.floor(y);w=Math.floor(w);h=Math.floor(h);if(x<0){w=w+x;x=0;}if(y<0){h=h+y;y=0;}if(x+w>640)w=640-x;if(y+h>480)h=480-y;if(w<1||h<1)return 0;tbRect(308064,x,y,w,h);tbPlace(308000,x,y,1);tbRect(308000,x,y,w,h);return tbCopy(308064,308000);}
-function noteChange(x,y,w,h){x=Math.floor(x);y=Math.floor(y);w=Math.floor(w);h=Math.floor(h);if(x<0){w=w+x;x=0;}if(y<0){h=h+y;y=0;}if(x+w>640)w=640-x;if(y+h>480)h=480-y;if(w<1||h<1)return 0;tbRect(308000,x,y,w,h);tbPlace(308064,x,y,1);tbRect(308064,x,y,w,h);return tbCopy(308000,308064);}
-function cbBack(obj){if(obj&&obj._cb)restoreRect(obj._cx,obj._cy,obj._cw,obj._ch);}
-function cbKeep(obj,x,y,w,h){obj._cx=Math.floor(x);obj._cy=Math.floor(y);obj._cw=w;obj._ch=h;obj._cb=1;}
-function cbWipe(obj){if(obj&&obj._cb){ctx.fillStyle="#0a0d16";ctx.fillRect(obj._cx,obj._cy,obj._cw,obj._ch);if(cbOn)noteChange(obj._cx,obj._cy,obj._cw,obj._ch);obj._cb=0;}}
+// Previous-frame physical damage survives object deletion. Cache only the
+// static playfield; all repairs precede drawing any current-frame mover.
+var cbState={ready:0,rects:[],mush:[],track:0};
+function cbMark(x,y,w,h){
+  if(!cbState.track)return;
+  var x0=Math.floor(x)-2,y0=Math.floor(24+y*0.95)-2;
+  var x1=Math.ceil(x+w)+2,y1=Math.ceil(24+(y+h)*0.95)+2;
+  if(x0<0)x0=0;if(y0<24)y0=24;if(x1>640)x1=640;if(y1>480)y1=480;
+  if(x1>x0&&y1>y0)cbState.rects.push([x0,y0,x1-x0,y1-y0]);
+}
+function cbBackgroundChanged(){
+  if(cbState.mush.length!=state.mushrooms.length*2)return true;
+  var i=0,m;
+  while(i<state.mushrooms.length){m=state.mushrooms[i];if(cbState.mush[i*2]!=m.x||cbState.mush[i*2+1]!=m.y)return true;i=i+1;}
+  return false;
+}
+function cbRemember(){
+  cbState.mush=[];var i=0,m;
+  while(i<state.mushrooms.length){m=state.mushrooms[i];cbState.mush.push(m.x);cbState.mush.push(m.y);i=i+1;}
+}
+function cbPrepare(){
+  tbSurface(308000,0,640,480,640,8);stgWrite(308002,2);
+  tbSurface(308064,0,640,480,640,8);
+  tbRect(308000,0,24,640,456);tbRect(308064,0,24,640,456);tbPlace(308064,0,24,1);
+  if(toolbox(6,308000,308064,0)>=0){cbState.ready=1;cbRemember();}
+}
+function cbRestore(){
+  var i=0,r;
+  while(i<cbState.rects.length){r=cbState.rects[i];tbRect(308064,r[0],r[1],r[2],r[3]);tbPlace(308000,r[0],r[1],1);tbRect(308000,r[0],r[1],r[2],r[3]);if(toolbox(6,308064,308000,0)<0){cbState.ready=0;return false;}i=i+1;}
+  return true;
+}
 function draw(){
-  var sx, sy, gy, c, segs, i, s;
-  if(!cbOn){
+  var sx=0,sy=0,gy,rebuild;
+  cbState.track=0;
+  // Global visual effects legitimately dirty the entire viewport.
+  if(state.shake>0||state.flash>0||state.over){
+    cbState.ready=0;cbState.rects=[];
     ctx.fillStyle="#0a0d16";ctx.fillRect(0,0,W,H);
-    ctx.fillStyle="#0e1220";
-    for(gy=44;gy<BAND_TOP;gy+=46){ctx.fillRect(0,gy,W,1);}
-    drawMushrooms();
-    prepareMaps();
-    if(savePlayfield()>=0)cbOn=1;
-  }else{
-    if(state.player)cbBack(state.player);
-    if(state.spider)cbBack(state.spider);
-    c=0;
-    while(c<state.chains.length){
-      segs=state.chains[c].segs;i=0;
-      while(i<segs.length){cbBack(segs[i]);i=i+1;}
-      c=c+1;
-    }
-    i=0;while(i<state.bullets.length){cbBack(state.bullets[i]);i=i+1;}
-    i=0;while(i<state.particles.length){cbBack(state.particles[i]);i=i+1;}
+    if(state.shake>0){sx=(Math.random()*2-1)*state.shake;sy=(Math.random()*2-1)*state.shake;}
+    ctx.save();ctx.translate(sx,sy);
+    ctx.fillStyle="#0e1220";for(gy=44;gy<BAND_TOP;gy+=46)ctx.fillRect(0,gy,W,1);
+    drawMushrooms();drawChains();drawShots();drawFx();ctx.restore();drawHud();return;
   }
-  sx=0;sy=0; if(state.shake>0){sx=(Math.random()*2-1)*state.shake;sy=(Math.random()*2-1)*state.shake;}
-  ctx.save();ctx.translate(sx,sy);
-  drawChains();
-  drawShots();
-  drawFx();
-  ctx.restore();
-  drawHud();
+  rebuild=!cbState.ready||cbBackgroundChanged();
+  if(!rebuild&&!cbRestore())rebuild=true;
+  cbState.rects=[];
+  if(rebuild){
+    ctx.fillStyle="#0a0d16";ctx.fillRect(0,0,W,H);
+    ctx.fillStyle="#0e1220";for(gy=44;gy<BAND_TOP;gy+=46)ctx.fillRect(0,gy,W,1);
+    drawMushrooms();cbPrepare();
+  }
+  cbState.track=1;drawChains();drawShots();drawFx();cbState.track=0;drawHud();
 }
 
 // ---- loop (no performance.now — CALL_METHOD now on interned "performance") ----
 var DT=0.0167;
 function frame(){
   update(DT); draw();
-  requestAnimationFrame(frame);
+  tbSessionFrame(frame);
 }
 window.game={reset:reset};
 reset();
-requestAnimationFrame(frame);
+tbSessionFrame(frame);
 })();
+
+tbSessionProgram('CBCENTIP.HTM');
 </script>
 </body></html>

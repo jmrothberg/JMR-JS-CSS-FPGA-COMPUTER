@@ -65,7 +65,7 @@ module jmr_js_vm #(
     output logic        mouse_evt_pop,
     // NEW: console loads NAME.JSB into code BRAM before start
     input logic toolbox_code_we=0,
-    input logic [11:0] toolbox_code_addr=0,
+    input logic [12:0] toolbox_code_addr=0,
     input logic [31:0] toolbox_code_data=0,
     input  logic        code_we,
     input  logic [14:0] code_waddr,
@@ -209,38 +209,55 @@ module jmr_js_vm #(
     // Read port (VM fetch) + write port (FAT .JSB load) — dual-port BRAM,
     // pow2-chunked. Registered chunk select keeps the 1-beat fetch contract.
     // Out-of-range writes drop (too-big images refused loud at S_GOT_HDR2).
-    // Resident code uses three spare RAMB36 tiles (2K + 1K words).
-    // The 4K virtual prefix ends in fixed jump padding, requiring no RAM.
-    // Keep all 20K application words in BRAM to avoid a large LUT-RAM mux.
-    (* ram_style="block" *) logic [31:0] toolbox_code0 [0:2047] /*verilator public_flat_rw*/;
-    (* ram_style="block" *) logic [31:0] toolbox_code1 [0:1023] /*verilator public_flat_rw*/;
+    // Shared software Toolbox: 7 BRAM tiles (4K+2K+1K) plus a distributed 1K tail.
+    // The 8K virtual prefix leaves the existing 21K application bank intact.
+    (* ram_style="block" *) logic [31:0] toolbox_code0 [0:4095] /*verilator public_flat_rw*/;
+    (* ram_style="block" *) logic [31:0] toolbox_code1 [0:2047] /*verilator public_flat_rw*/;
+    (* ram_style="block" *) logic [31:0] toolbox_code2 [0:1023] /*verilator public_flat_rw*/;
+    (* ram_style="distributed" *) logic [31:0] toolbox_code3 [0:1023] /*verilator public_flat_rw*/;
+    initial $readmemh("toolbox_code3.hex",toolbox_code3);
+    initial $readmemh("toolbox_code2.hex",toolbox_code2);
     initial $readmemh("toolbox_code0.hex",toolbox_code0);
     initial $readmemh("toolbox_code1.hex",toolbox_code1);
     logic load_toolbox /*verilator public_flat_rw*/=0;
     logic [14:0] load_ops_base /*verilator public_flat_rw*/=0;
     logic [31:0] load_toolbox_hash /*verilator public_flat_rw*/=0;
     logic [31:0] toolbox_hash /*verilator public_flat_rw*/=jmr_toolbox_rom_pkg::DEFAULT_HASH;
-    wire code_is_toolbox=load_toolbox && code_raddr>=load_ops_base && code_raddr<load_ops_base+15'd4096;
-    wire [14:0] code_physical=load_toolbox && code_raddr>=load_ops_base+15'd4096 ? code_raddr-15'd4096 : code_raddr;
-    logic [31:0] code_r_c0,code_r_c1,code_r_c2,code_r_toolbox0,code_r_toolbox1;
-    wire [11:0] toolbox_raddr=12'(code_raddr-load_ops_base);
+    // Cold-load identity: bundles are stable before START; the existing
+    // header fetch sequence gives several VM beats before S_GOT_HDR2.
+    // Keep the fast-domain hash comparator off the wide VM init/reset cone.
+    logic toolbox_identity_match_q;
+    always_ff @(posedge clk)begin
+        if(!rst_n)toolbox_identity_match_q<=1'b0;
+        else toolbox_identity_match_q<=(load_toolbox_hash==toolbox_hash);
+    end
+    wire code_is_toolbox=load_toolbox && code_raddr>=load_ops_base && code_raddr<load_ops_base+15'd8192;
+    wire [14:0] code_physical=load_toolbox && code_raddr>=load_ops_base+15'd8192 ? code_raddr-15'd8192 : code_raddr;
+    logic [31:0] code_r_c0,code_r_c1,code_r_c2,code_r_toolbox0,code_r_toolbox1,code_r_toolbox2,code_r_toolbox3;
+    wire [12:0] toolbox_raddr=13'(code_raddr-load_ops_base);
     logic [1:0] toolbox_rbank;
-    wire [31:0] code_r_toolbox=toolbox_rbank==0?code_r_toolbox0:toolbox_rbank==1?code_r_toolbox1:jmr_toolbox_rom_pkg::PADDING;
+    logic toolbox_final_word;
+    wire [31:0] code_r_toolbox=toolbox_rbank==0?code_r_toolbox0:toolbox_rbank==1?code_r_toolbox1:toolbox_rbank==2?code_r_toolbox2:toolbox_final_word?jmr_toolbox_rom_pkg::PADDING:code_r_toolbox3;
     logic [1:0] code_rsel;
     logic code_r_is_toolbox;
     always_ff @(posedge clk) begin
         code_r_c0<=code_mem_c0[code_physical[13:0]];
         code_r_c1<=code_mem_c1[code_physical[11:0]];
         code_r_c2<=code_mem_c2[code_physical[9:0]];
-        code_r_toolbox0<=toolbox_code0[toolbox_raddr[10:0]];
-        code_r_toolbox1<=toolbox_code1[toolbox_raddr[9:0]];
-        toolbox_rbank<=toolbox_raddr<2048?0:toolbox_raddr<3072?1:2;
+        code_r_toolbox0<=toolbox_code0[toolbox_raddr[11:0]];
+        code_r_toolbox1<=toolbox_code1[toolbox_raddr[10:0]];
+        code_r_toolbox2<=toolbox_code2[toolbox_raddr[9:0]];
+        code_r_toolbox3<=toolbox_code3[toolbox_raddr[9:0]];
+        toolbox_final_word<=toolbox_raddr==13'd8191;
+        toolbox_rbank<=toolbox_raddr<4096?0:toolbox_raddr<6144?1:toolbox_raddr<7168?2:3;
         code_rsel <= code_physical < 15'd16384 ? 2'd0 : code_physical < 15'd20480 ? 2'd1 : 2'd2;
         code_r_is_toolbox<=code_is_toolbox;
     end
     always_ff @(posedge clk_code_w)if(toolbox_code_we)begin
-        if(toolbox_code_addr<2048)toolbox_code0[toolbox_code_addr[10:0]]<=toolbox_code_data;
-        else if(toolbox_code_addr<3072)toolbox_code1[toolbox_code_addr[9:0]]<=toolbox_code_data;
+        if(toolbox_code_addr<4096)toolbox_code0[toolbox_code_addr[11:0]]<=toolbox_code_data;
+        else if(toolbox_code_addr<6144)toolbox_code1[toolbox_code_addr[10:0]]<=toolbox_code_data;
+        else if(toolbox_code_addr<7168)toolbox_code2[toolbox_code_addr[9:0]]<=toolbox_code_data;
+        else if(toolbox_code_addr<8191)toolbox_code3[toolbox_code_addr[9:0]]<=toolbox_code_data;
         toolbox_hash<=(toolbox_code_addr==0?32'd0:{toolbox_hash[30:0],toolbox_hash[31]})^toolbox_code_data;
     end
     // Write port on the full-rate clock (console streams during load; the
@@ -263,7 +280,7 @@ module jmr_js_vm #(
                 load_toolbox<=code_wdata_q2[20];
                 if(!code_wdata_q2[17])load_ops_base<=load_ops_base-1'b1;
             end
-            if(load_toolbox && code_waddr_q2>=load_ops_base && code_waddr_q2<load_ops_base+15'd4096)
+            if(load_toolbox && code_waddr_q2>=load_ops_base && code_waddr_q2<load_ops_base+15'd8192)
                 load_toolbox_hash<={load_toolbox_hash[30:0],load_toolbox_hash[31]}^code_wdata_q2;
             else begin
                 if(code_write_physical<15'd16384)code_mem_c0[code_write_physical[13:0]]<=code_wdata_q2;
@@ -272,7 +289,7 @@ module jmr_js_vm #(
             end
         end
     end
-    wire [14:0] code_write_physical=load_toolbox && code_waddr_q2>=load_ops_base+15'd4096 ? code_waddr_q2-15'd4096 : code_waddr_q2;
+    wire [14:0] code_write_physical=load_toolbox && code_waddr_q2>=load_ops_base+15'd8192 ? code_waddr_q2-15'd8192 : code_waddr_q2;
     assign code_rdata=code_r_is_toolbox?code_r_toolbox:code_rsel==0?code_r_c0:code_rsel==1?code_r_c1:code_r_c2;
 
     logic signed [31:0] consts [0:MAX_CONSTS-1];
@@ -933,6 +950,7 @@ module jmr_js_vm #(
     logic [15:0] nb_i, nb_len;
     logic        nb_one;              // this name is exactly 1 byte (char lookup)
     logic [15:0] nb_wp /*verilator public_flat_rd*/; // bytes loaded (VMSTAT strb)
+    logic [7:0] str_byte_q; // Numeric strByte capture; shares existing STRIDX reads.
     logic [10:0] str_res;             // stack slot the char is written back to
     // NEW: 8x8 glyph ROM — one BRAM, registered read, same bytes as the console
     // scanout font. fillText was a filled 64x8 bar before this; every HUD in
@@ -7200,7 +7218,7 @@ module jmr_js_vm #(
                     // an image without FLAG_VALUE64 (flags bit3 =
                     // code_rdata[19]) has no decoder any more. Fault loud;
                     // never reach S_EXEC / hs32.
-                    if (!code_rdata[19] || (code_rdata[20] && (n_ops<4096 || load_toolbox_hash!=toolbox_hash))) begin
+                    if (!code_rdata[19] || (code_rdata[20] && (n_ops<8192 || !toolbox_identity_match_q))) begin
                         machine_fault <= 1'b1;
                         fault_code <= 8'd9; fault_site <= 16'd6889; // 9 = tagged image refused
                         running <= 1'b0;
@@ -7208,7 +7226,7 @@ module jmr_js_vm #(
                     end else if ({16'd0, (code_rdata[17] ? 16'd4 : 16'd3)}
                                + {15'd0, (code_rdata[19] ? {n_consts, 1'b0}
                                                          : {1'b0, n_consts})}
-                               + {16'd0, n_ops} > 32'(CODE_WORDS)+(code_rdata[20]?32'd4096:32'd0)) begin
+                               + {16'd0, n_ops} > 32'(CODE_WORDS)+(code_rdata[20]?32'd8192:32'd0)) begin
                         // 2026-08-21 fit: CODE_WORDS shrank to the measured
                         // envelope. An image whose header promises more words
                         // than code_mem holds is refused LOUD here - the
@@ -12840,6 +12858,7 @@ module jmr_js_vm #(
                         hs_st(S_V64_STRIDX);
                     end else begin
                         stridx_rd_arm <= 1'b0;
+                        if (hp_nat == 4'd15) str_byte_q <= name_rdata;
                         hs_st(S_V64_STRIDX_WR);
                     end
                 end
@@ -12853,7 +12872,7 @@ module jmr_js_vm #(
                     // char to itself / the row (0 sprite pixels).
                     begin
                         logic [63:0] ch;
-                        ch = e32_char_ok_rdata
+                        ch = (hp_nat == 4'd15) ? v64_int32_number({24'd0, str_byte_q}) : e32_char_ok_rdata
                             ? v64_handle(4'd4, 12'd0,
                                          {16'd0, e32_char_id_rdata})
                             : V64_UNDEFINED;

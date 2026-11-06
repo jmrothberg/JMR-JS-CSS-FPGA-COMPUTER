@@ -1,157 +1,163 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1970" viewBox="0 0 1600 1970" role="img" aria-labelledby="title desc">
-<title id="title">JMR computer architecture: programs, Toolbox, system and hardware</title><desc id="desc">Read from top to bottom: Finder and applications call shared software and system services, which run on one native JavaScript CPU and reusable FPGA engines. Toolbox calls are grouped by purpose. SYSTEM.SYS is data, separate from executable TOOLBOX.ROM. Current development source, November 4, 2026; board qualification is separate.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="2200" viewBox="0 0 1600 2200" role="img" aria-labelledby="title desc">
+<title id="title">JMR clean architecture: software Toolbox and bounded hardware services</title><desc id="desc">Finder and applications share executable JavaScript Toolbox routines. UI policy and graphics algorithms are software; bounded bulk primitives, boot and recovery remain hardware. Run78 is the strict hardware baseline; run79 is a test build; run80 is building. The matching software revision has 44 programs and a full 8191-word library; physical acceptance remains separate.</desc>
 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="#526775"/></marker></defs>
-<rect x="0" y="0" width="1600" height="1970" rx="0" fill="#f4f7f8" stroke="none"/>
+<rect x="0" y="0" width="1600" height="2200" rx="0" fill="#f4f7f8" stroke="none"/>
 <text x="48" y="54" font-family="DejaVu Sans,sans-serif" font-size="36" font-weight="bold" fill="#172e3a">JMR computer architecture</text>
-<text x="48" y="88" font-family="DejaVu Sans,sans-serif" font-size="21" font-weight="normal" fill="#526775">Macintosh-inspired organization • one native JavaScript CPU • clear ownership at every layer</text>
+<text x="48" y="88" font-family="DejaVu Sans,sans-serif" font-size="21" font-weight="normal" fill="#526775">Macintosh-inspired organization • one native JavaScript CPU • software owns common UI policy</text>
 <rect x="48" y="110" width="1504" height="44" rx="6" fill="#fff3db" stroke="#e3cc98"/>
-<text x="64" y="138" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#735019">DEVELOPMENT SOURCE · 4 NOV 2026     Run77d/e/f include bitmap transport now; whole-board qualification pending.</text>
+<text x="64" y="138" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#735019">ONE ACTIVE SET · Run80 RTL · storage/ · one matching disk · .bit pending qualification</text>
 <text x="48" y="190" font-family="DejaVu Sans,sans-serif" font-size="15" font-weight="bold" fill="#086c68">READ TOP TO BOTTOM</text>
-<text x="265" y="190" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#526775">Programs decide behavior → shared routines → system services → FPGA mechanisms</text>
+<text x="265" y="190" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#526775">Application behavior → shared software → bounded system services → FPGA mechanisms</text>
 <rect x="48" y="212" width="736" height="288" rx="10" fill="white" stroke="#ced9de"/>
 <rect x="816" y="212" width="736" height="288" rx="10" fill="white" stroke="#ced9de"/>
 <text x="72" y="247" font-family="DejaVu Sans,sans-serif" font-size="23" font-weight="bold" fill="#086c68">01   FINDER</text>
 <text x="840" y="247" font-family="DejaVu Sans,sans-serif" font-size="23" font-weight="bold" fill="#086c68">01   APPLICATIONS + SYSTEM TOOLS</text>
-<text x="72" y="277" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#526775">FINDER.HTM → FINDER.JSH · ordinary JavaScript program</text>
-<text x="840" y="277" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#526775">HTML / JavaScript → compiled JSH · same VM as Finder</text>
+<text x="72" y="277" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#526775">Ordinary compiled JavaScript program: FINDER.JSH</text>
+<text x="840" y="277" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#526775">HTML / JavaScript → JSH · same processor as Finder</text>
 <path d="M72 295 H760" stroke="#ced9de"/>
 <path d="M840 295 H1528" stroke="#ced9de"/>
 <text x="72" y="326" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Desktop + windows</text>
-<text x="400" y="326" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Files + persistent desktop</text>
+<text x="400" y="326" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Files + persistence</text>
 <text x="72" y="355" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Icons, selection, drag/drop</text>
 <text x="72" y="382" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Window order, size, scrolling</text>
 <text x="72" y="409" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Icon / name / size / kind views</text>
 <text x="400" y="355" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Open, rename, duplicate, Trash</text>
 <text x="400" y="382" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Folders / positions / comments</text>
 <text x="400" y="409" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">DESKTOP.FDR on a flat FAT root</text>
-<text x="72" y="461" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#526775">File / Edit / View / Special menus; native menu UI still draws the bar.</text>
+<text x="72" y="461" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#526775">File / Edit / View / Special use the shared software menu system.</text>
 <text x="840" y="326" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Documents + tools</text>
-<text x="1170" y="326" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Games + Toolbox client</text>
-<text x="840" y="355" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Editor / Note / Reader</text>
-<text x="840" y="382" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Compiler / Utility / Terminal</text>
-<text x="840" y="409" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">MacPaint: document + Undo</text>
-<text x="1170" y="355" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Game rules, input, artwork</text>
-<text x="1170" y="382" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">TBDEMO: resident software UI</text>
-<text x="1170" y="409" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Apps own file I/O + commands</text>
-<text x="840" y="461" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#526775">One active program; Finder executable + arena can be parked in DDR.</text>
+<text x="1170" y="326" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Games + resources</text>
+<text x="840" y="355" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Editor / Note / Reader / Utility</text>
+<text x="840" y="382" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">On-device compiler + tools</text>
+<text x="840" y="409" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">MacPaint: page, tools, Undo</text>
+<text x="1170" y="355" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Rules, input and artwork</text>
+<text x="1170" y="382" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">ART assets / PAINT.RSC tables</text>
+<text x="1170" y="409" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">App-owned buffers and objects</text>
+<text x="840" y="461" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#526775">One active application; shared instructions, private application state.</text>
 <path d="M800 504 V546" stroke="#526775" stroke-width="2" marker-end="url(#arrow)"/>
-<text x="830" y="533" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#526775">Call shared code or existing native APIs</text>
-<rect x="48" y="556" width="1504" height="438" rx="10" fill="#eaf4f1" stroke="#a9c9c3"/>
-<text x="72" y="594" font-family="DejaVu Sans,sans-serif" font-size="25" font-weight="bold" fill="#086c68">02   RESIDENT TOOLBOX</text>
-<text x="72" y="626" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">TOOLBOX.ROM · shared JavaScript instructions; globals, constants and heap state belong to each application.</text>
-<path d="M414 650 L414 958" stroke="#ced9de"/>
-<path d="M780 650 L780 958" stroke="#ced9de"/>
-<path d="M1146 650 L1146 958" stroke="#ced9de"/>
-<text x="72" y="675" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Windows, menus + text</text>
-<text x="72" y="706" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbUIInit(...)</text>
-<text x="72" y="730" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbWindow(...)</text>
-<text x="72" y="754" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbMenus(...)</text>
-<text x="72" y="778" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbMenuEnabled(...)</text>
-<text x="72" y="802" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbMenuChecked(...)</text>
-<text x="72" y="826" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbText(...)</text>
-<text x="72" y="850" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbTextWidth(...)</text>
-<text x="72" y="874" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbBox(...)</text>
-<text x="438" y="675" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Dialogs + event loop</text>
-<text x="438" y="706" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbDialogOpen(...)</text>
-<text x="438" y="730" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbDialogResult()</text>
-<text x="438" y="754" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbDialogValue()</text>
-<text x="438" y="778" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbDialogSelection()</text>
-<text x="438" y="802" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbUIPointer(...)</text>
-<text x="438" y="826" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbUIKey(...)</text>
-<text x="438" y="850" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbMenuCommand()</text>
-<text x="438" y="874" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbUIChanged()</text>
-<text x="438" y="898" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbUIDraw()</text>
-<text x="804" y="675" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Memory + packed surfaces</text>
-<text x="804" y="706" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbMove(...) / tbFill(...)</text>
-<text x="804" y="730" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbResources(...)</text>
-<text x="804" y="754" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbU16(...)</text>
-<text x="804" y="778" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbSurface(...)</text>
-<text x="804" y="802" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbRect(...)</text>
-<text x="804" y="826" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbPlace(...)</text>
-<text x="804" y="850" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbClip(...)</text>
-<text x="804" y="874" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbInk(...)</text>
-<text x="804" y="898" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbBlit(...) / tbPattern(...)</text>
-<text x="804" y="922" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbCopyBits(src,dst)</text>
-<text x="804" y="946" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">tbScreen(d)</text>
-<text x="1170" y="675" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Native boundary · ID 64</text>
-<text x="1170" y="706" font-family="DejaVu Sans Mono,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">toolbox(op,a,b,c)</text>
-<text x="1170" y="742" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">0  Version + capabilities</text>
-<text x="1170" y="766" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">1  Memmove</text>
-<text x="1170" y="790" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">2  Byte fill</text>
-<text x="1170" y="814" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">3  Packed surface → screen</text>
-<text x="1170" y="838" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">4  Pattern → packed surface</text>
-<text x="1170" y="862" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">5  Read verified SYS payload</text>
-<text x="1170" y="912" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="bold" fill="#086c68">6  Raw 8-bit rectangle copy</text>
-<text x="1170" y="938" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#526775">Arena ↔ canvas; overlap + clip.</text>
-<text x="72" y="975" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#086c68">Software UI is cooperative: feed events → handle command/result → draw content + UI → present the frame.</text>
-<path d="M800 998 V1034" stroke="#526775" stroke-width="2" marker-end="url(#arrow)"/>
-<text x="830" y="1023" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#526775">Versioned calls + shared resource reads</text>
-<rect x="48" y="1044" width="1008" height="350" rx="10" fill="white" stroke="#ced9de"/>
-<rect x="1080" y="1044" width="472" height="350" rx="10" fill="#f2f0e9" stroke="#d4cec0"/>
-<text x="72" y="1081" font-family="DejaVu Sans,sans-serif" font-size="24" font-weight="bold" fill="#086c68">03   SYSTEM SERVICES</text>
-<text x="72" y="1110" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#526775">Existing native APIs + controllers in RTL; this is broader than SYSTEM.SYS.</text>
-<text x="72" y="1147" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="bold" fill="#172e3a">Boot + program lifecycle</text>
-<text x="72" y="1177" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Validate ROM / SYS / JSH; LOAD / RUN</text>
-<text x="72" y="1202" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Finder park / return; compile-tool chain</text>
-<text x="72" y="1227" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Console engine + Finder launch controller</text>
-<text x="568" y="1147" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="bold" fill="#172e3a">File services</text>
-<text x="568" y="1177" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">fsList / fsRead / fsWrite</text>
-<text x="568" y="1202" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">fsRemove / fsRename / sysRun</text>
-<text x="568" y="1227" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Finder FS → storage engine → FAT disk</text>
-<path d="M72 1244 H1032" stroke="#ced9de"/>
-<text x="72" y="1278" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="bold" fill="#172e3a">Input + events + recovery</text>
-<text x="72" y="1308" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Keyboard / pointer queues; event delivery</text>
-<text x="72" y="1333" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">addEventListener / requestAnimationFrame</text>
-<text x="72" y="1358" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Escape exit + Enterprise recovery menu</text>
-<text x="568" y="1278" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="bold" fill="#172e3a">Legacy shared UI · still active</text>
-<text x="568" y="1308" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">ctx.systemWindow / systemMenus / systemAbout</text>
-<text x="568" y="1333" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Menu / dialog / document / overlay controllers</text>
-<text x="568" y="1358" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Finder + unconverted apps keep this path</text>
-<text x="1104" y="1081" font-family="DejaVu Sans,sans-serif" font-size="23" font-weight="bold" fill="#655b3e">SYSTEM.SYS · DATA</text>
-<text x="1104" y="1110" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#526775">Appearance resources, separate from code</text>
-<text x="1104" y="1147" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Font glyphs</text>
-<text x="1104" y="1176" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Caption text + indexes + menu headings</text>
-<text x="1104" y="1205" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Native dialog offsets / buttons / styles</text>
-<text x="1104" y="1234" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Keyboard / ship / accessory captions</text>
-<path d="M1104 1255 H1528" stroke="#ced9de"/>
-<text x="1104" y="1286" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Boot-verified 24,320-byte payload</text>
-<text x="1104" y="1311" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Local UI memories + retained DDR snapshot</text>
-<text x="1104" y="1336" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbResources → app data; tbText uses glyphs</text>
-<text x="1104" y="1361" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Software dialog layout stays in Toolbox code</text>
-<path d="M800 1398 V1434" stroke="#526775" stroke-width="2" marker-end="url(#arrow)"/>
-<text x="830" y="1423" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#526775">Same CPU; reusable hardware executes the work</text>
-<rect x="48" y="1444" width="1504" height="280" rx="10" fill="#edf1f5" stroke="#ced9de"/>
-<text x="72" y="1482" font-family="DejaVu Sans,sans-serif" font-size="24" font-weight="bold" fill="#086c68">04   FPGA EXECUTION + I/O</text>
-<text x="72" y="1512" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">The .bit defines these mechanisms. Changing a JavaScript program or supported resource does not redefine the FPGA.</text>
-<path d="M414 1534 L414 1698" stroke="#ced9de"/>
-<path d="M780 1534 L780 1698" stroke="#ced9de"/>
-<path d="M1146 1534 L1146 1698" stroke="#ced9de"/>
-<text x="72" y="1564" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Native JavaScript CPU</text>
-<text x="72" y="1596" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Instruction fetch / execution</text>
-<text x="72" y="1624" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Stack, heap, globals, code BRAM</text>
-<text x="72" y="1652" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Shared resident instruction bank</text>
-<text x="72" y="1680" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">VM 33.333 MHz; services 100 MHz</text>
-<text x="438" y="1564" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Graphics + presentation</text>
-<text x="438" y="1596" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Raw rectangle copy / fill / blit</text>
-<text x="438" y="1624" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Rasterizer → BRAM draw canvas</text>
-<text x="438" y="1652" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Dirty-block transfer → DDR front</text>
-<text x="438" y="1680" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Palette / overlays → HDMI scanout</text>
-<text x="804" y="1564" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Storage + physical I/O</text>
-<text x="804" y="1596" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">FAT storage / microSD interface</text>
-<text x="804" y="1624" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">USB keyboard J15; PS/2 JA + JC</text>
-<text x="804" y="1652" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Joystick JB; input FIFOs / events</text>
-<text x="804" y="1680" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Audio synthesis + physical output</text>
-<text x="1170" y="1564" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Memory + board interface</text>
-<text x="1170" y="1596" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">8 MiB external address aperture</text>
-<text x="1170" y="1624" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Nexys Video: DDR3 behind bridge</text>
-<text x="1170" y="1652" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">On-chip BRAM: hot state + canvas</text>
-<text x="1170" y="1680" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">One VM and one drawing canvas</text>
-<rect x="48" y="1756" width="1504" height="146" rx="10" fill="white" stroke="#ced9de"/>
-<text x="72" y="1792" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#086c68">ON DISK / AT BOOT</text>
-<text x="320" y="1792" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#172e3a">Programs: HTML → JSH     Shared code: TOOLBOX.ROM     Shared data: SYSTEM.SYS</text>
-<text x="72" y="1825" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Boot: validate + commit ROM → validate + commit SYS → load Finder. Bad shared files use factory / cold-start defaults.</text>
-<text x="72" y="1856" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Software algorithms: update ROM + relink clients. New hardware access / formats / capacity: Vivado + new .bit.</text>
-<text x="72" y="1883" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#526775">Memory detail: memory-map.svg · 160 KiB Finder cache + 72 KiB parked arena + 24 KiB SYS staging; allocation unchanged.</text>
-<text x="48" y="1933" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#526775">Layer arrows show responsibility, not a mandatory route: apps can call native APIs directly; legacy UI is an existing parallel path.</text>
-<text x="48" y="1957" font-family="DejaVu Sans,sans-serif" font-size="16" font-weight="normal" fill="#526775">Sources: Finder / Toolbox JavaScript, RTL, RESIDENT_TOOLBOX.md, TOOLBOX_API.md. Release status: TOOLBOX_IMPLEMENTATION_STATUS.md.</text>
+<text x="830" y="533" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#526775">Normal JavaScript function calls</text>
+<rect x="48" y="556" width="1504" height="554" rx="10" fill="#eaf4f1" stroke="#a9c9c3"/>
+<text x="72" y="594" font-family="DejaVu Sans,sans-serif" font-size="25" font-weight="bold" fill="#086c68">02   RESIDENT TOOLBOX · SOFTWARE</text>
+<text x="72" y="626" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">TOOLBOX.ROM: shared instructions. Menus, dialogs, document decisions and graphics algorithms change here.</text>
+<path d="M414 650 L414 1074" stroke="#ced9de"/>
+<path d="M780 650 L780 1074" stroke="#ced9de"/>
+<path d="M1146 650 L1146 1074" stroke="#ced9de"/>
+<text x="72" y="677" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Windows, menus + text</text>
+<text x="72" y="710" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbUIInit(...)</text>
+<text x="72" y="736" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbWindow(...)</text>
+<text x="72" y="762" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbMenus(...)</text>
+<text x="72" y="788" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbMenuEnabled(...)</text>
+<text x="72" y="814" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbMenuChecked(...)</text>
+<text x="72" y="840" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbText(...)</text>
+<text x="72" y="866" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbTextWidth(...)</text>
+<text x="72" y="892" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbBox(...)</text>
+<text x="72" y="918" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbUIDraw()</text>
+<text x="438" y="677" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Dialogs + event handling</text>
+<text x="438" y="710" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbDialogOpen(...)</text>
+<text x="438" y="736" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbDialogResult()</text>
+<text x="438" y="762" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbDialogValue()</text>
+<text x="438" y="788" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbDialogSelection()</text>
+<text x="438" y="814" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbUIPointer(...)</text>
+<text x="438" y="840" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbUIKey(...)</text>
+<text x="438" y="866" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbMenuCommand()</text>
+<text x="438" y="892" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbUIChanged()</text>
+<text x="438" y="918" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Save / Discard / Cancel</text>
+<text x="438" y="944" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Open / Save As / Replace</text>
+<text x="804" y="677" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Memory + graphics</text>
+<text x="804" y="710" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbMove(...) / tbFill(...)</text>
+<text x="804" y="736" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbResources(...) / tbU16(...)</text>
+<text x="804" y="762" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbSurface(...) / tbScreen(...)</text>
+<text x="804" y="788" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbRect(...) / tbPlace(...)</text>
+<text x="804" y="814" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbClip(...) / tbInk(...)</text>
+<text x="804" y="840" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbBlit(...) / tbPattern(...)</text>
+<text x="804" y="866" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbCopyBits(src,dst)</text>
+<text x="804" y="892" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbRaster(src,dst,mode)</text>
+<text x="804" y="918" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbMask(...) / tbMaskOff(...)</text>
+<text x="804" y="944" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbPattern8(...)</text>
+<text x="804" y="970" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbPatternOff(...)</text>
+<text x="804" y="996" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbPaintRect(...)</text>
+<text x="1170" y="677" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Application session</text>
+<text x="1170" y="710" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbSessionProperty(...)</text>
+<text x="1170" y="736" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbSessionMenus(...)</text>
+<text x="1170" y="762" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbSessionProgram(...)</text>
+<text x="1170" y="788" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbSessionListen(...)</text>
+<text x="1170" y="814" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbSessionFrame(...)</text>
+<text x="1170" y="840" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbSessionInvalidate(...)</text>
+<text x="1170" y="866" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbSessionTransform(...)</text>
+<text x="1170" y="892" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbSessionSuffix(...)</text>
+<text x="1170" y="918" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">tbSessionCodes(...)</text>
+<text x="1170" y="944" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Shared File / Edit / Special</text>
+<text x="1170" y="970" font-family="DejaVu Sans Mono,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Dirty-save + tool navigation</text>
+<text x="72" y="1090" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#086c68">Cooperative events + frames. Pausing an app does not remove the independent keyboard / emergency recovery path.</text>
+<path d="M800 1114 V1150" stroke="#526775" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="830" y="1139" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#526775">Versioned native services; no browser or extra CPU</text>
+<rect x="48" y="1160" width="1008" height="380" rx="10" fill="white" stroke="#ced9de"/>
+<rect x="1080" y="1160" width="472" height="380" rx="10" fill="#f2f0e9" stroke="#d4cec0"/>
+<text x="72" y="1198" font-family="DejaVu Sans,sans-serif" font-size="24" font-weight="bold" fill="#086c68">03   SYSTEM SERVICES</text>
+<text x="72" y="1227" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#526775">Hardware transfers bytes and performs explicit operations; software chooses the policy.</text>
+<text x="72" y="1263" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="bold" fill="#172e3a">Boot + program lifecycle</text>
+<text x="72" y="1293" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Validate ROM / SYS / JSH; LOAD / RUN</text>
+<text x="72" y="1318" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Console + explicit program chain</text>
+<text x="72" y="1343" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">sysDocument: SOURCE metadata / names</text>
+<text x="72" y="1368" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Save → successful close → continuation</text>
+<text x="568" y="1263" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="bold" fill="#172e3a">File + string services</text>
+<text x="568" y="1293" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">fsList: bounded catalog pages</text>
+<text x="568" y="1318" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">fsRead / fsWrite / fsRemove / fsRename</text>
+<text x="568" y="1343" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">sysRun: explicit app / tool launch</text>
+<text x="568" y="1368" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">strByte: stored interned UTF-8 bytes</text>
+<path d="M72 1390 H1032" stroke="#ced9de"/>
+<text x="72" y="1424" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="bold" fill="#172e3a">Input + essential recovery</text>
+<text x="72" y="1454" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Keyboard / pointer events; frame scheduling</text>
+<text x="72" y="1479" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Boot artwork + Terminal + ship keyboard</text>
+<text x="72" y="1504" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Escape exit; About key 254 → software UI</text>
+<text x="568" y="1424" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="bold" fill="#172e3a">Native 64: toolbox(op,a,b,c)</text>
+<text x="568" y="1454" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">0 capabilities · 1 move · 2 fill · 5 SYS read</text>
+<text x="568" y="1479" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">3 packed blit · 4 packed pattern fill</text>
+<text x="568" y="1504" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">6 indexed CopyBits · 7 mask / raster / pattern</text>
+<text x="1104" y="1198" font-family="DejaVu Sans,sans-serif" font-size="23" font-weight="bold" fill="#655b3e">RESOURCES · DATA</text>
+<text x="1104" y="1235" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">SYSTEM.SYS: boot-validated appearance</text>
+<text x="1104" y="1263" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Chicago glyphs; captions; boot artwork</text>
+<text x="1104" y="1291" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Retained shared data, read through Toolbox</text>
+<path d="M1104 1322 H1528" stroke="#ced9de"/>
+<text x="1104" y="1353" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">PAINT.RSC: MacPaint fonts / icons / patterns</text>
+<text x="1104" y="1381" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">ART: application artwork + font sprites</text>
+<text x="1104" y="1409" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Data loads into app-owned memory</text>
+<text x="1104" y="1437" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">LNK: compiler names / constants / identity</text>
+<text x="1104" y="1465" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Objects / globals / mutable data stay private</text>
+<path d="M800 1544 V1580" stroke="#526775" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="830" y="1569" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#526775">Reusable mechanisms execute the work</text>
+<rect x="48" y="1590" width="1504" height="280" rx="10" fill="#edf1f5" stroke="#ced9de"/>
+<text x="72" y="1628" font-family="DejaVu Sans,sans-serif" font-size="24" font-weight="bold" fill="#086c68">04   FPGA EXECUTION + I/O</text>
+<text x="72" y="1658" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">The .bit defines the circuits. Replaced classic menu / dialog / document / system-action controllers are removed.</text>
+<path d="M414 1680 L414 1848" stroke="#ced9de"/>
+<path d="M780 1680 L780 1848" stroke="#ced9de"/>
+<path d="M1146 1680 L1146 1848" stroke="#ced9de"/>
+<text x="72" y="1710" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Native JavaScript CPU</text>
+<text x="72" y="1742" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Fetch / execute; stack, heap, globals</text>
+<text x="72" y="1770" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">8192-word shared instruction prefix</text>
+<text x="72" y="1798" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">21504 app words for code + metadata</text>
+<text x="72" y="1826" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">VM 33.333 MHz; services 100 MHz</text>
+<text x="438" y="1710" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Graphics + presentation</text>
+<text x="438" y="1742" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Bounded copy / Boolean mask engine</text>
+<text x="438" y="1770" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Rasterizer → BRAM draw canvas</text>
+<text x="438" y="1798" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Dirty blocks → DDR front image</text>
+<text x="438" y="1826" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Palette / recovery → HDMI scanout</text>
+<text x="804" y="1710" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Storage + physical I/O</text>
+<text x="804" y="1742" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">FAT storage / microSD interface</text>
+<text x="804" y="1770" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">USB keyboard J15; PS/2 JA + JC</text>
+<text x="804" y="1798" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Joystick JB; input FIFOs / events</text>
+<text x="804" y="1826" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Audio synthesis + physical output</text>
+<text x="1170" y="1710" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Memory + board interface</text>
+<text x="1170" y="1742" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">8 MiB external address aperture</text>
+<text x="1170" y="1770" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Nexys Video DDR3 bridge</text>
+<text x="1170" y="1798" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">BRAM + distributed resident tail</text>
+<text x="1170" y="1826" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">One VM and one drawing canvas</text>
+<rect x="48" y="1910" width="1504" height="184" rx="10" fill="white" stroke="#ced9de"/>
+<text x="72" y="1946" font-family="DejaVu Sans,sans-serif" font-size="22" font-weight="bold" fill="#086c68">WHAT CAN CHANGE WITHOUT A NEW .bit?</text>
+<text x="72" y="1982" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Software algorithms / menus / dialogs: update ROM + LNK + matching apps, then cold machine restart.</text>
+<text x="72" y="2011" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">New hardware access / formats / instruction capacity / clocks: edit RTL → Vivado → qualify a new .bit.</text>
+<text x="72" y="2040" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Bank: 8191 / 8191 mutable instructions used; zero spare. Replace or compact routines before adding code.</text>
+<text x="72" y="2069" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Factory ROM fd89c8… remains audited in the bit; disk ROM f6f805… loads at boot. Keep its LNK and resident apps matched.</text>
+<text x="48" y="2140" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#526775">44 programs / 42 resident clients. Active disk: card_toolbox_examples_working.img. Run80 qualification and physical acceptance remain open.</text>
+<text x="48" y="2172" font-family="DejaVu Sans,sans-serif" font-size="16" font-weight="normal" fill="#526775">Sources: Toolbox / Finder JavaScript, RTL, RESIDENT_TOOLBOX.md, TOOLBOX_API.md. Release evidence: TOOLBOX_IMPLEMENTATION_STATUS.md.</text>
 </svg>

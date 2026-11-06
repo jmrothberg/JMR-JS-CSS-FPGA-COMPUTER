@@ -84,7 +84,7 @@ module jmr_finder_shell(
     end
     default:state<=IDLE;
    endcase
-   // Native menu actions own their lifecycle until they explicitly show Home.
+   // External recovery controls select Home or the terminal.
    if(home_stb)begin
     if(home_on)begin how<=8;n<=0;pending<=1;state<=WAIT_STOP;end
     else begin home<=0;state<=IDLE;end
@@ -95,9 +95,12 @@ module jmr_finder_shell(
     // Mode 0 uses the on-disk extension, not an application-name list.
     if(launch_how==0 && !((launch_len>=4 && launch_name[(launch_len-4)*8+:32]==32'h4d54482e) ||
        (launch_len>=3 && launch_name[(launch_len-3)*8+:24]==24'h534a2e)))how<=2;
-    // Existing system actions create Note and stage Utility's catalog.
-    // They own the console until they return Home, avoiding two launchers.
-    if(launch_how>=5 && launch_how<=7)begin home<=0;pending<=0;state<=IDLE;end
+    // Stable sysRun aliases normalize once into ordinary file launches.
+    // NOTE's software launcher owns document creation through sysDocument;
+    // no menu/dialog policy or synthetic Save/Edit key sequence lives here.
+    if(launch_how==5)begin name<=96'h000000004d54482e45544f4e;n<=8;how<=0;end
+    else if(launch_how==6)begin name<=96'h0000000000444d2e504c4548;n<=7;how<=2;end
+    else if(launch_how==7)begin name<=96'h004d54482e5954494c495455;n<=11;how<=0;end
    end
   end
  end

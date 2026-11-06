@@ -277,7 +277,9 @@ def compile_html_text(html: str, *, sound: bool = True, source_path=None, artx=N
     """
     from functional_model.compiler import CompileError, compile_source
 
-    marker="jmr-toolbox: resident-v1"
+    marker="jmr-toolbox: resident-v2"
+    if "jmr-toolbox: resident-v1" in html:
+        raise CompileError("Relink this legacy resident-v1 client for the clean resident-v2 ROM",1)
     marker_at=html.find(marker)
     if marker_at>=0 and len(html[:marker_at+len(marker)].encode("utf-8"))>1024:
         raise CompileError("Put the resident Toolbox marker in the first 1024 bytes",html[:marker_at].count("\n")+1)
@@ -314,7 +316,11 @@ def compile_html_text(html: str, *, sound: bool = True, source_path=None, artx=N
         palette, sprites, _payload = read_artx(blob)
     else:
         src, images = _extract_data_uri_sprites(src)
-        harvested = _harvest_source_colors(src)
+        color_source=src
+        if "jmr-toolbox: resident-v2" in html:
+            from tools.toolbox_linker import library_source
+            color_source=library_source()+"\n"+src
+        harvested = _harvest_source_colors(color_source)
         palette = _build_title_palette(images, harvested)
         sprites = _quantize_sprites(images, palette)
     for js_line, var, prop in _lint_image_dom_props(src):
@@ -327,8 +333,20 @@ def compile_html_text(html: str, *, sound: bool = True, source_path=None, artx=N
             _js_line_to_html(spans, js_line),
         )
     try:
-        if "jmr-toolbox: resident-v1" in html:
+        if "jmr-toolbox: resident-v2" in html:
             from tools.toolbox_linker import compile_linked
+            if "jmr-clean-ui: session-v2" in html:
+                from tools.software_ui import lower
+                src=lower(src)
+                if source_path is not None:
+                    from tools.make_sd_image import card_name_83
+                    name=card_name_83(Path(source_path).name)
+                    src+='\ntbSessionProgram('+repr(name)+');'
+                    stem=Path(source_path).stem.upper()
+                    invalidators={'MACPAINT':'need=1;','FINDER':'stgWrite(16385,1);',
+                                  'EDITOR':'needDraw=1;','READ':'needDraw=1;','UTILITY':'needDraw=1;'}
+                    if stem in invalidators:src+='\ntbSessionInvalidate(function(){'+invalidators[stem]+'});'
+                    if stem=='MACPAINT':src+='\ntbSessionSuffix("PNT");'
             chunk = compile_linked(src)
         else:
             chunk = compile_source(src)

@@ -64,10 +64,7 @@ LINE_NO_MAX = 65535
 # longer (e.g. SET(x,y,color) × 6). Overflow used to wrap and corrupt the line.
 TOK_MAX = 128
 
-# Default geometry: 64 MiB. 32 MiB filled once storage held a second copy of
-# the MK and Donkey atlases (CBMKBA, CBMKCA, CBDNKF) beside the originals.
-# create and burn both use this size. The chip reads the size from the FAT
-# boot sector, so a larger image needs no new RTL.
+# Default geometry: 32 MiB (FAST title copies + MK atlas .JSH no longer fit in 16 MiB).
 DEFAULT_SIZE = 64 * 1024 * 1024
 PART_LBA = 2048
 RESERVED = 32
@@ -82,7 +79,7 @@ FSINFO_SECTOR = 1
 # PNG stays on the host. ARTX -> ART is runtime artwork; ARTJS -> ARJ
 # preserves source artwork separately for View > Hidden files.
 _SKIP_SUFFIX = {".JSH", ".JSB", ".MDC", ".JSON", ".PNG"}
-_KEEP_SUFFIX = {".SYS", ".ROM", ".HTML", ".HTM", ".JS", ".DAT", ".BIN", ".ARTX", ".ARTTX", ".ARTJS", ".TXT", ".MD"}
+_KEEP_SUFFIX = {".SYS", ".ROM", ".LNK", ".RSC", ".HTML", ".HTM", ".JS", ".DAT", ".BIN", ".ARTX", ".ARTTX", ".ARTJS", ".TXT", ".MD"}
 
 
 def compile_sidecars(
@@ -504,7 +501,7 @@ def put_host_files_on_card(
     return written
 
 
-_PUT_EXTS = {".SYS", ".ROM", ".HTM", ".HTML", ".JS", ".JSH", ".JSB", ".ART", ".ARTX", ".MD", ".TXT", ".ICN", ".ARJ"}
+_PUT_EXTS = {".SYS", ".ROM", ".LNK", ".RSC", ".HTM", ".HTML", ".JS", ".JSH", ".JSB", ".ART", ".ARTX", ".MD", ".TXT", ".ICN", ".ARJ"}
 
 
 def list_card_put_files(img_path: Path | None = None) -> list[tuple[str, int]]:

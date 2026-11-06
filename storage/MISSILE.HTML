@@ -1,3 +1,5 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Missile Command — JMR</title></head>
@@ -12,9 +14,9 @@
 var cvs=document.getElementById("c");
 var ctx=cvs.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-ctx.systemWindow=8;
-ctx.systemViewport=1;
-ctx.systemAbout="Missile Command|Protect cities from incoming missiles.";
+tbSessionProperty(ctx,0,8);
+tbSessionProperty(ctx,1,1);
+tbSessionProperty(ctx,2,"Missile Command|Protect cities from incoming missiles.");
 
 var W=640,H=480;
 /* Chrome SFX: playSfx(packed). Packed = freq,vol,frames,slide,ch repeating.
@@ -41,7 +43,8 @@ function skyMark(x,y,w,h){
   if(x<0){w=w+x;x=0;}
   if(y<0){h=h+y;y=0;}
   if(x+w>W)w=W-x;
-  if(y+h>H)h=H-y;
+  // Two guard rows cover fixed-point viewport rounding at the screen bottom.
+  if(y+h>H+2)h=H+2-y;
   if(w<1||h<1)return;
   _sx[_sn]=x;_sy[_sn]=y;_sw[_sn]=w;_sh[_sn]=h;_sn=_sn+1;
 }
@@ -437,7 +440,9 @@ function draw(){
     ctx.beginPath();
     ctx.arc(e.x,e.y,r,0,6.28);
     ctx.fill();
-    skyMark(e.x-r-2,e.y-r-2,r*2+4,r*2+4);
+    // The shared game viewport scales Y by 0.95, while native arc radius
+    // stays in screen pixels. Cover that vertical excess for r <= 80.
+    skyMark(e.x-r-2,e.y-r-6,r*2+4,r*2+12);
     i=i+1;
   }
   ch=state.crosshair;
@@ -489,7 +494,7 @@ function draw(){
 function frame(){
   update(0.016);
   draw();
-  requestAnimationFrame(frame);
+  tbSessionFrame(frame);
 }
 function down(e){
   var k=e.key, c=e.keyCode;
@@ -509,21 +514,23 @@ function up(e){
   if(k===" "||k==="Enter"||c===32||c===13) held.fire=0;
   if(k==="r"||k==="R"||c===82) held.r=0;
 }
-addEventListener("keydown",down);
-addEventListener("keyup",up);
+tbSessionListen("keydown",down);
+tbSessionListen("keyup",up);
 // Mouse aims directly; hold the primary button to fire. Click restarts.
-addEventListener("mousemove",function(e){
+tbSessionListen("mousemove",function(e){
   state.crosshair.x=Math.max(8,Math.min(W-8,e.clientX));
   state.crosshair.y=Math.max(8,Math.min(H-50,e.clientY));
 });
-addEventListener("mousedown",function(e){
+tbSessionListen("mousedown",function(e){
   if(e.button===0){if(state.over)reset();else{held.mouseFire=1;fire(0);}}
 });
-addEventListener("mouseup",function(e){if(e.button===0)held.mouseFire=0;});
+tbSessionListen("mouseup",function(e){if(e.button===0)held.mouseFire=0;});
 
 reset();
-requestAnimationFrame(frame);
+tbSessionFrame(frame);
 })();
+
+tbSessionProgram('MISSILE.HTM');
 </script>
 <script data-host="chrome">
 (function(){
