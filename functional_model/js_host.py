@@ -17,15 +17,11 @@ import math
 import time
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .canvas_engine import HEIGHT, WIDTH, CanvasEngine
 from .html_loader import extract_html_program
 from .input_engine import InputEngine, KEY_DOWN, KEY_FIRE, KEY_LEFT, KEY_RIGHT, KEY_UP
-
-if TYPE_CHECKING:
-    import dukpy as _dukpy_mod
-
 
 _PREAMBLE = r"""
 var __jmr_rafs = [];
@@ -359,24 +355,6 @@ def _rgb(style: str) -> Tuple[int, int, int]:
         "purple": (153, 102, 204),
     }
     return named.get(s, (255, 255, 255))
-
-
-def _parse_css_color(style: str) -> int:
-    """Legacy 8-slot map (INVADARC / older titles). Prefer HtmlJsHost._pal."""
-    r, g, b = _rgb(style)
-    if r < 40 and g < 40 and b < 40:
-        return 0
-    if r > 200 and g > 200 and b > 200:
-        return 1
-    if r > 200 and g < 80 and b < 80:
-        return 2
-    if r < 80 and g > 200 and b < 80:
-        return 3
-    if r < 80 and g < 80 and b > 200:
-        return 4
-    if r > 200 and g > 200 and b < 80:
-        return 5
-    return 1
 
 
 class HtmlJsHost:
@@ -755,7 +733,7 @@ class HtmlJsHost:
             f"var __jmr_width = {int(self._gw)}; var __jmr_height = {int(self._gh)}; "
             f"var __jmr_canvas_id = {cid!r};\n"
         )
-        # LLM NOTE: dukpy bridges the last eval result to Python — always end with null
+        # Dukpy bridges the last eval result to Python — always end with null
         # so functions/objects never get marshalled (Invalid Result Value / circular).
         self.interp.evaljs(boot + _PREAMBLE + "\nnull;")
         # Eval each <script> separately so one file's 'use strict' does not

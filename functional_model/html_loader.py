@@ -1,6 +1,6 @@
 """Extract runnable JS + canvas size from a minimal HTML game container.
 
-LLM NOTE: Not a browser. Playable titles are one HTML file (inline <script>
+Not a browser. Playable titles are one HTML file (inline <script>
 + data:image sprites). External <script src> is still resolved next to the
 HTML when present (browser-like), but games should not need sibling files.
 """

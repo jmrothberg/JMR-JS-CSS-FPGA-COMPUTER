@@ -1,9 +1,9 @@
 // SPI-mode SD master — CMD framing + R1 wait matching sd_spi.py shape.
 // Bit-bang SPI mode 0: MOSI changes before rising SCK; MISO sampled on rising.
-// NEW: init ≤400 kHz (div≈256), ACMD41 retry + CMD58, strict R1, write busy poll.
+// Init ≤400 kHz (div≈256), ACMD41 retry + CMD58, strict R1, write busy poll.
 
 module sd_spi_master #(
-    // NEW: SPI half-period counts, in clocks of THIS module's clk.
+    // SPI half-period counts, in clocks of THIS module's clk.
     // SCK = clk / (2 * (DIV + 1)).
     // Defaults are the original 100 MHz numbers (init ~390 kHz, run 12.5 MHz) so
     // simulation and the SPI transcript vectors are unchanged. The board core now
@@ -25,7 +25,7 @@ module sd_spi_master #(
     input  logic [31:0] lba,
     output logic [7:0]  status,    // bit0 present bit1 busy bit2 err bit3 init
     output logic        ack_done,
-    input  logic        abort = 1'b0,   // run 71: storage watchdog — drop CS, go idle
+    input  logic        abort = 1'b0,   // Storage watchdog — drop CS, go idle
     // SPI pins
     output logic        spi_sck,
     output logic        spi_mosi,
@@ -40,7 +40,7 @@ module sd_spi_master #(
     typedef enum logic [4:0] {
         ST_IDLE,
         ST_XFER,
-        ST_INIT_WAKE,     // NEW: ≥74 clocks with CS HIGH (SD power-up requirement)
+        ST_INIT_WAKE,     // ≥74 clocks with CS HIGH (SD power-up requirement)
         ST_INIT_LEAD,     // 2× 0xFF
         ST_INIT_FRAME,    // send 6-byte CMD from frame[]
         ST_INIT_R1,       // wait R1
@@ -55,7 +55,7 @@ module sd_spi_master #(
         ST_WRITE_PAYLOAD,
         ST_WRITE_CRC,
         ST_WRITE_RESP,
-        ST_WRITE_BUSY,    // NEW: poll MISO until 0xFF after data response
+        ST_WRITE_BUSY,    // Poll MISO until 0xFF after data response
         ST_DONE,
         ST_ERR
     } state_t;
@@ -69,7 +69,7 @@ module sd_spi_master #(
     logic [7:0]  shift_tx, shift_rx, rx_byte;
     logic [2:0]  bit_i;
     logic [9:0]  byte_i;
-    // NEW: every one of these waits used to be a handful of byte-times, which a
+    // Every one of these waits used to be a handful of byte-times, which a
     // simulated card always answered inside. A real card is far slower and the
     // spec says so, so each budget below is the spec's worst case with margin.
     // Timeouts still exist — the point is to fail on a broken card, not on a
@@ -83,10 +83,10 @@ module sd_spi_master #(
     logic        spi_active;
     logic [7:0]  frame [0:5];
     logic [2:0]  frame_i;
-    // NEW: SPI clock divider — half-period count-1, now from INIT_DIV/RUN_DIV.
+    // SPI clock divider — half-period count-1, now from INIT_DIV/RUN_DIV.
     logic [7:0]  spi_div;
     logic [7:0]  clk_cnt;
-    // 2026-08-25 first-light: CCS (OCR bit 30) captured from CMD58.
+    // First-light: CCS (OCR bit 30) captured from CMD58.
     // CCS=1 (SDHC/SDXC): CMD17/24 argument is a block number. CCS=0
     // (SDSC): the argument is a BYTE address. The old code always sent
     // the raw block number and DISCARDED the OCR, so an SDSC card
@@ -95,20 +95,20 @@ module sd_spi_master #(
     // the chain walk. The sim card model is SDHC (OCR 0x40..), so sim
     // behavior is unchanged by honoring CCS.
     logic ccs_r;
-    // NEW: ACMD41 retry counter (see ACMD_TRIES)
+    // ACMD41 retry counter (see ACMD_TRIES)
     logic [11:0] acmd_tries;
-    // NEW: "MOSI has been presented, next tick raises SCK" (see ST_XFER). Always
+    // "MOSI has been presented, next tick raises SCK" (see ST_XFER). Always
     // 0 on entry to and exit from ST_XFER, so it needs no per-transfer clearing.
     logic        mosi_rdy;
-    // NEW: write-busy poll timeout
+    // Write-busy poll timeout
     logic [15:0] busy_cnt;
-    // NEW: start only on 0→nonzero cmd edge (avoids ST_DONE→IDLE re-fire)
+    // Start only on 0→nonzero cmd edge (avoids ST_DONE→IDLE re-fire)
     logic [7:0]  cmd_d;
 
     assign status  = {4'b0, init_r, err_r, busy_r, 1'b1};
     assign spi_sck = (spi_active && sck_hi) ? 1'b1 : 1'b0;
 
-    // NEW: spi_miso comes from the card and is asynchronous to this clock, so it
+    // spi_miso comes from the card and is asynchronous to this clock, so it
     // goes through two flops before it is used. Sampling an async pin directly
     // can go metastable and corrupt a bit anywhere in a 512-byte sector -- a
     // fault simulation can never show, because there every pin is settled.
@@ -144,7 +144,7 @@ module sd_spi_master #(
             rx_byte <= 8'hFF;
             r1_tries <= '0;
             init_step <= '0;
-            spi_div <= 8'(INIT_DIV);   // NEW: slow clock until init succeeds
+            spi_div <= 8'(INIT_DIV);   // Slow clock until init succeeds
             clk_cnt <= '0;
             acmd_tries <= '0;
             ccs_r <= 1'b0;
@@ -157,7 +157,7 @@ module sd_spi_master #(
             cmd_d <= cmd;
 
             if (abort) begin
-                // Run 71: a card that never answers (S_SD_WAIT wedge) is
+                // A card that never answers (S_SD_WAIT wedge) is
                 // released here — CS high, idle, no ack. The storage engine
                 // poisons the mount so the next op re-inits at INIT_DIV.
                 state <= ST_IDLE;
@@ -175,9 +175,9 @@ module sd_spi_master #(
                     spi_active <= 1'b0;
                     sck_hi <= 1'b0;
                     spi_mosi <= 1'b1;
-                    // NEW: 0→cmd edge only (ST_DONE→IDLE must not re-fire)
+                    // 0→cmd edge only (ST_DONE→IDLE must not re-fire)
                     if (cmd != 8'h0 && cmd_d == 8'h0) begin
-                    // NEW: status[2] reports how THIS command went, so clear it
+                    // Status[2] reports how THIS command went, so clear it
                     // when one starts. Only init used to clear it, which made the
                     // flag sticky for the rest of the session: one hiccup during
                     // SAVE and storage_engine's S_SD_CLR then flagged every later
@@ -187,14 +187,14 @@ module sd_spi_master #(
                     if (cmd == 8'd1) begin
                         busy_r <= 1'b1;
                         err_r <= 1'b0;
-                        // NEW: CS stays HIGH for the wake-up clocks (ST_INIT_WAKE);
+                        // CS stays HIGH for the wake-up clocks (ST_INIT_WAKE);
                         // ST_INIT_LEAD selects the card just before CMD0.
                         spi_cs_n <= 1'b1;
                         byte_i <= '0;
                         frame_i <= '0;
                         init_step <= 3'd0;
                         acmd_tries <= '0;
-                        spi_div <= 8'(INIT_DIV); // NEW: ≤400 kHz for init
+                        spi_div <= 8'(INIT_DIV); // ≤400 kHz for init
                         clk_cnt <= '0;
                         // CMD0
                         frame[0] <= 8'h40;
@@ -233,18 +233,18 @@ module sd_spi_master #(
                         frame[5] <= 8'h01;
                         state <= ST_RW_FRAME;
                     end
-                    end // NEW: edge-trigger wrapper
+                    end // Edge-trigger wrapper
                 end
 
                 // SPI byte: spi_div+1 sysclks per half-period (mode 0)
                 ST_XFER: begin
                     spi_active <= 1'b1;
-                    // NEW: hold phase until divider elapses
+                    // Hold phase until divider elapses
                     if (clk_cnt < spi_div) begin
                         clk_cnt <= clk_cnt + 8'd1;
                     end else begin
                         clk_cnt <= '0;
-                        // NEW: the low phase now takes two divider intervals --
+                        // The low phase now takes two divider intervals --
                         // present MOSI on the first, raise SCK on the second.
                         // MOSI and sck_hi used to be assigned on the SAME clock
                         // edge, so SCK rose at the instant MOSI changed: zero
@@ -277,7 +277,7 @@ module sd_spi_master #(
                     end
                 end
 
-                // NEW: 80 clocks (10 bytes of 0xFF) with CS de-asserted. A real
+                // 80 clocks (10 bytes of 0xFF) with CS de-asserted. A real
                 // card ignores every command until it has seen ≥74 such clocks —
                 // this is the card's internal power-up window. The old code went
                 // straight to two lead-in bytes with CS already low, which the
@@ -305,8 +305,8 @@ module sd_spi_master #(
                     sck_hi <= 1'b0;
                     clk_cnt <= '0;
                     shift_tx <= 8'hFF;
-                    spi_cs_n <= 1'b0;   // NEW: select the card now that it is awake
-                    // 2026-08-25: 10 lead bytes (80 clocks), not 2. A COLD card
+                    spi_cs_n <= 1'b0;   // Select the card now that it is awake
+                    // 10 lead bytes (80 clocks), not 2. A COLD card
                     // tolerated 16 clocks, but DIR re-inits a LIVE card whose
                     // input may not be byte-aligned mid-flush; generous lead-in
                     // is spec-hygiene either way (board DIR-wedge candidate).
@@ -351,7 +351,7 @@ module sd_spi_master #(
                             state <= ST_XFER;
                         end
                     end else begin
-                        // NEW: decode R1 — only 0x00, or 0x01 while idle (CMD0/8/55/ACMD41)
+                        // Decode R1 — only 0x00, or 0x01 while idle (CMD0/8/55/ACMD41)
                         unique case (init_step)
                             3'd0, 3'd1: begin
                                 if (rx_byte == 8'h01) state <= ST_INIT_NEXT;
@@ -407,7 +407,7 @@ module sd_spi_master #(
                             state <= ST_INIT_FRAME;
                         end
                         3'd3: begin
-                            // NEW: After ACMD41 — retry while idle, else CMD58
+                            // After ACMD41 — retry while idle, else CMD58
                             if (rx_byte == 8'h01) begin
                                 if (acmd_tries >= 12'(ACMD_TRIES)) begin
                                     state <= ST_ERR;
@@ -455,7 +455,7 @@ module sd_spi_master #(
                         ccs_r <= rx_byte[6];
                     if (byte_i == 10'd3) begin
                         if (init_step == 3'd4) begin
-                            // NEW: last OCR byte (still slow), then ST_DONE switches to fast SPI
+                            // Last OCR byte (still slow), then ST_DONE switches to fast SPI
                             init_r <= 1'b1;
                             ret_state <= ST_DONE;
                         end else begin
@@ -494,7 +494,7 @@ module sd_spi_master #(
                 end
 
                 ST_RW_R1: begin
-                    // NEW: accept only R1==0x00 for read/write
+                    // Accept only R1==0x00 for read/write
                     if (rx_byte != 8'hFF) begin
                         if (rx_byte != 8'h00) begin
                             state <= ST_ERR;
@@ -615,7 +615,7 @@ module sd_spi_master #(
                     if (byte_i == 10'd1) begin
                         ret_state <= ST_WRITE_RESP;
                         byte_i <= '0;
-                        r1_tries <= '0;   // NEW: budget for the response poll below
+                        r1_tries <= '0;   // Budget for the response poll below
                     end else begin
                         byte_i <= byte_i + 10'd1;
                         ret_state <= ST_WRITE_CRC;
@@ -624,7 +624,7 @@ module sd_spi_master #(
                 end
 
                 ST_WRITE_RESP: begin
-                    // NEW: the data response does NOT share the last CRC byte --
+                    // The data response does NOT share the last CRC byte --
                     // the card holds MISO at 0xFF until the token is ready, a few
                     // byte times later. This used to judge the byte received while
                     // the second CRC byte went out, which is always 0xFF, so every
@@ -657,7 +657,7 @@ module sd_spi_master #(
                     end
                 end
 
-                // NEW: clock 0xFF until MISO returns 0xFF (card not busy)
+                // Clock 0xFF until MISO returns 0xFF (card not busy)
                 ST_WRITE_BUSY: begin
                     if (rx_byte == 8'hFF) begin
                         state <= ST_DONE;
@@ -679,10 +679,10 @@ module sd_spi_master #(
                     ack_done <= 1'b1;
                     spi_cs_n <= 1'b1;
                     spi_active <= 1'b0;
-                    // NEW: after successful init, switch to the faster run rate
+                    // After successful init, switch to the faster run rate
                     if (init_r)
                         spi_div <= 8'(RUN_DIV);
-                    // NEW: always return to IDLE.  Holding until cmd==0 raced the
+                    // Always return to IDLE.  Holding until cmd==0 raced the
                     // next sd_go (cmd still 3 → duplicate CMD24; cmd already 2 →
                     // stuck in DONE).  Storage clears cmd on ack before re-issue.
                     state <= ST_IDLE;

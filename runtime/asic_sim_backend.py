@@ -5,9 +5,6 @@ Pattern cite: BASIC asic_sim_backend.py. Not available until asic sim binary exi
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Optional
-
 from runtime.sim_backend import SimBackend, SIM_DIR
 
 _ASIC = SIM_DIR / "sim_build_asic" / "jmr_js_sim_server"

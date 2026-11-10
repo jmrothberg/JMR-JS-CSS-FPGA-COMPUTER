@@ -50,11 +50,11 @@ def save(name):
     (OUT / name).write_text(svg)
 
 begin(1600,2200,'JMR clean architecture: software Toolbox and bounded hardware services',
- 'Run81 implementation and RTL-simulation candidate. Finder and applications share native JavaScript Toolbox code, normalized typed resources and bounded hardware primitives. One candidate, no new FPGA build authorized; physical acceptance is separate.')
+ 'Finder and applications share compiled JavaScript Toolbox instructions, private application state and bounded hardware services. One matched release; see the release manifest for hardware qualification.')
 text(48,54,'JMR computer architecture',36,bold=True)
 text(48,88,'Macintosh-inspired organization • one native JavaScript CPU • software owns common UI policy',21,MUTED)
 rect(48,110,1504,44,'#fff3db','#e3cc98',6)
-text(64,138,'ONE CANDIDATE · Run81 RTL simulation · matched software + disk · no FPGA build authorized',18,'#735019',maxwidth=1472)
+text(64,138,'ONE MATCHED RELEASE · source + storage + disk + .bit · qualification recorded in the release manifest',18,'#735019',maxwidth=1472)
 text(48,190,'READ TOP TO BOTTOM',15,TEAL,bold=True)
 text(265,190,'Application behavior → shared software → bounded system services → FPGA mechanisms',20,MUTED)
 for x in (48,816):rect(x,212,736,288)
@@ -112,23 +112,23 @@ hardware=[
  ('Native JavaScript CPU',['Fetch / execute; stack, heap, globals','8192-word shared instruction prefix','21504 app words for code + metadata','VM 33.333 MHz; services 100 MHz']),
  ('Graphics + presentation',['Bounded copy / Boolean mask engine','Rasterizer → BRAM draw canvas','Dirty blocks → DDR front image','Palette / recovery → HDMI scanout']),
  ('Storage + physical I/O',['FAT storage / microSD interface','USB keyboard J15; PS/2 JA + JC','Joystick JB; input FIFOs / events','Audio synthesis + physical output']),
- ('Memory + board interface',['8 MiB external address aperture','Nexys Video DDR3 bridge','BRAM + distributed resident tail','One VM and one drawing canvas'])]
+ ('Memory + board interface',['8 MiB external address aperture','Nexys Video DDR3 bridge','On-chip instruction + data banks','One VM and one drawing canvas'])]
 for x,(heading,items) in zip(cols,hardware):
  text(x,1710,heading,19,bold=True,maxwidth=338);lines(x,1742,items,17,28,maxwidth=338)
 rect(48,1910,1504,184)
 text(72,1946,'WHAT CAN CHANGE WITHOUT A NEW .bit?',22,TEAL,bold=True)
 lines(72,1982,['Software algorithms / menus / dialogs: update ROM + LNK + matching apps, then cold machine restart.',
  'New hardware access / formats / instruction capacity / clocks: edit RTL → Vivado → qualify a new .bit.',
- 'Bank: 8096 / 8191 mutable instructions used; 95 spare. Fixed final jump and app-owned state are unchanged.',
- 'Typed access + scissor require matching new circuits; later UI policy updates use software. Old INIT audits stay historical.'],18,29,maxwidth=1456)
-text(48,2140,'44 programs / 42 resident clients. Candidate disk: build/run81_mac_native/card.img. Final RTL acceptance tracked in manifest; no FPGA/physical qualification.',17,MUTED,maxwidth=1504)
-text(48,2172,'Sources: Toolbox / Finder JavaScript, RTL, RESIDENT_TOOLBOX.md, TOOLBOX_API.md. Release evidence: TOOLBOX_IMPLEMENTATION_STATUS.md.',16,MUTED,maxwidth=1504)
+ 'Bank: 8184 / 8191 mutable instructions used; 7 spare. Fixed final jump; application-owned mutable state.',
+ 'CopyBits uses general bounded copy/raster hardware; its software composition can change with a matched disk.'],18,29,maxwidth=1456)
+text(48,2140,'45 programs / 42 resident clients. One matched ROM + linker + disk. Hardware timing and board acceptance are separate checks.',17,MUTED,maxwidth=1504)
+text(48,2172,'Sources: Toolbox / Finder JavaScript and RTL. Read CURRENT_SET.json and the release manifest for exact identities and status.',16,MUTED,maxwidth=1504)
 save('rarchitecture.svg')
 # Keep byte-level memory detail available without obscuring the layer diagram.
 begin(1600, 990, 'JMR 8 MiB physical memory map',
       'Physical byte offsets, exclusive ends; not drawn to scale. On-chip memory is separate from the external aperture. Toolbox addresses use a separate logical-byte arena.')
 text(48, 56, 'Memory detail · the 8 MiB external aperture', 32, bold=True)
-text(48, 91, '8 MiB total · cache +32 KiB from art; SYS / frame / SOURCE fixed · 5 November 2026', 20, MUTED)
+text(48, 91, '8 MiB total · cache +32 KiB from art; SYS / frame / SOURCE fixed', 20, MUTED)
 rect(48, 120, 1504, 565)
 text(72, 158, 'PHYSICAL RANGE', 17, TEAL, bold=True)
 text(470, 158, 'OWNER / PURPOSE', 17, TEAL, bold=True)
@@ -159,10 +159,10 @@ lines(48, 766, [
 text(48, 884, 'On-chip BRAM is separate from this map', 23, TEAL, bold=True)
 lines(48, 919, [
  'Application code, VM execution state, drawing canvas, fonts/captions and buffers consume scarce on-chip memory.',
- 'Toolbox: 32 KiB virtual prefix; 28 KiB BRAM + distributed tail; final word is a fixed jump. No extra VM.',
+ 'Toolbox: 32 KiB virtual instruction prefix; final word is a fixed jump. Physical bank mapping is an RTL detail.',
 ], 19, 30, maxwidth=1504)
 text(48, 978, 'Sources: jmr_js_vm_pkg.sv, jmr_console_engine.sv, jmr_js_core.sv; docs/lastrun_ARCHITECTURE.md.', 16, MUTED)
 save('memory-map.svg')
-for source in sorted(OUT.glob('*.svg')):
+for source in [OUT / 'rarchitecture.svg', OUT / 'memory-map.svg']:
     cairosvg.svg2png(url=str(source), write_to=str(source.with_suffix('.png')), scale=2, background_color='#f4f7f8')
 print('Generated architecture + memory sources and 2x PNG exports for all diagrams; measured text fits its column.')

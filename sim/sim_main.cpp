@@ -1,8 +1,8 @@
 // Verilator harness — tops jmr_js_core (same DUT as board PHY shell).
-// Protocol: KEY / LINE / SCREEN? / STATUS? / RUNCLK / TICK / QUIT
-// NEW: card.img SPI model (BASIC sim_main SdCard) for DIR/LOAD/SAVE.
+// Protocol: SERVICE / SERVICEPOLL / SERVICEBULK / KEY / SCREEN? / STATUS? / RUNCLK / TICK / QUIT
+// Card.img SPI model (BASIC sim_main SdCard) for DIR/LOAD/SAVE.
 #include "Vjmr_js_core.h"
-#include "Vjmr_js_core___024root.h" // NEW: VMSTAT? probe reads public VM regs
+#include "Vjmr_js_core___024root.h" // VMSTAT? probe reads public VM regs
 #include "verilated.h"
 #include <cstdint>
 #include <cstdio>
@@ -19,18 +19,122 @@
 
 static Vjmr_js_core* top = nullptr;
 
+// Typed Finder service observer. Responses are collected only on the actual
+// core valid/ready handshake; no console strings stand in for completion.
+static std::vector<std::string> finder_responses;
+static uint32_t finder_crc(const uint8_t* p, size_t n) {
+    uint32_t c = 0xffffffffu;
+    for (size_t j=0; j<n; ++j) {
+        c ^= p[j];
+        for (unsigned i=0; i<8; ++i)
+            c = (c >> 1) ^ ((c & 1u) ? 0xedb88320u : 0u);
+    }
+    return ~c;
+}
+static void finder_capture_response() {
+    if (!top->rst_n || !top->host_q_valid || !top->host_q_ready) return;
+    char payload[25], record[34];
+    std::snprintf(payload,sizeof(payload),"%08X%08X%08X",
+                  unsigned(top->host_q_payload[2]), unsigned(top->host_q_payload[1]),
+                  unsigned(top->host_q_payload[0]));
+    uint32_t crc = finder_crc(reinterpret_cast<const uint8_t*>(payload),24);
+    std::snprintf(record,sizeof(record),"Q%s%08X",payload,unsigned(crc));
+    finder_responses.emplace_back(record);
+}
+static void finder_print_responses() {
+    std::cout << "SERVICE";
+    for (const auto& r : finder_responses) std::cout << " " << r;
+    finder_responses.clear();
+    std::cout << std::endl;
+}
+
+
 // CHECKPOINT/OBJPEEK peek 1-D SRAM (not a third hardware port).
 // Match rtl/engines/jmr_js_vm.sv two-tier arrays (1536×32 + 128×128).
 
-// 2026-08-21 fit: mini_fb banks are pow2-chunked (256K+32K+8K+4K).
-// Route a flat pixel index to the right chunk of the selected bank.
-// Session-1 (2026-08-23): single persistent draw bank — the canvas. FB?
+// Persistent canvas: seventy-five separately inferred4-KiB banks.
+// This observer maps linear pixels; it adds no simulated hardware activity.
+// Session-1: single persistent draw bank — the canvas. FB?
 // reads it directly (post-present it equals the DDR3 front image exactly).
 static inline uint8_t fb_bank_pix(const Vjmr_js_core___024root* r, bool, unsigned i) {
-    if (i < 262144u) return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c0[i];
-    if (i < 294912u) return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c1[i - 262144u];
-    if (i < 303104u) return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c2[i - 294912u];
-    return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__mem0_c3[i - 303104u];
+    switch (i >> 12) {
+    case 0u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__0__KET____DOT__mem[i & 4095u];
+    case 1u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__1__KET____DOT__mem[i & 4095u];
+    case 2u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__2__KET____DOT__mem[i & 4095u];
+    case 3u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__3__KET____DOT__mem[i & 4095u];
+    case 4u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__4__KET____DOT__mem[i & 4095u];
+    case 5u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__5__KET____DOT__mem[i & 4095u];
+    case 6u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__6__KET____DOT__mem[i & 4095u];
+    case 7u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__7__KET____DOT__mem[i & 4095u];
+    case 8u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__8__KET____DOT__mem[i & 4095u];
+    case 9u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__9__KET____DOT__mem[i & 4095u];
+    case 10u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__10__KET____DOT__mem[i & 4095u];
+    case 11u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__11__KET____DOT__mem[i & 4095u];
+    case 12u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__12__KET____DOT__mem[i & 4095u];
+    case 13u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__13__KET____DOT__mem[i & 4095u];
+    case 14u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__14__KET____DOT__mem[i & 4095u];
+    case 15u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__15__KET____DOT__mem[i & 4095u];
+    case 16u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__16__KET____DOT__mem[i & 4095u];
+    case 17u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__17__KET____DOT__mem[i & 4095u];
+    case 18u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__18__KET____DOT__mem[i & 4095u];
+    case 19u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__19__KET____DOT__mem[i & 4095u];
+    case 20u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__20__KET____DOT__mem[i & 4095u];
+    case 21u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__21__KET____DOT__mem[i & 4095u];
+    case 22u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__22__KET____DOT__mem[i & 4095u];
+    case 23u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__23__KET____DOT__mem[i & 4095u];
+    case 24u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__24__KET____DOT__mem[i & 4095u];
+    case 25u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__25__KET____DOT__mem[i & 4095u];
+    case 26u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__26__KET____DOT__mem[i & 4095u];
+    case 27u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__27__KET____DOT__mem[i & 4095u];
+    case 28u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__28__KET____DOT__mem[i & 4095u];
+    case 29u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__29__KET____DOT__mem[i & 4095u];
+    case 30u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__30__KET____DOT__mem[i & 4095u];
+    case 31u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__31__KET____DOT__mem[i & 4095u];
+    case 32u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__32__KET____DOT__mem[i & 4095u];
+    case 33u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__33__KET____DOT__mem[i & 4095u];
+    case 34u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__34__KET____DOT__mem[i & 4095u];
+    case 35u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__35__KET____DOT__mem[i & 4095u];
+    case 36u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__36__KET____DOT__mem[i & 4095u];
+    case 37u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__37__KET____DOT__mem[i & 4095u];
+    case 38u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__38__KET____DOT__mem[i & 4095u];
+    case 39u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__39__KET____DOT__mem[i & 4095u];
+    case 40u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__40__KET____DOT__mem[i & 4095u];
+    case 41u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__41__KET____DOT__mem[i & 4095u];
+    case 42u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__42__KET____DOT__mem[i & 4095u];
+    case 43u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__43__KET____DOT__mem[i & 4095u];
+    case 44u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__44__KET____DOT__mem[i & 4095u];
+    case 45u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__45__KET____DOT__mem[i & 4095u];
+    case 46u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__46__KET____DOT__mem[i & 4095u];
+    case 47u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__47__KET____DOT__mem[i & 4095u];
+    case 48u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__48__KET____DOT__mem[i & 4095u];
+    case 49u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__49__KET____DOT__mem[i & 4095u];
+    case 50u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__50__KET____DOT__mem[i & 4095u];
+    case 51u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__51__KET____DOT__mem[i & 4095u];
+    case 52u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__52__KET____DOT__mem[i & 4095u];
+    case 53u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__53__KET____DOT__mem[i & 4095u];
+    case 54u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__54__KET____DOT__mem[i & 4095u];
+    case 55u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__55__KET____DOT__mem[i & 4095u];
+    case 56u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__56__KET____DOT__mem[i & 4095u];
+    case 57u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__57__KET____DOT__mem[i & 4095u];
+    case 58u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__58__KET____DOT__mem[i & 4095u];
+    case 59u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__59__KET____DOT__mem[i & 4095u];
+    case 60u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__60__KET____DOT__mem[i & 4095u];
+    case 61u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__61__KET____DOT__mem[i & 4095u];
+    case 62u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__62__KET____DOT__mem[i & 4095u];
+    case 63u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__63__KET____DOT__mem[i & 4095u];
+    case 64u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__64__KET____DOT__mem[i & 4095u];
+    case 65u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__65__KET____DOT__mem[i & 4095u];
+    case 66u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__66__KET____DOT__mem[i & 4095u];
+    case 67u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__67__KET____DOT__mem[i & 4095u];
+    case 68u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__68__KET____DOT__mem[i & 4095u];
+    case 69u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__69__KET____DOT__mem[i & 4095u];
+    case 70u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__70__KET____DOT__mem[i & 4095u];
+    case 71u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__71__KET____DOT__mem[i & 4095u];
+    case 72u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__72__KET____DOT__mem[i & 4095u];
+    case 73u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__73__KET____DOT__mem[i & 4095u];
+    case 74u: return (uint8_t)r->jmr_js_core__DOT__u_fb__DOT__g_bank__BRA__74__KET____DOT__mem[i & 4095u];
+    default: return 0;
+    }
 }
 
 static const unsigned VM_MAX_OBJ = 960u;   // MUST track rtl MAX_OBJ (bug #75: stale caps here count OOB garbage)
@@ -62,7 +166,7 @@ static inline unsigned venv_addr(unsigned h, unsigned s) {
     return (h * VM_ENV_SLOTS) + s;
 }
 
-// 2026-08-21 fit: heap slot arrays are pow2-chunked in the RTL
+// Fit: heap slot arrays are pow2-chunked in the RTL
 // (vobj 16K+8K+4K+2K, varr 32K+16K+2K, venv 4K+2K, code 16K+4K).
 // These routers mirror the RTL boundaries exactly.
 template <typename R>
@@ -113,6 +217,14 @@ static inline void code_poke(R* r, unsigned a, uint32_t w) {
     else if (a < 21504u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c2[a - 20480u] = w;
 }
 
+// Latched jsb_flags describes the last accepted header. A refused new image
+// can leave it unchanged, so inspectors also check the current physical header.
+static bool inspector_value64_image(Vjmr_js_core___024root* r) {
+    return (code_word(r, 0) == UINT32_C(0x3142534a) || code_word(r, 0) == UINT32_C(0x3242534a))
+        && (code_word(r, 2) & (UINT32_C(8) << 16)) != 0
+        && (unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u) != 0;
+}
+
 static uint16_t peek_vobj_key(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
     const auto& w = vobj_word(r, vobj_addr(h, s));
     return uint16_t(w[2] & 0xFFFFu);
@@ -120,9 +232,6 @@ static uint16_t peek_vobj_key(Vjmr_js_core___024root* r, unsigned h, unsigned s)
 static uint64_t peek_vobj_val(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
     const auto& w = vobj_word(r, vobj_addr(h, s));
     return uint64_t(w[0]) | (uint64_t(w[1]) << 32);
-}
-static uint8_t peek_vobj_tag(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
-    return uint8_t(r->jmr_js_core__DOT__u_vm__DOT__vobj_tmem[vobj_addr(h, s)]);
 }
 static uint64_t peek_varr_val(Vjmr_js_core___024root* r, unsigned h, unsigned e) {
     return varr_word(r, varr_addr(r, h, e));
@@ -135,9 +244,6 @@ static uint64_t peek_vstack(Vjmr_js_core___024root* r, unsigned slot, unsigned v
             return uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vst_win[d]);
     }
     return uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vstack[slot]);
-}
-static uint8_t peek_varr_tag(Vjmr_js_core___024root* r, unsigned h, unsigned e) {
-    return uint8_t(r->jmr_js_core__DOT__u_vm__DOT__varr_tmem[varr_addr(r, h, e)]);
 }
 static uint16_t peek_venv_key(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
     const auto& w = venv_word(r, venv_addr(h, s));
@@ -275,7 +381,7 @@ struct SdCard {
         }
     }
 
-    bool hang = false;   // run 71 gate: SD_HANG 1 -> the card never answers
+    bool hang = false;   // Gate: SD_HANG 1 -> the card never answers
     void step(bool cs_n, bool sck, bool mosi, uint8_t *miso_out) {
         if (!present || hang) { *miso_out = 1; return; }
         if (cs_n) {
@@ -336,22 +442,23 @@ static void sd_load_image() {
     std::cerr << "WARN: no card.img — DIR will ?IO\n";
 }
 
-// NEW: VARWATCH <slot> — log every write to vars[slot] with the VM ip.
+// VARWATCH observes actual Value64 global valid/raw-word transitions.
 // -1 disables. Minimal bring-up watchpoint (stderr, off by default).
 static int watch_slot = -1;
-static int32_t watch_prev = 0;
-// NEW: VSTWATCH <slot|-1> — log every change of vstack BRAM slot with ip/state
+static uint64_t watch_prev = 0;
+static bool watch_valid_prev = false;
+// VSTWATCH <slot|-1> — log every change of vstack BRAM slot with ip/state
 static int vst_watch_slot = -1;
 static uint64_t vst_watch_prev = 0;
 static std::vector<std::string> vst_watch_log;
-// NEW: VVWATCH <slot|-1> — log every change of vvars[slot] (Value64 global)
+// VVWATCH <slot|-1> — log every change of vvars[slot] (Value64 global)
 static int vvw_slot = -1;
 static uint64_t vvw_prev = 0;
 static std::vector<std::string> vvw_log;
-// NEW: BEATLOG <ip> — once parent ip hits <ip>, log every beat's key signals
+// BEATLOG <ip> — once parent ip hits <ip>, log every beat's key signals
 static int beat_ip = -1;
 static std::vector<std::string> beat_log;
-// NEW: ENVWATCH — log venv_valid transitions (slots 0..127)
+// ENVWATCH — log venv_valid transitions (slots 0..127)
 static std::vector<std::string> gcsnap_log;
 static uint64_t state_cycles[128];
 static uint64_t exec_state_cycles[128];
@@ -371,7 +478,7 @@ static bool envw_on = false;
 static uint8_t envw_prev[128];
 static uint8_t envw_base[128];
 static std::vector<std::string> envw_log;
-// NEW: IPTRACE — ring of executed ip values (execution path). Arm with
+// IPTRACE — ring of executed ip values (execution path). Arm with
 // "IPTRACE <n>", dump+disarm with "IPTRACE?". Off by default.
 struct VRingEnt {
     unsigned st; unsigned ip; uint64_t venv;
@@ -401,7 +508,7 @@ static unsigned long hot_n[3] = {0, 0, 0};
 static unsigned long state_prof[128] = {0};
 static unsigned long prof_cycles = 0;
 static bool prof_on = false;
-// NEW: ENVWATCH — log every venv_valid[idx] transition with state/ip.
+// ENVWATCH — log every venv_valid[idx] transition with state/ip.
 struct EnvEvt { unsigned st; unsigned ip; unsigned val; uint64_t venv; };
 static std::vector<EnvEvt> env_evts;
 static int env_watch = -1;
@@ -416,7 +523,7 @@ static bool ip_trace_user = false; // IPTRACE <n> armed by RPC: FRAME must not w
 static uint64_t key_frame_counter = 1;
 static uint64_t key_last_down_frame[256] = {0};
 static uint64_t key_pending_up[256] = {0}; // 0=none, else flush at this frame counter
-// NEW: last FRAME clocks / cap — play log showed swaps<<fb_frames with no
+// Last FRAME clocks / cap — play log showed swaps<<fb_frames with no
 // clk, so a 2M-clock cap abort was invisible.
 static unsigned last_fclk = 0;
 static unsigned last_fcap = 0;
@@ -499,7 +606,7 @@ static const char* vm_sname(unsigned s) {
         // print `sname=?` and cost debugging time.
         "S_V64_SLICE","S_V64_SORT","S_FB_SYNC","S_V64_DISPATCH",
         // V1.5 standalone compile: one state for the whole memory ABI.
-        "S_CSRAM","S_V64_MOUSE_PROP","S_UI_PROP"
+        "S_CSRAM","S_V64_MOUSE_PROP","S_UI_PROP","S_FS","S_V64_KEYS","S_V64_BYTESTRING","S_V64_CALLREF"
     };
     if (s < (unsigned)(sizeof(N) / sizeof(N[0]))) return N[s];
     return "?";
@@ -511,7 +618,7 @@ static int vm_sidx(const char* name) {
 }
 // SYNCPROF (JMR_SYNCPROF=1): per-present, cycles of the S_FB_SYNC stall and
 // the distance from sync ENTRY to the frame's first draw-state entry — the
-// exact bound on a present/VM overlap win (run-62 planning; peer's 30% stall).
+// exact bound on a present/VM overlap win.
 static FILE* syncprof_f = nullptr;
 static int syncprof_gate = -1;
 static uint64_t sp_clk = 0, sp_sync_entry = 0, sp_sync_exit = 0;
@@ -598,7 +705,9 @@ static void tick() {
         }
     }
     audio_environment_step();
+    top->host_q_ready = finder_responses.size() < 1024;
     top->clk = 0; top->pixel_clk = 0; top->eval();
+    finder_capture_response();
     if (!top->rst_n || top->rootp->jmr_js_core__DOT__vm_start_lat
         || top->rootp->jmr_js_core__DOT__vm_stop_lat) {
         frame_resume = FrameResume{};
@@ -641,13 +750,18 @@ static void tick() {
         if (occ > gcq_peak) gcq_peak = occ;
     }
     if (watch_slot >= 0) {
-        int32_t v = int32_t(top->rootp->jmr_js_core__DOT__u_vm__DOT__vars[watch_slot]);
-        if (v != watch_prev) {
-            std::cerr << "VARW slot=" << watch_slot << " " << watch_prev << "->" << v
-                      << " ip=" << unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__ip)
-                      << " state=" << unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state)
+        auto* r = top->rootp;
+        const bool valid = r->jmr_js_core__DOT__u_vm__DOT__vvar_valid[watch_slot];
+        const uint64_t word = valid
+            ? uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vvars[watch_slot]) : 0u;
+        if (valid != watch_valid_prev || (valid && word != watch_prev)) {
+            std::cerr << "VARW64 slot=" << watch_slot << " valid=" << valid;
+            if (valid) std::cerr << " raw=0x" << std::hex << word << std::dec;
+            std::cerr << " ip=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__ip)
+                      << " state=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__state)
                       << "\n";
-            watch_prev = v;
+            watch_valid_prev = valid;
+            watch_prev = word;
         }
     }
     if (prof_on) {
@@ -671,7 +785,7 @@ static void tick() {
         }
     }
     if (ring_on) {
-        // NEW: rolling cycle ring for fault forensics (VRING?). Freezes the
+        // Rolling cycle ring for fault forensics (VRING?). Freezes the
         // instant fault_code goes nonzero so the ring holds the run-up.
         auto* rr = top->rootp;
         static unsigned run_prev = 0;
@@ -823,7 +937,7 @@ static void tick() {
             }
             tear_count_live = tear_n;
         }
-        // run-59 piece-1 checker: during EXEC the op word register must
+        // Piece-1 checker: during EXEC the op word register must
         // equal code memory at the executing ip — a stale or mis-invalidated
         // prefetch dies loudly on the FIRST wrong op, across every test.
         unsigned esc = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state) & 127;
@@ -949,7 +1063,7 @@ static void tick() {
                 }
             }
         }
-        // run-59 handshake trace: log every core clk around fetch-wait/EXEC
+        // Handshake trace: log every core clk around fetch-wait/EXEC
         // transitions for the first 400 interesting clks after RUN.
         {
             static int hst_n = 0;
@@ -1301,9 +1415,9 @@ static int hex_nibble(char c) {
 }
 
 // gui-put BOARD path in FPGA-SIM: same console SOURCE pump as uart 0xFC.
-static int src_tether_pump(const std::vector<uint8_t>& blob, bool big = false) {
-    // run 71: big=true streams as an 0xFB CART put (jsb_tether_big)
-    top->jsb_tether_src = big ? 0 : 1;
+static int src_tether_pump(const std::vector<uint8_t>& blob, bool big = false, bool program = false) {
+    // Big=true streams as an 0xFB CART put (jsb_tether_big)
+    top->jsb_tether_src = (big || program) ? 0 : 1;
     top->jsb_tether_big = big ? 1 : 0;
     top->jsb_tether_stb = 0;
     top->jsb_tether_eof = 0;
@@ -1330,6 +1444,11 @@ static int src_tether_pump(const std::vector<uint8_t>& blob, bool big = false) {
     }
     wait = 0;
     while (!top->jsb_tether_rdy && wait < 20000) { ticks(1); wait++; }
+    if (!top->jsb_tether_rdy) {
+        top->jsb_tether_src = 0;
+        top->jsb_tether_big = 0;
+        return -3;
+    }
     // Drop src with eof so C_IDLE does not re-arm an empty stream.
     // Hold eof until TETHER samples it (uart_link jsh_eof_hold).
     top->jsb_tether_src = 0;
@@ -1337,6 +1456,10 @@ static int src_tether_pump(const std::vector<uint8_t>& blob, bool big = false) {
     top->jsb_tether_eof = 1;
     wait = 0;
     while (!top->jsb_tether_rdy && wait < 20000) { ticks(1); wait++; }
+    if (!top->jsb_tether_rdy) {
+        top->jsb_tether_eof = 0;
+        return -4;
+    }
     ticks(8);
     top->jsb_tether_eof = 0;
     ticks(16);
@@ -1362,9 +1485,9 @@ static uint64_t fnv_u64(uint64_t hash, uint64_t value) {
     return fnv_u32(hash, (uint32_t)(value >> 32));
 }
 
-// NEW: poke compiled .JSH into code BRAM + asset SRAM (no simulated SPI).
+// Poke compiled .JSH into code BRAM + asset SRAM (no simulated SPI).
 static int jsh_load_mem(const std::vector<uint8_t>& b) {
-    if (b.size() < 12 || b[0] != 'J' || b[1] != 'S' || b[2] != 'B' || b[3] != '1')
+    if (b.size() < 12 || b[0] != 'J' || b[1] != 'S' || b[2] != 'B' || (b[3] != '1' && b[3] != '2'))
         return -1;
     uint16_t flags = (uint16_t)b[10] | ((uint16_t)b[11] << 8);
     uint32_t aset_off = 0;
@@ -1390,6 +1513,8 @@ static int jsh_load_mem(const std::vector<uint8_t>& b) {
             return -1;
     }
     size_t code_len = has_aset ? (size_t)aset_off : b.size();
+    top->sim_image_code_bytes = uint32_t(code_len);
+    top->sim_image_code_valid = 1;
     auto* rp = top->rootp;
     const size_t CODE_WORDS = 32768;
     for (size_t w = 0; w < CODE_WORDS; w++) {
@@ -1487,7 +1612,7 @@ static std::string screen_text() {
     return oss.str();
 }
 
-// NEW: export native 640×480 game FB (no ×4 upsample — FB is glass size)
+// Export native 640×480 game FB (no ×4 upsample — FB is glass size)
 static std::string fb_export_b64() {
     constexpr int W = 640, H = 480;
     std::vector<uint8_t> full((size_t)W * H, 0);
@@ -1536,14 +1661,16 @@ int main(int argc, char** argv) {
     top->sd_miso = 1;
     top->sim_vm_start = 0;
     top->sim_frame_pulse = 0;
+    top->host_req_valid = 0;
+    top->host_req_crc_ok = 0;
+    for (unsigned i=0; i<6; ++i) top->host_req_body[i] = 0;
+    top->host_q_ready = 1;
     top->jsb_tether_stb = 0;
     top->jsb_tether_data = 0;
     top->jsb_tether_eof = 0;
     top->jsb_tether_crc_err = 0;
     top->jsb_tether_big = 0;
     top->jsb_tether_src = 0;
-    top->sim_src_bypass = 0;
-    top->sim_src_lines = 0;
     ticks(8);
     top->rst_n = 1;
     ticks(200000);
@@ -1555,6 +1682,56 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> program_image;
     size_t program_expected = 0;
     while (std::getline(std::cin, line)) {
+        if (line.rfind("SERVICE ",0)==0) {
+            const std::string hex=line.substr(8);
+            std::vector<uint8_t> bytes;
+            bool valid=(hex.size()==56);
+            for(size_t i=0; valid && i<hex.size(); i+=2) {
+                int a=hex_nibble(hex[i]), b=hex_nibble(hex[i+1]);
+                if(a<0 || b<0) { valid=false; break; }
+                bytes.push_back(uint8_t((a<<4)|b));
+            }
+            if(!valid || bytes[0]!=0xfa || top->host_req_valid) {
+                std::cout << "ERR SERVICE_PACKET" << std::endl; continue;
+            }
+            for(unsigned i=0;i<6;++i) top->host_req_body[i]=0;
+            for(unsigned i=0;i<23;++i)
+                top->host_req_body[i/4] |= uint32_t(bytes[1+i]) << ((i%4)*8);
+            uint32_t supplied=uint32_t(bytes[24]) | (uint32_t(bytes[25])<<8)
+                | (uint32_t(bytes[26])<<16) | (uint32_t(bytes[27])<<24);
+            top->host_req_crc_ok = finder_crc(bytes.data()+1,23)==supplied;
+            top->host_req_valid=1;
+            bool accepted=false;
+            for(unsigned wait=0;wait<200000;++wait) {
+                top->eval();
+                if(top->host_req_ready) { tick(); accepted=true; break; }
+                tick();
+            }
+            top->host_req_valid=0;
+            if(!accepted) std::cout << "ERR SERVICE_ACCEPT_TIMEOUT" << std::endl;
+            else finder_print_responses();
+            continue;
+        }
+        if (line=="SERVICEPOLL") {
+            // Bounded forward progress through the real service controller.
+            // Stop at a response; bulk streams are driven by SERVICEBULK.
+            for(unsigned i=0;i<200000 && finder_responses.empty();++i) tick();
+            finder_print_responses();
+            continue;
+        }
+        if (line.rfind("SERVICEBULK ",0)==0) {
+            std::vector<uint8_t> blob;
+            bool valid=line.size()>15 && line[14]==' ' && line[12]=='F'
+                && (line[13]=='B' || line[13]=='C' || line[13]=='D');
+            if(!valid || read_whole_file(line.substr(15),blob)!=0) {
+                std::cout << "ERR SERVICE_BULK_FILE" << std::endl; continue;
+            }
+            top->jsb_tether_crc_err=0;
+            if(src_tether_pump(blob,line[13]=='B',line[13]=='D')!=0)
+                std::cout << "ERR SERVICE_BULK_STALL" << std::endl;
+            else finder_print_responses();
+            continue;
+        }
         if (line == "QUIT") {
             std::cout << "BYE" << std::endl;
             break;
@@ -1623,10 +1800,10 @@ int main(int argc, char** argv) {
             std::cout << "OK bytes=" << program_image.size() << std::endl;
             continue;
         }
-        // NEW: RAM-load compiled .JSH (code BRAM + ASET SRAM). No FAT SPI.
-        // run 71: gate hook — pretend the UART trailer CRC mismatched.
+        // RAM-load compiled .JSH (code BRAM + ASET SRAM). No FAT SPI.
+        // Gate hook — pretend the UART trailer CRC mismatched.
         // The flag rides with the next stream's eof exactly like uart_link's.
-        // run 71 gate: SD_HANG <0|1> — the SD model stops answering so the
+        // Gate: SD_HANG <0|1> — the SD model stops answering so the
         // storage watchdog (S_SD_WAIT) must fire and report ?IO.
         if (line.rfind("SD_HANG ", 0) == 0) {
             sd.hang = (line[8] == '1');
@@ -1652,46 +1829,9 @@ int main(int argc, char** argv) {
             std::cout << "OK bytes=" << blob.size() << std::endl;
             continue;
         }
-        // NEW: FPGA-SIM LOAD of host HTML → source BRAM (no SPI of fat files).
-        if (line.rfind("SRCLOAD ", 0) == 0) {
-            std::vector<uint8_t> html;
-            std::string path = line.substr(8);
-            if (read_whole_file(path, html) != 0) {
-                std::cout << "ERR" << std::endl;
-                continue;
-            }
-            auto* rp = top->rootp;
-            const size_t SRC_MAX = 131072;
-            size_t n = html.size() < SRC_MAX ? html.size() : SRC_MAX;
-            for (size_t i = 0; i < n; i++)
-                rp->jmr_js_core__DOT__g_sram__DOT__u_sram__DOT__mem[3821568u + i] = (uint16_t)(unsigned char)html[i]; // source lives in external SRAM (SRC_SRAM_BASE)
-            rp->jmr_js_core__DOT__u_cons__DOT__src_len = (uint32_t)n;
-            std::string base = path;
-            auto slash = base.find_last_of("/\\");
-            if (slash != std::string::npos) base = base.substr(slash + 1);
-            for (char& c : base)
-                if (c >= 'a' && c <= 'z') c = (char)(c - 32);
-            size_t nlen = base.size() < 16 ? base.size() : 16;
-            rp->jmr_js_core__DOT__u_cons__DOT__src_name_len = (uint8_t)nlen;
-            for (size_t i = 0; i < 16; i++)
-                rp->jmr_js_core__DOT__u_cons__DOT__src_name[i] =
-                    (i < nlen) ? (uint8_t)base[i] : (uint8_t)0;
-            unsigned nlines = 0;
-            for (uint8_t c : html)
-                if (c == '\n') nlines++;
-            if (html.empty() || html.back() != '\n') nlines++;
-            // NEW: do NOT paint the glass here. Arm the console bypass and let
-            // the host send the normal `LINE LOAD "NAME"` — the console echoes
-            // the typed line and prints LOADED at the cursor (no row hopping,
-            // no swallowed command line).
-            top->sim_src_lines = (uint16_t)nlines;
-            top->sim_src_bypass = 1;
-            ticks(2);
-            std::cout << "OK bytes=" << html.size() << " lines=" << nlines << std::endl;
-            continue;
-        }
-        // gui-put: stream bytes into SOURCE (console 0xFC path), host SAVE next.
-        // run 71: BIGFILE <path> — stream a whole host file as an 0xFB CART put
+        // FPGA-SIM LOAD of host HTML → source BRAM (no SPI of fat files).
+        // Diagnostic bulk staging: live file imports use SERVICEBULK and typed commit.
+        // BIGFILE <path> — stream a whole host file as an 0xFB CART put
         if (line.rfind("BIGFILE ", 0) == 0) {
             std::vector<uint8_t> blob;
             if (read_whole_file(line.substr(8), blob) != 0) { std::cout << "ERR read" << std::endl; continue; }
@@ -1733,46 +1873,6 @@ int main(int argc, char** argv) {
             std::cout << "OK" << std::endl;
             continue;
         }
-        if (line.rfind("LINE ", 0) == 0) {
-            hide_desktop();
-            std::string text = line.substr(5);
-            for (char c : text) push_key(uint8_t(c));
-            push_key(0x0D);
-            // Tick until prompt, game_mode (RUN), -- MORE --, or a long
-            // console chain (EDIT/COMPILE: ready=0, game_mode=0). Waiting
-            // 100M clocks for EDIT froze the GUI then letterboxed READY
-            // while the editor was still in C_CMP_WAIT.
-            unsigned clk = 0;
-            int capped = 1;
-            int game_slices = 0;
-            int left_prompt = 0;
-            for (int i = 0; i < 400; ++i) {
-                ticks(250000);
-                clk += 250000;
-                if (!top->ready_lit) left_prompt = 1;
-                if (top->ready_lit && (left_prompt || i >= 3)) {
-                    capped = 0;
-                    break;
-                }
-                if (top->game_mode) {
-                    game_slices++;
-                    if (game_slices >= 16) { capped = 0; break; }
-                }
-                if ((i & 3) == 3) {
-                    std::string s = screen_text();
-                    if (s.find("-- MORE") != std::string::npos) { capped = 0; break; }
-                }
-                if (left_prompt && !top->ready_lit && !top->game_mode && i >= 7) {
-                    capped = 0;
-                    break;
-                }
-            }
-            sd_save_image();
-            // NEW: SRCLOAD's LOAD-without-FAT arm is one command long.
-            top->sim_src_bypass = 0;
-            std::cout << "OK clk=" << clk << " capped=" << capped << std::endl;
-            continue;
-        }
         if (line.rfind("JOY ", 0) == 0) {
             unsigned v = std::stoul(line.substr(4), nullptr, 0);
             top->joy_in = v & 0x3f;
@@ -1780,7 +1880,7 @@ int main(int argc, char** argv) {
             std::cout << "OK" << std::endl;
             continue;
         }
-        // NEW: KEYBITS = play bits (Left=4 Right=8 Fire=16). Assign joy_in;
+        // KEYBITS = play bits (Left=4 Right=8 Fire=16). Assign joy_in;
         // GUI must not follow with JOY 0 (that wiped arrows/Space).
         if (line.rfind("KEYBITS ", 0) == 0) {
             unsigned v = std::stoul(line.substr(8), nullptr, 0);
@@ -1892,7 +1992,6 @@ int main(int argc, char** argv) {
                       << " page=" << unsigned(top->desktop_page_o)
                       << " menu=" << unsigned(top->desktop_menu_o)
                       << " desktop_busy=" << unsigned(top->desktop_busy_o)
-                      << " disk=" << unsigned(top->rootp->jmr_js_core__DOT__u_desktop_disk__DOT__state)
                       << " error=" << unsigned(top->rootp->jmr_js_core__DOT__disk_error)
                       << std::endl;
             continue;
@@ -1926,7 +2025,7 @@ int main(int argc, char** argv) {
             std::cout << "OK" << std::endl;
             continue;
         }
-        // NEW: KEYEVT <keyCode> <down> — raw keyboard event for games
+        // KEYEVT <keyCode> <down> — raw keyboard event for games
         // (GUI forwards real keys; the HTML decides bindings)
         // Sim frames take seconds of wall time, so a human tap's down+up
         // both land in ONE frame's dispatch batch — a held-flag pattern
@@ -1974,14 +2073,14 @@ int main(int argc, char** argv) {
             else std::cout << "OK" << std::endl;
             continue;
         }
-        // NEW: TICKN <n> — n×1000 clocks in one RPC (DONKEY's 2.4 MB .JSH
+        // TICKN <n> — n×1000 clocks in one RPC (DONKEY's 2.4 MB .JSH
         // FAT+SRAM stream needs millions of clocks; per-TICK RPC is too slow)
         if (line.rfind("TICKN ", 0) == 0) {
             unsigned n = 1;
             std::sscanf(line.c_str() + 6, "%u", &n);
             if (n > 100000u) n = 100000u;
             ticks(1000u * n);
-            // 2026-09-01: on-machine COMPILE mints NAME.JSH during TICKN
+            // On-machine COMPILE mints NAME.JSH during TICKN
             // pumping (not LINE), and RUN reads the .JSH from DISK — flush
             // here too or the machine's own mint is invisible to RUN.
             // sd_save_image() is a no-op unless the machine wrote the card.
@@ -1993,8 +2092,8 @@ int main(int argc, char** argv) {
             std::cout << "OK" << std::endl;
             continue;
         }
-        // NEW: minimal VM probe for RTL bring-up (state/ip/raf/heap counters)
-        // NEW: DIR-wedge probe — storage FSM (port), console FSM, handshake
+        // Minimal VM probe for RTL bring-up (state/ip/raf/heap counters)
+        // DIR-wedge probe — storage FSM (port), console FSM, handshake
         if (line == "STOR?") {
             auto* r = top->rootp;
             std::cout << "STOR st=" << unsigned(top->stor_dbg_state_o)
@@ -2078,9 +2177,7 @@ int main(int argc, char** argv) {
                       << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_h)
                       << "," << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vdraw_color)
                       << ",0" // vdraw_i: walk moved to jmr_raster_engine (C1)
-                      << " raf=" << ((unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u)
-                          ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vraf_n)
-                          : unsigned(r->jmr_js_core__DOT__u_vm__DOT__raf_n))
+                      << " raf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vraf_n)
                       << " obj=";
             if (unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u) {
                 unsigned nlive = 0;
@@ -2100,7 +2197,7 @@ int main(int argc, char** argv) {
                 std::cout << narr;
             } else
                 std::cout << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_arr);
-            // 2026-08-21: live env count — ENV_DEPTH shrank to 256 and the
+            // Live env count — ENV_DEPTH shrank to 256 and the
             // titles' env peaks were measured on splash-biased data; this
             // makes the real in-play margin visible in every VMSTAT.
             {
@@ -2115,7 +2212,6 @@ int main(int argc, char** argv) {
                       << " venvnx=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_next)
                       << " venvfree=" << [&]{ unsigned f=0; for (int i=0;i<512;i++)
                             if (!r->jmr_js_core__DOT__u_vm__DOT__venv_valid[i]) f++; return f; }()
-                      << " efreen=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_free_n)
                       << " vkind=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_kind)
                       << " vretr=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_retried)
                       << " vali=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__valloc_i)
@@ -2144,13 +2240,6 @@ int main(int argc, char** argv) {
                       << " pflip=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_last_ip)
                       << " btry=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__jn_btry)
                       << " bmiss=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__jn_bmiss)
-                      << " pfa=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pfa)
-                      << " pfb=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pfb)
-                      << " pfc=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pfc)
-                      << " pfA=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_addr)
-                      << " pfW=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_want)
-                      << " pfM=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_mask)
-                      << " pfE=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_want2)
                       << " kd=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__kd_fn)
                       << " lsn=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vlistener_n)
                       << " kscan=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_key_scan)
@@ -2188,7 +2277,7 @@ int main(int argc, char** argv) {
                       << " spr0=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__spr_nid[0])
                       << " dihit=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_di_hit)
                       << " dimiss=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_di_miss)
-                      // NEW: join/path bring-up counters (PACMAN maze debug)
+                      // Join/path bring-up counters (PACMAN maze debug)
                       << " joinmiss=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_join_miss)
                       << " pathovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_path_ovf)
                       << " heapovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_heap_ovf)
@@ -2199,18 +2288,16 @@ int main(int argc, char** argv) {
                       << " gc=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_gc_n)
                       << " jsonovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_json_ovf)
                       << " swaps=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n)
-                      // NEW: interned string bytes loaded from the trailer (str[i])
+                      // Interned string bytes loaded from the trailer (str[i])
+                      << " namesready=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__names_ok)
                       << " strb=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__nb_wp)
                       << " strovf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_str_ovf)
-                      // NEW: ip where the last frame callback returned (dead loop)
+                      // Ip where the last frame callback returned (dead loop)
                       << " cbip=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_cb_ip)
-                      // NEW: timers dropped because the queued oid was no longer a Fn
+                      // Timers dropped because the queued oid was no longer a Fn
                       << " tmis=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_tmr_mis)
                       << " tsch=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_tmr_sched)
                       << " tfire=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_tmr_fire)
-                      << " ton=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__to_n)
-                      << " esp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_sp)
-                      << " efree=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_free_n)
                       << " findh=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_find_hit)
                       << " spln=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_splice_n)
                       << " divs=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_div_n)
@@ -2264,6 +2351,10 @@ int main(int argc, char** argv) {
             const uint64_t FNV0 = UINT64_C(0xCBF29CE484222325);
             const bool value64 =
                 (unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u) != 0;
+            if (!value64 || !inspector_value64_image(r)) {
+                std::cout << "ERR CHECKPOINT requires a Value64 image" << std::endl;
+                continue;
+            }
             uint64_t vars_hash = FNV0;
             if (value64) {
                 const uint64_t uninitialized = UINT64_C(0x7FF9F00000000000);
@@ -2273,17 +2364,6 @@ int main(int argc, char** argv) {
                         ? (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vvars[i]
                         : uninitialized;
                     vars_hash = fnv_u64(vars_hash, word);
-                }
-            } else {
-                for (unsigned i = 0; i < 512u; i++) {
-                    vars_hash = fnv_u32(
-                        vars_hash,
-                        (uint32_t)r->jmr_js_core__DOT__u_vm__DOT__vars[i]
-                    );
-                    vars_hash = fnv_byte(
-                        vars_hash,
-                        (uint8_t)r->jmr_js_core__DOT__u_vm__DOT__var_tag[i]
-                    );
                 }
             }
             uint64_t heap_hash = FNV0;
@@ -2500,53 +2580,6 @@ int main(int argc, char** argv) {
                         heap_hash = fnv_u64(heap_hash, slot.second);
                     }
                 }
-            } else {
-                unsigned nobj = unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_obj);
-                if (nobj > VM_MAX_OBJ) nobj = VM_MAX_OBJ;
-                for (unsigned oid = 0; oid < nobj; oid++) {
-                    heap_hash = fnv_u16(
-                        heap_hash,
-                        (uint16_t)r->jmr_js_core__DOT__u_vm__DOT__obj_cls[oid]
-                    );
-                    unsigned ns = unsigned(
-                        r->jmr_js_core__DOT__u_vm__DOT__obj_n[oid]
-                    );
-                    if (ns > VM_OBJ_SLOTS) ns = VM_OBJ_SLOTS;
-                    heap_hash = fnv_byte(heap_hash, (uint8_t)ns);
-                    for (unsigned slot = 0; slot < ns; slot++) {
-                        heap_hash = fnv_u16(
-                            heap_hash,
-                            (uint16_t)peek_vobj_key(r, oid, slot)
-                        );
-                        heap_hash = fnv_u32(
-                            heap_hash,
-                            (uint32_t)peek_vobj_val(r, oid, slot)
-                        );
-                        heap_hash = fnv_byte(
-                            heap_hash,
-                            peek_vobj_tag(r, oid, slot)
-                        );
-                    }
-                }
-                unsigned narr = unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_arr);
-                if (narr > VM_MAX_ARR) narr = VM_MAX_ARR;
-                for (unsigned aid = 0; aid < narr; aid++) {
-                    unsigned len = unsigned(
-                        r->jmr_js_core__DOT__u_vm__DOT__arr_len[aid]
-                    );
-                    if (len > VM_ARR_CAP) len = VM_ARR_CAP;
-                    heap_hash = fnv_byte(heap_hash, (uint8_t)len);
-                    for (unsigned elem = 0; elem < len; elem++) {
-                        heap_hash = fnv_u32(
-                            heap_hash,
-                            (uint32_t)peek_varr_val(r, aid, elem)
-                        );
-                        heap_hash = fnv_byte(
-                            heap_hash,
-                            peek_varr_tag(r, aid, elem)
-                        );
-                    }
-                }
             }
             uint64_t canvas_hash = FNV0;
             unsigned front = 1u; // single-bank canvas
@@ -2709,12 +2742,8 @@ int main(int argc, char** argv) {
                           << " frames=" << std::hex << frames_hash
                           << " queues=" << queues_hash << std::dec;
             }
-            std::cout << " raf=" << (value64
-                          ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vraf_n)
-                          : unsigned(r->jmr_js_core__DOT__u_vm__DOT__raf_n))
-                      << " timers=" << (value64
-                          ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vtimer_n)
-                          : unsigned(r->jmr_js_core__DOT__u_vm__DOT__to_n))
+            std::cout << " raf=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vraf_n)
+                      << " timers=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vtimer_n)
                       << " listeners="
                       << (value64
                           ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vlistener_n)
@@ -2760,7 +2789,7 @@ int main(int argc, char** argv) {
             std::cout << std::endl;
             continue;
         }
-        // NEW: OBJPEEK <oid> — dump one heap object (cls, n, key/val/tag slots)
+        // OBJPEEK <oid> — dump one heap object (cls, n, key/val/tag slots)
         if (line.rfind("OBJPEEK ", 0) == 0) {
             auto* r = top->rootp;
             // VM_MAX_OBJ is not necessarily a power of two: masking aliases IDs.
@@ -2772,66 +2801,67 @@ int main(int argc, char** argv) {
             const unsigned oid = static_cast<unsigned>(requested_oid);
             const bool value64 =
                 (unsigned(r->jmr_js_core__DOT__u_vm__DOT__jsb_flags) & 8u) != 0;
-            unsigned ns = value64
-                ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__vobj_len[oid])
-                : unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_n[oid]);
+            if (!value64 || !inspector_value64_image(r)) {
+                std::cout << "ERR OBJPEEK requires a Value64 image" << std::endl;
+                continue;
+            }
+            unsigned ns = unsigned(r->jmr_js_core__DOT__u_vm__DOT__vobj_len[oid]);
             std::cout << "OBJ " << oid
-                      << " cls=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__obj_cls[oid])
+                      << " cls=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vobj_cls[oid])
                       << " n=" << ns
-                      << " alloc=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vobj_alloc[oid]);
-            // NEW: dump every live slot (was 6) — item objects carry ~20 props
+                      << " alloc=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vobj_alloc[oid])
+                      << " format=Value64";
+            // Dump every live slot (was 6) — item objects carry ~20 props
             if (ns > VM_OBJ_SLOTS) ns = VM_OBJ_SLOTS;
             for (unsigned s = 0; s < ns; s++) {
                 std::cout << " [" << s << "]k="
                           << unsigned(peek_vobj_key(r, oid, s))
                           << " v=" << std::hex
                           << peek_vobj_val(r, oid, s)
-                          << std::dec
-                          << " t=" << unsigned(peek_vobj_tag(r, oid, s));
+                          << std::dec;
             }
             std::cout << std::endl;
             continue;
         }
-        // NEW: ENVSTAT? — env free list + keep watermark (bring-up only)
+        // ENVSTAT inspected the retired tagged-format environment free list.
         if (line == "ENVSTAT?") {
-            auto* r = top->rootp;
-            std::cout << "ENVSTAT keep=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_obj_keep)
-                      << " nobj=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__n_obj)
-                      << " esp=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_sp)
-                      << " free_n=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_free_n)
-                      << " free=";
-            unsigned fn2 = unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_free_n);
-            for (unsigned i = 0; i < fn2 && i < 64; i++)
-                std::cout << (i ? "," : "") << unsigned(r->jmr_js_core__DOT__u_vm__DOT__env_free[i]);
-            std::cout << std::endl;
+            std::cout << "ERR ENVSTAT retired tagged environment free list; use VENVPEEK? for Value64 state"
+                      << std::endl;
             continue;
         }
-        // NEW: RAFPEEK? — queued rAF fn oids (bring-up only)
+        // RAFPEEK inspected the retired tagged-format callback queue.
         if (line == "RAFPEEK?") {
-            auto* r = top->rootp;
-            std::cout << "RAF";
-            for (unsigned i = 0; i < 8; i++)
-                std::cout << " " << unsigned(r->jmr_js_core__DOT__u_vm__DOT__raf_fn[i]);
-            std::cout << std::endl;
+            std::cout << "ERR RAFPEEK retired tagged callback queue; use RAFTRACE/RAFTRACE? for Value64 tracing"
+                      << std::endl;
             continue;
         }
-        // NEW: ARRPEEK <aid> — dump array len + elements (bring-up only)
+        // ARRPEEK <aid> — dump array len + elements (bring-up only)
         if (line.rfind("ARRPEEK ", 0) == 0) {
             auto* r = top->rootp;
-            unsigned aid = std::stoul(line.substr(8));
-            if (aid >= VM_MAX_ARR) aid = 0;
-            unsigned len = unsigned(r->jmr_js_core__DOT__u_vm__DOT__arr_len[aid]);
-            std::cout << "ARR " << aid << " len=" << len;
-            if (len > VM_ARR_CAP) len = VM_ARR_CAP;
-            for (unsigned s = 0; s < len; s++) {
-                std::cout << " [" << s << "]v="
-                          << int(peek_varr_val(r, aid, s))
-                          << " t=" << unsigned(peek_varr_tag(r, aid, s));
+            const auto requested_aid = std::stoul(line.substr(8));
+            if (requested_aid >= VM_MAX_ARR) {
+                std::cout << "ERR ARRPEEK array id out of range" << std::endl;
+                continue;
             }
+            if (!inspector_value64_image(r)) {
+                std::cout << "ERR ARRPEEK requires a Value64 image" << std::endl;
+                continue;
+            }
+            const unsigned aid = static_cast<unsigned>(requested_aid);
+            const bool valid = r->jmr_js_core__DOT__u_vm__DOT__varr_valid[aid];
+            const unsigned len = valid
+                ? unsigned(r->jmr_js_core__DOT__u_vm__DOT__varr_len[aid]) : 0u;
+            std::cout << "ARR " << aid << " format=Value64 valid=" << valid
+                      << " len=" << len;
+            const unsigned cap = r->jmr_js_core__DOT__u_vm__DOT__varr_long[aid]
+                ? VM_ARR_CAP : VM_ARR_SHORT_CAP;
+            for (unsigned slot = 0; slot < len && slot < cap; slot++)
+                std::cout << " [" << slot << "]v=" << std::hex
+                          << peek_varr_val(r, aid, slot) << std::dec;
             std::cout << std::endl;
             continue;
         }
-        // NEW: VRING2? — last 8 ring entries with the captured win[0..2]
+        // VRING2? — last 8 ring entries with the captured win[0..2]
         if (line == "VRING2?") {
             std::ostringstream oss;
             oss << "VRING2" << std::hex;
@@ -2845,7 +2875,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::dec << std::endl;
             continue;
         }
-        // NEW: STKPEEK — vsp, TOS window[0..3] and vstack[0..3] side by side
+        // STKPEEK — vsp, TOS window[0..3] and vstack[0..3] side by side
         if (line == "STKPEEK?") {
             auto* r = top->rootp;
             unsigned vsp = unsigned(r->jmr_js_core__DOT__u_vm__DOT__vsp);
@@ -2860,7 +2890,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::dec << std::endl;
             continue;
         }
-        // NEW: VVARPEEK <slot> — one Value64 global (vvars) + valid bit
+        // VVARPEEK <slot> — one Value64 global (vvars) + valid bit
         if (line.rfind("VVARPEEK ", 0) == 0) {
             unsigned slot = std::stoul(line.substr(9)) & 0x1FF;
             auto* r = top->rootp;
@@ -2871,7 +2901,7 @@ int main(int argc, char** argv) {
                       << std::dec << std::endl;
             continue;
         }
-        // NEW: IDS? — method-intern id registers (join debugging)
+        // IDS? — method-intern id registers (join debugging)
         if (line == "IDS?") {
             auto* r = top->rootp;
             std::cout << "IDS join=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__id_join)
@@ -2891,7 +2921,7 @@ int main(int argc, char** argv) {
                       << std::endl;
             continue;
         }
-        // NEW: VARRPEEK <aid> — Value64 array tables + first 8 raw slots
+        // VARRPEEK <aid> — Value64 array tables + first 8 raw slots
         if (line.rfind("VARRPEEK ", 0) == 0) {
             auto* r = top->rootp;
             unsigned aid = std::stoul(line.substr(9));
@@ -2909,7 +2939,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::dec << std::endl;
             continue;
         }
-        // NEW: IPTRACE <n> arms; IPTRACE? dumps the executed-ip path
+        // IPTRACE <n> arms; IPTRACE? dumps the executed-ip path
         if (line.rfind("IPTRACE ", 0) == 0) {
             ip_trace.clear();
             ip_trace_vsp.clear();
@@ -2931,7 +2961,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: FNPEEK <id> — one vfn record
+        // FNPEEK <id> — one vfn record
         if (line.rfind("FNPEEK ", 0) == 0) {
             unsigned fi = std::stoul(line.substr(7)) & 0x1fff;
             auto* r = top->rootp;
@@ -2944,7 +2974,7 @@ int main(int argc, char** argv) {
                 << std::endl;
             continue;
         }
-        // NEW: FBBOX <idx> — bounding box + count of one palette index (front)
+        // FBBOX <idx> — bounding box + count of one palette index (front)
         if (line.rfind("FBBOX ", 0) == 0) {
             auto* r = top->rootp;
             unsigned want = std::stoul(line.substr(6)) & 0xff;
@@ -2967,7 +2997,7 @@ int main(int argc, char** argv) {
                       << " y=" << miny << ".." << maxy << std::endl;
             continue;
         }
-        // NEW: FBHIST? — front-buffer palette-index histogram (nonzero bins)
+        // FBHIST? — front-buffer palette-index histogram (nonzero bins)
         if (line == "FBHIST?") {
             auto* r = top->rootp;
             unsigned front = 1u; // single-bank canvas
@@ -2987,7 +3017,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: STATEHIST? — cumulative clocks per parent state (then reset)
+        // STATEHIST? — cumulative clocks per parent state (then reset)
         // NAMEPEEK <id>: intern table entry — hash, len, first bytes
         if (line.rfind("NAMEPEEK ", 0) == 0) {
             auto* r = top->rootp;
@@ -3046,7 +3076,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: JSONMEM <off> <n> — dump json_mem bytes as chars
+        // JSONMEM <off> <n> — dump json_mem bytes as chars
         if (line.rfind("JSONMEM ", 0) == 0) {
             unsigned off = 0, n = 64;
             std::sscanf(line.c_str() + 8, "%u %u", &off, &n);
@@ -3061,7 +3091,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: TMR? — vtimer table slots 0..7
+        // TMR? — vtimer table slots 0..7
         if (line == "TMR?") {
             auto* r = top->rootp;
             std::ostringstream oss;
@@ -3074,7 +3104,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: VFE? — forEach nest pointers + stack (parent + exec)
+        // VFE? — forEach nest pointers + stack (parent + exec)
         if (line == "VFE?") {
             auto* r = top->rootp;
             std::ostringstream oss;
@@ -3091,7 +3121,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: ESLOTS <eid> — dump one env's bindings (name-id:value pairs)
+        // ESLOTS <eid> — dump one env's bindings (name-id:value pairs)
         if (line.rfind("ESLOTS ", 0) == 0) {
             unsigned eid = std::stoul(line.substr(7)) & 0x1ff;
             auto* r = top->rootp;
@@ -3115,7 +3145,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: ENVDUMP — env slots 0..79: valid/gen/parent; fns referencing them
+        // ENVDUMP — env slots 0..79: valid/gen/parent; fns referencing them
         if (line == "ENVDUMP") {
             auto* r = top->rootp;
             std::ostringstream oss;
@@ -3141,7 +3171,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: ENVWATCH arm / ENVWATCH? dump venv_valid transition log
+        // ENVWATCH arm / ENVWATCH? dump venv_valid transition log
         if (line == "ENVWATCH") {
             envw_on = true;
             envw_log.clear();
@@ -3184,7 +3214,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: BEATLOG <ip|-1> arm; BEATLOG? dump per-beat signal log
+        // BEATLOG <ip|-1> arm; BEATLOG? dump per-beat signal log
         if (line.rfind("BEATLOG ", 0) == 0 && line[8] != '?') {
             beat_ip = std::stoi(line.substr(8));
             beat_log.clear();
@@ -3198,7 +3228,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: VVWATCH <slot|-1> arm; VVWATCH? dump change log
+        // VVWATCH <slot|-1> arm; VVWATCH? dump change log
         if (line.rfind("VVWATCH ", 0) == 0 && line[8] != '?') {
             vvw_slot = std::stoi(line.substr(8));
             vvw_log.clear();
@@ -3215,7 +3245,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: VSTWATCH <slot|-1> arm; VSTWATCH? dump change log
+        // VSTWATCH <slot|-1> arm; VSTWATCH? dump change log
         if (line.rfind("VSTWATCH ", 0) == 0 && line[9] != '?') {
             vst_watch_slot = std::stoi(line.substr(9));
             vst_watch_log.clear();
@@ -3232,27 +3262,25 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: VARWATCH <slot|-1> — arm/disarm the vars[] write watchpoint
+        // VARWATCH <slot|-1>: actual Value64 valid/raw-word changes.
         if (line.rfind("VARWATCH ", 0) == 0) {
-            watch_slot = std::stoi(line.substr(9));
-            if (watch_slot >= 0)
-                watch_prev = int32_t(top->rootp->jmr_js_core__DOT__u_vm__DOT__vars[watch_slot]);
-            std::cout << "OK" << std::endl;
+            const int requested = std::stoi(line.substr(9));
+            if (requested < -1 || requested >= 512) {
+                std::cout << "ERR VARWATCH slot out of range" << std::endl;
+                continue;
+            }
+            watch_slot = requested;
+            if (watch_slot >= 0) {
+                auto* r = top->rootp;
+                watch_valid_prev = r->jmr_js_core__DOT__u_vm__DOT__vvar_valid[watch_slot];
+                watch_prev = watch_valid_prev
+                    ? uint64_t(r->jmr_js_core__DOT__u_vm__DOT__vvars[watch_slot]) : 0u;
+            }
+            std::cout << "OK format=Value64" << std::endl;
             continue;
         }
-        // NEW: VARPEEK <i> <n> — dump VM vars (bring-up only)
-        if (line.rfind("VARPEEK ", 0) == 0) {
-            unsigned a = 0, n = 8;
-            std::sscanf(line.c_str() + 8, "%u %u", &a, &n);
-            std::ostringstream oss;
-            oss << "VARS";
-            for (unsigned i = 0; i < n && (a + i) < 512u; i++)
-                oss << " " << int32_t(top->rootp->jmr_js_core__DOT__u_vm__DOT__vars[a + i]);
-            std::cout << oss.str() << std::endl;
-            continue;
-        }
-        // NEW: FBRAW? — nonzero counts of both FB banks + front bit (bring-up)
-        // NEW: LSNPEEK? — key listener table (ev/fn handles) as registered
+        // FBRAW? — nonzero counts of both FB banks + front bit (bring-up)
+        // LSNPEEK? — key listener table (ev/fn handles) as registered
         if (line == "LSNPEEK?") {
             auto* r = top->rootp;
             std::ostringstream oss;
@@ -3268,7 +3296,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: CHARPEEK? — byte -> 1-char intern id table (string index path)
+        // CHARPEEK? — byte -> 1-char intern id table (string index path)
         if (line == "CHARPEEK?") {
             auto* r = top->rootp;
             std::ostringstream oss;
@@ -3286,7 +3314,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: VENVPEEK? — current env handle vs the venv_valid/gen table
+        // VENVPEEK? — current env handle vs the venv_valid/gen table
         if (line == "VENVPEEK?") {
             auto* r = top->rootp;
             uint64_t venv = uint64_t(r->jmr_js_core__DOT__u_vm__DOT__venv);
@@ -3306,7 +3334,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: VRING? — last 48 cycles of state/ip/venv/venv_valid_rdata
+        // VRING? — last 48 cycles of state/ip/venv/venv_valid_rdata
         if (line == "VRING?") {
             std::ostringstream oss;
             oss << "VRING";
@@ -3391,7 +3419,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: ENVDUMP <key> — walk the current env chain and report every
+        // ENVDUMP <key> — walk the current env chain and report every
         // slot, flagging the ones whose key matches. Answers "what does this
         // variable actually resolve to" without guessing.
         if (line.rfind("ENVDUMP ", 0) == 0) {
@@ -3455,7 +3483,7 @@ int main(int argc, char** argv) {
                       << std::endl;
             continue;
         }
-        // NEW: PDOPEEK? — first 16 latched path commands (op, p1x, p1y, p2x, p2y);
+        // PDOPEEK? — first 16 latched path commands (op, p1x, p1y, p2x, p2y);
         // PDOCLR re-arms the latch (bring-up only)
         if (line == "PDOPEEK?") {
             auto* r = top->rootp;
@@ -3482,7 +3510,7 @@ int main(int argc, char** argv) {
             std::cout << "OK" << std::endl;
             continue;
         }
-        // NEW: PXCNT? — raster px counters since PDOCLR (flood hunt)
+        // PXCNT? — raster px counters since PDOCLR (flood hunt)
         if (line == "PXCNT?") {
             auto* r = top->rootp;
             std::cout << "PX line=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__dbg_line_px)
@@ -3491,7 +3519,7 @@ int main(int argc, char** argv) {
                       << std::endl;
             continue;
         }
-        // NEW: RECTPEEK? — first 16 latched rect rasterizations
+        // RECTPEEK? — first 16 latched rect rasterizations
         if (line == "RECTPEEK?") {
             auto* r = top->rootp;
             std::ostringstream oss;
@@ -3508,7 +3536,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: FBBANK? <0|1> — dump one FB bank directly (bring-up: see what the
+        // FBBANK? <0|1> — dump one FB bank directly (bring-up: see what the
         // BACK buffer holds when the front never swaps in)
         if (line.rfind("FBBANK? ", 0) == 0) {
             unsigned b = 0;
@@ -3552,7 +3580,7 @@ int main(int argc, char** argv) {
                 top->rootp->jmr_js_core__DOT__g_sram__DOT__u_sram__DOT__mem[a+i]=uint16_t(v);
             std::cout<<"OK"<<std::endl;continue;
         }
-        // NEW: SRAMPEEK <word_addr> <n> — dump asset-SRAM words (bring-up only)
+        // SRAMPEEK <word_addr> <n> — dump asset-SRAM words (bring-up only)
         if (line.rfind("SRAMPEEK ", 0) == 0) {
             unsigned a = 0, n = 8;
             std::sscanf(line.c_str() + 9, "%u %u", &a, &n);
@@ -3564,7 +3592,7 @@ int main(int argc, char** argv) {
             std::cout << oss.str() << std::endl;
             continue;
         }
-        // NEW: title palette dump (ASET 256×RGB888 loaded by the console on RUN)
+        // Title palette dump (ASET 256×RGB888 loaded by the console on RUN)
         // — GUI mirror colors FB indices exactly like the HDMI field would.
         // Test-only readback of the live resource consumers, not the staging copy.
         if (line == "SYSBYTES?") {
@@ -3612,7 +3640,7 @@ int main(int argc, char** argv) {
             continue;
         }
         if (line == "FB?") {
-            // NEW: real mini-FB pixels when game_mode (RECTDEMO / VM)
+            // Real mini-FB pixels when game_mode (RECTDEMO / VM)
             // game_mode OR a chained program (EDIT: cmp_arm holds game_mode
             // off). Without this, FB? is always SAME during EDIT and the
             // GUI letterboxes READY over the editor.
@@ -3624,7 +3652,7 @@ int main(int argc, char** argv) {
             }
             continue;
         }
-        // NEW: one VM frame — tick until fb swap (dbg_swap_n) or cap.
+        // One VM frame — tick until fb swap (dbg_swap_n) or cap.
         // GUI TICK=1000 was << frame_div 65536, so PACMAN ghosts never left.
         // 2M was too small once string-row sprites actually painted: INVADERS
         // drawBitmap is per-pixel str[i]+fillRect, so FRAME capped mid-rAF
@@ -3671,7 +3699,7 @@ int main(int argc, char** argv) {
             int pulsed = resuming && frame_resume.pulsed;
             int left_wait = resuming && frame_resume.left_wait;
             int idle_run = resuming ? int(frame_resume.idle_run) : 0;
-            int dead = 0;       // NEW: VM already halted — do not burn the cap
+            int dead = 0;       // VM already halted — do not burn the cap
             auto* rframe = top->rootp;
             // A frame is finished when the VM PRESENTS. The older test
             // (left_wait && back in S_WAIT_FRAME && cbip != 0) depended on
@@ -3734,42 +3762,23 @@ int main(int argc, char** argv) {
                     left_wait = 1;
                 // Present after the rAF has run (back in S_WAIT_FRAME), not on
                 // the present_pend swap that shares the pulse cycle.
-                bool due_timer =
-                    unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__to_n) != 0
-                    && unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__to_delay[0]) == 0;
                 bool frame_continue =
                     unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__frame_fire) != 0;
                 if (left_wait && st == 16u && cbip != 0 &&
-                    !due_timer && !frame_continue) {
+                    !frame_continue) {
                     got = 1; used++; break;
                 }
-                // Present-based completion (see swap0 above): the frame put a
-                // new image on the glass, which is exactly what the GUI is
-                // waiting for. Still require left_wait so the present that
-                // shares the pulse cycle does not end the frame early.
-                // Deliberately NOT gated on due_timer: that reads the
-                // 32-bit to_n/to_delay registers, while a Value64 title keeps
-                // its timers in vtimer_*. For an HTML title the test could be
-                // permanently true and block completion forever — INVADERS
-                // presented ~1000 frames (swaps=1013, 34k fillText calls)
-                // inside ONE FRAME rpc while the GUI sat blocked. A present
-                // IS a finished frame; a pending timer fires on the next one.
-                // potential-bugs #31: require st == S_WAIT_FRAME. Value64
-                // swaps at FRAME_TIMER and a mid-rAF nid-3 swapBuffers also
-                // bumps dbg_swap_n — exiting on that cuts the callback and
-                // the splash stops animating.
-                // potential-bugs #31 predicate, minus frame_continue:
-                // frame_fire belongs to the 32-bit path (set by the 32-bit GC,
-                // cleared only in the 32-bit WAIT_FRAME arm), so for a
-                // Value64 title it can sit stuck and block every frame exit.
-                // st == S_WAIT_FRAME is the guard that actually protects the
-                // callback (a mid-rAF swapBuffers is not at WAIT_FRAME).
-                if (pulsed && left_wait && st == 16u && !due_timer &&
+                // The Value64 scheduler drains this frame's callbacks before
+                // returning to WAIT_FRAME. Preserve the state/present guards:
+                // a mid-callback swap is not a completed logical frame.
+                // The retired tagged queue count was always zero for accepted
+                // programs; removing that predicate adds no new due-timer test.
+                if (pulsed && left_wait && st == 16u &&
                     unsigned(rframe->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n)
                         != swap0) {
                     got = 1; used++; break;
                 }
-                // NEW: one-shot screen (title with no rAF re-arm, or a frame
+                // One-shot screen (title with no rAF re-arm, or a frame
                 // whose only work was the present) never leaves S_WAIT_FRAME.
                 // Burning the 16M cap there froze the GUI for seconds per
                 // frame and delayed the next KEYEVT dispatch (DONKEY Enter).
@@ -3848,7 +3857,7 @@ int main(int argc, char** argv) {
             } else {
                 frame_resume = FrameResume{};
             }
-            // 2026-09-01: same reason as the TICKN flush — the editor's F2
+            // Same reason as the TICKN flush — the editor's F2
             // save and the compile mint land during FRAME pumping; RUN and
             // the GUI read card.img from disk. No-op unless the card is dirty.
             sd_save_image();

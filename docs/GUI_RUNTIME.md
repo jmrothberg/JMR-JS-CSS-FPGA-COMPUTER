@@ -1,24 +1,18 @@
-# One matched GUI runtime
+# The GUI
 
-Start `python3 gui_jmr_js.py` from a checkout with dependencies installed.
-The GUI loads the root Python source and root `card.img`. No private build
-manifest or RTL executable is required to start the Python backend.
+```sh
+JMR_CARD_IMG=card.img .venv/bin/python gui_jmr_js.py
+```
 
-Both Python and FPGA-SIM execute the serialized `FINDER.JSH` and other programs
-from that disk, with its resident Toolbox. Python does not recompile Finder at
-startup. The launcher checks disk resources against `CURRENT_SET.json` and
-checks resident program instructions against the disk ROM before opening the GUI.
-It preserves user documents and never rebuilds or copies a disk at startup.
+One 640×480 window. F9 cycles the three machines; F10 opens the [Architecture Monitor](ARCH_MONITOR.md).
 
-FPGA-SIM uses the verified local `sim/sim_build_synth/jmr_js_sim_server`.
-On this machine it is the exact tested run81 simulator, with matching startup
-hex files. On another machine, build a native simulator with
-`make -C sim sim_server_synth`. It uses the same root `card.img` through
-`JMR_CARD_IMG`. A build receipt checks the executable, root RTL, simulator source and startup
-hex before launch. Changed or missing inputs require rebuilding; an old local
-binary cannot silently run as current. Missing RTL is an error when selecting
-FPGA-SIM; it is not a
-Python startup requirement. Python behavior is not FPGA timing evidence.
-Run81 implementation fits the resource limits but failed setup timing by
-1.652 ns. Its bitstream is unqualified; the next hardware build is held for
-architecture review. Passing simulation does not waive timing requirements.
+| Machine | What runs | Needs |
+|---|---|---|
+| Python | The Python model in `functional_model/` | nothing else |
+| FPGA-SIM | The root `rtl/` compiled by Verilator | `make -C sim sim_server_synth` |
+| Board | The Nexys Video over the USB tether | a loaded bitstream |
+
+All three run the programs on `card.img`. Saving a document changes that file.
+The GUI never rebuilds the card. FPGA-SIM refuses to start if `rtl/` or
+`sim/sim_main.cpp` is newer than the simulator; rebuild it.
+Python behaviour is not evidence of FPGA timing.

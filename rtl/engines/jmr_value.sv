@@ -93,16 +93,19 @@ package jmr_value_pkg;
     endfunction
 
     function automatic logic [5:0] v64_norm_shift(input logic [52:0] mant);
-        // Log-depth leading-zero count (priority scan, ~6 levels). The old
-        // form was 52 loop-carried conditional shifts — the same serial-
-        // chain class as the multiply's 477-CARRY4 -250ns path (2026-08-24).
-        // Semantics identical: highest set bit p -> 52-p; mant==0 -> 52.
+        // Six bounded binary decisions; zero retains the established 52.
+        logic [63:0] scan;
         logic [5:0] count;
         begin
-            count = 6'd52;
-            for (int k = 0; k <= 52; k++)
-                if (mant[k]) count = 6'(52 - k);
-            v64_norm_shift = count;
+            scan = {mant, 11'd0};
+            count = 0;
+            if (scan[63:32] == 0) begin count[5]=1; scan=scan<<32; end
+            if (scan[63:48] == 0) begin count[4]=1; scan=scan<<16; end
+            if (scan[63:56] == 0) begin count[3]=1; scan=scan<<8; end
+            if (scan[63:60] == 0) begin count[2]=1; scan=scan<<4; end
+            if (scan[63:62] == 0) begin count[1]=1; scan=scan<<2; end
+            if (scan[63] == 0) count[0]=1;
+            v64_norm_shift = mant == 0 ? 6'd52 : count;
         end
     endfunction
 

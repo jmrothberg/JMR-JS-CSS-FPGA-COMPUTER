@@ -87,10 +87,10 @@ package jmr_js_vm_pkg;
     localparam logic [3:0] HP_ASSIGN  = 4'd13;
     localparam logic [3:0] HP_AGETI   = 4'd14;
     localparam logic [3:0] HP_ASETI   = 4'd15;
-    localparam int CODE_WORDS = 20480; // 2026-08-21(final): see parent
+    localparam int CODE_WORDS = 21504;
     localparam int MAX_CONSTS = 1024;
     localparam int MAX_VARS   = 512;
-    localparam int STACK_DEPTH = 2048;
+    localparam int STACK_DEPTH = 1024;
     localparam int MW = 640;
     localparam int MH = 480;
     localparam int FB_PIXELS = MW * MH;
@@ -109,7 +109,7 @@ package jmr_js_vm_pkg;
     localparam int JSON_STK = 32;
     localparam int ARR_CAP = 128;
     localparam int MAX_CLS = 16;
-    localparam int NAME_CAP = 32768;
+    localparam int NAME_CAP = 16384;
     localparam int MAX_FN_PROTO = 64;
     localparam int MAX_CMETH = 16;
     localparam int TXT_MAX = 64;
@@ -230,5 +230,8 @@ package jmr_js_vm_pkg;
         , S_V64_MOUSE_PROP
         , S_UI_PROP
         , S_FS
+        , S_V64_KEYS
+        , S_V64_BYTESTRING
+        , S_V64_CALLREF
     } st_t;
 endpackage

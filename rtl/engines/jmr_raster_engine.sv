@@ -1,4 +1,4 @@
-// Full-rate raster/blit/ImageData engine — run-50 C1.
+// Full-rate raster/blit/ImageData engine.
 //
 // The framebuffer write port and the asset SRAM already run at the core
 // clock; only the VM's /VM_CLK_DIV beat rate limited every paint loop to
@@ -95,7 +95,7 @@ module jmr_raster_engine #(
     logic [18:0] imgd_i;          // linear imgd source index
     logic imgd_in_range; // advanced with imgd_i; no compare on write enable
     logic        fetch_wait;
-    // dest address, incremental (peer review pre-run-51): fb_row is the
+    // dest address, incremental: fb_row is the
     // current row's first pixel, fb_addr the current pixel. One constant
     // multiply per OP at go; per pixel the address is an incrementer,
     // not a 3-level multiply-add replicated in four case arms. Advanced
@@ -103,7 +103,7 @@ module jmr_raster_engine #(
     // step), and re-anchored to fb_row+MW at every row wrap so OOB
     // drift never carries across rows.
     logic [18:0] fb_row, fb_addr;
-    // Run 53 post-route fix: the row-wrap DDA (ay+ryr>=h compare
+    // Post-route fix: the row-wrap DDA (ay+ryr>=h compare
     // selecting row_so + row_step (+stride)) was the worst routed family
     // (-0.53, 9 levels). Precompute the next row's so/ay into registers
     // every clk; the wrap consumes registers only. nxt_ok guards the one
@@ -114,22 +114,28 @@ module jmr_raster_engine #(
     logic [22:0] nxt_row_so;
     logic [15:0] nxt_ay;
     logic        nxt_ok;
-    // one-word source cache (blit): tag is the WORD address
+    // One-word source cache: tag is relative to the fixed per-operation base.
+    // Compare before base addition; request addresses retain their original form.
     logic        cw_valid;
     logic [21:0] cw_tag;
+    logic [21:0] issued_key; // relative key paired with the outstanding SRAM address
     logic [15:0] cw_word;
 
     // per-pixel source word address + byte lane
     logic [21:0] px_word;
+    logic [21:0] px_key;
     logic        px_hi;
     always_comb begin
         if (m_q == M_IMGD) begin
+            px_key  = 22'(imgd_i >> 1);
             px_word = IMGD_SRAM_BASE + 21'(imgd_i >> 1);
             px_hi   = imgd_i[0];
         end else if (aset_q) begin
+            px_key  = so[22:1];
             px_word = 23'(so[22:1]);
             px_hi   = so[0];
         end else begin
+            px_key  = {4'd0, so[17:0]};
             px_word = SPR_SRAM_BASE + 21'(so[17:0]);
             px_hi   = 1'b0;
         end
@@ -272,7 +278,7 @@ module jmr_raster_engine #(
                         else adv_linear();
                     end
                     M_BLIT: begin
-                        if (cw_valid && cw_tag == px_word) begin
+                        if (cw_valid && cw_tag == px_key) begin
                             // cache hit: serve, write, advance — 1 clk/px
                             logic [7:0] pix;
                             pix = px_hi ? cw_word[15:8] : cw_word[7:0];
@@ -287,13 +293,14 @@ module jmr_raster_engine #(
                         end else if (!fetch_wait) begin
                             sram_req <= 1'b1;
                             sram_addr <= px_word;
+                            issued_key <= px_key;
                             fetch_wait <= 1'b1;
                         end else if (sram_ack) begin
                             logic [7:0] pix;
                             sram_req <= 1'b0;
                             fetch_wait <= 1'b0;
                             cw_valid <= 1'b1;
-                            cw_tag <= px_word;
+                            cw_tag <= px_key;
                             cw_word <= sram_rdata;
                             pix = px_hi ? sram_rdata[15:8] : sram_rdata[7:0];
                             if (pix != 8'd0 && inb) begin
@@ -307,7 +314,7 @@ module jmr_raster_engine #(
                         end
                     end
                     default: begin // M_IMGD
-                        if (!fetch_wait && cw_valid && cw_tag == px_word &&
+                        if (!fetch_wait && cw_valid && cw_tag == px_key &&
                             imgd_in_range) begin
                             if (inb) begin
                                 fb_we <= 1'b1;
@@ -324,6 +331,7 @@ module jmr_raster_engine #(
                                 // the next read while that pixel is written.
                                 if (imgd_i[0] && imgd_i < 19'(FB_PIXELS-1)) begin
                                     sram_addr <= px_word + 21'd1;
+                                    issued_key <= px_key + 22'd1;
                                     sram_req <= 1'b1;
                                     fetch_wait <= 1'b1;
                                 end
@@ -332,6 +340,7 @@ module jmr_raster_engine #(
                             if (imgd_in_range) begin
                                 sram_req <= 1'b1;
                                 sram_addr <= px_word;
+                            issued_key <= px_key;
                                 fetch_wait <= 1'b1;
                             end else begin
                                 // source ran off the snapshot: no write
@@ -340,7 +349,7 @@ module jmr_raster_engine #(
                             end
                         end else if (sram_ack) begin
                             cw_valid <= 1'b1;
-                            cw_tag <= sram_addr;
+                            cw_tag <= issued_key;
                             cw_word <= sram_rdata;
                             if (inb) begin
                                 fb_we <= 1'b1;
@@ -359,6 +368,9 @@ module jmr_raster_engine #(
                                 // Arbitration can preempt at every ack.
                                 if (imgd_i[0] && imgd_i < 19'(FB_PIXELS-1)) begin
                                     sram_addr <= sram_addr + 21'd1;
+                                    // Use the OLD issued key, matching the old address,
+                                    // including mode 3's existing default-arm behavior.
+                                    issued_key <= issued_key + 22'd1;
                                     sram_req <= 1'b1;
                                     fetch_wait <= 1'b1;
                                 end else begin

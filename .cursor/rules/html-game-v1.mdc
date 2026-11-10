@@ -1,91 +1,42 @@
 ---
-description: V1.0 walls; BOARD compile = card create (.JSH). V1.5 COMPILE is live; popular JS V1 lacks is still backlog. V2.0 = bigger ISA/ASET, not a title name.
+description: HTML programs must stay inside the machine's JavaScript subset and size limits; compile and run on the machine, not only in Chrome.
 alwaysApply: true
 ---
 
-# HTML games — V1.0 now, V1.5 COMPILE live, V2.0 ISA later
+# HTML programs stay inside the machine's limits
 
-Words: [README.md — Words used](../../docs/WORDS.md#words-used-in-this-project).
-This is **copy 1** of Version 1.0 walls / Version 1.5 console + popular JS /
-Version 2.0 machine work (copy 2:
-[docs/JMR_JS_COMPATIBILITY.md](../../docs/JMR_JS_COMPATIBILITY.md)
-§ Version 1.0, 1.5, and 2.0). How to write a title (FAST draw, `jmr:spr`
-literals, dest on-glass) is **one** page, not a two-copy pair:
-[docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md).
+The numbers and the full lists live in one place each. Do not copy them here.
 
-**V1.0** = PYTHON + FPGA-SIM + BOARD all play from `card.img`. Host mint at
-card-create still works (`make_sd_image.py create` mints `NAME.JSH`). Do not
-host-compile `storage/` on `RUN` as a second path.
-**V1.5 compile is live:** `LOAD` → `EDIT` → **`COMPILE`** → `RUN`. `RUN`
-still loads `.JSH` from the card. Compiler/editor are ordinary card programs
-(`EDITOR.JSH`, `ARTSCAN.JSH`, `COMPILER.JSH`), not a new ISA. **Do not
-delete** `storage/EDITOR.HTML`, `ARTSCAN.HTML`, `COMPILER.HTML` (`DIR`
-hides them). Typed-at-READY
-numbered authoring of *new* programs is still leftover. Popular JS V1.0 does
-not have (`shift`, `Math.sin`, …) is still the language backlog
-(stdlib + globals; not Canvas gradients / mouse).
-**V2.0** = grow the ISA past V1 walls (sprite descriptors, ASET size,
-`Object.keys`, dotted `new`, `.call`/`.apply`). **`Math.round` is live**
-(nid 54). **No title is the V2 example.** Do **not** title-gate (`if (stem == "…")`).
+- Language, Canvas and size limits:
+  [docs/JMR_JS_COMPATIBILITY.md](../../docs/JMR_JS_COMPATIBILITY.md)
+  ([Limits](../../docs/JMR_JS_COMPATIBILITY.md#limits),
+  [Names the compiler rejects](../../docs/JMR_JS_COMPATIBILITY.md#names-the-compiler-rejects)).
+- How to write a program (art, text, input, sound, speed, memory):
+  [docs/GAME_DESIGN.md](../../docs/GAME_DESIGN.md).
+- Menus, windows, dialogs, files:
+  [docs/SYSTEM_APPLICATIONS.md](../../docs/SYSTEM_APPLICATIONS.md).
+- Words: [docs/WORDS.md](../../docs/WORDS.md#words-used-in-this-project).
 
-## V1.0 — write titles inside these walls
+## Rules
 
-| Cap / hole | Author around it |
-|---|---|
-| **`MAX_SPR` = 16** ASET descriptors | ≤16 **PNG sheets** (`jmr:spr:N`). Pack frames into **atlases**; crop with **9-arg `drawImage`**. Do not ship one URI per frame (MKPVP: 274 → refuse). Keep sheets **modest** (not one multi-thousand-pixel-wide image — extra address math + SRAM traffic). |
-| **`Object.keys` / `for…in`** | Compiler lowers `for (k in obj)` → `Object.keys`. RTL lacks that native (`fault=5` / `fsite=4183`). Use literal key lists or indexed loops. |
-| **`setTransform(-1, …)` mirror** | **V2 live:** negative `dWidth`/`scale` mirrors the blit (RTL `flip_x`/`flip_y`). Left+right sheets still OK. |
-| **Math** | `floor` / `round` / `abs` / `min` / `max` / `random` / `sqrt` (+ `Math.PI`). No `sin`/`cos`/`ceil` native. |
-| **Heap caps (live silicon)** | `MAX_OBJ=960`, arrays `1536×32 + 12×128`, `ENV_DEPTH=384`, `ARR_CAP=128`. Loud overflow. Do not assume old 1024/512. Reuse one mutable `{x,y}` across frames — a fresh literal every tick burns the pool. Do **not** hoist per-frame grids to startup. A map bigger than 128 cells is **row arrays** (20×18 → 18 arrays of 20), not one 360-slot array — do **not** shrink the playfield to dodge the cap. [FPGA_FIT.md](../../docs/FPGA_FIT.md). |
-| **16 locals per function** (`ENV_SLOTS`) | Params + every `var`/`let`/`const` in that function **including names a tiny inlined helper adds** (`blit(im,x,y,w,h)` counts 5 extra in the caller). The 17th is a **card-mint `CompileError`**: `LOAD` still shows the HTML, `RUN` is `?NH`. Split a helper. **This is not `MAX_SPR=16`.** Do **not** cut game systems to “fit 16.” |
-| **No typed arrays / V1.5 stdlib** | No `Int32Array` / `Uint8Array` / `Array.shift` / `charCodeAt` / `performance.now` / `Object.create`. Ordinary arrays, `{}` or flags not `Object.create(null)`, frame counter not `performance.now`. Those last two **mint**, then PYTHON faults `CALL_METHOD … kind 4` (interned `"Object"` / `"performance"`). Chrome still runs. |
-| **`jmr:spr` literals; dest on-glass** | `img.src = "jmr:spr:0"` quoted per sheet — not `"jmr:spr:"+n`. Concat is PYTHON/Chrome-only; FPGA-SIM `dihit=0` with HUD still painting. `drawImage` dest `x,y >= 0`. Detail: [GAME_DESIGN.md](../../docs/GAME_DESIGN.md). |
-| **No mouse port** | Machine play is keys + `joy()`. Chrome may also bind `clientX`. Do **not** make mouse the only way to place/aim — then PYTHON/FPGA-SIM/BOARD cannot play the same game. |
-| **No per-tick maze flood** | Do **not** recursive BFS / `_copyMapOpen` / `Array(n).fill().map(()=>Array(m))` every actor every cell. HDMI freezes, **no ERROR**. One-step chase; door **`2` walks up**. Event-driven in-place flood on place/sell/reset is the eyes-home class — keep the maze. Split the BFS queue at `ARR_CAP=128` (e.g. 3×128 for 360 cells). Do **not** grow `ENV_DEPTH`/`CSTK`. [no-maze-flood-on-tick.mdc](no-maze-flood-on-tick.mdc). |
-| **`fillText` 8×8 only** | One bitmap font (READY glyphs). `ctx.font` parses `NNpx` only — no TTF / `"Press Start 2P"`. Scale `k = max(1, round(N * sx / 8))` (cap 15). Each glyph is **8k px** wide. Glass-space: **8px or 16px**. World→glass shrink (DNKFAST `sx≈0.42`): **32px only on Score/Lives** (16px stays 8 glass px and vanishes). Do **not** enlarge title/pause/select. **ASCII 32–126 only** — `♦`/`♥`/`\u25C6` become `b` (UTF-8 `E2` → `byte&127`) and inflate `textAlign` center/right so labels overlap. `textAlign=left` + `x + n*(8*k)`; lives via `*` or `fillRect`, not unicode. Two calls for label and number. Do not add small fonts to RTL. [GAME_DESIGN.md](../../docs/GAME_DESIGN.md). |
-| **Glass / Esc** | 640×480 Canvas fill; Esc = machine BREAK. Present is **gone** (run 52) — scanout reads the draw bank; budget tearing, draw fast. |
-| **Disk / compile (V1.0)** | PYTHON / FPGA-SIM / BOARD `LOAD`/`RUN` `card.img`. Host mint at card-create (`NAME.JSH`). **`LOAD` works + `RUN` is `?NH` / bounce to monitor** means mint skipped that title — `python3 tools/compile_js.py --html storage/NAME.HTML` prints the wall, then remake `card.img`. **V1.5:** `COMPILE` on the machine mints the same sidecar. |
-
-**V1 library example:** `storage/MKBA.HTML` / `MKCA.HTML` (atlases, L/R sheets, V1 Math). Short names of MKBIG / MKBIGCPU.
-
-**V1 product acceptance:** `INVADERS` / `PACMAN` / `DONKEY`.
-
-## V1.5 — COMPILE live; typed-READY + popular JS still leftover
-
-Not a title generation. Caps stay V1 (`MAX_SPR` = 16, 4 MB ASET, same heap).
-Shipped glass: `LOAD` → `EDIT` (`EDITOR.JSH`) → **`COMPILE`** (`ARTSCAN.JSH` +
-`COMPILER.JSH`) → `RUN`. `RUN` is unchanged — it loads whatever `.JSH` is
-on the card. Typed-at-READY numbered authoring of *new* programs is leftover.
-
-| Action | Glass |
-|---|---|
-| Type | leftover: `10 …` Enter, `20 …` Enter, … then `COMPILE` then `RUN` |
-| Paste | leftover. Unnumbered paste auto-numbers by 10; numbered paste keeps numbers |
-| Compile | **V1.5 live:** bare `COMPILE` verb. **V1.0:** compile when you make the card (minted `.JSH`). `RUN` always loads `.JSH`. |
-| Replace | leftover: `10 body` + Enter |
-| Delete | leftover: `10` + Enter (number only) — **gone**, not blank |
-| Insert between | leftover: step by 10 so `15 xyz` lands between `10` and `20` |
-| Edit | **V1.5 live:** bare `EDIT` launches `EDITOR.JSH`. Do **not** add `INSERT` / `DELETE` verbs — insert is an unused number (`15`); delete is `10` + Enter. V1.0 `LIST` / `DIR` / `LOAD` still view / learn |
-| **Language** | Popular JS V1 walls/faults (still backlog): `Array.shift`/`every`/`includes`, `Math.sin`/`ceil`, `String.split`/`charAt`/`toUpperCase`, `isFinite`/`isNaN`/`parseInt`, `performance.now`, `cancelAnimationFrame`, `e.code`. `Math.round` is live (nid 54). Full table: [JMR_JS_COMPATIBILITY.md § V1.5](../../docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). **Never:** Canvas gradients / `globalCompositeOperation` / mouse |
-
-**Fit:** SOURCE stays in external SRAM. Do not grow SOURCE into BRAM. Language natives’ LUT cost is **TBD**. Full table: [JMR_JS_COMPATIBILITY.md § V1.5](../../docs/JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
-
-## V2.0 — grow the ISA (not a named title)
-
-No `storage/MK.HTML` — that file is gone; do not treat a missing name as
-acceptance. V2 is **machine** work. Historical sizing (2026-08-20 census of
-the lost fighter HTML) still informs the caps:
-
-| Requirement | Number / behavior |
-|---|---|
-| Sprite descriptors | **`MAX_SPR` = `PROGRAM_MAX_SPRITES` ≥ 518** (V1 = 16) |
-| Asset bank | **V2.0 = 8 MB** (or more) simple SRAM port. ASIC: **single chip**, no fancy multi-bank access. V1 stays 4 MB. |
-| Compiler | Accept dotted `new Foo.Bar(…)` (runtime construct-on-a-value) |
-| Native | **`Object.keys`** (or real `for…in`) on exec64 |
-| Native | **`Math.round`** — **landed** nid 54 (PYTHON + exec64) |
-
-```text
-// BAD V1 — one data:image per frame past MAX_SPR=16
-// GOOD V1 — atlas + 9-arg drawImage (MKBIG)
-// V2 — raise the descriptor table when a title actually needs >16 sheets
-```
+- A page that runs in Chrome is not proof. Check every new or changed program
+  with `python3 tools/check_port.py storage/NAME.HTML`, then run it in the
+  Python model and FPGA-SIM. A program that fails to compile gets no `.JSH`
+  and will not start.
+- Programs start from Finder (double-click). The card builder compiles every
+  program in `storage/`; on the machine, Finder's Special → Compile does the
+  same job. Do not add a second compile path.
+- When a program hits a limit, change the program: pack frames into at most
+  16 art sheets, split a function that needs more than 16 parameters plus
+  locals, use row arrays for a map larger than 128 elements, reuse objects
+  instead of allocating every frame. Do not cut game content to fit, and do
+  not raise a machine limit for one title.
+- Never gate behaviour on a program's name (`if (stem == "…")`).
+  [no-game-hardwire.mdc](no-game-hardwire.mdc).
+- `img.src = "jmr:spr:N"` must be a string literal per sheet.
+- Text is one 8×8 bitmap font, ASCII 32–126. Do not add fonts to the RTL.
+- Esc leaves the program. Do not bind it.
+- No per-frame maze flood or other unbounded per-tick work.
+  [no-maze-flood-on-tick.mdc](no-maze-flood-on-tick.mdc).
+- Do not delete the system programs in `storage/`: `FINDER`, `EDITOR`, `READ`,
+  `NOTE`, `UTILITY`, `COMPILE`, `ARTSCAN`, `COMPILER`, `COMPIL2`.

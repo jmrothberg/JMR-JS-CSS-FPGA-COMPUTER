@@ -1113,7 +1113,7 @@ tbSessionProperty(_context,2,"Pac-Man|Clear the maze while avoiding ghosts.");
 				context.fillText(text,this.x,this.y);
 			}
 		}).bind('click',function(){
-			window.open('https://passer-by.com');
+			tbDialogOpen(1,tbSessionCodes("Pac-Man credit"),[tbSessionCodes("Original game: https://passer-by.com")],[]);
 		});
 		//事件绑定
 		stage.bind('keydown',function(e){

@@ -1,6 +1,5 @@
 """A system application declares its window through normal context properties."""
 from pathlib import Path
-import base64
 import pytest
 from functional_model.compiler import compile_source
 from functional_model.jsb_format import ProgramImage

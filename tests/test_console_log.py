@@ -551,7 +551,7 @@ def test_rtl_src_tether_then_save():
 
 
 # ---------------------------------------------------------------------------
-# run 71: transfer integrity + big put (0xFB -> CART staging bank)
+# Transfer integrity + big put (0xFB -> CART staging bank)
 # ---------------------------------------------------------------------------
 
 def _big_blob(n: int, seed: int = 71) -> bytes:

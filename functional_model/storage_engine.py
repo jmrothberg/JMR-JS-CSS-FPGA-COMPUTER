@@ -1,6 +1,6 @@
 """Storage — V1.0 disk is card.img (same FAT PYTHON / FPGA-SIM / BOARD play).
 
-LLM NOTE: Pattern cite BASIC make_sd_image / storage/ — method only.
+Pattern cite BASIC make_sd_image / storage/ — method only.
 `storage/` is the seed (`make_sd_image.py create`). Default Machine() mounts
 project card.img (or $JMR_CARD_IMG). Explicit `root=` stays a host folder
 so unit tests can use a temp dir.
@@ -212,6 +212,19 @@ class StorageEngine:
             return
         path = self._resolve(name)
         path.write_bytes(bytes(data))
+
+    def append_bytes(self, name: str, data: bytes) -> None:
+        """Append through the FAT chain or host file without loading its prefix."""
+        if self.card_img is not None:
+            if not self.card_img.is_file():
+                raise FileNotFoundError(name)
+            vol = self._mount()
+            vol.append_file(name, bytes(data))
+            self.card_img.write_bytes(bytes(vol.card.image))
+            return
+        path = self._resolve(name)
+        with path.open("ab") as stream:
+            stream.write(bytes(data))
 
     def delete(self, name: str) -> None:
         if self.card_img is not None:

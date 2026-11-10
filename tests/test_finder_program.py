@@ -16,7 +16,7 @@ from tools.compile_js import compile_html_text, encode_html_chunk
 
 ROOT = Path(__file__).resolve().parents[1]
 FINDER = ROOT / "storage" / "FINDER.HTML"
-# 2026-11-03: idle 88. Paint 5858, then 14231 with the System 1.0 picture.
+# Idle 88. Paint 5858, then 14231 with the System 1.0 picture.
 IDLE_BUDGET = 120
 PAINT_BUDGET = 20000
 

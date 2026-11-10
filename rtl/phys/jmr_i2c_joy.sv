@@ -29,7 +29,7 @@ module jmr_i2c_joy #(
     localparam logic [7:0] REG_A  = 8'h22;
     localparam logic [7:0] REG_B  = 8'h23;
     localparam logic [7:0] REG_D  = 8'h24;
-    // Run 54 (board-verified regression fix): 10 ms polls KILLED the
+    // 10 ms polls KILLED the
     // stick — the peripheral's firmware needs the idle gap (50 ms was
     // empirical device tolerance, not laziness), and the old failure
     // branch forced all directions OFF on any bad batch, so a starved
@@ -39,7 +39,7 @@ module jmr_i2c_joy #(
     //   2) HOLD last state on a transient bad batch; only 8 consecutive
     //      failures (~0.2 s = genuine unplug) clear the outputs.
     localparam int WAIT_POLL = CLK_HZ / 25;  // 40 ms between full polls
-    // Run 55 (board: works-then-JAMS at 25 ms, jam holds the last pushed
+    // Board: works-then-JAMS at 25 ms, jam holds the last pushed
     // direction = the device MCU wedged and repeats its last sample):
     // the burst of 7 back-to-back register reads is the real stressor —
     // give the device firmware breathing room BETWEEN reads too.
@@ -65,7 +65,7 @@ module jmr_i2c_joy #(
     logic [2:0]  step; // 0..6 register index
     logic [22:0] pause;
     logic [2:0]  fail_n;   // consecutive failed batches
-    // Run 55 (board JOYDEMO forensics): live L1 while R1 stuck 20 s =
+    // Live L1 while R1 stuck 20 s =
     // the pot RESTS right of nominal center (~145-155), and absolute
     // thresholds (release at 144) never release at rest. Capture the
     // true rest position on the first good batch (stick untouched at
@@ -164,7 +164,7 @@ module jmr_i2c_joy #(
                             ack_ok <= 1'b1;
                             fail_n <= 3'd0;
                             if (good_n != 3'd7) begin
-                                /* SETTLE WINDOW (board 2026-08-29: buttons
+                                /* SETTLE WINDOW (board: buttons
                                    double-fired and directions mislatched at
                                    power-on — early batches glitch). Outputs
                                    stay 0 for the first 8 consecutive good
@@ -194,7 +194,7 @@ module jmr_i2c_joy #(
                                 right <= (dx9 >  10'sd32) || (right && dx9 >  10'sd16);
                                 up    <= (dy9 < -10'sd32) || (up    && dy9 < -10'sd16);
                                 down  <= (dy9 >  10'sd32) || (down  && dy9 >  10'sd16);
-                                /* DRIFT RE-CENTER (board 2026-08-29: stick
+                                /* DRIFT RE-CENTER (board: stick
                                    held Left/Right "for a while" — the pot
                                    rest drifts, the one-shot boot center went
                                    stale, and the +-16 release band could no
@@ -207,7 +207,7 @@ module jmr_i2c_joy #(
                                     cx <= (dx9 > 10'sd0) ? cx + 8'd1 : cx - 8'd1;
                                 if (!up && !down && dy9 > -10'sd28 && dy9 < 10'sd28 && dy9 != 10'sd0)
                                     cy <= (dy9 > 10'sd0) ? cy + 8'd1 : cy - 8'd1;
-                                /* STUCK-RELEASE WATCHDOG (board 2026-08-29:
+                                /* STUCK-RELEASE WATCHDOG (board:
                                    MISSILE/ASTEROIDS jammed right after a
                                    flick — the pot RETURNED to a rest shifted
                                    past the +-16 release band, and idle
@@ -239,7 +239,7 @@ module jmr_i2c_joy #(
                                 ac_now = btn_held(va) | btn_held(vc) | btn_held(vok);
                                 bd_now = btn_held(vb) | btn_held(vd);
                                 fire_ac <= ac_now || (fire_ac && ac_p);
-                                /* v3c (board on run 58: fire 2-3x per press,
+                                /* v3c (board: fire 2-3x per press,
                                    game-dependent): the old VM edge bug ERASED
                                    concurrent edges and masked the device
                                    twitching a second button register during

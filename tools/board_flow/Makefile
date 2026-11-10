@@ -32,16 +32,15 @@ JMR_IMPL_TIMEOUT_MIN ?= 45
 export JMR_VIVADO_STRATEGY JMR_VIVADO_OPT_DIRECTIVE JMR_MAX_SYNTH_LUTS
 export JMR_MAX_LUTS JMR_MAX_BRAM JMR_MAX_SLICES JMR_IMPL_TIMEOUT_MIN
 #
-# LLM NOTE: Cursor sandbox breaks Vivado license — run on host shell.
+# Vivado needs its license: run on the host shell, not in a sandbox.
 # openFPGALoader board id: nexysVideo
 
 ROOT := $(abspath ../..)
 RTL  := $(ROOT)/rtl
 OUT  := $(ROOT)/build/nexys_video
 BIT  := $(OUT)/jmr_nexys_video.bit
-# Programming selects the preserved release, independently of build targets.
-# Override FLASH_BIT explicitly when testing a different, qualified artifact.
-FLASH_BIT ?= $(ROOT)/releases/current/fpga.bit
+# make flash FLASH_BIT=<file.bit>
+FLASH_BIT ?=
 VENV := $(ROOT)/.venv
 
 UI_ROM_SRCS := $(wildcard $(ROOT)/vectors/*.hex)
@@ -76,7 +75,7 @@ endif
 
 # Volatile config — lost when you unplug USB power
 flash:
-	@test -f "$(FLASH_BIT)" || { echo "Missing release: $(FLASH_BIT). See releases/current/README.md."; exit 1; }
+	@test -f "$(FLASH_BIT)" || { echo "Give the bitstream: make flash FLASH_BIT=<file.bit>. See docs/FPGA_FIT.md."; exit 1; }
 	@if command -v openFPGALoader >/dev/null 2>&1; then \
 	  openFPGALoader -b nexysVideo "$(FLASH_BIT)"; \
 	else \
@@ -86,7 +85,7 @@ flash:
 # Quad-SPI flash — board boots HDMI alone after PROG/power (set JP4 to QSPI)
 # Erase+program is slow (minutes). This is the untethered path.
 flash-qspi:
-	@test -f "$(FLASH_BIT)" || { echo "Missing release: $(FLASH_BIT). See releases/current/README.md."; exit 1; }
+	@test -f "$(FLASH_BIT)" || { echo "Give the bitstream: make flash FLASH_BIT=<file.bit>. See docs/FPGA_FIT.md."; exit 1; }
 	@if command -v openFPGALoader >/dev/null 2>&1; then \
 	  openFPGALoader -b nexysVideo -f "$(FLASH_BIT)"; \
 	else \

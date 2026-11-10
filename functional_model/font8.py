@@ -1,6 +1,6 @@
 """Tiny 8×8 bitmap font for monitor text on the 640×480 glass.
 
-LLM NOTE: On FPGA this table belongs in BRAM (font ROM), not LUT flops.
+On FPGA this table belongs in BRAM (font ROM), not LUT flops.
 Only printable ASCII 0x20–0x7E; others draw as solid block.
 """
 
@@ -80,7 +80,7 @@ def _build() -> None:
         "Z": _pack("######..", ".....#..", "....#...", "...#....", "..#.....", ".#......", "######..", "........"),
     }
     glyphs.update(letters)
-    # NEW: true lowercase (x-height) — do NOT alias to capitals (JS LIST must look like JS)
+    # True lowercase (x-height) — do NOT alias to capitals (JS LIST must look like JS)
     lowers = {
         "a": _pack("........", "........", ".####...", ".....#..", ".#####..", "#....#..", ".#####..", "........"),
         "b": _pack("#.......", "#.......", "#####...", "#....#..", "#....#..", "#....#..", "#####...", "........"),
@@ -119,7 +119,7 @@ def _build() -> None:
     glyphs["'"] = _pack("..##....", "..##....", ".##.....", "........", "........", "........", "........", "........")
     glyphs["["] = _pack(".####...", ".##.....", ".##.....", ".##.....", ".##.....", ".##.....", ".####...", "........")
     glyphs["]"] = _pack(".####...", "...##...", "...##...", "...##...", "...##...", "...##...", ".####...", "........")
-    # NEW: JS punctuation — LIST of INVADERS.JS needs these (missing → "?")
+    # JS punctuation — LIST of INVADERS.JS needs these (missing → "?")
     glyphs["{"] = _pack("...###..", "..##....", "..##....", ".##.....", "..##....", "..##....", "...###..", "........")
     glyphs["}"] = _pack(".###....", "...##...", "...##...", "....##..", "...##...", "...##...", ".###....", "........")
     glyphs[";"] = _pack("........", "..##....", "..##....", "........", "..##....", "..##....", ".##.....", "........")

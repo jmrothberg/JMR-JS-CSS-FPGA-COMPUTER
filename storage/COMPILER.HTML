@@ -1,33 +1,4 @@
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>COMPILER — JMR self-hosted compiler, pass B</title></head>
-<body style="margin:0;background:#000">
-<!--
-  COMPILER.HTML — DO NOT DELETE. Pass B of the on-machine compiler (not a game).
-  `COMPILE` chain-loads this after ARTSCAN. DIR hides this stem on purpose.
-
-  Reads the span map ARTSCAN left in the arena, walks the residual JavaScript
-  as a virtual byte stream, and writes a fixed-stride token array back into
-  the arena for the parser to index.
-
-  Why a virtual stream: the source is forward-only (on silicon it arrives
-  through a 64 KB ring over the open card file), but a parser needs random
-  access. Tokens are the smallest thing worth materialising, so the source
-  stays streamed and the tokens get indexed.
-
-  AUTHORING RULES - this file is compiled BY the machine's own walls:
-    - NO string methods exist. There is no charCodeAt, no substring, no
-      split. The compiler therefore never builds a JS string: identifiers
-      and literals are (offset, length) pairs into the source, always.
-    - NO shift or xor operators. Bit packing is arithmetic on binary64.
-    - 16 locals+params per function, hard. Split, do not economise.
-    - Avoid arrays. Only 12 may exceed 32 elements; state lives in the arena.
-    - Divide and modulo are ~53-beat iterative operations. Keep them out of
-      per-byte loops; per-token is fine.
--->
-<canvas id="gameCanvas" width="640" height="480"></canvas>
 <script>
-// ---- arena layout (mirror of functional_model/jsb_format.py) -------------
 var MSG_OFF = 128;  // 2026-09-01: console prints from CSTG_HDR_MSG=128 — 0 made every ?CE mute
 var HDR_PROGSEL = 64;
 var HDR_ART = 65;
@@ -39,10 +10,7 @@ var SPAN_OFF = 128;
 var SPAN_STRIDE = 12;
 var TOK_OFF = 3200;
 var TOK_STRIDE = 6;
-// Cap is the arena, not a guess: tokens grow from TOK_OFF and the parser's
-// tables start right after the last one, so a small title reserves nothing.
 var TOK_MAX = 48000;
-
 var K_EOF = 0;
 var K_ID = 1;
 var K_NUM = 2;
@@ -51,97 +19,13 @@ var K_TMPL = 4;
 var K_OP = 5;
 var K_REGEX = 6;
 var K_KEY = 7;
-
 var ST_ERR_TOKENS = 6;
 var ST_ERR_STR = 7;
 var ST_ERR_REGEX = 8;
 var ST_ERR_PARSE = 9;
-
-// ---- shim ---------------------------------------------------------------
-function _sb(i) { return srcByte(i); }
-function _gr(i) { return stgRead(i); }
-function _gw(i, b) { if (i < 0 || i >= 380928) { dgFail(i); return; } stgWrite(i, b); }
-
-function _r16(o) { return _gr(o) + _gr(o + 1) * 256; }
-function _r32(o) {
-  return _gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536 + _gr(o + 3) * 16777216;
-}
-function _w16(o, v) {
-  _gw(o, v % 256);
-  _gw(o + 1, Math.floor(v / 256) % 256);
-}
-function _w32(o, v) {
-  _gw(o, v % 256);
-  _gw(o + 1, Math.floor(v / 256) % 256);
-  _gw(o + 2, Math.floor(v / 65536) % 256);
-  _gw(o + 3, Math.floor(v / 16777216) % 256);
-}
-
-// ---- board diagnostics (2026-09-01): print the numbers, don't fault ----
-// A bad arena handoff used to run all the way to buildPalette and die as a
-// silent fault 5 on glass. These write ASCII decimals straight to the
-// message area (raw stgWrite: _gw guards must not recurse) and cdone so
-// the console prints them after ?CE.
 var DGN = 0;
 var DGONCE = 0;
 var HA_RAW = 0;
-function dgC(c) { if (DGN < 120) { stgWrite(MSG_OFF + DGN, c); DGN = DGN + 1; } }
-function dgD(v) {
-  if (v < 0) { dgC(45); v = 0 - v; }
-  var d = 1000000000; var s = 0;
-  while (d >= 1) {
-    var q = Math.floor(v / d) % 10;
-    if (q > 0 || s || d === 1) { dgC(48 + q); s = 1; }
-    d = Math.floor(d / 10);
-    if (d === 0) { break; }
-  }
-}
-function dgT(a, b, c) { dgC(32); dgC(a); if (b) { dgC(b); } if (c) { dgC(c); } dgC(61); }
-function dgFail(i) {
-  if (DGONCE) { return; }
-  DGONCE = 1;
-  DGN = 0;
-  dgC(79); dgC(79); dgC(66);            // "OOB"
-  dgT(73, 0, 0); dgD(i);                // " I=<bad index>"
-  dgT(83, 80, 0); dgD(spanN);           // " SP=<spanN>"
-  dgT(84, 75, 0); dgD(tokN);            // " TK=<tokN>"
-  dgT(80, 65, 0); dgD(PAL_OFF);         // " PA=<PAL_OFF>"
-  dgT(78, 77, 0); dgD(nNames);          // " NM=<nNames>"
-  dgT(86, 76, 0); dgD(vLen);            // " VL=<vLen>"
-  dgT(72, 65, 0); dgD(HA_RAW);          // " HA=<raw art flag>"
-  cdone(15, 0, DGN);
-}
-
-// The length field is free on an error path, so it carries the token index
-// the parser stopped at. That turns "SYNTAX" into something locatable.
-function _fail(code, a, b, c, d, e, f, g) {
-  if (DGONCE) { return; }
-  var n = 0;
-  if (a) { _gw(MSG_OFF + n, a); n = n + 1; }
-  if (b) { _gw(MSG_OFF + n, b); n = n + 1; }
-  if (c) { _gw(MSG_OFF + n, c); n = n + 1; }
-  if (d) { _gw(MSG_OFF + n, d); n = n + 1; }
-  if (e) { _gw(MSG_OFF + n, e); n = n + 1; }
-  if (f) { _gw(MSG_OFF + n, f); n = n + 1; }
-  if (g) { _gw(MSG_OFF + n, g); n = n + 1; }
-  cdone(code, perr, n);
-}
-
-// Only the v2 marker opts into the bounded on-device resident linker.
-function needsRomLink() {
- var sig = "jmr-toolbox: resident-v";
- var i=0,j=0,c,n=srcLen();
- if(n>1024)n=1024;
- while(i<n){
-  c=srcByte(i);
-  if(c==strByte(sig,j)){j=j+1;if(j==23){c=srcByte(i+1);if(i+1<n&&c==50)return 2;if(i+1<n&&c==49)return 1;j=0;}}
-  else {if(c==106)j=1;else j=0;}
-  i=i+1;
- }
- return 0;
-}
-
-// Resident v2 linker. Scratch is below ART_KEEP; SOURCE remains read-only.
 var LINK_OFF = 368640;
 var LINK_MODE = 0;
 var LINK_NAMES = 0;
@@ -149,66 +33,10 @@ var LINK_FUNCS = 0;
 var LINK_VARS = 0;
 var LINK_MAP = 0;
 var LINK_BYTES = 0;
-function linkXor(a,b) { var x=a&b;if(x<0)x=x+4294967296;return a+b-2*x; }
-function linkCrc(o,n) {
- var c=4294967295,i=0,j=0;
- while(i<n){c=linkXor(c,_gr(o+i));j=0;
-  while(j<8){if(c%2)c=linkXor(Math.floor(c/2),3988292384);else c=Math.floor(c/2);j=j+1;}i=i+1;}
- return 4294967295-c;
-}
-function linkName(rom) {
- _w32(LINK_OFF+8176,1280266068);_w32(LINK_OFF+8180,777539394);
- _w32(LINK_OFF+8184,rom?5066578:4935244);
-}
-function linkReadManifest() {
- var n;
- linkName(0);n=fsRead(LINK_OFF+8176,0,LINK_OFF,8176);
- if(_r32(LINK_OFF)!=1280593226 || _r32(LINK_OFF+4)!=4194306)return 0;
- if(_r32(LINK_OFF+8)!=n-64)return 0;
- if(fsRead(LINK_OFF+8176,n,LINK_OFF+8175,1)!=0)return 0;
- if(linkCrc(LINK_OFF+64,n-64)!=_r32(LINK_OFF+12))return 0;
- if(_r32(LINK_OFF+32)!=536813568)return 0;
- LINK_NAMES=_r16(LINK_OFF+24);LINK_VARS=_r16(LINK_OFF+28);LINK_FUNCS=_r16(LINK_OFF+30);LINK_BYTES=n;
- if(LINK_NAMES>NAME_MAX || _r16(LINK_OFF+26)>1024 || LINK_VARS>LINK_NAMES || LINK_FUNCS>FN_MAX)return 0;
- return 1;
-}
-function linkSeed() {
- var p=LINK_OFF+64,i=0,n,h,j;
- while(i<LINK_NAMES){
-  if(p+4>LINK_OFF+LINK_BYTES)return 0;
-  n=_r16(p);h=_r16(p+2);p=p+4;
-  if(n>255 || p+n>LINK_OFF+LINK_BYTES || blobLen+n>BLOB_MAX)return 0;
-  nameNew(n,h);j=0;while(j<n){_gw(NBLOB_OFF+blobLen+j,_gr(p+j));j=j+1;}
-  blobLen=blobLen+n;p=p+n;i=i+1;
- }
- nPool=_r16(LINK_OFF+26);n=nPool*8;
- if(p+n>LINK_OFF+LINK_BYTES)return 0;
- j=0;while(j<n){_gw(POOL_OFF+j,_gr(p+j));j=j+1;}p=p+n;
- LINK_MAP=p;p=p+LINK_VARS*2;
- if(p+LINK_FUNCS*6!=LINK_OFF+LINK_BYTES)return 0;
- i=0;while(i<LINK_FUNCS){
-  n=_r16(p);h=_r16(p+2);j=_r16(p+4);
-  if(n>=LINK_NAMES || h>=8191 || j>16 || fnFind(n)>=0)return 0;
-  fnAdd(n,h,j);p=p+6;i=i+1;
- }
- return 1;
-}
-function linkReadRom() {
- var n=0,i=0,h=0,w=0;
- linkName(1);n=fsRead(LINK_OFF+8176,0,OPS_OFF,32784);
- if(n!=32784 || fsRead(LINK_OFF+8176,32784,LINK_OFF+8175,1)!=0)return 0;
- if(_r32(OPS_OFF)!=1414679882 || _r32(OPS_OFF+4)!=1048578 || _r32(OPS_OFF+8)!=32768)return 0;
- if(_r32(OPS_OFF+12)!=_r32(LINK_OFF+16) || linkCrc(OPS_OFF+16,32768)!=_r32(LINK_OFF+16))return 0;
- while(i<8192){w=_r32(OPS_OFF+16+i*4);if(i==8191 && w!=2097163)return 0;
-  h=(h*2)%4294967296+Math.floor(h/2147483648);h=linkXor(h,w);i=i+1;}
- if(h!=_r32(LINK_OFF+20))return 0;
- i=0;while(i<32768){_gw(OPS_OFF+i,_gr(OPS_OFF+16+i));i=i+1;}
- nOps=8192;return 1;
-}
-// ---- the virtual source stream ------------------------------------------
-// Spans describe the residual JS as a sequence of source ranges plus
-// synthetic semicolons. vAt(vp) is the byte at virtual position vp. The
-// current span is cached so sequential reads never re-walk the map.
+var CRC_LO=[];var CRC_HI=[];var CRC_TYPED=0;
+var JSON_OFF=352256;
+var JSON_LEN=0;
+var NEED_RUNTIME=0;
 var spanN = 0;
 var vLen = 0;
 var cSpan = -1;
@@ -216,507 +44,12 @@ var cStart = 0;
 var cEnd = 0;
 var cSrc = 0;
 var cKind = 0;
-
-function spanKind(i) { return _gr(SPAN_OFF + i * SPAN_STRIDE); }
-function spanOff(i) { return _r32(SPAN_OFF + i * SPAN_STRIDE + 2); }
-function spanLen(i) { return _r32(SPAN_OFF + i * SPAN_STRIDE + 6); }
-
-function measure() {
-  var i = 0;
-  var t = 0;
-  while (i < spanN) {
-    if (spanKind(i) === 0) { t = t + spanLen(i); } else { t = t + 1; }
-    i = i + 1;
-  }
-  vLen = t;
-}
-
-// Point the cache at the span containing vp. Returns 0 if vp is past the end.
-function seek(vp) {
-  var i = 0;
-  var base = 0;
-  var n = 0;
-  while (i < spanN) {
-    if (spanKind(i) === 0) { n = spanLen(i); } else { n = 1; }
-    if (vp < base + n) {
-      cSpan = i;
-      cStart = base;
-      cEnd = base + n;
-      cSrc = spanOff(i);
-      cKind = spanKind(i);
-      return 1;
-    }
-    base = base + n;
-    i = i + 1;
-  }
-  cSpan = -1;
-  return 0;
-}
-
-function vAt(vp) {
-  if (vp < 0 || vp >= vLen) { return -1; }
-  if (cSpan < 0 || vp < cStart || vp >= cEnd) {
-    if (seek(vp) === 0) { return -1; }
-  }
-  if (cKind === 0) { return _sb(cSrc + (vp - cStart)); }
-  return 59;
-}
-
-// Source offset behind a virtual position, so token records point at the
-// real file and the parser never needs the text copied anywhere.
-function vSrc(vp) {
-  if (cSpan < 0 || vp < cStart || vp >= cEnd) {
-    if (seek(vp) === 0) { return 0; }
-  }
-  if (cKind === 0) { return cSrc + (vp - cStart); }
-  return 0;
-}
-
-// ---- character classes ---------------------------------------------------
-function isDigit(b) { return b >= 48 && b <= 57; }
-function isIdStart(b) {
-  if (b >= 97 && b <= 122) { return 1; }
-  if (b >= 65 && b <= 90) { return 1; }
-  if (b === 95 || b === 36) { return 1; }
-  return 0;
-}
-function isIdPart(b) {
-  if (isIdStart(b)) { return 1; }
-  return isDigit(b) ? 1 : 0;
-}
-function isSpace(b) {
-  return b === 32 || b === 9 || b === 10 || b === 13;
-}
-
-// ---- token emit ----------------------------------------------------------
 var tokN = 0;
 var tokOver = 0;
-
-function emitTok(kind, sub, off, len) {
-  if (tokN >= TOK_MAX || len>255) { tokOver = 1; return; }
-  var b = TOK_OFF + tokN * TOK_STRIDE;
-  _w16(b,kind+sub*256);
-  _w32(b+2,off+len*16777216);
-  tokN = tokN + 1;
-}
-
-function tokKind(i) { return _gr(TOK_OFF + i * TOK_STRIDE); }
-function tokSub(i) { return _gr(TOK_OFF + i * TOK_STRIDE + 1); }
-
-// ---- trivia --------------------------------------------------------------
-// Returns the position of the next real character, or vLen at end.
-function skipTrivia(vp) {
-  var b = 0;
-  var run = 1;
-  while (run) {
-    run = 0;
-    b = vAt(vp);
-    while (b >= 0 && isSpace(b)) { vp = vp + 1; b = vAt(vp); }
-    if (b === 47 && vAt(vp + 1) === 47) {
-      while (b >= 0 && b !== 10) { vp = vp + 1; b = vAt(vp); }
-      run = 1;
-    } else if (b === 47 && vAt(vp + 1) === 42) {
-      vp = vp + 2;
-      while (vAt(vp) >= 0) {
-        if (vAt(vp) === 42 && vAt(vp + 1) === 47) { vp = vp + 2; break; }
-        vp = vp + 1;
-      }
-      run = 1;
-    }
-  }
-  return vp;
-}
-
-// ---- keyword recognition -------------------------------------------------
-// No string compares exist, so identifiers are hashed with the SAME
-// h = (h*31 + b) & 0xFFFF the image format uses for its name table, then
-// verified byte-by-byte against the keyword table. Hash alone would risk a
-// collision renaming a variable into a keyword.
-function hashAt(vp, len) {
-  var h = 0;
-  var i = 0;
-  while (i < len) {
-    h = (h * 31 + vAt(vp + i)) % 65536;
-    i = i + 1;
-  }
-  return h;
-}
-
-// Keyword table lives in the arena as (hash, len, code) triples so this
-// function stays inside its 16 locals. Built once at startup.
 var KW_OFF = 2560;
 var KW_N = 0;
-
-function kwAdd(code, len, a, b, c, d, e, f, g, h) {
-  var o = KW_OFF + KW_N * 6;
-  var t = 0;
-  t = (t * 31 + a) % 65536;
-  if (len > 1) { t = (t * 31 + b) % 65536; }
-  if (len > 2) { t = (t * 31 + c) % 65536; }
-  if (len > 3) { t = (t * 31 + d) % 65536; }
-  if (len > 4) { t = (t * 31 + e) % 65536; }
-  if (len > 5) { t = (t * 31 + f) % 65536; }
-  if (len > 6) { t = (t * 31 + g) % 65536; }
-  if (len > 7) { t = (t * 31 + h) % 65536; }
-  _w16(o, t);
-  _gw(o + 2, len);
-  _gw(o + 3, code);
-  KW_N = KW_N + 1;
-}
-
-function kwInit() {
-  kwAdd(0, 3, 118, 97, 114, 0, 0, 0, 0, 0);            // var
-  kwAdd(1, 3, 108, 101, 116, 0, 0, 0, 0, 0);           // let
-  kwAdd(2, 5, 99, 111, 110, 115, 116, 0, 0, 0);        // const
-  kwAdd(3, 8, 102, 117, 110, 99, 116, 105, 111, 110);  // function
-  kwAdd(4, 6, 114, 101, 116, 117, 114, 110, 0, 0);     // return
-  kwAdd(5, 2, 105, 102, 0, 0, 0, 0, 0, 0);             // if
-  kwAdd(6, 4, 101, 108, 115, 101, 0, 0, 0, 0);         // else
-  kwAdd(7, 5, 119, 104, 105, 108, 101, 0, 0, 0);       // while
-  kwAdd(8, 3, 102, 111, 114, 0, 0, 0, 0, 0);           // for
-  kwAdd(9, 5, 98, 114, 101, 97, 107, 0, 0, 0);         // break
-  kwAdd(10, 8, 99, 111, 110, 116, 105, 110, 117, 101); // continue
-  kwAdd(11, 3, 110, 101, 119, 0, 0, 0, 0, 0);          // new
-  kwAdd(12, 6, 116, 121, 112, 101, 111, 102, 0, 0);    // typeof
-  kwAdd(13, 5, 99, 108, 97, 115, 115, 0, 0, 0);        // class
-  kwAdd(14, 4, 116, 104, 105, 115, 0, 0, 0, 0);        // this
-  kwAdd(15, 4, 116, 114, 117, 101, 0, 0, 0, 0);        // true
-  kwAdd(16, 5, 102, 97, 108, 115, 101, 0, 0, 0);       // false
-  kwAdd(17, 4, 110, 117, 108, 108, 0, 0, 0, 0);        // null
-  kwAdd(18, 9, 117, 110, 100, 101, 102, 105, 110, 101);// undefined (len>8: verify)
-  kwAdd(19, 6, 115, 119, 105, 116, 99, 104, 0, 0);     // switch
-  kwAdd(20, 4, 99, 97, 115, 101, 0, 0, 0, 0);          // case
-  kwAdd(21, 7, 100, 101, 102, 97, 117, 108, 116, 0);   // default
-  kwAdd(22, 2, 100, 111, 0, 0, 0, 0, 0, 0);            // do
-  kwAdd(23, 2, 105, 110, 0, 0, 0, 0, 0, 0);            // in
-  kwAdd(24, 2, 111, 102, 0, 0, 0, 0, 0, 0);            // of
-  kwAdd(25, 3, 116, 114, 121, 0, 0, 0, 0, 0);          // try
-  kwAdd(26, 5, 99, 97, 116, 99, 104, 0, 0, 0);         // catch
-  kwAdd(27, 7, 102, 105, 110, 97, 108, 108, 121, 0);   // finally
-  kwAdd(28, 5, 116, 104, 114, 111, 119, 0, 0, 0);      // throw
-}
-
-// Returns keyword code, or -1. Hash narrows; length must agree too.
-function kwLookup(vp, len) {
-  if (len > 9) { return -1; }
-  var h = hashAt(vp, len);
-  var i = 0;
-  var o = 0;
-  while (i < KW_N) {
-    o = KW_OFF + i * 6;
-    if (_gr(o + 2) === len && _r16(o) === h) { return _gr(o + 3); }
-    i = i + 1;
-  }
-  return -1;
-}
-
-// ---- scanners ------------------------------------------------------------
-function scanIdent(vp) {
-  var s = vp;
-  while (isIdPart(vAt(vp))) { vp = vp + 1; }
-  var len = vp - s;
-  var kw = kwLookup(s, len);
-  if (kw >= 0) {
-    emitTok(K_KEY, kw, vSrc(s), len);
-  } else {
-    emitTok(K_ID, 0, vSrc(s), len);
-  }
-  return vp;
-}
-
-function scanNum(vp) {
-  var s = vp;
-  while (isDigit(vAt(vp))) { vp = vp + 1; }
-  if (vAt(vp) === 46) {
-    vp = vp + 1;
-    while (isDigit(vAt(vp))) { vp = vp + 1; }
-  }
-  emitTok(K_NUM, 0, vSrc(s), vp - s);
-  return vp;
-}
-
-// String bodies keep their quotes out of the record: (off,len) covers the
-// text between them. Escapes are left raw for the parser to decode, since
-// decoding needs a destination and the parser owns the name blob.
-function scanStr(vp, quote) {
-  var s = vp + 1;
-  var p = s;
-  var b = vAt(p);
-  while (b >= 0 && b !== quote) {
-    if (b === 92) { p = p + 1; }
-    p = p + 1;
-    b = vAt(p);
-  }
-  if (b !== quote) { return -1; }
-  emitTok(quote === 96 ? K_TMPL : K_STR, 0, vSrc(s), p - s);
-  return p + 1;
-}
-
-// ---- operators -----------------------------------------------------------
-// Maximal munch, longest first. The order here IS the contract with
-// jsb_format.OP_TOKENS; getting it wrong is a silent mis-parse.
-function op3(a, b, c) {
-  if (a === 61 && b === 61 && c === 61) { return 0; }  // ===
-  if (a === 33 && b === 61 && c === 61) { return 1; }  // !==
-  return -1;
-}
-
-function op2(a, b) {
-  if (a === 61 && b === 61) { return 2; }   // ==
-  if (a === 33 && b === 61) { return 3; }   // !=
-  if (a === 60 && b === 61) { return 4; }   // <=
-  if (a === 62 && b === 61) { return 5; }   // >=
-  if (a === 38 && b === 38) { return 6; }   // &&
-  if (a === 124 && b === 124) { return 7; } // ||
-  if (a === 43 && b === 43) { return 8; }   // ++
-  if (a === 45 && b === 45) { return 9; }   // --
-  if (a === 61 && b === 62) { return 10; }  // =>
-  if (a === 63 && b === 46) { return 11; }  // ?.
-  if (a === 43 && b === 61) { return 12; }  // +=
-  if (a === 45 && b === 61) { return 13; }  // -=
-  if (a === 42 && b === 61) { return 14; }  // *=
-  if (a === 47 && b === 61) { return 15; }  // /=
-  if (a === 37 && b === 61) { return 16; }  // %=
-  return -1;
-}
-
-function op1(a) {
-  if (a === 43) { return 17; }
-  if (a === 45) { return 18; }
-  if (a === 42) { return 19; }
-  if (a === 47) { return 20; }
-  if (a === 37) { return 21; }
-  if (a === 60) { return 22; }
-  if (a === 62) { return 23; }
-  if (a === 61) { return 24; }
-  if (a === 33) { return 25; }
-  if (a === 40) { return 26; }
-  if (a === 41) { return 27; }
-  if (a === 59) { return 28; }
-  if (a === 58) { return 29; }
-  if (a === 123) { return 30; }
-  if (a === 125) { return 31; }
-  if (a === 44) { return 32; }
-  if (a === 46) { return 33; }
-  if (a === 91) { return 34; }
-  if (a === 93) { return 35; }
-  if (a === 124) { return 36; }
-  if (a === 38) { return 37; }
-  if (a === 63) { return 38; }
-  return -1;
-}
-
-// A '/' is a regex literal, not division, when the previous token cannot end
-// an expression. Lexing it is mandatory even though V1.5 refuses to compile
-// it: treating /foo/g as division corrupts every token after it.
-function regexHere() {
-  if (tokN === 0) { return 1; }
-  var k = tokKind(tokN - 1);
-  var s = tokSub(tokN - 1);
-  if (k === K_ID || k === K_NUM || k === K_STR) { return 0; }
-  if (k === K_KEY) {
-    if (s === 14 || s === 15 || s === 16 || s === 17 || s === 18) { return 0; }
-    return 1;
-  }
-  if (k === K_OP) {
-    if (s === 27 || s === 31 || s === 35) { return 0; }  // ) } ]
-    if (s === 8 || s === 9) { return 0; }                // ++ --
-    return 1;
-  }
-  return 1;
-}
-
-function scanRegex(vp) {
-  var p = vp + 1;
-  var b = vAt(p);
-  while (b >= 0 && b !== 47 && b !== 10) {
-    if (b === 92) { p = p + 1; }
-    p = p + 1;
-    b = vAt(p);
-  }
-  if (b !== 47) { return -1; }
-  p = p + 1;
-  while (isIdPart(vAt(p))) { p = p + 1; }
-  return p;
-}
-
-// ---- numeric literals ----------------------------------------------------
-// Every numeric constant in the image is an 8-byte IEEE-754 binary64, and
-// there is no DataView, no shifts and no Math.log here. This is the most
-// parity-fragile function in the whole port: one wrong bit and the title
-// runs with a different constant. It is exact by construction, not by
-// rounding — see the note on the mantissa scale below.
-
-// Parse the digits of a NUM token into a double.
-// Integers are exact to 2^53. Fractions accumulate then divide once, so the
-// result is a single correctly-rounded division rather than a chain of them.
-function numAt(off, len) {
-  var i = 0;
-  var whole = 0;
-  var frac = 0;
-  var scale = 1;
-  var b = 0;
-  var dot = 0;
-  while (i < len) {
-    b = _sb(off + i);
-    if (b === 46) {
-      dot = 1;
-    } else if (dot === 0) {
-      whole = whole * 10 + (b - 48);
-    } else {
-      frac = frac * 10 + (b - 48);
-      scale = scale * 10;
-    }
-    i = i + 1;
-  }
-  if (dot === 0) { return whole; }
-  return whole + frac / scale;
-}
-
-// Write v as 8 little-endian binary64 bytes at arena offset o.
-function w64(o, v) {
-  var sign = 0;
-  var e = 0;
-  var m = 0;
-  var i = 0;
-  var b = 0;
-  if (v < 0) { sign = 1; v = 0 - v; }
-  if (v === 0) {
-    i = 0;
-    while (i < 8) { _gw(o + i, 0); i = i + 1; }
-    if (sign) { _gw(o + 7, 128); }
-    return;
-  }
-  // Normalise into [1,2) by doubling/halving. No Math.log exists, and a
-  // loop is exact where a log would round.
-  while (v >= 2) { v = v / 2; e = e + 1; }
-  while (v < 1) { v = v * 2; e = e - 1; }
-  e = e + 1023;
-  // 2026-09-01 (PACFAST half-scale maze): the old (v-1)*2^52 multiply and
-  // the m%256 byte chain lost every mantissa bit on the machine — each
-  // constant collapsed to its leading power of two (0.64->0.5, 640->512).
-  // The VM has never before multiplied at 2^52 magnitude; do not start.
-  // Extract the 52 mantissa bits MSB-first by repeated doubling: v stays
-  // in [0,2), *2 is exact, floor and subtract are exact — no big numbers.
-  v = v - 1;
-  m = 0;
-  i = 0;
-  while (i < 4) { v = v * 2; b = Math.floor(v); v = v - b; m = m * 2 + b; i = i + 1; }
-  // byte 6 = low 4 bits of the exponent, then the top 4 mantissa bits
-  _gw(o + 6, (e % 16) * 16 + m);
-  i = 5;
-  while (i >= 0) {
-    m = 0;
-    b = 0;
-    while (b < 8) { v = v * 2; var t = Math.floor(v); v = v - t; m = m * 2 + t; b = b + 1; }
-    _gw(o + i, m);
-    i = i - 1;
-  }
-  // byte 7 = sign, then the high 7 exponent bits
-  _gw(o + 7, sign * 128 + Math.floor(e / 16));
-}
-
-// ---- template literals ---------------------------------------------------
-// Desugared in the TOKENIZER, so the parser never learns a new construct:
-//     `a ${x} b`   ->   ( "a" + ( x ) + " b" )
-// which is the same LOAD_CONST/ADD chain the host emits.
 var tmplOn = 0;
 var tmplBrace = 0;
-
-function tmplText(vp) {
-  var s = vp;
-  var b = 0;
-  while (1) {
-    b = vAt(vp);
-    if (b < 0) { tmplOn = 0; return vp; }
-    if (b === 96) {                          // closing backtick
-      emitTok(K_STR, 0, vSrc(s), vp - s);
-      emitTok(K_OP, 27, 0, 0);               // )
-      tmplOn = 0;
-      return vp + 1;
-    }
-    if (b === 36 && vAt(vp + 1) === 123) {   // ${
-      emitTok(K_STR, 0, vSrc(s), vp - s);
-      emitTok(K_OP, 17, 0, 0);               // +
-      emitTok(K_OP, 26, 0, 0);               // (
-      tmplBrace = 0;
-      return vp + 2;
-    }
-    if (b === 92) { vp = vp + 1; }
-    vp = vp + 1;
-  }
-}
-
-// ---- the tokenizer loop --------------------------------------------------
-function tokenize() {
-  var vp = 0;
-  var b = 0;
-  var n = 0;
-  while (1) {
-    vp = skipTrivia(vp);
-    b = vAt(vp);
-    if (b < 0) { break; }
-    if (tmplOn) {
-      // Inside a ${ } hole: the brace that closes it is not an operator.
-      if (b === 125 && tmplBrace === 0) {
-        emitTok(K_OP, 27, 0, 0);             // )
-        emitTok(K_OP, 17, 0, 0);             // +
-        vp = tmplText(vp + 1);
-        continue;
-      }
-      if (b === 123) { tmplBrace = tmplBrace + 1; }
-      if (b === 125) { tmplBrace = tmplBrace - 1; }
-    }
-    if (b === 96) {                          // `template`
-      emitTok(K_OP, 26, 0, 0);               // (
-      tmplOn = 1;
-      vp = tmplText(vp + 1);
-    } else if (isIdStart(b)) {
-      vp = scanIdent(vp);
-    } else if (isDigit(b) || (b === 46 && isDigit(vAt(vp + 1)))) {
-      vp = scanNum(vp);
-    } else if (b === 34 || b === 39) {
-      vp = scanStr(vp, b);
-      if (vp < 0) { return ST_ERR_STR; }
-    } else if (b === 47 && regexHere()) {
-      emitTok(K_REGEX, 0, vSrc(vp), 1);
-      vp = scanRegex(vp);
-      if (vp < 0) { return ST_ERR_REGEX; }
-    } else {
-      n = op3(b, vAt(vp + 1), vAt(vp + 2));
-      if (n >= 0) {
-        emitTok(K_OP, n, vSrc(vp), 3);
-        vp = vp + 3;
-      } else {
-        n = op2(b, vAt(vp + 1));
-        if (n >= 0) {
-          emitTok(K_OP, n, vSrc(vp), 2);
-          vp = vp + 2;
-        } else {
-          n = op1(b);
-          if (n < 0) { return ST_ERR_PARSE; }
-          emitTok(K_OP, n, vSrc(vp), 1);
-          vp = vp + 1;
-        }
-      }
-    }
-    if (tokOver) { return ST_ERR_TOKENS; }
-  }
-  emitTok(K_EOF, 0, 0, 0);
-  return 0;
-}
-
-// ==========================================================================
-// PARSER
-//
-// Recursive descent over the token array, emitting packed opcodes into the
-// arena. Structure mirrors compiler.py: function bodies are emitted FIRST,
-// each behind a skip JUMP, then the top-level statements. Operands here are
-// NAME indices and const-record indices; the assembler below maps them to the
-// var indices and native ids the image format actually stores, which is the
-// same split the host uses between compiler.py and jsb_format.
-// ==========================================================================
-
 var OPS_OFF = 0;
 var CREC_OFF = 0;
 var NIDX_OFF = 0;
@@ -743,15 +76,13 @@ var clsCtorAP = 0;
 var clsCtorBody = 0;
 var METH_N = 0;
 var FLD_N = 0;
-
 var OPS_MAX = 20480;
 var CREC_MAX = 1024;
 var NAME_MAX = 1024;
 var BLOB_MAX = 16384;
 var GS_MAX = 2048;
-var FN_MAX = 256;
+var FN_MAX = 384;
 var ART_KEEP = 376832;  // copy of CSTG_ART_OFF; tokens would overwrite 8192
-
 var nOps = 0;
 var nCrec = 0;
 var nNames = 0;
@@ -761,24 +92,6 @@ var nNat = 0;
 var nFn = 0;
 var over = 0;
 var perr = 0;
-
-function layout() {
-  IMG_OFF = TOK_OFF;                      // the image later overwrites tokens
-  OPS_OFF = TOK_OFF + tokN * TOK_STRIDE;
-  if(LINK_MODE && OPS_OFF<IMG_OFF+131072)OPS_OFF=IMG_OFF+131072;
-  CREC_OFF = OPS_OFF + OPS_MAX * 4;
-  NIDX_OFF = CREC_OFF + (CREC_MAX + 1) * 12;
-  NBLOB_OFF = NIDX_OFF + NAME_MAX * 8;
-  LOC_OFF = NBLOB_OFF + BLOB_MAX;
-  FSET_OFF = LOC_OFF + 8192; // names any function declares
-  NAT_OFF = FSET_OFF + 2048;
-  FN_OFF = NAT_OFF + 128 * 4;
-  CLS_OFF = FN_OFF + FN_MAX * 8;
-  PAL_OFF = CLS_OFF + 2048;
-  FSTY_OFF = PAL_OFF + 768;           // 4 bytes per row
-}
-
-// ---- opcodes -------------------------------------------------------------
 var O_LOADC = 1;
 var O_LOADV = 2;
 var O_STOREV = 3;
@@ -812,277 +125,445 @@ var O_BAND = 32;
 var O_MKFN = 33;
 var O_CALLVAL = 34;
 var O_NEWOBJ = 29;
-
-function emit(op, a0, a1) {
-  if (nOps >= OPS_MAX) { over = 1; return 0; }
-  var o = OPS_OFF + nOps * 4;
-  _gw(o, op);
-  _gw(o + 1, a0 % 256);
-  _gw(o + 2, Math.floor(a0 / 256) % 256);
-  _gw(o + 3, a1);
-  nOps = nOps + 1;
-  return nOps - 1;
+var nLoc = 0;
+var inFn = 0;
+var nDecl = 0;
+var locBase = 0;
+var declBase = 512;
+var nFset = 0;
+var CK_NUM = 0;
+var CK_STR = 1;
+var CK_NONE = 2;
+var CK_BOOL=3;var CK_NULL=4;
+var ti = 0;
+var lvKind = 0;
+var lvName = 0;
+var lvOp = -1;
+var TYPEOF_NI = -1;
+var BRK_OFF = 0;
+var nBrk = 0;
+var nCont = 0;
+var MODULE_END=0;
+var CALLREF=0;
+var POOL_OFF = 0;
+var VMAP_OFF = 0;
+var LC_OFF = 0;
+var nPool = 0;
+var nVars = 0;
+var LC_I32 = 0;
+var LC_STR = 1;
+var LC_NONE = 2;
+var ip = 0;
+var dcTail=[];var dcLength=0;
+var meta=0;var st=16;var stageScratch=131072;var stageSize=0;var stageCrc=0;var stage1Bytes=0;var stage1Crc=0;var stage2Bytes=0;var stage2Crc=0;
+var _dp=[];
+function _sb(i) { if(i>=1048576)return stgRead(JSON_OFF+i-1048576);return srcByte(i); }
+function _gr(i) { return stgRead(i); }
+function _gw(i, b) { if (i < 0 || i >= 380928 || (JSON_LEN && i>=JSON_OFF && i<LINK_OFF)) { dgFail(i); return; } stgWrite(i, b); }
+function _r16(o) { return _gr(o) + _gr(o + 1) * 256; }
+function _r32(o) { var v=toolbox(8,o,0,0);return v; }
+function _w16(o,v) { if(toolbox(11,o,v,0)<0)dgFail(o); }
+function _w32(o,v) { if(toolbox(9,o,v,0)<0)dgFail(o); }
+function dgC(c) { if (DGN < 120) { stgWrite(MSG_OFF + DGN, c); DGN = DGN + 1; } }
+function dgD(v) {
+  if (v < 0) { dgC(45); v = 0 - v; }
+  var d = 1000000000; var s = 0;
+  while (d >= 1) {
+    var q = Math.floor(v / d) % 10;
+    if (q > 0 || s || d === 1) { dgC(48 + q); s = 1; }
+    d = Math.floor(d / 10);
+    if (d === 0) { break; }
+  }
 }
-
+function dgT(a, b, c) { dgC(32); dgC(a); if (b) { dgC(b); } if (c) { dgC(c); } dgC(61); }
+function dgFail(i) {
+  if (DGONCE) { return; }
+  DGONCE = 1;
+  DGN = 0;
+  dgC(79); dgC(79); dgC(66);            // "OOB"
+  dgT(73, 0, 0); dgD(i);                // " I=<bad index>"
+  dgT(83, 80, 0); dgD(spanN);           // " SP=<spanN>"
+  dgT(84, 75, 0); dgD(tokN);            // " TK=<tokN>"
+  dgT(80, 65, 0); dgD(PAL_OFF);         // " PA=<PAL_OFF>"
+  dgT(78, 77, 0); dgD(nNames);          // " NM=<nNames>"
+  dgT(86, 76, 0); dgD(vLen);            // " VL=<vLen>"
+  dgT(72, 65, 0); dgD(HA_RAW);          // " HA=<raw art flag>"
+  cdone(15, 0, DGN);
+}
+function _fail(code, a, b, c, d, e, f, g) {
+  if (DGONCE) { return; }
+  var n = 0;
+  if (a) { _gw(MSG_OFF + n, a); n = n + 1; }
+  if (b) { _gw(MSG_OFF + n, b); n = n + 1; }
+  if (c) { _gw(MSG_OFF + n, c); n = n + 1; }
+  if (d) { _gw(MSG_OFF + n, d); n = n + 1; }
+  if (e) { _gw(MSG_OFF + n, e); n = n + 1; }
+  if (f) { _gw(MSG_OFF + n, f); n = n + 1; }
+  if (g) { _gw(MSG_OFF + n, g); n = n + 1; }
+  cdone(code, perr, n);
+}
+function needsRomLink() {
+ var sig = "jmr-toolbox: resident-v";
+ var i=0,j=0,c,n=srcLen();
+ if(n>1024)n=1024;
+ while(i<n){
+  c=srcByte(i);
+  if(c==strByte(sig,j)){j=j+1;if(j==23){c=srcByte(i+1);if(i+1<n&&c==50)return 2;if(i+1<n&&c==49)return 1;j=0;}}
+  else {if(c==106)j=1;else j=0;}
+  i=i+1;
+ }
+ return 0;
+}
+function linkXor(a,b) { var x=a&b;if(x<0)x=x+4294967296;return a+b-2*x; }
+function crcInit(){if(CRC_LO.length)return;CRC_TYPED=(toolbox(0,0,0,0)&128)?1:0;for(var i=0;i<256;i++){var c=i;for(var j=0;j<8;j++){if(c%2)c=linkXor(Math.floor(c/2),3988292384);else c=Math.floor(c/2);}if(i<128)CRC_LO.push(c);else CRC_HI.push(c);}}
+function crcFeed(c,o,n){crcInit();var i=0;var w=0;var left=0;var b=0;var idx=0;while(i<n){if(!left && CRC_TYPED && i+4<=n){w=toolbox(8,o+i,0,0);if(w<0)return -1;left=4;}if(left){b=w%256;w=Math.floor(w/256);left--;}else b=_gr(o+i);idx=linkXor(c%256,b);c=linkXor(Math.floor(c/256),idx<128?CRC_LO[idx]:CRC_HI[idx-128]);i++;}return c;}
+function linkCrc(o,n){return 4294967295-crcFeed(4294967295,o,n);}
+function jsonTokenEq(i,text){if(i<0||i>=tokN)return 0;if(tKind(i)!==K_ID||tLen(i)!==text.length)return 0;for(var j=0;j<text.length;j++)if(_sb(tOff(i)+j)!==strByte(text,j))return 0;return 1;}
+function jsonCall(i){if(i+3>=tokN)return 0;if(!jsonTokenEq(i,"JSON")||!isOp(i+1,33)||!isOp(i+3,26))return 0;if(jsonTokenEq(i+2,"parse"))return 1;if(jsonTokenEq(i+2,"stringify"))return 2;return 0;}
+function jsonDetect(){var found=0;for(var i=0;i<tokN;i++){if(tOff(i)>=1048576)continue;if(tKind(i)===K_ID&&tLen(i)>=10){var match=1;var prefix="_jmr_json_";for(var j=0;j<10;j++)if(_sb(tOff(i)+j)!==strByte(prefix,j))match=0;if(match)return -1;prefix="_jmr_store_";match=tLen(i)>=11?1:0;for(j=0;j<11&&match;j++)if(_sb(tOff(i)+j)!==strByte(prefix,j))match=0;if(match)return -1;}if(jsonCall(i))found=found|1;if(jsonTokenEq(i,"String"))found=found|2;if(jsonTokenEq(i,"localStorage")&&isOp(i+1,33))found=found|6;}return found;}
+function runtimeRead(path,size,crc,dst){var ptr=LINK_OFF+8176;for(var i=0;i<path.length;i++)_gw(ptr+i,strByte(path,i));_gw(ptr+path.length,0);if(fsRead(ptr,0,dst,size+1)!==size)return 0;return linkCrc(dst,size)===crc;}
+function jsonLoad(bits){JSON_LEN=0;var path="STRRT.JS",size=10927,crc=2989055545;if(bits&1){if(bits&2){path="BOTHRT.JS";size=20308;crc=1967364638;}else{path="JSONRT.JS";size=18459;crc=2197721644;}}var api="\nvar _jmr_store_api={getItem:_jmr_store_getItem,setItem:_jmr_store_setItem,removeItem:_jmr_store_removeItem};\n";var total=size+(bits&4?12908+api.length:0);JSON_OFF=LINK_OFF-total;if(!runtimeRead(path,size,crc,JSON_OFF))return 0;if(bits&4){if(!runtimeRead("LSRT.JS",12908,1355145073,JSON_OFF+size))return 0;for(var i=0;i<api.length;i++)_gw(JSON_OFF+size+12908+i,strByte(api,i));}JSON_LEN=total;return 1;}
+function spanKind(i) { return _gr(SPAN_OFF + i * SPAN_STRIDE); }
+function spanOff(i) { return _r32(SPAN_OFF + i * SPAN_STRIDE + 2); }
+function spanLen(i) { return _r32(SPAN_OFF + i * SPAN_STRIDE + 6); }
+function measure() {
+  var i = 0;
+  var t = JSON_LEN;
+  while (i < spanN) {
+    if (spanKind(i) === 0) { t = t + spanLen(i); } else { t = t + 1; }
+    i = i + 1;
+  }
+  vLen = t;
+}
+function seek(vp) {
+  if(vp<JSON_LEN){cSpan=0;cStart=0;cEnd=JSON_LEN;cSrc=1048576;cKind=2;return 1;}
+  var i = 0;
+  var base = JSON_LEN;
+  var n = 0;
+  while (i < spanN) {
+    if (spanKind(i) === 0) { n = spanLen(i); } else { n = 1; }
+    if (vp < base + n) {
+      cSpan = i;
+      cStart = base;
+      cEnd = base + n;
+      cSrc = spanOff(i);
+      cKind = spanKind(i);
+      return 1;
+    }
+    base = base + n;
+    i = i + 1;
+  }
+  cSpan = -1;
+  return 0;
+}
+function vAt(vp) {
+  if (vp < 0 || vp >= vLen) { return -1; }
+  if (cSpan < 0 || vp < cStart || vp >= cEnd) {
+    if (seek(vp) === 0) { return -1; }
+  }
+  if (cKind === 0 || cKind === 2) { return _sb(cSrc + (vp - cStart)); }
+  return 59;
+}
+function vSrc(vp) {
+  if (cSpan < 0 || vp < cStart || vp >= cEnd) {
+    if (seek(vp) === 0) { return 0; }
+  }
+  if (cKind === 0 || cKind === 2) { return cSrc + (vp - cStart); }
+  return 0;
+}
+function isDigit(b) { return b >= 48 && b <= 57; }
+function isIdStart(b) {
+  if (b >= 97 && b <= 122) { return 1; }
+  if (b >= 65 && b <= 90) { return 1; }
+  if (b === 95 || b === 36) { return 1; }
+  return 0;
+}
+function isIdPart(b) {
+  if (isIdStart(b)) { return 1; }
+  return isDigit(b) ? 1 : 0;
+}
+function isSpace(b) {
+  return b === 32 || b === 9 || b === 10 || b === 13;
+}
+function emitTok(kind, sub, off, len) {
+  if (tokN >= TOK_MAX || len>255) { tokOver = 1; return; }
+  var b = TOK_OFF + tokN * TOK_STRIDE;
+  _w16(b,kind+sub*256);
+  _w32(b+2,off+len*16777216);
+  tokN = tokN + 1;
+}
+function tokKind(i) { return _gr(TOK_OFF + i * TOK_STRIDE); }
+function tokSub(i) { return _gr(TOK_OFF + i * TOK_STRIDE + 1); }
+function skipTrivia(vp) {
+  var b = 0;
+  var run = 1;
+  while (run) {
+    run = 0;
+    b = vAt(vp);
+    while (b >= 0 && isSpace(b)) { vp = vp + 1; b = vAt(vp); }
+    if (b === 47 && vAt(vp + 1) === 47) {
+      while (b >= 0 && b !== 10) { vp = vp + 1; b = vAt(vp); }
+      run = 1;
+    } else if (b === 47 && vAt(vp + 1) === 42) {
+      vp = vp + 2;
+      while (vAt(vp) >= 0) {
+        if (vAt(vp) === 42 && vAt(vp + 1) === 47) { vp = vp + 2; break; }
+        vp = vp + 1;
+      }
+      run = 1;
+    }
+  }
+  return vp;
+}
+function hashAt(vp, len) {
+  var h = 0;
+  var i = 0;
+  while (i < len) {
+    h = (h * 31 + vAt(vp + i)) % 65536;
+    i = i + 1;
+  }
+  return h;
+}
+function kwInit(){var data="'\u000e\u0003\u0003\u0000\u001bD\u0002\u0003\u0001cn\u0000\u0005\u0002Xg\u0001\b\u00030z\u0000\u0006\u0004\u001d\u001a\u0000\u0002\u00059\u001a\u0002\u0004\u00061\u0016\u0003\u0005\u0007I\u0019\u0002\u0003\b\u007f1\u0001\u0005\t'Y\u0000\b\n S\u0002\u0003\u000b\u0011m\u0002\u0006\fxR\u0002\u0005\r\u001e\u001d\u0001\u0004\u000e\u000ek\u0001\u0004\u000f#2\u0000\u0005\u0010\u0007\u000b\u0003\u0004\u0011\u0014#\u0003\t\u00124n\u0002\u0006\u00130v\u0001\u0004\u0014A,\u0003\u0007\u0015\u000b\u0019\u0000\u0002\u0016%\u001a\u0000\u0002\u0017W\u001b\u0000\u0002\u0018;\u0003\u0003\u0003\u0019;]\u0003\u0005\u001a\u0003\u0013\u0001\u0007\u001bfM\u0002\u0005\u001c";KW_N=0;for(var i=0;i<29;i++){var p=i*5;var h=strByte(data,p)+strByte(data,p+1)*128+strByte(data,p+2)*16384;var o=KW_OFF+i*6;_w16(o,h);_gw(o+2,strByte(data,p+3));_gw(o+3,strByte(data,p+4));KW_N++;}}
+function kwLookup(vp, len) {
+  if (len > 9) { return -1; }
+  var h = hashAt(vp, len);
+  var i = 0;
+  var o = 0;
+  while (i < KW_N) {
+    o = KW_OFF + i * 6;
+    if (_gr(o + 2) === len && _r16(o) === h) { return _gr(o + 3); }
+    i = i + 1;
+  }
+  return -1;
+}
+function scanIdent(vp) {
+  var s = vp;
+  while (isIdPart(vAt(vp))) { vp = vp + 1; }
+  var len = vp - s;
+  var kw = kwLookup(s, len);
+  if (kw >= 0) {
+    emitTok(K_KEY, kw, vSrc(s), len);
+  } else {
+    emitTok(K_ID, 0, vSrc(s), len);
+  }
+  return vp;
+}
+function scanNum(vp) {
+ var s=vp;
+ while(isDigit(vAt(vp)))vp++;
+ if(vAt(vp)===46){vp++;while(isDigit(vAt(vp)))vp++;}
+ if(vAt(vp)===101 || vAt(vp)===69){vp++;if(vAt(vp)===43 || vAt(vp)===45)vp++;if(!isDigit(vAt(vp)))return -1;while(isDigit(vAt(vp)))vp++;}
+ if(isIdStart(vAt(vp)))return -1;
+ emitTok(K_NUM,0,vSrc(s),vp-s);return vp;
+}
+function scanStr(vp, quote) {
+  var s = vp + 1;
+  var p = s;
+  var b = vAt(p);
+  while (b >= 0 && b !== quote) {
+    if (b === 92) { p = p + 1; }
+    p = p + 1;
+    b = vAt(p);
+  }
+  if (b !== quote) { return -1; }
+  emitTok(quote === 96 ? K_TMPL : K_STR, 0, vSrc(s), p - s);
+  return p + 1;
+}
+function op3(a, b, c) {
+  if (a === 61 && b === 61 && c === 61) { return 0; }  // ===
+  if (a === 33 && b === 61 && c === 61) { return 1; }  // !==
+  return -1;
+}
+function op2(a, b) {
+  if (a === 61 && b === 61) { return 2; }   // ==
+  if (a === 33 && b === 61) { return 3; }   // !=
+  if (a === 60 && b === 61) { return 4; }   // <=
+  if (a === 62 && b === 61) { return 5; }   // >=
+  if (a === 38 && b === 38) { return 6; }   // &&
+  if (a === 124 && b === 124) { return 7; } // ||
+  if (a === 43 && b === 43) { return 8; }   // ++
+  if (a === 45 && b === 45) { return 9; }   // --
+  if (a === 61 && b === 62) { return 10; }  // =>
+  if (a === 63 && b === 46) { return 11; }  // ?.
+  if (a === 43 && b === 61) { return 12; }  // +=
+  if (a === 45 && b === 61) { return 13; }  // -=
+  if (a === 42 && b === 61) { return 14; }  // *=
+  if (a === 47 && b === 61) { return 15; }  // /=
+  if (a === 37 && b === 61) { return 16; }  // %=
+  return -1;
+}
+function op1(a) {
+  if (a === 43) { return 17; }
+  if (a === 45) { return 18; }
+  if (a === 42) { return 19; }
+  if (a === 47) { return 20; }
+  if (a === 37) { return 21; }
+  if (a === 60) { return 22; }
+  if (a === 62) { return 23; }
+  if (a === 61) { return 24; }
+  if (a === 33) { return 25; }
+  if (a === 40) { return 26; }
+  if (a === 41) { return 27; }
+  if (a === 59) { return 28; }
+  if (a === 58) { return 29; }
+  if (a === 123) { return 30; }
+  if (a === 125) { return 31; }
+  if (a === 44) { return 32; }
+  if (a === 46) { return 33; }
+  if (a === 91) { return 34; }
+  if (a === 93) { return 35; }
+  if (a === 124) { return 36; }
+  if (a === 38) { return 37; }
+  if (a === 63) { return 38; }
+  return -1;
+}
+function regexHere() {
+  if (tokN === 0) { return 1; }
+  var k = tokKind(tokN - 1);
+  var s = tokSub(tokN - 1);
+  if (k === K_ID || k === K_NUM || k === K_STR) { return 0; }
+  if (k === K_KEY) {
+    if (s === 14 || s === 15 || s === 16 || s === 17 || s === 18) { return 0; }
+    return 1;
+  }
+  if (k === K_OP) {
+    if (s === 27 || s === 31 || s === 35) { return 0; }  // ) } ]
+    if (s === 8 || s === 9) { return 0; }                // ++ --
+    return 1;
+  }
+  return 1;
+}
+function scanRegex(vp) {
+  var p = vp + 1;
+  var b = vAt(p);
+  while (b >= 0 && b !== 47 && b !== 10) {
+    if (b === 92) { p = p + 1; }
+    p = p + 1;
+    b = vAt(p);
+  }
+  if (b !== 47) { return -1; }
+  p = p + 1;
+  while (isIdPart(vAt(p))) { p = p + 1; }
+  return p;
+}
+function tmplText(vp) {
+  var s = vp;
+  var b = 0;
+  while (1) {
+    b = vAt(vp);
+    if (b < 0) { tmplOn = 0; return vp; }
+    if (b === 96) {                          // closing backtick
+      emitTok(K_STR, 0, vSrc(s), vp - s);
+      emitTok(K_OP, 27, 0, 0);               // )
+      tmplOn = 0;
+      return vp + 1;
+    }
+    if (b === 36 && vAt(vp + 1) === 123) {   // ${
+      emitTok(K_STR, 0, vSrc(s), vp - s);
+      emitTok(K_OP, 17, 0, 0);               // +
+      emitTok(K_OP, 26, 0, 0);               // (
+      tmplBrace = 0;
+      return vp + 2;
+    }
+    if (b === 92) { vp = vp + 1; }
+    vp = vp + 1;
+  }
+}
+function tokenize() {
+  var vp = 0;
+  var b = 0;
+  var n = 0;
+  while (1) {
+    vp = skipTrivia(vp);
+    b = vAt(vp);
+    if (b < 0) { break; }
+    if (tmplOn) {
+      if (b === 125 && tmplBrace === 0) {
+        emitTok(K_OP, 27, 0, 0);             // )
+        emitTok(K_OP, 17, 0, 0);             // +
+        vp = tmplText(vp + 1);
+        continue;
+      }
+      if (b === 123) { tmplBrace = tmplBrace + 1; }
+      if (b === 125) { tmplBrace = tmplBrace - 1; }
+    }
+    if (b === 96) {                          // `template`
+      emitTok(K_OP, 26, 0, 0);               // (
+      tmplOn = 1;
+      vp = tmplText(vp + 1);
+    } else if (isIdStart(b)) {
+      vp = scanIdent(vp);
+    } else if (isDigit(b) || (b === 46 && isDigit(vAt(vp + 1)))) {
+      vp = scanNum(vp);if(vp<0)return 12;
+    } else if (b === 34 || b === 39) {
+      vp = scanStr(vp, b);
+      if (vp < 0) { return ST_ERR_STR; }
+    } else if (b === 47 && regexHere()) {
+      emitTok(K_REGEX, 0, vSrc(vp), 1);
+      vp = scanRegex(vp);
+      if (vp < 0) { return ST_ERR_REGEX; }
+    } else {
+      n = op3(b, vAt(vp + 1), vAt(vp + 2));
+      if (n >= 0) {
+        emitTok(K_OP, n, vSrc(vp), 3);
+        vp = vp + 3;
+      } else {
+        n = op2(b, vAt(vp + 1));
+        if (n >= 0) {
+          emitTok(K_OP, n, vSrc(vp), 2);
+          vp = vp + 2;
+        } else {
+          n = op1(b);
+          if (n < 0) { return ST_ERR_PARSE; }
+          emitTok(K_OP, n, vSrc(vp), 1);
+          vp = vp + 1;
+        }
+      }
+    }
+    if (tokOver) { return ST_ERR_TOKENS; }
+  }
+  emitTok(K_EOF, 0, 0, 0);
+  return 0;
+}
+function layout() {
+  IMG_OFF = TOK_OFF;                      // the image later overwrites tokens
+  OPS_OFF = TOK_OFF + tokN * TOK_STRIDE;
+  if(OPS_OFF<IMG_OFF+131072)OPS_OFF=IMG_OFF+131072;
+  CREC_OFF = OPS_OFF + OPS_MAX * 4;
+  NIDX_OFF = CREC_OFF + (CREC_MAX + 1) * 12;
+  NBLOB_OFF = NIDX_OFF + NAME_MAX * 8;
+  LOC_OFF = NBLOB_OFF + BLOB_MAX;
+  FSET_OFF = LOC_OFF + 8192; // names any function declares
+  NAT_OFF = FSET_OFF + 2048;
+  FN_OFF = NAT_OFF + 128 * 4;
+  CLS_OFF = FN_OFF + FN_MAX * 8;
+  PAL_OFF = CLS_OFF + 2048;
+  FSTY_OFF = PAL_OFF + 768;           // 4 bytes per row
+}
 function patchA0(i, a0) {
   _w16(OPS_OFF+i*4+1,a0);
 }
-
 function opCode(i) { return _gr(OPS_OFF + i * 4); }
 function opA0(i) { return _r16(OPS_OFF+i*4+1); }
 function opA1(i) { return _gr(OPS_OFF + i * 4 + 3); }
 function setA1(i, v) { _gw(OPS_OFF + i * 4 + 3, v); }
-
-// ---- names ---------------------------------------------------------------
 function nLen(i) { return _gr(NIDX_OFF + i * 8 + 3); }
 function nHash(i) { return _r16(NIDX_OFF + i * 8 + 4); }
 function nBlob(i) {
   var o = NIDX_OFF + i * 8;
   return _gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536;
 }
-
 function nameNew(len, h) {
   if (nNames >= NAME_MAX || blobLen + len > BLOB_MAX) { over = 1; return 0; }
   var o = NIDX_OFF + nNames * 8;
   _w32(o,blobLen+len*16777216);
   _w16(o + 4, h);
+  _gw(o + 6, 0);
   nNames = nNames + 1;
   return nNames - 1;
 }
-
-// Intern raw source bytes. Verified byte-by-byte after the hash narrows, so
-// a collision cannot silently merge two identifiers into one variable.
-function internSrc(off, len) {
-  var h = 0;
-  var i = 0;
-  while (i < len) { h = (h * 31 + _sb(off + i)) % 65536; i = i + 1; }
-  i = 0;
-  var b = 0;
-  var k = 0;
-  var same = 0;
-  while (i < nNames) {
-    if (nLen(i) === len && nHash(i) === h) {
-      b = nBlob(i);
-      k = 0;
-      same = 1;
-      while (k < len) {
-        if (_gr(NBLOB_OFF + b + k) !== _sb(off + k)) { same = 0; k = len; }
-        k = k + 1;
-      }
-      if (same) { return i; }
-    }
-    i = i + 1;
-  }
-  var idx = nameNew(len, h);
-  i = 0;
-  while (i < len) { _gw(NBLOB_OFF + blobLen + i, _sb(off + i)); i = i + 1; }
-  blobLen = blobLen + len;
-  return idx;
-}
-
-// Intern "A.B" as one name — a dotted native is a single table entry, not a
-// property load (document.querySelector is CALL_NATIVE, not GET_PROP).
-function internDot(o1, l1, o2, l2) {
-  var h = 0;
-  var i = 0;
-  while (i < l1) { h = (h * 31 + _sb(o1 + i)) % 65536; i = i + 1; }
-  h = (h * 31 + 46) % 65536;
-  i = 0;
-  while (i < l2) { h = (h * 31 + _sb(o2 + i)) % 65536; i = i + 1; }
-  var len = l1 + l2 + 1;
-  i = 0;
-  while (i < nNames) {
-    if (nLen(i) === len && nHash(i) === h) { return i; }
-    i = i + 1;
-  }
-  var idx = nameNew(len, h);
-  i = 0;
-  while (i < l1) { _gw(NBLOB_OFF + blobLen + i, _sb(o1 + i)); i = i + 1; }
-  _gw(NBLOB_OFF + blobLen + l1, 46);
-  i = 0;
-  while (i < l2) { _gw(NBLOB_OFF + blobLen + l1 + 1 + i, _sb(o2 + i)); i = i + 1; }
-  blobLen = blobLen + len;
-  return idx;
-}
-
-// String literals intern into the SAME table as identifiers, exactly as the
-// image format does — a string "canvas" and a variable canvas share an entry.
-// Escapes are decoded here because the blob holds the real bytes.
-function internStr(off, len) {
-  var h = 0;
-  var i = 0;
-  var b = 0;
-  var start = blobLen;
-  var n = 0;
-  if (nNames >= NAME_MAX) { over = 1; return 0; }
-  while (i < len) {
-    b = _sb(off + i);
-    if (b === 92 && i + 1 < len) {
-      i = i + 1;
-      b = _sb(off + i);
-      if (b === 110) { b = 10; }
-      else if (b === 116) { b = 9; }
-      else if (b === 114) { b = 13; }
-      else if (b === 48) { b = 0; }
-    }
-    if (start + n >= BLOB_MAX) { over = 1; return 0; }
-    _gw(NBLOB_OFF + start + n, b);
-    h = (h * 31 + b) % 65536;
-    n = n + 1;
-    i = i + 1;
-  }
-  // look for an existing identical entry before committing the bytes
-  i = 0;
-  var k = 0;
-  var same = 0;
-  var bo = 0;
-  while (i < nNames) {
-    if (nLen(i) === n && nHash(i) === h) {
-      bo = nBlob(i);
-      k = 0;
-      same = 1;
-      while (k < n) {
-        if (_gr(NBLOB_OFF + bo + k) !== _gr(NBLOB_OFF + start + k)) { same = 0; k = n; }
-        k = k + 1;
-      }
-      if (same) { return i; }
-    }
-    i = i + 1;
-  }
-  var idx = nameNew(n, h);
-  blobLen = blobLen + n;
-  return idx;
-}
-
-function internTypeof() {
-  if (TYPEOF_NI >= 0) { return TYPEOF_NI; }
-  // hash of "typeof" = 46737 under the rolling h*31+c %65536
-  var h = ((((116 * 31 + 121) % 65536) * 31 + 112) % 65536);
-  h = (((h * 31 + 101) % 65536) * 31 + 111) % 65536;
-  h = (h * 31 + 102) % 65536;
-  var i = 0;
-  while (i < nNames) {
-    if (nLen(i) === 6 && nHash(i) === h) { TYPEOF_NI = i; return i; }
-    i = i + 1;
-  }
-  i = nameNew(6, h);
-  _gw(NBLOB_OFF + blobLen, 116);
-  _gw(NBLOB_OFF + blobLen + 1, 121);
-  _gw(NBLOB_OFF + blobLen + 2, 112);
-  _gw(NBLOB_OFF + blobLen + 3, 101);
-  _gw(NBLOB_OFF + blobLen + 4, 111);
-  _gw(NBLOB_OFF + blobLen + 5, 102);
-  blobLen = blobLen + 6;
-  TYPEOF_NI = i;
-  return i;
-}
-
-function internThis() {
-  var h = ((((95 * 31 + 95) % 65536) * 31 + 116) % 65536);
-  h = (((h * 31 + 104) % 65536) * 31 + 105) % 65536;
-  h = (h * 31 + 115) % 65536;
-  var i = 0;
-  while (i < nNames) {
-    if (nLen(i) === 6 && nHash(i) === h) { THIS_NI = i; return i; }
-    i = i + 1;
-  }
-  i = nameNew(6, h);
-  _gw(NBLOB_OFF + blobLen, 95);
-  _gw(NBLOB_OFF + blobLen + 1, 95);
-  _gw(NBLOB_OFF + blobLen + 2, 116);
-  _gw(NBLOB_OFF + blobLen + 3, 104);
-  _gw(NBLOB_OFF + blobLen + 4, 105);
-  _gw(NBLOB_OFF + blobLen + 5, 115);
-  blobLen = blobLen + 6;
-  THIS_NI = i;
-  return i;
-}
-
-function internArg() {
-  var h = ((((95 * 31 + 95) % 65536) * 31 + 97) % 65536);
-  h = (((h * 31 + 114) % 65536) * 31 + 103) % 65536;
-  var i = 0;
-  while (i < nNames) {
-    if (nLen(i) === 5 && nHash(i) === h) { ARG_NI = i; return i; }
-    i = i + 1;
-  }
-  i = nameNew(5, h);
-  _gw(NBLOB_OFF + blobLen, 95);
-  _gw(NBLOB_OFF + blobLen + 1, 95);
-  _gw(NBLOB_OFF + blobLen + 2, 97);
-  _gw(NBLOB_OFF + blobLen + 3, 114);
-  _gw(NBLOB_OFF + blobLen + 4, 103);
-  blobLen = blobLen + 5;
-  ARG_NI = i;
-  return i;
-}
-
-function internSw() {
-  var h = ((((95 * 31 + 95) % 65536) * 31 + 115) % 65536);
-  h = (h * 31 + 119) % 65536;
-  var i = 0;
-  while (i < nNames) {
-    if (nLen(i) === 4 && nHash(i) === h) { SW_NI = i; return i; }
-    i = i + 1;
-  }
-  i = nameNew(4, h);
-  _gw(NBLOB_OFF + blobLen, 95);
-  _gw(NBLOB_OFF + blobLen + 1, 95);
-  _gw(NBLOB_OFF + blobLen + 2, 115);
-  _gw(NBLOB_OFF + blobLen + 3, 119);
-  blobLen = blobLen + 4;
-  SW_NI = i;
-  return i;
-}
-
-// ---- native lookup -------------------------------------------------------
-// (hash, length) pairs generated from jsb_format.NATIVE_IDS. No collisions
-// across the 52 entries. A name the program declares itself always wins, so
-// `function sound()` shadows the native rather than silently stealing it.
-function nt(h, l, id) {
-  var o = NAT_OFF + nNat * 4;
-  _w16(o, h);
-  _gw(o + 2, l);
-  _gw(o + 3, id);
-  nNat = nNat + 1;
-}
-
-function natInit() {
-  nt(47195,8,49); // srcWrite
-  nt(10583,9,50); // srcSetLen
-  nt(57092,4,51); // joyX
-  nt(57093,4,52); // joyY
-  nt(34061,10,53); // joyButtons
-  nt(6984,10,54); // Math.round
-  nt(779,6,58); // fsList
-  nt(21266,7,60); // fsWrite
-  nt(25521,8,61); // fsRemove
-  nt(41579,8,62); // fsRename
-  nt(62590,6,63); // sysRun
-  nt(44035,6,59); // fsRead: resident linker file reads
-  nt(4825,7,66); // strByte: interned string bytes
-  nt(55048,11,65); // sysDocument: raw SOURCE metadata ABI
-  nt(36147,7,64); // toolbox: shared bulk-service ABI
-  // run 71 language-lite (host NATIVE_IDS 55-57; performance.now = Date.now)
-  nt(32377,8,55);   nt(7025,5,56);   nt(11,9,57);   nt(3096,15,35); 
-  nt(268,7,44); nt(1847,20,22); nt(2220,8,11); nt(2268,7,45); nt(7968,11,3);
-  nt(10181,14,24); nt(13726,8,13); nt(13964,8,12); nt(14949,5,47);
-  nt(16427,20,21); nt(18935,28,36); nt(18951,8,2); nt(19595,23,20);
-  nt(22269,8,5); nt(24758,8,35); nt(25138,13,31); nt(25550,4,25);
-  nt(27398,7,4); nt(27842,20,39); nt(29734,9,15); nt(29814,9,48);
-  nt(31405,22,38); nt(33337,5,34); nt(33607,11,29); nt(36186,5,8);
-  nt(36294,10,10); nt(36682,19,36); nt(37209,8,46); nt(38988,26,37);
-  nt(39715,11,41); nt(40493,10,23); nt(42173,12,0); nt(43316,22,17);
-  nt(45641,11,14); nt(46669,5,1); nt(46737,6,40); nt(47419,5,26);
-  nt(49461,7,6); nt(49549,5,33); nt(49869,22,18); nt(51384,21,27);
-  nt(51471,5,42); nt(52693,23,32); nt(54943,10,28); nt(58603,23,16);
-  nt(58957,16,19); nt(60973,11,0); nt(61012,12,30); nt(61345,7,9);
-  nt(61841,6,43); nt(62144,25,19); nt(65062,9,7);
-  // Host-only natives: PYTHON implements these, the image format has no id
-  // for them, so the encoder maps them to _stub (33). Same on the chip.
-  nt(39892,3,33); nt(19614,6,33); nt(38353,9,33); nt(25516,12,33);
-}
-
+function internText(text){var h=0;for(var j=0;j<text.length;j++)h=(h*31+strByte(text,j))%65536;for(var i=0;i<nNames;i++){if(nLen(i)===text.length&&nHash(i)===h){var same=1;for(var k=0;k<text.length;k++)if(_gr(NBLOB_OFF+nBlob(i)+k)!==strByte(text,k))same=0;if(same)return i;}}var ni=nameNew(text.length,h);for(var q=0;q<text.length;q++)_gw(NBLOB_OFF+blobLen+q,strByte(text,q));blobLen+=text.length;return ni;}
 function natLookup(h, l) {
   var i = 0;
   var o = 0;
@@ -1093,34 +574,9 @@ function natLookup(h, l) {
   }
   return -1;
 }
-
 function natIdOf(ni) {
   return natLookup(nHash(ni), nLen(ni));
 }
-
-// Hash "A.B" WITHOUT interning it. Probing has to be free of side effects:
-// interning first and asking later left c.fillRect and canvas.getContext in
-// the name table as phantom variables, each burning a var slot.
-function dotHash(o1, l1, o2, l2) {
-  var h = 0;
-  var i = 0;
-  while (i < l1) { h = (h * 31 + _sb(o1 + i)) % 65536; i = i + 1; }
-  h = (h * 31 + 46) % 65536;
-  i = 0;
-  while (i < l2) { h = (h * 31 + _sb(o2 + i)) % 65536; i = i + 1; }
-  return h;
-}
-
-// ---- declared functions --------------------------------------------------
-function fnAdd(ni, entry, nparams) {
-  if (nFn >= FN_MAX) { over = 1; return; }
-  var o = FN_OFF + nFn * 8;
-  _w16(o, ni);
-  _w16(o + 2, entry);
-  _gw(o + 4, nparams);
-  nFn = nFn + 1;
-}
-
 function fnFind(ni) {
   var i = 0;
   while (i < nFn) {
@@ -1129,200 +585,7 @@ function fnFind(ni) {
   }
   return -1;
 }
-
 function fnEntry(i) { return _r16(FN_OFF + i * 8 + 2); }
-
-// `new Foo()` when Foo is a function (PACFAST Item/Map/Stage/Game), not an
-// ES6 class: the host registers the function's entry as the class ctor so
-// NEW_OBJ can find it. Unknown names get a ctor-less stub (0xFFFF).
-function ensureFnClass(ni) {
-  var i = 0;
-  var k = CLS_OFF + 2;
-  var b = 0;
-  var fi = 0;
-  var ctor = 65535;
-  while (i < nCls) {
-    if (_r16(k) === ni) { return; }
-    b = _r16(k + 4);
-    k = k + 6 + b * 4;
-    i = i + 1;
-  }
-  fi = fnFind(ni);
-  // fnAdd plants entry 0 until compileFn writes the real IP. A ctor of 0
-  // is CALL_USER 0: re-enter IP 0 (host: do not plant functions[foo]=(0,[])).
-  if (fi >= 0) { ctor = fnEntry(fi); }
-  if (ctor === 0) { ctor = 65535; }
-  _w16(clsW, ni);
-  _w16(clsW + 2, ctor);
-  _w16(clsW + 4, 0);
-  clsW = clsW + 6;
-  nCls = nCls + 1;
-}
-
-// ---- locals and scopes ---------------------------------------------------
-// Frames stack, because function expressions nest: a callback declared
-// inside another function must not clobber its parent's slot table.
-var nLoc = 0;
-var inFn = 0;
-var nDecl = 0;
-var locBase = 0;
-var declBase = 512;
-
-function locFind(ni) {
-  var i = 0;
-  while (i < nLoc) {
-    if (_r16(LOC_OFF + (locBase + i) * 2) === ni) { return i; }
-    i = i + 1;
-  }
-  return -1;
-}
-
-function locAdd(ni) {
-  if (locFind(ni) >= 0) { return; }
-  if (nLoc >= 16) { over = 2; return; }   // ENV_SLOTS — loud, like the host
-  _w16(LOC_OFF + (locBase + nLoc) * 2, ni);
-  nLoc = nLoc + 1;
-}
-
-var nFset = 0;
-
-// Names declared inside SOME function anywhere in the program.
-//
-// The host resolves each global site against its own enclosing scopes, held
-// as live set objects that keep filling until compile() ends. Flat arrays
-// cannot hold live references, and function bodies are emitted before the
-// enclosing scope has even been walked — which is why checking the frame
-// stack at emit time marked MISSILE's `state` a global and broke it.
-// Resolving against the whole-program set instead is strictly more
-// conservative: a name any function owns keeps the env-chain walk (a1=0),
-// which is always correct, just not always the fastest path.
-function fsetAdd(ni) {
-  var i = 0;
-  while (i < nFset) {
-    if (_r16(FSET_OFF + i * 2) === ni) { return; }
-    i = i + 1;
-  }
-  if (nFset < 1024) { _w16(FSET_OFF + nFset * 2, ni); nFset = nFset + 1; }
-}
-
-function fsetHas(ni) {
-  var i = 0;
-  while (i < nFset) {
-    if (_r16(FSET_OFF + i * 2) === ni) { return 1; }
-    i = i + 1;
-  }
-  return 0;
-}
-
-function declAdd(ni) {
-  if (inFn) { fsetAdd(ni); }
-  var i = 0;
-  while (i < nDecl) {
-    if (_r16(LOC_OFF + (declBase + i) * 2) === ni) { return; }
-    i = i + 1;
-  }
-  if (nDecl < 128) { _w16(LOC_OFF + (declBase + nDecl) * 2, ni); nDecl = nDecl + 1; }
-}
-
-
-
-
-
-// ---- global sites --------------------------------------------------------
-// A reference that is neither a local nor a known function cannot be resolved
-// yet: `var` hoists, so a use may be emitted before its declaration is seen.
-// Record the site and settle it once the enclosing scope is complete.
-function gsAdd(opIdx, ni, fnDepth) {
-  if (nGs >= GS_MAX) { over = 1; return; }
-  var o = GS_OFF + nGs * 8;
-  _w32(o,opIdx+fnDepth*16777216);
-  _w16(o + 4, ni);
-  nGs = nGs + 1;
-}
-
-// Settle every site once the whole program has been walked, so a name a
-// function declares later still counts.
-function gsResolveAll() {
-  var i = 0;
-  var o = 0;
-  var idx = 0;
-  while (i < nGs) {
-    o = GS_OFF + i * 8;
-    if (fsetHas(_r16(o + 4)) === 0) {
-      idx = _gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536;
-      setA1(idx, 1);
-    }
-    i = i + 1;
-  }
-}
-
-// Unique literals only — PACFAST had thousands of occurrence-slots of
-// `0` and `1`, which blew CREC_MAX. The assembler still folds into the
-// pool; emitting uniques first just means CREC_MAX can equal the 1024
-// pool wall. GS lives in the leftover after LC, sized from ART_KEEP.
-var CK_NUM = 0;
-var CK_STR = 1;
-var CK_NONE = 2;
-
-function crecSame(a, b) {
-  var k = 0;
-  while (k < 12) {
-    if (_gr(a + k) !== _gr(b + k)) { return 0; }
-    k = k + 1;
-  }
-  return 1;
-}
-
-function crecCommit() {
-  var i = 0;
-  var o = CREC_OFF + nCrec * 12;
-  while (i < nCrec) {
-    if (crecSame(CREC_OFF + i * 12, o)) { return i; }
-    i = i + 1;
-  }
-  if (nCrec >= CREC_MAX) { over = 1; return 0; }
-  nCrec = nCrec + 1;
-  return nCrec - 1;
-}
-
-function crecNum(off, len) {
-  var o = CREC_OFF + nCrec * 12;
-  var k = 0;
-  while (k < 12) { _gw(o + k, 0); k = k + 1; }
-  _gw(o, CK_NUM);
-  w64(o + 4, numAt(off, len));
-  return crecCommit();
-}
-
-function crecVal(v) {
-  var o = CREC_OFF + nCrec * 12;
-  var k = 0;
-  while (k < 12) { _gw(o + k, 0); k = k + 1; }
-  _gw(o, CK_NUM);
-  w64(o + 4, v);
-  return crecCommit();
-}
-
-function crecStr(ni) {
-  var o = CREC_OFF + nCrec * 12;
-  var k = 0;
-  while (k < 12) { _gw(o + k, 0); k = k + 1; }
-  _gw(o, CK_STR);
-  _w16(o + 1, ni);
-  return crecCommit();
-}
-
-function crecNone() {
-  var o = CREC_OFF + nCrec * 12;
-  var k = 0;
-  while (k < 12) { _gw(o + k, 0); k = k + 1; }
-  _gw(o, CK_NONE);
-  return crecCommit();
-}
-
-// ---- token cursor --------------------------------------------------------
-var ti = 0;
-
 function tKind(i) { return _gr(TOK_OFF + i * TOK_STRIDE); }
 function tSub(i) { return _gr(TOK_OFF + i * TOK_STRIDE + 1); }
 function tOff(i) {
@@ -1331,1224 +594,6 @@ function tOff(i) {
 }
 function tLen(i) { return _gr(TOK_OFF + i * TOK_STRIDE + 5); }
 function isOp(i, s) { return tKind(i) === K_OP && tSub(i) === s; }
-function isKw(i, s) { return tKind(i) === K_KEY && tSub(i) === s; }
-
-function eatOp(s) {
-  if (isOp(ti, s)) { ti = ti + 1; return 1; }
-  if (perr === 0) { perr = ti + 1; }
-  return 0;
-}
-
-// ---- variable access -----------------------------------------------------
-// Returns the op index, so an assignment target's load can be rolled back:
-// primary() has to emit the load before it can know an '=' follows.
-function loadVar(ni) {
-  var slot = -1;
-  var idx = 0;
-  if (inFn) { slot = locFind(ni); }
-  if (slot >= 0) { return emit(O_LOADV, ni, 2 + slot); }
-  if (fnFind(ni) >= 0) { return emit(O_LOADV, ni, 1); }
-  idx = emit(O_LOADV, ni, 0);
-  gsAdd(idx, ni, inFn);
-  return idx;
-}
-
-// Undo the most recent loadVar when it turns out to be an assignment target.
-function dropLoad(idx) {
-  if (idx !== nOps - 1) { return; }
-  nOps = nOps - 1;
-  if (nGs > 0) {
-    var o = GS_OFF + (nGs - 1) * 8;
-    if (_gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536 === idx) { nGs = nGs - 1; }
-  }
-}
-
-function storeVar(ni) {
-  var slot = -1;
-  if (inFn) { slot = locFind(ni); }
-  if (slot >= 0) { emit(O_STOREV, ni, 2 + slot); return; }
-  if (fnFind(ni) >= 0) { emit(O_STOREV, ni, 1); return; }
-  gsAdd(emit(O_STOREV, ni, 0), ni, inFn);
-}
-
-// ---- expressions ---------------------------------------------------------
-// Precedence: assign -> ternary -> || -> && -> | -> & -> equality ->
-// comparison -> additive -> multiplicative -> unary -> postfix -> primary.
-//
-// lvKind/lvName carry what the last postfix chain ended on, so the assignment
-// level can turn `x`, `o.p` and `a[i]` into STORE_VAR / SET_PROP / ARRAY_SET
-// without re-parsing. 0 = not assignable, 1 = variable, 2 = property (object
-// already on the stack), 3 = index (object and index on the stack).
-var lvKind = 0;
-var lvName = 0;
-var lvOp = -1;
-
-function argList() {
-  var n = 0;
-  eatOp(26);
-  while (!isOp(ti, 27) && tKind(ti) !== K_EOF) {
-    expr();
-    n = n + 1;
-    if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
-  }
-  eatOp(27);
-  return n;
-}
-
-// A bare call: native if the table knows the name and the program did not
-// declare it, a user function if it did, else a call on a value.
-// User calls stay CALLN (name index) until rewriteOps: compileAllFns is
-// sequential, so a forward `rebuildPath()` still has fnEntry 0. CALL_USER 0
-// re-enters IP 0 and re-runs top-level (FLDF makeLong ×13). Host never
-// plants functions[foo]=(0,[]) for the same reason; encode rewrites CALLN.
-function bareCall(ni) {
-  var argc = 0;
-  if (fnFind(ni) >= 0 || natIdOf(ni) >= 0) {
-    argc = argList();
-    emit(O_CALLN, ni, argc);
-    return;
-  }
-  loadVar(ni);
-  argc = argList();
-  emit(O_CALLVAL, argc, 0);   // argc is arg0 (RTL reads opw[23:8])
-}
-
-function primary() {
-  var k = tKind(ti);
-  var ni = 0;
-  var o = 0;
-  lvKind = 0;
-  if (k === K_NUM) { emit(O_LOADC, crecNum(tOff(ti), tLen(ti)), 0); ti = ti + 1; return; }
-  if (k === K_STR) { emit(O_LOADC, crecStr(internStr(tOff(ti), tLen(ti))), 0); ti = ti + 1; return; }
-  if (k === K_KEY) {
-    if (tSub(ti) === 15) { emit(O_LOADC, crecVal(1), 0); ti = ti + 1; return; }
-    if (tSub(ti) === 16) { emit(O_LOADC, crecVal(0), 0); ti = ti + 1; return; }
-    if (tSub(ti) === 17 || tSub(ti) === 18) { emit(O_LOADC, crecNone(), 0); ti = ti + 1; return; }
-    if (tSub(ti) === 3) {                        // function expression
-      ti = ti + 1;
-      if (tKind(ti) === K_ID) { ti = ti + 1; }   // optional name, not bound
-      fnLiteral();
-      lvKind = 0;
-      return;
-    }
-    if (tSub(ti) === 11) {                       // new Foo(...)
-      ti = ti + 1;
-      if (tKind(ti) === K_ID) {
-        ni = internSrc(tOff(ti), tLen(ti));
-        ti = ti + 1;
-        // `new Date()` / `new Image()` are natives with their own ids; any
-        // other constructor is a real NEW_OBJ against the class name.
-        if (natIdOf(ni) >= 0) { emit(O_CALLN, ni, argList()); }
-        else { ensureFnClass(ni); emit(O_NEWOBJ, ni, argList()); }
-        lvKind = 0;
-        return;
-      }
-      if (perr === 0) { perr = ti + 1; }
-      return;
-    }
-    if (tSub(ti) === 12) {                       // typeof x
-      ti = ti + 1;
-      unary();
-      // O_CALLN's operand is a NAME index; rewriteOps maps it to a native
-      // id via natIdOf. TYPEOF_NI was forever -1, natIdOf(-1) missed, and
-      // rewriteOps stubbed every typeof to 33 — PACFAST's per-cell map
-      // check made that "compiles but does not run" (2026-09-01). Intern
-      // the name "typeof": its hash row already maps to native 40.
-      emit(O_CALLN, internTypeof(), 1);
-      return;
-    }
-    if (tSub(ti) === 14) {                       // this → __this
-      emit(O_LOADV, internThis(), 0);
-      ti = ti + 1;
-      lvKind = 1;
-      lvName = THIS_NI;
-      return;
-    }
-  }
-  if (k === K_ID && isOp(ti + 1, 10)) {          // x => ...
-    arrowLiteral(1);
-    lvKind = 0;
-    return;
-  }
-  if (isOp(ti, 26) && arrowAhead()) {             // (a, b) => ...
-    arrowLiteral(0);
-    lvKind = 0;
-    return;
-  }
-  if (k === K_ID) {
-    // Host folds Math.PI (no call) to LOAD_CONST. GET_PROP on undefined Math
-    // is None, and PACFAST stroke/arc dies on that.
-    if (isOp(ti + 1, 33) && tKind(ti + 2) === K_ID && !isOp(ti + 3, 26)
-        && tLen(ti) === 4 && tLen(ti + 2) === 2) {
-      o = tOff(ti);
-      if (_sb(o) === 77 && _sb(o + 1) === 97 && _sb(o + 2) === 116 && _sb(o + 3) === 104
-          && _sb(tOff(ti + 2)) === 80 && _sb(tOff(ti + 2) + 1) === 73) {
-        emit(O_LOADC, crecVal(Math.PI), 0);
-        ti = ti + 3;
-        lvKind = 0;
-        return;
-      }
-    }
-    // A dotted native (document.querySelector, Math.floor) is ONE name, not
-    // a property load. Probe by hash first so a plain method call like
-    // c.fillRect never leaves "c.fillRect" behind in the name table.
-    if (isOp(ti + 1, 33) && (tKind(ti + 2) === K_ID) && isOp(ti + 3, 26)) {
-      if (natLookup(dotHash(tOff(ti), tLen(ti), tOff(ti + 2), tLen(ti + 2)),
-                    tLen(ti) + tLen(ti + 2) + 1) >= 0) {
-        ni = internDot(tOff(ti), tLen(ti), tOff(ti + 2), tLen(ti + 2));
-        ti = ti + 3;
-        emit(O_CALLN, ni, argList());
-        return;
-      }
-      // Unknown browser-only API on the window object (window.open):
-      // the host lowers these to the no-op stub 33 so titles never need
-      // hand-edits to compile. Emit O_CALLN with the dotted name;
-      // rewriteOps stubs any native it cannot resolve.
-      if (tLen(ti) === 6 && _sb(tOff(ti)) === 119 && _sb(tOff(ti) + 1) === 105
-          && _sb(tOff(ti) + 2) === 110 && _sb(tOff(ti) + 3) === 100
-          && _sb(tOff(ti) + 4) === 111 && _sb(tOff(ti) + 5) === 119) {
-        ni = internDot(tOff(ti), tLen(ti), tOff(ti + 2), tLen(ti + 2));
-        ti = ti + 3;
-        emit(O_CALLN, ni, argList());
-        return;
-      }
-    }
-    ni = internSrc(tOff(ti), tLen(ti));
-    ti = ti + 1;
-    if (isOp(ti, 26)) { bareCall(ni); return; }
-    lvOp = loadVar(ni);
-    lvKind = 1;
-    lvName = ni;
-    return;
-  }
-  if (isOp(ti, 26)) { ti = ti + 1; expr(); eatOp(27); lvKind = 0; return; }
-  if (isOp(ti, 34)) {                            // [ ... ]
-    ti = ti + 1;
-    var n = 0;
-    while (!isOp(ti, 35) && tKind(ti) !== K_EOF) {
-      expr();
-      n = n + 1;
-      if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
-    }
-    eatOp(35);
-    emit(O_MKARR, n, 0);
-    lvKind = 0;
-    return;
-  }
-  if (isOp(ti, 30)) {                            // { k: v }
-    ti = ti + 1;
-    emit(O_MKOBJ, 0, 0);
-    while (!isOp(ti, 31) && tKind(ti) !== K_EOF) {
-      if (tKind(ti) === K_STR) { ni = internStr(tOff(ti), tLen(ti)); }
-      else { ni = internSrc(tOff(ti), tLen(ti)); }
-      ti = ti + 1;
-      // SET_PROP consumes the object, so each field needs its own copy or
-      // the literal evaporates after the first key.
-      //   [obj] DUP [obj,obj] value [obj,obj,v] SET_PROP [obj,v] POP [obj]
-      emit(O_DUP, 0, 0);
-      if (isOp(ti, 29)) {
-        ti = ti + 1;
-        expr();
-      } else {
-        // shorthand `{ score }` is `{ score: score }`
-        loadVar(ni);
-      }
-      emit(O_SETP, ni, 0);
-      emit(O_POP, 0, 0);
-      if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
-    }
-    eatOp(31);
-    lvKind = 0;
-    return;
-  }
-  if (perr === 0) { perr = ti + 1; }
-  ti = ti + 1;
-}
-
-// typeof is native id 40; its name has to exist in the table to be emitted.
-var TYPEOF_NI = -1;
-
-
-function postfix() {
-  primary();
-  var ni = 0;
-  var jf = 0;
-  var opt = 0;
-  while (1) {
-    if ((isOp(ti, 33) || isOp(ti, 11))
-        && (tKind(ti + 1) === K_ID || tKind(ti + 1) === K_KEY)) {
-      // `a?.b` — JUMP_IF_FALSE consumes the test, so DUP first and let the
-      // falsy value itself stand as the result, which is what the host does.
-      opt = isOp(ti, 11);
-      jf = 0;
-      if (opt) {
-        emit(O_DUP, 0, 0);
-        jf = emit(O_JF, 0, 0);
-      }
-      ni = internSrc(tOff(ti + 1), tLen(ti + 1));
-      if (isOp(ti + 2, 26)) {                    // o.m(args)
-        ti = ti + 2;
-        emit(O_CALLM, ni, argList());
-        if (opt) { patchA0(jf, nOps); }
-        lvKind = 0;
-        continue;
-      }
-      ti = ti + 2;
-      // NOT `opt === 0`: isOp() yields a BOOLEAN and `false === 0` is false
-      // in JS, so that form silently skipped every property assignment.
-      if (isAssignAhead() && !opt) { lvKind = 2; lvName = ni; return; }
-      emit(O_GETP, ni, 0);
-      if (opt) { patchA0(jf, nOps); }
-      lvKind = 0;
-      continue;
-    }
-    if (isOp(ti, 34)) {                          // a[i]
-      ti = ti + 1;
-      expr();
-      eatOp(35);
-      if (isAssignAhead()) { lvKind = 3; return; }
-      emit(O_AGET, 0, 0);
-      lvKind = 0;
-      continue;
-    }
-    if (isOp(ti, 26)) {                          // value call
-      // IIFE: the callee is the MAKE_FN emitted immediately before —
-      // set a1 bit6 (flat call, caller-chained env) like the host, or the
-      // wrapper's "globals" land in a private env and the title is dead.
-      if (nOps > 0 && opCode(nOps - 1) === O_MKFN) {
-        setA1(nOps - 1, _gr(OPS_OFF + (nOps - 1) * 4 + 3) + 64);
-      }
-      emit(O_CALLVAL, argList(), 0);   // argc is arg0 (RTL reads opw[23:8])
-      lvKind = 0;
-      continue;
-    }
-    return;
-  }
-}
-
-// ++ and -- count: a property being incremented has to stay an lvalue, or
-// `state.count++` reads the field and then throws the read away.
-function isAssignAhead() {
-  if (isOp(ti, 24)) { return 1; }
-  if (isOp(ti, 8) || isOp(ti, 9)) { return 1; }
-  if (isOp(ti, 12) || isOp(ti, 13) || isOp(ti, 14) || isOp(ti, 15) || isOp(ti, 16)) { return 1; }
-  return 0;
-}
-
-function unary() {
-  if (isOp(ti, 25)) { ti = ti + 1; unary(); emit(O_NOT, 0, 0); lvKind = 0; return; }
-  if (isOp(ti, 18)) { ti = ti + 1; unary(); emit(O_NEG, 0, 0); lvKind = 0; return; }
-  if (isOp(ti, 17)) { ti = ti + 1; unary(); lvKind = 0; return; }
-  if (isOp(ti, 8) || isOp(ti, 9)) {              // ++x / --x
-    var dec = isOp(ti, 9);
-    ti = ti + 1;
-    unary();
-    emit(O_LOADC, crecVal(1), 0);
-    emit(dec ? O_SUB : O_ADD, 0, 0);
-    if (lvKind === 1) { storeVar(lvName); loadVar(lvName); }
-    lvKind = 0;
-    return;
-  }
-  postfix();
-  if (isOp(ti, 8) || isOp(ti, 9)) {
-    var d2 = isOp(ti, 9);
-    var nm = lvName;
-    if (lvKind === 1) {                                 // x++ / x--
-      ti = ti + 1;
-      emit(O_LOADC, crecVal(1), 0);
-      emit(d2 ? O_SUB : O_ADD, 0, 0);
-      storeVar(nm);
-      loadVar(nm);
-      lvKind = 0;
-    } else if (lvKind === 2) {                          // o.p++ / o.p--
-      // [obj] DUP [obj,obj] GETP [obj,v] 1 ADD [obj,v+1] SETP [v+1]
-      ti = ti + 1;
-      emit(O_DUP, 0, 0);
-      emit(O_GETP, nm, 0);
-      emit(O_LOADC, crecVal(1), 0);
-      emit(d2 ? O_SUB : O_ADD, 0, 0);
-      emit(O_SETP, nm, 0);
-      lvKind = 0;
-    } else if (lvKind === 3) {
-      if (perr === 0) { perr = ti + 1; }                // a[i]++ — not yet
-    }
-  }
-  // A property or index that was held as an lvalue but never assigned still
-  // has to produce its value.
-  if (lvKind === 2 && !isAssignAhead()) { emit(O_GETP, lvName, 0); lvKind = 0; }
-  else if (lvKind === 3 && !isAssignAhead()) { emit(O_AGET, 0, 0); lvKind = 0; }
-}
-
-// Pratt climb for every binop through ternary. The old 10-function chain
-// (mulE…ternE) sat 10 frames on CSTK for EVERY leaf; INVA's nested
-// forEach/setTimeout arrows and PACFAST's Game body overflowed 128.
-// opPrec returns 0 for anything that is not a binary operator.
-function opPrec(s) {
-  if (s === 19 || s === 20 || s === 21) { return 9; }
-  if (s === 17 || s === 18) { return 8; }
-  if (s === 22 || s === 23 || s === 4 || s === 5) { return 7; }
-  if (s === 0 || s === 1 || s === 2 || s === 3) { return 6; }
-  if (s === 37) { return 5; }
-  if (s === 36) { return 4; }
-  if (s === 6) { return 3; }
-  if (s === 7) { return 2; }
-  if (s === 38) { return 1; }
-  return 0;
-}
-
-function exprP(minP) {
-  var s = 0;
-  var p = 0;
-  var j = 0;
-  var k = 0;
-  unary();
-  while (tKind(ti) === K_OP) {
-    s = tSub(ti);
-    p = opPrec(s);
-    if (p < minP || p === 0) { break; }
-    ti = ti + 1;
-    if (s === 6) {
-      emit(O_DUP, 0, 0);
-      j = emit(O_JF, 0, 0);
-      emit(O_POP, 0, 0);
-      exprP(p + 1);
-      patchA0(j, nOps);
-    } else if (s === 7) {
-      emit(O_DUP, 0, 0);
-      j = emit(O_JF, 0, 0);
-      k = emit(O_JUMP, 0, 0);
-      patchA0(j, nOps);
-      emit(O_POP, 0, 0);
-      exprP(p + 1);
-      patchA0(k, nOps);
-    } else if (s === 38) {
-      j = emit(O_JF, 0, 0);
-      exprP(1);
-      k = emit(O_JUMP, 0, 0);
-      patchA0(j, nOps);
-      eatOp(29);
-      exprP(1);
-      patchA0(k, nOps);
-    } else {
-      exprP(p + 1);
-      if (s === 19) { emit(O_MUL, 0, 0); }
-      else if (s === 20) { emit(O_DIV, 0, 0); }
-      else if (s === 21) { emit(O_MOD, 0, 0); }
-      else if (s === 17) { emit(O_ADD, 0, 0); }
-      else if (s === 18) { emit(O_SUB, 0, 0); }
-      else if (s === 22) { emit(O_LT, 0, 0); }
-      else if (s === 23) { emit(O_GT, 0, 0); }
-      else if (s === 4) { emit(O_GT, 0, 0); emit(O_NOT, 0, 0); }
-      else if (s === 5) { emit(O_LT, 0, 0); emit(O_NOT, 0, 0); }
-      else if (s === 0 || s === 2) { emit(O_EQ, 0, 0); }
-      else if (s === 1 || s === 3) { emit(O_EQ, 0, 0); emit(O_NOT, 0, 0); }
-      else if (s === 37) { emit(O_BAND, 0, 0); }
-      else { emit(O_BOR, 0, 0); }
-    }
-    lvKind = 0;
-  }
-}
-
-function emitBinOp(s) {
-  if (s === 12) { emit(O_ADD, 0, 0); }
-  else if (s === 13) { emit(O_SUB, 0, 0); }
-  else if (s === 14) { emit(O_MUL, 0, 0); }
-  else if (s === 15) { emit(O_DIV, 0, 0); }
-  else { emit(O_MOD, 0, 0); }
-}
-
-// Assignment. Compound forms re-read the target, so `x += e` is `x = x + e`.
-function expr() {
-  exprP(1);
-  var k = lvKind;
-  var nm = lvName;
-  var lo = lvOp;
-  var s = 0;
-  if (k === 0) { return; }
-  if (isOp(ti, 24)) {                     // plain =
-    ti = ti + 1;
-    // The target's own load was speculative; a plain assignment does not
-    // read it. Drop it before the RHS lands on the stack.
-    if (k === 1) { dropLoad(lo); }
-    expr();
-    if (k === 1) { storeVar(nm); loadVar(nm); }
-    else if (k === 2) { emit(O_SETP, nm, 0); }
-    else { emit(O_ASET, 0, 0); }
-    lvKind = 0;
-    return;
-  }
-  if (isOp(ti, 12) || isOp(ti, 13) || isOp(ti, 14) || isOp(ti, 15) || isOp(ti, 16)) {
-    s = tSub(ti);
-    ti = ti + 1;
-    if (k === 2) {
-      // o.p += v — the object is on the stack; read the field, combine,
-      // then store it back. DUP keeps the object for the SET_PROP.
-      emit(O_DUP, 0, 0);
-      emit(O_GETP, nm, 0);
-      expr();
-      emitBinOp(s);
-      emit(O_SETP, nm, 0);
-      lvKind = 0;
-      return;
-    }
-    if (k !== 1) { if (perr === 0) { perr = ti; } return; }
-    // Compound assignment DOES read the target, so primary's load stays.
-    expr();
-    emitBinOp(s);
-    storeVar(nm);
-    loadVar(nm);
-    lvKind = 0;
-  }
-}
-
-// ---- statements ----------------------------------------------------------
-var BRK_OFF = 0;
-var nBrk = 0;
-var nCont = 0;
-
-function exprComma() {
-  expr();
-  while (isOp(ti, 32)) {
-    emit(O_POP, 0, 0);
-    ti = ti + 1;
-    expr();
-  }
-}
-
-function stmt() {
-  var k = 0;
-  var ni = 0;
-  var j = 0;
-  var top = 0;
-  if (tKind(ti) === K_EOF) { return; }
-  if (isOp(ti, 28)) { ti = ti + 1; return; }             // stray ;
-  if (isOp(ti, 30)) {                                    // { block }
-    ti = ti + 1;
-    while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
-    eatOp(31);
-    return;
-  }
-  if (tKind(ti) === K_KEY) {
-    k = tSub(ti);
-    if (k === 0 || k === 1 || k === 2) { varDecl(); return; }
-    if (k === 3) { skipFn(); return; }                   // already emitted
-    if (k === 13) { skipFn(); return; }                  // class, already emitted
-    if (k === 5) { ifStmt(); return; }
-    if (k === 7) { whileStmt(); return; }
-    if (k === 8) { forStmt(); return; }
-    if (k === 4) {                                       // return
-      ti = ti + 1;
-      if (isOp(ti, 28) || isOp(ti, 31)) { emit(O_LOADC, crecNone(), 0); }
-      else { expr(); }
-      if (isOp(ti, 28)) { ti = ti + 1; }
-      emit(O_RETV, 0, 0);
-      return;
-    }
-    if (k === 25) {                                      // try { } catch { }
-      ti = ti + 1;
-      stmt();
-      if (isKw(ti, 26)) {
-        ti = ti + 1;
-        if (isOp(ti, 26)) { while (!isOp(ti, 27) && tKind(ti) !== K_EOF) { ti = ti + 1; } ti = ti + 1; }
-        // The VM has no exceptions, so the handler is unreachable: skip it
-        // rather than emit dead ops. Same call the host makes.
-        skipBlock();
-      }
-      if (isKw(ti, 27)) { ti = ti + 1; stmt(); }
-      return;
-    }
-    if (k === 28) {                                      // throw expr;
-      ti = ti + 1;
-      expr();
-      emit(O_POP, 0, 0);
-      if (isOp(ti, 28)) { ti = ti + 1; }
-      return;
-    }
-    if (k === 19) { switchStmt(); return; }              // switch
-    if (k === 9) {                                       // break
-      ti = ti + 1;
-      if (isOp(ti, 28)) { ti = ti + 1; }
-      brkAdd(emit(O_JUMP, 0, 0), 0);
-      return;
-    }
-    if (k === 10) {                                      // continue
-      ti = ti + 1;
-      if (isOp(ti, 28)) { ti = ti + 1; }
-      brkAdd(emit(O_JUMP, 0, 0), 1);
-      return;
-    }
-  }
-  exprComma();
-  emit(O_POP, 0, 0);
-  if (isOp(ti, 28)) { ti = ti + 1; }
-}
-
-// switch(disc){ case a: case b: stmts; break; default: ... }
-// Same grouping as the host: consecutive case labels OR together, then a
-// JUMP_IF_FALSE over the body; break lands at the closing brace.
-function switchStmt() {
-  var b0 = 0;
-  var first = 0;
-  var skip = 0;
-  ti = ti + 1;
-  eatOp(26);
-  expr();
-  eatOp(27);
-  internSw();
-  emit(O_STOREV, SW_NI, 1);
-  eatOp(30);
-  b0 = nBrk;
-  while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) {
-    if (isKw(ti, 20)) {
-      first = 1;
-      while (isKw(ti, 20) && perr === 0) {
-        ti = ti + 1;
-        emit(O_LOADV, SW_NI, 1);
-        expr();
-        eatOp(29);
-        emit(O_EQ, 0, 0);
-        if (first === 0) { emit(O_BOR, 0, 0); }
-        first = 0;
-      }
-      skip = emit(O_JF, 0, 0);
-      while (!isKw(ti, 20) && !isKw(ti, 21) && !isOp(ti, 31)
-          && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
-      brkAdd(emit(O_JUMP, 0, 0), 0);
-      patchA0(skip, nOps);
-    } else if (isKw(ti, 21)) {
-      ti = ti + 1;
-      eatOp(29);
-      while (!isKw(ti, 20) && !isKw(ti, 21) && !isOp(ti, 31)
-          && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
-    } else {
-      if (perr === 0) { perr = ti + 1; }
-      return;
-    }
-  }
-  eatOp(31);
-  brkPatch(b0, nOps, nOps);
-}
-
-// Skip one statement or balanced block without emitting anything.
-function skipBlock() {
-  var depth = 0;
-  if (!isOp(ti, 30)) {
-    while (tKind(ti) !== K_EOF && !isOp(ti, 28)) { ti = ti + 1; }
-    if (isOp(ti, 28)) { ti = ti + 1; }
-    return;
-  }
-  while (tKind(ti) !== K_EOF) {
-    if (isOp(ti, 30)) { depth = depth + 1; }
-    if (isOp(ti, 31)) {
-      depth = depth - 1;
-      ti = ti + 1;
-      if (depth <= 0) { return; }
-      continue;
-    }
-    ti = ti + 1;
-  }
-}
-
-function varDecl() {
-  ti = ti + 1;
-  var ni = 0;
-  while (tKind(ti) === K_ID) {
-    ni = internSrc(tOff(ti), tLen(ti));
-    ti = ti + 1;
-    declAdd(ni);
-    if (isOp(ti, 24)) { ti = ti + 1; expr(); } else { emit(O_LOADC, crecNone(), 0); }
-    if (inFn) {
-      locAdd(ni);
-      emit(O_LETV, ni, 1 + ((locFind(ni) & 31) + 1) * 2);
-    } else {
-      emit(O_LETV, ni, 0);
-    }
-    if (isOp(ti, 32)) { ti = ti + 1; continue; }
-    break;
-  }
-  if (isOp(ti, 28)) { ti = ti + 1; }
-}
-
-function ifStmt() {
-  ti = ti + 1;
-  eatOp(26);
-  expr();
-  eatOp(27);
-  var j = emit(O_JF, 0, 0);
-  stmt();
-  if (isKw(ti, 6)) {
-    ti = ti + 1;
-    var k = emit(O_JUMP, 0, 0);
-    patchA0(j, nOps);
-    stmt();
-    patchA0(k, nOps);
-  } else {
-    patchA0(j, nOps);
-  }
-}
-
-function whileStmt() {
-  ti = ti + 1;
-  var top = nOps;
-  var b0 = nBrk;
-  eatOp(26);
-  expr();
-  eatOp(27);
-  var j = emit(O_JF, 0, 0);
-  stmt();
-  emit(O_JUMP, top, 0);
-  patchA0(j, nOps);
-  brkPatch(b0, nOps, top);
-}
-
-function forStmt() {
-  ti = ti + 1;
-  eatOp(26);
-  if (!isOp(ti, 28)) {
-    if (tKind(ti) === K_KEY && tSub(ti) <= 2) { varDecl(); }
-    else { exprComma(); emit(O_POP, 0, 0); if (isOp(ti, 28)) { ti = ti + 1; } }
-  } else { ti = ti + 1; }
-  var top = nOps;
-  var b0 = nBrk;
-  var j = -1;
-  if (!isOp(ti, 28)) { expr(); j = emit(O_JF, 0, 0); }
-  eatOp(28);
-  // The step runs after the body, but it is written before it. Emit it into
-  // a scratch region first, then replay — cheaper than a second parse pass.
-  var stepTi = ti;
-  var depth = 0;
-  while (tKind(ti) !== K_EOF) {
-    if (isOp(ti, 26)) { depth = depth + 1; }
-    if (isOp(ti, 27)) { if (depth === 0) { break; } depth = depth - 1; }
-    ti = ti + 1;
-  }
-  var bodyTi = ti;
-  eatOp(27);
-  stmt();
-  var contTarget = nOps;
-  if (stepTi !== bodyTi) {
-    var save = ti;
-    ti = stepTi;
-    exprComma();
-    emit(O_POP, 0, 0);
-    ti = save;
-  }
-  emit(O_JUMP, top, 0);
-  if (j >= 0) { patchA0(j, nOps); }
-  brkPatch(b0, nOps, contTarget);
-}
-
-function brkAdd(opIdx, isCont) {
-  if (nBrk >= 256) { return; }
-  var o = BRK_OFF + nBrk * 4;
-  _gw(o, opIdx % 256);
-  _gw(o + 1, Math.floor(opIdx / 256) % 256);
-  _gw(o + 2, Math.floor(opIdx / 65536) % 256);
-  _gw(o + 3, isCont);
-  nBrk = nBrk + 1;
-}
-
-function brkPatch(base, endTarget, contTarget) {
-  var i = base;
-  var o = 0;
-  var idx = 0;
-  while (i < nBrk) {
-    o = BRK_OFF + i * 4;
-    idx = _gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536;
-    patchA0(idx, _gr(o + 3) ? contTarget : endTarget);
-    i = i + 1;
-  }
-  nBrk = base;
-}
-
-// Skip a function or class declaration whose body was already emitted.
-// Functions: skip the param list first so a destructure `{ a, b }` is not
-// taken as the body (host `_skip_function_decl`). Classes have no params
-// and fall through to the brace walk (host `_skip_class_decl`).
-function skipFn() {
-  ti = ti + 1;
-  if (tKind(ti) === K_ID) { ti = ti + 1; }
-  var depth = 0;
-  var pd = 0;
-  if (isOp(ti, 26)) {
-    pd = 1;
-    ti = ti + 1;
-    while (pd && tKind(ti) !== K_EOF) {
-      if (isOp(ti, 26)) { pd = pd + 1; }
-      if (isOp(ti, 27)) { pd = pd - 1; }
-      ti = ti + 1;
-    }
-  }
-  while (tKind(ti) !== K_EOF) {
-    if (isOp(ti, 30)) { depth = depth + 1; }
-    if (isOp(ti, 31)) { depth = depth - 1; ti = ti + 1; if (depth <= 0) { return; } continue; }
-    ti = ti + 1;
-  }
-}
-
-// ---- function bodies -----------------------------------------------------
-// Emitted before any top-level statement, each behind a skip JUMP, so a call
-// can name a callee declared further down the file. This is why the op stream
-// of every title starts with a JUMP.
-function prescanFns() {
-  var i = 0;
-  var ni = 0;
-  while (tKind(i) !== K_EOF) {
-    if (isKw(i, 3) && tKind(i + 1) === K_ID) {
-      ni = internSrc(tOff(i + 1), tLen(i + 1));
-      if(LINK_MODE && fnFind(ni)>=0 && fnFind(ni)<LINK_FUNCS){over=1;return;}
-      if (fnFind(ni) < 0) { fnAdd(ni, 0, 0); }
-    }
-    i = i + 1;
-  }
-}
-
-function skipPat(t) {
-  var d = 0;
-  if (isOp(t, 30)) {
-    d = 1;
-    t = t + 1;
-    while (d && tKind(t) !== K_EOF) {
-      if (isOp(t, 30)) { d = d + 1; }
-      if (isOp(t, 31)) { d = d - 1; }
-      t = t + 1;
-    }
-    return t;
-  }
-  return t + 1;
-}
-
-function scanParams() {
-  var np = 0;
-  while (!isOp(ti, 27) && tKind(ti) !== K_EOF) {
-    if (isOp(ti, 30) || tKind(ti) === K_ID) {
-      ti = skipPat(ti);
-      np = np + 1;
-      if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
-    } else { break; }
-  }
-  return np;
-}
-
-function bindOne(t) {
-  var pn = 0;
-  if (isOp(t, 30)) {
-    internArg();
-    locAdd(ARG_NI);
-    declAdd(ARG_NI);
-    emit(O_LETV, ARG_NI, 1 + ((locFind(ARG_NI) & 31) + 1) * 2);
-    t = t + 1;
-    while (!isOp(t, 31) && tKind(t) !== K_EOF) {
-      if (tKind(t) === K_ID) {
-        pn = internSrc(tOff(t), tLen(t));
-        locAdd(pn);
-        declAdd(pn);
-        emit(O_LOADV, ARG_NI, 0);
-        emit(O_GETP, pn, 0);
-        emit(O_LETV, pn, 1 + ((locFind(pn) & 31) + 1) * 2);
-      }
-      t = t + 1;
-      if (isOp(t, 32)) { t = t + 1; }
-    }
-  } else {
-    pn = internSrc(tOff(t), tLen(t));
-    locAdd(pn);
-    declAdd(pn);
-    emit(O_LETV, pn, 1 + ((locFind(pn) & 31) + 1) * 2);
-  }
-}
-
-function bindParams(p0, np) {
-  var i = np;
-  var t = 0;
-  var k = 0;
-  var save = ti;
-  while (i > 0) {
-    i = i - 1;
-    t = p0;
-    k = 0;
-    while (k < i) {
-      t = skipPat(t);
-      if (isOp(t, 32)) { t = t + 1; }
-      k = k + 1;
-    }
-    bindOne(t);
-  }
-  ti = save;
-}
-
-// One function literal: `function f(a){...}` and `function(a){...}` differ
-// only in whether a name is bound afterwards. Emits JUMP-over-body, the body,
-// then MAKE_FN, leaving the function value on the stack.
-function fnLiteral() {
-  var jmp = emit(O_JUMP, 0, 0);
-  var entry = nOps;
-  var np = 0;
-  var p0 = 0;
-  var pLoc = locBase;
-  var pNLoc = nLoc;
-  var pDecl = declBase;
-  var pNDecl = nDecl;
-  eatOp(26);
-  p0 = ti;
-  np = scanParams();
-  eatOp(27);
-  locBase = locBase + nLoc;
-  declBase = declBase + nDecl;
-  nLoc = 0;
-  nDecl = 0;
-  inFn = inFn + 1;
-  bindParams(p0, np);
-  eatOp(30);
-  while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
-  eatOp(31);
-  emit(O_LOADC, crecNone(), 0);
-  emit(O_RETV, 0, 0);
-  inFn = inFn - 1;
-  locBase = pLoc;
-  nLoc = pNLoc;
-  declBase = pDecl;
-  nDecl = pNDecl;
-  patchA0(jmp, nOps);
-  emit(O_MKFN, entry, np);
-  return entry;
-}
-
-// Is the '(' at ti the start of an arrow parameter list rather than a
-// parenthesised expression? Only the token after the matching ')' says so.
-function arrowAhead() {
-  var i = ti + 1;
-  var d = 0;
-  while (tKind(i) !== K_EOF) {
-    if (isOp(i, 26)) {
-      d = d + 1;
-    } else if (isOp(i, 27)) {
-      if (d === 0) { return isOp(i + 1, 10); }
-      d = d - 1;
-    }
-    i = i + 1;
-  }
-  return 0;
-}
-
-// `x => e`, `(a, b) => e`, `(a, b) => { ... }`. Same shape as a function
-// literal; an expression body is an implicit return.
-function arrowLiteral(single) {
-  var jmp = emit(O_JUMP, 0, 0);
-  var entry = nOps;
-  var np = 0;
-  var p0 = 0;
-  var pLoc = locBase;
-  var pNLoc = nLoc;
-  var pDecl = declBase;
-  var pNDecl = nDecl;
-  if (single) {
-    p0 = ti;
-    np = 1;
-    ti = ti + 1;
-  } else {
-    eatOp(26);
-    p0 = ti;
-    np = scanParams();
-    eatOp(27);
-  }
-  eatOp(10);
-  locBase = locBase + nLoc;
-  declBase = declBase + nDecl;
-  nLoc = 0;
-  nDecl = 0;
-  inFn = inFn + 1;
-  bindParams(p0, np);
-  if (isOp(ti, 30)) {
-    ti = ti + 1;
-    while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
-    eatOp(31);
-    emit(O_LOADC, crecNone(), 0);
-  } else {
-    expr();
-  }
-  emit(O_RETV, 0, 0);
-  inFn = inFn - 1;
-  locBase = pLoc;
-  nLoc = pNLoc;
-  declBase = pDecl;
-  nDecl = pNDecl;
-  patchA0(jmp, nOps);
-  emit(O_MKFN, entry, np + 128);
-}
-
-function compileFn() {
-  var ni = internSrc(tOff(ti + 1), tLen(ti + 1));
-  ti = ti + 2;
-  var entry = fnLiteral();
-  var fi = fnFind(ni);
-  if (fi >= 0) { _w16(FN_OFF + fi * 8 + 2, entry); }
-  emit(O_STOREV, ni, 1);
-}
-
-function compileAllFns() {
-  ti = 0;
-  var depth = 0;
-  while (tKind(ti) !== K_EOF && perr === 0) {
-    if (isKw(ti, 3) && tKind(ti + 1) === K_ID) { compileFn(); continue; }
-    if (isOp(ti, 30)) { depth = depth + 1; }
-    if (isOp(ti, 31)) { depth = depth - 1; }
-    ti = ti + 1;
-  }
-}
-
-// `(function(){ ... })();` wrapping the whole program is the standard way a
-// title avoids leaking globals, but the machine has no closures over an IIFE
-// frame: named functions are emitted at top level, so a var owned by the
-// wrapper would be unreachable from them. Unwrap it and compile the body at
-// top level, which is what the host's IIFE-isolation pass achieves.
-// Returns the first body token, or 0 when the program is not one IIFE.
-function unwrapIife() {
-  var i = 2;
-  if (!isOp(0, 26)) { return 0; }
-  if (!isKw(1, 3)) { return 0; }
-  if (tKind(i) === K_ID) { i = i + 1; }
-  if (!isOp(i, 26)) { return 0; }
-  while (!isOp(i, 27) && tKind(i) !== K_EOF) { i = i + 1; }
-  i = i + 1;
-  if (!isOp(i, 30)) { return 0; }
-  return i + 1;
-}
-
-function isGetId(i) {
-  if (tKind(i) !== K_ID || tLen(i) !== 3) { return 0; }
-  var o = tOff(i);
-  return (_sb(o) === 103 && _sb(o + 1) === 101 && _sb(o + 2) === 116) ? 1 : 0;
-}
-
-function isSetId(i) {
-  if (tKind(i) !== K_ID || tLen(i) !== 3) { return 0; }
-  var o = tOff(i);
-  return (_sb(o) === 115 && _sb(o + 1) === 101 && _sb(o + 2) === 116) ? 1 : 0;
-}
-
-function isCtorId(i) {
-  if (tKind(i) !== K_ID || tLen(i) !== 11) { return 0; }
-  var o = tOff(i);
-  return (_sb(o) === 99 && _sb(o + 1) === 111 && _sb(o + 2) === 110) ? 1 : 0;
-}
-
-function methAdd(ni, en, isG) {
-  var o = CLS_OFF + 1024 + METH_N * 6;
-  if (isG) { ni = ni + 32768; }
-  _w16(o, ni);
-  _w16(o + 2, en);
-  METH_N = METH_N + 1;
-}
-
-function fldAdd(ni, en, np) {
-  var o = CLS_OFF + 1536 + FLD_N * 8;
-  _w16(o, ni);
-  _w16(o + 2, en);
-  _gw(o + 4, np);
-  FLD_N = FLD_N + 1;
-}
-
-function classField(ni) {
-  var entry = 0;
-  var np = 0;
-  if (tKind(ti) === K_ID && isOp(ti + 1, 10)) { arrowLiteral(1); }
-  else if (isOp(ti, 26) && arrowAhead()) { arrowLiteral(0); }
-  else { expr(); emit(O_POP, 0, 0); return; }
-  nOps = nOps - 1;
-  entry = opA0(nOps);
-  np = opA1(nOps);
-  patchA0(entry - 1, nOps);
-  fldAdd(ni, entry, np);
-}
-
-function classMeth(isC, isG, ni) {
-  var jmp = emit(O_JUMP, 0, 0);
-  var entry = nOps;
-  var np = 0;
-  var p0 = 0;
-  var pLoc = locBase;
-  var pNLoc = nLoc;
-  var pDecl = declBase;
-  var pNDecl = nDecl;
-  var ap = 0;
-  var body = 0;
-  eatOp(26);
-  p0 = ti;
-  np = scanParams();
-  eatOp(27);
-  locBase = locBase + nLoc;
-  declBase = declBase + nDecl;
-  nLoc = 0;
-  nDecl = 0;
-  inFn = inFn + 1;
-  bindParams(p0, np);
-  ap = emit(O_JUMP, 0, 0);
-  body = nOps;
-  eatOp(30);
-  while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
-  eatOp(31);
-  emit(O_LOADC, crecNone(), 0);
-  emit(O_RETV, 0, 0);
-  inFn = inFn - 1;
-  locBase = pLoc;
-  nLoc = pNLoc;
-  declBase = pDecl;
-  nDecl = pNDecl;
-  patchA0(jmp, nOps);
-  patchA0(ap, body);
-  if (isC) {
-    clsCtor = entry;
-    clsCtorAP = ap;
-    clsCtorBody = body;
-  } else {
-    methAdd(ni, entry, isG);
-  }
-}
-
-function classMember() {
-  var isG = 0;
-  var isC = 0;
-  var ni = 0;
-  if (isGetId(ti) && tKind(ti + 1) === K_ID && isOp(ti + 2, 26)) {
-    isG = 1;
-    ti = ti + 1;
-  } else if (isSetId(ti) && tKind(ti + 1) === K_ID && isOp(ti + 2, 26)) {
-    ti = ti + 1;
-  }
-  if (tKind(ti) !== K_ID) { if (perr === 0) { perr = ti + 1; } return; }
-  ni = internSrc(tOff(ti), tLen(ti));
-  isC = isCtorId(ti);
-  ti = ti + 1;
-  if (isOp(ti, 24)) {
-    ti = ti + 1;
-    classField(ni);
-    if (isOp(ti, 28)) { ti = ti + 1; }
-    return;
-  }
-  classMeth(isC, isG, ni);
-}
-
-function classFinish(cname) {
-  var i = 0;
-  var o = 0;
-  var fi = 0;
-  var jmp = 0;
-  if (FLD_N && clsCtor >= 0) {
-    jmp = emit(O_JUMP, 0, 0);
-    fi = nOps;
-    while (i < FLD_N) {
-      o = CLS_OFF + 1536 + i * 8;
-      emit(O_LOADV, THIS_NI, 0);
-      emit(O_MKFN, _r16(o + 2), _gr(o + 4));
-      emit(O_SETP, _r16(o), 0);
-      emit(O_POP, 0, 0);
-      i = i + 1;
-    }
-    emit(O_JUMP, clsCtorBody, 0);
-    patchA0(jmp, nOps);
-    patchA0(clsCtorAP, fi);
-  }
-  if (clsCtor < 0) {
-    jmp = emit(O_JUMP, 0, 0);
-    clsCtor = nOps;
-    emit(O_LOADC, crecNone(), 0);
-    emit(O_RETV, 0, 0);
-    patchA0(jmp, nOps);
-  }
-  _w16(clsW, cname);
-  _w16(clsW + 2, clsCtor);
-  _w16(clsW + 4, METH_N);
-  clsW = clsW + 6;
-  i = 0;
-  while (i < METH_N) {
-    o = CLS_OFF + 1024 + i * 6;
-    _w16(clsW, _r16(o));
-    _w16(clsW + 2, _r16(o + 2));
-    clsW = clsW + 4;
-    i = i + 1;
-  }
-  nCls = nCls + 1;
-}
-
-function compileClass() {
-  var cname = 0;
-  ti = ti + 1;
-  cname = internSrc(tOff(ti), tLen(ti));
-  ti = ti + 1;
-  eatOp(30);
-  clsCtor = -1;
-  METH_N = 0;
-  FLD_N = 0;
-  internThis();
-  while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { classMember(); }
-  eatOp(31);
-  classFinish(cname);
-}
-
-function compileAllClasses() {
-  var i = 0;
-  var save = ti;
-  clsW = CLS_OFF + 2;
-  nCls = 0;
-  internThis();
-  while (tKind(i) !== K_EOF && perr === 0) {
-    if (isKw(i, 13) && tKind(i + 1) === K_ID) {
-      ti = i;
-      compileClass();
-      i = ti;
-    } else {
-      i = i + 1;
-    }
-  }
-  ti = save;
-  _w16(CLS_OFF, nCls);
-}
-
-function parse() {
-  internThis();
-  internArg();
-  prescanFns();
-  if(over)return 11;
-  compileAllClasses();
-  compileAllFns();
-  ti = unwrapIife();
-  if (ti > 0) {
-    while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0 && over === 0) { stmt(); }
-    gsResolveAll();
-    if (over === 2) { return 10; }
-    if (over) { return 11; }
-    if (perr) { return 12; }
-    return 0;
-  }
-  ti = 0;
-  while (tKind(ti) !== K_EOF && perr === 0 && over === 0) { stmt(); }
-  gsResolveAll();
-  if (over === 2) { return 10; }
-  if (over) { return 11; }
-  if (perr) { return 12; }
-  return 0;
-}
-
-// ==========================================================================
-// ASSEMBLER — build the .JSH image
-//
-// Mirrors jsb_format._encode_v2: fold the constant records into a pool,
-// derive var indices from the names that are not natives, rewrite every
-// operand accordingly, then lay out header, consts, ops and the v2 trailer.
-// ==========================================================================
-
-var POOL_OFF = 0;
-var VMAP_OFF = 0;
-var LC_OFF = 0;
-var nPool = 0;
-var nVars = 0;
-
-// LOAD_CONST a1 tags: 0 = const-pool slot, 1 = name-table index, 2 = undefined.
-var LC_I32 = 0;
-var LC_STR = 1;
-var LC_NONE = 2;
-
 function poolFind(o) {
   var i = 0;
   var k = 0;
@@ -2565,7 +610,34 @@ function poolFind(o) {
   }
   return -1;
 }
-
+function deviceAddProof(){
+ var i=0,op=0,a=0,h=0,p=0,q=0,j=0,n=0,k=0,need=0,b=0;
+ if(nCls||nOps>=32768||nNames>1024||nFn>384)return 1;
+ if(!_dpLayout())return 1;b=Math.floor((nOps+7)/8);_dpSet(_dp[33],0);
+ for(i=0;i<nOps;i++){
+  op=opCode(i);a=opA0(i);h=opA1(i);
+  if(op===11||op===12||op===24||op===33){if(a>=nOps){_dp[0]=1;break;}_dpSet(_dp[33],a);}
+  if(op===12&&i+1<nOps)_dpSet(_dp[33],i+1);
+  if(op===3||op===22){a=_dpName(i,a);h=1|((op===22&&h===0)||(op===3&&h===1)?2:0);_gw(_dp[36]+a,_gr(_dp[36]+a)|h);}
+ }
+ _dpFn(0,1);
+ for(n=1;n<=64&&!_dp[0];n++){
+  _dp[2]=n;_dp[1]=0;_dp[26]=0;_dp[27]=0;_dp[28]=0;_dp[41]=0;_dp[42]=0;_dpZero(_dp[34],b);_dpZero(_dp[35],b);k=_dp[16];
+  for(i=0;i<k;i++){p=_dp[15]+i*12;_dp[30]=_gr(p+2);a=_r16(p+6);for(j=0;j<_dp[30];j++)_w16(_dp[29]+j*2,_r16(a+j*2));_dpState(_r16(p),_r16(p));}
+  while(_dp[28]&&!_dp[0]){p=_r16(_dp[25]+_dp[26]*2);_dp[26]=(_dp[26]+1)%4096;_dp[28]--;_dpRun(p);}
+  if(!_dp[1])break;
+ }
+ if(_dp[0]||_dp[42]||n>64)return 1;
+ for(i=0;i<nOps;i++)if(opCode(i)===4){
+  a=_dpBit(_dp[34],i)?(!_dpBit(_dp[35],i)):_dpDead(i);
+  if(_dp[0])return 1;
+  if(LINK_MODE&&i<8192){if(!a){over=1;return 1;}}
+  else if(opA1(i)===1&&!a)need=1;
+ }
+ for(i=LINK_MODE?8192:0;i<nOps;i++)if(opCode(i)===4&&opA1(i)===1){if((_dpBit(_dp[34],i)&&!_dpBit(_dp[35],i))||(!_dpBit(_dp[34],i)&&_dpDead(i)))setA1(i,0);}
+ return need;
+}
+function mixedResolve(){if(!LINK_MODE){var any=0;for(var j=0;j<nOps;j++)if(opCode(j)===O_ADD&&opA1(j)===1)any=1;if(!any)return 0;}if(!deviceAddProof())return 0;var fi=fnFind(internText("_jmr_json_addNative"));if(fi<0){if(JSON_LEN===0||JSON_LEN===18459)return 1;over=1;return 0;}for(var i=LINK_MODE?8192:0;i<nOps;i++)if(opCode(i)===O_ADD&&opA1(i)===1){patchA0(i,fnEntry(fi));setA1(i,0);CALLREF=1;}return 0;}
 function buildPool() {
   var i = 0;
   var o = 0;
@@ -2578,6 +650,8 @@ function buildPool() {
     if (kind === CK_STR) {
       _w16(LC_OFF + i * 4, _r16(o + 1));
       _gw(LC_OFF + i * 4 + 2, LC_STR);
+    } else if(kind===CK_BOOL || kind===CK_NULL){
+      _w16(LC_OFF+i*4,kind===CK_BOOL?_gr(o+1):0);_gw(LC_OFF+i*4+2,kind===CK_BOOL?5:6);
     } else if (kind === CK_NONE) {
       _w16(LC_OFF + i * 4, 0);
       _gw(LC_OFF + i * 4 + 2, LC_NONE);
@@ -2595,8 +669,6 @@ function buildPool() {
     i = i + 1;
   }
 }
-
-// var index = position among names that are not natives, in name order.
 function buildVars() {
  var i=0,n=0,c=0;
  nVars=0;
@@ -2620,12 +692,10 @@ function buildVars() {
  }
  if(nVars>512)over=1;
 }
-
 function varOf(ni) {
   var v = _r16(VMAP_OFF + ni * 2);
   return v === 65535 ? 0 : v;
 }
-
 function rewriteOps() {
   var i = 0;
   var c = 0;
@@ -2634,8 +704,6 @@ function rewriteOps() {
   var fi = 0;
   var k = CLS_OFF + 2;
   var b = 0;
-  // Class rows from `new Foo` during compileFn still have ctor 0xFFFF
-  // (entry was 0). Fill the real IP now that every body exists.
   while (i < nCls) {
     a0 = _r16(k + 2);
     if (a0 === 0 || a0 === 65535) {
@@ -2672,21 +740,12 @@ function rewriteOps() {
     i = i + 1;
   }
 }
-
-// ---- colours -------------------------------------------------------------
-// The RTL does NOT parse colour strings. It resolves ctx.fillStyle through
-// the FSTY table the compiler emits (name index -> palette index) and paints
-// index 1 — WHITE — for anything it cannot find. So an image without FSTY
-// draws every rectangle white on real hardware while looking perfect on the
-// Python model, which parses the string itself. Emit the table.
 function hexOf(b) {
   if (b >= 48 && b <= 57) { return b - 48; }
   if (b >= 97 && b <= 102) { return b - 87; }
   if (b >= 65 && b <= 70) { return b - 55; }
   return -1;
 }
-
-// "#rgb" / "#rrggbb" -> r*65536 + g*256 + b, or -1 when not a colour.
 function colorOf(ni) {
   var o = NBLOB_OFF + nBlob(ni);
   var n = nLen(ni);
@@ -2710,7 +769,6 @@ function colorOf(ni) {
   }
   return namedRgb(o, n);
 }
-
 function namedRgb(o, n) {
   var a = _gr(o);
   if (n === 5 && a === 119 && _gr(o + 1) === 104 && _gr(o + 2) === 105
@@ -2730,13 +788,11 @@ function namedRgb(o, n) {
       && _gr(o + 3) === 100) { return 16766720; } // gold
   return -1;
 }
-
 function palSet(i, r, g, b) {
   _gw(PAL_OFF + i * 3, r);
   _gw(PAL_OFF + i * 3 + 1, g);
   _gw(PAL_OFF + i * 3 + 2, b);
 }
-
 function palNear(r, g, b) {
   var i = 1;
   var best = 1;
@@ -2756,17 +812,14 @@ function palNear(r, g, b) {
   }
   return best;
 }
-
 function artHdrLen() {
   return 8 + _r16(ART_KEEP + 6) * 8 + 4;
 }
-
 function artNspr() {
   var n = _r16(ART_KEEP + 6);
   if (n < 0 || n > 64) { dgFail(0 - 5); return 0; }
   return n;
 }
-
 function palFind(r, g, b) {
   var i = 0;
   while (i < nPal) {
@@ -2776,9 +829,6 @@ function palFind(r, g, b) {
   }
   return -1;
 }
-
-// Entries 0..7 are the frozen legacy palette the monitor glass also uses;
-// title colours are appended after them, exactly as the host does.
 function buildPalette() {
   var i = 0;
   var rgb = 0;
@@ -2837,10 +887,6 @@ function buildPalette() {
   }
   while (nPal < 256) { palSet(nPal, 0, 0, 0); nPal = nPal + 1; }
 }
-
-// ---- image emit ----------------------------------------------------------
-var ip = 0;
-
 function ob(b) { if(LINK_MODE && IMG_OFF+ip>=OPS_OFF){over=1;return;} _gw(IMG_OFF + ip, b % 256); ip = ip + 1; }
 function o16(v) { ob(v); ob(Math.floor(v / 256)); }
 function o32(v) {
@@ -2849,13 +895,22 @@ function o32(v) {
   ob(Math.floor(v / 65536));
   ob(Math.floor(v / 16777216));
 }
-
 function emitImage() {
   var i = 0;
   var k = 0;
   var b = 0;
+  k = CLS_OFF + 2;
+  while (i < nCls) {
+    var m = _r16(k + 4);
+    k = k + 6;
+    while (m > 0) {
+      if (_r16(k) >= 16384 && _r16(k) < 32768) { b = 1; }
+      k = k + 4; m = m - 1;
+    }
+    i = i + 1;
+  }
   ip = 0;
-  ob(74); ob(83); ob(66); ob(49);           // 'JSB1'
+  ob(74); ob(83); ob(66); ob(49 + (b || CALLREF ? 1 : 0));      // JSB2 only for surviving setter rows
   o16(nOps);
   o16(nPool);
   o16(nVars);
@@ -2873,7 +928,6 @@ function emitImage() {
     while (k < 4) { ob(_gr(OPS_OFF + i * 4 + k)); k = k + 1; }
     i = i + 1;
   }
-  // v2 trailer: name table, var->name map, class count, then the name blob.
   o16(nNames);
   i = 0;
   while (i < nNames) {
@@ -2905,7 +959,6 @@ function emitImage() {
     }
     i = i + 1;
   }
-  // SPRD from the arena sprite table (ARTX), or empty.
   ob(83); ob(80); ob(82); ob(68);           // 'SPRD'
   b = hasArt ? artNspr() : 0;
   o16(b);
@@ -2916,7 +969,6 @@ function emitImage() {
     o32(_r32(ART_KEEP + 12 + i * 8));
     i = i + 1;
   }
-  // FSTY: what the RTL actually uses to colour fillStyle.
   ob(70); ob(83); ob(84); ob(89);           // 'FSTY'
   o16(nFsty);
   i = 0;
@@ -2934,7 +986,6 @@ function emitImage() {
     while (k < nLen(i)) { ob(_gr(NBLOB_OFF + b + k)); k = k + 1; }
     i = i + 1;
   }
-  // 4-align. Art titles: aset_off points here; the console appends ASET.
   while (ip % 4 !== 0) { ob(0); }
   var aoff = ip;
   if (hasArt === 0) {
@@ -2943,58 +994,222 @@ function emitImage() {
     i = 0;
     while (i < 768) { ob(_gr(PAL_OFF + i)); i = i + 1; }
   }
-  // backpatch aset_off (header bytes 12..15)
   _gw(IMG_OFF + 12, aoff % 256);
   _gw(IMG_OFF + 13, Math.floor(aoff / 256) % 256);
   _gw(IMG_OFF + 14, Math.floor(aoff / 65536) % 256);
   _gw(IMG_OFF + 15, Math.floor(aoff / 16777216) % 256);
   return ip;
 }
-
-// ---- entry ---------------------------------------------------------------
-LINK_MODE=needsRomLink();
-if(LINK_MODE)OPS_MAX=29696;
-if(LINK_MODE==1) {_fail(15,82,79,77,76,73,78,75);} else {
-hasArt = _gr(HDR_ART);
-HA_RAW = hasArt;
-// 2026-09-01 board: the flag byte read back as garbage for a title with NO
-// .ART, sending the compiler down the art-append path where a payload
-// length computed from token junk ran the copy off the arena end (the
-// I=380928 OOB). Only an exact 1 means art; anything else is no-art.
-if (hasArt !== 1) { hasArt = 0; }
-if (hasArt) {
-  var ai = 0;
-  while (ai < 4096) { _gw(ART_KEEP + ai, _gr(8192 + ai)); ai = ai + 1; }
+function _dpTake(n){var a=_dp[4];if(n<0||a+n>_dp[5]){_dp[0]=1;return 0;}_dp[4]=a+n;return a;}
+function _dpZero(a,n){for(var i=0;i<n;i++)_gw(a+i,0);}
+function _dpFlags(v){return v<4?(v===3?4:v):_gr(_dp[6]+v);}
+function _dpCount(v){return v<4?0:_gr(_dp[6]+v+1);}
+function _dpAtom(v,i){return _r32(_dp[6]+v+4+i*4);}
+function _dpIntern(f,n){
+ var h=f,i=0,p=0,q=0,s=0;
+ if(f&4)return 3;if(n===0)return f;
+ if(n>64){_dp[0]=1;return 3;}
+ for(i=0;i<n;i++)h=(h*31+_r32(_dp[32]+i*4))%512;
+ p=_r16(_dp[8]+h*2);
+ while(p){if(_dpFlags(p)===f&&_dpCount(p)===n){s=1;for(i=0;i<n;i++)if(_dpAtom(p,i)!==_r32(_dp[32]+i*4))s=0;if(s)return p;}p=_r16(_dp[6]+p+2);}
+ p=_dp[7];q=4+n*4;if(p+q>12288){_dp[0]=1;return 3;}_dp[7]=p+q;
+ _gw(_dp[6]+p,f);_gw(_dp[6]+p+1,n);_w16(_dp[6]+p+2,_r16(_dp[8]+h*2));
+ for(i=0;i<n;i++)_w32(_dp[6]+p+4+i*4,_r32(_dp[32]+i*4));_w16(_dp[8]+h*2,p);return p;
 }
-spanN = _r16(HDR_SPAN_N);
-if (spanN < 0 || spanN > 4096) { dgFail(0 - 2); }
-measure();
-if (vLen < 0 || vLen > 65536) { dgFail(0 - 3); }
-kwInit();
-var st = tokenize();
-_w32(HDR_TOK_N, tokN);
-
-// The assembled image is written over the token array, which is dead by
-// then — that is how an MK-class token stream and its output share one
-// arena. It also means tokens cannot be inspected after a full compile, so
-// the harness can ask for tokenize-only when it wants to check them.
-if (st === 0 && _gr(HDR_PHASE) === 1) {
-  cdone(13, tokN, 0);
-} else if (st === 0) {
+function _dpRef(a){_w32(_dp[32],a);return _dpIntern(0,1);}
+function _dpJoin(a,b){
+ if(a===b||b===0)return a;if(a===0)return b;
+ var f=_dpFlags(a)|_dpFlags(b),i=0,j=0,n=0,x=0,y=0,na=_dpCount(a),nb=_dpCount(b);
+ if(f&4)return 3;
+ while(i<na||j<nb){x=i<na?_dpAtom(a,i):999999;y=j<nb?_dpAtom(b,j):999999;if(n>=64){_dp[0]=1;return 3;}if(x<=y){_w32(_dp[32]+n*4,x);i++;if(x===y)j++;}else{_w32(_dp[32]+n*4,y);j++;}n++;}
+ return _dpIntern(f,n);
+}
+function _dpBit(a,i){return (_gr(a+Math.floor(i/8))&_dp[48+i%8])?1:0;}
+function _dpSet(a,i){var p=a+Math.floor(i/8);_gw(p,_gr(p)|_dp[48+i%8]);}
+function _dpName(ip,a){if(LINK_MODE&&ip<8192){if(a>=LINK_VARS){_dp[0]=1;return 0;}a=_r16(LINK_MAP+a*2);}if(a>=nNames){_dp[0]=1;return 0;}return a;}
+function _dpEq(a,s){if(a<0||a>=nNames||nLen(a)!==s.length)return 0;for(var i=0;i<s.length;i++)if(_gr(NBLOB_OFF+nBlob(a)+i)!==strByte(s,i))return 0;return 1;}
+function _dpEnv(c,n,v,w){
+ var h=(c*31+n)%1024,p=_r16(_dp[11]+h*2),q=0,r=0;
+ while(p){q=_dp[9]+(p-1)*8;if(_r16(q)===c&&_r16(q+2)===n){r=_r16(q+4);if(w){v=_dpJoin(r,v);if(v!==r){_w16(q+4,v);_dp[1]=1;}}return w?v:r;}p=_r16(q+6);}
+ if(!w)return -1;if(_dp[10]>=2048){_dp[0]=1;return 3;}p=_dp[10]+1;_dp[10]=p;q=_dp[9]+(p-1)*8;
+ _w16(q,c);_w16(q+2,n);_w16(q+4,v);_w16(q+6,_r16(_dp[11]+h*2));_w16(_dp[11]+h*2,p);_dp[1]=1;return v;
+}
+function _dpLoad(c,n,h){
+ var v=0,i=0,p=0;
+ if(h===1){v=_dpEnv(0,n,0,0);return v<0?(_gr(_dp[36]+n)&2?1:3):v;}
+ if(h>=2){v=_dpEnv(c,n,0,0);return v<0?(_gr(_dp[36]+n)&1?1:3):v;}
+ v=_gr(_dp[36]+n)&1?1:3;for(i=0;i<_dp[10];i++){p=_dp[9]+i*8;if(_r16(p+2)===n)v=_dpJoin(v,_r16(p+4));}return v;
+}
+function _dpStore(c,n,h,v,letv){
+ var i=0,p=0,k=_dp[10];if(letv){_dpEnv(c,n,v,1);return;}if(h){_dpEnv(h===1?0:c,n,v,1);return;}
+ _dpEnv(0,n,v,1);for(i=0;i<k;i++){p=_dp[9]+i*8;if(_r16(p+2)===n)_dpEnv(_r16(p),n,v,1);}
+}
+function _dpHeap(a,k,v,w){
+ var h=(a*17+k)%512,p=_r16(_dp[14]+h*2),q=0,r=0;
+ while(p){q=_dp[12]+(p-1)*12;if(_r32(q)===a&&_r16(q+4)===k){r=_r16(q+6);if(w){v=_dpJoin(r,v);if(v!==r){_w16(q+6,v);_dp[1]=1;}}return w?v:r;}p=_r16(q+8);}
+ if(!w)return 0;if(_dp[13]>=512){_dp[0]=1;return 3;}p=_dp[13]+1;_dp[13]=p;q=_dp[12]+(p-1)*12;
+ _w32(q,a);_w16(q+4,k);_w16(q+6,v);_w16(q+8,_r16(_dp[14]+h*2));_w16(_dp[14]+h*2,p);_dp[1]=1;return v;
+}
+function _dpWrite(v,k,x){
+ if(_dpFlags(v)&4){_dp[42]=1;return;}for(var i=0;i<_dpCount(v);i++){var a=_dpAtom(v,i);var t=Math.floor(a/65536);if(t===1||t===2||t===4||t===5||t===6)_dpHeap(a,k,x,1);}
+}
+function _dpRead(v,k){
+ var out=0,i=0,a=0,t=0,x=0,j=0,p=0,f=_dpFlags(v);
+ if(f&4)return 3;if(f&1)out=1;if(f&2)out=_dpJoin(out,_dpEq(k,"length")?1:2);
+ for(i=0;i<_dpCount(v);i++){
+  a=_dpAtom(v,i);t=Math.floor(a/65536);x=1;
+  if(t===1&&_dpEq(k,"length"))x=1;
+  else if(t===1||t===2){x=_dpJoin(1,_dpHeap(a,65535,0,0));if(k===65535){for(j=0;j<_dp[13];j++){p=_dp[12]+j*12;if(_r32(p)===a)x=_dpJoin(x,_r16(p+6));}}else x=_dpJoin(x,_dpHeap(a,k,0,0));}
+  else if(t===4||t===6){x=3;if(t===4&&(_dpEq(k,"width")||_dpEq(k,"height")))x=1;if(t===6&&(_dpEq(k,"x")||_dpEq(k,"y")||_dpEq(k,"clientX")||_dpEq(k,"clientY")||_dpEq(k,"offsetX")||_dpEq(k,"offsetY")||_dpEq(k,"keyCode")||_dpEq(k,"which")||_dpEq(k,"button")||_dpEq(k,"buttons")||_dpEq(k,"shiftKey")||_dpEq(k,"ctrlKey")||_dpEq(k,"altKey")||_dpEq(k,"metaKey")||_dpEq(k,"repeat")))x=1;x=_dpJoin(x,_dpHeap(a,k,0,0));x=_dpJoin(x,_dpHeap(a,65535,0,0));}
+  else x=3;out=_dpJoin(out,x);
+ }return out;
+}
+function _dpArity(e){
+ var i=0,a=0;if(LINK_MODE&&e<8192){for(i=0;i<LINK_FUNCS;i++)if(fnEntry(i)===e)return _gr(FN_OFF+i*8+4);_dp[0]=1;return 0;}
+ if(e>0&&opCode(e-1)===11){a=opA0(e-1);if(a<nOps&&opCode(a)===33&&opA0(a)===e)return opA1(a)&63;}
+ for(i=0;i<nFn;i++)if(fnEntry(i)===e)return _gr(FN_OFF+i*8+4);
+ _dp[0]=1;return 0;
+}
+function _dpFn(e,create){
+ var h=e%512,p=_r16(_dp[17]+h*2),q=0,n=0,a=0;
+ while(p){q=_dp[15]+(p-1)*12;if(_r16(q)===e)return p;p=_r16(q+8);}if(!create)return 0;
+ n=e===0?0:_dpArity(e);if(n>64||_dp[16]>=384||_dp[19]+n*2>4096){_dp[0]=1;return 0;}p=_dp[16]+1;_dp[16]=p;q=_dp[15]+(p-1)*12;
+ a=_dp[18]+_dp[19];_dp[19]=_dp[19]+n*2;_w16(q,e);_gw(q+2,n);_gw(q+3,1);_w16(q+4,0);_w16(q+6,a);_w16(q+8,_r16(_dp[17]+h*2));_w16(_dp[17]+h*2,p);_dpZero(a,n*2);_dp[1]=1;return p;
+}
+function _dpCall(e,n){
+ if(e<=0||e>=nOps){_dp[0]=1;return 3;}var p=_dpFn(e,1),q=0,i=0,a=0,v=0,x=0;if(!p)return 3;q=_dp[15]+(p-1)*12;a=_r16(q+6);
+ for(i=0;i<_gr(q+2);i++){v=i<n?_r16(_dp[31]+i*2):1;x=_r16(a+i*2);v=_dpJoin(x,v);if(v!==x){_w16(a+i*2,v);_dp[1]=1;}}return _r16(q+4);
+}
+function _dpPush(v){if(_dp[30]>=256){_dp[0]=1;return;}_w16(_dp[29]+_dp[30]*2,v);_dp[30]++;}
+function _dpPop(){if(!_dp[30])return 1;_dp[30]--;return _r16(_dp[29]+_dp[30]*2);}
+function _dpArgs(n){if(n>64){_dp[0]=1;return;}for(var i=n-1;i>=0;i--)_w16(_dp[31]+i*2,_dpPop());}
+function _dpCallback(v,kind,x,y,z){
+ if(_dpFlags(v)&4){_dp[42]=1;return;}var i=0,a=0,n=0,j=0;
+ for(i=0;i<_dpCount(v);i++){a=_dpAtom(v,i);if(Math.floor(a/65536)===3){n=kind===0?_dpArity(a%65536):kind;if(n>64){_dp[0]=1;return;}for(j=0;j<n;j++)_w16(_dp[31]+j*2,kind===0?3:(j===0?x:(j===1?y:z)));_dpCall(a%65536,n);}}
+}
+function _dpQueue(p){var q=_dp[20]+(p-1)*12;if(_gr(q+9))return;if(_dp[28]>=4096){_dp[0]=1;return;}_w16(_dp[25]+_dp[27]*2,p);_dp[27]=(_dp[27]+1)%4096;_dp[28]++;_gw(q+9,1);}
+function _dpState(c,ip){
+ if(ip<0||ip>=nOps)return;var h=(c*31+ip)%2048,p=_r16(_dp[22]+h*2),q=0,a=0,i=0,v=0,x=0,dirty=0,fresh=0;
+ while(p){q=_dp[20]+(p-1)*12;if(_r16(q)===c&&_r16(q+2)===ip)break;p=_r16(q+10);}
+ if(!p){if(_dp[21]>=4096||_dp[24]+_dp[30]*2>4096){_dp[0]=1;return;}p=_dp[21]+1;_dp[21]=p;q=_dp[20]+(p-1)*12;a=_dp[24];_dp[24]=_dp[24]+_dp[30]*2;_w16(q,c);_w16(q+2,ip);_w16(q+4,_dp[30]);_w16(q+6,a);_gw(q+8,0);_gw(q+9,0);_w16(q+10,_r16(_dp[22]+h*2));_w16(_dp[22]+h*2,p);}
+ if(_r16(q+4)!==_dp[30]){_dp[0]=1;return;}a=_dp[23]+_r16(q+6);fresh=_gr(q+8)!==_dp[2];dirty=fresh;
+ for(i=0;i<_dp[30];i++){x=_r16(_dp[29]+i*2);v=fresh?x:_dpJoin(_r16(a+i*2),x);if(fresh||v!==_r16(a+i*2)){_w16(a+i*2,v);dirty=1;}}
+ _gw(q+8,_dp[2]);if(dirty)_dpQueue(p);
+}
+function _dpNative(ip,a,n){
+ var id=a,i=0,v=0,r=0,k=0;
+ if(!(LINK_MODE&&ip<8192)){i=fnFind(a);if(i>=0)return _dpCall(fnEntry(i),n);id=natIdOf(a);}
+ if(id<0){_dp[0]=1;return 3;}
+ if(id===19||id===20||id===27||id===28||id===29||id===7){for(i=0;i<n;i++)v=_dpJoin(v,_r16(_dp[31]+i*2));_dpCallback(v,id===19||id===20?1:(id===27?1:0),id===27?1:_dpRef(393216),1,1);return 1;}
+ if(id===16||id===17||id===18||id===26)return _dpRef(262144);
+ if(id===34){r=65536+ip;v=1;for(i=0;i<n;i++)v=_dpJoin(v,_r16(_dp[31]+i*2));_dpHeap(r,65535,v,1);return _dpRef(r);}
+ if(id===41){r=65536+ip;_dpHeap(r,65535,2,1);return _dpRef(r);}
+ if(id===21||id===68)return _dpJoin(1,2);if(id===24||id===40)return 2;if(id===23)return 3;return 1;
+}
+function _dpMethod(ip,k,n,v){
+ var out=0,i=0,a=0,t=0,x=0,j=0,r=0,f=_dpFlags(v),cb=0;
+ if(f&4){_dp[42]=1;return 3;}
+ if(f&1)out=_dpEq(k,"toString")||_dpEq(k,"toFixed")||_dpEq(k,"toPrecision")?3:1;
+ if(f&2){if(_dpEq(k,"charCodeAt")||_dpEq(k,"indexOf")||_dpEq(k,"lastIndexOf")||_dpEq(k,"includes")||_dpEq(k,"startsWith")||_dpEq(k,"endsWith"))out=_dpJoin(out,1);else if(_dpEq(k,"charAt")||_dpEq(k,"slice")||_dpEq(k,"substring")||_dpEq(k,"substr")||_dpEq(k,"toLowerCase")||_dpEq(k,"toUpperCase")||_dpEq(k,"trim")||_dpEq(k,"replace"))out=_dpJoin(out,2);else{_dp[0]=1;return 3;}}
+ for(j=0;j<n;j++)cb=_dpJoin(cb,_r16(_dp[31]+j*2));
+ for(i=0;i<_dpCount(v);i++){
+  a=_dpAtom(v,i);t=Math.floor(a/65536);r=_dpRef(a);x=0;
+  if(t===1&&(_dpEq(k,"push")||_dpEq(k,"unshift"))){_dpWrite(r,65535,cb);x=1;}
+  else if(t===1&&(_dpEq(k,"pop")||_dpEq(k,"shift")))x=_dpRead(r,65535);
+  else if(t===1&&(_dpEq(k,"slice")||_dpEq(k,"splice")||_dpEq(k,"concat"))){x=_dpRead(r,65535);_dpHeap(65536+ip,65535,x,1);if(_dpEq(k,"splice")){for(j=2;j<n;j++)_dpWrite(r,65535,_r16(_dp[31]+j*2));}if(_dpEq(k,"concat")){for(j=0;j<n;j++){x=_r16(_dp[31]+j*2);_dpHeap(65536+ip,65535,_dpJoin(x,_dpRead(x,65535)),1);}}x=_dpRef(65536+ip);}
+  else if(t===1&&(_dpEq(k,"indexOf")||_dpEq(k,"includes")))x=1;
+  else if(t===1&&(_dpEq(k,"forEach")||_dpEq(k,"sort"))){x=_dpRead(r,65535);_dpCallback(cb,_dpEq(k,"forEach")?3:2,x,_dpEq(k,"forEach")?1:x,r);x=_dpEq(k,"sort")?r:1;}
+  else if(t===4&&_dpEq(k,"getContext"))x=_dpRef(327680);
+  else if(t===5&&(_dpEq(k,"fillRect")||_dpEq(k,"clearRect")||_dpEq(k,"fillText")||_dpEq(k,"drawImage")||_dpEq(k,"beginPath")||_dpEq(k,"moveTo")||_dpEq(k,"lineTo")||_dpEq(k,"stroke")||_dpEq(k,"fill")||_dpEq(k,"arc")||_dpEq(k,"save")||_dpEq(k,"restore")||_dpEq(k,"translate")||_dpEq(k,"scale")||_dpEq(k,"setTransform")||_dpEq(k,"resetTransform")||_dpEq(k,"rect")||_dpEq(k,"closePath")||_dpEq(k,"strokeRect")||_dpEq(k,"putImageData")))x=1;
+  else if(t===5&&_dpEq(k,"measureText")){for(j=0;j<nNames;j++)if(_dpEq(j,"width"))_dpHeap(131072+ip,j,1,1);x=_dpRef(131072+ip);}
+  else{_dp[0]=1;return 3;}out=_dpJoin(out,x);
+ }return out;
+}
+function _dpSafe(a,b){return !((_dpFlags(a)|_dpFlags(b))&4)&&((!((_dpFlags(a)|_dpFlags(b))&2))||(a===2&&b===2));}
+function _dpBinary(ip,op){
+ var b=_dpPop(),a=_dpPop(),f=0,v=0;
+ if(op!==4){_dpPush(1);return;}_dpSet(_dp[34],ip);if(!_dpSafe(a,b))_dpSet(_dp[35],ip);
+ f=_dpFlags(a)|_dpFlags(b);if(f&4)v=3;else{if(f&2)v=2;if((_dpFlags(a)&1||_dpCount(a))&&(_dpFlags(b)&1||_dpCount(b)))v=_dpJoin(v,1);}_dpPush(v);
+}
+function _dpValueCall(n){
+ var v=_dpPop(),out=0,i=0,a=0;if(_dpFlags(v)&4){_dp[42]=1;return 3;}if(_dpFlags(v)&3)out=1;
+ for(i=0;i<_dpCount(v);i++){a=_dpAtom(v,i);out=_dpJoin(out,Math.floor(a/65536)===3?_dpCall(a%65536,n):1);}return out;
+}
+function _dpOther(ip,op,a,h){
+ var v=0,x=0,i=0,r=0,n=0,p=0;
+ if(op===19){v=1;for(i=0;i<a;i++)v=_dpJoin(v,_dpPop());r=65536+ip;_dpHeap(r,65535,v,1);_dpPush(_dpRef(r));}
+ else if(op===20){_dpPop();v=_dpPop();_dpPush(_dpRead(v,65535));}
+ else if(op===21){v=_dpPop();_dpPop();r=_dpPop();_dpWrite(r,65535,v);_dpPush(v);}
+ else if(op===26)_dpPush(_dpRef(131072+ip));
+ else if(op===27){if(h){_dp[0]=1;return;}v=_dpPop();_dpPush(_dpRead(v,a));}
+ else if(op===28){v=_dpPop();r=_dpPop();_dpWrite(r,a,v);_dpPush(v);if(_dpEq(a,"onload"))_dpCallback(v,0,3,3,3);}
+ else if(op===33)_dpPush(_dpRef(196608+a));
+ else if(op===24){_dpArgs(h);_dpPush(_dpCall(a,h));}
+ else if(op===13){_dpArgs(h);_dpPush(_dpNative(ip,a,h));}
+ else if(op===34){_dpArgs(a);_dpPush(_dpValueCall(a));}
+ else if(op===30){if(a&32768){_dp[0]=1;return;}_dpArgs(h);r=_dpPop();_dpPush(_dpMethod(ip,a,h,r));}
+ else _dp[0]=1;
+}
+function _dpRun(p){
+ var q=_dp[20]+(p-1)*12,c=_r16(q),ip=_r16(q+2),i=0,a=0,h=0,op=0,v=0,r=0,start=ip;
+ _gw(q+9,0);_dp[30]=_r16(q+4);a=_dp[23]+_r16(q+6);for(i=0;i<_dp[30];i++)_w16(_dp[29]+i*2,_r16(a+i*2));
+ while(ip<nOps&&!_dp[0]){
+  if(ip!==start&&_dpBit(_dp[33],ip)){_dpState(c,ip);return;}
+  _dp[41]++;if(_dp[41]>nOps*100){_dp[0]=1;return;}op=opCode(ip);a=opA0(ip);h=opA1(ip);
+  if(op===1){if(LINK_MODE&&ip<8192)v=h===1?2:1;else{if(a>=nCrec){_dp[0]=1;return;}v=_gr(CREC_OFF+a*12)===1?2:1;}_dpPush(v);}
+  else if(op===2){a=_dpName(ip,a);_dpPush(_dpLoad(c,a,h));}
+  else if(op===3||op===22){a=_dpName(ip,a);_dpStore(c,a,h,_dpPop(),op===22);}
+  else if(op===15)_dpPop();else if(op===16){v=_dpPop();_dpPush(v);_dpPush(v);}
+  else if(op===17||op===18){_dpPop();_dpPush(1);}
+  else if(op===4||op===5||op===6||op===7||op===8||op===9||op===10||op===23||op===31||op===32)_dpBinary(ip,op);
+  else if(op===11){_dpState(c,a);return;}
+  else if(op===12){_dpPop();_dpState(c,a);_dpState(c,ip+1);return;}
+  else if(op===14||op===25){v=op===25?_dpPop():1;p=_dpFn(c,0);if(!p){_dp[0]=1;return;}q=_dp[15]+(p-1)*12;r=_r16(q+4);v=_dpJoin(r,v);if(v!==r){_w16(q+4,v);_dp[1]=1;}return;}
+  else _dpOther(ip,op,a,h);ip++;
+ }
+}
+function _dpDead(ip){
+ var i=0,e=0,end=0,n=0,j=0,op=0,a=0,h=0,s=0;
+ for(i=0;i<nFn;i++){
+  e=fnEntry(i);if(e<=0||e>ip||opCode(e-1)!==11)continue;end=opA0(e-1);if(ip>=end||end>=nOps)continue;
+  if(opCode(end)!==33||opA0(end)!==e)continue;
+  s=_gr(_dp[37]+i);if(s)return s===1?1:0;n=_r16(FN_OFF+i*8);s=1;
+  for(j=0;j<nOps;j++){
+   if(j>=e&&j<end)continue;op=opCode(j);a=opA0(j);h=opA1(j);
+   if((op===24||op===4)&&a===e)s=2;
+   if(op===33&&a===e&&j!==end)s=2;
+   if(op===2&&_dpName(j,a)===n)s=2;
+   if(op===13&&!(LINK_MODE&&j<8192)&&a===n)s=2;
+  }_gw(_dp[37]+i,s);return s===1?1:0;
+ }return 0;
+}
+function _dpLayout(){
+ var i=0,a=1,b=Math.floor((nOps+7)/8);_dp=[];for(i=0;i<64;i++)_dp.push(0);_dp[4]=TOK_OFF;_dp[5]=OPS_OFF;
+ _dp[6]=_dpTake(12288);_dp[7]=4;_dp[8]=_dpTake(1024);
+ _dp[9]=_dpTake(16384);_dp[11]=_dpTake(2048);_dp[12]=_dpTake(6144);_dp[14]=_dpTake(1024);
+ _dp[15]=_dpTake(4608);_dp[17]=_dpTake(1024);_dp[18]=_dpTake(4096);
+ _dp[20]=_dpTake(49152);_dp[22]=_dpTake(4096);_dp[23]=_dpTake(4096);_dp[25]=_dpTake(8192);
+ _dp[29]=_dpTake(512);_dp[31]=_dpTake(128);_dp[32]=_dpTake(256);
+ _dp[33]=_dpTake(b);_dp[34]=_dpTake(b);_dp[35]=_dpTake(b);_dp[36]=_dpTake(1024);_dp[37]=_dpTake(384);
+ if(_dp[0])return 0;for(i=0;i<8;i++){_dp[48+i]=a;a*=2;}
+ _dpZero(_dp[8],1024);_dpZero(_dp[11],2048);_dpZero(_dp[14],1024);_dpZero(_dp[17],1024);_dpZero(_dp[22],4096);_dpZero(_dp[33],b);_dpZero(_dp[36],1024);_dpZero(_dp[37],384);return 1;
+}
+function stageFile(mode){var path=mode===0?"COMPIL2.JSH":"COMPILER.JSH";var ptr=LINK_OFF+8176;for(var i=0;i<path.length;i++)_gw(ptr+i,strByte(path,i));_gw(ptr+path.length,0);var off=0,c=4294967295,n;while(off<262144){n=fsRead(ptr,off,stageScratch,512);if(n<0)return 0;c=crcFeed(c,stageScratch,n);off+=n;if(n<512){stageSize=off;stageCrc=4294967295-c;return 1;}}return 0;}
+function stageManifest(){var path="COMPILE.LNK";var ptr=LINK_OFF+8176;for(var i=0;i<path.length;i++)_gw(ptr+i,strByte(path,i));_gw(ptr+path.length,0);if(fsRead(ptr,0,stageScratch,29)!==28)return 0;if(_r32(stageScratch)!==1129136970 || _r32(stageScratch+4)!==2982221407 || linkCrc(stageScratch,24)!==_r32(stageScratch+24))return 0;stage1Bytes=_r32(stageScratch+8);stage1Crc=_r32(stageScratch+12);stage2Bytes=_r32(stageScratch+16);stage2Crc=_r32(stageScratch+20);return stage1Bytes>0&&stage1Bytes<262144&&stage2Bytes>0&&stage2Bytes<262144;}
+var retry=0;var phase=_r32(84);if(phase===3783279628){
+st=16;_w32(84,0);JSON_LEN=_r16(88);if(JSON_LEN)JSON_OFF=LINK_OFF-JSON_LEN;hasArt=_gr(90);LINK_MODE=_gr(91);spanN=_r16(HDR_SPAN_N);tokN=_r32(HDR_TOK_N);if(LINK_MODE)OPS_MAX=29696;
+if((JSON_LEN===0 || JSON_LEN===18459 || JSON_LEN===10927 || JSON_LEN===20308 || JSON_LEN===23945 || JSON_LEN===33326) && hasArt<=1 && (LINK_MODE===0 || LINK_MODE===2) && spanN<=4096 && tokN<=TOK_MAX && TOK_OFF+tokN*TOK_STRIDE<=JSON_OFF){
   layout();
   BRK_OFF = FSTY_OFF + 1024 * 4;
   POOL_OFF = BRK_OFF + 1024;
   VMAP_OFF = POOL_OFF + 1024 * 8;
   LC_OFF = VMAP_OFF + NAME_MAX * 4;
-  // Global-site table uses whatever is left before the ART copy.
   GS_OFF = LC_OFF + CREC_MAX * 4;
-  GS_MAX = Math.floor(((LINK_MODE?LINK_OFF:ART_KEEP) - GS_OFF) / 8);
-  if (GS_MAX < 1) { GS_MAX = 1; }
-  natInit();
-  TYPEOF_NI = -1;
-  if(LINK_MODE && (GS_OFF>=LINK_OFF || !linkReadManifest() || !linkSeed() || !linkReadRom()))st=15;
-  else st = parse();
-  if (st === 0) {
+  GS_MAX = Math.floor(((JSON_LEN?JSON_OFF:(LINK_MODE?LINK_OFF:ART_KEEP)) - 768 - GS_OFF) / 8);
+  if (GS_MAX < 1) { GS_MAX = 1; over=1; }
+meta=(JSON_LEN?JSON_OFF:(LINK_MODE?LINK_OFF:ART_KEEP))-768;stageScratch=meta+128;if(stageManifest()&&linkCrc(meta,124)===_r32(92)&&linkCrc(OPS_OFF,GS_OFF-OPS_OFF)===_r32(meta+120)){
+nOps=_r32(meta+0);nCrec=_r32(meta+4);nNames=_r32(meta+8);blobLen=_r32(meta+12);nFn=_r32(meta+16);nCls=_r32(meta+20);nNat=_r32(meta+24);nFset=_r32(meta+28);CALLREF=_r32(meta+32);nPool=_r32(meta+36);LINK_NAMES=_r32(meta+40);LINK_VARS=_r32(meta+44);LINK_FUNCS=_r32(meta+48);LINK_BYTES=_r32(meta+52);LINK_MAP=_r32(meta+56);nGs=_r32(meta+60);NEED_RUNTIME=_r32(meta+64);st=0;
+if(NEED_RUNTIME||mixedResolve()){var bits=(JSON_LEN===18459||JSON_LEN===20308?1:0)|NEED_RUNTIME;if(!NEED_RUNTIME)bits=bits|2;if(!jsonLoad(bits))st=15;else{retry=1;tokN=0;tokOver=0;cSpan=-1;}}else{
     buildPool();
     buildVars();
     if(nOps+nPool*2+4>(LINK_MODE?29696:21504))over=1;
@@ -3004,18 +1219,51 @@ if (st === 0 && _gr(HDR_PHASE) === 1) {
     _w32(HDR_OUT_OFF, IMG_OFF);
     if(st==15 || over)_fail(15,82,79,77,76,73,78,75);
     else cdone(hasArt ? 133 : 0, len, 0);
-  }
 }
-
+}
+}
 if (st === ST_ERR_TOKENS) { _fail(st, 84, 79, 75, 78, 0, 0, 0); }        // TOKN
 else if (st === ST_ERR_STR) { _fail(st, 83, 84, 82, 0, 0, 0, 0); }       // STR
 else if (st === ST_ERR_REGEX) { _fail(st, 82, 69, 71, 69, 88, 0, 0); }   // REGEX
 else if (st === 10) { _fail(st, 76, 79, 67, 65, 76, 83, 0); }            // LOCALS
 else if (st === 11) { _fail(st, 66, 73, 71, 0, 0, 0, 0); }               // BIG
 else if (st === 12) { _fail(st, 83, 89, 78, 84, 65, 88, 0); }            // SYNTAX
-else if (st === 15) { _fail(st,82,79,77,76,73,78,75); }
+else if(st===16){_fail(15,83,84,65,71,69,50,0);}else if (st === 15) { _fail(st,82,79,77,76,73,78,75); }
+else if (st !== 0) { _fail(st, 67, 72, 65, 82, 0, 0, 0); }               // CHAR
+}if(phase!==3783279628 || retry){
+_w32(84,0);LINK_MODE=needsRomLink();
+if(LINK_MODE)OPS_MAX=29696;
+if(LINK_MODE==1) {_fail(15,82,79,77,76,73,78,75);} else {
+hasArt = _gr(HDR_ART);
+HA_RAW = hasArt;
+if (hasArt !== 1) { hasArt = 0; }
+if (hasArt && !retry) {
+  var ai = 0;
+  while (ai < 4096) { _gw(ART_KEEP + ai, _gr(8192 + ai)); ai = ai + 1; }
+}
+spanN = _r16(HDR_SPAN_N);
+if (spanN < 0 || spanN > 4096) { dgFail(0 - 2); }
+measure();
+if (vLen < 0 || vLen > 65536) { dgFail(0 - 3); }
+stageScratch=131072;if(!stageManifest()||!stageFile(1)||stageSize!==stage1Bytes||stageCrc!==stage1Crc||!stageFile(0)||stageSize!==stage2Bytes||stageCrc!==stage2Crc){_fail(15,83,84,65,71,69,50,0);}else{
+kwInit();
+st = tokenize();
+if(st===0){var jsonNeeded=jsonDetect();if(jsonNeeded<0)st=12;else if((jsonNeeded&1) && !JSON_LEN){if(!jsonLoad(jsonNeeded&1))st=15;else{measure();if(vLen>65536)st=11;else{tokN=0;tokOver=0;cSpan=-1;st=tokenize();}}}}
+_w32(HDR_TOK_N, tokN);
+if (st === 0 && _gr(HDR_PHASE) === 1) {
+  cdone(13, tokN, 0);
+} else if (st === 0) {
+meta=(JSON_LEN?JSON_OFF:(LINK_MODE?LINK_OFF:ART_KEEP))-768;stageScratch=meta+128;if(!stageManifest()){st=15;}else{_w32(meta+112,stage1Bytes);_w32(meta+116,stage1Crc);_w16(88,JSON_LEN);_gw(90,hasArt);_gw(91,LINK_MODE);_w32(92,linkCrc(TOK_OFF,tokN*TOK_STRIDE));_w32(84,2982221407);_gw(HDR_PROGSEL,3);cdone(128,0,0);}
+}
+if (st === ST_ERR_TOKENS) { _fail(st, 84, 79, 75, 78, 0, 0, 0); }        // TOKN
+else if (st === ST_ERR_STR) { _fail(st, 83, 84, 82, 0, 0, 0, 0); }       // STR
+else if (st === ST_ERR_REGEX) { _fail(st, 82, 69, 71, 69, 88, 0, 0); }   // REGEX
+else if (st === 10) { _fail(st, 76, 79, 67, 65, 76, 83, 0); }            // LOCALS
+else if (st === 11) { _fail(st, 66, 73, 71, 0, 0, 0, 0); }               // BIG
+else if (st === 12) { _fail(st, 83, 89, 78, 84, 65, 88, 0); }            // SYNTAX
+else if(st===16){_fail(15,83,84,65,71,69,50,0);}else if (st === 15) { _fail(st,82,79,77,76,73,78,75); }
 else if (st !== 0) { _fail(st, 67, 72, 65, 82, 0, 0, 0); }               // CHAR
 }
+}
+}
 </script>
-</body>
-</html>

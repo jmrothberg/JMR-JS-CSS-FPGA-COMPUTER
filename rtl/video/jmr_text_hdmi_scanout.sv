@@ -1,5 +1,5 @@
 // Text VRAM → 640×480 RGB for Digilent rgb2dvi (BASIC vga_scanout method).
-// NEW: game_mode paints native 640×480 FB 1:1 (was mini 160×120 ×4).
+// game_mode paints native 640×480 FB 1:1 (was mini 160×120 ×4).
 // Combo vram_addr + geom delay matches dual-clock BRAM (fixes torn glyphs).
 module jmr_text_hdmi_scanout #(
     parameter string FONT_HEX = "font_rom.hex"
@@ -24,12 +24,12 @@ module jmr_text_hdmi_scanout #(
     input logic [69:0] system_held=70'd0,
 
     output logic [18:0] fb_raddr,
-    // NEW 2026-08-23: raw beam position for the DDR3 line prefetcher
+    // Raw beam position for the DDR3 line prefetcher
     // (avoids a divide-by-640 on the linear address).
     output logic [9:0]  fb_x,
     output logic [9:0]  fb_y,
     input  logic [7:0]  fb_rdata,
-    // NEW: ASET palette (pixel-clk registered BRAM in the core)
+    // ASET palette (pixel-clk registered BRAM in the core)
     output logic [7:0]  pal_index,
     input  logic [23:0] pal_rgb,
     output logic [23:0] vid_pData,
@@ -135,7 +135,7 @@ module jmr_text_hdmi_scanout #(
     wire [2:0] gcol = tx[2:0];
 
     assign vram_addr = in_text ? {row, col} : 10'd0;
-    // NEW: 1:1 FB address (native 640×480)
+    // 1:1 FB address (native 640×480)
     assign fb_raddr = visible ? (19'(vcnt) * 19'd640 + 19'(hcnt)) : 19'd0;
     assign fb_x = 10'(hcnt);
     assign fb_y = 10'(vcnt);

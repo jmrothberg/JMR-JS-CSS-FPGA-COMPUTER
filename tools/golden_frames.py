@@ -99,7 +99,7 @@ def _python_shot(stem: str, dest: Path) -> bool:
         if m.vm.error:
             print("FAIL PYTHON", stem, "VM", m.vm.error)
             return False
-    # NEW: PACMAN title is Enter-to-start; goldens must be stage 0 / level 1.
+    # PACMAN title is Enter-to-start; goldens must be stage 0 / level 1.
     if stem == "PACMAN":
         m.input.key_event(13, "Enter", True)
         m.input.key_event(13, "Enter", False)
@@ -137,7 +137,7 @@ def _rtl_shot(stem: str, dest: Path) -> bool:
         if "running=1" not in sim._rpc("STATUS?"):
             print("FAIL RTL", stem, "not running", sim._rpc("STATUS?"))
             return False
-        # NEW: FRAME = one VM swap (TICK=1000 starved PACMAN/DONKEY goldens)
+        # FRAME = one VM swap (TICK=1000 starved PACMAN/DONKEY goldens)
         for _ in range(16):
             sim._rpc("FRAME")
         if stem == "PACMAN":
@@ -296,7 +296,7 @@ def main() -> int:
             report.append(line)
             report.extend(hits[:24])
         if stem == "PACMAN" and got_py:
-            # NEW: stage-0 binary occupancy (HUD masked). Corridors, not RGB.
+            # Stage-0 binary occupancy (HUD masked). Corridors, not RGB.
             py_occ = _write_occupancy(py, OUT / "PACMAN_python_occ.png")
             py_grid = _cell_grid(py_occ)
             if got_rtl:

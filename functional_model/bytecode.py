@@ -1,6 +1,6 @@
 """Minimal JMR-JS bytecode + interpreter (stack machine).
 
-LLM NOTE: Encoding not frozen — grow only for demos / compatibility matrix.
+Encoding not frozen — grow only for demos / compatibility matrix.
 Opcodes are multi-cycle in spirit; FM runs them immediately.
 """
 
@@ -54,24 +54,24 @@ class Op(IntEnum):
     MAKE_ARRAY = 19
     ARRAY_GET = 20
     ARRAY_SET = 21
-    # NEW (compiler v2): real modulo — % used to silently emit DIV
+    # Real modulo — % used to silently emit DIV
     MOD = 23
-    # NEW (compiler v2): user functions (frame = return IP on call_stack)
+    # User functions (frame = return IP on call_stack)
     CALL_USER = 24
     RET_VAL = 25
-    # NEW (compiler v2): fixed-slot objects (Python dict; RTL heap later)
+    # Fixed-slot objects (Python dict; RTL heap later)
     MAKE_OBJ = 26
     GET_PROP = 27  # arg0 = name index
     SET_PROP = 28  # arg0 = name index
     NEW_OBJ = 29  # arg0 = class name index, arg1 = argc
-    # NEW (compiler v2): class methods OR array/string builtins
+    # Class methods OR array/string builtins
     CALL_METHOD = 30
-    # NEW: bitwise (INVADERS uses `type | 0`)
+    # Bitwise (INVADERS uses `type | 0`)
     BIT_OR = 31
     BIT_AND = 32
-    # NEW: first-class function value (arrows / .sort callbacks)
+    # First-class function value (arrows / .sort callbacks)
     MAKE_FN = 33  # arg0=entry_ip, arg1=param_count
-    # NEW: call Fn value on stack (IIFE / expr()) — PACMAN polyfill
+    # Call Fn value on stack (IIFE / expr()) — PACMAN polyfill
     CALL_VAL = 34  # arg0 = argc; stack [fn, arg0..argN-1]
 
 
@@ -80,16 +80,16 @@ class Chunk:
     code: List[Tuple]  # (op, *args)
     consts: List[Any]
     names: List[str]
-    # NEW: name → (entry_ip, param_names) for CALL_USER
+    # Name → (entry_ip, param_names) for CALL_USER
     functions: Optional[Dict[str, Tuple[int, List[str]]]] = None
-    # NEW: class_name → {"ctor": entry|None, "methods": {meth: entry}}
+    # class_name → {"ctor": entry|None, "methods": {meth: entry}}
     classes: Optional[Dict[str, dict]] = None
-    # NEW: card-build sprite pack (w, h, indexed pixels) for drawImage
+    # Card-build sprite pack (w, h, indexed pixels) for drawImage
     sprites: Optional[List[Tuple[int, int, bytes]]] = None
-    # NEW (external SRAM asset bank): per-title 256-entry RGB888 palette.
+    # Per-title 256-entry RGB888 palette.
     # Entries 0..7 stay the legacy fixed 8; 8..255 = harvested + adaptive.
     palette: Optional[List[Tuple[int, int, int]]] = None
-    # NEW: HTML/JS source line per opcode (Architecture Monitor observer)
+    # HTML/JS source line per opcode (Architecture Monitor observer)
     op_lines: Optional[List[int]] = None
 
 
@@ -103,21 +103,21 @@ class VM:
         self.natives = natives or {}
         self.globals: Dict[str, Any] = {}
         self.stack: List[Any] = []
-        # NEW: (return_ip, saved__this, ctor_obj_or_None, saved_env)
+        # (return_ip, saved__this, ctor_obj_or_None, saved_env)
         self.call_stack: List[Tuple[int, Any, Any, Any]] = []
-        # NEW: lexical environment — dict of locals with "__par" parent link.
+        # Lexical environment — dict of locals with "__par" parent link.
         # None at top level (globals). PACMAN builds 12 game stages inside
         # _COIGIG.forEach(function(config){var stage,map,player;...}); a flat
         # namespace left every closure pointing at the LAST level's player.
         self.env: Optional[dict] = None
         self.halted = False
         self.error: Optional[str] = None
-        # NEW: deterministic frame clock (ms). The machine sets this every
+        # Deterministic frame clock (ms). The machine sets this every
         # frame so Date.now/getTime pace games by VM frames, not host wall
         # time (PACMAN's `now-timestamp<16` limiter skipped every draw when
         # the FM ticked faster than real time). None → wall clock fallback.
         self.time_ms: Optional[float] = None
-        # NEW: last opcode the loop actually executed (Architecture Monitor)
+        # Last opcode the loop actually executed (Architecture Monitor)
         self.last_ip: int = 0
         self.last_op: Optional[Op] = None
         self.last_arg0: Any = None
@@ -137,8 +137,28 @@ class VM:
         self.env = None
 
     def run(self, chunk: Chunk, max_steps: int = 1_000_000) -> None:
-        # NEW: shared opcode loop lives in _exec (also used by call_fn)
+        # Shared opcode loop lives in _exec (also used by call_fn)
         self._exec(chunk, start_ip=0, max_steps=max_steps, reset=True)
+
+    def _class_get(self,chunk,obj,name):
+        if name in obj:return obj[name]
+        meta=(chunk.classes or {}).get(obj.get("__class"),{})
+        entry=(meta.get("methods") or {}).get(name)
+        if entry is None:return None
+        fn={"__class":"Fn","entry":int(entry),"bound_this":obj}
+        if name in (meta.get("getters") or ()):
+            fn["nparam"]=0
+            return self.call_fn(chunk,fn,[])
+        return fn
+
+    def _class_set(self,chunk,obj,name,value):
+        if name in obj:return False
+        meta=(chunk.classes or {}).get(obj.get("__class"),{})
+        entry=(meta.get("setters") or {}).get(name)
+        if entry is not None:
+            self.call_fn(chunk,{"__class":"Fn","entry":int(entry),"nparam":1,"bound_this":obj},[value])
+            return True
+        return name in (meta.get("getters") or ())
 
     def call_fn(self, chunk: Chunk, fn: dict, argv: Optional[List[Any]] = None, max_steps: int = 500_000) -> Any:
         """NEW: invoke a MAKE_FN value (rAF / setTimeout / listeners).
@@ -148,7 +168,7 @@ class VM:
         """
         if not isinstance(fn, dict) or fn.get("__class") != "Fn":
             return None
-        # NEW: Element.click property stub → fire click listeners
+        # Element.click property stub → fire click listeners
         if fn.get("builtin") == "el_click":
             click_fn = self.natives.get("__fire_click")
             if click_fn:
@@ -157,7 +177,7 @@ class VM:
         entry = int(fn["entry"])
         if entry < 0:
             return None
-        # NEW: bind exactly nparam args (JS semantics) — the prologue pops
+        # Bind exactly nparam args (JS semantics) — the prologue pops
         # one value per declared param, so extra args (forEach idx) must be
         # trimmed and missing ones padded with undefined.
         args_in = list(argv or [])
@@ -167,7 +187,7 @@ class VM:
             args_in = args_in[:n] + [None] * max(0, n - len(args_in))
         for a in args_in:
             self.stack.append(a)
-        # NEW: fresh lexical env chained to the Fn's captured scope
+        # Fresh lexical env chained to the Fn's captured scope
         saved_env = self.env
         self.call_stack.append((-1, self.globals.get("__this"), None, saved_env))
         self.env = {"__par": fn.get("env")}
@@ -180,7 +200,7 @@ class VM:
         # Nested error should surface; don't leave halted stuck for outer frame_tick
         if not self.error:
             self.halted = saved_halted
-        # NEW: restore caller env even if the callee errored mid-frame
+        # Restore caller env even if the callee errored mid-frame
         self.env = saved_env
         return self.stack.pop() if self.stack else None
 
@@ -193,7 +213,7 @@ class VM:
         steps = 0
         while not self.halted and steps < max_steps:
             steps += 1
-            # NEW: call_fn sentinel return_ip=-1 ends nested invoke
+            # call_fn sentinel return_ip=-1 ends nested invoke
             if ip < 0:
                 return
             if ip >= len(code):
@@ -207,7 +227,7 @@ class VM:
                 self.stack.append(chunk.consts[args[0]])
             elif op == Op.LOAD_VAR:
                 name = chunk.names[args[0]]
-                # NEW: lexical env chain first, then globals
+                # Lexical env chain first, then globals
                 e = self.env
                 while e is not None:
                     if name in e:
@@ -218,9 +238,9 @@ class VM:
                     self.stack.append(self.globals.get(name))
             elif op == Op.STORE_VAR:
                 name = chunk.names[args[0]]
-                # NEW: tolerate empty stack (partial expr compile) — undefined
+                # Tolerate empty stack (partial expr compile) — undefined
                 val = self.stack.pop() if self.stack else None
-                # NEW: assign in the declaring scope; undeclared → global (JS)
+                # Assign in the declaring scope; undeclared → global (JS)
                 e = self.env
                 while e is not None:
                     if name in e:
@@ -230,7 +250,7 @@ class VM:
                 else:
                     self.globals[name] = val
             elif op == Op.LET_VAR:
-                # LLM NOTE: let/const under startLoop — do not reset each frame
+                # Let/const under startLoop — do not reset each frame
                 # at TOP LEVEL. Inside a function call env, declare/assign in
                 # the CURRENT env (fresh per call, so `let x = 0` re-inits).
                 name = chunk.names[args[0]]
@@ -241,7 +261,7 @@ class VM:
                     self.globals[name] = val
             elif op == Op.ADD:
                 b, a = self.stack.pop(), self.stack.pop()
-                # NEW: JS-ish concat when either side is string (templates)
+                # JS-ish concat when either side is string (templates)
                 if isinstance(a, str) or isinstance(b, str):
                     self.stack.append(str(a) + str(b))
                 else:
@@ -272,7 +292,7 @@ class VM:
                     b = 0
                 self.stack.append(a / b if b else 0)
             elif op == Op.MOD:
-                # NEW: real % (was silently DIV in the compiler)
+                # Real % (was silently DIV in the compiler)
                 b, a = self.stack.pop(), self.stack.pop()
                 if a is None:
                     a = 0
@@ -284,7 +304,7 @@ class VM:
                     self.stack.append(a % b)
             elif op == Op.LT:
                 b, a = self.stack.pop(), self.stack.pop()
-                # NEW: coerce None→0 like ADD/SUB do. `>=` compiles to NOT LT,
+                # Coerce None→0 like ADD/SUB do. `>=` compiles to NOT LT,
                 # so "None compares False" inverted into True there (DONKEY
                 # `!(this.jumpHeight >= 750)` broke platform collision).
                 a = 0 if a is None else a
@@ -297,19 +317,19 @@ class VM:
                 self.stack.append(a > b)
             elif op == Op.EQ:
                 b, a = self.stack.pop(), self.stack.pop()
-                # NEW: JS === is identity for objects/arrays (find(x => x === obj)).
+                # JS === is identity for objects/arrays (find(x => x === obj)).
                 # Python dict/list == is deep equality and would match the wrong item.
                 if isinstance(a, (dict, list)) or isinstance(b, (dict, list)):
                     self.stack.append(a is b)
                 elif isinstance(a, str) or isinstance(b, str):
-                    # NEW: join() may yield a Python str while case '1100' is
+                    # Join() may yield a Python str while case '1100' is
                     # interned; compare string values so maze switch hits arcs.
                     self.stack.append(str(a) == str(b))
                 else:
                     self.stack.append(a == b)
             elif op == Op.BIT_OR:
                 b, a = self.stack.pop(), self.stack.pop()
-                # NEW: coerce None/bool like JS ToInt32-ish for `type | 0`
+                # Coerce None/bool like JS ToInt32-ish for `type | 0`
                 self.stack.append(int(a or 0) | int(b or 0))
             elif op == Op.BIT_AND:
                 b, a = self.stack.pop(), self.stack.pop()
@@ -326,7 +346,7 @@ class VM:
                 argv = [self.stack.pop() for _ in range(argc)][::-1]
                 fn = self.natives.get(name)
                 if fn is None:
-                    # NEW: forward-declared user fn — call site compiled before
+                    # Forward-declared user fn — call site compiled before
                     # `function update(){}` existed (DONKEY startGame → update()).
                     fmeta = (chunk.functions or {}).get(name)
                     if fmeta is not None:
@@ -339,7 +359,7 @@ class VM:
                             self.stack.append(a)
                         ip = int(fmeta[0])
                         continue
-                    # NEW: env/global holds a first-class Fn value (var f = () => ...)
+                    # Env/global holds a first-class Fn value (var f = () => ...)
                     gfn = None
                     e = self.env
                     while e is not None:
@@ -365,7 +385,7 @@ class VM:
                     self.halted = True
                     return
                 result = fn(*argv)
-                # NEW: always push (None = JS undefined) so JSON.parse(getItem()) works
+                # Always push (None = JS undefined) so JSON.parse(getItem()) works
                 self.stack.append(result)
             elif op == Op.CALL_USER:
                 entry = int(args[0])
@@ -376,7 +396,7 @@ class VM:
                 self.env = {"__par": self.env}
                 ip = entry
             elif op == Op.CALL_VAL:
-                # NEW: call Fn on stack — (function(){...}()) IIFE
+                # Call Fn on stack — (function(){...}()) IIFE
                 argc = int(args[0])
                 argv = [self.stack.pop() for _ in range(argc)][::-1]
                 fn = self.stack.pop()
@@ -384,12 +404,12 @@ class VM:
                     self.call_stack.append(
                         (ip, self.globals.get("__this"), None, self.env)
                     )
-                    # NEW: top-level IIFE runs FLAT (no env) — module locals
+                    # Top-level IIFE runs FLAT (no env) — module locals
                     # stay global so class methods see their sprite sheets;
                     # nested closures still get a per-call env.
                     if not (fn.get("iife") and self.env is None and fn.get("env") is None):
                         self.env = {"__par": fn.get("env")}
-                    # NEW: honor captured `this` on the Fn value (arrows/bind)
+                    # Honor captured `this` on the Fn value (arrows/bind)
                     if fn.get("bound_this") is not None:
                         self.globals["__this"] = fn["bound_this"]
                     for a in argv:
@@ -398,11 +418,20 @@ class VM:
                 else:
                     self.stack.append(None)
             elif op == Op.CALL_METHOD:
-                # NEW: stack [obj, arg0..argN-1]; class methods OR array/string builtins
+                # Stack [obj, arg0..argN-1]; class methods OR array/string builtins
                 meth = chunk.names[args[0]]
                 argc = int(args[1])
                 argv = [self.stack.pop() for _ in range(argc)][::-1]
+                prepared = len(args)>2 and args[2]
+                target = self.stack.pop() if prepared else None
                 obj = self.stack.pop()
+                if prepared and target != ("__jmr_builtin_call_fallback__",):
+                    if not isinstance(target,dict) or target.get("__class")!="Fn":
+                        self.error="NOT CALLABLE";self.halted=True;break
+                    fn=dict(target)
+                    if fn.get("bound_this") is None:fn["bound_this"]=obj
+                    self.stack.append(self.call_fn(chunk,fn,argv))
+                    continue
                 # Builtins first (arrays / strings) — HTML titles use these heavily
                 if isinstance(obj, list):
                     if meth == "push":
@@ -431,7 +460,7 @@ class VM:
                         self.stack.append(obj.index(argv[0]) if argv and argv[0] in obj else -1)
                         continue
                     if meth == "sort":
-                        # NEW: sort([cmpFn]) — cmpFn is MAKE_FN dict
+                        # Sort([cmpFn]) — cmpFn is MAKE_FN dict
                         if argv and isinstance(argv[0], dict) and argv[0].get("__class") == "Fn":
                             fn = argv[0]
                             entry = int(fn["entry"])
@@ -452,7 +481,7 @@ class VM:
                                 self.call_stack.append(
                                     (-1, self.globals.get("__this"), None, self.env)
                                 )
-                                # NEW: comparator params LET_VAR into a fresh env
+                                # Comparator params LET_VAR into a fresh env
                                 self.env = {"__par": _fenv}
                                 rip = _entry
                                 # run until RET_VAL to our mark
@@ -557,7 +586,7 @@ class VM:
                         self.stack.append(obj)
                         continue
                     if meth == "forEach":
-                        # NEW: forEach(fn) — call fn(el, idx) for HTML animate loops
+                        # ForEach(fn) — call fn(el, idx) for HTML animate loops
                         if argv and isinstance(argv[0], dict) and argv[0].get("__class") == "Fn":
                             fn = argv[0]
                             for idx, el in enumerate(list(obj)):
@@ -567,7 +596,7 @@ class VM:
                         self.stack.append(None)
                         continue
                     if meth == "reduce":
-                        # NEW: reduce(fn, init) — INVADERS checkVictory
+                        # Reduce(fn, init) — INVADERS checkVictory
                         if argv and isinstance(argv[0], dict) and argv[0].get("__class") == "Fn":
                             fn = argv[0]
                             acc = argv[1] if len(argv) > 1 else (obj[0] if obj else None)
@@ -580,7 +609,7 @@ class VM:
                         else:
                             self.stack.append(None)
                         continue
-                    # NEW (full-game builtins): fill/map/filter/join/… (PACMAN)
+                    # Fill/map/filter/join/… (PACMAN)
                     if meth == "fill":
                         v = argv[0] if argv else None
                         for i in range(len(obj)):
@@ -636,7 +665,7 @@ class VM:
                         continue
                     if meth == "join":
                         sep = str(argv[0]) if argv and argv[0] is not None else ","
-                        # NEW: JS ToString for numbers so 1+1+0+0 → '1100'
+                        # JS ToString for numbers so 1+1+0+0 → '1100'
                         # not '1.0' (float elems would miss every switch case).
                         def _js_str(e):
                             if e is None:
@@ -675,9 +704,9 @@ class VM:
                     if meth == "trim":
                         self.stack.append(obj.strip())
                         continue
-                    # NEW (full-game builtins): string methods (PACMAN maze keys)
+                    # String methods (PACMAN maze keys)
                     if meth == "replace":
-                        # NEW: string pattern = first only; RegExp stub honors
+                        # String pattern = first only; RegExp stub honors
                         # source+flags (`g` → all). Any HTML, not one title.
                         if len(argv) >= 2 and isinstance(argv[0], str):
                             self.stack.append(obj.replace(argv[0], str(argv[1]), 1))
@@ -763,7 +792,7 @@ class VM:
                         self.stack.append(obj * max(0, int(argv[0])) if argv else "")
                         continue
                 if isinstance(obj, dict) and obj.get("__class") == "RegExp":
-                    # NEW: /re/.test(s) — stub false (skip iOS6 polyfill branch)
+                    # /re/.test(s) — stub false (skip iOS6 polyfill branch)
                     if meth == "test":
                         self.stack.append(False)
                         continue
@@ -781,7 +810,7 @@ class VM:
                     if meth in ("getTime", "valueOf"):
                         self.stack.append(self._now_ms())
                         continue
-                # NEW: Date.now() / performance.now() — seeded DateCtor global
+                # Date.now() / performance.now() — seeded DateCtor global
                 if (
                     isinstance(obj, dict)
                     and obj.get("__class") == "DateCtor"
@@ -789,7 +818,7 @@ class VM:
                 ):
                     self.stack.append(self._now_ms())
                     continue
-                # NEW: Object.keys/values/entries/freeze — seeded ObjectCtor global
+                # Object.keys/values/entries/freeze — seeded ObjectCtor global
                 if isinstance(obj, dict) and obj.get("__class") == "ObjectCtor":
                     src = argv[0] if argv else None
                     if meth == "keys":
@@ -816,7 +845,7 @@ class VM:
                     if meth == "freeze" or meth == "create":
                         self.stack.append(src if src is not None else {})
                         continue
-                    # NEW: Object.assign(target, ...srcs)
+                    # Object.assign(target, ...srcs)
                     if meth == "assign" and argv:
                         target = argv[0]
                         if isinstance(target, dict):
@@ -828,13 +857,13 @@ class VM:
                         self.stack.append(target)
                         continue
                 if not isinstance(obj, dict):
-                    # NEW: tolerate null.method() from optional DOM
+                    # Tolerate null.method() from optional DOM
                     self.stack.append(None)
                     continue
                 cls_name = obj.get("__class")
-                # NEW: canvas.getContext("2d") → Canvas2D stub for HTML titles
+                # Canvas.getContext("2d") → Canvas2D stub for HTML titles
                 if cls_name == "Element" and meth == "getContext":
-                    # NEW: imageSmoothingEnabled default true (browser); blit is nearest
+                    # ImageSmoothingEnabled default true (browser); blit is nearest
                     self.stack.append({
                         "__class": "Canvas2D",
                         "fillStyle": "#000000",
@@ -842,14 +871,14 @@ class VM:
                     })
                     continue
                 if cls_name == "Element" and meth == "click":
-                    # NEW: fire global "click" listeners (start button)
+                    # Fire global "click" listeners (start button)
                     click_fn = self.natives.get("__fire_click")
                     if click_fn:
                         click_fn()
                     self.stack.append(None)
                     continue
                 if cls_name == "Element" and meth == "addEventListener":
-                    # NEW: el.addEventListener → same as document.addEventListener
+                    # El.addEventListener → same as document.addEventListener
                     fn = self.natives.get("addEventListener")
                     if fn:
                         self.stack.append(fn(*argv))
@@ -872,7 +901,7 @@ class VM:
                     continue
                 if cls_name == "Fn" and meth == "bind":
                     # PACMAN callback.bind(this) — copy Fn with bound_this.
-                    # NEW: keep the captured lexical env — losing it detached
+                    # Keep the captured lexical env — losing it detached
                     # stage key handlers from their level's player/map.
                     bound = {
                         "__class": "Fn",
@@ -884,7 +913,7 @@ class VM:
                         bound["env"] = obj["env"]
                     self.stack.append(bound)
                     continue
-                # NEW: Object.assign(target, ...srcs) — PACMAN Item/Map/Stage ctors
+                # Object.assign(target, ...srcs) — PACMAN Item/Map/Stage ctors
                 if meth == "assign" and argv:
                     target = argv[0]
                     if isinstance(target, dict):
@@ -922,7 +951,7 @@ class VM:
                         self.stack.append(None)
                         continue
                     if meth == "quadraticCurveTo" and len(argv) >= 4:
-                        # NEW: real quadratic record — rasterizer subdivides
+                        # Real quadratic record — rasterizer subdivides
                         obj.setdefault("_path", []).append(
                             f"Q,{argv[0]},{argv[1]},{argv[2]},{argv[3]}"
                         )
@@ -961,13 +990,13 @@ class VM:
                                 argv[2] if len(argv) > 2 else 0,
                                 obj.get("fillStyle"),
                                 obj.get("textAlign") or "left",
-                                obj.get("font"),  # NEW: px size → glyph scale
+                                obj.get("font"),  # Px size → glyph scale
                                 obj.get("textBaseline"),
                             )
                         self.stack.append(None)
                         continue
                     if meth == "measureText":
-                        # NEW: DONKEY HUD layout — width from glyph size × font
+                        # DONKEY HUD layout — width from glyph size × font
                         mfn = self.natives.get("ctx.measureText")
                         t = argv[0] if argv else ""
                         if mfn:
@@ -976,7 +1005,7 @@ class VM:
                             self.stack.append({"width": len(str(t)) * 8})
                         continue
                     if meth == "strokeRect" and len(argv) >= 4:
-                        # NEW: 1px rect outline (was a no-op)
+                        # 1px rect outline (was a no-op)
                         sfn = self.natives.get("ctx.strokeRect")
                         if sfn:
                             sfn(
@@ -1059,7 +1088,7 @@ class VM:
                             self.stack.append(a)
                         ip = int(fn["entry"])
                         continue
-                    # NEW: no-op stub for unknown Element methods (DOM chrome)
+                    # No-op stub for unknown Element methods (DOM chrome)
                     if cls_name in ("Element", "Image", "Date", "Audio", None):
                         self.stack.append(None)
                         continue
@@ -1075,13 +1104,13 @@ class VM:
                     self.stack.append(a)
                 ip = int(entry)
             elif op == Op.NEW_OBJ:
-                # NEW: create dict with __class, call ctor if any, leave obj
+                # Create dict with __class, call ctor if any, leave obj
                 cls_name = chunk.names[args[0]]
                 argc = int(args[1])
                 argv = [self.stack.pop() for _ in range(argc)][::-1]
                 meta = (chunk.classes or {}).get(cls_name)
                 obj: dict = {"__class": cls_name}
-                # NEW: resolve the ctor Fn through the env chain then globals
+                # Resolve the ctor Fn through the env chain then globals
                 # (PACMAN's Stage/Item/Map are locals of the Game function now)
                 e = self.env
                 while e is not None:
@@ -1098,7 +1127,7 @@ class VM:
                         ctor_fn["prototype"] = proto
                     obj["__proto__"] = proto
                 ctor = meta.get("ctor") if meta else None
-                # NEW: var Item = function(){} — ctor is Fn value
+                # Var Item = function(){} — ctor is Fn value
                 if ctor is None:
                     fn = ctor_fn
                     if isinstance(fn, dict) and fn.get("__class") == "Fn":
@@ -1111,7 +1140,7 @@ class VM:
                             self.stack.append(a)
                         ip = int(fn["entry"])
                         continue
-                    # NEW: DOM event ctors — copy (type, options) into the
+                    # DOM event ctors — copy (type, options) into the
                     # instance so dispatchEvent handlers see ev.key/keyCode
                     # (DONKEY boot script's new KeyboardEvent("keydown", {...}))
                     if cls_name in ("KeyboardEvent", "Event", "CustomEvent", "MouseEvent"):
@@ -1138,7 +1167,7 @@ class VM:
                 ip, saved_this, ctor_obj, saved_env = self.call_stack.pop()
                 self.globals["__this"] = saved_this
                 self.env = saved_env
-                # NEW: constructor → discard return value, leave the instance
+                # Constructor → discard return value, leave the instance
                 if ctor_obj is not None:
                     if self.stack:
                         self.stack.pop()
@@ -1162,7 +1191,7 @@ class VM:
             elif op == Op.ARRAY_GET:
                 idx = self.stack.pop()
                 arr = self.stack.pop()
-                # NEW: JS-ish — list index OR dict/string key (PACMAN window[name])
+                # JS-ish — list index OR dict/string key (PACMAN window[name])
                 if isinstance(arr, list):
                     try:
                         i = int(idx)
@@ -1170,7 +1199,7 @@ class VM:
                     except Exception:
                         self.stack.append(None)
                 elif isinstance(arr, dict):
-                    self.stack.append(arr.get(idx))
+                    self.stack.append(self._class_get(chunk,arr,idx))
                 elif isinstance(arr, str):
                     try:
                         i = int(idx)
@@ -1186,7 +1215,7 @@ class VM:
                 if isinstance(arr, list):
                     try:
                         i = int(idx)
-                        # NEW: a[i]= grows length (JS). Twin of RTL ARR_SET.
+                        # A[i]= grows length (JS). Twin of RTL ARR_SET.
                         if i >= len(arr) and i < 64:
                             arr.extend([None] * (i - len(arr) + 1))
                         if 0 <= i < len(arr):
@@ -1194,28 +1223,28 @@ class VM:
                     except Exception:
                         pass
                 elif isinstance(arr, dict):
-                    arr[idx] = val
+                    if not self._class_set(chunk,arr,idx,val):arr[idx] = val
                 self.stack.append(val)
             elif op == Op.MAKE_OBJ:
                 self.stack.append({})
             elif op == Op.MAKE_FN:
-                # NEW: push first-class function {__class:Fn, entry, nparam}
+                # Push first-class function {__class:Fn, entry, nparam}
                 entry = int(args[0])
                 nparam = int(args[1]) if len(args) > 1 else 0
                 fn_val: dict = {"__class": "Fn", "entry": entry, "nparam": nparam}
-                # NEW: capture the lexical environment (closures) — PACMAN's
+                # Capture the lexical environment (closures) — PACMAN's
                 # per-level stage/map/player closures need their own iteration
                 # scope, not whatever the flat globals held last.
                 if self.env is not None:
                     fn_val["env"] = self.env
-                # NEW: only arrows (arg2=1) capture lexical `this` — DONKEY's
+                # Only arrows (arg2=1) capture lexical `this` — DONKEY's
                 # (e)=>this.startGame(e) — regular function expressions keep
                 # dynamic this (PACMAN Stage.prototype.* set inside ctors).
                 if len(args) > 2 and args[2]:
                     cur_this = self.globals.get("__this")
                     if cur_this is not None:
                         fn_val["bound_this"] = cur_this
-                # NEW: arg3=1 → immediately-invoked (IIFE). Top-level IIFEs
+                # arg3=1 → immediately-invoked (IIFE). Top-level IIFEs
                 # run FLAT (locals stay global) so module classes/functions
                 # keep seeing their module vars (DONKEY sprite sheets).
                 if len(args) > 3 and args[3]:
@@ -1224,17 +1253,19 @@ class VM:
             elif op == Op.GET_PROP:
                 name = chunk.names[args[0]]
                 obj = self.stack.pop()
-                if obj is None:
+                if len(args)>1 and args[1] and not isinstance(obj,dict) and name not in ("length","prototype","width","height"):
+                    self.stack.append(("__jmr_builtin_call_fallback__",))
+                elif obj is None:
                     self.stack.append(None)
                 elif name == "length" and isinstance(obj, (list, str)):
-                    # NEW: arr.length / str.length
+                    # Arr.length / str.length
                     self.stack.append(len(obj))
                 elif (
                     isinstance(obj, dict)
                     and obj.get("__class") == "Element"
                     and name == "click"
                 ):
-                    # NEW: truthy click handle so `if (b && b.click) b.click()` works
+                    # Truthy click handle so `if (b && b.click) b.click()` works
                     self.stack.append(
                         {"__class": "Fn", "entry": -2, "nparam": 0, "builtin": "el_click"}
                     )
@@ -1246,31 +1277,8 @@ class VM:
                         obj["prototype"] = proto
                     self.stack.append(proto)
                 elif isinstance(obj, dict):
-                    val = obj.get(name)
-                    # NEW: this.method / this.arrowField as a VALUE (DONKEY
-                    # passes this.startSelect to addEventListener). Materialize
-                    # the class method as a bound Fn and cache it on the
-                    # instance so identity is stable (add/remove listener).
-                    if val is None and obj.get("__class"):
-                        meta = (chunk.classes or {}).get(obj["__class"])
-                        entry = (meta.get("methods") or {}).get(name) if meta else None
-                        if entry is not None:
-                            # NEW: `get name()` accessor — CALL it now (argc 0)
-                            # instead of materializing a Fn (DONKEY marioMiddle).
-                            if name in (meta.get("getters") or ()):
-                                self.call_stack.append(
-                                    (ip, self.globals.get("__this"), None, self.env)
-                                )
-                                self.env = {"__par": None}
-                                self.globals["__this"] = obj
-                                ip = int(entry)
-                                continue
-                            val = {
-                                "__class": "Fn",
-                                "entry": int(entry),
-                                "bound_this": obj,
-                            }
-                            obj[name] = val
+                    val=self._class_get(chunk,obj,name)
+                    if len(args)>1 and args[1] and name not in obj and obj.get("__class") in ("Element","Canvas2D","RegExp","Date","DateCtor","Fn") and val is None:val=("__jmr_builtin_call_fallback__",)
                     self.stack.append(val)
                 else:
                     self.stack.append(getattr(obj, name, None))
@@ -1281,13 +1289,16 @@ class VM:
                 if obj is None:
                     self.stack.append(val)
                 elif isinstance(obj, list) and name == "length":
-                    # NEW: arr.length = n truncates (INVADERS start reset)
+                    # Arr.length = n truncates (INVADERS start reset)
                     n = max(0, int(val))
                     del obj[n:]
                     self.stack.append(n)
                 elif isinstance(obj, dict):
+                    if self._class_set(chunk,obj,name,val):
+                        self.stack.append(val)
+                        continue
                     obj[name] = val
-                    # NEW: Image.src = data:… → size from PNG + fire onload (Player ship)
+                    # Image.src = data:… → size from PNG + fire onload (Player ship)
                     if (
                         obj.get("__class") == "Image"
                         and name == "src"
@@ -1315,12 +1326,12 @@ class VM:
                                     obj["_pix"] = third
                         onload = obj.get("onload")
                         if isinstance(onload, dict) and onload.get("__class") == "Fn":
-                            # NEW: don't let nested call_fn disturb ctor stack
+                            # Don't let nested call_fn disturb ctor stack
                             depth = len(self.stack)
                             self.call_fn(chunk, onload, [])
                             while len(self.stack) > depth:
                                 self.stack.pop()
-                    # NEW: Image.onload = fn after src already set (INVADERS order)
+                    # Image.onload = fn after src already set (INVADERS order)
                     elif (
                         obj.get("__class") == "Image"
                         and name == "onload"

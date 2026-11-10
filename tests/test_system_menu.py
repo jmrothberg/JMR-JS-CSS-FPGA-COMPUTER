@@ -1,6 +1,5 @@
 """Always-on opaque menu and mouse-only keyboard, including real RTL input."""
 from pathlib import Path
-import re
 import pytest
 from functional_model.system_menu import SystemMenu,KEYS
 from functional_model.compiler import compile_source

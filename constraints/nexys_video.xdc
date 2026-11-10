@@ -3,9 +3,9 @@
 
 ## System clock 100 MHz
 set_property -dict { PACKAGE_PIN R4 IOSTANDARD LVCMOS33 } [get_ports { clk100 }]
-## 2026-08-23 relax experiment result: create_clock NEVER applies at
+## Relax experiment result: create_clock NEVER applies at
 ## synthesis here (XDC deferred past the MIG black box — Project 1-498),
-## so a 20 ns relax produced a BIT-IDENTICAL netlist (run 18 == run 17).
+## so a 20 ns relax produced a BIT-IDENTICAL netlist.
 ## The area gain the relax was meant to buy was already banked by
 ## AreaOptimized_high + the deferral. The period must stay TRUTHFUL:
 ## the physical clock is 100 MHz, and 20 ns would under-constrain the
@@ -17,10 +17,10 @@ set_property CLOCK_DEDICATED_ROUTE BACKBONE [get_nets clk100_IBUF]
 ## CPU reset (active low)
 set_property -dict { PACKAGE_PIN G4 IOSTANDARD LVCMOS15 } [get_ports { cpu_resetn }]
 
-## NEW: BTNC (center button) = user reset, like the T100/BASIC board
+## BTNC (center button) = user reset, like the T100/BASIC board
 set_property -dict { PACKAGE_PIN B22 IOSTANDARD LVCMOS12 } [get_ports { btnc }]
 
-## NEW: DPTI / FT245 FIFO on PROG jack J12 (FT2232 channel B) — GUI tether
+## DPTI / FT245 FIFO on PROG jack J12 (FT2232 channel B) — GUI tether
 ## Same USB cable as JTAG, matching the T100. Not the J13 UART jack.
 set_property -dict { PACKAGE_PIN U20 IOSTANDARD LVCMOS33 } [get_ports { prog_d[0] }]
 set_property -dict { PACKAGE_PIN P14 IOSTANDARD LVCMOS33 } [get_ports { prog_d[1] }]
@@ -98,13 +98,15 @@ set_false_path -to [get_pins -hierarchical -regexp {.*mute_sync_reg\[0\]/D}] -qu
 set_false_path -to [get_pins -hierarchical -regexp {.*u_psg/tgl_sync_reg\[0\]/D}] -quiet
 set_false_path -to [get_pins -hierarchical -regexp {.*u_exec64/snd_ack_sync_reg\[0\]/D}] -quiet
 set audio_payload_regs [get_cells -hierarchical -regexp {.*u_exec64/snd_(ch|freq|vol|frames|slide)_reg(\[[0-9]+\])?}]
-set audio_capture_regs [get_cells -hierarchical -regexp {.*u_psg/v(freq|vol|frames|slide|phase)_reg.*}]
+# snd_ch also inhibits ph23_q history on the same synchronized poke.
+# This is another held-payload capture endpoint, not a free-running CDC.
+set audio_capture_regs [get_cells -hierarchical -regexp {.*u_psg/(v(freq|vol|frames|slide|phase)|ph23_q)_reg.*}]
 set audio_capture_pins [get_pins -of_objects $audio_capture_regs -filter {REF_PIN_NAME == D || REF_PIN_NAME == CE || REF_PIN_NAME == R || REF_PIN_NAME == S}]
 set_max_delay -datapath_only 83.333 -from $audio_payload_regs -to $audio_capture_pins
 
 ## µSD slot
 ## µSD — SPI: SCK=cclk MOSI=cmd MISO=d[0] CS=d[3] (LiteX/Digilent)
-## NEW: PULLUP on MISO/CMD/CS — card tri-states DAT0 between transfers
+## PULLUP on MISO/CMD/CS — card tri-states DAT0 between transfers
 set_property -dict { PACKAGE_PIN V20 IOSTANDARD LVCMOS33 } [get_ports { sd_reset }]
 set_property -dict { PACKAGE_PIN W19 IOSTANDARD LVCMOS33 } [get_ports { sd_cclk }]
 set_property -dict { PACKAGE_PIN T18 IOSTANDARD LVCMOS33 } [get_ports { sd_cd }]
@@ -114,13 +116,13 @@ set_property -dict { PACKAGE_PIN T21 IOSTANDARD LVCMOS33 } [get_ports { sd_d[1] 
 set_property -dict { PACKAGE_PIN T20 IOSTANDARD LVCMOS33 } [get_ports { sd_d[2] }]
 set_property -dict { PACKAGE_PIN U18 IOSTANDARD LVCMOS33 PULLUP true } [get_ports { sd_d[3] }]
 
-## 2026-08-23: at extreme LUT utilization the IO clock placer cannot
+## At extreme LUT utilization the IO clock placer cannot
 ## co-locate rgb2dvi's internal MMCM with its BUFR/BUFIO pair. Fabric
 ## routing for the x5 serial clock is acceptable at 125 MHz for bring-up
 ## (override text supplied verbatim by Place 30-149).
 set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets u_tmds/u_rgb2dvi/ClockGenInternal.ClockGenX/PixelClkInX5]
 
-## 2026-08-24 (Place 30-512 at ~105% packed utilization): the clock
+## The clock
 ## placer put rgb2dvi's MMCM in X1Y1 while its BUFIO/BUFR loads must sit
 ## in the HDMI bank's region. Pin the MMCM beside its loads.
 set_property LOC MMCME2_ADV_X1Y2 [get_cells {u_tmds/u_rgb2dvi/ClockGenInternal.ClockGenX/GenMMCM.DVI_ClkGenerator}]
@@ -135,16 +137,32 @@ create_generated_clock -name vm_clk -edges {1 2 7} \
     [get_pins u_core/g_vmclk_div.u_vm_bufgce/O]
 
 # init_calib_complete is quasi-static (asserts once at power-up, long
-# before console/storage traffic) yet fanned into 51 of run-32's failing
+# before console/storage traffic) yet fanned into 51 failing
 # endpoints. Standard MIG practice: exclude it from timing.
 set_false_path -from [get_pins -hierarchical -filter {NAME =~ *u_ddr_calib_top/init_calib_complete*/C}]
 
-# 2026-08-25 congestion fix (measured: runs 33 vs 35 differ by +399 LUTs
-# at identical BRAM/DSP, yet 35 placed a 104% East window; the variable
+# Congestion fix (measured: two builds differ by +399 LUTs
+# at identical BRAM/DSP, yet one placed a 104% East window; the variable
 # is the DDR3 bridge's 128-bit cache nets anchored to the MIG hard
 # block warping the floorplan). Pin the bridge beside the MIG: the
-# pinned placement reproduces run-33's clean profile (no congestion
+# pinned placement reproduces the clean profile (no congestion
 # window above level 5).
 create_pblock pb_sram_br
 add_cells_to_pblock [get_pblocks pb_sram_br] [get_cells u_sram_br]
 resize_pblock [get_pblocks pb_sram_br] -add {CLOCKREGION_X1Y3}
+
+# Paired with the common-assert / core-qualified audio-release topology.
+# These are the only asynchronous boundary pins. Stage1 Q -> stage2 D and
+# stage2 Q -> every leaf reset remain fully timed.
+set audio_reset_first_d [get_pins -quiet -hierarchical -regexp {^mrst_sync_reg\[0\]/D$}]
+set audio_reset_sync_clr [get_pins -quiet -hierarchical -regexp {^mrst_sync_reg\[[01]\]/CLR$}]
+if {[llength $audio_reset_first_d] != 1} {error "Audio reset CDC: expected exactly one first-stage D pin"}
+if {[llength $audio_reset_sync_clr] != 2} {error "Audio reset CDC: expected exactly two synchronizer CLR pins"}
+set_false_path -to $audio_reset_first_d
+set_false_path -to $audio_reset_sync_clr
+
+# The build is area-first for the VM. These three control modules are mapped
+# timing-first.
+set_property -quiet BLOCK_SYNTH.STRATEGY {PERFORMANCE_OPTIMIZED} [get_cells -quiet u_core/u_cons]
+set_property -quiet BLOCK_SYNTH.STRATEGY {PERFORMANCE_OPTIMIZED} [get_cells -quiet u_core/u_toolbox]
+set_property -quiet BLOCK_SYNTH.STRATEGY {PERFORMANCE_OPTIMIZED} [get_cells -quiet u_core/u_stor]

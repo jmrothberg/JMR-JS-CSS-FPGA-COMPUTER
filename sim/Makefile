@@ -111,21 +111,13 @@ CORE_SRCS := \
     $(RTL)/engines/jmr_system_menu_pkg.sv \
     $(RTL)/engines/jmr_system_menu.sv \
     $(RTL)/engines/jmr_classic_ui_pkg.sv \
-    $(RTL)/engines/jmr_classic_ui.sv \
-    $(RTL)/engines/jmr_classic_labels.sv \
     $(RTL)/engines/jmr_classic_static_labels.sv \
     $(RTL)/engines/jmr_ui_snapshot.sv \
-    $(RTL)/engines/jmr_system_actions.sv \
-    $(RTL)/engines/jmr_system_documents.sv \
     $(RTL)/video/jmr_classic_overlay.sv \
     $(RTL)/video/jmr_system_overlay.sv \
     $(RTL)/video/jmr_mouse_overlay.sv \
-    $(RTL)/engines/jmr_desktop_layout_pkg.sv \
-    $(RTL)/engines/jmr_icon_stream.sv \
-    $(RTL)/engines/jmr_desktop_disk.sv \
-    $(RTL)/engines/jmr_finder_shell.sv $(RTL)/engines/jmr_desktop.sv \
+    $(RTL)/engines/jmr_finder_shell.sv \
     $(RTL)/engines/jmr_mouse_events.sv \
-	$(RTL)/engines/jmr_keyboard_fifo.sv \
 	$(RTL)/engines/jmr_video_vram.sv \
 	$(RTL)/engines/jmr_js_vm_pkg.sv $(RTL)/engines/jmr_console_engine.sv \
 	$(RTL)/engines/jmr_mini_fb.sv \

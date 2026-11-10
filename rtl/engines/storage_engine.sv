@@ -4,7 +4,7 @@
 // OPEN "I"/"O", CLOSE, LINE INPUT#, INPUT#, PRINT#) and the minimal FAT32
 // layout of hardware_model/fat32.py (MBR + one partition, 512-byte sectors,
 // root directory only, 8.3 upper-case names, create / grow / overwrite /
-// NEW: delete).
+// Delete).
 //
 // Physical layer is the existing rtl/phys/sd_spi_master.sv; this module owns
 // the 512-byte sector buffer it fills (CMD17) and drains (CMD24).
@@ -18,7 +18,7 @@
 // into the I/O page on OPEN / CLOSE.
 
 module storage_engine #(
-    // NEW: passed straight to sd_spi_master so the board can slow SD init to
+    // Passed straight to sd_spi_master so the board can slow SD init to
     // the spec window at its 4.6875 MHz core clock. Defaults = sim behaviour.
     parameter int unsigned SD_INIT_DIV = 127,
     parameter int unsigned SD_RUN_DIV  = 3
@@ -36,14 +36,12 @@ module storage_engine #(
     input  logic        card_present = 1'b1, // hot-swap detect (board sd_cd)
     input  logic        start_readline,   // LINE INPUT# -> STORAGE_BUFFER
     input  logic        start_readfield,  // INPUT#      -> STORAGE_BUFFER
-    // NEW: raw file byte for PATCH.BIN boot loader (after OPEN "I")
+    // Raw file byte for PATCH.BIN boot loader (after OPEN "I")
     input  logic        start_get_byte = 1'b0,
     output logic [7:0]  get_byte,
-    input  logic        start_nl_scan = 1'b0,  // count remaining 0x0A from f_pos
-    output logic [15:0] nl_count,
     input  logic        start_putc,       // PRINT# separator / newline
     input  logic [7:0]  putc_data,
-    // NEW: console DIR catalog + REMOVE (DIR uses BRAM sbuf sequential dent walk)
+    // Console DIR catalog + REMOVE (DIR uses BRAM sbuf sequential dent walk)
     input  logic        start_dir,
     input  logic        start_dir_next,
     input  logic        dir_show_all = 1'b0, // DIR *: do not hide .JSH/.ART
@@ -63,7 +61,7 @@ module storage_engine #(
     output logic        done,             // one-cycle command completion
     output logic        busy,
     output logic [6:0]  dbg_state, // board telemetry: which state a stall parks in
-    output logic [15:0] dbg_op_clk, // run 71: clocks (x256, saturating) the current/last op took
+    output logic [15:0] dbg_op_clk, // Clocks (x256, saturating) the current/last op took
 
     // -- print_engine character sink (FILE_PRINT_VALUE) --------------------
     // Same hand-shake shape as video_engine: hold wr_en until sink_busy rises.
@@ -102,33 +100,33 @@ module storage_engine #(
     logic [31:0] sd_lba_r;
     logic [7:0]  sd_status;
     logic        sd_ack;
-    logic        sd_abort;          // run 71: one-beat abort to the SPI master
-    logic [26:0] sd_wd;             // run 71: S_SD_WAIT watchdog
+    logic        sd_abort;          // One-beat abort to the SPI master
+    logic [26:0] sd_wd;             // S_SD_WAIT watchdog
     logic [8:0]  sd_buf_addr;
     logic [7:0]  sd_buf_wdata;
     logic        sd_buf_we;
 
-    // NEW: 512B sector pad in BRAM — simple dual-port 1W1R (SPI|FS time-mux)
+    // 512B sector pad in BRAM — simple dual-port 1W1R (SPI|FS time-mux)
     // Dual independent read ports made Vivado refuse ram_style=block (Synth 8-6849).
     (* ram_style = "block" *) logic [7:0] sbuf [0:511];
     logic        fs_buf_we;
     logic [8:0]  fs_buf_addr;
     logic [7:0]  fs_buf_wdata;
-    logic [8:0]  fs_rd_addr;     // NEW: FS read address (when SPI idle)
+    logic [8:0]  fs_rd_addr;     // FS read address (when SPI idle)
     logic [8:0]  sbuf_raddr;
     logic [8:0]  sbuf_waddr;
     logic [7:0]  sbuf_wdata;
     logic        sbuf_we;
-    logic [7:0]  sbuf_rdata;     // NEW: registered read data (SPI + FS)
-    logic [7:0]  br_byte;        // NEW: S_BRC capture
-    logic [4:0]  br_i;           // NEW: multi-byte gather index
-    logic [31:0] br_acc;         // NEW: LE word gather (FAT / MBR LBA)
-    logic [7:0]  dent [0:31];    // NEW: one dirent window (flops, not sbuf ports)
+    logic [7:0]  sbuf_rdata;     // Registered read data (SPI + FS)
+    logic [7:0]  br_byte;        // S_BRC capture
+    logic [4:0]  br_i;           // Multi-byte gather index
+    logic [31:0] br_acc;         // LE word gather (FAT / MBR LBA)
+    logic [7:0]  dent [0:31];    // One dirent window (flops, not sbuf ports)
     logic [4:0]  dent_i;
-    logic [3:0]  mnt_phase;      // NEW: BPB field gather
-    logic [15:0] reserved_sect;  // NEW: BPB reserved sector count
+    logic [3:0]  mnt_phase;      // BPB field gather
+    logic [15:0] reserved_sect;  // BPB reserved sector count
 
-    // NEW: SPI owns the read addr while busy; FS only reads in S_BR* (SPI idle)
+    // SPI owns the read addr while busy; FS only reads in S_BR* (SPI idle)
     assign sbuf_we    = sd_buf_we | fs_buf_we;
     assign sbuf_waddr = sd_buf_we ? sd_buf_addr : fs_buf_addr;
     assign sbuf_wdata = sd_buf_we ? sd_buf_wdata : fs_buf_wdata;
@@ -156,43 +154,123 @@ module storage_engine #(
         .spi_cs_n (spi_cs_n),
         .buf_addr (sd_buf_addr),
         .buf_wdata(sd_buf_wdata),
-        .buf_rdata(sbuf_rdata), // NEW: 1-cycle latency OK (SPI samples after addr settle)
+        .buf_rdata(sbuf_rdata), // 1-cycle latency OK (SPI samples after addr settle)
         .buf_we   (sd_buf_we)
     );
 
     // ---- states ----------------------------------------------------------
     typedef enum logic [6:0] {
-        S_IDLE, S_FIN, S_ERR, S_SINK_END,
-        S_MW, S_MR, S_MRC,                       // one-byte RAM write / read
-        S_BR, S_BRC,                             // NEW: one-byte sbuf BRAM read
-        S_SD_WAIT, S_SD_CLR, S_SD_ABORT,         // SPI command completion (+ run-71 watchdog)
-        S_MNT0, S_MNT1, S_MNT2, S_MNT2A, S_MNT2B, S_MNT2C, // mount (+ BRAM gather)
-        S_MNT3, S_MNT3G, S_MNT3C,
-        S_NM_RD, S_NM_CAP,                       // fetch + encode 8.3 name
-        S_DS_START, S_DS_BASE, S_DS_SECT, S_DS_ENT, // root-directory scan
-        S_DS_LD, S_DS_LDC, S_DS_EVAL,            // NEW: load dent[] then evaluate
-        S_FG0, S_FG1, S_FG1A, S_FG1B,            // FAT get (+ BRAM gather)
-        S_FS0, S_FS1, S_FS1B, S_FS2, S_FS3, S_FS4, // FAT set (all FAT copies)
-        S_AL0, S_AL1, S_AL1R, S_AL1C, S_AL1D, S_AL2, S_AL3, // allocate
-        S_FC0, S_FC1, S_FC2,                     // free cluster chain
-        S_RB0, S_RB0C, S_RB1, S_RBA0, S_RBA1, S_RBA1B, // read byte / pipelined LBA
-        S_GB0, S_GB1,                            // NEW: public get_byte
-        S_NL0, S_NL1,                            // remaining-file newline scan
-        S_RL0, S_RL1, S_RL2,                     // LINE INPUT#
-        S_RF0, S_RF1, S_RF2, S_RF3, S_RF4,       // INPUT# field
-        S_RF5, S_RF6,
-        S_CPY,                                   // linebuf -> STORAGE_BUFFER
-        S_OP0, S_OP1, S_OP2, S_OP3,              // OPEN
-        S_AP0, S_AP1, S_AP2, S_AP3, S_AP4, S_AP5,// append one byte
-        S_CL0, S_CL1, S_CL2, S_CL3, S_CL4, S_CL4W, S_CL5,// CLOSE
-        S_PUB,
-        // NEW: REMOVE + DIR catalog (BRAM sbuf enables sequential dent walk)
-        S_DEL0, S_DEL1, S_DEL2, S_DEL_RD, S_DEL_PK, S_DEL_WR, S_DEL_FC,
-        S_DIR0, S_DIR_N, S_DIR_LD, S_DIR_LDC, S_DIR_EV, S_DIR_FMT, S_DIR_ADV,
-        // NEW: OPEN dir scan follows the FAT chain (root >1 cluster)
-        S_DS_CHAIN, S_APPEND_LOC, S_APPEND_NEXT, S_APPEND_SECTOR, S_APPEND_READY,
-        S_RENAME_READ, S_RENAME_PATCH, S_RENAME_WRITE,
-        S_DIR_CHAIN, S_DIR_CHAIN_LOADED
+        S_IDLE=7'd0,
+        S_FIN=7'd1,
+        S_ERR=7'd2,
+        S_SINK_END=7'd3,
+        S_MW=7'd4,
+        S_MR=7'd5,
+        S_MRC=7'd6,
+        S_BR=7'd7,
+        S_BRC=7'd8,
+        S_SD_WAIT=7'd9,
+        S_SD_CLR=7'd10,
+        S_SD_ABORT=7'd11,
+        S_MNT0=7'd12,
+        S_MNT1=7'd13,
+        S_MNT2=7'd14,
+        S_MNT2A=7'd15,
+        S_MNT2B=7'd16,
+        S_MNT2C=7'd17,
+        S_MNT3=7'd18,
+        S_MNT3G=7'd19,
+        S_MNT3C=7'd20,
+        S_NM_RD=7'd21,
+        S_NM_CAP=7'd22,
+        S_DS_START=7'd23,
+        S_DS_BASE=7'd24,
+        S_DS_SECT=7'd25,
+        S_DS_ENT=7'd26,
+        S_DS_LD=7'd27,
+        S_DS_LDC=7'd28,
+        S_DS_EVAL=7'd29,
+        S_FG0=7'd30,
+        S_FG1=7'd31,
+        S_FG1A=7'd32,
+        S_FG1B=7'd33,
+        S_FS0=7'd34,
+        S_FS1=7'd35,
+        S_FS1B=7'd36,
+        S_FS2=7'd37,
+        S_FS3=7'd38,
+        S_FS4=7'd39,
+        S_AL0=7'd40,
+        S_AL1=7'd41,
+        S_AL1R=7'd42,
+        S_AL1C=7'd43,
+        S_AL1D=7'd44,
+        S_AL2=7'd45,
+        S_AL3=7'd46,
+        S_FC0=7'd47,
+        S_FC1=7'd48,
+        S_FC2=7'd49,
+        S_RB0=7'd50,
+        S_RB0C=7'd51,
+        S_RB1=7'd52,
+        S_RBA0=7'd53,
+        S_RBA1=7'd54,
+        S_RBA1B=7'd55,
+        S_GB0=7'd56,
+        S_GB1=7'd57,
+        S_RL0=7'd60,
+        S_RL1=7'd61,
+        S_RL2=7'd62,
+        S_RF0=7'd63,
+        S_RF1=7'd64,
+        S_RF2=7'd65,
+        S_RF3=7'd66,
+        S_RF4=7'd67,
+        S_RF5=7'd68,
+        S_RF6=7'd69,
+        S_CPY=7'd70,
+        S_OP0=7'd71,
+        S_OP1=7'd72,
+        S_OP2=7'd73,
+        S_OP3=7'd74,
+        S_AP0=7'd75,
+        S_AP1=7'd76,
+        S_AP2=7'd77,
+        S_AP3=7'd78,
+        S_AP4=7'd79,
+        S_AP5=7'd80,
+        S_CL0=7'd81,
+        S_CL1=7'd82,
+        S_CL2=7'd83,
+        S_CL3=7'd84,
+        S_CL4=7'd85,
+        S_CL4W=7'd86,
+        S_CL5=7'd87,
+        S_PUB=7'd88,
+        S_DEL0=7'd89,
+        S_DEL1=7'd90,
+        S_DEL2=7'd91,
+        S_DEL_RD=7'd92,
+        S_DEL_PK=7'd93,
+        S_DEL_WR=7'd94,
+        S_DEL_FC=7'd95,
+        S_DIR0=7'd96,
+        S_DIR_N=7'd97,
+        S_DIR_LD=7'd98,
+        S_DIR_LDC=7'd99,
+        S_DIR_EV=7'd100,
+        S_DIR_FMT=7'd101,
+        S_DIR_ADV=7'd102,
+        S_DS_CHAIN=7'd103,
+        S_APPEND_LOC=7'd104,
+        S_APPEND_NEXT=7'd105,
+        S_APPEND_SECTOR=7'd106,
+        S_APPEND_READY=7'd107,
+        S_RENAME_READ=7'd108,
+        S_RENAME_PATCH=7'd109,
+        S_RENAME_WRITE=7'd110,
+        S_DIR_CHAIN=7'd111,
+        S_DIR_CHAIN_LOADED=7'd112
     } state_t;
 
     state_t state;
@@ -205,7 +283,7 @@ module storage_engine #(
     logic        mounted;
     logic [31:0] part_lba, fat_start, data_start, spf;
     logic [7:0]  spc, nfats;
-    // NEW: log2(spc) — FAT32 spc is a power of two, so cluster→LBA math can
+    // log2(spc) — FAT32 spc is a power of two, so cluster→LBA math can
     // shift instead of DSP-multiply (the multiply broke board timing, WNS −3 ns)
     logic [2:0]  spc_shift;
     logic [31:0] root_clus;
@@ -224,7 +302,7 @@ module storage_engine #(
     assign dir_date_o={dent[25],dent[24]};
     assign dir_attr_o=dent[11];
     logic [31:0] cur_clus, data_lba, buf_lba;
-    logic [31:0] lba_off;  // NEW: pipeline (clus-2)<<spc then +data_start (WNS)
+    logic [31:0] lba_off;  // Pipeline (clus-2)<<spc then +data_start (WNS)
     logic [7:0]  sect_in_clus;
     logic [9:0]  rd_off;
     logic [9:0]  wr_idx;
@@ -234,12 +312,12 @@ module storage_engine #(
     logic [31:0] ent_clus, ent_size;
     // public_flat_rd: sim-only STOR? probe (metacomment, no synthesis effect)
     logic        eof_r /*verilator public_flat_rd*/, err_r /*verilator public_flat_rd*/, done_r;
-    // NEW: bare OPEN "ADV01" retries .BAS/.DAT/.JMR/.TXT (matches FM resolve_storage_name)
+    // Bare OPEN "ADV01" retries .BAS/.DAT/.JMR/.TXT (matches FM resolve_storage_name)
     logic        bare_name;
     logic [2:0]  alt_try;
 
     // ---- line buffer -----------------------------------------------------
-    // 2026-08-24: BRAM'd (was ~3k LUTs of comb-read muxing at the final
+    // BRAM'd (was ~3k LUTs of comb-read muxing at the final
     // 189-slice placement gap). Writes go through one strobe; the parser
     // reads two registered ports (line_pos scans, i9 trim/copy) with a
     // 2-beat arm per step — INPUT#/DIR are cold paths.
@@ -270,20 +348,20 @@ module storage_engine #(
     logic [7:0]  fs_i, fs_bi;
     logic [31:0] al_clus, al_prev, al_lba, al_guard;
     logic [31:0] fc_clus, fc_next, fc_guard;
-    // Dir-scan chain guard. First-light board lesson (2026-08-25): DIR
+    // Dir-scan chain guard. First-light board lesson: DIR
     // and LOAD wedged forever with busy high — a FAT entry read off the
     // real card can point back into the valid cluster range and form a
     // cycle, which the well-formed sim card image can never produce.
     // S_FC0 already had fc_guard; the S_DS_CHAIN walk had no bound.
     logic [15:0] ds_guard;
-    // Run-33 timing (post-console-fix head): the cluster->LBA arithmetic
+    // Timing: the cluster->LBA arithmetic
     // fed sd_lba_r/buf_lba in one beat (DSP product + barrel shift + two
     // 32-bit adds; l1 DSP -> sd_lba_r -0.727, ds_clus -> buf_lba 16
     // levels). Same recipe as the S_RBA1/S_RBA1B split: one settle beat.
     // ds_base is per-cluster loop-invariant across the sector walk.
     logic [31:0] ds_base;
     logic [31:0] fs_pre;
-    // Op watchdog (board directive 2026-08-25: a storage stall must never
+    // Op watchdog (board directive: a storage stall must never
     // freeze the machine with no escape). Storage returns to S_IDLE
     // between DIR pages — the console strobes the next step only when
     // !busy — so every busy episode is pure SD/FAT work with no user
@@ -298,7 +376,7 @@ module storage_engine #(
     logic        sink_busy_r;
     // 0 = LINE INPUT# consumer, 1 = INPUT# field scanner refill
     logic        rl_field;
-    logic        cl_data_done; // NEW: CLOSE data-sector flush latch
+    logic        cl_data_done; // CLOSE data-sector flush latch
     logic        cat_on /*verilator public_flat_rd*/;
     logic        cat_all; // latched at start_dir: 1 = DIR *
     logic cat_system;
@@ -307,12 +385,12 @@ module storage_engine #(
     integer dirtrace_fd = 0;
     state_t dirtrace_last;
     logic [31:0] trace_cyc = 0;
-`endif       // NEW: DIR catalog scan active
-    logic        dir_yield;    // NEW: S_DIR_ADV should S_CPY after advancing
-    logic [15:0] nl_acc;
+`endif       // DIR catalog scan active
+    logic        dir_yield;    // S_DIR_ADV should S_CPY after advancing
+
 
     assign busy      = (state != S_IDLE);
-    // run 71 instrument: how long each storage op takes, in 256-clock units,
+    // Instrument: how long each storage op takes, in 256-clock units,
     // saturating. Rides the E-line so the flight log can split LOAD/COMPILE
     // time into SD-sector time vs per-byte handshakes before anyone builds
     // a burst path. Reset when a new op is accepted (S_IDLE with a start).
@@ -322,7 +400,7 @@ module storage_engine #(
         if (!rst_n) op_clk_r <= 24'd0;
         else if (state == S_IDLE) begin
             if (start_open || start_close || start_readline || start_readfield || start_get_byte
-                || start_nl_scan || start_putc || start_dir || start_dir_next || start_delete)
+                || start_putc || start_dir || start_dir_next || start_delete)
                 op_clk_r <= 24'd0;
         end else if (!(&op_clk_r)) op_clk_r <= op_clk_r + 24'd1;
     end
@@ -332,18 +410,18 @@ module storage_engine #(
     assign err       = err_r;
     assign line_len  = fld_len[7:0];
     assign sink_busy = sink_busy_r;
-    // NEW: expose last S_RB0C byte for PATCH.BIN / binary readers
+    // Expose last S_RB0C byte for PATCH.BIN / binary readers
     assign get_byte  = rb_byte;
-    assign nl_count  = nl_acc;
+
 
     // ---- helpers ---------------------------------------------------------
     function automatic logic [7:0] upcase(input logic [7:0] c);
         upcase = (c >= 8'h61 && c <= 8'h7A) ? (c - 8'h20) : c;
     endfunction
 
-    // NEW: name/attr compare against dent[] window (filled via S_DS_LD*)
-    // Run 52 (P1b): the 11-byte compare fed the S_DS_EVAL state decode
-    // combinationally — run 50's -0.208 family (dent -> state, LL11).
+    // Name/attr compare against dent[] window (filled via S_DS_LD*)
+    // The 11-byte compare fed the S_DS_EVAL state decode
+    // combinationally (dent -> state, 11 logic levels, -0.208 ns).
     // dent[0..10] are written >=21 beats before EVAL (bytes 11..31 load
     // after them), so a free-running register costs zero beats and takes
     // the 88-bit AND out of the dispatch cone (the 7f4f113 recipe).
@@ -428,7 +506,7 @@ module storage_engine #(
         unique case (pub_i)
             5'd0: begin pub_addr = IO_STORAGE_STATUS;
                         pub_data = {5'b0, (mode_r != 8'h0), err_r, busy}; end
-            // NEW: bit0 = busy (matches memory_map IO_STORAGE_STATUS / GUI light)
+            // bit0 = busy (matches memory_map IO_STORAGE_STATUS / GUI light)
             5'd1: begin pub_addr = IO_SEQ_MODE;      pub_data = mode_r; end
             5'd2: begin pub_addr = IO_SEQ_CHANNEL;   pub_data = (mode_r != 8'h0) ? chan_r : 8'h0; end
             5'd3: begin pub_addr = IO_SEQ_OFFSET_LO; pub_data = pub_off[7:0]; end
@@ -473,7 +551,7 @@ module storage_engine #(
                 fs_buf_we = 1'b1; fs_buf_addr = dir_off[8:0] + {3'h0, ent_i};
                 fs_buf_wdata = ent_byte(ent_i, f_first, f_size);
             end
-            // NEW: REMOVE — poke dirent[0]=0xE5
+            // REMOVE — poke dirent[0]=0xE5
             S_RENAME_PATCH: begin
                 fs_buf_we=1;fs_buf_addr=dir_off[8:0]+{3'd0,ent_i};fs_buf_wdata=name83[ent_i];
             end
@@ -510,7 +588,7 @@ module storage_engine #(
         end
     endtask
 
-    // NEW: synchronous reset so linebuf[] can infer as RAM (Synth 8-4767 —
+    // Synchronous reset so linebuf[] can infer as RAM (Synth 8-4767 —
     // async reset in the sensitivity list blocks inference). name83[] is still
     // reset below and stays registers, which is fine at 11 bytes.
     always_ff @(posedge clk) begin
@@ -542,7 +620,7 @@ module storage_engine #(
             slot_ok <= 1'b0; found_r <= 1'b0;
             ent_clus <= 32'h0; ent_size <= 32'h0;
             eof_r <= 1'b0; err_r <= 1'b0; done_r <= 1'b0;
-            nl_acc <= 16'd0;
+
             bare_name <= 1'b0; alt_try <= 3'd0;
             cat_on <= 1'b0; cat_all <= 1'b0; cat_system <= 1'b0; cat_raw <= 1'b0; dir_yield <= 1'b0;
             line_n <= 9'h0; line_pos <= 9'h0; fld_off <= 9'h0; fld_len <= 9'h0;
@@ -564,7 +642,7 @@ module storage_engine #(
             pad_i <= 10'h0; ent_i <= 6'h0; pub_i <= 5'h0;
             sink_busy_r <= 1'b0;
             rl_field <= 1'b0;
-            cl_data_done <= 1'b0; // NEW: CLOSE flushes data sector once
+            cl_data_done <= 1'b0; // CLOSE flushes data sector once
         end else begin
             lbw_we <= 1'b0;
             done_r <= 1'b0;
@@ -584,7 +662,7 @@ module storage_engine #(
                         nm_i    <= 8'h0;
                         stem_i  <= 8'h0;
                         ext_i   <= 8'h0;
-                        al_prev <= 32'h0; // NEW: don't link a stale cluster on first alloc
+                        al_prev <= 32'h0; // Don't link a stale cluster on first alloc
                         in_ext  <= 1'b0;
                         err_r   <= 1'b0;
                         eof_r   <= 1'b0;
@@ -595,7 +673,7 @@ module storage_engine #(
                     end else if (start_close) begin
                         state <= S_CL0;
                     end else if (start_readline) begin
-                        // NEW: clear sticky SPI err so LINE INPUT# matches OPEN
+                        // Clear sticky SPI err so LINE INPUT# matches OPEN
                         eof_r    <= 1'b0;
                         err_r    <= 1'b0;
                         line_n   <= 9'h0;
@@ -603,19 +681,13 @@ module storage_engine #(
                         state    <= S_RL0;
                     end else if (start_readfield) begin
                         eof_r <= 1'b0;
-                        err_r <= 1'b0; // NEW: same sticky-err hygiene as readline
+                        err_r <= 1'b0; // Same sticky-err hygiene as readline
                         state <= S_RF0;
                     end else if (start_get_byte) begin
-                        // NEW: one raw file byte (PATCH.BIN boot); eof if past end
+                        // One raw file byte (PATCH.BIN boot); eof if past end
                         eof_r <= 1'b0;
                         err_r <= 1'b0;
                         state <= S_GB0;
-                    end else if (start_nl_scan) begin
-                        // Count remaining 0x0A from current f_pos (one SPI sector at a time)
-                        eof_r <= 1'b0;
-                        err_r <= 1'b0;
-                        nl_acc <= 16'd0;
-                        state <= S_NL0;
                     end else if (start_putc) begin
                         app_byte <= putc_data;
                         push_call(S_AP0, S_FIN);
@@ -623,18 +695,18 @@ module storage_engine #(
                         app_byte    <= sink_wr_char;
                         sink_busy_r <= 1'b1;
                         push_call(S_AP0, S_SINK_END);
-                    // NEW: DIR — always remount (hot-swap µSD without reset)
+                    // DIR — always remount (hot-swap µSD without reset)
                     end else if (start_dir) begin
                         err_r <= 1'b0; eof_r <= 1'b0; fld_len <= 9'h0;
                         cat_on <= 1'b1;
                         cat_all <= dir_show_all;
                         cat_system <= dir_show_system;
                         cat_raw <= dir_raw_names;
-                        // 2026-08-25: no forced remount. DIR was the ONLY
+                        // No forced remount. DIR was the ONLY
                         // command that re-initialized a live card (its board
                         // wedge slice); hot-swap is handled by card_present
                         // clearing `mounted` below, same as an SPI error.
-                        // 2026-08-26: the remount is now CONDITIONAL, matching
+                        // The remount is now CONDITIONAL, matching
                         // start_open (:1246) and S_DEL0 (:1423). 86011a9 removed
                         // `mounted <= 1'b0` but left this push_call unconditional,
                         // so DIR still re-ran full SPI init on a live card.
@@ -670,11 +742,11 @@ module storage_engine #(
                 end
 
                 S_ERR: begin
-                    // NEW: clear mode so a failed OPEN cannot leave LINE INPUT# spinning
+                    // Clear mode so a failed OPEN cannot leave LINE INPUT# spinning
                     err_r  <= 1'b1;
                     done_r <= 1'b1;
                     mode_r <= 8'h0;
-                    mounted <= 1'b0; // NEW: poison mount — next DIR/LOAD remounts
+                    mounted <= 1'b0; // Poison mount — next DIR/LOAD remounts
                     rsp    <= 3'd0;
                     state  <= S_IDLE;
                 end
@@ -693,7 +765,7 @@ module storage_engine #(
                     mbyte <= mem_rdata;
                     pop_ret();
                 end
-                // NEW: sbuf BRAM read — addr already on fs_rd_addr; +1 cycle then capture
+                // Sbuf BRAM read — addr already on fs_rd_addr; +1 cycle then capture
                 S_BR:  state <= S_BRC;
                 S_BRC: begin
                     br_byte <= sbuf_rdata;
@@ -706,8 +778,8 @@ module storage_engine #(
                     sd_cmd_r <= 8'h0;
                     state    <= S_SD_CLR;
                 end else if (&sd_wd) begin
-                    // Run 71 watchdog (~1.3 s at 100 MHz): the card never
-                    // answered. Board 2026-09-05: a SAVE sat here 85 s and
+                    // Watchdog (~1.3 s at 100 MHz): the card never
+                    // answered. Board: a SAVE sat here 85 s and
                     // a DIR wedged until power-cycle. Abort the SPI master,
                     // poison the mount, fail the op loud (?IO) — never wait
                     // forever again.
@@ -724,7 +796,7 @@ module storage_engine #(
                 S_SD_CLR: begin
                     if (sd_status[2]) begin
                         err_r <= 1'b1;
-                        mounted <= 1'b0; // NEW: SPI fail → remount next time
+                        mounted <= 1'b0; // SPI fail → remount next time
                     end
                     pop_ret();
                 end
@@ -732,7 +804,7 @@ module storage_engine #(
                 // ---------------- mount -----------------------------------
                 S_MNT0: sd_go(8'd1, 32'h0, S_MNT1);
                 S_MNT1: sd_go(8'd2, 32'h0, S_MNT2);
-                // NEW: BRAM — gather MBR type byte then optional LBA
+                // BRAM — gather MBR type byte then optional LBA
                 S_MNT2: begin
                     buf_lba    <= 32'h0;
                     fs_rd_addr <= 9'd450;
@@ -753,7 +825,7 @@ module storage_engine #(
                     push_call(S_BR, S_MNT2C);
                 end
                 S_MNT2C: begin
-                    // NEW: LE32 partition LBA at MBR +454
+                    // LE32 partition LBA at MBR +454
                     unique case (br_i[1:0])
                         2'd0: br_acc <= {24'h0, br_byte};
                         2'd1: br_acc <= {16'h0, br_byte, br_acc[7:0]};
@@ -793,7 +865,7 @@ module storage_engine #(
                 end
                 S_MNT3C: begin
                     unique case (mnt_phase)
-                        // NEW: also latch log2(spc) — FAT32 spc is a power of
+                        // Also latch log2(spc) — FAT32 spc is a power of
                         // two; shift replaces the timing-breaking DSP multiply
                         4'd0:  begin
                             spc <= br_byte;
@@ -843,7 +915,7 @@ module storage_engine #(
                 S_NM_CAP: begin
                     if (mbyte == 8'h2E) begin
                         in_ext    <= 1'b1;
-                        bare_name <= 1'b0;   // NEW: explicit extension present
+                        bare_name <= 1'b0;   // Explicit extension present
                         ext_i     <= 8'h0;
                     end else if (!in_ext) begin
                         if (stem_i < 8'd8) name83[stem_i[3:0]] <= upcase(mbyte);
@@ -852,7 +924,7 @@ module storage_engine #(
                         if (ext_i < 8'd3) name83[4'd8 + ext_i[1:0]] <= upcase(mbyte);
                         ext_i <= ext_i + 8'd1;
                     end
-                    // NEW: do NOT invent .BAS here — OPEN path applies FM suffixes
+                    // Do NOT invent .BAS here — OPEN path applies FM suffixes
                     if (nm_i + 8'd1 >= nm_len) pop_ret();
                     else begin
                         nm_i  <= nm_i + 8'd1;
@@ -879,7 +951,7 @@ module storage_engine #(
                     buf_lba <= ds_base + {24'h0, ds_sect};
                     sd_go(8'd2, ds_base + {24'h0, ds_sect}, S_DS_ENT);
                 end
-                // NEW: load 32-byte dirent into dent[] via BRAM, then evaluate
+                // Load 32-byte dirent into dent[] via BRAM, then evaluate
                 S_DS_ENT: begin
                     dent_i <= 5'd0;
                     state  <= S_DS_LD;
@@ -1027,7 +1099,7 @@ module storage_engine #(
                     if (fs_bi >= 8'd3) state <= S_FS3;
                     else fs_bi <= fs_bi + 8'd1;
                 end
-                // NEW: write THIS fat copy, then advance fs_i after the SPI op
+                // Write THIS fat copy, then advance fs_i after the SPI op
                 // completes (old path bumped fs_i when the write started, which
                 // raced the next S_FS1 and could skip FAT2 / reuse fs_lba).
                 S_FS3: sd_go(8'd3, fs_lba, S_FS4);
@@ -1044,7 +1116,7 @@ module storage_engine #(
                     buf_lba  <= fat_start;
                     sd_go(8'd2, fat_start, S_AL1);
                 end
-                // NEW: BRAM — gather FAT entry then decide
+                // BRAM — gather FAT entry then decide
                 S_AL1: begin
                     br_i   <= 5'd0;
                     br_acc <= 32'h0;
@@ -1156,7 +1228,7 @@ module storage_engine #(
                     end
                 end
                 S_RBA1: begin
-                    // NEW: split LBA math — was fat_val→data_lba in one cycle (−0.5 ns WNS)
+                    // Split LBA math — was fat_val→data_lba in one cycle (−0.5 ns WNS)
                     cur_clus     <= fat_val;
                     sect_in_clus <= 8'h0;
                     lba_off      <= (fat_val - 32'd2) << spc_shift;
@@ -1167,7 +1239,7 @@ module storage_engine #(
                     pop_ret();
                 end
 
-                // NEW: public get_byte — S_RB0 then advance; eof at f_size
+                // Public get_byte — S_RB0 then advance; eof at f_size
                 S_GB0: begin
                     if (mode_r != 8'h49) state <= S_ERR;
                     else if (f_pos >= f_size) begin
@@ -1176,21 +1248,6 @@ module storage_engine #(
                     end else push_call(S_RB0, S_GB1);
                 end
                 S_GB1: push_call(S_RBA0, S_FIN);
-
-                // Remaining-file NL count — one get_byte + advance per loop,
-                // all inside storage (no console handshake per byte).
-                S_NL0: begin
-                    if (mode_r != 8'h49) state <= S_ERR;
-                    else if (f_pos >= f_size) begin
-                        eof_r <= 1'b1;
-                        state <= S_FIN;
-                    end else push_call(S_RB0, S_NL1);
-                end
-                S_NL1: begin
-                    if (rb_byte == 8'h0A && nl_acc != 16'hFFFF)
-                        nl_acc <= nl_acc + 16'd1;
-                    push_call(S_RBA0, S_NL0);
-                end
 
                 // ---------------- LINE INPUT# -----------------------------
                 // Shared line filler: reads up to the next LF into linebuf.
@@ -1361,7 +1418,7 @@ module storage_engine #(
                     line_pos <= 9'h0;
                     if (mode_r == 8'h49) begin  // 'I'
                         if (!found_r) begin
-                            // NEW: bare OPEN "FOO" — try .JS/.HTML/.PNG/.DAT (JS FM resolve)
+                            // Bare OPEN "FOO" — try .JS/.HTML/.PNG/.DAT (JS FM resolve)
                             if (bare_name && alt_try < 3'd4) begin
                                 unique case (alt_try)
                                     3'd0: begin // .JS
@@ -1398,7 +1455,7 @@ module storage_engine #(
                         if(ent_size==0)begin cur_clus<=0;wr_idx<=0;state<=S_PUB;end
                         else state<=S_APPEND_LOC;
                     end else begin              // 'O' — create / overwrite
-                        // NEW: bare SAVE "FOO" → resolve FOO.JS before create
+                        // Bare SAVE "FOO" → resolve FOO.JS before create
                         if (bare_name && name83[8] == 8'h20 && alt_try == 3'd0) begin
                             name83[8]  <= 8'h4A;
                             name83[9]  <= 8'h53;
@@ -1517,7 +1574,7 @@ module storage_engine #(
                     state <= S_CL1;
                 end
                 S_CL3: begin
-                    // NEW: flush data at most once (wr_idx sticky caused a
+                    // Flush data at most once (wr_idx sticky caused a
                     // second CMD24 of the data LBA and then skipped the dirent).
                     if (!cl_data_done && wr_idx != 10'h0) begin
                         cl_data_done <= 1'b1;
@@ -1532,7 +1589,7 @@ module storage_engine #(
                 end
                 S_CL4: begin
                     // fs_buf_we patches the 32-byte directory record
-                    // NEW: defer CMD24 to S_CL4W so all 32 patches land first
+                    // Defer CMD24 to S_CL4W so all 32 patches land first
                     // (mirrors S_FS2 → S_FS3), otherwise the dirent write was
                     // skipped/raced and P.DAT never appeared on card.img.
                     if (ent_i >= 6'd31) state <= S_CL4W;
@@ -1559,7 +1616,7 @@ module storage_engine #(
                     end
                 end
 
-                // NEW: REMOVE "NAME" — find (bare suffixes like OPEN I) + E5 + free
+                // REMOVE "NAME" — find (bare suffixes like OPEN I) + E5 + free
                 S_DEL0: if (!mounted) push_call(S_MNT0, S_DEL1); else state <= S_DEL1;
                 S_DEL1: push_call(S_DS_START, S_DEL2);
                 S_DEL2: begin
@@ -1587,7 +1644,7 @@ module storage_engine #(
                     end else state <= S_FIN;
                 end
 
-                // NEW: DIR catalog — sequential dent[] walk, one name per start_dir_next
+                // DIR catalog — sequential dent[] walk, one name per start_dir_next
                 S_DIR0: begin
                     ds_guard  <= 16'd0;
                     ds_clus   <= root_clus;
@@ -1597,7 +1654,7 @@ module storage_engine #(
                     // ds_base steers every S_DIR_ADV sector advance; without
                     // this a cold DIR inherits stale ds_base (0 after reset)
                     // and reads LBA 1 instead of root sector 1 — the listing
-                    // silently truncates at 16 entries (sim-traced 2026-08-27).
+                    // silently truncates at 16 entries.
                     ds_base   <= data_start + ((root_clus - 32'd2) << spc_shift);
                     ds_lba    <= data_start + ((root_clus - 32'd2) << spc_shift);
                     buf_lba   <= data_start + ((root_clus - 32'd2) << spc_shift);
@@ -1665,7 +1722,7 @@ module storage_engine #(
                         end
                         if (dent_i >= 5'd11) begin
                             fld_off   <= 9'h0;
-                            // NEW: include this cycle's optional ext byte in length
+                            // Include this cycle's optional ext byte in length
                             // .HTM on FAT → glass .HTML (PYTHON names)
                             if (!cat_raw && dent[8] == "H" && dent[9] == "T" && dent[10] == "M") begin
                                 // one strobe per beat: the "L" append takes
@@ -1733,7 +1790,7 @@ module storage_engine #(
                     else state <= dir_yield ? S_CPY : S_DIR_N;
                 end
 
-                // 2026-08-27: a garbage state used to fall back to S_IDLE
+                // A garbage state used to fall back to S_IDLE
                 // SILENTLY (no done) — the console then waited 32 s for a
                 // pulse that never came. Fail loud instead.
                 default: state <= S_ERR;

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """FPGA-SIM protocol server (host twin of RTL sim_main line protocol).
 
-LLM NOTE: Speaks KEY/JOY/LINE/FB?/SCREEN?/STATUS?/RUNCLK/TICK/PROMPT like the
+Speaks KEY/JOY/LINE/FB?/SCREEN?/STATUS?/RUNCLK/TICK/PROMPT like the
 Verilator server. Uses the PYTHON FM as the DUT stand-in until
 `make -C sim sim_server_synth` produces jmr_js_sim_server.
 

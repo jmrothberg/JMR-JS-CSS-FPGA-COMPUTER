@@ -37,7 +37,7 @@ def git_stamp() -> str:
         return "unknown"
 
 
-# NEW: pytest / parity battery must not bury F9 session logs. JMR_TRACE=1
+# Pytest / parity battery must not bury F9 session logs. JMR_TRACE=1
 # forces the GUI folder (title smokes that we want LATEST_* for).
 def session_trace_dir() -> Path:
     if os.environ.get("JMR_TRACE", "").strip().lower() in ("1", "true", "yes"):

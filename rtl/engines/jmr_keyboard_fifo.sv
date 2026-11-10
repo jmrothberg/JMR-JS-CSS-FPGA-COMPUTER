@@ -1,6 +1,6 @@
 // Keyboard FIFO — fixed depth. NEW: no a-z fold (JS needs full keyboard;
 // BASIC folded for Model I; verbs are matched case-insensitively in console).
-// NEW: DEPTH 128 — fits one monitor line (127) + CR; 16 overflowed during
+// DEPTH 128 — fits one monitor line (127) + CR; 16 overflowed during
 // EDIT echo when the glass scrolled (long replace never reached edit_pending).
 module jmr_keyboard_fifo #(
     parameter int DEPTH = 128

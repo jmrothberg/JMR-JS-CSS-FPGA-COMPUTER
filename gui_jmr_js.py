@@ -44,7 +44,6 @@ from functional_model.canvas_engine import HEIGHT, WIDTH  # noqa: E402
 from functional_model.input_engine import (  # noqa: E402
     JOY_DOWN,
     JOY_FIRE1,
-    JOY_FIRE2,
     JOY_LEFT,
     JOY_RIGHT,
     JOY_UP,
@@ -55,7 +54,7 @@ from runtime.backend import PythonBackend  # noqa: E402
 FRAME_MS = 16
 DEADZONE = 40
 
-# NEW: Tk keysym → (JS keyCode, JS event.key). The HTML decides bindings —
+# Tk keysym → (JS keyCode, JS event.key). The HTML decides bindings —
 # this is the raw-keyboard path (Enter starts PACMAN; letters for DONKEY).
 _TK_TO_JS = {
     "Return": (13, "Enter"),
@@ -67,7 +66,7 @@ _TK_TO_JS = {
     "Down": (40, "ArrowDown"),
     "BackSpace": (8, "Backspace"),
     "Tab": (9, "Tab"),
-    # F-keys forwarded to a running title (run-66 board parity: the PS/2
+    # F-keys forwarded to a running title (board parity: the PS/2
     # decoder now delivers all F-keys). HTML decides bindings. F12 leaves a
     # running program at the GUI. Esc is machine BREAK.
     "F1": (112, "F1"),
@@ -210,7 +209,8 @@ class App:
         self._key_fire = False
         self._mouse_buttons = 0
         self._mouse_samples = collections.deque()
-        # NEW: real-time key display + capture (2026-08-29 — diagnosing
+        self._mouse_position = (320, 240)
+        # Real-time key display + capture (diagnosing
         # whether X11 auto-repeat masquerades as distinct keydowns; the
         # keysym-already-down check works because this desktop runs
         # detectable autorepeat — see on_key_release's existing note).
@@ -227,13 +227,13 @@ class App:
         # board keyboard never passes through the GUI (merge takes newest).
         self._kbd_last_t: float | None = None
         self._ppm_bytes: bytes | None = None
-        # NEW: letterbox cursor blink (~2 Hz) — HDMI already blinks via frame_div[5]
+        # Letterbox cursor blink (~2 Hz) — HDMI already blinks via frame_div[5]
         self._cursor_on = True
         self._cursor_t = time.monotonic()
         self._last_prompt: str | None = None
         self._busy_prompt: str | None = None  # keep typed RUN/LIST until LINE returns
         self._arch_phase_override: str | None = None
-        # NEW: ignore leftover F9/F10 from the launch key queue / auto-repeat.
+        # Ignore leftover F9/F10 from the launch key queue / auto-repeat.
         self._gui_t0 = time.monotonic()
         self._fkey_t = 0.0
         # GUI Ctrl-V → editor: keyCodes drip-fed before each frame_tick.
@@ -243,7 +243,7 @@ class App:
         # MORE waiter: pump Tk + refresh glass (BASIC more_idle pattern)
         self.machine.more_idle = self._more_idle
         for b in self.backends:
-            # 2026-09-04: BOARD too — its SAVE/PUT waits used to block Tk
+            # BOARD too — its SAVE/PUT waits used to block Tk
             if getattr(b, "name", "") in ("PYTHON", "FPGA-SIM", "BOARD"):
                 b.run_wait_idle = self._more_idle
 
@@ -279,7 +279,7 @@ class App:
         self._refresh_fb()
         self.canvas_label.focus_set()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        # NEW: size once. Status/log text must never grow the window or the
+        # Size once. Status/log text must never grow the window or the
         # 640×480 glass (Enter / F9 / LOADING used to widen the alleys).
         self.root.update_idletasks()
         gw = self.root.winfo_reqwidth()
@@ -292,7 +292,7 @@ class App:
         self._set_status(self._status_text())
         self._key_status_shown = None
         self._set_key_status(self._key_status_text())
-        # NEW: Architecture Monitor is a second window (does not grow the glass)
+        # Architecture Monitor is a second window (does not grow the glass)
         self._build_arch_monitor()
         self._after_id = self.root.after(FRAME_MS, self._frame)
 
@@ -308,7 +308,7 @@ class App:
         )
         self.status.pack(fill=tk.X, padx=6, pady=4)
 
-        # NEW: real-time key state readout, same fixed-width discipline as
+        # Real-time key state readout, same fixed-width discipline as
         # `status` — must never grow the window (geometry is locked right
         # after _build_ui in __init__).
         self.key_status = tk.Label(
@@ -346,7 +346,7 @@ class App:
         self.arch_window.title("JMR ARCHITECTURE MONITOR")
         self.arch_window.configure(bg="#0d0f0d")
         self.arch = ArchitectureView(self.arch_window)
-        # NEW: X hides (does not quit the glass). bind_all F10 already covers focus.
+        # X hides (does not quit the glass). bind_all F10 already covers focus.
         self.arch_window.protocol("WM_DELETE_WINDOW", self._hide_arch_monitor)
         # F9/F10: bind_all KeyRelease already covers this toplevel.
         self.arch_window.bind("<Escape>", lambda e: self.break_program())
@@ -428,7 +428,7 @@ class App:
                 snap = getter() or {}
             except Exception:
                 snap = {}
-        # NEW: real keystrokes reaching the machine — lights the
+        # Real keystrokes reaching the machine — lights the
         # Keyboard/PHY_PS2 block the same way every other engine block
         # lights (gui_arch_monitor.py's heat_stamp/decay), instead of
         # relying on catching the RTL's one-cycle S_KEYEV dispatch state
@@ -461,7 +461,7 @@ class App:
         )
 
     def _status_text(self) -> str:
-        # NEW: show FPGA-SIM (RTL) vs (HOST) so a fake twin cannot hide
+        # Show FPGA-SIM (RTL) vs (HOST) so a fake twin cannot hide
         names = []
         for b in self.backends:
             label = getattr(b, "mode_label", None)
@@ -475,7 +475,7 @@ class App:
         return f"Runtime: {cur}   [{' | '.join(names)}]{tip}"
 
     def _set_status(self, text: str) -> None:
-        # NEW: truncate inside a fixed-width label — never wrap (height) or
+        # Truncate inside a fixed-width label — never wrap (height) or
         # grow (width). Courier width=80 chars matches the 640 glass.
         max_ch = 80
         if len(text) > max_ch:
@@ -578,7 +578,7 @@ class App:
         if self.backend.name == "FPGA-SIM":
             self.backend._started = False
             self.backend._proc = None
-        # NEW: every runtime owns its own glass. The half-typed line belongs to
+        # Every runtime owns its own glass. The half-typed line belongs to
         # the machine you just left, so it must not follow you across F9.
         self.line_buf = ""
         self.line_col = 0
@@ -617,15 +617,6 @@ class App:
         self._paste_q.clear()
         self._paint_prompt()
         self.canvas_label.focus_set()
-
-    def _play_key_held(self) -> bool:
-        return (
-            self._key_left
-            or self._key_right
-            or self._key_up
-            or self._key_down
-            or self._key_fire
-        )
 
     def _editor_accepts_paste(self) -> bool:
         """True while EDIT owns the glass (PYTHON _edit_active / FPGA-SIM _editor_live)."""
@@ -771,11 +762,15 @@ class App:
         self.root.wait_window(win)
         return chosen
 
+    def _can_send_files(self):
+        available = getattr(self.backend, "can_transfer_files", None)
+        return bool(available()) if callable(available) else not self._is_running()
+
     def on_put_file(self, _event: tk.Event | None = None) -> str:
         """F8: pick storage/ or card.img files → host card.img (+ BOARD SAVE)."""
         from tkinter import filedialog, messagebox
 
-        if self._is_running():
+        if not self._can_send_files():
             return "break"
         src = self._ask_put_source()
         if not src:
@@ -802,7 +797,11 @@ class App:
                 put = getattr(self.backend, "put_files_on_card", None)
                 names = put(list(paths)) if callable(put) else ""
             self._set_status(f"PUT {names}")
-            self.backend.type_line("DIR *")
+            refresh = getattr(self.backend, "refresh_files", None)
+            if callable(refresh):
+                refresh()
+            else:
+                self.backend.type_line("DIR *")
             self._after_command()
         except Exception as e:
             try:
@@ -850,7 +849,7 @@ class App:
             if code is not None:
                 self.backend.console_key(code)
                 return "break"
-        # NEW: real-time capture, before any early return, so nothing is
+        # Real-time capture, before any early return, so nothing is
         # missed. This desktop runs detectable X11 autorepeat (see
         # on_key_release below) — a held key resends KeyPress with no
         # KeyRelease in between, so "keysym already in _keys_down" IS the
@@ -867,16 +866,16 @@ class App:
         # chrome at READY, not machine input; Escape IS (break_program).
         # F8 while a title runs is a TITLE key (F1–F11 group below).
         if event.keysym not in ("F9", "F10") and not (
-            event.keysym == "F8" and not self._is_running()
+            event.keysym == "F8" and self._can_send_files()
         ):
             self._kbd_last_t = time.monotonic()
         if event.keysym in ("F9", "F10", "Escape"):
             return None
-        if event.keysym == "F8" and not self._is_running():
+        if event.keysym == "F8" and self._can_send_files():
             return "break"  # put on KeyRelease-F8, like F9
         # F12 leaves a running program (READY). Every other F-key is a
         # TITLE key while running (HTML decides bindings — board parity
-        # with the run-66 PS/2 map). F9/F10 are GUI chrome.
+        # with the PS/2 map). F9/F10 are GUI chrome.
         if event.keysym == "F12":
             if self._is_running():
                 self.leave_program()
@@ -897,7 +896,7 @@ class App:
                 if command:
                     self.backend.key_event(command,'',True);self.backend.key_event(command,'',False)
             return "break"
-        # NEW: game running → forward the RAW key (JS keyCode/key) to the
+        # Game running → forward the RAW key (JS keyCode/key) to the
         # runtime key-state engine. The HTML decides bindings (Enter starts
         # PACMAN); KEYBITS below stays as the joy tether.
         if self._is_running():
@@ -996,7 +995,7 @@ class App:
                 self._refresh_fb()
             self.line_buf = ""
             self.line_col = 0
-            # NEW: fat LOAD/RUN must not freeze the window (swallows Enter)
+            # Fat LOAD/RUN must not freeze the window (swallows Enter)
             if up == "RUN" or up.startswith("RUN ") or up.startswith("LOAD"):
                 try:
                     self._set_status(self._status_text() + "  LOADING/COMPILING")
@@ -1025,7 +1024,7 @@ class App:
         return None
 
     def on_key_release(self, event: tk.Event) -> str | None:
-        # NEW: real-time capture (see on_key_press). Detectable autorepeat
+        # Real-time capture (see on_key_press). Detectable autorepeat
         # means this fires exactly once per physical release, never
         # mid-hold — so no repeat filtering needed on the release side.
         self._keys_down.discard(event.keysym)
@@ -1037,7 +1036,7 @@ class App:
             return None
         if event.keysym == "F12":
             return "break"
-        if event.keysym == "F8" and not self._is_running():
+        if event.keysym == "F8" and self._can_send_files():
             return "break"  # KeyRelease-F8 → on_put_file
         if event.keysym in ("F1", "F3", "F4", "F5", "F6", "F7", "F8", "F11"):
             if self._is_running():
@@ -1045,7 +1044,7 @@ class App:
                 if jk is not None and hasattr(self.backend, "key_event"):
                     self.backend.key_event(jk[0], jk[1], False)
             return "break"
-        # NEW: raw keyup twin of the on_key_press key_event forward
+        # Raw keyup twin of the on_key_press key_event forward
         if self._is_running():
             jk = _js_key(event)
             if jk is not None and hasattr(self.backend, "key_event"):
@@ -1073,7 +1072,7 @@ class App:
         return None
 
     def _feed_more(self, ch: str) -> None:
-        # NEW: FPGA-SIM MORE must get KEY — not only the PYTHON machine
+        # FPGA-SIM MORE must get KEY — not only the PYTHON machine
         if hasattr(self.backend, "push_key") and (
             getattr(self.backend, "more_waiting", False)
             or self.backend.name == "FPGA-SIM"
@@ -1096,7 +1095,7 @@ class App:
         if pref is not None:
             self.line_buf = pref
             self.line_col = len(pref)
-        # NEW: LOAD/RUN can outlive the window (DONKEY compile); skip
+        # LOAD/RUN can outlive the window (DONKEY compile); skip
         # focus if the user already closed Tk.
         if not self._alive:
             return
@@ -1125,7 +1124,7 @@ class App:
         m = getattr(self.backend, "machine", self.machine)
         prompt = self._prompt_text()
         col = max(0, min(getattr(self, "line_col", len(self.line_buf)), len(self.line_buf)))
-        # NEW: cyan block at insert index (`> ` is 2 cols) — no yellow '|'
+        # Cyan block at insert index (`> ` is 2 cols) — no yellow '|'
         cc = 2 + col
         if hasattr(self.backend, "paint_prompt"):
             self.backend.paint_prompt(prompt, cursor_on=self._cursor_on, cursor_col=cc)
@@ -1139,7 +1138,7 @@ class App:
         return f"> {self.line_buf}"
 
     def _emit_keys(self) -> None:
-        # NEW: KEYBITS only — never JOY 0 (SIM assigns joy_in; JOY wiped arrows/Space)
+        # KEYBITS only — never JOY 0 (SIM assigns joy_in; JOY wiped arrows/Space)
         bits = 0
         if self._key_left:
             bits |= JOY_LEFT
@@ -1176,6 +1175,7 @@ class App:
 
     def _queue_mouse(self, x, y, *, edge=False):
         sample = (max(0, min(639, int(x))), max(0, min(479, int(y))), self._mouse_buttons, edge)
+        self._mouse_position = sample[:2]
         if (not edge and self._mouse_samples and
                 not self._mouse_samples[-1][3] and self._mouse_samples[-1][2] == sample[2]):
             self._mouse_samples[-1] = sample
@@ -1197,7 +1197,7 @@ class App:
     def _mouse_focus_out(self, event):
         if self._mouse_buttons:
             self._mouse_buttons = 0
-            x, y = self._mouse_samples[-1][:2] if self._mouse_samples else (320, 240)
+            x, y = self._mouse_position
             self._queue_mouse(x, y, edge=True)
 
     def _feed_mouse(self):
@@ -1207,7 +1207,7 @@ class App:
             self._mouse_samples.popleft()
 
     def _on_close(self) -> None:
-        # NEW: cancel the after-loop before destroy so Tk does not fire
+        # Cancel the after-loop before destroy so Tk does not fire
         # `_frame` / focus on a dead interpreter (close during LOAD/RUN).
         self._alive = False
         if self._after_id is not None:
@@ -1241,7 +1241,7 @@ class App:
                 self.line_buf=getattr(self.backend,"console_line","")
                 self.line_col=len(self.line_buf)
             self._keyboard_was_open=keyboard_open
-            # NEW: blink cyan block on letterbox so you can see the insert point
+            # Blink cyan block on letterbox so you can see the insert point
             now = time.monotonic()
             blink_flip = False
             if now - self._cursor_t >= 0.5:

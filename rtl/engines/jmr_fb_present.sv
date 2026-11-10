@@ -8,6 +8,7 @@ module jmr_fb_present #(
 ) (
     input logic clk, rst_n,
     input logic swap, clear_go,
+    input logic refresh_all=1'b0,
     input logic [1199:0] dirty_blocks,
     output logic dirty_clear,
     output logic busy,
@@ -161,6 +162,7 @@ module jmr_fb_present #(
                     send_word <= send_word + 18'd1;
                 end
             end
+            if(refresh_all)force_full<=1'b1;
         end
     end
 `ifndef SYNTHESIS

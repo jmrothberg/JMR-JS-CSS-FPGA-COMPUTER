@@ -371,37 +371,6 @@ class SdSpiCard:
 
     # -- register-driven command path (FPGA MMIO shape) ---------------------
 
-    def service_regs(self) -> None:
-        """Poll IO_SD_CMD and execute if non-idle."""
-        cmd = self.memory.read(mm.IO_SD_CMD)
-        if cmd == mm.SD_CMD_IDLE:
-            return
-        lba = (
-            self.memory.read(mm.IO_SD_LBA_0)
-            | (self.memory.read(mm.IO_SD_LBA_1) << 8)
-            | (self.memory.read(mm.IO_SD_LBA_2) << 16)
-            | (self.memory.read(mm.IO_SD_LBA_3) << 24)
-        )
-        self.memory.write(mm.IO_SD_ACK, 0)
-        try:
-            if cmd == mm.SD_CMD_INIT:
-                self.init()
-            elif cmd == mm.SD_CMD_READ:
-                self.read_block(lba)
-            elif cmd == mm.SD_CMD_WRITE:
-                data = bytes(
-                    self.memory.read_block(mm.STORAGE_BUFFER, SECTOR_SIZE)
-                )
-                self.write_block(lba, data)
-        except (IndexError, IOError):
-            self.error = True
-            self.busy = False
-            self._publish()
-        self.memory.write(mm.IO_SD_CMD, mm.SD_CMD_IDLE)
-
-    def save_image(self, path: Path) -> None:
-        path.write_bytes(self.image)
-
     def _publish(self) -> None:
         status = 0
         if self.present:

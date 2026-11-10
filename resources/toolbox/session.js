@@ -3,7 +3,7 @@
 var _tbSRole=0,_tbSViewport=0,_tbSInstalled=0,_tbSHeld=0,_tbSCapture=0;
 var _tbSCallbacks=[[],[],[],[],[]],_tbSFrames=[],_tbSPending=0;
 var _tbSAbout=[],_tbSAboutTitle=[],_tbSOwned=0,_tbSEnable=4294967295,_tbSCheck=0;
-var _tbSConfigured=0;
+var _tbSConfigured=0,_tbSExtras=[],_tbSClickBlock=0;
 var _tbSScrollY=0,_tbSScrollX=0,_tbSDirty=0;
 function tbSessionProperty(ctx,field,value){
  if(field==0){
@@ -46,7 +46,7 @@ function tbSessionDefaults(){
  }else if(_tbSRole==2)menus=tbSessionParse("File|Open...=1002|Quit=1006");
  else menus=tbSessionParse("File|Quit=1006");
  if(_tbSRole==8)menus.push(tbSessionParse("Game|Restart=1007")[0]);
- menus.push(tbSessionParse("Special|Terminal=1009|Editor=1010|Reader=1011|Compile=1012|Utility=1013|Note=1014|Help=1015|Finder=1016")[0]);
+ menus.push(tbSessionParse("Special|Editor=1010|Reader=1011|Compile=1012|Utility=1013|Note=1014|Help=1015|Finder=1016")[0]);
  return menus;
 }
 function tbSessionCodes(text){var a=[],i=0,c;while(i<128){c=strByte(text,i);if(c<0)break;a.push(c);i=i+1;}return a;}
@@ -105,11 +105,12 @@ function tbSessionMasks(){
 }
 function tbSessionListen(text,fn){
  var k=text=="keydown"?0:text=="keyup"?1:text=="mousedown"?2:text=="mousemove"?3:text=="mouseup"?4:-1;
- if(k<0){addEventListener(text,fn);return;}_tbSCallbacks[k].push(fn);
+ if(k<0){var i=0;while(i<_tbSExtras.length){if(_tbSExtras[i]==text&&_tbSExtras[i+1]==fn)return;i=i+2;}_tbSExtras.push(text,fn);addEventListener(text,_tbSessionExtra);return;}_tbSCallbacks[k].push(fn);
 }
 function _tbSessionSend(kind,e){var i=0,list=_tbSCallbacks[kind],fn;while(i<list.length){fn=list[i];_tbSessionDraw(fn,e);i=i+1;}}
 function tbSessionSendKey(code){_tbSessionSend(0,{keyCode:code,charCode:0});}
 function _tbSessionKey(e){
+ if(e.keyCode==255&&_tbSRole==9){_tbSessionSend(0,e);return;}
  if(e.keyCode==254){tbDialogOpen(1,_tbSAboutTitle,[_tbSAbout],[]);return;}
  if(tbUIKey(e.keyCode,e.charCode))return;
  if(_tbMenu>=0){if(e.keyCode==27){_tbErase=1;_tbMenu=-1;_tbArmed=-1;_tbChanged=1;}return;}
@@ -125,13 +126,25 @@ function _tbSessionPointer(kind,e){
  consumed=code?1:old<0?0:tbUIPointer(e.clientX,y,_tbSHeld);
  if(code)tbSessionSendKey(code);
  if(kind==2)_tbSCapture=consumed?1:-1;
- if(kind==4){_tbSCapture=0;if(old<0)_tbDown=0;}
+ if(kind==4){_tbSClickBlock=consumed||old>0;_tbSCapture=0;if(old<0)_tbDown=0;}
  if(consumed||old>0)return;
  if(_tbSRole==8&&_tbSViewport){
   e={clientX:e.clientX,clientY:(y-24)*480/456,offsetX:e.offsetX,offsetY:(e.offsetY-24)*480/456,button:e.button,buttons:e.buttons,movementX:e.movementX,movementY:e.movementY*480/456};
  }
  if(_tbChromeWindow){e.clientX=x-_tbX+8;e.clientY=y-_tbY+34;e.offsetX=e.clientX;e.offsetY=e.clientY;}
  _tbSessionSend(kind,e);
+}
+// Extra input retains browser adapters, but obeys session ownership.
+function _tbSessionExtra(e){
+ var i=0,fn,y=e.clientY,x=e.clientX;
+ if(_tbSSwitching)return;
+ if(e.type=="click"||e.type=="contextmenu"){
+  if(e.type=="click"&&_tbSClickBlock){_tbSClickBlock=0;return;}
+  if(_tbDialog||_tbMenu>=0)return;
+  if(_tbSRole==8&&_tbSViewport)e={type:e.type,clientX:x,clientY:(y-24)*480/456,offsetX:e.offsetX,offsetY:(e.offsetY-24)*480/456,button:e.button,buttons:e.buttons,movementX:e.movementX,movementY:e.movementY*480/456};
+  if(_tbChromeWindow){e.clientX=x-_tbX+8;e.clientY=y-_tbY+34;e.offsetX=e.clientX;e.offsetY=e.clientY;}
+ }
+ while(i<_tbSExtras.length){if(e.type==_tbSExtras[i]){fn=_tbSExtras[i+1];_tbSessionDraw(fn,e);}i=i+2;}
 }
 function _tbSessionDown(e){_tbSessionPointer(2,e);}
 function _tbSessionMove(e){_tbSessionPointer(3,e);}

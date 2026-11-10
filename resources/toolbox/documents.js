@@ -4,6 +4,7 @@ var _tbSDState=0,_tbSDCommand=0,_tbSAfter=0,_tbSPage=0,_tbSNext=0,_tbSPages=[];
 var _tbSFiles=[],_tbSFileRows=[],_tbSResume=0,_tbSSwitching=0,_tbSProgram="",_tbSSuffix="";
 var _tbSInvalidator=0,_tbSClock=0;
 function _tbSessionStop(){
+ var i=0;while(i<_tbSExtras.length){removeEventListener(_tbSExtras[i],_tbSessionExtra);i=i+2;}_tbSExtras=[];
  removeEventListener("keydown",_tbSessionKey);removeEventListener("keyup",_tbSessionKeyUp);
  removeEventListener("mousedown",_tbSessionDown);removeEventListener("mousemove",_tbSessionMove);removeEventListener("mouseup",_tbSessionUp);
 }
@@ -67,7 +68,6 @@ function tbSessionCommand(command,kind){
   if(_tbSProgram==""){_tbSessionError();return;}
   _tbSessionWriteName(tbSessionCodes(_tbSProgram));_tbSSwitching=1;sysRun(96,0);return;
  }
- if(command==1009){_tbSessionWriteName(tbSessionCodes("TERMINAL"));_tbSSwitching=1;sysRun(96,4);return;}
  if(command==1010){tbDocumentHeader(1);stgWrite(64,5);_tbSSwitching=1;_tbSessionStop();cdone(128,0,0);return;}
  if(command==1011||command==1012){_tbSPage=0;_tbSPages=[];_tbSessionChooseOpen(command);return;}
  if(command==1013||command==1014||command==1015){_tbSessionWriteName(tbSessionCodes(command==1013?"UTILITY.HTM":command==1014?"NOTE.HTM":"HELP.MD"));_tbSSwitching=1;sysRun(96,command==1015?2:0);return;}

@@ -41,7 +41,7 @@ module jmr_ddr3_sram_bridge (
     logic [2:0]  slot;
     logic [15:0] wdata_q;
     logic        cmd_sent, wdf_sent;
-    // 2026-08-25 board fix: read-reissue watchdog. If a command is ever
+    // Board fix: read-reissue watchdog. If a command is ever
     // lost, S_WAIT_RD re-issues instead of wedging the whole SRAM fabric
     // (the arbiter holds the owner until ack, so a silent drop blacked
     // the screen and froze every sram client).
@@ -55,7 +55,7 @@ module jmr_ddr3_sram_bridge (
     logic         cache_valid;
     logic [18:0]  cache_base;   // addr[21:3]
     logic [127:0] cache_data;
-    // Run 53 (JMR_NOBURST reverts): single-entry BL8 WRITE-COMBINE
+    // Single-entry BL8 WRITE-COMBINE
     // buffer, the write-side twin of the read cache above. The present
     // engine streams 153,600 perfectly sequential words; per-word UI
     // transactions made that the dominant frame cost (768k core clk of

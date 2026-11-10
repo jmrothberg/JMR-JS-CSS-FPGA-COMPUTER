@@ -1,11 +1,11 @@
 // Char VRAM 64×16 + put/CLS/NL/scroll — BASIC video_engine method, dual-clock BRAM.
-// LLM NOTE: Port A @ clk (CPU put/scroll/dump). Port B @ scan_clk=pixel_clk (HDMI).
+// Port A @ clk (CPU put/scroll/dump). Port B @ scan_clk=pixel_clk (HDMI).
 // Async assign scan_data=mem[scan_addr] across clocks tore glyphs on the monitor.
 // SRAM/ASIC: no reset-for over mem (cannot infer BRAM; SRAM has no parallel clear).
 // Dump shares Port A read with scroll — a third concurrent port forced LUTRAM.
 module jmr_video_vram (
     input  logic        clk,
-    input  logic        scan_clk,  // NEW: pixel_clk — true dual-port like BASIC VRAM
+    input  logic        scan_clk,  // pixel_clk — true dual-port like BASIC VRAM
     input  logic        rst_n,
     // Writer
     input  logic        cls,
@@ -28,7 +28,7 @@ module jmr_video_vram (
     (* ram_style = "block" *) logic [7:0] mem [0:CELLS-1] /*verilator public_flat_rw*/;
 
     typedef enum logic [2:0] {
-        // NEW: V_SCROLL_WR — scroll copy is now read-then-write (2 cycles).
+        // V_SCROLL_WR — scroll copy is now read-then-write (2 cycles).
         // Single-cycle mem[idx] <= mem[idx+64] was the board's worst path
         // (1024:1 read mux + write in one clock, routed WNS −0.268 ns).
         V_IDLE, V_CLS, V_PUT, V_NL, V_SCROLL, V_SCROLL_WR, V_SCROLL_CLR
@@ -142,7 +142,7 @@ module jmr_video_vram (
                     end else idx <= idx + 1'b1;
                 end
                 V_PUT: begin
-                    // NEW: BS/DEL — match BASIC video_engine (cursor back + erase)
+                    // BS/DEL — match BASIC video_engine (cursor back + erase)
                     if (put_char == 8'h08 || put_char == 8'h7F) begin
                         if (cur != 10'd0)
                             cur <= cur - 10'd1;
@@ -183,7 +183,7 @@ module jmr_video_vram (
                     end
                 end
                 V_SCROLL_WR: begin
-                    // NEW: write phase — breaks the read-mux→write timing path
+                    // Write phase — breaks the read-mux→write timing path
                     idx <= idx + 1'b1;
                     state <= V_SCROLL;
                 end

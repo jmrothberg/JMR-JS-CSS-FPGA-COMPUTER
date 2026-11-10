@@ -2267,7 +2267,6 @@ def test_hw_value64_stack_and_call_bounds_fail_loudly():
 
 def test_html_program_image_is_value64_and_machine_uses_hw_vm():
     """Product HTML compile emits Value64; PYTHON RUN executes those words."""
-    from pathlib import Path
 
     from tools.compile_js import compile_html_text, encode_html_chunk
 
@@ -2555,7 +2554,6 @@ def test_hw_value64_raf_method_onload_reads_global():
 
 def test_invaders_hm_held_left_changes_framebuffer():
     """INVADERS: start, then held left must change live game state."""
-    from pathlib import Path
 
     from hardware_model.js_vm import (
         VALUE_KIND_RECORD,
@@ -2616,7 +2614,6 @@ def test_invaders_hm_held_left_changes_framebuffer():
 
 def test_donkey_hm_enter_keeps_raf_armed():
     """DONKEY: Enter must leave rAF live (title → next screen)."""
-    from pathlib import Path
 
     donkey = resolve_storage_html("DONKEY")
     if donkey is None:
@@ -2650,7 +2647,6 @@ def test_donkey_hm_enter_keeps_raf_armed():
 
 def test_pacman_hm_raf_stays_armed():
     """PACMAN: RUN must leave rAF live (title auto-advances via nested rAF)."""
-    from pathlib import Path
 
     pacman = resolve_storage_html("PACMAN")
     if pacman is None:
@@ -3958,7 +3954,7 @@ def test_hw_value64_foreach_compact_does_not_stale():
         "var head = {n: 0};\n"
         "var cur = head;\n"
         "var i = 1;\n"
-        "while (i < 700) {\n"  # 2026-08-21: was 980 under MAX_OBJ 1024; cap is 768 now
+        "while (i < 700) {\n"  # Was 980 under MAX_OBJ 1024; cap is 768 now
         "  var node = {n: i};\n"
         "  cur.next = node;\n"
         "  cur = node;\n"
@@ -4082,7 +4078,6 @@ def test_hw_value64_date_now_advances_on_frame():
 def test_mrdo_hm_enter_paints_without_hang():
     """MRDO PYTHON bytecode: Enter starts; a couple of paints finish."""
     import time
-    from pathlib import Path
 
     mrdo = resolve_storage_html("MRDO")
     if mrdo is None:

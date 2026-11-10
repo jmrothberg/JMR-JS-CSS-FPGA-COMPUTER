@@ -1,272 +1,210 @@
 # How to use this computer
 
-You are reading HELP.MD. This is the manual
-for the machine. Headings are large. Lists are
-indented. The file itself is not changed.
+You are reading HELP.MD, the manual for this
+machine. It opens from Special, then Help.
 
-- LOAD "HELP.MD"
-- READ
+The machine starts in Finder, the desktop. You
+work with the mouse, the menu bar, and the keys.
 
-Up and Down move one line. Left, Right, F3, and F4
-move one page. Esc returns to READY.
-
-On the desktop, select HELP.MD and choose File,
-then Read. Other .MD and .TXT files open the same
-way. At the prompt, LOAD "NAME.MD", then READ.
-
-If READ prints ?SN, this bitstream is older than
-the reader. The file is still loaded. Type LIST.
-Space or Enter shows the next page. Esc stops.
+- Double-click a program to run it.
+- Double-click a document to read it.
+- Esc leaves any program and returns to Finder.
 
 ---
 
 ## The desktop
 
-The Enterprise ship menu has About and Keyboard.
-It stays available over programs. To quit any
-game, choose File, then Quit. Simpler games have
-Game, then Restart to start again.
+Disk is at the upper right. Trash is at the lower
+right. Click Disk to open the Disk window. It
+lists the programs and documents on the card.
 
-About says JMR Enterprises, the game title and
-one line describing it. Finder and system tools
-have their own About descriptions.
+The line under the title shows how much of the
+disk is used and how much is available.
 
-The keyboard's Hold keys box holds game controls.
-Click a key again, hide the keyboard, or quit to
-release it. Programs have no red X at the top right.
+- Click an icon to select it.
+- Hold Shift and click to select more.
+- Drag in empty window space to select a group.
+- The arrow keys move the selection.
+- Type the first letters of a name to select it.
+- Drag an icon to move it. It can sit in a
+  window, in a folder, or on the desktop.
 
-Terminal is in Special. Edit source is in Edit.
-That Edit command is the EDIT verb below.
+Each window has a close box at the left of its
+title. Drag the title to move the window. Drag
+the lower right corner to change its size. The
+arrows at the right scroll it.
 
-A document window shows any .MD or .TXT file.
-Click the scroll arrows for one line. Click the
-upper or lower part of the page for one page.
-The small square at the left of the title closes
-the window.
+Finder menus are File, Edit, View, and Special.
+Grey items do nothing: Print, Page Setup, Eject,
+and Erase Disk.
 
-View, then List, puts the names in alphabetical
-order. View, then Icons, puts them back in the
-order the disk listed them.
+## Run a program
 
-Drag a file onto Trash. It is not deleted yet.
-Click Trash to see those files. Drag one onto
-Disk to put it back. When Trash holds a file,
-choose Special, then Empty Trash.
+Double-click it, or select it and choose File,
+then Open.
 
-The Finder program is the desktop when this
-shell is set that way. It is a program on the
-card, like the original Finder. Trash opens its
-own window. Each folder opens its own window.
-Folders, positions, and comments are kept in
-DESKTOP.FDR. The card stays one flat list.
+To leave, press Esc or choose File, then Quit.
+Games also have Game, then Restart, to start
+again.
 
-Double-click a program to run it. Double-click
-a document to read it. Quitting, or Esc, comes
-back to the Finder. File, then New Folder, makes
-a folder. File, then Get Info, shows the size,
-the date, Locked, and a comment. Special, then
-Empty Trash, asks first and then deletes what
-is in the Trash. Print, Page Setup, Eject, and
-Erase Disk stay grey.
+A program that has not been compiled opens in
+the Editor instead. See Compile.
 
-View, then Hidden files, shows the picture files
-and icons that ordinary DIR hides. Choose it
-again to hide them.
+## Read a document
 
-## DIR and DIR *
+Double-click a .MD or .TXT file. It opens in the
+Reader. Special, then Reader, shows a list of
+files to choose from.
 
-DIR lists what you can LOAD: HTML programs and MD
-documents. It shows 14 names, then -- MORE --.
-Space or Enter continues. Esc stops.
+- Up and Down move one line.
+- Left, Right, F3, and F4 move one page.
+- Click the upper half of the page to go back a
+  page. Click the lower half to go on.
+- File, then Open, reads another file.
 
-On the Python simulator, READY replaces
--- MORE -- and the first name stays. The run73o
-board scrolls that top name off and leaves
--- MORE -- on the glass. The next bitstream
-matches the simulator.
+The Reader does not change the file.
 
-DIR hides compiled JSH files, picture files, and
-the machine programs READ, EDITOR, ARTSCAN,
-COMPILER, and FINDER. Those files stay on the
-card. READ, EDIT, and COMPILE need them.
-Do not REMOVE them.
+## Names, folders, and Get Info
 
-DIR * also lists the JSH and picture files. The
-machine programs stay hidden. A numbered LOAD
-follows bare DIR, not DIR *.
+Select an icon and press Enter to rename it.
+Type the name, then press Enter again. A name is
+letters, digits, and a dot, up to 12 characters.
 
-## MacPaint
+File, then New Folder, makes a folder in the
+front window. Double-click a folder to open its
+window. Drag icons onto a folder to put them in.
 
-Double-click MacPaint. The window says
-untitled. The mouse draws in the page. Arrow
-keys or the stick move a pen. Space or the fire
-button draws with the current tool.
+File, then Duplicate, copies the selected file.
+The copy is named COPY with the same ending.
 
-The menus are File, Edit, Goodies, Font,
-FontSize, and Style. File, then Save, writes
-STEM.PNT. File, then Open, loads one back.
-New clears the page and does not ask. Quit does
-not ask either. Save before you leave. The window
-has no scroll bar. The hand moves the page. A row
-of colors sits beside the line widths.
+File, then Get Info, shows the kind, size, place,
+and date. Click the Locked box to lock the item.
+A locked item cannot be renamed or put in the
+Trash. Type to write a short comment.
 
-## Play a program
+Edit, then Undo, takes back the last move,
+rename, new folder, or trip to the Trash.
 
-- LOAD "NAME.HTML"
-- RUN
+## View
 
-LOAD reads the HTML and remembers the name.
-Nothing starts yet. RUN plays NAME.JSH, the
-compiled program stored next to the HTML.
-RUN does not compile. A missing JSH prints ?NH.
+View applies to the front window: by Icon, by
+Small Icon, by Name, by Size, by Kind, by Date.
 
-If you did not change the HTML, LOAD and RUN
-are enough.
+Hidden files also shows the compiled programs,
+picture files, and icons. Choose it again to
+hide them.
 
-## Pictures: ARTX and ARTJS
+Special, then Clean Up, lines the icons up.
 
-The HTML is the program. Its pictures live in a
-second file, so the HTML stays small enough to
-edit.
+## Trash
 
-ARTX is the picture file this computer runs.
-The card only allows three letters after the
-dot, so NAME.ARTX is stored as NAME.ART. DIR
-hides it. DIR * shows NAME.ART. COMPILE and RUN
-read that file and put the pictures into the
-program.
+Drag an icon onto Trash, or select it and choose
+Edit, then Clear. It is not deleted yet.
 
-ARTJS is the same pictures for Chrome on the
-PC. Open the HTML in the browser and Chrome
-loads NAME.ARTJS. This computer does not run
-that script. A copy is kept on the card so
-Hidden files can show it. DIR hides that copy.
+Click Trash to see what it holds. To get an item
+back, select it and choose File, then Put Back,
+or drag it onto Disk.
 
-One file cannot serve both. This computer needs
-a packed picture bank. Chrome needs a script it
-can load. Both are built from the same PNG
-sheets, so the pictures match. You do not write
-ARTX or ARTJS by hand.
+Special, then Empty Trash, asks first. Yes
+deletes the files for good. Locked items stay.
 
-## The editor
+## The Editor
 
-EDIT is a verb. It runs the editor program,
-EDITOR, on the file LOAD already parked. Do not
-LOAD "EDITOR.HTML" and RUN it. That would put
-the editor's own text in the buffer, and it
-would edit itself.
+Special, then Editor, starts the Editor. File,
+then Open, picks the file to edit.
 
-- LOAD "NAME.HTML"
-- EDIT
+- Arrows move. Typing inserts.
+- Enter starts a new line. Backspace deletes.
+- F3 and F4 move a page.
+- Click to place the cursor. Drag to select.
+- F2 saves.
 
-Arrows move. Typing inserts. Letters come out as
-capitals, because this editor stores key codes.
-Enter starts a new line. Backspace deletes.
-F3 and F4 move a page.
+File has New, Open, Save, Save As, and Quit.
+Save As asks for a name and asks again before it
+replaces a file. With no ending typed, the name
+gets .HTM. New, Open, and Quit ask about unsaved
+changes: Save, Discard, or Cancel.
 
-F2 saves that same file and returns to READY.
-Then type COMPILE, then RUN.
+Edit has Undo, Cut, Copy, Paste, Clear, and
+Select All. Ctrl with Z, X, C, V, and A does the
+same. Cut and Copy hold up to 4096 characters.
+Undo takes back one change.
 
-F5 leaves without saving. Esc is BREAK. It
-leaves, and it does not save.
+A document can be up to 65536 characters.
 
-EDIT with nothing loaded prints ?NB.
+## Note
 
-NOTE is not this editor. NOTE is a separate
-typing program. It is described under A new
-program.
+Special, then Note, opens the Editor on a new,
+empty document. Save asks for a name. With no
+ending typed, the name gets .JS.
 
 ## Compile
 
-COMPILE builds a new NAME.JSH from the HTML that
-LOAD parked. Do not type a filename. LOAD already
-chose the name.
+A program is an HTML file. The machine runs the
+compiled copy, NAME.JSH. Compile after you
+change the HTML.
 
-The Compile window can do the same job. File →
-Open parks a program and does not compile it yet.
-Save compiles that program. Save As writes a new
-HTML program under the name you type, then
-compiles the new name. The program you opened
-stays on the disk.
+In Finder, select the program and choose
+Special, then Compile.
 
-Success prints COMPILED. The program is still
-stopped. Type RUN to play the new file.
+The Compile window can do the same job. File,
+then Open, picks a program. Save compiles it.
+Save As writes the program under a new name and
+compiles that. The program you opened stays.
 
-A failed compile prints ?CE and a line message.
-The previous JSH stays, so RUN still plays the
-old program. REMOVE "NAME.JSH" deletes that old
-file when you want it gone.
+## Utility
 
-COMPILE with nothing loaded prints ?NB.
-COMPILE when the compiler programs are missing
-prints ?NH.
+Special, then Utility, lists every file on the
+card with its size in bytes, and counts them.
+Up and Down, or W and S, scroll the list.
 
-Compile after you change the HTML on this
-machine.
+## Startup and Restart
 
-## A new program
+Select a program and choose Special, then Set
+Startup. Special, then Restart, then runs that
+program. With none set, Restart reloads Finder.
 
-NEW only clears the text window. It does not
-open a blank page. EDIT after NEW prints ?NB.
-Numbered lines at READY print ?SN.
+## MacPaint
 
-Copy a program that is already on the card,
-then edit the copy. The name fits in eight
-characters plus .HTM.
+Double-click MacPaint. The window says untitled.
 
-- LOAD "BOXES.HTML"
-- SAVE "MYGAME.HTM"
-- EDIT
+The mouse draws. The arrow keys move a pen, and
+Space draws with the current tool. The hand
+moves the page.
 
-F2 saves MYGAME.HTM. COMPILE, then RUN, play
-that new name. BOXES.HTML stays as it was.
+The menus are File, Edit, Goodies, Font,
+FontSize, and Style. File, then Save As, asks
+for a name and writes NAME.PNT. File, then Open,
+loads a picture back. Revert reloads the saved
+picture.
 
-NOTE.HTML is only an easier page for typing.
-It is not the EDIT verb.
+Quit does not ask. Save before you leave.
 
-- LOAD "NOTE.HTML"
-- RUN
+## Pictures: ARTX and ARTJS
 
-Letters are lowercase. Hold Shift for capitals.
-Enter starts a new line. Backspace deletes.
-Tab inserts two spaces. F1 lists the keys.
-F3 and F4 move a page.
+A program's pictures live in a second file, so
+the HTML stays small enough to edit.
 
-In Python and FPGA-SIM, choose File, then Save.
-A new note asks for a short disk filename.
-Save and Save As keep the note open. F2 also
-saves. Close asks about unsaved changes.
+- NAME.ARTX is the picture file this computer
+  uses. The card stores it as NAME.ART.
+- NAME.ARTJS is the same pictures for a browser
+  on a PC. The card stores it as NAME.ARJ. This
+  computer does not use it.
 
-These menus need the new mouse/desktop bit on
-the board; the preserved run73o uses its older
-keyboard interface.
+Both are hidden until you choose View, then
+Hidden files. Keep NAME.ART with its program.
+You do not write either file by hand.
 
-## Send a file from the PC
+## The ship menu and the keyboard
 
-You do not rebuild the whole card to add one file.
-In the PC window, at READY, press F8.
+The ship at the left of the menu bar is always
+there, over any program. Its menu has About and
+Keyboard.
 
-F8 asks where the file is.
+About shows the name of the program and one line
+about it.
 
-- Host file picks a file on the PC. It is copied
-  onto the PC card image. If the window says
-  BOARD, that same file is also written to the
-  card in the slot.
-- card.img picks a file already on the PC card
-  image and writes it to the card in the slot.
-
-A game must not be running. Esc back to READY
-first. F8 while a game is playing is a game key.
-
-Files bigger than 64 KB, such as a picture bank,
-take longer. A 2.8 MB picture is about four
-minutes, then the card write.
-
-## Other words at READY
-
-- LIST pages the loaded file.
-- SAVE writes that file back to the card.
-- REMOVE "NAME" deletes a file.
-- STATUS shows the name, the size, and the last fault.
-- HELP is a short list. CLS clears the glass.
-- MEM shows how much memory is in use.
+Keyboard shows a keyboard on the screen. Click
+its keys with the mouse. Check the Hold keys box
+and a clicked key stays down. Use that for game
+controls.

@@ -4,8 +4,12 @@ import jmr_js_vm_pkg::*;
 import jmr_value_pkg::*;
 module jmr_js_vm_exec64 (
     input  logic clk,
+    input logic image_callref,
     input  logic rst_n,
     input  logic enable,
+    output logic arg_stack_read,
+    output logic [11:0] arg_stack_addr,
+    input logic [63:0] arg_stack_data,
     output logic leave_hold,
     input  logic hs_m_ip,
     input  logic hs_m_code,
@@ -13,7 +17,6 @@ module jmr_js_vm_exec64 (
     input  logic hs_m_state,
     input  logic hs_m_vsp,
     input  logic hs_m_hp_cmd,
-    input  logic hs_m_hp_v64,
     input  logic hs_m_hp_oid,
     input  logic hs_m_hp_aid,
     input  logic hs_m_hp_env,
@@ -29,7 +32,6 @@ module jmr_js_vm_exec64 (
     input  logic hs_m_hp_hit,
     input  logic hs_m_hp_ret,
     input  logic hs_m_hp_phase,
-    input  logic hs_m_hp_proto,
     input  logic hs_m_hp_qn,
     input  logic hs_m_hp_qi,
     input  logic hs_m_hp_si,
@@ -41,7 +43,6 @@ module jmr_js_vm_exec64 (
     input  logic hs_m_hp_spr_w,
     input  logic hs_m_hp_spr_h,
     input  logic hs_m_hp_nat,
-    input  logic hs_m_hp_tag,
     input  logic hs_m_hp_qk,
     input  logic hs_m_hp_qv,
     input  logic hs_m_hp_qt,
@@ -89,7 +90,6 @@ module jmr_js_vm_exec64 (
     // done path jumps to ip=0 until vfe_sp>=8 (INVADERS fault 3).
     input  logic hs_m_vfe_i,
     input  logic hs_m_vfe_pop,
-    output logic aset_win_retried_q,
     output logic [7:0] bind_argc_q,
     output logic [11:0] bind_base_q,
     output logic [15:0] bind_ip_q,
@@ -118,27 +118,20 @@ module jmr_js_vm_exec64 (
     output logic cc_second_q,
     output logic [1:0] cc_st_q,
     output logic [14:0] code_raddr_q,
-    output logic [31:0] opw_out, // run-59: op word as EXEC sees it (captured)
+    output logic [31:0] opw_out, // op word as EXEC sees it (captured)
     output logic [7:0] color_q,
     output logic [1:0] ctx_align_q,
-    output logic ctx_smooth_q,
     output logic signed [31:0] ctx_sx_q,
     output logic signed [31:0] ctx_sy_q,
     output logic signed [31:0] ctx_tx_q,
     output logic signed [31:0] ctx_ty_q,
     output logic [15:0] dbg_di_hit_q,
     output logic [15:0] dbg_di_miss_q,
-    output logic [15:0] dbg_div_n_q,
-    output logic [15:0] dbg_json_ovf_q,
-    output logic [15:0] dbg_path_ovf_q,
     output logic [7:0] fault_code_q,
     output logic [15:0] fault_site_q,
     output logic [31:0] fault_arg_q,   // G-line: the value that faulted (index/nid)
     output logic [18:0] fb_dump_addr_q,
-    output logic fb_dump_sel_q,
     output logic fb_swap_q,
-    output logic [7:0] fill_style_i_q,
-    output logic [7:0] stroke_style_i_q,
     output logic [11:0] hp_aid_q,
     output logic [7:0] hp_alen_q,
     output logic [6:0] hp_aslot_q,
@@ -167,12 +160,9 @@ module jmr_js_vm_exec64 (
     output logic [15:0] hp_spr_h_q,
     output logic [15:0] hp_spr_w_q,
     output logic [4:0] hp_ss_q,
-    output logic [2:0] hp_tag_q,
     output logic [5:0] hp_tn_q,
-    output logic hp_v64_q,
     output logic [11:0] hp_vbase_q,
     output logic [63:0] hp_wval_q,
-    output logic imgd_armed_q,
     output logic [9:0] imgd_h_q,
     output logic [18:0] imgd_i_q,
     output logic [18:0] imgd_n_q,
@@ -193,7 +183,6 @@ module jmr_js_vm_exec64 (
     output logic [13:0] json_src_q,
     output logic [13:0] json_srclen_q,
     output logic [13:0] json_wp_q,
-    output logic looping_q,
     output logic machine_fault_q,
     output logic [63:0] minmax_acc_q,
     // Bytes of HTML the console made available at SRC_SRAM_BASE. A wire,
@@ -225,16 +214,14 @@ module jmr_js_vm_exec64 (
     output logic minmax_is_min_q,
     output logic [7:0] minmax_k_q,
     output logic [7:0] minmax_n_q,
-    output logic namcpy_armed_q,
     output logic namcpy_repl_q,
     output logic namcpy_v64_q,
     output logic [15:0] name_rdaddr_q,
-    output logic path_active_q,
-    // potential-bugs #49: the parent owns the pc_* arrays that S_PWALK /
+    // The parent owns the pc_* arrays that S_PWALK /
     // S_PDO / S_LINE / S_CIRCLE / S_QSEG raster from, but nothing ever wrote
     // them (pc_n stuck at 0 => S_PWALK aborted on its first beat and every
     // path primitive painted nothing). Mirror this exec's writes out.
-    // potential-bugs #54: JSON.stringify seeds vjs_val[0] via js_we into
+    // JSON.stringify seeds vjs_val[0] via js_we into
     // exec's OWN copy; the parent S_V64_JSON arm walks the PARENT copy.
     // Mirror the write out (same shape as the #49 pc_we mirror).
     output logic js_we_q,
@@ -251,25 +238,15 @@ module jmr_js_vm_exec64 (
     output logic signed [31:0] pc_a4_wdata_q,
     output logic signed [31:0] pc_a5_wdata_q,
     output logic pc_ccw_wdata_q,
-    output logic [1:0] path_kind_q,
     output logic path_stroke_q,
     output logic [4:0] pc_n_q,
-    output logic [4:0] pi_q,
-    output logic repl_did_q,
     output logic repl_g_q,
-    output logic [7:0] repl_nlen_q,
     output logic [7:0] repl_pat0_q,
-    output logic [7:0] repl_pat1_q,
     output logic [7:0] repl_rch_q,
     output logic [9:0] rh_q,
-    output logic running_q,
     output logic [9:0] rw_q,
     output logic signed [11:0] rx_q,
     output logic signed [11:0] ry_q,
-    output logic signed [31:0] saved_sx_q,
-    output logic signed [31:0] saved_sy_q,
-    output logic signed [31:0] saved_tx_q,
-    output logic signed [31:0] saved_ty_q,
     output logic [4:0] sq_i_q,
     output logic [47:0] sq_rad_q,
     output logic [25:0] sq_rem_q,
@@ -283,7 +260,6 @@ module jmr_js_vm_exec64 (
     output logic [2:0] txt_vt_q,
     output logic v64_concat_q,
     output logic v64_join_q,
-    output logic v64_repl_q,
     output logic v64_sqrt_q,
     output logic [7:0] valloc_arr_n_q,
     output logic valloc_bind_q,
@@ -300,14 +276,12 @@ module jmr_js_vm_exec64 (
     output logic valloc_regex_q,
     output logic [31:0] valloc_regex_pack_q,
     output logic valloc_retried_q,
-    output logic [13:0] varr_next_q,
     output logic [11:0] vcall_argc_q,
     output logic [63:0] vcall_ctor_val_q,
     output logic [15:0] vcall_entry_q,
     output logic vcall_set_this_q,
     output logic [63:0] vcall_this_q,
     output logic vcall_value_q,
-    output logic [8:0] vconsole_n_q,
     output logic [7:0] vcsp_q,
     output logic [7:0] vdiv_count_q,
     output logic [52:0] vdiv_den_q,
@@ -323,7 +297,6 @@ module jmr_js_vm_exec64 (
     output logic [9:0] vdraw_x_q,
     output logic [9:0] vdraw_y_q,
     output logic [63:0] venv_q,
-    output logic [9:0] venv_next_q,
     output logic [63:0] vfe_arr_q,
     output logic [11:0] vfe_base_q,
     output logic [63:0] vfe_fn_q,
@@ -333,15 +306,11 @@ module jmr_js_vm_exec64 (
     output logic [1:0] vfe_mode_q,
     output logic [15:0] vfe_ret_q,
     output logic [3:0] vfe_sp_q,
-    output logic vfree_armed_q,
-    output logic vfree_arr_long_q,
     output logic [13:0] vgc_clear_i_q,
     output logic vgc_halt_after_q,
     output logic [13:0] vgc_qr_q,
     output logic [13:0] vgc_qw_q,
-    output logic [1:0] vgc_resume_q,
     output logic vgc_wait_after_q,
-    output logic vjs_rd_arm_q,
     output logic [4:0] vlistener_n_q,
     output logic [31:0] vmetrics_w_q,
     output logic [11:0] vmod_count_q,
@@ -352,10 +321,8 @@ module jmr_js_vm_exec64 (
     output logic [11:0] vnat_base_q,
     output logic [2:0] vnat_dom_q,
     output logic vprom_copy_q,
-    output logic vprom_done_q,
     output logic [6:0] vprom_ret_q,
     output logic [3:0] vraf_n_q,
-    output logic [31:0] vrng_q,
     output logic [11:0] vsp_q,
     output logic vst_hold_win_q,
     output logic vst_refill_arm_q,
@@ -365,58 +332,11 @@ module jmr_js_vm_exec64 (
     output logic [63:0] vst_wdata_q,
     output logic vst_we_q,
     output logic [63:0] vthis_q,
-    output logic [6:0] vtimer_n_q,
-    output logic [31:0] vtimer_seq_q,
     output logic [9:0] x_q,
     output logic [9:0] y_q,
     output logic p_clr_busy_q,
-    input  logic p_aset_win_retried,
-    input  logic [7:0] p_bind_argc,
-    input  logic [11:0] p_bind_base,
-    input  logic [15:0] p_bind_ip,
-    input  logic [7:0] p_bind_k,
-    input  logic [1:0] p_bind_mode,
-    input  logic [7:0] p_bind_n,
-    input  logic p_bind_rd_arm,
-    input  logic [6:0] p_bind_ret,
-    input  logic [11:0] p_bind_src,
-    input  logic [11:0] p_bind_vsp_next,
-    input  logic [15:0] p_blit_sh,
-    input  logic [7:0] p_blit_si,
-    input  logic [15:0] p_blit_sw,
-    input  logic [15:0] p_blit_sx,
-    input  logic [15:0] p_blit_sy,
-    input  logic [2:0] p_cc_at,
-    input  logic signed [31:0] p_cc_av,
-    input  logic p_cc_bok,
-    input  logic [2:0] p_cc_bt,
-    input  logic signed [31:0] p_cc_bv,
-    input  logic [3:0] p_cc_d,
-    input  logic [15:0] p_cc_h,
-    input  logic [7:0] p_cc_len,
-    input  logic p_cc_second,
-    input  logic [1:0] p_cc_st,
     input  logic [14:0] p_code_raddr,
     input  logic [31:0] code_rdata,
-    input  logic [7:0] p_color,
-    input  logic [1:0] p_ctx_align,
-    input  logic p_ctx_smooth,
-    input  logic signed [31:0] p_ctx_sx,
-    input  logic signed [31:0] p_ctx_sy,
-    input  logic signed [31:0] p_ctx_tx,
-    input  logic signed [31:0] p_ctx_ty,
-    input  logic [15:0] p_dbg_di_hit,
-    input  logic [15:0] p_dbg_di_miss,
-    input  logic [15:0] p_dbg_div_n,
-    input  logic [15:0] p_dbg_json_ovf,
-    input  logic [15:0] p_dbg_path_ovf,
-    input  logic [15:0] dbg_str_ovf,
-    input  logic [7:0] p_fault_code,
-    input  logic [18:0] p_fb_dump_addr,
-    input  logic p_fb_dump_sel,
-    input  logic p_fb_swap,
-    input  logic [7:0] p_fill_style_i,
-    input  logic [7:0] p_stroke_style_i,
     input  logic [11:0] p_hp_aid,
     input  logic [7:0] p_hp_alen,
     input  logic [6:0] p_hp_aslot,
@@ -432,7 +352,6 @@ module jmr_js_vm_exec64 (
     input  logic [3:0] p_hp_nat,
     input  logic [12:0] p_hp_oid,
     input  logic [2:0] p_hp_phase,
-    input  logic [63:0] p_hp_proto,
     input  logic [2:0] p_hp_qi,
     input  logic [63:0] p_hp_qk_pack,
     input  logic [2:0] p_hp_qn,
@@ -445,9 +364,7 @@ module jmr_js_vm_exec64 (
     input  logic [15:0] p_hp_spr_h,
     input  logic [15:0] p_hp_spr_w,
     input  logic [4:0] p_hp_ss,
-    input  logic [2:0] p_hp_tag,
     input  logic [5:0] p_hp_tn,
-    input  logic p_hp_v64,
     input  logic [11:0] p_hp_vbase,
     input  logic [63:0] p_hp_wval,
     input  logic [15:0] id_ael,
@@ -469,8 +386,7 @@ module jmr_js_vm_exec64 (
     input  logic [15:0] id_filter,
     input  logic [15:0] id_slice, // #40 Array.slice
     input  logic [15:0] id_sort, // #41 Array.sort
-    output logic vfe_sort_q,
-    input  logic [15:0] id_reduce, // potential-bugs #39: Array.reduce
+    input  logic [15:0] id_reduce, // Array.reduce
     output logic vfe_reduce_q,
     output logic vfe_findidx_q,
     input  logic [15:0] id_find,
@@ -505,6 +421,7 @@ module jmr_js_vm_exec64 (
     input  logic [15:0] id_splice,
     input  logic [15:0] id_src,
     input  logic [15:0] id_str_function,
+    input  logic [15:0] id_str_boolean,
     input  logic [15:0] id_str_number,
     input  logic [15:0] id_str_object,
     input  logic [15:0] id_str_string,
@@ -521,39 +438,11 @@ module jmr_js_vm_exec64 (
     input  logic [15:0] id_unshift,
     input  logic [15:0] id_white,
     input  logic [15:0] id_width,
-    input  logic p_imgd_armed,
-    input  logic [9:0] p_imgd_h,
-    input  logic [18:0] p_imgd_i,
-    input  logic [18:0] p_imgd_n,
-    input  logic p_imgd_v64,
-    input  logic [9:0] p_imgd_w,
-    input  logic [9:0] p_imgd_x,
-    input  logic [9:0] p_imgd_x0,
-    input  logic [9:0] p_imgd_y,
-    input  logic [9:0] p_imgd_y0,
     input  logic [15:0] p_ip,
-    input  logic [11:0] p_jn_arr,
-    input  logic [15:0] p_jn_h,
-    input  logic [15:0] p_jn_i,
-    input  logic [10:0] p_jn_res,
     input  logic [5:0] joy_in,
     input  logic [7:0] analog_x,
     input  logic [7:0] analog_y,
     input  logic [4:0] joy_btn,
-    input  logic [5:0] p_js_sp,
-    input  logic [2:0] p_json_pph,
-    input  logic [13:0] p_json_rp,
-    input  logic [13:0] p_json_src,
-    input  logic [13:0] p_json_srclen,
-    input  logic [13:0] p_json_wp,
-    input  logic p_looping,
-    input  logic p_machine_fault,
-    input  logic [63:0] p_minmax_acc,
-    input  logic [11:0] p_minmax_base,
-    input  logic p_minmax_is_min,
-    input  logic [7:0] p_minmax_k,
-    input  logic [7:0] p_minmax_n,
-    input  logic [4:0] n_cls,
     output logic cm_req_q,
     output logic [15:0] cm_key_q,
     output logic [15:0] cm_cls_q,
@@ -569,14 +458,9 @@ module jmr_js_vm_exec64 (
     input  logic [15:0] n_consts,
     input  logic [15:0] n_ops,
     input  logic [4:0] n_spr,
-    input  logic p_namcpy_armed,
-    input  logic p_namcpy_repl,
-    input  logic p_namcpy_v64,
-    input  logic [15:0] p_name_rdaddr,
     input  logic [15:0] name_blen_rdata,
     input  logic [15:0] name_hash_rdata,
     // Parent-owned JS heap: rdata next clock. Do not combo-index mem[i].
-    input  logic [7:0] name_rdata,
     input  logic [15:0] name_off_rdata,
     input  logic [63:0] vvars_rdata,
     input  logic vvar_valid_rdata,
@@ -587,7 +471,6 @@ module jmr_js_vm_exec64 (
     input  logic varr_valid_rdata,
     input  logic [11:0] varr_gen_rdata,
     input  logic varr_long_rdata,
-    input  logic [7:0] varr_lidx_rdata,
     input  logic [1:0] vobj_alloc_rdata,
     input  logic [11:0] vobj_gen_rdata,
     input  logic [63:0] vobj_proto_rdata,
@@ -601,7 +484,6 @@ module jmr_js_vm_exec64 (
     input  logic [5:0] vfn_nparam_rdata,
     input  logic [15:0] vfn_entry_rdata,
     input  logic [2:0] vfn_flags_rdata,
-    input  logic [63:0] vfn_bound_this_rdata,
     input  logic [63:0] vconsts_rdata,
     input  logic [15:0] vframe_rip_rdata,
     input  logic [11:0] vframe_bsp_rdata,
@@ -610,51 +492,18 @@ module jmr_js_vm_exec64 (
     input  logic [63:0] vframe_env_rdata,
     input  logic [63:0] vframe_fn_rdata,
     input  logic [63:0] vframe_ctor_rdata,
+    input  logic vframe_setter_rdata,
     input  logic [7:0] fill_lut_rdata,
     input  logic vtimer_valid_rdata,
     input  logic signed [31:0] vtimer_id_rdata,
+    input logic names_ready,
     input  logic [15:0] names_n,
     input  logic [15:0] ops_base,
-    input  logic p_path_active,
-    input  logic [1:0] p_path_kind,
-    input  logic p_path_stroke,
-    input  logic [4:0] p_pc_n,
-    input  logic [4:0] p_pi,
-    input  logic p_repl_did,
-    input  logic p_repl_g,
-    input  logic [7:0] p_repl_nlen,
-    input  logic [7:0] p_repl_pat0,
-    input  logic [7:0] p_repl_pat1,
-    input  logic [7:0] p_repl_rch,
-    input  logic [9:0] p_rh,
-    input  logic p_running,
-    input  logic [9:0] p_rw,
-    input  logic signed [11:0] p_rx,
-    input  logic signed [11:0] p_ry,
-    input  logic signed [31:0] p_saved_sx,
-    input  logic signed [31:0] p_saved_sy,
-    input  logic signed [31:0] p_saved_tx,
-    input  logic signed [31:0] p_saved_ty,
-    input  logic [10:0] sp,
     input  logic [255:0] spr_hh_pack,
     input  logic [255:0] spr_nid_pack,
     input  logic [255:0] spr_ww_pack,
-    input  logic [4:0] p_sq_i,
-    input  logic [47:0] p_sq_rad,
-    input  logic [25:0] p_sq_rem,
-    input  logic [23:0] p_sq_root,
     input  logic [6:0] p_state,
     input  logic this_ok,
-    input  logic [6:0] p_txt_bn,
-    input  logic [3:0] p_txt_ph,
-    input  logic signed [15:0] p_txt_px,
-    input  logic signed [15:0] p_txt_py,
-    input  logic [31:0] p_txt_val,
-    input  logic [2:0] p_txt_vt,
-    input  logic p_v64_concat,
-    input  logic p_v64_join,
-    input  logic p_v64_repl,
-    input  logic p_v64_sqrt,
     input  logic [7:0] p_valloc_arr_n,
     input  logic p_valloc_bind,
     input  logic [12:0] p_valloc_bind_src,
@@ -671,22 +520,13 @@ module jmr_js_vm_exec64 (
     input  logic [31:0] p_valloc_regex_pack,
     input  logic p_valloc_retried,
     input  logic [8:0] var_this,
-    input  logic [13:0] p_varr_next,
     input  logic [11:0] p_vcall_argc,
     input  logic [63:0] p_vcall_ctor_val,
     input  logic [15:0] p_vcall_entry,
     input  logic p_vcall_set_this,
     input  logic [63:0] p_vcall_this,
     input  logic p_vcall_value,
-    input  logic [8:0] p_vconsole_n,
     input  logic [7:0] p_vcsp,
-    input  logic [7:0] p_vdiv_count,
-    input  logic [52:0] p_vdiv_den,
-    input  logic signed [12:0] p_vdiv_exp,
-    input  logic [106:0] p_vdiv_num,
-    input  logic [106:0] p_vdiv_quot,
-    input  logic [53:0] p_vdiv_rem,
-    input  logic p_vdiv_sign,
     input  logic [7:0] p_vdraw_color,
     input  logic [9:0] p_vdraw_h,
     input  logic [18:0] p_vdraw_i,
@@ -694,64 +534,33 @@ module jmr_js_vm_exec64 (
     input  logic [9:0] p_vdraw_x,
     input  logic [9:0] p_vdraw_y,
     input  logic [63:0] p_venv,
-    input  logic [9:0] p_venv_next,
-    input  logic [63:0] p_vfe_arr,
-    input  logic [11:0] p_vfe_base,
-    input  logic [63:0] p_vfe_fn,
     input  logic [7:0] p_vfe_i,
-    input  logic [63:0] p_vfe_map,
-    input  logic [1:0] p_vfe_mode,
-    input  logic [15:0] p_vfe_ret,
-    input  logic [3:0] p_vfe_sp,
     input  logic [13:0] vfn_next,
     input  logic [31:0] vframe_no,
-    input  logic p_vfree_armed,
-    input  logic p_vfree_arr_long,
     input  logic vfree_ok,
     input  logic [13:0] p_vgc_clear_i,
     input  logic p_vgc_halt_after,
     input  logic [13:0] p_vgc_qr,
     input  logic [13:0] p_vgc_qw,
-    input  logic [1:0] p_vgc_resume,
     input  logic p_vgc_wait_after,
-    input  logic p_vjs_rd_arm,
     input  logic [4:0] p_vlistener_n,
     input  logic [63:0] vmetrics,
-    input  logic [31:0] p_vmetrics_w,
     input  logic [3:0] text_font_scale,
-    input  logic [11:0] p_vmod_count,
-    input  logic [52:0] p_vmod_den,
-    input  logic signed [12:0] p_vmod_exp,
-    input  logic [52:0] p_vmod_rem,
-    input  logic p_vmod_sign,
     input  logic [11:0] p_vnat_base,
     input  logic [2:0] p_vnat_dom,
     input  logic [13:0] vobj_next,
-    input  logic p_vprom_copy,
     input  logic p_vprom_done,
-    input  logic [6:0] p_vprom_ret,
     input  logic [3:0] p_vraf_n,
-    input  logic [31:0] p_vrng,
     input  logic [11:0] p_vsp,
-    input  logic p_vst_hold_win,
-    input  logic p_vst_refill_arm,
-    input  logic [3:0] p_vst_refill_i,
-    input  logic [6:0] p_vst_refill_ret,
-    input  logic [11:0] p_vst_waddr,
-    input  logic [63:0] p_vst_wdata,
-    input  logic p_vst_we,
     input  logic [1023:0] vst_win_pack,
     input  logic [63:0] p_vthis,
     input  logic [6:0] p_vtimer_n,
     input  logic [31:0] p_vtimer_seq,
-    input  logic [9:0] p_x,
-    input  logic [9:0] p_y,
     output logic json_mem_we_q,
     output logic [12:0] json_mem_waddr_q,
     output logic [7:0] json_mem_wdata_q,
     // Parent-owned name SRAM: local raddr, registered *_q (never combo raddr ports).
     output logic [8:0] vvars_raddr_q,
-    output logic [9:0] venv_raddr_q,
     output logic [11:0] varr_raddr_q,
     output logic [12:0] vobj_raddr_q,
     output logic [12:0] vfn_raddr_q,
@@ -837,25 +646,12 @@ module jmr_js_vm_exec64 (
     input  logic p_clr,
     input  logic p_we,
     input  logic [5:0] p_sel,
-    input  logic [15:0] p_addr,
-    input  logic [15:0] p_addr2,
-    input  logic [63:0] p_data,
-    input  logic [63:0] p_data2,
-    input  logic [63:0] p_data3,
-    input  logic [63:0] p_data4,
-    input  logic [63:0] p_data5,
     input  logic p_frame_we,
     input  logic [6:0] p_frame_idx,
-    input  logic [15:0] p_frame_rip,
-    input  logic [11:0] p_frame_bsp,
-    input  logic p_frame_esc,
-    input  logic [63:0] p_frame_this,
-    input  logic [63:0] p_frame_env,
-    input  logic [63:0] p_frame_fn,
     input  logic [63:0] p_frame_ctor
 );
 
-    /* run-59 piece 0 (opw_q): EXEC and every non-fetch state read the op
+    /* opw_q: EXEC and every non-fetch state read the op
        word from a register captured during S_FETCH_WAIT, not the live code
        BRAM output. Bit-identical today (nothing refetches mid-op); it
        frees the code port so piece 1 can prefetch op N+1 during EXEC
@@ -864,6 +660,7 @@ module jmr_js_vm_exec64 (
     logic        opw_cap_n; // piece 1: central-skip capture pulse (comb)
     logic [31:0] dbg_pf_n /*verilator public_flat_rd*/; // skips taken
     logic [15:0] dbg_pf_last_ip /*verilator public_flat_rd*/; // ip of last skip (the op skipped INTO)
+`ifdef JMR_PF_SKIP
     logic        dbg_pfa_c, dbg_pfb_c, dbg_pfc_c; // cascade probes (comb)
     logic [14:0] pf_addr_s; // probe copy
     logic [31:0] dbg_pfa /*verilator public_flat_rd*/;
@@ -872,7 +669,7 @@ module jmr_js_vm_exec64 (
     logic [15:0] dbg_pf_addr /*verilator public_flat_rd*/;
     logic [15:0] dbg_pf_want /*verilator public_flat_rd*/;
     logic [15:0] dbg_pf_mask /*verilator public_flat_rd*/;
-    logic [15:0] dbg_pf_want2 /*verilator public_flat_rd*/;
+`endif
     logic        pf_ok; // port-streams-ip+1 provenance (see mirror + skip)
     logic        post_parent_q; // one-shot: first op after a PARENT-flow
                                 // return must take the real fetch-wait (its
@@ -904,6 +701,7 @@ module jmr_js_vm_exec64 (
             dbg_pf_n <= dbg_pf_n + 32'd1;
             dbg_pf_last_ip <= ip_n;
         end
+`ifdef JMR_PF_SKIP
         if (enable && dbg_pfa_c) dbg_pfa <= dbg_pfa + 32'd1;
         if (enable && dbg_pfb_c) dbg_pfb <= dbg_pfb + 32'd1;
         if (enable && dbg_pfb_c && dbg_pf_want == 16'd0) begin
@@ -912,6 +710,7 @@ module jmr_js_vm_exec64 (
             dbg_pf_mask <= {15'd0, hs_m_code};
         end
         if (enable && dbg_pfc_c) dbg_pfc <= dbg_pfc + 32'd1;
+`endif
     end
     always_ff @(posedge clk)
         // BEAT-gated (caught by the PF checker on first run: ungated, the
@@ -922,7 +721,15 @@ module jmr_js_vm_exec64 (
         // FIRST op's capture entirely). Skip-capture: beat-edge only.
         if ((state == S_FETCH_WAIT) || (enable && opw_cap_n))
             opw_q <= code_rdata;
-    wire [31:0] opw = (state == S_FETCH_WAIT) ? code_rdata : opw_q;
+    wire [31:0] opw_raw = (state == S_FETCH_WAIT) ? code_rdata : opw_q;
+    // JSB2 prepared method retains its original name and argument width.
+    wire [31:0] opw = (opw_raw[7:0] == OP_CALL_METH) ?
+        (opw_raw & 32'hff7fffff) : opw_raw;
+    logic callref_done;
+    always_ff @(posedge clk) begin
+        if (!rst_n || p_clr || state == S_FETCH_WAIT || (enable && opw_cap_n) || opw_raw[7:0]!=OP_CALL_METH || !opw_raw[23]) callref_done <= 0;
+        else if (enable && state_n == S_V64_CALLREF) callref_done <= 1;
+    end
     assign opw_out = opw;
     // piece 1 fast-path class: the prefetched op's operand pre-latch needs
     // only code bits (or nothing) — no vsp-relative addressing, no heap or
@@ -945,7 +752,6 @@ module jmr_js_vm_exec64 (
     // SRAM we/waddr/wdata are local; parent sees *_q (opcode comb assigns no ports).
     // Dedicated raddr comb writes these locals; always_ff *_q to parent.
     logic [8:0] vvars_raddr;
-    logic [9:0] venv_raddr;
     logic [11:0] varr_raddr;
     logic [12:0] vobj_raddr;
     logic [12:0] vfn_raddr;
@@ -1098,9 +904,7 @@ module jmr_js_vm_exec64 (
     logic [15:0] hp_spr_h_n;
     logic [15:0] hp_spr_w_n;
     logic [4:0] hp_ss_n;
-    logic [2:0] hp_tag_n;
     logic [5:0] hp_tn_n;
-    logic hp_v64_n;
     logic [11:0] hp_vbase_n;
     logic [63:0] hp_wval_n;
     logic imgd_armed_n;
@@ -1178,7 +982,6 @@ module jmr_js_vm_exec64 (
     logic [2:0] txt_vt_n;
     logic v64_concat_n;
     logic v64_join_n;
-    logic v64_repl_n;
     logic v64_sqrt_n;
     logic [7:0] valloc_arr_n_n;
     logic valloc_bind_n;
@@ -1259,8 +1062,6 @@ module jmr_js_vm_exec64 (
     logic vst_refill_arm_n;
     logic [3:0] vst_refill_i_n;
     logic [6:0] vst_refill_ret_n;
-    logic [11:0] vst_waddr_n;
-    logic [63:0] vst_wdata_n;
     logic vst_we_n;
     logic [63:0] vthis_n;
     logic [6:0] vtimer_n_n;
@@ -1268,7 +1069,7 @@ module jmr_js_vm_exec64 (
     logic [9:0] x_n;
     logic [9:0] y_n;
 
-    // 2026-08-22: the class tables left this exec. Method lookup is a
+    // The class tables left this exec. Method lookup is a
     // request to the parent's sequential scanner: cm_scan/cm_key/cm_cls
     // are exported as a level request; the parent walks its own tables
     // and answers on cm_res_we/cm_res_mip (comb inputs — a poke would be
@@ -1366,10 +1167,47 @@ module jmr_js_vm_exec64 (
     // Native arguments are pipeline operands, not a second VM stack. The
     // original stack remains authoritative for calls, returns and GC.
     logic [63:0] call_arg_q [0:9];
+    logic arg_spill_busy;
+    logic arg_native_uses_capture;
+    always_comb begin
+        arg_native_uses_capture = 1'b1;
+        // These services consume no captured argument (min/max already
+        // walk the stack). Preserve their existing wide-call cycles too.
+        case(opw_q[15:8])
+          8'd0,8'd3,8'd4,8'd5,8'd6,8'd7,8'd8,8'd9,
+          8'd12,8'd13,8'd14,8'd21,8'd22,8'd25,8'd26,
+          8'd32,8'd33,8'd35,8'd43,8'd51,8'd52,8'd53,8'd70:
+            arg_native_uses_capture = 1'b0;
+          default: ;
+        endcase
+    end
+    logic [3:0] arg_spill_k;
+    logic [1:0] arg_spill_phase;
+    assign arg_stack_read = arg_spill_busy && enable && !leave_hold;
+    assign arg_stack_addr = vsp_hs - {4'd0,opw_q[31:24]}
+        - (opw_q[7:0] == OP_CALL_METH ? 12'd1 : 12'd0)
+        + {8'd0,arg_spill_k};
     assign fs_arg_value=call_arg_q[fs_arg_index];
     always_ff @(posedge clk) begin
-        if (enable && !leave_hold && opnd_q && !opnd2_q &&
+        if (!rst_n || p_clr || !enable || leave_hold) begin
+            arg_spill_busy <= 1'b0; arg_spill_k <= 4'd0; arg_spill_phase <= 2'd0;
+        end else if (arg_spill_busy) begin
+            if (arg_spill_phase != 2'd2) arg_spill_phase <= arg_spill_phase + 2'd1;
+            else begin
+                logic signed [12:0] rel;
+                rel = $signed({5'd0,opw_q[31:24]}) - 13'(arg_spill_k)
+                    - (opw_q[7:0] == OP_CALL ? 13'd1 : 13'd0);
+                call_arg_q[arg_spill_k] <= rel >= 0 && rel < 16
+                    ? vst_s[rel[3:0]] : arg_stack_data;
+                arg_spill_phase <= 2'd0;
+                if (arg_spill_k == 4'd9) arg_spill_busy <= 1'b0;
+                else arg_spill_k <= arg_spill_k + 4'd1;
+            end
+        end else if (opnd_q && !opnd2_q &&
             (opw_q[7:0] == OP_CALL || opw_q[7:0] == OP_CALL_METH)) begin
+            arg_spill_busy <= (opw_q[7:0] == OP_CALL_METH || arg_native_uses_capture) &&
+                opw_q[31:24] > (opw_q[7:0] == OP_CALL ? 8'd16 : 8'd15);
+            arg_spill_k <= 4'd0; arg_spill_phase <= 2'd0;
             for (int k = 0; k < 10; k++) begin : capture_call_arg
                 logic signed [12:0] rel;
                 rel = $signed({5'd0, opw_q[31:24]}) - 13'(k)
@@ -1543,7 +1381,6 @@ module jmr_js_vm_exec64 (
 
     // Working regs clock here. Parent sees *_q / leave_hold, not combo *_n.
     logic aset_win_retried;
-    assign aset_win_retried_q = aset_win_retried;
     // CALL_METH fillRect: one SRAM window refill when obj_ok is false.
     logic cm_win /*verilator public_flat_rd*/;
     logic [7:0] bind_argc;
@@ -1610,7 +1447,6 @@ module jmr_js_vm_exec64 (
     logic [1:0] ctx_baseline, ctx_baseline_n;
     assign ctx_baseline_q = ctx_baseline;
     logic ctx_smooth;
-    assign ctx_smooth_q = ctx_smooth;
     logic signed [31:0] ctx_sx;
     assign ctx_sx_q = ctx_sx;
     logic signed [31:0] ctx_sy;
@@ -1624,11 +1460,8 @@ module jmr_js_vm_exec64 (
     logic [15:0] dbg_di_miss;
     assign dbg_di_miss_q = dbg_di_miss;
     logic [15:0] dbg_div_n;
-    assign dbg_div_n_q = dbg_div_n;
     logic [15:0] dbg_json_ovf;
-    assign dbg_json_ovf_q = dbg_json_ovf;
     logic [15:0] dbg_path_ovf;
-    assign dbg_path_ovf_q = dbg_path_ovf;
     logic [7:0] fault_code /*verilator public_flat_rd*/;
     assign fault_code_q = fault_code;
     assign fault_site_q = fault_site;
@@ -1636,13 +1469,10 @@ module jmr_js_vm_exec64 (
     logic [18:0] fb_dump_addr;
     assign fb_dump_addr_q = fb_dump_addr;
     logic fb_dump_sel;
-    assign fb_dump_sel_q = fb_dump_sel;
     logic fb_swap;
     assign fb_swap_q = fb_swap;
     logic [7:0] fill_style_i;
-    assign fill_style_i_q = fill_style_i;
     logic [7:0] stroke_style_i;
-    assign stroke_style_i_q = stroke_style_i;
     logic [11:0] hp_aid;
     assign hp_aid_q = hp_aid;
     logic [7:0] hp_alen;
@@ -1704,18 +1534,13 @@ module jmr_js_vm_exec64 (
     assign hp_spr_w_q = hp_spr_w;
     logic [4:0] hp_ss;
     assign hp_ss_q = hp_ss;
-    logic [2:0] hp_tag;
-    assign hp_tag_q = hp_tag;
     logic [5:0] hp_tn;
     assign hp_tn_q = hp_tn;
-    logic hp_v64;
-    assign hp_v64_q = hp_v64;
     logic [11:0] hp_vbase;
     assign hp_vbase_q = hp_vbase;
     logic [63:0] hp_wval;
     assign hp_wval_q = hp_wval;
     logic imgd_armed;
-    assign imgd_armed_q = imgd_armed;
     logic [9:0] imgd_h;
     assign imgd_h_q = imgd_h;
     logic [18:0] imgd_i;
@@ -1759,7 +1584,6 @@ module jmr_js_vm_exec64 (
     logic [13:0] json_wp;
     assign json_wp_q = json_wp;
     logic looping;
-    assign looping_q = looping;
     logic machine_fault /*verilator public_flat_rd*/;
     assign machine_fault_q = machine_fault;
     logic [63:0] minmax_acc;
@@ -1810,7 +1634,6 @@ module jmr_js_vm_exec64 (
     logic [7:0] minmax_n;
     assign minmax_n_q = minmax_n;
     logic namcpy_armed;
-    assign namcpy_armed_q = namcpy_armed;
     logic namcpy_repl;
     assign namcpy_repl_q = namcpy_repl;
     logic namcpy_v64;
@@ -1818,9 +1641,7 @@ module jmr_js_vm_exec64 (
     logic [15:0] name_rdaddr;
     assign name_rdaddr_q = name_rdaddr;
     logic path_active;
-    assign path_active_q = path_active;
     logic [1:0] path_kind;
-    assign path_kind_q = path_kind;
     logic path_stroke;
     assign path_stroke_q = path_stroke;
     logic signed [31:0] pc_a1 [0:PATH_MAX-1];
@@ -1833,23 +1654,18 @@ module jmr_js_vm_exec64 (
     assign pc_n_q = pc_n;
     logic [1:0] pc_op [0:PATH_MAX-1];
     logic [4:0] pi;
-    assign pi_q = pi;
     logic repl_did;
-    assign repl_did_q = repl_did;
     logic repl_g;
     assign repl_g_q = repl_g;
     logic [7:0] repl_nlen;
-    assign repl_nlen_q = repl_nlen;
     logic [7:0] repl_pat0;
     assign repl_pat0_q = repl_pat0;
     logic [7:0] repl_pat1;
-    assign repl_pat1_q = repl_pat1;
     logic [7:0] repl_rch;
     assign repl_rch_q = repl_rch;
     logic [9:0] rh;
     assign rh_q = rh;
     logic running;
-    assign running_q = running;
     logic [9:0] rw;
     assign rw_q = rw;
     logic signed [11:0] rx;
@@ -1857,13 +1673,9 @@ module jmr_js_vm_exec64 (
     logic signed [11:0] ry;
     assign ry_q = ry;
     logic signed [31:0] saved_sx;
-    assign saved_sx_q = saved_sx;
     logic signed [31:0] saved_sy;
-    assign saved_sy_q = saved_sy;
     logic signed [31:0] saved_tx;
-    assign saved_tx_q = saved_tx;
     logic signed [31:0] saved_ty;
-    assign saved_ty_q = saved_ty;
     logic [4:0] sq_i;
     assign sq_i_q = sq_i;
     logic [47:0] sq_rad;
@@ -1890,8 +1702,6 @@ module jmr_js_vm_exec64 (
     assign v64_concat_q = v64_concat;
     logic v64_join;
     assign v64_join_q = v64_join;
-    logic v64_repl;
-    assign v64_repl_q = v64_repl;
     logic v64_sqrt;
     assign v64_sqrt_q = v64_sqrt;
     logic [7:0] valloc_arr_n;
@@ -1925,7 +1735,6 @@ module jmr_js_vm_exec64 (
     logic valloc_retried;
     assign valloc_retried_q = valloc_retried;
     logic [13:0] varr_next;
-    assign varr_next_q = varr_next;
     logic [11:0] vcall_argc;
     assign vcall_argc_q = vcall_argc;
     logic [63:0] vcall_ctor_val;
@@ -1941,7 +1750,6 @@ module jmr_js_vm_exec64 (
     logic vcall_value;
     assign vcall_value_q = vcall_value;
     logic [8:0] vconsole_n;
-    assign vconsole_n_q = vconsole_n;
     logic [7:0] vcsp /*verilator public_flat_rd*/;
     assign vcsp_q = vcsp;
     logic [7:0] vdiv_count;
@@ -1973,7 +1781,6 @@ module jmr_js_vm_exec64 (
     logic [63:0] venv;
     assign venv_q = venv;
     logic [9:0] venv_next;
-    assign venv_next_q = venv_next;
     logic [63:0] vfe_arr;
     assign vfe_arr_q = vfe_arr;
     logic [63:0] vfe_arr_s [0:7];
@@ -2008,7 +1815,6 @@ module jmr_js_vm_exec64 (
     logic vfe_findidx_s_wdata;
     // #41 Array.sort: comparator walk; cmp result rides vfe_map.
     logic vfe_sort, vfe_sort_n;
-    assign vfe_sort_q = vfe_sort;
     logic vfe_sort_s [0:7];
     logic vfe_sort_s_wdata;
     logic [15:0] vfe_ret;
@@ -2017,9 +1823,7 @@ module jmr_js_vm_exec64 (
     logic [3:0] vfe_sp;
     assign vfe_sp_q = vfe_sp;
     logic vfree_armed;
-    assign vfree_armed_q = vfree_armed;
     logic vfree_arr_long;
-    assign vfree_arr_long_q = vfree_arr_long;
     logic [13:0] vgc_clear_i;
     assign vgc_clear_i_q = vgc_clear_i;
     logic vgc_halt_after;
@@ -2029,11 +1833,9 @@ module jmr_js_vm_exec64 (
     logic [13:0] vgc_qw;
     assign vgc_qw_q = vgc_qw;
     logic [1:0] vgc_resume;
-    assign vgc_resume_q = vgc_resume;
     logic vgc_wait_after;
     assign vgc_wait_after_q = vgc_wait_after;
     logic vjs_rd_arm;
-    assign vjs_rd_arm_q = vjs_rd_arm;
     logic [63:0] vjs_val [0:JSON_STK-1];
     logic [4:0] vlistener_n;
     assign vlistener_n_q = vlistener_n;
@@ -2056,13 +1858,11 @@ module jmr_js_vm_exec64 (
     logic vprom_copy;
     assign vprom_copy_q = vprom_copy;
     logic vprom_done;
-    assign vprom_done_q = vprom_done;
     logic [6:0] vprom_ret;
     assign vprom_ret_q = vprom_ret;
     logic [3:0] vraf_n /*verilator public_flat_rd*/;
     assign vraf_n_q = vraf_n;
     logic [31:0] vrng;
-    assign vrng_q = vrng;
     // One owner: every reset/program clear restarts the documented sequence.
     always_ff @(posedge clk)
         if (!rst_n || p_clr) vrng <= 32'h6d2b79f5;
@@ -2086,9 +1886,7 @@ module jmr_js_vm_exec64 (
     logic [63:0] vthis;
     assign vthis_q = vthis;
     logic [6:0] vtimer_n;
-    assign vtimer_n_q = vtimer_n;
     logic [31:0] vtimer_seq;
-    assign vtimer_seq_q = vtimer_seq;
     logic [9:0] x;
     assign x_q = x;
     logic [9:0] y;
@@ -2174,6 +1972,7 @@ module jmr_js_vm_exec64 (
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             leave_hold <= 1'b0;
+            vtimer_seq <= 32'd1;
             // cdone() is sticky within one program; the console clears its
             // own copy before each chained launch.
             cmp_done <= 1'b0;
@@ -2378,9 +2177,7 @@ module jmr_js_vm_exec64 (
                 hp_spr_h <= hp_spr_h_n;
                 hp_spr_w <= hp_spr_w_n;
                 hp_ss <= hp_ss_n;
-                hp_tag <= hp_tag_n;
                 hp_tn <= hp_tn_n;
-                hp_v64 <= hp_v64_n;
                 hp_vbase <= hp_vbase_n;
                 hp_wval <= hp_wval_n;
                 imgd_armed <= imgd_armed_n;
@@ -2473,7 +2270,6 @@ module jmr_js_vm_exec64 (
                 txt_vt <= txt_vt_n;
                 v64_concat <= v64_concat_n;
                 v64_join <= v64_join_n;
-                v64_repl <= v64_repl_n;
                 v64_sqrt <= v64_sqrt_n;
                 valloc_arr_n <= valloc_arr_n_n;
                 valloc_bind <= valloc_bind_n;
@@ -2586,8 +2382,10 @@ module jmr_js_vm_exec64 (
                 vst_refill_arm <= vst_refill_arm_n;
                 vst_refill_i <= vst_refill_i_n;
                 vst_refill_ret <= vst_refill_ret_n;
-                vst_waddr <= vst_waddr_n;
-                vst_wdata <= vst_wdata_n;
+                if (|vst_result_valid) begin
+                    vst_waddr <= vst_result_addr[0] | vst_result_addr[1] | vst_result_addr[2];
+                    vst_wdata <= vst_result_data[0] | vst_result_data[1] | vst_result_data[2];
+                end
                 vst_we <= vst_we_n;
                 if (hs_m_vthis) vthis <= p_vthis;
                 else vthis <= vthis_n;
@@ -2660,7 +2458,6 @@ module jmr_js_vm_exec64 (
                 vst_win0_we_q <= vst_win0_we;
                 vst_win0_wdata_q <= vst_win0_wdata;
                 vvars_raddr_q <= vvars_raddr;
-                venv_raddr_q <= venv_raddr;
                 varr_raddr_q <= varr_raddr;
                 vobj_raddr_q <= vobj_raddr;
                 vfn_raddr_q <= vfn_raddr;
@@ -2679,10 +2476,11 @@ module jmr_js_vm_exec64 (
                     post_parent_q <= 1'b0;
         end else begin
             leave_hold <= 1'b0;
-                // potential-bugs #66: parent vtimer_n is truth (see the
+                // Parent vtimer_n is truth (see the
                 // parent mirror); absorb it while frozen so fire-time
                 // frees are visible to the setTimeout full-check.
                 vtimer_n <= p_vtimer_n;
+                vtimer_seq <= p_vtimer_seq;
                 json_mem_we_q <= 1'b0;
                 name_blen_we_q <= 1'b0;
                 name_hash_we_q <= 1'b0;
@@ -2718,7 +2516,6 @@ module jmr_js_vm_exec64 (
                 end
                 if (hs_m_vsp) vsp <= p_vsp;
                 if (hs_m_hp_cmd) hp_cmd <= p_hp_cmd;
-                if (hs_m_hp_v64) hp_v64 <= p_hp_v64;
                 if (hs_m_hp_oid) hp_oid <= p_hp_oid;
                 if (hs_m_hp_aid) hp_aid <= p_hp_aid;
                 if (hs_m_hp_env) hp_env <= p_hp_env;
@@ -2734,7 +2531,6 @@ module jmr_js_vm_exec64 (
                 if (hs_m_hp_hit) hp_hit <= p_hp_hit;
                 if (hs_m_hp_ret) hp_ret <= p_hp_ret;
                 if (hs_m_hp_phase) hp_phase <= p_hp_phase;
-                if (hs_m_hp_proto) hp_proto <= p_hp_proto;
                 if (hs_m_hp_qn) hp_qn <= p_hp_qn;
                 if (hs_m_hp_qi) hp_qi <= p_hp_qi;
                 if (hs_m_hp_si) hp_si <= p_hp_si;
@@ -2746,7 +2542,6 @@ module jmr_js_vm_exec64 (
                 if (hs_m_hp_spr_w) hp_spr_w <= p_hp_spr_w;
                 if (hs_m_hp_spr_h) hp_spr_h <= p_hp_spr_h;
                 if (hs_m_hp_nat) hp_nat <= p_hp_nat;
-                if (hs_m_hp_tag) hp_tag <= p_hp_tag;
                 if (hs_m_hp_qk) begin
                     hp_qk[0] <= p_hp_qk_pack[15:0];
                     hp_qk[1] <= p_hp_qk_pack[31:16];
@@ -2797,7 +2592,7 @@ module jmr_js_vm_exec64 (
                     // cdone() is sticky; without this clear the NEXT chained
                     // program (COMPILE after the editor's F2) instantly
                     // consumes the stale status in C_CMP_WAIT — COMPILE
-                    // printed SAVED. and never compiled (sim 2026-09-01).
+                    // printed SAVED. and never compiled.
                     cmp_done <= 1'b0;
                     cmp_status <= 8'd0;
                     cmp_len <= 21'd0;
@@ -2954,113 +2749,6 @@ module jmr_js_vm_exec64 (
     `define VST_REL(addr) (((((vsp_hs)>(addr)) && (((vsp_hs)-(addr)-12'd1)<12'd16))) ? 4'((vsp_hs)-(addr)-12'd1) : 4'd0)
     `define VST_AT(addr) vst_s[`VST_REL(addr)]
 
-    function automatic logic [7:0] sat8(input logic signed [31:0] v);
-        if (v < 0) sat8 = 8'd0;
-        else if (v > 255) sat8 = 8'd255;
-        else sat8 = 8'(v);
-    endfunction
-    task automatic v64_add_task(
-        input logic [63:0] aa,
-        input logic [63:0] bb,
-        output logic [63:0] result
-    );
-        logic sa, sb, sr;
-        logic [10:0] ea, eb;
-        logic [51:0] fa, fb;
-        logic [52:0] ma, mb, mant;
-        logic [55:0] xa, xb, sig;
-        logic [56:0] sum;
-        logic [53:0] rounded;
-        // Effective exponents are 1..2046, with at most two carry-out
-        // increments before overflow. A 12-bit unsigned path covers all
-        // cases; 32-bit integer arithmetic needlessly lengthened this cone.
-        logic [11:0] er, diff;
-        logic [10:0] ef;
-        begin
-            sa = aa[63]; sb = bb[63];
-            ea = aa[62:52]; eb = bb[62:52];
-            fa = aa[51:0]; fb = bb[51:0];
-            if ((ea == 11'h7ff && fa != 0) ||
-                (eb == 11'h7ff && fb != 0) ||
-                (ea == 11'h7ff && eb == 11'h7ff && sa != sb)) begin
-                result = V64_CANON_NAN;
-            end else if (ea == 11'h7ff) begin
-                result = {sa, 11'h7ff, 52'd0};
-            end else if (eb == 11'h7ff) begin
-                result = {sb, 11'h7ff, 52'd0};
-            end else if (aa[62:0] == 0 && bb[62:0] == 0) begin
-                result = {sa & sb, 63'd0};
-            end else if (aa[62:0] == 0) begin
-                result = bb;
-            end else if (bb[62:0] == 0) begin
-                result = aa;
-            end else begin
-                ma = {1'b0, fa};
-                mb = {1'b0, fb};
-                if (ea != 0) ma[52] = 1'b1;
-                if (eb != 0) mb[52] = 1'b1;
-                xa = {ma, 3'b000};
-                xb = {mb, 3'b000};
-                // Keep xa as the larger magnitude so subtraction has no sign
-                // borrow and signed zero cancellation is deterministic.
-                if (((ea == 0) ? 1 : ea) < ((eb == 0) ? 1 : eb) ||
-                    (((ea == 0) ? 1 : ea) == ((eb == 0) ? 1 : eb) &&
-                     ma < mb)) begin
-                    sig = xa; xa = xb; xb = sig;
-                    er = (eb == 0) ? 1 : eb;
-                    diff = er - ((ea == 0) ? 1 : ea);
-                    sr = sb;
-                end else begin
-                    er = (ea == 0) ? 1 : ea;
-                    diff = er - ((eb == 0) ? 1 : eb);
-                    sr = sa;
-                end
-                xb = v64_shr_sticky(xb, diff);
-                if (sa == sb) begin
-                    sum = {1'b0, xa} + {1'b0, xb};
-                    if (sum[56]) begin
-                        sig = sum[56:1];
-                        sig[0] = sig[0] | sum[0];
-                        er = er + 1;
-                    end else
-                        sig = sum[55:0];
-                end else begin
-                    // log-depth normalize: LZC + one barrel shift, clamped
-                    // at the subnormal boundary (er floor 1) — replaces the
-                    // 55-step loop-carried shift (the -250ns class).
-                    logic [5:0] lz, shn;
-                    sig = xa - xb;
-                    if (sig == 0)
-                        sr = 1'b0;
-                    lz = 0;
-                    for (int k = 0; k <= 55; k++)
-                        if (sig[k]) lz = 6'(55 - k);
-                    if (sig != 0) begin
-                        shn = (er - 12'd1 < {6'd0, lz})
-                            ? 6'(er - 12'd1) : lz;
-                        sig = sig << shn;
-                        er = er - shn;
-                    end
-                end
-                mant = sig[55:3];
-                rounded = {1'b0, mant}
-                        + (sig[2] && (sig[1] || sig[0] || mant[0]));
-                if (rounded[53]) begin
-                    mant = rounded[53:1];
-                    er = er + 1;
-                end else
-                    mant = rounded[52:0];
-                if (er >= 2047)
-                    result = {sr, 11'h7ff, 52'd0};
-                else if (mant == 0)
-                    result = {sr, 63'd0};
-                else begin
-                    ef = (er == 1 && !mant[52]) ? 11'd0 : 11'(er);
-                    result = {sr, ef, mant[51:0]};
-                end
-            end
-        end
-    endtask
     // Frame clock (performance.now / Date.now / getTime): all three
     // opcode branches compute the SAME product, so one shared instance
     // serves them — this removes two full 53x53 comb multipliers.
@@ -3069,7 +2757,7 @@ module jmr_js_vm_exec64 (
 
     // Comb pack/normalize/round on a REGISTERED 106-bit product — the
     // 53x53 comb multiply itself (477 series CARRY4s, the -250ns path)
-    // moved to 53-beat shift-add engines (2026-08-24).
+    // moved to 53-beat shift-add engines.
     function automatic logic [63:0] v64_mul_pack(
         input logic sign,
         input logic [10:0] ea,
@@ -3133,7 +2821,7 @@ module jmr_js_vm_exec64 (
                 v64_mul_pack = {sign, ef, q[51:0]};
         end
     endfunction
-    // v64_mul_task deleted 2026-08-24: the comb 53x53 multiply moved to
+    // v64_mul_task deleted: the comb 53x53 multiply moved to
     // the fpm/nwm shift-add engines; packing lives in v64_mul_pack.
     // len<=65535 and scale<=15: exact width fits23bits. Balanced
     // shift/add avoids another multiplier beside the shared font product.
@@ -3212,119 +2900,66 @@ module jmr_js_vm_exec64 (
         v64_array_index_task(shared_index_value, shared_index_valid,
                              shared_index_result);
     end
-    task automatic v64_div_pack_task(
-        input logic sign,
-        input logic signed [12:0] exponent,
-        input logic [106:0] quot,
-        input logic [53:0] div_rem,
-        output logic [63:0] result
-    );
-        logic [52:0] mant;
-        logic [53:0] rounded;
-        logic guard, sticky;
-        // Signed exponent is 13 bits. Subtracting at most one and the
-        // possible rounding carry require 14 bits: [-4097,4096].
-        logic signed [13:0] unbiased;
-        logic [6:0] shift_minus_one;
-        logic [106:0] shifted;
-        logic tiny;
-        begin
-            unbiased = $signed({exponent[12],exponent})
-                       - (quot[54] ? 14'sd0 : 14'sd1);
-            // For subnormals the original shift simplifies exactly to
-            // -1020-exponent, independently of quot[54]. Beyond 107 all
-            // quotient bits are sticky; guard and mantissa are zero.
-            tiny = (unbiased < -14'sd1022) && (exponent < -13'sd1127);
-            if (unbiased < -14'sd1022 && !tiny)
-                shift_minus_one = 7'(-14'sd1021-$signed({exponent[12],exponent}));
-            else
-                shift_minus_one = quot[54] ? 7'd1 : 7'd0;
-            shifted = quot;
-            sticky = |div_rem;
-            // Shift one less than the mantissa shift, retaining guard in
-            // bit zero. Each barrel stage folds exactly its discarded bits
-            // into sticky, replacing 107 wide integer range comparisons.
-            for (int stage = 0; stage < 7; stage++) begin
-                if (shift_minus_one[stage]) begin
-                    case (stage)
-                        0: sticky = sticky | (|shifted[0:0]);
-                        1: sticky = sticky | (|shifted[1:0]);
-                        2: sticky = sticky | (|shifted[3:0]);
-                        3: sticky = sticky | (|shifted[7:0]);
-                        4: sticky = sticky | (|shifted[15:0]);
-                        5: sticky = sticky | (|shifted[31:0]);
-                        6: sticky = sticky | (|shifted[63:0]);
-                    endcase
-                    shifted = shifted >> (1 << stage);
-                end
-            end
-            mant = tiny ? 53'd0 : shifted[53:1];
-            guard = !tiny && shifted[0];
-            if (tiny) sticky = sticky | (|quot);
-            rounded = {1'b0, mant}
-                    + (guard && (sticky || mant[0]));
-            if (unbiased >= -14'sd1022) begin
-                if (rounded[53]) begin
-                    mant = rounded[53:1];
-                    unbiased = unbiased + 14'sd1;
-                end else
-                    mant = rounded[52:0];
-                if (unbiased > 14'sd1023)
-                    result = {sign, 11'h7ff, 52'd0};
-                else
-                    result = {sign, 11'(unbiased + 14'sd1023), mant[51:0]};
-            end else if (rounded[52]) begin
-                result = {sign, 11'd1, 52'd0};
-            end else if (rounded == 0) begin
-                result = {sign, 63'd0};
-            end else begin
-                result = {sign, 11'd0, rounded[51:0]};
-            end
-        end
-    endtask
     task automatic v64_mod_pack_task(
         input logic sign,
         input logic signed [12:0] exponent,
         input logic [52:0] remainder,
         output logic [63:0] result
     );
-        logic [52:0] mant;
-        logic [63:0] fraction;
-        integer top, unbiased, shift;
+        logic [52:0] mant, fraction;
+        logic [5:0] count;
+        logic signed [13:0] unbiased, shift;
+        logic [13:0] magnitude;
         begin
+            count = v64_norm_shift(remainder);
+            unbiased = 14'(exponent) - $signed({8'd0,count});
+            shift = 14'(exponent) + 14'sd1022;
+            magnitude = shift < 0 ? 14'(-shift) : 14'(shift);
             if (remainder == 0) begin
                 result = {sign, 63'd0};
+            end else if (unbiased >= -14'sd1022) begin
+                mant = remainder << count;
+                result = {sign, 11'(unbiased + 14'sd1023), mant[51:0]};
             end else begin
-                top = 0;
-                for (int k = 0; k < 53; k++)
-                    if (remainder[k])
-                        top = k;
-                unbiased = exponent - 52 + top;
-                if (unbiased >= -1022) begin
-                    mant = remainder << (52 - top);
-                    result = {sign, 11'(unbiased + 1023), mant[51:0]};
-                end else begin
-                    shift = exponent + 1022;
-                    if (shift >= 0)
-                        fraction = 64'(remainder) << shift;
-                    else
-                        fraction = 64'(remainder) >> (-shift);
-                    result = {sign, 11'd0, fraction[51:0]};
-                end
+                // Only the low 52 result bits are observable. A logical
+                // shift of this 53-bit input by >=53 contributes no bits.
+                if (magnitude >= 14'd53) fraction = 0;
+                else if (shift >= 0) fraction = remainder << magnitude[5:0];
+                else fraction = remainder >> magnitude[5:0];
+                result = {sign, 11'd0, fraction[51:0]};
             end
         end
     endtask
+    // Opcode-owned result lanes are disjoint. Combine them without a
+    // cross-family priority mux; retain the registered interface and beats.
+    logic [2:0] vst_result_valid;
+    logic [11:0] vst_result_addr [0:2];
+    logic [63:0] vst_result_data [0:2];
     task automatic vst_wr(input logic [11:0] addr, input logic [63:0] data);
         vst_we_n = 1'b1;
-        vst_waddr_n = addr;
-        vst_wdata_n = data;
+        vst_result_valid[0] = 1'b1;
+        vst_result_addr[0] = addr;
+        vst_result_data[0] = data;
     endtask
+    task automatic vst_number_wr(input logic [11:0] addr, input logic [63:0] data);
+        vst_we_n = 1'b1;
+        vst_result_valid[1] = 1'b1;
+        vst_result_addr[1] = addr;
+        vst_result_data[1] = data;
+    endtask
+    task automatic vst_simple_wr(input logic [11:0] addr, input logic [63:0] data);
+        vst_we_n = 1'b1;
+        vst_result_valid[2] = 1'b1;
+        vst_result_addr[2] = addr;
+        vst_result_data[2] = data;
+    endtask
+
     function automatic logic [9:0] clip_u(input logic signed [31:0] v, input int unsigned lim);
         if (v < 0) clip_u = 10'd0;
         else if (v >= lim) clip_u = 10'(lim - 1);
         else clip_u = 10'(v);
     endfunction
-    // NEW: 16-bit clamp for blit source coords (ASET sheets exceed 10 bits)
+    // 16-bit clamp for blit source coords (ASET sheets exceed 10 bits)
     function automatic logic [15:0] clip_src(input logic signed [31:0] v);
         if (v < 0) clip_src = 16'd0;
         else if (v > 32'sd65535) clip_src = 16'd65535;
@@ -3380,15 +3015,9 @@ module jmr_js_vm_exec64 (
             v64_to_fx = v[63] ? -$signed(mag) : $signed(mag);
         end
     endfunction
-    task automatic json_putc(input logic [7:0] ch);
-        if (json_wp < 14'(JSON_CAP)) begin
-            begin json_mem_we = 1'b1; json_mem_waddr = json_wp[12:0]; json_mem_wdata = ch; end
-            json_wp_n = json_wp + 14'd1;
-        end else dbg_json_ovf_n = dbg_json_ovf + 16'd1;
-    endtask
 
     // Dedicated SRAM raddr comb — not the opcode decoder (never-fake-fpga-sim).
-    // run-59 SPLIT: vconsts/vvars address from the INCOMING word
+    // SPLIT: vconsts/vvars address from the INCOMING word
     // (code_rdata — the prefetch pre-latch; their rdata is consumed only
     // by single-beat first-touch ops in the fast path). Every other raddr
     // addresses from the CAPTURED word (opw) and stays stable through
@@ -3413,7 +3042,6 @@ module jmr_js_vm_exec64 (
         vconsts_raddr = code_rdata[17:8];
         vvars_raddr = code_rdata[16:8];
 `endif
-        venv_raddr = venv_hs[9:0];
         vtimer_raddr = tmr_i_q[5:0];
         vframe_raddr = (vcsp_hs != 8'd0) ? 7'(vcsp_hs - 8'd1) : 7'd0;
         fill_lut_raddr = `VST_AT(vsp - 12'd1)[9:0];
@@ -3438,7 +3066,7 @@ module jmr_js_vm_exec64 (
             else
                 vobj_raddr = `VST_AT(cm_base)[12:0];
         end else if (opw[7:0] == OP_SET_PROP)
-            // potential-bugs #67: SET_PROP's receiver is at vsp-2 (value on
+            // SET_PROP's receiver is at vsp-2 (value on
             // top). Reading vobj_* at vsp-1 aimed the Image.src fast-path's
             // vobj_builtin check at the VALUE's string id, so the jmr:spr:N
             // match never fired: no FFC class, no sprite dims — DONKEY drew
@@ -3509,7 +3137,7 @@ module jmr_js_vm_exec64 (
         // SRAM address preparation above still sees the live FETCH word.
         // Execution itself uses the word captured on that fetch edge.
         logic [31:0] opw;
-        opw = opw_q;
+        opw = opw_q[7:0]==OP_CALL_METH ? (opw_q & 32'hff7fffff) : opw_q;
         `ifndef SYNTHESIS
         call_arg_use_check = 1'b0;
         alu_window_check = 1'b0;
@@ -3616,9 +3244,7 @@ module jmr_js_vm_exec64 (
         hp_spr_h_n = hp_spr_h;
         hp_spr_w_n = hp_spr_w;
         hp_ss_n = hp_ss;
-        hp_tag_n = hp_tag;
         hp_tn_n = hp_tn;
-        hp_v64_n = hp_v64;
         hp_vbase_n = hp_vbase;
         hp_wval_n = hp_wval;
         imgd_armed_n = imgd_armed;
@@ -3699,7 +3325,6 @@ module jmr_js_vm_exec64 (
         txt_vt_n = txt_vt;
         v64_concat_n = v64_concat;
         v64_join_n = v64_join;
-        v64_repl_n = v64_repl;
         v64_sqrt_n = v64_sqrt;
         valloc_arr_n_n = valloc_arr_n;
         valloc_bind_n = valloc_bind;
@@ -3782,8 +3407,11 @@ module jmr_js_vm_exec64 (
         vst_refill_arm_n = vst_refill_arm;
         vst_refill_i_n = vst_refill_i;
         vst_refill_ret_n = vst_refill_ret;
-        vst_waddr_n = vst_waddr;
-        vst_wdata_n = vst_wdata;
+        vst_result_valid = 3'b000;
+        for (int result_lane = 0; result_lane < 3; result_lane++) begin
+            vst_result_addr[result_lane] = 12'd0;
+            vst_result_data[result_lane] = 64'd0;
+        end
         // Pulse: holding we replayed the previous write on opnd2 / CALL_VAL.
         vst_we_n = 1'b0;
         vthis_n = vthis_hs;
@@ -3915,7 +3543,7 @@ module jmr_js_vm_exec64 (
                         // Leftover vst_we must not hold through opnd2: CALL_VAL
                         // then re-wrote MAKE_FN into TOS (nonempty IIFE fault 4).
                         vst_we_n = 1'b0;
-                        /* run-59 prefetch v2 (built from the hs-trace, not the
+                        /* Prefetch (built from the hs-trace, not the
                            handshake myth): exec64 SELF-dispatches here; opw_q
                            holds this op's word from the wait beats, so the
                            code port is free from this beat on — advance it to
@@ -3944,6 +3572,10 @@ module jmr_js_vm_exec64 (
                         opnd_n = 1'b1;
                         opnd2_n = 1'b1;
                         opnd3_n = 1'b1;
+                        state_n = S_V64_EXEC;
+                        vst_we_n = 1'b0;
+                    end else if (arg_spill_busy) begin
+                        // Only calls whose leading operands spilled below TOS.
                         state_n = S_V64_EXEC;
                         vst_we_n = 1'b0;
                     end else if (fadd_req) begin
@@ -4029,7 +3661,7 @@ module jmr_js_vm_exec64 (
                                 vfe_arr[63:48] == V64_TAG_PREFIX &&
                                 vfe_arr[47:44] == V64_KIND_ARRAY &&
                                 vfe_i != 8'd0 && vfe_i <= vfe_len) begin
-                                // potential-bugs #6: a callback body that
+                                // A callback body that
                                 // runs off n_ops (JUMP to n_ops / IIFE tail,
                                 // no trailing RET_VAL) is an implicit
                                 // `return undefined`, not the end of the
@@ -4065,7 +3697,6 @@ module jmr_js_vm_exec64 (
                                     (vfe_i - 8'd1) < varr_len_rdata)
                                 begin
                                     hp_cmd_n = HP_ASETI;
-                                    hp_v64_n = 1'b1;
                                     hp_from_stack_n = 1'b0;
                                     hp_aid_n = vfe_map[11:0];
                                     hp_aslot_n = 7'(vfe_i - 8'd1);
@@ -4149,7 +3780,6 @@ module jmr_js_vm_exec64 (
                                             varr_len_rdata)
                                     begin
                                         hp_cmd_n = HP_ASETI;
-                                        hp_v64_n = 1'b1;
                                         hp_from_stack_n = 1'b0;
                                         hp_aid_n = vfe_map[11:0];
                                         hp_aslot_n = 7'(vfe_i - 8'd1);
@@ -4237,6 +3867,11 @@ module jmr_js_vm_exec64 (
                                     ip_n = ip + 16'd1;
                                     code_raddr_n = 15'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
+                                end else if ((opw[31:24] == 8'd5 && opw[23:8] <= 16'd1) ||
+                                             (opw[31:24] == 8'd6 && opw[23:8] == 16'd0)) begin
+                                    vst_wr(vsp,opw[31:24]==8'd6 ? V64_NULL : v64_handle(V64_KIND_BOOL,12'd0,{31'd0,opw[8]}));
+                                    vsp_n=vsp+12'd1;ip_n=ip+16'd1;
+                                    code_raddr_n=15'(ops_base+ip+16'd1);state_n=S_FETCH_WAIT;
                                 end else if (opw[31:24] == 8'd4) begin
                                     // RegExp stub — keep packed /pat/g from the
                                     // const pool so String.replace can read it.
@@ -4309,10 +3944,9 @@ module jmr_js_vm_exec64 (
                                     end else begin
                                         hp_env_n = 1'b1;
                                         hp_cmd_n = HP_GETPROP;
-                                        hp_v64_n = 1'b1;
                                         hp_eid_n = venv[9:0];
                                         hp_len_n = {1'b0, venv_len_rdata};
-                                        // potential-bugs #55: the a1>=2 slot
+                                        // The a1>=2 slot
                                         // hint used to seed the scan START,
                                         // but the parent env walk runs
                                         // hint..len-1 and never revisits the
@@ -4452,10 +4086,9 @@ module jmr_js_vm_exec64 (
                                         end else begin
                                         hp_env_n = 1'b1;
                                         hp_cmd_n = HP_SETPROP;
-                                        hp_v64_n = 1'b1;
                                         hp_eid_n = venv[9:0];
                                         hp_len_n = {1'b0, venv_len_rdata};
-                                        // potential-bugs #55: the a1>=2 slot
+                                        // The a1>=2 slot
                                         // hint used to seed the scan START,
                                         // but the parent env walk runs
                                         // hint..len-1 and never revisits the
@@ -4670,6 +4303,13 @@ module jmr_js_vm_exec64 (
                                             code_raddr_n = 15'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
+                                        8'd70: begin // joy/getJoy: existing digital input snapshot
+                                            vst_wr(base, v64_int32_number({26'd0,joy_in}));
+                                            vsp_n = base + 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end
                                         8'd51, 8'd52: begin // joyX/joyY (analog-joy)
                                             vst_wr(base, v64_int32_number(
                                                 {24'd0, (nid == 8'd51) ? analog_x : analog_y}));
@@ -4704,7 +4344,7 @@ module jmr_js_vm_exec64 (
                                             code_raddr_n = 15'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
-                                        8'd55: begin // isFinite (run 71)
+                                        8'd55: begin // isFinite
                                             result = {16'h7ff9, 4'd3, 12'd0, 31'd0,
                                                       (argc != 0) && v64_is_number(call_arg_q[0]) &&
                                                       (call_arg_q[0][62:52] != 11'h7ff)};
@@ -4714,7 +4354,7 @@ module jmr_js_vm_exec64 (
                                             code_raddr_n = 15'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
-                                        8'd56: begin // isNaN (run 71): non-numbers are NaN too
+                                        8'd56: begin // isNaN: non-numbers are NaN too
                                             result = {16'h7ff9, 4'd3, 12'd0, 31'd0,
                                                       (argc == 0) || !v64_is_number(call_arg_q[0]) ||
                                                       (call_arg_q[0][62:52] == 11'h7ff &&
@@ -4725,7 +4365,7 @@ module jmr_js_vm_exec64 (
                                             code_raddr_n = 15'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
-                                        8'd57: begin // Math.ceil (run 71) = -floor(-x)
+                                        8'd57: begin // Math.ceil = -floor(-x)
                                             begin
                                                 logic [63:0] neg_floor;
                                                 neg_floor = v64_floor_number({~call_arg_q[0][63], call_arg_q[0][62:0]});
@@ -4833,7 +4473,7 @@ module jmr_js_vm_exec64 (
                                             // GC (dual copy). A tagged Fn handle
                                             // is enough to re-arm rAF (PACMAN
                                             // `requestAnimationFrame(fn)`).
-                                            // FORBIDDEN 2026-08-17: skipping
+                                            // FORBIDDEN: skipping
                                             // vfn_valid/gen is the overnight
                                             // cheat. One heap; keep gen match.
                                             if (bad_fn) begin
@@ -5106,7 +4746,6 @@ module jmr_js_vm_exec64 (
                                                        vobj_builtin_rdata == 4'd7) begin
                                                 vnat_base_n = base;
                                                 hp_cmd_n = HP_OGETI;
-                                                hp_v64_n = 1'b1;
                                                 hp_oid_n = call_arg_q[0][12:0];
                                                 hp_slot_n = 5'd0;
                                                 hp_qn_n = 3'd2;
@@ -5235,6 +4874,8 @@ module jmr_js_vm_exec64 (
                                                          arg[47:44] ==
                                                              V64_KIND_UNDEFINED)
                                                     tn = id_str_undef;
+                                                else if (arg[63:48] == V64_TAG_PREFIX && arg[47:44] == V64_KIND_BOOL)
+                                                    tn=id_str_boolean;
                                                 else if (arg[63:48] == V64_TAG_PREFIX &&
                                                          arg[47:44] ==
                                                              V64_KIND_STRING)
@@ -5466,6 +5107,46 @@ module jmr_js_vm_exec64 (
                                                 end
                                             end
                                         end
+                                        8'd69: begin // Explicit software error; never substitute a successful value.
+                                            machine_fault_n=1'b1;
+                                            fault_code_n=(argc==1 && v64_is_number(call_arg_q[0]) && call_arg_q[0]==v64_int32_number(v64_to_int32(call_arg_q[0])) && v64_to_int32(call_arg_q[0])>=1 && v64_to_int32(call_arg_q[0])<=9)
+                                                ? 8'(v64_to_int32(call_arg_q[0])) : 8'd5;
+                                            fault_site_n=16'd15108;running_n=1'b0;state_n=S_DONE;
+                                        end
+                                        8'd68: begin // Immutable bytes: pages, or logical arena (offset,length).
+                                            logic [31:0] ba, bn;
+                                            ba=v64_to_int32(call_arg_q[0]);bn=v64_to_int32(call_arg_q[1]);
+                                            if((argc==2 || (argc==3 && v64_is_number(call_arg_q[2]) && v64_equal(call_arg_q[2],v64_int32_number(1)))) && v64_is_number(call_arg_q[0]) && v64_is_number(call_arg_q[1]) &&
+                                               v64_equal(call_arg_q[0],v64_int32_number(ba)) &&
+                                               v64_equal(call_arg_q[1],v64_int32_number(bn)) &&
+                                               ba<=32'(jmr_js_vm_pkg::CSTG_WORDS) && bn<=32'(jmr_js_vm_pkg::CSTG_WORDS)-ba) begin
+                                                if(bn>32'(NAME_CAP))begin
+                                                    if(argc==3)begin
+                                                        vst_wr(base,V64_UNDEFINED);vsp_n=base+1;ip_n=ip+1;code_raddr_n=15'(ops_base+ip+1);state_n=S_FETCH_WAIT;
+                                                    end else begin machine_fault_n=1;fault_code_n=3;fault_site_n=15109;running_n=0;state_n=S_DONE;end
+                                                end else begin
+                                                    hp_slot_n=1;hp_wval_n={bn,ba};hp_aid_n=0;hp_aslot_n=argc==3?1:0;
+                                                    vnat_base_n=base;state_n=S_V64_BYTESTRING;
+                                                end
+                                            end else if(argc==1 && call_arg_q[0][63:48]==V64_TAG_PREFIX &&
+                                                        call_arg_q[0][47:44]==V64_KIND_ARRAY && call_arg_q[0][31:0]<MAX_ARR) begin
+                                                hp_slot_n=0;hp_aid_n=call_arg_q[0][11:0];hp_aslot_n=0;
+                                                hp_wval_n=call_arg_q[0];vnat_base_n=base;state_n=S_V64_BYTESTRING;
+                                            end else begin
+                                                machine_fault_n=1;fault_code_n=4;fault_site_n=15100;running_n=0;state_n=S_DONE;
+                                            end
+                                        end
+                                        8'd67: begin // Array.isArray: exact Value64 tag, never a length heuristic.
+                                            result = v64_handle(V64_KIND_BOOL,12'd0,
+                                                {31'd0,(argc != 0 && call_arg_q[0][63:48] == V64_TAG_PREFIX &&
+                                                 call_arg_q[0][47:44] == V64_KIND_ARRAY &&
+                                                 call_arg_q[0][31:0] < MAX_ARR)});
+                                            vst_wr(base,result);
+                                            vsp_n = base + 12'd1;
+                                            ip_n = ip + 16'd1;
+                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            state_n = S_FETCH_WAIT;
+                                        end
                                         8'd66: begin // strByte(internedString, index=0)
                                             logic valid_index;
                                             logic signed [32:0] byte_index;
@@ -5473,7 +5154,7 @@ module jmr_js_vm_exec64 (
                                             valid_index = shared_index_valid;
                                             byte_index = shared_index_result;
                                             valid_index = valid_index && byte_index >= 0 && byte_index < 33'd65536;
-                                            if (argc < 1 || !valid_index ||
+                                            if (!names_ready || argc < 1 || !valid_index ||
                                                 call_arg_q[0][63:48] != V64_TAG_PREFIX ||
                                                 call_arg_q[0][47:44] != V64_KIND_STRING ||
                                                 call_arg_q[0][31:0] >= 1024 ||
@@ -5487,7 +5168,8 @@ module jmr_js_vm_exec64 (
                                                 // Reuse the existing synchronous name metadata read.
                                                 hash2_n = 1'b1; opnd_n = 1'b1; opnd2_n = 1'b1;
                                                 state_n = S_V64_EXEC;
-                                            end else if (byte_index >= {17'd0, name_blen_rdata}) begin
+                                            end else if (name_off_rdata == 16'hffff ||
+                                                         byte_index >= {17'd0, name_blen_rdata}) begin
                                                 vst_wr(base, v64_int32_number(32'hffffffff));
                                                 vsp_n = base + 12'd1;
                                                 ip_n = ip + 16'd1;
@@ -5502,6 +5184,12 @@ module jmr_js_vm_exec64 (
                                             end
                                         end
                                         // One cold, serialized service state; no file logic in the opcode datapath.
+                                        8'd41: begin // Object.keys: own slots, stable insertion order.
+                                            hp_rval_n = argc != 0 ? call_arg_q[0] : V64_UNDEFINED;
+                                            hp_oid_n = argc != 0 ? call_arg_q[0][12:0] : 13'd0;
+                                            hp_vbase_n = base;
+                                            state_n = S_V64_KEYS;
+                                        end
                                         8'd58,8'd59,8'd60,8'd61,8'd62,8'd63,8'd64,8'd65: begin
                                             hp_slot_n=5'(nid-8'd57);vnat_base_n=base;state_n=S_FS;
                                         end
@@ -5759,7 +5447,6 @@ module jmr_js_vm_exec64 (
                                             v64_truthy(`VST_AT(vsp - 12'd1)))
                                         begin
                                             hp_cmd_n = HP_AGETI;
-                                            hp_v64_n = 1'b1;
                                             hp_aid_n = vfe_arr[11:0];
                                             hp_aslot_n = 7'(vfe_i - 8'd1);
                                             hp_alen_n = varr_len_rdata;
@@ -5778,7 +5465,6 @@ module jmr_js_vm_exec64 (
                                                     varr_len_rdata)
                                             begin
                                                 hp_cmd_n = HP_ASETI;
-                                                hp_v64_n = 1'b1;
                                                 hp_from_stack_n = 1'b0;
                                                 hp_aid_n = vfe_map[11:0];
                                                 hp_aslot_n = 7'(vfe_i - 8'd1);
@@ -5795,7 +5481,6 @@ module jmr_js_vm_exec64 (
                                                      varr_valid_rdata)
                                             begin
                                                 hp_cmd_n = HP_AGETI;
-                                                hp_v64_n = 1'b1;
                                                 hp_aid_n = vfe_arr[11:0];
                                                 hp_aslot_n = 7'(vfe_i - 8'd1);
                                                 hp_alen_n = varr_len_rdata;
@@ -5817,7 +5502,7 @@ module jmr_js_vm_exec64 (
                                             // for this frame (ctor_csp). SRAM rdata can
                                             // still be UNDEF at this combo. Do not use
                                             // ctor_cur on nested CALL_USER RET.
-                                            ret_v = (ctor_csp != 8'd0 &&
+                                            ret_v = vframe_setter_rdata ? vframe_fn_rdata : (ctor_csp != 8'd0 &&
                                                  vcsp_hs == ctor_csp &&
                                                  ctor_cur[63:48] ==
                                                  V64_TAG_PREFIX &&
@@ -5949,12 +5634,13 @@ module jmr_js_vm_exec64 (
                                                 state_n = S_FETCH_WAIT;
                                             end else begin
                                                 hp_cmd_n = HP_GETIDX;
-                                                hp_v64_n = 1'b1;
                                                 hp_oid_n = handle[12:0];
                                                 hp_key_n = okey;
                                                 hp_len_n = vobj_len_rdata;
                                                 hp_slot_n = 5'd0;
-                                                hp_phase_n = 3'd1;
+                                                hp_phase_n = 3'd0;
+                                                hp_env_n = 1'b0;
+                                                hp_spr_w_n = {4'd0,handle[43:32]};
                                                 hp_proto_n = V64_UNDEFINED;
                                                 state_n = S_HEAP_WAIT;
                                             end
@@ -5993,7 +5679,6 @@ module jmr_js_vm_exec64 (
                                         state_n = S_FETCH_WAIT;
                                     end else begin
                                         hp_cmd_n = HP_ARRGET;
-                                        hp_v64_n = 1'b1;
                                         hp_env_n = 1'b0;
                                         hp_aid_n = handle[11:0];
                                         hp_aslot_n = array_index[6:0];
@@ -6042,7 +5727,8 @@ module jmr_js_vm_exec64 (
                                                 state_n = S_FETCH_WAIT;
                                             end else begin
                                                 hp_cmd_n = HP_SETIDX;
-                                                hp_v64_n = 1'b1;
+                                                hp_env_n = 1'b0;
+                                                hp_spr_w_n = {4'd0,handle[43:32]};
                                                 hp_oid_n = handle[12:0];
                                                 hp_key_n = okey;
                                                 hp_wval_n = `VST_AT(vsp - 12'd1);
@@ -6099,7 +5785,6 @@ module jmr_js_vm_exec64 (
                                         aset_win_retried_n = 1'b0;
                                         vprom_done_n = 1'b0;
                                         hp_cmd_n = HP_ARRSET;
-                                        hp_v64_n = 1'b1;
                                         hp_env_n = 1'b0;
                                         hp_from_stack_n = 1'b0;
                                         hp_aid_n = handle[11:0];
@@ -6125,7 +5810,9 @@ module jmr_js_vm_exec64 (
                                 end
                             end
                             OP_GET_PROP: begin
-                                if (vsp == 0) begin
+                                if (opw[31:24] != 0 && (!image_callref || opw[31:24] != 1)) begin
+                                    machine_fault_n=1;fault_code_n=9;fault_site_n=15143;running_n=0;state_n=S_DONE;
+                                end else if (vsp == 0) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd4782;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
@@ -6133,7 +5820,7 @@ module jmr_js_vm_exec64 (
                                     logic found;
                                     handle = `VST_AT(vsp - 12'd1);
                                     found = 1'b0;
-                                    result = V64_UNDEFINED;
+                                    result = opw[31:24]==1 ? 64'h7ff900000000cafe : V64_UNDEFINED;
                                     if (handle[63:48] == 16'h7ff9 &&
                                         handle[47:44] == 4'd6 &&
                                         handle[31:0] < MAX_ARR &&
@@ -6162,7 +5849,7 @@ module jmr_js_vm_exec64 (
                                     end else if (handle[63:48] == 16'h7ff9 &&
                                                  handle[47:44] == 4'd4 &&
                                                  handle[31:0] < 32'd1024) begin
-                                        // potential-bugs #14: a bare `.now`
+                                        // A bare `.now`
                                         // property READ used to S_V64_ALLOC a
                                         // native-35 function object. Removed:
                                         // `Date.now()` / `performance.now()`
@@ -6250,7 +5937,7 @@ module jmr_js_vm_exec64 (
                                                 state_n = S_V64_ALLOC;
                                             end
                                         end else begin
-                                            vst_wr(vsp - 12'd1, V64_UNDEFINED);
+                                            vst_wr(vsp - 12'd1, opw[31:24]==1 ? 64'h7ff900000000cafe : V64_UNDEFINED);
                                             ip_n = ip + 16'd1;
                                             code_raddr_n =
                                                 15'(ops_base + ip + 16'd1);
@@ -6275,8 +5962,7 @@ module jmr_js_vm_exec64 (
                                             // on v64 (no DOM object); the
                                             // native exists, so the guard
                                             // must read truthy.
-                                            result = {16'h7ff9, 4'd3, 27'd0,
-                                                      1'b1, 16'd0};
+                                            result = opw[31:24]==1 ? 64'h7ff900000000cafe : {16'h7ff9, 4'd3, 27'd0, 1'b1, 16'd0};
                                         vst_wr(vsp - 12'd1, result);
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
@@ -6295,9 +5981,7 @@ module jmr_js_vm_exec64 (
                                         // read undefined and DONKEY's
                                         // synthetic boot Enter never even
                                         // called the native).
-                                        vst_wr(vsp - 12'd1,
-                                            {16'h7ff9, 4'd3, 27'd0, 1'b1,
-                                             16'd0});
+                                        vst_wr(vsp - 12'd1, opw[31:24]==1 ? 64'h7ff900000000cafe : {16'h7ff9, 4'd3, 27'd0, 1'b1,16'd0});
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
                                             15'(ops_base + ip + 16'd1);
@@ -6309,7 +5993,6 @@ module jmr_js_vm_exec64 (
                                         // checks alloc+gen (one physical
                                         // heap). Exec copies can lag GC/poke.
                                         hp_cmd_n = HP_GETPROP;
-                                        hp_v64_n = 1'b1;
                                         hp_env_n = 1'b0;
                                         hp_oid_n = handle[12:0];
                                         hp_key_n = opw[23:8];
@@ -6323,7 +6006,7 @@ module jmr_js_vm_exec64 (
                                         hp_spr_w_n = {4'd0, handle[43:32]};
                                         state_n = S_HEAP_WAIT;
                                     end else begin
-                                        vst_wr(vsp - 12'd1, V64_UNDEFINED);
+                                        vst_wr(vsp - 12'd1, opw[31:24]==1 ? 64'h7ff900000000cafe : V64_UNDEFINED);
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
                                             15'(ops_base + ip + 16'd1);
@@ -6364,7 +6047,6 @@ module jmr_js_vm_exec64 (
                                             if (new_len > varr_len_rdata)
                                             begin
                                                 hp_cmd_n = HP_AFILL;
-                                                hp_v64_n = 1'b1;
                                                 hp_from_stack_n = 1'b0;
                                                 hp_aid_n = handle[11:0];
                                                 hp_aslot_n =
@@ -6496,10 +6178,10 @@ module jmr_js_vm_exec64 (
                                                 16'd1024) begin
                                             // ctx.font = "NNpx ..." — parse
                                             // the px size in the parent
-                                            // S_FONTPX walk (dead since the
-                                            // tagged entry was removed; every
-                                            // v64 fillText drew at the 8px
-                                            // default scale). The intern id
+                                            // live S_FONTPX walk. This Value64
+                                            // property setter supplies the font
+                                            // size; it does not use the retired
+                                            // tagged executor. The intern id
                                             // rides hp_key; the property
                                             // itself is not heap-stored
                                             // (ctx.font is write-only in the
@@ -6515,7 +6197,6 @@ module jmr_js_vm_exec64 (
                                             state_n = S_FONTPX;
                                         end else begin
                                         hp_cmd_n = HP_SETPROP;
-                                        hp_v64_n = 1'b1;
                                         hp_env_n = 1'b0;
                                         hp_oid_n = handle[12:0];
                                         hp_key_n = opw[23:8];
@@ -6523,7 +6204,6 @@ module jmr_js_vm_exec64 (
                                         hp_len_n = vobj_len_rdata;
                                         hp_slot_n = 5'd0;
                                         hp_phase_n = 3'd0;
-                                        hp_tag_n = 3'd0;
                                         // Latch handle gen for parent CMP
                                         // (phase 3 Image.src overwrites spr_w).
                                         hp_spr_w_n = {4'd0, handle[43:32]};
@@ -6605,6 +6285,11 @@ module jmr_js_vm_exec64 (
                                 `ifndef SYNTHESIS
                                 call_arg_use_check = 1'b1;
                                 `endif
+                                if (opw_raw[23] && !callref_done) begin
+                                    if (!image_callref || vsp_hs < {4'd0,opw[31:24]}+12'd2) begin
+                                        machine_fault_n=1;fault_code_n=9;fault_site_n=15144;running_n=0;state_n=S_DONE;
+                                    end else begin opnd_n=0;opnd2_n=0;opnd3_n=0;state_n=S_V64_CALLREF;end
+                                end else begin
                                 argc = {4'd0, opw[31:24]};
                                 // raddr comb already uses vsp_hs (cm_base).
                                 // Body must match or forEach/fillText/getContext
@@ -6665,7 +6350,7 @@ module jmr_js_vm_exec64 (
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
                                             15'(ops_base + ip + 16'd1);
-                                        if (tgt_ok && src0_ok) begin
+                                        if (tgt_ok && argc >= 12'd2) begin
                                             // Keep vsp until HP_ASSIGN finishes
                                             // so later sources stay in the TOS
                                             // window. Collapsing here made
@@ -6674,7 +6359,6 @@ module jmr_js_vm_exec64 (
                                             // params (PACMAN Item times /
                                             // orientation / update).
                                             hp_cmd_n = HP_ASSIGN;
-                                            hp_v64_n = 1'b1;
                                             hp_oid_n = tgt[12:0];
                                             hp_si_n = sv0[12:0];
                                             hp_ss_n = 5'd0;
@@ -6691,8 +6375,9 @@ module jmr_js_vm_exec64 (
                                             // player never drew.
                                             hp_phase_n = 3'd4;
                                             hp_tn_n = vobj_len_rdata;
-                                            hp_qi_n = 3'd0;
-                                            hp_qn_n = argc[2:0] - 3'd1;
+                                            hp_hit_n = src0_ok;
+                                            hp_alen_n = 8'd0;
+                                            hp_lim_n = argc[7:0] - 8'd1;
                                             hp_vbase_n = base + 12'd2;
                                             hp_ret_n = S_FETCH_WAIT;
                                             state_n = S_HEAP_WAIT;
@@ -6703,14 +6388,14 @@ module jmr_js_vm_exec64 (
                                     end
                                 end else if (arr_ok &&
                                            opw[23:8] == id_push) begin
-                                    if (varr_len_rdata + argc[7:0] >
+                                    if ({1'b0,varr_len_rdata} + {1'b0,argc[7:0]} >
                                             ARR_CAP[7:0]) begin
                                         machine_fault_n = 1'b1;
                                         fault_code_n = 8'd3;
                                         fault_site_n = 16'd5218;
                                         running_n = 1'b0; state_n = S_DONE;
                                     end else if (!varr_long_rdata &&
-                                        (varr_len_rdata + argc[7:0] >
+                                        ({1'b0,varr_len_rdata} + {1'b0,argc[7:0]} >
                                             ARR_SHORT_CAP[7:0]) &&
                                         !vprom_done && !p_vprom_done) begin
                                         hp_aid_n = receiver[11:0];
@@ -6734,7 +6419,6 @@ module jmr_js_vm_exec64 (
                                             state_n = S_FETCH_WAIT;
                                         else begin
                                             hp_cmd_n = HP_AFILL;
-                                            hp_v64_n = 1'b1;
                                             hp_from_stack_n = 1'b1;
                                             hp_make_arr_n = 1'b0;
                                             hp_aid_n = receiver[11:0];
@@ -6769,7 +6453,6 @@ module jmr_js_vm_exec64 (
                                             varr_len_we = 1'b1; varr_len_waddr = receiver[11:0]; varr_len_wdata =
                                                 al - 8'd1;
                                             hp_cmd_n = HP_AGETI;
-                                            hp_v64_n = 1'b1;
                                             hp_aid_n = receiver[11:0];
                                             hp_aslot_n = al[6:0] - 7'd1;
                                             hp_alen_n = al;
@@ -7089,7 +6772,6 @@ module jmr_js_vm_exec64 (
                                                 varr_len_rdata != 8'd0)
                                             begin
                                                 hp_cmd_n = HP_AFILL;
-                                                hp_v64_n = 1'b1;
                                                 hp_from_stack_n = 1'b0;
                                                 hp_aid_n = free_a[11:0];
                                                 hp_aslot_n = 7'd0;
@@ -7206,7 +6888,6 @@ module jmr_js_vm_exec64 (
                                             vnat_base_n = base;
                                             ip_n = ip + 16'd1;
                                             hp_cmd_n = HP_OGETI;
-                                            hp_v64_n = 1'b1;
                                             hp_oid_n = src[12:0];
                                             hp_slot_n = 5'd0;
                                             hp_qn_n = 3'd2;
@@ -7439,7 +7120,7 @@ module jmr_js_vm_exec64 (
                                         if (txt[63:48] == V64_TAG_PREFIX &&
                                             txt[47:44] == 4'd4 &&
                                             txt[31:0] < 32'd1024)
-                                            // potential-bugs #36: name_blen is
+                                            // name_blen is
                                             // u16 (TXT/NAME bytes), so the
                                             // [7:0] slice wrapped any intern
                                             // 256 bytes or longer to a short
@@ -7459,7 +7140,6 @@ module jmr_js_vm_exec64 (
                                         hp_vbase_n = base;
                                         if (dyn) begin
                                             hp_cmd_n = HP_OGETI;
-                                            hp_v64_n = 1'b1;
                                             hp_oid_n = txt[12:0];
                                             hp_slot_n = 5'd0;
                                             hp_qn_n = 3'd2;
@@ -7478,7 +7158,6 @@ module jmr_js_vm_exec64 (
                                                 vsp_n = base + 12'd1;
                                                 hp_cmd_n = HP_OSETI;
                                                 hp_env_n = 1'b0;
-                                                hp_v64_n = 1'b1;
                                                 hp_oid_n = vmetrics[12:0];
                                                 hp_slot_n = 5'd0;
                                                 hp_qn_n = 3'd1;
@@ -7519,7 +7198,6 @@ module jmr_js_vm_exec64 (
                                             15'(ops_base + ip + 16'd1);
                                         if (al != 8'd0) begin
                                             hp_cmd_n = HP_AFILL;
-                                            hp_v64_n = 1'b1;
                                             hp_from_stack_n = 1'b0;
                                             hp_aid_n = receiver[11:0];
                                             hp_aslot_n = 7'd0;
@@ -7557,7 +7235,6 @@ module jmr_js_vm_exec64 (
                                                 15'(ops_base + ip + 16'd1);
                                             if (al == 8'd0) begin
                                                 hp_cmd_n = HP_ASETI;
-                                                hp_v64_n = 1'b1;
                                                 hp_from_stack_n = 1'b0;
                                                 hp_aid_n = receiver[11:0];
                                                 hp_aslot_n = 7'd0;
@@ -7568,7 +7245,6 @@ module jmr_js_vm_exec64 (
                                                 state_n = S_HEAP_AWR;
                                             end else begin
                                                 hp_cmd_n = HP_UNSHIFT;
-                                                hp_v64_n = 1'b1;
                                                 hp_from_stack_n = 1'b0;
                                                 hp_aid_n = receiver[11:0];
                                                 hp_aslot_n = al[6:0] - 7'd1;
@@ -7610,7 +7286,6 @@ module jmr_js_vm_exec64 (
                                         code_raddr_n =
                                             15'(ops_base + ip + 16'd1);
                                         hp_cmd_n = HP_SPLICE;
-                                        hp_v64_n = 1'b1;
                                         hp_from_stack_n = 1'b0;
                                         hp_aid_n = receiver[11:0];
                                         hp_aslot_n = st[6:0] + cnt[6:0];
@@ -7653,7 +7328,6 @@ module jmr_js_vm_exec64 (
                                             state_n = S_FETCH_WAIT;
                                         end else begin
                                             hp_cmd_n = HP_AGETI;
-                                            hp_v64_n = 1'b1;
                                             hp_aid_n = receiver[11:0];
                                             hp_aslot_n = 7'd0;
                                             hp_alen_n = al;
@@ -7716,7 +7390,6 @@ module jmr_js_vm_exec64 (
                                                 json_srclen_n = hay_len[13:0];
                                                 json_rp_n = 14'd0;
                                                 json_wp_n = 14'd0;
-                                                hp_v64_n = 1'b1;
                                                 hp_nat_n = 4'd3;
                                                 namcpy_repl_n = 1'b0;
                                                 namcpy_v64_n = 1'b0;
@@ -7725,7 +7398,6 @@ module jmr_js_vm_exec64 (
                                             end
                                         end else begin
                                             hp_cmd_n = HP_OGETI;
-                                            hp_v64_n = 1'b1;
                                             hp_oid_n = receiver[12:0];
                                             hp_slot_n = 5'd0;
                                             hp_qn_n = 3'd2;
@@ -7757,7 +7429,6 @@ module jmr_js_vm_exec64 (
                                         if (!hash2_q) begin
                                             // Beat 1: rdata is pat. Arm replv for next clock.
                                             vnat_base_n = base;
-                                            v64_repl_n = 1'b1;
                                             repl_g_n = 1'b0;
                                             repl_nlen_n = 8'd1;
                                             repl_pat1_n = 8'd0;
@@ -7793,7 +7464,6 @@ module jmr_js_vm_exec64 (
                                             state_n = S_V64_EXEC;
                                         end else begin
                                         vnat_base_n = base;
-                                        v64_repl_n = 1'b1;
                                         repl_g_n = 1'b0;
                                         repl_nlen_n = 8'd1;
                                         repl_pat1_n = 8'd0;
@@ -7830,7 +7500,6 @@ module jmr_js_vm_exec64 (
                                             // reads garbage chars and simply
                                             // never matches.
                                             hp_cmd_n = HP_OGETI;
-                                            hp_v64_n = 1'b1;
                                             hp_oid_n = pat[12:0];
                                             hp_slot_n = 5'd0;
                                             hp_qn_n = 3'd1;
@@ -7854,7 +7523,6 @@ module jmr_js_vm_exec64 (
                                             state_n = S_HEAP_WAIT;
                                         end else if (!intern_hay) begin
                                             hp_cmd_n = HP_OGETI;
-                                            hp_v64_n = 1'b1;
                                             hp_oid_n = receiver[12:0];
                                             hp_slot_n = 5'd0;
                                             hp_qn_n = 3'd2;
@@ -7942,7 +7610,7 @@ module jmr_js_vm_exec64 (
                                 end else if (id_quadcurve != 16'hFFFF &&
                                            opw[23:8] == id_quadcurve &&
                                            argc >= 12'd4) begin
-                                    // potential-bugs #38: exec32 twin (~4402).
+                                    // exec32 twin (~4402).
                                     // pc_op 2 = quadratic; parent S_QSEG already
                                     // subdivides it. Only useful once #49 makes
                                     // the parent read this buffer.
@@ -8089,7 +7757,6 @@ module jmr_js_vm_exec64 (
                                         state_n = S_V64_BIND;
                                     end else begin
                                         hp_cmd_n = HP_LOOKFN;
-                                        hp_v64_n = 1'b1;
                                         hp_oid_n = receiver[12:0];
                                         hp_key_n = opw[23:8];
                                         hp_len_n = vobj_len_rdata;
@@ -8114,6 +7781,7 @@ module jmr_js_vm_exec64 (
                                     state_n = S_FETCH_WAIT;
                                 end
                             end
+                                end // ordinary/prepared-fallback method dispatch
                             OP_ADD, OP_SUB, OP_MUL: begin
                                 `ifndef SYNTHESIS
                                 alu_window_check = (vsp >= 12'd2);
@@ -8121,6 +7789,24 @@ module jmr_js_vm_exec64 (
                                 if (vsp < 12'd2) begin
                                     machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6381;
                                     running_n = 1'b0; state_n = S_DONE;
+                                end else if (opw[7:0] == OP_ADD && (image_callref || opw[23:8]!=0) &&
+                                    ((vst_s[1][63:48] == V64_TAG_PREFIX && vst_s[1][47:44] == V64_KIND_STRING) ^
+                                     (vst_s[0][63:48] == V64_TAG_PREFIX && vst_s[0][47:44] == V64_KIND_STRING))) begin
+                                    // Only mixed string ADD requires software ToString. Preserve
+                                    // both binary64/tagged operands on the ordinary argument stack.
+                                    // Numeric arithmetic and string/string ADD never enter here.
+                                    if (!image_callref || opw[23:8]==0 || opw[23:8]>=n_ops || opw[31:24]!=0) begin
+                                        machine_fault_n=1;fault_code_n=9;fault_site_n=15165;running_n=0;state_n=S_DONE;
+                                    end else if(vcsp_hs>=CSTK)begin
+                                        machine_fault_n=1;fault_code_n=2;fault_site_n=15166;running_n=0;state_n=S_DONE;
+                                    end else begin
+                                        vcall_value_n=0;vcall_entry_n=opw[23:8];vcall_argc_n=2;
+                                        vcall_set_this_n=0;vcall_ctor_val_n=V64_UNDEFINED;
+                                        valloc_kind_n=3;valloc_i_n=venv_next;valloc_retried_n=0;
+                                        bind_ip_n=ip+16'd1;ip_n=opw[23:8];
+                                        code_raddr_n=15'(ops_base+opw[23:8]);vcsp_n=vcsp_hs+8'd1;
+                                        state_n=S_V64_ALLOC;
+                                    end
                                 end else if (opw[7:0] == OP_ADD &&
                                     ((vst_s[1][63:48] == V64_TAG_PREFIX &&
                                       vst_s[1][47:44] == 4'd4) ||
@@ -8186,21 +7872,21 @@ module jmr_js_vm_exec64 (
                                             ((mea == 11'h7ff || meb == 11'h7ff) &&
                                              (aa[62:0] == 0 || bb[62:0] == 0))) begin
                                             arithmetic_result = V64_CANON_NAN;
-                                            vst_wr(vsp - 12'd2, arithmetic_result);
+                                            vst_number_wr(vsp - 12'd2, arithmetic_result);
                                             vsp_n = vsp - 12'd1;
                                             ip_n = ip + 16'd1;
                                             code_raddr_n = 15'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end else if (mea == 11'h7ff || meb == 11'h7ff) begin
                                             arithmetic_result = {msign, 11'h7ff, 52'd0};
-                                            vst_wr(vsp - 12'd2, arithmetic_result);
+                                            vst_number_wr(vsp - 12'd2, arithmetic_result);
                                             vsp_n = vsp - 12'd1;
                                             ip_n = ip + 16'd1;
                                             code_raddr_n = 15'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end else if (aa[62:0] == 0 || bb[62:0] == 0) begin
                                             arithmetic_result = {msign, 63'd0};
-                                            vst_wr(vsp - 12'd2, arithmetic_result);
+                                            vst_number_wr(vsp - 12'd2, arithmetic_result);
                                             vsp_n = vsp - 12'd1;
                                             ip_n = ip + 16'd1;
                                             code_raddr_n = 15'(ops_base + ip + 16'd1);
@@ -8299,7 +7985,7 @@ module jmr_js_vm_exec64 (
                                         dbg_div_n_n = dbg_div_n + 16'd1;
                                     end
                                     if (immediate) begin
-                                        vst_wr(vsp - 12'd2, immediate_result);
+                                        vst_number_wr(vsp - 12'd2, immediate_result);
                                         vsp_n = vsp - 12'd1;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n = 15'(ops_base + ip + 16'd1);
@@ -8340,6 +8026,10 @@ module jmr_js_vm_exec64 (
                                                  bb[62:52] == 11'h7ff) begin
                                         immediate_result = aa;
                                     end else begin
+                                        // Positive IEEE encodings preserve magnitude order.
+                                        // Keep the immediate result independent of the iterative
+                                        // operand normalizers: equal normal exponents cancel the
+                                        // hidden bits, and subnormal subtraction is already encoded.
                                         ma = {(aa[62:52] != 0), aa[51:0]};
                                         mb = {(bb[62:52] != 0), bb[51:0]};
                                         sha = v64_norm_shift(ma);
@@ -8348,28 +8038,32 @@ module jmr_js_vm_exec64 (
                                         nb = mb << shb;
                                         ea = v64_unbiased_exp(aa[62:52], sha);
                                         eb = v64_unbiased_exp(bb[62:52], shb);
-                                        if (ea < eb || (ea == eb && na < nb)) begin
+                                        if (aa[62:0] < bb[62:0]) begin
                                             immediate_result = aa;
+                                        end else if (aa[62:52] != 0 &&
+                                                     aa[62:52] == bb[62:52]) begin
+                                            v64_mod_pack_task(
+                                                aa[63], 13'(aa[62:52]) - 13'sd1023,
+                                                {1'b0,aa[51:0]} - {1'b0,bb[51:0]},
+                                                immediate_result
+                                            );
+                                        end else if (aa[62:52] == 0 &&
+                                                     bb[62:52] == 0 && sha == shb) begin
+                                            immediate_result = {aa[63],11'd0,
+                                                (aa[51:0] - bb[51:0])};
                                         end else begin
                                             initial_rem = (na >= nb) ? na - nb : na;
                                             distance = ea - eb;
-                                            if (distance == 0) begin
-                                                v64_mod_pack_task(
-                                                    aa[63], eb, initial_rem,
-                                                    immediate_result
-                                                );
-                                            end else begin
-                                                immediate = 1'b0;
-                                                vmod_rem_n = initial_rem;
-                                                vmod_den_n = nb;
-                                                vmod_count_n = 12'(distance);
-                                                vmod_exp_n = eb;
-                                                vmod_sign_n = aa[63];
-                                            end
+                                            immediate = 1'b0;
+                                            vmod_rem_n = initial_rem;
+                                            vmod_den_n = nb;
+                                            vmod_count_n = 12'(distance);
+                                            vmod_exp_n = eb;
+                                            vmod_sign_n = aa[63];
                                         end
                                     end
                                     if (immediate) begin
-                                        vst_wr(vsp - 12'd2, immediate_result);
+                                        vst_number_wr(vsp - 12'd2, immediate_result);
                                         vsp_n = vsp - 12'd1;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n = 15'(ops_base + ip + 16'd1);
@@ -8394,7 +8088,7 @@ module jmr_js_vm_exec64 (
                                     bit_result = (opw[7:0] == OP_BIT_OR)
                                                ? left_int | right_int
                                                : left_int & right_int;
-                                    vst_wr(vsp - 12'd2, v64_int32_number(bit_result));
+                                    vst_simple_wr(vsp - 12'd2, v64_int32_number(bit_result));
                                     vsp_n = vsp - 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n = 15'(ops_base + ip + 16'd1);
@@ -8419,7 +8113,7 @@ module jmr_js_vm_exec64 (
                                     bb = (opw[7:0] != OP_EQ &&
                                           !v64_is_number(vst_s[0]))
                                         ? 64'd0 : vst_s[0];
-                                    vst_wr(vsp - 12'd2, {16'h7ff9, 4'd3, 12'd0, 31'd0,
+                                    vst_simple_wr(vsp - 12'd2, {16'h7ff9, 4'd3, 12'd0, 31'd0,
                                          (opw[7:0] == OP_EQ)
                                          ? v64_equal(aa, bb)
                                          : (opw[7:0] == OP_LT)
@@ -8476,7 +8170,7 @@ module jmr_js_vm_exec64 (
                                     machine_fault_n = 1'b1; fault_code_n = 8'd1; fault_site_n = 16'd6680;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
-                                    vst_wr(vsp, `VST_AT(vsp - 12'd1));
+                                    vst_simple_wr(vsp, `VST_AT(vsp - 12'd1));
                                     vsp_n = vsp + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n = 15'(ops_base + ip + 16'd1);
@@ -8496,13 +8190,13 @@ module jmr_js_vm_exec64 (
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     if (opw[7:0] == OP_NEG)
-                                        vst_wr(vsp - 12'd1, (vst_s[0][62:52] == 11'h7ff &&
+                                        vst_simple_wr(vsp - 12'd1, (vst_s[0][62:52] == 11'h7ff &&
                                              vst_s[0][51:0] != 0)
                                             ? V64_CANON_NAN
                                             : {~vst_s[0][63],
                                                vst_s[0][62:0]});
                                     else
-                                        vst_wr(vsp - 12'd1, {16'h7ff9, 4'd3, 12'd0, 31'd0,
+                                        vst_simple_wr(vsp - 12'd1, {16'h7ff9, 4'd3, 12'd0, 31'd0,
                                              !v64_truthy(vst_s[0])});
                                     ip_n = ip + 16'd1;
                                     code_raddr_n = 15'(ops_base + ip + 16'd1);
@@ -8536,7 +8230,7 @@ module jmr_js_vm_exec64 (
             name_has_wdata = 1'b0;
         end
 
-        /* ===== run-59 piece 1: central S_FETCH_WAIT skip =====
+        /* ===== Central S_FETCH_WAIT skip =====
            Every op-end funnels through state_n = S_FETCH_WAIT; this one
            stanza retires the wait beat when — and only when —
            (a) the op ended inside EXEC (parent between-op work like
@@ -8616,7 +8310,7 @@ module jmr_js_vm_exec64 (
                INVADERS-after-Space hang describes. Perform it here. */
             vprom_done_n = 1'b0;
         end
-        end
+    end
 `endif
     end
     `undef VST_AT

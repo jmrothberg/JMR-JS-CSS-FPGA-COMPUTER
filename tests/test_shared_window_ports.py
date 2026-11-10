@@ -188,7 +188,6 @@ def test_shipped_finder_overlap_focus_move_resize_close_and_scroll_match_full_re
 def test_shipping_session_example_clips_and_scrolls_panel_at_window_origin(moved):
     from tools.compile_js import compile_html_text,encode_html_chunk
     from tools.toolbox_linker import build_rom
-    from hardware_model.js_vm import value_pack_number
     p=R/'storage/UISESS.HTML';html=p.read_text();at=html.rindex('</script>')
     html=html[:at]+'''function testPanel(){_tbSessionKey({keyCode:166,charCode:0});}
     function testMove(){_tbSessionPointer(2,{clientX:100,clientY:44,button:0});_tbSessionPointer(3,{clientX:120,clientY:64,button:0});_tbSessionPointer(4,{clientX:120,clientY:64,button:0});}'''+html[at:]

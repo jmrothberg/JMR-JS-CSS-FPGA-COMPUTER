@@ -17,7 +17,7 @@ WATCH = {'data':[0,2016,3120,4104,8580,8580,16770,16578,17346,16392,8208,8224,41
          'mask':[0,2016,4080,8184,16380,16380,32766,32766,32766,32766,16380,16380,8184,4080,2016,0]}
 MENUS = ((), ('Open', 'Compile', 'Read', 'Delete...', 'Close window'),
          ('Edit source',), ('Icons', 'List', 'Refresh', 'Hidden files'),
-         ('Terminal','Editor','Reader','Compile','Utility','Note','Help','Restart'))
+         ('Editor','Reader','Compile','Utility','Note','Help','Restart'))
 MENU_X = (0, 30, 84, 136, 190)
 PAGE_ITEMS = 15
 
@@ -440,7 +440,6 @@ class Desktop:
         if action=='Empty Trash':
             if self.trash:self.dialog=3
             return None
-        if action=='Terminal':self.visible=False;return ('TERMINAL',None)
         if action in ('Help','Reader') and not (action=='Reader' and 0<=self.selected<len(self.names)):
             self.visible=False;return ('READ','HELP.MD')
         # Compile with nothing selected opens the Compile program, the way

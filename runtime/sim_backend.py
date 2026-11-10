@@ -1,15 +1,15 @@
 """Verilator FPGA-SIM backend — line protocol client.
 
-HARD RULE: FPGA-SIM defaults to real RTL (jmr_js_sim_server). Never silently
+FPGA-SIM defaults to real RTL (jmr_js_sim_server). Never silently
 fall back to the PYTHON host twin — that fake default burned hours comparing
 the wrong machine to silicon.
 
   Default:          sim_build_synth/jmr_js_sim_server (RTL)
-  Host twin only:   JMR_SIM_HOST=1 (dukpy / full Canvas — explicit opt-in)
+  Host model:       select the separate PYTHON runtime
   Missing RTL:      fail loud (do not pretend PYTHON is FPGA-SIM)
 
-RTL text is rasterized from SCREEN? into the local 640×480 canvas.
-TICK stays cheap (FB SAME). GUI pulls FB? while game_mode.
+Finder services use typed requests into the same core ports as the tether.
+The GUI reads framebuffer and observer data directly; no command screen is rendered.
 """
 
 from __future__ import annotations
@@ -17,17 +17,17 @@ from __future__ import annotations
 import base64
 import os
 import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Optional
 
 from functional_model.canvas_engine import CanvasEngine
 from runtime.backend import (
-    ROOT, RuntimeBackend, card_catalog, parse_status_kv,
+    ROOT, RuntimeBackend, parse_status_kv,
     decode_ip, decode_op_at, fmt_code_window, fmt_html_window,
 )
 from runtime.flight_log import FlightLog
+from runtime.finder_tether import FinderServices, Operation
 
 SIM_DIR = ROOT / "sim"
 # JMR_SIM_BUILD: pick an alternate build dir (A/B binaries, e.g. the
@@ -50,15 +50,16 @@ _OPTIONAL_VERBS = frozenset((
 ))
 
 
-class SimBackend(RuntimeBackend):
+class SimBackend(FinderServices, RuntimeBackend):
     name = "FPGA-SIM"
 
     def __init__(self) -> None:
+        self._init_finder_services()
         self._proc: Optional[subprocess.Popen] = None
         self._canvas = CanvasEngine()
         self._screen = ""
         self._started = False
-        self._running = False  # NEW: RTL game_mode — skip prompt overlay
+        self._running = False  # RTL game_mode — skip prompt overlay
         self._desktop_visible = False
         self._desktop_busy = False
         self._system_keyboard = False
@@ -66,7 +67,7 @@ class SimBackend(RuntimeBackend):
         self._ui_overlays = []
         self._native_action = 0
         self._native_phase = 0
-        self._more = False     # NEW: parked on -- MORE --
+        self._more = False     # Parked on -- MORE --
         self._listing = False  # LIST/DIR until READY — no '>' between pages
         self._paging = False   # push_key already pumping — do not nest Enter
         self._editor_live = False  # interactive editor/reader uses the VM
@@ -98,7 +99,7 @@ class SimBackend(RuntimeBackend):
         self._run_snap_done = False
         self._last_glass = ""
         self._more_page = 0
-        # NEW: Architecture Monitor — cache VMSTAT/STATUS (no extra RPC while RUN)
+        # Architecture Monitor — cache VMSTAT/STATUS (no extra RPC while RUN)
         self._vmstat_raw = ""
         self._status_raw = ""
         self._vmstat_t = 0.0
@@ -113,7 +114,7 @@ class SimBackend(RuntimeBackend):
         self._ip_trace_ok = True
         self._image_meta: dict = {}
         self._aset_bytes = 0
-        # HARD RULE: RTL is default. Host twin ONLY via explicit JMR_SIM_HOST=1.
+        # RTL is default. Host twin ONLY via explicit JMR_SIM_HOST=1.
         # JMR_SIM_RTL=1 is accepted as a no-op alias (legacy scripts).
         host_opt = os.environ.get("JMR_SIM_HOST", "").strip().lower() in ("1", "true", "yes")
         self._use_rtl = not host_opt
@@ -137,30 +138,22 @@ class SimBackend(RuntimeBackend):
     def _start(self) -> None:
         if self._started:
             return
-        if self._use_rtl:
-            if not _SYNTH.is_file():
-                self._log.fault("NO_RTL", "build: make -C sim sim_server_synth")
-                raise RuntimeError(
-                    "FPGA-SIM RTL missing — run: make -C sim sim_server_synth "
-                    "(refusing host twin; set JMR_SIM_HOST=1 only for dukpy twin)"
-                )
-            if _SYNTH.resolve() == (ROOT / 'sim/sim_build_synth/jmr_js_sim_server').resolve():
-                from tools.simulator_provenance import verify
-                verify(ROOT, _SYNTH)
-            cmd = [str(_SYNTH)]
-            self._log.note(f"spawn RTL {cmd[0]}")
-        else:
-            if not _HOST_PY.is_file():
-                self._log.fault("NO_HOST", str(_HOST_PY))
-                raise RuntimeError("JMR_SIM_HOST=1 but host_sim_server.py missing")
-            cmd = [sys.executable, "-B", str(_HOST_PY)]
-            self._log.note("spawn host_sim_server.py (explicit JMR_SIM_HOST=1)")
+        if not self._use_rtl:
+            raise RuntimeError('Finder services require RTL; use the PYTHON runtime for the host model')
+        if not _SYNTH.is_file():
+            self._log.fault("NO_RTL", "build: make -C sim sim_server_synth")
+            raise RuntimeError("FPGA-SIM RTL missing — run: make -C sim sim_server_synth")
+        if _SYNTH.resolve() == (ROOT / 'sim/sim_build_synth/jmr_js_sim_server').resolve():
+            from tools.simulator_provenance import verify
+            verify(ROOT, _SYNTH)
+        cmd = [str(_SYNTH)]
+        self._log.note(f"spawn RTL {cmd[0]}")
         env = os.environ.copy()
         env["JMR_STANDALONE"] = env.get("JMR_STANDALONE", "1")
-        # NEW: always the project card.img (sim_main prefers ../card.img from
+        # Always the project card.img (sim_main prefers ../card.img from
         # sim/ cwd — a stale root image used to hide a missing HTML compile path → ?NH)
         env.setdefault("JMR_CARD_IMG", str(ROOT / "card.img"))
-        # NEW: keep stderr separate — RTL prints "SD image …" on cerr; merging
+        # Keep stderr separate — RTL prints "SD image …" on cerr; merging
         # into stdout used to steal the READY handshake (fake/broken SIM start).
         self._proc = subprocess.Popen(
             cmd,
@@ -178,14 +171,42 @@ class SimBackend(RuntimeBackend):
             self._log.fault("NO_READY", repr(hello))
             raise RuntimeError(f"sim server did not READY: {hello!r}")
         self._started = True
-        # NEW: arm the sim's rolling cycle ring (freezes on fault_code /
+        # Arm the sim's rolling cycle ring (freezes on fault_code /
         # running-drop) so a play fault leaves VRING forensics in the trace.
         try:
             self._rpc("RINGSTOP -1")
         except Exception:
             pass
-        self._rpc("SCREEN?")
-        self._sync_glass()
+        if not self._use_rtl:
+            raise RuntimeError('Finder services require RTL; use the PYTHON runtime for the host model')
+        self._rpc("FB?")
+
+    def _service_connected(self):
+        return True  # The first request starts the selected RTL simulator.
+
+    def _accept_service_rpc(self, response):
+        parts = response.split()
+        if not parts or parts[0] != 'SERVICE':
+            raise RuntimeError('RTL Finder service unavailable: ' + response)
+        for record in parts[1:]:
+            if not self._receive_service_line(record):
+                raise RuntimeError('Invalid RTL service reply')
+
+    def _send_service_packet(self, packet):
+        self._accept_service_rpc(self._rpc('SERVICE ' + packet.hex()))
+
+    def _stream_staged(self, prefix, data):
+        import tempfile
+        if prefix not in (0xFB, 0xFC, 0xFD):
+            raise ValueError('Unsupported bulk staging service')
+        try:
+            with tempfile.NamedTemporaryFile(prefix='jmr-finder-', suffix='.bin') as staged:
+                staged.write(data)
+                staged.flush()
+                self._accept_service_rpc(self._rpc(f'SERVICEBULK {prefix:02X} {staged.name}'))
+        except Exception:
+            self._transfer_fault = True
+            raise
 
     def _rpc(self, cmd: str) -> str:
         self._start()
@@ -255,84 +276,7 @@ class SimBackend(RuntimeBackend):
         self._kev_codes = []
         self._kev_t0 = time.monotonic()
 
-    def _last_glass_line(self) -> str:
-        """Last non-empty VRAM row (not a 16-row 400-char join)."""
-        last = ""
-        for ln in reversed(self._screen.replace("\\n", "\n").splitlines()):
-            t = ln.strip()
-            if t:
-                last = t
-                break
-        return last
 
-    def _vmstat_snap(self, st: str, extra: str = "") -> str:
-        """One-line glass snapshot — not a full VMSTAT dump."""
-        keep = (
-            "sname=", "ip=", "eip=", "vdraw=", "raf=", "obj=", "arr=", "spr=",
-            "dihit=", "dimiss=", "fault=", "fclk=", "gc=", "swaps=",
-            # NEW: bring-up fields so a GUI run is self-diagnosing. A silent
-            # halt (S_IDLE with fault=0) is invisible without fsite/badst,
-            # and a dead key needs kalloc/kcall/kcmp to tell "never queued"
-            # from "queued but no listener matched".
-            "fsite=", "badst=", "kalloc=", "kcall=", "kcmp=", "kevq=",
-            "align=", "vcsp=", "vret=", "lsn=", "efault=", "ecode=",
-            "evkey=", "txtw=", "fontpx=", "idkd=", "idku=",
-            "hp=", "venvk=", "venvi=", "nops=", "sp=", "txtmiss=", "strovf=", "loop=", "rafcall=", "frend=", "ipn=", "hot=", "topip=",
-        )
-        parts = [tok for tok in st.split() if tok.startswith(keep)]
-        title = (self._loaded_name or "").upper()[:16]
-        bits = [f"SNAP title={title or '-'}"]
-        bits.extend(parts)
-        if extra:
-            bits.append(extra)
-        return " ".join(bits)
-
-    def _note_glass(self, tag: str) -> None:
-        """LIST/DIR/LOAD/SAVE — last non-empty row so a long URI is readable."""
-        last = self._last_glass_line()
-        msg = f"GLASS {tag} {last[:120]}"
-        if msg == self._last_glass:
-            return
-        self._last_glass = msg
-        self._log.note(msg)
-        if last.startswith("-- MORE"):
-            self._note_more()
-
-    def _note_more(self) -> None:
-        """MORE page + the source line above it (wrap=1 if mid-URI / long)."""
-        self._more_page = getattr(self, "_more_page", 0) + 1
-        prev = ""
-        seen_more = False
-        for ln in reversed(self._screen.replace("\\n", "\n").splitlines()):
-            t = ln.strip()
-            if not t:
-                continue
-            if t.startswith("-- MORE"):
-                seen_more = True
-                continue
-            if seen_more:
-                prev = t
-                break
-        wrap = int(
-            ("data:image" in prev.lower())
-            or prev.endswith("|")
-            or len(prev) >= 60
-        )
-        self._log.note(f"MORE page={self._more_page} wrap={wrap} {prev[:80]}")
-
-    def _load_reply_ready(self, glass: str, stem: str) -> bool:
-        """True only for THIS load's LOADED stem+LINES (or ?IO/?FN/?LS)."""
-        g = glass.replace("\\n", "\n")
-        if "?IO" in g or "?LS" in g or "?FN" in g:
-            return True
-        want = (stem or "").upper()[:8]
-        if not want:
-            return "LOADED" in g and "LINES" in g
-        for ln in g.splitlines():
-            u = ln.upper()
-            if "LOADED" in u and "LINES" in u and want in u:
-                return True
-        return False
 
     @property
     def running(self) -> bool:
@@ -341,177 +285,30 @@ class SimBackend(RuntimeBackend):
 
     @property
     def more_waiting(self) -> bool:
-        """True while LIST/DIR is on glass (MORE or mid-page). Enter must page, not LINE."""
-        return self._more or self._listing
+        return False
 
-    def edit_prefill(self) -> Optional[str]:
-        """Body text after EDIT n (for GUI line_buf)."""
-        return self._edit_prefill
 
-    def _screen_has_more(self) -> bool:
-        # Parked MORE is the last nonempty row. Scanning all 16 VRAM rows
-        # kept Enter bound to paging after DIR (leftover "-- MORE --" above
-        # new names), so one page needed a dozen Returns to reach READY.
-        nonempty = [ln.strip() for ln in self._screen.splitlines() if ln.strip()]
-        return bool(nonempty) and nonempty[-1].startswith("-- MORE")
+    @property
+    def edit_prefill(self):
+        return None
 
-    def _capture_listing_rows(self) -> None:
-        """DIR/LIST names live on 16-row SCREEN. PYTHON console_log keeps them;
-        FPGA-SIM letterbox uses _typed_log — copy each page across or READY
-        paints an empty monitor after MORE."""
-        for ln in self._screen.replace("\\n", "\n").splitlines():
-            t = ln.strip()
-            if not t or t in (">", "> ") or t.startswith(">"):
-                continue
-            if t.startswith("-- MORE") or t == "READY" or t.startswith("READY"):
-                continue
-            if t not in self._typed_log[-24:]:
-                self._typed_log.append(t)
 
-    def _abort_more(self) -> None:
-        """Esc out of -- MORE -- so the next LINE is not eaten as a page key."""
-        for _ in range(32):
-            self._rpc("SCREEN?")
-            if not self._screen_has_more():
-                self._more = False
-                self._listing = False
-                return
-            self._rpc("KEY 1b")
-            for _ in range(30):
-                self._rpc("TICK")
-        self._more = False
-        self._listing = False
 
-    def _note_edit_prefill(self) -> None:
-        """After EDIT n, SCREEN shows '20 body' — capture body for GUI prefill."""
-        self._edit_prefill = None
-        for ln in reversed(self._screen.splitlines()):
-            t = ln.strip()
-            if not t or t in ("READY", ">", "OK", "?"):
-                continue
-            if t.startswith("-- MORE") or t.startswith(">"):
-                continue
-            parts = t.split(None, 1)
-            if parts and parts[0].isdigit():
-                self._edit_prefill = t
-                return
+
+
+
+
+
+
             # wrapped continuation of EDIT body — keep scanning for 'N body'
 
-    def _paint_screen_local(
-        self, prompt: Optional[str] = None, cursor_on: bool = False,
-        cursor_col: Optional[int] = None,
-    ) -> None:
-        """RTL text path — HDMI letterbox (same geometry as PYTHON / BOARD)."""
-        if self._system_keyboard:
-            self._canvas.paint_console_letterbox(self._screen.splitlines(), prompt="",color=0,prompt_color=0,background=1)
-            return
-        # Parked on -- MORE -- (or paging to the next MORE): never overlay '>'
-        if self._more or self._screen_has_more():
-            self._more = True
-            lines = self._screen.splitlines()
-            self._canvas.paint_console_letterbox(lines, prompt="",color=0,prompt_color=0,background=1)
-            return
-        pr = prompt if prompt is not None else "> "
-        # PYTHON console_log is append-only in typed order. RTL SCREEN is
-        # 16 VRAM rows and may still hold an older RUN while a later LOAD
-        # prints LOADED — never merge leftover `> run` onto the end of SCREEN.
-        if not self._listing and self._typed_log:
-            lines = [ln for ln in self._typed_log if ln.strip()]
-        else:
-            lines = [ln for ln in self._screen.splitlines() if ln.strip()]
-        while lines and lines[-1].strip() in (">", "> "):
-            lines.pop()
-        self._canvas.paint_console_letterbox(
-            lines,
-            prompt=pr,color=0,prompt_color=0,background=1,
-            cursor_on=cursor_on,
-            cursor_col=cursor_col,
-        )
 
-    def _sync_glass(self, prompt: Optional[str] = None) -> None:
-        """Pull SCREEN? + FB?; paint FB when game_mode, else HDMI letterbox text."""
-        self._rpc("SCREEN?")
-        self._more = self._screen_has_more()
-        resp = self._rpc("FB?")
-        st = self._rpc("STATUS?")
-        if self._editor_live and "ready=1" in st:
-            self._editor_live = False
-        last = self._last_glass_line()
-        if self._listing:
-            self._capture_listing_rows()
-            if "ready=1" in st or last in ("READY",) or last.startswith("READY"):
-                self._listing = False
-        self._running = "running=1" in st or self._editor_live
-        if self._use_rtl:
-            self._desktop_status()
-            if self._desktop_visible:
-                self._sync_palette()
-                return
-        # game_mode OR the canvas editor (cmp_arm holds game_mode off).
-        if self._running and resp.startswith("FB ") and len(resp.split(None, 3)) == 4:
-            self._run_snap_done = False
-            return
-        if self._running:
-            return
-        if self._use_rtl or resp == "FB SAME" or not resp.startswith("FB "):
-            if self._use_rtl or not any(self._canvas.front):
-                # LIST/DIR: keep -- MORE -- (or the current page) without '>'
-                if self._more or self._listing:
-                    self._paint_screen_local("")
-                else:
-                    self._paint_screen_local(prompt)
 
-    def _pump_until_more_or_ready(self, *, leave_more: bool = False) -> None:
-        """Wait until MORE or READY. Fat data-URI LIST needs millions of SPI clocks."""
-        for _ in range(500):
-            pump = getattr(self, "run_wait_idle", None)
-            if pump is not None:
-                pump()
-            if getattr(self, "_break_run_wait", False):
-                break
-            self._rpc("SCREEN?")
-            st = self._rpc("STATUS?")
-            if self._listing:
-                self._capture_listing_rows()
-            if "ready=1" in st:
-                self._listing = False
-                self._more = False
-                break
-            has = self._screen_has_more()
-            if leave_more:
-                if not has:
-                    break
-            elif has:
-                break
-            last = self._last_glass_line()
-            if last in ("READY", ">", "> ") or last.startswith("READY"):
-                break
-            # TICKN 20000 = 20M clocks (same as fat RUN)
-            self._rpc("TICKN 20000")
 
-    def _pump_compile(self) -> None:
-        """LINE yields while COMPILE is still in C_CMP_WAIT — tick until READY."""
-        self._break_run_wait = False
-        for _ in range(500):
-            pump = getattr(self, "run_wait_idle", None)
-            if pump is not None:
-                pump()
-            if getattr(self, "_break_run_wait", False):
-                break
-            st = self._rpc("STATUS?")
-            self._desktop_status()
-            self._paint_screen_local("")
-            if "ready=1" in st:
-                break
-            self._rpc("TICKN 20000")
-            self._rpc("SCREEN?")
-            last = self._last_glass_line()
-            if last.startswith("?") or last.startswith("COMPIL"):
-                if last not in self._typed_log[-3:]:
-                    if self._typed_log and self._typed_log[-1] == "READY":
-                        self._typed_log.insert(len(self._typed_log) - 1, last)
-                    else:
-                        self._typed_log.append(last)
+
+
+
+
 
     def _sync_native_source(self):
         reply=self._rpc("SOURCE?")
@@ -522,239 +319,29 @@ class SimBackend(RuntimeBackend):
             self._loaded_html_text="";self._program_image=b"";self._image_meta={};self._aset_bytes=0
 
     def type_line(self, text: str) -> None:
-        if self._use_rtl:
-            self._sync_native_source()
-            if text.strip().upper() == "DESKTOP":
-                self._rpc("DESKTOP 1")
-                self._desktop_visible = True
-                return
-            self._rpc("DESKTOP 0")
-            self._desktop_visible = False
-        self._log.type_line(text)
-        # NEW: leave MORE before a new command (else first char advances the page)
-        self._abort_more()
-        stripped = text.strip()
-        upper = stripped.upper()
-        if upper in ("EDIT","READ") or upper.startswith("LOAD"):
-            self._text_palette_synced = False
-        # Mirror the monitor editor in the backend so RUN compiles the actual
-        # loaded/editor source, including HTML larger than RTL SOURCE BRAM.
-        if self._edit_waiting_line is not None:
-            idx = self._editor_index(self._edit_waiting_line)
-            body = text
-            parts = text.split(None, 1)
-            if parts and parts[0].isdigit():
-                body = parts[1] if len(parts) > 1 else ""
-            if 0 <= idx < len(self._html_lines):
-                self._html_lines[idx] = body
-                self._loaded_html_text = "\n".join(self._html_lines)
-            self._edit_waiting_line = None
-        elif upper.startswith("EDIT "):
-            try:
-                self._edit_waiting_line = int(stripped[4:].strip().split()[0])
-            except (ValueError, IndexError):
-                self._edit_waiting_line = None
-        elif upper.startswith("INSERT "):
-            try:
-                n = int(stripped[6:].strip().split()[0])
-                idx = max(0, min(self._editor_index(n if n >= 10 else n * 10), len(self._html_lines)))
-                self._html_lines.insert(idx, "")
-                self._loaded_html_text = "\n".join(self._html_lines)
-            except (ValueError, IndexError):
-                pass
-        elif upper.startswith("DELETE "):
-            try:
-                n = int(stripped[6:].strip().split()[0])
-                idx = self._editor_index(n if n >= 10 else n * 10)
-                if 0 <= idx < len(self._html_lines):
-                    del self._html_lines[idx]
-                    self._loaded_html_text = "\n".join(self._html_lines)
-            except (ValueError, IndexError):
-                pass
-        self._last_cmd = stripped
-        if stripped:
-            # PYTHON console_log keeps every typed row. FPGA-SIM HTML RUN
-            # skips LINE so RTL never echoes `> RUN`; keep it here.
-            if not self._typed_log:
-                for ln in self._screen.splitlines():
-                    s = ln.strip()
-                    if s and s not in (">", "> "):
-                        self._typed_log.append(s)
-            self._typed_log.append(f"> {stripped}")
-        if upper in ("CLS", "NEW"):
-            self._typed_log = []
-        if upper.startswith("LOAD"):
-            self._loaded_name = stripped[4:].strip().strip('"').strip("'")
-            self._arch_phase = "load"
-            self._html_chunk = None
-            self._html_lines = []
-            self._loaded_html_text = ""
-            self._program_image = b""
-            # The previous title's header would otherwise sit under the new
-            # name in the sequencer panel until this one is RUN and compiled.
-            self._image_meta = {}
-            self._aset_bytes = 0
-            self._prof_raw = ""
-            self._prof_armed = False
-        skip_line = False
-        ram_load = False  # SOURCE from RTL FAT LOAD (wait for LOADED)
-        # Compile-on-RUN of storage/ HTML is not the product path. V1.0 RUN
-        # streams the minted NAME.JSH from card.img (same bytes as the board).
-        if upper == "RUN" or upper.startswith("RUN "):
-            self._arch_phase = "compile"
-            if self._html_loaded_stem() and not self._load_card_jsh():
-                self._arch_phase = "loaded"
-                self._sync_glass("> ")
-                return
-            if self._html_loaded_stem() and self._use_rtl:
-                resp = self._stream_program_image()
-                if not resp.startswith("OK"):
-                    self._log.fault("PROGRAM", resp)
-                    self._arch_phase = "loaded"
-                    self._sync_glass("> ")
-                    return
-                skip_line = True
-                self._arch_phase = "run"
-                self._run_snap_done = False
-                self._sync_palette()
-        if (upper == "RUN" or upper.startswith("RUN ")) and not self._loaded_name:
-            # `laod "invaders.html"` is ?SN, then RUN of an empty VM looks like
-            # a black title. One line — not a FRAME dump.
-            self._log.note("RUN-EMPTY no LOAD this session")
-        if not skip_line:
-            self._rpc(f"LINE {text}")
-            if not upper.startswith("LOAD") and upper != "RUN" and not upper.startswith("RUN "):
-                try:
-                    self._rpc("SCREEN?")
-                    last = self._last_glass_line()
-                    if last.startswith("?SN") or last.startswith("?FN") or last.startswith("?NH"):
-                        self._log.note(f"GLASS-ERR {last[:80]}")
-                except Exception:
-                    pass
-            if upper == "EDIT":
-                st = self._rpc("STATUS?")
-                if "ready=0" in st:
-                    self._editor_live = True
-                    self._running = True
-            if upper == "COMPILE":
-                self._pump_compile()
-        # LIST/DIR may park on -- MORE --; LINE now waits, but keep pumping
-        # until MORE or prompt so we never paint '>' over a mid-page.
-        if upper == "LIST" or upper.startswith("LIST ") or upper == "DIR" or upper.startswith("DIR"):
-            self._listing = True
-            self._more_page = 0
-            self._pump_until_more_or_ready()
-        # HTML LOAD: wait for THIS stem+LINES, not a stale LOADED still on glass.
-        # FAT SPI of the (squashed) card HTML — same path as the chip.
-        if (
-            upper.startswith("LOAD")
-            and self._html_loaded_stem()
-            and not skip_line
-            and not ram_load
-        ):
-            self._break_run_wait = False
-            stem = self._html_loaded_stem()
-            for i in range(500):
-                pump = getattr(self, "run_wait_idle", None)
-                if pump is not None:
-                    pump()
-                if getattr(self, "_break_run_wait", False):
-                    break
-                self._rpc("TICKN 20000")
-                self._rpc("SCREEN?")
-                if "?FN" in self._screen or "?SN" in self._screen:
-                    # NEW: missing file / bad name — stop waiting for LOADED
-                    self._arch_phase = "idle"
-                    break
-                if self._load_reply_ready(self._screen, stem):
-                    self._arch_phase = "loaded"
-                    # Mirror SOURCE from the card (squashed HTML), not storage/.
-                    self._mirror_card_html(stem)
-                    break
-        if upper.startswith("SAVE"):
-            self._persist_save(stripped)
-        # HTML RUN: PROGSTART already started the VM. FAT wait is gone.
-        if (
-            (upper == "RUN" or upper.startswith("RUN "))
-            and self._html_loaded_stem()
-            and not skip_line
-        ):
-            nbytes = len(self._program_image)
-            clocks = max(40_000_000, nbytes * 200)
-            # NEW: TICKN 20000 = 20M clocks/RPC (cap 100000). Fat ProgramImage was
-            # 236× TICKN 2000 RPCs after LINE's 100M cap — minutes of overhead.
-            slices = max(1, (clocks + 19_999_999) // 20_000_000)
-            self._break_run_wait = False
-            for i in range(slices):
-                pump = getattr(self, "run_wait_idle", None)
-                if pump is not None:
-                    pump()
-                if getattr(self, "_break_run_wait", False):
-                    break
-                self._rpc("TICKN 20000")
-                st = self._rpc("STATUS?")
-                glass = self.screen_text()
-                if "running=1" in st or "?NH" in glass or "?NB" in glass:
-                    if "running=1" in st:
-                        self._arch_phase = "run"
-                    else:
-                        self._arch_phase = "loaded"
-                    break
-                # Do not overlay '>' during LINE/FAT wait (typed RUN vanished).
-            # NEW: ASET palette landed in the RTL palette BRAM during the FAT
-            # load — mirror it so the GUI colors FB indices like HDMI would.
-            self._sync_palette()
-        if upper.startswith("LOAD"):
-            # Host log is chronological: `> LOAD` then this reply, never a
-            # SCREEN merge that can place LOADED above an older `> run`.
-            # SCREEN VRAM is 16 rows and keeps the first LOADED until CLS/RUN,
-            # so do not parse glass for the name — use the file just loaded.
-            loaded = ""
-            if self._html_lines:
-                stem = self._html_loaded_stem()
-                name = (self._loaded_name or f"{stem}.HTM").upper()
-                loaded = f"LOADED {name} ({len(self._html_lines)} LINES)"
-            if loaded:
-                self._typed_log.append(loaded)
-            if not self._typed_log or self._typed_log[-1] != "READY":
-                self._typed_log.append("READY")
-        # NEW: the GUI letterbox paints from _typed_log, not the raw glass —
-        # RTL error replies (?SN ERROR / ?FN FILE NOT FOUND / ?NH …) were on
-        # the glass but never shown. Mirror the reply that followed this
-        # command onto the console log, keeping READY last.
-        try:
-            self._rpc("SCREEN?")
-            rows = [r.strip() for r in self._screen.replace("\\n", "\n").splitlines()]
-            for r in reversed(rows):
-                if not r:
-                    continue
-                if r.startswith("?"):
-                    if r not in self._typed_log[-3:]:
-                        if self._typed_log and self._typed_log[-1] == "READY":
-                            self._typed_log.insert(len(self._typed_log) - 1, r)
-                        else:
-                            self._typed_log.append(r)
-                        self._log.note(f"GLASS-ERR {r[:80]}")
-                    break
-                if r.startswith(">") or r == "READY" or r.startswith("READY"):
-                    continue
-                # COMPILED / COMPILING / OK — same letterbox as ?CE. LIST
-                # pages stay on SCREEN, not this log. Bare EDIT owns the
-                # glass; do not steal a leftover VRAM row onto the letterbox.
-                if (upper == "COMPILE" or (upper.startswith("EDIT") and not self._editor_live)) and r not in self._typed_log[-5:]:
-                    if self._typed_log and self._typed_log[-1] == "READY":
-                        self._typed_log.insert(len(self._typed_log) - 1, r)
-                    else:
-                        self._typed_log.append(r)
-                    self._log.note(f"GLASS {r[:80]}")
-                break
-        except Exception:
-            pass
-        self._sync_glass()
-        if upper.startswith("DIR") or upper.startswith("LOAD") or upper.startswith("SAVE") or upper == "LIST" or upper.startswith("LIST"):
-            self._note_glass(upper.split()[0])
-        if upper.startswith("EDIT"):
-            self._note_edit_prefill()
+        """Compatibility adapter for host tools; never type into FPGA RAM."""
+        if self._transfer_active:
+            raise RuntimeError('A Finder transfer owns the tether')
+        command, _, tail = text.strip().partition(' ')
+        command = command.upper()
+        name = tail.strip().strip('"')
+        if command in ('DIR', 'CATALOG'):
+            self.refresh_board_catalog()
+        elif command == 'LOAD':
+            from runtime.finder_tether import fat_name
+            if not fat_name(name):
+                raise ValueError('Select a filename')
+            self._loaded_name = name
+        elif command in ('RUN', 'EDIT', 'READ', 'COMPILE'):
+            name = name or self._loaded_name
+            if not name:
+                raise ValueError('Select a program or document in Finder')
+            self.launch_named(name, {'RUN': 0, 'EDIT': 1, 'READ': 2, 'COMPILE': 3}[command])
+        elif command in ('HOME', 'DESKTOP'):
+            self._service(Operation.ENTER_FINDER, 1, timeout=120.0)
+        elif command:
+            raise ValueError('Use Finder for file operations; this FPGA has no command monitor')
+
 
     def _sync_palette(self) -> None:
         """Pull the RTL palette BRAM (PAL?) into the GUI canvas palette."""
@@ -792,9 +379,9 @@ class SimBackend(RuntimeBackend):
         self._loaded_html_text = ""
         self._html_lines = []
 
-    def _load_card_jsh(self) -> bool:
+    def _load_card_jsh(self, stem=None, expected_ops=None) -> bool:
         """V1.0 RUN: minted NAME.JSH bytes from card.img (not a storage/ recompile)."""
-        stem = self._html_loaded_stem()
+        stem = stem or self._html_loaded_stem()
         if not stem:
             return False
         try:
@@ -806,6 +393,8 @@ class SimBackend(RuntimeBackend):
             from functional_model.jsb_format import ProgramImage
 
             image = ProgramImage(blob)
+            if expected_ops is not None and image.n_ops != expected_ops:
+                return False  # Transition still exposes the previous VM header.
             try:
                 self._html_chunk = image.decode()
             except Exception:
@@ -819,65 +408,18 @@ class SimBackend(RuntimeBackend):
             self._aset_bytes = self._measure_aset(self._html_chunk) if self._html_chunk else 0
             self._program_image = image.data
             self._log.note(
-                f"card {stem}.JSH → ProgramImage ({len(blob)} bytes, RAM stream)"
+                f"observer image {stem}.JSH ({len(blob)} bytes); execution remains in RTL"
             )
             return True
         except Exception as e:
             self._log.fault("COMPILE", str(e))
             return False
 
-    def _editor_index(self, display_n: int) -> int:
-        """Map monitor display lines (10,20,...) or 1-based rows to an index."""
-        if display_n <= 0:
-            return -1
-        if display_n % 10 == 0:
-            return display_n // 10 - 1
-        if display_n < 10 or display_n <= len(self._html_lines):
-            return display_n - 1
-        return display_n // 10 - 1
 
-    def _stream_program_image(self) -> str:
-        """Stream the ephemeral ProgramImage into Verilator without a sidecar."""
-        blob = self._program_image
-        if not blob:
-            return "ERR no image"
-        resp = self._rpc(f"PROGBEGIN {len(blob)}")
-        if not resp.startswith("OK"):
-            return resp
-        # 32 KiB binary chunks keep each line bounded while avoiding hundreds
-        # of tiny process round trips for full-quality ASET payloads.
-        for off in range(0, len(blob), 32768):
-            resp = self._rpc(f"PROGDATA {blob[off : off + 32768].hex()}")
-            if not resp.startswith("OK"):
-                return resp
-        return self._rpc("PROGSTART")
 
-    def _persist_save(self, text: str) -> None:
-        """Host-copy full HTML onto card.img after RTL SAVE (SOURCE may truncate).
 
-        SDRELOAD picks up the patched FAT so LOAD of the new name works.
-        """
-        rest = text[4:].strip().strip('"').strip("'")
-        if not rest:
-            return
-        stem = self._html_loaded_stem() or Path(self._loaded_name or "").stem[:8]
-        if not stem:
-            return
-        data = self._loaded_html_text.encode("utf-8")
-        if not data:
-            return
-        try:
-            from tools.make_sd_image import patch_card_file
 
-            dest = ROOT / "storage" / rest
-            dest.write_bytes(data)
-            card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
-            if card.is_file():
-                patch_card_file(card, rest, data)
-                self._rpc("SDRELOAD")
-            self._log.note(f"SAVE loaded editor → {rest} ({len(data)} bytes)")
-        except Exception as e:
-            self._log.fault("SAVE", str(e))
+
 
     @staticmethod
     def _measure_aset(chunk) -> int:
@@ -893,92 +435,12 @@ class SimBackend(RuntimeBackend):
         except Exception:
             return 0
 
-    def _compile_on_run_html(self) -> bool:
-        """Compile the loaded/editor HTML into one ephemeral ProgramImage."""
-        stem = self._html_loaded_stem()
-        html_path = ROOT / "storage" / f"{stem}.HTML"
-        if not self._loaded_html_text and not html_path.is_file():
-            self._log.fault("COMPILE", f"no {html_path.name} — refuse RUN (?NH)")
-            return False
-        try:
-            from functional_model.compiler import CompileError
-            from functional_model.jsb_format import ProgramImage
-            from tools.compile_js import compile_html_text, encode_html_chunk
 
-            html = self._loaded_html_text
-            # The card copy of an HTML title is display-only: giant asset
-            # lines are squashed to `<LINE n: ... CHARS OMITTED>` for LIST
-            # (make_sd_image.squash_long_html_lines). A mirror populated
-            # from that copy compiles into a title with no sprites (DONKEY
-            # background-only, 2026-08-25). Compile the source of truth.
-            if html and "CHARS OMITTED>" in html and html_path.is_file():
-                self._log.note(
-                    f"squashed card copy in editor mirror - compiling {html_path.name}")
-                html = ""
-            if not html:
-                html = html_path.read_text(encoding="utf-8")
-                self._loaded_html_text = html
-                self._html_lines = html.splitlines()
-            chunk = compile_html_text(html, source_path=html_path)
-            blob = encode_html_chunk(chunk)
-            image = ProgramImage(blob)
-            # Observe the decoded ProgramImage, not the pre-encode Chunk: the
-            # RTL executes these words, and PYTHON's monitor reads the same
-            # artifact — otherwise the two runtimes report different n_consts
-            # for one title.
-            try:
-                self._html_chunk = image.decode()
-            except Exception:
-                self._html_chunk = chunk
-            self._image_meta = {
-                "n_ops": int(image.n_ops or 0),
-                "n_consts": int(image.n_consts or 0),
-                "n_vars": int(image.n_vars or 0),
-                "flags": int(image.flags or 0),
-            }
-            self._aset_bytes = self._measure_aset(self._html_chunk)
-            self._html_lines = html.splitlines()
-            self._program_image = image.data
-            self._log.note(
-                f"compile-on-RUN loaded {html_path.name} → ProgramImage "
-                f"({len(blob)} bytes, RAM stream)"
-            )
-            return True
-        except CompileError as e:
-            where = f" LINE {e.line}" if e.line else ""
-            self._log.fault("COMPILE", f"ERROR{where}: {e.message}")
-            return False
-        except Exception as e:
-            self._log.fault("COMPILE", str(e))
-            return False
 
-    def push_key(self, ch: str) -> None:
-        """MORE continue / Esc — GUI Space/Enter while more_waiting.
+    def push_key(self, ch):
+        if ch == '\x1b':
+            self.hard_break()
 
-        After the page key, TICKN until the next -- MORE -- or prompt
-        (LIST of a fat HTML needs ~10^5 clocks; a handful of TICK is not enough).
-        """
-        if not self._started:
-            self._start()
-        # root.update() during the pump re-enters here; extra Enter would
-        # queue page keys that become empty LINE once DIR hits READY.
-        if self._paging and ch != "\x1b":
-            return
-        self._paging = True
-        try:
-            if ch == "\x1b":
-                self._rpc("KEY 1b")
-            elif ch in (" ", "\r", "\n"):
-                self._rpc("KEY 20" if ch == " " else "KEY 0d")
-            else:
-                self._rpc(f"KEY {ord(ch):02x}")
-            # Leave the current MORE page first (SCREEN still shows the old -- MORE --)
-            self._pump_until_more_or_ready(leave_more=True)
-            # Then wait until the next -- MORE -- or prompt (same as type_line LIST)
-            self._pump_until_more_or_ready()
-            self._sync_glass()
-        finally:
-            self._paging = False
 
     def screen_text(self) -> str:
         if not self._started:
@@ -999,228 +461,68 @@ class SimBackend(RuntimeBackend):
         return self._rpc(f"MOUSE {int(x)} {int(y)} {int(buttons) & 7}") == "OK"
 
     def key_event(self, key_code: int, key: str, pressed: bool) -> None:
-        # NEW: raw keyboard → RTL KEYEVT for every code. HTML decides bindings.
+        # Raw keyboard → RTL KEYEVT for every code. HTML decides bindings.
         # KEYBITS still tethers arrows/space; RTL skips synthetic keydown when
         # a KEYEVT is already queued (no double-fire).
         text = ord(key) if pressed and len(key) == 1 else 0
         self._rpc(f"KEYEVT {int(key_code) & 0xFF} {1 if pressed else 0} {text & 255}")
 
-    def paint_prompt(self, prompt: str, cursor_on: bool = False, cursor_col=None) -> None:
-        if not self._started:
-            self._start()
-        # NEW: game owns the glass (BASIC method) — never overlay `>` on FB
-        if self._running or self._more or self._listing or self._desktop_visible or self._system_keyboard:
-            return
-        if self._use_rtl:
-            self._paint_screen_local(prompt, cursor_on=cursor_on, cursor_col=cursor_col)
-        else:
-            self._rpc(f"PROMPT {prompt}")
-            resp = self._rpc("FB?")
-            if resp == "FB SAME":
-                self._rpc("SCREEN?")
-                self._paint_screen_local(prompt, cursor_on=cursor_on, cursor_col=cursor_col)
+    def paint_prompt(self, prompt, cursor_on=False, cursor_col=None):
+        return  # Finder owns the FPGA-SIM display.
 
-    def hard_break(self) -> None:
-        self._running = False
-        self._editor_live = False
-        self._arch_phase = "loaded"
-        self._flush_keyevts()
-        self._log.note("BREAK")
-        # NEW: one VM telemetry line on BREAK (n_obj / heap_ovf / to_ovf / raf)
-        try:
-            st = self._rpc("VMSTAT?")
-            self._log.note(self._vmstat_snap(st))
-            self._log.note(self._rpc("PXCNT?"))
-            self._log.note(self._rpc("FBRAW?"))
-        except Exception:
-            pass
-        self._break_run_wait = True  # NEW: abort size-scaled RUN TICKN wait
-        self._abort_more()
-        self._rpc("KEY 1b")
-        self._sync_glass("> ")
-        self._edit_prefill = None
+
+    def hard_break(self):
+        if self._transfer_active:
+            raise RuntimeError('Finish or resolve the Finder transfer first')
+        self._log.note('BREAK')
+        self._rpc('KEY 1b')
+        self._rpc('VMSTAT?')
+        self._rpc('FB?')
+
 
     def framebuffer(self):
         return self._canvas
 
-    def poll(self) -> None:
-        return
+    def poll(self):
+        if self._service_pending:
+            self._accept_service_rpc(self._rpc('SERVICEPOLL'))
 
-    def frame_tick(self) -> None:
+
+    def frame_tick(self):
         if not self._started:
             return
-        if self._use_rtl:
-            ui_state=parse_status_kv(self._rpc("UISTATE?"))
-            if ui_state.get("catalog",0) or ui_state.get("action",0):
-                self._rpc("TICKN 500")
-                self._sync_native_source()
-            self._desktop_status()
-            live_status=self._rpc("STATUS?")
-            role=parse_status_kv(self._rpc("WINDOW?")).get("role",0)
-            if role!=self._palette_role:
-                # Finder selects RGB332 after VM startup. The earlier ASET
-                # palette must not remain cached on the host canvas.
-                self._sync_palette();self._palette_role=role
-            if "text_app=0" in live_status:
-                self._text_palette_synced=False
-            if "text_app=1" in live_status and "ready=0" in live_status:
-                if "vm_busy=1" in live_status and not self._text_palette_synced:
-                    self._sync_palette()
-                    self._text_palette_synced=True
-                self._editor_live=True
-                self._running=True
-            if self._desktop_visible or self._desktop_busy:
-                self._rpc("TICKN 500")
-                self._desktop_status()
-                self._rpc("FB?")
-                status = self._rpc("STATUS?")
-                was_running = self._running
-                self._running = "running=1" in status
-                if (self._native_action in (2,4,6) and self._native_phase==22
-                        and "vm_busy=1" in status):
-                    if not self._text_palette_synced:
-                        self._sync_palette()
-                        self._text_palette_synced=True
-                    self._editor_live = True
-                    self._running = True
-                if self._desktop_visible or self._running != was_running:
-                    self._sync_palette()
-                if not self._desktop_visible and not self._running:
-                    self._rpc("SCREEN?")
-                    self._paint_screen_local("")
-                return
-        if self._editor_live:
-            st = self._rpc("STATUS?")
-            if "ready=1" in st:
-                self._editor_live = False
-                self._running = False
-                if not self._typed_log or self._typed_log[-1] != "READY":
-                    self._typed_log.append("READY")
-                self._sync_glass("> ")
-                return
-            # File loading and a first Finder paint can take many simulated
-            # clocks. Bound each GUI call; never wait for an entire long paint
-            # on Tk's event thread. Game FRAME behavior below is unchanged.
-            if "vm_busy=0" in st:
-                self._arch_phase = "load"
-                self._rpc("TICKN 500")
-                self._rpc("FB?")
-            else:
-                self._arch_phase = "run"
-                self._rpc("FRAME 500000")
-            return
-        # NEW: while running, one VM frame (tick-to-swap) not TICK=1000
-        if self._running:
-            # Record the IPs this frame executes. Between frames the VM is
-            # always parked at the same rAF return, so a live IP read shows
-            # one frozen instruction — this is what the monitor replays.
-            # A simulated FRAME costs ~1.7 s; these probes cost ~0.01 ms.
-            self._arm_ip_trace()
-            resp = self._rpc("FRAME")
-            self._read_ip_trace()
-            self._play_frames += 1
-            now = time.monotonic()
-            if self._play_t == 0.0:
-                self._play_t = now
-            # Capped FRAME returns FB SAME while game_mode — that is the hang.
-            capped = resp == "FB SAME"
-            first3 = self._play_frames <= 3
-            beat = now - self._play_t >= 1.0
-            # Read VMSTAT every frame so the monitor's heap / rAF / fclk move
-            # with the game. A simulated FRAME is ~1.7 s and VMSTAT? is
-            # ~0.01 ms, so the old 1 s throttle bought nothing and left every
-            # counter on screen a second stale. Logging stays throttled below.
-            st = ""
-            try:
-                st = self._rpc("VMSTAT?")
-            except Exception:
-                st = ""
-            log_this = capped or first3 or beat
-            if st:
-                fclk = 0
-                vdraw = ""
-                for tok in st.split():
-                    if tok.startswith("fclk="):
-                        try:
-                            fclk = int(tok.split("=", 1)[1])
-                        except ValueError:
-                            pass
-                    elif tok.startswith("vdraw="):
-                        vdraw = tok
-                if fclk:
-                    self._play_fclk.append(fclk)
-                vdraw_chg = bool(vdraw) and vdraw != self._log_vdraw
-                if vdraw:
-                    self._log_vdraw = vdraw
-                # Overlay/capped FRAME used to dump the same VMSTAT 100+ times.
-                # Log first3, fcap hang, and a vdraw change (maze→win overlay).
-                # `log_this` keeps the old throttle now that VMSTAT is read
-                # every frame — vdraw changes nearly every frame in play, and
-                # without it the flight log would gain a line per frame.
-                if log_this and (first3 or "fcap=1" in st or vdraw_chg):
-                    if not self._run_snap_done:
-                        fb = ""
-                        try:
-                            fb = self._rpc("FBRAW?")
-                        except Exception:
-                            fb = ""
-                        self._log.note(self._vmstat_snap(st, extra=fb[:40]))
-                        self._run_snap_done = True
-                    elif "fcap=1" in st or vdraw_chg:
-                        self._log.note(f"FRAME {st}")
-                # VM halt (fault=255 ARRAY_GET, heap ovf, …): drop game_mode
-                # so LIST is the console, not keys queued behind a dead FRAME.
-                fault_n = 0
-                for tok in st.split():
-                    if tok.startswith("fault="):
-                        try:
-                            fault_n = int(tok.split("=", 1)[1])
-                        except ValueError:
-                            fault_n = 0
-                if fault_n:
-                    self._log.fault("VM", st)
-                    # NEW: fault forensics — the ring froze at the fault, so
-                    # this is the run-up, not noise. One line each.
-                    try:
-                        self._log.note("VRING " + self._rpc("VRING?")[:1600])
-                        self._log.note("PX " + self._rpc("PXCNT?")[:120])
-                    except Exception:
-                        pass
-                    self._running = False
-                    self._editor_live = False
-                    self._arch_phase = "loaded"
-                    self._rpc("KEY 1b")
-                    if not self._typed_log or self._typed_log[-1] != "READY":
-                        self._typed_log.append("READY")
-                    self._sync_glass("> ")
-            if beat:
-                n = len(self._play_fclk)
-                avg = (sum(self._play_fclk) // n) if n else 0
-                mx = max(self._play_fclk) if n else 0
-                self._flush_keyevts()
-                self._log.note(
-                    f"play fb_frames={self._play_frames} fclk_avg={avg} "
-                    f"fclk_max={mx} {self._vmstat_snap(st)}"
-                )
-                self._sample_prof()
-                self._play_t = now
-                self._play_frames = 0
-                self._play_fclk = []
-        elif self._more:
-            # Parked: do not TICK (C_LIST_WAIT is key-driven) and do not
-            # paint '>' between pages while the next MORE is still printing.
-            self._rpc("SCREEN?")
-            self._more = self._screen_has_more()
-            if not self._more:
-                last = self._last_glass_line()
-                if last in ("READY",) or last.startswith("READY"):
-                    self._paint_screen_local("> ")
+        if self._service_pending:
+            self.poll()
         else:
-            if self._system_keyboard:
-                self._rpc("TICKN 10")
-                self._sync_glass()
-            else:
-                self._rpc("TICK")
+            self._rpc('FRAME 500000')
+        self._poll_service_status()
+        status = parse_status_kv(self._rpc('STATUS?'))
+        self._running = bool(status.get('vm_busy', status.get('running', 0)))
+        self._arch_phase = 'run' if self._running else 'idle'
+        role = parse_status_kv(self._rpc('WINDOW?')).get('role', 0)
+        if role != self._palette_role:
+            self._sync_palette()
+            self._palette_role = role
+            self._sync_native_source()
+        self._desktop_status()
+        self._rpc('FB?')
+        now = time.monotonic()
+        if now - self._vmstat_t >= 0.25:
+            vm = parse_status_kv(self._rpc('VMSTAT?'))
+            self._sync_native_source()
+            stem = {1: 'EDITOR', 2: 'READ', 3: 'COMPILE', 4: 'UTILITY',
+                    5: 'EDITOR', 9: 'FINDER'}.get(role, self._html_loaded_stem())
+            key = (stem, vm.get('nops'))
+            if stem and key != getattr(self, '_observer_image_key', None):
+                if self._load_card_jsh(stem, vm.get('nops')):
+                    self._mirror_card_html(stem)
+                    self._observer_image_key = key
+        # Keep existing optional inspector data available without CLI scraping.
+        if now - self._play_t >= 1.0:
+            self._read_ip_trace()
+            self._sample_prof()
+            self._play_t = now
+
 
     @property
     def system_keyboard(self):
@@ -1228,13 +530,13 @@ class SimBackend(RuntimeBackend):
 
     @property
     def console_line(self):
-        for line in reversed(self._screen.splitlines()):
-            if line.lstrip().startswith("> "):
-                return line.lstrip()[2:].rstrip()
         return ""
 
+
     def console_key(self, char):
-        self._rpc(f"KEY {int(char)&255:02x}")
+        if int(char) == 27:
+            self.hard_break()
+
 
     def _desktop_status(self):
         state = parse_status_kv(self._rpc("DESKTOP?"))
@@ -1264,16 +566,6 @@ class SimBackend(RuntimeBackend):
     # How many distinct consecutive IPs to capture per frame. IPTRACE records
     # a prefix of the frame — real work, not the park it ends on.
     _IP_TRACE_N = 600
-
-    def _arm_ip_trace(self) -> None:
-        if not self._ip_trace_ok:
-            return
-        try:
-            if not self._rpc(f"IPTRACE {self._IP_TRACE_N}").startswith("OK"):
-                self._ip_trace_ok = False
-                self._log.note("IPTRACE unsupported by this sim — no IP replay")
-        except Exception:
-            self._ip_trace_ok = False
 
     def _read_ip_trace(self) -> None:
         if not self._ip_trace_ok:
@@ -1332,22 +624,9 @@ class SimBackend(RuntimeBackend):
     def trace_path(self) -> Optional[Path]:
         return self._log.path
 
-    def put_files_on_card(self, paths: list) -> str:
-        """gui-put: patch host card.img then SDRELOAD so FPGA-SIM DIR sees it."""
-        names = super().put_files_on_card(paths)
-        try:
-            self._rpc("SDRELOAD")
-        except Exception:
-            pass
-        return names
 
-    def put_card_names(self, names: list) -> str:
-        names = super().put_card_names(names)
-        try:
-            self._rpc("SDRELOAD")
-        except Exception:
-            pass
-        return names
+
+
 
     def shutdown(self) -> None:
         if self._proc is None:
@@ -1364,7 +643,7 @@ class SimBackend(RuntimeBackend):
             pass
         self._proc = None
         self._started = False
-        # NEW: the RTL is gone — nothing of this session may survive onto the
+        # The RTL is gone — nothing of this session may survive onto the
         # glass of the next runtime (F9 used to show the dead session's text).
         self._running = False
         self._more = False
@@ -1470,7 +749,9 @@ class SimBackend(RuntimeBackend):
         snap["source_name"] = self._loaded_name or ""
         snap["last_cmd"] = self._last_cmd
         snap["more"] = bool(self._more)
-        snap["catalog"] = card_catalog()
+        snap["catalog"] = list(self._board_catalog or [])
+        snap["catalog_known"] = self._board_catalog is not None
+        snap["catalog_source"] = "RTL storage"
         snap["prof"] = self._prof_raw
         snap["ip_ring"] = list(self._ip_ring)
         chunk = self._html_chunk

@@ -1,6 +1,6 @@
 // DDR3 front-image line prefetcher + 2-line ping-pong buffer.
 //
-// Session-1 (2026-08-23): the scanout FB moved to DDR3 (front image at
+// Session-1: the scanout FB moved to DDR3 (front image at
 // FB_SRAM_BASE, 2 px per 16-bit word, little pixel first). This module
 // keeps the NEXT beam line resident in a dual-clock 2x640 BRAM while the
 // current line scans out, so the pixel side sees the same 1-beat
@@ -52,14 +52,14 @@ module jmr_fb_scanout #(
         y_core = g;
     end
     // Registered decode: the gray prefix-XOR plus the +1/compare/x320
-    // address cone was 10-11 LUT levels and set run-32's residual WNS
+    // address cone was 10-11 LUT levels and set the residual WNS
     // (-1.17). One register here lags the prefetch decision a single
     // 10 ns cycle behind the beam - noise against the 32 us line time.
     logic [9:0] y_core_q;
     always_ff @(posedge clk) y_core_q <= y_core;
-    // run 71: the remaining cone (compare + increment + x320 DSP + 21-bit
-    // base add, 10-11 levels) set run 71's WNS (-0.448) and thinned runs
-    // 50/52/70b. Split it: stage 1 = the wanted line, stage 2 = its SRAM
+    // The remaining cone (compare + increment + x320 DSP + 21-bit
+    // base add, 10-11 levels) set the WNS (-0.448).
+    // Split it: stage 1 = the wanted line, stage 2 = its SRAM
     // base. want_qq rides beside line_base_q so the two are always from
     // the same beam sample. Prefetch now lags the beam 3 cycles (30 ns)
     // against a 32 us line - still noise.
@@ -82,7 +82,7 @@ module jmr_fb_scanout #(
     logic [7:0]  hi_byte;
     logic [10:0] hi_addr;
     always_ff @(posedge clk) begin
-        /* SINGLE write statement (vstack 1W recipe, run 58 census):
+        /* SINGLE write statement (vstack 1W recipe):
            the ack arm wrote BOTH bytes of the sram word in one cycle —
            two write ports made ram_style="block" infeasible, and this
            2048-deep buffer fell back to 16,496 FFs + ~10.6k LUTs of

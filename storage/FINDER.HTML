@@ -77,7 +77,7 @@ function tbWindowAt(i){return i>=0&&i<tbClientOrder.length?tbClientOrder[i]:255;
 // 16426 undoFolder, 16427 undoX, 16429 undoY, 16431 undoN, 16432 undoName[12],
 // 16445 deskDirty, 16446 selN, 16447 infoSlot, 16448 prefixN, 16449 prefix[4],
 // 16454 prefixFrame, 16456 orderN, 16458 startupN, 16459 startup[12].
-// 16600 zoom, 16620 dialog, 16621 clipN, 16622 clip[12], 16640 hitWin, 16642 hitSlot.
+// 16600 zoom, 16620 dialog, 16621 clipN, 16622 clip[12], 16634 hostRefresh, 16640 hitWin, 16642 hitSlot.
 // 16472 dragX, 16474 dragY: where the icon was when the drag started.
 // Slots at 8192 (32 bytes). Windows at 16896 (16 bytes, 8 of them).
 // Order at 20480. Comments at 24576 (24 bytes). Desktop image at 32768.
@@ -98,7 +98,7 @@ var fontImage=new Image();
 fontImage.src="jmr:spr:0";
 tbSessionProperty(ctx,0,9);
 tbSessionProperty(ctx,2,"Finder|Manage programs and documents.");
-tbSessionMenus(ctx,["File|New Folder=160|Open=161|Close=162|Close All=163|Get Info=164|Duplicate=165|Put Back=166|Print=167|Page Setup=168|Eject=169", "Edit|Undo=170|Cut=171|Copy=172|Paste=173|Clear=174|Select All=175|Show Clipboard=176", "View|by Icon=177|by Small Icon=178|by Name=179|by Size=180|by Kind=181|by Date=182|Hidden files=183", "Special|Clean Up=184|Empty Trash=185|Set Startup=186|Restart=187|Erase Disk=188|Terminal=189|Compile=190|Editor=1010|Reader=1011|Utility=1013|Note=1014|Help=1015"]);
+tbSessionMenus(ctx,["File|New Folder=160|Open=161|Close=162|Close All=163|Get Info=164|Duplicate=165|Put Back=166|Print=167|Page Setup=168|Eject=169", "Edit|Undo=170|Cut=171|Copy=172|Paste=173|Clear=174|Select All=175|Show Clipboard=176", "View|by Icon=177|by Small Icon=178|by Name=179|by Size=180|by Kind=181|by Date=182|Hidden files=183", "Special|Clean Up=184|Empty Trash=185|Set Startup=186|Restart=187|Erase Disk=188|Compile=190|Editor=1010|Reader=1011|Utility=1013|Note=1014|Help=1015"]);
 ctx.font="8px";
 ctx.fillStyle="#000000";
 
@@ -282,11 +282,12 @@ function markKinds(){
   }
  }
 }
-function findName(off,nlen){
+function findName(off,nlen,filesOnly){
  var i,a,n,j,ok;
  n=stgRead(16386);
  for(i=0;i<n;i++){
   a=8192+i*32;
+  if(filesOnly&&stgRead(a+13)==6)continue;
   if(stgRead(a)!=nlen)continue;
   ok=1;
   for(j=0;j<nlen;j++)if(stgRead(a+1+j)!=stgRead(off+j))ok=0;
@@ -304,6 +305,26 @@ function allocSlot(){
  if(n>=250)return -1;
  stgWrite(16386,n+1);
  return n;
+}
+// Host imports add/replace files; merge without renumbering folder/window slots.
+function refreshHostCatalog(){
+ var p=256,n,s,a,i,fl,count=0;
+ if(fsList()<0)return;
+ while(count<250){
+  n=stgRead(p);if(n==0)break;if(n>12)return;
+  s=findName(p+1,n,1);
+  if(s<0){s=allocSlot();if(s>=0){tbFill(8192+s*32,0,32);stgWrite(24576+s*24,0);}}
+  if(s>=0){
+   a=8192+s*32;fl=stgRead(a+15)&7;
+   stgWrite(a,n);tbMove(p+1,a+1,n);if(n<12)stgWrite(a+1+n,0);
+   stgWrite(a+13,kindOf(a));tbMove(p+1+n,a+16,6);
+   stgWrite(a+15,fl|flagsFor(a,stgRead(p+7+n)));
+  }
+  p=p+n+8;count=count+1;
+ }
+ for(i=0;i<256;i++)stgWrite(48000+i,0);
+ markKinds();placeGrid();recount();stgWrite(16445,1);saveDesk();
+ stgWrite(16634,0);stgWrite(16385,1);WM.bounded=0;
 }
 function recount(){
  var i,n,t,f,a;
@@ -466,7 +487,7 @@ function zoom(x0,y0,x1,y1,w,h){
 }
 // The shared Window/Control/Damage implementation owns geometry and stacking.
 // File records and the original DESKTOP.FDR layout remain Finder-owned.
-var WM={restored:0,r:[0,0,0,0],bounded:0,thumb:0,size:16,maximum:0,page:3};
+var WM={receiving:0,restored:0,r:[0,0,0,0],bounded:0,thumb:0,size:16,maximum:0,page:3};
 function wmRect(w){var a=16896+w*16;WM.r[0]=r16(a+5);WM.r[1]=r16(a+7);WM.r[2]=r16(a+9);WM.r[3]=r16(a+11);return WM.r;}
 function wmDamage(w){var a=wmRect(w);tbDamage(a[0],a[1],a[2],a[3]);WM.bounded=1;}
 function wmRanks(){var i=0,w;while(i<8){w=tbWindowAt(i);if(w!=255)stgWrite(16896+w*16+13,i);i=i+1;}}
@@ -1008,6 +1029,7 @@ function onKey(e){
  WM.bounded=0;
  var c,w;
  c=e.keyCode;
+ if(c==255){stgWrite(16634,1);_tbMenu=-1;_tbDialog=0;tbMenuCommand();tbDialogResult();WM.receiving=1;WM.bounded=0;stgWrite(16385,1);return;}
  // Menu commands end filename editing; they are not characters to rename with.
  if(c>=160){stgWrite(16409,0);stgWrite(16385,1);}
  if(c==16){stgWrite(16391,1);return;}
@@ -1040,7 +1062,6 @@ function onKey(e){
  else if(c==185){if(stgRead(16387)){stgWrite(16620,1);stgWrite(16385,1);}}
  else if(c==186)doStartup();
  else if(c==187)doRestart();
- else if(c==189){saveDesk();sysRun(30200,4);}
  else if(c==190)doCompile();
  else if(c==13){if(firstSel()>=0)beginRename(firstSel());}
  else if(c==37)arrowSel(0);
@@ -1517,6 +1538,13 @@ function drawZoom(){
  // kept that rectangle on the glass.
  stgWrite(16385,1);
 }
+function drawReceiving(){
+ ctx.fillRect(160,178,320,104,0);
+ ctx.fillRect(162,180,316,100,255);
+ tbInk(_tbD,0,1);
+ tbText([82,101,99,101,105,118,105,110,103,32,102,105,108,101,115],210,208);
+ tbText([80,108,101,97,115,101,32,119,97,105,116],232,240);
+}
 function paint(){
  var y,p;stgWrite(16385,0);
  if(!WM.bounded)tbDamage(0,22,640,458);tbDamageClip();p=tbDrawBounds(0,22,640,458);
@@ -1542,12 +1570,14 @@ function start(){
 }
 function frame(){
  var f;
+ if(WM.receiving==2){WM.receiving=0;sysRun(30200,8);return;}
  f=r16(16407)+1;w16(16407,f);
  if(stgRead(16448)>0&&f-r16(16454)>40)stgWrite(16448,0);
  if(stgRead(16409)&&f-Math.floor(f/16)*16==0)stgWrite(16385,1);
- if(!WM.restored&&stgRead(16384)){wmRestore();WM.restored=1;}
+ if(!WM.restored&&stgRead(16384)){wmRestore();if(stgRead(16634))refreshHostCatalog();WM.restored=1;}
  if(stgRead(16384)==0)start();
  else if(stgRead(16385))paint();
+ if(WM.receiving==1){drawReceiving();WM.receiving=2;}
  tbSessionFrame(frame);
 }
 tbSessionListen("keydown",onKey);

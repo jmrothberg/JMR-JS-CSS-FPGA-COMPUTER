@@ -96,7 +96,7 @@ var docX=0,docY=0,down=0,dirty=0,bad=0,undoOk=0,mode=0,docClean=1;
 
 var ax=0,ay=0,bx=0,by=0,lastX=0,lastY=0,lastSX=0,lastSY=0;
 
-var havePrev=0,pax=0,pay=0,pbx=0,pby=0;
+var havePrev=0,pbx=0,pby=0;
 
 var selOn=0,selFloat=0,selDrag=0,moving=0,selX=0,selY=0,selW=0,selH=0,hasClip=0;
 
@@ -106,7 +106,7 @@ var penX=16,penY=16,oldPX=16,oldPY=16,tx=8,ty=8,textX0=8;
 
 var sp=0,x0=0,y0=0,x1=0,y1=0;
 
-var rx=0,ry=0,rw=0,rh=0,fillX0=0,fillY0=0,fillX1=0,fillY1=0;
+var rx=0,ry=0,rw=0,rh=0;
 
 // Visit bits for the bucket, past the color undo. A fill that does not
 // change a pixel still has to mark it, or that pixel stays open forever.
@@ -185,7 +185,6 @@ function useColor(c){ var k; k=COLS[c]; ctx.fillStyle=k; }
 function patByte(p,row){var i; i=p*8+row;if(i<0)return 0;if(i>=304)return;return stgRead(374795+i);}
 function setPatByte(p,row,v){var i;i=p*8+row;if(i>=0&&i<304)stgWrite(374795+i,v);}
 function patBit(p,col,row){var b,m,i;i=p*8+row;b=i<0?0:i>=304?undefined:stgRead(374795+i);m=MASK[col];return Math.floor(b/m)%2;}
-function patAt(x,y){ var c,r; c=x-Math.floor(x/8)*8; r=y-Math.floor(y/8)*8; if(c<0) c=0; if(r<0) r=0; return patBit(pat,c,r); }
 function patInkAt(p,col,row){
  var k,n;
  n=p; if(n>=38) n=n-38;
@@ -566,18 +565,12 @@ function drawShape(commit){
  else if(tool==14) ovalScan(0,commit);
  else if(tool==15) ovalScan(1,commit);
 }
-function restoreBox(xa,ya,xb,yb){
- var x,y,t;
- if(xa>xb){ t=xa; xa=xb; xb=t; } if(ya>yb){ t=ya; ya=yb; yb=t; }
- if(xa<docX) xa=docX; if(ya<docY) ya=docY;
- if(xb>=docX+viewW()) xb=docX+viewW()-1; if(yb>=docY+viewH()) yb=docY+viewH()-1;
- y=ya; while(y<=yb){ x=xa; while(x<=xb){ paintDot(x,y,shown(x,y)); x=x+1; } y=y+1; }
-}
+
 function previewShape(x,y){
  if(havePrev) drawShape(2);
  bx=x; by=y;
  if(sh&&tool==8) constrainLine(); else if(sh) constrainBox();
- drawShape(0); pax=ax; pay=ay; pbx=bx; pby=by; havePrev=1;
+ drawShape(0); pbx=bx; pby=by; havePrev=1;
 }
 function commitShape(){ drawShape(1); havePrev=0; dirty=1; }
 function spray(x,y){
@@ -926,7 +919,7 @@ function doClear(){
  if(selOn==0||selDrag) return; copyDocToUndo();
  if(selFloat==0) clearSel(); selOn=0; selFloat=0;
 }
-function selectAll(){ selX=0; selY=0; selW=576; selH=320; selOn=1; selFloat=0; selDrag=0; if(copySel()) hasClip=1; }
+
 function clearPage(){
  if(tbFill(4096,0,23040)<0) bad=1;
  if(tbFill(27136,0,23040)<0) bad=1;
@@ -987,18 +980,7 @@ function saveSlot(slot,p,n){
  var a; if(n>12) n=12; a=3600+slot*13; stgWrite(a,n);
  if(tbMove(p+1,a+1,n)<0) bad=1; PC.nFiles=PC.nFiles+1;
 }
-function listPictures(){
- var p,n;
- copyRange(4096,27136,23040);
- PC.nFiles=0; fsList(); p=256;
- while(PC.nFiles<14&&p<3500){
-  n=stgRead(p); if(n<=0) break;
-  if(isPnt(p,n)) saveSlot(PC.nFiles,p,n);
-  p=p+1+n+7;
- }
- copyRange(27136,4096,23040);
- undoOk=0;
-}
+
 function takeStem(slot){
  var n,i,a; a=3600+slot*13; n=stgRead(a); if(n>4) n=n-4; if(n>8) n=8; PC.nameLen=n; i=0;
  while(i<8){ NAME[i]=0; i=i+1; } i=0; while(i<n){ NAME[i]=stgRead(a+1+i); i=i+1; }
@@ -1298,12 +1280,7 @@ function drawOpen(){
  i=0; while(i<PC.nFiles){ a=3600+i*13; n=stgRead(a); uiStringAt(a+1,n,VX+8,VY+32+i*14); i=i+1; }
 }
 function uiStringAt(a,n,x,y){ var i; i=0; while(i<n&&i<12){ uiChar(stgRead(a+i),x+i*6,y); i=i+1; } }
-function drawSaveAs(){
- ctx.fillStyle="#FFFFFF"; ctx.fillRect(VX,VY,VW,80);
- ctx.fillStyle="#000000"; ctx.font="16px"; ctx.fillText("Type a name. Return saves.",VX+8,VY+24);
- uiString(NAME,PC.nameLen,VX+8,VY+40);
- ctx.fillStyle="#000000"; ctx.fillRect(VX+8+PC.nameLen*6,VY+40,1,8);
-}
+
 function drawEditor(){
  var row,col,k;
  ctx.fillStyle="#000000"; ctx.fillRect(110,108,300,220);

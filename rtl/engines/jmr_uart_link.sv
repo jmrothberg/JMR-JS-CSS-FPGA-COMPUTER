@@ -121,7 +121,7 @@ endmodule
 module jmr_uart_link #(
     parameter int CLK_HZ = 100_000_000,
     parameter int BAUD   = 115200,
-    // NEW: Nexys Video PROG jack is FT245 FIFO (DPTI), not UART. T100/A7 used UART.
+    // Nexys Video PROG jack is FT245 FIFO (DPTI), not UART. T100/A7 used UART.
     parameter bit USE_DPTI = 0
 ) (
     input  logic       clk,
@@ -139,44 +139,56 @@ module jmr_uart_link #(
     // Keyboard inject (merged with PS/2 in the top)
     output logic       kbd_push,
     output logic [7:0] kbd_data,
-    // NEW: GUI play keys over PROG tether (ORed with JB stick; console optional)
+    // GUI play keys over PROG tether (ORed with JB stick; console optional)
     output logic [5:0] joy_bits,
     // Char VRAM dump read port (jmr_js_core dump_addr/dump_data)
     output logic [9:0] dump_addr,
     input  logic [7:0] dump_data,
-    // NEW: subsample of 640×480 FB for tether (160×120 → host ×4)
+    // Subsample of 640×480 FB for tether (160×120 → host ×4)
     output logic [18:0] dump_fb_raddr,
     input  logic [7:0]  dump_fb_rdata,
-    // NEW: when game_mode, stream P-rows (mini-FB) instead of text S-rows
+    // When game_mode, stream P-rows (mini-FB) instead of text S-rows
     input  logic       game_mode = 1'b0,
-    // NEW: log USB scancodes to tether (flight-log proof without guessing LEDs)
+    // Log USB scancodes to tether (flight-log proof without guessing LEDs)
     input  logic       ps2_strobe = 1'b0,
     input  logic [7:0] ps2_code = 8'h00,
     // storage state telemetry: "Dxx" line when it CHANGES while busy
     // (a stalled DIR parks in one state - one line names it)
     input  logic [6:0] stor_state = 7'd0,
-    input  logic [15:0] stor_op_clk = 16'd0,   // run 71: E line carries it
+    input  logic [15:0] stor_op_clk = 16'd0,   // E line carries it
     input  logic [6:0] cons_state = 7'd0,
     // BOARD VM heartbeat: packed {0,st[6:0],fault[7:0],ip[15:0]}, already
     // registered in the VM domain - sampled here as a plain register.
     input  logic [31:0] vm_vdbg = 32'd0,
     input  logic        vm_vdbg_fault = 1'b0,
-    // run-60 observability: heap gauge + fault snapshot + ip trace
+    // Observability: heap gauge + fault snapshot + ip trace
     input  logic [31:0] vm_hdbg = 32'd0,
     input  logic [31:0] vm_fdbg = 32'd0,
     input  logic        vm_fdbg_v = 1'b0,
     input  logic [47:0] vm_gdbg = 48'd0,
     input  logic [127:0] vm_ftrace = 128'd0,
-    // NEW: HTML RUN .JSH stream (0xFD + u32 LE length + payload)
+    // HTML RUN .JSH stream (0xFD + u32 LE length + payload)
     //       SOURCE put (0xFC + u32 LE length + payload) — then host SAVE
     output logic       jsb_tether_stb,
     output logic [7:0] jsb_tether_data,
     output logic       jsb_tether_eof,
     output logic       jsb_tether_src, // 1 while an 0xFC SOURCE stream is live
-    output logic       jsb_tether_big, // run 71: 1 while an 0xFB CART (big file) stream is live
-    output logic       jsb_tether_crc_err, // run 71: held with eof when the
+    output logic       jsb_tether_big, // 1 while an 0xFB CART (big file) stream is live
+    output logic       jsb_tether_crc_err, // Held with eof when the
                                            // trailer CRC-32 mismatched
-    input  logic       jsb_tether_rdy = 1'b0
+    input  logic       jsb_tether_rdy = 1'b0,
+    // Finder services: 0xFA + fixed 23-byte little-endian body + CRC32.
+    // Transport only: core validates version/name/op and owns side effects.
+    output logic         host_req_valid,
+    output logic [183:0] host_req_body,
+    output logic         host_req_crc_ok,
+    input  logic         host_req_ready = 1'b0,
+    input  logic         tether_abort = 1'b0,
+    // Q reply payload: {version8, operation8, transaction32, phase8,
+    // status8, value32}. Hold valid/payload until ready.
+    input  logic         host_q_valid = 1'b0,
+    input  logic [95:0]  host_q_payload = 96'd0,
+    output logic         host_q_ready
 );
     logic       rx_ready;
     logic [7:0] rx_data;
@@ -184,17 +196,19 @@ module jmr_uart_link #(
     logic       wr_en;
     logic [7:0] wr_data;
     logic       rx_pop;
-    // NEW: 0xFD + u32 LE length + payload → console C_JSB_TETHER (not kbd)
+    // 0xFD + u32 LE length + payload → console C_JSB_TETHER (not kbd)
     typedef enum logic [3:0] {
         JSH_IDLE, JSH_L0, JSH_L1, JSH_L2, JSH_L3, JSH_DATA,
-        JSH_C0, JSH_C1, JSH_C2, JSH_C3   // run 71: CRC-32 trailer
+        JSH_C0, JSH_C1, JSH_C2, JSH_C3,
+        FA_BODY, FA_C0, FA_C1, FA_C2, FA_C3
     } jsh_t;
     jsh_t jsh_st;
+    logic [4:0] fa_count;
     logic [31:0] jsh_left;
     logic        jsh_eof_pend;
     logic        jsh_src;
     logic jsh_big; // 1 = 0xFC SOURCE fill (not 0xFD ProgramImage)
-    // Board freeze root cause (2026-08-25): eof was a 1-cycle pulse
+    // Board freeze root cause: eof was a 1-cycle pulse
     // raised the same cycle the LAST data byte strobes - the console is
     // then in C_JSB_FEED processing that byte and returns to
     // C_JSB_TETHER only cycles later, so it could never see the pulse:
@@ -203,7 +217,7 @@ module jmr_uart_link #(
     logic        jsh_eof_hold;
     wire jsh_hold = (jsh_st == JSH_DATA) && !jsb_tether_rdy;
 
-    // Run 71: CRC-32 (IEEE, reflected, init FFFFFFFF, final ~) over the
+    // CRC-32 (IEEE, reflected, init FFFFFFFF, final ~) over the
     // 0xFC/0xFD payload, byte-serial so it costs one 32-bit register and a
     // few XOR levels. The host appends crc32(payload) little-endian after
     // the payload; a mismatch raises jsb_tether_crc_err alongside eof and
@@ -221,12 +235,12 @@ module jmr_uart_link #(
         end
     endfunction
     assign jsb_tether_crc_err = crc_err_r;
-    assign rx_pop = rx_ready && !jsh_hold;
-    assign jsb_tether_stb = rx_ready && (jsh_st == JSH_DATA) && jsb_tether_rdy;
+    assign rx_pop = rx_ready && (tether_abort || (!jsh_hold && !host_req_valid));
+    assign jsb_tether_stb = !tether_abort && rx_ready && (jsh_st == JSH_DATA) && jsb_tether_rdy;
     assign jsb_tether_data = rx_data;
-    assign jsb_tether_eof = jsh_eof_hold;
-    assign jsb_tether_src = jsh_src;
-    assign jsb_tether_big = jsh_big;
+    assign jsb_tether_eof = !tether_abort && jsh_eof_hold;
+    assign jsb_tether_src = !tether_abort && jsh_src;
+    assign jsb_tether_big = !tether_abort && jsh_big;
 
     generate
         if (USE_DPTI) begin : g_dpti
@@ -262,18 +276,49 @@ module jmr_uart_link #(
             joy_bits <= 6'b0;
             joy_cmd <= 1'b0;
             jsh_st <= JSH_IDLE;
+            host_req_valid <= 1'b0;
+            host_req_body <= 184'd0;
+            host_req_crc_ok <= 1'b0;
+            fa_count <= 5'd0;
             jsh_left <= 32'd0;
             jsh_eof_pend <= 1'b0;
             jsh_eof_hold <= 1'b0;
             jsh_src <= 1'b0; jsh_big <= 1'b0;
             crc_acc <= 32'hFFFFFFFF; crc_rx <= 32'd0; crc_err_r <= 1'b0;
+        end else if (tether_abort) begin
+            // Sticky core quarantine: discard RX until physical reset.
+            // TX diagnostics and typed error responses remain available.
+            kbd_push <= 1'b0;
+            joy_bits <= 6'd0; joy_cmd <= 1'b0;
+            host_req_valid <= 1'b0; host_req_crc_ok <= 1'b0;
+            jsh_st <= JSH_IDLE; jsh_left <= 32'd0;
+            jsh_eof_pend <= 1'b0; jsh_eof_hold <= 1'b0;
+            jsh_src <= 1'b0; jsh_big <= 1'b0;
         end else begin
             kbd_push <= 1'b0;
+            if (host_req_valid && host_req_ready)
+                host_req_valid <= 1'b0;
             jsh_eof_pend <= 1'b0;
             if (jsh_eof_pend)                       jsh_eof_hold <= 1'b1;
             else if (jsh_eof_hold && jsb_tether_rdy) jsh_eof_hold <= 1'b0;
             if (rx_ready && rx_pop) begin
-                if (jsh_st == JSH_L0) begin
+                if (jsh_st == FA_BODY) begin
+                    // Fixed shift wiring; byte 0 ends in body[7:0].
+                    host_req_body <= {rx_data, host_req_body[183:8]};
+                    crc_acc <= crc32_byte(crc_acc, rx_data);
+                    if (fa_count == 5'd22) jsh_st <= FA_C0;
+                    else fa_count <= fa_count + 5'd1;
+                end else if (jsh_st == FA_C0) begin
+                    crc_rx[7:0] <= rx_data; jsh_st <= FA_C1;
+                end else if (jsh_st == FA_C1) begin
+                    crc_rx[15:8] <= rx_data; jsh_st <= FA_C2;
+                end else if (jsh_st == FA_C2) begin
+                    crc_rx[23:16] <= rx_data; jsh_st <= FA_C3;
+                end else if (jsh_st == FA_C3) begin
+                    host_req_crc_ok <= ({rx_data, crc_rx[23:0]} == ~crc_acc);
+                    host_req_valid <= 1'b1;
+                    jsh_st <= JSH_IDLE;
+                end else if (jsh_st == JSH_L0) begin
                     jsh_left[7:0] <= rx_data;
                     jsh_st <= JSH_L1;
                 end else if (jsh_st == JSH_L1) begin
@@ -286,11 +331,11 @@ module jmr_uart_link #(
                     jsh_left[31:24] <= rx_data;
                     crc_acc <= 32'hFFFFFFFF;
                     crc_err_r <= 1'b0;
-                    if ({rx_data, jsh_left[23:0]} == 32'd0) begin
-                        jsh_eof_pend <= 1'b1;
-                        jsh_src <= 1'b0; jsh_big <= 1'b0;
-                        jsh_st <= JSH_IDLE;
-                    end else
+                    // Empty files still carry a CRC trailer. Do not leak
+                    // those four bytes into keyboard input or skip validation.
+                    if ({rx_data, jsh_left[23:0]} == 32'd0)
+                        jsh_st <= JSH_C0;
+                    else
                         jsh_st <= JSH_DATA;
                 end else if (jsh_st == JSH_DATA) begin
                     crc_acc <= crc32_byte(crc_acc, rx_data);
@@ -313,8 +358,14 @@ module jmr_uart_link #(
                 end else if (joy_cmd) begin
                     joy_bits <= rx_data[5:0];
                     joy_cmd <= 1'b0;
+                end else if (rx_data == 8'hFA) begin
+                    // Reached only outside bulk data/CRC and FE key payload.
+                    jsh_st <= FA_BODY;
+                    fa_count <= 5'd0;
+                    host_req_crc_ok <= 1'b0;
+                    crc_acc <= 32'hFFFFFFFF;
                 end else if (rx_data == 8'hFB) begin
-                    // run 71 big put: .ART/.ARTX (up to ~2.9 MB) -> CART
+                    // Big put: .ART/.ARTX (up to ~2.9 MB) -> CART
                     // staging bank, then host types SAVE. Same length+CRC
                     // framing as 0xFC.
                     jsh_st <= JSH_L0;
@@ -346,10 +397,16 @@ module jmr_uart_link #(
     typedef enum logic [4:0] {
         HB_IDLE, HB_HDR, HB_ROW, HB_ROW2, HB_COLON, HB_BYTE, HB_NL, HB_K, HB_KH, HB_KL, HB_KNL,
         HB_V, HB_VN, HB_VNL, HB_E2, HB_E3,
-        HB_H, HB_HN, HB_F, HB_FN, HB_T, HB_TN, HB_G, HB_GN, HB_E4
+        HB_H, HB_HN, HB_F, HB_FN, HB_T, HB_TN, HB_G, HB_GN, HB_E4,
+        HB_QBODY, HB_QCRC, HB_QNL
     } hb_t;
     hb_t hb_state;
-    // run-60 observability serializers
+    logic [95:0] q_shift;
+    logic [31:0] q_crc;
+    logic [4:0] q_left;
+    // HB_IDLE is a record boundary, including between framebuffer rows.
+    assign host_q_ready = (hb_state == HB_IDLE) && !tx_busy;
+    // Observability serializers
     logic        h_pending, f_pending, t_pending, fdbg_v_q;
     logic [31:0] h_latch, f_latch, fp_latch;
     logic [127:0] t_latch;
@@ -384,16 +441,39 @@ module jmr_uart_link #(
     logic        v_beat_q;
     logic [26:0] d_dwell;  // continuous-busy dwell (board: the old
     // single-state equality never fired - a stall can LOOP between states)
-    // NEW: register pixel/char before wr_data (dump_addr→RAM→wr was WNS −0.025)
+    // Register pixel/char before wr_data (dump_addr→RAM→wr was WNS −0.025)
     logic [7:0]  dump_byte_q;
 
     function automatic logic [7:0] hex_digit(input logic [3:0] n);
-        hex_digit = (n < 4'd10) ? (8'h30 + {4'b0, n}) : (8'h37 + {4'b0, n});
+        // Four input bits define the complete function. A constant lookup
+        // avoids an adder/comparator chain on the framebuffer read path.
+        case (n)
+            4'h0: hex_digit=8'h30;
+            4'h1: hex_digit=8'h31;
+            4'h2: hex_digit=8'h32;
+            4'h3: hex_digit=8'h33;
+            4'h4: hex_digit=8'h34;
+            4'h5: hex_digit=8'h35;
+            4'h6: hex_digit=8'h36;
+            4'h7: hex_digit=8'h37;
+            4'h8: hex_digit=8'h38;
+            4'h9: hex_digit=8'h39;
+            4'ha: hex_digit=8'h41;
+            4'hb: hex_digit=8'h42;
+            4'hc: hex_digit=8'h43;
+            4'hd: hex_digit=8'h44;
+            4'he: hex_digit=8'h45;
+            4'hf: hex_digit=8'h46;
+            default: hex_digit=8'hxx;
+        endcase
     endfunction
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             hb_state <= HB_IDLE;
+            q_shift <= 96'd0;
+            q_crc <= 32'hFFFFFFFF;
+            q_left <= 5'd0;
             dump_addr <= '0;
             dump_fb_raddr <= '0;
             dump_active <= 1'b0;
@@ -430,7 +510,7 @@ module jmr_uart_link #(
                 v_beat_q <= e_beat[25];
                 if ((dump_active_q && !dump_active) || (vm_vdbg_fault && !vfault_q)
                     || (e_beat[25] && !v_beat_q)) begin
-                    // 2026-08-27: third arm = free-running ~0.67s beat, so the
+                    // Third arm = free-running ~0.67s beat, so the
                     // heartbeat is alive at the console too (was dump/fault
                     // only: lively in games, silent at READY).
                     v_pending <= 1'b1;
@@ -460,7 +540,7 @@ module jmr_uart_link #(
                 // looping stalls; normal ops idle between console strobes and
                 // never accumulate a second of busy.
                 if (stor_state == 7'd0) d_dwell <= 27'd0;
-                else if (&d_dwell) d_dwell <= 27'h4000000; // 2026-08-27: re-arm,
+                else if (&d_dwell) d_dwell <= 27'h4000000; // Re-arm,
                 // don't saturate - a long stall used to get 4 D lines
                 // (0.671..1.174s) then permanent silence; now one per ~0.67s
                 // for the stall's whole duration.
@@ -470,7 +550,7 @@ module jmr_uart_link #(
                     d_pending <= 1'b1;
                     d_code_q  <= {1'b0, stor_state};
                 end
-                // 2026-08-27: free-running storage-state beat (E line, ~1.34s):
+                // Free-running storage-state beat (E line, ~1.34s):
                 // reports the state REGARDLESS of dwell - replaces inferring
                 // storage health from timeout durations. Change-triggered too
                 // capped at one per 2^20 clks (~10ms) so churn can't flood TX.
@@ -491,7 +571,14 @@ module jmr_uart_link #(
 
             unique case (hb_state)
                 HB_IDLE: begin
-                    if (k_pending && !tx_busy && !dump_active) begin
+                    if (host_q_valid && host_q_ready) begin
+                        q_shift <= host_q_payload;
+                        q_crc <= 32'hFFFFFFFF;
+                        q_left <= 5'd23;
+                        wr_en <= 1'b1;
+                        wr_data <= "Q";
+                        hb_state <= HB_QBODY;
+                    end else if (k_pending && !tx_busy && !dump_active) begin
                         k_pending <= 1'b0;
                         d_sel <= 2'd0;
                         hb_state <= HB_K;
@@ -535,6 +622,28 @@ module jmr_uart_link #(
                         hb_state <= HB_HDR;
                     end
                 end
+                HB_QBODY: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= hex_digit(q_shift[95:92]);
+                    q_crc <= crc32_byte(q_crc, hex_digit(q_shift[95:92]));
+                    q_shift <= {q_shift[91:0], 4'd0};
+                    if (q_left == 5'd0) begin
+                        q_left <= 5'd7;
+                        hb_state <= HB_QCRC;
+                    end else q_left <= q_left - 5'd1;
+                end
+                HB_QCRC: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= hex_digit(~q_crc[31:28]);
+                    q_crc <= {q_crc[27:0], 4'hF};
+                    if (q_left == 5'd0) hb_state <= HB_QNL;
+                    else q_left <= q_left - 5'd1;
+                end
+                HB_QNL: if (!tx_busy) begin
+                    wr_en <= 1'b1;
+                    wr_data <= 8'h0A;
+                    hb_state <= HB_IDLE;
+                end
                 HB_K: if (!tx_busy) begin
                     wr_en <= 1'b1;
                     wr_data <= (d_sel == 2'd2) ? "E" : (d_sel == 2'd1) ? "D" : "K";
@@ -566,7 +675,7 @@ module jmr_uart_link #(
                     e_nib <= 2'd3;
                     hb_state <= HB_E4;
                 end
-                // run 71: Exxyyzzzz — zzzz = storage op duration (x256 clk)
+                // Exxyyzzzz — zzzz = storage op duration (x256 clk)
                 HB_E4: if (!tx_busy) begin
                     wr_en <= 1'b1;
                     wr_data <= hex_digit(e_op_q[{e_nib, 2'b00} +: 4]);
@@ -662,7 +771,7 @@ module jmr_uart_link #(
                 end
                 HB_BYTE: if (!tx_busy) begin
                     wr_en <= 1'b1;
-                    // NEW: use registered sample (breaks dump_addr→wr_data combo)
+                    // Use registered sample (breaks dump_addr→wr_data combo)
                     wr_data <= dump_byte_q;
                     if (dump_game) begin
                         if (fb_col == 8'd159) begin

@@ -13,8 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from functional_model.compiler import compile_source  # noqa: E402
-from functional_model.jsb_format import encode_chunk, jsb_to_hex_lines, read_artx  # noqa: E402
+from functional_model.jsb_format import encode_chunk, read_artx  # noqa: E402
 
 STORAGE = ROOT / "storage"
 VECTORS = ROOT / "vectors"
@@ -197,7 +196,7 @@ def _quantize_sprites(images, pal):
 def compile_one(src_path: Path, out_dir: Path | None = None) -> Path:
     # exec32 retirement: standalone .JS sidecar builds are not a product
     # path (HTML compile-on-RUN only). Refuse rather than mint a .JSB /
-    # invaders_jsb.hex nobody should boot (docs/REMOVING_EXEC32.md).
+    # invaders_jsb.hex nobody should boot.
     raise SystemExit(
         f"refusing {src_path.name}: .JS sidecar compiles are retired with "
         "exec32 — HTML titles compile on RUN (encode_html_chunk)"
@@ -222,7 +221,7 @@ def _js_line_to_html(spans, js_line: int) -> int:
     return h0 + n - 1
 
 
-# V1 wall for Image DOM properties (2026-08-26). The chip serves
+# V1 wall for Image DOM properties. The chip serves
 # `.width`/`.height` only as the 640/480 CANVAS default, and only when the
 # receiver is a primitive (jmr_js_vm_exec64.sv:5361 "Not a live object").
 # A sprite handle from `Image.src = data:...` IS a live object, so reading
@@ -300,7 +299,7 @@ def compile_html_text(html: str, *, sound: bool = True, source_path=None, artx=N
         spans.append((h0, body.count("\n") + 1))
     if not any(b.strip() for b in bodies):
         raise CompileError("NO SCRIPT IN HTML", 1)
-    # NEW: ';' between <script> blocks — browsers end statements at script
+    # ';' between <script> blocks — browsers end statements at script
     # boundaries; a bare "\n" join glued DONKEY's `rAF(update)` to the next
     # script's `(function(){...})()` as a call chain (ASI hazard).
     src = ";\n".join(bodies)
@@ -358,12 +357,14 @@ def compile_html_text(html: str, *, sound: bool = True, source_path=None, artx=N
     return chunk
 
 
-def encode_html_chunk(chunk) -> bytes:
+def encode_html_chunk(chunk, *, debug_map: bool = False) -> bytes:
     """ProgramImage bytes (JSB v2 + SPRD descriptors + ASET section).
 
     HTML titles always take the ASET path: full-res sprite banks + the
     per-title palette stream to the external SRAM asset bank; code BRAM
     only ever sees bytecode + descriptors. Not a disk sidecar.
+    Release images omit optional SMAP; debug_map=True retains it for host tools.
+    The original Chunk keeps its source lines for a separate debug artifact.
     """
     # Product HTML images always carry the frozen 64-bit Value ABI so PYTHON
     # and FPGA-SIM execute the same serialized words.
@@ -373,6 +374,7 @@ def encode_html_chunk(chunk) -> bytes:
         sprites=getattr(chunk, "sprites", None),
         aset=True,
         value64=True,
+        debug_map=debug_map,
     )
 
 

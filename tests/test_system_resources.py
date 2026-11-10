@@ -1,7 +1,7 @@
 from pathlib import Path
-import json, struct
+import json
 import pytest
-from tools.build_system_resources import pack,unpack,SIZE,CONFIG
+from tools.build_system_resources import pack,unpack,SIZE
 from functional_model.system_resources import SystemResources
 from functional_model.classic_ui import ClassicUI
 

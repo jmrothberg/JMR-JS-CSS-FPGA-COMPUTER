@@ -6,7 +6,7 @@ ROM image, not rebuilding FPGA logic once the bank interface is installed.
 """
 from pathlib import Path
 import struct,zlib,re
-from functional_model.compiler import Compiler,_tokenize,_isolate_iife_modules
+from functional_model.compiler import Compiler,_tokenize,_isolate_iife_modules,prepare_software_source
 from functional_model.bytecode import Op
 from functional_model.jsb_format import ProgramImage,FLAG_ASET
 ROOT=Path(__file__).resolve().parents[1]
@@ -68,12 +68,14 @@ def compiler_with_library():
 
 def compile_linked(source):
     c=compiler_with_library()
+    source=prepare_software_source(source, proof_compiler=c)
     protected=set(c._hoisted_fn_names) | {name for name in c.names if name.startswith("_tb")}
     protected|={c.names[ins[1]] for ins in c.code if ins[0]==Op.CALL_NATIVE}
     probe=Compiler(source);probe._prescan_function_names()
     if protected & probe._hoisted_fn_names:
         raise ValueError('Application redefines a Toolbox function')
     c.tokens=_isolate_iife_modules(_tokenize(source));c.i=0
+    c._require_concat_helper=True
     return mark_linked(c.compile(),c)
 
 def prefix_bytes(image):

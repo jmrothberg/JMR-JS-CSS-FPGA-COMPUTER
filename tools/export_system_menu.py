@@ -2,7 +2,7 @@
 from pathlib import Path
 import sys
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
-from functional_model.system_menu import KEYS,key_value,SHIP
+from functional_model.system_menu import KEYS,SHIP
 from functional_model.desktop import FONT
 from functional_model.system_window import WINDOW_LABELS
 out=['// Generated from functional_model/system_menu.py.','package jmr_system_menu_pkg;']

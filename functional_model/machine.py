@@ -1,6 +1,6 @@
 """Top-level machine — PYTHON behavioral truth.
 
-LLM NOTE: Monitor + bytecode + Canvas + INPUT. Engines stay separate modules.
+Monitor + bytecode + Canvas + INPUT. Engines stay separate modules.
 Glass: monitor text and games share the same 640×480 framebuffer (BASIC method).
 """
 
@@ -15,7 +15,6 @@ from .bytecode import VM
 from .canvas_engine import CONSOLE_VISIBLE_LINES, FB_BYTES, HEIGHT, WIDTH, CanvasEngine
 from .desktop import rgb332
 from .compiler import CompileError, compile_source
-from .html_loader import extract_html_program
 from .input_engine import InputEngine
 from .js_host import HtmlJsHost
 from .sram_engine import SramEngine
@@ -37,7 +36,7 @@ class Machine:
         self.input = InputEngine()
         self.canvas = CanvasEngine()
         self.storage = StorageEngine(storage_root)
-        # NEW: external SRAM asset bank model (ASET payload lives here)
+        # External SRAM asset bank model (ASET payload lives here)
         self.sram = SramEngine()
         self._spr_descs: list = []  # (w, h, sram_off) per sprite handle
         # V1.5 standalone compile: SOURCE window + the cdone handshake the
@@ -61,16 +60,17 @@ class Machine:
         # GUI sets more_idle to pump Tk while LIST waits for MORE.
         self.more_idle: Optional[Callable[[], None]] = None
         self._more_key: Optional[str] = None
-        self._list_more_waiting: bool = False  # NEW: GUI more_waiting / ESC abort
+        self._list_more_waiting: bool = False  # GUI more_waiting / ESC abort
         # DIR pages onto the glass itself. type_line must not append that
         # catalog again, or the last page scrolls off.
         self._paged_on_glass: bool = False
         self.prompt_buf: str = ""  # live "> …" shown on glass
         self.break_requested: bool = False
         self.html_host: Optional[HtmlJsHost] = None
-        # NEW: one-shot RUN keeps pixels until next command / CLS
+        # One-shot RUN keeps pixels until next command / CLS
         self._keep_fb: bool = False
-        # NEW: bytecode HTML path is card-minted .JSH (dukpy only if JMR_HTML_DUKPY=1)
+        self.monitor_visible: bool = True
+        # Bytecode HTML path is card-minted .JSH (dukpy only if JMR_HTML_DUKPY=1)
         self._bytecode_html: bool = False
         self._html_chunk = None
         self._raf_q: list = []
@@ -80,10 +80,10 @@ class Machine:
         self._play_frames: int = 0
         # Always-on flight log (BASIC TraceLog method)
         self.trace = TraceLog(self)
-        # NEW: Architecture Monitor phase (LOAD vs compile-on-RUN vs execute)
+        # Architecture Monitor phase (LOAD vs compile-on-RUN vs execute)
         self._arch_phase: str = "idle"
         self._arch_cmd: str = ""
-        # NEW: HTML RUN executes the serialized ProgramImage on the hardware
+        # HTML RUN executes the serialized ProgramImage on the hardware
         # model. The functional Chunk is kept only for Architecture Monitor.
         self._hw_vm = None
         self.system_window = [0,0,0,0]
@@ -126,14 +126,16 @@ class Machine:
         self, prompt: Optional[str] = None, cursor_on: bool = False,
         cursor_col: Optional[int] = None,
     ) -> None:
-        """Paint console_log + prompt onto FRONT FB (HDMI letterbox — same as SIM/BOARD)."""
+        """Paint the explicit recovery/command interface when it owns FRONT."""
+        if not self.monitor_visible:
+            return
         if self.running and (
             self._loop_chunk is not None
             or self.html_host is not None
             or getattr(self, "_bytecode_html", False)
         ):
             return  # game owns the glass
-        # NEW: last RUN frame stays until CLS / next typed command
+        # Last RUN frame stays until CLS / next typed command
         if self._keep_fb and not self.running:
             return
         if prompt is not None:
@@ -172,26 +174,27 @@ class Machine:
             self._more_key = ch
         self.input.push_key(ch)
 
-    def hard_break(self, quiet: bool = False) -> None:
+    def hard_break(self, quiet: bool = False, *, show_monitor: bool = True) -> None:
         self.canvas.reset_scissor()
         more_abort = bool(self._list_more_waiting)
         self.running = False
         self._loop_chunk = None
-        self._keep_fb = False
+        self.monitor_visible = show_monitor
+        self._keep_fb = not show_monitor
         self._edit_active = False
         self._cmp_reset()
         self._ctx_baseline = 0
-        # NEW: clear bytecode-HTML frame state
+        # Clear bytecode-HTML frame state
         self._bytecode_html = False
         self._html_chunk = None
         self._hw_vm = None
         self._raf_q = []
         self._listeners = []
-        self._timers = []  # NEW: kill pending setTimeout/setInterval
+        self._timers = []  # Kill pending setTimeout/setInterval
         if self.html_host is not None:
             self.html_host.stop()
             self.html_host = None
-        # NEW: LIST MORE — GUI break_program push_key(ESC) then hard_break.
+        # LIST MORE — GUI break_program push_key(ESC) then hard_break.
         # Do not clear the abort the waiter still has to observe.
         # Do not print here. The waiter drops -- MORE -- and type_line
         # prints one READY. A ^BREAK from both places scrolls the page
@@ -204,14 +207,15 @@ class Machine:
         self.input.clear_escape()
         self.break_requested = False
         # F3 leave: same STOP, no ^BREAK on glass. Esc still prints it.
-        if not quiet:
-            self._print("^BREAK")
-        self._ready()
-        self.paint_monitor("> ")
-        # NEW: HTML still in the editor; bytecode chunk was cleared above
+        if show_monitor:
+            if not quiet:
+                self._print("^BREAK")
+            self._ready()
+            self.paint_monitor("> ")
+        # HTML still in the editor; bytecode chunk was cleared above
         self._arch_phase = "loaded" if self.source_lines else "idle"
         self.trace.edge("LEAVE" if quiet else "BREAK", "hard_break")
-        # NEW: one VM telemetry line on BREAK (minimal, no spam)
+        # One VM telemetry line on BREAK (minimal, no spam)
         self.trace.edge(
             "NOTE",
             "VM raf_n=%s to_n=%s"
@@ -224,7 +228,7 @@ class Machine:
 
     def poll_escape(self) -> bool:
         if self.input.escape_pending or self.break_requested:
-            self.hard_break()
+            self.hard_break(show_monitor=self.monitor_visible)
             return True
         return False
 
@@ -233,9 +237,10 @@ class Machine:
     def type_line(self, text: str) -> None:
         if self.poll_escape():
             return
+        self.monitor_visible = True
         line = text.rstrip("\n")
         self._arch_cmd = line
-        # NEW: any new command releases a kept RUN frame
+        # Any new command releases a kept RUN frame
         self._keep_fb = False
         self.trace.edge("LINE", repr(line)[:120])
         self.console_log.append(f"> {line}")
@@ -251,7 +256,7 @@ class Machine:
                     if row.startswith("ERROR") or row.startswith("?SN") or row.startswith("?FN"):
                         self.trace.edge("ERROR", row[:160])
                         self.trace.dump_ring("ERROR")
-        # NEW: log glass after DIR/LOAD/LIST/SAVE (not just the typed line)
+        # Log glass after DIR/LOAD/LIST/SAVE (not just the typed line)
         u = line.strip().upper()
         if u == "DIR" or u.startswith("DIR") or u.startswith("LOAD") or u.startswith("SAVE") or u == "LIST" or u.startswith("LIST"):
             glass = " | ".join(x for x in out if x and x != READY)[:400]
@@ -316,7 +321,7 @@ class Machine:
             self.source_name = "UNTITLED.JS"
             self._arch_phase = "idle"
             return ["OK"]
-        # NEW: CLS — clear glass like BASIC (log + FB); type_line adds READY
+        # CLS — clear glass like BASIC (log + FB); type_line adds READY
         if upper == "CLS":
             self.console_log = []
             self._keep_fb = False
@@ -363,7 +368,7 @@ class Machine:
         if text.isdigit():
             return self._cmd_run(f"RUN {text}")
 
-        # NEW: bare identifier / unknown verb → ?SN ERROR (laod), not silent JS
+        # Bare identifier / unknown verb → ?SN ERROR (laod), not silent JS
         first = text.split(None, 1)[0]
         if first.isidentifier() and first[0].isalpha():
             js_kw = (
@@ -378,7 +383,7 @@ class Machine:
     def _parse_filename(rest: str) -> str:
         """Strip spaces and ASCII/smart quotes from LOAD/SAVE names."""
         s = (rest or "").strip()
-        # LLM NOTE: paste from chat often uses U+201C/U+201D curly quotes
+        # Paste from chat often uses U+201C/U+201D curly quotes
         for q in ('"', "'", "\u201c", "\u201d", "\u2018", "\u2019", "`"):
             s = s.strip(q)
         return s.strip()
@@ -394,9 +399,13 @@ class Machine:
             if i < 0 or i >= len(names):
                 return ["ERROR: NO ENTRY"]
             rest = names[i]
+        return self.load_source(rest)
+
+    def load_source(self, name: str) -> List[str]:
+        """Load a named document without parsing commands or painting a console."""
         try:
-            raw = self.storage.load_text(rest)
-            self.source_name = self.storage.resolve_name(rest)
+            raw = self.storage.load_text(name)
+            self.source_name = self.storage.resolve_name(name)
         except FileNotFoundError:
             return ["?FN FILE NOT FOUND"]
         self.source_lines = raw.splitlines() or ['']
@@ -512,7 +521,7 @@ class Machine:
             for si, seg in enumerate(segs):
                 self._print(seg)
                 on_page += 1
-                self.paint_monitor("")  # NEW: no `>` over LIST / MORE
+                self.paint_monitor("")  # No `>` over LIST / MORE
                 more_follows = (si + 1 < nsegs) or (li + 1 < nlines)
                 if on_page >= LIST_PAGE_LINES and (more_follows or not hold_last):
                     self._print("-- MORE --")
@@ -693,6 +702,10 @@ class Machine:
 
     def _cmd_edit_program(self) -> List[str]:
         """EDIT — run EDITOR.JSH against the loaded source."""
+        return self.open_editor()
+
+    def open_editor(self) -> List[str]:
+        """Start Editor with the loaded SOURCE and existing resume state."""
         if not self.source_name or not self.source_lines:
             return ["?NB"]
         body = "\n".join(self.source_lines)
@@ -732,13 +745,17 @@ class Machine:
         """
         rest = self._parse_filename(text[4:])
         if rest:
-            loaded = self._cmd_load(f"LOAD {rest}")
+            loaded = self.load_source(rest)
             if loaded and (
                 loaded[0].startswith("ERROR")
                 or loaded[0].startswith("?FN")
                 or loaded[0].startswith("?NH")
             ):
                 return loaded
+        return self.open_reader()
+
+    def open_reader(self) -> List[str]:
+        """Start Reader with SOURCE preserved as the document."""
         if not self.source_name or not self.source_lines:
             return ["?NB"]
         body = "\n".join(self.source_lines)
@@ -881,11 +898,15 @@ class Machine:
             i = int(rest) - 1
             if i < 0 or i >= len(names):
                 return ["ERROR: NO ENTRY"]
-            load_out = self._cmd_load(f"LOAD {names[i]}")
+            load_out = self.load_source(names[i])
             if load_out and (
                 load_out[0].startswith("ERROR") or load_out[0].startswith("?FN")
             ):
                 return load_out
+        return self.run_loaded_source()
+
+    def run_loaded_source(self) -> List[str]:
+        """Run the loaded program through the same image path as RUN."""
         src = "\n".join(self.source_lines)
         if not src.strip():
             return ["ERROR: NO PROGRAM"]
@@ -898,26 +919,6 @@ class Machine:
             # V1.0: typed buffer with no card .JSH — same loud miss as the chip.
             return ["?NH"]
         return self._run_source(src)
-
-    def _run_html(self, html: str) -> List[str]:
-        import os
-
-        # Product path: bytecode ProgramImage (CONSTITUTION). dukpy is opt-in debug only.
-        if os.environ.get("JMR_HTML_DUKPY", "").strip() in ("1", "true", "yes"):
-            try:
-                self.html_host = HtmlJsHost(self.canvas, self.input)
-                # Playable titles are one HTML file (inline JS + data: URIs), same
-                # as dropping the file in a browser. Leftover relative src= still
-                # resolves next to the HTML (storage/), not a special games_* remap.
-                self.html_host.load_html(html, base_dir=self.storage.root)
-                self.running = True
-                self._loop_chunk = None
-                return ["HTML GAME RUNNING - arrows + space, ESC quit"]
-            except Exception as e:
-                self.html_host = None
-                self.running = False
-                return [f"ERROR: HTML/JS {e}"]
-        return self._run_html_bytecode(html)
 
     def _run_html_card_jsh(self) -> List[str]:
         """V1.0 product RUN: minted NAME.JSH from card.img (same bytes as the board)."""
@@ -954,7 +955,7 @@ class Machine:
         from .compiler import CompileError
         from tools.compile_js import compile_html_text, encode_html_chunk
 
-        # NEW: compiler front-end is live now (GUI paints this before the wait)
+        # Compiler front-end is live now (GUI paints this before the wait)
         self._arch_phase = "compile"
         try:
             src_path = None
@@ -1056,13 +1057,6 @@ class Machine:
             return [hw.error]
         return ["HTML BYTECODE RUNNING - arrows + space, ESC quit"]
 
-    def _html_jsh_path(self) -> Optional[Path]:
-        """Legacy cache-name helper; the product RUN path does not persist it."""
-        stem = Path(self.source_name).stem
-        if not stem:
-            return None
-        return self.storage.root / (stem.upper()[:8] + ".JSH")
-
     def _run_source(self, src: str) -> List[str]:
         self.canvas.reset_scissor()
         before = len(self.lines_out)
@@ -1093,7 +1087,7 @@ class Machine:
     def _natives(self):
         return {
             "console.log": self._nat_log,
-            # NEW: runtime key enumeration (mk.js for-in desugar)
+            # Runtime key enumeration (mk.js for-in desugar)
             "Object.keys": self._nat_object_keys,
             "fillRect": self._nat_fill_rect_raw,
             "clearRect": self._nat_clear_rect,
@@ -1108,11 +1102,11 @@ class Machine:
             "keyLeft": self._nat_key_left,
             "keyRight": self._nat_key_right,
             "keyFire": self._nat_key_fire,
-            # NEW: platformer climb (DONKEY) — same joy bits as GUI KEYBITS
+            # Platformer climb (DONKEY) — same joy bits as GUI KEYBITS
             "keyUp": self._nat_key_up,
             "keyDown": self._nat_key_down,
             "startLoop": self._nat_start_loop,
-            # NEW (compiler v2): Math natives for HTML titles (PYTHON first)
+            # Math natives for HTML titles (PYTHON first)
             "Math.floor": self._nat_math_floor,
             "Math.round": self._nat_math_round,
             "Math.abs": self._nat_math_abs,
@@ -1124,37 +1118,40 @@ class Machine:
             "Math.random": self._nat_math_random,
             "Math.sqrt": self._nat_math_sqrt,
             "typeof": self._nat_typeof,
-            # NEW: DOM / storage stubs so HTML titles can compile+run on bytecode path
+            # DOM / storage stubs so HTML titles can compile+run on bytecode path
             "document.getElementById": self._nat_dom_el,
             "document.querySelector": self._nat_dom_el,
             "document.createElement": self._nat_dom_el,
             "document.addEventListener": self._nat_add_event_listener,
             "window.addEventListener": self._nat_add_event_listener,
-            "addEventListener": self._nat_add_event_listener,  # NEW: bare global
-            # NEW: real removal (DONKEY startSelect removes itself; a missing
+            "addEventListener": self._nat_add_event_listener,  # Bare global
+            # Real removal (DONKEY startSelect removes itself; a missing
             # native here killed the handler before gameState changed)
             "removeEventListener": self._nat_remove_event_listener,
             "document.removeEventListener": self._nat_remove_event_listener,
             "window.removeEventListener": self._nat_remove_event_listener,
-            # NEW: synthetic events — DONKEY boot script fires Enter itself
+            # Synthetic events — DONKEY boot script fires Enter itself
             "document.dispatchEvent": self._nat_dispatch_event,
             "window.dispatchEvent": self._nat_dispatch_event,
             "localStorage.getItem": self._nat_ls_get,
             "localStorage.setItem": self._nat_ls_set,
             "localStorage.removeItem": self._nat_ls_remove,
+            "stringFromBytes": self._nat_string_from_bytes,
+            "runtimeFault": self._nat_runtime_fault,
+            "Array.isArray": lambda value=None: isinstance(value, list),
             "JSON.parse": self._nat_json_parse,
             "JSON.stringify": self._nat_json_stringify,
             "Date": self._nat_new_date,
             "Image": self._nat_new_image,
-            # NEW (full-game builtins): Array(n) constructor (PACMAN grids)
+            # Array(n) constructor (PACMAN grids)
             "Array": self._nat_new_array,
-            # NEW: real frame-scheduled timers (rAF stays queue-per-frame)
+            # Real frame-scheduled timers (rAF stays queue-per-frame)
             "requestAnimationFrame": self._nat_raf,
             "setTimeout": self._nat_set_timeout,
             "clearTimeout": self._nat_clear_timer,
             "setInterval": self._nat_set_interval,
             "clearInterval": self._nat_clear_timer,
-            # NEW: JSB v2 unknown CALL_NATIVE
+            # JSB v2 unknown CALL_NATIVE
             "_stub": self._nat_noop,
             # sound() nid 42 — always succeed (PHY later; silent no-op here)
             "sound": self._nat_noop,
@@ -1171,7 +1168,7 @@ class Machine:
             "artWrite2": self._nat_art_write2,
             "srcWrite": self._nat_src_write,
             "srcSetLen": self._nat_src_setlen,
-            # NEW: Canvas2D methods via ctx.* (HTML bytecode path)
+            # Canvas2D methods via ctx.* (HTML bytecode path)
             "ctx.fillRect": self._nat_fill_rect,
             "ctx.clearRect": self._nat_clear_rect,
             "ctx.setFillStyle": self._nat_fill_style_css,
@@ -1179,7 +1176,7 @@ class Machine:
             "ctx.fillText": self._nat_fill_text,
             "ctx.fillPath": self._nat_fill_path,
             "ctx.strokePath": self._nat_stroke_path,
-            # NEW: canvas growth for full games
+            # Canvas growth for full games
             "ctx.measureText": self._nat_measure_text,
             "ctx.strokeRect": self._nat_stroke_rect,
             "ctx.getImageData": self._nat_get_image_data,
@@ -1347,7 +1344,7 @@ class Machine:
             pix = img.get("_pix")
             iw = int(img.get("width") or 0)
             ih = int(img.get("height") or 0)
-            # NEW: ASET handle — pixels live in the external SRAM asset bank
+            # ASET handle — pixels live in the external SRAM asset bank
             if pix is None and img.get("_spr") is not None:
                 si = int(img["_spr"])
                 descs = self._spr_descs
@@ -1477,7 +1474,7 @@ class Machine:
         return {"width": len(str(t).encode('utf-8')) * 8 * self._font_scale(font)}
 
     def _nat_stroke_rect(self, x, y, w, h, style=None):
-        # NEW: 1px outline via four edges (device-space thickness)
+        # 1px outline via four edges (device-space thickness)
         if style is not None:
             self._nat_fill_style_css(style)
         ix, iy, iw, ih = self._xf(x, y, w, h)
@@ -1567,7 +1564,7 @@ class Machine:
                 cx, cy, r = float(parts[1]), float(parts[2]), float(parts[3])
                 ix, iy = self._path_point(cx, cy)
                 sx = float(getattr(self, "_ctx_sx", 1) or 1)
-                # NEW: real start/end angles (PACMAN mouth / ghost skirts)
+                # Real start/end angles (PACMAN mouth / ghost skirts)
                 a0 = float(parts[4]) if len(parts) > 4 else 0.0
                 a1 = float(parts[5]) if len(parts) > 5 else 0.0
                 ccw = bool(len(parts) > 6 and float(parts[6]))
@@ -1588,7 +1585,7 @@ class Machine:
                 self._line(x0, y0, x1, y1, c)
                 self._path_x, self._path_y = x1, y1
             elif op == "Q" and len(parts) >= 5:
-                # NEW: quadratic curve — subdivide into 8 line segments
+                # Quadratic curve — subdivide into 8 line segments
                 qcx, qcy = self._path_point(float(parts[1]), float(parts[2]))
                 x1, y1 = self._path_point(float(parts[3]), float(parts[4]))
                 x0 = getattr(self, "_path_x", x1)
@@ -1639,7 +1636,7 @@ class Machine:
 
     def _nat_swap(self):
         self.canvas.swap()
-        # NEW: one-shot demos keep pixels after RUN returns to READY
+        # One-shot demos keep pixels after RUN returns to READY
         self._keep_fb = True
         return None
 
@@ -1691,7 +1688,7 @@ class Machine:
         self._loop_chunk = True
         return None
 
-    # NEW (compiler v2): Math natives — int-friendly; random is deterministic seed later
+    # Math natives — int-friendly; random is deterministic seed later
     def _nat_math_floor(self, x):
         import math
 
@@ -1736,7 +1733,7 @@ class Machine:
         return math.sqrt(float(x)) if float(x) >= 0 else 0.0
 
     def _nat_typeof(self, x):
-        # NEW: JS typeof for PACMAN map checks
+        # JS typeof for PACMAN map checks
         if x is None:
             return "undefined"
         if isinstance(x, bool):
@@ -1749,7 +1746,7 @@ class Machine:
             return "function"
         return "object"
 
-    # NEW: tiny DOM/storage stubs for HTML→bytecode path (leaderboard etc.)
+    # Tiny DOM/storage stubs for HTML→bytecode path (leaderboard etc.)
     def _nat_dom_el(self, *_a):
         return {"__class": "Element", "style": {}}
 
@@ -1800,12 +1797,57 @@ class Machine:
         from .toolbox import execute
         return float(execute(self, int(op), int(a), int(b), int(c)))
 
+    def _nat_runtime_fault(self, code=5):
+        import math
+        valid = not isinstance(code, bool) and isinstance(code, (int, float)) and math.isfinite(code) and code == int(code) and 1 <= code <= 9
+        raise RuntimeError(f"VM software fault {int(code) if valid else 5}")
+
+    def _nat_string_from_bytes(self, pages=None, byte_length=None, checked=0):
+        import math
+        raw = bytearray()
+        if byte_length is not None:
+            if any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) or v != int(v) for v in (pages,byte_length)):
+                raise RuntimeError("VM software fault 4: byte span type")
+            start,n=int(pages),int(byte_length)
+            if start<0 or n<0 or start>jsb_format.CSTG_WORDS or n>jsb_format.CSTG_WORDS-start:
+                raise RuntimeError("VM software fault 4: byte span")
+            if checked not in (0,1) or isinstance(checked,bool):
+                raise RuntimeError("VM software fault 4: checked flag")
+            if n>jsb_format.PROGRAM_NAME_BYTES:
+                if checked==1:return None
+                raise RuntimeError("VM software fault 3: byte capacity")
+            raw.extend(int(self._nat_stg_read(start+i)) for i in range(n))
+        else:
+            if not isinstance(pages, list) or len(pages) > 128:
+                raise RuntimeError("VM software fault 4: byte pages")
+            for page in pages:
+                if not isinstance(page, list) or len(page) > 128:
+                    raise RuntimeError("VM software fault 4: byte page")
+                for value in page:
+                    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value != int(value) or not 0 <= value <= 255:
+                        raise RuntimeError("VM software fault 4: byte")
+                    raw.append(int(value))
+        class ByteString(str):
+            def __new__(cls, data):
+                try:
+                    text = bytes(data).decode('utf-8', 'surrogatepass')
+                except UnicodeDecodeError:
+                    text = bytes(data).decode('utf-8', 'surrogateescape')
+                obj = str.__new__(cls, text)
+                obj._jmr_bytes = bytes(data)
+                return obj
+            def __len__(self):
+                return len(self._jmr_bytes)
+        return ByteString(raw)
+
     def _nat_str_byte(self, text=None, index=0):
         import math
         if not isinstance(text, str) or isinstance(index, bool) or not isinstance(index, (int, float)) or not math.isfinite(index):
             return -1.0
         index = int(index)
-        data = text.encode('utf-8')
+        data = getattr(text, '_jmr_bytes', None)
+        if data is None:
+            data = text.encode('utf-8', 'surrogatepass')
         return float(data[index]) if 0 <= index < len(data) else -1.0
 
     def _nat_sys_document(self, op=0, ptr=0, role=1):
@@ -1879,7 +1921,10 @@ class Machine:
         if dst:
             if dst < 0 or capacity < 37 or dst > jsb_format.CSTG_WORDS or capacity > jsb_format.CSTG_WORDS-dst:
                 return -1.0
-            rows = self.storage.list_finder_info()[start_record:]
+            try:
+                rows = self.storage.list_finder_info()[start_record:]
+            except OSError:
+                return -1.0
             page = bytearray(16)
             count, used, more = 0, 0, 0
             for name, size, date, attr in rows:
@@ -1899,7 +1944,10 @@ class Machine:
             for i, value in enumerate(page):
                 self._nat_stg_write(dst+i, value)
             return float(count)
-        rows = self.storage.list_finder_info()
+        try:
+            rows = self.storage.list_finder_info()
+        except OSError:
+            return -1.0
         used = 0
         off = 256
         count = 0
@@ -1938,7 +1986,7 @@ class Machine:
             return -1.0
         try:
             data = self.storage.load_bytes(name)
-        except FileNotFoundError:
+        except OSError:
             return -1.0
         start = max(0, int(file_off))
         count = max(0, int(n))
@@ -1953,12 +2001,13 @@ class Machine:
             return -1.0
         count = max(0, int(n))
         blob = bytes(int(self._nat_stg_read(int(src_off) + i)) & 255 for i in range(count))
-        if int(mode) == 1:
-            try:
-                blob = self.storage.load_bytes(name) + blob
-            except FileNotFoundError:
-                pass
-        self.storage.save_bytes(name, blob)
+        try:
+            if int(mode) == 1:
+                self.storage.append_bytes(name, blob)
+            else:
+                self.storage.save_bytes(name, blob)
+        except OSError:
+            return -1.0
         return float(count)
 
     def _nat_fs_remove(self, name_off) -> float:
@@ -2170,28 +2219,28 @@ class Machine:
             return "null"
 
     def _nat_new_date(self, *_a):
-        # NEW: Date stub for HTML leaderboard
+        # Date stub for HTML leaderboard
         return {"__class": "Date"}
 
     def _nat_new_image(self, *_a):
-        # NEW: Image stub — onload/src set via props; host path paints real PNG
+        # Image stub — onload/src set via props; host path paints real PNG
         return {"__class": "Image", "src": "", "width": 1, "height": 1}
 
     def _nat_new_array(self, *args):
-        # NEW: Array(n) → n undefined slots (JS); Array(a,b,…) → [a,b,…]
+        # Array(n) → n undefined slots (JS); Array(a,b,…) → [a,b,…]
         if len(args) == 1 and isinstance(args[0], (int, float)):
             return [None] * max(0, int(args[0]))
         return list(args)
 
     def _nat_raf(self, fn=None):
-        # NEW: queue fn for next frame_tick (bytecode HTML path)
+        # Queue fn for next frame_tick (bytecode HTML path)
         if not hasattr(self, "_raf_q"):
             self._raf_q = []
         if fn is not None:
             self._raf_q.append(fn)
         return 1
 
-    # NEW: real frame-scheduled timers — hardware-honest (RTL counts frames
+    # Real frame-scheduled timers — hardware-honest (RTL counts frames
     # the same way; no host wall-clock in the game loop).
     _MS_PER_FRAME = 1000.0 / 60.0
 
@@ -2233,7 +2282,7 @@ class Machine:
         return None
 
     def _nat_add_event_listener(self, event=None, fn=None, *_a):
-        # NEW: store keydown/keyup handlers for bytecode HTML.
+        # Store keydown/keyup handlers for bytecode HTML.
         # Chrome semantics: the same (type, listener) pair registers once —
         # DONKEY re-adds startSelect every title frame.
         if not hasattr(self, "_listeners"):
@@ -2247,7 +2296,7 @@ class Machine:
         return None
 
     def _nat_remove_event_listener(self, event=None, fn=None, *_a):
-        # NEW: remove by (type, listener identity) — DONKEY menu handlers
+        # Remove by (type, listener identity) — DONKEY menu handlers
         if event is None or fn is None or not hasattr(self, "_listeners"):
             return None
         ev = str(event)
@@ -2257,7 +2306,7 @@ class Machine:
         return None
 
     def _nat_dispatch_event(self, ev=None, *_a):
-        # NEW: document/window.dispatchEvent(ev) — fire listeners matching
+        # Document/window.dispatchEvent(ev) — fire listeners matching
         # ev.type with the synthetic event object (DONKEY boot Enter).
         chunk = getattr(self, "_html_chunk", None)
         if chunk is None or not isinstance(ev, dict):
@@ -2269,7 +2318,7 @@ class Machine:
         return None
 
     def _nat_fire_click(self, *_a):
-        # NEW: Element.click() → invoke registered "click" listeners
+        # Element.click() → invoke registered "click" listeners
         chunk = getattr(self, "_html_chunk", None)
         if chunk is None:
             return None
@@ -2300,9 +2349,9 @@ class Machine:
         # The editor signals completion through cdone(); act on it and hand
         # the glass back, rather than leaving a finished program running.
         if getattr(self, "_edit_active", False) and self._cmp_done:
-            # F2/F5 already wrote the console log. The editor's last frame
-            # stays on the glass until _keep_fb drops, so the user never
-            # sees SAVED or OK and has to Esc. Paint READY over that frame.
+            # Complete the file operation, then return control to the shell.
+            # Finder keeps the application display; explicit recovery may
+            # show the command prompt and the recorded service result.
             self._edit_active = False
             self._cmp_done = False
             # The shell brings the Finder back. Leaving this flag clear
@@ -2320,14 +2369,14 @@ class Machine:
                 self._cmp_status, self._cmp_message()
             ):
                 self._print(line)
-            if not self.running:
+            if not self.running and self.monitor_visible:
                 self._print(READY)
                 self.paint_monitor("> ")
             return
-        # NEW: bytecode HTML path — fire key listeners + drain rAF
+        # Bytecode HTML path — fire key listeners + drain rAF
         if getattr(self, "_bytecode_html", False) and self.running:
             self._bytecode_html_frame()
-            # NEW: 1 s play heartbeat so a hang is visible without µop spam
+            # 1 s play heartbeat so a hang is visible without µop spam
             self._play_frames = getattr(self, "_play_frames", 0) + 1
             now = time.monotonic()
             if not getattr(self, "_play_t", 0.0):
@@ -2411,7 +2460,7 @@ class Machine:
         chunk = getattr(self, "_html_chunk", None)
         if chunk is None:
             return
-        # NEW: tether KEYBITS → key-state edges; drain generic key event queue
+        # Tether KEYBITS → key-state edges; drain generic key event queue
         self.input._sync_play_bits_to_keys()
         evs = self.input.drain_key_events()
         if evs:
@@ -2421,18 +2470,18 @@ class Machine:
             )
         for et, code, key in evs:
             self._fire_listeners(et, code, key)
-        # NEW: surface listener errors (they used to die silently mid-handler)
+        # Surface listener errors (they used to die silently mid-handler)
         if self.vm.error:
             self._print(self.vm.error)
             self.hard_break()
             return
         self._frame_no = getattr(self, "_frame_no", 0) + 1
-        # NEW: deterministic frame clock — Date.now/getTime tick with frames
+        # Deterministic frame clock — Date.now/getTime tick with frames
         self.vm.time_ms = self._frame_no * (1000.0 / 60.0)
         # drain rAF (one generation)
         q = getattr(self, "_raf_q", [])
         self._raf_q = []
-        # NEW: browser-style rAF timestamp (ms) — DONKEY's update(timestamp)
+        # Browser-style rAF timestamp (ms) — DONKEY's update(timestamp)
         # computes elapsed from it; without it DK animation/barrels froze.
         raf_ts = self._frame_no * (1000.0 / 60.0)
         for fn in q:
@@ -2446,7 +2495,7 @@ class Machine:
                 self._print(self.vm.error)
                 self.hard_break()
                 return
-        # NEW: fire due frame-scheduled timers AFTER rAF. A sub-frame timeout
+        # Fire due frame-scheduled timers AFTER rAF. A sub-frame timeout
         # set mid-handler (DK isThrowing, 10 ms) lands after the next rAF in
         # Chrome because the handler itself eats most of the frame slot; the
         # rAF handler must see the flag before the timeout clears it.
@@ -2468,10 +2517,10 @@ class Machine:
                 self._print(self.vm.error)
                 self.hard_break()
                 return
-        # NEW: no machine auto-Enter — the HTML decides its own boot keys
+        # No machine auto-Enter — the HTML decides its own boot keys
         # (DONKEY ships a boot script that dispatchEvent()s Enter; PACMAN's
         # game stage binds Enter as PAUSE, so a fake Enter froze it).
-        # NEW: present only frames the game drew (swap-on-draw) — setTimeout
+        # Present only frames the game drew (swap-on-draw) — setTimeout
         # paced loops draw every Nth tick; blind swap flashed stale buffers.
         if self.canvas.dirty:
             self.canvas.swap()

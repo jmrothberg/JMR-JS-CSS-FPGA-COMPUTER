@@ -1,0 +1,1837 @@
+<script>
+var MSG_OFF = 128;  // 2026-09-01: console prints from CSTG_HDR_MSG=128 — 0 made every ?CE mute
+var HDR_PROGSEL = 64;
+var HDR_ART = 65;
+var HDR_SPAN_N = 70;
+var HDR_TOK_N = 72;
+var HDR_OUT_OFF = 76;   // where the assembled image starts (console reads this)
+var HDR_PHASE = 80;     // 1 = stop after tokenizing (keeps tokens readable)
+var SPAN_OFF = 128;
+var SPAN_STRIDE = 12;
+var TOK_OFF = 3200;
+var TOK_STRIDE = 6;
+var TOK_MAX = 48000;
+var K_EOF = 0;
+var K_ID = 1;
+var K_NUM = 2;
+var K_STR = 3;
+var K_TMPL = 4;
+var K_OP = 5;
+var K_REGEX = 6;
+var K_KEY = 7;
+var ST_ERR_TOKENS = 6;
+var ST_ERR_STR = 7;
+var ST_ERR_REGEX = 8;
+var ST_ERR_PARSE = 9;
+var DGN = 0;
+var DGONCE = 0;
+var HA_RAW = 0;
+var LINK_OFF = 368640;
+var LINK_MODE = 0;
+var LINK_NAMES = 0;
+var LINK_FUNCS = 0;
+var LINK_VARS = 0;
+var LINK_MAP = 0;
+var LINK_BYTES = 0;
+var CRC_LO=[];var CRC_HI=[];var CRC_TYPED=0;
+var JSON_OFF=352256;
+var JSON_LEN=0;
+var NEED_RUNTIME=0;
+var spanN = 0;
+var vLen = 0;
+var cSpan = -1;
+var cStart = 0;
+var cEnd = 0;
+var cSrc = 0;
+var cKind = 0;
+var tokN = 0;
+var tokOver = 0;
+var KW_OFF = 2560;
+var KW_N = 0;
+var tmplOn = 0;
+var tmplBrace = 0;
+var OPS_OFF = 0;
+var CREC_OFF = 0;
+var NIDX_OFF = 0;
+var NBLOB_OFF = 0;
+var LOC_OFF = 0;
+var FSET_OFF = 0;
+var GS_OFF = 0;
+var NAT_OFF = 0;
+var FN_OFF = 0;
+var IMG_OFF = 0;
+var PAL_OFF = 0;
+var FSTY_OFF = 0;
+var CLS_OFF = 0;
+var nPal = 0;
+var nFsty = 0;
+var nCls = 0;
+var clsW = 0;
+var hasArt = 0;
+var THIS_NI = -1;
+var ARG_NI = -1;
+var SW_NI = -1;
+var clsCtor = -1;
+var clsCtorAP = 0;
+var clsCtorBody = 0;
+var METH_N = 0;
+var FLD_N = 0;
+var OPS_MAX = 20480;
+var CREC_MAX = 1024;
+var NAME_MAX = 1024;
+var BLOB_MAX = 16384;
+var GS_MAX = 2048;
+var FN_MAX = 384;
+var ART_KEEP = 376832;  // copy of CSTG_ART_OFF; tokens would overwrite 8192
+var nOps = 0;
+var nCrec = 0;
+var nNames = 0;
+var blobLen = 0;
+var nGs = 0;
+var nNat = 0;
+var nFn = 0;
+var over = 0;
+var perr = 0;
+var O_LOADC = 1;
+var O_LOADV = 2;
+var O_STOREV = 3;
+var O_ADD = 4;
+var O_SUB = 5;
+var O_MUL = 6;
+var O_DIV = 7;
+var O_LT = 8;
+var O_GT = 9;
+var O_EQ = 10;
+var O_JUMP = 11;
+var O_JF = 12;
+var O_CALLN = 13;
+var O_POP = 15;
+var O_DUP = 16;
+var O_NEG = 17;
+var O_NOT = 18;
+var O_MKARR = 19;
+var O_AGET = 20;
+var O_ASET = 21;
+var O_LETV = 22;
+var O_MOD = 23;
+var O_CALLU = 24;
+var O_RETV = 25;
+var O_MKOBJ = 26;
+var O_GETP = 27;
+var O_SETP = 28;
+var O_CALLM = 30;
+var O_BOR = 31;
+var O_BAND = 32;
+var O_MKFN = 33;
+var O_CALLVAL = 34;
+var O_NEWOBJ = 29;
+var nLoc = 0;
+var inFn = 0;
+var nDecl = 0;
+var locBase = 0;
+var declBase = 512;
+var nFset = 0;
+var CK_NUM = 0;
+var CK_STR = 1;
+var CK_NONE = 2;
+var CK_BOOL=3;var CK_NULL=4;
+var ti = 0;
+var lvKind = 0;
+var lvName = 0;
+var lvOp = -1;
+var TYPEOF_NI = -1;
+var BRK_OFF = 0;
+var nBrk = 0;
+var nCont = 0;
+var MODULE_END=0;
+var CALLREF=0;
+var POOL_OFF = 0;
+var VMAP_OFF = 0;
+var LC_OFF = 0;
+var nPool = 0;
+var nVars = 0;
+var LC_I32 = 0;
+var LC_STR = 1;
+var LC_NONE = 2;
+var ip = 0;
+var dcTail=[];var dcLength=0;
+var meta=0;var st=16;var stageScratch=131072;var stageSize=0;var stageCrc=0;var stage1Bytes=0;var stage1Crc=0;var stage2Bytes=0;var stage2Crc=0;
+function _sb(i) { if(i>=1048576)return stgRead(JSON_OFF+i-1048576);return srcByte(i); }
+function _gr(i) { return stgRead(i); }
+function _gw(i, b) { if (i < 0 || i >= 380928 || (JSON_LEN && i>=JSON_OFF && i<LINK_OFF)) { dgFail(i); return; } stgWrite(i, b); }
+function _r16(o) { return _gr(o) + _gr(o + 1) * 256; }
+function _r32(o) { var v=toolbox(8,o,0,0);return v; }
+function _w16(o,v) { if(toolbox(11,o,v,0)<0)dgFail(o); }
+function _w32(o,v) { if(toolbox(9,o,v,0)<0)dgFail(o); }
+function dgC(c) { if (DGN < 120) { stgWrite(MSG_OFF + DGN, c); DGN = DGN + 1; } }
+function dgD(v) {
+  if (v < 0) { dgC(45); v = 0 - v; }
+  var d = 1000000000; var s = 0;
+  while (d >= 1) {
+    var q = Math.floor(v / d) % 10;
+    if (q > 0 || s || d === 1) { dgC(48 + q); s = 1; }
+    d = Math.floor(d / 10);
+    if (d === 0) { break; }
+  }
+}
+function dgT(a, b, c) { dgC(32); dgC(a); if (b) { dgC(b); } if (c) { dgC(c); } dgC(61); }
+function dgFail(i) {
+  if (DGONCE) { return; }
+  DGONCE = 1;
+  DGN = 0;
+  dgC(79); dgC(79); dgC(66);            // "OOB"
+  dgT(73, 0, 0); dgD(i);                // " I=<bad index>"
+  dgT(83, 80, 0); dgD(spanN);           // " SP=<spanN>"
+  dgT(84, 75, 0); dgD(tokN);            // " TK=<tokN>"
+  dgT(80, 65, 0); dgD(PAL_OFF);         // " PA=<PAL_OFF>"
+  dgT(78, 77, 0); dgD(nNames);          // " NM=<nNames>"
+  dgT(86, 76, 0); dgD(vLen);            // " VL=<vLen>"
+  dgT(72, 65, 0); dgD(HA_RAW);          // " HA=<raw art flag>"
+  cdone(15, 0, DGN);
+}
+function _fail(code, a, b, c, d, e, f, g) {
+  if (DGONCE) { return; }
+  var n = 0;
+  if (a) { _gw(MSG_OFF + n, a); n = n + 1; }
+  if (b) { _gw(MSG_OFF + n, b); n = n + 1; }
+  if (c) { _gw(MSG_OFF + n, c); n = n + 1; }
+  if (d) { _gw(MSG_OFF + n, d); n = n + 1; }
+  if (e) { _gw(MSG_OFF + n, e); n = n + 1; }
+  if (f) { _gw(MSG_OFF + n, f); n = n + 1; }
+  if (g) { _gw(MSG_OFF + n, g); n = n + 1; }
+  cdone(code, perr, n);
+}
+function linkXor(a,b) { var x=a&b;if(x<0)x=x+4294967296;return a+b-2*x; }
+function crcInit(){if(CRC_LO.length)return;CRC_TYPED=(toolbox(0,0,0,0)&128)?1:0;for(var i=0;i<256;i++){var c=i;for(var j=0;j<8;j++){if(c%2)c=linkXor(Math.floor(c/2),3988292384);else c=Math.floor(c/2);}if(i<128)CRC_LO.push(c);else CRC_HI.push(c);}}
+function crcFeed(c,o,n){crcInit();var i=0;var w=0;var left=0;var b=0;var idx=0;while(i<n){if(!left && CRC_TYPED && i+4<=n){w=toolbox(8,o+i,0,0);if(w<0)return -1;left=4;}if(left){b=w%256;w=Math.floor(w/256);left--;}else b=_gr(o+i);idx=linkXor(c%256,b);c=linkXor(Math.floor(c/256),idx<128?CRC_LO[idx]:CRC_HI[idx-128]);i++;}return c;}
+function linkCrc(o,n){return 4294967295-crcFeed(4294967295,o,n);}
+function linkName(rom) {
+ _w32(LINK_OFF+8176,1280266068);_w32(LINK_OFF+8180,777539394);
+ _w32(LINK_OFF+8184,rom?5066578:4935244);
+}
+function linkReadManifest() {
+ var n;
+ linkName(0);n=fsRead(LINK_OFF+8176,0,LINK_OFF,8176);
+ if(_r32(LINK_OFF)!=1280593226 || _r32(LINK_OFF+4)!=4194306)return 0;
+ if(_r32(LINK_OFF+8)!=n-64)return 0;
+ if(fsRead(LINK_OFF+8176,n,LINK_OFF+8175,1)!=0)return 0;
+ if(linkCrc(LINK_OFF+64,n-64)!=_r32(LINK_OFF+12))return 0;
+ if(_r32(LINK_OFF+32)!=536813568)return 0;
+ LINK_NAMES=_r16(LINK_OFF+24);LINK_VARS=_r16(LINK_OFF+28);LINK_FUNCS=_r16(LINK_OFF+30);LINK_BYTES=n;
+ if(LINK_NAMES>NAME_MAX || _r16(LINK_OFF+26)>1024 || LINK_VARS>LINK_NAMES || LINK_FUNCS>FN_MAX)return 0;
+ return 1;
+}
+function linkSeed() {
+ var p=LINK_OFF+64,i=0,n,h,j;
+ while(i<LINK_NAMES){
+  if(p+4>LINK_OFF+LINK_BYTES)return 0;
+  n=_r16(p);h=_r16(p+2);p=p+4;
+  if(n>255 || p+n>LINK_OFF+LINK_BYTES || blobLen+n>BLOB_MAX)return 0;
+  nameNew(n,h);j=0;while(j<n){_gw(NBLOB_OFF+blobLen+j,_gr(p+j));j=j+1;}
+  blobLen=blobLen+n;p=p+n;i=i+1;
+ }
+ nPool=_r16(LINK_OFF+26);n=nPool*8;
+ if(p+n>LINK_OFF+LINK_BYTES)return 0;
+ j=0;while(j<n){_gw(POOL_OFF+j,_gr(p+j));j=j+1;}p=p+n;
+ LINK_MAP=p;p=p+LINK_VARS*2;
+ if(p+LINK_FUNCS*6!=LINK_OFF+LINK_BYTES)return 0;
+ i=0;while(i<LINK_FUNCS){
+  n=_r16(p);h=_r16(p+2);j=_r16(p+4);
+  if(n>=LINK_NAMES || h>=8191 || j>16 || fnFind(n)>=0)return 0;
+  fnAdd(n,h,j);p=p+6;i=i+1;
+ }
+ return 1;
+}
+function linkReadRom() {
+ var n=0,i=0,h=0,w=0;
+ linkName(1);n=fsRead(LINK_OFF+8176,0,OPS_OFF,32784);
+ if(n!=32784 || fsRead(LINK_OFF+8176,32784,LINK_OFF+8175,1)!=0)return 0;
+ if(_r32(OPS_OFF)!=1414679882 || _r32(OPS_OFF+4)!=1048578 || _r32(OPS_OFF+8)!=32768)return 0;
+ if(_r32(OPS_OFF+12)!=_r32(LINK_OFF+16) || linkCrc(OPS_OFF+16,32768)!=_r32(LINK_OFF+16))return 0;
+ while(i<8192){w=_r32(OPS_OFF+16+i*4);if(i==8191 && w!=2097163)return 0;
+  h=(h*2)%4294967296+Math.floor(h/2147483648);h=linkXor(h,w);i=i+1;}
+ if(h!=_r32(LINK_OFF+20))return 0;
+ i=0;while(i<32768){_gw(OPS_OFF+i,_gr(OPS_OFF+16+i));i=i+1;}
+ nOps=8192;return 1;
+}
+function jsonTokenEq(i,text){if(i<0||i>=tokN)return 0;if(tKind(i)!==K_ID||tLen(i)!==text.length)return 0;for(var j=0;j<text.length;j++)if(_sb(tOff(i)+j)!==strByte(text,j))return 0;return 1;}
+function jsonCall(i){if(i+3>=tokN)return 0;if(!jsonTokenEq(i,"JSON")||!isOp(i+1,33)||!isOp(i+3,26))return 0;if(jsonTokenEq(i+2,"parse"))return 1;if(jsonTokenEq(i+2,"stringify"))return 2;return 0;}
+function jsonHelper(which){var name=which===1?"_jmr_json_jsonParseNative":"_jmr_json_jsonStringifyNative";for(var i=0;i<tokN;i++)if(tOff(i)>=1048576&&jsonTokenEq(i,name))return internSrc(tOff(i),tLen(i));over=1;return 0;}
+function numAt(off,len){
+ var b=0;var exact=0;var j=0;
+ if(len<=15){while(j<len){b=_sb(off+j);if(b<48||b>57)break;exact=exact*10+b-48;j++;}if(j===len)return exact;}
+ var digits=[];var tail=[];var count=0;var exponent=0;var fraction=0;var dot=0;var i=0;var esign=1;
+ while(i<len){b=_sb(off+i);if(b===101||b===69){i++;break;}if(b===46)dot=1;else{if(count<128)digits.push(b-48);else tail.push(b-48);count++;if(dot)fraction++;}i++;}
+ if(i<len && (_sb(off+i)===43||_sb(off+i)===45)){if(_sb(off+i)===45)esign=-1;i++;}
+ while(i<len){if(exponent<10000)exponent=exponent*10+_sb(off+i)-48;i++;}
+ dcTail=tail;dcLength=count;var result=_dc_jdParse(digits,esign*exponent-fraction,false);
+ if(!result.ok){over=1;return 0;}return result.value;
+}
+function w64(o,v){
+ var sign=(v<0 || (v===0 && 1/v<0))?1:0;var e=1023;var m=0;var i=0;var b=0;var t=0;
+ if(sign)v=0-v;
+ if(v!==v){e=2047;v=0.5;sign=0;}
+ else if(v===1/0){e=2047;v=0;}
+ else if(v===0){e=0;}
+ else{while(v>=2){v=v/2;e++;}while(v<1 && e>1){v=v*2;e--;}if(v<1)e=0;else v=v-1;}
+ while(i<4){v=v*2;b=Math.floor(v);v=v-b;m=m*2+b;i++;}
+ _gw(o+6,(e%16)*16+m);
+ i=5;while(i>=0){m=0;b=0;while(b<8){v=v*2;t=Math.floor(v);v=v-t;m=m*2+t;b++;}_gw(o+i,m);i--;}
+ _gw(o+7,sign*128+Math.floor(e/16));
+}
+function layout() {
+  IMG_OFF = TOK_OFF;                      // the image later overwrites tokens
+  OPS_OFF = TOK_OFF + tokN * TOK_STRIDE;
+  if(OPS_OFF<IMG_OFF+131072)OPS_OFF=IMG_OFF+131072;
+  CREC_OFF = OPS_OFF + OPS_MAX * 4;
+  NIDX_OFF = CREC_OFF + (CREC_MAX + 1) * 12;
+  NBLOB_OFF = NIDX_OFF + NAME_MAX * 8;
+  LOC_OFF = NBLOB_OFF + BLOB_MAX;
+  FSET_OFF = LOC_OFF + 8192; // names any function declares
+  NAT_OFF = FSET_OFF + 2048;
+  FN_OFF = NAT_OFF + 128 * 4;
+  CLS_OFF = FN_OFF + FN_MAX * 8;
+  PAL_OFF = CLS_OFF + 2048;
+  FSTY_OFF = PAL_OFF + 768;           // 4 bytes per row
+}
+function emit(op, a0, a1) {
+  if (nOps >= OPS_MAX) { over = 1; return 0; }
+  var o = OPS_OFF + nOps * 4;
+  _gw(o, op);
+  _gw(o + 1, a0 % 256);
+  _gw(o + 2, Math.floor(a0 / 256) % 256);
+  _gw(o + 3, a1);
+  nOps = nOps + 1;
+  return nOps - 1;
+}
+function patchA0(i, a0) {
+  _w16(OPS_OFF+i*4+1,a0);
+}
+function opCode(i) { return _gr(OPS_OFF + i * 4); }
+function opA0(i) { return _r16(OPS_OFF+i*4+1); }
+function opA1(i) { return _gr(OPS_OFF + i * 4 + 3); }
+function setA1(i, v) { _gw(OPS_OFF + i * 4 + 3, v); }
+function nLen(i) { return _gr(NIDX_OFF + i * 8 + 3); }
+function nHash(i) { return _r16(NIDX_OFF + i * 8 + 4); }
+function nBlob(i) {
+  var o = NIDX_OFF + i * 8;
+  return _gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536;
+}
+function nameNew(len, h) {
+  if (nNames >= NAME_MAX || blobLen + len > BLOB_MAX) { over = 1; return 0; }
+  var o = NIDX_OFF + nNames * 8;
+  _w32(o,blobLen+len*16777216);
+  _w16(o + 4, h);
+  _gw(o + 6, 0);
+  nNames = nNames + 1;
+  return nNames - 1;
+}
+function internSrc(off, len) {
+  var h = 0;
+  var i = 0;
+  while (i < len) { h = (h * 31 + _sb(off + i)) % 65536; i = i + 1; }
+  i = 0;
+  var b = 0;
+  var k = 0;
+  var same = 0;
+  while (i < nNames) {
+    if (nLen(i) === len && nHash(i) === h) {
+      b = nBlob(i);
+      k = 0;
+      same = 1;
+      while (k < len) {
+        if (_gr(NBLOB_OFF + b + k) !== _sb(off + k)) { same = 0; k = len; }
+        k = k + 1;
+      }
+      if (same) { return i; }
+    }
+    i = i + 1;
+  }
+  var idx = nameNew(len, h);
+  i = 0;
+  while (i < len) { _gw(NBLOB_OFF + blobLen + i, _sb(off + i)); i = i + 1; }
+  blobLen = blobLen + len;
+  return idx;
+}
+function internDot(o1, l1, o2, l2) {
+  var h = 0;
+  var i = 0;
+  while (i < l1) { h = (h * 31 + _sb(o1 + i)) % 65536; i = i + 1; }
+  h = (h * 31 + 46) % 65536;
+  i = 0;
+  while (i < l2) { h = (h * 31 + _sb(o2 + i)) % 65536; i = i + 1; }
+  var len = l1 + l2 + 1;
+  i = 0;
+  while (i < nNames) {
+    if (nLen(i) === len && nHash(i) === h) { return i; }
+    i = i + 1;
+  }
+  var idx = nameNew(len, h);
+  i = 0;
+  while (i < l1) { _gw(NBLOB_OFF + blobLen + i, _sb(o1 + i)); i = i + 1; }
+  _gw(NBLOB_OFF + blobLen + l1, 46);
+  i = 0;
+  while (i < l2) { _gw(NBLOB_OFF + blobLen + l1 + 1 + i, _sb(o2 + i)); i = i + 1; }
+  blobLen = blobLen + len;
+  return idx;
+}
+function internStr(off, len) {
+  var h = 0;
+  var i = 0;
+  var b = 0;
+  var start = blobLen;
+  var n = 0;
+  if (nNames >= NAME_MAX) { over = 1; return 0; }
+  while (i < len) {
+    b = _sb(off + i);
+    if (b === 92 && i + 1 < len) {
+      i = i + 1;
+      b = _sb(off + i);
+      if (b === 110) { b = 10; }
+      else if (b === 116) { b = 9; }
+      else if (b === 114) { b = 13; }
+      else if (b === 48) { b = 0; }
+    }
+    if (start + n >= BLOB_MAX) { over = 1; return 0; }
+    _gw(NBLOB_OFF + start + n, b);
+    h = (h * 31 + b) % 65536;
+    n = n + 1;
+    i = i + 1;
+  }
+  i = 0;
+  var k = 0;
+  var same = 0;
+  var bo = 0;
+  while (i < nNames) {
+    if (nLen(i) === n && nHash(i) === h) {
+      bo = nBlob(i);
+      k = 0;
+      same = 1;
+      while (k < n) {
+        if (_gr(NBLOB_OFF + bo + k) !== _gr(NBLOB_OFF + start + k)) { same = 0; k = n; }
+        k = k + 1;
+      }
+      if (same) { return i; }
+    }
+    i = i + 1;
+  }
+  var idx = nameNew(n, h);
+  blobLen = blobLen + n;
+  return idx;
+}
+function internText(text){var h=0;for(var j=0;j<text.length;j++)h=(h*31+strByte(text,j))%65536;for(var i=0;i<nNames;i++){if(nLen(i)===text.length&&nHash(i)===h){var same=1;for(var k=0;k<text.length;k++)if(_gr(NBLOB_OFF+nBlob(i)+k)!==strByte(text,k))same=0;if(same)return i;}}var ni=nameNew(text.length,h);for(var q=0;q<text.length;q++)_gw(NBLOB_OFF+blobLen+q,strByte(text,q));blobLen+=text.length;return ni;}
+function internTypeof() {
+  if(TYPEOF_NI<0){internText("undefined");internText("number");internText("boolean");internText("string");internText("function");internText("object");}
+  if (TYPEOF_NI >= 0) { return TYPEOF_NI; }
+  var h = ((((116 * 31 + 121) % 65536) * 31 + 112) % 65536);
+  h = (((h * 31 + 101) % 65536) * 31 + 111) % 65536;
+  h = (h * 31 + 102) % 65536;
+  var i = 0;
+  while (i < nNames) {
+    if (nLen(i) === 6 && nHash(i) === h) { TYPEOF_NI = i; return i; }
+    i = i + 1;
+  }
+  i = nameNew(6, h);
+  _gw(NBLOB_OFF + blobLen, 116);
+  _gw(NBLOB_OFF + blobLen + 1, 121);
+  _gw(NBLOB_OFF + blobLen + 2, 112);
+  _gw(NBLOB_OFF + blobLen + 3, 101);
+  _gw(NBLOB_OFF + blobLen + 4, 111);
+  _gw(NBLOB_OFF + blobLen + 5, 102);
+  blobLen = blobLen + 6;
+  TYPEOF_NI = i;
+  return i;
+}
+function internThis() {
+  var h = ((((95 * 31 + 95) % 65536) * 31 + 116) % 65536);
+  h = (((h * 31 + 104) % 65536) * 31 + 105) % 65536;
+  h = (h * 31 + 115) % 65536;
+  var i = 0;
+  while (i < nNames) {
+    if (nLen(i) === 6 && nHash(i) === h) { THIS_NI = i; return i; }
+    i = i + 1;
+  }
+  i = nameNew(6, h);
+  _gw(NBLOB_OFF + blobLen, 95);
+  _gw(NBLOB_OFF + blobLen + 1, 95);
+  _gw(NBLOB_OFF + blobLen + 2, 116);
+  _gw(NBLOB_OFF + blobLen + 3, 104);
+  _gw(NBLOB_OFF + blobLen + 4, 105);
+  _gw(NBLOB_OFF + blobLen + 5, 115);
+  blobLen = blobLen + 6;
+  THIS_NI = i;
+  return i;
+}
+function internArg() {
+  var h = ((((95 * 31 + 95) % 65536) * 31 + 97) % 65536);
+  h = (((h * 31 + 114) % 65536) * 31 + 103) % 65536;
+  var i = 0;
+  while (i < nNames) {
+    if (nLen(i) === 5 && nHash(i) === h) { ARG_NI = i; return i; }
+    i = i + 1;
+  }
+  i = nameNew(5, h);
+  _gw(NBLOB_OFF + blobLen, 95);
+  _gw(NBLOB_OFF + blobLen + 1, 95);
+  _gw(NBLOB_OFF + blobLen + 2, 97);
+  _gw(NBLOB_OFF + blobLen + 3, 114);
+  _gw(NBLOB_OFF + blobLen + 4, 103);
+  blobLen = blobLen + 5;
+  ARG_NI = i;
+  return i;
+}
+function internSw() {
+  var h = ((((95 * 31 + 95) % 65536) * 31 + 115) % 65536);
+  h = (h * 31 + 119) % 65536;
+  var i = 0;
+  while (i < nNames) {
+    if (nLen(i) === 4 && nHash(i) === h) { SW_NI = i; return i; }
+    i = i + 1;
+  }
+  i = nameNew(4, h);
+  _gw(NBLOB_OFF + blobLen, 95);
+  _gw(NBLOB_OFF + blobLen + 1, 95);
+  _gw(NBLOB_OFF + blobLen + 2, 115);
+  _gw(NBLOB_OFF + blobLen + 3, 119);
+  blobLen = blobLen + 4;
+  SW_NI = i;
+  return i;
+}
+function natInit(){var data="\u001aQ5\u0018\u0004Pk< \u0004*B2(\u0004[p\"\b\u0003WR$\u0010\u0003\u0004>\u0013\u0018\u0003\u0005>\u0013 \u0003\r\n*(\u0003H6(0\u0003\u000b\u0006\u0018P\u0003\u0012&\u001d`\u00031G!h\u0003kD\"p\u0003~h\u001bx\u0003\u0003X\u001aX\u0003Y%\u001c\u0010\u0004\b./\b\u00043\u001a\u001e\u0000\u0004y|!8\u0003q6\u0014@\u0003\u000b\u0000$H\u0003\u0018\u0018<\u0018\u0002\f\u0002\u001c`\u00027\u000eP0\u0001,\u0011 X\u0000\\\u0011\u001ch\u0002 >,\u0018\u0000EO8@\u0001\u001ek h\u0000\fm `\u0000et\u0014x\u0002+\u0000Q(\u0001w\u0013q \u0002\u0007\u0014!\u0010\u0000\u000b\u0019] \u0001}-!(\u00006A!\u0018\u00022D5x\u0001NG\u0011H\u0001\u0006V\u001d \u0000BYQ8\u0002&h%x\u0000vh%\u0000\u0003-uY0\u00029\u0004\u0016\u0010\u0002G\u0006.h\u0001Z\u001a\u0016@\u0000F\u001b*P\u0000J\u001eN \u0002Y\"\"p\u0002L0j(\u0002#6.H\u0002-<*8\u0001=I2\u0000\u00004RZ\b\u0001Id.p\u0000Ml\u0016\b\u0000\u0011m\u001a@\u0002;r\u0016P\u00015\u0002\u001f0\u0000\r\u0003\u0017\b\u0002M\u0005[\u0010\u00018\u0011WX\u0001\u000f\u0012\u0017P\u0002U\u001b_\u0000\u0002\u001f-+`\u0001kI_\u0000\u0001MLC\u0018\u0001-\\/\u0000\u0000T\\3p\u0001!_\u001fH\u0000\u0011c\u001bX\u0002@eg\u0018\u0001&|'8\u0000T7\u000e0\u0004\u001e\u0019\u00190\u0004Q+&\b\u0002,G1\b\u0002";nNat=78;for(var i=0;i<nNat;i++){var v=0;var mul=1;for(var j=0;j<5;j++){v+=strByte(data,i*5+j)*mul;mul*=128;}_w32(NAT_OFF+i*4,v);}}
+function natLookup(h, l) {
+  var i = 0;
+  var o = 0;
+  while (i < nNat) {
+    o = NAT_OFF + i * 4;
+    if (_r16(o) === h && _gr(o + 2) === l) { return _gr(o + 3); }
+    i = i + 1;
+  }
+  return -1;
+}
+function natIdOf(ni) {
+  return natLookup(nHash(ni), nLen(ni));
+}
+function dotHash(o1, l1, o2, l2) {
+  var h = 0;
+  var i = 0;
+  while (i < l1) { h = (h * 31 + _sb(o1 + i)) % 65536; i = i + 1; }
+  h = (h * 31 + 46) % 65536;
+  i = 0;
+  while (i < l2) { h = (h * 31 + _sb(o2 + i)) % 65536; i = i + 1; }
+  return h;
+}
+function fnAdd(ni, entry, nparams) {
+  if (nFn >= FN_MAX) { over = 1; return; }
+  var o = FN_OFF + nFn * 8;
+  _w16(o, ni);
+  _w16(o + 2, entry);
+  _gw(o + 4, nparams);
+  nFn = nFn + 1;
+}
+function fnFind(ni) {
+  var i = 0;
+  while (i < nFn) {
+    if (_r16(FN_OFF + i * 8) === ni) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+function fnEntry(i) { return _r16(FN_OFF + i * 8 + 2); }
+function ensureFnClass(ni) {
+  var i = 0;
+  var k = CLS_OFF + 2;
+  var b = 0;
+  var fi = 0;
+  var ctor = 65535;
+  while (i < nCls) {
+    if (_r16(k) === ni) { return; }
+    b = _r16(k + 4);
+    k = k + 6 + b * 4;
+    i = i + 1;
+  }
+  fi = fnFind(ni);
+  if (fi >= 0) { ctor = fnEntry(fi); }
+  if (ctor === 0) { ctor = 65535; }
+  _w16(clsW, ni);
+  _w16(clsW + 2, ctor);
+  _w16(clsW + 4, 0);
+  clsW = clsW + 6;
+  nCls = nCls + 1;
+}
+function locFind(ni) {
+  var i = 0;
+  while (i < nLoc) {
+    if (_r16(LOC_OFF + (locBase + i) * 2) === ni) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+function locAdd(ni) {
+  if (locFind(ni) >= 0) { return; }
+  if (nLoc >= 16) { over = 2; return; }   // ENV_SLOTS — loud, like the host
+  _w16(LOC_OFF + (locBase + nLoc) * 2, ni);
+  nLoc = nLoc + 1;
+}
+function fsetAdd(ni) {
+  var i = 0;
+  while (i < nFset) {
+    if (_r16(FSET_OFF + i * 2) === ni) { return; }
+    i = i + 1;
+  }
+  if (nFset < 1024) { _w16(FSET_OFF + nFset * 2, ni); nFset = nFset + 1; }
+}
+function fsetHas(ni) {
+  var i = 0;
+  while (i < nFset) {
+    if (_r16(FSET_OFF + i * 2) === ni) { return 1; }
+    i = i + 1;
+  }
+  return 0;
+}
+function declAdd(ni) {
+  if (inFn) { fsetAdd(ni); }
+  var i = 0;
+  while (i < nDecl) {
+    if (_r16(LOC_OFF + (declBase + i) * 2) === ni) { return; }
+    i = i + 1;
+  }
+  if (nDecl < 128) { _w16(LOC_OFF + (declBase + nDecl) * 2, ni); nDecl = nDecl + 1; }
+}
+function gsAdd(opIdx, ni, fnDepth) {
+  if (nGs >= GS_MAX) { over = 1; return; }
+  var o = GS_OFF + nGs * 8;
+  _w32(o,opIdx+fnDepth*16777216);
+  _w16(o + 4, ni);
+  _w16(o+6,ti);
+  nGs = nGs + 1;
+}
+function specialName(ni){var o=NBLOB_OFF+nBlob(ni);var n=nLen(ni);var text=n===8?"Infinity":(n===3?"NaN":(n===6?"String":(n===12?"localStorage":"")));if(!text.length)return 0;for(var i=0;i<n;i++)if(_gr(o+i)!==strByte(text,i))return 0;return n===8?1:(n===3?2:(n===6?3:4));}
+function scopeMark(begin,end){for(var j=0;j<nDecl;j++){var ni=_r16(LOC_OFF+(declBase+j)*2);if(specialName(ni)){if(nGs>=GS_MAX){over=1;return;}var o=GS_OFF+nGs*8;_w16(o,begin);_w16(o+2,end);_w16(o+4,ni);_w16(o+6,65535);nGs++;}}}
+function gsShadow(o){var token=_r16(o+6);var ni=_r16(o+4);for(var j=0;j<nGs;j++){var p=GS_OFF+j*8;if(_r16(p+6)===65535 && _r16(p+4)===ni && token>=_r16(p) && token<_r16(p+2))return 1;}return 0;}
+function specialResolve(){for(var i=0;i<nGs;i++){var o=GS_OFF+i*8;if(_r16(o+6)===65535)continue;var ni=_r16(o+4);var kind=specialName(ni);if(!kind||kind>2||gsShadow(o)||fnFind(ni)>=0)continue;var idx=_r32(o)%16777216;if(opCode(idx)!==O_LOADV)continue;var assigned=0;for(var k=0;k<nOps;k++)if(opCode(k)===O_LETV && opA0(k)===ni && opA1(k)===0)assigned=1;for(var j=0;j<nGs;j++){var p=GS_OFF+j*8;if(_r16(p+6)!==65535 && _r16(p+4)===ni && opCode(_r32(p)%16777216)===O_STOREV && !gsShadow(p))assigned=1;}if(!assigned){_gw(OPS_OFF+idx*4,O_LOADC);patchA0(idx,crecVal(kind===1?1/0:0/0));setA1(idx,0);}}}
+function gsResolveAll() {
+  specialResolve();
+  var i = 0;
+  var o = 0;
+  var idx = 0;
+  while (i < nGs) {
+    o = GS_OFF + i * 8;
+    if (_r16(o+6)!==65535 && fsetHas(_r16(o + 4)) === 0) {
+      idx = _gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536;
+      if(opCode(idx)===O_LOADV || opCode(idx)===O_STOREV)setA1(idx, 1);
+    }
+    i = i + 1;
+  }
+}
+function crecSame(a, b) {
+  var k = 0;
+  while (k < 12) {
+    if (_gr(a + k) !== _gr(b + k)) { return 0; }
+    k = k + 1;
+  }
+  return 1;
+}
+function crecCommit() {
+  var i = 0;
+  var o = CREC_OFF + nCrec * 12;
+  while (i < nCrec) {
+    if (crecSame(CREC_OFF + i * 12, o)) { return i; }
+    i = i + 1;
+  }
+  if (nCrec >= CREC_MAX) { over = 1; return 0; }
+  nCrec = nCrec + 1;
+  return nCrec - 1;
+}
+function crecNum(off, len) {
+  var o = CREC_OFF + nCrec * 12;
+  var k = 0;
+  while (k < 12) { _gw(o + k, 0); k = k + 1; }
+  _gw(o, CK_NUM);
+  w64(o + 4, numAt(off, len));
+  return crecCommit();
+}
+function crecVal(v) {
+  var o = CREC_OFF + nCrec * 12;
+  var k = 0;
+  while (k < 12) { _gw(o + k, 0); k = k + 1; }
+  _gw(o, CK_NUM);
+  w64(o + 4, v);
+  return crecCommit();
+}
+function crecStr(ni) {
+  var o = CREC_OFF + nCrec * 12;
+  var k = 0;
+  while (k < 12) { _gw(o + k, 0); k = k + 1; }
+  _gw(o, CK_STR);
+  _w16(o + 1, ni);
+  return crecCommit();
+}
+function crecLiteral(kind,value){var o=CREC_OFF+nCrec*12;for(var i=0;i<12;i++)_gw(o+i,0);_gw(o,kind);_gw(o+1,value);return crecCommit();}
+function crecNone() {
+  var o = CREC_OFF + nCrec * 12;
+  var k = 0;
+  while (k < 12) { _gw(o + k, 0); k = k + 1; }
+  _gw(o, CK_NONE);
+  return crecCommit();
+}
+function tKind(i) { return _gr(TOK_OFF + i * TOK_STRIDE); }
+function tSub(i) { return _gr(TOK_OFF + i * TOK_STRIDE + 1); }
+function tOff(i) {
+  var b = TOK_OFF + i * TOK_STRIDE;
+  return _gr(b + 2) + _gr(b + 3) * 256 + _gr(b + 4) * 65536;
+}
+function tLen(i) { return _gr(TOK_OFF + i * TOK_STRIDE + 5); }
+function isOp(i, s) { return tKind(i) === K_OP && tSub(i) === s; }
+function isKw(i, s) { return tKind(i) === K_KEY && tSub(i) === s; }
+function eatOp(s) {
+  if (isOp(ti, s)) { ti = ti + 1; return 1; }
+  if (perr === 0) { perr = ti + 1; }
+  return 0;
+}
+function loadVar(ni) {
+  var slot = -1;
+  var idx = 0;
+  if (inFn) { slot = locFind(ni); }
+  if (slot >= 0) { return emit(O_LOADV, ni, 2 + slot); }
+  idx = emit(O_LOADV, ni, 0);
+  gsAdd(idx, ni, inFn);
+  return idx;
+}
+function dropLoad(idx) {
+  if (idx !== nOps - 1) { return; }
+  nOps = nOps - 1;
+  if (nGs > 0) {
+    var o = GS_OFF + (nGs - 1) * 8;
+    if (_gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536 === idx) { nGs = nGs - 1; }
+  }
+}
+function storeVar(ni) {
+  var slot = -1;
+  if (inFn) { slot = locFind(ni); }
+  if (slot >= 0) { emit(O_STOREV, ni, 2 + slot); return; }
+  gsAdd(emit(O_STOREV, ni, 0), ni, inFn);
+}
+function argList() {
+  var n = 0;
+  eatOp(26);
+  while (!isOp(ti, 27) && tKind(ti) !== K_EOF) {
+    expr();
+    n = n + 1;
+    if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
+  }
+  eatOp(27);
+  return n;
+}
+function bareCall(ni) {
+  var argc = 0;
+  if (!(inFn && locAny(ni)) && (fnFind(ni) >= 0 || natIdOf(ni) >= 0)) {
+    argc = argList();
+    emit(O_CALLN, ni, argc);
+    return;
+  }
+  var gs=nGs;var op=loadVar(ni);
+  argc = argList();
+  if(specialName(ni)===3 && gs<nGs && _r32(GS_OFF+gs*8)%16777216===op)_w32(GS_OFF+gs*8,op+(argc?33:32)*16777216);
+  emit(O_CALLVAL, argc, 0);   // argc is arg0 (RTL reads opw[23:8])
+}
+function primary() {
+  var k = tKind(ti);
+  var ni = 0;
+  var o = 0;
+  lvKind = 0;
+  if (k === K_NUM) { emit(O_LOADC, crecNum(tOff(ti), tLen(ti)), 0); ti = ti + 1; return; }
+  if (k === K_STR) { emit(O_LOADC, crecStr(internStr(tOff(ti), tLen(ti))), 0); ti = ti + 1; return; }
+  if (k === K_KEY) {
+    if (tSub(ti) === 15) { emit(O_LOADC, crecLiteral(CK_BOOL,1), 0); ti = ti + 1; return; }
+    if (tSub(ti) === 16) { emit(O_LOADC, crecLiteral(CK_BOOL,0), 0); ti = ti + 1; return; }
+    if (tSub(ti) === 17 || tSub(ti) === 18) { emit(O_LOADC, tSub(ti)===17?crecLiteral(CK_NULL,0):crecNone(), 0); ti = ti + 1; return; }
+    if (tSub(ti) === 3) {                        // function expression
+      ti = ti + 1;
+      if (tKind(ti) === K_ID) { ti = ti + 1; }   // optional name, not bound
+      fnLiteral();
+      lvKind = 0;
+      return;
+    }
+    if (tSub(ti) === 11) {                       // new Foo(...)
+      ti = ti + 1;
+      if (tKind(ti) === K_ID) {
+        ni = internSrc(tOff(ti), tLen(ti));
+        ti = ti + 1;
+        if (natIdOf(ni) >= 0) { emit(O_CALLN, ni, argList()); }
+        else { ensureFnClass(ni); emit(O_NEWOBJ, ni, argList()); }
+        lvKind = 0;
+        return;
+      }
+      if (perr === 0) { perr = ti + 1; }
+      return;
+    }
+    if (tSub(ti) === 12) {                       // typeof x
+      ti = ti + 1;
+      unary();
+      emit(O_CALLN, internTypeof(), 1);
+      return;
+    }
+    if (tSub(ti) === 14) {                       // this → __this
+      emit(O_LOADV, internThis(), 0);
+      ti = ti + 1;
+      lvKind = 1;
+      lvName = THIS_NI;
+      return;
+    }
+  }
+  if (k === K_ID && isOp(ti + 1, 10)) {          // x => ...
+    arrowLiteral(1);
+    lvKind = 0;
+    return;
+  }
+  if (isOp(ti, 26) && arrowAhead()) {             // (a, b) => ...
+    arrowLiteral(0);
+    lvKind = 0;
+    return;
+  }
+  if (k === K_ID) {
+    if (isOp(ti + 1, 33) && tKind(ti + 2) === K_ID && !isOp(ti + 3, 26)
+        && tLen(ti) === 4 && tLen(ti + 2) === 2) {
+      o = tOff(ti);
+      if (_sb(o) === 77 && _sb(o + 1) === 97 && _sb(o + 2) === 116 && _sb(o + 3) === 104
+          && _sb(tOff(ti + 2)) === 80 && _sb(tOff(ti + 2) + 1) === 73) {
+        emit(O_LOADC, crecVal(Math.PI), 0);
+        ti = ti + 3;
+        lvKind = 0;
+        return;
+      }
+    }
+    if(JSON_LEN && jsonCall(ti)){ni=jsonHelper(jsonCall(ti));ti=ti+3;emit(O_CALLN,ni,argList());return;}
+    if (isOp(ti + 1, 33) && (tKind(ti + 2) === K_ID) && isOp(ti + 3, 26)) {
+      if (!jsonTokenEq(ti,"localStorage") && natLookup(dotHash(tOff(ti), tLen(ti), tOff(ti + 2), tLen(ti + 2)),
+                    tLen(ti) + tLen(ti + 2) + 1) >= 0) {
+        ni = internDot(tOff(ti), tLen(ti), tOff(ti + 2), tLen(ti + 2));
+        ti = ti + 3;
+        emit(O_CALLN, ni, argList());
+        return;
+      }
+      if (tLen(ti) === 6 && _sb(tOff(ti)) === 119 && _sb(tOff(ti) + 1) === 105
+          && _sb(tOff(ti) + 2) === 110 && _sb(tOff(ti) + 3) === 100
+          && _sb(tOff(ti) + 4) === 111 && _sb(tOff(ti) + 5) === 119) {
+        ni = internDot(tOff(ti), tLen(ti), tOff(ti + 2), tLen(ti + 2));
+        ti = ti + 3;
+        emit(O_CALLN, ni, argList());
+        return;
+      }
+    }
+    ni = internSrc(tOff(ti), tLen(ti));
+    ti = ti + 1;
+    if (isOp(ti, 26)) { bareCall(ni); return; }
+    lvOp = loadVar(ni);
+    lvKind = 1;
+    lvName = ni;
+    return;
+  }
+  if (isOp(ti, 26)) { ti = ti + 1; expr(); eatOp(27); lvKind = 0; return; }
+  if (isOp(ti, 34)) {                            // [ ... ]
+    ti = ti + 1;
+    var n = 0;
+    while (!isOp(ti, 35) && tKind(ti) !== K_EOF) {
+      expr();
+      n = n + 1;
+      if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
+    }
+    eatOp(35);
+    emit(O_MKARR, n, 0);
+    lvKind = 0;
+    return;
+  }
+  if (isOp(ti, 30)) {                            // { k: v }
+    ti = ti + 1;
+    emit(O_MKOBJ, 0, 0);
+    while (!isOp(ti, 31) && tKind(ti) !== K_EOF) {
+      if (tKind(ti) === K_STR) { ni = internStr(tOff(ti), tLen(ti)); }
+      else { ni = internSrc(tOff(ti), tLen(ti)); }
+      ti = ti + 1;
+      emit(O_DUP, 0, 0);
+      if (isOp(ti, 29)) {
+        ti = ti + 1;
+        expr();
+      } else {
+        loadVar(ni);
+      }
+      emit(O_SETP, ni, 0);
+      emit(O_POP, 0, 0);
+      if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
+    }
+    eatOp(31);
+    lvKind = 0;
+    return;
+  }
+  if (perr === 0) { perr = ti + 1; }
+  ti = ti + 1;
+}
+function postfix(hold) {
+  primary();
+  var ni = 0;
+  var jf = 0;
+  var opt = 0;
+  while (1) {
+    if ((isOp(ti, 33) || isOp(ti, 11))
+        && (tKind(ti + 1) === K_ID || tKind(ti + 1) === K_KEY)) {
+      opt = isOp(ti, 11);
+      jf = 0;
+      if (opt) {
+        emit(O_DUP, 0, 0);
+        jf = emit(O_JF, 0, 0);
+      }
+      ni = internSrc(tOff(ti + 1), tLen(ti + 1));
+      if (isOp(ti + 2, 26)) {                    // o.m(args)
+        ti = ti + 2;
+        emit(O_CALLM, prepMethod(ni), argList());
+        if (opt) { patchA0(jf, nOps); }
+        lvKind = 0;
+        continue;
+      }
+      ti = ti + 2;
+      if ((isAssignAhead() || (hold && !isOp(ti,33) && !isOp(ti,34) && !isOp(ti,26))) && !opt) { lvKind = 2; lvName = ni; return; }
+      emit(O_GETP, ni, 0);
+      if (opt) { patchA0(jf, nOps); }
+      lvKind = 0;
+      continue;
+    }
+    if (isOp(ti, 34)) {                          // a[i]
+      ti = ti + 1;
+      expr();
+      eatOp(35);
+      if (isAssignAhead() || (hold && !isOp(ti,33) && !isOp(ti,34) && !isOp(ti,26))) { lvKind = 3; return; }
+      emit(O_AGET, 0, 0);
+      lvKind = 0;
+      continue;
+    }
+    if (isOp(ti, 26)) {                          // value call
+      if (nOps > 0 && opCode(nOps - 1) === O_MKFN) {
+        setA1(nOps - 1, _gr(OPS_OFF + (nOps - 1) * 4 + 3) + 64);
+      }
+      emit(O_CALLVAL, argList(), 0);   // argc is arg0 (RTL reads opw[23:8])
+      lvKind = 0;
+      continue;
+    }
+    return;
+  }
+}
+function isAssignAhead() {
+  if (isOp(ti, 24)) { return 1; }
+  if (isOp(ti, 8) || isOp(ti, 9)) { return 1; }
+  if (isOp(ti, 12) || isOp(ti, 13) || isOp(ti, 14) || isOp(ti, 15) || isOp(ti, 16)) { return 1; }
+  return 0;
+}
+function emitUpdate(kind,name,dec,pre){
+ if(kind===1){if(!pre)emit(O_DUP,0,0);emit(O_LOADC,crecVal(1),0);emit(dec?O_SUB:O_ADD,0,0);if(pre)emit(O_DUP,0,0);storeVar(name);return;}
+ if(kind!==2 && kind!==3){if(!perr)perr=ti+1;return;}
+ var obj=internText("@update_obj");var old=internText("@update_old");var idx=0;
+ if(kind===2){emit(O_DUP,0,0);emit(O_GETP,name,0);}
+ else{idx=internText("@update_idx");emit(O_STOREV,idx,1);emit(O_DUP,0,0);emit(O_STOREV,obj,1);emit(O_LOADV,idx,1);emit(O_LOADV,obj,1);emit(O_LOADV,idx,1);emit(O_AGET,0,0);}
+ emit(O_STOREV,old,1);if(kind===3)emit(O_STOREV,idx,1);emit(O_STOREV,obj,1);
+ if(!pre)emit(O_LOADV,old,1);emit(O_LOADV,obj,1);if(kind===3)emit(O_LOADV,idx,1);emit(O_LOADV,old,1);
+ emit(O_LOADC,crecVal(1),0);emit(dec?O_SUB:O_ADD,0,0);emit(kind===2?O_SETP:O_ASET,kind===2?name:0,0);if(!pre)emit(O_POP,0,0);
+}
+function unary(){
+ if(isOp(ti,25)){ti++;unary();emit(O_NOT,0,0);lvKind=0;return;}
+ if(isOp(ti,18)){ti++;unary();emit(O_NEG,0,0);lvKind=0;return;}
+ if(isOp(ti,17)){ti++;unary();lvKind=0;return;}
+ if(isOp(ti,8)||isOp(ti,9)){var dec=isOp(ti,9);ti++;postfix(1);emitUpdate(lvKind,lvName,dec,1);lvKind=0;return;}
+ postfix(0);
+ if(isOp(ti,8)||isOp(ti,9)){var d2=isOp(ti,9);ti++;emitUpdate(lvKind,lvName,d2,0);lvKind=0;}
+ if(lvKind===2 && !isAssignAhead()){emit(O_GETP,lvName,0);lvKind=0;}
+ else if(lvKind===3 && !isAssignAhead()){emit(O_AGET,0,0);lvKind=0;}
+}
+function opPrec(s) {
+  if (s === 19 || s === 20 || s === 21) { return 9; }
+  if (s === 17 || s === 18) { return 8; }
+  if (s === 22 || s === 23 || s === 4 || s === 5) { return 7; }
+  if (s === 0 || s === 1 || s === 2 || s === 3) { return 6; }
+  if (s === 37) { return 5; }
+  if (s === 36) { return 4; }
+  if (s === 6) { return 3; }
+  if (s === 7) { return 2; }
+  if (s === 38) { return 1; }
+  return 0;
+}
+function exprP(minP) {
+  var s = 0;
+  var p = 0;
+  var j = 0;
+  var k = 0;
+  unary();
+  while (tKind(ti) === K_OP) {
+    s = tSub(ti);
+    p = opPrec(s);
+    if (p < minP || p === 0) { break; }
+    ti = ti + 1;
+    if (s === 6) {
+      emit(O_DUP, 0, 0);
+      j = emit(O_JF, 0, 0);
+      emit(O_POP, 0, 0);
+      exprP(p + 1);
+      patchA0(j, nOps);
+    } else if (s === 7) {
+      emit(O_DUP, 0, 0);
+      j = emit(O_JF, 0, 0);
+      k = emit(O_JUMP, 0, 0);
+      patchA0(j, nOps);
+      emit(O_POP, 0, 0);
+      exprP(p + 1);
+      patchA0(k, nOps);
+    } else if (s === 38) {
+      j = emit(O_JF, 0, 0);
+      exprP(1);
+      k = emit(O_JUMP, 0, 0);
+      patchA0(j, nOps);
+      eatOp(29);
+      exprP(1);
+      patchA0(k, nOps);
+    } else {
+      exprP(p + 1);
+      if (s === 19) { emit(O_MUL, 0, 0); }
+      else if (s === 20) { emit(O_DIV, 0, 0); }
+      else if (s === 21) { emit(O_MOD, 0, 0); }
+      else if (s === 17) { emit(O_ADD, 0, tOff(ti)<1048576?1:0); }
+      else if (s === 18) { emit(O_SUB, 0, 0); }
+      else if (s === 22) { emit(O_LT, 0, 0); }
+      else if (s === 23) { emit(O_GT, 0, 0); }
+      else if (s === 4) { emit(O_GT, 0, 0); emit(O_NOT, 0, 0); }
+      else if (s === 5) { emit(O_LT, 0, 0); emit(O_NOT, 0, 0); }
+      else if (s === 0 || s === 2) { emit(O_EQ, 0, 0); }
+      else if (s === 1 || s === 3) { emit(O_EQ, 0, 0); emit(O_NOT, 0, 0); }
+      else if (s === 37) { emit(O_BAND, 0, 0); }
+      else { emit(O_BOR, 0, 0); }
+    }
+    lvKind = 0;
+  }
+}
+function emitBinOp(s) {
+  if (s === 12) { emit(O_ADD, 0, tOff(ti)<1048576?1:0); }
+  else if (s === 13) { emit(O_SUB, 0, 0); }
+  else if (s === 14) { emit(O_MUL, 0, 0); }
+  else if (s === 15) { emit(O_DIV, 0, 0); }
+  else { emit(O_MOD, 0, 0); }
+}
+function expr() {
+  exprP(1);
+  var k = lvKind;
+  var nm = lvName;
+  var lo = lvOp;
+  var s = 0;
+  if (k === 0) { return; }
+  if (isOp(ti, 24)) {                     // plain =
+    ti = ti + 1;
+    if (k === 1) { dropLoad(lo); }
+    expr();
+    if (k === 1) { storeVar(nm); loadVar(nm); }
+    else if (k === 2) { emit(O_SETP, nm, 0); }
+    else { emit(O_ASET, 0, 0); }
+    lvKind = 0;
+    return;
+  }
+  if (isOp(ti, 12) || isOp(ti, 13) || isOp(ti, 14) || isOp(ti, 15) || isOp(ti, 16)) {
+    s = tSub(ti);
+    ti = ti + 1;
+    if (k === 2) {
+      emit(O_DUP, 0, 0);
+      emit(O_GETP, nm, 0);
+      expr();
+      emitBinOp(s);
+      emit(O_SETP, nm, 0);
+      lvKind = 0;
+      return;
+    }
+    if(k===3){
+      var ix=internText("@update_idx");var ob=internText("@update_obj");
+      emit(O_STOREV,ix,1);emit(O_DUP,0,0);emit(O_STOREV,ob,1);
+      emit(O_LOADV,ix,1);emit(O_LOADV,ob,1);emit(O_LOADV,ix,1);emit(O_AGET,0,0);
+      expr();emitBinOp(s);emit(O_ASET,0,0);lvKind=0;return;
+    }
+    if (k !== 1) { if (perr === 0) { perr = ti; } return; }
+    expr();
+    emitBinOp(s);
+    storeVar(nm);
+    loadVar(nm);
+    lvKind = 0;
+  }
+}
+function exprComma() {
+  expr();
+  while (isOp(ti, 32)) {
+    emit(O_POP, 0, 0);
+    ti = ti + 1;
+    expr();
+  }
+}
+function moduleBody(t){if(inFn||tOff(t)>=1048576||!isOp(t,26)||!isKw(t+1,3)||!isOp(t+2,26)||!isOp(t+3,27)||!isOp(t+4,30))return 0;
+ for(var i=0;i<t;i++)if(tOff(i)<1048576&&tKind(i)!==K_EOF)return 0;
+ var d=1,j=t+5;while(j<tokN&&d){if(isOp(j,30))d++;if(isOp(j,31))d--;j++;}if(d||!isOp(j,27)||!isOp(j+1,26)||!isOp(j+2,27))return 0;
+ var end=j+3,k=end;while(isOp(k,28))k++;if(tKind(k)!==K_EOF)return 0;MODULE_END=end;return t+5;
+}
+function stmt() {
+  var k = 0;
+  var ni = 0;
+  var j = 0;
+  var top = 0;
+  j=moduleBody(ti);if(j){var end=MODULE_END;ti=j;while(ti<end-4&&perr===0&&over===0)stmt();ti=end;return;}
+  if (tKind(ti) === K_EOF) { return; }
+  if (isOp(ti, 28)) { ti = ti + 1; return; }             // stray ;
+  if (isOp(ti, 30)) {                                    // { block }
+    ti = ti + 1;
+    while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
+    eatOp(31);
+    return;
+  }
+  if (tKind(ti) === K_KEY) {
+    k = tSub(ti);
+    if (k === 0 || k === 1 || k === 2) { varDecl(); return; }
+    if (k === 3) { skipFn(); return; }                   // already emitted
+    if (k === 13) { skipFn(); return; }                  // class, already emitted
+    if (k === 5) { ifStmt(); return; }
+    if (k === 7) { whileStmt(); return; }
+    if (k === 8) { forStmt(); return; }
+    if (k === 4) {                                       // return
+      ti = ti + 1;
+      if (isOp(ti, 28) || isOp(ti, 31)) { emit(O_LOADC, crecNone(), 0); }
+      else { expr(); }
+      if (isOp(ti, 28)) { ti = ti + 1; }
+      emit(O_RETV, 0, 0);
+      return;
+    }
+    if (k === 25) {                                      // try { } catch { }
+      ti = ti + 1;
+      stmt();
+      if (isKw(ti, 26)) {
+        ti = ti + 1;
+        if (isOp(ti, 26)) { while (!isOp(ti, 27) && tKind(ti) !== K_EOF) { ti = ti + 1; } ti = ti + 1; }
+        skipBlock();
+      }
+      if (isKw(ti, 27)) { ti = ti + 1; stmt(); }
+      return;
+    }
+    if (k === 28) {                                      // throw expr;
+      ti = ti + 1;
+      expr();
+      emit(O_POP, 0, 0);
+      if (isOp(ti, 28)) { ti = ti + 1; }
+      return;
+    }
+    if (k === 19) { switchStmt(); return; }              // switch
+    if (k === 9) {                                       // break
+      ti = ti + 1;
+      if (isOp(ti, 28)) { ti = ti + 1; }
+      brkAdd(emit(O_JUMP, 0, 0), 0);
+      return;
+    }
+    if (k === 10) {                                      // continue
+      ti = ti + 1;
+      if (isOp(ti, 28)) { ti = ti + 1; }
+      brkAdd(emit(O_JUMP, 0, 0), 1);
+      return;
+    }
+  }
+  exprComma();
+  emit(O_POP, 0, 0);
+  if (isOp(ti, 28)) { ti = ti + 1; }
+}
+function switchStmt() {
+  var b0 = 0;
+  var first = 0;
+  var skip = 0;
+  ti = ti + 1;
+  eatOp(26);
+  expr();
+  eatOp(27);
+  internSw();
+  emit(O_STOREV, SW_NI, 1);
+  eatOp(30);
+  b0 = nBrk;
+  while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) {
+    if (isKw(ti, 20)) {
+      first = 1;
+      while (isKw(ti, 20) && perr === 0) {
+        ti = ti + 1;
+        emit(O_LOADV, SW_NI, 1);
+        expr();
+        eatOp(29);
+        emit(O_EQ, 0, 0);
+        if (first === 0) { emit(O_BOR, 0, 0); }
+        first = 0;
+      }
+      skip = emit(O_JF, 0, 0);
+      while (!isKw(ti, 20) && !isKw(ti, 21) && !isOp(ti, 31)
+          && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
+      brkAdd(emit(O_JUMP, 0, 0), 0);
+      patchA0(skip, nOps);
+    } else if (isKw(ti, 21)) {
+      ti = ti + 1;
+      eatOp(29);
+      while (!isKw(ti, 20) && !isKw(ti, 21) && !isOp(ti, 31)
+          && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
+    } else {
+      if (perr === 0) { perr = ti + 1; }
+      return;
+    }
+  }
+  eatOp(31);
+  brkPatch(b0, nOps, nOps);
+}
+function skipBlock() {
+  var depth = 0;
+  if (!isOp(ti, 30)) {
+    while (tKind(ti) !== K_EOF && !isOp(ti, 28)) { ti = ti + 1; }
+    if (isOp(ti, 28)) { ti = ti + 1; }
+    return;
+  }
+  while (tKind(ti) !== K_EOF) {
+    if (isOp(ti, 30)) { depth = depth + 1; }
+    if (isOp(ti, 31)) {
+      depth = depth - 1;
+      ti = ti + 1;
+      if (depth <= 0) { return; }
+      continue;
+    }
+    ti = ti + 1;
+  }
+}
+function varDecl() {
+  ti = ti + 1;
+  var ni = 0;
+  while (tKind(ti) === K_ID) {
+    ni = internSrc(tOff(ti), tLen(ti));
+    ti = ti + 1;
+    declAdd(ni);
+    if (isOp(ti, 24)) { ti = ti + 1; expr(); } else { emit(O_LOADC, crecNone(), 0); }
+    if (inFn) {
+      locAdd(ni);
+      emit(O_LETV, ni, 1 + ((locFind(ni) & 31) + 1) * 2);
+    } else {
+      emit(O_LETV, ni, 0);
+    }
+    if (isOp(ti, 32)) { ti = ti + 1; continue; }
+    break;
+  }
+  if (isOp(ti, 28)) { ti = ti + 1; }
+}
+function ifStmt() {
+  ti = ti + 1;
+  eatOp(26);
+  expr();
+  eatOp(27);
+  var j = emit(O_JF, 0, 0);
+  stmt();
+  if (isKw(ti, 6)) {
+    ti = ti + 1;
+    var k = emit(O_JUMP, 0, 0);
+    patchA0(j, nOps);
+    stmt();
+    patchA0(k, nOps);
+  } else {
+    patchA0(j, nOps);
+  }
+}
+function whileStmt() {
+  ti = ti + 1;
+  var top = nOps;
+  var b0 = nBrk;
+  eatOp(26);
+  expr();
+  eatOp(27);
+  var j = emit(O_JF, 0, 0);
+  stmt();
+  emit(O_JUMP, top, 0);
+  patchA0(j, nOps);
+  brkPatch(b0, nOps, top);
+}
+function forStmt() {
+  ti = ti + 1;
+  eatOp(26);
+  if (!isOp(ti, 28)) {
+    if (tKind(ti) === K_KEY && tSub(ti) <= 2) { varDecl(); }
+    else { exprComma(); emit(O_POP, 0, 0); if (isOp(ti, 28)) { ti = ti + 1; } }
+  } else { ti = ti + 1; }
+  var top = nOps;
+  var b0 = nBrk;
+  var j = -1;
+  if (!isOp(ti, 28)) { expr(); j = emit(O_JF, 0, 0); }
+  eatOp(28);
+  var stepTi = ti;
+  var depth = 0;
+  while (tKind(ti) !== K_EOF) {
+    if (isOp(ti, 26)) { depth = depth + 1; }
+    if (isOp(ti, 27)) { if (depth === 0) { break; } depth = depth - 1; }
+    ti = ti + 1;
+  }
+  var bodyTi = ti;
+  eatOp(27);
+  stmt();
+  var contTarget = nOps;
+  if (stepTi !== bodyTi) {
+    var save = ti;
+    ti = stepTi;
+    exprComma();
+    emit(O_POP, 0, 0);
+    ti = save;
+  }
+  emit(O_JUMP, top, 0);
+  if (j >= 0) { patchA0(j, nOps); }
+  brkPatch(b0, nOps, contTarget);
+}
+function brkAdd(opIdx, isCont) {
+  if (nBrk >= 256) { return; }
+  var o = BRK_OFF + nBrk * 4;
+  _gw(o, opIdx % 256);
+  _gw(o + 1, Math.floor(opIdx / 256) % 256);
+  _gw(o + 2, Math.floor(opIdx / 65536) % 256);
+  _gw(o + 3, isCont);
+  nBrk = nBrk + 1;
+}
+function brkPatch(base, endTarget, contTarget) {
+  var i = base;
+  var o = 0;
+  var idx = 0;
+  while (i < nBrk) {
+    o = BRK_OFF + i * 4;
+    idx = _gr(o) + _gr(o + 1) * 256 + _gr(o + 2) * 65536;
+    patchA0(idx, _gr(o + 3) ? contTarget : endTarget);
+    i = i + 1;
+  }
+  nBrk = base;
+}
+function skipFn() {
+  ti = ti + 1;
+  if (tKind(ti) === K_ID) { ti = ti + 1; }
+  var depth = 0;
+  var pd = 0;
+  if (isOp(ti, 26)) {
+    pd = 1;
+    ti = ti + 1;
+    while (pd && tKind(ti) !== K_EOF) {
+      if (isOp(ti, 26)) { pd = pd + 1; }
+      if (isOp(ti, 27)) { pd = pd - 1; }
+      ti = ti + 1;
+    }
+  }
+  while (tKind(ti) !== K_EOF) {
+    if (isOp(ti, 30)) { depth = depth + 1; }
+    if (isOp(ti, 31)) { depth = depth - 1; ti = ti + 1; if (depth <= 0) { return; } continue; }
+    ti = ti + 1;
+  }
+}
+function fnDeclAt(t){if(tKind(t+1)!==K_ID)return 0;if(t===0)return 1;if(isKw(t-1,4))return 0;if(tKind(t-1)===K_OP)return isOp(t-1,28)||isOp(t-1,30)||isOp(t-1,31);return 1;}
+function scanFns(mode){
+ var save=ti;var depth=0;var ni=0;var decl=0;var start=mode<2?unwrapIife():ti;
+ ti=start;
+ while(tKind(ti)!==K_EOF && !perr && !over){
+  var mb=moduleBody(ti);if(mb){ti=mb;depth=1;continue;}
+  if(isOp(ti,31) && depth===0 && (mode>=2 || start>0))break;
+  if(isKw(ti,13) || (isOp(ti,10)&&isOp(ti+1,30))){skipFn();continue;}
+  if(isKw(ti,3)){
+   decl=fnDeclAt(ti);
+   if(decl){ni=internSrc(tOff(ti+1),tLen(ti+1));
+    if(mode===0){if(LINK_MODE && fnFind(ni)>=0 && fnFind(ni)<LINK_FUNCS){over=1;break;}if(fnFind(ni)<0)fnAdd(ni,0,0);}
+    if(mode===1){compileFn();continue;}
+    if(mode===2){locAdd(ni);declAdd(ni);}
+    if(mode===3){ti+=2;fnLiteral();emit(O_LETV,ni,1+((locFind(ni)&31)+1)*2);continue;}
+   }
+   skipFn();continue;
+  }
+  if(isOp(ti,30))depth++;if(isOp(ti,31))depth--;ti++;
+ }
+ ti=save;
+}
+function prescanFns(){
+ scanFns(0);
+ for(var i=0;i+2<tokN;i++)if(isGetId(i)&&tKind(i+1)===K_ID&&isOp(i+2,26))_gw(NIDX_OFF+internSrc(tOff(i+1),tLen(i+1))*8+6,1);
+}
+function prepMethod(ni){if(!_gr(NIDX_OFF+ni*8+6))return ni;emit(O_DUP,0,0);emit(O_GETP,ni,1);CALLREF=1;return ni+32768;}
+function hoistFns(){scanFns(2);scanFns(3);}
+function locAny(ni){for(var i=0;i<locBase+nLoc;i++)if(_r16(LOC_OFF+i*2)===ni)return 1;return 0;}
+function skipPat(t) {
+  var d = 0;
+  if (isOp(t, 30)) {
+    d = 1;
+    t = t + 1;
+    while (d && tKind(t) !== K_EOF) {
+      if (isOp(t, 30)) { d = d + 1; }
+      if (isOp(t, 31)) { d = d - 1; }
+      t = t + 1;
+    }
+    return t;
+  }
+  return t + 1;
+}
+function scanParams() {
+  var np = 0;
+  while (!isOp(ti, 27) && tKind(ti) !== K_EOF) {
+    if (isOp(ti, 30) || tKind(ti) === K_ID) {
+      ti = skipPat(ti);
+      np = np + 1;
+      if (isOp(ti, 32)) { ti = ti + 1; } else { break; }
+    } else { break; }
+  }
+  return np;
+}
+function bindOne(t) {
+  var pn = 0;
+  if (isOp(t, 30)) {
+    internArg();
+    locAdd(ARG_NI);
+    declAdd(ARG_NI);
+    emit(O_LETV, ARG_NI, 1 + ((locFind(ARG_NI) & 31) + 1) * 2);
+    t = t + 1;
+    while (!isOp(t, 31) && tKind(t) !== K_EOF) {
+      if (tKind(t) === K_ID) {
+        pn = internSrc(tOff(t), tLen(t));
+        locAdd(pn);
+        declAdd(pn);
+        emit(O_LOADV, ARG_NI, 0);
+        emit(O_GETP, pn, 0);
+        emit(O_LETV, pn, 1 + ((locFind(pn) & 31) + 1) * 2);
+      }
+      t = t + 1;
+      if (isOp(t, 32)) { t = t + 1; }
+    }
+  } else {
+    pn = internSrc(tOff(t), tLen(t));
+    locAdd(pn);
+    declAdd(pn);
+    emit(O_LETV, pn, 1 + ((locFind(pn) & 31) + 1) * 2);
+  }
+}
+function bindParams(p0, np) {
+  var i = np;
+  var t = 0;
+  var k = 0;
+  var save = ti;
+  while (i > 0) {
+    i = i - 1;
+    t = p0;
+    k = 0;
+    while (k < i) {
+      t = skipPat(t);
+      if (isOp(t, 32)) { t = t + 1; }
+      k = k + 1;
+    }
+    bindOne(t);
+  }
+  ti = save;
+}
+function fnLiteral() {
+  var jmp = emit(O_JUMP, 0, 0);
+  var entry = nOps;
+  var np = 0;
+  var p0 = 0;
+  var pLoc = locBase;
+  var pNLoc = nLoc;
+  var pDecl = declBase;
+  var pNDecl = nDecl;
+  var pTok=ti;
+  eatOp(26);
+  p0 = ti;
+  np = scanParams();
+  eatOp(27);
+  locBase = locBase + nLoc;
+  declBase = declBase + nDecl;
+  nLoc = 0;
+  nDecl = 0;
+  inFn = inFn + 1;
+  bindParams(p0, np);
+  eatOp(30);
+  hoistFns();
+  while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
+  eatOp(31);
+  emit(O_LOADC, crecNone(), 0);
+  emit(O_RETV, 0, 0);
+  scopeMark(pTok,ti);
+  inFn = inFn - 1;
+  locBase = pLoc;
+  nLoc = pNLoc;
+  declBase = pDecl;
+  nDecl = pNDecl;
+  patchA0(jmp, nOps);
+  emit(O_MKFN, entry, np);
+  return entry;
+}
+function arrowAhead() {
+  var i = ti + 1;
+  var d = 0;
+  while (tKind(i) !== K_EOF) {
+    if (isOp(i, 26)) {
+      d = d + 1;
+    } else if (isOp(i, 27)) {
+      if (d === 0) { return isOp(i + 1, 10); }
+      d = d - 1;
+    }
+    i = i + 1;
+  }
+  return 0;
+}
+function arrowLiteral(single) {
+  var jmp = emit(O_JUMP, 0, 0);
+  var entry = nOps;
+  var np = 0;
+  var p0 = 0;
+  var pLoc = locBase;
+  var pNLoc = nLoc;
+  var pDecl = declBase;
+  var pNDecl = nDecl;
+  var pTok=ti;
+  if (single) {
+    p0 = ti;
+    np = 1;
+    ti = ti + 1;
+  } else {
+    eatOp(26);
+    p0 = ti;
+    np = scanParams();
+    eatOp(27);
+  }
+  eatOp(10);
+  locBase = locBase + nLoc;
+  declBase = declBase + nDecl;
+  nLoc = 0;
+  nDecl = 0;
+  inFn = inFn + 1;
+  bindParams(p0, np);
+  if (isOp(ti, 30)) {
+    ti = ti + 1;
+    hoistFns();
+    while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
+    eatOp(31);
+    emit(O_LOADC, crecNone(), 0);
+  } else {
+    expr();
+  }
+  emit(O_RETV, 0, 0);
+  scopeMark(pTok,ti);
+  inFn = inFn - 1;
+  locBase = pLoc;
+  nLoc = pNLoc;
+  declBase = pDecl;
+  nDecl = pNDecl;
+  patchA0(jmp, nOps);
+  emit(O_MKFN, entry, np + 128);
+}
+function compileFn() {
+  var ni = internSrc(tOff(ti + 1), tLen(ti + 1));
+  ti = ti + 2;
+  var entry = fnLiteral();
+  var fi = fnFind(ni);
+  if (fi >= 0) { _w16(FN_OFF + fi * 8 + 2, entry); }
+  emit(O_STOREV, ni, 1);
+}
+function compileAllFns(){scanFns(1);}
+function unwrapIife() {
+  var i = 2;
+  if (!isOp(0, 26)) { return 0; }
+  if (!isKw(1, 3)) { return 0; }
+  if (tKind(i) === K_ID) { i = i + 1; }
+  if (!isOp(i, 26)) { return 0; }
+  while (!isOp(i, 27) && tKind(i) !== K_EOF) { i = i + 1; }
+  i = i + 1;
+  if (!isOp(i, 30)) { return 0; }
+  return i + 1;
+}
+function isGetId(i) {
+  if (tKind(i) !== K_ID || tLen(i) !== 3) { return 0; }
+  var o = tOff(i);
+  return (_sb(o) === 103 && _sb(o + 1) === 101 && _sb(o + 2) === 116) ? 1 : 0;
+}
+function isSetId(i) {
+  if (tKind(i) !== K_ID || tLen(i) !== 3) { return 0; }
+  var o = tOff(i);
+  return (_sb(o) === 115 && _sb(o + 1) === 101 && _sb(o + 2) === 116) ? 1 : 0;
+}
+function isCtorId(i) {
+  if (tKind(i) !== K_ID || tLen(i) !== 11) { return 0; }
+  var o = tOff(i);
+  return (_sb(o) === 99 && _sb(o + 1) === 111 && _sb(o + 2) === 110) ? 1 : 0;
+}
+function methAdd(ni, en, isG) {
+  var i = 0;
+  var j = 0;
+  var o = 0;
+  var k = 0;
+  while (i < METH_N) {
+    o = CLS_OFF + 1024 + i * 6;
+    k = _r16(o);
+    if (k % 16384 === ni && (isG === 0 || k < 16384 || Math.floor(k / 16384) === (isG === 1 ? 2 : 1))) {
+      j = i;
+      while (j + 1 < METH_N) {
+        o = CLS_OFF + 1024 + j * 6;
+        _w16(o, _r16(o + 6)); _w16(o + 2, _r16(o + 8));
+        j = j + 1;
+      }
+      METH_N = METH_N - 1;
+    } else { i = i + 1; }
+  }
+  if (METH_N >= 16) { perr = ti + 1; return; }
+  o = CLS_OFF + 1024 + METH_N * 6;
+  if (isG) { ni = ni + (isG === 1 ? 32768 : 16384); }
+  _w16(o, ni); _w16(o + 2, en);
+  METH_N = METH_N + 1;
+}
+function fldAdd(ni, en, np) {
+  var o = CLS_OFF + 1536 + FLD_N * 8;
+  _w16(o, ni);
+  _w16(o + 2, en);
+  _gw(o + 4, np);
+  FLD_N = FLD_N + 1;
+}
+function classField(ni) {
+  var entry = 0;
+  var np = 0;
+  if (tKind(ti) === K_ID && isOp(ti + 1, 10)) { arrowLiteral(1); }
+  else if (isOp(ti, 26) && arrowAhead()) { arrowLiteral(0); }
+  else { expr(); emit(O_POP, 0, 0); return; }
+  nOps = nOps - 1;
+  entry = opA0(nOps);
+  np = opA1(nOps);
+  patchA0(entry - 1, nOps);
+  fldAdd(ni, entry, np);
+}
+function classMeth(isC, isG, ni) {
+  var jmp = emit(O_JUMP, 0, 0);
+  var entry = nOps;
+  var np = 0;
+  var p0 = 0;
+  var pLoc = locBase;
+  var pNLoc = nLoc;
+  var pDecl = declBase;
+  var pNDecl = nDecl;
+  var pTok=ti;
+  var ap = 0;
+  var body = 0;
+  eatOp(26);
+  p0 = ti;
+  np = scanParams();
+  if ((isG === 1 && np !== 0) || (isG === 2 && np !== 1)) { perr = ti + 1; }
+  eatOp(27);
+  locBase = locBase + nLoc;
+  declBase = declBase + nDecl;
+  nLoc = 0;
+  nDecl = 0;
+  inFn = inFn + 1;
+  bindParams(p0, np);
+  ap = emit(O_JUMP, 0, 0);
+  body = nOps;
+  eatOp(30);
+  hoistFns();
+  while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
+  eatOp(31);
+  emit(O_LOADC, crecNone(), 0);
+  emit(O_RETV, 0, 0);
+  scopeMark(pTok,ti);
+  inFn = inFn - 1;
+  locBase = pLoc;
+  nLoc = pNLoc;
+  declBase = pDecl;
+  nDecl = pNDecl;
+  patchA0(jmp, nOps);
+  patchA0(ap, body);
+  if (isC) {
+    clsCtor = entry;
+    clsCtorAP = ap;
+    clsCtorBody = body;
+  } else {
+    methAdd(ni, entry, isG);
+  }
+}
+function classMember() {
+  var isG = 0;
+  var isC = 0;
+  var ni = 0;
+  if (isGetId(ti) && tKind(ti + 1) === K_ID && isOp(ti + 2, 26)) {
+    isG = 1;
+    ti = ti + 1;
+  } else if (isSetId(ti) && tKind(ti + 1) === K_ID && isOp(ti + 2, 26)) {
+    isG = 2;
+    ti = ti + 1;
+  }
+  if (tKind(ti) !== K_ID) { if (perr === 0) { perr = ti + 1; } return; }
+  ni = internSrc(tOff(ti), tLen(ti));
+  isC = isG === 0 ? isCtorId(ti) : 0;
+  ti = ti + 1;
+  if (isOp(ti, 24)) {
+    ti = ti + 1;
+    classField(ni);
+    if (isOp(ti, 28)) { ti = ti + 1; }
+    return;
+  }
+  classMeth(isC, isG, ni);
+}
+function classFinish(cname) {
+  var i = 0;
+  var o = 0;
+  var fi = 0;
+  var jmp = 0;
+  if (FLD_N && clsCtor >= 0) {
+    jmp = emit(O_JUMP, 0, 0);
+    fi = nOps;
+    while (i < FLD_N) {
+      o = CLS_OFF + 1536 + i * 8;
+      emit(O_LOADV, THIS_NI, 0);
+      emit(O_MKFN, _r16(o + 2), _gr(o + 4));
+      emit(O_SETP, _r16(o), 0);
+      emit(O_POP, 0, 0);
+      i = i + 1;
+    }
+    emit(O_JUMP, clsCtorBody, 0);
+    patchA0(jmp, nOps);
+    patchA0(clsCtorAP, fi);
+  }
+  if (clsCtor < 0) {
+    jmp = emit(O_JUMP, 0, 0);
+    clsCtor = nOps;
+    emit(O_LOADC, crecNone(), 0);
+    emit(O_RETV, 0, 0);
+    patchA0(jmp, nOps);
+  }
+  _w16(clsW, cname);
+  _w16(clsW + 2, clsCtor);
+  _w16(clsW + 4, METH_N);
+  clsW = clsW + 6;
+  i = 0;
+  while (i < METH_N) {
+    o = CLS_OFF + 1024 + i * 6;
+    _w16(clsW, _r16(o));
+    _w16(clsW + 2, _r16(o + 2));
+    clsW = clsW + 4;
+    i = i + 1;
+  }
+  nCls = nCls + 1;
+}
+function compileClass() {
+  var cname = 0;
+  ti = ti + 1;
+  cname = internSrc(tOff(ti), tLen(ti));
+  ti = ti + 1;
+  eatOp(30);
+  clsCtor = -1;
+  METH_N = 0;
+  FLD_N = 0;
+  internThis();
+  while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { classMember(); }
+  eatOp(31);
+  classFinish(cname);
+}
+function compileAllClasses() {
+  var i = 0;
+  var save = ti;
+  clsW = CLS_OFF + 2;
+  nCls = 0;
+  internThis();
+  while (tKind(i) !== K_EOF && perr === 0) {
+    if (isKw(i, 13) && tKind(i + 1) === K_ID) {
+      ti = i;
+      compileClass();
+      i = ti;
+    } else {
+      i = i + 1;
+    }
+  }
+  ti = save;
+  _w16(CLS_OFF, nCls);
+}
+function parse() {
+  internThis();
+  internArg();
+  prescanFns();
+  if(over)return 11;
+  compileAllClasses();
+  compileAllFns();
+  ti = unwrapIife();
+  if (ti > 0) {
+    while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0 && over === 0) { stmt(); }
+    scopeMark(0,tokN);gsResolveAll();
+    if (over === 2) { return 10; }
+    if (over) { return 11; }
+    if (perr) { return 12; }
+    return 0;
+  }
+  ti = 0;
+  while (tKind(ti) !== K_EOF && perr === 0 && over === 0) { stmt(); }
+  scopeMark(0,tokN);gsResolveAll();
+  if (over === 2) { return 10; }
+  if (over) { return 11; }
+  if (perr) { return 12; }
+  return 0;
+}
+function runtimeResolve(){
+ NEED_RUNTIME=0;
+ for(var i=0;i<nGs;i++){var o=GS_OFF+i*8;if(_r16(o+6)===65535)continue;var ni=_r16(o+4),kind=specialName(ni),raw=_r32(o),idx=raw%16777216;
+ if(kind<3||opCode(idx)!==O_LOADV||gsShadow(o)||fnFind(ni)>=0)continue;
+ var assigned=0;for(var k=0;k<nOps;k++)if(opCode(k)===O_LETV&&opA0(k)===ni&&opA1(k)===0)assigned=1;
+ for(var j=0;j<nGs;j++){var q=GS_OFF+j*8;if(_r16(q+6)!==65535&&_r16(q+4)===ni&&opCode(_r32(q)%16777216)===O_STOREV&&!gsShadow(q))assigned=1;}
+ var c=CLS_OFF+2;for(j=0;j<nCls;j++){if(_r16(c)===ni)assigned=1;c+=6+_r16(c+4)*4;}if(assigned)continue;
+ if(kind===3){if(raw<32*16777216)continue;var fn=fnFind(internText(raw<33*16777216?"_jmr_json_stringEmptyNative":"_jmr_json_stringCoerceNative"));if(fn<0){NEED_RUNTIME=NEED_RUNTIME|2;continue;}_gw(OPS_OFF+idx*4,O_MKFN);patchA0(idx,fnEntry(fn));setA1(idx,raw<33*16777216?0:1);}
+ else{if(fnFind(internText("_jmr_store_getItem"))<0){NEED_RUNTIME=NEED_RUNTIME|6;continue;}patchA0(idx,internText("_jmr_store_api"));setA1(idx,1);}
+ }
+}
+function _dc_jdTrim(a){while(a.length>1 && a[a.length-1]===0)a.pop();return a;}
+function _dc_jdCopyInto(dst,src){while(dst.length)dst.pop();for(var i=0;i<src.length;i++)dst.push(src[i]);return dst;}
+function _dc_jdWorkspace(){return {n:[],d:[],a:[],b:[],twice:[]};}
+function _dc_jdMul(a,m){var c=0;for(var i=0;i<a.length;i++){var v=a[i]*m+c;c=Math.floor(v/268435456);a[i]=v-c*268435456;}if(c){if(a.length>=128)return false;a.push(c);}return true;}
+function _dc_jdAdd(a,v){var i=0;while(v){if(i>=a.length){if(i>=128)return false;a.push(0);}var n=a[i]+v;v=Math.floor(n/268435456);a[i]=n-v*268435456;i++;}return true;}
+function _dc_jdCmp(a,b){if(a.length!==b.length)return a.length>b.length?1:-1;for(var i=a.length-1;i>=0;i--){if(a[i]!==b[i])return a[i]>b[i]?1:-1;}return 0;}
+function _dc_jdSub(a,b){var borrow=0;for(var i=0;i<a.length;i++){var n=a[i]-(i<b.length?b[i]:0)-borrow;borrow=0;if(n<0){n+=268435456;borrow=1;}a[i]=n;}return _dc_jdTrim(a);}
+function _dc_jdDivSmall(a,m){var carry=0;for(var i=a.length-1;i>=0;i--){var v=carry*268435456+a[i];var q=Math.floor(v/m);carry=v-q*m;a[i]=q;}_dc_jdTrim(a);return carry;}
+function _dc_jdPow2(e){var x=1;while(e>0){x*=2;e--;}while(e<0){x*=0.5;e++;}return x;}
+function _dc_jdParse(digits,decimalExponent,negative){return _dc_jdParseWork(digits,decimalExponent,negative,_dc_jdWorkspace());}
+function _dc_jdParseWork(digits,decimalExponent,negative,work){
+ var n=work.n;var d=work.d;while(n.length)n.pop();n.push(0);while(d.length)d.pop();d.push(1);var i=0;while(i<dcLength && (i<128?digits[i]:dcTail[i-128])===0)i++;
+ if(i===dcLength)return {ok:true,value:negative?-0:0};
+ var significant=dcLength-i;var order=significant+decimalExponent-1;
+ if(order>308)return {ok:true,value:negative?-Infinity:Infinity};
+ if(order < -324)return {ok:true,value:negative?-0:0};
+ for(;i<dcLength;i++){if(!_dc_jdMul(n,10)||!_dc_jdAdd(n,(i<128?digits[i]:dcTail[i-128])))return {ok:false,value:0};}
+ if(decimalExponent>=0){for(i=0;i<decimalExponent;i++)if(!_dc_jdMul(n,10))return {ok:false,value:0};}
+ else{for(i=0;i< -decimalExponent;i++)if(!_dc_jdMul(d,10))return {ok:false,value:0};}
+ var a=_dc_jdCopyInto(work.a,n);var b=_dc_jdCopyInto(work.b,d);var e=0;
+ if(_dc_jdCmp(a,b)>=0){while(_dc_jdCmp(a,b)>=0){if(!_dc_jdMul(b,2))return {ok:false,value:0};e++;}_dc_jdDivSmall(b,2);e--;}
+ else{while(_dc_jdCmp(a,b)<0){if(!_dc_jdMul(a,2))return {ok:false,value:0};e--;}}
+ if(e < -1075)return {ok:true,value:negative?-0:0};
+ var count=e < -1022 ? e+1075 : 53;
+ var q=0;
+ for(i=0;i<count;i++){q*=2;if(_dc_jdCmp(a,b)>=0){_dc_jdSub(a,b);q++;}if(i+1<count)_dc_jdMul(a,2);}
+ if(count>0)_dc_jdMul(a,2);
+ var cmp=_dc_jdCmp(a,b);
+ if(cmp>0 || (cmp===0 && q%2===1))q++;
+ var value;
+ if(e < -1022)value=q*5e-324;
+ else if(e>1023 || (e===1023 && q===9007199254740992))value=Infinity;
+ else value=q*_dc_jdPow2(e-52);
+ return {ok:true,value:negative?-value:value};
+}
+function stageFile(mode){var path=mode===0?"COMPIL2.JSH":"COMPILER.JSH";var ptr=LINK_OFF+8176;for(var i=0;i<path.length;i++)_gw(ptr+i,strByte(path,i));_gw(ptr+path.length,0);var off=0,c=4294967295,n;while(off<262144){n=fsRead(ptr,off,stageScratch,512);if(n<0)return 0;c=crcFeed(c,stageScratch,n);off+=n;if(n<512){stageSize=off;stageCrc=4294967295-c;return 1;}}return 0;}
+function stageManifest(){var path="COMPILE.LNK";var ptr=LINK_OFF+8176;for(var i=0;i<path.length;i++)_gw(ptr+i,strByte(path,i));_gw(ptr+path.length,0);if(fsRead(ptr,0,stageScratch,29)!==28)return 0;if(_r32(stageScratch)!==1129136970 || _r32(stageScratch+4)!==2982221407 || linkCrc(stageScratch,24)!==_r32(stageScratch+24))return 0;stage1Bytes=_r32(stageScratch+8);stage1Crc=_r32(stageScratch+12);stage2Bytes=_r32(stageScratch+16);stage2Crc=_r32(stageScratch+20);return stage1Bytes>0&&stage1Bytes<262144&&stage2Bytes>0&&stage2Bytes<262144;}
+st=16;var hand=_r32(84);_w32(84,0);JSON_LEN=_r16(88);if(JSON_LEN)JSON_OFF=LINK_OFF-JSON_LEN;hasArt=_gr(90);LINK_MODE=_gr(91);spanN=_r16(HDR_SPAN_N);tokN=_r32(HDR_TOK_N);if(LINK_MODE)OPS_MAX=29696;
+if(hand===2982221407 && (JSON_LEN===0 || JSON_LEN===18459 || JSON_LEN===10927 || JSON_LEN===20308 || JSON_LEN===23945 || JSON_LEN===33326) && hasArt<=1 && (LINK_MODE===0 || LINK_MODE===2) && spanN<=4096 && tokN<=TOK_MAX && TOK_OFF+tokN*TOK_STRIDE<=JSON_OFF && linkCrc(TOK_OFF,tokN*TOK_STRIDE)===_r32(92)){st=0;
+  layout();
+  BRK_OFF = FSTY_OFF + 1024 * 4;
+  POOL_OFF = BRK_OFF + 1024;
+  VMAP_OFF = POOL_OFF + 1024 * 8;
+  LC_OFF = VMAP_OFF + NAME_MAX * 4;
+  GS_OFF = LC_OFF + CREC_MAX * 4;
+  GS_MAX = Math.floor(((JSON_LEN?JSON_OFF:(LINK_MODE?LINK_OFF:ART_KEEP)) - 768 - GS_OFF) / 8);
+  if (GS_MAX < 1) { GS_MAX = 1; over=1; }
+  natInit();
+  TYPEOF_NI = -1;
+  if(LINK_MODE && (GS_OFF>=LINK_OFF || !linkReadManifest() || !linkSeed() || !linkReadRom()))st=15;
+  else st = parse();
+  if (st === 0) {
+    runtimeResolve();
+meta=(JSON_LEN?JSON_OFF:(LINK_MODE?LINK_OFF:ART_KEEP))-768;stageScratch=meta+128;if(!stageManifest()||stage1Bytes!==_r32(meta+112)||stage1Crc!==_r32(meta+116)||!stageFile(1)||stageSize!==stage1Bytes||stageCrc!==stage1Crc){st=15;}else{
+_w32(meta+0,nOps);_w32(meta+4,nCrec);_w32(meta+8,nNames);_w32(meta+12,blobLen);_w32(meta+16,nFn);_w32(meta+20,nCls);_w32(meta+24,nNat);_w32(meta+28,nFset);_w32(meta+32,CALLREF);_w32(meta+36,nPool);_w32(meta+40,LINK_NAMES);_w32(meta+44,LINK_VARS);_w32(meta+48,LINK_FUNCS);_w32(meta+52,LINK_BYTES);_w32(meta+56,LINK_MAP);_w32(meta+60,nGs);_w32(meta+64,NEED_RUNTIME);_w32(meta+120,linkCrc(OPS_OFF,GS_OFF-OPS_OFF));_w32(92,linkCrc(meta,124));_w32(84,3783279628);_gw(HDR_PROGSEL,2);cdone(128,0,0);}
+}
+}
+if (st === ST_ERR_TOKENS) { _fail(st, 84, 79, 75, 78, 0, 0, 0); }        // TOKN
+else if (st === ST_ERR_STR) { _fail(st, 83, 84, 82, 0, 0, 0, 0); }       // STR
+else if (st === ST_ERR_REGEX) { _fail(st, 82, 69, 71, 69, 88, 0, 0); }   // REGEX
+else if (st === 10) { _fail(st, 76, 79, 67, 65, 76, 83, 0); }            // LOCALS
+else if (st === 11) { _fail(st, 66, 73, 71, 0, 0, 0, 0); }               // BIG
+else if (st === 12) { _fail(st, 83, 89, 78, 84, 65, 88, 0); }            // SYNTAX
+else if(st===16){_fail(15,83,84,65,71,69,50,0);}else if (st === 15) { _fail(st,82,79,77,76,73,78,75); }
+else if (st !== 0) { _fail(st, 67, 72, 65, 82, 0, 0, 0); }               // CHAR
+</script>

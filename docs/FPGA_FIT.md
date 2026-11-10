@@ -1,324 +1,65 @@
-# T200 fit — agent repair brief
+# FPGA build: status, limits, how to build
 
-Words: [README.md — Words used](../docs/WORDS.md#words-used-in-this-project).
+Board: Nexys Video, XC7A200T-1. VM clock 33.333 MHz; fabric and DDR3 100 MHz.
+These clocks do not change to make timing.
 
----
+## Status
 
-## SCOREBOARD — update this block when the bit changes
+| | Bitstream | Timing | Use |
+|---|---|---|---|
+| Rollback | `build/run78_clean_architecture/qualification_refined/run78_clean_qualified.bit` with `build/run78_clean_architecture/final_corrected/card.img` | met (setup 0.000 ns, hold +0.027 ns) | Works on the board. Has the old command monitor between programs. |
+| Current | `releases/current/jmr_js_mac.bit` (copy of `build/run94_mac/`) with a card made from the current source | met (setup +0.002 ns, hold +0.021 ns); DRC 0 errors; 98,244 LUTs, 340.5 BRAM, 28,649 slices | Finder-only, built from the root `rtl/`. Passes the simulator user loop. Not yet tried on the board. |
+| Before Finder-only | `build/run86_engineering_bit/run86_engineering_WNS-1.244.bit` | fails by 1.244 ns | Freezes on Quit. Comparison only. |
 
-This is the only place that names the current build. Other pages point here.
+Load a bitstream: `openFPGALoader -b nexysVideo <file.bit>` (add `-f` with JP4 on QSPI to keep it after power-off).
 
-**Active development: [run81](../build/run81_mac_native/STATUS.md).
-The completed implementation is unqualified: setup -1.652 ns, hold +0.025 ns,
-95,229 LUTs, 29,257 slices and 354.5 BRAM.** It fits the configured resource
-limits but fails timing. The generated bit is preserved as failed-build evidence,
-not an installation artifact. Targeted VM/text/RNG, graphics, floating-point,
-framebuffer and reset corrections are undergoing fresh RTL/Python verification
-before one hardware retry. Root `rtl/`, `storage/` and `card.img` remain the
-published review baseline until those corrections pass and are promoted together.
-No older bit is a substitute for this 44-program software set.
+## Known gaps in the current source
 
-The architecture review found two timer latches and uncovered internal timing
-paths in the older mapped design. Historical gate PASS below means those older
-script checks passed; it does not establish that every internal path was timed.
-Run81 corrects the timer default and strengthens the future publication gate to
-reject latches, missing clocks and unconstrained internal endpoints.
+1. Timing margin is thin: the default placement missed setup by 0.04 ns; the released bit used `ExtraNetDelay_high` placement plus `refine.tcl`. The tightest paths are framebuffer read → tether dump byte, console host payload, Toolbox `fb_y` → framebuffer write enable. Registering those would restore margin.
+2. The console state decode is 22–24 logic levels under `AreaOptimized_high` and 12 alone.
+3. 24 VM states left from the retired 32-bit executor are never entered; their enum entries remain.
+4. A failed program load returns to Finder with no message; the shell still names a Terminal role (7) for that case.
+5. `CURRENT_SET.json` describes an older source set.
 
+## Release limits
 
-| | |
+| Check | Limit |
 |---|---|
-| **Historical run78 gate PASS** | [run78 clean package](../build/run78_clean_architecture/final_corrected/README.md): setup 0.000 ns, hold +0.027 ns, 96097 LUTs, 28545 slices, 364.5 BRAM. Routing/DRC/pulse/pin/clock checks and independent selected routed memory audit pass. [Bit](../build/run78_clean_architecture/release/bitstream/run78_clean_qualified.bit), [disk](../build/run78_clean_architecture/final_corrected/card.img), [GUI](../build/run78_clean_architecture/final_corrected/test_gui.sh). RAM load completed; QSPI unchanged. Physical display/input acceptance pending. |
-| **Earlier experimental** | `build/run76_usb_keyboard_pmod_mice/test/`: WNS -0.355 ns, hold +0.017 ns, routing/DRC pass. Preserved for rollback; lacks the new Toolbox. |
-| **Rollback** | `build/run75_program_system/release/run75_program_finder_SYS_33MHz.bit`. Qualified 2026-11-04. Older jacks: mouse on J15, keyboard on JA. |
-| **QSPI state** | Agent did not write QSPI. User received the run78 `-f` command; current physical flash contents are unconfirmed. |
+| Setup and hold slack | ≥ 0, no false-path or multicycle waivers added to get there |
+| Routing, DRC | complete, 0 errors |
+| LUTs / BRAM tiles / slices | ≤ 106,500 / ≤ 365 / ≤ 32,900 |
+| Simulator user loop | passes on the same RTL |
 
-The latest [software revision](../build/toolbox_usage_examples/revision/card_final.img) contains 44 programs (42 resident clients), including eight CB variants and four Toolbox examples. Disk ROM `f6f805c5…` and LNK `0804ff96…` include the corrected `tbPaintRect` helper and occupy all 8191 mutable words. All resident clients were relinked together; focused graphics RTL checks include the complete cold-loaded prefix readback. Damage/UI examples have model checks. The unchanged hardware factory ROM is `fd89c8be…`; the routed INIT audit applies to that factory image. Physical acceptance remains open.
+## How to build
 
-[Run79 Editor TEST](../build/run79_handoff_fix/test/README.txt) passes the TEST bound at setup -0.195 ns and hold +0.029 ns, with the other qualification gates and selected memory audit passing. It fixes the application handoff halt/ack defect but is **not strict timing-qualified** and does not include the mouse fix. Run80 (`build/run80_pointer_handoff`) finished at setup -0.170 ns / hold +0.050 ns with both that handoff fix and an acknowledged pointer coordinate crossing; it failed strict setup timing. Run78 remains the preserved historical release, subject to the timing-coverage limitation above. No new bit has been flashed by the agent.
+Cheapest check first. Do not start a step whose predecessor failed.
 
-Fabric and DDR stay at **100 MHz**. The VM is divide-by-three, **33.333 MHz**. Do not put the VM back on divide-by-seven.
+| Step | Command | Time | Pass |
+|---|---|---|---|
+| Simulator | `make -C sim sim_server_synth` | 3 min | builds |
+| User loop | `python3 sim/user_loop.py` | 20 min | `USER_LOOP_PASS` |
+| One module | `vivado -mode batch -source tools/board_flow/ooc_module.tcl -tclargs <module> clk AreaOptimized_high <file.sv>` | 4–10 min | no `DEEP` lines |
+| Synthesis | `tools/board_flow/synth_gate.sh runNN` | 50 min | `LIVENESS_PASS`, 0 undriven nets, no `DEPTH` lines |
+| Place and route | `vivado -mode batch -source tools/board_flow/implement.tcl -tclargs build/runNN [place directive] [output dir]` | 30 min | `ROUTED_SETUP` and `ROUTED_HOLD` ≥ 0 |
+| Repair (only if setup misses by < 0.5 ns) | `vivado -mode batch -source tools/board_flow/refine.tcl -tclargs <output dir>` | 20–40 min | `REFINED_SETUP` and `REFINED_HOLD` ≥ 0 |
+| Qualify | `vivado -mode batch -source tools/board_flow/qualify_routed_bit.tcl -tclargs $PWD <routed.dcp or refined.dcp> build/runNN_release <name>` | 3 min | writes `<name>.bit` |
 
-Run75, the rollback bit, after place and route: 102,708 LUTs (limit 134,600), 29,855 slices (limit 33,650), 359.5 / 365 BRAM, setup 0.000 ns, hold +0.029 ns, no failing timing endpoints, no routing errors, no DRC errors. Reports: `build/run75_program_system/release/`. Owner confirmed Finder and JA keyboard pins 1/3 work on that bit. Do not copy these numbers onto run76 until run76 has its own report.
+Run `source scripts/vivado_env.sh` first. `make -C tools/board_flow bit` runs synthesis through bitstream in one go; use it only once the staged steps pass.
 
-Run73o, the image in QSPI: 87,876 LUTs, 28,045 slices, 353.5 BRAM, 128 DSP, setup 0.000 ns, hold +0.040 ns. Its reports stay in `releases/current/`. That image is not the rollback.
+## Rules that save build time
 
-### Why placement, not size, decides whether this design routes
+1. A path with more than about 12 logic levels at 100 MHz will not route. Fix it in the RTL; placement directives do not rescue it.
+2. Check a module alone before a full build. It shows the same deep paths in a tenth of the time.
+3. No undriven nets. Synthesis treats them as don't-care and may delete live logic; simulation reads zero, so the two disagree. Vivado warning `Synth 8-3848` must be absent.
+4. Confirm the mapped VM is whole right after synthesis (`synth_gate.tcl` does this).
+5. Register signals that cross between modules.
+6. `AreaOptimized_high` saves LUTs and adds logic levels. Measure both before choosing.
+7. Smaller RTL is not easier routing. Look at the failing endpoints, not totals.
+8. Check that an attribute landed on the mapped cell; do not trust the source line.
+9. No blanket `KEEP`/`DONT_TOUCH`, no blind floorplans. The only pblock is the SRAM bridge.
+10. An RTL change needs new synthesis. A placement-only experiment reuses `optimized.dcp`: a miss under 0.1 ns is worth one or two other placement directives (`ExtraNetDelay_high` closed run92); a larger miss is an RTL problem.
+11. Synthesizing one module as a separate block gives it shallower logic but more LUTs and worse routing (tried on the console: −0.6 ns). Keep the design flat.
+12. A card-only change needs no FPGA build.
+13. This Vivado license refuses `report_qor_assessment`, `report_qor_suggestions` and incremental implementation. Use `report_design_analysis`, `report_methodology`, `report_high_fanout_nets`.
 
-Runs 44–46 are the controlled proof: run 46 carries **+5,000 LUTs over run 44**
-on identical BRAM and DSP, and it is the one that both routed and closed
-timing. **A route failure here is a placement diagnosis until proven
-otherwise.** How to write: [RTL_DESIGN_PRINCIPLES.md](RTL_DESIGN_PRINCIPLES.md).
-
-### Trajectory (milestones only)
-
-| Milestone | Slice LUTs | Lesson |
-|---|---:|---|
-| Pre-campaign | 1,901,313 | FSM-as-FF + duplicated FB |
-| First under budget (run 27–28) | 131,314 | BRAM first, then place |
-| First timing-clean (run 46) | 110,532 | Placement strategy, not fewer LUTs |
-| Leanest published (run 60) | 86,628 | |
-| Historical run61 | 100,429 | Earlier fit milestone |
-| Flashed QSPI image run73o | 87,876 | Still in the chip until the next flash |
-| Rollback bit run75 | 102,708 | Qualified file. Run76 is not in this table until it routes |
-
-Git has every intermediate run. Closed/dead levers stay below.
-
-### FIT levers — closed out, kept for the record
-
-Listener consolidation, `vst_win` (16->8 attempted, **reverted** — silent
-correctness bug at deep nesting, see `tests/test_stack_window_depth.py`),
-`name_has`/`vlong_used`/name-family 1W merges, the LUTRAM->BRAM sweep, and
-`linebuf`->BRAM collectively closed the fit gap. **Do not revisit `vst_win`
-without the pop-refill detector design — the shrink is a language-contract
-change, not a free cut.**
-
-**Dead levers — do not retry:** 20 ns clock relax (bit-identical netlist;
-XDC never applies at synthesis), one-hot `fsm_encoding` (parent FSM not
-extractable through `hs_st()`/`ret_state`), HOF/regex/sort/bind walls
-(confirmed by real census: regex ~126 LUTs, sort's removable share <300
-LUTs — both done anyway for the correctness catch, see `potential
-bugs.md`, not for area), Verilator `--threads` (1 OS thread, single flat
-`always_ff` will not partition), Default vs ExploreArea opt-directive
-shopping (±250 slices, not a real lever — RTL fixes are).
-
----
-
-**T200** = this Nexys Video board (Artix-7 **XC7A200T**, 365 **BRAM** Block
-RAM tiles, 134,600 **LUTs** Look-Up Tables). **Fit** = does the design
-place without over-util. Agent does **not** run **Vivado** (AMD’s FPGA
-compiler) — you do:
-
-`source scripts/vivado_env.sh && make -C tools/board_flow bit-fresh`
-
-(once, 2026-08-21: source file list changed). After that, ordinary `bit`
-unless the file *list* / MIG / XDC changes. Same `rtl/*.sv` as FPGA-SIM.
-
-This file is **copy 2** of the RAM / “never fake FPGA-SIM” law (copy 1 is
-`.cursor/rules/never-fake-fpga-sim.mdc`). Synth hygiene **copy 1** is
-[SESSION_HANDOFF.md](SESSION_HANDOFF.md) § Synthesis; this NEVER table
-is the taxonomy.
-
-One JS heap. Control-only extraction allowed since 2026-08-22 (u_exec64
-shape: no arrays, scalar ports, registered reads); never extract-with-copies JOIN / JSON / GC (Garbage Collection) / HEAP
-into new modules. Extra clocks OK. The VM already runs at 33.333 MHz, not 100 MHz.
-If that divided clock misses timing, the hedge is
-[If timing fails](#if-timing-fails-wns--0--slow-the-js-core-not-ddr3).
-Do not slow DDR3.
-
-**This campaign is also the ASIC diet (2026-08-23):** the target is
-SkyWater 130 nm at ~2× the BASIC die, where ~170k logic LUTs ≈ tens of
-mm² of standard cells — every LUT removed here is future die area
-removed. [CONSTITUTION.md](../CONSTITUTION.md) § ASIC target.
-
-**Board core clock (fact, not a goal):** `core_clk` **is** **MIG**
-(Memory Interface Generator) `ui_clk` ≈ **100 MHz** today
-(`tools/board_flow/mig_a.prj`: DDR `TimePeriod` 2500 ps → 400 MHz memory,
-PHY **4:1** → `ui_clk` 100 MHz; `rtl/top_nexys_video.sv`
-`assign core_clk = ui_clk`). Older notes that said “~30 MHz” were a wish
-from the BASIC board era — **not** what this tree wires. Vivado does
-**not** pick a slower clock if the VM misses 10 ns — see **If timing
-fails** below. Do not slow MIG to “fix” **WNS** (Worst Negative Slack).
-
----
-
-**Clocks now:** VM 33.333 MHz, fabric and DDR 100 MHz. The 50 MHz
-recipe below is not wired. Fabric-to-VM paths can still have a 10 ns
-requirement. Inspect the path before changing a clock. Never weaken a
-timing constraint to publish a bit.
-
-## If timing fails (WNS < 0) — slow the JS core, not DDR3
-
-Publish a `.bit` only if WNS ≥ 0 ([FPGA_BRINGUP.md](FPGA_BRINGUP.md)).
-A prior VM map of code RAM to LUTRAM hit ~**−90 ns** WNS (dead tether) —
-that is a bad bit, not a board mystery. Negative WNS on the **VM / fabric**
-path is the hedge below. Negative WNS **inside MIG** is a different bug
-(do not “fix” it by clocking the core slower).
-
-**Do not:**
-
-- Lie in the XDC (`create_clock -period 20` on `clk100` while the pin is
-  still 100 MHz).
-- Ask MIG for a 50 MHz `ui_clk`. DDR3-800 + PHY 4:1 **locks** `ui_clk` at
-  100 MHz; the DRAM min clock is ~300 MHz-class. Slowing `ui_clk` breaks
-  calibration.
-- Hope Vivado inserts a clock crossing. `assign core_clk = ui_clk` is one
-  domain on purpose.
-
-**Do (50 MHz core, 100 MHz memory) — not wired yet; this is the recipe:**
-
-1. **Keep** MIG + `jmr_ddr3_sram_bridge` on `ui_clk` (100 MHz). `app_*`
-   must stay synchronous to `ui_clk`.
-2. **Make `core_clk` = `ui_clk` / 2** (BUFGCE or FF+BUFG from `ui_clk`,
-   then `create_generated_clock`). Related clocks beat a second MMCM.
-   Unused board MMCM `CLKOUT1` can also emit 50 MHz, but that MMCM is
-   **not** MIG’s — treat that pair as async.
-3. **CDC the asset port** between core and bridge. `jmr_sram_port` is
-   already hold-`req`-until-`ack`; add a two-clock slice (sync req/addr/data
-   into `ui_clk`, ack/rdata back). FPGA-SIM may keep `jmr_sram_model` on
-   one clock (`SRAM_INTERNAL=1`).
-4. **Sync reset** into the 50 MHz domain (`ui_clk_sync_rst` /
-   `init_calib_complete` are 100 MHz). HDMI `pixel_clk` (25 MHz) already
-   crosses; leave it.
-5. **Retune anything that assumes 100 MHz on `core_clk`:**
-   `ps2_rx` `DB_MAX` (Digilent ~19 @ 50 MHz; today 39 @ 100 MHz),
-   `jmr_uart_link` / `jmr_i2c_*` `CLK_HZ`, `jmr_js_core` frame tick
-   (`100e6/60` → `50e6/60`). SD `INIT_DIV`/`RUN_DIV` scale with this
-   module’s `clk` — 50 MHz is still in spec, just slower SPI.
-
-XDC: keep MIG’s 10 ns on `ui_clk`; generated 20 ns on `core_clk`;
-false-path / proper sync constraints on the new slice. Rebuild
-(`bit-fresh` if the clock net / MIG extra clocks change). Flash only
-if **both** clocks report WNS ≥ 0.
-
-This buys a 20 ns budget for the fat JS FSM. It does **not** relax 10 ns
-inside MIG+bridge, and it does not make JOIN intern walks cheaper in
-wall-clock (half the core Hz). Extra VM states for legal SRAM stay;
-do not combo-peek BRAM to “win back” the MHz.
-
-Glass: [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
-Phase 3b is done. `e32_*` names on the parent are live buses, not a second decoder. [RTL_REORG.md](RTL_REORG.md). External port map:
-[lastrun_ARCHITECTURE.md](lastrun_ARCHITECTURE.md).
-
----
-
-## JS core clock and crossing strobes
-
-**Depth is the lever.** Slow paths were ~50% logic / ~50% route because they
-were deep, not because placement was unlucky. Combinational divides in sprite
-math were the worst cone. Product fix: **run the JS VM on a divided clock**
-(now ÷3 = 33.333 MHz; do not go back to ÷7) and keep DDR3 / scanout on 100 MHz. Do not slow MIG.
-Hedge recipe: [If timing fails](#if-timing-fails-wns--0--slow-the-js-core-not-ddr3).
-How to write so this does not come back: [RTL_DESIGN_PRINCIPLES.md](RTL_DESIGN_PRINCIPLES.md).
-
-**If you change `VM_CLK_DIV`, these crossings are silent when wrong.**
-
-**Class A — fast→slow strobes the VM will miss** (1-fast-cycle pulse). Stretch
-to ≥N fast cycles or handshake: `sram_ack`, `code_we` (burst), `frame_tick`,
-`key_evt_stb`, `stop`, `start`.
-
-**Class B — slow→fast strobes that become N cycles wide.** Edge-qualify in the
-fast domain: `fb_swap`, `fb_we` (idempotent, low risk), `sram_req` (safe if
-`sram_ack` is Class A–fixed).
-
-**Class C — levels / data qualified by a listed strobe:** `joy_in`,
-`fb_present_busy`, `busy`, `done`, `sram_addr/we/wdata`, key codes, code write
-addr/data.
-
----
-
-## Paper BRAM budget (single copy — FINAL after the play-test round)
-
-The first shrink round set MAX_OBJ=768 and PACMAN **pegged the object
-heap in play** (fault 3 at obj=768, GC thrashing ~13/frame — the FM
-census was splash-biased). User call: stay near 1024 for future titles.
-Final caps for the FIRST .bin — **bisect-proven on the real titles**
-(2026-08-21 evening; the earlier "measured" shrinks were sized on
-splash-biased and between-frame data and two of them broke PACMAN):
-
-- **MAX_OBJ 960**: the attract-mode ghost-AI tick (4× JSON.parse maze +
-  BFS in ONE frame) legitimately bursts ~330 objects over ~570 steady
-  live. 896 pegged at rafcall 30; 960 clears it.
-- **ENV_DEPTH 384**: 256 CORRUPTED PACMAN — the finder's recursive BFS
-  transiently holds ~300 envs (the between-frame envl≈140 missed the
-  recursion peak); at 256, live envs were recycled mid-recursion and
-  callbacks ran on broken environments (the maze-flood). 384 proven
-  clean on FPGA-SIM; 512 is the pre-fit fallback (+5 tiles).
-  **BOARD 2026-08-26 (#84):** 384 + recursive `finder` still froze HDMI
-  (SIM Pac-Man still moved). **Do not raise `ENV_DEPTH` 384→512 or
-  `CSTK`** — the T200 is full and new bits fail routing. V1 HTML:
-  one-step chase (`storage/PACMAN.HTML`); original flood is
-  `PACORIG.HTML` (will freeze). Do not add a pathfinding opcode.
-- **MAX_ARR_LONG 12** (play peak 2; INVADERS bunkers 4), **CODE_WORDS
-  20480** (HM suite's extended PACMAN image is 19,527 words).
-
-| Item | Tiles |
-|---|---:|
-| Dual FB (hot, product glass) | 150–160 (see note) |
-| `varr_slot` 50688×64 | 99 |
-| `vobj_slot` 30720×80 | 75 |
-| `venv_slot` 6144×73 | ~14 |
-| `code_mem` 20480×32 | 20 |
-| `imgd_pix` | **0** (external) |
-| name/spr/json/vstack/source/work/gc leftovers | 0 (pinned distributed) |
-| misc | ~2 |
-| **Sum** | **~360–370 of 365** |
-
-**FB note:** the 160 figure (80 RAMB36/bank) was measured on the GARBAGE
-stitched netlist; the optimal TDP mapping is 75/bank = 150. A clean
-synth decides — which is the point of this build. If the report lands
-over 365, the trims in order: ENV 384 already taken; `MAX_ARR_LONG` 8
-(−1); our HM raf test shrunk so CODE can drop to 18432 (−2); then the
-real unlock is packing `vobj_slot`'s 16-bit key field down to ~10 bits
-(−8..14 tiles, mechanical but wide). If it lands comfortably under,
-ENV_DEPTH 512 (+5) buys back pre-fit attract longevity headroom.
-
-## Fit forensics (lesson only)
-
-Place-fails were **UTLZ-1**: incremental stitch duplicated the framebuffer;
-BRAM oversub demoted Port-A arrays to LUTRAM; tagged twin survived a constant
-fold. Do not delete an `e32_*` name that the parent still assigns. [RTL_REORG.md](RTL_REORG.md).
-
-## NEVER do these — they break the machine or the build
-
-Violating these is how we got 70 GB hangs, OOM mapping, and fake glass.
-Law detail: `.cursor/rules/never-fake-fpga-sim.mdc`,
-`one-heap-keep-gen.mdc`, `no-dukpy-cheat-native-cpu.mdc`.
-
-| NEVER | What breaks |
-|---|---|
-| **`mem[i] <=` / `stack[i] <=` / `vobj_alloc[i] <=`** (etc.) inside the big VM FSM `always_ff` on a large array | **~70 GB synth hang** — RAM becomes FFs. Glass/debug must use tasks too |
-| **`ram_style = "block"` while an FSM poke remains** | LUTRAM demotion or the hang; attribute does not save a bad template |
-| **Two `stack_wr` in one clock** | Illegal dual write. FOREACH uses `stack_dual_pend` (extra clock) |
-| **Peek Port A arrays same cycle** — must wait `*_rdata` | Wrong data / race; never “peek” to make a title paint |
-| **Mix blocking `=` and NBA `<=` in one sequential block** | UG901 — bad inference |
-| **Reset-clear a whole BRAM in one cycle** / reset inside the RAM process | AR 58025 — breaks BRAM inference (`source_mem`-class) |
-| **`unique case` that combo-indexes big unpacked arrays** | Parallel ports / giant mux (use plain `case` on opcode) |
-| **Second JS heap** inside exec (private `vvars` / `stack` / `vobj_*` / …) | Will not fit; goes stale; black PACMAN. One heap, keep gen-match |
-| **Skip gen-match** on object handles | Silent use-after-recycle |
-| **Extract WITH heap-array copies** (any submodule owning/duplicating a heap array) | Second heap; goes stale. Control-only extraction in the u_exec64 shape is ALLOWED (2026-08-22) |
-| **Put `vobj_slot` / `varr_slot` (the heap) or the DRAW bank on external/DDR3** | Cripples the JS Native CPU: S_V64_RECT writes 1 px/clock, PACMAN paints ~620k px/frame — a DDR3 draw bank multiplies frame cost through the bridge. **CONSCIOUS RELAXATION 2026-08-23 (user, rule-5 style): the FRONT/scanout bank + line-FIFO MAY move to DDR3** — scanout is sequential/prefetchable, swap becomes a burst copy (~3ms, in budget at the accepted half frame rate), and the ~75-80 freed BRAM tiles absorb the ~17k LUTRAM spill return. The draw bank stays BRAM. |
-| **dukpy / V8 / soft CPU / execute JS source as one RTL FSM** | Not this machine — bytecode ISA only |
-| **Title-name gates** (`if (stem == "PACMAN")`) | Forbidden hardwire |
-| **Grow heap past live caps** without a measured plan (`MAX_OBJ=960`,
-  arrays `1536×32 + 12×128`, `ENV_DEPTH=384` — [paper budget](#paper-bram-budget-single-copy--final-after-the-play-test-round)).
-  Do not restore `8192`/`4096` | Does not fit |
-| **Port-A the dead tagged twin** instead of leaving it unreachable | Wasted work; ghost stays |
-| **Claim “exec32 removed” while ignoring the `e32_*` naming trap** | 74 parent-owned `e32_*` signals are live silicon. [RTL_REORG.md](RTL_REORG.md) |
-| **`bit-fresh` to "recover" a mid-run crash** (it is REQUIRED after a file-list change — those are different situations); raise `JMR_VIVADO_SYNTH_THREADS`; `JMR_VIVADO_ALLOW_WIDE=1`; `drc.disableLUTOverUtilError` | Loses MIG/project for nothing. (The DRC demotion itself became a sanctioned experiment 2026-08-23 — user-directed, to let placement attempt LUT pairing; it stays set in vivado_build.tcl.) |
-| **`AUTO_INCREMENTAL_CHECKPOINT 1`** or any incremental synth while the RTL is changing | Stitches against a stale reference — the 04:11 netlist held the FB twice and ~2x logic; place cannot fix a garbage netlist |
-| ~~Agent runs Vivado / `make bit`~~ | Overridden 2026-08-22 by the user ("start the .bin yourself"): the agent runs builds directly; kill leftover heartbeat shells by PID after any aborted run |
-| **Pretend PYTHON or host twin is FPGA-SIM** | Fake machine |
-
-### How to write on-chip RAM (legal)
-
-```systemverilog
-// GOOD — Port A / tasks only (FSM sets strobes)
-stack_wr(sp, alu_r, tag);
-vobj_alloc_wr(valloc_i[9:0], 2'd1);
-// BAD — 70 GB
-stack[sp] <= alu_r;
-vobj_alloc[valloc_i] <= 2'd1;
-```
-
-Copy `jmr_mini_fb.sv`. One `we`/`addr`/`data`; read next clock; **no**
-reset-clear in the RAM process; clear strobes every beat; RUN-init via
-strobe / `heap_clr`. Cold buffers (once moved) use `jmr_sram_port`
-(`req`/`ack`) — not a second on-chip poke path.
-
-| Word | Meaning |
-|---|---|
-| **BRAM** (Block RAM) | On-chip tiles (**365** on this chip). Hot path only: dual framebuffer, bytecode, live JS heap |
-| **LUT** (Look-Up Table) | FPGA logic cell (~134,600). **LUTRAM** = a LUT used as tiny RAM — OK for 8-deep; fatal for `name_mem`-class under BRAM pressure |
-| **Port A** | Legal BRAM shape: `if (we) ram[waddr] <= wdata; rdata <= ram[raddr];` with **scalar** we/addr/data. FSM only pulses strobes |
-| **Dead twin** | Tagged (pre-Value64) arrays. A constant fold did not remove them. Do not Port-A a dead copy |
-| **WNS** | Worst Negative Slack — timing. Publish a `.bit` only if WNS ≥ 0 |
-| **MIG** | Memory Interface Generator — DDR3 controller. `ui_clk` ≈ 100 MHz |
-
-### Run77f completed route (not a release)
-
-Actual routed resources: 105,980 LUTs, 31,581 slices, 365 BRAM, 143 DSP.
-Setup -2.588 ns / hold +0.050 ns fails strict release and small-miss TEST
-limits. Actual routed resident-ROM INIT/INITP audit passed. Physical refinement
-is ongoing; no bit was published or flashed. G addresses the measured worst
-CopyBits overlap path without adding execution cycles. Its own board results
-are still required; isolated timing improvements are not board qualification.
+RTL coding rules are in [RTL_DESIGN_PRINCIPLES.md](RTL_DESIGN_PRINCIPLES.md).

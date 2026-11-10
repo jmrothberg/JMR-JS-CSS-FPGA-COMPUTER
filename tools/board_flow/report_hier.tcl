@@ -1,5 +1,5 @@
 # Forensic hierarchy report on an EXISTING checkpoint - NO resynthesis.
-# 2026-08-21: the fresh bit-fresh netlist still holds TWO framebuffer trees
+# The fresh bit-fresh netlist still holds TWO framebuffer trees
 # (u_core/u_fb AND u_corei_10/u_fb) and 1.84M LUT-as-logic. This report
 # attributes both: per-instance utilization + whether u_corei_10 is a real
 # cell in the final netlist or a synthesis-log phantom.

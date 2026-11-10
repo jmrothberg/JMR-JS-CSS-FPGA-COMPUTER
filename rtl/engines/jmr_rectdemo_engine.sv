@@ -1,5 +1,5 @@
 // RECTDEMO fillRect engine — same geometry as storage/RECTDEMO.JS on 640×480 FB.
-// LLM NOTE: Hardcoded native path; glass matches PYTHON fillRect coords.
+// Hardcoded native path; glass matches PYTHON fillRect coords.
 module jmr_rectdemo_engine (
     input  logic        clk,
     input  logic        rst_n,

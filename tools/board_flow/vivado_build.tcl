@@ -12,6 +12,7 @@ if {[llength $argv] >= 3 && [lindex $argv 2] eq "fresh"} {
 file mkdir $OUT
 set JMR_RESUME_PLACED_REQUEST [expr {[info exists ::env(JMR_RESUME_PLACED)] && $::env(JMR_RESUME_PLACED) eq "1"}]
 source [file join $ROOT tools board_flow build_gates.tcl]
+source [file join $ROOT tools board_flow physical_review.tcl]
 # Stem for build/bits/auto names. Prefer JMR_RUN_LABEL; else the newest
 # run*_console.log in $OUT (strip _console.log). need_timing=1 skips a
 # log that has not printed TIMING WNS= — that is the incoming tee, so a
@@ -36,7 +37,7 @@ proc jmr_run_stem_from_logs {dir {need_timing 0}} {
   set b [file tail $best]
   return [string range $b 0 end-[string length "_console.log"]]
 }
-# NEVER-SMASH GUARD (2026-08-27, user directive): before this flow touches
+# NEVER-SMASH GUARD: before this flow touches
 # anything, auto-archive whatever bit/bin the PREVIOUS run left in impl_1.
 # Runs unconditionally — a launch can no longer destroy an untested bit.
 # Name includes the previous run stem — timestamp-only names were opaque.
@@ -59,13 +60,13 @@ if {[llength [get_parts -quiet xc7a200tsbg484-1]] == 0} {
   exit 1
 }
 
-# 2026-08-19: synth_design technology mapping OOM (tcmalloc 5.2 GB, RSS
+# synth_design technology mapping OOM (tcmalloc 5.2 GB, RSS
 # 58→114 GB) with 7 synth workers. UG901 has one knob for all of
 # synth_design (`general.maxThreads`) — there is no "mapping only" cap.
 # Cap synth threads; leave impl place/route at 8. `-jobs` is parallel
 # *runs*, not mapping workers — do not cap impl jobs for this OOM.
 # Override synth cap: JMR_VIVADO_ALLOW_WIDE=1.
-# NEW: impl strategy (congestion campaign): JMR_VIVADO_STRATEGY names a
+# Impl strategy (congestion campaign): JMR_VIVADO_STRATEGY names a
 # Vivado impl_1 strategy, e.g. Performance_Explore or
 # Congestion_SpreadLogic_low. Default placement failed/died 3 of the
 # last 4 routes (35, 41, 45); directed placements route.
@@ -75,7 +76,7 @@ if {[info exists ::env(JMR_VIVADO_STRATEGY)] && $::env(JMR_VIVADO_STRATEGY) ne "
   set JMR_STRATEGY ""
 }
 
-# NEW: build-variant defines (JMR_VIVADO_DEFINES=JMR_NOCACHE = the
+# Build-variant defines (JMR_VIVADO_DEFINES=JMR_NOCACHE = the
 # PACMAN-freeze read-cache A/B build)
 if {[info exists ::env(JMR_VIVADO_DEFINES)] && $::env(JMR_VIVADO_DEFINES) ne ""} {
   set JMR_DEFINES [split $::env(JMR_VIVADO_DEFINES) ","]
@@ -117,7 +118,7 @@ foreach desktop_mem {desktop_font.hex desktop_advance.hex desktop_labels.hex sys
     file copy -force $ROOT/vectors/$desktop_mem $ROOT/rtl/engines/$desktop_mem
     file copy -force $ROOT/vectors/$desktop_mem $ROOT/rtl/video/$desktop_mem
 }
-# NEW: INVADERS bytecode for jmr_js_vm $readmemh
+# INVADERS bytecode for jmr_js_vm $readmemh
 file copy -force $ROOT/vectors/invaders_jsb.hex $ROOT/rtl/engines/invaders_jsb.hex
 file copy -force $ROOT/vectors/toolbox_code.hex $ROOT/rtl/engines/toolbox_code.hex
 file copy -force $ROOT/vectors/toolbox_code0.hex $ROOT/rtl/engines/toolbox_code0.hex
@@ -167,26 +168,18 @@ proc jmr_add_sources {ROOT} {
       $ROOT/vectors/system_about.hex \
       $ROOT/vectors/classic_records.hex \
       $ROOT/vectors/classic_static.hex \
-      $ROOT/rtl/engines/jmr_keyboard_fifo.sv \
       $ROOT/rtl/video/jmr_mouse_overlay.sv \
       $ROOT/rtl/engines/jmr_system_menu_pkg.sv \
       $ROOT/rtl/engines/jmr_system_menu.sv \
       $ROOT/rtl/engines/jmr_classic_ui_pkg.sv \
-      $ROOT/rtl/engines/jmr_classic_ui.sv \
-      $ROOT/rtl/engines/jmr_classic_labels.sv \
       $ROOT/rtl/engines/jmr_classic_static_labels.sv \
       $ROOT/rtl/engines/jmr_ui_snapshot.sv \
-      $ROOT/rtl/engines/jmr_system_actions.sv \
-      $ROOT/rtl/engines/jmr_system_documents.sv \
       $ROOT/rtl/video/jmr_classic_overlay.sv \
       $ROOT/rtl/video/jmr_system_overlay.sv \
       $ROOT/rtl/phys/jmr_ps2_mouse_host.sv \
       $ROOT/rtl/phys/jmr_pointer_accumulator.sv \
       $ROOT/rtl/phys/jmr_mouse_packet_merge.sv \
-      $ROOT/rtl/engines/jmr_desktop_layout_pkg.sv \
-      $ROOT/rtl/engines/jmr_icon_stream.sv \
-      $ROOT/rtl/engines/jmr_desktop_disk.sv \
-      $ROOT/rtl/engines/jmr_finder_shell.sv $ROOT/rtl/engines/jmr_desktop.sv \
+      $ROOT/rtl/engines/jmr_finder_shell.sv \
       $ROOT/rtl/engines/jmr_mouse_events.sv \
       $ROOT/rtl/engines/jmr_video_vram.sv \
       $ROOT/rtl/engines/jmr_js_vm_pkg.sv $ROOT/rtl/engines/jmr_console_engine.sv \
@@ -225,7 +218,6 @@ proc jmr_add_sources {ROOT} {
   ] {
     jmr_ensure_file $f
   }
-  # NEW: jmr_ps2_host removed from build — BASIC T100 is RX-only (file kept)
   # LED tests (tools/pmod_input_test, hid_led_blink) and the HDMI mouse
   # probe (tools/mouse_probe) are different projects — do not add those
   # paths to this JS board file list.
@@ -270,21 +262,21 @@ if {!$JMR_RESUME_PLACED_REQUEST} {
   set_property STEPS.WRITE_BITSTREAM.ARGS.BIN_FILE true [get_runs impl_1]
 }
 # Default Vivado strategy — Explore took 30m and still missed WNS; fix RTL instead
-# AUTO_INCREMENTAL_CHECKPOINT is BANNED (2026-08-21): the 04:11 place-fail
+# AUTO_INCREMENTAL_CHECKPOINT is BANNED: the 04:11 place-fail
 # netlist was an incremental stitch against the pre-exec32-delete reference
 # checkpoint — it contained the core's framebuffers TWICE (u_core/u_fb AND
 # u_corei_10/u_fb, 658 = 338 VM + 160 FB + 160 stale FB) and ~2x logic.
 # Incremental synth after big RTL/file-list changes produces garbage netlists
 # that place cannot fix. Full resynthesis every bit until the design is stable.
 catch {set_property AUTO_INCREMENTAL_CHECKPOINT 0 [get_runs synth_1]}
-# 2026-08-22: the design is control-logic-bound (flat 112-state FSM taxes
+# The design is control-logic-bound (flat 112-state FSM taxes
 # every FF with a decode cone; measured ~9-11 LUT/FF). AreaOptimized_high
 # targets exactly this. First tried on run 4 of the LUT campaign.
 catch {set_property STEPS.SYNTH_DESIGN.ARGS.DIRECTIVE AreaOptimized_high [get_runs synth_1]}
 if {!$JMR_RESUME_PLACED_REQUEST} {
   catch {set_property STEPS.OPT_DESIGN.ARGS.DIRECTIVE ExploreArea [get_runs impl_1]}
 }
-# 2026-08-23: the UTLZ-1 DRC compares LOGICAL LUT count against sites
+# The UTLZ-1 DRC compares LOGICAL LUT count against sites
 # BEFORE LUT6_2 pairing is attempted; control-heavy netlists pack 10-25%.
 # Demote to warning and let the placer try (user-approved experiment).
 set_param drc.disableLUTOverUtilError 1
@@ -313,7 +305,7 @@ if {!$JMR_RESUME_PLACED_REQUEST} {
   jmr_ckpt_hook impl_1 ROUTE_DESIGN $OUT/post_route.dcp
 }
 
-# NEW: Nexys Video DDR3 MIG (native UI) — pinout from Digilent mig_a.prj
+# Nexys Video DDR3 MIG (native UI) — pinout from Digilent mig_a.prj
 # Skip create/generate when the IP already exists in a reused project.
 if {[llength [get_ips -quiet mig_7series_0]] == 0} {
   create_ip -name mig_7series -vendor xilinx.com -library ip -module_name mig_7series_0
@@ -452,7 +444,7 @@ if {$skip_synth} {
   # Killed synth leaves PROGRESS 0% but still "needs reset" (Common 17-69).
   catch {reset_run synth_1}
   set_param general.maxThreads $SYNTH_THREADS
-# 2026-08-22: a killed/aborted previous run leaves synth_1 unlaunchable
+# A killed/aborted previous run leaves synth_1 unlaunchable
 # ("needs to be reset before launching"). Reset is always safe here: with
 # AUTO_INCREMENTAL off every bit is a full resynthesis anyway.
 catch {reset_run synth_1}
@@ -477,6 +469,9 @@ if {[get_property PROGRESS [get_runs synth_1]] != "100%" ||
 }
 
 open_run synth_1
+source $ROOT/tools/board_flow/audit_audio_reset.tcl
+report_timing_summary -file $OUT/timing_synth.rpt
+report_timing -max_paths 30 -file $OUT/paths_synth.rpt
 jmr_native_operand_gate
 report_utilization -file $OUT/utilization_synth.rpt
 report_utilization -hierarchical -hierarchical_depth 3 -file $OUT/utilization_synth_hier.rpt
@@ -518,10 +513,10 @@ if {!$resume_placed && $JMR_STRATEGY ne ""} {
   puts "INFO: impl strategy $JMR_STRATEGY"
   set_property strategy $JMR_STRATEGY [get_runs impl_1]
   # setting a strategy RESETS the run's step options — re-apply BIN_FILE
-  # or the flow silently ships no .bin (run 46: stale Aug-13 .bin trap)
+  # or the flow silently ships no .bin
   set_property STEPS.WRITE_BITSTREAM.ARGS.BIN_FILE true [get_runs impl_1]
-  # ...and the TCL.POST checkpoint hooks (run 51: post_opt/place/physopt
-  # on disk were silently run 50's — the strategy reset wiped the hooks;
+  # ...and the TCL.POST checkpoint hooks (without them post_opt/place/physopt
+  # on disk are silently a previous build's — the strategy reset wipes the hooks;
   # only Vivado's native impl_1/*.dcp existed for recovery/contingency)
   jmr_ckpt_hook impl_1 OPT_DESIGN $OUT/post_opt.dcp
   jmr_ckpt_hook impl_1 PLACE_DESIGN $OUT/post_place.dcp
@@ -533,6 +528,16 @@ if {!$resume_placed && [info exists ::env(JMR_VIVADO_OPT_DIRECTIVE)] &&
   puts "INFO: opt_design directive $::env(JMR_VIVADO_OPT_DIRECTIVE)"
   set_property STEPS.OPT_DESIGN.ARGS.DIRECTIVE $::env(JMR_VIVADO_OPT_DIRECTIVE) [get_runs impl_1]
 }
+# Preserve the qualified bridge-only placement policy.
+# Service/VM/framebuffer placement is left to the normal timing-driven placer.
+# Existing XPR files retain run properties. Reject an inherited placement hook
+# before any expensive placement instead of silently reapplying old locality.
+if {!$resume_placed} {
+  set inherited_place_pre [get_property STEPS.PLACE_DESIGN.TCL.PRE [get_runs impl_1]]
+  if {$inherited_place_pre ne ""} {
+    error "Unexpected retained placement PRE hook: $inherited_place_pre; use the matched fresh project"
+  }
+}
 # Place first: an overpacked candidate must never enter a long router run.
 if {!$resume_placed} {
   launch_runs impl_1 -to_step place_design -jobs $IMPL_JOBS
@@ -543,7 +548,18 @@ if {!$resume_placed} {
 catch {close_design}
 set placed_dcp [get_property DIRECTORY [get_runs impl_1]]/top_nexys_video_placed.dcp
 open_checkpoint $placed_dcp
+set bridge_policy [get_pblocks -quiet pb_sram_br]
+if {[llength $bridge_policy]!=1 || [get_property GRID_RANGES $bridge_policy] ne "CLOCKREGION_X1Y3:CLOCKREGION_X1Y3"} {
+  error "Placed checkpoint lacks original Run78 bridge placement policy"
+}
+if {[lsort [get_pblocks -quiet]] ne {pb_sram_br} ||
+    [get_property PARENT $bridge_policy] ne "ROOT" ||
+    ![get_property IS_SOFT $bridge_policy] ||
+    [get_property EXCLUDE_PLACEMENT $bridge_policy]} {
+  error "Placed checkpoint differs from measured Run78 bridge-only policy"
+}
 report_utilization -file $OUT/utilization_place.rpt
+jmr_physical_review place $OUT
 report_design_analysis -congestion -file $OUT/congestion_place.rpt
 report_timing_summary -file $OUT/timing_place.rpt
 jmr_resource_gate place [report_utilization -return_string]
@@ -552,7 +568,7 @@ jmr_stop_after place
 close_design
 launch_runs impl_1 -to_step write_bitstream -jobs $IMPL_JOBS
 # catch: a failed route ERRORs out of wait_on_runs and would kill the
-# script before the checkpoint-recovery branch below ever ran (run 45).
+# script before the checkpoint-recovery branch below ever ran.
 catch { jmr_wait_run impl_1 }
 if {[info exists ::JMR_IMPL_TIMED_OUT]} {
   puts "ERROR: timed implementation stopped; not entering automatic reroute recovery"
@@ -563,7 +579,7 @@ set RECOVERED 0
 if {[get_property PROGRESS [get_runs impl_1]] != "100%" ||
     [string match -nocase "*fail*" $st] ||
     [string match -nocase "*error*" $st]} {
-  # 2026-08-26 checkpoint recovery (run-41 lesson: a route SIGKILLed by
+  # Checkpoint recovery (a route SIGKILLed by
   # something outside Vivado discarded 3h of converged routing while the
   # step checkpoints sat on disk). Resume from the newest checkpoint
   # instead of failing the whole run; only a run with no checkpoints at
@@ -588,8 +604,9 @@ if {[get_property PROGRESS [get_runs impl_1]] != "100%" ||
 
 if {!$RECOVERED} { open_run impl_1 }
 report_utilization -file $OUT/utilization_impl.rpt
+jmr_physical_review impl $OUT
 jmr_resource_gate impl [report_utilization -return_string]
-# run-51 observability (2026-08-27): record congestion + timing
+# Observability: record congestion + timing
 # DISTRIBUTIONS every run. Every failed-run postmortem so far starved on
 # -max_paths 1 headlines (the project had exactly ONE saved intra-VM
 # path until a checkpoint was re-mined) and congestion was never
@@ -599,7 +616,7 @@ catch {report_design_analysis -congestion -file $OUT/congestion_impl.rpt}
 catch {report_timing -from [get_clocks vm_clk] -to [get_clocks vm_clk] -max_paths 100 -unique_pins -file $OUT/timing_vmclk_dist.rpt}
 catch {report_timing -max_paths 100 -unique_pins -file $OUT/timing_dist.rpt}
 
-# NEW: never ship a failing-timing bit (prior build wrote .bit with WNS −0.5 ns)
+# Never ship a failing-timing bit (prior build wrote .bit with WNS −0.5 ns)
 set wns [lindex [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -setup]] 0]
 set whs [lindex [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -hold]] 0]
 puts "TIMING WNS=$wns WHS=$whs"

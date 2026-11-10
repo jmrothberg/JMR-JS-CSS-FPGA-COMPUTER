@@ -34,7 +34,7 @@ _TOKEN = re.compile(
     (?P<STR>"([^"\\]|\\.)*") |
     (?P<STR2>'([^'\\]|\\.)*') |
     (?P<TMPL>`(?:\\.|\$\{[^}]*\}|[^`$\\])*`) |
-    (?P<NUM>\d+(\.\d+)?|\.\d+) |
+    (?P<NUM>(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?) |
     (?P<ID>[A-Za-z_$][A-Za-z0-9_$]*) |
     (?P<OP>\+\+|--|=>|\?\.|\?|===|!==|==|!=|<=|>=|&&|\|\||[+\-*/%]=|[+\-*/%<>=!();:{},.\[\]|&])
     """,
@@ -46,7 +46,7 @@ def _tokenize(src: str) -> List[Tuple[str, str, int]]:
     tokens: List[Tuple[str, str, int]] = []
     line = 1
     pos = 0
-    # NEW: after these, `/.../` is a regex literal (PACMAN rAF polyfill)
+    # After these, `/.../` is a regex literal (PACMAN rAF polyfill)
     _regex_prev = {
         "",
         "(",
@@ -71,7 +71,7 @@ def _tokenize(src: str) -> List[Tuple[str, str, int]]:
             line += 1
             pos += 1
             continue
-        # NEW: regex literal before OP `/` when prior token allows
+        # Regex literal before OP `/` when prior token allows
         prev = tokens[-1][1] if tokens else ""
         if src[pos] == "/" and pos + 1 < len(src) and src[pos + 1] not in ("/", "*"):
             if prev in _regex_prev:
@@ -192,23 +192,23 @@ def _isolate_iife_modules(
 
 
 
-# V1 AUTHORING WALL (2026-08-23): names whose silicon arms do not exist in
+# V1 AUTHORING WALL: names whose silicon arms do not exist in
 # the V1.0 chip (or were removed by the V1-surface cut). Verified zero hits
 # across every playable title (INVADERS, PACMAN, DONKEY, ASTEROID, MRDO,
 # MKPVP + AURORA/JOYDEMO/PACDBG). A program referencing one of these fails
 # HERE, loudly, instead of faulting on hardware. V1.5 lifts popular
 # language on this list; V2 is MK (dotted new / .call / Object.keys RTL).
 V1_WALL_NAMES = frozenset([
-    "sin", "cos", "atan2", "pow", "hypot",   # run 71: ceil is native 57
+    "sin", "cos", "atan2", "pow", "hypot",   # Ceil is native 57
     "charAt", "charCodeAt", "split", "match", "exec", "substring",
     "toUpperCase", "toLowerCase", "toFixed", "toString", "String",
-    "concat", "reverse", "shift", "startsWith", "endsWith",   # run 71: includes desugars to indexOf
+    "concat", "reverse", "shift", "startsWith", "endsWith",   # Includes desugars to indexOf
     "padStart", "padEnd", "repeat",
     "findIndex", "some", "every", "values", "entries",
 ])
 
-# V1 WALL EXTENSION (2026-08-23, switchable, OFF by default): candidate
-# silicon removals sized on the run-19 post-opt netlist. Per-arm LUTs:
+# V1 WALL EXTENSION: candidate
+# silicon removals sized on a post-opt netlist. Per-arm LUTs:
 # JSON engine 18,795 (REMOVAL-WORTHY); HOF find/filter/reduce/map 1,053,
 # bind 601, regex replace/test 126, sort ~0 (NOT worth removing — kept).
 # The extension stays off until the replacement titles (PACMAN2.HTML
@@ -218,7 +218,7 @@ V1_WALL_NAMES = frozenset([
 import os as _os
 
 def _wall_ext_names() -> frozenset:
-    # 2026-08-23: JSON wall is LIVE BY DEFAULT — the gate passed
+    # JSON wall is LIVE BY DEFAULT — the gate passed
     # (PACMAN2/INVADERS2 byte-identical, now shipping under the original
     # filenames; originals in storage/*.V2ORIG). JMR_V1_ALLOW_JSON=1 is
     # the archival escape for compiling the .V2ORIG titles.
@@ -235,39 +235,43 @@ def _wall_ext_names() -> frozenset:
 class Compiler:
     def __init__(self, src: str) -> None:
         self.tokens = _isolate_iife_modules(_tokenize(src))
+        self._getter_call_names = {self.tokens[k+1][1] for k in range(len(self.tokens)-2)
+            if self.tokens[k][0]=='ID' and self.tokens[k][1]=='get' and self.tokens[k+1][0]=='ID' and self.tokens[k+2][1]=='('}
         self.i = 0
         self.consts: List[Any] = []
+        self._null_consts = set()
         self.names: List[str] = []
         self.name_index: dict[str, int] = {}
         self.code: List[Tuple] = []
-        # NEW: HTML line per emitted op (monitor follows bytecode → source)
+        # HTML line per emitted op (monitor follows bytecode → source)
         self.op_lines: List[int] = []
-        # NEW: user functions name → (entry_ip, params)
+        # User functions name → (entry_ip, params)
         self.functions: dict[str, Tuple[int, List[str]]] = {}
         # Hoisted `function foo` names for LOAD_VAR a1=1. Do not plant
         # functions[foo]=(0,[]) — class methods compile before bodies and
         # CALL_USER 0 re-enters IP 0 (INVADERS star-loop / DONKEY new Game).
         self._hoisted_fn_names: set[str] = set()
-        # NEW: fname → IP after the function's last op (before MAKE_FN).
+        # Fname → IP after the function's last op (before MAKE_FN).
         # Used to inline tiny param-only callees at CALL_USER sites.
         self._fn_end: dict[str, int] = {}
         self._fn_compiling: Optional[str] = None
-        # NEW: classes + set of all method names (for CALL_METHOD dispatch)
+        # Classes + set of all method names (for CALL_METHOD dispatch)
         self.classes: dict[str, dict] = {}
         self.all_methods: set[str] = set()
-        # NEW: break patch lists for switch (and later loops)
+        # Break patch lists for switch (and later loops)
         self.break_stack: List[List[int]] = []
-        # NEW: continue patch lists for for/while (bunker arch `continue`)
+        # Continue patch lists for for/while (bunker arch `continue`)
         self.continue_stack: List[List[int]] = []
-        # NEW: >0 inside function/method/arrow → let/const must STORE (not LET_VAR).
+        # >0 inside function/method/arrow → let/const must STORE (not LET_VAR).
         # Top-level keeps LET_VAR for startLoop re-entry (DONKEY.JS inited etc.).
         self._fn_depth = 0
-        # NEW: per-function local name → env slot 0..15 for LOAD_VAR/STORE_VAR a1.
+        self._flat_module_frames = set()
+        # Per-function local name → env slot 0..15 for LOAD_VAR/STORE_VAR a1.
         self._local_stack: List[dict[str, int]] = []
-        # NEW: >0 inside while/for body. `var row = []` in a loop must STORE;
+        # >0 inside while/for body. `var row = []` in a loop must STORE;
         # LET_VAR skips if the name exists, so every row aliases one array.
         self._loop_depth = 0
-        # NEW: uncapped shadow sets, one per enclosing function scope (the
+        # Uncapped shadow sets, one per enclosing function scope (the
         # 16-entry _local_stack maps drop overflow names, so they cannot
         # answer "does ANY enclosing scope declare X"). Env chains are
         # lexical: a site whose name is declared by NO enclosing function
@@ -275,6 +279,13 @@ class Compiler:
         # end of compile() (see _global_sites).
         self._scope_sets: List[set] = []
         self._global_sites: List[Tuple[int, str, tuple]] = []
+        self._standard_global_bindings: set[str] = set()
+        self._string_call_sites = []
+        self._runtime_probe = False
+        self._require_concat_helper = False
+        self._needs_string_runtime = False
+        self._storage_call_sites = []
+        self._needs_storage_runtime = False
         # Metadata only. Resident-v2 serialization may reuse lexical leaf
         # slots without changing ordinary bytecode or captured outer names.
         self._local_serial = 0
@@ -283,7 +294,10 @@ class Compiler:
         self._compact_leaf_ranges = []
 
     def compile(self) -> Chunk:
-        # NEW: hoist function + class declarations first (JS-style)
+        concat_start = len(self.code)
+        self._concat_sites = []
+        self._needs_concat_runtime = False
+        # Hoist function + class declarations first (JS-style)
         saved_i = self.i
         self._prescan_class_names()  # so `new Foo` inside functions resolves
         self._prescan_function_names()
@@ -299,11 +313,17 @@ class Compiler:
                 self._skip_class_decl()
                 continue
             self._statement()
-        # NEW: retro-patch provable globals to a1=1 (skip the env walk).
+        # Retro-patch provable globals to a1=1 (skip the env walk).
         # Safe iff no lexically-enclosing function scope declares the name:
         # the runtime walk could then never hit an env slot and always fell
         # through to vvars — a1=1 reads/writes vvars directly (ENVWALK was
         # 92% of S_HEAP_CMP = ~44% of all VM cycles in INVADERS play).
+        # Determine bindings after all scopes finish: forward declarations and
+        # captured outer locals must shadow standard numeric globals too.
+        for _idx, _nm, _scopes in self._global_sites:
+            if (self.code[_idx][0] == Op.STORE_VAR and
+                    not any(_nm in scope for scope in _scopes)):
+                self._standard_global_bindings.add(_nm)
         for _idx, _nm, _scopes in self._global_sites:
             if any(_nm in s for s in _scopes):
                 continue
@@ -311,8 +331,63 @@ class Compiler:
             if (len(_t) == 2 and _t[0] in (Op.LOAD_VAR, Op.STORE_VAR)
                     and isinstance(_t[1], int) and 0 <= _t[1] < len(self.names)
                     and self.names[_t[1]] == _nm):
-                self.code[_idx] = (_t[0], _t[1], 1)
-        return Chunk(
+                if (_t[0] == Op.LOAD_VAR and _nm in ("Infinity", "NaN") and
+                        _nm not in self._standard_global_bindings and
+                        _nm not in self.functions and _nm not in self._hoisted_fn_names):
+                    self.code[_idx] = (Op.LOAD_CONST, self._const(
+                        float("inf") if _nm == "Infinity" else float("nan")))
+                else:
+                    self.code[_idx] = (_t[0], _t[1], 1)
+        # Defer builtin String decisions until forward local/global bindings
+        # and captured outer scope sets are complete. Keep shadowed calls intact.
+        for load_ip, call_ip, argc, scopes in self._string_call_sites:
+            if (any("String" in scope for scope in scopes) or
+                    "String" in self._standard_global_bindings or
+                    "String" in self.functions or "String" in self.classes or
+                    "String" in self._hoisted_fn_names):
+                continue
+            self._needs_string_runtime = True
+            if self._runtime_probe:
+                continue
+            helper = "_jmr_json_stringEmptyNative" if argc == 0 else "_jmr_json_stringCoerceNative"
+            if helper not in self.functions:
+                raise CompileError("String runtime must be included through shared source preparation", 0)
+            self.code[load_ip] = (Op.JUMP, load_ip + 1)
+            self.code[call_ip] = (Op.CALL_USER, self.functions[helper][0], argc)
+        # As with String, later declarations and captured outer bindings
+        # determine whether localStorage is the shared service or a user object.
+        for load_ip, prepare_ips, call_ip, argc, method, scopes in self._storage_call_sites:
+            if (any("localStorage" in scope for scope in scopes) or
+                    "localStorage" in self._standard_global_bindings or
+                    "localStorage" in self.functions or "localStorage" in self.classes or
+                    "localStorage" in self._hoisted_fn_names):
+                continue
+            self._needs_storage_runtime = True
+            if self._runtime_probe:
+                continue
+            helper = "_jmr_store_" + method
+            if helper not in self.functions:
+                raise CompileError("storage runtime must be included through shared source preparation", 0)
+            for ip in (load_ip,) + prepare_ips:
+                self.code[ip] = (Op.JUMP, ip + 1)
+            self.code[call_ip] = (Op.CALL_USER, self.functions[helper][0], argc)
+        # Markers survive existing safe inline copies; only this compile batch
+        # is rewritten, so a previously frozen resident prefix never changes.
+        sites = [i for i in range(concat_start, len(self.code))
+                 if self.code[i][0] == Op.ADD and len(self.code[i]) > 1 and self.code[i][1] == 0]
+        if sites:
+            from .add_proof import prove
+            self._add_proof = prove(self, sites)
+            safe = set(self._add_proof['safe'])
+            for site in safe: self.code[site] = (Op.ADD,)
+            sites = [site for site in sites if site not in safe]
+        self._needs_concat_runtime = bool(sites)
+        helper = self.functions.get("_jmr_json_addNative")
+        if sites and helper is None and self._require_concat_helper and not self._runtime_probe:
+            raise CompileError("mixed ADD proof changed after source preparation", 0)
+        for site in sites:
+            self.code[site] = (Op.ADD, helper[0]) if helper is not None else (Op.ADD,)
+        chunk = Chunk(
             self.code,
             self.consts,
             self.names,
@@ -320,22 +395,59 @@ class Compiler:
             dict(self.classes),
             op_lines=list(self.op_lines),
         )
+        chunk.null_const_indices = set(self._null_consts)
+        return chunk
+
+    def _function_end(self, start):
+        """Token after one function body; skip params/destructuring safely."""
+        j=start+1
+        while j<len(self.tokens) and self.tokens[j][1]!="(": j+=1
+        depth=0
+        while j<len(self.tokens):
+            t=self.tokens[j][1]; depth += (t=="(")-(t==")"); j+=1
+            if depth==0: break
+        if j>=len(self.tokens) or self.tokens[j][1]!="{": return j
+        depth=1; j+=1
+        while j<len(self.tokens) and depth:
+            t=self.tokens[j][1]; depth+=(t=="{")-(t=="}"); j+=1
+        return j
+
+    def _declarations(self, start=0, body=False):
+        """Declarations in this function scope, excluding nested bodies."""
+        out=[]; j=start; depth=0
+        while j<len(self.tokens):
+            t=self.tokens[j][1]
+            if body and t=="}" and depth==0: break
+            if t=="function":
+                named=j+1<len(self.tokens) and self.tokens[j+1][0]=="ID"
+                previous=self.tokens[j-1][1] if j else ";"
+                expression_prefix={"=","(","[",",",":","?","return","throw","=>","+","-","*","/","%","!","~","&","|","^","&&","||","??","+=","-=","*=","/=","%=","void","typeof","delete","new"}
+                if named and (j==start or previous not in expression_prefix):
+                    out.append(j)
+                j=self._function_end(j); continue
+            if t=="class" or (t=="=>" and j+1<len(self.tokens) and self.tokens[j+1][1]=="{"):
+                while j<len(self.tokens) and self.tokens[j][1]!="{":j+=1
+                if j<len(self.tokens):
+                    level=1;j+=1
+                    while j<len(self.tokens) and level:
+                        u=self.tokens[j][1];level+=(u=="{")-(u=="}");j+=1
+                continue
+            depth+=(t=="{")-(t=="}");j+=1
+        return out
 
     def _prescan_function_names(self) -> None:
-        """Register hoisted function names before emitting bodies.
+        self._global_declarations=self._declarations()
+        self._hoisted_fn_names={self.tokens[i+1][1] for i in self._global_declarations}
 
-        Inner `requestAnimationFrame(tick)` compiles while `tick` is still
-        being emitted; `_var_a1` needs the name in `_hoisted_fn_names` so
-        a1=1 (vvars global) rather than env-chain HEAP. Do not plant
-        functions[tick]=(0,[]) — that made class-method CALL_USER jump to IP 0.
-        """
-        i = 0
-        while i < len(self.tokens) - 1:
-            if (self.tokens[i][1] == "function"
-                    and self.tokens[i + 1][0] == "ID"):
-                fname = self.tokens[i + 1][1]
-                self._hoisted_fn_names.add(fname)
-            i += 1
+    def _hoist_local_declarations(self):
+        saved=self.i; declarations=self._declarations(saved,True)
+        for i in declarations:self._note_local(self.tokens[i+1][1])
+        for i in declarations:
+            self.i=i;self._function_decl()
+        self.i=saved
+
+    def _lexically_bound(self,name):
+        return any(name in scope for scope in self._scope_sets)
 
     def _prescan_class_names(self) -> None:
         """Register class names before emitting functions that `new` them."""
@@ -391,19 +503,8 @@ class Compiler:
             self._advance()
 
     def _compile_all_functions(self) -> None:
-        """Scan source for named function decls and emit them (jumped over at runtime)."""
-        i = 0
-        while i < len(self.tokens):
-            if self.tokens[i][1] == "function":
-                # NEW: skip anonymous function expressions (next token is '(')
-                if i + 1 < len(self.tokens) and self.tokens[i + 1][1] == "(":
-                    i += 1
-                    continue
-                self.i = i
-                self._function_decl()
-                i = self.i
-            else:
-                i += 1
+        for i in self._global_declarations:
+            self.i=i;self._function_decl()
 
     def _function_decl(self) -> None:
         """NEW: function name(params) { body } → JUMP over; entry; bind; body; RET_VAL."""
@@ -419,7 +520,7 @@ class Compiler:
         params: List[Any] = []
         if self._peek_text() != ")":
             while True:
-                # NEW: object destructuring { a, b } → one arg unpacked to locals
+                # Object destructuring { a, b } → one arg unpacked to locals
                 if self._match("{"):
                     keys: List[str] = []
                     while self._peek_text() not in ("", "}"):
@@ -441,11 +542,13 @@ class Compiler:
         self._expect(")")
         jmp_over = self._emit(Op.JUMP, 0)
         entry = len(self.code)
+        enclosing_fn = self._fn_compiling
+        nested = bool(self._fn_depth)
         self._fn_compiling = fname
         self._enter_local_frame()
         self._scope_sets.append(set())
         # prologue: stack has arg0..argN-1 (last arg on top)
-        # NEW: params declare into the per-call lexical env (LET_VAR).
+        # Params declare into the per-call lexical env (LET_VAR).
         # arg2=1 flags "call-frame local" for RTL (flat vars: always store;
         # only top-level LET_VAR keeps init-if-missing across frame re-runs).
         for p in reversed(params):
@@ -461,10 +564,11 @@ class Compiler:
                 self._note_local(p)
                 self._emit(Op.LET_VAR, self._name(p), 1)
         self._expect("{")
-        self._fn_depth += 1  # NEW: function body locals use LET_VAR (env)
-        # NEW: `if (ch === "1") return 1; ... return 0` is one obj[ch]|0
+        self._fn_depth += 1  # Function body locals use LET_VAR (env)
+        # `if (ch === "1") return 1; ... return 0` is one obj[ch]|0
         # instead of N EQ/JUMP pairs (inner sprite loops were ~14 compares
         # per pixel × CALL_USER). Lut is stored after MAKE_FN below.
+        self._hoist_local_declarations()
         ceq_lut = self._try_emit_char_eq_lookup(params)
         if not ceq_lut:
             while self._peek_text() not in ("", "}"):
@@ -482,12 +586,27 @@ class Compiler:
         self._patch(jmp_over, Op.JUMP, len(self.code))
         # store flat param count for arity (destruct counts as 1)
         flat = [p if isinstance(p, str) else "__arg" for p in params]
-        self.functions[fname] = (entry, flat)
-        self._fn_end[fname] = len(self.code)
-        self._fn_compiling = None
-        # NEW: bind function name as first-class Fn (rAF(animate) / keys need LOAD_VAR)
+        if not nested:
+            self.functions[fname] = (entry, flat)
+            self._fn_end[fname] = len(self.code)
+        self._fn_compiling = enclosing_fn
+        # Compiler-owned helpers used only by direct calls need no global Fn.
+        # Public/user functions and any first-class helper references keep binding.
+        private_direct = fname.startswith(("_jmr_json_", "_jmr_store_")) and not nested
+        if private_direct:
+            for ti, token in enumerate(self.tokens):
+                if token[0] == "ID" and token[1] == fname:
+                    if ti + 1 >= len(self.tokens) or self.tokens[ti + 1][1] != "(":
+                        private_direct = False
+                        break
+        if private_direct and fname in self.name_index:
+            ni = self.name_index[fname]
+            private_direct = not any(op[0] == Op.LOAD_VAR and op[1] == ni for op in self.code)
+        if private_direct and ceq_lut is None:
+            return
+        # Bind function name as first-class Fn (rAF(animate) / keys need LOAD_VAR)
         self._emit(Op.MAKE_FN, entry, len(flat))
-        # NEW: nested decls stay local to the enclosing call env (LET_VAR);
+        # Nested decls stay local to the enclosing call env (LET_VAR);
         # top level keeps the global STORE (hoisted call sites need it)
         if self._fn_depth:
             self._emit(Op.LET_VAR, self._name(fname), 1)  # call-frame local (RTL flag)
@@ -622,7 +741,7 @@ class Compiler:
         end = self._fn_end[fname]
         if not self._fn_body_inlineable(entry, end):
             return False
-        # 2026-08-30 (board saucer-kill fault 3, run-60 forensics): the spliced
+        # The spliced
         # body's LET_VAR param binds become KEYED SLOTS IN THE CALLER'S FRAME.
         # A caller already at the 16-slot wall (RTL ENV_SLOTS — animate() in
         # INVFAST sat at exactly 16) gained a 17th name on the FIRST execution
@@ -721,7 +840,8 @@ class Compiler:
             raise CompileError("EXPECTED CLASS NAME", line)
         cname = text
         methods: dict[str, int] = {}
-        getters: set[str] = set()  # NEW: `get name()` accessors (DONKEY marioMiddle)
+        setters: dict[str, int] = {}
+        getters: set[str] = set()  # `get name()` accessors (DONKEY marioMiddle)
         ctor_entry: Optional[int] = None
         ctor_jmp_after_params: Optional[int] = None
         ctor_body_ip: Optional[int] = None
@@ -729,15 +849,17 @@ class Compiler:
         fields: List[Tuple[str, int, int, int]] = []
         self._expect("{")
         while self._peek_text() not in ("", "}"):
-            # NEW: get name() / set name() — body compiles like a method, but
+            # Get name() / set name() — body compiles like a method, but
             # getters are recorded so GET_PROP invokes them (this.marioMiddle).
             is_getter = False
+            is_setter = False
             if self._peek_text() in ("get", "set") and (
                 self.i + 1 < len(self.tokens) and self.tokens[self.i + 1][0] == "ID"
             ):
                 is_getter = self._peek_text() == "get"
+                is_setter = self._peek_text() == "set"
                 self._advance()
-            # NEW: class field arrow — startSelect = (e) => {}
+            # Class field arrow — startSelect = (e) => {}
             mk, mname, mline = self._peek() or ("", "", 0)
             if mk == "ID" and self.i + 1 < len(self.tokens) and self.tokens[self.i + 1][1] == "=":
                 self._advance()
@@ -766,7 +888,7 @@ class Compiler:
             params: List[Any] = []
             if self._peek_text() != ")":
                 while True:
-                    # NEW: constructor({ position, type }) destructuring
+                    # Constructor({ position, type }) destructuring
                     if self._match("{"):
                         keys: List[str] = []
                         while self._peek_text() not in ("", "}"):
@@ -790,7 +912,7 @@ class Compiler:
             entry = len(self.code)
             self._enter_local_frame()
             self._scope_sets.append(set())
-            # NEW: method params declare into the per-call env (LET_VAR);
+            # Method params declare into the per-call env (LET_VAR);
             # arg2=1 = call-frame local flag for RTL (always store there)
             for p in reversed(params):
                 if isinstance(p, tuple) and p[0] == "destruct":
@@ -804,12 +926,13 @@ class Compiler:
                 else:
                     self._note_local(p)
                     self._emit(Op.LET_VAR, self._name(p), 1)
-            # NEW: after params so _value64_entry_nparam still sees LET_VAR
+            # After params so _value64_entry_nparam still sees LET_VAR
             # at constructor_ip (class-field inits jump in after binding).
             jmp_after_params = self._emit(Op.JUMP, 0)
             ctor_body = len(self.code)
             self._expect("{")
-            self._fn_depth += 1  # NEW: class method/ctor locals use LET_VAR (env)
+            self._fn_depth += 1  # Class method/ctor locals use LET_VAR (env)
+            self._hoist_local_declarations()
             while self._peek_text() not in ("", "}"):
                 self._statement()
             self._expect("}")
@@ -827,10 +950,18 @@ class Compiler:
                 ctor_jmp_after_params = jmp_after_params
                 ctor_body_ip = ctor_body
             else:
-                methods[mname] = entry
                 self.all_methods.add(mname)
-                if is_getter:
-                    getters.add(mname)
+                if is_setter:
+                    if len(params)!=1:raise CompileError("SETTER NEEDS ONE PARAM",mline)
+                    setters[mname]=entry
+                    if mname not in getters:methods.pop(mname,None)
+                else:
+                    methods[mname]=entry
+                    if is_getter:
+                        if params:raise CompileError("GETTER NEEDS NO PARAMS",mline)
+                        getters.add(mname)
+                    else:
+                        getters.discard(mname);setters.pop(mname,None)
         self._expect("}")
         if fields:
             jmp_over = self._emit(Op.JUMP, 0)
@@ -850,7 +981,7 @@ class Compiler:
                 ctor_entry = fi_entry
             self._patch(jmp_over, Op.JUMP, len(self.code))
         if ctor_entry is None:
-            # NEW 2026-08-26: constructorless class - synthesize an empty
+            # Constructorless class - synthesize an empty
             # ctor so `new T()` stamps the instance's class. Without one
             # the RTL object never received its class field and EVERY
             # method call on it silently missed (Defect B; gate:
@@ -860,7 +991,7 @@ class Compiler:
             self._emit(Op.LOAD_CONST, self._const(None))
             self._emit(Op.RET_VAL)
             self._patch(jmp_over2, Op.JUMP, len(self.code))
-        self.classes[cname] = {"ctor": ctor_entry, "methods": methods, "getters": getters}
+        self.classes[cname] = {"ctor": ctor_entry, "methods": methods, "getters": getters, "setters": setters}
 
     def _done(self) -> bool:
         return self.i >= len(self.tokens)
@@ -904,6 +1035,9 @@ class Compiler:
             t = self.tokens[self.i - 1]
         line = int(t[2]) if t is not None else 0
         args = tuple(op_args)
+        if (args and args[0] in (Op.STORE_VAR, Op.LET_VAR) and
+                len(args) >= 2 and not self._scope_sets):
+            self._standard_global_bindings.add(self.names[int(args[1])])
         # LOAD_VAR/STORE_VAR a1: 0=chain (global/upvalue), 1=hoisted fn
         # global (vvars), 2+slot=local. Do not pack a1=1 for every
         # non-local — that skipped env slots (bunkers/timestamp/`f`).
@@ -919,7 +1053,7 @@ class Compiler:
             if local:
                 name = self.names[ni] if 0 <= ni < len(self.names) else ""
                 self._note_local(name)
-                # NEW: carry the env slot as a verified hint (a1[7:1] in the
+                # Carry the env slot as a verified hint (a1[7:1] in the
                 # encoder). RTL phase-6 checks the hinted slot first and
                 # falls back to a full scan on mismatch — re-`let` in loop
                 # bodies was the top ENVWALK sink after loads got hints.
@@ -946,12 +1080,14 @@ class Compiler:
     def _note_local(self, name: str) -> None:
         if not name or not self._local_stack:
             return
+        if len(self._local_stack) in self._flat_module_frames:
+            return
         if self._scope_sets:
             self._scope_sets[-1].add(name)
         cur = self._local_stack[-1]
         if name in cur:
             return
-        # 2026-08-28: this used to silently drop the 17th+ name (RTL
+        # This used to silently drop the 17th+ name (RTL
         # ENV_SLOTS=16 per call frame — params + declared locals share the
         # budget). INVFAST's animate() grew to 24 during a rewrite and the
         # silence turned a compile-time-detectable mistake into a runtime
@@ -988,8 +1124,6 @@ class Compiler:
             cur = self._local_stack[-1]
             if name in cur:
                 return 2 + cur[name]
-        if name in self.functions or name in self._hoisted_fn_names:
-            return 1
         # Candidate global: decided at end of compile() when the enclosing
         # scopes' declaration sets are complete (`var` hoisting: a use can
         # be emitted before its declaration is seen). Hold references to
@@ -1005,21 +1139,24 @@ class Compiler:
         if t is None:
             return
         kind, text, line = t
-        # NEW: empty statement (";" script-block separators)
+        # Empty statement (";" script-block separators)
         if text == ";":
             self._advance()
+            return
+        if text == "function" and self.i+1<len(self.tokens) and self.tokens[self.i+1][0]=="ID":
+            self._skip_function_decl()
             return
         if text in ("let", "var", "const"):
             self._advance()
             self._var_decl(text)
             self._match(";")
             return
-        # NEW: nested class (DONKEY IIFE) — hoisted already; skip token body
+        # Nested class (DONKEY IIFE) — hoisted already; skip token body
         if text == "class":
             self._skip_class_decl()
             return
         if text == "throw":
-            # NEW: soft throw (mk.js invalid-state guards). No unwind
+            # Soft throw (mk.js invalid-state guards). No unwind
             # machinery in the VM: evaluate the expression for its side
             # effects and drop it. A thrown-in-practice path would differ from
             # Chrome — acceptable for guards that never fire in play.
@@ -1034,11 +1171,11 @@ class Compiler:
         if text == "while":
             self._while_stmt()
             return
-        # NEW: for (init; cond; step) body — desugar to while
+        # For (init; cond; step) body — desugar to while
         if text == "for":
             self._for_stmt()
             return
-        # NEW: switch / case / break
+        # Switch / case / break
         if text == "switch":
             self._switch_stmt()
             return
@@ -1049,7 +1186,7 @@ class Compiler:
             self.break_stack[-1].append(self._emit(Op.JUMP, 0))
             self._match(";")
             return
-        # NEW: continue → jump to innermost loop's step/condition (not a no-op ID)
+        # Continue → jump to innermost loop's step/condition (not a no-op ID)
         if text == "continue":
             self._advance()
             if not self.continue_stack:
@@ -1057,7 +1194,7 @@ class Compiler:
             self.continue_stack[-1].append(self._emit(Op.JUMP, 0))
             self._match(";")
             return
-        # NEW: try { ... } catch (...) { ... } — run try body; skip catch tokens
+        # Try { ... } catch (...) { ... } — run try body; skip catch tokens
         if text == "try":
             self._advance()
             self._statement()  # try block
@@ -1068,7 +1205,7 @@ class Compiler:
                     self._expect(")")
                 self._skip_statement()
             return
-        # NEW: return [expr];
+        # Return [expr];
         if text == "return":
             self._advance()
             if self._peek_text() not in ("", ";", "}"):
@@ -1087,7 +1224,7 @@ class Compiler:
         self._match(";")
 
     def _var_decl(self, kw: str = "var") -> None:
-        # NEW: const { key } = e;  object destructure
+        # Const { key } = e;  object destructure
         if self._match("{"):
             keys: List[str] = []
             while self._peek_text() not in ("", "}"):
@@ -1101,7 +1238,7 @@ class Compiler:
             self._expect("=")
             self._expression()
             tmp = self._name("__arg")
-            # NEW: fn locals declare into the call env (LET_VAR); top-level
+            # Fn locals declare into the call env (LET_VAR); top-level
             # LET_VAR keeps init-if-missing (startLoop), so tmp stays STORE
             # there (shared __arg must be re-assigned each use).
             if self._fn_depth:
@@ -1113,7 +1250,7 @@ class Compiler:
                 self._emit(Op.GET_PROP, self._name(key))
                 self._emit(Op.LET_VAR, self._name(key), 1 if self._fn_depth else 0)
             return
-        # NEW: var a, b=1, c;  multi-declarator (DONKEY)
+        # Var a, b=1, c;  multi-declarator (DONKEY)
         while True:
             kind, text, line = self._advance()
             if kind != "ID":
@@ -1123,12 +1260,12 @@ class Compiler:
             if self._fn_depth:
                 self._note_local(text)
             if self._match("="):
-                # NEW: _ternary not _expression — `,` separates declarators
+                # _ternary not _expression — `,` separates declarators
                 # (PACMAN `var _CONFIG=[..], _LIFE=5, _SCORE=0` got _LIFE=0)
                 self._ternary()
             else:
                 self._emit(Op.LOAD_CONST, self._const(None))
-            # NEW: LET_VAR everywhere — inside a fn it declares in the call
+            # LET_VAR everywhere — inside a fn it declares in the call
             # env (per-call locals, closure-correct); top level keeps the
             # init-if-missing global (startLoop re-entry). arg2=1 marks
             # call-frame locals so flat-var RTL always stores those.
@@ -1148,8 +1285,9 @@ class Compiler:
             if not self._match(","):
                 break
 
-    def _block(self) -> None:
+    def _block(self, function_scope=False) -> None:
         self._expect("{")
+        if function_scope:self._hoist_local_declarations()
         while self._peek_text() not in ("", "}"):
             self._statement()
         self._expect("}")
@@ -1186,7 +1324,7 @@ class Compiler:
         self._patch(jmp_f, Op.JUMP_IF_FALSE, end)
         for j in self.break_stack.pop():
             self._patch(j, Op.JUMP, end)
-        # NEW: while continue jumps to the condition (loop head)
+        # While continue jumps to the condition (loop head)
         for j in self.continue_stack.pop():
             self._patch(j, Op.JUMP, loop)
 
@@ -1196,7 +1334,7 @@ class Compiler:
         """
         self._advance()  # for
         self._expect("(")
-        # NEW: bare for (k in o) — no declaration keyword (mk.js shims)
+        # Bare for (k in o) — no declaration keyword (mk.js shims)
         if self._peek() and self._peek()[0] == "ID":
             saved_b = self.i
             bind = self._advance()[1]
@@ -1238,14 +1376,14 @@ class Compiler:
                     self._patch(j, Op.JUMP, end)
                 return
             self.i = saved_b
-        # NEW: for-of — for (const x of expr)
+        # For-of — for (const x of expr)
         if self._peek_text() in ("let", "var", "const"):
             saved_i = self.i
             self._advance()  # let/var/const
             if self._peek() and self._peek()[0] == "ID":
                 bind = self._advance()[1]
                 if self._match("in"):
-                    # NEW: for (k in o) → walk Object.keys(o) (native 41).
+                    # For (k in o) → walk Object.keys(o) (native 41).
                     # Same temp/loop shape as for-of below.
                     self._expression()
                     self._emit(Op.CALL_NATIVE, self._name("Object.keys"), 1)
@@ -1310,7 +1448,7 @@ class Compiler:
                     self._loop_depth += 1
                     self._statement()
                     self._loop_depth -= 1
-                    # NEW: for-of continue lands on idx++
+                    # For-of continue lands on idx++
                     cont = len(self.code)
                     for j in self.continue_stack.pop():
                         self._patch(j, Op.JUMP, cont)
@@ -1328,7 +1466,7 @@ class Compiler:
         # init — must STORE (not LET_VAR): loop vars re-init every entry;
         # LET_VAR skips if name already exists → empty nested loops (INVADERS
         # Grid; also flat top-level IIFE bodies where env is None).
-        # NEW: inside a call env, for (let/const i) LET_VAR first so STORE
+        # Inside a call env, for (let/const i) LET_VAR first so STORE
         # for i++ hits this frame's `i`, not a caller/forEach captured `i`.
         if self._peek_text() in ("let", "var", "const"):
             _kw = self._peek_text()
@@ -1337,7 +1475,7 @@ class Compiler:
             kind, text, line = self._advance()
             if kind != "ID":
                 raise CompileError("EXPECTED IDENTIFIER", line)
-            # NEW: for (let i;;) allows missing init expr
+            # For (let i;;) allows missing init expr
             # #81: note the local BEFORE deciding the op — for-init names
             # never reached the scope set, so the a1=1 global retro-patch
             # mislabeled their sites.
@@ -1356,7 +1494,7 @@ class Compiler:
                 self._emit(Op.LET_VAR, self._name(text), 1)
             else:
                 self._emit(_decl, self._name(text))
-            # NEW: for (let i = 0, j = n; ...) extra declarators
+            # For (let i = 0, j = n; ...) extra declarators
             while self._match(","):
                 kind, text, line = self._advance()
                 if kind != "ID":
@@ -1403,7 +1541,7 @@ class Compiler:
         self._loop_depth += 1
         self._statement()
         self._loop_depth -= 1
-        # NEW: for-continue lands on the step (must not skip col++/row++)
+        # For-continue lands on the step (must not skip col++/row++)
         cont = len(self.code)
         for j in self.continue_stack.pop():
             self._patch(j, Op.JUMP, cont)
@@ -1482,7 +1620,7 @@ class Compiler:
             self._patch(j, Op.JUMP, end)
 
     def _expression(self) -> None:
-        # NEW: comma operator (a, b) — INVADERS ctors chain assigns with ,
+        # Comma operator (a, b) — INVADERS ctors chain assigns with ,
         self._ternary()
         while self._match(","):
             self._emit(Op.POP)
@@ -1499,7 +1637,7 @@ class Compiler:
             self._ternary()
             self._patch(jmp_end, Op.JUMP, len(self.code))
 
-    # NEW: a || b — keep a if truthy, else b (short-circuit)
+    # A || b — keep a if truthy, else b (short-circuit)
     def _logic_or(self) -> None:
         self._logic_and()
         while self._peek_text() == "||":
@@ -1512,7 +1650,7 @@ class Compiler:
             self._logic_and()
             self._patch(jmp_end, Op.JUMP, len(self.code))
 
-    # NEW: a && b — keep a if falsy, else b (short-circuit)
+    # A && b — keep a if falsy, else b (short-circuit)
     def _logic_and(self) -> None:
         self._equality()
         while self._peek_text() == "&&":
@@ -1532,7 +1670,7 @@ class Compiler:
             if op in ("!=", "!=="):
                 self._emit(Op.NOT)
 
-    # NEW: bitwise | &  (lower precedence than == in our subset; JS is different
+    # Bitwise | &  (lower precedence than == in our subset; JS is different
     # but good enough for `type | 0` patterns in INVADERS)
     def _bit_or(self) -> None:
         self._bit_and()
@@ -1550,7 +1688,7 @@ class Compiler:
 
     def _comparison(self) -> None:
         self._term()
-        # NEW: `k in o` → o[k] !== undefined (mk.js). Same-key-undefined
+        # `k in o` → o[k] !== undefined (mk.js). Same-key-undefined
         # property is the only divergence from Chrome; mk.js never stores
         # undefined values in the maps it tests.
         while self._peek_text() == "in":
@@ -1577,12 +1715,38 @@ class Compiler:
                 self._emit(Op.LT)
                 self._emit(Op.NOT)
 
+    def _factor_kind(self, start: int) -> str:
+        # Only guaranteed terminal producers; no assumptions about variables,
+        # properties, parameters, calls, or their possible later assignments.
+        if len(self.code) == start + 1 and self.code[-1][0] == Op.LOAD_CONST:
+            value = self.consts[self.code[-1][1]]
+            if isinstance(value, str): return "string"
+            if isinstance(value, (int, float)) and not isinstance(value, bool): return "number"
+        if len(self.code) > start and self.code[-1][0] in (Op.SUB, Op.MUL, Op.DIV, Op.MOD, Op.NEG):
+            return "number"
+        return "unknown"
+
+    def _language_add(self, left="unknown", right="unknown") -> str:
+        private = (self._fn_compiling or "").startswith(("_jmr_json_", "_jmr_store_"))
+        proven = left == right and left in ("number", "string")
+        site = self._emit(Op.ADD, 0) if not private and not proven else self._emit(Op.ADD)
+        if not private and not proven:
+            self._concat_sites.append(site)
+        return left if proven else "unknown"
+
     def _term(self) -> None:
+        start = len(self.code)
         self._factor()
+        kind = self._factor_kind(start)
         while self._peek_text() in ("+", "-"):
             op = self._advance()[1]
+            start = len(self.code)
             self._factor()
-            self._emit(Op.ADD if op == "+" else Op.SUB)
+            right = self._factor_kind(start)
+            if op == "+": kind = self._language_add(kind, right)
+            else:
+                self._emit(Op.SUB)
+                kind = "number"
 
     def _factor(self) -> None:
         self._unary()
@@ -1592,17 +1756,90 @@ class Compiler:
             if op == "*":
                 self._emit(Op.MUL)
             elif op == "%":
-                # NEW: real modulo (was silently DIV — bug)
+                # Real modulo (was silently DIV — bug)
                 self._emit(Op.MOD)
             else:
                 self._emit(Op.DIV)
+
+    def _compound_indexed(self) -> None:
+        operation = self._advance()[1]
+        # Retain the evaluated base/key on the operand stack across both getter
+        # and RHS calls. Scratch slots are consumed before either can reenter.
+        idx = self._name("@update_idx")
+        obj = self._name("@update_obj")
+        self._emit(Op.STORE_VAR, idx, 1)
+        self._emit(Op.DUP)
+        self._emit(Op.STORE_VAR, obj, 1)
+        self._emit(Op.LOAD_VAR, idx, 1)
+        self._emit(Op.LOAD_VAR, obj, 1)
+        self._emit(Op.LOAD_VAR, idx, 1)
+        self._emit(Op.ARRAY_GET)
+        self._ternary()
+        if operation == "+=": self._language_add()
+        else: self._emit({"-=":Op.SUB,"*=":Op.MUL,"/=":Op.DIV,"%=":Op.MOD}[operation])
+        self._emit(Op.ARRAY_SET)
+
+    def _emit_increment(self, operation: str, prefix: bool) -> None:
+        """Update one evaluated numeric lvalue, retaining its old postfix value.
+
+        Member base/key copies stay on the operand stack across GET. All
+        private temporaries are consumed before SET can invoke a setter.
+        Their names cannot collide with source-language identifiers.
+        """
+        if not self.code:
+            raise CompileError("++/-- NEEDS LVALUE", 0)
+        target = self.code[-1]
+        arithmetic = Op.SUB if operation == "--" else Op.ADD
+        if target[0] == Op.LOAD_VAR:
+            if not prefix:
+                self._emit(Op.DUP)
+            self._emit(Op.LOAD_CONST, self._const(1))
+            self._emit(arithmetic)
+            if prefix:
+                self._emit(Op.DUP)
+            self._emit(Op.STORE_VAR, target[1])
+            return
+        if target[0] not in (Op.GET_PROP, Op.ARRAY_GET):
+            raise CompileError("++/-- NEEDS LVALUE", 0)
+        self.code.pop()
+        self.op_lines.pop()
+        obj = self._name("@update_obj")
+        old = self._name("@update_old")
+        indexed = target[0] == Op.ARRAY_GET
+        if indexed:
+            idx = self._name("@update_idx")
+            self._emit(Op.STORE_VAR, idx, 1)
+            self._emit(Op.DUP)
+            self._emit(Op.STORE_VAR, obj, 1)
+            self._emit(Op.LOAD_VAR, idx, 1)
+            self._emit(Op.LOAD_VAR, obj, 1)
+            self._emit(Op.LOAD_VAR, idx, 1)
+            self._emit(Op.ARRAY_GET)
+        else:
+            self._emit(Op.DUP)
+            self._emit(Op.GET_PROP, target[1])
+        self._emit(Op.STORE_VAR, old, 1)
+        if indexed:
+            self._emit(Op.STORE_VAR, idx, 1)
+        self._emit(Op.STORE_VAR, obj, 1)
+        if not prefix:
+            self._emit(Op.LOAD_VAR, old, 1)
+        self._emit(Op.LOAD_VAR, obj, 1)
+        if indexed:
+            self._emit(Op.LOAD_VAR, idx, 1)
+        self._emit(Op.LOAD_VAR, old, 1)
+        self._emit(Op.LOAD_CONST, self._const(1))
+        self._emit(arithmetic)
+        self._emit(Op.ARRAY_SET) if indexed else self._emit(Op.SET_PROP, target[1])
+        if not prefix:
+            self._emit(Op.POP)
 
     def _unary(self) -> None:
         if self._match("-"):
             self._unary()
             self._emit(Op.NEG)
             return
-        # NEW: unary plus (ToNumber) — mk.js `+x + 0.5`. `x - 0` has the
+        # Unary plus (ToNumber) — mk.js `+x + 0.5`. `x - 0` has the
         # same binary64 coercion on both runtimes (strings parse, junk NaN).
         if self._match("+"):
             self._unary()
@@ -1613,38 +1850,38 @@ class Compiler:
             self._unary()
             self._emit(Op.NOT)
             return
-        # NEW: typeof x → string tag (PACMAN map checks)
+        # Typeof x → string tag (PACMAN map checks)
         if self._peek_text() == "typeof":
             self._advance()
             self._unary()
+            for type_name in ("undefined", "number", "boolean", "string", "function", "object"):
+                self._name(type_name)
             # lower to native typeof
             self._emit(Op.CALL_NATIVE, self._name("typeof"), 1)
             return
-        # NEW: prefix ++/-- on simple ID
+        # Prefix ++/-- on simple ID
         if self._peek_text() in ("++", "--"):
             op = self._advance()[1]
-            kind, text, line = self._advance()
-            if kind != "ID":
-                raise CompileError("EXPECTED IDENTIFIER AFTER ++/--", line)
-            ni = self._name(text)
-            self._emit(Op.LOAD_VAR, ni)
-            self._emit(Op.LOAD_CONST, self._const(1))
-            self._emit(Op.ADD if op == "++" else Op.SUB)
-            self._emit(Op.STORE_VAR, ni)
-            self._emit(Op.LOAD_VAR, ni)
+            self._call()
+            self._emit_increment(op, True)
             return
         self._call()
+
+    def _prepare_method(self, meth: str) -> None:
+        if meth in self._getter_call_names:
+            self._emit(Op.DUP)
+            self._emit(Op.GET_PROP, self._name(meth), 1)
 
     def _emit_method(self, meth: str, argc: int) -> None:
         """CALL_METHOD, with the run-71 desugars that keep silicon unchanged:
         a.includes(v)  ->  !(a.indexOf(v) < 0)   (the chip has indexOf)."""
-        if meth == "includes" and argc == 1:
+        if meth == "includes" and argc == 1 and meth not in self._getter_call_names:
             self._emit(Op.CALL_METHOD, self._name("indexOf"), 1)
             self._emit(Op.LOAD_CONST, self._const(0))
             self._emit(Op.LT)
             self._emit(Op.NOT)
             return
-        self._emit(Op.CALL_METHOD, self._name(meth), argc)
+        self._emit(Op.CALL_METHOD, self._name(meth), argc, int(meth in self._getter_call_names))
 
     def _v1_wall(self, meth: str, line: int) -> None:
         # V1 authoring wall: a method CALL through one of these names would
@@ -1661,7 +1898,7 @@ class Compiler:
     def _call(self) -> None:
         self._primary()
         while True:
-            # NEW: optional chaining ?.prop / ?.meth()
+            # Optional chaining ?.prop / ?.meth()
             if self._match("?."):
                 kind2, meth, line2 = self._advance()
                 if kind2 != "ID":
@@ -1670,6 +1907,7 @@ class Compiler:
                 self._emit(Op.DUP)
                 jmp_nil = self._emit(Op.JUMP_IF_FALSE, 0)
                 if self._match("("):
+                    self._prepare_method(meth)
                     argc = self._arg_list()
                     self._expect(")")
                     self._v1_wall(meth, line2)
@@ -1680,20 +1918,21 @@ class Compiler:
                 self._patch(jmp_nil, Op.JUMP_IF_FALSE, len(self.code))
                 self._patch(jmp_end, Op.JUMP, len(self.code))
                 continue
-            # NEW: postfix property get / method / assign
+            # Postfix property get / method / assign
             if self._match("."):
                 kind2, meth, line2 = self._advance()
                 if kind2 != "ID":
                     raise CompileError("EXPECTED NAME", line2)
                 if self._match("("):
-                    # NEW: always CALL_METHOD — VM handles class + array/string builtins
+                    # Always CALL_METHOD — VM handles class + array/string builtins
+                    self._prepare_method(meth)
                     argc = self._arg_list()
                     self._expect(")")
                     self._v1_wall(meth, line2)
                     self._emit_method(meth, argc)
                     continue
                 if self._match("="):
-                    self._ternary()  # NEW: `,` is not part of the RHS
+                    self._ternary()  # `,` is not part of the RHS
                     self._emit(Op.SET_PROP, self._name(meth))
                     continue
                 if self._peek_text() in ("+=", "-=", "*=", "/=", "%="):
@@ -1702,7 +1941,7 @@ class Compiler:
                     self._emit(Op.GET_PROP, self._name(meth))
                     self._ternary()
                     if op == "+=":
-                        self._emit(Op.ADD)
+                        self._language_add()
                     elif op == "-=":
                         self._emit(Op.SUB)
                     elif op == "*=":
@@ -1714,51 +1953,25 @@ class Compiler:
                     self._emit(Op.SET_PROP, self._name(meth))
                     continue
                 self._emit(Op.GET_PROP, self._name(meth))
-                # NEW: obj.prop++ / obj.prop-- (this.moveClock++ in INVADERS)
+                # Obj.prop++ / obj.prop-- (this.moveClock++ in INVADERS)
                 if self._peek_text() in ("++", "--"):
-                    op = self._advance()[1]
-                    delta = 1 if op == "++" else -1
-                    # stack has value only — recover via temps
-                    # Rewrite: we need obj under value. Re-emit properly:
-                    # Remove the GET_PROP we just emitted and redo with DUP.
-                    self.code.pop()  # remove GET_PROP
-                    self.op_lines.pop()  # keep ProgramImage source map aligned
-                    # stack currently has obj (primary left it)
-                    self._emit(Op.DUP)
-                    self._emit(Op.GET_PROP, self._name(meth))
-                    # [obj, old]
-                    self._emit(Op.DUP)
-                    # [obj, old, old]
-                    self._emit(Op.LOAD_CONST, self._const(delta))
-                    self._emit(Op.ADD)
-                    # [obj, old, new]
-                    # SET_PROP needs [obj, new] → use temps
-                    ti_new = self._name("__n")
-                    ti_old = self._name("__v")
-                    ti_obj = self._name("__o")
-                    self._emit(Op.STORE_VAR, ti_new)  # [obj, old]
-                    self._emit(Op.STORE_VAR, ti_old)  # [obj]
-                    self._emit(Op.STORE_VAR, ti_obj)  # []
-                    self._emit(Op.LOAD_VAR, ti_obj)
-                    self._emit(Op.LOAD_VAR, ti_new)
-                    self._emit(Op.SET_PROP, self._name(meth))
-                    self._emit(Op.POP)
-                    self._emit(Op.LOAD_VAR, ti_old)  # postfix yields old
-                    continue
+                    self._emit_increment(self._advance()[1], False)
                 continue
-            # NEW: computed member obj[expr] (DONKEY rollingRight[loopIndex])
+            # Computed member obj[expr] (DONKEY rollingRight[loopIndex])
             if self._match("["):
                 self._expression()
                 self._expect("]")
                 if self._match("="):
-                    self._ternary()  # NEW: `,` is not part of the RHS
+                    self._ternary()  # `,` is not part of the RHS
                     self._emit(Op.ARRAY_SET)
+                elif self._peek_text() in ("+=", "-=", "*=", "/=", "%="):
+                    self._compound_indexed()
                 else:
                     self._emit(Op.ARRAY_GET)
                 continue
-            # NEW: call value on stack — IIFE / (fn)()
+            # Call value on stack — IIFE / (fn)()
             if self._match("("):
-                # NEW: tag `(function(){...})()` — the callee MAKE_FN is the
+                # Tag `(function(){...})()` — the callee MAKE_FN is the
                 # last op. IIFE bodies run FLAT at top level (module vars are
                 # shared globals; DONKEY module classes read their `img`),
                 # while non-IIFE fns keep per-call lexical envs (PACMAN
@@ -1776,23 +1989,8 @@ class Compiler:
                 self._emit(Op.CALL_VAL, argc)
                 continue
             if self._peek_text() in ("++", "--"):
-                # NEW: allow postfix on LOAD_VAR or after ARRAY_GET/GET_PROP (PACMAN)
-                if self.code and self.code[-1][0] == Op.LOAD_VAR:
-                    ni = self.code[-1][1]
-                    op = self._advance()[1]
-                    self._emit(Op.DUP)
-                    self._emit(Op.LOAD_CONST, self._const(1))
-                    self._emit(Op.ADD if op == "++" else Op.SUB)
-                    self._emit(Op.STORE_VAR, ni)
-                    break
-                if self.code and self.code[-1][0] in (Op.ARRAY_GET, Op.GET_PROP):
-                    # stack has value; we can't easily write back without obj/idx —
-                    # approximate: pop ++ as ADD 1 leave new value (read-modify only)
-                    op = self._advance()[1]
-                    self._emit(Op.LOAD_CONST, self._const(1))
-                    self._emit(Op.ADD if op == "++" else Op.SUB)
-                    continue
-                raise CompileError("POSTFIX ++/-- NEEDS IDENTIFIER", 0)
+                self._emit_increment(self._advance()[1], False)
+                continue
             break
 
     def _primary(self) -> None:
@@ -1802,10 +2000,10 @@ class Compiler:
         kind, text, line = t
         if kind == "NUM":
             self._advance()
-            val: Any = float(text) if "." in text else int(text)
+            val: Any = float(text) if any(c in text for c in ".eE") else int(text)
             self._emit(Op.LOAD_CONST, self._const(val))
             return
-        # NEW: /regex/ → RegExp stub (PACMAN polyfill .test)
+        # /regex/ → RegExp stub (PACMAN polyfill .test)
         if kind == "REGEX":
             self._advance()
             self._emit(
@@ -1818,13 +2016,13 @@ class Compiler:
             raw = text[1:-1].encode("utf-8").decode("unicode_escape")
             self._emit(Op.LOAD_CONST, self._const(raw))
             return
-        # NEW: single-quoted strings
+        # Single-quoted strings
         if kind == "STR2":
             self._advance()
             raw = text[1:-1].encode("utf-8").decode("unicode_escape")
             self._emit(Op.LOAD_CONST, self._const(raw))
             return
-        # NEW: template literals `a ${expr} b` → concat
+        # Template literals `a ${expr} b` → concat
         if kind == "TMPL":
             self._advance()
             inner = text[1:-1]
@@ -1833,14 +2031,17 @@ class Compiler:
         if text in ("true", "false", "null", "undefined"):
             self._advance()
             mapping = {"true": True, "false": False, "null": None, "undefined": None}
-            self._emit(Op.LOAD_CONST, self._const(mapping[text]))
+            index = self._const(mapping[text])
+            if text == "null":
+                self._null_consts.add(index)
+            self._emit(Op.LOAD_CONST, index)
             return
-        # NEW: this → hidden __this binding (set by NEW_OBJ / CALL_METHOD)
+        # This → hidden __this binding (set by NEW_OBJ / CALL_METHOD)
         if text == "this":
             self._advance()
             self._emit(Op.LOAD_VAR, self._name("__this"))
             return
-        # NEW: function expression function(a){...} / function name(a){...}
+        # Function expression function(a){...} / function name(a){...}
         if text == "function":
             self._advance()
             params: List[str] = []
@@ -1862,7 +2063,7 @@ class Compiler:
             # it checks `{` or expr. Good — but it doesn't expect `=>`.
             # Wait: _emit_arrow_body starts with body directly. Good.
             return
-        # NEW: new ClassName(args)
+        # New ClassName(args)
         if text == "new":
             self._advance()
             k2, cname, ln2 = self._advance()
@@ -1871,14 +2072,14 @@ class Compiler:
             self._expect("(")
             argc = self._arg_list()
             self._expect(")")
-            # NEW: built-in Date stub (leaderboard timestamps)
+            # Built-in Date stub (leaderboard timestamps)
             if cname == "Date":
                 self._emit(Op.CALL_NATIVE, self._name("Date"), argc)
                 return
             if cname == "Image":
                 self._emit(Op.CALL_NATIVE, self._name("Image"), argc)
                 return
-            # NEW: synthetic event ctors desugar to an object literal +
+            # Synthetic event ctors desugar to an object literal +
             # Object.assign — `new KeyboardEvent(T, O)` becomes
             # `Object.assign({type: T}, O)`. The tagged RTL had a native
             # NEW_OBJ arm for these; Value64 never did (DONKEY's synthetic
@@ -1907,7 +2108,7 @@ class Compiler:
                     self._emit(Op.CALL_METHOD, self._name("assign"), 2)
                     self._emit(Op.POP)
                 return
-            # NEW: new Foo() when Foo is a function (PACMAN Item/Map) or unknown soft stub
+            # New Foo() when Foo is a function (PACMAN Item/Map) or unknown soft stub
             if cname not in self.classes:
                 if cname in self.functions:
                     entry, _params = self.functions[cname]
@@ -1917,7 +2118,7 @@ class Compiler:
             self._emit(Op.NEW_OBJ, self._name(cname), argc)
             return
         if kind == "ID":
-            # NEW: x => expr  (single-param arrow)
+            # X => expr  (single-param arrow)
             if self.i + 1 < len(self.tokens) and self.tokens[self.i + 1][1] == "=>":
                 self._advance()
                 self._expect("=>")
@@ -1930,7 +2131,33 @@ class Compiler:
                 if kind2 != "ID":
                     raise CompileError("EXPECTED NAME", line2)
                 native = f"{text}.{meth}"
-                # NEW: Math.PI property (no call) — HTML titles use it
+                if native in ("JSON.parse", "JSON.stringify") and self._peek_text() == "(":
+                    helper = "_jmr_json_jsonParseNative" if meth == "parse" else "_jmr_json_jsonStringifyNative"
+                    if helper not in self.functions:
+                        raise CompileError("JSON runtime must be included through compile_source", line)
+                    self._expect("(")
+                    argc = self._arg_list()
+                    self._expect(")")
+                    self._emit(Op.CALL_USER, self.functions[helper][0], argc)
+                    return
+
+                if native in ("localStorage.getItem", "localStorage.setItem", "localStorage.removeItem") and self._peek_text() == "(":
+                    self._expect("(")
+                    load_ip = self._emit(Op.LOAD_VAR, self._name(text))
+                    prepare_start = len(self.code)
+                    # Use the same getter/receiver preparation as ordinary
+                    # object methods when this compiler supports CALL_REF.
+                    if hasattr(self, "_prepare_method"):
+                        self._prepare_method(meth)
+                    prepare_ips = tuple(range(prepare_start, len(self.code)))
+                    argc = self._arg_list()
+                    self._expect(")")
+                    call_ip = len(self.code)
+                    self._emit_method(meth, argc)
+                    self._storage_call_sites.append((load_ip, prepare_ips, call_ip, argc, meth, tuple(self._scope_sets)))
+                    return
+
+                # Math.PI property (no call) — HTML titles use it
                 if native == "Math.PI" and self._peek_text() != "(":
                     import math
 
@@ -1938,14 +2165,15 @@ class Compiler:
                     return
                 if self._peek_text() == "(":
                     self._expect("(")
-                    # NEW: Math.* / console.* / document.* stay natives
-                    if native == "Object.keys" or text in ("Math", "console", "document", "window", "localStorage", "JSON"):
+                    # Math.* / console.* / document.* stay natives
+                    if native in ("Object.keys", "Array.isArray") or text in ("Math", "console", "document", "window", "localStorage", "JSON"):
                         argc = self._arg_list()
                         self._expect(")")
                         self._v1_wall(native.split(".", 1)[-1], line)
                         self._emit(Op.CALL_NATIVE, self._name(native), argc)
                         return
                     self._emit(Op.LOAD_VAR, self._name(text))
+                    self._prepare_method(meth)
                     argc = self._arg_list()
                     self._expect(")")
                     self._v1_wall(meth, line)
@@ -1954,17 +2182,17 @@ class Compiler:
                 # bare ID.prop — load var then GET_PROP (e.g. player.x)
                 self._emit(Op.LOAD_VAR, self._name(text))
                 if self._match("="):
-                    self._ternary()  # NEW: `,` is not part of the RHS
+                    self._ternary()  # `,` is not part of the RHS
                     self._emit(Op.SET_PROP, self._name(meth))
                     return
-                # NEW: ID.prop += expr (was falling through and choking on +=)
+                # ID.prop += expr (was falling through and choking on +=)
                 if self._peek_text() in ("+=", "-=", "*=", "/=", "%="):
                     op = self._advance()[1]
                     self._emit(Op.DUP)
                     self._emit(Op.GET_PROP, self._name(meth))
                     self._ternary()
                     if op == "+=":
-                        self._emit(Op.ADD)
+                        self._language_add()
                     elif op == "-=":
                         self._emit(Op.SUB)
                     elif op == "*=":
@@ -1976,39 +2204,27 @@ class Compiler:
                     self._emit(Op.SET_PROP, self._name(meth))
                     return
                 self._emit(Op.GET_PROP, self._name(meth))
-                # NEW: ID.prop++ / ID.prop-- must write back. Bare `item.timeout--`
+                # ID.prop++ / ID.prop-- must write back. Bare `item.timeout--`
                 # was returning here; `_call`'s leftover GET_PROP postfix only
                 # subtracted on the stack, so PACMAN's engine never ticked NPC
                 # timeouts and ghosts never left the house.
                 if self._peek_text() in ("++", "--"):
-                    op = self._advance()[1]
-                    delta = 1 if op == "++" else -1
-                    self.code.pop()  # remove GET_PROP; stack still has the obj
-                    self.op_lines.pop()  # keep ProgramImage source map aligned
-                    self._emit(Op.DUP)
-                    self._emit(Op.GET_PROP, self._name(meth))
-                    self._emit(Op.DUP)
-                    self._emit(Op.LOAD_CONST, self._const(delta))
-                    self._emit(Op.ADD)
-                    ti_new = self._name("__n")
-                    ti_old = self._name("__v")
-                    ti_obj = self._name("__o")
-                    self._emit(Op.STORE_VAR, ti_new)
-                    self._emit(Op.STORE_VAR, ti_old)
-                    self._emit(Op.STORE_VAR, ti_obj)
-                    self._emit(Op.LOAD_VAR, ti_obj)
-                    self._emit(Op.LOAD_VAR, ti_new)
-                    self._emit(Op.SET_PROP, self._name(meth))
-                    self._emit(Op.POP)
-                    self._emit(Op.LOAD_VAR, ti_old)
+                    self._emit_increment(self._advance()[1], False)
                 return
             if self._match("("):
+                if text == "String":
+                    load_ip = self._emit(Op.LOAD_VAR, self._name(text))
+                    argc = self._arg_list()
+                    self._expect(")")
+                    call_ip = self._emit(Op.CALL_VAL, argc)
+                    self._string_call_sites.append((load_ip, call_ip, argc, tuple(self._scope_sets)))
+                    return
                 # Known `function foo()` → CALL_USER. Known natives stay
                 # CALL_NATIVE. Anything else is a first-class Fn in a var
                 # (`var rec = function(){ rec(); }` / nested `_render()`).
                 # JSB CALL_NATIVE encodes a numeric id and drops the name, so
                 # unknown ID( must not become stub 33 — LOAD_VAR + CALL_VAL.
-                if text in self.functions:
+                if text in self.functions and not self._lexically_bound(text):
                     argc = self._arg_list()
                     self._expect(")")
                     entry, params = self.functions[text]
@@ -2016,7 +2232,7 @@ class Compiler:
                     # env alloc). Sprite palettes and in-bounds checks.
                     if not self._try_inline_user_call(text, argc):
                         self._emit(Op.CALL_USER, entry, argc)
-                elif text in NATIVE_IDS or text in NATIVE_ALIASES or text in _HOST_NATIVES:
+                elif not self._lexically_bound(text) and (text in NATIVE_IDS or text in NATIVE_ALIASES or text in _HOST_NATIVES):
                     argc = self._arg_list()
                     self._expect(")")
                     self._emit(Op.CALL_NATIVE, self._name(text), argc)
@@ -2031,21 +2247,23 @@ class Compiler:
                 self._expression()
                 self._expect("]")
                 if self._match("="):
-                    self._ternary()  # NEW: `,` is not part of the RHS
+                    self._ternary()  # `,` is not part of the RHS
                     self._emit(Op.ARRAY_SET)
                     # ARRAY_SET already leaves the assigned value for the
                     # surrounding expression/statement to consume.
+                elif self._peek_text() in ("+=", "-=", "*=", "/=", "%="):
+                    self._compound_indexed()
                 else:
                     self._emit(Op.ARRAY_GET)
                 return
-            # NEW: compound assignment += -= *= /= %=
+            # Compound assignment += -= *= /= %=
             if self._peek_text() in ("+=", "-=", "*=", "/=", "%="):
                 op = self._advance()[1]
                 ni = self._name(text)
                 self._emit(Op.LOAD_VAR, ni)
-                self._ternary()  # NEW: `,` is not part of the RHS
+                self._ternary()  # `,` is not part of the RHS
                 if op == "+=":
-                    self._emit(Op.ADD)
+                    self._language_add()
                 elif op == "-=":
                     self._emit(Op.SUB)
                 elif op == "*=":
@@ -2058,7 +2276,7 @@ class Compiler:
                 self._emit(Op.LOAD_VAR, ni)
                 return
             if self._match("="):
-                # NEW: _ternary not _expression — assignment binds tighter
+                # _ternary not _expression — assignment binds tighter
                 # than the comma operator (PACMAN `_LIFE = 5, _SCORE = 0`)
                 self._ternary()
                 self._emit(Op.STORE_VAR, self._name(text))
@@ -2067,7 +2285,7 @@ class Compiler:
             self._emit(Op.LOAD_VAR, self._name(text))
             return
         if self._match("("):
-            # NEW: (a, b) => expr   vs   (expr)
+            # (a, b) => expr   vs   (expr)
             if self._arrow_after_paren():
                 params: List[str] = []
                 if self._peek_text() != ")":
@@ -2091,7 +2309,7 @@ class Compiler:
                 self._ternary()
                 n = 1
                 while self._match(","):
-                    # NEW: trailing comma in arrays (DONKEY platforms)
+                    # Trailing comma in arrays (DONKEY platforms)
                     if self._peek_text() == "]":
                         break
                     self._ternary()
@@ -2099,7 +2317,7 @@ class Compiler:
             self._expect("]")
             self._emit(Op.MAKE_ARRAY, n)
             return
-        # NEW: object literal { k: expr, ... } or shorthand { k }
+        # Object literal { k: expr, ... } or shorthand { k }
         if self._match("{"):
             self._emit(Op.MAKE_OBJ)
             if self._peek_text() != "}":
@@ -2115,7 +2333,7 @@ class Compiler:
                             self._emit(Op.SET_PROP, self._name(key))
                             self._emit(Op.POP)
                         else:
-                            # NEW: shorthand { position } → { position: position }
+                            # Shorthand { position } → { position: position }
                             self._emit(Op.DUP)
                             self._emit(Op.LOAD_VAR, self._name(key))
                             self._emit(Op.SET_PROP, self._name(key))
@@ -2158,18 +2376,29 @@ class Compiler:
         is_arrow marks lexical-this capture: only `=>` captures `this`;
         regular function expressions keep dynamic this (PACMAN prototypes).
         """
+        # Match the runtime's existing flat top-level zero-argument IIFE mode
+        # before allocating local-slot hints or hoisting its declarations.
+        flat_module=False
+        if not is_arrow and not params and self._fn_depth==0 and self._peek_text()=="{":
+            j=self.i;depth=0
+            while j<len(self.tokens):
+                text=self.tokens[j][1];depth+=(text=="{")-(text=="}");j+=1
+                if depth==0:break
+            while j<len(self.tokens) and self.tokens[j][1]==")":j+=1
+            flat_module=j+1<len(self.tokens) and self.tokens[j][1]=="(" and self.tokens[j+1][1]==")"
         jmp_over = self._emit(Op.JUMP, 0)
         entry = len(self.code)
         self._enter_local_frame()
         self._scope_sets.append(set())
-        # NEW: params declare into the per-call env (LET_VAR); arg2=1 =
+        if flat_module:self._flat_module_frames.add(len(self._local_stack))
+        # Params declare into the per-call env (LET_VAR); arg2=1 =
         # call-frame local flag for RTL (always store there)
         for p in reversed(params):
             self._note_local(p)
             self._emit(Op.LET_VAR, self._name(p), 1)
-        self._fn_depth += 1  # NEW: arrow locals use LET_VAR (env)
+        self._fn_depth += 0 if flat_module else 1
         if self._peek_text() == "{":
-            self._block()
+            self._block(function_scope=True)
             self._emit(Op.LOAD_CONST, self._const(None))
             self._emit(Op.RET_VAL)
         else:
@@ -2180,7 +2409,8 @@ class Compiler:
             # 1). Arrow bodies parse at assignment level, like arguments.
             self._ternary()
             self._emit(Op.RET_VAL)
-        self._fn_depth -= 1
+        self._fn_depth -= 0 if flat_module else 1
+        self._flat_module_frames.discard(len(self._local_stack))
         if self._local_stack:
             self._leave_local_frame()
         if self._scope_sets:
@@ -2195,7 +2425,7 @@ class Compiler:
         self._ternary()
         n = 1
         while self._match(","):
-            # NEW: trailing comma in calls
+            # Trailing comma in calls
             if self._peek_text() == ")":
                 break
             self._ternary()
@@ -2235,7 +2465,7 @@ class Compiler:
             if part or first:
                 self._emit(Op.LOAD_CONST, self._const(part))
                 if not first:
-                    self._emit(Op.ADD)
+                    self._language_add()
                 first = False
             if pi < len(exprs):
                 saved_tokens, saved_i = self.tokens, self.i
@@ -2246,12 +2476,71 @@ class Compiler:
                     raise CompileError("BAD TEMPLATE EXPR", 0)
                 self.tokens, self.i = saved_tokens, saved_i
                 if not first:
-                    self._emit(Op.ADD)
+                    self._language_add()
                 else:
                     first = False
         if first:
             self._emit(Op.LOAD_CONST, self._const(""))
 
 
+
+def prepare_storage_source(src: str) -> str:
+    """Append shared storage software only for supported localStorage calls.
+
+    Call once in unified source preparation, before resident linking. The caller
+    supplies the shared _jmr_json_stringCoerceNative dependency through the same
+    JSON/String preparation path. Direct Compiler users must prepare explicitly.
+    """
+    tokens = _tokenize(src)
+    needs_storage = any(tokens[i][1] == "localStorage" and tokens[i+1][1] == "." and
+                        tokens[i+2][1] in ("getItem", "setItem", "removeItem")
+                        for i in range(len(tokens)-2))
+    if not needs_storage:
+        return src
+    if any(kind == "ID" and text.startswith("_jmr_store_") for kind, text, *_ in tokens):
+        raise CompileError("reserved storage runtime identifier", 0)
+    from pathlib import Path
+    return Path(__file__).with_name("storage_runtime.js").read_text() + "\n" + src
+
+
+def prepare_software_source(src: str, *, proof_compiler=None) -> str:
+    """Select one shared String/JSON dependency graph before either host path."""
+    tokens = _tokenize(src)
+    if any(kind == "ID" and text.startswith(("_jmr_json_", "_jmr_store_"))
+           for kind, text, *_ in tokens):
+        raise CompileError("reserved software runtime identifier", 0)
+    needs_json = any(tokens[i][1] == "JSON" and tokens[i+1][1] == "." and
+                     tokens[i+2][1] in ("parse", "stringify")
+                     for i in range(len(tokens)-2))
+    needs_storage = any(tokens[i][1] == "localStorage" and tokens[i+1][1] == "." and
+                        tokens[i+2][1] in ("getItem", "setItem", "removeItem")
+                        for i in range(len(tokens)-2))
+    if proof_compiler is None:
+        probe = Compiler(src)
+    else:
+        import copy
+        probe = copy.deepcopy(proof_compiler)
+        probe.tokens = _isolate_iife_modules(_tokenize(src)); probe.i = 0
+    probe._runtime_probe = True
+    for name in ("_jmr_json_jsonParseNative", "_jmr_json_jsonStringifyNative",
+                 "_jmr_store_getItem", "_jmr_store_setItem", "_jmr_store_removeItem"):
+        probe.functions[name] = (0, [])
+    probe.compile()
+    needs_storage = probe._needs_storage_runtime
+    needs_concat = probe._needs_concat_runtime
+    needs_string = needs_storage or probe._needs_string_runtime or needs_concat
+    from pathlib import Path
+    source = Path(__file__).parent
+    if needs_storage:
+        src = prepare_storage_source(src)
+    if needs_json or needs_string:
+        filename = ("both_runtime.js" if needs_json and needs_string else
+                    "json_runtime.js" if needs_json else "string_runtime.js")
+        src = (source / filename).read_text() + "\n" + src
+    return src
+
+
 def compile_source(src: str) -> Chunk:
-    return Compiler(src).compile()
+    compiler = Compiler(prepare_software_source(src))
+    compiler._require_concat_helper = True
+    return compiler.compile()

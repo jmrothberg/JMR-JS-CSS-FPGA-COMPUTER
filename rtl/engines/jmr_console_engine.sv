@@ -1,20 +1,13 @@
-// Standalone READY console — BASIC console_engine method + FAT32 storage.
-// Verbs: HELP / DIR / LOAD / SAVE / REMOVE / LIST / MEM / NEW / RUN
+// Program, SOURCE, FAT and compiler services for Finder and tether.
+// Named operations enter services directly; no command monitor parser.
 // HTML RUN: host compile-on-RUN streams ProgramImage over PROG (missing → ?NH;
 // never silently run invaders_jsb.hex). Card is HTML only.
 //
-// Section map (C_* states):
-//   input:    C_IDLE, C_ECHO, C_PARSE
-//   replies:  C_REPLY  (sel 0=HELP 1=MEM 2=OK 3=?SN ERROR 4=?IO
-//                       5=LOADED 6=?FN FILE NOT FOUND 7=?NB 8=-- MORE --)
-//   disk:     C_DIR / C_LOAD / C_SAVE / C_REMOVE / C_LD_* / C_SV_* / C_JSB_*
-//   listing:  C_LIST, C_LIST_WRAP*, C_MORE
-//   edit/run: C_EDIT, C_RUN (compile-on-RUN → ProgramImage → VM)
 module jmr_console_engine (
     input  logic        clk,
     input  logic        rst_n,
-    input  logic        enable,       // standalone & idle
     // Keyboard FIFO
+    input  logic        failure_dismiss = 1'b0, // supervisor: drop the error reply, no monitor
     input  logic        kbd_empty,
     input  logic [7:0]  kbd_data,
     output logic        kbd_pop,
@@ -33,7 +26,24 @@ module jmr_console_engine (
     output logic [127:0] ui_source_name_o,
     output logic [4:0] ui_source_len_o,
     output logic ui_unnamed_o,
-    input logic shell_tool_start=1'b0,shell_tool_finder=1'b0,
+    // Typed program-loader service; request tuple is held until accepted.
+    input logic shell_request=1'b0,
+    input logic [95:0] shell_name=96'd0,
+    input logic [3:0] shell_len=4'd0,shell_how=4'd8,
+    input logic monitor_visible=1'b1,
+    input logic host_req_valid=1'b0,
+    input logic [183:0] host_req_body=184'd0,
+    input logic host_req_crc_ok=1'b0,
+    output logic host_req_ready,
+    output logic host_q_valid,
+    output logic [95:0] host_q_payload,
+    input logic host_q_ready=1'b0,
+    input logic finder_active_i=1'b0,
+    input logic [7:0] app_role_i=8'd0,vm_fault_i=8'd0,
+    output logic host_hold_o,host_started,host_started_finder,tether_abort,
+    output logic host_receive_request,host_receive_pending,
+    input logic host_receive_taken=1'b0,host_receive_yield=1'b0,present_busy_i=1'b0,
+    output logic shell_accepted,
     input logic sys_ready,
     output logic sys_we,
     output logic [13:0] sys_addr,
@@ -52,7 +62,7 @@ module jmr_console_engine (
     // state — poking the value through memory would cost two encodings.
     output logic [17:0] src_len_o,
     // srcSetLen (VM nid 50): a PROGRAM edited SOURCE — adopt its length so
-    // LIST / SAVE / COMPILE see the edit. Strobe is a one-shot from the VM.
+    // File and compiler services see the edit. Strobe is a one-shot from the VM.
     input  logic [17:0] src_setlen_i,
     input  logic        src_setlen_stb_i,
     input  logic        cmp_done_i,
@@ -63,29 +73,31 @@ module jmr_console_engine (
     input  logic [20:0] cmp_len_i,
     input  logic        vm_busy_i,
     output logic        cmp_arm_o,   // high across a compile: no game_mode
-    output logic [6:0]  dbg_state,    // 2026-08-27: E-line console-state telemetry
+    output logic [6:0]  dbg_state,    // E-line console-state telemetry
     // Silicon games ladder: pulse when monitor sees RUN (RECTDEMO only)
     output logic        run_pulse,
-    // NEW: start bytecode VM after .JSB loaded into code BRAM
+    // Start bytecode VM after .JSB loaded into code BRAM
     output logic        vm_start,
-    // NEW: NEW/CLS halt the VM so leftover game FB does not stick after NEW
+    // NEW/CLS halt the VM so leftover game FB does not stick after NEW
     output logic        halt_pulse,
-    // NEW: write port into VM code_mem
+    // Write port into VM code_mem
+    output logic [31:0] image_code_bytes,
+    output logic image_code_valid,
     output logic        code_we,
     output logic [14:0] code_waddr,
     output logic [31:0] code_wdata,
-    // NEW: ASET section → external asset SRAM (jmr_sram_port write master)
+    // ASET section → external asset SRAM (jmr_sram_port write master)
     output logic        sram_req,
     output logic        sram_we,
     output logic [21:0] sram_addr,
     output logic [15:0] sram_wdata,
     input  logic [15:0] sram_rdata,
     input  logic        sram_ack,
-    // NEW: ASET palette (payload bytes 0..767 = 256×RGB888) → palette BRAM
+    // ASET palette (payload bytes 0..767 = 256×RGB888) → palette BRAM
     output logic        pal_we,
     output logic [7:0]  pal_waddr,
     output logic [23:0] pal_wdata,
-    // NEW: storage_engine (BASIC handshake)
+    // storage_engine (BASIC handshake)
     output logic        stor_open,
     output logic [7:0]  stor_mode,
     output logic [7:0]  stor_chan,
@@ -95,8 +107,6 @@ module jmr_console_engine (
     output logic        stor_readline,
     output logic        stor_get_byte,
     input  logic [7:0]  stor_get_data,
-    output logic        stor_nl_scan,     // NEW: count remaining 0x0A per sector
-    input  logic [15:0] stor_nl_count,
     output logic        stor_putc,
     output logic [7:0]  stor_putc_data,
     output logic        stor_dir,
@@ -108,15 +118,15 @@ module jmr_console_engine (
     input  logic        stor_err,
     input  logic        stor_eof,
     input  logic [7:0]  stor_line_len,
-    // NEW: work RAM master (NAME_BUF 0xB850, STORAGE_BUFFER 0xBB00)
-    // SOURCE is a dedicated 128 KiB BRAM — not the 12 KB work map.
+    // Work RAM master (NAME_BUF 0xB850, STORAGE_BUFFER 0xBB00)
+    // SOURCE is a dedicated 64 KiB byte window in external memory.
     output logic        mem_en,
     output logic        mem_we,
     output logic [15:0] mem_addr,
     output logic [7:0]  mem_wdata,
     input  logic [7:0]  mem_rdata,
     input  logic        mem_gnt,
-    // NEW: HTML RUN streams compiled .JSH over PROG (not FAT). Sim uses JSHLOAD.
+    // HTML RUN streams compiled .JSH over PROG (not FAT). Sim uses JSHLOAD.
     input  logic        jsb_tether_stb = 1'b0,
     input  logic [7:0]  jsb_tether_data = 8'd0,
     input  logic        jsb_tether_eof = 1'b0,
@@ -124,23 +134,19 @@ module jmr_console_engine (
     // gui-put: 0xFC SOURCE stream (same wires as 0xFD, tagged src). Tied 0
     // unless uart_link saw 0xFC. FPGA-SIM drives this from SRCSTREAM.
     input  logic        jsb_tether_src = 1'b0,
-    input  logic        jsb_tether_big = 1'b0,   // run 71: 0xFB CART big put
-    input  logic        jsb_tether_crc_err = 1'b0, // run 71: with eof — discard the stream, ?CK
-    input  logic [47:0] vm_gdbg_i = 48'd0,          // run 71 STATUS: {fault_site16, fault_arg32}
-    // NEW: FPGA-SIM RAM LOAD — host already poked SOURCE/src_len, so LOAD skips
-    // the FAT open and announces with sim_src_lines. Tied 0 on the board.
-    input  logic        sim_src_bypass = 1'b0,
-    input  logic [15:0] sim_src_lines = 16'd0
+    input  logic        jsb_tether_big = 1'b0,   // 0xFB CART big put
+    input  logic        jsb_tether_crc_err = 1'b0  // With eof — discard the stream, ?CK
 );
     localparam logic [15:0] NAME_BUF        = 16'hB850;
     localparam logic [15:0] STORAGE_BUFFER  = 16'hBB00;
     // Dedicated SOURCE BRAM (INVADERS/PACMAN HTML). ASET SRAM stays art from 0.
     // 131072 -> 65536: 13 BRAM tiles back. Card .HTM copies are squashed
     // (make_sd_image) — every title's source fits except MK (85K), whose
-    // LIST shows the first 64K; oversize LOAD keeps the prefix and RUN
+    // The editor receives the first 64 KiB; a larger file retains a prefix.
+    // Program execution
     // compiles from the host file regardless (C_LD_RD "SOURCE full" arm).
     localparam int unsigned SOURCE_MAX      = 65536;
-    // 2026-08-22 LUTRAM fit: source_mem moved to the external 4MB SRAM
+    // LUTRAM fit: source_mem moved to the external 4MB SRAM
     // (words SRC_SRAM_BASE..+SOURCE_MAX-1, one byte per 16-bit word). The
     // old on-chip array was 8.2k LUTRAM against a failing 46.2k cap. The
     // internal 1-beat req/gnt protocol is kept; consumers already wait on
@@ -148,10 +154,10 @@ module jmr_console_engine (
     localparam logic [21:0] SRC_SRAM_BASE = 22'd3821568; // below IMGD region
     // V1.5 standalone-compile arena (mirror of jmr_js_vm_pkg / jsb_format).
     // CART: the art arena, words 0..1,480,703, packed 2 bytes per word
-    // (2,961,408 B). Staging ground for an ARTX payload during an
-    // on-machine art compile. Mirrors jmr_js_vm_pkg.CART_SRAM_BASE.
+    // (2,961,408 B). Staging ground for a big put (0xFB) until SAVE
+    // writes it. Mirrors jmr_js_vm_pkg.CART_SRAM_BASE.
     localparam logic [21:0] CART_SRAM_BASE = 21'd0;
-    // run 71 big put ceiling: CART bank = jmr_js_vm_pkg.CART_WORDS (1,480,704)
+    // Big put ceiling: CART bank = jmr_js_vm_pkg.CART_WORDS (1,480,704)
     // x 2 B/word. Mirrored like CART_SRAM_BASE (the console does not import the pkg).
     localparam logic [22:0] BIG_MAX_BYTES = 23'(2*jmr_js_vm_pkg::CART_WORDS);
     localparam logic [21:0] CSCR_SRAM_BASE = 22'd3747840;
@@ -164,12 +170,6 @@ module jmr_console_engine (
     localparam int          CSTG_HDR_NMLEN = 16;
     // Compiler diagnostic text, up to 127 B (cmp_msglen is 7 bits).
     localparam logic [20:0] CSTG_HDR_MSG   = 21'd128;
-    // ARTX pre-load: the sidecar's header (sprite table + payload_len) is
-    // copied into the arena so the compiler can lay out SPRD/FSTY/ASET, and
-    // the PAYLOAD is staged in CART for the mint to append.
-    localparam logic [20:0] CSTG_ART_OFF   = 21'd8192; // header lands here
-    localparam logic [20:0] CSTG_HDR_ART   = 21'd65;   // u8: 1 = title has art
-    localparam int          CSTG_ART_HDRB  = 4096;     // header bytes copied
     localparam logic [20:0] CSTG_HDR_PSEL  = 21'd64;  // u8: next program
 
     function automatic logic [21:0] cstg_word(input logic [20:0] i);
@@ -259,65 +259,85 @@ module jmr_console_engine (
     logic [7:0]  srcb_wd_l;
 
     typedef enum logic [6:0] {
-        C_BOOT_CLS, C_BOOT_MSG, C_PROMPT, C_IDLE, C_ECHO, C_WAIT_VIDEO,
-        C_EXEC, C_REPLY,
-        // DIR
-        C_DIR0, C_DIR0W, C_DIRN, C_DIRNW, C_DIR_RD, C_DIR_CH, C_DIR_PUT, C_DIR_NL,
-        // name parse / write for LOAD SAVE REMOVE
-        C_PF, C_PF2, C_NWR, C_NWR_W,
-        // LOAD
-        C_LD_OPEN, C_LD_OPENW, C_LD_RL, C_LD_RLW,
-        C_LD_RD, C_LD_RDW, C_LD_WRW, C_LD_NLW, C_LD_CLOSE, C_LD_CLOSEW,
-        C_LD_GB, C_LD_GBW, C_LD_GB_WR, // HTML: byte-copy into SOURCE (no 128-char ?LS)
-        C_LD_NLSCANW, C_LD_ANN_SP, C_LD_ANN_NAME, C_LD_ANN_PAR, C_LD_ANN_TAIL,
-        // SAVE
-        C_SV_OPEN, C_SV_OPENW, C_SV_RD, C_SV_RDW, C_SV_PUT, C_SV_PUTW, C_SV_CLOSE, C_SV_CLOSEW,
-        // REMOVE
-        C_RM, C_RMW,
-        C_CMP_WAIT,   // V1.5: poll the compiler, chain, then mint
-        // NEW: numbered LIST + MORE + ranges (BASIC method)
-        C_LIST_PARSE, C_LIST_PAR_LO, C_LIST_PAR_HI,
-        C_LIST_INIT, C_LIST_LINE, C_LIST_PEEL, C_LIST_EMIT_DIG,
-        C_LIST_SP, C_LIST_RD_GO, C_LIST_RD, C_LIST_CH, C_LIST_PUT,
-        C_LIST_PUT_LAST, C_LIST_NL_FORCE, C_LIST_NL, C_LIST_WRAP, C_LIST_WRAP_PAGE,
-        C_LIST_MORE, C_LIST_WAIT,
-        // NEW: HTML LIST re-streams the file from the card (SOURCE holds 128K)
-        C_LIST_CNWR, C_LIST_CNWR_W, C_LIST_COPEN, C_LIST_COPENW,
-        C_LIST_CARD_GB, C_LIST_CARD_GBW, C_LIST_CARD_FIRST, C_LIST_PUT_CARD,
-        C_LIST_CCLOSE, C_LIST_CCLOSEW,
-        // CLS. (Run 71: the 23 inline numbered-line EDIT states were retired —
-        // EDITOR.JSH is the one editor; `EDIT n` and numbered lines say ?SN.
-        // That freed the console's FSM encodings for CRC/STATUS/burst.)
-        C_CLS,
-        // NEW: load companion .JSB from FAT into VM code BRAM
-        C_JSB_PREP, C_JSB_NWR_W, C_JSB_OPEN, C_JSB_OPENW,
-        C_JSB_GB, C_JSB_GBW, C_JSB_CLOSE, C_JSB_CLOSEW,
-        C_JSB_SRAMW, // NEW: wait asset-SRAM write ack (ASET payload word)
-        C_JSB_PEEK, C_JSB_PEEKW, // NEW: code-BRAM full — fail loud if more bytes
-        C_JSB_TETHER, C_JSB_FEED, C_JSB_TEOF, // NEW: PROG/host .JSH stream (no FAT)
-        C_SRC_TETHER, C_SRC_WR, // gui-put: 0xFC → SOURCE, host then types SAVE
-        C_BIG_TETHER, C_BIG_WR, // run 71 big put: 0xFB → CART (2 B/word), SAVE pumps it
-        C_STATUS, C_STATUS_CH,  // run 71: STATUS — what the machine holds
-        // Item G: print the compiler's ASCII diagnostic after ?CE, so a
-        // failed compile says "L12 EXPECTED )" instead of a bare code.
-        C_CMP_MSG_RD, C_CMP_MSG_PUT,
-        // ARTX pre-load (HOOK 1): open NAME.ART, header -> arena, payload
-        // -> CART, set CSTG_HDR_ART, then fall through to the ARTSCAN
-        // chain-load. Missing sidecar is NOT an error here: the flag goes
-        // to 0 and a no-art title compiles exactly as it always did.
-        C_ART_OPEN, C_ART_OPENW, C_ART_GB, C_ART_GBW, C_ART_WR,
-        C_ART_CLOSE, C_ART_CLOSEW, C_ART_FLAG,
-        // Reuse one retired UI state ID; other debug state numbers stay stable.
-        C_SAVE_COMMIT = C_ART_FLAG + 1,
-        C_CACHE_WRITE = C_ART_FLAG + 3, C_CACHE_READ, C_CACHE_GAP, C_RESIDENT, C_SYS, C_NPUT
+        C_PROMPT=7'd2,
+        C_IDLE=7'd3,
+        C_JSB_DRAIN=7'd6,
+        C_WAIT_VIDEO=7'd5,
+        C_REPLY=7'd7,
+        C_DIR0=7'd8,
+        C_DIR0W=7'd9,
+        C_DIRN=7'd10,
+        C_DIRNW=7'd11,
+        C_DIR_RD=7'd12,
+        C_DIR_CH=7'd13,
+        C_DIR_PUT=7'd14,
+        C_DIR_NL=7'd15,
+        C_NWR=7'd18,
+        C_NWR_W=7'd19,
+        C_LD_OPEN=7'd20,
+        C_LD_OPENW=7'd21,
+        C_LD_RL=7'd22,
+        C_LD_RLW=7'd23,
+        C_LD_RD=7'd24,
+        C_LD_RDW=7'd25,
+        C_LD_WRW=7'd26,
+        C_LD_NLW=7'd27,
+        C_LD_CLOSE=7'd28,
+        C_LD_CLOSEW=7'd29,
+        C_LD_GB=7'd30,
+        C_LD_GBW=7'd31,
+        C_LD_GB_WR=7'd32,
+        C_SV_OPEN=7'd38,
+        C_SV_OPENW=7'd39,
+        C_SV_RD=7'd40,
+        C_SV_RDW=7'd41,
+        C_SV_PUT=7'd42,
+        C_SV_PUTW=7'd43,
+        C_SV_CLOSE=7'd44,
+        C_SV_CLOSEW=7'd45,
+        C_RM=7'd46,
+        C_RMW=7'd47,
+        C_CMP_WAIT=7'd48,
+        C_JSB_PREP=7'd79,
+        C_JSB_NWR_W=7'd80,
+        C_JSB_OPEN=7'd81,
+        C_JSB_OPENW=7'd82,
+        C_JSB_GB=7'd83,
+        C_JSB_GBW=7'd84,
+        C_JSB_CLOSE=7'd85,
+        C_JSB_CLOSEW=7'd86,
+        C_JSB_SRAMW=7'd87,
+        C_JSB_PEEK=7'd88,
+        C_JSB_PEEKW=7'd89,
+        C_JSB_TETHER=7'd90,
+        C_JSB_FEED=7'd91,
+        C_JSB_TEOF=7'd92,
+        C_SRC_TETHER=7'd93,
+        C_SRC_WR=7'd94,
+        C_BIG_TETHER=7'd95,
+        C_BIG_WR=7'd96,
+        C_CMP_MSG_RD=7'd99,
+        C_CMP_MSG_PUT=7'd100,
+        C_SAVE_COMMIT=7'd109,
+        C_CACHE_WRITE=7'd111,
+        C_CACHE_READ=7'd112,
+        C_CACHE_GAP=7'd113,
+        C_RESIDENT=7'd114,
+        C_SYS=7'd115,
+        C_NPUT=7'd116
     } cstate_t;
-`ifdef VERILATOR
-    integer ctrace_fd = 0;
-    cstate_t ctrace_last;
-    logic [31:0] ctrace_cyc = 0;
-`endif
     // public_flat_rd: sim-only STOR? probe (metacomment, no synthesis effect)
+    // Explicit one-hot storage: synthesis did not extract this multi-service
+    // controller as an FSM, so an encoding hint alone had no effect. Control
+    // reads the individual state bits directly; the binary encoder is for
+    // existing diagnostics only and never feeds the next-state decisions.
+    (* fsm_encoding = "none" *) logic [116:0] state_q;
     cstate_t state /*verilator public_flat_rd*/, ret_state;
+    always_comb begin
+        state = cstate_t'(7'd0);
+        for (integer code=0;code<117;code=code+1)
+            state = cstate_t'(7'(state) | (7'(code) & {7{state_q[code]}}));
+    end
     assign dbg_state = 7'(state);
 
     logic finder_cache_valid /*verilator public_flat_rd*/;
@@ -351,7 +371,7 @@ module jmr_console_engine (
     endfunction
     task automatic finish_system_file(input logic [1:0] status);
       if(sys_rom)begin rom_status<=status;sys_rom<=0;sys_i<=0;sys_phase<=0;end
-      else begin sys_status<=status;name_i<=0;state<=C_JSB_PREP;end
+      else begin sys_status<=status;name_i<=0;state_q <= (117'd1 << C_JSB_PREP);end
     endtask
     logic park_pending,resident_restore,resident_init,resident_cancelled;
     logic [2:0] resident_phase;
@@ -362,13 +382,13 @@ module jmr_console_engine (
     logic [7:0] cache_low;
     logic [15:0] cache_word;
     logic [31:0] finder_cache_hits /*verilator public_flat_rd*/;
-    logic [7:0] line [0:127];
-    logic [6:0] line_len;
-    logic [6:0] msg_idx;
-    logic [7:0] ch;
-    logic [4:0] reply_sel;   // run 71: 5 bits — rows 16+ (?CK, STATUS)
+
+    logic [4:0] reply_sel;   // 5 bits — rows 16+ (?CK, STATUS)
     logic [6:0] reply_idx;
-    logic [6:0] name_i, name_start, name_len_r;
+    logic [6:0] name_i,name_len_r;
+    logic service_load_pending;
+    logic [95:0] service_name_q;
+    logic [3:0] service_how;
     logic [7:0] name_char_q;
     // V1.5 standalone compile
     // 0 = NAME.JSH derived from src_name; 1 = chain-program ROM row
@@ -388,12 +408,10 @@ module jmr_console_engine (
     // NEW 2: filename source for a cdone file op — 1 = the loaded title's
     // name (src_name), 0 = the 16-byte name in the arena header.
     logic        cmp_use_srcname;
-    // Bare EDIT runs the editor AS A GAME: game_mode rises (framebuffer
-    // visible, key events flow) and the 172 s compile watchdog is held off —
-    // an interactive session has no deadline. The compiler stays a batch
-    // tool on the text screen (cmp_arm). Board evidence for why: under the
-    // old cmp_arm EDIT, the editor ran INVISIBLY behind the text screen
-    // until the watchdog reported ?IO.
+    // A chain program owns the screen AS A GAME: game_mode rises
+    // (framebuffer visible, key events flow). Every entry to C_CMP_WAIT
+    // sets it, so that wait has no deadline — an interactive session
+    // ends only by cdone, a VM stop, or a host stop.
     logic        cmp_interactive;
     assign interactive_o=cmp_interactive;
     assign system_role_o=cmp_arm_r?3'd3:cmp_interactive?(cmp_progsel==8?3'd0:cmp_progsel==5?3'd1:cmp_progsel==7?3'd3:3'd2):3'd0;
@@ -410,26 +428,21 @@ module jmr_console_engine (
             default:ui_untitled=0;
         endcase
     endfunction
-    // ARTX (art titles compiled on the machine). The payload is staged in
-    // the CART arena at COMPILE time and appended to NAME.JSH after the
-    // compiler's image. It CANNOT be streamed file-to-file: storage_engine
-    // is single-channel ("channel 1 only"), so opening the .ARTX while the
-    // .JSH is open for write would destroy the output file's state.
+    // Art append: after the image bytes the SAVE pump writes cmp_art_len
+    // bytes out of the CART arena, where a big put staged them. It is
+    // staged rather than streamed file-to-file because storage_engine is
+    // single-channel ("channel 1 only").
     // CART holds 2,961,408 B vs the largest payload 2,801,304 B.
     logic        cmp_art_mode;   // this mint appends an ARTX payload
     logic [22:0] cmp_art_len;    // payload bytes to append
     logic [22:0] cmp_art_i;      // bytes appended so far
     logic        cmp_art_hi;     // CART is packed 2 B/word: which half
-    logic [22:0] art_i;          // pre-load byte counter
-    logic        art_found;      // sidecar opened successfully
-    logic        art_hi;         // CART pack phase during the pre-load
-    logic [15:0] art_word;       // half-assembled CART word
-    // run 71: 16-bit CART writes. The bank-1 client zero-extended every
+    // 16-bit CART writes. The bank-1 client zero-extended every
     // write ({8'd0, src_wdata}) so the art stager's low bytes never
     // reached SRAM; src_w16 carries the held low byte alongside.
     logic [7:0]  src_wlo;
     logic        src_w16;
-    // run 71 big put (0xFB): .ART/.ARTX streamed into the CART staging
+    // Big put (0xFB): .ART/.ARTX streamed into the CART staging
     // bank, packed 2 B/word from word 0; SAVE pumps it through the
     // mint's art-append path (cmp_save_mode + cmp_art_mode, img_len 0).
     logic [22:0] big_len;        // bytes received (max 2*CART_WORDS)
@@ -438,9 +451,6 @@ module jmr_console_engine (
     logic        big_eof;        // flushing the odd tail byte at eof
     logic        big_staged;     // CART holds a put; next SAVE writes it
     logic        big_trunc;      // stream exceeded the bank -> SAVE says ?TR
-    logic [15:0] art_nspr;       // sprite count, snooped from the header
-    // Byte offset of payload_len inside .ARTX: 8 + n_sprites*8.
-    wire  [22:0] art_plen_off = 22'd8 + (22'(art_nspr) << 3);
     logic [7:0]  cmp_nm_len;
     logic        cmp_pend;
     logic [21:0] cmp_rd_addr;
@@ -450,22 +460,9 @@ module jmr_console_engine (
     logic [33:0] cmp_wd;
     logic        src_bank;
     assign cmp_arm_o = cmp_arm_r;
-    // C_NWR walk keeps the last five upcased name chars in a shift
-    // register, so the .HTM/.HTML/.JS suffix classify at walk end reads
-    // fixed positions instead of five 127:1 dynamic muxes off
-    // name_start+name_len_r (run-32's -1.06 path family). tail[0] is the
-    // most recent char. RECTDEMO likewise compares src_name, which the
-    // same walk already captures upcased at fixed indices.
+    // Fixed-byte rolling suffix for the typed filename writer.
     logic [7:0] name_tail [0:4];
-    // Number-parse char pipeline (run-33 residual: name_i -> 127:1 line
-    // mux -> digit classify -> state CE was 13 LUT levels, -0.496). The
-    // parse states read ch_ni_q and stall one beat via (ni_q != name_i)
-    // whenever the index moved, so each loop iteration self-paces to two
-    // beats. line[] is frozen post-Enter, so the pipe is always coherent.
-    logic [7:0] ch_ni_q;
-    logic       ni_end_q, ni_end1_q;
-    logic [6:0] ni_q;
-    // Same recipe for the reply-message ROM (run-38 head, 13 levels:
+    // Registered recovery-message ROM (13 levels:
     // reply_char's sel*idx case fed state/reply CEs combinationally).
     // Registered lookup + a one-beat settle whenever sel/idx moved.
     logic [7:0] reply_ch_q;
@@ -475,7 +472,7 @@ module jmr_console_engine (
     logic [17:0] src_len /*verilator public_flat_rw*/;     // bytes in SOURCE BRAM (0..131072)
     // cdone() race arm: exec64's cmp_done is sticky and its p_clr wipe rides
     // the slow vm_clk header walk — the console reaches C_CMP_WAIT first and
-    // consumed the PREVIOUS program's status (board 2026-09-01: COMPILE
+    // consumed the PREVIOUS program's status (board: COMPILE
     // answered OK instantly = the editor's stale F3 quit; second COMPILE
     // worked because launch #1 had cleared the latch). Accept cmp_done only
     // after it has been seen LOW since this launch.
@@ -487,16 +484,15 @@ module jmr_console_engine (
     assign src_len_o = src_len;
     logic [17:0] src_i;
     logic [7:0]  rd_ch;
-    logic        cmd_is_load, cmd_is_save, cmd_is_remove;
-    // NEW: last LOADed name (upcased) — classify HTML vs JS vs RECTDEMO
+    logic cmd_is_load;
+    // Last LOADed name (upcased) — classify HTML vs JS vs RECTDEMO
     logic [7:0]  src_name [0:15] /*verilator public_flat_rw*/;
     logic [4:0]  src_name_len /*verilator public_flat_rw*/;
     logic        src_is_rectdemo /*verilator public_flat_rw*/;
     logic        src_is_html /*verilator public_flat_rw*/;   // .HTM / .HTML — RUN loads .JSH (else ?NH)
     logic        src_is_js /*verilator public_flat_rw*/;     // .JS — RUN loads companion .JSB
-    logic        jsb_want_jsh;  // NEW: HTML sidecar uses .JSH not .JSB
-    logic        jsb_want_art;  // build NAME.ART (the art sidecar)
-    // Board directive 2026-08-25: no wait may hard-wedge the console.
+    logic        jsb_want_jsh;  // HTML sidecar uses .JSH not .JSB
+    // Board directive: no wait may hard-wedge the console.
     // C_JSB_TETHER waits on the HOST (the protocol has no board->host
     // request: the host only compiles when it saw RUN typed through the
     // GUI, so a PS/2 RUN waits forever). ESC aborts; ~10.7s of stream
@@ -504,7 +500,7 @@ module jmr_console_engine (
     // storage watchdog: armed on any stor strobe, cleared on stor_done,
     // ~32s (longer than storage's own 21.5s op watchdog, so storage
     // always errors first and this is pure belt-and-braces).
-    logic [29:0] teth_wd;
+    logic [30:0] teth_wd; // bit 30 = expired (one flop, no 30-input AND in the state decode)
     logic [31:0] cons_stor_wd;
     logic        cons_stor_arm;
     // Universal progress watchdog (board directive: DIR must NOT be able
@@ -512,14 +508,14 @@ module jmr_console_engine (
     // interactive wait must make progress; ~21.5s parked anywhere else
     // forces ?IO + prompt. The tether wait has its own shorter timeout.
     logic [31:0] cons_prog_wd;
-    logic        jsb_tether_mode; // NEW: HTML RUN — bytes from PROG, not FAT
-    logic [7:0]  jsb_din;         // NEW: latched stream byte (FAT or tether)
-    // NEW: JSB stream packer
+    logic        jsb_tether_mode; // HTML RUN — bytes from PROG, not FAT
+    logic [7:0]  jsb_din;         // Latched stream byte (FAT or tether)
+    // JSB stream packer
     logic [14:0] jsb_waddr;
     logic [1:0]  jsb_bi;        // byte index 0..3 within word
     logic [31:0] jsb_word;
     logic [7:0]  jsb_name_len;
-    // NEW: ASET stream splitter — code bytes → code BRAM (as before), ASET
+    // ASET stream splitter — code bytes → code BRAM (as before), ASET
     // payload → asset SRAM (palette bytes 0..767 also tap the palette BRAM)
     logic [22:0] jsb_boff;      // byte offset within the .JSH stream
     logic [22:0] jsb_aset_off;  // header u32 at bytes 12..15 (0 = none yet)
@@ -534,17 +530,13 @@ module jmr_console_engine (
     logic [1:0]  pal_ph;
     logic [22:0] aset_rel;      // byte offset inside the ASET section
     assign aset_rel = jsb_boff - jsb_aset_off;
-    assign jsb_tether_rdy = (state == C_JSB_TETHER) || (state == C_SRC_TETHER)
-                         || (state == C_BIG_TETHER);
-    logic        ld_err;        // NEW: LOAD ?LS/?IO sticky until CLOSEW
-    logic [15:0] ld_nlines;     // NEW: newline count for LOADED NAME (N LINES)
-    logic        ld_need_eol;   // last HTML byte was not NL
-    logic        ld_ann;        // announce name+count after LOADED
-    // NEW: LIST range / MORE (display numbers 10,20,… like PYTHON)
-    logic        list_page;
-    logic [15:0] list_lo, list_hi, list_disp;
-    logic [3:0]  list_on_page;
-    // 2026-08-27 DIR handshake self-heal: board capture proved storage can
+    assign jsb_tether_rdy = (state_q[C_JSB_DRAIN]) || (state_q[C_JSB_TETHER]) || (state_q[C_SRC_TETHER])
+                         || (state_q[C_BIG_TETHER]);
+    logic        ld_err;        // LOAD ?LS/?IO sticky until CLOSEW
+
+
+
+    // DIR handshake self-heal: board capture proved storage can
     // return to idle without the console ever seeing done (32 s ?IO with
     // both sides idle). If the wait state sees storage idle AND silent for
     // 2^22 clks (42 ms — impossible mid-op, busy is high then), re-issue
@@ -552,21 +544,11 @@ module jmr_console_engine (
     logic [21:0] dir_hs_wd;
     logic [1:0]  dir_hs_retry;
     logic        dir_hs_hit; // registered (&dir_hs_wd): keeps the 22-wide AND
-                             // out of the dispatch cone (run 49 WNS -0.166)
-    logic [5:0]  list_col;        // 0..63 glass wrap (FM _list_paged twin)
-    logic        list_wrap_more;  // MORE after a wrap, resume same source line
-    logic        dir_more;       // MORE issued from DIR paging (resume C_DIRN)
-    logic        list_eat_nl;     // drop leftover CR from LINE so first MORE waits
-    logic        list_skip;       // line outside range — consume without print
-    logic        list_from_card;  // HTML LIST: get_byte from FAT, not SOURCE
-    logic        list_bol;        // beginning of line — emit number first
-    logic [15:0] peel_mag, peel_q;
-    logic [3:0]  peel_rem;
-    logic [4:0]  peel_bit;
-    logic [7:0]  digs [0:4];
-    logic [2:0]  dig_n, dig_i;
-    // NEW: EDIT n
-    logic [4:0]  peel_tmp;  // NEW: /10 peel scratch (no nested logic decls)
+                             // out of the dispatch cone
+
+    
+
+    // EDIT n
 
     // Case-insensitive compare helpers (FIFO no longer folds a-z)
     function automatic logic [7:0] up(input logic [7:0] c);
@@ -576,221 +558,31 @@ module jmr_console_engine (
         is_sp = (c == " ");
     endfunction
 
-    // C_EXEC dispatch predicates, registered every clk. line/line_len
-    // change at most one char per keystroke, and C_EXEC always runs at
-    // least two cycles after the last edit (Enter -> C_WAIT_VIDEO ->
-    // C_EXEC), so the one-cycle predicate lag can never be observed.
-    // This kills run-32's residual worst path (-1.249ns, 14 LUT levels:
-    // the priority chain ANDed each arm's len+char compares in one
-    // cycle); the chain now selects among registered single bits.
-    // Board 2026-08-26: game keypresses queued into the kbd FIFO while
-    // game_mode was on and replayed into the console line on ESC (cursor
-    // walked right by the number of presses). Drain on the game->console
-    // transition (enable rising edge).
-    logic enable_q;
-    logic        kbd_avail_q; // registered !kbd_empty for C_IDLE (run 70)
-    logic        st_mode;      // run 71: STATUS owns the name/peel printers
-    logic [3:0]  st_ph;        // STATUS phase
-    logic [5:0]  st_i;         // STATUS label char index
-    logic [16:0] drain_ctr; // hold kbd_clear ~1.3ms: a PS/2 scancode
-    // mid-flight at ESC lands AFTER a 1-cycle clear (board: one key leaked)
-    logic p_status_q;   // run 71: "STATUS"
-    logic p_help_q, p_dir_q, p_dir_star_q, p_cls_q, p_list_q, p_mem_q,
-          p_new_q, p_run_q, p_load_q, p_save_q, p_remove_q, p_compile_q,
-          p_edit_bare_q, p_read_bare_q, p_empty_q,
-          p_len4_q;
-    logic [7:0] line_tail_q;
+    // Error messages remain read-only recovery diagnostics. Commands and
+    // normal progress text have no parser, keyboard editor or pager here.
     always_ff @(posedge clk) begin
-        p_empty_q <= (line_len == 0);
-        // run-58's -0.261 leader: C_PF2 indexed line[line_len-1] (a 128:1
-        // char mux) inside its reply steering. line_len is >=2 beats stable
-        // by any C_PF2 (same contract as every p_*_q), so hoist the mux.
-        line_tail_q <= (line_len != 0) ? line[line_len - 1'b1] : 8'd0;
-        p_len4_q  <= (line_len == 4);
-        p_status_q <= (line_len == 6 && up(line[0])=="S" && up(line[1])=="T" && up(line[2])=="A" && up(line[3])=="T" && up(line[4])=="U" && up(line[5])=="S");
-        p_help_q <= (line_len == 4 && up(line[0])=="H" && up(line[1])=="E" && up(line[2])=="L" && up(line[3])=="P");
-        p_dir_q  <= (line_len == 3 && up(line[0])=="D" && up(line[1])=="I" && up(line[2])=="R");
-        // DIR * (or DIR*) — sidecar catalog; bare DIR stays titles.
-        p_dir_star_q <= (up(line[0])=="D" && up(line[1])=="I" && up(line[2])=="R"
-                      && ((line_len == 4 && line[3]=="*")
-                       || (line_len == 5 && is_sp(line[3]) && line[4]=="*")));
-        p_cls_q  <= (line_len == 3 && up(line[0])=="C" && up(line[1])=="L" && up(line[2])=="S");
-        p_list_q <= (line_len >= 4 && up(line[0])=="L" && up(line[1])=="I" && up(line[2])=="S" && up(line[3])=="T" && (line_len == 4 || is_sp(line[4])));
-        p_mem_q  <= (line_len == 3 && up(line[0])=="M" && up(line[1])=="E" && up(line[2])=="M");
-        p_new_q  <= (line_len == 3 && up(line[0])=="N" && up(line[1])=="E" && up(line[2])=="W");
-        p_run_q  <= (line_len >= 3 && up(line[0])=="R" && up(line[1])=="U" && up(line[2])=="N" && (line_len == 3 || is_sp(line[3])));
-        p_load_q <= (line_len >= 5 && up(line[0])=="L" && up(line[1])=="O" && up(line[2])=="A" && up(line[3])=="D" && is_sp(line[4]));
-        p_save_q <= (line_len >= 5 && up(line[0])=="S" && up(line[1])=="A" && up(line[2])=="V" && up(line[3])=="E" && is_sp(line[4]));
-        p_remove_q <= (line_len >= 7 && up(line[0])=="R" && up(line[1])=="E" && up(line[2])=="M" && up(line[3])=="O" && up(line[4])=="V" && up(line[5])=="E" && is_sp(line[6]));
-        // COMPILE takes no argument: LOAD already parked the source and
-        // latched the name, and the VM has no argument register.
-        p_compile_q <= (line_len == 7 && up(line[0])=="C" && up(line[1])=="O"
-                     && up(line[2])=="M" && up(line[3])=="P" && up(line[4])=="I"
-                     && up(line[5])=="L" && up(line[6])=="E");
-        // NEW 1: a BARE "EDIT" (no argument) chain-loads EDITOR.JSH, leaving
-        // SOURCE holding the user's title. "EDIT n" (len >= 6, space at [4])
-        // is the existing line editor and is untouched by this.
-        p_edit_bare_q <= (line_len == 4 && up(line[0])=="E" && up(line[1])=="D"
-                          && up(line[2])=="I" && up(line[3])=="T");
-        // Bare READ chain-loads READ.JSH, same as EDIT, so SOURCE stays the
-        // document. READ NAME is the Python form; this predicate is bare only.
-        p_read_bare_q <= (line_len == 4 && up(line[0])=="R" && up(line[1])=="E"
-                          && up(line[2])=="A" && up(line[3])=="D");
+        reply_ch_q<=reply_char(reply_sel,reply_idx);
+        ridx_q<=reply_idx;rsel_q<=reply_sel;
     end
-    always_ff @(posedge clk) begin
-        ch_ni_q <= line[name_i];
-        ni_q    <= name_i;
-        // run 71c: the LIST-range parser's end tests, registered from the
-        // same name_i sample as ni_q (the ni_q != name_i stall keeps them
-        // consistent; line_len is static while these states run). The
-        // unregistered compares were run 71b's leader (-0.134, 13 levels).
-        ni_end_q  <= (name_i >= line_len);
-        ni_end1_q <= (name_i + 1'b1 >= line_len);
-        reply_ch_q <= reply_char(reply_sel, reply_idx);
-        ridx_q     <= reply_idx;
-        rsel_q     <= reply_sel;
-    end
-
-
-    function automatic logic [7:0] banner_char(input logic [6:0] i);
-        case (i)
-            0: banner_char = "J"; 1: banner_char = "M"; 2: banner_char = "R";
-            3: banner_char = " "; 4: banner_char = "J"; 5: banner_char = "S";
-            6: banner_char = "-"; 7: banner_char = "N"; 8: banner_char = "A";
-            9: banner_char = "T"; 10: banner_char = "I"; 11: banner_char = "V";
-            12: banner_char = "E"; 13: banner_char = "-"; 14: banner_char = "C";
-            15: banner_char = "P"; 16: banner_char = "U"; 17: banner_char = " ";
-            18: banner_char = "V"; 19: banner_char = "2"; 20: banner_char = ".";
-            21: banner_char = "0"; // V2.0 R72 — bump IN THE SAME change as the payload
-            // run number - bump by hand each build (user: know which bit
-            // is on the board from the glass)
-            22: banner_char = " "; 23: banner_char = "R";
-            24: banner_char = "7"; 25: banner_char = "2";
-            default: banner_char = 8'h00;
+    function automatic logic service_error(input logic [4:0] code);
+        service_error=code==4 || code==6 || code==7 || code==9 || code==10 || code==14 || code==15 || code==16;
+    endfunction
+    function automatic logic [7:0] reply_char(input logic [4:0] code,input logic [6:0] i);
+        if(i==0)reply_char=service_error(code)?"?":8'd0;
+        else if(i==1)case(code)
+            4:reply_char="I";6:reply_char="F";7:reply_char="N";
+            9:reply_char="N";10:reply_char="L";14:reply_char="C";15:reply_char="T";16:reply_char="C";
+            default:reply_char=0;
         endcase
+        else if(i==2)case(code)
+            4:reply_char="O";6:reply_char="N";7:reply_char="B";
+            9:reply_char="H";10:reply_char="S";14:reply_char="E";15:reply_char="R";16:reply_char="K";
+            default:reply_char=0;
+        endcase
+        else reply_char=0;
     endfunction
 
-    function automatic logic [7:0] ready_char(input logic [6:0] i);
-        case (i)
-            0: ready_char = "R"; 1: ready_char = "E"; 2: ready_char = "A";
-            3: ready_char = "D"; 4: ready_char = "Y";
-            default: ready_char = 8'h00;
-        endcase
-    endfunction
-
-    // 0=HELP 1=MEM 2=OK 3=?SN ERROR 4=?IO 5=LOADED 6=?FN FILE NOT FOUND 7=?NB 8=-- MORE --
-    // 9=?NH (HTML not runnable yet) 10=?LS 11=SAVED. 16=?CK
-    // run 71 STATUS labels, 8-char slots, NUL-terminated
-    function automatic logic [7:0] status_char(input logic [5:0] i);
-        case (i)
-            6'd0: status_char="N"; 6'd1: status_char="A"; 6'd2: status_char="M"; 6'd3: status_char="E"; 6'd4: status_char=" ";
-            6'd8: status_char=" "; 6'd9: status_char="L"; 6'd10: status_char="E"; 6'd11: status_char="N"; 6'd12: status_char=" ";
-            6'd16: status_char=" "; 6'd17: status_char="T"; 6'd18: status_char="R"; 6'd19: status_char="U"; 6'd20: status_char="N"; 6'd21: status_char="C";
-            6'd24: status_char=" ";
-            6'd32: status_char=" "; 6'd33: status_char="H"; 6'd34: status_char="T"; 6'd35: status_char="M"; 6'd36: status_char="L";
-            6'd40: status_char=" "; 6'd41: status_char="J"; 6'd42: status_char="S";
-            6'd48: status_char=" "; 6'd49: status_char="-"; 6'd50: status_char="-";
-            6'd56: status_char=" "; 6'd57: status_char="F"; 6'd58: status_char="A"; 6'd59: status_char="U"; 6'd60: status_char="L"; 6'd61: status_char="T"; 6'd62: status_char=" ";
-            default: status_char=8'h00;
-        endcase
-    endfunction
-
-    function automatic logic [7:0] reply_char(input logic [4:0] sel, input logic [6:0] i);
-        case (sel)
-            4'd0: case (i)
-                // DIR LOAD SAVE NEW LIST EDIT READ RUN
-                0: reply_char="D";1: reply_char="I";2: reply_char="R";3: reply_char=" ";
-                4: reply_char="L";5: reply_char="O";6: reply_char="A";7: reply_char="D";
-                8: reply_char=" ";9: reply_char="S";10: reply_char="A";11: reply_char="V";
-                12: reply_char="E";13: reply_char=" ";14: reply_char="N";15: reply_char="E";
-                16: reply_char="W";17: reply_char=" ";18: reply_char="L";19: reply_char="I";
-                20: reply_char="S";21: reply_char="T";22: reply_char=" ";23: reply_char="E";
-                24: reply_char="D";25: reply_char="I";26: reply_char="T";27: reply_char=" ";
-                28: reply_char="R";29: reply_char="E";30: reply_char="A";31: reply_char="D";
-                32: reply_char=" ";33: reply_char="R";34: reply_char="U";35: reply_char="N";
-                default: reply_char=8'h00;
-            endcase
-            4'd1: case (i)
-                0: reply_char="F";1: reply_char="B";2: reply_char=" ";3: reply_char="6";
-                4: reply_char="4";5: reply_char="0";6: reply_char="X";7: reply_char="4";
-                8: reply_char="8";9: reply_char="0"; default: reply_char=8'h00;
-            endcase
-            4'd2: case (i)
-                0: reply_char="O";1: reply_char="K"; default: reply_char=8'h00;
-            endcase
-            4'd4: case (i)
-                0: reply_char="?";1: reply_char="I";2: reply_char="O"; default: reply_char=8'h00;
-            endcase
-            4'd5: case (i)
-                0: reply_char="L";1: reply_char="O";2: reply_char="A";3: reply_char="D";
-                4: reply_char="E";5: reply_char="D"; default: reply_char=8'h00;
-            endcase
-            4'd6: case (i)
-                // ?FN FILE NOT FOUND
-                0: reply_char="?";1: reply_char="F";2: reply_char="N";3: reply_char=" ";
-                4: reply_char="F";5: reply_char="I";6: reply_char="L";7: reply_char="E";
-                8: reply_char=" ";9: reply_char="N";10: reply_char="O";11: reply_char="T";
-                12: reply_char=" ";13: reply_char="F";14: reply_char="O";15: reply_char="U";
-                16: reply_char="N";17: reply_char="D"; default: reply_char=8'h00;
-            endcase
-            4'd7: case (i)
-                // ?NB — no bytecode companion .JSB
-                0: reply_char="?";1: reply_char="N";2: reply_char="B"; default: reply_char=8'h00;
-            endcase
-            4'd8: case (i)
-                // -- MORE --
-                0: reply_char="-";1: reply_char="-";2: reply_char=" ";3: reply_char="M";
-                4: reply_char="O";5: reply_char="R";6: reply_char="E";7: reply_char=" ";
-                8: reply_char="-";9: reply_char="-"; default: reply_char=8'h00;
-            endcase
-            4'd9: case (i)
-                // ?NH — HTML not executable on RTL VM yet
-                0: reply_char="?";1: reply_char="N";2: reply_char="H"; default: reply_char=8'h00;
-            endcase
-            4'd10: case (i)
-                // ?LS — line/source too long
-                0: reply_char="?";1: reply_char="L";2: reply_char="S"; default: reply_char=8'h00;
-            endcase
-            4'd11: case (i)
-                // SAVED — loud acknowledgment for SAVE and the editor's F2
-                // (board 2026-09-01: a silent save is indistinguishable from
-                // a dead key). Row was the dead "(HTML)" LIST stub.
-                0: reply_char="S";1: reply_char="A";2: reply_char="V";3: reply_char="E";
-                4: reply_char="D";5: reply_char="."; default: reply_char=8'h00;
-            endcase
-            // ---- V1.5 standalone compile ----
-            4'd12: case (i)   // COMPILING
-                0: reply_char="C";1: reply_char="O";2: reply_char="M";3: reply_char="P";
-                4: reply_char="I";5: reply_char="L";6: reply_char="I";7: reply_char="N";
-                8: reply_char="G"; default: reply_char=8'h00;
-            endcase
-            4'd13: case (i)   // COMPILED
-                0: reply_char="C";1: reply_char="O";2: reply_char="M";3: reply_char="P";
-                4: reply_char="I";5: reply_char="L";6: reply_char="E";7: reply_char="D";
-                default: reply_char=8'h00;
-            endcase
-            4'd14: case (i)   // ?CE — the compiler refused or faulted
-                0: reply_char="?";1: reply_char="C";2: reply_char="E";
-                default: reply_char=8'h00;
-            endcase
-            4'd15: case (i)   // ?TR — SOURCE was truncated at SOURCE_MAX
-                0: reply_char="?";1: reply_char="T";2: reply_char="R";
-                default: reply_char=8'h00;
-            endcase
-            5'd16: case (i)   // ?CK — transfer CRC mismatch (run 71)
-                0: reply_char="?";1: reply_char="C";2: reply_char="K";
-                default: reply_char=8'h00;
-            endcase
-            default: case (i)
-                // ?SN ERROR — unknown verb (laod)
-                0: reply_char="?";1: reply_char="S";2: reply_char="N";3: reply_char=" ";
-                4: reply_char="E";5: reply_char="R";6: reply_char="R";7: reply_char="O";
-                8: reply_char="R"; default: reply_char=8'h00;
-            endcase
-        endcase
-    endfunction
-
-    assign ready_lit = (state == C_IDLE || state == C_PROMPT) && !park_pending && !raw_cdone_pending;
+    assign ready_lit = (state_q[C_IDLE] || state_q[C_PROMPT]) && !park_pending && !raw_cdone_pending;
     assign stor_chan = 8'd1;
     assign stor_name_addr = NAME_BUF;
 
@@ -798,19 +590,222 @@ module jmr_console_engine (
     // the main console FSM block (it shares the sram_* channel with the
     // ASET flash states, which never overlap source traffic).
 
+    // Loader services also used by explicit recovery commands. They only
+    // assign the existing registers/states; no extra instruction/pixel cycles.
+    task automatic run_loaded_source;
+        begin
+                        // HTML RUN, standalone-first (CONSTITUTION rule 10):
+                        // try NAME.JSH from the card (the builder emits it
+                        // beside every .HTML; on-device SAVE deletes it, so a
+                        // stale image can never run silently). FAT miss falls
+                        // back to the host tether at C_JSB_OPENW.
+                        // RECTDEMO → rect engine; empty NEW → rect; missing JSB → ?NB
+                        if (src_is_html) begin
+                            jsb_want_jsh <= 1'b1;
+                            jsb_tether_mode <= 1'b0;
+                            name_i <= 0;
+                            dir_n <= 0;
+                            jsb_waddr <= 0;
+                            jsb_bi <= 0;
+                            jsb_word <= 0;
+                            ld_err <= 0;
+                            jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
+                            aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
+                            sram_last <= 0; pal_idx <= 0; pal_ph <= 0;
+                            state_q <= (117'd1 << C_JSB_PREP);
+                        end else if (src_is_rectdemo) begin
+                            run_pulse <= 1'b1;
+                            reply_sel <= 4'd2; reply_idx <= 0; state_q <= (117'd1 << C_REPLY);
+                        end else if (src_len == 0 && !src_is_js) begin
+                            run_pulse <= 1'b1;
+                            reply_sel <= 4'd2; reply_idx <= 0; state_q <= (117'd1 << C_REPLY);
+                        end else if (src_is_js || src_name_len != 0) begin
+                            // Any LOADed program (INVADERS / PACMAN.JS / …) → NAME.JSB
+                            jsb_want_jsh <= 1'b0;
+                            jsb_tether_mode <= 1'b0;
+                            name_i <= 0;
+                            dir_n <= 0;
+                            jsb_waddr <= 0;
+                            jsb_bi <= 0;
+                            jsb_word <= 0;
+                            state_q <= (117'd1 << C_JSB_PREP);
+                        end else begin
+                            reply_sel <= 4'd7; reply_idx <= 0; state_q <= (117'd1 << C_REPLY); // ?NB
+                        end
+        end
+    endtask
+    task automatic open_document(input logic reader);
+        begin
+                        if (src_len == 18'd0 && src_name_len==0) begin
+                            reply_sel <= 4'd7; reply_idx <= 0; // ?NB
+                            state_q <= (117'd1 << C_REPLY);
+                        end else begin
+                            // NO cmp_arm: the editor is a GAME (visible,
+                            // interactive). cdone still reaches C_CMP_WAIT.
+                            cmp_arm_r <= 1'b0;
+                            cmp_interactive <= 1'b1;
+                            jsb_name_src <= 2'd1; cmp_progsel <= reader ? 4'd6 : 4'd5;
+                            cmp_save_mode <= 1'b0;
+                            jsb_want_jsh <= 1'b1; jsb_tether_mode <= 1'b0;
+                            name_i <= 0; dir_n <= 0; jsb_waddr <= 0;
+                            jsb_bi <= 0; jsb_word <= 0; ld_err <= 0;
+                            jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
+                            aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
+                            sram_last <= 0; cmp_wd <= '0; cmp_ph <= 5'd0;
+                            cmp_nw <= 1'b0; cmp_nm_len <= 8'd0;
+                            cmp_pend <= 1'b0;
+                            state_q <= (117'd1 << C_JSB_PREP);
+                        end
+        end
+    endtask
+    task automatic start_system(input logic [3:0] program_slot);
+        begin
+            src_bank<=0;cmp_arm_r<=0;cmp_interactive<=1;
+            jsb_name_src<=1;cmp_progsel<=program_slot;
+            cmp_save_mode<=0;jsb_want_jsh<=1;jsb_tether_mode<=0;
+            name_i<=0;dir_n<=0;jsb_waddr<=0;jsb_bi<=0;jsb_word<=0;ld_err<=0;
+            jsb_boff<=0;jsb_aset_off<=0;jsb_has_aset<=0;aset_seen<=0;aset_len<=0;aset_pay<=0;
+            sram_last<=0;cmp_wd<=0;cmp_ph<=0;cmp_nw<=0;cmp_nm_len<=0;cmp_pend<=0;
+            cache_tail<=0;finder_cache_fill<=0;finder_cache_replay<=0;
+            pal_idx<=0;pal_ph<=0;
+            if(program_slot==8 && !sys_attempted)begin
+                sys_attempted<=1;sys_i<=0;sys_phase<=0;state_q <= (117'd1 << C_SYS);
+            end else if(program_slot==8 && finder_cache_valid)begin
+                finder_cache_replay<=1;finder_cache_hits<=finder_cache_hits+1'b1;
+                cdone_seen_low<=0;state_q <= (117'd1 << C_JSB_GB);
+            end else state_q <= (117'd1 << C_JSB_PREP);
+        end
+    endtask
+    task automatic launch_loaded_source;
+        begin
+            service_load_pending<=0;
+            case(service_how)
+                1: open_document(1'b0);
+                2: open_document(1'b1);
+                3: start_system(4'd7);
+                default: run_loaded_source();
+            endcase
+        end
+    endtask
+
+    // Single-owner typed tether services. Packets and responses are held until
+    // accepted; no operation depends on text output or keyboard commands.
+    typedef enum logic [2:0] {H_NONE,H_CHECK,H_BEGIN,H_STOP,H_PARK,H_WAIT,H_NOTIFY} host_state_t;
+    host_state_t host_state;
+    logic host_active,host_owned,host_last_valid,host_finish_pending,host_status_tail,host_link_event,tether_abort_q;
+    logic [183:0] host_body,host_last_body;
+    logic [7:0] host_result_status,host_last_status;
+    logic [31:0] host_result_value,host_last_value,host_status_tx;
+    logic source_stage_valid,cart_stage_valid,library_dirty;
+    logic [7:0] source_stage_error,cart_stage_error;
+    logic [3:0] host_check_i,host_stem_n,host_ext_n;
+    logic host_dot,host_bad_name,host_stream_announced;
+    logic [95:0] host_check_name;
+    logic [31:0] host_watchdog,catalog_count;
+    logic [95:0] catalog_name;
+    logic [1:0] catalog_chunk;
+    wire [7:0] host_op=host_body[15:8];
+    wire [31:0] host_tx=host_body[47:16],host_arg=host_body[79:48];
+    wire [7:0] host_name_len=host_body[87:80];
+    wire [95:0] host_name=host_body[183:88];
+    // Full packet identity remains exact; keep its combinational
+    // reduction balanced across native words instead of a tall carry chain.
+    (* keep="true", dont_touch="true" *) wire [5:0] request_same_active_words,request_same_last_words;
+    for(genvar word=0;word<5;word=word+1)begin: g_host_identity
+        assign request_same_active_words[word]=host_req_body[word*32+:32]==host_body[word*32+:32];
+        assign request_same_last_words[word]=host_req_body[word*32+:32]==host_last_body[word*32+:32];
+    end
+    assign request_same_active_words[5]=host_req_body[183:160]==host_body[183:160];
+    assign request_same_last_words[5]=host_req_body[183:160]==host_last_body[183:160];
+    wire [7:0] request_op=host_req_body[15:8];
+    wire [31:0] request_tx=host_req_body[47:16],request_arg=host_req_body[79:48];
+    wire [7:0] request_len=host_req_body[87:80];
+    wire [31:0] host_snapshot={8'd0,vm_fault_i,app_role_i,1'b0,tether_abort,finder_active_i,host_owned,
+        cart_stage_valid,source_stage_valid,stor_busy,vm_busy_i};
+    assign host_req_ready=!host_q_valid && !host_finish_pending && !host_status_tail && !host_link_event;
+    assign host_hold_o=host_owned || host_active;
+    assign host_receive_pending=host_active && host_op==1 && host_arg==0 &&
+        (host_state==H_NOTIFY || host_state==H_STOP || host_state==H_PARK);
+    function automatic logic fat_letter(input logic [7:0] c);
+        fat_letter=c>=8'd33 && c<=8'd126 && c!="." && c!="/" && c!="\\" &&
+            c!=":" && c!="*" && c!="?" && c!=34 && c!="<" && c!=">" && c!="|" &&
+            c!="+" && c!="," && c!=";" && c!="=" && c!="[" && c!="]";
+    endfunction
+    task automatic host_reply(input logic [7:0] op,input logic [31:0] tx,
+        input logic [7:0] phase,status,input logic [31:0] value);
+        begin host_q_valid<=1;host_q_payload<={8'd1,op,tx,phase,status,value};end
+    endtask
+    task automatic host_finish(input logic [7:0] status,input logic [31:0] value);
+        begin
+            host_result_status<=status;host_result_value<=value;
+            host_finish_pending<=1;host_state<=H_NONE;host_receive_request<=0;
+        end
+    endtask
+    task automatic host_begin_owned;
+        begin
+            case(host_op)
+                1:begin
+                    if(host_arg==0)begin host_owned<=1;host_finish(0,0);end
+                    else begin
+                        host_owned<=0;source_stage_valid<=0;cart_stage_valid<=0;
+                        if(library_dirty)begin
+                            sys_attempted<=0;finder_cache_valid<=0;finder_state_valid<=0;
+                            library_dirty<=0;
+                            // C_SYS must be selected now (nonblocking resets
+                            // above cannot alter start_system's current guard).
+                            start_system(4'd8);sys_attempted<=1;sys_rom<=1;sys_i<=0;sys_phase<=0;state_q <= (117'd1 << C_SYS);
+                        end else start_system(4'd8);
+                        host_state<=H_WAIT;
+                    end
+                end
+                2,3:begin
+                    service_name_q<=host_name;name_len_r<=7'(host_name_len);name_i<=0;
+                    cmd_is_load<=0;
+                    cmp_save_mode<=0;cmp_art_mode<=0;raw_save_resume<=0;src_bank<=0;
+                    big_staged<=host_op==3;
+                    state_q <= (117'd1 << C_NWR);host_state<=H_WAIT;
+                end
+                4:begin
+                    host_owned<=0;service_name_q<=host_name;service_how<=host_arg[3:0];
+                    service_load_pending<=1;name_len_r<=7'(host_name_len);name_i<=0;
+                    cmd_is_load<=1;src_bank<=0;src_trunc<=0;
+                    state_q <= (117'd1 << C_NWR);host_state<=H_WAIT;
+                end
+                5:begin
+                    host_owned<=0;start_system(4'd7);
+                    cmp_interactive<=0;jsb_name_src<=0;jsb_tether_mode<=1;
+                    state_q <= (117'd1 << C_JSB_TETHER);host_state<=H_WAIT;
+                end
+                7:begin
+                    stor_dir_all<=1;catalog_count<=0;
+                    dir_hs_wd<=0;dir_hs_retry<=0;
+                    state_q <= (117'd1 << C_DIR0);host_state<=H_WAIT;
+                end
+                default:host_finish(3,0);
+            endcase
+        end
+    endtask
+
     always_ff @(posedge clk) begin
         if (!rst_n) begin
-            state <= C_BOOT_CLS;
+            state_q <= (117'd1 << C_PROMPT);
+            host_receive_request<=0;host_started<=0;host_started_finder<=0;tether_abort<=0;tether_abort_q<=0;host_link_event<=0;
+            host_state<=H_NONE;host_active<=0;host_owned<=0;host_last_valid<=0;
+            host_finish_pending<=0;host_status_tail<=0;host_body<=0;host_last_body<=0;
+            host_result_status<=0;host_result_value<=0;host_last_status<=0;host_last_value<=0;
+            host_status_tx<=0;host_q_valid<=0;host_q_payload<=0;
+            source_stage_valid<=0;cart_stage_valid<=0;source_stage_error<=0;cart_stage_error<=0;library_dirty<=0;
+            host_check_i<=0;host_stem_n<=0;host_ext_n<=0;host_dot<=0;host_bad_name<=0;host_stream_announced<=0;host_check_name<=0;
+            host_watchdog<=0;catalog_count<=0;catalog_name<=0;catalog_chunk<=0;
+            service_load_pending<=0;service_name_q<=0;service_how<=0;shell_accepted<=0;
             command_failed_o <= 1'b0;
             ret_state <= C_IDLE;
-            line_len <= 0;
-            msg_idx <= 0;
+
             reply_sel <= 0;
             reply_idx <= 0;
             kbd_pop <= 0;
             kbd_clear <= 0;
-            kbd_avail_q <= 1'b0;
-            st_mode <= 1'b0; st_ph <= 4'd0; st_i <= 6'd0;
+
             cls <= 0;
             put_en <= 0;
             put_char <= 0;
@@ -819,10 +814,11 @@ module jmr_console_engine (
             vm_start <= 0;
             halt_pulse <= 0;
             code_we <= 0;
-            ch <= 0;
+            image_code_bytes<=0;image_code_valid<=0;
+            
             stor_open <= 0; stor_close <= 0; stor_readline <= 0; stor_get_byte <= 0;
             stor_putc <= 0; stor_dir <= 0; stor_dir_next <= 0; stor_delete <= 0;
-            stor_nl_scan <= 0;
+            
             stor_mode <= "I"; stor_name_len <= 0; stor_putc_data <= 0;
             mem_en <= 0; mem_we <= 0; mem_addr <= 0; mem_wdata <= 0;
             src_req <= 0; src_we <= 0; src_addr <= 0; src_wdata <= 0;
@@ -842,21 +838,19 @@ module jmr_console_engine (
             raw_cdone_armed <= 1'b0;
             handoff_stop_pending <= 1'b0;
             cmp_art_mode <= 1'b0; cmp_art_len <= '0;
-            art_i <= '0; art_found <= 1'b0; art_hi <= 1'b0; art_word <= '0;
-            art_nspr <= '0;
             src_wlo <= '0; src_w16 <= 1'b0;
             big_len <= '0; big_lo <= '0; big_hi <= 1'b0; big_eof <= 1'b0;
             big_staged <= 1'b0; big_trunc <= 1'b0;
             cmp_art_i <= '0; cmp_art_hi <= 1'b0;
             cmp_out_off <= '0; cmp_img_len <= '0; cmp_i <= '0; cmp_wd <= '0;
             src_bank <= 1'b0;
-            name_len_r <= 0; name_i <= 0; name_start <= 0; name_char_q<=0;
+            name_len_r <= 0; name_i <= 0;   name_char_q<=0;
             dir_n <= 0; dir_idx <= 0;
-            cmd_is_load <= 0; cmd_is_save <= 0; cmd_is_remove <= 0;
+            cmd_is_load <= 0;  
             stor_dir_all <= 1'b0;
             src_name_len <= 0; src_is_rectdemo <= 0; src_is_html <= 0; src_is_js <= 0;
             jsb_waddr <= 0; jsb_bi <= 0; jsb_word <= 0; jsb_name_len <= 0;
-            jsb_want_jsh <= 1'b0; jsb_want_art <= 1'b0;
+            jsb_want_jsh <= 1'b0;
             jsb_tether_mode <= 1'b0;
             teth_wd <= 30'd0;
             cons_stor_wd <= 32'd0;
@@ -864,30 +858,22 @@ module jmr_console_engine (
             cons_prog_wd <= 32'd0;
             jsb_din <= 8'h0;
             ld_err <= 0;
-            ld_nlines <= 0; ld_need_eol <= 0; ld_ann <= 0;
+              
             sram_req <= 0; sram_we <= 0; sram_addr <= 0; sram_wdata <= 0;
             pal_we <= 0; pal_waddr <= 0; pal_wdata <= 0;
             jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
             aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
             sram_lo <= 0; sram_last <= 0;
             pal_r <= 0; pal_g <= 0; pal_idx <= 0; pal_ph <= 0;
-            list_page <= 0; list_lo <= 16'd10; list_hi <= 16'hFFFF;
-            list_disp <= 16'd10; list_on_page <= 0; list_skip <= 0;
-            list_col <= 0; list_wrap_more <= 0; list_eat_nl <= 0;
-            list_from_card <= 0; list_bol <= 0;
+
+              
+             
         end else begin
+            shell_accepted<=0;host_started<=0;
             toolbox_code_we<=0;
-            enable_q <= enable;
+            
             kbd_pop <= 0;
-            if (enable && !enable_q) drain_ctr <= 17'h1FFFF;
-            else if (drain_ctr != 17'd0) drain_ctr <= drain_ctr - 17'd1;
-            kbd_clear <= (enable && !enable_q) || (drain_ctr != 17'd0);
-            // Run 70: the C_IDLE keyboard qualifier sat one level deeper
-            // once the 0xFC tether branch took priority — 5 misses from
-            // u_kbd/rd_ptr to state_reg. Register it (the p_*_q recipe);
-            // only a clear can empty the FIFO without a console pop, so
-            // !kbd_clear keeps the one-beat lag from ever popping empty.
-            kbd_avail_q <= !kbd_empty && !kbd_clear;
+            kbd_clear<=0;
             cls <= 0;
             put_en <= 0;
             print_nl <= 0;
@@ -897,10 +883,10 @@ module jmr_console_engine (
             code_we <= 0;
             stor_open <= 0; stor_close <= 0; stor_readline <= 0; stor_get_byte <= 0;
             stor_putc <= 0; stor_dir <= 0; stor_dir_next <= 0; stor_delete <= 0;
-            stor_nl_scan <= 0;
+            
             mem_en <= 0; mem_we <= 0;
             src_req <= 0; src_we <= 0;
-            pal_we <= 0; // NEW: 1-cycle palette write strobes (sram_req holds to ack)
+            pal_we <= 0; // 1-cycle palette write strobes (sram_req holds to ack)
 
             // srcSetLen (VM nid 50): a PROGRAM edited SOURCE. Placed BEFORE
             // the state case on purpose — a console action in the same beat
@@ -912,358 +898,81 @@ module jmr_console_engine (
             // interactive clients. Require a fresh low before accepting sticky
             // cdone, and reserve the console before the shell can return Home.
             if (handoff_stop_pending && !vm_busy_i) handoff_stop_pending <= 0;
-            if (state == C_CMP_WAIT) raw_cdone_armed <= 0;
+            if (state_q[C_CMP_WAIT]) raw_cdone_armed <= 0;
             else if (vm_busy_i && !cmp_done_i) raw_cdone_armed <= 1;
             // A discarded Finder copy must drain its current SRAM beat but
             // must neither publish a parked image nor start a restored VM.
-            if (state != C_RESIDENT) resident_cancelled <= 0;
+            if (!state_q[C_RESIDENT]) resident_cancelled <= 0;
             else if (forget_finder) resident_cancelled <= 1;
-            unique case (state)
-                C_BOOT_CLS: begin
-                    cls <= 1'b1;
-                    state <= C_WAIT_VIDEO;
-                    ret_state <= C_BOOT_MSG;
-                    msg_idx <= 0;
+            unique case (1'b1)
+                state_q[C_PROMPT]: begin
+                    raw_save_resume<=0;src_bank<=0;cmp_save_mode<=0;
+                    cmp_art_mode<=0;cmp_interactive<=0;
+                    big_staged<=0;src_w16<=0;jsb_name_src<=0;
+                    state_q <= (117'd1 << C_IDLE);
                 end
-                C_BOOT_MSG: begin
-                    if (banner_char(msg_idx) == 8'h00) begin
-                        print_nl <= 1'b1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_PROMPT;
-                        msg_idx <= 0;
-                    end else if (!video_busy) begin
-                        put_en <= 1'b1;
-                        put_char <= banner_char(msg_idx);
-                        msg_idx <= msg_idx + 1'b1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_BOOT_MSG;
-                    end
-                end
-                C_PROMPT: begin
-                    raw_save_resume <= 0;
-                    // Returning to the prompt is the ONE place every flow
-                    // passes through, so the SOURCE/arena bridge selector and
-                    // the mint-mode flag are cleared here rather than on each
-                    // exit path. src_bank is set by 8 different sites and was
-                    // cleared by only 4: after a COMPILE watchdog, a VM fault
-                    // exit, or an editor quit, every later SOURCE access
-                    // (EDIT memmove, LIST, SAVE) went to the arena at a stale
-                    // address — the edit "succeeded" into the wrong memory and
-                    // SOURCE was untouched. cmp_save_mode leaks the same way
-                    // if a mint aborts before C_SV_CLOSEW (card error on open
-                    // or put), which would make the NEXT plain SAVE pump the
-                    // arena and reply COMPILED instead of OK.
-                    src_bank <= 1'b0;
-                    cmp_save_mode <= 1'b0;
-                    cmp_art_mode <= 1'b0;
-                    jsb_want_art <= 1'b0;
-                    cmp_interactive <= 1'b0;
-                    big_staged <= 1'b0; src_w16 <= 1'b0;   // run 71 belt
-                    // THE "RUN opened the editor" bug: jsb_name_src=1 leaked
-                    // from a chain-load, so RUN's reload built the CHAIN
-                    // program's name (EDITOR.JSH) instead of the title's.
-                    jsb_name_src <= 2'd0;
-                    if (msg_idx < 5) begin
-                        if (!video_busy) begin
-                            put_en <= 1'b1;
-                            put_char <= ready_char(msg_idx);
-                            msg_idx <= msg_idx + 1'b1;
-                            state <= C_WAIT_VIDEO;
-                            ret_state <= C_PROMPT;
-                        end
-                    end else if (msg_idx == 5) begin
-                        print_nl <= 1'b1;
-                        msg_idx <= 6;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_PROMPT;
-                    end else if (msg_idx == 6) begin
-                        if (!video_busy) begin
-                            put_en <= 1'b1;
-                            put_char <= ">";
-                            msg_idx <= 7;
-                            state <= C_WAIT_VIDEO;
-                            ret_state <= C_PROMPT;
-                        end
-                    end else if (msg_idx == 7) begin
-                        if (!video_busy) begin
-                            put_en <= 1'b1;
-                            put_char <= " ";
-                            line_len <= 0;
-                            state <= C_WAIT_VIDEO;
-                            ret_state <= C_IDLE;
-                        end
-                    end
-                end
-                C_IDLE: begin
-                    // gui-put: host 0xFC (or FPGA-SIM SRCSTREAM) fills SOURCE
-                    // then types SAVE "NAME" — same FAT write as a local SAVE.
-                    if (jsb_tether_src) begin
+                state_q[C_IDLE]: begin
+                    // Bulk staging is accepted only under Finder ownership.
+                    if (host_owned && jsb_tether_src) begin
                         src_len <= 0;
                         src_trunc <= 1'b0;
                         src_i <= 0;
                         src_bank <= 1'b0;
                         teth_wd <= 30'd0;
-                        state <= C_SRC_TETHER;
-                    end else if (jsb_tether_big) begin
-                        // run 71: 0xFB big put -> CART staging bank
+                        state_q <= (117'd1 << C_SRC_TETHER);
+                    end else if (host_owned && jsb_tether_big) begin
+                        // 0xFB big put -> CART staging bank
                         big_len <= '0; big_hi <= 1'b0; big_eof <= 1'b0;
                         big_staged <= 1'b0; big_trunc <= 1'b0;
                         src_bank <= 1'b1;
                         teth_wd <= 30'd0;
-                        state <= C_BIG_TETHER;
-                    end else if (enable && kbd_avail_q && !kbd_clear && !video_busy) begin
-                        ch <= kbd_data;
-                        kbd_pop <= 1'b1;
-                        state <= C_ECHO;
+                        state_q <= (117'd1 << C_BIG_TETHER);
                     end
                 end
-                C_ECHO: begin
-                    if (ch == 8'h0D || ch == 8'h0A) begin
-                        print_nl <= 1'b1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_EXEC;
-                    end else if (ch == 8'h08 || ch == 8'h7F) begin
-                        if (line_len != 0) begin
-                            line_len <= line_len - 1'b1;
-                            put_en <= 1'b1;
-                            put_char <= 8'h08;
-                            state <= C_WAIT_VIDEO;
-                            ret_state <= C_IDLE;
-                        end else state <= C_IDLE;
-                    end else if (ch >= 8'h20 && ch < 8'h7F) begin
-                        if (line_len < 7'd127) begin
-                            line[line_len] <= ch;
-                            line_len <= line_len + 1'b1;
-                            put_en <= 1'b1;
-                            put_char <= ch;
-                            state <= C_WAIT_VIDEO;
-                            ret_state <= C_IDLE;
-                        end else state <= C_IDLE;
-                    end else state <= C_IDLE;
+                state_q[C_WAIT_VIDEO]: begin
+                    if (!video_busy) begin
+                        // Every ret_state writer selects one of these four
+                        // constants. Explicit targets permit FSM extraction;
+                        // a general state-register data input prevented it.
+                        case (ret_state)
+                            C_PROMPT: state_q <= (117'd1 << C_PROMPT);
+                            C_REPLY: state_q <= (117'd1 << C_REPLY);
+                            C_CMP_MSG_RD: state_q <= (117'd1 << C_CMP_MSG_RD);
+                            default: state_q <= (117'd1 << C_IDLE);
+                        endcase
+                    end
                 end
-                C_WAIT_VIDEO: begin
-                    if (!video_busy) state <= ret_state;
-                end
-                C_EXEC: begin
-                    command_failed_o <= 1'b0;
-                    reply_sel <= 4'd3; // ?
-                    cmd_is_load <= 0; cmd_is_save <= 0; cmd_is_remove <= 0;
-                    // NEW: EDIT waiting — next typed line replaces that source line
-                    if (p_empty_q) begin
-                        // run-55 -0.466 leader: raw line_len==0 at the ladder
-                        // root put line_len into every arm's CE. Registered
-                        // predicate, same 2-cycle-stable contract as p_*_q.
-                        msg_idx <= 0;
-                        state <= C_PROMPT;
-                    end else if (p_status_q) begin
-                        st_mode <= 1'b1; st_ph <= 4'd0; st_i <= 6'd0;
-                        state <= C_STATUS;
-                    end else if (p_help_q) begin
-                        reply_sel <= 4'd0; reply_idx <= 0; state <= C_REPLY;
-                    end else if (p_dir_star_q) begin
-                        stor_dir_all <= 1'b1;
-                        state <= C_DIR0;
-                    end else if (p_dir_q) begin
-                        stor_dir_all <= 1'b0;
-                        state <= C_DIR0;
-                    end else if (p_cls_q) begin
-                        // NEW: CLS like BASIC
-                        state <= C_CLS;
-                    end else if (p_list_q) begin
-                        // NEW: LIST / LIST - / LIST n-m — parse then numbered dump
-                        list_page <= 1'b1;
-                        list_lo <= 16'd10;
-                        list_hi <= 16'hFFFF;
-                        list_on_page <= 0;
-                        // Parse rest after "LIST"
-                        if (p_len4_q) begin
-                            // run-56 leader (line_len -> state under
-                            // placement stress); registered like its
-                            // p_*_q siblings, same 2-cycle contract
-                            state <= C_LIST_INIT;
-                        end else begin
-                            // skip spaces
-                            name_i <= 5;
-                            state <= C_LIST_PARSE;
-                        end
-                    end else if (p_mem_q) begin
-                        reply_sel <= 4'd1; reply_idx <= 0; state <= C_REPLY;
-                    end else if (p_new_q) begin
-                        src_len <= 0; src_name_len <= 0; src_trunc <= 1'b0;
-                        src_is_rectdemo <= 0; src_is_html <= 0; src_is_js <= 0;
-                        halt_pulse <= 1'b1; // drop game_mode / stop VM (cyan stub leftover)
-                        reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
-                    end else if (p_run_q) begin
-                        // HTML RUN, standalone-first (CONSTITUTION rule 10):
-                        // try NAME.JSH from the card (the builder emits it
-                        // beside every .HTML; on-device SAVE deletes it, so a
-                        // stale image can never run silently). FAT miss falls
-                        // back to the host tether at C_JSB_OPENW.
-                        // RECTDEMO → rect engine; empty NEW → rect; missing JSB → ?NB
-                        if (src_is_html) begin
-                            jsb_want_jsh <= 1'b1;
-                            jsb_tether_mode <= 1'b0;
-                            name_i <= 0;
-                            dir_n <= 0;
-                            jsb_waddr <= 0;
-                            jsb_bi <= 0;
-                            jsb_word <= 0;
-                            ld_err <= 0;
-                            jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
-                            aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
-                            sram_last <= 0; pal_idx <= 0; pal_ph <= 0;
-                            state <= C_JSB_PREP;
-                        end else if (src_is_rectdemo) begin
-                            run_pulse <= 1'b1;
-                            reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
-                        end else if (src_len == 0 && !src_is_js) begin
-                            run_pulse <= 1'b1;
-                            reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
-                        end else if (src_is_js || src_name_len != 0) begin
-                            // NEW: any LOADed program (INVADERS / PACMAN.JS / …) → NAME.JSB
-                            jsb_want_jsh <= 1'b0;
-                            jsb_tether_mode <= 1'b0;
-                            name_i <= 0;
-                            dir_n <= 0;
-                            jsb_waddr <= 0;
-                            jsb_bi <= 0;
-                            jsb_word <= 0;
-                            state <= C_JSB_PREP;
-                        end else begin
-                            reply_sel <= 4'd7; reply_idx <= 0; state <= C_REPLY; // ?NB
-                        end
-                    end else if (p_load_q) begin
-                        // Board 2026-08-26: LOAD must stop/reset the VM the way
-                        // NEW does - stale VM state from the previous title
-                        // (heap/objects/sprites) made the NEXT title misbehave
-                        // (MRDO "froze" until NEW+RUN first).
-                        halt_pulse <= 1'b1;
-                        cmd_is_load <= 1'b1; name_start <= 5; state <= C_PF;
-                    end else if (p_save_q) begin
-                        cmd_is_save <= 1'b1; name_start <= 5; state <= C_PF;
-                    end else if (p_remove_q) begin
-                        cmd_is_remove <= 1'b1; name_start <= 7; state <= C_PF;
-                    end else if (p_compile_q) begin
-                        if (src_trunc) begin
-                            // Item H: the buffer is a PREFIX of the file and
-                            // COMPILE re-reads the card, so any edit made here
-                            // would be silently thrown away. Refuse loudly.
-                            reply_sel <= 4'd15; reply_idx <= 0; // ?TR
-                            state <= C_REPLY;
-                        end else if (!src_is_html || src_len == 18'd0) begin
-                            reply_sel <= 4'd7; reply_idx <= 0; state <= C_REPLY;
-                        end else begin
-                            cmp_arm_r <= 1'b1;
-                            jsb_name_src <= 2'd1; cmp_progsel <= 3'd0; // ARTSCAN
-                            cmp_save_mode <= 1'b0;
-                            // HOOK 1: stage NAME.ART first (header -> arena,
-                            // payload -> CART), THEN chain-load ARTSCAN. A
-                            // title with no sidecar just writes the flag 0.
-                            jsb_want_art <= 1'b1;
-                            jsb_want_jsh <= 1'b0; jsb_tether_mode <= 1'b0;
-                            name_i <= 0; dir_n <= 0; jsb_waddr <= 0;
-                            jsb_bi <= 0; jsb_word <= 0; ld_err <= 0;
-                            jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
-                            aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
-                            sram_last <= 0; cmp_wd <= '0; cmp_ph <= 5'd0; cmp_nw <= 1'b0; cmp_nm_len <= 8'd0;
-                            cmp_pend <= 1'b0;
-                            reply_sel <= 4'd12; reply_idx <= 0;  // COMPILING
-                            state <= C_JSB_PREP;
-                        end
-                    end else if (p_edit_bare_q) begin
-                        // NEW 1: bare EDIT — chain-load EDITOR.JSH exactly the
-                        // way COMPILE launches ARTSCAN, so SOURCE keeps the
-                        // user's title instead of the editor's own text.
-                        // cmp_arm_r goes HIGH here and stays high through
-                        // C_CMP_WAIT, so game_mode never rises: the text
-                        // screen stays up and the editor cannot appear to
-                        // hang behind the framebuffer.
-                        if (src_len == 18'd0 && src_name_len==0) begin
-                            reply_sel <= 4'd7; reply_idx <= 0; // ?NB
-                            state <= C_REPLY;
-                        end else begin
-                            // NO cmp_arm: the editor is a GAME (visible,
-                            // interactive). cdone still reaches C_CMP_WAIT.
-                            cmp_arm_r <= 1'b0;
-                            cmp_interactive <= 1'b1;
-                            jsb_name_src <= 2'd1; cmp_progsel <= 3'd5; // EDITOR
-                            cmp_save_mode <= 1'b0;
-                            jsb_want_jsh <= 1'b1; jsb_tether_mode <= 1'b0;
-                            name_i <= 0; dir_n <= 0; jsb_waddr <= 0;
-                            jsb_bi <= 0; jsb_word <= 0; ld_err <= 0;
-                            jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
-                            aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
-                            sram_last <= 0; cmp_wd <= '0; cmp_ph <= 5'd0;
-                            cmp_nw <= 1'b0; cmp_nm_len <= 8'd0;
-                            cmp_pend <= 1'b0;
-                            state <= C_JSB_PREP;
-                        end
-                    end else if (p_read_bare_q) begin
-                        // Same launch as EDIT. Slot 6 is READ.JSH. SOURCE
-                        // stays the file LOAD parked (an .MD document).
-                        if (src_len == 18'd0 && src_name_len==0) begin
-                            reply_sel <= 4'd7; reply_idx <= 0; // ?NB
-                            state <= C_REPLY;
-                        end else begin
-                            cmp_arm_r <= 1'b0;
-                            cmp_interactive <= 1'b1;
-                            jsb_name_src <= 2'd1; cmp_progsel <= 3'd6; // READ
-                            cmp_save_mode <= 1'b0;
-                            jsb_want_jsh <= 1'b1; jsb_tether_mode <= 1'b0;
-                            name_i <= 0; dir_n <= 0; jsb_waddr <= 0;
-                            jsb_bi <= 0; jsb_word <= 0; ld_err <= 0;
-                            jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
-                            aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
-                            sram_last <= 0; cmp_wd <= '0; cmp_ph <= 5'd0;
-                            cmp_nw <= 1'b0; cmp_nm_len <= 8'd0;
-                            cmp_pend <= 1'b0;
-                            state <= C_JSB_PREP;
-                        end
+                state_q[C_REPLY]: begin
+                    service_load_pending<=0;
+                    if(!service_error(reply_sel))state_q <= (117'd1 << C_PROMPT);
+                    else if(host_owned)begin
+                        // Bulk CRC/range failures are staged status for the
+                        // following COMMIT; no monitor display blocks recovery.
+                        command_failed_o<=0;state_q <= (117'd1 << C_PROMPT);
                     end else begin
-                        reply_idx <= 0; state <= C_REPLY;
-                    end
-                end
-                C_REPLY: begin
-                    if (ridx_q == reply_idx && rsel_q == reply_sel && reply_ch_q == "?")
-                        command_failed_o <= 1'b1;
-                    if (ridx_q != reply_idx || rsel_q != reply_sel) begin
-                        // reply ROM pipe settling
-                    end else if (reply_ch_q == 8'h00) begin
-                        if (reply_sel == 4'd14 && cmp_msglen_i != 7'd0) begin
-                            // Item G: "?CE" is printed; now print the
-                            // compiler's own diagnostic on the same line.
-                            cmp_i <= 21'd0;
-                            cmp_pend <= 1'b0;
-                            state <= C_CMP_MSG_RD;
-                        end else if (ld_ann && reply_sel == 4'd5) begin
-                            // NEW: same line as PYTHON — LOADED NAME (N LINES)
-                            name_i <= 0;
-                            state <= C_LD_ANN_SP;
-                        end else begin
-                            print_nl <= 1'b1;
-                            msg_idx <= 0;
-                            state <= C_WAIT_VIDEO;
-                            ret_state <= C_PROMPT;
+                        command_failed_o<=1;
+                        if(failure_dismiss)begin command_failed_o<=0;state_q <= (117'd1 << C_PROMPT);end
+                        else if(ridx_q!=reply_idx || rsel_q!=reply_sel)begin end
+                        else if(!monitor_visible)begin end
+                        else if(reply_ch_q==0)begin
+                            if(reply_sel==14 && cmp_msglen_i!=0)begin
+                                cmp_i<=0;cmp_pend<=0;state_q <= (117'd1 << C_CMP_MSG_RD);
+                            end else begin print_nl<=1;state_q <= (117'd1 << C_WAIT_VIDEO);ret_state<=C_PROMPT;end
+                        end else if(!video_busy)begin
+                            put_en<=1;put_char<=reply_ch_q;reply_idx<=reply_idx+1'b1;
+                            state_q <= (117'd1 << C_WAIT_VIDEO);ret_state<=C_REPLY;
                         end
-                    end else if (!video_busy) begin
-                        put_en <= 1'b1;
-                        put_char <= reply_ch_q;
-                        reply_idx <= reply_idx + 1'b1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_REPLY;
                     end
                 end
 
-                // ---- DIR (BASIC ST_DIR*) --------------------------------
-                C_DIR0: if (!stor_busy) begin
+                state_q[C_DIR0]: if (!stor_busy) begin
                     stor_dir <= 1'b1;
-                    list_on_page <= 0;
-                    dir_more <= 1'b0;
+                    
                     dir_hs_wd <= 22'd0;
                     dir_hs_retry <= 2'd0;
-                    state <= C_DIR0W;
+                    state_q <= (117'd1 << C_DIR0W);
                 end
-                C_DIR0W: if (stor_done) begin
+                state_q[C_DIR0W]: if (stor_done) begin
                     dir_hs_wd <= 22'd0;
                     if (stor_err) begin
                         // transient SPI/mount error: retry (S_ERR poisoned the
@@ -1272,9 +981,9 @@ module jmr_console_engine (
                         if (dir_hs_retry != 2'd3) begin
                             dir_hs_retry <= dir_hs_retry + 2'd1;
                             stor_dir <= 1'b1;
-                        end else begin reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY; end
+                        end else begin reply_sel <= 4'd4; reply_idx <= 0; state_q <= (117'd1 << C_REPLY); end
                     end
-                    else state <= C_DIRN;
+                    else state_q <= (117'd1 << C_DIRN);
                 end else if (!stor_busy && dir_hs_hit && dir_hs_retry != 2'd3) begin
                     dir_hs_retry <= dir_hs_retry + 2'd1;
                     dir_hs_wd <= 22'd0;
@@ -1284,30 +993,20 @@ module jmr_console_engine (
                     // A late stor_done pulse with nobody waiting is ignored;
                     // storage completes or watchdogs out on its own.
                     kbd_pop <= 1'b1;
-                    msg_idx <= 0; state <= C_PROMPT;
+                     state_q <= (117'd1 << C_PROMPT);
                 end
-                C_DIRN: if (!stor_busy) begin
+                state_q[C_DIRN]: if (!stor_busy) begin
                     stor_dir_next <= 1'b1;
                     dir_hs_wd <= 22'd0;
-                    state <= C_DIRNW;
+                    state_q <= (117'd1 << C_DIRNW);
                 end
-                C_DIRNW: if (stor_done) begin
+                state_q[C_DIRNW]: if (stor_done) begin
                     dir_hs_wd <= 22'd0;
-                    if (stor_err) begin reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY; end
-                    else if (stor_eof) begin msg_idx <= 0; state <= C_PROMPT; end
+                    if (stor_err) begin reply_sel <= 4'd4; reply_idx <= 0; state_q <= (117'd1 << C_REPLY); end
+                    else if (stor_eof) begin host_finish(0,catalog_count);state_q <= (117'd1 << C_PROMPT);end
                     else begin
-                        dir_n <= stor_line_len; dir_idx <= 0;
-                        // 2026-08-27: page decision moved HERE from C_DIR_NL —
-                        // pause only when another entry is KNOWN to exist.
-                        // C_DIR_NL paged after the 14th row before asking
-                        // storage, so a 14-entry card printed a phantom
-                        // "-- MORE --" with nothing behind it.
-                        if (list_on_page >= 4'd14) begin
-                            list_on_page <= 0;
-                            dir_more <= 1'b1;
-                            reply_sel <= 4'd8; reply_idx <= 0;
-                            state <= C_LIST_MORE;
-                        end else state <= C_DIR_RD;
+                        dir_n <= stor_line_len; dir_idx <= 0;catalog_name<=0;catalog_chunk<=0;
+                        state_q <= (117'd1 << C_DIR_RD);
                     end
                 end else if (!stor_busy && dir_hs_hit && dir_hs_retry != 2'd3) begin
                     dir_hs_retry <= dir_hs_retry + 2'd1;
@@ -1315,22 +1014,25 @@ module jmr_console_engine (
                     stor_dir_next <= 1'b1; // lost handshake: fetch next name
                 end else if (!kbd_empty && kbd_data == 8'h1B) begin
                     kbd_pop <= 1'b1;
-                    msg_idx <= 0; state <= C_PROMPT;
+                     state_q <= (117'd1 << C_PROMPT);
                 end
-                C_DIR_RD: begin
-                    if (dir_idx >= dir_n) state <= C_DIR_NL;
-                    else begin
+                state_q[C_DIR_RD]: begin
+                    if(dir_n==0 || dir_n>12)begin host_finish(5,0);state_q <= (117'd1 << C_PROMPT);end
+                    else if(dir_idx>=12)state_q <= (117'd1 << C_DIR_NL);
+                    else if(dir_idx>=dir_n)begin
+                        catalog_name<={8'd0,catalog_name[95:8]};dir_idx<=dir_idx+1'b1;
+                    end else begin
                         mem_en <= 1'b1; mem_we <= 1'b0;
                         mem_addr <= STORAGE_BUFFER + {8'h0, dir_idx};
-                        state <= C_DIR_CH;
+                        state_q <= (117'd1 << C_DIR_CH);
                     end
                 end
-                C_DIR_CH: if (mem_gnt) begin
-                    rd_ch <= mem_rdata;
+                state_q[C_DIR_CH]: if (mem_gnt) begin
+                    rd_ch <= mem_rdata;catalog_name<={mem_rdata,catalog_name[95:8]};
                     dir_hs_wd <= 22'd0;
-                    state <= C_DIR_PUT;
+                    state_q <= (117'd1 << C_DIR_PUT);
                 end else if (dir_hs_hit) begin
-                    // 2026-08-27: the mem request is a 1-cycle pulse into a
+                    // The mem request is a 1-cycle pulse into a
                     // shared latch — if the latch was busy that cycle the
                     // pulse is DROPPED and nothing re-asks (board R49:
                     // console parked here, cons=0x0D, 21.5s ?IO). Re-issue
@@ -1339,59 +1041,19 @@ module jmr_console_engine (
                     mem_en <= 1'b1; mem_we <= 1'b0;
                     mem_addr <= STORAGE_BUFFER + {8'h0, dir_idx};
                 end
-                C_DIR_PUT: if (!video_busy) begin
-                    put_en <= 1'b1;
-                    put_char <= rd_ch;
-                    dir_idx <= dir_idx + 1'b1;
-                    state <= C_WAIT_VIDEO;
-                    ret_state <= C_DIR_RD;
+                state_q[C_DIR_PUT]: begin
+                    dir_idx<=dir_idx+1'b1;state_q <= (117'd1 << C_DIR_RD);
                 end
-                C_DIR_NL: if (!video_busy) begin
-                    // DIR pages like LIST (head must not scroll off), but the
-                    // page decision lives in C_DIRNW where eof is known.
-                    print_nl <= 1'b1;
-                    state <= C_WAIT_VIDEO;
-                    list_on_page <= list_on_page + 4'd1;
-                    ret_state <= C_DIRN;
+                state_q[C_DIR_NL]:if(!host_q_valid && !host_finish_pending && !host_status_tail && !host_req_valid)begin
+                    host_reply(7,host_tx,8'h10+{6'd0,catalog_chunk},dir_n,catalog_name[31:0]);
+                    catalog_name<=catalog_name>>32;catalog_chunk<=catalog_chunk+1'b1;
+                    if(catalog_chunk==2)begin catalog_count<=catalog_count+1'b1;state_q <= (117'd1 << C_DIRN);end
                 end
 
-                // ---- parse filename after verb --------------------------
-                C_PF: begin
-                    name_i <= 0;
-                    if (name_start >= line_len) begin
-                        reply_sel <= 4'd6; reply_idx <= 0; state <= C_REPLY;
-                    end else begin
-                        // skip leading quote
-                        if (line[name_start] == "\"" || line[name_start] == "'")
-                            name_start <= name_start + 1'b1;
-                        // compute length into name_len_r next cycle via C_PF2
-                        state <= C_PF2;
-                    end
-                end
-                C_PF2: begin
-                    // trailing quote strip + length (line_tail_q = the
-                    // hoisted line[line_len-1] — see the predicate block)
-                    if (line_len > name_start &&
-                        (line_tail_q == "\"" || line_tail_q == "'"))
-                        name_len_r <= line_len - name_start - 1'b1;
-                    else
-                        name_len_r <= line_len - name_start;
-                    if ((line_len > name_start &&
-                         (line_tail_q == "\"" || line_tail_q == "'") &&
-                         (line_len - name_start - 1'b1) == 0) ||
-                        (!(line_len > name_start &&
-                           (line_tail_q == "\"" || line_tail_q == "'")) &&
-                         (line_len - name_start) == 0)) begin
-                        reply_sel <= 4'd6; reply_idx <= 0; state <= C_REPLY;
-                    end else begin
-                        name_i <= 0;
-                        state <= C_NWR;
-                    end
-                end
-                C_NWR: begin
+                state_q[C_NWR]: begin
                     if (name_i >= name_len_r) begin
                         stor_name_len <= {1'b0, name_len_r};
-                        // Remember upcased name for RUN gate / LIST header
+                        // Retain the normalized SOURCE filename and suffix.
                         if (cmd_is_load) begin
                             ui_unnamed_o<=0;
                             src_name_len <= (name_len_r > 5'd16) ? 5'd16 : name_len_r[4:0];
@@ -1428,15 +1090,14 @@ module jmr_console_engine (
                                   name_tail[2]=="T" && name_tail[1]=="M" &&
                                   name_tail[0]=="L");
                         end
-                        if (cmd_is_load) state <= C_LD_OPEN;
-                        else if (cmd_is_save) state <= C_SV_OPEN;
-                        else state <= C_RM;
+                        if (cmd_is_load) state_q <= (117'd1 << C_LD_OPEN);
+                        else state_q <= (117'd1 << C_SV_OPEN);
                     end else begin
-                        name_char_q<=line[name_start+name_i];
-                        state<=C_NPUT;
+                        name_char_q<=service_name_q[7:0];
+                        state_q <= (117'd1 << C_NPUT);
                     end
                 end
-                C_NPUT:begin
+                state_q[C_NPUT]:begin
                         mem_en <= 1'b1; mem_we <= 1'b1;
                         mem_addr <= NAME_BUF + {9'h0, name_i};
                         // FAT 8.3 is uppercase — match BASIC storage_engine
@@ -1448,257 +1109,130 @@ module jmr_console_engine (
                         name_tail[2] <= name_tail[1];
                         name_tail[3] <= name_tail[2];
                         name_tail[4] <= name_tail[3];
-                        state <= C_NWR_W;
+                        state_q <= (117'd1 << C_NWR_W);
                 end
-                C_NWR_W: if (mem_gnt) begin
+                state_q[C_NWR_W]: if (mem_gnt) begin
+                    service_name_q<=service_name_q>>8;
                     name_i <= name_i + 1'b1;
-                    state <= C_NWR;
+                    state_q <= (117'd1 << C_NWR);
                 end
 
                 // ---- LOAD -----------------------------------------------
-                C_LD_OPEN: if (!stor_busy) begin
-                    // NEW: FPGA-SIM RAM LOAD — SOURCE was poked by the host, so
-                    // announce straight away (same glass rows as a FAT LOAD:
-                    // typed line echoed above, LOADED at the cursor).
-                    if (sim_src_bypass) begin
-                        ld_err <= 0;
-                        ld_need_eol <= 0;
-                        ld_nlines <= sim_src_lines;
-                        ld_ann <= 1'b1;
-                        reply_sel <= 4'd5; reply_idx <= 0; state <= C_REPLY;
-                    end else begin
-                        stor_mode <= "I";
-                        stor_open <= 1'b1;
-                        src_len <= 0;
-                        ld_err <= 0;
-                        ld_nlines <= 0;
-                        ld_need_eol <= 0;
-                        ld_ann <= 0;
-                        state <= C_LD_OPENW;
-                    end
+                state_q[C_LD_OPEN]: if (!stor_busy) begin
+                    stor_mode <= "I";
+                    stor_open <= 1'b1;
+                    src_len <= 0;
+                    ld_err <= 0;
+                    state_q <= (117'd1 << C_LD_OPENW);
                 end
-                C_LD_OPENW: if (stor_done) begin
-                    if (stor_err) begin reply_sel <= 4'd6; reply_idx <= 0; state <= C_REPLY; end
+                state_q[C_LD_OPENW]: if (stor_done) begin
+                    if (stor_err) begin reply_sel <= 4'd6; reply_idx <= 0; state_q <= (117'd1 << C_REPLY); end
                     // HTML: copy bytes into SOURCE (prefix) — long data: lines must not ?LS
-                    else if (src_is_html) state <= C_LD_GB;
-                    else state <= C_LD_RL;
+                    else if (src_is_html) state_q <= (117'd1 << C_LD_GB);
+                    else state_q <= (117'd1 << C_LD_RL);
                 end
-                C_LD_RL: if (!stor_busy) begin
+                state_q[C_LD_RL]: if (!stor_busy) begin
                     stor_readline <= 1'b1;
-                    state <= C_LD_RLW;
+                    state_q <= (117'd1 << C_LD_RLW);
                 end
-                C_LD_RLW: if (stor_done) begin
+                state_q[C_LD_RLW]: if (stor_done) begin
                     if (stor_err) begin
-                        ld_err <= 1'b1; reply_sel <= 4'd4; reply_idx <= 0; state <= C_LD_CLOSE;
-                    end else if (stor_eof) state <= C_LD_CLOSE;
+                        ld_err <= 1'b1; reply_sel <= 4'd4; reply_idx <= 0; state_q <= (117'd1 << C_LD_CLOSE);
+                    end else if (stor_eof) state_q <= (117'd1 << C_LD_CLOSE);
                     else begin
-                        // NEW: FAT lines >128 → ?LS (unlistable / overflow)
+                        // FAT lines >128 → ?LS (unlistable / overflow)
                         if (stor_line_len > 8'd128) begin
-                            ld_err <= 1'b1; reply_sel <= 4'd10; reply_idx <= 0; state <= C_LD_CLOSE;
+                            ld_err <= 1'b1; reply_sel <= 4'd10; reply_idx <= 0; state_q <= (117'd1 << C_LD_CLOSE);
                         end else begin
-                            dir_n <= stor_line_len; dir_idx <= 0; state <= C_LD_RD;
+                            dir_n <= stor_line_len; dir_idx <= 0; state_q <= (117'd1 << C_LD_RD);
                         end
                     end
                 end
-                C_LD_RD: begin
+                state_q[C_LD_RD]: begin
                     if (dir_idx >= dir_n) begin
                         // append NL
                         if (src_len < SOURCE_MAX) begin
                             src_req <= 1'b1; src_we <= 1'b1;
                             src_addr <= src_len[16:0];
                             src_wdata <= 8'h0A;
-                            state <= C_LD_NLW;
+                            state_q <= (117'd1 << C_LD_NLW);
                         end else begin
-                            // SOURCE full — keep prefix for LIST, RUN uses .JSB
-                            state <= C_LD_CLOSE;
+                            // SOURCE full: preserve the edit prefix; execution uses the full image.
+                            state_q <= (117'd1 << C_LD_CLOSE);
                         end
                     end else if (src_len < SOURCE_MAX) begin
                         mem_en <= 1'b1; mem_we <= 1'b0;
                         mem_addr <= STORAGE_BUFFER + {8'h0, dir_idx};
-                        state <= C_LD_RDW;
+                        state_q <= (117'd1 << C_LD_RDW);
                     end else begin
-                        state <= C_LD_CLOSE;
+                        state_q <= (117'd1 << C_LD_CLOSE);
                     end
                 end
-                C_LD_RDW: if (mem_gnt) begin
+                state_q[C_LD_RDW]: if (mem_gnt) begin
                     rd_ch <= mem_rdata;
                     src_req <= 1'b1; src_we <= 1'b1;
                     src_addr <= src_len[16:0];
                     src_wdata <= mem_rdata;
-                    state <= C_LD_WRW;
+                    state_q <= (117'd1 << C_LD_WRW);
                 end
-                C_LD_WRW: if (src_gnt) begin
+                state_q[C_LD_WRW]: if (src_gnt) begin
                     src_len <= src_len + 1'b1;
                     dir_idx <= dir_idx + 1'b1;
-                    state <= C_LD_RD;
+                    state_q <= (117'd1 << C_LD_RD);
                 end
-                C_LD_NLW: if (src_gnt) begin
+                state_q[C_LD_NLW]: if (src_gnt) begin
                     src_len <= src_len + 1'b1;
-                    ld_nlines <= ld_nlines + 16'd1;
-                    state <= C_LD_RL;
+                    
+                    state_q <= (117'd1 << C_LD_RL);
                 end
-                // HTML: stream file bytes into SOURCE (128K), then sector NL scan
-                C_LD_GB: if (!stor_busy) begin
+                // HTML: retain a 64 KiB SOURCE prefix without scanning unused text.
+                state_q[C_LD_GB]: if (!stor_busy) begin
                     if (src_len >= SOURCE_MAX) begin
                         // Item H: the file is LARGER than the SOURCE window,
                         // so what sits in the buffer is a prefix. COMPILE
                         // re-reads the card, so editing this buffer and
                         // compiling would silently discard the edit.
                         src_trunc <= 1'b1;
-                        stor_nl_scan <= 1'b1;
-                        state <= C_LD_NLSCANW;
+                        state_q <= (117'd1 << C_LD_CLOSE);
                     end else begin
                         stor_get_byte <= 1'b1;
-                        state <= C_LD_GBW;
+                        state_q <= (117'd1 << C_LD_GBW);
                     end
                 end
-                C_LD_GBW: if (stor_done) begin
+                state_q[C_LD_GBW]: if (stor_done) begin
                     if (stor_err) begin
-                        ld_err <= 1'b1; reply_sel <= 4'd4; reply_idx <= 0; state <= C_LD_CLOSE;
-                    end else if (stor_eof) state <= C_LD_CLOSE;
+                        ld_err <= 1'b1; reply_sel <= 4'd4; reply_idx <= 0; state_q <= (117'd1 << C_LD_CLOSE);
+                    end else if (stor_eof) state_q <= (117'd1 << C_LD_CLOSE);
                     else begin
                         src_req <= 1'b1; src_we <= 1'b1;
                         src_addr <= src_len[16:0];
                         src_wdata <= stor_get_data;
-                        if (stor_get_data == 8'h0A)
-                            ld_nlines <= ld_nlines + 16'd1;
-                        ld_need_eol <= (stor_get_data != 8'h0A && stor_get_data != 8'h0D);
-                        state <= C_LD_GB_WR;
+
+                        state_q <= (117'd1 << C_LD_GB_WR);
                     end
                 end
-                C_LD_GB_WR: if (src_gnt) begin
+                state_q[C_LD_GB_WR]: if (src_gnt) begin
                     src_len <= src_len + 1'b1;
-                    state <= C_LD_GB;
+                    state_q <= (117'd1 << C_LD_GB);
                 end
-                C_LD_NLSCANW: if (stor_done) begin
-                    if (!stor_err)
-                        ld_nlines <= ld_nlines + stor_nl_count;
-                    state <= C_LD_CLOSE;
-                end
-                C_LD_CLOSE: if (!stor_busy) begin stor_close <= 1'b1; state <= C_LD_CLOSEW; end
-                C_LD_CLOSEW: if (stor_done) begin
+                state_q[C_LD_CLOSE]: if (!stor_busy) begin stor_close <= 1'b1; state_q <= (117'd1 << C_LD_CLOSEW); end
+                state_q[C_LD_CLOSEW]: if (stor_done) begin
                     if (ld_err)
-                        state <= C_REPLY;
+                        state_q <= (117'd1 << C_REPLY);
                     else begin
-                        if (ld_need_eol)
-                            ld_nlines <= ld_nlines + 16'd1;
-                        ld_ann <= 1'b1;
-                        reply_sel <= 4'd5; reply_idx <= 0; state <= C_REPLY;
+
+                        if(service_load_pending)launch_loaded_source();
+                        else begin reply_sel<=5;reply_idx<=0;state_q <= (117'd1 << C_REPLY);end
                     end
                 end
                 // Item G: stream the compiler's ASCII diagnostic out of the
                 // arena (CSTG_HDR_MSG, cmp_msglen_i bytes) after "?CE".
                 // A space is printed first so the line reads "?CE L12 ...".
-                // ---- ARTX pre-load (HOOK 1) --------------------------
-                // NAME.ART -> header into the arena, payload into CART.
-                // The payload is staged in SRAM rather than copied
-                // file-to-file at mint time because storage_engine is
-                // SINGLE-CHANNEL ("channel 1 only"): opening the sidecar
-                // while NAME.JSH is open for write would destroy the
-                // output file's state. CART holds 2,961,408 B; the
-                // largest payload is 2,801,304 B.
-                C_ART_OPEN: if (!stor_busy) begin
-                    stor_mode <= "I";
-                    stor_open <= 1'b1;
-                    art_i <= '0; art_hi <= 1'b0; art_word <= '0;
-                    art_found <= 1'b0;
-                    state <= C_ART_OPENW;
-                end
-                C_ART_OPENW: if (stor_done) begin
-                    // No sidecar is NOT an error: the title has no art.
-                    if (stor_err) begin
-                        art_found <= 1'b0;
-                        state <= C_ART_FLAG;
-                    end else begin
-                        art_found <= 1'b1;
-                        state <= C_ART_GB;
-                    end
-                end
-                C_ART_GB: if (!stor_busy) begin
-                    stor_get_byte <= 1'b1;
-                    state <= C_ART_GBW;
-                end
-                C_ART_GBW: if (stor_done) begin
-                    if (stor_err || stor_eof) state <= C_ART_CLOSE;
-                    else if(art_i>=23'(CSTG_ART_HDRB)+23'(2*jmr_js_vm_pkg::CART_WORDS))begin
-                        art_found<=0;ld_err<=1;reply_sel<=4'd9;reply_idx<=0;state<=C_ART_CLOSE;
-                    end
-                    else begin
-                        rd_ch <= stor_get_data;
-                        // Snoop n_sprites (u16 @6) and payload_len (u32 @
-                        // 8 + n*8) as the bytes stream past, so the length
-                        // is self-contained: the compiler never has to
-                        // publish it and the two sides cannot disagree.
-                        if (art_i == 22'd6) art_nspr[7:0]  <= stor_get_data;
-                        if (art_i == 22'd7) art_nspr[15:8] <= stor_get_data;
-                        if (art_i == art_plen_off)
-                            cmp_art_len[7:0]   <= stor_get_data;
-                        if (art_i == art_plen_off + 22'd1)
-                            cmp_art_len[15:8]  <= stor_get_data;
-                        if (art_i == art_plen_off + 22'd2)
-                            cmp_art_len[22:16] <= stor_get_data[6:0];
-                        if (art_i < 22'(CSTG_ART_HDRB)) begin
-                            // header -> arena, 1 B/word like every other
-                            // arena region
-                            src_req <= 1'b1; src_we <= 1'b1;
-                            src_bank <= 1'b1;
-                            cmp_rd_addr <= cstg_word(CSTG_ART_OFF
-                                                     + 21'(art_i));
-                            src_wdata <= stor_get_data;
-                            state <= C_ART_WR;
-                        end else begin
-                            // payload -> CART, packed 2 B/word
-                            if (!art_hi) begin
-                                art_word[7:0] <= stor_get_data;
-                                art_hi <= 1'b1;
-                                art_i  <= art_i + 22'd1;
-                                state  <= C_ART_GB;   // no write yet
-                            end else begin
-                                src_req <= 1'b1; src_we <= 1'b1;
-                                src_bank <= 1'b1;
-                                cmp_rd_addr <= CART_SRAM_BASE
-                                    + 22'((art_i - 22'(CSTG_ART_HDRB)) >> 1);
-                                src_wdata <= stor_get_data; // high half
-                                src_wlo <= art_word[7:0];   // low half (was dropped)
-                                src_w16 <= 1'b1;
-                                art_hi <= 1'b0;
-                                state <= C_ART_WR;
-                            end
-                        end
-                    end
-                end
-                C_ART_WR: if (src_gnt) begin
-                    src_w16 <= 1'b0;
-                    art_i <= art_i + 22'd1;
-                    state <= C_ART_GB;
-                end
-                C_ART_CLOSE: if (!stor_busy) begin
-                    stor_close <= 1'b1;
-                    state <= C_ART_CLOSEW;
-                end
-                C_ART_CLOSEW: if (stor_done) state <= ld_err?C_REPLY:C_ART_FLAG;
-                C_ART_FLAG: begin
-                    // Publish "this title has art" for the compiler, then
-                    // chain-load ARTSCAN exactly as before.
-                    if (!cmp_pend) begin
-                        src_req <= 1'b1; src_we <= 1'b1;
-                        src_bank <= 1'b1;
-                        cmp_rd_addr <= cstg_word(CSTG_HDR_ART);
-                        src_wdata <= art_found ? 8'd1 : 8'd0;
-                        cmp_pend <= 1'b1;
-                    end else if (src_gnt) begin
-                        cmp_pend <= 1'b0;
-                        jsb_want_art <= 1'b0;
-                        jsb_want_jsh <= 1'b1;
-                        name_i <= 0; dir_n <= 0;
-                        state <= C_JSB_PREP;   // -> ARTSCAN chain-load
-                    end
-                end
-                C_CMP_MSG_RD: begin
+                state_q[C_CMP_MSG_RD]: begin
                     if (cmp_i >= 21'(cmp_msglen_i)) begin
                         print_nl <= 1'b1;
-                        msg_idx  <= 0;
-                        state <= C_WAIT_VIDEO;
+                        
+                        state_q <= (117'd1 << C_WAIT_VIDEO);
                         ret_state <= C_PROMPT;
                     end else if (!cmp_pend) begin
                         src_req <= 1'b1; src_we <= 1'b0;
@@ -1709,92 +1243,30 @@ module jmr_console_engine (
                         cmp_pend <= 1'b0;
                         cmp_ch   <= src_rdata;
                         cmp_i    <= cmp_i + 21'd1;
-                        state    <= C_CMP_MSG_PUT;
+                        state_q <= (117'd1 << C_CMP_MSG_PUT);
                     end
                 end
-                C_CMP_MSG_PUT: if (!video_busy) begin
+                state_q[C_CMP_MSG_PUT]: if (!video_busy) begin
                     // NUL inside the text prints as a space rather than
                     // ending the line: the length is authoritative.
                     put_en   <= 1'b1;
                     put_char <= (cmp_ch == 8'h00) ? 8'h20 : cmp_ch;
-                    state <= C_WAIT_VIDEO;
+                    state_q <= (117'd1 << C_WAIT_VIDEO);
                     ret_state <= C_CMP_MSG_RD;
                 end
-                C_LD_ANN_SP: if (!video_busy) begin
-                    put_en <= 1'b1;
-                    put_char <= " ";
-                    name_i <= 0;
-                    dir_idx <= 0;
-                    state <= C_WAIT_VIDEO;
-                    ret_state <= C_LD_ANN_NAME;
-                end
-                C_LD_ANN_NAME: begin
-                    if (name_i >= {2'b0, src_name_len}) begin
-                        state <= st_mode ? C_STATUS : C_LD_ANN_PAR;
-                    end else if (!video_busy) begin
-                        put_en <= 1'b1;
-                        put_char <= src_name[name_i[3:0]];
-                        name_i <= name_i + 1'b1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_LD_ANN_NAME;
-                    end
-                end
-                C_LD_ANN_PAR: if (!video_busy) begin
-                    put_en <= 1'b1;
-                    put_char <= (dir_idx == 8'd0) ? " " : "(";
-                    if (dir_idx == 8'd0) begin
-                        dir_idx <= 8'd1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_LD_ANN_PAR;
-                    end else begin
-                        dir_idx <= 0;
-                        peel_mag <= ld_nlines;
-                        dig_n <= 0;
-                        peel_bit <= 5'd16;
-                        peel_rem <= 0;
-                        peel_q <= 0;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_LIST_PEEL;
-                    end
-                end
-                C_LD_ANN_TAIL: begin
-                    if (msg_idx >= 7) begin
-                        ld_ann <= 1'b0;
-                        print_nl <= 1'b1;
-                        msg_idx <= 0;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_PROMPT;
-                    end else if (!video_busy) begin
-                        put_en <= 1'b1;
-                        case (msg_idx)
-                            0: put_char <= " ";
-                            1: put_char <= "L";
-                            2: put_char <= "I";
-                            3: put_char <= "N";
-                            4: put_char <= "E";
-                            5: put_char <= "S";
-                            default: put_char <= ")";
-                        endcase
-                        msg_idx <= msg_idx + 1'b1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_LD_ANN_TAIL;
-                    end
-                end
-
-                // ---- SAVE -----------------------------------------------
-                C_SV_OPEN: if (big_staged && big_trunc) begin
-                    // run 71: the put overflowed the CART bank — refuse
+                state_q[C_SV_OPEN]: if (big_staged && big_trunc) begin
+                    // The put overflowed the CART bank — refuse
                     // rather than write a truncated art file.
                     big_staged <= 1'b0;
                     reply_sel <= 5'd15; reply_idx <= 0;   // ?TR
-                    state <= C_REPLY;
+                    state_q <= (117'd1 << C_REPLY);
                 end else if (!stor_busy) begin
                     save_failed <= 0;
                     stor_mode <= "O";
                     stor_open <= 1'b1;
                     src_i <= 0;
                     if (big_staged) begin
-                        // run 71: pump the staged CART bytes through the
+                        // Pump the staged CART bytes through the
                         // mint's art-append loop (no image bytes first).
                         cmp_save_mode <= 1'b1; cmp_art_mode <= 1'b1;
                         cmp_img_len <= '0; cmp_i <= '0;
@@ -1802,13 +1274,13 @@ module jmr_console_engine (
                         cmp_art_len <= big_len;
                         src_bank <= 1'b1;
                     end
-                    state <= C_SV_OPENW;
+                    state_q <= (117'd1 << C_SV_OPENW);
                 end
-                C_SV_OPENW: if (stor_done) begin
-                    if (stor_err) begin reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY; end
-                    else state <= C_SV_RD;
+                state_q[C_SV_OPENW]: if (stor_done) begin
+                    if (stor_err) begin reply_sel <= 4'd4; reply_idx <= 0; state_q <= (117'd1 << C_REPLY); end
+                    else state_q <= (117'd1 << C_SV_RD);
                 end
-                C_SV_RD: begin
+                state_q[C_SV_RD]: begin
                     if (cmp_save_mode) begin
                         // Mint: pump the assembled image out of the arena,
                         // then (art titles) the ARTX payload out of CART.
@@ -1819,48 +1291,48 @@ module jmr_console_engine (
                                 cmp_rd_addr <= CART_SRAM_BASE
                                              + 22'(cmp_art_i[22:1]);
                                 cmp_art_hi  <= cmp_art_i[0];
-                                state <= C_SV_RDW;
-                            end else state <= C_SV_CLOSE;
+                                state_q <= (117'd1 << C_SV_RDW);
+                            end else state_q <= (117'd1 << C_SV_CLOSE);
                         end else begin
                             src_req <= 1'b1; src_we <= 1'b0;
                             src_bank <= 1'b1;
                             cmp_rd_addr <= cstg_word(cmp_out_off + cmp_i);
-                            state <= C_SV_RDW;
+                            state_q <= (117'd1 << C_SV_RDW);
                         end
-                    end else if (src_i >= src_len) state <= C_SV_CLOSE;
+                    end else if (src_i >= src_len) state_q <= (117'd1 << C_SV_CLOSE);
                     else begin
                         src_req <= 1'b1; src_we <= 1'b0;
                         src_addr <= src_i[16:0];
-                        state <= C_SV_RDW;
+                        state_q <= (117'd1 << C_SV_RDW);
                     end
                 end
-                C_SV_RDW: if (src_gnt) begin
+                state_q[C_SV_RDW]: if (src_gnt) begin
                     // ARTX bytes come packed 2/word out of CART; image bytes
                     // are 1 B/word like every other arena region.
                     if (cmp_art_mode && cmp_i >= cmp_img_len) begin
                         rd_ch <= cmp_art_hi ? src_rdata_hi : src_rdata;
                         cmp_art_i <= cmp_art_i + 22'd1;
                     end else rd_ch <= src_rdata;
-                    state <= C_SV_PUT;
+                    state_q <= (117'd1 << C_SV_PUT);
                 end
-                C_SV_PUT: if (!stor_busy) begin
+                state_q[C_SV_PUT]: if (!stor_busy) begin
                     stor_putc <= 1'b1;
                     stor_putc_data <= rd_ch;
-                    state <= C_SV_PUTW;
+                    state_q <= (117'd1 << C_SV_PUTW);
                 end
-                C_SV_PUTW: if (stor_done) begin
-                    if (stor_err) begin save_failed <= 1; reply_sel <= 4'd4; reply_idx <= 0; state <= C_SV_CLOSE; end
-                    else if (cmp_save_mode) begin cmp_i <= cmp_i + 21'd1; state <= C_SV_RD; end
-                    else begin src_i <= src_i + 1'b1; state <= C_SV_RD; end
+                state_q[C_SV_PUTW]: if (stor_done) begin
+                    if (stor_err) begin save_failed <= 1; reply_sel <= 4'd4; reply_idx <= 0; state_q <= (117'd1 << C_SV_CLOSE); end
+                    else if (cmp_save_mode) begin cmp_i <= cmp_i + 21'd1; state_q <= (117'd1 << C_SV_RD); end
+                    else begin src_i <= src_i + 1'b1; state_q <= (117'd1 << C_SV_RD); end
                 end
-                C_SV_CLOSE: if (!stor_busy) begin stor_close <= 1'b1; state <= C_SV_CLOSEW; end
-                C_SV_CLOSEW: if (stor_done) begin
+                state_q[C_SV_CLOSE]: if (!stor_busy) begin stor_close <= 1'b1; state_q <= (117'd1 << C_SV_CLOSEW); end
+                state_q[C_SV_CLOSEW]: if (stor_done) begin
                     cmp_save_mode <= 1'b0;
                     big_staged <= 1'b0;
                     raw_save_resume <= 1'b0;
                     reply_idx <= 0;
                     if (save_failed || stor_err) begin
-                        reply_sel <= 4'd4; state <= C_REPLY;
+                        reply_sel <= 4'd4; state_q <= (117'd1 << C_REPLY);
                     end else if (raw_save_resume) begin
                         // Caller owns RES32..52 and pending208..239. Only
                         // reload its explicit continuation; no UI policy here.
@@ -1875,15 +1347,15 @@ module jmr_console_engine (
                         // it before SAVE and consumes it before pending actions.
                         src_req <= 1; src_we <= 1; src_bank <= 1;
                         cmp_rd_addr <= cstg_word(21'd65); src_wdata <= 8'd1;
-                        state <= C_SAVE_COMMIT;
+                        state_q <= (117'd1 << C_SAVE_COMMIT);
                     end else begin
                         reply_sel <= (cmp_save_mode && !big_staged) ? 5'd13 : 5'd11;
-                        state <= C_REPLY;
+                        state_q <= (117'd1 << C_REPLY);
                     end
                 end
 
-                C_SAVE_COMMIT: if (src_gnt) begin
-                    src_bank <= 0; state <= C_JSB_PREP;
+                state_q[C_SAVE_COMMIT]: if (src_gnt) begin
+                    src_bank <= 0; state_q <= (117'd1 << C_JSB_PREP);
                 end
 
                 // ---- REMOVE ---------------------------------------------
@@ -1892,14 +1364,13 @@ module jmr_console_engine (
                 // the scarce resource (117 of 128 before this).
                 //   0 wait for cdone   1-4 read the published image offset
                 //   5 read PROGSEL     6 relaunch / mint / fail
-                C_CMP_WAIT: begin
+                state_q[C_CMP_WAIT]: begin
                     // Swallow the keystroke that got us here (an ESC which
                     // killed a previous VM must not become a command) — but
                     // ONLY on the first beat. Holding kbd_clear for the whole
                     // wait drained the FIFO continuously, so an INTERACTIVE
                     // chain program could never receive a keypress: the
-                    // editor launched by EDIT looked hung, sat there until
-                    // the 172 s compile watchdog fired, and reported ?IO.
+                    // editor launched by EDIT looked hung.
                     // Typing RUN afterwards started the same loaded program
                     // outside this state, which is why it then worked. The
                     // compiler needs no input; the editor does.
@@ -1915,18 +1386,11 @@ module jmr_console_engine (
                             cmp_img_len <= cmp_len_i;
                             cmp_ph <= 5'd1;
                             cmp_out_off <= 21'd0;
-                        end else if (&cmp_wd && !cmp_interactive) begin
-                            // The compile watchdog. cons_prog_wd is also
-                            // held off for this state; without both, a real
-                            // compile dies at 21.5 s looking like ?IO.
-                            cmp_arm_r <= 1'b0; halt_pulse <= 1'b1;
-                            src_bank <= 1'b0;   // belt: see C_PROMPT
-                            reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY;
                         end else if (!vm_busy_i && cmp_wd[20]) begin
                             // VM stopped without reporting: fault or ESC.
                             cmp_arm_r <= 1'b0;
                             src_bank <= 1'b0;   // belt: see C_PROMPT
-                            reply_sel <= 4'd14; reply_idx <= 0; state <= C_REPLY;
+                            reply_sel <= 4'd14; reply_idx <= 0; state_q <= (117'd1 << C_REPLY);
                         end else begin
                             cmp_wd <= cmp_wd + 1'b1;
                         end
@@ -2014,7 +1478,7 @@ module jmr_console_engine (
                         src_bank <= 1'b0;
                         if ((cmp_status_i == 8'h81 || cmp_status_i == 8'h80) && cmp_progsel > 8) begin
                             cmp_arm_r <= 0; halt_pulse <= 1; raw_save_resume <= 0;
-                            reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY;
+                            reply_sel <= 4'd4; reply_idx <= 0; state_q <= (117'd1 << C_REPLY);
                         end else if (cmp_status_i == 8'h81) begin
                             // SAVE: SOURCE -> current file, then explicit caller.
                             raw_save_resume <= 1;
@@ -2024,18 +1488,18 @@ module jmr_console_engine (
                             cmp_save_mode <= 1'b0; // plain source, not an image
                             stor_name_len <= cmp_nm_len;
                             src_i <= 0; src_bank <= 1'b0;
-                            state <= C_SV_OPEN;
+                            state_q <= (117'd1 << C_SV_OPEN);
                         end else if (cmp_status_i == 8'h82) begin
                             // DELETE the arena-named file.
                             cmp_arm_r <= 1'b0;
                             stor_name_len <= cmp_nm_len;
-                            state <= C_RM;
+                            state_q <= (117'd1 << C_RM);
                         end else if (cmp_status_i == 8'h83) begin
                             // LOAD the arena-named file into SOURCE.
                             cmp_arm_r <= 1'b0;
                             stor_name_len <= cmp_nm_len;
                             src_len <= 0; src_i <= 0; src_bank <= 1'b0;
-                            state <= C_LD_OPEN;
+                            state_q <= (117'd1 << C_LD_OPEN);
                         end else if (cmp_status_i == 8'h84) begin
                             // Mint the staged image under the arena name.
                             cmp_arm_r <= 1'b0;
@@ -2046,7 +1510,7 @@ module jmr_console_engine (
                             jsb_want_jsh <= 1'b1;
                             cmp_i <= 21'd0;
                             name_i <= 0; dir_n <= 0;
-                            state <= C_SV_OPEN;
+                            state_q <= (117'd1 << C_SV_OPEN);
                         end else if (cmp_status_i == 8'h80) begin
                             // NEXT: load the program PROGSEL named and rerun.
                             name_i <= 0; dir_n <= 0; jsb_waddr <= 0;
@@ -2054,7 +1518,7 @@ module jmr_console_engine (
                             jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
                             aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
                             sram_last <= 0; cmp_wd <= '0; cmp_ph <= 5'd0; cmp_nw <= 1'b0; cmp_nm_len <= 8'd0;
-                            state <= C_JSB_PREP;
+                            state_q <= (117'd1 << C_JSB_PREP);
                         end else if (cmp_status_i == 8'd0 &&
                                      cmp_len_i == 21'd0) begin
                             // NEW 2: the editor quitting without saving —
@@ -2068,23 +1532,21 @@ module jmr_console_engine (
                             halt_pulse <= 1'b1;
                             cmp_interactive <= 1'b0;
                             reply_sel <= 4'd2; reply_idx <= 0; // OK
-                            state <= C_REPLY;
+                            state_q <= (117'd1 << C_REPLY);
                         end else if (cmp_status_i == 8'h85) begin
-                            // HOOK 2: mint, then append the ARTX payload that
-                            // the pre-load staged in CART. cmp_len_i is the
-                            // image length; cmp_art_len is the payload length
-                            // the compiler read out of the staged header and
-                            // published in the arena.
+                            // Mint NAME.JSH, then append cmp_art_len bytes
+                            // from CART. cmp_len_i is the image length;
+                            // cmp_art_len is the length of the last big put
+                            // that SAVE wrote (0 if none since reset).
                             cmp_arm_r <= 1'b0;
                             cmp_save_mode <= 1'b1;
                             cmp_art_mode <= 1'b1;
                             cmp_art_i <= '0; cmp_art_hi <= 1'b0;
                             jsb_name_src <= 2'd0;
-                            jsb_want_art <= 1'b0;
                             jsb_want_jsh <= 1'b1;
                             cmp_i <= 21'd0;
                             name_i <= 0; dir_n <= 0;
-                            state <= C_JSB_PREP;
+                            state_q <= (117'd1 << C_JSB_PREP);
                         end else if (cmp_status_i == 8'd0) begin
                             // DONE: mint NAME.JSH from the staged image.
                             cmp_arm_r <= 1'b0;
@@ -2093,462 +1555,35 @@ module jmr_console_engine (
                             jsb_want_jsh <= 1'b1;
                             cmp_i <= 21'd0;
                             name_i <= 0; dir_n <= 0;
-                            state <= C_JSB_PREP;
+                            state_q <= (117'd1 << C_JSB_PREP);
                         end else begin
                             cmp_arm_r <= 1'b0;
                             reply_sel <= 4'd14; reply_idx <= 0;  // ?CE
-                            state <= C_REPLY;
+                            state_q <= (117'd1 << C_REPLY);
                         end
                     end
                 end
-                C_RM: if (!stor_busy) begin stor_delete <= 1'b1; state <= C_RMW; end
-                C_RMW: if (stor_done) begin
+                state_q[C_RM]: if (!stor_busy) begin stor_delete <= 1'b1; state_q <= (117'd1 << C_RMW); end
+                state_q[C_RMW]: if (stor_done) begin
                     if (stor_err) reply_sel <= 4'd4; else reply_sel <= 4'd2;
-                    reply_idx <= 0; state <= C_REPLY;
+                    reply_idx <= 0; state_q <= (117'd1 << C_REPLY);
                 end
 
                 // ---- CLS ------------------------------------------------
-                C_CLS: begin
-                    // NEW: wait until video idle, then pulse cls (if already busy,
-                    // a pulse is ignored and WAIT would skip the clear)
-                    msg_idx <= 0;
-                    ret_state <= C_PROMPT;
-                    if (!video_busy) begin
-                        cls <= 1'b1;
-                        state <= C_WAIT_VIDEO;
-                    end
-                end
-
-                // ---- LIST parse: LIST - / LIST n / LIST n-m --------------
-                C_LIST_PARSE: begin
-                    if (ni_q != name_i) begin
-                        // char pipe settling
-                    end else if (ni_end_q) begin
-                        state <= C_LIST_INIT;
-                    end else if (is_sp(ch_ni_q)) begin
-                        name_i <= name_i + 1'b1;
-                    end else if (ch_ni_q == "-") begin
-                        // LIST -  or LIST -m
-                        if (ni_end1_q) begin
-                            list_page <= 1'b1;
-                            state <= C_LIST_INIT;
-                        end else begin
-                            list_page <= 1'b0;
-                            list_lo <= 16'd10;
-                            peel_mag <= 0;
-                            name_i <= name_i + 1'b1;
-                            state <= C_LIST_PAR_HI;
-                        end
-                    end else if (ch_ni_q >= "0" && ch_ni_q <= "9") begin
-                        list_page <= 1'b0;
-                        peel_mag <= 0;
-                        state <= C_LIST_PAR_LO;
-                    end else begin
-                        reply_sel <= 4'd3; reply_idx <= 0; state <= C_REPLY;
-                    end
-                end
-                C_LIST_PAR_LO: begin
-                    if (ni_q != name_i) begin
-                        // char pipe settling
-                    end else if (ni_end_q) begin
-                        // NEW: list_hi must use peel_mag — same-cycle list_lo is still old
-                        list_lo <= (peel_mag == 0) ? 16'd10 : peel_mag;
-                        list_hi <= (peel_mag == 0) ? 16'd10 : peel_mag;
-                        state <= C_LIST_INIT;
-                    end else if (ch_ni_q >= "0" && ch_ni_q <= "9") begin
-                        peel_mag <= peel_mag * 16'd10 + {12'h0, ch_ni_q - "0"};
-                        name_i <= name_i + 1'b1;
-                    end else if (ch_ni_q == "-") begin
-                        list_lo <= (peel_mag == 0) ? 16'd10 : peel_mag;
-                        name_i <= name_i + 1'b1;
-                        peel_mag <= 0;
-                        state <= C_LIST_PAR_HI;
-                    end else begin
-                        list_lo <= (peel_mag == 0) ? 16'd10 : peel_mag;
-                        list_hi <= (peel_mag == 0) ? 16'd10 : peel_mag;
-                        state <= C_LIST_INIT;
-                    end
-                end
-                C_LIST_PAR_HI: begin
-                    if (ni_q != name_i) begin
-                        // char pipe settling
-                    end else if (ni_end_q) begin
-                        list_hi <= (peel_mag == 0) ? 16'hFFFF : peel_mag;
-                        state <= C_LIST_INIT;
-                    end else if (ch_ni_q >= "0" && ch_ni_q <= "9") begin
-                        peel_mag <= peel_mag * 16'd10 + {12'h0, ch_ni_q - "0"};
-                        name_i <= name_i + 1'b1;
-                    end else begin
-                        list_hi <= (peel_mag == 0) ? 16'hFFFF : peel_mag;
-                        state <= C_LIST_INIT;
-                    end
-                end
-
-                // ---- LIST numbered dump ---------------------------------
-                C_LIST_INIT: begin
-                    if (src_is_html && src_name_len != 0) begin
-                        // LIST HTML from the card so PACMAN.HTML pages like PYTHON
-                        list_from_card <= 1'b1;
-                        list_bol <= 1'b1;
-                        src_i <= 0;
-                        list_disp <= 16'd10;
-                        list_on_page <= 0;
-                        list_col <= 0;
-                        list_wrap_more <= 0;
-                        list_skip <= 1'b0;
-                        name_i <= 0;
-                        state <= C_LIST_CNWR;
-                    end else if (src_len == 0) begin
-                        msg_idx <= 0; state <= C_PROMPT;
-                    end else begin
-                        list_from_card <= 1'b0;
-                        src_i <= 0;
-                        list_disp <= 16'd10;
-                        list_on_page <= 0;
-                        list_col <= 0;
-                        list_wrap_more <= 0;
-                        list_skip <= 1'b0;
-                        state <= C_LIST_LINE;
-                    end
-                end
-                C_LIST_LINE: begin
-                    if (src_i >= src_len) begin
-                        msg_idx <= 0; state <= C_PROMPT;
-                    end else if (list_disp > list_hi) begin
-                        msg_idx <= 0; state <= C_PROMPT;
-                    end else begin
-                        // NEW: decide skip from list_disp/list_lo this cycle —
-                        // do not use registered list_skip (NBA would be stale)
-                        if (list_disp < list_lo) begin
-                            list_skip <= 1'b1;
-                            // consume until NL without printing
-                            src_req <= 1'b1; src_we <= 1'b0;
-                            src_addr <= src_i[16:0];
-                            state <= C_LIST_RD;
-                        end else begin
-                            list_skip <= 1'b0;
-                            peel_mag <= list_disp;
-                            dig_n <= 0;
-                            peel_bit <= 5'd16;
-                            peel_rem <= 0;
-                            peel_q <= 0;
-                            state <= C_LIST_PEEL;
-                        end
-                    end
-                end
-                // Multi-cycle /10 digit peel (16-bit; not the VM 32-bit critical path)
-                C_LIST_PEEL: begin
-                    if (peel_mag == 0 && dig_n != 0) begin
-                        dig_i <= dig_n;
-                        state <= C_LIST_EMIT_DIG;
-                    end else if (peel_mag == 0 && dig_n == 0) begin
-                        digs[0] <= "0";
-                        dig_n <= 1;
-                        dig_i <= 1;
-                        state <= C_LIST_EMIT_DIG;
-                    end else begin
-                        digs[dig_n] <= 8'("0") + 8'(peel_mag % 16'd10);
-                        peel_mag <= peel_mag / 16'd10;
-                        dig_n <= dig_n + 3'd1;
-                    end
-                end
-                C_LIST_EMIT_DIG: begin
-                    if (dig_i == 0) begin
-                        if (ld_ann) begin
-                            msg_idx <= 0;
-                            state <= C_LD_ANN_TAIL;
-                        end else if (st_mode) state <= C_STATUS;
-                        else state <= C_LIST_SP;
-                    end else if (!video_busy) begin
-                        dig_i <= dig_i - 3'd1;
-                        put_en <= 1'b1;
-                        put_char <= digs[dig_i - 3'd1];
-                        // LIST wrap tracks the glass column, including "NNN "
-                        if (!ld_ann)
-                            list_col <= list_col + 6'd1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_LIST_EMIT_DIG;
-                    end
-                end
-                C_LIST_SP: if (!video_busy) begin
-                    put_en <= 1'b1;
-                    put_char <= " ";
-                    list_col <= list_col + 6'd1;
-                    state <= C_WAIT_VIDEO;
-                    ret_state <= list_from_card ? C_LIST_CARD_FIRST : C_LIST_RD_GO;
-                end
-                C_LIST_RD_GO: begin
-                    src_req <= 1'b1; src_we <= 1'b0;
-                    src_addr <= src_i[16:0];
-                    state <= C_LIST_RD;
-                end
-                C_LIST_RD: if (src_gnt) begin
-                    rd_ch <= src_rdata;
-                    state <= C_LIST_CH;
-                end
-                C_LIST_CH: begin
-                    src_i <= src_i + 1'b1;
-                    if (rd_ch == 8'h0A || rd_ch == 8'h0D) begin
-                        if (list_skip) begin
-                            list_disp <= list_disp + 16'd10;
-                            state <= C_LIST_LINE;
-                        // wrap already sat at col 0 — extra print_nl skipped a row
-                        end else if (list_col == 6'd0) begin
-                            state <= C_LIST_NL;
-                        end else if (!video_busy) begin
-                            print_nl <= 1'b1;
-                            state <= C_WAIT_VIDEO;
-                            ret_state <= C_LIST_NL;
-                        end
-                    end else if (src_i + 1'b1 >= src_len) begin
-                        // last line without NL
-                        if (list_skip) begin
-                            list_disp <= list_disp + 16'd10;
-                            state <= C_LIST_LINE;
-                        end else if (rd_ch >= 8'h20 && rd_ch < 8'h7F) begin
-                            state <= C_LIST_PUT_LAST;
-                        end else begin
-                            print_nl <= 1'b1;
-                            state <= C_WAIT_VIDEO;
-                            ret_state <= C_LIST_NL;
-                        end
-                    end else if (list_skip) begin
-                        state <= C_LIST_RD_GO;
-                    end else if (rd_ch >= 8'h20 && rd_ch < 8'h7F) begin
-                        state <= C_LIST_PUT;
-                    end else begin
-                        state <= C_LIST_RD_GO;
-                    end
-                end
-                C_LIST_PUT: if (!video_busy) begin
-                    put_en <= 1'b1;
-                    put_char <= rd_ch;
-                    if (list_col >= 6'd63) begin
-                        list_col <= 0;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_LIST_WRAP;
-                    end else begin
-                        list_col <= list_col + 6'd1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_LIST_RD_GO;
-                    end
-                end
-                C_LIST_PUT_LAST: if (!video_busy) begin
-                    put_en <= 1'b1;
-                    put_char <= rd_ch;
-                    state <= C_WAIT_VIDEO;
-                    ret_state <= C_LIST_NL_FORCE;
-                end
-                C_LIST_NL_FORCE: begin
-                    if (list_col == 6'd0) begin
-                        state <= C_LIST_NL;
-                    end else begin
-                        print_nl <= 1'b1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_LIST_NL;
-                    end
-                end
-                C_LIST_NL: begin
-                    list_disp <= list_disp + 16'd10;
-                    list_bol <= 1'b1;
-                    list_col <= 0;
-                    if (list_page) begin
-                        if (list_on_page >= 4'd13) begin
-                            list_on_page <= 0;
-                            reply_sel <= 4'd8; reply_idx <= 0;
-                            list_eat_nl <= 1'b1;
-                            state <= C_LIST_MORE;
-                        end else begin
-                            list_on_page <= list_on_page + 4'd1;
-                            state <= list_from_card ? C_LIST_CARD_GB : C_LIST_LINE;
-                        end
-                    end else state <= list_from_card ? C_LIST_CARD_GB : C_LIST_LINE;
-                end
-                C_LIST_WRAP: begin
-                    // V_PUT already advanced at col 63. Extra print_nl used to
-                    // skip a glass row (3-char remnant + blank) on every wrap.
-                    state <= C_LIST_WRAP_PAGE;
-                end
-                C_LIST_WRAP_PAGE: begin
-                    if (list_page) begin
-                        if (list_on_page >= 4'd13) begin
-                            list_on_page <= 0;
-                            list_wrap_more <= 1'b1;
-                            list_eat_nl <= 1'b1;
-                            reply_sel <= 4'd8; reply_idx <= 0;
-                            state <= C_LIST_MORE;
-                        end else begin
-                            list_on_page <= list_on_page + 4'd1;
-                            state <= list_from_card ? C_LIST_CARD_GB : C_LIST_RD_GO;
-                        end
-                    end else state <= list_from_card ? C_LIST_CARD_GB : C_LIST_RD_GO;
-                end
-                C_LIST_MORE: begin
-                    if (ridx_q != reply_idx || rsel_q != reply_sel) begin
-                        // reply ROM pipe settling
-                    end else if (reply_ch_q == 8'h00) begin
-                        print_nl <= 1'b1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_LIST_WAIT;
-                    end else if (!video_busy) begin
-                        put_en <= 1'b1;
-                        put_char <= reply_ch_q;
-                        reply_idx <= reply_idx + 1'b1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_LIST_MORE;
-                    end
-                end
-                C_LIST_WAIT: if (enable && !kbd_empty) begin
-                    ch <= kbd_data;
-                    kbd_pop <= 1'b1;
-                    if (list_eat_nl && (kbd_data == 8'h0D || kbd_data == 8'h0A)) begin
-                        // LINE's terminating CR must not page the first MORE.
-                        list_eat_nl <= 1'b0;
-                    end else if (kbd_data == 8'h1B || kbd_data == 8'h03) begin
-                        list_eat_nl <= 1'b0;
-                        state <= dir_more ? C_PROMPT
-                               : list_from_card ? C_LIST_CCLOSE : C_PROMPT;
-                        dir_more <= 1'b0;
-                        msg_idx <= 0;
-                    end else begin
-                        list_eat_nl <= 1'b0;
-                        // Space/Enter/any key → next page
-                        if (dir_more) begin
-                            dir_more <= 1'b0;
-                            // the paused entry is already fetched — print it,
-                            // do NOT re-request (C_DIRN would skip a name)
-                            state <= C_DIR_RD;
-                        end else if (list_wrap_more) begin
-                            list_wrap_more <= 1'b0;
-                            state <= list_from_card ? C_LIST_CARD_GB : C_LIST_RD_GO;
-                        end else
-                            state <= list_from_card ? C_LIST_CARD_GB : C_LIST_LINE;
-                    end
-                end
-                // HTML LIST: reopen LOADed name and stream bytes (long lines OK)
-                C_LIST_CNWR: begin
-                    if (name_i >= src_name_len) begin
-                        stor_name_len <= {3'b0, src_name_len};
-                        state <= C_LIST_COPEN;
-                    end else begin
-                        mem_en <= 1'b1; mem_we <= 1'b1;
-                        mem_addr <= NAME_BUF + {9'h0, name_i};
-                        mem_wdata <= src_name[name_i[3:0]];
-                        state <= C_LIST_CNWR_W;
-                    end
-                end
-                C_LIST_CNWR_W: if (mem_gnt) begin
-                    name_i <= name_i + 1'b1;
-                    state <= C_LIST_CNWR;
-                end
-                C_LIST_COPEN: if (!stor_busy) begin
-                    stor_mode <= "I";
-                    stor_open <= 1'b1;
-                    state <= C_LIST_COPENW;
-                end
-                C_LIST_COPENW: if (stor_done) begin
-                    if (stor_err) begin
-                        reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY;
-                    end else state <= C_LIST_CARD_GB;
-                end
-                C_LIST_CARD_GB: if (!stor_busy) begin
-                    stor_get_byte <= 1'b1;
-                    state <= C_LIST_CARD_GBW;
-                end
-                C_LIST_CARD_GBW: if (stor_done) begin
-                    if (stor_err || stor_eof) state <= C_LIST_CCLOSE;
-                    else if (list_disp > list_hi) state <= C_LIST_CCLOSE;
-                    else if (list_bol) begin
-                        rd_ch <= stor_get_data;
-                        if (list_disp < list_lo) begin
-                            list_skip <= 1'b1;
-                            list_bol <= 1'b0;
-                            if (stor_get_data == 8'h0A || stor_get_data == 8'h0D) begin
-                                list_disp <= list_disp + 16'd10;
-                                list_bol <= 1'b1;
-                            end
-                            state <= C_LIST_CARD_GB;
-                        end else begin
-                            list_skip <= 1'b0;
-                            list_bol <= 1'b0;
-                            peel_mag <= list_disp;
-                            dig_n <= 0;
-                            peel_bit <= 5'd16;
-                            peel_rem <= 0;
-                            peel_q <= 0;
-                            state <= C_LIST_PEEL;
-                        end
-                    end else if (list_skip) begin
-                        if (stor_get_data == 8'h0A || stor_get_data == 8'h0D) begin
-                            list_disp <= list_disp + 16'd10;
-                            list_bol <= 1'b1;
-                        end
-                        state <= C_LIST_CARD_GB;
-                    end else if (stor_get_data == 8'h0A || stor_get_data == 8'h0D) begin
-                        if (list_col == 6'd0) begin
-                            state <= C_LIST_NL;
-                        end else begin
-                            print_nl <= 1'b1;
-                            state <= C_WAIT_VIDEO;
-                            ret_state <= C_LIST_NL;
-                        end
-                    end else if (stor_get_data >= 8'h20 && stor_get_data < 8'h7F) begin
-                        rd_ch <= stor_get_data;
-                        state <= C_LIST_PUT_CARD;
-                    end else state <= C_LIST_CARD_GB;
-                end
-                C_LIST_CARD_FIRST: begin
-                    // after "NNNN " — emit first byte of the line (already in rd_ch)
-                    if (rd_ch == 8'h0A || rd_ch == 8'h0D) begin
-                        if (list_col == 6'd0) begin
-                            state <= C_LIST_NL;
-                        end else begin
-                            print_nl <= 1'b1;
-                            state <= C_WAIT_VIDEO;
-                            ret_state <= C_LIST_NL;
-                        end
-                    end else if (rd_ch >= 8'h20 && rd_ch < 8'h7F) begin
-                        state <= C_LIST_PUT_CARD;
-                    end else state <= C_LIST_CARD_GB;
-                end
-                C_LIST_PUT_CARD: if (!video_busy) begin
-                    put_en <= 1'b1;
-                    put_char <= rd_ch;
-                    if (list_col >= 6'd63) begin
-                        list_col <= 0;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_LIST_WRAP;
-                    end else begin
-                        list_col <= list_col + 6'd1;
-                        state <= C_WAIT_VIDEO;
-                        ret_state <= C_LIST_CARD_GB;
-                    end
-                end
-                C_LIST_CCLOSE: if (!stor_busy) begin
-                    stor_close <= 1'b1;
-                    state <= C_LIST_CCLOSEW;
-                end
-                C_LIST_CCLOSEW: if (stor_done) begin
-                    list_from_card <= 1'b0;
-                    msg_idx <= 0;
-                    state <= C_PROMPT;
-                end
-
-                // ---- RUN → FAT-load companion .JSB into code BRAM ----------
-                // dir_n: 0=copy base, 1=write J, 2=write S, 3=write B, 4=done
-                // No '.' in name (LOAD "invaders") → append ".JSB" after full name
-                C_JSB_PREP: begin
+                state_q[C_JSB_PREP]:if(jsb_name_src==1 && cmp_progsel==8 && sys_attempted && (rom_status!=1 || sys_status!=1))begin
+                    ld_err<=1;reply_sel<=9;reply_idx<=0;state_q <= (117'd1 << C_REPLY);
+                end else begin
                     cdone_seen_low <= 1'b0;   // re-arm the cdone edge gate
                     if (jsb_name_src != 2'd0) begin
                         // A chain program, loaded by identity not by title.
                         if ({1'b0, name_i} >= cmp_name_len(cmp_progsel)) begin
                             stor_name_len <= cmp_name_len(cmp_progsel);
-                            state <= C_JSB_OPEN;
+                            state_q <= (117'd1 << C_JSB_OPEN);
                         end else begin
                             mem_en <= 1'b1; mem_we <= 1'b1;
                             mem_addr <= NAME_BUF + {9'h0, name_i};
                             mem_wdata <= cmp_name_char(cmp_progsel, name_i);
-                            state <= C_JSB_NWR_W;
+                            state_q <= (117'd1 << C_JSB_NWR_W);
                         end
                     end else if (dir_n == 8'd0) begin
                         if (name_i >= src_name_len) begin
@@ -2558,62 +1593,54 @@ module jmr_console_engine (
                             mem_addr <= NAME_BUF + {9'h0, name_i};
                             mem_wdata <= ".";
                             dir_n <= 8'd1;
-                            state <= C_JSB_NWR_W;
+                            state_q <= (117'd1 << C_JSB_NWR_W);
                         end else if (src_name[name_i[3:0]] == ".") begin
                             jsb_name_len <= {3'b0, name_i} + 8'd4;
                             mem_en <= 1'b1; mem_we <= 1'b1;
                             mem_addr <= NAME_BUF + {9'h0, name_i};
                             mem_wdata <= ".";
                             dir_n <= 8'd1;
-                            state <= C_JSB_NWR_W;
+                            state_q <= (117'd1 << C_JSB_NWR_W);
                         end else begin
                             mem_en <= 1'b1; mem_we <= 1'b1;
                             mem_addr <= NAME_BUF + {9'h0, name_i};
                             mem_wdata <= src_name[name_i[3:0]];
-                            state <= C_JSB_NWR_W;
+                            state_q <= (117'd1 << C_JSB_NWR_W);
                         end
                     end else if (dir_n == 8'd1) begin
                         mem_en <= 1'b1; mem_we <= 1'b1;
                         mem_addr <= NAME_BUF + {9'h0, name_i} + 16'd1;
-                        // .ART = the art sidecar. FAT 8.3 truncates on the
-                        // card, so storage/NAME.ARTX lands as NAME.ART —
-                        // open the 3-char form or the title silently looks
-                        // like it has no art.
-                        mem_wdata <= jsb_want_art ? "A" : "J";
+                        mem_wdata <= "J";
                         dir_n <= 8'd2;
-                        state <= C_JSB_NWR_W;
+                        state_q <= (117'd1 << C_JSB_NWR_W);
                     end else if (dir_n == 8'd2) begin
                         mem_en <= 1'b1; mem_we <= 1'b1;
                         mem_addr <= NAME_BUF + {9'h0, name_i} + 16'd2;
-                        mem_wdata <= jsb_want_art ? "R" : "S";
+                        mem_wdata <= "S";
                         dir_n <= 8'd3;
-                        state <= C_JSB_NWR_W;
+                        state_q <= (117'd1 << C_JSB_NWR_W);
                     end else begin
                         mem_en <= 1'b1; mem_we <= 1'b1;
                         mem_addr <= NAME_BUF + {9'h0, name_i} + 16'd3;
-                        mem_wdata <= jsb_want_art ? "T"
-                                   : (jsb_want_jsh ? "H" : "B");
+                        mem_wdata <= jsb_want_jsh ? "H" : "B";
                         dir_n <= 8'd4;
-                        state <= C_JSB_NWR_W;
+                        state_q <= (117'd1 << C_JSB_NWR_W);
                     end
                 end
-                C_JSB_NWR_W: if (mem_gnt) begin
+                state_q[C_JSB_NWR_W]: if (mem_gnt) begin
                     if (dir_n == 8'd0) begin
                         name_i <= name_i + 1'b1;
-                        state <= C_JSB_PREP;
+                        state_q <= (117'd1 << C_JSB_PREP);
                     end else if (dir_n == 8'd4) begin
                         stor_name_len <= jsb_name_len;
                         // The mint reuses this name builder, then goes to the
-                        // byte-transparent SAVE pump instead of the loader.
-                        // ARTX pre-load takes its own path; the mint goes
-                        // to the byte-transparent SAVE pump; everything else
-                        // is a normal chain-load.
-                        state <= jsb_want_art ? C_ART_OPEN
-                               : (cmp_save_mode ? C_SV_OPEN : C_JSB_OPEN);
+                        // byte-transparent SAVE pump instead of the loader;
+                        // everything else is a normal chain-load.
+                        state_q <= cmp_save_mode ? (117'd1 << C_SV_OPEN) : (117'd1 << C_JSB_OPEN);
                     end else
-                        state <= C_JSB_PREP;
+                        state_q <= (117'd1 << C_JSB_PREP);
                 end
-                C_JSB_OPEN: if (!stor_busy) begin
+                state_q[C_JSB_OPEN]: if (!stor_busy) begin
                     finder_cache_replay<=0;cache_tail<=0;
                     finder_cache_fill<=jsb_name_src==1 && cmp_progsel==8;
                     if(jsb_name_src==1 && cmp_progsel==8)finder_cache_valid<=0;
@@ -2623,13 +1650,13 @@ module jmr_console_engine (
                     jsb_bi <= 0;
                     jsb_word <= 0;
                     ld_err <= 0;
-                    // NEW: fresh ASET splitter per load
+                    // Fresh ASET splitter per load
                     jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
                     aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
                     sram_last <= 0; pal_idx <= 0; pal_ph <= 0;
-                    state <= C_JSB_OPENW;
+                    state_q <= (117'd1 << C_JSB_OPENW);
                 end
-                C_JSB_OPENW: if (stor_done) begin
+                state_q[C_JSB_OPENW]: if (stor_done) begin
                     if (stor_err) begin
                         if (jsb_want_jsh && !jsb_tether_mode) begin
                             // no NAME.JSH on card → host tether fallback
@@ -2640,97 +1667,55 @@ module jmr_console_engine (
                             jsb_boff <= 0; jsb_aset_off <= 0; jsb_has_aset <= 0;
                             aset_seen <= 0; aset_len <= 0; aset_pay <= 0;
                             sram_last <= 0; pal_idx <= 0; pal_ph <= 0;
-                            state <= C_JSB_TETHER;
+                            state_q <= (117'd1 << C_JSB_TETHER);
                         end else begin
                             // tether-fed retry missing too → ?NH; .JS → ?NB
                             reply_sel <= jsb_want_jsh ? 4'd9 : 4'd7;
-                            reply_idx <= 0; state <= C_REPLY;
+                            reply_idx <= 0; state_q <= (117'd1 << C_REPLY);
                         end
-                    end else state <= C_JSB_GB;
+                    end else state_q <= (117'd1 << C_JSB_GB);
                 end
-                C_JSB_GB: if(finder_cache_replay)begin
-                    if(jsb_boff>=finder_cache_length)state<=C_JSB_TEOF;
-                    else if(jsb_boff[0])begin jsb_din<=cache_word[15:8];state<=C_JSB_FEED;end
+                state_q[C_JSB_GB]: if(finder_cache_replay)begin
+                    if(jsb_boff>=finder_cache_length)state_q <= (117'd1 << C_JSB_TEOF);
+                    else if(jsb_boff[0])begin jsb_din<=cache_word[15:8];state_q <= (117'd1 << C_JSB_FEED);end
                     else begin
-                        sram_req<=1;sram_we<=0;sram_addr<=jmr_js_vm_pkg::SYSTEM_CACHE_BASE+22'(jsb_boff>>1);state<=C_CACHE_READ;
+                        sram_req<=1;sram_we<=0;sram_addr<=jmr_js_vm_pkg::SYSTEM_CACHE_BASE+22'(jsb_boff>>1);state_q <= (117'd1 << C_CACHE_READ);
                     end
                 end else if (!stor_busy) begin
                     stor_get_byte <= 1'b1;
-                    state <= C_JSB_GBW;
+                    state_q <= (117'd1 << C_JSB_GBW);
                 end
-                C_JSB_GBW: if (stor_done) begin
+                state_q[C_JSB_GBW]: if (stor_done) begin
                     if (stor_err) begin
-                        ld_err <= 1'b1; reply_sel <= 4'd4; reply_idx <= 0; state <= C_JSB_CLOSE;
+                        ld_err <= 1'b1; reply_sel <= 4'd4; reply_idx <= 0; state_q <= (117'd1 << C_JSB_CLOSE);
                     end else if (stor_eof) begin
-                        state <= C_JSB_TEOF;
+                        state_q <= (117'd1 << C_JSB_TEOF);
                     end else begin
                         jsb_din <= stor_get_data;
-                        state <= C_JSB_FEED;
+                        state_q <= (117'd1 << C_JSB_FEED);
                         if(finder_cache_fill)begin
                             if(jsb_boff>=jmr_js_vm_pkg::FINDER_CACHE_BYTES)finder_cache_fill<=0;
                             else if(!jsb_boff[0])cache_low<=stor_get_data;
                             else begin
                                 sram_req<=1;sram_we<=1;sram_addr<=jmr_js_vm_pkg::SYSTEM_CACHE_BASE+22'(jsb_boff>>1);
-                                sram_wdata<={stor_get_data,cache_low};state<=C_CACHE_WRITE;
+                                sram_wdata<={stor_get_data,cache_low};state_q <= (117'd1 << C_CACHE_WRITE);
                             end
                         end
                     end
                 end
-                // gui-put: 0xFC payload → SOURCE SRAM (byte-transparent, same
-                // write as HTML LOAD's C_LD_GB_WR). Host then types SAVE.
-                // ---- run 71: STATUS ---------------------------------------
-                // NAME <src_name> LEN <src_len>[ TRUNC] <HTML|JS|--> FAULT <site> <arg>
-                // Reuses the LOADED name printer (C_LD_ANN_NAME) and the LIST
-                // digit printer (C_LIST_PEEL/EMIT_DIG) through st_mode.
-                C_STATUS: begin
-                    case (st_ph)
-                        4'd0: begin st_i <= 6'd0; st_ph <= 4'd1; state <= C_STATUS_CH; end   // "NAME "
-                        4'd1: begin name_i <= 0; st_ph <= 4'd2; state <= C_LD_ANN_NAME; end
-                        4'd2: begin st_i <= 6'd8; st_ph <= 4'd3; state <= C_STATUS_CH; end   // " LEN "
-                        4'd3: begin
-                            peel_mag <= src_len[15:0]; dig_n <= 0; st_ph <= 4'd4;
-                            state <= C_LIST_PEEL;
-                        end
-                        4'd4: begin st_i <= src_trunc ? 6'd16 : 6'd24; st_ph <= 4'd5; state <= C_STATUS_CH; end // " TRUNC" / " "
-                        4'd5: begin st_i <= src_is_html ? 6'd32 : (src_is_js ? 6'd40 : 6'd48); st_ph <= 4'd6; state <= C_STATUS_CH; end
-                        4'd6: begin st_i <= 6'd56; st_ph <= 4'd7; state <= C_STATUS_CH; end  // " FAULT "
-                        4'd7: begin
-                            peel_mag <= vm_gdbg_i[47:32]; dig_n <= 0; st_ph <= 4'd8;
-                            state <= C_LIST_PEEL;
-                        end
-                        4'd8: begin st_i <= 6'd24; st_ph <= 4'd9; state <= C_STATUS_CH; end  // " "
-                        4'd9: begin
-                            peel_mag <= vm_gdbg_i[15:0]; dig_n <= 0; st_ph <= 4'd10;
-                            state <= C_LIST_PEEL;
-                        end
-                        default: begin
-                            st_mode <= 1'b0; print_nl <= 1'b1;
-                            state <= C_WAIT_VIDEO; ret_state <= C_PROMPT;
-                        end
-                    endcase
-                end
-                C_STATUS_CH: if (!video_busy) begin
-                    // 8-char label slots: 0 "NAME ", 8 " LEN ", 16 " TRUNC", 24 " ",
-                    // 32 " HTML", 40 " JS", 48 " --", 56 " FAULT "
-                    if (status_char(st_i) == 8'h00) state <= C_STATUS;
-                    else begin
-                        put_en <= 1'b1; put_char <= status_char(st_i);
-                        st_i <= st_i + 6'd1;
-                        state <= C_WAIT_VIDEO; ret_state <= C_STATUS_CH;
-                    end
-                end
-                C_SRC_TETHER: begin
+                // CRC-validated SOURCE staging for named COMMIT.
+                state_q[C_SRC_TETHER]: begin
                     if (jsb_tether_eof) begin
                         teth_wd <= 30'd0;
                         if (jsb_tether_crc_err) begin
-                            // run 71: trailer CRC mismatch — the bytes in
+                            // Trailer CRC mismatch — the bytes in
                             // SOURCE are not the host's file. Drop them
                             // and say so; the host retries.
                             src_len <= 0; src_trunc <= 1'b0;
                             reply_sel <= 5'd16; reply_idx <= 0;
-                            state <= C_REPLY;
+                            state_q <= (117'd1 << C_REPLY);
                         end else
-                            state <= C_IDLE;
+                            state_q <= (117'd1 << C_IDLE);
                     end else if (jsb_tether_stb) begin
                         teth_wd <= 30'd0;
                         if (src_len >= SOURCE_MAX) begin
@@ -2740,30 +1725,30 @@ module jmr_console_engine (
                             src_req <= 1'b1; src_we <= 1'b1;
                             src_addr <= src_len[16:0];
                             src_wdata <= jsb_tether_data;
-                            state <= C_SRC_WR;
+                            state_q <= (117'd1 << C_SRC_WR);
                         end
                     end else if ((!kbd_empty && kbd_data == 8'h1B)
-                                 || (&teth_wd)) begin
+                                 || teth_wd[30]) begin
                         if (!kbd_empty && kbd_data == 8'h1B) kbd_pop <= 1'b1;
                         teth_wd <= 30'd0;
-                        state <= C_IDLE;
+                        state_q <= (117'd1 << C_IDLE);
                     end else teth_wd <= teth_wd + 30'd1;
                 end
-                C_SRC_WR: if (src_gnt) begin
+                state_q[C_SRC_WR]: if (src_gnt) begin
                     src_len <= src_len + 1'b1;
-                    state <= C_SRC_TETHER;
+                    state_q <= (117'd1 << C_SRC_TETHER);
                 end
-                // run 71 big put: same stream contract as C_SRC_TETHER
+                // Big put: same stream contract as C_SRC_TETHER
                 // (stb/eof/crc_err/ESC/10.7 s silence), bytes packed two
                 // per CART word. The odd tail byte is flushed at eof.
-                C_BIG_TETHER: begin
+                state_q[C_BIG_TETHER]: begin
                     if (jsb_tether_eof) begin
                         teth_wd <= 30'd0;
                         if (jsb_tether_crc_err) begin
                             big_len <= '0; big_staged <= 1'b0; big_hi <= 1'b0;
                             src_bank <= 1'b0;
                             reply_sel <= 5'd16; reply_idx <= 0;   // ?CK
-                            state <= C_REPLY;
+                            state_q <= (117'd1 << C_REPLY);
                         end else begin
                             big_staged <= 1'b1;
                             if (big_hi) begin
@@ -2772,10 +1757,10 @@ module jmr_console_engine (
                                 cmp_rd_addr <= CART_SRAM_BASE + 22'(big_len[22:1]);
                                 src_wdata <= 8'd0; src_wlo <= big_lo; src_w16 <= 1'b1;
                                 big_hi <= 1'b0; big_eof <= 1'b1;
-                                state <= C_BIG_WR;
+                                state_q <= (117'd1 << C_BIG_WR);
                             end else begin
                                 src_bank <= 1'b0;
-                                state <= C_IDLE;
+                                state_q <= (117'd1 << C_IDLE);
                             end
                         end
                     end else if (jsb_tether_stb) begin
@@ -2794,35 +1779,46 @@ module jmr_console_engine (
                             src_wlo <= big_lo; src_w16 <= 1'b1;
                             big_hi <= 1'b0;
                             big_len <= big_len + 22'd1;
-                            state <= C_BIG_WR;
+                            state_q <= (117'd1 << C_BIG_WR);
                         end
                     end else if ((!kbd_empty && kbd_data == 8'h1B)
-                                 || (&teth_wd)) begin
+                                 || teth_wd[30]) begin
                         if (!kbd_empty && kbd_data == 8'h1B) kbd_pop <= 1'b1;
                         teth_wd <= 30'd0;
                         big_staged <= 1'b0; big_hi <= 1'b0;
                         src_bank <= 1'b0;
-                        state <= C_IDLE;
+                        state_q <= (117'd1 << C_IDLE);
                     end else teth_wd <= teth_wd + 30'd1;
                 end
-                C_BIG_WR: if (src_gnt) begin
+                state_q[C_BIG_WR]: if (src_gnt) begin
                     src_w16 <= 1'b0;
                     if (big_eof) begin
                         big_eof <= 1'b0;
                         src_bank <= 1'b0;
-                        state <= C_IDLE;
-                    end else state <= C_BIG_TETHER;
+                        state_q <= (117'd1 << C_IDLE);
+                    end else state_q <= (117'd1 << C_BIG_TETHER);
                 end
-                // NEW: HTML RUN — PROG/host byte stream (same splitter as FAT GBW)
-                C_JSB_TETHER: begin
+                // HTML RUN — PROG/host byte stream (same splitter as FAT GBW)
+                state_q[C_JSB_DRAIN]:begin
+                    // Finish the CRC-framed packet even when an early asset
+                    // header is bad. Otherwise the transport waits forever
+                    // for a consumer that already left the image state.
+                    if(jsb_tether_eof)state_q <= (117'd1 << C_JSB_TEOF);
+                    else if(jsb_tether_stb)teth_wd<=0;
+                    else if(teth_wd[30] || (!kbd_empty && kbd_data==27))begin
+                        tether_abort<=1;ld_err<=1;image_code_valid<=0;
+                        reply_sel<=9;reply_idx<=0;state_q <= (117'd1 << C_REPLY);
+                    end else teth_wd<=teth_wd+1'b1;
+                end
+                state_q[C_JSB_TETHER]: begin
                     if (jsb_tether_eof)
-                        state <= C_JSB_TEOF;
+                        state_q <= (117'd1 << C_JSB_TEOF);
                     else if (jsb_tether_stb) begin
                         teth_wd <= 30'd0;
                         jsb_din <= jsb_tether_data;
-                        state <= C_JSB_FEED;
+                        state_q <= (117'd1 << C_JSB_FEED);
                     end else if ((!kbd_empty && kbd_data == 8'h1B)
-                                 || (&teth_wd)) begin
+                                 || teth_wd[30]) begin
                         // ESC (head of the kbd FIFO) or ~10.7s of host
                         // silence: fail loud (?NB), never a dead console
                         // (a PS/2 RUN cannot trigger the host compile -
@@ -2831,10 +1827,10 @@ module jmr_console_engine (
                         teth_wd <= 30'd0;
                         ld_err <= 1'b1;
                         reply_sel <= 4'd7; reply_idx <= 0;
-                        state <= C_REPLY;
+                        state_q <= (117'd1 << C_REPLY);
                     end else teth_wd <= teth_wd + 30'd1;
                 end
-                C_SYS:case(sys_phase)
+                state_q[C_SYS]:case(sys_phase)
                     0:begin
                         mem_en<=1;mem_we<=1;mem_addr<=NAME_BUF+16'(sys_i);
                         if(sys_rom)case(sys_i)0:mem_wdata<="T";1:mem_wdata<="O";2:mem_wdata<="O";3:mem_wdata<="L";4:mem_wdata<="B";5:mem_wdata<="O";6:mem_wdata<="X";7:mem_wdata<=".";8:mem_wdata<="R";9:mem_wdata<="O";default:mem_wdata<="M";endcase
@@ -2894,7 +1890,7 @@ module jmr_console_engine (
                     end
                     default:finish_system_file(3);
                 endcase
-                C_RESIDENT:case(resident_phase)
+                state_q[C_RESIDENT]:case(resident_phase)
                     0:begin
                         sram_req<=1;sram_we<=0;
                         sram_addr<=resident_restore?(jmr_js_vm_pkg::FINDER_STATE_BASE+22'(resident_i>>1)):(CSCR_SRAM_BASE+22'(resident_i));
@@ -2925,63 +1921,70 @@ module jmr_console_engine (
                     5:begin
                         resident_i<=resident_i+1'b1;
                         if(resident_init || resident_cancelled || forget_finder || resident_i==CSCR_WORDS-1)begin
-                            if(resident_cancelled || forget_finder)begin finder_state_valid<=0;park_pending<=0;state<=C_PROMPT;end
-                            else if(resident_restore)begin vm_start<=1;cmp_ph<=0;cmp_wd<=0;state<=C_CMP_WAIT;end
-                            else begin finder_state_valid<=1;park_pending<=0;state<=C_PROMPT;end
+                            if(resident_cancelled || forget_finder)begin finder_state_valid<=0;park_pending<=0;state_q <= (117'd1 << C_PROMPT);end
+                            else if(resident_restore)begin vm_start<=1;cmp_ph<=0;cmp_wd<=0;state_q <= (117'd1 << C_CMP_WAIT);end
+                            else begin finder_state_valid<=1;park_pending<=0;state_q <= (117'd1 << C_PROMPT);end
                         end else resident_phase<=(resident_restore && !resident_i[0])?3:0;
                     end
                     default:resident_phase<=0;
                 endcase
-                C_CACHE_WRITE:if(sram_ack)begin
-                    sram_req<=0;sram_we<=0;state<=C_CACHE_GAP;
+                state_q[C_CACHE_WRITE]:if(sram_ack)begin
+                    sram_req<=0;sram_we<=0;state_q <= (117'd1 << C_CACHE_GAP);
                 end
-                C_CACHE_READ:if(sram_ack)begin
-                    sram_req<=0;cache_word<=sram_rdata;jsb_din<=sram_rdata[7:0];state<=C_CACHE_GAP;
+                state_q[C_CACHE_READ]:if(sram_ack)begin
+                    sram_req<=0;cache_word<=sram_rdata;jsb_din<=sram_rdata[7:0];state_q <= (117'd1 << C_CACHE_GAP);
                 end
-                C_CACHE_GAP:state<=cache_tail?C_JSB_TEOF:C_JSB_FEED;
-                C_JSB_TEOF: if(finder_cache_fill && jsb_boff[0] && !cache_tail)begin
+                state_q[C_CACHE_GAP]:state_q <= cache_tail?(117'd1 << C_JSB_TEOF):(117'd1 << C_JSB_FEED);
+                state_q[C_JSB_TEOF]: if(finder_cache_fill && jsb_boff[0] && !cache_tail)begin
                     sram_req<=1;sram_we<=1;sram_addr<=jmr_js_vm_pkg::SYSTEM_CACHE_BASE+22'(jsb_boff>>1);
-                    sram_wdata<={8'd0,cache_low};cache_tail<=1;state<=C_CACHE_WRITE;
+                    sram_wdata<={8'd0,cache_low};cache_tail<=1;state_q <= (117'd1 << C_CACHE_WRITE);
                 end else begin
                     if (jsb_bi != 2'd0) begin
                         code_we <= 1'b1;
                         code_waddr <= jsb_waddr;
                         code_wdata <= jsb_word;
                     end
-                    // run 71: a corrupted program stream never runs — ?CK.
-                    if (jsb_tether_mode && jsb_tether_crc_err) begin
+                    image_code_bytes <= jsb_has_aset ? {9'd0,jsb_aset_off} : {9'd0,jsb_boff};
+                    image_code_valid <= !ld_err && jsb_boff>=16 &&
+                                        !(host_active && host_op==5 && host_arg!=32'(jsb_boff)) &&
+                                        !(jsb_tether_mode && jsb_tether_crc_err) &&
+                                        (!jsb_has_aset || (aset_seen && aset_pay >= aset_len));
+                    // A corrupted program stream never runs — ?CK.
+                    if(jsb_boff<16 || (host_active && host_op==5 && host_arg!=32'(jsb_boff)))begin
+                        ld_err<=1;reply_sel<=7;reply_idx<=0;state_q <= (117'd1 << C_JSB_CLOSE);
+                    end else if (jsb_tether_mode && jsb_tether_crc_err) begin
                         ld_err <= 1'b1; reply_sel <= 5'd16; reply_idx <= 0;
-                        state <= C_JSB_CLOSE;
+                        state_q <= (117'd1 << C_JSB_CLOSE);
                     end else
                     // NEW fail loud: header promised an ASET section but the
                     // stream ended early → ?NH, never silent blank sprites
                     if (jsb_has_aset && (!aset_seen || aset_pay < aset_len)) begin
                         ld_err <= 1'b1; reply_sel <= 4'd9; reply_idx <= 0;
-                        state <= C_JSB_CLOSE;
+                        state_q <= (117'd1 << C_JSB_CLOSE);
                     end else if (aset_seen && aset_pay[0]) begin
                         sram_req <= 1'b1; sram_we <= 1'b1;
                         sram_addr <= aset_pay[22:1];
                         sram_wdata <= {8'h00, sram_lo};
                         sram_last <= 1'b1;
-                        state <= C_JSB_SRAMW;
+                        state_q <= (117'd1 << C_JSB_SRAMW);
                     end else
-                        state <= C_JSB_CLOSE;
+                        state_q <= (117'd1 << C_JSB_CLOSE);
                 end
-                C_JSB_FEED: begin
+                state_q[C_JSB_FEED]: begin
                     if(aset_seen && aset_len>2*jmr_js_vm_pkg::CART_WORDS)begin
-                        ld_err<=1;reply_sel<=4'd9;reply_idx<=0;state<=C_JSB_CLOSE;
+                        ld_err<=1;reply_sel<=4'd9;reply_idx<=0;state_q <= jsb_tether_mode?(117'd1 << C_JSB_DRAIN):(117'd1 << C_JSB_CLOSE);
                     end else if (jsb_has_aset && jsb_aset_off != 23'd0
                                  && jsb_boff >= 23'd16 && jsb_boff >= jsb_aset_off) begin
                         // ---- ASET section: "ASET" + u32 len, then payload → SRAM
                         jsb_boff <= jsb_boff + 23'd1;
-                        state <= jsb_tether_mode ? C_JSB_TETHER : C_JSB_GB;
+                        state_q <= jsb_tether_mode ? (117'd1 << C_JSB_TETHER) : (117'd1 << C_JSB_GB);
                         if (aset_rel < 23'd4) begin
                             if ((aset_rel == 23'd0 && jsb_din != "A") ||
                                 (aset_rel == 23'd1 && jsb_din != "S") ||
                                 (aset_rel == 23'd2 && jsb_din != "E") ||
                                 (aset_rel == 23'd3 && jsb_din != "T")) begin
                                 ld_err <= 1'b1; reply_sel <= 4'd9; reply_idx <= 0;
-                                state <= C_JSB_CLOSE;
+                                state_q <= jsb_tether_mode ? (117'd1 << C_JSB_DRAIN) : (117'd1 << C_JSB_CLOSE);
                             end
                         end else if (aset_rel < 23'd8) begin
                             unique case (aset_rel[1:0])
@@ -3011,7 +2014,7 @@ module jmr_console_engine (
                                 sram_req <= 1'b1; sram_we <= 1'b1;
                                 sram_addr <= aset_pay[22:1];
                                 sram_wdata <= {jsb_din, sram_lo};
-                                state <= C_JSB_SRAMW;
+                                state_q <= (117'd1 << C_JSB_SRAMW);
                             end
                         end
                     end else begin
@@ -3034,90 +2037,78 @@ module jmr_console_engine (
                             end
                         endcase
                         if (jsb_bi == 2'd3 && jsb_waddr == 15'h7FFF)
-                            state <= jsb_tether_mode ? C_JSB_TETHER : C_JSB_PEEK;
+                            state_q <= jsb_tether_mode ? (117'd1 << C_JSB_TETHER) : (117'd1 << C_JSB_PEEK);
                         else begin
                             jsb_bi <= jsb_bi + 2'd1;
-                            state <= jsb_tether_mode ? C_JSB_TETHER : C_JSB_GB;
+                            state_q <= jsb_tether_mode ? (117'd1 << C_JSB_TETHER) : (117'd1 << C_JSB_GB);
                         end
                     end
                 end
-                // NEW: hold the SRAM write until the port acks, then stream on
-                C_JSB_SRAMW: if (sram_ack) begin
+                // Hold the SRAM write until the port acks, then stream on
+                state_q[C_JSB_SRAMW]: if (sram_ack) begin
                     sram_req <= 1'b0; sram_we <= 1'b0;
-                    state <= sram_last ? C_JSB_CLOSE
-                           : (jsb_tether_mode ? C_JSB_TETHER : C_JSB_GB);
+                    state_q <= sram_last ? (117'd1 << C_JSB_CLOSE)
+                           : (jsb_tether_mode ? (117'd1 << C_JSB_TETHER) : (117'd1 << C_JSB_GB));
                 end
-                C_JSB_CLOSE: if(finder_cache_replay)begin
+                state_q[C_JSB_CLOSE]: if(finder_cache_replay)begin
                     finder_cache_replay<=0;
-                    if(ld_err)begin finder_cache_valid<=0;state<=C_REPLY;end
+                    if(ld_err)begin finder_cache_valid<=0;state_q <= (117'd1 << C_REPLY);end
                     else if(finder_state_valid)begin
-                        resident_restore<=1;resident_init<=0;resident_phase<=0;resident_i<=0;state<=C_RESIDENT;
-                    end else begin resident_restore<=1;resident_init<=1;resident_phase<=3;resident_i<=16384;state<=C_RESIDENT;end
+                        resident_restore<=1;resident_init<=0;resident_phase<=0;resident_i<=0;state_q <= (117'd1 << C_RESIDENT);
+                    end else begin resident_restore<=1;resident_init<=1;resident_phase<=3;resident_i<=16384;state_q <= (117'd1 << C_RESIDENT);end
                 end else if (jsb_tether_mode) begin
                     // no FAT handle — PROG stream already ended
                     if (ld_err)
-                        state <= C_REPLY;
+                        state_q <= (117'd1 << C_REPLY);
                     else begin
                         vm_start <= 1'b1;
-                        reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
+                        reply_sel <= 4'd2; reply_idx <= 0; state_q <= (117'd1 << C_REPLY);
                     end
-                end else if (!stor_busy) begin stor_close <= 1'b1; state <= C_JSB_CLOSEW; end
-                C_JSB_CLOSEW: if (stor_done) begin
+                end else if (!stor_busy) begin stor_close <= 1'b1; state_q <= (117'd1 << C_JSB_CLOSEW); end
+                state_q[C_JSB_CLOSEW]: if (stor_done) begin
                     if(finder_cache_fill && !ld_err && !stor_err && jsb_boff!=0 && jsb_boff<=jmr_js_vm_pkg::FINDER_CACHE_BYTES)begin
                         finder_cache_valid<=1;finder_cache_length<=jsb_boff[17:0];
                     end
                     finder_cache_fill<=0;
                     if (ld_err || stor_err)
-                        state <= C_REPLY;
+                        state_q <= (117'd1 << C_REPLY);
                     else if (jsb_name_src != 2'd0) begin
                         // Finder initializes its scratch marker before entering the VM.
                         vm_start <= cmp_progsel!=8;
                         cmp_ph <= 5'd0; cmp_nw <= 1'b0; cmp_nm_len <= 8'd0; cmp_pend <= 1'b0; cmp_wd <= '0;
-                        if(cmp_progsel==8)begin resident_restore<=1;resident_init<=1;resident_phase<=3;resident_i<=16384;state<=C_RESIDENT;end
-                        else state <= C_CMP_WAIT;
+                        if(cmp_progsel==8)begin resident_restore<=1;resident_init<=1;resident_phase<=3;resident_i<=16384;state_q <= (117'd1 << C_RESIDENT);end
+                        else state_q <= (117'd1 << C_CMP_WAIT);
                     end else begin
                         vm_start <= 1'b1;
-                        reply_sel <= 4'd2; reply_idx <= 0; state <= C_REPLY;
+                        reply_sel <= 4'd2; reply_idx <= 0; state_q <= (117'd1 << C_REPLY);
                     end
                 end
-                // NEW: code BRAM full after word 7FFF — more code bytes → ?NB, never truncated RUN
-                C_JSB_PEEK: if (!stor_busy) begin
+                // Code BRAM full after word 7FFF — more code bytes → ?NB, never truncated RUN
+                state_q[C_JSB_PEEK]: if (!stor_busy) begin
                     stor_get_byte <= 1'b1;
-                    state <= C_JSB_PEEKW;
+                    state_q <= (117'd1 << C_JSB_PEEKW);
                 end
-                C_JSB_PEEKW: if (stor_done) begin
+                state_q[C_JSB_PEEKW]: if (stor_done) begin
                     if (stor_err || stor_eof)
-                        state <= C_JSB_CLOSE;
+                        state_q <= (117'd1 << C_JSB_CLOSE);
                     else if (jsb_has_aset && jsb_aset_off != 23'd0
                              && (jsb_boff + 23'd1) >= jsb_aset_off)
-                        state <= C_JSB_CLOSE; // ASET follows — code fit
+                        state_q <= (117'd1 << C_JSB_CLOSE); // ASET follows — code fit
                     else begin
                         ld_err <= 1'b1; reply_sel <= 4'd7; reply_idx <= 0;
-                        state <= C_JSB_CLOSE;
+                        state_q <= (117'd1 << C_JSB_CLOSE);
                     end
                 end
 
-                default: state <= C_IDLE;
+                default: state_q <= (117'd1 << C_IDLE);
             endcase
-`ifdef VERILATOR
-            ctrace_cyc <= ctrace_cyc + 1;
-            if (state inside {C_DIRN, C_DIRNW, C_DIR_RD, C_DIR_NL, C_LIST_MORE,
-                              C_LIST_WAIT, C_PROMPT}) begin
-                if (ctrace_fd == 0) ctrace_fd = $fopen("constrace.log", "w");
-                if (state != ctrace_last) begin
-                    $fdisplay(ctrace_fd, "c=%0d cst=%0d dirn=%0d page=%0d dmore=%0d",
-                              ctrace_cyc, state, dir_n, list_on_page, dir_more);
-                    ctrace_last <= state;
-                    $fflush(ctrace_fd);
-                end
-            end
-`endif
+
             // DIR handshake silence counter: counts only while waiting in the
             // DIR wait states with storage idle and no done this cycle.
-            if ((state == C_DIR0W || state == C_DIRNW) && !stor_busy && !stor_done) begin
+            if ((state_q[C_DIR0W] || state_q[C_DIRNW]) && !stor_busy && !stor_done) begin
                 if (!(&dir_hs_wd)) dir_hs_wd <= dir_hs_wd + 22'd1;
             end
-            if (state == C_DIR_CH && !mem_gnt) begin
+            if (state_q[C_DIR_CH] && !mem_gnt) begin
                 if (!(&dir_hs_wd)) dir_hs_wd <= dir_hs_wd + 22'd1;
             end
             // single-cycle qualifier: self-clearing so one timeout = one retry
@@ -3131,7 +2122,7 @@ module jmr_console_engine (
             // the command never started or done was lost - fail to ?IO,
             // never a dead console.
             if (stor_dir || stor_dir_next || stor_open || stor_readline
-                || stor_close || stor_delete || stor_nl_scan
+                || stor_close || stor_delete
                 || stor_get_byte || stor_putc)
                 cons_stor_arm <= 1'b1;
             else if (stor_done)
@@ -3139,21 +2130,20 @@ module jmr_console_engine (
             if (stor_done || !cons_stor_arm)
                 cons_stor_wd <= 32'd0;
             else begin
-                cons_stor_wd <= (state == C_CMP_WAIT) ? 32'd0
+                cons_stor_wd <= (state_q[C_CMP_WAIT]) ? 32'd0
                                                       : (cons_stor_wd + 32'd1);
-                if (state != C_CMP_WAIT && cons_stor_wd[31] && cons_stor_wd[30]) begin // ~32s
+                if (!state_q[C_CMP_WAIT] && cons_stor_wd[31] && cons_stor_wd[30]) begin // ~32s
                     cons_stor_arm <= 1'b0;
                     cons_stor_wd  <= 32'd0;
-                    reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY;
+                    reply_sel <= 4'd4; reply_idx <= 0; state_q <= (117'd1 << C_REPLY);
                 end
             end
             // C_CMP_WAIT is progress by definition: the VM is computing and
             // issues no storage ops for the whole compile. Without this the
             // 21.5 s clock fires mid-compile and reports ?IO, which looks
-            // like a disk fault rather than a watchdog. Its own cmp_wd
-            // (~172 s) bounds the compile instead.
-            if (state == C_IDLE || state == C_PROMPT || state == C_ECHO
-                || state == C_LIST_WAIT || state == C_CMP_WAIT || stor_done)
+            // like a disk fault rather than a watchdog.
+            if (state_q[C_IDLE] || state_q[C_PROMPT]
+                || state_q[C_CMP_WAIT] || stor_done)
                 // stor_done counts as progress: a standalone DONKEY.JSH
                 // load is 2.36MB of get_byte pulses over minutes - alive
                 // the whole time. A wedged op stops pulsing done and the
@@ -3163,7 +2153,7 @@ module jmr_console_engine (
                 cons_prog_wd <= cons_prog_wd + 32'd1;
                 if (cons_prog_wd[31]) begin // ~21.5s
                     cons_prog_wd <= 32'd0;
-                    reply_sel <= 4'd4; reply_idx <= 0; state <= C_REPLY;
+                    reply_sel <= 4'd4; reply_idx <= 0; state_q <= (117'd1 << C_REPLY);
                 end
             end
 
@@ -3171,34 +2161,35 @@ module jmr_console_engine (
             // is idle. SOURCE and its filename stay owned by this console.
             if(park_finder && finder_cache_valid)park_pending<=1;
             if(forget_finder)begin finder_state_valid<=0;park_pending<=0;end
-            if(park_pending && !vm_busy_i && (state==C_IDLE || state==C_PROMPT))begin
-                resident_restore<=0;resident_init<=0;resident_phase<=0;resident_i<=0;state<=C_RESIDENT;
+            if(park_pending && !vm_busy_i && (state_q[C_IDLE] || state_q[C_PROMPT]))begin
+                resident_restore<=0;resident_init<=0;resident_phase<=0;resident_i<=0;state_q <= (117'd1 << C_RESIDENT);
             end
-            if(shell_tool_start && (state==C_IDLE || state==C_PROMPT))begin
-                // Start a system executable without replacing the user's SOURCE.
-                src_bank<=0;cmp_arm_r<=0;cmp_interactive<=1;
-                jsb_name_src<=1;cmp_progsel<=shell_tool_finder?4'd8:4'd7;
-                cmp_save_mode<=0;jsb_want_jsh<=1;jsb_tether_mode<=0;
-                name_i<=0;dir_n<=0;jsb_waddr<=0;jsb_bi<=0;jsb_word<=0;ld_err<=0;
-                jsb_boff<=0;jsb_aset_off<=0;jsb_has_aset<=0;aset_seen<=0;aset_len<=0;aset_pay<=0;
-                sram_last<=0;cmp_wd<=0;cmp_ph<=0;cmp_nw<=0;cmp_nm_len<=0;cmp_pend<=0;
-                cache_tail<=0;finder_cache_fill<=0;finder_cache_replay<=0;
-                pal_idx<=0;pal_ph<=0;
-                if(shell_tool_finder && !sys_attempted)begin
-                    sys_attempted<=1;sys_i<=0;sys_phase<=0;state<=C_SYS;
-                end else if(shell_tool_finder && finder_cache_valid)begin
-                    finder_cache_replay<=1;finder_cache_hits<=finder_cache_hits+1'b1;
-                    cdone_seen_low<=0;state<=C_JSB_GB;
-                end else state<=C_JSB_PREP;
+            if(shell_request && ready_lit && !vm_busy_i && !host_hold_o)begin
+                shell_accepted<=1;command_failed_o<=0;
+                service_how<=shell_how;service_name_q<=shell_name;
+                service_load_pending<=0;
+                if(shell_how==8)start_system(4'd8);
+                else if(shell_len==0 || shell_len>12)begin
+                    reply_sel<=4'd6;reply_idx<=0;state_q <= (117'd1 << C_REPLY);
+                end else begin
+                    // Enter the name writer directly; the command parser,
+                    // line buffer and keyboard have no role in Finder launch.
+                    halt_pulse<=1;
+                    service_load_pending<=1;
+                    name_len_r<={3'd0,shell_len};name_i<=0;
+                    cmd_is_load<=1;
+                    src_bank<=0;src_trunc<=0;
+                    state_q <= (117'd1 << C_NWR);
+                end
             end
-            if(raw_cdone_pending && (state==C_IDLE || state==C_PROMPT))begin
+            if(raw_cdone_pending && !host_hold_o && (state_q[C_IDLE] || state_q[C_PROMPT]))begin
                 raw_cdone_armed<=0; cdone_seen_low<=1;
                 halt_pulse<=1'b1; handoff_stop_pending<=1'b1;
                 cmp_arm_r<=0; cmp_interactive<=1;
                 cmp_img_len<=cmp_len_i; cmp_out_off<=0;
                 cmp_ph<=1; cmp_wd<=1; cmp_pend<=0;
                 cmp_save_mode<=0; cmp_art_mode<=0; big_staged<=0;
-                state<=C_CMP_WAIT;
+                state_q <= (117'd1 << C_CMP_WAIT);
             end
             if(document_new)begin
                 src_len<=0;src_name_len<=12;ui_unnamed_o<=1;
@@ -3210,6 +2201,188 @@ module jmr_console_engine (
                 for(integer nn=0;nn<16;nn=nn+1)src_name[nn]<=nn<12 && nn<ui_name_len?ui_name[nn*8+:8]:8'd0;
                 src_is_html<=ui_name_len>=4 && ui_name[(ui_name_len-4)*8+:32]==32'h4d54482e;
                 src_is_js<=ui_name_len>=3 && ui_name[(ui_name_len-3)*8+:24]==24'h534a2e;
+            end
+
+            tether_abort_q<=tether_abort;
+            if(tether_abort && !tether_abort_q)host_link_event<=1;
+            // Service response storage is independent of the UART serializer;
+            // a completion cannot overwrite an unconsumed acceptance record.
+            if(host_q_valid && host_q_ready)host_q_valid<=0;
+            if(host_finish_pending && !host_q_valid)begin
+                host_reply(host_op,host_tx,2,host_result_status,host_result_value);
+                if(host_op!=7)begin
+                    host_last_body<=host_body;host_last_status<=host_result_status;
+                    host_last_value<=host_result_value;host_last_valid<=1;
+                end
+                host_finish_pending<=0;host_active<=0;
+            end else if(host_status_tail && !host_q_valid)begin
+                host_reply(0,host_status_tx,2,0,32'h0000007f);host_status_tail<=0;
+            end else if(host_link_event && !host_q_valid)begin
+                host_reply(0,0,3,0,host_snapshot);host_link_event<=0;
+            end
+            if(src_setlen_stb_i || state_q[C_LD_OPEN])source_stage_valid<=0;
+            if(state_q[C_IDLE] && host_owned && jsb_tether_src)begin
+                source_stage_valid<=0;source_stage_error<=0;
+            end
+            if(state_q[C_IDLE] && host_owned && jsb_tether_big)begin
+                cart_stage_valid<=0;cart_stage_error<=0;
+            end
+            if(state_q[C_SRC_TETHER] && jsb_tether_eof)begin
+                source_stage_valid<=!jsb_tether_crc_err && !src_trunc;
+                source_stage_error<=jsb_tether_crc_err?8'd6:src_trunc?8'd5:8'd0;
+            end
+            if(state_q[C_BIG_TETHER] && jsb_tether_eof)begin
+                cart_stage_error<=jsb_tether_crc_err?8'd6:big_trunc?8'd5:8'd0;
+                if(!big_hi)cart_stage_valid<=!jsb_tether_crc_err && !big_trunc;
+            end
+            if(state_q[C_BIG_WR] && src_gnt && big_eof)
+                cart_stage_valid<=!big_trunc && cart_stage_error==0;
+            // No stage is valid after an interrupted transfer.
+            if((state_q[C_SRC_TETHER] || state_q[C_BIG_TETHER]) &&
+                ((!kbd_empty && kbd_data==27) || teth_wd[30]))begin
+                source_stage_valid<=0;cart_stage_valid<=0;
+                source_stage_error<=8;cart_stage_error<=8;tether_abort<=1;
+            end
+            if(host_active && host_state!=H_NONE)begin
+                host_watchdog<=host_watchdog+1'b1;
+                if(host_state!=H_NOTIFY && (stor_done || jsb_tether_stb || sram_ack))host_watchdog<=0;
+                else if(host_watchdog[31])begin
+                    // Existing storage/VM watchdogs remain authoritative;
+                    // this also bounds a lost host-service handoff.
+                    host_finish(7,0);
+                end
+            end
+            case(host_state)
+                H_CHECK:begin
+                    host_check_name<=host_check_name>>8;
+                    host_check_i<=host_check_i+1'b1;
+                    if(host_check_i<host_name_len)begin
+                        if(host_check_name[7:0]==".")begin
+                            if(host_dot || host_stem_n==0)host_bad_name<=1;
+                            host_dot<=1;
+                        end else begin
+                            if(!fat_letter(host_check_name[7:0]))host_bad_name<=1;
+                            if(host_dot)begin
+                                if(host_ext_n==3)host_bad_name<=1;
+                                host_ext_n<=host_ext_n+1'b1;
+                            end else begin
+                                if(host_stem_n==8)host_bad_name<=1;
+                                host_stem_n<=host_stem_n+1'b1;
+                            end
+                        end
+                    end else if(host_check_name[7:0]!=0)host_bad_name<=1;
+                    if(host_check_i==11)host_state<=H_BEGIN;
+                end
+                H_BEGIN:begin
+                    if((host_op==2 || host_op==3 || host_op==4) &&
+                        (host_bad_name || host_stem_n==0 || (host_dot && host_ext_n==0)))host_finish(4,0);
+                    else if((host_op==2 || host_op==3) && !host_owned)host_finish(1,0);
+                    else if((host_op==2 || host_op==3) &&
+                        (srcb_pend || src_req || state_q[C_SRC_TETHER] || state_q[C_SRC_WR] ||
+                         state_q[C_BIG_TETHER] || state_q[C_BIG_WR]))begin
+                        // The CRC trailer may arrive before an outstanding
+                        // SOURCE write or odd CART tail reaches SRAM. Await
+                        // that acknowledged staging completion, not a timer.
+                    end
+                    else if(host_op==2 && (!source_stage_valid || host_arg!=32'(src_len)))
+                        host_finish(source_stage_error!=0?source_stage_error:8'd5,32'(src_len));
+                    else if(host_op==3 && (!cart_stage_valid || host_arg!=32'(big_len)))
+                        host_finish(cart_stage_error!=0?cart_stage_error:8'd5,32'(big_len));
+                    else if(host_op==7 && !host_owned)host_finish(1,0);
+                    else if(host_op==1 && host_arg>1)host_finish(5,0);
+                    else if(host_op==4 && (host_arg>3 || library_dirty))host_finish(5,0);
+                    else if(host_op==5 && (library_dirty || host_arg<16 || host_arg>32'h007fffff))host_finish(5,0);
+                    else if(vm_busy_i)begin
+                        // Finder may be parked; an editor/game with unsaved
+                        // data is never stopped merely to import a file.
+                        if(finder_active_i && state_q[C_CMP_WAIT] && cmp_ph==0 && !srcb_pend && !stor_busy)begin
+                            raw_cdone_armed<=0;
+                            if(host_op==1 && host_arg==0)begin
+                                // Finder paints its own receiving panel and
+                                // yields through the existing sysRun service.
+                                host_receive_request<=1;host_state<=H_NOTIFY;
+                            end else begin halt_pulse<=1;host_state<=H_STOP;end
+                        end else host_finish(1,0);
+                    end else if(ready_lit)begin
+                        if(!present_busy_i)host_begin_owned();
+                    end
+                    else host_finish(1,0);
+                end
+                H_NOTIFY:begin
+                    if(host_receive_taken)host_receive_request<=0;
+                    if(host_receive_yield)host_state<=H_STOP;
+                    else if(host_watchdog[29])host_finish(1,0);
+                end
+                H_STOP:if(!vm_busy_i && !present_busy_i && !srcb_pend && !stor_busy)begin
+                    cmp_interactive<=0;cmp_arm_r<=0;raw_cdone_armed<=0;
+                    state_q <= (117'd1 << C_PROMPT);host_state<=H_PARK;
+                    if(finder_cache_valid)park_pending<=1;
+                end
+                H_PARK:if(ready_lit && !vm_busy_i)host_begin_owned();
+                H_WAIT:begin
+                    if(host_op==5 && !host_stream_announced && state_q[C_JSB_TETHER] && !host_q_valid)begin
+                        // Only invite bulk bytes once Finder is safely parked
+                        // and the actual image consumer can accept them.
+                        host_reply(5,host_tx,1,0,host_arg);host_stream_announced<=1;
+                    end
+                    if((host_op==1 || host_op==4 || host_op==5) && (vm_start || run_pulse))begin
+                        host_started<=1;host_started_finder<=host_op==1;host_finish(0,host_op==5?32'(jsb_boff):image_code_bytes);
+                    end
+                    if((host_op==2 || host_op==3) && state_q[C_SV_CLOSEW] && stor_done)begin
+                        if(save_failed || stor_err)host_finish(7,0);
+                        else begin
+                            host_finish(0,host_arg);source_stage_valid<=0;cart_stage_valid<=0;
+                            // A replacement library or Finder must never use
+                            // an older executable/cache at the next refresh.
+                            if(host_name==96'h004d4f522e584f424c4f4f54 || // TOOLBOX.ROM
+                               host_name==96'h004b4e4c2e584f424c4f4f54 || // TOOLBOX.LNK
+                               host_name==96'h000048534a2e5245444e4946 || // FINDER.JSH
+                               host_name==96'h00005359532e4d4554535953)begin // SYSTEM.SYS
+                                library_dirty<=1;finder_cache_valid<=0;finder_state_valid<=0;
+                            end
+                        end
+                    end
+                    if(state_q[C_REPLY] && service_error(reply_sel))begin
+                        host_finish(tether_abort?8'd8:reply_sel==16?8'd6:(reply_sel==7 || reply_sel==15)?8'd5:8'd7,
+                            tether_abort?32'h80000000:32'(reply_sel));
+                        state_q <= (117'd1 << C_PROMPT);command_failed_o<=0;
+                    end
+                end
+                default:;
+            endcase
+            if(host_req_valid && host_req_ready)begin
+                if(!host_req_crc_ok)host_reply(request_op,request_tx,2,6,0);
+                else if(host_req_body[7:0]!=1)host_reply(request_op,request_tx,2,2,0);
+                else if(request_op==6)begin
+                    if(host_active && request_arg==host_tx)host_reply(6,request_tx,1,0,0);
+                    else if(host_last_valid && request_arg==host_last_body[47:16])host_reply(6,request_tx,2,host_last_status,host_last_value);
+                    else host_reply(6,request_tx,2,9,0);
+                end else if(request_op==0)begin
+                    host_reply(0,request_tx,3,0,host_snapshot);
+                    host_status_tail<=1;host_status_tx<=request_tx;
+                end else if(host_active && request_tx==host_tx)begin
+                    if((&request_same_active_words))begin
+                        if(host_op!=5 || host_stream_announced)host_reply(request_op,request_tx,1,0,0);
+                        // Otherwise its original acceptance is still pending
+                        // the FD consumer; do not invite the bytes early.
+                    end else host_reply(request_op,request_tx,2,10,0);
+                end else if(host_last_valid && request_tx==host_last_body[47:16])begin
+                    if((&request_same_last_words))host_reply(request_op,request_tx,2,host_last_status,host_last_value);
+                    else host_reply(request_op,request_tx,2,10,0);
+                end else if(host_active)host_reply(request_op,request_tx,2,1,0);
+                else if(tether_abort)host_reply(request_op,request_tx,2,8,32'h80000000);
+                else if(request_op>7)host_reply(request_op,request_tx,2,3,0);
+                else if((request_op==2 || request_op==3 || request_op==4) && (request_len==0 || request_len>12))
+                    host_reply(request_op,request_tx,2,4,0);
+                else if(!(request_op==2 || request_op==3 || request_op==4) && request_len!=0)
+                    host_reply(request_op,request_tx,2,4,0);
+                else begin
+                    host_body<=host_req_body;host_active<=1;host_watchdog<=0;host_stream_announced<=0;
+                    host_check_name<=host_req_body[183:88];host_check_i<=0;
+                    host_stem_n<=0;host_ext_n<=0;host_dot<=0;host_bad_name<=0;
+                    host_state<=(request_op==2 || request_op==3 || request_op==4)?H_CHECK:H_BEGIN;
+                    if(request_op!=5)host_reply(request_op,request_tx,1,0,0);
+                end
             end
 
             // ---- SOURCE -> external SRAM bridge (appended; every beat) ----

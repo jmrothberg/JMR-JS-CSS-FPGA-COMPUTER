@@ -1,6 +1,5 @@
 """The ordinary FPGA-SIM launch must reject a stale local cache."""
 import json
-from pathlib import Path
 import pytest
 from tools.simulator_provenance import digest, inputs, verify
 

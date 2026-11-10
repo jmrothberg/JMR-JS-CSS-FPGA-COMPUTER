@@ -12,10 +12,13 @@
   "disk": "card.img",
   "toolbox_capabilities": "0x00010fff",
   "bitstream": {
-    "status": "building_after_review",
+    "status": "run84_postroute_repair_active_setup_not_yet_met",
     "path": null,
-    "candidate": "build/run81_mac_native",
-    "previous_failed_wns_ns": -1.652
+    "build_directory": "/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/run84_structural_cleanup",
+    "build_session": 43383,
+    "input_lock": "/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/run84_structural_cleanup/build_input_lock.json",
+    "factory_rom_sha256": "17e4a1c7e843d99176e5893a49cb4226010af2bb43ae80221cc407491720afb6",
+    "release_qualified": false
   },
   "strict_scopes": [
     "rtl",
@@ -55,8 +58,8 @@
     "rtl/engines/jmr_ft245_async.sv": "93d2136917daf4a02e15c7f97d4cf95203209499b650522400ccc24bc2346f2c",
     "rtl/engines/jmr_icon_stream.sv": "14466b21b5492dc89b99f2831d30741655a39044d63f895ce11e6e26cd22564e",
     "rtl/engines/jmr_input_engine.sv": "c16f2af2acc042cb10853ba6882f6854f797d452f08f5c1422ec845c3e6b0e67",
-    "rtl/engines/jmr_js_vm.sv": "dec57441840871d1e7fd90b6bdb3d82928b9a979426b7a060a3dfd9a55e663f5",
-    "rtl/engines/jmr_js_vm_exec64.sv": "f14e547de974453bc7d16cc814710fd5aaa8de8faf909ee5f110102aef69a44e",
+    "rtl/engines/jmr_js_vm.sv": "ba7678ded5ff9e594ee6ed96ce31ea0bddb121f4294d420c72999f720f4fd0a7",
+    "rtl/engines/jmr_js_vm_exec64.sv": "5a6d3ce3eb54d170871e453283d1697ed2b211042a12538ce24fc25efe025e70",
     "rtl/engines/jmr_js_vm_pkg.sv": "7aa416f7612e2938770cb5ab1d9814e2094951c8a0133d16f8c38a3200b969c8",
     "rtl/engines/jmr_keyboard_fifo.sv": "a1d43b0b7f486a77f7f88b73d703c631ecd37c77b4c47023ad5de39954032a7d",
     "rtl/engines/jmr_mini_fb.sv": "15807acb2b485fa78913421116594fa7f975a9dd813817cf1f35c05b64795560",
@@ -70,11 +73,11 @@
     "rtl/engines/jmr_system_documents.sv": "8632d39e27133a4aa28fb8cb58c986458698ab909e53d93938fcaed212078095",
     "rtl/engines/jmr_system_menu.sv": "e75d69ce18ace5ad34e4819b181954b05543d13f28a5524c95d50fc3d1965892",
     "rtl/engines/jmr_system_menu_pkg.sv": "f74a2a797b849906e9784f3db395449298ff7b5c66bbf26ad69a0408be4c81aa",
-    "rtl/engines/jmr_toolbox.sv": "00404cb64c5b7f34959384f934d507d5bb4715a4ef07a76032bca816bffaef76",
+    "rtl/engines/jmr_toolbox.sv": "7d793f2b07069f9b1f4bf8ac8a98f476af7dd913a55e34425bff6cd1581290fb",
     "rtl/engines/jmr_toolbox_rom_pkg.sv": "a9a52347d190503985041cf17e864c4bcd58edd4197d67350b3a0a92de0622dd",
     "rtl/engines/jmr_uart_link.sv": "2fe822fc23f2d2a7994bd2ac7e9f8b232af5e028194859a642d209127a97b9e3",
     "rtl/engines/jmr_ui_snapshot.sv": "378dd51b74e58056e88733979a27d88a668e761404344cfcccfcae6009b206d6",
-    "rtl/engines/jmr_value.sv": "4a320ccc45831f4e1f7e9ff9f859ed73df310d686eb87346a9d940312f3c3370",
+    "rtl/engines/jmr_value.sv": "f5594569644899741ea08bc5605ff82b51678a4ae02857ad6a150751c97af73e",
     "rtl/engines/jmr_video_vram.sv": "e4ba41cd340794bd0f37d9e786b282810dad02e80642f2b48f2e04875c4641b2",
     "rtl/engines/storage_engine.sv": "d6ac684c9eba32d378eeb3b192d994565732a75c08f6047e6f2cd6172cffda2e",
     "rtl/engines/system_about.hex": "972b079d449ab3a658f1fb446b55d36a43eb27ef8c78226399e884a0b8e1a534",
@@ -427,7 +430,7 @@
     "tools/verify_current_set.py": "035759218233761ec3a0c2270536f2c344d042a2ae64f31ffe0f1957b998ae64",
     "sim/Makefile": "ed92b343ed7d6684752a744f4d16d01456ab86df14bb38144306af911c361a36",
     "sim/jmr_sram_ddr_model.sv": "393986899efd9b2348d75dbb8c035d82eef58b32593c04febe86b8c2e95e72a7",
-    "sim/sim_main.cpp": "e7e6d952d22889d43d81c5d2d0452b0990ddb50b6b657079032b18b2e338b0a7",
+    "sim/sim_main.cpp": "f853c3a3ecc7c414be3f7668b3cab7ccfb94e2d9fcd2055f948f7daba28b7d65",
     "sim/tb_finder_launch.sv": "16c2e258abd2fdf428f3e22090c54e465eaa306213b4603c20a2ecf0b52b4e2e",
     "sim/tb_frame_cadence.cpp": "f2a5e5b6e0b9b79716e0dfe3f7ff700ec842a184cd262a05a1bc7b8162c3ab12",
     "sim/tb_ft245.cpp": "e2ea7a7dfa1bb93e0106df2dfdf77f833086bad99fe253439470c16a5b1fa793",
@@ -459,7 +462,10 @@
     "docs/JMR_JS_COMPATIBILITY.md": "195db724f1abe35e1de0c01fdb8d7e74106d63dff97c5d3e71002f0c0d825e3b",
     "tests/test_canvas_rect_contract.py": "d6ae0d82294f201fe1f9ef5bb69d445dc28be8498533c7aacd08870aeff5477c",
     "tests/test_blit_scale_exact.py": "53e82e9f5341fe53efd02c5920310b7f4767b66510b998c278a88aebedc7fc18",
-    "tests/test_legacy_sprite_validation.py": "2a6f64047f51588cac7da3d514c1fc25767ddbbac0c79b7a994c92a01caaec4e"
+    "tests/test_legacy_sprite_validation.py": "2a6f64047f51588cac7da3d514c1fc25767ddbbac0c79b7a994c92a01caaec4e",
+    "docs/RTL_REORG.md": "ba8a97e5b4a9ca84feec172f45bbe6ec3add2069235a4328e726ffc0c30ce12d",
+    "docs/FPGA_FIT.md": "d53e6994528f859973d52f49f39519702b4f435ebdb0b94b9fe6daa84d62d209",
+    "docs/lastrun_ARCHITECTURE.md": "6cb4ff9741eba4e271469684170e69c691cb8af002c7b0bad5d049398f2e64ff"
   },
   "compatibility_checks": {
     "all44_recompiled_programs_match_drive": true,
@@ -468,5 +474,18 @@
     "directory_chain_fix": "d6ac684c9eba32d378eeb3b192d994565732a75c08f6047e6f2cd6172cffda2e",
     "receipt": "build/run81_mac_native/canonical_promotion/storage_rebuild_check.json"
   },
-  "scope": "Current source/storage/disk consistency for copying and synthesis. FPGA bitstream qualification is separate."
+  "scope": "Current source/storage/disk consistency for copying and synthesis. FPGA bitstream qualification is separate.",
+  "pending_build_source": "/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/run84_structural_cleanup/source",
+  "pending_matched_disk": {
+    "path": "/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/run84_structural_cleanup/card.img",
+    "sha256": "1a6912c17048f416bf55c02d0a017d19de94c5a43befcd58f51fa43dbb1dc207",
+    "programs": 45
+  },
+  "rollback": {
+    "name": "run78 selected by user",
+    "bit": "build/run78_clean_architecture/final_corrected/bitstream/run78_clean_qualified.bit",
+    "disk": "build/run78_clean_architecture/final_corrected/card.img",
+    "scope": "Historical rollback; previously documented limitations retained, not qualification of current software"
+  },
+  "cleanup_receipt": "build/cleanup_20261107/deleted_obsolete.json"
 }

@@ -125,7 +125,7 @@ requestAnimationFrame(tick);
         sim.shutdown()
 
 
-# NOTE (2026-08-27): a sprite re-upload invalidation gate was attempted
+# NOTE: a sprite re-upload invalidation gate was attempted
 # and hit two harness walls: (a) a second .JS RUN in one sim session
 # answers ?NB (console JSB lookup; stale-mount class, pre-existing), and
 # (b) after hard_break of an HTML title the sim console stops accepting
@@ -417,7 +417,7 @@ def test_joy_concurrent_edges_none_lost():
     assert run([20, F, F, 0, F, F]) == (1, 1), "fire beside direction edge"
     assert run([16, F, 0, F, 16, F, 0, F]) == (2, 2), "two rapid presses"
 
-    # Dual-interface pad (board 2026-08-29 JOYDEMO): the same press arrives
+    # Dual-interface pad: the same press arrives
     # as a REAL key event AND as a joy bit — the synthetic twin must be
     # swallowed (one keydown, one keyup), while a joy-only press after the
     # dedup window still delivers normally.

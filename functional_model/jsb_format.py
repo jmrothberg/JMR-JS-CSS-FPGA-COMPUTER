@@ -22,10 +22,11 @@ from typing import Any, List, Tuple
 from functional_model.bytecode import Chunk, Op
 
 MAGIC = b"JSB1"
+SETTER_MAGIC = b"JSB2"
 PROGRAM_IMAGE_VERSION = 1
 
 # Frozen V1 capacities shared with rtl/engines/jmr_js_vm.sv.
-PROGRAM_CODE_WORDS = 21504  # 2026-08-21(3): RTL CODE_WORDS
+PROGRAM_CODE_WORDS = 21504  # RTL CODE_WORDS
 PROGRAM_MAX_CONSTS = 1024
 PROGRAM_MAX_VARS = 512
 PROGRAM_MAX_NAMES = 1024
@@ -45,14 +46,14 @@ NATIVE_IDS = {
     "startLoop": 7,
     "keyUp": 8,
     "keyDown": 9,
-    # NEW (compiler v2): Math natives — ids reserved; RTL grows later
+    # Math natives — ids reserved; RTL grows later
     "Math.floor": 10,
     "Math.abs": 11,
     "Math.min": 12,
     "Math.max": 13,
     "Math.random": 14,
     "Math.sqrt": 15,
-    # NEW: DOM/storage stubs (PYTHON bytecode path; RTL ignores / later)
+    # DOM/storage stubs (PYTHON bytecode path; RTL ignores / later)
     "document.getElementById": 16,
     "document.querySelector": 17,
     "document.createElement": 18,
@@ -64,7 +65,7 @@ NATIVE_IDS = {
     "JSON.stringify": 24,
     "Date": 25,
     "Image": 26,
-    # NEW JSB v2: HTML titles (rAF / timers / extra DOM). RTL grows later.
+    # JSB v2: HTML titles (rAF / timers / extra DOM). RTL grows later.
     "requestAnimationFrame": 27,
     "setTimeout": 28,
     "setInterval": 29,
@@ -72,20 +73,18 @@ NATIVE_IDS = {
     "clearInterval": 31,
     "localStorage.removeItem": 32,
     "_stub": 33,  # unknown CALL_NATIVE → no-op
-    # NEW (full-game builtins): Array(n) ctor; Date.now reserved for RTL
+    # Array(n) ctor; Date.now reserved for RTL
     "Array": 34,
     "Date.now": 35,
-    # NEW: listener removal (DONKEY menus) — distinct from add ids 19/20
+    # Listener removal (DONKEY menus) — distinct from add ids 19/20
     "document.removeEventListener": 36,
     "window.removeEventListener": 37,
-    # NEW: synthetic events (DONKEY boot script Enter via dispatchEvent)
+    # Synthetic events (DONKEY boot script Enter via dispatchEvent)
     "document.dispatchEvent": 38,
     "window.dispatchEvent": 39,
-    # NEW: typeof x → interned tag string (PACMAN map hole checks)
+    # Typeof x → interned tag string (PACMAN map hole checks)
     "typeof": 40,
-    # NEW: runtime key enumeration (mk.js for-in desugar). PYTHON-first:
-    # the RTL nid-41 arm is pending the "worth doing" decision — until
-    # then FPGA-SIM faults loud (fault 5) on titles that reach it.
+    # Runtime own-key enumeration, shared by Object.keys and for-in lowering.
     "Object.keys": 41,
     # sound(ch, freqHz, vol0_15, frames, slideHzPerFrame) — always succeed
     # (no-op until ADAU1761 PHY). Unknown nid is fault 5; do not omit this.
@@ -115,7 +114,7 @@ NATIVE_IDS = {
     "joyButtons": 53,
     # natives V2: ES Math.round (ties toward +inf). Same shape as Math.floor.
     "Math.round": 54,
-    # run 71 language-lite: the cheap V1.5 gaps that forced hand-edits
+    # Language-lite: the cheap V1.5 gaps that forced hand-edits
     "isFinite": 55,
     "isNaN": 56,
     "Math.ceil": 57,
@@ -131,12 +130,17 @@ NATIVE_IDS = {
     "sysRun": 63,
     "toolbox": 64,  # versioned bulk memory/bitmap services; native JS engine unchanged
     "sysDocument": 65,  # raw SOURCE metadata/new-document service; UI stays software
+    "runtimeFault": 69,
+    "joy": 70,  # fail-closed software library error
+    "stringFromBytes": 68,  # bounded pages of bytes, immutable canonical string
+    "Array.isArray": 67,  # exact runtime array predicate
     "strByte": 66,  # byte access to interned strings; -1 for invalid operands
 }
 
-# NEW: aliases share an id (decode prefers the canonical NATIVE_IDS key)
+# Aliases share an id (decode prefers the canonical NATIVE_IDS key)
 NATIVE_ALIASES = {
-    "performance.now": "Date.now",   # run 71: frame clock alias
+    "getJoy": 70,
+    "performance.now": "Date.now",   # Frame clock alias
     "console.warn": 0,
     "addEventListener": 19,
     "removeEventListener": 36,
@@ -324,6 +328,7 @@ def program_max_sprites() -> int:
 # LOAD_CONST a1: 0=i32  1=string intern  2=None  3=IEEE-754 bits in const pool
 # 4=RegExp packed in const pool (pattern bytes + flags — RTL has no char heap)
 _LC_I32, _LC_STR, _LC_NONE, _LC_F32, _LC_REGEX = 0, 1, 2, 3, 4
+_LC_BOOL, _LC_NULL = 5, 6
 _STR_CAP = 512  # huge data: URIs stubbed — Image.onload still truthy
 # Non-data interned literals (layout rows, etc.) keep their full text.
 # NAMB length is u16; do not stub those down to 512.
@@ -333,7 +338,7 @@ _STR_CAP = 512  # huge data: URIs stubbed — Image.onload still truthy
 class ProgramClass:
     name_index: int
     constructor_ip: int | None
-    methods: Tuple[Tuple[int, int, bool], ...]
+    methods: Tuple[Tuple[int, int, int], ...]
 
 
 @dataclass(frozen=True)
@@ -499,9 +504,12 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
         return struct.unpack_from("<I", data, off)[0]
 
     need(0, 12, "header")
-    if data[:4] != MAGIC:
+    setter_format = data[:4] == SETTER_MAGIC
+    if data[:4] not in (MAGIC, SETTER_MAGIC):
         raise ValueError("bad JSB magic")
     n_ops, n_consts, n_vars, flags = struct.unpack_from("<HHHH", data, 4)
+    if setter_format and (flags & (FLAG_V2 | FLAG_VALUE64)) != (FLAG_V2 | FLAG_VALUE64):
+        raise ValueError("JSB2 accessors require Value64 v2 metadata")
     unknown = flags & ~KNOWN_FLAGS
     if unknown:
         raise ValueError(f"unsupported required ProgramImage flags 0x{unknown:04x}")
@@ -592,11 +600,13 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
             for _m in range(n_meth):
                 mi, entry = struct.unpack_from("<HH", data, off)
                 off += 4
-                if (mi & 0x7FFF) >= n_names:
+                mask=0x3fff if setter_format else 0x7fff
+                if setter_format and (mi&0xc000)==0xc000:raise ValueError("invalid accessor kind")
+                if (mi & mask) >= n_names:
                     raise ValueError(f"method name index {mi & 0x7FFF} is out of bounds")
                 if entry >= n_ops:
                     raise ValueError(f"method entry IP {entry} is out of bounds")
-                methods.append((mi & 0x7FFF, int(entry), bool(mi & 0x8000)))
+                methods.append((mi & mask, int(entry), 2 if setter_format and mi&0x4000 else int(bool(mi&0x8000))))
             classes.append(
                 ProgramClass(
                     int(ni),
@@ -730,7 +740,9 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
                 raise ValueError(f"constant index {a0} at IP {ip} is out of bounds")
             if a1 == _LC_STR and a0 >= n_names:
                 raise ValueError(f"string name index {a0} at IP {ip} is out of bounds")
-            if a1 not in (_LC_I32, _LC_STR, _LC_NONE, _LC_F32, _LC_REGEX):
+            if a1 == _LC_BOOL and a0 > 1 or a1 == _LC_NULL and a0 != 0:
+                raise ValueError(f"malformed literal operand at IP {ip}")
+            if a1 not in (_LC_I32, _LC_STR, _LC_NONE, _LC_F32, _LC_REGEX, _LC_BOOL, _LC_NULL):
                 raise ValueError(f"unknown LOAD_CONST tag {a1} at IP {ip}")
         elif op in (Op.LOAD_VAR, Op.STORE_VAR, Op.LET_VAR):
             if a0 >= n_vars:
@@ -744,7 +756,15 @@ def _validate_program_image(data: bytes) -> _ImageMeta:
         elif op in (Op.CALL_USER, Op.MAKE_FN):
             if a0 >= n_ops:
                 raise ValueError(f"function entry {a0} at IP {ip} is out of bounds")
+        elif op == Op.ADD and (a0 or a1):
+            if data[:4] != SETTER_MAGIC or a1 or not 0 < a0 < n_ops:
+                raise ValueError("invalid mixed ADD helper hint")
         elif op in (Op.GET_PROP, Op.SET_PROP, Op.NEW_OBJ, Op.CALL_METHOD):
+            if op==Op.GET_PROP and (a1 not in (0,1) or a1 and data[:4]!=SETTER_MAGIC):
+                raise ValueError("invalid prepared property mode")
+            if op==Op.CALL_METHOD and a0&0x8000:
+                if data[:4]!=SETTER_MAGIC: raise ValueError("prepared call requires JSB2")
+                a0 &= 0x7fff
             if a0 >= n_names:
                 raise ValueError(f"name index {a0} at IP {ip} is out of bounds")
 
@@ -836,24 +856,6 @@ def _id_to_native() -> dict[int, str]:
     return out
 
 
-def _needs_v2(chunk: Chunk) -> bool:
-    """v1 is ints + ops 1–18/22. HTML objects/strings/rAF require v2."""
-    v2_ops = {
-        Op.MAKE_ARRAY, Op.ARRAY_GET, Op.ARRAY_SET, Op.MOD,
-        Op.CALL_USER, Op.RET_VAL, Op.MAKE_OBJ, Op.GET_PROP, Op.SET_PROP,
-        Op.NEW_OBJ, Op.CALL_METHOD, Op.BIT_OR, Op.BIT_AND, Op.MAKE_FN, Op.CALL_VAL,
-    }
-    for op, *_a in chunk.code:
-        if op in v2_ops:
-            return True
-    for c in chunk.consts:
-        if isinstance(c, str) or c is None or isinstance(c, float):
-            return True
-        if isinstance(c, dict):
-            return True
-    return False
-
-
 def build_aset_payload(palette, sprites):
     """ASET payload = 256×RGB888 palette + 2-byte-aligned sprite banks.
 
@@ -880,7 +882,7 @@ def build_aset_payload(palette, sprites):
         raise ValueError(
             f"ASET payload {len(out)} bytes exceeds the 8 MiB asset SRAM bank"
         )
-    # 2026-08-28: the 4MB check above is necessary but not sufficient — the
+    # The 4MB check above is necessary but not sufficient — the
     # asset SRAM bank is SHARED with fixed runtime regions (framebuffer,
     # work RAM, legacy sprite RAM, source RAM, ImageData snapshot), all
     # placed contiguously from FB_SRAM_BASE to the top of the bank (see
@@ -969,6 +971,7 @@ def encode_chunk(
     sprites=None,
     aset: bool = False,
     value64: bool = True,
+    debug_map: bool = True,
 ) -> bytes:
     """Encode a compiled Chunk to .JSB bytes.
 
@@ -986,6 +989,10 @@ def encode_chunk(
             "tagged (non-Value64) ProgramImages are retired with exec32; "
             "every image must be FLAG_VALUE64 (docs/REMOVING_EXEC32.md)"
         )
+    if not debug_map:
+        import copy
+        chunk = copy.copy(chunk)
+        chunk.op_lines = None
     # Value64 requires the v2 trailer encoding.
     v2 = True
     if v2 or aset:
@@ -998,55 +1005,6 @@ def encode_chunk(
     if value64:
         raise ValueError("64-bit Values require the v2 ProgramImage trailer")
     return _encode_v1(chunk)
-
-
-def _upgrade_numeric_constants_to_value64(blob: bytes) -> bytes:
-    """Expand a validated v2 image's constant pool without changing opcodes."""
-    n_ops, n_consts, _n_vars, flags = struct.unpack_from("<HHHH", blob, 4)
-    header_bytes = 16 if flags & FLAG_ASET else 12
-    old_const_off = header_bytes
-    old_ops_off = old_const_off + 4 * n_consts
-    old_tail_off = old_ops_off + 4 * n_ops
-
-    # A pool slot's LOAD_CONST tag tells whether its old 32-bit bits are an
-    # integer, float32, or non-number descriptor. Conflicting uses are invalid.
-    slot_types: dict[int, int] = {}
-    for ip in range(n_ops):
-        word = struct.unpack_from("<I", blob, old_ops_off + 4 * ip)[0]
-        if (word & 0xFF) != int(Op.LOAD_CONST):
-            continue
-        index = (word >> 8) & 0xFFFF
-        load_type = (word >> 24) & 0xFF
-        if load_type not in (_LC_I32, _LC_F32, _LC_REGEX):
-            continue
-        previous = slot_types.setdefault(index, load_type)
-        if previous != load_type:
-            raise ValueError(f"constant slot {index} has conflicting Value types")
-
-    expanded = bytearray()
-    for index in range(n_consts):
-        raw = struct.unpack_from("<I", blob, old_const_off + 4 * index)[0]
-        load_type = slot_types.get(index, _LC_I32)
-        if load_type == _LC_F32:
-            number = struct.unpack("<f", struct.pack("<I", raw))[0]
-            expanded += struct.pack("<d", float(number))
-        elif load_type == _LC_I32:
-            signed = struct.unpack("<i", struct.pack("<I", raw))[0]
-            expanded += struct.pack("<d", float(signed))
-        else:
-            # Regex descriptors are consumed by the string engine, not ALU.
-            expanded += struct.pack("<Q", raw)
-
-    out = bytearray(blob[:old_const_off])
-    out += expanded
-    out += blob[old_ops_off:old_tail_off]
-    out += blob[old_tail_off:]
-    flags |= FLAG_VALUE64
-    struct.pack_into("<H", out, 10, flags)
-    if flags & FLAG_ASET:
-        old_aset = struct.unpack_from("<I", blob, 12)[0]
-        struct.pack_into("<I", out, 12, old_aset + 4 * n_consts)
-    return bytes(out)
 
 
 def _encode_v1(chunk: Chunk) -> bytes:
@@ -1089,6 +1047,10 @@ def _encode_v1(chunk: Chunk) -> bytes:
             a0 = var_index[name] & 0xFFFF
             if op in (Op.LOAD_VAR, Op.STORE_VAR) and len(args) > 1:
                 a1 = int(args[1]) & 0xFF
+        elif op == Op.ADD and args:
+            if not 0 < int(args[0]) < len(chunk.code):
+                raise ValueError("mixed ADD helper entry outside code")
+            a0 = int(args[0])
         elif op in (Op.JUMP, Op.JUMP_IF_FALSE):
             a0 = int(args[0]) & 0xFFFF
         elif op == Op.CALL_NATIVE:
@@ -1103,7 +1065,7 @@ def _encode_v1(chunk: Chunk) -> bytes:
         elif op == Op.MOD:
             pass  # no args
         elif op == Op.CALL_USER:
-            # NEW: a0=entry_ip, a1=argc
+            # a0=entry_ip, a1=argc
             a0 = int(args[0]) & 0xFFFF
             a1 = int(args[1]) & 0xFF
         elif op == Op.RET_VAL:
@@ -1111,16 +1073,17 @@ def _encode_v1(chunk: Chunk) -> bytes:
         elif op == Op.MAKE_OBJ:
             pass
         elif op in (Op.GET_PROP, Op.SET_PROP):
-            a0 = int(args[0]) & 0xFFFF  # name index — RTL heap uses slot ids later
+            a0 = int(args[0]) & 0xFFFF  # name index
+            a1 = int(args[1]) if op==Op.GET_PROP and len(args)>1 else 0
         elif op == Op.NEW_OBJ:
             a0 = int(args[0]) & 0xFFFF  # class name index
             a1 = int(args[1]) & 0xFF
         elif op == Op.CALL_METHOD:
-            a0 = int(args[0]) & 0xFFFF  # method name index
+            a0 = (int(args[0]) & 0x7FFF) | (0x8000 if len(args)>2 and args[2] else 0)  # method name index
             a1 = int(args[1]) & 0xFF
         elif op == Op.MAKE_FN:
             a0 = int(args[0]) & 0xFFFF
-            # NEW: a1 bit7 = is_arrow (lexical this); bit6 = IIFE (flat call);
+            # a1 bit7 = is_arrow (lexical this); bit6 = IIFE (flat call);
             # low 6 bits = nparam
             a1 = int(args[1]) & 0x3F if len(args) > 1 else 0
             if len(args) > 2 and args[2]:
@@ -1128,7 +1091,7 @@ def _encode_v1(chunk: Chunk) -> bytes:
             if len(args) > 3 and args[3]:
                 a1 |= 0x40
         elif op == Op.CALL_VAL:
-            # NEW: a0=argc (was dropped in v1 fall-through)
+            # a0=argc (was dropped in v1 fall-through)
             a0 = int(args[0]) & 0xFFFF
         elif op in (Op.BIT_OR, Op.BIT_AND):
             pass
@@ -1164,7 +1127,13 @@ def _encode_v2(
     const_map: dict[tuple[str, int] | int, int] = {}
     # per original const: (packed_i32_or_name_idx, a1_tag)
     orig_lc: List[Tuple[int, int]] = []
-    for c in chunk.consts:
+    for const_index, c in enumerate(chunk.consts):
+        if value64 and const_index in getattr(chunk, 'null_const_indices', ()):
+            orig_lc.append((0, _LC_NULL))
+            continue
+        if value64 and isinstance(c, bool):
+            orig_lc.append((int(c), _LC_BOOL))
+            continue
         if c is None:
             orig_lc.append((0, _LC_NONE))
             continue
@@ -1261,18 +1230,22 @@ def _encode_v2(
                 var_index[name] = len(var_names)
                 var_names.append(name)
             a0 = var_index[name] & 0xFFFF
-            # NEW: LET_VAR a1 bit0 = call-frame local (fn param/var). RTL has
+            # LET_VAR a1 bit0 = call-frame local (fn param/var). RTL has
             # flat vars: it must always-store those, keeping init-if-missing
             # only for top-level LET_VAR (state survives per-frame re-runs).
             if op == Op.LET_VAR and len(args) > 1 and args[1]:
                 a1 = 1
-                # NEW: a1[7:1] = env slot hint + 1 (0 = no hint). RTL
+                # a1[7:1] = env slot hint + 1 (0 = no hint). RTL
                 # phase-6 verified first guess; mismatch rescans from 0.
                 if len(args) > 2 and args[2] is not None:
                     a1 |= ((int(args[2]) & 0x1F) + 1) << 1
             # LOAD_VAR/STORE_VAR a1: 0=chain, 1=global, 2+slot=local.
             elif op in (Op.LOAD_VAR, Op.STORE_VAR) and len(args) > 1:
                 a1 = int(args[1]) & 0xFF
+        elif op == Op.ADD and args:
+            if not 0 < int(args[0]) < len(chunk.code):
+                raise ValueError("mixed ADD helper entry outside code")
+            a0 = int(args[0])
         elif op in (Op.JUMP, Op.JUMP_IF_FALSE):
             a0 = int(args[0]) & 0xFFFF
         elif op == Op.CALL_NATIVE:
@@ -1296,15 +1269,16 @@ def _encode_v2(
             a1 = int(args[1]) & 0xFF
         elif op in (Op.GET_PROP, Op.SET_PROP):
             a0 = int(args[0]) & 0xFFFF
+            a1 = int(args[1]) if op==Op.GET_PROP and len(args)>1 else 0
         elif op == Op.NEW_OBJ:
             a0 = int(args[0]) & 0xFFFF
             a1 = int(args[1]) & 0xFF
         elif op == Op.CALL_METHOD:
-            a0 = int(args[0]) & 0xFFFF
+            a0 = (int(args[0]) & 0x7FFF) | (0x8000 if len(args)>2 and args[2] else 0)
             a1 = int(args[1]) & 0xFF
         elif op == Op.MAKE_FN:
             a0 = int(args[0]) & 0xFFFF
-            # NEW: a1 bit7 = is_arrow (lexical this); bit6 = IIFE (flat call);
+            # a1 bit7 = is_arrow (lexical this); bit6 = IIFE (flat call);
             # low 6 bits = nparam
             a1 = int(args[1]) & 0x3F if len(args) > 1 else 0
             if len(args) > 2 and args[2]:
@@ -1324,7 +1298,8 @@ def _encode_v2(
         | (FLAG_VALUE64 if value64 else 0)
         | (FLAG_TOOLBOX if getattr(chunk,"toolbox_resident",False) else 0)
     )
-    hdr = MAGIC + struct.pack(
+    magic=SETTER_MAGIC if any(op[0]==Op.ADD and len(op)>1 and op[1] for op in chunk.code) or any(meta.get("setters") for meta in (chunk.classes or {}).values()) or any(op[0]==Op.GET_PROP and len(op)>2 and op[2] for op in chunk.code) else MAGIC
+    hdr = magic + struct.pack(
         "<HHHH", len(ops_out), len(consts), len(var_names), flags
     )
     body = (
@@ -1345,15 +1320,18 @@ def _encode_v2(
         getters = meta.get("getters") or ()
         for mname, entry in (meta.get("methods") or {}).items():
             mi = _intern_name(names, name_index, mname)
-            # NEW: bit15 of the name index flags a `get name()` accessor
+            # bit15 of the name index flags a `get name()` accessor
             if mname in getters:
                 mi |= 0x8000
             meth_rows.append((mi & 0xFFFF, int(entry) & 0xFFFF))
+        for mname,entry in (meta.get("setters") or {}).items():
+            mi=_intern_name(names,name_index,mname)
+            meth_rows.append((mi|0x4000,int(entry)&0xffff))
         class_rows.append((ni & 0xFFFF, ctor_ip, meth_rows))
     trailer = struct.pack("<H", len(names))
-    # NEW: u16 hashes first so RTL intern does not walk UTF-8 (that FSM hung HTML RUN)
+    # u16 hashes first so RTL intern does not walk UTF-8 (that FSM hung HTML RUN)
     for n in names:
-        # NEW: u8 length after each hash — RTL string concat folds
+        # u8 length after each hash — RTL string concat folds
         # h(a+b) = h(a)*31^len(b) + h(b), and find-or-alloc matches
         # hash+len (two PACMAN names collide on hash alone)
         trailer += struct.pack("<HB", _name_hash(n), min(len(n.encode("utf-8")), 255))
@@ -1375,7 +1353,7 @@ def _encode_v2(
         aset_payload, descs = build_aset_payload(
             getattr(chunk, "palette", None), spr
         )
-        # NEW: RTL descriptor table holds 16 (MAX_SPR in jmr_js_vm.sv).
+        # RTL descriptor table holds 16 (MAX_SPR in jmr_js_vm.sv).
         # Fail LOUD at compile time — never silently drop a sheet.
         if len(descs) > 16:
             raise ValueError(
@@ -1385,7 +1363,7 @@ def _encode_v2(
         trailer += b"SPRD" + struct.pack("<H", len(descs))
         for w, h, soff in descs:
             trailer += struct.pack("<HHI", w, h, soff)
-        # NEW: FSTY — fillStyle color table. The compiler owns the title
+        # FSTY — fillStyle color table. The compiler owns the title
         # palette, so it precomputes name→palette-index with the SAME
         # resolve the FM uses at runtime; RTL loads this LUT so PYTHON and
         # RTL paint the exact same indices (no hardcoded hex map drift).
@@ -1441,12 +1419,6 @@ def _encode_v2(
         + struct.pack("<I", len(aset_payload))
         + aset_payload
     )
-
-
-def decode_chunk(data: bytes | ProgramImage) -> Chunk:
-    """Validate JSB1 bytes, then reconstruct a Chunk solely for VM semantics."""
-    image = data if isinstance(data, ProgramImage) else ProgramImage(data)
-    return image.decode()
 
 
 def _decode_chunk_unchecked(data: bytes, meta: _ImageMeta) -> Chunk:
@@ -1520,13 +1492,13 @@ def _decode_chunk_unchecked(data: bytes, meta: _ImageMeta) -> Chunk:
                 sw, sh, soff = struct.unpack_from("<HHI", data, off)
                 off += 8
                 sprite_descs.append((int(sw), int(sh), int(soff)))
-        # NEW: skip the FSTY fillStyle LUT (RTL-only; FM resolves at runtime
+        # Skip the FSTY fillStyle LUT (RTL-only; FM resolves at runtime
         # with the same algorithm the compiler used, so results are identical)
         if off + 4 <= len(data) and data[off : off + 4] == b"FSTY":
             off += 4
             n_fsty = struct.unpack_from("<H", data, off)[0]
             off += 2 + 4 * n_fsty
-        # NEW: "NAMB" marks the UTF-8 name bytes for the RTL trailer FSM.
+        # "NAMB" marks the UTF-8 name bytes for the RTL trailer FSM.
         # Tolerate its absence so an older .JSH still decodes.
         if off + 4 <= len(data) and data[off : off + 4] == b"NAMB":
             off += 4
@@ -1539,18 +1511,22 @@ def _decode_chunk_unchecked(data: bytes, meta: _ImageMeta) -> Chunk:
             cname = names[ni] if ni < len(names) else f"C{ni}"
             methods = {}
             getters: set = set()
+            setters = {}
             for mi, entry in meths:
-                # NEW: bit15 of the name index flags a `get name()` accessor
+                # bit15 of the name index flags a `get name()` accessor
                 is_get = bool(mi & 0x8000)
-                mi &= 0x7FFF
+                is_set = data[:4]==SETTER_MAGIC and bool(mi&0x4000)
+                mi &= 0x3fff if data[:4]==SETTER_MAGIC else 0x7fff
                 mname = names[mi] if mi < len(names) else f"m{mi}"
-                methods[mname] = int(entry)
+                if is_set:setters[mname]=int(entry)
+                else:methods[mname] = int(entry)
                 if is_get:
                     getters.add(mname)
             classes[cname] = {
                 "ctor": None if ctor_ip == 0xFFFF else int(ctor_ip),
                 "methods": methods,
                 "getters": getters,
+                "setters": setters,
             }
         # pad names so var/GET_PROP indices resolve
         while len(names) < n_names:
@@ -1579,6 +1555,7 @@ def _decode_chunk_unchecked(data: bytes, meta: _ImageMeta) -> Chunk:
 
     idn = _id_to_native()
     code: List[Tuple] = []
+    null_const_indices = set()
     if flags & FLAG_VALUE64:
         consts: List[Any] = [
             struct.unpack("<d", struct.pack("<Q", raw))[0] for raw in packed_consts
@@ -1594,8 +1571,10 @@ def _decode_chunk_unchecked(data: bytes, meta: _ImageMeta) -> Chunk:
             if a1 == _LC_STR:
                 consts.append(names[a0] if a0 < len(names) else "")
                 code.append((Op.LOAD_CONST, len(consts) - 1))
-            elif a1 == _LC_NONE:
-                consts.append(None)
+            elif a1 in (_LC_NONE, _LC_NULL, _LC_BOOL):
+                if a1 == _LC_NULL:
+                    null_const_indices.add(len(consts))
+                consts.append(bool(a0) if a1 == _LC_BOOL else None)
                 code.append((Op.LOAD_CONST, len(consts) - 1))
             elif a1 == _LC_F32:
                 bits = packed_consts[a0] if a0 < len(packed_consts) else 0
@@ -1636,18 +1615,22 @@ def _decode_chunk_unchecked(data: bytes, meta: _ImageMeta) -> Chunk:
             code.append((Op.CALL_NATIVE, ni, a1))
         elif op == Op.CALL_USER:
             code.append((Op.CALL_USER, a0, a1))
-        elif op in (Op.JUMP, Op.JUMP_IF_FALSE, Op.MAKE_ARRAY, Op.GET_PROP, Op.SET_PROP, Op.CALL_VAL):
+        elif op==Op.GET_PROP:
+            code.append((op,a0,a1) if a1 else (op,a0))
+        elif op in (Op.JUMP, Op.JUMP_IF_FALSE, Op.MAKE_ARRAY, Op.SET_PROP, Op.CALL_VAL):
             code.append((op, a0))
         elif op == Op.MAKE_FN:
-            # NEW: unpack a1 bit7 → is_arrow, bit6 → IIFE, low 6 → nparam
+            # Unpack a1 bit7 → is_arrow, bit6 → IIFE, low 6 → nparam
             code.append(
                 (op, a0, a1 & 0x3F, 1 if (a1 & 0x80) else 0, 1 if (a1 & 0x40) else 0)
             )
-        elif op in (Op.NEW_OBJ, Op.CALL_METHOD):
+        elif op==Op.CALL_METHOD:
+            code.append((op,a0&0x7fff,a1,1) if a0&0x8000 else (op,a0,a1))
+        elif op == Op.NEW_OBJ:
             code.append((op, a0, a1))
         else:
             code.append((op,) if not a0 and not a1 else (op, a0, a1) if a1 else (op, a0))
-    return Chunk(
+    chunk = Chunk(
         code,
         consts,
         names,
@@ -1657,24 +1640,6 @@ def _decode_chunk_unchecked(data: bytes, meta: _ImageMeta) -> Chunk:
         palette=palette,
         op_lines=list(meta.op_lines) if meta.op_lines is not None else None,
     )
+    chunk.null_const_indices = null_const_indices
+    return chunk
 
-
-def jsb_to_hex_lines(data: bytes, width: int = 4) -> str:
-    """$readmemh words (width bytes, little-endian → hex word)."""
-    lines = []
-    # Pad to width
-    pad = (-len(data)) % width
-    data = data + b"\x00" * pad
-    for i in range(0, len(data), width):
-        chunk = data[i : i + width]
-        # little-endian word as hex
-        val = int.from_bytes(chunk, "little")
-        lines.append(f"{val:0{width*2}X}")
-    return "\n".join(lines) + "\n"
-
-
-def decode_header(data: bytes) -> Tuple[int, int, int]:
-    if data[:4] != MAGIC:
-        raise ValueError("bad JSB magic")
-    n_ops, n_consts, n_vars, _flags = struct.unpack_from("<HHHH", data, 4)
-    return n_ops, n_consts, n_vars

@@ -1,6 +1,5 @@
 // Mini canvas 640×480×8 — SINGLE persistent draw bank (BRAM) + DDR3 front.
 //
-// 2026-08-23 Session-1 rewrite (NEVER-table row consciously relaxed, user):
 // JS canvas is a persistent surface; the old two-bank ping-pong emulated it
 // with fb_swap + a 307k-cycle S_FB_SYNC copy-back after every present. Now
 // the draw bank never flips: present = stream this bank into the DDR3 front
@@ -28,58 +27,64 @@ module jmr_mini_fb (
     input  logic [18:0] dump_raddr,
     output logic [7:0]  dump_rdata
 );
-    // exact pow2 chunks: [0,256K) [256K,288K) [288K,296K) [296K,300K)
-    localparam int C0 = 262144;
-    localparam int C1 = 32768;
-    localparam int C2 = 8192;
-    localparam int C3 = 4096;
+    // Seventy-five 4-KiB banks retain the exact persistent canvas capacity.
+    // Register the one-hot selection beside the synchronous memory read,
+    // then combine bank outputs in three balanced LUT-sized levels.
+    localparam int BANKS = 75;
 
-    (* ram_style = "block" *) logic [7:0] mem0_c0 [0:C0-1] /*verilator public_flat_rd*/;
-    (* ram_style = "block" *) logic [7:0] mem0_c1 [0:C1-1] /*verilator public_flat_rd*/;
-    (* ram_style = "block" *) logic [7:0] mem0_c2 [0:C2-1] /*verilator public_flat_rd*/;
-    (* ram_style = "block" *) logic [7:0] mem0_c3 [0:C3-1] /*verilator public_flat_rd*/;
-
-    function automatic [1:0] chunk_of(input logic [18:0] a);
-        if (a < 19'(C0))                 chunk_of = 2'd0;
-        else if (a < 19'(C0 + C1))       chunk_of = 2'd1;
-        else if (a < 19'(C0 + C1 + C2))  chunk_of = 2'd2;
-        else                             chunk_of = 2'd3;
+    function automatic logic [6:0] read_bank(input logic [18:0] a);
+        if (a < 19'd262144)      return {1'b0,a[17:12]};
+        if (a < 19'd294912)      return 7'd64 + {4'd0,a[14:12]};
+        if (a < 19'd303104)      return 7'd72 + {6'd0,a[12]};
+        return 7'd74;
     endfunction
-
-    // ---------------- Port A: draw writes + dump reads ----------------
-    logic [18:0] a0;
-    assign a0 = address_we ? waddr : dump_raddr;
-    // Every chunk starts on its own power-of-two boundary. Use the same
-    // bank-local address net for Port A reads and writes, so each bank has
-    // exactly one address per port. Invalid writes must not wrap into bank 3.
-    wire [17:0] a_c0 = a0[17:0];
-    wire [14:0] a_c1 = a0[14:0];
-    wire [12:0] a_c2 = a0[12:0];
-    wire [11:0] a_c3 = a0[11:0];
-    wire [17:0] b_c0 = copy_raddr[17:0];
-    wire [14:0] b_c1 = copy_raddr[14:0];
-    wire [12:0] b_c2 = copy_raddr[12:0];
-    wire [11:0] b_c3 = copy_raddr[11:0];
-    logic [7:0] d0_c0, d0_c1, d0_c2, d0_c3;
-    logic [1:0] d0_sel;
+    wire [18:0] a0 = address_we ? waddr : dump_raddr;
+    (* keep = "true" *) logic [BANKS-1:0] a_bank_q,b_bank_q;
+    logic [7:0] a_data[0:BANKS-1],b_data[0:BANKS-1];
     always_ff @(posedge wr_clk) begin
-        if (we && waddr < 19'd307200) begin
-            unique case (chunk_of(a0))
-                2'd0: mem0_c0[a_c0] <= wdata;
-                2'd1: mem0_c1[a_c1] <= wdata;
-                2'd2: mem0_c2[a_c2] <= wdata;
-                2'd3: mem0_c3[a_c3] <= wdata;
-            endcase
-        end
-        d0_c0 <= mem0_c0[a_c0];
-        d0_c1 <= mem0_c1[a_c1];
-        d0_c2 <= mem0_c2[a_c2];
-        d0_c3 <= mem0_c3[a_c3];
-        d0_sel <= chunk_of(a0);
+        a_bank_q <= 75'b1 << read_bank(a0);
+        b_bank_q <= 75'b1 << read_bank(copy_raddr);
     end
-    assign dump_rdata = (d0_sel == 2'd0) ? d0_c0 :
-                        (d0_sel == 2'd1) ? d0_c1 :
-                        (d0_sel == 2'd2) ? d0_c2 : d0_c3;
+    for(genvar bank=0;bank<BANKS;bank=bank+1)begin: g_bank
+        (* ram_style = "block" *) logic [7:0] mem[0:4095] /*verilator public_flat_rd*/;
+        wire bank_we;
+        // Direct bank-local write decoding preserves the old write path;
+        // read-side balancing must not insert another address mux into WEA.
+        if(bank<64)begin: g_c0
+            assign bank_we=we && waddr<19'd262144 && a0[17:12]==6'(bank);
+        end else if(bank<72)begin: g_c1
+            assign bank_we=we && waddr>=19'd262144 && waddr<19'd294912 && a0[14:12]==3'(bank-64);
+        end else if(bank<74)begin: g_c2
+            assign bank_we=we && waddr>=19'd294912 && waddr<19'd303104 && a0[12]==1'(bank-72);
+        end else begin: g_c3
+            assign bank_we=we && waddr>=19'd303104 && waddr<19'd307200;
+        end
+        always_ff @(posedge wr_clk) begin
+            if(bank_we)
+                mem[a0[11:0]] <= wdata;
+            a_data[bank] <= mem[a0[11:0]];
+            b_data[bank] <= mem[copy_raddr[11:0]];
+        end
+    end
+    // Preserve these two combinational boundaries: each first-stage bit is
+    // exactly one six-input LUT; the two following ORs each fit one LUT.
+    // Flattening them rebuilt a five-level, long-wire mux in the routed chip.
+    (* keep = "true", dont_touch = "true" *) wire [7:0] a_first[0:24],b_first[0:24];
+    for(genvar g=0;g<25;g=g+1)begin: g_first
+        assign a_first[g] = (a_data[3*g] & {8{a_bank_q[3*g]}}) |
+                            (a_data[3*g+1] & {8{a_bank_q[3*g+1]}}) |
+                            (a_data[3*g+2] & {8{a_bank_q[3*g+2]}});
+        assign b_first[g] = (b_data[3*g] & {8{b_bank_q[3*g]}}) |
+                            (b_data[3*g+1] & {8{b_bank_q[3*g+1]}}) |
+                            (b_data[3*g+2] & {8{b_bank_q[3*g+2]}});
+    end
+    (* keep = "true", dont_touch = "true" *) wire [7:0] a_second[0:4],b_second[0:4];
+    for(genvar g=0;g<5;g=g+1)begin: g_second
+        assign a_second[g] = a_first[5*g] | a_first[5*g+1] | a_first[5*g+2] | a_first[5*g+3] | a_first[5*g+4];
+        assign b_second[g] = b_first[5*g] | b_first[5*g+1] | b_first[5*g+2] | b_first[5*g+3] | b_first[5*g+4];
+    end
+    assign dump_rdata = a_second[0] | a_second[1] | a_second[2] | a_second[3] | a_second[4];
+    assign copy_rdata = b_second[0] | b_second[1] | b_second[2] | b_second[3] | b_second[4];
 
     // Read-first Port A already returns the old byte of a draw write.
     // Pipeline the selected old byte, comparison and 256-byte block mark,
@@ -116,17 +121,4 @@ module jmr_mini_fb (
         end
     end
 
-    // ---------------- Port B: present-copy read (core clk) ----------------
-    logic [7:0] c_c0, c_c1, c_c2, c_c3;
-    logic [1:0] c_sel;
-    always_ff @(posedge wr_clk) begin
-        c_c0 <= mem0_c0[b_c0];
-        c_c1 <= mem0_c1[b_c1];
-        c_c2 <= mem0_c2[b_c2];
-        c_c3 <= mem0_c3[b_c3];
-        c_sel <= chunk_of(copy_raddr);
-    end
-    assign copy_rdata = (c_sel == 2'd0) ? c_c0 :
-                        (c_sel == 2'd1) ? c_c1 :
-                        (c_sel == 2'd2) ? c_c2 : c_c3;
 endmodule

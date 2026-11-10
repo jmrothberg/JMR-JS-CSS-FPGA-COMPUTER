@@ -20,8 +20,6 @@ def codes(text):
 def lower(source):
     tokens=[m for m in _TOKEN.finditer(source) if m.lastgroup not in ('WS','LINE_COMMENT','BLOCK_COMMENT')]
     edits=[];i=0
-    finder=any(tokens[j].group()=='systemWindow' and tokens[j+1].group()=='=' and tokens[j+2].group()=='9'
-               for j in range(len(tokens)-2))
     while i<len(tokens):
         t=tokens[i];name=t.group()
         if (i+3<len(tokens) and t.lastgroup=='ID' and tokens[i+1].group()=='.'

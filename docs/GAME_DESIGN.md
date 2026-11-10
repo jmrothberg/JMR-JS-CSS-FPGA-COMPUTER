@@ -1,394 +1,219 @@
-# Game design (HTML titles for this machine)
+# How to write a program for this machine
 
-Words: [README.md — Words used](../docs/WORDS.md#words-used-in-this-project).
+A program is one HTML file with a 640×480 `<canvas>` and inline `<script>`
+blocks. The card builder compiles it to a `.JSH` program image. Finder runs
+that image when you double-click the program.
 
-How to write a playable `.HTML` game for this **NLISC-JS** machine
-(Native Language Instruction Set Computing — JavaScript is the
-**ISA** Instruction Set Architecture; HTML is the title file). The
-language and Canvas surface are specified in
-[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md). This file is the
-**authoring** contract: glass, files, input, and what a title may assume.
+| Topic | Page |
+|---|---|
+| The JavaScript you can use | [JS_COMMANDS.md](JS_COMMANDS.md) |
+| What is missing, how Canvas and text differ, every size limit | [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md) |
+| Menus, windows, About text, roles | [SYSTEM_APPLICATIONS.md](SYSTEM_APPLICATIONS.md) |
+| Toolbox drawing and bitmap copies | [TOOLBOX_USAGE.md](TOOLBOX_USAGE.md), [TOOLBOX_API.md](TOOLBOX_API.md) |
+| Which files go on the card | [storage/README.md](../storage/README.md) |
 
-This is **copy 2** of “do not hardwire game names”
-(copy 1 is `.cursor/rules/no-game-hardwire.mdc`). Version 1.0 walls live in
-[JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20)
-(agent rule: `.cursor/rules/html-game-v1.mdc`). Version 2.0 is **machine**
-work (bigger ASET / more natives), not a named title. Do not raise caps in
-RTL for one game.
+Rules for the machine itself: do not add a program's name to the RTL, the
+compiler or a native, and do not raise a limit for one program.
 
-**Product generations:**
+## A minimal game
 
-| Gen | Meaning | Titles |
+Copy `storage/BOXES.HTML` (no input) or `storage/MENUEX.HTML` (a menu
+command).
+
+```html
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>My game</title></head>
+<body>
+<canvas id="c" width="640" height="480"></canvas>
+<script>
+var ctx = document.getElementById("c").getContext("2d");
+tbSessionProperty(ctx, 0, 8);                        // role 8: a game
+tbSessionProperty(ctx, 1, 1);                        // fit the picture under the menu bar
+tbSessionProperty(ctx, 2, "My Game|One line for the About box.");
+
+var x = 0;
+tbSessionListen("keydown", function (e) {
+  if (e.keyCode === 39) x = x + 8;                   // right arrow
+});
+function frame() {
+  ctx.fillStyle = "#000000"; ctx.fillRect(0, 0, 640, 480);
+  ctx.fillStyle = "#FF0000"; ctx.fillRect(x, 200, 32, 32);
+  tbSessionFrame(frame);
+}
+tbSessionFrame(frame);
+tbSessionProgram("MYGAME.HTM");
+</script>
+</body></html>
+```
+
+- The `jmr-toolbox` comment must be in the first 1024 bytes. It links the
+  program to the resident Toolbox, which draws the menu bar, File → Quit and
+  the About box.
+- The `tbSession…` calls, roles and menus are specified in
+  [SYSTEM_APPLICATIONS.md](SYSTEM_APPLICATIONS.md#session-calls).
+- A browser does not define the `tbSession…` calls, so this file does not
+  run in Chrome as written.
+
+## Build and run
+
+```sh
+python3 tools/check_port.py storage/MYGAME.HTML    # compile, print sizes against the limits
+python3 tools/make_artx.py MYGAME                  # only if the program has art
+python3 tools/make_sd_image.py create card.img     # rebuild the card, compile every program
+JMR_CARD_IMG=card.img .venv/bin/python gui_jmr_js.py
+```
+
+In the GUI, F9 cycles the Python model, FPGA-SIM and the board. Test in
+Python first, then FPGA-SIM. A compile error names the HTML line. A program
+that fails to compile gets no `.JSH` and will not start.
+
+`create` replaces `card.img`, including documents saved on it.
+
+The machine can also edit and compile a program by itself. Finder's Special
+menu starts the Editor and Compile. In Compile, File → Open picks an HTML
+program and File → Save compiles it. The source must be under 65,536 bytes.
+
+`python3 tools/prepare_port.py GAME.HTML --out NEW_DIR` moves pictures
+embedded in an HTML file into an art file. It leaves the original untouched
+and refuses to write unless the compiled program is byte-identical.
+
+## Screen
+
+- Declare `<canvas width="640" height="480">` and fill it. Do not assign
+  `canvas.width` or `canvas.height` later.
+- The canvas is persistent. What you do not redraw stays.
+- At the end of each frame the machine copies the changed 16×16 blocks to
+  the display. Redrawing less means copying less.
+- Draw the score and all text on the canvas. HTML elements outside the
+  canvas are not shown.
+- To scale a larger world onto the canvas, call `tbSessionTransform` with
+  the arguments of `setTransform`. `rotate` and `scale()` are not available.
+- A game shares the top rows with the menu bar:
+  [where to draw](SYSTEM_APPLICATIONS.md#where-to-draw).
+
+## Art
+
+Draw PNG sheets. Tools convert them. Do not paste `data:image` base64 into
+the HTML, and do not write `.ARTX` or `.ARTJS` by hand.
+
+| You make | Tool | Result |
 |---|---|---|
-| **1.0 (now)** | Frozen caps + natives on PYTHON **and** FPGA-SIM. **One disk:** `card.img` for PYTHON / FPGA-SIM / BOARD. Host mint at card-create still works. | Product: `INVADERS` / `PACMAN` / `DONKEY`. Library must **author inside** V1 walls ([JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#v10-hard-walls-do-not-fix-in-rtl-for-one-title)). `MKPVP.HTML` is the V1 MK-shaped example. |
-| **1.5 (now)** | Console **authoring and compile on the machine:** `LOAD` → `EDIT` → `COMPILE` → `RUN`. Editor and compiler are ordinary card programs (`EDITOR.JSH`, `COMPILER.JSH`), not a new ISA. Same heap and Canvas caps. Popular JS still lacks `shift`, `Math.sin`, `isFinite`, `e.code`. **`Math.round` is live.** | Same V1 titles. How-to: [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required). |
-| **2.0 (planned)** | Grow the ISA past V1 walls: more than 16 sprite sheets, `Object.keys` on the chip, dotted `new`, `.call`/`.apply`. **`Math.round` is already nid 54.** The aperture is already 8 MiB. **No title is the V2 example.** Do **not** title-gate. Detail: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20). | Any `NAME.HTML` that needs those caps. Library MK-shaped play today: `MKBA.HTML` / `MKCA.HTML` (V1, ≤16 sheets). |
+| `MYGAME-0.png`, `MYGAME-1.png`, … | `python3 tools/make_artx.py MYGAME` | `MYGAME.ARTX`: the palette and 8-bit pixels the machine uses |
+| | same command | `MYGAME.ARTJS`: the same pixels for a browser preview |
+| `MYGAME.HTML` | `tools/make_sd_image.py create card.img` | `MYGAME.JSH` on the card: code plus that art |
 
-V1 / V1.5 / V2 surface backlog: [JMR_JS_COMPATIBILITY.md § Version 1.0, 1.5, and 2.0](JMR_JS_COMPATIBILITY.md#version-10-15-and-20).
-Agent rule: `.cursor/rules/html-game-v1.mdc`.
-
-The three vendored titles (`INVADERS.HTML`, `PACMAN.HTML`, `DONKEY.HTML`)
-are **V1.0 acceptance tests**, not the only games the machine may run. A new
-title is another `NAME.HTML` on the card. Do **not** add title-name gates
-in RTL, the compiler, or natives.
-
----
-
-## Art: PNG in, tools write `.ARTX` and `.ARTJS`
-
-**You draw PNG files. Tools convert them.** Never paste `data:image/...;base64,...`
-into game code, and never hand-write `.ARTX` or `.ARTJS`.
-
-### New game — what you make vs what the tools make
-
-| You write | Then run | Tool writes |
-|---|---|---|
-| `MYGAME.HTML` (stem ≤ 8, source **< 65,536 bytes**) with `img.src = "jmr:spr:N"` | `python3 tools/make_artx.py MYGAME` | `MYGAME.ARTX` — quantized pixels the **machine** reads |
-| `MYGAME-0.png`, `MYGAME-1.png`, … (≤ **16** sheets) listed in `window.JMR_SPR` | `python3 tools/make_artx.py MYGAME` (also writes `.ARTJS` and wires the Chrome `__jmrSpr` hook) | `MYGAME.ARTJS` — same pixels for **Chrome** |
-| | `python3 tools/make_sd_image.py create card.img` | `MYGAME.JSH` on the card (bytecode + art). PNG and ARTJS stay on the host. |
-
-```bash
-python3 tools/make_artx.py MYGAME
-python3 tools/make_artx.py /path/to/bomberman.html
-python3 tools/make_sd_image.py create card.img
-```
-
-A path is looked up as-is (Linux is case-sensitive). The tool copies
-`STEM.HTML`, writes `STEM.ARTX` + `STEM.ARTJS`, and patches the HTML so
-Chrome loads `STEM.ARTJS` (`__jmrSpr`) — the same hook as INVF/DNKF.
-PNGs stay next to the source HTML and are **not** copied. Stem is the
-filename, card 8.3 (`bomberman.html` → `BOMBERMA`). A bare `MYGAME`
-still means `storage/MYGAME.HTML`.
-
-After you change a PNG, run `make_artx` then card create (`make_artx` rewrites `.ARTJS` and the Chrome hook).
-
-### What each file is
-
-```text
-storage/MYGAME.HTML      code — readable, under 64 KB. Handles, not pixels.
-storage/MYGAME-0.png     editable art (you / the agent). Manifest order.
-storage/MYGAME.ARTX      quantized pixels + palette. PYTHON / FPGA-SIM / board.
-storage/MYGAME.ARTJS     Chrome copy of that same quantized art. Not on the card.
-card.img  MYGAME.JSH     minted bytecode + ASET. RUN uses this.
-```
-
-Card 8.3: `MYGAME.ARTX` → `MYGAME.ART`. Keep the stem ≤ 8 so FPGA-SIM and
-the board see the same name. `.ARTJS` and `.png` are **not** in the card keep-list.
-
-### Game code — handles only
-
-In the HTML you never write a URI. You write a **sprite handle**. `N` is
-the index in `JMR_SPR` / in the `.ARTX` sprite table (identical images
-share one handle — first appearance wins):
-
-```javascript
-var img = new Image();
-img.src = "jmr:spr:0";          // MYGAME-0.png → first sheet in MYGAME.ARTX
-ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
-```
-
-**`src` must be a quoted literal** (`"jmr:spr:0"` … `"jmr:spr:12"`). The chip only intern-binds those strings. `"jmr:spr:" + i` paints in PYTHON/Chrome and **misses every blit on FPGA-SIM/BOARD** (`dihit=0`). Same pattern as `storage/BOMBFAST.HTML`.
-
-**Dest must land on the glass.** FPGA `drawImage` clamps a negative `dx`/`dy` to 0 and does **not** crop source (PYTHON/Chrome do). Crop dest∩640×480 **and** the source rect together (9-arg), or skip the blit. Do not pass `dx < 0`. After run-69 RTL this clamp goes away; cropping stays valid.
-
-That line is what **all five** targets run. Only Chrome rewrites the handle.
-
-### `JMR_SPR` is the PNG list (append-only)
-
-Put this **before** the game script so `make_artx.py` knows which PNG is
-sheet 0, 1, …. Copy the chrome block from a shipped title (`storage/INVA.HTML`)
-or start with:
+List the sheets in a browser-only block before the game script. The index
+in this list is the sheet number:
 
 ```html
 <script data-host="chrome">
-// PNG list make_artx.py reads. Index N is jmr:spr:N and ARTX sprite N.
-// make_artjs.py --patch-html will load MYGAME.ARTJS and paint from that.
 window.JMR_SPR = ["MYGAME-0.png", "MYGAME-1.png"];
 </script>
 ```
 
-Reorder that array and every `jmr:spr:N` in the title silently paints the
-wrong sheet. **Append only.**
+Use a sheet by its number:
 
-`make_artjs.py --patch-html` then adds `<script src="MYGAME.ARTJS">` and
-makes Chrome resolve `jmr:spr:N` to those quantized images (not the raw PNGs).
-Mint strips every `data-host="chrome"` block. Do **not** leave two src
-rewrites (`JMR_SPR` loading PNG files **and** `__jmrSpr`); after
-`--patch-html`, ARTJS is what Chrome paints.
-
-### Chrome-OK is not machine-OK
-
-Chrome (and Agent_learning’s Chromium probes) will run **browser** JS
-that the chip never will. A green screenshot is authoring, not
-`LOAD`/`RUN`. PYTHON Value64, FPGA-SIM, and BOARD share one bytecode
-image — that is the product.
-
-| Chrome / harness green | Chip (PYTHON then FPGA-SIM / BOARD) |
-|---|---|
-| `Object.create(null)` | `CALL_METHOD create` on interned `"Object"` (`Value64` kind 4) |
-| `performance.now()` | same class, interned `"performance"` |
-| `e.preventDefault()` / `{passive:false}` | interned `CALL_METHOD` / extra options object |
-| `img.src = "jmr:spr:" + n` | every `drawImage` miss (`dihit=0`); HUD `fillRect` still paints |
-| `arr.splice(i,n)` used as a value | PYTHON returns the deleted slice; FPGA writes `undefined`. `back=segs.splice(…); back[0]=…` makes a ghost chain — wave 2 never starts |
-| fat `draw()` + tiny `blit(im,x,y,w,h)` | compiler **inlines** blit params into the caller → 17th local, mint skip, RUN `?NH` |
-| eight PNG files on disk | **not** the local wall — `MAX_SPR=16` sheets ≠ `ENV_SLOTS=16` locals |
-
-**Do:** `var keys = {l:0,r:0,u:0,d:0,f:0};`, integer `frames` + a fixed
-`DT` (no `performance.now`), one quoted `"jmr:spr:0"` … `"jmr:spr:7"`
-per sheet, dest `x,y >= 0`, split draw helpers so each function stays
-≤16 locals **after** inlining. HUD: ASCII `fillText`, `textAlign=left`,
-`x + n*(8*k)` (16px face → 16 px/glyph); lives via `fillRect` or `*`
-(never `♦`/`♥`).
-
-### Chrome vs the machine (pixels)
-
-Open `storage/MYGAME.HTML` in Chrome on the PC to see the game while you
-author. That is not LOAD/RUN and not the card. Chrome cannot read `.ARTX`,
-so `.ARTJS` exists: same quantized pictures, in a form the browser can load
-without a web server (`<script src>` works from a file).
-
-| target | where the pixels come from |
-|---|---|
-| Chrome (after `make_artjs.py --patch-html`) | `.ARTJS` (quantized, from `.ARTX`) |
-| host mint (`card.img`) | `.ARTX` copied into the `.JSH` as `ASET` (no PNG decode) |
-| PYTHON sim · FPGA-SIM · board `RUN` | the `.JSH` — art already inside as `ASET` |
-| board `COMPILE` | small HTML + `MYGAME.ARTX` (pre-quantized) → the same `.JSH` |
-
-### Why this is a rule, not a preference
-
-- **The machine can compile it.** `COMPILE` reads the card copy as source.
-  A megabyte of base64 does not fit the 65,536-byte SOURCE window; the code
-  alone always does. MKBIG went from 2,194,397 bytes of source to 20,314.
-- **The editor can open it.** `EDIT` on an inline-art title shows a wall of
-  base64. On a `.ARTX` title it shows the game.
-- **No PNG decoder on the machine.** `.ARTX` is already quantized to the
-  title palette — the same bytes that land in the `.JSH`.
-- **`LIST` stays fast.** No 690 KB single lines to stream over SPI.
-
-### Rules that follow
-
-| Rule | Why |
-|---|---|
-| Agent writes **PNGs + HTML**, not `.ARTX` / `.ARTJS` | those are `make_artx.py` / `make_artjs.py` outputs |
-| HTML under **65,536 bytes** | SOURCE window `EDIT` and `COMPILE` read |
-| at most **16 sheets** per title | `MAX_SPR`; RTL descriptor RAM is fixed |
-| ASET payload under **2,961,408 bytes** | framebuffer wall, enforced in silicon |
-| 8.3-safe stem (≤8 chars) | FAT truncates; `MKBIGCPU` → `MKCA` |
-| colours as `#rgb` / `#rrggbb` literals | compiler `FSTY` table; a colour it cannot parse paints **white** on hardware |
-| `data-host="chrome"` for browser-only tags | mint strips them; the machine never faults on them |
-| `JMR_SPR` order **append-only** | it **is** the `jmr:spr:N` numbering |
-
-Existing inline-art titles were migrated with `tools/make_artx.py` to short
-names (`INVADERS`→`INVA`, `INVFAST`→`INVF`, `FLDFAST`→`FLDF`,
-`MRDOFAST`→`MRDOF`, `DNKFAST`→`DNKF`, `MKBIG`→`MKBA`, `MKBIGCPU`→`MKCA`).
-The long names are not in this folder. The short names are the files.
-
----
-
-## Product loop
-
-```text
-LOAD "NAME.HTML"
-RUN
+```javascript
+var img = new Image();
+img.src = "jmr:spr:0";
+ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
 ```
 
-- **One title = one `NAME.HTML`** in `storage/` (seed), plus `NAME-N.png` if it has
-  sprites. Tools add `.ARTX` / `.ARTJS`. Rebuild `card.img` after
-  edits. No external `.js` / `.css`.
-- **V1.0 disk is `card.img`:** PYTHON, FPGA-SIM, and BOARD all `LOAD` that
-  HTML from the FAT and **`RUN` the minted `.JSH`**. Compile is at card
-  create, not a host recompile of `storage/` on `RUN`.
-- **V1.0:** host mint at card-create still works (`make_sd_image.py` writes
-  `.JSH`). **V1.5:** the machine also compiles. `LOAD "NAME.HTML"` parks
-  source; bare `EDIT` chain-loads `EDITOR.JSH` as a GAME (F2 saves and
-  prints SAVED., F3 quits without saving, Esc is BREAK — board-live since
-  run 66's full PS/2 keyCode map); `COMPILE` chain-loads `ARTSCAN.JSH`
-  then `COMPILER.JSH` (staging any `.ART` sidecar) and mints `NAME.JSH` on the
-  card; `RUN` is the ordinary sidecar load. `EDIT n` stays the numbered-line
-  replace. Popular JS V1 does not have (`shift`, `Math.sin`,
-  `isFinite`, `e.code`, …) is still a language backlog, not a title gate.
-  **`Math.round` is live** (nid 54). Spec:
-  [JMR_JS_COMPATIBILITY.md § V1.5](JMR_JS_COMPATIBILITY.md#v15--type-paste-compile-edit-html-at-ready-no-card-required).
-- **GUI send-to-card (F8):** listed on the glass hint with F9/F10/F12.
-  Pick **host file** (`storage/` or anywhere) or **card.img** (where `.JSH`
-  lives — `storage/` does not keep it). HTML also takes `.ART` / `.ARTX` and
-  `.JSH`. PYTHON/FPGA-SIM write host `card.img` (HTML mints `.JSH`). BOARD
-  streams each file into SOURCE and types `SAVE "NAME"`. SOURCE is 64K;
-  bigger files (`?TR`) stay on host `card.img` only. SAVE of HTML deletes
-  a stale `.JSH` then F8 writes `.JSH` last when it fits.
-- **`DIR`** titles only (`.HTM` / `.JS` / `.MD`) so `LOAD n` stays a title index.
-  **`DIR *`** also lists `.JSH` and `.ART` (8.3 of `.ARTX`). `READ` / `EDITOR` /
-  `COMPILER` / `ARTSCAN` stay hidden. `REMOVE "NAME.JSH"` deletes a sidecar.
-- Chrome may open the same file for authoring. PYTHON bytecode → FPGA-SIM
-  RTL → BOARD is the machine. Dukpy / a host twin is not.
+| Rule | Reason |
+|---|---|
+| `"jmr:spr:N"` must be a quoted literal | The FPGA binds the handle from the literal. A string built at run time draws nothing there. |
+| Only append to `JMR_SPR` | The order is the numbering. Reordering makes every handle draw the wrong sheet. |
+| At most 16 sheets | Pack related frames into one sheet and draw with the 9-argument `drawImage`. |
+| Palette index 0 is transparent | The blitter skips it. |
+| Do not test `img.width`, `img.complete` or wait for `onload` | The art is in memory before the program starts. The compiler rejects those reads. |
+| Rerun `make_artx.py`, then rebuild the card, after changing a PNG | The card holds the converted art, not the PNG. |
 
-### Machine programs in `storage/` — do not delete
+`make_artx.py /path/to/game.html` copies a file from elsewhere into
+`storage/` under an 8-character name and converts its sheets.
 
-These HTML files are **the machine**, not titles. `DIR` hides them
-so they do not bury the games. Removing them from `storage/` (or dropping
-them from `card.img`) breaks `READ` / `EDIT` / `COMPILE`.
+## Text
 
-| File | READY verb | What it is |
-|---|---|---|
-| `storage/READ.HTML` | `READ` | Markdown reader (`READ.JSH`). `#` / `##` headings are twice body size and the marks are not drawn. `- ` / `* ` become an indented square. `>` is a quote. A line of dashes is a rule. |
-| `storage/EDITOR.HTML` | `EDIT` | Full-screen editor (`EDITOR.JSH`). Edits whatever `LOAD` parked. |
-| `storage/ARTSCAN.HTML` | `COMPILE` (first) | Compiler pass A: span map + art check (`ARTSCAN.JSH`). |
-| `storage/COMPILER.HTML` | `COMPILE` (then) | Compiler pass B: tokenize / parse / emit (`COMPILER.JSH`). |
+The Canvas font is one 8×8 bitmap, ASCII only. The exact rules are in
+[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#text). In practice:
 
-`storage/GUIDEX.HTML` is a visible example, not one of those hidden engines. It is the small windowed tool to copy: alphabetical names, drag onto Trash, Desk → Empty Trash, and a heading drawn without its `#`. The real Finder behavior is the Python desktop (`functional_model/desktop.py`). The real document formatter is `READ.HTML`. Detail for the shared menus is [SYSTEM_APPLICATIONS.md](SYSTEM_APPLICATIONS.md).
-
-Keep the matching minted `.JSH` on the card (card-create mints them). `READ` and `GUIDEX` changes are ordinary card programs: they show up after `make_sd_image.py create`, because `RUN` loads the minted `.JSH`. Detail:
-[JS_COMMANDS.md](JS_COMMANDS.md) READY console, [ARCHITECTURE.md](lastrun_ARCHITECTURE.md)
-standalone compile.
-
-After adding or changing a title:
-
-```bash
-python3 tools/make_sd_image.py create card.img
-# default: minted .JSH includes sound() nid 42
-# python3 tools/make_sd_image.py create card.img -soundoff
-```
-
-That seeds the FAT image from `storage/` root files (8.3 names on the card).
-PYTHON, FPGA-SIM, and BOARD all play this `card.img` — rebuild it before F9
-if you changed a title.
-
----
-
-## Glass
-
-- Native canvas is **640×480**. Declare it in markup:
-  `<canvas id="…" width="640" height="480"></canvas>`
-- **Games fill that field.** Do not letterbox a smaller arcade raster
-  (192×240, 224×256, …) with side gutters to “preserve cabinet aspect.”
-  READY console letterbox is monitor text only. After `RUN`, the title
-  owns every pixel. Scale play (tiles, sprites, HUD) to 640×480.
-- **No hidden back buffer.** Run 52 deleted the present pipeline;
-  scanout reads the same bank you draw into. Budget for tearing — do
-  not rely on “the frame I’m drawing into is invisible until I say so.”
-  If a logic step needs an atomic-looking screen, draw fast with the
-  hardware paint natives (`fillRect` / `drawImage` / `putImageData`)
-  rather than assuming isolation.
-- `setTransform` is for a title’s own world (DONKEY) if it needs one — not
-  a rule to keep original-resolution bars.
-- Do **not** assign `canvas.width` / `canvas.height` after load (that
-  clears the bitmap and fights HDMI).
-- Draw the whole game on Canvas, including score / lives / attract text
-  (`fillText`). Do not rely on HTML overlay HUD (`innerHTML`, layout CSS).
-- `body { margin:0; background:#000 }` is Chrome-only chrome. The machine
-  ignores page CSS.
-
----
+- With no transform, `"8px"` gives 8-pixel characters and `"16px"` gives 16.
+  Sizes between round to one of those.
+- After a `setTransform` that shrinks the world, raise the size so
+  `NN × scale / 8` still rounds to the size you want.
+- Draw a label and its number as two calls:
+  `fillText("SCORE", x, y)` then `fillText(score, x + 48, y)`.
+- Use `textAlign = "left"` and place by character width for a row of items.
+- Draw lives as `*`, rectangles or a sprite. Symbols such as ♥ draw as
+  wrong characters.
 
 ## Input
 
-- Bind keys in the title (`keydown` / `keyup`). Hardware delivers raw
-  `key` + `keyCode` only.
-- Typical host strings: `"ArrowLeft"`, `"ArrowRight"`, `"ArrowUp"`,
-  `"ArrowDown"`, `" "` (Space), `"Enter"`. Also read `keyCode` (37/39/38/40/32/13)
-  so a missing `key` string still plays.
-- **Do not steal Esc.** Esc is machine BREAK / READY.
-- **No mouse port.** `clientX` / `mousedown` never fire on PYTHON / FPGA-SIM /
-  BOARD. Chrome may still bind mouse for authoring, but keys + `joy()` must
-  play the **same** game (place, sell, aim, start). A mouse-only title
-  `LOAD`s then cannot be played on the machine.
-- Joystick bits are optional extras; they must not replace HTML bindings.
-  Poll `joy()` each frame (bits: 1=up 2=down 4=left 8=right 16=FIRE1 32=FIRE2)
-  and OR into the same held flags as keys (`JOYDEMO.HTML`). RTL may also
-  synthesize Arrow/Space/Enter — still read `keyCode`. The stick’s four face
-  buttons are only two bits: A + C + stick-click = FIRE1 (Space); B + D =
-  FIRE2 (Enter). Map those to fire / start / jump — not four distinct actions.
-- **Poll-fire needs a cooldown** — tap duration quantizes to 1-3 frames
-  depending on frame rate. A physical (or keyboard) tap stays "held" for
-  ~40-80ms, which is 2-5 polls at 60fps and more as sim speed increases;
-  a title that polls the held-fire state every frame to support
-  hold-to-repeat will double- or triple-fire on a single tap unless the
-  fire handler gates itself. Use `INVFAST.HTML`'s `playerShoot()` as the
-  reference pattern: `if (frames < canShootAt) return; canShootAt =
-  frames + N;` (N≈9 for ~150ms at 60fps) — a frame-counter, not
-  `setTimeout` (per-call allocation) and not a `dt`-accumulated clock
-  (this platform has no `performance.now`, so a hardcoded per-call `dt`
-  is really a disguised call-counter that decouples from real elapsed
-  time if the true poll rate ever changes). The gate must only
-  rate-limit, never edge-gate, or hold-to-repeat breaks.
-- **Analog stick (V2.0, `analog-joy`).** `joyX()` / `joyY()` return the
-  Pmod stick's raw axis 0..255 (rest ~128; `joyY()` 0 = top). `joyButtons()`
-  returns 5 discrete bits: `1`=A `2`=B `4`=C `8`=D `16`=stick-click. These
-  are *extra* axes for analog aiming/menus — not a replacement for `joy()`
-  / keys, and not a mouse: a title using only `joyX()`/`joyY()` to place or
-  aim still needs a keys/digital-`joy()` fallback so PYTHON/FPGA-SIM/BOARD
-  keyboard-only play still works.
+Bind keys in the program. The machine delivers raw events only.
 
----
-
-## JavaScript / Canvas you may use
-
-Stay on the **Complete** rows in the compatibility checklist. In particular:
-
-| Use | Do not use |
+| Source | How to read it |
 |---|---|
-| `var` / `let` / `const`, `if`, `for` / `while`, functions, objects, arrays | `eval`, `async`/`await`, `fetch`, modules as a real loader |
-| `Math.floor` `round` `abs` `min` `max` `random` `sqrt` `Math.PI` | `Math.sin` `cos` `atan2` (not V1 natives — use a lookup table) |
-| `requestAnimationFrame`, `setTimeout`, `playSfx(packed)` | HTML `Audio` / `.play()` (stub). **How:** [Sound](#sound) below. Catalog: `SNDDEMO.HTML`. |
-| `getContext("2d")`, `fillRect`, `clearRect`, `fillStyle` | `getContext("webgl")`, gradients, filters |
-| `beginPath` `moveTo` `lineTo` `arc` `stroke` `fill` `closePath` | `scale()` as a separate call; prefer `setTransform` if you must |
-| `strokeStyle` `lineWidth` `save` `restore` `translate` `rotate` | shadows, `globalCompositeOperation`, `strokeRect` |
-| `imageSmoothingEnabled = false` | bilinear / filtered upscale (indexed FB is nearest) |
-| `fillText` — one 8×8 bitmap; `ctx.font = "NNpx …"` size only (see wall below) | TTF / `@font-face` / `"Press Start 2P"` / CSS overlay HUD |
-| `drawImage` / `Image` + `jmr:spr:N` (PNG → `.ARTX` → ASET SRAM) | packing fat art into code, downscaling to “fit BRAM”, inline `data:image` base64 |
+| Keyboard | `keydown` / `keyup`. Test `e.keyCode` (37 left, 38 up, 39 right, 40 down, 32 space, 13 Enter); `e.key` is also set. |
+| Stick and play keys | `joy()` each frame. Bits: 1 up, 2 down, 4 left, 8 right, 16 fire 1, 32 fire 2. Arrow keys and space set the same bits. |
+| Stick buttons | A, C and the stick click are fire 1. B and D are fire 2. |
+| Analog stick | `joyX()`, `joyY()`: 0..255, rest near 128, `joyY()` 0 is up. `joyButtons()`: bit 0 A, 1 B, 2 C, 3 D, 4 click. |
+| Mouse | `mousemove`, `mousedown`, `mouseup`, `click`. `e.x`, `e.y` are canvas pixels; `e.movementX/Y`, `e.button`, `e.buttons`. |
+| Menu command | A `keydown` whose `keyCode` is the number you gave the menu item. |
 
-Vector titles (asteroids-style): stroke polylines on black. Close a polygon
-by `lineTo` back to the first point (`closePath` is not required).
+- Escape leaves the program. Do not bind it.
+- The machine runs with no stick and with no mouse. Make every action
+  reachable from the keyboard.
+- Do not declare your own `function joy()`. It replaces the native.
+- `storage/JOYDEMO.HTML` shows stick and keys together.
 
-Bitmap titles: `fillRect` and/or `drawImage`. Put sheets in `NAME-N.png`
-and `img.src = "jmr:spr:N"`; `make_artx.py` quantizes them into `.ARTX`.
-Do not inline `data:image` in the HTML. Art lands in the ASET bank, not code BRAM.
+### Fire needs a cooldown
 
-Shatter / split / particles are **ordinary JS arrays** of points or objects.
-There is no engine primitive for “break an asteroid.” Caps are VM-wide
-(`MAX_OBJ` / `MAX_ARR` / `ARR_CAP`) with loud overflow — size effects to
-fit, same as every other `NAME.HTML`. A 0.3s boom/flash on kill crawls on
-the board: **vanish the sprite** and `playSfx` (one native poke, no per-frame
-mixer). Catalog: `SNDDEMO.HTML`.
+A tap stays held for several frames. A program that fires whenever fire is
+held shoots two or three times per tap. Gate the handler with a frame
+counter, as `playerShoot()` in `storage/INVF.HTML` does:
 
----
+```javascript
+if (frames < canShootAt) return;
+canShootAt = frames + 6;
+```
+
+Rate-limit only. Do not require a release, or hold-to-repeat stops working.
 
 ## Sound
 
-Teach this once. Copy it into every title that should beep. Walk the
-numbers in `LOAD "SNDDEMO.HTML"` then `RUN` (FIRE replay, L/R step).
-
-The jack is a **4-voice PSG**: channels **0–2** are square, channel **3**
-is noise. You do **not** mix audio in JavaScript. You poke a recipe; the
-PHY (or Chrome Web Audio) owns the envelope and turns it off.
-
-### Three files, two speakers, one recipe
-
-| Where you listen | What actually plays |
-|---|---|
-| Chrome (open `storage/NAME.HTML`) | `_chromePlay` inside `<script data-host="chrome">` (Web Audio) |
-| Card / FPGA / PYTHON (`LOAD` + `RUN`) | native `sound(ch, freq, vol, frames, slide)` — nid **42** |
-
-Same packed array. Mint **strips** `data-host="chrome"` so `AudioContext`
-never lands in the `.JSH`. Default `make_sd_image.py create card.img`
-keeps `sound()`. Pass `-soundoff` only for an old bit that lacks nid 42.
-
-**Never write `function sound()` in the game script.** That compiles as
-a user function and **steals** the native (same trap as `function joy()`).
-Chrome may set `window._chromePlay`. The game script only calls `playSfx`.
-
-### Step 1 — paste `playSfx` near the top of `<script>`
+The machine has four voices: channels 0–2 are square waves, channel 3 is
+noise. All four take a pitch. One call starts a note; the hardware runs its
+envelope and stops it.
 
 ```javascript
-/* Packed: freqHz, vol0_15, frames, slideHzPerFrame, ch  repeating.
-   ch 0-2 square, 3 noise. Missing r is silent. */
+sound(ch, freqHz, vol, frames, slide);
+```
+
+| Argument | Meaning |
+|---|---|
+| `ch` | 0, 1, 2 square; 3 noise |
+| `freqHz` | Pitch |
+| `vol` | 0–15. 0 is silent. |
+| `frames` | Length in 1/60 s. 0 is silent. |
+| `slide` | Hz added per frame. Negative falls. |
+
+A call on a channel that is still sounding restarts it. Use two channels
+for two sounds at once.
+
+Keep effects as number arrays and play them with one helper. `playSfx` is
+the helper every shipped program uses; `storage/SNDDEMO.HTML` is the
+catalogue.
+
+```javascript
+/* freqHz, vol, frames, slide, ch — repeated per voice */
+var sfxFire    = [1200, 10, 4, -120, 0];
+var sfxExplode = [70, 12, 14, 0, 3,  90, 8, 10, -6, 1];
+
 function playSfx(r) {
   var i;
   if (!r) return;
-  if (typeof _chromePlay === "function") {
-    _chromePlay(r);
-    return;
-  }
+  if (typeof _chromePlay === "function") { _chromePlay(r); return; }
   i = 0;
   while (i + 4 < r.length) {
     sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
@@ -397,635 +222,57 @@ function playSfx(r) {
 }
 ```
 
-That is **two locals** (`r`, `i`) — well under the 16-local wall.
-
-### Step 2 — write recipes as number arrays
-
-Five numbers = one voice. Concatenate for overlap (two voices = ten
-numbers). `frames` is duration at 60 fps (`12` ≈ 200 ms). `slide` is
-Hz per frame (negative = drop). `vol` is 0–15.
-
-```javascript
-var sfxFire    = [1200, 10, 4, -120, 0];           /* short chirp, ch 0 */
-var sfxExplode = [70, 12, 14, 0, 3, 90, 8, 10, -6, 1]; /* noise + square */
-var sfxDie     = [200, 12, 28, -6, 0];
-```
-
-| Index | Field | Typical |
-|---|---|---|
-| 0 | `freqHz` | 55 thump … 1200 laser. Noise (`ch===3`) ignores pitch; still pass a number. |
-| 1 | `vol` 0–15 | 8–12 in game. 0 = skip that group. |
-| 2 | `frames` | 4 = tick, 12–16 = hit, 24–36 = die. 0 = skip. |
-| 3 | `slide` | `0` flat. `-80` laser drop. `+18` jump up. |
-| 4 | `ch` | `0` `1` `2` square (retrigger overlap). `3` noise. |
-
-A new poke on a **live** channel **retriggers** it (arcade overlap).
-Use two channels for explode, not two recipes on channel 0.
-
-### Step 3 — call it at the event, then return
-
-```javascript
-function firePlayer() {
-  if (shots.length >= 4) return;
-  playSfx(sfxFire);   /* one poke; do not tick this in rAF */
-  shots.push(makeShot());
-}
-```
-
-Do **not** put `tickSfx` / oscillators / `setTimeout` beeps in the game
-loop. `playSfx` is one `CALL_NATIVE`. A 0.3 s particle boom is what
-crawls the board — **vanish the sprite** and play the recipe.
-
-`playSfx(0)` and `playSfx()` are silent on purpose (`if (!r) return`).
-
-### Step 4 — Chrome preview (paste once, before `</body>`)
-
-Copy the whole tag from `storage/SNDDEMO.HTML` (search `data-host="chrome"`).
-It defines `window._chromePlay` so Step 1’s `typeof` check takes the Web
-Audio path. Card mint skips this tag. If you omit it, Chrome is silent
-and the board still beeps.
-
-### Step 5 — remint after you edit HTML
-
-```bash
-python3 tools/make_sd_image.py create card.img
-# board: sudo python3 tools/make_sd_image.py burn /dev/sdb
-```
-
-PYTHON / FPGA-SIM / BOARD `RUN` the minted `.JSH`, not live `storage/`.
-
-### Do not
-
-| Don’t | Why |
+| Do not | Reason |
 |---|---|
-| `function sound() { … }` in the game `<script>` | Steals nid 42; chip plays your stub (silence). |
-| `<audio>` / `.play()` / `new Audio` | Stub. Never a product path. |
-| `tickSfx` in `requestAnimationFrame` | Per-frame mixer hitch (FIELD class). |
-| Call `sound()` only, skip `playSfx` | Chrome has no `sound` native; use the helper so both hosts hear. |
-| One `data:image` of a waveform | There is no PCM / sample RAM. Recipes only. |
+| Declare `function sound()` | It replaces the native and the program is silent. |
+| Mix or step sounds in the frame loop | The hardware already does it. |
+| Use `<audio>` or Web Audio in the game script | Absent. Browser-only audio goes in a `<script data-host="chrome">` block that defines `_chromePlay`; copy it from `SNDDEMO.HTML`. |
 
----
+`make_sd_image.py create card.img -soundoff` compiles every `sound()` call
+to a no-op.
 
+## Speed
 
-## Disk names
+The VM runs at 33.333 MHz: about 555,000 VM clocks per 1/60 s. The paint
+engine runs at 100 MHz and writes about one pixel per clock. So drawing
+through `fillRect`, `drawImage` and `putImageData` is cheap, and JavaScript
+instructions are the cost.
 
-Put `storage/NAME.HTML` in the storage folder (stem ≤ 8 letters so the board
-8.3 name stays obvious: `ASTEROID.HTML` → `ASTEROID.HTM`).
-`python3 tools/make_sd_image.py create card.img` scans `storage/` and copies
-what is there. There is no title list to edit.
-
-`LOAD` uses the HTML name. The card holds `.HTML` / `.HTM` plus minted
-`.JSH`. **V1.0:** `make_sd_image.py create` **mints** `NAME.JSH` from that
-HTML. **V1.5:** `COMPILE` on the machine mints the same sidecar from SOURCE
-(`LOAD` → `EDIT` → `COMPILE` → `RUN`). PYTHON, FPGA-SIM, and BOARD all
-`RUN` that `.JSH` from `card.img` (not a host recompile of `storage/` on
-`RUN`). Never copy a stale `.JSH` from `storage/`. The card builder copies
-**root** `storage/*.HTML`. `storage/games_*`
-is the upstream archive — not DIR, not the card. Same-stem `NAME.JS` /
-`NAME.JSB` are leftover demos, not product twins.
-
-Library example: `MRDO.HTML` is a portrait 384×480 playfield (2× arcade
-192×240) centered in 640×480 with black side letterbox. Tunnels are one
-character wide (32px).
-
----
-
-## V1.0 authoring extras (not in the walls table)
-
-Machine caps and workarounds:
-[JMR_JS_COMPATIBILITY.md § V1.0 hard walls](JMR_JS_COMPATIBILITY.md#v10-hard-walls-do-not-fix-in-rtl-for-one-title)
-(agent: `.cursor/rules/html-game-v1.mdc`). Maze / fire / splice recipes are
-in [FAST](#writing-a-title-that-is-fast-measured-not-guessed) below.
-
-Two author recipes that page does not spell out:
-
-| Extra | How to write the HTML |
+| Do | Instead of |
 |---|---|
-| **Nested literal tables** | Hundreds of tiny `MAKE_ARRAY`s for frame rects work only while under the array caps. Prefer compact atlases + small meta, or parallel number arrays, if you approach the cap. |
-| **`fillText` glass-space sizes** | Family/weight are ignored. Glyph scale is `k = max(1, min(15, round(N * sx / 8)))` where `sx` is the current `setTransform` x-scale (default 1). Each character is **8k × 8k glass pixels**. There is no 6px/10px/12px face — 10px at `sx=1` still paints the same 8×8 as 8px. **Glass-space HUD (PACMAN / INVADERS):** `8px` (native) or `16px` (2×). **World canvas then `setTransform` onto 640×480 (DONKEY / DNKFAST, `sx ≈ 640/1510 ≈ 0.42`):** `16px` still rounds to **k=1** (8 glass px — easy to miss on FPGA-SIM). Use **`32px` minimum** (k=2) for HUD, **`48px`** (k=3) for titles; drop the baseline so `8*k` glass pixels of height stay on screen. **ASCII 32–126 only.** UTF-8 extras (`♦` `\u25C6` = bytes `E2 97 86`) paint as `byte&127` (`♦` → **`b`**) and `textAlign` center/right uses **byte** length, so WAVE/LIVES overlap. Place HUD `textAlign=left` at `x + n*(8*k)` (16px face → 16 px/glyph). Lives: ASCII `*` or `fillRect` diamonds / extra ship blit — never `♥`/`♦`/emoji. Label and number are two calls (`fillText("SCORE",x,y)` then `fillText(score,x+6*8*k,y)`). Do not add a second font to RTL. |
+| Draw sprites with `drawImage` | Loops of 1×1 `fillRect`. Every native call has a fixed cost. |
+| Draw a wall or a map in large pieces | Hundreds of small rectangles or one-pixel columns per frame |
+| Redraw what changed | Clearing and repainting the whole screen every frame |
+| Read `obj.prop` into a local before a hot loop | Reading the property on every pass |
+| Move one step toward a target each tick | A maze search or a grid copy every tick. A frame that does not finish freezes the picture with no error. |
+| Do a full search once, on the event that needs it | Repeating it per frame |
+| Hide a destroyed sprite and play a sound | A long particle effect in JavaScript |
 
-**V1 MK-shaped titles in `storage/`:** `MKBA.HTML` / `MKCA.HTML` —
-atlases, L/R sheets, V1 Math, ≤16 sheets.
+## Memory
 
-## CopyBits — specified, not in the machine yet
+The limits are in
+[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#limits). The ones that
+shape a program:
 
-The 128K call for a still picture is QuickDraw CopyBits. The spec for the
-RTL agent is in [MAC_TOOLBOX_RTL_PLAN.md](MAC_TOOLBOX_RTL_PLAN.md). It is
-`toolbox(6, src, dst, 0)`. Python and the current simulator return -1.
-Keep using `fillRect` and `drawImage` until a runtime reports that
-operation in the version mask.
-
-When it exists, the game draws the still scene once, copies that glass
-rectangle into the arena, and later copies a mover's rectangle back
-before drawing the mover with `drawImage`. A cell that changes is drawn,
-then copied back into the arena. Sprites stay on their existing sheets.
-Solid color stays `fillRect`.
-
-```javascript
-function tbCopy(src, dst) { return toolbox(6, src, dst, 0); }
-// Flag bit 1 on a descriptor means the drawing framebuffer.
-// Both rectangles are glass pixels and the same size. Mode 0 is srcCopy.
-```
-
-Titles whose still scene is rebuilt every frame: `DNKF.HTML`,
-`FLDF.HTML`, `PACFAST.HTML`, `MRDOF.HTML`, `MKBA.HTML`, `MKCA.HTML`,
-`BOMBFAST.HTML`, `CENTIPED.HTML`. A black or fully redrawn frame
-(`INVF`, `ASTEROID`, `TANK`, `BOXES`, `AURORA`, `MISSILE`, `DOOM3DFI`,
-`2DFANTA2`) has nothing to put back.
-
----
-
-## Writing a title that is FAST (measured, not guessed)
-
-Rules for writing faster HTML games on this machine, from what has
-actually been measured to matter, **roughly in order of impact:**
-
-1. **Never do per-tick pathfinding / flood work.** A maze BFS or
-   full-grid clone every frame is the one thing proven to **hard-freeze
-   the board** (PACMAN / `PACORIG`). One-step “move toward target” on
-   the existing map is fine; full recompute is not. Detail below and
-   [no-maze-flood-on-tick.mdc](../.cursor/rules/no-maze-flood-on-tick.mdc).
-2. **Mirroring (`setTransform(-1)` / negative `dWidth`) is live.** RTL
-   `flip_x`/`flip_y` mirrors the dest walk. Left+right sheets still work
-   and save a transform. Off-glass dest still needs dest∩screen crop
-   (clip_u).
-3. **Avoid `for…in` / `Object.keys`.** Not on this VM (FPGA-SIM
-   `fault=5` / `fsite=4183`). Index arrays or use a fixed key list.
-4. **Reuse objects across frames instead of allocating new ones.** The
-   heap is a hard-capped pool (`MAX_OBJ=960`). A fresh `{x,y,…}` literal
-   every frame burns that pool and is the shape of the PACMAN-adjacent
-   object-exhaustion fault. Keep **one mutable object** and write into
-   its fields. (Do **not** hoist per-frame *grids/arrays* to startup —
-   that is a different trap; see rule 4 in the historic notes below.)
-5. **Prefer the built-in draw calls** (`fillRect`, `drawImage`,
-   `putImageData`) **over manual pixel loops.** As of run 50/51 these
-   run through a dedicated hardware engine at close to **1 pixel per
-   clock**. A hand-written loop of `setPixel`-equivalents runs at
-   VM-instruction speed, which is dramatically slower.
-6. **Keep sprite sheets modest** and let the atlas system pack them,
-   rather than one enormous multi-thousand-pixel-wide image. Wide
-   atlases mean bigger address math per lookup and more SRAM traffic
-   per frame.
-7. **Budget for tearing now that present is gone.** Scanout reads the
-   draw bank (run 52 deleted the present pipeline). Do not rely on
-   “the frame I’m drawing into is invisible until I say so.” If a
-   game-logic step needs an atomic-looking screen, draw fast (rule 5
-   already helps) rather than assuming isolation.
-8. **Never 1-pixel `drawImage` columns or hundreds of tiny `fillRect`s
-   per frame.** 640 wall strips or a 24×24 minimap of 4×4 rects is
-   native-call bound (INVADERS 1×1 class). Step walls ≥8 px; one
-   billboard blit per actor; run-length or skip HUD maps. Board budget
-   is ~417k clocks at 30 fps (VM ÷8).
-9. **Do not `fillRect` the whole 640×480 black, then blit a splash.**
-   Scanout reads the draw bank — that wipe **is** the black screen until
-   the blit finishes. Draw the sheet first (or a cheap colored rect that
-   is not a full-glass clear).
-10. **`Image.src` literals; dest on-glass.** See [Game code — handles
-    only](#game-code--handles-only) and [Chrome-OK is not
-    machine-OK](#chrome-ok-is-not-machine-ok). Concat `"jmr:spr:" + i`,
-    `Object.create`, `performance.now`, and negative dest are
-    PYTHON/Chrome-only; FPGA ghosts, misses, or PYTHON kind-4 faults.
-
-> **Silicon cost model (run 51 engine + run 52 present-delete) — the
-> numbered historic text below this box is the OLD chip.** The raster
-> engine (run 51+) moved every paint walk to the 100 MHz clock, and
-> the VM runs div7 (14.3 MHz). Present is **gone**, not “burst.”
->
-> | Operation | OLD cost | NEW cost |
-> |---|---|---|
-> | `fillRect` / `clearRect` | 1 px/VM-clock | **~1 px/100MHz clk — ~14x cheaper** |
-> | `drawImage` (atlas) | >=2 VM-clocks/px | **~1 px/clk (word-cached)** |
-> | `putImageData` | 2+ clk/px | **~2-3 px per 100MHz clk-pair (DMA)** |
-> | `fillText` | glyph px via slow rect | rides the engine — cheap |
-> | swapBuffers/present | 768k clk WAIT per frame | **deleted (run 52) — scanout reads the draw bank; tearing is real** |
-> | per-op JS, property access | ~1 VM-beat/op | **UNCHANGED — now the dominant cost** |
-> | string `+` / join (intern FIND) | ~2,000 clk | UNCHANGED |
-> | per-frame allocs / GC churn | GC walks | UNCHANGED (one redundant frame-end GC now skipped) |
->
-> Once paint is hardware, **JavaScript ops are the remaining currency.**
-> INVFAST: paint is 1.3% of its frame, per-op execution is 75%. Hoist
-> invariants out of loops; cache `var p = obj.prop` outside hot loops
-> (`S_HEAP_CMP` is ~12% of DNKFAST/INVFAST). Full-screen clears are
-> cheap now. Full-screen `putImageData` is **not** — DNKFAST measured
-> **~0.92M VM clocks** for one 640×480 blit. Dirty-rect that *redraws
-> girder tiles under movers* beat that blit. Dirty-rect whose extra JS
-> exceeds a cheap `fillRect` is still a loss. Unchanged capacity laws: `fillText(number)` never
-> `""+n` (intern table is 1024, never released); no per-frame grid
-> hoists to startup; `Array.slice`/allocs in the frame path still cost
-> GC.
->
-> **HARD WALL — max 16 locals per function** (params + every `var`).
-> The 17th env slot faults 3 on the FIRST call, with healthy heap
-> counters (INVFAST 2026-08-28: `animate()` hoisted 24 loop temps and
-> black-screened at frame 0). Note the trap: the inlining advice above
-> pushes loop temps into one function — split hot logic into helper
-> functions instead; the wall is per-function and calls are cheap.
->
-> Budget at div7: 60 fps = **238,000 VM beats/frame** of JS+logic (paint
-> no longer counts against it in practice). INVFAST-style per-pixel-JS
-> remains the one pattern the chip cannot save.
-
-> **FAST vs original (FPGA-SIM play `fclk`, 2026-08-29).** Same pixels
-> as PACMAN / DONKEY — not fillRect ghosts or stick mazes. Skip the
-> first-play `getImageData` hitch; numbers are steady `rafcall` play.
->
-> | Title | clocks/frame | vs original |
-> |---|---:|---:|
-> | PACMAN | **17.38M** | — |
-> | PACFAST | **6.26M** | **2.8×** |
-> | DONKEY | **2.72M** | — |
-> | DNKFAST | **1.65M** | **1.65×** |
->
-> PACFAST: maze ImageData is snapshotted *after* the first beans stamp
-> so regular 4×4 pellets live in the blit; later frames draw only the
-> four pulsing power arcs and punch eaten cells (`data[y][x]=3`).
-> `item.coord = position2coord(...)` must mint a new `{x,y,offset}` —
-> writing into `item.coord` mutates `_params.coord` (spawn), so
-> `resetItems` respawns on the ghost and drains every life. `ARR_CAP=128`
-> — one remaining-pellet array of ~300 dots faults at boot.
->
-> DNKFAST: first frame draws every girder. Later frames **black-fill**
-> Mario/barrel/**Kong** last boxes, then restore overlapping tiles
-> (`Platform.drawDirty`). Dirty-only (no erase) smears in empty space.
-> Kong poses do not cover each other — erase the 140×144 box or the
-> previous animation frame stays. Do not put `_pel` / frame numbers on
-> Mario (`OBJ_SLOTS=32`).
-
-Correctness gets you a title that runs. This section gets you one that
-plays. Every number here is **measured** — from the PACMAN and INVADERS
-frame profiles in
-`to_delete/notes/SYNTH_SLOWDOWN_LEDGER.md`, not estimated.
-
-### The budget — this is the number that matters
-
-The live VM clock is **33.333 MHz** (see [FPGA_FIT.md](FPGA_FIT.md)).
-The table below was measured on the older divided clock, about 12.5 MHz:
-
-| | |
+| Limit | What to do |
 |---|---|
-| **30 fps budget** | **416,667 VM clocks per frame** |
-| 60 fps budget | 208,333 clocks |
+| 16 parameters plus locals per function | Split large functions into helpers. A tiny helper called from a function at the limit is still safe: the compiler calls it normally. |
+| 960 live objects | Keep one object and write its fields. Do not build a new `{x, y}` every frame. |
+| 128 elements per array; only 12 arrays may exceed 32 | Store a grid as one array per row. Split a long queue. |
+| 1,536 arrays | Do not keep per-frame scratch arrays alive. Temporaries are collected; permanent ones are not. |
+| 1,024 strings, never released | Do not build strings from changing numbers (`"" + score`). Pass the number to `fillText`. Strings from a fixed set are fine. |
+| 8 pending frame callbacks, 64 timers | One frame chain. Do not start a timer per event. |
 
-Measured against that budget, today's titles:
+### Removing items from a list
 
-| Title | clocks/frame | actual fps | over budget |
-|---|---:|---:|---:|
-| PACMAN play | 3,500,000 | **3.6 fps** | **8×** |
-| INVADERS play | 10,600,000 | **1.2 fps** | **25×** |
-
-**Read that before optimizing anything.** These are not titles that need
-trimming; they need a different drawing strategy. And note the budget is
-8× tighter than the 100 MHz numbers the ledger was profiled at.
-
-### What each primitive actually costs
-
-| Operation | Cost | Full-screen (640×480) | % of a 30fps frame |
-|---|---|---:|---:|
-| `fillRect` | **1 px/clock** | 307,200 clk | **74%** |
-| `putImageData` | **2 clk/px** | 614,400 clk | **148%** |
-| string `+` / join | **~2,000 clk each** (intern FIND, O(names)) | — | 0.5% each |
-| per-op decode | ~1 clk/op | — | — |
-
-**One full-screen clear costs three quarters of your entire frame.** One
-full-screen `putImageData` is over budget by itself, before any game
-logic runs.
-
-### The four rules, ranked by measured impact
-
-**1. Never draw sprites with per-pixel JavaScript loops.**
-This is why INVADERS is the slowest title on the machine: it paints
-sprites as a loop of tiny `fillRect`s, and **66% of its 10.6M-clock frame
-is per-op execution cost**. A 1×1 `fillRect` pays a full native call —
-the call overhead dwarfs the one pixel it paints. Use `drawImage` with a
-sprite `Image`, which moves the pixels inside the chip instead of one JS
-op per pixel. This single change is worth more than everything else here
-combined.
-
-**2. Do not repaint what did not change.**
-`fillRect` is 1 px/clock, so painted **area** is the cost — not the number
-of calls. Clearing the whole screen each frame spends 74% of the budget
-before drawing anything. Repaint only dirty regions: the sprites that
-moved, plus the background patch they vacated. PACMAN spends 17% of its
-frame on `fillRect` painting roughly two full screens.
-
-**3. Never turn a number into a string. Pass the number to `fillText`.**
-
-> ⚠️ **This rule was wrong in an earlier revision of this file and broke
-> five titles.** The earlier text said "build strings once, not per frame,"
-> which read as an invitation to hoist `""+score` into a variable. Doing
-> that **converts a free path into a leaking one.** Corrected below.
-
-The intern table holds **1024 entries and never releases them.** Every
-*distinct* string a title creates takes a permanent slot. So this:
+Do not `splice` an array while a loop is walking it. Mark the item and
+compact once after the loop:
 
 ```javascript
-_SCORE_STR = "" + _SCORE;                    // WRONG — new slot per score value
-context.fillText(_SCORE_STR, x, y);
-```
-
-mints a new permanent entry for every score value the player reaches —
-0, 10, 20, 30 … — and after ~750 of them the machine halts with
-`ERROR: HM VALUE64: string table overflow (1025 > 1024)`. Chrome has no
-such table, so this passes in a browser and dies here.
-
-`fillText` renders a **number** argument without interning anything:
-
-```javascript
-context.fillText(_SCORE, x, y);              // RIGHT — costs nothing, leaks nothing
-```
-
-**Rules:**
-- **Pass numbers directly to `fillText`.** Never `"" + n`, never a
-  `*_STR` mirror variable.
-- **Draw a label and its value as two `fillText` calls**, not one joined
-  string: `fillText("SCORE", x, y)` then `fillText(score, x+48, y)`.
-  Literals cost one permanent slot each — fine. *Values* must never
-  become strings.
-- **Only if a title already builds strings every frame** is there
-  anything to optimize, and the fix is to remove the concatenation, not
-  to cache it. Caching a value-derived string still leaks one slot per
-  distinct value.
-- A string built from a **bounded** set (level names, a fixed menu) is
-  safe. A string built from a score, timer, coordinate, or any unbounded
-  counter is a leak.
-
-Cost, for reference: each intern FIND walks up to ~2,000 clocks, and
-PACMAN spends **15%** of its frame in `S_JOIN_FIND`. But the overflow is
-the real hazard — it stops the machine, not just slows it.
-
-**4. Reduce allocation — but do NOT convert temporaries into permanents.**
-
-> ⚠️ **This rule was also wrong in an earlier revision and broke PACMAN.**
-> It said "allocate your arrays once at startup and reuse them." On this
-> machine that trades a *transient* cost for a *permanent* one, and there
-> is almost no permanent capacity left.
-
-Allocation churn does cost: GC is PACMAN's largest sink at **24% of the
-frame, 4 mark-sweeps per frame**. But the array heap holds **1536 arrays**
-and PACMAN already sits at **1352 live — about 180 slack.** Hoisting a
-few per-frame grids to startup made it permanent and produced
-`ERROR: HM VALUE64: array heap overflow (1549 > 1548)`.
-
-**A temporary array is free capacity — GC reclaims it. A hoisted one is
-capacity you never get back.**
-
-**Rules:**
-- **Do not pre-allocate grids, maps, or scratch structures at startup**
-  to avoid per-frame allocation. That is the trade that breaks titles.
-- The right fix is to **allocate less**, not to allocate earlier:
-  compute values without building an intermediate array, avoid `.map` /
-  `.slice` / `.split` where a plain loop over the existing array works,
-  and do not build a lookup table for something you can index directly.
-- **Reuse is required for per-frame *objects*** — one mutable
-  `{x,y,…}` written in place, not a new literal every tick
-  (`MAX_OBJ=960`). That is not the same as hoisting a *grid*:
-  reuse a handful of coordinate / event objects; do not make a
-  per-cell array permanent.
-- **Check the budget before hoisting anything:** the `arr=` field in the
-  monitor `SNAP` line shows live arrays. If a title is near 1536, it has
-  no room for a permanent structure of any size.
-
-**The general lesson behind rules 3 and 4:** this machine's limits are
-**capacity**, not just speed — 1024 interned strings, 1536 arrays, and
-neither is released. An optimization that converts per-frame work into a
-permanent allocation can turn a slow title into one that will not start.
-Measure capacity headroom before trading for speed.
-
-**5. Do not flood-fill the maze (or any large grid) on a tick.**
-PACMAN ghosts called a recursive BFS that built a fresh 2-D
-`Array.fill`/`map` grid plus nested closures every cell. The board VM
-runs at **12.5 MHz**; that search never finished inside one
-`requestAnimationFrame`, so HDMI froze on the last frame with **no
-ERROR**. PYTHON and FPGA-SIM still looked playable (not 60 Hz glass).
-Empty `finder` → no freeze, ghosts boxed. Chase with **one-step** on the
-existing map (door cell `2` walks **up** out of the house). Do **not**
-grow `ENV_DEPTH` / `CSTK` — the T200 is full and new bits fail routing.
-Do not add a pathfinding opcode. Rule:
-[no-maze-flood-on-tick.mdc](../.cursor/rules/no-maze-flood-on-tick.mdc).
-`storage/PACMAN.HTML` = one-step chase; `finder` stays `[]`. Eyes home
-is `_ghostHome` (in-place BFS, no clone, once per eye tile) — **not**
-the old `finder`. `storage/PACORIG.HTML` = original flood (board freezes).
-
-**Confirmed on silicon 2026-08-27.** The old `finder` allocated, *per
-call*: `Array(31).fill(0).map(()=>Array(28).fill(0))` = **32 array
-objects**, plus `Object.assign({},defaults,params)` and the `start:{}` /
-`end:{}` literals = **~36 heap objects before the search even starts**,
-then more per `push`. Four ghosts × 60 fps is ~8,600 objects/second
-against **284 free slots** (`MAX_OBJ` 960, PACMAN's steady live 676).
-A *single frame* of it eats half the headroom. The replacement
-`_ghostStep` (chase) and `_ghostHome` (eyes) allocate **no maze clone** —
-they write into `_gs` / `_eh` and one reused number queue. That is the
-difference between `fault 3` and a playable board.
-
-**6. Never splice an array in the same synchronous burst as a
-score/effect/state-change call. Mark it dead; sweep once, after.**
-
-> ⚠️ **Status 2026-08-29: mitigation, not a proven fix.** Applying this
-> to the invader-kill path fixed it, board-confirmed. Applying the
-> *identical* shape to the saucer-kill path did **not** fix it — same
-> fault, still reproduces. So "several calls then splice, synchronous"
-> is not the whole mechanism. Board telemetry pinned the fault
-> precisely: `fault 3` at the exact instruction that enters
-> `bumpScore()`'s call frame from the saucer-hit call site
-> (`bumpScore(UFO_SCORES[shotCount & 15])`) — a specific, deterministic
-> site, not a vague accumulation (an earlier draft of this note guessed
-> "slow cross-frame leak" without that data; retracted — don't repeat
-> the guess, follow the telemetry). Why THIS call to `bumpScore`
-> faults while the invader-kill's call to the same function does not is
-> still open — RTL side is instrumenting the env pool at exactly this
-> call boundary. Apply the pattern below anyway — it is free and it did
-> fix one real site — but do **not** treat a title as safe just because
-> it follows this rule. If a kill event still freezes after converting
-> it, get the exact fault `ip` from the architecture monitor and decode
-> it against the compiled bytecode before theorizing further.
->
-> **2026-08-29 update — disassembled both sites, found the real
-> discriminator.** `bumpScore` is small enough that the compiler's
-> tiny-callee inliner (`compiler.py:_try_inline_user_call`) splices it
-> directly into the caller at **every** call site — it never emits
-> `CALL_USER` at all (verified: zero `CALL_USER` targets point at
-> `bumpScore`'s nominal entry; that entry is dead code). So "inlined vs
-> not" is not the difference — both are inlined, byte-identical bodies
-> (`LET_VAR n → score+=n → …`). What differs is the single instruction
-> immediately before that inlined body:
-> - invader-kill (works): `LOAD_VAR inv` → **`CALL_METHOD`** (`inv.points()`, a class-method call/return) → inlined `bumpScore`.
-> - saucer-kill (faults): `LOAD_VAR shotCount` → `LOAD_CONST 15` → `BIT_AND` → **`ARRAY_GET`** (`UFO_SCORES[shotCount & 15]`, no call at all) → inlined `bumpScore`.
->
-> So the saucer path is actually *shallower* (no method call/return
-> immediately before the inline), not deeper — ruling out "more nesting
-> pressures the pool." Two live, precise hypotheses for RTL to test at
-> this exact boundary: (a) a `CALL_METHOD` return does something (frees
-> a slot / advances a generation counter) that a bare `ARRAY_GET` never
-> does, so the pool is only ever "fresh" going into `bumpScore` when a
-> call preceded it; (b) the user's original theory — the *value* itself
-> (`UFO_SCORES` reaches 300; `invader.points()` tops out at 30) drives
-> a different runtime path once bound to `n`. Compile-time constant
-> encoding is identical for both magnitudes (checked — not a storage
-> difference), so if (b) is right the divergence is at runtime bind,
-> not at compile time. This is as far as static bytecode reading can
-> narrow it; the rest needs RTL-side instrumentation at ip ~5328 (was
-> 5313 before later edits shifted addresses).
->
-> **2026-08-29 later — tried the cheap fix, and a data point that cuts
-> against it.** Changed the saucer-kill call site to route through a new
-> `Saucer.points(shotCount)` method (returns `UFO_SCORES[shotCount &
-> 15]`), so it now compiles to `CALL_METHOD` immediately before the
-> inlined `bumpScore`, byte-for-byte the same shape as the working
-> invader-kill site (verified by disassembly: both are now `LOAD_VAR →
-> CALL_METHOD → LET_VAR n → …`). **Untested on hardware — user tests.**
-> Caveat found while checking this: the original, never-rewritten
-> `INVADERS.HTML` also computes the saucer score as a bare
-> `UFO_SCORES[shotCount & 15]` array index (no method call) and does
-> **not** freeze on the board. So a bare array index isn't fatal by
-> itself elsewhere in the same codebase — which points back at the
-> user's competing theory (INVFAST's ~60fps leaves the VM no idle time
-> to reclaim/GC between calls the way INVADERS's much-slower loop does)
-> as at least as plausible as the CALL_METHOD-vs-ARRAY_GET theory. Both
-> remain open; this fix is cheap and harmless either way, but a fault
-> after this change would mean the discriminator is something the
-> CALL_METHOD theory doesn't explain — check timing/speed next, not
-> another inlining variant.
->
-> **2026-08-29 board result: fault MOVED, didn't clear.** New fault ip
-> 1531 decodes to the `RET_VAL` inside the new `Saucer.points()` —
-> literally the instruction that returns `UFO_SCORES[shotCount & 15]`
-> to its caller. This kills the CALL_METHOD theory outright: wrapping
-> the lookup in a method call didn't add safety, it just relocated the
-> exact same `ARRAY_GET` → return sequence one level in, and the fault
-> followed it there. `Invader.points()` also ends every branch in a
-> `RET_VAL` (`return 30;` / `return 20;` / `return 10;`) with zero
-> issue, so returning a value is not the problem — returning **this
-> specific array-derived value** is. Open question only hardware
-> testing can answer: does *every* saucer kill freeze regardless of
-> which of the 16 `UFO_SCORES` entries `shotCount & 15` lands on, or
-> only the one worth 300? That distinguishes "the value 300 specifically
-> is poisonous" from "an array-sourced return value is poisonous
-> regardless of magnitude" — the two remaining live theories.
->
-> **2026-08-29 answer: every saucer kill faults, not just the 300s.**
-> Kills "value 300 is specifically poisonous" — with 16 equally-likely
-> `UFO_SCORES` entries only one of which is 300, a value-magnitude
-> theory would predict ~15/16 saucer kills survive. They don't; it's
-> 100%. Also: **the user plays this on keyboard, not joystick.** RTL
-> proposed a double-hit theory pinned on run 58's un-deduped *joystick*
-> fire button (multiple bullets per press → possible double-kill in one
-> frame) — that mechanism cannot apply here; the keyboard input path is
-> unrelated hardware. If a double-fire/double-hit mechanism is still
-> right, it has to be a keyboard-side analog (e.g. key-repeat/debounce
-> launching >1 bullet per press), not the joystick PHY fix landing in
-> run 59. Relayed to RTL immediately — don't expect run 59's joystick
-> dedup to touch this bug.
->
-> **2026-08-29 status: still open, now the last known bug.** Run 59
-> (joystick dedup + keydown fix, `ce72170`) is on the board and runs
-> well, confirmed board-tested — but as expected it does not touch this
-> bug (unrelated input path). `playerShoot()` in `storage/INVFAST.HTML`
-> already guards against extra bullets (`projectiles.length > 0` + a
-> 6-frame cooldown; checked while adding key-event capture below), so a
-> keyboard auto-repeat storm shouldn't itself double a shot at the
-> content layer. Real-time key display + capture landed in
-> `gui_jmr_js.py` (commit `1d08748`) so a held-key storm can be lined up
-> against a future board fault by timestamp, and the Keyboard/`PHY_PS2`
-> block in the Architecture Monitor now blinks on every real keystroke
-> (commit follows) instead of staying dark. Run 60's F/T-line fault
-> forensics (docs/ARCH_MONITOR.md) is the endgame here: one capture at
-> a saucer kill names which allocator ran out. Separately, the Pmod
-> joystick fire button still fires multiple shots per press even after
-> run 59's dual-path dedup (`jmr_js_vm.sv`) and PHY v3c
-> (`jmr_i2c_joy.sv`) — **not a priority**, flagged to RTL with a
-> specific gap in the dedup's ordering assumption, but not blocking
-> anything. Current priority order: (1) increase VM speed without
-> increasing placement/routing congestion, (2) fix this saucer freeze —
-> the last known content-breaking bug.
->
-> **2026-08-30 SOLVED (mechanism): run 60's F/T capture named it.**
-> First saucer kill on the run-60 bit, forensics on the glass:
-> `kind=env retried=False vcsp=2 vsp=1, pools at fault: env 4, arr 21,
-> obj 689`. The **env allocator** faulted with **4 of 384 env slots
-> live** — the pool was ~99 % empty. Not exhaustion, not a leak, not
-> the value 300: the env free-list said "no free slot" while nearly
-> everything was free, and it never attempted a GC retry first. The
-> T-line approach path (`05F4 05F6 05F7 05F8 05F9 05FA 05FB → 14D9`)
-> decodes to the ENTIRE `Saucer.points()` body completing cleanly —
-> param bind, `UFO_SCORES[shotCount & 15]`, `RET_VAL` — and the return
-> LANDING back at the call site (`14D9` = the inlined `bumpScore`'s
-> `LET_VAR n`). The machine dies on the method-return seam: the
-> `CALL_METHOD` frame's env teardown/re-entry. That is why every
-> content reshaping only *moved* the fault — each variant still crossed
-> a method-frame env boundary at this site. Content-side there is
-> nothing left to do; this is an RTL env-allocator free-list state bug,
-> handed to the RTL session with the full decode. (Also note `05F5`,
-> the body's `JUMP`, is absent from the committed-ip ring — jump-class
-> ops evidently don't commit an entry; remember that when reading
-> future trails.)
->
-> **2026-08-30 ACTUALLY SOLVED — and the paragraph above got the organ
-> wrong.** RTL traced the fault site: the `S_HEAP_CMP` check
-> `venv_len_rdata >= ENV_SLOTS` (=16) — the documented **per-frame
-> 16-keyed-slot wall**, NOT the allocator ("kind=env" in the F-line was
-> a stale latch from the previous frame's alloc; instrument accordingly
-> — RTL is adding fault-site tags so the F-line names this wall
-> directly). The true chain: `animate()` has EXACTLY 16 declared locals
-> (the earlier trim landed precisely at the wall), and the compiler's
-> tiny-callee inliner (`_try_inline_user_call`) spliced `bumpScore`'s
-> `n` param bind into `animate`'s frame as a **17th keyed slot** —
-> invisible to the loud 16-locals checker, which counted only source
-> declarations. First saucer kill = first execution of that inline =
-> fault 3. Explains every observation: value-independent,
-> input-independent, 100 % of kills, the fault following every code
-> reshape (each variant kept an inlined param), and the invader path
-> being safe (its inline lands in `updateInvaderCollision`'s 14-name
-> frame). **Fix (compiler, this commit):** `_try_inline_user_call` now
-> refuses to inline when the caller's locals + callee's params would
-> exceed 16 — or on name capture — and falls back to `CALL_USER` (own
-> frame, always correct); when it does inline, it registers the params
-> as caller locals so the 16-wall check counts the true post-inline
-> total and stays loud forever. Verified by disassembly: the saucer
-> site now emits `CALL_USER → bumpScore`, the invader site keeps its
-> free inline. **Authoring lesson: the 16-slot budget is spent by
-> declared locals + params + any inlined callee's params — when in
-> doubt, stay a couple under the wall.**
-
-INVFAST froze on the board — **only** on a hit, never on a miss, 100%
-repeatable — the instant a bullet actually killed an alien. Fault 3,
-heap counters (`obj=`, `arr=`, `envl=`) completely flat right up to the
-exact frame it happens. **It does not reproduce in Chrome** — this is a
-machine-specific wall, not a JS bug; testing in a browser will not
-catch it.
-
-The shape every broken site shared:
-
-```javascript
-// WRONG — several calls, THEN splice, all in one synchronous pass
-bumpScore(invader.points());
-createParticles(invader, "#BAA0DE");
-invaders.splice(i, 1);
-projectiles.splice(j, 1);
-```
-
-The *original*, never-rewritten `INVADERS.HTML` never hit this: it
-wrapped its entire kill (score, particles, splice) in
-`setTimeout(() => {...})`, which by construction only ever runs after
-that frame's loops have fully finished — never nested inside them. The
-FAST rewrite correctly removed `setTimeout` (rule elsewhere: it is a
-per-call allocation) but made the splice synchronous instead, so a kill
-now runs several function calls deep, mid-iteration, over the very
-arrays it's mutating. Whatever pool that pressures (under RTL
-investigation — see [potential bugs.md](../to_delete/notes/potential%20bugs.md); the leading theory is
-the per-call environment pool, exhausted faster than sweep reclaims it)
-is a real, load-bearing limit, and the old code never exercised it by
-accident.
-
-**The fix — mark-and-sweep, not deferred-and-slow:**
-
-```javascript
-// RIGHT — mark now (cheap, no allocation); one array-length pass later
 invader.dead = true;
-bullet.dead = true;
-// ... later, once, after this array's iteration is fully done:
-function sweepInvaders(list) {
-  var i, w;
-  w = 0;
+
+function sweep(list) {
+  var i, w = 0;
   for (i = 0; i < list.length; i++) {
     if (!list[i].dead) { list[w] = list[i]; w = w + 1; }
   }
@@ -1033,141 +280,16 @@ function sweepInvaders(list) {
 }
 ```
 
-Same O(n) cost as the splice it replaces — this is not a speed
-trade-off, it is free, and it did fix the invader-kill site. It did
-**not** fix the saucer-kill site despite the identical shape — apply
-the pattern for the free win, but treat the underlying wall as
-unresolved. `storage/INVFAST.HTML`'s `updateInvaderCollision`/
-`sweepGridInvaders`/`sweepProjectiles`/`sweepInvaderProjectiles`/
-`sweepPowerUps` are the reference pattern.
+`sweepGridInvaders` and `sweepProjectiles` in `storage/INVF.HTML` are the
+reference.
 
-**Rules:**
-- Any array holding game entities that can be "killed" (invaders,
-  projectiles, power-ups, particles-with-effects) gets a `.dead`
-  (or `.alive`) flag set in its constructor.
-- On a kill: run the score/effect/state calls, then set the flag. Do
-  **not** call `.splice()` in the same statement block.
-- Compact with a plain index-rebuilding loop (shown above) called
-  **once**, after the loop that was iterating/checking hits is
-  completely finished — never from inside a nested helper that's still
-  mid-iteration one or two calls up the stack.
-- A **bare** removal with no score/effect call before it (an offscreen
-  cull, a simple bounds check) is fine to splice directly — it never
-  froze. The wall is specifically "several calls, then remove," not
-  array removal itself.
+## Checklist
 
-### Never gate drawing on an `Image` object's properties
-
-```javascript
-if (sprAtlas.width) {                    // WRONG — undefined on the chip
-    c.drawImage(sprAtlas, ...);
-}                                        // silently falls through to your
-                                         // fallback path: game renders WRONG
-```
-
-The chip serves `.width`/`.height` **only as the 640×480 canvas default,
-and only when the receiver is a primitive**
-(`jmr_js_vm_exec64.sv:5361` — *"Not a live object"*). A sprite handle
-created by `Image.src = "data:image/..."` **is** a live object, so reading
-`.width` on it returns `undefined`. The guard fails, your fallback runs,
-and you get a working-but-wrong game with **no error** — MRDO's player
-drew as a white block and its apples and enemies vanished, for exactly
-this.
-
-Chrome and PYTHON both return the real width, so **this only bites on
-silicon** — which makes it expensive to find.
-
-**Rule: blit unconditionally.** The ASET atlas is compiled into the
-ProgramImage and is always present by the time your code runs; there is
-nothing to wait for and nothing to check.
-
-```javascript
-c.drawImage(sprAtlas, fi * 16, 0, 16, 16, x, y, 16 * sc, 16 * sc);
-```
-
-Same for `.complete`, `.naturalWidth`, `.naturalHeight`, and `onload`
-gating — none of them mean on the chip what they mean in a browser.
-`canvas.width` is fine; it is only `Image` receivers that are affected.
-
-The compiler now refuses these at build time (`V1 WALL: <var>.<prop> is
-not readable on the V1.0 chip`), scoped to variables provably assigned
-`new Image()`.
-
-### Quick self-check for a new title
-
-- Per-tick BFS / grid clone / `finder`? *(FAST rule 1 — freezes the board)*
-- Event-driven maze flood using one `Array(COLS*ROWS)` over 128? *(ARR_CAP — split rows/queue, do not shrink the map)*
-- 17+ locals in one function? *(ENV_SLOTS — mint skip, LOAD works, RUN `?NH`)*
-- `Int32Array` / `Uint8Array` / `Array.shift` / `charCodeAt` / `performance.now`? *(V1.5 — mint skip or fault 4)*
-- Mouse as the only place/aim path? *(no mouse port — keys + joy() must play the same game)*
-- `setTransform(-1, …)` to flip a sprite? *(FAST rule 2 — draws 1 px; use L/R sheets)*
-- `for…in` / `Object.keys`? *(FAST rule 3 — faults on the chip)*
-- Fresh `{x,y}` / `new` / `{}` every frame instead of one reused object? *(FAST rule 4 — burns `MAX_OBJ=960`)*
-- Sprites drawn with `drawImage` / `fillRect` / `putImageData`, not per-pixel JS loops? *(FAST rule 5 — hardware ~1 px/clk)*
-- One enormous multi-thousand-pixel-wide sheet? *(FAST rule 6 — split; let the atlas packer work)*
-- Assuming a hidden back buffer / `present` isolation? *(FAST rule 7 — present is gone; budget tearing)*
-- 640 one-pixel `drawImage` columns, or a minimap of one `fillRect` per cell? *(FAST rule 8 — native-call hang on the board)*
-- Full-screen black `fillRect` then a 640×480 splash blit? *(FAST rule 9 — HDMI shows the wipe)*
-- `img.src = "jmr:spr:" + i`, or `drawImage` with `dx < 0` / `dy < 0`? *(FAST rule 10 — FPGA `dihit=0` / dest smear; PYTHON+Chrome still paint)*
-- `fillText` with `♦` / `♥` / `\u25C6` / em-dash, or `textAlign` center/right for a HUD row? *(8×8 ASCII; UTF-8 `E2` paints `b`; place `left` at `x+n*(8*k)`)*
-- `back = arr.splice(i,n)` then `back[0]` / `push({segs:back})`? *(FPGA splice return is undefined; PYTHON returns the slice — copy-down the tail)*
-- `Object.create` / `performance.now` / `e.preventDefault`? *(interned-name `CALL_METHOD` kind 4 — Chrome OK, PYTHON Value64 faults. Use `{}`, a frame counter, no preventDefault)*
-- One `draw()` with a tiny `blit(im,x,y,w,h)` plus many loop temps? *(inliner copies blit params into the caller — 17th local, mint `?NH`. Split draw helpers. **16 locals ≠ 16 PNG sheets**)*
-- A 0.3s boom / hit-flash / particle burst on kill? *(vanish + `playSfx`; the fx loop crawls on the board)*
-- Any `if (img.width)` / `.complete` / `onload` guard around a draw? *(never — undefined on the chip, renders wrong with no error)*
-- Any `"" + number`, or a `*_STR` variable holding a score/timer/coordinate? *(intern table is 1024, never released)*
-- Any `.map` / `.slice` / `.split` / per-frame **grid** hoisted to startup? *(reduce them; do NOT make grids permanent)*
-- Array-heap headroom (`arr=` in SNAP, cap 1536) before you make anything permanent?
-
-A title that answers the FAST rules above and keeps intern/array
-capacity has a real chance at 60 fps on the engine. One that paints
-sprites as per-pixel JS will land where INVADERS is.
-
-### What is being fixed in the machine (do not design around these)
-
-Some of the cost is the chip's, and is on the roadmap — do not contort a
-title to dodge these:
-
-- intern FIND hash→id (removes most of the 15% string cost)
-- `putImageData` 2→1 clk/px
-- `fillRect` 4 px/clock
-- skipping the scheduled frame-end GC when a forced GC already ran
-
-Rules 1–4 above are the **authoring** half, and they are worth more than
-the machine-side fixes for a title shaped like INVADERS.
-
----
-
-## Checklist before calling a new **V1.0** title done
-
-Before changing a port to fit, run `python3 tools/check_port.py GAME.HTML`.
-It distinguishes the 65,536-byte source/editor window from compiled program
-memory (81,920 bytes including trailers), counts image sheets, and reports
-compile/layout failures. Live heap peaks and runtime APIs still need native
-RTL testing. The image-sheet limit remains 16; animation frames can share a
-sheet through atlas crops.
-
-For HTML containing embedded pictures, `python3 tools/prepare_port.py GAME.HTML
---out NEW_DIRECTORY` extracts the pictures into the existing art bank and
-retains editable PNG sheets plus browser-preview support. It preserves the
-original files and refuses to write a result unless the complete compiled
-program and native artwork are byte-for-byte identical. Move the prepared
-HTML and ARTX together when making a card. This can bring the HTML below the
-source window without shortening the program or discarding pictures; it
-does not enlarge code, art or heap capacity, or qualify on-machine compilation.
-
-1. Self-contained `storage/NAME.HTML`, 640×480 canvas, keys in the file.
-2. Stays inside **V1.0 authoring walls** (sprites ≤16, no `for-in` /
-   `Object.keys` / `Object.create`, no negative scale mirror, V1 Math, **≤16 locals/function**,
-   no typed arrays / `shift` / `charCodeAt` / `performance.now`, quoted
-   `jmr:spr:N` (not concat), dest `x,y>=0`, keys+joy
-   play the same game as Chrome mouse). **Chrome playable is not the chip.**
-3. Chrome opens it (authoring look only).
-4. `python3 tools/compile_js.py --html storage/NAME.HTML` succeeds (in memory).
-   Card image **mints** a `.JSH` (V1.0 compile-at-card-create).
-   **If `LOAD` works and `RUN` is `?NH` / bounce to monitor, mint failed —
-   that compile is the log; remake `card.img` after the HTML fix.**
-5. `python3 tools/make_sd_image.py create card.img` lists the 8.3 name.
-6. PYTHON `LOAD` + `RUN` from **that `card.img`** plays. **FPGA-SIM** then
-   board use the same image — do not claim silicon from Chrome or from a
-   `storage/`-only PYTHON path.
+1. One `storage/NAME.HTML`, name of 8 characters or fewer, 640×480 canvas.
+2. The two marker comments, role, About text and `tbSessionProgram`.
+3. `python3 tools/check_port.py storage/NAME.HTML` reports no error.
+4. Every action works from the keyboard. Escape is not bound.
+5. Art handles are literals. At most 16 sheets.
+6. No function over 16 locals. No strings built from changing numbers.
+7. `python3 tools/make_sd_image.py create card.img` lists `NAME.JSH`.
+8. It plays in the GUI on Python, then on FPGA-SIM.

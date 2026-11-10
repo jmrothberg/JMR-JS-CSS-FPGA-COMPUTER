@@ -1,141 +1,114 @@
-# Write graphics that restore correctly
+# Drawing with the Toolbox
 
-Use GRAPHICS.HTML as an operations gallery and DAMAGE.HTML as a small moving
-scene. These are native JavaScript resident-v2 clients, not browser emulation.
-Run them with the matching Toolbox ROM/LNK and supported bit. The revision package supplies ROM/LNK and freshly linked JSH files together.
-Do not run those new clients against the earlier b022 library.
-Compile with `tools.compile_js.compile_html_text` / `encode_html_chunk` after
-changing source. Never paste the resident library into a marked client.
+How to pick a drawing call, convert coordinates, and erase what moved.
+Call signatures and descriptor fields are in [TOOLBOX_API.md](TOOLBOX_API.md).
 
-## Choose the layer
+| Example in `storage/` | Shows |
+|---|---|
+| `GRAPHICS.HTML` | Every operation once: memory, packed 1/4/8-bit blits, copy, raster modes, mask, pattern, clipping |
+| `DAMAGE.HTML` | A moving scene that restores its background from a cache |
+| `UISESS.HTML` | A nested port and scrolling by screen-to-screen copy |
 
-Use Canvas fillRect for solid rectangles and its existing path/circle operations
-for shapes. Use Toolbox op3 for packed1/4/8-bit sprites, integer enlargement and
-transparent-zero drawing. Use op6 for raw indexed rectangle capture, scrolling,
-and restoration. Use op7 for Boolean byte operations, masks and8×8 patterns.
-Menus, dialogs, brush policy, regions and document actions remain shared
-JavaScript. They are not separate RTL engines. See UI_USAGE.md for the two
-separate UI approaches; do not install both event/RAF owners in one program.
+## Choose the call
+
+| To draw | Use |
+|---|---|
+| Solid rectangles, lines, circles, text | Canvas calls (`fillRect`, paths, `fillText`) |
+| A 1/4/8-bit sprite, enlarged 1×/2×/4×/8×, with value 0 transparent | `tbBlit` (operation 3) |
+| Save, restore or scroll a rectangle of the screen | `tbCopyBits` (operation 6) |
+| OR, XOR, AND, invert, a masked shape, an 8×8 pattern fill | `tbRaster` (operation 7) |
+| Bulk copy or clear of arena bytes | `tbMove`, `tbFill` |
+
+Replace a whole pixel loop with one call. Do not put a one-byte Toolbox call
+inside the old loop.
 
 ## Two coordinate spaces
 
-Canvas transforms affect Canvas calls. They do NOT affect raw Toolbox descriptors.
-For `setTransform(1,0,0,0.95,0,24)`, a logical rectangle becomes:
+A canvas transform changes canvas calls. It does **not** change Toolbox
+descriptors, which are always physical screen pixels. `tbPlaceScreen` and
+`tbText` add the current port origin and nothing else.
 
-- left=floor(x), right=ceil(x+w)
-- top=floor(24+0.95*y), bottom=ceil(24+0.95*(y+h))
+The game viewport is `setTransform(1,0,0,0.95,0,24)`. The hardware holds the
+scale as 16.16 fixed point and truncates, so a logical row `y` lands on
+physical row `floor(y*62259/65536)+24`.
 
-The RTL stores scale as16.16 fixed-point and truncates transformed coordinates.
-At0.95 and y100, the RTL center is118 after+24, while the floating-point model
-places it at119. For exact positive integer coordinates use
-`floor(y*62259/65536)+24`; for conservative cleanup using the floating formula,
-expand top/bottom by at least1 physical pixel. DAMAGE does that and keeps circle
-damage in physical radius units with a2pixel guard.
+To find the physical rectangle a logical rectangle x, y, w, h covers:
 
-Clip these physical edges to the screen/cache before forming width and height.
-Use the same transformed edges for capture and restoration; transforming a
-position while leaving height unchanged creates trails. The DAMAGE example
-handles this positive axis-aligned transform only. Rotation, negative scaling
-and shear require transforming all corners and preserving appropriate clipping.
-Expand dirty bounds for strokes, text ascent/descent and other raster coverage.
-For a guaranteed physical pixel, switch temporarily to identity transform and
-draw fillRect(physicalX,physicalY,1,1), then restore the prior transform. A logical
-height1 under0.95 scaling can truncate to0 and disappear. For tiled borders, map
-shared endpoints and enforce at least1 physical pixel when that is the intended
-UI rule. Do not independently truncate each tile height: that leaves gaps.
+```javascript
+left   = Math.floor(x);
+right  = Math.ceil(x+w);
+top    = Math.floor(24+0.95*y) - 1;       // one row of guard
+bottom = Math.ceil(24+0.95*(y+h)) + 1;
+```
 
-The implemented native arc transforms the center but does not shrink the radius
-with the game viewport Y scale0.95. Do not assume browser elliptical scaling.
-Conservative damage must cover the actual physical radius around that transformed
-center, plus stroke coverage; mapping only a logical diameter can under-erase.
-See the corrected MISSILE explosion bounds. The Python path model additionally
-applies X scale to radius, so arbitrary non-unit X scales need explicit RTL
-qualification; these examples use X scale1. A radius1 circle is not one pixel.
+- Clip those edges to the screen and to your cache before computing width
+  and height.
+- Use the same edges to capture and to restore. Moving the top without
+  changing the height leaves trails.
+- For a circle, damage the transformed centre ± (radius + 2).
+- Widen the rectangle for stroke width and for text above and below the
+  baseline.
+- A logical height of 1 can truncate to 0 rows. To set one physical pixel,
+  switch to the identity transform, `fillRect(px,py,1,1)`, then restore the
+  transform.
+- For a row of tiles, compute the shared edges once. Truncating each tile's
+  height separately leaves gaps.
 
-## Own the background and previous damage
+This covers positive axis-aligned scaling only. Rotation or shear needs all
+four corners transformed.
 
-1. Reserve descriptors, masks and surfaces in an explicit, disjoint memory map.
-   Do not assume that spare-looking MacPaint document/Undo bytes are free.
-2. Draw static background, then capture it BEFORE drawing moving objects.
-3. Keep the rectangles actually drawn last frame. Store them independently of
-   actor objects so deletion of an actor cannot delete its cleanup record.
-4. Restore ALL old rectangles before drawing ANY current object. Interleaving
-   restoration and drawing lets a later restore erase an earlier new sprite.
-5. Draw current actors, labels, particles, selection borders and transient UI;
-   record every region they touched. Overlapping dirty rectangles are valid.
-6. When static terrain changes, first restore old actors. Clear the old tile's
-   entire opaque bounds, draw its replacement, then refresh that cache region.
-   Transparent pixels do not erase the old tile by themselves.
+## Erase and restore
 
-DAMAGE.HTML uses this sequence, including deleted circles/text and a transparent
-tile becoming empty. It copies small dirty rectangles on ordinary frames; it
-does not silently replace damage tracking with a full-screen transfer.
-A full redraw is appropriate when the background/transform/palette globally
-changes. Invalidate the cache in that case, rather than restoring stale indices.
+1. Lay out descriptors, masks, surfaces and caches at fixed, separate arena
+   addresses. Do not borrow bytes another part of the program uses.
+2. Draw the static background. Capture it **before** drawing anything that moves.
+3. Each frame, keep a list of the rectangles you drew. Keep it separate from
+   the actors, so deleting an actor does not lose its rectangle.
+4. Next frame, restore **all** old rectangles first, then draw **any** new
+   object. Mixing the two lets a restore wipe a sprite just drawn.
+5. Record every rectangle the new frame touches: actors, labels, particles,
+   selection borders. Overlapping rectangles are fine.
+6. When the background itself changes: restore the old actors, clear the
+   old tile's whole area, draw the new tile, then capture that area again.
+   Transparent pixels do not erase what was there.
 
-## Descriptor rules that matter
+After a change of palette, transform or the whole background, redraw
+everything and capture again. Cached pixels are palette indices and are
+wrong under another palette.
 
-Both op6/op7 descriptors must specify the SAME rectangle width and height.
-`tbScreen` initializes640×480, so always follow it with `tbRect` for a small
-request, including the DESTINATION descriptor. Destination source x/y fields
-are ignored; destination placement uses `tbPlace`. Source must fit completely;
-only destination is clipped. A successful clipped request returns requested
-area, not visible pixel count. Check for−1 and do not treat errors as empty draws.
+## Descriptor mistakes
 
-All staging addresses are logical bytes, not physical SRAM words. Pixel data is
-palette INDEX bytes, not RGB. Finder white255 and ordinary PAL white1 are not
-interchangeable. Boolean modes operate on those index bits. XOR255 is not a
-promise of visual RGB inversion. Do not reuse a cache after changing palette.
+- `tbScreen(d)` selects all 640×480. Call `tbRect` on the source **and** the
+  destination; both must give the same width and height.
+- The destination's source x, y are ignored. Position it with `tbPlace`.
+- The source rectangle must fit its surface. Only the destination is clipped.
+- A clipped copy still returns the full requested area. Test for −1, not
+  for a pixel count.
+- Mask rows need ⌈width/8⌉ bytes each and must not overlap an arena
+  destination.
+- Pattern phase follows destination coordinates in `tbRaster` and surface
+  coordinates in `tbPattern`.
+- Call `tbMaskOff` and `tbPatternOff`, or rebuild the descriptor, before
+  using it for a plain copy.
+- `tbCopyBits` takes 8-bit surfaces only. Packed sprites and transparency go
+  through `tbBlit`.
 
-Mask rows are high-bit-first and request-relative. Reserve ceil(width/8) bytes
-per row; mask storage cannot overlap an arena destination allocation. Pattern
-phase for op7 follows physical destination coordinates; op4 follows source
-surface coordinates. Geometry is required even when pattern/invert needs no
-source pixel value. Use tbMaskOff/tbPatternOff before reusing a descriptor, or
-initialize it anew. Op6 does not accept op3 transparency/packed formats.
+## Ports
 
-The previously installed tbPaintRect helper has a destination-size omission.
-The final revision GRAPHICS invokes the fixed public helper. The reviewed helper correction adds destination `tbRect`
-and independent pixel/capacity evidence:8191/8191 resident words, zero spare.
-Do not distribute that ROM alone: every resident client and LNK must match it.
-The corrected helper must be installed together with its matching ROM/LNK and
-relinked clients.
+Inside a window, draw through a port so output is clipped and offset for you.
 
-## Verification and limits
+```javascript
+if (tbPortPush(x,y,w,h,ox,oy) >= 0) {
+  // canvas calls, tbText, tbPlaceScreen
+  tbPortPop();
+}
+```
 
-`check.py` compiles and executes the actual gallery through the native-instruction
-model, checks return values and operation/mode coverage. `check_damage.py`
-compares13 scripted frames against a fresh-background reference pixel-for-pixel.
-`check_helper.py` proves the old helper rejects small rectangles and the fixed
-helper draws exact phase/clipped pixels and rejects invalid source geometry.
-The GRAPHICS example also passed the run79 full RTL simulator after cold-loading
-and reading back all8192 words of the new resident bank. Its packed/raster/mask/
-pattern/copy/clipping pixels match the model; the scaled circle matches after
-the explicit16.16 one-row correction described above. DAMAGE and UI/session
-checks are native-instruction model checks, not RTL coverage of those programs.
-No FPS/game benchmark or physical acceptance is claimed. Evidence is retained
-in `build/toolbox_usage_examples/revision/rtl_gallery/evidence.json`,
-`build/toolbox_usage_examples/damage_checks.json` and
-`build/toolbox_usage_examples/ui_model_checks_fixed.json`.
+Session programs already run inside the window's port. Do not call
+`tbPortReset` inside a port.
 
-Stay within compiler/runtime limits:16 locals including parameters,128 array
-items,32 object properties, and actual image/variable capacities. Use explicit
-functions rather than assuming arbitrary prototype-method dispatch. Reserve
-shared session scratch380320..380927 and document continuation fields if using
-the high-level UI; neither graphics example writes there. SYSTEM.SYS resource
-reads require the cold-boot snapshot and return−1 when unavailable.
+## Limits
 
-## Drawing ports and shared client modules
-
-Raw `tbPlace` and CopyBits descriptors retain explicit coordinates. Use
-`tbPlaceScreen` for a screen draw in the active local Port; `tbText` already does.
-Use screen-space clips with `tbPortPush`, check success, and pair each successful
-push with one pop. Do not call the low-level scissor reset inside nested scopes.
-The session restores scopes before drawing global menus/chrome.
-
-The shared optional modules are real inline HTML. Check them with
-`python3 tools/sync_toolbox_clients.py` before minting. UISESS demonstrates nested
-clipping and overlap-copy scrolling without a backing framebuffer. Read the
-complete contracts in [TOOLBOX_API.md](TOOLBOX_API.md#shared-windows-ports-controls-and-damage-in-this-candidate).
-This candidate requires native capability mask 0xF80; pair it with its matching
-RTL/bit. Relink ROM/LNK and all clients together, then cold-restart.
+Compiler and runtime limits (locals per function, array size, code size) are
+in [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md). Session programs must
+keep clear of the [reserved arena bytes](SYSTEM_APPLICATIONS.md#reserved-arena-bytes).

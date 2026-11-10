@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify the current portable RTL, storage and disk set without modifying it."""
 from pathlib import Path
-import hashlib,json,sys
+import hashlib,json
 ROOT=Path(__file__).resolve().parents[1]
 
 def digest(path):

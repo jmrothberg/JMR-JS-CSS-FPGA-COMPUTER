@@ -1,6 +1,6 @@
 """INPUT — keyboard FIFO + digital joystick bitfield (board Pmod / GUI mouse).
 
-LLM NOTE: Same bitfield on PYTHON, FPGA-SIM (mouse→JOY), and BOARD (Pmod).
+Same bitfield on PYTHON, FPGA-SIM (mouse→JOY), and BOARD (Pmod).
 Bits: 0=UP 1=DOWN 2=LEFT 3=RIGHT 4=FIRE1 5=FIRE2
 
 NEW (HTML games): generic key-state engine — PS/2 scancode → JS keyCode →
@@ -29,7 +29,7 @@ KEY_UP = JOY_UP
 KEY_DOWN = JOY_DOWN
 KEY_FIRE = JOY_FIRE1
 
-# NEW: PS/2 Set-2 make codes → JS keyCode (subset for games + letters)
+# PS/2 Set-2 make codes → JS keyCode (subset for games + letters)
 # Break = F0 + make; extended = E0 + make (arrows).
 _PS2_MAKE_TO_KEYCODE: Dict[int, Tuple[int, str]] = {
     # arrows (E0 prefix stripped by caller)
@@ -63,7 +63,7 @@ _PS2_MAKE_TO_KEYCODE: Dict[int, Tuple[int, str]] = {
     0x76: (27, "Escape"),
 }
 
-# NEW: joy/KEYBITS mask → (keyCode, key) for tether debug OR
+# Joy/KEYBITS mask → (keyCode, key) for tether debug OR
 _PLAY_BIT_TO_KEY: List[Tuple[int, int, str]] = [
     (KEY_LEFT, 37, "ArrowLeft"),
     (KEY_UP, 38, "ArrowUp"),
@@ -113,7 +113,7 @@ class InputEngine:
         self.analog_y: int = 128
         self.joy_buttons: int = 0
         self.escape_pending: bool = False
-        # NEW: key-state engine
+        # Key-state engine
         self._down: Dict[int, bool] = {}  # keyCode → pressed
         self._events: Deque[Tuple[str, int, str]] = deque(maxlen=160)  # aggregate of 32-entry raw + 128-entry virtual input queues
         self._ps2_ext = False
@@ -194,29 +194,6 @@ class InputEngine:
 
     # --- NEW: key-state engine --------------------------------------------
 
-    def push_ps2_byte(self, byte: int) -> None:
-        """Feed one PS/2 Set-2 byte; updates down table + event queue."""
-        b = int(byte) & 0xFF
-        if b == 0xE0:
-            self._ps2_ext = True
-            return
-        if b == 0xF0:
-            self._ps2_break = True
-            return
-        make = b
-        ext, brk = self._ps2_ext, self._ps2_break
-        self._ps2_ext = False
-        self._ps2_break = False
-        info = _PS2_MAKE_TO_KEYCODE.get(make)
-        if info is None:
-            return
-        key_code, key = info
-        # Arrows are E0+make on a spec keyboard. Some PS/2 / PIC24 HID
-        # translators drop E0, so accept 6B/75/74/72 with or without it
-        # (same as rtl/phys/ps2_decode.sv kmap).
-        _ = ext
-        self._set_key(key_code, key, pressed=not brk)
-
     def _set_key(self, key_code: int, key: str, pressed: bool) -> None:
         was = bool(self._down.get(key_code))
         if pressed == was:
@@ -236,9 +213,6 @@ class InputEngine:
                 self._set_key(code, key, True)
             elif was and not down:
                 self._set_key(code, key, False)
-
-    def key_down(self, key_code: int) -> bool:
-        return bool(self._down.get(int(key_code)))
 
     def key_event(self, key_code: int, key: str, pressed: bool) -> None:
         """NEW: GUI/host raw keyboard → key-state engine (the HTML decides

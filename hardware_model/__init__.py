@@ -1,6 +1,6 @@
 """Hardware model stubs for card.img tooling + JS VM memory twin.
 
-LLM NOTE: fat32.py / sd_spi.py copied from JMR-BASIC-FPGA-COMPUTER (working
+Fat32.py / sd_spi.py copied from JMR-BASIC-FPGA-COMPUTER (working
 FAT32 path). js_vm.py is the Python HM of rtl/engines/jmr_js_vm.sv.
 """
 

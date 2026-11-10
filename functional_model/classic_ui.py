@@ -180,7 +180,7 @@ class ClassicUI:
         for title,rows in self.custom:
             if label==title:return rows
         if label=='Game':return [('Restart','restart_app',True)]
-        return [(x,'tool:'+x,self.role!=3) for x in ('Terminal','Editor','Reader','Compile','Utility','Note','Help','Restart')]
+        return [(x,'tool:'+x,self.role!=3) for x in ('Editor','Reader','Compile','Utility','Note','Help','Restart')]
     def show_files(self,names):
         self.menu=0;self.dialog='open';self.files=list(names);self.file_top=0;self.selected=0 if names else -1
         self.hot=-1;self.armed=-1
@@ -351,7 +351,7 @@ class ClassicUI:
         def text(x,y,s,c=(0,0,0),literal=False):
             if self.resources and not literal:s=self.resources.translate(s)
             paint_text(rgba,640,x+dx,y+dy,s,c)
-        white=(255,255,255);black=(0,0,0);grey=(219,219,219)
+        white=(255,255,255);black=(0,0,0)
         rect(30,0,610,21,white)
         for i,(x,end,label) in enumerate(self.bar(),1):
             own=self.owned or label not in ('File','Edit','View','Special','Game')

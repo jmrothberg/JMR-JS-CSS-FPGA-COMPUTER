@@ -11,7 +11,7 @@ from functional_model.storage_engine import resolve_storage_html, storage_html_m
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# div7 (run 52). Budget ceilings for
+# div7. Budget ceilings for
 # VM progress scale by this; polling loops break early so passing tests
 # pay nothing. Console/RPC-side waits are unscaled.
 _VMDIV = 7
@@ -5680,7 +5680,7 @@ def test_pacman_fpga_sim_enter_paints_maze():
         # Do NOT assert framebuffer inequality here (the old
         # `maze != splash` / `later != maze` pair). Those compared pixel
         # bytes on a ONE-frame budget, which stopped meaning "the game is
-        # animating" when S_FB_SYNC (4188e01, 2026-08-20) made a
+        # animating" when S_FB_SYNC made a
         # same-scene frame produce a byte-identical buffer. Sprite motion
         # can be sub-pixel for many frames -- measured 30 on DONKEY, which
         # is exactly how that smoke turned into a permanent false failure.
@@ -5753,12 +5753,12 @@ def test_donkey_fpga_sim_enter_keeps_raf():
         # honest redraw, so fclk is the real signal.
         #
         # Do NOT re-add a "framebuffer changed within N frames" check here.
-        # Measured on this screen (2026-08-22 probe): the picture is
+        # Measured on this screen: the picture is
         # byte-identical for frames 1-30, changes at 31 (2076 bytes = one
         # sprite stepping a single glass pixel), holds again until 44.
         # Motion is sub-pixel per frame, so any small N is a coin flip.
-        # The old N=8 check only ever passed BEFORE S_FB_SYNC (4188e01,
-        # 2026-08-20), when the two FB banks still held different images and
+        # The old N=8 check only ever passed BEFORE S_FB_SYNC,
+        # when the two FB banks still held different images and
         # consecutive FB? reads differed even when the scene did not --
         # i.e. it was passing on the bank-mismatch bug that fix removed.
         fclk = 0

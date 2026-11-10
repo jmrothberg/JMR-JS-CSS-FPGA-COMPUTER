@@ -225,7 +225,7 @@ class CanvasEngine:
         self.front = _ScissoredBuffer(self)
         self.back = _ScissoredBuffer(self)
         self.fill_style: int = 1  # palette index
-        # NEW: draw-activity flag — present only on frames the game actually
+        # Draw-activity flag — present only on frames the game actually
         # drew (setTimeout-paced loops draw every Nth tick; presenting
         # blindly would flash a stale snapshot).
         self.dirty: bool = False
@@ -356,7 +356,7 @@ class CanvasEngine:
             while text:
                 wrapped.append(text[:CONSOLE_COLS])
                 text = text[CONSOLE_COLS:]
-        # NEW: drop trailing blank VRAM rows, then bare ">" — else blanks leave
+        # Drop trailing blank VRAM rows, then bare ">" — else blanks leave
         # a green ">" in the body and the host paints a second yellow ">" under it.
         while wrapped and not wrapped[-1].strip():
             wrapped.pop()
@@ -370,7 +370,7 @@ class CanvasEngine:
         pr_row = min(len(body), CONSOLE_ROWS - 1)
         for c, ch in enumerate(pr[:CONSOLE_COLS]):
             self.draw_console_char(c, pr_row, ch, prompt_color)
-        # NEW: cyan block at insert column (not a literal '|' in the prompt)
+        # Cyan block at insert column (not a literal '|' in the prompt)
         if cursor_on:
             cc = cursor_col if cursor_col is not None else len(pr)
             if 0 <= cc < CONSOLE_COLS:

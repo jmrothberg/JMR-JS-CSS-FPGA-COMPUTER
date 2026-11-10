@@ -5,11 +5,10 @@ not an interpreter or app rewrite. Public calls and hot drawing handles stay
 unchanged. Each state object has at most sixteen fields.
 """
 import ast
-import json
 import re
 from functional_model.compiler import _TOKEN
 
-KEEP={'_tbC','_tbD','_tbFont','_tbReady','_tbWidths','_tbGlyph'}
+KEEP={'_tbMenu','_tbDialog','_tbSRole','_tbY','_tbPortRect','_tbX','_tbW','_tbSExtras','_tbC','_tbD','_tbFont','_tbReady','_tbWidths','_tbGlyph'}
 
 def split_declarations(text):
     parts=[];start=0;depth=0

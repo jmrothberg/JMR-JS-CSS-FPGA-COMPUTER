@@ -1,363 +1,346 @@
-# Shared Mac-style application interface
+# Writing an application: menus, windows, dialogs, files
 
-The normal GUI is Python, then F9 for FPGA-SIM. Both use `card.img`.
-Which bitstream is loaded: [FPGA_FIT.md](FPGA_FIT.md). The image still in QSPI (run73o) does not have this interface. The run75 rollback bit does. Run76 is the source being built.
+The machine boots into Finder. Finder and every other program are HTML files
+on the card, compiled to native JavaScript. The menu bar, windows and dialogs
+are drawn by the resident Toolbox library, not by hardware and not by each
+program.
 
-```sh
-.venv/bin/python gui_jmr_js.py
-```
+| For | Read |
+|---|---|
+| Memory and graphics calls | [TOOLBOX_API.md](TOOLBOX_API.md) |
+| Drawing recipes | [TOOLBOX_USAGE.md](TOOLBOX_USAGE.md) |
+| Linking against the library, compiling, building the card | [RESIDENT_TOOLBOX.md](RESIDENT_TOOLBOX.md) |
+| Game rules, art, sound, speed | [GAME_DESIGN.md](GAME_DESIGN.md) |
+| Supported JavaScript | [JS_COMMANDS.md](JS_COMMANDS.md) |
 
-## System feature, declared by HTML
+Sources: `resources/toolbox/session.js`, `documents.js`, `ui.js`.
 
-The system draws the Enterprise ship, classic font, opaque pull-downs, windows,
-scroll controls and dialogs. HTML declares a role and optional application menus;
-it handles application commands through the existing keydown event path. Do not
-copy a menu renderer, click rectangles, ship image, or font atlas into each app.
+## Smallest program
 
-`storage/MENUEX.HTML` is the complete small example for a menu command.
-`storage/GUIDEX.HTML` is the example for a standalone desktop habit:
-names in alphabetical order, drag one onto Trash, and Desk → Empty Trash.
-Both converted real games use exactly the same interface:
-
-```js
+```html
+<!-- jmr-toolbox: resident-v2 -->
+<!doctype html>
+<html><body><canvas id="c" width="640" height="480"></canvas><script>
 var ctx=document.getElementById("c").getContext("2d");
-ctx.systemWindow=8;
-ctx.systemMenus="Game|New Game=160|Pause / Resume=161";
-addEventListener("keydown",function(e){
-  if(e.keyCode===160)resetGame();
-  if(e.keyCode===161)togglePause();
+tbSessionProperty(ctx,2,"Menu Example|A small example of shared menus.");
+tbSessionProperty(ctx,0,6);                       // 6 = windowed tool, 8 = game
+tbSessionMenus(ctx,"Example|Add One=160|Reset=161");
+var count=0,redraw=1;
+tbSessionListen("keydown",function(e){
+  if(e.keyCode===160){count=count+1;redraw=1;}
+  if(e.keyCode===161){count=0;redraw=1;}
 });
+function frame(){
+  if(redraw){ /* draw inside x 24..599, y 88..431 */ redraw=0; }
+  tbSessionFrame(frame);
+}
+tbSessionFrame(frame);
+tbSessionProgram("MENUEX.HTM");
+</script></body></html>
 ```
 
-The same declarations are how a game uses the system box. File → Save draws
-one Macintosh dialog: the words "Save document as:", the name field,
-then Save and Cancel. There is no Eject, Drive, or radio row. The program
-does not paint that box. Python draws it, and the chip draws the same box.
-A one-pixel caret blinks in the name field. Clicking between letters, or
-the left and right keys, moves it. Backspace deletes the letter before it.
-The button Return presses has a second outline. The buttons are round.
-Over the name field the pointer is an I-beam. A click outside the box
-flashes that outlined button and does not close the box.
-`storage/MENUEX.HTML` is the copy for a game. `storage/GUIDEX.HTML` is the
-copy for a program that has a window.
+| Example in `storage/` | Shows |
+|---|---|
+| `MENUEX.HTML` | A menu command |
+| `GUIDEX.HTML` | A windowed tool with mouse dragging |
+| `UISESS.HTML` | Owned File menu, Open and Save As, a nested port, scrolling. It overwrites SOURCE and writes files; use a scratch card |
+| `UIMAN.HTML` | The manual UI calls, without a session |
+| `EDITOR.HTML`, `NOTE.HTML` | The SOURCE document protocol |
 
-## The boxes the system draws
+## Two ways to use the UI
 
-Open, Save, Save As, the save-changes question, and Replace are one set of
-boxes. `storage/EDITOR.HTML` is the program that uses them. It sets
-`ctx.systemWindow` to 1 (Note uses 5), publishes `ctx.windowDirty`, and
-does not supply its own `File|` menu. File → Save As opens the box the
-editor shows: "Save document as:", the name field, Save, and Cancel.
-The program does not paint that box, those words, the field, or the buttons.
+Use one per program, never both.
 
-File → Save delivers keyCode 113 with an empty character. The editor writes
-the resume header and calls `cdone(129,0,0)`. The system then stores SOURCE
-under the name from the box. The header bytes are in SOURCE document tools
-below.
+| | Session | Manual |
+|---|---|---|
+| Calls | `tbSession…` | `tbUIInit`, `tbMenus`, `tbUIPointer`, … |
+| Who owns `addEventListener` and `requestAnimationFrame` | the session | the program |
+| Menu bar, File and Special menus, About, Quit, file dialogs | provided | the program builds them |
+| Use for | applications and games | special cases |
 
-A menu string that starts with `File|` replaces that File menu. Items
-labeled `Open...` and `Save As...` still open these boxes. The chosen
-name is written at arena bytes 96–111 (the filename field, up to 12
-letters and a trailing 0), and then the item's command key is delivered.
-The program reads that name and loads or writes its own bytes. `Save`
-stays a command key: the program already has a name. Do not paint a
-second name field or file list in the window.
+## Session calls
 
-`resetGame` and `togglePause` are the application's own functions. Menu commands
-have no text/character payload and do not simulate mouse clicks into game buttons.
-The system consumes menu pointer events so a menu selection cannot also move a
-chess piece or act as a click in the program underneath. Ship → About and Keyboard remain available. **Quit is in File for every
-game and every windowed program**, and is absent from the ship menu. Games without their own Game menu
-receive a shared Game → Restart action that reloads the same executable.
+| Call | Does |
+|---|---|
+| `tbSessionProperty(ctx,field,value)` | Set a property. See the table below |
+| `tbSessionMenus(ctx,spec)` | Set the menus. `spec` is one string, or an array of strings with one menu each |
+| `tbSessionListen(type,fn)` | Register an input callback |
+| `tbSessionFrame(fn)` | Run `fn` on the next frame, once. Call it again from `fn` to keep animating |
+| `tbSessionInvalidate(fn)` | Register a callback that redraws the content and does nothing else |
+| `tbSessionTransform(a,b,c,d,e,f)` | `setTransform` that keeps the game viewport or window origin |
+| `tbSessionProgram(name)` | Give the program's own 8.3 card name, for example `"MYGAME.HTM"`. Enables Game → Restart |
+| `tbSessionSuffix(ext)` | File type, for example `"PNT"`. Filters Open lists and is the default Save As extension |
+| `tbSessionCodes(text)` | Turn a string literal (up to 128 bytes) into the byte array the drawing and dialog calls take |
+| `tbSessionChrome(fn)`, `tbSessionNames(fn)`, `tbSessionDocument(fn)` | Register callbacks. See [Callbacks](#callbacks) |
 
-## Roles and drawing areas
+Other exported `tbSession…` names (`Defaults`, `Parse`, `Equals`, `Bit`,
+`Masks`, `SendKey`, `Command`, `DialogResult`, `U32`) are the session's own
+plumbing. Do not call them.
 
-- `1`: SOURCE Editor. Shared File/Edit actions and save/resume protocol below.
-- `2`: SOURCE Reader. File → Open chooses another `.MD` or `.TXT` on disk.
-- `3`: Compiler. The system selects this during the actual compile chain; do not
-  insert chrome into the nearly full compiler program.
-- `4`: Utility. Shared window and catalog contents; File → Quit works.
-- `5`: Note. A tiny entry point opens an untitled `.TXT` in the shared Editor.
-- `6`: Other utility/application. Shared window, File → Quit, application menus.
-- `7`: Terminal. Selected by the system for the command console.
-- `8`: Game. Shared top menu bar; no surrounding document frame.
-- `0`: Legacy program without the shared application menu bar.
+### Properties
 
-Windowed app content occupies **x=24..599, y=88..431**. Paint only that body.
-The system owns everything outside it. A game has two options:
+| Field | Value |
+|---|---|
+| 0 | Role. Setting it starts the session: it initialises the UI, installs the input listeners and paints the window |
+| 1 | 1 = game viewport (role 8 only) |
+| 2 | `"Title|One line about the program"`, up to 100 bytes. Used as the window title and the About dialog |
+| 4 | Window title string. Overrides the title from field 2 |
+| 5 | Enable mask for commands 160–191. Bit *n* is command 160+*n*. Default: all enabled |
+| 6 | Check-mark mask for commands 160–191 |
+| 7, 8 | Vertical and horizontal scroll position, 0–255, shown by the scroll bars |
+| 9 | Document flags for roles 1 and 5: 1 modified, 2 undo available, 4 clipboard has data, 8 selection exists. They enable the Edit items |
 
-```js
-ctx.systemWindow=8;
-ctx.systemViewport=1;
-ctx.systemAbout="Game title|One line describing the game.";
+There is no field 3.
+
+### Roles
+
+| Role | Program | Default File menu |
+|---|---|---|
+| 1 | Editor | New, Open…, Save, Save As…, Quit |
+| 2 | Reader | Open…, Quit |
+| 4 | Utility | Quit |
+| 5 | Note | as role 1 |
+| 6 | Any other windowed program | Quit |
+| 8 | Game: full screen, menu bar only | Quit |
+| 9 | Finder: no window frame, RGB332 palette | none; Finder owns its bar |
+
+### Where to draw
+
+**Windowed roles.** The session paints the desktop and one window. Draw only
+in the content area, **x 24–599, y 88–431**. Callbacks registered with
+`tbSessionListen`, `tbSessionFrame` and `tbSessionInvalidate` run inside a
+[port](TOOLBOX_API.md#ports) clipped to the content area, and mouse
+coordinates arrive in the same coordinates. The user can drag and resize the
+window; the program keeps using the same coordinates. A smaller window shows
+less of the content.
+
+**Games (role 8).** The program draws the full 640×480 screen. The menu bar
+covers rows 0–21. Either lay the game out below row 24, or set field 1 to 1:
+the session then scales drawing by 0.95 vertically into rows 24–479 and maps
+mouse coordinates back, so the game keeps its original coordinates. Do not do
+both. A game that calls `setTransform` itself must call `tbSessionTransform`
+instead. Physical pixel positions under the viewport:
+[TOOLBOX_USAGE.md](TOOLBOX_USAGE.md#two-coordinate-spaces).
+
+## Menus
+
+```
+"Game|New Game=160|Pause=161;Level|Easy=162|Hard=163"
 ```
 
-`systemViewport=1` fits the full existing 640×480 game into screen rows 24..479.
-Keep all original drawing, collision, and mouse coordinates. The system samples
-rows from the existing framebuffer during display and maps pointer coordinates
-back into the same logical game space, including `offsetY` and motion deltas.
-It does not allocate a second game framebuffer or add a sprite sheet. This is
-particularly useful when converting a collection of existing games: score/HUD
-text at the original top of the picture remains visible below the menu bar.
+`;` separates menus. `|` separates the heading and the items. `=` gives an
+item its command number. An item that is only `-` is a separator. Text is
+printable ASCII. The whole specification is at most 800 bytes, and each
+string literal at most 255 bytes; pass an array of strings for a large bar.
 
-With `systemViewport=0` (the default), the program arranges its own content below
-row 24. Chess and Donkey Kong already do this. Do **not** both move the game's
-coordinates and enable the automatic viewport, or its contents will be inset
-twice. The viewport is a presentation setting, not a game-specific renderer.
+| The program | Menu bar |
+|---|---|
+| never calls `tbSessionMenus` | The role's File menu; Edit for roles 1 and 5; Game → Restart for role 8; Special |
+| gives menus whose first heading is not `File` | The role's File menu, the program's menus, Special |
+| gives menus whose first heading is `File` | Exactly the program's menus |
 
-Every About dialog says **JMR Enterprises**, then the active program's title,
-then the one-line description from `systemAbout`. Declare the metadata once on
-startup. Use `Title|Description`, a 1–32 character title and 1–64 character
-printable ASCII description, each at most 335 pixels in the shared font. The
-system rejects text that does not fit instead of letting it cross the dialog.
-Finder and system tools have their own role-based About descriptions; a game
-must provide its own metadata. There is no game-name lookup in the runtime.
+Special holds Editor, Reader, Compile, Utility, Note, Help and Finder.
 
-`ctx.windowScroll` and `ctx.windowScrollX` publish normalized scroll position
-from 0 to 255, not a request to scroll. The system sends keys 128/129 for one line
-up/down, 130/131 for page up/down and 132/133 for left/right. The app changes its
-viewport and republishes the positions. Games do not need these properties.
-`ctx.systemTitle="untitled"` supplies a 0–24 character printable ASCII document
-caption and suppresses generic window hints. An empty title restores the default.
-`ctx.windowBars=0` hides that scroll bar. The default is a bar. MacPaint sets
-0 because the hand moves the page and the window itself does not scroll.
+### Commands
 
-## Menu description
+A chosen item arrives at the program's `keydown` listeners as
+`{keyCode: command, charCode: 0}`, except for the cases below.
 
-These context properties are write-only declarations.
+| Command or label | The session does |
+|---|---|
+| 160–191 | Delivered to the program. Enabled and checked through properties 5 and 6 |
+| Label `Quit` or `Close`, 1006, 255 (window close box) | Leaves the program and returns to Finder. Roles 1 and 5 ask about unsaved changes first |
+| Label `Open...` | Shows the file list. On Open, writes the chosen name at arena bytes 96–111 and delivers the item's command |
+| Label `Save As...` | Shows the name box, checks the name, asks before replacing a file. Then writes the name at 96–111 and delivers the item's command. Needs `filename_client.js` |
+| 1001 New, 1002 Open, 1004 Save, 1005 Save As | Document commands of roles 1 and 5 |
+| 137–142 | Undo, Cut, Copy, Paste, Clear, Select All. Delivered to the program |
+| 1007 | Restart: runs the name given to `tbSessionProgram` again |
+| 1010–1016 | Editor, Reader, Compile, Utility, Note, Help, Finder |
 
-Set `ctx.systemMenus` once at startup, using a literal string. Semicolons separate
-menus, `|` separates the heading/items, and `=` assigns an item a command number.
-Use at most **3 extra menus, 8 items per menu, 512 printable ASCII bytes total**.
-A document program that must own File and Edit starts the descriptor with
-`File|`. That form allows six menus and 14 items, up to 800 bytes, and
-commands 160–239. `Quit` and `Close` leave the program. `Open...` and
-`Save As...` open the shared boxes, then deliver that item's command
-key. The name is at arena bytes 96–111. A lone `-` is a separator.
-Menu headings are 1–12 characters; item labels are 1–24 characters. Commands
-**160–191** must be unique in the descriptor. Do not use `File`, `Edit`, `View`,
-or `Special` as custom headings. The system rejects invalid descriptors visibly.
+`Open...` and `Save As...` only choose a name. The program reads or writes
+its own bytes with `fsRead` and `fsWrite`. Any other command number is
+delivered unchanged; keep clear of key codes the program also handles.
 
-Keep command numbers stable. Handle them inside an existing keydown handler
-where possible: this machine has a small listener limit. Do not add a new
-listener every time a game restarts. Only expose commands the app implements.
-Do not invent an Undo command for chess unless actual chess undo exists.
+Keep the menus static. Handle commands in one `keydown` listener. Only list
+commands the program implements.
 
-The system provides File/Edit/View/Special in windowed tools. Games get File,
-application menus and Special. Unsupported standard actions are grey. Special
-launches Terminal, Editor, Reader, Compile, Utility, Note and Help, or restarts
-Finder. These are common system actions, not game-specific callbacks.
+## Input and frames
 
-## SOURCE document tools
+`tbSessionListen` takes `"keydown"`, `"keyup"`, `"mousedown"`, `"mousemove"`
+and `"mouseup"`. Other event names, such as `"click"`, are also accepted.
 
-SOURCE stays in the existing memory region. `srcLen`, `srcByte`, `srcWrite` and
-`srcSetLen` access it; the document limit remains **65,536 bytes**. A menu does not
-increase that limit. `EDIT` and `READ` chain-load their tools without loading the
-tool's own HTML into SOURCE. Note opens the same editor rather than maintaining
-a second editor. File → Open offers real disk files; no embedded manual copy.
+The session sees input first. While a menu or dialog is open the program gets
+no input. A click that operated a menu, the window frame or a scroll bar is
+not passed on.
 
-Editor/Note use `ctx.windowDirty` bits: 0 modified, 1 undo available, 2 clipboard
-available, 3 selection exists. Bits 4–5 report notices: 1 clipboard overflow,
-2 document full. Commands are 137 Undo, 138 Cut, 139 Copy, 140 Paste, 141 Clear,
-142 Select All. Selection and edits belong to the app; menus/dialogs belong to
-the system. File → New/Open/Quit offers Save/Discard/Cancel when modified.
+While a menu or dialog is open:
 
-File → Save sends F2 (keyCode 113, empty character). The Editor writes this
-21-byte resume header using `stgWrite`, then calls `cdone(129,0,0)`:
+- With a `tbSessionInvalidate` callback, the program's frames are held and
+  the callback is called to repaint what the menu or dialog covered.
+- Without one, frames continue and the UI is drawn on top. This suits games.
 
-- bytes 32..35: `82,69,83,1` (`RES`, version 1).
-- little-endian u32 at 36,40,44,48: caret row, column, top row, left column.
-- byte 52: role 1 or 5.
+The invalidate callback must only draw. It must not advance the game, edit
+the document or read input.
 
-The system saves SOURCE to the chosen filename and restarts the same editor on
-that document, restoring the caret/viewport. New/Save As uses the shared filename
-dialog. A new document starts with an empty name, not `UNTITLED.TXT`. A real
-name stays in the field. The caret blinks at the insertion point, and
-Backspace deletes the character before it. The on-screen
-keyboard stays closed until the apple menu opens it.
-Existing files require an explicit Replace choice. Radio buttons are not part
-of that box. A program adds them only when the choice is real for that program.
-Saving HTML invalidates its old `.JSH`, as the existing storage system requires;
-Compile builds its new executable. Ordinary text uses `.TXT` or `.MD`.
+Keep one `tbSessionFrame` chain. Restart must reset state, not add listeners
+or a second chain.
 
-Editor selection is byte offsets. The clipboard and one-edit Undo each use at
-most 4 KiB of existing compile scratch, at 24584 and 32768 respectively; the
-clipboard header is at 24576..24583. The line index remains at 4096..20479. Cut/
-Copy over 4 KiB reports a limit and leaves the document/clipboard intact. Clear
-can delete a larger selection but has no Undo. There is no full document clone.
-Compile uses that same scratch arena, so clipboard/Undo do not survive compiling.
+### Keys the system owns
 
-## Instructions for a porting agent
+| Key | Meaning |
+|---|---|
+| Esc | Leaves the program and returns to Finder. Do not bind it |
+| 254 | About. Sent by the ship menu; the session opens the About dialog |
+| 113 (F2) with no character | Save, in roles 1 and 5 |
+| 128, 129 | Scroll one line up, down |
+| 130, 131 | Scroll one page up, down |
+| 132, 133 | Scroll left, right |
 
-1. Read the program, identify its real commands and current mouse/keyboard
-   behavior. Start from the latest optimized project version; compare older
-   supplied copies before replacing anything. Preserve existing artwork/logic.
-2. Choose role 8 for a game or role 6 for a general tool. SOURCE document tools
-   can use the documented Editor/Reader protocol. Do not assign Editor role
-   merely to obtain enabled Save when the app has a different document model.
-3. Declare `systemAbout` for the application and use `systemViewport=1` for
-   an existing full-screen game. Declare a compact menu string when the app
-   needs extra commands, and route those commands to existing functions.
-   Use `MENUEX.HTML` for a menu command and `EDITOR.HTML` for Open, Save,
-   and Save As. Draw the document only. The system draws the menu bar and
-   those boxes. On a `File|` menu, label the items `Open...` and
-   `Save As...` so the same boxes open. Read the chosen name at arena
-   bytes 96–111 when that command key arrives.
-4. Use the shared viewport to reserve the bar without changing game coordinates,
-   or use explicit layout and update drawing and mouse coordinates together.
-   Remove displaced toolbar buttons; put their real actions in menus.
-5. Keep one animation loop. Restart resets state, not listeners/timers/animation
-   loops. Keep literals and static menu setup outside per-frame code.
-6. Compile with `tools/check_port.py`, run the serialized `.JSH` on Python,
-   check the application-specific About dialog, exercise commands by clicking
-   the actual menu, and test that menu clicks do
-   not leak into content. Test restart repeatedly, Quit/close and mouse keyboard.
-   For documents also test Save/Save As, dirty-close choices and opening files.
-7. Record actual sizes and limitations. Update the normal disk only when the
-   owner requests it, preserving other files and a rollback copy. Keep the
-   released `.bit` alone. No claim of FPGA support
-   until the same interface passes the real RTL simulator and board process.
+The scroll keys come from the scroll bars of `chrome_client.js`. The program
+moves its view and reports the new position through properties 7 and 8.
 
-## Memory and real examples
+The ship corner at the top left (x < 30, y < 22) belongs to the hardware. Its
+menu has About and Keyboard. The on-screen keyboard and its Hold keys box
+work over any program.
 
-Menu descriptors remain small literals in the program. Context window state is
-four bytes; menu command delivery uses the existing input path. No new native
-opcode is needed. Editor, Utility, Note and the small example add **zero** sprite
-sheets. Reader retains its existing Chicago text atlas. Chess retains 12 sheets;
-Donkey Kong retains 6. The Python display uses cached host overlays; actual FPGA
-resource use and fit for this interface have **not** yet been qualified.
+## Callbacks
 
-Fantasy Chess uses Game → New Game and Level → Ply 1..5. Donkey Kong uses Game →
-New Game - Mario / New Game - Luigi / Pause / Resume. Its existing fast dirty
-redraw remains; a single animation loop handles the title and repeated restarts.
-All 19 games/demos in `storage/` declare the shared menu role and About metadata.
-The other 17 use the automatic viewport and receive Game → Restart. No runtime
-behavior is selected by game filename. The publisher discovers declarations in
-HTML, so future converted programs are included without editing a title list.
+| Register with | Signature | Module that supplies it |
+|---|---|---|
+| `tbSessionChrome(fn)` | `fn(mode,a,b)`. Mode 0: draw the scroll bars; `a`, `b` are the vertical and horizontal positions. Mode 1: mouse down at `a`, `b`; return a key code to send, or 0. Mode 2: the window was resized; `a`, `b` are the new content width and height | `chrome_client.js`. The program must define `tbClientResize(w,h)` |
+| `tbSessionNames(fn)` | `fn(codes,suffix,kind)`. Kind 0: check and normalise the name array in place; return 1 if valid. Kind 1: return 1 if the name has that extension | `filename_client.js` |
+| `tbSessionDocument(fn)` | `fn(action,value)`. See below | `editor_client.js`, for Editor and Note |
 
-## MacPaint
+`filename_client.js` accepts 1–8 characters, an optional dot and 1–3
+characters, from letters, digits and ``$%'-_@~`!(){}^#&``. It upper-cases the
+name and adds the default extension when there is none.
 
-`storage/MACPAINT.HTML` is a windowed drawing program, role 6. It draws
-only in the white hole. Its menu descriptor starts with `File|`, so the
-program owns the menu bar: File, Edit, Goodies, Font, FontSize, Style.
-The title stripes say `untitled`. File → Open... and File → Save As...
-open the shared boxes. MacPaint reads the name at arena bytes 96–111
-and loads or writes `STEM.PNT` with `fsRead` and `fsWrite`. No new
-instruction was added. The tool pictures are the 1984 MacPaint font,
-and the 38 patterns are the System pattern list from that disk.
+Document actions:
 
-The page is 576 by 320. The page, one undo copy, and a full-page
-clipboard have to fit in the 73,728-byte compile arena. A taller classic
-page does not fit beside those copies. Bits are arena bytes (`stgRead` /
-`stgWrite`) because a program cannot index ImageData pixels. Each ink
-pixel also has a color nibble in the image half of that arena, which
-this program does not use for pictures. The 16 colors are the exact
-entries on the glass: black, white, red, green, blue, yellow, cyan,
-magenta, and eight greys. The text tool is one 5 by 7 face. Font names
-move the check. The stick uses `keyUp` / `keyDown` / `keyLeft` /
-`keyRight` / `keyFire`. `joy()` is not a chip instruction. The window
-sets `windowBars=0`.
+| Action | Meaning | `value` |
+|---|---|---|
+| 0 | Return the current SOURCE name as a byte array, empty if unnamed | — |
+| 1 | Save, then continue | what to do next |
+| 2 | Commit a save under the name already chosen | what to do next |
+| 3 | Start a new document | — |
+| 4 | The user asked for New, Open or Quit; ask about unsaved changes if needed | what to do next |
+| 5 | A dialog closed; return 1 if the document handled the result | dialog result |
 
-## Standalone desktop, from the 128K Finder
+"What to do next" is 0 stay, 1 new, 2 open, 3 quit. Helpers for a document
+callback: `tbDocumentContinue(next)`, `tbDocumentSaveAs(next)`,
+`tbDocumentHeader(role)`, `tbDocumentSuspend(on)`.
 
-The original Macintosh Finder is one disk, a Trash can, and four menus.
-These are the pieces worth having on this computer, and small enough to
-show in an HTML example.
+A program with its own file format does not register a document callback. It
+uses `Open...` and `Save As...` items and its own `fsRead`/`fsWrite`.
 
-Python desktop, now:
+## Manual UI
 
-- View → List sorts names A to Z. View → Icons keeps disk order.
-- Drag a file onto Trash. It leaves the window and stays on the disk.
-- Click Trash to see the held files. Drag one onto Disk to put it back.
-- Special → Empty Trash appears once Trash holds a file, asks, then `REMOVE`s them.
-- File → Delete... still deletes the selected file immediately.
+These seventeen calls are what the session is built on. A program that calls
+them directly owns its own listeners and frame loop. `UIMAN.HTML` uses all of
+them. Labels are arrays of ASCII codes.
 
-`storage/GUIDEX.HTML` is the copyable window. A windowed program draws
-only in the white hole, x 24 to 600 and y 88 to 432, and leaves out
-anything that does not fit. Games stay `systemWindow` 8 and fill the
-screen. They are not put in that hole. `storage/READ.HTML` is the
-document reader: `#` and `##` are twice body size and the marks are not
-drawn. `- ` and `* ` become an indented square.
+| Call | Does |
+|---|---|
+| `tbUIInit(ctx,descriptor,glyphScratch,title)` | Start the UI. `descriptor` is 64 arena bytes, `glyphScratch` 32 bytes, both owned by the UI from then on. Returns 1, or 0 if the hardware lacks operations 8–12 or `SYSTEM.SYS` has no UI font |
+| `tbWindow(x,y,w,h,title)` | Set the window rectangle and title |
+| `tbMenus(menus)` | `[[title,[[label,command,enabled,checked],…]],…]`. An empty label is a separator. Command 255 is the close box |
+| `tbMenuEnabled(menu,item,on)`, `tbMenuChecked(menu,item,on)` | Change one item by index |
+| `tbUIKey(keyCode,charCode)` | Give a key to an open dialog. Returns 1 if used |
+| `tbUIPointer(x,y,buttons)` | Give the pointer to the UI. `buttons` is 1 while the main button is down, else 0. Forward moves and releases too. Returns 1 if used |
+| `tbMenuCommand()` | The chosen command, or 0. Reading clears it |
+| `tbDialogOpen(kind,prompt,rows,value)` | Open a dialog |
+| `tbDialogResult()` | 0 while open or idle. Reading clears it |
+| `tbDialogValue()` | The name array of a kind 3 dialog |
+| `tbDialogSelection()` | The chosen row of a kind 4 dialog, from 0 |
+| `tbUIChanged()` | 1 if the UI needs a redraw. Reading clears it |
+| `tbUIDraw()` | Draw menu bar, window frame, open menu and dialog. Call it last, after the content |
+| `tbText(codes,x,y)` | Draw text in the 16-row system font. Codes outside 32–126 draw as `?` |
+| `tbTextWidth(codes)` | Width in pixels |
+| `tbBox(x,y,w,h,fill)` | Filled rectangle with a one-pixel black border |
 
-Those desktop behaviors belong to the Finder program below, not to a
-later edit of `jmr_desktop.sv`. The built-in desktop remains only the
-`JMR_FINDER=builtin` / `PROGRAM_FINDER=0` rollback. This machine has
-one disk, so Eject stays off.
+| Dialog kind | Shows | Result |
+|---|---|---|
+| 1 | Message with OK. `rows[0]` is an optional second line | 1 |
+| 2 | OK and Cancel | 1 OK, 2 Cancel |
+| 3 | Name field (12 characters) with Save and Cancel. `value` is the starting name | 1 Save, 2 Cancel |
+| 4 | List of `rows`, five visible, with Open and Cancel | 1 Open, 2 Cancel |
+| 5 | Save, Discard, Cancel | 1, 2, 3 |
+| 6 | Replace and Cancel | 1 Replace, 2 Cancel |
 
-## Finder program
+Return accepts. A dialog does no disk work; the caller acts on the result.
 
-The section above is the built-in desktop (`functional_model/desktop.py`
-and `rtl/engines/jmr_desktop.sv`). The Finder program is a different
-thing: `storage/FINDER.HTML`, an ordinary card program, the way the
-1984 Finder was a program and the menu bar stayed in ROM.
+If `tbUIInit` failed, `tbUIDraw` writes the reason in the menu bar and
+`tbText` draws nothing.
 
-The Python shell uses it when `JMR_FINDER=program` (the GUI default)
-or when `FINDER.JSH` is on the disk. `JMR_FINDER=builtin` keeps the
-built-in desktop. Quitting a program, or Esc, runs the Finder again.
-Nothing in the built-in desktop is deleted.
+## Files, SOURCE and running programs
 
-A menu title inverts while that menu is open. Dragging across the bar
-switches menus. A row inverts under the pointer, and the command runs
-when the button is released on it. A dialog button does the same: it
-inverts while held, and it runs only if the pointer is still on it.
+Names are NUL-terminated 8.3 names stored in the arena. The card is one flat
+directory.
 
-The Finder draws its own overlapping windows. Once it has loaded, that
-running program stays in memory. Opening something else uses the one
-heap, and coming back continues the same Finder. Restart loads it again.
-The toolbox still draws
-the menu bar, the Apple menu, and the Open / Save As dialogs. Folders,
-icon positions, Trash, comments, and window places live in
-`DESKTOP.FDR` on the flat card. There are no FAT subdirectories.
+| Native | Does | Returns |
+|---|---|---|
+| `fsList(dst,capacity,start)` | Write one page of the catalog at `dst`, starting at record `start`. `capacity` ≥ 37 | records written, or −1 |
+| `fsRead(name,offset,dst,n)` | Read up to `n` bytes of a file from `offset` | bytes read, or −1 |
+| `fsWrite(name,src,n,mode)` | Write `n` bytes. Mode 0 replaces the file, 1 appends | `n`, or −1 |
+| `fsRemove(name)` | Delete a file | 0, or −1 |
+| `fsRename(old,new)` | Rename a file | 0, or −1 |
+| `sysRun(name,how)` | Leave this program and start another. `how`: 0 run, 1 edit, 2 read, 3 compile, 8 return to Finder | — |
+| `sysDocument(op,ptr,role)` | 0: write SOURCE name information at `ptr`. 1: name SOURCE from the name at `ptr`. 2: make SOURCE an empty unnamed document. Ops 1 and 2 need role 1 or 5 | 0, or −1 |
+| `srcLen()`, `srcByte(i)`, `srcWrite(i,b)`, `srcSetLen(n)` | Read and write SOURCE, the shared document buffer of at most 65536 bytes | |
+| `strByte(s,i)` | Byte `i` of a string literal's UTF-8 bytes | byte, or −1 |
 
-File has New Folder, Open, Close, Close All, Get Info, Duplicate, and
-Put Back. Print, Page Setup, and Eject stay grey. Edit has Undo, Cut,
-Copy, Paste, Clear, Select All, and Show Clipboard. View has by Icon,
-by Small Icon, by Name, by Size, by Kind, by Date, and Hidden files.
-Special has Clean Up, Empty Trash, Set Startup, Restart, Terminal, and
-Compile. Erase Disk stays grey. An HTML file with a minted JSH is an
-application. HTML with no JSH is source. `.MD` and `.TXT` are documents.
+`fsList` page: bytes 0–3 total size of the listed files, 8–9 record count,
+byte 10 is 1 if more records follow, 12–15 the next `start`. Records begin
+at byte 16: name length, name, u32 size, u16 DOS date, u8 attributes. A
+length of 0 ends the page. With `dst` 0 it writes the whole catalog at arena
+256 with its header at 240.
 
-DIR hides `FINDER` the same way it hides EDITOR and COMPILER.
-`DESKTOP.FDR` is hidden with the other non-title suffixes. The icons
-are the rectangles the program draws. No new icon art is added.
+`sysDocument(0,ptr,0)` writes 20 bytes: 16 name bytes, name length, 1 if
+unnamed, role, 0.
 
-## RTL program Finder handoff (November 3)
+SOURCE is one shared buffer. Loading a document into it replaces what was
+there. Writes are not atomic: a failed save can leave a partial file.
 
-The default RTL now uses the Finder program and generic file/launch hooks.
-The built-in desktop is preserved as a build option and source snapshot.
-See [lastrun_ARCHITECTURE.md](lastrun_ARCHITECTURE.md).
+## Reserved arena bytes
 
-The RTL implementation keeps the 8 MiB memory map. It caches the Finder image
-and parks its arena state while another application uses the single VM. Returning
-reconstructs JavaScript globals, restores the arena and redraws; it does not keep
-a second live JS heap. This is specific to the Finder’s documented arena layout.
-The implemented SYSTEM.SYS loader is documented in
-[SYSTEM_RESOURCES.md](SYSTEM_RESOURCES.md), including source format and agent
-instructions. It supplies shared visual resources; application behavior and
-custom menu commands remain JavaScript. Boot, desktop, menu and Terminal-return smoke checks
-have passed; application-wide owner testing and board timing remain outstanding.
+A session program must leave these alone. Everything else in the arena
+(0–380927) is the program's to lay out. The arena is not cleared between
+programs: initialise every byte you read.
 
-## Shared scratch RAM is not initialized program state
+| Bytes | Used for |
+|---|---|
+| 32–52 | Editor resume header: `RES`, 1 at 32–35; u32 caret row, column, top row, left column at 36–51; role at 52 |
+| 64–65 | Program-chain selector and save-completed flag |
+| 96–111 | File name passed between the session, the program and `sysRun` |
+| 208–211 | Pending action across a save |
+| 380320–380831 | Session catalog page and document name |
+| 380832–380895 | Session UI descriptor |
+| 380896–380927 | Session glyph scratch |
 
-The real board's external RAM is undefined at cold power-on and can contain
-previous applications' data. A new system program must initialize every flag,
-length and structure it reads before writing. Do not rely on Python/Verilator
-zero-filled memory. Clear metadata and invalidate caches; image buffers can be
-loaded on demand. A resident application's valid restore path must preserve
-its saved state rather than performing a cold clear.
+A manual-UI program supplies its own descriptor and glyph scratch and has no
+reserved ranges.
 
-The November 4 Finder correction initializes file/window/control metadata,
-comment lengths and icon-cache flags in `start()`. The loader clears the init
-flag on cold launch; a resident return keeps it set. Regression tests seed
-external RAM with 0xA5 and verify window geometry and keyboard selection.
+## The shipped programs
 
-## Run76 FPGA interface status
+**Editor and Note** (`EDITOR.HTML`, roles 1 and 5). Note creates an empty
+document and starts the same Editor. Save As defaults to `.HTM` in Editor and
+`.JS` in Note. Editor keeps its line index at arena 4096–20479, a clipboard
+header at 24576–24583 with up to 4096 bytes at 24584, and one undo record of
+up to 4096 bytes at 32768. Cut or Copy of more than 4096 bytes is refused.
+Compile uses the same arena, so clipboard and undo do not survive it.
 
-The six-menu `File|` contract, separator/checkmark rendering, `systemTitle` and
-`windowBars` are now implemented in RTL and tested with the exact MacPaint
-program. Use run76 after its release qualification; older run75 does not
-support those extensions. `tests/test_owned_menus_rtl.py` exercises the native
-parser and pointer dispatch, including Save, the last menu and Quit lifecycle.
-The program still implements its own document bytes. `Open...` and
-`Save As...` open the shared boxes and leave the name at arena bytes
-96–111. Declaring those labels does not invent file serialization.
+**Reader** (`READ.HTML`, role 2) shows `.MD` and `.TXT` files from SOURCE.
+
+**Finder** (`FINDER.HTML`, role 9) owns its whole menu bar and draws its own
+overlapping windows, icons and Trash. Folders, icon positions, comments and
+window places are stored in `DESKTOP.FDR`; the card has no subdirectories.
+The machine keeps Finder's compiled image and arena while another program
+runs, so returning to Finder does not reload it from the card. Icons:
+[DESKTOP_ICONS.md](DESKTOP_ICONS.md).
+
+**MacPaint** (`MACPAINT.HTML`, role 6) owns its menu bar: File, Edit,
+Goodies, Font, FontSize, Style. It saves `STEM.PNT` through `Open...` and
+`Save As...`. Its tables live in `PAINT.RSC` (1611 bytes: a 32-byte `JMRP`
+version 1 header with an additive checksum, then fonts, icons, patterns and
+tones), built by `tools/build_paint_resources.py` from
+`resources/macpaint/tables.json` and loaded at arena 373504–375114.

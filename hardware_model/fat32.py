@@ -38,7 +38,7 @@ class FatGeom:
     fsinfo_sector: int
     fat_start: int  # absolute LBA of first FAT
     data_start: int  # absolute LBA of cluster 2
-    # NEW: partition sector count (BPB total_sectors_32) — caps allocation so
+    # Partition sector count (BPB total_sectors_32) — caps allocation so
     # FAT tail entries with no backing data sectors are never handed out
     total_sectors: int = 0
 
@@ -104,7 +104,7 @@ class Fat32Volume:
             | (bpb[47] << 24)
         )
         fsinfo = bpb[48] | (bpb[49] << 8)
-        # NEW: partition size (total_sectors_32 at offset 32) for alloc bound
+        # Partition size (total_sectors_32 at offset 32) for alloc bound
         total32 = (
             bpb[32]
             | (bpb[33] << 8)
@@ -256,7 +256,7 @@ class Fat32Volume:
                 if hint < 2 or hint >= 0x0FFFFFF0:
                     hint = 2
         max_cluster = (g.sectors_per_fat * SECTOR_SIZE) // 4
-        # NEW: FAT sizing rounds up, so tail entries can point past the card
+        # FAT sizing rounds up, so tail entries can point past the card
         # (DONKEY 2.4 MB patch hit "LBA 32768 out of range"). Cap allocation
         # at clusters whose data sectors actually exist in the partition.
         if g.total_sectors:
@@ -437,7 +437,7 @@ class Fat32Volume:
         size: int,
         attr: int = 0x20,
     ) -> None:
-        g = self._require()
+        self._require()
         lba = self._cluster_lba(cluster) + sect_in_clus
         buf = self._read_sector(lba)
         ent = bytearray(32)
@@ -537,7 +537,7 @@ class Fat32Volume:
         self._require()
         return self.list_root()
 
-    # NEW: console REMOVE / host unlink — mark dirent deleted + free clusters
+    # Console REMOVE / host unlink — mark dirent deleted + free clusters
     def delete_file(self, name: str) -> None:
         found = self.find(name)
         if found is None:

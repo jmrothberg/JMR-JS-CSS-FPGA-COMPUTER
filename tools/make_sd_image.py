@@ -60,7 +60,7 @@ STORAGE_DIR = ROOT / "storage"
 LINE_MAX = 128
 # ST_LN_DIG accepts at most 5 digits of line number.
 LINE_NO_MAX = 65535
-# NEW: console tok_buf is 128 bytes; source can fit LINE_MAX chars but tokenize
+# Console tok_buf is 128 bytes; source can fit LINE_MAX chars but tokenize
 # longer (e.g. SET(x,y,color) × 6). Overflow used to wrap and corrupt the line.
 TOK_MAX = 128
 
@@ -83,7 +83,7 @@ _KEEP_SUFFIX = {".SYS", ".ROM", ".LNK", ".RSC", ".HTML", ".HTM", ".JS", ".DAT", 
 
 
 def compile_sidecars(
-    files: list[tuple[str, bytes]], *, sound: bool = True
+    files: list[tuple[str, bytes]], *, sound: bool = True, strict: bool = False
 ) -> list[tuple[str, bytes]]:
     """Mint a .JSH ProgramImage next to every HTML title on the card.
 
@@ -97,8 +97,8 @@ def compile_sidecars(
     sound=True (default): sound() stays nid 42. sound=False (-soundoff):
     those calls become _stub so old bits without the native do not fault.
 
-    Compile failures are reported and skipped, never silently dropped:
-    a title without a .JSH simply has no standalone path yet.
+    strict=True rejects a failed mint before an import writes any file.
+    The default batch-build mode reports and skips failures for legacy callers.
     """
     from tools.compile_js import compile_html_text, encode_html_chunk
 
@@ -127,6 +127,8 @@ def compile_sidecars(
                 )
             )
         except Exception as exc:  # compile error: report, keep going
+            if strict:
+                raise ValueError(f"{name}: compilation failed; no files imported: {exc}") from exc
             print(f"note: {name}: no .JSH sidecar ({type(exc).__name__}: {exc})")
             continue
         out.append((side, blob))
@@ -493,7 +495,12 @@ def put_host_files_on_card(
             from tools.desktop_icons import collect_program_icons
             pairs.extend(collect_program_icons(src.parent,[src.name]))
     if mint_jsh:
-        pairs.extend(compile_sidecars(pairs))
+        # Compile all selected program sources before the first disk write.
+        # Supplied stale sidecars cannot bypass source compilation.
+        generated = {name.rsplit('.', 1)[0].upper() + '.JSH'
+                     for name, _ in pairs if name.upper().endswith('.HTM')}
+        pairs = [(name, data) for name, data in pairs if name.upper() not in generated]
+        pairs.extend(compile_sidecars(pairs, strict=True))
     written: list[str] = []
     for name, data in pairs:
         patch_card_file(card, name, data)
@@ -580,7 +587,7 @@ def create_image(
         for name, data in files:
             by_name[name.upper()] = data
         pairs = list(by_name.items())
-    # NEW: blank/whitespace-only .bas lines never reach the card (see
+    # Blank/whitespace-only .bas lines never reach the card (see
     # strip_blank_bas_lines). Do this BEFORE check_storage so the lint sees
     # what the board will actually load.
     # Standalone: mint .JSH from the RAW html, before squash_long_html_lines

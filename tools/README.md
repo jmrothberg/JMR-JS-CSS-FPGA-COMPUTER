@@ -18,29 +18,22 @@ computer. The machine loads `card.img`.
 | `export_font_rom_hex.py` | READY font into `vectors/font_rom.hex`. |
 | `export_reader_font.py` | Markdown-reader sprite from `assets/desktop/`. |
 | `selfhost.py` | Size check for the on-machine compiler titles. Tests call it. |
-| `board_flow/` | Vivado build. `make -C tools/board_flow bit` is the owner's step, not an agent's. |
+| `toolbox_linker.py` | Link `resources/toolbox/` into `TOOLBOX.ROM`, `TOOLBOX.LNK` and `vectors/toolbox_code*.hex`. |
+| `toolbox_state.py`, `toolbox_manifest.py` | Linker passes: group library state per application; version the linked identities. |
+| `sync_toolbox_clients.py` | Keep the shared Toolbox client scripts identical in every HTML program. |
+| `software_ui.py`, `materialize_software_ui.py` | Turn declarative menu and window markup into Toolbox calls. |
+| `build_paint_resources.py` | Pack MacPaint artwork from `resources/macpaint/` into its resource file. |
+| `make_artjs.py` | Chrome-side art for a title, from its `.ARTX`. |
+| `golden_frames.py` | Compare a title's picture in Chrome, Python and FPGA-SIM. |
+| `generate_architecture_diagram.py` | Regenerate `docs/diagrams/`. |
+| `gui_runtime.py`, `simulator_provenance.py` | GUI start-up checks: which card and simulator to use, and that the simulator matches `rtl/`. |
+| `verify_current_set.py`, `audit_toolbox_release.py` | Check the source tree and a card against `CURRENT_SET.json`. |
+| `inventory_ui_migration.py` | List which programs still use a hardware UI service. |
+| `board_flow/` | Vivado build. See [board_flow/README.md](board_flow/README.md). |
 | `mouse_probe/` | Small bit that only checks the keyboard and mouse jacks. |
 | `pmod_input_test/` | LED proof that a Pmod plug is alive. Not FPGA-SIM. |
 | `hid_led_blink/` | LED proof that J15 is delivering PS/2 bytes. Not FPGA-SIM. |
 | `audio_beep_test/` | Board beep check. |
 | `psg_bench/` | Sound-chip bench. |
 
-`golden_frames.py` compares a title's picture with a saved frame.
-Do not add those LED proofs to the JS computer's source list.
-
-These are not the current build. Leave them until a measurement needs them again:
-
-| Script | What it was |
-|---|---|
-| `check_runtime_parity.py` | Old full battery. The gate is `pytest`. Do not call a run of this a pass. |
-| `measure_game_rtl.py`, `profile_game_workload.py`, `build_ddr_latency_sim.py` | How the numbers in `docs/GAME_SPEEDUP_RESULTS.md` were taken. |
-| `board_flow/run73o_finalize.tcl`, `run73o_repair_cascade.tcl` | How the run73o bit was finished. The current build is `vivado_build.tcl`. |
-
-`mkbig.py`, `verify_game_speedups.py`, and `board_flow/close_wns.tcl` are in `to_delete/tools/`. The packer read `storage/MK.HTML`, which is gone. The other two are one-shot checks with nothing left to call them.
-
-`toolbox_linker.py` builds the resident native-JavaScript library as TOOLBOX.ROM
-and the FPGA factory hex files. HTML marked `jmr-toolbox: resident-v1` is linked
-by `compile_js.py`; unmarked programs retain the ordinary compilation path.
-After changing library code, relink its clients and publish their matching ROM.
-See `docs/RESIDENT_TOOLBOX.md` for the contract and complete menu/dialog example.
-`make_sd_image.py` includes .ROM in disk creation and transfer.
+The LED and probe folders are separate small designs; they are not part of the computer's source list.

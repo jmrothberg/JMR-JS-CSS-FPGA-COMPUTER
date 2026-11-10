@@ -20,7 +20,7 @@ module jmr_system_menu (
  output logic hold_keys,
  output logic [69:0] held_keys,
  output logic [31:0] generation,
- output logic quit_pulse,terminal_pulse,
+ output logic quit_pulse,
  output logic key_stb,key_down,
  output logic [7:0] key_code_o,key_char_o,
  output logic ascii_stb,
@@ -70,11 +70,11 @@ module jmr_system_menu (
    about_hot<=0;tool_stb<=0;tool_action<=0;
    inject_release<=0;inject_release_code<=0;old_buttons<=0;guest_drag<=0;held<=0;held_code<=0;
    menu_open<=0;keyboard_open<=0;about_open<=0;shift_on<=0;caps_on<=0;ctrl_on<=0;alt_on<=0;pressed_index<=127;generation<=0;hold_keys<=0;held_keys<=0;release_walk<=127;held_f9<=120;held_f10<=121;
-   quit_pulse<=0;terminal_pulse<=0;key_stb<=0;key_down<=0;key_code_o<=0;key_char_o<=0;
+   quit_pulse<=0;key_stb<=0;key_down<=0;key_code_o<=0;key_char_o<=0;
    ascii_stb<=0;ascii_data<=0;wp<=0;rp<=0;count<=0;put<=0;put_data<=0;cooldown<=0;release_mods<=0;
   end else begin
    tool_stb<=0;
-   put<=0;key_stb<=0;ascii_stb<=0;quit_pulse<=0;terminal_pulse<=0;
+   put<=0;key_stb<=0;ascii_stb<=0;quit_pulse<=0;
    case({put,pop})2'b10:count<=count+1'b1;2'b01:count<=count-1'b1;default:;endcase
    if(put)wp<=wp+1'b1;
    if(cooldown!=0)cooldown<=cooldown-1'b1;
@@ -127,7 +127,7 @@ module jmr_system_menu (
       if(y<47 && !put && count<124 && !inject_release)begin
        put<=1;put_data<={8'd0,8'd254,1'b1};inject_release<=1;inject_release_code<=254;
       end
-      else if(y<68)begin keyboard_open<=!keyboard_open;if(!keyboard_open)terminal_pulse<=1;else begin release_mods<=1;release_walk<=0;hold_keys<=0;end end
+      else if(y<68)begin keyboard_open<=!keyboard_open;if(keyboard_open)begin release_mods<=1;release_walk<=0;hold_keys<=0;end end
       else begin tool_stb<=1;tool_action<=y<89?4'd11:y<110?4'd12:4'd10;end
      end else if(!(x<30 && y<22))begin menu_open<=0;generation<=generation+1'b1;end
     end

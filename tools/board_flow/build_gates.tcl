@@ -81,7 +81,24 @@ proc jmr_internal_timing_gate {report latch_cells} {
 # settling time. Empty/false-pathed collections are a failure, not a waiver.
 proc jmr_audio_payload_gate {out} {
   set src [get_cells -hierarchical -regexp {.*u_exec64/snd_(ch|freq|vol|frames|slide)_reg(\[[0-9]+\])?}]
-  set dst [get_cells -hierarchical -regexp {.*u_psg/v(freq|vol|frames|slide|phase)_reg.*}]
+  set dst {}
+  # Require all logical capture families, allowing synthesis to prune constant
+  # phase bits but never allowing the entire phase-history family to disappear.
+  foreach family {vfreq vvol vframes vslide vphase ph23_q} {
+    set regs [get_cells -quiet -hierarchical -filter {IS_SEQUENTIAL} -regexp ".*u_psg/${family}_reg.*"]
+    if {[llength $regs] == 0} {error "Audio capture family missing: $family"}
+    set dst [concat $dst $regs]
+    foreach reg $regs {
+      set family_pins [get_pins -of_objects $reg -filter {REF_PIN_NAME == D || REF_PIN_NAME == CE || REF_PIN_NAME == R || REF_PIN_NAME == S}]
+      if {[llength $family_pins] == 0} {
+        error "Audio capture register has no sequential payload pins: $reg"
+      }
+      set paths [get_timing_paths -delay_type max -from $src -to $family_pins -max_paths 1]
+      if {[llength $paths] == 0} {
+        error "Audio capture register has no timed payload path: $reg"
+      }
+    }
+  }
   set pins [get_pins -of_objects $dst -filter {REF_PIN_NAME == D || REF_PIN_NAME == CE || REF_PIN_NAME == R || REF_PIN_NAME == S}]
   if {[llength $src] != 38 || [llength $pins] == 0} {
     error "Audio held-payload endpoints missing or changed: source=[llength $src], destination=[llength $pins]"

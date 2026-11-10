@@ -1,6 +1,6 @@
 """Python hardware model of the RTL JS VM — explicit code BRAM + JSB v2 load.
 
-LLM NOTE: Constitution: FM → this HM (memories / sizes) → SystemVerilog.
+Constitution: FM → this HM (memories / sizes) → SystemVerilog.
 FLAG_VALUE64 opcode semantics execute here from serialized code_mem words;
 the functional_model.bytecode.VM remains only the explicitly transitional
 pre-Value64 path. This module is the load/memory twin of
@@ -24,11 +24,12 @@ from functional_model.jsb_format import (
     ASET_MAGIC,
     FLAG_ASET,
     FLAG_VALUE64,
-    MAGIC,
+    MAGIC, SETTER_MAGIC,
     NATIVE_IDS,
     PROGRAM_CODE_WORDS,
     PROGRAM_MAX_CONSTS,
     PROGRAM_MAX_NAMES,
+    PROGRAM_NAME_BYTES,
     PROGRAM_MAX_VARS,
     ProgramImage,
 )
@@ -55,12 +56,12 @@ MAX_CONSTS = PROGRAM_MAX_CONSTS
 MAX_VARS = PROGRAM_MAX_VARS
 STACK_DEPTH = 1024  # mirrors jmr_js_vm.sv (RTL vspmax=71; literals push per element)
 CALL_DEPTH = 128
-MAX_OBJECTS = 960  # 2026-08-21(final): mirrors RTL; attract burst needs >896
+MAX_OBJECTS = 960  # Mirrors RTL; attract burst needs >896
 # Two-tier arrays: leftover BRAM cannot hold 1024×128. Same 65536 × 64b
 # words as 1024×32+256×128; more short handles for nested map literals plus
 # wall/bean JSON clones (~1152), fewer long (bunker push still fits).
 MAX_ARRAYS_SHORT = 1536
-MAX_ARRAYS_LONG = 12  # 2026-08-21(final): mirrors RTL
+MAX_ARRAYS_LONG = 12  # Mirrors RTL
 MAX_ARRAYS = MAX_ARRAYS_SHORT + MAX_ARRAYS_LONG
 HEAP_SLOTS = MAX_OBJECTS  # Backward-compatible name for the object heap cap.
 OBJECT_SLOTS = 32
@@ -68,7 +69,7 @@ ARRAY_SHORT_CAP = 32
 ARRAY_ELEMENTS = 128
 # One env per live call/closure. `new Ctor()` bodies that MAKE_FN keep that
 # ctor env for as long as those closures live (empty update/draw on instances).
-ENV_DEPTH = 384  # 2026-08-21(final): mirrors RTL; 256 broke PACMAN's BFS recursion
+ENV_DEPTH = 384  # Mirrors RTL; 256 broke PACMAN's BFS recursion
 ENV_SLOTS = 16
 RAF_QUEUE_DEPTH = 8
 TIMER_QUEUE_DEPTH = 64
@@ -526,7 +527,7 @@ class JsHwVm:
             self.code_mem[i] = 0
         # Header words — same parse as jmr_js_vm.sv S_GOT_MAGIC / HDR1 / HDR2
         magic_w = self.code_mem[0]
-        if magic_w != int.from_bytes(MAGIC, "little"):
+        if magic_w not in (int.from_bytes(MAGIC,"little"),int.from_bytes(SETTER_MAGIC,"little")):
             raise ValueError("code_mem magic mismatch")
         hdr1 = self.code_mem[1]
         self.n_ops = hdr1 & 0xFFFF
@@ -548,37 +549,13 @@ class JsHwVm:
             # Phase-2 path: never decode a Chunk and never call VM.run().
             self._load_value64_words()
             return
-        # Tagged Q16 images are retired with exec32 (docs/REMOVING_EXEC32.md):
+        # Tagged Q16 images are not supported:
         # refuse loud rather than silently execute an encoding the silicon
         # no longer decodes.
         raise ValueError(
             "ProgramImage without FLAG_VALUE64 — tagged images are retired "
             "with exec32 (docs/REMOVING_EXEC32.md)"
         )
-
-    def _load_legacy_decoded_image(self, image: ProgramImage) -> None:
-        """Explicit transitional path for pre-Value64 ProgramImages only."""
-        # Transitional execution adapter: opcode semantics remain in the FM VM,
-        # but its Chunk is reconstructed only from validated serialized bytes.
-        chunk = image.decode()
-        self._capacity_error = None
-        self._value64_active = False
-        self._m.vm = _HardwareCheckedVm(
-            self._record_capacity_error, natives=self._bounded_natives()
-        )
-        self._m.vm.globals.clear()
-        self._m.html_host = None
-        self._m._html_chunk = chunk
-        self._m._sprites = list(getattr(chunk, "sprites", None) or [])
-        self._m.vm._sprites = self._m._sprites
-        self._m._raf_q = []
-        self._m._listeners = []
-        self._m._timers = []
-        self._m._timer_seq = 1
-        self._m._frame_no = 0
-        self._m._bytecode_html = True
-        self._m.running = True
-        self._execute_checked(lambda: self._m.vm.run(chunk))
 
     def _load_value64_words(self) -> None:
         """Execute the finite Value64 subset directly from code_mem words."""
@@ -969,11 +946,6 @@ class JsHwVm:
             f"object heap overflow ({MAX_OBJECTS + 1} > {MAX_OBJECTS}) at IP {ip}"
         )
         return None
-
-    def _value64_new_record(self) -> int:
-        ident = self._value_small_id
-        self._value_small_id = 1 if ident >= 0xFFF else ident + 1
-        return record_pack(ident, False, False)
 
     def _value64_record_follow(self, handle: int) -> int:
         """Walk RECORD → box / newer RECORD. Compact rewrites fwd[ident]
@@ -2015,6 +1987,8 @@ class JsHwVm:
                 except RuntimeError as exc:
                     self._value64_fault(f"native ID {native_id} at IP {ip}: {exc}")
                     return None
+            elif native_id == 70:
+                return value_pack_number(self._m.input.play_bits() & 63)
             elif native_id in (51, 52, 53):
                 # analog-joy: same rest defaults as InputEngine / RTL
                 if native_id == 51:
@@ -2035,7 +2009,7 @@ class JsHwVm:
                     value = math.floor(value + 0.5)
                 return value_pack_number(value)
             elif native_id in (55, 56):
-                # Run-71 RTL treats non-Number inputs as nonfinite/NaN.
+                # RTL treats non-Number inputs as nonfinite/NaN.
                 is_number = bool(args) and value_is_number(args[0])
                 result = (
                     is_number and math.isfinite(number(0))
@@ -2052,6 +2026,55 @@ class JsHwVm:
                     if value == 0:
                         value = -0.0
                 return value_pack_number(value)
+            elif native_id == 67:
+                result = bool(args) and value_kind(args[0]) == VALUE_KIND_ARRAY and value_payload(args[0]) < MAX_ARRAYS
+                return value_pack_tagged(VALUE_KIND_BOOL, payload=int(result))
+            elif native_id == 68:
+                arena_mode=len(args) in (2,3)
+                checked=len(args)==3 and value_is_number(args[2]) and value_unpack_number(args[2])==1
+                try:
+                    if arena_mode:
+                        if not all(value_is_number(v) for v in args) or (len(args)==3 and not checked):
+                            raise RuntimeError("VM software fault 4: byte span type")
+                        text=self._m._nat_string_from_bytes(*(value_unpack_number(v) for v in args))
+                        if text is None:return value_pack_tagged(VALUE_KIND_UNDEFINED)
+                    elif len(args)==1:
+                        pages=self._value64_resolve_array(args[0],ip,Op.CALL_NATIVE)
+                        if pages is None:return None
+                        decoded=[]
+                        for page_handle in pages:
+                            page=self._value64_resolve_array(page_handle,ip,Op.CALL_NATIVE)
+                            if page is None:return None
+                            if not all(value_is_number(v) for v in page):
+                                raise RuntimeError("VM software fault 4: byte type")
+                            decoded.append([value_unpack_number(v) for v in page])
+                        text=self._m._nat_string_from_bytes(decoded)
+                    else:
+                        raise RuntimeError("VM software fault 4: argument count")
+                except (RuntimeError,UnicodeError) as exc:
+                    self._value64_fault(str(exc));return None
+                def raw_bytes(s):
+                    raw=getattr(s,'_jmr_bytes',None)
+                    return raw if raw is not None else s.encode('utf-8','surrogatepass')
+                raw=raw_bytes(text)
+                match=next((i for i,v in enumerate(self._value_strings) if raw_bytes(v)==raw),None)
+                if arena_mode and match is not None:
+                    return value_pack_tagged(VALUE_KIND_STRING,payload=match)
+                if sum(len(raw_bytes(v)) for v in self._value_strings)+len(raw)>PROGRAM_NAME_BYTES:
+                    if checked:return value_pack_tagged(VALUE_KIND_UNDEFINED)
+                    self._value64_fault(f"native68 fault3 byte capacity at IP {ip}");return None
+                if match is not None:return value_pack_tagged(VALUE_KIND_STRING,payload=match)
+                if len(self._value_strings)>=PROGRAM_MAX_NAMES:
+                    if checked:return value_pack_tagged(VALUE_KIND_UNDEFINED)
+                    self._value64_fault(f"native68 fault3 name capacity at IP {ip}");return None
+                index=len(self._value_strings);self._value_strings.append(text)
+                return value_pack_tagged(VALUE_KIND_STRING,payload=index)
+            elif native_id == 69:
+                try:
+                    self._m._nat_runtime_fault(number(0) if len(args) == 1 and value_is_number(args[0]) else 5)
+                except RuntimeError as exc:
+                    self._value64_fault(str(exc))
+                return None
             elif native_id == 66:
                 if not args or value_kind(args[0]) != VALUE_KIND_STRING:
                     return value_pack_number(-1)
@@ -2318,7 +2341,7 @@ class JsHwVm:
                 "_sy": 1.0,
                 "_saved": None,
             }
-            # NEW: ctx.imageSmoothingEnabled default true; indexed blit is nearest
+            # Ctx.imageSmoothingEnabled default true; indexed blit is nearest
             smooth_name = self._value64_interned_string("imageSmoothingEnabled", ip)
             obj = self._value_objects[ctx_slot]
             if smooth_name is not None and obj is not None:
@@ -2897,8 +2920,37 @@ class JsHwVm:
             return None
         return handle
 
+    def _value64_class_row(self,handle,key,kinds):
+        ci=self._value_object_classes[value_payload(handle)]
+        for descriptor in self.program_image.classes if self.program_image else ():
+            if descriptor.name_index==ci:
+                return next((r for r in descriptor.methods if r[0]==key and r[2] in kinds),None)
+        return None
+
+    def _value64_class_read(self,handle,key,ip):
+        row=self._value64_class_row(handle,key,(0,1))
+        if row is None:return value_pack_tagged(VALUE_KIND_UNDEFINED)
+        fn=_ValueFunction(entry=row[1],nparam=self._value64_entry_nparam(row[1]),captured_env=self._value_env,is_arrow=False,is_iife=False,bound_this=handle,has_bound_this=True)
+        result=self._value64_alloc_function(fn,ip)
+        if result is not None and row[2]==1:result=self._value64_invoke_function(result,[])
+        return result
+
+    def _value64_class_store(self,handle,key,value,ip):
+        row=self._value64_class_row(handle,key,(2,))
+        if row is None:
+            return (self._value64_class_row(handle,key,(1,)) is not None,value)
+        # Keep the assignment result rooted while setter code may allocate,
+        # overwrite its parameter, call another setter or trigger collection.
+        if not self._value64_push(value):return True,None
+        fn=_ValueFunction(entry=row[1],nparam=self._value64_entry_nparam(row[1]),captured_env=self._value_env,is_arrow=False,is_iife=False,bound_this=handle,has_bound_this=True)
+        f=self._value64_alloc_function(fn,ip)
+        if f is None:return True,None
+        result=self._value64_invoke_function(f,[self._value_stack[-1]])
+        if result is None:return True,None
+        return True,self._value64_pop(ip,Op.SET_PROP)
+
     def _value64_invoke_function(
-        self, handle: int, args: List[int]
+        self, handle: int, args: List[int], explicit_this: Optional[int] = None
     ) -> Optional[int]:
         self._value_callback_result = None
         function = self._value64_resolve_function(handle, 0, Op.CALL_VAL)
@@ -2912,12 +2964,13 @@ class JsHwVm:
         if function.entry < 0:
             return self._value64_native(-function.entry, args, 0)
         # Mutable so GC compact can rewrite args before they are LET_VAR'd.
-        held = [handle, *args]
+        held = [handle, *args, explicit_this if explicit_this is not None else value_pack_tagged(VALUE_KIND_UNDEFINED)]
         env_handle = self._value64_alloc_env(function.captured_env, 0, held)
         if env_handle is None:
             return None
         handle = held[0]
-        args = held[1:]
+        args = held[1:-1]
+        explicit_this = held[-1]
         frame = _ValueCallFrame(
             return_ip=-1,
             base_sp=len(self._value_stack),
@@ -2931,7 +2984,7 @@ class JsHwVm:
         self._value_this = (
             function.bound_this
             if function.is_arrow or function.has_bound_this
-            else value_pack_tagged(VALUE_KIND_UNDEFINED)
+            else explicit_this
         )
         for argument in args:
             if not self._value64_push(argument):
@@ -3031,6 +3084,12 @@ class JsHwVm:
                         value_pack_tagged(VALUE_KIND_UNDEFINED)
                     ):
                         return
+                elif arg1 == 5 and arg0 in (0, 1):
+                    if not self._value64_push(value_pack_tagged(VALUE_KIND_BOOL, payload=arg0)):
+                        return
+                elif arg1 == 6 and arg0 == 0:
+                    if not self._value64_push(value_pack_tagged(VALUE_KIND_NULL)):
+                        return
                 elif arg1 == 4:
                     packed = self.code_mem[const_base + 2 * arg0]
                     length = (packed >> 16) & 0xFF
@@ -3112,6 +3171,45 @@ class JsHwVm:
                     return
                 try:
                     if op == Op.ADD:
+                        mixed_string = ((value_kind(left) == VALUE_KIND_STRING) !=
+                                        (value_kind(right) == VALUE_KIND_STRING))
+                        if mixed_string:
+                            # Mirror the RTL's JSB2 ADD helper dispatch. Keep the
+                            # original tagged operands; shared software owns ToString.
+                            if (self.program_image.data[:4] != b"JSB2" or
+                                    not 0 < arg0 < self.n_ops or arg1 != 0):
+                                self._value64_fault(f"mixed ADD fault9 invalid helper at IP {op_ip}")
+                                return
+                            if len(self._value_calls) >= CALL_DEPTH:
+                                self._value64_fault(f"mixed ADD fault2 call stack at IP {op_ip}")
+                                return
+                            if not self._value64_push(left) or not self._value64_push(right):
+                                return
+                            nparam = self._value64_entry_nparam(arg0)
+                            argc = 2
+                            while argc > nparam:
+                                if self._value64_pop(op_ip, op) is None:
+                                    return
+                                argc -= 1
+                            while argc < nparam:
+                                if not self._value64_push(undefined):
+                                    return
+                                argc += 1
+                            env_handle = self._value64_alloc_env(self._value_env, op_ip)
+                            if env_handle is None:
+                                return
+                            self._value_calls.append(_ValueCallFrame(
+                                return_ip=ip,
+                                base_sp=len(self._value_stack) - nparam,
+                                this_value=self._value_this,
+                                lexical_env=self._value_env,
+                                function_handle=undefined,
+                                constructor_value=undefined,
+                            ))
+                            self._value_env = env_handle
+                            self._value_this = undefined
+                            ip = arg0
+                            continue
                         if value_kind(left) == VALUE_KIND_STRING or value_kind(
                             right
                         ) == VALUE_KIND_STRING:
@@ -3286,7 +3384,9 @@ class JsHwVm:
                     slot = self._value64_property_slot(index_word, op_ip, op)
                     if slot is None:
                         return
-                    if not self._value64_push(obj.get(slot, undefined)):
+                    result=obj[slot] if slot in obj else self._value64_class_read(handle,slot,op_ip)
+                    if result is None:return
+                    if not self._value64_push(result):
                         return
                     continue
                 # Number/undefined/null[index] → undefined (working Chunk VM).
@@ -3338,6 +3438,11 @@ class JsHwVm:
                     slot = self._value64_property_slot(index_word, op_ip, op)
                     if slot is None:
                         return
+                    if slot not in obj:
+                        handled,value=self._value64_class_store(handle,slot,value,op_ip)
+                        if handled:
+                            if value is None or not self._value64_push(value):return
+                            continue
                     if slot not in obj and len(obj) >= OBJECT_SLOTS:
                         self._value64_fault(
                             f"object slots {len(obj) + 1} > {OBJECT_SLOTS} "
@@ -3361,6 +3466,9 @@ class JsHwVm:
                     return
                 names = self.program_image.names if self.program_image else ()
                 property_name = names[arg0] if arg0 < len(names) else ""
+                if arg1==1 and value_kind(handle) not in (VALUE_KIND_OBJECT,VALUE_KIND_ELEMENT) and property_name not in ("length","prototype","width","height"):
+                    if not self._value64_push(0x7ff900000000cafe):return
+                    continue
                 if value_kind(handle) == VALUE_KIND_ARRAY:
                     array = self._value64_resolve_array(handle, op_ip, op)
                     if array is None:
@@ -3461,54 +3569,9 @@ class JsHwVm:
                 obj = self._value64_resolve_object(handle, op_ip, op)
                 if obj is None:
                     return
-                result = obj.get(
-                    arg0, value_pack_tagged(VALUE_KIND_UNDEFINED)
-                )
-                if (
-                    value_kind(result) == VALUE_KIND_UNDEFINED
-                    and self._value_object_classes[value_payload(handle)]
-                    is not None
-                ):
-                    class_index = self._value_object_classes[value_payload(handle)]
-                    descriptor = next(
-                        (
-                            item
-                            for item in (
-                                self.program_image.classes
-                                if self.program_image
-                                else ()
-                            )
-                            if item.name_index == class_index
-                        ),
-                        None,
-                    )
-                    method_row = (
-                        next(
-                            (row for row in descriptor.methods if row[0] == arg0),
-                            None,
-                        )
-                        if descriptor is not None
-                        else None
-                    )
-                    if method_row is not None:
-                        function = _ValueFunction(
-                            entry=method_row[1],
-                            nparam=self._value64_entry_nparam(method_row[1]),
-                            captured_env=self._value_env,
-                            is_arrow=False,
-                            is_iife=False,
-                            bound_this=handle,
-                            has_bound_this=True,
-                        )
-                        result = self._value64_alloc_function(function, op_ip)
-                        if result is None:
-                            return
-                        if method_row[2]:
-                            result = self._value64_invoke_function(result, [])
-                            if result is None:
-                                return
-                        # Prototype methods are not own properties — do not
-                        # cache into the instance (OBJECT_SLOTS / identity).
+                result = obj[arg0] if arg0 in obj else self._value64_class_read(handle,arg0,op_ip)
+                if arg1==1 and arg0 not in obj and self._value64_class_row(handle,arg0,(0,1,2)) is None and self._value_object_builtins[value_payload(handle)]:result=0x7ff900000000cafe
+                if result is None:return
                 if not self._value64_push(result):
                     return
             elif op == Op.SET_PROP:
@@ -3645,6 +3708,11 @@ class JsHwVm:
                     self._m.system_window[field]=value_to_int32(value)&255
                     if not self._value64_push(value):return
                     continue
+                if arg0 not in obj:
+                    handled,value=self._value64_class_store(handle,arg0,value,op_ip)
+                    if handled:
+                        if value is None or not self._value64_push(value):return
+                        continue
                 if arg0 not in obj and len(obj) >= OBJECT_SLOTS:
                     self._value64_fault(
                         f"object slots {len(obj) + 1} > {OBJECT_SLOTS} at IP {op_ip}"
@@ -3807,9 +3875,16 @@ class JsHwVm:
                 args = self._value_stack[-arg1:] if arg1 else []
                 if arg1:
                     del self._value_stack[-arg1:]
+                prepared = bool(arg0 & 0x8000)
+                arg0 &= 0x7fff
+                target = self._value64_pop(op_ip,op) if prepared else None
                 receiver = self._value64_pop(op_ip, op)
                 if receiver is None:
                     return
+                if prepared and target != 0x7ff900000000cafe:
+                    result=self._value64_invoke_function(target,args,receiver)
+                    if result is None or not self._value64_push(result):return
+                    continue
                 names = self.program_image.names if self.program_image else ()
                 method = names[arg0] if arg0 < len(names) else ""
                 receiver_kind = value_kind(receiver)
@@ -3932,7 +4007,7 @@ class JsHwVm:
                     )
                     method_row = (
                         next(
-                            (row for row in descriptor.methods if row[0] == arg0),
+                            (row for row in descriptor.methods if row[0] == arg0 and row[2]==0),
                             None,
                         )
                         if descriptor is not None
@@ -4970,29 +5045,3 @@ class JsHwVm:
             )
         return word
 
-
-def run_jsh_frames(
-    path: Path,
-    frames: int = 30,
-    *,
-    key_left_at: Optional[int] = None,
-    key_fire_at: Optional[int] = None,
-) -> JsHwVm:
-    """Load NAME.JSH, drain rAF frames, optional KEYBITS (HM smoke)."""
-    from functional_model.input_engine import KEY_FIRE, KEY_LEFT
-
-    vm = JsHwVm()
-    vm.load_path(path)
-    for i in range(frames):
-        if key_left_at is not None and i == key_left_at:
-            vm.set_key_bits(KEY_LEFT)
-        elif key_fire_at is not None and i == key_fire_at:
-            vm.set_key_bits(KEY_FIRE)
-        elif key_left_at is not None and i == key_left_at + 1:
-            vm.set_key_bits(0)
-        elif key_fire_at is not None and i == key_fire_at + 1:
-            vm.set_key_bits(0)
-        vm.frame_tick()
-        if vm.error:
-            break
-    return vm

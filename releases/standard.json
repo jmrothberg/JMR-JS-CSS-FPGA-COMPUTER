@@ -1,56 +1,10 @@
 {
-  "standard": "run73o_native_js_speed_WNS+0.000",
-  "date": "2026-11-02",
-  "part": "xc7a200tsbg484-1",
-  "current_folder": "releases/current",
-  "load_file": "releases/current/fpga.bit",
-  "persistent_flash_input": "releases/current/fpga.bit",
-  "board_status": "Owner reports successful QSPI flashing with openFPGALoader -f and that run73o runs fine on the board on 2026-11-02. Numeric board FPS and a separate cold-boot test were not reported.",
-  "board_reported_working": true,
-  "board_fps_measured": false,
-  "setup_slack_ns": 0.0,
-  "hold_slack_ns": 0.04,
-  "resources": {
-    "luts": 87876,
-    "slices": 28045,
-    "bram_tiles": 353.5,
-    "dsps": 128,
-    "framebuffer_read_first_ramb36": 86,
-    "mapped_native_argument_registers": 642
-  },
-  "validation": {
-    "distinct_test_passes": 579,
-    "specified_timing_constraints_met": true,
-    "drc_errors": 0,
-    "routing_errors": 0
-  },
-  "qualification_manifest": "releases/current/evidence/build_manifest.json",
-  "artifacts": {
-    "run73o_native_js_speed_WNS+0.000.bit": {
-      "path": "releases/current/run73o_native_js_speed_WNS+0.000.bit",
-      "bytes": 9730859,
-      "sha256": "cd53d807d1e4346f6ed59dae1a2a48dcc0df80ad64f5e18d02466648a60adecb"
-    },
-    "run73o_sources_and_evidence.zip": {
-      "path": "releases/current/run73o_sources_and_evidence.zip",
-      "bytes": 1639310,
-      "sha256": "7939eee990c7bed3d0b878311826ef52bb783fa993523e2d5d782291e8e3e832"
-    },
-    "run73o_qualification_reports.zip": {
-      "path": "releases/current/run73o_qualification_reports.zip",
-      "bytes": 425586,
-      "sha256": "4c2b16d3f4cb0f67e7f7dbaf6e81e6bc7bae555e7e7526da682a3b79ef00b4cb"
-    }
-  },
-  "card": {
-    "path": "releases/archive/run72b-2026-10-26/run72b_card.img",
-    "sha256": "c7eaf812e79357e070db9e6a690bc82e681fe4920bff3b081af6c8fe2fe4680c",
-    "note": "Existing run72b disk is compatible; no card change is required for run73o. Continue LOAD NAME.HTML then RUN."
-  },
-  "previous_standard": {
-    "folder": "releases/archive/run72b-2026-10-26",
-    "manifest": "releases/archive/run72b-2026-10-26/standard.json",
-    "original_tag": "standard-2026-10-26-run72b"
-  },
-  "source_note": "General FPGA engine changes; identical reference game JSH bytes were benchmarked. Qualification snapshot predates the folder/README cleanup."
+  "status": "timing_qualified_pending_board_test",
+  "qualified_current_bit": "releases/current/jmr_js_mac.bit",
+  "sha256": "15d71beadc4b5e85961c69e954c428fa03a3c5d93f35e488ed8a5457328e2f16",
+  "setup_ns": 0.002,
+  "hold_ns": 0.021,
+  "built_from": "build/run92 synthesis, ExtraNetDelay_high placement, refine.tcl",
+  "rollback": "build/run78_clean_architecture",
+  "active_development": "repository root"
 }

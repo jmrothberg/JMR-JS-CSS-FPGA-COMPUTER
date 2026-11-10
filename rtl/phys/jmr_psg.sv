@@ -1,5 +1,4 @@
 // 4-voice PSG + I2S master for the ADAU1761 line-out (Nexys Video J5).
-// Phase 1 of the line-out PSG plan (~/.cursor/plans/fpga_line-out_psg_*).
 //
 // Everything runs on MCLK (12 MHz, main MMCM CLKOUT1 /50). The clock chain
 // and I2S framing are byte-for-byte the shape proven by the phase-0 beep

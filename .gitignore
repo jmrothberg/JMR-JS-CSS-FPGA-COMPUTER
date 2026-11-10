@@ -20,8 +20,8 @@ build/
 sim/sim_build*/
 sim/sim_build_*/
 
-# Local archive. Kept on this machine. Do not publish.
-/to_delete/
+# Retired files awaiting deletion.
+/to_be_deleted/
 
 # Editor
 .vscode/
@@ -59,3 +59,7 @@ vivado_*.backup.log
 # Generated resident Toolbox copies; canonical words remain in vectors/.
 /rtl/engines/toolbox_code*.hex
 /sim/toolbox_code*.hex
+
+# GUI session logs
+/traces/*.log
+/traces/pytest/

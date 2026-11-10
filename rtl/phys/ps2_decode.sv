@@ -9,7 +9,7 @@ module ps2_decode (
     input  logic       strobe,
     output logic [7:0] ascii,
     output logic       ascii_strobe,
-    // 2026-08-25: browser-keyCode game events (make AND break, so held
+    // Browser-keyCode game events (make AND break, so held
     // keys work). PACMAN on glass would not steer: the games' keydown
     // listeners match browser keyCodes (37-40 arrows...), which only the
     // GUI tether ever produced - the PS/2 path fed typing ASCII alone
@@ -163,7 +163,7 @@ module ps2_decode (
                             8'h66: ascii <= 8'h08; // Backspace
                             8'h29: ascii <= " ";
                             8'h76: ascii <= 8'h1B; // Esc
-                            // NEW: punctuation — required for decimals (.8),
+                            // Punctuation — required for decimals (.8),
                             // strings ("…"), LOAD/SAVE names, expressions.
                             // These scancodes are all >= 0x15, so the existing
                             // strobe condition below already pulses for them;

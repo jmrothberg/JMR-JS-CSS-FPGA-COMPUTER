@@ -1,6 +1,5 @@
 """Full native disk desktop: FAT, pixels, controls and console program launch."""
 from pathlib import Path
-import re
 import pytest
 from functional_model.desktop import Desktop
 from functional_model.desktop_icons import GENERIC_PROGRAM_ICON

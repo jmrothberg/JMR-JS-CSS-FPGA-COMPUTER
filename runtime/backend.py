@@ -53,18 +53,6 @@ def card_catalog(extra: list[str] | None = None) -> list[str]:
     return names
 
 
-def _native_name_for_id(nid) -> str:
-    try:
-        from functional_model.jsb_format import NATIVE_IDS
-        n = int(nid)
-    except (TypeError, ValueError, ImportError):
-        return ""
-    for name, i in NATIVE_IDS.items():
-        if i == n:
-            return name
-    return ""
-
-
 def _native_id_for_name(name: str):
     """NATIVE_IDS / alias id for a name-table entry ('' when it is a user fn)."""
     if not name:
@@ -190,7 +178,7 @@ def _js_tag(val) -> str:
 
 
 def _js_short(val, n: int = 24) -> str:
-    # NEW: never repr() heap objects — PACMAN stack entries are cyclic/huge
+    # Never repr() heap objects — PACMAN stack entries are cyclic/huge
     # and repr() of one dict froze the GUI frame loop after RUN.
     if val is None:
         return "undef"
@@ -542,7 +530,10 @@ class PythonBackend(RuntimeBackend):
         self._finder_image=None
         self._finder_resident=None
         self._finder_home=self._finder_program()
-        if self._finder_home:self.desktop.visible=False
+        if self._finder_home:
+            self.desktop.visible = False
+            self.machine._keep_fb = True
+            self.machine.monitor_visible = False
 
     def _finder_program(self):
         """True when the shell is the Finder program, not the built-in desktop.
@@ -688,7 +679,7 @@ class PythonBackend(RuntimeBackend):
             self.desktop.visible=True
             self.desktop.refresh()
             return
-        self.machine.hard_break(quiet=True)
+        self.machine.hard_break(quiet=True, show_monitor=False)
         self.desktop.visible=False
         self.machine._start_html_image(ProgramImage(blob),share_machine=True)
         # The editor uses this same SRAM. Its old "already started" flag
@@ -697,49 +688,71 @@ class PythonBackend(RuntimeBackend):
         self.machine._nat_stg_write(16600,0)
         self._pump_finder()
 
-    def _finder_launch(self,name,how):
-        """What the Finder program asked to run. Quit comes back here."""
-        how=int(how)
-        self.desktop.visible=False
-        self._finder_home=True
-        # Restart builds a fresh Finder. Leaving for a program keeps this one.
-        if how==8 or not name:self._finder_resident=None
-        elif getattr(self.machine,'system_window',[0])[0]==9:self._park_finder()
-        # The Finder VM just stopped. Land on the monitor before LOAD/RUN
-        # so the next program is not started inside the Finder's heap.
-        self.machine.hard_break(quiet=True)
-        self.desktop.visible=False
-        if how==8 or not name:
+    def _finder_launch(self, name, how):
+        """Dispatch Finder's structured request directly to system services."""
+        how = int(how)
+        self.desktop.visible = False
+        self._finder_home = True
+        if how == 8 or not name:
+            self._finder_resident = None
+        elif getattr(self.machine, 'system_window', [0])[0] == 9:
+            self._park_finder()
+        # Retire the old VM before loading code. Keep its display through the
+        # synchronous load; normal application traffic never visits the CLI.
+        self.machine.hard_break(quiet=True, show_monitor=False)
+        if how == 8 or not name:
             return
-        if how==4:
-            self._finder_home=False
+        if how == 4:
+            self._finder_home = False
+            self.machine._keep_fb = False
+            self.machine.monitor_visible = True
             self.machine.paint_monitor('> ')
             return
-        if how in (5,6,7):
-            how,name={5:(0,'NOTE.HTM'),6:(2,'HELP.MD'),7:(0,'UTILITY.HTM')}[how]
-        self.machine.unnamed_document=False
-        self.machine.type_line('LOAD "'+name+'"')
-        suf=Path(name).suffix.upper()
-        if how==1:
-            self.machine.type_line('EDIT')
-        elif how==2 or (how==0 and suf not in ('.HTM','.HTML','.JS')):
-            self.machine.type_line('READ')
-        elif how==3:
-            try:
-                blob=self.machine.storage.load_bytes('COMPILE.JSH')
-            except FileNotFoundError:
-                self.machine.console_log.append('?NH')
-                return
-            from functional_model.jsb_format import ProgramImage
-            self.machine._start_html_image(ProgramImage(blob),share_machine=True)
-        else:
-            self.machine.type_line('RUN')
+        if how in (5, 6, 7):
+            how, name = {5: (0, 'NOTE.HTM'), 6: (2, 'HELP.MD'),
+                         7: (0, 'UTILITY.HTM')}[how]
+        self.machine.unnamed_document = False
+        self._finder_loading = True
+        try:
+            result = self.machine.load_source(name)
+            if not self._finder_service_failed(result):
+                suffix = Path(name).suffix.upper()
+                if how == 1:
+                    result = self.machine.open_editor()
+                elif how == 2 or (how == 0 and suffix not in ('.HTM', '.HTML', '.JS')):
+                    result = self.machine.open_reader()
+                elif how == 3:
+                    try:
+                        blob = self.machine.storage.load_bytes('COMPILE.JSH')
+                    except FileNotFoundError:
+                        result = ['?NH', 'COMPILE.JSH']
+                    else:
+                        from functional_model.jsb_format import ProgramImage
+                        result = self.machine._start_html_image(
+                            ProgramImage(blob), share_machine=True)
+                else:
+                    result = self.machine.run_loaded_source()
+            if self._finder_service_failed(result):
+                # A failed load must never run the previously loaded SOURCE.
+                # Keep diagnostics and enter explicit recovery, not silent Home.
+                self.machine.console_log.extend(result)
+                self.machine.hard_break(quiet=True)
+                self._finder_home = False
+        finally:
+            self._finder_loading = False
+
+    @staticmethod
+    def _finder_service_failed(result):
+        return any(str(line).lstrip().startswith(('?', 'ERROR'))
+                   for line in (result or ()))
 
     def _system_progress(self):
-        self.machine.paint_monitor()
+        if not getattr(self, '_finder_loading', False):
+            self.machine.paint_monitor()
         self.framebuffer()
-        pump=getattr(self,'run_wait_idle',None)
-        if pump:pump()
+        pump = getattr(self, 'run_wait_idle', None)
+        if pump:
+            pump()
 
     def type_line(self, text: str) -> None:
         if text.strip().upper() == "DESKTOP":
@@ -969,8 +982,7 @@ class PythonBackend(RuntimeBackend):
             self._desktop_return=True;return
         if kind=='tool':
             tool=operation[1]
-            if tool=='Terminal':self.machine.paint_monitor('> ');self._desktop_return=False
-            elif tool=='Note':self._new_document(5)
+            if tool=='Note':self._new_document(5)
             elif tool=='Editor':
                 if self.machine.source_name and self.machine.source_lines:
                     self.machine.type_line('EDIT');self._desktop_return=True
@@ -1120,9 +1132,6 @@ class PythonBackend(RuntimeBackend):
             self.desktop.refresh()
             self._desktop_return=True
             return
-        if action == "TERMINAL":
-            self.machine.paint_monitor("> ")
-            return
         commands = ([f'REMOVE "{name}"'] if action == "REMOVE" else
                     [f'LOAD "{name}"', action])
         for command in commands:
@@ -1141,7 +1150,7 @@ class PythonBackend(RuntimeBackend):
         self.machine.push_key(ch)
 
     def hard_break(self, quiet: bool = False) -> None:
-        self.machine.hard_break(quiet=quiet)
+        self.machine.hard_break(quiet=quiet, show_monitor=not self._finder_program())
         self.system_menu.classic.menu=0;self.system_menu.classic.dialog=None
         self.system_menu.classic.drag=False;self.system_menu.classic.capture=False
         self._desktop_return = False
@@ -1161,7 +1170,9 @@ class PythonBackend(RuntimeBackend):
     def framebuffer(self):
         from functional_model.desktop import pointer_overlays
         # The startup pictures own the glass. No menu bar over them.
-        if getattr(self, '_boot_glass', False):
+        if (getattr(self, '_boot_glass', False)
+                or getattr(self, '_finder_loading', False)
+                or (self._finder_home and not self.machine.running)):
             self.machine.canvas.display_overlays = ()
             return self.machine.canvas
         params=list(getattr(self.machine,'system_window',(0,0,0,0)))
@@ -1257,7 +1268,8 @@ class PythonBackend(RuntimeBackend):
         self.desktop.tick()
 
     def paint_prompt(self, prompt: str, cursor_on: bool = False, cursor_col=None) -> None:
-        if self.desktop.visible or self.system_menu.keyboard:
+        if (self.desktop.visible or self.system_menu.keyboard
+                or self._finder_home or getattr(self, "_finder_loading", False)):
             return
         self.machine.paint_monitor(prompt, cursor_on=cursor_on, cursor_col=cursor_col)
 

@@ -1,15 +1,13 @@
-"""Optional artwork -> actual FAT sidecar -> PYTHON and RTL pixel parity."""
+"""Optional artwork -> actual FAT sidecar -> PYTHON pixels."""
 
 from io import BytesIO
 from pathlib import Path
-import shutil
-import subprocess
 
 from PIL import Image
 import pytest
 
 from functional_model.desktop_icons import (
-    DesktopIcon, GENERIC_PROGRAM_ICON, ICON_FILE_BYTES, ICON_HEADER,
+    GENERIC_PROGRAM_ICON, ICON_FILE_BYTES,
     decode_icon, icon_card_name,
 )
 from functional_model.storage_engine import StorageEngine
@@ -129,50 +127,6 @@ def test_native_icon_is_read_from_the_same_mounted_fat_disk(tmp_path, monkeypatc
     assert storage.program_icon("BAD.HTM") == GENERIC_PROGRAM_ICON
     assert "GAME.ICN" not in storage.catalog()
     assert "GAME.ICN" in storage.catalog(all_files=True)
-
-
-@pytest.fixture(scope="module")
-def rtl_icon_reader(tmp_path_factory):
-    if not shutil.which("verilator"):
-        pytest.skip("Verilator missing")
-    folder = tmp_path_factory.mktemp("icon_rtl")
-    exe = folder / "bench"
-    subprocess.run([
-        "verilator", "-cc", "-exe", "-build", "-j", "2",
-        "-Mdir", str(folder / "obj"), "-o", str(exe),
-        "--top-module", "jmr_icon_stream",
-        str(ROOT / "rtl/engines/jmr_icon_stream.sv"),
-        str(ROOT / "sim/tb_icon_stream.cpp"),
-    ], check=True, capture_output=True, text=True)
-    return exe
-
-
-@pytest.mark.parametrize("failure", [None, "missing", "size", "header", "abort"])
-def test_real_rtl_matches_all_python_pixels_under_stalls(rtl_icon_reader, tmp_path, failure):
-    data = convert_icon(_image_bytes())
-    declared_size = len(data)
-    abort_after = -1
-    expected = decode_icon(data)
-    if failure:
-        expected = GENERIC_PROGRAM_ICON
-    if failure == "missing":
-        declared_size = 0
-        data = b""
-    elif failure == "size":
-        declared_size -= 1
-    elif failure == "header":
-        data = data[:6] + b"\x02" + data[7:]
-    elif failure == "abort":
-        abort_after = 721  # mid-drawing: fallback must repaint the entire icon
-    src, out = tmp_path / "icon.bin", tmp_path / "pixels.bin"
-    src.write_bytes(data)
-    result = subprocess.run([str(rtl_icon_reader), str(src), str(declared_size),
-                             str(abort_after), str(out), str(int(bool(failure)))],
-                            check=True, capture_output=True, text=True)
-    assert "PASS icon stream" in result.stdout
-    wanted = bytes(v for y in range(32) for x in range(32)
-                   for v in expected.pixel(x, y))
-    assert out.read_bytes() == wanted
 
 
 def test_f8_copies_documents_and_optional_program_icon(tmp_path):

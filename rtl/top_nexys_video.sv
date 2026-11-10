@@ -6,9 +6,9 @@
 module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_MOUSE) (
     input  wire       clk100,
     input  wire       cpu_resetn,
-    // NEW: BTNC (B22) = user reset, same as the BASIC A7 board habit
+    // BTNC (B22) = user reset, same as the BASIC A7 board habit
     input  wire       btnc,
-    // NEW: DPTI on PROG jack J12 (FT2232 ch B) — same USB cable as JTAG, like T100
+    // DPTI on PROG jack J12 (FT2232 ch A) — same USB cable as JTAG
     inout  wire [7:0] prog_d,
     input  wire       prog_rxen,
     input  wire       prog_txen,
@@ -32,7 +32,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     inout  wire       pmod_ps2_data,
     inout  wire       pmod_jc_ps2_clk,
     inout  wire       pmod_jc_ps2_data,
-    // NEW: Mini I2C joystick @ 0x5A on JB (SCL=JB1 SDA=JB2)
+    // Mini I2C joystick @ 0x5A on JB (SCL=JB1 SDA=JB2)
     inout  wire       joy_scl,
     inout  wire       joy_sda,
     // ADAU1761 audio codec (J5 line-out) — line-out PSG plan phase 1
@@ -48,7 +48,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     inout  wire       sd_cmd,
     inout  wire [3:0] sd_d,
     input  wire       sd_cd,
-    // NEW: Nexys Video DDR3 (asset SRAM = first 4 MB behind jmr_sram_port)
+    // Nexys Video DDR3 (asset SRAM = first 8 MiB behind jmr_sram_port)
     inout  wire [15:0] ddr3_dq,
     inout  wire [1:0]  ddr3_dqs_n,
     inout  wire [1:0]  ddr3_dqs_p,
@@ -104,7 +104,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
         .PWRDWN(1'b0),
         .RST(~cpu_resetn)
     );
-    // NEW: BTNC also resets (matches the T100/BASIC board habit)
+    // BTNC also resets (matches the T100/BASIC board habit)
     assign mig_sys_rst_n = cpu_resetn & mmcm_locked & ~btnc;
     assign core_clk = ui_clk;
     assign reset_request_n = mig_sys_rst_n & init_calib_complete & ~ui_clk_sync_rst;
@@ -133,7 +133,17 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
         if (!reset_request_n) core_reset_release <= 2'b00;
         else core_reset_release <= {core_reset_release[0], 1'b1};
     end
-    assign rst_n = core_reset_release[1];
+    // The synchronizer's second stage is ASYNC_REG and cannot be replicated,
+    // yet it reset every core flip-flop from one site (thousands of loads
+    // across the die, ~10 ns of routing). Add one ordinary fan-out stage that
+    // synthesis and physical optimization may replicate. Assertion is still
+    // immediate; release moves one core clock later for all core logic alike.
+    (* max_fanout = 400 *) logic core_rst_n_fan;
+    always_ff @(posedge core_clk or negedge reset_request_n) begin
+        if (!reset_request_n) core_rst_n_fan <= 1'b0;
+        else core_rst_n_fan <= core_reset_release[1];
+    end
+    assign rst_n = core_rst_n_fan;
 
 
     logic desktop_keyboard_mode;
@@ -198,7 +208,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     logic [7:0] ps2_scancode;
     logic       ps2_strobe;
     logic       ps2_parity_err;
-    // NEW: no jmr_ps2_host — host TX of 0xFF/0xF4 killed PIC24 scanning
+    // Receive only: transmitting on these lines stops the PIC24 keyboard scan.
     ps2_rx u_ps2_rx (
         .clk(core_clk), .rst_n(rst_n && (!USB_MOUSE || desktop_keyboard_mode)),
         .ps2_clk(ps2_clk), .ps2_data(ps2_data),
@@ -230,7 +240,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
         .ascii(pmod_ascii), .ascii_strobe(pmod_kbd_push),
         .kev_code(pmod_kev_code), .kev_down(pmod_kev_down), .kev_stb(pmod_kev_stb)
     );
-    // NEW: I2C stick @ 0x5A — NACK leaves bits 0 so GUI KEYBITS still work
+    // I2C stick @ 0x5A — NACK leaves bits 0 so GUI KEYBITS still work
     logic ack_ok, joy_left, joy_up, joy_down, joy_right, fire_ac, fire_bd;
     // analog-joy: raw stick axes + 5 discrete buttons the digital bits
     // above don't carry. Wired straight to jmr_js_core (no tether OR —
@@ -245,7 +255,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
         .fire_ac(fire_ac), .fire_bd(fire_bd),
         .analog_x(i2c_analog_x), .analog_y(i2c_analog_y), .buttons(i2c_joy_btn)
     );
-    // Board 2026-08-26: this stick's electrical DOWN is physical forward
+    // Board: this stick's electrical DOWN is physical forward
     // (ASTEROID hand-compensated; every other title read Y reversed).
     // Invert once here; ASTEROID's compensation removed in the same
     // change so it is not doubly inverted.
@@ -271,9 +281,9 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     logic [23:0] pal_rgb;
     logic [18:0] dump_fb_raddr;
     logic [7:0]  dump_fb_rdata;
-    // NEW: SPI from core storage_engine
+    // SPI from core storage_engine
     logic sd_sck, sd_mosi, sd_miso, sd_cs_n;
-    // NEW: asset SRAM port (core master → MIG bridge)
+    // Asset SRAM port (core master → MIG bridge)
     logic        sram_req, sram_we, sram_ack;
     logic [21:0] sram_addr;
     logic [15:0] sram_wdata, sram_rdata;
@@ -285,10 +295,10 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     logic         app_rd_data_valid, app_rdy, app_wdf_rdy;
     logic         app_rd_data_end, app_sr_active, app_ref_ack, app_zq_ack;
 
-    // NEW: PROG-cable tether — FT245 FIFO on FT2232 ch A (T100-style one cable)
+    // PROG-cable tether — FT245 FIFO on FT2232 ch A (T100-style one cable)
     logic       uart_kbd_push;
     logic [7:0] uart_kbd_data;
-    logic [5:0] uart_joy_bits;  // NEW: GUI KEYBITS ORed with JB stick; optional tether
+    logic [5:0] uart_joy_bits;  // GUI KEYBITS ORed with JB stick; optional tether
     logic [9:0] uart_dump_addr;
     logic        uart_jsb_stb;
     logic [7:0]  uart_jsb_data;
@@ -297,6 +307,9 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     logic uart_jsb_big;
     logic        uart_jsb_src;
     logic        uart_jsb_rdy;
+    logic host_req_valid,host_req_ready,host_req_crc_ok,host_q_valid,host_q_ready,tether_abort;
+    logic [183:0] host_req_body;
+    logic [95:0] host_q_payload;
     jmr_uart_link #(.CLK_HZ(100_000_000), .USE_DPTI(1)) u_link (
         .clk(core_clk), .rst_n(rst_n),
         .uart_rx(1'b1), .uart_tx(),
@@ -316,6 +329,8 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
         .vm_vdbg(vm_vdbg), .vm_vdbg_fault(vm_vdbg_fault),
         .vm_hdbg(vm_hdbg), .vm_fdbg(vm_fdbg), .vm_fdbg_v(vm_fdbg_v),
         .vm_ftrace(vm_ftrace), .vm_gdbg(vm_gdbg),
+        .tether_abort(tether_abort),.host_req_valid(host_req_valid),.host_req_body(host_req_body),.host_req_crc_ok(host_req_crc_ok),.host_req_ready(host_req_ready),
+        .host_q_valid(host_q_valid),.host_q_payload(host_q_payload),.host_q_ready(host_q_ready),
         .jsb_tether_stb(uart_jsb_stb), .jsb_tether_data(uart_jsb_data),
         .jsb_tether_eof(uart_jsb_eof), .jsb_tether_src(uart_jsb_src),
         .jsb_tether_big(uart_jsb_big),
@@ -355,7 +370,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
         .key_evt_code(kev_stb ? kev_code : pmod_kev_code),
         .key_evt_down(kev_stb ? kev_down : pmod_kev_down),
         .kbd_push(core_kbd_push), .kbd_data(core_kbd_data),
-        // NEW: tether KEYBITS OR I2C stick (same 6-bit field as PYTHON)
+        // Tether KEYBITS OR I2C stick (same 6-bit field as PYTHON)
         .joy_in(uart_joy_bits | i2c_joy_bits), .joy_out(joy_out),
         .analog_x(i2c_analog_x), .analog_y(i2c_analog_y), .joy_btn(i2c_joy_btn),
         .dump_addr(uart_dump_addr), .dump_data(dump_data),
@@ -368,6 +383,8 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
         .dump_fb_raddr(dump_fb_raddr), .dump_fb_rdata(dump_fb_rdata),
         .pal_raddr(pal_index), .pal_rdata(pal_rgb),
         .sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso), .sd_cs_n(sd_cs_n),
+        .tether_abort(tether_abort),.host_req_valid(host_req_valid),.host_req_body(host_req_body),.host_req_crc_ok(host_req_crc_ok),.host_req_ready(host_req_ready),
+        .host_q_valid(host_q_valid),.host_q_payload(host_q_payload),.host_q_ready(host_q_ready),
         .jsb_tether_stb(uart_jsb_stb), .jsb_tether_data(uart_jsb_data),
         .jsb_tether_eof(uart_jsb_eof), .jsb_tether_src(uart_jsb_src),
         .jsb_tether_big(uart_jsb_big),
@@ -378,7 +395,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
         .sram_ext_rdata(sram_rdata), .sram_ext_ack(sram_ack)
     );
 
-    // NEW: first 4 MB of DDR3 = asset SRAM. FPGA-SIM uses jmr_sram_model
+    // First 8 MiB of DDR3 = asset SRAM. FPGA-SIM uses jmr_sram_model
     // inside the core (SRAM_INTERNAL=1); board is this MIG + bridge.
 `ifdef SYNTHESIS
     mig_7series_0 u_mig (
@@ -443,7 +460,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
 
     // µSD SPI — Nexys Video pinout (LiteX/Digilent):
     //   SCK=sd_cclk, MOSI=sd_cmd, MISO=sd_d[0], CS=sd_d[3]
-    // NEW: CS was left floating (d[3] Z) → every DIR returned ?IO with card present.
+    // CS was left floating (d[3] Z) → every DIR returned ?IO with card present.
     assign sd_cclk = sd_sck;
     assign sd_cmd  = sd_mosi;
     assign sd_d[3] = sd_cs_n;
@@ -474,7 +491,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
         .TMDS_Clk_n(hdmi_tx_clk_n),
         .TMDS_Data_p(hdmi_tx_p),
         .TMDS_Data_n(hdmi_tx_n),
-        .aRst(~rst_n),
+        .aRst(~core_reset_release[1]),
         // rgb2dvi convention (third_party .../rgb2dvi.vhd:215-217): pData is
         // R[23:16], BLUE[15:8], GREEN[7:0]. The scanout drives honest RGB;
         // swap at the boundary. Board evidence: blue rendered green, red
@@ -517,9 +534,12 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     // release only after two clean audio clock edges.
     (* ASYNC_REG = "TRUE" *) logic [1:0] mrst_sync;
     wire mrst_n = mrst_sync[1];
-    always_ff @(posedge mclk or negedge rst_n) begin
-        if (!rst_n) mrst_sync <= 2'b00;
-        else mrst_sync <= {mrst_sync[0], 1'b1};
+    // Common reset asserts directly in each domain. Synchronize the
+    // qualified core release as data, rather than distributing its Q to
+    // audio asynchronous-clear pins. Two audio edges still qualify release.
+    always_ff @(posedge mclk or negedge reset_request_n) begin
+        if (!reset_request_n) mrst_sync <= 2'b00;
+        else mrst_sync <= {mrst_sync[0], core_reset_release[1]};
     end
 
     logic cfg_scl_oe, cfg_sda_oe, cfg_done, cfg_nack;
@@ -538,7 +558,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     always_ff @(posedge mclk) begin
         acfg_sync <= {acfg_sync[0], cfg_done};
         // MUTE = "no program is running", i.e. ~game_mode.
-        // Do NOT use ready_lit here (run 63 shipped that and was silent in
+        // Do NOT use ready_lit here (that build was silent in
         // every game): ready_lit means "console FSM is in C_IDLE/C_PROMPT",
         // and the console is DISABLED during game_mode
         // (jmr_js_core .enable(standalone_mode && !game_mode)), so its FSM

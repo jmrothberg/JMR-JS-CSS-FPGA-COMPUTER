@@ -1,6 +1,6 @@
 """Minimal memory map stubs for FAT32 card tooling (from BASIC sibling).
 
-LLM NOTE: Only SD/FS IO registers + STORAGE_BUFFER needed by
+Only SD/FS IO registers + STORAGE_BUFFER needed by
 hardware_model.fat32 / sd_spi for tools/make_sd_image.py. Not a full
 BASIC 64K map.
 """

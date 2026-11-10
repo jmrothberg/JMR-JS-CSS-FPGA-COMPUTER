@@ -30,8 +30,6 @@ from __future__ import annotations
 
 import os
 import re
-import struct
-import zlib
 import time
 from pathlib import Path
 from typing import Optional
@@ -41,8 +39,9 @@ from functional_model.canvas_engine import (
     CONSOLE_ROWS,
     CanvasEngine,
 )
-from runtime.backend import ROOT, RuntimeBackend, card_catalog
+from runtime.backend import ROOT, RuntimeBackend
 from runtime.flight_log import FlightLog
+from runtime.finder_tether import FinderServices, Operation
 
 # Board char VRAM geometry (jmr_video_vram / jmr_uart_link dump)
 _MIRROR_COLS = CONSOLE_COLS
@@ -73,33 +72,8 @@ _FB_RE = re.compile(r"^P([0-9A-Fa-f]{2}):([0-9A-Fa-f]*)$")
 
 # Lockstep with sim/sim_main.cpp vm_sname[] / jmr_js_vm.sv st_t (append-only).
 # Unknown index → S_<hex>; never raise. Host-only: RTL V line may not exist yet.
-_VM_SNAME = (
-    "S_IDLE", "S_RD", "S_GOT_MAGIC", "S_GOT_HDR1", "S_GOT_HDR2", "S_LD_CONST",
-    "S_TRAIL", "S_FETCH_WAIT", "S_EXEC", "S_NAT", "S_CLEAR", "S_RECT", "S_CIRCLE",
-    "S_LINE", "S_BLIT", "S_SPR", "S_WAIT_FRAME", "S_DONE", "S_XF_MUL", "S_XF_APPLY",
-    "S_PWALK", "S_PDO", "S_QSEG", "S_QPX", "S_QPY", "S_JOIN", "S_JOIN_FIND",
-    "S_IDXOF", "S_CONCAT", "S_SQRT", "S_DIV", "S_DIV_FIN", "S_MUL", "S_MUL_WR",
-    "S_ALU", "S_ALU_WR", "S_CALL", "S_FOREACH", "S_KEYEV", "S_ENV_LOAD",
-    "S_JSON", "S_JSON_PARSE", "S_REPL", "S_IDXSTR", "S_STRIDX", "S_STRIDX_WR",
-    "S_FONTPX", "S_TXT_LD", "S_TXT_DRAW", "S_STR_WR", "S_IMGD_GET", "S_IMGD_PUT",
-    "S_NAMCPY", "S_ARR_DCOPY",
-    "S_GC_CLEAR", "S_GC_ROOT", "S_GC_POP", "S_GC_OBJ", "S_GC_ARR",
-    "S_V64_CONST_HI", "S_V64_EXEC", "S_V64_DIV", "S_V64_DIV_FIN", "S_V64_MOD",
-    "S_V64_ALLOC", "S_V64_GC_CLEAR", "S_V64_GC_ROOT", "S_V64_GC_POP",
-    "S_V64_GC_OBJ", "S_V64_GC_ARR", "S_V64_GC_SWEEP_OBJ",
-    "S_V64_GC_SWEEP_ARR", "S_V64_GC_FN", "S_V64_GC_ENV",
-    "S_V64_GC_SWEEP_ENV", "S_V64_CLEAR", "S_V64_RECT",
-    "S_V64_WAIT_FRAME", "S_V64_FRAME_RAF", "S_V64_FRAME_TIMER",
-    "S_V64_FOREACH", "S_V64_FRAME_KEY", "S_V64_STRIDX", "S_V64_STRIDX_WR",
-    "S_V64_JSON", "S_V64_JSON_PARSE", "S_V64_CTOR_PAD",
-    "S_HEAP_WAIT", "S_HEAP_CMP", "S_HEAP_WR", "S_HEAP_AWR", "S_HEAP_FILL",
-    "S_V64_METH", "S_V64_FE_ELEM", "S_V64_FE_FILTER", "S_V64_OGETI_NAT",
-    "S_V64_IDXSCAN", "S_V64_CTOR_ENV", "S_V64_CTOR_VARS", "S_REL_ENV",
-    "S_FREE_OBJ", "S_FREE_ARR",
-    "S_V64_BIND", "S_V64_MINMAX", "S_V64_WIN_FILL", "S_ARR_PROMOTE",
-    "S_V64_RECT_LD", "S_HEAP_CLR",
-    "S_V64_SLICE", "S_V64_SORT", "S_FB_SYNC", "S_V64_DISPATCH",
-)
+from runtime.vm_state_names import VM_STATE_NAMES as _VM_SNAME
+
 
 
 def _vm_sname(st: int) -> str:
@@ -236,7 +210,7 @@ def _find_serial_port() -> Optional[str]:
         return None
     # PROG FT2232 (pid 0x6010): ch A (".0") = DPTI FIFO tether, ch B (".1") =
     # JTAG (openFPGALoader board nexysVideo uses cable digilent_b = channel B).
-    # VERIFIED on silicon 2026-08-12: S-rows stream on the ".0" interface.
+    # VERIFIED on silicon: S-rows stream on the ".0" interface.
     ftdi = [p for p in list_ports.comports() if p.vid == 0x0403]
     for p in ftdi:
         if p.pid == 0x6010 and (p.location or "").endswith(".0"):
@@ -250,17 +224,17 @@ def _find_serial_port() -> Optional[str]:
     return None
 
 
-class BoardBackend(RuntimeBackend):
+class BoardBackend(FinderServices, RuntimeBackend):
     name = "BOARD"
 
     def __init__(self) -> None:
         self._ser = None
+        self._init_finder_services()
         self._rows = [""] * _MIRROR_ROWS
         self._rx_buf = b""
         self._canvas = CanvasEngine()
-        self._prompt = "> "
         self._log = FlightLog(self.name)
-        # NEW: mini-FB mirror (game_mode P-rows) — full 640×480 after ×4 scale
+        # Mini-FB mirror (game_mode P-rows) — full 640×480 after ×4 scale
         self._fb = bytearray(_FB_W * _FB_H)
         self._have_fb = False
         self._ps2_strobes = 0
@@ -271,7 +245,7 @@ class BoardBackend(RuntimeBackend):
         self._vm_fault = None
         self._vm_ip = None
         self._vm_logged = None  # (st, fault) last NOTE — change-only, no spam
-        # Optional run-60+ H/F/T telemetry (docs/ARCH_MONITOR.md). Stay None
+        # Optional H/F/T telemetry. Stay None
         # until a well-formed line arrives so older bits keep dashed fields.
         self._heap_live = None  # (env, arr, obj) from the H-line
         self._fault_snap = None  # dict from the F-line
@@ -308,7 +282,7 @@ class BoardBackend(RuntimeBackend):
             self._log.fault("SERIAL", str(e))
             self._ser = None
             return
-        # 2026-08-27: host RX heartbeat — every ~3s log how many tether
+        # Host RX heartbeat — every ~3s log how many tether
         # bytes arrived. Distinguishes "board TX went silent" (rx=+0) from
         # "GUI stopped polling" (no TETHER lines at all) — the DIR-freeze
         # flight log ended at TYPE dir with neither side identifiable.
@@ -323,14 +297,16 @@ class BoardBackend(RuntimeBackend):
         while b"\n" in self._rx_buf:
             raw, self._rx_buf = self._rx_buf.split(b"\n", 1)
             line = raw.decode("ascii", errors="replace").rstrip("\r")
+            if self._receive_service_line(line):
+                continue
             if len(line) == 3 and line[0] == "D":
                 # storage stalled >0.67s in one state - names the wedge
                 self._log.note(f"STOR-STALL state=0x{line[1:]}")
                 continue
             if line and line[0] == "E" and len(line) in (3, 5, 9):
                 # free-running storage(+console)-state beat (change-only log).
-                # len 3 = run-48 bits (stor only); len 5 = run-49+ (stor+cons);
-                # len 9 = run-71+ (+ op duration, x256 clocks, saturating)
+                # len 3 = stor only; len 5 = stor+cons;
+                # len 9 = + op duration, x256 clocks, saturating)
                 if line[1:5] != getattr(self, "_stor_beat", None):
                     self._stor_beat = line[1:5]
                     tag = f"stor=0x{line[1:3]}"
@@ -344,8 +320,8 @@ class BoardBackend(RuntimeBackend):
                     self._log.note(f"STOR-BEAT {tag}")
                 continue
             if line == "K" or (len(line) == 3 and line[0] == "K"):
-                # K or Kxx (scancode hex, 2026-08-25 arrows debug)
-                # NEW: USB Host scancode reached RTL (ps2_strobe)
+                # K or Kxx
+                # USB Host scancode reached RTL (ps2_strobe)
                 self._ps2_strobes += 1
                 # Keystroke evidence for the Architecture Monitor's Keyboard
                 # block. On BOARD the keyboard plugs into the board itself,
@@ -354,7 +330,7 @@ class BoardBackend(RuntimeBackend):
                 self._kbd_last_t = time.monotonic()
                 self._log.note(f"ps2_strobe n={self._ps2_strobes} code={line[1:] or '??'}")
                 continue
-            # Optional run-60+ heap gauge / fault forensics. Malformed or
+            # Optional heap gauge / fault forensics. Malformed or
             # absent → ignore (older bits never send these).
             parsed_h = _parse_h_line(line)
             if parsed_h is not None:
@@ -405,8 +381,7 @@ class BoardBackend(RuntimeBackend):
             m = _ROW_RE.match(line)
             if m:
                 self._rows[int(m.group(1), 16)] = m.group(2)
-                self._have_fb = False
-                continue
+                continue  # Historical text telemetry never takes display ownership.
             fm = _FB_RE.match(line)
             if fm:
                 row = int(fm.group(1), 16)
@@ -418,26 +393,18 @@ class BoardBackend(RuntimeBackend):
                     self._have_fb = True
 
     def frame_tick(self) -> None:
-        # Board directive 2026-08-25: the GUI must never die mid-session
+        # Board directive: the GUI must never die mid-session
         # while the board keeps running (a crashed GUI stops forwarding
         # keystrokes and masquerades as a dead board console). Any parser
         # or paint surprise logs a fault and drops the rx buffer to
         # resync instead of propagating.
         try:
             self.poll()
+            self._poll_service_status()
             self._paint_mirror()
         except Exception as e:
             self._log.fault("GUI_TICK", repr(e))
             self._rx_buf = b""
-
-    def _prompt_row(self) -> int:
-        for r in range(_MIRROR_ROWS - 1, -1, -1):
-            if self._rows[r].startswith(">"):
-                return r
-        # 2026-09-04: no prompt row = the board is mid-listing (-- MORE --)
-        # or mid-command; painting "> " on the last row hid the final DIR
-        # entry ("files scrolled off"). No prompt row → no overlay.
-        return -1
 
     def _paint_fb_scaled(self) -> None:
         """Mini 160×120 → full 640×480 (same ×4 as HDMI game scanout)."""
@@ -455,80 +422,40 @@ class BoardBackend(RuntimeBackend):
                         front[base + dx] = pix
 
     def _paint_mirror(self) -> None:
-        """Rasterize tether into full 640×480 glass (shared HDMI letterbox)."""
+        """Display the FPGA framebuffer, never reconstruct a command screen."""
         if self._ser is None:
             self._canvas.clear_front(0)
             for i, line in enumerate(_HINT.splitlines()[:25]):
                 self._canvas.draw_text_front(2, 2 + i, line[:76], 3)
-            return
-        if self._have_fb:
-            self._canvas.clear_front(0)
+        elif self._have_fb:
             self._paint_fb_scaled()
-            return
-        if not any(self._rows):
+        else:
             self._canvas.clear_front(0)
-            self._canvas.draw_text_front(2, 2, "HDMI MONITOR IS THE SCREEN", 3)
-            self._canvas.draw_text_front(2, 4, "TYPE ON THE USB KEYBOARD IN J15", 3)
-            self._canvas.draw_text_front(2, 6, "JP4=BOOT SOURCE ONLY — NOT KEYBOARD", 3)
-            self._canvas.draw_text_front(2, 8, "LD6 ON=PS/2 CLK IDLE; LD7=SCANCODE", 3)
-            return
-        rows = [r.rstrip() for r in self._rows]
-        pr = self._prompt_row()
-        # paint_console_letterbox wraps/truncates; pass exact 16 VRAM rows
-        self._canvas.clear_front(0)
-        for r in range(_MIRROR_ROWS):
-            text = rows[r] if r < len(rows) else ""
-            for c, ch in enumerate(text[:_MIRROR_COLS]):
-                color = 5 if r == pr else 3
-                ch_out = ch
-                if r == pr and c < len(self._prompt):
-                    ch_out = self._prompt[c]
-                elif r == pr and c >= len(self._prompt.rstrip()):
-                    # keep board row under overlay past prompt
-                    ch_out = ch if ch else " "
-                self._canvas.draw_console_char(c, r, ch_out if ch_out else " ", color)
-        # Ensure prompt chars visible
-        for c, ch in enumerate(self._prompt[:_MIRROR_COLS]):
-            self._canvas.draw_console_char(c, pr, ch, 5)
+            self._canvas.draw_text_front(2, 2, "WAITING FOR FINDER DISPLAY", 3)
 
     def type_line(self, text: str) -> None:
-        self._log.type_line(text)
-        self._prompt = "> "
-        if self._ser is None:
-            return
-        stripped = text.strip()
-        upper = stripped.upper()
-        if upper.startswith("LOAD"):
-            self._loaded_name = stripped[4:].strip().strip('"').strip("'")
-        try:
-            # HTML RUN: host-compile current HTML, type RUN, PROG-stream bytes.
-            # Card stays HTML-only.
-            if upper == "RUN" or upper.startswith("RUN "):
-                if self._html_loaded_stem():
-                    blob = self._compile_html_blob()
-                    if not blob:
-                        return
-                    self._ser.write((text + "\n").encode("ascii", errors="replace"))
-                    self._ser.flush()
-                    time.sleep(0.05)
-                    self._ser.write(bytes([0xFD]) + struct.pack("<I", len(blob)))
-                    mv = memoryview(blob)
-                    for i in range(0, len(blob), 16384):
-                        self._ser.write(mv[i : i + 16384])
-                    self._ser.write(struct.pack("<I", zlib.crc32(blob) & 0xFFFFFFFF))
-                    self._ser.flush()
-                    self._log.note(f"PROG ProgramImage stream {len(blob)} bytes")
-                    return
-            self._ser.write((text + "\n").encode("ascii", errors="replace"))
-            self._ser.flush()
-        except Exception as e:
-            self._log.fault("SERIAL", str(e))
-            if "Errno 5" in str(e) and self._reopen_serial():
-                try:
-                    self._ser.write((text + "\n").encode("ascii", errors="replace"))
-                    self._ser.flush()
-                except Exception as e2:
-                    self._log.fault("SERIAL", f"retry failed: {e2}")
+        """Compatibility adapter for host tools; never type into FPGA RAM."""
+        if self._transfer_active:
+            raise RuntimeError('A Finder transfer owns the tether')
+        command, _, tail = text.strip().partition(' ')
+        command = command.upper()
+        name = tail.strip().strip('"')
+        if command in ('DIR', 'CATALOG'):
+            self.refresh_board_catalog()
+        elif command == 'LOAD':
+            from runtime.finder_tether import fat_name
+            if not fat_name(name):
+                raise ValueError('Select a filename')
+            self._loaded_name = name
+        elif command in ('RUN', 'EDIT', 'READ', 'COMPILE'):
+            name = name or self._loaded_name
+            if not name:
+                raise ValueError('Select a program or document in Finder')
+            self.launch_named(name, {'RUN': 0, 'EDIT': 1, 'READ': 2, 'COMPILE': 3}[command])
+        elif command in ('HOME', 'DESKTOP'):
+            self._service(Operation.ENTER_FINDER, 1, timeout=120.0)
+        elif command:
+            raise ValueError('Use Finder for file operations; this FPGA has no command monitor')
 
     def _html_loaded_stem(self) -> str:
         name = (self._loaded_name or "").upper()
@@ -550,7 +477,7 @@ class BoardBackend(RuntimeBackend):
             from tools.compile_js import compile_html_text, encode_html_chunk
 
             html = html_path.read_text(encoding="utf-8")
-            # 2026-09-04: a jmr:spr title whose .ARTX/.ART sidecar is gone
+            # A jmr:spr title whose .ARTX/.ART sidecar is gone
             # compiled fine with the art silently dropped; the board then
             # faulted inside the running game and the GUI sat in "running"
             # with a dead console. Refuse loudly instead.
@@ -577,11 +504,13 @@ class BoardBackend(RuntimeBackend):
             return b""
 
     def paint_prompt(self, prompt: str, cursor_on: bool = False, cursor_col=None) -> None:
-        self._prompt = prompt
-        self._paint_mirror()
+        # The shared GUI also supports developer runtimes. BOARD has Finder.
+        return
 
     def hard_break(self) -> None:
         self._log.note("BREAK")
+        if self._transfer_active:
+            raise RuntimeError('Finish or resolve the file transfer before leaving Finder')
         if self._ser is not None:
             try:
                 self._ser.write(b"\x1b")
@@ -594,12 +523,12 @@ class BoardBackend(RuntimeBackend):
         return "\n".join(self._rows)
 
     def set_joy(self, bits: int) -> None:
-        # NEW: same wire as KEYBITS — board joy_in was hardwired 0
+        # Same wire as KEYBITS — board joy_in was hardwired 0
         self.set_key_bits(bits)
 
     def set_key_bits(self, bits: int) -> None:
         """GUI arrows/Space → PROG tether → RTL joy_in (J15 USB host is dead)."""
-        if self._ser is None:
+        if self._ser is None or self._transfer_active:
             return
         try:
             # 0xFE prefix + 6-bit play field (matches jmr_uart_link joy_cmd)
@@ -614,223 +543,9 @@ class BoardBackend(RuntimeBackend):
     def trace_path(self) -> Optional[Path]:
         return self._log.path
 
-    def _reopen_serial(self) -> bool:
-        """run 71 (item H): [Errno 5] Input/output error = the USB-serial
-        device went away mid-write (marginal cable/port). Close, re-find the
-        port, reopen once; the caller retries its write."""
-        try:
-            if self._ser is not None:
-                self._ser.close()
-        except Exception:
-            pass
-        self._ser = None
-        port = _find_serial_port()
-        if not port:
-            self._log.fault("SERIAL", "port gone after I/O error — check the USB cable/port")
-            return False
-        try:
-            import serial
-            self._ser = serial.Serial(port, 115200, timeout=0.05)
-            self._log.note(f"reopened {port} after I/O error (USB cable/port hiccup)")
-            return True
-        except Exception as e:
-            self._log.fault("SERIAL", f"reopen failed: {e} — check the USB cable/port")
-            return False
-
-    def _wait_glass(self, pred, timeout: float, fail_pred=None) -> bool:
-        """Poll the tether until pred() or timeout. 2026-09-04: pumps the
-        GUI (run_wait_idle, the FPGA-SIM pattern) so a long wait never
-        freezes Tk, and returns early when fail_pred() sees an error reply
-        (?IO / ?TR / ?NB ...) — before, a SAVE that answered ?IO froze the
-        window for the full 90 s while the board sat happily at READY."""
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < timeout:
-            self.poll()
-            if pred():
-                return True
-            if fail_pred is not None and fail_pred():
-                return False
-            pump = getattr(self, "run_wait_idle", None)
-            if pump is not None:
-                try:
-                    pump()
-                except Exception:
-                    pass
-            time.sleep(0.05)
-        return False
-
-    def _glass_error_row(self):
-        """The most recent console error reply on the mirror, or None."""
-        for r in reversed(self._rows):
-            t = r.strip()
-            if t.startswith("?"):
-                return t
-        return None
-
     @property
     def more_waiting(self) -> bool:
-        """True while the board's DIR/LIST is parked on -- MORE -- (last
-        non-empty mirror row). Lets the GUI page with Space instead of
-        typing a LINE into the pager, and keeps the prompt overlay off the
-        listing (2026-09-04: DIR rows looked 'scrolled off')."""
-        for r in reversed(self._rows):
-            t = r.strip()
-            if t:
-                return t.startswith("-- MORE")
-        return False
-
-    def _src_tether_save(self, name: str, data: bytes) -> None:
-        """0xFC → SOURCE, then typed SAVE — the µSD write the console already has."""
-        if self._ser is None:
-            raise RuntimeError("BOARD tether required to SAVE onto the µSD")
-        self._ser.write(bytes([0xFC]) + struct.pack("<I", len(data)))
-        mv = memoryview(data)
-        for i in range(0, len(data), 16384):
-            self._ser.write(mv[i : i + 16384])
-        # run 71: CRC-32 trailer; a bit without the check ignores it only
-        # if it never reads past the length — R71+ bits verify and answer ?CK
-        self._ser.write(struct.pack("<I", zlib.crc32(data) & 0xFFFFFFFF))
-        self._ser.flush()
-        self._log.note(f"PROG SOURCE stream {name} {len(data)} bytes")
-        before = self._glass_error_row()
-        # 2026-09-05: count SAVED rows BEFORE typing — the previous file's
-        # SAVED. was still on the mirror, so the second put's wait passed
-        # instantly and DIR * was typed while the .JSH was mid-write (the
-        # SD then sat in S_SD_WAIT for ~85 s). Wait for a NEW SAVED and for
-        # the prompt to come back before returning.
-        saved_before = sum(1 for r in self._rows if "SAVED" in r.upper())
-        self.type_line(f'SAVE "{name}"')
-        ok = False
-        for attempt in range(3):
-            ok = self._wait_glass(
-                lambda: sum(1 for r in self._rows if "SAVED" in r.upper()) > saved_before
-                and self._prompt_row() >= 0,
-                120.0,
-                fail_pred=lambda: self._glass_error_row() not in (None, before),
-            )
-            if ok or (self._glass_error_row() or "").startswith("?CK") is False:
-                break
-            # ?CK: the trailer CRC failed on the board — resend (run 71)
-            self._log.note(f"?CK on {name}, resend {attempt + 1}/3")
-            before = self._glass_error_row()
-            self._ser.write(bytes([0xFC]) + struct.pack("<I", len(data)))
-            for i in range(0, len(data), 16384):
-                self._ser.write(mv[i : i + 16384])
-            self._ser.write(struct.pack("<I", zlib.crc32(data) & 0xFFFFFFFF))
-            self._ser.flush()
-            self.type_line(f'SAVE "{name}"')
-        if not ok:
-            err = self._glass_error_row()
-            raise RuntimeError(
-                f"SAVE {name}: board answered {err}" if err and err != before
-                else f"SAVE {name} did not print SAVED within 120 s (SD write stalled?) — power-cycle the board before more writes"
-            )
-
-    @staticmethod
-    def _save_order(name: str) -> int:
-        # HTML first (deletes stale .JSH), then ART, JSH last so RUN can find it.
-        u = name.upper()
-        if u.endswith(".HTM") or u.endswith(".HTML"):
-            return 0
-        if u.endswith(".ART") or u.endswith(".ARTX"):
-            return 1
-        if u.endswith(".JSH"):
-            return 2
-        return 3
-
-    _BIG_MAX = 1480704 * 2   # CART staging bank, bytes (2 B/word)
-
-    def _big_tether_save(self, name: str, data: bytes) -> None:
-        """run 71: 0xFB -> CART staging (up to ~2.9 MB), then typed SAVE
-        pumps it to the card through the mint's art-append path."""
-        if self._ser is None:
-            raise RuntimeError("BOARD tether required to SAVE onto the µSD")
-        if len(data) > self._BIG_MAX:
-            raise RuntimeError(f"{name}: {len(data)} bytes exceeds the CART staging bank ({self._BIG_MAX})")
-        before = self._glass_error_row()
-        saved_before = sum(1 for r in self._rows if "SAVED" in r.upper())
-        mv = memoryview(data)
-        for attempt in range(3):
-            self._ser.write(bytes([0xFB]) + struct.pack("<I", len(data)))
-            for i in range(0, len(data), 16384):
-                self._ser.write(mv[i : i + 16384])
-            self._ser.write(struct.pack("<I", zlib.crc32(data) & 0xFFFFFFFF))
-            self._ser.flush()
-            self._log.note(f"PROG CART stream {name} {len(data)} bytes")
-            # flush() returned only once the OS buffer drained, and the typed
-            # SAVE rides the same UART behind the trailer, so the console
-            # sees it after eof. A 2.8 MB bank takes ~4 min at 115200 baud
-            # and the card write about as long again — the wait below covers
-            # both, pumping Tk the whole time.
-            self.type_line(f'SAVE "{name}"')
-            ok = self._wait_glass(
-                lambda: sum(1 for r in self._rows if "SAVED" in r.upper()) > saved_before
-                and self._prompt_row() >= 0,
-                max(300.0, len(data) / 4000.0),
-                fail_pred=lambda: self._glass_error_row() not in (None, before),
-            )
-            if ok:
-                return
-            err = self._glass_error_row()
-            if err and err.startswith("?CK"):
-                self._log.note(f"?CK on {name}, resend {attempt + 1}/3")
-                before = err
-                continue
-            raise RuntimeError(f"SAVE {name}: board answered {err}" if err and err != before
-                               else f"SAVE {name} did not print SAVED (big put) — power-cycle before more writes")
-        raise RuntimeError(f"SAVE {name}: CRC failed 3 times — check the USB cable")
-
-    def _save_jobs_to_msd(self, jobs: list) -> str:
-        from functional_model.jsb_format import SOURCE_MAX
-
-        jobs = sorted(jobs, key=lambda x: (self._save_order(x[0]), x[0]))
-        saved: list[str] = []
-        skipped: list[str] = []
-        for name, data in jobs:
-            if len(data) > SOURCE_MAX:
-                # run 71: big files ride the CART staging bank (0xFB)
-                self._big_tether_save(name, data)
-                saved.append(name)
-                continue
-            self._src_tether_save(name, data)
-            saved.append(name)
-        bits = []
-        if saved:
-            bits.append(", ".join(saved))
-        if skipped:
-            bits.append("skip " + ", ".join(skipped) + " (SOURCE 64K)")
-        return "; ".join(bits) if bits else "nothing"
-
-    def put_files_on_card(self, paths: list) -> str:
-        """F8: host card.img (mint) + live µSD via SOURCE+SAVE of what landed."""
-        import os
-
-        from tools.make_sd_image import open_volume, put_host_files_on_card
-
-        names = put_host_files_on_card([Path(p) for p in paths])
-        card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
-        vol = open_volume(card)
-        jobs = []
-        for name in names:
-            try:
-                jobs.append((name, vol.read_file(name)))
-            except FileNotFoundError:
-                continue
-        live = self._save_jobs_to_msd(jobs)
-        return f"{live} (host {', '.join(names)})"
-
-    def put_card_names(self, names: list) -> str:
-        """F8 from card.img: stream existing FAT files onto the board µSD."""
-        import os
-
-        from tools.make_sd_image import open_volume
-
-        card = Path(os.environ.get("JMR_CARD_IMG") or (ROOT / "card.img"))
-        vol = open_volume(card)
-        jobs = []
-        for name in names:
-            jobs.append((name, vol.read_file(name)))
-        return self._save_jobs_to_msd(jobs)
+        return False  # Board directory results are typed catalog records.
 
     def shutdown(self) -> None:
         if self._ser is not None:
@@ -841,21 +556,20 @@ class BoardBackend(RuntimeBackend):
 
     def arch_snapshot(self) -> dict:
         """BOARD tether snapshot — coarse until an optional V line arrives."""
-        running = bool(self._have_fb)
-        try:
-            glass = self.screen_text()[-800:]
-        except Exception:
-            glass = ""
-        try:
-            catalog = card_catalog()
-        except Exception:
-            catalog = []
+        state = self._service_snapshot
+        running = bool(state and state['running'])
+        glass = self.screen_text()[-800:]
+        catalog = list(self._board_catalog) if self._board_catalog is not None else []
         snap = {
             "running": running,
-            "sname": "RUN" if running else "IDLE",
-            "hdmi_mode": "game" if running else "letterbox",
+            "sname": ("RUN" if running else "IDLE") if state is not None else "UNKNOWN",
+            "hdmi_mode": "framebuffer" if self._have_fb else "unavailable",
             "glass": glass,
-            "board_coarse": True,
+            "board_coarse": state is None,
+            "execution_known": state is not None,
+            "catalog_known": self._board_catalog is not None,
+            "catalog_source": "board",
+            "service_status": dict(state) if state is not None else None,
             "tether": self._ser is not None,
             "catalog": catalog,
             "more": False,
@@ -872,14 +586,14 @@ class BoardBackend(RuntimeBackend):
         # runtime: the keyboard is plugged into the board, not the host.
         if self._kbd_last_t is not None:
             snap["kbd_last_t"] = self._kbd_last_t
-        # Run-60+ H-line: live pool counts. Reuses the same keys PYTHON/
+        # H-line: live pool counts. Reuses the same keys PYTHON/
         # FPGA-SIM already populate so _inspect_heap() needs no changes.
         if self._heap_live is not None:
             env, arr, obj = self._heap_live
             snap["envl"] = env
             snap["arr"] = arr
             snap["obj"] = obj
-        # Run-60+ F/T-line: at-fault forensics, BOARD-specific field names
+        # F/T-line: at-fault forensics, BOARD-specific field names
         # (distinct from PYTHON/FPGA-SIM's fsite/badst/heapovf vocabulary,
         # which mean something more precise there and would be misleading
         # to overload with this coarser hardware snapshot).

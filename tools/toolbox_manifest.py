@@ -4,7 +4,7 @@ import struct,zlib,sys
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from tools.toolbox_linker import compiler_with_library,build_rom,mark_linked
-from functional_model.jsb_format import ProgramImage,NATIVE_IDS,NATIVE_ALIASES
+from functional_model.jsb_format import ProgramImage
 
 def build_manifest():
  c=compiler_with_library();c.tokens=[];c.i=0

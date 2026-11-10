@@ -3,7 +3,8 @@
 
 Pattern cite: JMR-BASIC-FPGA-COMPUTER/gui_jmr.py ArchitectureView (window
 mechanics only). Blocks follow docs/ARCHITECTURE.md posters — JS bytecode ISA,
-three memory rooms, compile-on-RUN HTML. Not a BASIC 64K reskin.
+logical memory resources and load/compile paths. This is a functional view,
+not a physical floorplan or a five-stage pipeline.
 
 F7/F8 µop-step is not in this pass (needs STEPUOP / TRACE).
 """
@@ -17,7 +18,7 @@ import tkinter.font as tkfont
 from functional_model.bytecode import Op
 from functional_model.jsb_format import (
     ASET_PAL_BYTES, FLAG_ASET, FLAG_SOURCE_MAP, FLAG_V2, FLAG_VALUE64,
-    MAGIC, NATIVE_IDS,
+    MAGIC, NATIVE_IDS, TOOLBOX_WORDS,
 )
 
 ASET_PAL_ENTRIES = ASET_PAL_BYTES // 3
@@ -26,7 +27,7 @@ ASET_PAL_ENTRIES = ASET_PAL_BYTES // 3
 N_OPCODES = len(list(Op))
 
 # Capacities come from the model that mirrors jmr_js_vm_pkg.sv, so the panel
-# cannot drift from the RTL the way hand-typed numbers did (the 2026-08-21
+# cannot drift from the RTL the way hand-typed numbers did (the
 # T200 fit moved every one of these).
 try:  # pragma: no cover - the GUI must still open if the HM moves
     from hardware_model.js_vm import (
@@ -180,7 +181,7 @@ def _sname_keys(sname: str) -> list[str]:
         ]
     if s == "RUN":
         return ["SEQUENCER", "DISPATCH", "S1", "S2", "S4"]
-    # S_V64_EXEC and S_EXEC are the same stage of the same pipeline.
+    # S_V64_EXEC and S_EXEC are the same stage of the same execution engine.
     base = "S_" + s[6:] if s.startswith("S_V64_") else s
     hit = _STATE_ENGINES.get(base)
     if hit is not None:
@@ -278,7 +279,7 @@ def _op_engine_keys(op_name: str, native_name: str) -> list[str]:
     """Executing opcode → blocks (BASIC µop-heat analog, JS ISA)."""
     op = (op_name or "").upper()
     nat = native_name or ""
-    # Executing an op means it was fetched, decoded, and its microcode entry
+    # Executing an op means it was fetched, decoded, and its hardwired state-machine entry
     # loaded — S3 was dark under PYTHON only because nothing ever claimed it.
     keys = ["SEQUENCER", "DISPATCH", "S1", "S2", "S3", "S4"]
     if op in (
@@ -621,14 +622,14 @@ class ArchitectureView:
         ("BLIT", "Blitter"),
         ("RAF", "Event/rAF"),
         ("STR", "String"),
-        ("CONS_ENG", "Console"),
+        ("CONS_ENG", "Services"),
         ("STORE", "Storage"),
         ("VIDEO", "Video"),
     ]
     STAGES = [
         ("S1", "1 FETCH"),
         ("S2", "2 DECODE"),
-        ("S3", "3 LOAD µCODE"),
+        ("S3", "3 SELECT FSM"),
         ("S4", "4 EXECUTE"),
         ("S5", "5 COMPLETE"),
     ]
@@ -636,11 +637,11 @@ class ArchitectureView:
     ENGINE_BLURBS = {
         "ALU": (
             "Expression / ALU — hardwired arithmetic for bytecode ops.\n"
-            "ADD/SUB/MUL/DIV/MOD and compares. One copy; never merged."
+            "ADD/SUB/MUL/DIV/MOD and compares; physical sharing is synthesis-dependent."
         ),
         "CANVAS": (
             "Canvas 2D — fillRect · fillText (8×8 font ROM) · getImageData.\n"
-            "Paints the on-chip dual 640×480 8-bpp framebuffer."
+            "Paints the on-chip draw buffer; dirty regions present to the DDR3 front buffer."
         ),
         "BLIT": (
             "Blitter — drawImage streams 8-bpp pixels from asset SRAM,\n"
@@ -655,46 +656,47 @@ class ArchitectureView:
             "JSON.parse / stringify share this path (not a CSS engine)."
         ),
         "CONS_ENG": (
-            "Console engine — READY · LOAD · RUN · DIR · EDIT.\n"
-            "RUN always compiles the loaded HTML into an in-memory ProgramImage."
+            "Program / SOURCE / file services — typed Finder and host requests.\n"
+            "Loads JSH bytecode; source compilation is a separate supported path."
         ),
         "STORE": (
             "Storage engine — µSD SPI FAT32.\n"
-            "NAME.HTML titles. Compile-on-RUN is in memory (code + ASET)."
+            "JSH programs, HTM/JS source, Toolbox ROM/LNK, resources and documents."
         ),
         "VIDEO": (
-            "Video / HDMI scanout — 8-bpp indexed through 256-entry RGB888\n"
-            "palette. HDMI reads the on-chip FRONT framebuffer only."
+            "Video / HDMI scanout — DDR3 front buffer through line buffers; indexed RGB888\n"
+            "palette or RGB332 conversion according to the selected display mode."
         ),
     }
     STAGE_BLURBS = {
         "S1": "1 FETCH — Program Sequencer reads the next 32-bit bytecode word from code BRAM.",
         "S2": f"2 DECODE — Dispatch Table maps opcode[7:0] to an engine ({N_OPCODES} opcodes).",
-        "S3": "3 LOAD µCODE — jump to that opcode's microcode entry (not a hidden CPU).",
-        "S4": "4 EXECUTE — one op strobes one engine (ALU / heap / Canvas / blitter / …).",
-        "S5": "5 COMPLETE / wait — statement done, or stall for rAF / blitter / timer.",
+        "S3": "3 SELECT FSM — select that opcode's hardwired FSM states (no microcode store).",
+        "S4": "4 EXECUTE — FSM sequences the required shared mechanisms and memory requests.",
+        "S5": "5 COMPLETE / wait — instruction completes, or waits for its operation/event.",
     }
     MEMORY_BLURBS = {
         "M_BRAM": (
-            "ON-CHIP BRAM (room A) — working set, no fake 64K map.\n"
-            f"Dual 640×480 8-bpp FB, code BRAM {CODE_WORDS or '?'}×32, JS heap,\n"
+            "ON-CHIP BRAM (room A) — code, data and draw-buffer working set.\n"
+            f"Draw framebuffer, application bank {CODE_WORDS or '?'}×32, JS heap,\n"
+            f"separate shared resident prefix {TOOLBOX_WORDS}×32,\n"
             "256-entry RGB888 palette, font ROM, FIFOs.\n"
-            "HDMI scans out from the front FB."
+            "Dirty present copies draw regions to the external front buffer."
         ),
         "M_SRAM": (
-            "ASSET SRAM 4 MB (room B) — ISSI IS61WV204816.\n"
-            "0x000000–0x0002FF title palette (256×RGB888).\n"
-            "0x000300+ 8-bpp sprite banks. Blitter-source only.\n"
-            "Pixels never enter code BRAM. No NAME.DAT file."
+            "EXTERNAL MEMORY 8 MiB (room B) — logical memory backed by DDR3.\n"
+            "Assets, staging, system state and front framebuffer share this space.\n"
+            "Within the ASET area: 768-byte palette followed by sprite banks.\n"
+            "SRAM-style request/acknowledge ports connect through the DDR3 bridge."
         ),
         "M_SDCARD": (
             "µSD FAT32 (room C) — disk, not RAM.\n"
-            "LOAD \"NAME.HTML\" titles. Compile-on-RUN stays in memory\n"
-            "(code + ASET). Card is HTML only."
+            "Loads matched Toolbox ROM and linked JSH clients; source compilation\n"
+            "is also supported. Resources and user documents remain on disk."
         ),
         "ARBITER": (
             "MEMORY ARBITER — engines do not bypass BRAM / SRAM.\n"
-            "Same simple SRAM port: addr[20:0], data[15:0], we/req/ack."
+            "Logical 16-bit external-memory requests remain held until acknowledged."
         ),
     }
 
@@ -823,7 +825,7 @@ class ArchitectureView:
         )
 
     def _wire(self, key: str, *coords: float, kind: str = "ctrl") -> None:
-        # NEW: poster legend — ctrl (solid), data (solid green-idle),
+        # Poster legend — ctrl (solid), data (solid green-idle),
         # code (dashed blue) = compile-on-RUN HTML → ProgramImage → BRAM/SRAM
         if kind == "code":
             fill, dash = "#3a5580", (5, 3)
@@ -891,13 +893,13 @@ class ArchitectureView:
         #   x=1326 right gutter (HDMI scanout → HDMI J8)
         c = self.canvas
         c.create_text(
-            self.WIDTH / 2, 18, text="JMR JS PROCESSOR — LIVE",
+            self.WIDTH / 2, 18, text="JMR JS PROCESSOR — OBSERVER",
             font=tkfont.Font(family="Helvetica", size=15, weight="bold"),
             fill=PHOSPHOR, tags=("chrome",),
         )
         c.create_text(
             self.WIDTH / 2, 36,
-            text="HTML/JS-native CPU — bytecode is the ISA — wheel zoom · shift-drag pan · Home reset",
+            text="JS-native bytecode ISA · functional view, not floorplan · wheel zoom · shift-drag pan · Home reset",
             font=self.small_font, fill=TITLE_FG, tags=("chrome",),
         )
         c.create_rectangle(
@@ -905,13 +907,13 @@ class ArchitectureView:
             dash=(6, 4), tags=("die",),
         )
         c.create_text(
-            228, 70, text="JMR JS DIE · XC7A200T",
+            228, 70, text="JMR JS SYSTEM · XC7A200T + external resources",
             font=self.small_font, fill=DIE_FG, tags=("die",), anchor="w",
         )
 
         self._block("UART", 16, 72, 204, 148, "UART / PROG TETHER")
-        self._block("CONSOLE", 16, 162, 204, 258, "CONSOLE / LINE EDITOR")
-        self._block("COMPILER", 16, 272, 204, 448, "COMPILER — compile-on-RUN")
+        self._block("CONSOLE", 16, 162, 204, 258, "FINDER / HOST SERVICES")
+        self._block("COMPILER", 16, 272, 204, 448, "PROGRAM / SOURCE")
         self._wire("UART", 110, 148, 110, 162)
         self._wire("CONSOLE", 110, 258, 110, 272)
         # compile-on-RUN: HTML → sequencer (left gutter — misses core title)
@@ -936,7 +938,7 @@ class ArchitectureView:
         self._wire("DISPATCH", 696, 144, 704, 144, 704, 355, 696, 355)
 
         c.create_text(
-            468, 412, text="6 SHARED ENGINES — never merged",
+            468, 412, text="6 SHARED NATIVE MECHANISMS",
             font=self.title_font, fill=TITLE_FG,
         )
         grid_x, grid_y, bw, bh, gap = 240, 428, 108, 92, 12
@@ -955,10 +957,10 @@ class ArchitectureView:
 
         c.create_rectangle(808, 64, 1010, 700, outline="#3b6e3b", width=2)
         c.create_text(
-            909, 80, text="MEMORY — THREE ROOMS", font=self.title_font, fill=PHOSPHOR,
+            909, 80, text="MEMORY RESOURCES", font=self.title_font, fill=PHOSPHOR,
         )
         self._block("M_BRAM", 818, 98, 1000, 278, "A  ON-CHIP BRAM")
-        self._block("M_SRAM", 818, 296, 1000, 486, "B  ASSET SRAM 4 MB")
+        self._block("M_SRAM", 818, 296, 1000, 486, "B  EXTERNAL 8 MiB")
         self._block("M_SDCARD", 818, 504, 1000, 688, "C  µSD FAT32")
         # heap → alley x=718 → ARB *top* (does not cross ARB caption)
         self._wire("MEM", 696, 254, 718, 254, 718, 430, 728, 430, kind="data")
@@ -1002,7 +1004,7 @@ class ArchitectureView:
             1032, 472, window=self.sd_list, anchor="nw", width=220, height=214,
         )
         self._sd_list_text = ""
-        self._wire("HDMI", 1000, 133, 1022, 133, kind="data")
+        self._wire("HDMI", 1000, 350, 1016, 350, 1016, 133, 1022, 133, kind="data")
         self._wire("REGS", 1000, 241, 1022, 241)
         self._wire("HSTATS", 1000, 372, 1022, 372, kind="data")
         # Storage → µSD room from below (not through C's header)
@@ -1030,7 +1032,7 @@ class ArchitectureView:
                 tags=("pad",),
             )
         # plugs stay in gutters / under-die alley — HDMI on the RIGHT, SD straight up
-        self._wire("KBD", 126, 748, 126, 722, 10, 722, 10, 210, 16, 210)
+        self._wire("KBD", 126, 748, 126, 722, 720, 722, 720, 474, 708, 474)
         self._wire("UART_PHY", 626, 748, 626, 722, 6, 722, 6, 110, 16, 110)
         self._wire(
             "HDMI_PHY", 1264, 133, 1326, 133, 1326, 736, 376, 736, 376, 748,
@@ -1040,7 +1042,7 @@ class ArchitectureView:
         self._wire("SD_PHY", 1132, 748, 1132, 700)
 
         c.create_text(
-            16, 834, text="INSTRUCTION FLOW", font=self.title_font,
+            16, 834, text="INSTRUCTION FLOW — conceptual phases, not a five-stage pipeline", font=self.title_font,
             fill=PHOSPHOR, anchor="w",
         )
         x = 16
@@ -1053,7 +1055,7 @@ class ArchitectureView:
             16, 932, text="", font=self.value_font, fill=VALUE_FG, anchor="w",
         )
         self.motto_text = c.create_text(
-            16, 954, text="ONE OP · ONE DISPATCH · ONE ENGINE",
+            16, 954, text="BYTECODE → HARDWIRED FSM → SHARED MECHANISMS",
             font=self.value_font, fill=ACCENT_FG, anchor="w",
         )
         c.create_text(
@@ -1063,8 +1065,18 @@ class ArchitectureView:
         )
         c.create_text(
             16, 998,
-            text="solid = control/data · dashed blue = compile-on-RUN · A animates · T freezes the trace replay · F10 hides",
+            text="solid = control/data · dashed blue = load/compile data · A animates · T freezes the trace replay · F10 hides",
             font=self.small_font, fill=TITLE_FG, anchor="w",
+        )
+        c.create_text(
+            16, 1052,
+            text="Finder / apps → resident software Toolbox → shared native mechanisms",
+            font=self.title_font, fill=TITLE_FG, anchor="w",
+        )
+        c.create_text(
+            16, 1076,
+            text="Display: BRAM draw → dirty present → DDR3 front → line buffers → HDMI",
+            font=self.value_font, fill=VALUE_FG, anchor="w",
         )
         self.path_text = c.create_text(
             16, 1020, text="", font=self.small_font, fill=TITLE_FG, anchor="w",
@@ -1247,7 +1259,7 @@ class ArchitectureView:
             "BLIT_SRAM": ("BLIT", "M_SRAM", "ARBITER"),
             "FB_BUS": ("CANVAS", "VIDEO", "M_BRAM"),
             "HDMI_PHY": ("HDMI", "PHY_HDMI", "VIDEO"),
-            "KBD": ("PHY_PS2", "CONSOLE"),
+            "KBD": ("PHY_PS2", "RAF"),
             "SD_PHY": ("SD", "PHY_SD", "STORE", "M_SDCARD"),
             "JOY": ("PHY_JOY", "RAF"),
             "UART_PHY": ("UART", "PHY_UART"),
@@ -1271,7 +1283,7 @@ class ArchitectureView:
         self._snap = dict(snap or {})
         self._line_buf = line_buf or ""
         now = time.monotonic()
-        sname = str(self._g("sname", "IDLE"))
+        sname = str(self._g("sname", "UNKNOWN"))
         running = bool(self._snap.get("running"))
         # Walk the executed-IP trace and let the schematic follow it, so the
         # sequencer shows code that really ran instead of the one park point
@@ -1286,21 +1298,22 @@ class ArchitectureView:
             if info:
                 self._snap["ip"] = rip
                 self._snap.update(info)
-        for key in _sname_keys(sname):
+        for key in (_sname_keys(sname) if sname not in ("UNKNOWN", "", "—") else []):
             self._heat_stamp[key] = now
         op_name = str(self._snap.get("op_name") or "")
         nname_live = str(self._snap.get("native_name") or "")
-        # NEW: follow the opcode actually executing (not a blanket Canvas glow)
+        # Follow the opcode actually executing (not a blanket Canvas glow)
         if running:
             for key in _op_engine_keys(op_name, nname_live):
                 self._heat_stamp[key] = now
-        if self._line_buf or self._snap.get("more"):
+        if (self._snap.get("service_status") or {}).get("transfer_owned"):
             self._heat_stamp["CONSOLE"] = now
         if runtime == "BOARD":
-            self._heat_stamp["PHY_HDMI"] = now
+            if self._snap.get("hdmi_mode") in ("game", "framebuffer"):
+                self._heat_stamp["PHY_HDMI"] = now
             if self._snap.get("tether"):
                 self._heat_stamp["PHY_UART"] = now
-        # NEW: real keystroke reaching the machine (gui_jmr_js.py, every
+        # Real keystroke reaching the machine (gui_jmr_js.py, every
         # runtime) — was previously dark on BOARD in practice because the
         # RTL's own S_KEYEV dispatch state is one cycle wide against a
         # ~0.67s V-line heartbeat; this stamps on every actual keypress.
@@ -1348,8 +1361,10 @@ class ArchitectureView:
         sp = self._g("sp")
         raf = self._g("raf")
         self._set("UART", f"{runtime}\nPROG tether")
-        buf = self._line_buf[-18:] if self._line_buf else ""
-        self._set("CONSOLE", f"line: {buf!r}" if buf else "line: ''")
+        service = self._snap.get("service_status")
+        self._set("CONSOLE", "status unavailable" if not isinstance(service, dict) else
+                  ("host transfer" if service.get("transfer_owned") else
+                   "Finder active" if service.get("finder_active") else "Finder inactive"))
         src = self._g("source_name", "")
         nops = self._g("n_ops", "")
         nhtml = self._g("n_html", "")
@@ -1367,10 +1382,10 @@ class ArchitectureView:
         elif nops_i > 0:
             comp_live = f"{nops_i} ops"
         elif nhtml_i > 0:
-            comp_live = f"{nhtml_i} lines  (RUN compiles)"
+            comp_live = f"{nhtml_i} SOURCE lines"
         else:
-            comp_live = "LOAD HTML then RUN"
-        self._set("COMPILER", f"{src or 'no HTML'}\n{comp_live}")
+            comp_live = "awaiting program"
+        self._set("COMPILER", f"{src or 'no source/image'}\n{comp_live}")
         src_line = self._g("src_line")
         seq_l2 = f"IP {_dash(ip)}"
         if src_line not in ("", "—", 0, "0"):
@@ -1400,7 +1415,7 @@ class ArchitectureView:
         self._set(
             "DISPATCH",
             (f"→ {op_name}\n{N_OPCODES} opcodes" if op_name not in ("", "—")
-             else f"{N_OPCODES} opcodes\nidle"),
+             else f"{N_OPCODES} opcodes\n" + ("idle" if self._snap.get("running") is False else "unknown")),
         )
         depth = self._g("stack_depth", sp)
         self._set("STACK", f"sp {depth}\n{STACK_SLOTS} tagged")
@@ -1440,15 +1455,16 @@ class ArchitectureView:
         self._set("STR", self._eng_caption("join / JSON", ("strb", "strb")))
         self._set(
             "CONS_ENG",
-            "MORE" if self._snap.get("more") else ("RUN" if running else "READY"),
+            "status unavailable" if not isinstance(service, dict) else
+            ("storage busy" if service.get("storage_busy") else "storage idle"),
         )
-        self._set("STORE", f"FAT32\n{len(self._snap.get('catalog') or [])} files")
+        self._set("STORE", f"FAT32\n{len(self._snap.get('catalog') or [])} files" if "catalog" in self._snap and self._snap.get("catalog_known", True) else "FAT32\ncatalog unknown")
         self._set("VIDEO", self._eng_caption("640×480", ("swaps", "swaps")))
         self._set("ARBITER", "port")
-        mode = self._g("hdmi_mode", "letterbox")
+        mode = self._g("hdmi_mode", "unavailable")
         self._set(
             "M_BRAM",
-            f"code+heap+FB\nHDMI {mode}",
+            "code + heap\nBRAM draw buffer",
         )
         sram_b = self._g("sram_bytes", "")
         spr = self._g("spr")
@@ -1460,11 +1476,11 @@ class ArchitectureView:
                 f"spr {spr}\n0x300+ banks",
             )
         ncat = len(self._snap.get("catalog") or [])
-        self._set("M_SDCARD", f"{ncat} files\nHTML titles")
-        if mode == "game" or running:
-            self._set("HDMI", "RUN  full field\n640×480 game FB")
+        self._set("M_SDCARD", f"{ncat} files\nJSH / source / ROM" if "catalog" in self._snap and self._snap.get("catalog_known", True) else "catalog unknown\nJSH / source / ROM")
+        if mode in ("game", "framebuffer"):
+            self._set("HDMI", "Framebuffer\n640×480")
         else:
-            self._set("HDMI", "READY letterbox\n64×16 on 640×480")
+            self._set("HDMI", "Display status\nunavailable")
         if self._snap.get("board_coarse"):
             # BOARD is a UART tether with no VMSTAT — say the counters are
             # unavailable rather than letting em dashes read as zeros.
@@ -1486,9 +1502,9 @@ class ArchitectureView:
             self._set("PHY_JOY", "GUI arrows\nKEYBITS")
             self._set("PHY_SD", "card.img\non host")
         elif runtime == "BOARD":
-            tether = "tether OK" if self._snap.get("tether") else "no tether"
-            self._set("PHY_PS2", "J15 dead\nGUI tether")
-            self._set("PHY_HDMI", "monitor\n640×480")
+            tether = "status unknown" if "tether" not in self._snap else ("tether OK" if self._snap["tether"] else "no tether")
+            self._set("PHY_PS2", "USB/PS2 input\nstatus unknown")
+            self._set("PHY_HDMI", "HDMI output\n" + ("640×480" if mode in ("game", "framebuffer") else "status unknown"))
             self._set("PHY_UART", f"PROG FT245\n{tether}")
             self._set("PHY_JOY", "Pmod 6-bit\nor KEYBITS")
             self._set("PHY_SD", "J1 slot\nSPI FAT")
@@ -1500,7 +1516,7 @@ class ArchitectureView:
             self._set("PHY_SD", "card.img\nSPI model")
 
         cat = list(self._snap.get("catalog") or [])
-        body = "\n".join(cat[:40]) if cat else "(empty card)"
+        body = "\n".join(cat[:40]) if cat else ("(empty card)" if "catalog" in self._snap and self._snap.get("catalog_known", True) else "(catalog unavailable)")
         if body != self._sd_list_text:
             self._sd_list_text = body
             self.sd_list.configure(state="normal")
@@ -1511,7 +1527,7 @@ class ArchitectureView:
         fclk = self._g("fclk", "")
         fclk_s = f"  fclk {fclk}" if fclk not in ("", "—") else ""
         if self._faulted():
-            # F-line forensics (run 60+): name the failing allocator and its
+            # F-line forensics: name the failing allocator and its
             # at-fault pool counts right on the main window — the headline
             # fact should not require opening an inspector.
             forensic = ""
@@ -1547,8 +1563,8 @@ class ArchitectureView:
             path = "packets ON (A) — waiting for an op"
         else:
             path = (
-                "storage: NAME.HTML titles · compile-on-RUN in memory "
-                "(code + ASET) · A = animate data path"
+                "storage: matched ROM/LNK + linked JSH · source/resources/documents "
+                "· A = animate data path"
             )
         self.canvas.itemconfigure(self.path_text, text=path)
         self._refresh_inspector()
@@ -1747,7 +1763,9 @@ class ArchitectureView:
             + f"IP          {self._g('ip')}\n"
             f"opcode      {self._g('op_name')}  arg0 {self._g('op_arg')}\n"
             f"native      {self._g('native_name')}  (id {self._g('native_id')})\n"
-            f"n_ops       {_cap(self._g('n_ops'), CODE_WORDS)}  code words\n"
+            f"n_ops       {self._g('n_ops')} virtual instructions (includes linked prefix)\n"
+            f"app bank    {CODE_WORDS or '?'} words capacity; physical usage unavailable\n"
+            f"shared      {TOOLBOX_WORDS} words resident prefix\n"
             f"n_consts    {_cap(self._g('n_consts'), MAX_CONSTS)}\n"
             f"n_vars      {_cap(self._g('n_vars'), MAX_VARS)}\n"
             f"flags       {_flag_names(self._snap.get('flags'))}\n"
@@ -1770,7 +1788,7 @@ class ArchitectureView:
         return (
             self._hdr("DISPATCH TABLE — opcode → engine")
             + f"{N_OPCODES} opcodes. CALL_NATIVE (0D) is the FM name; RTL OP_CALL\n"
-            "is the same instruction (name-table index in arg0).\n"
+            "is the same instruction: encoded native ID in opw[15:8].\n"
             f"now: {self._g('op_name')}  native {self._g('native_name')}\n\n"
             + "\n".join(rows)
             + "\n"
@@ -1818,9 +1836,9 @@ class ArchitectureView:
         rows = [f"  {nid:3}  {name}" for name, nid in sorted(NATIVE_IDS.items(), key=lambda kv: kv[1])]
         return (
             self._hdr("NATIVE CALL UNIT — CALL_NATIVE id table")
-            + f"{len(NATIVE_IDS)} ids resolved at compile time. CALL_NATIVE arg0 is an\n"
-            "index into the image name table; canvas work arrives as ctx.*\n"
-            "method natives, which are engine calls rather than JSB ids.\n\n"
+            + f"{len(NATIVE_IDS)} ids resolved when encoding bytecode. RTL CALL_NATIVE uses\n"
+            "the numeric native ID in opw[15:8], not a runtime name lookup.\n"
+            "Canvas natives dispatch through shared graphics mechanisms.\n\n"
             + "\n".join(rows)
             + f"\n\nat IP  {self._g('native_name')}  (id {self._g('native_id')})\n"
         )
@@ -1828,16 +1846,16 @@ class ArchitectureView:
     def _inspect_compiler(self) -> str:
         html_win = str(self._snap.get("html_window") or "")
         body = (
-            self._hdr("COMPILE-ON-RUN FRONT END")
+            self._hdr("LOAD / COMPILE FRONT END")
             + "Lexer → Parser → Bytecode generator.\n"
-            "LOAD \"NAME.HTML\" then RUN always recompiles the current HTML\n"
-            "into an in-memory ProgramImage (code + ASET art).\n"
-            "Code → code BRAM. ASET → external SRAM asset bank.\n"
+            "JSH loads compiled bytecode. Source compilation produces a ProgramImage\n"
+            "(code + ASET art); not every launch recompiles source.\n"
+            "Boot loads Toolbox ROM; resident clients must match its identity.\nCode → code BRAM. ASET → external-memory asset region.\n"
             "Compile errors use HTML line numbers.\n"
             "Missing compile path → fail loud (?NH), never fake output.\n\n"
             f"phase        {self._g('phase')}\n"
             f"last command {self._g('last_cmd')!r}\n"
-            f"loaded HTML  {self._g('source_name', '(none)')}\n"
+            f"source/image {self._g('source_name', '(none)')}\n"
             f"HTML lines   {self._g('n_html')}\n"
             f"n_ops        {self._g('n_ops')}   n_consts {self._g('n_consts')}\n"
             f"ASET bytes   {self._g('sram_bytes')}   sprites {self._g('spr')}\n"
@@ -1848,28 +1866,24 @@ class ArchitectureView:
         return body
 
     def _inspect_console(self) -> str:
-        glass = str(self._snap.get("glass") or "")
-        last = ""
-        for ln in reversed(glass.splitlines()):
-            if ln.strip():
-                last = ln.strip()
-                break
-        return (
-            self._hdr("CONSOLE / LINE EDITOR")
-            + "Monitor verbs: READY · LOAD · RUN · DIR · EDIT · LIST.\n"
-            "LIST parks on -- MORE -- (Space pages). Line numbers = HTML.\n\n"
-            f"typed line   {self._line_buf!r}\n"
-            f"last command {self._g('last_cmd')!r}\n"
-            f"MORE         {bool(self._snap.get('more'))}\n"
-            f"last glass   {last[:120] or '—'}\n"
+        state = self._snap.get("service_status")
+        body = self._hdr("FINDER / HOST SERVICES") + (
+            "Typed Finder requests share program, SOURCE and file services.\n"
+            "Host file transfers acquire ownership while Finder is active.\n"
+            "Guest keyboard events go to Event/rAF; there is no command line.\n\n"
         )
+        if not isinstance(state, dict):
+            return body + "Service status unavailable in this snapshot.\n"
+        return body + "\n".join(f"{k:20} {_dash(state.get(k))}" for k in (
+            "finder_active", "transfer_owned", "storage_busy", "source_staged",
+            "cart_staged", "link_reset_required", "role", "fault")) + "\n"
 
     def _inspect_uart(self) -> str:
         return (
             self._hdr("UART / PROG TETHER")
             + "Nexys Video PROG FT245 (channel A) is a debug mirror / KEYBITS\n"
             "path, not the product keyboard. Product keys: USB/PS/2 FIFO;\n"
-            "this board's J15 USB Host is dead — GUI tether until RMA.\n\n"
+            "keyboard health is unknown without observed input events.\n\n"
             f"runtime  {self._runtime}\n"
             f"tether   {_dash(self._snap.get('tether'), 'n/a')}\n"
         )
@@ -1973,9 +1987,9 @@ class ArchitectureView:
     def _inspect_hdmi(self) -> str:
         return (
             self._hdr("HDMI OUT 640×480")
-            + "Native 640×480 @ ~60 Hz. 8-bpp indexed → 256-entry RGB888 palette.\n"
-            "READY = 64×16 letterbox on the same FB. RUN = full-field game.\n"
-            "Scanout is from the on-chip FRONT framebuffer — not asset SRAM.\n\n"
+            + "Native 640×480 @ ~60 Hz. Indexed palette or RGB332 display mode.\n"
+            "Software draws into BRAM; dirty present updates the DDR3 front buffer.\n"
+            "Scanout reads DDR3 front → line buffers → colour conversion → HDMI.\n\n"
             f"mode     {self._g('hdmi_mode')}\n"
             f"running  {self._g('running')}\n"
             f"swaps    {self._g('swaps')}\n"
@@ -1986,8 +2000,8 @@ class ArchitectureView:
         listing = "\n".join(f"  {n}" for n in cat[:80]) if cat else "  (empty)"
         return (
             self._hdr("microSD / FAT32")
-            + "Room C: disk. LOAD names are NAME.HTML.\n"
-            "Compile-on-RUN stays in memory (code + ASET).\n\n"
+            + "Room C: FAT32 disk with JSH, source, Toolbox ROM/LNK and resources.\n"
+            "Keep resident clients matched to the disk Toolbox ROM and linker data.\n\n"
             + listing
             + "\n"
         )
@@ -2050,7 +2064,9 @@ class ArchitectureView:
         if key == "M_BRAM":
             extra = (
                 f"\nhdmi {self._g('hdmi_mode')}  strb {self._g('strb')}\n"
-                f"code  {_cap(self._g('n_ops'), CODE_WORDS)} words\n"
+                f"virtual instructions {self._g('n_ops')} (includes linked prefix)\n"
+                f"application bank capacity {CODE_WORDS or '?'} words; usage unavailable\n"
+                f"shared resident prefix {TOOLBOX_WORDS} words\n"
                 + self._peek_block("variable slots", "vars", 0, 24)
                 + self._peek_block("bytecode at IP", "ring")
             )
@@ -2065,7 +2081,7 @@ class ArchitectureView:
                 f"\n0x000000-0x0002FF is the {ASET_PAL_ENTRIES}-entry RGB888 title\n"
                 "palette; sprite banks start at 0x000300.\n"
                 + self._peek_block(f"hex @ byte {base} (0x{base:06x})", "sram", base, 64)
-                + "\n(click ASSET SRAM again to page +64 bytes)\n"
+                + "\n(click EXTERNAL MEMORY again to page +64 bytes)\n"
             )
         elif key == "M_SDCARD":
             cat = list(self._snap.get("catalog") or [])
